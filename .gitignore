@@ -1,0 +1,7 @@
+tmp/
+.env
+secrets
+llm.log
+/coagent
+.lint.stamp
+ai/
