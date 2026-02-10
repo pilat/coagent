@@ -1,0 +1,383 @@
+version: "2"
+
+run:
+  # Without this every //go:build integration file is invisible to the gate and
+  # rots silently — one of them had not compiled for a long time.
+  build-tags:
+    - integration
+    - live
+
+issues:
+  # Defaults are 50 and 3: the gate silently truncates and under-reports, so a
+  # repeated violation hides behind the ones you already fixed.
+  max-issues-per-linter: 0
+  max-same-issues: 0
+
+linters:
+  enable:
+    # Correctness
+    - errcheck       # unchecked errors
+    - govet          # go vet
+    - staticcheck    # staticcheck suite (includes unused)
+    - ineffassign    # useless assignments
+    - bodyclose      # unclosed http response bodies
+    - sqlclosecheck  # unclosed sql.Rows
+    - rowserrcheck   # unchecked sql.Rows.Err()
+    - nilerr         # returning nil after checking err != nil
+    - nilnesserr     # returning a nil error after a non-nil one was checked
+    - nilnil         # simultaneous nil value + nil error return
+    - forcetypeassert # x.(T) without the ok form
+    - unparam        # unused function parameters
+    - wastedassign   # assignments that are never read
+    - makezero       # make([]T, n) followed by append
+    - recvcheck      # mixed pointer/value receivers on one type
+    - reassign       # reassignment of package-level vars from other packages
+    - durationcheck  # multiplying two durations
+    - copyloopvar    # redundant loop-variable copies (Go 1.22+)
+    - asasalint      # passing []any to a variadic any
+    - canonicalheader # non-canonical http.Header keys
+    - gocheckcompilerdirectives # malformed //go: directives
+    - gochecksumtype # exhaustiveness over sum types
+    - errchkjson     # json.Marshal on types that cannot fail (or that can)
+    - musttag        # struct serialized without tags on every field
+    - loggercheck    # zap/logr key-value pairs must balance
+    - spancheck      # unended/unrecorded tracing spans
+    - mirror         # string/[]byte API mismatch
+    - bidichk        # bidirectional unicode in source
+
+    # Errors
+    - errorlint      # %w vs %v, errors.Is/As vs ==
+    - wrapcheck      # errors crossing a package boundary must carry context
+    - errname        # sentinel errors named ErrX, error types XError
+
+    # Context
+    - contextcheck   # a function passing the wrong (or no) inherited ctx
+    - containedctx   # context.Context stored in a struct field
+    - fatcontext     # context re-derived inside a loop
+    - noctx          # http request / sql call without a context
+
+    # Exhaustiveness
+    - exhaustive     # enum switch missing cases
+
+    # Architecture
+    - depguard       # import bans (see settings)
+    - forbidigo      # forbidden identifiers (see settings)
+
+    # Style & consistency
+    - goconst        # repeated strings → const
+    - misspell       # spelling errors in comments
+    - whitespace     # leading/trailing whitespace
+    - nolintlint     # malformed //nolint directives
+    - revive         # extensible linter (replaces golint)
+    - unconvert      # unnecessary type conversions
+    - predeclared    # shadowing predeclared identifiers (true, nil, etc.)
+    - usestdlibvars  # use stdlib vars (http.MethodGet instead of "GET")
+    - dupword        # duplicate words in comments
+    - wsl_v5         # whitespace: newlines before return, after blocks
+    - modernize      # gopls modernize: minmax, stringscutprefix, slicescontains, etc.
+    - intrange       # for i := 0; i < n; i++ → for i := range n
+    - nonamedreturns # no named returns (cleaner, avoids shadowing bugs)
+    - tagalign       # align struct tags
+    - tagliatelle    # one casing convention for JSON tags
+    - testifylint    # testify best practices
+    - iface          # interface in same package as impl
+    - funcorder      # declaration order: constructor first, exported before unexported
+    - interfacebloat # interfaces with too many methods
+    - nakedret       # naked returns in long functions
+    - perfsprint     # fmt.Sprintf where a cheaper conversion exists
+    - gocritic       # broad diagnostic/style/performance checks
+
+    # Complexity
+    - gocyclo        # cyclomatic complexity
+    - gocognit       # cognitive complexity
+    - funlen         # function length
+    - nestif         # nested if depth
+
+    # Security
+    - gosec          # security issues
+
+    # Performance
+    - prealloc       # slice preallocation hints
+
+  settings:
+    goconst:
+      ignore-tests: true  # repeated literals in table-driven tests are idiomatic, not debt
+    gocyclo:
+      min-complexity: 20
+    gocognit:
+      min-complexity: 45  # 30 too strict for this codebase, catch only the worst
+    funlen:
+      lines: 80           # warning at 80, style guide says 50 but some headroom
+      statements: 50
+    nestif:
+      min-complexity: 5   # 4 is too strict, allow one extra nesting level
+    govet:
+      enable-all: true
+      disable:
+        - fieldalignment  # too noisy, marginal benefit
+    revive:
+      rules:
+        - name: blank-imports
+        - name: context-as-argument
+        - name: context-keys-type
+        - name: dot-imports
+        - name: error-return
+        - name: error-strings
+        - name: error-naming
+        - name: exported
+          disabled: true  # we don't require comments on all exports
+        - name: if-return
+        - name: increment-decrement
+        - name: var-naming
+        - name: var-declaration
+        - name: package-comments
+          disabled: true  # we don't want package comments
+        - name: range
+        - name: receiver-naming
+        - name: time-naming
+        - name: unexported-return
+        - name: indent-error-flow
+        - name: errorf
+        - name: empty-block
+        - name: superfluous-else
+        - name: unused-parameter
+          disabled: true  # unparam does this better
+        - name: unreachable-code
+        - name: redefines-builtin-id
+    gosec:
+      excludes:
+        - G104  # unhandled errors — errcheck handles this
+        - G304  # file path from variable — too many false positives for us
+        - G703  # path traversal via taint — same rationale as G304, agent tools take caller-given paths by design
+        - G204  # subprocess tainted input — we shell out by design (git, curl)
+        - G404  # weak random — crypto/rand overkill for jitter/retry delays
+        - G115  # integer overflow — safe in our logger/hash contexts
+        - G301  # directory permissions — tools need 0755 for dirs
+        - G306  # file permissions — tools preserve original permissions
+    staticcheck:
+      checks:
+        - all
+        - -ST1000  # package comments — we don't want them per style guide
+    wsl_v5:
+      allow-first-in-block: true
+      allow-whole-block: false
+      branch-max-lines: 2
+      disable:
+        - decl  # matches old wsl's allow-cuddle-declarations: true — var x cuddled with prior code is fine
+        - err   # matches old wsl's force-err-cuddling: false — don't require if err != nil right after call
+    nonamedreturns:
+      report-error-in-defer: false  # allow named returns for defer err capture
+    tagalign:
+      align: true
+      sort: false  # don't reorder tags, just align
+    tagliatelle:
+      # Both must be set explicitly: an unconfigured tag type silently defaults to
+      # camel, which would demand renaming every key in the user's config.yaml.
+      case:
+        rules:
+          json: snake
+          yaml: snake
+    testifylint:
+      enable-all: true
+      disable:
+        - go-require  # too strict — require in helpers is fine
+    iface:
+      enable:
+        - identical
+        - unused
+    nolintlint:
+      require-explanation: true  # a suppression without a reason is indistinguishable from a bug
+      require-specific: true     # bare //nolint silently disables every linter on that line
+    errorlint:
+      errorf: true
+      errorf-multi: true
+      asserts: true
+      comparison: true
+    wrapcheck:
+      ignore-sigs:
+        - .Errorf(
+        - errors.New(
+        - errors.Join(
+      ignore-sig-regexps:
+        # Interface passthroughs that must return the inner error verbatim: zapcore
+        # decorators (zap matches on its own errors) and the tool registry dispatcher
+        # (callers match tool.ErrSuspend). Matched on the signature — the
+        # ignore-interface-regexps option does not see these.
+        - zapcore\.
+        - \btool\.Tool\b
+    nilnil:
+      checked-types: [ptr, func, iface, map, chan]
+    exhaustive:
+      # No default-signifies-exhaustive: a switch either lists every case or carries
+      # a //nolint:exhaustive with a reason.
+      default-signifies-exhaustive: false
+    gochecksumtype:
+      # A default branch must not hide a newly added variant of a sealed protocol.
+      # Mark finite interfaces with //sumtype:decl and enumerate every case.
+      default-signifies-exhaustive: false
+    interfacebloat:
+      max: 12  # Controller and Store are wide contracts by design; cap the rest
+    perfsprint:
+      int-conversion: true
+      err-error: true
+      errorf: true
+      sprintf1: true
+    gocritic:
+      enabled-tags:
+        - diagnostic
+        - style
+        - performance
+      disabled-checks:
+        - hugeParam       # noisy for the wide option structs
+        - rangeValCopy    # false positives on small structs
+        - ifElseChain     # switch preference is stylistic
+        - commentFormatting # conflicts with the //nolint and //go: directive style
+        - unnamedResult   # demands named returns, which nonamedreturns forbids — unsatisfiable together
+    forbidigo:
+      forbid:
+        - pattern: ^fmt\.Print.*$
+          msg: the daemon has no stdout contract — log through internal/logger
+        - pattern: ^print(ln)?$
+          msg: builtin print writes to stderr unconditionally — use internal/logger
+    depguard:
+      rules:
+        # One logging path. The stdlib logger writes to a global with no session
+        # prefix, so a stray log.Printf escapes the per-session log routing.
+        no-stdlib-log:
+          list-mode: lax
+          deny:
+            - pkg: log
+              desc: use internal/logger (zap) — stdlib log bypasses session log routing
+        # Secrets are parsed into an in-memory map and must never reach the process
+        # environment, so the one package allowed to touch dotenv is the one that
+        # owns that invariant.
+        dotenv-confined:
+          list-mode: lax
+          files:
+            - "!**/internal/config/**"
+          deny:
+            - pkg: github.com/joho/godotenv
+              desc: only internal/config may read the secrets file (secrets never enter the environment)
+        # Process spawning is a capability, not a convenience: keep the set of
+        # packages that can fork explicit so a new one is a deliberate decision.
+        exec-confined:
+          list-mode: lax
+          files:
+            - "!**/internal/bashsandbox/**"
+            - "!**/internal/lsp/**"
+            - "!**/internal/mcp/**"
+            - "!**/internal/git/**"
+            - "!**/internal/shellenv/**"
+            - "!**/internal/tool/builtin/**"
+            # The service installer's whole job is running systemctl/launchctl,
+            # and onboarding re-invokes this binary under sudo to use it.
+            - "!**/internal/install/**"
+            - "!**/cmd/coagent/**"
+            - "!**/*_test.go"
+          deny:
+            - pkg: os/exec
+              desc: spawn processes through bashsandbox/lsp/mcp/git/shellenv or a builtin tool, not ad hoc
+
+  exclusions:
+    paths:
+      - old
+      - tmp
+    rules:
+      # Allow unused params in interface implementations
+      - linters: [unparam]
+        source: "^func \\(.+\\) .+\\(.*\\) .+ \\{$"
+      # The CLI front-end is the one place that owns a terminal: its verbs print
+      # for a human reader, not for a log sink.
+      - linters: [forbidigo]
+        path: ^cmd/coagent/
+        text: "fmt.Print"
+      # Test files can be longer
+      - linters: [funlen]
+        path: _test\.go
+      # Google auth: CredentialsFromJSONWithParams is deprecated but replacement
+      # (cloud.google.com/go/auth) requires module-level migration. Tracked separately.
+      - linters: [staticcheck]
+        path: google_auth\.go
+        text: "SA1019.*CredentialsFromJSONWithParams"
+      # Test files can have higher complexity
+      - linters: [gocyclo, gocognit]
+        path: _test\.go
+      # Test files can use 0644 permissions
+      - linters: [gosec]
+        path: _test\.go
+        text: "G306"
+      # Integer conversions in tests are fine
+      - linters: [gosec]
+        path: _test\.go
+        text: "G115"
+      # Duplicate words in test data strings are fine
+      - linters: [dupword]
+        path: _test\.go
+      # defer Close() errors are typically ignorable
+      - linters: [errcheck]
+        source: "defer .+\\.Close\\(\\)"
+      # Test helpers often have constant params for flexibility
+      - linters: [unparam]
+        path: _test\.go
+      # shouldRetry has many error type checks by design
+      - linters: [gocyclo]
+        path: retry\.go
+        text: "shouldRetry"
+      # err shadowing is idiomatic Go
+      - linters: [govet]
+        text: 'shadow: declaration of "err" shadows'
+      # Test cleanup errors are acceptable to ignore
+      - linters: [errcheck]
+        path: _test\.go
+        source: "Close\\(\\)"
+      # Unused writes in test mocks are fine
+      - linters: [govet]
+        path: _test\.go
+        text: "unusedwrite"
+      # Websocket dial in tests
+      - linters: [bodyclose]
+        path: _test\.go
+      # Test files can have looser whitespace
+      - linters: [wsl_v5]
+        path: _test\.go
+      # Test structs don't need aligned tags
+      - linters: [tagalign]
+        path: _test\.go
+      # Test scaffolding: relax the conventions that only govern production code.
+      - linters: [wrapcheck, containedctx, noctx, errchkjson, musttag, funcorder, forcetypeassert, perfsprint, gocritic, nakedret, nilnil, prealloc]
+        path: _test\.go
+      # ctx.Err() is a canonical sentinel; wrapping it breaks errors.Is at the caller
+      - linters: [wrapcheck]
+        source: "ctx\\.Err\\(\\)"
+      # The composition root reports startup failures and exits; nothing to wrap into
+      - linters: [wrapcheck]
+        path: cmd/coagent/
+      # LSP is a camelCase protocol — these field names are the wire format, not ours.
+      - linters: [tagliatelle]
+        path: internal/lsp/types\.go
+      # Persisted verbatim in the sessions DB; renaming a tag orphans existing rows.
+      - linters: [tagliatelle]
+        path: internal/llmwire/
+      # SKILL.md frontmatter keys are kebab-case for Claude Code compatibility.
+      - linters: [tagliatelle]
+        path: internal/loader/types\.go
+
+formatters:
+  enable:
+    - gofumpt
+    - gci
+    - golines
+  settings:
+    gofumpt:
+      module-path: coagent
+    gci:
+      sections:
+        - standard
+        - default
+        - prefix(github.com/pilat/coagent)
+    golines:
+      max-len: 120
+  exclusions:
+    paths:
+      - old
+      - tmp
