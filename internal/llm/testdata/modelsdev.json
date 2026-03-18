@@ -1,0 +1,113 @@
+{
+  "anthropic": {
+    "id": "anthropic",
+    "name": "Anthropic",
+    "models": {
+      "claude-opus-5": {
+        "id": "claude-opus-5",
+        "name": "Claude Opus 5",
+        "reasoning": true,
+        "reasoning_options": [{ "type": "effort", "values": ["low", "medium", "high"] }],
+        "limit": { "context": 1000000, "output": 128000 },
+        "cost": { "input": 5, "output": 25, "cache_read": 0.5, "cache_write": 6.25 }
+      },
+      "claude-sonnet-4-6": {
+        "id": "claude-sonnet-4-6",
+        "name": "Claude Sonnet 4.6",
+        "reasoning": true,
+        "reasoning_options": [
+          { "type": "effort", "values": ["low", "medium", "high"] },
+          { "type": "budget_tokens", "min": 1024 }
+        ],
+        "limit": { "context": 1000000, "output": 128000 },
+        "cost": { "input": 3, "output": 15, "cache_read": 0.3, "cache_write": 3.75 }
+      },
+      "claude-haiku-4-5": {
+        "id": "claude-haiku-4-5",
+        "name": "Claude Haiku 4.5",
+        "reasoning": true,
+        "reasoning_options": [{ "type": "budget_tokens", "min": 2048 }],
+        "limit": { "context": 200000, "output": 64000 },
+        "cost": { "input": 1, "output": 5, "cache_read": 0.1, "cache_write": 1.25 }
+      },
+      "claude-thinker-no-options": {
+        "id": "claude-thinker-no-options",
+        "name": "Claude Thinker",
+        "reasoning": true,
+        "limit": { "context": 200000, "output": 8192 }
+      },
+      "claude-legacy-2": {
+        "id": "claude-legacy-2",
+        "name": "Claude Legacy 2",
+        "reasoning": false,
+        "limit": { "context": 100000, "output": 4096 },
+        "cost": { "input": 8, "output": 24 }
+      },
+      "claude-nameless": {
+        "id": "claude-nameless",
+        "reasoning": false,
+        "limit": { "context": 128000, "output": 8192 }
+      }
+    }
+  },
+  "google-vertex": {
+    "id": "google-vertex",
+    "name": "Google Vertex",
+    "models": {
+      "claude-opus-4-5@20251101": {
+        "id": "claude-opus-4-5@20251101",
+        "name": "Claude Opus 4.5",
+        "reasoning": true,
+        "reasoning_options": [{ "type": "budget_tokens", "min": 1024 }],
+        "limit": { "context": 200000, "output": 64000 },
+        "cost": { "input": 5, "output": 25 }
+      },
+      "zai-org/glm-5-maas": {
+        "id": "zai-org/glm-5-maas",
+        "name": "GLM 5",
+        "reasoning": false,
+        "limit": { "context": 131072, "output": 32768 },
+        "cost": { "input": 1, "output": 3.2, "cache_read": 0.1 }
+      }
+    }
+  },
+  "deepseek": {
+    "id": "deepseek",
+    "name": "DeepSeek",
+    "models": {
+      "deepseek-chat": {
+        "id": "deepseek-chat",
+        "name": "DeepSeek Chat",
+        "reasoning": false,
+        "limit": { "context": 65536, "output": 8192 },
+        "cost": { "input": 0.28, "output": 0.42 }
+      },
+      "shared-model": {
+        "id": "shared-model",
+        "name": "Shared From DeepSeek",
+        "reasoning": false,
+        "limit": { "context": 32768, "output": 4096 }
+      }
+    }
+  },
+  "zai": {
+    "id": "zai",
+    "name": "Z.AI",
+    "models": {
+      "glm-5": {
+        "id": "glm-5",
+        "name": "GLM 5",
+        "reasoning": true,
+        "reasoning_options": [{ "type": "budget_tokens", "min": 1024 }],
+        "limit": { "context": 200000, "output": 32768 },
+        "cost": { "input": 0.6, "output": 2.2 }
+      },
+      "shared-model": {
+        "id": "shared-model",
+        "name": "Shared From ZAI",
+        "reasoning": false,
+        "limit": { "context": 16384, "output": 2048 }
+      }
+    }
+  }
+}
