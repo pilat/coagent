@@ -1,0 +1,142 @@
+package sessionstore
+
+import (
+	"context"
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	"github.com/pilat/coagent/internal/llmwire"
+)
+
+func TestScheduledDeliveryStore_ToolNotificationIsExactlyOnceAndConflictsFailClosed(t *testing.T) {
+	store, _, projectID := newTestStore(t)
+	ctx := context.Background()
+	sess, err := store.CreateSession(ctx, projectID, "m", "", nil)
+	require.NoError(t, err)
+
+	assistant := &StoredMessage{Role: llmwire.RoleAssistant, ToolCalls: []byte(`[{"id":"c1","name":"schedule"}]`)}
+	result := &StoredMessage{
+		Role: llmwire.RoleTool, ToolCallID: "c1", ToolName: "schedule", Content: "due",
+	}
+
+	asstID, resultID, inserted, err := store.InsertToolNotificationPairOnce(
+		ctx, sess.ID, "schedule:one-shot:7", "fingerprint-a", assistant, result,
+	)
+	require.NoError(t, err)
+	assert.True(t, inserted)
+	assert.Positive(t, asstID)
+	assert.Positive(t, resultID)
+
+	asstID, resultID, inserted, err = store.InsertToolNotificationPairOnce(
+		ctx, sess.ID, "schedule:one-shot:7", "fingerprint-a", assistant, result,
+	)
+	require.NoError(t, err)
+	assert.False(t, inserted)
+	assert.Zero(t, asstID)
+	assert.Zero(t, resultID)
+
+	_, _, _, err = store.InsertToolNotificationPairOnce(
+		ctx, sess.ID, "schedule:one-shot:7", "different-payload", assistant, result,
+	)
+	require.ErrorIs(t, err, ErrDeliveryConflict)
+
+	messages, err := store.LoadActiveMessages(ctx, sess.ID)
+	require.NoError(t, err)
+	require.Len(t, messages, 2, "producer retry must not append a second synthetic pair")
+}
+
+func TestScheduledDeliveryStore_ContextResetIsAtomicIdempotentAndClearsDerivedState(t *testing.T) {
+	store, db, projectID := newTestStore(t)
+	ctx := context.Background()
+	sess, err := store.CreateSession(ctx, projectID, "m", "", nil)
+	require.NoError(t, err)
+
+	_, err = store.InsertMessage(ctx, sess.ID, &StoredMessage{Role: llmwire.RoleUser, Content: "old task"})
+	require.NoError(t, err)
+	require.NoError(t, store.UpdateSessionCompactionBrief(ctx, sess.ID, "old brief"))
+	require.NoError(t, store.UpdateSessionTodoItems(ctx, sess.ID, []byte(`[{"content":"old"}]`)))
+
+	opening := []*StoredMessage{
+		{Role: llmwire.RoleUser, Content: "project context"},
+		{Role: llmwire.RoleUser, Content: "fresh task"},
+	}
+	ids, inserted, err := store.ResetSessionContextOnce(
+		ctx, sess.ID, "schedule:cron:9:20260814T1200Z", "fresh-a", opening,
+	)
+	require.NoError(t, err)
+	assert.True(t, inserted)
+	require.Len(t, ids, 2)
+
+	ids, inserted, err = store.ResetSessionContextOnce(
+		ctx, sess.ID, "schedule:cron:9:20260814T1200Z", "fresh-a", opening,
+	)
+	require.NoError(t, err)
+	assert.False(t, inserted)
+	assert.Empty(t, ids)
+
+	active, err := store.LoadActiveMessages(ctx, sess.ID)
+	require.NoError(t, err)
+	require.Len(t, active, 2)
+	assert.Equal(t, "project context", active[0].Content)
+	assert.Equal(t, "fresh task", active[1].Content)
+
+	var brief, todos string
+	require.NoError(t, db.QueryRowContext(
+		ctx, `SELECT compaction_brief, todo_items FROM sessions WHERE id = ?`, sess.ID,
+	).Scan(&brief, &todos))
+	assert.Empty(t, brief)
+	assert.JSONEq(t, `[]`, todos)
+}
+
+func TestScheduledDeliveryStore_ContextResetRollsBackClaimAndTranscriptOnInsertFailure(t *testing.T) {
+	store, db, projectID := newTestStore(t)
+	ctx := context.Background()
+	sess, err := store.CreateSession(ctx, projectID, "m", "", nil)
+	require.NoError(t, err)
+
+	_, err = store.InsertMessage(ctx, sess.ID, &StoredMessage{Role: llmwire.RoleUser, Content: "old task"})
+	require.NoError(t, err)
+	require.NoError(t, store.UpdateSessionCompactionBrief(ctx, sess.ID, "must survive"))
+	require.NoError(t, store.UpdateSessionTodoItems(ctx, sess.ID, []byte(`[{"content":"keep"}]`)))
+
+	_, err = db.ExecContext(ctx, `
+		CREATE TRIGGER fail_context_reset_insert
+		BEFORE INSERT ON messages
+		WHEN NEW.content = 'explode'
+		BEGIN
+			SELECT RAISE(ABORT, 'forced reset failure');
+		END`)
+	require.NoError(t, err)
+
+	_, _, err = store.ResetSessionContextOnce(
+		ctx,
+		sess.ID,
+		"schedule:cron:9:20260814T1200Z",
+		"fresh-a",
+		[]*StoredMessage{
+			{Role: llmwire.RoleUser, Content: "partial opening"},
+			{Role: llmwire.RoleUser, Content: "explode"},
+		},
+	)
+	require.ErrorContains(t, err, "forced reset failure")
+
+	active, err := store.LoadActiveMessages(ctx, sess.ID)
+	require.NoError(t, err)
+	require.Len(t, active, 1)
+	assert.Equal(t, "old task", active[0].Content)
+
+	var brief, todos string
+	require.NoError(t, db.QueryRowContext(
+		ctx, `SELECT compaction_brief, todo_items FROM sessions WHERE id = ?`, sess.ID,
+	).Scan(&brief, &todos))
+	assert.Equal(t, "must survive", brief)
+	assert.JSONEq(t, `[{"content":"keep"}]`, todos)
+
+	var claims int
+	require.NoError(t, db.QueryRowContext(
+		ctx, `SELECT COUNT(*) FROM session_deliveries WHERE session_id = ?`, sess.ID,
+	).Scan(&claims))
+	assert.Zero(t, claims, "failed transcript mutation must not consume its retry identity")
+}

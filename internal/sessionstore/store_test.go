@@ -1,0 +1,124 @@
+package sessionstore
+
+import (
+	"context"
+	"encoding/json"
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	"github.com/pilat/coagent/internal/llmwire"
+)
+
+// TestMarkCleared_PreservesContent verifies clearing is metadata-only: cleared_at
+// is stamped, but the stored content column is left byte-for-byte intact.
+func TestMarkCleared_PreservesContent(t *testing.T) {
+	store, _, projectID := newTestStore(t)
+	ctx := context.Background()
+
+	sess, err := store.CreateSession(ctx, projectID, "test-model", "medium", nil)
+	require.NoError(t, err)
+
+	const original = "[/tmp/file.go]\npackage main\n\nfunc main() {}"
+
+	id, err := store.InsertMessage(ctx, sess.ID, &StoredMessage{
+		Role:       llmwire.RoleTool,
+		Content:    original,
+		ToolCallID: "call-1",
+		ToolName:   "read",
+	})
+	require.NoError(t, err)
+
+	require.NoError(t, store.MarkCleared(ctx, []int64{id}))
+
+	msgs, err := store.LoadActiveMessages(ctx, sess.ID)
+	require.NoError(t, err)
+	require.Len(t, msgs, 1)
+
+	assert.Equal(t, original, msgs[0].Content, "stored content must survive clearing")
+	require.NotNil(t, msgs[0].ClearedAt, "cleared_at must be set")
+}
+
+// TestMarkCleared_Empty is a no-op and must not error.
+func TestMarkCleared_Empty(t *testing.T) {
+	store, _, _ := newTestStore(t)
+	require.NoError(t, store.MarkCleared(context.Background(), nil))
+}
+
+// A switch to a model with no effort choice must land an empty level, not a medium
+// the model never offered — the caller has already settled it against the catalog.
+func TestUpdateSessionModelWritesTheLevelVerbatim(t *testing.T) {
+	ctx := context.Background()
+	store, db, projectID := newTestStore(t)
+
+	rec, err := store.CreateSession(ctx, projectID, "model-a", "high", nil)
+	require.NoError(t, err)
+
+	require.NoError(t, store.UpdateSessionModel(ctx, rec.ID, "model-b", ""))
+
+	var raw string
+	require.NoError(t,
+		db.QueryRowContext(ctx, `SELECT reasoning_level FROM sessions WHERE id = ?`, rec.ID).Scan(&raw))
+	assert.Empty(t, raw)
+
+	reloaded, err := store.GetSession(ctx, rec.ID)
+	require.NoError(t, err)
+	assert.Empty(t, reloaded.ReasoningLevel, "the read path must not invent a level either")
+
+	require.NoError(t, store.UpdateSessionModel(ctx, rec.ID, "model-c", "low"))
+	require.NoError(t,
+		db.QueryRowContext(ctx, `SELECT reasoning_level FROM sessions WHERE id = ?`, rec.ID).Scan(&raw))
+	assert.Equal(t, "low", raw)
+}
+
+func TestUpdateSessionStatusRejectsMissingSession(t *testing.T) {
+	store, _, _ := newTestStore(t)
+
+	err := store.UpdateSessionStatus(context.Background(), 999_999, SessionStatusCompleted)
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "session 999999 not found")
+}
+
+func TestSessionStatusRejectsUnknownVocabulary(t *testing.T) {
+	store, _, projectID := newTestStore(t)
+	ctx := context.Background()
+
+	rec, err := store.CreateSession(ctx, projectID, "model", "", nil)
+	require.NoError(t, err)
+	assert.Equal(t, SessionStatusActive, rec.Status, "returned record must match the database default")
+
+	err = store.UpdateSessionStatus(ctx, rec.ID, SessionStatus("running"))
+	require.ErrorContains(t, err, "invalid session status")
+
+	reloaded, err := store.GetSession(ctx, rec.ID)
+	require.NoError(t, err)
+	assert.Equal(t, SessionStatusActive, reloaded.Status)
+}
+
+func TestReasoningRawSurvivesReload(t *testing.T) {
+	ctx := context.Background()
+	store, _, projectID := newTestStore(t)
+
+	rec, err := store.CreateSession(ctx, projectID, "claude-opus-5", "high", nil)
+	require.NoError(t, err)
+
+	envelope := json.RawMessage(`{"model":"claude-opus-5","payload":[{"type":"thinking","signature":"sig"}]}`)
+
+	_, err = store.InsertMessage(ctx, rec.ID, &StoredMessage{
+		Role:         "assistant",
+		Content:      "thinking out loud",
+		ReasoningRaw: envelope,
+	})
+	require.NoError(t, err)
+
+	_, err = store.InsertMessage(ctx, rec.ID, &StoredMessage{Role: "user", Content: "next"})
+	require.NoError(t, err)
+
+	loaded, err := store.LoadActiveMessages(ctx, rec.ID)
+	require.NoError(t, err)
+	require.Len(t, loaded, 2)
+
+	assert.JSONEq(t, string(envelope), string(loaded[0].ReasoningRaw))
+	assert.Nil(t, loaded[1].ReasoningRaw, "a message without reasoning stores nothing")
+}
