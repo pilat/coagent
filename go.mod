@@ -4,6 +4,7 @@ go 1.25.6
 
 require (
 	github.com/anthropics/anthropic-sdk-go v1.62.0
+	github.com/bmatcuk/doublestar/v4 v4.8.1
 	github.com/caarlos0/env/v11 v11.4.0
 	github.com/charmbracelet/lipgloss v1.1.0
 	github.com/joho/godotenv v1.5.1
