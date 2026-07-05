@@ -11,6 +11,7 @@ require (
 	github.com/mark3labs/mcp-go v0.43.2
 	github.com/moby/moby/api v1.54.1
 	github.com/pressly/goose/v3 v3.27.0
+	github.com/robfig/cron/v3 v3.0.1
 	github.com/stretchr/testify v1.11.1
 	github.com/testcontainers/testcontainers-go v0.42.0
 	go.uber.org/zap v1.27.1
