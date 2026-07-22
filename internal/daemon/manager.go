@@ -1,0 +1,773 @@
+package daemon
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"sync"
+	"sync/atomic"
+	"time"
+
+	"go.uber.org/zap"
+
+	"github.com/pilat/coagent/internal/config"
+	"github.com/pilat/coagent/internal/controllerapi"
+	"github.com/pilat/coagent/internal/logger"
+	"github.com/pilat/coagent/internal/mcp"
+	"github.com/pilat/coagent/internal/mcpstore"
+	"github.com/pilat/coagent/internal/schedule"
+	"github.com/pilat/coagent/internal/session"
+	"github.com/pilat/coagent/internal/sessionevent"
+	"github.com/pilat/coagent/internal/sessionstore"
+)
+
+//nolint:interfacebloat // the daemon's whole operation surface; the Controller contract it backs is equally wide by design
+type Service interface {
+	Start(ctx context.Context) error
+	Send(ctx context.Context, projectID int64, prompt, model string, attrs map[string]any) (int64, error)
+	SendToSession(ctx context.Context, sessionID int64, prompt string) error
+	DeliverPendingCallResult(
+		ctx context.Context, sessionID int64, callID, toolName, content string,
+	) (bool, error)
+	DeliverScheduleTick(ctx context.Context, sessionID int64, deliveryID, content string) (bool, error)
+	DeliverFreshSchedule(ctx context.Context, sessionID int64, deliveryID, content string) (bool, error)
+	ResolveSecretRequest(ctx context.Context, requestID, name string) error
+	CancelSecretRequest(ctx context.Context, requestID string) error
+	PendingSecretRequests(sessionID int64) []sessionevent.Notification
+	Kill(ctx context.Context, sessionID int64) error
+	Stop(ctx context.Context, sessionID int64) error
+	Clear(ctx context.Context, sessionID int64) (int64, error)
+	SetModel(ctx context.Context, sessionID int64, model, reasoningLevel string) error
+	SetAttributes(ctx context.Context, sessionID int64, attrs map[string]any) error
+	GetSession(ctx context.Context, id int64) (*sessionstore.SessionRecord, error)
+	List(ctx context.Context) ([]*sessionstore.SessionRecord, error)
+	HasActiveLoop(sessionID int64) bool
+	PubSub() NotificationSource
+	NotifySession(sessionID int64, n sessionevent.Notification)
+	Shutdown(timeout time.Duration)
+	GetOrCreateProject(ctx context.Context, workDir string) (int64, error)
+	GetProjectWorkDir(ctx context.Context, projectID int64) (string, error)
+	GetProjectName(ctx context.Context, projectID int64) (string, error)
+	ListRecentProjects(ctx context.Context, root string) ([]RecentProject, error)
+}
+
+type NotificationSource interface {
+	Subscribe(sessionID int64) <-chan sessionevent.Notification
+	SubscribeAll() <-chan controllerapi.SessionNotification
+	Unsubscribe(sessionID int64, ch <-chan sessionevent.Notification)
+	UnsubscribeAll(ch <-chan controllerapi.SessionNotification)
+}
+
+var (
+	_ Service                = (*svc)(nil)
+	_ schedule.SessionSender = (*svc)(nil)
+)
+
+type svc struct {
+	mu             sync.Mutex
+	loops          map[int64]*runner
+	factory        session.Factory
+	store          Store
+	sessionStore   sessionstore.OrchestrationStore
+	inboxStore     sessionstore.InboxStore
+	links          LinkStore
+	scheduleSvc    schedule.Service
+	admit          *admissionCtl
+	queueMu        sync.Mutex
+	queue          []queuedChild
+	pendingMu      sync.Mutex
+	pendingRunners []queuedRunner
+	pubsub         *pubSub
+	defaultModelFn func() string
+	subagentModel  string
+	modelCatalog   []modelInfo
+	modelEntries   []config.ModelEntry
+	mcpStore       mcpstore.Store
+	mcpPool        mcp.Pool
+	applier        *ConfigApplier
+	staged         *stagedCalls
+	secrets        *secretRequests
+	deferNotices   *deferAnnouncements
+	shuttingDown   atomic.Bool
+	// childMu guards childCache only — never s.mu, which is held around runner
+	// starts and must not be contended by the publish path.
+	childMu    sync.Mutex
+	childCache map[int64]bool
+}
+
+// queuedChild is a background child that could not be admitted immediately and
+// waits (in arrival order) for a slot to free. Durability comes from its
+// already-persisted subagent_links row (state 'spawned', inserted by Spawn before
+// admission) — the restart sweep re-runs it on crash; this slice is only the
+// in-memory ordering cache.
+type queuedChild struct {
+	sessionID int64
+	parentID  int64
+	workDir   string
+	projectID int64
+}
+
+type queuedRunner struct {
+	sessionID int64
+	workDir   string
+	projectID int64
+}
+
+func New(
+	factory session.Factory,
+	store Store,
+	sessionStore sessionstore.OrchestrationStore,
+	inboxStore sessionstore.InboxStore,
+	links LinkStore,
+	scheduleSvc schedule.Service,
+	cfg *config.Config,
+	mcpStore mcpstore.Store,
+	mcpPool mcp.Pool,
+	applier *ConfigApplier,
+) Service {
+	s := newSvc(factory, store, sessionStore, inboxStore, links, scheduleSvc, cfg.DefaultModel)
+	s.subagentModel = cfg.SubagentModel
+	s.mcpStore = mcpStore
+	s.mcpPool = mcpPool
+	s.applier = applier
+
+	if cfg.UnifiedConfig != nil {
+		s.loadModelCatalog(cfg.UnifiedConfig.Models)
+	}
+
+	return s
+}
+
+func newSvc(
+	factory session.Factory,
+	store Store,
+	sessionStore sessionstore.OrchestrationStore,
+	inboxStore sessionstore.InboxStore,
+	links LinkStore,
+	scheduleSvc schedule.Service,
+	defaultModelFn func() string,
+) *svc {
+	return &svc{
+		loops:          make(map[int64]*runner),
+		factory:        factory,
+		store:          store,
+		sessionStore:   sessionStore,
+		inboxStore:     inboxStore,
+		links:          links,
+		scheduleSvc:    scheduleSvc,
+		staged:         newStagedCalls(),
+		secrets:        newSecretRequests(),
+		admit:          newAdmissionCtl(),
+		pubsub:         newPubSub(),
+		defaultModelFn: defaultModelFn,
+		childCache:     make(map[int64]bool),
+		deferNotices:   newDeferAnnouncements(),
+	}
+}
+
+func (s *svc) PubSub() NotificationSource {
+	return s.pubsub
+}
+
+func (s *svc) NotifySession(sessionID int64, n sessionevent.Notification) {
+	s.publish(sessionID, n)
+}
+
+func (s *svc) Send(ctx context.Context, projectID int64, prompt, model string, attrs map[string]any) (int64, error) {
+	return s.send(ctx, projectID, prompt, model, attrs)
+}
+
+func (s *svc) SendToSession(ctx context.Context, sessionID int64, prompt string) error {
+	if _, err := s.inboxStore.EnqueueInput(ctx, sessionID, sessionstore.InputSourceUser, prompt); err != nil {
+		if errors.Is(err, sessionstore.ErrSessionNotAcceptingInput) {
+			if rec, getErr := s.sessionStore.GetSession(ctx, sessionID); getErr == nil && rec.KilledAt != nil {
+				return fmt.Errorf("session %d is killed", sessionID)
+			}
+		}
+
+		return fmt.Errorf("persist session input: %w", err)
+	}
+
+	s.mu.Lock()
+	_, ok := s.loops[sessionID]
+	s.mu.Unlock()
+
+	if ok {
+		return nil
+	}
+
+	rec, err := s.sessionStore.GetSession(ctx, sessionID)
+	if err != nil {
+		return fmt.Errorf("session %d not found", sessionID)
+	}
+
+	if rec.KilledAt != nil {
+		return fmt.Errorf("session %d is killed", sessionID)
+	}
+
+	if rec.Status == sessionstore.SessionStatusStopping {
+		return fmt.Errorf("session %d is stopping", sessionID)
+	}
+
+	if rec.Status == sessionstore.SessionStatusStopped {
+		if err := s.sessionStore.UpdateSessionStatus(ctx, sessionID, sessionstore.SessionStatusActive); err != nil {
+			return fmt.Errorf("resume stopped session %d: %w", sessionID, err)
+		}
+	}
+
+	workDir, err := s.store.GetProjectWorkDir(ctx, rec.ProjectID)
+	if err != nil {
+		return fmt.Errorf("resolve project %d: %w", rec.ProjectID, err)
+	}
+
+	s.mu.Lock()
+	if _, ok = s.loops[sessionID]; ok {
+		s.mu.Unlock()
+
+		return nil
+	}
+	s.mu.Unlock()
+
+	if err := s.ensureRunner(ctx, sessionID, workDir, rec.ProjectID, nil); err != nil {
+		if errors.Is(err, errNoCapacity) {
+			s.enqueuePendingRunner(sessionID, workDir, rec.ProjectID)
+			return nil
+		}
+
+		return err
+	}
+
+	return nil
+}
+
+// DeliverPendingCallResult answers one specific pending tool call. It is how an
+// outcome produced outside the loop — a config verdict that survived a restart,
+// a secret typed at a terminal — gets back into the session that asked for it,
+// whatever channel that session belongs to.
+func (s *svc) DeliverPendingCallResult(
+	ctx context.Context, sessionID int64, callID, toolName, content string,
+) (bool, error) {
+	return s.deliverSessionInput(ctx, sessionID, pendingCallResultInput{
+		Call:    session.PendingToolCall{ID: callID, Name: toolName},
+		Content: content,
+	})
+}
+
+func (s *svc) DeliverScheduleTick(
+	ctx context.Context,
+	sessionID int64,
+	deliveryID, content string,
+) (bool, error) {
+	return s.deliverSessionInput(ctx, sessionID, scheduleTickInput{
+		DeliveryID: deliveryID,
+		Content:    content,
+	})
+}
+
+func (s *svc) DeliverFreshSchedule(
+	ctx context.Context,
+	sessionID int64,
+	deliveryID, content string,
+) (bool, error) {
+	return s.deliverSessionInput(ctx, sessionID, freshScheduleInput{
+		DeliveryID: deliveryID,
+		Prompt:     content,
+	})
+}
+
+// StageExternalCall records that a tool call suspended awaiting work the daemon
+// itself is doing, so the loop neither re-executes it nor advances past it.
+func (s *svc) StageExternalCall(sessionID int64, callID, toolName string) {
+	s.staged.stage(sessionID, callID, toolName)
+}
+
+func (s *svc) GetSession(ctx context.Context, id int64) (*sessionstore.SessionRecord, error) {
+	rec, err := s.sessionStore.GetSession(ctx, id)
+	if err != nil {
+		return nil, fmt.Errorf("load session record: %w", err)
+	}
+
+	return rec, nil
+}
+
+func (s *svc) List(ctx context.Context) ([]*sessionstore.SessionRecord, error) {
+	recs, err := s.sessionStore.ListSessions(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list sessions: %w", err)
+	}
+
+	return recs, nil
+}
+
+func (s *svc) HasActiveLoop(sessionID int64) bool {
+	s.mu.Lock()
+	_, ok := s.loops[sessionID]
+	s.mu.Unlock()
+
+	return ok
+}
+
+func (s *svc) Kill(ctx context.Context, sessionID int64) error {
+	s.mu.Lock()
+	rs, ok := s.loops[sessionID]
+	s.mu.Unlock()
+
+	if ok {
+		s.publish(
+			sessionID,
+			sessionevent.Notification{
+				Type:    sessionevent.NotifyMessage,
+				Message: "Stopping session...",
+			},
+		)
+
+		rs.stop()
+	}
+
+	rec, err := s.sessionStore.GetSession(ctx, sessionID)
+	if err != nil {
+		return fmt.Errorf("session %d not found", sessionID)
+	}
+
+	if rec.KilledAt != nil {
+		return nil
+	}
+
+	// Cleanup must complete even if the caller disconnects mid-Kill — detach
+	// from request-scoped cancellation while keeping logger values.
+	cleanupCtx := context.WithoutCancel(ctx)
+
+	if err := s.sessionStore.MarkSessionKilled(cleanupCtx, sessionID); err != nil {
+		return fmt.Errorf("mark session killed: %w", err)
+	}
+
+	_, _ = s.inboxStore.CancelPendingInputs(cleanupCtx, []int64{sessionID}, "killed")
+	s.removeSchedules(cleanupCtx, sessionID)
+
+	// Cascade-kill every non-terminal descendant (blocking and background): this is
+	// a deliberate tree teardown, so background work that would outlive it and
+	// report to nobody is stopped too. Completed-but-undelivered children keep their
+	// result (see cascadeKillChildren).
+	s.cascadeKillChildren(cleanupCtx, sessionID, 0, time.Now().Add(cascadeRetryBudget))
+
+	s.publish(sessionID, sessionevent.Notification{
+		Type:   sessionevent.NotifyStateChanged,
+		Status: controllerapi.StateIdle,
+		Reason: "killed",
+	})
+
+	return nil
+}
+
+// Stop parks a session tree without destroying it. Every active descendant is
+// stopped, one-shot waits and pending external calls receive an explicit stopped
+// result, and accepted-but-unconsumed input is cancelled. Recurring schedules
+// remain installed. A later root message resumes only the root; a stopped child
+// requires an explicit send_to_subagent follow-up.
+func (s *svc) Stop(ctx context.Context, sessionID int64) error {
+	s.publish(sessionID, sessionevent.Notification{
+		Type:    sessionevent.NotifyMessage,
+		Message: "⏹ Stopping...",
+	})
+
+	cleanupCtx := context.WithoutCancel(ctx)
+
+	ids, links, err := s.stopTree(cleanupCtx, sessionID)
+	if err != nil {
+		return err
+	}
+
+	// Closing admission before cancellation prevents queued descendants from
+	// being launched while the tree is being parked.
+	for _, id := range ids {
+		if err := s.sessionStore.UpdateSessionStatus(cleanupCtx, id, sessionstore.SessionStatusStopping); err != nil {
+			return fmt.Errorf("mark session %d stopping: %w", id, err)
+		}
+	}
+
+	for _, link := range links {
+		if err := s.links.MarkLinkStopped(cleanupCtx, link.ChildID); err != nil {
+			return fmt.Errorf("mark subagent %d stopped: %w", link.ChildID, err)
+		}
+	}
+
+	s.removeQueuedSessions(ids)
+
+	for _, id := range ids {
+		s.mu.Lock()
+		rs := s.loops[id]
+		s.mu.Unlock()
+
+		if rs != nil {
+			rs.stop()
+		}
+	}
+
+	if _, err := s.inboxStore.CancelPendingInputs(cleanupCtx, ids, "stopped"); err != nil {
+		return fmt.Errorf("cancel stopped session input: %w", err)
+	}
+
+	// With all writers joined, it is safe to close every outstanding tool_use in
+	// the transcript. This is what makes a stopped session resumable without
+	// replaying a sleep/config/task call that no longer exists.
+	for _, id := range ids {
+		if err := s.settleStoppedCalls(cleanupCtx, id); err != nil {
+			return err
+		}
+
+		if s.scheduleSvc != nil {
+			if _, err := s.scheduleSvc.CancelPendingSleeps(cleanupCtx, id); err != nil {
+				return fmt.Errorf("cancel one-shot waits for session %d: %w", id, err)
+			}
+		}
+	}
+
+	for _, link := range links {
+		if err := s.links.MakeStoppedLinkResumable(cleanupCtx, link.ChildID); err != nil {
+			return fmt.Errorf("detach stopped subagent %d: %w", link.ChildID, err)
+		}
+	}
+
+	for _, id := range ids {
+		if err := s.sessionStore.UpdateSessionStatus(cleanupCtx, id, sessionstore.SessionStatusStopped); err != nil {
+			return fmt.Errorf("mark session %d stopped: %w", id, err)
+		}
+	}
+
+	s.publish(sessionID, sessionevent.Notification{
+		Type:   sessionevent.NotifyStateChanged,
+		Status: controllerapi.StateIdle,
+		Reason: "stopped",
+	})
+
+	return nil
+}
+
+func (s *svc) Clear(ctx context.Context, sessionID int64) (int64, error) {
+	log := logger.Ctx(ctx).Named("manager.clear")
+
+	rec, err := s.sessionStore.GetSession(ctx, sessionID)
+	if err != nil {
+		return 0, fmt.Errorf("session %d not found", sessionID)
+	}
+
+	if rec.KilledAt != nil {
+		return 0, fmt.Errorf("session %d is already killed", sessionID)
+	}
+
+	if err := s.sessionStore.UpdateSessionStatus(
+		ctx,
+		sessionID,
+		sessionstore.SessionStatusTerminating,
+	); err != nil {
+		log.Warn("clear_set_terminating_failed", zap.Int64("session_id", sessionID), zap.Error(err))
+	}
+
+	newRec, err := s.sessionStore.CreateSession(ctx, rec.ProjectID, rec.Model, rec.ReasoningLevel, rec.Attributes)
+	if err != nil {
+		return 0, fmt.Errorf("create replacement session: %w", err)
+	}
+
+	workDir, _ := s.store.GetProjectWorkDir(ctx, rec.ProjectID)
+	projectName, _ := s.store.GetProjectName(ctx, rec.ProjectID)
+	name := fmt.Sprintf("%s - %d", projectName, newRec.ID)
+	s.publish(sessionID, sessionevent.Notification{
+		Type:         sessionevent.NotifySessionCleared,
+		OldSessionID: sessionID,
+		NewSessionID: newRec.ID,
+		Name:         name,
+		WorkDir:      workDir,
+		Attributes:   rec.Attributes,
+	})
+
+	if err := s.Kill(ctx, sessionID); err != nil {
+		log.Warn("clear_kill_old_session_failed", zap.Int64("session_id", sessionID), zap.Error(err))
+	}
+
+	return newRec.ID, nil
+}
+
+// SetModel applies the switch before recording it: a model the session cannot
+// run must never land in the record, or the session stops being resumable.
+func (s *svc) SetModel(ctx context.Context, sessionID int64, model, reasoningLevel string) error {
+	if err := s.checkModelConfigured(model); err != nil {
+		return err
+	}
+
+	// The record is all a later run reads, so it must carry the level a session
+	// would settle on: the model's default when none is asked for, none at all
+	// for a model with no effort selector.
+	level := reasoningLevel
+
+	if len(s.modelEntries) > 0 {
+		resolved, err := session.ResolveReasoningLevel(s.modelEntries, model, reasoningLevel)
+		if err != nil {
+			return fmt.Errorf("switch session %d to model %s: %w", sessionID, model, err)
+		}
+
+		level = resolved
+	}
+
+	s.mu.Lock()
+	rs, ok := s.loops[sessionID]
+	s.mu.Unlock()
+
+	var sessSvc session.Service
+
+	if ok {
+		rs.svcMu.Lock()
+		sessSvc = rs.service
+		rs.svcMu.Unlock()
+	}
+
+	if sessSvc != nil {
+		if err := sessSvc.SetModel(model, level); err != nil {
+			return fmt.Errorf("switch session %d to model %s: %w", sessionID, model, err)
+		}
+	}
+
+	if err := s.sessionStore.UpdateSessionModel(ctx, sessionID, model, level); err != nil {
+		return fmt.Errorf("update session model: %w", err)
+	}
+
+	return nil
+}
+
+func (s *svc) SetAttributes(ctx context.Context, sessionID int64, attrs map[string]any) error {
+	if err := s.sessionStore.SetAttributes(ctx, sessionID, attrs); err != nil {
+		return fmt.Errorf("set session attributes: %w", err)
+	}
+
+	return nil
+}
+
+func (s *svc) Shutdown(timeout time.Duration) {
+	s.shuttingDown.Store(true)
+
+	s.mu.Lock()
+	runners := make([]*runner, 0, len(s.loops))
+
+	for _, rs := range s.loops {
+		runners = append(runners, rs)
+	}
+
+	s.mu.Unlock()
+
+	done := make(chan struct{})
+
+	go func() {
+		var wg sync.WaitGroup
+
+		wg.Add(len(runners))
+
+		for _, rs := range runners {
+			go func(r *runner) {
+				defer wg.Done()
+
+				r.stop()
+			}(rs)
+		}
+
+		wg.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(timeout):
+		logger.Named("manager.shutdown").Warn("shutdown_timeout", zap.Int("remaining_sessions", len(runners)))
+	}
+}
+
+func (s *svc) GetOrCreateProject(ctx context.Context, workDir string) (int64, error) {
+	id, err := s.store.GetOrCreateProject(ctx, workDir)
+	if err != nil {
+		return 0, fmt.Errorf("resolve project: %w", err)
+	}
+
+	return id, nil
+}
+
+func (s *svc) GetProjectWorkDir(ctx context.Context, projectID int64) (string, error) {
+	workDir, err := s.store.GetProjectWorkDir(ctx, projectID)
+	if err != nil {
+		return "", fmt.Errorf("get project workdir: %w", err)
+	}
+
+	return workDir, nil
+}
+
+func (s *svc) GetProjectName(ctx context.Context, projectID int64) (string, error) {
+	name, err := s.store.GetProjectName(ctx, projectID)
+	if err != nil {
+		return "", fmt.Errorf("get project name: %w", err)
+	}
+
+	return name, nil
+}
+
+// loadModelCatalog records the configured models once: the subagent picker reads
+// the names, SetModel reads the effort levels.
+func (s *svc) loadModelCatalog(models []config.ModelEntry) {
+	s.modelEntries = models
+
+	for _, m := range models {
+		s.modelCatalog = append(s.modelCatalog, modelInfo{ID: m.ID, Name: m.Name})
+	}
+}
+
+// checkModelConfigured guards the idle path, where no live session validates.
+// An empty catalog means no config was loaded, so it vouches for nothing.
+func (s *svc) checkModelConfigured(model string) error {
+	if len(s.modelCatalog) == 0 {
+		return nil
+	}
+
+	for _, m := range s.modelCatalog {
+		if m.ID == model {
+			return nil
+		}
+	}
+
+	return fmt.Errorf("unknown model: %s", model)
+}
+
+// appendIfLive appends the input to the session's live runner under the
+// manager lock, returning true if a live runner existed. Holding the lock across
+// the append serializes it with runner teardown (delete + leftover drain).
+func (s *svc) appendIfLive(sessionID int64, input queuedSessionInput) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if rs, ok := s.loops[sessionID]; ok {
+		rs.appendSessionInput(input)
+		return true
+	}
+
+	return false
+}
+
+func (s *svc) deliverSessionInput(ctx context.Context, sessionID int64, input sessionInput) (bool, error) {
+	if err := input.validate(); err != nil {
+		return false, err
+	}
+
+	delivery := newAwaitedSessionInput(input)
+	if err := s.routeQueuedSessionInput(ctx, sessionID, delivery); err != nil {
+		delivery.complete(false, err)
+		return false, err
+	}
+
+	select {
+	case outcome := <-delivery.done:
+		return outcome.Applied, outcome.Err
+	case <-ctx.Done():
+		return false, ctx.Err()
+	}
+}
+
+func (s *svc) enqueueSessionInput(ctx context.Context, sessionID int64, input sessionInput) error {
+	if err := input.validate(); err != nil {
+		return err
+	}
+
+	return s.routeQueuedSessionInput(ctx, sessionID, asyncSessionInput{value: input})
+}
+
+// routeQueuedSessionInput appends a validated delivery to a live runner or
+// lazily revives an idle session. It rejects killed sessions; awaited callers
+// receive the actual injection outcome through their delivery object.
+func (s *svc) routeQueuedSessionInput(ctx context.Context, sessionID int64, input queuedSessionInput) error {
+	if err := input.input().validate(); err != nil {
+		input.complete(false, err)
+		return err
+	}
+
+	rec, err := s.sessionStore.GetSession(ctx, sessionID)
+	if err != nil {
+		return fmt.Errorf("session %d not found", sessionID)
+	}
+
+	if rec.KilledAt != nil {
+		return fmt.Errorf("session %d is killed", sessionID)
+	}
+
+	if rec.Status == sessionstore.SessionStatusStopping || rec.Status == sessionstore.SessionStatusStopped {
+		return fmt.Errorf("session %d is %s", sessionID, rec.Status)
+	}
+
+	// Append under s.mu so the check-and-append is atomic against the runner's
+	// teardown (which deletes from s.loops under the same lock, then drains
+	// leftover inputs) — otherwise a completion racing an exiting suspended
+	// parent could be lost.
+	if s.appendIfLive(sessionID, input) {
+		return nil
+	}
+
+	workDir, err := s.store.GetProjectWorkDir(ctx, rec.ProjectID)
+	if err != nil {
+		return fmt.Errorf("resolve project %d: %w", rec.ProjectID, err)
+	}
+
+	if s.appendIfLive(sessionID, input) {
+		return nil
+	}
+
+	return s.ensureRunner(ctx, sessionID, workDir, rec.ProjectID, []queuedSessionInput{input})
+}
+
+// removeSchedules deletes all schedules (one-shot and cron) for a killed session.
+// Cleanup failure must not fail the kill — the session is already terminal.
+func (s *svc) removeSchedules(ctx context.Context, sessionID int64) {
+	if s.scheduleSvc == nil {
+		return
+	}
+
+	if err := s.scheduleSvc.RemoveAllForSession(ctx, sessionID); err != nil {
+		logger.Ctx(ctx).Named("daemon.manager").
+			Warn("remove_schedules_failed", zap.Int64("session_id", sessionID), zap.Error(err))
+	}
+}
+
+func (s *svc) send(
+	ctx context.Context,
+	projectID int64,
+	prompt, model string,
+	attrs map[string]any,
+) (int64, error) {
+	workDir, err := s.store.GetProjectWorkDir(ctx, projectID)
+	if err != nil {
+		return 0, fmt.Errorf("resolve project %d: %w", projectID, err)
+	}
+
+	if model == "" && s.defaultModelFn != nil {
+		model = s.defaultModelFn()
+	}
+
+	level, err := s.resolveChildEffort(model, "", "")
+	if err != nil {
+		return 0, fmt.Errorf("resolve reasoning level for model %s: %w", model, err)
+	}
+
+	rec, err := s.sessionStore.CreateSession(ctx, projectID, model, level, attrs)
+	if err != nil {
+		return 0, fmt.Errorf("create session record: %w", err)
+	}
+
+	if prompt != "" {
+		if _, err := s.inboxStore.EnqueueInput(ctx, rec.ID, sessionstore.InputSourceUser, prompt); err != nil {
+			return 0, fmt.Errorf("persist initial session input: %w", err)
+		}
+	}
+
+	if err := s.ensureRunner(ctx, rec.ID, workDir, projectID, nil); err != nil {
+		if errors.Is(err, errNoCapacity) {
+			s.enqueuePendingRunner(rec.ID, workDir, projectID)
+			return rec.ID, nil
+		}
+
+		return 0, err
+	}
+
+	return rec.ID, nil
+}
