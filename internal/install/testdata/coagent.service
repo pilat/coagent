@@ -1,0 +1,20 @@
+[Unit]
+Description=coagent daemon
+Documentation=https://github.com/pilat/coagent
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=testuser
+ExecStart=/home/testuser/.local/bin/coagent daemon
+Restart=on-failure
+RestartSec=5
+MemoryMax=4G
+OOMPolicy=stop
+CPUQuota=50%
+
+[Install]
+WantedBy=multi-user.target
