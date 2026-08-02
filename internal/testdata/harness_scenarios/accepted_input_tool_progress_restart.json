@@ -1,0 +1,22 @@
+{
+  "source_test": "TestHarnessScenario_RestartResumesAcceptedInputAfterToolResult",
+  "trace": [
+    {
+      "type": "session_created",
+      "name": "<name>",
+      "work_dir": "<workdir>"
+    },
+    {
+      "type": "state_changed",
+      "status": "running"
+    },
+    {
+      "type": "message",
+      "message": "✅ accepted input recovered"
+    },
+    {
+      "type": "state_changed",
+      "status": "idle"
+    }
+  ]
+}

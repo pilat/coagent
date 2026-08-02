@@ -1,0 +1,39 @@
+{
+  "source_test": "TestHarnessScenario_BackgroundChildIsTheWakeSource",
+  "trace": [
+    {
+      "type": "session_created",
+      "name": "<name>",
+      "work_dir": "<workdir>"
+    },
+    {
+      "type": "state_changed",
+      "status": "running"
+    },
+    {
+      "type": "message",
+      "message": "✅ background launched; yielded without sleep"
+    },
+    {
+      "type": "state_changed",
+      "status": "idle"
+    },
+    {
+      "type": "session_created",
+      "name": "<name>",
+      "work_dir": "<workdir>"
+    },
+    {
+      "type": "state_changed",
+      "status": "running"
+    },
+    {
+      "type": "message",
+      "message": "✅ background completion delivered"
+    },
+    {
+      "type": "state_changed",
+      "status": "idle"
+    }
+  ]
+}

@@ -1,0 +1,91 @@
+{
+  "source_test": "TestHarnessScenario_ForegroundScatterGatherProjectsShrinkingAllWaitSet",
+  "trace": [
+    {
+      "type": "session_created",
+      "name": "<name>",
+      "work_dir": "<workdir>"
+    },
+    {
+      "type": "state_changed",
+      "status": "running"
+    },
+    {
+      "type": "waiting",
+      "message": "⏳ Waiting for all:\n• subagent #1\n• subagent #2\n• subagent #3\n💬 New messages will be queued until this wait completes",
+      "waiting": [
+        {
+          "kind": "subagent",
+          "child": "#1"
+        },
+        {
+          "kind": "subagent",
+          "child": "#2"
+        },
+        {
+          "kind": "subagent",
+          "child": "#3"
+        }
+      ]
+    },
+    {
+      "type": "session_created",
+      "name": "<name>",
+      "work_dir": "<workdir>"
+    },
+    {
+      "type": "state_changed",
+      "status": "running"
+    },
+    {
+      "type": "waiting",
+      "message": "⏳ Waiting for all:\n• subagent #2\n• subagent #3\n💬 New messages will be queued until this wait completes",
+      "waiting": [
+        {
+          "kind": "subagent",
+          "child": "#2"
+        },
+        {
+          "kind": "subagent",
+          "child": "#3"
+        }
+      ]
+    },
+    {
+      "type": "session_created",
+      "name": "<name>",
+      "work_dir": "<workdir>"
+    },
+    {
+      "type": "state_changed",
+      "status": "running"
+    },
+    {
+      "type": "waiting",
+      "message": "⏳ Waiting for subagent #3\n💬 New messages will be queued until this wait completes",
+      "waiting": [
+        {
+          "kind": "subagent",
+          "child": "#3"
+        }
+      ]
+    },
+    {
+      "type": "session_created",
+      "name": "<name>",
+      "work_dir": "<workdir>"
+    },
+    {
+      "type": "state_changed",
+      "status": "running"
+    },
+    {
+      "type": "message",
+      "message": "✅ all children delivered"
+    },
+    {
+      "type": "state_changed",
+      "status": "idle"
+    }
+  ]
+}

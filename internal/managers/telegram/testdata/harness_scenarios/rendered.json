@@ -1,0 +1,241 @@
+{
+  "scenarios": [
+    {
+      "trace": "accepted_input_persisted_final_restart.json",
+      "source_test": "TestHarnessScenario_RestartSettlesPersistedFinalWithoutRepublishing",
+      "calls": [
+        {
+          "method": "createForumTopic",
+          "chat_id": -100123
+        }
+      ]
+    },
+    {
+      "trace": "accepted_input_restart_recovery.json",
+      "source_test": "TestHarnessScenario_RestartResumesAcceptedInputWithoutAssistant",
+      "calls": [
+        {
+          "method": "createForumTopic",
+          "chat_id": -100123
+        },
+        {
+          "method": "sendMessage",
+          "chat_id": -100123,
+          "thread_id": 7001,
+          "text": "✅ accepted input recovered",
+          "parse_mode": "HTML"
+        }
+      ]
+    },
+    {
+      "trace": "accepted_input_tool_progress_restart.json",
+      "source_test": "TestHarnessScenario_RestartResumesAcceptedInputAfterToolResult",
+      "calls": [
+        {
+          "method": "createForumTopic",
+          "chat_id": -100123
+        },
+        {
+          "method": "sendMessage",
+          "chat_id": -100123,
+          "thread_id": 7001,
+          "text": "✅ accepted input recovered",
+          "parse_mode": "HTML"
+        }
+      ]
+    },
+    {
+      "trace": "background_child_no_sleep.json",
+      "source_test": "TestHarnessScenario_BackgroundChildIsTheWakeSource",
+      "calls": [
+        {
+          "method": "createForumTopic",
+          "chat_id": -100123
+        },
+        {
+          "method": "sendMessage",
+          "chat_id": -100123,
+          "thread_id": 7001,
+          "text": "✅ background launched; yielded without sleep",
+          "parse_mode": "HTML"
+        },
+        {
+          "method": "editForumTopic",
+          "chat_id": -100123,
+          "thread_id": 7001
+        },
+        {
+          "method": "sendMessage",
+          "chat_id": -100123,
+          "thread_id": 7001,
+          "text": "✅ background completion delivered",
+          "parse_mode": "HTML"
+        }
+      ]
+    },
+    {
+      "trace": "foreground_followup_no_sleep.json",
+      "source_test": "TestHarnessScenario_ForegroundChildContinuesWithoutSleep",
+      "calls": [
+        {
+          "method": "createForumTopic",
+          "chat_id": -100123
+        },
+        {
+          "method": "sendMessage",
+          "chat_id": -100123,
+          "thread_id": 7001,
+          "text": "⏳ Waiting for subagent #1\n💬 New messages will be queued until this wait completes",
+          "parse_mode": "HTML"
+        },
+        {
+          "method": "editForumTopic",
+          "chat_id": -100123,
+          "thread_id": 7001
+        },
+        {
+          "method": "sendMessage",
+          "chat_id": -100123,
+          "thread_id": 7001,
+          "text": "✅ initial child delivered",
+          "parse_mode": "HTML"
+        },
+        {
+          "method": "editForumTopic",
+          "chat_id": -100123,
+          "thread_id": 7001
+        },
+        {
+          "method": "sendMessage",
+          "chat_id": -100123,
+          "thread_id": 7001,
+          "text": "✅ follow-up accepted",
+          "parse_mode": "HTML"
+        },
+        {
+          "method": "editForumTopic",
+          "chat_id": -100123,
+          "thread_id": 7001
+        },
+        {
+          "method": "sendMessage",
+          "chat_id": -100123,
+          "thread_id": 7001,
+          "text": "✅ continuation delivered",
+          "parse_mode": "HTML"
+        }
+      ]
+    },
+    {
+      "trace": "scatter_gather_shrinking_wait_set.json",
+      "source_test": "TestHarnessScenario_ForegroundScatterGatherProjectsShrinkingAllWaitSet",
+      "calls": [
+        {
+          "method": "createForumTopic",
+          "chat_id": -100123
+        },
+        {
+          "method": "sendMessage",
+          "chat_id": -100123,
+          "thread_id": 7001,
+          "text": "⏳ Waiting for all:\n• subagent #1\n• subagent #2\n• subagent #3\n💬 New messages will be queued until this wait completes",
+          "parse_mode": "HTML"
+        },
+        {
+          "method": "editForumTopic",
+          "chat_id": -100123,
+          "thread_id": 7001
+        },
+        {
+          "method": "sendMessage",
+          "chat_id": -100123,
+          "thread_id": 7001,
+          "text": "⏳ Waiting for all:\n• subagent #2\n• subagent #3\n💬 New messages will be queued until this wait completes",
+          "parse_mode": "HTML"
+        },
+        {
+          "method": "editForumTopic",
+          "chat_id": -100123,
+          "thread_id": 7001
+        },
+        {
+          "method": "sendMessage",
+          "chat_id": -100123,
+          "thread_id": 7001,
+          "text": "⏳ Waiting for subagent #3\n💬 New messages will be queued until this wait completes",
+          "parse_mode": "HTML"
+        },
+        {
+          "method": "editForumTopic",
+          "chat_id": -100123,
+          "thread_id": 7001
+        },
+        {
+          "method": "sendMessage",
+          "chat_id": -100123,
+          "thread_id": 7001,
+          "text": "✅ all children delivered",
+          "parse_mode": "HTML"
+        }
+      ]
+    },
+    {
+      "trace": "second_input_no_replay.json",
+      "source_test": "TestHarnessScenario_SecondInputDoesNotReplayPreviousFinal",
+      "calls": [
+        {
+          "method": "createForumTopic",
+          "chat_id": -100123
+        },
+        {
+          "method": "sendMessage",
+          "chat_id": -100123,
+          "thread_id": 7001,
+          "text": "✅ first answer",
+          "parse_mode": "HTML"
+        },
+        {
+          "method": "editForumTopic",
+          "chat_id": -100123,
+          "thread_id": 7001
+        },
+        {
+          "method": "sendMessage",
+          "chat_id": -100123,
+          "thread_id": 7001,
+          "text": "✅ second answer",
+          "parse_mode": "HTML"
+        }
+      ]
+    },
+    {
+      "trace": "sleep_interrupted_by_input.json",
+      "source_test": "TestHarnessScenario_SleepProjectsWakeAtAndUserInputInterruptsIt",
+      "calls": [
+        {
+          "method": "createForumTopic",
+          "chat_id": -100123
+        },
+        {
+          "method": "sendMessage",
+          "chat_id": -100123,
+          "thread_id": 7001,
+          "text": "⏳ Sleeping until &lt;wake&gt;\n💬 Send a message to interrupt sleep",
+          "parse_mode": "HTML"
+        },
+        {
+          "method": "editForumTopic",
+          "chat_id": -100123,
+          "thread_id": 7001
+        },
+        {
+          "method": "sendMessage",
+          "chat_id": -100123,
+          "thread_id": 7001,
+          "text": "✅ sleep interruption handled",
+          "parse_mode": "HTML"
+        }
+      ]
+    }
+  ]
+}

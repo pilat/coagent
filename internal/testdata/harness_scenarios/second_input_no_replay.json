@@ -1,0 +1,39 @@
+{
+  "source_test": "TestHarnessScenario_SecondInputDoesNotReplayPreviousFinal",
+  "trace": [
+    {
+      "type": "session_created",
+      "name": "<name>",
+      "work_dir": "<workdir>"
+    },
+    {
+      "type": "state_changed",
+      "status": "running"
+    },
+    {
+      "type": "message",
+      "message": "✅ first answer"
+    },
+    {
+      "type": "state_changed",
+      "status": "idle"
+    },
+    {
+      "type": "session_created",
+      "name": "<name>",
+      "work_dir": "<workdir>"
+    },
+    {
+      "type": "state_changed",
+      "status": "running"
+    },
+    {
+      "type": "message",
+      "message": "✅ second answer"
+    },
+    {
+      "type": "state_changed",
+      "status": "idle"
+    }
+  ]
+}

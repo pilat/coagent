@@ -1,0 +1,18 @@
+{
+  "source_test": "TestHarnessScenario_RestartSettlesPersistedFinalWithoutRepublishing",
+  "trace": [
+    {
+      "type": "session_created",
+      "name": "<name>",
+      "work_dir": "<workdir>"
+    },
+    {
+      "type": "state_changed",
+      "status": "running"
+    },
+    {
+      "type": "state_changed",
+      "status": "idle"
+    }
+  ]
+}

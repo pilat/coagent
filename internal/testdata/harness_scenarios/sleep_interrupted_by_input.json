@@ -1,0 +1,41 @@
+{
+  "source_test": "TestHarnessScenario_SleepProjectsWakeAtAndUserInputInterruptsIt",
+  "trace": [
+    {
+      "type": "session_created",
+      "name": "<name>",
+      "work_dir": "<workdir>"
+    },
+    {
+      "type": "state_changed",
+      "status": "running"
+    },
+    {
+      "type": "waiting",
+      "message": "⏳ Sleeping until <wake>\n💬 Send a message to interrupt sleep",
+      "waiting": [
+        {
+          "kind": "sleep",
+          "wake": "<wake>"
+        }
+      ]
+    },
+    {
+      "type": "session_created",
+      "name": "<name>",
+      "work_dir": "<workdir>"
+    },
+    {
+      "type": "state_changed",
+      "status": "running"
+    },
+    {
+      "type": "message",
+      "message": "✅ sleep interruption handled"
+    },
+    {
+      "type": "state_changed",
+      "status": "idle"
+    }
+  ]
+}

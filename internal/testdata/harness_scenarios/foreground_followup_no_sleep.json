@@ -1,0 +1,75 @@
+{
+  "source_test": "TestHarnessScenario_ForegroundChildContinuesWithoutSleep",
+  "trace": [
+    {
+      "type": "session_created",
+      "name": "<name>",
+      "work_dir": "<workdir>"
+    },
+    {
+      "type": "state_changed",
+      "status": "running"
+    },
+    {
+      "type": "waiting",
+      "message": "⏳ Waiting for subagent #1\n💬 New messages will be queued until this wait completes",
+      "waiting": [
+        {
+          "kind": "subagent",
+          "child": "#1"
+        }
+      ]
+    },
+    {
+      "type": "session_created",
+      "name": "<name>",
+      "work_dir": "<workdir>"
+    },
+    {
+      "type": "state_changed",
+      "status": "running"
+    },
+    {
+      "type": "message",
+      "message": "✅ initial child delivered"
+    },
+    {
+      "type": "state_changed",
+      "status": "idle"
+    },
+    {
+      "type": "session_created",
+      "name": "<name>",
+      "work_dir": "<workdir>"
+    },
+    {
+      "type": "state_changed",
+      "status": "running"
+    },
+    {
+      "type": "message",
+      "message": "✅ follow-up accepted"
+    },
+    {
+      "type": "state_changed",
+      "status": "idle"
+    },
+    {
+      "type": "session_created",
+      "name": "<name>",
+      "work_dir": "<workdir>"
+    },
+    {
+      "type": "state_changed",
+      "status": "running"
+    },
+    {
+      "type": "message",
+      "message": "✅ continuation delivered"
+    },
+    {
+      "type": "state_changed",
+      "status": "idle"
+    }
+  ]
+}
