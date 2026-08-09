@@ -1,0 +1,230 @@
+# Project invariants that no off-the-shelf linter expresses, because they are
+# about which CALL is allowed rather than which package is imported (depguard
+# covers the import-level bans in .golangci.yml).
+#
+# Every rule here is at zero violations and is meant to stay there: `make semgrep`
+# is a hard gate, not a ratchet. Suppress a genuine exception inline with
+# `// nosemgrep: <rule-id> -- <reason>`.
+
+rules:
+  - id: coagent-no-dotenv-into-environment
+    languages: [go]
+    severity: ERROR
+    message: >-
+      godotenv.Load/Overload export the secrets file into the process environment,
+      which every tool subprocess (bash, MCP, LSP) then inherits. Parse it with
+      godotenv.Read into config.Secrets instead.
+    patterns:
+      - pattern-either:
+          - pattern: godotenv.Load(...)
+          - pattern: godotenv.Overload(...)
+          - pattern: godotenv.Exec(...)
+
+  - id: coagent-no-environment-mutation
+    languages: [go]
+    severity: ERROR
+    message: >-
+      The daemon's environment is the template every tool subprocess inherits.
+      Mutating it process-wide leaks into unrelated sessions — pass the value
+      through config or the subprocess's own Env slice.
+    paths:
+      exclude: ["*_test.go"]
+    patterns:
+      - pattern-either:
+          - pattern: os.Setenv(...)
+          - pattern: os.Unsetenv(...)
+          - pattern: os.Clearenv()
+
+  - id: coagent-no-direct-environment-read
+    languages: [go]
+    severity: ERROR
+    message: >-
+      Read configuration through internal/config, not the environment directly:
+      secrets deliberately never reach os.Environ, so a direct lookup silently
+      returns empty in production.
+    paths:
+      exclude: ["*_test.go"]
+    patterns:
+      - pattern-either:
+          - pattern: os.Getenv(...)
+          - pattern: os.LookupEnv(...)
+
+  - id: coagent-no-direct-user-home-dir
+    languages: [go]
+    severity: ERROR
+    message: >-
+      Resolve the home directory through coagenthome.UserHome/Dir/Join, not
+      os.UserHomeDir directly: coagenthome is the single resolution point and
+      the only one tests can override.
+    paths:
+      exclude: ["/internal/coagenthome/*"]
+    pattern: os.UserHomeDir()
+
+  - id: coagent-no-real-marketplace-fixtures
+    languages: [generic]
+    severity: ERROR
+    message: >-
+      Tests must use synthetic local marketplace fixtures. Referencing the real
+      marketplace makes the suite depend on mutable external content and network.
+    paths:
+      include: ["*_test.go"]
+    pattern-regex: 'github\.com/pilat/pilat-marketplace|pilat-marketplace'
+
+  - id: coagent-no-inherited-home-in-process-tests
+    languages: [go]
+    severity: ERROR
+    message: >-
+      Compiled-process tests must use isolatedProcessEnv. Appending HOME to
+      os.Environ leaves duplicate HOME values and inherited XDG paths that can
+      route the daemon into the developer's real profile.
+    paths:
+      include: ["cmd/coagent/*_test.go"]
+    pattern: append(os.Environ(), ...)
+
+  - id: coagent-no-process-wide-chdir
+    languages: [go]
+    severity: ERROR
+    message: >-
+      os.Chdir is process-global and sessions run concurrently with different
+      work dirs. Set the directory on the subprocess (cmd.Dir) or resolve paths
+      against the session work dir.
+    paths:
+      exclude: ["*_test.go"]
+    pattern: os.Chdir(...)
+
+  - id: coagent-no-default-http-client
+    languages: [go]
+    severity: ERROR
+    message: >-
+      The package-level http helpers carry no timeout, no context and skip the
+      webfetch destination policy. Build an *http.Client with an explicit timeout
+      and use http.NewRequestWithContext.
+    paths:
+      exclude: ["*_test.go"]
+    patterns:
+      - pattern-either:
+          - pattern: http.Get(...)
+          - pattern: http.Post(...)
+          - pattern: http.Head(...)
+          - pattern: http.PostForm(...)
+          - pattern: http.NewRequest(...)
+          - pattern: http.DefaultClient
+
+  - id: coagent-no-panic-in-daemon
+    languages: [go]
+    severity: ERROR
+    message: >-
+      A panic in a session goroutine takes the whole daemon with it and every
+      other running session. Return an error.
+    paths:
+      exclude: ["*_test.go"]
+    pattern: panic(...)
+
+  - id: coagent-no-os-exit-outside-main
+    languages: [go]
+    severity: ERROR
+    message: >-
+      os.Exit skips every registered stop closure, so sessions are killed without
+      being persisted. Only the composition root may exit; elsewhere return an error.
+    paths:
+      exclude: ["*_test.go", "/cmd/coagent/*"]
+    pattern: os.Exit(...)
+
+  # Generic (regex) rather than Go: semgrep's Go patterns cannot see comments,
+  # and this rule is entirely about what sits above the package clause.
+  - id: coagent-no-preamble-before-package
+    languages: [generic]
+    severity: ERROR
+    paths:
+      include: ["*.go"]
+    message: >-
+      Nothing belongs above a package clause except a build directive. No package
+      doc comments (revive package-comments and staticcheck ST1000 are off for the
+      same reason) — what a package is for belongs in ARCHITECTURE.md, and working
+      notes belong in the commit message.
+    patterns:
+      - pattern-either:
+          - pattern-regex: \A(?:[ \t]*\n)*//(?!go:build)(?![ \t]*\+build)
+          - pattern-regex: \A(?:[ \t]*\n)*/\*
+          - pattern-regex: (?m)^//go:build[^\n]*\n(?:^//[^\n]*\n|^[ \t]*\n)*?^//(?![ \t]*\+build)[^\n]*\n(?:^[^\n]*\n)*?^package[ \t]
+
+  # The ops layer renders drafts back to YAML. A resolved config carries the
+  # credential *values* in api_key/bot_token, so loading one here and marshalling
+  # it would write them into config.yaml in plaintext. Raw load only.
+  - id: coagent-configops-raw-draft-only
+    languages: [go]
+    severity: ERROR
+    paths:
+      include: ["internal/configops/*.go"]
+      exclude: ["*_test.go"]
+    message: >-
+      internal/configops must load config through LoadRawUnifiedConfig, which keeps
+      ${VAR} references unresolved. LoadUnifiedConfig returns resolved credentials,
+      and marshalling that draft writes them into config.yaml as plaintext.
+    pattern: config.LoadUnifiedConfig(...)
+
+  # Child sessions are controller-invisible end to end; the drop happens in one
+  # place, so no direct call may reach the hub around it.
+  - id: coagent-pubsub-publish-via-gate
+    languages: [go]
+    severity: ERROR
+    paths:
+      include: ["internal/**/*.go", "cmd/**/*.go"]
+      exclude: ["internal/daemon/publish.go", "internal/daemon/pubsub.go", "*_test.go"]
+    message: >-
+      Publish through svc.publish (internal/daemon/publish.go), which drops
+      child-session events. A direct PubSub.Publish leaks subagent lifecycle
+      notifications to every controller.
+    patterns:
+      - pattern-either:
+          - pattern: $X.PubSub().Publish(...)
+          - pattern: $S.pubsub.Publish(...)
+
+  # Credentials reach config.yaml only as ${VAR} references, so nothing outside
+  # the one package that owns the secrets file may write to it.
+  - id: coagent-secrets-file-single-writer
+    languages: [go]
+    severity: ERROR
+    paths:
+      include: ["internal/**/*.go", "cmd/**/*.go"]
+      exclude: ["internal/configops/*.go", "*_test.go"]
+    message: >-
+      Only internal/configops writes the secrets file. Route credential writes
+      through configops.Service.SetSecret, which enforces the name shape, the
+      value round-trip and immediate log redaction.
+    pattern: writeSecretLine(...)
+
+  # Package-level architecture allows daemon to import session, but only the
+  # runner owns causal transcript mutation. A completion/scheduler callback that
+  # calls these methods directly would bypass ordering, deferral and retry.
+  - id: coagent-session-inputs-via-runner
+    languages: [go]
+    severity: ERROR
+    paths:
+      include: ["internal/**/*.go"]
+      exclude: ["internal/daemon/runner.go", "internal/session/*.go", "*_test.go"]
+    message: >-
+      Route transcript inputs through daemon's typed sessionInput queue. Only
+      runner.go may resolve pending calls or inject standalone session events.
+    patterns:
+      - pattern-either:
+          - pattern: $S.ResolvePendingCall(...)
+          - pattern: $S.InjectToolNotification(...)
+          - pattern: $S.ResetContextAndInject(...)
+
+  # Store.AddSchedule mirrors nullable SQLite columns and is intentionally less
+  # honest than the domain API. Keep that representation behind Service, whose
+  # AddRecurring/AddSleep methods make the variant and sleep call ID mandatory.
+  - id: coagent-schedule-creation-via-domain-service
+    languages: [go]
+    severity: ERROR
+    paths:
+      include: ["internal/schedule/*.go"]
+      exclude: ["internal/schedule/service.go", "internal/schedule/store.go", "*_test.go"]
+    message: >-
+      Create schedules through Service.AddRecurring or Service.AddSleep; direct
+      Store creation can reintroduce anonymous one-shots and optional-field bags.
+    patterns:
+      - pattern-either:
+          - pattern: $S.AddSchedule(...)
+          - pattern: $S.AddScheduleWithMeta(...)

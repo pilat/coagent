@@ -1,0 +1,140 @@
+version: 3
+workdir: .
+
+allow:
+  # We model internal architecture here, not vendor policy.
+  depOnAnyVendor: true
+  # A stale/misspelled component must fail the gate instead of silently dropping
+  # its rules after a directory move.
+  ignoreNotFoundComponents: false
+  # deepScan resolves concrete types through interface params at call sites, so
+  # it catches coupling the import graph hides. Keep it on: it guards the rule
+  # that tool (protocol) stays a pure leaf while builtin (implementations) carries
+  # the capability-hub dependencies.
+  deepScan: true
+
+# tmp/ holds an unrelated vendored project (openclaw) with its own go.mod.
+exclude:
+  - tmp
+
+# Arch rules govern production dependency direction. Test wiring (e.g. tests
+# pulling migrate to build a temp DB) is not an architectural edge.
+excludeFiles:
+  - "_test\\.go$"
+
+components:
+  main:           { in: cmd/coagent }
+
+  coagenthome:    { in: internal/coagenthome }
+  config:         { in: internal/config }
+  logger:         { in: internal/logger }
+  llmwire:        { in: internal/llmwire }
+  sessionevent:   { in: internal/sessionevent }
+  controllerapi:  { in: internal/controllerapi }
+  id:             { in: internal/id }
+  git:            { in: internal/git }
+  version:        { in: internal/version }
+  install:        { in: internal/install }
+  migrate:        { in: internal/migrate }
+  migrations:     { in: migrations }
+
+  registry:     { in: internal/registry }
+  todo:         { in: internal/todo }
+  lsp:          { in: internal/lsp }
+  loader:       { in: internal/loader }
+  memory:       { in: internal/memory }
+  mcpstore:     { in: internal/mcpstore }
+  sessionstore: { in: internal/sessionstore }
+
+  tool:       { in: internal/tool }
+  bashsandbox: { in: internal/bashsandbox }
+  builtin:    { in: internal/tool/builtin }
+  catalog:    { in: internal/catalog }
+  llm:        { in: internal/llm }
+  mcp:        { in: internal/mcp }
+  shellenv:   { in: internal/shellenv }
+
+  session:    { in: internal/session }
+  schedule:   { in: internal/schedule }
+
+  telegram:   { in: internal/managers/telegram }
+  managercli: { in: internal/managers/cli }
+  managers:   { in: internal/managers }
+  daemon:     { in: internal/daemon }
+
+  configops:  { in: internal/configops }
+  ctl:        { in: internal/ctl }
+
+deps:
+  # Composition root — wires everything.
+  main:
+    anyProjectDeps: true
+
+  # Leaves stay leaves unless an edge is explicitly admitted here. There are no
+  # global "common" exceptions: even logging/config/protocol imports are part of
+  # a component's contract and a new one must be reviewed.
+  config:
+    mayDependOn: [coagenthome]
+  controllerapi:
+    mayDependOn: [sessionevent]
+  install:
+    mayDependOn: [coagenthome]
+  migrate:
+    mayDependOn: [coagenthome, logger, migrations]
+  todo:
+    mayDependOn: [id]
+
+  # Per-cwd shell activation, consumed by the three per-cwd spawners.
+  bashsandbox:
+    mayDependOn: [coagenthome, shellenv]
+  lsp:
+    mayDependOn: [coagenthome, logger, shellenv]
+  loader:
+    mayDependOn: [coagenthome, config, git, logger]
+  mcp:
+    mayDependOn: [logger, shellenv, tool]
+  shellenv:
+    mayDependOn: [coagenthome, logger]
+
+  # Shared protocols are small, but not globally importable by fiat.
+  tool:
+    mayDependOn: [llmwire]
+
+  # External model catalogs — the drivers' source of model metadata.
+  catalog:
+    mayDependOn: [coagenthome, config, logger]
+  llm:
+    mayDependOn: [catalog, config, llmwire, logger]
+
+  # Capability hub: tool implementations reach into a few leaf services.
+  builtin:
+    mayDependOn: [bashsandbox, coagenthome, config, loader, logger, lsp, mcp, memory, shellenv, todo, tool]
+
+  # ReAct loop — the heaviest service.
+  session:
+    mayDependOn: [builtin, config, git, id, llm, llmwire, loader, logger, mcp, mcpstore, memory, registry, sessionevent, sessionstore, shellenv, todo, tool]
+
+  # schedule fires wake-ups only through its own SessionSender interface; it has
+  # protocol/logging edges but cannot import session or daemon.
+  schedule:
+    mayDependOn: [logger, sessionevent, tool]
+
+  # Controllers.
+  telegram:
+    mayDependOn: [coagenthome, config, controllerapi, logger, sessionevent]
+  managers:
+    mayDependOn: [config, controllerapi, logger, telegram]
+  # The local chat rides the control socket the way telegram rides HTTP.
+  managercli:
+    mayDependOn: [controllerapi, ctl, logger, sessionevent]
+
+  # Orchestrator.
+  daemon:
+    mayDependOn: [coagenthome, config, configops, controllerapi, git, id, llmwire, loader, logger, mcp, mcpstore, registry, schedule, session, sessionevent, sessionstore, tool]
+
+  configops:
+    mayDependOn: [coagenthome, config, logger]
+
+  # Local control plane: pure transport plus the daemon-state ops it answers from.
+  ctl:
+    mayDependOn: [coagenthome, config, logger, version]
