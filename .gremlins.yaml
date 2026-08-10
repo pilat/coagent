@@ -1,0 +1,23 @@
+# Mutation testing config for `make mutation`.
+#
+# Mutation answers the question coverage cannot: would the test suite actually
+# FAIL if the logic were wrong. Gremlins applies one small mutation at a time
+# (flip a condition, change a boundary, drop an increment) and reruns the tests.
+# A mutant that survives is a line the tests execute but do not assert on.
+
+unleash:
+  exclude-files:
+    - '(^|/)migrations/'      # SQL under a thin Go wrapper, nothing to mutate meaningfully
+    - '(^|/)tmp/'             # unrelated vendored tree with its own go.mod
+    - '(^|/).*_gen\.go$'
+    - '(^|/)mock_[^/]*\.go$'
+
+mutants:
+  # Off by default in gremlins but worth having: these three are exactly the
+  # class of mistake a generated-then-lightly-reviewed codebase carries.
+  invert-logical:
+    enabled: true
+  invert-loopctrl:
+    enabled: true
+  remove-self-assignments:
+    enabled: true
