@@ -1,0 +1,27 @@
+{
+  "extraKnownMarketplaces": {
+    "pilat-marketplace": {
+      "autoUpdate": true,
+      "source": {
+        "source": "github",
+        "repo": "pilat/pilat-marketplace"
+      }
+    }
+  },
+  "enabledPlugins": {
+    "pilat@pilat-marketplace": true
+  },
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "make -C \"$CLAUDE_PROJECT_DIR\" post-stop-hook 1>&2",
+            "timeout": 180
+          }
+        ]
+      }
+    ]
+  }
+}
