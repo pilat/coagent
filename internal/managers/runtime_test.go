@@ -87,6 +87,16 @@ func TestRuntime_OnStart_StartsOnlyEnabledManagers(t *testing.T) {
 	assert.Equal(t, 1, enabledMgr.stopped)
 }
 
+func TestRuntime_RejectsBuiltinCLIManagerID(t *testing.T) {
+	reserved := &fakeManager{id: "cli"}
+	r := runtimeFor(reserved)
+
+	require.NoError(t, r.Start(context.Background()))
+	assert.Empty(t, r.RunningIDs())
+	assert.Equal(t, 0, reserved.started)
+	require.ErrorContains(t, r.StartError("cli"), "reserved for the built-in local chat")
+}
+
 func TestRuntime_OnStart_SkipsFailedManagerAndKeepsTheRest(t *testing.T) {
 	first := &fakeManager{id: "first"}
 	second := &fakeManager{id: "second", startErr: errors.New("boom")}

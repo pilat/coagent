@@ -150,7 +150,9 @@ func TestScenario_ConfigApplyRejectionReachesTheSessionInProcess(t *testing.T) {
 
 	d.mgr.applier = NewConfigApplier(failingCommitOps{d.ops}, func() { d.restarts <- struct{}{} })
 
-	sessionID, err := d.mgr.Send(d.ctx, d.projectID, "switch the default model", "fake-model", nil)
+	sessionID, err := d.mgr.Send(
+		d.ctx, d.projectID, "switch the default model", "fake-model", map[string]any{"channel": "cli"},
+	)
 	require.NoError(t, err)
 
 	d.waitUntil("the rejection reached the transcript", func() bool {

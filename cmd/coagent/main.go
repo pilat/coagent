@@ -364,7 +364,12 @@ func runDaemon(
 	// The chat sees only its own contract type, never main's wider resolver.
 	var secretPushes cli.SecretRequests = core.secretResolver
 
-	chat := cli.New(core.controller, ctlSrv, onboardingModel(cfg), secretPushes)
+	chat := cli.New(
+		core.controller.ForManager(controllerapi.BuiltinCLIManagerID),
+		ctlSrv,
+		onboardingModel(cfg),
+		secretPushes,
+	)
 	if err := chat.Start(ctx); err != nil {
 		return fmt.Errorf("start local chat: %w", err)
 	}
@@ -460,7 +465,7 @@ func verdictUndeliverable(ctx context.Context, sender applyVerdictSender, sessio
 // core is what the control plane is wired onto. Every field names the exact
 // capability runDaemon hands to a consumer; it is a return value, not a layer.
 type core struct {
-	controller     controllerapi.Controller
+	controller     controllerapi.ManagerControllerFactory
 	scheduleStore  schedule.Store
 	scheduleSender schedule.SessionSender
 	verdictSender  applyVerdictSender

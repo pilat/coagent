@@ -33,6 +33,10 @@ func (c *chat) readLines(ctx context.Context) int {
 		}
 
 		if err := c.consume(ctx, strings.TrimSpace(line)); err != nil {
+			if errors.Is(err, io.EOF) {
+				return exitOK
+			}
+
 			c.errorf("%v", err)
 
 			return exitError
@@ -59,6 +63,10 @@ func (c *chat) consume(ctx context.Context, line string) error {
 		c.stopTurn(ctx)
 
 		return nil
+	}
+
+	if line == "/model" {
+		return c.chooseModel(ctx)
 	}
 
 	return c.send(ctx, line)

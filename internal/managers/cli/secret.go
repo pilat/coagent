@@ -34,6 +34,10 @@ func (m *Manager) cancelSecretHandler() ctl.Handler {
 			return nil, &ctl.Error{Code: ctl.CodeInvalidParams, Message: err.Error()}
 		}
 
+		if err := m.requireOwnedSession(p.SessionID); err != nil {
+			return nil, &ctl.Error{Code: ctl.CodeInvalidParams, Message: err.Error()}
+		}
+
 		if err := m.secrets.CancelSecretRequest(ctx, p.RequestID); err != nil {
 			return nil, &ctl.Error{Code: ctl.CodeInternal, Message: err.Error()}
 		}

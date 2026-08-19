@@ -3,13 +3,18 @@ package daemon
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"path/filepath"
+	"strings"
+
+	"github.com/pilat/coagent/internal/controllerapi"
 )
 
 // Store persists daemon state (project registry) in SQLite.
 type Store interface {
 	GetOrCreateProject(ctx context.Context, workDir string) (int64, error)
+	GetOrCreateSystemProject(ctx context.Context, workDir, name string) (int64, error)
 	GetProjectWorkDir(ctx context.Context, projectID int64) (string, error)
 	GetProjectName(ctx context.Context, projectID int64) (string, error)
 	ListProjects(ctx context.Context) ([]ProjectRow, error)
@@ -39,25 +44,25 @@ func (s *store) GetOrCreateProject(ctx context.Context, workDir string) (int64, 
 	}
 
 	name := filepath.Base(absPath)
-
-	_, err = s.db.ExecContext(
-		ctx,
-		`INSERT OR IGNORE INTO projects (work_dir, name) VALUES (?, ?)`,
-		absPath,
-		name,
-	)
-	if err != nil {
-		return 0, fmt.Errorf("upsert project: %w", err)
+	if name == controllerapi.CoagentSystemProjectDir || strings.ContainsRune(name, ':') {
+		return 0, fmt.Errorf("project directory name %q is reserved", name)
 	}
 
-	var projectID int64
+	return s.getOrCreateProject(ctx, absPath, name, false)
+}
 
-	err = s.db.QueryRowContext(ctx, `SELECT id FROM projects WHERE work_dir = ?`, absPath).Scan(&projectID)
+func (s *store) GetOrCreateSystemProject(ctx context.Context, workDir, name string) (int64, error) {
+	absPath, err := filepath.Abs(workDir)
 	if err != nil {
-		return 0, fmt.Errorf("select project: %w", err)
+		absPath = workDir
 	}
 
-	return projectID, nil
+	if name != controllerapi.CoagentSystemProjectName ||
+		filepath.Base(absPath) != controllerapi.CoagentSystemProjectDir {
+		return 0, errors.New("unknown system project identity")
+	}
+
+	return s.getOrCreateProject(ctx, absPath, name, true)
 }
 
 func (s *store) GetProjectName(ctx context.Context, projectID int64) (string, error) {
@@ -107,4 +112,31 @@ func (s *store) ListProjects(ctx context.Context) ([]ProjectRow, error) {
 	}
 
 	return projects, nil
+}
+
+func (s *store) getOrCreateProject(ctx context.Context, absPath, name string, system bool) (int64, error) {
+	query := `INSERT OR IGNORE INTO projects (work_dir, name) VALUES (?, ?)`
+	if system {
+		query = `INSERT INTO projects (work_dir, name) VALUES (?, ?)
+			ON CONFLICT(work_dir) DO UPDATE SET name = excluded.name`
+	}
+
+	_, err := s.db.ExecContext(
+		ctx,
+		query,
+		absPath,
+		name,
+	)
+	if err != nil {
+		return 0, fmt.Errorf("upsert project: %w", err)
+	}
+
+	var projectID int64
+
+	err = s.db.QueryRowContext(ctx, `SELECT id FROM projects WHERE work_dir = ?`, absPath).Scan(&projectID)
+	if err != nil {
+		return 0, fmt.Errorf("select project: %w", err)
+	}
+
+	return projectID, nil
 }

@@ -42,6 +42,24 @@ type mockSession struct {
 	boundary     session.InputBoundary
 }
 
+type blockingCreateSessionStore struct {
+	sessionstore.OrchestrationStore
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (s *blockingCreateSessionStore) CreateSession(
+	ctx context.Context,
+	projectID int64,
+	model, reasoningLevel string,
+	attrs map[string]any,
+) (*sessionstore.SessionRecord, error) {
+	close(s.entered)
+	<-s.release
+
+	return s.OrchestrationStore.CreateSession(ctx, projectID, model, reasoningLevel, attrs)
+}
+
 // mockFactory implements session.Factory for testing.
 type mockFactory struct {
 	mu       sync.Mutex
@@ -863,7 +881,11 @@ func TestManager_Clear(t *testing.T) {
 
 	ctx := context.Background()
 	pid := testProject(t, s, "/tmp/clear")
-	id, err := mgr.Send(ctx, pid, "init", "test-model", map[string]any{"chat_id": float64(42)})
+	id, err := mgr.Send(ctx, pid, "init", "test-model", map[string]any{
+		"channel":                               "cli",
+		"chat_id":                               float64(42),
+		controllerapi.SessionAttributeManagerID: "cli",
+	})
 	require.NoError(t, err)
 
 	waitForState(t, ch, id, controllerapi.StateIdle, 3*time.Second)
@@ -883,7 +905,9 @@ func TestManager_Clear(t *testing.T) {
 	assert.Nil(t, newRec.KilledAt, "new session should not be killed")
 	assert.Equal(t, "test-model", newRec.Model)
 	assert.Equal(t, "high", newRec.ReasoningLevel)
+	assert.Equal(t, "cli", newRec.Attributes["channel"])
 	assert.InDelta(t, float64(42), newRec.Attributes["chat_id"], 0.0)
+	assert.Equal(t, "cli", newRec.Attributes[controllerapi.SessionAttributeManagerID])
 
 	// Old session should be killed (Kill ran synchronously inside Clear)
 	oldRec, err := mgr.sessionStore.GetSession(context.Background(), id)
@@ -905,6 +929,112 @@ func TestManager_Clear(t *testing.T) {
 			t.Fatal("timed out waiting for session.cleared notification")
 		}
 	}
+}
+
+func TestManager_SetAttributesCannotRemoveOrRebindManagerOwner(t *testing.T) {
+	mgr, _, store := newTestManager(t)
+	ctx := context.Background()
+	pid := testProject(t, store, "/tmp/manager-owner-immutable")
+	rec, err := mgr.sessionStore.CreateSession(ctx, pid, "test-model", "", map[string]any{
+		controllerapi.SessionAttributeManagerID: "alpha",
+	})
+	require.NoError(t, err)
+
+	require.NoError(t, mgr.SetAttributes(ctx, rec.ID, map[string]any{"topic": float64(42)}))
+	stored, err := mgr.sessionStore.GetSession(ctx, rec.ID)
+	require.NoError(t, err)
+	assert.Equal(t, "alpha", stored.Attributes[controllerapi.SessionAttributeManagerID])
+	assert.InDelta(t, float64(42), stored.Attributes["topic"], 0)
+
+	err = mgr.SetAttributes(ctx, rec.ID, map[string]any{
+		controllerapi.SessionAttributeManagerID: "beta",
+	})
+	require.ErrorContains(t, err, `belongs to manager "alpha"`)
+	stored, err = mgr.sessionStore.GetSession(ctx, rec.ID)
+	require.NoError(t, err)
+	assert.Equal(t, "alpha", stored.Attributes[controllerapi.SessionAttributeManagerID])
+}
+
+func TestManager_ConcurrentManagerClaimsHaveExactlyOneWinner(t *testing.T) {
+	mgr, _, store := newTestManager(t)
+	ctx := context.Background()
+	pid := testProject(t, store, "/tmp/concurrent-manager-claim")
+	rec, err := mgr.sessionStore.CreateSession(ctx, pid, "test-model", "", nil)
+	require.NoError(t, err)
+
+	start := make(chan struct{})
+	errs := make(chan error, 2)
+	for _, owner := range []string{"alpha", "beta"} {
+		go func() {
+			<-start
+			errs <- mgr.SetAttributes(ctx, rec.ID, map[string]any{
+				controllerapi.SessionAttributeManagerID: owner,
+			})
+		}()
+	}
+	close(start)
+
+	results := []error{<-errs, <-errs}
+	successes := 0
+	for _, claimErr := range results {
+		if claimErr == nil {
+			successes++
+		}
+	}
+	assert.Equal(t, 1, successes)
+
+	stored, err := mgr.sessionStore.GetSession(ctx, rec.ID)
+	require.NoError(t, err)
+	assert.Contains(t, []string{"alpha", "beta"}, stored.Attributes[controllerapi.SessionAttributeManagerID])
+}
+
+func TestManager_ClearRejectsAConcurrentLateOwnerClaim(t *testing.T) {
+	mgr, _, store := newTestManager(t)
+	ctx := context.Background()
+	pid := testProject(t, store, "/tmp/clear-concurrent-manager-claim")
+	rec, err := mgr.sessionStore.CreateSession(ctx, pid, "test-model", "", nil)
+	require.NoError(t, err)
+
+	blocking := &blockingCreateSessionStore{
+		OrchestrationStore: mgr.sessionStore,
+		entered:            make(chan struct{}), release: make(chan struct{}),
+	}
+	mgr.sessionStore = blocking
+	clearResult := make(chan struct {
+		id  int64
+		err error
+	}, 1)
+	go func() {
+		id, clearErr := mgr.Clear(ctx, rec.ID)
+		clearResult <- struct {
+			id  int64
+			err error
+		}{id: id, err: clearErr}
+	}()
+	requireSignal(t, blocking.entered)
+	if mgr.routeMu.TryLock() {
+		mgr.routeMu.Unlock()
+		t.Fatal("clear did not hold the manager ownership boundary while creating its replacement")
+	}
+
+	claimResult := make(chan error, 1)
+	claimStarted := make(chan struct{})
+	go func() {
+		close(claimStarted)
+		claimResult <- mgr.SetAttributes(ctx, rec.ID, map[string]any{
+			controllerapi.SessionAttributeManagerID: "alpha",
+		})
+	}()
+	requireSignal(t, claimStarted)
+
+	close(blocking.release)
+	cleared := <-clearResult
+	require.NoError(t, cleared.err)
+	require.ErrorContains(t, <-claimResult, "cannot acquire a manager owner")
+
+	replacement, err := mgr.sessionStore.GetSession(ctx, cleared.id)
+	require.NoError(t, err)
+	assert.NotContains(t, replacement.Attributes, controllerapi.SessionAttributeManagerID)
 }
 
 func TestManager_ClearWhileRunning(t *testing.T) {

@@ -13,6 +13,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/pilat/coagent/internal/coagenthome"
+	"github.com/pilat/coagent/internal/controllerapi"
 	"github.com/pilat/coagent/internal/id"
 	"github.com/pilat/coagent/internal/loader"
 	"github.com/pilat/coagent/internal/logger"
@@ -122,11 +123,10 @@ func (r *secretRequests) take(requestID string) (secretRequest, bool) {
 	return req, ok
 }
 
-// registerSecretTool registers request_secret on a CLI-channel root session.
-// A subagent of a CLI session does not get it: the tool's whole premise is a
-// person watching the conversation it belongs to.
+// registerSecretTool registers request_secret where the reserved configuration
+// project also has a person watching through the terminal.
 func (s *svc) registerSecretTool(ctx context.Context, rec *sessionstore.SessionRecord, sess session.Service) {
-	if s.applier == nil || rec.ParentID != 0 || !isCLISession(rec) {
+	if s.applier == nil || !s.isConfigurationSession(ctx, rec) || !isCLISession(rec) {
 		return
 	}
 
@@ -137,8 +137,49 @@ func (s *svc) registerSecretTool(ctx context.Context, rec *sessionstore.SessionR
 // the CLI manager stamps at creation.
 func isCLISession(rec *sessionstore.SessionRecord) bool {
 	channel, _ := rec.Attributes["channel"].(string)
+	owner, _ := rec.Attributes[controllerapi.SessionAttributeManagerID].(string)
 
-	return channel == "cli"
+	return channel == controllerapi.BuiltinCLIManagerID &&
+		(owner == "" || owner == controllerapi.BuiltinCLIManagerID)
+}
+
+func (s *svc) isConfigurationSession(ctx context.Context, rec *sessionstore.SessionRecord) bool {
+	if rec.ParentID != 0 {
+		return false
+	}
+
+	owner, _ := rec.Attributes[controllerapi.SessionAttributeManagerID].(string)
+	if owner != "" && owner != controllerapi.BuiltinCLIManagerID {
+		return false
+	}
+
+	name, err := s.store.GetProjectName(ctx, rec.ProjectID)
+	if err != nil {
+		logger.Ctx(ctx).Named("daemon.config_gate").Warn(
+			"project_identity_unavailable",
+			zap.Int64("project_id", rec.ProjectID),
+			zap.Error(err),
+		)
+
+		return false
+	}
+
+	if name != controllerapi.CoagentSystemProjectName {
+		return false
+	}
+
+	workDir, err := s.store.GetProjectWorkDir(ctx, rec.ProjectID)
+	if err != nil {
+		logger.Ctx(ctx).Named("daemon.config_gate").Warn(
+			"project_path_unavailable",
+			zap.Int64("project_id", rec.ProjectID),
+			zap.Error(err),
+		)
+
+		return false
+	}
+
+	return sameProjectPath(workDir, s.systemProject)
 }
 
 // ResolveSecretRequest answers the call that asked for a credential. It is given
@@ -260,8 +301,8 @@ func (t *requestSecretTool) Execute(ctx context.Context, params json.RawMessage)
 // guide goes only to a terminal chat: its script calls request_secret, and a
 // skill that tells a Telegram session to use a tool it does not have is worse
 // than no skill at all.
-func builtinSkillsFor(ctx context.Context, rec *sessionstore.SessionRecord) []*loader.Skill {
-	if rec.ParentID != 0 || !isCLISession(rec) {
+func (s *svc) builtinSkillsFor(ctx context.Context, rec *sessionstore.SessionRecord) []*loader.Skill {
+	if !s.isConfigurationSession(ctx, rec) || !isCLISession(rec) {
 		return nil
 	}
 

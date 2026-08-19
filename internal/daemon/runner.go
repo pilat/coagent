@@ -761,7 +761,7 @@ func (s *svc) createOrResumeSession(
 		CompactionBrief: rec.CompactionBrief,
 		LastActivityAt:  rec.UpdatedAt,
 
-		ExtraSkills:         builtinSkillsFor(ctx, rec),
+		ExtraSkills:         s.builtinSkillsFor(ctx, rec),
 		StagedExternalCalls: externalCalls,
 
 		CompactionDeferAnnounced: s.deferNotices.announced(sessionID),
@@ -928,10 +928,10 @@ func (s *svc) registerMCPTools(ctx context.Context, rec *sessionstore.SessionRec
 	}
 }
 
-// registerConfigTools registers the config-mutation tools. Root sessions only:
-// a subagent must not reshape the daemon its parent is running on.
+// registerConfigTools registers config mutation only on the reserved system
+// project. Other project roots and subagents must not reshape the daemon.
 func (s *svc) registerConfigTools(ctx context.Context, rec *sessionstore.SessionRecord, sess session.Service) {
-	if s.applier == nil || rec.ParentID != 0 {
+	if s.applier == nil || !s.isConfigurationSession(ctx, rec) {
 		return
 	}
 

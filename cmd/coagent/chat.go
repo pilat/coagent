@@ -52,6 +52,7 @@ type chat struct {
 	mu       sync.Mutex
 	client   *ctl.Client
 	session  int64
+	model    string
 	busy     bool
 	activity int
 
@@ -89,7 +90,7 @@ func (c *chat) run(ctx context.Context) int {
 		c.pushWG.Wait()
 	}()
 
-	c.println("Talking to coagent. Ctrl-D to leave, /stop to interrupt a turn.")
+	c.println("Talking to coagent. Ctrl-D to leave, /stop to interrupt a turn, /model to switch model.")
 
 	c.startEvents(ctx)
 
@@ -131,7 +132,7 @@ func (c *chat) send(ctx context.Context, line string) error {
 
 	var res cli.SendResult
 
-	err := c.call(ctx, cli.OpChatSend, cli.SendParams{SessionID: c.currentSession(), Text: line}, &res)
+	err := c.call(ctx, cli.OpChatSend, c.sendParams(line), &res)
 	if err == nil {
 		c.setSession(res.SessionID)
 
@@ -154,7 +155,7 @@ func (c *chat) send(ctx context.Context, line string) error {
 		return err
 	}
 
-	if err := c.call(ctx, cli.OpChatSend, cli.SendParams{SessionID: c.currentSession(), Text: line}, &res); err != nil {
+	if err := c.call(ctx, cli.OpChatSend, c.sendParams(line), &res); err != nil {
 		c.setBusy(false)
 
 		return err
@@ -217,6 +218,23 @@ func (c *chat) call(ctx context.Context, method string, params, out any) error {
 	return client.Call(ctx, method, params, out)
 }
 
+// callIdempotent reconnects and safely repeats model discovery or selection.
+// Both operations can be issued twice without duplicating a conversation turn.
+func (c *chat) callIdempotent(ctx context.Context, method string, params func() any, out any) error {
+	err := c.call(ctx, method, params(), out)
+	if !errors.Is(err, ctl.ErrClosed) && !errors.Is(err, ctl.ErrNotRunning) {
+		return err
+	}
+
+	c.println("daemon restarting…")
+
+	if err := c.reconnect(ctx); err != nil {
+		return err
+	}
+
+	return c.call(ctx, method, params(), out)
+}
+
 func (c *chat) currentClient() *ctl.Client {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -236,6 +254,7 @@ func (c *chat) setSession(id int64) {
 	defer c.mu.Unlock()
 
 	c.session = id
+	c.model = ""
 }
 
 func (c *chat) setBusy(busy bool) {

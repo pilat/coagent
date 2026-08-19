@@ -65,7 +65,7 @@ func newExternalCallDaemon(
 ) *applyDaemon {
 	t.Helper()
 
-	h := newSubagentHarnessOnDB(t, dbPath, respond, nil)
+	h := newSubagentHarnessOnSystemProjectDB(t, dbPath, respond)
 	ops := configops.New(filepath.Join(configDir, "config.yaml"), filepath.Join(configDir, "secrets"))
 	restarts := make(chan struct{}, 4)
 

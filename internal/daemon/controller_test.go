@@ -2,6 +2,8 @@ package daemon
 
 import (
 	"context"
+	"fmt"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -10,8 +12,58 @@ import (
 
 	"github.com/pilat/coagent/internal/config"
 	"github.com/pilat/coagent/internal/controllerapi"
+	"github.com/pilat/coagent/internal/migrate"
 	"github.com/pilat/coagent/internal/schedule"
+	"github.com/pilat/coagent/internal/sessionevent"
+	"github.com/pilat/coagent/internal/sessionstore"
 )
+
+func TestControllerManagerSubscriptionIsExactAcrossRestart(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	dbPath := filepath.Join(t.TempDir(), "routing.db")
+	firstDB, err := migrate.OpenDB(ctx, dbPath)
+	require.NoError(t, err)
+	require.NoError(t, migrate.Run(ctx, firstDB, dbPath))
+	firstStore := NewStore(firstDB)
+	firstSessions := sessionstore.NewStore(firstDB)
+	projectID := testProject(t, firstStore, "/tmp/controller-manager-restart")
+	record, err := firstSessions.CreateSession(ctx, projectID, "model", "", map[string]any{
+		controllerapi.SessionAttributeManagerID: "manager-7",
+	})
+	require.NoError(t, err)
+	require.NoError(t, firstDB.Close())
+
+	secondDB, err := migrate.OpenDB(ctx, dbPath)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = secondDB.Close() })
+	secondSessions := sessionstore.NewStore(secondDB)
+	mgr := newSvc(
+		&mockFactory{}, NewStore(secondDB), secondSessions, secondSessions,
+		NewLinkStore(secondDB), nil, nil,
+	)
+	controllers := NewController(mgr, &config.Config{}, nil, nil)
+	subscriptions := make(map[string]<-chan controllerapi.SessionNotification, 10)
+	for i := range 10 {
+		managerID := fmt.Sprintf("manager-%d", i)
+		subscriptions[managerID] = controllers.ForManager(managerID).Subscribe()
+	}
+
+	mgr.NotifySession(record.ID, sessionevent.Notification{
+		Type: sessionevent.NotifyMessage, Message: "after restart",
+	})
+
+	for managerID, subscription := range subscriptions {
+		if managerID == "manager-7" {
+			notification := requireManagerNotification(t, subscription)
+			assert.Equal(t, "after restart", notification.Notification.Message)
+			continue
+		}
+
+		requireNoManagerNotification(t, subscription)
+	}
+}
 
 func TestListSchedulesMapsEntries(t *testing.T) {
 	ctx := context.Background()
@@ -19,7 +71,9 @@ func TestListSchedulesMapsEntries(t *testing.T) {
 
 	projectID, err := store.GetOrCreateProject(ctx, "/p")
 	require.NoError(t, err)
-	rec, err := mgr.sessionStore.CreateSession(ctx, projectID, "model", "", nil)
+	rec, err := mgr.sessionStore.CreateSession(ctx, projectID, "model", "", map[string]any{
+		controllerapi.SessionAttributeManagerID: "test",
+	})
 	require.NoError(t, err)
 
 	schedSvc := schedule.NewService(schedStore)
@@ -30,7 +84,7 @@ func TestListSchedulesMapsEntries(t *testing.T) {
 	_, err = schedStore.AddSchedule(ctx, rec.ID, "", &oneShot, "wake once", false)
 	require.NoError(t, err)
 
-	controller := NewController(mgr, &config.Config{}, nil, schedSvc)
+	controller := NewController(mgr, &config.Config{}, nil, schedSvc).ForManager("test")
 	result, err := controller.ListSchedules(ctx, controllerapi.ScheduleListData{SessionID: rec.ID})
 	require.NoError(t, err)
 	require.Len(t, result.Schedules, 2)
@@ -72,7 +126,7 @@ func TestListModelsMapsEnrichedEntries(t *testing.T) {
 		},
 	}}
 
-	controller := NewController(nil, cfg, nil, nil)
+	controller := NewController(nil, cfg, nil, nil).ForManager("test")
 
 	result, err := controller.ListModels(context.Background())
 	require.NoError(t, err)

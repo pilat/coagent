@@ -14,7 +14,8 @@ import (
 //go:embed builtin/*/SKILL.md
 var builtinSkills embed.FS
 
-// OnboardingSkillName is the setup guide, registered only where its tools exist.
+// OnboardingSkillName is the setup guide activated by the daemon only where its
+// configuration tools exist.
 const OnboardingSkillName = "onboarding"
 
 // BuiltinSkill parses one embedded skill by name.

@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/pilat/coagent/internal/controllerapi"
 	"github.com/pilat/coagent/internal/loader"
 	"github.com/pilat/coagent/internal/logger"
 	"github.com/pilat/coagent/internal/registry"
@@ -16,36 +17,48 @@ import (
 	"github.com/pilat/coagent/internal/tool"
 )
 
-func cliRecord(id int64) *sessionstore.SessionRecord {
-	return &sessionstore.SessionRecord{ID: id, Attributes: map[string]any{"channel": "cli"}}
+func cliRecord(id, projectID int64) *sessionstore.SessionRecord {
+	return &sessionstore.SessionRecord{
+		ID: id, ProjectID: projectID, Attributes: map[string]any{"channel": "cli"},
+	}
 }
 
 // The tool exists only where a masked prompt can actually happen: a root session
 // that belongs to a terminal.
 func TestRegisterSecretTool_Gating(t *testing.T) {
 	tests := []struct {
-		name string
-		rec  *sessionstore.SessionRecord
-		want bool
+		name   string
+		system bool
+		attrs  map[string]any
+		parent int64
+		want   bool
 	}{
-		{name: "cli root session", rec: cliRecord(1), want: true},
+		{name: "configuration cli root", system: true, attrs: map[string]any{"channel": "cli"}, want: true},
+		{name: "configuration telegram root", system: true, attrs: map[string]any{"channel": "telegram"}},
 		{
-			name: "telegram-shaped root session",
-			rec:  &sessionstore.SessionRecord{ID: 2, Attributes: map[string]any{"channel": "telegram"}},
+			name: "foreign manager spoofing cli channel", system: true,
+			attrs: map[string]any{
+				"channel": "cli", controllerapi.SessionAttributeManagerID: "telegram-main",
+			},
 		},
-		{name: "session with no channel at all", rec: &sessionstore.SessionRecord{ID: 3}},
-		{
-			name: "a cli session's subagent",
-			rec:  &sessionstore.SessionRecord{ID: 4, ParentID: 1, Attributes: map[string]any{"channel": "cli"}},
-		},
+		{name: "configuration root without terminal", system: true},
+		{name: "ordinary cli root", attrs: map[string]any{"channel": "cli"}},
+		{name: "configuration cli child", system: true, attrs: map[string]any{"channel": "cli"}, parent: 1},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			h := newConfigHarness(t)
 			sess := &mockSession{}
+			projectID := testProject(t, h.store, t.TempDir())
+			if tt.system {
+				projectID = h.projectID
+			}
+			rec := &sessionstore.SessionRecord{
+				ID: 1, ProjectID: projectID, ParentID: tt.parent, Attributes: tt.attrs,
+			}
 
-			h.mgr.registerSecretTool(context.Background(), tt.rec, sess)
+			h.mgr.registerSecretTool(context.Background(), rec, sess)
 			assert.Equal(t, tt.want, sess.hasTool(tool.IDRequestSecret))
 		})
 	}
@@ -62,7 +75,7 @@ func TestRequestSecret_RoundTrip(t *testing.T) {
 	sessionID := h.liveSession(t)
 
 	sess := &mockSession{}
-	h.mgr.registerSecretTool(ctx, cliRecord(sessionID), sess)
+	h.mgr.registerSecretTool(ctx, cliRecord(sessionID, h.projectID), sess)
 
 	events := h.mgr.PubSub().SubscribeAll()
 	t.Cleanup(func() { h.mgr.PubSub().UnsubscribeAll(events) })
@@ -103,7 +116,7 @@ func TestRequestSecret_RejectsBadInput(t *testing.T) {
 	h := newConfigHarness(t)
 
 	sess := &mockSession{}
-	h.mgr.registerSecretTool(ctx, cliRecord(testSessionID), sess)
+	h.mgr.registerSecretTool(ctx, cliRecord(testSessionID, h.projectID), sess)
 	tl := sess.registry.Get(tool.IDRequestSecret)
 
 	_, err := tl.Execute(tool.WithCallID(ctx, "c1"), json.RawMessage(`{"name":"not a var","purpose":"x"}`))
@@ -124,7 +137,7 @@ func TestSecretRequest_UndeliverableOutcomeKeepsThePromptOpen(t *testing.T) {
 	const ghostSession = 4242
 
 	sess := &mockSession{}
-	h.mgr.registerSecretTool(ctx, cliRecord(ghostSession), sess)
+	h.mgr.registerSecretTool(ctx, cliRecord(ghostSession, h.projectID), sess)
 
 	_, err := sess.registry.Get(tool.IDRequestSecret).Execute(
 		tool.WithCallID(ctx, "c1"),
@@ -157,7 +170,10 @@ func TestRegisterSecretTool_ChildOfACLISession(t *testing.T) {
 
 	h.mgr.registerSecretTool(
 		context.Background(),
-		&sessionstore.SessionRecord{ID: 9, ParentID: testSessionID, Attributes: map[string]any{"channel": "cli"}},
+		&sessionstore.SessionRecord{
+			ID: 9, ProjectID: h.projectID, ParentID: testSessionID,
+			Attributes: map[string]any{"channel": "cli"},
+		},
 		child,
 	)
 
@@ -168,24 +184,36 @@ func TestRegisterSecretTool_ChildOfACLISession(t *testing.T) {
 // tells the model to call request_secret, which no other channel has.
 func TestBuiltinSkillsFor(t *testing.T) {
 	tests := []struct {
-		name string
-		rec  *sessionstore.SessionRecord
-		want bool
+		name   string
+		system bool
+		attrs  map[string]any
+		parent int64
+		want   bool
 	}{
-		{name: "cli root session", rec: cliRecord(1), want: true},
+		{name: "configuration cli root", system: true, attrs: map[string]any{"channel": "cli"}, want: true},
+		{name: "configuration telegram root", system: true, attrs: map[string]any{"channel": "telegram"}},
 		{
-			name: "telegram-shaped root session",
-			rec:  &sessionstore.SessionRecord{ID: 2, Attributes: map[string]any{"channel": "telegram"}},
+			name: "foreign manager spoofing cli channel", system: true,
+			attrs: map[string]any{
+				"channel": "cli", controllerapi.SessionAttributeManagerID: "telegram-main",
+			},
 		},
-		{
-			name: "a cli session's subagent",
-			rec:  &sessionstore.SessionRecord{ID: 3, ParentID: 1, Attributes: map[string]any{"channel": "cli"}},
-		},
+		{name: "configuration root without terminal", system: true},
+		{name: "ordinary cli root", attrs: map[string]any{"channel": "cli"}},
+		{name: "configuration cli child", system: true, attrs: map[string]any{"channel": "cli"}, parent: 1},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			skills := builtinSkillsFor(context.Background(), tt.rec)
+			h := newConfigHarness(t)
+			projectID := testProject(t, h.store, t.TempDir())
+			if tt.system {
+				projectID = h.projectID
+			}
+			rec := &sessionstore.SessionRecord{
+				ID: 1, ProjectID: projectID, ParentID: tt.parent, Attributes: tt.attrs,
+			}
+			skills := h.mgr.builtinSkillsFor(context.Background(), rec)
 
 			if !tt.want {
 				assert.Empty(t, skills)

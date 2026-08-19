@@ -28,6 +28,15 @@ type countingSessionStore struct {
 	failNth  int // fail exactly the Nth GetSession call; 0 = never
 }
 
+type staleReadSessionStore struct {
+	sessionstore.OrchestrationStore
+	target      int64
+	read        chan struct{}
+	release     chan struct{}
+	mu          sync.Mutex
+	intercepted bool
+}
+
 // eventCollector accumulates everything a SubscribeAll channel yields, so a test
 // can assert on the whole stream after the fact instead of racing it.
 type eventCollector struct {
@@ -50,6 +59,86 @@ func TestPublishGate_RootPasses(t *testing.T) {
 	sn := requireNotification(t, ch)
 	assert.Equal(t, rec.ID, sn.SessionID)
 	assert.Equal(t, "hi", sn.Notification.Message)
+}
+
+func TestPublishGate_RoutesRootOnlyToOwningManager(t *testing.T) {
+	mgr, _, store := newTestManager(t)
+	alpha := mgr.PubSub().SubscribeManager("alpha")
+	beta := mgr.PubSub().SubscribeManager("beta")
+
+	pid := testProject(t, store, "/tmp/publish-owned-root")
+	rec, err := mgr.sessionStore.CreateSession(context.Background(), pid, "fake-model", "", map[string]any{
+		controllerapi.SessionAttributeManagerID: "alpha",
+	})
+	require.NoError(t, err)
+
+	mgr.NotifySession(rec.ID, sessionevent.Notification{Type: sessionevent.NotifyMessage, Message: "private"})
+
+	assert.Equal(t, rec.ID, requireManagerNotification(t, alpha).SessionID)
+	requireNoManagerNotification(t, beta)
+}
+
+func TestPublishGate_OwnerlessRootReachesNoManager(t *testing.T) {
+	mgr, _, store := newTestManager(t)
+	alpha := mgr.PubSub().SubscribeManager("alpha")
+
+	pid := testProject(t, store, "/tmp/publish-ownerless-root")
+	rec, err := mgr.sessionStore.CreateSession(context.Background(), pid, "fake-model", "", nil)
+	require.NoError(t, err)
+
+	mgr.NotifySession(rec.ID, sessionevent.Notification{Type: sessionevent.NotifyMessage, Message: "unowned"})
+
+	requireNoManagerNotification(t, alpha)
+}
+
+func TestPublishGate_ClaimingOwnerUpdatesTheWarmRoute(t *testing.T) {
+	mgr, _, store := newTestManager(t)
+	alpha := mgr.PubSub().SubscribeManager("alpha")
+
+	pid := testProject(t, store, "/tmp/publish-claimed-root")
+	rec, err := mgr.sessionStore.CreateSession(context.Background(), pid, "fake-model", "", nil)
+	require.NoError(t, err)
+	mgr.NotifySession(rec.ID, sessionevent.Notification{Type: sessionevent.NotifyMessage, Message: "before"})
+	requireNoManagerNotification(t, alpha)
+
+	require.NoError(t, mgr.SetAttributes(context.Background(), rec.ID, map[string]any{
+		controllerapi.SessionAttributeManagerID: "alpha",
+	}))
+	mgr.NotifySession(rec.ID, sessionevent.Notification{Type: sessionevent.NotifyMessage, Message: "after"})
+
+	assert.Equal(t, "after", requireManagerNotification(t, alpha).Notification.Message)
+}
+
+func TestPublishGate_ConcurrentClaimWinsOverAStaleRouteRead(t *testing.T) {
+	mgr, _, store := newTestManager(t)
+	alpha := mgr.PubSub().SubscribeManager("alpha")
+	pid := testProject(t, store, "/tmp/publish-concurrent-claim")
+	rec, err := mgr.sessionStore.CreateSession(context.Background(), pid, "fake-model", "", nil)
+	require.NoError(t, err)
+
+	stale := &staleReadSessionStore{
+		OrchestrationStore: mgr.sessionStore,
+		target:             rec.ID,
+		read:               make(chan struct{}), release: make(chan struct{}),
+	}
+	mgr.sessionStore = stale
+	published := make(chan struct{})
+
+	go func() {
+		defer close(published)
+		mgr.NotifySession(rec.ID, sessionevent.Notification{
+			Type: sessionevent.NotifyMessage, Message: "claimed while lookup was stale",
+		})
+	}()
+
+	requireSignal(t, stale.read)
+	require.NoError(t, mgr.SetAttributes(context.Background(), rec.ID, map[string]any{
+		controllerapi.SessionAttributeManagerID: "alpha",
+	}))
+	close(stale.release)
+	requireSignal(t, published)
+
+	assert.Equal(t, "claimed while lookup was stale", requireManagerNotification(t, alpha).Notification.Message)
 }
 
 func TestPublishGate_DropsMalformedEventBeforeSessionLookup(t *testing.T) {
@@ -174,6 +263,38 @@ func (c *countingSessionStore) calls() int {
 	defer c.mu.Unlock()
 
 	return c.getCalls
+}
+
+func (s *staleReadSessionStore) GetSession(
+	ctx context.Context,
+	id int64,
+) (*sessionstore.SessionRecord, error) {
+	record, err := s.OrchestrationStore.GetSession(ctx, id)
+	if err != nil || id != s.target {
+		return record, err
+	}
+
+	s.mu.Lock()
+	intercept := !s.intercepted
+	s.intercepted = true
+	s.mu.Unlock()
+
+	if intercept {
+		close(s.read)
+		<-s.release
+	}
+
+	return record, nil
+}
+
+func requireSignal(t *testing.T, ch <-chan struct{}) {
+	t.Helper()
+
+	select {
+	case <-ch:
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for synchronization point")
+	}
 }
 
 func collectEvents(ch <-chan controllerapi.SessionNotification) *eventCollector {

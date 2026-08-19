@@ -24,20 +24,20 @@ type Runtime interface {
 var _ Runtime = (*runtime)(nil)
 
 type runtime struct {
-	cfg        *config.Config
-	controller controllerapi.Controller
-	builder    func(config.ManagerEntry) (Manager, error)
+	cfg         *config.Config
+	controllers controllerapi.ManagerControllerFactory
+	builder     func(config.ManagerEntry) (Manager, error)
 
 	mu        sync.Mutex
 	managers  []Manager
 	startErrs map[string]error
 }
 
-func NewRuntime(cfg *config.Config, controller controllerapi.Controller) Runtime {
+func NewRuntime(cfg *config.Config, controllers controllerapi.ManagerControllerFactory) Runtime {
 	r := &runtime{
-		cfg:        cfg,
-		controller: controller,
-		builder:    nil,
+		cfg:         cfg,
+		controllers: controllers,
+		builder:     nil,
 	}
 	r.builder = r.buildManager
 
@@ -119,6 +119,10 @@ func (r *runtime) StartError(id string) error {
 }
 
 func (r *runtime) startOne(ctx context.Context, entry config.ManagerEntry) (Manager, error) {
+	if entry.ID == controllerapi.BuiltinCLIManagerID {
+		return nil, fmt.Errorf("manager id %q is reserved for the built-in local chat", entry.ID)
+	}
+
 	mgr, err := r.builder(entry)
 	if err != nil {
 		return nil, err
@@ -146,7 +150,7 @@ func (r *runtime) stopManagers(ctx context.Context, list []Manager) error {
 func (r *runtime) buildManager(entry config.ManagerEntry) (Manager, error) {
 	switch entry.Driver {
 	case "telegram":
-		mgr, err := telegram.New(entry, r.cfg.UnifiedConfig, r.controller)
+		mgr, err := telegram.New(entry, r.cfg.UnifiedConfig, r.controllers.ForManager(entry.ID))
 		if err != nil {
 			return nil, fmt.Errorf("create telegram manager: %w", err)
 		}

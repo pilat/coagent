@@ -74,6 +74,11 @@
       ]
     },
     {
+      "trace": "cli_conversation_manager_owned.json",
+      "source_test": "TestHarnessScenario_CLIConversationIsManagerOwned",
+      "calls": null
+    },
+    {
       "trace": "foreground_followup_no_sleep.json",
       "source_test": "TestHarnessScenario_ForegroundChildContinuesWithoutSleep",
       "calls": [

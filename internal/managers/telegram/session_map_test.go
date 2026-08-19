@@ -146,13 +146,13 @@ func (f *fakeController) ListSchedules(
 	return &controllerapi.ScheduleListResultData{Schedules: f.listSchedules}, nil
 }
 
-func (f *fakeController) SubscribeAll() <-chan controllerapi.SessionNotification {
+func (f *fakeController) Subscribe() <-chan controllerapi.SessionNotification {
 	ch := make(chan controllerapi.SessionNotification)
 	close(ch)
 	return ch
 }
 
-func (f *fakeController) UnsubscribeAll(ch <-chan controllerapi.SessionNotification) {}
+func (f *fakeController) Unsubscribe(ch <-chan controllerapi.SessionNotification) {}
 
 func TestHandleNotification_SessionClearedRemapsTopic(t *testing.T) {
 	enabled := true
@@ -439,10 +439,13 @@ func TestResolveSessionByTopicID_UsesMetadataFallback(t *testing.T) {
 	ctrl := &fakeController{
 		listSessions: []controllerapi.SessionInfo{
 			{
-				ID:         96,
-				WorkDir:    "/tmp/live",
-				Status:     "completed",
-				Attributes: map[string]any{"telegram_topic_id": int64(6344)},
+				ID:      96,
+				WorkDir: "/tmp/live",
+				Status:  "completed",
+				Attributes: map[string]any{
+					"telegram_topic_id":                     int64(6344),
+					controllerapi.SessionAttributeManagerID: "telegram-main",
+				},
 			},
 		},
 	}
@@ -481,10 +484,13 @@ func TestReconcileOnStartup_IgnoresKilledSessions(t *testing.T) {
 	ctrl := &fakeController{
 		listSessions: []controllerapi.SessionInfo{
 			{
-				ID:         96,
-				WorkDir:    "/tmp/live",
-				Status:     "completed",
-				Attributes: map[string]any{"telegram_topic_id": int64(6344)},
+				ID:      96,
+				WorkDir: "/tmp/live",
+				Status:  "completed",
+				Attributes: map[string]any{
+					"telegram_topic_id":                     int64(6344),
+					controllerapi.SessionAttributeManagerID: "telegram-main",
+				},
 			},
 			{
 				ID:         95,
@@ -527,7 +533,11 @@ func TestReconcileOnStartup_IgnoresKilledSessions(t *testing.T) {
 
 func TestHandleCallback_KillDispatchesController(t *testing.T) {
 	enabled := true
-	ctrl := &fakeController{}
+	ctrl := &fakeController{listSessions: []controllerapi.SessionInfo{{
+		ID: 95, Status: "active", Attributes: map[string]any{
+			controllerapi.SessionAttributeManagerID: "telegram-main",
+		},
+	}}}
 
 	m := &Manager{
 		id: "telegram-main",
@@ -563,4 +573,34 @@ func TestHandleCallback_KillDispatchesController(t *testing.T) {
 
 	require.Len(t, ctrl.killCalls, 1)
 	assert.Equal(t, int64(95), ctrl.killCalls[0])
+}
+
+func TestHandleCallback_KillRejectsAForeignRetainedButton(t *testing.T) {
+	enabled := true
+	ctrl := &fakeController{listSessions: []controllerapi.SessionInfo{{
+		ID: 95, Status: "active", Attributes: map[string]any{
+			controllerapi.SessionAttributeManagerID: "telegram-secondary",
+		},
+	}}}
+	m := &Manager{
+		id: "telegram-main",
+		cfg: config.ManagerEntry{
+			ID: "telegram-main", Enabled: &enabled, BotToken: "token",
+			TargetChatID: -100123, AllowedUserIDs: []int64{42},
+		},
+		controller:     ctrl,
+		httpClient:     &http.Client{Transport: roundTripFunc(okTelegramRoundTrip)},
+		sessionToTopic: map[int64]int64{}, topicToSession: map[int64]int64{},
+		navPaths: map[int64]string{}, pathToNav: map[string]int64{}, workDirs: map[int64]string{},
+		serviceTopicID: 6344,
+	}
+
+	m.handleCallback(context.Background(), &telegramCallbackData{
+		ID: "cb-foreign", From: &telegramUser{ID: 42}, Data: "kill:95",
+		Message: &telegramCallbackMeta{
+			Chat: telegramChat{ID: -100123}, MessageID: 1, MessageThreadID: 6344,
+		},
+	})
+
+	assert.Empty(t, ctrl.killCalls)
 }

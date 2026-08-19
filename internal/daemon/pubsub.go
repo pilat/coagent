@@ -18,15 +18,31 @@ var _ NotificationSource = (*pubSub)(nil)
 // Per-session subscribers receive notifications for a specific session.
 // Global subscribers receive notifications from all sessions (with session ID).
 type pubSub struct {
-	mu      sync.RWMutex
-	subs    map[int64][]chan sessionevent.Notification // per-session subscribers
-	globals []chan controllerapi.SessionNotification   // wildcard subscribers (carry session ID)
+	mu       sync.RWMutex
+	subs     map[int64][]chan sessionevent.Notification // per-session subscribers
+	globals  []chan controllerapi.SessionNotification   // wildcard subscribers (carry session ID)
+	managers map[string][]chan controllerapi.SessionNotification
 }
 
 func newPubSub() *pubSub {
 	return &pubSub{
-		subs: make(map[int64][]chan sessionevent.Notification),
+		subs:     make(map[int64][]chan sessionevent.Notification),
+		managers: make(map[string][]chan controllerapi.SessionNotification),
 	}
+}
+
+// SubscribeManager receives only sessions durably owned by managerID.
+func (ps *pubSub) SubscribeManager(managerID string) <-chan controllerapi.SessionNotification {
+	ch := make(chan controllerapi.SessionNotification, subscriberBufferSize)
+	if managerID == "" {
+		return ch
+	}
+
+	ps.mu.Lock()
+	ps.managers[managerID] = append(ps.managers[managerID], ch)
+	ps.mu.Unlock()
+
+	return ch
 }
 
 // Subscribe creates a buffered channel that receives notifications for a specific session.
@@ -84,15 +100,45 @@ func (ps *pubSub) UnsubscribeAll(ch <-chan controllerapi.SessionNotification) {
 	}
 }
 
+// UnsubscribeManager removes a manager-scoped subscriber. It does not close it.
+func (ps *pubSub) UnsubscribeManager(ch <-chan controllerapi.SessionNotification) {
+	ps.mu.Lock()
+	defer ps.mu.Unlock()
+
+	for managerID, subscribers := range ps.managers {
+		for i, subscriber := range subscribers {
+			if subscriber != ch {
+				continue
+			}
+
+			ps.managers[managerID] = append(subscribers[:i], subscribers[i+1:]...)
+			if len(ps.managers[managerID]) == 0 {
+				delete(ps.managers, managerID)
+			}
+
+			return
+		}
+	}
+}
+
 // Publish sends a notification to all per-session subscribers for the given session
 // and to all global subscribers. Non-blocking: if a subscriber's channel is full, the
 // notification is dropped with a warning log.
 func (ps *pubSub) Publish(sessionID int64, n sessionevent.Notification) {
+	ps.PublishOwned(sessionID, "", n)
+}
+
+// PublishOwned fans an event out to observers and to the session's one owning
+// manager. An empty owner reaches no manager subscription.
+func (ps *pubSub) PublishOwned(sessionID int64, managerID string, n sessionevent.Notification) {
 	log := logger.Named("daemon.pubsub")
 
 	ps.mu.RLock()
 	perSession := append([]chan sessionevent.Notification(nil), ps.subs[sessionID]...)
 	globals := append([]chan controllerapi.SessionNotification(nil), ps.globals...)
+	managerSubscribers := append(
+		[]chan controllerapi.SessionNotification(nil), ps.managers[managerID]...,
+	)
 	ps.mu.RUnlock()
 
 	for _, ch := range perSession {
@@ -116,6 +162,19 @@ func (ps *pubSub) Publish(sessionID int64, n sessionevent.Notification) {
 			log.Warn(
 				"pubsub_slow_global_subscriber",
 				zap.Int64("session_id", sessionID),
+				zap.String("type", string(n.Type)),
+			)
+		}
+	}
+
+	for _, ch := range managerSubscribers {
+		select {
+		case ch <- sn:
+		default:
+			log.Warn(
+				"pubsub_slow_manager_subscriber",
+				zap.Int64("session_id", sessionID),
+				zap.String("manager_id", managerID),
 				zap.String("type", string(n.Type)),
 			)
 		}

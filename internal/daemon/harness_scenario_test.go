@@ -42,6 +42,27 @@ func TestHarnessScenario_SecondInputDoesNotReplayPreviousFinal(t *testing.T) {
 	assertHarnessTrace(t, "second_input_no_replay.json", collector.snapshot(), sessionID)
 }
 
+func TestHarnessScenario_CLIConversationIsManagerOwned(t *testing.T) {
+	h := newSubagentHarnessWith(t, func(string, []llmwire.Message) *llmwire.Response {
+		return &llmwire.Response{Text: "configuration answer"}
+	})
+	collector := collectEvents(h.mgr.PubSub().SubscribeAll())
+	defer func() {
+		collector.stop()
+		h.shutdown()
+	}()
+
+	sessionID, err := h.mgr.Send(h.ctx, h.projectID, "configure coagent", "fake-model", map[string]any{
+		controllerapi.SessionAttributeManagerID: "cli",
+		"channel":                               "cli",
+	})
+	require.NoError(t, err)
+	waitForVisibleMessage(t, collector, sessionID, "✅ configuration answer")
+	waitForIdleAfterMessage(t, collector, sessionID, "✅ configuration answer")
+
+	assertHarnessTrace(t, "cli_conversation_manager_owned.json", collector.snapshot(), sessionID)
+}
+
 func TestHarnessScenario_ForegroundChildContinuesWithoutSleep(t *testing.T) {
 	initialRelease := make(chan struct{})
 	followUpRelease := make(chan struct{})

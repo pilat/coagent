@@ -1,11 +1,13 @@
 package daemon
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/pilat/coagent/internal/controllerapi"
 	"github.com/pilat/coagent/internal/llm"
 	"github.com/pilat/coagent/internal/llmwire"
 	"github.com/pilat/coagent/internal/tool"
@@ -55,10 +57,12 @@ func TestIntegration_ExploreChildIsDeniedControlPlaneTools(t *testing.T) {
 		}
 	}
 
-	h := newGatingHarness(t, nil, respond)
+	h := newGatingHarness(t, true, nil, respond)
 	defer h.shutdown()
 
-	parentID, err := h.mgr.Send(h.ctx, h.projectID, "spawn an explore child", "fake-model", nil)
+	parentID, err := h.mgr.Send(
+		h.ctx, h.projectID, "spawn an explore child", "fake-model", map[string]any{"channel": "cli"},
+	)
 	require.NoError(t, err)
 
 	link := h.waitForLink(parentID, exploreCallID)
@@ -79,6 +83,79 @@ func TestIntegration_ExploreChildIsDeniedControlPlaneTools(t *testing.T) {
 	}
 
 	require.NoError(t, llm.ValidateToolPairing(h.parentMessages(parentID)))
+}
+
+func TestIntegration_ConfigToolsOnlyReachSystemProjectRoot(t *testing.T) {
+	tests := []struct {
+		name          string
+		systemProject bool
+		attrs         map[string]any
+		want          bool
+	}{
+		{name: "configuration project without channel", systemProject: true, want: true},
+		{
+			name: "foreign manager in configuration project", systemProject: true,
+			attrs: map[string]any{controllerapi.SessionAttributeManagerID: "telegram-main"},
+		},
+		{name: "ordinary cli project", attrs: map[string]any{"channel": "cli"}},
+		{name: "ordinary channel-less project"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			h := newGatingHarness(t, tt.systemProject, nil, func(string, []llmwire.Message) *llmwire.Response {
+				return &llmwire.Response{Text: "done"}
+			})
+			defer h.shutdown()
+
+			sessionID, err := h.mgr.Send(h.ctx, h.projectID, "configure", "fake-model", tt.attrs)
+			require.NoError(t, err)
+			h.mgr.waitIdle(sessionID)
+
+			offered := h.schemas.offered(sessionID)
+			for _, id := range configPlaneTools {
+				assert.Equal(t, tt.want, offered[id], id)
+			}
+		})
+	}
+}
+
+func TestIntegration_ConfigurationProjectAutoActivatesOnboardingSkill(t *testing.T) {
+	tests := []struct {
+		name          string
+		systemProject bool
+		want          bool
+	}{
+		{name: "configuration project", systemProject: true, want: true},
+		{name: "ordinary cli project"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			prompts := newPromptRecorder()
+			h := newGatingHarness(t, tt.systemProject, nil, func(system string, _ []llmwire.Message) *llmwire.Response {
+				prompts.record("root", system)
+
+				return &llmwire.Response{Text: "done"}
+			})
+			defer h.shutdown()
+
+			sessionID, err := h.mgr.Send(
+				h.ctx, h.projectID, "configure", "fake-model", map[string]any{"channel": "cli"},
+			)
+			require.NoError(t, err)
+			h.mgr.waitIdle(sessionID)
+
+			system := prompts.first(t, "root")
+			assert.Equal(t, tt.want, strings.Contains(system, "<name>onboarding</name>"))
+			assert.Equal(t, tt.want, strings.Contains(system, "Never ask for a credential in the chat"))
+			if tt.want {
+				assert.Equal(t, 1, strings.Count(system, "<name>onboarding</name>"))
+				assert.NotContains(t, system, "- **onboarding**",
+					"an automatically active skill must not also be offered for model invocation")
+			}
+		})
+	}
 }
 
 // Project-defined subagents are outside the built-in taxonomy: a restricted one
@@ -111,7 +188,7 @@ func TestIntegration_ProjectSubagentToolGating(t *testing.T) {
 
 	agents := map[string]string{"scout.md": scoutAgentFile, "wide.md": wideAgentFile}
 
-	h := newGatingHarness(t, agents, respond)
+	h := newGatingHarness(t, false, agents, respond)
 	defer h.shutdown()
 
 	parentID, err := h.mgr.Send(h.ctx, h.projectID, "spawn project children", "fake-model", nil)

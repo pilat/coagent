@@ -43,7 +43,7 @@ func (m *Manager) handleModel(ctx context.Context, sessionID, threadID int64) {
 
 	currentModel, effort := "", ""
 
-	for _, s := range filterActiveSessions(sessions) {
+	for _, s := range m.filterOwnedActiveSessions(sessions) {
 		if s.ID == sessionID {
 			currentModel, effort = s.Model, s.ReasoningLevel
 			break

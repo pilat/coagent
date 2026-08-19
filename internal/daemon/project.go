@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"sort"
 	"time"
+
+	"github.com/pilat/coagent/internal/controllerapi"
 )
 
 // RecentProject is a daemon-managed folder-project with its most recent
@@ -35,7 +37,7 @@ func (s *svc) ListRecentProjects(ctx context.Context, root string) ([]RecentProj
 	)
 
 	for _, r := range rows {
-		if filepath.Dir(r.WorkDir) != root {
+		if filepath.Dir(r.WorkDir) != root || r.Name == controllerapi.CoagentSystemProjectName {
 			continue
 		}
 

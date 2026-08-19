@@ -55,7 +55,7 @@ func TestHarnessScenario_BatchCannotEscapeSubagentAllowlist(t *testing.T) {
 		}}
 	}
 
-	h := newGatingHarness(t, map[string]string{"batcher.md": batcherAgentFile}, respond)
+	h := newGatingHarness(t, false, map[string]string{"batcher.md": batcherAgentFile}, respond)
 	defer h.shutdown()
 
 	parentID, err := h.mgr.Send(h.ctx, h.projectID, "spawn a batching child", "fake-model", nil)
