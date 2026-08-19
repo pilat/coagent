@@ -14,7 +14,6 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/pilat/coagent/internal/bashsandbox"
-	"github.com/pilat/coagent/internal/catalog"
 	"github.com/pilat/coagent/internal/config"
 	"github.com/pilat/coagent/internal/configops"
 	"github.com/pilat/coagent/internal/controllerapi"
@@ -268,7 +267,7 @@ func onboardingModel(cfg *config.Config) string {
 			continue
 		}
 
-		rec, ok := catalog.Recommend(section)
+		rec, ok := recommend(section)
 		if ok && enabled[rec.Onboarding] {
 			return rec.Onboarding
 		}

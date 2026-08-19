@@ -12,9 +12,16 @@ import (
 	"github.com/pilat/coagent/internal/ctl"
 )
 
+const (
+	driverAnthropic  = "anthropic"
+	driverOpenRouter = "openrouter"
+	driverOpenAI     = "openai"
+	driverGoogleSA   = "google-sa"
+)
+
 // driverPrompt is the fixed set of provider drivers. It is a list, not free
 // text: a typo here becomes a config the daemon refuses to start on.
-var driverPrompt = []string{"anthropic", "openrouter", "openai", "google-sa"}
+var driverPrompt = []string{driverAnthropic, driverOpenRouter, driverOpenAI, driverGoogleSA}
 
 // collectProvider asks for exactly the fields the chosen driver needs.
 func collectProvider() (ctl.SetProviderParams, bool) {
@@ -31,12 +38,12 @@ func collectProvider() (ctl.SetProviderParams, bool) {
 	}
 
 	switch driver {
-	case "anthropic":
+	case driverAnthropic:
 		p.APIKey = askSecret("API key")
-	case "openrouter":
+	case driverOpenRouter:
 		p.APIKey = askSecret("API key")
 		p.BaseURL = ask("Base URL", "https://openrouter.ai/api/v1")
-	case "openai":
+	case driverOpenAI:
 		p.BaseURL = ask("Base URL", "https://api.openai.com/v1")
 		p.APIKey = askSecret("API key")
 		// A bare openai endpoint has no vendor to key on, so there is no model to
@@ -44,7 +51,7 @@ func collectProvider() (ctl.SetProviderParams, bool) {
 		if id := ask("Model id to enable", ""); id != "" {
 			p.Models = []string{id}
 		}
-	case "google-sa":
+	case driverGoogleSA:
 		p.SAFile = ask("Service-account JSON path", "")
 		p.BaseURL = ask("Base URL", "")
 	}

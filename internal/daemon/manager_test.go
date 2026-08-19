@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"sync"
@@ -321,6 +322,7 @@ func TestManager_SendToSession_PersistsWhileRunning(t *testing.T) {
 
 	// Wait for RunDaemon to start
 	waitForLoopStart(t, ch, id, 3*time.Second)
+	waitForPendingInput(t, mgr.inboxStore, id, false, 3*time.Second)
 
 	// Verify mock factory created a session and RunDaemon was called
 	factory.mu.Lock()
@@ -395,6 +397,24 @@ func waitForLoopStart(
 ) {
 	t.Helper()
 	waitForState(t, ch, sessionID, controllerapi.StateRunning, timeout)
+}
+
+func waitForPendingInput(
+	t *testing.T,
+	store sessionstore.InboxStore,
+	sessionID int64,
+	want bool,
+	timeout time.Duration,
+) {
+	t.Helper()
+	require.Eventually(t, func() bool {
+		_, err := store.PeekPending(context.Background(), sessionID)
+		if want {
+			return err == nil
+		}
+
+		return errors.Is(err, sessionstore.ErrNoPendingInput)
+	}, timeout, 10*time.Millisecond)
 }
 
 // waitForState blocks until a specific state_changed notification arrives.
@@ -567,6 +587,7 @@ func TestManager_SendToSession_AlreadyRunningUsesDurableInbox(t *testing.T) {
 	require.NoError(t, err)
 
 	waitForLoopStart(t, ch, id, 3*time.Second)
+	waitForPendingInput(t, mgr.inboxStore, id, false, 3*time.Second)
 
 	// SendToSession on an already-running session — should route to inbox
 	err = mgr.SendToSession(ctx, id, "steer message")

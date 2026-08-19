@@ -68,6 +68,60 @@ func TestNewSet_ProjectSubagentShadowsBuiltIn(t *testing.T) {
 	assert.Equal(t, "custom general", cfg.Description)
 }
 
+func TestNewSet_ClonesProjectToolsBeforeNormalization(t *testing.T) {
+	t.Parallel()
+
+	tools := make([]string, 1, 4)
+	tools[0] = "read"
+	set := NewSet([]AgentTypeConfig{{Name: "reviewer", Mode: ModeSubagent, Tools: tools}})
+
+	tools[0] = "bash"
+	tools = append(tools, "write")
+	assert.Equal(t, "write", tools[1])
+
+	cfg, ok := set.Get("reviewer")
+	require.True(t, ok)
+	assert.Equal(t, []string{"read", "-todoread", "-todowrite"}, cfg.Tools)
+}
+
+func TestSet_GetReturnsClonedTools(t *testing.T) {
+	t.Parallel()
+
+	set := NewSet(nil)
+
+	cfg, ok := set.Get(AgentTypeExplore)
+	require.True(t, ok)
+	cfg.Tools[0] = "bash"
+
+	again, ok := set.Get(AgentTypeExplore)
+	require.True(t, ok)
+	assert.Equal(t, "read", again.Tools[0])
+}
+
+func TestSet_ListSubagentsReturnsClonedTools(t *testing.T) {
+	t.Parallel()
+
+	set := NewSet([]AgentTypeConfig{{Name: "reviewer", Mode: ModeSubagent, Tools: []string{"read"}}})
+
+	configs := set.ListSubagents()
+	for i := range configs {
+		if configs[i].Name == "reviewer" {
+			configs[i].Tools[0] = "bash"
+		}
+	}
+
+	cfg, ok := set.Get("reviewer")
+	require.True(t, ok)
+	assert.Equal(t, "read", cfg.Tools[0])
+}
+
+func TestCloneConfigPreservesNilAndEmptyTools(t *testing.T) {
+	t.Parallel()
+
+	assert.Nil(t, cloneConfig(AgentTypeConfig{}).Tools)
+	assert.NotNil(t, cloneConfig(AgentTypeConfig{Tools: []string{}}).Tools)
+}
+
 func TestSet_ListSubagentsDeterministic(t *testing.T) {
 	set := NewSet([]AgentTypeConfig{
 		{Name: "zeta", Mode: ModeSubagent},

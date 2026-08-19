@@ -1,16 +1,4 @@
 {
-  "extraKnownMarketplaces": {
-    "pilat-marketplace": {
-      "autoUpdate": true,
-      "source": {
-        "source": "github",
-        "repo": "pilat/pilat-marketplace"
-      }
-    }
-  },
-  "enabledPlugins": {
-    "pilat@pilat-marketplace": true
-  },
   "hooks": {
     "Stop": [
       {

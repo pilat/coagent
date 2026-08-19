@@ -1,0 +1,74 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Verify release source
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.0.2
+        with:
+          fetch-depth: 0
+      - name: Install mise
+        uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db # v3.6.1
+        with:
+          install: true
+          cache: true
+      - name: Bootstrap pinned tools
+        run: make tools
+      - name: Verify source
+        run: make check workflow.check
+
+  publish:
+    name: Build, attest, and publish
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    env:
+      VERSION: ${{ github.ref_name }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.0.2
+        with:
+          fetch-depth: 0
+      - name: Install mise
+        uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db # v3.6.1
+        with:
+          install: true
+          cache: true
+      - name: Prepare release modules
+        run: go mod download
+      - name: Build deterministic archives
+        run: scripts/release-build.sh
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac # v3.10.0
+      - name: Sign checksum manifest
+        run: cosign sign-blob --yes --bundle dist/checksums.txt.sigstore.json dist/checksums.txt
+      - name: Attest release archives
+        uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3.0.0
+        with:
+          subject-path: "dist/*.tar.gz"
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          gh release create "$VERSION"
+          "dist/coagent_${VERSION}_linux-amd64.tar.gz"
+          "dist/coagent_${VERSION}_linux-arm64.tar.gz"
+          "dist/coagent_${VERSION}_darwin-amd64.tar.gz"
+          "dist/coagent_${VERSION}_darwin-arm64.tar.gz"
+          dist/checksums.txt
+          dist/checksums.txt.sigstore.json
+          --generate-notes --verify-tag

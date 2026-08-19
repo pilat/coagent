@@ -1,11 +1,13 @@
 package ctl
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
 	"net"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -16,9 +18,23 @@ import (
 	"github.com/pilat/coagent/internal/config"
 )
 
-// wedgedPush is one push in the loop that fills a stopped peer's socket buffer.
-// Large enough that a handful of them park the writer, small enough to encode fast.
-const wedgedPush = 64 << 10
+const (
+	// wedgedPush fills the deliberately small socket buffer in one write.
+	wedgedPush        = 64 << 10
+	wedgedWriteBuffer = 4 << 10
+)
+
+type observedWriteConn struct {
+	net.Conn
+	started chan struct{}
+	once    sync.Once
+}
+
+func (c *observedWriteConn) Write(p []byte) (int, error) {
+	c.once.Do(func() { close(c.started) })
+
+	return c.Conn.Write(p)
+}
 
 // requireStalled waits until the pushing goroutine stops making progress, which on
 // a peer that never reads means it is parked inside the socket write itself.
@@ -31,7 +47,7 @@ func requireStalled(t *testing.T, sent *atomic.Int64) {
 
 		time.Sleep(300 * time.Millisecond)
 
-		if before > 0 && sent.Load() == before {
+		if sent.Load() == before {
 			return
 		}
 	}
@@ -51,6 +67,12 @@ func grabbedConn(t *testing.T, h *harness, grabbed <-chan *Conn) *Conn {
 
 	_, err = fmt.Fprint(peer, "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"grab\"}\n")
 	require.NoError(t, err)
+
+	reader := bufio.NewReader(peer)
+	for range 2 { // greeting, then grab response
+		_, err = reader.ReadBytes('\n')
+		require.NoError(t, err)
+	}
 
 	select {
 	case c := <-grabbed:
@@ -86,6 +108,14 @@ func newGrabHarness(t *testing.T) (*harness, <-chan *Conn) {
 func TestConn_CloseUnblocksAnInFlightNotify(t *testing.T) {
 	h, grabbed := newGrabHarness(t)
 	conn := grabbedConn(t, h, grabbed)
+	unixConn, ok := conn.conn.(*net.UnixConn)
+	require.True(t, ok)
+	require.NoError(t, unixConn.SetWriteBuffer(wedgedWriteBuffer))
+
+	writeStarted := make(chan struct{})
+	conn.writeMu.Lock()
+	conn.enc = json.NewEncoder(&observedWriteConn{Conn: conn.conn, started: writeStarted})
+	conn.writeMu.Unlock()
 
 	var sent atomic.Int64
 
@@ -105,6 +135,7 @@ func TestConn_CloseUnblocksAnInFlightNotify(t *testing.T) {
 		}
 	}()
 
+	<-writeStarted
 	requireStalled(t, &sent)
 	require.NoError(t, conn.Close())
 

@@ -157,8 +157,8 @@ func (d *openRouterDriver) ListModels(
 // entry's explicit choice, or the driver's own default.
 //
 // A bare `openai` provider has none, and reports false. The driver name says
-// nothing about the vendor behind the endpoint, so there is no model set to
-// recommend from — a caller has to ask for an id rather than guess one.
+// nothing about the vendor behind the endpoint, so callers must supply a model
+// id rather than guess one.
 func CatalogSection(entry config.ProviderEntry) (string, bool) {
 	if entry.Catalog != "" {
 		return entry.Catalog, true

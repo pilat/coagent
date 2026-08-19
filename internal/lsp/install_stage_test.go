@@ -215,7 +215,10 @@ func TestRubyLauncherUsesPublishedGemHome(t *testing.T) {
 	cmd := exec.Command(ruby, filepath.Join(binDir, "ruby-lsp"), "--version")
 	output, err := cmd.CombinedOutput()
 	require.NoError(t, err, string(output))
-	want := filepath.Join(root, "gems") + "|" + filepath.Join(root, "gems") + "|--version"
+	resolvedRoot, err := filepath.EvalSymlinks(root)
+	require.NoError(t, err)
+	gemHome := filepath.Join(resolvedRoot, "gems")
+	want := gemHome + "|" + gemHome + "|--version"
 	assert.Equal(t, want, string(output))
 }
 

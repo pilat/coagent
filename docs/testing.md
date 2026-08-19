@@ -163,12 +163,18 @@ workflow; that remains the job of scenario or E2E evidence.
 
 ## Local CI gate
 
-This repository currently has no hosted CI. `make ci` is the canonical slow
-local pre-merge gate. It composes `make all`, compiled-process harness E2E,
-build-tagged environment integration, long-running protocol fuzzing, the full
-race detector, shuffled repeated protocol scenarios, and thresholded mutation
-testing. The Make target is the source of truth for budgets and exact commands;
-this document defines why those checks exist.
+`make ci` is the canonical slow pre-merge gate. It composes `make all`,
+compiled-process harness E2E, build-tagged environment integration, long-running
+protocol fuzzing, the full race detector, shuffled repeated protocol scenarios,
+and thresholded mutation testing. The Make target is the source of truth for
+budgets and exact commands; this document defines why those checks exist.
+
+GitHub pull requests and main pushes run `make check` on Linux and macOS plus a
+compiled harness smoke on Linux. Scheduled and manually dispatched Linux jobs run
+default-budget `make ci`. Hosted execution does not weaken the local contract:
+only an unmodified default-budget run may be reported as canonical CI. The
+privileged Testcontainers Bubblewrap test remains explicit opt-in and is not
+implied by a green macOS or ordinary Linux workflow.
 
 `make check` adds build-tagged environment integration against locally installed
 programs such as `git` and `gopls`. Git repositories are temporary local fixtures:
