@@ -1,4 +1,4 @@
-.PHONY: help build test tests test.integration test.live harness-e2e lint lint.fix fmt fmt.check all verify verify-offline check ci long-fuzz race stress ci.mutation arch semgrep mutation tools workflow.check post-stop-hook
+.PHONY: help build test tests test.integration test.live harness-e2e lint lint.fix fmt fmt.check all verify verify-offline check ci long-fuzz race stress ci.mutation arch semgrep secrets mutation tools workflow.check post-stop-hook
 
 .DEFAULT_GOAL := help
 
@@ -14,6 +14,7 @@ GREMLINS_VERSION ?= v0.6.0
 GOPLS_VERSION ?= v0.20.0
 ACTIONLINT_VERSION ?= v1.7.12
 SEMGREP_VERSION ?= 1.168.0
+GITLEAKS_VERSION ?= v8.30.1
 
 GOLANGCI_RUN = golangci-lint run ./...
 SEMGREP ?= uv tool run --offline --from semgrep==$(SEMGREP_VERSION) semgrep
@@ -23,7 +24,7 @@ SEMGREP ?= uv tool run --offline --from semgrep==$(SEMGREP_VERSION) semgrep
 # and mutation workers) without disabling the explicitly online bootstrap.
 OFFLINE_TARGETS := all verify verify-offline check ci build test tests \
 	test.integration harness-e2e long-fuzz race stress ci.mutation mutation \
-	lint arch semgrep post-stop-hook
+	lint arch semgrep secrets post-stop-hook
 $(OFFLINE_TARGETS): export GOPROXY := off
 $(OFFLINE_TARGETS): export GOSUMDB := off
 $(OFFLINE_TARGETS): export GOTOOLCHAIN := local
@@ -40,7 +41,7 @@ GO_LDFLAGS := -X $(VERSION_PKG).Version=$(VERSION)
 
 help:
 	@echo "Everyday gate:"
-	@echo "  all / verify     format check + build + lint + arch + semgrep + tests"
+	@echo "  all / verify     format check + build + lint + arch + semgrep + secret scan + tests"
 	@echo "  verify-offline   verify with Go/uv network resolution disabled"
 	@echo "  check            all + integration tests      (needs local git/gopls)"
 	@echo "  ci               slow local CI: all + integration + harness E2E + long fuzz + race"
@@ -56,6 +57,7 @@ help:
 	@echo "  lint.fix         apply every golangci-lint autofix"
 	@echo "  arch             go-arch-lint only"
 	@echo "  semgrep          project invariants only"
+	@echo "  secrets          scan Git history and working tree for committed credentials"
 	@echo "  workflow.check   validate GitHub Actions workflows with actionlint"
 	@echo ""
 	@echo "Opt-in (slow):"
@@ -71,7 +73,7 @@ help:
 # Everything that must be green before a commit, and nothing that needs the
 # network. Every gate is listed by name: burying arch/semgrep inside `lint` made
 # people read `all` and conclude they were missing.
-all verify: fmt.check build lint arch semgrep tests
+all verify: fmt.check build lint arch semgrep secrets tests
 
 # Prove the warmed checkout does not need module or Python-package resolution.
 # Missing modules or uv tool state fail closed; only `tools` may populate them.
@@ -140,6 +142,7 @@ tools:
 	go install github.com/fe3dback/go-arch-lint@$(GO_ARCH_LINT_VERSION)
 	go install github.com/go-gremlins/gremlins/cmd/gremlins@$(GREMLINS_VERSION)
 	go install github.com/rhysd/actionlint/cmd/actionlint@$(ACTIONLINT_VERSION)
+	go install github.com/zricethezav/gitleaks/v8@$(GITLEAKS_VERSION)
 	@command -v uv >/dev/null 2>&1 || { echo "✋ uv missing (semgrep runs through it): curl -LsSf https://astral.sh/uv/install.sh | sh"; exit 1; }
 	uv tool run --from semgrep==$(SEMGREP_VERSION) semgrep --version
 
@@ -155,6 +158,13 @@ arch:
 semgrep:
 	@command -v uv >/dev/null 2>&1 || { echo "✋ uv missing (semgrep runs through it): curl -LsSf https://astral.sh/uv/install.sh | sh"; exit 1; }
 	$(SEMGREP) scan --config .semgrep/ --error --metrics=off --quiet .
+
+secrets:
+	@command -v gitleaks >/dev/null 2>&1 || { echo "✋ gitleaks missing; run make tools"; exit 1; }
+	@gitleaks_bin="$$(command -v gitleaks)"; \
+		go version -m "$$gitleaks_bin" | awk '$$1 == "mod" && $$2 == "github.com/zricethezav/gitleaks/v8" && $$3 == "$(GITLEAKS_VERSION)" { found = 1 } END { exit !found }' || { echo "✋ gitleaks $(GITLEAKS_VERSION) required; run make tools"; exit 1; }
+	gitleaks git --redact=100 .
+	gitleaks dir --redact=100 .
 
 workflow.check:
 	@actionlint -version 2>/dev/null | grep -q "$(patsubst v%,%,$(ACTIONLINT_VERSION))" || { echo "✋ actionlint $(ACTIONLINT_VERSION) required; run make tools"; exit 1; }
