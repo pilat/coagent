@@ -60,7 +60,7 @@ func (m *Manager) resolveSessionByTopicID(ctx context.Context, topicID int64) (i
 		return 0, false
 	}
 
-	for _, s := range filterActiveSessions(sessions) {
+	for _, s := range m.filterOwnedActiveSessions(sessions) {
 		attrTopicID, ok := topicIDFromAttributes(s.Attributes)
 		if !ok || attrTopicID != topicID {
 			continue
@@ -379,7 +379,7 @@ func (m *Manager) reconcileOnStartup(ctx context.Context) error {
 		return fmt.Errorf("list sessions: %w", err)
 	}
 
-	for _, s := range filterActiveSessions(sessions) {
+	for _, s := range m.filterOwnedActiveSessions(sessions) {
 		m.setWorkDir(s.ID, s.WorkDir)
 
 		if topicID, ok := topicIDFromAttributes(s.Attributes); ok && m.verifyTopicExists(ctx, topicID) {
@@ -426,20 +426,7 @@ func (m *Manager) handleNotification(ctx context.Context, sn controllerapi.Sessi
 
 	switch n.Type {
 	case sessionevent.NotifySessionCreated:
-		if topicID, ok := topicIDFromAttributes(n.Attributes); ok && m.verifyTopicExists(ctx, topicID) {
-			m.registerTopic(sessionID, topicID)
-			m.setWorkDir(sessionID, n.WorkDir)
-
-			return
-		}
-
-		if _, err := m.createTopicForSession(ctx, sessionID, n.WorkDir, n.Name, n.Attributes); err != nil {
-			logger.Ctx(ctx).Named("telegram").Error(
-				"bind_session_topic",
-				zap.Int64("session_id", sessionID),
-				zap.Error(err),
-			)
-		}
+		m.handleSessionCreated(ctx, sessionID, n)
 	case sessionevent.NotifySessionCleared:
 		m.handleSessionCleared(ctx, n)
 	case sessionevent.NotifyMessage:

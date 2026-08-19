@@ -177,7 +177,7 @@ func (m *Manager) Start(ctx context.Context) error {
 		return fmt.Errorf("announce startup: %w", err)
 	}
 
-	m.subscription = m.controller.SubscribeAll()
+	m.subscription = m.controller.Subscribe()
 
 	go func() {
 		defer close(done)
@@ -227,7 +227,7 @@ func (m *Manager) Stop(ctx context.Context) error {
 	}
 
 	if m.subscription != nil {
-		m.controller.UnsubscribeAll(m.subscription)
+		m.controller.Unsubscribe(m.subscription)
 	}
 
 	if m.done == nil {

@@ -12,8 +12,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/pilat/coagent/internal/configops"
+	"github.com/pilat/coagent/internal/controllerapi"
 	"github.com/pilat/coagent/internal/llmwire"
-	"github.com/pilat/coagent/internal/registry"
 	"github.com/pilat/coagent/internal/session"
 	"github.com/pilat/coagent/internal/sessionevent"
 	"github.com/pilat/coagent/internal/sessionstore"
@@ -40,6 +40,7 @@ type configHarness struct {
 	// sessionID is a real session row: the apply pipeline reads its transcript
 	// before it commits, so a config tool needs somewhere to have suspended.
 	sessionID int64
+	projectID int64
 	sessions  sessionstore.Store
 	store     Store
 	factory   *mockFactory
@@ -65,6 +66,15 @@ func newConfigHarness(t *testing.T) *configHarness {
 	h.sessions = sessions
 	h.store = store
 	h.factory = factory
+	systemWorkDir := filepath.Join(t.TempDir(), controllerapi.CoagentSystemProjectDir)
+	projectID, err := store.GetOrCreateSystemProject(
+		context.Background(),
+		systemWorkDir,
+		controllerapi.CoagentSystemProjectName,
+	)
+	require.NoError(t, err)
+	h.projectID = projectID
+	mgr.systemProject = systemWorkDir
 	mgr.applier = NewConfigApplier(configops.New(configPath, secretsPath), func() { h.restarts++ })
 
 	h.mgr = mgr
@@ -86,9 +96,9 @@ func (h *configHarness) liveSession(t *testing.T) int64 {
 	t.Helper()
 
 	ctx := context.Background()
-	pid := testProject(t, h.store, t.TempDir())
-
-	rec, err := h.mgr.sessionStore.CreateSession(ctx, pid, "fake-model", "", map[string]any{"channel": "cli"})
+	rec, err := h.mgr.sessionStore.CreateSession(
+		ctx, h.projectID, "fake-model", "", map[string]any{"channel": "cli"},
+	)
 	require.NoError(t, err)
 
 	return rec.ID
@@ -277,25 +287,88 @@ func TestConfigTool_RefusesWithoutACallID(t *testing.T) {
 	assert.Contains(t, err.Error(), "tool_call id")
 }
 
-// Subagents never see these tools: a child must not reshape the daemon its
-// parent is running on.
-func TestRegisterConfigTools_RootSessionsOnly(t *testing.T) {
+// Configuration belongs to the reserved system project. Neither a root in an
+// ordinary project nor a child may reshape the daemon.
+func TestRegisterConfigTools_SystemProjectRootOnly(t *testing.T) {
 	ctx := context.Background()
 	h := newConfigHarness(t)
-
-	root := &mockSession{}
-	h.mgr.registerConfigTools(ctx, &sessionstore.SessionRecord{ID: testSessionID}, root)
-
-	child := &mockSession{agentType: registry.AgentTypeExplore}
-	h.mgr.registerConfigTools(ctx, &sessionstore.SessionRecord{ID: 43, ParentID: testSessionID}, child)
-
-	for _, id := range []string{
+	ordinaryProjectID := testProject(t, h.store, t.TempDir())
+	rogueProjectID, err := h.store.GetOrCreateSystemProject(
+		ctx,
+		filepath.Join(t.TempDir(), controllerapi.CoagentSystemProjectDir),
+		controllerapi.CoagentSystemProjectName,
+	)
+	require.NoError(t, err)
+	ids := []string{
 		tool.IDSetProvider, tool.IDRemoveProvider, tool.IDSetManager, tool.IDRemoveManager,
 		tool.IDAddModel, tool.IDRemoveModel, tool.IDSetDefaultModel,
-	} {
-		assert.True(t, root.hasTool(id), id)
-		assert.False(t, child.hasTool(id), id)
 	}
+	tests := []struct {
+		name string
+		rec  *sessionstore.SessionRecord
+		want bool
+	}{
+		{
+			name: "configuration root without channel",
+			rec: &sessionstore.SessionRecord{
+				ID: testSessionID, ProjectID: h.projectID,
+			},
+			want: true,
+		},
+		{
+			name: "ordinary cli root",
+			rec: &sessionstore.SessionRecord{
+				ID: testSessionID, ProjectID: ordinaryProjectID,
+				Attributes: map[string]any{"channel": "cli"},
+			},
+		},
+		{
+			name: "foreign manager in configuration project",
+			rec: &sessionstore.SessionRecord{
+				ID: testSessionID, ProjectID: h.projectID,
+				Attributes: map[string]any{
+					controllerapi.SessionAttributeManagerID: "telegram-main",
+				},
+			},
+		},
+		{
+			name: "system name outside canonical directory",
+			rec:  &sessionstore.SessionRecord{ID: testSessionID, ProjectID: rogueProjectID},
+		},
+		{
+			name: "configuration child",
+			rec: &sessionstore.SessionRecord{
+				ID: 43, ProjectID: h.projectID, ParentID: testSessionID,
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sess := &mockSession{}
+			h.mgr.registerConfigTools(ctx, tt.rec, sess)
+
+			for _, id := range ids {
+				assert.Equal(t, tt.want, sess.hasTool(id), id)
+			}
+		})
+	}
+}
+
+func TestRegisterConfigTools_SystemProjectIdentitySurvivesClear(t *testing.T) {
+	h := newConfigHarness(t)
+
+	newID, err := h.mgr.Clear(context.Background(), h.sessionID)
+	require.NoError(t, err)
+
+	rec, err := h.mgr.sessionStore.GetSession(context.Background(), newID)
+	require.NoError(t, err)
+	assert.Equal(t, h.projectID, rec.ProjectID)
+
+	sess := &mockSession{}
+	h.mgr.registerConfigTools(context.Background(), rec, sess)
+	assert.True(t, sess.hasTool(tool.IDSetProvider))
+	assert.True(t, sess.hasTool(tool.IDSetDefaultModel))
 }
 
 // Every mutating tool has to say what a caller cannot see: the restart, and the

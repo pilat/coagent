@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"maps"
 	"os"
 	"path/filepath"
 	"sync"
@@ -24,8 +25,12 @@ type fakeController struct {
 
 	sessions []controllerapi.SessionInfo
 	created  []controllerapi.SessionCreateData
+	projects []controllerapi.ProjectCreateData
 	sent     []controllerapi.SessionMessageData
 	stopped  []int64
+	models   []controllerapi.ConfigModelInfo
+	setModel []controllerapi.SessionSetModelData
+	setAttrs []controllerapi.SessionSetAttributesData
 	nextID   int64
 
 	events chan controllerapi.SessionNotification
@@ -36,10 +41,12 @@ func newFakeController() *fakeController {
 }
 
 func (f *fakeController) CreateProject(
-	context.Context, controllerapi.ProjectCreateData,
+	_ context.Context, data controllerapi.ProjectCreateData,
 ) (*controllerapi.ProjectCreateResultData, error) {
+	f.projects = append(f.projects, data)
+
 	return &controllerapi.ProjectCreateResultData{
-		ID: chatProjectID, Name: ProjectName, Path: "/projects/coagent",
+		ID: chatProjectID, Name: ProjectName, Path: "/projects/sys_coagent",
 	}, nil
 }
 
@@ -49,8 +56,13 @@ func (f *fakeController) CreateSession(_ context.Context, d controllerapi.Sessio
 
 	f.nextID++
 	f.created = append(f.created, d)
+	attributes := maps.Clone(d.Attributes)
+	if attributes == nil {
+		attributes = make(map[string]any)
+	}
+	attributes[controllerapi.SessionAttributeManagerID] = controllerapi.BuiltinCLIManagerID
 	f.sessions = append(f.sessions, controllerapi.SessionInfo{
-		ID: f.nextID, ProjectID: chatProjectID, UpdatedAt: time.Now(),
+		ID: f.nextID, ProjectID: chatProjectID, UpdatedAt: time.Now(), Attributes: attributes,
 	})
 
 	return f.nextID, nil
@@ -74,16 +86,62 @@ func (f *fakeController) StopSession(_ context.Context, d controllerapi.SessionS
 	return nil
 }
 
+func (f *fakeController) ListModels(context.Context) (*controllerapi.ConfigModelsResultData, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	return &controllerapi.ConfigModelsResultData{
+		Models: append([]controllerapi.ConfigModelInfo(nil), f.models...),
+	}, nil
+}
+
+func (f *fakeController) SetSessionModel(_ context.Context, d controllerapi.SessionSetModelData) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	f.setModel = append(f.setModel, d)
+
+	return nil
+}
+
+func (f *fakeController) SetSessionAttributes(
+	_ context.Context,
+	d controllerapi.SessionSetAttributesData,
+) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	f.setAttrs = append(f.setAttrs, d)
+	for i := range f.sessions {
+		if f.sessions[i].ID == d.SessionID {
+			f.sessions[i].Attributes = d.Attributes
+		}
+	}
+
+	return nil
+}
+
 func (f *fakeController) ListSessions(context.Context) ([]controllerapi.SessionInfo, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
-	return append([]controllerapi.SessionInfo(nil), f.sessions...), nil
+	sessions := append([]controllerapi.SessionInfo(nil), f.sessions...)
+	for i := range sessions {
+		if sessions[i].ProjectID != chatProjectID || sessions[i].Attributes != nil {
+			continue
+		}
+
+		sessions[i].Attributes = map[string]any{
+			controllerapi.SessionAttributeManagerID: "cli",
+		}
+	}
+
+	return sessions, nil
 }
 
-func (f *fakeController) SubscribeAll() <-chan controllerapi.SessionNotification { return f.events }
+func (f *fakeController) Subscribe() <-chan controllerapi.SessionNotification { return f.events }
 
-func (f *fakeController) UnsubscribeAll(<-chan controllerapi.SessionNotification) {}
+func (f *fakeController) Unsubscribe(<-chan controllerapi.SessionNotification) {}
 
 type harness struct {
 	ctrl    *fakeController

@@ -7,6 +7,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/pilat/coagent/internal/controllerapi"
 	"github.com/pilat/coagent/internal/sessionevent"
 )
 
@@ -58,6 +59,38 @@ func TestPubSub_GlobalSubscriber(t *testing.T) {
 	assert.Contains(t, messages, "from s2")
 	assert.Contains(t, sessionIDs, int64(1))
 	assert.Contains(t, sessionIDs, int64(2))
+}
+
+func TestPubSub_ManagerSubscribersReceiveOnlyTheirOwner(t *testing.T) {
+	ps := newPubSub()
+	alpha := ps.SubscribeManager("alpha")
+	beta := ps.SubscribeManager("beta")
+	blank := ps.SubscribeManager("")
+	observer := ps.SubscribeAll()
+	n := sessionevent.Notification{Type: sessionevent.NotifyMessage, Message: "owned"}
+
+	ps.PublishOwned(41, "alpha", n)
+
+	assert.Equal(t, int64(41), requireManagerNotification(t, alpha).SessionID)
+	assert.Equal(t, int64(41), requireManagerNotification(t, observer).SessionID)
+	requireNoManagerNotification(t, beta)
+	requireNoManagerNotification(t, blank)
+
+	ps.PublishOwned(42, "", n)
+	requireNoManagerNotification(t, alpha)
+	requireNoManagerNotification(t, beta)
+	requireNoManagerNotification(t, blank)
+	assert.Equal(t, int64(42), requireManagerNotification(t, observer).SessionID)
+}
+
+func TestPubSub_UnsubscribeManager(t *testing.T) {
+	ps := newPubSub()
+	ch := ps.SubscribeManager("alpha")
+	ps.UnsubscribeManager(ch)
+
+	ps.PublishOwned(1, "alpha", sessionevent.Notification{Type: sessionevent.NotifyMessage})
+
+	requireNoManagerNotification(t, ch)
 }
 
 func TestPubSub_SlowSubscriber(t *testing.T) {
@@ -150,5 +183,31 @@ func TestPubSub_PerSessionIsolation(t *testing.T) {
 		t.Fatal("s2 subscriber should not receive s1 notification")
 	case <-time.After(50 * time.Millisecond):
 		// Expected
+	}
+}
+
+func requireManagerNotification(
+	t *testing.T,
+	ch <-chan controllerapi.SessionNotification,
+) controllerapi.SessionNotification {
+	t.Helper()
+
+	select {
+	case notification := <-ch:
+		return notification
+	case <-time.After(time.Second):
+		t.Fatal("manager notification timeout")
+	}
+
+	return controllerapi.SessionNotification{}
+}
+
+func requireNoManagerNotification(t *testing.T, ch <-chan controllerapi.SessionNotification) {
+	t.Helper()
+
+	select {
+	case notification := <-ch:
+		t.Fatalf("unexpected manager notification: %#v", notification)
+	case <-time.After(20 * time.Millisecond):
 	}
 }

@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"encoding/json"
+	"os"
 	"path/filepath"
 	"slices"
 	"strconv"
@@ -15,6 +16,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/pilat/coagent/internal/config"
+	"github.com/pilat/coagent/internal/controllerapi"
 	"github.com/pilat/coagent/internal/llm"
 	"github.com/pilat/coagent/internal/llmwire"
 	"github.com/pilat/coagent/internal/mcp"
@@ -149,6 +151,24 @@ func newSubagentHarnessOnDB(
 	respond func(system string, msgs []llmwire.Message) *llmwire.Response,
 	decorate func(LinkStore) LinkStore,
 ) *subagentHarness {
+	return newSubagentHarnessOnDBWithProject(t, dbPath, respond, decorate, false)
+}
+
+func newSubagentHarnessOnSystemProjectDB(
+	t *testing.T,
+	dbPath string,
+	respond func(system string, msgs []llmwire.Message) *llmwire.Response,
+) *subagentHarness {
+	return newSubagentHarnessOnDBWithProject(t, dbPath, respond, nil, true)
+}
+
+func newSubagentHarnessOnDBWithProject(
+	t *testing.T,
+	dbPath string,
+	respond func(system string, msgs []llmwire.Message) *llmwire.Response,
+	decorate func(LinkStore) LinkStore,
+	systemProject bool,
+) *subagentHarness {
 	t.Helper()
 
 	db, err := migrate.OpenDB(context.Background(), dbPath)
@@ -166,6 +186,10 @@ func newSubagentHarnessOnDB(
 	}
 
 	workDir := t.TempDir()
+	if systemProject {
+		workDir = filepath.Join(workDir, controllerapi.CoagentSystemProjectDir)
+		require.NoError(t, os.MkdirAll(workDir, 0o755))
+	}
 	cfg := &config.Config{WorkDir: workDir, Model: "fake-model"}
 
 	factory := session.NewFactoryWithOptions(
@@ -179,8 +203,18 @@ func newSubagentHarnessOnDB(
 		factory, store, sessStore, sessStore, links, schedule.NewService(schedStore),
 		func() string { return "fake-model" },
 	)
+	if systemProject {
+		mgr.systemProject = workDir
+	}
 
-	pid, err := store.GetOrCreateProject(context.Background(), workDir)
+	var pid int64
+	if systemProject {
+		pid, err = store.GetOrCreateSystemProject(
+			context.Background(), workDir, controllerapi.CoagentSystemProjectName,
+		)
+	} else {
+		pid, err = store.GetOrCreateProject(context.Background(), workDir)
+	}
 	require.NoError(t, err)
 
 	return &subagentHarness{

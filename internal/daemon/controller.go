@@ -2,7 +2,9 @@ package daemon
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"sort"
@@ -17,13 +19,17 @@ import (
 	"github.com/pilat/coagent/internal/sessionevent"
 )
 
-var _ controllerapi.Controller = (*controller)(nil)
+var (
+	_ controllerapi.Controller               = (*controller)(nil)
+	_ controllerapi.ManagerControllerFactory = (*controller)(nil)
+)
 
 type controller struct {
-	svc      Service
-	cfg      *config.Config
-	cache    loader.MarketplaceCache
-	schedule schedule.Service
+	svc       Service
+	cfg       *config.Config
+	cache     loader.MarketplaceCache
+	schedule  schedule.Service
+	managerID string
 }
 
 func NewController(
@@ -31,8 +37,14 @@ func NewController(
 	cfg *config.Config,
 	cache loader.MarketplaceCache,
 	scheduleSvc schedule.Service,
-) controllerapi.Controller {
+) controllerapi.ManagerControllerFactory {
 	return &controller{svc: svc, cfg: cfg, cache: cache, schedule: scheduleSvc}
+}
+
+func (c *controller) ForManager(managerID string) controllerapi.Controller {
+	return &controller{
+		svc: c.svc, cfg: c.cfg, cache: c.cache, schedule: c.schedule, managerID: managerID,
+	}
 }
 
 // ListSchedules returns the schedules attached to a session for read-only
@@ -41,6 +53,10 @@ func (c *controller) ListSchedules(
 	ctx context.Context,
 	data controllerapi.ScheduleListData,
 ) (*controllerapi.ScheduleListResultData, error) {
+	if err := c.requireOwnedSession(ctx, data.SessionID); err != nil {
+		return nil, err
+	}
+
 	if c.schedule == nil {
 		return &controllerapi.ScheduleListResultData{}, nil
 	}
@@ -71,6 +87,22 @@ func (c *controller) ListSchedules(
 }
 
 func (c *controller) CreateSession(ctx context.Context, data controllerapi.SessionCreateData) (int64, error) {
+	if err := c.requireManagerIdentity(); err != nil {
+		return 0, err
+	}
+
+	if data.SystemProject != "" && c.managerID != controllerapi.BuiltinCLIManagerID {
+		return 0, errors.New("the reserved system project belongs to the local chat")
+	}
+
+	if data.SystemProject != "" && data.SystemProject != controllerapi.CoagentSystemProjectName {
+		return 0, fmt.Errorf("unknown system project %q", data.SystemProject)
+	}
+
+	if data.SystemProject != "" && data.UseWorktree {
+		return 0, fmt.Errorf("system project %q cannot use a worktree", data.SystemProject)
+	}
+
 	if data.UseWorktree {
 		nextWorkDir, err := createWorktree(ctx, data.WorkDir)
 		if err != nil {
@@ -80,7 +112,14 @@ func (c *controller) CreateSession(ctx context.Context, data controllerapi.Sessi
 		data.WorkDir = nextWorkDir
 	}
 
-	projectID, err := c.svc.GetOrCreateProject(ctx, data.WorkDir)
+	data.Attributes = maps.Clone(data.Attributes)
+	if data.Attributes == nil {
+		data.Attributes = make(map[string]any)
+	}
+
+	data.Attributes[controllerapi.SessionAttributeManagerID] = c.managerID
+
+	projectID, err := c.resolveSessionProject(ctx, data)
 	if err != nil {
 		return 0, fmt.Errorf("resolve project: %w", err)
 	}
@@ -98,6 +137,10 @@ func (c *controller) CreateSession(ctx context.Context, data controllerapi.Sessi
 }
 
 func (c *controller) SendSessionMessage(ctx context.Context, data controllerapi.SessionMessageData) error {
+	if err := c.requireOwnedSession(ctx, data.SessionID); err != nil {
+		return err
+	}
+
 	if err := c.svc.SendToSession(ctx, data.SessionID, data.Message); err != nil {
 		return fmt.Errorf("send session message: %w", err)
 	}
@@ -118,6 +161,10 @@ func (c *controller) ListSessions(ctx context.Context) ([]controllerapi.SessionI
 	infos := make([]controllerapi.SessionInfo, 0, len(records))
 
 	for _, rec := range records {
+		if !c.canListSession(ctx, rec) {
+			continue
+		}
+
 		workDir, _ := c.svc.GetProjectWorkDir(ctx, rec.ProjectID)
 		projectName, _ := c.svc.GetProjectName(ctx, rec.ProjectID)
 		name := fmt.Sprintf("%s - %d", projectName, rec.ID)
@@ -140,6 +187,10 @@ func (c *controller) ListSessions(ctx context.Context) ([]controllerapi.SessionI
 }
 
 func (c *controller) KillSession(ctx context.Context, data controllerapi.SessionKillData) error {
+	if err := c.requireOwnedSession(ctx, data.SessionID); err != nil {
+		return err
+	}
+
 	if err := c.svc.Kill(ctx, data.SessionID); err != nil {
 		return fmt.Errorf("kill session: %w", err)
 	}
@@ -148,6 +199,10 @@ func (c *controller) KillSession(ctx context.Context, data controllerapi.Session
 }
 
 func (c *controller) StopSession(ctx context.Context, data controllerapi.SessionStopData) error {
+	if err := c.requireOwnedSession(ctx, data.SessionID); err != nil {
+		return err
+	}
+
 	if err := c.svc.Stop(ctx, data.SessionID); err != nil {
 		return fmt.Errorf("stop session: %w", err)
 	}
@@ -156,6 +211,10 @@ func (c *controller) StopSession(ctx context.Context, data controllerapi.Session
 }
 
 func (c *controller) ClearSession(ctx context.Context, data controllerapi.SessionClearData) (int64, error) {
+	if err := c.requireOwnedSession(ctx, data.SessionID); err != nil {
+		return 0, err
+	}
+
 	id, err := c.svc.Clear(ctx, data.SessionID)
 	if err != nil {
 		return 0, fmt.Errorf("clear session: %w", err)
@@ -165,6 +224,10 @@ func (c *controller) ClearSession(ctx context.Context, data controllerapi.Sessio
 }
 
 func (c *controller) SetSessionModel(ctx context.Context, data controllerapi.SessionSetModelData) error {
+	if err := c.requireOwnedSession(ctx, data.SessionID); err != nil {
+		return err
+	}
+
 	if err := c.svc.SetModel(ctx, data.SessionID, data.Model, data.ReasoningLevel); err != nil {
 		return fmt.Errorf("set session model: %w", err)
 	}
@@ -173,6 +236,10 @@ func (c *controller) SetSessionModel(ctx context.Context, data controllerapi.Ses
 }
 
 func (c *controller) SetSessionAttributes(ctx context.Context, data controllerapi.SessionSetAttributesData) error {
+	if err := c.authorizeAttributeUpdate(ctx, &data); err != nil {
+		return err
+	}
+
 	if err := c.svc.SetAttributes(ctx, data.SessionID, data.Attributes); err != nil {
 		return fmt.Errorf("set session attributes: %w", err)
 	}
@@ -225,6 +292,10 @@ func (c *controller) ListSkills(
 	ctx context.Context,
 	data controllerapi.ConfigSkillsData,
 ) (*controllerapi.ConfigSkillsResultData, error) {
+	if err := c.requireOwnedSession(ctx, data.SessionID); err != nil {
+		return nil, err
+	}
+
 	workDir, err := c.skillContext(ctx, data.SessionID)
 	if err != nil {
 		return nil, err
@@ -251,12 +322,46 @@ func (c *controller) ListSkills(
 	return &controllerapi.ConfigSkillsResultData{Skills: skills}, nil
 }
 
-func (c *controller) SubscribeAll() <-chan controllerapi.SessionNotification {
-	return c.svc.PubSub().SubscribeAll()
+func (c *controller) Subscribe() <-chan controllerapi.SessionNotification {
+	if c.managerID == "" {
+		return make(chan controllerapi.SessionNotification)
+	}
+
+	return c.svc.PubSub().SubscribeManager(c.managerID)
 }
 
-func (c *controller) UnsubscribeAll(ch <-chan controllerapi.SessionNotification) {
-	c.svc.PubSub().UnsubscribeAll(ch)
+func (c *controller) Unsubscribe(ch <-chan controllerapi.SessionNotification) {
+	c.svc.PubSub().UnsubscribeManager(ch)
+}
+
+func (c *controller) resolveSessionProject(ctx context.Context, data controllerapi.SessionCreateData) (int64, error) {
+	if data.SystemProject != "" {
+		expected := filepath.Join(
+			resolveProjectsRoot(c.cfg.UnifiedConfig),
+			controllerapi.CoagentSystemProjectDir,
+		)
+		if !sameProjectPath(data.WorkDir, expected) {
+			return 0, errors.New("system project is outside the canonical configuration directory")
+		}
+
+		projectID, err := c.svc.GetOrCreateSystemProject(ctx, data.WorkDir, data.SystemProject)
+		if err != nil {
+			return 0, fmt.Errorf("get system project: %w", err)
+		}
+
+		return projectID, nil
+	}
+
+	if filepath.Base(filepath.Clean(data.WorkDir)) == controllerapi.CoagentSystemProjectDir {
+		return 0, errors.New("reserved system project requires its internal identity")
+	}
+
+	projectID, err := c.svc.GetOrCreateProject(ctx, data.WorkDir)
+	if err != nil {
+		return 0, fmt.Errorf("get project: %w", err)
+	}
+
+	return projectID, nil
 }
 
 func (c *controller) skillContext(ctx context.Context, sessionID int64) (string, error) {

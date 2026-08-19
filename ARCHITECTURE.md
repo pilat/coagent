@@ -131,6 +131,13 @@ marketplace content is loadable instruction/definition data, not executable
 code with privileged integration rights. New managers and drivers are source
 contributions governed by the internal dependency graph.
 
+Each manager-created root session carries one durable manager owner ID. The
+composition root binds one controller capability to each manager ID: creation
+stamps it, every session-addressed operation checks it, and subscriptions
+deliver only that owner's events. Daemon-internal observer subscriptions are
+not part of that contract. Driver and channel names cannot route ownership
+because several configured managers may share them.
+
 Agent-type policy is immutable after construction. Registry inputs and returned
 configs are copied so a caller cannot mutate global capability policy or another
 session's policy. Model metadata belongs to catalogs and drivers; CLI model
@@ -272,12 +279,14 @@ replay arbitrary notifications to reconstitute state. Startup may re-arm
 unfinished producer work, but it must validate exact delivery ownership before
 making a transcript mutation.
 
-Only root sessions publish session events to managers. Subagent events remain
-inside their tree; parent completion is the explicit cross-boundary signal.
+Only root sessions publish session events to managers, and each event reaches
+only the subscription matching the session's durable manager owner. Ownerless
+sessions fail closed. Subagent events remain inside their tree; parent
+completion is the explicit cross-boundary signal.
 Publication is best effort for an individual local control connection: a blocked
 push reader must not block RPC replies. The control client exposes a dropped-push
 counter; it provides observability, not replay or resynchronization. See
-ADR-0021 for this boundary.
+ADR-0021 and ADR-0023 for these boundaries.
 
 ## Security and Trust Boundaries
 
@@ -339,12 +348,20 @@ sources. A missing subagent `tools` declaration inherits the inventory, whereas
 an explicit empty list grants none. An unknown subagent model degrades to its
 default instead of making every spawn fail. Skill model visibility and direct
 user invocation are independent controls; a leading `/skill` command is
-expanded before model invocation.
+expanded before model invocation. Daemon-selected system skills can instead be
+activated directly in the static prompt without being offered to the model for
+invocation.
 
 Bare invocation performs deterministic bootstrap, including the initial provider
 credential collection over the control socket, and then hands further setup to
-the local chat. Telegram is optional: a bad manager configuration must not
-prevent the chat used to repair it.
+the local chat. That chat owns the reserved logical project `sys:coagent`
+at the canonical `<projects_root>/sys_coagent` path, which user projects and
+internal markers for other paths cannot claim. Only its root receives
+daemon-wide provider, model and manager tools; terminal-dependent
+secret prompting additionally requires its CLI channel. The full onboarding
+skill is automatically active there. Telegram, ordinary project roots and
+subagents receive none of these configuration surfaces. Telegram is optional: a
+bad manager configuration must not prevent the chat used to repair it.
 
 ## Package profiles
 
@@ -426,8 +443,11 @@ helpers with no durable protocol ownership.
 The manager coordinator isolates manager failures. CLI and Telegram render
 controller state and submit controller requests; they do not directly manipulate
 session rows. The CLI is always available with a running daemon, while Telegram
-is configuration-dependent. Session-event defines the event vocabulary shared at
-this boundary.
+is configuration-dependent. The reserved `sys:coagent` logical name together
+with its canonical configured path, rather than a transport attribute or numeric
+session ID, marks the dedicated daemon-configuration root; its CLI attribute
+separately proves a terminal can answer a secret prompt. Session-event defines
+the event vocabulary shared at this boundary.
 
 Control owns socket framing, readiness, operation registration, single-instance
 coordination and push/reply multiplexing. Its best-effort push policy must remain

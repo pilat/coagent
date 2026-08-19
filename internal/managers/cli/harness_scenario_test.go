@@ -214,8 +214,13 @@ func TestHarnessScenario_ConcurrentSendsAndPushesNeverCrossWire(t *testing.T) {
 
 	for i := range senders {
 		wg.Go(func() {
-			// Each request names its own session, so a crossed response is visible.
-			params := SendParams{SessionID: int64(1000 + i), Text: fmt.Sprintf("msg %d", i)}
+			sessionID := chatSessionID
+			if i%2 == 1 {
+				// Distinct rejected ids make a crossed error response visible while
+				// preserving the manager ownership boundary.
+				sessionID = int64(1000 + i)
+			}
+			params := SendParams{SessionID: sessionID, Text: fmt.Sprintf("msg %d", i)}
 			errs[i] = c.Call(context.Background(), OpChatSend, params, &results[i])
 		})
 	}
@@ -227,19 +232,26 @@ func TestHarnessScenario_ConcurrentSendsAndPushesNeverCrossWire(t *testing.T) {
 	wg.Wait()
 
 	for i := range senders {
+		if i%2 == 1 {
+			require.Error(t, errs[i])
+			assert.Contains(t, errs[i].Error(), fmt.Sprintf("session %d", 1000+i))
+			continue
+		}
+
 		require.NoError(t, errs[i])
-		assert.Equal(t, int64(1000+i), results[i].SessionID, "the answer went back to the caller that asked")
+		assert.Equal(t, chatSessionID, results[i].SessionID)
 	}
 
-	bySession := map[int64]string{}
+	sentTexts := map[string]bool{}
 	for _, sent := range h.sentMessages() {
-		bySession[sent.SessionID] = sent.Message
+		assert.Equal(t, chatSessionID, sent.SessionID)
+		sentTexts[sent.Message] = true
 	}
 
-	require.Len(t, bySession, senders, "every message reached the controller exactly once")
+	require.Len(t, sentTexts, senders/2, "every owned message reached the controller exactly once")
 
 	for i := range senders {
-		assert.Equal(t, fmt.Sprintf("msg %d", i), bySession[int64(1000+i)])
+		assert.Equal(t, i%2 == 0, sentTexts[fmt.Sprintf("msg %d", i)])
 	}
 
 	for i := range lines {

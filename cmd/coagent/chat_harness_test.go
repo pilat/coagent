@@ -16,6 +16,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/pilat/coagent/internal/config"
+	"github.com/pilat/coagent/internal/controllerapi"
 	"github.com/pilat/coagent/internal/ctl"
 	"github.com/pilat/coagent/internal/managers/cli"
 )
@@ -35,6 +36,10 @@ type chatServer struct {
 	conns    []*ctl.Conn
 	sent     []cli.SendParams
 	stops    []int64
+	models   []controllerapi.ConfigModelInfo
+	current  string
+	effort   string
+	setModel []cli.SetModelParams
 	secrets  []ctl.SetSecretParams
 	declined []cli.SecretCancelParams
 }
@@ -50,6 +55,8 @@ func newChatServer(t *testing.T, socket string, sessionID int64) *chatServer {
 	require.NoError(t, srv.Register(cli.OpChatOpen, s.openOp))
 	require.NoError(t, srv.Register(cli.OpChatSend, s.sendOp))
 	require.NoError(t, srv.Register(cli.OpChatStop, s.stopOp))
+	require.NoError(t, srv.Register(cli.OpChatModels, s.modelsOp))
+	require.NoError(t, srv.Register(cli.OpChatSetModel, s.setModelOp))
 	require.NoError(t, srv.Register(ctl.OpSetSecret, s.secretOp))
 	require.NoError(t, srv.Register(cli.OpChatSecretCancel, s.cancelOp))
 
@@ -92,6 +99,13 @@ func (s *chatServer) sentText() []string {
 	return out
 }
 
+func (s *chatServer) sentParams() []cli.SendParams {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	return append([]cli.SendParams(nil), s.sent...)
+}
+
 func (s *chatServer) storedSecrets() []ctl.SetSecretParams {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -104,6 +118,13 @@ func (s *chatServer) stopped() []int64 {
 	defer s.mu.Unlock()
 
 	return append([]int64(nil), s.stops...)
+}
+
+func (s *chatServer) modelChanges() []cli.SetModelParams {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	return append([]cli.SetModelParams(nil), s.setModel...)
 }
 
 func (s *chatServer) declinedSecrets() []cli.SecretCancelParams {
@@ -158,6 +179,29 @@ func (s *chatServer) stopOp(_ context.Context, _ *ctl.Conn, params json.RawMessa
 	s.mu.Unlock()
 
 	return cli.SendResult(p), nil
+}
+
+func (s *chatServer) modelsOp(_ context.Context, _ *ctl.Conn, _ json.RawMessage) (any, *ctl.Error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	return cli.ModelsResult{
+		Models:    append([]controllerapi.ConfigModelInfo(nil), s.models...),
+		CurrentID: s.current, CurrentEffort: s.effort,
+	}, nil
+}
+
+func (s *chatServer) setModelOp(_ context.Context, _ *ctl.Conn, params json.RawMessage) (any, *ctl.Error) {
+	var p cli.SetModelParams
+	if err := json.Unmarshal(params, &p); err != nil {
+		return nil, &ctl.Error{Code: ctl.CodeInvalidParams, Message: err.Error()}
+	}
+
+	s.mu.Lock()
+	s.setModel = append(s.setModel, p)
+	s.mu.Unlock()
+
+	return cli.SendResult{SessionID: p.SessionID}, nil
 }
 
 func (s *chatServer) secretOp(_ context.Context, _ *ctl.Conn, params json.RawMessage) (any, *ctl.Error) {

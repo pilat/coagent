@@ -1,4 +1,4 @@
-# ADR-0008: Config mutations are root-session tools; apply = file write + daemon self-restart
+# ADR-0008: Config mutations are configuration-project tools; apply = file write + daemon self-restart
 
 - **Status:** Accepted
 - **Date:** 2026-08-08
@@ -11,7 +11,7 @@ Onboarding and later reconfiguration need a mutation path for providers, models,
 
 Configuration mutations follow the `mcp_tools.go` pattern, and applying them restarts the daemon:
 
-- Provider/model/manager mutations are **plain daemon-side tools** implementing `tool.Tool`, registered per iteration onto **all root sessions** (temporarily — tightening the audience is future work), exactly like the MCP registry tools. No MCP loopback, no new plumbing.
+- Provider/model/manager mutations are **plain daemon-side tools** implementing `tool.Tool`, registered per iteration only onto the root of the reserved `sys:coagent` project ([ADR-0022](0022-reserved-coagent-configuration-project.md)). Telegram roots, ordinary project roots and subagents never receive them. The terminal-only `request_secret` tool additionally requires `channel=cli`. No MCP loopback, no new plumbing.
 - Providers, models, and managers **stay in `config.yaml`**; the daemon is the only writer. A mutating tool validates, takes a timestamped `config.yaml.bak`, writes atomically, and triggers a **self-restart**. A daemon that fails to boot on the new file rolls back to the last bak and starts on it. There is no in-memory snapshot holder and no live-reload path.
 - A tool call whose answer arrives after the restart is completed via the session's normal suspend/resume: a persisted pending-apply marker lets the rebooted daemon deliver the verdict into the suspended session, channel-agnostically.
 - Credential values never appear in tool arguments: tools accept only `${VAR}` references to existing secrets (creation of secrets is the CLI channel's `request_secret` path, ADR-0007).
@@ -22,7 +22,7 @@ Configuration mutations follow the `mcp_tools.go` pattern, and applying them res
 - One semantic op layer serves every facade (socket bootstrap op, session tools); validation and secret handling live in one place.
 - Config changes are visible to sessions only after a restart; running sessions checkpoint and resume — a brief, survivable hiccup rather than a hidden reload machinery.
 - Every apply costs a restart and a bak file; bak retention bounds the pile.
-- Any root session on any channel can reconfigure the daemon it runs on — acceptable for a single-owner tool, revisited when an admin boundary exists.
+- Daemon-wide configuration requires the dedicated local CLI chat; ordinary project channels cannot ask their model to reshape the daemon.
 - The pending-apply marker and boot-time rollback become correctness-critical paths and need dedicated tests.
 
 ## Alternatives Considered

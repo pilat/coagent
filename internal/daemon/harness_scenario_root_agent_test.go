@@ -23,7 +23,7 @@ func TestHarnessScenario_RootSessionRunsAsTheBuildAgent(t *testing.T) {
 		return &llmwire.Response{Text: "done"}
 	}
 
-	h := newGatingHarness(t, nil, respond)
+	h := newGatingHarness(t, false, nil, respond)
 	defer h.shutdown()
 
 	rootID, err := h.mgr.Send(h.ctx, h.projectID, "do the thing", "fake-model", nil)

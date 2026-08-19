@@ -297,7 +297,7 @@ func (m *Manager) handleKill(ctx context.Context, sessionID, threadID int64) {
 		return
 	}
 
-	sessions = filterActiveSessions(sessions)
+	sessions = m.filterOwnedActiveSessions(sessions)
 	if len(sessions) == 0 {
 		_, _ = m.sendMessage(ctx, "No sessions to kill.", nil, m.serviceTopicID)
 		return
@@ -335,7 +335,12 @@ func (m *Manager) displayDir(dir string) string {
 func (m *Manager) handleLaunch(ctx context.Context, dir string) {
 	_, _ = m.sendMessage(ctx, "🚀 Creating session in "+m.displayDir(dir)+"...", nil, m.serviceTopicID)
 
-	_, err := m.controller.CreateSession(ctx, controllerapi.SessionCreateData{WorkDir: dir})
+	_, err := m.controller.CreateSession(ctx, controllerapi.SessionCreateData{
+		WorkDir: dir,
+		Attributes: map[string]any{
+			"channel": "telegram",
+		},
+	})
 	if err != nil {
 		_, _ = m.sendMessage(ctx, "❌ Session create failed: "+err.Error(), nil, m.serviceTopicID)
 	}
@@ -347,6 +352,9 @@ func (m *Manager) handleLaunchGWT(ctx context.Context, dir string) {
 	_, err := m.controller.CreateSession(ctx, controllerapi.SessionCreateData{
 		WorkDir:     dir,
 		UseWorktree: true,
+		Attributes: map[string]any{
+			"channel": "telegram",
+		},
 	})
 	if err != nil {
 		_, _ = m.sendMessage(ctx, "❌ Session create failed: "+err.Error(), nil, m.serviceTopicID)
@@ -565,6 +573,11 @@ func (m *Manager) handleCallbackMore(ctx context.Context, cb *telegramCallbackDa
 }
 
 func (m *Manager) handleCallbackKill(ctx context.Context, cb *telegramCallbackData, action callbackAction) {
+	if !m.ownsActiveSessionID(ctx, action.Session) {
+		m.answerCallback(ctx, cb.ID, "Session is no longer available")
+		return
+	}
+
 	m.answerCallback(ctx, cb.ID, "Killing...")
 
 	if err := m.controller.KillSession(ctx, controllerapi.SessionKillData{SessionID: action.Session}); err != nil {

@@ -11,10 +11,8 @@ import (
 	"github.com/pilat/coagent/internal/sessionevent"
 )
 
-// ProjectName is the reserved project the local chat lives in. It is a real
-// folder-project like any other, so its sessions persist, resume and show up in
-// every listing.
-const ProjectName = "coagent"
+// ProjectName is the reserved logical project the local chat lives in.
+const ProjectName = controllerapi.CoagentSystemProjectName
 
 // Push methods the daemon sends a terminal.
 const (
@@ -87,14 +85,17 @@ func New(
 	}
 }
 
-func (m *Manager) ID() string { return "cli" }
+func (m *Manager) ID() string { return controllerapi.BuiltinCLIManagerID }
 
 // Start provisions the reserved project and forwards session events. It runs
 // outside the config-driven loop, so it is up on a configless daemon.
 //
 //nolint:contextcheck // runCtx is the manager's own long-lived root context, canceled by Stop
 func (m *Manager) Start(ctx context.Context) error {
-	project, err := m.controller.CreateProject(ctx, controllerapi.ProjectCreateData{Name: ProjectName})
+	project, err := m.controller.CreateProject(ctx, controllerapi.ProjectCreateData{
+		Name:   ProjectName,
+		System: true,
+	})
 	if err != nil {
 		return fmt.Errorf("provision the %s project: %w", ProjectName, err)
 	}
@@ -119,7 +120,7 @@ func (m *Manager) Start(ctx context.Context) error {
 	m.done = done
 	m.mu.Unlock()
 
-	m.subscription = m.controller.SubscribeAll()
+	m.subscription = m.controller.Subscribe()
 
 	go func() {
 		defer close(done)
@@ -156,7 +157,7 @@ func (m *Manager) Stop(ctx context.Context) error {
 	}
 
 	if m.subscription != nil {
-		m.controller.UnsubscribeAll(m.subscription)
+		m.controller.Unsubscribe(m.subscription)
 	}
 
 	if m.done == nil {

@@ -5,19 +5,21 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"strings"
 
 	"github.com/pilat/coagent/internal/controllerapi"
 	"github.com/pilat/coagent/internal/ctl"
 )
 
-// Chat op names. They carry a session id from day one even though there is only
-// ever one chat: attaching a terminal to another project's session is a later
-// feature the protocol must not preclude.
+// Chat op names. Session ids make reconnects explicit, but an operation may
+// address only the session this manager adopted.
 const (
-	OpChatOpen = "chat_open"
-	OpChatSend = "chat_send"
-	OpChatStop = "chat_stop"
+	OpChatOpen     = "chat_open"
+	OpChatSend     = "chat_send"
+	OpChatStop     = "chat_stop"
+	OpChatModels   = "chat_models"
+	OpChatSetModel = "chat_set_model"
 )
 
 type (
@@ -58,6 +60,7 @@ type (
 	SendParams struct {
 		SessionID int64  `json:"session_id"`
 		Text      string `json:"text"`
+		Model     string `json:"model,omitempty"`
 	}
 
 	// SendResult reports which session took the message, so a client that opened
@@ -80,6 +83,8 @@ func (m *Manager) registerOps() error {
 		{OpChatOpen, m.openHandler()},
 		{OpChatSend, m.sendHandler()},
 		{OpChatStop, m.stopHandler()},
+		{OpChatModels, m.modelsHandler()},
+		{OpChatSetModel, m.setModelHandler()},
 		{OpChatSecretCancel, m.cancelSecretHandler()},
 	}
 
@@ -123,6 +128,10 @@ func (m *Manager) stopHandler() ctl.Handler {
 	return func(ctx context.Context, _ *ctl.Conn, params json.RawMessage) (any, *ctl.Error) {
 		var p SessionParams
 		if err := json.Unmarshal(params, &p); err != nil {
+			return nil, &ctl.Error{Code: ctl.CodeInvalidParams, Message: err.Error()}
+		}
+
+		if err := m.requireOwnedSession(p.SessionID); err != nil {
 			return nil, &ctl.Error{Code: ctl.CodeInvalidParams, Message: err.Error()}
 		}
 
@@ -178,6 +187,13 @@ func (m *Manager) send(ctx context.Context, c *ctl.Conn, p SendParams) (SendResu
 	defer m.createMu.Unlock()
 
 	sessionID := p.SessionID
+	if sessionID != 0 {
+		if err := m.requireOwnedSession(sessionID); err != nil {
+			return SendResult{}, err
+		}
+	}
+
+	applyPendingModel := sessionID == 0 && p.Model != ""
 	if sessionID == 0 {
 		m.mu.Lock()
 		sessionID = m.sessionID
@@ -185,7 +201,16 @@ func (m *Manager) send(ctx context.Context, c *ctl.Conn, p SendParams) (SendResu
 	}
 
 	if sessionID == 0 {
-		return m.create(ctx, p.Text)
+		return m.create(ctx, p.Text, p.Model)
+	}
+
+	if applyPendingModel {
+		if err := m.controller.SetSessionModel(ctx, controllerapi.SessionSetModelData{
+			SessionID: sessionID,
+			Model:     p.Model,
+		}); err != nil {
+			return SendResult{}, fmt.Errorf("apply pending chat model: %w", err)
+		}
 	}
 
 	if err := m.deliver(ctx, sessionID, p.Text); err != nil {
@@ -193,6 +218,18 @@ func (m *Manager) send(ctx context.Context, c *ctl.Conn, p SendParams) (SendResu
 	}
 
 	return SendResult{SessionID: sessionID}, nil
+}
+
+func (m *Manager) requireOwnedSession(sessionID int64) error {
+	m.mu.Lock()
+	ownedID := m.sessionID
+	m.mu.Unlock()
+
+	if sessionID == 0 || sessionID != ownedID {
+		return fmt.Errorf("session %d is not owned by the local chat", sessionID)
+	}
+
+	return nil
 }
 
 func (m *Manager) deliver(ctx context.Context, sessionID int64, text string) error {
@@ -206,16 +243,21 @@ func (m *Manager) deliver(ctx context.Context, sessionID int64, text string) err
 	return nil
 }
 
-func (m *Manager) create(ctx context.Context, prompt string) (SendResult, error) {
+func (m *Manager) create(ctx context.Context, prompt, model string) (SendResult, error) {
 	m.mu.Lock()
 	workDir := m.workDir
 	m.mu.Unlock()
 
+	if model == "" {
+		model = m.model
+	}
+
 	id, err := m.controller.CreateSession(ctx, controllerapi.SessionCreateData{
-		WorkDir:    workDir,
-		Prompt:     prompt,
-		Model:      m.model,
-		Attributes: map[string]any{channelAttribute: channelCLI},
+		WorkDir:       workDir,
+		Prompt:        prompt,
+		Model:         model,
+		Attributes:    map[string]any{channelAttribute: channelCLI},
+		SystemProject: controllerapi.CoagentSystemProjectName,
 	})
 	if err != nil {
 		return SendResult{}, fmt.Errorf("create chat session: %w", err)
@@ -245,8 +287,32 @@ func (m *Manager) resumeLatest(ctx context.Context) (int64, error) {
 			continue
 		}
 
+		owner, _ := s.Attributes[controllerapi.SessionAttributeManagerID].(string)
+
+		channel, _ := s.Attributes[channelAttribute].(string)
+
+		if owner != "" && owner != m.ID() || owner == "" && channel != channelCLI {
+			continue
+		}
+
 		if latest.ID == 0 || s.UpdatedAt.After(latest.UpdatedAt) {
 			latest = s
+		}
+	}
+
+	if latest.ID == 0 {
+		return 0, nil
+	}
+
+	if owner, _ := latest.Attributes[controllerapi.SessionAttributeManagerID].(string); owner == "" {
+		attributes := maps.Clone(latest.Attributes)
+
+		attributes[controllerapi.SessionAttributeManagerID] = m.ID()
+
+		if err := m.controller.SetSessionAttributes(ctx, controllerapi.SessionSetAttributesData{
+			SessionID: latest.ID, Attributes: attributes,
+		}); err != nil {
+			return 0, fmt.Errorf("claim legacy chat session: %w", err)
 		}
 	}
 

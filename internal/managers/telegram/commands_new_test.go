@@ -133,6 +133,7 @@ func TestHandleNew_CreatesAndLaunches(t *testing.T) {
 	assert.Equal(t, "посты", ctrl.createProjectCalls[0].Name)
 	require.Len(t, ctrl.createSessionCalls, 1)
 	assert.Equal(t, "/root/посты", ctrl.createSessionCalls[0].WorkDir)
+	assert.Equal(t, "telegram", ctrl.createSessionCalls[0].Attributes["channel"])
 }
 
 func TestHandleNew_ErrorReplyNoLaunch(t *testing.T) {

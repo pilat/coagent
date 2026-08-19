@@ -45,14 +45,15 @@ type harnessTraceFile struct {
 }
 
 type harnessTraceEvent struct {
-	Type    string             `json:"type"`
-	Message string             `json:"message,omitempty"`
-	Status  string             `json:"status,omitempty"`
-	Reason  string             `json:"reason,omitempty"`
-	Source  string             `json:"source,omitempty"`
-	Name    string             `json:"name,omitempty"`
-	WorkDir string             `json:"work_dir,omitempty"`
-	Waiting []harnessTraceWait `json:"waiting,omitempty"`
+	Type       string             `json:"type"`
+	Message    string             `json:"message,omitempty"`
+	Status     string             `json:"status,omitempty"`
+	Reason     string             `json:"reason,omitempty"`
+	Source     string             `json:"source,omitempty"`
+	Name       string             `json:"name,omitempty"`
+	WorkDir    string             `json:"work_dir,omitempty"`
+	Attributes map[string]any     `json:"attributes,omitempty"`
+	Waiting    []harnessTraceWait `json:"waiting,omitempty"`
 }
 
 type harnessTraceWait struct {
@@ -109,13 +110,76 @@ func TestHarnessScenario_DaemonTraceRendersExactlyOnceInTelegram(t *testing.T) {
 	}
 }
 
+// This is the exact reported cross-manager leak: a local CLI conversation is
+// visible on the global notification subscription, but it must produce no
+// Telegram traffic — neither a topic nor the model's answer.
+func TestHarnessScenario_CLIConversationIsNotRenderedInTelegram(t *testing.T) {
+	var calls []telegramHarnessCall
+	manager := newTelegramHarnessManager(t, &fakeController{}, &calls)
+
+	manager.handleNotification(t.Context(), controllerapi.SessionNotification{
+		SessionID: harnessSessionID,
+		Notification: sessionevent.Notification{
+			Type:       sessionevent.NotifySessionCreated,
+			Name:       "sys:coagent - 42",
+			WorkDir:    "/tmp/projects/sys_coagent",
+			Attributes: map[string]any{"manager_id": "cli", "channel": "cli"},
+		},
+	})
+	manager.handleNotification(t.Context(), controllerapi.SessionNotification{
+		SessionID: harnessSessionID,
+		Notification: sessionevent.Notification{
+			Type:    sessionevent.NotifyMessage,
+			Message: "✅ configuration answer",
+		},
+	})
+
+	assert.Empty(t, calls, "a Telegram manager must ignore another manager's conversation")
+}
+
+func TestHarnessScenario_TelegramManagersRenderOnlyTheirOwnConversation(t *testing.T) {
+	var primaryCalls, secondaryCalls []telegramHarnessCall
+	primary := newTelegramHarnessManager(t, &fakeController{}, &primaryCalls)
+	secondary := newTelegramHarnessManager(t, &fakeController{}, &secondaryCalls)
+	secondary.id = "telegram-secondary"
+	secondary.cfg.ID = "telegram-secondary"
+
+	created := controllerapi.SessionNotification{
+		SessionID: harnessSessionID,
+		Notification: sessionevent.Notification{
+			Type:       sessionevent.NotifySessionCreated,
+			Name:       "project - 42",
+			WorkDir:    "/tmp/project",
+			Attributes: map[string]any{controllerapi.SessionAttributeManagerID: "telegram-main"},
+		},
+	}
+	answer := controllerapi.SessionNotification{
+		SessionID: harnessSessionID,
+		Notification: sessionevent.Notification{
+			Type: sessionevent.NotifyMessage, Message: "✅ private answer",
+		},
+	}
+
+	primary.handleNotification(t.Context(), created)
+	secondary.handleNotification(t.Context(), created)
+	primary.handleNotification(t.Context(), answer)
+	secondary.handleNotification(t.Context(), answer)
+
+	require.Len(t, primaryCalls, 2)
+	assert.Equal(t, "createForumTopic", primaryCalls[0].Method)
+	assert.Equal(t, "✅ private answer", primaryCalls[1].Text)
+	assert.Empty(t, secondaryCalls)
+}
+
 // replayDaemonTrace feeds one recorded trace through the production notification
 // handler and returns the resulting Telegram API traffic.
 func replayDaemonTrace(t *testing.T, trace harnessTraceFile) []telegramHarnessCall {
 	t.Helper()
 
 	var calls []telegramHarnessCall
-	attributes := map[int64]map[string]any{}
+	attributes := map[int64]map[string]any{
+		harnessSessionID: {controllerapi.SessionAttributeManagerID: "telegram-main"},
+	}
 	controller := &fakeController{setAttrsHook: func(data controllerapi.SessionSetAttributesData) {
 		attributes[data.SessionID] = roundTripAttributes(t, data.Attributes)
 	}}
@@ -123,6 +187,9 @@ func replayDaemonTrace(t *testing.T, trace harnessTraceFile) []telegramHarnessCa
 
 	for _, event := range trace.Trace {
 		n := harnessNotification(t, event)
+		if n.Type == sessionevent.NotifySessionCreated && len(n.Attributes) > 0 {
+			attributes[harnessSessionID] = roundTripAttributes(t, n.Attributes)
+		}
 		if n.Type == sessionevent.NotifySessionCreated || n.Type == sessionevent.NotifySessionCleared {
 			n.Attributes = attributes[harnessSessionID]
 		}
@@ -141,13 +208,14 @@ func harnessNotification(t *testing.T, event harnessTraceEvent) sessionevent.Not
 	t.Helper()
 
 	n := sessionevent.Notification{
-		Type:    sessionevent.NotificationType(event.Type),
-		Message: event.Message,
-		Name:    event.Name,
-		Status:  sessionevent.State(event.Status),
-		Reason:  event.Reason,
-		Source:  event.Source,
-		WorkDir: event.WorkDir,
+		Type:       sessionevent.NotificationType(event.Type),
+		Message:    event.Message,
+		Name:       event.Name,
+		Status:     sessionevent.State(event.Status),
+		Reason:     event.Reason,
+		Source:     event.Source,
+		WorkDir:    event.WorkDir,
+		Attributes: event.Attributes,
 	}
 
 	wake := time.Date(2026, time.January, 2, 15, 4, 0, 0, time.UTC)
@@ -256,8 +324,10 @@ func newTelegramHarnessManager(
 	// No topic is pre-registered: the recorded session_created event is what must
 	// bind one, exactly as it does in production.
 	return &Manager{
+		id: "telegram-main",
 		cfg: config.ManagerEntry{
-			BotToken: "test-token", TargetChatID: harnessChatID, SendChunkDelayMS: 0,
+			ID: "telegram-main", BotToken: "test-token", TargetChatID: harnessChatID,
+			SendChunkDelayMS: 0,
 		},
 		controller:     controller,
 		httpClient:     &http.Client{Transport: telegramHarnessRecorder(t, calls)},

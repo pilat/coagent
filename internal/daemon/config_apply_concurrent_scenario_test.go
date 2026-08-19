@@ -52,7 +52,7 @@ func newApplyDaemonWith(
 ) *applyDaemon {
 	t.Helper()
 
-	h := newSubagentHarnessOnDB(t, dbPath, respond, nil)
+	h := newSubagentHarnessOnSystemProjectDB(t, dbPath, respond)
 	ops := configops.New(filepath.Join(configDir, "config.yaml"), filepath.Join(configDir, "secrets"))
 	restarts := make(chan struct{}, 4)
 
@@ -89,14 +89,18 @@ func TestScenario_ASecondSessionCannotOverwriteAStagedApply(t *testing.T) {
 
 	first := newApplyDaemonWith(t, dbPath, configDir, twoSessionApplyRespond)
 
-	sessionA, err := first.mgr.Send(first.ctx, first.projectID, "APPLY_A switch the default model", "fake-model", nil)
+	sessionA, err := first.mgr.Send(
+		first.ctx, first.projectID, "APPLY_A switch the default model", "fake-model", map[string]any{"channel": "cli"},
+	)
 	require.NoError(t, err)
 
 	first.waitForRestart(t)
 	first.waitUntil("A suspended on its config call", func() bool { return !first.mgr.HasActiveLoop(sessionA) })
 
 	// B stages against the config A is already restarting into.
-	sessionB, err := first.mgr.Send(first.ctx, first.projectID, "APPLY_B switch the default model", "fake-model", nil)
+	sessionB, err := first.mgr.Send(
+		first.ctx, first.projectID, "APPLY_B switch the default model", "fake-model", map[string]any{"channel": "cli"},
+	)
 	require.NoError(t, err)
 
 	first.mgr.waitIdle(sessionB)
@@ -181,7 +185,9 @@ func TestScenario_ConcurrentAppliesResolveExactlyOnce(t *testing.T) {
 
 	for _, prompt := range []string{"APPLY_A switch the default model", "APPLY_B switch the default model"} {
 		wg.Go(func() {
-			id, err := first.mgr.Send(first.ctx, first.projectID, prompt, "fake-model", nil)
+			id, err := first.mgr.Send(
+				first.ctx, first.projectID, prompt, "fake-model", map[string]any{"channel": "cli"},
+			)
 
 			mu.Lock()
 			sessions[prompt[:7]] = id

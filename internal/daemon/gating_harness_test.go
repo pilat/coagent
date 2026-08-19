@@ -15,6 +15,7 @@ import (
 
 	"github.com/pilat/coagent/internal/config"
 	"github.com/pilat/coagent/internal/configops"
+	"github.com/pilat/coagent/internal/controllerapi"
 	"github.com/pilat/coagent/internal/llm"
 	"github.com/pilat/coagent/internal/llmwire"
 	"github.com/pilat/coagent/internal/migrate"
@@ -107,6 +108,7 @@ func (c *recordingLLM) Chat(
 
 func newGatingHarness(
 	t *testing.T,
+	systemProject bool,
 	agents map[string]string,
 	respond func(system string, msgs []llmwire.Message) *llmwire.Response,
 ) *gatingHarness {
@@ -127,6 +129,10 @@ func newGatingHarness(
 	schedStore := schedule.NewStore(db)
 
 	workDir := t.TempDir()
+	if systemProject {
+		workDir = filepath.Join(workDir, controllerapi.CoagentSystemProjectDir)
+		require.NoError(t, os.MkdirAll(workDir, 0o755))
+	}
 	writeProjectAgents(t, workDir, agents)
 
 	rec := &schemaRecorder{names: make(map[int64]map[string]bool)}
@@ -143,9 +149,17 @@ func newGatingHarness(
 		factory, store, sessStore, sessStore, links, schedule.NewService(schedStore),
 		func() string { return "fake-model" },
 	)
+	if systemProject {
+		mgr.systemProject = workDir
+	}
 	mgr.applier = NewConfigApplier(newTestConfigOps(t, dir), func() {})
 
-	pid, err := store.GetOrCreateProject(ctx, workDir)
+	var pid int64
+	if systemProject {
+		pid, err = store.GetOrCreateSystemProject(ctx, workDir, controllerapi.CoagentSystemProjectName)
+	} else {
+		pid, err = store.GetOrCreateProject(ctx, workDir)
+	}
 	require.NoError(t, err)
 
 	return &gatingHarness{
@@ -158,7 +172,7 @@ func newGatingHarness(
 }
 
 // newTestConfigOps gives the daemon a real config mutation layer over temp
-// files, so config tools are registered on root sessions at all.
+// files, so config tools can be registered on the system-project root.
 func newTestConfigOps(t *testing.T, dir string) configops.Service {
 	t.Helper()
 

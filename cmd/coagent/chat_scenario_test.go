@@ -9,9 +9,233 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/pilat/coagent/internal/controllerapi"
 	"github.com/pilat/coagent/internal/managers/cli"
 	"github.com/pilat/coagent/internal/sessionevent"
 )
+
+func TestHarnessScenario_ModelCommandSwitchesTheCurrentSession(t *testing.T) {
+	srv := newChatServer(t, socketPath(t), 42)
+	srv.models = []controllerapi.ConfigModelInfo{
+		{ID: "anthropic/claude", DisplayName: "Claude"},
+		{
+			ID: "openai/gpt-5", DisplayName: "GPT-5",
+			EffortLevels: []string{"low", "high"}, DefaultEffort: "low",
+		},
+	}
+	run := startChat(t, srv.socket, newScriptedTerminal(10*time.Millisecond))
+
+	run.term.lines <- "/model"
+	require.Eventually(t, func() bool {
+		return strings.Contains(run.out.String(), "2) GPT-5")
+	}, 5*time.Second, 5*time.Millisecond)
+	run.term.lines <- "2"
+	require.Eventually(t, func() bool {
+		return strings.Contains(run.out.String(), "Reasoning effort")
+	}, 5*time.Second, 5*time.Millisecond)
+	run.term.lines <- "2"
+
+	require.Eventually(t, func() bool { return len(srv.modelChanges()) == 1 }, 5*time.Second, 5*time.Millisecond)
+	assert.Equal(t, []cli.SetModelParams{{
+		SessionID: 42, Model: "openai/gpt-5", ReasoningLevel: "high",
+	}}, srv.modelChanges())
+	assert.Empty(t, srv.sentText(), "a local command is never conversation text")
+	assert.Contains(t, run.out.String(), "Model: GPT-5 · effort: high")
+
+	assert.Equal(t, exitOK, run.finish(t))
+}
+
+func TestHarnessScenario_ModelCommandSelectsModelBeforeFirstMessage(t *testing.T) {
+	srv := newChatServer(t, socketPath(t), 0)
+	srv.models = []controllerapi.ConfigModelInfo{
+		{ID: "anthropic/claude", DisplayName: "Claude"},
+		{ID: "openai/gpt-5", DisplayName: "GPT-5", DefaultEffort: "high"},
+	}
+	run := startChat(t, srv.socket, newScriptedTerminal(10*time.Millisecond))
+
+	run.term.lines <- "/model"
+	require.Eventually(t, func() bool {
+		return strings.Contains(run.out.String(), "2) GPT-5")
+	}, 5*time.Second, 5*time.Millisecond)
+	run.term.lines <- "2"
+	require.Eventually(t, func() bool {
+		return strings.Contains(run.out.String(), "New conversation model: GPT-5")
+	}, 5*time.Second, 5*time.Millisecond)
+	run.term.lines <- "hello"
+
+	require.Eventually(t, func() bool { return len(srv.sentParams()) == 1 }, 5*time.Second, 5*time.Millisecond)
+	assert.Equal(t, "openai/gpt-5", srv.sentParams()[0].Model)
+	assert.Equal(t, "hello", srv.sentParams()[0].Text)
+	assert.Empty(t, srv.modelChanges(), "there is no session to mutate before the first message")
+
+	assert.Equal(t, exitOK, run.finish(t))
+}
+
+func TestHarnessScenario_ModelCommandReconnectsBeforeApplyingChoice(t *testing.T) {
+	socket := socketPath(t)
+	first := newChatServer(t, socket, 42)
+	first.models = []controllerapi.ConfigModelInfo{
+		{ID: "anthropic/claude", DisplayName: "Claude"},
+		{ID: "openai/gpt-5", DisplayName: "GPT-5"},
+	}
+	run := startChat(t, socket, newScriptedTerminal(10*time.Millisecond))
+
+	run.term.lines <- "/model"
+	require.Eventually(t, func() bool {
+		return strings.Contains(run.out.String(), "2) GPT-5")
+	}, 5*time.Second, 5*time.Millisecond)
+	require.NoError(t, first.server.Close())
+	require.Eventually(t, func() bool { return run.chat.pushLive.Load() == 0 }, 5*time.Second, 5*time.Millisecond)
+
+	second := newChatServer(t, socket, 99)
+	second.models = first.models
+	run.term.lines <- "2"
+
+	require.Eventually(t, func() bool { return len(second.modelChanges()) == 1 }, 10*time.Second, 5*time.Millisecond)
+	assert.Equal(t, int64(99), second.modelChanges()[0].SessionID)
+	assert.Equal(t, "openai/gpt-5", second.modelChanges()[0].Model)
+	assert.Contains(t, run.out.String(), "daemon restarting…")
+	assert.Contains(t, run.out.String(), "reconnected.")
+
+	assert.Equal(t, exitOK, run.finish(t))
+}
+
+func TestHarnessScenario_PendingModelSurvivesReconnectToANewSession(t *testing.T) {
+	socket := socketPath(t)
+	first := newChatServer(t, socket, 0)
+	first.models = []controllerapi.ConfigModelInfo{
+		{ID: "anthropic/claude", DisplayName: "Claude"},
+		{ID: "openai/gpt-5", DisplayName: "GPT-5"},
+	}
+	run := startChat(t, socket, newScriptedTerminal(10*time.Millisecond))
+
+	run.term.lines <- "/model"
+	require.Eventually(t, func() bool {
+		return strings.Contains(run.out.String(), "2) GPT-5")
+	}, 5*time.Second, 5*time.Millisecond)
+	run.term.lines <- "2"
+	require.Eventually(t, func() bool {
+		return strings.Contains(run.out.String(), "New conversation model: GPT-5")
+	}, 5*time.Second, 5*time.Millisecond)
+
+	require.NoError(t, first.server.Close())
+	require.Eventually(t, func() bool { return run.chat.pushLive.Load() == 0 }, 5*time.Second, 5*time.Millisecond)
+
+	second := newChatServer(t, socket, 77)
+	run.term.lines <- "hello"
+
+	require.Eventually(t, func() bool { return len(second.sentParams()) == 1 }, 10*time.Second, 5*time.Millisecond)
+	assert.Equal(t, int64(0), second.sentParams()[0].SessionID,
+		"zero asks the manager to adopt its current session and apply the pending model")
+	assert.Equal(t, "openai/gpt-5", second.sentParams()[0].Model)
+
+	assert.Equal(t, exitOK, run.finish(t))
+}
+
+func TestHarnessScenario_ExplicitModelChoiceReplacesPendingAfterReconnect(t *testing.T) {
+	socket := socketPath(t)
+	first := newChatServer(t, socket, 0)
+	first.models = []controllerapi.ConfigModelInfo{
+		{ID: "anthropic/claude", DisplayName: "Claude"},
+		{ID: "openai/gpt-5", DisplayName: "GPT-5"},
+	}
+	run := startChat(t, socket, newScriptedTerminal(10*time.Millisecond))
+
+	run.term.lines <- "/model"
+	require.Eventually(t, func() bool {
+		return strings.Contains(run.out.String(), "2) GPT-5")
+	}, 5*time.Second, 5*time.Millisecond)
+	run.term.lines <- "1"
+	require.Eventually(t, func() bool {
+		return strings.Contains(run.out.String(), "New conversation model: Claude")
+	}, 5*time.Second, 5*time.Millisecond)
+
+	require.NoError(t, first.server.Close())
+	require.Eventually(t, func() bool { return run.chat.pushLive.Load() == 0 }, 5*time.Second, 5*time.Millisecond)
+
+	second := newChatServer(t, socket, 77)
+	second.models = first.models
+	run.term.lines <- "/model"
+	require.Eventually(t, func() bool {
+		return strings.Count(run.out.String(), "2) GPT-5") >= 2
+	}, 10*time.Second, 5*time.Millisecond)
+	run.term.lines <- "2"
+	require.Eventually(t, func() bool { return len(second.modelChanges()) == 1 }, 5*time.Second, 5*time.Millisecond)
+
+	run.term.lines <- "hello"
+	require.Eventually(t, func() bool { return len(second.sentParams()) == 1 }, 5*time.Second, 5*time.Millisecond)
+	assert.Equal(t, int64(77), second.sentParams()[0].SessionID)
+	assert.Empty(t, second.sentParams()[0].Model, "the superseded pending model must not be applied")
+
+	assert.Equal(t, exitOK, run.finish(t))
+}
+
+func TestHarnessScenario_ModelCommandShowsCurrentNonDefaultEffort(t *testing.T) {
+	srv := newChatServer(t, socketPath(t), 42)
+	srv.models = []controllerapi.ConfigModelInfo{{
+		ID: "openai/gpt-5", DisplayName: "GPT-5",
+		EffortLevels: []string{"low", "high"}, DefaultEffort: "low",
+	}}
+	srv.current = "openai/gpt-5"
+	srv.effort = "high"
+	run := startChat(t, srv.socket, newScriptedTerminal(10*time.Millisecond))
+
+	run.term.lines <- "/model"
+	require.Eventually(t, func() bool {
+		return strings.Contains(run.out.String(), "Choose model")
+	}, 5*time.Second, 5*time.Millisecond)
+	run.term.lines <- "1"
+	require.Eventually(t, func() bool {
+		return strings.Contains(run.out.String(), "high (current)")
+	}, 5*time.Second, 5*time.Millisecond)
+	run.term.lines <- ""
+
+	require.Eventually(t, func() bool { return len(srv.modelChanges()) == 1 }, 5*time.Second, 5*time.Millisecond)
+	assert.Equal(t, exitOK, run.finish(t))
+}
+
+func TestHarnessScenario_ModelCommandCancelKeepsChatOpen(t *testing.T) {
+	srv := newChatServer(t, socketPath(t), 42)
+	srv.models = []controllerapi.ConfigModelInfo{{ID: "anthropic/claude", DisplayName: "Claude"}}
+	run := startChat(t, srv.socket, newScriptedTerminal(10*time.Millisecond))
+
+	run.term.lines <- "/model"
+	require.Eventually(t, func() bool {
+		return strings.Contains(run.out.String(), "Choose model")
+	}, 5*time.Second, 5*time.Millisecond)
+	run.term.lines <- ""
+	run.term.lines <- "still chatting"
+
+	require.Eventually(t, func() bool { return len(srv.sentText()) == 1 }, 5*time.Second, 5*time.Millisecond)
+	assert.Equal(t, []string{"still chatting"}, srv.sentText())
+	assert.Empty(t, srv.modelChanges())
+
+	assert.Equal(t, exitOK, run.finish(t))
+}
+
+func TestHarnessScenario_ModelCommandEnterUsesDefaultEffort(t *testing.T) {
+	srv := newChatServer(t, socketPath(t), 42)
+	srv.models = []controllerapi.ConfigModelInfo{{
+		ID: "openai/gpt-5", DisplayName: "GPT-5",
+		EffortLevels: []string{"low", "high"}, DefaultEffort: "high",
+	}}
+	run := startChat(t, srv.socket, newScriptedTerminal(10*time.Millisecond))
+
+	run.term.lines <- "/model"
+	require.Eventually(t, func() bool {
+		return strings.Contains(run.out.String(), "Choose model")
+	}, 5*time.Second, 5*time.Millisecond)
+	run.term.lines <- "1"
+	require.Eventually(t, func() bool {
+		return strings.Contains(run.out.String(), "Choose effort")
+	}, 5*time.Second, 5*time.Millisecond)
+	run.term.lines <- ""
+
+	require.Eventually(t, func() bool { return len(srv.modelChanges()) == 1 }, 5*time.Second, 5*time.Millisecond)
+	assert.Equal(t, "high", srv.modelChanges()[0].ReasoningLevel)
+
+	assert.Equal(t, exitOK, run.finish(t))
+}
 
 type chatRun struct {
 	chat *chat

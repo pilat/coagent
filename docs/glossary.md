@@ -21,12 +21,20 @@ A unit of work a manager submits to the daemon. It has no Go type of its own —
 _Avoid_: job, request (for the work-unit); unqualified "task" in code.
 
 **Controller** (`controllerapi.Controller`):
-The private in-process interface the daemon implements for built-in managers — create sessions, durably send messages, stop/kill them, and subscribe to session events. It is an internal package boundary, not a supported external API.
+The private manager-bound in-process capability the daemon implements for built-in managers — create sessions, durably send messages, stop/kill them, and subscribe to their owned session events. The composition root binds one capability to each manager ID; session-addressed operations reject every other owner. It is an internal package boundary, not a supported external API.
 _Avoid_: using "controller" for a front-end integration — that is a manager.
 
 **manager**:
 A built-in front end (Telegram or local chat today) that drives the daemon through `controllerapi.Controller`. A new manager is a source-level contribution, not a third-party plugin.
 _Avoid_: controller, bot, adapter, integration.
+
+**manager ownership**:
+The durable routing identity of a root session: the unique manager ID stored as
+`manager_id`. A manager subscribes with that same ID and receives only its own
+session events. Its bound Controller also stamps new sessions and rejects reads
+or mutations of any other owner; a driver or channel name is not ownership
+because several managers may share it.
+_Avoid_: channel ownership, transport ownership.
 
 **subagent**:
 An independent child session with clean context, a restricted tool set, and its own iteration budget, spawned by a parent session's `task` tool. A subagent *is* a session (its own `SessionRecord` row) — that is what separates it from a top-level task.
@@ -54,15 +62,15 @@ The built-in local chat — a peer of the Telegram manager that drives the same 
 _Avoid_: TUI, configurator, console UI.
 
 **coagent project**:
-The reserved folder-project (`ProjectName = "coagent"`) the CLI chat's session lives in. An ordinary project in every respect; the name is what makes it findable.
-_Avoid_: admin project, system project.
+The reserved system project (`sys:coagent`) that owns the CLI configuration chat. Its identity is the logical name together with the canonical `<projects_root>/sys_coagent` path: user project names cannot contain `:`, user project creation cannot claim that directory, and an internal marker cannot grant authority to another path.
+_Avoid_: admin project, ordinary CLI project.
 
 **bootstrap**:
 The deterministic half of a first run, before any model is involved: install-or-update the daemon, then collect one provider and its key over the control socket. Everything past that is the chat.
 _Avoid_: wizard, setup flow (for the chat half).
 
 **onboarding skill**:
-The setup guide embedded in the binary (`internal/loader/builtin/onboarding`), registered only on CLI-channel root sessions. Its script calls `request_secret`, which no other channel has.
+The setup protocol embedded in the binary (`internal/loader/builtin/onboarding`) and automatically active only in the coagent project's terminal root session. Its script calls `request_secret`, which requires both that project identity and the CLI channel.
 _Avoid_: setup agent, onboarding agent (it is not an agent type).
 
 ## Agent loop & context management
@@ -111,7 +119,7 @@ A diversity-based detector that catches repetitive tool-call patterns and forces
 A capability the agent invokes — id, description, parameters, execute. Three origins: **built-in** (bash, read, edit, …), **MCP** (discovered from external servers), and **control-plane** (`task`, `schedule`, `compact_context` — registered onto the live registry from outside and owned by the package that holds their state).
 
 **skill**:
-A `SKILL.md` instruction bundle loaded from project, global, or marketplace dirs. Two *independent* visibility axes: `disable-model-invocation: true` hides it from the model's prompt/tool inventory; `user-invocable: false` rejects `/skill <name>`. A leading `/skill <name> [args]` expands before the LLM call.
+A `SKILL.md` instruction bundle loaded from project, global, or marketplace dirs. Two *independent* discovery axes: `disable-model-invocation: true` hides it from the model's available-skills inventory and skill tool; `user-invocable: false` rejects `/skill <name>`. A leading `/skill <name> [args]` expands before the LLM call. Daemon-selected system instructions, currently the onboarding skill, may be activated directly without becoming model-invocable.
 _Avoid_: plugin (a plugin is a marketplace bundle), command.
 
 **marketplace**:
@@ -141,7 +149,7 @@ The runtime status a controller sees — `running` / `idle` / `error` (`controll
 _Avoid_: treating "running" (runtime) and "active" (persisted) as the same word.
 
 **notification** (session event):
-A session→controller event — a message chunk, a state change, a heartbeat (`sessionevent.Notification`, delivered as `controllerapi.SessionNotification`). Only *root* sessions have them: `svc.publish` drops every event whose session is a subagent, so a controller never sees one. The bare type name "Notification" is overloaded elsewhere (LSP JSON-RPC, tool notifications), so qualify it as a *session event*.
+A session→controller event — a message chunk, a state change, a heartbeat (`sessionevent.Notification`, delivered as `controllerapi.SessionNotification`). Only *root* sessions have them: `svc.publish` drops every event whose session is a subagent. Manager subscriptions additionally receive only events whose durable manager owner matches their ID; daemon-internal observers may inspect all root events. The bare type name "Notification" is overloaded elsewhere (LSP JSON-RPC, tool notifications), so qualify it as a *session event*.
 _Avoid_: bare "Notification".
 
 **suspend** (`ErrSuspend`):

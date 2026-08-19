@@ -51,7 +51,7 @@ func newApplyConfigDir(t *testing.T) string {
 func newApplyDaemon(t *testing.T, dbPath, configDir string) *applyDaemon {
 	t.Helper()
 
-	h := newSubagentHarnessOnDB(t, dbPath, configApplyRespond, nil)
+	h := newSubagentHarnessOnSystemProjectDB(t, dbPath, configApplyRespond)
 	ops := configops.New(filepath.Join(configDir, "config.yaml"), filepath.Join(configDir, "secrets"))
 	restarts := make(chan struct{}, 4)
 
@@ -105,7 +105,9 @@ func stageApplyAndStop(t *testing.T, dbPath, configDir string) int64 {
 
 	first := newApplyDaemon(t, dbPath, configDir)
 
-	sessionID, err := first.mgr.Send(first.ctx, first.projectID, "switch the default model", "fake-model", nil)
+	sessionID, err := first.mgr.Send(
+		first.ctx, first.projectID, "switch the default model", "fake-model", map[string]any{"channel": "cli"},
+	)
 	require.NoError(t, err)
 
 	first.waitForRestart(t)

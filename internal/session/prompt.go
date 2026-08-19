@@ -10,6 +10,7 @@ import (
 	"github.com/pilat/coagent/internal/loader"
 	"github.com/pilat/coagent/internal/memory"
 	"github.com/pilat/coagent/internal/tool"
+	"github.com/pilat/coagent/internal/tool/builtin"
 )
 
 // Tool-name constants for the dynamic tool inventory rendered in the system prompt.
@@ -80,6 +81,7 @@ var knownSearchMCPs = []string{
 type promptBuilder struct {
 	mu                     sync.RWMutex
 	basePrompt             string
+	activeSkillsSection    string
 	toolsSection           string
 	skillsSection          string
 	subagentsSection       string
@@ -88,11 +90,15 @@ type promptBuilder struct {
 	activeSubagentsSection string
 }
 
-func newPromptBuilder(basePrompt, memoriesSection, modelsSection string) *promptBuilder {
+func newPromptBuilder(
+	basePrompt, memoriesSection, modelsSection string,
+	activeSkills ...*loader.Skill,
+) *promptBuilder {
 	return &promptBuilder{
-		basePrompt:      basePrompt,
-		memoriesSection: memoriesSection,
-		modelsSection:   modelsSection,
+		basePrompt:          basePrompt,
+		activeSkillsSection: buildActiveSkillsSection(activeSkills),
+		memoriesSection:     memoriesSection,
+		modelsSection:       modelsSection,
 	}
 }
 
@@ -102,8 +108,31 @@ func (p *promptBuilder) systemPrompt() string {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 
-	return p.basePrompt + p.toolsSection + p.skillsSection + p.subagentsSection +
+	return p.basePrompt + p.activeSkillsSection + p.toolsSection + p.skillsSection + p.subagentsSection +
 		p.memoriesSection + p.modelsSection + p.activeSubagentsSection
+}
+
+// buildActiveSkillsSection embeds daemon-selected instructions directly in the
+// system prompt. Unlike the skills inventory, these require no model tool call.
+func buildActiveSkillsSection(skills []*loader.Skill) string {
+	if len(skills) == 0 {
+		return ""
+	}
+
+	var section strings.Builder
+	section.WriteString(
+		"\n\n# ACTIVE SKILLS\n\nThe following skill instructions are already active. Follow them directly; do not load them again.\n\n",
+	)
+
+	for i, skill := range skills {
+		if i > 0 {
+			section.WriteString("\n\n")
+		}
+
+		section.WriteString(builtin.RenderSkill(skill, ""))
+	}
+
+	return section.String()
 }
 
 // setActiveSubagentsSection replaces the pinned "# Active subagents" section.

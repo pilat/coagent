@@ -114,7 +114,10 @@ func TestHandleModelRendersDisplayNamePriceAndEffort(t *testing.T) {
 	ctrl := &fakeController{
 		listModels: pickerModels,
 		listSessions: []controllerapi.SessionInfo{
-			{ID: 1, Model: "claude-opus-5", ReasoningLevel: "high"},
+			{
+				ID: 1, Model: "claude-opus-5", ReasoningLevel: "high",
+				Attributes: map[string]any{controllerapi.SessionAttributeManagerID: "telegram-main"},
+			},
 		},
 	}
 
@@ -134,8 +137,11 @@ func TestHandleModelRendersDisplayNamePriceAndEffort(t *testing.T) {
 // is exactly the lie the catalog-driven list exists to remove.
 func TestHandleModelOmitsEffortWhenSessionHasNone(t *testing.T) {
 	ctrl := &fakeController{
-		listModels:   pickerModels,
-		listSessions: []controllerapi.SessionInfo{{ID: 1, Model: "local/plain"}},
+		listModels: pickerModels,
+		listSessions: []controllerapi.SessionInfo{{
+			ID: 1, Model: "local/plain",
+			Attributes: map[string]any{controllerapi.SessionAttributeManagerID: "telegram-main"},
+		}},
 	}
 
 	var calls []tgCall

@@ -13,6 +13,20 @@ const (
 	StateError   = sessionevent.StateError
 )
 
+// CoagentSystemProjectName is the durable logical identity of the local
+// configuration project. Its directory is separate because ':' is reserved
+// from user project names.
+const (
+	CoagentSystemProjectName = "sys:coagent"
+	CoagentSystemProjectDir  = "sys_coagent"
+	// BuiltinCLIManagerID is the reserved owner of the local configuration chat.
+	BuiltinCLIManagerID = "cli"
+	// SessionAttributeManagerID is the durable owner of a root session. Manager
+	// subscriptions are routed by this value, so one manager never receives
+	// another manager's conversation.
+	SessionAttributeManagerID = "manager_id"
+)
+
 // State aliases the notification-layer runtime state for controller clients.
 // The alias keeps one vocabulary owner while preserving controllerapi's public
 // surface.
@@ -20,11 +34,12 @@ type State = sessionevent.State
 
 // SessionCreateData defines input for creating a session.
 type SessionCreateData struct {
-	WorkDir     string         `json:"work_dir"`
-	Prompt      string         `json:"prompt"`
-	Model       string         `json:"model,omitempty"`
-	Attributes  map[string]any `json:"attributes,omitempty"`
-	UseWorktree bool           `json:"use_worktree,omitempty"`
+	WorkDir       string         `json:"work_dir"`
+	Prompt        string         `json:"prompt"`
+	Model         string         `json:"model,omitempty"`
+	Attributes    map[string]any `json:"attributes,omitempty"`
+	UseWorktree   bool           `json:"use_worktree,omitempty"`
+	SystemProject string         `json:"system_project,omitempty"`
 }
 
 // SessionMessageData defines one durable normal message for a session.
@@ -76,7 +91,8 @@ type FsListDirData struct {
 // ProjectCreateData defines input for provisioning (get-or-create) a
 // daemon-managed folder-project by name under the configured projects root.
 type ProjectCreateData struct {
-	Name string `json:"name"`
+	Name   string `json:"name"`
+	System bool   `json:"system,omitempty"`
 }
 
 // ProjectCreateResultData is the payload for a created-or-opened project.

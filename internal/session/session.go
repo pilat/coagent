@@ -189,7 +189,8 @@ type options struct {
 	// compaction writes its summary — the create-time snapshot is stale by then.
 	ActiveSubagentsProvider func(context.Context) []ActiveSubagentInfo
 
-	// ExtraSkills are daemon-injected, session-scoped skills.
+	// ExtraSkills are daemon-injected, session-scoped skills that are registered
+	// for discovery and activated directly in the system prompt.
 	ExtraSkills []*loader.Skill
 
 	// StagedExternalCalls are tool_call ids the daemon owes a result for.
@@ -501,6 +502,7 @@ func buildPrompt(
 		basePrompt,
 		memoriesSection,
 		buildModelsSection(p.Config.UnifiedConfig, p.Config.Model),
+		opts.ExtraSkills...,
 	)
 }
 

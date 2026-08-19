@@ -51,9 +51,8 @@ type CreateOptions struct {
 	// compaction summary carries. Nil outside a daemon.
 	ActiveSubagentsProvider func(context.Context) []ActiveSubagentInfo
 
-	// ExtraSkills are skills the daemon injects for this session alone — the
-	// onboarding guide on a terminal chat, whose script calls tools no other
-	// channel has.
+	// ExtraSkills are session-scoped instructions the daemon registers and
+	// activates in the system prompt without waiting for a model tool call.
 	ExtraSkills []*loader.Skill
 
 	// StagedExternalCalls are call ids the daemon owes a result for: neither

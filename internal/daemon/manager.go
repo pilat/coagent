@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
+	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -46,6 +48,7 @@ type Service interface {
 	NotifySession(sessionID int64, n sessionevent.Notification)
 	Shutdown(timeout time.Duration)
 	GetOrCreateProject(ctx context.Context, workDir string) (int64, error)
+	GetOrCreateSystemProject(ctx context.Context, workDir, name string) (int64, error)
 	GetProjectWorkDir(ctx context.Context, projectID int64) (string, error)
 	GetProjectName(ctx context.Context, projectID int64) (string, error)
 	ListRecentProjects(ctx context.Context, root string) ([]RecentProject, error)
@@ -53,8 +56,10 @@ type Service interface {
 
 type NotificationSource interface {
 	Subscribe(sessionID int64) <-chan sessionevent.Notification
+	SubscribeManager(managerID string) <-chan controllerapi.SessionNotification
 	SubscribeAll() <-chan controllerapi.SessionNotification
 	Unsubscribe(sessionID int64, ch <-chan sessionevent.Notification)
+	UnsubscribeManager(ch <-chan controllerapi.SessionNotification)
 	UnsubscribeAll(ch <-chan controllerapi.SessionNotification)
 }
 
@@ -88,11 +93,16 @@ type svc struct {
 	staged         *stagedCalls
 	secrets        *secretRequests
 	deferNotices   *deferAnnouncements
+	systemProject  string
 	shuttingDown   atomic.Bool
-	// childMu guards childCache only — never s.mu, which is held around runner
-	// starts and must not be contended by the publish path.
+	// routeMu linearizes owner claims with replacement-session creation. The
+	// daemon is single-instance, so this is the ownership CAS boundary.
+	routeMu sync.Mutex
+	// childMu guards the publication route caches only — never s.mu,
+	// which is held around runner starts and must not be contended by publish.
 	childMu    sync.Mutex
 	childCache map[int64]bool
+	ownerCache map[int64]string
 }
 
 // queuedChild is a background child that could not be admitted immediately and
@@ -126,6 +136,10 @@ func New(
 	applier *ConfigApplier,
 ) Service {
 	s := newSvc(factory, store, sessionStore, inboxStore, links, scheduleSvc, cfg.DefaultModel)
+	s.systemProject = filepath.Join(
+		resolveProjectsRoot(cfg.UnifiedConfig),
+		controllerapi.CoagentSystemProjectDir,
+	)
 	s.subagentModel = cfg.SubagentModel
 	s.mcpStore = mcpStore
 	s.mcpPool = mcpPool
@@ -161,6 +175,7 @@ func newSvc(
 		pubsub:         newPubSub(),
 		defaultModelFn: defaultModelFn,
 		childCache:     make(map[int64]bool),
+		ownerCache:     make(map[int64]string),
 		deferNotices:   newDeferAnnouncements(),
 	}
 }
@@ -446,6 +461,9 @@ func (s *svc) Stop(ctx context.Context, sessionID int64) error {
 func (s *svc) Clear(ctx context.Context, sessionID int64) (int64, error) {
 	log := logger.Ctx(ctx).Named("manager.clear")
 
+	s.routeMu.Lock()
+	defer s.routeMu.Unlock()
+
 	rec, err := s.sessionStore.GetSession(ctx, sessionID)
 	if err != nil {
 		return 0, fmt.Errorf("session %d not found", sessionID)
@@ -534,9 +552,48 @@ func (s *svc) SetModel(ctx context.Context, sessionID int64, model, reasoningLev
 }
 
 func (s *svc) SetAttributes(ctx context.Context, sessionID int64, attrs map[string]any) error {
+	s.routeMu.Lock()
+	defer s.routeMu.Unlock()
+
+	rec, err := s.sessionStore.GetSession(ctx, sessionID)
+	if err != nil {
+		return fmt.Errorf("get session before setting attributes: %w", err)
+	}
+
+	if rec == nil {
+		return fmt.Errorf("session %d not found", sessionID)
+	}
+
+	attrs = maps.Clone(attrs)
+	existingOwner, _ := rec.Attributes[controllerapi.SessionAttributeManagerID].(string)
+
+	requestedOwner, _ := attrs[controllerapi.SessionAttributeManagerID].(string)
+	claimingOwner := existingOwner == "" && requestedOwner != ""
+
+	if claimingOwner && (rec.Status == sessionstore.SessionStatusTerminating || rec.KilledAt != nil) {
+		return fmt.Errorf("session %d is closing and cannot acquire a manager owner", sessionID)
+	}
+
+	if existingOwner != "" && requestedOwner != "" && existingOwner != requestedOwner {
+		return fmt.Errorf("session %d belongs to manager %q", sessionID, existingOwner)
+	}
+
+	if existingOwner != "" {
+		if attrs == nil {
+			attrs = make(map[string]any)
+		}
+
+		attrs[controllerapi.SessionAttributeManagerID] = existingOwner
+		requestedOwner = existingOwner
+	}
+
 	if err := s.sessionStore.SetAttributes(ctx, sessionID, attrs); err != nil {
 		return fmt.Errorf("set session attributes: %w", err)
 	}
+
+	s.childMu.Lock()
+	s.ownerCache[sessionID] = requestedOwner
+	s.childMu.Unlock()
 
 	return nil
 }
@@ -583,6 +640,19 @@ func (s *svc) GetOrCreateProject(ctx context.Context, workDir string) (int64, er
 	id, err := s.store.GetOrCreateProject(ctx, workDir)
 	if err != nil {
 		return 0, fmt.Errorf("resolve project: %w", err)
+	}
+
+	return id, nil
+}
+
+func (s *svc) GetOrCreateSystemProject(ctx context.Context, workDir, name string) (int64, error) {
+	if !sameProjectPath(workDir, s.systemProject) {
+		return 0, errors.New("system project is outside the canonical configuration directory")
+	}
+
+	id, err := s.store.GetOrCreateSystemProject(ctx, workDir, name)
+	if err != nil {
+		return 0, fmt.Errorf("resolve system project: %w", err)
 	}
 
 	return id, nil

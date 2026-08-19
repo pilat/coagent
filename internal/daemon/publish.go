@@ -5,6 +5,7 @@ import (
 
 	"go.uber.org/zap"
 
+	"github.com/pilat/coagent/internal/controllerapi"
 	"github.com/pilat/coagent/internal/logger"
 	"github.com/pilat/coagent/internal/sessionevent"
 )
@@ -25,7 +26,7 @@ func (s *svc) publish(sessionID int64, n sessionevent.Notification) {
 		return
 	}
 
-	isChild, known := s.lookupChild(sessionID)
+	isChild, managerID, known := s.lookupPublishRoute(sessionID)
 	if !known {
 		// Background: NotifySession carries no ctx, and inheriting a caller's dead
 		// one would fail the check and mis-drop.
@@ -36,36 +37,44 @@ func (s *svc) publish(sessionID int64, n sessionevent.Notification) {
 				zap.Int64("session_id", sessionID),
 				zap.Error(err),
 			)
-			s.pubsub.Publish(sessionID, n)
+			s.pubsub.PublishOwned(sessionID, "", n)
 
 			return
 		}
 
 		isChild = rec.ParentID != 0
-		s.cacheChild(sessionID, isChild)
+		managerID, _ = rec.Attributes[controllerapi.SessionAttributeManagerID].(string)
+		managerID = s.cachePublishRoute(sessionID, isChild, managerID)
 	}
 
 	if isChild {
 		return
 	}
 
-	s.pubsub.Publish(sessionID, n)
+	s.pubsub.PublishOwned(sessionID, managerID, n)
 }
 
-// lookupChild reports the cached child verdict for a session and whether the
-// cache held one at all.
-func (s *svc) lookupChild(sessionID int64) (bool, bool) {
+// lookupPublishRoute reports the immutable root/owner route for a session.
+func (s *svc) lookupPublishRoute(sessionID int64) (bool, string, bool) {
 	s.childMu.Lock()
 	defer s.childMu.Unlock()
 
 	isChild, known := s.childCache[sessionID]
+	managerID := s.ownerCache[sessionID]
 
-	return isChild, known
+	return isChild, managerID, known
 }
 
-func (s *svc) cacheChild(sessionID int64, isChild bool) {
+func (s *svc) cachePublishRoute(sessionID int64, isChild bool, managerID string) string {
 	s.childMu.Lock()
 	defer s.childMu.Unlock()
 
+	if cachedOwner, known := s.ownerCache[sessionID]; known {
+		managerID = cachedOwner
+	}
+
 	s.childCache[sessionID] = isChild
+	s.ownerCache[sessionID] = managerID
+
+	return managerID
 }

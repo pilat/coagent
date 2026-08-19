@@ -27,6 +27,14 @@ func (c *controller) CreateProject(
 	ctx context.Context,
 	data controllerapi.ProjectCreateData,
 ) (*controllerapi.ProjectCreateResultData, error) {
+	if data.System {
+		if c.managerID != controllerapi.BuiltinCLIManagerID {
+			return nil, errors.New("the reserved system project belongs to the local chat")
+		}
+
+		return c.createSystemProject(ctx, data.Name)
+	}
+
 	name, err := sanitizeProjectName(data.Name)
 	if err != nil {
 		return nil, err
@@ -48,6 +56,27 @@ func (c *controller) CreateProject(
 		Name: name,
 		Path: path,
 	}, nil
+}
+
+func (c *controller) createSystemProject(
+	ctx context.Context,
+	name string,
+) (*controllerapi.ProjectCreateResultData, error) {
+	if name != controllerapi.CoagentSystemProjectName {
+		return nil, fmt.Errorf("unknown system project %q", name)
+	}
+
+	path := filepath.Join(resolveProjectsRoot(c.cfg.UnifiedConfig), controllerapi.CoagentSystemProjectDir)
+	if err := os.MkdirAll(path, 0o755); err != nil {
+		return nil, fmt.Errorf("create system project dir: %w", err)
+	}
+
+	projectID, err := c.svc.GetOrCreateSystemProject(ctx, path, name)
+	if err != nil {
+		return nil, fmt.Errorf("resolve system project: %w", err)
+	}
+
+	return &controllerapi.ProjectCreateResultData{ID: projectID, Name: name, Path: path}, nil
 }
 
 // ListRecentProjects returns the folder-projects under the configured root,
@@ -94,6 +123,21 @@ func resolveProjectsRoot(uc *config.UnifiedConfig) string {
 	return filepath.Clean(root)
 }
 
+func sameProjectPath(left, right string) bool {
+	if left == "" || right == "" {
+		return false
+	}
+
+	leftAbs, leftErr := filepath.Abs(left)
+
+	rightAbs, rightErr := filepath.Abs(right)
+	if leftErr != nil || rightErr != nil {
+		return filepath.Clean(left) == filepath.Clean(right)
+	}
+
+	return filepath.Clean(leftAbs) == filepath.Clean(rightAbs)
+}
+
 // sanitizeProjectName trims and validates a user-supplied name for use as one
 // path segment. Blacklist (not whitelist) so cyrillic and other non-ASCII names
 // pass; the cap counts runes (not bytes) so ~64 cyrillic chars are admitted. Each
@@ -105,8 +149,12 @@ func sanitizeProjectName(raw string) (string, error) {
 		return "", errors.New("project name is empty")
 	}
 
-	if strings.ContainsAny(name, "/\\\x00") {
-		return "", errors.New(`project name must not contain "/", "\", or a NUL byte`)
+	if strings.ContainsAny(name, "/\\:\x00") {
+		return "", errors.New(`project name must not contain "/", "\", ":", or a NUL byte`)
+	}
+
+	if name == controllerapi.CoagentSystemProjectDir {
+		return "", errors.New("project name is reserved")
 	}
 
 	if strings.HasPrefix(name, ".") {

@@ -46,14 +46,15 @@ type harnessTraceFile struct {
 }
 
 type harnessTraceEvent struct {
-	Type    string             `json:"type"`
-	Message string             `json:"message,omitempty"`
-	Status  string             `json:"status,omitempty"`
-	Reason  string             `json:"reason,omitempty"`
-	Source  string             `json:"source,omitempty"`
-	Name    string             `json:"name,omitempty"`
-	WorkDir string             `json:"work_dir,omitempty"`
-	Waiting []harnessTraceWait `json:"waiting,omitempty"`
+	Type       string             `json:"type"`
+	Message    string             `json:"message,omitempty"`
+	Status     string             `json:"status,omitempty"`
+	Reason     string             `json:"reason,omitempty"`
+	Source     string             `json:"source,omitempty"`
+	Name       string             `json:"name,omitempty"`
+	WorkDir    string             `json:"work_dir,omitempty"`
+	Attributes map[string]any     `json:"attributes,omitempty"`
+	Waiting    []harnessTraceWait `json:"waiting,omitempty"`
 }
 
 type harnessTraceWait struct {
@@ -143,6 +144,9 @@ func normalizeHarnessTrace(
 			Reason: n.Reason,
 			Source: n.Source,
 		}
+		if len(n.Attributes) > 0 {
+			recorded.Attributes = n.Attributes
+		}
 		if n.Name != "" {
 			recorded.Name = namePlaceholder
 		}
@@ -174,7 +178,6 @@ func normalizeHarnessTrace(
 func requireRecordableNotification(t *testing.T, n sessionevent.Notification) {
 	t.Helper()
 
-	require.Empty(t, n.Attributes, "extend the trace schema before recording attributes")
 	require.Empty(t, n.RequestID, "extend the trace schema before recording secret requests")
 	require.Zero(t, n.OldSessionID, "extend the trace schema before recording session clears")
 	require.Zero(t, n.NewSessionID, "extend the trace schema before recording session clears")
