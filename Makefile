@@ -1,4 +1,4 @@
-.PHONY: help build test tests test.integration test.live harness-e2e lint lint.fix fmt all check ci long-fuzz race stress ci.mutation arch semgrep mutation tools post-stop-hook
+.PHONY: help build test tests test.integration test.live harness-e2e lint lint.fix fmt fmt.check all verify verify-offline check ci long-fuzz race stress ci.mutation arch semgrep mutation tools workflow.check post-stop-hook
 
 .DEFAULT_GOAL := help
 
@@ -11,10 +11,22 @@
 # the floor for the `modernize` linter in .golangci.yml).
 GO_ARCH_LINT_VERSION ?= v1.16.0
 GREMLINS_VERSION ?= v0.6.0
+GOPLS_VERSION ?= v0.20.0
+ACTIONLINT_VERSION ?= v1.7.12
 SEMGREP_VERSION ?= 1.168.0
 
 GOLANGCI_RUN = golangci-lint run ./...
-SEMGREP ?= uv tool run --from semgrep==$(SEMGREP_VERSION) semgrep
+SEMGREP ?= uv tool run --offline --from semgrep==$(SEMGREP_VERSION) semgrep
+
+# Verification consumes only dependencies prepared by `make tools`. Target-
+# specific exports flow into prerequisites and subprocesses (including go list
+# and mutation workers) without disabling the explicitly online bootstrap.
+OFFLINE_TARGETS := all verify verify-offline check ci build test tests \
+	test.integration harness-e2e long-fuzz race stress ci.mutation mutation \
+	lint arch semgrep post-stop-hook
+$(OFFLINE_TARGETS): export GOPROXY := off
+$(OFFLINE_TARGETS): export GOSUMDB := off
+$(OFFLINE_TARGETS): export GOTOOLCHAIN := local
 
 # The binary version is stamped from git. The fallback is "dev", not a
 # plausible-looking number: a build without tags must be obvious in a version-skew
@@ -28,14 +40,15 @@ GO_LDFLAGS := -X $(VERSION_PKG).Version=$(VERSION)
 
 help:
 	@echo "Everyday gate:"
-	@echo "  all              fmt + build + lint + arch + semgrep + tests"
-	@echo "                   (hermetic: no network, no external binaries)"
+	@echo "  all / verify     format check + build + lint + arch + semgrep + tests"
+	@echo "  verify-offline   verify with Go/uv network resolution disabled"
 	@echo "  check            all + integration tests      (needs local git/gopls)"
 	@echo "  ci               slow local CI: all + integration + harness E2E + long fuzz + race"
 	@echo "                   + protocol stress + scoped mutation testing"
 	@echo ""
 	@echo "Pieces:"
 	@echo "  fmt              apply the formatters"
+	@echo "  fmt.check        report formatting drift without modifying files"
 	@echo "  build            compile the binary"
 	@echo "  tests            go test ./... (build-tagged files excluded)"
 	@echo "  test.integration go test -tags=integration ./..."
@@ -43,6 +56,7 @@ help:
 	@echo "  lint.fix         apply every golangci-lint autofix"
 	@echo "  arch             go-arch-lint only"
 	@echo "  semgrep          project invariants only"
+	@echo "  workflow.check   validate GitHub Actions workflows with actionlint"
 	@echo ""
 	@echo "Opt-in (slow):"
 	@echo "  harness-e2e      compiled daemon + socket + fake LLM process tests"
@@ -52,12 +66,17 @@ help:
 	@echo "  stress           repeat/shuffle critical protocol tests"
 	@echo "  ci.mutation      mutate harness-critical execution and delivery boundaries"
 	@echo "  mutation MUTATION_PATH=./internal/session"
-	@echo "  tools            install/verify the toolchain"
+	@echo "  tools            online bootstrap for modules and pinned dev tools"
 
 # Everything that must be green before a commit, and nothing that needs the
 # network. Every gate is listed by name: burying arch/semgrep inside `lint` made
 # people read `all` and conclude they were missing.
-all: fmt build lint arch semgrep tests
+all verify: fmt.check build lint arch semgrep tests
+
+# Prove the warmed checkout does not need module or Python-package resolution.
+# Missing modules or uv tool state fail closed; only `tools` may populate them.
+verify-offline:
+	UV_OFFLINE=1 $(MAKE) verify
 
 # `all` plus hermetic suites that exercise installed programs (real gopls and
 # local-only git clone/pull). They never clone a network repository.
@@ -66,8 +85,8 @@ check: all test.integration
 # Slow, reproducible, local pre-merge gate. Its test workloads are hermetic: the
 # compiled-process E2E uses a local fake LLM server, Git clones only temporary
 # local repositories, and the stress suite needs no external services. Local dev
-# tools are still required; the mutation target installs pinned Gremlins if it is
-# absent. Budgets are variables so a developer can run a short smoke first
+# tools are still required and are provisioned explicitly by `make tools`.
+# Budgets are variables so a developer can run a short smoke first
 # without changing the canonical defaults used for the final local CI run.
 ci: all test.integration harness-e2e long-fuzz race stress ci.mutation
 
@@ -112,27 +131,34 @@ CI_STRESS_RUN := Test(Harness|ExecuteToolCalls_(RejectsSleepAlongside|RejectedSl
 stress:
 	go test -shuffle=on -count=$(CI_STRESS_COUNT) -timeout=$(CI_STRESS_TIMEOUT) -run '$(CI_STRESS_RUN)' $(CI_STRESS_PACKAGES)
 
-# Ensure dev tools are present. golangci-lint comes from mise, gremlins/go-arch-lint
-# from go install; semgrep runs through uv so it needs no permanent install.
+# The only online bootstrap target. Go and uv themselves come from mise; all Go
+# helpers are pinned here, and the online Semgrep invocation warms uv's tool cache.
 tools:
+	go mod download
 	golangci-lint version
+	go install golang.org/x/tools/gopls@$(GOPLS_VERSION)
 	go install github.com/fe3dback/go-arch-lint@$(GO_ARCH_LINT_VERSION)
 	go install github.com/go-gremlins/gremlins/cmd/gremlins@$(GREMLINS_VERSION)
+	go install github.com/rhysd/actionlint/cmd/actionlint@$(ACTIONLINT_VERSION)
 	@command -v uv >/dev/null 2>&1 || { echo "✋ uv missing (semgrep runs through it): curl -LsSf https://astral.sh/uv/install.sh | sh"; exit 1; }
-	$(SEMGREP) --version
+	uv tool run --from semgrep==$(SEMGREP_VERSION) semgrep --version
 
-# Architecture boundary check (.go-arch-lint.yml). Installs the pinned version
-# when the binary on PATH is missing or a different one — presence alone isn't enough.
+# Architecture boundary and documentation-contract checks. Gates never install.
 arch:
-	@go-arch-lint version 2>/dev/null | grep -q "$(GO_ARCH_LINT_VERSION)" || go install github.com/fe3dback/go-arch-lint@$(GO_ARCH_LINT_VERSION)
+	@go-arch-lint version 2>/dev/null | grep -q "$(GO_ARCH_LINT_VERSION)" || { echo "✋ go-arch-lint $(GO_ARCH_LINT_VERSION) required; run make tools"; exit 1; }
 	@go-arch-lint self-inspect --json >/dev/null
 	go-arch-lint check
+	./scripts/check-architecture.sh
 
 # Project invariants that are not expressible as a Go linter (.semgrep/). Every
 # rule there is at zero violations, so this is a hard gate with no baseline.
 semgrep:
 	@command -v uv >/dev/null 2>&1 || { echo "✋ uv missing (semgrep runs through it): curl -LsSf https://astral.sh/uv/install.sh | sh"; exit 1; }
 	$(SEMGREP) scan --config .semgrep/ --error --metrics=off --quiet .
+
+workflow.check:
+	@actionlint -version 2>/dev/null | grep -q "$(patsubst v%,%,$(ACTIONLINT_VERSION))" || { echo "✋ actionlint $(ACTIONLINT_VERSION) required; run make tools"; exit 1; }
+	actionlint
 
 lint:
 	golangci-lint config verify
@@ -145,6 +171,11 @@ lint.fix:
 
 fmt:
 	golangci-lint fmt
+
+fmt.check:
+	@output="$$(mktemp)"; trap 'rm -f "$$output"' EXIT HUP INT TERM; \
+		if ! golangci-lint fmt --diff >"$$output"; then cat "$$output"; exit 1; fi; \
+		if [ -s "$$output" ]; then cat "$$output"; exit 1; fi
 
 # Mutation testing (.gremlins.yaml): asks whether the tests would actually FAIL if
 # the logic were wrong — the question coverage cannot answer. MUTATION_PATH is
@@ -170,7 +201,7 @@ CI_STORE_MUTATION_FILES := scheduled_delivery_store.go
 CI_STORE_MUTATION_EXCLUDES = $(foreach file,$(filter-out $(CI_STORE_MUTATION_FILES),$(notdir $(wildcard internal/sessionstore/*.go))),--exclude-files '$(file)')
 
 ci.mutation:
-	@command -v gremlins >/dev/null 2>&1 || go install github.com/go-gremlins/gremlins/cmd/gremlins@$(GREMLINS_VERSION)
+	@go version -m "$$(command -v gremlins)" 2>/dev/null | grep -q "github.com/go-gremlins/gremlins[[:space:]]*$(GREMLINS_VERSION)" || { echo "✋ gremlins $(GREMLINS_VERSION) required; run make tools"; exit 1; }
 	gremlins unleash ./$(CI_MUTATION_DIR) \
 		--workers $(MUTATION_WORKERS) \
 		--timeout-coefficient $(MUTATION_TIMEOUT_COEFFICIENT) \
@@ -197,7 +228,7 @@ mutation:
 		echo "   Whole module:  make mutation MUTATION_PATH=./...   (many minutes)"; \
 		exit 1; \
 	fi
-	@command -v gremlins >/dev/null 2>&1 || go install github.com/go-gremlins/gremlins/cmd/gremlins@$(GREMLINS_VERSION)
+	@go version -m "$$(command -v gremlins)" 2>/dev/null | grep -q "github.com/go-gremlins/gremlins[[:space:]]*$(GREMLINS_VERSION)" || { echo "✋ gremlins $(GREMLINS_VERSION) required; run make tools"; exit 1; }
 	gremlins unleash \
 		--workers $(MUTATION_WORKERS) \
 		--timeout-coefficient $(MUTATION_TIMEOUT_COEFFICIENT) \

@@ -124,10 +124,10 @@ rules:
     languages: [go]
     severity: ERROR
     message: >-
-      os.Exit skips every registered stop closure, so sessions are killed without
-      being persisted. Only the composition root may exit; elsewhere return an error.
+      os.Exit skips registered stop closures. Only command composition roots may
+      exit; runtime and library packages must return an error.
     paths:
-      exclude: ["*_test.go", "/cmd/coagent/*"]
+      exclude: ["*_test.go", "/cmd/coagent/*", "/cmd/releasebuilder/*"]
     pattern: os.Exit(...)
 
   # Generic (regex) rather than Go: semgrep's Go patterns cannot see comments,

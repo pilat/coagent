@@ -2,7 +2,6 @@ package registry
 
 import (
 	"cmp"
-	"maps"
 	"slices"
 )
 
@@ -22,8 +21,7 @@ const (
 
 const defaultSubagentMaxIterations = 50
 
-// AgentTypes maps built-in agent type names to their configurations.
-var AgentTypes = map[AgentType]AgentTypeConfig{
+var builtinAgentTypes = map[AgentType]AgentTypeConfig{
 	AgentTypeBuild: {
 		Name:          AgentTypeBuild,
 		Description:   "Primary build agent with full tool access",
@@ -84,11 +82,14 @@ type Set struct {
 // subagents on top, normalizing each (subagent-mode todo exclusion, default
 // MaxIterations). A project subagent may shadow a built-in of the same name.
 func NewSet(projectSubagents []AgentTypeConfig) *Set {
-	types := make(map[AgentType]AgentTypeConfig, len(AgentTypes)+len(projectSubagents))
+	types := make(map[AgentType]AgentTypeConfig, len(builtinAgentTypes)+len(projectSubagents))
 
-	maps.Copy(types, AgentTypes)
+	for name, cfg := range builtinAgentTypes {
+		types[name] = cloneConfig(cfg)
+	}
 
 	for _, cfg := range projectSubagents {
+		cfg = cloneConfig(cfg)
 		types[cfg.Name] = normalizeSubagent(cfg)
 	}
 
@@ -99,7 +100,7 @@ func NewSet(projectSubagents []AgentTypeConfig) *Set {
 func (s *Set) Get(t AgentType) (AgentTypeConfig, bool) {
 	cfg, ok := s.types[t]
 
-	return cfg, ok
+	return cloneConfig(cfg), ok
 }
 
 // Has reports whether the set contains the given agent type.
@@ -115,7 +116,7 @@ func (s *Set) ListSubagents() []AgentTypeConfig {
 
 	for _, cfg := range s.types {
 		if cfg.Mode == ModeSubagent {
-			out = append(out, cfg)
+			out = append(out, cloneConfig(cfg))
 		}
 	}
 
@@ -163,6 +164,12 @@ func (s *Set) FilterTools(allTools []string, t AgentType) []string {
 	}
 
 	return result
+}
+
+func cloneConfig(config AgentTypeConfig) AgentTypeConfig {
+	config.Tools = slices.Clone(config.Tools)
+
+	return config
 }
 
 // normalizeSubagent applies subagent defaults: the iteration cap, an omitted tool

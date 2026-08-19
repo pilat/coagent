@@ -9,6 +9,7 @@ import (
 	"net"
 	"os"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -43,6 +44,7 @@ type Client struct {
 	greeting Greeting
 
 	notifications chan Notification
+	dropped       atomic.Uint64
 
 	mu      sync.Mutex
 	nextID  int64
@@ -103,6 +105,11 @@ func (c *Client) SkewsFrom() bool { return c.greeting.ProtocolVersion != Protoco
 // Notifications is the server→client push stream. It closes when the connection
 // drops, which is how a chat client learns the daemon went away to restart.
 func (c *Client) Notifications() <-chan Notification { return c.notifications }
+
+// DroppedNotifications reports pushes discarded because Notifications was full.
+// Push delivery is deliberately best effort so an unread consumer cannot stall
+// RPC replies; this counter lets internal callers observe that loss.
+func (c *Client) DroppedNotifications() uint64 { return c.dropped.Load() }
 
 // Close ends the connection and fails every call still waiting on it.
 func (c *Client) Close() error {
@@ -249,6 +256,7 @@ func (c *Client) readLoop(reader *bufio.Reader) {
 		select {
 		case c.notifications <- Notification{JSONRPC: jsonrpcVersion, Method: f.Method, Params: f.Params}:
 		default:
+			c.dropped.Add(1)
 		}
 	}
 }

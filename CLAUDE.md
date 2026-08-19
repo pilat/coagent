@@ -19,7 +19,9 @@ make lint           # golangci-lint run ./...
 make fmt            # golangci-lint fmt
 make arch           # go-arch-lint check (.go-arch-lint.yml tier boundaries)
 make semgrep        # semgrep invariants (.semgrep/)
-make all            # fmt + build + lint + arch + semgrep + tests
+make tools          # online bootstrap for modules and pinned development tools
+make all            # non-mutating format check + build + lint + arch + semgrep + tests
+make verify-offline # run the everyday gate with Go/uv resolution disabled
 make ci             # slow local CI: all + integration + E2E + 5m fuzz + race + stress + mutation
 
 # Run a single test
@@ -30,6 +32,14 @@ COAGENT_TESTCONTAINERS_INTEGRATION=1 mise exec -- go test -count=1 -v -timeout 2
 ```
 
 Go version is managed via `mise.toml` (currently Go 1.25.6).
+
+## Commit Messages
+
+Every commit must follow [Conventional Commits 1.0](https://www.conventionalcommits.org/):
+`<type>[optional scope][!]: <description>`. Use the smallest accurate type
+(`feat`, `fix`, `docs`, `refactor`, `test`, `build`, `ci`, `perf`, `chore`, or
+`revert`), write the description in imperative lowercase without a trailing
+period, and mark breaking changes with `!` plus a `BREAKING CHANGE:` footer.
 
 **Never pipe a gate.** `make all 2>&1 | tail` reports the *pipe's* exit status, so a
 failing lint/semgrep/test stage reads as success. Run gates bare, or with
@@ -57,10 +67,11 @@ behave adversarially. Use “E2E” only for compiled-process tests.
 
 ### Local CI
 
-There is no hosted CI pipeline. The canonical pre-merge quality gate is
-`make ci`, run locally. It is deliberately much slower than `make all` and runs
-sequentially even under `make -j`, because mutation testing temporarily rewrites
-production files.
+GitHub pull requests and main pushes run the shorter Linux/macOS verification;
+scheduled/manual jobs run `make ci`. The canonical pre-merge quality gate remains
+default-budget `make ci`, locally or in that deep hosted job. It is deliberately
+much slower than `make all` and runs sequentially even under `make -j`, because
+mutation testing temporarily rewrites production files.
 
 `make ci` includes:
 
@@ -199,9 +210,9 @@ The tree under `internal/` is flat — package names say what they provide; depe
 ## Architecture Documentation
 
 - **[docs/glossary.md](docs/glossary.md)** — the project vocabulary: what each coagent term means and which synonyms to avoid. Read it first; everything else is written in these words.
-- **[ARCHITECTURE.md](ARCHITECTURE.md)** — the single architecture document. System-wide topology and rules first (package boundaries, cross-cutting rules, data lifecycle, init/shutdown sequences), then per-package internals (state ownership, concurrency model, ordering constraints, anti-patterns, contracts) as one section per package under "Package Internals".
+- **[ARCHITECTURE.md](ARCHITECTURE.md)** — the single, bounded architecture document. Every production package appears exactly once in its grouped package map; only packages that own lifecycle, durable state, concurrency, trust boundaries or cross-package protocols receive a profile. Obey the anti-bloat contract at the top and never turn it into a file/member inventory, API reference, changelog or test plan.
 - **After implementing changes**, run `/pilat:arch-sync` to catch drift between the code and this document before committing.
-- Dependency-tier boundaries are mechanically enforced by `make arch` (go-arch-lint, `.go-arch-lint.yml`) and project invariants by `make semgrep` (`.semgrep/`) — both gated in `make all` and the Stop hook (`make post-stop-hook`).
+- Dependency tiers, package-map coverage, durable-protocol/trust headings and the architecture line budget are mechanically enforced by `make arch`; project invariants by `make semgrep`. Both are gated in `make all` and the Stop hook (`make post-stop-hook`).
 
 ## Decision Records
 

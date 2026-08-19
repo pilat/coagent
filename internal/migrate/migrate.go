@@ -3,8 +3,8 @@ package migrate
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -20,12 +20,17 @@ import (
 
 // Open opens the default database and runs migrations. Caller owns Close.
 func Open(ctx context.Context) (*sql.DB, error) {
-	db, err := OpenDB(ctx, "")
+	dbPath, existed, err := productionDBPath()
+	if err != nil {
+		return nil, fmt.Errorf("resolve database path: %w", err)
+	}
+
+	db, err := OpenDB(ctx, dbPath)
 	if err != nil {
 		return nil, fmt.Errorf("open database: %w", err)
 	}
 
-	if err := Run(ctx, db, ""); err != nil {
+	if err := run(ctx, db, dbPath, existed); err != nil {
 		_ = db.Close() // cleanup
 		return nil, fmt.Errorf("run migrations: %w", err)
 	}
@@ -36,18 +41,12 @@ func Open(ctx context.Context) (*sql.DB, error) {
 // OpenDB opens (or creates) the SQLite database at dbPath.
 // If dbPath is empty, uses ~/.coagent/daemon.db.
 func OpenDB(ctx context.Context, dbPath string) (*sql.DB, error) {
-	if dbPath == "" {
-		globalDir, err := coagenthome.Dir()
-		if err != nil {
-			return nil, fmt.Errorf("user home dir: %w", err)
-		}
-
-		if err := os.MkdirAll(globalDir, 0o755); err != nil {
-			return nil, fmt.Errorf("create config dir: %w", err)
-		}
-
-		dbPath = filepath.Join(globalDir, coagenthome.DBFileName)
+	resolvedPath, err := resolveDBPath(dbPath)
+	if err != nil {
+		return nil, err
 	}
+
+	dbPath = resolvedPath
 
 	// Apply connection-scoped settings via the DSN so EVERY pooled connection gets
 	// them. Every explicit transaction in the repository writes; immediate mode
@@ -74,6 +73,10 @@ func OpenDB(ctx context.Context, dbPath string) (*sql.DB, error) {
 
 // Run applies all pending migrations (legacy Go no-ops + SQL files).
 func Run(ctx context.Context, db *sql.DB, dbPath string) error {
+	return run(ctx, db, dbPath, false)
+}
+
+func run(ctx context.Context, db *sql.DB, dbPath string, backup bool) error {
 	provider, err := goose.NewProvider(
 		goose.DialectSQLite3,
 		db,
@@ -85,10 +88,16 @@ func Run(ctx context.Context, db *sql.DB, dbPath string) error {
 		return fmt.Errorf("create goose provider: %w", err)
 	}
 
-	if dbPath != "" {
+	if backup {
 		pending, err := provider.HasPending(ctx)
-		if err == nil && pending {
-			backupDB(dbPath)
+		if err != nil {
+			return fmt.Errorf("check pending migrations: %w", err)
+		}
+
+		if pending {
+			if err := backupDB(ctx, db, dbPath); err != nil {
+				return fmt.Errorf("backup database: %w", err)
+			}
 		}
 	}
 
@@ -97,12 +106,47 @@ func Run(ctx context.Context, db *sql.DB, dbPath string) error {
 		return fmt.Errorf("goose up: %w", err)
 	}
 
-	log := logger.Named("migrate.run")
+	log := logger.Ctx(ctx).Named("migrate.run")
 	for _, r := range results {
 		log.Info("applied", zap.Int64("version", r.Source.Version), zap.Duration("duration", r.Duration))
 	}
 
 	return nil
+}
+
+func resolveDBPath(dbPath string) (string, error) {
+	if dbPath != "" {
+		return dbPath, nil
+	}
+
+	globalDir, err := coagenthome.Dir()
+	if err != nil {
+		return "", fmt.Errorf("user home dir: %w", err)
+	}
+
+	if err := os.MkdirAll(globalDir, 0o755); err != nil {
+		return "", fmt.Errorf("create config dir: %w", err)
+	}
+
+	return filepath.Join(globalDir, coagenthome.DBFileName), nil
+}
+
+func productionDBPath() (string, bool, error) {
+	dbPath, err := resolveDBPath("")
+	if err != nil {
+		return "", false, err
+	}
+
+	_, err = os.Stat(dbPath)
+	if errors.Is(err, os.ErrNotExist) {
+		return dbPath, false, nil
+	}
+
+	if err != nil {
+		return "", false, fmt.Errorf("inspect database: %w", err)
+	}
+
+	return dbPath, true, nil
 }
 
 // escapeURIPath percent-encodes the characters SQLite's URI parser treats as
@@ -125,30 +169,4 @@ func configurePragmas(ctx context.Context, db *sql.DB) error {
 	}
 
 	return nil
-}
-
-func backupDB(dbPath string) {
-	log := logger.Named("migrate.run")
-	bakPath := dbPath + ".bak"
-
-	src, err := os.Open(dbPath)
-	if err != nil {
-		log.Warn("backup_open_failed", zap.String("path", dbPath), zap.Error(err))
-		return
-	}
-	defer src.Close()
-
-	dst, err := os.Create(bakPath)
-	if err != nil {
-		log.Warn("backup_create_failed", zap.String("path", bakPath), zap.Error(err))
-		return
-	}
-	defer dst.Close()
-
-	if _, err := io.Copy(dst, src); err != nil {
-		log.Warn("backup_copy_failed", zap.Error(err))
-		return
-	}
-
-	log.Info("backup_created", zap.String("path", bakPath))
 }

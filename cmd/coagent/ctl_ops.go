@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/pilat/coagent/internal/catalog"
 	"github.com/pilat/coagent/internal/config"
 	"github.com/pilat/coagent/internal/configops"
 	"github.com/pilat/coagent/internal/ctl"
@@ -160,12 +159,12 @@ func providerModels(entry config.ProviderEntry, explicit []string) []string {
 		return nil
 	}
 
-	rec, ok := catalog.Recommend(section)
+	rec, ok := recommend(section)
 	if !ok {
 		return nil
 	}
 
-	return rec.Models()
+	return rec.models()
 }
 
 // setSecret stores one credential. A variable the config already references is a

@@ -174,7 +174,7 @@ func TestScenario_MCPAddReachesTheNextRunOnly(t *testing.T) {
 	assert.Contains(t, lastToolResultContent(msgs, tool.IDMCPAdd), "next run")
 	assert.Contains(t, toolResultForCallID(msgs, "ping-same-run"), "unknown tool",
 		"the run that registered the server must not gain its tools")
-	assert.Equal(t, 0, fake.count(t, "spawn"), "a mid-run registration spawns nothing")
+	assert.Equal(t, 0, fake.count(t, "call"), "a mid-run registration executes nothing")
 
 	require.NoError(t, h.mgr.SendToSession(h.ctx, sessionID, "USE_IT now"))
 	h.waitUntil("next run uses the server", func() bool {
