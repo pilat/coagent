@@ -1,0 +1,13 @@
+title = "coagent secret scanning configuration"
+
+[extend]
+useDefault = true
+
+[[rules]]
+id = "generic-api-key"
+
+  [[rules.allowlists]]
+  description = "dated catalog model identifier used by TestLookup"
+  regexTarget = "secret"
+  regexes = ["^claude-opus-5-20260101$"]
+  paths = ["^internal/catalog/catalog_test\\.go$"]
