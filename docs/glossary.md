@@ -198,8 +198,13 @@ _Avoid_: memory.
 ## Configuration & isolation
 
 **coagent home**:
-`~/.coagent` — the daemon's own state directory: config, secrets, control socket, DB, caches, `projects/`, `bin/`. Resolved exclusively by `internal/coagenthome`, which also names everything inside it. Tests isolate resolution under `t.TempDir()` through `HOME` or `coagenthome.Override`; test binaries reject the inherited user home and its descendants. Distinct from a task repo's project-level `.coagent/` context dir (`config.ProjectCoagentDir`) — same directory name, different scope.
+`~/.coagent` — the daemon's own state directory: config, secrets, control socket, DB, caches and `projects/`. Resolved exclusively by `internal/coagenthome`, which also names everything inside it. Tests isolate resolution under `t.TempDir()` through `HOME` or `coagenthome.Override`; test binaries reject the inherited user home and its descendants. Distinct from a task repo's project-level `.coagent/` context dir (`config.ProjectCoagentDir`) — same directory name, different scope.
 _Avoid_: "config dir" for the whole directory; conflating it with the project-level `.coagent/`.
+
+**LSP server**:
+A user- or project-owned language-server executable discovered through the
+project's activated shell PATH. Coagent neither downloads, installs, nor pins it.
+_Avoid_: managed LSP installation, PATH fallback.
 
 **provider**:
 A user-named entry in `config.yaml`'s `providers:` map — credentials, `base_url`, which **driver** to use, and an optional `catalog` key. It is the operator's label for one endpoint, not a vendor.

@@ -40,7 +40,7 @@ type Stack struct {
 func BuildStack(ctx context.Context, cfg StackConfig) (*Stack, error) {
 	sandboxCfg := bashSandboxConfig(cfg)
 
-	//nolint:contextcheck // sandbox preflight is a bounded self-test sharing the process-wide Probe() cache, decoupled from session ctx
+	//nolint:contextcheck // Sandbox preflight is a bounded process-wide self-test.
 	bashRunner, err := bashsandbox.New(sandboxCfg, cfg.Provider)
 	if err != nil {
 		return nil, fmt.Errorf("create bash sandbox: %w", err)

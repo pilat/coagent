@@ -38,7 +38,6 @@ components:
   migrate:        { in: internal/migrate }
   migrations:     { in: migrations }
   releasebuilder: { in: cmd/releasebuilder }
-
   registry:     { in: internal/registry }
   todo:         { in: internal/todo }
   lsp:          { in: internal/lsp }

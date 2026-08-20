@@ -147,6 +147,58 @@ func TestWrapExec_WithSnapshotSourcesAndExecs(t *testing.T) {
 	assert.Contains(t, cmd.Env, "K=V")
 }
 
+func TestWrapExecRejectsInvalidEnvironmentNames(t *testing.T) {
+	for name, provider := range map[string]*provider{
+		"without snapshot": {},
+		"with snapshot":    fakeProvider(t),
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := provider.WrapExec(
+				context.Background(),
+				t.TempDir(),
+				[]string{"echo", "ok"},
+				[]string{"BAD; touch /tmp/pwn=value"},
+			)
+			require.ErrorContains(t, err, "invalid environment variable")
+		})
+	}
+}
+
+func TestLookPathResolvesRelativePathAgainstWorkDir(t *testing.T) {
+	workDir := t.TempDir()
+	bin := filepath.Join(workDir, "bin")
+	require.NoError(t, os.Mkdir(bin, 0o700))
+	executable := filepath.Join(bin, "tool")
+	require.NoError(t, os.WriteFile(executable, []byte("#!/bin/sh\n"), 0o700))
+
+	t.Run("without snapshot", func(t *testing.T) {
+		t.Setenv("PATH", "bin")
+		found, err := lookPathWithoutSnapshot(workDir, []string{"tool"})
+		require.NoError(t, err)
+		assert.Equal(t, executable, found)
+	})
+
+	t.Run("without snapshot does not consult daemon cwd", func(t *testing.T) {
+		daemonDir := t.TempDir()
+		require.NoError(t, os.Mkdir(filepath.Join(daemonDir, "bin"), 0o700))
+		require.NoError(t, os.WriteFile(filepath.Join(daemonDir, "bin", "tool"), []byte("#!/bin/sh\n"), 0o700))
+		t.Chdir(daemonDir)
+		t.Setenv("PATH", "bin")
+		missingWorkDir := t.TempDir()
+
+		_, err := lookPathWithoutSnapshot(missingWorkDir, []string{"tool"})
+		require.ErrorContains(t, err, "executable not found")
+	})
+
+	t.Run("with snapshot", func(t *testing.T) {
+		snapshot := filepath.Join(t.TempDir(), "snapshot")
+		require.NoError(t, os.WriteFile(snapshot, []byte("export PATH=bin\n"), 0o600))
+		found, err := fakeProvider(t).lookPathFromSnapshot(context.Background(), workDir, snapshot, []string{"tool"})
+		require.NoError(t, err)
+		assert.Equal(t, executable, found)
+	})
+}
+
 func TestEnsureCacheDir_Mode0700(t *testing.T) {
 	if runtime.GOOS == "darwin" {
 		t.Skip("UserCacheDir ignores XDG_CACHE_HOME on darwin")

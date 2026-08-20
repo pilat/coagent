@@ -10,14 +10,17 @@ import (
 	"github.com/pilat/coagent/internal/tool"
 )
 
-const lspDescription = `Interact with Language Server Protocol (LSP) servers to get code intelligence features.
+const (
+	lspOperationDocumentSymbol  = "documentSymbol"
+	lspOperationWorkspaceSymbol = "workspaceSymbol"
+	lspDescription              = `Interact with Language Server Protocol (LSP) servers to get code intelligence features.
 
 Supported operations:
 - goToDefinition: Find where a symbol is defined
 - findReferences: Find all references to a symbol
 - hover: Get hover information (documentation, type info) for a symbol
 - documentSymbol: Get all symbols (functions, classes, variables) in a document
-- workspaceSymbol: Search symbols across the entire workspace (requires query parameter)
+- workspaceSymbol: Search symbols in the anchor file's language workspace (requires file_path and query)
 - goToImplementation: Find implementations of interfaces or abstract methods
 - prepareCallHierarchy: Prepare call hierarchy data for a symbol
 - incomingCalls: Find functions that call this function
@@ -27,14 +30,15 @@ Required parameters:
 - file_path: The file to operate on
 - operation: The LSP operation to perform
 
-Optional parameters (required for most operations except workspaceSymbol):
-- line: The line number (1-based, as shown in editors)
-- character: The character offset (1-based, as shown in editors)
+Optional parameters (required only for position-based operations):
+- line: The one-based line number
+- character: The one-based UTF-16 code-unit offset
 
 Additional parameters:
 - query: Query string (only used by workspaceSymbol operation)
 
 Note: LSP servers must be configured for the file type. If no server is available, an error will be returned.`
+)
 
 var _ tool.Tool = (*lspTool)(nil)
 
@@ -69,7 +73,7 @@ func (t *lspTool) Parameters() json.RawMessage {
 			},
 			"file_path": {
 				"type": "string",
-				"description": "The file to operate on"
+				"description": "The required file and language-server anchor, including for workspaceSymbol"
 			},
 			"line": {
 				"type": "integer",
@@ -102,13 +106,25 @@ func (t *lspTool) Execute(ctx context.Context, params json.RawMessage) (*tool.Re
 }
 
 func (t *lspTool) dispatch(ctx context.Context, p lspParams) (*tool.Result, error) {
-	// Convert 1-based to 0-based (used by all operations except workspaceSymbol)
+	if p.FilePath == "" {
+		return nil, errors.New("LSP file_path is required")
+	}
+
+	if !knownLSPOperation(p.Operation) {
+		return nil, fmt.Errorf("unknown operation: %s", p.Operation)
+	}
+
+	needsPosition := p.Operation != lspOperationDocumentSymbol && p.Operation != lspOperationWorkspaceSymbol
+	if needsPosition && (p.Line <= 0 || p.Character <= 0) {
+		return nil, errors.New("LSP line and character must be positive")
+	}
+	// Convert the tool's one-based UTF-16 offset to LSP's zero-based value.
 	line := p.Line - 1
 	char := p.Character - 1
 
 	switch p.Operation {
-	case "workspaceSymbol":
-		return t.workspaceSymbol(ctx, p.Query)
+	case lspOperationWorkspaceSymbol:
+		return t.workspaceSymbol(ctx, p.FilePath, p.Query)
 	case "goToImplementation":
 		return t.implementation(ctx, p.FilePath, line, char)
 	case "prepareCallHierarchy":
@@ -123,10 +139,27 @@ func (t *lspTool) dispatch(ctx context.Context, p lspParams) (*tool.Result, erro
 		return t.references(ctx, p.FilePath, line, char)
 	case "hover":
 		return t.hover(ctx, p.FilePath, line, char)
-	case "documentSymbol":
+	case lspOperationDocumentSymbol:
 		return t.documentSymbol(ctx, p.FilePath)
 	default:
 		return nil, fmt.Errorf("unknown operation: %s", p.Operation)
+	}
+}
+
+func knownLSPOperation(operation string) bool {
+	switch operation {
+	case lspOperationWorkspaceSymbol,
+		"goToImplementation",
+		"prepareCallHierarchy",
+		"incomingCalls",
+		"outgoingCalls",
+		"goToDefinition",
+		"findReferences",
+		"hover",
+		lspOperationDocumentSymbol:
+		return true
+	default:
+		return false
 	}
 }
 
@@ -139,8 +172,12 @@ func lspJSON(v any) (*tool.Result, error) {
 	return &tool.Result{Output: string(output)}, nil
 }
 
-func (t *lspTool) workspaceSymbol(ctx context.Context, query string) (*tool.Result, error) {
-	symbols, err := t.manager.WorkspaceSymbol(ctx, t.workDir, query)
+func (t *lspTool) workspaceSymbol(ctx context.Context, filePath, query string) (*tool.Result, error) {
+	if query == "" {
+		return nil, errors.New("workspaceSymbol requires a query")
+	}
+
+	symbols, err := t.manager.WorkspaceSymbol(ctx, t.workDir, filePath, query)
 	if err != nil {
 		return nil, fmt.Errorf("workspaceSymbol: %w", err)
 	}

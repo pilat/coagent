@@ -111,8 +111,8 @@ opinionated product, not an agent framework with a public plugin API.
   at startup instead of running with guessed metadata.
 - **Coding tools:** Bash, file operations, unified patches, search, LSP code
   intelligence, web fetch, parallel batches, todos, and persistent per-project
-  memory. Common language servers can be installed lazily; `clangd` and
-  OmniSharp must already be on `PATH`.
+  memory. Language servers are supplied by the project or user toolchain and
+  must be available on the activated project `PATH`.
 - **MCP:** global and project-scoped servers stored in SQLite. Connections are
   pooled across sessions and reaped after 30 minutes idle.
 - **Skills and subagents:** project and user `SKILL.md` files, project-defined
@@ -175,7 +175,6 @@ is intentionally inspectable:
 - `~/.coagent/daemon.db` — sessions, messages, schedules, memories, MCP registry,
   and delivery ledgers.
 - `~/.coagent/cache` — model catalogs and marketplace checkouts.
-- `~/.coagent/bin` — managed language-server installations.
 
 MCP servers are managed with `mcp_add`, `mcp_remove`, `mcp_enable`,
 `mcp_disable`, and `mcp_list`; they do not live in `config.yaml`.
@@ -210,9 +209,8 @@ are writable by default. Add language- or package-manager caches explicitly.
   selection and isolated worktree creation currently live in Telegram.
 - Shell environment activation is Bash-based. zsh and fish users can still run
   coagent, but do not get automatic per-directory mise/asdf/nvm/direnv capture.
-- Most LSP servers may install themselves on first use. This is unattended
-  network activity that trusts the configured package registries and upstream
-  publishers.
+- Language servers are user- or project-owned. Coagent discovers them through
+  the project's activated shell PATH and never downloads or installs them.
 - Config, storage schema, and internal manager contracts may still change before
   1.0. Database migrations are automatic and forward-only.
 

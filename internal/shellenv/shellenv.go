@@ -45,10 +45,13 @@ type Provider interface {
 	// required for correctness — fingerprint validation catches the rest.
 	Invalidate(workDir string)
 
-	// WrapExec builds `<shell> -c "source <snap>; exec <argv>"` with Dir=workDir
-	// and Env=os.Environ()+extraEnv. With no snapshot it returns a plain exec of
-	// argv. Errors only on empty argv, never on snapshot-unavailability.
+	// WrapExec execs argv in workDir after sourcing a snapshot when available; extraEnv overrides inherited names and is exported after it.
+	// It returns a plain exec without a snapshot and errors only on empty argv.
 	WrapExec(ctx context.Context, workDir string, argv, extraEnv []string) (*exec.Cmd, error)
+
+	// LookPath resolves the first executable from names using the same activated
+	// environment that WrapExec replays. It returns an absolute path.
+	LookPath(ctx context.Context, workDir string, names []string) (string, error)
 
 	// Close best-effort removes the per-instance cache dir.
 	Close() error

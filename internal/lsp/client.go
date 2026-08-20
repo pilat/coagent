@@ -4,25 +4,21 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"os/exec"
-	"path/filepath"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
-
-	"go.uber.org/zap"
-
-	"github.com/pilat/coagent/internal/logger"
 )
 
 const (
+	jsonRPCVersion            = "2.0"
 	lspKeyTextDocument        = "textDocument"
 	lspKeyURI                 = "uri"
+	lspKeyVersion             = "version"
 	lspKeyDynamicRegistration = "dynamicRegistration"
+	lspWriteQueueSize         = 64
 )
 
 // lspCallTimeout bounds every RPC so a wedged server can't hang the tool + loop;
@@ -33,157 +29,157 @@ var (
 	stopTimeout    = 3 * time.Second
 )
 
-// client represents an LSP client connection.
-// Lock order: fileMu may acquire writeMu through notify; pendingMu and
-// diagnosticsMu are never held with either of them.
+// client represents one server connection. The process waiter is its only
+// reaper; readers and callers only mark the connection unusable.
 type client struct {
-	cmd           *exec.Cmd
-	stdin         io.WriteCloser
-	stdout        io.ReadCloser
-	reader        *bufio.Reader
-	pendingMu     sync.Mutex
-	writeMu       sync.Mutex
-	fileMu        sync.Mutex
-	idGen         atomic.Int64
-	pending       map[int64]chan *json.RawMessage
-	rootPath      string
-	files         map[string]documentState // key: URI, last content/version synchronized with the server
-	diagnostics   map[string][]Diagnostic  // key: URI
-	diagnosticsMu sync.RWMutex
+	cmd         *exec.Cmd
+	processDone chan struct{}
+	stdin       io.WriteCloser
+	stdout      io.ReadCloser
+	reader      *bufio.Reader
+	pendingMu   sync.Mutex
+	writerOnce  sync.Once
+	writerStop  sync.Once
+	writer      chan *outbound
+	writerDone  chan struct{}
+	// Lock order is fileMu -> diagnosticsMu -> pendingMu. Writer state is
+	// channel-owned; atomic flags only publish irreversible client exit.
+	fileMu         sync.Mutex
+	idGen          atomic.Int64
+	pending        map[int64]chan rpcResult
+	rootPath       string
+	languageID     string
+	files          map[string]documentState // key: URI, last content/version synchronized with the server
+	syncing        map[string]chan struct{}
+	diagnostics    map[string][]Diagnostic // key: URI
+	diagVersions   map[string]diagnosticVersion
+	staleDiags     map[string]diagnosticObservation
+	diagnosticsMu  sync.RWMutex
+	diagnosticGen  map[string]uint64
+	versionlessGen map[string]uint64
+	diagSignal     chan struct{}
+	onExit         func()
+	exitOnce       sync.Once
+	processOnce    sync.Once
+	exited         atomic.Bool
+}
+
+type rpcResult struct {
+	result json.RawMessage
+	err    error
 }
 
 func newClient() *client {
 	return &client{
-		pending:     make(map[int64]chan *json.RawMessage),
-		files:       make(map[string]documentState),
-		diagnostics: make(map[string][]Diagnostic),
+		pending:        make(map[int64]chan rpcResult),
+		files:          make(map[string]documentState),
+		syncing:        make(map[string]chan struct{}),
+		diagnostics:    make(map[string][]Diagnostic),
+		diagVersions:   make(map[string]diagnosticVersion),
+		staleDiags:     make(map[string]diagnosticObservation),
+		diagnosticGen:  make(map[string]uint64),
+		versionlessGen: make(map[string]uint64),
+		diagSignal:     make(chan struct{}),
 	}
 }
 
-// stop stops the LSP client. Kill-first so cmd.Wait can't block on a server that
-// ignores the graceful shutdown RPC; the RPC is best-effort and time-bounded, so
-// it never gates the kill (mirrors mcp.Client.Close).
-func (c *client) stop() error {
+// stop gives a responsive server the LSP shutdown/exit handshake before using
+// kill as the bounded fallback for a mute process.
+func (c *client) stop(parent context.Context) error {
 	if c.cmd == nil || c.cmd.Process == nil {
 		return nil
 	}
 
-	_ = c.cmd.Process.Kill()
+	c.ensureProcessWaiter()
 
-	ctx, cancel := context.WithTimeout(context.Background(), stopTimeout)
+	deadline := time.NewTimer(stopTimeout)
+	defer deadline.Stop()
+
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(parent), stopTimeout)
 	_ = c.call(ctx, "shutdown", nil, nil)
 	_ = c.notify(ctx, "exit", nil)
 
 	cancel()
 
-	_ = c.cmd.Wait() // the kill above makes this a zombie reap; "signal: killed" is expected
+	select {
+	case <-c.processDone:
+	case <-deadline.C:
+		_ = c.cmd.Process.Kill()
+
+		<-c.processDone
+	}
 
 	return nil
-}
-
-// call sends a request and waits for response, bounded by lspCallTimeout so a
-// wedged server fails on a deadline instead of hanging the tool and the loop.
-func (c *client) call(ctx context.Context, method string, params, result any) error {
-	ctx, cancel := context.WithTimeout(ctx, lspCallTimeout)
-	defer cancel()
-
-	id := c.idGen.Add(1)
-
-	paramsBytes, err := json.Marshal(params)
-	if err != nil {
-		return fmt.Errorf("marshal params: %w", err)
-	}
-
-	req := Request{
-		JSONRPC: "2.0",
-		ID:      id,
-		Method:  method,
-		Params:  paramsBytes,
-	}
-
-	reqBytes, err := json.Marshal(req)
-	if err != nil {
-		return fmt.Errorf("marshal request: %w", err)
-	}
-
-	respChan := make(chan *json.RawMessage, 1)
-
-	c.pendingMu.Lock()
-	c.pending[id] = respChan
-	c.pendingMu.Unlock()
-
-	defer func() {
-		c.pendingMu.Lock()
-		delete(c.pending, id)
-		c.pendingMu.Unlock()
-	}()
-
-	if err := c.send(ctx, reqBytes); err != nil {
-		return fmt.Errorf("send request: %w", err)
-	}
-
-	select {
-	case resp := <-respChan:
-		if resp == nil {
-			return errors.New("no response")
-		}
-
-		if result != nil {
-			if err := json.Unmarshal(*resp, result); err != nil {
-				return fmt.Errorf("unmarshal result: %w", err)
-			}
-		}
-
-		return nil
-	case <-ctx.Done():
-		return ctx.Err()
-	}
 }
 
 // notify sends a notification.
 func (c *client) notify(ctx context.Context, method string, params any) error {
-	paramsBytes, err := json.Marshal(params)
+	data, err := notificationFrame(method, params)
 	if err != nil {
-		return fmt.Errorf("marshal params: %w", err)
+		return err
 	}
 
-	notif := Notification{
-		JSONRPC: "2.0",
-		Method:  method,
-		Params:  paramsBytes,
-	}
-
-	notifBytes, err := json.Marshal(notif)
-	if err != nil {
-		return fmt.Errorf("marshal notification: %w", err)
-	}
-
-	return c.send(ctx, notifBytes)
+	return c.send(ctx, data)
 }
 
-// send sends a message to the server.
+// send queues one complete JSON-RPC frame. A blocked server stdin cannot hold a
+// caller after its context is cancelled because waiting happens outside writer.
 func (c *client) send(ctx context.Context, data []byte) error {
-	c.writeMu.Lock()
-	defer c.writeMu.Unlock()
+	_, err := c.sendFrame(ctx, data, nil)
+	return err
+}
 
-	header := fmt.Sprintf("Content-Length: %d\r\n\r\n", len(data))
-	if _, err := c.stdin.Write([]byte(header)); err != nil {
-		return fmt.Errorf("write header: %w", err)
+func (c *client) sendFrame(ctx context.Context, data []byte, beforeWrite func() uint64) (uint64, error) {
+	if c.stdin == nil || c.hasExited() {
+		return 0, ErrClientExited
 	}
 
-	if _, err := c.stdin.Write(data); err != nil {
-		return fmt.Errorf("write data: %w", err)
+	c.ensureWriter()
+
+	request := &outbound{data: append([]byte(nil), data...), done: make(chan writeResult, 1), beforeWrite: beforeWrite}
+	select {
+	case c.writer <- request:
+	case <-ctx.Done():
+		return 0, ctx.Err()
+	case <-c.writerDone:
+		return 0, ErrClientExited
 	}
 
-	// Log sent message (truncate long payloads)
-	var msg json.RawMessage
-	if len(data) < 500 && json.Unmarshal(data, &msg) == nil {
-		logger.Ctx(ctx).Debug("→ sent", zap.String("payload", string(data)))
-	} else {
-		logger.Ctx(ctx).Debug("→ sent", zap.Int("size", len(data)))
+	select {
+	case result := <-request.done:
+		return result.generation, result.err
+	case <-ctx.Done():
+		if request.cancel() {
+			return 0, ctx.Err()
+		}
+
+		if request.state.Load() == outboundComplete {
+			result := <-request.done
+			return result.generation, result.err
+		}
+
+		if request.state.Load() == outboundActive {
+			c.failWriter()
+		}
+
+		return 0, ctx.Err()
+	case <-c.writerDone:
+		return 0, ErrClientExited
+	}
+}
+
+func notificationFrame(method string, params any) ([]byte, error) {
+	paramsBytes, err := json.Marshal(params)
+	if err != nil {
+		return nil, fmt.Errorf("marshal params: %w", err)
 	}
 
-	return nil
+	data, err := json.Marshal(Notification{JSONRPC: jsonRPCVersion, Method: method, Params: paramsBytes})
+	if err != nil {
+		return nil, fmt.Errorf("marshal notification: %w", err)
+	}
+
+	return data, nil
 }
 
 // getDiagnostics returns diagnostics for a URI.
@@ -218,203 +214,16 @@ func (c *client) getAllDiagnostics() map[string][]Diagnostic {
 	return result
 }
 
-// readLoop reads responses and notifications from the server.
-func (c *client) readLoop(ctx context.Context) {
-	defer c.cleanupPending()
+func (c *client) ensureWriter() {
+	c.writerOnce.Do(func() {
+		c.writer = make(chan *outbound, lspWriteQueueSize)
 
-	for {
-		var contentLength int
+		c.writerDone = make(chan struct{})
 
-		for {
-			line, err := c.reader.ReadString('\n')
-			if err != nil {
-				logger.Ctx(ctx).Debug("readLoop: exit on read error", zap.Error(err))
-				return
-			}
-
-			line = line[:len(line)-1] // Remove \n
-			if line == "\r" || line == "" {
-				break
-			}
-
-			if n, _ := fmt.Sscanf(line, "Content-Length: %d", &contentLength); n == 1 {
-				continue
-			}
-		}
-
-		body := make([]byte, contentLength)
-		if _, err := io.ReadFull(c.reader, body); err != nil {
-			logger.Ctx(ctx).Debug("readLoop: exit on read body error", zap.Error(err))
+		if c.hasExited() {
+			close(c.writerDone)
 			return
 		}
-
-		logger.Ctx(ctx).Debug("← received", zap.Int("size", len(body)))
-
-		// Try to parse as notification first
-		var notif Notification
-		if err := json.Unmarshal(body, &notif); err == nil && notif.Method != "" {
-			c.handleNotification(ctx, &notif)
-			continue
-		}
-
-		var resp Response
-		if err := json.Unmarshal(body, &resp); err != nil {
-			logger.Ctx(ctx).Debug("← parse error", zap.Error(err))
-			continue
-		}
-
-		c.pendingMu.Lock()
-		ch, ok := c.pending[resp.ID]
-		c.pendingMu.Unlock()
-
-		if ok {
-			logger.Ctx(ctx).Debug("← response", zap.Int64("id", resp.ID), zap.Bool("hasError", resp.Error != nil))
-
-			if resp.Error != nil {
-				ch <- nil
-			} else {
-				ch <- resp.Result
-			}
-		}
-	}
-}
-
-// cleanupPending closes all pending channels to unblock in-flight calls.
-func (c *client) cleanupPending() {
-	c.pendingMu.Lock()
-	defer c.pendingMu.Unlock()
-
-	for id, ch := range c.pending {
-		close(ch)
-		delete(c.pending, id)
-	}
-}
-
-// handleNotification handles LSP notifications.
-func (c *client) handleNotification(ctx context.Context, notif *Notification) {
-	if notif.Method != "textDocument/publishDiagnostics" {
-		return
-	}
-
-	var params PublishDiagnosticsParams
-	if err := json.Unmarshal(notif.Params, &params); err != nil {
-		logger.Ctx(ctx).Debug("publishDiagnostics: parse error", zap.Error(err))
-		return
-	}
-
-	c.diagnosticsMu.Lock()
-	oldCount := len(c.diagnostics[params.URI])
-	c.diagnostics[params.URI] = params.Diagnostics
-	newCount := len(params.Diagnostics)
-
-	c.diagnosticsMu.Unlock()
-
-	logger.Ctx(ctx).Info("publishDiagnostics",
-		zap.String("uri", params.URI),
-		zap.Int("version", params.Version),
-		zap.Int("count", newCount),
-		zap.Int("oldCount", oldCount),
-	)
-	logger.Ctx(ctx).Debug("publishDiagnostics: diagnostics",
-		zap.String("uri", params.URI),
-		zap.Any("diagnostics", params.Diagnostics),
-	)
-}
-
-// startWithCommand starts the client with an existing command.
-func (c *client) startWithCommand(ctx context.Context, cmd *exec.Cmd, root string) error {
-	c.rootPath = root
-	c.cmd = cmd
-
-	stdin, err := cmd.StdinPipe()
-	if err != nil {
-		return fmt.Errorf("stdin pipe: %w", err)
-	}
-
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		return fmt.Errorf("stdout pipe: %w", err)
-	}
-
-	if err := cmd.Start(); err != nil {
-		return fmt.Errorf("start server: %w", err)
-	}
-
-	c.stdin = stdin
-	c.stdout = stdout
-	c.reader = bufio.NewReader(stdout)
-
-	// readLoop outlives the bounded handshake ctx; strip cancellation but keep the
-	// logger value so a handshake deadline can't kill the response reader.
-	go c.readLoop(context.WithoutCancel(ctx))
-
-	initParams := map[string]any{
-		"processId": nil,
-		"rootPath":  root,
-		"rootUri":   "file://" + filepath.ToSlash(root),
-		"capabilities": map[string]any{
-			lspKeyTextDocument: map[string]any{
-				"synchronization": map[string]bool{
-					lspKeyDynamicRegistration: false,
-					"willSave":                true,
-					"willSaveWaitUntil":       true,
-					"didSave":                 true,
-				},
-				"completion": map[string]any{
-					lspKeyDynamicRegistration: false,
-				},
-				"hover": map[string]any{
-					lspKeyDynamicRegistration: false,
-				},
-				"definition": map[string]any{
-					lspKeyDynamicRegistration: false,
-					"linkSupport":             true,
-				},
-				"documentSymbol": map[string]any{
-					lspKeyDynamicRegistration: false,
-				},
-			},
-		},
-		"workspaceFolders": nil,
-	}
-
-	var result map[string]any
-	if err := c.call(ctx, "initialize", initParams, &result); err != nil {
-		return fmt.Errorf("initialize: %w", err)
-	}
-
-	if err := c.notify(ctx, "initialized", map[string]any{}); err != nil {
-		return fmt.Errorf("initialized: %w", err)
-	}
-
-	return nil
-}
-
-// pathToURI converts a file path to a URI.
-func pathToURI(file string) string {
-	abs, _ := filepath.Abs(file)
-	return "file://" + filepath.ToSlash(abs)
-}
-
-// languageID returns the language ID for a file.
-func languageID(file string) string {
-	ext := strings.ToLower(filepath.Ext(file))
-	switch ext {
-	case ".go":
-		return "go"
-	case ".ts", ".tsx":
-		return "typescript"
-	case ".js", ".jsx", ".mjs":
-		return "javascript"
-	case ".yaml", ".yml":
-		return "yaml"
-	case ".rs":
-		return "rust"
-	case ".py", ".pyi":
-		return "python"
-	case ".lua":
-		return "lua"
-	default:
-		return ext[1:]
-	}
+		go c.writeLoop()
+	})
 }

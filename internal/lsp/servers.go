@@ -3,38 +3,77 @@ package lsp
 import (
 	"context"
 	"os/exec"
+	"path/filepath"
+	"strings"
+)
+
+const (
+	languageIDCSharp = "csharp"
+	stdioArg         = "--stdio"
 )
 
 type serverConfig struct {
-	ID         string
-	Extensions []string
-	RootFinder func(workDir, file string) (string, error)
-	Spawn      func(ctx context.Context, root string) (*exec.Cmd, error)
+	ID            string
+	LanguageID    string
+	LanguageIDFor func(path string) string
+	Extensions    []string
+	PathNames     []string
+	Args          []string
+	RootFinder    func(workDir, file string) (string, error)
+	Spawn         func(ctx context.Context, root string) (*exec.Cmd, error)
 }
 
-func defaultServers(coagentBin string) []serverConfig {
+func (s serverConfig) languageID(path string) string {
+	if s.LanguageIDFor != nil {
+		return s.LanguageIDFor(path)
+	}
+
+	return s.LanguageID
+}
+
+func (s serverConfig) matches(path string) bool {
+	ext := strings.ToLower(filepath.Ext(path))
+	base := filepath.Base(path)
+
+	for _, entry := range s.Extensions {
+		isExtension := strings.HasPrefix(entry, ".")
+		if isExtension && strings.EqualFold(ext, entry) {
+			return true
+		}
+
+		if !isExtension && strings.EqualFold(base, entry) {
+			return true
+		}
+	}
+
+	return false
+}
+
+func defaultServers() []serverConfig {
 	return []serverConfig{
-		goPLS(coagentBin),
-		typeScript(coagentBin),
-		yamlLS(coagentBin),
-		rustAnalyzer(coagentBin),
-		pyright(coagentBin),
-		luaLS(coagentBin),
-		jsonLS(coagentBin),
+		goPLS(),
+		typeScript(),
+		yamlLS(),
+		rustAnalyzer(),
+		pyright(),
+		luaLS(),
+		jsonLS(),
 		cSharp(),
 		cClangd(),
-		rubyLSP(coagentBin),
-		bashLS(coagentBin),
-		dockerfileLS(coagentBin),
-		terraformLS(coagentBin),
-		phpIntelephense(coagentBin),
+		rubyLSP(),
+		bashLS(),
+		dockerfileLS(),
+		terraformLS(),
+		phpIntelephense(),
 	}
 }
 
-func goPLS(coagentBin string) serverConfig {
+func goPLS() serverConfig {
 	return serverConfig{
 		ID:         "gopls",
+		LanguageID: "go",
 		Extensions: []string{".go"},
+		PathNames:  []string{"gopls"},
 		RootFinder: func(workDir, file string) (string, error) {
 			// Look for go.work first
 			if root := findNearestRoot(workDir, file, []string{"go.work"}); root != "" {
@@ -43,127 +82,87 @@ func goPLS(coagentBin string) serverConfig {
 			// Fall back to go.mod
 			return findNearestRoot(workDir, file, []string{"go.mod", "go.sum"}), nil
 		},
-		Spawn: func(ctx context.Context, root string) (*exec.Cmd, error) {
-			bin, err := findOrInstallGopls(ctx, coagentBin)
-			if err != nil {
-				return nil, err
-			}
-
-			return exec.CommandContext(ctx, bin), nil
-		},
 	}
 }
 
-func typeScript(coagentBin string) serverConfig {
+func typeScript() serverConfig {
 	return serverConfig{
-		ID:         "typescript",
-		Extensions: []string{".ts", ".tsx", ".js", ".jsx", ".mjs"},
+		ID:            "typescript-language-server",
+		LanguageIDFor: languageIDTypeScript,
+		Extensions:    []string{".ts", ".tsx", ".js", ".jsx", ".mjs"},
+		PathNames:     []string{"typescript-language-server"},
+		Args:          []string{stdioArg},
 		RootFinder: func(workDir, file string) (string, error) {
 			return findNearestRoot(workDir, file, []string{
 				"package-lock.json", "bun.lockb", "bun.lock", "pnpm-lock.yaml", "yarn.lock",
 			}), nil
 		},
-		Spawn: func(ctx context.Context, root string) (*exec.Cmd, error) {
-			bin, err := findOrInstallTypescript(ctx, coagentBin)
-			if err != nil {
-				return nil, err
-			}
-
-			return exec.CommandContext(ctx, bin, "--stdio"), nil
-		},
 	}
 }
 
-func yamlLS(coagentBin string) serverConfig {
+func yamlLS() serverConfig {
 	return serverConfig{
-		ID:         "yaml-ls",
+		ID:         "yaml-language-server",
+		LanguageID: "yaml",
 		Extensions: []string{".yaml", ".yml"},
+		PathNames:  []string{"yaml-language-server"},
+		Args:       []string{stdioArg},
 		RootFinder: func(workDir, file string) (string, error) {
 			return findNearestRoot(workDir, file, []string{
 				"package-lock.json", "bun.lockb", "bun.lock", "pnpm-lock.yaml", "yarn.lock",
 			}), nil
 		},
-		Spawn: func(ctx context.Context, root string) (*exec.Cmd, error) {
-			bin, args, err := findOrInstallYamlLS(ctx, coagentBin)
-			if err != nil {
-				return nil, err
-			}
-
-			return exec.CommandContext(ctx, bin, args...), nil
-		},
 	}
 }
 
-func rustAnalyzer(coagentBin string) serverConfig {
+func rustAnalyzer() serverConfig {
 	return serverConfig{
-		ID:         rustAnalyzerName,
+		ID:         "rust-analyzer",
+		LanguageID: "rust",
 		Extensions: []string{".rs"},
+		PathNames:  []string{"rust-analyzer"},
 		RootFinder: func(workDir, file string) (string, error) {
 			return findNearestRoot(workDir, file, []string{"Cargo.toml"}), nil
 		},
-		Spawn: func(ctx context.Context, root string) (*exec.Cmd, error) {
-			bin, err := findOrInstallRustAnalyzer(ctx, coagentBin)
-			if err != nil {
-				return nil, err
-			}
-
-			return exec.CommandContext(ctx, bin), nil
-		},
 	}
 }
 
-func pyright(coagentBin string) serverConfig {
+func pyright() serverConfig {
 	return serverConfig{
 		ID:         "pyright",
+		LanguageID: "python",
 		Extensions: []string{".py", ".pyi"},
+		PathNames:  []string{"pyright-langserver"},
+		Args:       []string{stdioArg},
 		RootFinder: func(workDir, file string) (string, error) {
 			return findNearestRoot(workDir, file, []string{
 				"pyproject.toml", "setup.py", "setup.cfg", "requirements.txt", "Pipfile",
 			}), nil
 		},
-		Spawn: func(ctx context.Context, root string) (*exec.Cmd, error) {
-			bin, err := findOrInstallPyright(ctx, coagentBin)
-			if err != nil {
-				return nil, err
-			}
-
-			return exec.CommandContext(ctx, bin, "--stdio"), nil
-		},
 	}
 }
 
-func luaLS(coagentBin string) serverConfig {
+func luaLS() serverConfig {
 	return serverConfig{
-		ID:         "lua-ls",
+		ID:         "lua-language-server",
+		LanguageID: "lua",
 		Extensions: []string{".lua"},
+		PathNames:  []string{"lua-language-server"},
 		RootFinder: func(workDir, file string) (string, error) {
 			return workDir, nil
-		},
-		Spawn: func(ctx context.Context, root string) (*exec.Cmd, error) {
-			bin, err := findOrInstallLuaLS(ctx, coagentBin)
-			if err != nil {
-				return nil, err
-			}
-
-			return exec.CommandContext(ctx, bin), nil
 		},
 	}
 }
 
-func jsonLS(coagentBin string) serverConfig {
+func jsonLS() serverConfig {
 	return serverConfig{
-		ID:         "json-ls",
+		ID:         "vscode-json-language-server",
+		LanguageID: "json",
 		Extensions: []string{".json"},
+		PathNames:  []string{"vscode-json-language-server"},
+		Args:       []string{stdioArg},
 		RootFinder: func(workDir, file string) (string, error) {
 			return workDir, nil
-		},
-		Spawn: func(ctx context.Context, root string) (*exec.Cmd, error) {
-			bin, err := findOrInstallJSONLS(ctx, coagentBin)
-			if err != nil {
-				return nil, err
-			}
-
-			return exec.CommandContext(ctx, bin, "--stdio"), nil
 		},
 	}
 }
@@ -171,125 +170,110 @@ func jsonLS(coagentBin string) serverConfig {
 func cSharp() serverConfig {
 	return serverConfig{
 		ID:         "csharp",
+		LanguageID: languageIDCSharp,
 		Extensions: []string{".cs"},
+		PathNames:  []string{"omnisharp"},
+		Args:       []string{"-lsp"},
 		RootFinder: func(workDir, file string) (string, error) {
 			return findNearestRoot(workDir, file, []string{"*.csproj", "*.sln"}), nil
-		},
-		Spawn: func(ctx context.Context, root string) (*exec.Cmd, error) {
-			bin := "omnisharp"
-			if b, err := exec.LookPath(bin); err == nil {
-				bin = b
-			}
-
-			return exec.CommandContext(ctx, bin, "-lsp"), nil
 		},
 	}
 }
 
 func cClangd() serverConfig {
 	return serverConfig{
-		ID:         "clangd",
-		Extensions: []string{".c", ".cpp", ".h", ".hpp", ".cc", ".cxx"},
+		ID:            "clangd",
+		LanguageIDFor: languageIDC,
+		Extensions:    []string{".c", ".cpp", ".h", ".hpp", ".cc", ".cxx"},
+		PathNames:     []string{"clangd"},
 		RootFinder: func(workDir, file string) (string, error) {
 			return findNearestRoot(workDir, file, []string{"compile_commands.json", ".clangd", "CMakeLists.txt"}), nil
 		},
-		Spawn: func(ctx context.Context, root string) (*exec.Cmd, error) {
-			bin, err := findOrInstallClangd()
-			if err != nil {
-				return nil, err
-			}
-
-			return exec.CommandContext(ctx, bin), nil
-		},
 	}
 }
 
-func rubyLSP(coagentBin string) serverConfig {
+func languageIDTypeScript(path string) string {
+	switch strings.ToLower(filepath.Ext(path)) {
+	case ".ts":
+		return "typescript"
+	case ".tsx":
+		return "typescriptreact"
+	case ".jsx":
+		return "javascriptreact"
+	default:
+		return "javascript"
+	}
+}
+
+func languageIDC(path string) string {
+	switch strings.ToLower(filepath.Ext(path)) {
+	case ".c", ".h":
+		return "c"
+	default:
+		return "cpp"
+	}
+}
+
+func rubyLSP() serverConfig {
 	return serverConfig{
-		ID:         rubyLSPName,
+		ID:         "ruby-lsp",
+		LanguageID: "ruby",
 		Extensions: []string{".rb", ".rake", ".gemspec", ".ru"},
+		PathNames:  []string{"ruby-lsp"},
 		RootFinder: func(workDir, file string) (string, error) {
 			return findNearestRoot(workDir, file, []string{"Gemfile"}), nil
 		},
-		Spawn: func(ctx context.Context, root string) (*exec.Cmd, error) {
-			bin, err := findOrInstallRubyLSP(ctx, coagentBin)
-			if err != nil {
-				return nil, err
-			}
-
-			return exec.CommandContext(ctx, bin), nil
-		},
 	}
 }
 
-func bashLS(coagentBin string) serverConfig {
+func bashLS() serverConfig {
 	return serverConfig{
-		ID:         "bash-ls",
+		ID:         "bash-language-server",
+		LanguageID: "shellscript",
 		Extensions: []string{".sh", ".bash"},
+		PathNames:  []string{"bash-language-server"},
+		Args:       []string{"start"},
 		RootFinder: func(workDir, file string) (string, error) {
 			return workDir, nil
 		},
-		Spawn: func(ctx context.Context, root string) (*exec.Cmd, error) {
-			bin, err := findOrInstallBashLS(ctx, coagentBin)
-			if err != nil {
-				return nil, err
-			}
-
-			return exec.CommandContext(ctx, bin, "start"), nil
-		},
 	}
 }
 
-func dockerfileLS(coagentBin string) serverConfig {
+func dockerfileLS() serverConfig {
 	return serverConfig{
 		ID:         "dockerfile-ls",
+		LanguageID: "dockerfile",
 		Extensions: []string{"Dockerfile", ".dockerfile"},
+		PathNames:  []string{"docker-langserver"},
+		Args:       []string{stdioArg},
 		RootFinder: func(workDir, file string) (string, error) {
 			return workDir, nil
 		},
-		Spawn: func(ctx context.Context, root string) (*exec.Cmd, error) {
-			bin, err := findOrInstallDockerfileLS(ctx, coagentBin)
-			if err != nil {
-				return nil, err
-			}
-
-			return exec.CommandContext(ctx, bin, "--stdio"), nil
-		},
 	}
 }
 
-func terraformLS(coagentBin string) serverConfig {
+func terraformLS() serverConfig {
 	return serverConfig{
-		ID:         terraformLSName,
+		ID:         "terraform-ls",
+		LanguageID: "terraform",
 		Extensions: []string{".tf", ".tfvars"},
+		PathNames:  []string{"terraform-ls"},
+		Args:       []string{"serve"},
 		RootFinder: func(workDir, file string) (string, error) {
-			return findNearestRoot(workDir, file, []string{".terraform", "*.tf"}), nil
-		},
-		Spawn: func(ctx context.Context, root string) (*exec.Cmd, error) {
-			bin, err := findOrInstallTerraformLS(ctx, coagentBin)
-			if err != nil {
-				return nil, err
-			}
-
-			return exec.CommandContext(ctx, bin, "serve"), nil
+			return findNearestRootMarkers(workDir, file, []rootMarker{exactDir(".terraform"), filePattern("*.tf")}), nil
 		},
 	}
 }
 
-func phpIntelephense(coagentBin string) serverConfig {
+func phpIntelephense() serverConfig {
 	return serverConfig{
 		ID:         "php-intelephense",
+		LanguageID: "php",
 		Extensions: []string{".php"},
+		PathNames:  []string{"intelephense"},
+		Args:       []string{stdioArg},
 		RootFinder: func(workDir, file string) (string, error) {
 			return findNearestRoot(workDir, file, []string{"composer.json", "composer.lock"}), nil
-		},
-		Spawn: func(ctx context.Context, root string) (*exec.Cmd, error) {
-			bin, args, err := findOrInstallIntelephense(ctx, coagentBin)
-			if err != nil {
-				return nil, err
-			}
-
-			return exec.CommandContext(ctx, bin, args...), nil
 		},
 	}
 }

@@ -8,7 +8,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
 
 	"go.uber.org/zap"
 
@@ -98,7 +97,13 @@ func (t *editTool) Execute(ctx context.Context, params json.RawMessage) (*tool.R
 	log.Info("applied", zap.String("filePath", filePath))
 
 	output := t.buildOutput(newContent, finalRanges, hasReplaceAll)
-	output += t.lspDiagnostics(ctx, filePath, log)
+
+	diagnostics, err := t.lspDiagnostics(ctx, filePath, log)
+	if err != nil {
+		return nil, err
+	}
+
+	output += diagnostics
 
 	title := filePath
 
@@ -192,9 +197,9 @@ func (t *editTool) buildOutput(newContent string, finalRanges []editRange, hasRe
 	return output
 }
 
-func (t *editTool) lspDiagnostics(ctx context.Context, filePath string, log *zap.Logger) string {
+func (t *editTool) lspDiagnostics(ctx context.Context, filePath string, log *zap.Logger) (string, error) {
 	if t.lspMgr == nil {
-		return ""
+		return "", nil
 	}
 
 	log.Debug("edit: checking LSP diagnostics",
@@ -202,9 +207,15 @@ func (t *editTool) lspDiagnostics(ctx context.Context, filePath string, log *zap
 		zap.String("workDir", t.workDir),
 	)
 
-	_ = t.lspMgr.TouchFile(ctx, t.workDir, filePath)
+	if _, err := t.lspMgr.GetDiagnostics(ctx, t.workDir, filePath); err != nil {
+		if ctx.Err() != nil {
+			return "", ctx.Err()
+		}
 
-	time.Sleep(150 * time.Millisecond)
+		log.Debug("edit: LSP diagnostics unavailable", zap.Error(err))
+
+		return "", nil
+	}
 
 	diagnostics := t.lspMgr.GetAllDiagnostics(ctx, t.workDir, 20, 5)
 	log.Debug("edit: LSP diagnostics",
@@ -213,13 +224,13 @@ func (t *editTool) lspDiagnostics(ctx context.Context, filePath string, log *zap
 	)
 
 	if len(diagnostics) == 0 {
-		return ""
+		return "", nil
 	}
 
 	diagStr := lsp.FormatDiagnostics(diagnostics)
 	if diagStr == "" {
-		return ""
+		return "", nil
 	}
 
-	return "\n\n" + diagStr
+	return "\n\n" + diagStr, nil
 }

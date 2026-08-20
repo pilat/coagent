@@ -29,6 +29,9 @@ func (p *recordingProvider) Shell() string                           { return ""
 func (p *recordingProvider) Fingerprint(string) string               { return "" }
 func (p *recordingProvider) Invalidate(string)                       {}
 func (p *recordingProvider) Close() error                            { return nil }
+func (p *recordingProvider) LookPath(context.Context, string, []string) (string, error) {
+	return "", errRecorded
+}
 
 func (p *recordingProvider) WrapExec(
 	_ context.Context,

@@ -72,9 +72,6 @@ func MainFunc() {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	// Give gopls time to start up.
-	time.Sleep(500 * time.Millisecond)
-
 	t.Run("Definition", func(t *testing.T) {
 		locs, err := mgr.Definition(ctx, tmpDir, testFile, 4, 5)
 		require.NoError(t, err)
@@ -133,7 +130,7 @@ func MainFunc() {
 	})
 
 	t.Run("WorkspaceSymbol", func(t *testing.T) {
-		symbols, err := mgr.WorkspaceSymbol(ctx, tmpDir, "Greeter")
+		symbols, err := mgr.WorkspaceSymbol(ctx, tmpDir, testFile, "Greeter")
 		require.NoError(t, err)
 		assert.NotEmpty(t, symbols, "should find Greeter in workspace symbols")
 	})
