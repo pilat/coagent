@@ -32,10 +32,10 @@ func init() {
 	L = zap.New(newRedactingCore(core))
 }
 
-// WithHumanOutput adds the colorful column encoder writing to w.
-func WithHumanOutput(w io.Writer) Option {
+// WithConsoleOutput adds Zap's plain-text console encoder writing to w.
+func WithConsoleOutput(w io.Writer) Option {
 	return func(c *initConfig) {
-		enc := newHumanEncoder()
+		enc := zapcore.NewConsoleEncoder(zap.NewDevelopmentEncoderConfig())
 		core := zapcore.NewCore(enc, zapcore.AddSync(w), atom)
 		c.cores = append(c.cores, core)
 	}

@@ -111,7 +111,7 @@ type startupState struct {
 // bootDaemon loads configuration and runs the daemon in the foreground. This is
 // what the service unit executes; every other verb is a socket client.
 func bootDaemon(ctx context.Context) int {
-	logger.Init(logger.WithHumanOutput(os.Stderr), logger.WithSessionPrefix())
+	logger.Init(logger.WithConsoleOutput(os.Stderr), logger.WithSessionPrefix())
 
 	ops, err := newConfigOps()
 	if err != nil {
