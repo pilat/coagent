@@ -100,5 +100,5 @@ func runOnboarding(ctx context.Context) int {
 // stderr for the daemon's benefit; a CLI talks to its user with fmt, and a chat
 // REPL cannot share the terminal with a log stream.
 func silenceLogs() {
-	logger.Init(logger.WithHumanOutput(io.Discard))
+	logger.Init(logger.WithConsoleOutput(io.Discard))
 }

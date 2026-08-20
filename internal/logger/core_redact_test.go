@@ -102,7 +102,7 @@ func TestRedactHelper(t *testing.T) {
 	assert.Equal(t, "start [REDACTED] failed", Redact("start s3cr3t-token failed"))
 }
 
-func TestInitPipelineRedacts(t *testing.T) {
+func TestInitConsolePipelineRedacts(t *testing.T) {
 	prev := L
 	t.Cleanup(func() {
 		L = prev
@@ -110,7 +110,7 @@ func TestInitPipelineRedacts(t *testing.T) {
 	})
 
 	var buf bytes.Buffer
-	Init(WithHumanOutput(&buf), WithSessionPrefix())
+	Init(WithConsoleOutput(&buf), WithSessionPrefix())
 	SetRedactedValues([]string{"s3cr3t-token"})
 
 	tokenErr := &url.Error{
@@ -122,6 +122,7 @@ func TestInitPipelineRedacts(t *testing.T) {
 
 	out := buf.String()
 	assert.NotContains(t, out, "s3cr3t-token")
+	assert.Contains(t, out, "WARN\tgetupdates_failed")
 	assert.Contains(t, out, "[REDACTED]")
 }
 
