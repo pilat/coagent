@@ -91,7 +91,7 @@ func (s *svc) handleSetModel(modelID, reasoning string) error {
 	newClient.SetSessionID(sessionID)
 
 	// promptBuilder is self-synchronized, so this needs no modelMu.
-	s.prompt.setModelsSection(buildModelsSection(s.cfg.UnifiedConfig, modelID))
+	s.prompt.setModelsSection(buildModelsSection(modelID))
 
 	// Swap the triplet under modelMu (the loop reads it via currentLLM /
 	// buildSessionStatus); close the old client outside the lock — Close is IO.

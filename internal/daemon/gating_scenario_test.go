@@ -16,7 +16,7 @@ import (
 // A subagent must never reach the control plane, whatever its allowlist says.
 var controlPlaneTools = []string{tool.IDSleep, tool.IDTask, tool.IDSchedule}
 
-var configPlaneTools = []string{tool.IDSetProvider, tool.IDSetDefaultModel}
+var configPlaneTools = []string{tool.IDSetProvider, tool.IDSetDefaultModel, tool.IDSetModelTags}
 
 const scoutAgentFile = `---
 name: scout

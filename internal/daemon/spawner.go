@@ -12,6 +12,9 @@ import (
 // Spawn creates a child session + durable link and starts it running in the
 // background. It never waits: the child id is returned immediately.
 func (s *svc) Spawn(ctx context.Context, req spawnRequest) (childResult, error) {
+	s.treeMu.Lock()
+	defer s.treeMu.Unlock()
+
 	childID, workDir, projectID, err := s.createChildSession(ctx, req)
 	if err != nil {
 		return childResult{}, err
@@ -255,16 +258,13 @@ func (s *svc) resolveChildEffort(model, requested, inherited string) (string, er
 	return level, nil
 }
 
-// resolveChildModel picks the child model: explicit req → agent type override →
-// daemon subagent default → parent's model (Appendix G5).
+// resolveChildModel picks the child model: explicit request → agent type override → parent model.
 func (s *svc) resolveChildModel(req spawnRequest, parentRec *sessionstore.SessionRecord) string {
 	switch {
 	case req.Model != "":
 		return req.Model
 	case req.AgentModel != "":
 		return req.AgentModel
-	case s.subagentModel != "":
-		return s.subagentModel
 	default:
 		return parentRec.Model
 	}

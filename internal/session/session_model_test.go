@@ -387,27 +387,36 @@ func TestHandleSetModelWaitsForInFlightChatBeforeClosingOldClient(t *testing.T) 
 	}
 }
 
-func TestBuildModelsSection_MarksCurrentModel(t *testing.T) {
-	uc := &config.UnifiedConfig{
-		Models: []config.ModelEntry{
-			{ID: "m1", Name: "Model One", ContextWindow: 100000},
-			{ID: "m2", Name: "Model Two"},
+func TestBuildModelsSection_OnlyNamesCurrentModel(t *testing.T) {
+	section := buildModelsSection("some-model")
+
+	assert.Equal(t, "\n- Model: some-model", section)
+}
+
+func TestHandleSetModel_DoesNotExposeOtherConfiguredModels(t *testing.T) {
+	uc := unifiedCfgWithModels("new-model")
+	uc.Models[0].ContextWindow = 100_000
+	uc.Models = append(uc.Models, config.ModelEntry{
+		ID: "hidden-model", Name: "Hidden", Provider: "openrouter", ContextWindow: 200_000,
+	})
+
+	s := &svc{
+		cfg:       &config.Config{UnifiedConfig: uc},
+		llmClient: &mockLLMClientTracked{model: "old-model"},
+		model:     "old-model",
+		prompt:    newPromptBuilder("", "", buildModelsSection("old-model")),
+		ms:        newMessageStore(nil, 0),
+		newLLMWithModel: func(_ *config.Config, _ string) (llm.Client, error) {
+			return &mockLLMClientTracked{model: "new-model"}, nil
 		},
 	}
 
-	section := buildModelsSection(uc, "m1")
+	require.NoError(t, s.handleSetModel("new-model", ""))
 
-	assert.Contains(t, section, "m1")
-	assert.Contains(t, section, "(current)")
-	assert.Contains(t, section, "100k context")
-	assert.Contains(t, section, "- Model: m1")
-}
-
-func TestBuildModelsSection_NilUnifiedConfig(t *testing.T) {
-	section := buildModelsSection(nil, "some-model")
-
-	assert.NotContains(t, section, "Available Models")
-	assert.Contains(t, section, "- Model: some-model")
+	prompt := s.prompt.systemPrompt()
+	assert.Contains(t, prompt, "- Model: new-model")
+	assert.NotContains(t, prompt, "hidden-model")
+	assert.NotContains(t, prompt, "context")
 }
 
 // mockLLMWithSessionTracking tracks SetSessionID calls for model switch tests.

@@ -49,12 +49,19 @@ func newTaskTool(
 		subagentTypes = append(subagentTypes, subagentInfo{Name: string(cfg.Name), Description: cfg.Description})
 	}
 
+	candidates := make([]modelInfo, 0, len(modelCatalog))
+	for _, model := range modelCatalog {
+		if len(model.Tags) != 0 {
+			candidates = append(candidates, model)
+		}
+	}
+
 	return &taskTool{
 		spawner:       sp,
 		parentID:      parentID,
 		set:           set,
 		subagentTypes: subagentTypes,
-		modelCatalog:  modelCatalog,
+		modelCatalog:  candidates,
 	}
 }
 
@@ -69,18 +76,14 @@ func (t *taskTool) Description() string {
 		fmt.Fprintf(&typeList, "- %s: %s\n", info.Name, info.Description)
 	}
 
-	var modelList string
+	var b strings.Builder
+	b.WriteString("\nAvailable models for subagents:\n- inherit (default): use the current session model\n")
 
-	if len(models) > 0 {
-		var b strings.Builder
-		b.WriteString("\nAvailable models for subagents:\n")
-
-		for _, m := range models {
-			fmt.Fprintf(&b, "- %s: %s\n", m.ID, m.Name)
-		}
-
-		modelList = b.String()
+	for _, m := range models {
+		fmt.Fprintf(&b, "- %s: %s (tags: %s)\n", m.ID, m.Name, strings.Join(m.Tags, ", "))
 	}
+
+	modelList := b.String()
 
 	return fmt.Sprintf(`Launch a subagent to work autonomously with its own context and tools.
 
@@ -137,7 +140,7 @@ func (t *taskTool) Parameters() json.RawMessage {
 			},
 			"model": {
 				"type": "string",
-				"description": "Model ID for the subagent (from available models list). If omitted, inherits current session model."
+				"description": "Optional tagged model ID from the available candidates. If omitted, inherits current session model."
 			},
 			"timeout": {
 				"type": "integer",
@@ -266,6 +269,10 @@ func (t *taskTool) validateParams(p TaskParams) error {
 		return errors.New("subagent_type is required")
 	}
 
+	if p.Model != "" && !t.isCandidateModel(p.Model) {
+		return fmt.Errorf("model %q is not an advertised tagged subagent candidate", p.Model)
+	}
+
 	for _, info := range t.subagentTypes {
 		if info.Name == p.SubagentType {
 			return nil
@@ -278,6 +285,16 @@ func (t *taskTool) validateParams(p TaskParams) error {
 	}
 
 	return fmt.Errorf("invalid subagent_type: %s (available: %s)", p.SubagentType, strings.Join(typeNames, ", "))
+}
+
+func (t *taskTool) isCandidateModel(id string) bool {
+	for _, model := range t.modelCatalog {
+		if model.ID == id {
+			return true
+		}
+	}
+
+	return false
 }
 
 // agentModel returns the agent type's configured model override, or "" when the

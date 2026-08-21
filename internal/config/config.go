@@ -24,8 +24,7 @@ const (
 
 type (
 	Config struct {
-		Model         string // current session model — resolved from UnifiedConfig.Models[0] at runtime
-		SubagentModel string `env:"SUBAGENT_MODEL"` // optional: default model for subagents
+		Model string // current session model — resolved from UnifiedConfig.Models[0] at runtime
 
 		// CLI-only fields (not loaded from env, set by main.go)
 		WorkDir   string

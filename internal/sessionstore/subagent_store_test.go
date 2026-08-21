@@ -134,6 +134,27 @@ func TestStore_CreateSubagentWithLinkCommitsAggregate(t *testing.T) {
 	assert.Equal(t, "inspect the repository", input.RawContent)
 }
 
+func TestStore_CreateSubagentWithLinkRejectsStoppingParent(t *testing.T) {
+	s, db, projectID := newTestStore(t)
+	ctx := context.Background()
+
+	parent, err := s.CreateSession(ctx, projectID, "parent-model", "", nil)
+	require.NoError(t, err)
+	require.NoError(t, s.UpdateSessionStatus(ctx, parent.ID, SessionStatusStopping))
+
+	_, err = s.CreateSubagentWithLink(ctx, SubagentCreate{
+		ProjectID: projectID, ParentID: parent.ID, RootID: parent.ID,
+		Model: "child-model", TaskCallID: "task-1", LinkState: "spawned",
+	})
+	require.ErrorContains(t, err, "not accepting subagents")
+
+	var children int
+	require.NoError(t, db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM sessions WHERE parent_id = ?`, parent.ID,
+	).Scan(&children))
+	assert.Zero(t, children)
+}
+
 func TestStore_CreateSubagentWithLinkRollsBackAggregateOnInboxFailure(t *testing.T) {
 	s, db, projectID := newTestStore(t)
 	ctx := context.Background()

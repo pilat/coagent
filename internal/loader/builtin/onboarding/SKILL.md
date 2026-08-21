@@ -69,6 +69,13 @@ The first model in the list is the default new sessions run on. `set_default_mod
 reorders it. Call it only after the `add_model` verdict. `remove_model` refuses
 to remove the default unless `new_default` names its replacement.
 
+After a successful `add_model` verdict, tell the user the model is available through
+`/model`. If they want agents to consider it for autonomous subagent work, offer
+`set_model_tags` with user-defined examples such as `fast`, `strong`, `coding`, or
+`review`. Tags are lowercase ASCII letters, digits, `_`, and `-`; they are hints,
+not built-in routing behavior. `set_model_tags` replaces the complete tag list, and
+an empty list removes all tags. The default model may be tagged or untagged.
+
 ## Connecting Telegram
 
 Complete the numbered steps in order. Do not combine the tool calls.

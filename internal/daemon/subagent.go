@@ -39,6 +39,7 @@ type subagentInfo struct {
 type modelInfo struct {
 	ID   string
 	Name string
+	Tags []string
 }
 
 // spawner creates and tracks subagent sessions. The daemon svc implements it;

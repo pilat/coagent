@@ -23,6 +23,11 @@ type idParams struct {
 	ID string `json:"id"`
 }
 
+type setModelTagsParams struct {
+	ID   string   `json:"id"`
+	Tags []string `json:"tags"`
+}
+
 func (t *addModelTool) ID() string { return tool.IDAddModel }
 
 func (t *addModelTool) Description() string {
@@ -110,4 +115,34 @@ func (t *setDefaultModelTool) Execute(ctx context.Context, params json.RawMessag
 	}
 
 	return t.apply(ctx, tool.IDSetDefaultModel, configops.SetDefaultModel(p.ID))
+}
+
+func (t *setModelTagsTool) ID() string { return tool.IDSetModelTags }
+
+func (t *setModelTagsTool) Description() string {
+	return "Replace a configured model's complete list of user-defined tags. Tags are lowercase letters, digits, _ or -; an empty list removes all tags. " + restartNotice
+}
+
+func (t *setModelTagsTool) Parameters() json.RawMessage {
+	return json.RawMessage(`{
+  "type": "object",
+  "properties": {
+    "id": {"type": "string", "description": "Configured model id."},
+    "tags": {"type": "array", "items": {"type": "string"}, "description": "Complete replacement tag list; empty removes all tags."}
+  },
+  "required": ["id", "tags"]
+}`)
+}
+
+func (t *setModelTagsTool) Execute(ctx context.Context, params json.RawMessage) (*tool.Result, error) {
+	var p setModelTagsParams
+	if err := json.Unmarshal(params, &p); err != nil {
+		return nil, fmt.Errorf("parse parameters: %w", err)
+	}
+
+	if p.ID == "" {
+		return nil, errors.New("id is required")
+	}
+
+	return t.apply(ctx, tool.IDSetModelTags, configops.SetModelTags(p.ID, p.Tags))
 }

@@ -301,7 +301,7 @@ func TestRegisterConfigTools_SystemProjectRootOnly(t *testing.T) {
 	require.NoError(t, err)
 	ids := []string{
 		tool.IDSetProvider, tool.IDRemoveProvider, tool.IDSetManager, tool.IDRemoveManager,
-		tool.IDAddModel, tool.IDRemoveModel, tool.IDSetDefaultModel,
+		tool.IDAddModel, tool.IDRemoveModel, tool.IDSetDefaultModel, tool.IDSetModelTags,
 	}
 	tests := []struct {
 		name string
@@ -495,6 +495,12 @@ func TestConfigTool_ParamsReachTheConfig(t *testing.T) {
 			want:   "id: claude-haiku-4-5",
 		},
 		{
+			name:   "set_model_tags",
+			id:     tool.IDSetModelTags,
+			params: `{"id":"claude-opus-5","tags":["coding","review","coding"]}`,
+			want:   "tags:\n        - coding\n        - review",
+		},
+		{
 			name:   "remove_model with a replacement default",
 			id:     tool.IDRemoveModel,
 			params: `{"id":"claude-sonnet-5","new_default":"claude-opus-5"}`,
@@ -518,6 +524,30 @@ func TestConfigTool_ParamsReachTheConfig(t *testing.T) {
 			assert.Contains(t, h.configBytes(t), tt.want)
 		})
 	}
+}
+
+func TestConfigTool_SetModelTagsDeliversOneVerdictAfterRestart(t *testing.T) {
+	h := newConfigHarness(t)
+
+	require.ErrorIs(
+		t,
+		h.call(t, tool.IDSetModelTags, "tags-1", `{"id":"claude-opus-5","tags":["coding"]}`),
+		tool.ErrSuspend,
+	)
+	h.mgr.runStagedApply(context.Background(), h.sessionID)
+	h.restart(t, "tags-1", tool.IDSetModelTags)
+
+	assert.False(t, h.mgr.staged.has(h.sessionID))
+	assert.Equal(t, 1, h.restarts)
+	messages, err := h.sessions.LoadActiveMessages(context.Background(), h.sessionID)
+	require.NoError(t, err)
+	var verdicts int
+	for _, message := range messages {
+		if message.ToolName == tool.IDSetModelTags && message.Content == "Config applied." {
+			verdicts++
+		}
+	}
+	assert.Equal(t, 1, verdicts)
 }
 
 // remove_provider and remove_manager both need a success path, and each has a

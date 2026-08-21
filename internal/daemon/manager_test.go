@@ -42,6 +42,8 @@ type mockSession struct {
 	boundary     session.InputBoundary
 }
 
+func (m *mockSession) SettleStoppedCalls(context.Context, string) error { return nil }
+
 type blockingCreateSessionStore struct {
 	sessionstore.OrchestrationStore
 	entered chan struct{}

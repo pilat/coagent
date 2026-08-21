@@ -181,6 +181,11 @@ Shutdown stops admission, drains or checkpoints work according to its durable
 state, stops managers and pooled resources, then closes stores. Startup recovery
 rebuilds runnable sessions from persisted rows and producer ledgers. A stopped
 link is retained for explicit follow-up but is not automatically resumed.
+`/stop` is stronger than an ordinary interruption: it fences an active tree,
+cancels and joins its runners, settles each active unresolved call in the
+append-only transcript, and only then parks it. Recovery finishes an interrupted
+stop before ordinary resume; a later root input or explicit child follow-up is a
+new activation, never a replay of pre-stop work.
 
 Configuration application is a controlled restart: the tool stages work and
 suspends; the daemon makes the suspension durable, commits guarded files, then
@@ -344,6 +349,9 @@ reported rather than silently overwritten.
 The unified YAML configuration names providers, models, managers, marketplaces
 and tool policy; unknown fields fail closed. Model entries identify a provider
 and model ID, while model dimensions and pricing come from the provider catalog.
+Model IDs are globally unique. Optional user-defined tags are preserved as YAML
+policy: `/model` exposes every configured model to people, while `task` exposes
+inheritance and only tagged models for autonomous explicit selection.
 An operator can pin a catalog section where a protocol driver alone cannot
 identify the vendor. MCP server definitions live in SQLite, with project scope
 overriding a global entry of the same name.

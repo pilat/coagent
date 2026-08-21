@@ -61,7 +61,7 @@ func TestHarnessE2E_SecondInputDoesNotReplayPreviousFinal(t *testing.T) {
 }
 
 func TestHarnessE2E_ForegroundFollowUpRejectsCompetingSleep(t *testing.T) {
-	modelServer, releaseFollowUp := newHarnessSubagentModelServer(t)
+	modelServer, releaseFollowUp := newHarnessChildModelServer(t)
 	defer closeHarnessChannel(releaseFollowUp)
 	home, err := os.MkdirTemp("/tmp", "coa-harness")
 	require.NoError(t, err)
@@ -167,7 +167,7 @@ func newHarnessModelServer(t *testing.T) *httptest.Server {
 	}))
 }
 
-func newHarnessSubagentModelServer(t *testing.T) (*httptest.Server, chan struct{}) {
+func newHarnessChildModelServer(t *testing.T) (*httptest.Server, chan struct{}) {
 	t.Helper()
 
 	releaseFollowUp := make(chan struct{})

@@ -22,7 +22,8 @@ type (
 	// TimeoutSec is catalog-filled at startup.
 	ModelEntry struct {
 		ID               string            `json:"id"                yaml:"id"`
-		Provider         string            `json:"provider"          yaml:"provider"`              // required: references providers map key
+		Provider         string            `json:"provider"          yaml:"provider"` // required: references providers map key
+		Tags             []string          `json:"tags,omitempty"    yaml:"tags,omitempty"`
 		TimeoutSec       int               `json:"timeout_sec"       yaml:"timeout_sec,omitempty"` // per-request timeout for the model; 0 = 10m default
 		OpenRouterConfig *OpenRouterConfig `json:"openrouter_config" yaml:"openrouter_config,omitempty"`
 

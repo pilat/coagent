@@ -28,6 +28,7 @@ var (
 	_ tool.Tool = (*addModelTool)(nil)
 	_ tool.Tool = (*removeModelTool)(nil)
 	_ tool.Tool = (*setDefaultModelTool)(nil)
+	_ tool.Tool = (*setModelTagsTool)(nil)
 )
 
 type (
@@ -45,6 +46,7 @@ type (
 	addModelTool        struct{ configDeps }
 	removeModelTool     struct{ configDeps }
 	setDefaultModelTool struct{ configDeps }
+	setModelTagsTool    struct{ configDeps }
 
 	setProviderParams struct {
 		Name    string `json:"name"`
@@ -84,6 +86,7 @@ func newConfigTools(s *svc, sessionID int64) []tool.Tool {
 		&addModelTool{deps},
 		&removeModelTool{deps},
 		&setDefaultModelTool{deps},
+		&setModelTagsTool{deps},
 	}
 }
 
