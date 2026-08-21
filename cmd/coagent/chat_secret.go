@@ -32,23 +32,29 @@ func (c *chat) takeSecret() (cli.SecretRequest, bool) {
 
 // askForSecret sends one credential straight to the daemon, never through the chat
 // stream: it is stored by name, and the model only ever learns the name.
-func (c *chat) askForSecret(ctx context.Context, req cli.SecretRequest, typed string) {
+func (c *chat) askForSecret(ctx context.Context, req cli.SecretRequest, typed string) error {
 	if req.Purpose != "" {
 		c.println(req.Purpose)
 	}
 
 	value, err := c.secretValue(req, typed)
+	var fatal *chatFatalError
 
 	switch {
+	case errors.As(err, &fatal):
+		c.forgetRequested(req.RequestID)
+
+		return err
 	case errors.Is(err, errSecretDismissed):
 		c.printf("%s: provided in another terminal\n", req.Name)
 		c.prompt()
 
-		return
+		return nil
 	case err != nil:
+		c.forgetRequested(req.RequestID)
 		c.errorf("could not read the value: %v", err)
 
-		return
+		return nil
 	}
 
 	// Claimed before the call: the daemon's dismissal races the response back, and
@@ -58,17 +64,20 @@ func (c *chat) askForSecret(ctx context.Context, req cli.SecretRequest, typed st
 	if value == "" {
 		c.declineSecret(ctx, req)
 
-		return
+		return nil
 	}
 
-	err = c.call(ctx, ctl.OpSetSecret, ctl.SetSecretParams{
+	_, err = c.call(ctx, ctl.OpSetSecret, ctl.SetSecretParams{
 		Name:      req.Name,
 		Value:     value,
 		RequestID: req.RequestID,
 	}, nil)
 	if err != nil {
+		c.retryAnswer(req.RequestID)
 		c.errorf("%v", err)
 	}
+
+	return nil
 }
 
 // declineSecret answers the prompt with a refusal, so the session stops waiting
@@ -76,11 +85,12 @@ func (c *chat) askForSecret(ctx context.Context, req cli.SecretRequest, typed st
 func (c *chat) declineSecret(ctx context.Context, req cli.SecretRequest) {
 	c.printf("declined %s\n", req.Name)
 
-	err := c.call(ctx, cli.OpChatSecretCancel, cli.SecretCancelParams{
+	_, err := c.call(ctx, cli.OpChatSecretCancel, cli.SecretCancelParams{
 		SessionID: c.currentSession(),
 		RequestID: req.RequestID,
 	}, nil)
 	if err != nil {
+		c.retryAnswer(req.RequestID)
 		c.errorf("%v", err)
 	}
 }
@@ -112,6 +122,12 @@ func (c *chat) secretValue(req cli.SecretRequest, typed string) (string, error) 
 // rather than wait for a value nobody is going to type here.
 func (c *chat) readMasked(req cli.SecretRequest) (string, error) {
 	for {
+		if err := c.takeFatal(); err != nil {
+			c.term.EndSecret()
+
+			return "", err
+		}
+
 		if c.claimDismissed(req.RequestID) {
 			c.term.EndSecret()
 
@@ -140,11 +156,14 @@ func (c *chat) dismissSecret(params json.RawMessage) {
 
 	if c.answered[res.RequestID] {
 		delete(c.answered, res.RequestID)
+		delete(c.requested, res.RequestID)
+		delete(c.replayed, res.RequestID)
 
 		return
 	}
 
 	c.dismissed[res.RequestID] = true
+	delete(c.replayed, res.RequestID)
 }
 
 // claimDismissed reports and clears a pending dismissal for one request.
@@ -157,8 +176,50 @@ func (c *chat) claimDismissed(requestID string) bool {
 	}
 
 	delete(c.dismissed, requestID)
+	delete(c.requested, requestID)
+	delete(c.replayed, requestID)
 
 	return true
+}
+
+func (c *chat) acceptSecret(req cli.SecretRequest) bool {
+	c.secretMu.Lock()
+	defer c.secretMu.Unlock()
+
+	if c.requested[req.RequestID] {
+		c.replayed[req.RequestID] = req
+
+		return false
+	}
+
+	c.requested[req.RequestID] = true
+
+	return true
+}
+
+func (c *chat) forgetRequested(requestID string) {
+	c.secretMu.Lock()
+	defer c.secretMu.Unlock()
+
+	delete(c.requested, requestID)
+	delete(c.replayed, requestID)
+}
+
+func (c *chat) retryAnswer(requestID string) {
+	c.secretMu.Lock()
+	delete(c.answered, requestID)
+
+	replay, ok := c.replayed[requestID]
+	delete(c.replayed, requestID)
+
+	if !ok {
+		delete(c.requested, requestID)
+	}
+	c.secretMu.Unlock()
+
+	if ok {
+		c.enqueueSecret(replay)
+	}
 }
 
 func (c *chat) noteAnswered(requestID string) {

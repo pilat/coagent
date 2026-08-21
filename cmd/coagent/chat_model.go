@@ -177,8 +177,15 @@ func (c *chat) readChoice(ctx context.Context, prompt string) (string, error) {
 	c.write(prompt)
 
 	for {
+		if err := c.takeFatal(); err != nil {
+			return "", err
+		}
+
 		if req, ok := c.takeSecret(); ok {
-			c.askForSecret(ctx, req, "")
+			if err := c.askForSecret(ctx, req, ""); err != nil {
+				return "", err
+			}
+
 			c.write(prompt)
 
 			continue
@@ -196,7 +203,10 @@ func (c *chat) readChoice(ctx context.Context, prompt string) (string, error) {
 
 		line = strings.TrimSpace(line)
 		if req, ok := c.takeSecret(); ok {
-			c.askForSecret(ctx, req, line)
+			if err := c.askForSecret(ctx, req, line); err != nil {
+				return "", err
+			}
+
 			c.write(prompt)
 
 			continue

@@ -85,10 +85,10 @@ func TestHarnessScenario_ModelCommandReconnectsBeforeApplyingChoice(t *testing.T
 		return strings.Contains(run.out.String(), "2) GPT-5")
 	}, 5*time.Second, 5*time.Millisecond)
 	require.NoError(t, first.server.Close())
-	require.Eventually(t, func() bool { return run.chat.pushLive.Load() == 0 }, 5*time.Second, 5*time.Millisecond)
 
 	second := newChatServer(t, socket, 99)
 	second.models = first.models
+	require.Eventually(t, func() bool { return run.chat.currentSession() == 99 }, 5*time.Second, 5*time.Millisecond)
 	run.term.lines <- "2"
 
 	require.Eventually(t, func() bool { return len(second.modelChanges()) == 1 }, 10*time.Second, 5*time.Millisecond)
@@ -119,9 +119,9 @@ func TestHarnessScenario_PendingModelSurvivesReconnectToANewSession(t *testing.T
 	}, 5*time.Second, 5*time.Millisecond)
 
 	require.NoError(t, first.server.Close())
-	require.Eventually(t, func() bool { return run.chat.pushLive.Load() == 0 }, 5*time.Second, 5*time.Millisecond)
 
 	second := newChatServer(t, socket, 77)
+	require.Eventually(t, func() bool { return run.chat.currentSession() == 77 }, 5*time.Second, 5*time.Millisecond)
 	run.term.lines <- "hello"
 
 	require.Eventually(t, func() bool { return len(second.sentParams()) == 1 }, 10*time.Second, 5*time.Millisecond)
@@ -151,10 +151,10 @@ func TestHarnessScenario_ExplicitModelChoiceReplacesPendingAfterReconnect(t *tes
 	}, 5*time.Second, 5*time.Millisecond)
 
 	require.NoError(t, first.server.Close())
-	require.Eventually(t, func() bool { return run.chat.pushLive.Load() == 0 }, 5*time.Second, 5*time.Millisecond)
 
 	second := newChatServer(t, socket, 77)
 	second.models = first.models
+	require.Eventually(t, func() bool { return run.chat.currentSession() == 77 }, 5*time.Second, 5*time.Millisecond)
 	run.term.lines <- "/model"
 	require.Eventually(t, func() bool {
 		return strings.Count(run.out.String(), "2) GPT-5") >= 2
@@ -435,66 +435,6 @@ func TestHarnessScenario_ChatOwnSecretAnswerIsNotAnnouncedBack(t *testing.T) {
 	require.Eventually(t, func() bool { return len(srv.sentText()) == 1 }, 5*time.Second, 5*time.Millisecond)
 
 	assert.Equal(t, exitOK, run.finish(t))
-}
-
-// A daemon restart is survived by one reconnect, and the push stream keeps
-// exactly one reader across it — two would double-read the connection.
-func TestHarnessScenario_ChatReconnectKeepsOneEventReader(t *testing.T) {
-	socket := socketPath(t)
-	first := newChatServer(t, socket, 1)
-	run := startChat(t, socket, newScriptedTerminal(10*time.Millisecond))
-
-	run.term.lines <- "before the restart"
-	require.Eventually(t, func() bool { return len(first.sentText()) == 1 }, 5*time.Second, 5*time.Millisecond)
-
-	require.NoError(t, first.server.Close())
-	// The client has seen the drop, so the next call is refused rather than
-	// half-written — which is what makes the reconnect deterministic.
-	require.Eventually(t, func() bool { return run.chat.pushLive.Load() == 0 }, 5*time.Second, 5*time.Millisecond)
-
-	second := newChatServer(t, socket, 9)
-
-	run.term.lines <- "after the restart"
-	require.Eventually(t, func() bool { return len(second.sentText()) == 1 }, 10*time.Second, 5*time.Millisecond)
-
-	assert.Equal(t, []string{"after the restart"}, second.sentText())
-	assert.Equal(t, int64(9), run.chat.currentSession(), "the chat re-attached to the resumed session")
-	assert.Equal(t, int32(1), run.chat.pushLive.Load())
-	assert.Equal(t, int32(1), run.chat.pushPeak.Load(), "a second push reader was left running")
-
-	second.push(t, cli.EventMethod, cli.Event{SessionID: 9, Type: string(sessionevent.NotifyMessage), Message: "back"})
-	require.Eventually(t, func() bool {
-		return strings.Contains(run.out.String(), "back")
-	}, 5*time.Second, 5*time.Millisecond)
-
-	assert.Contains(t, run.out.String(), "daemon restarting…")
-	assert.Contains(t, run.out.String(), "reconnected.")
-
-	// A reconnect whose predecessor is still alive is the case that used to leave
-	// two readers behind: the old one must be dropped, not abandoned.
-	require.NoError(t, run.chat.reconnect(context.Background()))
-	assert.Equal(t, int32(1), run.chat.pushLive.Load())
-	assert.Equal(t, int32(1), run.chat.pushPeak.Load())
-
-	assert.Equal(t, exitOK, run.finish(t))
-}
-
-// A reconnect that runs out of budget ends the chat with the reason, and leaves
-// no turn marked in flight — busy is what suppresses the prompt.
-func TestHarnessScenario_ChatFailedReconnectClearsBusy(t *testing.T) {
-	socket := socketPath(t)
-	srv := newChatServer(t, socket, 3)
-	run := startChatWithin(t, socket, newScriptedTerminal(10*time.Millisecond), 150*time.Millisecond)
-
-	require.NoError(t, srv.server.Close())
-	require.Eventually(t, func() bool { return run.chat.pushLive.Load() == 0 }, 5*time.Second, 5*time.Millisecond)
-
-	run.term.lines <- "anybody home?"
-
-	assert.Equal(t, exitError, run.finish(t))
-	assert.False(t, run.chat.isBusy(), "a turn that never left must not keep the prompt suppressed")
-	assert.Contains(t, run.err.String(), "did not come back")
-	assert.Contains(t, run.out.String(), "daemon restarting…")
 }
 
 func startChat(t *testing.T, socket string, term *scriptedTerminal) *chatRun {

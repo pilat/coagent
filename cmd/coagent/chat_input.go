@@ -13,8 +13,18 @@ func (c *chat) readLines(ctx context.Context) int {
 	c.prompt()
 
 	for {
+		if err := c.takeFatal(); err != nil {
+			c.errorf("%v", err)
+
+			return exitError
+		}
+
 		if req, ok := c.takeSecret(); ok {
-			c.askForSecret(ctx, req, "")
+			if err := c.askForSecret(ctx, req, ""); err != nil {
+				c.errorf("%v", err)
+
+				return exitError
+			}
 
 			continue
 		}
@@ -48,9 +58,7 @@ func (c *chat) readLines(ctx context.Context) int {
 // that line: the value goes to the daemon, never into the conversation.
 func (c *chat) consume(ctx context.Context, line string) error {
 	if req, ok := c.takeSecret(); ok {
-		c.askForSecret(ctx, req, line)
-
-		return nil
+		return c.askForSecret(ctx, req, line)
 	}
 
 	if line == "" {
