@@ -24,8 +24,8 @@ const reconnectPoll = 250 * time.Millisecond
 // prompting on the push goroutine is what keeps the terminal single-owner.
 const secretQueueCap = 8
 
-// chat is the terminal side of the local chat. The input loop is the only code
-// that ever reads the terminal; the push reader hands it secrets over a channel.
+// chat owns terminal state. Lock order is reconnectMu before mu or outMu;
+// secretMu is independent and never nests with another lock.
 type chat struct {
 	socket string
 	term   terminal
@@ -42,12 +42,18 @@ type chat struct {
 	secretMu  sync.Mutex
 	answered  map[string]bool
 	dismissed map[string]bool
+	requested map[string]bool
+	replayed  map[string]cli.SecretRequest
 
 	// pushLive/pushPeak count push readers. Exactly one owns the stream: a
 	// reconnect that left the old one running would double-read the connection.
-	pushLive atomic.Int32
-	pushPeak atomic.Int32
-	pushWG   sync.WaitGroup
+	pushLive        atomic.Int32
+	pushPeak        atomic.Int32
+	pushWG          sync.WaitGroup
+	reconnectMu     sync.Mutex
+	reconnectFailed *ctl.Client
+	reconnectErr    error
+	fatal           chan *chatFatalError
 
 	mu       sync.Mutex
 	client   *ctl.Client
@@ -72,9 +78,12 @@ func newChat(socket string, t terminal, out, errOut io.Writer) *chat {
 		budget:  reconnectBudget,
 		poll:    reconnectPoll,
 		secrets: make(chan cli.SecretRequest, secretQueueCap),
+		fatal:   make(chan *chatFatalError, 1),
 
 		answered:  make(map[string]bool),
 		dismissed: make(map[string]bool),
+		requested: make(map[string]bool),
+		replayed:  make(map[string]cli.SecretRequest),
 	}
 }
 
@@ -85,14 +94,16 @@ func (c *chat) run(ctx context.Context) int {
 		return exitError
 	}
 
-	defer func() {
-		c.closeClient()
-		c.pushWG.Wait()
-	}()
-
 	c.println("Talking to coagent. Ctrl-D to leave, /stop to interrupt a turn, /model to switch model.")
 
-	c.startEvents(ctx)
+	eventsCtx, cancelEvents := context.WithCancel(ctx)
+	defer func() {
+		cancelEvents()
+		c.pushWG.Wait()
+		c.closeClient()
+	}()
+
+	c.startEvents(eventsCtx)
 
 	return c.readLines(ctx)
 }
@@ -132,7 +143,7 @@ func (c *chat) send(ctx context.Context, line string) error {
 
 	var res cli.SendResult
 
-	err := c.call(ctx, cli.OpChatSend, c.sendParams(line), &res)
+	failed, err := c.call(ctx, cli.OpChatSend, c.sendParams(line), &res)
 	if err == nil {
 		c.setSession(res.SessionID)
 
@@ -147,15 +158,13 @@ func (c *chat) send(ctx context.Context, line string) error {
 		return err
 	}
 
-	c.println("daemon restarting…")
-
-	if err := c.reconnect(ctx); err != nil {
+	if err := c.reconnect(ctx, failed); err != nil {
 		c.setBusy(false)
 
 		return err
 	}
 
-	if err := c.call(ctx, cli.OpChatSend, c.sendParams(line), &res); err != nil {
+	if _, err := c.call(ctx, cli.OpChatSend, c.sendParams(line), &res); err != nil {
 		c.setBusy(false)
 
 		return err
@@ -166,35 +175,6 @@ func (c *chat) send(ctx context.Context, line string) error {
 	return nil
 }
 
-// reconnect waits for the daemon to come back and re-attaches to the same
-// conversation. The budget is a real answer: past it, the restart failed.
-func (c *chat) reconnect(ctx context.Context) error {
-	c.closeClient()
-
-	// The dropped connection ends the old push reader; waiting for it keeps the
-	// stream single-owner across the restart.
-	c.pushWG.Wait()
-
-	deadline := time.Now().Add(c.budget)
-
-	for time.Now().Before(deadline) {
-		if err := c.connect(ctx); err == nil {
-			c.startEvents(ctx)
-			c.println("reconnected.")
-
-			return nil
-		}
-
-		select {
-		case <-ctx.Done():
-			return fmt.Errorf("waiting for the daemon: %w", ctx.Err())
-		case <-time.After(c.poll):
-		}
-	}
-
-	return fmt.Errorf("the daemon did not come back within %s — check `coagent status`", c.budget)
-}
-
 func (c *chat) stopTurn(ctx context.Context) {
 	if c.currentSession() == 0 {
 		c.prompt()
@@ -202,37 +182,39 @@ func (c *chat) stopTurn(ctx context.Context) {
 		return
 	}
 
-	if err := c.call(ctx, cli.OpChatStop, cli.SessionParams{SessionID: c.currentSession()}, nil); err != nil {
+	if _, err := c.call(ctx, cli.OpChatStop, cli.SessionParams{SessionID: c.currentSession()}, nil); err != nil {
 		c.errorf("%v", err)
 	}
 }
 
 // call runs one op against whichever connection is live now, so a reconnect
 // cannot be dereferenced mid-swap.
-func (c *chat) call(ctx context.Context, method string, params, out any) error {
+func (c *chat) call(ctx context.Context, method string, params, out any) (*ctl.Client, error) {
 	client := c.currentClient()
 	if client == nil {
-		return ctl.ErrClosed
+		return nil, ctl.ErrClosed
 	}
 
-	return client.Call(ctx, method, params, out)
+	err := client.Call(ctx, method, params, out)
+
+	return client, err
 }
 
 // callIdempotent reconnects and safely repeats model discovery or selection.
 // Both operations can be issued twice without duplicating a conversation turn.
 func (c *chat) callIdempotent(ctx context.Context, method string, params func() any, out any) error {
-	err := c.call(ctx, method, params(), out)
+	failed, err := c.call(ctx, method, params(), out)
 	if !errors.Is(err, ctl.ErrClosed) && !errors.Is(err, ctl.ErrNotRunning) {
 		return err
 	}
 
-	c.println("daemon restarting…")
-
-	if err := c.reconnect(ctx); err != nil {
+	if err := c.reconnect(ctx, failed); err != nil {
 		return err
 	}
 
-	return c.call(ctx, method, params(), out)
+	_, err = c.call(ctx, method, params(), out)
+
+	return err
 }
 
 func (c *chat) currentClient() *ctl.Client {

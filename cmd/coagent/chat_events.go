@@ -3,21 +3,22 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+
+	"go.uber.org/zap"
 
 	"github.com/pilat/coagent/internal/ctl"
+	"github.com/pilat/coagent/internal/logger"
 	"github.com/pilat/coagent/internal/managers/cli"
 	"github.com/pilat/coagent/internal/sessionevent"
 )
 
-// startEvents hands the current connection to one push reader. Exactly one runs
-// at a time; reconnect waits for the previous one before asking for another.
+// startEvents starts the one supervisor that owns every push stream this chat
+// uses, including the streams acquired after a daemon restart.
 func (c *chat) startEvents(ctx context.Context) {
-	client := c.currentClient()
-	if client == nil {
-		return
-	}
-
 	c.pushWG.Add(1)
+
+	log := logger.Ctx(ctx).Named("cmd.chat.events")
 
 	// Counted before the goroutine runs, so a caller that just started a reader
 	// can be held to the one-owner rule immediately.
@@ -26,25 +27,56 @@ func (c *chat) startEvents(ctx context.Context) {
 	}
 
 	go func() {
+		defer c.pushLive.Add(-1)
+		defer c.pushWG.Done()
 		defer func() {
-			c.pushLive.Add(-1)
-			c.pushWG.Done()
+			if recovered := recover(); recovered != nil {
+				log.Error("goroutine panic", zap.Any("recovered", recovered), zap.Stack("stack"))
+				c.setBusy(false)
+
+				select {
+				case c.fatal <- &chatFatalError{cause: fmt.Errorf("chat event supervisor panicked: %v", recovered)}:
+				default:
+				}
+			}
 		}()
 
-		c.printEvents(ctx, client)
+		c.superviseEvents(ctx)
 	}()
 }
 
-// printEvents renders the push stream of one connection. It exits when that
-// connection drops; the send path is what notices and reconnects.
-func (c *chat) printEvents(ctx context.Context, client *ctl.Client) {
+// superviseEvents reconnects across daemon images so a config apply's accepted
+// turn can receive the answer produced after its restart.
+func (c *chat) superviseEvents(ctx context.Context) {
+	for {
+		client := c.currentClient()
+		if client == nil || !c.printEvents(ctx, client) {
+			return
+		}
+
+		if err := c.reconnect(ctx, client); err != nil {
+			c.setBusy(false)
+
+			select {
+			case c.fatal <- &chatFatalError{cause: err}:
+			default:
+			}
+
+			return
+		}
+	}
+}
+
+// printEvents renders one connection's push stream and reports an unexpected
+// drop to the supervisor so it can reconnect without waiting for user input.
+func (c *chat) printEvents(ctx context.Context, client *ctl.Client) bool {
 	for {
 		select {
 		case <-ctx.Done():
-			return
+			return false
 		case n, ok := <-client.Notifications():
 			if !ok {
-				return
+				return ctx.Err() == nil
 			}
 
 			switch n.Method {
@@ -67,9 +99,18 @@ func (c *chat) queueSecret(params json.RawMessage) {
 		return
 	}
 
+	if !c.acceptSecret(req) {
+		return
+	}
+
+	c.enqueueSecret(req)
+}
+
+func (c *chat) enqueueSecret(req cli.SecretRequest) {
 	select {
 	case c.secrets <- req:
 	default:
+		c.forgetRequested(req.RequestID)
 		c.errorf("dropped the prompt for %s: too many unanswered requests", req.Name)
 	}
 }

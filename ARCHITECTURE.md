@@ -328,6 +328,12 @@ responses and server pushes. A bounded push channel may discard pushes for an
 unread consumer so response progress is preserved; durable session state is the
 recovery source.
 
+The local-chat client treats a closed push stream as a restart boundary and
+performs one bounded, coalesced reattachment without waiting for new user input,
+so the new daemon can deliver the accepted turn's answer. Outstanding secret
+requests replay idempotently by request ID; if reattachment fails, every terminal
+input mode exits and restores unmasked input rather than waiting silently.
+
 Service installation uses the supported platform service mechanism while running
 the daemon as the login user from a user-owned binary. Update/restart flows go
 through the control operation, avoiding repeated elevation. Unit drift is
