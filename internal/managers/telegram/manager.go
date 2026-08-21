@@ -171,12 +171,6 @@ func (m *Manager) Start(ctx context.Context) error {
 		return fmt.Errorf("set commands: %w", err)
 	}
 
-	//nolint:contextcheck // same long-lived runCtx as above
-	if _, err := m.sendMessage(runCtx, "🤖 tg-manager started", nil, m.serviceTopicID); err != nil {
-		cancel()
-		return fmt.Errorf("announce startup: %w", err)
-	}
-
 	m.subscription = m.controller.Subscribe()
 
 	go func() {
