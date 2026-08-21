@@ -37,6 +37,10 @@ func (fakeProvider) WrapExec(context.Context, string, []string, []string) (*exec
 	return nil, nil
 }
 
+func (fakeProvider) LookPath(context.Context, string, []string) (string, error) {
+	return "", os.ErrNotExist
+}
+
 type errorRunner struct {
 	err error
 }

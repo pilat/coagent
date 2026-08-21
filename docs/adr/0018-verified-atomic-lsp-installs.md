@@ -1,6 +1,6 @@
 # ADR-0018: Lazy LSP installs are pinned, verified, and atomically published
 
-- **Status:** Accepted
+- **Status:** Superseded by [ADR-0024](0024-project-owned-lsp-servers.md)
 - **Date:** 2026-08-17
 
 ## Context

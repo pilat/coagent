@@ -63,16 +63,12 @@ func UseCalculator(c Calculator) int {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	// TouchFile is what spins up the server: it resolves the client for this
-	// workdir/extension and opens the document.
-	if err := mgr.TouchFile(ctx, tmpDir, testFile); err != nil {
-		t.Logf("TouchFile warning: %v", err)
+	// Diagnostics resolves the client for this workdir/extension and opens the document.
+	if _, err := mgr.GetDiagnostics(ctx, tmpDir, testFile); err != nil {
+		t.Logf("GetDiagnostics warning: %v", err)
 	}
 
 	tool := newLspTool(tmpDir, mgr)
-
-	// Wait for server initialization
-	time.Sleep(1 * time.Second)
 
 	t.Run("goToDefinition", func(t *testing.T) {
 		params := lspParams{

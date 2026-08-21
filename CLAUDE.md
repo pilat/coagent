@@ -147,7 +147,9 @@ The tree under `internal/` is flat — package names say what they provide; depe
 - **`internal/memory`** — Curated per-project memory (`CuratedStore`): plain SQLite CRUD over the `memories` table, surfaced in the system prompt and managed via `memory_save`/`memory_delete`
 - **`internal/schedule`** — Schedule storage, cron validation, executor, plus the `schedule` and `sleep` tools
 - **`internal/todo`** — In-memory task tracking (todo lists for the agent)
-- **`internal/lsp`** — LSP client for code intelligence tools
+- **`internal/lsp`** — LSP process and JSON-RPC boundary for code-intelligence
+  tools; servers are user- or project-owned and discovered through the
+  activated shell PATH
 - **`internal/managers`** / **`internal/managers/telegram`** / **`internal/managers/cli`** — Manager runtime + the Telegram bot manager and the built-in local chat, all talking to the daemon via `controllerapi.Controller`. A manager that fails to start is recorded against its own id (`RunningIDs`/`StartError`) and skipped, not fatal — the chat is how a bad token gets fixed, and it needs the daemon alive
 - **`internal/ctl`** — The control socket: newline-delimited JSON-RPC 2.0 over `~/.coagent/daemon.sock` (0600), an op registry other layers register into, server→client pushes on the same connection (so the client is a demultiplexing read loop), the single-instance flock, and the built-in `status` op. It accepts from the bind and answers every op with a "starting" code until the daemon marks itself ready ([ADR-0017](docs/adr/0017-a-bound-control-socket-answers.md))
 - **`internal/configops`** — Every semantic config mutation: the raw (unresolved) draft, the guards, `Verdict`, backup + atomic write + retention, the secrets-file line editor, and the pending-apply marker with its boot-time resolution

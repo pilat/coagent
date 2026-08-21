@@ -5,8 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
-	"slices"
-	"strings"
 	"sync"
 	"time"
 
@@ -22,18 +20,17 @@ var lspInitTimeout = 30 * time.Second
 
 // Manager defines the interface for LSP operations.
 //
-//nolint:interfacebloat // one method per LSP capability we expose; the count tracks the protocol, not our design
+
 type Manager interface {
 	Definition(ctx context.Context, workDir, file string, line, character int) ([]Location, error)
 	References(ctx context.Context, workDir, file string, line, character int) ([]Location, error)
 	Hover(ctx context.Context, workDir, file string, line, character int) (*Hover, error)
 	DocumentSymbol(ctx context.Context, workDir, file string) ([]DocumentSymbol, error)
-	WorkspaceSymbol(ctx context.Context, workDir, query string) ([]SymbolInformation, error)
+	WorkspaceSymbol(ctx context.Context, workDir, file, query string) ([]SymbolInformation, error)
 	Implementation(ctx context.Context, workDir, file string, line, character int) ([]Location, error)
 	PrepareCallHierarchy(ctx context.Context, workDir, file string, line, character int) ([]CallHierarchyItem, error)
 	IncomingCalls(ctx context.Context, workDir, file string, line, character int) ([]CallHierarchyIncomingCall, error)
 	OutgoingCalls(ctx context.Context, workDir, file string, line, character int) ([]CallHierarchyOutgoingCall, error)
-	TouchFile(ctx context.Context, workDir, file string) error
 	GetDiagnostics(ctx context.Context, workDir, file string) ([]Diagnostic, error)
 	GetAllDiagnostics(ctx context.Context, workDir string, maxErrorsPerFile, maxFiles int) []FileDiagnostics
 	Close()
@@ -42,38 +39,29 @@ type Manager interface {
 var _ Manager = (*manager)(nil)
 
 type manager struct {
-	coagentBin string
-	servers    []serverConfig
-	clients    map[string]*client // key: "serverID:root"
-	keyLocks   sync.Map           // map[key]*sync.Mutex — per-root spawn dedupe without holding mu
-	provider   shellenv.Provider  // per-cwd shell activation; may be nil (fallback)
-	mu         sync.RWMutex
-	closed     bool
+	servers  []serverConfig
+	clients  map[clientKey]*client
+	keyLocks sync.Map          // map[key]*sync.Mutex — per-root spawn dedupe without holding mu
+	provider shellenv.Provider // per-cwd shell activation; may be nil (fallback)
+	mu       sync.RWMutex
+	closed   bool
 }
+
+type clientKey struct {
+	serverID string
+	root     string
+}
+
+func (k clientKey) String() string { return k.serverID + ":" + k.root }
 
 // NewManager creates a new LSP manager. provider may be nil: servers then spawn
 // with the daemon's inherited env instead of the project's activated toolchain.
 func NewManager(provider shellenv.Provider) Manager {
-	coagentBin := coagentBin()
-	if coagentBin == "" {
-		logger.Named("lsp.manager").Warn("coagent bin dir unresolvable; LSP auto-install disabled")
-	}
-
 	return &manager{
-		coagentBin: coagentBin,
-		servers:    defaultServers(coagentBin),
-		clients:    make(map[string]*client),
-		provider:   provider,
+		servers:  defaultServers(),
+		clients:  make(map[clientKey]*client),
+		provider: provider,
 	}
-}
-
-func (m *manager) TouchFile(ctx context.Context, workDir, file string) error {
-	cl, err := m.getClient(ctx, workDir, file)
-	if err != nil {
-		return nil //nolint:nilerr // LSP is optional; if unavailable, skip silently
-	}
-
-	return cl.syncFile(ctx, file)
 }
 
 // Close stops all cached LSP clients. Clients are collected under mu and stopped
@@ -82,111 +70,150 @@ func (m *manager) Close() {
 	m.mu.Lock()
 	m.closed = true
 	clients := m.clients
-	m.clients = make(map[string]*client)
+	m.clients = make(map[clientKey]*client)
 	m.mu.Unlock()
 
 	for _, cl := range clients {
-		_ = cl.stop()
+		_ = cl.stop(context.Background())
 	}
 }
 
 func (m *manager) getClient(ctx context.Context, workDir, file string) (*client, error) {
-	ext := strings.ToLower(filepath.Ext(file))
-	var server *serverConfig
-
-	for i := range m.servers {
-		if slices.Contains(m.servers[i].Extensions, ext) {
-			server = &m.servers[i]
-		}
-
-		if server != nil {
-			break
-		}
+	identity, err := resolveFile(workDir, file)
+	if err != nil {
+		return nil, err
 	}
 
+	workDir, err = filepath.Abs(workDir)
+	if err != nil {
+		return nil, fmt.Errorf("resolve work directory: %w", err)
+	}
+
+	workDir = filepath.Clean(workDir)
+
+	server := m.serverFor(identity.path)
 	if server == nil {
-		return nil, fmt.Errorf("no LSP server for extension %s", ext)
+		return nil, fmt.Errorf("no LSP server for file %s", file)
 	}
 
-	root, err := server.RootFinder(workDir, file)
+	root, err := server.RootFinder(workDir, identity.path)
 	if err != nil {
 		return nil, fmt.Errorf("find root: %w", err)
 	}
 
-	key := fmt.Sprintf("%s:%s", server.ID, root)
+	key := clientKey{serverID: server.ID, root: root}
 
 	m.mu.RLock()
 	cl, ok := m.clients[key]
 	m.mu.RUnlock()
 
-	if ok {
+	if ok && !cl.hasExited() {
 		return cl, nil
 	}
 
-	return m.startClient(ctx, server, root, key)
+	if ok {
+		m.evictClient(ctx, key, cl)
+	}
+
+	return m.startClient(ctx, server, root, server.languageID(identity.path), key)
+}
+
+func (m *manager) serverFor(file string) *serverConfig {
+	for i := range m.servers {
+		if m.servers[i].matches(file) {
+			return &m.servers[i]
+		}
+	}
+
+	return nil
 }
 
 // startClient spawns and initializes a server under a per-key lock so concurrent
 // callers for the same root dedupe the spawn while different roots proceed — and
-// mu is never held across the spawn/install/handshake, so Close can't be starved.
-func (m *manager) startClient(ctx context.Context, server *serverConfig, root, key string) (*client, error) {
-	unlock := m.lockKey(key)
+// mu is never held across the spawn/handshake, so Close can't be starved.
+func (m *manager) startClient(
+	ctx context.Context,
+	server *serverConfig,
+	root, languageID string,
+	key clientKey,
+) (*client, error) {
+	unlock := m.lockKey(key.String())
 	defer unlock()
 
-	// Re-check: another caller may have started this key while we waited.
+	if cl, found, err := m.cachedClient(ctx, key); found || err != nil {
+		return cl, err
+	}
+
+	cl, err := m.createClient(ctx, server, root, languageID, key)
+	if err != nil {
+		return nil, err
+	}
+
+	return m.cacheClient(ctx, key, cl)
+}
+
+func (m *manager) cachedClient(ctx context.Context, key clientKey) (*client, bool, error) {
 	m.mu.RLock()
 	cl, ok := m.clients[key]
 	closed := m.closed
 	m.mu.RUnlock()
 
+	if ok && !cl.hasExited() {
+		return cl, true, nil
+	}
+
 	if ok {
-		return cl, nil
+		m.evictClient(ctx, key, cl)
 	}
 
 	if closed {
-		return nil, errors.New("lsp manager closed")
+		return nil, false, errors.New("lsp manager closed")
 	}
 
+	return nil, false, nil
+}
+
+func (m *manager) createClient(
+	ctx context.Context,
+	server *serverConfig,
+	root, languageID string,
+	key clientKey,
+) (*client, error) {
 	logger.Ctx(ctx).Debug("starting LSP server", zap.String("server", server.ID), zap.String("root", root))
 
-	cmd, err := server.Spawn(ctx, root)
+	cmd, err := m.wrappedServerCommand(ctx, server, root)
 	if err != nil {
-		return nil, fmt.Errorf("spawn %s: %w", server.ID, err)
-	}
-
-	// Re-spawn through the provider so the server inherits root's activated
-	// toolchain (PATH/GOROOT). WrapExec sets Dir=root — benign, gopls uses rootUri.
-	if m.provider != nil {
-		cmd, err = m.provider.WrapExec(ctx, root, cmd.Args, nil)
-		if err != nil {
-			return nil, fmt.Errorf("wrap %s spawn: %w", server.ID, err)
-		}
+		return nil, err
 	}
 
 	initCtx, cancel := context.WithTimeout(ctx, lspInitTimeout)
 	defer cancel()
 
-	cl = newClient()
-	if err := cl.startWithCommand(initCtx, cmd, root); err != nil {
-		_ = cl.stop() //nolint:contextcheck // stop owns its bounded teardown ctx; don't leak the process
+	cl := newClient()
+	cl.languageID = languageID
 
+	cl.onExit = func() { m.evictClient(context.Background(), key, cl) } //nolint:contextcheck // process exit has no request owner.
+	if err := cl.startWithCommand(initCtx, cmd, root); err != nil {
+		_ = cl.stop(ctx)
 		return nil, fmt.Errorf("start client: %w", err)
 	}
 
-	m.mu.Lock()
+	return cl, nil
+}
 
-	if m.closed {
+func (m *manager) cacheClient(ctx context.Context, key clientKey, cl *client) (*client, error) {
+	m.mu.Lock()
+	if !m.closed {
+		m.clients[key] = cl
 		m.mu.Unlock()
 
-		_ = cl.stop() //nolint:contextcheck // stop owns its bounded teardown ctx; reap the orphan outside mu
-
-		return nil, errors.New("lsp manager closed")
+		return cl, nil
 	}
-
-	m.clients[key] = cl
 	m.mu.Unlock()
 
-	return cl, nil
+	_ = cl.stop(ctx)
+
+	return nil, errors.New("lsp manager closed")
 }
 
 // lockKey serializes starts of the same key without holding mu across the spawn.
@@ -196,4 +223,20 @@ func (m *manager) lockKey(key string) func() {
 	mu.Lock()
 
 	return mu.Unlock
+}
+
+func (m *manager) evictClient(ctx context.Context, key clientKey, candidate *client) {
+	m.mu.Lock()
+	removed := false
+
+	if m.clients[key] == candidate {
+		delete(m.clients, key)
+
+		removed = true
+	}
+	m.mu.Unlock()
+
+	if removed && candidate.processDone != nil {
+		go func() { _ = candidate.stop(ctx) }()
+	}
 }

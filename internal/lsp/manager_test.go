@@ -3,7 +3,9 @@ package lsp
 import (
 	"context"
 	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -11,6 +13,9 @@ import (
 )
 
 func TestManager_GetClient_CachesPerKey(t *testing.T) {
+	workDir := t.TempDir()
+	root := filepath.Join(workDir, "root")
+	require.NoError(t, os.MkdirAll(root, 0o755))
 	spawnCount := 0
 	m := &manager{
 		servers: []serverConfig{
@@ -18,7 +23,7 @@ func TestManager_GetClient_CachesPerKey(t *testing.T) {
 				ID:         "test-server",
 				Extensions: []string{".go"},
 				RootFinder: func(workDir, file string) (string, error) {
-					return "/project/root", nil
+					return root, nil
 				},
 				Spawn: func(ctx context.Context, root string) (*exec.Cmd, error) {
 					spawnCount++
@@ -29,13 +34,12 @@ func TestManager_GetClient_CachesPerKey(t *testing.T) {
 				},
 			},
 		},
-		clients: make(map[string]*client),
+		clients: make(map[clientKey]*client),
 	}
-
 	ctx := context.Background()
 
 	// First call: spawn is called, returns error.
-	_, err1 := m.getClient(ctx, "/project", "/project/root/main.go")
+	_, err1 := m.getClient(ctx, workDir, filepath.Join(root, "main.go"))
 	require.Error(t, err1)
 	assert.Equal(t, 1, spawnCount)
 
@@ -44,17 +48,22 @@ func TestManager_GetClient_CachesPerKey(t *testing.T) {
 		return nil, nil
 	})
 	m.mu.Lock()
-	m.clients["test-server:/project/root"] = testClient
+	m.clients[clientKey{serverID: "test-server", root: root}] = testClient
 	m.mu.Unlock()
 
 	// Second call: should find the cached client, NOT call Spawn again.
-	cl, err2 := m.getClient(ctx, "/project", "/project/root/main.go")
+	cl, err2 := m.getClient(ctx, workDir, filepath.Join(root, "main.go"))
 	require.NoError(t, err2)
 	assert.Equal(t, testClient, cl)
 	assert.Equal(t, 1, spawnCount, "Spawn should not be called again")
 }
 
 func TestManager_GetClient_DifferentRoots(t *testing.T) {
+	workDir := t.TempDir()
+	rootA := filepath.Join(workDir, "a")
+	rootB := filepath.Join(workDir, "b")
+	require.NoError(t, os.MkdirAll(rootA, 0o755))
+	require.NoError(t, os.MkdirAll(rootB, 0o755))
 	m := &manager{
 		servers: []serverConfig{
 			{
@@ -62,17 +71,17 @@ func TestManager_GetClient_DifferentRoots(t *testing.T) {
 				Extensions: []string{".go"},
 				RootFinder: func(workDir, file string) (string, error) {
 					// Return different roots based on file path.
-					if file == "/project/a/main.go" {
-						return "/project/a", nil
+					if file == filepath.Join(rootA, "main.go") {
+						return rootA, nil
 					}
-					return "/project/b", nil
+					return rootB, nil
 				},
 				Spawn: func(ctx context.Context, root string) (*exec.Cmd, error) {
 					return nil, fmt.Errorf("no real server")
 				},
 			},
 		},
-		clients: make(map[string]*client),
+		clients: make(map[clientKey]*client),
 	}
 
 	// Inject two different clients for two different roots.
@@ -80,17 +89,17 @@ func TestManager_GetClient_DifferentRoots(t *testing.T) {
 	clientB := newTestClient(t, func(req Request) (any, error) { return "B", nil })
 
 	m.mu.Lock()
-	m.clients["test-server:/project/a"] = clientA
-	m.clients["test-server:/project/b"] = clientB
+	m.clients[clientKey{serverID: "test-server", root: rootA}] = clientA
+	m.clients[clientKey{serverID: "test-server", root: rootB}] = clientB
 	m.mu.Unlock()
 
 	ctx := context.Background()
 
-	gotA, err := m.getClient(ctx, "/project", "/project/a/main.go")
+	gotA, err := m.getClient(ctx, workDir, filepath.Join(rootA, "main.go"))
 	require.NoError(t, err)
 	assert.Equal(t, clientA, gotA)
 
-	gotB, err := m.getClient(ctx, "/project", "/project/b/main.go")
+	gotB, err := m.getClient(ctx, workDir, filepath.Join(rootB, "main.go"))
 	require.NoError(t, err)
 	assert.Equal(t, clientB, gotB)
 
@@ -98,6 +107,7 @@ func TestManager_GetClient_DifferentRoots(t *testing.T) {
 }
 
 func TestManager_GetClient_NoServerForExtension(t *testing.T) {
+	workDir := t.TempDir()
 	m := &manager{
 		servers: []serverConfig{
 			{
@@ -108,13 +118,13 @@ func TestManager_GetClient_NoServerForExtension(t *testing.T) {
 				},
 			},
 		},
-		clients: make(map[string]*client),
+		clients: make(map[clientKey]*client),
 	}
 
 	ctx := context.Background()
-	_, err := m.getClient(ctx, "/project", "/project/main.rs")
+	_, err := m.getClient(ctx, workDir, filepath.Join(workDir, "main.rs"))
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "no LSP server for extension .rs")
+	assert.Contains(t, err.Error(), "no LSP server for file")
 }
 
 func TestManager_Close(t *testing.T) {
@@ -122,9 +132,9 @@ func TestManager_Close(t *testing.T) {
 	clientB := newTestClient(t, func(req Request) (any, error) { return nil, nil })
 
 	m := &manager{
-		clients: map[string]*client{
-			"server-a:/root/a": clientA,
-			"server-b:/root/b": clientB,
+		clients: map[clientKey]*client{
+			{serverID: "server-a", root: "/root/a"}: clientA,
+			{serverID: "server-b", root: "/root/b"}: clientB,
 		},
 	}
 
@@ -136,60 +146,27 @@ func TestManager_Close(t *testing.T) {
 }
 
 func TestManager_WorkspaceSymbol(t *testing.T) {
-	t.Run("finds client by workDir prefix", func(t *testing.T) {
-		testClient := newTestClient(t, func(req Request) (any, error) {
-			assert.Equal(t, "workspace/symbol", req.Method)
-			return []SymbolInformation{
-				{Name: "Foo", Kind: 12, Location: Location{URI: "file:///project/foo.go"}},
-			}, nil
-		})
-
-		m := &manager{
-			clients: map[string]*client{
-				"gopls:/project": testClient,
+	workDir := t.TempDir()
+	file := filepath.Join(workDir, "main.go")
+	require.NoError(t, os.WriteFile(file, []byte("package main\n"), 0o644))
+	testClient := newTestClient(t, func(req Request) (any, error) {
+		assert.Equal(t, "workspace/symbol", req.Method)
+		return []SymbolInformation{{Name: "Foo", Kind: 12, Location: SymbolLocation{URI: fileURI(file)}}}, nil
+	})
+	m := &manager{
+		servers: []serverConfig{
+			{
+				ID:         "gopls",
+				Extensions: []string{".go"},
+				RootFinder: func(_, _ string) (string, error) { return workDir, nil },
 			},
-		}
-
-		ctx := context.Background()
-		symbols, err := m.WorkspaceSymbol(ctx, "/project", "Foo")
-
-		require.NoError(t, err)
-		require.Len(t, symbols, 1)
-		assert.Equal(t, "Foo", symbols[0].Name)
-	})
-
-	t.Run("falls back to any client", func(t *testing.T) {
-		testClient := newTestClient(t, func(req Request) (any, error) {
-			return []SymbolInformation{
-				{Name: "Bar", Kind: 5},
-			}, nil
-		})
-
-		m := &manager{
-			clients: map[string]*client{
-				"gopls:/other/project": testClient,
-			},
-		}
-
-		ctx := context.Background()
-		symbols, err := m.WorkspaceSymbol(ctx, "/unrelated", "Bar")
-
-		require.NoError(t, err)
-		require.Len(t, symbols, 1)
-		assert.Equal(t, "Bar", symbols[0].Name)
-	})
-
-	t.Run("no clients available", func(t *testing.T) {
-		m := &manager{
-			clients: make(map[string]*client),
-		}
-
-		ctx := context.Background()
-		_, err := m.WorkspaceSymbol(ctx, "/project", "anything")
-
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "no LSP client available")
-	})
+		},
+		clients: map[clientKey]*client{{serverID: "gopls", root: workDir}: testClient},
+	}
+	symbols, err := m.WorkspaceSymbol(context.Background(), workDir, file, "Foo")
+	require.NoError(t, err)
+	require.Len(t, symbols, 1)
+	assert.Equal(t, "Foo", symbols[0].Name)
 }
 
 func TestManager_GetAllDiagnostics(t *testing.T) {
@@ -206,10 +183,11 @@ func TestManager_GetAllDiagnostics(t *testing.T) {
 	clientA.diagnosticsMu.Unlock()
 
 	m := &manager{
-		clients: map[string]*client{
-			"gopls:/project": clientA,
+		clients: map[clientKey]*client{
+			{serverID: "gopls", root: "/project"}: clientA,
 		},
 	}
+	clientA.rootPath = "/project"
 
 	ctx := context.Background()
 	result := m.GetAllDiagnostics(ctx, "/project", 10, 10)
@@ -238,8 +216,9 @@ func TestManager_GetAllDiagnostics_RespectsLimits(t *testing.T) {
 	cl.diagnosticsMu.Unlock()
 
 	m := &manager{
-		clients: map[string]*client{"gopls:/": cl},
+		clients: map[clientKey]*client{{serverID: "gopls", root: "/"}: cl},
 	}
+	cl.rootPath = "/"
 
 	ctx := context.Background()
 
@@ -254,4 +233,29 @@ func TestManager_GetAllDiagnostics_RespectsLimits(t *testing.T) {
 		result := m.GetAllDiagnostics(ctx, "/", 10, 1)
 		assert.Len(t, result, 1)
 	})
+}
+
+func TestManagerGetAllDiagnosticsFiltersClientRootsAndExitedClients(t *testing.T) {
+	inside := newClient()
+	inside.rootPath = "/project/module"
+	inside.diagnostics["file:///project/module/main.go"] = []Diagnostic{{Severity: 1, Message: "inside"}}
+
+	exited := newClient()
+	exited.rootPath = "/project"
+	exited.diagnostics["file:///project/exited.go"] = []Diagnostic{{Severity: 1, Message: "exited"}}
+	exited.exited.Store(true)
+
+	outside := newClient()
+	outside.rootPath = "/other"
+	outside.diagnostics["file:///project/leak.go"] = []Diagnostic{{Severity: 1, Message: "leak"}}
+
+	m := &manager{clients: map[clientKey]*client{
+		{serverID: "inside", root: inside.rootPath}:   inside,
+		{serverID: "exited", root: exited.rootPath}:   exited,
+		{serverID: "outside", root: outside.rootPath}: outside,
+	}}
+
+	result := m.GetAllDiagnostics(context.Background(), "/project", 10, 10)
+	require.Len(t, result, 1)
+	assert.Equal(t, "/project/module/main.go", result[0].Path)
 }

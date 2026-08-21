@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"time"
 
 	"go.uber.org/zap"
 
@@ -67,19 +66,12 @@ func (t *writeTool) Parameters() json.RawMessage {
 func (t *writeTool) Execute(ctx context.Context, params json.RawMessage) (*tool.Result, error) {
 	log := logger.Ctx(ctx).Named("tool.write")
 
-	var p writeParams
-	if err := json.Unmarshal(params, &p); err != nil {
-		log.Warn("invalid_parameters", zap.Error(err))
-		return nil, fmt.Errorf("invalid parameters: %w", err)
-	}
-
-	if p.FilePath == "" {
-		log.Warn("empty_filepath")
-		return nil, errors.New("file_path is required")
+	p, err := parseWriteParams(params, log)
+	if err != nil {
+		return nil, err
 	}
 
 	log.Debug("executing", zap.String("filePath", p.FilePath), zap.Int("contentLength", len(p.Content)))
-
 	filePath := resolvePath(t.workDir, p.FilePath)
 
 	isNew, err := t.writeFile(ctx, filePath, p.Content, log)
@@ -87,6 +79,15 @@ func (t *writeTool) Execute(ctx context.Context, params json.RawMessage) (*tool.
 		return nil, err
 	}
 
+	return t.writeResult(ctx, filePath, p.Content, isNew, log)
+}
+
+func (t *writeTool) writeResult(
+	ctx context.Context,
+	filePath, content string,
+	isNew bool,
+	log *zap.Logger,
+) (*tool.Result, error) {
 	action := "updated"
 	if isNew {
 		action = "created"
@@ -95,24 +96,29 @@ func (t *writeTool) Execute(ctx context.Context, params json.RawMessage) (*tool.
 	log.Debug("complete",
 		zap.String("filePath", filePath),
 		zap.String("action", action),
-		zap.Int("bytesWritten", len(p.Content)),
+		zap.Int("bytesWritten", len(content)),
 	)
 
 	title := filePath
-
 	if t.workDir != "" {
 		if rel, err := filepath.Rel(t.workDir, filePath); err == nil {
 			title = rel
 		}
 	}
 
-	output := fmt.Sprintf("File %s successfully: %s (%d bytes)", action, filePath, len(p.Content))
-	output += t.writeLSPDiagnostics(ctx, filePath, log)
+	output := fmt.Sprintf("File %s successfully: %s (%d bytes)", action, filePath, len(content))
+
+	diagnostics, err := t.writeLSPDiagnostics(ctx, filePath, log)
+	if err != nil {
+		return nil, err
+	}
+
+	output += diagnostics
 
 	log.Info("file_written",
 		zap.String("filePath", filePath),
 		zap.String("action", action),
-		zap.Int("bytes", len(p.Content)),
+		zap.Int("bytes", len(content)),
 	)
 
 	return &tool.Result{
@@ -120,11 +126,26 @@ func (t *writeTool) Execute(ctx context.Context, params json.RawMessage) (*tool.
 		Output: output,
 		Metadata: map[string]any{
 			metaKeyPath: filePath,
-			"bytes":     len(p.Content),
+			"bytes":     len(content),
 			"isNew":     isNew,
 			"action":    action,
 		},
 	}, nil
+}
+
+func parseWriteParams(params json.RawMessage, log *zap.Logger) (writeParams, error) {
+	var parsed writeParams
+	if err := json.Unmarshal(params, &parsed); err != nil {
+		log.Warn("invalid_parameters", zap.Error(err))
+		return writeParams{}, fmt.Errorf("invalid parameters: %w", err)
+	}
+
+	if parsed.FilePath == "" {
+		log.Warn("empty_filepath")
+		return writeParams{}, errors.New("file_path is required")
+	}
+
+	return parsed, nil
 }
 
 func (t *writeTool) writeFile(
@@ -150,9 +171,9 @@ func (t *writeTool) writeFile(
 	return isNew, nil
 }
 
-func (t *writeTool) writeLSPDiagnostics(ctx context.Context, filePath string, log *zap.Logger) string {
+func (t *writeTool) writeLSPDiagnostics(ctx context.Context, filePath string, log *zap.Logger) (string, error) {
 	if t.lspMgr == nil {
-		return ""
+		return "", nil
 	}
 
 	log.Debug("write: checking LSP diagnostics",
@@ -160,9 +181,15 @@ func (t *writeTool) writeLSPDiagnostics(ctx context.Context, filePath string, lo
 		zap.String("workDir", t.workDir),
 	)
 
-	_ = t.lspMgr.TouchFile(ctx, t.workDir, filePath)
+	if _, err := t.lspMgr.GetDiagnostics(ctx, t.workDir, filePath); err != nil {
+		if ctx.Err() != nil {
+			return "", ctx.Err()
+		}
 
-	time.Sleep(150 * time.Millisecond)
+		log.Debug("write: LSP diagnostics unavailable", zap.Error(err))
+
+		return "", nil
+	}
 
 	diagnostics := t.lspMgr.GetAllDiagnostics(ctx, t.workDir, 20, 5)
 	log.Debug("write: LSP diagnostics",
@@ -171,13 +198,13 @@ func (t *writeTool) writeLSPDiagnostics(ctx context.Context, filePath string, lo
 	)
 
 	if len(diagnostics) == 0 {
-		return ""
+		return "", nil
 	}
 
 	diagStr := lsp.FormatDiagnostics(diagnostics)
 	if diagStr == "" {
-		return ""
+		return "", nil
 	}
 
-	return "\n\n" + diagStr
+	return "\n\n" + diagStr, nil
 }

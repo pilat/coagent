@@ -58,7 +58,10 @@ func (m *mockLSPManager) DocumentSymbol(ctx context.Context, workDir, file strin
 	return nil, nil
 }
 
-func (m *mockLSPManager) WorkspaceSymbol(ctx context.Context, workDir, query string) ([]lsp.SymbolInformation, error) {
+func (m *mockLSPManager) WorkspaceSymbol(
+	ctx context.Context,
+	workDir, file, query string,
+) ([]lsp.SymbolInformation, error) {
 	if m.workspaceSymbolFunc != nil {
 		return m.workspaceSymbolFunc(ctx, workDir, query)
 	}
@@ -107,10 +110,6 @@ func (m *mockLSPManager) OutgoingCalls(
 		return m.outgoingCallsFunc(ctx, workDir, file, line, character)
 	}
 	return nil, nil
-}
-
-func (m *mockLSPManager) TouchFile(ctx context.Context, workDir, file string) error {
-	return nil
 }
 
 func (m *mockLSPManager) GetDiagnostics(ctx context.Context, workDir, file string) ([]lsp.Diagnostic, error) {
@@ -526,9 +525,9 @@ func TestLspTool_ResponseTypes(t *testing.T) {
 		sym := lsp.SymbolInformation{
 			Name: "TestFunc",
 			Kind: 12, // Function
-			Location: lsp.Location{
+			Location: lsp.SymbolLocation{
 				URI: "file:///test.go",
-				Range: lsp.Range{
+				Range: &lsp.Range{
 					Start: lsp.Position{Line: 5, Character: 0},
 					End:   lsp.Position{Line: 10, Character: 1},
 				},
@@ -784,7 +783,7 @@ func TestLspTool_Execute(t *testing.T) {
 		mockMgr := &mockLSPManager{
 			workspaceSymbolFunc: func(ctx context.Context, workDir, query string) ([]lsp.SymbolInformation, error) {
 				return []lsp.SymbolInformation{
-					{Name: "TestFunc", Kind: 12, Location: lsp.Location{URI: "file:///test.go"}},
+					{Name: "TestFunc", Kind: 12, Location: lsp.SymbolLocation{URI: "file:///test.go"}},
 				}, nil
 			},
 		}

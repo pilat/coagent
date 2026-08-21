@@ -3,27 +3,95 @@ package lsp
 import (
 	"os"
 	"path/filepath"
-	"strings"
 )
 
-func findNearestRoot(workDir, startFile string, targets []string) string {
-	dir := filepath.Dir(startFile)
-	if !filepath.IsAbs(dir) {
-		dir = filepath.Join(workDir, dir)
-	}
+type markerKind uint8
 
-	for {
-		for _, target := range targets {
-			if _, err := os.Stat(filepath.Join(dir, target)); err == nil {
-				return dir
-			}
+const (
+	markerFile markerKind = iota
+	markerDirectory
+	markerEither
+)
+
+type rootMarker struct {
+	name    string
+	pattern bool
+	kind    markerKind
+}
+
+func exactFile(name string) rootMarker { return rootMarker{name: name, kind: markerFile} }
+func exactDir(name string) rootMarker  { return rootMarker{name: name, kind: markerDirectory} }
+func filePattern(name string) rootMarker {
+	return rootMarker{name: name, pattern: true, kind: markerFile}
+}
+
+func findNearestRoot(workDir, startFile string, names []string) string {
+	markers := make([]rootMarker, 0, len(names))
+	for _, name := range names {
+		if name != "" && name[0] == '*' {
+			markers = append(markers, filePattern(name))
+			continue
 		}
 
-		parent := filepath.Dir(dir)
-		if parent == dir || !strings.HasPrefix(dir, workDir) {
+		markers = append(markers, exactFile(name))
+	}
+
+	return findNearestRootMarkers(workDir, startFile, markers)
+}
+
+func findNearestRootMarkers(workDir, startFile string, markers []rootMarker) string {
+	identity, err := resolveFile(workDir, startFile)
+	if err != nil {
+		return ""
+	}
+
+	dir := filepath.Dir(identity.path)
+	for {
+		if containsRootMarker(dir, markers) {
+			return dir
+		}
+
+		rel, err := filepath.Rel(workDir, dir)
+		if err != nil || rel == "." {
 			return workDir
 		}
 
-		dir = parent
+		dir = filepath.Dir(dir)
 	}
+}
+
+func containsRootMarker(dir string, markers []rootMarker) bool {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return false
+	}
+
+	for _, marker := range markers {
+		for _, entry := range entries {
+			match := entry.Name() == marker.name
+			if marker.pattern {
+				match, _ = filepath.Match(marker.name, entry.Name())
+			}
+
+			if !match || !matchesMarkerKind(entry, marker.kind) {
+				continue
+			}
+
+			return true
+		}
+	}
+
+	return false
+}
+
+func matchesMarkerKind(entry os.DirEntry, kind markerKind) bool {
+	if kind == markerEither {
+		return true
+	}
+
+	if kind == markerDirectory {
+		return entry.IsDir()
+	}
+
+	return !entry.IsDir()
 }

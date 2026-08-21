@@ -401,6 +401,28 @@ policy, while the live session registry controls what is actually callable.
 Todo tracking is intentionally in-memory and session-local; it is planning aid,
 not durable workflow state.
 
+### Language-server boundary
+
+The LSP package owns language selection, project-root discovery, subprocess
+lifecycle and the JSON-RPC connection used by code-intelligence tools. File
+paths are canonicalized and confined to the session project before server
+selection, synchronization, requests or diagnostic aggregation. Workspace
+symbol requests use an explicit file anchor rather than an arbitrary cached
+client.
+
+Language servers are user- or project-owned executables. Resolution and process
+spawning use the captured project shell environment, so per-directory toolchain
+activation determines the PATH; coagent neither downloads nor installs servers.
+
+Each client serializes writes, distinguishes requests, notifications and
+responses by their JSON-RPC shape, and answers server requests through the same
+writer. Failure completes pending calls once, evicts only the same cached client
+instance and leaves one process-wait owner to reap it. Diagnostic freshness is
+an event protocol keyed by document version or, for versionless servers, a
+post-sync generation; aggregation admits only live clients and URIs belonging
+to the requested project. Write and edit tools wait on that protocol rather
+than sleeping.
+
 ### LLM, catalog and loading
 
 LLM drivers own provider-specific request/response encoding, client creation,

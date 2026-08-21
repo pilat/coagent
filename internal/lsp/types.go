@@ -1,8 +1,11 @@
 package lsp
 
 import (
+	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 )
 
@@ -25,23 +28,36 @@ type DocumentSymbol struct {
 	Name           string           `json:"name"`
 	Detail         string           `json:"detail,omitempty"`
 	Kind           int              `json:"kind"`
+	Tags           []int            `json:"tags,omitempty"`
+	Deprecated     bool             `json:"deprecated,omitempty"`
+	ContainerName  string           `json:"containerName,omitempty"`
 	Range          Range            `json:"range"`
 	SelectionRange Range            `json:"selectionRange"`
 	Children       []DocumentSymbol `json:"children,omitempty"`
 }
 
 type SymbolInformation struct {
-	Name     string   `json:"name"`
-	Kind     int      `json:"kind"`
-	Location Location `json:"location"`
+	Name          string         `json:"name"`
+	Kind          int            `json:"kind"`
+	Tags          []int          `json:"tags,omitempty"`
+	Deprecated    bool           `json:"deprecated,omitempty"`
+	ContainerName string         `json:"containerName,omitempty"`
+	Location      SymbolLocation `json:"location"`
+}
+
+// SymbolLocation keeps URI-only WorkspaceSymbol locations distinct from a
+// Location, whose range is required by the LSP specification.
+type SymbolLocation struct {
+	URI   string `json:"uri"`
+	Range *Range `json:"range,omitempty"`
 }
 
 type Diagnostic struct {
-	Range    Range  `json:"range"`
-	Severity int    `json:"severity,omitempty"`
-	Code     string `json:"code,omitempty"`
-	Source   string `json:"source,omitempty"`
-	Message  string `json:"message"`
+	Range    Range          `json:"range"`
+	Severity int            `json:"severity,omitempty"`
+	Code     DiagnosticCode `json:"code,omitempty"`
+	Source   string         `json:"source,omitempty"`
+	Message  string         `json:"message"`
 }
 
 type Hover struct {
@@ -55,12 +71,14 @@ type MarkupContent struct {
 }
 
 type CallHierarchyItem struct {
-	Name           string `json:"name"`
-	Kind           int    `json:"kind"`
-	Detail         string `json:"detail,omitempty"`
-	URI            string `json:"uri"`
-	Range          Range  `json:"range"`
-	SelectionRange Range  `json:"selectionRange"`
+	Name           string          `json:"name"`
+	Kind           int             `json:"kind"`
+	Detail         string          `json:"detail,omitempty"`
+	URI            string          `json:"uri"`
+	Range          Range           `json:"range"`
+	SelectionRange Range           `json:"selectionRange"`
+	Tags           []int           `json:"tags,omitempty"`
+	Data           json.RawMessage `json:"data,omitempty"`
 }
 
 type CallHierarchyIncomingCall struct {
@@ -75,8 +93,85 @@ type CallHierarchyOutgoingCall struct {
 
 type PublishDiagnosticsParams struct {
 	URI         string       `json:"uri"`
-	Version     int          `json:"version,omitempty"`
 	Diagnostics []Diagnostic `json:"diagnostics"`
+	version     diagnosticVersion
+}
+
+// DiagnosticCode preserves LSP's string-or-integer diagnostic code union.
+type DiagnosticCode json.RawMessage
+
+func (c *DiagnosticCode) UnmarshalJSON(data []byte) error {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
+		return errors.New("diagnostic code must not be null")
+	}
+
+	var text string
+	if err := json.Unmarshal(trimmed, &text); err == nil {
+		*c = append((*c)[:0], trimmed...)
+		return nil
+	}
+
+	var number json.Number
+	decoder := json.NewDecoder(bytes.NewReader(trimmed))
+	decoder.UseNumber()
+
+	if err := decoder.Decode(&number); err != nil {
+		return fmt.Errorf("diagnostic code: %w", err)
+	}
+
+	if _, err := strconv.ParseInt(number.String(), 10, 64); err != nil {
+		return errors.New("diagnostic code must be a string or integer")
+	}
+
+	*c = append((*c)[:0], trimmed...)
+
+	return nil
+}
+
+func (c DiagnosticCode) MarshalJSON() ([]byte, error) {
+	if len(c) == 0 {
+		return []byte("null"), nil
+	}
+
+	return c, nil
+}
+
+func (p *PublishDiagnosticsParams) UnmarshalJSON(data []byte) error {
+	var wire struct {
+		URI         string          `json:"uri"`
+		Version     json.RawMessage `json:"version"`
+		Diagnostics []Diagnostic    `json:"diagnostics"`
+	}
+	if err := json.Unmarshal(data, &wire); err != nil {
+		return fmt.Errorf("publish diagnostics: %w", err)
+	}
+
+	p.URI = wire.URI
+	p.Diagnostics = wire.Diagnostics
+	p.version = diagnosticVersion{}
+
+	if len(wire.Version) == 0 {
+		return nil
+	}
+
+	if bytes.Equal(bytes.TrimSpace(wire.Version), []byte("null")) {
+		return errors.New("diagnostic version must not be null")
+	}
+
+	var version int
+	if err := json.Unmarshal(wire.Version, &version); err != nil {
+		return fmt.Errorf("diagnostic version: %w", err)
+	}
+
+	p.version = diagnosticVersion{present: true, value: version}
+
+	return nil
+}
+
+type diagnosticVersion struct {
+	present bool
+	value   int
 }
 
 type Request struct {
@@ -93,15 +188,17 @@ type Response struct {
 	Error   *ResponseError   `json:"error,omitempty"`
 }
 
-type ResponseError struct {
+type RPCError struct {
 	Code    int             `json:"code"`
 	Message string          `json:"message"`
 	Data    json.RawMessage `json:"data,omitempty"`
 }
 
-func (e *ResponseError) Error() string {
-	return fmt.Sprintf("LSP error %d: %s", e.Code, e.Message)
+func (e *RPCError) Error() string {
+	return fmt.Sprintf("lsp error %d: %s", e.Code, e.Message)
 }
+
+type ResponseError = RPCError
 
 type Notification struct {
 	JSONRPC string          `json:"jsonrpc"`

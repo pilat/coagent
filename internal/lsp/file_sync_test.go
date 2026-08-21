@@ -42,7 +42,7 @@ func (c *notificationCapture) snapshot() []Notification {
 	return append([]Notification(nil), c.notifications...)
 }
 
-func TestManager_TouchFileAndQueriesSynchronizeOneOpenThenChanges(t *testing.T) {
+func TestManager_QueriesSynchronizeOneOpenThenChanges(t *testing.T) {
 	dir := t.TempDir()
 	file := filepath.Join(dir, "main.go")
 	require.NoError(t, os.WriteFile(file, []byte("package first\n"), 0o600))
@@ -56,12 +56,13 @@ func TestManager_TouchFileAndQueriesSynchronizeOneOpenThenChanges(t *testing.T) 
 			Extensions: []string{".go"},
 			RootFinder: func(_, _ string) (string, error) { return dir, nil },
 		}},
-		clients: map[string]*client{"test:" + dir: cl},
+		clients: map[clientKey]*client{{serverID: "test", root: dir}: cl},
 	}
 
 	runConcurrentSyncs(t, func(i int) error {
 		if i%2 == 0 {
-			return manager.TouchFile(t.Context(), dir, file)
+			_, err := manager.GetDiagnostics(t.Context(), dir, file)
+			return err
 		}
 
 		return cl.ensureFileOpen(t.Context(), file)
@@ -70,7 +71,8 @@ func TestManager_TouchFileAndQueriesSynchronizeOneOpenThenChanges(t *testing.T) 
 	require.NoError(t, os.WriteFile(file, []byte("package second\n"), 0o600))
 	runConcurrentSyncs(t, func(i int) error {
 		if i%2 == 0 {
-			return manager.TouchFile(t.Context(), dir, file)
+			_, err := manager.GetDiagnostics(t.Context(), dir, file)
+			return err
 		}
 
 		return cl.ensureFileOpen(t.Context(), file)

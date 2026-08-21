@@ -7,7 +7,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -19,8 +18,12 @@ type diagnosticsLSPManager struct {
 	*mockLSPManager
 
 	diagnostics []lsp.FileDiagnostics
-	touchedAt   time.Time
-	polledAt    time.Time
+	observed    []string
+}
+
+func (m *diagnosticsLSPManager) GetDiagnostics(_ context.Context, workDir, file string) ([]lsp.Diagnostic, error) {
+	m.observed = append(m.observed, workDir+":"+file)
+	return nil, nil
 }
 
 var _ lsp.Manager = (*diagnosticsLSPManager)(nil)
@@ -29,24 +32,12 @@ func newDiagnosticsManager(diagnostics []lsp.FileDiagnostics) *diagnosticsLSPMan
 	return &diagnosticsLSPManager{mockLSPManager: &mockLSPManager{}, diagnostics: diagnostics}
 }
 
-func (m *diagnosticsLSPManager) TouchFile(_ context.Context, _, _ string) error {
-	m.touchedAt = time.Now()
-	return nil
-}
-
 func (m *diagnosticsLSPManager) GetAllDiagnostics(
 	_ context.Context,
 	_ string,
 	_, _ int,
 ) []lsp.FileDiagnostics {
-	m.polledAt = time.Now()
 	return m.diagnostics
-}
-
-// The tool must give the language server a settle window before polling, or it
-// reports a file as clean that the server has not analysed yet.
-func (m *diagnosticsLSPManager) settleWindow() time.Duration {
-	return m.polledAt.Sub(m.touchedAt)
 }
 
 func TestWriteToolAppendsDiagnosticsOnlyWhenPresent(t *testing.T) {
@@ -73,7 +64,6 @@ func TestWriteToolAppendsDiagnosticsOnlyWhenPresent(t *testing.T) {
 			require.NoError(t, err)
 
 			assert.Equal(t, tt.wantDiags, containsDiagnosticsReport(result.Output))
-			assert.GreaterOrEqual(t, mgr.settleWindow(), 140*time.Millisecond)
 		})
 	}
 }
@@ -103,9 +93,21 @@ func TestEditToolAppendsDiagnosticsOnlyWhenPresent(t *testing.T) {
 			require.NoError(t, err)
 
 			assert.Equal(t, tt.wantDiags, containsDiagnosticsReport(result.Output))
-			assert.GreaterOrEqual(t, mgr.settleWindow(), 140*time.Millisecond)
 		})
 	}
+}
+
+func TestDiagnosticsScenario_WritePublishesFakeLSPDiagnostics(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "main.go")
+	mgr := newDiagnosticsManager(sampleDiagnostics())
+	raw, err := json.Marshal(writeParams{FilePath: path, Content: "package main\n"})
+	require.NoError(t, err)
+
+	result, err := newWriteTool(dir, mgr, directFileMutator{}).Execute(context.Background(), raw)
+	require.NoError(t, err)
+	assert.Contains(t, result.Output, "LSP errors detected")
+	assert.Equal(t, []string{dir + ":" + path}, mgr.observed)
 }
 
 func TestWriteToolTitleFallsBackToAbsolutePath(t *testing.T) {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -32,7 +33,7 @@ func TestManager_StartClient_HandshakeTimesOut(t *testing.T) {
 				return exec.Command("sleep", "60"), nil // spawns but never speaks LSP
 			},
 		}},
-		clients: make(map[string]*client),
+		clients: make(map[clientKey]*client),
 	}
 
 	done := make(chan error, 1)
@@ -52,7 +53,7 @@ func TestManager_StartClient_HandshakeTimesOut(t *testing.T) {
 	}
 }
 
-// A start stuck in Spawn (slow install / handshake) holds only its per-key lock,
+// A start stuck in Spawn (slow spawn / handshake) holds only its per-key lock,
 // not mu — so Close and a start for a different root must proceed. Pre-fix, mu was
 // held across Spawn and both would wedge.
 func TestManager_StartClient_SlowSpawnDoesNotBlockCloseOrOtherRoots(t *testing.T) {
@@ -83,10 +84,11 @@ func TestManager_StartClient_SlowSpawnDoesNotBlockCloseOrOtherRoots(t *testing.T
 				return nil, errors.New("no server for b")
 			},
 		}},
-		clients: make(map[string]*client),
+		clients: make(map[clientKey]*client),
 	}
+	workDir := t.TempDir()
 
-	go func() { _, _ = m.getClient(context.Background(), "/proj", "/proj/a/main.go") }()
+	go func() { _, _ = m.getClient(context.Background(), workDir, filepath.Join(workDir, "a", "main.go")) }()
 	<-enteredA // A is stuck in Spawn, holding only keyLock[A]
 
 	doneClose := make(chan struct{})
@@ -100,7 +102,7 @@ func TestManager_StartClient_SlowSpawnDoesNotBlockCloseOrOtherRoots(t *testing.T
 
 	doneB := make(chan struct{})
 	go func() {
-		_, _ = m.getClient(context.Background(), "/proj", "/proj/b/main.go")
+		_, _ = m.getClient(context.Background(), workDir, filepath.Join(workDir, "b", "main.go"))
 		close(doneB)
 	}()
 
@@ -108,5 +110,42 @@ func TestManager_StartClient_SlowSpawnDoesNotBlockCloseOrOtherRoots(t *testing.T
 	case <-doneB:
 	case <-time.After(5 * time.Second):
 		t.Fatal("getClient for root B blocked behind a slow spawn of root A")
+	}
+}
+
+func TestManager_StartClient_CancellationStopsSpawn(t *testing.T) {
+	workDir := t.TempDir()
+	spawned := make(chan struct{})
+	result := make(chan error, 1)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	m := &manager{
+		servers: []serverConfig{{
+			ID:         "srv",
+			Extensions: []string{".go"},
+			RootFinder: func(_, _ string) (string, error) { return workDir, nil },
+			Spawn: func(ctx context.Context, _ string) (*exec.Cmd, error) {
+				close(spawned)
+				<-ctx.Done()
+				return nil, ctx.Err()
+			},
+		}},
+		clients: make(map[clientKey]*client),
+	}
+
+	go func() {
+		_, err := m.getClient(ctx, workDir, filepath.Join(workDir, "main.go"))
+		result <- err
+	}()
+
+	<-spawned
+	cancel()
+
+	select {
+	case err := <-result:
+		require.ErrorIs(t, err, context.Canceled)
+	case <-time.After(time.Second):
+		t.Fatal("cancelling the request did not stop server resolution")
 	}
 }
