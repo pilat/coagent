@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"sync"
 	"time"
 
@@ -273,11 +274,18 @@ func (s *svc) runSessionIteration( //nolint:funlen // linear lifecycle with expl
 		return false, false
 	}
 
+	if err := s.activateStoppedRootForScheduledTurn(ctx, rec, inputs); err != nil {
+		sess.Close()
+		reportSessionUnstarted(notify, err)
+
+		return false, false
+	}
+
 	rs.svcMu.Lock()
 	rs.service = sess
 	rs.svcMu.Unlock()
 
-	s.registerScheduleTools(ctx, sessionID, sess)
+	s.registerScheduleTools(ctx, rec, sess)
 	s.registerSubagentTools(ctx, sessionID, sess)
 	s.registerMCPTools(ctx, rec, sess)
 	s.registerConfigTools(ctx, rec, sess)
@@ -311,6 +319,28 @@ func (s *svc) runSessionIteration( //nolint:funlen // linear lifecycle with expl
 
 	// Continue to drain any messages that arrived during this run.
 	return true, hadInput
+}
+
+// activateStoppedRootForScheduledTurn reopens a root only after SQLite accepted
+// a new standalone occurrence; duplicate delivery leaves the root parked.
+func (s *svc) activateStoppedRootForScheduledTurn(
+	ctx context.Context,
+	rec *sessionstore.SessionRecord,
+	inputs []sessionInput,
+) error {
+	if rec.ParentID != 0 || rec.Status != sessionstore.SessionStatusStopped || !hasScheduledTurn(inputs) {
+		return nil
+	}
+
+	if err := s.sessionStore.UpdateSessionStatus(ctx, rec.ID, sessionstore.SessionStatusActive); err != nil {
+		return fmt.Errorf("activate stopped root %d for scheduled turn: %w", rec.ID, err)
+	}
+
+	return nil
+}
+
+func hasScheduledTurn(inputs []sessionInput) bool {
+	return slices.ContainsFunc(inputs, inputIsScheduledTurn)
 }
 
 func (s *svc) publishWaiting(
@@ -899,17 +929,24 @@ func (s *svc) handleRunError(
 }
 
 // registerScheduleTools registers daemon-mode schedule and sleep tools on the session's live registry.
-func (s *svc) registerScheduleTools(ctx context.Context, sessionID int64, sess session.Service) {
+func (s *svc) registerScheduleTools(
+	ctx context.Context,
+	rec *sessionstore.SessionRecord,
+	sess session.Service,
+) {
 	if s.scheduleSvc == nil {
 		return
 	}
 
-	for _, t := range []tool.Tool{
-		schedule.NewScheduleTool(sessionID, s.scheduleSvc, time.Local),
-		s.guardSleepWhileSubagentsPending(sessionID, schedule.NewSleepTool(s.scheduleSvc, sessionID)),
-	} {
-		registerLogged(ctx, sess, t)
+	if rec.ParentID == 0 {
+		registerLogged(ctx, sess, schedule.NewScheduleTool(rec.ID, s.scheduleSvc, time.Local))
 	}
+
+	registerLogged(
+		ctx,
+		sess,
+		s.guardSleepWhileSubagentsPending(rec.ID, schedule.NewSleepTool(s.scheduleSvc, rec.ID)),
+	)
 }
 
 // registerMCPTools registers the MCP registry tools. Root sessions only: a
@@ -1091,12 +1128,8 @@ func (s *svc) ensureRunner(
 		return fmt.Errorf("load session %d before start: %w", sessionID, err)
 	}
 
-	if rec.KilledAt != nil || rec.Status == sessionstore.SessionStatusKilled {
-		return fmt.Errorf("session %d is killed", sessionID)
-	}
-
-	if rec.Status == sessionstore.SessionStatusStopping || rec.Status == sessionstore.SessionStatusStopped {
-		return fmt.Errorf("session %d is %s", sessionID, rec.Status)
+	if err := validateRunnerStart(rec, inputs); err != nil {
+		return err
 	}
 
 	s.mu.Lock()
@@ -1162,6 +1195,26 @@ func (s *svc) ensureRunner(
 	go s.runSession(loopCtx, sessionID, rs)
 
 	return nil
+}
+
+func validateRunnerStart(rec *sessionstore.SessionRecord, inputs []queuedSessionInput) error {
+	if rec.KilledAt != nil || rec.Status == sessionstore.SessionStatusKilled {
+		return fmt.Errorf("session %d is killed", rec.ID)
+	}
+
+	if rec.Status == sessionstore.SessionStatusStopping ||
+		(rec.Status == sessionstore.SessionStatusStopped &&
+			(rec.ParentID != 0 || !queuedInputsStartScheduledTurn(inputs))) {
+		return fmt.Errorf("session %d is %s", rec.ID, rec.Status)
+	}
+
+	return nil
+}
+
+func queuedInputsStartScheduledTurn(inputs []queuedSessionInput) bool {
+	return len(inputs) > 0 && !slices.ContainsFunc(inputs, func(input queuedSessionInput) bool {
+		return !inputIsScheduledTurn(input.input())
+	})
 }
 
 func (s *svc) registerRunner(sessionID int64, rs *runner) (*runner, bool) {

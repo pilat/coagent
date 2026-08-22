@@ -1118,11 +1118,9 @@ func TestManager_KillTerminatingOnStartup(t *testing.T) {
 // Control-plane tool gating
 // ---------------------------------------------------------------------------
 
-// TestRegisterControlPlaneTools_RespectsAgentTypeAllowlist: schedule/sleep/task/
-// get_subagent_result/send_to_subagent are injected onto the live registry AFTER
-// the session already filtered by agent type — RegisterGatedTool must re-check
-// the allowlist so a read-only explore session never gains them, while build
-// keeps full access.
+// TestRegisterControlPlaneTools_RespectsAgentTypeAllowlist: dynamic tools are
+// re-checked against the session allowlist, and schedule has the additional
+// root-session boundary.
 func TestRegisterControlPlaneTools_RespectsAgentTypeAllowlist(t *testing.T) {
 	mgr, _, _, _ := newTestManagerWithSchedule(t)
 	ctx := context.Background()
@@ -1130,7 +1128,7 @@ func TestRegisterControlPlaneTools_RespectsAgentTypeAllowlist(t *testing.T) {
 	gatedIDs := []string{"schedule", "sleep", "task", "get_subagent_result", "send_to_subagent"}
 
 	explore := &mockSession{agentType: registry.AgentTypeExplore}
-	mgr.registerScheduleTools(ctx, 1, explore)
+	mgr.registerScheduleTools(ctx, &sessionstore.SessionRecord{ID: 1, ParentID: 10}, explore)
 	mgr.registerSubagentTools(ctx, 1, explore)
 
 	for _, id := range gatedIDs {
@@ -1138,10 +1136,79 @@ func TestRegisterControlPlaneTools_RespectsAgentTypeAllowlist(t *testing.T) {
 	}
 
 	build := &mockSession{agentType: registry.AgentTypeBuild}
-	mgr.registerScheduleTools(ctx, 2, build)
+	mgr.registerScheduleTools(ctx, &sessionstore.SessionRecord{ID: 2}, build)
 	mgr.registerSubagentTools(ctx, 2, build)
 
 	for _, id := range gatedIDs {
 		assert.True(t, build.hasTool(id), "build session must keep %q", id)
 	}
+
+	general := &mockSession{agentType: registry.AgentTypeGeneral}
+	mgr.registerScheduleTools(ctx, &sessionstore.SessionRecord{ID: 3, ParentID: 2}, general)
+	assert.False(t, general.hasTool(tool.IDSchedule))
+	assert.True(t, general.hasTool(tool.IDSleep))
+}
+
+func TestDeliverScheduleToSubagentDoesNotConstructSession(t *testing.T) {
+	tests := []struct {
+		name    string
+		deliver func(*svc, context.Context, int64) (bool, error)
+	}{
+		{
+			name: "normal",
+			deliver: func(mgr *svc, ctx context.Context, sessionID int64) (bool, error) {
+				return mgr.DeliverScheduleTick(ctx, sessionID, "schedule:legacy:normal", "legacy task")
+			},
+		},
+		{
+			name: "fresh",
+			deliver: func(mgr *svc, ctx context.Context, sessionID int64) (bool, error) {
+				return mgr.DeliverFreshSchedule(ctx, sessionID, "schedule:legacy:fresh", "legacy task")
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mgr, factory, projects, _ := newTestManagerWithSchedule(t)
+			ctx := context.Background()
+			projectID := testProject(t, projects, t.TempDir())
+
+			parent, err := mgr.sessionStore.CreateSession(ctx, projectID, "fake-model", "", nil)
+			require.NoError(t, err)
+			childID, err := mgr.sessionStore.CreateSubagentSession(
+				ctx, projectID, parent.ID, parent.ID, "general", "fake-model", "",
+			)
+			require.NoError(t, err)
+			require.NoError(t, mgr.sessionStore.UpdateSessionStatus(ctx, childID, sessionstore.SessionStatusCompleted))
+
+			applied, err := tt.deliver(mgr, ctx, childID)
+			require.NoError(t, err)
+			assert.False(t, applied)
+
+			factory.mu.Lock()
+			defer factory.mu.Unlock()
+			assert.Empty(t, factory.sessions, "legacy subagent delivery must not construct a session")
+		})
+	}
+}
+
+func TestEnsureRunner_EmptyRootPublishesCreatedAndIdle(t *testing.T) {
+	mgr, _, projects := newTestManager(t)
+	ctx := context.Background()
+	workDir := t.TempDir()
+	projectID := testProject(t, projects, workDir)
+	rec, err := mgr.sessionStore.CreateSession(ctx, projectID, "fake-model", "", nil)
+	require.NoError(t, err)
+	notifications := mgr.PubSub().SubscribeAll()
+	defer mgr.PubSub().UnsubscribeAll(notifications)
+
+	require.NoError(t, mgr.ensureRunner(ctx, rec.ID, workDir, projectID, nil))
+
+	created := requireNotification(t, notifications)
+	assert.Equal(t, sessionevent.NotifySessionCreated, created.Notification.Type)
+	idle := requireNotification(t, notifications)
+	assert.Equal(t, sessionevent.NotifyStateChanged, idle.Notification.Type)
+	assert.Equal(t, controllerapi.StateIdle, idle.Notification.Status)
+	require.Eventually(t, func() bool { return !mgr.HasActiveLoop(rec.ID) }, time.Second, 10*time.Millisecond)
 }

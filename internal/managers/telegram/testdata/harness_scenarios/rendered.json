@@ -282,6 +282,54 @@
           "parse_mode": "HTML"
         }
       ]
+    },
+    {
+      "trace": "stopped_root_fresh_schedule_turn.json",
+      "source_test": "TestHarnessScenario_StoppedRootScheduleStartsOneTurn/fresh",
+      "calls": [
+        {
+          "method": "createForumTopic",
+          "chat_id": -100123
+        },
+        {
+          "method": "sendMessage",
+          "chat_id": -100123,
+          "thread_id": 7001,
+          "text": "[⏰ scheduled] fresh scheduled task",
+          "parse_mode": "HTML"
+        },
+        {
+          "method": "sendMessage",
+          "chat_id": -100123,
+          "thread_id": 7001,
+          "text": "✅ fresh scheduled turn completed",
+          "parse_mode": "HTML"
+        }
+      ]
+    },
+    {
+      "trace": "stopped_root_schedule_turn.json",
+      "source_test": "TestHarnessScenario_StoppedRootScheduleStartsOneTurn/normal",
+      "calls": [
+        {
+          "method": "createForumTopic",
+          "chat_id": -100123
+        },
+        {
+          "method": "sendMessage",
+          "chat_id": -100123,
+          "thread_id": 7001,
+          "text": "[⏰ scheduled] scheduled task",
+          "parse_mode": "HTML"
+        },
+        {
+          "method": "sendMessage",
+          "chat_id": -100123,
+          "thread_id": 7001,
+          "text": "✅ scheduled turn completed",
+          "parse_mode": "HTML"
+        }
+      ]
     }
   ]
 }

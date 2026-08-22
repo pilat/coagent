@@ -113,6 +113,17 @@ func inputResolvesExistingCall(input sessionInput) bool {
 	}
 }
 
+func inputIsScheduledTurn(input sessionInput) bool {
+	switch input.(type) {
+	case scheduleTickInput, freshScheduleInput:
+		return true
+	case pendingCallResultInput, blockingSubagentCompletionInput, backgroundSubagentCompletionInput:
+		return false
+	default:
+		return false
+	}
+}
+
 func inputSleepInterruption(input sessionInput) string {
 	switch input.(type) {
 	case backgroundSubagentCompletionInput:

@@ -279,6 +279,10 @@ func (s *svc) DeliverScheduleTick(
 	sessionID int64,
 	deliveryID, content string,
 ) (bool, error) {
+	if root, err := s.isRootScheduleTarget(ctx, sessionID); err != nil || !root {
+		return false, err
+	}
+
 	return s.deliverSessionInput(ctx, sessionID, scheduleTickInput{
 		DeliveryID: deliveryID,
 		Content:    content,
@@ -290,6 +294,10 @@ func (s *svc) DeliverFreshSchedule(
 	sessionID int64,
 	deliveryID, content string,
 ) (bool, error) {
+	if root, err := s.isRootScheduleTarget(ctx, sessionID); err != nil || !root {
+		return false, err
+	}
+
 	return s.deliverSessionInput(ctx, sessionID, freshScheduleInput{
 		DeliveryID: deliveryID,
 		Prompt:     content,
@@ -716,6 +724,15 @@ func (s *svc) GetProjectName(ctx context.Context, projectID int64) (string, erro
 	return name, nil
 }
 
+func (s *svc) isRootScheduleTarget(ctx context.Context, sessionID int64) (bool, error) {
+	rec, err := s.sessionStore.GetSession(ctx, sessionID)
+	if err != nil {
+		return false, fmt.Errorf("session %d not found", sessionID)
+	}
+
+	return rec.ParentID == 0, nil
+}
+
 func (s *svc) stopRecovery() <-chan struct{} {
 	s.recoveryMu.Lock()
 	cancel := s.recoveryCancel
@@ -815,7 +832,12 @@ func (s *svc) routeQueuedSessionInput(ctx context.Context, sessionID int64, inpu
 		return fmt.Errorf("session %d is killed", sessionID)
 	}
 
-	if rec.Status == sessionstore.SessionStatusStopping || rec.Status == sessionstore.SessionStatusStopped {
+	if rec.Status == sessionstore.SessionStatusStopping {
+		return fmt.Errorf("session %d is %s", sessionID, rec.Status)
+	}
+
+	if rec.Status == sessionstore.SessionStatusStopped &&
+		(rec.ParentID != 0 || !inputIsScheduledTurn(input.input())) {
 		return fmt.Errorf("session %d is %s", sessionID, rec.Status)
 	}
 

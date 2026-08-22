@@ -37,8 +37,8 @@ because several managers may share it.
 _Avoid_: channel ownership, transport ownership.
 
 **subagent**:
-An independent child session with clean context, a restricted tool set, and its own iteration budget, spawned by a parent session's `task` tool. A subagent *is* a session (its own `SessionRecord` row) — that is what separates it from a top-level task.
-_Avoid_: worker, child process (it is a session, not an OS process).
+An independent session with clean context, a restricted tool set, and its own iteration budget, spawned by a parent session's `task` tool. A subagent *is* a session (its own `SessionRecord` row) whose `ParentID` identifies another session — that is what separates it from a root session. Subagents may suspend with `sleep`, but standalone scheduled work belongs only to roots.
+_Avoid_: worker, child process (it is a session, not an OS process); using child or descendant when the entity rather than its graph direction is meant.
 
 **subagent round**:
 One bounded activation of an existing subagent session, ending in a completed, failed, or stopped outcome. Follow-ups accepted before terminalization join the active round in FIFO order; a follow-up accepted after terminalization starts the next serialized round, after the previous outcome is delivered. A subagent session may have many rounds while retaining the same conversation history and ID. A round is not a model-facing identity; persistence uses an internal monotonic `activation_seq` only to reject delayed completion signals from older rounds.
@@ -153,7 +153,7 @@ A session→controller event — a message chunk, a state change, a heartbeat (`
 _Avoid_: bare "Notification".
 
 **suspend** (`ErrSuspend`):
-A sentinel error a tool (`sleep`, `schedule`) returns to checkpoint and exit the agent loop *without* recording a result; the real result is injected on resume. The persisted status is `suspended`.
+A sentinel error `sleep` returns to checkpoint and exit the agent loop *without* recording a result; the timer's exact result is injected on resume. The persisted status is `suspended`. Standalone `schedule` creates future work but does not suspend the calling session.
 
 **session input**:
 A normal user or agent message accepted into the durable `session_inbox` FIFO before any runner observes it. The session promotes it into the append-only transcript at the next agent-loop boundary. The same path handles a live, idle, suspended, or stopped session; “steering” and “waking” are no longer separate data transports.
@@ -170,6 +170,10 @@ _Avoid_: one-shot wait (ambiguous), any one-shot is sleep.
 **scheduled delivery identity**:
 A deterministic ID for one standalone one-shot or cron occurrence. Its fingerprint and transcript mutation commit together in `session_deliveries`; an identical producer retry is accepted with `applied=false`, while different semantics under the same ID fail closed. Cron uses one canonical minute for ID and payload; fresh delivery fingerprints stable prompt context, not stamped wall-clock text.
 _Avoid_: schedule message ID, retry token.
+
+**scheduled turn**:
+New standalone work injected by a one-shot or cron schedule, rather than the result of a pending external call. Only a root session may own a scheduled turn. A due scheduled turn may reactivate a stopped root after its deterministic delivery identity is claimed; duplicate acknowledgement leaves that root stopped. A legacy scheduled occurrence addressed to a subagent is acknowledged as an unapplied no-op.
+_Avoid_: sleep wake, subagent wake.
 
 **admission control**:
 The daemon's concurrency governor — caps on total, child, and per-parent sessions plus spawn depth, with a FIFO overflow queue.
