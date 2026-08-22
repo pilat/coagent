@@ -132,6 +132,47 @@
       ]
     },
     {
+      "trace": "one_shot_ack_retry_restart.json",
+      "source_test": "TestHarnessScenario_OneShotAckRetrySurvivesDaemonRestartAndRendersOnce",
+      "calls": [
+        {
+          "method": "createForumTopic",
+          "chat_id": -100123
+        },
+        {
+          "method": "sendMessage",
+          "chat_id": -100123,
+          "thread_id": 7001,
+          "text": "✅ ready for schedule",
+          "parse_mode": "HTML"
+        },
+        {
+          "method": "editForumTopic",
+          "chat_id": -100123,
+          "thread_id": 7001
+        },
+        {
+          "method": "sendMessage",
+          "chat_id": -100123,
+          "thread_id": 7001,
+          "text": "[⏰ scheduled] scheduled once",
+          "parse_mode": "HTML"
+        },
+        {
+          "method": "sendMessage",
+          "chat_id": -100123,
+          "thread_id": 7001,
+          "text": "✅ scheduled work completed",
+          "parse_mode": "HTML"
+        },
+        {
+          "method": "editForumTopic",
+          "chat_id": -100123,
+          "thread_id": 7001
+        }
+      ]
+    },
+    {
       "trace": "scatter_gather_shrinking_wait_set.json",
       "source_test": "TestHarnessScenario_ForegroundScatterGatherProjectsShrinkingAllWaitSet",
       "calls": [

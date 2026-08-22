@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"flag"
 	"io"
+	"maps"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -188,7 +189,9 @@ func replayDaemonTrace(t *testing.T, trace harnessTraceFile) []telegramHarnessCa
 	for _, event := range trace.Trace {
 		n := harnessNotification(t, event)
 		if n.Type == sessionevent.NotifySessionCreated && len(n.Attributes) > 0 {
-			attributes[harnessSessionID] = roundTripAttributes(t, n.Attributes)
+			attrs := maps.Clone(attributes[harnessSessionID])
+			maps.Copy(attrs, n.Attributes)
+			attributes[harnessSessionID] = roundTripAttributes(t, attrs)
 		}
 		if n.Type == sessionevent.NotifySessionCreated || n.Type == sessionevent.NotifySessionCleared {
 			n.Attributes = attributes[harnessSessionID]

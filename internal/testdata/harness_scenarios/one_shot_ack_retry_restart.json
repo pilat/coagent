@@ -1,0 +1,62 @@
+{
+  "source_test": "TestHarnessScenario_OneShotAckRetrySurvivesDaemonRestartAndRendersOnce",
+  "trace": [
+    {
+      "type": "session_created",
+      "name": "<name>",
+      "work_dir": "<workdir>",
+      "attributes": {
+        "manager_id": "telegram-main"
+      }
+    },
+    {
+      "type": "state_changed",
+      "status": "running"
+    },
+    {
+      "type": "message",
+      "message": "✅ ready for schedule"
+    },
+    {
+      "type": "state_changed",
+      "status": "idle"
+    },
+    {
+      "type": "session_created",
+      "name": "<name>",
+      "work_dir": "<workdir>",
+      "attributes": {
+        "manager_id": "telegram-main"
+      }
+    },
+    {
+      "type": "state_changed",
+      "status": "running"
+    },
+    {
+      "type": "input_received",
+      "message": "scheduled once",
+      "source": "scheduler"
+    },
+    {
+      "type": "message",
+      "message": "✅ scheduled work completed"
+    },
+    {
+      "type": "state_changed",
+      "status": "idle"
+    },
+    {
+      "type": "session_created",
+      "name": "<name>",
+      "work_dir": "<workdir>",
+      "attributes": {
+        "manager_id": "telegram-main"
+      }
+    },
+    {
+      "type": "state_changed",
+      "status": "idle"
+    }
+  ]
+}
