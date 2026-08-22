@@ -1,0 +1,30 @@
+{
+  "source_test": "TestHarnessScenario_StoppedRootScheduleStartsOneTurn/fresh",
+  "trace": [
+    {
+      "type": "session_created",
+      "name": "<name>",
+      "work_dir": "<workdir>",
+      "attributes": {
+        "manager_id": "telegram-main"
+      }
+    },
+    {
+      "type": "state_changed",
+      "status": "running"
+    },
+    {
+      "type": "input_received",
+      "message": "fresh scheduled task",
+      "source": "scheduler"
+    },
+    {
+      "type": "message",
+      "message": "✅ fresh scheduled turn completed"
+    },
+    {
+      "type": "state_changed",
+      "status": "idle"
+    }
+  ]
+}

@@ -169,6 +169,11 @@ a user message directly into a live transcript while the session has unresolved
 external work. Completion, scheduling and user input use durable paths before a
 runner observes them.
 
+Standalone scheduled work is a root-session capability: the daemon attaches
+`schedule` only to roots, while subagents retain `sleep` to resolve an existing
+call rather than create future work. Schedule delivery and stopped-root
+activation follow the durable protocol below.
+
 The loop asks the LLM, executes returned tools, records observations, and repeats
 until a final response, stop, error, suspension, or iteration limit. Retried
 provider requests are local to the client; durable operations must be idempotent
@@ -261,6 +266,14 @@ retries are deliberately bounded: ten consecutive same-process failures remove
 the row; recreating the executor resets that in-memory counter. This prevents a
 permanent retry storm but is not a dead-letter protocol. See ADR-0020 for the
 accepted recovery trade-off.
+
+Only roots may own standalone schedules. The daemon verifies persisted session
+parentage both when it attaches the `schedule` tool and before it creates a
+runner for a delivery; `sleep` remains available to subagents because it owns an
+existing pending call. An old standalone schedule addressed to a subagent is
+acknowledged as unapplied without a runner, transcript mutation, publication or
+retry. A newly claimed standalone occurrence can reactivate a stopped root as a
+new turn, while an already-claimed retry leaves it stopped. See ADR-0027.
 
 ### Configuration restart verdict
 

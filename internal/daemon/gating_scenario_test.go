@@ -173,7 +173,7 @@ func TestIntegration_ProjectSubagentToolGating(t *testing.T) {
 		}
 
 		if hasUserContaining(msgs, "CHILD_WIDE") {
-			return probeMissingTools(msgs, "wide", configPlaneTools)
+			return probeMissingTools(msgs, "wide", append(configPlaneTools, tool.IDSchedule))
 		}
 
 		if hasToolResultFor(msgs, tool.IDTask) || hasToolResultFor(msgs, "subagent_event") {
@@ -207,17 +207,43 @@ func TestIntegration_ProjectSubagentToolGating(t *testing.T) {
 	assertNotOffered(t, scoutOffered, append([]string{"ls", "bash"}, controlPlaneTools...))
 	assertNotOffered(t, scoutOffered, configPlaneTools)
 
-	h.assertUnknownTools(wide.ChildID, configPlaneTools)
+	h.assertUnknownTools(wide.ChildID, append(configPlaneTools, tool.IDSchedule))
 	wideOffered := h.schemas.offered(wide.ChildID)
-	for _, id := range controlPlaneTools {
-		assert.Contains(
-			t,
-			wideOffered,
-			id,
-			`a "*" subagent does gain %q — so its config-plane gap is the parentage gate`,
-			id,
-		)
+	assert.Contains(t, wideOffered, tool.IDSleep, "subagents retain bounded suspension")
+	assert.Contains(t, wideOffered, tool.IDTask, "nested subagents remain available within depth limits")
+	assertNotOffered(t, wideOffered, append(configPlaneTools, tool.IDSchedule))
+}
+
+func TestIntegration_GeneralSubagentCannotScheduleButCanSleep(t *testing.T) {
+	const callID = "task-general-schedule-boundary"
+
+	respond := func(_ string, msgs []llmwire.Message) *llmwire.Response {
+		if hasUserContaining(msgs, "CHILD_GENERAL") {
+			return probeMissingTools(msgs, "general", []string{tool.IDSchedule})
+		}
+
+		if hasToolResultFor(msgs, tool.IDTask) || hasToolResultFor(msgs, "subagent_event") {
+			return &llmwire.Response{Text: "parent done"}
+		}
+
+		return &llmwire.Response{ToolCalls: []llmwire.ToolCall{
+			spawnTaskCall(callID, "general", "CHILD_GENERAL"),
+		}}
 	}
 
-	assertNotOffered(t, wideOffered, configPlaneTools)
+	h := newGatingHarness(t, false, nil, respond)
+	defer h.shutdown()
+
+	parentID, err := h.mgr.Send(h.ctx, h.projectID, "spawn general subagent", "fake-model", nil)
+	require.NoError(t, err)
+
+	link := h.waitForLink(parentID, callID)
+	h.waitForDelivery(link.ChildID)
+	h.mgr.waitIdle(parentID)
+
+	h.assertUnknownTools(link.ChildID, []string{tool.IDSchedule})
+	offered := h.schemas.offered(link.ChildID)
+	assert.NotContains(t, offered, tool.IDSchedule)
+	assert.Contains(t, offered, tool.IDSleep)
+	assert.Contains(t, h.schemas.offered(parentID), tool.IDSchedule)
 }
