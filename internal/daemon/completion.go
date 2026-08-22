@@ -400,7 +400,7 @@ func (s *svc) Start(ctx context.Context) error {
 			continue
 		}
 
-		if err := s.Stop(ctx, rec.ID); err != nil {
+		if err := s.stopTreeCleanup(ctx, rec.ID); err != nil {
 			return fmt.Errorf("recover stopping session %d: %w", rec.ID, err)
 		}
 	}
@@ -409,9 +409,29 @@ func (s *svc) Start(ctx context.Context) error {
 	// the moment Start returns, and a runner they open makes it skip that session.
 	s.resolveOrphanedCalls(ctx)
 
-	go s.resumeAfterRestart(context.WithoutCancel(ctx))
+	s.startRecovery(ctx)
 
 	return nil
+}
+
+func (s *svc) startRecovery(ctx context.Context) {
+	s.recoveryMu.Lock()
+	defer s.recoveryMu.Unlock()
+
+	if s.shuttingDown.Load() || s.recoveryDone != nil {
+		return
+	}
+
+	recoveryCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
+	done := make(chan struct{})
+	s.recoveryCancel = cancel
+	s.recoveryDone = done
+
+	go func() {
+		defer close(done)
+
+		s.resumeAfterRestart(recoveryCtx)
+	}()
 }
 
 // sweep is the whole boot recovery in order; Start splits it at the PASS 0

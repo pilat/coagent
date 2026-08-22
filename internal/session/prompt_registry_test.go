@@ -58,6 +58,7 @@ func newPromptTestSession(
 	workDir string,
 	ldr loader.Service,
 	agentType registry.AgentType,
+	models ...config.ModelEntry,
 ) (*svc, *promptRecordingLLM) {
 	t.Helper()
 
@@ -67,8 +68,13 @@ func newPromptTestSession(
 	}
 
 	llmClient := &promptRecordingLLM{}
+	var uc *config.UnifiedConfig
+	if len(models) > 0 {
+		uc = &config.UnifiedConfig{Models: models}
+	}
+
 	p := params{
-		Config:    &config.Config{WorkDir: workDir, Model: "test-model"},
+		Config:    &config.Config{WorkDir: workDir, Model: "test-model", UnifiedConfig: uc},
 		LLMClient: llmClient,
 		TodoStore: todo.New(),
 		Loader:    ldr,
@@ -79,6 +85,40 @@ func newPromptTestSession(
 	require.NoError(t, err)
 
 	return sess.(*svc), llmClient
+}
+
+func TestSystemPrompt_DoesNotAdvertiseConfiguredModelCatalog(t *testing.T) {
+	models := []config.ModelEntry{
+		{ID: "test-model", Name: "Current", ContextWindow: 100_000},
+		{ID: "hidden-model", Name: "Hidden", ContextWindow: 200_000},
+		{ID: "tagged-model", Name: "Candidate", ContextWindow: 300_000, Tags: []string{"coding"}},
+	}
+
+	for _, tc := range []struct {
+		name      string
+		agentType registry.AgentType
+		withTask  bool
+	}{
+		{name: "root with task", agentType: registry.AgentTypeBuild, withTask: true},
+		{name: "restricted subagent without task", agentType: registry.AgentTypeExplore},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, llmClient := newPromptTestSession(t, t.TempDir(), loader.New(), tc.agentType, models...)
+			if tc.withTask {
+				require.True(t, s.RegisterGatedTool(testTool{id: tool.IDTask}))
+			}
+
+			_, err := s.run(context.Background(), "do the thing")
+			require.NoError(t, err)
+
+			prompt := llmClient.firstPrompt(t)
+			assert.Contains(t, prompt, "- Model: test-model")
+			assert.NotContains(t, prompt, "## Available Models")
+			assert.NotContains(t, prompt, "hidden-model")
+			assert.NotContains(t, prompt, "tagged-model")
+			assert.NotContains(t, prompt, "100k context")
+		})
+	}
 }
 
 func writeProjectAgent(t *testing.T, workDir, name, body string) {

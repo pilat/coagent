@@ -384,15 +384,11 @@ func (s *svc) settleStoppedCalls(ctx context.Context, sessionID int64) error {
 	}
 	defer sess.Close()
 
-	if err := s.injectOwedCompletions(ctx, sess, sessionID); err != nil {
-		return fmt.Errorf("deliver completed subagents before stopping session %d: %w", sessionID, err)
+	if err := sess.SettleStoppedCalls(ctx, "Stopped by user."); err != nil {
+		return fmt.Errorf("settle stopped calls for session %d: %w", sessionID, err)
 	}
 
-	for _, call := range sess.PendingExternalCalls() {
-		if _, err := sess.ResolvePendingCall(ctx, call, "Stopped by user."); err != nil {
-			return fmt.Errorf("settle stopped call %s for session %d: %w", call.ID, sessionID, err)
-		}
-
+	for _, call := range pending {
 		s.staged.resolve(sessionID, call.ID)
 	}
 
@@ -1086,6 +1082,10 @@ func (s *svc) ensureRunner(
 	projectID int64,
 	inputs []queuedSessionInput,
 ) error {
+	if s.shuttingDown.Load() {
+		return errDaemonShuttingDown
+	}
+
 	rec, err := s.sessionStore.GetSession(ctx, sessionID)
 	if err != nil {
 		return fmt.Errorf("load session %d before start: %w", sessionID, err)
@@ -1142,11 +1142,14 @@ func (s *svc) ensureRunner(
 		parentID:  parentID,
 	}
 
-	s.mu.Lock()
-	if existing, ok := s.loops[sessionID]; ok {
-		s.mu.Unlock()
+	existing, started := s.registerRunner(sessionID, rs)
+	if !started {
 		s.admit.release(kind, parentID)
 		loopCancel()
+
+		if existing == nil {
+			return errDaemonShuttingDown
+		}
 
 		for _, input := range inputs {
 			existing.appendSessionInput(input)
@@ -1155,13 +1158,27 @@ func (s *svc) ensureRunner(
 		return nil
 	}
 
-	s.loops[sessionID] = rs
-	s.mu.Unlock()
-
 	//nolint:contextcheck // deliberate: the session goroutine must outlive the caller's request ctx (see comment above)
 	go s.runSession(loopCtx, sessionID, rs)
 
 	return nil
+}
+
+func (s *svc) registerRunner(sessionID int64, rs *runner) (*runner, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.shuttingDown.Load() {
+		return nil, false
+	}
+
+	if existing, ok := s.loops[sessionID]; ok {
+		return existing, false
+	}
+
+	s.loops[sessionID] = rs
+
+	return nil, true
 }
 
 // slotInfo classifies a session for admission: a session with a subagent link is

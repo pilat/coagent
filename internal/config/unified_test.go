@@ -49,6 +49,71 @@ models:
 	assert.Equal(t, []string{"inceptron/fp8"}, cfg.Models[1].OpenRouterConfig.Only)
 }
 
+func TestUnifiedConfig_ModelTagsValidateAndRoundTrip(t *testing.T) {
+	path := writeConfig(t, `
+providers:
+  ant:
+    driver: anthropic
+    api_key: test
+models:
+  - id: claude-opus-4-6
+    provider: ant
+    tags: [coding, review_2, fast-model]
+`)
+
+	cfg, err := LoadUnifiedConfig(path, nil)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"coding", "review_2", "fast-model"}, cfg.Models[0].Tags)
+
+	raw, err := MarshalUnifiedConfig(cfg)
+	require.NoError(t, err)
+	roundTripped, err := ParseAndResolve(raw, nil)
+	require.NoError(t, err)
+	assert.Equal(t, cfg.Models[0].Tags, roundTripped.Models[0].Tags)
+}
+
+func TestUnifiedConfig_RejectsInvalidModelTagsAndDuplicateIDs(t *testing.T) {
+	for name, tags := range map[string]string{
+		"uppercase":         "[Coding]",
+		"whitespace":        "[code review]",
+		"special character": "[review!]",
+	} {
+		t.Run(name, func(t *testing.T) {
+			path := writeConfig(t, `
+providers:
+  ant:
+    driver: anthropic
+    api_key: test
+models:
+  - id: claude-opus-4-6
+    provider: ant
+    tags: `+tags+`
+`)
+			_, err := LoadUnifiedConfig(path, nil)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "invalid tag")
+		})
+	}
+
+	path := writeConfig(t, `
+providers:
+  ant:
+    driver: anthropic
+    api_key: test
+  other:
+    driver: anthropic
+    api_key: test
+models:
+  - id: same
+    provider: ant
+  - id: same
+    provider: other
+`)
+	_, err := LoadRawUnifiedConfig(path)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `duplicate model id "same"`)
+}
+
 func TestUnifiedConfig_ProviderCatalogKey(t *testing.T) {
 	path := writeConfig(t, `
 providers:

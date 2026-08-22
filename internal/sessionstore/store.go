@@ -352,26 +352,9 @@ func (s *store) CreateSubagentWithLink(ctx context.Context, create SubagentCreat
 
 	now := time.Now().UTC()
 
-	result, err := tx.ExecContext(
-		ctx,
-		`INSERT INTO sessions (project_id, parent_id, root_id, agent_type, model, reasoning_level, created_at, updated_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-		create.ProjectID,
-		create.ParentID,
-		create.RootID,
-		create.AgentType,
-		create.Model,
-		create.ReasoningLevel,
-		now,
-		now,
-	)
+	childID, err := insertSubagentSession(ctx, tx, create, now)
 	if err != nil {
-		return 0, fmt.Errorf("insert subagent session: %w", err)
-	}
-
-	childID, err := result.LastInsertId()
-	if err != nil {
-		return 0, fmt.Errorf("subagent session id: %w", err)
+		return 0, err
 	}
 
 	_, err = tx.ExecContext(
@@ -401,6 +384,35 @@ func (s *store) CreateSubagentWithLink(ctx context.Context, create SubagentCreat
 
 	if err := tx.Commit(); err != nil {
 		return 0, fmt.Errorf("commit create subagent: %w", err)
+	}
+
+	return childID, nil
+}
+
+func insertSubagentSession(ctx context.Context, tx *sql.Tx, create SubagentCreate, now time.Time) (int64, error) {
+	result, err := tx.ExecContext(ctx, `
+		INSERT INTO sessions (project_id, parent_id, root_id, agent_type, model, reasoning_level, created_at, updated_at)
+		SELECT ?, ?, ?, ?, ?, ?, ?, ?
+		WHERE EXISTS (SELECT 1 FROM sessions WHERE id = ? AND status NOT IN ('stopping', 'stopped'))`,
+		create.ProjectID, create.ParentID, create.RootID, create.AgentType, create.Model,
+		create.ReasoningLevel, now, now, create.ParentID,
+	)
+	if err != nil {
+		return 0, fmt.Errorf("insert subagent session: %w", err)
+	}
+
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("check parent session admission: %w", err)
+	}
+
+	if rows == 0 {
+		return 0, fmt.Errorf("parent session %d is not accepting subagents", create.ParentID)
+	}
+
+	childID, err := result.LastInsertId()
+	if err != nil {
+		return 0, fmt.Errorf("subagent session id: %w", err)
 	}
 
 	return childID, nil

@@ -6,7 +6,6 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/pilat/coagent/internal/config"
 	"github.com/pilat/coagent/internal/loader"
 	"github.com/pilat/coagent/internal/memory"
 	"github.com/pilat/coagent/internal/tool"
@@ -337,34 +336,10 @@ func buildMemoriesSection(ctx context.Context, store memory.CuratedStore, projec
 	return sb.String()
 }
 
-// buildModelsSection builds the dynamic model section of the system prompt.
-// Contains the "Available Models" block (if models configured) and the "- Model:" line.
-func buildModelsSection(uc *config.UnifiedConfig, currentModel string) string {
-	var b strings.Builder
-
-	if uc != nil && len(uc.Models) > 0 {
-		b.WriteString(
-			"\n\n## Available Models\nYou can specify these models when spawning subagents via the 'task' tool:\n",
-		)
-
-		for _, m := range uc.Models {
-			if m.ID == currentModel {
-				fmt.Fprintf(&b, "- **%s**: %s (current)", m.ID, m.DisplayName)
-			} else {
-				fmt.Fprintf(&b, "- **%s**: %s", m.ID, m.DisplayName)
-			}
-
-			if m.ContextWindow > 0 {
-				fmt.Fprintf(&b, " (%dk context)", m.ContextWindow/1000)
-			}
-
-			b.WriteString("\n")
-		}
-	}
-
-	fmt.Fprintf(&b, "\n- Model: %s", currentModel)
-
-	return b.String()
+// buildModelsSection records the inherited model without duplicating task's
+// tagged-candidate policy into the general system prompt.
+func buildModelsSection(currentModel string) string {
+	return "\n- Model: " + currentModel
 }
 
 // buildSkillsSection returns the skills block for the system prompt.

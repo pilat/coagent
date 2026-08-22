@@ -5,7 +5,6 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/pilat/coagent/internal/coagenthome"
@@ -25,20 +24,5 @@ func TestNewConfig(t *testing.T) {
 		require.NotNil(t, cfg)
 
 		_ = cfg.Model
-		_ = cfg.SubagentModel
-	})
-
-	t.Run("loads subagent model env var", func(t *testing.T) {
-		tmpDir := t.TempDir()
-		coagentDir := filepath.Join(tmpDir, coagenthome.DirName)
-		require.NoError(t, os.MkdirAll(coagentDir, 0o755))
-		require.NoError(t, os.WriteFile(filepath.Join(coagentDir, coagenthome.ConfigFileName), []byte("{}"), 0o644))
-		t.Setenv("HOME", tmpDir)
-		t.Setenv("SUBAGENT_MODEL", "test-subagent-model")
-
-		cfg, _, err := NewConfig()
-		require.NoError(t, err)
-
-		assert.Equal(t, "test-subagent-model", cfg.SubagentModel)
 	})
 }

@@ -31,17 +31,22 @@ func (s *svc) stopTree(ctx context.Context, rootID int64) ([]int64, []SubagentLi
 	}
 
 	ids := []int64{rootID}
+	walk := []int64{rootID}
 	seen := map[int64]bool{rootID: true}
 	var treeLinks []SubagentLink
 
-	for pos := 0; pos < len(ids); pos++ {
-		for _, child := range byParent[ids[pos]] {
+	for pos := 0; pos < len(walk); pos++ {
+		for _, child := range byParent[walk[pos]] {
 			if seen[child.ID] {
 				continue
 			}
 
 			seen[child.ID] = true
-			ids = append(ids, child.ID)
+			walk = append(walk, child.ID)
+
+			if isStopActive(child.Status) {
+				ids = append(ids, child.ID)
+			}
 		}
 	}
 
@@ -59,6 +64,12 @@ func (s *svc) stopTree(ctx context.Context, rootID int64) ([]int64, []SubagentLi
 	}
 
 	return ids, treeLinks, nil
+}
+
+func isStopActive(status sessionstore.SessionStatus) bool {
+	return status == sessionstore.SessionStatusActive ||
+		status == sessionstore.SessionStatusSuspended ||
+		status == sessionstore.SessionStatusStopping
 }
 
 func (s *svc) removeQueuedSessions(ids []int64) {

@@ -259,6 +259,20 @@ func TestSetDefaultModel_ReordersToIndexZero(t *testing.T) {
 	assert.Contains(t, v.Reason(), `no model named "nope"`)
 }
 
+func TestSetModelTags_ReplacesAndDeduplicates(t *testing.T) {
+	f := newFixture(t, baseConfig, baseSecrets)
+	cfg := f.applied(t, SetModelTags("claude-sonnet-5", []string{"coding", "fast", "coding"}))
+	assert.Equal(t, []string{"coding", "fast"}, cfg.Models[0].Tags)
+
+	cfg = f.applied(t, SetModelTags("claude-sonnet-5", nil))
+	assert.Empty(t, cfg.Models[0].Tags)
+
+	v := f.rejected(t, SetModelTags("unknown", []string{"fast"}))
+	assert.Contains(t, v.Reason(), `no model named "unknown"`)
+	v = f.rejected(t, SetModelTags("claude-sonnet-5", []string{"Not valid"}))
+	assert.Contains(t, v.Reason(), "invalid tag")
+}
+
 func TestAddModel_Guards(t *testing.T) {
 	f := newFixture(t, baseConfig, baseSecrets)
 

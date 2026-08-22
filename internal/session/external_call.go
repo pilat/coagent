@@ -98,6 +98,31 @@ func (s *svc) ResolvePendingCall(
 	return CallResolutionInserted, nil
 }
 
+// SettleStoppedCalls closes every externally pending call plus unresolved calls
+// in the current assistant turn. It is lifecycle-only: callers must have fenced
+// all ordinary and external producers before using it.
+func (s *svc) SettleStoppedCalls(ctx context.Context, content string) error {
+	messages := s.ms.getMessages()
+	current := unresolvedToolCalls(messages)
+	calls := unresolvedCallsMatching(messages, func(tc llmwire.ToolCall) bool {
+		return s.stagedCalls[tc.ID] != "" || current[tc.ID] == tc.Name
+	})
+
+	seen := make(map[string]struct{}, len(calls))
+	for _, call := range calls {
+		if _, exists := seen[call.ID]; exists {
+			continue
+		}
+
+		seen[call.ID] = struct{}{}
+		if err := s.ms.addToolResult(ctx, call.ID, call.Name, content); err != nil {
+			return fmt.Errorf("settle stopped call %q: %w", call.ID, err)
+		}
+	}
+
+	return nil
+}
+
 // HasPendingWork reports whether the current assistant turn has unresolved
 // in-loop tools. External calls are excluded even if an erroneous newer turn
 // exists; handlePreviousResult suspends on their global ledger first.

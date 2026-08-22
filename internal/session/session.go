@@ -35,6 +35,8 @@ const (
 )
 
 // Service manages the state for a single agent session.
+//
+//nolint:interfacebloat // Daemon lifecycle needs one session-scoped capability.
 type Service interface {
 	// RunDaemon runs the session with durable boundary input and notifications.
 	RunDaemon(
@@ -62,6 +64,10 @@ type Service interface {
 	// ResolvePendingCall durably answers one exact external call. Re-delivery is
 	// idempotent; an unknown call or a mismatched tool name is rejected.
 	ResolvePendingCall(ctx context.Context, call PendingToolCall, content string) (CallResolution, error)
+
+	// SettleStoppedCalls durably closes external calls and unresolved calls in the
+	// current assistant turn after lifecycle code has fenced their producers.
+	SettleStoppedCalls(ctx context.Context, content string) error
 
 	// InjectToolNotificationOnce adds a synthetic tool_call + tool_result pair,
 	// applying one externally identified event at most once, including across
@@ -501,7 +507,7 @@ func buildPrompt(
 	return newPromptBuilder(
 		basePrompt,
 		memoriesSection,
-		buildModelsSection(p.Config.UnifiedConfig, p.Config.Model),
+		buildModelsSection(p.Config.Model),
 		opts.ExtraSkills...,
 	)
 }

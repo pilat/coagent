@@ -7,12 +7,18 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"gopkg.in/yaml.v3"
 
 	"github.com/pilat/coagent/internal/coagenthome"
 )
+
+var modelTagPattern = regexp.MustCompile(`^[a-z0-9_-]+$`)
+
+// ValidModelTag reports whether a user-defined model tag has stable syntax.
+func ValidModelTag(tag string) bool { return modelTagPattern.MatchString(tag) }
 
 const (
 	// DefaultUnifiedConfigFile is the default path for unified config.
@@ -105,6 +111,10 @@ func ParseUnifiedConfig(data []byte) (*UnifiedConfig, error) {
 		}
 
 		return nil, errors.New("parsing config file: multiple YAML documents are not supported")
+	}
+
+	if err := cfg.validateModelIDs(); err != nil {
+		return nil, err
 	}
 
 	return &cfg, nil
@@ -335,10 +345,27 @@ func validateProvider(name string, p ProviderEntry) error {
 }
 
 func (c *UnifiedConfig) validateModels() error {
+	if err := c.validateModelIDs(); err != nil {
+		return err
+	}
+
 	for _, m := range c.Models {
 		if err := c.validateModel(m); err != nil {
 			return err
 		}
+	}
+
+	return nil
+}
+
+func (c *UnifiedConfig) validateModelIDs() error {
+	seen := make(map[string]int, len(c.Models))
+	for i, m := range c.Models {
+		if previous, exists := seen[m.ID]; exists {
+			return fmt.Errorf("duplicate model id %q at indexes %d and %d", m.ID, previous, i)
+		}
+
+		seen[m.ID] = i
 	}
 
 	return nil
@@ -351,6 +378,12 @@ func (c *UnifiedConfig) validateModel(m ModelEntry) error {
 
 	if _, ok := c.Providers[m.Provider]; !ok {
 		return fmt.Errorf("model %q references unknown provider %q", m.ID, m.Provider)
+	}
+
+	for _, tag := range m.Tags {
+		if !ValidModelTag(tag) {
+			return fmt.Errorf("model %q has invalid tag %q: tags must match %s", m.ID, tag, modelTagPattern.String())
+		}
 	}
 
 	return nil

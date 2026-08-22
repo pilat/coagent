@@ -54,7 +54,7 @@ func TestSecretsEnvironment(t *testing.T) {
 // A credential in the secrets file must never become inheritable by tool
 // subprocesses, while still reaching the config that needs it.
 func TestNewConfigKeepsSecretsOutOfEnvironment(t *testing.T) {
-	home := withSecretsFile(t, "COAGENT_AUDIT_SECRET=sentinel\nSUBAGENT_MODEL=knob-from-file\n")
+	home := withSecretsFile(t, "COAGENT_AUDIT_SECRET=sentinel\n")
 
 	writeHomeConfig(t, home, `
 providers:
@@ -67,8 +67,6 @@ providers:
 	require.NoError(t, err)
 
 	assert.Equal(t, "sentinel", cfg.UnifiedConfig.Providers["anthropic"].APIKey)
-	assert.Equal(t, "knob-from-file", cfg.SubagentModel)
-
 	assert.Empty(t, os.Getenv("COAGENT_AUDIT_SECRET"))
 	assert.NotContains(t, os.Environ(), "COAGENT_AUDIT_SECRET=sentinel")
 }

@@ -23,6 +23,9 @@ func RemoveModel(id, newDefault string) Op {
 // there is no separate key to drift out of sync with it.
 func SetDefaultModel(id string) Op { return &setDefaultModel{id: id} }
 
+// SetModelTags replaces a configured model's autonomous-subagent tags.
+func SetModelTags(id string, tags []string) Op { return &setModelTags{id: id, tags: tags} }
+
 type addModel struct{ entry config.ModelEntry }
 
 func (o *addModel) Path() string { return "models." + o.entry.ID }
@@ -95,6 +98,11 @@ func (o *removeModel) promoteReplacement(draft *config.UnifiedConfig) error {
 
 type setDefaultModel struct{ id string }
 
+type setModelTags struct {
+	id   string
+	tags []string
+}
+
 func (o *setDefaultModel) Path() string { return "models." + o.id }
 
 func (o *setDefaultModel) Summary() string { return "set default model " + o.id }
@@ -106,6 +114,38 @@ func (o *setDefaultModel) apply(draft *config.UnifiedConfig) error {
 	}
 
 	moveToFront(draft, i)
+
+	return nil
+}
+
+func (o *setModelTags) Path() string { return "models." + o.id + ".tags" }
+
+func (o *setModelTags) Summary() string { return "set model tags " + o.id }
+
+func (o *setModelTags) apply(draft *config.UnifiedConfig) error {
+	i := indexOfModel(draft, o.id)
+	if i < 0 {
+		return fmt.Errorf("no model named %q", o.id)
+	}
+
+	tags := make([]string, 0, len(o.tags))
+
+	seen := make(map[string]struct{}, len(o.tags))
+
+	for _, tag := range o.tags {
+		if !config.ValidModelTag(tag) {
+			return fmt.Errorf("invalid tag %q", tag)
+		}
+
+		if _, exists := seen[tag]; exists {
+			continue
+		}
+
+		seen[tag] = struct{}{}
+		tags = append(tags, tag)
+	}
+
+	draft.Models[i].Tags = tags
 
 	return nil
 }

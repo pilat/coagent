@@ -181,6 +181,13 @@ The daemon's durable record (`subagent_links` table) of parent↔child subagent 
 A tool call whose outcome comes from outside the loop — a sleep timer, a subagent, a config apply across a restart, a person typing at a terminal. The loop never re-executes one and never advances past it; transcript repair never stubs one; only an injection targeting its call id resolves it. The daemon's in-memory **staged-call ledger** records the ones it is itself answering.
 _Avoid_: suspended call, blocked tool.
 
+**stop boundary**:
+The durable `/stop` transition for an active root tree. It fences producers,
+cancels and joins runners, settles active unresolved calls, then marks the tree
+stopped. Later root input and explicit child follow-up are new work; neither
+replays pre-stop calls.
+_Avoid_: cancellation alone, pause.
+
 **pending apply**:
 A config change that has been written and is waiting for the restart to confirm it. Its marker (`~/.coagent/pending-apply.json`) carries the session to answer, the backup to restore, and the hash of the config that was about to land — which is what lets the next boot tell "the write never happened" from "the write landed and something else broke".
 _Avoid_: transaction, staged config (that is the pre-write `Staged`).
@@ -216,6 +223,13 @@ The private `llm.driverProtocol` implementation that owns one provider protocol 
 **catalog**:
 The external source of model metadata — display name, context window, max output tokens, pricing, reasoning capability. models.dev for the `anthropic` / `openai` / `google-sa` drivers (section selected by the provider's `catalog` key), OpenRouter's own `/api/v1/models` for `openrouter`. Fetched once at daemon startup, cached under `~/.coagent/cache/catalog`, and the **only** source for those fields — config carries none of them, and a model the catalog does not know is a startup error ([ADR-0003](adr/0003-external-model-catalogs.md)).
 _Avoid_: "model config" for this data.
+
+**model tag**:
+A user-defined lowercase ASCII token on a configured model. Tags are hints with
+no built-in routing meaning: they bound which configured models `task` may offer
+for autonomous explicit selection, while `/model` remains available for every
+configured model.
+_Avoid_: capability, model role.
 
 **secrets**:
 The in-memory credential map parsed from `~/.coagent/secrets`, deliberately kept out of the process environment (tool subprocesses inherit no credentials) and scrubbed from all log output.

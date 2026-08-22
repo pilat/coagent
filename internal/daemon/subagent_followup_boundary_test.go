@@ -146,6 +146,27 @@ func TestStopParksWholeTreeAndExplicitFollowUpResumesOnlyChild(t *testing.T) {
 	mgr.Shutdown(3 * time.Second)
 }
 
+func TestStopParksActiveDescendantBelowCompletedChild(t *testing.T) {
+	ctx := context.Background()
+	mgr, _, projects := newTestManager(t)
+	projectID := testProject(t, projects, "/tmp/stop-terminal-ancestor")
+	root, err := mgr.sessionStore.CreateSession(ctx, projectID, "fake-model", "", nil)
+	require.NoError(t, err)
+
+	completedID := createBackgroundChild(t, mgr, projectID, root.ID)
+	require.NoError(t, mgr.sessionStore.UpdateSessionStatus(ctx, completedID, sessionstore.SessionStatusCompleted))
+	activeID := createBackgroundChild(t, mgr, projectID, completedID)
+
+	require.NoError(t, mgr.Stop(ctx, root.ID))
+
+	completed, err := mgr.sessionStore.GetSession(ctx, completedID)
+	require.NoError(t, err)
+	assert.Equal(t, sessionstore.SessionStatusCompleted, completed.Status)
+	active, err := mgr.sessionStore.GetSession(ctx, activeID)
+	require.NoError(t, err)
+	assert.Equal(t, sessionstore.SessionStatusStopped, active.Status)
+}
+
 func TestStopDirectChildParksItsOwnLinkWithoutStoppingParent(t *testing.T) {
 	ctx := context.Background()
 	mgr, _, projects := newTestManager(t)

@@ -7,6 +7,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"github.com/pilat/coagent/internal/registry"
 	"github.com/pilat/coagent/internal/tool"
 )
@@ -347,4 +350,38 @@ func TestTaskTool_MetadataFormat(t *testing.T) {
 	if got != expected {
 		t.Errorf("taskMetadata() = %q, want %q", got, expected)
 	}
+}
+
+func TestTaskTool_OnlyTaggedModelsAreExplicitCandidates(t *testing.T) {
+	sp := &mockSpawner{}
+	tt := newTaskTool(sp, 7, registry.NewSet(nil), []modelInfo{
+		{ID: "untagged", Name: "Hidden"},
+		{ID: "tagged", Name: "Candidate", Tags: []string{"coding", "fast"}},
+	})
+
+	assert.Contains(t, tt.Description(), "inherit (default)")
+	assert.Contains(t, tt.Description(), "tagged: Candidate (tags: coding, fast)")
+	assert.NotContains(t, tt.Description(), "untagged")
+
+	ctx := tool.WithCallID(context.Background(), "candidate-call")
+	valid, _ := json.Marshal(
+		TaskParams{Prompt: "do", Description: "do", SubagentType: "general", Model: "tagged", Background: true},
+	)
+	_, err := tt.Execute(ctx, valid)
+	require.NoError(t, err)
+	assert.Equal(t, 1, sp.spawnCount)
+
+	invalid, _ := json.Marshal(
+		TaskParams{Prompt: "do", Description: "do", SubagentType: "general", Model: "untagged", Background: true},
+	)
+	_, err = tt.Execute(ctx, invalid)
+	require.Error(t, err)
+	assert.Equal(t, 1, sp.spawnCount)
+}
+
+func TestTaskTool_AdvertisesInheritanceWithoutTaggedModels(t *testing.T) {
+	tt := newTaskTool(&mockSpawner{}, 7, registry.NewSet(nil), []modelInfo{{ID: "untagged", Name: "Hidden"}})
+
+	assert.Contains(t, tt.Description(), "inherit (default): use the current session model")
+	assert.NotContains(t, tt.Description(), "untagged")
 }

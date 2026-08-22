@@ -66,6 +66,8 @@ type NotificationSource interface {
 var (
 	_ Service                = (*svc)(nil)
 	_ schedule.SessionSender = (*svc)(nil)
+
+	errDaemonShuttingDown = errors.New("daemon is shutting down")
 )
 
 type svc struct {
@@ -84,7 +86,6 @@ type svc struct {
 	pendingRunners []queuedRunner
 	pubsub         *pubSub
 	defaultModelFn func() string
-	subagentModel  string
 	modelCatalog   []modelInfo
 	modelEntries   []config.ModelEntry
 	mcpStore       mcpstore.Store
@@ -95,6 +96,11 @@ type svc struct {
 	deferNotices   *deferAnnouncements
 	systemProject  string
 	shuttingDown   atomic.Bool
+	recoveryMu     sync.Mutex
+	recoveryCancel context.CancelFunc
+	recoveryDone   chan struct{}
+	// treeMu linearizes subagent admission with the durable stop boundary.
+	treeMu sync.Locker
 	// routeMu linearizes owner claims with replacement-session creation. The
 	// daemon is single-instance, so this is the ownership CAS boundary.
 	routeMu sync.Mutex
@@ -140,7 +146,6 @@ func New(
 		resolveProjectsRoot(cfg.UnifiedConfig),
 		controllerapi.CoagentSystemProjectDir,
 	)
-	s.subagentModel = cfg.SubagentModel
 	s.mcpStore = mcpStore
 	s.mcpPool = mcpPool
 	s.applier = applier
@@ -173,6 +178,7 @@ func newSvc(
 		secrets:        newSecretRequests(),
 		admit:          newAdmissionCtl(),
 		pubsub:         newPubSub(),
+		treeMu:         &sync.Mutex{},
 		defaultModelFn: defaultModelFn,
 		childCache:     make(map[int64]bool),
 		ownerCache:     make(map[int64]string),
@@ -385,10 +391,30 @@ func (s *svc) Stop(ctx context.Context, sessionID int64) error {
 		Message: "⏹ Stopping...",
 	})
 
+	if err := s.stopTreeCleanup(ctx, sessionID); err != nil {
+		return err
+	}
+
+	s.publish(sessionID, sessionevent.Notification{
+		Type:   sessionevent.NotifyStateChanged,
+		Status: controllerapi.StateIdle,
+		Reason: "stopped",
+	})
+
+	return nil
+}
+
+// stopTreeCleanup durably parks a tree without publishing user-command events.
+// Startup recovery uses it to finish an interrupted stop without replaying UI.
+//
+//nolint:funcorder // It stays adjacent to its only public lifecycle entrypoint.
+func (s *svc) stopTreeCleanup(ctx context.Context, sessionID int64) error {
+	s.treeMu.Lock()
 	cleanupCtx := context.WithoutCancel(ctx)
 
 	ids, links, err := s.stopTree(cleanupCtx, sessionID)
 	if err != nil {
+		s.treeMu.Unlock()
 		return err
 	}
 
@@ -396,26 +422,40 @@ func (s *svc) Stop(ctx context.Context, sessionID int64) error {
 	// being launched while the tree is being parked.
 	for _, id := range ids {
 		if err := s.sessionStore.UpdateSessionStatus(cleanupCtx, id, sessionstore.SessionStatusStopping); err != nil {
+			s.treeMu.Unlock()
 			return fmt.Errorf("mark session %d stopping: %w", id, err)
 		}
 	}
 
 	for _, link := range links {
 		if err := s.links.MarkLinkStopped(cleanupCtx, link.ChildID); err != nil {
+			s.treeMu.Unlock()
 			return fmt.Errorf("mark subagent %d stopped: %w", link.ChildID, err)
 		}
 	}
+	s.treeMu.Unlock()
 
 	s.removeQueuedSessions(ids)
 
+	runners := make([]*runner, 0, len(ids))
 	for _, id := range ids {
 		s.mu.Lock()
 		rs := s.loops[id]
 		s.mu.Unlock()
 
 		if rs != nil {
-			rs.stop()
+			runners = append(runners, rs)
 		}
+	}
+
+	// Signal the entire tree before waiting for any one runner: a foreground
+	// parent can otherwise keep a child alive while stop is waiting on it.
+	for _, rs := range runners {
+		rs.cancel()
+	}
+
+	for _, rs := range runners {
+		<-rs.done
 	}
 
 	if _, err := s.inboxStore.CancelPendingInputs(cleanupCtx, ids, "stopped"); err != nil {
@@ -448,12 +488,6 @@ func (s *svc) Stop(ctx context.Context, sessionID int64) error {
 			return fmt.Errorf("mark session %d stopped: %w", id, err)
 		}
 	}
-
-	s.publish(sessionID, sessionevent.Notification{
-		Type:   sessionevent.NotifyStateChanged,
-		Status: controllerapi.StateIdle,
-		Reason: "stopped",
-	})
 
 	return nil
 }
@@ -600,6 +634,7 @@ func (s *svc) SetAttributes(ctx context.Context, sessionID int64, attrs map[stri
 
 func (s *svc) Shutdown(timeout time.Duration) {
 	s.shuttingDown.Store(true)
+	recoveryDone := s.stopRecovery()
 
 	s.mu.Lock()
 	runners := make([]*runner, 0, len(s.loops))
@@ -626,6 +661,11 @@ func (s *svc) Shutdown(timeout time.Duration) {
 		}
 
 		wg.Wait()
+
+		if recoveryDone != nil {
+			<-recoveryDone
+		}
+
 		close(done)
 	}()
 
@@ -676,13 +716,26 @@ func (s *svc) GetProjectName(ctx context.Context, projectID int64) (string, erro
 	return name, nil
 }
 
+func (s *svc) stopRecovery() <-chan struct{} {
+	s.recoveryMu.Lock()
+	cancel := s.recoveryCancel
+	done := s.recoveryDone
+	s.recoveryMu.Unlock()
+
+	if cancel != nil {
+		cancel()
+	}
+
+	return done
+}
+
 // loadModelCatalog records the configured models once: the subagent picker reads
 // the names, SetModel reads the effort levels.
 func (s *svc) loadModelCatalog(models []config.ModelEntry) {
 	s.modelEntries = models
 
 	for _, m := range models {
-		s.modelCatalog = append(s.modelCatalog, modelInfo{ID: m.ID, Name: m.Name})
+		s.modelCatalog = append(s.modelCatalog, modelInfo{ID: m.ID, Name: m.Name, Tags: m.Tags})
 	}
 }
 

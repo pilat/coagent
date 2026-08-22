@@ -133,6 +133,29 @@ func TestResolvePendingCall_ExactAndIdempotent(t *testing.T) {
 	assert.Equal(t, 1, exactResults, "retry must not append a second result")
 }
 
+func TestSettleStoppedCalls_ClosesOnlyCurrentAndExternalCallsInTranscriptOrder(t *testing.T) {
+	agent := newTestAgent()
+	agent.stagedCalls = map[string]string{"external": tool.IDSleep}
+	agent.ms.setMessages([]llmwire.Message{
+		asst("", call("historical", "bash")),
+		usr("new request supersedes the old bash"),
+		asst("", call("external", tool.IDSleep)),
+		asst("", call("ordinary-one", "bash"), call("ordinary-two", "read")),
+		{Role: llmwire.RoleTool, ToolCallID: "ordinary-one", ToolName: "bash", Content: "already done"},
+	})
+
+	require.NoError(t, agent.SettleStoppedCalls(context.Background(), "Stopped by user."))
+	require.NoError(t, agent.SettleStoppedCalls(context.Background(), "Stopped by user."))
+
+	var settled []string
+	for _, msg := range agent.ms.getMessages() {
+		if msg.Role == llmwire.RoleTool && msg.Content == "Stopped by user." {
+			settled = append(settled, msg.ToolCallID+":"+msg.ToolName)
+		}
+	}
+	assert.Equal(t, []string{"external:sleep", "ordinary-two:read"}, settled)
+}
+
 func TestResolvePendingCall_RejectsDishonestIdentity(t *testing.T) {
 	agent := newTestAgent()
 	agent.stagedCalls = map[string]string{"sleep-call-1": tool.IDSleep}
