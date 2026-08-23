@@ -5,15 +5,11 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"slices"
 	"sync"
 	"time"
 
-	"go.uber.org/zap"
-
 	"github.com/pilat/coagent/internal/config"
 	"github.com/pilat/coagent/internal/controllerapi"
-	"github.com/pilat/coagent/internal/logger"
 )
 
 const (
@@ -119,12 +115,17 @@ func New(
 		return nil, errors.New("controller is required")
 	}
 
+	timeout, err := httpTimeoutFor(entry.PollTimeoutSec)
+	if err != nil {
+		return nil, fmt.Errorf("manager %q: %w", entry.ID, err)
+	}
+
 	m := &Manager{
 		id:             entry.ID,
 		cfg:            entry,
 		unifiedCfg:     unifiedCfg,
 		controller:     controller,
-		httpClient:     &http.Client{Timeout: 45 * time.Second},
+		httpClient:     &http.Client{Timeout: timeout},
 		navPaths:       make(map[int64]string),
 		pathToNav:      make(map[string]int64),
 		sessionToTopic: make(map[int64]int64),
@@ -286,170 +287,4 @@ func (m *Manager) notificationsLoop(ctx context.Context) {
 			m.handleNotification(ctx, sn)
 		}
 	}
-}
-
-func (m *Manager) pollLoop(ctx context.Context) {
-	log := logger.Ctx(ctx).Named("telegram.poll")
-	backoff := reconnectBackoffBase
-	fatalWarned := false
-
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		default:
-		}
-
-		updates, err := m.getUpdates(ctx, m.updateOffset)
-		if err != nil {
-			wait := nextPollWait(err, &backoff, &fatalWarned, log)
-
-			select {
-			case <-ctx.Done():
-				return
-			case <-time.After(wait):
-				continue
-			}
-		}
-
-		backoff = reconnectBackoffBase
-		fatalWarned = false
-
-		for _, upd := range updates {
-			m.updateOffset = upd.UpdateID + 1
-			m.processUpdate(ctx, upd)
-		}
-	}
-}
-
-// nextPollWait picks how long to wait after a getUpdates failure and advances the
-// exponential backoff. A 429 is honored to the second; a fatal error that won't
-// self-heal (bad token, conflicting poller) throttles to the max and warns once;
-// every other failure backs off exponentially. Retries are never capped — the bot
-// must recover whenever the outage clears.
-func nextPollWait(err error, backoff *time.Duration, fatalWarned *bool, log *zap.Logger) time.Duration {
-	var apiErr *tgAPIError
-	if errors.As(err, &apiErr) {
-		if apiErr.RetryAfter > 0 {
-			log.Warn("getupdates_rate_limited", zap.Int("retry_after", apiErr.RetryAfter))
-
-			return time.Duration(apiErr.RetryAfter) * time.Second
-		}
-
-		if isFatalPollError(apiErr.ErrorCode) {
-			if !*fatalWarned {
-				*fatalWarned = true
-
-				log.Error("getupdates_fatal",
-					zap.Int("error_code", apiErr.ErrorCode),
-					zap.String("description", apiErr.Description))
-			}
-
-			*backoff = reconnectBackoffMax
-
-			return *backoff
-		}
-	}
-
-	log.Warn("getupdates_failed", zap.Duration("retry_in", *backoff), zap.Error(err))
-
-	wait := *backoff
-	*backoff = min(*backoff*2, reconnectBackoffMax)
-
-	return wait
-}
-
-// isFatalPollError reports telegram error codes that will not self-heal by
-// retrying: bad token (401), forbidden (403), or a conflicting poller/webhook (409).
-func isFatalPollError(code int) bool {
-	return code == http.StatusUnauthorized || code == http.StatusForbidden || code == http.StatusConflict
-}
-
-func (m *Manager) processUpdate(ctx context.Context, upd telegramUpdate) {
-	if upd.CallbackQuery != nil {
-		m.handleCallback(ctx, upd.CallbackQuery)
-		return
-	}
-
-	log := logger.Ctx(ctx).Named("telegram")
-
-	msg := upd.Message
-	if msg == nil {
-		log.Debug("update_dropped", zap.String("reason", "not_a_message"))
-		return
-	}
-
-	if msg.Text == "" && msg.Voice == nil {
-		log.Debug("update_dropped", zap.String("reason", "no_text_or_voice"))
-		return
-	}
-
-	if msg.Chat.ID != m.effectiveChatID() {
-		log.Debug("update_dropped", zap.String("reason", "other_chat"), zap.Int64("chat_id", msg.Chat.ID))
-		return
-	}
-
-	if msg.From == nil || !m.isAllowedUser(msg.From.ID) {
-		log.Debug("update_dropped", zap.String("reason", "user_not_allowed"))
-		return
-	}
-
-	threadID := msg.MessageThreadID
-	if threadID == 0 {
-		if m.target.topology == forumTopologyBot {
-			_, _ = m.sendMessage(
-				ctx,
-				fmt.Sprintf("Open the “%s” topic to create or manage sessions.", m.cfg.ServiceTopicName),
-				nil,
-				0,
-			)
-		}
-
-		log.Debug("update_dropped", zap.String("reason", "no_topic"))
-
-		return
-	}
-
-	sessionID, hasSession := m.resolveSessionByTopicID(ctx, threadID)
-
-	log.Info("message_received",
-		zap.Int64("thread_id", threadID),
-		zap.Int64("session_id", sessionID),
-		zap.Bool("has_session", hasSession),
-		zap.String("text", textPreview(msg.Text)))
-
-	if msg.Voice != nil {
-		m.handleVoiceMessage(ctx, msg, threadID, sessionID, hasSession)
-		return
-	}
-
-	text := normalizeTextCommand(msg.Text)
-	if threadID == m.serviceTopicID {
-		m.handleServiceTopicMessage(ctx, text)
-		return
-	}
-
-	if hasSession {
-		m.handleSessionTopicMessage(ctx, sessionID, threadID, text)
-		return
-	}
-
-	log.Info("update_dropped", zap.String("reason", "no_session_for_topic"), zap.Int64("thread_id", threadID))
-}
-
-// textPreview truncates a message body for log lines — enough to recognize the
-// message, not carry the whole payload into logs.
-func textPreview(s string) string {
-	const limit = 48
-
-	r := []rune(s)
-	if len(r) <= limit {
-		return s
-	}
-
-	return string(r[:limit]) + "…"
-}
-
-func (m *Manager) isAllowedUser(userID int64) bool {
-	return slices.Contains(m.cfg.AllowedUserIDs, userID)
 }

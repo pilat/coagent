@@ -224,6 +224,12 @@ func TestConfigTool_GuardViolationsAreImmediateErrors(t *testing.T) {
 			params: `{"id":"tg","driver":"telegram"}`,
 			want:   "bot_token reference",
 		},
+		{
+			name:   "ambiguous manager parameters",
+			id:     tool.IDSetManager,
+			params: `{"id":"tg","id":"tg2"}`,
+			want:   "duplicate key",
+		},
 	}
 
 	for _, tt := range tests {

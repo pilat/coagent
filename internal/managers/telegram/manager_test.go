@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -14,6 +15,25 @@ import (
 	"github.com/pilat/coagent/internal/coagenthome"
 	"github.com/pilat/coagent/internal/config"
 )
+
+func TestHTTPTimeoutForPollTimeout(t *testing.T) {
+	tests := []struct {
+		poll int
+		want time.Duration
+	}{
+		{poll: 0, want: 45 * time.Second},
+		{poll: 30, want: 45 * time.Second},
+		{poll: 45, want: 60 * time.Second},
+	}
+	for _, tt := range tests {
+		got, err := httpTimeoutFor(tt.poll)
+		require.NoError(t, err)
+		assert.Equal(t, tt.want, got)
+	}
+
+	_, err := httpTimeoutFor(int(^uint(0) >> 1))
+	assert.Error(t, err)
+}
 
 func TestTextPreview(t *testing.T) {
 	assert.Empty(t, textPreview(""))

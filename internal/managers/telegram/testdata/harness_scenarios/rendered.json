@@ -255,6 +255,16 @@
       ]
     },
     {
+      "trace": "set_manager_patch_restart.json",
+      "source_test": "TestHarnessScenario_SetManagerPatchPreservesFields",
+      "calls": null
+    },
+    {
+      "trace": "set_manager_reapply_restart.json",
+      "source_test": "TestHarnessScenario_SetManagerReapplyRestarts",
+      "calls": null
+    },
+    {
       "trace": "sleep_interrupted_by_input.json",
       "source_test": "TestHarnessScenario_SleepProjectsWakeAtAndUserInputInterruptsIt",
       "calls": [

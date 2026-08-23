@@ -276,7 +276,7 @@ func (m *Manager) forumTopicExists(ctx context.Context, topicID int64) (bool, er
 		return false, nil
 	}
 
-	err := m.editForumTopic(ctx, topicID)
+	err := m.editForumTopic(ctx, topicID, "", "")
 	if err == nil {
 		return true, nil
 	}

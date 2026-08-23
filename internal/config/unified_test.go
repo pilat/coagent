@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -526,6 +527,59 @@ managers:
 	assert.Equal(t, defaultTelegramSessionTopicIconEmojiID, m.SessionTopicIconEmojiID)
 	assert.Equal(t, defaultTelegramSendChunkDelayMS, m.SendChunkDelayMS)
 	assert.Equal(t, defaultTelegramPollTimeoutSec, m.PollTimeoutSec)
+}
+
+func TestUnifiedConfig_ServiceTopicNameUsesRuneLimit(t *testing.T) {
+	for _, tt := range []struct {
+		name    string
+		runes   int
+		wantErr bool
+	}{
+		{name: "one", runes: 1},
+		{name: "128 multibyte runes", runes: 128},
+		{name: "129 runes", runes: 129, wantErr: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			path := writeConfig(t, `providers:
+  ant:
+    driver: anthropic
+    api_key: key
+managers:
+  - id: tg
+    driver: telegram
+    enabled: true
+    bot_token: token
+    allowed_user_ids: [7]
+    target_chat_id: -100
+    service_topic_name: `+strings.Repeat("я", tt.runes)+"\n")
+			_, err := LoadUnifiedConfig(path, nil)
+			if tt.wantErr {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), "service_topic_name")
+				return
+			}
+			require.NoError(t, err)
+		})
+	}
+}
+
+func TestUnifiedConfig_PollTimeoutRejectsDurationOverflow(t *testing.T) {
+	path := writeConfig(t, `providers:
+  ant:
+    driver: anthropic
+    api_key: key
+managers:
+  - id: tg
+    driver: telegram
+    enabled: true
+    bot_token: token
+    allowed_user_ids: [7]
+    target_chat_id: -100
+    poll_timeout_sec: 9223372022
+`)
+	_, err := LoadUnifiedConfig(path, nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "overflows time.Duration")
 }
 
 func TestUnifiedConfig_Managers_MissingEnabled(t *testing.T) {

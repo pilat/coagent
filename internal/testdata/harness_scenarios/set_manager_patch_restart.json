@@ -1,0 +1,39 @@
+{
+  "source_test": "TestHarnessScenario_SetManagerPatchPreservesFields",
+  "trace": [
+    {
+      "type": "session_created",
+      "name": "<name>",
+      "work_dir": "<workdir>",
+      "attributes": {
+        "channel": "cli",
+        "manager_id": "cli"
+      }
+    },
+    {
+      "type": "state_changed",
+      "status": "running"
+    },
+    {
+      "type": "session_created",
+      "name": "<name>",
+      "work_dir": "<workdir>",
+      "attributes": {
+        "channel": "cli",
+        "manager_id": "cli"
+      }
+    },
+    {
+      "type": "state_changed",
+      "status": "running"
+    },
+    {
+      "type": "message",
+      "message": "✅ manager settings updated"
+    },
+    {
+      "type": "state_changed",
+      "status": "idle"
+    }
+  ]
+}

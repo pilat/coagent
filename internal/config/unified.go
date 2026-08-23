@@ -5,10 +5,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
+	"unicode/utf8"
 
 	"gopkg.in/yaml.v3"
 
@@ -242,12 +244,21 @@ func (c *UnifiedConfig) validateTelegramManager(m *ManagerEntry) error {
 
 	applyTelegramDefaults(m)
 
+	if utf8.RuneCountInString(m.ServiceTopicName) > 128 {
+		return fmt.Errorf("manager %q (driver: telegram) service_topic_name exceeds 128 characters", m.ID)
+	}
+
 	if m.SendChunkDelayMS < 0 {
 		return fmt.Errorf("manager %q (driver: telegram) requires \"send_chunk_delay_ms\" to be >= 0", m.ID)
 	}
 
 	if m.PollTimeoutSec < 0 {
 		return fmt.Errorf("manager %q (driver: telegram) requires \"poll_timeout_sec\" to be >= 0", m.ID)
+	}
+
+	const maxPollTimeoutSec = math.MaxInt64 / 1_000_000_000
+	if int64(m.PollTimeoutSec) > maxPollTimeoutSec-15 {
+		return fmt.Errorf("manager %q (driver: telegram) poll_timeout_sec overflows time.Duration", m.ID)
 	}
 
 	return c.validateTelegramWhisper(m)

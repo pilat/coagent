@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"maps"
 	"regexp"
-	"slices"
 	"strings"
 
 	"github.com/pilat/coagent/internal/config"
@@ -49,14 +48,6 @@ func SetProvider(name string, entry config.ProviderEntry) Op {
 // any model still references — no cascade: a mutation that silently deletes
 // models the caller did not name is worse than a refusal it can read.
 func RemoveProvider(name string) Op { return &removeProvider{name: name} }
-
-// SetManager adds or replaces a manager, enabled. Enabled is set explicitly
-// because a nil value means disabled, which would end the flagship flow in
-// silence.
-func SetManager(entry config.ManagerEntry) Op { return &setManager{entry: entry} }
-
-// RemoveManager deletes a manager by id.
-func RemoveManager(id string) Op { return &removeManager{id: id} }
 
 type setProvider struct {
 	name  string
@@ -120,87 +111,6 @@ func (o *removeProvider) apply(draft *config.UnifiedConfig) error {
 
 	draft.Providers = maps.Clone(draft.Providers)
 	delete(draft.Providers, o.name)
-
-	return nil
-}
-
-type setManager struct{ entry config.ManagerEntry }
-
-func (o *setManager) Path() string { return "managers." + o.entry.ID }
-
-func (o *setManager) Summary() string { return "set manager " + o.entry.ID }
-
-func (o *setManager) apply(draft *config.UnifiedConfig) error {
-	if strings.TrimSpace(o.entry.ID) == "" {
-		return errors.New("manager id is required")
-	}
-
-	if err := checkCredential("bot_token", o.entry.BotToken); err != nil {
-		return err
-	}
-
-	entry := o.entry
-	on := true
-	entry.Enabled = &on
-
-	for i, m := range draft.Managers {
-		if m.ID == entry.ID {
-			if managerTargetChanged(m, entry) {
-				return fmt.Errorf("manager %q forum target cannot change; create a new manager id", entry.ID)
-			}
-
-			if entry.BotToken == "" {
-				entry.BotToken = m.BotToken
-			}
-
-			draft.Managers[i] = entry
-
-			return nil
-		}
-	}
-
-	if entry.BotToken == "" {
-		return errors.New("a new manager needs a bot_token reference")
-	}
-
-	draft.Managers = append(draft.Managers, entry)
-
-	return nil
-}
-
-func managerTargetChanged(current, next config.ManagerEntry) bool {
-	if (current.TargetChatID == nil) != (next.TargetChatID == nil) {
-		return true
-	}
-
-	if current.TargetChatID != nil && *current.TargetChatID != *next.TargetChatID {
-		return true
-	}
-
-	if current.TargetChatID == nil &&
-		(len(current.AllowedUserIDs) != 1 || len(next.AllowedUserIDs) != 1 || current.AllowedUserIDs[0] != next.AllowedUserIDs[0]) {
-		return true
-	}
-
-	return false
-}
-
-type removeManager struct{ id string }
-
-func (o *removeManager) Path() string { return "managers." + o.id }
-
-func (o *removeManager) Summary() string { return "remove manager " + o.id }
-
-func (o *removeManager) apply(draft *config.UnifiedConfig) error {
-	before := len(draft.Managers)
-
-	draft.Managers = slices.DeleteFunc(draft.Managers, func(m config.ManagerEntry) bool {
-		return m.ID == o.id
-	})
-
-	if len(draft.Managers) == before {
-		return fmt.Errorf("no manager named %q", o.id)
-	}
 
 	return nil
 }
