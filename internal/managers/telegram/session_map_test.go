@@ -2,6 +2,7 @@ package telegram
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"io"
@@ -164,7 +165,7 @@ func TestHandleNotification_SessionClearedRemapsTopic(t *testing.T) {
 			ID:               "telegram-main",
 			Enabled:          &enabled,
 			BotToken:         "token",
-			TargetChatID:     -100123,
+			TargetChatID:     targetID(-100123),
 			SendChunkDelayMS: 0,
 			PollTimeoutSec:   30,
 		},
@@ -210,7 +211,7 @@ func TestCreateTopicForSessionPersistsBeforeCaching(t *testing.T) {
 	}
 
 	manager = &Manager{
-		cfg:        config.ManagerEntry{BotToken: "token", TargetChatID: -100123},
+		cfg:        config.ManagerEntry{BotToken: "token", TargetChatID: targetID(-100123)},
 		controller: ctrl,
 		httpClient: &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 			return telegramResponse(req, `{"ok":true,"result":{"message_thread_id":7001}}`), nil
@@ -242,7 +243,7 @@ func TestCreateTopicForSessionCompensatesPersistenceFailure(t *testing.T) {
 	ctrl := &fakeController{setAttrsErr: errors.New("database unavailable")}
 	methods := make([]string, 0, 2)
 	manager := &Manager{
-		cfg:        config.ManagerEntry{BotToken: "token", TargetChatID: -100123},
+		cfg:        config.ManagerEntry{BotToken: "token", TargetChatID: targetID(-100123)},
 		controller: ctrl,
 		httpClient: &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 			method := filepath.Base(req.URL.Path)
@@ -270,7 +271,7 @@ func TestCreateTopicForSessionCompensatesPersistenceFailure(t *testing.T) {
 func TestHandleNotificationClearKeepsOldMappingWhenPersistenceFails(t *testing.T) {
 	ctrl := &fakeController{setAttrsErr: errors.New("database unavailable")}
 	manager := &Manager{
-		cfg:            config.ManagerEntry{BotToken: "token", TargetChatID: -100123},
+		cfg:            config.ManagerEntry{BotToken: "token", TargetChatID: targetID(-100123)},
 		controller:     ctrl,
 		httpClient:     &http.Client{Transport: roundTripFunc(okTelegramRoundTrip)},
 		sessionToTopic: map[int64]int64{},
@@ -311,14 +312,14 @@ func telegramResponse(req *http.Request, payload string) *http.Response {
 }
 
 func TestServiceTopicPath(t *testing.T) {
-	m := &Manager{cfg: config.ManagerEntry{TargetChatID: -100123}}
+	m := &Manager{id: "telegram-main", cfg: config.ManagerEntry{TargetChatID: targetID(-100123)}}
 
 	home := t.TempDir()
 	restoreHome := coagenthome.Override(home)
 	want := filepath.Join(
 		home,
 		coagenthome.DirName,
-		fmt.Sprintf(coagenthome.TelegramServiceFilePattern, m.cfg.TargetChatID),
+		"tg-service-manager-"+fmt.Sprintf("%x", sha256.Sum256([]byte(m.id)))+".json",
 	)
 	assert.Equal(t, want, m.serviceTopicPath())
 	restoreHome()
@@ -339,7 +340,7 @@ func TestEnsureServiceTopicPersistsBeforeReturning(t *testing.T) {
 	m := &Manager{
 		cfg: config.ManagerEntry{
 			BotToken:     "token",
-			TargetChatID: -100123,
+			TargetChatID: targetID(-100123),
 		},
 		httpClient: &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 			methods = append(methods, filepath.Base(req.URL.Path))
@@ -367,7 +368,7 @@ func TestEnsureServiceTopicCompensatesPersistenceFailure(t *testing.T) {
 	m := &Manager{
 		cfg: config.ManagerEntry{
 			BotToken:     "token",
-			TargetChatID: -100123,
+			TargetChatID: targetID(-100123),
 		},
 		httpClient: &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 			method := filepath.Base(req.URL.Path)
@@ -409,7 +410,7 @@ func TestEnsureServiceTopicRejectsCorruptDurableRecord(t *testing.T) {
 
 	called := false
 	m := &Manager{
-		cfg: config.ManagerEntry{BotToken: "token", TargetChatID: -100123},
+		cfg: config.ManagerEntry{BotToken: "token", TargetChatID: targetID(-100123)},
 		httpClient: &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 			called = true
 
@@ -418,7 +419,7 @@ func TestEnsureServiceTopicRejectsCorruptDurableRecord(t *testing.T) {
 	}
 
 	_, err := m.ensureServiceTopic(context.Background())
-	require.ErrorContains(t, err, "decode service topic file")
+	require.ErrorContains(t, err, "decode legacy service topic file")
 	assert.False(t, called, "a corrupt durable record must not create a duplicate remote topic")
 }
 
@@ -456,7 +457,7 @@ func TestResolveSessionByTopicID_UsesMetadataFallback(t *testing.T) {
 			ID:               "telegram-main",
 			Enabled:          &enabled,
 			BotToken:         "token",
-			TargetChatID:     -100123,
+			TargetChatID:     targetID(-100123),
 			SendChunkDelayMS: 0,
 			PollTimeoutSec:   30,
 		},
@@ -508,7 +509,7 @@ func TestReconcileOnStartup_IgnoresKilledSessions(t *testing.T) {
 			ID:               "telegram-main",
 			Enabled:          &enabled,
 			BotToken:         "token",
-			TargetChatID:     -100123,
+			TargetChatID:     targetID(-100123),
 			SendChunkDelayMS: 0,
 			PollTimeoutSec:   30,
 		},
@@ -545,7 +546,7 @@ func TestHandleCallback_KillDispatchesController(t *testing.T) {
 			ID:               "telegram-main",
 			Enabled:          &enabled,
 			BotToken:         "token",
-			TargetChatID:     -100123,
+			TargetChatID:     targetID(-100123),
 			AllowedUserIDs:   []int64{42},
 			SendChunkDelayMS: 0,
 			PollTimeoutSec:   30,
@@ -586,7 +587,7 @@ func TestHandleCallback_KillRejectsAForeignRetainedButton(t *testing.T) {
 		id: "telegram-main",
 		cfg: config.ManagerEntry{
 			ID: "telegram-main", Enabled: &enabled, BotToken: "token",
-			TargetChatID: -100123, AllowedUserIDs: []int64{42},
+			TargetChatID: targetID(-100123), AllowedUserIDs: []int64{42},
 		},
 		controller:     ctrl,
 		httpClient:     &http.Client{Transport: roundTripFunc(okTelegramRoundTrip)},

@@ -18,11 +18,24 @@ func (m *Manager) handleSessionCreated(
 		return
 	}
 
-	if topicID, ok := topicIDFromAttributes(n.Attributes); ok && m.verifyTopicExists(ctx, topicID) {
-		m.registerTopic(sessionID, topicID)
-		m.setWorkDir(sessionID, n.WorkDir)
+	if topicID, ok := topicIDFromAttributes(n.Attributes); ok {
+		exists, err := m.forumTopicExists(ctx, topicID)
+		if err != nil {
+			logger.Ctx(ctx).Named("telegram").Error(
+				"verify_session_topic",
+				zap.Int64("session_id", sessionID),
+				zap.Error(err),
+			)
 
-		return
+			return
+		}
+
+		if exists {
+			m.registerTopic(sessionID, topicID)
+			m.setWorkDir(sessionID, n.WorkDir)
+
+			return
+		}
 	}
 
 	if _, err := m.createTopicForSession(ctx, sessionID, n.WorkDir, n.Name, n.Attributes); err != nil {

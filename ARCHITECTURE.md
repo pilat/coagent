@@ -72,7 +72,9 @@ does not imply a tier except where it expresses an implementation variant.
 - `internal/lsp` — language-server process client for code-intelligence tools.
 - `internal/managers` — manager lifecycle coordinator.
 - `internal/managers/cli` — built-in local chat over the control socket.
-- `internal/managers/telegram` — Telegram manager implementation.
+- `internal/managers/telegram` — Telegram manager implementation. Each manager
+  owns one bot account, immutable group- or bot-forum target, polling loop, and
+  manager-scoped service-topic identity; failures remain isolated at startup.
 - `internal/mcp` — external MCP process lifecycle and daemon-level pooled connections.
 - `internal/mcpstore` — durable MCP server definitions and scope precedence.
 - `internal/memory` — curated per-project long-term memory.

@@ -144,6 +144,41 @@ func TestRuntime_OnStart_ReportsNoErrorWhenEveryManagerStarts(t *testing.T) {
 	assert.Equal(t, []string{"only"}, r.RunningIDs())
 }
 
+func TestRuntime_DuplicateTelegramTokensStopOnlyTheConflictSet(t *testing.T) {
+	enabled := true
+	disabled := false
+	first := &fakeManager{id: "first"}
+	second := &fakeManager{id: "second"}
+	third := &fakeManager{id: "third"}
+
+	r := &runtime{
+		cfg: &config.Config{UnifiedConfig: &config.UnifiedConfig{Managers: []config.ManagerEntry{
+			{ID: "first", Driver: "telegram", Enabled: &enabled, BotToken: "same"},
+			{ID: "second", Driver: "telegram", Enabled: &enabled, BotToken: "same"},
+			{ID: "disabled", Driver: "telegram", Enabled: &disabled, BotToken: "same"},
+			{ID: "third", Driver: "telegram", Enabled: &enabled, BotToken: "other"},
+		}}},
+		builder: func(entry config.ManagerEntry) (Manager, error) {
+			switch entry.ID {
+			case "first":
+				return first, nil
+			case "second":
+				return second, nil
+			default:
+				return third, nil
+			}
+		},
+	}
+
+	require.NoError(t, r.Start(context.Background()))
+	assert.Zero(t, first.started)
+	assert.Zero(t, second.started)
+	assert.Equal(t, 1, third.started)
+	assert.Equal(t, []string{"third"}, r.RunningIDs())
+	assert.Equal(t, `telegram bot token is shared by managers ["first" "second"]`, r.StartError("first").Error())
+	assert.Equal(t, r.StartError("first"), r.StartError("second"))
+}
+
 // "Running" must mean the manager's own loops are still up, not that Start
 // returned nil once: a bot whose poller died reads as running forever otherwise.
 func TestRuntime_RunningIDs_DropsAManagerWhoseLoopsDied(t *testing.T) {

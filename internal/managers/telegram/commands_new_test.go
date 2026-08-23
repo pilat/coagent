@@ -26,7 +26,7 @@ func newCmdTestManager(t *testing.T, ctrl *fakeController, messages *[]string) *
 			ID:               "telegram-main",
 			Enabled:          &enabled,
 			BotToken:         "token",
-			TargetChatID:     -100123,
+			TargetChatID:     targetID(-100123),
 			AllowedUserIDs:   []int64{42},
 			SendChunkDelayMS: 0,
 			PollTimeoutSec:   30,

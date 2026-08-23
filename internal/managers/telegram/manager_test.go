@@ -44,9 +44,11 @@ func TestStartDoesNotAnnounceStartup(t *testing.T) {
 		cfg: config.ManagerEntry{
 			ID:             "telegram-main",
 			BotToken:       "token",
-			TargetChatID:   -100123,
+			TargetChatID:   targetID(-100123),
 			PollTimeoutSec: 30,
 		},
+		target:     forumTarget{chatID: -100123, topology: forumTopologyGroup},
+		botUserID:  42,
 		controller: &fakeController{},
 		httpClient: &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 			method := filepath.Base(req.URL.Path)
@@ -57,7 +59,22 @@ func TestStartDoesNotAnnounceStartup(t *testing.T) {
 				return nil, req.Context().Err()
 			}
 
-			return telegramResponse(req, `{"ok":true,"result":true}`), nil
+			switch method {
+			case "getMe":
+				return telegramResponse(req, `{"ok":true,"result":{"id":42}}`), nil
+			case "getChat":
+				return telegramResponse(
+					req,
+					`{"ok":true,"result":{"id":-100123,"type":"supergroup","is_forum":true}}`,
+				), nil
+			case "getChatMember":
+				return telegramResponse(
+					req,
+					`{"ok":true,"result":{"status":"administrator","can_manage_topics":true,"can_delete_messages":true}}`,
+				), nil
+			default:
+				return telegramResponse(req, `{"ok":true,"result":true}`), nil
+			}
 		})},
 		navPaths:       map[int64]string{},
 		pathToNav:      map[string]int64{},

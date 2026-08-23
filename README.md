@@ -45,9 +45,12 @@ and schedules. When a new secret is needed, coagent asks through a masked
 terminal prompt instead of sending it through the model conversation.
 
 The local chat owns a persistent dialog project and is primarily the onboarding
-and configuration surface. Telegram setup needs a BotFather token, your numeric
-user ID, and the numeric chat ID of a forum-enabled supergroup; give the two IDs
-to the local chat and it will request the token privately. Then send `/spawn` to
+and configuration surface. For one person, Telegram setup recommends a private
+bot forum: enable Threaded Mode in BotFather, disallow users from creating
+topics, send the bot `/start`, and give the local chat your numeric user ID. For
+a shared group, use a forum-enabled supergroup and provide its numeric chat ID.
+Each manager needs its own bot token; changing a forum target requires a new
+manager ID. The local chat requests the token privately. Then send `/spawn` to
 the bot, choose an existing checkout, and hand off the task:
 
 ```text

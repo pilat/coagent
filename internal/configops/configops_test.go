@@ -153,7 +153,7 @@ func TestStage_RejectsCredentialValueInEveryCredentialField(t *testing.T) {
 			name: "manager bot_token",
 			op: SetManager(config.ManagerEntry{
 				ID: "tg2", Driver: "telegram", BotToken: fakeBotToken,
-				AllowedUserIDs: []int64{7}, TargetChatID: -100,
+				AllowedUserIDs: []int64{7}, TargetChatID: int64ptr(-100),
 			}),
 		},
 		{
@@ -295,7 +295,7 @@ func TestSetManager_SetsEnabledExplicitly(t *testing.T) {
 
 	cfg := f.applied(t, SetManager(config.ManagerEntry{
 		ID: "tg2", Driver: "telegram", BotToken: Ref("MANAGER_TG2_BOT_TOKEN"),
-		AllowedUserIDs: []int64{7}, TargetChatID: -1001,
+		AllowedUserIDs: []int64{7}, TargetChatID: int64ptr(-1001),
 	}))
 
 	require.Len(t, cfg.Managers, 2)
@@ -580,7 +580,7 @@ func TestSetManager_NewManagerNeedsATokenReference(t *testing.T) {
 	f := newFixture(t, baseConfig, baseSecrets)
 
 	v := f.rejected(t, SetManager(config.ManagerEntry{
-		ID: "tg2", Driver: "telegram", AllowedUserIDs: []int64{7}, TargetChatID: -100,
+		ID: "tg2", Driver: "telegram", AllowedUserIDs: []int64{7}, TargetChatID: int64ptr(-100),
 	}))
 	assert.Contains(t, v.Reason(), "bot_token reference")
 }
@@ -591,13 +591,14 @@ func TestSetManager_EmptyTokenKeepsTheExistingReference(t *testing.T) {
 	f := newFixture(t, baseConfig, baseSecrets)
 
 	cfg := f.applied(t, SetManager(config.ManagerEntry{
-		ID: "tg", Driver: "telegram", AllowedUserIDs: []int64{7, 9}, TargetChatID: -200,
+		ID: "tg", Driver: "telegram", AllowedUserIDs: []int64{7, 9}, TargetChatID: int64ptr(-100),
 	}))
 
 	require.Len(t, cfg.Managers, 1)
 	assert.Equal(t, "${MANAGER_TG_BOT_TOKEN}", cfg.Managers[0].BotToken)
 	assert.Equal(t, []int64{7, 9}, cfg.Managers[0].AllowedUserIDs)
-	assert.Equal(t, int64(-200), cfg.Managers[0].TargetChatID)
+	require.NotNil(t, cfg.Managers[0].TargetChatID)
+	assert.Equal(t, int64(-100), *cfg.Managers[0].TargetChatID)
 }
 
 // A new provider missing its key is refused for every driver whose schema

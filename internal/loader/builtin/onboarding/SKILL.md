@@ -78,7 +78,27 @@ an empty list removes all tags. The default model may be tagged or untagged.
 
 ## Connecting Telegram
 
-Complete the numbered steps in order. Do not combine the tool calls.
+Complete one topology path at a time. Every manager needs a distinct BotFather
+bot and token; request that token only through `request_secret` at the terminal.
+Do not combine `set_manager` calls.
+
+### Private bot forum (recommended for one person)
+
+1. Obtain the user's numeric Telegram ID (for example, `@userinfobot` returns
+it). It is the sole `allowed_user_ids` entry.
+2. In BotFather enable **Threaded Mode** and **Disallow users to create new
+threads**. The user must open the bot and send `/start`.
+3. Call `set_manager` with the manager ID, token reference, and that one user
+ID. Omit `target_chat_id`: omission selects a private bot forum.
+4. Wait for restart, run `coagent status`, and confirm the dedicated `Coagent`
+topic. A General message is guidance only, never a session.
+
+If status says Threaded Mode is disabled, users may create topics, or the private
+chat was not found, fix the named BotFather setting or send `/start`, update the
+manager, and recheck status. Use the group path if private Threaded Mode is
+unavailable to the account or client.
+
+### Group forum (for several people or compatibility)
 
 1. **Make the bot.** In Telegram, message `@BotFather`, send `/newbot`, and
 follow the prompts. It answers with a token like `1234567890:AAH...`. Do not ask
@@ -88,7 +108,12 @@ stop this setup without calling `set_manager`.
 
 2. **Get their user id.** Telegram does not show it anywhere in the UI. Tell them
 to message `@userinfobot` — it replies with their numeric id. That number goes in
-`allowed_user_ids`; nobody else can drive the bot.
+`allowed_user_ids`; nobody else can drive the bot. For one person, recommend a
+private bot forum first: enable Threaded Mode in BotFather, enable `Disallow users
+to create new threads`, open the bot and send `/start`, then call `set_manager`
+without `target_chat_id`. Confirm the dedicated `Coagent` topic after restart.
+If private Threaded Mode is unavailable or several people need access, use the
+group forum path below.
 
 3. **Make the group and get its chat id.** coagent needs a **forum-enabled
 supergroup**: it opens one topic per session, so a plain group will not work.
@@ -113,6 +138,15 @@ If startup failed, explain the reported cause. For a bad token, request a new
 secret and then update the same manager; for permissions, wait for the user to
 promote the bot and then update the same manager. Make one `set_manager` call
 after the cause is corrected, wait for its verdict, and check status again.
+Every configured manager needs a distinct BotFather bot token. Changing a
+target or the sole private user requires a new manager ID; sessions are never
+moved to another forum.
+
+For group status failures, enable Topics, make the bot an administrator, and
+grant both topic-management and delete-message permission before updating the
+manager and rechecking status. A duplicate-token error names every conflicting
+manager: assign each one a distinct bot. Replacing a token with a different bot
+account leaves the manager down; use a new manager ID to change bot or target.
 
 ## When you are finished
 

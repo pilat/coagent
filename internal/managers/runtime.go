@@ -2,6 +2,7 @@ package managers
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"sync"
@@ -55,9 +56,15 @@ func (r *runtime) Start(ctx context.Context) error {
 	log := logger.Ctx(ctx).Named("managers.runtime")
 	started := make([]Manager, 0, len(r.cfg.UnifiedConfig.Managers))
 	failed := make(map[string]error)
+	conflicts := telegramTokenConflicts(r.cfg.UnifiedConfig.Managers)
 
 	for _, entry := range r.cfg.UnifiedConfig.Managers {
 		if entry.Enabled == nil || !*entry.Enabled {
+			continue
+		}
+
+		if err := conflicts[entry.ID]; err != nil {
+			failed[entry.ID] = err
 			continue
 		}
 
@@ -79,6 +86,33 @@ func (r *runtime) Start(ctx context.Context) error {
 	r.mu.Unlock()
 
 	return nil
+}
+
+func telegramTokenConflicts(entries []config.ManagerEntry) map[string]error {
+	byToken := make(map[string][]string)
+
+	for _, entry := range entries {
+		if entry.Driver == "telegram" && entry.BotToken != "" && entry.Enabled != nil && *entry.Enabled {
+			byToken[entry.BotToken] = append(byToken[entry.BotToken], entry.ID)
+		}
+	}
+
+	conflicts := make(map[string]error)
+
+	for _, ids := range byToken {
+		if len(ids) < 2 {
+			continue
+		}
+
+		slices.Sort(ids)
+
+		message := fmt.Sprintf("telegram bot token is shared by managers %q", ids)
+		for _, id := range ids {
+			conflicts[id] = errors.New(message)
+		}
+	}
+
+	return conflicts
 }
 
 func (r *runtime) Stop(ctx context.Context) error {
