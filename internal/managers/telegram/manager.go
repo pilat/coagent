@@ -41,6 +41,8 @@ type Manager struct {
 	mu sync.RWMutex
 
 	serviceTopicID  int64
+	target          forumTarget
+	botUserID       int64
 	updateOffset    int64
 	daemonHome      string
 	availableModels []controllerapi.ConfigModelInfo
@@ -130,6 +132,13 @@ func New(
 		workDirs:       make(map[int64]string),
 	}
 
+	target, err := m.resolveForumTarget()
+	if err != nil {
+		return nil, err
+	}
+
+	m.target = target
+
 	return m, nil
 }
 
@@ -140,15 +149,37 @@ func (m *Manager) ID() string {
 //nolint:contextcheck // Start spawns runCtx as the manager's own long-lived root context, canceled by Stop, not derived from the caller's ctx
 func (m *Manager) Start(ctx context.Context) error {
 	runCtx, cancel := context.WithCancel(context.Background())
+
 	m.cancel = cancel
+	if m.target.chatID == 0 {
+		target, err := m.resolveForumTarget()
+		if err != nil {
+			cancel()
+			return err
+		}
+
+		m.target = target
+	}
 
 	// done is read by Alive from whichever goroutine asks for status, so the
 	// handoff to the loops is published under the lock.
 	done := make(chan struct{})
 
+	started := false
+	defer func() {
+		if !started {
+			close(done)
+		}
+	}()
+
 	m.mu.Lock()
 	m.done = done
 	m.mu.Unlock()
+
+	if err := m.preflight(runCtx); err != nil {
+		cancel()
+		return fmt.Errorf("preflight forum target: %w", err)
+	}
 
 	//nolint:contextcheck // runCtx is the manager's own long-lived root context, canceled by Stop, not derived from Start's caller ctx
 	serviceTopicID, err := m.ensureServiceTopic(runCtx)
@@ -192,6 +223,8 @@ func (m *Manager) Start(ctx context.Context) error {
 
 		wg.Wait()
 	}()
+
+	started = true
 
 	return nil
 }
@@ -351,7 +384,7 @@ func (m *Manager) processUpdate(ctx context.Context, upd telegramUpdate) {
 		return
 	}
 
-	if msg.Chat.ID != m.cfg.TargetChatID {
+	if msg.Chat.ID != m.effectiveChatID() {
 		log.Debug("update_dropped", zap.String("reason", "other_chat"), zap.Int64("chat_id", msg.Chat.ID))
 		return
 	}
@@ -363,7 +396,17 @@ func (m *Manager) processUpdate(ctx context.Context, upd telegramUpdate) {
 
 	threadID := msg.MessageThreadID
 	if threadID == 0 {
+		if m.target.topology == forumTopologyBot {
+			_, _ = m.sendMessage(
+				ctx,
+				fmt.Sprintf("Open the “%s” topic to create or manage sessions.", m.cfg.ServiceTopicName),
+				nil,
+				0,
+			)
+		}
+
 		log.Debug("update_dropped", zap.String("reason", "no_topic"))
+
 		return
 	}
 

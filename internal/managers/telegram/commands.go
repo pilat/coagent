@@ -489,7 +489,7 @@ func (m *Manager) handleCallback(ctx context.Context, cb *telegramCallbackData) 
 		return
 	}
 
-	if cb.Message.Chat.ID != m.cfg.TargetChatID {
+	if cb.Message.Chat.ID != m.effectiveChatID() {
 		return
 	}
 

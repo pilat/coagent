@@ -54,7 +54,7 @@ func TestSanitizeTransportError(t *testing.T) {
 func TestSendMessage_PlainFallbackOnlyForExplicitEntityParseRejection(t *testing.T) {
 	calls := 0
 	m := &Manager{
-		cfg: config.ManagerEntry{BotToken: "fake", TargetChatID: 1},
+		cfg: config.ManagerEntry{BotToken: "fake", TargetChatID: targetID(1)},
 		httpClient: &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 			calls++
 			var body map[string]any
@@ -99,7 +99,7 @@ func TestSendMessage_DoesNotDuplicateOnRateLimitOrAmbiguousTransportFailure(t *t
 		t.Run(tt.name, func(t *testing.T) {
 			calls := 0
 			m := &Manager{
-				cfg: config.ManagerEntry{BotToken: "fake", TargetChatID: 1},
+				cfg: config.ManagerEntry{BotToken: "fake", TargetChatID: targetID(1)},
 				httpClient: &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
 					calls++
 					return tt.response, tt.transport
@@ -111,6 +111,18 @@ func TestSendMessage_DoesNotDuplicateOnRateLimitOrAmbiguousTransportFailure(t *t
 			assert.Equal(t, 1, calls, "an uncertain first send must never trigger a second message")
 		})
 	}
+}
+
+func TestCreateForumTopicRejectsMissingThreadID(t *testing.T) {
+	m := &Manager{
+		cfg: config.ManagerEntry{BotToken: "fake", TargetChatID: targetID(1)},
+		httpClient: &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			return telegramJSONResponse(`{"ok":true,"result":{}}`), nil
+		})},
+	}
+
+	_, err := m.createForumTopic(context.Background(), "Coagent", "")
+	require.ErrorContains(t, err, "invalid message_thread_id")
 }
 
 func telegramJSONResponse(body string) *http.Response {

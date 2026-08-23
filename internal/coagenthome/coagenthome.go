@@ -25,8 +25,10 @@ const (
 	CatalogDirName      = "catalog"
 	MarketplacesDirName = "marketplaces"
 
-	// TelegramServiceFilePattern is an fmt pattern keyed by target chat ID.
+	// TelegramServiceFilePattern is the legacy target-chat-keyed service record.
 	TelegramServiceFilePattern = "tg-service-%d.json"
+	// TelegramServiceManagerFilePattern is keyed by a manager-ID digest.
+	TelegramServiceManagerFilePattern = "tg-service-manager-%s.json"
 )
 
 var (

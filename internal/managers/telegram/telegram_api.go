@@ -44,6 +44,24 @@ type tgAPIError struct {
 	RetryAfter  int // seconds; from a 429's parameters.retry_after, 0 when absent
 }
 
+type telegramBotUser struct {
+	ID                        int64 `json:"id"`
+	HasTopicsEnabled          bool  `json:"has_topics_enabled"`
+	AllowsUsersToCreateTopics bool  `json:"allows_users_to_create_topics"`
+}
+
+type telegramForumChat struct {
+	ID      int64  `json:"id"`
+	Type    string `json:"type"`
+	IsForum bool   `json:"is_forum"`
+}
+
+type telegramChatMember struct {
+	Status            string `json:"status"`
+	CanManageTopics   bool   `json:"can_manage_topics"`
+	CanDeleteMessages bool   `json:"can_delete_messages"`
+}
+
 func (e *tgAPIError) Error() string {
 	if e.Description == "" {
 		return fmt.Sprintf("telegram %s failed (code %d)", e.Method, e.ErrorCode)
@@ -149,6 +167,33 @@ func (m *Manager) getUpdates(ctx context.Context, offset int64) ([]telegramUpdat
 	return updates, nil
 }
 
+func (m *Manager) getMe(ctx context.Context) (telegramBotUser, error) {
+	var out telegramBotUser
+	if err := m.tg(ctx, "getMe", nil, &out); err != nil {
+		return telegramBotUser{}, err
+	}
+
+	return out, nil
+}
+
+func (m *Manager) getChat(ctx context.Context, chatID int64) (telegramForumChat, error) {
+	var out telegramForumChat
+	if err := m.tg(ctx, "getChat", map[string]any{tgKeyChatID: chatID}, &out); err != nil {
+		return telegramForumChat{}, err
+	}
+
+	return out, nil
+}
+
+func (m *Manager) getChatMember(ctx context.Context, chatID, userID int64) (telegramChatMember, error) {
+	var out telegramChatMember
+	if err := m.tg(ctx, "getChatMember", map[string]any{tgKeyChatID: chatID, "user_id": userID}, &out); err != nil {
+		return telegramChatMember{}, err
+	}
+
+	return out, nil
+}
+
 func (m *Manager) setCommands(ctx context.Context) error {
 	return m.tg(ctx, "setMyCommands", map[string]any{
 		"commands": []map[string]string{
@@ -177,7 +222,7 @@ func (m *Manager) answerCallback(ctx context.Context, callbackID, text string) {
 
 func (m *Manager) sendTyping(ctx context.Context, threadID int64) error {
 	params := map[string]any{
-		tgKeyChatID: m.cfg.TargetChatID,
+		tgKeyChatID: m.effectiveChatID(),
 		"action":    "typing",
 	}
 	if threadID > 0 {
@@ -239,7 +284,7 @@ func shouldFallbackToPlain(err error) bool {
 
 func (m *Manager) sendRawHTML(ctx context.Context, html string, markup *tgReplyMarkup, threadID int64) (int64, error) {
 	params := map[string]any{
-		tgKeyChatID:    m.cfg.TargetChatID,
+		tgKeyChatID:    m.effectiveChatID(),
 		tgKeyText:      html,
 		tgKeyParseMode: tgParseModeHTML,
 	}
@@ -264,7 +309,7 @@ func (m *Manager) sendRawHTML(ctx context.Context, html string, markup *tgReplyM
 
 func (m *Manager) editMessageText(ctx context.Context, messageID int64, text string, markup *tgReplyMarkup) error {
 	params := map[string]any{
-		tgKeyChatID:    m.cfg.TargetChatID,
+		tgKeyChatID:    m.effectiveChatID(),
 		tgKeyMessageID: messageID,
 		tgKeyText:      textToTelegramHTML(text),
 		tgKeyParseMode: tgParseModeHTML,
@@ -278,7 +323,7 @@ func (m *Manager) editMessageText(ctx context.Context, messageID int64, text str
 
 func (m *Manager) editMessageRawHTML(ctx context.Context, messageID int64, html string, markup *tgReplyMarkup) error {
 	params := map[string]any{
-		tgKeyChatID:    m.cfg.TargetChatID,
+		tgKeyChatID:    m.effectiveChatID(),
 		tgKeyMessageID: messageID,
 		tgKeyText:      html,
 		tgKeyParseMode: tgParseModeHTML,
@@ -292,14 +337,14 @@ func (m *Manager) editMessageRawHTML(ctx context.Context, messageID int64, html 
 
 func (m *Manager) deleteMessage(ctx context.Context, messageID int64) error {
 	return m.tg(ctx, "deleteMessage", map[string]any{
-		tgKeyChatID:    m.cfg.TargetChatID,
+		tgKeyChatID:    m.effectiveChatID(),
 		tgKeyMessageID: messageID,
 	}, nil)
 }
 
 func (m *Manager) createForumTopic(ctx context.Context, name, emojiID string) (int64, error) {
 	params := map[string]any{
-		tgKeyChatID: m.cfg.TargetChatID,
+		tgKeyChatID: m.effectiveChatID(),
 		"name":      name,
 	}
 	if emojiID != "" {
@@ -314,19 +359,23 @@ func (m *Manager) createForumTopic(ctx context.Context, name, emojiID string) (i
 		return 0, err
 	}
 
+	if out.MessageThreadID <= 0 {
+		return 0, errors.New("telegram createForumTopic returned an invalid message_thread_id")
+	}
+
 	return out.MessageThreadID, nil
 }
 
 func (m *Manager) deleteForumTopic(ctx context.Context, topicID int64) error {
 	return m.tg(ctx, "deleteForumTopic", map[string]any{
-		tgKeyChatID:         m.cfg.TargetChatID,
+		tgKeyChatID:         m.effectiveChatID(),
 		"message_thread_id": topicID,
 	}, nil)
 }
 
 func (m *Manager) editForumTopic(ctx context.Context, topicID int64) error {
 	err := m.tg(ctx, "editForumTopic", map[string]any{
-		tgKeyChatID:         m.cfg.TargetChatID,
+		tgKeyChatID:         m.effectiveChatID(),
 		"message_thread_id": topicID,
 	}, nil)
 	if err == nil {
@@ -354,7 +403,7 @@ func (m *Manager) sendMessageChunk(
 	threadID int64,
 ) (int64, error) {
 	params := map[string]any{
-		tgKeyChatID:    m.cfg.TargetChatID,
+		tgKeyChatID:    m.effectiveChatID(),
 		tgKeyText:      chunk,
 		tgKeyParseMode: tgParseModeHTML,
 	}
@@ -384,7 +433,7 @@ func (m *Manager) sendPlainFallback(
 	threadID int64,
 ) (int64, error) {
 	params := map[string]any{
-		tgKeyChatID: m.cfg.TargetChatID,
+		tgKeyChatID: m.effectiveChatID(),
 		tgKeyText:   stripHTMLToPlain(html),
 	}
 	if markup != nil {

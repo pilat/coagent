@@ -138,6 +138,27 @@ func TestHarnessScenario_CLIConversationIsNotRenderedInTelegram(t *testing.T) {
 	assert.Empty(t, calls, "a Telegram manager must ignore another manager's conversation")
 }
 
+func TestHarnessScenario_BotForumGeneralGuidesWithoutCreatingSession(t *testing.T) {
+	var calls []telegramHarnessCall
+	controller := &fakeController{}
+	manager := newTelegramHarnessManager(t, controller, &calls)
+	manager.cfg.AllowedUserIDs = []int64{7}
+	manager.cfg.TargetChatID = nil
+	manager.cfg.ServiceTopicName = "Coagent"
+	manager.target = forumTarget{chatID: 7, topology: forumTopologyBot}
+
+	manager.processUpdate(t.Context(), telegramUpdate{Message: &telegramMessage{
+		From: &telegramUser{ID: 7}, Chat: telegramChat{ID: 7}, Text: "hello",
+	}})
+
+	require.Len(t, calls, 1)
+	assert.Equal(t, telegramHarnessCall{
+		Method: "sendMessage", ChatID: 7,
+		Text: "Open the “Coagent” topic to create or manage sessions.", ParseMode: tgParseModeHTML,
+	}, calls[0])
+	assert.Empty(t, controller.createSessionCalls)
+}
+
 func TestHarnessScenario_TelegramManagersRenderOnlyTheirOwnConversation(t *testing.T) {
 	var primaryCalls, secondaryCalls []telegramHarnessCall
 	primary := newTelegramHarnessManager(t, &fakeController{}, &primaryCalls)
@@ -329,7 +350,7 @@ func newTelegramHarnessManager(
 	return &Manager{
 		id: "telegram-main",
 		cfg: config.ManagerEntry{
-			ID: "telegram-main", BotToken: "test-token", TargetChatID: harnessChatID,
+			ID: "telegram-main", BotToken: "test-token", TargetChatID: targetID(harnessChatID),
 			SendChunkDelayMS: 0,
 		},
 		controller:     controller,

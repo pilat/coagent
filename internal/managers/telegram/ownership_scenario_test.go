@@ -68,7 +68,7 @@ func newTelegramOwnershipHarness(t *testing.T) *telegramOwnershipHarness {
 
 	recorder := &ownershipTelegramRecorder{}
 	manager, err := New(config.ManagerEntry{
-		ID: "telegram-main", BotToken: "test-token", TargetChatID: harnessChatID,
+		ID: "telegram-main", BotToken: "test-token", TargetChatID: targetID(harnessChatID),
 	}, cfg.UnifiedConfig, telegramController)
 	require.NoError(t, err)
 	manager.httpClient = &http.Client{Transport: recorder}

@@ -6,22 +6,16 @@ import (
 	"errors"
 	"fmt"
 	"maps"
-	"os"
 	"path/filepath"
 	"slices"
 	"strings"
 
 	"go.uber.org/zap"
 
-	"github.com/pilat/coagent/internal/coagenthome"
 	"github.com/pilat/coagent/internal/controllerapi"
 	"github.com/pilat/coagent/internal/logger"
 	"github.com/pilat/coagent/internal/sessionevent"
 )
-
-type serviceTopicFile struct {
-	TopicID int64 `json:"topic_id"`
-}
 
 func (m *Manager) getSessionByTopicID(topicID int64) (int64, bool) {
 	m.mu.RLock()
@@ -170,135 +164,6 @@ func makeLabels(sessions []controllerapi.SessionInfo) map[int64]string {
 	return labels
 }
 
-func (m *Manager) serviceTopicPath() string {
-	path, err := coagenthome.Join(fmt.Sprintf(coagenthome.TelegramServiceFilePattern, m.cfg.TargetChatID))
-	if err != nil {
-		return ""
-	}
-
-	return path
-}
-
-func (m *Manager) loadServiceTopicID() (int64, error) {
-	path := m.serviceTopicPath()
-	if path == "" {
-		return 0, errors.New("resolve service topic path")
-	}
-
-	raw, err := os.ReadFile(path)
-	if errors.Is(err, os.ErrNotExist) {
-		return 0, nil
-	}
-
-	if err != nil {
-		return 0, fmt.Errorf("read service topic file: %w", err)
-	}
-
-	var payload serviceTopicFile
-	if err := json.Unmarshal(raw, &payload); err != nil {
-		return 0, fmt.Errorf("decode service topic file: %w", err)
-	}
-
-	if payload.TopicID <= 0 {
-		return 0, fmt.Errorf("decode service topic file: invalid topic id %d", payload.TopicID)
-	}
-
-	return payload.TopicID, nil
-}
-
-func (m *Manager) saveServiceTopicID(topicID int64) error {
-	path := m.serviceTopicPath()
-	if path == "" {
-		return errors.New("resolve service topic path")
-	}
-
-	payload, err := json.Marshal(serviceTopicFile{TopicID: topicID})
-	if err != nil {
-		return fmt.Errorf("encode service topic file: %w", err)
-	}
-
-	if err := writeServiceTopicFile(path, payload); err != nil {
-		return fmt.Errorf("write service topic file: %w", err)
-	}
-
-	return nil
-}
-
-// writeServiceTopicFile atomically replaces the tiny routing record. A crash
-// before rename leaves the previous valid file in place instead of a truncated
-// JSON document that would otherwise trigger a duplicate topic on restart.
-func writeServiceTopicFile(path string, payload []byte) error {
-	tmp, err := os.CreateTemp(filepath.Dir(path), ".telegram-service-*")
-	if err != nil {
-		return fmt.Errorf("create temporary file: %w", err)
-	}
-
-	tmpPath := tmp.Name()
-	closed := false
-
-	defer func() {
-		if !closed {
-			_ = tmp.Close()
-		}
-
-		_ = os.Remove(tmpPath)
-	}()
-
-	if err := tmp.Chmod(0o600); err != nil {
-		return fmt.Errorf("chmod temporary file: %w", err)
-	}
-
-	if _, err := tmp.Write(payload); err != nil {
-		return fmt.Errorf("write temporary file: %w", err)
-	}
-
-	if err := tmp.Sync(); err != nil {
-		return fmt.Errorf("sync temporary file: %w", err)
-	}
-
-	if err := tmp.Close(); err != nil {
-		return fmt.Errorf("close temporary file: %w", err)
-	}
-
-	closed = true
-
-	if err := os.Rename(tmpPath, path); err != nil {
-		return fmt.Errorf("replace service topic file: %w", err)
-	}
-
-	return nil
-}
-
-func (m *Manager) ensureServiceTopic(ctx context.Context) (int64, error) {
-	saved, err := m.loadServiceTopicID()
-	if err != nil {
-		return 0, err
-	}
-
-	if saved > 0 {
-		return saved, nil
-	}
-
-	topicID, err := m.createForumTopic(ctx, m.cfg.ServiceTopicName, m.cfg.ServiceTopicIconEmojiID)
-	if err != nil {
-		return 0, err
-	}
-
-	if err := m.saveServiceTopicID(topicID); err != nil {
-		persistErr := fmt.Errorf("persist service topic %d: %w", topicID, err)
-		if cleanupErr := m.deleteForumTopic(ctx, topicID); cleanupErr != nil {
-			return 0, errors.Join(
-				persistErr,
-				fmt.Errorf("delete unbound service topic %d: %w", topicID, cleanupErr),
-			)
-		}
-
-		return 0, persistErr
-	}
-
-	return topicID, nil
-}
-
 func (m *Manager) createTopicForSession(
 	ctx context.Context,
 	sessionID int64,
@@ -357,16 +222,6 @@ func (m *Manager) deleteTopicForSession(ctx context.Context, sessionID int64) {
 	m.unregisterTopic(sessionID)
 }
 
-func (m *Manager) verifyTopicExists(ctx context.Context, topicID int64) bool {
-	if topicID == 0 {
-		return false
-	}
-
-	err := m.editForumTopic(ctx, topicID)
-
-	return err == nil
-}
-
 func (m *Manager) reconcileOnStartup(ctx context.Context) error {
 	m.mu.Lock()
 	m.sessionToTopic = make(map[int64]int64)
@@ -382,9 +237,16 @@ func (m *Manager) reconcileOnStartup(ctx context.Context) error {
 	for _, s := range m.filterOwnedActiveSessions(sessions) {
 		m.setWorkDir(s.ID, s.WorkDir)
 
-		if topicID, ok := topicIDFromAttributes(s.Attributes); ok && m.verifyTopicExists(ctx, topicID) {
-			m.registerTopic(s.ID, topicID)
-			continue
+		if topicID, ok := topicIDFromAttributes(s.Attributes); ok {
+			exists, err := m.forumTopicExists(ctx, topicID)
+			if err != nil {
+				return fmt.Errorf("verify topic for session %d: %w", s.ID, err)
+			}
+
+			if exists {
+				m.registerTopic(s.ID, topicID)
+				continue
+			}
 		}
 
 		if _, err := m.createTopicForSession(ctx, s.ID, s.WorkDir, s.Name, s.Attributes); err != nil {

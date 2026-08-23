@@ -274,3 +274,11 @@ Naming conflicts this vocabulary resolves. "Resolved" means the winner above is 
 - **memory vs conversation history** — *Resolved.* "memory" means the curated `CuratedStore` only; the transcript is **conversation history** / the message store.
 - **loop (agent) vs loop (detection)** — *Resolved.* The **agent loop** is the execution cycle; **loop detection** is about repetitive-call *repetition*. Same word, unrelated meanings — always qualify.
 - **project vs space/workspace/dialog (folders for non-code chats)** — *Resolved.* A folder for notes/blog-style dialogs is an ordinary **project** (daemon-provisioned ones default under `~/.coagent/projects/`); no separate container term. "workspace" stays unused (git connotation); topic/thread name the Telegram dialog *on* a project, never the folder.
+- **Telegram group forum vs bot forum** — *Resolved.* A **group forum** is a
+  topic-enabled supergroup containing the bot; a **bot forum** is the topic-enabled
+  private chat between one user and the bot. Both contain Telegram **topics**,
+  but neither topology is itself a topic.
+- **Telegram manager vs Telegram bot** — *Resolved.* A configured Telegram
+  **manager** has one durable manager ID, one forum target and one Telegram bot
+  account. Each manager owns its polling instance; two enabled managers must not
+  reuse the same bot token.

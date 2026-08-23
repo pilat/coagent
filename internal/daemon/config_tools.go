@@ -62,7 +62,7 @@ type (
 		Driver         string  `json:"driver"`
 		BotToken       string  `json:"bot_token"`
 		AllowedUserIDs []int64 `json:"allowed_user_ids"`
-		TargetChatID   int64   `json:"target_chat_id"`
+		TargetChatID   *int64  `json:"target_chat_id"`
 	}
 
 	nameParams struct {
@@ -160,7 +160,7 @@ func (t *setManagerTool) Parameters() json.RawMessage {
     "driver": {"type": "string", "enum": ["telegram"]},
     "bot_token": {"type": "string", "description": ` + quote(credentialDoc) + `},
     "allowed_user_ids": {"type": "array", "items": {"type": "integer"}, "description": "Numeric user ids allowed to talk to the bot."},
-    "target_chat_id": {"type": "integer", "description": "The forum group's chat id, negative for a supergroup."}
+	    "target_chat_id": {"type": "integer", "description": "The group forum chat id. Omit it for a private bot forum with exactly one allowed user."}
   },
   "required": ["id", "driver"]
 }`)

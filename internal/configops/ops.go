@@ -145,6 +145,10 @@ func (o *setManager) apply(draft *config.UnifiedConfig) error {
 
 	for i, m := range draft.Managers {
 		if m.ID == entry.ID {
+			if managerTargetChanged(m, entry) {
+				return fmt.Errorf("manager %q forum target cannot change; create a new manager id", entry.ID)
+			}
+
 			if entry.BotToken == "" {
 				entry.BotToken = m.BotToken
 			}
@@ -162,6 +166,23 @@ func (o *setManager) apply(draft *config.UnifiedConfig) error {
 	draft.Managers = append(draft.Managers, entry)
 
 	return nil
+}
+
+func managerTargetChanged(current, next config.ManagerEntry) bool {
+	if (current.TargetChatID == nil) != (next.TargetChatID == nil) {
+		return true
+	}
+
+	if current.TargetChatID != nil && *current.TargetChatID != *next.TargetChatID {
+		return true
+	}
+
+	if current.TargetChatID == nil &&
+		(len(current.AllowedUserIDs) != 1 || len(next.AllowedUserIDs) != 1 || current.AllowedUserIDs[0] != next.AllowedUserIDs[0]) {
+		return true
+	}
+
+	return false
 }
 
 type removeManager struct{ id string }
