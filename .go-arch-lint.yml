@@ -63,6 +63,7 @@ components:
   daemon:     { in: internal/daemon }
 
   configops:  { in: internal/configops }
+  configtools: { in: internal/configtools }
   ctl:        { in: internal/ctl }
 
 deps:
@@ -130,10 +131,13 @@ deps:
 
   # Orchestrator.
   daemon:
-    mayDependOn: [coagenthome, config, configops, controllerapi, git, id, llmwire, loader, logger, mcp, mcpstore, registry, schedule, session, sessionevent, sessionstore, tool]
+    mayDependOn: [coagenthome, config, configops, configtools, controllerapi, git, id, llmwire, loader, logger, mcp, mcpstore, registry, schedule, session, sessionevent, sessionstore, tool]
 
   configops:
     mayDependOn: [coagenthome, config, logger]
+
+  configtools:
+    mayDependOn: [coagenthome, config, configops, tool]
 
   # Local control plane: pure transport plus the daemon-state ops it answers from.
   ctl:

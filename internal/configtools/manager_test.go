@@ -1,4 +1,4 @@
-package daemon
+package configtools
 
 import (
 	"encoding/json"
@@ -13,6 +13,8 @@ import (
 )
 
 func TestParseManagerParams_AcceptsAllFields(t *testing.T) {
+	t.Parallel()
+
 	params := `{
 		"id": "tg-main",
 		"driver": "telegram",
@@ -59,6 +61,8 @@ func TestParseManagerParams_AcceptsAllFields(t *testing.T) {
 }
 
 func TestParseManagerParams_RequiredFieldsOnly(t *testing.T) {
+	t.Parallel()
+
 	patch, err := parseManagerParams([]byte(`{"id":"tg"}`))
 	require.NoError(t, err)
 	assert.Equal(t, "tg", patch.ID)
@@ -69,24 +73,32 @@ func TestParseManagerParams_RequiredFieldsOnly(t *testing.T) {
 }
 
 func TestParseManagerParams_RejectsMissingID(t *testing.T) {
+	t.Parallel()
+
 	_, err := parseManagerParams([]byte(`{"driver":"telegram"}`))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "id is required")
 }
 
 func TestParseManagerParams_RejectsUnknownField(t *testing.T) {
+	t.Parallel()
+
 	_, err := parseManagerParams([]byte(`{"id":"tg","unknown":"value"}`))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "unknown field")
 }
 
 func TestParseManagerParams_RejectsDuplicateKey(t *testing.T) {
+	t.Parallel()
+
 	_, err := parseManagerParams([]byte(`{"id":"tg","id":"tg2"}`))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "duplicate key")
 }
 
 func TestParseManagerParams_RejectsTrailingData(t *testing.T) {
+	t.Parallel()
+
 	_, err := parseManagerParams([]byte(`{"id":"tg"} "extra"`))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "trailing data")
@@ -120,6 +132,8 @@ func TestParseManagerParams_RejectsNullForNonNullableFields(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
 			_, err := parseManagerParams([]byte(tt.params))
 			require.Error(t, err)
 			assert.Contains(t, err.Error(), tt.want)
@@ -128,6 +142,8 @@ func TestParseManagerParams_RejectsNullForNonNullableFields(t *testing.T) {
 }
 
 func TestParseManagerParams_AcceptsWhisperNull(t *testing.T) {
+	t.Parallel()
+
 	patch, err := parseManagerParams([]byte(`{"id":"tg","whisper":null}`))
 	require.NoError(t, err)
 	assert.True(t, patch.Whisper.Set)
@@ -135,24 +151,32 @@ func TestParseManagerParams_AcceptsWhisperNull(t *testing.T) {
 }
 
 func TestParseManagerParams_RejectsNullInAllowedUserIDs(t *testing.T) {
+	t.Parallel()
+
 	_, err := parseManagerParams([]byte(`{"id":"tg","allowed_user_ids":[7,null]}`))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "null")
 }
 
 func TestParseManagerParams_RejectsUnknownWhisperField(t *testing.T) {
+	t.Parallel()
+
 	_, err := parseManagerParams([]byte(`{"id":"tg","whisper":{"provider":"x","model":"y","extra":"z"}}`))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "whisper")
 }
 
 func TestParseManagerParams_RejectsMissingWhisperFields(t *testing.T) {
+	t.Parallel()
+
 	_, err := parseManagerParams([]byte(`{"id":"tg","whisper":{"provider":"x"}}`))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "whisper provider and model are required")
 }
 
 func TestParseManagerParams_RejectsAmbiguousJSON(t *testing.T) {
+	t.Parallel()
+
 	tests := []string{
 		`{"id":"tg","Driver":"telegram"}`,
 		`{"id":"tg","whisper":{"provider":"x","model":"y","Provider":"z"}}`,
@@ -167,6 +191,8 @@ func TestParseManagerParams_RejectsAmbiguousJSON(t *testing.T) {
 }
 
 func TestSetManagerSchemaCoversManagerFields(t *testing.T) {
+	t.Parallel()
+
 	var schema map[string]json.RawMessage
 	require.NoError(t, json.Unmarshal((&setManagerTool{}).Parameters(), &schema))
 	var additional bool

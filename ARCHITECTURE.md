@@ -59,6 +59,7 @@ does not imply a tier except where it expresses an implementation variant.
 - `internal/coagenthome` — sole resolver and name owner for the coagent home directory.
 - `internal/config` — typed configuration and secrets resolution policy.
 - `internal/configops` — guarded configuration mutations, backups and restart verdict markers.
+- `internal/configtools` — agent-facing configuration tool schemas, parsing and semantic-operation adapters.
 - `internal/controllerapi` — private daemon-to-manager contract and DTO vocabulary.
 - `internal/ctl` — authenticated local control socket, operation registry and client multiplexing.
 - `internal/daemon` — global runtime coordinator, persistence integration and controller implementation.
@@ -480,11 +481,14 @@ knowledge.
 ### Configuration, migration and host lifecycle
 
 Config owns parsing and secret-sink resolution; config operations own semantic
-mutation, backup retention and pending-apply recovery. Migration owns SQLite
-opening and schema progression. A production upgrade of an existing database
-creates a consistent SQLite backup before applying pending migrations and fails
-closed if inspection, backup or publication fails; fixture migration runs do not
-surprise callers with a backup side effect. Migration assets are append-only.
+mutation, backup retention and pending-apply recovery. Config tools own the
+agent-facing schemas, strict argument parsing and mapping to semantic config
+operations; the daemon gates their availability and owns the durable
+suspend-to-restart handoff. Migration owns SQLite opening and schema progression.
+A production upgrade of an existing database creates a consistent SQLite backup
+before applying pending migrations and fails closed if inspection, backup or
+publication fails; fixture migration runs do not surprise callers with a backup
+side effect. Migration assets are append-only.
 
 Coagent-home owns home-path semantics. Install owns service registration and
 platform lifecycle only; it does not become a second runtime coordinator. Logger
