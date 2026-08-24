@@ -151,9 +151,9 @@ func TestStage_RejectsCredentialValueInEveryCredentialField(t *testing.T) {
 		},
 		{
 			name: "manager bot_token",
-			op: SetManager(config.ManagerEntry{
-				ID: "tg2", Driver: "telegram", BotToken: fakeBotToken,
-				AllowedUserIDs: []int64{7}, TargetChatID: int64ptr(-100),
+			op: SetManagerPatch(ManagerPatch{
+				ID: "tg2", Driver: strptr("telegram"), BotToken: strptr(fakeBotToken),
+				AllowedUserIDs: &[]int64{7}, TargetChatID: int64ptr(-100),
 			}),
 		},
 		{
@@ -293,9 +293,9 @@ func TestSetManager_SetsEnabledExplicitly(t *testing.T) {
 	_, v := f.svc.SetSecret("MANAGER_TG2_BOT_TOKEN", "9999:another-token-value")
 	require.True(t, v.Applied)
 
-	cfg := f.applied(t, SetManager(config.ManagerEntry{
-		ID: "tg2", Driver: "telegram", BotToken: Ref("MANAGER_TG2_BOT_TOKEN"),
-		AllowedUserIDs: []int64{7}, TargetChatID: int64ptr(-1001),
+	cfg := f.applied(t, SetManagerPatch(ManagerPatch{
+		ID: "tg2", Driver: strptr("telegram"), BotToken: strptr(Ref("MANAGER_TG2_BOT_TOKEN")),
+		AllowedUserIDs: &[]int64{7}, TargetChatID: int64ptr(-1001),
 	}))
 
 	require.Len(t, cfg.Managers, 2)
@@ -579,8 +579,8 @@ func twoDigits(i int) string {
 func TestSetManager_NewManagerNeedsATokenReference(t *testing.T) {
 	f := newFixture(t, baseConfig, baseSecrets)
 
-	v := f.rejected(t, SetManager(config.ManagerEntry{
-		ID: "tg2", Driver: "telegram", AllowedUserIDs: []int64{7}, TargetChatID: int64ptr(-100),
+	v := f.rejected(t, SetManagerPatch(ManagerPatch{
+		ID: "tg2", Driver: strptr("telegram"), AllowedUserIDs: &[]int64{7}, TargetChatID: int64ptr(-100),
 	}))
 	assert.Contains(t, v.Reason(), "bot_token reference")
 }
@@ -590,8 +590,8 @@ func TestSetManager_NewManagerNeedsATokenReference(t *testing.T) {
 func TestSetManager_EmptyTokenKeepsTheExistingReference(t *testing.T) {
 	f := newFixture(t, baseConfig, baseSecrets)
 
-	cfg := f.applied(t, SetManager(config.ManagerEntry{
-		ID: "tg", Driver: "telegram", AllowedUserIDs: []int64{7, 9}, TargetChatID: int64ptr(-100),
+	cfg := f.applied(t, SetManagerPatch(ManagerPatch{
+		ID: "tg", Driver: strptr("telegram"), AllowedUserIDs: &[]int64{7, 9}, TargetChatID: int64ptr(-100),
 	}))
 
 	require.Len(t, cfg.Managers, 1)

@@ -2,6 +2,7 @@ package telegram
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"os"
@@ -33,6 +34,9 @@ func TestHarnessModel_ServiceTopicBindingSurvivesRestart(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, bound, restarted)
 	assert.Equal(t, 1, remote.created, "restart must reuse the durable binding")
+	assert.Equal(t, []forumTopicUpdate{{
+		ChatID: -100123, ThreadID: bound,
+	}}, remote.topicUpdates)
 }
 
 func FuzzTelegramServiceTopicProtocol(f *testing.F) {
@@ -67,15 +71,19 @@ func FuzzTelegramServiceTopicProtocol(f *testing.F) {
 }
 
 type serviceTopicHarness struct {
-	nextID  int64
-	created int
-	missing bool
+	nextID       int64
+	created      int
+	missing      bool
+	topicUpdates []forumTopicUpdate
 }
 
 func (h *serviceTopicHarness) manager() *Manager {
 	return &Manager{
-		id:     "telegram-main",
-		cfg:    config.ManagerEntry{ID: "telegram-main", BotToken: "test", TargetChatID: targetID(-100123)},
+		id: "telegram-main",
+		cfg: config.ManagerEntry{
+			ID: "telegram-main", BotToken: "test", TargetChatID: targetID(-100123),
+			ServiceTopicName: "Group support", ServiceTopicIconEmojiID: "777",
+		},
 		target: forumTarget{chatID: -100123, topology: forumTopologyGroup},
 		httpClient: &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 			switch filepath.Base(req.URL.Path) {
@@ -86,6 +94,11 @@ func (h *serviceTopicHarness) manager() *Manager {
 				h.nextID++
 				return telegramResponse(req, fmt.Sprintf(`{"ok":true,"result":{"message_thread_id":%d}}`, id)), nil
 			case "editForumTopic":
+				var update forumTopicUpdate
+				if err := json.NewDecoder(req.Body).Decode(&update); err != nil {
+					return nil, err
+				}
+				h.topicUpdates = append(h.topicUpdates, update)
 				if h.missing {
 					return telegramResponse(
 						req,

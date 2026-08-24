@@ -392,6 +392,8 @@ skill is automatically active there. Telegram, ordinary project roots and
 subagents receive none of these configuration surfaces. Telegram is optional: a
 bad manager configuration must not prevent the chat used to repair it.
 
+The `set_manager` tool is a presence-aware upsert: omitted fields preserve existing raw configuration, present fields replace their complete value, and immutable manager identity (ID, driver, Telegram forum identity) cannot change in place. A no-op patch that changes no value is valid and still restarts the daemon, supplying the retry path after external Telegram capability or permission repair. Secret rotation for an existing token reference uses `request_secret`, which restarts without a configuration edit.
+
 ## Package profiles
 
 ### Daemon, sessions and persistence

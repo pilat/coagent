@@ -11,6 +11,8 @@ import (
 	"github.com/pilat/coagent/internal/tool"
 )
 
+const mcpStatusEnabled = "enabled"
+
 // evict retires the server's pooled subprocess now (or on its last release)
 // instead of letting it idle out the pool TTL.
 func (d mcpDeps) evict(name string) {
@@ -63,7 +65,7 @@ func writeServerSection(b *strings.Builder, title string, defs []mcpstore.Server
 	}
 
 	for _, def := range defs {
-		status := "enabled"
+		status := mcpStatusEnabled
 		if !def.Enabled {
 			status = "disabled"
 		}

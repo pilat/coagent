@@ -41,8 +41,14 @@ func configApplyRespond(_ string, msgs []llmwire.Message) *llmwire.Response {
 func newApplyConfigDir(t *testing.T) string {
 	t.Helper()
 
+	return newApplyConfigDirWith(t, toolConfig)
+}
+
+func newApplyConfigDirWith(t *testing.T, configYAML string) string {
+	t.Helper()
+
 	dir := t.TempDir()
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "config.yaml"), []byte(toolConfig), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "config.yaml"), []byte(configYAML), 0o600))
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "secrets"), []byte(toolSecrets), 0o600))
 
 	return dir
@@ -51,13 +57,7 @@ func newApplyConfigDir(t *testing.T) string {
 func newApplyDaemon(t *testing.T, dbPath, configDir string) *applyDaemon {
 	t.Helper()
 
-	h := newSubagentHarnessOnSystemProjectDB(t, dbPath, configApplyRespond)
-	ops := configops.New(filepath.Join(configDir, "config.yaml"), filepath.Join(configDir, "secrets"))
-	restarts := make(chan struct{}, 4)
-
-	h.mgr.applier = NewConfigApplier(ops, func() { restarts <- struct{}{} })
-
-	return &applyDaemon{subagentHarness: h, ops: ops, restarts: restarts}
+	return newApplyDaemonWith(t, dbPath, configDir, configApplyRespond)
 }
 
 func (d *applyDaemon) restartCount() int { return len(d.restarts) }

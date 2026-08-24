@@ -43,6 +43,9 @@ func TestBuiltinSkill_Onboarding(t *testing.T) {
 		"reports a rollback",
 		"If startup failed",
 		"Do not call the\n`onboarding` skill",
+		"preserves every omitted field",
+		"no-op patch",
+		"restarts the daemon without a config",
 	} {
 		assert.Contains(t, skill.Content, want, want)
 	}

@@ -193,6 +193,21 @@ func TestHarnessScenario_TelegramManagersRenderOnlyTheirOwnConversation(t *testi
 	assert.Empty(t, secondaryCalls)
 }
 
+// CLI-owned config-apply traces must produce no Telegram traffic.
+// This non-golden guard prevents regenerating a hidden ownership regression.
+func TestHarnessScenario_SetManagerTracesProduceNoTelegramTraffic(t *testing.T) {
+	for _, name := range []string{
+		"set_manager_patch_restart.json",
+		"set_manager_reapply_restart.json",
+	} {
+		t.Run(name, func(t *testing.T) {
+			trace := readDaemonTrace(t, name)
+			calls := replayDaemonTrace(t, trace)
+			assert.Empty(t, calls, "a CLI-owned trace must produce no Telegram traffic")
+		})
+	}
+}
+
 // replayDaemonTrace feeds one recorded trace through the production notification
 // handler and returns the resulting Telegram API traffic.
 func replayDaemonTrace(t *testing.T, trace harnessTraceFile) []telegramHarnessCall {

@@ -373,11 +373,20 @@ func (m *Manager) deleteForumTopic(ctx context.Context, topicID int64) error {
 	}, nil)
 }
 
-func (m *Manager) editForumTopic(ctx context.Context, topicID int64) error {
-	err := m.tg(ctx, "editForumTopic", map[string]any{
+func (m *Manager) editForumTopic(ctx context.Context, topicID int64, name, emojiID string) error {
+	params := map[string]any{
 		tgKeyChatID:         m.effectiveChatID(),
 		"message_thread_id": topicID,
-	}, nil)
+	}
+	if name != "" {
+		params["name"] = name
+	}
+
+	if emojiID != "" {
+		params["icon_custom_emoji_id"] = emojiID
+	}
+
+	err := m.tg(ctx, "editForumTopic", params, nil)
 	if err == nil {
 		return nil
 	}
@@ -389,7 +398,8 @@ func (m *Manager) editForumTopic(ctx context.Context, topicID int64) error {
 		return err
 	}
 
-	if strings.Contains(strings.ToLower(apiErr.Description), "not modified") {
+	description := strings.ToLower(apiErr.Description)
+	if strings.Contains(description, "not modified") || strings.Contains(description, "not_modified") {
 		return nil
 	}
 

@@ -134,13 +134,17 @@ the manager. Say first that the daemon will restart, then wait for the verdict.
 An enabled manager that is not running includes its start error, often a bad
 token or missing bot admin rights. When it is running, the bot posts a startup
 line in the group's service topic. Ask the user to confirm that line is visible.
-If startup failed, explain the reported cause. For a bad token, request a new
-secret and then update the same manager; for permissions, wait for the user to
-promote the bot and then update the same manager. Make one `set_manager` call
-after the cause is corrected, wait for its verdict, and check status again.
-Every configured manager needs a distinct BotFather bot token. Changing a
-target or the sole private user requires a new manager ID; sessions are never
-moved to another forum.
+If startup failed, explain the reported cause.
+
+`set_manager` preserves every omitted field on update, so changing one setting
+does not remove another. Rotating the secret value for an existing token
+reference uses `request_secret`, which restarts the daemon without a config
+edit; use `set_manager` only when the reference itself must change. To retry
+after an external Telegram fix (permissions, topics, or a corrected secret),
+reapply the same manager with `set_manager`; a no-op patch intentionally
+restarts so the manager tries again. Every configured manager needs a distinct
+BotFather bot token. Changing a target or the sole private user requires a new
+manager ID; sessions are never moved to another forum.
 
 For group status failures, enable Topics, make the bot an administrator, and
 grant both topic-management and delete-message permission before updating the

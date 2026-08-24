@@ -41,7 +41,6 @@ type (
 
 	setProviderTool     struct{ configDeps }
 	removeProviderTool  struct{ configDeps }
-	setManagerTool      struct{ configDeps }
 	removeManagerTool   struct{ configDeps }
 	addModelTool        struct{ configDeps }
 	removeModelTool     struct{ configDeps }
@@ -55,14 +54,6 @@ type (
 		SAFile  string `json:"sa_file"`
 		BaseURL string `json:"base_url"`
 		Catalog string `json:"catalog"`
-	}
-
-	setManagerParams struct {
-		ID             string  `json:"id"`
-		Driver         string  `json:"driver"`
-		BotToken       string  `json:"bot_token"`
-		AllowedUserIDs []int64 `json:"allowed_user_ids"`
-		TargetChatID   *int64  `json:"target_chat_id"`
 	}
 
 	nameParams struct {
@@ -143,42 +134,6 @@ func (t *removeProviderTool) Execute(ctx context.Context, params json.RawMessage
 	}
 
 	return t.apply(ctx, tool.IDRemoveProvider, configops.RemoveProvider(p.Name))
-}
-
-func (t *setManagerTool) ID() string { return tool.IDSetManager }
-
-func (t *setManagerTool) Description() string {
-	return "Add a chat manager, or change one that exists. It is enabled by the call. " +
-		"Leave bot_token empty to keep the token an existing manager already has. " + restartNotice
-}
-
-func (t *setManagerTool) Parameters() json.RawMessage {
-	return json.RawMessage(`{
-  "type": "object",
-  "properties": {
-    "id": {"type": "string", "description": "Name for this manager, e.g. \"telegram-main\"."},
-    "driver": {"type": "string", "enum": ["telegram"]},
-    "bot_token": {"type": "string", "description": ` + quote(credentialDoc) + `},
-    "allowed_user_ids": {"type": "array", "items": {"type": "integer"}, "description": "Numeric user ids allowed to talk to the bot."},
-	    "target_chat_id": {"type": "integer", "description": "The group forum chat id. Omit it for a private bot forum with exactly one allowed user."}
-  },
-  "required": ["id", "driver"]
-}`)
-}
-
-func (t *setManagerTool) Execute(ctx context.Context, params json.RawMessage) (*tool.Result, error) {
-	var p setManagerParams
-	if err := json.Unmarshal(params, &p); err != nil {
-		return nil, fmt.Errorf("parse parameters: %w", err)
-	}
-
-	return t.apply(ctx, tool.IDSetManager, configops.SetManager(config.ManagerEntry{
-		ID:             p.ID,
-		Driver:         p.Driver,
-		BotToken:       p.BotToken,
-		AllowedUserIDs: p.AllowedUserIDs,
-		TargetChatID:   p.TargetChatID,
-	}))
 }
 
 func (t *removeManagerTool) ID() string { return tool.IDRemoveManager }

@@ -37,7 +37,7 @@ func TestHarnessScenario_BotForumStartupGeneralAndRestart(t *testing.T) {
 	}, remote.prefix())
 	assert.Equal(t, 1, remote.created)
 	assert.Equal(t, int64(0), remote.sentThreads[0])
-	assert.Equal(t, "Open the “Coagent” topic to create or manage sessions.", remote.sentTexts[0])
+	assert.Equal(t, "Open the “Private support” topic to create or manage sessions.", remote.sentTexts[0])
 
 	remote.resetCalls()
 	second := remote.newManager(t)
@@ -46,21 +46,34 @@ func TestHarnessScenario_BotForumStartupGeneralAndRestart(t *testing.T) {
 
 	assert.Equal(t, []string{"getMe", "getChat", "editForumTopic", "setMyCommands"}, remote.prefix())
 	assert.Equal(t, 1, remote.created, "restart must not create another service topic")
+	assert.Equal(t, []forumTopicUpdate{{
+		ChatID: 7, ThreadID: 7001,
+	}}, remote.topicUpdates)
 }
 
 type botForumHarness struct {
-	mu          sync.Mutex
-	methods     []string
-	created     int
-	sentTexts   []string
-	sentThreads []int64
+	mu           sync.Mutex
+	methods      []string
+	created      int
+	sentTexts    []string
+	sentThreads  []int64
+	topicUpdates []forumTopicUpdate
+}
+
+type forumTopicUpdate struct {
+	ChatID      int64  `json:"chat_id"`
+	ThreadID    int64  `json:"message_thread_id"`
+	Name        string `json:"name"`
+	IconEmojiID string `json:"icon_custom_emoji_id"`
+	Text        string `json:"text"`
 }
 
 func (h *botForumHarness) newManager(t *testing.T) *Manager {
 	t.Helper()
 	entry := config.ManagerEntry{
 		ID: "telegram-main", BotToken: "test", AllowedUserIDs: []int64{7},
-		ServiceTopicName: "Coagent", SendChunkDelayMS: 0, PollTimeoutSec: 1,
+		ServiceTopicName: "Private support", ServiceTopicIconEmojiID: "888",
+		SendChunkDelayMS: 0, PollTimeoutSec: 1,
 	}
 	m, err := New(entry, nil, &fakeController{})
 	require.NoError(t, err)
@@ -70,10 +83,7 @@ func (h *botForumHarness) newManager(t *testing.T) *Manager {
 
 func (h *botForumHarness) roundTrip(req *http.Request) (*http.Response, error) {
 	method := filepath.Base(req.URL.Path)
-	var body struct {
-		MessageThreadID int64  `json:"message_thread_id"`
-		Text            string `json:"text"`
-	}
+	var body forumTopicUpdate
 	if req.Body != nil {
 		_ = json.NewDecoder(req.Body).Decode(&body)
 	}
@@ -81,10 +91,13 @@ func (h *botForumHarness) roundTrip(req *http.Request) (*http.Response, error) {
 	h.methods = append(h.methods, method)
 	if method == "sendMessage" {
 		h.sentTexts = append(h.sentTexts, body.Text)
-		h.sentThreads = append(h.sentThreads, body.MessageThreadID)
+		h.sentThreads = append(h.sentThreads, body.ThreadID)
 	}
 	if method == "createForumTopic" {
 		h.created++
+	}
+	if method == "editForumTopic" {
+		h.topicUpdates = append(h.topicUpdates, body)
 	}
 	h.mu.Unlock()
 
@@ -98,7 +111,7 @@ func (h *botForumHarness) roundTrip(req *http.Request) (*http.Response, error) {
 	case "editForumTopic":
 		return harnessResponse(
 			req,
-			`{"ok":false,"error_code":400,"description":"Bad Request: message is not modified"}`,
+			`{"ok":false,"error_code":400,"description":"Bad Request: TOPIC_NOT_MODIFIED"}`,
 		), nil
 	case "getUpdates":
 		<-req.Context().Done()
