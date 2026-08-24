@@ -1,4 +1,4 @@
-package daemon
+package configtools
 
 import (
 	"context"
@@ -12,9 +12,18 @@ import (
 	"github.com/pilat/coagent/internal/tool"
 )
 
+const managerFieldEnabled = "enabled"
+
+// knownManagerFields is the complete set of accepted top-level keys.
+var knownManagerFields = []string{
+	"id", "driver", "enabled", "bot_token", "allowed_user_ids", "target_chat_id",
+	"service_topic_name", "service_topic_icon_emoji_id", "session_topic_icon_emoji_id",
+	"send_chunk_delay_ms", "poll_timeout_sec", "whisper",
+}
+
 // setManagerTool implements the presence-aware manager upsert.
 // Ambiguous input fails before it can stage an apply, suspend, or restart.
-type setManagerTool struct{ configDeps }
+type setManagerTool struct{ deps }
 
 func (t *setManagerTool) ID() string { return tool.IDSetManager }
 
@@ -55,15 +64,6 @@ func (t *setManagerTool) Execute(ctx context.Context, params json.RawMessage) (*
 
 	return t.apply(ctx, tool.IDSetManager, configops.SetManagerPatch(patch))
 }
-
-// knownManagerFields is the complete set of accepted top-level keys.
-var knownManagerFields = []string{
-	"id", "driver", "enabled", "bot_token", "allowed_user_ids", "target_chat_id",
-	"service_topic_name", "service_topic_icon_emoji_id", "session_topic_icon_emoji_id",
-	"send_chunk_delay_ms", "poll_timeout_sec", "whisper",
-}
-
-const managerFieldEnabled = "enabled"
 
 // parseManagerParams rejects ambiguous input before constructing a manager patch.
 // Only the "whisper" property itself accepts null.
