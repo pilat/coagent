@@ -3,6 +3,7 @@ package sessionstore
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -47,6 +48,10 @@ func (s *store) InsertToolNotificationPairOnce(
 	resultID, err = insertMessageWith(ctx, tx, sessionID, toolResult)
 	if err != nil {
 		return 0, 0, false, fmt.Errorf("insert idempotent tool result: %w", err)
+	}
+
+	if err := insertScheduledOutput(ctx, tx, sessionID, deliveryID, toolResult.Content); err != nil {
+		return 0, 0, false, err
 	}
 
 	if err := tx.Commit(); err != nil {
@@ -122,11 +127,63 @@ func (s *store) ResetSessionContextOnce(
 		return nil, false, fmt.Errorf("session %d not found during context reset", sessionID)
 	}
 
+	if err := insertScheduledOutput(ctx, tx, sessionID, deliveryID, opening[len(opening)-1].Content); err != nil {
+		return nil, false, err
+	}
+
 	if err := tx.Commit(); err != nil {
 		return nil, false, fmt.Errorf("commit context reset: %w", err)
 	}
 
 	return ids, true, nil
+}
+
+func insertScheduledOutput(ctx context.Context, tx *sql.Tx, sessionID int64, deliveryID, content string) error {
+	var parentID int64
+
+	var encodedSessionAttrs string
+	if err := tx.QueryRowContext(ctx, `SELECT parent_id, attributes FROM sessions WHERE id = ?`, sessionID).
+		Scan(&parentID, &encodedSessionAttrs); err != nil {
+		return fmt.Errorf("load scheduled output owner: %w", err)
+	}
+
+	if parentID != 0 {
+		return nil
+	}
+
+	var sessionAttrs map[string]any
+	if err := json.Unmarshal([]byte(encodedSessionAttrs), &sessionAttrs); err != nil {
+		return fmt.Errorf("decode scheduled output attributes: %w", err)
+	}
+
+	owner, _ := sessionAttrs[managerIDAttribute].(string)
+	if owner == "" {
+		return nil
+	}
+
+	attrs := map[string]any{managerIDAttribute: owner, "source": outputSourceScheduler}
+
+	encodedAttrs, err := json.Marshal(attrs)
+	if err != nil {
+		return fmt.Errorf("marshal scheduled output attributes: %w", err)
+	}
+
+	output := "⏰ scheduled\n\n" + content
+	key := "schedule:" + deliveryID + ":announcement"
+
+	fingerprint := outputFingerprint(
+		OutputMessagePersistent,
+		output,
+		sessionID,
+		map[string]any{"source": outputSourceScheduler},
+	)
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO session_outbox (session_id, type, content, attributes, source_key, fingerprint, created_at)
+		VALUES (?, 'message_persistent', ?, ?, ?, ?, ?)`, sessionID, output, string(encodedAttrs), key, fingerprint, time.Now().UTC()); err != nil {
+		return fmt.Errorf("insert scheduled output: %w", err)
+	}
+
+	return nil
 }
 
 func claimSessionDelivery(

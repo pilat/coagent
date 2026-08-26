@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
@@ -13,6 +14,38 @@ import (
 	"github.com/pilat/coagent/internal/managers/cli"
 	"github.com/pilat/coagent/internal/sessionevent"
 )
+
+func TestChatLifecyclePushCannotBeOverwrittenByAnOlderGeneration(t *testing.T) {
+	chat := newChat("", newScriptedTerminal(0), &strings.Builder{}, &strings.Builder{})
+	chat.setSession(1)
+	replacement, err := json.Marshal(cli.Event{
+		SessionID: 2, OldSessionID: 1, Generation: 8, Type: "session_replaced",
+	})
+	require.NoError(t, err)
+	chat.render(replacement)
+	assert.Equal(t, int64(2), chat.currentSession())
+
+	staleClose, err := json.Marshal(cli.Event{SessionID: 2, Generation: 7, Type: "session_closed"})
+	require.NoError(t, err)
+	chat.render(staleClose)
+	assert.Equal(t, int64(2), chat.currentSession())
+
+	closed, err := json.Marshal(cli.Event{SessionID: 2, Generation: 9, Type: "session_closed"})
+	require.NoError(t, err)
+	chat.render(closed)
+	assert.Zero(t, chat.currentSession())
+}
+
+func TestChatClosedLifecycleCannotBeOverwrittenBySameGenerationResponse(t *testing.T) {
+	chat := newChat("", newScriptedTerminal(0), &strings.Builder{}, &strings.Builder{})
+	chat.setSessionAt(1, 4)
+	closed, err := json.Marshal(cli.Event{SessionID: 1, Generation: 5, Type: "session_closed"})
+	require.NoError(t, err)
+	chat.render(closed)
+	chat.setSessionAt(1, 5)
+
+	assert.Zero(t, chat.currentSession())
+}
 
 func TestHarnessScenario_ChatReconnectKeepsOneEventReader(t *testing.T) {
 	socket := socketPath(t)

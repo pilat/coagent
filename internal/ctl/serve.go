@@ -43,6 +43,12 @@ func (s *Server) MarkReady() {
 	s.ready = true
 }
 
+func (s *Server) SetBuiltinManager(manager BuiltinManagerControl) {
+	s.mu.Lock()
+	s.deps.Builtin = manager
+	s.mu.Unlock()
+}
+
 func (s *Server) accept(ctx context.Context) error {
 	log := logger.Named("ctl")
 

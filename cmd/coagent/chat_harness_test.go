@@ -178,7 +178,7 @@ func (s *chatServer) stopOp(_ context.Context, _ *ctl.Conn, params json.RawMessa
 	s.stops = append(s.stops, p.SessionID)
 	s.mu.Unlock()
 
-	return cli.SendResult(p), nil
+	return cli.SendResult{SessionID: p.SessionID}, nil
 }
 
 func (s *chatServer) modelsOp(_ context.Context, _ *ctl.Conn, _ json.RawMessage) (any, *ctl.Error) {

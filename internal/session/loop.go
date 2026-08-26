@@ -10,6 +10,7 @@ import (
 
 	"github.com/pilat/coagent/internal/llmwire"
 	"github.com/pilat/coagent/internal/logger"
+	"github.com/pilat/coagent/internal/sessionstore"
 	"github.com/pilat/coagent/internal/tool"
 )
 
@@ -39,6 +40,7 @@ const loopFailureWarningTemplate = `[LOOP WARNING: The %s tool has returned the 
 
 type loopResult struct {
 	FinalResponse string
+	ErrorNotice   string
 	Iterations    int
 	Error         error
 	Suspended     bool // true when a tool (e.g., sleep) requested session suspend
@@ -225,15 +227,13 @@ func (r *loopRunner) handlePreviousResult(ctx context.Context) (bool, error) {
 	if r.emptyCount >= emptyResponseBreakThreshold {
 		r.log.Warn("empty_response_notify_user", zap.Int("count", r.emptyCount))
 
-		if r.opts.Notify != nil {
-			_ = r.opts.Notify(
-				ctx,
-				fmt.Sprintf(
-					"⚠️ Model returned %d consecutive empty responses. Session paused — waiting for input.",
-					r.emptyCount,
-				),
-			)
-		}
+		r.notifyPersistent(
+			ctx,
+			fmt.Sprintf(
+				"⚠️ Model returned %d consecutive empty responses. Session paused — waiting for input.",
+				r.emptyCount,
+			),
+		)
 
 		return true, nil
 	}
@@ -264,6 +264,14 @@ func (r *loopRunner) notify(ctx context.Context, msg string) {
 	}
 }
 
+func (r *loopRunner) notifyPersistent(ctx context.Context, msg string) {
+	if err := r.agent.enqueuePersistentOutput(ctx, msg); err != nil {
+		r.log.Warn("enqueue_output_failed", zap.Error(err))
+	}
+
+	r.notify(ctx, msg)
+}
+
 func (r *loopRunner) callLLM(ctx context.Context) error {
 	activeTools := r.agent.registry.List()
 
@@ -289,10 +297,7 @@ func (r *loopRunner) callLLM(ctx context.Context) error {
 	response, err := r.agent.chat(ctx, system, msgs, schemas)
 	if err != nil {
 		r.log.Error("llm_call_failed", zap.Error(err))
-
-		if r.opts.Notify != nil {
-			_ = r.opts.Notify(ctx, fmt.Sprintf("❌ LLM error: %v", err))
-		}
+		r.result.ErrorNotice = "❌ LLM error: " + logger.Redact(err.Error())
 
 		r.result.Error = err
 
@@ -323,7 +328,8 @@ func (r *loopRunner) recordIteration(ctx context.Context) error {
 		}
 	}
 
-	if err := r.agent.ms.addAssistantMessage(ctx, r.lastResp); err != nil {
+	outputType, output := assistantOutput(r.lastResp, r.agent.outputEnabled)
+	if err := r.agent.ms.addAssistantMessageOutput(ctx, r.lastResp, outputType, output); err != nil {
 		r.result.Error = err
 
 		return fmt.Errorf("record assistant message: %w", err)
@@ -342,10 +348,28 @@ func (r *loopRunner) recordIteration(ctx context.Context) error {
 	return nil
 }
 
+func assistantOutput(response *llmwire.Response, enabled bool) (sessionstore.OutputType, string) {
+	if !enabled || strings.TrimSpace(response.Text) == "" {
+		return "", ""
+	}
+
+	if len(response.ToolCalls) > 0 {
+		return sessionstore.OutputMessageReplaceable, response.Text
+	}
+
+	return sessionstore.OutputMessagePersistent, "✅ " + response.Text
+}
+
 func (r *loopRunner) finalize(ctx context.Context) (*loopResult, error) {
 	if strings.TrimSpace(r.result.FinalResponse) == "" {
 		if state := lastAssistantState(r.agent.ms.getMessages()); state != nil && state.HasText {
 			r.result.FinalResponse = state.Text
+		}
+	}
+
+	if strings.TrimSpace(r.result.FinalResponse) != "" && r.agent.outputEnabled {
+		if err := r.agent.ms.enqueueFinalAssistantOutput(ctx, "✅ "+r.result.FinalResponse); err != nil {
+			return r.result, err
 		}
 	}
 

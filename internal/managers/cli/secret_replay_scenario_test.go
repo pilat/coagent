@@ -109,17 +109,17 @@ func TestScenario_ReattachedTerminalIsAskedForTheOutstandingSecret(t *testing.T)
 	)
 	require.Error(t, err)
 
-	// A declined prompt is not replayed: the next terminal sees the conversation
-	// and nothing else, which is what "before this event" pins down.
+	// A declined prompt is not replayed: the next terminal sees only the
+	// ephemeral stream, which is what this heartbeat pins down.
 	third := h.dial(t)
 	openChat(t, third)
 
 	h.ctrl.events <- controllerapi.SessionNotification{
 		SessionID:    11,
-		Notification: sessionevent.Notification{Type: sessionevent.NotifyMessage, Message: "carry on"},
+		Notification: sessionevent.Notification{Type: sessionevent.NotifyHeartbeat},
 	}
 
-	assert.Equal(t, "carry on", waitForEvent(t, third).Message)
+	assert.Equal(t, "heartbeat", waitForEvent(t, third).Type)
 }
 
 // Two terminals can hold the same prompt open — the push went to everyone and the
@@ -160,7 +160,7 @@ func TestScenario_ResolvedSecretDismissesTheOtherTerminalsPrompt(t *testing.T) {
 	}
 	h.ctrl.events <- controllerapi.SessionNotification{
 		SessionID:    11,
-		Notification: sessionevent.Notification{Type: sessionevent.NotifyMessage, Message: "carry on"},
+		Notification: sessionevent.Notification{Type: sessionevent.NotifyHeartbeat},
 	}
 
 	dismissed := waitForSecretResolved(t, loser)
@@ -168,8 +168,8 @@ func TestScenario_ResolvedSecretDismissesTheOtherTerminalsPrompt(t *testing.T) {
 	assert.Equal(t, "MANAGER_TG_BOT_TOKEN", dismissed.Name)
 	assert.Equal(t, int64(11), dismissed.SessionID)
 
-	// The next push is the ordinary message: the dismissal arrived exactly once.
-	assert.Equal(t, "carry on", waitForEvent(t, loser).Message)
+	// The next push is the heartbeat: the dismissal arrived exactly once.
+	assert.Equal(t, "heartbeat", waitForEvent(t, loser).Type)
 	assert.Equal(t, "req-1", waitForSecretResolved(t, winner).RequestID, "the winner is told too, and ignores it")
 }
 

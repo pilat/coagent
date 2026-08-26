@@ -10,6 +10,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/pilat/coagent/internal/config"
+	"github.com/pilat/coagent/internal/controllerapi"
 	"github.com/pilat/coagent/internal/logger"
 )
 
@@ -53,7 +54,7 @@ func (s *Server) call(ctx context.Context, c *Conn, req Request) (any, *Error) {
 	}
 
 	if req.Method == OpStatus {
-		return s.status(), nil
+		return s.status(ctx), nil
 	}
 
 	h, ok := s.handler(req.Method)
@@ -64,7 +65,7 @@ func (s *Server) call(ctx context.Context, c *Conn, req Request) (any, *Error) {
 	return h(ctx, c, req.Params)
 }
 
-func (s *Server) status() StatusResult {
+func (s *Server) status(ctx context.Context) StatusResult {
 	cfg := s.deps.Config
 
 	out := StatusResult{
@@ -77,19 +78,69 @@ func (s *Server) status() StatusResult {
 		ConfigPresent:   cfg != nil && cfg.UnifiedConfig != nil,
 	}
 
-	if !out.ConfigPresent {
-		return out
+	if out.ConfigPresent {
+		out.Providers = providerStatuses(cfg.UnifiedConfig.Providers)
+		out.ModelCount = len(cfg.UnifiedConfig.Models)
+		out.DefaultModel = cfg.DefaultModel()
+		out.Managers = s.managerStatuses(ctx, cfg.UnifiedConfig.Managers)
 	}
 
-	out.Providers = providerStatuses(cfg.UnifiedConfig.Providers)
-	out.ModelCount = len(cfg.UnifiedConfig.Models)
-	out.DefaultModel = cfg.DefaultModel()
-	out.Managers = s.managerStatuses(cfg.UnifiedConfig.Managers)
+	if s.deps.Builtin != nil {
+		builtin := ManagerStatus{ID: s.deps.Builtin.ID(), Driver: "cli", Enabled: true, Running: s.deps.Builtin.Alive()}
+		if s.deps.Delivery != nil {
+			health, err := s.deps.Delivery.OutputQueueStatus(ctx, builtin.ID)
+			if err == nil {
+				builtin.PendingOutputs = health.Pending
+				builtin.BlockedOutputID = health.BlockedID
+				builtin.BlockedForSeconds = health.BlockedForSec
+				builtin.DeliveryError = health.DeliveryError
+			}
+		}
+
+		out.Managers = append(out.Managers, builtin)
+	}
+
+	s.appendRemovedManagerBacklogs(ctx, &out)
 
 	return out
 }
 
-func (s *Server) managerStatuses(entries []config.ManagerEntry) []ManagerStatus {
+func (s *Server) appendRemovedManagerBacklogs(ctx context.Context, out *StatusResult) {
+	owners, ok := s.deps.Delivery.(controllerapi.OutputOwnerStatusFactory)
+	if !ok {
+		return
+	}
+
+	ids, err := owners.UnresolvedOutputOwners(ctx)
+	if err != nil {
+		return
+	}
+
+	known := make(map[string]struct{}, len(out.Managers))
+	for _, manager := range out.Managers {
+		known[manager.ID] = struct{}{}
+	}
+
+	for _, id := range ids {
+		if _, exists := known[id]; exists {
+			continue
+		}
+
+		manager := ManagerStatus{ID: id, Driver: "removed"}
+
+		health, err := s.deps.Delivery.OutputQueueStatus(ctx, id)
+		if err == nil {
+			manager.PendingOutputs = health.Pending
+			manager.BlockedOutputID = health.BlockedID
+			manager.BlockedForSeconds = health.BlockedForSec
+			manager.DeliveryError = health.DeliveryError
+		}
+
+		out.Managers = append(out.Managers, manager)
+	}
+}
+
+func (s *Server) managerStatuses(ctx context.Context, entries []config.ManagerEntry) []ManagerStatus {
 	running := map[string]struct{}{}
 
 	if s.deps.Managers != nil {
@@ -102,11 +153,21 @@ func (s *Server) managerStatuses(entries []config.ManagerEntry) []ManagerStatus 
 
 	for _, m := range entries {
 		_, isRunning := running[m.ID]
+
 		st := ManagerStatus{
 			ID:      m.ID,
 			Driver:  m.Driver,
 			Enabled: m.Enabled != nil && *m.Enabled,
 			Running: isRunning,
+		}
+		if s.deps.Delivery != nil {
+			health, err := s.deps.Delivery.OutputQueueStatus(ctx, m.ID)
+			if err == nil {
+				st.PendingOutputs = health.Pending
+				st.BlockedOutputID = health.BlockedID
+				st.BlockedForSeconds = health.BlockedForSec
+				st.DeliveryError = health.DeliveryError
+			}
 		}
 
 		if st.Enabled && !isRunning {

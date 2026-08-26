@@ -6,6 +6,62 @@ import (
 	"github.com/pilat/coagent/internal/sessionevent"
 )
 
+type OutputBindingData struct {
+	Driver     string         `json:"driver"`
+	Attributes map[string]any `json:"attributes"`
+}
+
+// Durable output type vocabulary. controllerapi must not import sessionstore,
+// so the wire values are mirrored here; a sync test in internal/daemon pins
+// both spellings together.
+const (
+	OutputMessageReplaceable = "message_replaceable"
+	OutputMessagePersistent  = "message_persistent"
+	OutputSessionOpened      = "session_opened"
+	OutputSessionReplaced    = "session_replaced"
+	OutputSessionClosed      = "session_closed"
+)
+
+type OutputClaimData struct {
+	ID                        int64          `json:"id"`
+	SessionID                 int64          `json:"session_id"`
+	Type                      string         `json:"type"`
+	Content                   string         `json:"content"`
+	Attributes                map[string]any `json:"attributes"`
+	AttemptID                 string         `json:"attempt_id"`
+	AttemptSeq                int64          `json:"attempt_seq"`
+	SessionAttributes         map[string]any `json:"session_attributes"`
+	PreviousMessageAttributes map[string]any `json:"previous_message_attributes,omitempty"`
+	PreviousMessageType       string         `json:"previous_message_type,omitempty"`
+}
+
+type OutputAckData struct {
+	ID           int64          `json:"id"`
+	AttemptID    string         `json:"attempt_id"`
+	MessageIDs   []string       `json:"message_ids"`
+	SessionPatch map[string]any `json:"session_patch,omitempty"`
+}
+
+type OutputRetryData struct {
+	ID        int64     `json:"id"`
+	AttemptID string    `json:"attempt_id"`
+	Error     string    `json:"error"`
+	NextAt    time.Time `json:"next_at"`
+}
+
+type OutputBlockData struct {
+	ID        int64  `json:"id"`
+	AttemptID string `json:"attempt_id"`
+	Error     string `json:"error"`
+}
+
+type OutputQueueStatusData struct {
+	Pending       int    `json:"pending"`
+	BlockedID     int64  `json:"blocked_id,omitempty"`
+	BlockedForSec int64  `json:"blocked_for_seconds,omitempty"`
+	DeliveryError string `json:"delivery_error,omitempty"`
+}
+
 // Runtime session states (not persisted, derived from in-memory map).
 const (
 	StateRunning = sessionevent.StateRunning

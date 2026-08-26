@@ -654,7 +654,8 @@ func TestRunLoopLLMErrorSurfacesToCallerAndUser(t *testing.T) {
 	require.ErrorIs(t, err, boom)
 	assert.Contains(t, err.Error(), "LLM call failed")
 	require.ErrorIs(t, result.Error, boom)
-	assert.Equal(t, []string{"❌ LLM error: boom"}, notifier.all())
+	assert.Equal(t, "❌ LLM error: boom", result.ErrorNotice)
+	assert.Empty(t, notifier.all(), "the daemon publishes only after the error state and outbox commit")
 	assert.Empty(t, agent.ms.getMessages(), "a failed call records nothing")
 }
 

@@ -139,10 +139,12 @@ func (h *chatHarness) sentMessages() []controllerapi.SessionMessageData {
 	return append([]controllerapi.SessionMessageData(nil), h.ctrl.sent...)
 }
 
+// chatEvent rides the ephemeral heartbeat channel: these tests exercise the
+// terminal socket mechanics, not durable output, which has its own scenarios.
 func chatEvent(sessionID int64, message string) controllerapi.SessionNotification {
 	return controllerapi.SessionNotification{
 		SessionID:    sessionID,
-		Notification: sessionevent.Notification{Type: sessionevent.NotifyMessage, Message: message},
+		Notification: sessionevent.Notification{Type: sessionevent.NotifyHeartbeat, Message: message},
 	}
 }
 

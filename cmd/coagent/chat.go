@@ -55,12 +55,14 @@ type chat struct {
 	reconnectErr    error
 	fatal           chan *chatFatalError
 
-	mu       sync.Mutex
-	client   *ctl.Client
-	session  int64
-	model    string
-	busy     bool
-	activity int
+	mu         sync.Mutex
+	client     *ctl.Client
+	session    int64
+	generation int64
+	model      string
+	busy       bool
+	outputID   int64
+	activity   int
 
 	outMu sync.Mutex
 }
@@ -125,6 +127,7 @@ func (c *chat) connect(ctx context.Context) error {
 	c.mu.Lock()
 	c.client = client
 	c.session = res.SessionID
+	c.generation = res.Generation
 	c.mu.Unlock()
 
 	return nil
@@ -145,7 +148,7 @@ func (c *chat) send(ctx context.Context, line string) error {
 
 	failed, err := c.call(ctx, cli.OpChatSend, c.sendParams(line), &res)
 	if err == nil {
-		c.setSession(res.SessionID)
+		c.setSessionAt(res.SessionID, res.Generation)
 
 		return nil
 	}
@@ -170,7 +173,7 @@ func (c *chat) send(ctx context.Context, line string) error {
 		return err
 	}
 
-	c.setSession(res.SessionID)
+	c.setSessionAt(res.SessionID, res.Generation)
 
 	return nil
 }
@@ -232,10 +235,46 @@ func (c *chat) currentSession() int64 {
 }
 
 func (c *chat) setSession(id int64) {
+	c.setSessionAt(id, 0)
+}
+
+func (c *chat) setSessionAt(id, generation int64) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
+	if generation < c.generation || generation == c.generation &&
+		(generation != 0 || c.session != 0 || id == 0) {
+		return
+	}
+
+	c.generation = generation
 	c.session = id
+	c.model = ""
+}
+
+func (c *chat) applyLifecycle(generation, oldSessionID, sessionID int64, kind string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if generation <= c.generation {
+		return
+	}
+
+	c.generation = generation
+
+	switch kind {
+	case "session_opened":
+		c.session = sessionID
+	case "session_replaced":
+		if c.session == oldSessionID || c.session == 0 {
+			c.session = sessionID
+		}
+	case "session_closed":
+		if c.session == sessionID {
+			c.session = 0
+		}
+	}
+
 	c.model = ""
 }
 
@@ -244,6 +283,22 @@ func (c *chat) setBusy(busy bool) {
 	defer c.mu.Unlock()
 
 	c.busy = busy
+}
+
+func (c *chat) recordOutput(id int64) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if id > c.outputID {
+		c.outputID = id
+	}
+}
+
+func (c *chat) outputDelivered(id int64) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	return id == 0 || c.outputID >= id
 }
 
 func (c *chat) isBusy() bool {

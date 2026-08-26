@@ -79,6 +79,7 @@ does not imply a tier except where it expresses an implementation variant.
 - `internal/mcp` — external MCP process lifecycle and daemon-level pooled connections.
 - `internal/mcpstore` — durable MCP server definitions and scope precedence.
 - `internal/memory` — curated per-project long-term memory.
+- `internal/managerdelivery` — manager-neutral single-worker durable output drain and retry policy.
 - `internal/migrate` — SQLite opening and schema migration with production backup policy.
 - `internal/registry` — immutable per-session agent-type policy and prompt templates.
 - `cmd/releasebuilder` — build-time deterministic archive and checksum composition root.
@@ -111,6 +112,16 @@ delivery. The daemon owns orchestration across those facts: it must not recreate
 them from transcript text or infer correctness from a notification. Schedule,
 MCP, config-apply, and subagent packages each own their producer ledger; the
 daemon joins those ledgers into a session's runnable and waiting projections.
+
+Manager-owned roots also carry a durable outbox obligation. `session_outbox`
+stores the closed output vocabulary, immutable owner identity, delivery receipt,
+and `pending → delivering → retry_wait|delivered|blocked` attempt state. Each
+manager drains its own globally ordered unresolved head through
+`managerdelivery`; a successful transport effect is acknowledged only afterward,
+so delivery beyond SQLite is deliberately at least once. Wake notifications are
+hints: startup, reconnect, and idle scans reconstruct work from the ledger.
+Lifecycle output and ordinary transcript/control facts commit in the same store
+transaction; a blocked head remains visible and blocks only that manager.
 
 ### Runtime isolation and admission
 

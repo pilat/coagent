@@ -22,6 +22,7 @@ import (
 	"github.com/pilat/coagent/internal/coagenthome"
 	"github.com/pilat/coagent/internal/ctl"
 	managercli "github.com/pilat/coagent/internal/managers/cli"
+	"github.com/pilat/coagent/internal/migrate"
 )
 
 func TestHarnessE2E_SecondInputDoesNotReplayPreviousFinal(t *testing.T) {
@@ -105,6 +106,45 @@ func TestHarnessE2E_ForegroundFollowUpRejectsCompetingSleep(t *testing.T) {
 	assertHarnessDaemonHasNoSQLiteContention(t, daemonLog)
 }
 
+func TestHarnessE2E_RestartReplaysCommittedOutputToReconnectedCLI(t *testing.T) {
+	modelServer, release := newRestartHarnessModelServer(t)
+	defer closeHarnessChannel(release)
+	home, err := os.MkdirTemp("/tmp", "coa-harness")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = os.RemoveAll(home) })
+
+	writeHarnessConfig(t, home, modelServer.URL)
+	binary := buildBinary(t)
+	socket := filepath.Join(home, coagenthome.DirName, coagenthome.SocketFileName)
+	first := startDaemon(t, binary, home)
+	waitForStatus(t, socket, func(status ctl.StatusResult) bool { return status.ConfigPresent })
+
+	client, err := ctl.Dial(t.Context(), socket)
+	require.NoError(t, err)
+	require.NoError(t, client.Call(t.Context(), managercli.OpChatOpen, struct{}{}, &managercli.OpenResult{}))
+	session := sendHarnessChat(t, client, managercli.SendParams{Text: "restart question"})
+	require.NoError(t, client.Close(), "the first terminal must not acknowledge the answer")
+	close(release)
+	waitForCommittedHarnessOutput(
+		t,
+		filepath.Join(home, coagenthome.DirName, coagenthome.DBFileName),
+		session.SessionID,
+		"✅ restart answer",
+	)
+	require.NoError(t, first.Process.Kill())
+	require.Error(t, first.Wait())
+
+	second := startDaemon(t, binary, home)
+	defer func() { _ = second.Process.Kill() }()
+	waitForStatus(t, socket, func(status ctl.StatusResult) bool { return status.ConfigPresent })
+	reconnected, err := ctl.Dial(t.Context(), socket)
+	require.NoError(t, err)
+	defer func() { _ = reconnected.Close() }()
+	require.NoError(t, reconnected.Call(t.Context(), managercli.OpChatOpen, struct{}{}, &managercli.OpenResult{}))
+	trace := waitForHarnessChatTrace(t, reconnected, session.SessionID, "✅ restart answer")
+	assert.Equal(t, []string{"✅ restart answer"}, trace.Messages)
+}
+
 func newHarnessModelServer(t *testing.T) *httptest.Server {
 	t.Helper()
 
@@ -165,6 +205,36 @@ func newHarnessModelServer(t *testing.T) *httptest.Server {
 			http.NotFound(response, request)
 		}
 	}))
+}
+
+func newRestartHarnessModelServer(t *testing.T) (*httptest.Server, chan struct{}) {
+	t.Helper()
+	release := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		response.Header().Set("Content-Type", "application/json")
+		if request.URL.Path == "/models" {
+			writeHarnessCatalog(response)
+			return
+		}
+		if request.URL.Path != "/chat/completions" {
+			http.NotFound(response, request)
+			return
+		}
+		var body harnessModelRequest
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			t.Errorf("decode restart harness request: %v", err)
+			http.Error(response, "invalid request", http.StatusBadRequest)
+			return
+		}
+		if body.hasUser("restart question") {
+			<-release
+			writeHarnessTextCompletion(t, response, "restart answer")
+			return
+		}
+		writeHarnessTextCompletion(t, response, "unexpected")
+	}))
+
+	return server, release
 }
 
 func newHarnessChildModelServer(t *testing.T) (*httptest.Server, chan struct{}) {
@@ -455,6 +525,32 @@ func closeHarnessChannel(channel chan struct{}) {
 	case <-channel:
 	default:
 		close(channel)
+	}
+}
+
+func waitForCommittedHarnessOutput(t *testing.T, path string, sessionID int64, content string) {
+	t.Helper()
+	db, err := migrate.OpenDB(t.Context(), path)
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+	timer := time.NewTimer(20 * time.Second)
+	defer timer.Stop()
+	for {
+		var committed bool
+		err := db.QueryRowContext(t.Context(), `SELECT EXISTS(
+			SELECT 1 FROM sessions JOIN session_outbox ON session_outbox.session_id = sessions.id
+			WHERE sessions.id = ? AND sessions.status = 'completed'
+				AND session_outbox.content = ? AND session_outbox.state <> 'delivered'
+		)`, sessionID, content).Scan(&committed)
+		require.NoError(t, err)
+		if committed {
+			return
+		}
+		select {
+		case <-timer.C:
+			t.Fatalf("session %d did not commit undelivered %q", sessionID, content)
+		case <-time.After(25 * time.Millisecond):
+		}
 	}
 }
 

@@ -130,13 +130,15 @@ type svc struct {
 	reasoningLevel  string
 	// modelMu guards the mutable model triplet (llmClient/model/reasoningLevel),
 	// swapped by handleSetModel (daemon goroutine) while the loop reads them.
-	modelMu   sync.RWMutex
-	closeOnce sync.Once
-	cfg       *config.Config
-	loopOpts  loopOptions
-	stamper   timestamper
-	prompt    *promptBuilder
-	boundary  InputBoundary
+	modelMu         sync.RWMutex
+	closeOnce       sync.Once
+	cfg             *config.Config
+	loopOpts        loopOptions
+	stamper         timestamper
+	prompt          *promptBuilder
+	boundary        InputBoundary
+	outputEnabled   bool
+	preserveStopped bool
 
 	// Loop execution state
 	ms                *messageStore
@@ -144,6 +146,10 @@ type svc struct {
 	compactionBrief   string
 	compactionFocus   string // optional /compact focus, set for one compact() then cleared
 	pendingCompaction *int
+	compactionInput   *PendingInput
+	// Summary row of the last auto compaction; keys its success output
+	// (`compaction:<id>:succeeded`) so a replay is an idempotent no-op.
+	compactionSummaryDBID int64
 	// compactionDeferAnnounced survives the session object: the daemon rebuilds
 	// this svc on every wake, so per-run state would re-announce per wake.
 	compactionDeferAnnounced bool
@@ -186,6 +192,15 @@ type options struct {
 	CompactionBrief string
 	LastActivityAt  time.Time
 	InputBoundary   InputBoundary
+	OutputEnabled   bool
+
+	// SettlementOpen marks a lifecycle settlement open: it may not reactivate
+	// the root past a won stop/clear/kill fence (the store rejects such writes).
+	SettlementOpen bool
+
+	// PreserveStopped marks a command-only activation of a stopped root: the
+	// run must not reactivate the root past its prior stopped status.
+	PreserveStopped bool
 
 	// ActiveSubagents is the daemon-pushed set of this session's in-flight
 	// children, rendered into the pinned "# Active subagents" prompt section.
@@ -292,6 +307,8 @@ func newSession(p params, opts options, workDir string, agentConfig registry.Age
 		maxIterations:   agentConfig.MaxIterations,
 		stagedCalls:     opts.StagedExternalCalls,
 		boundary:        opts.InputBoundary,
+		outputEnabled:   opts.OutputEnabled,
+		preserveStopped: opts.PreserveStopped,
 
 		compactionDeferAnnounced: opts.CompactionDeferAnnounced,
 		activeSubagentsProvider:  opts.ActiveSubagentsProvider,
@@ -606,6 +623,33 @@ func (s *svc) compactionRequested() bool {
 	return s.pendingCompaction != nil
 }
 
+func (s *svc) compactionCommandInput() *PendingInput {
+	s.ms.mu.Lock()
+	defer s.ms.mu.Unlock()
+
+	if s.compactionInput == nil {
+		return nil
+	}
+
+	input := *s.compactionInput
+
+	return &input
+}
+
+func (s *svc) setCompactionCommandInput(input PendingInput) {
+	s.ms.mu.Lock()
+	defer s.ms.mu.Unlock()
+
+	s.compactionInput = &input
+}
+
+func (s *svc) clearCompactionCommandInput() {
+	s.ms.mu.Lock()
+	defer s.ms.mu.Unlock()
+
+	s.compactionInput = nil
+}
+
 // setCompactionFocus records (or clears) the one-shot /compact focus.
 func (s *svc) setCompactionFocus(focus string) {
 	s.ms.mu.Lock()
@@ -663,8 +707,10 @@ func (s *svc) applyResumeOrInit(ctx context.Context, opts options, log *zap.Logg
 		return nil
 	}
 
-	if err := s.persistState(ctx, 0, "active"); err != nil {
-		return fmt.Errorf("persist initial state: %w", err)
+	if !opts.SettlementOpen {
+		if err := s.persistState(ctx, 0, "active"); err != nil {
+			return fmt.Errorf("persist initial state: %w", err)
+		}
 	}
 
 	return nil

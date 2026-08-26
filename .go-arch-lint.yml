@@ -45,6 +45,7 @@ components:
   memory:       { in: internal/memory }
   mcpstore:     { in: internal/mcpstore }
   sessionstore: { in: internal/sessionstore }
+  managerdelivery: { in: internal/managerdelivery }
 
   tool:       { in: internal/tool }
   bashsandbox: { in: internal/bashsandbox }
@@ -122,12 +123,12 @@ deps:
 
   # Controllers.
   telegram:
-    mayDependOn: [coagenthome, config, controllerapi, logger, sessionevent]
+    mayDependOn: [coagenthome, config, controllerapi, logger, managerdelivery, sessionevent]
   managers:
     mayDependOn: [config, controllerapi, logger, telegram]
   # The local chat rides the control socket the way telegram rides HTTP.
   managercli:
-    mayDependOn: [controllerapi, ctl, logger, sessionevent]
+    mayDependOn: [controllerapi, ctl, logger, managerdelivery, sessionevent]
 
   # Orchestrator.
   daemon:
@@ -141,4 +142,4 @@ deps:
 
   # Local control plane: pure transport plus the daemon-state ops it answers from.
   ctl:
-    mayDependOn: [coagenthome, config, logger, version]
+    mayDependOn: [coagenthome, config, controllerapi, logger, version]

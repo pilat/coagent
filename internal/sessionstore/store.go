@@ -226,13 +226,25 @@ type Store interface {
 	RuntimeStore
 	OrchestrationStore
 	InboxStore
+	OutputStore
+	ManagerRootStore
+	CommandOutputStore
+	LifecycleOutputStore
+	LifecycleCommandStore
+	ReplacementStore
 }
 
 var (
-	_ Store              = (*store)(nil)
-	_ RuntimeStore       = (*store)(nil)
-	_ OrchestrationStore = (*store)(nil)
-	_ InboxStore         = (*store)(nil)
+	_ Store                 = (*store)(nil)
+	_ RuntimeStore          = (*store)(nil)
+	_ OrchestrationStore    = (*store)(nil)
+	_ InboxStore            = (*store)(nil)
+	_ OutputStore           = (*store)(nil)
+	_ ManagerRootStore      = (*store)(nil)
+	_ CommandOutputStore    = (*store)(nil)
+	_ LifecycleOutputStore  = (*store)(nil)
+	_ LifecycleCommandStore = (*store)(nil)
+	_ ReplacementStore      = (*store)(nil)
 )
 
 type store struct {
@@ -588,7 +600,7 @@ func (s *store) MarkSessionKilled(ctx context.Context, id int64) error {
 
 	result, err := tx.ExecContext(
 		ctx,
-		`UPDATE sessions SET killed_at = ?, updated_at = ? WHERE id = ?`,
+		`UPDATE sessions SET status = 'killed', killed_at = ?, updated_at = ? WHERE id = ?`,
 		now,
 		now,
 		id,
@@ -637,17 +649,52 @@ func (s *store) UpdateSessionStatus(ctx context.Context, id int64, status Sessio
 	return nil
 }
 
+// KillTerminatingSessions finishes the boot reconciliation of roots left mid
+// clear or kill: a matching replacement row means clear transferred the
+// surface, its absence selects kill cleanup with a close output.
 func (s *store) KillTerminatingSessions(ctx context.Context) error {
 	now := time.Now().UTC()
 
-	_, err := s.db.ExecContext(
-		ctx,
-		`UPDATE sessions SET killed_at = ?, updated_at = ? WHERE status = 'terminating' AND killed_at IS NULL`,
-		now,
-		now,
-	)
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT id, attributes FROM sessions
+		WHERE status = 'terminating' AND killed_at IS NULL`)
 	if err != nil {
-		return fmt.Errorf("kill terminating sessions: %w", err)
+		return fmt.Errorf("list terminating sessions: %w", err)
+	}
+	defer rows.Close()
+
+	type terminating struct {
+		id    int64
+		owner string
+	}
+
+	targets := make([]terminating, 0)
+
+	for rows.Next() {
+		var target terminating
+
+		var encoded string
+		if err := rows.Scan(&target.id, &encoded); err != nil {
+			return fmt.Errorf("scan terminating session: %w", err)
+		}
+
+		var attributes map[string]any
+		if err := json.Unmarshal([]byte(encoded), &attributes); err != nil {
+			return fmt.Errorf("decode session %d attributes: %w", target.id, err)
+		}
+
+		target.owner, _ = attributes[managerIDAttribute].(string)
+		targets = append(targets, target)
+	}
+
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("iterate terminating sessions: %w", err)
+	}
+
+	for _, target := range targets {
+		if err := s.killTerminatingTarget(ctx, target.id, target.owner, now); err != nil {
+			return err
+		}
 	}
 
 	return nil
@@ -795,7 +842,26 @@ func (s *store) ReplaceCompactedMessages(
 
 	defer func() { _ = tx.Rollback() }()
 
-	now := time.Now().UTC()
+	ids, err := replaceCompactedMessagesTx(ctx, tx, sessionID, compactedIDs, entries, time.Now().UTC())
+	if err != nil {
+		return nil, err
+	}
+
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("commit compaction replacement: %w", err)
+	}
+
+	return ids, nil
+}
+
+func replaceCompactedMessagesTx(
+	ctx context.Context,
+	tx *sql.Tx,
+	sessionID int64,
+	compactedIDs []int64,
+	entries []CompactionEntry,
+	now time.Time,
+) ([]int64, error) {
 	for _, id := range compactedIDs {
 		if _, err := tx.ExecContext(ctx, `UPDATE messages SET compacted_at = ? WHERE id = ?`, now, id); err != nil {
 			return nil, fmt.Errorf("mark compacted %d: %w", id, err)
@@ -848,10 +914,6 @@ func (s *store) ReplaceCompactedMessages(
 		ids[i] = id
 	}
 
-	if err := tx.Commit(); err != nil {
-		return nil, fmt.Errorf("commit compaction replacement: %w", err)
-	}
-
 	return ids, nil
 }
 
@@ -884,7 +946,9 @@ func (s *store) UpdateSessionIteration(
 
 	result, err := s.db.ExecContext(
 		ctx,
-		`UPDATE sessions SET iteration = ?, status = ?, updated_at = ? WHERE id = ?`,
+		`UPDATE sessions SET iteration = ?, status = ?, updated_at = ?
+		WHERE id = ? AND killed_at IS NULL
+			AND status NOT IN ('stopping', 'terminating', 'killed')`,
 		iteration, status, now, id,
 	)
 	if err != nil {
@@ -946,6 +1010,58 @@ func (s *store) UpdateSessionCompactionBrief(ctx context.Context, id int64, brie
 
 	if rows == 0 {
 		return fmt.Errorf("session %d not found", id)
+	}
+
+	return nil
+}
+
+// killTerminatingTarget commits one root's killed transition and its close
+// output in a single transaction: a crash after a committed killed UPDATE but
+// before the close INSERT would strand the obligation on a root that is never
+// re-selected.
+func (s *store) killTerminatingTarget(ctx context.Context, id int64, owner string, now time.Time) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin terminating kill: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	result, err := tx.ExecContext(
+		ctx,
+		`UPDATE sessions SET status = 'killed', killed_at = ?, updated_at = ?
+		WHERE id = ? AND status = 'terminating' AND killed_at IS NULL`,
+		now, now, id,
+	)
+	if err != nil {
+		return fmt.Errorf("kill terminating sessions: %w", err)
+	}
+
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("kill terminating rows affected: %w", err)
+	}
+
+	if affected == 0 || owner == "" {
+		if err := tx.Commit(); err != nil {
+			return fmt.Errorf("commit terminating kill: %w", err)
+		}
+
+		return nil
+	}
+
+	replaced, err := hasReplacementRow(ctx, tx, id, owner)
+	if err != nil {
+		return err
+	}
+
+	if !replaced {
+		if _, err := insertClosedOutput(ctx, tx, id, owner, now); err != nil {
+			return err
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit terminating kill: %w", err)
 	}
 
 	return nil

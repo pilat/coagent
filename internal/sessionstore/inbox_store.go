@@ -33,13 +33,14 @@ var (
 	ErrSessionNotAcceptingInput = errors.New("session is not accepting input")
 )
 
-const inboxColumns = `id, session_id, source, raw_content, received_at, state, resolved_at, resolution_reason, accepted_message_id`
+const inboxColumns = `id, session_id, source, raw_content, attributes, received_at, state, resolved_at, resolution_reason, accepted_message_id`
 
 type InboxInput struct {
 	ID                int64
 	SessionID         int64
 	Source            InputSource
 	RawContent        string
+	Attributes        map[string]any
 	ReceivedAt        time.Time
 	State             InputState
 	ResolvedAt        *time.Time
@@ -96,11 +97,16 @@ func (s *store) EnqueueInput(
 	receivedAt := time.Now().UTC()
 
 	result, err := s.db.ExecContext(ctx, `
-		INSERT INTO session_inbox (session_id, source, raw_content, received_at)
-		SELECT id, ?, ?, ? FROM sessions
+		INSERT INTO session_inbox (session_id, source, raw_content, attributes, received_at)
+		SELECT id, ?, ?, CASE
+			WHEN ? = 'user' AND json_type(attributes, '$.manager_id') = 'text'
+				AND json_extract(attributes, '$.manager_id') <> ''
+			THEN json_object('manager_id', json_extract(attributes, '$.manager_id'))
+			ELSE '{}'
+		END, ? FROM sessions
 		WHERE id = ? AND killed_at IS NULL
 			AND status NOT IN ('killed', 'terminating', 'stopping')`,
-		source, rawContent, receivedAt, sessionID,
+		source, rawContent, source, receivedAt, sessionID,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("enqueue input for session %d: %w", sessionID, err)
@@ -120,11 +126,29 @@ func (s *store) EnqueueInput(
 		return nil, fmt.Errorf("%w: session %d", ErrSessionNotAcceptingInput, sessionID)
 	}
 
+	attributes := map[string]any{}
+
+	if source == InputSourceUser {
+		var owner sql.NullString
+		if err := s.db.QueryRowContext(
+			ctx,
+			`SELECT json_extract(attributes, '$.manager_id') FROM sessions WHERE id = ?`,
+			sessionID,
+		).Scan(&owner); err != nil {
+			return nil, fmt.Errorf("load input owner: %w", err)
+		}
+
+		if owner.Valid && owner.String != "" {
+			attributes["manager_id"] = owner.String
+		}
+	}
+
 	return &InboxInput{
 		ID:         inputID,
 		SessionID:  sessionID,
 		Source:     source,
 		RawContent: rawContent,
+		Attributes: attributes,
 		ReceivedAt: receivedAt,
 		State:      InputStatePending,
 	}, nil

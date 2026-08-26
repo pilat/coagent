@@ -42,16 +42,6 @@ func TestManagerBoundControllerRejectsEveryForeignSessionOperation(t *testing.T)
 				SessionID: betaRecord.ID, Message: "foreign",
 			})
 		}},
-		{name: "stop", call: func() error {
-			return controller.StopSession(ctx, controllerapi.SessionStopData{SessionID: betaRecord.ID})
-		}},
-		{name: "kill", call: func() error {
-			return controller.KillSession(ctx, controllerapi.SessionKillData{SessionID: betaRecord.ID})
-		}},
-		{name: "clear", call: func() error {
-			_, clearErr := controller.ClearSession(ctx, controllerapi.SessionClearData{SessionID: betaRecord.ID})
-			return clearErr
-		}},
 		{name: "set model", call: func() error {
 			return controller.SetSessionModel(ctx, controllerapi.SessionSetModelData{
 				SessionID: betaRecord.ID, Model: "other",
@@ -61,10 +51,6 @@ func TestManagerBoundControllerRejectsEveryForeignSessionOperation(t *testing.T)
 			return controller.SetSessionAttributes(ctx, controllerapi.SessionSetAttributesData{
 				SessionID: betaRecord.ID, Attributes: map[string]any{"topic": 9},
 			})
-		}},
-		{name: "list schedules", call: func() error {
-			_, listErr := controller.ListSchedules(ctx, controllerapi.ScheduleListData{SessionID: betaRecord.ID})
-			return listErr
 		}},
 		{name: "list skills", call: func() error {
 			_, listErr := controller.ListSkills(ctx, controllerapi.ConfigSkillsData{SessionID: betaRecord.ID})

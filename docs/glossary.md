@@ -152,11 +152,37 @@ _Avoid_: treating "running" (runtime) and "active" (persisted) as the same word.
 A session→controller event — a message chunk, a state change, a heartbeat (`sessionevent.Notification`, delivered as `controllerapi.SessionNotification`). Only *root* sessions have them: `svc.publish` drops every event whose session is a subagent. Manager subscriptions additionally receive only events whose durable manager owner matches their ID; daemon-internal observers may inspect all root events. The bare type name "Notification" is overloaded elsewhere (LSP JSON-RPC, tool notifications), so qualify it as a *session event*.
 _Avoid_: bare "Notification".
 
+**replaceable output**:
+A durable manager-output message that may reuse the external message identities
+of the immediately preceding replaceable output. A following persistent output
+may reuse those identities once and closes the replaceable chain. Managers whose
+transport cannot edit append a new rendering instead.
+_Avoid_: manager replacement, cursor.
+
+**persistent output**:
+A durable manager-output message that cannot be replaced by later output. It
+closes an immediately preceding replaceable chain, potentially by editing that
+chain's external messages; otherwise it creates new external messages.
+_Avoid_: final output (persistent output is not necessarily a task result).
+
+**manager delivery receipt**:
+The manager-owned external message identities recorded when one durable output
+is acknowledged. It is scoped by manager ID, may contain multiple identities
+for a chunked rendering, and is stored and returned without daemon-side
+interpretation.
+_Avoid_: message ID (singular), cursor.
+
 **suspend** (`ErrSuspend`):
 A sentinel error `sleep` returns to checkpoint and exit the agent loop *without* recording a result; the timer's exact result is injected on resume. The persisted status is `suspended`. Standalone `schedule` creates future work but does not suspend the calling session.
 
 **session input**:
-A normal user or agent message accepted into the durable `session_inbox` FIFO before any runner observes it. The session promotes it into the append-only transcript at the next agent-loop boundary. The same path handles a live, idle, suspended, or stopped session; “steering” and “waking” are no longer separate data transports.
+A user or agent action addressed to an existing session and accepted into the
+durable `session_inbox` FIFO before any consumer observes it. A normal message
+is promoted into the append-only transcript; a generic session command is
+handled from the same ledger without entering the LLM. Manager-specific UI
+actions such as project spawning, pickers and masked secret prompts remain with
+the manager. The same input path handles a live, idle, suspended, or stopped
+session; “steering” and “waking” are no longer separate data transports.
 _Avoid_: steering message, wake message, in-memory inbox.
 
 **waiting projection**:

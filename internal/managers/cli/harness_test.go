@@ -27,7 +27,6 @@ type fakeController struct {
 	created  []controllerapi.SessionCreateData
 	projects []controllerapi.ProjectCreateData
 	sent     []controllerapi.SessionMessageData
-	stopped  []int64
 	models   []controllerapi.ConfigModelInfo
 	setModel []controllerapi.SessionSetModelData
 	setAttrs []controllerapi.SessionSetAttributesData
@@ -73,15 +72,6 @@ func (f *fakeController) SendSessionMessage(_ context.Context, d controllerapi.S
 	defer f.mu.Unlock()
 
 	f.sent = append(f.sent, d)
-
-	return nil
-}
-
-func (f *fakeController) StopSession(_ context.Context, d controllerapi.SessionStopData) error {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-
-	f.stopped = append(f.stopped, d.SessionID)
 
 	return nil
 }

@@ -3,6 +3,7 @@ package sessionstore
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -76,6 +77,7 @@ func loadInboxInput(ctx context.Context, q queryer, inputID int64) (*InboxInput,
 func scanInboxInput(sc rowScanner) (*InboxInput, error) {
 	var input InboxInput
 	var source, state string
+	var attributes string
 	var resolvedAt sql.NullTime
 	var reason sql.NullString
 	var acceptedMessageID sql.NullInt64
@@ -85,6 +87,7 @@ func scanInboxInput(sc rowScanner) (*InboxInput, error) {
 		&input.SessionID,
 		&source,
 		&input.RawContent,
+		&attributes,
 		&input.ReceivedAt,
 		&state,
 		&resolvedAt,
@@ -96,7 +99,12 @@ func scanInboxInput(sc rowScanner) (*InboxInput, error) {
 	}
 
 	input.Source = InputSource(source)
+
 	input.State = InputState(state)
+	if err := json.Unmarshal([]byte(attributes), &input.Attributes); err != nil {
+		return nil, fmt.Errorf("decode inbox attributes: %w", err)
+	}
+
 	input.ResolutionReason = reason.String
 	input.AcceptedMessageID = acceptedMessageID.Int64
 

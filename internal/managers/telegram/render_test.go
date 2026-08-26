@@ -1,8 +1,10 @@
 package telegram
 
 import (
+	"html"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -28,6 +30,20 @@ func TestTextToTelegramHTMLHeadings(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			assert.Equal(t, tt.want, textToTelegramHTML(tt.in))
 		})
+	}
+}
+
+func TestSplitMessageChunksPreservesUTF8EntitiesAndTags(t *testing.T) {
+	text := "<b>Привет &amp; " + strings.Repeat("😀", 12) + "</b>"
+	chunks := splitMessageChunks(text, 18)
+	require.Greater(t, len(chunks), 1)
+	for _, chunk := range chunks {
+		assert.True(t, utf8.ValidString(chunk))
+		if strings.Contains(chunk, "&") {
+			assert.Contains(t, chunk, "&amp;", "entities are never sliced")
+		}
+		assert.Equal(t, stripHTMLToPlain(chunk), html.UnescapeString(stripHTMLToPlain(chunk)))
+		assert.Equal(t, strings.Count(chunk, "<b>"), strings.Count(chunk, "</b>"))
 	}
 }
 

@@ -1,10 +1,15 @@
 package daemon
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
+	"sort"
 	"sync"
 	"time"
 
@@ -35,6 +40,10 @@ type runner struct {
 
 	inputMu sync.Mutex
 	inputs  []queuedSessionInput
+
+	// preserveStopped reports a command-only activation of a stopped root: the
+	// run answers read-only boundary commands but must not reactivate the root.
+	preserveStopped bool
 }
 
 // stop cancels the runner's context and waits for the goroutine to exit.
@@ -228,10 +237,10 @@ func (s *svc) runSessionIteration( //nolint:funlen // linear lifecycle with expl
 		s.announceSession(ctx, sessionID, rs, rec, notify)
 	}
 
-	sess, runErr := s.createOrResumeSession(ctx, sessionID, rs.workDir, rec)
+	sess, runErr := s.createOrResumeSession(ctx, sessionID, rs.workDir, rec, rs.preserveStopped)
 	if runErr != nil {
 		logger.Ctx(ctx).Warn("session_create_failed", zap.Int64("session_id", sessionID), zap.Error(runErr))
-		reportSessionUnstarted(notify, runErr)
+		s.reportSessionUnstarted(ctx, sessionID, notify, runErr)
 
 		return false, false
 	}
@@ -241,7 +250,7 @@ func (s *svc) runSessionIteration( //nolint:funlen // linear lifecycle with expl
 		sess.Close()
 		logger.Ctx(ctx).Named("daemon.runner").
 			Error("session_inputs_failed", zap.Int64("session_id", sessionID), zap.Error(runErr))
-		reportSessionUnstarted(notify, runErr)
+		s.reportSessionUnstarted(ctx, sessionID, notify, runErr)
 
 		return false, false
 	}
@@ -249,7 +258,7 @@ func (s *svc) runSessionIteration( //nolint:funlen // linear lifecycle with expl
 	hasDurableInput, pendingErr := s.hasPendingDurableInput(ctx, sessionID)
 	if pendingErr != nil {
 		sess.Close()
-		reportSessionUnstarted(notify, pendingErr)
+		s.reportSessionUnstarted(ctx, sessionID, notify, pendingErr)
 
 		return false, false
 	}
@@ -259,7 +268,7 @@ func (s *svc) runSessionIteration( //nolint:funlen // linear lifecycle with expl
 		recoveringAcceptedTurn, runErr = s.recoverableInputRunnable(ctx, sessionID)
 		if runErr != nil {
 			sess.Close()
-			reportSessionUnstarted(notify, runErr)
+			s.reportSessionUnstarted(ctx, sessionID, notify, runErr)
 
 			return false, false
 		}
@@ -276,7 +285,7 @@ func (s *svc) runSessionIteration( //nolint:funlen // linear lifecycle with expl
 
 	if err := s.activateStoppedRootForScheduledTurn(ctx, rec, inputs); err != nil {
 		sess.Close()
-		reportSessionUnstarted(notify, err)
+		s.reportSessionUnstarted(ctx, sessionID, notify, err)
 
 		return false, false
 	}
@@ -306,7 +315,7 @@ func (s *svc) runSessionIteration( //nolint:funlen // linear lifecycle with expl
 	s.runStagedApply(ctx, sessionID)
 
 	if runErr != nil {
-		s.handleRunError(ctx, sessionID, runErr, notify)
+		s.handleRunError(ctx, sessionID, runResult.ErrorNotice, runErr, notify)
 		notify(sessionevent.Notification{Type: sessionevent.NotifyStateChanged, Status: controllerapi.StateIdle})
 
 		return false, hadInput
@@ -348,7 +357,27 @@ func (s *svc) publishWaiting(
 	sessionID int64,
 	notify func(sessionevent.Notification),
 ) {
-	var waits []sessionevent.WaitItem
+	projections := s.collectWaitingProjections(ctx, sessionID)
+	if len(projections) == 0 {
+		return
+	}
+
+	waits := make([]sessionevent.WaitItem, len(projections))
+	for i, projection := range projections {
+		waits[i] = projection.wait
+	}
+
+	if s.waitingSetUnchanged(ctx, sessionID, projections) {
+		return
+	}
+
+	notify(sessionevent.Notification{
+		Type: sessionevent.NotifyWaiting, Message: sessionevent.FormatWaiting(waits), Waiting: waits,
+	})
+}
+
+func (s *svc) collectWaitingProjections(ctx context.Context, sessionID int64) []waitingProjection {
+	projections := make([]waitingProjection, 0)
 
 	if s.scheduleSvc != nil {
 		sleeps, err := s.scheduleSvc.PendingSleeps(ctx, sessionID)
@@ -357,7 +386,11 @@ func (s *svc) publishWaiting(
 		} else {
 			for _, sleep := range sleeps {
 				wakeAt := sleep.WakeAt
-				waits = append(waits, sessionevent.WaitItem{Kind: sessionevent.WaitSleep, WakeAt: &wakeAt})
+				projections = append(projections, waitingProjection{
+					wait:     sessionevent.WaitItem{Kind: sessionevent.WaitSleep, WakeAt: &wakeAt},
+					display:  map[string]any{"wake_at": wakeAt.Format(time.RFC3339)},
+					identity: map[string]any{"tool_call_id": sleep.CallID},
+				})
 			}
 		}
 	}
@@ -368,20 +401,166 @@ func (s *svc) publishWaiting(
 	} else {
 		for _, link := range links {
 			if link.Blocking && !link.Terminal() && link.State != LinkStateStopped {
-				waits = append(waits, sessionevent.WaitItem{
-					Kind: sessionevent.WaitSubagent, ChildID: link.ChildID,
+				projections = append(projections, waitingProjection{
+					wait:     sessionevent.WaitItem{Kind: sessionevent.WaitSubagent, ChildID: link.ChildID},
+					display:  map[string]any{"child_id": link.ChildID},
+					identity: map[string]any{"child_id": link.ChildID, "activation_seq": link.ActivationSeq},
 				})
 			}
 		}
 	}
 
-	if len(waits) == 0 {
-		return
+	sort.Slice(projections, func(i, j int) bool {
+		return waitingIdentityKey(projections[i].identity) < waitingIdentityKey(projections[j].identity)
+	})
+
+	return projections
+}
+
+// waitingSetUnchanged reconciles the current projection against the latest
+// waiting row; it reports true when the set is unchanged and nothing is owed.
+func (s *svc) waitingSetUnchanged(ctx context.Context, sessionID int64, projections []waitingProjection) bool {
+	outputStore := s.OutputStore()
+	if outputStore == nil {
+		return false
 	}
 
-	notify(sessionevent.Notification{
-		Type: sessionevent.NotifyWaiting, Message: sessionevent.FormatWaiting(waits), Waiting: waits,
-	})
+	waitingStore, ok := outputStore.(sessionstore.WaitingOutputStore)
+	if !ok {
+		logger.Ctx(ctx).Named("daemon.waiting").Warn("missing_waiting_output_store")
+
+		return false
+	}
+
+	display := make([]map[string]any, len(projections))
+	identities := make([]map[string]any, len(projections))
+
+	for i, projection := range projections {
+		identities[i] = projection.identity
+		display[i] = projection.display
+	}
+
+	identity, err := canonicalWaitingIdentities(identities)
+	if err != nil {
+		logger.Ctx(ctx).Named("daemon.waiting").Warn("encode_waiting_identity", zap.Error(err))
+
+		return false
+	}
+
+	digest := sha256.Sum256(identity)
+	hash := hex.EncodeToString(digest[:])
+	previousID := int64(0)
+
+	previous, err := waitingStore.LatestWaitingOutput(ctx, sessionID)
+	if errors.Is(err, sessionstore.ErrNoWaitingOutput) {
+		err = nil
+	}
+
+	if err != nil {
+		logger.Ctx(ctx).Named("daemon.waiting").Warn("load_waiting_output", zap.Error(err))
+
+		return false
+	}
+
+	if previous != nil {
+		previousIdentity, err := canonicalWaitingIdentities(previous.Attributes["waiting_identity"])
+		if err != nil {
+			logger.Ctx(ctx).Named("daemon.waiting").Warn("decode_waiting_identity", zap.Error(err))
+
+			return false
+		}
+
+		if bytes.Equal(previousIdentity, identity) {
+			return true
+		}
+
+		previousID = previous.ID
+	}
+
+	content := sessionevent.FormatWaiting(waitingWaits(projections))
+
+	if _, err = outputStore.EnqueueOutput(ctx, sessionstore.OutputDraft{
+		SessionID: sessionID,
+		Type:      sessionstore.OutputMessageReplaceable,
+		Content:   content,
+		Attributes: map[string]any{
+			"waiting": display, "waiting_identity": identities,
+		},
+		SourceKey: fmt.Sprintf("wait:%d:%s", previousID, hash),
+		Fingerprint: sessionstore.OutputFingerprint(
+			sessionstore.OutputMessageReplaceable,
+			content,
+			sessionID,
+			map[string]any{
+				"waiting": display, "waiting_identity": identities,
+			},
+		),
+	}); err != nil && !errors.Is(err, sessionstore.ErrOutputOwner) {
+		logger.Ctx(ctx).Named("daemon.waiting").Warn("enqueue_waiting_output", zap.Error(err))
+	}
+
+	return false
+}
+
+func waitingWaits(projections []waitingProjection) []sessionevent.WaitItem {
+	waits := make([]sessionevent.WaitItem, len(projections))
+	for i, projection := range projections {
+		waits[i] = projection.wait
+	}
+
+	return waits
+}
+
+type waitingProjection struct {
+	wait     sessionevent.WaitItem
+	display  map[string]any
+	identity map[string]any
+}
+
+func waitingIdentityKey(identity map[string]any) string {
+	if childID, child := positiveWaitingInt(identity["child_id"]); child {
+		activation, _ := positiveWaitingInt(identity["activation_seq"])
+
+		return fmt.Sprintf("0:%020d:%020d", childID, activation)
+	}
+
+	if callID, ok := identity["tool_call_id"].(string); ok {
+		return "1:" + callID
+	}
+
+	return "2:invalid"
+}
+
+func positiveWaitingInt(value any) (int64, bool) {
+	switch number := value.(type) {
+	case int64:
+		return number, number > 0
+	case int:
+		return int64(number), number > 0
+	default:
+		return 0, false
+	}
+}
+
+func canonicalWaitingIdentities(value any) ([]byte, error) {
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return nil, fmt.Errorf("encode waiting identities: %w", err)
+	}
+
+	var items []json.RawMessage
+	if err := json.Unmarshal(encoded, &items); err != nil {
+		return nil, fmt.Errorf("decode waiting identities: %w", err)
+	}
+
+	sort.Slice(items, func(i, j int) bool { return bytes.Compare(items[i], items[j]) < 0 })
+
+	canonical, err := json.Marshal(items)
+	if err != nil {
+		return nil, fmt.Errorf("encode canonical waiting identities: %w", err)
+	}
+
+	return canonical, nil
 }
 
 // settleStoppedCalls is runner-owned transcript mutation used by the /stop
@@ -408,7 +587,7 @@ func (s *svc) settleStoppedCalls(ctx context.Context, sessionID int64) error {
 		s.staged.stage(sessionID, call.ID, call.Name)
 	}
 
-	sess, err := s.createOrResumeSession(ctx, sessionID, workDir, rec)
+	sess, err := s.openSession(ctx, sessionID, workDir, rec, true, false)
 	if err != nil {
 		return fmt.Errorf("open stopping session %d: %w", sessionID, err)
 	}
@@ -451,7 +630,7 @@ func (s *svc) closeOrphanedCalls(ctx context.Context, rec *sessionstore.SessionR
 		}
 	}()
 
-	sess, err := s.createOrResumeSession(ctx, rec.ID, workDir, rec)
+	sess, err := s.createOrResumeSession(ctx, rec.ID, workDir, rec, false)
 	if err != nil {
 		return 0, fmt.Errorf("open session %d to close orphaned calls: %w", rec.ID, err)
 	}
@@ -503,13 +682,23 @@ func (s *svc) ensureSessionRunner(ctx context.Context, sessionID int64) error {
 
 // reportSessionUnstarted tells the controller a session could not start and parks
 // it idle. Shared so every pre-run failure reads identically to the user.
-func reportSessionUnstarted(notify func(sessionevent.Notification), err error) {
+func (s *svc) reportSessionUnstarted(
+	ctx context.Context,
+	sessionID int64,
+	notify func(sessionevent.Notification),
+	err error,
+) {
+	message := fmt.Sprintf(
+		"⚠️ Session error: %s\n\nThe session is still alive — send a message to retry.",
+		logger.Redact(err.Error()),
+	)
+	if outputErr := s.enqueuePersistentOutput(ctx, sessionID, message); outputErr != nil {
+		logger.Ctx(ctx).Named("daemon.runner").Warn("enqueue_unstarted_error_output", zap.Error(outputErr))
+	}
+
 	notify(sessionevent.Notification{
-		Type: sessionevent.NotifyMessage,
-		Message: fmt.Sprintf(
-			"⚠️ Session error: %s\n\nThe session is still alive — send a message to retry.",
-			err.Error(),
-		),
+		Type:    sessionevent.NotifyMessage,
+		Message: message,
 	})
 	notify(sessionevent.Notification{Type: sessionevent.NotifyStateChanged, Status: controllerapi.StateIdle})
 }
@@ -768,6 +957,20 @@ func (s *svc) createOrResumeSession(
 	sessionID int64,
 	workDir string,
 	rec *sessionstore.SessionRecord,
+	preserveStopped bool,
+) (session.Service, error) {
+	return s.openSession(ctx, sessionID, workDir, rec, false, preserveStopped)
+}
+
+// openSession builds the session service. A settlement open never persists the
+// initial state: /stop settles a tree already marked stopping, and reactivating
+// it would lose the lifecycle fence.
+func (s *svc) openSession(
+	ctx context.Context,
+	sessionID int64,
+	workDir string,
+	rec *sessionstore.SessionRecord,
+	settlement, preserveStopped bool,
 ) (session.Service, error) {
 	externalCalls, err := s.pendingExternalCallsForSession(ctx, sessionID)
 	if err != nil {
@@ -796,7 +999,11 @@ func (s *svc) createOrResumeSession(
 			schedules: s.scheduleSvc,
 			sessionID: sessionID,
 		},
+		SettlementOpen:        settlement,
+		PreserveStoppedStatus: preserveStopped,
 	}
+	owner, _ := rec.Attributes[controllerapi.SessionAttributeManagerID].(string)
+	opts.OutputEnabled = rec.ParentID == 0 && owner != ""
 
 	opts.ActiveSubagents = s.activeSubagentInfos(ctx, sessionID)
 	opts.ActiveSubagentsProvider = func(ctx context.Context) []session.ActiveSubagentInfo {
@@ -908,6 +1115,7 @@ func (s *svc) executeSession(
 func (s *svc) handleRunError(
 	ctx context.Context,
 	sessionID int64,
+	message string,
 	runErr error,
 	notify func(sessionevent.Notification),
 ) {
@@ -918,14 +1126,14 @@ func (s *svc) handleRunError(
 
 	logger.Ctx(ctx).Warn("session_error", zap.Int64("session_id", sessionID), zap.Error(runErr))
 
-	// Send the error as a user-visible message so the conversation is not lost.
-	notify(sessionevent.Notification{
-		Type: sessionevent.NotifyMessage,
-		Message: fmt.Sprintf(
+	if message == "" {
+		message = fmt.Sprintf(
 			"⚠️ Session error: %s\n\nThe session is still alive — send a message to continue.",
-			runErr.Error(),
-		),
-	})
+			logger.Redact(runErr.Error()),
+		)
+	}
+
+	notify(sessionevent.Notification{Type: sessionevent.NotifyMessage, Message: message})
 }
 
 // registerScheduleTools registers daemon-mode schedule and sleep tools on the session's live registry.
@@ -1128,7 +1336,8 @@ func (s *svc) ensureRunner(
 		return fmt.Errorf("load session %d before start: %w", sessionID, err)
 	}
 
-	if err := validateRunnerStart(rec, inputs); err != nil {
+	preserveStopped, err := s.ensureRunnerStartable(ctx, rec, inputs)
+	if err != nil {
 		return err
 	}
 
@@ -1166,13 +1375,14 @@ func (s *svc) ensureRunner(
 	// Session goroutine uses independent context — survives controller disconnect
 	loopCtx, loopCancel := context.WithCancel(context.Background())
 	rs := &runner{
-		cancel:    loopCancel,
-		done:      make(chan struct{}),
-		workDir:   workDir,
-		projectID: projectID,
-		inputs:    inputs,
-		kind:      kind,
-		parentID:  parentID,
+		cancel:          loopCancel,
+		done:            make(chan struct{}),
+		workDir:         workDir,
+		projectID:       projectID,
+		inputs:          inputs,
+		kind:            kind,
+		parentID:        parentID,
+		preserveStopped: preserveStopped,
 	}
 
 	existing, started := s.registerRunner(sessionID, rs)
@@ -1197,18 +1407,60 @@ func (s *svc) ensureRunner(
 	return nil
 }
 
-func validateRunnerStart(rec *sessionstore.SessionRecord, inputs []queuedSessionInput) error {
+func (s *svc) ensureRunnerStartable(
+	ctx context.Context,
+	rec *sessionstore.SessionRecord,
+	inputs []queuedSessionInput,
+) (bool, error) {
+	preserveStopped, err := s.commandOnlyStoppedRoot(ctx, rec)
+	if err != nil {
+		return false, err
+	}
+
+	if err := validateRunnerStart(rec, inputs, preserveStopped); err != nil {
+		return false, err
+	}
+
+	return preserveStopped, nil
+}
+
+func validateRunnerStart(rec *sessionstore.SessionRecord, inputs []queuedSessionInput, preserveStopped bool) error {
 	if rec.KilledAt != nil || rec.Status == sessionstore.SessionStatusKilled {
 		return fmt.Errorf("session %d is killed", rec.ID)
 	}
 
 	if rec.Status == sessionstore.SessionStatusStopping ||
-		(rec.Status == sessionstore.SessionStatusStopped &&
+		(rec.Status == sessionstore.SessionStatusStopped && !preserveStopped &&
 			(rec.ParentID != 0 || !queuedInputsStartScheduledTurn(inputs))) {
 		return fmt.Errorf("session %d is %s", rec.ID, rec.Status)
 	}
 
 	return nil
+}
+
+// commandOnlyStoppedRoot reports whether a stopped root is being woken for a
+// read-only boundary command: those run while the root stays parked, unlike
+// ordinary accepted work which reactivates it.
+func (s *svc) commandOnlyStoppedRoot(ctx context.Context, rec *sessionstore.SessionRecord) (bool, error) {
+	if rec.Status != sessionstore.SessionStatusStopped || rec.ParentID != 0 {
+		return false, nil
+	}
+
+	pending, err := s.hasPendingDurableInput(ctx, rec.ID)
+	if err != nil {
+		return false, err
+	}
+
+	if !pending {
+		return false, nil
+	}
+
+	head, err := s.inboxStore.PeekPending(ctx, rec.ID)
+	if err != nil {
+		return false, fmt.Errorf("peek stopped root input: %w", err)
+	}
+
+	return isReadOnlyBoundaryCommand(head.RawContent), nil
 }
 
 func queuedInputsStartScheduledTurn(inputs []queuedSessionInput) bool {

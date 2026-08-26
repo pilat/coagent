@@ -21,6 +21,9 @@ const (
 	callbackEffort    = "effort"
 	callbackNewPick   = "newpick"
 	callbackNewPage   = "newpage"
+	commandKill       = "/kill"
+	commandStop       = "/stop"
+	telegramChannel   = "telegram"
 )
 
 type callbackAction struct {
@@ -66,9 +69,9 @@ func (m *Manager) handleServiceTopicMessage(ctx context.Context, text string) {
 		_, _ = m.sendMessage(ctx, "Use /spawn to create a session, or /kill to stop one.", nil, m.serviceTopicID)
 	case "/spawn":
 		m.handleSpawn(ctx, "", 0, 0)
-	case "/kill":
+	case commandKill:
 		m.handleKill(ctx, 0, m.serviceTopicID)
-	case "/stop":
+	case commandStop:
 		_, _ = m.sendMessage(ctx, "Use /stop inside a session topic.", nil, m.serviceTopicID)
 	case "/model":
 		_, _ = m.sendMessage(ctx, "Use /model inside a session topic.", nil, m.serviceTopicID)
@@ -94,18 +97,22 @@ func (m *Manager) handleSessionTopicMessage(ctx context.Context, sessionID, thre
 	}
 
 	switch text {
-	case "/kill":
+	case commandKill:
 		m.handleKill(ctx, sessionID, threadID)
-	case "/stop":
-		_ = m.controller.StopSession(ctx, controllerapi.SessionStopData{SessionID: sessionID})
+	case commandStop:
+		_ = m.controller.SendSessionMessage(ctx, controllerapi.SessionMessageData{
+			SessionID: sessionID, Message: commandStop,
+		})
 	case "/clear":
-		_, _ = m.controller.ClearSession(ctx, controllerapi.SessionClearData{SessionID: sessionID})
+		_ = m.controller.SendSessionMessage(ctx, controllerapi.SessionMessageData{
+			SessionID: sessionID, Message: "/clear",
+		})
 	case "/model":
 		m.handleModel(ctx, sessionID, threadID)
 	case "/schedules":
-		m.handleSchedules(ctx, sessionID, threadID)
+		m.handleSessionMessage(ctx, sessionID, text, threadID)
 	case "/help":
-		m.handleHelp(ctx, sessionID, threadID)
+		m.handleSessionMessage(ctx, sessionID, text, threadID)
 	case "/spawn", "/start":
 		_, _ = m.sendMessage(ctx, "Use this command in the service topic.", nil, threadID)
 	default:
@@ -284,7 +291,9 @@ func (m *Manager) buildSpawnDirKeyboard(
 
 func (m *Manager) handleKill(ctx context.Context, sessionID, threadID int64) {
 	if sessionID > 0 {
-		if err := m.controller.KillSession(ctx, controllerapi.SessionKillData{SessionID: sessionID}); err != nil {
+		if err := m.controller.SendSessionMessage(ctx, controllerapi.SessionMessageData{
+			SessionID: sessionID, Message: commandKill,
+		}); err != nil {
 			_, _ = m.sendMessage(ctx, "❌ Kill failed: "+err.Error(), nil, threadID)
 		}
 
@@ -338,7 +347,7 @@ func (m *Manager) handleLaunch(ctx context.Context, dir string) {
 	_, err := m.controller.CreateSession(ctx, controllerapi.SessionCreateData{
 		WorkDir: dir,
 		Attributes: map[string]any{
-			"channel": "telegram",
+			"channel": telegramChannel,
 		},
 	})
 	if err != nil {
@@ -353,70 +362,12 @@ func (m *Manager) handleLaunchGWT(ctx context.Context, dir string) {
 		WorkDir:     dir,
 		UseWorktree: true,
 		Attributes: map[string]any{
-			"channel": "telegram",
+			"channel": telegramChannel,
 		},
 	})
 	if err != nil {
 		_, _ = m.sendMessage(ctx, "❌ Session create failed: "+err.Error(), nil, m.serviceTopicID)
 	}
-}
-
-func (m *Manager) handleSchedules(ctx context.Context, sessionID, threadID int64) {
-	result, err := m.controller.ListSchedules(ctx, controllerapi.ScheduleListData{SessionID: sessionID})
-	if err != nil {
-		_, _ = m.sendRawHTML(ctx, "Failed to list schedules: "+escapeHTML(err.Error()), nil, threadID)
-		return
-	}
-
-	if result == nil || len(result.Schedules) == 0 {
-		_, _ = m.sendRawHTML(ctx, "No schedules for this session. Ask me to add one.", nil, threadID)
-		return
-	}
-
-	lines := []string{fmt.Sprintf("<b>Schedules (%d):</b>", len(result.Schedules))}
-	for _, s := range result.Schedules {
-		lines = append(lines, formatSchedule(s))
-	}
-
-	lines = append(lines, "\n<i>Ask me in chat to add, change, or remove a schedule.</i>")
-
-	_, _ = m.sendRawHTML(ctx, strings.Join(lines, "\n"), nil, threadID)
-}
-
-func formatSchedule(s controllerapi.ScheduleInfo) string {
-	var b strings.Builder
-
-	fmt.Fprintf(&b, "  <b>#%d</b> · ", s.ID)
-
-	switch {
-	case s.Cron != "":
-		fmt.Fprintf(&b, "cron <code>%s</code> (%s)", escapeHTML(s.Cron), escapeHTML(s.Timezone))
-	case s.OneShotAt != nil:
-		fmt.Fprintf(&b, "once %s UTC", s.OneShotAt.UTC().Format("2006-01-02 15:04"))
-	}
-
-	if s.Fresh {
-		b.WriteString(" · 🆕 fresh")
-	}
-
-	if s.Prompt != "" {
-		fmt.Fprintf(&b, " · %s", escapeHTML(truncateText(s.Prompt, 80)))
-	}
-
-	if s.LastFiredAt != nil {
-		fmt.Fprintf(&b, " · last %s", s.LastFiredAt.UTC().Format("01-02 15:04"))
-	}
-
-	return b.String()
-}
-
-func truncateText(text string, maxLen int) string {
-	runes := []rune(text)
-	if len(runes) <= maxLen {
-		return text
-	}
-
-	return string(runes[:maxLen]) + "…"
 }
 
 func (m *Manager) handleHelp(ctx context.Context, sessionID, threadID int64) {
@@ -580,7 +531,10 @@ func (m *Manager) handleCallbackKill(ctx context.Context, cb *telegramCallbackDa
 
 	m.answerCallback(ctx, cb.ID, "Killing...")
 
-	if err := m.controller.KillSession(ctx, controllerapi.SessionKillData{SessionID: action.Session}); err != nil {
+	if err := m.controller.SendSessionMessage(ctx, controllerapi.SessionMessageData{
+		SessionID: action.Session,
+		Message:   commandKill,
+	}); err != nil {
 		_, _ = m.sendMessage(ctx, "❌ Kill failed: "+err.Error(), nil, m.serviceTopicID)
 	}
 }

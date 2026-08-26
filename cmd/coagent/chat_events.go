@@ -123,12 +123,19 @@ func (c *chat) render(params json.RawMessage) {
 
 	switch e.Type {
 	case string(sessionevent.NotifyMessage):
+		c.recordOutput(e.Generation)
 		c.clearActivity()
 		c.println(e.Message)
+	case "waiting":
+		c.recordOutput(e.Generation)
+		c.clearActivity()
+		c.println(e.Message)
+	case "session_opened", "session_replaced", "session_closed":
+		c.applyLifecycle(e.Generation, e.OldSessionID, e.SessionID, e.Type)
 	case string(sessionevent.NotifyHeartbeat):
 		c.showActivity()
 	case string(sessionevent.NotifyStateChanged):
-		if e.Status == "idle" {
+		if e.Status == "idle" && c.outputDelivered(e.AfterOutputID) {
 			c.clearActivity()
 			c.setBusy(false)
 			c.prompt()

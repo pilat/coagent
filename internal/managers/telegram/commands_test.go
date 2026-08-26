@@ -7,7 +7,6 @@ import (
 	"net/http"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -81,7 +80,9 @@ func TestHandleCommandsPreservesCanonicalSkillNames(t *testing.T) {
 	}
 }
 
-func TestSchedulesCommandBypassesModel(t *testing.T) {
+// Generic commands are durable inbox rows: the manager only forwards the
+// canonical text and never calls a direct lifecycle/schedule capability.
+func TestSchedulesCommandEntersDurableInbox(t *testing.T) {
 	var messages []string
 	ctrl := &fakeController{}
 	m := &Manager{
@@ -92,11 +93,9 @@ func TestSchedulesCommandBypassesModel(t *testing.T) {
 
 	m.handleSessionTopicMessage(context.Background(), 42, 99, "/schedules")
 
-	// Read-only command: it queries the session's schedules and never steers the
-	// model (the agent must not see the command).
-	require.Len(t, ctrl.scheduleCalls, 1)
-	assert.Equal(t, int64(42), ctrl.scheduleCalls[0].SessionID)
-	assert.Empty(t, ctrl.messageCalls)
+	require.Equal(t, []controllerapi.SessionMessageData{
+		{SessionID: 42, Message: "/schedules"},
+	}, ctrl.messageCalls)
 }
 
 func TestStopCommandStopsWithoutSteering(t *testing.T) {
@@ -110,61 +109,11 @@ func TestStopCommandStopsWithoutSteering(t *testing.T) {
 
 	m.handleSessionTopicMessage(context.Background(), 42, 99, "/stop")
 
-	// /stop halts the current run via the controller; it must never be forwarded to
-	// the model as a steering message.
-	require.Equal(t, []int64{42}, ctrl.stopCalls)
-	assert.Empty(t, ctrl.messageCalls)
-}
-
-func TestHandleSchedulesFormatsEntries(t *testing.T) {
-	var messages []string
-	firedAt := time.Date(2026, 7, 21, 9, 0, 0, 0, time.UTC)
-	ctrl := &fakeController{
-		listSchedules: []controllerapi.ScheduleInfo{
-			{
-				ID:          12,
-				Cron:        "0 9 * * *",
-				Timezone:    "Europe/Berlin",
-				Fresh:       true,
-				Prompt:      "check CI",
-				LastFiredAt: &firedAt,
-			},
-			{ID: 13, OneShotAt: &firedAt, Prompt: "wake once"},
-		},
-	}
-	m := &Manager{
-		cfg:        config.ManagerEntry{BotToken: "token", TargetChatID: targetID(-100123)},
-		controller: ctrl,
-		httpClient: &http.Client{Transport: telegramMessageRecorder(t, &messages)},
-	}
-
-	m.handleSchedules(context.Background(), 42, 99)
-
-	require.Len(t, messages, 1)
-	out := messages[0]
-	assert.Contains(t, out, "Schedules (2)")
-	assert.Contains(t, out, "#12")
-	assert.Contains(t, out, "0 9 * * *")
-	assert.Contains(t, out, "Europe/Berlin")
-	assert.Contains(t, out, "🆕 fresh")
-	assert.Contains(t, out, "check CI")
-	assert.Contains(t, out, "#13")
-	assert.Contains(t, out, "once 2026-07-21 09:00 UTC")
-}
-
-func TestHandleSchedulesEmpty(t *testing.T) {
-	var messages []string
-	ctrl := &fakeController{}
-	m := &Manager{
-		cfg:        config.ManagerEntry{BotToken: "token", TargetChatID: targetID(-100123)},
-		controller: ctrl,
-		httpClient: &http.Client{Transport: telegramMessageRecorder(t, &messages)},
-	}
-
-	m.handleSchedules(context.Background(), 42, 99)
-
-	require.Len(t, messages, 1)
-	assert.Contains(t, messages[0], "No schedules")
+	// /stop is forwarded as a durable generic command; it must never be sent to
+	// the model as ordinary steering text beyond that canonical command.
+	require.Equal(t, []controllerapi.SessionMessageData{
+		{SessionID: 42, Message: "/stop"},
+	}, ctrl.messageCalls)
 }
 
 func TestHandleSessionTopicMessagePreservesCanonicalText(t *testing.T) {

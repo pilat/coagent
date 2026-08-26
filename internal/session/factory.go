@@ -42,6 +42,16 @@ type CreateOptions struct {
 	CompactionBrief string
 	LastActivityAt  time.Time
 	InputBoundary   InputBoundary
+	OutputEnabled   bool
+
+	// SettlementOpen marks a lifecycle settlement open: the initial state is not
+	// persisted, so a stopping root is never reactivated by /stop settlement.
+	SettlementOpen bool
+
+	// PreserveStoppedStatus marks a command-only activation of a stopped root:
+	// read-only boundary commands run, but the run must not reactivate the root
+	// past its prior stopped status.
+	PreserveStoppedStatus bool
 
 	// ActiveSubagents is the daemon-pushed set of this session's in-flight
 	// children, rendered into the pinned "# Active subagents" prompt section.
@@ -253,6 +263,9 @@ func (f *factory) build(
 		CompactionBrief: opts.CompactionBrief,
 		LastActivityAt:  opts.LastActivityAt,
 		InputBoundary:   opts.InputBoundary,
+		OutputEnabled:   opts.OutputEnabled,
+		SettlementOpen:  opts.SettlementOpen,
+		PreserveStopped: opts.PreserveStoppedStatus,
 		ActiveSubagents: opts.ActiveSubagents,
 
 		ActiveSubagentsProvider:  opts.ActiveSubagentsProvider,

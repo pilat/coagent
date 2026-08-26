@@ -302,6 +302,7 @@ func probeBashSandbox(cfg *config.Config) error {
 	return bashsandbox.Probe()
 }
 
+//nolint:funlen // Composition-root ordering keeps control readiness and manager startup auditable together.
 func runDaemon(
 	ctx context.Context,
 	state startupState,
@@ -348,7 +349,9 @@ func runDaemon(
 
 	runtime := managers.NewRuntime(cfg, core.controller)
 
-	ctlSrv, err := prepareControlSocket(ctx, cfg, runtime, applier, core.secretResolver)
+	deliveryStatus, _ := core.controller.(controllerapi.OutputStatusFactory)
+
+	ctlSrv, err := prepareControlSocket(ctx, cfg, runtime, deliveryStatus, applier, core.secretResolver)
 	if err != nil {
 		return err
 	}
@@ -373,6 +376,8 @@ func runDaemon(
 	if err := chat.Start(ctx); err != nil {
 		return fmt.Errorf("start local chat: %w", err)
 	}
+
+	ctlSrv.SetBuiltinManager(chat)
 
 	a.onStop("managers.cli", chat.Stop)
 
@@ -526,6 +531,10 @@ func startCore(
 	linkStore := daemon.NewLinkStore(db)
 	mcpRegistry := mcpstore.NewStore(db)
 
+	if _, err := sessionStore.RecoverInterruptedOutputs(ctx); err != nil {
+		return nil, fmt.Errorf("recover interrupted manager output: %w", err)
+	}
+
 	scheduleSvc := schedule.NewService(scheduleStore)
 
 	factory := session.NewFactory(
@@ -535,6 +544,14 @@ func startCore(
 	daemonSvc := daemon.New(
 		factory, daemonStore, sessionStore, sessionStore, linkStore, scheduleSvc, cfg, mcpRegistry, pool, applier,
 	)
+
+	controller := daemon.NewController(daemonSvc, cfg, cache, scheduleSvc)
+	if preparer, ok := daemonSvc.(daemon.LegacyCLIPreparer); ok {
+		if err := preparer.PrepareLegacyCLIRoots(ctx); err != nil {
+			return nil, fmt.Errorf("prepare legacy cli roots: %w", err)
+		}
+	}
+
 	if err := daemonSvc.Start(ctx); err != nil {
 		return nil, fmt.Errorf("start daemon: %w", err)
 	}
@@ -542,7 +559,7 @@ func startCore(
 	a.onStop("daemon", func(context.Context) error { daemonSvc.Shutdown(30 * time.Second); return nil })
 
 	return &core{
-		controller:     daemon.NewController(daemonSvc, cfg, cache, scheduleSvc),
+		controller:     controller,
 		scheduleStore:  scheduleStore,
 		scheduleSender: daemonSvc,
 		verdictSender:  daemonSvc,
@@ -570,6 +587,7 @@ func prepareControlSocket(
 	ctx context.Context,
 	cfg *config.Config,
 	mgrs ctl.ManagerControl,
+	delivery controllerapi.OutputStatusFactory,
 	applier *daemon.ConfigApplier,
 	resolver secretRequestResolver,
 ) (*ctl.Server, error) {
@@ -582,6 +600,7 @@ func prepareControlSocket(
 		Config:     cfg,
 		ConfigPath: config.DefaultUnifiedConfigFile,
 		Managers:   mgrs,
+		Delivery:   delivery,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("control socket: %w", err)

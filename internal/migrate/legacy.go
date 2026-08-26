@@ -21,5 +21,6 @@ func legacyMigrations() []*goose.Migration {
 		goose.NewGoMigration(4, noop, nil),
 		goose.NewGoMigration(5, noop, nil),
 		goose.NewGoMigration(6, noop, nil),
+		managerOutboxBackfillMigration(),
 	}
 }

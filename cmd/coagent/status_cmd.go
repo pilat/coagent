@@ -103,6 +103,21 @@ func managerLine(m ctl.ManagerStatus) string {
 		line += " · " + m.Error
 	}
 
+	if m.PendingOutputs > 0 {
+		line += fmt.Sprintf(" · %d pending output", m.PendingOutputs)
+	}
+
+	if m.BlockedOutputID != 0 {
+		line += fmt.Sprintf(" · blocked #%d", m.BlockedOutputID)
+		if m.BlockedForSeconds > 0 {
+			line += " for " + humanDuration(m.BlockedForSeconds)
+		}
+
+		if m.DeliveryError != "" {
+			line += " · " + m.DeliveryError
+		}
+	}
+
 	return line
 }
 

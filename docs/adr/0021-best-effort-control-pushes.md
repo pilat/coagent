@@ -1,6 +1,6 @@
 # ADR-0021: Keep control pushes best effort and make overflow observable
 
-- **Status:** Accepted
+- **Status:** Superseded by [ADR-0030](0030-durable-session-outbox.md)
 - **Date:** 2026-08-18
 
 ## Context

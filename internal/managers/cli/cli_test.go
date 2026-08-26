@@ -164,7 +164,6 @@ func TestChatOperationsRejectForeignSessionIDs(t *testing.T) {
 	}
 
 	assert.Empty(t, h.ctrl.sent)
-	assert.Empty(t, h.ctrl.stopped)
 	assert.Empty(t, h.ctrl.setModel)
 	assert.Empty(t, h.secrets.cancels())
 }
@@ -221,10 +220,13 @@ func TestChatStop(t *testing.T) {
 	openChat(t, c)
 
 	require.NoError(t, c.Call(context.Background(), OpChatStop, SessionParams{SessionID: 11}, nil))
-	assert.Equal(t, []int64{11}, h.ctrl.stopped)
+	require.Len(t, h.ctrl.sent, 1)
+	assert.Equal(t, "/stop", h.ctrl.sent[0].Message)
+	assert.Equal(t, int64(11), h.ctrl.sent[0].SessionID)
 }
 
-// Concurrent terminals are allowed and both see the whole conversation.
+// Concurrent terminals are allowed and both see the ephemeral activity stream
+// of their own session only.
 func TestChatEvents_ReachEveryAttachedTerminalAndNobodyElsesSession(t *testing.T) {
 	h := newHarness(t)
 	h.ctrl.sessions = []controllerapi.SessionInfo{{ID: 11, ProjectID: chatProjectID, UpdatedAt: time.Now()}}
@@ -236,17 +238,17 @@ func TestChatEvents_ReachEveryAttachedTerminalAndNobodyElsesSession(t *testing.T
 	// A different session's event is not this manager's business.
 	h.ctrl.events <- controllerapi.SessionNotification{
 		SessionID:    99,
-		Notification: sessionevent.Notification{Type: sessionevent.NotifyMessage, Message: "not yours"},
+		Notification: sessionevent.Notification{Type: sessionevent.NotifyHeartbeat},
 	}
 	h.ctrl.events <- controllerapi.SessionNotification{
 		SessionID:    11,
-		Notification: sessionevent.Notification{Type: sessionevent.NotifyMessage, Message: "hello there"},
+		Notification: sessionevent.Notification{Type: sessionevent.NotifyHeartbeat},
 	}
 
 	for _, c := range []*ctl.Client{first, second} {
 		event := waitForEvent(t, c)
 		assert.Equal(t, int64(11), event.SessionID)
-		assert.Equal(t, "hello there", event.Message, "the other session's event was filtered out")
+		assert.Equal(t, "heartbeat", event.Type, "the other session's event was filtered out")
 	}
 }
 

@@ -77,6 +77,14 @@ func (s *svc) focusSection() string {
 // the transcript was restructured. keepRecent now only bounds how many recent
 // rounds the summarizer reads with their tool output intact.
 func (s *svc) compact(ctx context.Context, keepRecent int) (bool, error) {
+	return s.compactWithCommand(ctx, keepRecent, nil)
+}
+
+func (s *svc) compactWithCommand(
+	ctx context.Context,
+	keepRecent int,
+	commandInput *PendingInput,
+) (bool, error) {
 	log := logger.Ctx(ctx).Named("session.compaction")
 
 	// Defence in depth: a caller that forgets the gate must not delete a tool_use
@@ -100,11 +108,16 @@ func (s *svc) compact(ctx context.Context, keepRecent int) (bool, error) {
 	s.ms.mu.Lock()
 	defer s.ms.mu.Unlock()
 
-	return s.compactLocked(ctx, log, background)
+	return s.compactLocked(ctx, log, background, commandInput)
 }
 
 // compactLocked is compact's transcript-mutating half, under s.ms.mu.
-func (s *svc) compactLocked(ctx context.Context, log *zap.Logger, background string) (bool, error) {
+func (s *svc) compactLocked(
+	ctx context.Context,
+	log *zap.Logger,
+	background string,
+	commandInput *PendingInput,
+) (bool, error) {
 	headerSize := compactionHeaderSize(s.ms.messages)
 	if !s.headerFitsLocked(headerSize) {
 		return false, errCompactionHeaderTooLarge
@@ -136,7 +149,7 @@ func (s *svc) compactLocked(ctx context.Context, log *zap.Logger, background str
 
 	// The brief advances only once the durable swap landed: describing messages
 	// still in the transcript would summarize the same work twice.
-	beforeCount, err := s.rebuildMessages(ctx, turn, acc, headerSize, reattachments)
+	beforeCount, err := s.rebuildMessages(ctx, turn, acc, headerSize, reattachments, brief, commandInput)
 	if err != nil {
 		return false, err
 	}
@@ -144,8 +157,13 @@ func (s *svc) compactLocked(ctx context.Context, log *zap.Logger, background str
 	s.resetContextBaseline() // the transcript the measurement described is gone
 	s.compactionBrief = brief
 
-	if err := s.ms.persistCompactionBrief(ctx, brief); err != nil {
-		log.Warn("persist_compaction_brief_failed", zap.Error(err))
+	if commandInput == nil {
+		// rebuildMessages left the summary turn right after the header.
+		s.compactionSummaryDBID = s.ms.messages[headerSize].DBID
+
+		if err := s.ms.persistCompactionBrief(ctx, brief); err != nil {
+			log.Warn("persist_compaction_brief_failed", zap.Error(err))
+		}
 	}
 
 	log.Info("compaction_completed",
@@ -230,6 +248,8 @@ func (s *svc) rebuildMessages(
 	acc *compactionUsage,
 	headerSize int,
 	reattachments []llmwire.Message,
+	brief string,
+	commandInput *PendingInput,
 ) (int, error) {
 	beforeCount := len(s.ms.messages)
 	compactedIDs := make([]int64, 0, beforeCount-headerSize)
@@ -261,7 +281,13 @@ func (s *svc) rebuildMessages(
 	newMessages = append(newMessages, summaryMsg, ackMsg, primerMsg)
 	newMessages = append(newMessages, reattachments...)
 
-	if err := s.ms.replaceCompactedMessagesLocked(ctx, compactedIDs, newMessages); err != nil {
+	if err := s.ms.replaceCompactedMessagesWithCommandLocked(
+		ctx,
+		compactedIDs,
+		newMessages,
+		brief,
+		commandInput,
+	); err != nil {
 		return 0, fmt.Errorf("replace compacted messages: %w", err)
 	}
 

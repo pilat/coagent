@@ -192,19 +192,17 @@ func (s *Server) Close() error {
 // Notify pushes one notification to this connection. It is safe to call from any
 // goroutine and returns the write error so a broadcaster can drop a dead peer.
 func (c *Conn) Notify(method string, params any) error {
-	raw, err := json.Marshal(params)
-	if err != nil {
-		return fmt.Errorf("encode %s params: %w", method, err)
+	return c.notify(method, params, 0)
+}
+
+// NotifyWithin writes one complete push under a bounded socket deadline. The
+// deadline is cleared before the shared connection returns to ordinary RPC use.
+func (c *Conn) NotifyWithin(method string, params any, timeout time.Duration) error {
+	if timeout <= 0 {
+		return c.Notify(method, params)
 	}
 
-	c.writeMu.Lock()
-	defer c.writeMu.Unlock()
-
-	if err := c.enc.Encode(Notification{JSONRPC: jsonrpcVersion, Method: method, Params: raw}); err != nil {
-		return fmt.Errorf("push %s: %w", method, err)
-	}
-
-	return nil
+	return c.notify(method, params, timeout)
 }
 
 // Close drops this connection alone, indistinguishably from the peer hanging up:
@@ -229,6 +227,29 @@ func (c *Conn) AfterReply(fn func()) { c.afterReply = fn }
 // Done closes when the connection drops, so whatever subscribed on its behalf
 // can unsubscribe.
 func (c *Conn) Done() <-chan struct{} { return c.done }
+
+func (c *Conn) notify(method string, params any, timeout time.Duration) error {
+	c.writeMu.Lock()
+	defer c.writeMu.Unlock()
+
+	if timeout > 0 {
+		if err := c.conn.SetWriteDeadline(time.Now().Add(timeout)); err != nil {
+			return fmt.Errorf("set push deadline: %w", err)
+		}
+		defer func() { _ = c.conn.SetWriteDeadline(time.Time{}) }()
+	}
+
+	raw, err := json.Marshal(params)
+	if err != nil {
+		return fmt.Errorf("encode %s params: %w", method, err)
+	}
+
+	if err := c.enc.Encode(Notification{JSONRPC: jsonrpcVersion, Method: method, Params: raw}); err != nil {
+		return fmt.Errorf("push %s: %w", method, err)
+	}
+
+	return nil
+}
 
 func (s *Server) handleConn(ctx context.Context, nc net.Conn) error {
 	c := &Conn{conn: nc, enc: json.NewEncoder(nc), done: make(chan struct{})}

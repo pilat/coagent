@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"maps"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -54,6 +55,14 @@ type Service interface {
 	ListRecentProjects(ctx context.Context, root string) ([]RecentProject, error)
 }
 
+// LegacyCLIPreparer claims unambiguous pre-owner local-chat roots before the
+// recovery sweep can construct a root session without durable output ownership.
+//
+//nolint:iface // composition root asserts the preparation capability structurally.
+type LegacyCLIPreparer interface {
+	PrepareLegacyCLIRoots(ctx context.Context) error
+}
+
 type NotificationSource interface {
 	Subscribe(sessionID int64) <-chan sessionevent.Notification
 	SubscribeManager(managerID string) <-chan controllerapi.SessionNotification
@@ -62,6 +71,13 @@ type NotificationSource interface {
 	UnsubscribeManager(ch <-chan controllerapi.SessionNotification)
 	UnsubscribeAll(ch <-chan controllerapi.SessionNotification)
 }
+
+const (
+	stopCommand    = "/stop"
+	clearCommand   = "/clear"
+	killCommand    = "/kill"
+	compactCommand = "/compact"
+)
 
 var (
 	_ Service                = (*svc)(nil)
@@ -109,6 +125,32 @@ type svc struct {
 	childMu    sync.Mutex
 	childCache map[int64]bool
 	ownerCache map[int64]string
+}
+
+// OutputStore exposes the narrow manager-delivery ledger without widening the
+// daemon's general Service interface used by controller fakes.
+func (s *svc) OutputStore() sessionstore.OutputStore {
+	store, _ := s.sessionStore.(sessionstore.OutputStore)
+	return store
+}
+
+func (s *svc) PrepareLegacyCLIRoots(ctx context.Context) error {
+	store, ok := s.sessionStore.(sessionstore.LegacyCLIClaimStore)
+	if !ok {
+		return nil
+	}
+
+	if err := store.ClaimLegacyCLIRoots(
+		ctx,
+		controllerapi.CoagentSystemProjectName,
+		s.systemProject,
+		"cli",
+		controllerapi.BuiltinCLIManagerID,
+	); err != nil {
+		return fmt.Errorf("claim legacy cli roots: %w", err)
+	}
+
+	return nil
 }
 
 // queuedChild is a background child that could not be admitted immediately and
@@ -199,7 +241,8 @@ func (s *svc) Send(ctx context.Context, projectID int64, prompt, model string, a
 }
 
 func (s *svc) SendToSession(ctx context.Context, sessionID int64, prompt string) error {
-	if _, err := s.inboxStore.EnqueueInput(ctx, sessionID, sessionstore.InputSourceUser, prompt); err != nil {
+	input, err := s.inboxStore.EnqueueInput(ctx, sessionID, sessionstore.InputSourceUser, prompt)
+	if err != nil {
 		if errors.Is(err, sessionstore.ErrSessionNotAcceptingInput) {
 			if rec, getErr := s.sessionStore.GetSession(ctx, sessionID); getErr == nil && rec.KilledAt != nil {
 				return fmt.Errorf("session %d is killed", sessionID)
@@ -207,6 +250,10 @@ func (s *svc) SendToSession(ctx context.Context, sessionID int64, prompt string)
 		}
 
 		return fmt.Errorf("persist session input: %w", err)
+	}
+
+	if handled, err := s.handleGenericCommand(ctx, input); handled || err != nil {
+		return err
 	}
 
 	s.mu.Lock()
@@ -230,7 +277,7 @@ func (s *svc) SendToSession(ctx context.Context, sessionID int64, prompt string)
 		return fmt.Errorf("session %d is stopping", sessionID)
 	}
 
-	if rec.Status == sessionstore.SessionStatusStopped {
+	if rec.Status == sessionstore.SessionStatusStopped && !isReadOnlyBoundaryCommand(prompt) {
 		if err := s.sessionStore.UpdateSessionStatus(ctx, sessionID, sessionstore.SessionStatusActive); err != nil {
 			return fmt.Errorf("resume stopped session %d: %w", sessionID, err)
 		}
@@ -256,6 +303,156 @@ func (s *svc) SendToSession(ctx context.Context, sessionID int64, prompt string)
 		}
 
 		return err
+	}
+
+	return nil
+}
+
+func (s *svc) SendToSessionResolved(ctx context.Context, sessionID int64, prompt string) (int64, error) {
+	record, err := s.sessionStore.GetSession(ctx, sessionID)
+	if err != nil {
+		return 0, fmt.Errorf("load session for replacement resolution: %w", err)
+	}
+
+	owner, _ := record.Attributes[controllerapi.SessionAttributeManagerID].(string)
+	if replacements, ok := s.sessionStore.(sessionstore.ReplacementStore); ok {
+		resolved, err := replacements.ResolveReplacement(ctx, sessionID, owner)
+		if err != nil {
+			return 0, fmt.Errorf("resolve replacement session: %w", err)
+		}
+
+		sessionID = resolved
+	}
+
+	if err := s.SendToSession(ctx, sessionID, prompt); err != nil {
+		return 0, err
+	}
+
+	return sessionID, nil
+}
+
+func isReadOnlyBoundaryCommand(content string) bool {
+	content = strings.TrimSpace(content)
+
+	return content == "/status" || content == "/help" || content == "/schedules" ||
+		content == compactCommand || strings.HasPrefix(content, compactCommand+" ")
+}
+
+//nolint:funcorder // Command dispatch remains beside durable input admission and lifecycle fencing.
+func (s *svc) handleGenericCommand(ctx context.Context, input *sessionstore.InboxInput) (bool, error) {
+	if input.Source != sessionstore.InputSourceUser {
+		return false, nil
+	}
+
+	if input.RawContent != stopCommand && input.RawContent != clearCommand && input.RawContent != killCommand {
+		return false, nil
+	}
+
+	switch input.RawContent {
+	case stopCommand:
+		record, err := s.sessionStore.GetSession(ctx, input.SessionID)
+		if err != nil {
+			return true, fmt.Errorf("load stop session: %w", err)
+		}
+
+		if record.Status == sessionstore.SessionStatusStopped {
+			return true, s.handleStoppedStop(ctx, input)
+		}
+
+		if err := s.handleLifecycleInput(ctx, input, "⏹ Stopping..."); err != nil {
+			return true, err
+		}
+
+		return true, s.Stop(ctx, input.SessionID)
+	case clearCommand:
+		if _, err := s.clear(ctx, input.SessionID, input.ID); err != nil {
+			return true, err
+		}
+
+		return true, nil
+	case killCommand:
+		if err := s.handleLifecycleInput(ctx, input, "Stopping session..."); err != nil {
+			return true, err
+		}
+
+		return true, s.Kill(ctx, input.SessionID)
+	default:
+		return false, nil
+	}
+}
+
+//nolint:funcorder // The idempotent stop result is part of the same command dispatcher.
+func (s *svc) handleStoppedStop(ctx context.Context, input *sessionstore.InboxInput) error {
+	content := "Session already stopped."
+
+	if _, owned := input.Attributes[controllerapi.SessionAttributeManagerID].(string); owned {
+		if outputs, ok := s.inboxStore.(sessionstore.CommandOutputStore); ok {
+			_, err := outputs.HandleInputWithOutput(ctx, input.ID, "stop command", sessionstore.OutputDraft{
+				SessionID: input.SessionID,
+				Type:      sessionstore.OutputMessagePersistent,
+				Content:   content,
+				SourceKey: fmt.Sprintf("input:%d:stop:already_stopped", input.ID),
+				Fingerprint: sessionstore.OutputFingerprint(
+					sessionstore.OutputMessagePersistent,
+					content,
+					input.SessionID,
+					nil,
+				),
+			})
+			if err != nil {
+				return fmt.Errorf("handle stopped stop with output: %w", err)
+			}
+
+			return nil
+		}
+	}
+
+	if err := s.inboxStore.HandleInput(ctx, input.ID, "stop command"); err != nil {
+		return fmt.Errorf("handle stopped stop: %w", err)
+	}
+
+	return s.enqueuePersistentOutput(ctx, input.SessionID, content)
+}
+
+//nolint:funcorder // Lifecycle input must stay with the generic dispatcher that invokes it.
+func (s *svc) handleLifecycleInput(ctx context.Context, input *sessionstore.InboxInput, content string) error {
+	command := strings.TrimPrefix(input.RawContent, "/")
+
+	if _, owned := input.Attributes[controllerapi.SessionAttributeManagerID].(string); !owned {
+		if err := s.inboxStore.HandleInput(ctx, input.ID, command); err != nil {
+			return fmt.Errorf("handle lifecycle input: %w", err)
+		}
+
+		return nil
+	}
+
+	outputs, ok := s.inboxStore.(sessionstore.LifecycleCommandStore)
+	if !ok {
+		if err := s.inboxStore.HandleInput(ctx, input.ID, command); err != nil {
+			return fmt.Errorf("handle lifecycle input: %w", err)
+		}
+
+		return s.enqueuePersistentOutput(ctx, input.SessionID, content)
+	}
+
+	if _, err := outputs.BeginLifecycleInput(ctx, input.ID, command, content); err != nil {
+		return fmt.Errorf("start lifecycle input: %w", err)
+	}
+
+	return nil
+}
+
+//nolint:funcorder // Daemon producers share this helper with the adjacent command boundary.
+func (s *svc) enqueuePersistentOutput(ctx context.Context, sessionID int64, content string) error {
+	outputs := s.OutputStore()
+	if outputs == nil {
+		return nil
+	}
+
+	if _, err := outputs.EnqueueOutput(ctx, sessionstore.OutputDraft{
+		SessionID: sessionID, Type: sessionstore.OutputMessagePersistent, Content: content,
+	}); err != nil {
+		return fmt.Errorf("enqueue persistent output: %w", err)
 	}
 
 	return nil
@@ -366,7 +563,11 @@ func (s *svc) Kill(ctx context.Context, sessionID int64) error {
 	// from request-scoped cancellation while keeping logger values.
 	cleanupCtx := context.WithoutCancel(ctx)
 
-	if err := s.sessionStore.MarkSessionKilled(cleanupCtx, sessionID); err != nil {
+	if lifecycle, ok := s.sessionStore.(sessionstore.LifecycleOutputStore); ok {
+		if _, err := lifecycle.MarkSessionKilledWithOutput(cleanupCtx, sessionID); err != nil {
+			return fmt.Errorf("mark session killed with output: %w", err)
+		}
+	} else if err := s.sessionStore.MarkSessionKilled(cleanupCtx, sessionID); err != nil {
 		return fmt.Errorf("mark session killed: %w", err)
 	}
 
@@ -415,7 +616,7 @@ func (s *svc) Stop(ctx context.Context, sessionID int64) error {
 // stopTreeCleanup durably parks a tree without publishing user-command events.
 // Startup recovery uses it to finish an interrupted stop without replaying UI.
 //
-//nolint:funcorder // It stays adjacent to its only public lifecycle entrypoint.
+//nolint:funcorder // The second stop phase belongs beside the public Stop transition.
 func (s *svc) stopTreeCleanup(ctx context.Context, sessionID int64) error {
 	s.treeMu.Lock()
 	cleanupCtx := context.WithoutCancel(ctx)
@@ -501,6 +702,11 @@ func (s *svc) stopTreeCleanup(ctx context.Context, sessionID int64) error {
 }
 
 func (s *svc) Clear(ctx context.Context, sessionID int64) (int64, error) {
+	return s.clear(ctx, sessionID, 0)
+}
+
+//nolint:funcorder // Clear's command variant shares one replacement transaction with Clear.
+func (s *svc) clear(ctx context.Context, sessionID, inputID int64) (int64, error) {
 	log := logger.Ctx(ctx).Named("manager.clear")
 
 	s.routeMu.Lock()
@@ -515,21 +721,37 @@ func (s *svc) Clear(ctx context.Context, sessionID int64) (int64, error) {
 		return 0, fmt.Errorf("session %d is already killed", sessionID)
 	}
 
-	if err := s.sessionStore.UpdateSessionStatus(
-		ctx,
-		sessionID,
-		sessionstore.SessionStatusTerminating,
-	); err != nil {
-		log.Warn("clear_set_terminating_failed", zap.Int64("session_id", sessionID), zap.Error(err))
-	}
-
-	newRec, err := s.sessionStore.CreateSession(ctx, rec.ProjectID, rec.Model, rec.ReasoningLevel, rec.Attributes)
-	if err != nil {
-		return 0, fmt.Errorf("create replacement session: %w", err)
-	}
-
 	workDir, _ := s.store.GetProjectWorkDir(ctx, rec.ProjectID)
 	projectName, _ := s.store.GetProjectName(ctx, rec.ProjectID)
+	owner, _ := rec.Attributes[controllerapi.SessionAttributeManagerID].(string)
+	var newRec *sessionstore.SessionRecord
+
+	//nolint:nestif // Owner-aware replacement is the one boundary that preserves a manager surface.
+	if roots, ok := s.sessionStore.(sessionstore.ManagerRootStore); ok && owner != "" {
+		if inputID > 0 {
+			newRec, _, err = roots.ReplaceManagerRootForInput(ctx, sessionID, inputID, projectName, workDir)
+		} else {
+			newRec, _, err = roots.ReplaceManagerRoot(ctx, sessionID, projectName, workDir)
+		}
+
+		if err != nil {
+			return 0, fmt.Errorf("replace manager session: %w", err)
+		}
+	} else {
+		if err := s.sessionStore.UpdateSessionStatus(
+			ctx,
+			sessionID,
+			sessionstore.SessionStatusTerminating,
+		); err != nil {
+			log.Warn("clear_set_terminating_failed", zap.Int64("session_id", sessionID), zap.Error(err))
+		}
+
+		newRec, err = s.sessionStore.CreateSession(ctx, rec.ProjectID, rec.Model, rec.ReasoningLevel, rec.Attributes)
+		if err != nil {
+			return 0, fmt.Errorf("create replacement session: %w", err)
+		}
+	}
+
 	name := fmt.Sprintf("%s - %d", projectName, newRec.ID)
 	s.publish(sessionID, sessionevent.Notification{
 		Type:         sessionevent.NotifySessionCleared,
@@ -894,12 +1116,33 @@ func (s *svc) send(
 		return 0, fmt.Errorf("resolve reasoning level for model %s: %w", model, err)
 	}
 
-	rec, err := s.sessionStore.CreateSession(ctx, projectID, model, level, attrs)
-	if err != nil {
-		return 0, fmt.Errorf("create session record: %w", err)
+	owner, _ := attrs[controllerapi.SessionAttributeManagerID].(string)
+	var rec *sessionstore.SessionRecord
+	createdWithInput := false
+
+	if roots, ok := s.sessionStore.(sessionstore.ManagerRootStore); ok && owner != "" {
+		projectName, nameErr := s.store.GetProjectName(ctx, projectID)
+		if nameErr != nil {
+			return 0, fmt.Errorf("resolve project name: %w", nameErr)
+		}
+
+		rec, _, err = roots.CreateManagerRoot(ctx, sessionstore.ManagerRootCreate{
+			ProjectID: projectID, Model: model, ReasoningLevel: level, Attributes: attrs,
+			Prompt: prompt, Name: projectName, WorkDir: workDir,
+		})
+		if err != nil {
+			return 0, fmt.Errorf("create manager session record: %w", err)
+		}
+
+		createdWithInput = prompt != ""
+	} else {
+		rec, err = s.sessionStore.CreateSession(ctx, projectID, model, level, attrs)
+		if err != nil {
+			return 0, fmt.Errorf("create session record: %w", err)
+		}
 	}
 
-	if prompt != "" {
+	if prompt != "" && !createdWithInput {
 		if _, err := s.inboxStore.EnqueueInput(ctx, rec.ID, sessionstore.InputSourceUser, prompt); err != nil {
 			return 0, fmt.Errorf("persist initial session input: %w", err)
 		}

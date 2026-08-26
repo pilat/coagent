@@ -48,7 +48,7 @@ func (s *svc) finalizeChild(ctx context.Context, childID int64, shuttingDown, er
 	if err != nil {
 		logger.Ctx(ctx).Named("daemon.completion").
 			Error("finalize_get_session", zap.Int64("child", childID), zap.Error(err))
-		s.notifyChildFailure(link.ParentID, childID, "could not be finalized", err)
+		s.notifyChildFailure(ctx, link.ParentID, childID, "could not be finalized", err)
 
 		return
 	}
@@ -78,7 +78,7 @@ func (s *svc) finalizeChild(ctx context.Context, childID int64, shuttingDown, er
 		logger.Ctx(ctx).
 			Named("daemon.completion").
 			Error("mark_link_terminal", zap.Int64("child", childID), zap.Error(err))
-		s.notifyChildFailure(link.ParentID, childID, "completion could not be recorded", err)
+		s.notifyChildFailure(ctx, link.ParentID, childID, "completion could not be recorded", err)
 
 		return
 	}
@@ -352,6 +352,46 @@ func (s *svc) injectOwedCompletions(
 	return nil
 }
 
+// finishInterruptedKills completes a /kill or /clear whose process died
+// between the durable terminating fence and the final transition: the store
+// kills the root (emitting its close output when no replacement took over),
+// then the same tree cleanup as a live Kill reruns idempotently.
+func (s *svc) finishInterruptedKills(ctx context.Context) error {
+	records, err := s.sessionStore.ListAllSessions(ctx)
+	if err != nil {
+		return fmt.Errorf("list sessions for kill recovery: %w", err)
+	}
+
+	interrupted := make([]int64, 0)
+
+	for _, rec := range records {
+		if rec.Status == sessionstore.SessionStatusTerminating && rec.KilledAt == nil {
+			interrupted = append(interrupted, rec.ID)
+		}
+	}
+
+	if len(interrupted) == 0 {
+		return nil
+	}
+
+	if err := s.sessionStore.KillTerminatingSessions(ctx); err != nil {
+		return fmt.Errorf("kill terminating sessions: %w", err)
+	}
+
+	cleanupCtx := context.WithoutCancel(ctx)
+
+	for _, id := range interrupted {
+		if _, err := s.inboxStore.CancelPendingInputs(cleanupCtx, []int64{id}, "killed"); err != nil {
+			return fmt.Errorf("cancel killed session input %d: %w", id, err)
+		}
+
+		s.removeSchedules(cleanupCtx, id)
+		s.cascadeKillChildren(cleanupCtx, id, 0, time.Now().Add(cascadeRetryBudget))
+	}
+
+	return nil
+}
+
 // completionContent formats a terminal child's stored result + outcome for the
 // parent, via the shared formatter so it matches get_subagent_result verbatim.
 func (s *svc) completionContent(ctx context.Context, link SubagentLink) string {
@@ -373,10 +413,10 @@ func (s *svc) completionContent(ctx context.Context, link SubagentLink) string {
 // Start re-establishes in-flight children and re-delivers undelivered completions
 // after a restart. Only PASS 0 blocks; the resumes run asynchronously.
 func (s *svc) Start(ctx context.Context) error {
-	// Must precede the sweep: a session left mid-clear by the previous run would
-	// otherwise be resumed in that half-torn state.
-	if err := s.sessionStore.KillTerminatingSessions(ctx); err != nil {
-		logger.Ctx(ctx).Named("daemon.manager").Warn("kill_terminating_sessions_failed", zap.Error(err))
+	// Must precede the sweep: a session left mid-clear or mid-kill by the previous
+	// run would otherwise be resumed in that half-torn state.
+	if err := s.finishInterruptedKills(ctx); err != nil {
+		logger.Ctx(ctx).Named("daemon.manager").Warn("finish_interrupted_kills_failed", zap.Error(err))
 	}
 
 	// /stop is a durable two-phase park. If the process died after writing
