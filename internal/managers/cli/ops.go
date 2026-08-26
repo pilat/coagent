@@ -25,10 +25,13 @@ const (
 type (
 	// Event is one line of chat output pushed to every attached terminal.
 	Event struct {
-		SessionID int64  `json:"session_id"`
-		Type      string `json:"type"`
-		Message   string `json:"message,omitempty"`
-		Status    string `json:"status,omitempty"`
+		SessionID     int64  `json:"session_id"`
+		OldSessionID  int64  `json:"old_session_id,omitempty"`
+		Generation    int64  `json:"generation,omitempty"`
+		AfterOutputID int64  `json:"after_output_id,omitempty"`
+		Type          string `json:"type"`
+		Message       string `json:"message,omitempty"`
+		Status        string `json:"status,omitempty"`
 	}
 
 	// SecretRequest asks the terminal for one credential. The value never comes
@@ -51,8 +54,9 @@ type (
 	// OpenResult answers chat_open. A zero session id means the conversation has
 	// not started yet: the first message creates it.
 	OpenResult struct {
-		SessionID int64  `json:"session_id"`
-		WorkDir   string `json:"work_dir"`
+		SessionID  int64  `json:"session_id"`
+		Generation int64  `json:"generation,omitempty"`
+		WorkDir    string `json:"work_dir"`
 	}
 
 	// SendParams is one message from a terminal. A zero session id asks for the
@@ -66,7 +70,8 @@ type (
 	// SendResult reports which session took the message, so a client that opened
 	// on nothing learns the id it now belongs to.
 	SendResult struct {
-		SessionID int64 `json:"session_id"`
+		SessionID  int64 `json:"session_id"`
+		Generation int64 `json:"generation,omitempty"`
 	}
 
 	// SessionParams names the session an op acts on.
@@ -135,11 +140,14 @@ func (m *Manager) stopHandler() ctl.Handler {
 			return nil, &ctl.Error{Code: ctl.CodeInvalidParams, Message: err.Error()}
 		}
 
-		if err := m.controller.StopSession(ctx, controllerapi.SessionStopData{SessionID: p.SessionID}); err != nil {
+		acceptedID, err := m.deliver(ctx, p.SessionID, "/stop")
+		if err != nil {
 			return nil, &ctl.Error{Code: ctl.CodeInternal, Message: err.Error()}
 		}
 
-		return SendResult(p), nil
+		_, generation := m.lifecycle()
+
+		return SendResult{SessionID: acceptedID, Generation: generation}, nil
 	}
 }
 
@@ -156,6 +164,13 @@ func registerHandler(server *ctl.Server, op string, handler ctl.Handler) error {
 // continues, it does not restart because the last answer happened to be an error.
 func (m *Manager) open(ctx context.Context, c *ctl.Conn) (OpenResult, error) {
 	t := m.attach(c)
+	if m.delivery != nil {
+		if queue, ok := m.controller.(controllerapi.OutputQueueController); ok {
+			_ = queue.WakeOutput(ctx)
+		}
+
+		m.delivery.Wake()
+	}
 
 	sessionID, err := m.resumeLatest(ctx)
 	if err != nil {
@@ -169,10 +184,14 @@ func (m *Manager) open(ctx context.Context, c *ctl.Conn) (OpenResult, error) {
 	workDir := m.workDir
 	m.mu.Unlock()
 
-	return OpenResult{SessionID: sessionID, WorkDir: workDir}, nil
+	_, generation := m.lifecycle()
+
+	return OpenResult{SessionID: sessionID, Generation: generation, WorkDir: workDir}, nil
 }
 
 // send routes one normal message through the controller's durable input path.
+//
+//nolint:wsl_v5 // Closed-ID normalization precedes the existing owned-session admission path.
 func (m *Manager) send(ctx context.Context, c *ctl.Conn, p SendParams) (SendResult, error) {
 	if strings.TrimSpace(p.Text) == "" {
 		return SendResult{}, errors.New("nothing to send")
@@ -187,9 +206,15 @@ func (m *Manager) send(ctx context.Context, c *ctl.Conn, p SendParams) (SendResu
 	defer m.createMu.Unlock()
 
 	sessionID := p.SessionID
-	if sessionID != 0 {
-		if err := m.requireOwnedSession(sessionID); err != nil {
-			return SendResult{}, err
+	if sessionID != 0 && m.closedSession(sessionID) {
+		sessionID = 0
+	}
+	if sessionID != 0 && !m.ownsSession(sessionID) {
+		// The replacement aliases are a delivery cache, not the authority:
+		// until the lifecycle push lands, only the controller knows where an
+		// old ID resolves, and it fails closed for foreign owners itself.
+		if _, routed := m.controller.(controllerapi.SessionMessageRouter); !routed {
+			return SendResult{}, fmt.Errorf("session %d is not owned by the local chat", sessionID)
 		}
 	}
 
@@ -213,34 +238,44 @@ func (m *Manager) send(ctx context.Context, c *ctl.Conn, p SendParams) (SendResu
 		}
 	}
 
-	if err := m.deliver(ctx, sessionID, p.Text); err != nil {
+	_, generation := m.lifecycle()
+
+	acceptedID, err := m.deliver(ctx, sessionID, p.Text)
+	if err != nil {
 		return SendResult{}, err
 	}
 
-	return SendResult{SessionID: sessionID}, nil
+	m.adoptIfUnchanged(acceptedID, generation)
+
+	_, generation = m.lifecycle()
+
+	return SendResult{SessionID: acceptedID, Generation: generation}, nil
 }
 
 func (m *Manager) requireOwnedSession(sessionID int64) error {
-	m.mu.Lock()
-	ownedID := m.sessionID
-	m.mu.Unlock()
-
-	if sessionID == 0 || sessionID != ownedID {
+	if !m.ownsSession(sessionID) {
 		return fmt.Errorf("session %d is not owned by the local chat", sessionID)
 	}
 
 	return nil
 }
 
-func (m *Manager) deliver(ctx context.Context, sessionID int64, text string) error {
-	if err := m.controller.SendSessionMessage(
-		ctx,
-		controllerapi.SessionMessageData{SessionID: sessionID, Message: text},
-	); err != nil {
-		return fmt.Errorf("send session message: %w", err)
+func (m *Manager) deliver(ctx context.Context, sessionID int64, text string) (int64, error) {
+	data := controllerapi.SessionMessageData{SessionID: sessionID, Message: text}
+	if router, ok := m.controller.(controllerapi.SessionMessageRouter); ok {
+		acceptedID, err := router.SendSessionMessageResolved(ctx, data)
+		if err != nil {
+			return 0, fmt.Errorf("send resolved session message: %w", err)
+		}
+
+		return acceptedID, nil
 	}
 
-	return nil
+	if err := m.controller.SendSessionMessage(ctx, data); err != nil {
+		return 0, fmt.Errorf("send session message: %w", err)
+	}
+
+	return sessionID, nil
 }
 
 func (m *Manager) create(ctx context.Context, prompt, model string) (SendResult, error) {
@@ -265,7 +300,9 @@ func (m *Manager) create(ctx context.Context, prompt, model string) (SendResult,
 
 	m.adopt(id)
 
-	return SendResult{SessionID: id}, nil
+	_, generation := m.lifecycle()
+
+	return SendResult{SessionID: id, Generation: generation}, nil
 }
 
 // resumeLatest finds the chat project's most recent live session, or 0 when

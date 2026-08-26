@@ -8,6 +8,7 @@ import (
 
 	"github.com/pilat/coagent/internal/controllerapi"
 	"github.com/pilat/coagent/internal/ctl"
+	"github.com/pilat/coagent/internal/managerdelivery"
 	"github.com/pilat/coagent/internal/sessionevent"
 )
 
@@ -56,14 +57,18 @@ type Manager struct {
 	// the fields themselves.
 	createMu sync.Mutex
 
-	mu        sync.Mutex
-	projectID int64
-	workDir   string
-	sessionID int64
-	clients   []*terminal
-	pending   []controllerapi.SessionNotification
+	mu           sync.Mutex
+	projectID    int64
+	workDir      string
+	sessionID    int64
+	generation   int64
+	replacements map[int64]int64
+	closed       map[int64]struct{}
+	clients      []*terminal
+	pending      []controllerapi.SessionNotification
 
 	subscription <-chan controllerapi.SessionNotification
+	delivery     managerdelivery.Worker
 	adopted      chan struct{}
 	cancel       context.CancelFunc
 	done         chan struct{}
@@ -77,11 +82,13 @@ func New(
 	secrets SecretRequests,
 ) *Manager {
 	return &Manager{
-		controller: controller,
-		server:     server,
-		model:      model,
-		secrets:    secrets,
-		adopted:    make(chan struct{}, 1),
+		controller:   controller,
+		server:       server,
+		model:        model,
+		secrets:      secrets,
+		adopted:      make(chan struct{}, 1),
+		replacements: make(map[int64]int64),
+		closed:       make(map[int64]struct{}),
 	}
 }
 
@@ -121,6 +128,18 @@ func (m *Manager) Start(ctx context.Context) error {
 	m.mu.Unlock()
 
 	m.subscription = m.controller.Subscribe()
+	if queue, ok := m.controller.(controllerapi.OutputQueueController); ok {
+		if err := queue.BindOutputDelivery(runCtx, controllerapi.OutputBindingData{
+			Driver: "cli", Attributes: map[string]any{"local": true},
+		}); err != nil {
+			cancel()
+			return fmt.Errorf("bind durable output delivery: %w", err)
+		}
+		var deliveryQueue managerdelivery.Queue = newOutputQueue(queue)
+		var transport managerdelivery.Transport = &outputTransport{manager: m}
+		m.delivery = managerdelivery.New(deliveryQueue, transport)
+		m.delivery.Start(runCtx)
+	}
 
 	go func() {
 		defer close(done)
@@ -154,6 +173,12 @@ func (m *Manager) Alive() bool {
 func (m *Manager) Stop(ctx context.Context) error {
 	if m.cancel != nil {
 		m.cancel()
+	}
+
+	if m.delivery != nil {
+		if err := m.delivery.Stop(ctx); err != nil {
+			return fmt.Errorf("stop cli output delivery: %w", err)
+		}
 	}
 
 	if m.subscription != nil {
@@ -191,7 +216,29 @@ func (m *Manager) forward(ctx context.Context) {
 	}
 }
 
+// publish treats observer events as hints only: ordinary output is rendered
+// from the durable outbox, so a notification at most wakes the worker. Only
+// the ephemeral channel — heartbeat and the masked-prompt protocol — reaches
+// terminals directly.
 func (m *Manager) publish(sn controllerapi.SessionNotification) {
+	switch sn.Notification.Type {
+	case sessionevent.NotifySessionCreated,
+		sessionevent.NotifySessionCleared,
+		sessionevent.NotifyMessage,
+		sessionevent.NotifyWaiting,
+		sessionevent.NotifyInputReceived:
+		m.wakeDelivery()
+
+		return
+	case sessionevent.NotifyStateChanged:
+		if sn.Notification.Reason == "killed" {
+			m.wakeDelivery()
+		}
+
+		return
+	case sessionevent.NotifyHeartbeat, sessionevent.NotifySecretRequest, sessionevent.NotifySecretResolved:
+	}
+
 	m.mu.Lock()
 
 	// An event published before the chat session id came back is held, not
@@ -207,6 +254,12 @@ func (m *Manager) publish(sn controllerapi.SessionNotification) {
 	m.mu.Unlock()
 
 	m.fanOut(clients, sessionID, append(held, sn))
+}
+
+func (m *Manager) wakeDelivery() {
+	if m.delivery != nil {
+		m.delivery.Wake()
+	}
 }
 
 // adopt records which session the chat is on and wakes the forwarder to release
@@ -225,6 +278,97 @@ func (m *Manager) adopt(sessionID int64) {
 	case m.adopted <- struct{}{}:
 	default:
 	}
+}
+
+func (m *Manager) currentSession() int64 {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	return m.sessionID
+}
+
+// adoptIfUnchanged applies a send-response session only when no lifecycle push
+// landed while the send was in flight: an unversioned assignment must never
+// overwrite a newer lifecycle projection.
+func (m *Manager) adoptIfUnchanged(sessionID, generation int64) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if generation != m.generation {
+		return
+	}
+
+	m.sessionID = sessionID
+}
+
+//nolint:wsl_v5 // Lifecycle aliases update one synchronized projection in ordered steps.
+func (m *Manager) adoptLifecycle(oldSessionID, sessionID, generation int64) {
+	m.mu.Lock()
+	if generation < m.generation {
+		m.mu.Unlock()
+		return
+	}
+
+	if oldSessionID != 0 && sessionID != 0 {
+		if m.replacements == nil {
+			m.replacements = make(map[int64]int64)
+		}
+
+		m.replacements[oldSessionID] = sessionID
+	}
+	if oldSessionID != 0 && sessionID == 0 {
+		if m.closed == nil {
+			m.closed = make(map[int64]struct{})
+		}
+		m.closed[oldSessionID] = struct{}{}
+	}
+
+	m.generation = generation
+	m.sessionID = sessionID
+	waiting := len(m.pending) > 0
+	m.mu.Unlock()
+
+	if sessionID == 0 || !waiting {
+		return
+	}
+
+	select {
+	case m.adopted <- struct{}{}:
+	default:
+	}
+}
+
+func (m *Manager) lifecycle() (int64, int64) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	return m.sessionID, m.generation
+}
+
+func (m *Manager) ownsSession(sessionID int64) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if sessionID == 0 {
+		return false
+	}
+
+	if sessionID == m.sessionID {
+		return true
+	}
+
+	_, ok := m.replacements[sessionID]
+
+	return ok
+}
+
+func (m *Manager) closedSession(sessionID int64) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	_, closed := m.closed[sessionID]
+
+	return closed
 }
 
 // flush releases held events when no further one is coming to carry them out.
@@ -273,9 +417,10 @@ func render(sn controllerapi.SessionNotification) (string, any) {
 	}
 
 	return EventMethod, Event{
-		SessionID: sn.SessionID,
-		Type:      string(sn.Notification.Type),
-		Message:   sn.Notification.Message,
-		Status:    string(sn.Notification.Status),
+		SessionID:     sn.SessionID,
+		Type:          string(sn.Notification.Type),
+		Message:       sn.Notification.Message,
+		Status:        string(sn.Notification.Status),
+		AfterOutputID: sn.Notification.AfterOutputID,
 	}
 }

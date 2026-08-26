@@ -69,8 +69,8 @@ func TestSlashCompact_RaisesTheFlagAndCompactsAtTheLoopPoint(t *testing.T) {
 	outcome, err := r.handleBoundaryCommand(t.Context(), *b.input)
 	require.NoError(t, err)
 
-	assert.Equal(t, commandConsumed, outcome)
-	assert.Nil(t, b.input, "the command is taken off the durable queue")
+	assert.Equal(t, commandDeferred, outcome)
+	assert.NotNil(t, b.input, "the request remains pending until its terminal outcome")
 	assert.True(t, s.compactionRequested())
 	assert.Zero(t, llm.callCount, "nothing is summarized from the command handler")
 
@@ -199,7 +199,7 @@ func TestSlashCompact_InterruptsSleepInsteadOfDeferring(t *testing.T) {
 	outcome, err := r.handleBoundaryCommand(t.Context(), *b.input)
 	require.NoError(t, err)
 
-	assert.Equal(t, commandConsumed, outcome)
+	assert.Equal(t, commandDeferred, outcome)
 	assert.True(t, s.compactionRequested())
 	assert.False(t, s.HasPendingExternalCall(), "the sleep was resolved, not left hanging")
 	assert.Zero(t, countNotes(notes, compactionDeferredNotice))

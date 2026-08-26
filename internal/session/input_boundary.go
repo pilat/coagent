@@ -10,6 +10,7 @@ import (
 type PendingInput struct {
 	ID         int64
 	Content    string
+	Attributes map[string]any
 	ReceivedAt time.Time
 }
 

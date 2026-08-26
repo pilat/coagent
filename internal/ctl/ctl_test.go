@@ -15,6 +15,7 @@ import (
 
 	"github.com/pilat/coagent/internal/coagenthome"
 	"github.com/pilat/coagent/internal/config"
+	"github.com/pilat/coagent/internal/controllerapi"
 )
 
 const testVersion = "0.4.2"
@@ -58,6 +59,23 @@ type harness struct {
 	socket   string
 	server   *Server
 	managers *fakeManagers
+	delivery *fakeDeliveryStatus
+}
+
+type fakeDeliveryStatus struct {
+	values map[string]controllerapi.OutputQueueStatusData
+	owners []string
+}
+
+func (f fakeDeliveryStatus) UnresolvedOutputOwners(context.Context) ([]string, error) {
+	return f.owners, nil
+}
+
+func (f fakeDeliveryStatus) OutputQueueStatus(
+	_ context.Context,
+	id string,
+) (controllerapi.OutputQueueStatusData, error) {
+	return f.values[id], nil
 }
 
 func newHarness(t *testing.T, cfg *config.Config) *harness {
@@ -68,12 +86,14 @@ func newHarnessWithRegistration(t *testing.T, cfg *config.Config, register func(
 	t.Helper()
 
 	mgrs := &fakeManagers{}
-	h := &harness{socket: socketPath(t), managers: mgrs}
+	delivery := &fakeDeliveryStatus{}
+	h := &harness{socket: socketPath(t), managers: mgrs, delivery: delivery}
 
 	srv, err := NewServer(context.Background(), h.socket, testVersion, Deps{
 		Config:     cfg,
 		ConfigPath: testConfigPath,
 		Managers:   mgrs,
+		Delivery:   delivery,
 	})
 	require.NoError(t, err)
 
@@ -191,6 +211,9 @@ func TestStatus_WithConfig(t *testing.T) {
 	h := newHarness(t, cfg)
 	h.managers.running = []string{"tg"}
 	h.managers.fail("tg-down", errors.New("ensure service topic: unauthorized"))
+	h.delivery.values = map[string]controllerapi.OutputQueueStatusData{
+		"tg": {Pending: 2, BlockedID: 7, BlockedForSec: 9, DeliveryError: "permission denied"},
+	}
 
 	c := h.dial(t)
 
@@ -208,7 +231,10 @@ func TestStatus_WithConfig(t *testing.T) {
 	}, st.Providers)
 
 	require.Len(t, st.Managers, 2)
-	assert.Equal(t, ManagerStatus{ID: "tg", Driver: "telegram", Enabled: true, Running: true}, st.Managers[0])
+	assert.Equal(t, ManagerStatus{
+		ID: "tg", Driver: "telegram", Enabled: true, Running: true,
+		PendingOutputs: 2, BlockedOutputID: 7, BlockedForSeconds: 9, DeliveryError: "permission denied",
+	}, st.Managers[0])
 	assert.Equal(t, "tg-down", st.Managers[1].ID)
 	assert.False(t, st.Managers[1].Running)
 	assert.Contains(t, st.Managers[1].Error, "unauthorized")

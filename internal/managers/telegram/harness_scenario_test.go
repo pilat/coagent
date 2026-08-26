@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"flag"
 	"io"
-	"maps"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -81,36 +80,6 @@ type telegramHarnessCall struct {
 	ParseMode string `json:"parse_mode,omitempty"`
 }
 
-func TestHarnessScenario_DaemonTraceRendersExactlyOnceInTelegram(t *testing.T) {
-	names := daemonTraceNames(t)
-
-	got := telegramRenderedFile{}
-	for _, name := range names {
-		trace := readDaemonTrace(t, name)
-		got.Scenarios = append(got.Scenarios, telegramRenderedScenario{
-			Trace:      name,
-			SourceTest: trace.SourceTest,
-			Calls:      replayDaemonTrace(t, trace),
-		})
-	}
-
-	if *updateHarnessTraces {
-		writeRenderedGolden(t, got)
-
-		return
-	}
-
-	want := readRenderedGolden(t)
-	require.Len(t, got.Scenarios, len(want.Scenarios),
-		"every recorded daemon trace must have a rendered golden; regenerate with -update-traces")
-
-	for i, scenario := range got.Scenarios {
-		t.Run(scenario.Trace, func(t *testing.T) {
-			assert.Equal(t, want.Scenarios[i], scenario, "Telegram traffic rendered from the daemon trace")
-		})
-	}
-}
-
 // This is the exact reported cross-manager leak: a local CLI conversation is
 // visible on the global notification subscription, but it must produce no
 // Telegram traffic — neither a topic nor the model's answer.
@@ -159,90 +128,6 @@ func TestHarnessScenario_BotForumGeneralGuidesWithoutCreatingSession(t *testing.
 	assert.Empty(t, controller.createSessionCalls)
 }
 
-func TestHarnessScenario_TelegramManagersRenderOnlyTheirOwnConversation(t *testing.T) {
-	var primaryCalls, secondaryCalls []telegramHarnessCall
-	primary := newTelegramHarnessManager(t, &fakeController{}, &primaryCalls)
-	secondary := newTelegramHarnessManager(t, &fakeController{}, &secondaryCalls)
-	secondary.id = "telegram-secondary"
-	secondary.cfg.ID = "telegram-secondary"
-
-	created := controllerapi.SessionNotification{
-		SessionID: harnessSessionID,
-		Notification: sessionevent.Notification{
-			Type:       sessionevent.NotifySessionCreated,
-			Name:       "project - 42",
-			WorkDir:    "/tmp/project",
-			Attributes: map[string]any{controllerapi.SessionAttributeManagerID: "telegram-main"},
-		},
-	}
-	answer := controllerapi.SessionNotification{
-		SessionID: harnessSessionID,
-		Notification: sessionevent.Notification{
-			Type: sessionevent.NotifyMessage, Message: "✅ private answer",
-		},
-	}
-
-	primary.handleNotification(t.Context(), created)
-	secondary.handleNotification(t.Context(), created)
-	primary.handleNotification(t.Context(), answer)
-	secondary.handleNotification(t.Context(), answer)
-
-	require.Len(t, primaryCalls, 2)
-	assert.Equal(t, "createForumTopic", primaryCalls[0].Method)
-	assert.Equal(t, "✅ private answer", primaryCalls[1].Text)
-	assert.Empty(t, secondaryCalls)
-}
-
-// CLI-owned config-apply traces must produce no Telegram traffic.
-// This non-golden guard prevents regenerating a hidden ownership regression.
-func TestHarnessScenario_SetManagerTracesProduceNoTelegramTraffic(t *testing.T) {
-	for _, name := range []string{
-		"set_manager_patch_restart.json",
-		"set_manager_reapply_restart.json",
-	} {
-		t.Run(name, func(t *testing.T) {
-			trace := readDaemonTrace(t, name)
-			calls := replayDaemonTrace(t, trace)
-			assert.Empty(t, calls, "a CLI-owned trace must produce no Telegram traffic")
-		})
-	}
-}
-
-// replayDaemonTrace feeds one recorded trace through the production notification
-// handler and returns the resulting Telegram API traffic.
-func replayDaemonTrace(t *testing.T, trace harnessTraceFile) []telegramHarnessCall {
-	t.Helper()
-
-	var calls []telegramHarnessCall
-	attributes := map[int64]map[string]any{
-		harnessSessionID: {controllerapi.SessionAttributeManagerID: "telegram-main"},
-	}
-	controller := &fakeController{setAttrsHook: func(data controllerapi.SessionSetAttributesData) {
-		attributes[data.SessionID] = roundTripAttributes(t, data.Attributes)
-	}}
-	manager := newTelegramHarnessManager(t, controller, &calls)
-
-	for _, event := range trace.Trace {
-		n := harnessNotification(t, event)
-		if n.Type == sessionevent.NotifySessionCreated && len(n.Attributes) > 0 {
-			attrs := maps.Clone(attributes[harnessSessionID])
-			maps.Copy(attrs, n.Attributes)
-			attributes[harnessSessionID] = roundTripAttributes(t, attrs)
-		}
-		if n.Type == sessionevent.NotifySessionCreated || n.Type == sessionevent.NotifySessionCleared {
-			n.Attributes = attributes[harnessSessionID]
-		}
-		require.NoError(t, n.Validate(), "recorded daemon notification must satisfy the union contract")
-		manager.handleNotification(t.Context(), controllerapi.SessionNotification{
-			SessionID: harnessSessionID, Notification: n,
-		})
-	}
-
-	return calls
-}
-
-// harnessNotification rebuilds a notification from its recorded form. Ids and wake
-// times were normalized on the daemon side; only their shape has to survive.
 func harnessNotification(t *testing.T, event harnessTraceEvent) sessionevent.Notification {
 	t.Helper()
 
@@ -270,20 +155,6 @@ func harnessNotification(t *testing.T, event harnessTraceEvent) sessionevent.Not
 	}
 
 	return n
-}
-
-// roundTripAttributes mimics the daemon storing attributes as JSON and echoing
-// them back on the next announcement: numbers come back as float64.
-func roundTripAttributes(t *testing.T, attrs map[string]any) map[string]any {
-	t.Helper()
-
-	data, err := json.Marshal(attrs)
-	require.NoError(t, err)
-
-	var out map[string]any
-	require.NoError(t, json.Unmarshal(data, &out))
-
-	return out
 }
 
 func daemonTraceNames(t *testing.T) []string {

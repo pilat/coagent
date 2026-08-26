@@ -3,7 +3,6 @@ package telegram
 import (
 	"context"
 	"crypto/sha256"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -19,7 +18,6 @@ import (
 	"github.com/pilat/coagent/internal/coagenthome"
 	"github.com/pilat/coagent/internal/config"
 	"github.com/pilat/coagent/internal/controllerapi"
-	"github.com/pilat/coagent/internal/sessionevent"
 )
 
 type roundTripFunc func(req *http.Request) (*http.Response, error)
@@ -29,14 +27,10 @@ func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
 }
 
 type fakeController struct {
-	lastSetAttrs  controllerapi.SessionSetAttributesData
-	listSessions  []controllerapi.SessionInfo
-	listSkills    []controllerapi.ConfigSkillInfo
-	listSchedules []controllerapi.ScheduleInfo
-	scheduleCalls []controllerapi.ScheduleListData
-	killCalls     []int64
-	stopCalls     []int64
-	messageCalls  []controllerapi.SessionMessageData
+	lastSetAttrs controllerapi.SessionSetAttributesData
+	listSessions []controllerapi.SessionInfo
+	listSkills   []controllerapi.ConfigSkillInfo
+	messageCalls []controllerapi.SessionMessageData
 
 	createSessionCalls  []controllerapi.SessionCreateData
 	createProjectCalls  []controllerapi.ProjectCreateData
@@ -87,20 +81,6 @@ func (f *fakeController) ListSessions(context.Context) ([]controllerapi.SessionI
 	return f.listSessions, nil
 }
 
-func (f *fakeController) KillSession(_ context.Context, data controllerapi.SessionKillData) error {
-	f.killCalls = append(f.killCalls, data.SessionID)
-	return nil
-}
-
-func (f *fakeController) StopSession(_ context.Context, data controllerapi.SessionStopData) error {
-	f.stopCalls = append(f.stopCalls, data.SessionID)
-	return nil
-}
-
-func (f *fakeController) ClearSession(context.Context, controllerapi.SessionClearData) (int64, error) {
-	return 0, nil
-}
-
 func (f *fakeController) SendSessionMessage(_ context.Context, data controllerapi.SessionMessageData) error {
 	f.messageCalls = append(f.messageCalls, data)
 	return nil
@@ -139,14 +119,6 @@ func (f *fakeController) ListSkills(
 	return &controllerapi.ConfigSkillsResultData{Skills: f.listSkills}, nil
 }
 
-func (f *fakeController) ListSchedules(
-	_ context.Context,
-	data controllerapi.ScheduleListData,
-) (*controllerapi.ScheduleListResultData, error) {
-	f.scheduleCalls = append(f.scheduleCalls, data)
-	return &controllerapi.ScheduleListResultData{Schedules: f.listSchedules}, nil
-}
-
 func (f *fakeController) Subscribe() <-chan controllerapi.SessionNotification {
 	ch := make(chan controllerapi.SessionNotification)
 	close(ch)
@@ -154,146 +126,6 @@ func (f *fakeController) Subscribe() <-chan controllerapi.SessionNotification {
 }
 
 func (f *fakeController) Unsubscribe(ch <-chan controllerapi.SessionNotification) {}
-
-func TestHandleNotification_SessionClearedRemapsTopic(t *testing.T) {
-	enabled := true
-	ctrl := &fakeController{}
-
-	m := &Manager{
-		id: "telegram-main",
-		cfg: config.ManagerEntry{
-			ID:               "telegram-main",
-			Enabled:          &enabled,
-			BotToken:         "token",
-			TargetChatID:     targetID(-100123),
-			SendChunkDelayMS: 0,
-			PollTimeoutSec:   30,
-		},
-		controller:     ctrl,
-		httpClient:     &http.Client{Transport: roundTripFunc(okTelegramRoundTrip)},
-		navPaths:       map[int64]string{},
-		pathToNav:      map[string]int64{},
-		sessionToTopic: map[int64]int64{},
-		topicToSession: map[int64]int64{},
-		workDirs:       map[int64]string{},
-	}
-
-	m.registerTopic(1, 5001)
-	m.setWorkDir(1, "/tmp/old")
-
-	m.handleNotification(context.Background(), controllerapi.SessionNotification{
-		SessionID: 1,
-		Notification: sessionevent.Notification{
-			Type:         sessionevent.NotifySessionCleared,
-			OldSessionID: 1,
-			NewSessionID: 2,
-			WorkDir:      "/tmp/new",
-			Attributes:   map[string]any{"language": "ru"},
-		},
-	})
-
-	_, oldExists := m.getTopicBySessionID(1)
-	newTopic, newExists := m.getTopicBySessionID(2)
-	assert.False(t, oldExists)
-	require.True(t, newExists)
-	assert.Equal(t, int64(5001), newTopic)
-	assert.Equal(t, int64(2), ctrl.lastSetAttrs.SessionID)
-	assert.Equal(t, int64(5001), ctrl.lastSetAttrs.Attributes["telegram_topic_id"])
-	assert.Equal(t, "ru", ctrl.lastSetAttrs.Attributes["language"], "binding must preserve unrelated attributes")
-}
-
-func TestCreateTopicForSessionPersistsBeforeCaching(t *testing.T) {
-	ctrl := &fakeController{}
-	var manager *Manager
-	var mappedDuringPersist bool
-	ctrl.setAttrsHook = func(data controllerapi.SessionSetAttributesData) {
-		_, mappedDuringPersist = manager.getTopicBySessionID(data.SessionID)
-	}
-
-	manager = &Manager{
-		cfg:        config.ManagerEntry{BotToken: "token", TargetChatID: targetID(-100123)},
-		controller: ctrl,
-		httpClient: &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
-			return telegramResponse(req, `{"ok":true,"result":{"message_thread_id":7001}}`), nil
-		})},
-		sessionToTopic: map[int64]int64{},
-		topicToSession: map[int64]int64{},
-		workDirs:       map[int64]string{},
-	}
-
-	topicID, err := manager.createTopicForSession(
-		context.Background(),
-		41,
-		"/tmp/project",
-		"project",
-		map[string]any{"channel": "telegram"},
-	)
-	require.NoError(t, err)
-	assert.Equal(t, int64(7001), topicID)
-	assert.False(t, mappedDuringPersist, "in-memory routing must not lead its durable source of truth")
-	assert.Equal(t, "telegram", ctrl.lastSetAttrs.Attributes["channel"])
-	assert.Equal(t, int64(7001), ctrl.lastSetAttrs.Attributes["telegram_topic_id"])
-
-	cachedTopic, ok := manager.getTopicBySessionID(41)
-	require.True(t, ok)
-	assert.Equal(t, topicID, cachedTopic)
-}
-
-func TestCreateTopicForSessionCompensatesPersistenceFailure(t *testing.T) {
-	ctrl := &fakeController{setAttrsErr: errors.New("database unavailable")}
-	methods := make([]string, 0, 2)
-	manager := &Manager{
-		cfg:        config.ManagerEntry{BotToken: "token", TargetChatID: targetID(-100123)},
-		controller: ctrl,
-		httpClient: &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
-			method := filepath.Base(req.URL.Path)
-			methods = append(methods, method)
-			if method == "createForumTopic" {
-				return telegramResponse(req, `{"ok":true,"result":{"message_thread_id":7002}}`), nil
-			}
-
-			return telegramResponse(req, `{"ok":true,"result":true}`), nil
-		})},
-		sessionToTopic: map[int64]int64{},
-		topicToSession: map[int64]int64{},
-		workDirs:       map[int64]string{},
-	}
-
-	_, err := manager.createTopicForSession(context.Background(), 42, "/tmp/project", "project", nil)
-	require.ErrorContains(t, err, "persist topic 7002")
-	assert.Equal(t, []string{"createForumTopic", "deleteForumTopic"}, methods)
-
-	_, mapped := manager.getTopicBySessionID(42)
-	assert.False(t, mapped, "an unpersisted topic must never become routable")
-	assert.NotContains(t, manager.workDirs, int64(42))
-}
-
-func TestHandleNotificationClearKeepsOldMappingWhenPersistenceFails(t *testing.T) {
-	ctrl := &fakeController{setAttrsErr: errors.New("database unavailable")}
-	manager := &Manager{
-		cfg:            config.ManagerEntry{BotToken: "token", TargetChatID: targetID(-100123)},
-		controller:     ctrl,
-		httpClient:     &http.Client{Transport: roundTripFunc(okTelegramRoundTrip)},
-		sessionToTopic: map[int64]int64{},
-		topicToSession: map[int64]int64{},
-		workDirs:       map[int64]string{},
-	}
-	manager.registerTopic(1, 5001)
-	manager.setWorkDir(1, "/tmp/old")
-
-	manager.handleNotification(context.Background(), controllerapi.SessionNotification{
-		SessionID: 1,
-		Notification: sessionevent.Notification{
-			Type: sessionevent.NotifySessionCleared, OldSessionID: 1, NewSessionID: 2, WorkDir: "/tmp/new",
-		},
-	})
-
-	oldTopic, oldExists := manager.getTopicBySessionID(1)
-	_, newExists := manager.getTopicBySessionID(2)
-	require.True(t, oldExists)
-	assert.Equal(t, int64(5001), oldTopic)
-	assert.False(t, newExists, "failed durability must not be presented as a successful remap")
-}
 
 func okTelegramRoundTrip(req *http.Request) (*http.Response, error) {
 	payload := `{"ok":true,"result":{"message_id":123}}`
@@ -572,8 +404,9 @@ func TestHandleCallback_KillDispatchesController(t *testing.T) {
 		},
 	})
 
-	require.Len(t, ctrl.killCalls, 1)
-	assert.Equal(t, int64(95), ctrl.killCalls[0])
+	require.Equal(t, []controllerapi.SessionMessageData{
+		{SessionID: 95, Message: commandKill},
+	}, ctrl.messageCalls)
 }
 
 func TestHandleCallback_KillRejectsAForeignRetainedButton(t *testing.T) {
@@ -603,5 +436,5 @@ func TestHandleCallback_KillRejectsAForeignRetainedButton(t *testing.T) {
 		},
 	})
 
-	assert.Empty(t, ctrl.killCalls)
+	assert.Empty(t, ctrl.messageCalls)
 }

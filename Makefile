@@ -119,16 +119,22 @@ harness-e2e:
 
 CI_FUZZ_TIME ?= 5m
 
+# The cached corpus replays as fuzz baseline before a single new input runs.
+# Each protocol exec drives two full SQLite suites (~0.4s), so an accumulated
+# cache starves generation of the whole budget. Clearing it per run keeps the
+# baseline at the checked-in seeds; regression corpus lives in testdata/fuzz.
 long-fuzz:
+	go clean -fuzzcache
 	go test ./internal/sessionstore -run '^$$' -fuzz '^FuzzHarnessProtocol$$' -fuzztime=$(CI_FUZZ_TIME)
+	go test ./internal/sessionstore -run '^$$' -fuzz '^FuzzManagerOutputProtocol$$' -fuzztime=$(CI_FUZZ_TIME)
 
 race:
 	go test -race -count=1 ./...
 
 CI_STRESS_COUNT ?= 25
 CI_STRESS_TIMEOUT ?= 15m
-CI_STRESS_PACKAGES := ./internal/session ./internal/sessionstore ./internal/daemon ./internal/schedule ./internal/managers/telegram ./internal/migrate
-CI_STRESS_RUN := Test(Harness|ExecuteToolCalls_(RejectsSleepAlongside|RejectedSleepDoesNotSkip)|Integration_(StressBlockingNoDeadlock|BackgroundTaskRejectsCompetingSleepProtocol|ScatterGatherBlockingTasks|OneShotAckFailureRedeliversWithoutDuplicateTranscriptOrPublication|FreshScheduleDuplicateDoesNotResetOrRunTwice)|Executor_CronAckRetryKeepsCanonicalIdentityAndPayload|ScheduledDeliveryStore_ContextResetRollsBackClaimAndTranscriptOnInsertFailure|SendMessage_DoesNotDuplicateOnRateLimitOrAmbiguousTransportFailure|FollowUpAcceptedBeforeTerminalBoundaryStaysInSameActivation|Stop(ParksWholeTreeAndExplicitFollowUpResumesOnlyChild|DirectChildParksItsOwnLinkWithoutStoppingParent)|StartFinishesInterruptedStopBeforeRecoverySweep|SubagentWaitGuardRejectsSleepUntilCompletionDelivered|OpenDB_ExplicitTransactionsReserveWriterAtBegin)
+CI_STRESS_PACKAGES := ./internal/session ./internal/sessionstore ./internal/daemon ./internal/schedule ./internal/managerdelivery ./internal/managers/cli ./internal/managers/telegram ./internal/migrate
+CI_STRESS_RUN := Test(Harness|Worker|OutputTransport|ExecuteToolCalls_(RejectsSleepAlongside|RejectedSleepDoesNotSkip)|Integration_(StressBlockingNoDeadlock|BackgroundTaskRejectsCompetingSleepProtocol|ScatterGatherBlockingTasks|OneShotAckFailureRedeliversWithoutDuplicateTranscriptOrPublication|FreshScheduleDuplicateDoesNotResetOrRunTwice)|Executor_CronAckRetryKeepsCanonicalIdentityAndPayload|ScheduledDeliveryStore_ContextResetRollsBackClaimAndTranscriptOnInsertFailure|SendMessage_DoesNotDuplicateOnRateLimitOrAmbiguousTransportFailure|FollowUpAcceptedBeforeTerminalBoundaryStaysInSameActivation|Stop(ParksWholeTreeAndExplicitFollowUpResumesOnlyChild|DirectChildParksItsOwnLinkWithoutStoppingParent)|StartFinishesInterruptedStopBeforeRecoverySweep|SubagentWaitGuardRejectsSleepUntilCompletionDelivered|OpenDB_ExplicitTransactionsReserveWriterAtBegin)
 
 stress:
 	go test -shuffle=on -count=$(CI_STRESS_COUNT) -timeout=$(CI_STRESS_TIMEOUT) -run '$(CI_STRESS_RUN)' $(CI_STRESS_PACKAGES)
@@ -207,8 +213,10 @@ CI_MUTATION_COVERAGE ?= 90
 CI_MUTATION_EXCLUDES = $(foreach file,$(filter-out $(CI_MUTATION_FILES),$(notdir $(wildcard $(CI_MUTATION_DIR)/*.go))),--exclude-files '$(file)')
 CI_SCHEDULE_MUTATION_FILES := executor.go service.go store.go
 CI_SCHEDULE_MUTATION_EXCLUDES = $(foreach file,$(filter-out $(CI_SCHEDULE_MUTATION_FILES),$(notdir $(wildcard internal/schedule/*.go))),--exclude-files '$(file)')
-CI_STORE_MUTATION_FILES := scheduled_delivery_store.go
+CI_STORE_MUTATION_FILES := scheduled_delivery_store.go output_delivery_store.go output_lifecycle_store.go output_message_store.go
 CI_STORE_MUTATION_EXCLUDES = $(foreach file,$(filter-out $(CI_STORE_MUTATION_FILES),$(notdir $(wildcard internal/sessionstore/*.go))),--exclude-files '$(file)')
+CI_TELEGRAM_MUTATION_FILES := delivery.go delivery_errors.go
+CI_TELEGRAM_MUTATION_EXCLUDES = $(foreach file,$(filter-out $(CI_TELEGRAM_MUTATION_FILES),$(notdir $(wildcard internal/managers/telegram/*.go))),--exclude-files '$(file)')
 
 ci.mutation:
 	@go version -m "$$(command -v gremlins)" 2>/dev/null | grep -q "github.com/go-gremlins/gremlins[[:space:]]*$(GREMLINS_VERSION)" || { echo "✋ gremlins $(GREMLINS_VERSION) required; run make tools"; exit 1; }
@@ -230,6 +238,12 @@ ci.mutation:
 		--threshold-efficacy $(CI_MUTATION_EFFICACY) \
 		--threshold-mcover $(CI_MUTATION_COVERAGE) \
 		$(CI_STORE_MUTATION_EXCLUDES)
+	gremlins unleash ./internal/managers/telegram \
+		--workers $(MUTATION_WORKERS) \
+		--timeout-coefficient $(MUTATION_TIMEOUT_COEFFICIENT) \
+		--threshold-efficacy $(CI_MUTATION_EFFICACY) \
+		--threshold-mcover $(CI_MUTATION_COVERAGE) \
+		$(CI_TELEGRAM_MUTATION_EXCLUDES)
 
 mutation:
 	@if [ -z "$(MUTATION_PATH)" ]; then \

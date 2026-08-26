@@ -65,6 +65,14 @@ func TestManagerLine(t *testing.T) {
 			in:   ctl.ManagerStatus{ID: "tg", Driver: "telegram"},
 			want: "manager tg (telegram) · disabled",
 		},
+		{
+			name: "blocked delivery",
+			in: ctl.ManagerStatus{
+				ID: "tg", Driver: "telegram", Enabled: true, Running: true,
+				PendingOutputs: 2, BlockedOutputID: 7, BlockedForSeconds: 75, DeliveryError: "permission denied",
+			},
+			want: "manager tg (telegram) · running · 2 pending output · blocked #7 for 1m · permission denied",
+		},
 	}
 
 	for _, tt := range tests {

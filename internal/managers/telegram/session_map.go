@@ -3,17 +3,13 @@ package telegram
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
-	"maps"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 
-	"go.uber.org/zap"
-
 	"github.com/pilat/coagent/internal/controllerapi"
-	"github.com/pilat/coagent/internal/logger"
 	"github.com/pilat/coagent/internal/sessionevent"
 )
 
@@ -164,64 +160,6 @@ func makeLabels(sessions []controllerapi.SessionInfo) map[int64]string {
 	return labels
 }
 
-func (m *Manager) createTopicForSession(
-	ctx context.Context,
-	sessionID int64,
-	workDir, name string,
-	attrs map[string]any,
-) (int64, error) {
-	topicName := name
-	if topicName == "" {
-		topicName = labelFromWorkDir(workDir)
-	}
-
-	// Rune-safe: byte-slicing a cyrillic name mid-rune yields invalid UTF-8 and
-	// createForumTopic silently fails, leaving the session with no topic.
-	if runes := []rune(topicName); len(runes) > maxTopicNameRunes {
-		topicName = string(runes[:maxTopicNameRunes])
-	}
-
-	topicID, err := m.createForumTopic(ctx, topicName, m.cfg.SessionTopicIconEmojiID)
-	if err != nil {
-		return 0, err
-	}
-
-	updatedAttrs := maps.Clone(attrs)
-	if updatedAttrs == nil {
-		updatedAttrs = make(map[string]any)
-	}
-
-	updatedAttrs["telegram_topic_id"] = topicID
-
-	if err := m.controller.SetSessionAttributes(ctx, controllerapi.SessionSetAttributesData{
-		SessionID:  sessionID,
-		Attributes: updatedAttrs,
-	}); err != nil {
-		persistErr := fmt.Errorf("persist topic %d for session %d: %w", topicID, sessionID, err)
-		if cleanupErr := m.deleteForumTopic(ctx, topicID); cleanupErr != nil {
-			return 0, errors.Join(persistErr, fmt.Errorf("delete unbound topic %d: %w", topicID, cleanupErr))
-		}
-
-		return 0, persistErr
-	}
-
-	// Persistence is now ahead of the in-memory projection.
-	m.registerTopic(sessionID, topicID)
-	m.setWorkDir(sessionID, workDir)
-
-	return topicID, nil
-}
-
-func (m *Manager) deleteTopicForSession(ctx context.Context, sessionID int64) {
-	topicID, ok := m.getTopicBySessionID(sessionID)
-	if !ok {
-		return
-	}
-
-	_ = m.deleteForumTopic(ctx, topicID)
-	m.unregisterTopic(sessionID)
-}
-
 func (m *Manager) reconcileOnStartup(ctx context.Context) error {
 	m.mu.Lock()
 	m.sessionToTopic = make(map[int64]int64)
@@ -249,9 +187,23 @@ func (m *Manager) reconcileOnStartup(ctx context.Context) error {
 			}
 		}
 
-		if _, err := m.createTopicForSession(ctx, s.ID, s.WorkDir, s.Name, s.Attributes); err != nil {
-			return fmt.Errorf("create topic for session %d: %w", s.ID, err)
+		// Lifecycle rows own remote topic creation; startup may rehydrate a
+		// proven binding but requests a missing surface through the outbox.
+		queue, ok := m.controller.(controllerapi.OutputQueueController)
+		if !ok {
+			continue
 		}
+
+		binding := "none"
+		if topicID, found := topicIDFromAttributes(s.Attributes); found {
+			binding = strconv.FormatInt(topicID, 10)
+		}
+
+		if err := queue.RepairSessionSurface(ctx, s.ID, binding); err != nil {
+			return fmt.Errorf("enqueue topic repair for session %d: %w", s.ID, err)
+		}
+
+		m.wakeDelivery()
 	}
 
 	return nil
@@ -282,56 +234,26 @@ func topicIDFromAttributes(attrs map[string]any) (int64, bool) {
 	}
 }
 
+// handleNotification treats observer events as hints only: ordinary output is
+// rendered from the durable outbox, so a notification at most wakes the worker.
 func (m *Manager) handleNotification(ctx context.Context, sn controllerapi.SessionNotification) {
 	n := sn.Notification
-	sessionID := sn.SessionID
 
 	switch n.Type {
-	case sessionevent.NotifySessionCreated:
-		m.handleSessionCreated(ctx, sessionID, n)
-	case sessionevent.NotifySessionCleared:
-		m.handleSessionCleared(ctx, n)
-	case sessionevent.NotifyMessage:
-		topicID, ok := m.getTopicBySessionID(sessionID)
-		if !ok {
-			return
-		}
-
-		m.sendSessionNotification(ctx, sessionID, n.Type, n.Message, topicID)
-	case sessionevent.NotifyWaiting:
-		topicID, ok := m.getTopicBySessionID(sessionID)
-		if !ok {
-			return
-		}
-
-		m.sendSessionNotification(ctx, sessionID, n.Type, n.Message, topicID)
-	case sessionevent.NotifyInputReceived:
-		if n.Source == "user" {
-			return
-		}
-
-		topicID, ok := m.getTopicBySessionID(sessionID)
-		if !ok {
-			return
-		}
-
-		prefix := "⏰ scheduled"
-		if n.Source == "agent" {
-			prefix = "📨 from agent"
-		}
-
-		m.sendSessionNotification(ctx, sessionID, n.Type, "["+prefix+"] "+n.Message, topicID)
-	case sessionevent.NotifyHeartbeat:
-		topicID, ok := m.getTopicBySessionID(sessionID)
-		if !ok {
-			return
-		}
-
-		_ = m.sendTyping(ctx, topicID)
+	case sessionevent.NotifySessionCreated,
+		sessionevent.NotifySessionCleared,
+		sessionevent.NotifyMessage,
+		sessionevent.NotifyWaiting,
+		sessionevent.NotifyInputReceived:
+		m.wakeDelivery()
 	case sessionevent.NotifyStateChanged:
-		if n.Status == controllerapi.StateIdle && n.Reason == "killed" {
-			m.deleteTopicForSession(ctx, sessionID)
-			m.deleteWorkDir(sessionID)
+		if n.Reason == "killed" {
+			m.wakeDelivery()
+		}
+	case sessionevent.NotifyHeartbeat:
+		// Typing stays on the ephemeral activity channel.
+		if topicID, ok := m.getTopicBySessionID(sn.SessionID); ok {
+			_ = m.sendTyping(ctx, topicID)
 		}
 	case sessionevent.NotifySecretRequest, sessionevent.NotifySecretResolved:
 		// A masked prompt needs a terminal. Telegram sessions never carry the
@@ -339,51 +261,8 @@ func (m *Manager) handleNotification(ctx context.Context, sn controllerapi.Sessi
 	}
 }
 
-func (m *Manager) sendSessionNotification(
-	ctx context.Context,
-	sessionID int64,
-	eventType sessionevent.NotificationType,
-	message string,
-	topicID int64,
-) {
-	if _, err := m.sendMessage(ctx, message, nil, topicID); err != nil {
-		logger.Ctx(ctx).Named("telegram").Error(
-			"send_session_notification",
-			zap.Int64("session_id", sessionID),
-			zap.String("type", string(eventType)),
-			zap.Error(err),
-		)
+func (m *Manager) wakeDelivery() {
+	if m.delivery != nil {
+		m.delivery.Wake()
 	}
-}
-
-func (m *Manager) handleSessionCleared(ctx context.Context, n sessionevent.Notification) {
-	oldTopicID, ok := m.getTopicBySessionID(n.OldSessionID)
-	if !ok {
-		return
-	}
-
-	updatedAttrs := maps.Clone(n.Attributes)
-	if updatedAttrs == nil {
-		updatedAttrs = make(map[string]any)
-	}
-
-	updatedAttrs["telegram_topic_id"] = oldTopicID
-
-	if err := m.controller.SetSessionAttributes(ctx, controllerapi.SessionSetAttributesData{
-		SessionID:  n.NewSessionID,
-		Attributes: updatedAttrs,
-	}); err != nil {
-		logger.Ctx(ctx).Named("telegram").Error(
-			"persist_cleared_session_topic",
-			zap.Int64("old_session_id", n.OldSessionID),
-			zap.Int64("new_session_id", n.NewSessionID),
-			zap.Int64("topic_id", oldTopicID),
-			zap.Error(err),
-		)
-
-		return
-	}
-
-	m.remapTopic(n.OldSessionID, n.NewSessionID, oldTopicID, n.WorkDir)
-	_, _ = m.sendMessage(ctx, "🧹 Session cleared. Send a message to start fresh.", nil, oldTopicID)
 }

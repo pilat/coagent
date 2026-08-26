@@ -3,8 +3,10 @@ package telegram
 import (
 	"html"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 )
 
 var (
@@ -102,43 +104,104 @@ func splitMessageChunks(text string, maxLen int) []string {
 		return []string{""}
 	}
 
-	lines := strings.Split(text, "\n")
-	chunks := make([]string, 0)
-	current := ""
+	if maxLen <= 0 {
+		return []string{text}
+	}
 
-	for _, line := range lines {
-		if len(current)+len(line)+1 > maxLen && current != "" {
-			chunks = append(chunks, current)
-			current = ""
-		}
+	chunks := make([]string, 0, utf8.RuneCountInString(text)/maxLen+1)
+	var current strings.Builder
 
-		if len(line) > maxLen && current == "" {
-			for i := 0; i < len(line); i += maxLen {
-				end := min(i+maxLen, len(line))
+	active := make([]string, 0, 2)
+	for _, token := range telegramHTMLTokens(text) {
+		closers := closingTags(active)
+		if current.Len() > 0 && runeLen(current.String())+runeLen(token)+runeLen(closers) > maxLen {
+			current.WriteString(closers)
+			chunks = append(chunks, current.String())
+			current.Reset()
 
-				chunks = append(chunks, line[i:end])
+			for _, tag := range active {
+				current.WriteString(tag)
 			}
-
-			continue
 		}
 
-		if current != "" {
-			current += "\n"
-		}
-
-		current += line
+		current.WriteString(token)
+		active = updateActiveTags(active, token)
 	}
 
-	if current != "" {
-		chunks = append(chunks, current)
-	}
-
-	if len(chunks) == 0 {
-		chunks = []string{text}
+	if current.Len() > 0 {
+		current.WriteString(closingTags(active))
+		chunks = append(chunks, current.String())
 	}
 
 	return chunks
 }
+
+func telegramHTMLTokens(text string) []string {
+	tokens := make([]string, 0, len(text)/8)
+	for text != "" {
+		switch text[0] {
+		case '<':
+			if end := strings.IndexByte(text, '>'); end >= 0 {
+				tokens = append(tokens, text[:end+1])
+				text = text[end+1:]
+
+				continue
+			}
+		case '&':
+			if end := strings.IndexByte(text, ';'); end >= 0 {
+				tokens = append(tokens, text[:end+1])
+				text = text[end+1:]
+
+				continue
+			}
+		}
+
+		_, size := utf8.DecodeRuneInString(text)
+		tokens = append(tokens, text[:size])
+		text = text[size:]
+	}
+
+	return tokens
+}
+
+func updateActiveTags(active []string, token string) []string {
+	if !strings.HasPrefix(token, "<") || !strings.HasSuffix(token, ">") {
+		return active
+	}
+
+	if strings.HasPrefix(token, "</") {
+		if len(active) > 0 {
+			return active[:len(active)-1]
+		}
+
+		return active
+	}
+
+	if strings.HasPrefix(token, "<br") || strings.HasPrefix(token, "<!") {
+		return active
+	}
+
+	return append(active, token)
+}
+
+func closingTags(active []string) string {
+	var out strings.Builder
+
+	for _, tag := range slices.Backward(active) {
+		name := strings.TrimSuffix(strings.TrimPrefix(tag, "<"), ">")
+		if i := strings.IndexByte(name, ' '); i >= 0 {
+			name = name[:i]
+		}
+
+		out.WriteString("</")
+		out.WriteString(name)
+		out.WriteByte('>')
+	}
+
+	return out.String()
+}
+
+func runeLen(value string) int { return utf8.RuneCountInString(value) }
 
 func stripHTMLToPlain(htmlText string) string {
 	plain := reHTMLTag.ReplaceAllString(htmlText, "")

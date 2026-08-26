@@ -2,12 +2,15 @@ package daemon
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"maps"
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"time"
 
 	"github.com/pilat/coagent/internal/coagenthome"
@@ -17,6 +20,7 @@ import (
 	"github.com/pilat/coagent/internal/loader"
 	"github.com/pilat/coagent/internal/schedule"
 	"github.com/pilat/coagent/internal/sessionevent"
+	"github.com/pilat/coagent/internal/sessionstore"
 )
 
 var (
@@ -30,6 +34,10 @@ type controller struct {
 	cache     loader.MarketplaceCache
 	schedule  schedule.Service
 	managerID string
+}
+
+type outputStoreSource interface {
+	OutputStore() sessionstore.OutputStore
 }
 
 func NewController(
@@ -47,43 +55,235 @@ func (c *controller) ForManager(managerID string) controllerapi.Controller {
 	}
 }
 
-// ListSchedules returns the schedules attached to a session for read-only
-// display (Telegram /schedules). Mutations stay with the agent's schedule tool.
-func (c *controller) ListSchedules(
-	ctx context.Context,
-	data controllerapi.ScheduleListData,
-) (*controllerapi.ScheduleListResultData, error) {
-	if err := c.requireOwnedSession(ctx, data.SessionID); err != nil {
-		return nil, err
+func (c *controller) BindOutputDelivery(ctx context.Context, data controllerapi.OutputBindingData) error {
+	if err := c.requireManagerIdentity(); err != nil {
+		return err
 	}
 
-	if c.schedule == nil {
-		return &controllerapi.ScheduleListResultData{}, nil
+	outputs := c.outputStore()
+	if outputs == nil {
+		return errors.New("output delivery is unavailable")
 	}
 
-	entries, err := c.schedule.ListSchedules(ctx, data.SessionID)
+	if err := outputs.BindManager(ctx, c.managerID, data.Driver, data.Attributes); err != nil {
+		return fmt.Errorf("bind output delivery: %w", err)
+	}
+
+	if _, err := outputs.RetryBlockedHead(ctx, c.managerID); err != nil {
+		return fmt.Errorf("retry blocked output head: %w", err)
+	}
+
+	return nil
+}
+
+func (c *controller) ClaimOutput(ctx context.Context) (*controllerapi.OutputClaimData, error) {
+	outputs := c.outputStore()
+	if outputs == nil {
+		return nil, errors.New("output delivery is unavailable")
+	}
+
+	claim, err := outputs.ClaimOutputHead(ctx, c.managerID)
+
+	var pending *sessionstore.OutputRetryPendingError
+	if errors.As(err, &pending) {
+		return nil, &controllerapi.OutputRetryPendingError{NextAt: pending.NextAt}
+	}
+
+	if errors.Is(err, sessionstore.ErrNoOutput) {
+		return nil, controllerapi.ErrNoOutput
+	}
+
 	if err != nil {
-		return nil, fmt.Errorf("list schedules: %w", err)
+		return nil, fmt.Errorf("claim output head: %w", err)
 	}
 
-	schedules := make([]controllerapi.ScheduleInfo, len(entries))
-	for i, e := range entries {
-		info := controllerapi.ScheduleInfo{
-			ID:          e.ID(),
-			OneShotAt:   e.OneShotAt(),
-			LastFiredAt: e.LastFiredAt(),
-			Fresh:       e.Fresh(),
-			Prompt:      e.InputMessage(),
-		}
-
-		if cronExpr := e.CronExpr(); cronExpr != "" {
-			info.Cron, info.Timezone = schedule.SplitCronTZ(cronExpr)
-		}
-
-		schedules[i] = info
+	data := &controllerapi.OutputClaimData{
+		ID:                claim.Output.ID,
+		SessionID:         claim.Output.SessionID,
+		Type:              string(claim.Output.Type),
+		Content:           claim.Output.Content,
+		Attributes:        claim.Output.Attributes,
+		AttemptID:         claim.Output.AttemptID,
+		AttemptSeq:        claim.Output.AttemptSeq,
+		SessionAttributes: claim.SessionAttributes,
+	}
+	if claim.PreviousDeliveredOutput != nil {
+		data.PreviousMessageAttributes = claim.PreviousDeliveredOutput.Attributes
+		data.PreviousMessageType = string(claim.PreviousDeliveredOutput.Type)
 	}
 
-	return &controllerapi.ScheduleListResultData{Schedules: schedules}, nil
+	return data, nil
+}
+
+func (c *controller) AckOutput(ctx context.Context, data controllerapi.OutputAckData) error {
+	outputs := c.outputStore()
+	if outputs == nil {
+		return errors.New("output delivery is unavailable")
+	}
+
+	if err := outputs.AckOutput(
+		ctx,
+		c.managerID,
+		data.ID,
+		data.AttemptID,
+		data.MessageIDs,
+		data.SessionPatch,
+	); err != nil {
+		return fmt.Errorf("ack output: %w", err)
+	}
+
+	return nil
+}
+
+func (c *controller) RetryOutput(ctx context.Context, data controllerapi.OutputRetryData) error {
+	outputs := c.outputStore()
+	if outputs == nil {
+		return errors.New("output delivery is unavailable")
+	}
+
+	if err := outputs.RetryOutput(ctx, c.managerID, data.ID, data.AttemptID, data.Error, data.NextAt); err != nil {
+		return fmt.Errorf("retry output: %w", err)
+	}
+
+	return nil
+}
+
+func (c *controller) BlockOutput(ctx context.Context, data controllerapi.OutputBlockData) error {
+	outputs := c.outputStore()
+	if outputs == nil {
+		return errors.New("output delivery is unavailable")
+	}
+
+	if err := outputs.BlockOutput(ctx, c.managerID, data.ID, data.AttemptID, data.Error); err != nil {
+		return fmt.Errorf("block output: %w", err)
+	}
+
+	return nil
+}
+
+func (c *controller) WakeOutput(ctx context.Context) error {
+	outputs := c.outputStore()
+	if outputs == nil {
+		return errors.New("output delivery is unavailable")
+	}
+
+	if _, err := outputs.WakeOutputHead(ctx, c.managerID); err != nil {
+		return fmt.Errorf("wake output head: %w", err)
+	}
+
+	return nil
+}
+
+func (c *controller) RepairSessionSurface(ctx context.Context, sessionID int64, binding string) error {
+	if err := c.requireOwnedSession(ctx, sessionID); err != nil {
+		return err
+	}
+
+	outputs := c.outputStore()
+	if outputs == nil {
+		return errors.New("output delivery is unavailable")
+	}
+
+	history, ok := outputs.(sessionstore.LifecycleOutputHistoryStore)
+	if !ok {
+		return errors.New("output lifecycle history is unavailable")
+	}
+
+	record, err := c.svc.GetSession(ctx, sessionID)
+	if err != nil {
+		return fmt.Errorf("load session for surface repair: %w", err)
+	}
+
+	name, err := c.svc.GetProjectName(ctx, record.ProjectID)
+	if err != nil {
+		return fmt.Errorf("load repair project name: %w", err)
+	}
+
+	workDir, err := c.svc.GetProjectWorkDir(ctx, record.ProjectID)
+	if err != nil {
+		return fmt.Errorf("load repair work dir: %w", err)
+	}
+
+	lifecycleID, err := history.LatestLifecycleOutputID(ctx, sessionID)
+	if err != nil {
+		return fmt.Errorf("load surface repair lifecycle: %w", err)
+	}
+
+	digest := sha256.Sum256([]byte(binding))
+	bindingHash := hex.EncodeToString(digest[:])
+	attributes := map[string]any{"name": name, "work_dir": workDir}
+
+	_, err = outputs.EnqueueOutput(ctx, sessionstore.OutputDraft{
+		SessionID:  sessionID,
+		Type:       sessionstore.OutputSessionOpened,
+		Attributes: attributes,
+		SourceKey: "session:" + strconv.FormatInt(
+			sessionID,
+			10,
+		) + ":repair:" + strconv.FormatInt(
+			lifecycleID,
+			10,
+		) + ":" + bindingHash,
+		Fingerprint: sessionstore.OutputFingerprint(sessionstore.OutputSessionOpened, "", sessionID, attributes),
+	})
+	if err != nil {
+		return fmt.Errorf("enqueue session surface repair: %w", err)
+	}
+
+	return nil
+}
+
+//nolint:funcorder // helper stays beside the delivery capability it supports.
+func (c *controller) outputStore() sessionstore.OutputStore {
+	source, ok := c.svc.(outputStoreSource)
+	if !ok {
+		return nil
+	}
+
+	return source.OutputStore()
+}
+
+func (c *controller) OutputQueueStatus(
+	ctx context.Context,
+	managerID string,
+) (controllerapi.OutputQueueStatusData, error) {
+	outputs := c.outputStore()
+	if outputs == nil {
+		return controllerapi.OutputQueueStatusData{}, errors.New("output delivery is unavailable")
+	}
+
+	status, err := outputs.OutputQueueStatus(ctx, managerID)
+	if err != nil {
+		return controllerapi.OutputQueueStatusData{}, fmt.Errorf("load output queue status: %w", err)
+	}
+
+	data := controllerapi.OutputQueueStatusData{
+		Pending: status.Pending, BlockedID: status.BlockedID, DeliveryError: status.DeliveryError,
+	}
+	if status.BlockedAt != nil {
+		data.BlockedForSec = int64(time.Since(*status.BlockedAt).Seconds())
+	}
+
+	return data, nil
+}
+
+func (c *controller) UnresolvedOutputOwners(ctx context.Context) ([]string, error) {
+	outputs := c.outputStore()
+	if outputs == nil {
+		return nil, errors.New("output delivery is unavailable")
+	}
+
+	owners, ok := outputs.(sessionstore.OutputOwnerStore)
+	if !ok {
+		return nil, errors.New("output owner status is unavailable")
+	}
+
+	values, err := owners.ListUnresolvedOutputOwners(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list unresolved output owners: %w", err)
+	}
+
+	return values, nil
 }
 
 func (c *controller) CreateSession(ctx context.Context, data controllerapi.SessionCreateData) (int64, error) {
@@ -137,19 +337,39 @@ func (c *controller) CreateSession(ctx context.Context, data controllerapi.Sessi
 }
 
 func (c *controller) SendSessionMessage(ctx context.Context, data controllerapi.SessionMessageData) error {
+	_, err := c.SendSessionMessageResolved(ctx, data)
+	return err
+}
+
+func (c *controller) SendSessionMessageResolved(
+	ctx context.Context,
+	data controllerapi.SessionMessageData,
+) (int64, error) {
 	if err := c.requireOwnedSession(ctx, data.SessionID); err != nil {
-		return err
+		return 0, err
 	}
 
-	if err := c.svc.SendToSession(ctx, data.SessionID, data.Message); err != nil {
-		return fmt.Errorf("send session message: %w", err)
+	resolver, ok := c.svc.(interface {
+		SendToSessionResolved(context.Context, int64, string) (int64, error)
+	})
+	if !ok {
+		if err := c.svc.SendToSession(ctx, data.SessionID, data.Message); err != nil {
+			return 0, fmt.Errorf("send session message: %w", err)
+		}
+
+		return data.SessionID, nil
+	}
+
+	acceptedID, err := resolver.SendToSessionResolved(ctx, data.SessionID, data.Message)
+	if err != nil {
+		return 0, fmt.Errorf("send resolved session message: %w", err)
 	}
 
 	if data.Message != "" {
-		c.publishInputReceived(data.SessionID, data.Message, "user")
+		c.publishInputReceived(acceptedID, data.Message, "user")
 	}
 
-	return nil
+	return acceptedID, nil
 }
 
 func (c *controller) ListSessions(ctx context.Context) ([]controllerapi.SessionInfo, error) {
@@ -184,43 +404,6 @@ func (c *controller) ListSessions(ctx context.Context) ([]controllerapi.SessionI
 	}
 
 	return infos, nil
-}
-
-func (c *controller) KillSession(ctx context.Context, data controllerapi.SessionKillData) error {
-	if err := c.requireOwnedSession(ctx, data.SessionID); err != nil {
-		return err
-	}
-
-	if err := c.svc.Kill(ctx, data.SessionID); err != nil {
-		return fmt.Errorf("kill session: %w", err)
-	}
-
-	return nil
-}
-
-func (c *controller) StopSession(ctx context.Context, data controllerapi.SessionStopData) error {
-	if err := c.requireOwnedSession(ctx, data.SessionID); err != nil {
-		return err
-	}
-
-	if err := c.svc.Stop(ctx, data.SessionID); err != nil {
-		return fmt.Errorf("stop session: %w", err)
-	}
-
-	return nil
-}
-
-func (c *controller) ClearSession(ctx context.Context, data controllerapi.SessionClearData) (int64, error) {
-	if err := c.requireOwnedSession(ctx, data.SessionID); err != nil {
-		return 0, err
-	}
-
-	id, err := c.svc.Clear(ctx, data.SessionID)
-	if err != nil {
-		return 0, fmt.Errorf("clear session: %w", err)
-	}
-
-	return id, nil
 }
 
 func (c *controller) SetSessionModel(ctx context.Context, data controllerapi.SessionSetModelData) error {

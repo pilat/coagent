@@ -1,8 +1,11 @@
 package cli
 
 import (
+	"context"
+	"errors"
 	"slices"
 	"sync"
+	"time"
 
 	"go.uber.org/zap"
 
@@ -15,10 +18,13 @@ import (
 // A dead terminal costs one person, a wedged forwarder costs everyone.
 const terminalQueueCap = 128
 
+var _ = (*Manager).writeOutput
+
 // push is one rendered notification waiting on a terminal's writer.
 type push struct {
 	method string
 	params any
+	result chan<- error
 }
 
 // terminal is an attached connection plus the goroutine that owns its socket writes.
@@ -27,11 +33,11 @@ type terminal struct {
 	conn  *ctl.Conn
 	queue chan push
 
-	once sync.Once
-	dead chan struct{}
-
-	// exited closes when the writer goroutine has returned, so a dropped
-	// terminal's release is observable rather than assumed.
+	// mu makes enqueue and the writer's exit mutually exclusive, so a push is
+	// never accepted after the writer stopped answering results.
+	mu     sync.Mutex
+	once   sync.Once
+	dead   chan struct{}
 	exited chan struct{}
 }
 
@@ -44,9 +50,20 @@ func newTerminal(c *ctl.Conn) *terminal {
 	}
 }
 
-// enqueue reports false when the queue is full — the caller's cue to drop this
-// terminal rather than wait for it.
+// enqueue reports false when the queue is full or the writer has exited — the
+// caller's cue to drop this terminal rather than wait for it.
 func (t *terminal) enqueue(p push) bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	// A separate check: a combined select could still pick the queue send when
+	// both cases are ready, accepting a push nobody will ever answer.
+	select {
+	case <-t.exited:
+		return false
+	default:
+	}
+
 	select {
 	case t.queue <- p:
 		return true
@@ -75,21 +92,83 @@ func (t *terminal) kill() {
 }
 
 // run writes queued pushes until the terminal is killed or the socket refuses.
+// On exit it answers every already-accepted push, so a delivery waiter is never
+// stranded behind a result nobody will send.
 func (t *terminal) run() {
-	defer close(t.exited)
+	defer func() {
+		t.mu.Lock()
+		defer t.mu.Unlock()
+
+		close(t.exited)
+
+		for {
+			select {
+			case p := <-t.queue:
+				if p.result != nil {
+					p.result <- errors.New("terminal writer stopped")
+				}
+			default:
+				return
+			}
+		}
+	}()
 
 	for {
 		select {
 		case <-t.dead:
 			return
 		case p := <-t.queue:
-			if err := t.conn.Notify(p.method, p.params); err != nil {
+			err := t.conn.NotifyWithin(p.method, p.params, 5*time.Second)
+			if p.result != nil {
+				p.result <- err
+			}
+
+			if err != nil {
 				logger.Named("managers.cli").Debug("push_failed", zap.Error(err))
 
 				return
 			}
 		}
 	}
+}
+
+func (m *Manager) writeOutput(ctx context.Context, params any) error {
+	m.mu.Lock()
+	clients := slices.Clone(m.clients)
+	m.mu.Unlock()
+
+	if len(clients) == 0 {
+		return errors.New("no attached terminal")
+	}
+
+	results := make(chan error, len(clients))
+	queued := 0
+
+	for _, terminal := range clients {
+		if terminal.stopped() || !terminal.enqueue(push{method: EventMethod, params: params, result: results}) {
+			m.drop(terminal)
+			continue
+		}
+
+		queued++
+	}
+
+	if queued == 0 {
+		return errors.New("no writable terminal")
+	}
+
+	for range queued {
+		select {
+		case err := <-results:
+			if err == nil {
+				return nil
+			}
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+
+	return errors.New("all terminal writes failed")
 }
 
 // fanOut queues each event on every attached terminal. It runs on the forwarder,

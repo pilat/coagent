@@ -59,16 +59,17 @@ type NotificationType string
 
 // Notification is a message sent from a session to connected clients.
 type Notification struct {
-	Type         NotificationType
-	Message      string
-	Name         string         // only for NotifySessionCreated / NotifySessionCleared
-	Status       State          // only for NotifyStateChanged
-	Reason       string         // only for NotifyStateChanged
-	Source       string         // "user", "agent", "scheduler" — only for NotifyInputReceived
-	WorkDir      string         // only for NotifySessionCreated / NotifySessionCleared
-	Attributes   map[string]any // only for NotifySessionCreated / NotifySessionCleared
-	OldSessionID int64          // only for NotifySessionCleared
-	NewSessionID int64          // only for NotifySessionCleared
+	Type          NotificationType
+	Message       string
+	Name          string         // only for NotifySessionCreated / NotifySessionCleared
+	Status        State          // only for NotifyStateChanged
+	Reason        string         // only for NotifyStateChanged
+	Source        string         // "user", "agent", "scheduler" — only for NotifyInputReceived
+	WorkDir       string         // only for NotifySessionCreated / NotifySessionCleared
+	Attributes    map[string]any // only for NotifySessionCreated / NotifySessionCleared
+	OldSessionID  int64          // only for NotifySessionCleared
+	NewSessionID  int64          // only for NotifySessionCleared
+	AfterOutputID int64          // only for NotifyStateChanged; 0 has no output barrier
 
 	// RequestID correlates a NotifySecretRequest with the value that answers it,
 	// and with the NotifySecretResolved that closes it everywhere else. The
@@ -99,7 +100,15 @@ func (n Notification) variantContract() (map[string]bool, error) {
 	case NotifyHeartbeat:
 		return fields(), nil
 	case NotifyStateChanged:
-		return fields("status", "reason"), n.require(n.Status.valid(), "status running, idle, or error")
+		if err := n.require(n.Status.valid(), "status running, idle, or error"); err != nil {
+			return nil, err
+		}
+
+		if err := n.require(n.AfterOutputID >= 0, "non-negative output barrier"); err != nil {
+			return nil, err
+		}
+
+		return fields("status", "reason", "after_output_id"), nil
 	case NotifyInputReceived:
 		return fields("message", "source"), n.validateInput()
 	case NotifySessionCreated:

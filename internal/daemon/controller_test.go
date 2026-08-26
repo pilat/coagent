@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"path/filepath"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -13,7 +12,6 @@ import (
 	"github.com/pilat/coagent/internal/config"
 	"github.com/pilat/coagent/internal/controllerapi"
 	"github.com/pilat/coagent/internal/migrate"
-	"github.com/pilat/coagent/internal/schedule"
 	"github.com/pilat/coagent/internal/sessionevent"
 	"github.com/pilat/coagent/internal/sessionstore"
 )
@@ -63,51 +61,6 @@ func TestControllerManagerSubscriptionIsExactAcrossRestart(t *testing.T) {
 
 		requireNoManagerNotification(t, subscription)
 	}
-}
-
-func TestListSchedulesMapsEntries(t *testing.T) {
-	ctx := context.Background()
-	mgr, _, store, schedStore := newTestManagerWithSchedule(t)
-
-	projectID, err := store.GetOrCreateProject(ctx, "/p")
-	require.NoError(t, err)
-	rec, err := mgr.sessionStore.CreateSession(ctx, projectID, "model", "", map[string]any{
-		controllerapi.SessionAttributeManagerID: "test",
-	})
-	require.NoError(t, err)
-
-	schedSvc := schedule.NewService(schedStore)
-	_, err = schedSvc.AddRecurring(ctx, rec.ID, "CRON_TZ=Europe/Berlin 0 9 * * *", "morning job", true)
-	require.NoError(t, err)
-
-	oneShot := time.Date(2026, 7, 21, 15, 0, 0, 0, time.UTC)
-	_, err = schedStore.AddSchedule(ctx, rec.ID, "", &oneShot, "wake once", false)
-	require.NoError(t, err)
-
-	controller := NewController(mgr, &config.Config{}, nil, schedSvc).ForManager("test")
-	result, err := controller.ListSchedules(ctx, controllerapi.ScheduleListData{SessionID: rec.ID})
-	require.NoError(t, err)
-	require.Len(t, result.Schedules, 2)
-
-	var cron, once controllerapi.ScheduleInfo
-	for _, s := range result.Schedules {
-		if s.Cron != "" {
-			cron = s
-		} else {
-			once = s
-		}
-	}
-
-	assert.Equal(t, "0 9 * * *", cron.Cron, "CRON_TZ prefix stripped for display")
-	assert.Equal(t, "Europe/Berlin", cron.Timezone)
-	assert.True(t, cron.Fresh)
-	assert.Equal(t, "morning job", cron.Prompt)
-	assert.Nil(t, cron.OneShotAt)
-
-	assert.Empty(t, once.Cron)
-	assert.False(t, once.Fresh)
-	require.NotNil(t, once.OneShotAt)
-	assert.Equal(t, oneShot, once.OneShotAt.UTC())
 }
 
 func TestListModelsMapsEnrichedEntries(t *testing.T) {

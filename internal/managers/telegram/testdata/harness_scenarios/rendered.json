@@ -19,6 +19,11 @@
           "chat_id": -100123
         },
         {
+          "method": "editForumTopic",
+          "chat_id": -100123,
+          "thread_id": 7001
+        },
+        {
           "method": "sendMessage",
           "chat_id": -100123,
           "thread_id": 7001,
@@ -36,6 +41,11 @@
           "chat_id": -100123
         },
         {
+          "method": "editForumTopic",
+          "chat_id": -100123,
+          "thread_id": 7001
+        },
+        {
           "method": "sendMessage",
           "chat_id": -100123,
           "thread_id": 7001,
@@ -51,6 +61,11 @@
         {
           "method": "createForumTopic",
           "chat_id": -100123
+        },
+        {
+          "method": "editForumTopic",
+          "chat_id": -100123,
+          "thread_id": 7001
         },
         {
           "method": "sendMessage",
@@ -87,6 +102,11 @@
           "chat_id": -100123
         },
         {
+          "method": "editForumTopic",
+          "chat_id": -100123,
+          "thread_id": 7001
+        },
+        {
           "method": "sendMessage",
           "chat_id": -100123,
           "thread_id": 7001,
@@ -99,9 +119,8 @@
           "thread_id": 7001
         },
         {
-          "method": "sendMessage",
+          "method": "editMessageText",
           "chat_id": -100123,
-          "thread_id": 7001,
           "text": "✅ initial child delivered",
           "parse_mode": "HTML"
         },
@@ -140,6 +159,11 @@
           "chat_id": -100123
         },
         {
+          "method": "editForumTopic",
+          "chat_id": -100123,
+          "thread_id": 7001
+        },
+        {
           "method": "sendMessage",
           "chat_id": -100123,
           "thread_id": 7001,
@@ -155,20 +179,8 @@
           "method": "sendMessage",
           "chat_id": -100123,
           "thread_id": 7001,
-          "text": "[⏰ scheduled] scheduled once",
-          "parse_mode": "HTML"
-        },
-        {
-          "method": "sendMessage",
-          "chat_id": -100123,
-          "thread_id": 7001,
           "text": "✅ scheduled work completed",
           "parse_mode": "HTML"
-        },
-        {
-          "method": "editForumTopic",
-          "chat_id": -100123,
-          "thread_id": 7001
         }
       ]
     },
@@ -179,6 +191,11 @@
         {
           "method": "createForumTopic",
           "chat_id": -100123
+        },
+        {
+          "method": "editForumTopic",
+          "chat_id": -100123,
+          "thread_id": 7001
         },
         {
           "method": "sendMessage",
@@ -193,10 +210,9 @@
           "thread_id": 7001
         },
         {
-          "method": "sendMessage",
+          "method": "editMessageText",
           "chat_id": -100123,
-          "thread_id": 7001,
-          "text": "⏳ Waiting for all:\n• subagent #2\n• subagent #3\n💬 New messages will be queued until this wait completes",
+          "text": "⏳ Waiting for all:\n• subagent #1\n• subagent #2\n💬 New messages will be queued until this wait completes",
           "parse_mode": "HTML"
         },
         {
@@ -205,10 +221,9 @@
           "thread_id": 7001
         },
         {
-          "method": "sendMessage",
+          "method": "editMessageText",
           "chat_id": -100123,
-          "thread_id": 7001,
-          "text": "⏳ Waiting for subagent #3\n💬 New messages will be queued until this wait completes",
+          "text": "⏳ Waiting for subagent #1\n💬 New messages will be queued until this wait completes",
           "parse_mode": "HTML"
         },
         {
@@ -217,9 +232,8 @@
           "thread_id": 7001
         },
         {
-          "method": "sendMessage",
+          "method": "editMessageText",
           "chat_id": -100123,
-          "thread_id": 7001,
           "text": "✅ all children delivered",
           "parse_mode": "HTML"
         }
@@ -232,6 +246,11 @@
         {
           "method": "createForumTopic",
           "chat_id": -100123
+        },
+        {
+          "method": "editForumTopic",
+          "chat_id": -100123,
+          "thread_id": 7001
         },
         {
           "method": "sendMessage",
@@ -273,13 +292,6 @@
           "chat_id": -100123
         },
         {
-          "method": "sendMessage",
-          "chat_id": -100123,
-          "thread_id": 7001,
-          "text": "⏳ Sleeping until &lt;wake&gt;\n💬 Send a message to interrupt sleep",
-          "parse_mode": "HTML"
-        },
-        {
           "method": "editForumTopic",
           "chat_id": -100123,
           "thread_id": 7001
@@ -288,6 +300,17 @@
           "method": "sendMessage",
           "chat_id": -100123,
           "thread_id": 7001,
+          "text": "⏳ Sleeping until 15:04 02 Jan\n💬 Send a message to interrupt sleep",
+          "parse_mode": "HTML"
+        },
+        {
+          "method": "editForumTopic",
+          "chat_id": -100123,
+          "thread_id": 7001
+        },
+        {
+          "method": "editMessageText",
+          "chat_id": -100123,
           "text": "✅ sleep interruption handled",
           "parse_mode": "HTML"
         }
@@ -302,11 +325,9 @@
           "chat_id": -100123
         },
         {
-          "method": "sendMessage",
+          "method": "editForumTopic",
           "chat_id": -100123,
-          "thread_id": 7001,
-          "text": "[⏰ scheduled] fresh scheduled task",
-          "parse_mode": "HTML"
+          "thread_id": 7001
         },
         {
           "method": "sendMessage",
@@ -326,11 +347,9 @@
           "chat_id": -100123
         },
         {
-          "method": "sendMessage",
+          "method": "editForumTopic",
           "chat_id": -100123,
-          "thread_id": 7001,
-          "text": "[⏰ scheduled] scheduled task",
-          "parse_mode": "HTML"
+          "thread_id": 7001
         },
         {
           "method": "sendMessage",

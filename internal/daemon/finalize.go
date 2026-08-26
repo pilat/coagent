@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -9,6 +10,7 @@ import (
 
 	"github.com/pilat/coagent/internal/logger"
 	"github.com/pilat/coagent/internal/sessionevent"
+	"github.com/pilat/coagent/internal/sessionstore"
 )
 
 const (
@@ -90,18 +92,57 @@ func (s *svc) reportTimeoutUnresolved(ctx context.Context, parentID, childID int
 
 	logger.Ctx(ctx).Named("daemon.runner").
 		Error("child_timeout_unresolved", zap.Int64("session_id", childID), zap.Error(err))
-	s.notifyChildFailure(parentID, childID, "could not resolve its wall-clock timeout", err)
+	s.notifyChildFailure(ctx, parentID, childID, "could not resolve its wall-clock timeout", err)
 }
 
 // notifyChildFailure reports on the PARENT's topic: a child that never reached
 // announceSession has no topic of its own, so publishing to it reaches nobody.
-func (s *svc) notifyChildFailure(parentID, childID int64, what string, err error) {
+func (s *svc) notifyChildFailure(ctx context.Context, parentID, childID int64, what string, err error) {
 	if parentID == 0 {
 		return
 	}
 
-	s.publish(parentID, sessionevent.Notification{
-		Type:    sessionevent.NotifyMessage,
-		Message: fmt.Sprintf("⚠️ Subagent %d: %s — %s", childID, what, err),
+	message := fmt.Sprintf("⚠️ Subagent %d: %s — %s", childID, what, logger.Redact(err.Error()))
+	if outputErr := s.enqueueChildFailureOutput(ctx, parentID, childID, message); outputErr != nil {
+		logger.Named("daemon.finalize").Warn("enqueue_child_failure_output", zap.Error(outputErr))
+	}
+
+	s.publish(parentID, sessionevent.Notification{Type: sessionevent.NotifyMessage, Message: message})
+}
+
+func (s *svc) enqueueChildFailureOutput(ctx context.Context, parentID, childID int64, message string) error {
+	outputs := s.OutputStore()
+	if outputs == nil {
+		return nil
+	}
+
+	link, err := s.links.GetLink(ctx, childID)
+	if err != nil || link == nil || link.ParentID != parentID || link.ActivationSeq <= 0 {
+		return s.enqueuePersistentOutput(ctx, parentID, message)
+	}
+
+	attributes := map[string]any{"source": "agent"}
+
+	_, err = outputs.EnqueueOutput(ctx, sessionstore.OutputDraft{
+		SessionID:  parentID,
+		Type:       sessionstore.OutputMessagePersistent,
+		Content:    message,
+		Attributes: attributes,
+		SourceKey:  fmt.Sprintf("child:%d:%d:outcome", childID, link.ActivationSeq),
+		Fingerprint: sessionstore.OutputFingerprint(
+			sessionstore.OutputMessagePersistent,
+			message,
+			parentID,
+			attributes,
+		),
 	})
+	if errors.Is(err, sessionstore.ErrOutputOwner) {
+		return nil
+	}
+
+	if err != nil {
+		return fmt.Errorf("enqueue child failure output: %w", err)
+	}
+
+	return nil
 }

@@ -10,6 +10,7 @@ import (
 
 	"github.com/pilat/coagent/internal/config"
 	"github.com/pilat/coagent/internal/controllerapi"
+	"github.com/pilat/coagent/internal/managerdelivery"
 )
 
 const (
@@ -53,6 +54,7 @@ type Manager struct {
 	workDirs       map[int64]string
 
 	subscription <-chan controllerapi.SessionNotification
+	delivery     managerdelivery.Worker
 	cancel       context.CancelFunc
 	done         chan struct{}
 }
@@ -147,7 +149,7 @@ func (m *Manager) ID() string {
 	return m.id
 }
 
-//nolint:contextcheck // Start spawns runCtx as the manager's own long-lived root context, canceled by Stop, not derived from the caller's ctx
+//nolint:contextcheck,funlen // Startup owns the long-lived context and orders identity, repair, then delivery.
 func (m *Manager) Start(ctx context.Context) error {
 	runCtx, cancel := context.WithCancel(context.Background())
 
@@ -169,6 +171,12 @@ func (m *Manager) Start(ctx context.Context) error {
 	started := false
 	defer func() {
 		if !started {
+			cancel()
+
+			if m.subscription != nil {
+				m.controller.Unsubscribe(m.subscription)
+			}
+
 			close(done)
 		}
 	}()
@@ -191,6 +199,25 @@ func (m *Manager) Start(ctx context.Context) error {
 
 	m.serviceTopicID = serviceTopicID
 
+	m.subscription = m.controller.Subscribe()
+	if queue, ok := m.controller.(controllerapi.OutputQueueController); ok {
+		if err := queue.BindOutputDelivery(runCtx, controllerapi.OutputBindingData{
+			Driver: telegramChannel,
+			Attributes: map[string]any{
+				"bot_user_id": m.botUserID,
+				"chat_id":     m.target.chatID,
+				"topology":    string(m.target.topology),
+			},
+		}); err != nil {
+			cancel()
+			return fmt.Errorf("bind durable output delivery: %w", err)
+		}
+
+		var deliveryQueue managerdelivery.Queue = newOutputQueue(queue)
+		var transport managerdelivery.Transport = &outputTransport{manager: m}
+		m.delivery = managerdelivery.New(deliveryQueue, transport)
+	}
+
 	//nolint:contextcheck // same long-lived runCtx as above
 	if err := m.reconcileOnStartup(runCtx); err != nil {
 		cancel()
@@ -203,10 +230,17 @@ func (m *Manager) Start(ctx context.Context) error {
 		return fmt.Errorf("set commands: %w", err)
 	}
 
-	m.subscription = m.controller.Subscribe()
+	if m.delivery != nil {
+		m.delivery.Start(runCtx)
+	}
 
 	go func() {
 		defer close(done)
+		defer func() {
+			if m.delivery != nil {
+				_ = m.delivery.Stop(context.Background())
+			}
+		}()
 		var wg sync.WaitGroup
 
 		wg.Add(2)
@@ -252,6 +286,12 @@ func (m *Manager) Alive() bool {
 func (m *Manager) Stop(ctx context.Context) error {
 	if m.cancel != nil {
 		m.cancel()
+	}
+
+	if m.delivery != nil {
+		if err := m.delivery.Stop(ctx); err != nil {
+			return fmt.Errorf("stop telegram output delivery: %w", err)
+		}
 	}
 
 	if m.subscription != nil {

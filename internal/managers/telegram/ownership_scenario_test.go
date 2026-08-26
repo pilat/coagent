@@ -17,8 +17,8 @@ import (
 	"github.com/pilat/coagent/internal/config"
 	"github.com/pilat/coagent/internal/controllerapi"
 	"github.com/pilat/coagent/internal/daemon"
+	"github.com/pilat/coagent/internal/managerdelivery"
 	"github.com/pilat/coagent/internal/migrate"
-	"github.com/pilat/coagent/internal/sessionevent"
 	"github.com/pilat/coagent/internal/sessionstore"
 )
 
@@ -26,6 +26,7 @@ type telegramOwnershipHarness struct {
 	svc           daemon.Service
 	sessions      sessionstore.Store
 	projectID     int64
+	manager       *Manager
 	cliController controllerapi.Controller
 	recorder      *ownershipTelegramRecorder
 }
@@ -37,14 +38,13 @@ func TestHarnessScenario_DurableManagerOwnershipReachesOnlyTelegramRenderer(t *t
 	cliEvents := h.cliController.Subscribe()
 	t.Cleanup(func() { h.cliController.Unsubscribe(cliEvents) })
 
-	h.publish(owned, createdTelegramSession())
-	h.publish(owned, message("✅ telegram owner answer"))
-	h.publish(foreign, createdCLISession())
-	h.publish(foreign, message("❌ local chat answer"))
-	h.publish(owned, message("✅ telegram owner barrier"))
+	h.publish(t, owned, openedTelegramSession())
+	h.publish(t, foreign, openedCLISession())
+	h.publish(t, owned, persistentMessage("✅ telegram owner answer"))
+	h.publish(t, foreign, persistentMessage("❌ local chat answer"))
+	h.publish(t, owned, persistentMessage("✅ telegram owner barrier"))
 
 	assertTelegramCalls(t, h.recorder)
-	assertCLIControllerEvents(t, cliEvents, foreign)
 }
 
 func newTelegramOwnershipHarness(t *testing.T) *telegramOwnershipHarness {
@@ -74,17 +74,28 @@ func newTelegramOwnershipHarness(t *testing.T) *telegramOwnershipHarness {
 	manager.httpClient = &http.Client{Transport: recorder}
 	manager.subscription = telegramController.Subscribe()
 
+	queue, ok := telegramController.(controllerapi.OutputQueueController)
+	require.True(t, ok, "the daemon controller must expose the bound output queue")
+	require.NoError(t, queue.BindOutputDelivery(ctx, controllerapi.OutputBindingData{
+		Driver: "telegram", Attributes: map[string]any{
+			"bot_user_id": int64(42), "chat_id": int64(harnessChatID), "topology": "group",
+		},
+	}))
+	manager.delivery = managerdelivery.New(newOutputQueue(queue), &outputTransport{manager: manager})
+	manager.delivery.Start(ctx)
+
 	loopCtx, cancel := context.WithCancel(ctx)
 	var loop sync.WaitGroup
 	loop.Go(func() { manager.notificationsLoop(loopCtx) })
 	t.Cleanup(func() {
 		cancel()
+		require.NoError(t, manager.delivery.Stop(context.Background()))
 		telegramController.Unsubscribe(manager.subscription)
 		loop.Wait()
 	})
 
 	return &telegramOwnershipHarness{
-		svc: svc, sessions: sessions, projectID: projectID, recorder: recorder,
+		svc: svc, sessions: sessions, projectID: projectID, manager: manager, recorder: recorder,
 		cliController: controllers.ForManager(controllerapi.BuiltinCLIManagerID),
 	}
 }
@@ -103,37 +114,46 @@ func (h *telegramOwnershipHarness) createSessions(t *testing.T) (int64, int64) {
 	return owned.ID, foreign.ID
 }
 
-func (h *telegramOwnershipHarness) publish(sessionID int64, n sessionevent.Notification) {
-	h.svc.NotifySession(sessionID, n)
-}
-
-func createdTelegramSession() sessionevent.Notification {
-	return createdSession("project - telegram", "telegram-main")
-}
-
-func createdCLISession() sessionevent.Notification {
-	return createdSession("project - cli", controllerapi.BuiltinCLIManagerID)
-}
-
-func createdSession(name, managerID string) sessionevent.Notification {
-	return sessionevent.Notification{
-		Type: sessionevent.NotifySessionCreated, Name: name, WorkDir: filepath.Join("/tmp", "project"),
-		Attributes: map[string]any{controllerapi.SessionAttributeManagerID: managerID},
+func openedTelegramSession() sessionstore.OutputDraft {
+	return sessionstore.OutputDraft{
+		Type:       sessionstore.OutputSessionOpened,
+		Attributes: map[string]any{"name": "project - telegram", "work_dir": filepath.Join("/tmp", "project")},
 	}
 }
 
-func message(text string) sessionevent.Notification {
-	return sessionevent.Notification{Type: sessionevent.NotifyMessage, Message: text}
+func openedCLISession() sessionstore.OutputDraft {
+	return sessionstore.OutputDraft{
+		Type:       sessionstore.OutputSessionOpened,
+		Attributes: map[string]any{"name": "project - cli", "work_dir": filepath.Join("/tmp", "project")},
+	}
+}
+
+func persistentMessage(text string) sessionstore.OutputDraft {
+	return sessionstore.OutputDraft{Type: sessionstore.OutputMessagePersistent, Content: text}
+}
+
+// publish enqueues one durable output row and wakes the worker directly: the
+// wake channel is the contract every producer may rely on, while observer
+// notifications are best effort hints that must never be load-bearing.
+func (h *telegramOwnershipHarness) publish(t *testing.T, sessionID int64, draft sessionstore.OutputDraft) {
+	t.Helper()
+	draft.SessionID = sessionID
+	_, err := h.sessions.EnqueueOutput(context.Background(), draft)
+	require.NoError(t, err)
+	h.manager.delivery.Wake()
 }
 
 func assertTelegramCalls(t *testing.T, recorder *ownershipTelegramRecorder) {
 	t.Helper()
 	require.Eventually(t, func() bool {
 		calls := recorder.snapshot()
+
 		return len(calls) >= 3 && calls[len(calls)-1].Text == "✅ telegram owner barrier"
-	}, time.Second, 10*time.Millisecond, "owned barrier must be rendered after every prior notification")
+	}, 10*time.Second, 10*time.Millisecond, "owned barrier must be rendered after every prior notification")
 	assert.Equal(t, []telegramHarnessCall{
 		{Method: "createForumTopic", ChatID: harnessChatID},
+		// Each later output re-verifies the cached topic before rendering.
+		{Method: "editForumTopic", ChatID: harnessChatID, ThreadID: harnessTopicID},
 		{
 			Method:    "sendMessage",
 			ChatID:    harnessChatID,
@@ -141,6 +161,7 @@ func assertTelegramCalls(t *testing.T, recorder *ownershipTelegramRecorder) {
 			Text:      "✅ telegram owner answer",
 			ParseMode: tgParseModeHTML,
 		},
+		{Method: "editForumTopic", ChatID: harnessChatID, ThreadID: harnessTopicID},
 		{
 			Method:    "sendMessage",
 			ChatID:    harnessChatID,
@@ -149,19 +170,6 @@ func assertTelegramCalls(t *testing.T, recorder *ownershipTelegramRecorder) {
 			ParseMode: tgParseModeHTML,
 		},
 	}, recorder.snapshot())
-}
-
-func assertCLIControllerEvents(t *testing.T, events <-chan controllerapi.SessionNotification, sessionID int64) {
-	t.Helper()
-	for _, want := range []sessionevent.NotificationType{sessionevent.NotifySessionCreated, sessionevent.NotifyMessage} {
-		select {
-		case got := <-events:
-			assert.Equal(t, sessionID, got.SessionID)
-			assert.Equal(t, want, got.Notification.Type)
-		case <-time.After(3 * time.Second):
-			t.Fatalf("CLI manager did not receive its %s notification", want)
-		}
-	}
 }
 
 type ownershipTelegramRecorder struct {

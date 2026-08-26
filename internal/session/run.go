@@ -26,6 +26,7 @@ const noTaskPrompt = "You were just started but the user hasn't provided a task 
 type RunResult struct {
 	FinalResponse string
 	Suspended     bool
+	ErrorNotice   string
 
 	// CompactionDeferAnnounced hands the deferral notice's dedup state back to
 	// the daemon, which owns the session's identity across wakes.
@@ -99,7 +100,7 @@ func (s *svc) run(ctx context.Context, prompt string) (*loopResult, error) {
 				}
 			}
 
-			if saveErr := s.persistState(ctx, totalIteration, sessionstore.SessionStatusActive); saveErr != nil {
+			if saveErr := s.persistState(ctx, totalIteration, s.activationStatus()); saveErr != nil {
 				return fmt.Errorf("persist checkpoint (iteration %d): %w", totalIteration, saveErr)
 			}
 
@@ -110,11 +111,20 @@ func (s *svc) run(ctx context.Context, prompt string) (*loopResult, error) {
 	totalIterations := s.iterationOffset + result.Iterations
 
 	if err != nil {
-		if saveErr := s.persistState(ctx, totalIterations, sessionstore.SessionStatusError); saveErr != nil {
+		notice := result.ErrorNotice
+		if notice == "" {
+			notice = fmt.Sprintf(
+				"⚠️ Session error: %s\n\nThe session is still alive — send a message to continue.",
+				logger.Redact(err.Error()),
+			)
+			result.ErrorNotice = notice
+		}
+
+		if saveErr := s.persistErrorState(ctx, totalIterations, notice); saveErr != nil {
 			return nil, errors.Join(err, fmt.Errorf("persist checkpoint error state: %w", saveErr))
 		}
 
-		return nil, err
+		return result, err
 	}
 
 	finalStatus := sessionstore.SessionStatusCompleted
@@ -122,11 +132,27 @@ func (s *svc) run(ctx context.Context, prompt string) (*loopResult, error) {
 		finalStatus = sessionstore.SessionStatusSuspended
 	}
 
+	// A command-only activation of a stopped root (e.g. /status) must not
+	// reactivate it: persisting completed would soft-resume a root the user parked.
+	if s.preserveStopped {
+		finalStatus = sessionstore.SessionStatusStopped
+	}
+
 	if saveErr := s.persistState(ctx, totalIterations, finalStatus); saveErr != nil {
 		return nil, fmt.Errorf("persist checkpoint %s state: %w", finalStatus, saveErr)
 	}
 
 	return result, nil
+}
+
+// activationStatus is the status a per-iteration checkpoint writes while the
+// session runs: active, or stopped when the activation is command-only.
+func (s *svc) activationStatus() sessionstore.SessionStatus {
+	if s.preserveStopped {
+		return sessionstore.SessionStatusStopped
+	}
+
+	return sessionstore.SessionStatusActive
 }
 
 func (s *svc) prepareRunMessages(ctx context.Context, prompt string) error {
@@ -176,8 +202,12 @@ func (s *svc) RunDaemon(
 
 	result, err := s.run(ctx, "")
 	if err != nil {
-		// The notice was already delivered; a failed run must not re-announce it.
-		return RunResult{CompactionDeferAnnounced: s.compactionDeferAnnounced}, err
+		out := RunResult{CompactionDeferAnnounced: s.compactionDeferAnnounced}
+		if result != nil {
+			out.ErrorNotice = result.ErrorNotice
+		}
+
+		return out, err
 	}
 
 	return RunResult{

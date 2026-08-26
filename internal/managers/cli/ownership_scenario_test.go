@@ -35,9 +35,9 @@ func TestHarnessScenario_DurableManagerOwnershipReachesOnlyTheCLIRenderer(t *tes
 
 	foreignEvents := h.foreignController.Subscribe()
 	t.Cleanup(func() { h.foreignController.Unsubscribe(foreignEvents) })
-	h.publish(owned, "✅ local owner answer")
-	h.publish(foreign, "❌ telegram answer")
-	h.publish(owned, "✅ local owner barrier")
+	h.publish(t, owned, "✅ local owner answer")
+	h.publish(t, foreign, "❌ telegram answer")
+	h.publish(t, owned, "✅ local owner barrier")
 
 	assertCLIEvents(t, terminal, owned)
 	assertForeignControllerEvent(t, foreignEvents, foreign)
@@ -104,16 +104,31 @@ func (h *cliOwnershipHarness) dial(t *testing.T) *ctl.Client {
 	return terminal
 }
 
-func (h *cliOwnershipHarness) publish(sessionID int64, message string) {
+func (h *cliOwnershipHarness) publish(t *testing.T, sessionID int64, message string) {
+	t.Helper()
+	_, err := h.sessions.EnqueueOutput(context.Background(), sessionstore.OutputDraft{
+		SessionID: sessionID, Type: sessionstore.OutputMessagePersistent, Content: message,
+	})
+	require.NoError(t, err)
 	h.svc.NotifySession(sessionID, sessionevent.Notification{Type: sessionevent.NotifyMessage, Message: message})
 }
 
 func assertCLIEvents(t *testing.T, terminal *ctl.Client, sessionID int64) {
 	t.Helper()
 	for _, message := range []string{"✅ local owner answer", "✅ local owner barrier"} {
-		event := waitForEvent(t, terminal)
+		event := waitForMessageEvent(t, terminal)
 		assert.Equal(t, sessionID, event.SessionID)
 		assert.Equal(t, message, event.Message)
+	}
+}
+
+func waitForMessageEvent(t *testing.T, terminal *ctl.Client) Event {
+	t.Helper()
+	for {
+		event := waitForEvent(t, terminal)
+		if event.Type == "message" {
+			return event
+		}
 	}
 }
 

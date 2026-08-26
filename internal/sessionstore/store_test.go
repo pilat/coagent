@@ -80,6 +80,19 @@ func TestUpdateSessionStatusRejectsMissingSession(t *testing.T) {
 	assert.ErrorContains(t, err, "session 999999 not found")
 }
 
+func TestMarkSessionKilledMarksTheTerminalStatus(t *testing.T) {
+	ctx := context.Background()
+	store, _, projectID := newTestStore(t)
+	record, err := store.CreateSession(ctx, projectID, "model", "", nil)
+	require.NoError(t, err)
+
+	require.NoError(t, store.MarkSessionKilled(ctx, record.ID))
+	killed, err := store.GetSession(ctx, record.ID)
+	require.NoError(t, err)
+	assert.Equal(t, SessionStatusKilled, killed.Status)
+	assert.NotNil(t, killed.KilledAt)
+}
+
 func TestSessionStatusRejectsUnknownVocabulary(t *testing.T) {
 	store, _, projectID := newTestStore(t)
 	ctx := context.Background()

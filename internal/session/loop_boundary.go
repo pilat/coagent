@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/pilat/coagent/internal/sessionstore"
 	"github.com/pilat/coagent/internal/tool"
 )
 
@@ -27,6 +28,14 @@ const (
 	// commandDeferred: left in the durable queue behind a pending call; stop draining.
 	commandDeferred
 )
+
+type outputCommandBoundary interface {
+	HandleWithOutput(context.Context, PendingInput, string, string) error
+}
+
+type schedulesCommandBoundary interface {
+	HandleSchedules(context.Context, PendingInput) (string, error)
+}
 
 func (r *loopRunner) drainBoundary(ctx context.Context) (bool, error) {
 	if r.agent.boundary == nil {
@@ -69,7 +78,7 @@ func (r *loopRunner) drainBoundary(ctx context.Context) (bool, error) {
 				r.handledControl = true
 			}
 
-			r.notify(ctx, "⚠️ "+err.Error())
+			r.notifyPersistent(ctx, "⚠️ "+err.Error())
 
 			continue
 		}
@@ -116,15 +125,39 @@ func (r *loopRunner) handleBoundaryCommand(ctx context.Context, input PendingInp
 
 	switch {
 	case trimmed == "/status":
-		if err := r.agent.boundary.Handle(ctx, input, "status command"); err != nil {
-			return commandNotRecognized, fmt.Errorf("resolve status command: %w", err)
-		}
-
 		if r.nothingToAnswer() {
 			r.handledControl = true
 		}
 
-		r.notify(ctx, renderStatus(r.agent.buildSessionStatus(ctx)))
+		output := renderStatus(r.agent.buildSessionStatus(ctx))
+		if err := r.handleCommandOutput(ctx, input, "status command", output); err != nil {
+			return commandNotRecognized, err
+		}
+
+		r.notify(ctx, output)
+
+		return commandConsumed, nil
+	case trimmed == "/help":
+		output := r.agent.renderSessionHelp()
+		if err := r.handleCommandOutput(ctx, input, "help command", output); err != nil {
+			return commandNotRecognized, err
+		}
+
+		r.notify(ctx, output)
+
+		return commandConsumed, nil
+	case trimmed == "/schedules":
+		boundary, ok := r.agent.boundary.(schedulesCommandBoundary)
+		if !ok {
+			return commandNotRecognized, nil
+		}
+
+		output, err := boundary.HandleSchedules(ctx, input)
+		if err != nil {
+			return commandNotRecognized, fmt.Errorf("resolve schedules command: %w", err)
+		}
+
+		r.notify(ctx, output)
 
 		return commandConsumed, nil
 	case trimmed == compactCommand || strings.HasPrefix(trimmed, compactCommand+" "):
@@ -132,6 +165,22 @@ func (r *loopRunner) handleBoundaryCommand(ctx context.Context, input PendingInp
 	default:
 		return commandNotRecognized, nil
 	}
+}
+
+func (r *loopRunner) handleCommandOutput(ctx context.Context, input PendingInput, reason, output string) error {
+	if boundary, ok := r.agent.boundary.(outputCommandBoundary); ok {
+		if err := boundary.HandleWithOutput(ctx, input, reason, output); err != nil {
+			return fmt.Errorf("resolve %s: %w", reason, err)
+		}
+
+		return nil
+	}
+
+	if err := r.agent.boundary.Handle(ctx, input, reason); err != nil {
+		return fmt.Errorf("resolve %s: %w", reason, err)
+	}
+
+	return r.agent.enqueuePersistentOutput(ctx, output)
 }
 
 // handleCompactCommand raises the flag compact_context raises, so /compact runs
@@ -158,14 +207,20 @@ func (r *loopRunner) handleCompactCommand(
 	if len(pending) > 0 {
 		if !r.agent.compactionDeferAnnounced {
 			r.agent.compactionDeferAnnounced = true
+			if err := r.enqueueCompactionNotice(
+				ctx,
+				input,
+				"deferred",
+				sessionstore.OutputMessagePersistent,
+				compactionDeferredNotice,
+			); err != nil {
+				return commandNotRecognized, err
+			}
+
 			r.notify(ctx, compactionDeferredNotice)
 		}
 
 		return commandDeferred, nil
-	}
-
-	if err := r.agent.boundary.Handle(ctx, input, "compact command"); err != nil {
-		return commandNotRecognized, fmt.Errorf("resolve compact command: %w", err)
 	}
 
 	if r.nothingToAnswer() {
@@ -173,9 +228,10 @@ func (r *loopRunner) handleCompactCommand(
 	}
 
 	r.agent.setCompactionFocus(strings.TrimSpace(strings.TrimPrefix(trimmed, compactCommand)))
+	r.agent.setCompactionCommandInput(input)
 	r.agent.RequestCompaction(compactionKeepRecent)
 
-	return commandConsumed, nil
+	return commandDeferred, nil
 }
 
 // nothingToAnswer reports an empty transcript (or a lone AGENTS.md header): the
