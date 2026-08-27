@@ -29,6 +29,7 @@ components:
   config:         { in: internal/config }
   logger:         { in: internal/logger }
   llmwire:        { in: internal/llmwire }
+  humanize:       { in: internal/humanize }
   sessionevent:   { in: internal/sessionevent }
   controllerapi:  { in: internal/controllerapi }
   id:             { in: internal/id }
@@ -108,9 +109,14 @@ deps:
   llm:
     mayDependOn: [catalog, config, llmwire, logger]
 
+  # Presentation-only formatting helpers shared across packages; stdlib only.
+  humanize:
+    anyProjectDeps: false
+    anyVendorDeps: true
+
   # Capability hub: tool implementations reach into a few leaf services.
   builtin:
-    mayDependOn: [bashsandbox, coagenthome, config, loader, logger, lsp, mcp, memory, shellenv, todo, tool]
+    mayDependOn: [bashsandbox, coagenthome, config, humanize, llmwire, loader, logger, lsp, mcp, memory, shellenv, todo, tool]
 
   # ReAct loop — the heaviest service.
   session:
@@ -123,7 +129,7 @@ deps:
 
   # Controllers.
   telegram:
-    mayDependOn: [coagenthome, config, controllerapi, logger, managerdelivery, sessionevent]
+    mayDependOn: [coagenthome, config, controllerapi, humanize, llmwire, logger, managerdelivery, sessionevent]
   managers:
     mayDependOn: [config, controllerapi, logger, telegram]
   # The local chat rides the control socket the way telegram rides HTTP.

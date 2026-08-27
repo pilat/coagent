@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/pilat/coagent/internal/llmwire"
 	"github.com/pilat/coagent/internal/tool"
 )
 
@@ -189,6 +190,7 @@ func (t *BatchTool) formatResult(results []callResult, total int) *tool.Result {
 
 	successCount := 0
 	errorCount := 0
+	var images []llmwire.ImageRef
 
 	for _, r := range results {
 		fmt.Fprintf(&output, "=== %s (call %d) ===\n", r.tool, r.index+1)
@@ -205,6 +207,10 @@ func (t *BatchTool) formatResult(results []callResult, total int) *tool.Result {
 			output.WriteString(r.result.Output)
 			output.WriteString("\n")
 
+			// Failed children produce no refs; successful ones keep their pixel
+			// attachments in nested call order.
+			images = append(images, r.result.Images...)
+
 			successCount++
 		}
 
@@ -219,5 +225,6 @@ func (t *BatchTool) formatResult(results []callResult, total int) *tool.Result {
 			"success": successCount,
 			"errors":  errorCount,
 		},
+		Images: images,
 	}
 }

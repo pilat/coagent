@@ -32,10 +32,20 @@ func estimateTokens(messages []llmwire.Message) int {
 		for _, tc := range msg.ToolCalls {
 			total += len(tc.Arguments) / 4
 		}
+
+		for _, ref := range msg.Images {
+			// Providers downscale oversized images (long edge <=1568px), so the
+			// real per-image cost stays near a few thousand tokens; raw Size/4
+			// would over-count ordinary photos and trigger spurious compaction.
+			total += min(int(ref.Size)/4, imageTokenCeiling)
+		}
 	}
 
 	return total
 }
+
+// imageTokenCeiling bounds the estimator's per-image charge (D8).
+const imageTokenCeiling = 8192
 
 // estimateSchemas estimates the tool inventory a request carries.
 func estimateSchemas(schemas []llmwire.ToolSchema) int {

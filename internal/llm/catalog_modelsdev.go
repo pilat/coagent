@@ -45,6 +45,12 @@ type (
 		ReasoningOptions []modelsDevReasoningOpt `json:"reasoning_options"`
 		Limit            modelsDevLimit          `json:"limit"`
 		Cost             *modelsDevCost          `json:"cost"`
+		Modalities       *modelsDevModalities    `json:"modalities"`
+	}
+
+	modelsDevModalities struct {
+		Input  []string `json:"input"`
+		Output []string `json:"output"`
 	}
 
 	modelsDevReasoningOpt struct {
@@ -99,6 +105,10 @@ func (m modelsDevModel) toSpec() catalog.ModelSpec {
 		ContextWindow: m.Limit.Context,
 		MaxTokens:     m.Limit.Output,
 		Reasoning:     m.reasoningSpec(),
+	}
+
+	if m.Modalities != nil {
+		spec.InputModalities = m.Modalities.Input
 	}
 
 	if m.Cost != nil {

@@ -56,6 +56,11 @@ type (
 		Pricing             openRouterPricing    `json:"pricing"`
 		SupportedParameters []string             `json:"supported_parameters"`
 		Reasoning           *openRouterReasoning `json:"reasoning"`
+		Architecture        *openRouterArch      `json:"architecture"`
+	}
+
+	openRouterArch struct {
+		Modality string `json:"modality"` // arrow form, e.g. "text+image->text+image"
 	}
 
 	openRouterReasoning struct {
@@ -112,11 +117,17 @@ func (m openRouterModel) toSpec() catalog.ModelSpec {
 		maxTokens = *m.TopProvider.MaxCompletionTokens
 	}
 
+	modality := ""
+	if m.Architecture != nil {
+		modality = m.Architecture.Modality
+	}
+
 	return catalog.ModelSpec{
-		Name:          m.Name,
-		Source:        "openrouter",
-		ContextWindow: contextWindow,
-		MaxTokens:     maxTokens,
+		Name:            m.Name,
+		Source:          "openrouter",
+		ContextWindow:   contextWindow,
+		MaxTokens:       maxTokens,
+		InputModalities: parseOpenRouterModality(modality),
 		Pricing: &config.ModelPricing{
 			InputPrice:      perMillion(m.Pricing.Prompt),
 			OutputPrice:     perMillion(m.Pricing.Completion),
@@ -174,4 +185,29 @@ func perMillion(raw string) float64 {
 	}
 
 	return v * perTokenToPerMillion
+}
+
+// parseOpenRouterModality splits the arrow form "text+image->text+image" into
+// its input modality list. Absent or malformed input returns nil — the gate
+// must fail closed, never invent modalities.
+func parseOpenRouterModality(raw string) []string {
+	input, _, found := strings.Cut(raw, "->")
+	if !found || input == "" {
+		return nil
+	}
+
+	parts := strings.Split(input, "+")
+	modalities := make([]string, 0, len(parts))
+
+	for _, p := range parts {
+		if p = strings.TrimSpace(p); p != "" {
+			modalities = append(modalities, p)
+		}
+	}
+
+	if len(modalities) == 0 {
+		return nil
+	}
+
+	return modalities
 }

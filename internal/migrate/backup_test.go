@@ -26,7 +26,7 @@ func TestOpenFreshDefaultDatabaseDoesNotCreateBackup(t *testing.T) {
 	dbPath := filepath.Join(home, coagenthome.DirName, coagenthome.DBFileName)
 	_, err = os.Stat(dbPath + ".bak")
 	require.ErrorIs(t, err, os.ErrNotExist)
-	assert.Equal(t, int64(25), currentVersion(t, db))
+	assert.Equal(t, int64(26), currentVersion(t, db))
 }
 
 func TestOpenBacksUpWALDatabaseBeforeMigration(t *testing.T) {
@@ -71,7 +71,7 @@ func TestOpenBacksUpWALDatabaseBeforeMigration(t *testing.T) {
 	require.NoError(t, backupDB.QueryRowContext(ctx,
 		`SELECT raw_content FROM session_inbox WHERE session_id = 1`).Scan(&content))
 	assert.Equal(t, "from wal", content)
-	assert.Equal(t, int64(25), currentVersion(t, db))
+	assert.Equal(t, int64(26), currentVersion(t, db))
 }
 
 func TestOpenRefusesMigrationWhenBackupPublicationCannotProceed(t *testing.T) {

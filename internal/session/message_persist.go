@@ -167,6 +167,19 @@ func storedMessage(msg *llmwire.Message) (*sessionstore.StoredMessage, error) {
 		usageJSON = data
 	}
 
+	var attachmentsJSON json.RawMessage
+
+	// Images are valid on user/tool rows only (D2); any other role drops them
+	// so they can neither render nor inflate the token estimate.
+	if len(msg.Images) > 0 && (msg.Role == llmwire.RoleUser || msg.Role == llmwire.RoleTool) {
+		data, err := json.Marshal(msg.Images)
+		if err != nil {
+			return nil, fmt.Errorf("marshal attachments: %w", err)
+		}
+
+		attachmentsJSON = data
+	}
+
 	return &sessionstore.StoredMessage{
 		Role:             msg.Role,
 		Content:          msg.Content,
@@ -175,6 +188,7 @@ func storedMessage(msg *llmwire.Message) (*sessionstore.StoredMessage, error) {
 		ToolCalls:        toolCallsJSON,
 		ReasoningContent: msg.ReasoningContent,
 		ReasoningRaw:     msg.ReasoningRaw,
+		Attachments:      attachmentsJSON,
 		CostUSD:          msg.CostUSD,
 		Usage:            usageJSON,
 	}, nil

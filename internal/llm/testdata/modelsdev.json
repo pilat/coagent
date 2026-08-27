@@ -9,7 +9,8 @@
         "reasoning": true,
         "reasoning_options": [{ "type": "effort", "values": ["low", "medium", "high"] }],
         "limit": { "context": 1000000, "output": 128000 },
-        "cost": { "input": 5, "output": 25, "cache_read": 0.5, "cache_write": 6.25 }
+        "cost": { "input": 5, "output": 25, "cache_read": 0.5, "cache_write": 6.25 },
+        "modalities": { "input": ["text", "image"], "output": ["text"] }
       },
       "claude-sonnet-4-6": {
         "id": "claude-sonnet-4-6",
@@ -41,7 +42,8 @@
         "name": "Claude Legacy 2",
         "reasoning": false,
         "limit": { "context": 100000, "output": 4096 },
-        "cost": { "input": 8, "output": 24 }
+        "cost": { "input": 8, "output": 24 },
+        "modalities": { "input": ["text"], "output": ["text"] }
       },
       "claude-nameless": {
         "id": "claude-nameless",

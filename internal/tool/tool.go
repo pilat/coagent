@@ -103,6 +103,10 @@ type Result struct {
 	Title    string         `json:"title,omitempty"`
 	Output   string         `json:"output"`
 	Metadata map[string]any `json:"metadata,omitempty"`
+	// Images carries referenced-not-stored pixel attachments this result
+	// produced (read on a supported image); stored on the role-tool row and
+	// materialized per request by the drivers. Stub/repair paths never set it.
+	Images []llmwire.ImageRef `json:"images,omitempty"`
 }
 
 // Registry manages a collection of tools.

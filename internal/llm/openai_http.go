@@ -3,6 +3,7 @@ package llm
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -169,7 +170,7 @@ func (c *openaiClient) convertMessages(messages []llmwire.Message) []map[string]
 		case roleUser:
 			result = append(result, map[string]any{
 				msgKeyRole:    roleUser,
-				msgKeyContent: msg.Content,
+				msgKeyContent: c.userContent(msg),
 			})
 		case roleAssistant:
 			var reasoningContent any
@@ -211,7 +212,7 @@ func (c *openaiClient) convertMessages(messages []llmwire.Message) []map[string]
 		case roleTool:
 			result = append(result, map[string]any{
 				msgKeyRole:     roleTool,
-				msgKeyContent:  msg.Content,
+				msgKeyContent:  c.toolContent(msg),
 				"tool_call_id": msg.ToolCallID,
 				"name":         msg.ToolName,
 			})
@@ -219,6 +220,66 @@ func (c *openaiClient) convertMessages(messages []llmwire.Message) []map[string]
 	}
 
 	return result
+}
+
+// userContent renders a user message: plain text when it carries no images,
+// an array of content parts (text first, then image slots) when it does.
+func (c *openaiClient) userContent(msg llmwire.Message) any {
+	if len(msg.Images) == 0 {
+		return msg.Content
+	}
+
+	parts := make([]map[string]any, 0, len(msg.Images)+1)
+	if msg.Content != "" {
+		parts = append(parts, oaiTextPart(msg.Content))
+	}
+
+	for _, ref := range msg.Images {
+		parts = append(parts, c.imagePart(ref)...)
+	}
+
+	return parts
+}
+
+// toolContent renders a tool result: plain text without refs, else a role-tool
+// content array whose image_url data-URL parts follow the text part in order.
+func (c *openaiClient) toolContent(msg llmwire.Message) any {
+	if len(msg.Images) == 0 {
+		return msg.Content
+	}
+
+	parts := make([]map[string]any, 0, len(msg.Images)+1)
+	if msg.Content != "" {
+		parts = append(parts, oaiTextPart(msg.Content))
+	}
+
+	for _, ref := range msg.Images {
+		parts = append(parts, c.imagePart(ref)...)
+	}
+
+	return parts
+}
+
+func oaiTextPart(text string) map[string]any {
+	return map[string]any{msgKeyType: oaiTypeText, oaiTypeText: text}
+}
+
+// imagePart resolves one slot into zero or more content parts: a data-URL part
+// when sendable, or a single text placeholder keeping the slot's position (D3).
+func (c *openaiClient) imagePart(ref llmwire.ImageRef) []map[string]any {
+	log := logger.Named("llm.client")
+
+	data, reason := resolveImage(c.inputModalities, ref, log)
+	if data == nil {
+		return []map[string]any{oaiTextPart(llmwire.ImagePlaceholder(reason))}
+	}
+
+	return []map[string]any{{
+		msgKeyType: "image_url",
+		"image_url": map[string]any{
+			"url": "data:" + ref.Mime + ";base64," + base64.StdEncoding.EncodeToString(data),
+		},
+	}}
 }
 
 func (c *openaiClient) convertTools(tools []llmwire.ToolSchema) []oaiToolDef {

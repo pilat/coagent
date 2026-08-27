@@ -9,6 +9,38 @@ const (
 	RoleSystem    = "system"
 )
 
+// Canonical image MIME set accepted end to end — read tool sniffing, Telegram
+// ingestion advice and driver gating all map onto this one definition.
+const (
+	MimeImageJpeg = "image/jpeg"
+	MimeImagePng  = "image/png"
+	MimeImageGif  = "image/gif"
+	MimeImageWebp = "image/webp"
+)
+
+// Reasons an image slot renders as text instead of pixels (D3 degradation);
+// drivers share these so wording cannot drift between families.
+const (
+	ImageOmitReasonUnreadable  = "unreadable file"
+	ImageOmitReasonUnsupported = "unsupported media type"
+	ImageOmitReasonNoVision    = "model cannot accept images"
+)
+
+// ImagePlaceholder renders the inline text that replaces a degraded image slot.
+func ImagePlaceholder(reason string) string {
+	return "[image omitted: " + reason + "]"
+}
+
+// IsSupportedImageMime reports whether mime belongs to the canonical image set.
+func IsSupportedImageMime(mime string) bool {
+	switch mime {
+	case MimeImageJpeg, MimeImagePng, MimeImageGif, MimeImageWebp:
+		return true
+	default:
+		return false
+	}
+}
+
 // ContextInputFraction is the share of a model's context window conversation
 // input may occupy; the complement is reserved for output (request max_tokens).
 const ContextInputFraction = 0.85
@@ -27,6 +59,16 @@ type MessageUsage struct {
 	CacheWriteTokens int `json:"cacheWriteTokens,omitempty"`
 }
 
+// ImageRef points at image bytes on disk. Explicit tags pin its on-disk keys:
+// it is persisted verbatim in messages.attachments, so renaming a field must
+// not silently orphan existing rows. Valid on RoleUser and RoleTool; other
+// roles drop the field.
+type ImageRef struct {
+	Path string `json:"path"`
+	Mime string `json:"mime"`
+	Size int64  `json:"size"`
+}
+
 type Message struct {
 	DBID             int64  `json:"-"` // DB row ID for persistence; excluded from LLM serialization
 	Role             string // "user", "assistant", "tool"
@@ -36,6 +78,7 @@ type Message struct {
 	ToolCalls        []ToolCall      // For assistant messages that call tools
 	ReasoningContent string          // For OpenAI-compatible models that return reasoning_content
 	ReasoningRaw     json.RawMessage `json:"ReasoningRaw,omitempty"` // sealed ReasoningEnvelope; replayed verbatim
+	Images           []ImageRef      `json:"Images,omitempty"`       // referenced-not-stored attachments (tool results)
 	CostUSD          float64         `json:"CostUSD,omitempty"`
 	Usage            *MessageUsage   `json:"Usage,omitempty"`
 }

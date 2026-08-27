@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/pilat/coagent/internal/catalog"
 	"github.com/pilat/coagent/internal/config"
 )
 
@@ -27,6 +28,18 @@ func TestParseModelsDev(t *testing.T) {
 		assert.Equal(t, &config.ModelPricing{
 			InputPrice: 5, OutputPrice: 25, CacheReadPrice: 0.5, CacheWritePrice: 6.25,
 		}, spec.Pricing)
+	})
+
+	t.Run("input modalities", func(t *testing.T) {
+		// Provenance: live models.dev capture (2026-08) carries per-model
+		// `modalities: {"input": [...], "output": [...]}` on the section's
+		// models; e.g. anthropic ⇒ input ["text","image"]. The fixture pins that
+		// shape; a drift here must surface as this assertion, not a dead gate.
+		assert.Equal(t, []string{"text", "image"}, anthropic["claude-opus-5"].InputModalities)
+		assert.Equal(t, []string{"text"}, anthropic["claude-legacy-2"].InputModalities)
+
+		// Absent key decodes nil — every capability gate fails closed.
+		assert.Nil(t, anthropic["claude-nameless"].InputModalities)
 	})
 
 	t.Run("model without cost carries no pricing", func(t *testing.T) {
@@ -82,6 +95,41 @@ func TestParseModelsDevRejectsGarbage(t *testing.T) {
 			assert.Error(t, err)
 		})
 	}
+}
+
+// TestModelsDevFixtureModalityGuard fails when the fixture no longer feeds the
+// modality decoder: every vision gate test would then pass trivially (nil =
+// fail-closed) over a dead feature. Upstream shape drift on models.dev must
+// break THIS test, not silently green the gates.
+func TestModelsDevFixtureModalityGuard(t *testing.T) {
+	sections, err := parseModelsDev(fixture(t, "modelsdev.json"))
+	require.NoError(t, err)
+
+	assert.False(t, specsAllNil(sections),
+		"no modelsdev fixture model decodes modalities.input — vision gates test nothing")
+}
+
+// TestOpenRouterFixtureModalityGuard is the arrow-form counterpart: the fixture
+// must still decode architecture.modality or the parsing below tests nothing.
+func TestOpenRouterFixtureModalityGuard(t *testing.T) {
+	models, err := parseOpenRouter(fixture(t, "openrouter.json"))
+	require.NoError(t, err)
+
+	bySpec := map[string]map[string]catalog.ModelSpec{"openrouter": models}
+	assert.False(t, specsAllNil(bySpec),
+		"no openrouter fixture model decodes architecture.modality — vision gates test nothing")
+}
+
+func specsAllNil(sections map[string]map[string]catalog.ModelSpec) bool {
+	for _, models := range sections {
+		for _, spec := range models {
+			if spec.InputModalities != nil {
+				return false
+			}
+		}
+	}
+
+	return true
 }
 
 func TestParseOpenRouter(t *testing.T) {
@@ -162,6 +210,17 @@ func TestParseOpenRouter(t *testing.T) {
 			assert.Equal(t, &tt.want, models[tt.id].Reasoning)
 		})
 	}
+
+	t.Run("arrow-form modality parses the input side", func(t *testing.T) {
+		// Provenance: live OpenRouter capture exposes
+		// `architecture.modality: "text->text"` (testdata/openrouter.json);
+		// multi-modal models use "+"-joined inputs. The fixture pins both.
+		assert.Equal(t, []string{"text", "image"}, models["anthropic/claude-opus-5"].InputModalities)
+		assert.Equal(t, []string{"text"}, models["openai/gpt-5-mini"].InputModalities)
+
+		// Absent or unparseable modality decodes nil — fail closed.
+		assert.Nil(t, models["zai/glm-narrow"].InputModalities)
+	})
 }
 
 func TestParseOpenRouterRejectsGarbage(t *testing.T) {
@@ -178,6 +237,23 @@ func TestParseOpenRouterRejectsGarbage(t *testing.T) {
 			_, err := parseOpenRouter([]byte(tt.body))
 			assert.Error(t, err)
 		})
+	}
+}
+
+func TestParseOpenRouterModality(t *testing.T) {
+	tests := []struct {
+		raw  string
+		want []string
+	}{
+		{"text->text", []string{"text"}},
+		{"text+image->text+image", []string{"text", "image"}},
+		{"", nil},
+		{"garbage", nil},
+		{"->text", nil},
+	}
+
+	for _, tt := range tests {
+		assert.Equal(t, tt.want, parseOpenRouterModality(tt.raw), "raw=%q", tt.raw)
 	}
 }
 

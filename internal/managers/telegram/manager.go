@@ -29,11 +29,12 @@ var _ interface {
 } = (*Manager)(nil)
 
 type Manager struct {
-	id         string
-	cfg        config.ManagerEntry
-	unifiedCfg *config.UnifiedConfig
-	controller controllerapi.Controller
-	httpClient *http.Client
+	id             string
+	cfg            config.ManagerEntry
+	unifiedCfg     *config.UnifiedConfig
+	controller     controllerapi.Controller
+	httpClient     *http.Client // poll/API calls: bounded by the poll timeout
+	downloadClient *http.Client // bot-API file downloads: request-scoped deadlines only
 
 	mu sync.RWMutex
 
@@ -71,7 +72,12 @@ type telegramMessage struct {
 	From            *telegramUser         `json:"from,omitempty"`
 	Chat            telegramChat          `json:"chat"`
 	Text            string                `json:"text,omitempty"`
+	Caption         string                `json:"caption,omitempty"`
 	Voice           *telegramVoiceMessage `json:"voice,omitempty"`
+	Document        *telegramDocument     `json:"document,omitempty"`
+	Photo           []telegramPhotoSize   `json:"photo,omitempty"`
+	Video           *telegramVideo        `json:"video,omitempty"`
+	Audio           *telegramAudio        `json:"audio,omitempty"`
 }
 
 type telegramUser struct {
@@ -84,6 +90,37 @@ type telegramChat struct {
 
 type telegramVoiceMessage struct {
 	FileID string `json:"file_id"`
+}
+
+// Attachment payloads share a shape: a file_id to resolve via getFile, an
+// optional original name (photos have none), optional mime and byte size.
+type telegramDocument struct {
+	FileID   string `json:"file_id"`
+	FileName string `json:"file_name,omitempty"`
+	MimeType string `json:"mime_type,omitempty"`
+	FileSize int64  `json:"file_size,omitempty"`
+}
+
+type telegramPhotoSize struct {
+	FileID   string `json:"file_id"`
+	Width    int    `json:"width,omitempty"`
+	Height   int    `json:"height,omitempty"`
+	FileSize int64  `json:"file_size,omitempty"`
+}
+
+type telegramVideo struct {
+	FileID   string `json:"file_id"`
+	FileName string `json:"file_name,omitempty"`
+	MimeType string `json:"mime_type,omitempty"`
+	FileSize int64  `json:"file_size,omitempty"`
+	Duration int    `json:"duration,omitempty"`
+}
+
+type telegramAudio struct {
+	FileID   string `json:"file_id"`
+	FileName string `json:"file_name,omitempty"`
+	MimeType string `json:"mime_type,omitempty"`
+	FileSize int64  `json:"file_size,omitempty"`
 }
 
 type telegramCallbackData struct {
@@ -128,6 +165,7 @@ func New(
 		unifiedCfg:     unifiedCfg,
 		controller:     controller,
 		httpClient:     &http.Client{Timeout: timeout},
+		downloadClient: &http.Client{}, // request-scoped deadlines: bot-API downloads must outlive PollTimeoutSec
 		navPaths:       make(map[int64]string),
 		pathToNav:      make(map[string]int64),
 		sessionToTopic: make(map[int64]int64),

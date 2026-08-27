@@ -130,6 +130,7 @@ type openaiClient struct {
 	reasoningLevel   ReasoningLevel
 	maxTokens        int
 	contextWindow    int
+	inputModalities  []string                 // catalog-resolved; nil/absent "image" means no pixels are ever sent
 	replayReasoning  bool                     // echo reasoning_details back (OpenRouter's tool-calling contract)
 	pricing          *config.ModelPricing     // catalog-resolved; nil bills the call at zero
 	reasoning        *config.ReasoningSpec    // catalog-resolved reasoning capability
@@ -195,6 +196,7 @@ func newOpenAIClient(
 		tokenSource:      tokenSource,
 		maxTokens:        maxTokens,
 		contextWindow:    entry.ContextWindow,
+		inputModalities:  entry.InputModalities,
 		pricing:          entry.Pricing,
 		reasoning:        entry.Reasoning,
 		openrouterConfig: entry.OpenRouterConfig,

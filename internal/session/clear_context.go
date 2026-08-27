@@ -69,6 +69,9 @@ func (s *svc) applyClear(ctx context.Context, keepRecentRounds int) int {
 
 	for _, i := range targets {
 		messages[i].Content = clearedPlaceholder(messages[i].ToolName)
+		// Refs must die here too: reloadMessages drops them for ClearedAt rows,
+		// so keeping them in memory would diverge pre/post restart.
+		messages[i].Images = nil
 	}
 
 	return len(targets)

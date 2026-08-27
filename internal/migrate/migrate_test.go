@@ -491,3 +491,38 @@ func TestMigrate_ZeroHistoricalSummaryCost(t *testing.T) {
 	assert.InDelta(t, 1.0, otherCost, 1e-9, "non-summary user message untouched")
 	assert.InDelta(t, 4.0, treeSum, 1e-9, "original 3.0 counted once + real task 1.0, not 7.0")
 }
+
+// TestMigrate_MessageAttachments brings a DB to version 25 (the Go
+// manager-outbox backfill; SQL slots jump 00024 → 00026) with live message rows,
+// applies 00026, and verifies messages.attachments lands as a nullable
+// NULL-defaulting column on the pre-existing rows.
+func TestMigrate_MessageAttachments(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "v25attachments.db")
+	db, err := OpenDB(context.Background(), dbPath)
+	require.NoError(t, err)
+	defer db.Close()
+
+	ctx := context.Background()
+	provider := newProvider(t, db)
+	_, err = provider.UpTo(ctx, 25)
+	require.NoError(t, err)
+
+	require.False(t, columnExists(t, db, "messages", "attachments"), "attachments must not exist at v25")
+
+	_, err = db.ExecContext(ctx, `INSERT INTO projects (id, work_dir, name) VALUES (1, '/tmp/p', 'p')`)
+	require.NoError(t, err)
+	_, err = db.ExecContext(ctx, `INSERT INTO sessions (id, project_id, agent_type) VALUES (1, 1, 'general')`)
+	require.NoError(t, err)
+	_, err = db.ExecContext(ctx, `INSERT INTO messages (session_id, role, content) VALUES (1, 'user', 'task')`)
+	require.NoError(t, err)
+
+	_, err = provider.Up(ctx)
+	require.NoError(t, err)
+
+	assert.True(t, columnExists(t, db, "messages", "attachments"), "attachments added by 00026")
+
+	var attachments sql.NullString
+	require.NoError(t,
+		db.QueryRowContext(ctx, `SELECT attachments FROM messages WHERE session_id = 1`).Scan(&attachments))
+	assert.False(t, attachments.Valid, "pre-existing row defaults attachments to NULL")
+}
