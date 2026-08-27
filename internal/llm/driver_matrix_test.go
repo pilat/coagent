@@ -127,6 +127,7 @@ func TestDriverMatrix_ImageInToolRoleContent(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			raw := serializeChatBody(t, newMatrixClient(t, tt.driver, vision), imageConversation(pngPath))
 
+			assert.Contains(t, raw, "[img]", "%s keeps the result's text part ahead of its image slots", tt.driver)
 			assert.Contains(t, raw, wantB64, "%s: pixels materialized at request build", tt.driver)
 			assert.NotContains(t, raw, llmwire.ImagePlaceholder(llmwire.ImageOmitReasonNoVision),
 				"%s: no degradation on a vision-capable catalog", tt.driver)

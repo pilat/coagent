@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"os"
 
 	"go.uber.org/zap"
@@ -18,8 +19,6 @@ import (
 // at read time, rather than enter history and poison every replayed turn.
 const maxImageBytes = 5 * 1024 * 1024
 
-var _ tool.Tool = (*readTool)(nil)
-
 // sniffImageMIME returns the canonical wire MIME for files whose magic bytes
 // match, or "" otherwise. Sniffs bytes, never extensions.
 func sniffImageMIME(path string) string {
@@ -32,8 +31,9 @@ func sniffImageMIME(path string) string {
 
 	defer func() { _ = file.Close() }()
 
-	n, err := file.Read(buf)
-	if err != nil || n == 0 {
+	// (n>0, io.EOF) is legal for Readers; judge by populated bytes only.
+	n, _ := io.ReadFull(file, buf)
+	if n == 0 {
 		return ""
 	}
 

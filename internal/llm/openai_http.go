@@ -170,7 +170,7 @@ func (c *openaiClient) convertMessages(messages []llmwire.Message) []map[string]
 		case roleUser:
 			result = append(result, map[string]any{
 				msgKeyRole:    roleUser,
-				msgKeyContent: c.userContent(msg),
+				msgKeyContent: c.contentParts(msg),
 			})
 		case roleAssistant:
 			var reasoningContent any
@@ -212,7 +212,7 @@ func (c *openaiClient) convertMessages(messages []llmwire.Message) []map[string]
 		case roleTool:
 			result = append(result, map[string]any{
 				msgKeyRole:     roleTool,
-				msgKeyContent:  c.toolContent(msg),
+				msgKeyContent:  c.contentParts(msg),
 				"tool_call_id": msg.ToolCallID,
 				"name":         msg.ToolName,
 			})
@@ -222,28 +222,10 @@ func (c *openaiClient) convertMessages(messages []llmwire.Message) []map[string]
 	return result
 }
 
-// userContent renders a user message: plain text when it carries no images,
-// an array of content parts (text first, then image slots) when it does.
-func (c *openaiClient) userContent(msg llmwire.Message) any {
-	if len(msg.Images) == 0 {
-		return msg.Content
-	}
-
-	parts := make([]map[string]any, 0, len(msg.Images)+1)
-	if msg.Content != "" {
-		parts = append(parts, oaiTextPart(msg.Content))
-	}
-
-	for _, ref := range msg.Images {
-		parts = append(parts, c.imagePart(ref)...)
-	}
-
-	return parts
-}
-
-// toolContent renders a tool result: plain text without refs, else a role-tool
-// content array whose image_url data-URL parts follow the text part in order.
-func (c *openaiClient) toolContent(msg llmwire.Message) any {
+// contentParts renders a user or tool-result message: plain text when it
+// carries no images, else an array of content parts — text part first, then
+// the image slots in slice order.
+func (c *openaiClient) contentParts(msg llmwire.Message) any {
 	if len(msg.Images) == 0 {
 		return msg.Content
 	}

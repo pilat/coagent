@@ -8,13 +8,12 @@
 The pipeline could not show any image to any model: `llmwire.Message.Content` is a plain
 string, both driver families serialize only text/tool blocks, and `read` rejects binaries
 including every image extension. Multi-image user input therefore had no path into context.
-Peer agents (Claude Code, OpenCode, Codex CLI — sources checked) all carry real pixels through
-conversation history because providers are stateless; they differ only in where those pixels are
-stored (inline data URLs / temp files with placeholders) and how pressure evicts them.
+Providers are stateless, so peer agent implementations carry real pixels through conversation
+history; they differ only in where those pixels are stored (inline data URLs / temp files with
+placeholders) and how pressure evicts them.
 
 Coagent's append-only context log projects "what the model sees" at load time. Entering pixels
-into that log as blobs would duplicate megabytes into SQLite and recreate codex's
-image-eviction-budget problem; skipping images entirely would leave models blind to legitimate
+into that log as blobs would duplicate megabytes into SQLite and recreate an image-eviction-budget problem; skipping images entirely would leave models blind to legitimate
 visual input. Telegram simultaneously gained file ingestion, which produces files on disk that
 models should be able to inspect on demand without any of them being forced into context wholesale
 (a full PDF dumped into a request was an explicitly rejected outcome).
@@ -58,15 +57,15 @@ fixed-EN metadata text whose only conditional advice points small images at `rea
 
 ## Alternatives Considered
 
-- **Store base64 inline in SQLite** (codex-style data URLs). Rejected: duplicated megabytes per row,
+- **Store base64 inline in SQLite** (inline data-URL style). Rejected: duplicated megabytes per row,
   slower loads/backups, plus their compaction eviction machinery; reversible later since the column
   format can carry bytes.
 - **Attach uploads directly via extended controllerapi DTOs.** Rejected after transport analysis:
   manager→transcript entries have only ever been strings (`SessionMessageData`, `sessionInput`
   variants); typed media crossing that boundary buys one saved tool roundtrip while creating the
   first non-string contract surface. `read` covers visibility; upload messages stay metadata.
-- **Separate `view_image` command.** Rejected: all three peer agents use the ordinary read path;
+- **Separate `view_image` command.** Rejected: peer implementations use the ordinary read path;
   a second reading tool splits MCP/tool budgets and duplicates binary-sniff logic.
-- **Provider-side rescaling/budget pass before send** (codex detail budgets). Rejected for v1:
+- **Provider-side rescaling/budget pass before send** (per-request detail budgets). Rejected for v1:
   any transform adds cross-turn determinism obligations against prefix caching; provider-side
   downscaling already bounds cost, and failures will arrive as evidence if needed.

@@ -2,6 +2,7 @@ package telegram
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"strings"
 
@@ -62,8 +63,9 @@ func sniffImageMIME(path string) string {
 
 	defer func() { _ = file.Close() }()
 
-	n, err := file.Read(buf)
-	if err != nil || n < 3 {
+	// (n>0, io.EOF) is legal for Readers; judge by populated bytes only.
+	n, _ := io.ReadFull(file, buf)
+	if n < 3 {
 		return ""
 	}
 
