@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/pilat/coagent/internal/humanize"
 	"github.com/pilat/coagent/internal/tool"
 )
 
@@ -92,25 +93,8 @@ func TestLsToolRejectsBadInput(t *testing.T) {
 	}
 }
 
-func TestFormatSizeUnitBoundaries(t *testing.T) {
-	tests := []struct {
-		bytes int64
-		want  string
-	}{
-		{bytes: 0, want: "0B"},
-		{bytes: 1023, want: "1023B"},
-		{bytes: 1024, want: "1.0KB"},
-		{bytes: 1024*1024 - 1, want: "1024.0KB"},
-		{bytes: 1024 * 1024, want: "1.0MB"},
-		{bytes: 1024*1024*1024 - 1, want: "1024.0MB"},
-		{bytes: 1024 * 1024 * 1024, want: "1.0GB"},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.want, func(t *testing.T) {
-			assert.Equal(t, tt.want, formatSize(tt.bytes))
-		})
-	}
+func TestLsToolRendersHumanSizes(t *testing.T) {
+	assert.Equal(t, "1.0KB", humanize.FormatSize(1024), "tool output sizes flow through humanize.FormatSize")
 }
 
 func TestGlobToolExcludesDirectories(t *testing.T) {

@@ -232,6 +232,10 @@ _Avoid_: history, context (those are the transcript, not memory).
 The append-only transcript of a session's messages — what the agent loop reads and writes each turn. Distinct from **memory**.
 _Avoid_: memory.
 
+**attachment** (referenced image attachment):
+A disk reference (`{path, mime, size}`) stored on a tool-result row in `messages.attachments` — never the pixels themselves. Produced by `read` on a supported image; drivers re-materialize it into content blocks on every request, gated fail-closed on the catalog's input modalities, degrading to an inline placeholder when unmaterializable. Telegram uploads produce metadata text only; seeing pixels always takes a `read` roundtrip ([ADR-0034](adr/0034-vision-via-referenced-tool-result-attachments.md)).
+_Avoid_: "image message", inline base64, upload-attached media.
+
 ## Configuration & isolation
 
 **coagent home**:

@@ -34,6 +34,10 @@ type (
 		Pricing       *ModelPricing  `json:"pricing,omitempty" yaml:"-"`
 		Reasoning     *ReasoningSpec `json:"-"                 yaml:"-"`
 
+		// InputModalities is the catalog's declared input types ("text", "image",
+		// ...). Nil means unknown — capability gates must fail closed.
+		InputModalities []string `json:"-" yaml:"-"`
+
 		// EffortLevels is what the picker offers for this model — the catalog's
 		// allowlist narrowed to what the driver can actually deliver. Empty = no step.
 		EffortLevels []string `json:"-" yaml:"-"`

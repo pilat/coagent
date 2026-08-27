@@ -22,6 +22,9 @@ type (
 		MaxTokens     int
 		Pricing       *config.ModelPricing
 		Reasoning     *config.ReasoningSpec
+		// InputModalities is the catalog's declared input types ("text",
+		// "image", ...). Nil means the catalog said nothing.
+		InputModalities []string
 		// Shadowed names the sections that carry this id and lost the Flatten,
 		// so enrichment can tell the operator the metadata may be another host's.
 		Shadowed []string

@@ -64,6 +64,7 @@ does not imply a tier except where it expresses an implementation variant.
 - `internal/ctl` — authenticated local control socket, operation registry and client multiplexing.
 - `internal/daemon` — global runtime coordinator, persistence integration and controller implementation.
 - `internal/git` — Git operations used by repository-facing features.
+- `internal/humanize` — presentation-only formatting helpers (human-readable sizes); stdlib only.
 - `internal/id` — local identity generation utilities.
 - `internal/install` — platform service installation and lifecycle integration.
 - `internal/llm` — provider protocol drivers, client creation, retries and cost handling.
@@ -220,13 +221,19 @@ Stored message content never changes after insertion. The model-visible
 conversation is a projection of rows plus context metadata, which keeps an
 unchanged prompt prefix byte-stable between context events. Oversized tool output
 is capped before insertion; the system never retroactively rewrites history.
+Image-bearing tool results store disk references (`messages.attachments`), not
+pixels: drivers re-materialize them into blocks on every request, so what the
+model sees additionally depends on current disk state — a missing file degrades
+to an inline placeholder rather than an error, invalidating the prompt prefix
+only from the changed message onward.
 
 Compaction is the sole automatic response to context pressure. At one safe loop
 point, when no tool call is pending, it clears eligible tool-result bodies as
 metadata, summarizes the post-header conversation, appends the replacement turn,
 and reattaches required skill context. There is no continuous pruning ladder and
 no verbatim tail guarantee. Manual compaction requests raise the same event; a
-request behind non-sleep external work waits in the durable inbox.
+request behind non-sleep external work waits in the durable inbox. Cleared rows
+drop their image references with their content, in memory and on reload alike.
 
 The trigger combines the provider's last reported prompt tokens with an estimate
 of appended content; absent measurement is explicitly approximate. Repeated
@@ -467,6 +474,10 @@ retry rules and model listing. The wire package carries neutral message and tool
 types so session/tool code does not depend on provider SDKs. Reasoning payloads
 are stored verbatim with their originating model and are replayed only to that
 same model; a model change drops them rather than sending incompatible data.
+Image references carried on user/tool messages are materialized inside each
+driver's conversion step and gated fail-closed on catalog-declared input
+modalities — unknown or absent modality information degrades the slot to a
+placeholder shared by both driver families.
 
 Catalog owns externally fetched model metadata and cache validity, not product
 recommendation. Loader owns trusted local discovery and marketplace retrieval of

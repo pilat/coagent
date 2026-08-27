@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/pilat/coagent/internal/humanize"
 	"github.com/pilat/coagent/internal/tool"
 )
 
@@ -154,29 +155,9 @@ func buildLsOutput(infos []entryInfo) string {
 		if info.isDir {
 			fmt.Fprintf(&output, "%s/\n", info.name)
 		} else {
-			fmt.Fprintf(&output, "%s (%s)\n", info.name, formatSize(info.size))
+			fmt.Fprintf(&output, "%s (%s)\n", info.name, humanize.FormatSize(info.size))
 		}
 	}
 
 	return output.String()
-}
-
-// formatSize formats a file size in human-readable form.
-func formatSize(bytes int64) string {
-	const (
-		KB = 1024
-		MB = KB * 1024
-		GB = MB * 1024
-	)
-
-	switch {
-	case bytes >= GB:
-		return fmt.Sprintf("%.1fGB", float64(bytes)/GB)
-	case bytes >= MB:
-		return fmt.Sprintf("%.1fMB", float64(bytes)/MB)
-	case bytes >= KB:
-		return fmt.Sprintf("%.1fKB", float64(bytes)/KB)
-	default:
-		return fmt.Sprintf("%dB", bytes)
-	}
 }

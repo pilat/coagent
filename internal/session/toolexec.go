@@ -19,6 +19,7 @@ type toolCallResultItem struct {
 	index    int
 	toolCall llmwire.ToolCall
 	result   string
+	images   []llmwire.ImageRef
 	err      error
 }
 
@@ -99,11 +100,12 @@ func executeToolCallsInternal(ctx context.Context, agent *svc, toolCalls []llmwi
 
 			log.Info("tool_call", zap.String("name", tc.Name))
 
-			toolResult, err := executeToolCall(ctx, agent.registry, tc, agent.contextWindow())
+			content, images, err := executeToolCall(ctx, agent.registry, tc, agent.contextWindow())
 			results[idx] = toolCallResultItem{
 				index:    idx,
 				toolCall: tc,
-				result:   toolResult,
+				result:   content,
+				images:   images,
 				err:      err,
 			}
 		}(i, tc)
@@ -176,10 +178,13 @@ func recordToolResults(
 		}
 
 		resultContent := r.result
+		images := r.images
 
 		if r.err != nil {
 			log.Warn("exec_failed", zap.String("name", r.toolCall.Name), zap.Error(r.err))
 			resultContent = fmt.Sprintf("Error: %v", r.err)
+			// An error stub never claims pixels (D7).
+			images = nil
 		} else {
 			log.Info("result", zap.String("name", r.toolCall.Name), zap.Int("size", len(r.result)))
 		}
@@ -189,7 +194,7 @@ func recordToolResults(
 			resultContent = prependLoopWarning(ctx, agent, postAction, r.toolCall.Name, resultContent)
 		}
 
-		if err := agent.ms.addToolResult(ctx, r.toolCall.ID, r.toolCall.Name, resultContent); err != nil {
+		if err := agent.ms.addToolResultRef(ctx, r.toolCall.ID, r.toolCall.Name, resultContent, images); err != nil {
 			return err
 		}
 	}
@@ -248,10 +253,10 @@ func executeToolCall(
 	registry tool.Registry,
 	call llmwire.ToolCall,
 	contextWindow int,
-) (string, error) {
+) (string, []llmwire.ImageRef, error) {
 	t := registry.Get(call.Name)
 	if t == nil {
-		return "", fmt.Errorf("unknown tool: %s", call.Name)
+		return "", nil, fmt.Errorf("unknown tool: %s", call.Name)
 	}
 
 	// Bind this call's id to ctx per-goroutine so tools (e.g. task) can resolve
@@ -261,14 +266,14 @@ func executeToolCall(
 
 	result, err := t.Execute(ctx, call.Arguments)
 	if err != nil {
-		return "", fmt.Errorf("execute tool %s: %w", call.Name, err)
+		return "", nil, fmt.Errorf("execute tool %s: %w", call.Name, err)
 	}
 
 	if result == nil {
-		return "", fmt.Errorf("execute tool %s: tool returned nil result", call.Name)
+		return "", nil, fmt.Errorf("execute tool %s: tool returned nil result", call.Name)
 	}
 
-	return formatToolResult(result, contextWindow), nil
+	return formatToolResult(result, contextWindow), result.Images, nil
 }
 
 func formatToolResult(result *tool.Result, contextWindow int) string {

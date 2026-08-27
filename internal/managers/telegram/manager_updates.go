@@ -96,8 +96,8 @@ func (m *Manager) processUpdate(ctx context.Context, update telegramUpdate) {
 		return
 	}
 
-	if msg.Text == "" && msg.Voice == nil {
-		log.Debug("update_dropped", zap.String("reason", "no_text_or_voice"))
+	if msg.Text == "" && msg.Voice == nil && !hasAttachment(msg) {
+		log.Debug("update_dropped", zap.String("reason", "no_text_or_voice_or_attachment"))
 		return
 	}
 
@@ -142,6 +142,15 @@ func (m *Manager) processTopicUpdate(ctx context.Context, msg *telegramMessage, 
 
 	if msg.Voice != nil {
 		m.handleVoiceMessage(ctx, msg, threadID, sessionID, hasSession)
+
+		return
+	}
+
+	// Attachments dispatch at voice's position: ahead of service-topic routing,
+	// so an upload into any session topic cannot be eaten as a command.
+	if att := attachmentOf(msg); att != nil {
+		m.handleAttachment(ctx, msg, att, threadID, sessionID, hasSession)
+
 		return
 	}
 

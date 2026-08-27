@@ -203,17 +203,18 @@ func activatePromotedInputSession(
 
 func loadMessage(ctx context.Context, q queryer, messageID int64) (*StoredMessage, error) {
 	var msg StoredMessage
-	var toolCallID, toolName, toolCallsRaw, reasoningContent, reasoningRaw, usageRaw sql.NullString
+	var toolCallID, toolName, toolCallsRaw, reasoningContent, reasoningRaw, attachmentsRaw, usageRaw sql.NullString
 	var compactedAt, clearedAt sql.NullTime
 	var costUSD sql.NullFloat64
 
 	err := q.QueryRowContext(ctx, `
 		SELECT id, session_id, role, content, tool_call_id, tool_name, tool_calls,
-			reasoning_content, reasoning_raw, cost_usd, usage, compacted_at, cleared_at, created_at
+			reasoning_content, reasoning_raw, attachments, cost_usd, usage, compacted_at, cleared_at, created_at
 		FROM messages WHERE id = ?`, messageID,
 	).Scan(
 		&msg.ID, &msg.SessionID, &msg.Role, &msg.Content,
 		&toolCallID, &toolName, &toolCallsRaw, &reasoningContent, &reasoningRaw,
+		&attachmentsRaw,
 		&costUSD, &usageRaw, &compactedAt, &clearedAt, &msg.CreatedAt,
 	)
 	if err != nil {
@@ -239,6 +240,10 @@ func loadMessage(ctx context.Context, q queryer, messageID int64) (*StoredMessag
 
 	if reasoningRaw.Valid {
 		msg.ReasoningRaw = []byte(reasoningRaw.String)
+	}
+
+	if attachmentsRaw.Valid && attachmentsRaw.String != "" {
+		msg.Attachments = []byte(attachmentsRaw.String)
 	}
 
 	if usageRaw.Valid {

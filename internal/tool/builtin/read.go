@@ -28,7 +28,8 @@ Usage:
 - You can optionally specify a line offset and limit for pagination (especially handy for long files)
 - Any lines longer than 2000 characters will be truncated
 - Each line is returned as "lineNum| content" (e.g., "42| some code here")
-- Cannot read binary files
+- Image files (jpeg, png, gif, webp, up to 5 MB) are returned as viewable image attachments; text-only tools cannot see them otherwise
+- Other binary files cannot be read
 
 CRITICAL: You have the capability to call multiple tools in a single response. It is always better to speculatively read multiple files in parallel that are potentially useful.`
 )
@@ -82,6 +83,15 @@ func (t *readTool) Execute(ctx context.Context, params json.RawMessage) (*tool.R
 	}
 
 	filePath := resolvePath(t.workDir, p.FilePath)
+
+	// Supported images route to the pixel branch ahead of binary rejection;
+	// offset/limit do not apply there. Stat first without opening: a FIFO must
+	// never reach an open() call.
+	if info, statErr := os.Stat(filePath); statErr == nil && info.Mode().IsRegular() {
+		if mime := sniffImageMIME(filePath); mime != "" {
+			return t.readImage(ctx, filePath, mime)
+		}
+	}
 
 	offset, limit := normalizeReadBounds(p.Offset, p.Limit)
 

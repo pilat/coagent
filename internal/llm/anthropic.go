@@ -2,6 +2,7 @@ package llm
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"slices"
@@ -18,15 +19,16 @@ import (
 var _ Client = (*anthropicClient)(nil)
 
 type anthropicClient struct {
-	client         anthropic.Client
-	model          string
-	apiKey         string
-	usage          *Usage
-	reasoningLevel ReasoningLevel
-	maxTokens      int
-	contextWindow  int
-	pricing        *config.ModelPricing  // catalog-resolved; nil bills the call at zero
-	reasoning      *config.ReasoningSpec // catalog-resolved reasoning capability
+	client          anthropic.Client
+	model           string
+	apiKey          string
+	usage           *Usage
+	reasoningLevel  ReasoningLevel
+	maxTokens       int
+	contextWindow   int
+	pricing         *config.ModelPricing  // catalog-resolved; nil bills the call at zero
+	reasoning       *config.ReasoningSpec // catalog-resolved reasoning capability
+	inputModalities []string              // catalog-resolved; nil/absent "image" means no pixels are ever sent
 }
 
 // anthropicParams holds parameters for creating an Anthropic client.
@@ -50,14 +52,15 @@ func newAnthropicClient(params anthropicParams) (Client, error) {
 	}
 
 	return &anthropicClient{
-		client:        client,
-		model:         params.Model.ID,
-		apiKey:        params.APIKey,
-		usage:         &Usage{},
-		maxTokens:     params.Model.MaxTokens,
-		contextWindow: params.Model.ContextWindow,
-		pricing:       params.Model.Pricing,
-		reasoning:     params.Model.Reasoning,
+		client:          client,
+		model:           params.Model.ID,
+		apiKey:          params.APIKey,
+		usage:           &Usage{},
+		maxTokens:       params.Model.MaxTokens,
+		contextWindow:   params.Model.ContextWindow,
+		pricing:         params.Model.Pricing,
+		reasoning:       params.Model.Reasoning,
+		inputModalities: params.Model.InputModalities,
 	}, nil
 }
 
@@ -190,10 +193,8 @@ func (c *anthropicClient) convertMessages(messages []llmwire.Message) []anthropi
 	for _, msg := range messages {
 		switch msg.Role {
 		case roleUser:
-			if msg.Content != "" {
-				result = append(result, anthropic.NewUserMessage(
-					anthropic.NewTextBlock(msg.Content),
-				))
+			if blocks := c.userMessageBlocks(msg); len(blocks) > 0 {
+				result = append(result, anthropic.NewUserMessage(blocks...))
 			}
 		case roleAssistant:
 			if blocks := c.buildAssistantBlocks(msg); len(blocks) > 0 {
@@ -205,6 +206,54 @@ func (c *anthropicClient) convertMessages(messages []llmwire.Message) []anthropi
 	}
 
 	return result
+}
+
+// userMessageBlocks renders a user message as text (if any) followed by its
+// image slots in slice order.
+func (c *anthropicClient) userMessageBlocks(msg llmwire.Message) []anthropic.ContentBlockParamUnion {
+	blocks := make([]anthropic.ContentBlockParamUnion, 0, len(msg.Images)+1)
+
+	if msg.Content != "" {
+		blocks = append(blocks, anthropic.NewTextBlock(msg.Content))
+	}
+
+	for _, ref := range msg.Images {
+		blocks = append(blocks, c.imageSlot(ref))
+	}
+
+	return blocks
+}
+
+// imageSlot resolves one image slot: a base64 block when the gate allows and the
+// file materializes, else an inline text placeholder that keeps slot order (D3).
+func (c *anthropicClient) imageSlot(ref llmwire.ImageRef) anthropic.ContentBlockParamUnion {
+	log := logger.Named("llm.client")
+
+	data, reason := resolveImage(c.inputModalities, ref, log)
+	if data == nil {
+		return anthropic.NewTextBlock(llmwire.ImagePlaceholder(reason))
+	}
+
+	return c.base64ImageBlock(ref.Mime, data)
+}
+
+func (c *anthropicClient) base64ImageBlock(mime string, data []byte) anthropic.ContentBlockParamUnion {
+	return anthropic.NewImageBlockBase64(string(anthropicImageMediaType(mime)), base64.StdEncoding.EncodeToString(data))
+}
+
+// anthropicImageMediaType maps canonical wire MIME strings onto the SDK's media
+// type vocabulary; only the four canonical values reach here unfiltered.
+func anthropicImageMediaType(mime string) anthropic.Base64ImageSourceMediaType {
+	switch mime {
+	case llmwire.MimeImageJpeg:
+		return anthropic.Base64ImageSourceMediaTypeImageJPEG
+	case llmwire.MimeImageGif:
+		return anthropic.Base64ImageSourceMediaTypeImageGIF
+	case llmwire.MimeImageWebp:
+		return anthropic.Base64ImageSourceMediaTypeImageWebP
+	default:
+		return anthropic.Base64ImageSourceMediaTypeImagePNG
+	}
 }
 
 func (c *anthropicClient) buildAssistantBlocks(msg llmwire.Message) []anthropic.ContentBlockParamUnion {
@@ -236,9 +285,56 @@ func (c *anthropicClient) buildAssistantBlocks(msg llmwire.Message) []anthropic.
 }
 
 func (c *anthropicClient) buildToolResultMessage(msg llmwire.Message) anthropic.MessageParam {
+	if len(msg.Images) == 0 {
+		return anthropic.NewUserMessage(
+			anthropic.NewToolResultBlock(msg.ToolCallID, toolResultPayloadJSON(msg.Content), false),
+		)
+	}
+
+	// Image-bearing results nest sibling blocks inside the tool_result's content
+	// array (the documented computer-use shape) so setMessageCacheControl keeps
+	// stamping the outer block — a sibling outside would move the breakpoint.
+	content := []anthropic.ToolResultBlockParamContentUnion{
+		{OfText: &anthropic.TextBlockParam{Text: toolResultPayloadJSON(msg.Content)}},
+	}
+
+	log := logger.Named("llm.client")
+
+	for _, ref := range msg.Images {
+		data, reason := resolveImage(c.inputModalities, ref, log)
+		if data != nil {
+			content = append(content, anthropic.ToolResultBlockParamContentUnion{
+				OfImage: &anthropic.ImageBlockParam{
+					Source: anthropic.ImageBlockParamSourceUnion{
+						OfBase64: &anthropic.Base64ImageSourceParam{
+							Data:      base64.StdEncoding.EncodeToString(data),
+							MediaType: anthropicImageMediaType(ref.Mime),
+						},
+					},
+				},
+			})
+		} else {
+			content = append(content, anthropic.ToolResultBlockParamContentUnion{
+				OfText: &anthropic.TextBlockParam{Text: llmwire.ImagePlaceholder(reason)},
+			})
+		}
+	}
+
+	return anthropic.NewUserMessage(anthropic.ContentBlockParamUnion{
+		OfToolResult: &anthropic.ToolResultBlockParam{
+			ToolUseID: msg.ToolCallID,
+			IsError:   anthropic.Bool(false),
+			Content:   content,
+		},
+	})
+}
+
+// toolResultPayloadJSON preserves the historical wire shape: text that parses as
+// a JSON object is sent verbatim, anything else is wrapped as {"output": ...}.
+func toolResultPayloadJSON(content string) string {
 	var resultMap map[string]any
-	if err := json.Unmarshal([]byte(msg.Content), &resultMap); err != nil {
-		resultMap = map[string]any{"output": msg.Content}
+	if err := json.Unmarshal([]byte(content), &resultMap); err != nil {
+		resultMap = map[string]any{"output": content}
 	}
 
 	resultJSON, err := json.Marshal(resultMap)
@@ -246,9 +342,7 @@ func (c *anthropicClient) buildToolResultMessage(msg llmwire.Message) anthropic.
 		resultJSON = []byte(`{"output": "marshal error"}`)
 	}
 
-	return anthropic.NewUserMessage(
-		anthropic.NewToolResultBlock(msg.ToolCallID, string(resultJSON), false),
-	)
+	return string(resultJSON)
 }
 
 func (c *anthropicClient) streamMessage(

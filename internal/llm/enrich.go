@@ -141,6 +141,7 @@ func applySpec(m *config.ModelEntry, providerKey, driverName string, spec catalo
 	m.MaxTokens = spec.MaxTokens
 	m.Pricing = spec.Pricing
 	m.Reasoning = spec.Reasoning
+	m.InputModalities = spec.InputModalities
 	m.EffortLevels = effortLevels(driverName, spec.Reasoning)
 	m.DefaultEffort = defaultEffort(spec.Reasoning, m.EffortLevels)
 }

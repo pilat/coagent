@@ -225,7 +225,7 @@ func TestExecuteToolCall_RejectsNilResult(t *testing.T) {
 	registry := tool.NewRegistry()
 	registry.Register(&nilResultTool{})
 
-	_, err := executeToolCall(t.Context(), registry, llmwire.ToolCall{
+	_, _, err := executeToolCall(t.Context(), registry, llmwire.ToolCall{
 		ID:        "call-1",
 		Name:      "nil-result",
 		Arguments: json.RawMessage(`{}`),

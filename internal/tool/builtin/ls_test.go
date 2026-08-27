@@ -129,28 +129,3 @@ func TestLsTool_Metadata(t *testing.T) {
 		}
 	})
 }
-
-func TestFormatSize(t *testing.T) {
-	tests := []struct {
-		bytes int64
-		want  string
-	}{
-		{0, "0B"},
-		{500, "500B"},
-		{1024, "1.0KB"},
-		{1536, "1.5KB"},
-		{1048576, "1.0MB"},
-		{1572864, "1.5MB"},
-		{1073741824, "1.0GB"},
-		{1610612736, "1.5GB"},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.want, func(t *testing.T) {
-			got := formatSize(tt.bytes)
-			if got != tt.want {
-				t.Errorf("formatSize(%d) = %s, want %s", tt.bytes, got, tt.want)
-			}
-		})
-	}
-}

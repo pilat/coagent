@@ -71,6 +71,16 @@ func (ms *messageStore) addAssistantMessageOutput(
 }
 
 func (ms *messageStore) addToolResult(ctx context.Context, callID, toolName, content string) error {
+	return ms.addToolResultRef(ctx, callID, toolName, content, nil)
+}
+
+// addToolResultRef records a tool result that carries pixel attachments
+// (referenced-not-stored); plain results go through addToolResult.
+func (ms *messageStore) addToolResultRef(
+	ctx context.Context,
+	callID, toolName, content string,
+	images []llmwire.ImageRef,
+) error {
 	ms.mu.Lock()
 	defer ms.mu.Unlock()
 
@@ -79,6 +89,7 @@ func (ms *messageStore) addToolResult(ctx context.Context, callID, toolName, con
 		Content:    content,
 		ToolCallID: callID,
 		ToolName:   toolName,
+		Images:     images,
 	}
 
 	return ms.appendMessageLocked(ctx, &msg)
@@ -362,6 +373,14 @@ func (ms *messageStore) reloadMessages(ctx context.Context) error {
 		if len(sm.ToolCalls) > 0 {
 			if err := json.Unmarshal(sm.ToolCalls, &msg.ToolCalls); err != nil {
 				return fmt.Errorf("unmarshal tool calls for message %d: %w", sm.ID, err)
+			}
+		}
+
+		// Cleared rows drop their refs in the same projection pass as the
+		// content placeholder — a cleared row must never re-materialize pixels.
+		if sm.ClearedAt == nil && len(sm.Attachments) > 0 {
+			if err := json.Unmarshal(sm.Attachments, &msg.Images); err != nil {
+				return fmt.Errorf("unmarshal attachments for message %d: %w", sm.ID, err)
 			}
 		}
 

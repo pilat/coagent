@@ -82,6 +82,7 @@ type StoredMessage struct {
 	ToolCalls        json.RawMessage
 	ReasoningContent string
 	ReasoningRaw     json.RawMessage
+	Attachments      json.RawMessage
 	CostUSD          float64
 	Usage            json.RawMessage
 	CompactedAt      *time.Time
@@ -747,7 +748,7 @@ type execer interface {
 func insertMessageWith(ctx context.Context, q execer, sessionID int64, msg *StoredMessage) (int64, error) {
 	result, err := q.ExecContext(
 		ctx,
-		`INSERT INTO messages (session_id, role, content, tool_call_id, tool_name, tool_calls, reasoning_content, reasoning_raw, cost_usd, usage) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		`INSERT INTO messages (session_id, role, content, tool_call_id, tool_name, tool_calls, reasoning_content, reasoning_raw, attachments, cost_usd, usage) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		sessionID,
 		msg.Role,
 		msg.Content,
@@ -756,6 +757,7 @@ func insertMessageWith(ctx context.Context, q execer, sessionID int64, msg *Stor
 		nullRawJSON(msg.ToolCalls),
 		msg.ReasoningContent,
 		nullRawJSON(msg.ReasoningRaw),
+		nullRawJSON(msg.Attachments),
 		msg.CostUSD,
 		nullRawJSON(msg.Usage),
 	)
@@ -920,7 +922,7 @@ func replaceCompactedMessagesTx(
 func (s *store) LoadActiveMessages(ctx context.Context, sessionID int64) ([]*StoredMessage, error) {
 	rows, err := s.db.QueryContext(
 		ctx,
-		`SELECT id, session_id, role, content, tool_call_id, tool_name, tool_calls, reasoning_content, reasoning_raw, cost_usd, usage, compacted_at, cleared_at, created_at
+		`SELECT id, session_id, role, content, tool_call_id, tool_name, tool_calls, reasoning_content, reasoning_raw, attachments, cost_usd, usage, compacted_at, cleared_at, created_at
 		FROM messages WHERE session_id = ? AND compacted_at IS NULL ORDER BY position IS NULL, position, id`,
 		sessionID,
 	)
@@ -1164,13 +1166,14 @@ func scanMessages(rows *sql.Rows) ([]*StoredMessage, error) {
 	for rows.Next() {
 		var msg StoredMessage
 
-		var toolCallID, toolName, toolCallsRaw, reasoningContent, reasoningRaw, usageRaw sql.NullString
+		var toolCallID, toolName, toolCallsRaw, reasoningContent, reasoningRaw, attachmentsRaw, usageRaw sql.NullString
 		var compactedAt, clearedAt sql.NullTime
 		var costUSD sql.NullFloat64
 
 		err := rows.Scan(
 			&msg.ID, &msg.SessionID, &msg.Role, &msg.Content,
 			&toolCallID, &toolName, &toolCallsRaw, &reasoningContent, &reasoningRaw,
+			&attachmentsRaw,
 			&costUSD, &usageRaw, &compactedAt, &clearedAt, &msg.CreatedAt,
 		)
 		if err != nil {
@@ -1188,6 +1191,10 @@ func scanMessages(rows *sql.Rows) ([]*StoredMessage, error) {
 
 		if reasoningRaw.Valid && reasoningRaw.String != "" {
 			msg.ReasoningRaw = json.RawMessage(reasoningRaw.String)
+		}
+
+		if attachmentsRaw.Valid && attachmentsRaw.String != "" {
+			msg.Attachments = json.RawMessage(attachmentsRaw.String)
 		}
 
 		msg.CostUSD = costUSD.Float64
