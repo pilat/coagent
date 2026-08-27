@@ -234,7 +234,7 @@ func TestAttachment_SavedImageCarriesReadAdviceAndRealType(t *testing.T) {
 	text := controller.messageCalls[0].Message
 
 	assert.Contains(t, text, "- name: photo.jpg")
-	assert.Contains(t, text, imageAdvisory, "small sniffed jpeg gets exactly one advisory sentence")
+	assert.Contains(t, text, imageAdvisory, "small sniffed image gets exactly one advisory sentence")
 	assert.Equal(t, 1, strings.Count(text, "Use the read tool"), "never double advice")
 }
 
@@ -248,6 +248,15 @@ func TestAttachment_PhotoAndAudioNameFallbacks(t *testing.T) {
 		Document: &telegramDocument{FileID: "d1", FileName: "", MimeType: ""},
 	})
 	assert.Equal(t, "coagent-whatever", doc.nameText("/tmp/coagent-whatever"))
+}
+
+func TestAttachment_UnnamedDocumentDoesNotInheritAudioPrefix(t *testing.T) {
+	doc := attachmentOf(&telegramMessage{
+		Document: &telegramDocument{FileID: "d1", FileName: "", MimeType: "application/pdf"},
+	})
+
+	assert.Equal(t, "coagent-whatever", doc.nameText("/tmp/coagent-whatever"),
+		"mime-derived fallback is audio-only per D12; unnamed documents keep the saved-path base")
 }
 
 func TestSanitizeExtension_StripsNonAlnumAndCapsLength(t *testing.T) {

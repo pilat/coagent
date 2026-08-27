@@ -92,8 +92,8 @@ func (a *tgAttachment) nameText(savedPath string) string {
 		return "photo.jpg"
 	case a.kind == "video":
 		return "video.mp4"
-	case a.mimeType != "":
-		// mime-derived fallback: "audio/ogg" → "audio.ogg"
+	case a.kind == "audio" && a.mimeType != "":
+		// mime-derived fallback is audio-only per D12: "audio/ogg" → "audio.ogg"
 		sub := a.mimeType
 		if i := strings.IndexByte(sub, '/'); i >= 0 {
 			sub = sub[i+1:]
