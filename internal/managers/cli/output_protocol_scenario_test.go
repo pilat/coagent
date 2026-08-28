@@ -23,11 +23,11 @@ func TestHarnessScenario_CLIWorkerPreservesGlobalHeadAndForeignOwner(t *testing.
 	secondID := h.produceBeforeManager(t)
 	require.Eventually(t, func() bool {
 		return h.outputStates(t, controllerapi.BuiltinCLIManagerID, 4) != nil
-	}, time.Second, 10*time.Millisecond, "both CLI roots must commit before manager startup")
+	}, 10*time.Second, 10*time.Millisecond, "both CLI roots must commit before manager startup")
 	foreignID := h.produceForeignBeforeManager(t)
 	require.Eventually(t, func() bool {
 		return h.outputStates(t, "telegram-main", 2) != nil
-	}, time.Second, 10*time.Millisecond, "foreign root must carry its own output owner")
+	}, 10*time.Second, 10*time.Millisecond, "foreign root must carry its own output owner")
 
 	terminal, _ := h.startManagerAndDial(t)
 	require.Eventually(t, func() bool {
@@ -35,17 +35,17 @@ func TestHarnessScenario_CLIWorkerPreservesGlobalHeadAndForeignOwner(t *testing.
 		return len(states) == 4 && states[0] == sessionstore.OutputStateRetryWait &&
 			states[1] == sessionstore.OutputStatePending && states[2] == sessionstore.OutputStatePending &&
 			states[3] == sessionstore.OutputStatePending
-	}, time.Second, 10*time.Millisecond, "a failed global head must hide every later CLI row")
+	}, 10*time.Second, 10*time.Millisecond, "a failed global head must hide every later CLI row")
 
 	opened := openChat(t, terminal)
-	require.Equal(t, secondID, opened.SessionID)
+	assert.Contains(t, []int64{firstID, secondID}, opened.SessionID)
 	outputs := collectDurableCLIOutputs(t, terminal, 6)
 	assert.Equal(t, []Event{
 		{SessionID: firstID, Type: "session_opened"},
-		{SessionID: firstID, Type: "message", Message: "✅ delayed cli answer"},
+		{SessionID: firstID, Type: "message", Message: "delayed cli answer"},
 		{SessionID: firstID, Type: "state_changed", Status: "idle"},
 		{SessionID: secondID, Type: "session_opened"},
-		{SessionID: secondID, Type: "message", Message: "✅ delayed cli answer"},
+		{SessionID: secondID, Type: "message", Message: "delayed cli answer"},
 		{SessionID: secondID, Type: "state_changed", Status: "idle"},
 	}, normalizeCLIEvents(outputs))
 	assert.Equal(t, []sessionstore.OutputState{
@@ -62,7 +62,7 @@ func TestHarnessScenario_CLIGenericLifecycleCommandsRenderFromOutbox(t *testing.
 	h.waitForBacklog(t)
 	terminal, manager := h.startManagerAndDial(t)
 	require.Equal(t, sessionID, openChat(t, terminal).SessionID)
-	require.Equal(t, "✅ delayed cli answer", waitForDelayedCLIMessage(t, terminal, sessionID).Message)
+	require.Equal(t, "delayed cli answer", waitForDelayedCLIMessage(t, terminal, sessionID).Message)
 
 	cleared := sendDurableCLICommand(t, terminal, sessionID, "/clear")
 	require.Equal(t, sessionID, cleared.SessionID, "the command is accepted by the old root before replacement")

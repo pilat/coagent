@@ -127,8 +127,16 @@ func (c *chat) connect(ctx context.Context) error {
 	c.mu.Lock()
 	c.client = client
 	c.session = res.SessionID
+
 	c.generation = res.Generation
+	if res.ProgressWatermark > c.outputID {
+		c.outputID = res.ProgressWatermark
+	}
 	c.mu.Unlock()
+
+	if res.Progress != "" {
+		c.println(res.Progress)
+	}
 
 	return nil
 }

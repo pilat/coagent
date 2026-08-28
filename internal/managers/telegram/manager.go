@@ -262,6 +262,23 @@ func (m *Manager) Start(ctx context.Context) error {
 		return fmt.Errorf("reconcile sessions: %w", err)
 	}
 
+	if progressController, ok := m.controller.(controllerapi.ProgressController); ok {
+		sessions, listErr := m.controller.ListSessions(runCtx)
+		if listErr != nil {
+			cancel()
+			return fmt.Errorf("list sessions for progress refresh: %w", listErr)
+		}
+
+		for _, session := range sessions {
+			if session.HasActiveLoop {
+				if refreshErr := progressController.RefreshProgress(runCtx, session.ID); refreshErr != nil {
+					cancel()
+					return fmt.Errorf("refresh session %d progress: %w", session.ID, refreshErr)
+				}
+			}
+		}
+	}
+
 	//nolint:contextcheck // same long-lived runCtx as above
 	if err := m.setCommands(runCtx); err != nil {
 		cancel()

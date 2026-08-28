@@ -2,8 +2,10 @@ package session
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
+	"unicode"
 
 	"github.com/pilat/coagent/internal/sessionstore"
 	"github.com/pilat/coagent/internal/tool"
@@ -37,6 +39,41 @@ type schedulesCommandBoundary interface {
 	HandleSchedules(context.Context, PendingInput) (string, error)
 }
 
+type activatedInputBoundary interface {
+	AcceptActivated(
+		context.Context,
+		PendingInput,
+		string,
+		[]PendingToolCall,
+		tool.ActivationGrant,
+	) (bool, bool, error)
+}
+
+type activationResolver interface {
+	ExpireActivation(context.Context, tool.ActivationGrant) error
+}
+
+type activationCancelBoundary interface {
+	CancelActivation(context.Context, tool.ActivationGrant) error
+}
+
+type activationStateBoundary interface {
+	PendingActivation(context.Context) (*tool.ActivationGrant, error)
+}
+
+type progressInputBoundary interface {
+	CurrentProgress(context.Context) (string, error)
+}
+
+type progressChangeBoundary interface {
+	ProgressChange(context.Context) (string, error)
+}
+
+type finalOutputBoundary interface {
+	FinalOutput(context.Context, string) (string, error)
+}
+
+//nolint:funlen,gocognit,gocyclo // FIFO command, activation, and pending-call cases share one drain boundary.
 func (r *loopRunner) drainBoundary(ctx context.Context) (bool, error) {
 	if r.agent.boundary == nil {
 		return false, nil
@@ -51,6 +88,15 @@ func (r *loopRunner) drainBoundary(ctx context.Context) (bool, error) {
 		}
 
 		if input == nil {
+			return acceptedAny, nil
+		}
+
+		if r.agent.currentActivation != nil && input.ID != r.agent.currentActivation.InputID {
+			return acceptedAny, nil
+		}
+
+		command := leadingSlashCommand(input.Content)
+		if acceptedAny && command != "" {
 			return acceptedAny, nil
 		}
 
@@ -92,12 +138,27 @@ func (r *loopRunner) drainBoundary(ctx context.Context) (bool, error) {
 			}
 		}
 
-		accepted, blocked, err := r.agent.boundary.Accept(
-			ctx,
-			*input,
-			prepared,
-			pendingCalls,
-		)
+		toolID := r.agent.activationIndex[command]
+		var grant *tool.ActivationGrant
+		var accepted, blocked bool
+
+		if toolID != "" {
+			value := tool.ActivationGrant{
+				SessionID: r.agent.id, InputID: input.ID, ToolID: toolID, Command: command,
+			}
+			prepared += activationInstruction(toolID, command)
+
+			boundary, ok := r.agent.boundary.(activatedInputBoundary)
+			if !ok {
+				return acceptedAny, errors.New("activation boundary unavailable")
+			}
+
+			accepted, blocked, err = boundary.AcceptActivated(ctx, *input, prepared, pendingCalls, value)
+			grant = &value
+		} else {
+			accepted, blocked, err = r.agent.boundary.Accept(ctx, *input, prepared, pendingCalls)
+		}
+
 		if err != nil {
 			return acceptedAny, fmt.Errorf("accept durable input: %w", err)
 		}
@@ -116,8 +177,40 @@ func (r *loopRunner) drainBoundary(ctx context.Context) (bool, error) {
 
 		acceptedAny = true
 
+		if grant != nil {
+			r.agent.currentActivation = grant
+			return acceptedAny, nil
+		}
+
+		if command != "" {
+			return acceptedAny, nil
+		}
+
 		r.agent.loopDetector.resetWindow()
 	}
+}
+
+func leadingSlashCommand(content string) string {
+	trimmed := strings.TrimLeftFunc(content, unicode.IsSpace)
+	if trimmed == "" || trimmed[0] != '/' {
+		return ""
+	}
+
+	for i, r := range trimmed {
+		if unicode.IsSpace(r) {
+			return trimmed[:i]
+		}
+	}
+
+	return trimmed
+}
+
+func activationInstruction(toolID, command string) string {
+	return fmt.Sprintf(
+		"\n\n[Host activation: call %s as the only tool in this assistant response to handle %s. No change has occurred until the host emits its receipt.]",
+		toolID,
+		command,
+	)
 }
 
 func (r *loopRunner) handleBoundaryCommand(ctx context.Context, input PendingInput) (boundaryOutcome, error) {
@@ -130,6 +223,15 @@ func (r *loopRunner) handleBoundaryCommand(ctx context.Context, input PendingInp
 		}
 
 		output := renderStatus(r.agent.buildSessionStatus(ctx))
+		if provider, ok := r.agent.boundary.(progressInputBoundary); ok {
+			var err error
+
+			output, err = provider.CurrentProgress(ctx)
+			if err != nil {
+				return commandNotRecognized, fmt.Errorf("capture session progress: %w", err)
+			}
+		}
+
 		if err := r.handleCommandOutput(ctx, input, "status command", output); err != nil {
 			return commandNotRecognized, err
 		}

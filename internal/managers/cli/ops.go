@@ -1,3 +1,4 @@
+//nolint:wrapcheck // Control op responses preserve controller-domain errors.; nosemgrep: semgrep.coagent-no-preamble-before-package
 package cli
 
 import (
@@ -54,9 +55,11 @@ type (
 	// OpenResult answers chat_open. A zero session id means the conversation has
 	// not started yet: the first message creates it.
 	OpenResult struct {
-		SessionID  int64  `json:"session_id"`
-		Generation int64  `json:"generation,omitempty"`
-		WorkDir    string `json:"work_dir"`
+		SessionID         int64  `json:"session_id"`
+		Generation        int64  `json:"generation,omitempty"`
+		WorkDir           string `json:"work_dir"`
+		Progress          string `json:"progress,omitempty"`
+		ProgressWatermark int64  `json:"progress_watermark,omitempty"`
 	}
 
 	// SendParams is one message from a terminal. A zero session id asks for the
@@ -185,8 +188,25 @@ func (m *Manager) open(ctx context.Context, c *ctl.Conn) (OpenResult, error) {
 	m.mu.Unlock()
 
 	_, generation := m.lifecycle()
+	var progressText string
+	var progressWatermark int64
 
-	return OpenResult{SessionID: sessionID, Generation: generation, WorkDir: workDir}, nil
+	if sessionID != 0 {
+		if provider, ok := m.controller.(controllerapi.ProgressController); ok {
+			current, progressErr := provider.CurrentProgress(ctx, sessionID)
+			if progressErr != nil {
+				return OpenResult{}, progressErr
+			}
+
+			progressText = current.Rendered
+			progressWatermark = current.OutboxWatermark
+		}
+	}
+
+	return OpenResult{
+		SessionID: sessionID, Generation: generation, WorkDir: workDir,
+		Progress: progressText, ProgressWatermark: progressWatermark,
+	}, nil
 }
 
 // send routes one normal message through the controller's durable input path.

@@ -2,6 +2,7 @@ package sessionstore
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -47,7 +48,8 @@ func (s *store) InsertAssistantMessageWithOutput(
 	}
 
 	key := fmt.Sprintf("message:%d:%s", messageID, phase)
-	fingerprint := outputFingerprint(outputType, content, sessionID, nil)
+	releasesInput := outputType == OutputMessagePersistent
+	fingerprint := outputFingerprintWithRelease(outputType, content, sessionID, nil, releasesInput)
 
 	attributes, err := json.Marshal(map[string]any{managerIDAttribute: owner})
 	if err != nil {
@@ -56,9 +58,9 @@ func (s *store) InsertAssistantMessageWithOutput(
 
 	result, err := tx.ExecContext(ctx, `
 		INSERT INTO session_outbox
-			(session_id, type, content, attributes, source_key, fingerprint, created_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		sessionID, outputType, content, string(attributes), key, fingerprint, time.Now().UTC())
+			(session_id, type, content, attributes, source_key, fingerprint, created_at, releases_input)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		sessionID, outputType, content, string(attributes), key, fingerprint, time.Now().UTC(), releasesInput)
 	if err != nil {
 		return 0, nil, fmt.Errorf("insert assistant output: %w", err)
 	}
@@ -108,12 +110,16 @@ func (s *store) EnqueueOutput(ctx context.Context, draft OutputDraft) (*OutputCo
 	}
 
 	now := time.Now().UTC()
+	if !draft.CreatedAt.IsZero() {
+		now = draft.CreatedAt.UTC()
+	}
 
 	result, err := tx.ExecContext(ctx, `
 		INSERT INTO session_outbox
-			(session_id, type, content, attributes, source_key, fingerprint, created_at)
-		VALUES (?, ?, ?, ?, NULLIF(?, ''), NULLIF(?, ''), ?)`,
-		draft.SessionID, draft.Type, draft.Content, string(encoded), draft.SourceKey, draft.Fingerprint, now)
+			(session_id, type, content, attributes, source_key, fingerprint, created_at, releases_input)
+		VALUES (?, ?, ?, ?, NULLIF(?, ''), NULLIF(?, ''), ?, ?)`,
+		draft.SessionID, draft.Type, draft.Content, string(encoded), draft.SourceKey, draft.Fingerprint, now,
+		draft.ReleasesInput)
 	if err == nil {
 		id, idErr := result.LastInsertId()
 		if idErr != nil {
@@ -145,6 +151,24 @@ func (s *store) EnqueueOutput(ctx context.Context, draft OutputDraft) (*OutputCo
 	}
 
 	return &OutputCommit{OutputID: existingID, OwnerID: owner, Existing: true}, nil
+}
+
+//nolint:wsl_v5 // Identity lookup keeps sentinel handling adjacent.
+func (s *store) OutputBySourceKey(
+	ctx context.Context,
+	sessionID int64,
+	sourceKey string,
+) (*OutputRecord, error) {
+	record, err := scanOutputRecord(s.db.QueryRowContext(ctx, `SELECT `+outputColumns+
+		` FROM session_outbox WHERE session_id = ? AND source_key = ?`, sessionID, sourceKey))
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrNoOutput
+	}
+	if err != nil {
+		return nil, fmt.Errorf("load output by source key: %w", err)
+	}
+
+	return record, nil
 }
 
 // HandleInputWithOutput commits a command's terminal state with its response.

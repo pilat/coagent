@@ -29,11 +29,7 @@
     },
     {
       "type": "message",
-      "message": "✅ manager reapplied"
-    },
-    {
-      "type": "state_changed",
-      "status": "idle"
+      "message": "manager reapplied"
     }
   ]
 }

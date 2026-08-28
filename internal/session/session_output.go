@@ -24,6 +24,7 @@ func (s *svc) renderSessionHelp() string {
 		"`/kill` — close this session",
 		"`/compact [focus]` — compact the context",
 		"`/schedules` — list schedules",
+		"`/budget <request>` — arm, replace, inspect, or clear a one-shot cost/wall-time checkpoint",
 	}
 	if s.loader == nil {
 		return strings.Join(lines, "\n")

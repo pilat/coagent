@@ -15,14 +15,15 @@ import (
 func TestTodoWriteReplacesTheWholeList(t *testing.T) {
 	store := todo.New()
 	store.Add("stale", todo.PriorityHigh)
+	id := "a"
 
 	raw, err := json.Marshal(todoWriteParams{Items: []todoItem{
-		{ID: "a", Content: "first", Status: "in_progress", Priority: "high"},
+		{ID: &id, Content: "first", Status: "in_progress", Priority: "high"},
 		{Content: "second"},
 	}})
 	require.NoError(t, err)
 
-	result, err := newTodoWriteTool(store).Execute(context.Background(), raw)
+	result, err := newTodoWriteTool(store, nil).Execute(context.Background(), raw)
 	require.NoError(t, err)
 
 	assert.Equal(t, "Todo list updated with 2 items.", result.Output)
@@ -36,7 +37,7 @@ func TestTodoWriteReplacesTheWholeList(t *testing.T) {
 }
 
 func TestTodoWriteRejectsMalformedParams(t *testing.T) {
-	_, err := newTodoWriteTool(todo.New()).Execute(context.Background(), json.RawMessage(`{`))
+	_, err := newTodoWriteTool(todo.New(), nil).Execute(context.Background(), json.RawMessage(`{`))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "invalid parameters")
 }

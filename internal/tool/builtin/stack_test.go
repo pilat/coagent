@@ -124,6 +124,7 @@ func TestRegisterCoreTools_SharesFileMutator(t *testing.T) {
 		loader.New(),
 		todo.New(),
 		nil,
+		nil,
 		&bashRunnerStub{},
 		mutator,
 	)

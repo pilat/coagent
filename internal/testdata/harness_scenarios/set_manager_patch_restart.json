@@ -29,11 +29,7 @@
     },
     {
       "type": "message",
-      "message": "✅ manager settings updated"
-    },
-    {
-      "type": "state_changed",
-      "status": "idle"
+      "message": "manager settings updated"
     }
   ]
 }

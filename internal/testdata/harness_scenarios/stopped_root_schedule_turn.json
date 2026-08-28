@@ -20,11 +20,7 @@
     },
     {
       "type": "message",
-      "message": "✅ scheduled turn completed"
-    },
-    {
-      "type": "state_changed",
-      "status": "idle"
+      "message": "scheduled turn completed"
     }
   ]
 }

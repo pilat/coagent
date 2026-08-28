@@ -196,7 +196,7 @@ func TestHarnessScenario_SetManagerPatchPreservesFields(t *testing.T) {
 	assert.NoFileExists(t, filepath.Join(configDir, "pending_apply.json"))
 
 	collector2.waitFor(t, "resumed completion trace", func(events []controllerapi.SessionNotification) bool {
-		return len(events) == 4
+		return len(events) == 3
 	})
 	combined := append(collector1.snapshot(), collector2.snapshot()...)
 	assertHarnessTrace(t, "set_manager_patch_restart.json", combined, sessionID)
@@ -255,7 +255,7 @@ func TestHarnessScenario_SetManagerReapplyRestarts(t *testing.T) {
 	assert.Equal(t, before.Managers, raw.Managers)
 
 	collector2.waitFor(t, "resumed completion trace", func(events []controllerapi.SessionNotification) bool {
-		return len(events) == 4
+		return len(events) == 3
 	})
 	combined := append(collector1.snapshot(), collector2.snapshot()...)
 	assertHarnessTrace(t, "set_manager_reapply_restart.json", combined, sessionID)

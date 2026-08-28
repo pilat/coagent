@@ -204,6 +204,7 @@ func (m *Manager) setCommands(ctx context.Context) error {
 			{tgKeyCommand: "clear", tgKeyDescription: "Clear session (fresh start, same topic)"},
 			{tgKeyCommand: "model", tgKeyDescription: "Choose LLM model"},
 			{tgKeyCommand: "status", tgKeyDescription: "Show session stats (tokens, cost, context)"},
+			{tgKeyCommand: "budget", tgKeyDescription: "Set a cost or wall-time checkpoint"},
 			{tgKeyCommand: "help", tgKeyDescription: "Show available commands"},
 		},
 	}, nil)

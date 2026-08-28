@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 
@@ -16,11 +17,12 @@ import (
 
 // toolCallResultItem holds the result of a single tool call execution.
 type toolCallResultItem struct {
-	index    int
-	toolCall llmwire.ToolCall
-	result   string
-	images   []llmwire.ImageRef
-	err      error
+	index          int
+	toolCall       llmwire.ToolCall
+	result         string
+	images         []llmwire.ImageRef
+	err            error
+	directMessages []string
 }
 
 // batchConflict rejects a call that cannot share an assistant turn with its
@@ -75,6 +77,22 @@ func executeToolCallsInternal(ctx context.Context, agent *svc, toolCalls []llmwi
 
 	results := make([]toolCallResultItem, len(toolCalls))
 
+	if agent.currentActivation != nil {
+		ctx = tool.WithActivationGrant(ctx, *agent.currentActivation)
+
+		if len(toolCalls) > 1 && slices.ContainsFunc(toolCalls, func(call llmwire.ToolCall) bool {
+			return call.Name == agent.currentActivation.ToolID
+		}) {
+			for i, call := range toolCalls {
+				results[i] = toolCallResultItem{index: i, toolCall: call, err: fmt.Errorf(
+					"%s must be invoked alone in its activated command turn", agent.currentActivation.ToolID,
+				)}
+			}
+
+			return results
+		}
+	}
+
 	var wg sync.WaitGroup
 
 	for i, tc := range toolCalls {
@@ -100,13 +118,14 @@ func executeToolCallsInternal(ctx context.Context, agent *svc, toolCalls []llmwi
 
 			log.Info("tool_call", zap.String("name", tc.Name))
 
-			content, images, err := executeToolCall(ctx, agent.registry, tc, agent.contextWindow())
+			toolResult, images, directMessages, err := executeToolCall(ctx, agent.registry, tc, agent.contextWindow())
 			results[idx] = toolCallResultItem{
-				index:    idx,
-				toolCall: tc,
-				result:   content,
-				images:   images,
-				err:      err,
+				index:          idx,
+				toolCall:       tc,
+				result:         toolResult,
+				images:         images,
+				err:            err,
+				directMessages: directMessages,
 			}
 		}(i, tc)
 	}
@@ -159,6 +178,8 @@ func executeToolCalls(ctx context.Context, agent *svc, toolCalls []llmwire.ToolC
 
 // recordToolResults appends every result in call order, prefixing the last one
 // with the loop-detector warning when postAction asks for it.
+//
+//nolint:nestif // Each result commits before its semantic progress hook.
 func recordToolResults(
 	ctx context.Context,
 	agent *svc,
@@ -194,8 +215,34 @@ func recordToolResults(
 			resultContent = prependLoopWarning(ctx, agent, postAction, r.toolCall.Name, resultContent)
 		}
 
-		if err := agent.ms.addToolResultRef(ctx, r.toolCall.ID, r.toolCall.Name, resultContent, images); err != nil {
+		direct := make([]string, len(r.directMessages))
+		for i, message := range r.directMessages {
+			direct[i] = logger.Redact(message)
+		}
+
+		if err := agent.ms.addToolResultOutput(
+			ctx, r.toolCall.ID, r.toolCall.Name, resultContent, images, direct,
+		); err != nil {
 			return err
+		}
+
+		activatedDirect := r.err == nil && len(r.directMessages) > 0 && agent.currentActivation != nil &&
+			r.toolCall.Name == agent.currentActivation.ToolID
+		if activatedDirect {
+			agent.currentActivation = nil
+		}
+
+		if r.err == nil && (r.toolCall.Name == "todowrite" || activatedDirect) {
+			if provider, ok := agent.boundary.(progressChangeBoundary); ok {
+				message, progressErr := provider.ProgressChange(ctx)
+				if progressErr != nil {
+					return fmt.Errorf("enqueue TODO progress snapshot: %w", progressErr)
+				}
+
+				if agent.loopOpts.Notify != nil {
+					_ = agent.loopOpts.Notify(ctx, message)
+				}
+			}
 		}
 	}
 
@@ -253,10 +300,10 @@ func executeToolCall(
 	registry tool.Registry,
 	call llmwire.ToolCall,
 	contextWindow int,
-) (string, []llmwire.ImageRef, error) {
+) (string, []llmwire.ImageRef, []string, error) {
 	t := registry.Get(call.Name)
 	if t == nil {
-		return "", nil, fmt.Errorf("unknown tool: %s", call.Name)
+		return "", nil, nil, fmt.Errorf("unknown tool: %s", call.Name)
 	}
 
 	// Bind this call's id to ctx per-goroutine so tools (e.g. task) can resolve
@@ -266,14 +313,14 @@ func executeToolCall(
 
 	result, err := t.Execute(ctx, call.Arguments)
 	if err != nil {
-		return "", nil, fmt.Errorf("execute tool %s: %w", call.Name, err)
+		return "", nil, nil, fmt.Errorf("execute tool %s: %w", call.Name, err)
 	}
 
 	if result == nil {
-		return "", nil, fmt.Errorf("execute tool %s: tool returned nil result", call.Name)
+		return "", nil, nil, fmt.Errorf("execute tool %s: tool returned nil result", call.Name)
 	}
 
-	return formatToolResult(result, contextWindow), result.Images, nil
+	return formatToolResult(result, contextWindow), result.Images, result.DirectMessages, nil
 }
 
 func formatToolResult(result *tool.Result, contextWindow int) string {

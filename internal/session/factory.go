@@ -43,6 +43,7 @@ type CreateOptions struct {
 	LastActivityAt  time.Time
 	InputBoundary   InputBoundary
 	OutputEnabled   bool
+	BudgetGate      BudgetGate
 
 	// SettlementOpen marks a lifecycle settlement open: the initial state is not
 	// persisted, so a stopping root is never reactivated by /stop settlement.
@@ -229,7 +230,7 @@ func (f *factory) build(
 	todoSvc := todo.New()
 	ldr := loader.New(f.marketplaceCache)
 
-	reg, stack, err := f.buildRegistry(ctx, cfg, ldr, todoSvc, opts.ProjectID)
+	reg, stack, err := f.buildRegistry(ctx, cfg, ldr, todoSvc, opts.ProjectID, opts.ID)
 	if err != nil {
 		return nil, err
 	}
@@ -264,6 +265,7 @@ func (f *factory) build(
 		LastActivityAt:  opts.LastActivityAt,
 		InputBoundary:   opts.InputBoundary,
 		OutputEnabled:   opts.OutputEnabled,
+		BudgetGate:      opts.BudgetGate,
 		SettlementOpen:  opts.SettlementOpen,
 		PreserveStopped: opts.PreserveStoppedStatus,
 		ActiveSubagents: opts.ActiveSubagents,
@@ -293,16 +295,17 @@ func (f *factory) buildRegistry(
 	cfg *config.Config,
 	ldr loader.Service,
 	todoSvc todo.Service,
-	projectID int64,
+	projectID, sessionID int64,
 ) (tool.Registry, *builtin.Stack, error) {
 	stack, err := builtin.BuildStack(ctx, builtin.StackConfig{
-		WorkDir:  cfg.WorkDir,
-		Pool:     f.mcpPool,
-		Servers:  resolveMCPServers(ctx, f.mcpStore, f.secrets, projectID),
-		Unified:  cfg.UnifiedConfig,
-		Loader:   ldr,
-		Todo:     todoSvc,
-		Provider: f.provider,
+		WorkDir:         cfg.WorkDir,
+		Pool:            f.mcpPool,
+		Servers:         resolveMCPServers(ctx, f.mcpStore, f.secrets, projectID),
+		Unified:         cfg.UnifiedConfig,
+		Loader:          ldr,
+		Todo:            todoSvc,
+		TodoReplacement: &todoReplacement{store: f.store, sessionID: sessionID, memory: todoSvc},
+		Provider:        f.provider,
 	})
 	if err != nil {
 		return nil, nil, fmt.Errorf("build tool stack: %w", err)

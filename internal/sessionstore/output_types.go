@@ -53,12 +53,14 @@ const (
 )
 
 type OutputDraft struct {
-	SessionID   int64
-	Type        OutputType
-	Content     string
-	Attributes  map[string]any
-	SourceKey   string
-	Fingerprint string
+	SessionID     int64
+	Type          OutputType
+	Content       string
+	Attributes    map[string]any
+	SourceKey     string
+	Fingerprint   string
+	ReleasesInput bool
+	CreatedAt     time.Time
 }
 
 type OutputRecord struct {
@@ -78,6 +80,7 @@ type OutputRecord struct {
 	BlockedAt     *time.Time
 	LastError     string
 	CreatedAt     time.Time
+	ReleasesInput bool
 }
 
 type OutputClaim struct {
@@ -122,6 +125,7 @@ type ManagerRootCreate struct {
 	ReasoningLevel string
 	Attributes     map[string]any
 	Prompt         string
+	StartEpisode   bool
 	Name           string
 	WorkDir        string
 }
@@ -151,6 +155,10 @@ type OutputStore interface {
 	RetryBlockedHead(ctx context.Context, managerID string) (bool, error)
 	WakeOutputHead(ctx context.Context, managerID string) (bool, error)
 	OutputQueueStatus(ctx context.Context, managerID string) (*OutputQueueStatus, error)
+}
+
+type OutputIdentityStore interface { //nolint:iface // Optional reconciliation capability.
+	OutputBySourceKey(ctx context.Context, sessionID int64, sourceKey string) (*OutputRecord, error)
 }
 
 // CommandOutputStore resolves an inbox command and its visible result together;

@@ -32,6 +32,9 @@ type chatServer struct {
 	server    *ctl.Server
 	sessionID int64
 
+	progress          string
+	progressWatermark int64
+
 	mu       sync.Mutex
 	conns    []*ctl.Conn
 	sent     []cli.SendParams
@@ -150,9 +153,12 @@ func (s *chatServer) cancelOp(_ context.Context, _ *ctl.Conn, params json.RawMes
 func (s *chatServer) openOp(_ context.Context, c *ctl.Conn, _ json.RawMessage) (any, *ctl.Error) {
 	s.mu.Lock()
 	s.conns = append(s.conns, c)
+	progress, watermark := s.progress, s.progressWatermark
 	s.mu.Unlock()
 
-	return cli.OpenResult{SessionID: s.sessionID}, nil
+	return cli.OpenResult{
+		SessionID: s.sessionID, Progress: progress, ProgressWatermark: watermark,
+	}, nil
 }
 
 func (s *chatServer) sendOp(_ context.Context, _ *ctl.Conn, params json.RawMessage) (any, *ctl.Error) {

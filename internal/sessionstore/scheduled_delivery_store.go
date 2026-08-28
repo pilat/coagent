@@ -40,6 +40,10 @@ func (s *store) InsertToolNotificationPairOnce(
 		return 0, 0, false, nil
 	}
 
+	if err := startScheduledEpisode(ctx, tx, sessionID); err != nil {
+		return 0, 0, false, err
+	}
+
 	asstID, err = insertMessageWith(ctx, tx, sessionID, assistant)
 	if err != nil {
 		return 0, 0, false, fmt.Errorf("insert idempotent assistant stub: %w", err)
@@ -86,6 +90,10 @@ func (s *store) ResetSessionContextOnce(
 
 	if !claimed {
 		return nil, false, nil
+	}
+
+	if err := startScheduledEpisode(ctx, tx, sessionID); err != nil {
+		return nil, false, err
 	}
 
 	now := time.Now().UTC()
@@ -136,6 +144,21 @@ func (s *store) ResetSessionContextOnce(
 	}
 
 	return ids, true, nil
+}
+
+func startScheduledEpisode(ctx context.Context, tx *sql.Tx, sessionID int64) error {
+	now := time.Now().UTC()
+
+	_, err := tx.ExecContext(ctx, `UPDATE sessions SET episode_started_at = ?
+		WHERE id = ? AND parent_id = 0
+			AND json_type(attributes, '$.manager_id') = 'text'
+			AND json_extract(attributes, '$.manager_id') <> ''
+			AND (episode_started_at IS NULL OR status NOT IN ('active', 'suspended'))`, now, sessionID)
+	if err != nil {
+		return fmt.Errorf("start scheduled episode: %w", err)
+	}
+
+	return nil
 }
 
 func insertScheduledOutput(ctx context.Context, tx *sql.Tx, sessionID int64, deliveryID, content string) error {

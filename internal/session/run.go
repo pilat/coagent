@@ -15,6 +15,7 @@ import (
 	"github.com/pilat/coagent/internal/logger"
 	"github.com/pilat/coagent/internal/sessionevent"
 	"github.com/pilat/coagent/internal/sessionstore"
+	"github.com/pilat/coagent/internal/tool"
 )
 
 const agentsMDMessagePrefix = "User preferences from AGENTS.md files (lower priority than system instructions):\n\n"
@@ -47,6 +48,15 @@ type sessionStatus struct {
 	SubagentCount int
 }
 
+func (s *svc) ContextProjection(ctx context.Context) ContextProjection {
+	status := s.buildSessionStatus(ctx)
+
+	return ContextProjection{
+		Used: status.ContextUsed, Max: status.ContextMax, Approximate: status.ContextIsEst,
+		Available: status.ContextMax > 0 && status.ContextUsed > 0,
+	}
+}
+
 // Run executes the main agent loop.
 func (s *svc) Run(ctx context.Context, prompt string) (string, error) {
 	result, err := s.run(ctx, prompt)
@@ -61,6 +71,8 @@ func (s *svc) Run(ctx context.Context, prompt string) (string, error) {
 // the historical text-only API for direct callers, while RunDaemon must carry
 // suspension across the session boundary without reconstructing it from
 // producer ledgers that may have been created during this run.
+//
+//nolint:funlen // Run keeps setup, loop, and durable terminalization in causal order.
 func (s *svc) run(ctx context.Context, prompt string) (*loopResult, error) {
 	ctx = logger.With(ctx, zap.Int64("session_id", s.rootID), zap.Int64("agent_id", s.id))
 	log := logger.Ctx(ctx).Named("session.run")
@@ -68,6 +80,28 @@ func (s *svc) run(ctx context.Context, prompt string) (*loopResult, error) {
 	// Last point before the first request where the registry can still grow: the
 	// daemon registers its tools between construction and this call.
 	s.refreshRegistrySections()
+
+	activationIndex, err := tool.ActivationIndex(s.registry)
+	if err != nil {
+		return nil, fmt.Errorf("index activation commands: %w", err)
+	}
+
+	s.activationIndex = activationIndex
+	if boundary, ok := s.boundary.(activationStateBoundary); ok {
+		grant, loadErr := boundary.PendingActivation(ctx)
+		if loadErr != nil {
+			return nil, fmt.Errorf("load pending activation: %w", loadErr)
+		}
+
+		if grant != nil && grant.ToolCallID != "" {
+			pending := unresolvedToolCalls(s.ms.getMessages())
+			if pending[grant.ToolCallID] != grant.ToolID {
+				grant = nil
+			}
+		}
+
+		s.currentActivation = grant
+	}
 
 	if err := s.prepareRunMessages(ctx, prompt); err != nil {
 		return nil, err

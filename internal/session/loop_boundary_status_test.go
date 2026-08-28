@@ -58,7 +58,7 @@ func TestRunLoopStatusAtBoundaryEndsOnlyASettledActivation(t *testing.T) {
 			require.NoError(t, err)
 			assert.Equal(t, tc.wantCalls, llmClient.calls)
 			assert.Equal(t, 1, notifier.countWith("Session Status"), "the status report is delivered exactly once")
-			assert.Equal(t, tc.wantAnswer, notifier.countWith("✅ answered"))
+			assert.Equal(t, tc.wantAnswer, notifier.countWith("answered"))
 			assert.Len(t, agent.ms.getMessages(), tc.wantMessages, "the status command writes nothing itself")
 		})
 	}

@@ -27,7 +27,7 @@
           "method": "sendMessage",
           "chat_id": -100123,
           "thread_id": 7001,
-          "text": "✅ accepted input recovered",
+          "text": "accepted input recovered",
           "parse_mode": "HTML"
         }
       ]
@@ -49,7 +49,7 @@
           "method": "sendMessage",
           "chat_id": -100123,
           "thread_id": 7001,
-          "text": "✅ accepted input recovered",
+          "text": "accepted input recovered",
           "parse_mode": "HTML"
         }
       ]
@@ -71,7 +71,7 @@
           "method": "sendMessage",
           "chat_id": -100123,
           "thread_id": 7001,
-          "text": "✅ background launched; yielded without sleep",
+          "text": "background launched; yielded without sleep",
           "parse_mode": "HTML"
         },
         {
@@ -83,7 +83,7 @@
           "method": "sendMessage",
           "chat_id": -100123,
           "thread_id": 7001,
-          "text": "✅ background completion delivered",
+          "text": "background completion delivered",
           "parse_mode": "HTML"
         }
       ]
@@ -121,7 +121,7 @@
         {
           "method": "editMessageText",
           "chat_id": -100123,
-          "text": "✅ initial child delivered",
+          "text": "initial child delivered",
           "parse_mode": "HTML"
         },
         {
@@ -133,7 +133,7 @@
           "method": "sendMessage",
           "chat_id": -100123,
           "thread_id": 7001,
-          "text": "✅ follow-up accepted",
+          "text": "follow-up accepted",
           "parse_mode": "HTML"
         },
         {
@@ -145,7 +145,7 @@
           "method": "sendMessage",
           "chat_id": -100123,
           "thread_id": 7001,
-          "text": "✅ continuation delivered",
+          "text": "continuation delivered",
           "parse_mode": "HTML"
         }
       ]
@@ -167,7 +167,7 @@
           "method": "sendMessage",
           "chat_id": -100123,
           "thread_id": 7001,
-          "text": "✅ ready for schedule",
+          "text": "ready for schedule",
           "parse_mode": "HTML"
         },
         {
@@ -179,7 +179,7 @@
           "method": "sendMessage",
           "chat_id": -100123,
           "thread_id": 7001,
-          "text": "✅ scheduled work completed",
+          "text": "scheduled work completed",
           "parse_mode": "HTML"
         }
       ]
@@ -234,7 +234,7 @@
         {
           "method": "editMessageText",
           "chat_id": -100123,
-          "text": "✅ all children delivered",
+          "text": "all children delivered",
           "parse_mode": "HTML"
         }
       ]
@@ -256,7 +256,7 @@
           "method": "sendMessage",
           "chat_id": -100123,
           "thread_id": 7001,
-          "text": "✅ first answer",
+          "text": "first answer",
           "parse_mode": "HTML"
         },
         {
@@ -268,7 +268,7 @@
           "method": "sendMessage",
           "chat_id": -100123,
           "thread_id": 7001,
-          "text": "✅ second answer",
+          "text": "second answer",
           "parse_mode": "HTML"
         }
       ]
@@ -311,7 +311,7 @@
         {
           "method": "editMessageText",
           "chat_id": -100123,
-          "text": "✅ sleep interruption handled",
+          "text": "sleep interruption handled",
           "parse_mode": "HTML"
         }
       ]
@@ -333,7 +333,7 @@
           "method": "sendMessage",
           "chat_id": -100123,
           "thread_id": 7001,
-          "text": "✅ fresh scheduled turn completed",
+          "text": "fresh scheduled turn completed",
           "parse_mode": "HTML"
         }
       ]
@@ -355,7 +355,7 @@
           "method": "sendMessage",
           "chat_id": -100123,
           "thread_id": 7001,
-          "text": "✅ scheduled turn completed",
+          "text": "scheduled turn completed",
           "parse_mode": "HTML"
         }
       ]

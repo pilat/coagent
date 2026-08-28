@@ -1,0 +1,18 @@
+{
+  "source": "sanitized production session 165",
+  "events": [
+    {"kind": "root_input", "minute": 0},
+    {"kind": "tool_only_responses", "count": 96},
+    {"kind": "model_progress", "minute": 36},
+    {"kind": "compaction", "sequence": 1},
+    {"kind": "compaction", "sequence": 2},
+    {"kind": "blocking_child_timeout"},
+    {"kind": "terminal_response", "minute": 143}
+  ],
+  "documented_visible_failures": [
+    "no prompt acknowledgement",
+    "no semantic output inside five minutes",
+    "cost visible only after the fact",
+    "automatic success prefix"
+  ]
+}

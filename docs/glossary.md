@@ -165,6 +165,35 @@ closes an immediately preceding replaceable chain, potentially by editing that
 chain's external messages; otherwise it creates new external messages.
 _Avoid_: final output (persistent output is not necessarily a task result).
 
+**autonomous episode**:
+The interval of manager-owned root work that starts with initial or reactivating
+model-bound input, or an applied scheduled turn. Queued input keeps the current
+episode; empty roots and read-only commands do not create one. Its durable start
+anchors operator wall time and the five-minute silence deadline.
+_Avoid_: accepted task, queued message, run (ambiguous with one process activation).
+
+**progress snapshot**:
+The canonical root-session operator view: runtime/persisted state, live context
+projection when available, lifetime persisted usage, autonomous-episode wall
+time, durable TODO items, latest model progress, exact waits, subagent topology
+and an optional one-shot budget. Automatic cards, `/status`, reconnect and final
+footers render this shared transport-neutral value.
+_Avoid_: progress message (the output remains replaceable output), heartbeat.
+
+**one-shot budget**:
+A user-authorized root-tree checkpoint over additional persisted USD cost,
+additional wall time, or both. One generation is armed from durable baselines,
+fires once, closes admission and parks the tree, then is released by the next
+ordinary model-bound root input. It is not a permanent spending policy.
+_Avoid_: iteration budget, billing limit, permanent ceiling.
+
+**tool activation grant**:
+Durable one-turn authority created only by a manager-owned user input whose
+leading command matches a tool's declared activation command. It is bound to
+the exact input/session/tool/command and is consumed only by the first valid
+matching mutation; prompt text is never authority.
+_Avoid_: command text authorization, hidden tool.
+
 **manager delivery receipt**:
 The manager-owned external message identities recorded when one durable output
 is acknowledged. It is scoped by manager ID, may contain multiple identities

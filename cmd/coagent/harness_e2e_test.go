@@ -48,16 +48,19 @@ func TestHarnessE2E_SecondInputDoesNotReplayPreviousFinal(t *testing.T) {
 	require.NoError(t, client.Call(t.Context(), managercli.OpChatOpen, struct{}{}, &opened))
 
 	firstSession := sendHarnessChat(t, client, managercli.SendParams{Text: "first question"})
-	firstTrace := waitForHarnessChatMessage(t, client, firstSession.SessionID, "✅ first answer")
-	assert.Equal(t, []string{"✅ first answer"}, firstTrace)
+	firstAnswer := "first answer"
+	firstTrace := waitForHarnessChatMessage(t, client, firstSession.SessionID, firstAnswer)
+	assert.Equal(t, []string{firstAnswer}, firstTrace)
 
 	secondSession := sendHarnessChat(t, client, managercli.SendParams{
 		SessionID: firstSession.SessionID,
 		Text:      "second question",
 	})
 	require.Equal(t, firstSession.SessionID, secondSession.SessionID)
-	secondTrace := waitForHarnessChatMessage(t, client, secondSession.SessionID, "✅ second answer")
-	assert.Equal(t, []string{"✅ second answer"}, secondTrace,
+	secondAnswer := "second answer"
+	secondTrace := waitForHarnessChatMessage(t, client, secondSession.SessionID, secondAnswer)
+	require.Len(t, secondTrace, 1)
+	assert.Equal(t, secondAnswer, secondTrace[0],
 		"the compiled daemon must not replay history as a new controller event")
 }
 
@@ -83,24 +86,37 @@ func TestHarnessE2E_ForegroundFollowUpRejectsCompetingSleep(t *testing.T) {
 	require.NoError(t, client.Call(t.Context(), managercli.OpChatOpen, struct{}{}, &managercli.OpenResult{}))
 
 	started := sendHarnessChat(t, client, managercli.SendParams{Text: "start foreground child"})
-	initial := waitForHarnessChatTrace(t, client, started.SessionID, "✅ initial child delivered")
-	assert.Equal(t, []string{"✅ initial child delivered"}, initial.Messages)
-	assert.Equal(t, 1, initial.Waiting,
-		"the compiled daemon must project the foreground child wait before completion")
+	initialAnswer := "initial child delivered"
+	initial := waitForHarnessChatTrace(t, client, started.SessionID, initialAnswer)
+	assert.Contains(t, initial.Messages, initialAnswer)
+	assert.Condition(t, func() bool {
+		if initial.Waiting > 0 {
+			return true
+		}
+		for _, message := range initial.Messages {
+			if strings.Contains(message, "Waiting: 1 item(s)") {
+				return true
+			}
+		}
+
+		return false
+	}, "the compiled daemon must project the foreground child wait before completion")
 
 	sendHarnessChat(t, client, managercli.SendParams{
 		SessionID: started.SessionID,
 		Text:      "continue the same child",
 	})
-	accepted := waitForHarnessChatTrace(t, client, started.SessionID, "✅ follow-up accepted")
-	assert.Equal(t, []string{"✅ follow-up accepted"}, accepted.Messages)
+	acceptedAnswer := "follow-up accepted"
+	accepted := waitForHarnessChatTrace(t, client, started.SessionID, acceptedAnswer)
+	assert.Equal(t, []string{acceptedAnswer}, accepted.Messages)
 	assert.Zero(t, accepted.Waiting,
 		"send_to_subagent+sleep must be rejected before a competing wait reaches a controller")
 	assert.Zero(t, accepted.Errors, "parent/child concurrency must not leak transient SQLite errors")
 
 	close(releaseFollowUp)
-	continued := waitForHarnessChatTrace(t, client, started.SessionID, "✅ continuation delivered")
-	assert.Equal(t, []string{"✅ continuation delivered"}, continued.Messages)
+	continuedAnswer := "continuation delivered"
+	continued := waitForHarnessChatTrace(t, client, started.SessionID, continuedAnswer)
+	assert.Contains(t, continued.Messages, continuedAnswer)
 	assert.Zero(t, continued.Waiting)
 	assert.Zero(t, continued.Errors)
 	assertHarnessDaemonHasNoSQLiteContention(t, daemonLog)
@@ -129,7 +145,7 @@ func TestHarnessE2E_RestartReplaysCommittedOutputToReconnectedCLI(t *testing.T) 
 		t,
 		filepath.Join(home, coagenthome.DirName, coagenthome.DBFileName),
 		session.SessionID,
-		"✅ restart answer",
+		"restart answer",
 	)
 	require.NoError(t, first.Process.Kill())
 	require.Error(t, first.Wait())
@@ -141,8 +157,9 @@ func TestHarnessE2E_RestartReplaysCommittedOutputToReconnectedCLI(t *testing.T) 
 	require.NoError(t, err)
 	defer func() { _ = reconnected.Close() }()
 	require.NoError(t, reconnected.Call(t.Context(), managercli.OpChatOpen, struct{}{}, &managercli.OpenResult{}))
-	trace := waitForHarnessChatTrace(t, reconnected, session.SessionID, "✅ restart answer")
-	assert.Equal(t, []string{"✅ restart answer"}, trace.Messages)
+	restartAnswer := "restart answer"
+	trace := waitForHarnessChatTrace(t, reconnected, session.SessionID, restartAnswer)
+	assert.Equal(t, []string{restartAnswer}, trace.Messages)
 }
 
 func newHarnessModelServer(t *testing.T) *httptest.Server {

@@ -139,6 +139,28 @@ func (h *chatHarness) sentMessages() []controllerapi.SessionMessageData {
 	return append([]controllerapi.SessionMessageData(nil), h.ctrl.sent...)
 }
 
+func TestHarnessScenario_CLIRendersLifecycleGatedBudgetReadiness(t *testing.T) {
+	h := newChatHarness(t)
+	h.ctrl.sessions = []controllerapi.SessionInfo{
+		{ID: chatSessionID, ProjectID: chatProjectID, UpdatedAt: time.Now()},
+	}
+	client := h.dial(t)
+	opened := openChat(t, client)
+	require.Equal(t, chatSessionID, opened.SessionID)
+	h.waitForAttached(t, 1)
+
+	h.publish(t, controllerapi.SessionNotification{
+		SessionID: opened.SessionID,
+		Notification: sessionevent.Notification{
+			Type: sessionevent.NotifyStateChanged, Status: controllerapi.StateIdle, Reason: "budget reached",
+		},
+	})
+	h.settle(t)
+
+	event := waitForEvent(t, client)
+	assert.Equal(t, Event{SessionID: opened.SessionID, Type: "state_changed", Status: "idle"}, event)
+}
+
 // chatEvent rides the ephemeral heartbeat channel: these tests exercise the
 // terminal socket mechanics, not durable output, which has its own scenarios.
 func chatEvent(sessionID int64, message string) controllerapi.SessionNotification {

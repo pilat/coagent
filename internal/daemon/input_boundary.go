@@ -1,3 +1,4 @@
+//nolint:wrapcheck // Boundary preserves durable activation sentinel errors.; nosemgrep: semgrep.coagent-no-preamble-before-package
 package daemon
 
 import (
@@ -14,9 +15,36 @@ import (
 )
 
 type durableInputBoundary struct {
-	store     sessionstore.InboxStore
-	schedules schedule.Service
-	sessionID int64
+	store          sessionstore.InboxStore
+	schedules      schedule.Service
+	sessionID      int64
+	progress       func(context.Context) (string, error)
+	progressChange func(context.Context) (string, error)
+	finalOutput    func(context.Context, string) (string, error)
+}
+
+func (b *durableInputBoundary) FinalOutput(ctx context.Context, text string) (string, error) {
+	if b.finalOutput == nil {
+		return text, nil
+	}
+
+	return b.finalOutput(ctx, text)
+}
+
+func (b *durableInputBoundary) ProgressChange(ctx context.Context) (string, error) {
+	if b.progressChange == nil {
+		return "", errors.New("progress change provider unavailable")
+	}
+
+	return b.progressChange(ctx)
+}
+
+func (b *durableInputBoundary) CurrentProgress(ctx context.Context) (string, error) {
+	if b.progress == nil {
+		return "", errors.New("progress provider unavailable")
+	}
+
+	return b.progress(ctx)
 }
 
 var _ session.InputBoundary = (*durableInputBoundary)(nil)
@@ -63,6 +91,89 @@ func (b *durableInputBoundary) Accept(
 	}
 
 	return true, false, nil
+}
+
+func (b *durableInputBoundary) AcceptActivated(
+	ctx context.Context,
+	input session.PendingInput,
+	prepared string,
+	pendingCalls []session.PendingToolCall,
+	grant tool.ActivationGrant,
+) (bool, bool, error) {
+	for _, call := range pendingCalls {
+		if call.Name != tool.IDSleep {
+			return false, true, nil
+		}
+	}
+
+	store, ok := b.store.(sessionstore.ActivationStore)
+	if !ok {
+		return false, false, errors.New("activation store unavailable")
+	}
+
+	_, _, err := store.PromoteInputWithActivation(ctx, input.ID, prepared, sessionstore.ActivationDraft{
+		ToolID: grant.ToolID, Command: grant.Command,
+	})
+	if err != nil {
+		return false, false, fmt.Errorf("promote activated input: %w", err)
+	}
+
+	return true, false, nil
+}
+
+func (b *durableInputBoundary) ExpireActivation(
+	ctx context.Context,
+	grant tool.ActivationGrant,
+) error {
+	store, ok := b.store.(sessionstore.ActivationStore)
+	if !ok {
+		return errors.New("activation store unavailable")
+	}
+
+	_, _, err := store.ExpireActivationWithOutput(
+		ctx, grant.InputID, grant.SessionID, "Budget was not changed",
+	)
+
+	return err
+}
+
+// CancelActivation is the stop/kill/shutdown expiry: the grant must not block
+// later inbox rows, but the lifecycle output already answers the turn.
+func (b *durableInputBoundary) CancelActivation(
+	ctx context.Context,
+	grant tool.ActivationGrant,
+) error {
+	store, ok := b.store.(sessionstore.ActivationStore)
+	if !ok {
+		return errors.New("activation store unavailable")
+	}
+
+	_, err := store.ExpireActivation(ctx, grant.InputID, grant.SessionID)
+
+	return err
+}
+
+func (b *durableInputBoundary) PendingActivation(
+	ctx context.Context,
+) (*tool.ActivationGrant, error) {
+	store, ok := b.store.(sessionstore.ActivationStore)
+	if !ok {
+		return nil, nil //nolint:nilnil // No activation capability means no pending grant.
+	}
+
+	activation, err := store.CurrentActivation(ctx, b.sessionID)
+	if errors.Is(err, sessionstore.ErrActivationNotFound) {
+		return nil, nil //nolint:nilnil // Absence is the normal boundary state.
+	}
+
+	if err != nil {
+		return nil, err
+	}
+
+	return &tool.ActivationGrant{
+		SessionID: activation.SessionID, InputID: activation.InputID,
+		ToolID: activation.ToolID, Command: activation.Command, ToolCallID: activation.ToolCallID,
+	}, nil
 }
 
 func (b *durableInputBoundary) Reject(ctx context.Context, input session.PendingInput, reason string) error {

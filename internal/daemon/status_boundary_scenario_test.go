@@ -17,7 +17,7 @@ import (
 
 // The status header a controller receives, duplicated from internal/session on
 // purpose: it is the contract with the human, not an implementation detail.
-const statusReportHeader = "📊 **Session Status**"
+const statusReportHeader = "## Session progress"
 
 func statusReports(events []controllerapi.SessionNotification, sessionID int64) []string {
 	var out []string
@@ -91,13 +91,13 @@ func TestHarnessScenario_StatusMidActivationDoesNotStrandJustExecutedToolResults
 	released = true
 
 	collector.waitFor(t, "the interrupted work is still answered", func(e []controllerapi.SessionNotification) bool {
-		return countPublishedMessage(e, sessionID, "✅ work done") == 1
+		return countPublishedMessage(e, sessionID, "work done") == 1
 	})
 	h.mgr.waitIdle(sessionID)
 
 	events := collector.snapshot()
 	assert.Len(t, statusReports(events, sessionID), 1, "exactly one status report")
-	assert.Equal(t, 1, countPublishedMessage(events, sessionID, "✅ work done"), "the answer reaches the human once")
+	assert.Equal(t, 1, countPublishedMessage(events, sessionID, "work done"), "the answer reaches the human once")
 
 	msgs := h.parentMessages(sessionID)
 	require.NoError(t, llm.ValidateToolPairing(msgs))
@@ -172,7 +172,7 @@ func TestHarnessScenario_CompactMidActivationStillAnswersTheInterruptedWork(t *t
 	h.mgr.waitIdle(sessionID)
 
 	collector.waitFor(t, "the interrupted work is still answered", func(e []controllerapi.SessionNotification) bool {
-		return countPublishedMessage(e, sessionID, "✅ work done") == 1
+		return countPublishedMessage(e, sessionID, "work done") == 1
 	})
 
 	msgs := h.parentMessages(sessionID)
@@ -250,7 +250,7 @@ func TestHarnessScenario_StatusIsAnsweredWhileABlockingChildIsOut(t *testing.T) 
 	h.mgr.waitIdle(parentID)
 
 	collector.waitFor(t, "the parent answers once the child returns", func(e []controllerapi.SessionNotification) bool {
-		return countPublishedMessage(e, parentID, "✅ parent got the child result") == 1
+		return countPublishedMessage(e, parentID, "parent got the child result") == 1
 	})
 
 	msgs := h.parentMessages(parentID)

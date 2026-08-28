@@ -12,7 +12,7 @@
     },
     {
       "type": "message",
-      "message": "✅ accepted input recovered"
+      "message": "accepted input recovered"
     },
     {
       "type": "state_changed",

@@ -144,6 +144,10 @@ func (t *BatchTool) validateCalls(calls []BatchCall) error {
 			return fmt.Errorf("call %d: skill must be invoked directly", i+1)
 		}
 
+		if _, activated := t.registry.Get(call.Tool).(tool.ActivationDeclarer); activated {
+			return fmt.Errorf("call %d: %s requires a user command turn and must be called directly", i+1, call.Tool)
+		}
+
 		// A suspending tool answers after the loop stops; batch cannot carry that
 		// through, and would report a result for work still in flight.
 		if tool.IsExternalCall(call.Tool) {
@@ -187,6 +191,7 @@ func (t *BatchTool) runParallel(ctx context.Context, calls []BatchCall) []callRe
 
 func (t *BatchTool) formatResult(results []callResult, total int) *tool.Result {
 	var output strings.Builder
+	direct := make([]string, 0)
 
 	successCount := 0
 	errorCount := 0
@@ -212,6 +217,8 @@ func (t *BatchTool) formatResult(results []callResult, total int) *tool.Result {
 			images = append(images, r.result.Images...)
 
 			successCount++
+
+			direct = append(direct, r.result.DirectMessages...)
 		}
 
 		output.WriteString("\n")
@@ -225,6 +232,7 @@ func (t *BatchTool) formatResult(results []callResult, total int) *tool.Result {
 			"success": successCount,
 			"errors":  errorCount,
 		},
-		Images: images,
+		Images:         images,
+		DirectMessages: direct,
 	}
 }

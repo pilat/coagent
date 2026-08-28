@@ -135,7 +135,7 @@ func (m *Manager) Start(ctx context.Context) error {
 			cancel()
 			return fmt.Errorf("bind durable output delivery: %w", err)
 		}
-		var deliveryQueue managerdelivery.Queue = newOutputQueue(queue)
+		var deliveryQueue managerdelivery.Queue = newOutputQueue(queue, m)
 		var transport managerdelivery.Transport = &outputTransport{manager: m}
 		m.delivery = managerdelivery.New(deliveryQueue, transport)
 		m.delivery.Start(runCtx)
@@ -231,6 +231,10 @@ func (m *Manager) publish(sn controllerapi.SessionNotification) {
 
 		return
 	case sessionevent.NotifyStateChanged:
+		if sn.Notification.Reason == "budget reached" {
+			break
+		}
+
 		if sn.Notification.Reason == "killed" {
 			m.wakeDelivery()
 		}

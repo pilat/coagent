@@ -453,13 +453,14 @@ func TestOutputStore_CreatesManagerRootWithLifecycleAndInitialInputAtomically(t 
 	store, db, projectID := newTestStore(t)
 	record, output, err := store.CreateManagerRoot(ctx, ManagerRootCreate{
 		ProjectID: projectID, Model: "model", Attributes: map[string]any{"manager_id": "telegram"},
-		Prompt: "start", Name: "project", WorkDir: "/work/project",
+		Prompt: "start", StartEpisode: true, Name: "project", WorkDir: "/work/project",
 	})
 	require.NoError(t, err)
 	require.NotZero(t, record.ID)
 	require.NotZero(t, output.OutputID)
 
 	var outputType, inputContent, inputOwner string
+	var episodeStartedAt time.Time
 	require.NoError(
 		t,
 		db.QueryRowContext(ctx, `SELECT type FROM session_outbox WHERE id = ?`, output.OutputID).Scan(&outputType),
@@ -467,9 +468,12 @@ func TestOutputStore_CreatesManagerRootWithLifecycleAndInitialInputAtomically(t 
 	require.NoError(t, db.QueryRowContext(ctx, `
 		SELECT raw_content, json_extract(attributes, '$.manager_id')
 		FROM session_inbox WHERE session_id = ?`, record.ID).Scan(&inputContent, &inputOwner))
+	require.NoError(t, db.QueryRowContext(ctx,
+		`SELECT episode_started_at FROM sessions WHERE id = ?`, record.ID).Scan(&episodeStartedAt))
 	assert.Equal(t, string(OutputSessionOpened), outputType)
 	assert.Equal(t, "start", inputContent)
 	assert.Equal(t, "telegram", inputOwner)
+	assert.False(t, episodeStartedAt.IsZero())
 }
 
 func TestOutputStore_ReplacesManagerRootWithOneLifecycleOutput(t *testing.T) {

@@ -32,12 +32,12 @@ func TestHarnessScenario_SecondInputDoesNotReplayPreviousFinal(t *testing.T) {
 
 	sessionID, err := h.mgr.Send(h.ctx, h.projectID, "first question", "fake-model", nil)
 	require.NoError(t, err)
-	waitForVisibleMessage(t, collector, sessionID, "✅ first answer")
-	waitForIdleAfterMessage(t, collector, sessionID, "✅ first answer")
+	waitForVisibleMessage(t, collector, sessionID, "first answer")
+	waitForIdleAfterMessage(t, collector, sessionID, "first answer")
 
 	require.NoError(t, h.mgr.SendToSession(h.ctx, sessionID, "second question"))
-	waitForVisibleMessage(t, collector, sessionID, "✅ second answer")
-	waitForIdleAfterMessage(t, collector, sessionID, "✅ second answer")
+	waitForVisibleMessage(t, collector, sessionID, "second answer")
+	waitForIdleAfterMessage(t, collector, sessionID, "second answer")
 
 	assertHarnessTrace(t, "second_input_no_replay.json", collector.snapshot(), sessionID)
 }
@@ -57,8 +57,7 @@ func TestHarnessScenario_CLIConversationIsManagerOwned(t *testing.T) {
 		"channel":                               "cli",
 	})
 	require.NoError(t, err)
-	waitForVisibleMessage(t, collector, sessionID, "✅ configuration answer")
-	waitForIdleAfterMessage(t, collector, sessionID, "✅ configuration answer")
+	waitForVisibleMessage(t, collector, sessionID, "configuration answer")
 
 	assertHarnessTrace(t, "cli_conversation_manager_owned.json", collector.snapshot(), sessionID)
 }
@@ -141,8 +140,8 @@ func TestHarnessScenario_ForegroundChildContinuesWithoutSleep(t *testing.T) {
 	require.NoError(t, err)
 	waitForWaitKind(t, collector, parentID, sessionevent.WaitSubagent)
 	close(initialRelease)
-	waitForVisibleMessage(t, collector, parentID, "✅ initial child delivered")
-	waitForIdleAfterMessage(t, collector, parentID, "✅ initial child delivered")
+	waitForVisibleMessage(t, collector, parentID, "initial child delivered")
+	waitForIdleAfterMessage(t, collector, parentID, "initial child delivered")
 
 	link, err := h.links.GetLinkByTaskCallID(h.ctx, parentID, taskCallID)
 	require.NoError(t, err)
@@ -151,12 +150,12 @@ func TestHarnessScenario_ForegroundChildContinuesWithoutSleep(t *testing.T) {
 	childID.Store(link.ChildID)
 
 	require.NoError(t, h.mgr.SendToSession(h.ctx, parentID, "continue the same child"))
-	waitForVisibleMessage(t, collector, parentID, "✅ follow-up accepted")
-	waitForIdleAfterMessage(t, collector, parentID, "✅ follow-up accepted")
+	waitForVisibleMessage(t, collector, parentID, "follow-up accepted")
+	waitForIdleAfterMessage(t, collector, parentID, "follow-up accepted")
 
 	close(followUpRelease)
-	waitForVisibleMessage(t, collector, parentID, "✅ continuation delivered")
-	waitForIdleAfterMessage(t, collector, parentID, "✅ continuation delivered")
+	waitForVisibleMessage(t, collector, parentID, "continuation delivered")
+	waitForIdleAfterMessage(t, collector, parentID, "continuation delivered")
 
 	continued, err := h.links.GetLink(h.ctx, link.ChildID)
 	require.NoError(t, err)
@@ -218,8 +217,8 @@ func TestHarnessScenario_BackgroundChildIsTheWakeSource(t *testing.T) {
 
 	parentID, err := h.mgr.Send(h.ctx, h.projectID, "start background child", "fake-model", nil)
 	require.NoError(t, err)
-	waitForVisibleMessage(t, collector, parentID, "✅ background launched; yielded without sleep")
-	waitForIdleAfterMessage(t, collector, parentID, "✅ background launched; yielded without sleep")
+	waitForVisibleMessage(t, collector, parentID, "background launched; yielded without sleep")
+	waitForIdleAfterMessage(t, collector, parentID, "background launched; yielded without sleep")
 
 	link, err := h.links.GetLinkByTaskCallID(h.ctx, parentID, taskCallID)
 	require.NoError(t, err)
@@ -235,8 +234,8 @@ func TestHarnessScenario_BackgroundChildIsTheWakeSource(t *testing.T) {
 	assert.Empty(t, schedules, "pending child must remain the sole wake source")
 
 	close(childRelease)
-	waitForVisibleMessage(t, collector, parentID, "✅ background completion delivered")
-	waitForIdleAfterMessage(t, collector, parentID, "✅ background completion delivered")
+	waitForVisibleMessage(t, collector, parentID, "background completion delivered")
+	waitForIdleAfterMessage(t, collector, parentID, "background completion delivered")
 
 	assertHarnessTrace(t, "background_child_no_sleep.json", collector.snapshot(), parentID)
 }
@@ -302,7 +301,7 @@ func TestHarnessScenario_ForegroundScatterGatherProjectsShrinkingAllWaitSet(t *t
 	slices.Sort(childIDs)
 
 	waitForSubagentSet(t, collector, parentID, childIDs)
-	assert.Zero(t, countPublishedMessage(collector.snapshot(), parentID, "✅ all children delivered"),
+	assert.Zero(t, countPublishedMessage(collector.snapshot(), parentID, "all children delivered"),
 		"the model must not run while any foreground child is pending")
 
 	// Release in child-id order: spawn order across concurrent task calls is not
@@ -316,8 +315,8 @@ func TestHarnessScenario_ForegroundScatterGatherProjectsShrinkingAllWaitSet(t *t
 		}
 	}
 
-	waitForVisibleMessage(t, collector, parentID, "✅ all children delivered")
-	waitForIdleAfterMessage(t, collector, parentID, "✅ all children delivered")
+	waitForVisibleMessage(t, collector, parentID, "all children delivered")
+	waitForIdleAfterMessage(t, collector, parentID, "all children delivered")
 
 	for _, event := range collector.snapshot() {
 		if event.SessionID != parentID || event.Notification.Type != sessionevent.NotifyWaiting {
@@ -373,8 +372,8 @@ func TestHarnessScenario_SleepProjectsWakeAtAndUserInputInterruptsIt(t *testing.
 	})
 
 	require.NoError(t, h.mgr.SendToSession(h.ctx, parentID, "interrupt now"))
-	waitForVisibleMessage(t, collector, parentID, "✅ sleep interruption handled")
-	waitForIdleAfterMessage(t, collector, parentID, "✅ sleep interruption handled")
+	waitForVisibleMessage(t, collector, parentID, "sleep interruption handled")
+	waitForIdleAfterMessage(t, collector, parentID, "sleep interruption handled")
 
 	messages := h.parentMessages(parentID)
 	require.NoError(t, llm.ValidateToolPairing(messages))

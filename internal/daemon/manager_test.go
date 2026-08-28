@@ -890,7 +890,9 @@ func TestManager_Clear(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	waitForState(t, ch, id, controllerapi.StateIdle, 3*time.Second)
+	require.Eventually(t, func() bool {
+		return !mgr.HasActiveLoop(id)
+	}, 3*time.Second, 10*time.Millisecond)
 
 	// Set reasoning level on the session before clearing
 	err = mgr.SetModel(context.Background(), id, "test-model", "high")

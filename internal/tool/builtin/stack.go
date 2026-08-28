@@ -19,13 +19,14 @@ import (
 
 // StackConfig configures a session-scoped local tool stack.
 type StackConfig struct {
-	WorkDir  string
-	Pool     mcp.Pool                    // may be nil
-	Servers  map[string]mcp.ServerConfig // resolved MCP definitions; empty = no MCP
-	Unified  *config.UnifiedConfig       // for the Bash sandbox config
-	Loader   loader.Service
-	Todo     todo.Service
-	Provider shellenv.Provider // per-cwd shell activation; may be nil (fallback)
+	WorkDir         string
+	Pool            mcp.Pool                    // may be nil
+	Servers         map[string]mcp.ServerConfig // resolved MCP definitions; empty = no MCP
+	Unified         *config.UnifiedConfig       // for the Bash sandbox config
+	Loader          loader.Service
+	Todo            todo.Service
+	TodoReplacement TodoReplacement
+	Provider        shellenv.Provider // per-cwd shell activation; may be nil (fallback)
 }
 
 // Stack is a session-scoped local tool set. It owns the LSP manager and MCP access
@@ -54,7 +55,7 @@ func BuildStack(ctx context.Context, cfg StackConfig) (*Stack, error) {
 	registry := tool.NewRegistry()
 	lspMgr := lsp.NewManager(cfg.Provider)
 
-	registerCoreTools(registry, cfg.WorkDir, cfg.Loader, cfg.Todo, lspMgr, bashRunner, mutator)
+	registerCoreTools(registry, cfg.WorkDir, cfg.Loader, cfg.Todo, cfg.TodoReplacement, lspMgr, bashRunner, mutator)
 
 	// MCP failure degrades to a builtin-only stack: a broken MCP server must not block sessions.
 	mcpSvc, err := mcp.AcquireForWorkDir(ctx, cfg.Pool, cfg.Servers, cfg.WorkDir, cfg.Provider)
@@ -89,6 +90,7 @@ func registerCoreTools(
 	workDir string,
 	ldr loader.Service,
 	todoSvc todo.Service,
+	todoReplacement TodoReplacement,
 	lspMgr lsp.Manager,
 	bashRunner bashsandbox.Runner,
 	fileMutator fileMutator,
@@ -108,7 +110,7 @@ func registerCoreTools(
 
 	registry.Register(NewSkillTool(ldr))
 	registry.Register(newTodoReadTool(todoSvc))
-	registry.Register(newTodoWriteTool(todoSvc))
+	registry.Register(newTodoWriteTool(todoSvc, todoReplacement))
 
 	registry.Register(NewBatchTool(registry))
 

@@ -67,7 +67,7 @@ func TestHarnessScenario_RestartSettlesPersistedFinalWithoutRepublishing(t *test
 	})
 
 	assert.Zero(t, modelCalls.Load(), "a durable final answer must not call the model again")
-	assert.Zero(t, countPublishedMessage(collector.snapshot(), root.ID, "✅ persisted final"),
+	assert.Zero(t, countPublishedMessage(collector.snapshot(), root.ID, "persisted final"),
 		"historical output is state, not a new publication")
 	record, err := second.sessStore.GetSession(second.ctx, root.ID)
 	require.NoError(t, err)
@@ -146,8 +146,8 @@ func runAcceptedInputRestartScenario(
 	}()
 
 	second.mgr.sweep(second.ctx)
-	waitForVisibleMessage(t, collector, root.ID, "✅ accepted input recovered")
-	waitForIdleAfterMessage(t, collector, root.ID, "✅ accepted input recovered")
+	waitForVisibleMessage(t, collector, root.ID, "accepted input recovered")
+	waitForIdleAfterMessage(t, collector, root.ID, "accepted input recovered")
 
 	assert.Equal(t, "accepted input recovered", lastAssistantTextDTO(second.parentMessages(root.ID)))
 	require.NoError(t, llm.ValidateToolPairing(second.parentMessages(root.ID)))

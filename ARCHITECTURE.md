@@ -55,6 +55,7 @@ does not imply a tier except where it expresses an implementation variant.
 
 - `cmd/coagent` — composition root, CLI product policy, onboarding and control-operation wiring.
 - `internal/bashsandbox` — native direct-write confinement for Bash and file-mutation tools.
+- `internal/budget` — one-shot root-tree budget policy and its user-authorized tool.
 - `internal/catalog` — external model metadata acquisition, caching and identifier matching.
 - `internal/coagenthome` — sole resolver and name owner for the coagent home directory.
 - `internal/config` — typed configuration and secrets resolution policy.
@@ -82,6 +83,7 @@ does not imply a tier except where it expresses an implementation variant.
 - `internal/memory` — curated per-project long-term memory.
 - `internal/managerdelivery` — manager-neutral single-worker durable output drain and retry policy.
 - `internal/migrate` — SQLite opening and schema migration with production backup policy.
+- `internal/progress` — controller-neutral progress snapshots and Markdown rendering.
 - `internal/registry` — immutable per-session agent-type policy and prompt templates.
 - `cmd/releasebuilder` — build-time deterministic archive and checksum composition root.
 - `internal/schedule` — durable schedules, sleep ownership and scheduled delivery execution.
@@ -102,7 +104,8 @@ does not imply a tier except where it expresses an implementation variant.
 SQLite is the source of truth for runtime facts that must survive restart:
 projects, sessions, append-only messages, durable inbox entries, delivery
 identity, subagent links, schedules, curated memory, MCP definitions, and
-delivery records. Configuration files, their recoverable backups and the
+delivery records, including tool-activation grants, root-tree budgets and
+durable TODO state. Configuration files, their recoverable backups and the
 pending-apply marker are atomic filesystem state owned by config operations.
 Other memory is coordination or cache only and must be reconstructible from
 durable state. A runtime state label shown by a controller is an in-memory
@@ -123,6 +126,10 @@ so delivery beyond SQLite is deliberately at least once. Wake notifications are
 hints: startup, reconnect, and idle scans reconstruct work from the ledger.
 Lifecycle output and ordinary transcript/control facts commit in the same store
 transaction; a blocked head remains visible and blocks only that manager.
+Model-bound input acceptance remains internal to the durable inbox. Replaceable
+progress snapshots, direct tool receipts, checkpoint output and final readiness
+reuse the outbox and manager receipt chain; managers do not maintain a second
+progress or result queue.
 
 ### Runtime isolation and admission
 
@@ -240,6 +247,31 @@ of appended content; absent measurement is explicitly approximate. Repeated
 automatic attempts that cannot relieve pressure disable only the automatic path
 for that activation. The transcript remains the durable audit and recovery
 source even when its model projection is compacted.
+
+### Operator progress and one-shot budgets
+
+Each manager-owned root with a current autonomous episode has one canonical
+progress projection assembled from durable TODO state, transcript usage, tree
+topology, exact waits, budget state and output watermarks, with live context
+occupancy when a runner is available.
+The daemon owns one wakeable reconciler for all roots. Meaningful transitions
+enqueue replaceable snapshots immediately; five minutes without newer semantic
+output creates a silence snapshot. Stable source keys and the outbox uniqueness
+boundary make restart and concurrent reconciliation idempotent. Final output
+adds only the non-empty TODO/budget parts of its compact footer; readiness
+appears only after its releasing output is acknowledged and terminal or parked
+state is current. Empty and read-only-command-only roots have no episode clock
+and produce no silence snapshots; the first model-bound input or an applied
+scheduled turn starts one.
+
+`/budget` grants one exact manager-user input authority to arm, replace or clear
+a one-shot root-tree cost/duration checkpoint. Model responses and successful
+compaction summaries commit usage, fire comparison, skipped returned-tool
+results and checkpoint intent in one session-store transaction. The daemon
+closes admission before a generation drains and parks; managed park workers are
+cancelled and joined at shutdown. Startup reconciles armed and half-parked
+generations before normal session recovery. The next ordinary model-bound root
+input atomically releases a fired checkpoint and resumes only the root.
 
 ### Pending external calls: producer ledger and exact result
 
@@ -442,8 +474,9 @@ after the loop exits.
 Registry produces an immutable per-session agent-type set: built-ins plus
 project-local overlays. Agent type controls tool filtering, prompt and iteration
 policy, while the live session registry controls what is actually callable.
-Todo tracking is intentionally in-memory and session-local; it is planning aid,
-not durable workflow state.
+Todo tracking is root-session-local durable state. The tool replaces the whole
+list atomically, and progress treats it as planning state rather than a separate
+workflow engine.
 
 ### Language-server boundary
 

@@ -50,6 +50,7 @@ func TestHandleCommandsPreservesCanonicalSkillNames(t *testing.T) {
 					"  /model — choose LLM model\n" +
 					"  /status — show session stats (tokens, cost, context)\n" +
 					"  /schedules — list this session's schedules (ask me to add/change them)\n" +
+					"  /budget &lt;request&gt; — arm or clear a one-shot cost/wall-time checkpoint\n" +
 					"  /help — this message",
 				"<b>Skills:</b>\n  /skill pilat:plan-handoff&lt;&amp;&gt; — Use &lt;plan&gt; &amp; ship",
 			},

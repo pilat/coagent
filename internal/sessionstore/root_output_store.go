@@ -1,3 +1,4 @@
+// nosemgrep: semgrep.coagent-no-preamble-before-package
 package sessionstore
 
 import (
@@ -47,8 +48,8 @@ func (s *store) CreateManagerRoot(
 	}
 
 	if create.Prompt != "" {
-		if err := insertManagerInput(ctx, tx, record.ID, create.Prompt, owner, now); err != nil {
-			return nil, nil, err
+		if inputErr := insertManagerInput(ctx, tx, record.ID, create.Prompt, owner, now); inputErr != nil {
+			return nil, nil, inputErr
 		}
 	}
 
@@ -185,10 +186,10 @@ func insertClearNotice(ctx context.Context, tx *sql.Tx, sessionID, inputID int64
 	content := "Session cleared."
 	key := fmt.Sprintf("input:%d:clear:result", inputID)
 
-	fingerprint := outputFingerprint(OutputMessagePersistent, content, sessionID, nil)
+	fingerprint := outputFingerprintWithRelease(OutputMessagePersistent, content, sessionID, nil, true)
 	if _, err := tx.ExecContext(ctx, `
-		INSERT INTO session_outbox (session_id, type, content, attributes, source_key, fingerprint, created_at)
-		VALUES (?, 'message_persistent', ?, ?, ?, ?, ?)`, sessionID, content, string(attrs), key, fingerprint, now); err != nil {
+		INSERT INTO session_outbox (session_id, type, content, attributes, source_key, fingerprint, created_at, releases_input)
+		VALUES (?, 'message_persistent', ?, ?, ?, ?, ?, 1)`, sessionID, content, string(attrs), key, fingerprint, now); err != nil {
 		return fmt.Errorf("insert clear output: %w", err)
 	}
 
@@ -215,10 +216,17 @@ func insertManagerRoot(
 		return nil, fmt.Errorf("marshal manager root attributes: %w", err)
 	}
 
+	var episodeStartedAt *time.Time
+	if create.Prompt != "" && create.StartEpisode {
+		episodeStartedAt = &now
+	}
+
 	result, err := tx.ExecContext(ctx, `
-		INSERT INTO sessions (project_id, model, reasoning_level, attributes, agent_type, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		create.ProjectID, create.Model, create.ReasoningLevel, string(attrs), rootAgentType, now, now)
+		INSERT INTO sessions (project_id, model, reasoning_level, attributes, agent_type,
+			created_at, updated_at, episode_started_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		create.ProjectID, create.Model, create.ReasoningLevel, string(attrs), rootAgentType,
+		now, now, episodeStartedAt)
 	if err != nil {
 		return nil, fmt.Errorf("insert manager root: %w", err)
 	}
@@ -247,13 +255,47 @@ func insertManagerInput(
 		return fmt.Errorf("marshal manager input attributes: %w", err)
 	}
 
-	if _, err := tx.ExecContext(ctx, `
+	_, err = tx.ExecContext(ctx, `
 		INSERT INTO session_inbox (session_id, source, raw_content, attributes, received_at)
-		VALUES (?, 'user', ?, ?, ?)`, sessionID, prompt, string(attrs), now); err != nil {
+		VALUES (?, 'user', ?, ?, ?)`, sessionID, prompt, string(attrs), now)
+	if err != nil {
 		return fmt.Errorf("insert manager root input: %w", err)
 	}
 
 	return nil
+}
+
+func insertMessageOutput(
+	ctx context.Context,
+	tx *sql.Tx,
+	sessionID int64,
+	owner, content, sourceKey string,
+	now time.Time,
+	releasesInput bool,
+) (*OutputCommit, error) {
+	encoded, err := json.Marshal(map[string]any{managerIDAttribute: owner})
+	if err != nil {
+		return nil, fmt.Errorf("marshal message output attributes: %w", err)
+	}
+
+	fingerprint := outputFingerprintWithRelease(
+		OutputMessagePersistent, content, sessionID, nil, releasesInput,
+	)
+
+	result, err := tx.ExecContext(ctx, `INSERT INTO session_outbox
+		(session_id, type, content, attributes, source_key, fingerprint, created_at, releases_input)
+		VALUES (?, 'message_persistent', ?, ?, ?, ?, ?, ?)`,
+		sessionID, content, string(encoded), sourceKey, fingerprint, now, releasesInput)
+	if err != nil {
+		return nil, fmt.Errorf("insert message output: %w", err)
+	}
+
+	id, err := result.LastInsertId()
+	if err != nil {
+		return nil, fmt.Errorf("message output id: %w", err)
+	}
+
+	return &OutputCommit{OutputID: id, OwnerID: owner}, nil
 }
 
 func insertLifecycleOutput(

@@ -71,15 +71,14 @@ func (ms *messageStore) addAssistantMessageOutput(
 }
 
 func (ms *messageStore) addToolResult(ctx context.Context, callID, toolName, content string) error {
-	return ms.addToolResultRef(ctx, callID, toolName, content, nil)
+	return ms.addToolResultOutput(ctx, callID, toolName, content, nil, nil)
 }
 
-// addToolResultRef records a tool result that carries pixel attachments
-// (referenced-not-stored); plain results go through addToolResult.
-func (ms *messageStore) addToolResultRef(
+func (ms *messageStore) addToolResultOutput(
 	ctx context.Context,
 	callID, toolName, content string,
 	images []llmwire.ImageRef,
+	directMessages []string,
 ) error {
 	ms.mu.Lock()
 	defer ms.mu.Unlock()
@@ -92,7 +91,29 @@ func (ms *messageStore) addToolResultRef(
 		Images:     images,
 	}
 
-	return ms.appendMessageLocked(ctx, &msg)
+	if len(directMessages) == 0 {
+		return ms.appendMessageLocked(ctx, &msg)
+	}
+
+	directStore, ok := ms.store.(sessionstore.DirectOutputStore)
+	if !ok {
+		return ms.appendMessageLocked(ctx, &msg)
+	}
+
+	stored, err := storedMessage(&msg)
+	if err != nil {
+		return fmt.Errorf("serialize tool result: %w", err)
+	}
+
+	id, _, err := directStore.InsertToolResultWithDirectOutput(ctx, ms.sessID, stored, directMessages)
+	if err != nil {
+		return fmt.Errorf("persist tool result with direct output: %w", err)
+	}
+
+	msg.DBID = id
+	ms.messages = append(ms.messages, msg)
+
+	return nil
 }
 
 // appendMessageLocked persists a message and only then appends it in memory, so
@@ -185,8 +206,11 @@ func (ms *messageStore) enqueueFinalAssistantOutput(ctx context.Context, content
 
 		_, err := outputStore.EnqueueOutput(ctx, sessionstore.OutputDraft{
 			SessionID: ms.sessID, Type: sessionstore.OutputMessagePersistent, Content: content,
-			SourceKey:   fmt.Sprintf("message:%d:final", message.DBID),
-			Fingerprint: sessionstore.OutputFingerprint(sessionstore.OutputMessagePersistent, content, ms.sessID, nil),
+			SourceKey: fmt.Sprintf("message:%d:final", message.DBID),
+			Fingerprint: sessionstore.OutputFingerprintWithRelease(
+				sessionstore.OutputMessagePersistent, content, ms.sessID, nil, true,
+			),
+			ReleasesInput: true,
 		})
 		if err != nil {
 			return fmt.Errorf("enqueue final assistant output: %w", err)
