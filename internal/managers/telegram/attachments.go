@@ -4,23 +4,15 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
-	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
 
 	"go.uber.org/zap"
 
 	"github.com/pilat/coagent/internal/humanize"
 	"github.com/pilat/coagent/internal/logger"
 )
-
-// attachmentDownloadTimeout bounds one bot-API file download by request scope;
-// Bot-API refuses getFile downloads >20 MB, so this must comfortably cover the
-// transfer of whatever fits beneath that ceiling.
-const attachmentDownloadTimeout = 10 * time.Minute
 
 // handleAttachment ingests one uploaded file: download → /tmp under a random
 // name → confirmation echo → synthetic metadata message into the session.
@@ -171,9 +163,12 @@ func hasAttachment(msg *telegramMessage) bool {
 // saveAttachment resolves the bot-API file and streams it straight into
 // os.CreateTemp("", "coagent-*"+ext): O_EXCL naming keeps collisions away.
 func (m *Manager) saveAttachment(ctx context.Context, att *tgAttachment) (string, error) {
-	tgFilePath, err := m.getTelegramFilePath(ctx, att.fileID)
+	dctx, cancel := context.WithTimeout(ctx, attachmentDownloadTimeout)
+	defer cancel()
+
+	tgFilePath, err := m.getTelegramFilePath(dctx, att.fileID, m.downloadClient)
 	if err != nil {
-		return "", fmt.Errorf("resolve file id: %w", err)
+		return "", attachmentResolveError(err)
 	}
 
 	ext := sanitizeExtension(firstExtension(att.name, tgFilePath))
@@ -185,7 +180,7 @@ func (m *Manager) saveAttachment(ctx context.Context, att *tgAttachment) (string
 
 	path := tmp.Name()
 
-	written, writeErr := m.downloadToFile(ctx, tgFilePath, tmp)
+	written, writeErr := m.downloadToFile(dctx, tgFilePath, tmp)
 
 	closeErr := tmp.Close()
 
@@ -202,6 +197,21 @@ func (m *Manager) saveAttachment(ctx context.Context, att *tgAttachment) (string
 	return path, nil
 }
 
+func attachmentResolveError(err error) error {
+	var apiErr *tgAPIError
+
+	tooBig := errors.As(err, &apiErr) && apiErr.ErrorCode == 400 &&
+		strings.Contains(strings.ToLower(apiErr.Description), "file is too big")
+	if tooBig {
+		return errors.New(
+			"telegram Bot API rejected this file as too big; files over 20 MB require " +
+				"api_url pointing to a Bot API server running in local mode",
+		)
+	}
+
+	return fmt.Errorf("resolve file id: %w", err)
+}
+
 func pickError(errs ...error) error {
 	for _, err := range errs {
 		if err != nil {
@@ -210,37 +220,6 @@ func pickError(errs ...error) error {
 	}
 
 	return nil
-}
-
-// downloadToFile streams the bot-API file onto w under its own request-scoped
-// deadline rather than the poll client's global http.Client.Timeout.
-func (m *Manager) downloadToFile(ctx context.Context, tgFilePath string, w io.Writer) (int64, error) {
-	url := fmt.Sprintf("https://api.telegram.org/file/bot%s/%s", m.cfg.BotToken, tgFilePath)
-
-	dctx, cancel := context.WithTimeout(ctx, attachmentDownloadTimeout)
-	defer cancel()
-
-	req, err := http.NewRequestWithContext(dctx, http.MethodGet, url, http.NoBody)
-	if err != nil {
-		return 0, fmt.Errorf("build download request: %w", sanitizeTransportError(err))
-	}
-
-	resp, err := m.downloadClient.Do(req)
-	if err != nil {
-		return 0, fmt.Errorf("download telegram file: %w", sanitizeTransportError(err))
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return 0, fmt.Errorf("download failed with status %d", resp.StatusCode)
-	}
-
-	written, err := io.Copy(w, resp.Body)
-	if err != nil {
-		return 0, fmt.Errorf("write downloaded file: %w", err)
-	}
-
-	return written, nil
 }
 
 // sanitizeExtension filters an extension candidate to [A-Za-z0-9], ≤10 chars;

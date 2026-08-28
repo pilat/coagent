@@ -45,7 +45,7 @@ func (m *Manager) transcribeVoice(ctx context.Context, fileID string) (string, e
 		return "", errors.New("voice transcription is not configured")
 	}
 
-	filePath, err := m.getTelegramFilePath(ctx, fileID)
+	filePath, err := m.getTelegramFilePath(ctx, fileID, m.httpClient)
 	if err != nil {
 		return "", err
 	}
@@ -58,12 +58,12 @@ func (m *Manager) transcribeVoice(ctx context.Context, fileID string) (string, e
 	return m.transcribeAudio(ctx, audio)
 }
 
-func (m *Manager) getTelegramFilePath(ctx context.Context, fileID string) (string, error) {
+func (m *Manager) getTelegramFilePath(ctx context.Context, fileID string, client *http.Client) (string, error) {
 	var out struct {
 		FilePath string `json:"file_path"`
 	}
 
-	if err := m.tg(ctx, "getFile", map[string]any{"file_id": fileID}, &out); err != nil {
+	if err := m.tgWithClient(ctx, client, "getFile", map[string]any{"file_id": fileID}, &out); err != nil {
 		return "", err
 	}
 
@@ -72,32 +72,6 @@ func (m *Manager) getTelegramFilePath(ctx context.Context, fileID string) (strin
 	}
 
 	return out.FilePath, nil
-}
-
-func (m *Manager) downloadTelegramFile(ctx context.Context, filePath string) ([]byte, error) {
-	url := fmt.Sprintf("https://api.telegram.org/file/bot%s/%s", m.cfg.BotToken, filePath)
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, http.NoBody)
-	if err != nil {
-		return nil, fmt.Errorf("build download request: %w", sanitizeTransportError(err))
-	}
-
-	resp, err := m.httpClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("download telegram file: %w", sanitizeTransportError(err))
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("download voice failed with status %d", resp.StatusCode)
-	}
-
-	raw, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("read downloaded voice file: %w", err)
-	}
-
-	return raw, nil
 }
 
 func (m *Manager) transcribeAudio(ctx context.Context, audio []byte) (string, error) {

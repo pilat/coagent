@@ -77,7 +77,8 @@ does not imply a tier except where it expresses an implementation variant.
 - `internal/managers/cli` — built-in local chat over the control socket.
 - `internal/managers/telegram` — Telegram manager implementation. Each manager
   owns one bot account, immutable group- or bot-forum target, polling loop, and
-  manager-scoped service-topic identity; failures remain isolated at startup.
+  manager-scoped service-topic identity. It also owns Bot API routing and file
+  ingestion; failures remain isolated at startup.
 - `internal/mcp` — external MCP process lifecycle and daemon-level pooled connections.
 - `internal/mcpstore` — durable MCP server definitions and scope precedence.
 - `internal/memory` — curated per-project long-term memory.
@@ -375,6 +376,11 @@ a backstop, not permission to log secrets: opaque structured values still requir
 call-site discipline. Coagent-home resolution has one owner so packages do not
 invent inconsistent or test-leaking state locations.
 
+A Telegram manager's `api_url` is a credential-bearing trust destination: every
+request includes its bot token. A local-mode Bot API server may also return an
+absolute `file_path`; coagent opens it only when a custom URL was configured, so
+the endpoint must be co-located with the daemon or expose the same filesystem.
+
 ### Filesystem and egress boundary
 
 The optional native sandbox confines direct writes by Bash descendants and
@@ -443,7 +449,7 @@ skill is automatically active there. Telegram, ordinary project roots and
 subagents receive none of these configuration surfaces. Telegram is optional: a
 bad manager configuration must not prevent the chat used to repair it.
 
-The `set_manager` tool is a presence-aware upsert: omitted fields preserve existing raw configuration, present fields replace their complete value, and immutable manager identity (ID, driver, Telegram forum identity) cannot change in place. A no-op patch that changes no value is valid and still restarts the daemon, supplying the retry path after external Telegram capability or permission repair. Secret rotation for an existing token reference uses `request_secret`, which restarts without a configuration edit.
+The `set_manager` tool is a presence-aware upsert: omitted fields preserve existing raw configuration, present fields replace their complete value, and immutable manager identity (ID, driver, Telegram forum identity) cannot change in place. `api_url` selects the manager's Bot API server; omission uses the hosted endpoint. A no-op patch that changes no value is valid and still restarts the daemon, supplying the retry path after external Telegram capability or permission repair. Secret rotation for an existing token reference uses `request_secret`, which restarts without a configuration edit.
 
 ## Package profiles
 
@@ -555,7 +561,12 @@ helpers with no durable protocol ownership.
 The manager coordinator isolates manager failures. CLI and Telegram render
 controller state and submit controller requests; they do not directly manipulate
 session rows. The CLI is always available with a running daemon, while Telegram
-is configuration-dependent. The reserved `sys:coagent` logical name together
+is configuration-dependent. Telegram routes polling, commands, and downloads
+through one Bot API server. The hosted endpoint rejects downloads over 20 MB; a
+co-located server in local mode resolves them to absolute paths, which Telegram
+copies into random temporary artifacts before producing one metadata-only
+session input. A size rejection produces an actionable Telegram reply and no
+session input. The reserved `sys:coagent` logical name together
 with its canonical configured path, rather than a transport attribute or numeric
 session ID, marks the dedicated daemon-configuration root; its CLI attribute
 separately proves a terminal can answer a secret prompt. Session-event defines

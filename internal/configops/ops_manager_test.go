@@ -33,6 +33,18 @@ func TestSetManagerPatch_UpdateSummaryListsChangedFields(t *testing.T) {
 	assert.Equal(t, `update manager "tg" (allowed_user_ids)`, staged.Summary)
 }
 
+func TestSetManagerPatch_UpdatesAPIURL(t *testing.T) {
+	f := newFixture(t, baseConfig, baseSecrets)
+	apiURL := "http://127.0.0.1:8081"
+
+	staged, verdict := f.svc.Stage(SetManagerPatch(ManagerPatch{ID: "tg", APIURL: &apiURL}))
+	require.True(t, verdict.Applied)
+	assert.Equal(t, `update manager "tg" (api_url)`, staged.Summary)
+
+	cfg := f.applied(t, SetManagerPatch(ManagerPatch{ID: "tg", APIURL: &apiURL}))
+	assert.Equal(t, apiURL, cfg.Managers[0].APIURL)
+}
+
 func TestSetManagerPatch_NoOpSummary(t *testing.T) {
 	f := newFixture(t, baseConfig, baseSecrets)
 
