@@ -14,6 +14,13 @@ type mockTool struct {
 	execFunc    func(ctx context.Context, params json.RawMessage) (*Result, error)
 }
 
+type activatedMockTool struct {
+	*mockTool
+	commands []string
+}
+
+func (t *activatedMockTool) ActivationCommands() []string { return t.commands }
+
 func (m *mockTool) ID() string                  { return m.id }
 func (m *mockTool) Description() string         { return m.description }
 func (m *mockTool) Parameters() json.RawMessage { return m.params }
@@ -69,6 +76,17 @@ func TestRegistry_Register_Overwrite(t *testing.T) {
 	}
 	if got.Description() != "Second version" {
 		t.Errorf("Register did not overwrite, got description %s", got.Description())
+	}
+}
+
+func TestActivationIndex_RejectsDuplicateExactCommand(t *testing.T) {
+	registry := NewRegistry()
+	registry.Register(&activatedMockTool{mockTool: newMockTool("one", "one"), commands: []string{"/budget"}})
+	registry.Register(&activatedMockTool{mockTool: newMockTool("two", "two"), commands: []string{"/budget"}})
+
+	_, err := ActivationIndex(registry)
+	if err == nil {
+		t.Fatal("duplicate activation command was accepted")
 	}
 }
 

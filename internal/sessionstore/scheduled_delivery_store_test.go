@@ -3,6 +3,7 @@ package sessionstore
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -11,9 +12,11 @@ import (
 )
 
 func TestScheduledDeliveryStore_ToolNotificationIsExactlyOnceAndConflictsFailClosed(t *testing.T) {
-	store, _, projectID := newTestStore(t)
+	t.Parallel()
+
+	store, db, projectID := newTestStore(t)
 	ctx := context.Background()
-	sess, err := store.CreateSession(ctx, projectID, "m", "", nil)
+	sess, err := store.CreateSession(ctx, projectID, "m", "", map[string]any{"manager_id": "telegram"})
 	require.NoError(t, err)
 
 	assistant := &StoredMessage{Role: llmwire.RoleAssistant, ToolCalls: []byte(`[{"id":"c1","name":"schedule"}]`)}
@@ -28,6 +31,10 @@ func TestScheduledDeliveryStore_ToolNotificationIsExactlyOnceAndConflictsFailClo
 	assert.True(t, inserted)
 	assert.Positive(t, asstID)
 	assert.Positive(t, resultID)
+	var episodeStartedAt time.Time
+	require.NoError(t, db.QueryRowContext(ctx,
+		`SELECT episode_started_at FROM sessions WHERE id = ?`, sess.ID).Scan(&episodeStartedAt))
+	assert.False(t, episodeStartedAt.IsZero())
 
 	asstID, resultID, inserted, err = store.InsertToolNotificationPairOnce(
 		ctx, sess.ID, "schedule:one-shot:7", "fingerprint-a", assistant, result,
@@ -36,6 +43,10 @@ func TestScheduledDeliveryStore_ToolNotificationIsExactlyOnceAndConflictsFailClo
 	assert.False(t, inserted)
 	assert.Zero(t, asstID)
 	assert.Zero(t, resultID)
+	var replayedEpisodeStart time.Time
+	require.NoError(t, db.QueryRowContext(ctx,
+		`SELECT episode_started_at FROM sessions WHERE id = ?`, sess.ID).Scan(&replayedEpisodeStart))
+	assert.Equal(t, episodeStartedAt, replayedEpisodeStart)
 
 	_, _, _, err = store.InsertToolNotificationPairOnce(
 		ctx, sess.ID, "schedule:one-shot:7", "different-payload", assistant, result,

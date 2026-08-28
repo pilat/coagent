@@ -96,11 +96,14 @@ func TestMigrationsApplyToAnExistingDatabase(t *testing.T) {
 		`ALTER TABLE messages DROP COLUMN reasoning_raw`,
 		`ALTER TABLE messages DROP COLUMN attachments`,
 		`DROP TABLE session_inbox`,
+		`ALTER TABLE sessions DROP COLUMN episode_started_at`,
 		`ALTER TABLE subagent_links DROP COLUMN activation_seq`,
 		`DROP TABLE session_deliveries`,
+		`DROP TABLE session_tool_activations`,
+		`DROP TABLE session_budgets`,
 		`DROP TABLE session_outbox`,
 		`DROP TABLE manager_bindings`,
-		`DELETE FROM goose_db_version WHERE version_id IN (16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26)`,
+		`DELETE FROM goose_db_version WHERE version_id IN (16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27)`,
 	} {
 		_, err = db.ExecContext(ctx, stmt)
 		require.NoError(t, err, stmt)

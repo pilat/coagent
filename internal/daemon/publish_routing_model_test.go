@@ -74,7 +74,6 @@ func TestPublishRoutingModel_ManagerOwnershipSurvivesTransitions(t *testing.T) {
 	require.NoError(t, err)
 	model[newAlphaID] = model[alphaID]
 	assertModelDeliveries(t, subscribers, "alpha", alphaID, "")
-	assertModelDeliveries(t, subscribers, "alpha", alphaID, "")
 	publish(newAlphaID, "clear preserved alpha")
 }
 

@@ -76,6 +76,14 @@ type Tool interface {
 	Execute(ctx context.Context, params json.RawMessage) (*Result, error)
 }
 
+// ActivationDeclarer marks mutations that require an exact user command turn.
+// The declaration advertises routing only; execution must revalidate the
+// durable grant carried by the tool context.
+type ActivationDeclarer interface {
+	Tool
+	ActivationCommands() []string
+}
+
 // RegistryBound is implemented by tools that dispatch to other tools through a
 // registry. Registry views rebind them, so such a tool can never reach past the
 // tool set it is served from.
@@ -106,7 +114,46 @@ type Result struct {
 	// Images carries referenced-not-stored pixel attachments this result
 	// produced (read on a supported image); stored on the role-tool row and
 	// materialized per request by the drivers. Stub/repair paths never set it.
-	Images []llmwire.ImageRef `json:"images,omitempty"`
+	Images         []llmwire.ImageRef `json:"images,omitempty"`
+	DirectMessages []string           `json:"direct_messages,omitempty"`
+}
+
+// ActivationIndex returns the exact command owner map for a registry. Duplicate
+// ownership fails session setup instead of making command routing depend on
+// registration order.
+func ActivationIndex(reg Registry) (map[string]string, error) {
+	index := make(map[string]string)
+
+	for _, candidate := range reg.List() {
+		declarer, ok := candidate.(ActivationDeclarer)
+		if !ok {
+			continue
+		}
+
+		commands := declarer.ActivationCommands()
+		if !slices.IsSorted(commands) {
+			return nil, fmt.Errorf("tool %s activation commands are not sorted", candidate.ID())
+		}
+
+		for _, command := range commands {
+			if command == "" || command[0] != '/' || len(command) == 1 {
+				return nil, fmt.Errorf("tool %s has invalid activation command %q", candidate.ID(), command)
+			}
+
+			if owner, exists := index[command]; exists {
+				return nil, fmt.Errorf(
+					"activation command %s is declared by both %s and %s",
+					command,
+					owner,
+					candidate.ID(),
+				)
+			}
+
+			index[command] = candidate.ID()
+		}
+	}
+
+	return index, nil
 }
 
 // Registry manages a collection of tools.

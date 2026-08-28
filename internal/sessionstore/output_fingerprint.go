@@ -9,14 +9,36 @@ import (
 // OutputFingerprint makes deterministic identities for producers that reconcile
 // an existing durable fact instead of inventing a fresh standalone notice.
 func OutputFingerprint(kind OutputType, content string, sessionID int64, attributes map[string]any) string {
+	return outputFingerprintWithRelease(kind, content, sessionID, attributes, false)
+}
+
+func OutputFingerprintWithRelease(
+	kind OutputType,
+	content string,
+	sessionID int64,
+	attributes map[string]any,
+	releasesInput bool,
+) string {
+	return outputFingerprintWithRelease(kind, content, sessionID, attributes, releasesInput)
+}
+
+func outputFingerprintWithRelease(
+	kind OutputType,
+	content string,
+	sessionID int64,
+	attributes map[string]any,
+	releasesInput bool,
+) string {
 	payload := struct {
-		Type       OutputType      `json:"type"`
-		Content    string          `json:"content"`
-		SessionID  int64           `json:"session_id"`
-		Attributes json.RawMessage `json:"attributes"`
+		Type          OutputType      `json:"type"`
+		Content       string          `json:"content"`
+		SessionID     int64           `json:"session_id"`
+		Attributes    json.RawMessage `json:"attributes"`
+		ReleasesInput bool            `json:"releases_input,omitempty"`
 	}{
 		Type: kind, Content: content, SessionID: sessionID,
-		Attributes: fingerprintAttributes(kind, attributes),
+		Attributes:    fingerprintAttributes(kind, attributes),
+		ReleasesInput: releasesInput,
 	}
 	encoded, _ := json.Marshal(payload) //nolint:errchkjson // closed internal payload contains only JSON values.
 	digest := sha256.Sum256(encoded)
@@ -26,9 +48,10 @@ func OutputFingerprint(kind OutputType, content string, sessionID int64, attribu
 
 func fingerprintAttributes(kind OutputType, attributes map[string]any) json.RawMessage {
 	type messageAttributes struct {
-		Source          string          `json:"source,omitempty"`
-		Waiting         json.RawMessage `json:"waiting,omitempty"`
-		WaitingIdentity json.RawMessage `json:"waiting_identity,omitempty"`
+		Source           string          `json:"source,omitempty"`
+		Waiting          json.RawMessage `json:"waiting,omitempty"`
+		WaitingIdentity  json.RawMessage `json:"waiting_identity,omitempty"`
+		ProgressRevision string          `json:"progress_revision,omitempty"`
 	}
 	type openedAttributes struct {
 		Name    string `json:"name"`
@@ -59,9 +82,10 @@ func fingerprintAttributes(kind OutputType, attributes map[string]any) json.RawM
 		}
 
 		value = messageAttributes{
-			Source:          stringValue(attributes["source"]),
-			Waiting:         waiting,
-			WaitingIdentity: identity,
+			Source:           stringValue(attributes["source"]),
+			Waiting:          waiting,
+			WaitingIdentity:  identity,
+			ProgressRevision: stringValue(attributes["progress_revision"]),
 		}
 	case OutputSessionOpened:
 		value = openedAttributes{

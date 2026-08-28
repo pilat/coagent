@@ -237,7 +237,7 @@ func TestRunLoopFinalTextResponseEndsRun(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "all done", result.FinalResponse)
 	assert.Equal(t, 1, result.Iterations)
-	assert.Equal(t, []string{"✅ all done"}, notifier.all())
+	assert.Equal(t, []string{"all done"}, notifier.all())
 }
 
 func TestRunLoopDoesNotRepublishPreviousFinalBeforeAcceptingNextInput(t *testing.T) {
@@ -380,7 +380,7 @@ func TestRunLoopAnnouncesAssistantTextBeforeExecutingItsTools(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.Equal(t, "done", result.FinalResponse)
-	assert.Equal(t, []string{"🔄 working on it", "✅ done"}, notifier.all())
+	assert.Equal(t, []string{"🔄 working on it", "done"}, notifier.all())
 }
 
 func TestRunLoopSilentToolTurnNotifiesNothing(t *testing.T) {
@@ -397,7 +397,7 @@ func TestRunLoopSilentToolTurnNotifiesNothing(t *testing.T) {
 	_, err := runLoop(t.Context(), agent, loopOptions{Notify: notifier.fn}, iterationGuard(5))
 
 	require.NoError(t, err)
-	assert.Equal(t, []string{"✅ done"}, notifier.all())
+	assert.Equal(t, []string{"done"}, notifier.all())
 }
 
 func TestRunLoopEmptyResponseLadder(t *testing.T) {
@@ -743,7 +743,7 @@ func TestRunLoopFinalizeRecoversLastAssistantText(t *testing.T) {
 	require.Error(t, err)
 	require.EqualError(t, err, "maximum iterations (1) reached")
 	assert.Equal(t, "partial answer", result.FinalResponse)
-	assert.Equal(t, []string{"✅ partial answer"}, notifier.all())
+	assert.Equal(t, []string{"partial answer"}, notifier.all())
 }
 
 func TestRunLoopFinalizeNotifyFailureIsLogged(t *testing.T) {
@@ -772,7 +772,7 @@ func TestRunLoopFinalizeNotifyFailureIsLogged(t *testing.T) {
 
 			require.Error(t, err) // the single iteration is exhausted
 			assert.Equal(t, "partial answer", result.FinalResponse)
-			assert.Equal(t, []string{"✅ partial answer"}, notifier.all())
+			assert.Equal(t, []string{"partial answer"}, notifier.all())
 			assert.Len(t, logs.FilterMessage("notify_failed").All(), tt.wantLog)
 		})
 	}

@@ -445,11 +445,65 @@ func (s *svc) Start(ctx context.Context) error {
 		}
 	}
 
+	if budgets, ok := s.sessionStore.(sessionstore.BudgetStore); ok {
+		if err := s.reconcileArmedBudgets(ctx, budgets); err != nil {
+			return err
+		}
+
+		pending, parkErr := budgets.ListPendingBudgetParks(ctx)
+		if parkErr != nil {
+			return fmt.Errorf("list pending budget parks: %w", parkErr)
+		}
+
+		for _, record := range pending {
+			s.parkBudgetTree(ctx, record)
+		}
+	}
+
 	// PASS 0 is the one blocking phase. Controllers and the schedule executor start
 	// the moment Start returns, and a runner they open makes it skip that session.
 	s.resolveOrphanedCalls(ctx)
+	s.startProgressReconciler(ctx)
 
 	s.startRecovery(ctx)
+
+	return nil
+}
+
+//nolint:wsl_v5 // Startup reconciliation keeps capture, observe, and park ordered.
+func (s *svc) reconcileArmedBudgets(ctx context.Context, budgets sessionstore.BudgetStore) error {
+	if s.budgetSvc == nil {
+		return nil
+	}
+
+	progressStore, ok := s.sessionStore.(sessionstore.ProgressStore)
+	if !ok {
+		return nil
+	}
+
+	armed, err := budgets.ListArmedBudgets(ctx)
+	if err != nil {
+		return fmt.Errorf("list armed budgets: %w", err)
+	}
+
+	now := time.Now().UTC()
+	for _, budgetRecord := range armed {
+		facts, captureErr := progressStore.CaptureProgress(ctx, budgetRecord.RootSessionID)
+		if captureErr != nil {
+			return fmt.Errorf("capture budget progress for session %d: %w", budgetRecord.RootSessionID, captureErr)
+		}
+
+		record, fired, observeErr := s.budgetSvc.Observe(
+			ctx, budgetRecord.RootSessionID, facts.CostUSD, now, "",
+		)
+		if observeErr != nil {
+			return fmt.Errorf("reconcile budget for session %d: %w", budgetRecord.RootSessionID, observeErr)
+		}
+
+		if fired {
+			s.parkBudgetTree(ctx, record)
+		}
+	}
 
 	return nil
 }

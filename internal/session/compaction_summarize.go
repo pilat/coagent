@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"go.uber.org/zap"
 
@@ -147,6 +148,12 @@ func (s *svc) compactWithRetry(ctx context.Context, acc *compactionUsage, prompt
 // compactOnce runs one summarization call, refusing a prompt the model cannot
 // hold rather than silently trimming it into one that fits.
 func (s *svc) compactOnce(ctx context.Context, acc *compactionUsage, prompt string) (string, error) {
+	if s.budgetGate != nil {
+		if err := s.budgetGate.Admit(ctx, time.Now().UTC()); err != nil {
+			return "", fmt.Errorf("budget admission for compaction: %w", err)
+		}
+	}
+
 	system := s.prompt.systemPrompt()
 
 	budget := s.compactionInputBudget()

@@ -67,7 +67,7 @@ func selectOutputHead(ctx context.Context, tx *sql.Tx, managerID string) (*Outpu
 	return scanOutputRecord(row)
 }
 
-const outputColumns = `id, session_id, type, content, attributes, COALESCE(source_key, ''), COALESCE(fingerprint, ''), state, attempt_seq, COALESCE(attempt_id, ''), last_attempt_at, next_attempt_at, delivered_at, blocked_at, last_error, created_at`
+const outputColumns = `id, session_id, type, content, attributes, COALESCE(source_key, ''), COALESCE(fingerprint, ''), state, attempt_seq, COALESCE(attempt_id, ''), last_attempt_at, next_attempt_at, delivered_at, blocked_at, last_error, created_at, releases_input`
 
 func scanOutputRecord(row interface{ Scan(...any) error }) (*OutputRecord, error) {
 	var record OutputRecord
@@ -91,6 +91,7 @@ func scanOutputRecord(row interface{ Scan(...any) error }) (*OutputRecord, error
 		&blocked,
 		&record.LastError,
 		&record.CreatedAt,
+		&record.ReleasesInput,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("scan output record: %w", err)

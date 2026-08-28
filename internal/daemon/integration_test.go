@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -88,6 +89,7 @@ func (c *scriptedLLM) SetSessionID(_ string)      {}
 // temp SQLite DB.
 type subagentHarness struct {
 	t          *testing.T
+	db         *sql.DB
 	mgr        *svc
 	sessStore  sessionstore.Store
 	links      LinkStore
@@ -218,7 +220,7 @@ func newSubagentHarnessOnDBWithProject(
 	require.NoError(t, err)
 
 	return &subagentHarness{
-		t: t, mgr: mgr, sessStore: sessStore, links: links, schedStore: schedStore,
+		t: t, db: db, mgr: mgr, sessStore: sessStore, links: links, schedStore: schedStore,
 		projectID: pid, ctx: context.Background(),
 	}
 }
@@ -922,7 +924,7 @@ func newMCPHarness(
 	require.NoError(t, err)
 
 	return &subagentHarness{
-		t: t, mgr: mgr, sessStore: sessStore, links: links, schedStore: schedStore,
+		t: t, db: db, mgr: mgr, sessStore: sessStore, links: links, schedStore: schedStore,
 		projectID: pid, ctx: ctx,
 	}, registry, pool
 }

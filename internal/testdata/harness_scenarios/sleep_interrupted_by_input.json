@@ -31,7 +31,7 @@
     },
     {
       "type": "message",
-      "message": "✅ sleep interruption handled"
+      "message": "sleep interruption handled"
     },
     {
       "type": "state_changed",

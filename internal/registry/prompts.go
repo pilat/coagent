@@ -90,6 +90,8 @@ Rules:
 - Mark todos completed IMMEDIATELY after finishing each one
 - Only ONE task in_progress at a time
 - Break complex work into concrete, verifiable steps
+- Replace the full list whenever reality changes; write an empty list when no TODO remains or the list is no longer useful
+- Brief progress prose beside tool calls is optional; TODO state must remain truthful even when you omit prose
 
 If todo tools are not available, plan in your reasoning instead.
 

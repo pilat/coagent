@@ -12,7 +12,7 @@
     },
     {
       "type": "message",
-      "message": "✅ background launched; yielded without sleep"
+      "message": "background launched; yielded without sleep"
     },
     {
       "type": "state_changed",
@@ -29,7 +29,7 @@
     },
     {
       "type": "message",
-      "message": "✅ background completion delivered"
+      "message": "background completion delivered"
     },
     {
       "type": "state_changed",

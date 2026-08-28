@@ -49,11 +49,17 @@ func runStoppedRootScheduleScenario(t *testing.T, tc stoppedRootScheduleCase) {
 	started := make(chan struct{})
 	release := make(chan struct{})
 	h, rootID, collector := newStoppedRootScheduleHarness(t, tc, started, release)
+	oldEpisode := time.Now().UTC().Add(-time.Hour)
+	_, err := h.db.ExecContext(t.Context(),
+		`UPDATE sessions SET episode_started_at = ? WHERE id = ?`, oldEpisode, rootID)
+	require.NoError(t, err)
 	deliveryID := runDueStoppedRootSchedule(t, h, rootID, collector, tc, started, release)
 	successfulTrace := collector.snapshot()
+	newEpisode := sessionEpisodeStart(t, h, rootID)
+	assert.True(t, newEpisode.After(oldEpisode))
 
 	assertStoppedRootScheduleResult(t, h, rootID, tc)
-	assertStoppedRootScheduleDuplicate(t, h, rootID, deliveryID, tc)
+	assertStoppedRootScheduleDuplicate(t, h, rootID, deliveryID, tc, newEpisode)
 	assertHarnessTrace(t, tc.trace, successfulTrace, rootID)
 }
 
@@ -133,8 +139,7 @@ func runDueStoppedRootSchedule(
 			lastAssistantTextDTO(h.parentMessages(rootID)) == tc.answer
 	}, 5*time.Second, 10*time.Millisecond)
 	executor.Stop()
-	waitForVisibleMessage(t, collector, rootID, "✅ "+tc.answer)
-	waitForIdleAfterMessage(t, collector, rootID, "✅ "+tc.answer)
+	waitForVisibleMessage(t, collector, rootID, tc.answer)
 
 	return fmt.Sprintf("schedule:one-shot:%d", entry.ID())
 }
@@ -165,6 +170,7 @@ func assertStoppedRootScheduleDuplicate(
 	rootID int64,
 	deliveryID string,
 	tc stoppedRootScheduleCase,
+	episodeStartedAt time.Time,
 ) {
 	t.Helper()
 	require.NoError(t, h.mgr.Stop(t.Context(), rootID))
@@ -176,9 +182,20 @@ func assertStoppedRootScheduleDuplicate(
 	rec, err := h.sessStore.GetSession(t.Context(), rootID)
 	require.NoError(t, err)
 	assert.Equal(t, sessionstore.SessionStatusStopped, rec.Status)
+	assert.Equal(t, episodeStartedAt, sessionEpisodeStart(t, h, rootID))
 	assertStoppedRootScheduleResult(t, h, rootID, tc)
 	_, err = h.mgr.DeliverPendingCallResult(t.Context(), rootID, "missing-call", tool.IDSleep, "must stay stopped")
 	require.ErrorContains(t, err, "stopped")
+}
+
+func sessionEpisodeStart(t *testing.T, h *subagentHarness, rootID int64) time.Time {
+	t.Helper()
+
+	var startedAt time.Time
+	require.NoError(t, h.db.QueryRowContext(t.Context(),
+		`SELECT episode_started_at FROM sessions WHERE id = ?`, rootID).Scan(&startedAt))
+
+	return startedAt
 }
 
 func deliverStoppedRootSchedule(

@@ -138,6 +138,7 @@ func (s *svc) runSession(ctx context.Context, sessionID int64, rs *runner) {
 	}
 }
 
+//nolint:wsl_v5 // Teardown publishes readiness only after removing the live loop.
 func (s *svc) finishRunner(
 	ctx context.Context,
 	sessionID int64,
@@ -171,6 +172,9 @@ func (s *svc) finishRunner(
 	}
 
 	s.finalizeChild(cleanupCtx, sessionID, shuttingDown, *errored)
+	if !shuttingDown {
+		s.reconcileLatestReadiness(cleanupCtx, sessionID)
+	}
 
 	leftover := rs.drainSessionInputs()
 	close(rs.done)
@@ -218,7 +222,7 @@ func (s *svc) restartPendingAfterExit(ctx context.Context, sessionID int64) {
 // result reports whether the loop should continue; the second whether this
 // iteration consumed real input (messages or notifications) — the spin guard in
 // runSession uses it to bound consecutive no-input continuations.
-func (s *svc) runSessionIteration( //nolint:funlen // linear lifecycle with explicit cleanup at each failure boundary
+func (s *svc) runSessionIteration( //nolint:funlen,gocyclo // Linear lifecycle with explicit cleanup at each boundary.
 	ctx context.Context,
 	sessionID int64,
 	rs *runner,
@@ -278,7 +282,10 @@ func (s *svc) runSessionIteration( //nolint:funlen // linear lifecycle with expl
 
 	if !hadInput && !sess.HasPendingWork() {
 		sess.Close()
-		notify(sessionevent.Notification{Type: sessionevent.NotifyStateChanged, Status: controllerapi.StateIdle})
+
+		if ownerlessSession(rec) {
+			notify(sessionevent.Notification{Type: sessionevent.NotifyStateChanged, Status: controllerapi.StateIdle})
+		}
 
 		return false, false
 	}
@@ -299,9 +306,25 @@ func (s *svc) runSessionIteration( //nolint:funlen // linear lifecycle with expl
 	s.registerMCPTools(ctx, rec, sess)
 	s.registerConfigTools(ctx, rec, sess)
 	s.registerSecretTool(ctx, rec, sess)
+	s.registerBudgetTool(ctx, rec, sess)
 
 	rs.hasRun = true
 	runResult, runErr := s.executeSession(ctx, sess, notify)
+
+	if rec.ParentID == 0 {
+		releaseReason := "completed"
+		if runErr != nil {
+			releaseReason = "error"
+		}
+
+		if !runResult.Suspended || runErr != nil {
+			if releaseErr := s.releaseArmedBudget(ctx, sessionID, releaseReason); releaseErr != nil {
+				runErr = errors.Join(runErr, releaseErr)
+			}
+		}
+	}
+
+	s.reconcileLatestReadiness(ctx, sessionID)
 	s.deferNotices.record(sessionID, runResult.CompactionDeferAnnounced)
 
 	rs.svcMu.Lock()
@@ -316,7 +339,10 @@ func (s *svc) runSessionIteration( //nolint:funlen // linear lifecycle with expl
 
 	if runErr != nil {
 		s.handleRunError(ctx, sessionID, runResult.ErrorNotice, runErr, notify)
-		notify(sessionevent.Notification{Type: sessionevent.NotifyStateChanged, Status: controllerapi.StateIdle})
+
+		if ownerlessSession(rec) {
+			notify(sessionevent.Notification{Type: sessionevent.NotifyStateChanged, Status: controllerapi.StateIdle})
+		}
 
 		return false, hadInput
 	}
@@ -367,8 +393,8 @@ func (s *svc) publishWaiting(
 		waits[i] = projection.wait
 	}
 
-	if s.waitingSetUnchanged(ctx, sessionID, projections) {
-		return
+	if err := s.recordWaitingProgress(ctx, sessionID, projections); err != nil {
+		logger.Ctx(ctx).Named("daemon.waiting").Warn("record_waiting_progress", zap.Error(err))
 	}
 
 	notify(sessionevent.Notification{
@@ -417,98 +443,44 @@ func (s *svc) collectWaitingProjections(ctx context.Context, sessionID int64) []
 	return projections
 }
 
-// waitingSetUnchanged reconciles the current projection against the latest
-// waiting row; it reports true when the set is unchanged and nothing is owed.
-func (s *svc) waitingSetUnchanged(ctx context.Context, sessionID int64, projections []waitingProjection) bool {
-	outputStore := s.OutputStore()
-	if outputStore == nil {
-		return false
-	}
-
-	waitingStore, ok := outputStore.(sessionstore.WaitingOutputStore)
-	if !ok {
-		logger.Ctx(ctx).Named("daemon.waiting").Warn("missing_waiting_output_store")
-
-		return false
-	}
-
-	display := make([]map[string]any, len(projections))
+// recordWaitingProgress enqueues the durable waiting card for the projected
+// set; the canonical replaceable row is its own dedupe, so nothing is returned.
+//
+//nolint:wsl_v5 // Waiting projection and output reconciliation stay adjacent.
+func (s *svc) recordWaitingProgress(
+	ctx context.Context,
+	sessionID int64,
+	projections []waitingProjection,
+) error {
 	identities := make([]map[string]any, len(projections))
 
 	for i, projection := range projections {
 		identities[i] = projection.identity
-		display[i] = projection.display
 	}
 
 	identity, err := canonicalWaitingIdentities(identities)
 	if err != nil {
-		logger.Ctx(ctx).Named("daemon.waiting").Warn("encode_waiting_identity", zap.Error(err))
-
-		return false
+		return fmt.Errorf("encode waiting identities: %w", err)
 	}
 
 	digest := sha256.Sum256(identity)
 	hash := hex.EncodeToString(digest[:])
-	previousID := int64(0)
-
-	previous, err := waitingStore.LatestWaitingOutput(ctx, sessionID)
-	if errors.Is(err, sessionstore.ErrNoWaitingOutput) {
-		err = nil
+	progressStore, ok := s.sessionStore.(sessionstore.ProgressStore)
+	if !ok {
+		return nil
 	}
 
+	facts, err := progressStore.CaptureProgress(ctx, sessionID)
 	if err != nil {
-		logger.Ctx(ctx).Named("daemon.waiting").Warn("load_waiting_output", zap.Error(err))
-
-		return false
+		return fmt.Errorf("capture progress: %w", err)
 	}
 
-	if previous != nil {
-		previousIdentity, err := canonicalWaitingIdentities(previous.Attributes["waiting_identity"])
-		if err != nil {
-			logger.Ctx(ctx).Named("daemon.waiting").Warn("decode_waiting_identity", zap.Error(err))
-
-			return false
-		}
-
-		if bytes.Equal(previousIdentity, identity) {
-			return true
-		}
-
-		previousID = previous.ID
+	if _, err := s.enqueueProgressChangeFacts(ctx, facts, "waiting:"+hash); err != nil &&
+		!errors.Is(err, sessionstore.ErrOutputOwner) {
+		return fmt.Errorf("enqueue progress: %w", err)
 	}
 
-	content := sessionevent.FormatWaiting(waitingWaits(projections))
-
-	if _, err = outputStore.EnqueueOutput(ctx, sessionstore.OutputDraft{
-		SessionID: sessionID,
-		Type:      sessionstore.OutputMessageReplaceable,
-		Content:   content,
-		Attributes: map[string]any{
-			"waiting": display, "waiting_identity": identities,
-		},
-		SourceKey: fmt.Sprintf("wait:%d:%s", previousID, hash),
-		Fingerprint: sessionstore.OutputFingerprint(
-			sessionstore.OutputMessageReplaceable,
-			content,
-			sessionID,
-			map[string]any{
-				"waiting": display, "waiting_identity": identities,
-			},
-		),
-	}); err != nil && !errors.Is(err, sessionstore.ErrOutputOwner) {
-		logger.Ctx(ctx).Named("daemon.waiting").Warn("enqueue_waiting_output", zap.Error(err))
-	}
-
-	return false
-}
-
-func waitingWaits(projections []waitingProjection) []sessionevent.WaitItem {
-	waits := make([]sessionevent.WaitItem, len(projections))
-	for i, projection := range projections {
-		waits[i] = projection.wait
-	}
-
-	return waits
+	return nil
 }
 
 type waitingProjection struct {
@@ -700,7 +672,10 @@ func (s *svc) reportSessionUnstarted(
 		Type:    sessionevent.NotifyMessage,
 		Message: message,
 	})
-	notify(sessionevent.Notification{Type: sessionevent.NotifyStateChanged, Status: controllerapi.StateIdle})
+
+	if record, err := s.sessionStore.GetSession(ctx, sessionID); err != nil || ownerlessSession(record) {
+		notify(sessionevent.Notification{Type: sessionevent.NotifyStateChanged, Status: controllerapi.StateIdle})
+	}
 }
 
 // prepareSessionInputs applies causal results before standalone events, regardless
@@ -965,6 +940,8 @@ func (s *svc) createOrResumeSession(
 // openSession builds the session service. A settlement open never persists the
 // initial state: /stop settles a tree already marked stopping, and reactivating
 // it would lose the lifecycle fence.
+//
+//nolint:funlen // Session construction assembles one activation boundary.
 func (s *svc) openSession(
 	ctx context.Context,
 	sessionID int64,
@@ -998,12 +975,46 @@ func (s *svc) openSession(
 			store:     s.inboxStore,
 			schedules: s.scheduleSvc,
 			sessionID: sessionID,
+			progress: func(ctx context.Context) (string, error) {
+				current, err := s.CurrentProgress(ctx, sessionID)
+				if err != nil {
+					return "", err
+				}
+
+				return current.Rendered, nil
+			},
+			progressChange: func(ctx context.Context) (string, error) {
+				return s.enqueueProgressChange(ctx, sessionID)
+			},
+			finalOutput: func(ctx context.Context, text string) (string, error) {
+				return s.renderFinalOutput(ctx, sessionID, text)
+			},
 		},
 		SettlementOpen:        settlement,
 		PreserveStoppedStatus: preserveStopped,
 	}
 	owner, _ := rec.Attributes[controllerapi.SessionAttributeManagerID].(string)
+
 	opts.OutputEnabled = rec.ParentID == 0 && owner != ""
+	budgetGateNeeded := owner != ""
+
+	if rec.ParentID != 0 && s.budgetSvc != nil {
+		budgetRecord, budgetErr := s.budgetSvc.Get(ctx, sessionRootID(rec))
+		if budgetErr != nil && !errors.Is(budgetErr, sessionstore.ErrBudgetNotFound) {
+			return nil, fmt.Errorf("load child budget gate: %w", budgetErr)
+		}
+
+		budgetGateNeeded = budgetErr == nil && budgetRecord.State != sessionstore.BudgetReleased
+	}
+
+	if s.budgetSvc != nil && budgetGateNeeded {
+		if runtimeStore, ok := s.sessionStore.(sessionstore.RuntimeStore); ok {
+			opts.BudgetGate = &sessionBudgetGate{
+				daemon: s, service: s.budgetSvc, store: runtimeStore,
+				sessionID: rec.ID, rootID: sessionRootID(rec),
+			}
+		}
+	}
 
 	opts.ActiveSubagents = s.activeSubagentInfos(ctx, sessionID)
 	opts.ActiveSubagentsProvider = func(ctx context.Context) []session.ActiveSubagentInfo {

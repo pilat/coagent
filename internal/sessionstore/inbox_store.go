@@ -175,49 +175,133 @@ func (s *store) PeekPending(ctx context.Context, sessionID int64) (*InboxInput, 
 }
 
 func (s *store) PromoteInput(ctx context.Context, inputID int64, preparedContent string) (*StoredMessage, error) {
+	message, _, err := s.promoteInput(ctx, inputID, preparedContent, nil)
+
+	return message, err
+}
+
+func (s *store) PromoteInputWithActivation(
+	ctx context.Context,
+	inputID int64,
+	preparedContent string,
+	activation ActivationDraft,
+) (*StoredMessage, *ToolActivation, error) {
+	if activation.ToolID == "" || activation.Command == "" || activation.Command[0] != '/' {
+		return nil, nil, ErrActivationConflict
+	}
+
+	return s.promoteInput(ctx, inputID, preparedContent, &activation)
+}
+
+func (s *store) promoteInput(
+	ctx context.Context,
+	inputID int64,
+	preparedContent string,
+	activation *ActivationDraft,
+) (*StoredMessage, *ToolActivation, error) {
 	if preparedContent == "" {
-		return nil, errors.New("empty prepared input content")
+		return nil, nil, errors.New("empty prepared input content")
 	}
 
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
-		return nil, fmt.Errorf("begin promote input: %w", err)
+		return nil, nil, fmt.Errorf("begin promote input: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
 
 	input, err := loadInboxInput(ctx, tx, inputID)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	if input.State == InputStateAccepted {
-		return loadMessage(ctx, tx, input.AcceptedMessageID)
+		message, loadErr := loadMessage(ctx, tx, input.AcceptedMessageID)
+		if loadErr != nil {
+			return nil, nil, loadErr
+		}
+
+		if activation == nil {
+			return message, nil, nil
+		}
+
+		existing, loadErr := scanActivation(tx.QueryRowContext(ctx, `SELECT input_id, session_id, tool_id,
+			command, state, COALESCE(tool_call_id, ''), created_at, resolved_at
+			FROM session_tool_activations WHERE input_id = ?`, inputID))
+		if loadErr != nil {
+			return nil, nil, fmt.Errorf("load promoted activation: %w", loadErr)
+		}
+
+		if existing.ToolID != activation.ToolID || existing.Command != activation.Command {
+			return nil, nil, ErrActivationConflict
+		}
+
+		return message, existing, nil
 	}
 
 	if input.State != InputStatePending {
-		return nil, fmt.Errorf("%w: input %d is %s", ErrInputResolved, inputID, input.State)
+		return nil, nil, fmt.Errorf("%w: input %d is %s", ErrInputResolved, inputID, input.State)
 	}
 
 	now := time.Now().UTC()
 
 	msg, err := insertPromotedMessage(ctx, tx, input, preparedContent)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
+	}
+
+	var grant *ToolActivation
+	if activation != nil {
+		grant, err = insertActivation(ctx, tx, input, *activation, now)
+		if err != nil {
+			return nil, nil, err
+		}
 	}
 
 	if err := acceptPendingInput(ctx, tx, inputID, msg.ID, now); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	if err := activatePromotedInputSession(ctx, tx, input.SessionID, inputID, now); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	if err := tx.Commit(); err != nil {
-		return nil, fmt.Errorf("commit promote input %d: %w", inputID, err)
+		return nil, nil, fmt.Errorf("commit promote input %d: %w", inputID, err)
 	}
 
-	return msg, nil
+	return msg, grant, nil
+}
+
+func insertActivation(
+	ctx context.Context,
+	tx *sql.Tx,
+	input *InboxInput,
+	draft ActivationDraft,
+	now time.Time,
+) (*ToolActivation, error) {
+	owner, _ := input.Attributes[managerIDAttribute].(string)
+	if input.Source != InputSourceUser || owner == "" {
+		return nil, ErrActivationConflict
+	}
+
+	result, err := tx.ExecContext(ctx, `INSERT INTO session_tool_activations
+		(input_id, session_id, tool_id, command, state, created_at)
+		SELECT ?, sessions.id, ?, ?, 'pending', ? FROM sessions
+		WHERE sessions.id = ? AND sessions.parent_id = 0
+			AND json_extract(sessions.attributes, '$.manager_id') = ?`,
+		input.ID, draft.ToolID, draft.Command, now, input.SessionID, owner)
+	if err != nil {
+		return nil, fmt.Errorf("insert tool activation: %w", err)
+	}
+
+	if err := requireActivationChanged(result); err != nil {
+		return nil, err
+	}
+
+	return &ToolActivation{
+		InputID: input.ID, SessionID: input.SessionID, ToolID: draft.ToolID,
+		Command: draft.Command, State: ActivationPending, CreatedAt: now,
+	}, nil
 }
 
 func (s *store) RejectInput(ctx context.Context, inputID int64, reason string) error {

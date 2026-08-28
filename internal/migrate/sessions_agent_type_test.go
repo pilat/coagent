@@ -74,6 +74,12 @@ func TestMigrate_SessionsAgentTypeRebuildPreservesExistingDB(t *testing.T) {
 
 	// Legacy NULLs get 00021's rule; every other row is byte-for-byte identical.
 	for i := range rowsBefore {
+		if rowsBefore[i]["id"].String == "1" {
+			assert.Equal(t, rowsBefore[i]["updated_at"].String, rowsAfter[i]["episode_started_at"].String)
+			rowsBefore[i]["episode_started_at"] = rowsAfter[i]["episode_started_at"]
+		} else {
+			rowsBefore[i]["episode_started_at"] = sql.NullString{}
+		}
 		switch rowsBefore[i]["id"].String {
 		case "4":
 			assert.False(t, rowsBefore[i]["agent_type"].Valid, "row 4 was the legacy NULL root")
@@ -88,7 +94,10 @@ func TestMigrate_SessionsAgentTypeRebuildPreservesExistingDB(t *testing.T) {
 		assert.Equal(t, rowsBefore[i], rowsAfter[i], "session row %d survives the rebuild", i)
 	}
 
-	assert.Equal(t, indexesBefore, dumpRows(t, db, sessionIndexes), "indexes on sessions are recreated verbatim")
+	indexesAfter := dumpRows(t, db, sessionIndexes)
+	require.Len(t, indexesAfter, 2, "the operator contract adds the root history index")
+	assert.Equal(t, indexesBefore[0], indexesAfter[0], "the existing sessions index is recreated verbatim")
+	assert.Equal(t, "idx_sessions_root_history", indexesAfter[1]["name"].String)
 
 	assert.Empty(t, dumpRows(t, db, `PRAGMA foreign_key_check`), "no dangling references after the rebuild")
 

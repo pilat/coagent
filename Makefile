@@ -129,12 +129,12 @@ long-fuzz:
 	go test ./internal/sessionstore -run '^$$' -fuzz '^FuzzManagerOutputProtocol$$' -fuzztime=$(CI_FUZZ_TIME)
 
 race:
-	go test -race -count=1 ./...
+	go test -race -count=1 -timeout=20m ./...
 
 CI_STRESS_COUNT ?= 25
 CI_STRESS_TIMEOUT ?= 15m
 CI_STRESS_PACKAGES := ./internal/session ./internal/sessionstore ./internal/daemon ./internal/schedule ./internal/managerdelivery ./internal/managers/cli ./internal/managers/telegram ./internal/migrate
-CI_STRESS_RUN := Test(Harness|Worker|OutputTransport|ExecuteToolCalls_(RejectsSleepAlongside|RejectedSleepDoesNotSkip)|Integration_(StressBlockingNoDeadlock|BackgroundTaskRejectsCompetingSleepProtocol|ScatterGatherBlockingTasks|OneShotAckFailureRedeliversWithoutDuplicateTranscriptOrPublication|FreshScheduleDuplicateDoesNotResetOrRunTwice)|Executor_CronAckRetryKeepsCanonicalIdentityAndPayload|ScheduledDeliveryStore_ContextResetRollsBackClaimAndTranscriptOnInsertFailure|SendMessage_DoesNotDuplicateOnRateLimitOrAmbiguousTransportFailure|FollowUpAcceptedBeforeTerminalBoundaryStaysInSameActivation|Stop(ParksWholeTreeAndExplicitFollowUpResumesOnlyChild|DirectChildParksItsOwnLinkWithoutStoppingParent)|StartFinishesInterruptedStopBeforeRecoverySweep|SubagentWaitGuardRejectsSleepUntilCompletionDelivered|OpenDB_ExplicitTransactionsReserveWriterAtBegin)
+CI_STRESS_RUN := Test(Harness|Worker|OutputTransport|ExecuteToolCalls_(RejectsSleepAlongside|RejectedSleepDoesNotSkip)|Integration_(StressBlockingNoDeadlock|BackgroundTaskRejectsCompetingSleepProtocol|ScatterGatherBlockingTasks|OneShotAckFailureRedeliversWithoutDuplicateTranscriptOrPublication|FreshScheduleDuplicateDoesNotResetOrRunTwice)|Executor_CronAckRetryKeepsCanonicalIdentityAndPayload|ScheduledDeliveryStore_ContextResetRollsBackClaimAndTranscriptOnInsertFailure|SendMessage_DoesNotDuplicateOnRateLimitOrAmbiguousTransportFailure|FollowUpAcceptedBeforeTerminalBoundaryStaysInSameActivation|Stop(ParksWholeTreeAndExplicitFollowUpResumesOnlyChild|DirectChildParksItsOwnLinkWithoutStoppingParent)|StartFinishesInterruptedStopBeforeRecoverySweep|SubagentWaitGuardRejectsSleepUntilCompletionDelivered|OpenDB_ExplicitTransactionsReserveWriterAtBegin|BudgetStore_ArmFireAndReplayAreAtomic)
 
 stress:
 	go test -shuffle=on -count=$(CI_STRESS_COUNT) -timeout=$(CI_STRESS_TIMEOUT) -run '$(CI_STRESS_RUN)' $(CI_STRESS_PACKAGES)
@@ -207,16 +207,20 @@ MUTATION_TIMEOUT_COEFFICIENT ?= 30
 # idempotency boundaries exercised by the harness regressions. The thresholds
 # are an explicit baseline, not Gremlins' default "always success".
 CI_MUTATION_DIR := internal/session
-CI_MUTATION_FILES := toolexec.go message_persist.go
+CI_MUTATION_FILES := toolexec.go message_persist.go loop_boundary.go todo_replace.go
 CI_MUTATION_EFFICACY ?= 80
 CI_MUTATION_COVERAGE ?= 90
-CI_MUTATION_EXCLUDES = $(foreach file,$(filter-out $(CI_MUTATION_FILES),$(notdir $(wildcard $(CI_MUTATION_DIR)/*.go))),--exclude-files '$(file)')
+# Gremlins patterns are unanchored regexps, so a bare basename like "store.go"
+# would also match every *_store.go — anchor each exclude to the basename.
+CI_MUTATION_EXCLUDES = $(foreach file,$(filter-out $(CI_MUTATION_FILES),$(notdir $(wildcard $(CI_MUTATION_DIR)/*.go))),--exclude-files '(^|/)$(file)$$')
 CI_SCHEDULE_MUTATION_FILES := executor.go service.go store.go
-CI_SCHEDULE_MUTATION_EXCLUDES = $(foreach file,$(filter-out $(CI_SCHEDULE_MUTATION_FILES),$(notdir $(wildcard internal/schedule/*.go))),--exclude-files '$(file)')
-CI_STORE_MUTATION_FILES := scheduled_delivery_store.go output_delivery_store.go output_lifecycle_store.go output_message_store.go
-CI_STORE_MUTATION_EXCLUDES = $(foreach file,$(filter-out $(CI_STORE_MUTATION_FILES),$(notdir $(wildcard internal/sessionstore/*.go))),--exclude-files '$(file)')
+CI_SCHEDULE_MUTATION_EXCLUDES = $(foreach file,$(filter-out $(CI_SCHEDULE_MUTATION_FILES),$(notdir $(wildcard internal/schedule/*.go))),--exclude-files '(^|/)$(file)$$')
+CI_STORE_MUTATION_FILES := scheduled_delivery_store.go output_delivery_store.go output_lifecycle_store.go output_message_store.go activation_store.go budget_state_store.go budget_output_store.go direct_output_store.go progress_store.go readiness_store.go
+CI_STORE_MUTATION_EXCLUDES = $(foreach file,$(filter-out $(CI_STORE_MUTATION_FILES),$(notdir $(wildcard internal/sessionstore/*.go))),--exclude-files '(^|/)$(file)$$')
 CI_TELEGRAM_MUTATION_FILES := delivery.go delivery_errors.go
-CI_TELEGRAM_MUTATION_EXCLUDES = $(foreach file,$(filter-out $(CI_TELEGRAM_MUTATION_FILES),$(notdir $(wildcard internal/managers/telegram/*.go))),--exclude-files '$(file)')
+CI_TELEGRAM_MUTATION_EXCLUDES = $(foreach file,$(filter-out $(CI_TELEGRAM_MUTATION_FILES),$(notdir $(wildcard internal/managers/telegram/*.go))),--exclude-files '(^|/)$(file)$$')
+CI_DAEMON_MUTATION_FILES := budget_park.go progress.go progress_reconciler.go readiness.go
+CI_DAEMON_MUTATION_EXCLUDES = $(foreach file,$(filter-out $(CI_DAEMON_MUTATION_FILES),$(notdir $(wildcard internal/daemon/*.go))),--exclude-files '(^|/)$(file)$$')
 
 ci.mutation:
 	@go version -m "$$(command -v gremlins)" 2>/dev/null | grep -q "github.com/go-gremlins/gremlins[[:space:]]*$(GREMLINS_VERSION)" || { echo "✋ gremlins $(GREMLINS_VERSION) required; run make tools"; exit 1; }
@@ -244,6 +248,17 @@ ci.mutation:
 		--threshold-efficacy $(CI_MUTATION_EFFICACY) \
 		--threshold-mcover $(CI_MUTATION_COVERAGE) \
 		$(CI_TELEGRAM_MUTATION_EXCLUDES)
+	gremlins unleash ./internal/budget \
+		--workers $(MUTATION_WORKERS) \
+		--timeout-coefficient $(MUTATION_TIMEOUT_COEFFICIENT) \
+		--threshold-efficacy $(CI_MUTATION_EFFICACY) \
+		--threshold-mcover $(CI_MUTATION_COVERAGE)
+	gremlins unleash ./internal/daemon \
+		--workers $(MUTATION_WORKERS) \
+		--timeout-coefficient $(MUTATION_TIMEOUT_COEFFICIENT) \
+		--threshold-efficacy $(CI_MUTATION_EFFICACY) \
+		--threshold-mcover $(CI_MUTATION_COVERAGE) \
+		$(CI_DAEMON_MUTATION_EXCLUDES)
 
 mutation:
 	@if [ -z "$(MUTATION_PATH)" ]; then \

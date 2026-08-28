@@ -13,6 +13,7 @@ import (
 
 	"go.uber.org/zap"
 
+	budgetservice "github.com/pilat/coagent/internal/budget"
 	"github.com/pilat/coagent/internal/config"
 	"github.com/pilat/coagent/internal/controllerapi"
 	"github.com/pilat/coagent/internal/logger"
@@ -115,6 +116,15 @@ type svc struct {
 	recoveryMu     sync.Mutex
 	recoveryCancel context.CancelFunc
 	recoveryDone   chan struct{}
+	progressCancel context.CancelFunc
+	progressDone   chan struct{}
+	progressWake   chan struct{}
+	progressMu     sync.Mutex
+	progressNow    func() time.Time
+	progressTimer  func(time.Duration) progressTimer
+	budgetCtx      context.Context //nolint:containedctx // Daemon lifetime context for joined park workers.
+	budgetCancel   context.CancelFunc
+	budgetWG       sync.WaitGroup
 	// treeMu linearizes subagent admission with the durable stop boundary.
 	treeMu sync.Locker
 	// routeMu linearizes owner claims with replacement-session creation. The
@@ -125,6 +135,7 @@ type svc struct {
 	childMu    sync.Mutex
 	childCache map[int64]bool
 	ownerCache map[int64]string
+	budgetSvc  budgetservice.Service
 }
 
 // OutputStore exposes the narrow manager-delivery ledger without widening the
@@ -199,6 +210,7 @@ func New(
 	return s
 }
 
+//nolint:wsl_v5 // Lifetime contexts are created immediately before service assembly.
 func newSvc(
 	factory session.Factory,
 	store Store,
@@ -208,7 +220,8 @@ func newSvc(
 	scheduleSvc schedule.Service,
 	defaultModelFn func() string,
 ) *svc {
-	return &svc{
+	budgetCtx, budgetCancel := context.WithCancel(context.Background())
+	s := &svc{
 		loops:          make(map[int64]*runner),
 		factory:        factory,
 		store:          store,
@@ -225,7 +238,17 @@ func newSvc(
 		childCache:     make(map[int64]bool),
 		ownerCache:     make(map[int64]string),
 		deferNotices:   newDeferAnnouncements(),
+		progressWake:   make(chan struct{}, 1),
+		progressNow:    time.Now,
+		progressTimer:  newRealProgressTimer,
+		budgetCtx:      budgetCtx,
+		budgetCancel:   budgetCancel,
 	}
+	if budgetStore, ok := sessionStore.(sessionstore.BudgetStore); ok {
+		s.budgetSvc = budgetservice.New(budgetStore)
+	}
+
+	return s
 }
 
 func (s *svc) PubSub() NotificationSource {
@@ -241,12 +264,21 @@ func (s *svc) Send(ctx context.Context, projectID int64, prompt, model string, a
 }
 
 func (s *svc) SendToSession(ctx context.Context, sessionID int64, prompt string) error {
-	input, err := s.inboxStore.EnqueueInput(ctx, sessionID, sessionstore.InputSourceUser, prompt)
+	input, err := s.enqueueUserSessionInput(ctx, sessionID, prompt)
 	if err != nil {
 		if errors.Is(err, sessionstore.ErrSessionNotAcceptingInput) {
-			if rec, getErr := s.sessionStore.GetSession(ctx, sessionID); getErr == nil && rec.KilledAt != nil {
+			if record, getErr := s.sessionStore.GetSession(ctx, sessionID); getErr == nil && record.KilledAt != nil {
 				return fmt.Errorf("session %d is killed", sessionID)
 			}
+		}
+
+		// The park drain won the arbitration CAS; the retry is the user's next
+		// message once the parked root accepts input again.
+		if errors.Is(err, sessionstore.ErrBudgetConflict) {
+			return fmt.Errorf(
+				"session %d is parking after a budget checkpoint — send the message again once it stops",
+				sessionID,
+			)
 		}
 
 		return fmt.Errorf("persist session input: %w", err)
@@ -336,6 +368,13 @@ func isReadOnlyBoundaryCommand(content string) bool {
 
 	return content == "/status" || content == "/help" || content == "/schedules" ||
 		content == compactCommand || strings.HasPrefix(content, compactCommand+" ")
+}
+
+func isExactControlCommand(content string) bool {
+	content = strings.TrimSpace(content)
+
+	return isReadOnlyBoundaryCommand(content) || content == stopCommand || content == clearCommand ||
+		content == killCommand
 }
 
 //nolint:funcorder // Command dispatch remains beside durable input admission and lifecycle fencing.
@@ -559,6 +598,12 @@ func (s *svc) Kill(ctx context.Context, sessionID int64) error {
 		return nil
 	}
 
+	if rec.ParentID == 0 {
+		if err := s.releaseArmedBudget(ctx, sessionID, "killed"); err != nil {
+			return err
+		}
+	}
+
 	// Cleanup must complete even if the caller disconnects mid-Kill — detach
 	// from request-scoped cancellation while keeping logger values.
 	cleanupCtx := context.WithoutCancel(ctx)
@@ -580,11 +625,11 @@ func (s *svc) Kill(ctx context.Context, sessionID int64) error {
 	// result (see cascadeKillChildren).
 	s.cascadeKillChildren(cleanupCtx, sessionID, 0, time.Now().Add(cascadeRetryBudget))
 
-	s.publish(sessionID, sessionevent.Notification{
-		Type:   sessionevent.NotifyStateChanged,
-		Status: controllerapi.StateIdle,
-		Reason: "killed",
-	})
+	if ownerlessSession(rec) {
+		s.publish(sessionID, sessionevent.Notification{
+			Type: sessionevent.NotifyStateChanged, Status: controllerapi.StateIdle, Reason: "killed",
+		})
+	}
 
 	return nil
 }
@@ -595,6 +640,16 @@ func (s *svc) Kill(ctx context.Context, sessionID int64) error {
 // remain installed. A later root message resumes only the root; a stopped child
 // requires an explicit send_to_subagent follow-up.
 func (s *svc) Stop(ctx context.Context, sessionID int64) error {
+	record, getErr := s.sessionStore.GetSession(ctx, sessionID)
+	if getErr != nil {
+		// Fail closed: an unread session must not be classified as ownerless,
+		// so the idle publication is skipped instead of faked.
+		logger.Ctx(ctx).Warn("stop_session_lookup_failed",
+			zap.Int64("session_id", sessionID), zap.Error(getErr))
+
+		record = nil
+	}
+
 	s.publish(sessionID, sessionevent.Notification{
 		Type:    sessionevent.NotifyMessage,
 		Message: "⏹ Stopping...",
@@ -604,11 +659,15 @@ func (s *svc) Stop(ctx context.Context, sessionID int64) error {
 		return err
 	}
 
-	s.publish(sessionID, sessionevent.Notification{
-		Type:   sessionevent.NotifyStateChanged,
-		Status: controllerapi.StateIdle,
-		Reason: "stopped",
-	})
+	if err := s.releaseArmedBudget(ctx, sessionID, "stopped"); err != nil {
+		return err
+	}
+
+	if record != nil && ownerlessSession(record) {
+		s.publish(sessionID, sessionevent.Notification{
+			Type: sessionevent.NotifyStateChanged, Status: controllerapi.StateIdle, Reason: "stopped",
+		})
+	}
 
 	return nil
 }
@@ -776,6 +835,23 @@ func (s *svc) SetModel(ctx context.Context, sessionID int64, model, reasoningLev
 		return err
 	}
 
+	if budgets, ok := s.sessionStore.(sessionstore.BudgetStore); ok {
+		record, loadErr := s.sessionStore.GetSession(ctx, sessionID)
+		if loadErr != nil {
+			return fmt.Errorf("load session for budgeted model switch: %w", loadErr)
+		}
+
+		budgetRecord, budgetErr := budgets.GetBudget(ctx, sessionRootID(record))
+		if budgetErr == nil && budgetRecord.State == sessionstore.BudgetArmed &&
+			budgetRecord.CostLimitUSD != nil && !s.modelHasPricing(model) {
+			return errors.New("cannot switch an armed budget tree to a model without catalog pricing")
+		}
+
+		if budgetErr != nil && !errors.Is(budgetErr, sessionstore.ErrBudgetNotFound) {
+			return fmt.Errorf("load budget for model switch: %w", budgetErr)
+		}
+	}
+
 	// The record is all a later run reads, so it must carry the level a session
 	// would settle on: the model's default when none is asked for, none at all
 	// for a model with no effort selector.
@@ -862,8 +938,17 @@ func (s *svc) SetAttributes(ctx context.Context, sessionID int64, attrs map[stri
 	return nil
 }
 
+//nolint:wsl_v5 // Cancellation sources are adjacent before joins begin.
 func (s *svc) Shutdown(timeout time.Duration) {
 	s.shuttingDown.Store(true)
+
+	if s.progressCancel != nil {
+		s.progressCancel()
+	}
+	if s.budgetCancel != nil {
+		s.budgetCancel()
+	}
+
 	recoveryDone := s.stopRecovery()
 
 	s.mu.Lock()
@@ -895,6 +980,12 @@ func (s *svc) Shutdown(timeout time.Duration) {
 		if recoveryDone != nil {
 			<-recoveryDone
 		}
+
+		if s.progressDone != nil {
+			<-s.progressDone
+		}
+
+		s.budgetWG.Wait()
 
 		close(done)
 	}()
@@ -944,6 +1035,47 @@ func (s *svc) GetProjectName(ctx context.Context, projectID int64) (string, erro
 	}
 
 	return name, nil
+}
+
+func (s *svc) enqueueUserSessionInput(
+	ctx context.Context,
+	sessionID int64,
+	prompt string,
+) (*sessionstore.InboxInput, error) {
+	modelInputs, ok := s.inboxStore.(sessionstore.ModelInputStore)
+	if !ok || isExactControlCommand(prompt) {
+		return s.enqueueGenericUserInput(ctx, sessionID, prompt)
+	}
+
+	record, err := s.sessionStore.GetSession(ctx, sessionID)
+	if err != nil {
+		return nil, fmt.Errorf("load session for model input: %w", err)
+	}
+
+	owner, _ := record.Attributes[controllerapi.SessionAttributeManagerID].(string)
+	if record.ParentID != 0 || owner == "" {
+		return s.enqueueGenericUserInput(ctx, sessionID, prompt)
+	}
+
+	input, err := modelInputs.EnqueueModelInput(ctx, sessionID, prompt)
+	if err != nil {
+		return nil, fmt.Errorf("enqueue model input: %w", err)
+	}
+
+	return input, nil
+}
+
+func (s *svc) enqueueGenericUserInput(
+	ctx context.Context,
+	sessionID int64,
+	prompt string,
+) (*sessionstore.InboxInput, error) {
+	input, err := s.inboxStore.EnqueueInput(ctx, sessionID, sessionstore.InputSourceUser, prompt)
+	if err != nil {
+		return nil, fmt.Errorf("enqueue generic user input: %w", err)
+	}
+
+	return input, nil
 }
 
 func (s *svc) isRootScheduleTarget(ctx context.Context, sessionID int64) (bool, error) {
@@ -1128,7 +1260,8 @@ func (s *svc) send(
 
 		rec, _, err = roots.CreateManagerRoot(ctx, sessionstore.ManagerRootCreate{
 			ProjectID: projectID, Model: model, ReasoningLevel: level, Attributes: attrs,
-			Prompt: prompt, Name: projectName, WorkDir: workDir,
+			Prompt: prompt, StartEpisode: prompt != "" && !isExactControlCommand(prompt),
+			Name: projectName, WorkDir: workDir,
 		})
 		if err != nil {
 			return 0, fmt.Errorf("create manager session record: %w", err)

@@ -30,9 +30,19 @@ type OutputClaimData struct {
 	Attributes                map[string]any `json:"attributes"`
 	AttemptID                 string         `json:"attempt_id"`
 	AttemptSeq                int64          `json:"attempt_seq"`
+	SourceKey                 string         `json:"source_key,omitempty"`
 	SessionAttributes         map[string]any `json:"session_attributes"`
 	PreviousMessageAttributes map[string]any `json:"previous_message_attributes,omitempty"`
 	PreviousMessageType       string         `json:"previous_message_type,omitempty"`
+	ReleasesInput             bool           `json:"releases_input"`
+}
+
+type ProgressData struct {
+	SessionID       int64     `json:"session_id"`
+	Revision        string    `json:"revision"`
+	OutboxWatermark int64     `json:"outbox_watermark"`
+	ObservedAt      time.Time `json:"observed_at"`
+	Rendered        string    `json:"rendered"`
 }
 
 type OutputAckData struct {

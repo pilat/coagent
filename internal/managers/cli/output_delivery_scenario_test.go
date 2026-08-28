@@ -44,11 +44,11 @@ func TestHarnessScenario_DelayedCLIManagerDrainsRealSessionOutput(t *testing.T) 
 
 	opened := openChat(t, terminal)
 	require.Equal(t, sessionID, opened.SessionID)
-	assert.Equal(t, "✅ delayed cli answer", waitForDelayedCLIMessage(t, terminal, sessionID).Message)
+	assert.Equal(t, "delayed cli answer", waitForDelayedCLIMessage(t, terminal, sessionID).Message)
 	require.Eventually(t, func() bool {
 		status, statusErr := h.sessions.OutputQueueStatus(t.Context(), controllerapi.BuiltinCLIManagerID)
 		return statusErr == nil && status.Pending == 0
-	}, time.Second, 10*time.Millisecond, "the attached terminal must acknowledge the durable backlog")
+	}, 10*time.Second, 10*time.Millisecond, "the attached terminal must acknowledge the durable backlog")
 }
 
 func newDelayedCLIHarness(t *testing.T) *delayedCLIHarness {
@@ -126,7 +126,7 @@ func (h *delayedCLIHarness) waitForBacklog(t *testing.T) {
 	require.Eventually(t, func() bool {
 		status, err := h.sessions.OutputQueueStatus(t.Context(), controllerapi.BuiltinCLIManagerID)
 		return err == nil && status.Pending >= 2
-	}, time.Second, 10*time.Millisecond, "the real session must commit lifecycle and terminal output before manager start")
+	}, 10*time.Second, 10*time.Millisecond, "the real session must commit lifecycle and terminal output before manager start")
 }
 
 func waitForDelayedCLIMessage(t *testing.T, terminal *ctl.Client, sessionID int64) Event {

@@ -382,13 +382,14 @@ func (m *Manager) handleHelp(ctx context.Context, sessionID, threadID int64) {
 		"  /model — choose LLM model",
 		"  /status — show session stats (tokens, cost, context)",
 		"  /schedules — list this session's schedules (ask me to add/change them)",
+		"  /budget &lt;request&gt; — arm or clear a one-shot cost/wall-time checkpoint",
 		"  /help — this message",
 	}
 
 	if sessionID == 0 {
 		lines = append(
 			lines,
-			"\n<i>/status, /stop, /clear, /compact, /model, /schedules work inside a session topic only.</i>",
+			"\n<i>/status, /stop, /clear, /compact, /model, /schedules, /budget work inside a session topic only.</i>",
 		)
 	}
 

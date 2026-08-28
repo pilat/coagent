@@ -3,6 +3,7 @@ package daemon
 import (
 	"cmp"
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/pilat/coagent/internal/session"
@@ -65,6 +66,19 @@ func (s *svc) createChildSession(ctx context.Context, req spawnRequest) (int64, 
 	}
 
 	model := s.resolveChildModel(req, parentRec)
+	if budgets, ok := s.sessionStore.(sessionstore.BudgetStore); ok {
+		budgetRecord, budgetErr := budgets.GetBudget(ctx, rootID)
+		if budgetErr == nil && budgetRecord.State == sessionstore.BudgetArmed &&
+			budgetRecord.CostLimitUSD != nil && !s.modelHasPricing(model) {
+			return 0, "", 0, errors.New(
+				"cannot spawn an armed budget tree onto a model without catalog pricing",
+			)
+		}
+
+		if budgetErr != nil && !errors.Is(budgetErr, sessionstore.ErrBudgetNotFound) {
+			return 0, "", 0, fmt.Errorf("load root budget for child model: %w", budgetErr)
+		}
+	}
 
 	reasoning, err := s.resolveChildEffort(model, req.ReasoningLevel, parentRec.ReasoningLevel)
 	if err != nil {

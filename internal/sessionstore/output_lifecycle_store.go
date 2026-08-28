@@ -101,11 +101,11 @@ func insertLifecycleAcknowledgement(
 	}
 
 	key := fmt.Sprintf("input:%d:%s:result", inputID, command)
-	fingerprint := outputFingerprint(OutputMessagePersistent, content, sessionID, nil)
+	fingerprint := outputFingerprintWithRelease(OutputMessagePersistent, content, sessionID, nil, true)
 
 	result, err := tx.ExecContext(ctx, `
-		INSERT INTO session_outbox (session_id, type, content, attributes, source_key, fingerprint, created_at)
-		VALUES (?, 'message_persistent', ?, ?, ?, ?, ?)`, sessionID, content, string(attributes), key, fingerprint, now)
+		INSERT INTO session_outbox (session_id, type, content, attributes, source_key, fingerprint, created_at, releases_input)
+		VALUES (?, 'message_persistent', ?, ?, ?, ?, ?, 1)`, sessionID, content, string(attributes), key, fingerprint, now)
 	if err != nil {
 		return 0, fmt.Errorf("insert lifecycle acknowledgement: %w", err)
 	}
@@ -158,12 +158,14 @@ func insertClosedOutput(ctx context.Context, q interface {
 
 	key := fmt.Sprintf("session:%d:closed", sessionID)
 
-	fingerprint := outputFingerprint(OutputSessionClosed, "", sessionID, map[string]any{"reason": killedReason})
+	fingerprint := outputFingerprintWithRelease(
+		OutputSessionClosed, "", sessionID, map[string]any{"reason": killedReason}, true,
+	)
 
 	result, err := q.ExecContext(ctx, `
 		INSERT INTO session_outbox
-			(session_id, type, content, attributes, source_key, fingerprint, created_at)
-		VALUES (?, ?, '', ?, ?, ?, ?)`,
+			(session_id, type, content, attributes, source_key, fingerprint, created_at, releases_input)
+		VALUES (?, ?, '', ?, ?, ?, ?, 1)`,
 		sessionID, OutputSessionClosed, string(attributes), key, fingerprint, now)
 	if err != nil {
 		return 0, fmt.Errorf("insert session closed output: %w", err)

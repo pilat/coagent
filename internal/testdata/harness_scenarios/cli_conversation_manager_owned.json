@@ -16,11 +16,7 @@
     },
     {
       "type": "message",
-      "message": "✅ configuration answer"
-    },
-    {
-      "type": "state_changed",
-      "status": "idle"
+      "message": "configuration answer"
     }
   ]
 }

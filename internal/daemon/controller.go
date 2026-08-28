@@ -1,3 +1,4 @@
+//nolint:wrapcheck // Bound controller methods preserve capability-domain errors.; nosemgrep: semgrep.coagent-no-preamble-before-package
 package daemon
 
 import (
@@ -105,7 +106,9 @@ func (c *controller) ClaimOutput(ctx context.Context) (*controllerapi.OutputClai
 		Attributes:        claim.Output.Attributes,
 		AttemptID:         claim.Output.AttemptID,
 		AttemptSeq:        claim.Output.AttemptSeq,
+		SourceKey:         claim.Output.SourceKey,
 		SessionAttributes: claim.SessionAttributes,
+		ReleasesInput:     claim.Output.ReleasesInput,
 	}
 	if claim.PreviousDeliveredOutput != nil {
 		data.PreviousMessageAttributes = claim.PreviousDeliveredOutput.Attributes
@@ -113,6 +116,39 @@ func (c *controller) ClaimOutput(ctx context.Context) (*controllerapi.OutputClai
 	}
 
 	return data, nil
+}
+
+func (c *controller) CurrentProgress(
+	ctx context.Context,
+	sessionID int64,
+) (*controllerapi.ProgressData, error) {
+	if err := c.requireOwnedSession(ctx, sessionID); err != nil {
+		return nil, err
+	}
+
+	provider, ok := c.svc.(interface {
+		CurrentProgress(context.Context, int64) (*controllerapi.ProgressData, error)
+	})
+	if !ok {
+		return nil, errors.New("session progress is unavailable")
+	}
+
+	return provider.CurrentProgress(ctx, sessionID)
+}
+
+func (c *controller) RefreshProgress(ctx context.Context, sessionID int64) error {
+	if err := c.requireOwnedSession(ctx, sessionID); err != nil {
+		return err
+	}
+
+	provider, ok := c.svc.(interface {
+		RefreshProgress(context.Context, int64) error
+	})
+	if !ok {
+		return errors.New("session progress is unavailable")
+	}
+
+	return provider.RefreshProgress(ctx, sessionID)
 }
 
 func (c *controller) AckOutput(ctx context.Context, data controllerapi.OutputAckData) error {
@@ -130,6 +166,14 @@ func (c *controller) AckOutput(ctx context.Context, data controllerapi.OutputAck
 		data.SessionPatch,
 	); err != nil {
 		return fmt.Errorf("ack output: %w", err)
+	}
+
+	if reconciler, ok := c.svc.(interface {
+		ReconcileOutputReadiness(context.Context, int64) error
+	}); ok {
+		if err := reconciler.ReconcileOutputReadiness(ctx, data.ID); err != nil {
+			return fmt.Errorf("reconcile output readiness: %w", err)
+		}
 	}
 
 	return nil

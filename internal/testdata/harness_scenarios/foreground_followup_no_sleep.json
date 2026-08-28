@@ -31,7 +31,7 @@
     },
     {
       "type": "message",
-      "message": "✅ initial child delivered"
+      "message": "initial child delivered"
     },
     {
       "type": "state_changed",
@@ -48,7 +48,7 @@
     },
     {
       "type": "message",
-      "message": "✅ follow-up accepted"
+      "message": "follow-up accepted"
     },
     {
       "type": "state_changed",
@@ -65,7 +65,7 @@
     },
     {
       "type": "message",
-      "message": "✅ continuation delivered"
+      "message": "continuation delivered"
     },
     {
       "type": "state_changed",

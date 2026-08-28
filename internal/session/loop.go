@@ -2,9 +2,11 @@ package session
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
+	"time"
 
 	"go.uber.org/zap"
 
@@ -79,6 +81,7 @@ type loopRunner struct {
 	autoCompactionOff  bool
 }
 
+//nolint:funlen,wsl_v5 // Loop ordering is the session protocol.
 func runLoop(ctx context.Context, agent *svc, opts loopOptions, callback iterationCallback) (*loopResult, error) {
 	r := &loopRunner{
 		agent:   agent,
@@ -101,6 +104,11 @@ func runLoop(ctx context.Context, agent *svc, opts loopOptions, callback iterati
 
 	hb := newHeartbeatTicker(opts.Heartbeat)
 	defer hb.stop()
+
+	// Decision 21: every terminal exit resolves a still-pending grant exactly once,
+	// so no provider error, iteration cap, empty pause, budget fire or stop can
+	// wedge later inbox rows behind it.
+	defer r.resolveTerminalGrant(ctx)
 
 	hb.start(ctx)
 
@@ -154,15 +162,27 @@ func runLoop(ctx context.Context, agent *svc, opts loopOptions, callback iterati
 		if err := r.callLLM(ctx); err != nil {
 			return r.result, err
 		}
+		if r.agent.budgetFired {
+			r.result.Suspended = true
+
+			return r.result, nil
+		}
 
 		if err := r.recordIteration(ctx); err != nil {
 			return r.result, err
+		}
+
+		if r.agent.budgetFired {
+			r.result.Suspended = true
+
+			return r.result, nil
 		}
 	}
 
 	return r.finalize(ctx)
 }
 
+//nolint:funlen,nestif // One discriminated prior-response protocol is clearer kept together.
 func (r *loopRunner) handlePreviousResult(ctx context.Context) (bool, error) {
 	// A call that is out with the world outranks everything: re-executing it
 	// would apply the same change twice, and advancing past it would send the
@@ -183,7 +203,18 @@ func (r *loopRunner) handlePreviousResult(ctx context.Context) (bool, error) {
 		r.emptyCount = 0 // a productive turn breaks the empty-response streak
 
 		if state.HasText {
-			r.notify(ctx, "🔄 "+state.Text)
+			message := "🔄 " + state.Text
+
+			if provider, ok := r.agent.boundary.(progressChangeBoundary); ok {
+				var err error
+
+				message, err = provider.ProgressChange(ctx)
+				if err != nil {
+					return false, fmt.Errorf("enqueue model progress snapshot: %w", err)
+				}
+			}
+
+			r.notify(ctx, message)
 		}
 
 		r.log.Info("executing_pending_tools", zap.Int("count", len(state.PendingTools)))
@@ -213,8 +244,12 @@ func (r *loopRunner) handlePreviousResult(ctx context.Context) (bool, error) {
 		// the human. Without this guard every later durable input would replay the
 		// previous final answer before being promoted.
 		if r.lastResp != nil {
+			if err := r.expireCurrentActivation(ctx); err != nil {
+				return false, err
+			}
+
 			r.result.FinalResponse = state.Text
-			r.notify(ctx, "✅ "+state.Text)
+			r.notify(ctx, state.Text)
 		}
 
 		return true, nil
@@ -255,6 +290,59 @@ func (r *loopRunner) handlePreviousResult(ctx context.Context) (bool, error) {
 	return false, nil
 }
 
+func (r *loopRunner) expireCurrentActivation(ctx context.Context) error {
+	if r.agent.currentActivation == nil {
+		return nil
+	}
+
+	resolver, ok := r.agent.boundary.(activationResolver)
+	if !ok {
+		return errors.New("activation resolver unavailable")
+	}
+
+	if err := resolver.ExpireActivation(ctx, *r.agent.currentActivation); err != nil {
+		return fmt.Errorf("expire unused activation: %w", err)
+	}
+
+	r.agent.currentActivation = nil
+
+	return nil
+}
+
+// resolveTerminalGrant runs once per runLoop exit. A consumed grant is left
+// alone: it belongs to the owed-call replay contract, not to expiry.
+func (r *loopRunner) resolveTerminalGrant(ctx context.Context) {
+	grant := r.agent.currentActivation
+	if grant == nil || grant.ToolCallID != "" {
+		return
+	}
+
+	runCtx := context.WithoutCancel(ctx)
+
+	if ctx.Err() != nil {
+		// A cancelled context means stop/kill/shutdown: their lifecycle output
+		// answers the command turn, so the store-only expiry avoids a receipt.
+		canceler, ok := r.agent.boundary.(activationCancelBoundary)
+		if !ok {
+			return
+		}
+
+		if err := canceler.CancelActivation(runCtx, *grant); err != nil {
+			r.log.Warn("cancel_activation_failed", zap.Error(err))
+
+			return
+		}
+
+		r.agent.currentActivation = nil
+
+		return
+	}
+
+	if err := r.expireCurrentActivation(runCtx); err != nil {
+		r.log.Warn("expire_activation_on_terminal_failed", zap.Error(err))
+	}
+}
+
 // notify sends a message to the user without adding it to the model's conversation history.
 func (r *loopRunner) notify(ctx context.Context, msg string) {
 	if r.opts.Notify != nil {
@@ -273,6 +361,18 @@ func (r *loopRunner) notifyPersistent(ctx context.Context, msg string) {
 }
 
 func (r *loopRunner) callLLM(ctx context.Context) error {
+	if r.agent.budgetGate != nil {
+		if err := r.agent.budgetGate.Admit(ctx, time.Now().UTC()); err != nil {
+			if errors.Is(err, ErrBudgetCheckpoint) {
+				r.agent.budgetFired = true
+
+				return nil
+			}
+
+			return fmt.Errorf("budget admission: %w", err)
+		}
+	}
+
 	activeTools := r.agent.registry.List()
 
 	if r.agent.loopDetector.forceTextOnly {
@@ -318,6 +418,7 @@ func (r *loopRunner) callLLM(ctx context.Context) error {
 	return nil
 }
 
+//nolint:nestif,wsl_v5 // Budget persistence and final selection are one ordered boundary.
 func (r *loopRunner) recordIteration(ctx context.Context) error {
 	r.result.Iterations++
 
@@ -328,8 +429,37 @@ func (r *loopRunner) recordIteration(ctx context.Context) error {
 		}
 	}
 
-	outputType, output := assistantOutput(r.lastResp, r.agent.outputEnabled)
-	if err := r.agent.ms.addAssistantMessageOutput(ctx, r.lastResp, outputType, output); err != nil {
+	outputType, output := assistantOutput(r.lastResp, r.agent.outputEnabled && r.agent.budgetGate == nil)
+	if outputType == sessionstore.OutputMessagePersistent {
+		if renderer, ok := r.agent.boundary.(finalOutputBoundary); ok {
+			var renderErr error
+
+			output, renderErr = renderer.FinalOutput(ctx, output)
+			if renderErr != nil {
+				return fmt.Errorf("render final output: %w", renderErr)
+			}
+		}
+	}
+
+	if r.agent.budgetGate != nil {
+		message := llmwire.Message{
+			Role: llmwire.RoleAssistant, Content: r.lastResp.Text, ToolCalls: r.lastResp.ToolCalls,
+			ReasoningContent: r.lastResp.ReasoningContent, ReasoningRaw: r.lastResp.ReasoningRaw,
+			CostUSD: r.lastResp.CostUSD, Usage: r.lastResp.Usage,
+		}
+		stored, err := storedMessage(&message)
+		if err != nil {
+			return fmt.Errorf("serialize budgeted response: %w", err)
+		}
+		_, fired, err := r.agent.budgetGate.PersistResponse(ctx, stored)
+		if err != nil {
+			return fmt.Errorf("persist budgeted response: %w", err)
+		}
+		if err := r.agent.ms.reloadMessages(ctx); err != nil {
+			return err
+		}
+		r.agent.budgetFired = fired
+	} else if err := r.agent.ms.addAssistantMessageOutput(ctx, r.lastResp, outputType, output); err != nil {
 		r.result.Error = err
 
 		return fmt.Errorf("record assistant message: %w", err)
@@ -343,6 +473,23 @@ func (r *loopRunner) recordIteration(ctx context.Context) error {
 		)
 	}
 
+	if r.agent.budgetGate != nil {
+		if !r.agent.budgetFired && len(r.lastResp.ToolCalls) == 0 && strings.TrimSpace(r.lastResp.Text) != "" {
+			output := r.lastResp.Text
+			var err error
+			if renderer, ok := r.agent.boundary.(finalOutputBoundary); ok {
+				output, err = renderer.FinalOutput(ctx, output)
+				if err != nil {
+					return fmt.Errorf("render budgeted final output: %w", err)
+				}
+			}
+
+			if err := r.agent.ms.enqueueFinalAssistantOutput(ctx, output); err != nil {
+				return err
+			}
+		}
+	}
+
 	r.log.Info("iteration_end", zap.Int("iter", r.result.Iterations))
 
 	return nil
@@ -354,10 +501,10 @@ func assistantOutput(response *llmwire.Response, enabled bool) (sessionstore.Out
 	}
 
 	if len(response.ToolCalls) > 0 {
-		return sessionstore.OutputMessageReplaceable, response.Text
+		return "", ""
 	}
 
-	return sessionstore.OutputMessagePersistent, "✅ " + response.Text
+	return sessionstore.OutputMessagePersistent, response.Text
 }
 
 func (r *loopRunner) finalize(ctx context.Context) (*loopResult, error) {
@@ -368,13 +515,13 @@ func (r *loopRunner) finalize(ctx context.Context) (*loopResult, error) {
 	}
 
 	if strings.TrimSpace(r.result.FinalResponse) != "" && r.agent.outputEnabled {
-		if err := r.agent.ms.enqueueFinalAssistantOutput(ctx, "✅ "+r.result.FinalResponse); err != nil {
+		if err := r.agent.ms.enqueueFinalAssistantOutput(ctx, r.result.FinalResponse); err != nil {
 			return r.result, err
 		}
 	}
 
 	if strings.TrimSpace(r.result.FinalResponse) != "" && r.opts.Notify != nil {
-		if err := r.opts.Notify(ctx, "✅ "+r.result.FinalResponse); err != nil {
+		if err := r.opts.Notify(ctx, r.result.FinalResponse); err != nil {
 			r.log.Warn("notify_failed", zap.Error(err))
 		}
 	}

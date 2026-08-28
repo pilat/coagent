@@ -98,6 +98,13 @@ type Service interface {
 	Close()
 }
 
+type ContextProjection struct {
+	Used        int
+	Max         int
+	Approximate bool
+	Available   bool
+}
+
 // ActiveSubagentInfo summarizes one of a session's in-flight children for the
 // pinned "# Active subagents" prompt section. The daemon (owner of the subagent
 // ledger) pushes these at session create/resume.
@@ -110,24 +117,26 @@ type ActiveSubagentInfo struct {
 var _ Service = (*svc)(nil)
 
 type svc struct {
-	workDir         string
-	projectID       int64
-	llmClient       llm.Client
-	stack           *builtin.Stack
-	loader          loader.Service
-	todoStore       todo.Service
-	registry        tool.Registry
-	agentsMD        string
-	memoryStore     memory.CuratedStore
-	store           sessionstore.RuntimeStore
-	rootID          int64
-	id              int64
-	model           string
-	agentType       registry.AgentType
-	agentTypes      *registry.Set
-	iterationOffset int
-	newLLMWithModel func(cfg *config.Config, model string) (llm.Client, error)
-	reasoningLevel  string
+	workDir           string
+	projectID         int64
+	llmClient         llm.Client
+	stack             *builtin.Stack
+	loader            loader.Service
+	todoStore         todo.Service
+	registry          tool.Registry
+	activationIndex   map[string]string
+	currentActivation *tool.ActivationGrant
+	agentsMD          string
+	memoryStore       memory.CuratedStore
+	store             sessionstore.RuntimeStore
+	rootID            int64
+	id                int64
+	model             string
+	agentType         registry.AgentType
+	agentTypes        *registry.Set
+	iterationOffset   int
+	newLLMWithModel   func(cfg *config.Config, model string) (llm.Client, error)
+	reasoningLevel    string
 	// modelMu guards the mutable model triplet (llmClient/model/reasoningLevel),
 	// swapped by handleSetModel (daemon goroutine) while the loop reads them.
 	modelMu         sync.RWMutex
@@ -139,6 +148,8 @@ type svc struct {
 	boundary        InputBoundary
 	outputEnabled   bool
 	preserveStopped bool
+	budgetGate      BudgetGate
+	budgetFired     bool
 
 	// Loop execution state
 	ms                *messageStore
@@ -193,6 +204,7 @@ type options struct {
 	LastActivityAt  time.Time
 	InputBoundary   InputBoundary
 	OutputEnabled   bool
+	BudgetGate      BudgetGate
 
 	// SettlementOpen marks a lifecycle settlement open: it may not reactivate
 	// the root past a won stop/clear/kill fence (the store rejects such writes).
@@ -308,6 +320,7 @@ func newSession(p params, opts options, workDir string, agentConfig registry.Age
 		stagedCalls:     opts.StagedExternalCalls,
 		boundary:        opts.InputBoundary,
 		outputEnabled:   opts.OutputEnabled,
+		budgetGate:      opts.BudgetGate,
 		preserveStopped: opts.PreserveStopped,
 
 		compactionDeferAnnounced: opts.CompactionDeferAnnounced,

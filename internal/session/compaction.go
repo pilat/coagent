@@ -12,6 +12,7 @@ import (
 	"github.com/pilat/coagent/internal/llmwire"
 	"github.com/pilat/coagent/internal/logger"
 	"github.com/pilat/coagent/internal/registry"
+	"github.com/pilat/coagent/internal/sessionstore"
 	"github.com/pilat/coagent/internal/tool/builtin"
 )
 
@@ -281,17 +282,49 @@ func (s *svc) rebuildMessages(
 	newMessages = append(newMessages, summaryMsg, ackMsg, primerMsg)
 	newMessages = append(newMessages, reattachments...)
 
-	if err := s.ms.replaceCompactedMessagesWithCommandLocked(
-		ctx,
-		compactedIDs,
-		newMessages,
-		brief,
-		commandInput,
+	//nolint:nestif,wsl_v5 // Atomic and ordinary persistence share the assembled projection.
+	if s.budgetGate != nil {
+		entries, err := compactionEntries(newMessages)
+		if err != nil {
+			return 0, err
+		}
+		inputID := int64(0)
+		if commandInput != nil {
+			inputID = commandInput.ID
+		}
+		ids, fired, err := s.budgetGate.PersistCompaction(ctx, sessionstore.BudgetedCompaction{
+			InputID: inputID, CompactedIDs: compactedIDs, Entries: entries, Brief: brief,
+			ObservedAt: time.Now().UTC(),
+		})
+		if err != nil {
+			return 0, fmt.Errorf("replace budgeted compacted messages: %w", err)
+		}
+		if len(ids) != len(newMessages) {
+			return 0, fmt.Errorf("budgeted compaction returned %d ids for %d messages", len(ids), len(newMessages))
+		}
+		for i := range newMessages {
+			newMessages[i].DBID = ids[i]
+		}
+		s.budgetFired = fired
+	} else if err := s.ms.replaceCompactedMessagesWithCommandLocked(
+		ctx, compactedIDs, newMessages, brief, commandInput,
 	); err != nil {
 		return 0, fmt.Errorf("replace compacted messages: %w", err)
 	}
 
 	s.ms.messages = newMessages
+	//nolint:nestif // Optional progress failure has an ownerless-root no-op branch.
+	if !s.budgetFired {
+		if provider, ok := s.boundary.(progressChangeBoundary); ok {
+			if _, err := provider.ProgressChange(ctx); err != nil {
+				if errors.Is(err, sessionstore.ErrOutputOwner) {
+					return beforeCount, nil
+				}
+
+				return 0, fmt.Errorf("enqueue compaction progress snapshot: %w", err)
+			}
+		}
+	}
 
 	return beforeCount, nil
 }

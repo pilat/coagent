@@ -60,6 +60,14 @@ type SessionMessageRouter interface {
 	SendSessionMessageResolved(ctx context.Context, data SessionMessageData) (int64, error)
 }
 
+// ProgressController exposes the current owned root projection to reconnecting managers.
+//
+//nolint:iface // Optional capability keeps ordinary controller fakes narrow.
+type ProgressController interface {
+	CurrentProgress(ctx context.Context, sessionID int64) (*ProgressData, error)
+	RefreshProgress(ctx context.Context, sessionID int64) error
+}
+
 // Controller is the complete in-process API the daemon exposes to rich
 // built-in managers such as Telegram. Narrower consumers should depend on a named
 // capability interface such as ChatController instead of this aggregate.

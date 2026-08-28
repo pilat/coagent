@@ -1,3 +1,4 @@
+//nolint:wrapcheck // Replacement validation errors are already tool-facing.; nosemgrep: semgrep.coagent-no-preamble-before-package
 package builtin
 
 import (
@@ -53,18 +54,30 @@ type todoWriteParams struct {
 }
 
 type todoItem struct {
-	ID       string `json:"id,omitempty"`
-	Content  string `json:"content"`
-	Status   string `json:"status,omitempty"`
-	Priority string `json:"priority,omitempty"`
+	ID       *string `json:"id,omitempty"`
+	Content  string  `json:"content"`
+	Status   string  `json:"status,omitempty"`
+	Priority string  `json:"priority,omitempty"`
 }
 
 type todoWriteTool struct {
-	store todo.Service
+	store   todo.Service
+	replace TodoReplacement
 }
 
-func newTodoWriteTool(store todo.Service) *todoWriteTool {
-	return &todoWriteTool{store: store}
+type TodoReplacement interface {
+	ReplaceTodo(ctx context.Context, callID string, items []TodoReplacementItem) ([]*todo.Item, error)
+}
+
+type TodoReplacementItem struct {
+	ID       *string
+	Content  string
+	Status   todo.Status
+	Priority todo.Priority
+}
+
+func newTodoWriteTool(store todo.Service, replace TodoReplacement) *todoWriteTool {
+	return &todoWriteTool{store: store, replace: replace}
 }
 
 func (t *todoWriteTool) ID() string          { return "todowrite" }
@@ -113,9 +126,9 @@ func (t *todoWriteTool) Execute(ctx context.Context, params json.RawMessage) (*t
 		return nil, fmt.Errorf("invalid parameters: %w", err)
 	}
 
-	items := make([]*todo.Item, len(p.Items))
+	replacements := make([]TodoReplacementItem, len(p.Items))
 	for i, item := range p.Items {
-		items[i] = &todo.Item{
+		replacements[i] = TodoReplacementItem{
 			ID:       item.ID,
 			Content:  item.Content,
 			Status:   todo.Status(item.Status),
@@ -123,7 +136,23 @@ func (t *todoWriteTool) Execute(ctx context.Context, params json.RawMessage) (*t
 		}
 	}
 
-	t.store.Replace(items)
+	if t.replace != nil {
+		if _, err := t.replace.ReplaceTodo(ctx, tool.CallIDFromContext(ctx), replacements); err != nil {
+			return nil, err
+		}
+	} else {
+		items := make([]*todo.Item, len(replacements))
+		for i, item := range replacements {
+			var itemID string
+			if item.ID != nil {
+				itemID = *item.ID
+			}
+
+			items[i] = &todo.Item{ID: itemID, Content: item.Content, Status: item.Status, Priority: item.Priority}
+		}
+
+		t.store.Replace(items)
+	}
 
 	return &tool.Result{
 		Title:  "Todo List Updated",

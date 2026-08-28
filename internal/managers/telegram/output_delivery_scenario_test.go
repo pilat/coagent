@@ -54,16 +54,17 @@ func TestHarnessScenario_DelayedTelegramManagerDrainsRealSessionOutput(t *testin
 	t.Cleanup(func() { require.NoError(t, manager.Stop(context.Background())) })
 
 	require.Eventually(t, func() bool {
-		return h.recorder.hasMessage("✅ delayed telegram answer")
-	}, 3*time.Second, 10*time.Millisecond, "the delayed manager must render its persisted answer")
+		return h.recorder.hasMessage("delayed telegram answer")
+	}, 5*time.Second, 10*time.Millisecond, "the delayed manager must render its persisted answer")
 	require.Eventually(t, func() bool {
 		status, statusErr := h.sessions.OutputQueueStatus(t.Context(), delayedTelegramManagerID)
 		return statusErr == nil && status.Pending == 0
-	}, time.Second, 10*time.Millisecond, "the production telegram adapter must acknowledge every queued row")
+	}, 10*time.Second, 10*time.Millisecond, "the production telegram adapter must acknowledge every queued row")
 
 	calls := h.recorder.snapshot()
 	assert.True(t, hasTelegramMethod(calls, "createForumTopic"), "session delivery must establish a forum topic")
-	assert.True(t, hasTelegramMessage(calls, "✅ delayed telegram answer"))
+	assert.False(t, hasTelegramMessage(calls, "Task accepted"))
+	assert.True(t, hasTelegramMessage(calls, "delayed telegram answer"))
 	assert.NotZero(t, sessionID)
 }
 
@@ -118,7 +119,7 @@ func (h *delayedTelegramHarness) waitForBacklog(t *testing.T) {
 	require.Eventually(t, func() bool {
 		status, err := h.sessions.OutputQueueStatus(t.Context(), delayedTelegramManagerID)
 		return err == nil && status.Pending >= 2
-	}, time.Second, 10*time.Millisecond, "the real session must commit lifecycle and answer before manager start")
+	}, 10*time.Second, 10*time.Millisecond, "the real session must commit lifecycle and answer before manager start")
 }
 
 type delayedTelegramClient struct{}

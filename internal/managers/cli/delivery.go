@@ -15,10 +15,11 @@ import (
 
 type outputQueue struct {
 	controllerapi.OutputQueueController
+	manager *Manager
 }
 
-func newOutputQueue(controller controllerapi.OutputQueueController) *outputQueue {
-	return &outputQueue{OutputQueueController: controller}
+func newOutputQueue(controller controllerapi.OutputQueueController, manager *Manager) *outputQueue {
+	return &outputQueue{OutputQueueController: controller, manager: manager}
 }
 
 func (q *outputQueue) Claim(ctx context.Context) (*managerdelivery.Item, error) {
@@ -48,6 +49,13 @@ func (q *outputQueue) Ack(ctx context.Context, item *managerdelivery.Item, resul
 		controllerapi.OutputAckData{ID: item.ID, AttemptID: item.AttemptID, MessageIDs: []string{}},
 	); err != nil {
 		return fmt.Errorf("ack cli output: %w", err)
+	}
+
+	claim, ok := item.Payload.(*controllerapi.OutputClaimData)
+	if ok && claim.ReleasesInput && !strings.HasPrefix(claim.SourceKey, "budget:") {
+		_ = q.manager.writeOutput(ctx, Event{
+			SessionID: claim.SessionID, Type: "state_changed", Status: string(controllerapi.StateIdle),
+		})
 	}
 
 	return nil
@@ -108,18 +116,6 @@ func (t *outputTransport) Deliver(ctx context.Context, item *managerdelivery.Ite
 
 	if err := t.manager.writeOutput(ctx, event); err != nil {
 		return managerdelivery.Result{Retryable: true, Error: deliveryError(err)}
-	}
-
-	if event.Type == "waiting" || claim.Type == controllerapi.OutputMessagePersistent {
-		if err := t.manager.writeOutput(
-			ctx,
-			Event{
-				SessionID: claim.SessionID, Generation: item.ID, AfterOutputID: item.ID,
-				Type: "state_changed", Status: "idle",
-			},
-		); err != nil {
-			return managerdelivery.Result{Retryable: true, Error: deliveryError(err)}
-		}
 	}
 
 	return managerdelivery.Result{MessageIDs: []string{}}

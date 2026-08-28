@@ -31,11 +31,12 @@ func validateOutputDraft(draft OutputDraft) error {
 		return err
 	}
 
-	if draft.SourceKey != "" && draft.Fingerprint != outputFingerprint(
+	if draft.SourceKey != "" && draft.Fingerprint != outputFingerprintWithRelease(
 		draft.Type,
 		draft.Content,
 		draft.SessionID,
 		draft.Attributes,
+		draft.ReleasesInput,
 	) {
 		return ErrOutputConflict
 	}
@@ -52,6 +53,7 @@ func validateProducerAttributes(kind OutputType, attributes map[string]any) erro
 		allowed["waiting"] = struct{}{}
 		allowed["waiting_identity"] = struct{}{}
 		allowed["source"] = struct{}{}
+		allowed["progress_revision"] = struct{}{}
 
 		if source, ok := attributes["source"]; ok && source != outputSourceScheduler && source != outputSourceAgent {
 			return errors.New("invalid message output source")

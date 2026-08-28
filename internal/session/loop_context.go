@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"go.uber.org/zap"
 
@@ -38,6 +39,16 @@ func (r *loopRunner) applyContextEvents(ctx context.Context) {
 
 	if !explicit && (r.autoCompactionOff || !r.agent.shouldCompact(window)) {
 		return
+	}
+
+	// A fired budget parks the tree: /compact is read-only and answers with the
+	// parked explanation, never with a failure claim (and spends no model call).
+	if r.agent.budgetGate != nil {
+		if err := r.agent.budgetGate.Admit(ctx, time.Now().UTC()); errors.Is(err, ErrBudgetCheckpoint) {
+			r.finishParkedCompaction(ctx, commandInput)
+
+			return
+		}
 	}
 
 	if commandInput != nil {
@@ -119,6 +130,27 @@ func compactionOutcomePhase(ok bool, err error) string {
 	}
 
 	return "failed"
+}
+
+// finishParkedCompaction resolves a compaction request against a fired budget:
+// the command gets its durable outcome, the root stays parked.
+func (r *loopRunner) finishParkedCompaction(ctx context.Context, commandInput *PendingInput) {
+	const parkedNotice = "⏸ Budget checkpoint reached — the session is parked. Send a message to resume."
+
+	if commandInput != nil {
+		if err := r.finishCompactionCommand(ctx, *commandInput, "parked", parkedNotice); err != nil {
+			r.log.Warn("finish_compaction_command_failed", zap.Error(err))
+
+			return
+		}
+
+		r.agent.clearCompactionCommandInput()
+		r.notify(ctx, parkedNotice)
+
+		return
+	}
+
+	r.notifyPersistent(ctx, parkedNotice)
 }
 
 // notifyAutoCompactionOutcome keys the success row to its summary message, so a

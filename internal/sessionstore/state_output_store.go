@@ -72,8 +72,8 @@ func (s *store) UpdateSessionIterationWithOutput(
 	}
 
 	result, err = tx.ExecContext(ctx, `INSERT INTO session_outbox
-		(session_id, type, content, attributes, created_at)
-		VALUES (?, 'message_persistent', ?, ?, ?)`, sessionID, content, string(attributes), now)
+		(session_id, type, content, attributes, created_at, releases_input)
+		VALUES (?, 'message_persistent', ?, ?, ?, 1)`, sessionID, content, string(attributes), now)
 	if err != nil {
 		return nil, fmt.Errorf("insert state output: %w", err)
 	}
