@@ -15,6 +15,7 @@ func applyManagerPatchFields(fields map[string]json.RawMessage, patch *configops
 		{"driver", func() error { return setStringField(fields, "driver", &patch.Driver) }},
 		{managerFieldEnabled, func() error { return setBoolField(fields, managerFieldEnabled, &patch.Enabled) }},
 		{"bot_token", func() error { return setStringField(fields, "bot_token", &patch.BotToken) }},
+		{"api_url", func() error { return setStringField(fields, "api_url", &patch.APIURL) }},
 		{
 			"allowed_user_ids",
 			func() error { return setInt64SliceField(fields, "allowed_user_ids", &patch.AllowedUserIDs) },

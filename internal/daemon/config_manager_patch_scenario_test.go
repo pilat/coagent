@@ -60,6 +60,7 @@ managers:
       driver: telegram
       enabled: true
       bot_token: ${MANAGER_TG_BOT_TOKEN}
+      api_url: http://127.0.0.1:8081
       allowed_user_ids:
         - 7
       target_chat_id: -100
@@ -187,6 +188,7 @@ func TestHarnessScenario_SetManagerPatchPreservesFields(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, config.ManagerEntry{
 		ID: "tg", Driver: "telegram", Enabled: boolPtr(true), BotToken: "1234:tg-token",
+		APIURL:         "http://127.0.0.1:8081",
 		AllowedUserIDs: []int64{7, 9}, TargetChatID: int64Ptr(-100), ServiceTopicName: "Support",
 		ServiceTopicIconEmojiID: "123", SessionTopicIconEmojiID: "456", SendChunkDelayMS: 200,
 		PollTimeoutSec: 45, Whisper: &config.ManagerWhisperEntry{Provider: "whisper", Model: "whisper-1"},

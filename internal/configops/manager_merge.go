@@ -22,6 +22,10 @@ func mergeManagerEntry(entry config.ManagerEntry, patch ManagerPatch) config.Man
 		entry.BotToken = *patch.BotToken
 	}
 
+	if patch.APIURL != nil {
+		entry.APIURL = *patch.APIURL
+	}
+
 	if patch.AllowedUserIDs != nil {
 		entry.AllowedUserIDs = *patch.AllowedUserIDs
 	}

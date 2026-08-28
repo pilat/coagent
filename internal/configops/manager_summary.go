@@ -3,7 +3,7 @@ package configops
 import "github.com/pilat/coagent/internal/config"
 
 var fieldOrder = []string{
-	"driver", "enabled", "bot_token", "allowed_user_ids", "target_chat_id",
+	"driver", "enabled", "bot_token", "api_url", "allowed_user_ids", "target_chat_id",
 	"service_topic_name", "service_topic_icon_emoji_id", "session_topic_icon_emoji_id",
 	"send_chunk_delay_ms", "poll_timeout_sec", "whisper",
 }
@@ -53,6 +53,8 @@ func fieldChanged(name string, before, after config.ManagerEntry) bool {
 		return !boolPtrEqual(before.Enabled, after.Enabled)
 	case "bot_token":
 		return before.BotToken != after.BotToken
+	case "api_url":
+		return before.APIURL != after.APIURL
 	case "allowed_user_ids":
 		return !managerSlicesEqual(before.AllowedUserIDs, after.AllowedUserIDs)
 	case "target_chat_id":

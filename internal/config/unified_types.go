@@ -83,6 +83,7 @@ type (
 		Enabled *bool  `yaml:"enabled,omitempty"`
 
 		BotToken                string  `yaml:"bot_token,omitempty"`
+		APIURL                  string  `yaml:"api_url,omitempty"`
 		AllowedUserIDs          []int64 `yaml:"allowed_user_ids,omitempty"`
 		TargetChatID            *int64  `yaml:"target_chat_id,omitempty"`
 		ServiceTopicName        string  `yaml:"service_topic_name,omitempty"`
