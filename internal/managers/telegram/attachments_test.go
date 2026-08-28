@@ -20,7 +20,6 @@ import (
 // every sendMessage text, all through one transport.
 type fakeAttachmentAPI struct {
 	getFilePath  string
-	getFileError string
 	payload      []byte
 	downloadCode int // non-zero overrides 200 on the /file/ endpoint
 
@@ -29,10 +28,6 @@ type fakeAttachmentAPI struct {
 
 func (f *fakeAttachmentAPI) RoundTrip(req *http.Request) (*http.Response, error) {
 	if strings.Contains(req.URL.Path, "/getFile") {
-		if f.getFileError != "" {
-			return telegramJSONResponse(f.getFileError), nil
-		}
-
 		return telegramJSONResponse(`{"ok":true,"result":{"file_path":"` + f.getFilePath + `"}}`), nil
 	}
 
@@ -185,54 +180,6 @@ func TestAttachment_DownloadFailureRepliesWithoutInjection(t *testing.T) {
 	assert.Empty(t, controller.messageCalls, "a failed save injects nothing")
 	require.Len(t, api.sentMessages, 1)
 	assert.Contains(t, api.sentMessages[0], "Failed to save x.pdf")
-}
-
-func TestAttachment_HostedAPILargeFileExplainsLocalMode(t *testing.T) {
-	api := &fakeAttachmentAPI{getFileError: `{
-		"ok":false,"error_code":400,"description":"Bad Request: file is too big"
-	}`}
-	controller := &fakeController{}
-	m := newAttachmentTestManager(t, api, controller)
-
-	msg := &telegramMessage{Document: &telegramDocument{
-		FileID: "large-doc", FileName: "menschen_a1_1_arbeitsbuch.pdf", FileSize: 25 * 1024 * 1024,
-	}}
-
-	m.handleAttachment(context.Background(), msg, attachmentOf(msg), 42, 99, true)
-
-	assert.Empty(t, controller.messageCalls)
-	require.Len(t, api.sentMessages, 1)
-	assert.Equal(t,
-		"❌ Failed to save menschen_a1_1_arbeitsbuch.pdf: "+
-			"telegram Bot API rejected this file as too big; files over 20 MB require "+
-			"api_url pointing to a Bot API server running in local mode",
-		api.sentMessages[0],
-	)
-}
-
-func TestAttachment_LocalAPICopiesAbsoluteFilePath(t *testing.T) {
-	source := filepath.Join(t.TempDir(), "large.pdf")
-	payload := []byte("%PDF-1.4 large body")
-	require.NoError(t, os.WriteFile(source, payload, 0o600))
-
-	api := &fakeAttachmentAPI{getFilePath: source}
-	controller := &fakeController{}
-	m := newAttachmentTestManager(t, api, controller)
-	m.cfg.APIURL = "http://127.0.0.1:8081"
-
-	msg := &telegramMessage{Document: &telegramDocument{
-		FileID: "large-doc", FileName: "large.pdf", FileSize: 25 * 1024 * 1024,
-	}}
-
-	m.handleAttachment(context.Background(), msg, attachmentOf(msg), 42, 99, true)
-
-	require.Len(t, controller.messageCalls, 1)
-	savedPath := extractedPath(controller.messageCalls[0].Message)
-	t.Cleanup(func() { _ = os.Remove(savedPath) })
-
-	saved, err := os.ReadFile(savedPath)
-	require.NoError(t, err)
-	assert.Equal(t, payload, saved)
 }
 
 func TestAttachment_LargestPhotoSelected(t *testing.T) {

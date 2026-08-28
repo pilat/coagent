@@ -529,52 +529,6 @@ managers:
 	assert.Equal(t, defaultTelegramPollTimeoutSec, m.PollTimeoutSec)
 }
 
-func TestUnifiedConfig_Managers_TelegramAPIURL(t *testing.T) {
-	tests := []struct {
-		name    string
-		apiURL  string
-		want    string
-		wantErr bool
-	}{
-		{name: "local HTTP", apiURL: "http://127.0.0.1:8081/", want: "http://127.0.0.1:8081"},
-		{
-			name:   "HTTPS path prefix",
-			apiURL: "https://telegram.example.test/api",
-			want:   "https://telegram.example.test/api",
-		},
-		{name: "missing scheme", apiURL: "127.0.0.1:8081", wantErr: true},
-		{name: "userinfo", apiURL: "http://user@127.0.0.1:8081", wantErr: true},
-		{name: "query", apiURL: "http://127.0.0.1:8081?mode=local", wantErr: true},
-		{name: "unsupported scheme", apiURL: "file:///tmp/telegram", wantErr: true},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-
-			path := writeConfig(t, `managers:
-  - id: telegram-main
-    driver: telegram
-    enabled: true
-    bot_token: tg-token
-    api_url: `+tt.apiURL+`
-    allowed_user_ids: [123]
-    target_chat_id: -100123456
-`)
-
-			cfg, err := LoadUnifiedConfig(path, nil)
-			if tt.wantErr {
-				require.Error(t, err)
-				assert.Contains(t, err.Error(), "api_url")
-				return
-			}
-
-			require.NoError(t, err)
-			assert.Equal(t, tt.want, cfg.Managers[0].APIURL)
-		})
-	}
-}
-
 func TestUnifiedConfig_ServiceTopicNameUsesRuneLimit(t *testing.T) {
 	for _, tt := range []struct {
 		name    string

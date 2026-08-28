@@ -14,8 +14,6 @@ import (
 )
 
 const (
-	defaultTelegramAPIURL = "https://api.telegram.org"
-
 	tgKeyCommand     = "command"
 	tgKeyDescription = "description"
 	tgKeyChatID      = "chat_id"
@@ -73,16 +71,6 @@ func (e *tgAPIError) Error() string {
 }
 
 func (m *Manager) tg(ctx context.Context, method string, params map[string]any, out any) error {
-	return m.tgWithClient(ctx, m.httpClient, method, params, out)
-}
-
-func (m *Manager) tgWithClient(
-	ctx context.Context,
-	client *http.Client,
-	method string,
-	params map[string]any,
-	out any,
-) error {
 	disableLinkPreview(method, params)
 
 	body, err := json.Marshal(params)
@@ -90,7 +78,7 @@ func (m *Manager) tgWithClient(
 		return fmt.Errorf("marshal telegram request: %w", err)
 	}
 
-	endpoint := fmt.Sprintf("%s/bot%s/%s", m.telegramAPIURL(), m.cfg.BotToken, method)
+	endpoint := fmt.Sprintf("https://api.telegram.org/bot%s/%s", m.cfg.BotToken, method)
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
 	if err != nil {
@@ -99,7 +87,7 @@ func (m *Manager) tgWithClient(
 
 	req.Header.Set("Content-Type", "application/json")
 
-	resp, err := client.Do(req)
+	resp, err := m.httpClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("call telegram %s: %w", method, sanitizeTransportError(err))
 	}
@@ -137,14 +125,6 @@ func (m *Manager) tgWithClient(
 	}
 
 	return nil
-}
-
-func (m *Manager) telegramAPIURL() string {
-	if m.cfg.APIURL == "" {
-		return defaultTelegramAPIURL
-	}
-
-	return strings.TrimRight(m.cfg.APIURL, "/")
 }
 
 // sanitizeTransportError drops the *url.Error wrapper, whose text embeds the

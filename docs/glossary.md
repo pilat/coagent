@@ -28,13 +28,6 @@ _Avoid_: using "controller" for a front-end integration — that is a manager.
 A built-in front end (Telegram or local chat today) that drives the daemon through `controllerapi.Controller`. A new manager is a source-level contribution, not a third-party plugin.
 _Avoid_: controller, bot, adapter, integration.
 
-**Bot API server** (Telegram):
-The HTTP endpoint a Telegram manager calls. `api_url` selects it; omission uses
-the hosted endpoint, while a co-located server in local mode can resolve files
-over 20 MB to absolute paths that the manager copies into random temporary
-artifacts. It is not the **manager** or its Telegram bot account.
-_Avoid_: Telegram server (ambiguous), bot (the remote account).
-
 **manager ownership**:
 The durable routing identity of a root session: the unique manager ID stored as
 `manager_id`. A manager subscribes with that same ID and receives only its own

@@ -41,20 +41,6 @@ func TestTGTransportErrorOmitsToken(t *testing.T) {
 	assert.ErrorIs(t, err, context.Canceled)
 }
 
-func TestTGUsesConfiguredAPIURL(t *testing.T) {
-	var gotURL string
-	m := &Manager{
-		cfg: config.ManagerEntry{BotToken: "fake", APIURL: "http://127.0.0.1:8081"},
-		httpClient: &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
-			gotURL = req.URL.String()
-			return telegramJSONResponse(`{"ok":true,"result":{}}`), nil
-		})},
-	}
-
-	require.NoError(t, m.tg(context.Background(), "getMe", nil, nil))
-	assert.Equal(t, "http://127.0.0.1:8081/botfake/getMe", gotURL)
-}
-
 func TestSanitizeTransportError(t *testing.T) {
 	cause := errors.New("connection refused")
 	wrapped := &url.Error{Op: "Post", URL: "https://api.telegram.org/botSECRET/getUpdates", Err: cause}
