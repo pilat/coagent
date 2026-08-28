@@ -20,7 +20,6 @@ func TestParseManagerParams_AcceptsAllFields(t *testing.T) {
 		"driver": "telegram",
 		"enabled": true,
 		"bot_token": "${TG_BOT_TOKEN}",
-		"api_url": "http://127.0.0.1:8081",
 		"allowed_user_ids": [7, 9],
 		"target_chat_id": -100,
 		"service_topic_name": "Support",
@@ -41,8 +40,6 @@ func TestParseManagerParams_AcceptsAllFields(t *testing.T) {
 	assert.True(t, *patch.Enabled)
 	require.NotNil(t, patch.BotToken)
 	assert.Equal(t, "${TG_BOT_TOKEN}", *patch.BotToken)
-	require.NotNil(t, patch.APIURL)
-	assert.Equal(t, "http://127.0.0.1:8081", *patch.APIURL)
 	require.NotNil(t, patch.AllowedUserIDs)
 	assert.Equal(t, []int64{7, 9}, *patch.AllowedUserIDs)
 	require.NotNil(t, patch.TargetChatID)
@@ -72,7 +69,6 @@ func TestParseManagerParams_RequiredFieldsOnly(t *testing.T) {
 	assert.Nil(t, patch.Driver)
 	assert.Nil(t, patch.Enabled)
 	assert.Nil(t, patch.BotToken)
-	assert.Nil(t, patch.APIURL)
 	assert.False(t, patch.Whisper.Set)
 }
 
@@ -117,7 +113,6 @@ func TestParseManagerParams_RejectsNullForNonNullableFields(t *testing.T) {
 		{"driver", `{"id":"tg","driver":null}`, "driver cannot be null"},
 		{"enabled", `{"id":"tg","enabled":null}`, "enabled cannot be null"},
 		{"bot_token", `{"id":"tg","bot_token":null}`, "bot_token cannot be null"},
-		{"api_url", `{"id":"tg","api_url":null}`, "api_url cannot be null"},
 		{"allowed_user_ids", `{"id":"tg","allowed_user_ids":null}`, "allowed_user_ids cannot be null"},
 		{"target_chat_id", `{"id":"tg","target_chat_id":null}`, "target_chat_id cannot be null"},
 		{"service_topic_name", `{"id":"tg","service_topic_name":null}`, "service_topic_name cannot be null"},

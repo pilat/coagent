@@ -17,7 +17,6 @@ type ManagerPatch struct {
 	Driver                  *string
 	Enabled                 *bool
 	BotToken                *string
-	APIURL                  *string
 	AllowedUserIDs          *[]int64
 	TargetChatID            *int64
 	ServiceTopicName        *string

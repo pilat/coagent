@@ -227,10 +227,6 @@ func (c *UnifiedConfig) validateTelegramManager(m *ManagerEntry) error {
 		return fmt.Errorf("manager %q (driver: telegram) requires \"bot_token\" to be set", m.ID)
 	}
 
-	if err := validateTelegramAPIURL(m); err != nil {
-		return err
-	}
-
 	if len(m.AllowedUserIDs) == 0 {
 		return fmt.Errorf("manager %q (driver: telegram) requires \"allowed_user_ids\" to be non-empty", m.ID)
 	}

@@ -16,7 +16,7 @@ const managerFieldEnabled = "enabled"
 
 // knownManagerFields is the complete set of accepted top-level keys.
 var knownManagerFields = []string{
-	"id", "driver", "enabled", "bot_token", "api_url", "allowed_user_ids", "target_chat_id",
+	"id", "driver", "enabled", "bot_token", "allowed_user_ids", "target_chat_id",
 	"service_topic_name", "service_topic_icon_emoji_id", "session_topic_icon_emoji_id",
 	"send_chunk_delay_ms", "poll_timeout_sec", "whisper",
 }
@@ -43,7 +43,6 @@ func (t *setManagerTool) Parameters() json.RawMessage {
     "driver": {"type": "string", "enum": ["telegram"], "description": "Required when creating a manager; omit or repeat unchanged when updating."},
     "enabled": {"type": "boolean", "description": "Omit to keep the current state. Pass false to disable without removing config."},
     "bot_token": {"type": "string", "description": ` + quote(credentialDoc+" Omit to keep the reference an existing manager already has.") + `},
-    "api_url": {"type": "string", "description": "Bot API server URL. Set a co-located server running in local mode to receive files over 20 MB; empty uses Telegram's hosted API. Omit to keep the current URL."},
     "allowed_user_ids": {"type": "array", "items": {"type": "integer"}, "description": "Numeric user ids allowed to talk to the bot. A present array is the new complete list."},
     "target_chat_id": {"type": "integer", "description": "The group forum chat id. Omit for a private bot forum with exactly one allowed user. Cannot change on an existing manager."},
     "service_topic_name": {"type": "string", "description": "Name for the dedicated service topic. Empty resets to the default. Omit to keep the current name."},

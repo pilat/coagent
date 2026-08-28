@@ -27,10 +27,6 @@ func TestParseManagerParams_MapsEachPropertyIndependently(t *testing.T) {
 			require.NotNil(t, p.BotToken)
 			assert.Equal(t, "${TG_TOKEN}", *p.BotToken)
 		}},
-		{"api_url", `"api_url":"http://127.0.0.1:8081"`, func(t *testing.T, p configops.ManagerPatch) {
-			require.NotNil(t, p.APIURL)
-			assert.Equal(t, "http://127.0.0.1:8081", *p.APIURL)
-		}},
 		{"allowed_user_ids", `"allowed_user_ids":[7]`, func(t *testing.T, p configops.ManagerPatch) {
 			require.NotNil(t, p.AllowedUserIDs)
 			assert.Equal(t, []int64{7}, *p.AllowedUserIDs)
@@ -100,9 +96,6 @@ func assertOptionalManagerFieldAbsence(t *testing.T, present string, p configops
 	}
 	if present != "bot_token" {
 		assert.Nil(t, p.BotToken)
-	}
-	if present != "api_url" {
-		assert.Nil(t, p.APIURL)
 	}
 	if present != "allowed_user_ids" {
 		assert.Nil(t, p.AllowedUserIDs)
