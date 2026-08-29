@@ -19,7 +19,7 @@ type durableInputBoundary struct {
 	schedules      schedule.Service
 	sessionID      int64
 	progress       func(context.Context) (string, error)
-	progressChange func(context.Context) (string, error)
+	progressChange func(context.Context) (string, bool, error)
 	finalOutput    func(context.Context, string) (string, error)
 }
 
@@ -31,9 +31,12 @@ func (b *durableInputBoundary) FinalOutput(ctx context.Context, text string) (st
 	return b.finalOutput(ctx, text)
 }
 
-func (b *durableInputBoundary) ProgressChange(ctx context.Context) (string, error) {
+// ProgressChange returns the card content, whether it was actually published,
+// and any transport error. Supersession is not an error: published=false tells
+// the loop to stay silent because a newer transition owns the next card.
+func (b *durableInputBoundary) ProgressChange(ctx context.Context) (string, bool, error) {
 	if b.progressChange == nil {
-		return "", errors.New("progress change provider unavailable")
+		return "", false, errors.New("progress change provider unavailable")
 	}
 
 	return b.progressChange(ctx)

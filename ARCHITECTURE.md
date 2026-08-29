@@ -119,17 +119,23 @@ daemon joins those ledgers into a session's runnable and waiting projections.
 
 Manager-owned roots also carry a durable outbox obligation. `session_outbox`
 stores the closed output vocabulary, immutable owner identity, delivery receipt,
-and `pending → delivering → retry_wait|delivered|blocked` attempt state. Each
-manager drains its own globally ordered unresolved head through
-`managerdelivery`; a successful transport effect is acknowledged only afterward,
-so delivery beyond SQLite is deliberately at least once. Wake notifications are
-hints: startup, reconnect, and idle scans reconstruct work from the ledger.
-Lifecycle output and ordinary transcript/control facts commit in the same store
-transaction; a blocked head remains visible and blocks only that manager.
-Model-bound input acceptance remains internal to the durable inbox. Replaceable
-progress snapshots, direct tool receipts, checkpoint output and final readiness
-reuse the outbox and manager receipt chain; managers do not maintain a second
-progress or result queue.
+host-stamped model-input generation, and `pending → delivering →
+retry_wait|delivered|blocked` attempt state. Each manager drains its own
+globally ordered unresolved head through `managerdelivery`; a successful
+transport effect is acknowledged only afterward, so delivery beyond SQLite is
+deliberately at least once. Wake notifications are hints: startup, reconnect,
+and idle scans reconstruct work from the ledger. Lifecycle output and ordinary
+transcript/control facts commit in the same store transaction; a blocked head
+remains visible and blocks only that manager. Model-bound input acceptance
+remains internal to the durable inbox, and the session's model-input generation
+advances only when inbox promotion or scheduled injection enters history.
+Manager replay edits a previous external message only when the adjacent outbox
+rows carry equal generations (or both carry none under the legacy rule), so a
+consumed follow-up or scheduled turn starts a new external message without
+querying session state at claim time. Replaceable progress snapshots, direct
+tool receipts, checkpoint output and final readiness reuse the outbox and
+manager receipt chain; managers do not maintain a second progress or result
+queue.
 
 ### Runtime isolation and admission
 
@@ -210,9 +216,14 @@ rebuilds runnable sessions from persisted rows and producer ledgers. A stopped
 link is retained for explicit follow-up but is not automatically resumed.
 `/stop` is stronger than an ordinary interruption: it fences an active tree,
 cancels and joins its runners, settles each active unresolved call in the
-append-only transcript, and only then parks it. Recovery finishes an interrupted
-stop before ordinary resume; a later root input or explicit child follow-up is a
-new activation, never a replay of pre-stop work.
+append-only transcript, and only then parks it. An explicit manager-owned stop
+commits a replaceable start row with the fence and, after every descendant
+obligation settles, one terminal transaction releases an armed budget, moves the
+root to `stopped`, and inserts the persistent completion output; failure leaves
+the root stopping and publishes no success. Recovery finishes an interrupted
+stop — including its owed terminal output — before ordinary resume; a later
+root input or explicit child follow-up is a new activation, never a replay of
+pre-stop work.
 
 Configuration application is a controlled restart: the tool stages work and
 suspends; the daemon makes the suspension durable, commits guarded files, then
@@ -261,13 +272,18 @@ topology, exact waits, budget state and output watermarks, with live context
 occupancy when a runner is available.
 The daemon owns one wakeable reconciler for all roots. Meaningful transitions
 enqueue replaceable snapshots immediately; five minutes without newer semantic
-output creates a silence snapshot. Stable source keys and the outbox uniqueness
-boundary make restart and concurrent reconciliation idempotent. Final output
-adds only the non-empty TODO/budget parts of its compact footer; readiness
-appears only after its releasing output is acknowledged and terminal or parked
-state is current. Empty and read-only-command-only roots have no episode clock
-and produce no silence snapshots; the first model-bound input or an applied
-scheduled turn starts one.
+output creates a silence snapshot. Snapshots carry the captured generation and
+root status, and the inserting transaction discards them as superseded instead
+of stamping a stale card with a newer generation — so no progress card can
+appear below a stop fence or terminal stop result. Generation-scoped source keys
+and the outbox uniqueness boundary make restart and concurrent reconciliation
+idempotent. Automatic cards lead with the complete current-generation assistant
+note and render TODO counts only; `/status` keeps the full diagnostic view.
+Final output adds only the non-empty TODO summary and budget parts of its
+compact footer; readiness appears only after the newest releasing output is
+acknowledged and terminal or parked state is current. Empty and
+read-only-command-only roots have no episode clock and produce no silence
+snapshots; the first model-bound input or an applied scheduled turn starts one.
 
 `/budget` grants one exact manager-user input authority to arm, replace or clear
 a one-shot root-tree cost/duration checkpoint. Model responses and successful

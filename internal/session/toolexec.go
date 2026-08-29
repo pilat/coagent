@@ -12,6 +12,7 @@ import (
 
 	"github.com/pilat/coagent/internal/llmwire"
 	"github.com/pilat/coagent/internal/logger"
+	"github.com/pilat/coagent/internal/sessionstore"
 	"github.com/pilat/coagent/internal/tool"
 )
 
@@ -221,12 +222,12 @@ func recordToolResults(
 
 		if r.err == nil && (r.toolCall.Name == "todowrite" || activatedDirect) {
 			if provider, ok := agent.boundary.(progressChangeBoundary); ok {
-				message, progressErr := provider.ProgressChange(ctx)
-				if progressErr != nil {
+				message, published, progressErr := provider.ProgressChange(ctx)
+				if progressErr != nil && !errors.Is(progressErr, sessionstore.ErrProgressSuperseded) {
 					return fmt.Errorf("enqueue TODO progress snapshot: %w", progressErr)
 				}
 
-				if agent.loopOpts.Notify != nil {
+				if published && agent.loopOpts.Notify != nil {
 					_ = agent.loopOpts.Notify(ctx, message)
 				}
 			}

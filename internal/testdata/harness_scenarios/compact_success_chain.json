@@ -1,0 +1,117 @@
+{
+  "source_test": "TestHarnessScenario_CompactSuccessChain",
+  "trace": [
+    {
+      "type": "session_created",
+      "name": "<name>",
+      "work_dir": "<workdir>",
+      "attributes": {
+        "manager_id": "telegram:main"
+      }
+    },
+    {
+      "type": "state_changed",
+      "status": "running"
+    },
+    {
+      "type": "message",
+      "message": "First answer."
+    },
+    {
+      "type": "session_created",
+      "name": "<name>",
+      "work_dir": "<workdir>",
+      "attributes": {
+        "manager_id": "telegram:main"
+      }
+    },
+    {
+      "type": "state_changed",
+      "status": "running"
+    },
+    {
+      "type": "message",
+      "message": "🔄 Compacting context..."
+    },
+    {
+      "type": "message",
+      "message": "✅ Context compacted"
+    },
+    {
+      "type": "state_changed",
+      "status": "idle"
+    }
+  ],
+  "claims": [
+    {
+      "type": "session_opened",
+      "content": "",
+      "attributes": {
+        "manager_id": "telegram:main",
+        "name": "002",
+        "work_dir": "<workdir>"
+      },
+      "source_key": "session:1:opened",
+      "releases_input": false
+    },
+    {
+      "type": "message_persistent",
+      "content": "First answer.",
+      "attributes": {
+        "manager_id": "telegram:main",
+        "model_input_generation": 1
+      },
+      "source_key": "message:2:final",
+      "model_input_generation": 1,
+      "releases_input": true
+    },
+    {
+      "type": "message_replaceable",
+      "content": "🔄 Compacting context...",
+      "attributes": {
+        "manager_id": "telegram:main",
+        "model_input_generation": 1
+      },
+      "source_key": "input:2:compact:started",
+      "model_input_generation": 1,
+      "previous_message_type": "message_persistent",
+      "previous_model_input_generation": 1,
+      "previous_message_ids": [
+        "<msg-1>"
+      ],
+      "releases_input": false
+    },
+    {
+      "type": "message_persistent",
+      "content": "✅ Context compacted",
+      "attributes": {
+        "manager_id": "telegram:main",
+        "model_input_generation": 1
+      },
+      "source_key": "input:2:compact:succeeded",
+      "model_input_generation": 1,
+      "previous_message_type": "message_replaceable",
+      "previous_model_input_generation": 1,
+      "previous_message_ids": [
+        "<msg-2>"
+      ],
+      "releases_input": false
+    },
+    {
+      "type": "message_replaceable",
+      "content": "**⚙️ Working**\n\n🤖 `fake-model` · iteration 1\n⏱ <elapsed> · 💰 $0.0 total",
+      "attributes": {
+        "manager_id": "telegram:main",
+        "model_input_generation": 1
+      },
+      "source_key": "progress:change:message:5:g1",
+      "model_input_generation": 1,
+      "previous_message_type": "message_persistent",
+      "previous_model_input_generation": 1,
+      "previous_message_ids": [
+        "<msg-3>"
+      ],
+      "releases_input": false
+    }
+  ]
+}

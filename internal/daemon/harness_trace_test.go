@@ -37,12 +37,39 @@ var updateHarnessTraces = flag.Bool(
 
 var childRefPattern = regexp.MustCompile(`#(\d+)`)
 
-// harnessTraceFile is the shared artifact: the exact ordered notification trace a
-// daemon scenario published to a controller sink, with ids normalized. The
-// telegram manager scenario replays this same file through its renderer.
+// elapsedPattern matches the wall-time fragment of an automatic card; its
+// value depends on scheduling and carries no conversation meaning.
+var elapsedPattern = regexp.MustCompile(`⏱ [0-9.]+[a-z0-9.]+`)
+
+// harnessTraceFile is the shared artifact: the exact ordered notification trace
+// a daemon scenario published to a controller sink, plus the exact sanitized
+// controllerapi.OutputClaimData sequence the production controller produced for
+// the same run. The telegram manager scenario replays these claims through the
+// production output transport. Ids are normalized; generations are kept.
 type harnessTraceFile struct {
 	SourceTest string              `json:"source_test"`
 	Trace      []harnessTraceEvent `json:"trace"`
+	Claims     []harnessTraceClaim `json:"claims,omitempty"`
+}
+
+// messagePlaceholderPrefix marks sanitized Telegram message receipts. The
+// telegram replay maps each placeholder to a real message id, so edit decisions
+// and chunk bookkeeping run against genuine targets.
+const messagePlaceholderPrefix = "<msg-"
+
+// harnessTraceClaim is the sanitized OutputClaimData one production claim
+// produced. Presence-bearing generations stay exact; random attempt ids and raw
+// message receipts do not survive sanitization.
+type harnessTraceClaim struct {
+	Type                         string         `json:"type"`
+	Content                      string         `json:"content"`
+	Attributes                   map[string]any `json:"attributes,omitempty"`
+	SourceKey                    string         `json:"source_key,omitempty"`
+	ModelInputGeneration         *int64         `json:"model_input_generation,omitempty"`
+	PreviousMessageType          string         `json:"previous_message_type,omitempty"`
+	PreviousModelInputGeneration *int64         `json:"previous_model_input_generation,omitempty"`
+	PreviousMessageIDs           []string       `json:"previous_message_ids,omitempty"`
+	ReleasesInput                bool           `json:"releases_input"`
 }
 
 type harnessTraceEvent struct {
@@ -75,7 +102,10 @@ func assertHarnessTrace(
 	path := harnessTracePath(name)
 
 	if *updateHarnessTraces {
-		writeHarnessTrace(t, path, got)
+		stored := readHarnessTraceFileForUpdate(t, path)
+		stored.SourceTest = t.Name()
+		stored.Trace = got.Trace
+		writeHarnessTrace(t, path, stored)
 
 		return
 	}
@@ -103,6 +133,20 @@ func readHarnessTraceFile(t *testing.T, path string) harnessTraceFile {
 	var file harnessTraceFile
 	require.NoError(t, decoder.Decode(&file))
 	require.NotEmpty(t, file.Trace)
+
+	return file
+}
+
+// readHarnessTraceFileForUpdate loads a trace file during recording, tolerating
+// a file that only the notification pass has written so far.
+func readHarnessTraceFileForUpdate(t *testing.T, path string) harnessTraceFile {
+	t.Helper()
+
+	data, err := os.ReadFile(path)
+	require.NoError(t, err, "run the notification trace recording before claim recording")
+
+	var file harnessTraceFile
+	require.NoError(t, json.Unmarshal(data, &file))
 
 	return file
 }
@@ -198,6 +242,8 @@ func normalizeHarnessMessage(message string, children map[int64]string, wakes []
 	if message == "" {
 		return ""
 	}
+
+	message = elapsedPattern.ReplaceAllString(message, "⏱ <elapsed>")
 
 	for _, wake := range wakes {
 		message = strings.ReplaceAll(message, wake, wakePlaceholder)

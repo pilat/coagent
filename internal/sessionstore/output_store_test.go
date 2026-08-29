@@ -65,7 +65,7 @@ func TestOutputStore_GlobalFIFOAndAttemptCAS(t *testing.T) {
 	var attributes string
 	require.NoError(t, db.QueryRowContext(ctx,
 		`SELECT attributes FROM session_outbox WHERE id = ?`, claim.Output.ID).Scan(&attributes))
-	assert.JSONEq(t, `{"manager_id":"telegram","message_ids":["1"]}`, attributes)
+	assert.JSONEq(t, `{"manager_id":"telegram","message_ids":["1"],"model_input_generation":0}`, attributes)
 
 	stale := store.AckOutput(ctx, "telegram", claim.Output.ID, claim.Output.AttemptID, []string{"1"}, nil)
 	require.ErrorIs(t, stale, ErrOutputAttempt)

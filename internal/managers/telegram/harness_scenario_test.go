@@ -42,6 +42,22 @@ var updateHarnessTraces = flag.Bool(
 type harnessTraceFile struct {
 	SourceTest string              `json:"source_test"`
 	Trace      []harnessTraceEvent `json:"trace"`
+	Claims     []harnessTraceClaim `json:"claims,omitempty"`
+}
+
+// harnessTraceClaim mirrors the daemon's sanitized OutputClaimData record.
+// Generations stay exact (nil is legacy absence); message receipts are
+// placeholders the replay resolves against its own deliveries.
+type harnessTraceClaim struct {
+	Type                         string         `json:"type"`
+	Content                      string         `json:"content"`
+	Attributes                   map[string]any `json:"attributes,omitempty"`
+	SourceKey                    string         `json:"source_key,omitempty"`
+	ModelInputGeneration         *int64         `json:"model_input_generation,omitempty"`
+	PreviousMessageType          string         `json:"previous_message_type,omitempty"`
+	PreviousModelInputGeneration *int64         `json:"previous_model_input_generation,omitempty"`
+	PreviousMessageIDs           []string       `json:"previous_message_ids,omitempty"`
+	ReleasesInput                bool           `json:"releases_input"`
 }
 
 type harnessTraceEvent struct {

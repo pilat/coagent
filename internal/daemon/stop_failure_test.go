@@ -63,7 +63,7 @@ func TestStopOnStoreFailureDoesNotPublishIdle(t *testing.T) {
 	controllers := NewController(mgr, &config.Config{}, nil, nil)
 	notifications := controllers.ForManager("manager-stop").Subscribe()
 
-	require.NoError(t, mgr.Stop(ctx, record.ID),
+	require.NoError(t, mgr.Stop(ctx, record.ID, 0),
 		"the stop itself must succeed: the cleanup ran on the real store")
 
 	// The unconditional stop announcement is legitimate; the idle publication

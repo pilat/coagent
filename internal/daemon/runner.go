@@ -475,8 +475,10 @@ func (s *svc) recordWaitingProgress(
 		return fmt.Errorf("capture progress: %w", err)
 	}
 
-	if _, err := s.enqueueProgressChangeFacts(ctx, facts, "waiting:"+hash); err != nil &&
-		!errors.Is(err, sessionstore.ErrOutputOwner) {
+	// A stale waiting card is dropped without a recapture retry: the newer
+	// transition that moved the generation owns the next card.
+	if _, _, err := s.enqueueProgressChangeFacts(ctx, facts, "waiting:"+hash, false); err != nil &&
+		!errors.Is(err, sessionstore.ErrProgressSuperseded) && !errors.Is(err, sessionstore.ErrOutputOwner) {
 		return fmt.Errorf("enqueue progress: %w", err)
 	}
 
@@ -982,7 +984,7 @@ func (s *svc) openSession(
 
 				return current.Rendered, nil
 			},
-			progressChange: func(ctx context.Context) (string, error) {
+			progressChange: func(ctx context.Context) (string, bool, error) {
 				return s.enqueueProgressChange(ctx, sessionID)
 			},
 			finalOutput: func(ctx context.Context, text string) (string, error) {

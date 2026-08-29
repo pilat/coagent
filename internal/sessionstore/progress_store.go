@@ -11,16 +11,21 @@ import (
 )
 
 type ProgressFacts struct {
-	RootID               int64
-	Model                string
-	Iteration            int
-	Status               SessionStatus
-	TodoItems            json.RawMessage
-	PromptTokens         int
-	CompletionTokens     int
-	CostUSD              float64
-	ChildCount           int
-	ChildIterations      int
+	RootID           int64
+	Model            string
+	Iteration        int
+	Status           SessionStatus
+	TodoItems        json.RawMessage
+	PromptTokens     int
+	CompletionTokens int
+	CostUSD          float64
+	ChildCount       int
+	ChildIterations  int
+	// ModelInputGeneration and ModelInputBoundary snapshot the causal chain a
+	// progress card belongs to; the note query only reads rows after the
+	// boundary so an older turn's narration can never serve a newer one.
+	ModelInputGeneration int64
+	ModelInputBoundary   int64
 	LatestModelProgress  string
 	EpisodeStartedAt     *time.Time
 	LastSemanticOutputAt *time.Time
@@ -42,6 +47,14 @@ type ProgressStore interface {
 	CaptureProgress(ctx context.Context, rootID int64) (*ProgressFacts, error)
 	ListAutonomousProgressRoots(ctx context.Context) ([]int64, error)
 	OutboxWatermark(ctx context.Context, sessionID int64) (int64, error)
+	// EnqueueProgressOutput commits one causal progress card: it succeeds only
+	// while the captured generation and status still own the session.
+	EnqueueProgressOutput(
+		ctx context.Context,
+		draft OutputDraft,
+		expectedGeneration int64,
+		expectedStatus SessionStatus,
+	) (*OutputCommit, error)
 }
 
 var _ ProgressStore = (*store)(nil)
@@ -55,10 +68,13 @@ func (s *store) CaptureProgress(ctx context.Context, rootID int64) (*ProgressFac
 
 	facts := &ProgressFacts{RootID: rootID}
 	var todos string
+	var boundary sql.NullInt64
 
-	err = tx.QueryRowContext(ctx, `SELECT model, iteration, status, todo_items
+	err = tx.QueryRowContext(ctx, `SELECT model, iteration, status, todo_items,
+		model_input_generation, model_input_boundary
 		FROM sessions WHERE id = ? AND parent_id = 0`, rootID).
-		Scan(&facts.Model, &facts.Iteration, &facts.Status, &todos)
+		Scan(&facts.Model, &facts.Iteration, &facts.Status, &todos,
+			&facts.ModelInputGeneration, &boundary)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrOutputNotRoot
 	}
@@ -68,6 +84,7 @@ func (s *store) CaptureProgress(ctx context.Context, rootID int64) (*ProgressFac
 	}
 
 	facts.TodoItems = json.RawMessage(todos)
+	facts.ModelInputBoundary = boundary.Int64
 
 	err = tx.QueryRowContext(ctx, `SELECT
 		COALESCE(SUM(json_extract(messages.usage, '$.promptTokens')), 0),
@@ -86,16 +103,23 @@ func (s *store) CaptureProgress(ctx context.Context, rootID int64) (*ProgressFac
 		return nil, fmt.Errorf("load progress child stats: %w", err)
 	}
 
-	var latest sql.NullString
+	// The current-generation note is the newest active assistant row after the
+	// generation boundary with non-empty text and a non-empty tool-call array.
+	// A boundaryless session (generation 0) has no note at all.
+	if facts.ModelInputBoundary > 0 {
+		var latest sql.NullString
 
-	err = tx.QueryRowContext(ctx, `SELECT content FROM messages WHERE session_id = ?
-		AND role = 'assistant' AND TRIM(COALESCE(content, '')) <> '' AND tool_calls IS NOT NULL
-		ORDER BY id DESC LIMIT 1`, rootID).Scan(&latest)
-	if err != nil && !errors.Is(err, sql.ErrNoRows) {
-		return nil, fmt.Errorf("load latest model progress: %w", err)
+		err = tx.QueryRowContext(ctx, `SELECT content FROM messages WHERE session_id = ?
+			AND role = 'assistant' AND id > ? AND compacted_at IS NULL
+			AND TRIM(COALESCE(content, '')) <> ''
+			AND json_type(tool_calls) = 'array' AND json_array_length(tool_calls) > 0
+			ORDER BY id DESC LIMIT 1`, rootID, facts.ModelInputBoundary).Scan(&latest)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return nil, fmt.Errorf("load latest model progress: %w", err)
+		}
+
+		facts.LatestModelProgress = latest.String
 	}
-
-	facts.LatestModelProgress = latest.String
 
 	if err := captureProgressTimes(ctx, tx, facts); err != nil {
 		return nil, err

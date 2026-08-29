@@ -184,24 +184,12 @@ func (s *svc) enqueueProgressSilence(
 	s.progressMu.Lock()
 	defer s.progressMu.Unlock()
 
-	previousID := facts.OutboxWatermark
-	sourceKey := "progress:silence:" + strconv.FormatInt(previousID, 10) + ":" +
-		strconv.FormatInt(deadline.Unix(), 10)
-	if existing, ok, err := s.existingProgressOutput(ctx, facts.RootID, sourceKey); err != nil {
+	sourceKey := "progress:silence:" + strconv.FormatInt(facts.OutboxWatermark, 10) + ":" +
+		strconv.FormatInt(deadline.Unix(), 10) + ":g" + strconv.FormatInt(facts.ModelInputGeneration, 10)
+	if _, ok, err := s.existingProgressOutput(ctx, facts.RootID, sourceKey); err != nil {
 		return err
 	} else if ok {
-		_ = existing
-
 		return nil
-	}
-
-	// A semantic fact committed after the capture owns the next card; publishing
-	// this silence revision would render facts it never saw.
-	if progressStore, ok := s.sessionStore.(sessionstore.ProgressStore); ok {
-		current, wmErr := progressStore.OutboxWatermark(ctx, facts.RootID)
-		if wmErr == nil && current != previousID {
-			return nil
-		}
 	}
 
 	snapshot, err := s.progressSnapshot(facts, observedAt)
@@ -216,29 +204,36 @@ func (s *svc) enqueueProgressSilence(
 	}
 	draft.Fingerprint = sessionstore.OutputFingerprint(draft.Type, draft.Content, draft.SessionID, attributes)
 
-	outputs, ok := s.sessionStore.(sessionstore.OutputStore)
+	store, ok := s.sessionStore.(sessionstore.ProgressStore)
 	if !ok {
 		return errors.New("progress output store unavailable")
 	}
 
-	_, err = outputs.EnqueueOutput(ctx, draft)
+	// Silence waits belong to the transition that captured them: a superseded
+	// silence card is simply dropped because the newer transition owns the next
+	// card. No recapture retry — the reconciler re-derives the deadline anyway.
+	if _, err := store.EnqueueProgressOutput(
+		ctx, draft, facts.ModelInputGeneration, facts.Status,
+	); err != nil && !errors.Is(err, sessionstore.ErrProgressSuperseded) {
+		return err
+	}
 
-	return err
+	return nil
 }
 
-func (s *svc) enqueueProgressChange(ctx context.Context, rootID int64) (string, error) {
+func (s *svc) enqueueProgressChange(ctx context.Context, rootID int64) (string, bool, error) {
 	store, ok := s.sessionStore.(sessionstore.ProgressStore)
 	if !ok {
-		return "", errors.New("progress store unavailable")
+		return "", false, errors.New("progress store unavailable")
 	}
 
 	facts, err := store.CaptureProgress(ctx, rootID)
 	if err != nil {
-		return "", err
+		return "", false, err
 	}
 
 	return s.enqueueProgressChangeFacts(
-		ctx, facts, "message:"+strconv.FormatInt(facts.MessageWatermark, 10),
+		ctx, facts, "message:"+strconv.FormatInt(facts.MessageWatermark, 10), true,
 	)
 }
 
@@ -246,20 +241,45 @@ func (s *svc) enqueueProgressChangeFacts(
 	ctx context.Context,
 	facts *sessionstore.ProgressFacts,
 	causalID string,
-) (string, error) {
+	recaptureOnSuperseded bool,
+) (string, bool, error) {
 	s.progressMu.Lock()
 	defer s.progressMu.Unlock()
 
-	sourceKey := "progress:change:" + causalID
+	content, published, err := s.tryEnqueueProgressChange(ctx, facts, causalID)
+	if err == nil || !errors.Is(err, sessionstore.ErrProgressSuperseded) || !recaptureOnSuperseded {
+		return content, published, err
+	}
+
+	store, ok := s.sessionStore.(sessionstore.ProgressStore)
+	if !ok {
+		return "", false, errors.New("progress store unavailable")
+	}
+
+	fresh, captureErr := store.CaptureProgress(ctx, facts.RootID)
+	if captureErr != nil {
+		return "", false, captureErr
+	}
+
+	return s.tryEnqueueProgressChange(ctx, fresh, causalID)
+}
+
+func (s *svc) tryEnqueueProgressChange(
+	ctx context.Context,
+	facts *sessionstore.ProgressFacts,
+	causalID string,
+) (string, bool, error) {
+	sourceKey := "progress:change:" + causalID +
+		":g" + strconv.FormatInt(facts.ModelInputGeneration, 10)
 	if existing, ok, err := s.existingProgressOutput(ctx, facts.RootID, sourceKey); err != nil {
-		return "", err
+		return "", false, err
 	} else if ok {
-		return existing.Content, nil
+		return existing.Content, true, nil
 	}
 
 	snapshot, err := s.progressSnapshot(facts, s.progressNow().UTC())
 	if err != nil {
-		return "", err
+		return "", false, err
 	}
 
 	content := progress.RenderCompact(snapshot, logger.Redact)
@@ -272,16 +292,18 @@ func (s *svc) enqueueProgressChangeFacts(
 	}
 	draft.Fingerprint = sessionstore.OutputFingerprint(draft.Type, draft.Content, facts.RootID, attributes)
 
-	outputs, ok := s.sessionStore.(sessionstore.OutputStore)
+	store, ok := s.sessionStore.(sessionstore.ProgressStore)
 	if !ok {
-		return "", errors.New("progress output store unavailable")
+		return "", false, errors.New("progress output store unavailable")
 	}
 
-	if _, err := outputs.EnqueueOutput(ctx, draft); err != nil {
-		return "", err
+	if _, err := store.EnqueueProgressOutput(
+		ctx, draft, facts.ModelInputGeneration, facts.Status,
+	); err != nil {
+		return "", false, err
 	}
 
-	return content, nil
+	return content, true, nil
 }
 
 //nolint:wsl_v5 // Optional capability and sentinel handling remain adjacent.

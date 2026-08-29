@@ -94,7 +94,7 @@ func validateProducerAttributes(kind OutputType, attributes map[string]any) erro
 	}
 
 	for key := range attributes {
-		if key == managerIDAttribute || key == "message_ids" {
+		if key == managerIDAttribute || key == "message_ids" || key == ModelInputGenerationAttribute {
 			return fmt.Errorf("output attributes may not set %q", key)
 		}
 

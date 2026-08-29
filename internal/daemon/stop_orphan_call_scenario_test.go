@@ -40,7 +40,7 @@ func TestScenario_StopOrdinaryBashDoesNotReplayAfterNewInputOrRestart(t *testing
 					first.mgr.HasActiveLoop(firstID)
 			})
 
-			require.NoError(t, first.mgr.Stop(first.ctx, firstID))
+			require.NoError(t, first.mgr.Stop(first.ctx, firstID, 0))
 			first.waitUntil("stop completed", func() bool {
 				rec, getErr := first.sessStore.GetSession(first.ctx, firstID)
 				return getErr == nil && rec.Status == sessionstore.SessionStatusStopped

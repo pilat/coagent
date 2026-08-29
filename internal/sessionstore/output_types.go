@@ -43,6 +43,10 @@ func (e *OutputRetryPendingError) Unwrap() error { return ErrNoOutput }
 
 const managerIDAttribute = "manager_id"
 
+// ModelInputGenerationAttribute is host-owned outbox metadata: producers cannot
+// set it, and it never enters semantic output fingerprints.
+const ModelInputGenerationAttribute = "model_input_generation"
+
 const killedReason = "killed"
 
 const (

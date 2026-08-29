@@ -85,6 +85,16 @@ func TestMigrate_SessionsAgentTypeRebuildPreservesExistingDB(t *testing.T) {
 		} else {
 			rowsBefore[i]["episode_started_at"] = sql.NullString{}
 		}
+		// 00028 backfills generation only for sessions with transcript history.
+		if rowsBefore[i]["id"].String == "1" {
+			assert.Equal(t, "1", rowsAfter[i]["model_input_generation"].String)
+			assert.Equal(t, "1", rowsAfter[i]["model_input_boundary"].String)
+		} else {
+			assert.Equal(t, "0", rowsAfter[i]["model_input_generation"].String)
+			assert.False(t, rowsAfter[i]["model_input_boundary"].Valid)
+		}
+		rowsBefore[i]["model_input_generation"] = rowsAfter[i]["model_input_generation"]
+		rowsBefore[i]["model_input_boundary"] = rowsAfter[i]["model_input_boundary"]
 		switch rowsBefore[i]["id"].String {
 		case "4":
 			assert.False(t, rowsBefore[i]["agent_type"].Valid, "row 4 was the legacy NULL root")

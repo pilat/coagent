@@ -111,7 +111,7 @@ func (t *outputTransport) renderMessage(
 	chunks := splitMessageChunks(textToTelegramHTML(claim.Content), maxMessageChunk)
 	previous := previousMessageIDs(claim)
 
-	editPrevious := claim.PreviousMessageType == controllerapi.OutputMessageReplaceable && len(previous) > 0
+	editPrevious := mayReusePreviousReceipts(claim) && len(previous) > 0
 	if !editPrevious {
 		return t.sendChunks(ctx, chunks, topicID)
 	}
@@ -209,4 +209,25 @@ func previousMessageIDs(claim *controllerapi.OutputClaimData) []string {
 	}
 
 	return ids
+}
+
+// mayReusePreviousReceipts compares only the persisted generations of the
+// adjacent outbox rows. Equal generations (or two legacy rows without one)
+// permit editing the previous replaceable receipt; any other pair — a changed
+// generation, or one row with a generation and one without — starts a new
+// external message.
+func mayReusePreviousReceipts(claim *controllerapi.OutputClaimData) bool {
+	if claim.PreviousMessageType != controllerapi.OutputMessageReplaceable {
+		return false
+	}
+
+	current, previous := claim.ModelInputGeneration, claim.PreviousModelInputGeneration
+	switch {
+	case current == nil && previous == nil:
+		return true
+	case current != nil && previous != nil:
+		return *current == *previous
+	default:
+		return false
+	}
 }

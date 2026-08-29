@@ -1,0 +1,98 @@
+{
+  "source_test": "TestHarnessScenario_ScheduledTurnChain",
+  "trace": [
+    {
+      "type": "session_created",
+      "name": "<name>",
+      "work_dir": "<workdir>",
+      "attributes": {
+        "manager_id": "telegram:main"
+      }
+    },
+    {
+      "type": "state_changed",
+      "status": "running"
+    },
+    {
+      "type": "message",
+      "message": "Hi there."
+    },
+    {
+      "type": "session_created",
+      "name": "<name>",
+      "work_dir": "<workdir>",
+      "attributes": {
+        "manager_id": "telegram:main"
+      }
+    },
+    {
+      "type": "state_changed",
+      "status": "running"
+    },
+    {
+      "type": "message",
+      "message": "Report ready."
+    },
+    {
+      "type": "state_changed",
+      "status": "idle"
+    }
+  ],
+  "claims": [
+    {
+      "type": "session_opened",
+      "content": "",
+      "attributes": {
+        "manager_id": "telegram:main",
+        "name": "002",
+        "work_dir": "<workdir>"
+      },
+      "source_key": "session:1:opened",
+      "releases_input": false
+    },
+    {
+      "type": "message_persistent",
+      "content": "Hi there.",
+      "attributes": {
+        "manager_id": "telegram:main",
+        "model_input_generation": 1
+      },
+      "source_key": "message:2:final",
+      "model_input_generation": 1,
+      "releases_input": true
+    },
+    {
+      "type": "message_persistent",
+      "content": "⏰ scheduled\n\nproduce the weekly report",
+      "attributes": {
+        "manager_id": "telegram:main",
+        "model_input_generation": 2,
+        "source": "scheduler"
+      },
+      "source_key": "schedule:delivery-chain-1:announcement",
+      "model_input_generation": 2,
+      "previous_message_type": "message_persistent",
+      "previous_model_input_generation": 1,
+      "previous_message_ids": [
+        "<msg-1>"
+      ],
+      "releases_input": false
+    },
+    {
+      "type": "message_persistent",
+      "content": "Report ready.",
+      "attributes": {
+        "manager_id": "telegram:main",
+        "model_input_generation": 2
+      },
+      "source_key": "message:5:final",
+      "model_input_generation": 2,
+      "previous_message_type": "message_persistent",
+      "previous_model_input_generation": 2,
+      "previous_message_ids": [
+        "<msg-2>"
+      ],
+      "releases_input": true
+    }
+  ]
+}

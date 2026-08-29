@@ -157,6 +157,42 @@ func outputSessionAttributes(ctx context.Context, tx *sql.Tx, sessionID int64) (
 	return attributes, nil
 }
 
+// sessionModelInputGeneration reads the causal generation a message output must
+// snapshot. It must run inside the inserting transaction so an advancement that
+// commits alongside the row is observed.
+func sessionModelInputGeneration(ctx context.Context, tx *sql.Tx, sessionID int64) (int64, error) {
+	var generation int64
+	if err := tx.QueryRowContext(ctx,
+		`SELECT model_input_generation FROM sessions WHERE id = ?`, sessionID).Scan(&generation); err != nil {
+		return 0, fmt.Errorf("load model input generation: %w", err)
+	}
+
+	return generation, nil
+}
+
+// stampMessageOutputAttributes builds host-owned attributes for one message
+// output: the manager owner and the current model-input generation. The
+// generation is deliberately excluded from fingerprints — a source-key replay
+// returns the originally stored row and generation, never a recomputed one.
+func stampMessageOutputAttributes(
+	ctx context.Context,
+	tx *sql.Tx,
+	sessionID int64,
+	owner string,
+	producer map[string]any,
+) (map[string]any, error) {
+	generation, err := sessionModelInputGeneration(ctx, tx, sessionID)
+	if err != nil {
+		return nil, err
+	}
+
+	attributes := cloneAttributes(producer)
+	attributes[managerIDAttribute] = owner
+	attributes[ModelInputGenerationAttribute] = generation
+
+	return attributes, nil
+}
+
 func previousDeliveredMessage(ctx context.Context, tx *sql.Tx, sessionID, outputID int64) (*OutputRecord, error) {
 	record, err := scanOutputRecord(tx.QueryRowContext(ctx, `SELECT `+outputColumns+` FROM session_outbox
 		WHERE session_id = ? AND id < ? AND state = 'delivered'

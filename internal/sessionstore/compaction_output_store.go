@@ -70,7 +70,12 @@ func (s *store) CompleteCompactionInput(
 		return nil, nil, err
 	}
 
-	attributes, err := json.Marshal(map[string]any{managerIDAttribute: owner})
+	attributes, err := stampMessageOutputAttributes(ctx, tx, sessionID, owner, nil)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	encoded, err := json.Marshal(attributes)
 	if err != nil {
 		return nil, nil, fmt.Errorf("marshal compaction output attributes: %w", err)
 	}
@@ -81,7 +86,7 @@ func (s *store) CompleteCompactionInput(
 	result, err = tx.ExecContext(ctx, `INSERT INTO session_outbox
 		(session_id, type, content, attributes, source_key, fingerprint, created_at)
 		VALUES (?, 'message_persistent', ?, ?, ?, ?, ?)`,
-		sessionID, content, string(attributes), key, fingerprint, now)
+		sessionID, content, string(encoded), key, fingerprint, now)
 	if err != nil {
 		return nil, nil, fmt.Errorf("insert compaction outcome: %w", err)
 	}

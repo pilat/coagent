@@ -35,6 +35,12 @@ type OutputClaimData struct {
 	PreviousMessageAttributes map[string]any `json:"previous_message_attributes,omitempty"`
 	PreviousMessageType       string         `json:"previous_message_type,omitempty"`
 	ReleasesInput             bool           `json:"releases_input"`
+	// ModelInputGeneration snapshots this row's insertion-time generation.
+	// Presence-bearing: nil is legacy absence, while zero is a valid value.
+	ModelInputGeneration *int64 `json:"model_input_generation,omitempty"`
+	// PreviousModelInputGeneration snapshots the preceding delivered message
+	// output's generation with the same nil-means-legacy rule.
+	PreviousModelInputGeneration *int64 `json:"previous_model_input_generation,omitempty"`
 }
 
 type ProgressData struct {

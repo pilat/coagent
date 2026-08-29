@@ -178,7 +178,12 @@ func handleReplacementInput(ctx context.Context, tx *sql.Tx, inputID, sessionID 
 }
 
 func insertClearNotice(ctx context.Context, tx *sql.Tx, sessionID, inputID int64, owner string, now time.Time) error {
-	attrs, err := json.Marshal(map[string]any{managerIDAttribute: owner})
+	attributes, err := stampMessageOutputAttributes(ctx, tx, sessionID, owner, nil)
+	if err != nil {
+		return err
+	}
+
+	attrs, err := json.Marshal(attributes)
 	if err != nil {
 		return fmt.Errorf("marshal clear output attributes: %w", err)
 	}
@@ -273,7 +278,12 @@ func insertMessageOutput(
 	now time.Time,
 	releasesInput bool,
 ) (*OutputCommit, error) {
-	encoded, err := json.Marshal(map[string]any{managerIDAttribute: owner})
+	attributes, err := stampMessageOutputAttributes(ctx, tx, sessionID, owner, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	encoded, err := json.Marshal(attributes)
 	if err != nil {
 		return nil, fmt.Errorf("marshal message output attributes: %w", err)
 	}

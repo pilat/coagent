@@ -1,0 +1,62 @@
+{
+  "source_test": "TestHarnessScenario_LiveStopChain",
+  "trace": [
+    {
+      "type": "session_created",
+      "name": "<name>",
+      "work_dir": "<workdir>",
+      "attributes": {
+        "manager_id": "telegram:main"
+      }
+    },
+    {
+      "type": "state_changed",
+      "status": "running"
+    },
+    {
+      "type": "state_changed",
+      "status": "idle",
+      "reason": "stopped"
+    }
+  ],
+  "claims": [
+    {
+      "type": "session_opened",
+      "content": "",
+      "attributes": {
+        "manager_id": "telegram:main",
+        "name": "002",
+        "work_dir": "<workdir>"
+      },
+      "source_key": "session:1:opened",
+      "releases_input": false
+    },
+    {
+      "type": "message_replaceable",
+      "content": "⏳ Stopping…",
+      "attributes": {
+        "manager_id": "telegram:main",
+        "model_input_generation": 1
+      },
+      "source_key": "input:2:stop:started",
+      "model_input_generation": 1,
+      "releases_input": false
+    },
+    {
+      "type": "message_persistent",
+      "content": "⏸️ Session stopped",
+      "attributes": {
+        "manager_id": "telegram:main",
+        "model_input_generation": 1
+      },
+      "source_key": "input:2:stop:completed",
+      "model_input_generation": 1,
+      "previous_message_type": "message_replaceable",
+      "previous_model_input_generation": 1,
+      "previous_message_ids": [
+        "<msg-1>"
+      ],
+      "releases_input": true
+    }
+  ]
+}

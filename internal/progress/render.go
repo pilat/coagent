@@ -3,28 +3,40 @@ package progress
 import (
 	"fmt"
 	"math"
+	"strconv"
 	"strings"
-	"unicode/utf8"
 )
 
-const latestExcerptRunes = 512
+const todoHint = "ℹ️ `/status` shows the full TODO list"
 
 func RenderCompact(snapshot Snapshot, redact func(string) string) string {
-	return render(snapshot, redact, false)
-}
-
-func RenderFull(snapshot Snapshot, redact func(string) string) string {
-	return render(snapshot, redact, true)
-}
-
-func RenderFooter(snapshot Snapshot, redact func(string) string) string {
 	if redact == nil {
 		redact = func(value string) string { return value }
 	}
 
-	var lines []string
-	if len(snapshot.Todos) > 0 {
-		lines = renderTodos(snapshot.Todos, redact)
+	lines := []string{"**" + cardTitle(snapshot) + "**"}
+
+	if note := strings.TrimSpace(redact(snapshot.LatestModelProgress)); note != "" {
+		lines = append(lines, "", note)
+	}
+
+	if snapshot.Model != "" {
+		lines = append(lines, "", fmt.Sprintf("🤖 `%s` · iteration %d", snapshot.Model, snapshot.RootIteration))
+	}
+
+	if metrics := renderCardMetrics(snapshot); metrics != "" {
+		lines = append(lines, metrics)
+	}
+
+	if len(snapshot.Waiting) > 0 {
+		lines = append(
+			lines,
+			fmt.Sprintf("⏳ Waiting on %d item%s", len(snapshot.Waiting), plural(len(snapshot.Waiting))),
+		)
+	}
+
+	if todoBlock := renderCardTodos(snapshot.Todos); len(todoBlock) > 0 {
+		lines = append(lines, todoBlock...)
 	}
 
 	if snapshot.Budget != nil {
@@ -34,7 +46,7 @@ func RenderFooter(snapshot Snapshot, redact func(string) string) string {
 	return strings.Join(lines, "\n")
 }
 
-func render(snapshot Snapshot, redact func(string) string, full bool) string {
+func RenderFull(snapshot Snapshot, redact func(string) string) string {
 	if redact == nil {
 		redact = func(value string) string { return value }
 	}
@@ -59,8 +71,8 @@ func render(snapshot Snapshot, redact func(string) string, full bool) string {
 	}
 
 	lines = append(lines, renderTodos(snapshot.Todos, redact)...)
-	if excerpt := excerpt(redact(snapshot.LatestModelProgress)); excerpt != "" {
-		lines = append(lines, "- Latest agent note: "+excerpt)
+	if note := strings.TrimSpace(redact(snapshot.LatestModelProgress)); note != "" {
+		lines = append(lines, "- Latest agent note: "+note)
 	}
 
 	if len(snapshot.Waiting) > 0 {
@@ -71,19 +83,116 @@ func render(snapshot Snapshot, redact func(string) string, full bool) string {
 		lines = append(lines, renderBudget(*snapshot.Budget))
 	}
 
-	if full {
-		lines = append(
-			lines,
-			fmt.Sprintf("- Children: %d · child iterations %d", snapshot.ChildCount, snapshot.ChildIterations),
-			fmt.Sprintf(
-				"- Observed: %s · revision `%s`",
-				snapshot.ObservedAt.UTC().Format("2006-01-02 15:04:05 UTC"),
-				snapshot.Revision,
-			),
-		)
-	}
+	lines = append(
+		lines,
+		fmt.Sprintf("- Children: %d · child iterations %d", snapshot.ChildCount, snapshot.ChildIterations),
+		fmt.Sprintf(
+			"- Observed: %s · revision `%s`",
+			snapshot.ObservedAt.UTC().Format("2006-01-02 15:04:05 UTC"),
+			snapshot.Revision,
+		),
+	)
 
 	return strings.Join(lines, "\n")
+}
+
+// RenderFooter is the final-output tail: TODO summaries only, then the budget
+// line separated by one blank line. No TODO summary is produced when no list
+// exists.
+func RenderFooter(snapshot Snapshot, redact func(string) string) string {
+	var parts []string
+	if summary := renderTodoSummary(snapshot.Todos); summary != "" {
+		parts = append(parts, summary)
+	}
+
+	if snapshot.Budget != nil {
+		parts = append(parts, renderBudget(*snapshot.Budget))
+	}
+
+	return strings.Join(parts, "\n\n")
+}
+
+// cardTitle precedence: a fired budget outranks waiting, which outranks working.
+// Armed and released budgets never select the budget title.
+func cardTitle(snapshot Snapshot) string {
+	if snapshot.Budget != nil && snapshot.Budget.State == "fired" {
+		return "🛑 Budget reached"
+	}
+
+	if len(snapshot.Waiting) > 0 {
+		return "⏳ Waiting"
+	}
+
+	return "⚙️ Working"
+}
+
+// renderCardMetrics joins only the available fragments; the whole line
+// disappears when nothing is measurable.
+func renderCardMetrics(snapshot Snapshot) string {
+	var fragments []string
+
+	if snapshot.EpisodeElapsed != nil {
+		fragments = append(fragments, "⏱ "+snapshot.EpisodeElapsed.Round(1e9).String())
+	}
+
+	if snapshot.Lifetime.Available && !math.IsNaN(snapshot.Lifetime.CostUSD) &&
+		!math.IsInf(snapshot.Lifetime.CostUSD, 0) {
+		fragments = append(fragments, "💰 $"+formatUSD(snapshot.Lifetime.CostUSD)+" total")
+	}
+
+	if snapshot.Context.Available && snapshot.Context.Max > 0 {
+		prefix := ""
+		if snapshot.Context.Approximate {
+			prefix = "~"
+		}
+
+		percent := float64(snapshot.Context.Used) * 100 / float64(snapshot.Context.Max)
+		fragments = append(fragments, fmt.Sprintf("🧠 context %s%.0f%%", prefix, percent))
+	}
+
+	return strings.Join(fragments, " · ")
+}
+
+// renderCardTodos renders counts only — item text belongs to /status.
+func renderCardTodos(items []TodoItem) []string {
+	if len(items) == 0 {
+		return nil
+	}
+
+	active, remaining, done, cancelled := Snapshot{Todos: items}.TodoCounts()
+
+	line := fmt.Sprintf("📋 TODO · %d active · %d remaining · %d done", active, remaining, done)
+	if cancelled > 0 {
+		line += fmt.Sprintf(" · %d cancelled", cancelled)
+	}
+
+	return []string{line, todoHint}
+}
+
+// renderTodoSummary is the final-output TODO tail. An empty list appends
+// nothing; finished work reads as success, unfinished work points at /status.
+func renderTodoSummary(items []TodoItem) string {
+	if len(items) == 0 {
+		return ""
+	}
+
+	active, remaining, done, cancelled := Snapshot{Todos: items}.TodoCounts()
+
+	if remaining == 0 {
+		summary := fmt.Sprintf("✅ TODO complete · %d done", done)
+		if cancelled > 0 {
+			summary += fmt.Sprintf(" · %d cancelled", cancelled)
+		}
+
+		return summary
+	}
+
+	summary := fmt.Sprintf("📋 TODO · %d active · %d remaining · %d done", active, remaining, done)
+	if cancelled > 0 {
+		summary += fmt.Sprintf(" · %d cancelled", cancelled)
+	}
+
+	return summary + " · /status shows the full list"
 }
 
 func renderContext(value Context) string {
@@ -115,9 +224,13 @@ func renderTodos(items []TodoItem, redact func(string) string) []string {
 		return []string{"- TODO: no TODO is declared"}
 	}
 
-	current, completed, remaining := Snapshot{Todos: items}.TodoCounts()
+	active, remaining, done, cancelled := Snapshot{Todos: items}.TodoCounts()
 
-	lines := []string{fmt.Sprintf("- TODO: %d current · %d completed · %d remaining", current, completed, remaining)}
+	lines := []string{fmt.Sprintf("- TODO: %d active · %d remaining · %d done", active, remaining, done)}
+	if cancelled > 0 {
+		lines[0] += fmt.Sprintf(" · %d cancelled", cancelled)
+	}
+
 	for _, item := range items {
 		lines = append(lines, fmt.Sprintf("  - [%s] %s", item.Status, redact(item.Content)))
 	}
@@ -148,13 +261,21 @@ func renderBudget(value Budget) string {
 	return line
 }
 
-func excerpt(value string) string {
-	value = strings.TrimSpace(value)
-	if utf8.RuneCountInString(value) <= latestExcerptRunes {
-		return value
+// formatUSD renders at most six decimals with trailing zeroes trimmed while
+// always keeping one decimal digit, so costs never read as integers.
+func formatUSD(value float64) string {
+	fixed := strings.TrimRight(strconv.FormatFloat(value, 'f', 6, 64), "0")
+	if strings.HasSuffix(fixed, ".") {
+		return fixed + "0"
 	}
 
-	runes := []rune(value)
+	return fixed
+}
 
-	return string(runes[:latestExcerptRunes]) + "…"
+func plural(count int) string {
+	if count == 1 {
+		return ""
+	}
+
+	return "s"
 }

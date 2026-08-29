@@ -113,7 +113,7 @@ func TestStopParksWholeTreeAndExplicitFollowUpResumesOnlyChild(t *testing.T) {
 	_, err = mgr.inboxStore.EnqueueInput(ctx, childID, sessionstore.InputSourceAgent, "not consumed")
 	require.NoError(t, err)
 
-	require.NoError(t, mgr.Stop(ctx, parent.ID))
+	require.NoError(t, mgr.Stop(ctx, parent.ID, 0))
 
 	for _, id := range []int64{parent.ID, childID} {
 		rec, getErr := mgr.sessionStore.GetSession(ctx, id)
@@ -157,7 +157,7 @@ func TestStopParksActiveDescendantBelowCompletedChild(t *testing.T) {
 	require.NoError(t, mgr.sessionStore.UpdateSessionStatus(ctx, completedID, sessionstore.SessionStatusCompleted))
 	activeID := createBackgroundChild(t, mgr, projectID, completedID)
 
-	require.NoError(t, mgr.Stop(ctx, root.ID))
+	require.NoError(t, mgr.Stop(ctx, root.ID, 0))
 
 	completed, err := mgr.sessionStore.GetSession(ctx, completedID)
 	require.NoError(t, err)
@@ -179,7 +179,7 @@ func TestStopDirectChildParksItsOwnLinkWithoutStoppingParent(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	require.NoError(t, mgr.Stop(ctx, childID))
+	require.NoError(t, mgr.Stop(ctx, childID, 0))
 
 	parentRec, err := mgr.sessionStore.GetSession(ctx, parent.ID)
 	require.NoError(t, err)
