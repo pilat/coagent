@@ -20,6 +20,9 @@ const (
 	llmRetryWarnThreshold = 3
 	maxRetryAttempts      = 6
 	defaultModelTimeout   = 10 * time.Minute
+	// One full-length attempt plus retries; without it a provider that hangs
+	// ~7 min per attempt (empty choices) burns 6 × timeout before giving up.
+	retryBudgetMultiplier = 2
 )
 
 type retryableClient struct {
@@ -28,6 +31,7 @@ type retryableClient struct {
 	maxDelay      time.Duration
 	warnThreshold int
 	timeout       time.Duration // per-request deadline applied to each attempt
+	budget        time.Duration // wall-clock cap over the whole retry loop
 }
 
 var _ Client = (*retryableClient)(nil)
@@ -43,6 +47,7 @@ func newRetryableClient(inner Client, timeout time.Duration) Client {
 		maxDelay:      llmRetryMaxDelay,
 		warnThreshold: llmRetryWarnThreshold,
 		timeout:       timeout,
+		budget:        retryBudgetMultiplier * timeout,
 	}
 }
 
@@ -54,6 +59,9 @@ func (r *retryableClient) Chat(
 	opts ...llmwire.ChatOption,
 ) (*llmwire.Response, error) {
 	var lastErr error
+
+	loopCtx, cancel := context.WithTimeout(ctx, r.budget)
+	defer cancel()
 
 	for attempt := range maxRetryAttempts {
 		if attempt > 0 {
@@ -68,13 +76,18 @@ func (r *retryableClient) Chat(
 			}
 
 			select {
-			case <-ctx.Done():
-				return nil, ctx.Err()
+			case <-loopCtx.Done():
+				if ctx.Err() != nil {
+					return nil, ctx.Err() // caller cancelled — propagate, don't reclassify
+				}
+
+				// Budget spent mid-wait — the provider error is the real cause.
+				return nil, lastErr
 			case <-time.After(delay):
 			}
 		}
 
-		resp, err := r.callOnce(ctx, systemPrompt, messages, tools, opts...)
+		resp, err := r.callOnce(loopCtx, systemPrompt, messages, tools, opts...)
 		if err == nil {
 			return resp, nil
 		}
@@ -83,6 +96,13 @@ func (r *retryableClient) Chat(
 
 		if ctx.Err() != nil {
 			return nil, ctx.Err() // caller cancelled — propagate, don't reclassify
+		}
+
+		if loopCtx.Err() != nil {
+			logger.Ctx(ctx).Named("llm.client").
+				Warn("retry_budget_exhausted", zap.Int("attempts", attempt+1), zap.Duration("budget", r.budget), zap.Error(lastErr))
+
+			return nil, lastErr
 		}
 
 		if !r.shouldRetry(err) {
@@ -134,7 +154,8 @@ func (r *retryableClient) SetSessionID(id string) {
 }
 
 // callOnce runs a single attempt under the per-request model timeout. The deadline
-// is per attempt, not shared across retries.
+// is per attempt, but bounded by the caller-facing retry budget: the effective
+// deadline of an attempt is min(timeout, budget remaining).
 func (r *retryableClient) callOnce(
 	ctx context.Context,
 	systemPrompt string,

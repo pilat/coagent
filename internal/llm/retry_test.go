@@ -8,6 +8,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"github.com/pilat/coagent/internal/llmwire"
 )
 
@@ -185,6 +188,57 @@ func TestRetryableClient_GivesUpAfterMaxAttempts(t *testing.T) {
 	if inner.chatCalls != maxRetryAttempts {
 		t.Errorf("expected exactly %d attempts, got %d", maxRetryAttempts, inner.chatCalls)
 	}
+}
+
+func TestRetryableClient_BudgetStopsRetries(t *testing.T) {
+	// An expired budget must stop the loop after the current attempt and surface
+	// the provider error, not spin through remaining attempts on a dead context.
+	inner := &mockClient{
+		chatResponses: []*llmwire.Response{nil},
+		chatErrors:    []error{errors.New("503 service unavailable")},
+	}
+
+	client := newRetryableClient(inner, 0).(*retryableClient)
+	client.budget = -1 * time.Second // already expired
+
+	_, err := client.Chat(context.Background(), "", nil, nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "503")
+	assert.Equal(t, 1, inner.chatCalls)
+}
+
+func TestRetryableClient_BudgetExpiryDuringBackoff(t *testing.T) {
+	inner := &mockClient{
+		chatResponses: []*llmwire.Response{nil},
+		chatErrors:    []error{errors.New("503 service unavailable")},
+	}
+
+	client := newRetryableClient(inner, 0).(*retryableClient)
+	client.baseDelay = 5 * time.Second
+	client.maxDelay = 5 * time.Second
+	client.budget = 50 * time.Millisecond
+
+	_, err := client.Chat(context.Background(), "", nil, nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "503")
+	assert.Equal(t, 1, inner.chatCalls)
+}
+
+func TestRetryableClient_FastFailuresUseFullAttemptCap(t *testing.T) {
+	// The budget (2 × per-attempt timeout) must not cut short the standard
+	// backoff ladder for fast-failing errors — all attempts still happen.
+	inner := &mockClient{
+		chatResponses: []*llmwire.Response{nil},
+		chatErrors:    []error{errors.New("503 service unavailable")},
+	}
+
+	client := newRetryableClient(inner, 0).(*retryableClient)
+	client.baseDelay = 1 * time.Millisecond
+	client.maxDelay = 1 * time.Millisecond
+
+	_, err := client.Chat(context.Background(), "", nil, nil)
+	require.Error(t, err)
+	assert.Equal(t, maxRetryAttempts, inner.chatCalls)
 }
 
 func TestRetryableClient_NonRetryableError(t *testing.T) {
