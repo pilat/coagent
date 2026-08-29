@@ -51,7 +51,12 @@ func (s *store) InsertAssistantMessageWithOutput(
 	releasesInput := outputType == OutputMessagePersistent
 	fingerprint := outputFingerprintWithRelease(outputType, content, sessionID, nil, releasesInput)
 
-	attributes, err := json.Marshal(map[string]any{managerIDAttribute: owner})
+	attributes, err := stampMessageOutputAttributes(ctx, tx, sessionID, owner, nil)
+	if err != nil {
+		return 0, nil, err
+	}
+
+	encoded, err := json.Marshal(attributes)
 	if err != nil {
 		return 0, nil, fmt.Errorf("marshal assistant output attributes: %w", err)
 	}
@@ -60,7 +65,7 @@ func (s *store) InsertAssistantMessageWithOutput(
 		INSERT INTO session_outbox
 			(session_id, type, content, attributes, source_key, fingerprint, created_at, releases_input)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-		sessionID, outputType, content, string(attributes), key, fingerprint, time.Now().UTC(), releasesInput)
+		sessionID, outputType, content, string(encoded), key, fingerprint, time.Now().UTC(), releasesInput)
 	if err != nil {
 		return 0, nil, fmt.Errorf("insert assistant output: %w", err)
 	}
@@ -88,6 +93,20 @@ func (s *store) EnqueueOutput(ctx context.Context, draft OutputDraft) (*OutputCo
 	}
 	defer func() { _ = tx.Rollback() }()
 
+	commit, err := enqueueOutputTx(ctx, tx, draft)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("commit output: %w", err)
+	}
+
+	return commit, nil
+}
+
+//nolint:dupl // EnqueueOutput and EnqueueProgressOutput differ only in their eligibility gate.
+func enqueueOutputTx(ctx context.Context, tx *sql.Tx, draft OutputDraft) (*OutputCommit, error) {
 	owner, err := outputOwner(ctx, tx, draft.SessionID)
 	if err != nil {
 		return nil, err
@@ -103,6 +122,13 @@ func (s *store) EnqueueOutput(ctx context.Context, draft OutputDraft) (*OutputCo
 
 	attributes := cloneAttributes(draft.Attributes)
 	attributes[managerIDAttribute] = owner
+
+	if isMessageOutput(draft.Type) {
+		attributes, err = stampMessageOutputAttributes(ctx, tx, draft.SessionID, owner, draft.Attributes)
+		if err != nil {
+			return nil, err
+		}
+	}
 
 	encoded, err := json.Marshal(attributes)
 	if err != nil {
@@ -124,10 +150,6 @@ func (s *store) EnqueueOutput(ctx context.Context, draft OutputDraft) (*OutputCo
 		id, idErr := result.LastInsertId()
 		if idErr != nil {
 			return nil, fmt.Errorf("output id: %w", idErr)
-		}
-
-		if commitErr := tx.Commit(); commitErr != nil {
-			return nil, fmt.Errorf("commit output: %w", commitErr)
 		}
 
 		return &OutputCommit{OutputID: id, OwnerID: owner}, nil
@@ -220,6 +242,13 @@ func (s *store) HandleInputWithOutput(
 
 	attributes := cloneAttributes(draft.Attributes)
 	attributes[managerIDAttribute] = owner
+
+	if isMessageOutput(draft.Type) {
+		attributes, err = stampMessageOutputAttributes(ctx, tx, draft.SessionID, owner, draft.Attributes)
+		if err != nil {
+			return nil, err
+		}
+	}
 
 	encoded, err := json.Marshal(attributes)
 	if err != nil {

@@ -234,3 +234,93 @@ func missingFirstEditClient(t *testing.T, ops *[]chunkOperation) *http.Client {
 		return harnessResponse(req, `{"ok":true,"result":{"message_id":500}}`), nil
 	})}
 }
+
+func TestMayReusePreviousReceiptsByAdjacentGenerations(t *testing.T) {
+	current := int64(3)
+	older := int64(2)
+
+	tests := []struct {
+		name     string
+		claim    *controllerapi.OutputClaimData
+		expected bool
+	}{
+		{
+			name:     "both legacy rows keep the legacy rule",
+			claim:    &controllerapi.OutputClaimData{PreviousMessageType: "message_replaceable"},
+			expected: true,
+		},
+		{
+			name: "equal generations edit",
+			claim: &controllerapi.OutputClaimData{
+				PreviousMessageType:          "message_replaceable",
+				ModelInputGeneration:         &current,
+				PreviousModelInputGeneration: &current,
+			},
+			expected: true,
+		},
+		{
+			name: "changed generation sends new",
+			claim: &controllerapi.OutputClaimData{
+				PreviousMessageType:          "message_replaceable",
+				ModelInputGeneration:         &current,
+				PreviousModelInputGeneration: &older,
+			},
+			expected: false,
+		},
+		{
+			name: "mixed legacy and current rows send new",
+			claim: &controllerapi.OutputClaimData{
+				PreviousMessageType:          "message_replaceable",
+				ModelInputGeneration:         &current,
+				PreviousModelInputGeneration: nil,
+			},
+			expected: false,
+		},
+		{
+			name: "mixed current predecessor and legacy row sends new",
+			claim: &controllerapi.OutputClaimData{
+				PreviousMessageType:          "message_replaceable",
+				ModelInputGeneration:         nil,
+				PreviousModelInputGeneration: &older,
+			},
+			expected: false,
+		},
+		{
+			name: "persistent predecessor never edits",
+			claim: &controllerapi.OutputClaimData{
+				PreviousMessageType:          "message_persistent",
+				ModelInputGeneration:         &current,
+				PreviousModelInputGeneration: &current,
+			},
+			expected: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.expected, mayReusePreviousReceipts(tt.claim))
+		})
+	}
+}
+
+func TestOutputTransport_ChangedGenerationSendsNewChunks(t *testing.T) {
+	var ops []chunkOperation
+	manager := newTelegramHarnessManager(t, &fakeController{}, new([]telegramHarnessCall))
+	manager.registerTopic(42, harnessTopicID)
+	manager.httpClient = chunkClient(t, &ops)
+	transport := &outputTransport{manager: manager}
+
+	current := int64(2)
+	previous := int64(1)
+
+	result := transport.Deliver(t.Context(), outputItem(&controllerapi.OutputClaimData{
+		SessionID: 42, Type: "message_replaceable", Content: "new chain",
+		PreviousMessageType:          "message_replaceable",
+		PreviousMessageAttributes:    map[string]any{"message_ids": []any{"111"}},
+		ModelInputGeneration:         &current,
+		PreviousModelInputGeneration: &previous,
+	}))
+	require.Empty(t, result.Error)
+	assert.Equal(t, []string{"500"}, result.MessageIDs)
+	assert.Equal(t, []chunkOperation{{Method: "sendMessage", MessageID: 500}}, ops)
+}

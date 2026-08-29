@@ -46,7 +46,7 @@ func (s SessionStatus) valid() bool {
 	}
 }
 
-const sessionColumns = `id, project_id, model, reasoning_level, master_enabled, attributes, agent_type, parent_id, iteration, status, todo_items, created_at, updated_at, killed_at, root_id`
+const sessionColumns = `id, project_id, model, reasoning_level, master_enabled, attributes, agent_type, parent_id, iteration, status, todo_items, created_at, updated_at, killed_at, root_id, model_input_generation, model_input_boundary`
 
 // errSessionNotFound signals a lookup query matched no row.
 var errSessionNotFound = errors.New("session not found")
@@ -68,6 +68,13 @@ type SessionRecord struct {
 	CreatedAt      time.Time
 	UpdatedAt      time.Time
 	KilledAt       *time.Time
+	// ModelInputGeneration is the monotonic generation advanced only when
+	// model-bound input enters conversation history; zero means no generated
+	// input has ever been committed for this session.
+	ModelInputGeneration int64
+	// ModelInputBoundary is the transcript message ID at which the current
+	// generation began. Nil only on sessions with generation 0 and no history.
+	ModelInputBoundary *int64
 }
 
 // StoredMessage represents a row in the messages table.
@@ -237,6 +244,7 @@ type Store interface { //nolint:interfacebloat // Complete constructor result; c
 	ModelInputStore
 	ProgressStore
 	ReadinessStore
+	StopCompletionStore
 }
 
 var (
@@ -256,6 +264,7 @@ var (
 	_ ModelInputStore       = (*store)(nil)
 	_ ProgressStore         = (*store)(nil)
 	_ ReadinessStore        = (*store)(nil)
+	_ StopCompletionStore   = (*store)(nil)
 )
 
 type store struct {
@@ -1089,10 +1098,12 @@ func scanSessionFrom(sc rowScanner) (*SessionRecord, error) {
 	var masterEnabled sql.NullBool
 	var projectID, parentID, iteration, rootID sql.NullInt64
 	var killedAt sql.NullTime
+	var boundary sql.NullInt64
 
 	err := sc.Scan(&rec.ID, &projectID, &model, &reasoning, &masterEnabled, &attrsRaw,
 		&agentType, &parentID, &iteration, &status, &todoItems,
-		&rec.CreatedAt, &rec.UpdatedAt, &killedAt, &rootID)
+		&rec.CreatedAt, &rec.UpdatedAt, &killedAt, &rootID,
+		&rec.ModelInputGeneration, &boundary)
 	if err != nil {
 		return nil, fmt.Errorf("scan session: %w", err)
 	}
@@ -1112,6 +1123,10 @@ func scanSessionFrom(sc rowScanner) (*SessionRecord, error) {
 
 	if killedAt.Valid {
 		rec.KilledAt = &killedAt.Time
+	}
+
+	if boundary.Valid {
+		rec.ModelInputBoundary = &boundary.Int64
 	}
 
 	return &rec, nil

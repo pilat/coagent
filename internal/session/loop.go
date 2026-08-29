@@ -205,15 +205,22 @@ func (r *loopRunner) handlePreviousResult(ctx context.Context) (bool, error) {
 			message := "🔄 " + state.Text
 
 			if provider, ok := r.agent.boundary.(progressChangeBoundary); ok {
-				var err error
+				var published bool
+				var progressErr error
 
-				message, err = provider.ProgressChange(ctx)
-				if err != nil {
-					return false, fmt.Errorf("enqueue model progress snapshot: %w", err)
+				message, published, progressErr = provider.ProgressChange(ctx)
+				if progressErr != nil && !errors.Is(progressErr, sessionstore.ErrProgressSuperseded) {
+					return false, fmt.Errorf("enqueue model progress snapshot: %w", progressErr)
+				}
+
+				if !published {
+					message = ""
 				}
 			}
 
-			r.notify(ctx, message)
+			if message != "" {
+				r.notify(ctx, message)
+			}
 		}
 
 		r.log.Info("executing_pending_tools", zap.Int("count", len(state.PendingTools)))

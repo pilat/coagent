@@ -65,20 +65,26 @@ type Snapshot struct {
 	LastSemanticOutputAt *time.Time
 }
 
-//nolint:nonamedreturns // Three same-typed counters are ambiguous without names.
-func (s Snapshot) TodoCounts() (current, completed, remaining int) {
+// TodoCounts applies the operator-visible arithmetic: active counts only
+// in_progress, remaining counts everything not finished (pending, in_progress,
+// and any unknown persisted status), done counts completed, and cancelled is
+// reported separately so a cancelled item never reads as success.
+//
+//nolint:nonamedreturns // Four same-typed counters are ambiguous without names.
+func (s Snapshot) TodoCounts() (active, remaining, done, cancelled int) {
 	for _, item := range s.Todos {
 		switch item.Status {
-		case "completed", "cancelled":
-			completed++
+		case "completed":
+			done++
+		case "cancelled":
+			cancelled++
+		case "in_progress":
+			active++
+			remaining++
 		default:
 			remaining++
-
-			if item.Status == "in_progress" {
-				current++
-			}
 		}
 	}
 
-	return current, completed, remaining
+	return active, remaining, done, cancelled
 }

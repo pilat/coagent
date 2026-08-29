@@ -94,6 +94,63 @@
       "calls": null
     },
     {
+      "trace": "compact_success_chain.json",
+      "source_test": "TestHarnessScenario_CompactSuccessChain",
+      "calls": [
+        {
+          "method": "createForumTopic",
+          "chat_id": -100123
+        },
+        {
+          "method": "editForumTopic",
+          "chat_id": -100123,
+          "thread_id": 7001
+        },
+        {
+          "method": "sendMessage",
+          "chat_id": -100123,
+          "thread_id": 7001,
+          "text": "First answer.",
+          "parse_mode": "HTML"
+        },
+        {
+          "method": "editForumTopic",
+          "chat_id": -100123,
+          "thread_id": 7001
+        },
+        {
+          "method": "sendMessage",
+          "chat_id": -100123,
+          "thread_id": 7001,
+          "text": "🔄 Compacting context...",
+          "parse_mode": "HTML"
+        },
+        {
+          "method": "editForumTopic",
+          "chat_id": -100123,
+          "thread_id": 7001
+        },
+        {
+          "method": "editMessageText",
+          "chat_id": -100123,
+          "text": "✅ Context compacted",
+          "parse_mode": "HTML"
+        },
+        {
+          "method": "editForumTopic",
+          "chat_id": -100123,
+          "thread_id": 7001
+        },
+        {
+          "method": "sendMessage",
+          "chat_id": -100123,
+          "thread_id": 7001,
+          "text": "<b>⚙️ Working</b>\n\n🤖 <code>fake-model</code> · iteration 1\n⏱ &lt;elapsed&gt; · 💰 $0.0 total",
+          "parse_mode": "HTML"
+        }
+      ]
+    },
+    {
       "trace": "foreground_followup_no_sleep.json",
       "source_test": "TestHarnessScenario_ForegroundChildContinuesWithoutSleep",
       "calls": [
@@ -185,6 +242,51 @@
       ]
     },
     {
+      "trace": "output_chain_reported_order.json",
+      "source_test": "TestHarnessScenario_OutputChainReportedOrder",
+      "calls": [
+        {
+          "method": "createForumTopic",
+          "chat_id": -100123
+        },
+        {
+          "method": "editForumTopic",
+          "chat_id": -100123,
+          "thread_id": 7001
+        },
+        {
+          "method": "sendMessage",
+          "chat_id": -100123,
+          "thread_id": 7001,
+          "text": "<b>⚙️ Working</b>\n\nReading the repo\n\n🤖 <code>fake-model</code> · iteration 1\n⏱ &lt;elapsed&gt; · 💰 $0.0 total",
+          "parse_mode": "HTML"
+        },
+        {
+          "method": "editForumTopic",
+          "chat_id": -100123,
+          "thread_id": 7001
+        },
+        {
+          "method": "sendMessage",
+          "chat_id": -100123,
+          "thread_id": 7001,
+          "text": "<b>⚙️ Working</b>\n\n🤖 <code>fake-model</code> · iteration 2\n⏱ &lt;elapsed&gt; · 💰 $0.0 total",
+          "parse_mode": "HTML"
+        },
+        {
+          "method": "editForumTopic",
+          "chat_id": -100123,
+          "thread_id": 7001
+        },
+        {
+          "method": "editMessageText",
+          "chat_id": -100123,
+          "text": "All done.",
+          "parse_mode": "HTML"
+        }
+      ]
+    },
+    {
       "trace": "scatter_gather_shrinking_wait_set.json",
       "source_test": "TestHarnessScenario_ForegroundScatterGatherProjectsShrinkingAllWaitSet",
       "calls": [
@@ -235,6 +337,52 @@
           "method": "editMessageText",
           "chat_id": -100123,
           "text": "all children delivered",
+          "parse_mode": "HTML"
+        }
+      ]
+    },
+    {
+      "trace": "scheduled_turn_chain.json",
+      "source_test": "TestHarnessScenario_ScheduledTurnChain",
+      "calls": [
+        {
+          "method": "createForumTopic",
+          "chat_id": -100123
+        },
+        {
+          "method": "editForumTopic",
+          "chat_id": -100123,
+          "thread_id": 7001
+        },
+        {
+          "method": "sendMessage",
+          "chat_id": -100123,
+          "thread_id": 7001,
+          "text": "Hi there.",
+          "parse_mode": "HTML"
+        },
+        {
+          "method": "editForumTopic",
+          "chat_id": -100123,
+          "thread_id": 7001
+        },
+        {
+          "method": "sendMessage",
+          "chat_id": -100123,
+          "thread_id": 7001,
+          "text": "⏰ scheduled\n\nproduce the weekly report",
+          "parse_mode": "HTML"
+        },
+        {
+          "method": "editForumTopic",
+          "chat_id": -100123,
+          "thread_id": 7001
+        },
+        {
+          "method": "sendMessage",
+          "chat_id": -100123,
+          "thread_id": 7001,
+          "text": "Report ready.",
           "parse_mode": "HTML"
         }
       ]
@@ -312,6 +460,135 @@
           "method": "editMessageText",
           "chat_id": -100123,
           "text": "sleep interruption handled",
+          "parse_mode": "HTML"
+        }
+      ]
+    },
+    {
+      "trace": "stop_interrupted_chain.json",
+      "source_test": "TestHarnessScenario_InterruptedStopChain",
+      "calls": [
+        {
+          "method": "createForumTopic",
+          "chat_id": -100123
+        },
+        {
+          "method": "sendMessage",
+          "chat_id": -100123,
+          "thread_id": 7001,
+          "text": "⏳ Stopping…",
+          "parse_mode": "HTML"
+        },
+        {
+          "method": "editForumTopic",
+          "chat_id": -100123,
+          "thread_id": 7001
+        },
+        {
+          "method": "editMessageText",
+          "chat_id": -100123,
+          "text": "⏸️ Session stopped",
+          "parse_mode": "HTML"
+        }
+      ]
+    },
+    {
+      "trace": "stop_live_chain.json",
+      "source_test": "TestHarnessScenario_LiveStopChain",
+      "calls": [
+        {
+          "method": "createForumTopic",
+          "chat_id": -100123
+        },
+        {
+          "method": "editForumTopic",
+          "chat_id": -100123,
+          "thread_id": 7001
+        },
+        {
+          "method": "sendMessage",
+          "chat_id": -100123,
+          "thread_id": 7001,
+          "text": "⏳ Stopping…",
+          "parse_mode": "HTML"
+        },
+        {
+          "method": "editForumTopic",
+          "chat_id": -100123,
+          "thread_id": 7001
+        },
+        {
+          "method": "editMessageText",
+          "chat_id": -100123,
+          "text": "⏸️ Session stopped",
+          "parse_mode": "HTML"
+        }
+      ]
+    },
+    {
+      "trace": "stop_then_fresh_turn.json",
+      "source_test": "TestHarnessScenario_LaterFreshTurnAfterStop",
+      "calls": [
+        {
+          "method": "createForumTopic",
+          "chat_id": -100123
+        },
+        {
+          "method": "editForumTopic",
+          "chat_id": -100123,
+          "thread_id": 7001
+        },
+        {
+          "method": "sendMessage",
+          "chat_id": -100123,
+          "thread_id": 7001,
+          "text": "<b>⚙️ Working</b>\n\nWorking on it\n\n🤖 <code>fake-model</code> · iteration 1\n⏱ &lt;elapsed&gt; · 💰 $0.0 total",
+          "parse_mode": "HTML"
+        },
+        {
+          "method": "editForumTopic",
+          "chat_id": -100123,
+          "thread_id": 7001
+        },
+        {
+          "method": "editMessageText",
+          "chat_id": -100123,
+          "text": "Working on it, done for now.",
+          "parse_mode": "HTML"
+        },
+        {
+          "method": "editForumTopic",
+          "chat_id": -100123,
+          "thread_id": 7001
+        },
+        {
+          "method": "sendMessage",
+          "chat_id": -100123,
+          "thread_id": 7001,
+          "text": "⏳ Stopping…",
+          "parse_mode": "HTML"
+        },
+        {
+          "method": "editForumTopic",
+          "chat_id": -100123,
+          "thread_id": 7001
+        },
+        {
+          "method": "editMessageText",
+          "chat_id": -100123,
+          "text": "⏸️ Session stopped",
+          "parse_mode": "HTML"
+        },
+        {
+          "method": "editForumTopic",
+          "chat_id": -100123,
+          "thread_id": 7001
+        },
+        {
+          "method": "sendMessage",
+          "chat_id": -100123,
+          "thread_id": 7001,
+          "text": "Resumed and done.",
           "parse_mode": "HTML"
         }
       ]

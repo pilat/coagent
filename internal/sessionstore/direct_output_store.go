@@ -50,6 +50,14 @@ func (s *store) InsertToolResultWithDirectOutput(
 		return 0, nil, err
 	}
 
+	// Fail closed behind a stop/kill fence: no late direct output may appear
+	// below the stop result, even when its tool result still settles.
+	if len(directMessages) > 0 {
+		if err := outputSessionWritable(ctx, tx, sessionID); err != nil {
+			return 0, nil, err
+		}
+	}
+
 	messageID, err := insertToolResultOnce(ctx, tx, sessionID, message)
 	if err != nil {
 		return 0, nil, err
@@ -141,7 +149,12 @@ func insertDirectOutput(
 	index int,
 	content string,
 ) (*OutputCommit, error) {
-	attributes, err := json.Marshal(map[string]any{managerIDAttribute: owner})
+	attributes, err := stampMessageOutputAttributes(ctx, tx, sessionID, owner, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	encoded, err := json.Marshal(attributes)
 	if err != nil {
 		return nil, fmt.Errorf("marshal direct output attributes: %w", err)
 	}
@@ -152,7 +165,7 @@ func insertDirectOutput(
 	result, err := tx.ExecContext(ctx, `INSERT INTO session_outbox
 		(session_id, type, content, attributes, source_key, fingerprint, created_at)
 		VALUES (?, 'message_persistent', ?, ?, ?, ?, ?)`,
-		sessionID, content, string(attributes), sourceKey, fingerprint, time.Now().UTC())
+		sessionID, content, string(encoded), sourceKey, fingerprint, time.Now().UTC())
 	if err == nil {
 		id, idErr := result.LastInsertId()
 		return &OutputCommit{OutputID: id, OwnerID: owner}, idErr

@@ -152,11 +152,24 @@ _Avoid_: treating "running" (runtime) and "active" (persisted) as the same word.
 A session→controller event — a message chunk, a state change, a heartbeat (`sessionevent.Notification`, delivered as `controllerapi.SessionNotification`). Only *root* sessions have them: `svc.publish` drops every event whose session is a subagent. Manager subscriptions additionally receive only events whose durable manager owner matches their ID; daemon-internal observers may inspect all root events. The bare type name "Notification" is overloaded elsewhere (LSP JSON-RPC, tool notifications), so qualify it as a *session event*.
 _Avoid_: bare "Notification".
 
+**model-input generation**:
+The session-local monotonic counter (plus its transcript boundary message ID)
+that advances atomically only when model-bound input enters conversation
+history — ordinary inbox promotion and standalone scheduled-turn injection.
+Pending inbox input, tool results, external-call completions, compaction, and
+host-handled commands never advance it. Every manager message output snapshots
+the current generation as host-owned outbox metadata in its insertion
+transaction; progress narration is scoped to rows after the boundary.
+_Avoid_: iteration (loop counter), activation sequence (subagent delivery CAS).
+
 **replaceable output**:
 A durable manager-output message that may reuse the external message identities
-of the immediately preceding replaceable output. A following persistent output
-may reuse those identities once and closes the replaceable chain. Managers whose
-transport cannot edit append a new rendering instead.
+of the immediately preceding replaceable output only when both adjacent rows
+carry the same model-input generation — or both carry none under the legacy
+rule. A changed or mixed generation starts a new external message. A following
+same-generation persistent output may reuse those identities once and closes
+the replaceable chain. Managers whose transport cannot edit append a new
+rendering instead.
 _Avoid_: manager replacement, cursor.
 
 **persistent output**:

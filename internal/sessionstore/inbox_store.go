@@ -265,6 +265,10 @@ func (s *store) promoteInput(
 		return nil, nil, err
 	}
 
+	if err := advanceModelInputGeneration(ctx, tx, input.SessionID, msg.ID); err != nil {
+		return nil, nil, err
+	}
+
 	if err := tx.Commit(); err != nil {
 		return nil, nil, fmt.Errorf("commit promote input %d: %w", inputID, err)
 	}

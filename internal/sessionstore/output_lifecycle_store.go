@@ -12,6 +12,9 @@ import (
 // lifecycleKill mirrors the daemon's canonical /kill command name.
 const lifecycleKill = "kill"
 
+// lifecycleStop mirrors the daemon's canonical /stop command name.
+const lifecycleStop = "stop"
+
 // BeginLifecycleInput records the durable fence before the runner is cancelled.
 // The command comes from the daemon's central classification, not from re-parsing
 // stored content here.
@@ -88,6 +91,10 @@ func (s *store) BeginLifecycleInput(
 	return &OutputCommit{OutputID: outputID, OwnerID: owner}, nil
 }
 
+// insertLifecycleAcknowledgement writes the command's visible start. /stop gets
+// a replaceable, non-releasing start row that a later terminal completion
+// transaction edits into the final result; other lifecycle commands keep the
+// persistent releasing acknowledgement.
 func insertLifecycleAcknowledgement(
 	ctx context.Context,
 	tx *sql.Tx,
@@ -95,17 +102,31 @@ func insertLifecycleAcknowledgement(
 	command, content, owner string,
 	now time.Time,
 ) (int64, error) {
-	attributes, err := json.Marshal(map[string]any{managerIDAttribute: owner})
+	attributes, err := stampMessageOutputAttributes(ctx, tx, sessionID, owner, nil)
+	if err != nil {
+		return 0, err
+	}
+
+	encoded, err := json.Marshal(attributes)
 	if err != nil {
 		return 0, fmt.Errorf("marshal lifecycle input attributes: %w", err)
 	}
 
+	kind := OutputMessagePersistent
+	releases := true
 	key := fmt.Sprintf("input:%d:%s:result", inputID, command)
-	fingerprint := outputFingerprintWithRelease(OutputMessagePersistent, content, sessionID, nil, true)
+
+	if command == lifecycleStop {
+		kind = OutputMessageReplaceable
+		releases = false
+		key = fmt.Sprintf("input:%d:stop:started", inputID)
+	}
+
+	fingerprint := outputFingerprintWithRelease(kind, content, sessionID, nil, releases)
 
 	result, err := tx.ExecContext(ctx, `
 		INSERT INTO session_outbox (session_id, type, content, attributes, source_key, fingerprint, created_at, releases_input)
-		VALUES (?, 'message_persistent', ?, ?, ?, ?, ?, 1)`, sessionID, content, string(attributes), key, fingerprint, now)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, sessionID, kind, content, string(encoded), key, fingerprint, now, releases)
 	if err != nil {
 		return 0, fmt.Errorf("insert lifecycle acknowledgement: %w", err)
 	}

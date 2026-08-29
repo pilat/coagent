@@ -803,7 +803,7 @@ func TestManager_StopCancelsPendingSleepButPreservesScheduledWork(t *testing.T) 
 	)
 	require.NoError(t, err)
 
-	require.NoError(t, mgr.Stop(ctx, sessionID))
+	require.NoError(t, mgr.Stop(ctx, sessionID, 0))
 
 	pendingSleeps, err := schedule.NewService(schedStore).PendingSleeps(ctx, sessionID)
 	require.NoError(t, err)

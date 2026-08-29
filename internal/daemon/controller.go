@@ -113,9 +113,26 @@ func (c *controller) ClaimOutput(ctx context.Context) (*controllerapi.OutputClai
 	if claim.PreviousDeliveredOutput != nil {
 		data.PreviousMessageAttributes = claim.PreviousDeliveredOutput.Attributes
 		data.PreviousMessageType = string(claim.PreviousDeliveredOutput.Type)
+		data.PreviousModelInputGeneration = generationFromAttributes(claim.PreviousDeliveredOutput.Attributes)
 	}
 
+	data.ModelInputGeneration = generationFromAttributes(claim.Output.Attributes)
+
 	return data, nil
+}
+
+// generationFromAttributes extracts the host-stamped model-input generation.
+// JSON decoding makes stored numbers float64; absence stays nil so legacy rows
+// remain distinguishable from a real generation zero.
+func generationFromAttributes(attributes map[string]any) *int64 {
+	value, ok := attributes[sessionstore.ModelInputGenerationAttribute].(float64)
+	if !ok {
+		return nil
+	}
+
+	generation := int64(value)
+
+	return &generation
 }
 
 func (c *controller) CurrentProgress(

@@ -54,6 +54,10 @@ func (s *store) InsertToolNotificationPairOnce(
 		return 0, 0, false, fmt.Errorf("insert idempotent tool result: %w", err)
 	}
 
+	if err := advanceModelInputGeneration(ctx, tx, sessionID, resultID); err != nil {
+		return 0, 0, false, err
+	}
+
 	if err := insertScheduledOutput(ctx, tx, sessionID, deliveryID, toolResult.Content); err != nil {
 		return 0, 0, false, err
 	}
@@ -75,6 +79,15 @@ func (s *store) ResetSessionContextOnce(
 		return nil, false, errors.New("reset session context requires an opening turn")
 	}
 
+	return s.resetSessionContextTx(ctx, sessionID, deliveryID, fingerprint, opening)
+}
+
+func (s *store) resetSessionContextTx(
+	ctx context.Context,
+	sessionID int64,
+	deliveryID, fingerprint string,
+	opening []*StoredMessage,
+) ([]int64, bool, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, false, fmt.Errorf("begin context reset: %w", err)
@@ -135,6 +148,10 @@ func (s *store) ResetSessionContextOnce(
 		return nil, false, fmt.Errorf("session %d not found during context reset", sessionID)
 	}
 
+	if err := advanceModelInputGeneration(ctx, tx, sessionID, ids[len(ids)-1]); err != nil {
+		return nil, false, err
+	}
+
 	if err := insertScheduledOutput(ctx, tx, sessionID, deliveryID, opening[len(opening)-1].Content); err != nil {
 		return nil, false, err
 	}
@@ -184,9 +201,18 @@ func insertScheduledOutput(ctx context.Context, tx *sql.Tx, sessionID int64, del
 		return nil
 	}
 
-	attrs := map[string]any{managerIDAttribute: owner, "source": outputSourceScheduler}
+	attributes, err := stampMessageOutputAttributes(
+		ctx,
+		tx,
+		sessionID,
+		owner,
+		map[string]any{"source": outputSourceScheduler},
+	)
+	if err != nil {
+		return err
+	}
 
-	encodedAttrs, err := json.Marshal(attrs)
+	encodedAttrs, err := json.Marshal(attributes)
 	if err != nil {
 		return fmt.Errorf("marshal scheduled output attributes: %w", err)
 	}

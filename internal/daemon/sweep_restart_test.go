@@ -183,7 +183,7 @@ func TestScenario_StoppedChildSurvivesARestartWithoutResurrection(t *testing.T) 
 	link := first.waitForChildLink(parentID)
 	first.waitUntil("child loop is live", func() bool { return first.mgr.HasActiveLoop(link.ChildID) })
 
-	require.NoError(t, first.mgr.Stop(first.ctx, link.ChildID))
+	require.NoError(t, first.mgr.Stop(first.ctx, link.ChildID, 0))
 
 	parked, err := first.links.GetLink(first.ctx, link.ChildID)
 	require.NoError(t, err)

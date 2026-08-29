@@ -432,7 +432,9 @@ func (s *svc) Start(ctx context.Context) error {
 
 	// /stop is a durable two-phase park. If the process died after writing
 	// stopping, finish the same idempotent operation before any recovery sweep can
-	// restart work from that tree.
+	// restart work from that tree. An explicit stop whose terminal output is still
+	// owed converges to the same completion transaction; other stopping trees
+	// finish silently as before.
 	records, err := s.sessionStore.ListAllSessions(ctx)
 	if err != nil {
 		return fmt.Errorf("list sessions for stop recovery: %w", err)
@@ -446,13 +448,64 @@ func (s *svc) Start(ctx context.Context) error {
 		}
 	}
 
+	owedStops := make(map[int64]int64)
+
+	completionStore, completionStoreOK := s.sessionStore.(sessionstore.StopCompletionStore)
+	if completionStoreOK {
+		stops, selectErr := completionStore.SelectInterruptedExplicitStops(ctx)
+		if selectErr != nil {
+			return fmt.Errorf("select interrupted explicit stops: %w", selectErr)
+		}
+
+		for _, stop := range stops {
+			owedStops[stop.SessionID] = stop.InputID
+		}
+	}
+
+	return s.finishStoppingRoots(ctx, records, stopping, owedStops)
+}
+
+// finishStoppingRoots completes every interrupted stop before ordinary resume:
+// stopping trees finish their cleanup (and owed terminal output), while a
+// stopped root whose fence committed through the non-explicit fallback gets the
+// idempotent terminal transaction so its start receipt never strands.
+func (s *svc) finishStoppingRoots(
+	ctx context.Context,
+	records []*sessionstore.SessionRecord,
+	stopping map[int64]bool,
+	owedStops map[int64]int64,
+) error {
 	for _, rec := range records {
 		if !stopping[rec.ID] || stopping[rec.ParentID] {
 			continue
 		}
 
-		if err := s.stopTreeCleanup(ctx, rec.ID); err != nil {
+		if inputID, owed := owedStops[rec.ID]; owed {
+			if err := s.stopTreeCleanup(ctx, rec.ID, true); err != nil {
+				return fmt.Errorf("recover stopping session %d: %w", rec.ID, err)
+			}
+
+			if err := s.completeExplicitStop(ctx, rec.ID, inputID); err != nil {
+				return fmt.Errorf("recover explicit stop for session %d: %w", rec.ID, err)
+			}
+
+			continue
+		}
+
+		if err := s.stopTreeCleanup(ctx, rec.ID, false); err != nil {
 			return fmt.Errorf("recover stopping session %d: %w", rec.ID, err)
+		}
+	}
+
+	for _, rec := range records {
+		if rec.Status != sessionstore.SessionStatusStopped {
+			continue
+		}
+
+		if inputID, owed := owedStops[rec.ID]; owed {
+			if err := s.completeExplicitStop(ctx, rec.ID, inputID); err != nil {
+				return fmt.Errorf("converge explicit stop for session %d: %w", rec.ID, err)
+			}
 		}
 	}
 

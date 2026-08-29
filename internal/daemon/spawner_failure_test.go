@@ -90,7 +90,7 @@ func TestStopRejectsSpawnQueuedBehindDurableBoundary(t *testing.T) {
 	})
 
 	stopDone := make(chan error, 1)
-	go func() { stopDone <- h.mgr.Stop(context.Background(), root.ID) }()
+	go func() { stopDone <- h.mgr.Stop(context.Background(), root.ID, 0) }()
 
 	requireBarrierSignal(t, lock.attempted, "stop did not attempt the admission boundary")
 	lock.permit <- struct{}{}
@@ -122,7 +122,7 @@ func TestSpawnRejectsStoppedParent(t *testing.T) {
 
 	root, err := h.sessStore.CreateSession(h.ctx, h.projectID, "fake-model", "", nil)
 	require.NoError(t, err)
-	require.NoError(t, h.mgr.Stop(context.Background(), root.ID))
+	require.NoError(t, h.mgr.Stop(context.Background(), root.ID, 0))
 
 	_, err = h.mgr.Spawn(h.ctx, spawnRequest{ParentID: root.ID, AgentType: "general", Prompt: "x"})
 	require.ErrorContains(t, err, "not accepting subagents")

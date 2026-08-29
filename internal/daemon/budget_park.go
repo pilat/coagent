@@ -37,7 +37,7 @@ func (s *svc) parkBudgetTree(ctx context.Context, record *sessionstore.BudgetRec
 		}
 	}
 
-	if err := s.stopTreeCleanup(ctx, record.RootSessionID); err != nil {
+	if err := s.stopTreeCleanup(ctx, record.RootSessionID, false); err != nil {
 		logger.Ctx(ctx).Named("daemon.budget").Warn("park_cleanup_failed", zap.Error(err))
 		return
 	}

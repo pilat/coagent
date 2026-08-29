@@ -66,7 +66,7 @@ type progressInputBoundary interface {
 }
 
 type progressChangeBoundary interface {
-	ProgressChange(context.Context) (string, error)
+	ProgressChange(context.Context) (content string, published bool, err error)
 }
 
 type finalOutputBoundary interface {

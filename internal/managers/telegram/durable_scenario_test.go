@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"strconv"
 	"testing"
 	"time"
 
@@ -33,10 +34,15 @@ func TestHarnessScenario_DaemonTraceDeliversThroughDurableOutbox(t *testing.T) {
 	got := telegramRenderedFile{}
 	for _, name := range names {
 		trace := readDaemonTrace(t, name)
+		calls := replayDaemonTraceThroughOutbox(t, trace)
+		if len(trace.Claims) > 0 {
+			calls = replayProductionClaims(t, trace)
+		}
+
 		got.Scenarios = append(got.Scenarios, telegramRenderedScenario{
 			Trace:      name,
 			SourceTest: trace.SourceTest,
-			Calls:      replayDaemonTraceThroughOutbox(t, trace),
+			Calls:      calls,
 		})
 	}
 
@@ -280,4 +286,93 @@ func newDurableReplayStore(t *testing.T) (sessionstore.Store, int64) {
 	}))
 
 	return store, root.ID
+}
+
+// replayProductionClaims feeds the recorded production OutputClaimData sequence
+// straight through the production output transport. Nothing is reconstructed:
+// the claims carry their insertion-time generations, so the transport itself
+// makes every edit-versus-send decision the manager would have made live.
+func replayProductionClaims(t *testing.T, trace harnessTraceFile) []telegramHarnessCall {
+	t.Helper()
+
+	if len(trace.Claims) == 0 {
+		return nil
+	}
+
+	var calls []telegramHarnessCall
+	manager := newTelegramHarnessManager(t, &fakeController{}, &calls)
+	transport := &outputTransport{manager: manager}
+
+	resolved := map[string][]string{}
+	var lastDelivered []string
+
+	// materialize maps one recorded receipt placeholder to real message ids:
+	// the placeholder of the previous claim resolves to that claim's own
+	// delivery result; anything unknown is created as a fresh real message so
+	// edit targets always exist.
+	materialize := func(placeholders []string) []string {
+		ids := make([]string, 0, len(placeholders))
+		for _, placeholder := range placeholders {
+			if resolvedIDs, ok := resolved[placeholder]; ok {
+				ids = append(ids, resolvedIDs...)
+
+				continue
+			}
+
+			if lastDelivered != nil {
+				resolved[placeholder] = lastDelivered
+				ids = append(ids, lastDelivered...)
+
+				continue
+			}
+
+			id, err := manager.sendMessageChunk(context.Background(), "recorded receipt", nil, harnessTopicID)
+			require.NoError(t, err)
+			resolved[placeholder] = []string{fmtRS(id)}
+			ids = append(ids, fmtRS(id))
+		}
+
+		return ids
+	}
+
+	for _, claim := range trace.Claims {
+		data := &controllerapi.OutputClaimData{
+			Type:                         claim.Type,
+			Content:                      claim.Content,
+			Attributes:                   claim.Attributes,
+			SourceKey:                    claim.SourceKey,
+			ModelInputGeneration:         claim.ModelInputGeneration,
+			PreviousMessageType:          claim.PreviousMessageType,
+			PreviousModelInputGeneration: claim.PreviousModelInputGeneration,
+			ReleasesInput:                claim.ReleasesInput,
+			SessionAttributes:            map[string]any{"manager_id": traceOwner(trace)},
+		}
+		if len(claim.PreviousMessageIDs) > 0 {
+			data.PreviousMessageAttributes = map[string]any{
+				"message_ids": toAnySlice(materialize(claim.PreviousMessageIDs)),
+			}
+		}
+
+		result := transport.Deliver(context.Background(), &managerdelivery.Item{
+			ID: 1, AttemptID: "replay", Attempts: 1, Payload: data,
+		})
+		require.Empty(t, result.Error, "recorded production claims must deliver cleanly")
+
+		lastDelivered = result.MessageIDs
+	}
+
+	return calls
+}
+
+func fmtRS(id int64) string {
+	return strconv.FormatInt(id, 10)
+}
+
+func toAnySlice(values []string) []any {
+	out := make([]any, len(values))
+	for i, value := range values {
+		out[i] = value
+	}
+
+	return out
 }

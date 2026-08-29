@@ -475,8 +475,10 @@ func (s *svc) recordWaitingProgress(
 		return fmt.Errorf("capture progress: %w", err)
 	}
 
-	if _, err := s.enqueueProgressChangeFacts(ctx, facts, "waiting:"+hash); err != nil &&
-		!errors.Is(err, sessionstore.ErrOutputOwner) {
+	// A stale waiting card is dropped without a recapture retry: the newer
+	// transition that moved the generation owns the next card.
+	if _, _, err := s.enqueueProgressChangeFacts(ctx, facts, "waiting:"+hash, false); err != nil &&
+		!errors.Is(err, sessionstore.ErrProgressSuperseded) && !errors.Is(err, sessionstore.ErrOutputOwner) {
 		return fmt.Errorf("enqueue progress: %w", err)
 	}
 
@@ -653,13 +655,19 @@ func (s *svc) ensureSessionRunner(ctx context.Context, sessionID int64) error {
 }
 
 // reportSessionUnstarted tells the controller a session could not start and parks
-// it idle. Shared so every pre-run failure reads identically to the user.
+// it idle. Shared so every pre-run failure reads identically to the user. A
+// canceled context is a shutdown, not a session failure: restart will resume the
+// work, so no error receipt is published.
 func (s *svc) reportSessionUnstarted(
 	ctx context.Context,
 	sessionID int64,
 	notify func(sessionevent.Notification),
 	err error,
 ) {
+	if ctx.Err() != nil {
+		return
+	}
+
 	message := fmt.Sprintf(
 		"⚠️ Session error: %s\n\nThe session is still alive — send a message to retry.",
 		logger.Redact(err.Error()),
@@ -982,7 +990,7 @@ func (s *svc) openSession(
 
 				return current.Rendered, nil
 			},
-			progressChange: func(ctx context.Context) (string, error) {
+			progressChange: func(ctx context.Context) (string, bool, error) {
 				return s.enqueueProgressChange(ctx, sessionID)
 			},
 			finalOutput: func(ctx context.Context, text string) (string, error) {

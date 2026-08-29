@@ -66,14 +66,19 @@ func (s *store) UpdateSessionIterationWithOutput(
 		return nil, err
 	}
 
-	attributes, err := json.Marshal(map[string]any{managerIDAttribute: owner})
+	attributes, err := stampMessageOutputAttributes(ctx, tx, sessionID, owner, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	encoded, err := json.Marshal(attributes)
 	if err != nil {
 		return nil, fmt.Errorf("marshal state output attributes: %w", err)
 	}
 
 	result, err = tx.ExecContext(ctx, `INSERT INTO session_outbox
 		(session_id, type, content, attributes, created_at, releases_input)
-		VALUES (?, 'message_persistent', ?, ?, ?, 1)`, sessionID, content, string(attributes), now)
+		VALUES (?, 'message_persistent', ?, ?, ?, 1)`, sessionID, content, string(encoded), now)
 	if err != nil {
 		return nil, fmt.Errorf("insert state output: %w", err)
 	}

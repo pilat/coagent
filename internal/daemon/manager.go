@@ -39,7 +39,7 @@ type Service interface {
 	CancelSecretRequest(ctx context.Context, requestID string) error
 	PendingSecretRequests(sessionID int64) []sessionevent.Notification
 	Kill(ctx context.Context, sessionID int64) error
-	Stop(ctx context.Context, sessionID int64) error
+	Stop(ctx context.Context, sessionID, inputID int64) error
 	Clear(ctx context.Context, sessionID int64) (int64, error)
 	SetModel(ctx context.Context, sessionID int64, model, reasoningLevel string) error
 	SetAttributes(ctx context.Context, sessionID int64, attrs map[string]any) error
@@ -398,11 +398,11 @@ func (s *svc) handleGenericCommand(ctx context.Context, input *sessionstore.Inbo
 			return true, s.handleStoppedStop(ctx, input)
 		}
 
-		if err := s.handleLifecycleInput(ctx, input, "⏹ Stopping..."); err != nil {
+		if err := s.handleLifecycleInput(ctx, input, "⏳ Stopping…"); err != nil {
 			return true, err
 		}
 
-		return true, s.Stop(ctx, input.SessionID)
+		return true, s.Stop(ctx, input.SessionID, input.ID)
 	case clearCommand:
 		if _, err := s.clear(ctx, input.SessionID, input.ID); err != nil {
 			return true, err
@@ -639,7 +639,12 @@ func (s *svc) Kill(ctx context.Context, sessionID int64) error {
 // result, and accepted-but-unconsumed input is cancelled. Recurring schedules
 // remain installed. A later root message resumes only the root; a stopped child
 // requires an explicit send_to_subagent follow-up.
-func (s *svc) Stop(ctx context.Context, sessionID int64) error {
+//
+// An explicit manager-owned /stop (inputID > 0) leaves its root in `stopping`
+// after cleanup and commits the durable terminal output in one transaction with
+// the budget release and the final stopped status. A failure before that
+// commit leaves the root stopping and publishes no success.
+func (s *svc) Stop(ctx context.Context, sessionID, inputID int64) error {
 	record, getErr := s.sessionStore.GetSession(ctx, sessionID)
 	if getErr != nil {
 		// Fail closed: an unread session must not be classified as ownerless,
@@ -650,16 +655,28 @@ func (s *svc) Stop(ctx context.Context, sessionID int64) error {
 		record = nil
 	}
 
-	s.publish(sessionID, sessionevent.Notification{
-		Type:    sessionevent.NotifyMessage,
-		Message: "⏹ Stopping...",
-	})
+	explicit := inputID > 0 && record != nil && !ownerlessSession(record)
 
-	if err := s.stopTreeCleanup(ctx, sessionID); err != nil {
+	if !explicit {
+		s.publish(sessionID, sessionevent.Notification{
+			Type:    sessionevent.NotifyMessage,
+			Message: "⏹ Stopping...",
+		})
+	}
+
+	if err := s.stopTreeCleanup(ctx, sessionID, explicit); err != nil {
 		return err
 	}
 
+	if explicit {
+		return s.completeExplicitStop(ctx, sessionID, inputID)
+	}
+
 	if err := s.releaseArmedBudget(ctx, sessionID, "stopped"); err != nil {
+		return err
+	}
+
+	if err := s.convergeOrphanedStopStart(ctx, sessionID, inputID); err != nil {
 		return err
 	}
 
@@ -672,11 +689,63 @@ func (s *svc) Stop(ctx context.Context, sessionID int64) error {
 	return nil
 }
 
+// convergeOrphanedStopStart finishes the terminal fact when the stop fence
+// committed a start row before the ownership check could classify the stop.
+// Without it a replaceable "Stopping…" receipt would stay dangling with no
+// recovery path, because startup only converges roots still in `stopping`.
+//
+//nolint:funcorder // completes the stop transition documented above.
+func (s *svc) convergeOrphanedStopStart(ctx context.Context, sessionID, inputID int64) error {
+	if inputID <= 0 {
+		return nil
+	}
+
+	record, recordErr := s.sessionStore.GetSession(ctx, sessionID)
+	// Ownerless stops have no start row to converge; an unread session stays a
+	// startup-recovery case rather than a terminal fact published blind.
+	if recordErr == nil && !ownerlessSession(record) {
+		return s.completeExplicitStop(ctx, sessionID, inputID)
+	}
+
+	return nil
+}
+
+// completeExplicitStop commits the terminal stop fact and then issues a
+// non-authoritative delivery wake, so the manager need not wait for its idle
+// rescan. The outbox remains the source of truth either way.
+//
+//nolint:funcorder // belongs beside the public Stop transition it completes.
+func (s *svc) completeExplicitStop(ctx context.Context, rootID, inputID int64) error {
+	store, ok := s.sessionStore.(sessionstore.StopCompletionStore)
+	if !ok {
+		return errors.New("stop completion store unavailable")
+	}
+
+	if _, err := store.CompleteExplicitStop(ctx, rootID, inputID); err != nil {
+		return fmt.Errorf("commit explicit stop completion: %w", err)
+	}
+
+	record, err := s.sessionStore.GetSession(ctx, rootID)
+	if err != nil {
+		return nil //nolint:nilerr // the terminal fact is committed; the wake is best-effort
+	}
+
+	owner, _ := record.Attributes[controllerapi.SessionAttributeManagerID].(string)
+	if outputs := s.OutputStore(); outputs != nil && owner != "" {
+		_, _ = outputs.WakeOutputHead(ctx, owner)
+	}
+
+	return nil
+}
+
 // stopTreeCleanup durably parks a tree without publishing user-command events.
-// Startup recovery uses it to finish an interrupted stop without replaying UI.
+// Startup recovery and budget parking use it to finish an interrupted stop
+// without replaying UI. With keepRootStopping the explicit root stays in its
+// stopping fence: the caller owns the single terminal transaction that moves it
+// to `stopped` together with the visible completion output.
 //
 //nolint:funcorder // The second stop phase belongs beside the public Stop transition.
-func (s *svc) stopTreeCleanup(ctx context.Context, sessionID int64) error {
+func (s *svc) stopTreeCleanup(ctx context.Context, sessionID int64, keepRootStopping bool) error {
 	s.treeMu.Lock()
 	cleanupCtx := context.WithoutCancel(ctx)
 
@@ -751,8 +820,26 @@ func (s *svc) stopTreeCleanup(ctx context.Context, sessionID int64) error {
 		}
 	}
 
+	return s.markStoppedTreeSessions(cleanupCtx, ids, sessionID, keepRootStopping)
+}
+
+// markStoppedTreeSessions commits the final stopped status of every parked
+// descendant; an explicit root stays in its fence for the caller's terminal
+// transaction.
+//
+//nolint:funcorder // completes the stop transition documented above.
+func (s *svc) markStoppedTreeSessions(
+	ctx context.Context,
+	ids []int64,
+	rootID int64,
+	keepRootStopping bool,
+) error {
 	for _, id := range ids {
-		if err := s.sessionStore.UpdateSessionStatus(cleanupCtx, id, sessionstore.SessionStatusStopped); err != nil {
+		if keepRootStopping && id == rootID {
+			continue
+		}
+
+		if err := s.sessionStore.UpdateSessionStatus(ctx, id, sessionstore.SessionStatusStopped); err != nil {
 			return fmt.Errorf("mark session %d stopped: %w", id, err)
 		}
 	}

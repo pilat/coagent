@@ -53,7 +53,13 @@ func (s *svc) CurrentProgress(
 }
 
 func (s *svc) RefreshProgress(ctx context.Context, rootID int64) error {
-	_, err := s.enqueueProgressChange(ctx, rootID)
+	_, _, err := s.enqueueProgressChange(ctx, rootID)
+	// Supersession is successful suppression, never a failure: a manager that
+	// refreshes a just-fenced root must not treat the stale snapshot as an error.
+	if errors.Is(err, sessionstore.ErrProgressSuperseded) {
+		return nil
+	}
+
 	if err == nil {
 		s.wakeProgress()
 	}

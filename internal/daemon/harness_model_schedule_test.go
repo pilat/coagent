@@ -55,7 +55,7 @@ func TestHarnessModel_ScheduleCapabilityBoundary(t *testing.T) {
 	rootID, err := h.mgr.Send(t.Context(), h.projectID, "initialize", "fake-model", nil)
 	require.NoError(t, err)
 	h.mgr.waitIdle(rootID)
-	require.NoError(t, h.mgr.Stop(t.Context(), rootID))
+	require.NoError(t, h.mgr.Stop(t.Context(), rootID, 0))
 	subagentID := createScheduleBoundarySubagent(t, h)
 
 	model := scheduleBoundaryModel{
@@ -151,7 +151,7 @@ func executeScheduleBoundaryCommand(
 	case deliverStoppedRoot, deliverDuplicateRoot:
 		return h.mgr.DeliverScheduleTick(t.Context(), rootID, "schedule:model:root", "scheduled task")
 	case stopRootAgain:
-		return false, h.mgr.Stop(t.Context(), rootID)
+		return false, h.mgr.Stop(t.Context(), rootID, 0)
 	case deliverPendingResult:
 		_, err := h.mgr.DeliverPendingCallResult(
 			t.Context(), rootID, "missing-call", tool.IDSleep, "must stay stopped",

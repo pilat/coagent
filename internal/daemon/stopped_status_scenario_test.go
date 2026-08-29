@@ -43,7 +43,7 @@ func TestScenario_StoppedRootAnswersStatusWithoutReactivating(t *testing.T) {
 			h.mgr.HasActiveLoop(sessionID)
 	})
 
-	require.NoError(t, h.mgr.Stop(h.ctx, sessionID))
+	require.NoError(t, h.mgr.Stop(h.ctx, sessionID, 0))
 	h.waitUntil("stop completed", func() bool {
 		rec, getErr := h.sessStore.GetSession(h.ctx, sessionID)
 		return getErr == nil && rec.Status == sessionstore.SessionStatusStopped

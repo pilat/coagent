@@ -293,13 +293,17 @@ func (s *svc) publishCompactionProgress(ctx context.Context) error {
 		return nil
 	}
 
-	if _, err := provider.ProgressChange(ctx); err != nil {
-		if errors.Is(err, sessionstore.ErrOutputOwner) {
+	_, published, err := provider.ProgressChange(ctx)
+	if err != nil {
+		if errors.Is(err, sessionstore.ErrOutputOwner) ||
+			errors.Is(err, sessionstore.ErrProgressSuperseded) {
 			return nil
 		}
 
 		return fmt.Errorf("enqueue compaction progress snapshot: %w", err)
 	}
+
+	_ = published
 
 	return nil
 }

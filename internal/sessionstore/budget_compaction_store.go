@@ -127,7 +127,11 @@ func settleBudgetedCompactionInput(
 	if err := requireOnePendingResolution(ctx, tx, result, compaction.InputID); err != nil {
 		return err
 	}
-	attributes, err := json.Marshal(map[string]any{managerIDAttribute: owner})
+	attributes, err := stampMessageOutputAttributes(ctx, tx, compaction.SessionID, owner, nil)
+	if err != nil {
+		return err
+	}
+	encoded, err := json.Marshal(attributes)
 	if err != nil {
 		return fmt.Errorf("marshal compaction output attributes: %w", err)
 	}
@@ -136,7 +140,7 @@ func settleBudgetedCompactionInput(
 	_, err = tx.ExecContext(ctx, `INSERT INTO session_outbox
 		(session_id, type, content, attributes, source_key, fingerprint, created_at)
 		VALUES (?, 'message_persistent', ?, ?, ?, ?, ?)`, compaction.SessionID, content,
-		string(attributes), key, outputFingerprint(OutputMessagePersistent, content, compaction.SessionID, nil), now)
+		string(encoded), key, outputFingerprint(OutputMessagePersistent, content, compaction.SessionID, nil), now)
 	if err != nil {
 		return fmt.Errorf("insert budgeted compaction outcome: %w", err)
 	}
