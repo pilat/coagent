@@ -113,7 +113,10 @@ func TestCompactionProtocolModel(t *testing.T) {
 func runCompactionSequence(t *testing.T, sequence []compactionCommand) {
 	t.Helper()
 
-	llm := &compactionMockLLM{response: &llmwire.Response{Text: validSummary}, contextWindow: 200000}
+	llm := &compactionMockLLM{
+		response:      &llmwire.Response{Text: validSummary, FinishType: llmwire.FinishStop},
+		contextWindow: 200000,
+	}
 	s := newCompactionTestSvc(llm)
 	s.stagedCalls = map[string]string{}
 	s.ms.setMessages([]llmwire.Message{
@@ -164,7 +167,7 @@ func applyToSession(t *testing.T, s *svc, runner *loopRunner, command compaction
 
 	switch command {
 	case cmdQueueCompact:
-		s.RequestCompaction(compactionKeepRecent)
+		s.RequestCompaction()
 	case cmdStartExternalCall:
 		if s.HasPendingExternalCall() || s.HasPendingWork() {
 			return
@@ -172,7 +175,11 @@ func applyToSession(t *testing.T, s *svc, runner *loopRunner, command compaction
 
 		id := fmt.Sprintf("ext-%d", seq)
 		s.stagedCalls[id] = tool.IDTask
-		appendMessages(t, s, compactionAssistantCall(id, "spawning"))
+		appendMessages(t, s, llmwire.Message{
+			Role:      llmwire.RoleAssistant,
+			Content:   "spawning",
+			ToolCalls: []llmwire.ToolCall{{ID: id, Name: tool.IDTask}},
+		})
 	case cmdDeliverExternalResult:
 		for _, call := range s.PendingExternalCalls() {
 			appendMessages(t, s, llmwire.Message{

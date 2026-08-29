@@ -4,204 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/pilat/coagent/internal/llmwire"
-	"github.com/pilat/coagent/internal/registry"
 )
-
-// Compaction is one call. The middle fits the window it was being sent through,
-// so there is nothing to split, merge, or partially summarize.
-func TestCompactInitialLockedUsesOneCall(t *testing.T) {
-	llm := &compactionMockLLM{
-		contextWindow: 200000,
-		response:      &llmwire.Response{Text: validSummary},
-	}
-	s := newCompactionTestSvc(llm)
-
-	brief, err := s.compactInitialLocked(
-		t.Context(),
-		[]llmwire.Message{userTokens(20000), userTokens(20000), userTokens(20000)},
-		&compactionUsage{},
-	)
-
-	require.NoError(t, err)
-	assert.Equal(t, validSummary, brief)
-	assert.Equal(t, 1, llm.callCount, "60k tokens of conversation into a 200k window is one call")
-}
-
-// A conversation the compaction model cannot hold is reported as an error — the
-// session keeps the uncompacted dialogue rather than a summary of part of it.
-func TestCompactInitialLockedRefusesAConversationThatDoesNotFit(t *testing.T) {
-	llm := &compactionMockLLM{
-		contextWindow: 10000,
-		response:      &llmwire.Response{Text: validSummary},
-	}
-	s := newCompactionTestSvc(llm)
-
-	_, err := s.compactInitialLocked(
-		t.Context(),
-		[]llmwire.Message{userTokens(4000), userTokens(4000), userTokens(4000)},
-		&compactionUsage{},
-	)
-
-	require.ErrorIs(t, err, errCompactionTooLarge)
-	assert.Zero(t, llm.callCount, "nothing is sent when it cannot fit")
-}
-
-func TestCompactMergeRefusesAConversationThatDoesNotFit(t *testing.T) {
-	llm := &compactionMockLLM{
-		contextWindow: 10000,
-		response:      &llmwire.Response{Text: validSummary},
-	}
-	s := newCompactionTestSvc(llm)
-
-	_, err := s.compactMergeLocked(
-		t.Context(),
-		"EXISTING",
-		[]llmwire.Message{userTokens(4000), userTokens(4000), userTokens(4000)},
-		&compactionUsage{},
-	)
-
-	require.ErrorIs(t, err, errCompactionTooLarge)
-	assert.Zero(t, llm.callCount)
-}
-
-// The summarizer must read the whole conversation: a brief written without the
-// opening task and the current tail can say neither where the work started nor
-// where it stands — the two things a /compact focus most often asks for.
-func TestCompactSendsTheWholeConversationToTheSummarizer(t *testing.T) {
-	ctx := context.Background()
-	store := &compactionRecordingStore{nextID: 1}
-	llm := &compactionMockLLM{contextWindow: 200000, response: &llmwire.Response{Text: validSummary}}
-	s := newCompactionTestSvc(llm)
-	s.ms = newMessageStore(store, 1)
-
-	messages := []llmwire.Message{
-		{Role: llmwire.RoleSystem, Content: "sys"},
-		{Role: llmwire.RoleUser, Content: "ORIGINAL TASK"},
-	}
-	for i := range 3 {
-		messages = append(messages, roundTokens(fmt.Sprintf("c%d", i), 10, 10)...)
-	}
-	messages = append(messages, llmwire.Message{Role: llmwire.RoleAssistant, Content: "LATEST STATE"})
-
-	for i := range messages {
-		message := messages[i]
-		s.ms.mu.Lock()
-		require.NoError(t, s.ms.appendMessageLocked(ctx, &message))
-		s.ms.mu.Unlock()
-	}
-
-	ok, err := s.compact(ctx, 1)
-
-	require.NoError(t, err)
-	require.True(t, ok)
-	require.Len(t, llm.prompts, 1)
-	assert.Contains(t, llm.prompts[0], "ORIGINAL TASK", "the opening task frames the whole brief")
-	assert.Contains(t, llm.prompts[0], "LATEST STATE", "the retained tail is where the work stands now")
-}
-
-// The incremental path omits only the rows the existing brief already condenses.
-func TestCompactMergeSendsEverythingAfterThePreviousBrief(t *testing.T) {
-	ctx := context.Background()
-	store := &compactionRecordingStore{nextID: 1}
-	llm := &compactionMockLLM{contextWindow: 200000, response: &llmwire.Response{Text: validSummary}}
-	s := newCompactionTestSvc(llm)
-	s.ms = newMessageStore(store, 1)
-	s.compactionBrief = "EXISTING BRIEF"
-
-	messages := []llmwire.Message{
-		{Role: llmwire.RoleSystem, Content: "sys"},
-		{Role: llmwire.RoleUser, Content: "ORIGINAL TASK"},
-		{Role: llmwire.RoleUser, Content: "[CONTEXT SUMMARY - previous work condensed]\n\nEXISTING BRIEF"},
-		{Role: llmwire.RoleAssistant, Content: registry.PostCompactionAssistantAck},
-	}
-	for i := range 3 {
-		messages = append(messages, roundTokens(fmt.Sprintf("c%d", i), 10, 10)...)
-	}
-	messages = append(messages, llmwire.Message{Role: llmwire.RoleAssistant, Content: "LATEST STATE"})
-
-	for i := range messages {
-		message := messages[i]
-		s.ms.mu.Lock()
-		require.NoError(t, s.ms.appendMessageLocked(ctx, &message))
-		s.ms.mu.Unlock()
-	}
-
-	ok, err := s.compact(ctx, 1)
-
-	require.NoError(t, err)
-	require.True(t, ok)
-	require.Len(t, llm.prompts, 1)
-	assert.Contains(t, llm.prompts[0], "EXISTING BRIEF", "carried in as the merge base")
-	assert.Contains(t, llm.prompts[0], "LATEST STATE")
-	assert.NotContains(t, llm.prompts[0], "[CONTEXT SUMMARY", "the brief is passed in, not replayed as a message")
-}
-
-func TestCompactLeavesTheTranscriptIntactWhenSummarizationFails(t *testing.T) {
-	for _, testCase := range []struct {
-		name string
-		err  error
-	}{
-		{name: "provider down", err: errors.New("provider down")},
-		{name: "cancelled mid-compaction", err: context.Canceled},
-	} {
-		t.Run(testCase.name, func(t *testing.T) {
-			ctx := context.Background()
-			store := &compactionRecordingStore{nextID: 1}
-			llm := &compactionMockLLM{err: testCase.err}
-			s := newCompactionTestSvc(llm)
-			s.ms = newMessageStore(store, 1)
-
-			seedCompactableTranscript(ctx, t, s)
-			before := s.ms.getMessages()
-
-			ok, err := s.compact(ctx, 1)
-
-			require.Error(t, err)
-			assert.False(t, ok)
-			// Trimming tool bodies is compaction's own first step and survives on its
-			// own terms (the call stays visible, re-run to recover). What must not
-			// happen is the summarizing rewrite: same messages, same order, nothing
-			// hidden, no summary row.
-			after := s.ms.getMessages()
-			require.Len(t, after, len(before))
-			for i := range before {
-				assert.Equal(t, before[i].Role, after[i].Role)
-				assert.Equal(t, before[i].DBID, after[i].DBID)
-			}
-			assert.Zero(t, store.markCompacted, "nothing may be hidden without a summary that replaces it")
-			assert.Empty(t, s.compactionBrief, "no placeholder brief survives the failure")
-
-			for _, message := range store.messages {
-				assert.NotContains(t, message.Content, "[CONTEXT SUMMARY")
-			}
-		})
-	}
-}
-
-// A durable write failure must not advance the in-memory brief either: the
-// summarized messages are still in the transcript, and a brief describing them
-// would make the next compaction summarize the same work twice.
-func TestCompactKeepsTheOldBriefWhenTheDurableSwapFails(t *testing.T) {
-	ctx := context.Background()
-	store := &compactionRecordingStore{nextID: 1, markCompactedErr: errStoreDown}
-	llm := &compactionMockLLM{response: &llmwire.Response{Text: validSummary}}
-	s := newCompactionTestSvc(llm)
-	s.ms = newMessageStore(store, 1)
-
-	seedCompactableTranscript(ctx, t, s)
-
-	ok, err := s.compact(ctx, 1)
-
-	require.Error(t, err)
-	assert.False(t, ok)
-	assert.Empty(t, s.compactionBrief)
-}
 
 func seedCompactableTranscript(ctx context.Context, t *testing.T, s *svc) {
 	t.Helper()
@@ -222,26 +32,253 @@ func seedCompactableTranscript(ctx context.Context, t *testing.T, s *svc) {
 	}
 }
 
-// The budget is window − output reserve, never the compactionFraction trigger:
-// a payload the auto path hands over is above that fraction by definition, so
-// budgeting by it would refuse every compaction it asks for.
-func TestCompactionBudgetIsTheWindowMinusTheReserveNotTheTrigger(t *testing.T) {
-	const window = 200000
-
-	llm := &compactionMockLLM{contextWindow: window, response: &llmwire.Response{Text: validSummary}}
-	s := newCompactionTestSvc(llm)
-
-	// 180k of conversation: over the 170k trigger, under the 192k real budget.
-	payload := make([]llmwire.Message, 0, 18)
-	for range 18 {
-		payload = append(payload, userTokens(10000))
+// Every rejected candidate leaves the active transcript and its metadata
+// exactly as they were.
+func TestCompactLeavesTheTranscriptIntactOnFailure(t *testing.T) {
+	tests := []struct {
+		name string
+		llm  func() *compactionMockLLM
+	}{
+		{
+			name: "provider error",
+			llm:  func() *compactionMockLLM { return &compactionMockLLM{err: errors.New("provider down")} },
+		},
+		{
+			name: "cancelled mid-compaction",
+			llm:  func() *compactionMockLLM { return &compactionMockLLM{err: context.Canceled} },
+		},
+		{
+			name: "empty text",
+			llm: func() *compactionMockLLM {
+				return &compactionMockLLM{response: &llmwire.Response{Text: "", FinishType: llmwire.FinishStop}}
+			},
+		},
+		{
+			name: "whitespace-only text",
+			llm: func() *compactionMockLLM {
+				return &compactionMockLLM{response: &llmwire.Response{Text: "  \n  ", FinishType: llmwire.FinishStop}}
+			},
+		},
+		{
+			name: "tool-calling response",
+			llm: func() *compactionMockLLM {
+				return &compactionMockLLM{response: &llmwire.Response{
+					Text: "let me call a tool", FinishType: llmwire.FinishToolCalls,
+					ToolCalls: []llmwire.ToolCall{{ID: "x", Name: "read"}},
+				}}
+			},
+		},
+		{
+			name: "length-stopped response",
+			llm: func() *compactionMockLLM {
+				return &compactionMockLLM{response: &llmwire.Response{
+					Text: "partial", FinishType: llmwire.FinishLength,
+				}}
+			},
+		},
+		{
+			name: "unknown finish",
+			llm: func() *compactionMockLLM {
+				return &compactionMockLLM{response: &llmwire.Response{
+					Text: "looks complete", FinishType: llmwire.FinishUnknown,
+				}}
+			},
+		},
 	}
 
-	require.Greater(t, estimateTokens(payload), compactionCutoff(window), "the trigger would have fired")
-	require.Less(t, estimateTokens(payload), s.compactionInputBudget(), "but it still fits the real budget")
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			store := &compactionRecordingStore{nextID: 1}
+			llm := tc.llm()
+			s := newCompactionTestSvc(llm)
+			s.ms = newMessageStore(store, 1)
 
-	_, err := s.compactInitialLocked(t.Context(), payload, &compactionUsage{})
+			seedCompactableTranscript(ctx, t, s)
+			before := s.ms.getMessages()
 
-	require.NoError(t, err)
+			ok, err := s.compact(ctx, nil)
+
+			require.Error(t, err)
+			assert.False(t, ok)
+
+			after := s.ms.getMessages()
+			require.Len(t, after, len(before))
+			for i := range before {
+				assert.Equal(t, before[i].Role, after[i].Role)
+				assert.Equal(t, before[i].Content, after[i].Content)
+				assert.Equal(t, before[i].DBID, after[i].DBID)
+			}
+
+			assert.Zero(t, store.markCompacted, "nothing may be hidden without a committed checkpoint")
+			assert.False(t, hasSummaryRow(after), "no partial summary survives the failure")
+
+			for _, message := range store.messages {
+				assert.NotContains(t, message.Content, compactionMarkOpen)
+			}
+		})
+	}
+}
+
+// A durable write failure must not advance the in-memory projection either:
+// the summarized messages are still active, and a committed-looking checkpoint
+// without the durable swap would summarize the same work twice.
+func TestCompactKeepsTheOldTranscriptWhenTheDurableSwapFails(t *testing.T) {
+	ctx := context.Background()
+	store := &compactionRecordingStore{nextID: 1, replaceErr: errStoreDown}
+	llm := &compactionMockLLM{
+		response:      &llmwire.Response{Text: validSummary, FinishType: llmwire.FinishStop},
+		contextWindow: 32000,
+	}
+	s := newCompactionTestSvc(llm)
+	s.ms = newMessageStore(store, 1)
+
+	seedCompactableTranscript(ctx, t, s)
+
+	ok, err := s.compact(ctx, nil)
+
+	require.Error(t, err)
+	assert.False(t, ok)
+
+	after := s.ms.getMessages()
+	assert.False(t, hasSummaryRow(after))
+}
+
+// A candidate that would still sit above the trigger is refused: compaction
+// spends no metadata, and the caller records the non-relieving outcome.
+func TestCompactHeaderAloneOverThreshold(t *testing.T) {
+	const window = 32000
+
+	llm := &compactionMockLLM{
+		response:      &llmwire.Response{Text: validSummary, FinishType: llmwire.FinishStop},
+		contextWindow: window,
+	}
+	s := newCompactionTestSvc(llm)
+
+	// The header is under the trigger but over half the window, so no legal
+	// summarizer request exists at all.
+	s.ms.setMessages([]llmwire.Message{
+		{Role: llmwire.RoleUser, Content: agentsMDMessagePrefix + strings.Repeat("p", 100000)},
+		compactionUserMessage("task"),
+		compactionAssistantCall("c1", "work"),
+		compactionToolResult("c1", strings.Repeat("r", 4000)),
+	})
+
+	ok, err := s.compact(t.Context(), nil)
+
+	require.NoError(t, err, "an unfittable head is nothing to compact, not a failure")
+	assert.False(t, ok)
+	assert.Zero(t, llm.callCount, "no LLM call is worth making")
+
+	after := s.ms.getMessages()
+	assert.False(t, hasSummaryRow(after))
+}
+
+// A candidate checkpoint that would still sit above the trigger is refused
+// whole: no metadata changes, and the provider call is still counted as spent.
+func TestCompactRefusesANonRelievingCandidate(t *testing.T) {
+	const window = 32000
+
+	llm := &compactionMockLLM{
+		response:      &llmwire.Response{Text: validSummary, FinishType: llmwire.FinishStop},
+		contextWindow: window,
+	}
+	s := newCompactionTestSvc(llm)
+
+	// Huge indivisible groups: the largest legal head inside the 50% bound is
+	// one group, so the retained tail still leaves the projection above the
+	// cutoff and the candidate is refused.
+	payload := []llmwire.Message{{Role: llmwire.RoleSystem, Content: "sys"}, compactionUserMessage("task")}
+	for i := range 5 {
+		payload = append(payload, roundTokens(fmt.Sprintf("c%d", i), 100, 8000)...)
+	}
+	s.ms.setMessages(payload)
+
+	ok, err := s.compact(t.Context(), nil)
+
+	require.ErrorIs(t, err, errCompactionNonRelieving)
+	assert.False(t, ok)
+	assert.Positive(t, llm.callCount, "the summarizer ran before the relief check refused")
+
+	after := s.ms.getMessages()
+	assert.False(t, hasSummaryRow(after), "the active transcript keeps byte-identical history")
+	assert.Len(t, after, len(payload))
+}
+
+// One compaction attempt makes exactly one model call — no compaction-specific
+// retry, corrective prompt, or second pass exists.
+func TestCompactionMakesExactlyOneModelCall(t *testing.T) {
+	ctx := context.Background()
+	store := &compactionRecordingStore{nextID: 1}
+	llm := &compactionMockLLM{
+		contextWindow: 32000,
+		response:      &llmwire.Response{Text: validSummary, FinishType: llmwire.FinishStop},
+	}
+	s := newCompactionTestSvc(llm)
+	s.ms = newMessageStore(store, 1)
+	s.ms.setMessages(oversizedTranscript(32000))
+
+	require.NoError(t, s.compactIfNeeded(ctx, 32000))
+
 	assert.Equal(t, 1, llm.callCount)
+}
+
+// Only a fully completed non-empty text response is a checkpoint.
+func TestAcceptedCheckpointTextRejections(t *testing.T) {
+	tests := []struct {
+		name string
+		resp *llmwire.Response
+	}{
+		{name: "nil response", resp: nil},
+		{
+			name: "empty text",
+			resp: &llmwire.Response{
+				Text: "", FinishType: llmwire.FinishStop,
+			},
+		},
+		{
+			name: "whitespace text",
+			resp: &llmwire.Response{
+				Text: "\n\t \n", FinishType: llmwire.FinishStop,
+			},
+		},
+		{
+			name: "tool calls",
+			resp: &llmwire.Response{
+				Text: "compacting…", FinishType: llmwire.FinishToolCalls,
+				ToolCalls: []llmwire.ToolCall{{ID: "c", Name: "read"}},
+			},
+		},
+		{
+			name: "length stop",
+			resp: &llmwire.Response{
+				Text: "partial summary", FinishType: llmwire.FinishLength,
+			},
+		},
+		{
+			name: "unknown finish",
+			resp: &llmwire.Response{
+				Text: "finished somehow", FinishType: llmwire.FinishUnknown,
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := acceptedCheckpointText(tc.resp)
+			require.Error(t, err)
+		})
+	}
+
+	t.Run("normal completed text is accepted", func(t *testing.T) {
+		brief, err := acceptedCheckpointText(&llmwire.Response{Text: " summary ", FinishType: llmwire.FinishStop})
+		require.NoError(t, err)
+		assert.Equal(t, "summary", brief)
+	})
+
+	t.Run("a short completed answer is accepted", func(t *testing.T) {
+		brief, err := acceptedCheckpointText(&llmwire.Response{Text: "brief", FinishType: llmwire.FinishStop})
+		require.NoError(t, err)
+		assert.Equal(t, "brief", brief, "output is not rejected for being shorter than the reserve")
+	})
 }

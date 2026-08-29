@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -11,7 +12,6 @@ import (
 
 	"github.com/pilat/coagent/internal/llm"
 	"github.com/pilat/coagent/internal/llmwire"
-	"github.com/pilat/coagent/internal/registry"
 	"github.com/pilat/coagent/internal/tool"
 )
 
@@ -36,10 +36,33 @@ func measuredResponse(resp *llmwire.Response) *llmwire.Response {
 	return resp
 }
 
+var (
+	scriptedCallMu      sync.Mutex
+	scriptedCallCounter int
+)
+
+// scriptedToolCall mints one uniquely identified scripted tool call: real
+// providers never reuse call ids across assistant turns, and pairing validity
+// treats reuse as history corruption.
+func scriptedToolCall(name, args string) *llmwire.Response {
+	scriptedCallMu.Lock()
+	defer scriptedCallMu.Unlock()
+
+	scriptedCallCounter++
+
+	return measuredResponse(&llmwire.Response{
+		ToolCalls: []llmwire.ToolCall{{
+			ID:        fmt.Sprintf("%s-call-%d", name, scriptedCallCounter),
+			Name:      name,
+			Arguments: []byte(args),
+		}},
+	})
+}
+
 // isCompactionPrompt recognises the summarization call: one user message
 // carrying the whole rendered conversation.
 func isCompactionPrompt(msgs []llmwire.Message) bool {
-	return len(msgs) == 1 && strings.Contains(msgs[0].Content, "Conversation:")
+	return len(msgs) == 1 && strings.Contains(msgs[0].Content, "HISTORY TO SUMMARIZE")
 }
 
 func indexOfSummary(msgs []llmwire.Message) int {
@@ -78,11 +101,7 @@ func TestScenario_AutomaticCompactionRunsInsideTheDaemon(t *testing.T) {
 		case hasToolResultFor(msgs, "ls"):
 			return &llmwire.Response{Text: "uncompacted fallback"}
 		default:
-			return measuredResponse(&llmwire.Response{ToolCalls: []llmwire.ToolCall{{
-				ID:        "ls-call-1",
-				Name:      "ls",
-				Arguments: []byte(`{"path":"."}`),
-			}}})
+			return scriptedToolCall("ls", `{"path":"."}`)
 		}
 	}
 
@@ -103,16 +122,16 @@ func TestScenario_AutomaticCompactionRunsInsideTheDaemon(t *testing.T) {
 	msgs := h.parentMessages(parentID)
 	require.NoError(t, llm.ValidateToolPairing(msgs), "the rebuilt transcript must stay provider-valid")
 
-	// header → summary turn → (no reattachments here, the work dir has no skills).
+	// header → marked summary → the work the loop continued on the rebuilt
+	// transcript (no ack or primer is inserted by design).
 	summaryAt := indexOfSummary(msgs)
 	require.Positive(t, summaryAt, "the header survives ahead of the summary")
 	require.Equal(t, 1, countSummaryRows(msgs), "exactly one summary row")
 	assert.Equal(t, llmwire.RoleUser, msgs[0].Role)
 	assert.Contains(t, msgs[0].Content, "start the scripted work")
 	assert.Contains(t, msgs[summaryAt].Content, autoCompactionBrief)
-	require.Greater(t, len(msgs), summaryAt+2)
-	assert.Equal(t, registry.PostCompactionAssistantAck, msgs[summaryAt+1].Content)
-	assert.True(t, strings.HasPrefix(msgs[summaryAt+2].Content, "[Post-compaction"))
+	require.Greater(t, len(msgs), summaryAt+1)
+	assert.Equal(t, "work complete", msgs[summaryAt+1].Content, "the loop continued on the checkpoint")
 
 	// Everything the summary replaced is gone, including the settled tool pair.
 	assert.False(t, hasAssistantToolCall(msgs, "ls"), "the summarized tool_use is gone")
@@ -154,20 +173,18 @@ func TestScenario_AutoCompactionWhileABackgroundChildIsInFlight(t *testing.T) {
 		case hasUserContaining(msgs, contextSummaryPrefix):
 			return &llmwire.Response{Text: "parent continued after compaction"}
 		case hasToolResultFor(msgs, tool.IDTask):
-			return measuredResponse(&llmwire.Response{ToolCalls: []llmwire.ToolCall{{
-				ID:        "ls-call-1",
-				Name:      "ls",
-				Arguments: []byte(`{"path":"."}`),
-			}}})
+			return scriptedToolCall("ls", `{"path":"."}`)
 		default:
-			return measuredResponse(&llmwire.Response{ToolCalls: []llmwire.ToolCall{{
-				ID:   taskCallID,
-				Name: tool.IDTask,
-				Arguments: []byte(
-					`{"prompt":"CHILD_TASK do the thing","description":"child work",` +
-						`"subagent_type":"general","background":true}`,
-				),
-			}}})
+			return measuredResponse(&llmwire.Response{
+				ToolCalls: []llmwire.ToolCall{{
+					ID:   taskCallID,
+					Name: tool.IDTask,
+					Arguments: []byte(
+						`{"prompt":"CHILD_TASK do the thing","description":"child work",` +
+							`"subagent_type":"general","background":true}`,
+					),
+				}},
+			})
 		}
 	}
 

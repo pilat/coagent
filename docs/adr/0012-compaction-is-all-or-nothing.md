@@ -1,6 +1,6 @@
 # ADR-0012: Compaction trims, then summarizes the whole conversation — or fails
 
-- **Status:** Accepted
+- **Status:** Superseded by [ADR-0035](0035-compaction-summarizes-a-bounded-head.md)
 - **Date:** 2026-08-15
 
 ## Context

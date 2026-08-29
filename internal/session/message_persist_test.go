@@ -109,10 +109,9 @@ func TestAddToolNotificationPairOnce_PersistsCallList(t *testing.T) {
 }
 
 func TestBuildBackgroundSubagentCompletion_PersistsCallList(t *testing.T) {
-	stored, mem, err := BuildBackgroundSubagentCompletion(42, "child done")
+	stored, err := BuildBackgroundSubagentCompletion(42, "child done")
 	require.NoError(t, err)
 	require.Len(t, stored, 2)
-	require.Len(t, mem, 2)
 
 	var calls []llmwire.ToolCall
 	require.NoError(t, json.Unmarshal(stored[0].ToolCalls, &calls))
@@ -121,16 +120,12 @@ func TestBuildBackgroundSubagentCompletion_PersistsCallList(t *testing.T) {
 	assert.JSONEq(t, `{"child_id":42,"event":"completed"}`, string(calls[0].Arguments))
 }
 
-// TestResetContextAndInjectOnce_MarkCompactedFailureKeepsTranscript pins the
-// fresh-reset invariant: a failure at the point of no return still leaves the
-// old transcript readable rather than emptying the session.
 func TestResetContextAndInjectOnce_MarkCompactedFailureKeepsTranscript(t *testing.T) {
 	ctx := context.Background()
 	store := &compactionRecordingStore{nextID: 1, markCompactedErr: errStoreDown}
 	s := newResetTestSvc(store)
 
 	seedResetTranscript(ctx, t, s)
-	s.compactionBrief = "stale summary of the old run"
 	s.todoStore.Add("old todo", todo.PriorityMedium)
 
 	_, err := s.ResetContextAndInjectOnce(ctx, "reset:fresh:1", "do the fresh job")
@@ -140,7 +135,6 @@ func TestResetContextAndInjectOnce_MarkCompactedFailureKeepsTranscript(t *testin
 	msgs := s.ms.getMessages()
 	require.Len(t, msgs, 3)
 	assert.Equal(t, "old task", msgs[0].Content)
-	assert.Equal(t, "stale summary of the old run", s.compactionBrief)
 	assert.Len(t, s.todoStore.List(), 1)
 }
 

@@ -83,13 +83,13 @@ _Avoid_: ReAct loop (doc-only alias), main loop.
 One turn of the agent loop — a single LLM call plus the tool executions it triggers. Bounded by a max-iterations cap. An iteration is a *sub-unit* of the loop, not another word for it.
 _Avoid_: using "iteration" and "agent loop" interchangeably.
 
-**clearing** (tool-result clearing):
-Replacing older `role='tool'` result bodies with a uniform placeholder while keeping the tool call itself visible (re-run the tool to recover). Not a context event of its own: it is compaction's first phase, preparing the feed for the summarizer ([ADR-0013](adr/0013-immutable-history-single-compaction-point.md)).
-_Avoid_: compaction, pruning, truncation; calling it a stage or rung of its own.
+**compaction** (checkpoint):
+The single automatic answer to context pressure: one no-tools model call summarizes a bounded older head — the repaired canonical JSONL projection — and the committed checkpoint rebuilds the transcript as header → marked summary → optional current-skill envelope → verbatim raw tail. The complete summarizer request stays within half the context window; a repair-free verbatim suffix of at least a tenth of the window is retained when that much history exists. Runs at exactly one point in the loop, where no tool call is pending ([ADR-0035](adr/0035-compaction-summarizes-a-bounded-head.md)).
+_Avoid_: clearing (removed with ADR-0035); compression; "context ladder"; trim-before-summary (superseded).
 
-**compaction**:
-The single automatic answer to context pressure: clear older tool bodies, LLM-summarize everything after the header, and rebuild the transcript as header → summary turn → skill reattachments. No verbatim tail survives; the summary turn carries the model's brief plus a programmatically capped excerpt of the last turns and the still-running background work. Runs at exactly one point in the loop, where no tool call is pending.
-_Avoid_: clearing; compression; "context ladder" (there is no ladder — the term is retired).
+**checkpoint marker**:
+The host-authored wrapper around model-authored summary text inside a compaction summary row. It identifies the text as a lossy summary of older history and says later verbatim messages are newer and take precedence on conflict. Only the complete wrapper at the one allowed position (immediately after the header) is recognized as a previous checkpoint.
+_Avoid_: treating the wrapper as a security boundary — delimiter collisions in user content are accepted user-controlled content.
 
 **deferral episode**:
 The lifetime of the pending external call that made a `/compact` wait in the durable inbox. The "⏳ Compaction deferred" notice is deduplicated per episode — not per run or per wake — via a verdict the daemon carries across session rebuilds (`RunResult` → `deferAnnouncements` → `CreateOptions`).
@@ -104,7 +104,7 @@ The share of a model's context window left for the response — the complement o
 _Avoid_: max_tokens (as a name for the budget rather than the wire field), output budget.
 
 **append-only context log**:
-The invariant that stored message content is immutable after insert. Clearing and compaction are metadata events (`cleared_at` / `compacted_at`) plus appended rows; "what the model sees" is a projection computed at load, so the prompt prefix stays byte-stable between compactions — nothing edits history in between.
+The invariant that stored message content is immutable after insert. Compaction is a metadata event (`compacted_at`) plus appended rows; "what the model sees" is a projection computed at load, so the prompt prefix stays byte-stable between compactions — nothing edits history in between.
 
 **insertion-time truncation**:
 Capping an oversized tool result *before* it is appended to the conversation history (`toolexec.go`). What enters the transcript is already trimmed and never changes afterward, so the cached prompt prefix stays intact. The opposite — going back and editing messages already in the history (**retroactive pruning**) — invalidates the provider's prompt cache from the edited point onward, and coagent deliberately does not do it.
@@ -116,7 +116,7 @@ A diversity-based detector that catches repetitive tool-call patterns and forces
 ## Tools, skills & extensions
 
 **tool**:
-A capability the agent invokes — id, description, parameters, execute. Three origins: **built-in** (bash, read, edit, …), **MCP** (discovered from external servers), and **control-plane** (`task`, `schedule`, `compact_context` — registered onto the live registry from outside and owned by the package that holds their state).
+A capability the agent invokes — id, description, parameters, execute. Three origins: **built-in** (bash, read, edit, …), **MCP** (discovered from external servers), and **control-plane** (`task`, `schedule` — registered onto the live registry from outside and owned by the package that holds their state).
 
 **skill**:
 A `SKILL.md` instruction bundle loaded from project, global, or marketplace dirs. Two *independent* discovery axes: `disable-model-invocation: true` hides it from the model's available-skills inventory and skill tool; `user-invocable: false` rejects `/skill <name>`. A leading `/skill <name> [args]` expands before the LLM call. Daemon-selected system instructions, currently the onboarding skill, may be activated directly without becoming model-invocable.
@@ -328,7 +328,7 @@ Naming conflicts this vocabulary resolves. "Resolved" means the winner above is 
 - **task (work-unit) vs `task` tool** — *Resolved.* "task" is prose for a submitted unit of work, realized as a session with no `Task` type; the only code symbol named `task` is the subagent-spawning tool. Qualify in code contexts.
 - **state / status (three vocabularies)** — *Resolved.* Runtime **state** = `controllerapi.State*` (running/idle/error, in-memory); persisted **status** = active/completed/suspended/error; subagent **link state** = `LinkState*`. Don't treat "running" and "active" as one word.
 - **agent loop vs ReAct loop vs iteration** — *Resolved.* Canonical is **agent loop** (matches `runLoop`); "ReAct loop" is an acceptable doc alias; **iteration** is one turn, not a synonym for the loop.
-- **clearing vs compaction** — *Resolved.* **Compaction** is the whole operation and the only automatic pressure response; **clearing** is its first phase (drop tool-result bodies), never an event on its own. The old "context ladder" is retired.
+- **clearing vs compaction** — *Resolved.* **Compaction** is the whole operation and the only automatic pressure response; clearing (dropping tool-result bodies) was removed with [ADR-0035](adr/0035-compaction-summarizes-a-bounded-head.md) — summarizer evidence is serialized, never erased. The old "context ladder" is retired.
 - **Notification (overloaded type)** — *Resolved.* Use **session event** / `sessionevent.Notification` for session→controller events; it collides with `lsp.Notification` (JSON-RPC). Daemon transcript delivery is now a sealed typed `sessionInput`, not another notification bag.
 - **memory vs conversation history** — *Resolved.* "memory" means the curated `CuratedStore` only; the transcript is **conversation history** / the message store.
 - **loop (agent) vs loop (detection)** — *Resolved.* The **agent loop** is the execution cycle; **loop detection** is about repetitive-call *repetition*. Same word, unrelated meanings — always qualify.

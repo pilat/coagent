@@ -10,9 +10,24 @@ import (
 	"github.com/pilat/coagent/internal/logger"
 )
 
-func (c *openaiClient) parseMessage(message *oaiMessage) (*llmwire.Response, error) {
+// mapOpenAIFinish translates the OpenAI-compatible finish_reason onto the
+// portable llmwire outcome; anything undocumented is unknown, never stop.
+func mapOpenAIFinish(reason string) string {
+	switch reason {
+	case "stop":
+		return llmwire.FinishStop
+	case "length":
+		return llmwire.FinishLength
+	case "tool_calls", "function_call":
+		return llmwire.FinishToolCalls
+	default:
+		return llmwire.FinishUnknown
+	}
+}
+
+func (c *openaiClient) parseMessage(message *oaiMessage, finishReason string) (*llmwire.Response, error) {
 	resp := &llmwire.Response{
-		FinishType: "stop",
+		FinishType: mapOpenAIFinish(finishReason),
 	}
 
 	if message == nil {
@@ -40,7 +55,7 @@ func (c *openaiClient) parseMessage(message *oaiMessage) (*llmwire.Response, err
 				Name:      tc.Function.Name,
 				Arguments: []byte(tc.Function.Arguments),
 			})
-			resp.FinishType = finishTypeToolCalls
+			resp.FinishType = llmwire.FinishToolCalls
 		}
 	}
 

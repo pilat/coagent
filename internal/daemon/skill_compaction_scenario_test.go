@@ -14,7 +14,7 @@ import (
 // skillCompactRespond answers summarization prompts with a brief and every other
 // turn with text, so each send reaches idle in one turn.
 func skillCompactRespond(_ string, msgs []llmwire.Message) *llmwire.Response {
-	if len(msgs) == 1 && strings.Contains(msgs[0].Content, "Conversation:") {
+	if len(msgs) == 1 && strings.Contains(msgs[0].Content, "HISTORY TO SUMMARIZE") {
 		return &llmwire.Response{
 			Text: "## Goal\nfollow the playbook\n## Progress\n- read it\n## Context for Continuation\ncarry on",
 		}

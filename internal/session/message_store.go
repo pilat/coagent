@@ -263,18 +263,15 @@ func (ms *messageStore) replaceCompactedMessagesLocked(
 	return nil
 }
 
-func (ms *messageStore) replaceCompactedMessagesWithCommandLocked(
+// completeCompactionCommandLocked commits the compaction inside the durable
+// /compact command transaction so its inbox settlement cannot outlive it.
+func (ms *messageStore) completeCompactionCommandLocked(
 	ctx context.Context,
+	input PendingInput,
 	compactedIDs []int64,
 	messages []llmwire.Message,
-	brief string,
-	input *PendingInput,
 ) error {
-	if input == nil {
-		return ms.replaceCompactedMessagesLocked(ctx, compactedIDs, messages)
-	}
-
-	store, ok := ms.store.(sessionstore.CompactionCommandStore)
+	commandStore, ok := ms.store.(sessionstore.CompactionCommandStore)
 	if !ok {
 		return ms.replaceCompactedMessagesLocked(ctx, compactedIDs, messages)
 	}
@@ -284,8 +281,8 @@ func (ms *messageStore) replaceCompactedMessagesWithCommandLocked(
 		return err
 	}
 
-	ids, _, err := store.CompleteCompactionInput(
-		ctx, input.ID, ms.sessID, compactedIDs, entries, brief, "✅ Context compacted",
+	ids, _, err := commandStore.CompleteCompactionInput(
+		ctx, input.ID, ms.sessID, compactedIDs, entries, "✅ Context compacted",
 	)
 	if err != nil {
 		return fmt.Errorf("commit compact command: %w", err)
@@ -320,23 +317,6 @@ func compactionEntries(messages []llmwire.Message) ([]sessionstore.CompactionEnt
 	}
 
 	return entries, nil
-}
-
-// appendPersisted appends messages that were already committed to the DB
-// elsewhere (DeliverCompletionAtomic), stamping each with its DB id. It performs
-// no DB write — the rows exist; this only refreshes the in-memory transcript.
-func (ms *messageStore) appendPersisted(msgs []llmwire.Message, dbIDs []int64) {
-	ms.mu.Lock()
-	defer ms.mu.Unlock()
-
-	for i := range msgs {
-		m := msgs[i]
-		if i < len(dbIDs) {
-			m.DBID = dbIDs[i]
-		}
-
-		ms.messages = append(ms.messages, m)
-	}
 }
 
 func (ms *messageStore) setMessages(msgs []llmwire.Message) {
@@ -374,19 +354,10 @@ func (ms *messageStore) reloadMessages(ctx context.Context) error {
 	messages := make([]llmwire.Message, len(stored))
 
 	for i, sm := range stored {
-		content := sm.Content
-		// Cleared tool results render as a uniform placeholder built from the
-		// tool name — never the stored content. This is the sole load-time
-		// substitution site; the event-apply path uses the same helper so both
-		// produce byte-identical output.
-		if sm.ClearedAt != nil {
-			content = clearedPlaceholder(sm.ToolName)
-		}
-
 		msg := llmwire.Message{
 			DBID:             sm.ID,
 			Role:             sm.Role,
-			Content:          content,
+			Content:          sm.Content,
 			ToolCallID:       sm.ToolCallID,
 			ToolName:         sm.ToolName,
 			ReasoningContent: sm.ReasoningContent,
@@ -400,9 +371,7 @@ func (ms *messageStore) reloadMessages(ctx context.Context) error {
 			}
 		}
 
-		// Cleared rows drop their refs in the same projection pass as the
-		// content placeholder — a cleared row must never re-materialize pixels.
-		if sm.ClearedAt == nil && len(sm.Attachments) > 0 {
+		if len(sm.Attachments) > 0 {
 			if err := json.Unmarshal(sm.Attachments, &msg.Images); err != nil {
 				return fmt.Errorf("unmarshal attachments for message %d: %w", sm.ID, err)
 			}
@@ -421,19 +390,6 @@ func (ms *messageStore) reloadMessages(ctx context.Context) error {
 	}
 
 	ms.messages = messages
-
-	return nil
-}
-
-// persistCompactionBrief saves the compaction brief to the store.
-func (ms *messageStore) persistCompactionBrief(ctx context.Context, brief string) error {
-	if ms.store == nil {
-		return nil
-	}
-
-	if err := ms.store.UpdateSessionCompactionBrief(ctx, ms.sessID, brief); err != nil {
-		return fmt.Errorf("persist compaction brief: %w", err)
-	}
 
 	return nil
 }

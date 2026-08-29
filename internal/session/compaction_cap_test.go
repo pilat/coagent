@@ -2,7 +2,6 @@ package session
 
 import (
 	"context"
-	"fmt"
 	"strings"
 	"testing"
 
@@ -18,7 +17,7 @@ func TestAutoCompactionConvergesOnASmallWindow(t *testing.T) {
 	const window = 32000
 
 	llm := &compactionMockLLM{
-		response:      &llmwire.Response{Text: validSummary},
+		response:      &llmwire.Response{Text: validSummary, FinishType: llmwire.FinishStop},
 		contextWindow: window,
 	}
 	s := newCompactionTestSvc(llm)
@@ -36,27 +35,29 @@ func TestAutoCompactionConvergesOnASmallWindow(t *testing.T) {
 	assert.False(t, r.autoCompactionOff)
 }
 
-// The protection may not rest on the model's diligence: a brief far larger than
-// the cap still leaves the session over the threshold, and that counts as a
-// failed attempt even though compaction "succeeded".
-func TestAutoCompactionCountsASuccessThatDidNotRelievePressure(t *testing.T) {
+// A completed summary that still leaves the projection over the threshold is
+// rejected pre-commit and counts as a failed attempt.
+func TestAutoCompactionCountsANonRelievingCandidateAsAFailure(t *testing.T) {
 	const window = 32000
 
 	llm := &compactionMockLLM{
 		response: &llmwire.Response{
-			Text: validSummary + "\n" + strings.Repeat("b", window*4),
+			Text:       validSummary + "\n" + strings.Repeat("b", window*4),
+			FinishType: llmwire.FinishStop,
 		},
 		contextWindow: window,
 	}
 	s := newCompactionTestSvc(llm)
 	s.ms.setMessages(oversizedTranscript(window))
+	before := s.ms.getMessages()
 
 	var notes []string
 	r := contextEventRunner(s, &notes)
 	r.applyContextEvents(context.Background())
 
-	assert.True(t, notesContain(notes, "✅ Context compacted"))
-	assert.True(t, s.shouldCompact(window), "the oversized brief kept it over the trigger")
+	assert.Equal(t, 1, llm.callCount, "the summarizer ran")
+	assert.True(t, notesContain(notes, "❌ Compaction failed"))
+	assert.Len(t, s.ms.getMessages(), len(before), "a non-relieving candidate commits nothing")
 	assert.Equal(t, 1, r.compactionFailures)
 }
 
@@ -67,7 +68,8 @@ func TestAutoCompactionStopsAfterThreeFruitlessAttempts(t *testing.T) {
 
 	llm := &compactionMockLLM{
 		response: &llmwire.Response{
-			Text: validSummary + "\n" + strings.Repeat("b", window*4),
+			Text:       validSummary + "\n" + strings.Repeat("b", window*4),
+			FinishType: llmwire.FinishStop,
 		},
 		contextWindow: window,
 	}
@@ -94,7 +96,10 @@ func TestAutoCompactionStopsAfterThreeFruitlessAttempts(t *testing.T) {
 func TestExplicitCompactionIgnoresTheAttemptCap(t *testing.T) {
 	const window = 32000
 
-	llm := &compactionMockLLM{response: &llmwire.Response{Text: validSummary}, contextWindow: window}
+	llm := &compactionMockLLM{
+		response:      &llmwire.Response{Text: validSummary, FinishType: llmwire.FinishStop},
+		contextWindow: window,
+	}
 	s := newCompactionTestSvc(llm)
 	s.ms.setMessages(oversizedTranscript(window))
 
@@ -103,7 +108,7 @@ func TestExplicitCompactionIgnoresTheAttemptCap(t *testing.T) {
 	r.compactionFailures = compactionAttemptCap
 	r.autoCompactionOff = true
 
-	s.RequestCompaction(2)
+	s.RequestCompaction()
 	r.applyContextEvents(context.Background())
 
 	assert.Equal(t, 1, llm.callCount)
@@ -115,7 +120,10 @@ func TestExplicitCompactionIgnoresTheAttemptCap(t *testing.T) {
 func TestAutoCompactionResetsTheCounterOnRelief(t *testing.T) {
 	const window = 32000
 
-	llm := &compactionMockLLM{response: &llmwire.Response{Text: validSummary}, contextWindow: window}
+	llm := &compactionMockLLM{
+		response:      &llmwire.Response{Text: validSummary, FinishType: llmwire.FinishStop},
+		contextWindow: window,
+	}
 	s := newCompactionTestSvc(llm)
 	s.ms.setMessages(oversizedTranscript(window))
 
@@ -127,50 +135,4 @@ func TestAutoCompactionResetsTheCounterOnRelief(t *testing.T) {
 
 	assert.Zero(t, r.compactionFailures)
 	assert.False(t, r.autoCompactionOff)
-}
-
-// The counter lives on the runner, so a new activation starts clean — that is
-// the "conditions changed" boundary, not a leak.
-func TestAutoCompactionCounterIsPerActivation(t *testing.T) {
-	s := newCompactionTestSvc(&compactionMockLLM{contextWindow: 32000})
-
-	var notes []string
-	first := contextEventRunner(s, &notes)
-	first.compactionFailures = compactionAttemptCap
-	first.autoCompactionOff = true
-
-	second := contextEventRunner(s, &notes)
-
-	assert.Zero(t, second.compactionFailures)
-	assert.False(t, second.autoCompactionOff)
-}
-
-// oversizedTranscript builds a header plus ten rounds that put the projection
-// over the trigger. Clearing drops the four oldest bodies, so what the
-// summarizer actually carries still fits window − compactionOutputReserve.
-func oversizedTranscript(window int) []llmwire.Message {
-	msgs := []llmwire.Message{
-		{Role: llmwire.RoleSystem, Content: "sys"},
-		{Role: llmwire.RoleUser, Content: "task"},
-	}
-
-	body := compactionCutoff(window) / 9
-
-	for i := range 10 {
-		msgs = append(msgs, roundTokens(fmt.Sprintf("c%d", i), 10, body)...)
-	}
-
-	return msgs
-}
-
-func countNotes(notes []string, sub string) int {
-	n := 0
-
-	for _, note := range notes {
-		if strings.Contains(note, sub) {
-			n++
-		}
-	}
-
-	return n
 }

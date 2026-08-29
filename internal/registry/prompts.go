@@ -101,7 +101,7 @@ Lines are shown as "lineNum| content". To edit, use the edit tool with oldString
 
 # CONTEXT MANAGEMENT
 
-When the conversation approaches the context limit it is compacted: everything but the opening task is replaced by a written summary, and older tool results are dropped before that. If you reference information from an earlier tool call and aren't confident in the details, re-read the file. Do not re-read proactively — only when you need specific content you can't recall.
+When the conversation approaches the context limit it is compacted: older history is replaced by a marked summary of that older work, while recent messages stay in the transcript verbatim and take precedence on conflict. If you reference information from an earlier tool call and aren't confident in the details, re-read the file. Do not re-read proactively — only when you need specific content you can't recall.
 
 Issue independent tool calls in a single response when possible to save context and latency.
 
@@ -133,7 +133,7 @@ Use the ` + "`batch`" + ` tool to run independent tool calls in parallel.
 - Missing info? Use grep, glob, read to discover what you need.
 - Unclear parameters? Pick reasonable defaults and proceed.
 - On errors: try a different approach, search the codebase for patterns, give up after 3 failed attempts with a clear writeup of what you tried.
-- Compaction replaces older conversation with a summary and drops old tool results — re-read if needed.
+- Compaction summarizes older conversation; recent messages stay verbatim — re-read if needed.
 
 # EDITING FILES
 
@@ -176,7 +176,7 @@ Include multiple tool calls in a single response to run independent searches in 
 3. Deep dive — read specific files
 4. Cross-reference — grep for symbols, callers, usages
 
-Compaction replaces older conversation with a summary and drops old tool results — re-read if needed.
+Compaction summarizes older conversation; recent messages stay verbatim — re-read if needed.
 
 When scope is unclear, start from the project root (your working directory). When depth is unclear, go 2-3 levels. Aim to complete research within 10-15 tool calls. If you need more, focus on the most relevant files first and note areas for further investigation.
 
@@ -192,71 +192,19 @@ Include: direct answer, relevant files with line numbers, key patterns found.
 
 When you cannot answer the question, respond with TASK_COMPLETE: followed by what you searched, where you looked, and what you ruled out.`
 
-	CompactionInitialPrompt = `Create a structured brief from this conversation. The conversation below is about to be REPLACED IN FULL by what you write: the same agent continues from your brief alone, with none of the turns you are reading still visible. Preserve everything needed, discard noise.
+	// CompactionSummaryPrompt opens the one canonical summarizer request. It
+	// describes useful continuation content but mandates no Markdown schema:
+	// semantic coverage is a model-quality property the runtime cannot prove.
+	CompactionSummaryPrompt = `You are writing a continuation checkpoint for a coding agent. Everything below your summary is replaced by your text plus the conversation's newer messages, so whatever you leave out is lost. The agent will read your summary as one block, followed by the newer conversation verbatim.
 
-Produce a brief using EXACTLY this structure:
+Summarize what the older history shows, so work can continue without rediscovery:
+- The task and why it is being done this way, including decisions already made and why alternatives were rejected.
+- What has succeeded so far — completed mutations, verification that already passed, commands that were run — so it is not repeated.
+- What is still open: current state, the next action, anything unresolved.
+- Errors already hit and how they were resolved, so they are not retried as new.
+- Active background work (still-running subagents) is recorded separately by the host; do not restate it.
 
-## Goal
-[What the agent is trying to accomplish]
+Preserve technical specifics exactly as written: file paths, line numbers, commands, error messages, and every opaque identifier (UUIDs, hashes, commit SHAs, URLs, branch names) verbatim — never shorten or paraphrase them.
 
-## Progress
-[What's done, what's in progress — bullet points]
-
-## Files Modified
-[Exact paths and nature of changes]
-
-## Key Decisions
-[Choices made and why]
-
-## Errors & Resolutions
-[Problems hit and how they were handled — prevents repeating mistakes]
-
-## Active Tasks
-[If the agent was using todoread/todowrite, list all pending/in-progress items with their status.
-After resuming from this brief, the agent should call todoread to verify current task state.]
-
-## Context for Continuation
-[Anything else needed to continue effectively]
-
-Guidelines:
-- Kill redundant back-and-forth and conversational noise
-- Consolidate repeated information
-- Keep technical specifics: paths, line numbers, error codes, command outputs that informed decisions
-- Preserve all opaque identifiers exactly as written (no shortening or paraphrasing):
-  UUIDs, hashes, commit SHAs, file paths, line numbers, error codes, URLs, branch names.
-- The brief should be self-contained — no references to "earlier in the conversation"
-- Keep it concise: aim for under 4000 tokens`
-
-	CompactionMergePrompt = `Update the existing brief below with new information from the recent conversation. Do NOT regenerate unchanged sections — only add, modify, or append new information.
-
-The merged brief REPLACES both the existing brief and the new conversation: nothing you leave out survives.
-
-EXISTING BRIEF:
-%s
-
----
-
-Merge the new conversation into the brief above. Use the same section structure:
-## Goal / ## Progress / ## Files Modified / ## Key Decisions / ## Errors & Resolutions / ## Context for Continuation
-
-Guidelines:
-- Add new bullet points to existing sections
-- Update status of items that progressed
-- Do NOT repeat information already in the brief
-- Keep it concise: total brief should stay under 4000 tokens
-- If a section has no new information, keep it as-is
-
-MUST PRESERVE across merges:
-- Active tasks and their current status (in-progress, blocked, pending)
-- The last thing being worked on and its current state
-- Decisions made and their rationale
-- All file paths, line numbers, and identifiers exactly as written`
-
-	PostCompactionAssistantAck = "I've reviewed my context summary. Continuing from where I left off."
-
-	PostCompactionPrimer = `[Post-compaction context refresh]
-
-Session was just compacted. The conversation summary above contains your previous work context. Continue working on the task — do not greet the user or start over.
-
-Current time: %s`
+Write plain prose or bullet points; no fixed headings are required. Be concise and complete; do not include tool-call syntax or chat filler. Answer with the summary text only.`
 )

@@ -11,43 +11,7 @@ import (
 	"github.com/pilat/coagent/internal/llmwire"
 )
 
-// TestMarkCleared_PreservesContent verifies clearing is metadata-only: cleared_at
-// is stamped, but the stored content column is left byte-for-byte intact.
-func TestMarkCleared_PreservesContent(t *testing.T) {
-	store, _, projectID := newTestStore(t)
-	ctx := context.Background()
-
-	sess, err := store.CreateSession(ctx, projectID, "test-model", "medium", nil)
-	require.NoError(t, err)
-
-	const original = "[/tmp/file.go]\npackage main\n\nfunc main() {}"
-
-	id, err := store.InsertMessage(ctx, sess.ID, &StoredMessage{
-		Role:       llmwire.RoleTool,
-		Content:    original,
-		ToolCallID: "call-1",
-		ToolName:   "read",
-	})
-	require.NoError(t, err)
-
-	require.NoError(t, store.MarkCleared(ctx, []int64{id}))
-
-	msgs, err := store.LoadActiveMessages(ctx, sess.ID)
-	require.NoError(t, err)
-	require.Len(t, msgs, 1)
-
-	assert.Equal(t, original, msgs[0].Content, "stored content must survive clearing")
-	require.NotNil(t, msgs[0].ClearedAt, "cleared_at must be set")
-}
-
-// TestMarkCleared_Empty is a no-op and must not error.
-func TestMarkCleared_Empty(t *testing.T) {
-	store, _, _ := newTestStore(t)
-	require.NoError(t, store.MarkCleared(context.Background(), nil))
-}
-
 // A switch to a model with no effort choice must land an empty level, not a medium
-// the model never offered — the caller has already settled it against the catalog.
 func TestUpdateSessionModelWritesTheLevelVerbatim(t *testing.T) {
 	ctx := context.Background()
 	store, db, projectID := newTestStore(t)

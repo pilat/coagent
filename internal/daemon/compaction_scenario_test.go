@@ -18,7 +18,7 @@ const contextSummaryPrefix = "[CONTEXT SUMMARY"
 // answers with a compaction brief whenever it is handed a summarization prompt.
 func blockingCompactRespond(release <-chan struct{}) func(string, []llmwire.Message) *llmwire.Response {
 	return func(_ string, msgs []llmwire.Message) *llmwire.Response {
-		if len(msgs) == 1 && strings.Contains(msgs[0].Content, "Conversation:") {
+		if len(msgs) == 1 && strings.Contains(msgs[0].Content, "HISTORY TO SUMMARIZE") {
 			return &llmwire.Response{
 				Text: "## Goal\nspawn work\n## Progress\n- child ran\n## Context for Continuation\ncarry on",
 			}

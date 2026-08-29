@@ -128,9 +128,6 @@ func registerSessionTools(reg tool.Registry, session *svc) {
 
 	// Subagent tools (task / get_subagent_result / send_to_subagent) are
 	// registered by the daemon onto the live registry — they need its spawner.
-
-	// Context-management tool — the session implements the local compactor interface.
-	reg.Register(newCompactContextTool(session))
 }
 
 // persistState persists current session metadata to the daemon store.

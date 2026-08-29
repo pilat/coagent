@@ -15,7 +15,6 @@ type BudgetedCompaction struct {
 	InputID      int64
 	CompactedIDs []int64
 	Entries      []CompactionEntry
-	Brief        string
 	ObservedAt   time.Time
 }
 
@@ -55,10 +54,6 @@ func (s *store) ReplaceCompactedMessagesBudgeted(
 	)
 	if err != nil {
 		return nil, err
-	}
-	if _, err := tx.ExecContext(ctx, `UPDATE sessions SET compaction_brief = ?, updated_at = ? WHERE id = ?`,
-		compaction.Brief, now, compaction.SessionID); err != nil {
-		return nil, fmt.Errorf("persist budgeted compaction brief: %w", err)
 	}
 	if compaction.InputID > 0 {
 		if err := settleBudgetedCompactionInput(ctx, tx, compaction, now); err != nil {

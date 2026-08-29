@@ -119,7 +119,7 @@ func (s *store) ResetSessionContextOnce(
 
 	result, err := tx.ExecContext(
 		ctx,
-		`UPDATE sessions SET compaction_brief = '', todo_items = '[]' WHERE id = ?`,
+		`UPDATE sessions SET todo_items = '[]' WHERE id = ?`,
 		sessionID,
 	)
 	if err != nil {

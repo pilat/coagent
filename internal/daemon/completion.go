@@ -7,7 +7,6 @@ import (
 
 	"go.uber.org/zap"
 
-	"github.com/pilat/coagent/internal/llmwire"
 	"github.com/pilat/coagent/internal/logger"
 	"github.com/pilat/coagent/internal/session"
 	"github.com/pilat/coagent/internal/sessionstore"
@@ -191,7 +190,7 @@ func (s *svc) injectBlockingCompletion(
 		return fmt.Errorf("blocking task call %s for child %d is not pending", callID, childID)
 	}
 
-	stored, mem, err := session.BuildBlockingSubagentCompletion(
+	stored, err := session.BuildBlockingSubagentCompletion(
 		callID,
 		s.completionContent(ctx, *link),
 	)
@@ -199,7 +198,7 @@ func (s *svc) injectBlockingCompletion(
 		return fmt.Errorf("build blocking completion for child %d: %w", childID, err)
 	}
 
-	return s.persistCompletion(ctx, sess, *link, stored, mem)
+	return s.persistCompletion(ctx, sess, *link, stored)
 }
 
 func (s *svc) injectBackgroundCompletion(
@@ -233,7 +232,7 @@ func (s *svc) injectBackgroundCompletion(
 		return fmt.Errorf("%w: %s (%s)", errSessionInputDeferred, pending[0].ID, pending[0].Name)
 	}
 
-	stored, mem, err := session.BuildBackgroundSubagentCompletion(
+	stored, err := session.BuildBackgroundSubagentCompletion(
 		childID,
 		s.completionContent(ctx, *link),
 	)
@@ -241,28 +240,40 @@ func (s *svc) injectBackgroundCompletion(
 		return fmt.Errorf("build background completion for child %d: %w", childID, err)
 	}
 
-	return s.persistCompletion(ctx, sess, *link, stored, mem)
+	return s.persistCompletion(ctx, sess, *link, stored)
 }
 
 // persistCompletion is the exactly-once commit shared by the two semantically
 // distinct completion variants. The link CAS and transcript insert remain one
-// transaction; only a winning commit is appended to live memory.
+// transaction; a winning commit is followed by a reload from the authoritative
+// store, which places the rows after the positioned tail even when a compaction
+// committed in between.
 func (s *svc) persistCompletion(
 	ctx context.Context,
 	sess session.Service,
 	link SubagentLink,
 	stored []*sessionstore.StoredMessage,
-	mem []llmwire.Message,
 ) error {
-	msgIDs, won, err := s.sessionStore.DeliverCompletionAtomic(
+	_, won, err := s.sessionStore.DeliverCompletionAtomic(
 		ctx, link.ParentID, stored, link.ChildID, link.ActivationSeq,
 	)
 	if err != nil {
 		return fmt.Errorf("deliver completion for child %d: %w", link.ChildID, err)
 	}
 
+	// The DB reload is authoritative: rows committed outside a concurrent
+	// compaction snapshot stay a newer NULL-position suffix. A failed reload
+	// loses nothing — the row is durable and the loop's mandatory reload before
+	// its next model call recovers it.
 	if won {
-		sess.AppendDeliveredCompletion(mem, msgIDs)
+		if reloadErr := sess.ReloadDeliveredCompletion(ctx); reloadErr != nil {
+			logger.Ctx(ctx).Named("daemon.completion").Warn(
+				"completion_reload_failed",
+				zap.Int64("child", link.ChildID),
+				zap.Int64("parent", link.ParentID),
+				zap.Error(reloadErr),
+			)
+		}
 	}
 
 	// A follow-up may have arrived while this activation was terminalizing.

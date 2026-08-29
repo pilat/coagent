@@ -16,17 +16,16 @@ type CompactionCommandStore interface {
 		inputID, sessionID int64,
 		compactedIDs []int64,
 		entries []CompactionEntry,
-		brief, content string,
+		content string,
 	) ([]int64, *OutputCommit, error)
 }
 
-//nolint:funlen // One transaction commits transcript replacement, input resolution, and its outcome.
 func (s *store) CompleteCompactionInput(
 	ctx context.Context,
 	inputID, sessionID int64,
 	compactedIDs []int64,
 	entries []CompactionEntry,
-	brief, content string,
+	content string,
 ) ([]int64, *OutputCommit, error) {
 	if content == "" {
 		return nil, nil, errors.New("empty compaction outcome")
@@ -58,16 +57,6 @@ func (s *store) CompleteCompactionInput(
 	ids, err := replaceCompactedMessagesTx(ctx, tx, sessionID, compactedIDs, entries, now)
 	if err != nil {
 		return nil, nil, err
-	}
-
-	if _, err := tx.ExecContext(
-		ctx,
-		`UPDATE sessions SET compaction_brief = ?, updated_at = ? WHERE id = ?`,
-		brief,
-		now,
-		sessionID,
-	); err != nil {
-		return nil, nil, fmt.Errorf("persist compaction brief: %w", err)
 	}
 
 	result, err := tx.ExecContext(ctx, `UPDATE session_inbox

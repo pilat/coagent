@@ -7,169 +7,116 @@ import (
 	"strings"
 	"time"
 
-	"go.uber.org/zap"
-
 	"github.com/pilat/coagent/internal/llmwire"
-	"github.com/pilat/coagent/internal/logger"
 	"github.com/pilat/coagent/internal/registry"
 )
 
-var errCompactionTooLarge = errors.New("conversation does not fit the compaction model's context window")
-
-// compactInitialLocked builds a brief from scratch in one call. A summary that
-// never arrived is an error, never a placeholder or a partial summary.
-func (s *svc) compactInitialLocked(
+// summarizeCheckpoint runs the one no-tools model call that produces the
+// checkpoint: one canonical text input, one accepted completed non-empty text
+// output. No compaction-specific retry exists — a failed attempt persists no
+// boundary and may submit the same head again on a later attempt.
+func (s *svc) summarizeCheckpoint(
 	ctx context.Context,
-	messages []llmwire.Message,
-	acc *compactionUsage,
-) (string, error) {
-	brief, err := s.compactWithRetry(ctx, acc, func() string {
-		return buildInitialPrompt(messages) + s.focusSection()
-	})
-	if err != nil {
-		return "", fmt.Errorf("summarize conversation: %w", err)
-	}
-
-	return brief, nil
-}
-
-// compactionInputBudget is the window minus writing room, NOT the trigger
-// fraction: budgeting by that would refuse every compaction the auto path asks for.
-func (s *svc) compactionInputBudget() int {
-	return s.contextWindow() - compactionOutputReserve
-}
-
-func buildInitialPrompt(messages []llmwire.Message) string {
-	var prompt strings.Builder
-
-	prompt.WriteString(registry.CompactionInitialPrompt)
-	prompt.WriteString("\n\nConversation:\n\n")
-
-	for _, msg := range messages {
-		fmt.Fprintf(&prompt, "[%s]: %s\n\n", msg.Role, msg.Content)
-	}
-
-	return prompt.String()
-}
-
-// compactMergeLocked folds new messages into an existing brief. A failed merge
-// aborts: the old brief would compact those messages away undescribed.
-func (s *svc) compactMergeLocked(
-	ctx context.Context,
-	existingBrief string,
-	messages []llmwire.Message,
-	acc *compactionUsage,
-) (string, error) {
-	brief, err := s.compactWithRetry(ctx, acc, func() string {
-		mergePrompt := strings.Replace(registry.CompactionMergePrompt, "%s", existingBrief, 1)
-
-		var prompt strings.Builder
-
-		prompt.WriteString(mergePrompt)
-		prompt.WriteString("\n\nNew conversation to merge:\n\n")
-
-		for _, msg := range messages {
-			fmt.Fprintf(&prompt, "[%s]: %s\n\n", msg.Role, msg.Content)
-		}
-
-		prompt.WriteString(s.focusSection())
-
-		return prompt.String()
-	})
-
-	if err == nil {
-		return brief, nil
-	}
-
-	return "", fmt.Errorf("merge %d new messages into the brief: %w", len(messages), err)
-}
-
-func validateSummary(brief string) (bool, []string) {
-	required := []string{"## Goal", "## Progress", "## Context for Continuation"}
-
-	var missing []string
-
-	for _, section := range required {
-		if !strings.Contains(brief, section) {
-			missing = append(missing, section)
-		}
-	}
-
-	return len(missing) == 0, missing
-}
-
-// compactWithRetry retries up to 3 times on a summary missing required sections.
-// Every call lands in acc, so the summary row carries compaction's own cost.
-func (s *svc) compactWithRetry(ctx context.Context, acc *compactionUsage, promptBuilder func() string) (string, error) {
-	const maxAttempts = 3
-
-	log := logger.Ctx(ctx).Named("session.compaction")
-
-	var lastBrief string
-	var lastMissing []string
-
-	for attempt := 1; attempt <= maxAttempts; attempt++ {
-		prompt := promptBuilder()
-
-		if attempt > 1 {
-			prompt += fmt.Sprintf(
-				"\n\nIMPORTANT: Your previous summary was missing these required sections: %s. You MUST include ALL of them: ## Goal, ## Progress, ## Context for Continuation.",
-				strings.Join(lastMissing, ", "),
-			)
-		}
-
-		brief, err := s.compactOnce(ctx, acc, prompt)
-		if err != nil {
-			return "", err
-		}
-
-		lastBrief = brief
-
-		ok, missing := validateSummary(lastBrief)
-
-		if ok {
-			return lastBrief, nil
-		}
-
-		lastMissing = missing
-		log.Info("compaction_quality_gate_retry",
-			zap.Int("attempt", attempt),
-			zap.Strings("missing_sections", missing),
-		)
-	}
-
-	log.Warn("compaction_quality_gate_failed",
-		zap.Strings("missing_sections", lastMissing),
-	)
-
-	return lastBrief, nil
-}
-
-// compactOnce runs one summarization call, refusing a prompt the model cannot
-// hold rather than silently trimming it into one that fits.
-func (s *svc) compactOnce(ctx context.Context, acc *compactionUsage, prompt string) (string, error) {
+	headerJSONL, prevSummary, headJSONL string,
+	window int,
+) (string, *compactionUsage, error) {
 	if s.budgetGate != nil {
 		if err := s.budgetGate.Admit(ctx, time.Now().UTC()); err != nil {
-			return "", fmt.Errorf("budget admission for compaction: %w", err)
+			return "", nil, fmt.Errorf("budget admission for compaction: %w", err)
 		}
 	}
 
-	system := s.prompt.systemPrompt()
+	prompt := buildSummarizerPrompt(headerJSONL, prevSummary, headJSONL, s.focusSection())
 
-	budget := s.compactionInputBudget()
-	if size := estimateText(prompt) + estimateText(system); size > budget {
-		return "", fmt.Errorf("%w: ~%d tokens into a %d token budget", errCompactionTooLarge, size, budget)
+	// The 50% bound was enforced by the split selection; this defensive recheck
+	// compares the exact final text rather than trusting the selection estimate.
+	if size := estimateText(s.prompt.systemPrompt()) + estimateText(prompt); size > window/2 {
+		return "", nil, fmt.Errorf("summarizer request exceeds its half-window bound: ~%d of %d tokens", size, window/2)
 	}
 
-	// On the call itself, so it bounds the first brief and every later merge alike.
-	resp, err := s.chat(ctx, system, []llmwire.Message{
+	// The normal full output reserve: the ordinary complement of the input
+	// fraction, not a summary-length target — any useful completed length passes.
+	reserve := int((1 - llmwire.ContextInputFraction) * float64(window))
+
+	resp, err := s.chat(ctx, s.prompt.systemPrompt(), []llmwire.Message{
 		{Role: llmwire.RoleUser, Content: prompt},
-	}, nil, llmwire.WithMaxTokens(compactionOutputReserve))
+	}, nil, llmwire.WithMaxTokens(reserve))
 	if err != nil {
-		return "", fmt.Errorf("compaction chat: %w", err)
+		return "", nil, fmt.Errorf("compaction chat: %w", err)
 	}
 
+	acc := &compactionUsage{}
 	acc.add(resp)
 
-	return resp.Text, nil
+	summaryText, err := acceptedCheckpointText(resp)
+	if err != nil {
+		return "", acc, err
+	}
+
+	return summaryText, acc, nil
+}
+
+// acceptedCheckpointText validates the single accepted shape: one fully
+// completed, non-empty text response with no tool calls. Missing headings or a
+// short answer are fine; anything else is not a checkpoint.
+func acceptedCheckpointText(resp *llmwire.Response) (string, error) {
+	if resp == nil {
+		return "", errors.New("empty summarizer response")
+	}
+
+	if len(resp.ToolCalls) > 0 {
+		return "", errors.New("summarizer attempted tool calls")
+	}
+
+	switch resp.FinishType {
+	case llmwire.FinishStop:
+	case llmwire.FinishLength:
+		return "", errors.New("summarizer output stopped for length")
+	default:
+		return "", fmt.Errorf("summarizer finished with %q, not a normal completion", resp.FinishType)
+	}
+
+	if strings.TrimSpace(resp.Text) == "" {
+		return "", errors.New("summarizer returned no text")
+	}
+
+	return strings.TrimSpace(resp.Text), nil
+}
+
+// The static section renderers behind both the request estimate and the actual
+// summarizer prompt, so the 50% bound is estimated against the exact bytes.
+func headerSection(headerJSONL string) string {
+	return "\n\n" + summarizeHeaderSection + " (context only, never summarized):\n" + headerJSONL
+}
+
+func prevSummarySection(prevSummary string) string {
+	return "\n" + summarizePrevSection +
+		" (the running checkpoint anchor; fold the history below into it):\n" + prevSummary + "\n\n"
+}
+
+func historySectionHeader() string {
+	return summarizeHistorySection + " (JSON Lines, one message per line):\n"
+}
+
+// buildSummarizerPrompt renders the one canonical summarizer user message.
+// Sections are fixed and ordered; the section markers are static.
+func buildSummarizerPrompt(headerJSONL, prevSummary, headJSONL, focus string) string {
+	var b strings.Builder
+
+	b.WriteString(registry.CompactionSummaryPrompt)
+
+	if focus != "" {
+		b.WriteString(focus)
+	}
+
+	b.WriteString(headerSection(headerJSONL))
+
+	if prevSummary != "" {
+		b.WriteString(prevSummarySection(prevSummary))
+	}
+
+	b.WriteString(historySectionHeader())
+	b.WriteString(headJSONL)
+
+	return b.String()
 }

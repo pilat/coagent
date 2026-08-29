@@ -285,8 +285,8 @@ func (r *loopRunner) handleCommandOutput(ctx context.Context, input PendingInput
 	return r.agent.enqueuePersistentOutput(ctx, output)
 }
 
-// handleCompactCommand raises the flag compact_context raises, so /compact runs
-// at the loop's one sanctioned point instead of reaching in from the side.
+// handleCompactCommand queues the request, so /compact runs at the loop's one
+// sanctioned point instead of reaching in from the side.
 func (r *loopRunner) handleCompactCommand(
 	ctx context.Context,
 	input PendingInput,
@@ -331,7 +331,7 @@ func (r *loopRunner) handleCompactCommand(
 
 	r.agent.setCompactionFocus(strings.TrimSpace(strings.TrimPrefix(trimmed, compactCommand)))
 	r.agent.setCompactionCommandInput(input)
-	r.agent.RequestCompaction(compactionKeepRecent)
+	r.agent.RequestCompaction()
 
 	return commandDeferred, nil
 }

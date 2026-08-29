@@ -39,26 +39,24 @@ var toolCategories = []struct {
 	{"Parallel execution", []string{batchToolName}},
 	{"Skills", []string{"skill"}},
 	{"Web", []string{"webfetch"}},
-	{"Context management", []string{"compact_context"}},
 	{"Scheduling", []string{"schedule", "sleep"}},
 }
 
 var toolDescriptions = map[string]string{
-	readToolName:      "view file",
-	writeToolName:     "create/overwrite",
-	editToolName:      "find-replace",
-	"apply_patch":     "unified diff",
-	globToolName:      "find by pattern",
-	grepToolName:      "search contents",
-	"ls":              "list directory",
-	"lsp":             "definitions, references, diagnostics",
-	"task":            "spawn/resume subagents",
-	batchToolName:     "run independent tools simultaneously",
-	"skill":           "load domain knowledge",
-	"webfetch":        "fetch known URL",
-	"compact_context": "compress conversation history",
-	"schedule":        "wake-up timer",
-	"sleep":           "fixed delay",
+	readToolName:  "view file",
+	writeToolName: "create/overwrite",
+	editToolName:  "find-replace",
+	"apply_patch": "unified diff",
+	globToolName:  "find by pattern",
+	grepToolName:  "search contents",
+	"ls":          "list directory",
+	"lsp":         "definitions, references, diagnostics",
+	"task":        "spawn/resume subagents",
+	batchToolName: "run independent tools simultaneously",
+	"skill":       "load domain knowledge",
+	"webfetch":    "fetch known URL",
+	"schedule":    "wake-up timer",
+	"sleep":       "fixed delay",
 }
 
 // knownSearchMCPs lists MCP server config keys known to provide web search.
@@ -377,7 +375,7 @@ func buildActiveSubagentsSection(links []ActiveSubagentInfo) string {
 	}
 
 	var b strings.Builder
-	b.WriteString("\n\n# Active subagents\n")
+	b.WriteString(backgroundSectionMarker)
 	b.WriteString(
 		"Subagents you spawned that are still running or awaiting result delivery. " +
 			"Each completion is delivered automatically as a subagent_event and wakes this session. " +

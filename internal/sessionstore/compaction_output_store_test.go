@@ -32,21 +32,16 @@ func TestStore_CompleteCompactionInputCommitsReplacementAndOutcomeTogether(t *te
 			{ExistingID: headerID},
 			{Message: &StoredMessage{Role: "user", Content: "[CONTEXT SUMMARY] brief"}},
 		},
-		"brief",
 		"✅ Context compacted",
 	)
 	require.NoError(t, err)
 	require.Len(t, ids, 2)
 	require.NotNil(t, output)
 
-	var inputState, brief, sourceKey, content string
+	var inputState, sourceKey, content string
 	require.NoError(
 		t,
 		db.QueryRowContext(ctx, `SELECT state FROM session_inbox WHERE id = ?`, input.ID).Scan(&inputState),
-	)
-	require.NoError(
-		t,
-		db.QueryRowContext(ctx, `SELECT compaction_brief FROM sessions WHERE id = ?`, record.ID).Scan(&brief),
 	)
 	require.NoError(
 		t,
@@ -54,7 +49,6 @@ func TestStore_CompleteCompactionInputCommitsReplacementAndOutcomeTogether(t *te
 			Scan(&sourceKey, &content),
 	)
 	assert.Equal(t, InputStateHandled, InputState(inputState))
-	assert.Equal(t, "brief", brief)
 	assert.Equal(t, "input:"+strconv.FormatInt(input.ID, 10)+":compact:succeeded", sourceKey)
 	assert.Equal(t, "✅ Context compacted", content)
 

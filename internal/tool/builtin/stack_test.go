@@ -69,10 +69,8 @@ func TestBuildStack_ToolCount(t *testing.T) {
 	assert.Contains(t, tools, "write")
 	assert.Contains(t, tools, "bash")
 	assert.Contains(t, tools, "grep")
-	// Memory, task and compact_context are registered by the
-	// session, not the stack.
+	// Memory and task are registered by the session, not the stack.
 	assert.NotContains(t, tools, "task")
-	assert.NotContains(t, tools, "compact_context")
 	assert.NotContains(t, tools, "memory_save")
 	assert.NotContains(t, tools, "memory_delete")
 }

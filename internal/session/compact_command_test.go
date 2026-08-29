@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"strings"
 	"testing"
 	"time"
 
@@ -59,7 +58,10 @@ func TestBoundaryCommand_IgnoresOtherPrompts(t *testing.T) {
 // /compact no longer compacts from the side: it raises the flag the loop's one
 // sanctioned compaction point reads.
 func TestSlashCompact_RaisesTheFlagAndCompactsAtTheLoopPoint(t *testing.T) {
-	llm := &compactionMockLLM{response: &llmwire.Response{Text: validSummary}, contextWindow: 200000}
+	llm := &compactionMockLLM{
+		response:      &llmwire.Response{Text: validSummary, FinishType: llmwire.FinishStop},
+		contextWindow: 200000,
+	}
 	s := newCompactionTestSvc(llm)
 	s.ms.setMessages(loopRounds(10, 4000))
 
@@ -86,7 +88,10 @@ func TestSlashCompact_RaisesTheFlagAndCompactsAtTheLoopPoint(t *testing.T) {
 }
 
 func TestSlashCompact_EmptySessionRepliesNothingToCompact(t *testing.T) {
-	llm := &compactionMockLLM{response: &llmwire.Response{Text: validSummary}, contextWindow: 200000}
+	llm := &compactionMockLLM{
+		response:      &llmwire.Response{Text: validSummary, FinishType: llmwire.FinishStop},
+		contextWindow: 200000,
+	}
 	s := newCompactionTestSvc(llm)
 
 	var notes []string
@@ -102,7 +107,10 @@ func TestSlashCompact_EmptySessionRepliesNothingToCompact(t *testing.T) {
 }
 
 func TestSlashCompact_FocusThreadsIntoTheSummarizationPrompt(t *testing.T) {
-	llm := &compactionMockLLM{response: &llmwire.Response{Text: validSummary}, contextWindow: 200000}
+	llm := &compactionMockLLM{
+		response:      &llmwire.Response{Text: validSummary, FinishType: llmwire.FinishStop},
+		contextWindow: 200000,
+	}
 	s := newCompactionTestSvc(llm)
 	s.ms.setMessages(loopRounds(10, 4000))
 
@@ -120,27 +128,11 @@ func TestSlashCompact_FocusThreadsIntoTheSummarizationPrompt(t *testing.T) {
 	assert.Empty(t, s.compactionFocus)
 }
 
-func TestSlashCompact_FocusThreadsIntoTheIncrementalPrompt(t *testing.T) {
-	llm := &compactionMockLLM{response: &llmwire.Response{Text: validSummary}, contextWindow: 200000}
-	s := newCompactionTestSvc(llm)
-	s.compactionBrief = "## Goal\nExisting work" // non-empty brief → incremental merge path
-	s.ms.setMessages(loopRounds(10, 4000))
-
-	var notes []string
-	r, b := compactCommandRunner(s, compactCommand+" focus on the auth bug", &notes)
-
-	_, err := r.handleBoundaryCommand(t.Context(), *b.input)
-	require.NoError(t, err)
-
-	r.applyContextEvents(t.Context())
-
-	require.NotEmpty(t, llm.prompts)
-	assert.Contains(t, llm.prompts[0], "EXISTING BRIEF:", "must be on the incremental merge path")
-	assert.Contains(t, llm.prompts[0], "Priority for this summary: focus on the auth bug")
-}
-
 func TestSlashCompact_CompactionFailureIsReported(t *testing.T) {
-	llm := &compactionMockLLM{response: &llmwire.Response{Text: validSummary}, contextWindow: 200000}
+	llm := &compactionMockLLM{
+		response:      &llmwire.Response{Text: validSummary, FinishType: llmwire.FinishStop},
+		contextWindow: 200000,
+	}
 	store := &compactionRecordingStore{nextID: 1, markCompactedErr: errors.New("write conflict")}
 	s := newCompactionTestSvc(llm)
 	s.ms = newMessageStore(store, 1)
@@ -162,7 +154,10 @@ func TestSlashCompact_CompactionFailureIsReported(t *testing.T) {
 // Behind a blocking call the request stays durable. An in-memory flag would die
 // with the svc the resume rebuilds; the inbox survives even a daemon restart.
 func TestSlashCompact_DefersBehindANonSleepPendingCall(t *testing.T) {
-	llm := &compactionMockLLM{response: &llmwire.Response{Text: validSummary}, contextWindow: 200000}
+	llm := &compactionMockLLM{
+		response:      &llmwire.Response{Text: validSummary, FinishType: llmwire.FinishStop},
+		contextWindow: 200000,
+	}
 	s := newCompactionTestSvc(llm)
 	s.stagedCalls = map[string]string{"t1": tool.IDTask}
 	s.ms.setMessages(pendingCallTranscript("t1", tool.IDTask))
@@ -188,7 +183,10 @@ func TestSlashCompact_DefersBehindANonSleepPendingCall(t *testing.T) {
 // here would mute the messages queued behind it and spin the runner, which
 // considers "input + sleep only" runnable.
 func TestSlashCompact_InterruptsSleepInsteadOfDeferring(t *testing.T) {
-	llm := &compactionMockLLM{response: &llmwire.Response{Text: validSummary}, contextWindow: 200000}
+	llm := &compactionMockLLM{
+		response:      &llmwire.Response{Text: validSummary, FinishType: llmwire.FinishStop},
+		contextWindow: 200000,
+	}
 	s := newCompactionTestSvc(llm)
 	s.stagedCalls = map[string]string{"s1": tool.IDSleep}
 	s.ms.setMessages(pendingCallTranscript("s1", tool.IDSleep))
@@ -239,7 +237,7 @@ func TestRunLoopDoesNotCompactOnASuspendPath(t *testing.T) {
 	agent.maxIterations = 5
 	agent.stagedCalls = map[string]string{"t1": tool.IDTask}
 	agent.ms.setMessages(pendingCallTranscript("t1", tool.IDTask))
-	agent.RequestCompaction(compactionKeepRecent)
+	agent.RequestCompaction()
 
 	notifier := &loopNotifier{}
 
@@ -253,7 +251,7 @@ func TestRunLoopDoesNotCompactOnASuspendPath(t *testing.T) {
 
 func hasSummaryRow(msgs []llmwire.Message) bool {
 	for _, m := range msgs {
-		if strings.HasPrefix(m.Content, compactionSummaryPrefix) {
+		if isMarkedSummary(m.Content) {
 			return true
 		}
 	}
@@ -341,13 +339,16 @@ func TestCompactionNeverRunsWithPendingCalls(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			llm := &compactionMockLLM{response: &llmwire.Response{Text: validSummary}, contextWindow: 200000}
+			llm := &compactionMockLLM{
+				response:      &llmwire.Response{Text: validSummary, FinishType: llmwire.FinishStop},
+				contextWindow: 200000,
+			}
 			s := newCompactionTestSvc(llm)
 			s.stagedCalls = tc.staged
 			s.ms.setMessages(tc.transcript)
 
 			if tc.explicit {
-				s.RequestCompaction(compactionKeepRecent)
+				s.RequestCompaction()
 			}
 
 			var notes []string

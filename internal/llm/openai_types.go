@@ -12,11 +12,10 @@ import (
 )
 
 const (
-	roleUser            = "user"
-	roleAssistant       = "assistant"
-	roleTool            = "tool"
-	roleSystem          = "system"
-	finishTypeToolCalls = "tool_calls"
+	roleUser      = "user"
+	roleAssistant = "assistant"
+	roleTool      = "tool"
+	roleSystem    = "system"
 
 	msgKeyRole      = "role"
 	msgKeyContent   = "content"

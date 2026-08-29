@@ -50,7 +50,7 @@ func compactionNotices(events []controllerapi.SessionNotification, sessionID int
 // compactOnlyRespond answers summarization prompts with a brief and everything
 // else with plain text, so a session reaches idle in one turn.
 func compactOnlyRespond(_ string, msgs []llmwire.Message) *llmwire.Response {
-	if len(msgs) == 1 && strings.Contains(msgs[0].Content, "Conversation:") {
+	if len(msgs) == 1 && strings.Contains(msgs[0].Content, "HISTORY TO SUMMARIZE") {
 		return &llmwire.Response{
 			Text: "## Goal\nsome work\n## Progress\n- done\n## Context for Continuation\ncarry on",
 		}

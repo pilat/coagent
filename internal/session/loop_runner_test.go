@@ -215,7 +215,7 @@ func loopRounds(n, bodySize int) []llmwire.Message {
 }
 
 func textResponse(text string) *llmwire.Response {
-	return &llmwire.Response{Text: text}
+	return &llmwire.Response{Text: text, FinishType: llmwire.FinishStop}
 }
 
 func toolCallResponse(id, name string) *llmwire.Response {
@@ -516,7 +516,7 @@ func TestRunLoopThresholdCompactsWithoutAClearEvent(t *testing.T) {
 	agent := newTestAgent()
 	agent.llmClient = summarizingLLM()
 	agent.maxIterations = 5
-	agent.ms.setMessages(loopRounds(10, 40000))
+	agent.ms.setMessages(loopRounds(70, 4000))
 
 	require.True(t, agent.shouldCompact(compactionThreshold))
 
@@ -534,8 +534,8 @@ func TestRunLoopExplicitCompactionForcesSummarization(t *testing.T) {
 	agent := newTestAgent()
 	agent.llmClient = summarizingLLM()
 	agent.maxIterations = 5
-	agent.ms.setMessages(loopRounds(10, 40000))
-	agent.RequestCompaction(4)
+	agent.ms.setMessages(loopRounds(70, 4000))
+	agent.RequestCompaction()
 
 	_, err := runLoop(t.Context(), agent, loopOptions{Notify: notifier.fn}, iterationGuard(5))
 	require.NoError(t, err)
@@ -552,9 +552,9 @@ func TestRunLoopCompactionFailureIsReportedAndSurvived(t *testing.T) {
 	agent := newTestAgent()
 	agent.llmClient = summarizingLLM()
 	agent.ms = newMessageStore(&loopReloadStore{replaceErr: errors.New("write conflict")}, 1)
-	agent.ms.setMessages(loopRounds(10, 40000))
+	agent.ms.setMessages(loopRounds(70, 4000))
 	agent.maxIterations = 5
-	agent.RequestCompaction(4)
+	agent.RequestCompaction()
 
 	result, err := runLoop(t.Context(), agent, loopOptions{Notify: notifier.fn}, iterationGuard(5))
 

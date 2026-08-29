@@ -8,15 +8,16 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/pilat/coagent/internal/llmwire"
-	"github.com/pilat/coagent/internal/registry"
 	"github.com/pilat/coagent/internal/tool"
 )
 
-// No tail survives compaction, so an unanswered tool_use inside it would be
-// deleted while its external producer still holds the call id. The guard refuses
-// before anything is written.
+// No tail survives a cut through an open group, so an unanswered tool_use inside
+// the tail would be unanswerable. The guard refuses before anything is written.
 func TestCompactRefusesWhileAnExternalCallIsPending(t *testing.T) {
-	llm := &compactionMockLLM{response: &llmwire.Response{Text: validSummary}, contextWindow: 200000}
+	llm := &compactionMockLLM{
+		response:      &llmwire.Response{Text: validSummary, FinishType: llmwire.FinishStop},
+		contextWindow: 200000,
+	}
 	s := newCompactionTestSvc(llm)
 	s.stagedCalls = map[string]string{"c9": tool.IDTask}
 
@@ -33,7 +34,7 @@ func TestCompactRefusesWhileAnExternalCallIsPending(t *testing.T) {
 	}
 	s.ms.setMessages(before)
 
-	compacted, err := s.compact(t.Context(), 1)
+	compacted, err := s.compact(t.Context(), nil)
 
 	require.ErrorIs(t, err, errCompactionPendingCall)
 	assert.False(t, compacted)
@@ -44,7 +45,10 @@ func TestCompactRefusesWhileAnExternalCallIsPending(t *testing.T) {
 // The same guard covers ordinary tool calls of the current turn that have not
 // been executed yet: compaction would erase the call the loop is about to run.
 func TestCompactRefusesWhileOrdinaryToolWorkIsPending(t *testing.T) {
-	llm := &compactionMockLLM{response: &llmwire.Response{Text: validSummary}, contextWindow: 200000}
+	llm := &compactionMockLLM{
+		response:      &llmwire.Response{Text: validSummary, FinishType: llmwire.FinishStop},
+		contextWindow: 200000,
+	}
 	s := newCompactionTestSvc(llm)
 
 	before := []llmwire.Message{
@@ -56,7 +60,7 @@ func TestCompactRefusesWhileOrdinaryToolWorkIsPending(t *testing.T) {
 	}
 	s.ms.setMessages(before)
 
-	compacted, err := s.compact(t.Context(), 1)
+	compacted, err := s.compact(t.Context(), nil)
 
 	require.ErrorIs(t, err, errCompactionPendingCall)
 	assert.False(t, compacted)
@@ -65,9 +69,12 @@ func TestCompactRefusesWhileOrdinaryToolWorkIsPending(t *testing.T) {
 }
 
 // A tool_use abandoned by a later user turn has no external owner and is
-// deliberately not protected — the rebuild destroys it along with everything else.
+// deliberately not protected — the repair policy stubs it in the head.
 func TestCompactProceedsWithAnAbandonedToolCall(t *testing.T) {
-	llm := &compactionMockLLM{response: &llmwire.Response{Text: validSummary}, contextWindow: 200000}
+	llm := &compactionMockLLM{
+		response:      &llmwire.Response{Text: validSummary, FinishType: llmwire.FinishStop},
+		contextWindow: 200000,
+	}
 	s := newCompactionTestSvc(llm)
 
 	s.ms.setMessages([]llmwire.Message{
@@ -75,19 +82,23 @@ func TestCompactProceedsWithAnAbandonedToolCall(t *testing.T) {
 		compactionUserMessage("task"),
 		compactionAssistantCall("c1", "interrupted"),
 		compactionUserMessage("stop, do something else"),
+		compactionAssistantCall("c2", "settled work"),
+		compactionToolResult("c2", "result"),
 	})
 
-	compacted, err := s.compact(t.Context(), 1)
+	compacted, err := s.compact(t.Context(), nil)
 
 	require.NoError(t, err)
 	assert.True(t, compacted)
-	assert.Len(t, s.ms.getMessages(), 5)
 }
 
 // A header that clears the trigger on its own makes compaction an endless
 // grinder: say so instead of summarizing forever.
 func TestCompactRefusesWhenTheHeaderAloneExceedsTheThreshold(t *testing.T) {
-	llm := &compactionMockLLM{response: &llmwire.Response{Text: validSummary}, contextWindow: 32000}
+	llm := &compactionMockLLM{
+		response:      &llmwire.Response{Text: validSummary, FinishType: llmwire.FinishStop},
+		contextWindow: 32000,
+	}
 	s := newCompactionTestSvc(llm)
 
 	s.ms.setMessages([]llmwire.Message{
@@ -97,7 +108,7 @@ func TestCompactRefusesWhenTheHeaderAloneExceedsTheThreshold(t *testing.T) {
 		compactionToolResult("c1", "result"),
 	})
 
-	compacted, err := s.compact(t.Context(), 1)
+	compacted, err := s.compact(t.Context(), nil)
 
 	require.ErrorIs(t, err, errCompactionHeaderTooLarge)
 	assert.False(t, compacted)
@@ -126,54 +137,15 @@ func TestHeaderCheckCountsTheSystemPrompt(t *testing.T) {
 	assert.False(t, s.headerFitsLocked(2))
 }
 
-// Compacting twice in a row must recognise its own output — summary, ack, primer
-// and reattachments — and answer "nothing to compact" without paying for a call.
-func TestSecondCompactionRightAfterOneFindsNothing(t *testing.T) {
-	llm := &compactionMockLLM{response: &llmwire.Response{Text: validSummary}, contextWindow: 200000}
-	s := newCompactionTestSvc(llm)
+// The summarizer call receives the ordinary full output reserve: the complement
+// of the context input fraction, not a fixed summary-length target.
+func TestSummarizationRequestCarriesTheFullOutputReserve(t *testing.T) {
+	const window = 200000
 
-	s.ms.setMessages([]llmwire.Message{
-		{Role: llmwire.RoleSystem, Content: "sys"},
-		compactionUserMessage("task"),
-		skillMessage(t, "review", "Review carefully."),
-		compactionAssistantCall("c1", "work"),
-		compactionToolResult("c1", "result"),
-	})
-
-	compacted, err := s.compact(t.Context(), 1)
-	require.NoError(t, err)
-	require.True(t, compacted)
-	require.Equal(t, 1, llm.callCount)
-	require.Len(t, renderedSkills(s.ms.getMessages()), 1, "the skill was reattached")
-
-	compacted, err = s.compact(t.Context(), 1)
-
-	require.NoError(t, err)
-	assert.False(t, compacted, "nothing but the previous compaction's own output is present")
-	assert.Equal(t, 1, llm.callCount, "no second summarization request")
-}
-
-func TestSummarizeStartAfterSkipsTheWholePostCompactionPreamble(t *testing.T) {
-	messages := []llmwire.Message{
-		{Role: llmwire.RoleSystem, Content: "sys"},
-		compactionUserMessage("task"),
-		compactionUserMessage(compactionSummaryPrefix + " - previous work condensed]\n\nbrief"),
-		{Role: llmwire.RoleAssistant, Content: registry.PostCompactionAssistantAck},
-		compactionUserMessage(compactionPrimerPrefix + " context refresh]"),
-		skillMessage(t, "one", "a"),
-		skillMessage(t, "two", "b"),
-		compactionAssistantCall("c1", "new work"),
+	llm := &compactionMockLLM{
+		response:      &llmwire.Response{Text: validSummary, FinishType: llmwire.FinishStop},
+		contextWindow: window,
 	}
-
-	assert.Equal(t, 7, summarizeStartAfter(messages, 2))
-	assert.Equal(t, 2, summarizeStartAfter(messages[:2], 2), "no previous compaction: start at the header")
-}
-
-// The summarization request carries its own max_tokens cap, so the brief cannot
-// outgrow the room the window reserved for it — first brief and every later
-// merge alike.
-func TestSummarizationRequestCarriesTheOutputCap(t *testing.T) {
-	llm := &compactionMockLLM{response: &llmwire.Response{Text: validSummary}, contextWindow: 200000}
 	s := newCompactionTestSvc(llm)
 
 	s.ms.setMessages([]llmwire.Message{
@@ -183,8 +155,26 @@ func TestSummarizationRequestCarriesTheOutputCap(t *testing.T) {
 		compactionToolResult("c1", "result"),
 	})
 
-	_, err := s.compact(t.Context(), 1)
+	_, err := s.compact(t.Context(), nil)
 	require.NoError(t, err)
 
-	assert.Equal(t, compactionOutputReserve, llm.lastOptions.MaxTokens)
+	assert.Equal(t, int((1-llmwire.ContextInputFraction)*float64(window)), llm.lastOptions.MaxTokens)
+}
+
+// A header carrying tool protocol fields can never pair once retained.
+func TestCompactRefusesAHeaderWithToolProtocolFields(t *testing.T) {
+	llm := &compactionMockLLM{contextWindow: 200000}
+	s := newCompactionTestSvc(llm)
+
+	s.ms.setMessages([]llmwire.Message{
+		{Role: llmwire.RoleSystem, Content: "sys"},
+		{Role: llmwire.RoleAssistant, ToolCalls: []llmwire.ToolCall{{ID: "c1", Name: "read"}}},
+		compactionToolResult("c1", "result"),
+	})
+
+	compacted, err := s.compact(t.Context(), nil)
+
+	require.Error(t, err)
+	assert.False(t, compacted)
+	assert.Zero(t, llm.callCount)
 }

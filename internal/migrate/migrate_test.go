@@ -176,10 +176,15 @@ func TestMigrate_ContextLog(t *testing.T) {
 	_, err = db.ExecContext(ctx, `INSERT INTO extractions (project_id, session_id, text) VALUES (1, 1, 'x')`)
 	require.NoError(t, err)
 
-	_, err = provider.Up(ctx)
+	_, err = provider.UpTo(ctx, 12)
 	require.NoError(t, err)
 
 	assert.True(t, columnExists(t, db, "messages", "cleared_at"), "cleared_at added by 00012")
+
+	_, err = provider.Up(ctx)
+	require.NoError(t, err)
+
+	assert.False(t, columnExists(t, db, "messages", "cleared_at"), "cleared_at dropped again by 00028")
 	assert.False(t, tableExists(t, db, "extractions"), "extractions dropped by 00012")
 	assert.False(t, tableExists(t, db, "extraction_chunks"), "extraction_chunks dropped by 00012")
 	assert.False(t, tableExists(t, db, "memory_meta"), "memory_meta dropped by 00012")

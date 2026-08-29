@@ -117,7 +117,7 @@ func TestHarnessScenario_CompactMidActivationStillAnswersTheInterruptedWork(t *t
 	var once sync.Once
 
 	respond := func(_ string, msgs []llmwire.Message) *llmwire.Response {
-		if len(msgs) == 1 && strings.Contains(msgs[0].Content, "Conversation:") {
+		if len(msgs) == 1 && strings.Contains(msgs[0].Content, "HISTORY TO SUMMARIZE") {
 			return &llmwire.Response{
 				Text: "## Goal\nlist the workdir\n## Progress\n- listed\n## Context for Continuation\nreport back",
 			}
