@@ -84,6 +84,16 @@ func (c *openaiClient) makeRequest(ctx context.Context, reqBody oaiRequest) (*ll
 	}
 
 	if len(completionResp.Choices) == 0 {
+		log.Warn("no_choices_response",
+			zap.String("provider", c.provider),
+			zap.String("model", c.model),
+			zap.String("raw", truncateBody(body)),
+		)
+
+		if msg := completionResp.errorMessage(); msg != "" {
+			return nil, fmt.Errorf("%s api returned no choices: %s", c.provider, msg)
+		}
+
 		return nil, fmt.Errorf("%s api returned no choices", c.provider)
 	}
 
@@ -131,10 +141,7 @@ func (c *openaiClient) checkEmptyResponse(
 		return nil
 	}
 
-	rawBody := string(body)
-	if len(rawBody) > 2000 {
-		rawBody = rawBody[:2000] + "..."
-	}
+	rawBody := truncateBody(body)
 
 	log.Warn("empty_response_body",
 		zap.String("provider", c.provider),
@@ -150,6 +157,15 @@ func (c *openaiClient) checkEmptyResponse(
 	}
 
 	return nil
+}
+
+// truncateBody caps a raw provider response for logging.
+func truncateBody(body []byte) string {
+	if len(body) > bodyLogLimit {
+		return string(body[:bodyLogLimit]) + "..."
+	}
+
+	return string(body)
 }
 
 func attachUsage(result *llmwire.Response, usage Usage) {

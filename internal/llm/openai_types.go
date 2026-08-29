@@ -23,6 +23,8 @@ const (
 	msgKeyType      = "type"
 	oaiTypeFunction = "function"
 	oaiTypeText     = "text"
+
+	bodyLogLimit = 2000 // provider response bodies are capped at this length when logged
 )
 
 // oaiRequest represents the request body for OpenAI-compatible chat APIs.
@@ -55,6 +57,31 @@ type oaiResponse struct {
 	Model   string      `json:"model"`
 	Choices []oaiChoice `json:"choices"`
 	Usage   oaiUsage    `json:"usage"`
+	// OpenRouter (and some others) report upstream failures as {"error": ...}
+	// with HTTP 200 and no choices — object or bare string.
+	Error json.RawMessage `json:"error,omitempty"`
+}
+
+// errorMessage extracts the provider error message from an error-bearing body,
+// returning "" when none is present.
+func (r *oaiResponse) errorMessage() string {
+	if len(r.Error) == 0 {
+		return ""
+	}
+
+	var obj struct {
+		Message string `json:"message"`
+	}
+	if err := json.Unmarshal(r.Error, &obj); err == nil && obj.Message != "" {
+		return obj.Message
+	}
+
+	var s string
+	if err := json.Unmarshal(r.Error, &s); err == nil {
+		return s
+	}
+
+	return string(r.Error)
 }
 
 // oaiChoice represents a completion choice.
