@@ -49,7 +49,10 @@ func TestAutoCompaction_SuccessIsKeyedToItsSummaryMessage(t *testing.T) {
 	ctx := context.Background()
 	h, sessionID := newAutoCompactionStore(t)
 
-	llm := &compactionMockLLM{response: &llmwire.Response{Text: validSummary}, contextWindow: 32000}
+	llm := &compactionMockLLM{
+		response:      &llmwire.Response{Text: validSummary, FinishType: llmwire.FinishStop},
+		contextWindow: 32000,
+	}
 	s := newCompactionTestSvc(llm)
 	s.store = h.store
 	s.id = sessionID

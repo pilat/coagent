@@ -431,14 +431,34 @@ func (c *anthropicClient) convertTools(tools []llmwire.ToolSchema) []anthropic.T
 	return result
 }
 
+// mapAnthropicFinish translates the Anthropic stop_reason onto the portable
+// llmwire outcome; pause_turn, refusal and anything new are unknown, never stop.
+func mapAnthropicFinish(reason anthropic.StopReason) string {
+	switch reason {
+	case anthropic.StopReasonEndTurn, anthropic.StopReasonStopSequence:
+		return llmwire.FinishStop
+	case anthropic.StopReasonMaxTokens:
+		return llmwire.FinishLength
+	case anthropic.StopReasonToolUse:
+		return llmwire.FinishToolCalls
+	case anthropic.StopReasonPauseTurn, anthropic.StopReasonRefusal,
+		anthropic.StopReasonModelContextWindowExceeded:
+		return llmwire.FinishUnknown
+	default:
+		return llmwire.FinishUnknown
+	}
+}
+
 func (c *anthropicClient) parseResponse(message *anthropic.Message) (*llmwire.Response, error) {
 	resp := &llmwire.Response{
-		FinishType: "stop",
+		FinishType: llmwire.FinishStop,
 	}
 
 	if message == nil {
 		return resp, nil
 	}
+
+	resp.FinishType = mapAnthropicFinish(message.StopReason)
 
 	var thinking []anthropicThinkingBlock
 
@@ -468,7 +488,7 @@ func (c *anthropicClient) parseResponse(message *anthropic.Message) (*llmwire.Re
 				Name:      block.Name,
 				Arguments: inputJSON,
 			})
-			resp.FinishType = finishTypeToolCalls
+			resp.FinishType = llmwire.FinishToolCalls
 		}
 	}
 

@@ -103,7 +103,11 @@ func TestMigrationsApplyToAnExistingDatabase(t *testing.T) {
 		`DROP TABLE session_budgets`,
 		`DROP TABLE session_outbox`,
 		`DROP TABLE manager_bindings`,
-		`DELETE FROM goose_db_version WHERE version_id IN (16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27)`,
+		// Restore what migration 28 dropped, so re-running it from the rewound
+		// version sees the pre-28 schema.
+		`ALTER TABLE messages ADD COLUMN cleared_at DATETIME`,
+		`ALTER TABLE sessions ADD COLUMN compaction_brief TEXT DEFAULT ''`,
+		`DELETE FROM goose_db_version WHERE version_id IN (16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28)`,
 	} {
 		_, err = db.ExecContext(ctx, stmt)
 		require.NoError(t, err, stmt)

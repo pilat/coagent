@@ -235,12 +235,17 @@ to an inline placeholder rather than an error, invalidating the prompt prefix
 only from the changed message onward.
 
 Compaction is the sole automatic response to context pressure. At one safe loop
-point, when no tool call is pending, it clears eligible tool-result bodies as
-metadata, summarizes the post-header conversation, appends the replacement turn,
-and reattaches required skill context. There is no continuous pruning ladder and
-no verbatim tail guarantee. Manual compaction requests raise the same event; a
-request behind non-sleep external work waits in the durable inbox. Cleared rows
-drop their image references with their content, in memory and on reload alike.
+point, when no tool call is pending, it summarizes a bounded older head through
+one no-tools model call over the repaired canonical JSONL projection — full tool
+evidence, never placeholders — and commits the checkpoint as one atomic
+positioned replacement: header → marked summary → optional current-skill
+envelope → verbatim raw tail. The complete summarizer request stays within half
+the context window; a repair-free verbatim suffix of at least a tenth of the
+window survives when that much history exists. There is no continuous pruning
+ladder and no clearing stage. Manual compaction requests raise the same event; a
+request behind non-sleep external work waits in the durable inbox. A failed,
+empty, non-relieving or length-stopped attempt leaves the active transcript
+untouched.
 
 The trigger combines the provider's last reported prompt tokens with an estimate
 of appended content; absent measurement is explicitly approximate. Repeated
@@ -301,8 +306,12 @@ Background work reports independently without blocking the parent. A child can
 have serialized rounds: an activation sequence rejects delayed completions from
 an earlier round. Completion delivery uses a transactional compare-and-swap with
 the link state, so producer retries are at-least-once but parent transcript
-delivery is at-most-once. Cascade stop, failed delivery and restart recovery
-preserve the link's obligation until it is resolved or explicitly stopped.
+delivery is at-most-once. A winning commit refreshes the live transcript by
+reloading the authoritative active-message projection from SQLite — rows
+committed outside a concurrent compaction snapshot load after the positioned
+tail, so either reload order yields one copy of each row. Cascade stop, failed
+delivery and restart recovery preserve the link's obligation until it is
+resolved or explicitly stopped.
 
 ### Schedule delivery identity
 

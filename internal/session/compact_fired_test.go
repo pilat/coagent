@@ -13,7 +13,10 @@ import (
 // without spending a model call." A generic compaction failure is a false
 // claim — nothing failed, the tree is parked.
 func TestSlashCompactOnFiredBudgetReturnsParkedExplanation(t *testing.T) {
-	llm := &compactionMockLLM{response: &llmwire.Response{Text: validSummary}, contextWindow: 200000}
+	llm := &compactionMockLLM{
+		response:      &llmwire.Response{Text: validSummary, FinishType: llmwire.FinishStop},
+		contextWindow: 200000,
+	}
 	s := newCompactionTestSvc(llm)
 	s.ms.setMessages(loopRounds(10, 4000))
 	s.budgetGate = &terminalBudgetGate{admitErr: ErrBudgetCheckpoint}

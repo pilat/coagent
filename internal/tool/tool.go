@@ -18,7 +18,6 @@ const (
 	IDSchedule       = "schedule"
 	IDTask           = "task"
 	IDSendToSubagent = "send_to_subagent"
-	IDCompactContext = "compact_context"
 	IDBatch          = "batch"
 	IDSkill          = "skill"
 	IDMCPAdd         = "mcp_add"

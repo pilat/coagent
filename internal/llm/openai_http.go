@@ -101,7 +101,7 @@ func (c *openaiClient) makeRequest(ctx context.Context, reqBody oaiRequest) (*ll
 
 	message := choice.Message
 
-	result, err := c.parseMessage(&message)
+	result, err := c.parseMessage(&message, choice.FinishReason)
 	if err != nil {
 		return nil, err
 	}

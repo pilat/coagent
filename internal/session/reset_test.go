@@ -39,7 +39,6 @@ func TestResetContextAndInjectOnce_StartsBlankSlate(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	s.compactionBrief = "stale summary of the old run"
 	s.todoStore.Add("old todo", todo.PriorityMedium)
 
 	applied, err := s.ResetContextAndInjectOnce(ctx, "reset:fresh:1", "do the fresh job")
@@ -54,7 +53,6 @@ func TestResetContextAndInjectOnce_StartsBlankSlate(t *testing.T) {
 	assert.NotContains(t, msgs[1].Content, "old task")
 
 	// Derived context is gone.
-	assert.Empty(t, s.compactionBrief)
 	assert.Empty(t, s.todoStore.List())
 
 	// The persisted projection agrees: a reload sees only the fresh two rows —

@@ -46,29 +46,28 @@ func (s SessionStatus) valid() bool {
 	}
 }
 
-const sessionColumns = `id, project_id, model, reasoning_level, master_enabled, attributes, agent_type, parent_id, iteration, status, todo_items, compaction_brief, created_at, updated_at, killed_at, root_id`
+const sessionColumns = `id, project_id, model, reasoning_level, master_enabled, attributes, agent_type, parent_id, iteration, status, todo_items, created_at, updated_at, killed_at, root_id`
 
 // errSessionNotFound signals a lookup query matched no row.
 var errSessionNotFound = errors.New("session not found")
 
 // SessionRecord represents a row in the sessions table.
 type SessionRecord struct {
-	ID              int64
-	ProjectID       int64
-	Model           string
-	ReasoningLevel  string
-	MasterEnabled   bool
-	Attributes      map[string]any
-	AgentType       string
-	ParentID        int64
-	RootID          int64
-	Iteration       int
-	Status          SessionStatus
-	TodoItems       string
-	CompactionBrief string
-	CreatedAt       time.Time
-	UpdatedAt       time.Time
-	KilledAt        *time.Time
+	ID             int64
+	ProjectID      int64
+	Model          string
+	ReasoningLevel string
+	MasterEnabled  bool
+	Attributes     map[string]any
+	AgentType      string
+	ParentID       int64
+	RootID         int64
+	Iteration      int
+	Status         SessionStatus
+	TodoItems      string
+	CreatedAt      time.Time
+	UpdatedAt      time.Time
+	KilledAt       *time.Time
 }
 
 // StoredMessage represents a row in the messages table.
@@ -86,7 +85,6 @@ type StoredMessage struct {
 	CostUSD          float64
 	Usage            json.RawMessage
 	CompactedAt      *time.Time
-	ClearedAt        *time.Time
 	CreatedAt        time.Time
 }
 
@@ -122,7 +120,6 @@ type SubagentCreate struct {
 type RuntimeStore interface {
 	InsertMessage(ctx context.Context, sessionID int64, msg *StoredMessage) (int64, error)
 	MarkCompacted(ctx context.Context, ids []int64) error
-	MarkCleared(ctx context.Context, ids []int64) error
 	ReplaceCompactedMessages(
 		ctx context.Context,
 		sessionID int64,
@@ -133,7 +130,6 @@ type RuntimeStore interface {
 
 	UpdateSessionIteration(ctx context.Context, id int64, iteration int, status SessionStatus) error
 	UpdateSessionTodoItems(ctx context.Context, id int64, items json.RawMessage) error
-	UpdateSessionCompactionBrief(ctx context.Context, id int64, brief string) error
 	GetChildSessionStats(ctx context.Context, rootID int64) (count int, totalIterations int, err error)
 	// GetSessionTreeUsage sums token usage and cost over the whole session tree
 	// rooted at rootID, including compacted rows.
@@ -817,34 +813,6 @@ func (s *store) MarkCompacted(ctx context.Context, ids []int64) error {
 	return nil
 }
 
-// MarkCleared stamps cleared_at on tool results; stored content is never touched
-// (the rendered view substitutes a placeholder). Mirrors MarkCompacted.
-func (s *store) MarkCleared(ctx context.Context, ids []int64) error {
-	if len(ids) == 0 {
-		return nil
-	}
-
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("begin tx: %w", err)
-	}
-
-	defer func() { _ = tx.Rollback() }()
-
-	now := time.Now().UTC()
-	for _, id := range ids {
-		if _, err := tx.ExecContext(ctx, `UPDATE messages SET cleared_at = ? WHERE id = ?`, now, id); err != nil {
-			return fmt.Errorf("mark cleared %d: %w", id, err)
-		}
-	}
-
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("commit tx: %w", err)
-	}
-
-	return nil
-}
-
 func (s *store) ReplaceCompactedMessages(
 	ctx context.Context,
 	sessionID int64,
@@ -936,7 +904,7 @@ func replaceCompactedMessagesTx(
 func (s *store) LoadActiveMessages(ctx context.Context, sessionID int64) ([]*StoredMessage, error) {
 	rows, err := s.db.QueryContext(
 		ctx,
-		`SELECT id, session_id, role, content, tool_call_id, tool_name, tool_calls, reasoning_content, reasoning_raw, attachments, cost_usd, usage, compacted_at, cleared_at, created_at
+		`SELECT id, session_id, role, content, tool_call_id, tool_name, tool_calls, reasoning_content, reasoning_raw, attachments, cost_usd, usage, compacted_at, created_at
 		FROM messages WHERE session_id = ? AND compacted_at IS NULL ORDER BY position IS NULL, position, id`,
 		sessionID,
 	)
@@ -993,30 +961,6 @@ func (s *store) UpdateSessionTodoItems(ctx context.Context, id int64, items json
 	)
 	if err != nil {
 		return fmt.Errorf("update session todo items: %w", err)
-	}
-
-	rows, err := result.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("rows affected: %w", err)
-	}
-
-	if rows == 0 {
-		return fmt.Errorf("session %d not found", id)
-	}
-
-	return nil
-}
-
-func (s *store) UpdateSessionCompactionBrief(ctx context.Context, id int64, brief string) error {
-	now := time.Now().UTC()
-
-	result, err := s.db.ExecContext(
-		ctx,
-		`UPDATE sessions SET compaction_brief = ?, updated_at = ? WHERE id = ?`,
-		brief, now, id,
-	)
-	if err != nil {
-		return fmt.Errorf("update session compaction brief: %w", err)
 	}
 
 	rows, err := result.RowsAffected()
@@ -1141,13 +1085,13 @@ func scanSessionRows(rows *sql.Rows) (*SessionRecord, error) {
 func scanSessionFrom(sc rowScanner) (*SessionRecord, error) {
 	var rec SessionRecord
 	var model, reasoning, attrsRaw sql.NullString
-	var agentType, status, todoItems, compactionBrief sql.NullString
+	var agentType, status, todoItems sql.NullString
 	var masterEnabled sql.NullBool
 	var projectID, parentID, iteration, rootID sql.NullInt64
 	var killedAt sql.NullTime
 
 	err := sc.Scan(&rec.ID, &projectID, &model, &reasoning, &masterEnabled, &attrsRaw,
-		&agentType, &parentID, &iteration, &status, &todoItems, &compactionBrief,
+		&agentType, &parentID, &iteration, &status, &todoItems,
 		&rec.CreatedAt, &rec.UpdatedAt, &killedAt, &rootID)
 	if err != nil {
 		return nil, fmt.Errorf("scan session: %w", err)
@@ -1165,7 +1109,6 @@ func scanSessionFrom(sc rowScanner) (*SessionRecord, error) {
 	rec.Iteration = int(iteration.Int64)
 	rec.Status = SessionStatus(status.String)
 	rec.TodoItems = todoItems.String
-	rec.CompactionBrief = compactionBrief.String
 
 	if killedAt.Valid {
 		rec.KilledAt = &killedAt.Time
@@ -1181,14 +1124,14 @@ func scanMessages(rows *sql.Rows) ([]*StoredMessage, error) {
 		var msg StoredMessage
 
 		var toolCallID, toolName, toolCallsRaw, reasoningContent, reasoningRaw, attachmentsRaw, usageRaw sql.NullString
-		var compactedAt, clearedAt sql.NullTime
+		var compactedAt sql.NullTime
 		var costUSD sql.NullFloat64
 
 		err := rows.Scan(
 			&msg.ID, &msg.SessionID, &msg.Role, &msg.Content,
 			&toolCallID, &toolName, &toolCallsRaw, &reasoningContent, &reasoningRaw,
 			&attachmentsRaw,
-			&costUSD, &usageRaw, &compactedAt, &clearedAt, &msg.CreatedAt,
+			&costUSD, &usageRaw, &compactedAt, &msg.CreatedAt,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("scan message: %w", err)
@@ -1219,10 +1162,6 @@ func scanMessages(rows *sql.Rows) ([]*StoredMessage, error) {
 
 		if compactedAt.Valid {
 			msg.CompactedAt = &compactedAt.Time
-		}
-
-		if clearedAt.Valid {
-			msg.ClearedAt = &clearedAt.Time
 		}
 
 		messages = append(messages, &msg)

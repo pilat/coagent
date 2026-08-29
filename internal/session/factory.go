@@ -30,20 +30,19 @@ type Factory interface {
 
 // CreateOptions configures a new or resumed session.
 type CreateOptions struct {
-	ID              int64
-	WorkDir         string
-	Model           string
-	ProjectID       int64
-	AgentType       string // "" = root build agent; set for subagent sessions
-	RootID          int64
-	ReasoningLevel  string
-	Iteration       int
-	TodoItems       string
-	CompactionBrief string
-	LastActivityAt  time.Time
-	InputBoundary   InputBoundary
-	OutputEnabled   bool
-	BudgetGate      BudgetGate
+	ID             int64
+	WorkDir        string
+	Model          string
+	ProjectID      int64
+	AgentType      string // "" = root build agent; set for subagent sessions
+	RootID         int64
+	ReasoningLevel string
+	Iteration      int
+	TodoItems      string
+	LastActivityAt time.Time
+	InputBoundary  InputBoundary
+	OutputEnabled  bool
+	BudgetGate     BudgetGate
 
 	// SettlementOpen marks a lifecycle settlement open: the initial state is not
 	// persisted, so a stopping root is never reactivated by /stop settlement.
@@ -261,7 +260,6 @@ func (f *factory) build(
 		ResumeMessages:  resumeMessages,
 		ResumeIteration: opts.Iteration,
 		ResumeTodoItems: todoItems,
-		CompactionBrief: opts.CompactionBrief,
 		LastActivityAt:  opts.LastActivityAt,
 		InputBoundary:   opts.InputBoundary,
 		OutputEnabled:   opts.OutputEnabled,

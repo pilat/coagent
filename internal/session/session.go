@@ -81,13 +81,11 @@ type Service interface {
 	// intact.
 	ResetContextAndInjectOnce(ctx context.Context, deliveryID, prompt string) (bool, error)
 
-	// AppendDeliveredCompletion appends already-persisted subagent-completion
-	// messages (built by the typed blocking/background builders, committed by the store's
-	// DeliverCompletionAtomic) to the live in-memory transcript, stamping each with
-	// its DB id. It does NOT write the DB. This synchronous refresh is mandatory on
-	// the blocking path so the resumed loop observes the resolved task tool_use
-	// before its next LLM call (otherwise it re-suspends and hangs).
-	AppendDeliveredCompletion(msgs []llmwire.Message, msgIDs []int64)
+	// ReloadDeliveredCompletion replaces the in-memory transcript with the
+	// authoritative SQLite projection. Called after a winning completion CAS:
+	// either reload order yields one copy of each DBID, and both operations
+	// replace the whole projection rather than append rows.
+	ReloadDeliveredCompletion(ctx context.Context) error
 
 	// HasPendingWork reports whether the last assistant turn has unresolved
 	// tool calls that are not external-pending (sleep/task) — i.e. work the loop
@@ -154,9 +152,8 @@ type svc struct {
 	// Loop execution state
 	ms                *messageStore
 	loopDetector      *loopDetector
-	compactionBrief   string
 	compactionFocus   string // optional /compact focus, set for one compact() then cleared
-	pendingCompaction *int
+	pendingCompaction bool
 	compactionInput   *PendingInput
 	// Summary row of the last auto compaction; keys its success output
 	// (`compaction:<id>:succeeded`) so a replay is an idempotent no-op.
@@ -200,7 +197,6 @@ type options struct {
 	ResumeMessages  []llmwire.Message
 	ResumeIteration int
 	ResumeTodoItems []*todo.Item
-	CompactionBrief string
 	LastActivityAt  time.Time
 	InputBoundary   InputBoundary
 	OutputEnabled   bool
@@ -414,7 +410,6 @@ func (s *svc) ResetContextAndInjectOnce(
 	}
 
 	// In-memory derived state drops only once the durable swap succeeded.
-	s.compactionBrief = ""
 	s.todoStore.Clear()
 	s.loopDetector.resetWindow()
 	s.resetContextBaseline()
@@ -428,9 +423,9 @@ func (s *svc) ResetContextAndInjectOnce(
 func BuildBlockingSubagentCompletion(
 	taskCallID string,
 	content string,
-) ([]*sessionstore.StoredMessage, []llmwire.Message, error) {
+) ([]*sessionstore.StoredMessage, error) {
 	if taskCallID == "" {
-		return nil, nil, errors.New("build blocking subagent completion: task call id is required")
+		return nil, errors.New("build blocking subagent completion: task call id is required")
 	}
 
 	stored := &sessionstore.StoredMessage{
@@ -439,14 +434,8 @@ func BuildBlockingSubagentCompletion(
 		ToolCallID: taskCallID,
 		ToolName:   tool.IDTask,
 	}
-	mem := llmwire.Message{
-		Role:       llmwire.RoleTool,
-		Content:    content,
-		ToolCallID: taskCallID,
-		ToolName:   tool.IDTask,
-	}
 
-	return []*sessionstore.StoredMessage{stored}, []llmwire.Message{mem}, nil
+	return []*sessionstore.StoredMessage{stored}, nil
 }
 
 // BuildBackgroundSubagentCompletion builds a standalone synthetic event for a
@@ -455,9 +444,9 @@ func BuildBlockingSubagentCompletion(
 func BuildBackgroundSubagentCompletion(
 	childID int64,
 	content string,
-) ([]*sessionstore.StoredMessage, []llmwire.Message, error) {
+) ([]*sessionstore.StoredMessage, error) {
 	if childID <= 0 {
-		return nil, nil, errors.New("build background subagent completion: positive child id is required")
+		return nil, errors.New("build background subagent completion: positive child id is required")
 	}
 
 	callID := id.Generate()
@@ -466,7 +455,7 @@ func BuildBackgroundSubagentCompletion(
 
 	toolCallsJSON, err := json.Marshal(toolCalls)
 	if err != nil {
-		return nil, nil, fmt.Errorf("marshal subagent completion tool call: %w", err)
+		return nil, fmt.Errorf("marshal subagent completion tool call: %w", err)
 	}
 
 	asstStored := &sessionstore.StoredMessage{Role: llmwire.RoleAssistant, ToolCalls: toolCallsJSON}
@@ -475,18 +464,13 @@ func BuildBackgroundSubagentCompletion(
 		Role: llmwire.RoleTool, Content: content, ToolCallID: callID, ToolName: subagentEventTool,
 	}
 
-	asstMem := llmwire.Message{Role: llmwire.RoleAssistant, ToolCalls: toolCalls}
-	resultMem := llmwire.Message{
-		Role: llmwire.RoleTool, Content: content, ToolCallID: callID, ToolName: subagentEventTool,
-	}
-
-	return []*sessionstore.StoredMessage{asstStored, resultStored}, []llmwire.Message{asstMem, resultMem}, nil
+	return []*sessionstore.StoredMessage{asstStored, resultStored}, nil
 }
 
-// AppendDeliveredCompletion appends already-persisted completion messages to the
-// live in-memory transcript, stamping each with its store DBID. No DB write.
-func (s *svc) AppendDeliveredCompletion(msgs []llmwire.Message, msgIDs []int64) {
-	s.ms.appendPersisted(msgs, msgIDs)
+// ReloadDeliveredCompletion refreshes the live in-memory transcript from the
+// authoritative active-message projection. No DB write.
+func (s *svc) ReloadDeliveredCompletion(ctx context.Context) error {
+	return s.ms.reloadMessages(ctx)
 }
 
 func (s *svc) Close() {
@@ -502,12 +486,11 @@ func (s *svc) Close() {
 }
 
 // RequestCompaction requests a forced compaction at the next loop iteration.
-// Implements the session-local compactor interface.
-func (s *svc) RequestCompaction(keepRecentRounds int) {
+func (s *svc) RequestCompaction() {
 	s.ms.mu.Lock()
 	defer s.ms.mu.Unlock()
 
-	s.pendingCompaction = &keepRecentRounds
+	s.pendingCompaction = true
 }
 
 // buildPrompt assembles the promptBuilder for a session before tool registration.
@@ -633,7 +616,7 @@ func (s *svc) compactionRequested() bool {
 	s.ms.mu.Lock()
 	defer s.ms.mu.Unlock()
 
-	return s.pendingCompaction != nil
+	return s.pendingCompaction
 }
 
 func (s *svc) compactionCommandInput() *PendingInput {
@@ -672,14 +655,14 @@ func (s *svc) setCompactionFocus(focus string) {
 }
 
 // consumePendingCompaction atomically reads and clears the pending compaction request.
-func (s *svc) consumePendingCompaction() *int {
+func (s *svc) consumePendingCompaction() bool {
 	s.ms.mu.Lock()
 	defer s.ms.mu.Unlock()
 
-	result := s.pendingCompaction
-	s.pendingCompaction = nil
+	pending := s.pendingCompaction
+	s.pendingCompaction = false
 
-	return result
+	return pending
 }
 
 func (s *svc) contextWindow() int {
@@ -707,9 +690,6 @@ func (s *svc) applyResumeOrInit(ctx context.Context, opts options, log *zap.Logg
 		s.ms.setMessages(opts.ResumeMessages)
 
 		s.iterationOffset = opts.ResumeIteration
-		if opts.CompactionBrief != "" {
-			s.compactionBrief = opts.CompactionBrief
-		}
 
 		if len(opts.ResumeTodoItems) > 0 {
 			s.todoStore.Replace(opts.ResumeTodoItems)

@@ -28,7 +28,7 @@ type toolCallResultItem struct {
 // batchConflict rejects a call that cannot share an assistant turn with its
 // siblings: calls in one response run concurrently and cannot order each other.
 func batchConflict(batch []llmwire.ToolCall, call llmwire.ToolCall) error {
-	hasTask, hasFollowUp, suspending := false, false, ""
+	hasTask, hasFollowUp := false, false
 
 	for _, sibling := range batch {
 		switch sibling.Name {
@@ -36,10 +36,6 @@ func batchConflict(batch []llmwire.ToolCall, call llmwire.ToolCall) error {
 			hasTask = true
 		case tool.IDSendToSubagent:
 			hasFollowUp = true
-		}
-
-		if tool.IsExternalCall(sibling.Name) || sibling.Name == tool.IDSendToSubagent {
-			suspending = sibling.Name
 		}
 	}
 
@@ -54,15 +50,6 @@ func batchConflict(batch []llmwire.ToolCall, call llmwire.ToolCall) error {
 		return fmt.Errorf(
 			"sleep cannot be combined with %s: subagent completion wakes the session automatically",
 			conflict,
-		)
-	}
-
-	// The flag a compaction request raises dies with the svc a suspend rebuilds;
-	// refuse the combination rather than lose the request silently.
-	if suspending != "" && call.Name == tool.IDCompactContext {
-		return fmt.Errorf(
-			"cannot compact in the same turn as %s — call compact_context again after it completes",
-			suspending,
 		)
 	}
 

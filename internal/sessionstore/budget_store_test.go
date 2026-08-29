@@ -129,7 +129,7 @@ func TestBudgetStore_CompactionCrossingCommitsReplacementAndCheckpointTogether(t
 	require.NoError(t, err)
 
 	result, err := store.ReplaceCompactedMessagesBudgeted(ctx, BudgetedCompaction{
-		SessionID: root.ID, RootID: root.ID, Brief: "durable brief",
+		SessionID: root.ID, RootID: root.ID,
 		Entries: []CompactionEntry{{Message: &StoredMessage{Role: "user", Content: "summary", CostUSD: 0.75}}},
 	})
 	require.NoError(t, err)

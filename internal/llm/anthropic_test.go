@@ -253,7 +253,7 @@ func TestParseResponse_TextOnly(t *testing.T) {
 	var block anthropic.ContentBlockUnion
 	require.NoError(t, block.UnmarshalJSON([]byte(raw)))
 
-	msg := &anthropic.Message{Content: []anthropic.ContentBlockUnion{block}}
+	msg := &anthropic.Message{Content: []anthropic.ContentBlockUnion{block}, StopReason: anthropic.StopReasonEndTurn}
 
 	resp, err := c.parseResponse(msg)
 	require.NoError(t, err)

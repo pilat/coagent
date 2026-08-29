@@ -72,6 +72,12 @@ func (c *scriptedLLM) Chat(
 			panic(o.panic)
 		}
 
+		// The scripted harness bypasses provider parsing, so give an unparsed
+		// response the normal completion outcome a real client would report.
+		if o.resp != nil && o.resp.FinishType == "" && len(o.resp.ToolCalls) == 0 {
+			o.resp.FinishType = llmwire.FinishStop
+		}
+
 		return o.resp, nil
 	}
 }

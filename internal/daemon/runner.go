@@ -955,17 +955,16 @@ func (s *svc) openSession(
 	}
 
 	opts := session.CreateOptions{
-		ID:              sessionID,
-		WorkDir:         workDir,
-		Model:           rec.Model,
-		ProjectID:       rec.ProjectID,
-		AgentType:       rec.AgentType,
-		RootID:          rec.RootID,
-		ReasoningLevel:  rec.ReasoningLevel,
-		Iteration:       rec.Iteration,
-		TodoItems:       rec.TodoItems,
-		CompactionBrief: rec.CompactionBrief,
-		LastActivityAt:  rec.UpdatedAt,
+		ID:             sessionID,
+		WorkDir:        workDir,
+		Model:          rec.Model,
+		ProjectID:      rec.ProjectID,
+		AgentType:      rec.AgentType,
+		RootID:         rec.RootID,
+		ReasoningLevel: rec.ReasoningLevel,
+		Iteration:      rec.Iteration,
+		TodoItems:      rec.TodoItems,
+		LastActivityAt: rec.UpdatedAt,
 
 		ExtraSkills:         s.builtinSkillsFor(ctx, rec),
 		StagedExternalCalls: externalCalls,

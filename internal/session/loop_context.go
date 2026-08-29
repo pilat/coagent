@@ -26,12 +26,10 @@ func (r *loopRunner) applyContextEvents(ctx context.Context) {
 		return
 	}
 
-	keepRecent := compactionKeepRecent
 	explicit := false
 	commandInput := r.agent.compactionCommandInput()
 
-	if pending := r.agent.consumePendingCompaction(); pending != nil {
-		keepRecent = *pending
+	if r.agent.consumePendingCompaction() {
 		explicit = true
 	}
 
@@ -73,7 +71,7 @@ func (r *loopRunner) applyContextEvents(ctx context.Context) {
 		durableCommand = nil
 	}
 
-	ok, err := r.agent.compactWithCommand(ctx, keepRecent, durableCommand)
+	ok, err := r.agent.compact(ctx, durableCommand)
 
 	// The focus is one-shot: it described this request, not the next one.
 	r.agent.setCompactionFocus("")

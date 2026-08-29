@@ -83,11 +83,21 @@ type Message struct {
 	Usage            *MessageUsage   `json:"Usage,omitempty"`
 }
 
+// FinishType is the portable outcome vocabulary every driver reports on
+// llmwire.Response. Native reasons that are neither normal completion, tool
+// calling nor a length stop map to FinishUnknown rather than FinishStop.
+const (
+	FinishStop      = "stop"
+	FinishToolCalls = "tool_calls"
+	FinishLength    = "length"
+	FinishUnknown   = "unknown"
+)
+
 type Response struct {
 	Text             string
 	Thoughts         string // Model's reasoning/thinking (if available)
 	ToolCalls        []ToolCall
-	FinishType       string          // "stop", "tool_calls", "error"
+	FinishType       string          // FinishStop, FinishToolCalls, FinishLength, FinishUnknown
 	ReasoningContent string          // For OpenAI-compatible models that return reasoning_content
 	ReasoningRaw     json.RawMessage // sealed ReasoningEnvelope; persisted and replayed verbatim
 	CostUSD          float64

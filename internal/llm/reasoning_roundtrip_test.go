@@ -132,7 +132,7 @@ func TestOpenRouterCapturesAndEchoesReasoningDetails(t *testing.T) {
 		Role:             roleAssistant,
 		RawContent:       json.RawMessage(`"working on it"`),
 		ReasoningDetails: details,
-	})
+	}, "stop")
 	require.NoError(t, err)
 
 	payload, ok := unwrapReasoning(resp.ReasoningRaw, "anthropic/claude-opus-5")

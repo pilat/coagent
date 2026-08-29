@@ -19,7 +19,6 @@ import (
 const (
 	emptyResponseWarnThreshold  = 3
 	emptyResponseBreakThreshold = 6
-	compactionKeepRecent        = 6
 
 	// compactionAttemptCap is how many consecutive automatic compactions may fail
 	// to relieve the pressure before the automatic path stops trying.

@@ -13,7 +13,6 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/pilat/coagent/internal/controllerapi"
-	"github.com/pilat/coagent/internal/llmwire"
 	"github.com/pilat/coagent/internal/migrate"
 	"github.com/pilat/coagent/internal/registry"
 	"github.com/pilat/coagent/internal/schedule"
@@ -227,7 +226,7 @@ func (m *mockSession) ResetContextAndInjectOnce(ctx context.Context, _, prompt s
 	err := m.ResetContextAndInject(ctx, prompt)
 	return err == nil, err
 }
-func (m *mockSession) AppendDeliveredCompletion(_ []llmwire.Message, _ []int64) {}
+func (m *mockSession) ReloadDeliveredCompletion(context.Context) error { return nil }
 func (m *mockSession) HasPendingWork() bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()

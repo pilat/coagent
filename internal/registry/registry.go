@@ -51,7 +51,7 @@ var builtinAgentTypes = map[AgentType]AgentTypeConfig{
 		Description:   "Context compression agent",
 		Mode:          ModeHidden,
 		Tools:         []string{},
-		Prompt:        CompactionInitialPrompt,
+		Prompt:        CompactionSummaryPrompt,
 		MaxIterations: 0, // unlimited
 	},
 }

@@ -66,7 +66,6 @@ func TestScheduledDeliveryStore_ContextResetIsAtomicIdempotentAndClearsDerivedSt
 
 	_, err = store.InsertMessage(ctx, sess.ID, &StoredMessage{Role: llmwire.RoleUser, Content: "old task"})
 	require.NoError(t, err)
-	require.NoError(t, store.UpdateSessionCompactionBrief(ctx, sess.ID, "old brief"))
 	require.NoError(t, store.UpdateSessionTodoItems(ctx, sess.ID, []byte(`[{"content":"old"}]`)))
 
 	opening := []*StoredMessage{
@@ -93,11 +92,10 @@ func TestScheduledDeliveryStore_ContextResetIsAtomicIdempotentAndClearsDerivedSt
 	assert.Equal(t, "project context", active[0].Content)
 	assert.Equal(t, "fresh task", active[1].Content)
 
-	var brief, todos string
+	var todos string
 	require.NoError(t, db.QueryRowContext(
-		ctx, `SELECT compaction_brief, todo_items FROM sessions WHERE id = ?`, sess.ID,
-	).Scan(&brief, &todos))
-	assert.Empty(t, brief)
+		ctx, `SELECT todo_items FROM sessions WHERE id = ?`, sess.ID,
+	).Scan(&todos))
 	assert.JSONEq(t, `[]`, todos)
 }
 
@@ -109,7 +107,6 @@ func TestScheduledDeliveryStore_ContextResetRollsBackClaimAndTranscriptOnInsertF
 
 	_, err = store.InsertMessage(ctx, sess.ID, &StoredMessage{Role: llmwire.RoleUser, Content: "old task"})
 	require.NoError(t, err)
-	require.NoError(t, store.UpdateSessionCompactionBrief(ctx, sess.ID, "must survive"))
 	require.NoError(t, store.UpdateSessionTodoItems(ctx, sess.ID, []byte(`[{"content":"keep"}]`)))
 
 	_, err = db.ExecContext(ctx, `
@@ -138,11 +135,10 @@ func TestScheduledDeliveryStore_ContextResetRollsBackClaimAndTranscriptOnInsertF
 	require.Len(t, active, 1)
 	assert.Equal(t, "old task", active[0].Content)
 
-	var brief, todos string
+	var todos string
 	require.NoError(t, db.QueryRowContext(
-		ctx, `SELECT compaction_brief, todo_items FROM sessions WHERE id = ?`, sess.ID,
-	).Scan(&brief, &todos))
-	assert.Equal(t, "must survive", brief)
+		ctx, `SELECT todo_items FROM sessions WHERE id = ?`, sess.ID,
+	).Scan(&todos))
 	assert.JSONEq(t, `[{"content":"keep"}]`, todos)
 
 	var claims int

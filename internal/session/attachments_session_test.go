@@ -13,7 +13,6 @@ import (
 	"github.com/pilat/coagent/internal/llmwire"
 	"github.com/pilat/coagent/internal/migrate"
 	"github.com/pilat/coagent/internal/sessionstore"
-	"github.com/pilat/coagent/internal/tool"
 )
 
 func newAttachmentsStore(t *testing.T) (*sql.DB, sessionstore.RuntimeStore, int64) {
@@ -119,61 +118,4 @@ func TestEstimateTokens_ImageDeltaBounded(t *testing.T) {
 
 	delta := estimateTokens(withRef(1<<30)) - estimateTokens(base)
 	assert.Equal(t, 8192, delta, "huge files cap at the ceiling instead of triggering spurious compaction")
-}
-
-type attachmentsRenderedMsg struct {
-	Role    string
-	Content string
-	HasImgs bool
-}
-
-func renderAttachmentsView(msgs []llmwire.Message) []attachmentsRenderedMsg {
-	out := make([]attachmentsRenderedMsg, len(msgs))
-	for i, m := range msgs {
-		out[i] = attachmentsRenderedMsg{Role: m.Role, Content: m.Content, HasImgs: len(m.Images) > 0}
-	}
-
-	return out
-}
-
-// Clearing must drop refs at all three surfaces: in-memory mutation, the
-// store-rebuilt projection under cleared_at, and — via the byte-stability
-// comparison — the event-apply path sharing the placeholder helper. A missed
-// nil-out yields pre/post-restart divergence; this pins all three together.
-func TestClear_DropsRefsAtEverySurface(t *testing.T) {
-	ctx := context.Background()
-	_, store, sessionID := newAttachmentsStore(t)
-	s := &svc{
-		llmClient:    &compactionMockLLM{},
-		ms:           newMessageStore(store, sessionID),
-		loopDetector: newLoopDetector(),
-		registry:     tool.NewRegistry(),
-		prompt:       newPromptBuilder(testPrompt, "", ""),
-	}
-
-	appendImageToolResult(ctx, t, s.ms, "old-1") // will be cleared
-	appendImageToolResult(ctx, t, s.ms, "new-1") // protected tail
-
-	require.Positive(t, s.applyClear(ctx, 1))
-	msgs := s.ms.getMessages()
-
-	clearedInMemory := msgs[1]
-	assert.Equal(t, clearedPlaceholder("read"), clearedInMemory.Content)
-	assert.Nil(t, clearedInMemory.Images, "cleared row loses refs in memory immediately")
-
-	survivor := msgs[3]
-	assert.Len(t, survivor.Images, 2, "protected tail keeps its refs")
-
-	require.NoError(t, s.ms.reloadMessages(ctx))
-
-	assert.Equal(t, renderAttachmentsView(s.ms.getMessages()), renderAttachmentsView(msgs),
-		"event-apply and reload projections must be byte-identical — no divergence across restart")
-
-	for _, m := range s.ms.getMessages() {
-		if m.Content == clearedPlaceholder("read") {
-			assert.Nil(t, m.Images, "reloaded cleared row must not resurrect pixels")
-		} else if m.Role == llmwire.RoleTool {
-			assert.Equal(t, demoRefs, m.Images)
-		}
-	}
 }

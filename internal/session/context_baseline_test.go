@@ -32,8 +32,9 @@ func TestCompactionLeavesNoBaselineBehind(t *testing.T) {
 	ctx := context.Background()
 	mockLLM := &compactionMockLLM{
 		response: &llmwire.Response{
-			Text:  "## Goal\ng\n## Progress\np\n## Context for Continuation\nc",
-			Usage: &llmwire.MessageUsage{PromptTokens: 999_999},
+			Text:       validSummary,
+			FinishType: llmwire.FinishStop,
+			Usage:      &llmwire.MessageUsage{PromptTokens: 999_999},
 		},
 		contextWindow: 200000,
 	}
@@ -42,16 +43,16 @@ func TestCompactionLeavesNoBaselineBehind(t *testing.T) {
 	seedCompactableTranscript(ctx, t, s)
 	s.recordContextBaseline(150000, 2, s.modelGeneration())
 
-	ok, err := s.compact(ctx, 1)
+	ok, err := s.compact(ctx, nil)
 	require.NoError(t, err)
 	require.True(t, ok)
 
 	assert.Nil(t, s.loadContextBaseline(), "the summarization request is not a measurement of the new transcript")
 }
 
-// Clearing runs before summarization and is durable, so a summarization failure
-// must not leave a baseline that describes the pre-clear transcript.
-func TestFailedCompactionStillDropsTheBaseline(t *testing.T) {
+// A failed attempt changes no transcript metadata, so the baseline it described
+// still describes the active transcript and must be kept.
+func TestFailedCompactionKeepsItsBaseline(t *testing.T) {
 	ctx := context.Background()
 	mockLLM := &compactionMockLLM{err: errStoreDown, contextWindow: 200000}
 	s := newCompactionTestSvc(mockLLM)
@@ -59,10 +60,10 @@ func TestFailedCompactionStillDropsTheBaseline(t *testing.T) {
 	seedCompactableTranscript(ctx, t, s)
 	s.recordContextBaseline(150000, 2, s.modelGeneration())
 
-	_, err := s.compact(ctx, 1)
+	_, err := s.compact(ctx, nil)
 	require.Error(t, err)
 
-	assert.Nil(t, s.loadContextBaseline())
+	assert.NotNil(t, s.loadContextBaseline(), "the transcript was not rewritten, so its measurement stands")
 }
 
 // Another window and another tokenizer: the measurement describes neither.
@@ -136,7 +137,10 @@ func TestBaselineFromAnInFlightRequestIsDroppedAfterAModelSwitch(t *testing.T) {
 // away a valid measurement and downgrade the next check to a pure estimate.
 func TestNoOpCompactionKeepsTheBaseline(t *testing.T) {
 	ctx := context.Background()
-	llm := &compactionMockLLM{response: &llmwire.Response{Text: validSummary}, contextWindow: 200000}
+	llm := &compactionMockLLM{
+		response:      &llmwire.Response{Text: validSummary, FinishType: llmwire.FinishStop},
+		contextWindow: 200000,
+	}
 	s := newCompactionTestSvc(llm)
 
 	s.ms.setMessages([]llmwire.Message{
@@ -145,7 +149,7 @@ func TestNoOpCompactionKeepsTheBaseline(t *testing.T) {
 	})
 	s.recordContextBaseline(1234, 2, s.modelGeneration())
 
-	compacted, err := s.compact(ctx, 1)
+	compacted, err := s.compact(ctx, nil)
 	require.NoError(t, err)
 	require.False(t, compacted)
 

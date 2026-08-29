@@ -1,26 +1,17 @@
 package session
 
 import (
-	"errors"
-	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"go.uber.org/zap"
-	"go.uber.org/zap/zapcore"
-	"go.uber.org/zap/zaptest/observer"
 
 	"github.com/pilat/coagent/internal/llmwire"
-	"github.com/pilat/coagent/internal/logger"
-	"github.com/pilat/coagent/internal/registry"
 )
 
-const testPrimer = "2020-01-01T00:00:00Z"
-
 func TestCompactLeavesTranscriptsWithNothingToSummarize(t *testing.T) {
-	summary := llmwire.Message{Role: llmwire.RoleUser, Content: "[CONTEXT SUMMARY - previous work condensed]\n\nold"}
-	ack := llmwire.Message{Role: llmwire.RoleAssistant, Content: registry.PostCompactionAssistantAck}
+	summary := llmwire.Message{Role: llmwire.RoleUser, Content: renderMarkedSummary("old checkpoint", "")}
 
 	tests := []struct {
 		name     string
@@ -39,24 +30,11 @@ func TestCompactLeavesTranscriptsWithNothingToSummarize(t *testing.T) {
 			},
 		},
 		{
-			name: "previous ack is the last message",
+			name: "previous summary plus its reattachment are the last messages",
 			messages: []llmwire.Message{
 				{Role: llmwire.RoleSystem, Content: "sys"},
 				compactionUserMessage("task"),
 				summary,
-				ack,
-			},
-		},
-		{
-			// A second /compact straight after one: summary, ack, primer and the
-			// skill envelopes it reattached are all its own output.
-			name: "everything present is the previous compaction's own output",
-			messages: []llmwire.Message{
-				{Role: llmwire.RoleSystem, Content: "sys"},
-				compactionUserMessage("task"),
-				summary,
-				ack,
-				compactionUserMessage(fmt.Sprintf(registry.PostCompactionPrimer, testPrimer)),
 				skillMessage(t, "review", "Review carefully."),
 			},
 		},
@@ -64,124 +42,176 @@ func TestCompactLeavesTranscriptsWithNothingToSummarize(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			llm := &compactionMockLLM{response: &llmwire.Response{Text: validSummary}}
+			llm := &compactionMockLLM{response: &llmwire.Response{Text: validSummary, FinishType: llmwire.FinishStop}}
 			s := newCompactionTestSvc(llm)
 			s.ms.setMessages(tc.messages)
 
-			compacted, err := s.compact(t.Context(), 1)
+			compacted, err := s.compact(t.Context(), nil)
 
 			require.NoError(t, err)
-			assert.False(t, compacted)
+			assert.False(t, compacted, "nothing to compact")
 			assert.Zero(t, llm.callCount)
 			assert.Equal(t, tc.messages, s.ms.getMessages())
 		})
 	}
 }
 
-func TestCompactSummarizesOnlyPastThePreviousCompactionHeader(t *testing.T) {
-	llm := &compactionMockLLM{response: &llmwire.Response{Text: validSummary}}
+// A second compaction immediately after one has no raw delta: the previous
+// summary and its reattachment scaffolding are the only rows present.
+func TestSecondCompactionRightAfterOneFindsNothing(t *testing.T) {
+	llm := &compactionMockLLM{response: &llmwire.Response{Text: validSummary, FinishType: llmwire.FinishStop}}
 	s := newCompactionTestSvc(llm)
-	s.compactionBrief = "old brief"
+
 	s.ms.setMessages([]llmwire.Message{
 		{Role: llmwire.RoleSystem, Content: "sys"},
 		compactionUserMessage("task"),
-		compactionUserMessage("[CONTEXT SUMMARY - previous work condensed]\n\nold brief"),
-		{Role: llmwire.RoleAssistant, Content: registry.PostCompactionAssistantAck},
-		compactionUserMessage(fmt.Sprintf(registry.PostCompactionPrimer, testPrimer)),
+		skillMessage(t, "review", "Review carefully."),
+		compactionAssistantCall("c1", "work"),
+		compactionToolResult("c1", "result"),
+	})
+
+	compacted, err := s.compact(t.Context(), nil)
+	require.NoError(t, err)
+	require.True(t, compacted)
+	require.Equal(t, 1, llm.callCount)
+	require.Len(t, renderedSkills(s.ms.getMessages()), 1, "the skill was reattached")
+
+	compacted, err = s.compact(t.Context(), nil)
+
+	require.NoError(t, err)
+	assert.False(t, compacted, "nothing but the previous compaction's own output is present")
+	assert.Equal(t, 1, llm.callCount, "no second summarization request")
+}
+
+// A repeated checkpoint feeds the previous summary as the anchor and only the
+// delta as HISTORY TO SUMMARIZE.
+func TestSecondCheckpointAnchorsOnThePreviousSummaryAndSendsOnlyTheDelta(t *testing.T) {
+	window := 1 << 20
+
+	llm := &compactionMockLLM{
+		response:      &llmwire.Response{Text: validSummary, FinishType: llmwire.FinishStop},
+		contextWindow: window,
+	}
+	s := newCompactionTestSvc(llm)
+	s.ms.setMessages([]llmwire.Message{
+		{Role: llmwire.RoleSystem, Content: "sys"},
+		compactionUserMessage("task"),
 		compactionAssistantCall("c1", "MIDDLE-WORK"),
 		compactionToolResult("c1", "middle result"),
 		compactionAssistantCall("c2", "recent work"),
 		compactionToolResult("c2", "recent result"),
 	})
 
-	compacted, err := s.compact(t.Context(), 1)
-
+	_, err := s.compact(t.Context(), nil)
 	require.NoError(t, err)
-	assert.True(t, compacted)
+	require.Equal(t, 1, llm.callCount)
 
-	require.Len(t, llm.prompts, 1)
-	prompt := llm.prompts[0]
-	assert.Contains(t, prompt, "EXISTING BRIEF:")
-	assert.Contains(t, prompt, "MIDDLE-WORK")
-	assert.NotContains(t, prompt, "[CONTEXT SUMMARY")
-	assert.NotContains(t, prompt, registry.PostCompactionAssistantAck)
-	assert.NotContains(t, prompt, "[Post-compaction")
+	s.ms.mu.Lock()
+	s.ms.messages = append(s.ms.messages,
+		compactionAssistantCall("c3", "NEWLY-AGED"),
+		compactionToolResult("c3", "new result"),
+	)
+	s.ms.mu.Unlock()
+
+	compacted, err := s.compact(t.Context(), nil)
+	require.NoError(t, err)
+	require.True(t, compacted)
+	require.Equal(t, 2, llm.callCount)
+
+	prompt := llm.prompts[1]
+	assert.Contains(t, prompt, summarizePrevSection, "the previous marked summary is the anchor")
+	assert.Contains(t, prompt, validSummary, "the extracted model text anchors, not the wrapper")
+	assert.Contains(t, prompt, "NEWLY-AGED", "the delta is the raw group that left the tail")
 }
 
-func TestCompactSkipsOnlyTheHeaderMessagesThatArePresent(t *testing.T) {
-	llm := &compactionMockLLM{response: &llmwire.Response{Text: validSummary}}
-	s := newCompactionTestSvc(llm)
-	s.compactionBrief = "old brief"
-	// A summary without the ack and primer that normally follow it: the skips are
-	// conditional, so nothing after the summary may be swallowed.
-	s.ms.setMessages([]llmwire.Message{
-		{Role: llmwire.RoleSystem, Content: "sys"},
-		compactionUserMessage("task"),
-		compactionUserMessage("[CONTEXT SUMMARY - previous work condensed]\n\nold brief"),
-		compactionAssistantCall("c1", "MIDDLE-WORK"),
-		compactionToolResult("c1", "middle result"),
-		compactionAssistantCall("c2", "recent work"),
-		compactionToolResult("c2", "recent result"),
+func TestParseCheckpointPrefix(t *testing.T) {
+	t.Run("no previous checkpoint", func(t *testing.T) {
+		msgs := []llmwire.Message{
+			{Role: llmwire.RoleSystem, Content: "sys"},
+			compactionUserMessage("task"),
+		}
+
+		cp := parseCheckpointPrefix(msgs, 2)
+		assert.Equal(t, -1, cp.summaryRowIdx)
+		assert.Equal(t, 2, cp.rawStart)
 	})
 
-	compacted, err := s.compact(t.Context(), 1)
+	t.Run("marked summary directly after the header", func(t *testing.T) {
+		msgs := []llmwire.Message{
+			{Role: llmwire.RoleSystem, Content: "sys"},
+			compactionUserMessage("task"),
+			compactionUserMessage(renderMarkedSummary("anchor text", "")),
+			compactionAssistantCall("c1", "raw work"),
+		}
 
-	require.NoError(t, err)
-	assert.True(t, compacted)
+		cp := parseCheckpointPrefix(msgs, 2)
+		assert.Equal(t, 2, cp.summaryRowIdx)
+		assert.Equal(t, "anchor text", cp.prevSummary)
+		assert.Equal(t, 3, cp.rawStart)
+		assert.Equal(t, -1, cp.skillRowIdx)
+	})
 
-	require.Len(t, llm.prompts, 1)
-	assert.Contains(t, llm.prompts[0], "MIDDLE-WORK")
-	assert.NotContains(t, llm.prompts[0], "[CONTEXT SUMMARY")
+	t.Run("reattachment row is scaffolding", func(t *testing.T) {
+		rendered := skillMessage(t, "review", "Review carefully.")
+		msgs := []llmwire.Message{
+			{Role: llmwire.RoleSystem, Content: "sys"},
+			compactionUserMessage("task"),
+			compactionUserMessage(renderMarkedSummary("anchor", "")),
+			compactionUserMessage(rendered.Content),
+			compactionAssistantCall("c1", "raw work"),
+		}
+
+		cp := parseCheckpointPrefix(msgs, 2)
+		assert.Equal(t, 2, cp.summaryRowIdx)
+		assert.Equal(t, 3, cp.skillRowIdx)
+		assert.Equal(t, 4, cp.rawStart)
+	})
+
+	t.Run("an unclosed wrapper is ordinary history", func(t *testing.T) {
+		msgs := []llmwire.Message{
+			{Role: llmwire.RoleSystem, Content: "sys"},
+			compactionUserMessage("task"),
+			compactionUserMessage(compactionMarkOpen + "\n\nno closing marker"),
+			compactionAssistantCall("c1", "work"),
+		}
+
+		cp := parseCheckpointPrefix(msgs, 2)
+		assert.Equal(t, -1, cp.summaryRowIdx)
+		assert.Equal(t, 2, cp.rawStart)
+	})
+
+	t.Run("a summary not immediately after the header is raw", func(t *testing.T) {
+		msgs := []llmwire.Message{
+			{Role: llmwire.RoleSystem, Content: "sys"},
+			compactionUserMessage("task"),
+			compactionUserMessage("steering turn"),
+			compactionUserMessage(renderMarkedSummary("anchor", "")),
+			compactionAssistantCall("c1", "work"),
+		}
+
+		cp := parseCheckpointPrefix(msgs, 2)
+		assert.Equal(t, -1, cp.summaryRowIdx)
+	})
 }
 
-func TestCompactReportsSummarizedCountAndBriefPersistFailure(t *testing.T) {
-	core, logs := observer.New(zapcore.InfoLevel)
-	ctx := logger.ToContext(t.Context(), zap.New(core))
+func TestMarkedSummaryRoundTrips(t *testing.T) {
+	background := "\n\n# Active subagents\n- #42 (background): running\n"
 
-	store := &compactionRecordingStore{nextID: 1, updateBriefErr: errors.New("store unavailable")}
-	llm := &compactionMockLLM{response: &llmwire.Response{Text: validSummary}}
-	s := newCompactionTestSvc(llm)
-	s.ms = newMessageStore(store, 1)
+	content := renderMarkedSummary("model text", background)
+	assert.True(t, isMarkedSummary(content))
 
-	for _, message := range []llmwire.Message{
-		{Role: llmwire.RoleSystem, Content: "sys"},
-		compactionUserMessage("task"),
-		compactionAssistantCall("c1", "one"),
-		compactionToolResult("c1", "one result"),
-		compactionAssistantCall("c2", "two"),
-		compactionToolResult("c2", "two result"),
-		compactionAssistantCall("c3", "three"),
-		compactionToolResult("c3", "three result"),
-	} {
-		s.ms.mu.Lock()
-		require.NoError(t, s.ms.appendMessageLocked(ctx, &message))
-		s.ms.mu.Unlock()
-	}
+	modelText, bg, ok := parseMarkedSummary(content)
+	require.True(t, ok)
+	assert.Equal(t, "model text", modelText)
+	assert.Equal(t, strings.TrimRight(background, "\n"), bg)
+	assert.True(t, isMarkedSummary(content))
 
-	compacted, err := s.compact(ctx, 1)
+	content = renderMarkedSummary("model text", "")
+	modelText, bg, ok = parseMarkedSummary(content)
+	require.True(t, ok)
+	assert.Equal(t, "model text", modelText)
+	assert.Empty(t, bg)
 
-	require.NoError(t, err)
-	assert.True(t, compacted)
-	assert.Len(t, logs.FilterMessage("persist_compaction_brief_failed").All(), 1)
-
-	completed := logs.FilterMessage("compaction_completed").All()
-	require.Len(t, completed, 1)
-	// Only the header stays out — no tail is retained any more.
-	assert.Equal(t, int64(6), completed[0].ContextMap()["summarized"])
-}
-
-func compactionUserMessage(content string) llmwire.Message {
-	return llmwire.Message{Role: llmwire.RoleUser, Content: content}
-}
-
-func compactionAssistantCall(id, content string) llmwire.Message {
-	return llmwire.Message{
-		Role:      llmwire.RoleAssistant,
-		Content:   content,
-		ToolCalls: []llmwire.ToolCall{{ID: id, Name: "read"}},
-	}
-}
-
-func compactionToolResult(id, content string) llmwire.Message {
-	return llmwire.Message{Role: llmwire.RoleTool, Content: content, ToolCallID: id, ToolName: "read"}
+	_, _, ok = parseMarkedSummary("not a summary at all")
+	assert.False(t, ok)
 }

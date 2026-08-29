@@ -1,6 +1,6 @@
 # ADR-0013: History is immutable between compactions; compaction is the only automatic pressure response
 
-- **Status:** Accepted
+- **Status:** Superseded by [ADR-0035](0035-compaction-summarizes-a-bounded-head.md)
 - **Date:** 2026-08-16
 
 ## Context
