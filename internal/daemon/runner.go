@@ -655,13 +655,19 @@ func (s *svc) ensureSessionRunner(ctx context.Context, sessionID int64) error {
 }
 
 // reportSessionUnstarted tells the controller a session could not start and parks
-// it idle. Shared so every pre-run failure reads identically to the user.
+// it idle. Shared so every pre-run failure reads identically to the user. A
+// canceled context is a shutdown, not a session failure: restart will resume the
+// work, so no error receipt is published.
 func (s *svc) reportSessionUnstarted(
 	ctx context.Context,
 	sessionID int64,
 	notify func(sessionevent.Notification),
 	err error,
 ) {
+	if ctx.Err() != nil {
+		return
+	}
+
 	message := fmt.Sprintf(
 		"⚠️ Session error: %s\n\nThe session is still alive — send a message to retry.",
 		logger.Redact(err.Error()),

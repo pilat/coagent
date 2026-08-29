@@ -94,7 +94,7 @@ func TestHarnessE2E_ForegroundFollowUpRejectsCompetingSleep(t *testing.T) {
 			return true
 		}
 		for _, message := range initial.Messages {
-			if strings.Contains(message, "Waiting: 1 item(s)") {
+			if strings.Contains(message, "⏳ Waiting on 1 item") {
 				return true
 			}
 		}
