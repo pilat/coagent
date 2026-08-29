@@ -68,6 +68,13 @@ type SessionRecord struct {
 	CreatedAt      time.Time
 	UpdatedAt      time.Time
 	KilledAt       *time.Time
+	// ModelInputGeneration is the monotonic generation advanced only when
+	// model-bound input enters conversation history; zero means no generated
+	// input has ever been committed for this session.
+	ModelInputGeneration int64
+	// ModelInputBoundary is the transcript message ID at which the current
+	// generation began. Nil only on sessions with generation 0 and no history.
+	ModelInputBoundary *int64
 }
 
 // StoredMessage represents a row in the messages table.
@@ -237,6 +244,7 @@ type Store interface { //nolint:interfacebloat // Complete constructor result; c
 	ModelInputStore
 	ProgressStore
 	ReadinessStore
+	StopCompletionStore
 }
 
 var (
@@ -256,6 +264,7 @@ var (
 	_ ModelInputStore       = (*store)(nil)
 	_ ProgressStore         = (*store)(nil)
 	_ ReadinessStore        = (*store)(nil)
+	_ StopCompletionStore   = (*store)(nil)
 )
 
 type store struct {
