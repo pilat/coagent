@@ -444,7 +444,10 @@ Model IDs are globally unique. Optional user-defined tags are preserved as YAML
 policy: `/model` exposes every configured model to people, while `task` exposes
 inheritance and only tagged models for autonomous explicit selection.
 An operator can pin a catalog section where a protocol driver alone cannot
-identify the vendor. MCP server definitions live in SQLite, with project scope
+identify the vendor. Without that pin, the OpenAI-compatible driver searches
+catalog sections in deterministic sorted order. When a configured model ID is
+exposed by several sections, enrichment uses the first match and emits an
+ambiguity warning. MCP server definitions live in SQLite, with project scope
 overriding a global entry of the same name.
 
 Project context is discovered from supported CLAUDE/AGENTS and coagent locations;

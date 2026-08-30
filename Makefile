@@ -1,4 +1,4 @@
-.PHONY: help build test tests test.integration test.live harness-e2e lint lint.fix fmt fmt.check all verify verify-offline check ci long-fuzz race stress ci.mutation arch semgrep secrets mutation tools workflow.check post-stop-hook
+.PHONY: help build test tests test.integration test.live harness-e2e lint lint.paths lint.fix fmt fmt.check all verify verify-offline check ci long-fuzz race stress ci.mutation arch semgrep secrets mutation tools workflow.check
 
 .DEFAULT_GOAL := help
 
@@ -24,7 +24,7 @@ SEMGREP ?= uv tool run --offline --from semgrep==$(SEMGREP_VERSION) semgrep
 # and mutation workers) without disabling the explicitly online bootstrap.
 OFFLINE_TARGETS := all verify verify-offline check ci build test tests \
 	test.integration harness-e2e long-fuzz race stress ci.mutation mutation \
-	lint arch semgrep secrets post-stop-hook
+	lint lint.paths arch semgrep secrets
 $(OFFLINE_TARGETS): export GOPROXY := off
 $(OFFLINE_TARGETS): export GOSUMDB := off
 $(OFFLINE_TARGETS): export GOTOOLCHAIN := local
@@ -53,7 +53,8 @@ help:
 	@echo "  build            compile the binary"
 	@echo "  tests            go test ./... (build-tagged files excluded)"
 	@echo "  test.integration go test -tags=integration ./..."
-	@echo "  lint             golangci-lint only"
+	@echo "  lint             golangci-lint over the whole module"
+	@echo "  lint.paths       scoped lint (LINT_PATHS=./internal/session/...)"
 	@echo "  lint.fix         apply every golangci-lint autofix"
 	@echo "  arch             go-arch-lint only"
 	@echo "  semgrep          project invariants only"
@@ -180,6 +181,11 @@ lint:
 	golangci-lint config verify
 	$(GOLANGCI_RUN)
 
+lint.paths:
+	@if [ -z "$(strip $(LINT_PATHS))" ]; then echo "✋ LINT_PATHS is required; for example ./internal/session/..."; exit 1; fi
+	golangci-lint config verify
+	golangci-lint run $(LINT_PATHS)
+
 # Apply every autofix golangci-lint offers, then report what still needs a human.
 lint.fix:
 	golangci-lint cache clean
@@ -197,6 +203,8 @@ fmt.check:
 # the logic were wrong — the question coverage cannot answer. MUTATION_PATH is
 # required because every mutant reruns the suite; scope it deliberately.
 MUTATION_WORKERS ?= 4
+MUTATION_EFFICACY ?= 80
+MUTATION_COVERAGE ?= 90
 # A surviving mutant runs the whole suite; killed ones exit early. Too tight a
 # coefficient turns survivors into TIMED OUT and silently hides the real debt.
 MUTATION_TIMEOUT_COEFFICIENT ?= 30
@@ -271,15 +279,6 @@ mutation:
 	gremlins unleash \
 		--workers $(MUTATION_WORKERS) \
 		--timeout-coefficient $(MUTATION_TIMEOUT_COEFFICIENT) \
+		--threshold-efficacy $(MUTATION_EFFICACY) \
+		--threshold-mcover $(MUTATION_COVERAGE) \
 		$(MUTATION_FLAGS) $(MUTATION_PATH)
-
-# Stop hook (.claude/settings.json): static gates, but only when source or a lint
-# config changed.
-LINT_DEPS := $(shell find ./cmd ./internal -type f -name '*.go') \
-	     .golangci.yml .go-arch-lint.yml $(shell find .semgrep -type f)
-
-.lint.stamp: $(LINT_DEPS)
-	$(MAKE) lint arch semgrep
-	@touch $@
-
-post-stop-hook: .lint.stamp
