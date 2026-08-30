@@ -62,6 +62,55 @@ func TestHarnessScenario_CLIConversationIsManagerOwned(t *testing.T) {
 	assertHarnessTrace(t, "cli_conversation_manager_owned.json", collector.snapshot(), sessionID)
 }
 
+func TestHarnessScenario_SubagentTextWithToolsCompletes(t *testing.T) {
+	respond := func(_ string, messages []llmwire.Message) *llmwire.Response {
+		if hasUserContaining(messages, "CHILD_TEXT_WITH_TOOL") {
+			if hasToolResultFor(messages, "ls") {
+				return &llmwire.Response{Text: "child inspection complete"}
+			}
+
+			return &llmwire.Response{
+				Text: "Inspecting the project files",
+				ToolCalls: []llmwire.ToolCall{{
+					ID: "child-ls", Name: "ls", Arguments: []byte(`{"path":"."}`),
+				}},
+			}
+		}
+
+		if hasToolResultFor(messages, tool.IDTask) {
+			return &llmwire.Response{Text: "child completion delivered"}
+		}
+
+		return &llmwire.Response{ToolCalls: []llmwire.ToolCall{{
+			ID:   taskCallID,
+			Name: tool.IDTask,
+			Arguments: []byte(
+				`{"prompt":"CHILD_TEXT_WITH_TOOL","description":"scenario","subagent_type":"general"}`,
+			),
+		}}}
+	}
+
+	h := newSubagentHarnessWith(t, respond)
+	collector := collectEvents(h.mgr.PubSub().SubscribeAll())
+	defer func() {
+		collector.stop()
+		h.shutdown()
+	}()
+
+	parentID, err := h.mgr.Send(h.ctx, h.projectID, "run child with narrated tool call", "fake-model", nil)
+	require.NoError(t, err)
+	waitForVisibleMessage(t, collector, parentID, "child completion delivered")
+	waitForIdleAfterMessage(t, collector, parentID, "child completion delivered")
+
+	link, err := h.links.GetLinkByTaskCallID(h.ctx, parentID, taskCallID)
+	require.NoError(t, err)
+	require.NotNil(t, link)
+	assert.Equal(t, LinkOutcomeCompleted, link.Outcome)
+	assert.Equal(t, 1, countToolResultsFor(transcriptOf(h, link.ChildID), "ls"))
+
+	assertHarnessTrace(t, "subagent_text_with_tools.json", collector.snapshot(), parentID)
+}
+
 func TestHarnessScenario_ForegroundChildContinuesWithoutSleep(t *testing.T) {
 	initialRelease := make(chan struct{})
 	followUpRelease := make(chan struct{})

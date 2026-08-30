@@ -342,6 +342,17 @@ type stubTool struct {
 	err    error
 }
 
+type progressTrapBoundary struct {
+	*loopInputBoundary
+	calls int
+}
+
+func (b *progressTrapBoundary) ProgressChange(context.Context) (string, bool, error) {
+	b.calls++
+
+	return "", false, fmt.Errorf("progress must stay root-only")
+}
+
 func (s *stubTool) ID() string                  { return s.id }
 func (s *stubTool) Description() string         { return "stub" }
 func (s *stubTool) Parameters() json.RawMessage { return json.RawMessage(`{}`) }
@@ -351,6 +362,29 @@ func (s *stubTool) Execute(_ context.Context, _ json.RawMessage) (*tool.Result, 
 	}
 
 	return &tool.Result{Output: s.result}, nil
+}
+
+func TestHandlePreviousResult_SubagentTextWithToolsSkipsProgress(t *testing.T) {
+	read := &countingTool{id: "read"}
+	agent := newTestAgent(read)
+	boundary := &progressTrapBoundary{loopInputBoundary: &loopInputBoundary{agent: agent}}
+	agent.boundary = boundary
+	agent.ms.setMessages([]llmwire.Message{
+		{Role: llmwire.RoleUser, Content: "inspect"},
+		{Role: llmwire.RoleAssistant, Content: "Inspecting files", ToolCalls: []llmwire.ToolCall{{
+			ID: "read-1", Name: "read", Arguments: []byte(`{}`),
+		}}},
+	})
+
+	done, err := stagedRunner(agent).handlePreviousResult(t.Context())
+	require.NoError(t, err)
+	assert.False(t, done)
+	assert.Zero(t, boundary.calls)
+	assert.Equal(t, int64(1), read.runs.Load())
+	messages := agent.ms.getMessages()
+	require.Len(t, messages, 3)
+	assert.Equal(t, llmwire.RoleTool, messages[2].Role)
+	assert.Equal(t, "read", messages[2].ToolName)
 }
 
 // newTestAgent creates a minimal svc with the given tools registered.
