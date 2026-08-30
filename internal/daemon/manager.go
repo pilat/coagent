@@ -383,6 +383,10 @@ func (s *svc) handleGenericCommand(ctx context.Context, input *sessionstore.Inbo
 		return false, nil
 	}
 
+	if strings.TrimSpace(input.RawContent) == "/status" {
+		return true, s.handleStatusInput(ctx, input)
+	}
+
 	if input.RawContent != stopCommand && input.RawContent != clearCommand && input.RawContent != killCommand {
 		return false, nil
 	}
@@ -418,6 +422,38 @@ func (s *svc) handleGenericCommand(ctx context.Context, input *sessionstore.Inbo
 	default:
 		return false, nil
 	}
+}
+
+//nolint:funcorder // Immediate status dispatch belongs beside the generic command boundary.
+func (s *svc) handleStatusInput(ctx context.Context, input *sessionstore.InboxInput) error {
+	current, err := s.CurrentProgress(ctx, input.SessionID)
+	if err != nil {
+		return fmt.Errorf("capture status progress: %w", err)
+	}
+
+	if _, owned := input.Attributes[controllerapi.SessionAttributeManagerID].(string); owned {
+		if outputs, ok := s.inboxStore.(sessionstore.CommandOutputStore); ok {
+			_, err = outputs.HandleInputWithOutput(ctx, input.ID, "status command", sessionstore.OutputDraft{
+				SessionID: input.SessionID,
+				Type:      sessionstore.OutputMessagePersistent,
+				Content:   current.Rendered,
+			})
+		} else {
+			err = s.inboxStore.HandleInput(ctx, input.ID, "status command")
+		}
+	} else {
+		err = s.inboxStore.HandleInput(ctx, input.ID, "status command")
+	}
+
+	if err != nil {
+		return fmt.Errorf("handle status input: %w", err)
+	}
+
+	s.publish(input.SessionID, sessionevent.Notification{
+		Type: sessionevent.NotifyMessage, Message: current.Rendered,
+	})
+
+	return nil
 }
 
 //nolint:funcorder // The idempotent stop result is part of the same command dispatcher.

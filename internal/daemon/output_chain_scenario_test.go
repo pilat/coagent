@@ -56,7 +56,7 @@ func TestHarnessScenario_OutputChainReportedOrder(t *testing.T) {
 				}},
 			}
 		case 2:
-			return &llmwire.Response{ToolCalls: []llmwire.ToolCall{
+			return &llmwire.Response{Text: "Stopping the mutation run", ToolCalls: []llmwire.ToolCall{
 				{
 					ID:   "chain-todo",
 					Name: "todowrite",

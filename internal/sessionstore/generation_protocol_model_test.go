@@ -24,6 +24,7 @@ const (
 	genPromote
 	genScheduleTick
 	genEmitMessage
+	genEmitDirectReply
 	genClaim
 	genAck
 	genStaleProgress
@@ -45,6 +46,7 @@ type generationModelRow struct {
 	inputID     int64
 	stopStarted bool
 	stopDone    bool
+	directReply bool
 }
 
 // generationProtocolModel is the protocol oracle. Generation advances only on
@@ -121,6 +123,14 @@ func (m *generationProtocolModel) apply(command generationProtocolCommand) {
 			generation: m.generation,
 			replacing:  m.emitSeq%2 == 1,
 			sourceKey:  "model:" + strconv.FormatInt(m.emitSeq, 10),
+		})
+	case genEmitDirectReply:
+		if m.stopping || m.stopped {
+			return
+		}
+
+		m.rows = append(m.rows, generationModelRow{
+			generation: m.generation, directReply: true,
 		})
 	case genClaim:
 		if head := m.head(); head >= 0 {
@@ -243,6 +253,16 @@ func (p *generationProduction) apply(command generationProtocolCommand) {
 			Fingerprint: OutputFingerprint(kind, "card "+strconv.FormatInt(p.inputs, 10), p.root, nil),
 		})
 		require.NoError(p.t, err)
+	case genEmitDirectReply:
+		if p.rootStopping() {
+			return
+		}
+
+		_, _, err := p.store.InsertAssistantMessageWithOutput(p.ctx, p.root, &StoredMessage{
+			Role: "assistant", Content: "reply before tool",
+			ToolCalls: []byte(`[{"id":"reply-tool","name":"bash"}]`),
+		}, OutputMessagePersistent, "reply before tool")
+		require.NoError(p.t, err)
 	case genClaim:
 		if p.claim != nil {
 			_, err := p.store.ClaimOutputHead(p.ctx, "mgr")
@@ -349,7 +369,12 @@ func (p *generationProduction) assertMatches(model *generationProtocolModel, ste
 		require.NoError(p.t, rows.Scan(&sourceKey, &attributes, &releases))
 
 		want := model.rows[i]
-		if want.stopStarted {
+		if want.directReply {
+			assert.True(p.t, strings.HasPrefix(sourceKey, "message:"),
+				"step %d row %d: direct reply message key", step, i)
+			assert.True(p.t, strings.HasSuffix(sourceKey, ":reply"),
+				"step %d row %d: direct reply phase", step, i)
+		} else if want.stopStarted {
 			// The exact inbox id is an implementation detail of identity
 			// allocation; the protocol invariant is the started/completed
 			// pairing under the same input id.
@@ -415,11 +440,12 @@ func runGenerationProtocol(t *testing.T, commands []byte) {
 
 func TestGenerationProtocol_TranscriptEntryAdvancesAndReplayPreserves(t *testing.T) {
 	runGenerationProtocol(t, []byte{
-		byte(genEmitMessage),    // generation 0 card
-		byte(genEnqueuePending), // pending input must not advance
-		byte(genEmitMessage),    // still generation 0
-		byte(genPromote),        // promotion advances
-		byte(genEmitMessage),    // new generation card
+		byte(genEmitMessage),     // generation 0 card
+		byte(genEnqueuePending),  // pending input must not advance
+		byte(genEmitMessage),     // still generation 0
+		byte(genPromote),         // promotion advances
+		byte(genEmitDirectReply), // direct reply is persistent but non-releasing
+		byte(genEmitMessage),     // new generation card
 		byte(genClaim),
 		byte(genAck),
 		byte(genEmitMessage),
@@ -459,7 +485,7 @@ func FuzzGenerationProtocol(f *testing.F) {
 	})
 	f.Add([]byte{
 		byte(genScheduleTick), byte(genScheduleTick), byte(genEmitMessage),
-		byte(genStaleProgress), byte(genClaim), byte(genAck),
+		byte(genEmitDirectReply), byte(genStaleProgress), byte(genClaim), byte(genAck),
 	})
 
 	f.Fuzz(func(t *testing.T, commands []byte) {

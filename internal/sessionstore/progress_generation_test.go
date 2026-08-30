@@ -238,6 +238,36 @@ func TestCaptureProgressNoteScoping(t *testing.T) {
 	assert.Empty(t, facts.LatestModelProgress, "compacted narration is dropped")
 }
 
+func TestCaptureProgressExcludesPublishedDirectReply(t *testing.T) {
+	store, db, projectID := newTestStore(t)
+	ctx := context.Background()
+
+	session, err := store.CreateSession(ctx, projectID, "m", "", map[string]any{"manager_id": "mgr"})
+	require.NoError(t, err)
+	input, err := store.EnqueueInput(ctx, session.ID, InputSourceUser, "stop mutations")
+	require.NoError(t, err)
+	_, err = store.PromoteInput(ctx, input.ID, input.RawContent)
+	require.NoError(t, err)
+
+	_, output, err := store.InsertAssistantMessageWithOutput(ctx, session.ID, &StoredMessage{
+		Role: "assistant", Content: "Stopping the mutation run",
+		ToolCalls: jsonRaw(`[{"id":"stop","name":"bash","input":{}}]`),
+	}, OutputMessagePersistent, "Stopping the mutation run")
+	require.NoError(t, err)
+	require.NotNil(t, output)
+
+	var sourceKey string
+	var releasesInput bool
+	require.NoError(t, db.QueryRowContext(t.Context(), `SELECT source_key, releases_input
+		FROM session_outbox WHERE id = ?`, output.OutputID).Scan(&sourceKey, &releasesInput))
+	assert.Contains(t, sourceKey, ":reply")
+	assert.False(t, releasesInput)
+
+	facts, err := store.CaptureProgress(ctx, session.ID)
+	require.NoError(t, err)
+	assert.Empty(t, facts.LatestModelProgress)
+}
+
 func TestScheduledTurnWithoutNarrationDoesNotReuseNote(t *testing.T) {
 	store, _, projectID := newTestStore(t)
 	ctx := context.Background()

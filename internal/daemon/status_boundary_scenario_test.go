@@ -86,6 +86,14 @@ func TestHarnessScenario_StatusMidActivationDoesNotStrandJustExecutedToolResults
 
 	require.NoError(t, h.mgr.SendToSession(h.ctx, sessionID, "/status"))
 
+	collector.waitFor(
+		t,
+		"status answers while the model call is still in flight",
+		func(e []controllerapi.SessionNotification) bool {
+			return len(statusReports(e, sessionID)) == 1
+		},
+	)
+
 	close(release)
 
 	released = true

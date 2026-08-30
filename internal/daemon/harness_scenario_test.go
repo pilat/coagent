@@ -63,11 +63,14 @@ func TestHarnessScenario_CLIConversationIsManagerOwned(t *testing.T) {
 }
 
 func TestHarnessScenario_SubagentTextWithToolsCompletes(t *testing.T) {
+	childRelease := make(chan struct{})
 	respond := func(_ string, messages []llmwire.Message) *llmwire.Response {
 		if hasUserContaining(messages, "CHILD_TEXT_WITH_TOOL") {
 			if hasToolResultFor(messages, "ls") {
 				return &llmwire.Response{Text: "child inspection complete"}
 			}
+
+			<-childRelease
 
 			return &llmwire.Response{
 				Text: "Inspecting the project files",
@@ -92,13 +95,25 @@ func TestHarnessScenario_SubagentTextWithToolsCompletes(t *testing.T) {
 
 	h := newSubagentHarnessWith(t, respond)
 	collector := collectEvents(h.mgr.PubSub().SubscribeAll())
+	released := false
 	defer func() {
+		if !released {
+			close(childRelease)
+		}
+
 		collector.stop()
 		h.shutdown()
 	}()
 
 	parentID, err := h.mgr.Send(h.ctx, h.projectID, "run child with narrated tool call", "fake-model", nil)
 	require.NoError(t, err)
+	collector.waitFor(t, "parent projects the blocking child", func(events []controllerapi.SessionNotification) bool {
+		return slices.ContainsFunc(events, func(event controllerapi.SessionNotification) bool {
+			return event.SessionID == parentID && event.Notification.Type == sessionevent.NotifyWaiting
+		})
+	})
+	close(childRelease)
+	released = true
 	waitForVisibleMessage(t, collector, parentID, "child completion delivered")
 	waitForIdleAfterMessage(t, collector, parentID, "child completion delivered")
 

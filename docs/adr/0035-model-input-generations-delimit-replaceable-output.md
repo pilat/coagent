@@ -15,6 +15,8 @@ Each session carries a monotonic model-input generation and the transcript messa
 
 Every manager message output snapshots the current generation as host-owned outbox metadata in its insertion transaction. A manager may reuse previous external message identities only when the immediately preceding delivered message output is replaceable and both adjacent outputs carry the same generation. The outbox row order is authoritative: an output committed before generation advancement stays in the old chain even when its remote effect occurs later. Delivery does not re-read current session state or block input promotion on transport I/O.
 
+When the first model response to newly promoted manager input contains both text and tool calls, that text commits with the assistant row as a non-releasing persistent direct reply. The next progress snapshot therefore starts a separate replaceable chain below the answer. Progress projection excludes that published assistant row from its note lookup, while later unpublished narration in the same generation may still appear in the card. Budget observation, a non-firing budget decision and the direct reply share one response transaction; a firing checkpoint supersedes the reply and retains the existing budget-terminal behavior.
+
 Legacy adjacent outputs with no generation keep the legacy replacement behavior. A mixed legacy/current pair starts a new external message. Progress narration is scoped to active assistant tool-call text after the generation boundary, so a tool-only new turn cannot display narration from an older one.
 
 Migration backfill places the boundary at the latest existing message rather than guessing which legacy input created the current turn. This fail-safe suppresses ambiguous old narration until the session stores new narration in a generated turn.
@@ -22,6 +24,7 @@ Migration backfill places the boundary at the latest existing message rather tha
 ## Consequences
 
 - A consumed follow-up or scheduled turn starts a new replaceable progress chain, while queued input leaves the current chain intact.
+- A narrated response to consumed manager input remains adjacent and immutable; only the progress output below it is edited.
 - Inbox and outbox remain separate ledgers with one small shared causal fact rather than one union state machine.
 - Every message-output insertion path must inject the host generation, and progress identities must include it so source-key replay cannot cross a generation.
 - Generation advancement and transcript insertion must share a transaction. A stale progress snapshot is discarded rather than stamped with a newer generation.

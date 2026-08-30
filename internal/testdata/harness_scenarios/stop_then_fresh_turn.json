@@ -15,7 +15,11 @@
     },
     {
       "type": "message",
-      "message": "**⚙️ Working**\n\nWorking on it\n\n🤖 `fake-model` · iteration 1\n⏱ <elapsed> · 💰 $0.0 total"
+      "message": "Working on it"
+    },
+    {
+      "type": "message",
+      "message": "**⚙️ Working**\n\n🤖 `fake-model` · iteration 1\n⏱ <elapsed> · 💰 $0.0 total"
     },
     {
       "type": "message",
@@ -55,14 +59,30 @@
       "releases_input": false
     },
     {
+      "type": "message_persistent",
+      "content": "Working on it",
+      "attributes": {
+        "manager_id": "telegram:main",
+        "model_input_generation": 1
+      },
+      "source_key": "message:2:reply",
+      "model_input_generation": 1,
+      "releases_input": false
+    },
+    {
       "type": "message_replaceable",
-      "content": "**⚙️ Working**\n\nWorking on it\n\n🤖 `fake-model` · iteration 1\n⏱ <elapsed> · 💰 $0.0 total",
+      "content": "**⚙️ Working**\n\n🤖 `fake-model` · iteration 1\n⏱ <elapsed> · 💰 $0.0 total",
       "attributes": {
         "manager_id": "telegram:main",
         "model_input_generation": 1
       },
       "source_key": "progress:change:message:2:g1",
       "model_input_generation": 1,
+      "previous_message_type": "message_persistent",
+      "previous_model_input_generation": 1,
+      "previous_message_ids": [
+        "<msg-1>"
+      ],
       "releases_input": false
     },
     {
@@ -77,7 +97,7 @@
       "previous_message_type": "message_replaceable",
       "previous_model_input_generation": 1,
       "previous_message_ids": [
-        "<msg-1>"
+        "<msg-2>"
       ],
       "releases_input": true
     },
@@ -93,7 +113,7 @@
       "previous_message_type": "message_persistent",
       "previous_model_input_generation": 1,
       "previous_message_ids": [
-        "<msg-2>"
+        "<msg-3>"
       ],
       "releases_input": false
     },
@@ -109,7 +129,7 @@
       "previous_message_type": "message_replaceable",
       "previous_model_input_generation": 1,
       "previous_message_ids": [
-        "<msg-3>"
+        "<msg-4>"
       ],
       "releases_input": true
     },
@@ -125,7 +145,7 @@
       "previous_message_type": "message_persistent",
       "previous_model_input_generation": 1,
       "previous_message_ids": [
-        "<msg-4>"
+        "<msg-5>"
       ],
       "releases_input": true
     }

@@ -89,8 +89,12 @@ type recordingBudgetGate struct {
 
 func (g *recordingBudgetGate) Admit(context.Context, time.Time) error { return nil }
 func (g *recordingBudgetGate) Observe(context.Context) (bool, error)  { return false, nil }
-func (g *recordingBudgetGate) PersistResponse(context.Context, *sessionstore.StoredMessage) (int64, bool, error) {
-	return 0, false, nil
+func (g *recordingBudgetGate) PersistResponse(
+	context.Context,
+	*sessionstore.StoredMessage,
+	string,
+) (int64, bool, bool, error) {
+	return 0, false, false, nil
 }
 
 func (g *recordingBudgetGate) PersistCompaction(
