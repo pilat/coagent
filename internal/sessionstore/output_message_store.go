@@ -42,13 +42,17 @@ func (s *store) InsertAssistantMessageWithOutput(
 		return 0, nil, err
 	}
 
+	terminal := outputType == OutputMessagePersistent && !storedMessageHasToolCalls(message)
+
 	phase := "progress"
-	if outputType == OutputMessagePersistent {
+	if terminal {
 		phase = "final"
+	} else if outputType == OutputMessagePersistent {
+		phase = "reply"
 	}
 
 	key := fmt.Sprintf("message:%d:%s", messageID, phase)
-	releasesInput := outputType == OutputMessagePersistent
+	releasesInput := terminal
 	fingerprint := outputFingerprintWithRelease(outputType, content, sessionID, nil, releasesInput)
 
 	attributes, err := stampMessageOutputAttributes(ctx, tx, sessionID, owner, nil)
@@ -80,6 +84,12 @@ func (s *store) InsertAssistantMessageWithOutput(
 	}
 
 	return messageID, &OutputCommit{OutputID: outputID, OwnerID: owner}, nil
+}
+
+func storedMessageHasToolCalls(message *StoredMessage) bool {
+	var calls []json.RawMessage
+
+	return json.Unmarshal(message.ToolCalls, &calls) == nil && len(calls) > 0
 }
 
 func (s *store) EnqueueOutput(ctx context.Context, draft OutputDraft) (*OutputCommit, error) {

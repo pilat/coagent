@@ -103,17 +103,19 @@ func (s *store) CaptureProgress(ctx context.Context, rootID int64) (*ProgressFac
 		return nil, fmt.Errorf("load progress child stats: %w", err)
 	}
 
-	// The current-generation note is the newest active assistant row after the
-	// generation boundary with non-empty text and a non-empty tool-call array.
-	// A boundaryless session (generation 0) has no note at all.
+	// The current-generation note is the newest unpublished assistant narration
+	// after the generation boundary. A direct reply already has its own durable
+	// output and must not be duplicated inside the replaceable progress card.
 	if facts.ModelInputBoundary > 0 {
 		var latest sql.NullString
 
-		err = tx.QueryRowContext(ctx, `SELECT content FROM messages WHERE session_id = ?
-			AND role = 'assistant' AND id > ? AND compacted_at IS NULL
-			AND TRIM(COALESCE(content, '')) <> ''
-			AND json_type(tool_calls) = 'array' AND json_array_length(tool_calls) > 0
-			ORDER BY id DESC LIMIT 1`, rootID, facts.ModelInputBoundary).Scan(&latest)
+		err = tx.QueryRowContext(ctx, `SELECT messages.content FROM messages
+			WHERE messages.session_id = ? AND messages.role = 'assistant' AND messages.id > ?
+			AND messages.compacted_at IS NULL AND TRIM(COALESCE(messages.content, '')) <> ''
+			AND json_type(messages.tool_calls) = 'array' AND json_array_length(messages.tool_calls) > 0
+			AND NOT EXISTS (SELECT 1 FROM session_outbox WHERE session_outbox.session_id = messages.session_id
+				AND session_outbox.source_key = 'message:' || messages.id || ':reply')
+			ORDER BY messages.id DESC LIMIT 1`, rootID, facts.ModelInputBoundary).Scan(&latest)
 		if err != nil && !errors.Is(err, sql.ErrNoRows) {
 			return nil, fmt.Errorf("load latest model progress: %w", err)
 		}

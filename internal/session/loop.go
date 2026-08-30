@@ -76,6 +76,8 @@ type loopRunner struct {
 	emptyCount         int
 	lastResp           *llmwire.Response
 	handledControl     bool
+	replyToInput       bool
+	publishedReply     bool
 	compactionFailures int
 	autoCompactionOff  bool
 }
@@ -125,8 +127,11 @@ func runLoop(ctx context.Context, agent *svc, opts loopOptions, callback iterati
 		// An already-staged external call may be interrupted only through the
 		// durable boundary (currently sleep). In every ordinary turn the previous
 		// assistant result is settled first, preserving transcript causality.
+		accepted := false
 		if r.agent.HasPendingExternalCall() {
-			if _, err := r.drainBoundary(ctx); err != nil {
+			var err error
+			accepted, err = r.drainBoundary(ctx)
+			if err != nil {
 				return r.result, err
 			}
 		}
@@ -136,10 +141,11 @@ func runLoop(ctx context.Context, agent *svc, opts loopOptions, callback iterati
 			return r.result, err
 		}
 
-		accepted, err := r.drainBoundary(ctx)
+		acceptedAfterResult, err := r.drainBoundary(ctx)
 		if err != nil {
 			return r.result, err
 		}
+		accepted = accepted || acceptedAfterResult
 
 		if !accepted && (done || r.handledControl) {
 			// Gated on the flag alone: an unconditional call would also run the
@@ -161,6 +167,7 @@ func runLoop(ctx context.Context, agent *svc, opts loopOptions, callback iterati
 		if err := r.callLLM(ctx); err != nil {
 			return r.result, err
 		}
+		r.replyToInput = accepted
 		if r.agent.budgetFired {
 			r.result.Suspended = true
 
@@ -202,6 +209,11 @@ func (r *loopRunner) handlePreviousResult(ctx context.Context) (bool, error) {
 		r.emptyCount = 0 // a productive turn breaks the empty-response streak
 
 		if state.HasText {
+			if r.publishedReply {
+				r.notify(ctx, state.Text)
+				r.publishedReply = false
+			}
+
 			message := "🔄 " + state.Text
 
 			if provider, ok := r.agent.boundary.(progressChangeBoundary); ok && r.agent.outputEnabled {
@@ -424,7 +436,7 @@ func (r *loopRunner) callLLM(ctx context.Context) error {
 	return nil
 }
 
-//nolint:nestif,wsl_v5 // Budget persistence and final selection are one ordered boundary.
+//nolint:funlen,gocyclo,nestif,wsl_v5 // Budget persistence, direct replies, and final selection share one boundary.
 func (r *loopRunner) recordIteration(ctx context.Context) error {
 	r.result.Iterations++
 
@@ -435,8 +447,12 @@ func (r *loopRunner) recordIteration(ctx context.Context) error {
 		}
 	}
 
-	outputType, output := assistantOutput(r.lastResp, r.agent.outputEnabled && r.agent.budgetGate == nil)
-	if outputType == sessionstore.OutputMessagePersistent {
+	outputType, output := assistantOutput(
+		r.lastResp,
+		r.agent.outputEnabled,
+		r.replyToInput,
+	)
+	if outputType == sessionstore.OutputMessagePersistent && len(r.lastResp.ToolCalls) == 0 {
 		if renderer, ok := r.agent.boundary.(finalOutputBoundary); ok {
 			var renderErr error
 
@@ -457,7 +473,11 @@ func (r *loopRunner) recordIteration(ctx context.Context) error {
 		if err != nil {
 			return fmt.Errorf("serialize budgeted response: %w", err)
 		}
-		_, fired, err := r.agent.budgetGate.PersistResponse(ctx, stored)
+		directReply := ""
+		if outputType == sessionstore.OutputMessagePersistent && len(r.lastResp.ToolCalls) > 0 {
+			directReply = output
+		}
+		_, fired, replyPublished, err := r.agent.budgetGate.PersistResponse(ctx, stored, directReply)
 		if err != nil {
 			return fmt.Errorf("persist budgeted response: %w", err)
 		}
@@ -465,11 +485,16 @@ func (r *loopRunner) recordIteration(ctx context.Context) error {
 			return err
 		}
 		r.agent.budgetFired = fired
+		r.publishedReply = replyPublished
 	} else if err := r.agent.ms.addAssistantMessageOutput(ctx, r.lastResp, outputType, output); err != nil {
 		r.result.Error = err
 
 		return fmt.Errorf("record assistant message: %w", err)
 	}
+	if r.agent.budgetGate == nil {
+		r.publishedReply = outputType == sessionstore.OutputMessagePersistent && len(r.lastResp.ToolCalls) > 0
+	}
+	r.replyToInput = false
 
 	if r.lastResp.CostUSD > 0 {
 		r.log.Info(
@@ -501,12 +526,16 @@ func (r *loopRunner) recordIteration(ctx context.Context) error {
 	return nil
 }
 
-func assistantOutput(response *llmwire.Response, enabled bool) (sessionstore.OutputType, string) {
+func assistantOutput(response *llmwire.Response, enabled, replyToInput bool) (sessionstore.OutputType, string) {
 	if !enabled || strings.TrimSpace(response.Text) == "" {
 		return "", ""
 	}
 
 	if len(response.ToolCalls) > 0 {
+		if replyToInput {
+			return sessionstore.OutputMessagePersistent, response.Text
+		}
+
 		return "", ""
 	}
 

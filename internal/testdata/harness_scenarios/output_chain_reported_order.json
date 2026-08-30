@@ -15,7 +15,19 @@
     },
     {
       "type": "message",
-      "message": "**⚙️ Working**\n\nReading the repo\n\n🤖 `fake-model` · iteration 1\n⏱ <elapsed> · 💰 $0.0 total"
+      "message": "Reading the repo"
+    },
+    {
+      "type": "message",
+      "message": "**⚙️ Working**\n\n🤖 `fake-model` · iteration 1\n⏱ <elapsed> · 💰 $0.0 total"
+    },
+    {
+      "type": "message",
+      "message": "Stopping the mutation run"
+    },
+    {
+      "type": "message",
+      "message": "**⚙️ Working**\n\n🤖 `fake-model` · iteration 2\n⏱ <elapsed> · 💰 $0.0 total"
     },
     {
       "type": "message",
@@ -43,14 +55,62 @@
       "releases_input": false
     },
     {
+      "type": "message_persistent",
+      "content": "Reading the repo",
+      "attributes": {
+        "manager_id": "telegram:main",
+        "model_input_generation": 1
+      },
+      "source_key": "message:2:reply",
+      "model_input_generation": 1,
+      "releases_input": false
+    },
+    {
       "type": "message_replaceable",
-      "content": "**⚙️ Working**\n\nReading the repo\n\n🤖 `fake-model` · iteration 1\n⏱ <elapsed> · 💰 $0.0 total",
+      "content": "**⚙️ Working**\n\n🤖 `fake-model` · iteration 1\n⏱ <elapsed> · 💰 $0.0 total",
       "attributes": {
         "manager_id": "telegram:main",
         "model_input_generation": 1
       },
       "source_key": "progress:change:message:2:g1",
       "model_input_generation": 1,
+      "previous_message_type": "message_persistent",
+      "previous_model_input_generation": 1,
+      "previous_message_ids": [
+        "<msg-1>"
+      ],
+      "releases_input": false
+    },
+    {
+      "type": "message_persistent",
+      "content": "Stopping the mutation run",
+      "attributes": {
+        "manager_id": "telegram:main",
+        "model_input_generation": 2
+      },
+      "source_key": "message:5:reply",
+      "model_input_generation": 2,
+      "previous_message_type": "message_replaceable",
+      "previous_model_input_generation": 1,
+      "previous_message_ids": [
+        "<msg-2>"
+      ],
+      "releases_input": false
+    },
+    {
+      "type": "message_replaceable",
+      "content": "**⚙️ Working**\n\n🤖 `fake-model` · iteration 2\n⏱ <elapsed> · 💰 $0.0 total",
+      "attributes": {
+        "manager_id": "telegram:main",
+        "model_input_generation": 2
+      },
+      "source_key": "progress:change:message:5:g2",
+      "model_input_generation": 2,
+      "previous_message_type": "message_persistent",
+      "previous_model_input_generation": 2,
+      "previous_message_ids": [
+        "<msg-3>"
+      ],
       "releases_input": false
     },
     {
@@ -63,9 +123,9 @@
       "source_key": "progress:change:message:6:g2",
       "model_input_generation": 2,
       "previous_message_type": "message_replaceable",
-      "previous_model_input_generation": 1,
+      "previous_model_input_generation": 2,
       "previous_message_ids": [
-        "<msg-1>"
+        "<msg-4>"
       ],
       "releases_input": false
     },
@@ -81,7 +141,7 @@
       "previous_message_type": "message_replaceable",
       "previous_model_input_generation": 2,
       "previous_message_ids": [
-        "<msg-2>"
+        "<msg-5>"
       ],
       "releases_input": true
     }

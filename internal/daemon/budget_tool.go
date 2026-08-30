@@ -50,23 +50,25 @@ func (g *sessionBudgetGate) Admit(ctx context.Context, now time.Time) error {
 func (g *sessionBudgetGate) PersistResponse(
 	ctx context.Context,
 	message *sessionstore.StoredMessage,
-) (int64, bool, error) {
+	directReply string,
+) (int64, bool, bool, error) {
 	store, ok := g.store.(sessionstore.BudgetResponseStore)
 	if !ok {
-		return 0, false, errors.New("budget response store unavailable")
+		return 0, false, false, errors.New("budget response store unavailable")
 	}
 
 	result, err := store.InsertBudgetedResponse(ctx, sessionstore.BudgetedResponse{
-		SessionID: g.sessionID, RootID: g.rootID, Message: message, ObservedAt: time.Now().UTC(),
+		SessionID: g.sessionID, RootID: g.rootID, Message: message,
+		DirectReply: directReply, ObservedAt: time.Now().UTC(),
 	})
 	if err != nil {
-		return 0, false, err
+		return 0, false, false, err
 	}
 	if result.Fired && result.Budget.ParkPhase == budgetParkRequested {
 		g.daemon.startBudgetPark(result.Budget)
 	}
 
-	return result.MessageID, result.Fired, nil
+	return result.MessageID, result.Fired, result.ReplyPublished, nil
 }
 
 func (g *sessionBudgetGate) Observe(ctx context.Context) (bool, error) {

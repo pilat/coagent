@@ -258,7 +258,7 @@
           "method": "sendMessage",
           "chat_id": -100123,
           "thread_id": 7001,
-          "text": "<b>⚙️ Working</b>\n\nReading the repo\n\n🤖 <code>fake-model</code> · iteration 1\n⏱ &lt;elapsed&gt; · 💰 $0.0 total",
+          "text": "Reading the repo",
           "parse_mode": "HTML"
         },
         {
@@ -270,6 +270,41 @@
           "method": "sendMessage",
           "chat_id": -100123,
           "thread_id": 7001,
+          "text": "<b>⚙️ Working</b>\n\n🤖 <code>fake-model</code> · iteration 1\n⏱ &lt;elapsed&gt; · 💰 $0.0 total",
+          "parse_mode": "HTML"
+        },
+        {
+          "method": "editForumTopic",
+          "chat_id": -100123,
+          "thread_id": 7001
+        },
+        {
+          "method": "sendMessage",
+          "chat_id": -100123,
+          "thread_id": 7001,
+          "text": "Stopping the mutation run",
+          "parse_mode": "HTML"
+        },
+        {
+          "method": "editForumTopic",
+          "chat_id": -100123,
+          "thread_id": 7001
+        },
+        {
+          "method": "sendMessage",
+          "chat_id": -100123,
+          "thread_id": 7001,
+          "text": "<b>⚙️ Working</b>\n\n🤖 <code>fake-model</code> · iteration 2\n⏱ &lt;elapsed&gt; · 💰 $0.0 total",
+          "parse_mode": "HTML"
+        },
+        {
+          "method": "editForumTopic",
+          "chat_id": -100123,
+          "thread_id": 7001
+        },
+        {
+          "method": "editMessageText",
+          "chat_id": -100123,
           "text": "<b>⚙️ Working</b>\n\n🤖 <code>fake-model</code> · iteration 2\n⏱ &lt;elapsed&gt; · 💰 $0.0 total",
           "parse_mode": "HTML"
         },
@@ -542,7 +577,19 @@
           "method": "sendMessage",
           "chat_id": -100123,
           "thread_id": 7001,
-          "text": "<b>⚙️ Working</b>\n\nWorking on it\n\n🤖 <code>fake-model</code> · iteration 1\n⏱ &lt;elapsed&gt; · 💰 $0.0 total",
+          "text": "Working on it",
+          "parse_mode": "HTML"
+        },
+        {
+          "method": "editForumTopic",
+          "chat_id": -100123,
+          "thread_id": 7001
+        },
+        {
+          "method": "sendMessage",
+          "chat_id": -100123,
+          "thread_id": 7001,
+          "text": "<b>⚙️ Working</b>\n\n🤖 <code>fake-model</code> · iteration 1\n⏱ &lt;elapsed&gt; · 💰 $0.0 total",
           "parse_mode": "HTML"
         },
         {

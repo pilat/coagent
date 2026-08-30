@@ -13,16 +13,18 @@ import (
 const budgetToolNotExecuted = "Not executed because the budget checkpoint fired."
 
 type BudgetedResponse struct {
-	SessionID  int64
-	RootID     int64
-	Message    *StoredMessage
-	ObservedAt time.Time
+	SessionID   int64
+	RootID      int64
+	Message     *StoredMessage
+	DirectReply string
+	ObservedAt  time.Time
 }
 
 type BudgetedResponseResult struct {
-	MessageID int64
-	Fired     bool
-	Budget    *BudgetRecord
+	MessageID      int64
+	Fired          bool
+	ReplyPublished bool
+	Budget         *BudgetRecord
 }
 
 type BudgetResponseStore interface {
@@ -31,7 +33,7 @@ type BudgetResponseStore interface {
 
 var _ BudgetResponseStore = (*store)(nil)
 
-//nolint:gocyclo,wsl_v5 // Transaction phases intentionally remain visually compact.
+//nolint:funlen,gocyclo,wsl_v5 // Response, reply, budget crossing, and checkpoint form one transaction.
 func (s *store) InsertBudgetedResponse(
 	ctx context.Context,
 	response BudgetedResponse,
@@ -52,13 +54,20 @@ func (s *store) InsertBudgetedResponse(
 		return nil, err
 	}
 
+	observedAt := response.ObservedAt.UTC()
+	if response.ObservedAt.IsZero() {
+		observedAt = time.Now().UTC()
+	}
+
 	record, err := scanBudget(tx.QueryRowContext(ctx, budgetSelect+` WHERE root_session_id = ?`, response.RootID))
 	if err == nil && record.State == BudgetFired {
-		now := response.ObservedAt.UTC()
-		if response.ObservedAt.IsZero() {
-			now = time.Now().UTC()
-		}
-		if err := insertBudgetNonExecution(ctx, tx, response.SessionID, response.Message.ToolCalls, now); err != nil {
+		if err := insertBudgetNonExecution(
+			ctx,
+			tx,
+			response.SessionID,
+			response.Message.ToolCalls,
+			observedAt,
+		); err != nil {
 			return nil, err
 		}
 		if commitErr := tx.Commit(); commitErr != nil {
@@ -68,19 +77,20 @@ func (s *store) InsertBudgetedResponse(
 		return &BudgetedResponseResult{MessageID: messageID, Fired: true, Budget: record}, nil
 	}
 	if errors.Is(err, sql.ErrNoRows) || (err == nil && record.State != BudgetArmed) {
+		published, publishErr := insertBudgetedDirectReply(ctx, tx, response, messageID, observedAt)
+		if publishErr != nil {
+			return nil, publishErr
+		}
 		if commitErr := tx.Commit(); commitErr != nil {
 			return nil, fmt.Errorf("commit unarmed budgeted response: %w", commitErr)
 		}
 
-		return &BudgetedResponseResult{MessageID: messageID, Budget: record}, nil
+		return &BudgetedResponseResult{
+			MessageID: messageID, ReplyPublished: published, Budget: record,
+		}, nil
 	}
 	if err != nil {
 		return nil, fmt.Errorf("load response budget: %w", err)
-	}
-
-	observedAt := response.ObservedAt.UTC()
-	if response.ObservedAt.IsZero() {
-		observedAt = time.Now().UTC()
 	}
 
 	reason, delta, err := budgetCrossing(ctx, tx, record, observedAt)
@@ -88,11 +98,17 @@ func (s *store) InsertBudgetedResponse(
 		return nil, err
 	}
 	if reason == "" {
+		published, publishErr := insertBudgetedDirectReply(ctx, tx, response, messageID, observedAt)
+		if publishErr != nil {
+			return nil, publishErr
+		}
 		if commitErr := tx.Commit(); commitErr != nil {
 			return nil, fmt.Errorf("commit budgeted response: %w", commitErr)
 		}
 
-		return &BudgetedResponseResult{MessageID: messageID, Budget: record}, nil
+		return &BudgetedResponseResult{
+			MessageID: messageID, ReplyPublished: published, Budget: record,
+		}, nil
 	}
 
 	if err := fireBudgetedResponse(ctx, tx, response, record, reason, delta, observedAt); err != nil {
@@ -111,6 +127,35 @@ func (s *store) InsertBudgetedResponse(
 	record.ParkOwner = fmt.Sprintf("budget:%d:%d", response.RootID, record.Generation)
 
 	return &BudgetedResponseResult{MessageID: messageID, Fired: true, Budget: record}, nil
+}
+
+func insertBudgetedDirectReply(
+	ctx context.Context,
+	tx *sql.Tx,
+	response BudgetedResponse,
+	messageID int64,
+	now time.Time,
+) (bool, error) {
+	if response.DirectReply == "" {
+		return false, nil
+	}
+
+	if response.SessionID != response.RootID || response.DirectReply != response.Message.Content ||
+		!storedMessageHasToolCalls(response.Message) {
+		return false, ErrBudgetConflict
+	}
+
+	owner, err := outputOwner(ctx, tx, response.RootID)
+	if err != nil {
+		return false, err
+	}
+
+	_, err = insertMessageOutput(
+		ctx, tx, response.RootID, owner, response.DirectReply,
+		fmt.Sprintf("message:%d:reply", messageID), now, false,
+	)
+
+	return err == nil, err
 }
 
 //nolint:wsl_v5 // The usage query directly precedes threshold selection.

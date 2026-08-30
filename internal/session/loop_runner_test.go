@@ -314,6 +314,45 @@ func TestRunLoopHandlesStatusAtBoundaryWithoutCallingModel(t *testing.T) {
 	assert.Equal(t, 1, notifier.countWith("Session Status"))
 }
 
+func TestAssistantOutput_DirectReplyPrecedesReplaceableProgress(t *testing.T) {
+	tests := []struct {
+		name         string
+		response     *llmwire.Response
+		enabled      bool
+		replyToInput bool
+		wantType     sessionstore.OutputType
+		wantOutput   string
+	}{
+		{name: "output disabled", response: textResponse("done")},
+		{name: "empty response", response: &llmwire.Response{}, enabled: true, replyToInput: true},
+		{
+			name: "internal progress narration", response: &llmwire.Response{
+				Text: "checking", ToolCalls: []llmwire.ToolCall{call("internal", "read")},
+			}, enabled: true,
+		},
+		{
+			name: "direct reply with tool", response: &llmwire.Response{
+				Text: "stopping the mutation run", ToolCalls: []llmwire.ToolCall{call("reply", "bash")},
+			}, enabled: true, replyToInput: true,
+			wantType: sessionstore.OutputMessagePersistent, wantOutput: "stopping the mutation run",
+		},
+		{
+			name: "terminal answer", response: textResponse("done"), enabled: true,
+			wantType: sessionstore.OutputMessagePersistent, wantOutput: "done",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			outputType, output := assistantOutput(tc.response, tc.enabled, tc.replyToInput)
+			assert.Equal(t, tc.wantType, outputType)
+			assert.Equal(t, tc.wantOutput, output)
+		})
+	}
+}
+
 func TestRunLoopStopsExactlyAtMaxIterations(t *testing.T) {
 	llmClient := &loopScriptLLM{onCall: func(call int, _ []llmwire.Message) (*llmwire.Response, error) {
 		return toolCallResponse(fmt.Sprintf("tc_%d", call), "read"), nil

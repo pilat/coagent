@@ -178,6 +178,14 @@ closes an immediately preceding replaceable chain, potentially by editing that
 chain's external messages; otherwise it creates new external messages.
 _Avoid_: final output (persistent output is not necessarily a task result).
 
+**direct reply**:
+The first non-empty assistant text produced for newly promoted manager input
+when that same response also calls tools. It is persistent but non-releasing,
+so the human's message keeps an adjacent immutable answer while subsequent
+progress uses a new replaceable output. A published direct reply is excluded
+from progress narration rather than repeated inside the card.
+_Avoid_: final output, progress note.
+
 **autonomous episode**:
 The interval of manager-owned root work that starts with initial or reactivating
 model-bound input, or an applied scheduled turn. Queued input keeps the current

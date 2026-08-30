@@ -132,10 +132,12 @@ advances only when inbox promotion or scheduled injection enters history.
 Manager replay edits a previous external message only when the adjacent outbox
 rows carry equal generations (or both carry none under the legacy rule), so a
 consumed follow-up or scheduled turn starts a new external message without
-querying session state at claim time. Replaceable progress snapshots, direct
-tool receipts, checkpoint output and final readiness reuse the outbox and
-manager receipt chain; managers do not maintain a second progress or result
-queue.
+querying session state at claim time. A narrated first response to promoted
+manager input commits as a non-releasing persistent direct reply before its
+replaceable progress chain; budget observation and that reply share the response
+transaction. Replaceable progress snapshots, direct tool receipts, checkpoint
+output and final readiness reuse the outbox and manager receipt chain; managers
+do not maintain a second progress or result queue.
 
 ### Runtime isolation and admission
 
@@ -195,7 +197,9 @@ constructs the permitted tool stack, then hands control to the session loop. At
 each boundary the daemon promotes durable input in FIFO order. It does not append
 a user message directly into a live transcript while the session has unresolved
 external work. Completion, scheduling and user input use durable paths before a
-runner observes them.
+runner observes them. `/status` is the read-only exception to runner timing: the
+daemon resolves its durable inbox row and persistent full-progress output at
+admission, so an active model or tool call cannot delay the answer.
 
 Standalone scheduled work is a root-session capability: the daemon attaches
 `schedule` only to roots, while subagents retain `sleep` to resolve an existing
@@ -277,8 +281,10 @@ root status, and the inserting transaction discards them as superseded instead
 of stamping a stale card with a newer generation — so no progress card can
 appear below a stop fence or terminal stop result. Generation-scoped source keys
 and the outbox uniqueness boundary make restart and concurrent reconciliation
-idempotent. Automatic cards lead with the complete current-generation assistant
-note and render TODO counts only; `/status` keeps the full diagnostic view.
+idempotent. Automatic cards may lead with the latest unpublished
+current-generation assistant note and render TODO counts only; an already
+published direct reply stays separate, and `/status` keeps the full diagnostic
+view.
 Final output adds only the non-empty TODO summary and budget parts of its
 compact footer; readiness appears only after the newest releasing output is
 acknowledged and terminal or parked state is current. Empty and

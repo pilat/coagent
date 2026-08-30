@@ -50,8 +50,9 @@ func (g *terminalBudgetGate) Observe(context.Context) (bool, error)  { return fa
 func (g *terminalBudgetGate) PersistResponse(
 	context.Context,
 	*sessionstore.StoredMessage,
-) (int64, bool, error) {
-	return 0, false, nil
+	string,
+) (int64, bool, bool, error) {
+	return 0, false, false, nil
 }
 
 func (g *terminalBudgetGate) PersistCompaction(
