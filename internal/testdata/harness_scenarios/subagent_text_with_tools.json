@@ -1,0 +1,41 @@
+{
+  "source_test": "TestHarnessScenario_SubagentTextWithToolsCompletes",
+  "trace": [
+    {
+      "type": "session_created",
+      "name": "<name>",
+      "work_dir": "<workdir>"
+    },
+    {
+      "type": "state_changed",
+      "status": "running"
+    },
+    {
+      "type": "waiting",
+      "message": "⏳ Waiting for subagent #1\n💬 New messages will be queued until this wait completes",
+      "waiting": [
+        {
+          "kind": "subagent",
+          "child": "#1"
+        }
+      ]
+    },
+    {
+      "type": "session_created",
+      "name": "<name>",
+      "work_dir": "<workdir>"
+    },
+    {
+      "type": "state_changed",
+      "status": "running"
+    },
+    {
+      "type": "message",
+      "message": "child completion delivered"
+    },
+    {
+      "type": "state_changed",
+      "status": "idle"
+    }
+  ]
+}

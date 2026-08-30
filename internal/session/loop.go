@@ -204,7 +204,7 @@ func (r *loopRunner) handlePreviousResult(ctx context.Context) (bool, error) {
 		if state.HasText {
 			message := "🔄 " + state.Text
 
-			if provider, ok := r.agent.boundary.(progressChangeBoundary); ok {
+			if provider, ok := r.agent.boundary.(progressChangeBoundary); ok && r.agent.outputEnabled {
 				var published bool
 				var progressErr error
 

@@ -636,6 +636,39 @@
           "parse_mode": "HTML"
         }
       ]
+    },
+    {
+      "trace": "subagent_text_with_tools.json",
+      "source_test": "TestHarnessScenario_SubagentTextWithToolsCompletes",
+      "calls": [
+        {
+          "method": "createForumTopic",
+          "chat_id": -100123
+        },
+        {
+          "method": "editForumTopic",
+          "chat_id": -100123,
+          "thread_id": 7001
+        },
+        {
+          "method": "sendMessage",
+          "chat_id": -100123,
+          "thread_id": 7001,
+          "text": "⏳ Waiting for subagent #1\n💬 New messages will be queued until this wait completes",
+          "parse_mode": "HTML"
+        },
+        {
+          "method": "editForumTopic",
+          "chat_id": -100123,
+          "thread_id": 7001
+        },
+        {
+          "method": "editMessageText",
+          "chat_id": -100123,
+          "text": "child completion delivered",
+          "parse_mode": "HTML"
+        }
+      ]
     }
   ]
 }
