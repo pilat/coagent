@@ -143,6 +143,26 @@ When uncertain, classify by the failure being prevented. If the failure can be
 described only as “after A, while B, then C”, it is temporal and needs more than a
 unit test.
 
+## Development cadence
+
+Verification follows coherent checkpoints, not edits or agent turns. A
+checkpoint completes one behavior or package-level change and leaves the working
+tree internally consistent before work moves to another layer or independent
+concern.
+
+At each checkpoint, run the narrowest tests from the evidence matrix and lint
+the affected packages with `make lint.paths LINT_PATHS=./path/to/package/...`. Before
+leaving a changed production area, mutation-test its load-bearing guards,
+retry/dedup conditions, and error paths with
+`make mutation MUTATION_PATH=./path/to/package` after the focused tests pass.
+Scope mutation to that area and run it once; rerun a successful check only when
+any relevant input changes.
+
+After all checkpoints are complete, run `make all` once. Diagnose failures with
+the focused failing target and repeat the full gate only after the fix. Complete
+`make check` and `make ci` runs remain environment/pre-merge evidence, not an
+iteration loop.
+
 ## Orthogonal test amplifiers
 
 These strengthen an evidence level; they do not replace one:
@@ -218,7 +238,8 @@ the general rule remains that mutable upstream content is never a test oracle.
 3. If the bug represents a class of reorder/retry/restart failures, add the
    command and invariant to the model-based layer, not only one scenario fixture.
 4. Make the smallest production change that restores the invariant.
-5. Run the focused red→green test, the package suite, then `make all`.
+5. Run the focused red→green test and package suite at the checkpoint. Leave
+   the full `make all` run to the final handoff gate.
 
 Every bug found in a real conversation becomes a permanent scenario fixture.
 Sanitize content if necessary, but preserve event order, concurrency boundary,
