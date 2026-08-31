@@ -9,12 +9,14 @@ import (
 	"github.com/pilat/coagent/internal/budget"
 	"github.com/pilat/coagent/internal/controllerapi"
 	"github.com/pilat/coagent/internal/session"
+	"github.com/pilat/coagent/internal/sessionevent"
 	"github.com/pilat/coagent/internal/sessionstore"
 )
 
 // Store is the durable progress projection and output identity boundary.
 type Store interface {
 	sessionstore.ProgressStore
+	sessionstore.ReadinessStore
 }
 
 // Service owns progress projection, durable cards, and silence reconciliation.
@@ -33,6 +35,8 @@ type Service interface {
 	) (string, bool, error)
 	Reconcile(ctx context.Context, now time.Time) time.Duration
 	ReconcileArmedBudgets(ctx context.Context) error
+	ReconcileOutputReadiness(ctx context.Context, outputID int64) error
+	ReconcileLatestReadiness(ctx context.Context, sessionID int64)
 }
 
 var _ Service = (*runtime)(nil)
@@ -44,6 +48,7 @@ type runtime struct {
 	hasActiveLoop         func(int64) bool
 	liveContextProjection func(context.Context, int64) (session.ContextProjection, bool)
 	startBudgetPark       func(*sessionstore.BudgetRecord)
+	publish               func(int64, sessionevent.Notification)
 
 	mu             sync.Mutex
 	progressCancel context.CancelFunc
@@ -59,11 +64,13 @@ func New(
 	hasActiveLoop func(int64) bool,
 	contextProjection func(context.Context, int64) (session.ContextProjection, bool),
 	startBudgetPark func(*sessionstore.BudgetRecord),
+	publish func(int64, sessionevent.Notification),
 ) Service {
 	return &runtime{
 		sessionStore: store, budgetSvc: budgetSvc,
 		hasActiveLoop: hasActiveLoop, liveContextProjection: contextProjection,
 		startBudgetPark: startBudgetPark,
+		publish:         publish,
 		progressWake:    make(chan struct{}, 1), progressNow: time.Now, progressTimer: newRealProgressTimer,
 	}
 }

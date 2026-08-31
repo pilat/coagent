@@ -103,7 +103,7 @@ deps:
   sessionbus:
     mayDependOn: [controllerapi, logger, sessionevent]
   progressruntime:
-    mayDependOn: [budget, controllerapi, logger, progress, session, sessionstore, todo]
+    mayDependOn: [budget, controllerapi, logger, progress, session, sessionevent, sessionstore, todo]
 
   # Per-cwd shell activation, consumed by the three per-cwd spawners.
   bashsandbox:

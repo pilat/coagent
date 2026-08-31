@@ -124,6 +124,7 @@ func newProgressRuntime(
 	}
 
 	return progressruntime.New(
-		store, budgetSvc, daemon.HasActiveLoop, daemon.liveContextProjection, daemon.startBudgetPark,
+		store, budgetSvc, daemon.HasActiveLoop, daemon.liveContextProjection,
+		daemon.startBudgetPark, daemon.publish,
 	)
 }

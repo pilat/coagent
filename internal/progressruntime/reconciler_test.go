@@ -16,6 +16,7 @@ import (
 // store defect that must cost one tick, not the reconciler's life.
 type panickingProgressStore struct {
 	sessionstore.ProgressStore
+	sessionstore.ReadinessStore
 }
 
 func (panickingProgressStore) ListAutonomousProgressRoots(context.Context) ([]int64, error) {
@@ -27,7 +28,7 @@ func (panickingProgressStore) ListAutonomousProgressRoots(context.Context) ([]in
 func TestReconcileProgressSafelySurvivesStorePanic(t *testing.T) {
 	t.Parallel()
 
-	runtime := New(panickingProgressStore{}, nil, func(int64) bool { return false }, nil, nil)
+	runtime := New(panickingProgressStore{}, nil, func(int64) bool { return false }, nil, nil, nil)
 	// The recovered panic is logged; a quiet logger keeps the test output honest.
 	ctx := logger.ToContext(context.Background(), zap.NewNop())
 	delay := runtime.Reconcile(ctx, time.Now().UTC())
