@@ -20,6 +20,7 @@ import (
 	"github.com/pilat/coagent/internal/sessionstore"
 	"github.com/pilat/coagent/internal/tool"
 	"github.com/pilat/coagent/internal/tool/builtin"
+	"github.com/pilat/coagent/internal/transcript"
 )
 
 const (
@@ -44,7 +45,7 @@ type compactionMockLLM struct {
 type compactionRecordingStore struct {
 	mockSessionStore
 	nextID           int64
-	messages         []*sessionstore.StoredMessage
+	messages         []*transcript.Message
 	positions        map[int64]int
 	markCompactedErr error
 	markCompacted    int
@@ -94,7 +95,7 @@ func (m *compactionMockLLM) SetSessionID(id string) {}
 func (s *compactionRecordingStore) InsertMessage(
 	_ context.Context,
 	sessionID int64,
-	message *sessionstore.StoredMessage,
+	message *transcript.Message,
 ) (int64, error) {
 	s.insertCalls++
 	if s.insertErr != nil && (s.insertFailAt == 0 || s.insertCalls == s.insertFailAt) {
@@ -172,8 +173,8 @@ func (s *compactionRecordingStore) ReplaceCompactedMessages(
 func (s *compactionRecordingStore) LoadActiveMessages(
 	_ context.Context,
 	sessionID int64,
-) ([]*sessionstore.StoredMessage, error) {
-	var active []*sessionstore.StoredMessage
+) ([]*transcript.Message, error) {
+	var active []*transcript.Message
 	for _, message := range s.messages {
 		if message.SessionID != sessionID || message.CompactedAt != nil {
 			continue
@@ -183,7 +184,7 @@ func (s *compactionRecordingStore) LoadActiveMessages(
 		active = append(active, &stored)
 	}
 
-	slices.SortFunc(active, func(a, b *sessionstore.StoredMessage) int {
+	slices.SortFunc(active, func(a, b *transcript.Message) int {
 		return cmp.Compare(s.positions[a.ID], s.positions[b.ID])
 	})
 
@@ -194,7 +195,7 @@ func (s *compactionRecordingStore) ResetSessionContextOnce(
 	ctx context.Context,
 	sessionID int64,
 	_, _ string,
-	opening []*sessionstore.StoredMessage,
+	opening []*transcript.Message,
 ) ([]int64, bool, error) {
 	ids, err := s.resetSessionContext(ctx, sessionID, opening)
 	return ids, err == nil, err
@@ -203,10 +204,10 @@ func (s *compactionRecordingStore) ResetSessionContextOnce(
 func (s *compactionRecordingStore) resetSessionContext(
 	ctx context.Context,
 	sessionID int64,
-	opening []*sessionstore.StoredMessage,
+	opening []*transcript.Message,
 ) ([]int64, error) {
 	// Model the production transaction: failure restores every mutation.
-	beforeMessages := make([]*sessionstore.StoredMessage, len(s.messages))
+	beforeMessages := make([]*transcript.Message, len(s.messages))
 	for i, message := range s.messages {
 		copyMessage := *message
 		beforeMessages[i] = &copyMessage
@@ -402,7 +403,7 @@ func TestCompactionAttributesOwnCostToSummaryRow(t *testing.T) {
 }
 
 // findStoredSummary returns the persisted marked summary row.
-func findStoredSummary(t *testing.T, store *compactionRecordingStore) *sessionstore.StoredMessage {
+func findStoredSummary(t *testing.T, store *compactionRecordingStore) *transcript.Message {
 	t.Helper()
 
 	for _, m := range store.messages {

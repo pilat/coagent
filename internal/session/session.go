@@ -27,6 +27,7 @@ import (
 	"github.com/pilat/coagent/internal/todo"
 	"github.com/pilat/coagent/internal/tool"
 	"github.com/pilat/coagent/internal/tool/builtin"
+	"github.com/pilat/coagent/internal/transcript"
 )
 
 const (
@@ -429,19 +430,19 @@ func (s *svc) ResetContextAndInjectOnce(
 func BuildBlockingSubagentCompletion(
 	taskCallID string,
 	content string,
-) ([]*sessionstore.StoredMessage, error) {
+) ([]*transcript.Message, error) {
 	if taskCallID == "" {
 		return nil, errors.New("build blocking subagent completion: task call id is required")
 	}
 
-	stored := &sessionstore.StoredMessage{
+	stored := &transcript.Message{
 		Role:       llmwire.RoleTool,
 		Content:    content,
 		ToolCallID: taskCallID,
 		ToolName:   tool.IDTask,
 	}
 
-	return []*sessionstore.StoredMessage{stored}, nil
+	return []*transcript.Message{stored}, nil
 }
 
 // BuildBackgroundSubagentCompletion builds a standalone synthetic event for a
@@ -450,7 +451,7 @@ func BuildBlockingSubagentCompletion(
 func BuildBackgroundSubagentCompletion(
 	childID int64,
 	content string,
-) ([]*sessionstore.StoredMessage, error) {
+) ([]*transcript.Message, error) {
 	if childID <= 0 {
 		return nil, errors.New("build background subagent completion: positive child id is required")
 	}
@@ -464,13 +465,13 @@ func BuildBackgroundSubagentCompletion(
 		return nil, fmt.Errorf("marshal subagent completion tool call: %w", err)
 	}
 
-	asstStored := &sessionstore.StoredMessage{Role: llmwire.RoleAssistant, ToolCalls: toolCallsJSON}
+	asstStored := &transcript.Message{Role: llmwire.RoleAssistant, ToolCalls: toolCallsJSON}
 
-	resultStored := &sessionstore.StoredMessage{
+	resultStored := &transcript.Message{
 		Role: llmwire.RoleTool, Content: content, ToolCallID: callID, ToolName: subagentEventTool,
 	}
 
-	return []*sessionstore.StoredMessage{asstStored, resultStored}, nil
+	return []*transcript.Message{asstStored, resultStored}, nil
 }
 
 // ReloadDeliveredCompletion refreshes the live in-memory transcript from the

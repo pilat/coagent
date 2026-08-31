@@ -9,7 +9,7 @@ import (
 	"fmt"
 
 	"github.com/pilat/coagent/internal/llmwire"
-	"github.com/pilat/coagent/internal/sessionstore"
+	"github.com/pilat/coagent/internal/transcript"
 )
 
 // addToolNotificationPairOnce appends a synthetic assistant tool_call stub plus
@@ -46,8 +46,8 @@ func (ms *messageStore) addToolNotificationPairOnce(
 		return false, fmt.Errorf("marshal idempotent notification tool call: %w", err)
 	}
 
-	asstStored := &sessionstore.StoredMessage{Role: assistant.Role, ToolCalls: toolCallsJSON}
-	resultStored := &sessionstore.StoredMessage{
+	asstStored := &transcript.Message{Role: assistant.Role, ToolCalls: toolCallsJSON}
+	resultStored := &transcript.Message{
 		Role:       result.Role,
 		Content:    result.Content,
 		ToolCallID: result.ToolCallID,
@@ -96,7 +96,7 @@ func (ms *messageStore) resetToOnce(
 		return true, nil
 	}
 
-	storedOpening := make([]*sessionstore.StoredMessage, len(opening))
+	storedOpening := make([]*transcript.Message, len(opening))
 	for i := range opening {
 		stored, err := storedMessage(&opening[i])
 		if err != nil {
@@ -144,7 +144,7 @@ func deliveryFingerprint(parts ...string) string {
 	return hex.EncodeToString(h.Sum(nil))
 }
 
-func storedMessage(msg *llmwire.Message) (*sessionstore.StoredMessage, error) {
+func storedMessage(msg *llmwire.Message) (*transcript.Message, error) {
 	var toolCallsJSON json.RawMessage
 
 	if len(msg.ToolCalls) > 0 {
@@ -180,7 +180,7 @@ func storedMessage(msg *llmwire.Message) (*sessionstore.StoredMessage, error) {
 		attachmentsJSON = data
 	}
 
-	return &sessionstore.StoredMessage{
+	return &transcript.Message{
 		Role:             msg.Role,
 		Content:          msg.Content,
 		ToolCallID:       msg.ToolCallID,

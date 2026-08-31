@@ -7,6 +7,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/pilat/coagent/internal/transcript"
 )
 
 func TestPromotionAdvancesGeneration(t *testing.T) {
@@ -95,8 +97,8 @@ func TestScheduledDeliveryAdvancesGenerationOnce(t *testing.T) {
 	session, err := store.CreateSession(ctx, projectID, "m", "", nil)
 	require.NoError(t, err)
 
-	assistant := &StoredMessage{Role: "assistant", Content: ""}
-	toolResult := &StoredMessage{Role: "tool", Content: "scheduled work", ToolCallID: "call1"}
+	assistant := &transcript.Message{Role: "assistant", Content: ""}
+	toolResult := &transcript.Message{Role: "tool", Content: "scheduled work", ToolCallID: "call1"}
 
 	asstID, resultID, inserted, err := store.InsertToolNotificationPairOnce(
 		ctx, session.ID, "delivery-1", "fp-1", assistant, toolResult)
@@ -140,7 +142,7 @@ func TestContextResetAdvancesGenerationOnce(t *testing.T) {
 	session, err := store.CreateSession(ctx, projectID, "m", "", nil)
 	require.NoError(t, err)
 
-	opening := []*StoredMessage{
+	opening := []*transcript.Message{
 		{Role: "user", Content: "scheduled turn"},
 	}
 	_, inserted, err := store.ResetSessionContextOnce(ctx, session.ID, "reset-1", "fp-r1", opening)
@@ -180,7 +182,7 @@ func TestCompactionDoesNotAdvanceGeneration(t *testing.T) {
 	require.NoError(t, err)
 
 	msgID, err := store.InsertMessage(ctx, session.ID,
-		&StoredMessage{Role: "assistant", Content: "work"})
+		&transcript.Message{Role: "assistant", Content: "work"})
 	require.NoError(t, err)
 
 	_, err = store.ReplaceCompactedMessages(ctx, session.ID, []int64{msgID}, []CompactionEntry{})

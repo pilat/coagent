@@ -13,6 +13,7 @@ import (
 	"github.com/pilat/coagent/internal/llmwire"
 	"github.com/pilat/coagent/internal/migrate"
 	"github.com/pilat/coagent/internal/subagent"
+	"github.com/pilat/coagent/internal/transcript"
 )
 
 func newTestSubagentTransactions(db *sql.DB) subagent.Transactions {
@@ -236,8 +237,8 @@ func TestSubagentStore_DeliverCompletion_CAS(t *testing.T) {
 	require.NoError(t, err)
 	seedLink(t, db, parent.ID, childID, "c1")
 
-	msg := func(c string) []*StoredMessage {
-		return []*StoredMessage{{Role: llmwire.RoleTool, Content: c, ToolCallID: "c1", ToolName: "task"}}
+	msg := func(c string) []*transcript.Message {
+		return []*transcript.Message{{Role: llmwire.RoleTool, Content: c, ToolCallID: "c1", ToolName: "task"}}
 	}
 
 	ids, won, err := newTestSubagentTransactions(db).DeliverCompletion(ctx, parent.ID, msg("first"), childID, 1)
@@ -272,8 +273,8 @@ func TestStore_StaleCompletionCannotCrossSubagentRearmBoundary(t *testing.T) {
 	require.NoError(t, err)
 	seedLink(t, db, parent.ID, childID, "c1")
 
-	completion := func(content string) []*StoredMessage {
-		return []*StoredMessage{{
+	completion := func(content string) []*transcript.Message {
+		return []*transcript.Message{{
 			Role: llmwire.RoleTool, Content: content, ToolCallID: "c1", ToolName: "task",
 		}}
 	}
@@ -325,7 +326,7 @@ func TestSubagentStore_DeliverCompletionRejectsWrongParent(t *testing.T) {
 	require.NoError(t, err)
 	seedLink(t, db, parent.ID, childID, "c1")
 
-	_, won, err := newTestSubagentTransactions(db).DeliverCompletion(ctx, otherParent.ID, []*StoredMessage{{
+	_, won, err := newTestSubagentTransactions(db).DeliverCompletion(ctx, otherParent.ID, []*transcript.Message{{
 		Role: llmwire.RoleTool, Content: "wrong parent", ToolCallID: "c1", ToolName: "task",
 	}}, childID, 1)
 	require.Error(t, err)
@@ -368,11 +369,11 @@ func TestStore_InsertToolNotificationPairOnce(t *testing.T) {
 	sess, err := s.CreateSession(ctx, projectID, "m", "", nil)
 	require.NoError(t, err)
 
-	assistant := &StoredMessage{
+	assistant := &transcript.Message{
 		Role:      llmwire.RoleAssistant,
 		ToolCalls: []byte(`[{"ID":"call-1","Name":"subagent_event"}]`),
 	}
-	toolResult := &StoredMessage{
+	toolResult := &transcript.Message{
 		Role:       llmwire.RoleTool,
 		ToolCallID: "call-1",
 		ToolName:   "subagent_event",
@@ -401,20 +402,24 @@ func TestStore_ReplaceCompactedMessagesPreservesReplacementOrder(t *testing.T) {
 	sess, err := s.CreateSession(ctx, projectID, "m", "", nil)
 	require.NoError(t, err)
 
-	headerID, err := s.InsertMessage(ctx, sess.ID, &StoredMessage{Role: llmwire.RoleUser, Content: "task"})
+	headerID, err := s.InsertMessage(ctx, sess.ID, &transcript.Message{Role: llmwire.RoleUser, Content: "task"})
 	require.NoError(t, err)
-	oldID, err := s.InsertMessage(ctx, sess.ID, &StoredMessage{Role: llmwire.RoleAssistant, Content: "old"})
+	oldID, err := s.InsertMessage(ctx, sess.ID, &transcript.Message{Role: llmwire.RoleAssistant, Content: "old"})
 	require.NoError(t, err)
-	retainedID, err := s.InsertMessage(ctx, sess.ID, &StoredMessage{Role: llmwire.RoleAssistant, Content: "retained"})
+	retainedID, err := s.InsertMessage(
+		ctx,
+		sess.ID,
+		&transcript.Message{Role: llmwire.RoleAssistant, Content: "retained"},
+	)
 	require.NoError(t, err)
-	_, err = s.InsertMessage(ctx, sess.ID, &StoredMessage{Role: llmwire.RoleUser, Content: "concurrent"})
+	_, err = s.InsertMessage(ctx, sess.ID, &transcript.Message{Role: llmwire.RoleUser, Content: "concurrent"})
 	require.NoError(t, err)
 
 	ids, err := s.ReplaceCompactedMessages(ctx, sess.ID, []int64{oldID}, []CompactionEntry{
 		{ExistingID: headerID},
-		{Message: &StoredMessage{Role: llmwire.RoleUser, Content: "summary"}},
-		{Message: &StoredMessage{Role: llmwire.RoleAssistant, Content: "ack"}},
-		{Message: &StoredMessage{Role: llmwire.RoleUser, Content: "skill"}},
+		{Message: &transcript.Message{Role: llmwire.RoleUser, Content: "summary"}},
+		{Message: &transcript.Message{Role: llmwire.RoleAssistant, Content: "ack"}},
+		{Message: &transcript.Message{Role: llmwire.RoleUser, Content: "skill"}},
 		{ExistingID: retainedID},
 	})
 	require.NoError(t, err)

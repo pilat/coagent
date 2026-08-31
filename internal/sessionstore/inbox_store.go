@@ -7,6 +7,8 @@ import (
 	"errors"
 	"fmt"
 	"time"
+
+	"github.com/pilat/coagent/internal/transcript"
 )
 
 type InputSource string
@@ -52,7 +54,7 @@ type InboxInput struct {
 type InboxStore interface {
 	EnqueueInput(ctx context.Context, sessionID int64, source InputSource, rawContent string) (*InboxInput, error)
 	PeekPending(ctx context.Context, sessionID int64) (*InboxInput, error)
-	PromoteInput(ctx context.Context, inputID int64, preparedContent string) (*StoredMessage, error)
+	PromoteInput(ctx context.Context, inputID int64, preparedContent string) (*transcript.Message, error)
 	HandleInput(ctx context.Context, inputID int64, reason string) error
 	RejectInput(ctx context.Context, inputID int64, reason string) error
 	CancelPendingInputs(ctx context.Context, sessionIDs []int64, reason string) (int64, error)
@@ -174,7 +176,7 @@ func (s *store) PeekPending(ctx context.Context, sessionID int64) (*InboxInput, 
 	return input, nil
 }
 
-func (s *store) PromoteInput(ctx context.Context, inputID int64, preparedContent string) (*StoredMessage, error) {
+func (s *store) PromoteInput(ctx context.Context, inputID int64, preparedContent string) (*transcript.Message, error) {
 	message, _, err := s.promoteInput(ctx, inputID, preparedContent, nil)
 
 	return message, err
@@ -185,7 +187,7 @@ func (s *store) PromoteInputWithActivation(
 	inputID int64,
 	preparedContent string,
 	activation ActivationDraft,
-) (*StoredMessage, *ToolActivation, error) {
+) (*transcript.Message, *ToolActivation, error) {
 	if activation.ToolID == "" || activation.Command == "" || activation.Command[0] != '/' {
 		return nil, nil, ErrActivationConflict
 	}
@@ -198,7 +200,7 @@ func (s *store) promoteInput(
 	inputID int64,
 	preparedContent string,
 	activation *ActivationDraft,
-) (*StoredMessage, *ToolActivation, error) {
+) (*transcript.Message, *ToolActivation, error) {
 	if preparedContent == "" {
 		return nil, nil, errors.New("empty prepared input content")
 	}

@@ -7,6 +7,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/pilat/coagent/internal/transcript"
 )
 
 func TestDirectOutputStore_CommitsToolResultAndOrderedOutputs(t *testing.T) {
@@ -15,7 +17,7 @@ func TestDirectOutputStore_CommitsToolResultAndOrderedOutputs(t *testing.T) {
 	store, db, projectID := newTestStore(t)
 	root, err := store.CreateSession(ctx, projectID, "model", "", map[string]any{"manager_id": "cli"})
 	require.NoError(t, err)
-	message := &StoredMessage{
+	message := &transcript.Message{
 		Role: "tool", Content: "model result", ToolCallID: "call-1",
 		ToolName: "example", CreatedAt: time.Now().UTC(),
 	}
@@ -50,7 +52,7 @@ func TestDirectOutputStore_OwnerlessRootKeepsOutputInternal(t *testing.T) {
 	store, db, projectID := newTestStore(t)
 	root, err := store.CreateSession(ctx, projectID, "model", "", nil)
 	require.NoError(t, err)
-	message := &StoredMessage{
+	message := &transcript.Message{
 		Role: "tool", Content: "model result", ToolCallID: "call-1",
 		ToolName: "example", CreatedAt: time.Now().UTC(),
 	}

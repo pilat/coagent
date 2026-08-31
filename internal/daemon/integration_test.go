@@ -29,6 +29,7 @@ import (
 	"github.com/pilat/coagent/internal/sessionstore"
 	"github.com/pilat/coagent/internal/subagent"
 	"github.com/pilat/coagent/internal/tool"
+	"github.com/pilat/coagent/internal/transcript"
 )
 
 // scriptedLLM is a fake llm.Client whose responses are produced by a
@@ -339,7 +340,7 @@ func (h *subagentHarness) parentMessages(parentID int64) []llmwire.Message {
 	return toDTO(stored)
 }
 
-func toDTO(stored []*sessionstore.StoredMessage) []llmwire.Message {
+func toDTO(stored []*transcript.Message) []llmwire.Message {
 	msgs := make([]llmwire.Message, 0, len(stored))
 
 	for _, m := range stored {
@@ -867,7 +868,7 @@ func TestIntegration_SweepRedeliversIdempotently(t *testing.T) {
 	}))
 	// Child wrote its final message before dying; its result was stored on the link
 	// at terminalization (as a real run would), so delivery reads the column.
-	_, err = h.sessStore.InsertMessage(ctx, childID, &sessionstore.StoredMessage{
+	_, err = h.sessStore.InsertMessage(ctx, childID, &transcript.Message{
 		Role: llmwire.RoleAssistant, Content: "child finished: 99",
 	})
 	require.NoError(t, err)

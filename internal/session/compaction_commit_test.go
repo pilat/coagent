@@ -11,6 +11,7 @@ import (
 
 	"github.com/pilat/coagent/internal/llmwire"
 	"github.com/pilat/coagent/internal/sessionstore"
+	"github.com/pilat/coagent/internal/transcript"
 )
 
 // summarySizedForProjection returns summarizer text whose marked projection
@@ -102,7 +103,7 @@ func (g *recordingBudgetGate) Admit(context.Context, time.Time) error { return n
 func (g *recordingBudgetGate) Observe(context.Context) (bool, error)  { return false, nil }
 func (g *recordingBudgetGate) PersistResponse(
 	context.Context,
-	*sessionstore.StoredMessage,
+	*transcript.Message,
 	string,
 ) (int64, bool, bool, error) {
 	return 0, false, false, nil

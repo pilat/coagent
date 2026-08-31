@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/pilat/coagent/internal/llmwire"
+	"github.com/pilat/coagent/internal/transcript"
 )
 
 // generationProtocolCommand enumerates the externally meaningful transitions of
@@ -225,10 +226,10 @@ func (p *generationProduction) apply(command generationProtocolCommand) {
 	case genScheduleTick:
 		_, _, _, err := p.store.InsertToolNotificationPairOnce(
 			p.ctx, p.root, "schedule:model:tick", "schedule-model-fingerprint",
-			&StoredMessage{
+			&transcript.Message{
 				Role: llmwire.RoleAssistant, ToolCalls: []byte(`[{"id":"s1","name":"schedule"}]`),
 			},
-			&StoredMessage{
+			&transcript.Message{
 				Role: llmwire.RoleTool, Content: "scheduled event",
 				ToolCallID: "s1", ToolName: "schedule",
 			},
@@ -258,7 +259,7 @@ func (p *generationProduction) apply(command generationProtocolCommand) {
 			return
 		}
 
-		_, _, err := p.store.InsertAssistantMessageWithOutput(p.ctx, p.root, &StoredMessage{
+		_, _, err := p.store.InsertAssistantMessageWithOutput(p.ctx, p.root, &transcript.Message{
 			Role: "assistant", Content: "reply before tool",
 			ToolCalls: []byte(`[{"id":"reply-tool","name":"bash"}]`),
 		}, OutputMessagePersistent, "reply before tool")

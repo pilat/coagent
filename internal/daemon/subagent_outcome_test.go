@@ -14,6 +14,7 @@ import (
 	"github.com/pilat/coagent/internal/logger"
 	"github.com/pilat/coagent/internal/sessionstore"
 	"github.com/pilat/coagent/internal/subagent"
+	"github.com/pilat/coagent/internal/transcript"
 )
 
 // TestFinalizeChild_IncompleteWhenNoFinalAnswer: a child that ran out of
@@ -45,7 +46,7 @@ func TestFinalizeChild_IncompleteWhenNoFinalAnswer(t *testing.T) {
 	// The child's last message is a tool call — it stopped mid-tool / hit its cap.
 	toolCalls, err := json.Marshal([]llmwire.ToolCall{{ID: "x", Name: "bash", Arguments: []byte(`{}`)}})
 	require.NoError(t, err)
-	_, err = h.sessStore.InsertMessage(ctx, childID, &sessionstore.StoredMessage{
+	_, err = h.sessStore.InsertMessage(ctx, childID, &transcript.Message{
 		Role: llmwire.RoleAssistant, ToolCalls: toolCalls,
 	})
 	require.NoError(t, err)

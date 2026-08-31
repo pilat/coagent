@@ -8,6 +8,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/pilat/coagent/internal/transcript"
 )
 
 func TestOperatorProtocolModel_ParallelCrossingReleaseAndReplay(t *testing.T) {
@@ -37,7 +39,7 @@ func TestOperatorProtocolModel_ParallelCrossingReleaseAndReplay(t *testing.T) {
 				callID := fmt.Sprintf("call-%d", i)
 				result, responseErr := store.InsertBudgetedResponse(ctx, BudgetedResponse{
 					SessionID: root.ID, RootID: root.ID,
-					Message: &StoredMessage{
+					Message: &transcript.Message{
 						Role: "assistant", CostUSD: cost,
 						ToolCalls: json.RawMessage(fmt.Sprintf(`[{"id":%q,"name":"bash"}]`, callID)),
 					},

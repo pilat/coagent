@@ -7,6 +7,8 @@ import (
 	"errors"
 	"fmt"
 	"time"
+
+	"github.com/pilat/coagent/internal/transcript"
 )
 
 type queryer interface {
@@ -120,7 +122,7 @@ func insertPromotedMessage(
 	tx *sql.Tx,
 	input *InboxInput,
 	preparedContent string,
-) (*StoredMessage, error) {
+) (*transcript.Message, error) {
 	result, err := tx.ExecContext(ctx, `
 		INSERT INTO messages (session_id, role, content, created_at)
 		VALUES (?, 'user', ?, ?)`,
@@ -135,7 +137,7 @@ func insertPromotedMessage(
 		return nil, fmt.Errorf("promoted message id: %w", err)
 	}
 
-	return &StoredMessage{
+	return &transcript.Message{
 		ID:        messageID,
 		SessionID: input.SessionID,
 		Role:      "user",
@@ -201,8 +203,8 @@ func activatePromotedInputSession(
 	return nil
 }
 
-func loadMessage(ctx context.Context, q queryer, messageID int64) (*StoredMessage, error) {
-	var msg StoredMessage
+func loadMessage(ctx context.Context, q queryer, messageID int64) (*transcript.Message, error) {
+	var msg transcript.Message
 	var toolCallID, toolName, toolCallsRaw, reasoningContent, reasoningRaw, attachmentsRaw, usageRaw sql.NullString
 	var compactedAt sql.NullTime
 	var costUSD sql.NullFloat64

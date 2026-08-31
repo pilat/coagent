@@ -13,6 +13,7 @@ import (
 	"github.com/pilat/coagent/internal/sessionstore"
 	"github.com/pilat/coagent/internal/subagent"
 	"github.com/pilat/coagent/internal/tool"
+	"github.com/pilat/coagent/internal/transcript"
 )
 
 // finalizeChild marks a subagent terminal (once its loop has fully exited and
@@ -254,7 +255,7 @@ func (s *svc) persistCompletion(
 	ctx context.Context,
 	sess session.Service,
 	link subagent.Link,
-	stored []*sessionstore.StoredMessage,
+	stored []*transcript.Message,
 ) error {
 	_, won, err := s.subagents.DeliverCompletion(
 		ctx, link.ParentID, stored, link.ChildID, link.ActivationSeq,

@@ -7,6 +7,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/pilat/coagent/internal/transcript"
 )
 
 func TestStore_CompleteCompactionInputCommitsReplacementAndOutcomeTogether(t *testing.T) {
@@ -16,9 +18,9 @@ func TestStore_CompleteCompactionInputCommitsReplacementAndOutcomeTogether(t *te
 	require.NoError(t, err)
 	input, err := store.EnqueueInput(ctx, record.ID, InputSourceUser, "/compact focus")
 	require.NoError(t, err)
-	headerID, err := store.InsertMessage(ctx, record.ID, &StoredMessage{Role: "user", Content: "task"})
+	headerID, err := store.InsertMessage(ctx, record.ID, &transcript.Message{Role: "user", Content: "task"})
 	require.NoError(t, err)
-	oldID, err := store.InsertMessage(ctx, record.ID, &StoredMessage{Role: "assistant", Content: "long work"})
+	oldID, err := store.InsertMessage(ctx, record.ID, &transcript.Message{Role: "assistant", Content: "long work"})
 	require.NoError(t, err)
 
 	compactionStore, ok := store.(CompactionCommandStore)
@@ -30,7 +32,7 @@ func TestStore_CompleteCompactionInputCommitsReplacementAndOutcomeTogether(t *te
 		[]int64{oldID},
 		[]CompactionEntry{
 			{ExistingID: headerID},
-			{Message: &StoredMessage{Role: "user", Content: "[CONTEXT SUMMARY] brief"}},
+			{Message: &transcript.Message{Role: "user", Content: "[CONTEXT SUMMARY] brief"}},
 		},
 		"✅ Context compacted",
 	)

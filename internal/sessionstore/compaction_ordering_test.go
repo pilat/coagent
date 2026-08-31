@@ -9,6 +9,7 @@ import (
 
 	"github.com/pilat/coagent/internal/llmwire"
 	"github.com/pilat/coagent/internal/subagent"
+	"github.com/pilat/coagent/internal/transcript"
 )
 
 // A background child's completion commits in its own transaction. If it lands
@@ -26,16 +27,16 @@ func TestStore_CompactionKeepsACompletionPairCommittedOutsideItsSnapshot(t *test
 	require.NoError(t, err)
 	seedLink(t, db, parent.ID, childID, "task-1")
 
-	headerID, err := s.InsertMessage(ctx, parent.ID, &StoredMessage{
+	headerID, err := s.InsertMessage(ctx, parent.ID, &transcript.Message{
 		Role: llmwire.RoleUser, Content: "the original task",
 	})
 	require.NoError(t, err)
-	spawnID, err := s.InsertMessage(ctx, parent.ID, &StoredMessage{
+	spawnID, err := s.InsertMessage(ctx, parent.ID, &transcript.Message{
 		Role:      llmwire.RoleAssistant,
 		ToolCalls: []byte(`[{"ID":"task-1","Name":"task","Arguments":"e30="}]`),
 	})
 	require.NoError(t, err)
-	ackID, err := s.InsertMessage(ctx, parent.ID, &StoredMessage{
+	ackID, err := s.InsertMessage(ctx, parent.ID, &transcript.Message{
 		Role: llmwire.RoleTool, Content: "launched", ToolCallID: "task-1", ToolName: "task",
 	})
 	require.NoError(t, err)
@@ -44,7 +45,7 @@ func TestStore_CompactionKeepsACompletionPairCommittedOutsideItsSnapshot(t *test
 	snapshot := []int64{spawnID, ackID}
 
 	// The child completes in the window before the replacement commits.
-	msgIDs, won, err := subagent.NewTransactions(db).DeliverCompletion(ctx, parent.ID, []*StoredMessage{
+	msgIDs, won, err := subagent.NewTransactions(db).DeliverCompletion(ctx, parent.ID, []*transcript.Message{
 		{Role: llmwire.RoleAssistant, ToolCalls: []byte(`[{"ID":"ev-1","Name":"subagent_event"}]`)},
 		{Role: llmwire.RoleTool, Content: "child done", ToolCallID: "ev-1", ToolName: "subagent_event"},
 	}, childID, 1)
@@ -54,8 +55,8 @@ func TestStore_CompactionKeepsACompletionPairCommittedOutsideItsSnapshot(t *test
 
 	_, err = s.ReplaceCompactedMessages(ctx, parent.ID, snapshot, []CompactionEntry{
 		{ExistingID: headerID},
-		{Message: &StoredMessage{Role: llmwire.RoleUser, Content: "[CONTEXT SUMMARY - previous work condensed]"}},
-		{Message: &StoredMessage{Role: llmwire.RoleAssistant, Content: "ack"}},
+		{Message: &transcript.Message{Role: llmwire.RoleUser, Content: "[CONTEXT SUMMARY - previous work condensed]"}},
+		{Message: &transcript.Message{Role: llmwire.RoleAssistant, Content: "ack"}},
 	})
 	require.NoError(t, err)
 

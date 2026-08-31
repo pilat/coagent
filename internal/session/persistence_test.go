@@ -16,6 +16,7 @@ import (
 	"github.com/pilat/coagent/internal/todo"
 	"github.com/pilat/coagent/internal/tool"
 	"github.com/pilat/coagent/internal/tool/builtin"
+	"github.com/pilat/coagent/internal/transcript"
 )
 
 func TestRun_FailFastOnPersistError(t *testing.T) {
@@ -109,13 +110,13 @@ type mockSessionStore struct {
 
 	// InsertToolNotificationPair: knob plus what the last call was handed.
 	pairErr        error
-	lastPairAsst   *sessionstore.StoredMessage
-	lastPairResult *sessionstore.StoredMessage
+	lastPairAsst   *transcript.Message
+	lastPairResult *transcript.Message
 }
 
 var _ sessionstore.RuntimeStore = (*mockSessionStore)(nil)
 
-func (m *mockSessionStore) InsertMessage(_ context.Context, _ int64, _ *sessionstore.StoredMessage) (int64, error) {
+func (m *mockSessionStore) InsertMessage(_ context.Context, _ int64, _ *transcript.Message) (int64, error) {
 	m.insertCalls++
 	if m.insertErr != nil && (m.insertFailAt == 0 || m.insertCalls == m.insertFailAt) {
 		return 0, m.insertErr
@@ -137,7 +138,7 @@ func (m *mockSessionStore) ReplaceCompactedMessages(
 	return make([]int64, len(entries)), nil
 }
 
-func (m *mockSessionStore) LoadActiveMessages(_ context.Context, _ int64) ([]*sessionstore.StoredMessage, error) {
+func (m *mockSessionStore) LoadActiveMessages(_ context.Context, _ int64) ([]*transcript.Message, error) {
 	return nil, nil
 }
 
@@ -181,7 +182,7 @@ func (m *mockSessionStore) ClearContextBaseline(_ context.Context, _ int64) erro
 func (m *mockSessionStore) InsertToolNotificationPair(
 	_ context.Context,
 	_ int64,
-	asst, result *sessionstore.StoredMessage,
+	asst, result *transcript.Message,
 ) (int64, int64, error) {
 	m.lastPairAsst = asst
 	m.lastPairResult = result
@@ -199,7 +200,7 @@ func (m *mockSessionStore) InsertToolNotificationPairOnce(
 	ctx context.Context,
 	sessionID int64,
 	_, _ string,
-	asst, result *sessionstore.StoredMessage,
+	asst, result *transcript.Message,
 ) (int64, int64, bool, error) {
 	asstID, resultID, err := m.InsertToolNotificationPair(ctx, sessionID, asst, result)
 	return asstID, resultID, err == nil, err
@@ -208,7 +209,7 @@ func (m *mockSessionStore) InsertToolNotificationPairOnce(
 func (m *mockSessionStore) ResetSessionContext(
 	ctx context.Context,
 	sessionID int64,
-	opening []*sessionstore.StoredMessage,
+	opening []*transcript.Message,
 ) ([]int64, error) {
 	ids := make([]int64, len(opening))
 	for i, message := range opening {
@@ -226,7 +227,7 @@ func (m *mockSessionStore) ResetSessionContextOnce(
 	ctx context.Context,
 	sessionID int64,
 	_, _ string,
-	opening []*sessionstore.StoredMessage,
+	opening []*transcript.Message,
 ) ([]int64, bool, error) {
 	ids, err := m.ResetSessionContext(ctx, sessionID, opening)
 	return ids, err == nil, err

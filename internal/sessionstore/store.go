@@ -86,13 +86,10 @@ type SessionRecord struct {
 	ContextBaselineMessageCount int
 }
 
-// StoredMessage is retained while transcript consumers migrate to its owner.
-type StoredMessage = transcript.Message
-
 // CompactionEntry is either an existing active row or a new message in rebuilt transcript order.
 type CompactionEntry struct {
 	ExistingID int64
-	Message    *StoredMessage
+	Message    *transcript.Message
 }
 
 // RuntimeStore is the persistence capability used by a live agent session. It
@@ -100,7 +97,7 @@ type CompactionEntry struct {
 // a session may checkpoint itself and mutate its transcript, but cannot create
 // or kill another session.
 type RuntimeStore interface {
-	InsertMessage(ctx context.Context, sessionID int64, msg *StoredMessage) (int64, error)
+	InsertMessage(ctx context.Context, sessionID int64, msg *transcript.Message) (int64, error)
 	MarkCompacted(ctx context.Context, ids []int64) error
 	ReplaceCompactedMessages(
 		ctx context.Context,
@@ -108,7 +105,7 @@ type RuntimeStore interface {
 		compactedIDs []int64,
 		entries []CompactionEntry,
 	) ([]int64, error)
-	LoadActiveMessages(ctx context.Context, sessionID int64) ([]*StoredMessage, error)
+	LoadActiveMessages(ctx context.Context, sessionID int64) ([]*transcript.Message, error)
 
 	UpdateSessionIteration(ctx context.Context, id int64, iteration int, status SessionStatus) error
 	UpdateSessionTodoItems(ctx context.Context, id int64, items json.RawMessage) error
@@ -135,13 +132,13 @@ type ScheduledDeliveryStore interface {
 		ctx context.Context,
 		sessionID int64,
 		deliveryID, fingerprint string,
-		assistant, toolResult *StoredMessage,
+		assistant, toolResult *transcript.Message,
 	) (asstID, resultID int64, inserted bool, err error)
 	ResetSessionContextOnce(
 		ctx context.Context,
 		sessionID int64,
 		deliveryID, fingerprint string,
-		opening []*StoredMessage,
+		opening []*transcript.Message,
 	) (messageIDs []int64, inserted bool, err error)
 }
 
@@ -171,7 +168,7 @@ type OrchestrationStore interface { //nolint:interfacebloat // one bounded orche
 	MarkSessionKilled(ctx context.Context, id int64) error
 	UpdateSessionStatus(ctx context.Context, id int64, status SessionStatus) error
 	KillTerminatingSessions(ctx context.Context) error
-	LoadActiveMessages(ctx context.Context, sessionID int64) ([]*StoredMessage, error)
+	LoadActiveMessages(ctx context.Context, sessionID int64) ([]*transcript.Message, error)
 }
 
 // Store is the complete persistence surface returned by NewStore. Consumers
@@ -631,7 +628,7 @@ type execer interface {
 	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
 }
 
-func insertMessageWith(ctx context.Context, q execer, sessionID int64, msg *StoredMessage) (int64, error) {
+func insertMessageWith(ctx context.Context, q execer, sessionID int64, msg *transcript.Message) (int64, error) {
 	result, err := q.ExecContext(
 		ctx,
 		`INSERT INTO messages (session_id, role, content, tool_call_id, tool_name, tool_calls, reasoning_content, reasoning_raw, attachments, cost_usd, usage) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -659,7 +656,7 @@ func insertMessageWith(ctx context.Context, q execer, sessionID int64, msg *Stor
 	return id, nil
 }
 
-func (s *store) InsertMessage(ctx context.Context, sessionID int64, msg *StoredMessage) (int64, error) {
+func (s *store) InsertMessage(ctx context.Context, sessionID int64, msg *transcript.Message) (int64, error) {
 	return insertMessageWith(ctx, s.db, sessionID, msg)
 }
 
@@ -777,7 +774,7 @@ func replaceCompactedMessagesTx(
 	return ids, nil
 }
 
-func (s *store) LoadActiveMessages(ctx context.Context, sessionID int64) ([]*StoredMessage, error) {
+func (s *store) LoadActiveMessages(ctx context.Context, sessionID int64) ([]*transcript.Message, error) {
 	rows, err := s.db.QueryContext(
 		ctx,
 		`SELECT id, session_id, role, content, tool_call_id, tool_name, tool_calls, reasoning_content, reasoning_raw, attachments, cost_usd, usage, compacted_at, created_at
@@ -1000,11 +997,11 @@ func scanSessionFrom(sc rowScanner) (*SessionRecord, error) {
 	return &rec, nil
 }
 
-func scanMessages(rows *sql.Rows) ([]*StoredMessage, error) {
-	var messages []*StoredMessage
+func scanMessages(rows *sql.Rows) ([]*transcript.Message, error) {
+	var messages []*transcript.Message
 
 	for rows.Next() {
-		var msg StoredMessage
+		var msg transcript.Message
 
 		var toolCallID, toolName, toolCallsRaw, reasoningContent, reasoningRaw, attachmentsRaw, usageRaw sql.NullString
 		var compactedAt sql.NullTime

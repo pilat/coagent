@@ -12,6 +12,7 @@ import (
 	"github.com/pilat/coagent/internal/migrate"
 	"github.com/pilat/coagent/internal/sessionstore"
 	"github.com/pilat/coagent/internal/subagent"
+	"github.com/pilat/coagent/internal/transcript"
 )
 
 // newTestLinkStore opens a migrated temp SQLite DB and returns a sessionstore.Store
@@ -44,7 +45,7 @@ func newTestLinkStore(t *testing.T) (sessionstore.Store, subagent.Store, subagen
 func deliverOneLink(t *testing.T, tx subagent.Transactions, parentID, childID int64) []int64 {
 	t.Helper()
 
-	ids, won, err := tx.DeliverCompletion(context.Background(), parentID, []*sessionstore.StoredMessage{{
+	ids, won, err := tx.DeliverCompletion(context.Background(), parentID, []*transcript.Message{{
 		Role: llmwire.RoleTool, Content: "done", ToolCallID: "x", ToolName: "task",
 	}}, childID, 1)
 	require.NoError(t, err)

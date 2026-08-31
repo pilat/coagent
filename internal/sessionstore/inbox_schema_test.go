@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/pilat/coagent/internal/subagent"
+	"github.com/pilat/coagent/internal/transcript"
 )
 
 func TestSessionInboxSchema_ResolutionTruthTable(t *testing.T) {
@@ -19,7 +20,7 @@ func TestSessionInboxSchema_ResolutionTruthTable(t *testing.T) {
 	store, db, projectID := newTestStore(t)
 	rec, err := store.CreateSession(ctx, projectID, "model", "", nil)
 	require.NoError(t, err)
-	messageID, err := store.InsertMessage(ctx, rec.ID, &StoredMessage{Role: "user", Content: "accepted"})
+	messageID, err := store.InsertMessage(ctx, rec.ID, &transcript.Message{Role: "user", Content: "accepted"})
 	require.NoError(t, err)
 	now := time.Now().UTC()
 

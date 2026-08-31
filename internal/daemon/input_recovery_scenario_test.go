@@ -15,6 +15,7 @@ import (
 	"github.com/pilat/coagent/internal/llmwire"
 	"github.com/pilat/coagent/internal/sessionevent"
 	"github.com/pilat/coagent/internal/sessionstore"
+	"github.com/pilat/coagent/internal/transcript"
 )
 
 func TestHarnessScenario_RestartResumesAcceptedInputWithoutAssistant(t *testing.T) {
@@ -44,7 +45,7 @@ func TestHarnessScenario_RestartSettlesPersistedFinalWithoutRepublishing(t *test
 	require.NoError(t, err)
 	_, err = first.sessStore.PromoteInput(first.ctx, input.ID, "[user] answered before crash")
 	require.NoError(t, err)
-	_, err = first.sessStore.InsertMessage(first.ctx, root.ID, &sessionstore.StoredMessage{
+	_, err = first.sessStore.InsertMessage(first.ctx, root.ID, &transcript.Message{
 		Role: llmwire.RoleAssistant, Content: "persisted final",
 	})
 	require.NoError(t, err)
@@ -86,7 +87,7 @@ func TestHarnessScenario_RestartDoesNotRunHandledHeaderOnlySession(t *testing.T)
 	first := newSubagentHarnessOnDB(t, dbPath, respond, nil)
 	root, err := first.sessStore.CreateSession(first.ctx, first.projectID, "fake-model", "", nil)
 	require.NoError(t, err)
-	_, err = first.sessStore.InsertMessage(first.ctx, root.ID, &sessionstore.StoredMessage{
+	_, err = first.sessStore.InsertMessage(first.ctx, root.ID, &transcript.Message{
 		Role: llmwire.RoleUser, Content: "User preferences from AGENTS.md files:\n\nheader only",
 	})
 	require.NoError(t, err)
@@ -161,11 +162,11 @@ func appendCrashToolProgress(t *testing.T, h *subagentHarness, sessionID int64) 
 		ID: "crash-tool", Name: "read", Arguments: []byte(`{"path":"README.md"}`),
 	}})
 	require.NoError(t, err)
-	_, err = h.sessStore.InsertMessage(h.ctx, sessionID, &sessionstore.StoredMessage{
+	_, err = h.sessStore.InsertMessage(h.ctx, sessionID, &transcript.Message{
 		Role: llmwire.RoleAssistant, ToolCalls: calls,
 	})
 	require.NoError(t, err)
-	_, err = h.sessStore.InsertMessage(h.ctx, sessionID, &sessionstore.StoredMessage{
+	_, err = h.sessStore.InsertMessage(h.ctx, sessionID, &transcript.Message{
 		Role: llmwire.RoleTool, ToolCallID: "crash-tool", ToolName: "read", Content: "durable tool result",
 	})
 	require.NoError(t, err)

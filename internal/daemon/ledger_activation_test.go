@@ -15,6 +15,7 @@ import (
 	"github.com/pilat/coagent/internal/llmwire"
 	"github.com/pilat/coagent/internal/sessionstore"
 	"github.com/pilat/coagent/internal/subagent"
+	"github.com/pilat/coagent/internal/transcript"
 )
 
 const backgroundChildArgs = `{"prompt":"CHILD_TASK do it","description":"c","subagent_type":"general","background":true}`
@@ -78,7 +79,7 @@ type casProbe struct {
 func (p *casProbe) DeliverCompletion(
 	ctx context.Context,
 	sessionID int64,
-	msgs []*sessionstore.StoredMessage,
+	msgs []*transcript.Message,
 	childID, activationSeq int64,
 ) ([]int64, bool, error) {
 	ids, won, err := p.Transactions.DeliverCompletion(ctx, sessionID, msgs, childID, activationSeq)

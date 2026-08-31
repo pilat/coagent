@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"time"
+
+	"github.com/pilat/coagent/internal/transcript"
 )
 
 type OutputType string
@@ -139,7 +141,7 @@ type OutputStore interface {
 	InsertAssistantMessageWithOutput(
 		ctx context.Context,
 		sessionID int64,
-		message *StoredMessage,
+		message *transcript.Message,
 		outputType OutputType,
 		content string,
 	) (messageID int64, output *OutputCommit, err error)
@@ -193,7 +195,7 @@ type AssistantOutputStore interface {
 	InsertAssistantMessageWithOutput(
 		ctx context.Context,
 		sessionID int64,
-		message *StoredMessage,
+		message *transcript.Message,
 		outputType OutputType,
 		content string,
 	) (messageID int64, output *OutputCommit, err error)

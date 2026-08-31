@@ -135,7 +135,7 @@ deps:
 
   # ReAct loop — the heaviest service.
   session:
-    mayDependOn: [builtin, config, git, id, llm, llmwire, loader, logger, mcp, mcpstore, memory, registry, sessionevent, sessionstore, shellenv, todo, tool]
+    mayDependOn: [builtin, config, git, id, llm, llmwire, loader, logger, mcp, mcpstore, memory, registry, sessionevent, sessionstore, shellenv, todo, tool, transcript]
 
   # schedule fires wake-ups only through its own SessionSender interface; it has
   # protocol/logging edges but cannot import session or daemon.
@@ -153,7 +153,7 @@ deps:
 
   # Orchestrator.
   daemon:
-    mayDependOn: [admission, budget, coagenthome, config, configapply, configops, configtools, controllerapi, git, id, llmwire, loader, logger, mcp, mcpstore, progress, registry, schedule, session, sessionbus, sessionevent, sessionstore, subagent, todo, tool]
+    mayDependOn: [admission, budget, coagenthome, config, configapply, configops, configtools, controllerapi, git, id, llmwire, loader, logger, mcp, mcpstore, progress, registry, schedule, session, sessionbus, sessionevent, sessionstore, subagent, todo, tool, transcript]
 
   configops:
     mayDependOn: [coagenthome, config, logger]

@@ -10,6 +10,7 @@ import (
 	"github.com/pilat/coagent/internal/budget"
 	"github.com/pilat/coagent/internal/session"
 	"github.com/pilat/coagent/internal/sessionstore"
+	"github.com/pilat/coagent/internal/transcript"
 )
 
 type sessionBudgetGate struct {
@@ -49,7 +50,7 @@ func (g *sessionBudgetGate) Admit(ctx context.Context, now time.Time) error {
 //nolint:wsl_v5 // Commit and park scheduling form one response boundary.
 func (g *sessionBudgetGate) PersistResponse(
 	ctx context.Context,
-	message *sessionstore.StoredMessage,
+	message *transcript.Message,
 	directReply string,
 ) (int64, bool, bool, error) {
 	store, ok := g.store.(sessionstore.BudgetResponseStore)

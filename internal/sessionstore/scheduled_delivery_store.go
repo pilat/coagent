@@ -7,6 +7,8 @@ import (
 	"errors"
 	"fmt"
 	"time"
+
+	"github.com/pilat/coagent/internal/transcript"
 )
 
 var ErrDeliveryConflict = errors.New("session delivery identity conflict")
@@ -21,7 +23,7 @@ func (s *store) InsertToolNotificationPairOnce(
 	ctx context.Context,
 	sessionID int64,
 	deliveryID, fingerprint string,
-	assistant, toolResult *StoredMessage,
+	assistant, toolResult *transcript.Message,
 ) (asstID, resultID int64, inserted bool, err error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -73,7 +75,7 @@ func (s *store) ResetSessionContextOnce(
 	ctx context.Context,
 	sessionID int64,
 	deliveryID, fingerprint string,
-	opening []*StoredMessage,
+	opening []*transcript.Message,
 ) ([]int64, bool, error) {
 	if len(opening) == 0 {
 		return nil, false, errors.New("reset session context requires an opening turn")
@@ -86,7 +88,7 @@ func (s *store) resetSessionContextTx(
 	ctx context.Context,
 	sessionID int64,
 	deliveryID, fingerprint string,
-	opening []*StoredMessage,
+	opening []*transcript.Message,
 ) ([]int64, bool, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {

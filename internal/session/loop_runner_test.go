@@ -20,6 +20,7 @@ import (
 	"github.com/pilat/coagent/internal/logger"
 	"github.com/pilat/coagent/internal/sessionstore"
 	"github.com/pilat/coagent/internal/tool"
+	"github.com/pilat/coagent/internal/transcript"
 )
 
 // loopScriptLLM drives runLoop with a scripted response sequence and records
@@ -144,7 +145,7 @@ func (n *loopNotifier) countWith(substr string) int {
 func (s *loopReloadStore) LoadActiveMessages(
 	_ context.Context,
 	_ int64,
-) ([]*sessionstore.StoredMessage, error) {
+) ([]*transcript.Message, error) {
 	return nil, s.loadErr
 }
 

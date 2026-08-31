@@ -8,13 +8,15 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/pilat/coagent/internal/transcript"
 )
 
 //nolint:nonamedreturns // message and output identities need named results.
 func (s *store) InsertAssistantMessageWithOutput(
 	ctx context.Context,
 	sessionID int64,
-	message *StoredMessage,
+	message *transcript.Message,
 	outputType OutputType,
 	content string,
 ) (messageID int64, output *OutputCommit, err error) {
@@ -86,7 +88,7 @@ func (s *store) InsertAssistantMessageWithOutput(
 	return messageID, &OutputCommit{OutputID: outputID, OwnerID: owner}, nil
 }
 
-func storedMessageHasToolCalls(message *StoredMessage) bool {
+func storedMessageHasToolCalls(message *transcript.Message) bool {
 	var calls []json.RawMessage
 
 	return json.Unmarshal(message.ToolCalls, &calls) == nil && len(calls) > 0

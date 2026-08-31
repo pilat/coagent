@@ -9,7 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/pilat/coagent/internal/llmwire"
-	"github.com/pilat/coagent/internal/sessionstore"
+	"github.com/pilat/coagent/internal/transcript"
 )
 
 // reasoningBlob stands in for a provider's sealed reasoning payload. The session
@@ -67,7 +67,7 @@ func TestStoredMessageCarriesReasoningRaw(t *testing.T) {
 
 func TestReloadMessagesRestoresReasoningRaw(t *testing.T) {
 	ms := newMessageStore(&reasoningLoadStore{
-		messages: []*sessionstore.StoredMessage{
+		messages: []*transcript.Message{
 			{ID: 1, Role: llmwire.RoleUser, Content: "go"},
 			{ID: 2, Role: llmwire.RoleAssistant, Content: "sure", ReasoningRaw: reasoningBlob},
 		},
@@ -86,11 +86,11 @@ func TestReloadMessagesRestoresReasoningRaw(t *testing.T) {
 type reasoningLoadStore struct {
 	mockSessionStore
 
-	messages []*sessionstore.StoredMessage
+	messages []*transcript.Message
 }
 
 func (s *reasoningLoadStore) LoadActiveMessages(
 	context.Context, int64,
-) ([]*sessionstore.StoredMessage, error) {
+) ([]*transcript.Message, error) {
 	return s.messages, nil
 }

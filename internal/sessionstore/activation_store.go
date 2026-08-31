@@ -7,6 +7,8 @@ import (
 	"errors"
 	"fmt"
 	"time"
+
+	"github.com/pilat/coagent/internal/transcript"
 )
 
 type ActivationState string
@@ -44,7 +46,7 @@ type ActivationStore interface {
 		inputID int64,
 		preparedContent string,
 		activation ActivationDraft,
-	) (*StoredMessage, *ToolActivation, error)
+	) (*transcript.Message, *ToolActivation, error)
 	PendingActivation(ctx context.Context, sessionID int64) (*ToolActivation, error)
 	CurrentActivation(ctx context.Context, sessionID int64) (*ToolActivation, error)
 	ConsumeActivation(

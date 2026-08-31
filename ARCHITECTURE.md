@@ -516,9 +516,9 @@ reconstructible and defer to stores for durable ordering/CAS decisions.
 The session package owns prompt construction, model-tool iteration, context
 projection, loop detection and the sole tool-gating API. It receives a prepared
 tool stack rather than reaching into daemon state. Session-store owns immutable
-messages, compaction metadata/replacement ordering, durable inbox sequencing and
-atomic completion delivery. Neither session nor manager may recreate a delivery
-by parsing message content.
+messages, compaction metadata/replacement ordering and durable inbox sequencing;
+`transcript` owns the durable message-row vocabulary shared with producers.
+Neither session nor manager may recreate a delivery by parsing message content.
 
 ### Tools and agent policy
 

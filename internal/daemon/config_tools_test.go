@@ -19,6 +19,7 @@ import (
 	"github.com/pilat/coagent/internal/sessionevent"
 	"github.com/pilat/coagent/internal/sessionstore"
 	"github.com/pilat/coagent/internal/tool"
+	"github.com/pilat/coagent/internal/transcript"
 )
 
 // toolConfig is a valid starting point every config-tool test mutates from.
@@ -127,7 +128,7 @@ func (h *configHarness) recordCall(t *testing.T, callID, toolName string) {
 	calls, err := json.Marshal([]llmwire.ToolCall{{ID: callID, Name: toolName}})
 	require.NoError(t, err)
 
-	_, err = h.sessions.InsertMessage(context.Background(), h.sessionID, &sessionstore.StoredMessage{
+	_, err = h.sessions.InsertMessage(context.Background(), h.sessionID, &transcript.Message{
 		Role:      llmwire.RoleAssistant,
 		ToolCalls: calls,
 	})
@@ -142,7 +143,7 @@ func (h *configHarness) restart(t *testing.T, callID, toolName string) {
 	h.mgr.applier.ReleaseApply()
 	h.mgr.staged.resolve(h.sessionID, callID)
 
-	_, err := h.sessions.InsertMessage(context.Background(), h.sessionID, &sessionstore.StoredMessage{
+	_, err := h.sessions.InsertMessage(context.Background(), h.sessionID, &transcript.Message{
 		Role:       llmwire.RoleTool,
 		ToolCallID: callID,
 		ToolName:   toolName,
