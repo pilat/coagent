@@ -680,9 +680,8 @@ func (s *svc) cascadeKillChildren(ctx context.Context, parentID int64, depth int
 		return
 	}
 
-	// ListPendingChildLinks = delivered_at IS NULL, which also includes terminal
-	// children whose completion was not yet delivered and queued children parked in
-	// s.queue — the Terminal() guard below keeps us from re-killing the former.
+	// Pending links include terminal-undelivered and queued children; the
+	// terminal guard preserves the former's stored outcome.
 	links, err := s.links.ListPendingChildLinks(ctx, parentID)
 	if err != nil {
 		// The walk stops here, so part of the subtree survives the teardown.

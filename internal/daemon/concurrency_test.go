@@ -339,10 +339,7 @@ func closeOnce(ch chan struct{}) {
 }
 
 func (h *subagentHarness) queueLen() int {
-	h.mgr.queueMu.Lock()
-	defer h.mgr.queueMu.Unlock()
-
-	return len(h.mgr.queue)
+	return h.mgr.childQueue.Len()
 }
 
 func (h *subagentHarness) waitForLinkByCall(parentID int64, callID string) subagent.Link {

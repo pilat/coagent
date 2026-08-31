@@ -106,10 +106,8 @@ type svc struct {
 	subagents      subagent.Transactions
 	scheduleSvc    schedule.Service
 	admit          admission.Governor
-	queueMu        sync.Mutex
-	queue          []queuedChild
-	pendingMu      sync.Mutex
-	pendingRunners []queuedRunner
+	childQueue     sessionlifecycle.Queue[queuedChild]
+	pendingQueue   sessionlifecycle.Queue[queuedRunner]
 	pubsub         sessionbus.Bus
 	defaultModelFn func() string
 	modelCatalog   []modelInfo
@@ -257,6 +255,8 @@ func newSvc(
 		staged:         newStagedCalls(),
 		secrets:        newSecretRequests(),
 		admit:          admission.New(),
+		childQueue:     sessionlifecycle.NewQueue[queuedChild](),
+		pendingQueue:   sessionlifecycle.NewQueue[queuedRunner](),
 		pubsub:         sessionbus.New(),
 		treeMu:         &sync.Mutex{},
 		defaultModelFn: defaultModelFn,

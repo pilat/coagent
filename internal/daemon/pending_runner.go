@@ -14,32 +14,20 @@ import (
 // acquire an admission slot. Normal input is already durable; this queue is only
 // a best-effort ordering cache, rebuilt by the startup recoverable-input selector.
 func (s *svc) enqueuePendingRunner(sessionID int64, workDir string, projectID int64) {
-	s.pendingMu.Lock()
-	defer s.pendingMu.Unlock()
-
-	for _, pending := range s.pendingRunners {
-		if pending.sessionID == sessionID {
-			return
-		}
-	}
-
-	s.pendingRunners = append(s.pendingRunners, queuedRunner{
+	s.pendingQueue.PushUnique(queuedRunner{
 		sessionID: sessionID,
 		workDir:   workDir,
 		projectID: projectID,
+	}, func(left, right queuedRunner) bool {
+		return left.sessionID == right.sessionID
 	})
 }
 
 func (s *svc) drainPendingRunners(ctx context.Context) {
-	s.pendingMu.Lock()
-	if len(s.pendingRunners) == 0 {
-		s.pendingMu.Unlock()
+	next, ok := s.pendingQueue.PopFirst(func(queuedRunner) bool { return true })
+	if !ok {
 		return
 	}
-
-	next := s.pendingRunners[0]
-	s.pendingRunners = s.pendingRunners[1:]
-	s.pendingMu.Unlock()
 
 	err := s.ensureRunner(ctx, next.sessionID, next.workDir, next.projectID, nil)
 	if errors.Is(err, admission.ErrNoCapacity) {

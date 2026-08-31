@@ -79,27 +79,14 @@ func (s *svc) removeQueuedSessions(ids []int64) {
 		stopped[id] = struct{}{}
 	}
 
-	s.queueMu.Lock()
-	defer s.queueMu.Unlock()
+	s.childQueue.Remove(func(queued queuedChild) bool {
+		_, remove := stopped[queued.sessionID]
 
-	kept := s.queue[:0]
-	for _, queued := range s.queue {
-		if _, ok := stopped[queued.sessionID]; !ok {
-			kept = append(kept, queued)
-		}
-	}
+		return remove
+	})
+	s.pendingQueue.Remove(func(queued queuedRunner) bool {
+		_, remove := stopped[queued.sessionID]
 
-	s.queue = kept
-
-	s.pendingMu.Lock()
-	defer s.pendingMu.Unlock()
-
-	pendingKept := s.pendingRunners[:0]
-	for _, queued := range s.pendingRunners {
-		if _, ok := stopped[queued.sessionID]; !ok {
-			pendingKept = append(pendingKept, queued)
-		}
-	}
-
-	s.pendingRunners = pendingKept
+		return remove
+	})
 }

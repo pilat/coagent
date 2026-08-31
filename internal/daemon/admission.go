@@ -20,14 +20,12 @@ func (s *svc) enqueueChild(
 	workDir string,
 	projectID int64,
 ) {
-	s.queueMu.Lock()
-	s.queue = append(s.queue, queuedChild{
+	s.childQueue.Push(queuedChild{
 		sessionID: sessionID,
 		parentID:  parentID,
 		workDir:   workDir,
 		projectID: projectID,
 	})
-	s.queueMu.Unlock()
 
 	logger.Ctx(ctx).Named("daemon.admission").Info("subagent_queued", zap.Int64("child", sessionID))
 }
@@ -35,25 +33,12 @@ func (s *svc) enqueueChild(
 // drainQueue starts one queued child whose parent now has capacity. Called after
 // every slot release; ensureRunner re-checks admission (re-queueing on a race).
 func (s *svc) drainQueue(ctx context.Context) {
-	s.queueMu.Lock()
-
-	idx := -1
-
-	for i, q := range s.queue {
-		if s.admit.CanAdmitChild(q.parentID) {
-			idx = i
-			break
-		}
-	}
-
-	if idx < 0 {
-		s.queueMu.Unlock()
+	next, ok := s.childQueue.PopFirst(func(queued queuedChild) bool {
+		return s.admit.CanAdmitChild(queued.parentID)
+	})
+	if !ok {
 		return
 	}
-
-	next := s.queue[idx]
-	s.queue = append(s.queue[:idx], s.queue[idx+1:]...)
-	s.queueMu.Unlock()
 
 	// A child cascade-killed while parked (its link/session marked terminal by
 	// killSubagent, but no runner existed to stop) must never be launched. It is

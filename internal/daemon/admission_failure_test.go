@@ -48,7 +48,7 @@ func TestDrainPendingRunners_DerivesPromotedRecoveryAfterCapacityWait(t *testing
 
 	require.NoError(t, mgr.ensureSessionRunner(ctx, rec.ID))
 	assert.False(t, mgr.HasActiveLoop(rec.ID))
-	require.Len(t, mgr.pendingRunners, 1)
+	require.Equal(t, 1, mgr.pendingQueue.Len())
 
 	mgr.admit.Release(admission.Parent, 0)
 	reserved--
