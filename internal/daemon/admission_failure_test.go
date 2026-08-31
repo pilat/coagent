@@ -17,6 +17,27 @@ import (
 	"github.com/pilat/coagent/internal/subagent"
 )
 
+type childStateLinkStore struct {
+	subagent.Store
+	link *subagent.Link
+}
+
+func (s childStateLinkStore) GetLink(context.Context, int64) (*subagent.Link, error) {
+	return s.link, nil
+}
+
+type childStateSessionStore struct {
+	sessionstore.OrchestrationStore
+	record *sessionstore.SessionRecord
+	reads  int
+}
+
+func (s *childStateSessionStore) GetSession(context.Context, int64) (*sessionstore.SessionRecord, error) {
+	s.reads++
+
+	return s.record, nil
+}
+
 // TestDrainPendingRunners_DerivesPromotedRecoveryAfterCapacityWait preserves the
 // crash obligation through an admission delay without relying on queue metadata.
 func TestDrainPendingRunners_DerivesPromotedRecoveryAfterCapacityWait(t *testing.T) {
@@ -114,4 +135,46 @@ func TestChildTerminated_ReadErrorSurfaces(t *testing.T) {
 
 	_, err = h.mgr.childTerminated(h.ctx, h.childID)
 	require.ErrorIs(t, err, errLinkRead)
+}
+
+func TestChildTerminated_ClassifiesLedgerBeforeSessionFallback(t *testing.T) {
+	t.Parallel()
+
+	killedAt := time.Now()
+	tests := []struct {
+		name         string
+		link         *subagent.Link
+		record       *sessionstore.SessionRecord
+		want         bool
+		wantSessRead int
+	}{
+		{
+			name: "completed link", link: &subagent.Link{State: subagent.StateCompleted},
+			want: true,
+		},
+		{
+			name: "stopped link", link: &subagent.Link{State: subagent.StateStopped},
+			want: true,
+		},
+		{
+			name: "live link with killed session", link: &subagent.Link{State: subagent.StateRunning},
+			record: &sessionstore.SessionRecord{KilledAt: &killedAt}, want: true, wantSessRead: 1,
+		},
+		{
+			name: "missing link with live session", record: &sessionstore.SessionRecord{},
+			wantSessRead: 1,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sessions := &childStateSessionStore{record: tt.record}
+			mgr := &svc{links: childStateLinkStore{link: tt.link}, sessionStore: sessions}
+
+			got, err := mgr.childTerminated(t.Context(), 42)
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, got)
+			assert.Equal(t, tt.wantSessRead, sessions.reads)
+		})
+	}
 }

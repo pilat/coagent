@@ -57,3 +57,46 @@ func TestGovernor_EnforcesChildQuotas(t *testing.T) {
 		t.Fatal("released per-parent capacity was not reusable")
 	}
 }
+
+func TestGovernor_ReleaseDoesNotUnderflowGauges(t *testing.T) {
+	t.Parallel()
+
+	governor := New()
+	governor.Release(Parent, 0)
+	governor.Release(Child, 42)
+
+	if governor.LiveTotal() != 0 || governor.LiveChildren() != 0 {
+		t.Fatalf("release underflowed gauges: children=%d total=%d", governor.LiveChildren(), governor.LiveTotal())
+	}
+}
+
+func TestGovernor_ReleasePreservesPerParentOccupancy(t *testing.T) {
+	t.Parallel()
+
+	const parentID = int64(42)
+
+	empty := New()
+	empty.Release(Child, parentID)
+	for range MaxPerParent {
+		if !empty.TryAdmit(Child, parentID) {
+			t.Fatal("empty release consumed per-parent capacity")
+		}
+	}
+	if empty.TryAdmit(Child, parentID) {
+		t.Fatal("empty release underflowed per-parent occupancy")
+	}
+
+	occupied := New()
+	for range MaxPerParent {
+		if !occupied.TryAdmit(Child, parentID) {
+			t.Fatal("expected per-parent child capacity")
+		}
+	}
+	occupied.Release(Child, parentID)
+	if !occupied.TryAdmit(Child, parentID) {
+		t.Fatal("released per-parent capacity was not reusable")
+	}
+	if occupied.TryAdmit(Child, parentID) {
+		t.Fatal("release discarded remaining per-parent occupancy")
+	}
+}
