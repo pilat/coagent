@@ -969,11 +969,9 @@ func (s *svc) openSession(
 		StagedExternalCalls: externalCalls,
 
 		CompactionDeferAnnounced: s.deferNotices.announced(sessionID),
-		InputBoundary: &durableInputBoundary{
-			store:     s.inboxStore,
-			schedules: s.scheduleSvc,
-			sessionID: sessionID,
-			progress: func(ctx context.Context) (string, error) {
+		InputBoundary: s.inputFactory.Boundary(
+			sessionID,
+			func(ctx context.Context) (string, error) {
 				current, err := s.CurrentProgress(ctx, sessionID)
 				if err != nil {
 					return "", err
@@ -981,13 +979,13 @@ func (s *svc) openSession(
 
 				return current.Rendered, nil
 			},
-			progressChange: func(ctx context.Context) (string, bool, error) {
+			func(ctx context.Context) (string, bool, error) {
 				return s.enqueueProgressChange(ctx, sessionID)
 			},
-			finalOutput: func(ctx context.Context, text string) (string, error) {
+			func(ctx context.Context, text string) (string, error) {
 				return s.renderFinalOutput(ctx, sessionID, text)
 			},
-		},
+		),
 		SettlementOpen:        settlement,
 		PreserveStoppedStatus: preserveStopped,
 	}

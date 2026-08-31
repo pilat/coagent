@@ -71,6 +71,7 @@ does not imply a tier except where it expresses an implementation variant.
 - `internal/git` — Git operations used by repository-facing features.
 - `internal/humanize` — presentation-only formatting helpers (human-readable sizes); stdlib only.
 - `internal/id` — local identity generation utilities.
+- `internal/inputruntime` — durable session-input promotion, activation and command boundary.
 - `internal/install` — platform service installation and lifecycle integration.
 - `internal/llm` — provider protocol drivers, client creation, retries and cost handling.
 - `internal/llmwire` — provider-neutral message, response and tool wire vocabulary.
@@ -213,13 +214,14 @@ do not turn configuration into a mutable policy source.
 ### Session activation
 
 The daemon creates or resumes a session, loads its project context and policy,
-constructs the permitted tool stack, then hands control to the session loop. At
-each boundary the daemon promotes durable input in FIFO order. It does not append
-a user message directly into a live transcript while the session has unresolved
-external work. Completion, scheduling and user input use durable paths before a
-runner observes them. `/status` is the read-only exception to runner timing: the
-daemon resolves its durable inbox row and persistent full-progress output at
-admission, so an active model or tool call cannot delay the answer.
+constructs the permitted tool stack, then hands control to the session loop.
+`inputruntime` owns FIFO promotion, one-turn activation and atomic command output
+at that boundary. It does not append a user message while the session has
+unresolved external work. Completion, scheduling and user input use durable
+paths before a runner observes them. `/status` is the read-only exception to
+runner timing: the daemon resolves its durable inbox row and persistent
+full-progress output at admission, so an active model or tool call cannot delay
+the answer.
 
 Standalone scheduled work is a root-session capability: the daemon attaches
 `schedule` only to roots, while subagents retain `sleep` to resolve an existing
@@ -532,6 +534,8 @@ messages, compaction metadata/replacement ordering and durable inbox sequencing;
 `transcript` owns the durable message-row vocabulary shared with producers.
 `progress` owns the neutral context and operator-snapshot vocabulary shared by
 the session projection and progress runtime.
+`inputruntime` implements the session-owned consumption seam without letting the
+agent loop discover daemon or store capabilities at runtime.
 Session keeps row identities in a positional transcript sidecar; persistence
 metadata never enters the provider-facing `llmwire.Message`.
 Neither session nor manager may recreate a delivery by parsing message content.

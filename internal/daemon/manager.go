@@ -18,6 +18,7 @@ import (
 	"github.com/pilat/coagent/internal/config"
 	"github.com/pilat/coagent/internal/configapply"
 	"github.com/pilat/coagent/internal/controllerapi"
+	"github.com/pilat/coagent/internal/inputruntime"
 	"github.com/pilat/coagent/internal/logger"
 	"github.com/pilat/coagent/internal/mcp"
 	"github.com/pilat/coagent/internal/mcpstore"
@@ -90,6 +91,7 @@ type svc struct {
 	store          Store
 	sessionStore   sessionstore.OrchestrationStore
 	inboxStore     sessionstore.InboxStore
+	inputFactory   inputruntime.Factory
 	links          subagent.Store
 	subagents      subagent.Transactions
 	scheduleSvc    schedule.Service
@@ -178,7 +180,7 @@ func New(
 	factory session.Factory,
 	store Store,
 	sessionStore sessionstore.OrchestrationStore,
-	inboxStore sessionstore.InboxStore,
+	inboxStore inputruntime.Store,
 	links subagent.Store,
 	subagents subagent.Transactions,
 	budgetSvc budgetservice.Service,
@@ -212,7 +214,7 @@ func newSvc(
 	factory session.Factory,
 	store Store,
 	sessionStore sessionstore.OrchestrationStore,
-	inboxStore sessionstore.InboxStore,
+	inboxStore inputruntime.Store,
 	links subagent.Store,
 	subagents subagent.Transactions,
 	budgetSvc budgetservice.Service,
@@ -227,6 +229,7 @@ func newSvc(
 		store:          store,
 		sessionStore:   sessionStore,
 		inboxStore:     inboxStore,
+		inputFactory:   inputruntime.New(inboxStore, scheduleSvc),
 		links:          links,
 		subagents:      subagents,
 		budgetSvc:      budgetSvc,

@@ -49,6 +49,7 @@ components:
   memory:       { in: internal/memory }
   mcpstore:     { in: internal/mcpstore }
   sessionstore: { in: internal/sessionstore }
+  inputruntime: { in: internal/inputruntime }
   subagent:     { in: internal/subagent }
   transcript:   { in: internal/transcript }
   managerdelivery: { in: internal/managerdelivery }
@@ -98,6 +99,8 @@ deps:
     mayDependOn: [sessionstore, tool]
   sessionstore:
     mayDependOn: [transcript]
+  inputruntime:
+    mayDependOn: [controllerapi, schedule, session, sessionstore, tool]
   subagent:
     mayDependOn: [transcript]
   sessionbus:
@@ -156,7 +159,7 @@ deps:
 
   # Orchestrator.
   daemon:
-    mayDependOn: [admission, budget, coagenthome, config, configapply, configops, configtools, controllerapi, git, id, llmwire, loader, logger, mcp, mcpstore, progress, progressruntime, registry, schedule, session, sessionbus, sessionevent, sessionstore, subagent, todo, tool, transcript]
+    mayDependOn: [admission, budget, coagenthome, config, configapply, configops, configtools, controllerapi, git, id, inputruntime, llmwire, loader, logger, mcp, mcpstore, progress, progressruntime, registry, schedule, session, sessionbus, sessionevent, sessionstore, subagent, todo, tool, transcript]
 
   configops:
     mayDependOn: [coagenthome, config, logger]
