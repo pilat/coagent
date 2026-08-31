@@ -157,6 +157,7 @@ func newEffortHarness(t *testing.T, baseURL string) *subagentHarness {
 		links,
 		subagent.NewTransactions(db),
 		budget.New(sessStore),
+		sessStore,
 		schedule.NewService(schedStore),
 		func() string { return "plain-model" },
 	)

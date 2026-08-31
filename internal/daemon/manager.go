@@ -21,6 +21,7 @@ import (
 	"github.com/pilat/coagent/internal/logger"
 	"github.com/pilat/coagent/internal/mcp"
 	"github.com/pilat/coagent/internal/mcpstore"
+	"github.com/pilat/coagent/internal/progressruntime"
 	"github.com/pilat/coagent/internal/schedule"
 	"github.com/pilat/coagent/internal/session"
 	"github.com/pilat/coagent/internal/sessionbus"
@@ -112,12 +113,7 @@ type svc struct {
 	recoveryMu     sync.Mutex
 	recoveryCancel context.CancelFunc
 	recoveryDone   chan struct{}
-	progressCancel context.CancelFunc
-	progressDone   chan struct{}
-	progressWake   chan struct{}
-	progressMu     sync.Mutex
-	progressNow    func() time.Time
-	progressTimer  func(time.Duration) progressTimer
+	progress       progressruntime.Service
 	budgetCtx      context.Context //nolint:containedctx // Daemon lifetime context for joined park workers.
 	budgetCancel   context.CancelFunc
 	budgetWG       sync.WaitGroup
@@ -186,6 +182,7 @@ func New(
 	links subagent.Store,
 	subagents subagent.Transactions,
 	budgetSvc budgetservice.Service,
+	progressStore progressruntime.Store,
 	scheduleSvc schedule.Service,
 	cfg *config.Config,
 	mcpStore mcpstore.Store,
@@ -193,7 +190,8 @@ func New(
 	applier configapply.Service,
 ) Service {
 	s := newSvc(
-		factory, store, sessionStore, inboxStore, links, subagents, budgetSvc, scheduleSvc, cfg.DefaultModel,
+		factory, store, sessionStore, inboxStore, links, subagents, budgetSvc, progressStore,
+		scheduleSvc, cfg.DefaultModel,
 	)
 	s.systemProject = filepath.Join(
 		resolveProjectsRoot(cfg.UnifiedConfig),
@@ -218,6 +216,7 @@ func newSvc(
 	links subagent.Store,
 	subagents subagent.Transactions,
 	budgetSvc budgetservice.Service,
+	progressStore progressruntime.Store,
 	scheduleSvc schedule.Service,
 	defaultModelFn func() string,
 ) *svc {
@@ -241,12 +240,10 @@ func newSvc(
 		childCache:     make(map[int64]bool),
 		ownerCache:     make(map[int64]string),
 		deferNotices:   newDeferAnnouncements(),
-		progressWake:   make(chan struct{}, 1),
-		progressNow:    time.Now,
-		progressTimer:  newRealProgressTimer,
 		budgetCtx:      budgetCtx,
 		budgetCancel:   budgetCancel,
 	}
+	s.progress = newProgressRuntime(progressStore, budgetSvc, s)
 
 	return s
 }
@@ -1061,13 +1058,12 @@ func (s *svc) SetAttributes(ctx context.Context, sessionID int64, attrs map[stri
 	return nil
 }
 
-//nolint:wsl_v5 // Cancellation sources are adjacent before joins begin.
 func (s *svc) Shutdown(timeout time.Duration) {
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
 	s.shuttingDown.Store(true)
 
-	if s.progressCancel != nil {
-		s.progressCancel()
-	}
 	if s.budgetCancel != nil {
 		s.budgetCancel()
 	}
@@ -1086,6 +1082,10 @@ func (s *svc) Shutdown(timeout time.Duration) {
 	done := make(chan struct{})
 
 	go func() {
+		if s.progress != nil {
+			_ = s.progress.Stop(shutdownCtx)
+		}
+
 		var wg sync.WaitGroup
 
 		wg.Add(len(runners))
@@ -1104,10 +1104,6 @@ func (s *svc) Shutdown(timeout time.Duration) {
 			<-recoveryDone
 		}
 
-		if s.progressDone != nil {
-			<-s.progressDone
-		}
-
 		s.budgetWG.Wait()
 
 		close(done)
@@ -1115,7 +1111,7 @@ func (s *svc) Shutdown(timeout time.Duration) {
 
 	select {
 	case <-done:
-	case <-time.After(timeout):
+	case <-shutdownCtx.Done():
 		logger.Named("manager.shutdown").Warn("shutdown_timeout", zap.Int("remaining_sessions", len(runners)))
 	}
 }

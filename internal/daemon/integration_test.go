@@ -232,6 +232,7 @@ func newSubagentHarnessOnDBWithProject(
 		links,
 		subagent.NewTransactions(db),
 		budget.New(sessStore),
+		sessStore,
 		schedule.NewService(schedStore),
 		func() string { return "fake-model" },
 	)
@@ -951,6 +952,7 @@ func newMCPHarness(
 		links,
 		subagent.NewTransactions(db),
 		budget.New(sessStore),
+		sessStore,
 		schedule.NewService(schedStore),
 		func() string { return "fake-model" },
 	)

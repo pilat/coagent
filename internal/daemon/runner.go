@@ -447,8 +447,6 @@ func (s *svc) collectWaitingProjections(ctx context.Context, sessionID int64) []
 
 // recordWaitingProgress enqueues the durable waiting card for the projected
 // set; the canonical replaceable row is its own dedupe, so nothing is returned.
-//
-//nolint:wsl_v5 // Waiting projection and output reconciliation stay adjacent.
 func (s *svc) recordWaitingProgress(
 	ctx context.Context,
 	sessionID int64,
@@ -467,19 +465,9 @@ func (s *svc) recordWaitingProgress(
 
 	digest := sha256.Sum256(identity)
 	hash := hex.EncodeToString(digest[:])
-	progressStore, ok := s.sessionStore.(sessionstore.ProgressStore)
-	if !ok {
-		return nil
-	}
-
-	facts, err := progressStore.CaptureProgress(ctx, sessionID)
-	if err != nil {
-		return fmt.Errorf("capture progress: %w", err)
-	}
-
 	// A stale waiting card is dropped without a recapture retry: the newer
 	// transition that moved the generation owns the next card.
-	if _, _, err := s.enqueueProgressChangeFacts(ctx, facts, "waiting:"+hash, false); err != nil &&
+	if _, _, err := s.enqueueProgressChangeFor(ctx, sessionID, "waiting:"+hash, false); err != nil &&
 		!errors.Is(err, sessionstore.ErrProgressSuperseded) && !errors.Is(err, sessionstore.ErrOutputOwner) {
 		return fmt.Errorf("enqueue progress: %w", err)
 	}

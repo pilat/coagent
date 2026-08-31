@@ -86,6 +86,7 @@ does not imply a tier except where it expresses an implementation variant.
 - `internal/managerdelivery` — manager-neutral single-worker durable output drain and retry policy.
 - `internal/migrate` — SQLite opening and schema migration with production backup policy.
 - `internal/progress` — controller-neutral progress snapshots and Markdown rendering.
+- `internal/progressruntime` — durable progress publication and silence reconciliation lifecycle.
 - `internal/registry` — immutable per-session agent-type policy and prompt templates.
 - `cmd/releasebuilder` — build-time deterministic archive and checksum composition root.
 - `internal/schedule` — durable schedules, sleep ownership and scheduled delivery execution.
@@ -291,7 +292,7 @@ Each manager-owned root with a current autonomous episode has one canonical
 progress projection assembled from durable TODO state, transcript usage, tree
 topology, exact waits, budget state and output watermarks, with live context
 occupancy when a runner is available.
-The daemon owns one wakeable reconciler for all roots. Meaningful transitions
+`progressruntime` owns one wakeable reconciler for all roots. Meaningful transitions
 enqueue replaceable snapshots immediately; five minutes without newer semantic
 output creates a silence snapshot. Snapshots carry the captured generation and
 root status, and the inserting transaction discards them as superseded instead

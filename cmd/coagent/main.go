@@ -547,7 +547,7 @@ func startCore(
 	)
 
 	daemonSvc := daemon.New(
-		factory, daemonStore, sessionStore, sessionStore, linkStore, subagentTx, budgetSvc,
+		factory, daemonStore, sessionStore, sessionStore, linkStore, subagentTx, budgetSvc, sessionStore,
 		scheduleSvc, cfg, mcpRegistry, pool, applier,
 	)
 

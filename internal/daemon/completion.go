@@ -513,8 +513,10 @@ func (s *svc) finishStoppingRoots(
 	}
 
 	if s.budgetSvc != nil {
-		if err := s.reconcileArmedBudgets(ctx); err != nil {
-			return err
+		if s.progress != nil {
+			if err := s.progress.ReconcileArmedBudgets(ctx); err != nil {
+				return fmt.Errorf("reconcile armed budgets: %w", err)
+			}
 		}
 
 		pending, parkErr := s.budgetSvc.ListPendingParks(ctx)
@@ -533,44 +535,6 @@ func (s *svc) finishStoppingRoots(
 	s.startProgressReconciler(ctx)
 
 	s.startRecovery(ctx)
-
-	return nil
-}
-
-//nolint:wsl_v5 // Startup reconciliation keeps capture, observe, and park ordered.
-func (s *svc) reconcileArmedBudgets(ctx context.Context) error {
-	if s.budgetSvc == nil {
-		return nil
-	}
-
-	progressStore, ok := s.sessionStore.(sessionstore.ProgressStore)
-	if !ok {
-		return nil
-	}
-
-	armed, err := s.budgetSvc.ListArmed(ctx)
-	if err != nil {
-		return fmt.Errorf("list armed budgets: %w", err)
-	}
-
-	now := time.Now().UTC()
-	for _, budgetRecord := range armed {
-		facts, captureErr := progressStore.CaptureProgress(ctx, budgetRecord.RootSessionID)
-		if captureErr != nil {
-			return fmt.Errorf("capture budget progress for session %d: %w", budgetRecord.RootSessionID, captureErr)
-		}
-
-		record, fired, observeErr := s.budgetSvc.Observe(
-			ctx, budgetRecord.RootSessionID, facts.CostUSD, now, "",
-		)
-		if observeErr != nil {
-			return fmt.Errorf("reconcile budget for session %d: %w", budgetRecord.RootSessionID, observeErr)
-		}
-
-		if fired {
-			s.parkBudgetTree(ctx, record)
-		}
-	}
 
 	return nil
 }

@@ -53,6 +53,7 @@ components:
   transcript:   { in: internal/transcript }
   managerdelivery: { in: internal/managerdelivery }
   progress:      { in: internal/progress }
+  progressruntime: { in: internal/progressruntime }
   budget:        { in: internal/budget }
 
   tool:       { in: internal/tool }
@@ -101,6 +102,8 @@ deps:
     mayDependOn: [transcript]
   sessionbus:
     mayDependOn: [controllerapi, logger, sessionevent]
+  progressruntime:
+    mayDependOn: [budget, controllerapi, logger, progress, session, sessionstore, todo]
 
   # Per-cwd shell activation, consumed by the three per-cwd spawners.
   bashsandbox:
@@ -153,7 +156,7 @@ deps:
 
   # Orchestrator.
   daemon:
-    mayDependOn: [admission, budget, coagenthome, config, configapply, configops, configtools, controllerapi, git, id, llmwire, loader, logger, mcp, mcpstore, progress, registry, schedule, session, sessionbus, sessionevent, sessionstore, subagent, todo, tool, transcript]
+    mayDependOn: [admission, budget, coagenthome, config, configapply, configops, configtools, controllerapi, git, id, llmwire, loader, logger, mcp, mcpstore, progress, progressruntime, registry, schedule, session, sessionbus, sessionevent, sessionstore, subagent, todo, tool, transcript]
 
   configops:
     mayDependOn: [coagenthome, config, logger]

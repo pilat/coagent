@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/pilat/coagent/internal/llmwire"
+	"github.com/pilat/coagent/internal/progressruntime"
 	"github.com/pilat/coagent/internal/sessionstore"
 )
 
@@ -99,8 +100,8 @@ func TestHarnessScenario_LongSessionSilenceDeadlineIsDurableAndDeduplicated(t *t
 	require.NotNil(t, facts.EpisodeStartedAt)
 	deadline := facts.EpisodeStartedAt.Add(5 * time.Minute)
 
-	h.mgr.reconcileProgress(h.ctx, progressStore, deadline)
-	h.mgr.reconcileProgress(h.ctx, progressStore, deadline)
+	h.mgr.progress.Reconcile(h.ctx, deadline)
+	h.mgr.progress.Reconcile(h.ctx, deadline)
 
 	var intents int
 	require.NoError(t, h.db.QueryRowContext(h.ctx, `SELECT COUNT(*) FROM session_outbox
@@ -150,10 +151,10 @@ func TestHarnessScenario_ReactivatedEpisodeGetsFullSilenceInterval(t *testing.T)
 	require.NotNil(t, facts.LastSemanticOutputAt)
 	require.True(t, facts.EpisodeStartedAt.After(*facts.LastSemanticOutputAt))
 
-	h.mgr.reconcileProgress(h.ctx, progressStore, facts.EpisodeStartedAt.Add(progressSilenceInterval-time.Second))
+	h.mgr.progress.Reconcile(h.ctx, facts.EpisodeStartedAt.Add(progressruntime.SilenceInterval-time.Second))
 	assert.Equal(t, 0, countSilenceIntents(t, h, sessionID))
 
-	h.mgr.reconcileProgress(h.ctx, progressStore, facts.EpisodeStartedAt.Add(progressSilenceInterval))
+	h.mgr.progress.Reconcile(h.ctx, facts.EpisodeStartedAt.Add(progressruntime.SilenceInterval))
 	assert.Equal(t, 1, countSilenceIntents(t, h, sessionID))
 }
 

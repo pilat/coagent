@@ -191,7 +191,7 @@ func newRegistryPromptManager(
 ) *svc {
 	mgr := newSvc(
 		factory, deps.store, deps.sessionStore, deps.sessionStore, deps.links, deps.subagents,
-		budget.New(deps.sessionStore), schedule.NewService(deps.schedules),
+		budget.New(deps.sessionStore), deps.sessionStore, schedule.NewService(deps.schedules),
 		func() string { return "fake-model" },
 	)
 	mgr.systemProject = workDir

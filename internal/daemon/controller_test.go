@@ -40,7 +40,7 @@ func TestControllerManagerSubscriptionIsExactAcrossRestart(t *testing.T) {
 	secondSessions := sessionstore.NewStore(secondDB)
 	mgr := newSvc(
 		&mockFactory{}, NewStore(secondDB), secondSessions, secondSessions,
-		subagent.NewStore(secondDB), subagent.NewTransactions(secondDB), nil, nil, nil,
+		subagent.NewStore(secondDB), subagent.NewTransactions(secondDB), nil, secondSessions, nil, nil,
 	)
 	controllers := NewController(mgr, &config.Config{}, nil, nil)
 	subscriptions := make(map[string]<-chan controllerapi.SessionNotification, 10)

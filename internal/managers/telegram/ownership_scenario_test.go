@@ -64,7 +64,7 @@ func newTelegramOwnershipHarness(t *testing.T) *telegramOwnershipHarness {
 	cfg := &config.Config{UnifiedConfig: &config.UnifiedConfig{ProjectsRoot: filepath.Join(root, "projects")}}
 	svc := daemon.New(
 		nil, projects, sessions, sessions, subagent.NewStore(db), subagent.NewTransactions(db),
-		budget.New(sessions), nil, cfg, nil, nil, nil,
+		budget.New(sessions), sessions, nil, cfg, nil, nil, nil,
 	)
 	controllers := daemon.NewController(svc, cfg, nil, nil)
 	telegramController := controllers.ForManager("telegram-main")

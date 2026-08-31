@@ -142,6 +142,7 @@ func newModelAwareHarness(
 		links,
 		subagent.NewTransactions(db),
 		budget.New(sessStore),
+		sessStore,
 		schedule.NewService(schedStore),
 		func() string { return known[0] },
 	)
