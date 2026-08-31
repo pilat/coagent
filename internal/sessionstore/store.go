@@ -7,6 +7,8 @@ import (
 	"errors"
 	"fmt"
 	"time"
+
+	"github.com/pilat/coagent/internal/subagent"
 )
 
 const defaultReasoningLevel = "medium"
@@ -108,10 +110,8 @@ type CompactionEntry struct {
 	Message    *StoredMessage
 }
 
-// SubagentCreate describes the two-row durable aggregate created for a spawned
-// subagent. Link lifecycle values are supplied by the daemon, which owns that
-// state machine; sessionstore only guarantees that the session row and its
-// initial link commit together.
+// SubagentCreate describes the child session, link, and input committed together.
+// Link lifecycle comes from subagent; sessionstore owns only the transaction.
 type SubagentCreate struct {
 	ProjectID      int64
 	ParentID       int64
@@ -122,7 +122,7 @@ type SubagentCreate struct {
 	TaskCallID     string
 	Blocking       bool
 	Depth          int
-	LinkState      string
+	State          subagent.State
 	TimeoutSec     int
 	InitialInput   string
 }
@@ -219,7 +219,7 @@ type OrchestrationStore interface { //nolint:interfacebloat // one bounded orche
 	// ID that is not the link's parent are rejected without consuming the CAS. This
 	// is the SOLE writer of subagent_links.delivered_at/delivered_msg_id — the one
 	// link state the session store owns (the rest of the ledger lives in
-	// daemon.LinkStore).
+	// subagent.Store).
 	DeliverCompletionAtomic(
 		ctx context.Context,
 		sessionID int64,
@@ -230,7 +230,9 @@ type OrchestrationStore interface { //nolint:interfacebloat // one bounded orche
 	TryFinalizeSubagentActivation(
 		ctx context.Context,
 		childID int64,
-		state, result, outcome string,
+		state subagent.State,
+		result string,
+		outcome subagent.Outcome,
 	) (bool, error)
 	RearmDeliveredSubagentWithPendingInput(ctx context.Context, childID int64) (bool, error)
 }
@@ -383,7 +385,7 @@ func (s *store) CreateSubagentWithLink(ctx context.Context, create SubagentCreat
 		create.ReasoningLevel = defaultReasoningLevel
 	}
 
-	if create.LinkState == "" {
+	if create.State == "" {
 		return 0, errors.New("create subagent: empty initial link state")
 	}
 
@@ -409,7 +411,7 @@ func (s *store) CreateSubagentWithLink(ctx context.Context, create SubagentCreat
 		create.TaskCallID,
 		create.Blocking,
 		create.Depth,
-		create.LinkState,
+		create.State,
 		create.TimeoutSec,
 		now.Unix(),
 	)

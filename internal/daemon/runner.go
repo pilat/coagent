@@ -22,6 +22,7 @@ import (
 	"github.com/pilat/coagent/internal/session"
 	"github.com/pilat/coagent/internal/sessionevent"
 	"github.com/pilat/coagent/internal/sessionstore"
+	"github.com/pilat/coagent/internal/subagent"
 	"github.com/pilat/coagent/internal/tool"
 )
 
@@ -426,7 +427,7 @@ func (s *svc) collectWaitingProjections(ctx context.Context, sessionID int64) []
 		logger.Ctx(ctx).Named("daemon.waiting").Warn("list_subagents", zap.Error(err))
 	} else {
 		for _, link := range links {
-			if link.Blocking && !link.Terminal() && link.State != LinkStateStopped {
+			if link.Blocking && !link.Terminal() && link.State != subagent.StateStopped {
 				projections = append(projections, waitingProjection{
 					wait:     sessionevent.WaitItem{Kind: sessionevent.WaitSubagent, ChildID: link.ChildID},
 					display:  map[string]any{"child_id": link.ChildID},

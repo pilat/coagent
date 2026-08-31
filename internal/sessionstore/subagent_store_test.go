@@ -105,7 +105,7 @@ func TestStore_CreateSubagentWithLinkCommitsAggregate(t *testing.T) {
 		TaskCallID:     "task-1",
 		Blocking:       true,
 		Depth:          1,
-		LinkState:      "spawned",
+		State:          "spawned",
 		TimeoutSec:     30,
 		InitialInput:   "inspect the repository",
 	})
@@ -144,7 +144,7 @@ func TestStore_CreateSubagentWithLinkRejectsStoppingParent(t *testing.T) {
 
 	_, err = s.CreateSubagentWithLink(ctx, SubagentCreate{
 		ProjectID: projectID, ParentID: parent.ID, RootID: parent.ID,
-		Model: "child-model", TaskCallID: "task-1", LinkState: "spawned",
+		Model: "child-model", TaskCallID: "task-1", State: "spawned",
 	})
 	require.ErrorContains(t, err, "not accepting subagents")
 
@@ -171,7 +171,7 @@ func TestStore_CreateSubagentWithLinkRollsBackAggregateOnInboxFailure(t *testing
 
 	_, err = s.CreateSubagentWithLink(ctx, SubagentCreate{
 		ProjectID: projectID, ParentID: parent.ID, RootID: parent.ID,
-		Model: "child-model", TaskCallID: "task-1", LinkState: "spawned",
+		Model: "child-model", TaskCallID: "task-1", State: "spawned",
 		InitialInput: "work",
 	})
 	require.ErrorContains(t, err, "insert subagent initial input")
@@ -208,7 +208,7 @@ func TestStore_CreateSubagentWithLinkRollsBackOrphanOnLinkFailure(t *testing.T) 
 		Model:      "child-model",
 		TaskCallID: "task-1",
 		Depth:      1,
-		LinkState:  "spawned",
+		State:      "spawned",
 	})
 	require.ErrorContains(t, err, "insert subagent link")
 

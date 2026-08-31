@@ -7,6 +7,8 @@ import (
 	"errors"
 	"fmt"
 	"time"
+
+	"github.com/pilat/coagent/internal/subagent"
 )
 
 type ActivationState string
@@ -271,18 +273,19 @@ func requireActivationChanged(result sql.Result) error {
 
 // TryFinalizeSubagentActivation linearizes terminalization against durable
 // follow-up acceptance and /stop.
-//
-//nolint:goconst // Link-state strings are a separate durable vocabulary from session status.
 func (s *store) TryFinalizeSubagentActivation(
 	ctx context.Context,
 	childID int64,
-	state, result, outcome string,
+	state subagent.State,
+	result string,
+	outcome subagent.Outcome,
 ) (bool, error) {
-	if state != "completed" && state != "error" {
+	if state != subagent.StateCompleted && state != subagent.StateError {
 		return false, fmt.Errorf("invalid activation terminal state %q", state)
 	}
 
-	if outcome != "completed" && outcome != "error" && outcome != "incomplete" {
+	if outcome != subagent.OutcomeCompleted && outcome != subagent.OutcomeError &&
+		outcome != subagent.OutcomeIncomplete {
 		return false, fmt.Errorf("invalid activation outcome %q", outcome)
 	}
 

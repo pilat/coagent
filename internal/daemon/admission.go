@@ -10,6 +10,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/pilat/coagent/internal/logger"
+	"github.com/pilat/coagent/internal/subagent"
 )
 
 // Concurrency limits. Children are capped below the total so ≥(total-child)
@@ -216,7 +217,7 @@ func (s *svc) childTerminated(ctx context.Context, childID int64) (bool, error) 
 		return false, fmt.Errorf("queued child link %d: %w", childID, err)
 	}
 
-	if link != nil && (link.Terminal() || link.State == LinkStateStopped) {
+	if link != nil && (link.Terminal() || link.State == subagent.StateStopped) {
 		return true, nil
 	}
 

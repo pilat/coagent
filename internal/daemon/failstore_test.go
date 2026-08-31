@@ -6,6 +6,7 @@ import (
 	"sync"
 
 	"github.com/pilat/coagent/internal/sessionstore"
+	"github.com/pilat/coagent/internal/subagent"
 )
 
 // errLinkRead is the sentinel every ledger-failure test asserts on.
@@ -124,7 +125,9 @@ type flakyActivationStore struct {
 func (f *flakyActivationStore) TryFinalizeSubagentActivation(
 	ctx context.Context,
 	childID int64,
-	state, result, outcome string,
+	state subagent.State,
+	result string,
+	outcome subagent.Outcome,
 ) (bool, error) {
 	f.mu.Lock()
 	f.calls++

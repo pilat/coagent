@@ -91,6 +91,7 @@ does not imply a tier except where it expresses an implementation variant.
 - `internal/sessionevent` — session-to-controller notification vocabulary.
 - `internal/sessionstore` — durable sessions, messages, inbox and atomic delivery primitives.
 - `internal/shellenv` — captured per-worktree shell environment for child processes.
+- `internal/subagent` — typed parent-child link vocabulary and durable subagent ledger access.
 - `internal/todo` — session-local task tracking.
 - `internal/tool` — implementation-free tool protocol, registry and suspension sentinel.
 - `internal/tool/builtin` — built-in tools and their common stack construction.
@@ -116,6 +117,9 @@ delivery. The daemon owns orchestration across those facts: it must not recreate
 them from transcript text or infer correctness from a notification. Schedule,
 MCP, config-apply, and subagent packages each own their producer ledger; the
 daemon joins those ledgers into a session's runnable and waiting projections.
+Subagent link vocabulary and ordinary ledger access belong to `subagent`, not
+the daemon; session-store retains only the cross-table child creation,
+terminalization and parent-transcript delivery transactions.
 
 Manager-owned roots also carry a durable outbox obligation. `session_outbox`
 stores the closed output vocabulary, immutable owner identity, delivery receipt,
@@ -492,7 +496,8 @@ The `set_manager` tool is a presence-aware upsert: omitted fields preserve exist
 The daemon, session and session-store boundary divides global coordination,
 per-task execution and SQLite transaction ownership. The daemon creates runners,
 maintains admission queues and event fan-out, owns project identity and subagent
-links, and implements the manager controller. It must keep transient maps
+coordination, and implements the manager controller. The subagent package owns
+the durable parent-child link ledger. The daemon must keep transient maps
 reconstructible and defer to stores for durable ordering/CAS decisions.
 
 The session package owns prompt construction, model-tool iteration, context

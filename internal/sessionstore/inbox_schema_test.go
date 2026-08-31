@@ -141,7 +141,7 @@ func TestSubagentLinkSchema_ActivationSequenceStartsAtOne(t *testing.T) {
 	require.NoError(t, err)
 	childID, err := store.CreateSubagentWithLink(ctx, SubagentCreate{
 		ProjectID: projectID, ParentID: parent.ID, RootID: parent.ID,
-		Model: "model", TaskCallID: "task-1", LinkState: "spawned",
+		Model: "model", TaskCallID: "task-1", State: "spawned",
 	})
 	require.NoError(t, err)
 

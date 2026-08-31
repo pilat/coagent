@@ -21,7 +21,7 @@ func createBackgroundChild(t *testing.T, mgr *svc, projectID, parentID int64) in
 		RootID:     parentID,
 		Model:      "fake-model",
 		TaskCallID: "task-follow-up",
-		LinkState:  string(LinkStateSpawned),
+		State:      LinkStateSpawned,
 	})
 	require.NoError(t, err)
 
@@ -107,7 +107,7 @@ func TestStopParksWholeTreeAndExplicitFollowUpResumesOnlyChild(t *testing.T) {
 		Model:      "fake-model",
 		TaskCallID: "blocking-task",
 		Blocking:   true,
-		LinkState:  string(LinkStateRunning),
+		State:      LinkStateRunning,
 	})
 	require.NoError(t, err)
 	_, err = mgr.inboxStore.EnqueueInput(ctx, childID, sessionstore.InputSourceAgent, "not consumed")
@@ -175,7 +175,7 @@ func TestStopDirectChildParksItsOwnLinkWithoutStoppingParent(t *testing.T) {
 	require.NoError(t, err)
 	childID, err := mgr.sessionStore.CreateSubagentWithLink(ctx, sessionstore.SubagentCreate{
 		ProjectID: projectID, ParentID: parent.ID, RootID: parent.ID,
-		Model: "fake-model", TaskCallID: "background", LinkState: string(LinkStateRunning),
+		Model: "fake-model", TaskCallID: "background", State: LinkStateRunning,
 	})
 	require.NoError(t, err)
 
@@ -201,7 +201,7 @@ func TestStartFinishesInterruptedStopBeforeRecoverySweep(t *testing.T) {
 	require.NoError(t, err)
 	childID, err := mgr.sessionStore.CreateSubagentWithLink(ctx, sessionstore.SubagentCreate{
 		ProjectID: projectID, ParentID: parent.ID, RootID: parent.ID,
-		Model: "fake-model", TaskCallID: "background", LinkState: string(LinkStateRunning),
+		Model: "fake-model", TaskCallID: "background", State: LinkStateRunning,
 	})
 	require.NoError(t, err)
 	require.NoError(t, mgr.sessionStore.UpdateSessionStatus(ctx, parent.ID, sessionstore.SessionStatusStopping))

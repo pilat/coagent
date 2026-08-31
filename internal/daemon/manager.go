@@ -23,6 +23,7 @@ import (
 	"github.com/pilat/coagent/internal/session"
 	"github.com/pilat/coagent/internal/sessionevent"
 	"github.com/pilat/coagent/internal/sessionstore"
+	"github.com/pilat/coagent/internal/subagent"
 )
 
 //nolint:interfacebloat // the daemon's whole operation surface; the Controller contract it backs is equally wide by design
@@ -94,7 +95,7 @@ type svc struct {
 	store          Store
 	sessionStore   sessionstore.OrchestrationStore
 	inboxStore     sessionstore.InboxStore
-	links          LinkStore
+	links          subagent.Store
 	scheduleSvc    schedule.Service
 	admit          *admissionCtl
 	queueMu        sync.Mutex
@@ -187,7 +188,7 @@ func New(
 	store Store,
 	sessionStore sessionstore.OrchestrationStore,
 	inboxStore sessionstore.InboxStore,
-	links LinkStore,
+	links subagent.Store,
 	scheduleSvc schedule.Service,
 	cfg *config.Config,
 	mcpStore mcpstore.Store,
@@ -216,7 +217,7 @@ func newSvc(
 	store Store,
 	sessionStore sessionstore.OrchestrationStore,
 	inboxStore sessionstore.InboxStore,
-	links LinkStore,
+	links subagent.Store,
 	scheduleSvc schedule.Service,
 	defaultModelFn func() string,
 ) *svc {

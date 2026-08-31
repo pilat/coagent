@@ -46,6 +46,7 @@ components:
   memory:       { in: internal/memory }
   mcpstore:     { in: internal/mcpstore }
   sessionstore: { in: internal/sessionstore }
+  subagent:    { in: internal/subagent }
   managerdelivery: { in: internal/managerdelivery }
   progress:      { in: internal/progress }
   budget:        { in: internal/budget }
@@ -90,6 +91,8 @@ deps:
     mayDependOn: [id]
   budget:
     mayDependOn: [sessionstore, tool]
+  sessionstore:
+    mayDependOn: [subagent]
 
   # Per-cwd shell activation, consumed by the three per-cwd spawners.
   bashsandbox:
@@ -142,7 +145,7 @@ deps:
 
   # Orchestrator.
   daemon:
-    mayDependOn: [budget, coagenthome, config, configops, configtools, controllerapi, git, id, llmwire, loader, logger, mcp, mcpstore, progress, registry, schedule, session, sessionevent, sessionstore, todo, tool]
+    mayDependOn: [budget, coagenthome, config, configops, configtools, controllerapi, git, id, llmwire, loader, logger, mcp, mcpstore, progress, registry, schedule, session, sessionevent, sessionstore, subagent, todo, tool]
 
   configops:
     mayDependOn: [coagenthome, config, logger]

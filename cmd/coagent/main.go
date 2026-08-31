@@ -34,6 +34,7 @@ import (
 	"github.com/pilat/coagent/internal/sessionevent"
 	"github.com/pilat/coagent/internal/sessionstore"
 	"github.com/pilat/coagent/internal/shellenv"
+	"github.com/pilat/coagent/internal/subagent"
 	"github.com/pilat/coagent/internal/version"
 )
 
@@ -528,7 +529,7 @@ func startCore(
 	sessionStore := sessionstore.NewStore(db)
 	scheduleStore := schedule.NewStore(db)
 	curatedStore := memory.NewCuratedStore(db)
-	linkStore := daemon.NewLinkStore(db)
+	linkStore := subagent.NewStore(db)
 	mcpRegistry := mcpstore.NewStore(db)
 
 	if _, err := sessionStore.RecoverInterruptedOutputs(ctx); err != nil {

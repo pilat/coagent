@@ -8,6 +8,7 @@ import (
 
 	"github.com/pilat/coagent/internal/session"
 	"github.com/pilat/coagent/internal/sessionstore"
+	"github.com/pilat/coagent/internal/subagent"
 )
 
 // Spawn creates a child session + durable link and starts it running in the
@@ -27,7 +28,7 @@ func (s *svc) Spawn(ctx context.Context, req spawnRequest) (childResult, error) 
 		return childResult{}, fmt.Errorf("start child runner: %w", err)
 	}
 
-	return childResult{ChildID: childID, State: LinkStateSpawned}, nil
+	return childResult{ChildID: childID, State: subagent.StateSpawned}, nil
 }
 
 // createChildSession validates the spawn request (nesting depth), then durably
@@ -95,7 +96,7 @@ func (s *svc) createChildSession(ctx context.Context, req spawnRequest) (int64, 
 		TaskCallID:     req.TaskCallID,
 		Blocking:       req.Blocking,
 		Depth:          depth,
-		LinkState:      string(LinkStateSpawned),
+		State:          subagent.StateSpawned,
 		TimeoutSec:     req.TimeoutSec,
 		InitialInput:   req.Prompt,
 	})
@@ -127,7 +128,7 @@ func (s *svc) SendToChild(ctx context.Context, childID int64, msg string) error 
 		return fmt.Errorf("subagent %d not found", childID)
 	}
 
-	if link.State == LinkStateKilled {
+	if link.State == subagent.StateKilled {
 		return fmt.Errorf("subagent %d is killed", childID)
 	}
 
@@ -146,7 +147,7 @@ func (s *svc) SendToChild(ctx context.Context, childID int64, msg string) error 
 		return fmt.Errorf("subagent %d disappeared after accepting follow-up", childID)
 	}
 
-	if link.State == LinkStateStopped {
+	if link.State == subagent.StateStopped {
 		rec, recErr := s.sessionStore.GetSession(ctx, childID)
 		if recErr != nil {
 			return fmt.Errorf("load stopped subagent session: %w", recErr)

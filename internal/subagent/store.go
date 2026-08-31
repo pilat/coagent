@@ -1,4 +1,4 @@
-package daemon
+package subagent
 
 import (
 	"context"
@@ -14,78 +14,78 @@ const subagentLinkColumns = `parent_id, child_id, task_call_id, blocking, depth,
 // for queries that join subagent_links to sessions.
 const subagentLinkColumnsSL = `sl.parent_id, sl.child_id, sl.task_call_id, sl.blocking, sl.depth, sl.state, sl.delivered_at, sl.delivered_msg_id, sl.timeout_sec, sl.created_at, sl.result, sl.outcome, sl.activation_seq`
 
-// LinkState enumerates subagent link states. Terminal states (completed/error/killed) mean the child
+// State enumerates subagent link states. Terminal states (completed/error/killed) mean the child
 // loop has exited; non-terminal states (spawned/running) mean it may still run. A
 // background child awaiting an admission slot keeps its durable 'spawned' state
 // (the in-memory FIFO queue is only an ordering cache) so the restart sweep
 // re-runs it.
-type LinkState string
+type State string
 
 const (
-	LinkStateSpawned   LinkState = "spawned"
-	LinkStateRunning   LinkState = "running"
-	LinkStateCompleted LinkState = "completed"
-	LinkStateError     LinkState = "error"
-	LinkStateStopped   LinkState = "stopped"
-	LinkStateKilled    LinkState = "killed"
+	StateSpawned   State = "spawned"
+	StateRunning   State = "running"
+	StateCompleted State = "completed"
+	StateError     State = "error"
+	StateStopped   State = "stopped"
+	StateKilled    State = "killed"
 )
 
-// LinkOutcome is the parent-facing result vocabulary. It is deliberately
-// distinct from LinkState even where their serialized values coincide.
-type LinkOutcome string
+// Outcome is the parent-facing result vocabulary. It is deliberately
+// distinct from State even where their serialized values coincide.
+type Outcome string
 
 const (
-	LinkOutcomeCompleted  LinkOutcome = "completed"
-	LinkOutcomeError      LinkOutcome = "error"
-	LinkOutcomeKilled     LinkOutcome = "killed"
-	LinkOutcomeIncomplete LinkOutcome = "incomplete"
+	OutcomeCompleted  Outcome = "completed"
+	OutcomeError      Outcome = "error"
+	OutcomeKilled     Outcome = "killed"
+	OutcomeIncomplete Outcome = "incomplete"
 )
 
-func (s LinkState) valid() bool {
+func (s State) valid() bool {
 	switch s {
-	case LinkStateSpawned, LinkStateRunning, LinkStateCompleted, LinkStateError, LinkStateStopped, LinkStateKilled:
+	case StateSpawned, StateRunning, StateCompleted, StateError, StateStopped, StateKilled:
 		return true
 	default:
 		return false
 	}
 }
 
-func (o LinkOutcome) valid() bool {
+func (o Outcome) valid() bool {
 	switch o {
-	case LinkOutcomeCompleted, LinkOutcomeError, LinkOutcomeKilled, LinkOutcomeIncomplete:
+	case OutcomeCompleted, OutcomeError, OutcomeKilled, OutcomeIncomplete:
 		return true
 	default:
 		return false
 	}
 }
 
-func validTerminalLink(state LinkState, outcome LinkOutcome) bool {
+func validTerminalLink(state State, outcome Outcome) bool {
 	switch state {
-	case LinkStateCompleted:
-		return outcome == LinkOutcomeCompleted || outcome == LinkOutcomeIncomplete
-	case LinkStateError:
-		return outcome == LinkOutcomeError || outcome == LinkOutcomeIncomplete
-	case LinkStateKilled:
-		return outcome == LinkOutcomeKilled
-	case LinkStateSpawned, LinkStateRunning, LinkStateStopped:
+	case StateCompleted:
+		return outcome == OutcomeCompleted || outcome == OutcomeIncomplete
+	case StateError:
+		return outcome == OutcomeError || outcome == OutcomeIncomplete
+	case StateKilled:
+		return outcome == OutcomeKilled
+	case StateSpawned, StateRunning, StateStopped:
 		return false
 	default:
 		return false
 	}
 }
 
-var _ LinkStore = (*linkStore)(nil)
+var _ Store = (*store)(nil)
 
-// SubagentLink is a durable parent→child relationship row in subagent_links.
+// Link is a durable parent→child relationship row in subagent_links.
 // It is the source of truth for "a completion is owed" and survives compaction,
 // restart, and lost in-memory notifications.
-type SubagentLink struct {
+type Link struct {
 	ParentID       int64
 	ChildID        int64
 	TaskCallID     string
 	Blocking       bool
 	Depth          int
-	State          LinkState
+	State          State
 	DeliveredAt    int64 // unix seconds; 0 = undelivered
 	DeliveredMsgID int64
 	TimeoutSec     int
@@ -95,35 +95,35 @@ type SubagentLink struct {
 	// Result is the child's final answer text (or a short context note when it
 	// stopped without one); Outcome is the richer terminal signal (completed/
 	// error/killed/incomplete). Both are written at terminalization and read by
-	// the completion delivered to the parent — see LinkOutcomeIncomplete.
+	// the completion delivered to the parent — see OutcomeIncomplete.
 	Result  string
-	Outcome LinkOutcome
+	Outcome Outcome
 }
 
-// LinkStore persists the subagent_links ledger — the daemon-owned durable record
+// Store persists the subagent_links ledger — the subagent-owned durable record
 // of parent↔child relationships. It legitimately READS session liveness
 // (killed_at) in its JOIN queries but never writes the sessions table; the status
 // half of terminalization is the caller's separate UpdateSessionStatus.
-type LinkStore interface {
-	InsertSubagentLink(ctx context.Context, link SubagentLink) error
-	GetLink(ctx context.Context, childID int64) (*SubagentLink, error)
-	GetLinkByTaskCallID(ctx context.Context, parentID int64, taskCallID string) (*SubagentLink, error)
-	ListPendingChildLinks(ctx context.Context, parentID int64) ([]SubagentLink, error)
-	ListRunningChildLinks(ctx context.Context) ([]SubagentLink, error)
-	ListUndeliveredParentLinks(ctx context.Context) ([]SubagentLink, error)
+type Store interface {
+	InsertSubagentLink(ctx context.Context, link Link) error
+	GetLink(ctx context.Context, childID int64) (*Link, error)
+	GetLinkByTaskCallID(ctx context.Context, parentID int64, taskCallID string) (*Link, error)
+	ListPendingChildLinks(ctx context.Context, parentID int64) ([]Link, error)
+	ListRunningChildLinks(ctx context.Context) ([]Link, error)
+	ListUndeliveredParentLinks(ctx context.Context) ([]Link, error)
 	MarkLinkTerminal(
 		ctx context.Context,
 		childID int64,
-		state LinkState,
+		state State,
 		result string,
-		outcome LinkOutcome,
+		outcome Outcome,
 	) error
 	ResetLinkRunning(ctx context.Context, childID int64) error
 	MarkLinkStopped(ctx context.Context, childID int64) error
 	MakeStoppedLinkResumable(ctx context.Context, childID int64) error
 }
 
-type linkStore struct {
+type store struct {
 	db *sql.DB
 }
 
@@ -132,29 +132,29 @@ type rowScanner interface {
 	Scan(dest ...any) error
 }
 
-func NewLinkStore(db *sql.DB) LinkStore {
-	return &linkStore{db: db}
+func NewStore(db *sql.DB) Store {
+	return &store{db: db}
 }
 
 // Terminal reports whether the link is in a terminal state.
-func (l SubagentLink) Terminal() bool {
+func (l Link) Terminal() bool {
 	switch l.State {
-	case LinkStateCompleted, LinkStateError, LinkStateKilled:
+	case StateCompleted, StateError, StateKilled:
 		return true
-	case LinkStateSpawned, LinkStateRunning, LinkStateStopped:
+	case StateSpawned, StateRunning, StateStopped:
 		return false
 	default:
 		return false
 	}
 }
 
-func (s *linkStore) InsertSubagentLink(ctx context.Context, link SubagentLink) error {
+func (s *store) InsertSubagentLink(ctx context.Context, link Link) error {
 	if link.CreatedAt == 0 {
 		link.CreatedAt = time.Now().UTC().Unix()
 	}
 
 	if link.State == "" {
-		link.State = LinkStateSpawned
+		link.State = StateSpawned
 	}
 
 	if !link.State.valid() {
@@ -181,7 +181,7 @@ func (s *linkStore) InsertSubagentLink(ctx context.Context, link SubagentLink) e
 	return nil
 }
 
-func (s *linkStore) GetLink(ctx context.Context, childID int64) (*SubagentLink, error) {
+func (s *store) GetLink(ctx context.Context, childID int64) (*Link, error) {
 	row := s.db.QueryRowContext(
 		ctx,
 		`SELECT `+subagentLinkColumns+` FROM subagent_links WHERE child_id = ? LIMIT 1`,
@@ -191,7 +191,7 @@ func (s *linkStore) GetLink(ctx context.Context, childID int64) (*SubagentLink, 
 	return scanLinkRow(row)
 }
 
-func (s *linkStore) GetLinkByTaskCallID(ctx context.Context, parentID int64, taskCallID string) (*SubagentLink, error) {
+func (s *store) GetLinkByTaskCallID(ctx context.Context, parentID int64, taskCallID string) (*Link, error) {
 	row := s.db.QueryRowContext(
 		ctx,
 		`SELECT `+subagentLinkColumns+` FROM subagent_links WHERE parent_id = ? AND task_call_id = ? LIMIT 1`,
@@ -201,7 +201,7 @@ func (s *linkStore) GetLinkByTaskCallID(ctx context.Context, parentID int64, tas
 	return scanLinkRow(row)
 }
 
-func (s *linkStore) ListPendingChildLinks(ctx context.Context, parentID int64) ([]SubagentLink, error) {
+func (s *store) ListPendingChildLinks(ctx context.Context, parentID int64) ([]Link, error) {
 	rows, err := s.db.QueryContext(
 		ctx,
 		`SELECT `+subagentLinkColumns+` FROM subagent_links
@@ -216,7 +216,7 @@ func (s *linkStore) ListPendingChildLinks(ctx context.Context, parentID int64) (
 	return scanLinkRows(rows)
 }
 
-func (s *linkStore) ListRunningChildLinks(ctx context.Context) ([]SubagentLink, error) {
+func (s *store) ListRunningChildLinks(ctx context.Context) ([]Link, error) {
 	// The JOIN reads sessions.killed_at (read-only) to skip killed children — the
 	// ledger observing session liveness, never writing it.
 	rows, err := s.db.QueryContext(
@@ -234,7 +234,7 @@ func (s *linkStore) ListRunningChildLinks(ctx context.Context) ([]SubagentLink, 
 	return scanLinkRows(rows)
 }
 
-func (s *linkStore) ListUndeliveredParentLinks(ctx context.Context) ([]SubagentLink, error) {
+func (s *store) ListUndeliveredParentLinks(ctx context.Context) ([]Link, error) {
 	// The JOIN reads sessions.killed_at (read-only) to skip killed parents — the
 	// ledger observing session liveness, never writing it.
 	rows, err := s.db.QueryContext(
@@ -256,12 +256,12 @@ func (s *linkStore) ListUndeliveredParentLinks(ctx context.Context) ([]SubagentL
 // overwrite unconditionally (so a re-engaged child's second terminalization
 // replaces the prior run's values). The caller must have committed the child's
 // final message first (call-ordering guarantee, Appendix G7).
-func (s *linkStore) MarkLinkTerminal(
+func (s *store) MarkLinkTerminal(
 	ctx context.Context,
 	childID int64,
-	state LinkState,
+	state State,
 	result string,
-	outcome LinkOutcome,
+	outcome Outcome,
 ) error {
 	if !state.valid() || !outcome.valid() || !validTerminalLink(state, outcome) {
 		return fmt.Errorf("invalid terminal link state/outcome %q/%q", state, outcome)
@@ -292,14 +292,14 @@ func (s *linkStore) MarkLinkTerminal(
 // delivery marker cleared so a new completion is owed. result/outcome are left
 // stale until the next MarkLinkTerminal overwrites them; childSnapshot guards
 // reads with the terminal check so the stale value is never surfaced mid-rerun.
-func (s *linkStore) ResetLinkRunning(ctx context.Context, childID int64) error {
+func (s *store) ResetLinkRunning(ctx context.Context, childID int64) error {
 	result, err := s.db.ExecContext(
 		ctx,
 		`UPDATE subagent_links
 		 SET state = ?, blocking = 0, activation_seq = activation_seq + 1,
 		     delivered_at = NULL, delivered_msg_id = NULL
 		 WHERE child_id = ?`,
-		LinkStateRunning, childID,
+		StateRunning, childID,
 	)
 	if err != nil {
 		return fmt.Errorf("reset link running: %w", err)
@@ -317,10 +317,10 @@ func (s *linkStore) ResetLinkRunning(ctx context.Context, childID int64) error {
 	return nil
 }
 
-func (s *linkStore) MarkLinkStopped(ctx context.Context, childID int64) error {
+func (s *store) MarkLinkStopped(ctx context.Context, childID int64) error {
 	result, err := s.db.ExecContext(ctx, `
 		UPDATE subagent_links SET state = ?
-		WHERE child_id = ? AND state IN ('spawned', 'running')`, LinkStateStopped, childID)
+		WHERE child_id = ? AND state IN ('spawned', 'running')`, StateStopped, childID)
 	if err != nil {
 		return fmt.Errorf("mark link stopped: %w", err)
 	}
@@ -335,7 +335,7 @@ func (s *linkStore) MarkLinkStopped(ctx context.Context, childID int64) error {
 // MakeStoppedLinkResumable detaches a stopped foreground child from the task
 // call that Stop resolves in its parent. A later explicit follow-up then runs it
 // as a background continuation and reports through the normal completion event.
-func (s *linkStore) MakeStoppedLinkResumable(ctx context.Context, childID int64) error {
+func (s *store) MakeStoppedLinkResumable(ctx context.Context, childID int64) error {
 	_, err := s.db.ExecContext(ctx, `
 		UPDATE subagent_links SET blocking = 0
 		WHERE child_id = ? AND state = 'stopped'`, childID)
@@ -346,10 +346,10 @@ func (s *linkStore) MakeStoppedLinkResumable(ctx context.Context, childID int64)
 	return nil
 }
 
-func scanLinkRow(row *sql.Row) (*SubagentLink, error) {
+func scanLinkRow(row *sql.Row) (*Link, error) {
 	link, err := scanLinkFrom(row)
 	if errors.Is(err, sql.ErrNoRows) {
-		//nolint:nilnil // established "not found" contract of LinkStore.Get*, relied on by every caller in this package
+		//nolint:nilnil // established "not found" contract of Store.Get*, relied on by every caller in this package
 		return nil, nil
 	}
 
@@ -360,8 +360,8 @@ func scanLinkRow(row *sql.Row) (*SubagentLink, error) {
 	return link, nil
 }
 
-func scanLinkRows(rows *sql.Rows) ([]SubagentLink, error) {
-	var links []SubagentLink
+func scanLinkRows(rows *sql.Rows) ([]Link, error) {
+	var links []Link
 
 	for rows.Next() {
 		link, err := scanLinkFrom(rows)
@@ -379,8 +379,8 @@ func scanLinkRows(rows *sql.Rows) ([]SubagentLink, error) {
 	return links, nil
 }
 
-func scanLinkFrom(sc rowScanner) (*SubagentLink, error) {
-	var link SubagentLink
+func scanLinkFrom(sc rowScanner) (*Link, error) {
+	var link Link
 	var deliveredAt, deliveredMsgID sql.NullInt64
 	var state, outcome string
 
@@ -396,9 +396,9 @@ func scanLinkFrom(sc rowScanner) (*SubagentLink, error) {
 
 	link.DeliveredAt = deliveredAt.Int64
 	link.DeliveredMsgID = deliveredMsgID.Int64
-	link.State = LinkState(state)
+	link.State = State(state)
 
-	link.Outcome = LinkOutcome(outcome)
+	link.Outcome = Outcome(outcome)
 	if !link.State.valid() {
 		return nil, fmt.Errorf("invalid persisted link state %q for child %d", link.State, link.ChildID)
 	}

@@ -5,9 +5,10 @@ import (
 	"fmt"
 
 	"github.com/pilat/coagent/internal/sessionstore"
+	"github.com/pilat/coagent/internal/subagent"
 )
 
-func (s *svc) stopTree(ctx context.Context, rootID int64) ([]int64, []SubagentLink, error) {
+func (s *svc) stopTree(ctx context.Context, rootID int64) ([]int64, []subagent.Link, error) {
 	records, err := s.sessionStore.ListAllSessions(ctx)
 	if err != nil {
 		return nil, nil, fmt.Errorf("list sessions for stop tree: %w", err)
@@ -33,7 +34,7 @@ func (s *svc) stopTree(ctx context.Context, rootID int64) ([]int64, []SubagentLi
 	ids := []int64{rootID}
 	walk := []int64{rootID}
 	seen := map[int64]bool{rootID: true}
-	var treeLinks []SubagentLink
+	var treeLinks []subagent.Link
 
 	for pos := 0; pos < len(walk); pos++ {
 		for _, child := range byParent[walk[pos]] {
@@ -58,7 +59,7 @@ func (s *svc) stopTree(ctx context.Context, rootID int64) ([]int64, []SubagentLi
 			return nil, nil, fmt.Errorf("load subagent link for session %d: %w", id, linkErr)
 		}
 
-		if link != nil && !link.Terminal() && link.State != LinkStateStopped {
+		if link != nil && !link.Terminal() && link.State != subagent.StateStopped {
 			treeLinks = append(treeLinks, *link)
 		}
 	}

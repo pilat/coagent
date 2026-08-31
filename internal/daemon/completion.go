@@ -10,6 +10,7 @@ import (
 	"github.com/pilat/coagent/internal/logger"
 	"github.com/pilat/coagent/internal/session"
 	"github.com/pilat/coagent/internal/sessionstore"
+	"github.com/pilat/coagent/internal/subagent"
 	"github.com/pilat/coagent/internal/tool"
 )
 
@@ -39,7 +40,7 @@ func (s *svc) finalizeChild(ctx context.Context, childID int64, shuttingDown, er
 		return // already finalized
 	}
 
-	if link.State == LinkStateStopped {
+	if link.State == subagent.StateStopped {
 		return // /stop parks the child without producing a completion
 	}
 
@@ -62,11 +63,11 @@ func (s *svc) finalizeChild(ctx context.Context, childID int64, shuttingDown, er
 	// list queries are unchanged; outcome (the richer parent-facing signal) is
 	// derived separately and may differ (e.g. a max-iterations child is
 	// state=error but outcome=incomplete).
-	status := LinkStateCompleted
+	status := subagent.StateCompleted
 	persistedStatus := sessionstore.SessionStatusCompleted
 
 	if errored || rec.Status == sessionstore.SessionStatusError {
-		status = LinkStateError
+		status = subagent.StateError
 		persistedStatus = sessionstore.SessionStatusError
 	}
 
@@ -107,7 +108,7 @@ func (s *svc) deriveChildOutcome(
 	childID int64,
 	iterations int,
 	errored bool,
-) (string, LinkOutcome) {
+) (string, subagent.Outcome) {
 	msgs, err := s.sessionStore.LoadActiveMessages(ctx, childID)
 	if err != nil {
 		msgs = nil
@@ -122,17 +123,17 @@ func (s *svc) deriveChildOutcome(
 			result = fmt.Sprintf("crashed after %d iterations", iterations)
 		}
 
-		return result, LinkOutcomeError
+		return result, subagent.OutcomeError
 	case lastStoredMessageIsFinalAnswer(msgs):
-		return finalText, LinkOutcomeCompleted
+		return finalText, subagent.OutcomeCompleted
 	default:
-		return fmt.Sprintf("ended without a final answer after %d iterations", iterations), LinkOutcomeIncomplete
+		return fmt.Sprintf("ended without a final answer after %d iterations", iterations), subagent.OutcomeIncomplete
 	}
 }
 
 // deliverCompletionToParent routes a completion notification to the parent,
 // reviving it if idle. A killed parent rejects it (orphan policy).
-func (s *svc) deliverCompletionToParent(ctx context.Context, link SubagentLink) {
+func (s *svc) deliverCompletionToParent(ctx context.Context, link subagent.Link) {
 	var input sessionInput
 	if link.Blocking {
 		input = blockingSubagentCompletionInput{
@@ -251,7 +252,7 @@ func (s *svc) injectBackgroundCompletion(
 func (s *svc) persistCompletion(
 	ctx context.Context,
 	sess session.Service,
-	link SubagentLink,
+	link subagent.Link,
 	stored []*sessionstore.StoredMessage,
 ) error {
 	_, won, err := s.sessionStore.DeliverCompletionAtomic(
@@ -405,7 +406,7 @@ func (s *svc) finishInterruptedKills(ctx context.Context) error {
 
 // completionContent formats a terminal child's stored result + outcome for the
 // parent, via the shared formatter so it matches get_subagent_result verbatim.
-func (s *svc) completionContent(ctx context.Context, link SubagentLink) string {
+func (s *svc) completionContent(ctx context.Context, link subagent.Link) string {
 	res := childResult{
 		ChildID:  link.ChildID,
 		State:    link.State,
@@ -689,7 +690,7 @@ func (s *svc) resumeSessionsWithRecoverableInput(ctx context.Context) (int, erro
 			}
 
 			resumed++
-		case link.State == LinkStateStopped:
+		case link.State == subagent.StateStopped:
 			// Explicitly parked by /stop.
 		case link.Terminal() && link.DeliveredAt != 0:
 			if err := s.rearmChildAfterDelivery(ctx, sessionID); err != nil {
@@ -741,7 +742,7 @@ func (s *svc) cascadeKillChildren(ctx context.Context, parentID int64, depth int
 
 // warnKilledDescendant emits one audit line per non-terminal descendant torn down
 // by a cascade kill, using only fields already in hand (no message load).
-func (s *svc) warnKilledDescendant(ctx context.Context, link SubagentLink) {
+func (s *svc) warnKilledDescendant(ctx context.Context, link subagent.Link) {
 	iteration := 0
 	if rec, err := s.sessionStore.GetSession(ctx, link.ChildID); err == nil {
 		iteration = rec.Iteration
@@ -763,7 +764,7 @@ func (s *svc) warnKilledDescendant(ctx context.Context, link SubagentLink) {
 func (s *svc) killSubagent(ctx context.Context, childID int64, deadline time.Time) {
 	// Link-terminal must commit before the status write: it is the authoritative
 	// sweep signal, and MarkSessionKilled below hides a non-terminal link for good.
-	err := s.markLinkTerminalRetrying(ctx, deadline, childID, LinkStateKilled, "", LinkOutcomeKilled)
+	err := s.markLinkTerminalRetrying(ctx, deadline, childID, subagent.StateKilled, "", subagent.OutcomeKilled)
 	if err != nil {
 		// Skipping killed_at is what keeps the child recoverable: the sweep selects
 		// on `state IN ('spawned','running') AND killed_at IS NULL`.
@@ -804,7 +805,7 @@ func (s *svc) markChildKilled(ctx context.Context, childID int64) {
 }
 
 // resumeChild restarts a child's runner so its loop can finish.
-func (s *svc) resumeChild(ctx context.Context, link SubagentLink) {
+func (s *svc) resumeChild(ctx context.Context, link subagent.Link) {
 	rec, err := s.sessionStore.GetSession(ctx, link.ChildID)
 	if err != nil {
 		return

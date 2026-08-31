@@ -11,6 +11,7 @@ import (
 	"github.com/pilat/coagent/internal/logger"
 	"github.com/pilat/coagent/internal/sessionevent"
 	"github.com/pilat/coagent/internal/sessionstore"
+	"github.com/pilat/coagent/internal/subagent"
 )
 
 const (
@@ -32,9 +33,9 @@ func (s *svc) markLinkTerminalRetrying(
 	ctx context.Context,
 	deadline time.Time,
 	childID int64,
-	state LinkState,
+	state subagent.State,
 	result string,
-	outcome LinkOutcome,
+	outcome subagent.Outcome,
 ) error {
 	var err error
 
@@ -59,9 +60,9 @@ func (s *svc) markLinkTerminalRetrying(
 func (s *svc) finalizeActivationRetrying(
 	ctx context.Context,
 	childID int64,
-	state LinkState,
+	state subagent.State,
 	result string,
-	outcome LinkOutcome,
+	outcome subagent.Outcome,
 ) (bool, error) {
 	var err error
 
@@ -72,9 +73,7 @@ func (s *svc) finalizeActivationRetrying(
 
 		var finalized bool
 
-		finalized, err = s.sessionStore.TryFinalizeSubagentActivation(
-			ctx, childID, string(state), result, string(outcome),
-		)
+		finalized, err = s.sessionStore.TryFinalizeSubagentActivation(ctx, childID, state, result, outcome)
 		if err == nil {
 			return finalized, nil
 		}
