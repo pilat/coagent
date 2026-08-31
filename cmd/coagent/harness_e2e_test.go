@@ -65,7 +65,8 @@ func TestHarnessE2E_SecondInputDoesNotReplayPreviousFinal(t *testing.T) {
 }
 
 func TestHarnessE2E_ForegroundFollowUpRejectsCompetingSleep(t *testing.T) {
-	modelServer, releaseFollowUp := newHarnessChildModelServer(t)
+	modelServer, releaseInitial, releaseFollowUp := newHarnessChildModelServer(t)
+	defer closeHarnessChannel(releaseInitial)
 	defer closeHarnessChannel(releaseFollowUp)
 	home, err := os.MkdirTemp("/tmp", "coa-harness")
 	require.NoError(t, err)
@@ -86,22 +87,14 @@ func TestHarnessE2E_ForegroundFollowUpRejectsCompetingSleep(t *testing.T) {
 	require.NoError(t, client.Call(t.Context(), managercli.OpChatOpen, struct{}{}, &managercli.OpenResult{}))
 
 	started := sendHarnessChat(t, client, managercli.SendParams{Text: "start foreground child"})
+	waitForHarnessEvent(t, client, started.SessionID, "foreground child wait", func(event managercli.Event) bool {
+		return event.Type == "waiting" ||
+			(event.Type == "message" && strings.Contains(event.Message, "⏳ Waiting on 1 item"))
+	})
+	close(releaseInitial)
 	initialAnswer := "initial child delivered"
 	initial := waitForHarnessChatTrace(t, client, started.SessionID, initialAnswer)
 	assert.Contains(t, initial.Messages, initialAnswer)
-	assert.Condition(t, func() bool {
-		if initial.Waiting > 0 {
-			return true
-		}
-		for _, message := range initial.Messages {
-			if strings.Contains(message, "⏳ Waiting on 1 item") {
-				return true
-			}
-		}
-
-		return false
-	}, "the compiled daemon must project the foreground child wait before completion")
-
 	sendHarnessChat(t, client, managercli.SendParams{
 		SessionID: started.SessionID,
 		Text:      "continue the same child",
@@ -254,9 +247,10 @@ func newRestartHarnessModelServer(t *testing.T) (*httptest.Server, chan struct{}
 	return server, release
 }
 
-func newHarnessChildModelServer(t *testing.T) (*httptest.Server, chan struct{}) {
+func newHarnessChildModelServer(t *testing.T) (*httptest.Server, chan struct{}, chan struct{}) {
 	t.Helper()
 
+	releaseInitial := make(chan struct{})
 	releaseFollowUp := make(chan struct{})
 	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
 		response.Header().Set("Content-Type", "application/json")
@@ -285,6 +279,7 @@ func newHarnessChildModelServer(t *testing.T) (*httptest.Server, chan struct{}) 
 				<-releaseFollowUp
 				writeHarnessTextCompletion(t, response, "child continuation answer")
 			} else {
+				<-releaseInitial
 				writeHarnessTextCompletion(t, response, "child initial answer")
 			}
 		case body.hasToolResult("subagent_event"):
@@ -323,7 +318,7 @@ func newHarnessChildModelServer(t *testing.T) (*httptest.Server, chan struct{}) 
 		}
 	}))
 
-	return server, releaseFollowUp
+	return server, releaseInitial, releaseFollowUp
 }
 
 type harnessModelRequest struct {
@@ -487,6 +482,37 @@ func waitForHarnessChatMessage(
 	t.Helper()
 
 	return waitForHarnessChatTrace(t, client, sessionID, target).Messages
+}
+
+func waitForHarnessEvent(
+	t *testing.T,
+	client *ctl.Client,
+	sessionID int64,
+	label string,
+	match func(managercli.Event) bool,
+) {
+	t.Helper()
+
+	timer := time.NewTimer(20 * time.Second)
+	defer timer.Stop()
+
+	for {
+		select {
+		case notification, ok := <-client.Notifications():
+			require.True(t, ok, "daemon disconnected before %s", label)
+			if notification.Method != managercli.EventMethod {
+				continue
+			}
+
+			var event managercli.Event
+			require.NoError(t, json.Unmarshal(notification.Params, &event))
+			if event.SessionID == sessionID && match(event) {
+				return
+			}
+		case <-timer.C:
+			t.Fatalf("session %d did not emit %s", sessionID, label)
+		}
+	}
 }
 
 func waitForHarnessChatTrace(
