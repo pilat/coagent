@@ -60,6 +60,7 @@ does not imply a tier except where it expresses an implementation variant.
 - `internal/catalog` — external model metadata acquisition, caching and identifier matching.
 - `internal/coagenthome` — sole resolver and name owner for the coagent home directory.
 - `internal/config` — typed configuration and secrets resolution policy.
+- `internal/configapply` — serialized config-commit claim and restart trigger.
 - `internal/configops` — guarded configuration mutations, backups and restart verdict markers.
 - `internal/configtools` — agent-facing configuration tool schemas, parsing and semantic-operation adapters.
 - `internal/controllerapi` — private daemon-to-manager contract and DTO vocabulary.
@@ -595,8 +596,9 @@ knowledge.
 Config owns parsing and secret-sink resolution; config operations own semantic
 mutation, backup retention and pending-apply recovery. Config tools own the
 agent-facing schemas, strict argument parsing and mapping to semantic config
-operations; the daemon gates their availability and owns the durable
-suspend-to-restart handoff. Migration owns SQLite opening and schema progression.
+operations. Config apply owns the process-wide commit claim and restart trigger;
+the daemon gates tool availability and owns the durable suspend-to-restart
+handoff. Migration owns SQLite opening and schema progression.
 A production upgrade of an existing database creates a consistent SQLite backup
 before applying pending migrations and fails closed if inspection, backup or
 publication fails; fixture migration runs do not surprise callers with a backup

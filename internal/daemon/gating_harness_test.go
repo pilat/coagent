@@ -14,6 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/pilat/coagent/internal/config"
+	"github.com/pilat/coagent/internal/configapply"
 	"github.com/pilat/coagent/internal/configops"
 	"github.com/pilat/coagent/internal/controllerapi"
 	"github.com/pilat/coagent/internal/llm"
@@ -153,7 +154,7 @@ func newGatingHarness(
 	if systemProject {
 		mgr.systemProject = workDir
 	}
-	mgr.applier = NewConfigApplier(newTestConfigOps(t, dir), func() {})
+	mgr.applier = configapply.New(newTestConfigOps(t, dir), func() {})
 
 	var pid int64
 	if systemProject {

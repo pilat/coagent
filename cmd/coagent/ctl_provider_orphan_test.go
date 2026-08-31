@@ -11,9 +11,9 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/pilat/coagent/internal/config"
+	"github.com/pilat/coagent/internal/configapply"
 	"github.com/pilat/coagent/internal/configops"
 	"github.com/pilat/coagent/internal/ctl"
-	"github.com/pilat/coagent/internal/daemon"
 )
 
 const (
@@ -86,7 +86,7 @@ func TestCommitProvider_ARefusedApplyKeepsTheCredential(t *testing.T) {
 
 			failing := tt.ops
 			failing.Service = configops.New(configPath, secretsPath)
-			applier := daemon.NewConfigApplier(&failing, func() {})
+			applier := configapply.New(&failing, func() {})
 
 			v := commitProvider(applier, ctl.SetProviderParams{
 				Name: "second", Driver: "anthropic", APIKey: orphanKey,
@@ -114,7 +114,7 @@ func TestSetProvider_ARetryAfterARefusedApplyOverwritesTheOrphan(t *testing.T) {
 
 	failing := &failingOps{Service: configops.New(configPath, secretsPath), failStage: true}
 	restarts := make(chan struct{}, 4)
-	applier := daemon.NewConfigApplier(failing, func() { restarts <- struct{}{} })
+	applier := configapply.New(failing, func() { restarts <- struct{}{} })
 
 	refused := setProvider(applier, newFakeReplyHook(), ctl.SetProviderParams{
 		Name: "second", Driver: "anthropic", APIKey: orphanKey,

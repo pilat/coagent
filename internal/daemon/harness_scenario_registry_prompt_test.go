@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/pilat/coagent/internal/config"
+	"github.com/pilat/coagent/internal/configapply"
 	"github.com/pilat/coagent/internal/controllerapi"
 	"github.com/pilat/coagent/internal/llm"
 	"github.com/pilat/coagent/internal/llmwire"
@@ -194,7 +195,7 @@ func newRegistryPromptManager(
 	mgr.systemProject = workDir
 	mgr.mcpStore = deps.mcpRegistry
 	mgr.mcpPool = deps.mcpPool
-	mgr.applier = NewConfigApplier(newTestConfigOps(t, t.TempDir()), func() {})
+	mgr.applier = configapply.New(newTestConfigOps(t, t.TempDir()), func() {})
 
 	return mgr
 }

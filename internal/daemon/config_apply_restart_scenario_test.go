@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/pilat/coagent/internal/coagenthome"
+	"github.com/pilat/coagent/internal/configapply"
 	"github.com/pilat/coagent/internal/configops"
 	"github.com/pilat/coagent/internal/controllerapi"
 	"github.com/pilat/coagent/internal/llm"
@@ -148,7 +149,7 @@ func TestScenario_ConfigApplyRejectionReachesTheSessionInProcess(t *testing.T) {
 	d := newApplyDaemon(t, dbPath, configDir)
 	defer d.shutdown()
 
-	d.mgr.applier = NewConfigApplier(failingCommitOps{d.ops}, func() { d.restarts <- struct{}{} })
+	d.mgr.applier = configapply.New(failingCommitOps{d.ops}, func() { d.restarts <- struct{}{} })
 
 	sessionID, err := d.mgr.Send(
 		d.ctx, d.projectID, "switch the default model", "fake-model", map[string]any{"channel": "cli"},

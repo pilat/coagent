@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/pilat/coagent/internal/coagenthome"
+	"github.com/pilat/coagent/internal/configapply"
 	"github.com/pilat/coagent/internal/configops"
 	"github.com/pilat/coagent/internal/llm"
 	"github.com/pilat/coagent/internal/llmwire"
@@ -69,7 +70,7 @@ func newExternalCallDaemon(
 	ops := configops.New(filepath.Join(configDir, "config.yaml"), filepath.Join(configDir, "secrets"))
 	restarts := make(chan struct{}, 4)
 
-	h.mgr.applier = NewConfigApplier(ops, func() { restarts <- struct{}{} })
+	h.mgr.applier = configapply.New(ops, func() { restarts <- struct{}{} })
 
 	return &applyDaemon{subagentHarness: h, ops: ops, restarts: restarts}
 }

@@ -28,6 +28,7 @@ components:
   admission:      { in: internal/admission }
   coagenthome:    { in: internal/coagenthome }
   config:         { in: internal/config }
+  configapply:    { in: internal/configapply }
   logger:         { in: internal/logger }
   llmwire:        { in: internal/llmwire }
   humanize:       { in: internal/humanize }
@@ -152,10 +153,13 @@ deps:
 
   # Orchestrator.
   daemon:
-    mayDependOn: [admission, budget, coagenthome, config, configops, configtools, controllerapi, git, id, llmwire, loader, logger, mcp, mcpstore, progress, registry, schedule, session, sessionbus, sessionevent, sessionstore, subagent, todo, tool]
+    mayDependOn: [admission, budget, coagenthome, config, configapply, configops, configtools, controllerapi, git, id, llmwire, loader, logger, mcp, mcpstore, progress, registry, schedule, session, sessionbus, sessionevent, sessionstore, subagent, todo, tool]
 
   configops:
     mayDependOn: [coagenthome, config, logger]
+
+  configapply:
+    mayDependOn: [configops]
 
   configtools:
     mayDependOn: [coagenthome, config, configops, tool]

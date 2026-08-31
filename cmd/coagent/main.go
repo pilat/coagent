@@ -15,6 +15,7 @@ import (
 
 	"github.com/pilat/coagent/internal/bashsandbox"
 	"github.com/pilat/coagent/internal/config"
+	"github.com/pilat/coagent/internal/configapply"
 	"github.com/pilat/coagent/internal/configops"
 	"github.com/pilat/coagent/internal/controllerapi"
 	"github.com/pilat/coagent/internal/ctl"
@@ -331,7 +332,7 @@ func runDaemon(
 	a.onStop("ctl.lock", func(context.Context) error { return lock.Release() })
 
 	restart := make(chan struct{}, 1)
-	applier := daemon.NewConfigApplier(ops, func() {
+	applier := configapply.New(ops, func() {
 		select {
 		case restart <- struct{}{}:
 		default: // a restart is already on its way
@@ -504,7 +505,7 @@ func startCore(
 	a *app,
 	cfg *config.Config,
 	secrets config.Secrets,
-	applier *daemon.ConfigApplier,
+	applier configapply.Service,
 ) (*core, error) {
 	gitClient := git.New()
 
@@ -591,7 +592,7 @@ func prepareControlSocket(
 	cfg *config.Config,
 	mgrs ctl.ManagerControl,
 	delivery controllerapi.OutputStatusFactory,
-	applier *daemon.ConfigApplier,
+	applier configapply.Service,
 	resolver secretRequestResolver,
 ) (*ctl.Server, error) {
 	path, err := ctl.SocketPath()

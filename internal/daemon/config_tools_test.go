@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/pilat/coagent/internal/configapply"
 	"github.com/pilat/coagent/internal/configops"
 	"github.com/pilat/coagent/internal/controllerapi"
 	"github.com/pilat/coagent/internal/llmwire"
@@ -75,7 +76,7 @@ func newConfigHarness(t *testing.T) *configHarness {
 	require.NoError(t, err)
 	h.projectID = projectID
 	mgr.systemProject = systemWorkDir
-	mgr.applier = NewConfigApplier(configops.New(configPath, secretsPath), func() { h.restarts++ })
+	mgr.applier = configapply.New(configops.New(configPath, secretsPath), func() { h.restarts++ })
 
 	h.mgr = mgr
 	h.sessionID = h.liveSession(t)

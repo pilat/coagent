@@ -16,6 +16,7 @@ import (
 	"github.com/pilat/coagent/internal/admission"
 	budgetservice "github.com/pilat/coagent/internal/budget"
 	"github.com/pilat/coagent/internal/config"
+	"github.com/pilat/coagent/internal/configapply"
 	"github.com/pilat/coagent/internal/controllerapi"
 	"github.com/pilat/coagent/internal/logger"
 	"github.com/pilat/coagent/internal/mcp"
@@ -102,7 +103,7 @@ type svc struct {
 	modelEntries   []config.ModelEntry
 	mcpStore       mcpstore.Store
 	mcpPool        mcp.Pool
-	applier        *ConfigApplier
+	applier        configapply.Service
 	staged         *stagedCalls
 	secrets        *secretRequests
 	deferNotices   *deferAnnouncements
@@ -188,7 +189,7 @@ func New(
 	cfg *config.Config,
 	mcpStore mcpstore.Store,
 	mcpPool mcp.Pool,
-	applier *ConfigApplier,
+	applier configapply.Service,
 ) Service {
 	s := newSvc(factory, store, sessionStore, inboxStore, links, subagents, scheduleSvc, cfg.DefaultModel)
 	s.systemProject = filepath.Join(
