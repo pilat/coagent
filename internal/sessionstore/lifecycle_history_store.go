@@ -9,8 +9,6 @@ import (
 
 // LifecycleOutputHistoryStore supplies the lifecycle anchor for a repaired
 // manager surface without exposing delivery receipts to producers.
-//
-//nolint:iface // controller asserts this optional store capability structurally.
 type LifecycleOutputHistoryStore interface {
 	LatestLifecycleOutputID(ctx context.Context, sessionID int64) (int64, error)
 }

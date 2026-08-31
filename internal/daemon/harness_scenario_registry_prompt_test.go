@@ -191,7 +191,9 @@ func newRegistryPromptManager(
 	t *testing.T,
 ) *svc {
 	mgr := newSvc(
-		factory, deps.store, deps.sessionStore, deps.sessionStore, deps.links, deps.subagents,
+		factory, deps.store, deps.sessionStore, deps.sessionStore, deps.sessionStore,
+		deps.sessionStore, deps.sessionStore, deps.sessionStore, deps.sessionStore,
+		deps.links, deps.subagents,
 		budget.New(deps.sessionStore), deps.sessionStore, schedule.NewService(deps.schedules),
 		func() string { return "fake-model" },
 	)

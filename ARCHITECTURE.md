@@ -130,6 +130,12 @@ parent-transcript delivery belong to `subagent`, not the daemon. Its store owns
 those cross-table transactions; session-store owns ordinary session runtime and
 transcript mutations.
 
+Session-store consumers receive four named ownership surfaces rather than its
+complete constructor type: agent runtime/checkpoint transactions, manager output
+delivery, manager-root creation/replacement, and lifecycle command settlement.
+These boundaries group operations by the invariant committed atomically, not by
+which table a query happens to touch.
+
 A live session receives transcript/checkpoint persistence and atomic output
 persistence as separate contracts; manager output cannot be enabled without the
 latter. Its in-memory model messages contain no database fields: a positional

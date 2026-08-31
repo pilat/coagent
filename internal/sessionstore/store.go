@@ -174,17 +174,13 @@ type OrchestrationStore interface { //nolint:interfacebloat // one bounded orche
 // Store is the complete persistence surface returned by NewStore. Consumers
 // should accept RuntimeStore or OrchestrationStore unless they truly need both.
 type Store interface { //nolint:interfacebloat // Complete constructor result; consumers use narrow capabilities.
-	RuntimeStore
-	BudgetResponseStore
-	BudgetCompactionStore
+	AgentRuntimeStore
 	OrchestrationStore
 	InboxStore
-	OutputStore
+	ManagerOutputStore
 	RuntimeOutputStore
-	ManagerRootStore
-	LifecycleOutputStore
-	LifecycleCommandStore
-	ReplacementStore
+	ManagerRootTransactions
+	SessionLifecycleStore
 	ActivationStore
 	BudgetStore
 	ModelInputStore
@@ -195,10 +191,12 @@ type Store interface { //nolint:interfacebloat // Complete constructor result; c
 
 var (
 	_ Store                 = (*store)(nil)
+	_ AgentRuntimeStore     = (*store)(nil)
 	_ RuntimeStore          = (*store)(nil)
 	_ OrchestrationStore    = (*store)(nil)
 	_ InboxStore            = (*store)(nil)
 	_ OutputStore           = (*store)(nil)
+	_ ManagerOutputStore    = (*store)(nil)
 	_ RuntimeOutputStore    = (*store)(nil)
 	_ ManagerRootStore      = (*store)(nil)
 	_ CommandOutputStore    = (*store)(nil)

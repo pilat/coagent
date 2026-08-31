@@ -89,7 +89,7 @@ type factory struct {
 	cfg              *config.Config
 	secrets          config.Secrets
 	memoryStore      memory.CuratedStore
-	store            sessionstore.RuntimeStore
+	store            sessionstore.AgentRuntimeStore
 	outputStore      sessionstore.RuntimeOutputStore
 	gitClient        git.Client
 	mcpPool          mcp.Pool
@@ -104,7 +104,7 @@ func NewFactory(
 	cfg *config.Config,
 	secrets config.Secrets,
 	memoryStore memory.CuratedStore,
-	store sessionstore.RuntimeStore,
+	store sessionstore.AgentRuntimeStore,
 	outputStore sessionstore.RuntimeOutputStore,
 	gitClient git.Client,
 	mcpPool mcp.Pool,
@@ -122,7 +122,7 @@ func NewFactoryWithOptions(
 	cfg *config.Config,
 	secrets config.Secrets,
 	memoryStore memory.CuratedStore,
-	store sessionstore.RuntimeStore,
+	store sessionstore.AgentRuntimeStore,
 	outputStore sessionstore.RuntimeOutputStore,
 	gitClient git.Client,
 	mcpPool mcp.Pool,

@@ -39,7 +39,8 @@ func TestControllerManagerSubscriptionIsExactAcrossRestart(t *testing.T) {
 	t.Cleanup(func() { _ = secondDB.Close() })
 	secondSessions := sessionstore.NewStore(secondDB)
 	mgr := newSvc(
-		&mockFactory{}, NewStore(secondDB), secondSessions, secondSessions,
+		&mockFactory{}, NewStore(secondDB), secondSessions, secondSessions, secondSessions,
+		secondSessions, secondSessions, secondSessions, secondSessions,
 		subagent.NewStore(secondDB), subagent.NewTransactions(secondDB), nil, secondSessions, nil, nil,
 	)
 	controllers := NewController(mgr, &config.Config{}, nil, nil)

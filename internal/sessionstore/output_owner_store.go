@@ -7,8 +7,6 @@ import (
 
 // OutputOwnerStore enumerates only manager identities with unresolved work so
 // status can expose a removed manager's blocked backlog without its payload.
-//
-//nolint:iface // controller asserts this optional store capability structurally.
 type OutputOwnerStore interface {
 	ListUnresolvedOutputOwners(ctx context.Context) ([]string, error)
 }

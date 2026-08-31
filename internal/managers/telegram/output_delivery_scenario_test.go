@@ -94,7 +94,8 @@ func newDelayedTelegramHarness(t *testing.T) *delayedTelegramHarness {
 		}),
 	)
 	service := daemon.New(
-		factory, projects, sessions, sessions, subagent.NewStore(db), subagent.NewTransactions(db),
+		factory, projects, sessions, sessions, sessions, sessions, sessions, sessions, sessions,
+		subagent.NewStore(db), subagent.NewTransactions(db),
 		budget.New(sessions), sessions, schedule.NewService(schedule.NewStore(db)), cfg, nil, nil, nil,
 	)
 	t.Cleanup(func() { service.Shutdown(3 * time.Second) })

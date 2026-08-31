@@ -16,7 +16,7 @@ import (
 type sessionBudgetGate struct {
 	daemon    *svc
 	service   budget.Service
-	store     sessionstore.RuntimeStore
+	store     sessionstore.AgentRuntimeStore
 	sessionID int64
 	rootID    int64
 }
@@ -53,12 +53,7 @@ func (g *sessionBudgetGate) PersistResponse(
 	message *transcript.Message,
 	directReply string,
 ) (int64, bool, bool, error) {
-	store, ok := g.store.(sessionstore.BudgetResponseStore)
-	if !ok {
-		return 0, false, false, errors.New("budget response store unavailable")
-	}
-
-	result, err := store.InsertBudgetedResponse(ctx, sessionstore.BudgetedResponse{
+	result, err := g.store.InsertBudgetedResponse(ctx, sessionstore.BudgetedResponse{
 		SessionID: g.sessionID, RootID: g.rootID, Message: message,
 		DirectReply: directReply, ObservedAt: time.Now().UTC(),
 	})
@@ -91,13 +86,9 @@ func (g *sessionBudgetGate) PersistCompaction(
 	ctx context.Context,
 	compaction sessionstore.BudgetedCompaction,
 ) ([]int64, bool, error) {
-	store, ok := g.store.(sessionstore.BudgetCompactionStore)
-	if !ok {
-		return nil, false, errors.New("budget compaction store unavailable")
-	}
 	compaction.SessionID = g.sessionID
 	compaction.RootID = g.rootID
-	result, err := store.ReplaceCompactedMessagesBudgeted(ctx, compaction)
+	result, err := g.store.ReplaceCompactedMessagesBudgeted(ctx, compaction)
 	if err != nil {
 		return nil, false, err
 	}

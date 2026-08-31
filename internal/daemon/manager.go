@@ -91,6 +91,11 @@ type svc struct {
 	store          Store
 	sessionStore   sessionstore.OrchestrationStore
 	inboxStore     sessionstore.InboxStore
+	runtimeStore   sessionstore.AgentRuntimeStore
+	managerOutputs sessionstore.ManagerOutputStore
+	managerRoots   sessionstore.ManagerRootTransactions
+	lifecycleStore sessionstore.SessionLifecycleStore
+	modelInputs    sessionstore.ModelInputStore
 	inputFactory   inputruntime.Factory
 	links          subagent.Store
 	subagents      subagent.Transactions
@@ -134,18 +139,12 @@ type svc struct {
 
 // OutputStore exposes the narrow manager-delivery ledger without widening the
 // daemon's general Service interface used by controller fakes.
-func (s *svc) OutputStore() sessionstore.OutputStore {
-	store, _ := s.sessionStore.(sessionstore.OutputStore)
-	return store
+func (s *svc) OutputStore() sessionstore.ManagerOutputStore {
+	return s.managerOutputs
 }
 
 func (s *svc) PrepareLegacyCLIRoots(ctx context.Context) error {
-	store, ok := s.sessionStore.(sessionstore.LegacyCLIClaimStore)
-	if !ok {
-		return nil
-	}
-
-	if err := store.ClaimLegacyCLIRoots(
+	if err := s.managerRoots.ClaimLegacyCLIRoots(
 		ctx,
 		controllerapi.CoagentSystemProjectName,
 		s.systemProject,
@@ -181,6 +180,11 @@ func New(
 	store Store,
 	sessionStore sessionstore.OrchestrationStore,
 	inboxStore inputruntime.Store,
+	runtimeStore sessionstore.AgentRuntimeStore,
+	managerOutputs sessionstore.ManagerOutputStore,
+	managerRoots sessionstore.ManagerRootTransactions,
+	lifecycleStore sessionstore.SessionLifecycleStore,
+	modelInputs sessionstore.ModelInputStore,
 	links subagent.Store,
 	subagents subagent.Transactions,
 	budgetSvc budgetservice.Service,
@@ -192,7 +196,9 @@ func New(
 	applier configapply.Service,
 ) Service {
 	s := newSvc(
-		factory, store, sessionStore, inboxStore, links, subagents, budgetSvc, progressStore,
+		factory, store, sessionStore, inboxStore, runtimeStore,
+		managerOutputs, managerRoots, lifecycleStore, modelInputs,
+		links, subagents, budgetSvc, progressStore,
 		scheduleSvc, cfg.DefaultModel,
 	)
 	s.systemProject = filepath.Join(
@@ -215,6 +221,11 @@ func newSvc(
 	store Store,
 	sessionStore sessionstore.OrchestrationStore,
 	inboxStore inputruntime.Store,
+	runtimeStore sessionstore.AgentRuntimeStore,
+	managerOutputs sessionstore.ManagerOutputStore,
+	managerRoots sessionstore.ManagerRootTransactions,
+	lifecycleStore sessionstore.SessionLifecycleStore,
+	modelInputs sessionstore.ModelInputStore,
 	links subagent.Store,
 	subagents subagent.Transactions,
 	budgetSvc budgetservice.Service,
@@ -229,6 +240,11 @@ func newSvc(
 		store:          store,
 		sessionStore:   sessionStore,
 		inboxStore:     inboxStore,
+		runtimeStore:   runtimeStore,
+		managerOutputs: managerOutputs,
+		managerRoots:   managerRoots,
+		lifecycleStore: lifecycleStore,
+		modelInputs:    modelInputs,
 		inputFactory:   inputruntime.New(inboxStore, scheduleSvc),
 		links:          links,
 		subagents:      subagents,
@@ -347,14 +363,13 @@ func (s *svc) SendToSessionResolved(ctx context.Context, sessionID int64, prompt
 	}
 
 	owner, _ := record.Attributes[controllerapi.SessionAttributeManagerID].(string)
-	if replacements, ok := s.sessionStore.(sessionstore.ReplacementStore); ok {
-		resolved, err := replacements.ResolveReplacement(ctx, sessionID, owner)
-		if err != nil {
-			return 0, fmt.Errorf("resolve replacement session: %w", err)
-		}
 
-		sessionID = resolved
+	resolved, err := s.managerRoots.ResolveReplacement(ctx, sessionID, owner)
+	if err != nil {
+		return 0, fmt.Errorf("resolve replacement session: %w", err)
 	}
+
+	sessionID = resolved
 
 	if err := s.SendToSession(ctx, sessionID, prompt); err != nil {
 		return 0, err
@@ -432,15 +447,11 @@ func (s *svc) handleStatusInput(ctx context.Context, input *sessionstore.InboxIn
 	}
 
 	if _, owned := input.Attributes[controllerapi.SessionAttributeManagerID].(string); owned {
-		if outputs, ok := s.inboxStore.(sessionstore.CommandOutputStore); ok {
-			_, err = outputs.HandleInputWithOutput(ctx, input.ID, "status command", sessionstore.OutputDraft{
-				SessionID: input.SessionID,
-				Type:      sessionstore.OutputMessagePersistent,
-				Content:   current.Rendered,
-			})
-		} else {
-			err = s.inboxStore.HandleInput(ctx, input.ID, "status command")
-		}
+		_, err = s.lifecycleStore.HandleInputWithOutput(ctx, input.ID, "status command", sessionstore.OutputDraft{
+			SessionID: input.SessionID,
+			Type:      sessionstore.OutputMessagePersistent,
+			Content:   current.Rendered,
+		})
 	} else {
 		err = s.inboxStore.HandleInput(ctx, input.ID, "status command")
 	}
@@ -461,25 +472,23 @@ func (s *svc) handleStoppedStop(ctx context.Context, input *sessionstore.InboxIn
 	content := "Session already stopped."
 
 	if _, owned := input.Attributes[controllerapi.SessionAttributeManagerID].(string); owned {
-		if outputs, ok := s.inboxStore.(sessionstore.CommandOutputStore); ok {
-			_, err := outputs.HandleInputWithOutput(ctx, input.ID, "stop command", sessionstore.OutputDraft{
-				SessionID: input.SessionID,
-				Type:      sessionstore.OutputMessagePersistent,
-				Content:   content,
-				SourceKey: fmt.Sprintf("input:%d:stop:already_stopped", input.ID),
-				Fingerprint: sessionstore.OutputFingerprint(
-					sessionstore.OutputMessagePersistent,
-					content,
-					input.SessionID,
-					nil,
-				),
-			})
-			if err != nil {
-				return fmt.Errorf("handle stopped stop with output: %w", err)
-			}
-
-			return nil
+		_, err := s.lifecycleStore.HandleInputWithOutput(ctx, input.ID, "stop command", sessionstore.OutputDraft{
+			SessionID: input.SessionID,
+			Type:      sessionstore.OutputMessagePersistent,
+			Content:   content,
+			SourceKey: fmt.Sprintf("input:%d:stop:already_stopped", input.ID),
+			Fingerprint: sessionstore.OutputFingerprint(
+				sessionstore.OutputMessagePersistent,
+				content,
+				input.SessionID,
+				nil,
+			),
+		})
+		if err != nil {
+			return fmt.Errorf("handle stopped stop with output: %w", err)
 		}
+
+		return nil
 	}
 
 	if err := s.inboxStore.HandleInput(ctx, input.ID, "stop command"); err != nil {
@@ -501,16 +510,7 @@ func (s *svc) handleLifecycleInput(ctx context.Context, input *sessionstore.Inbo
 		return nil
 	}
 
-	outputs, ok := s.inboxStore.(sessionstore.LifecycleCommandStore)
-	if !ok {
-		if err := s.inboxStore.HandleInput(ctx, input.ID, command); err != nil {
-			return fmt.Errorf("handle lifecycle input: %w", err)
-		}
-
-		return s.enqueuePersistentOutput(ctx, input.SessionID, content)
-	}
-
-	if _, err := outputs.BeginLifecycleInput(ctx, input.ID, command, content); err != nil {
+	if _, err := s.lifecycleStore.BeginLifecycleInput(ctx, input.ID, command, content); err != nil {
 		return fmt.Errorf("start lifecycle input: %w", err)
 	}
 
@@ -644,12 +644,8 @@ func (s *svc) Kill(ctx context.Context, sessionID int64) error {
 	// from request-scoped cancellation while keeping logger values.
 	cleanupCtx := context.WithoutCancel(ctx)
 
-	if lifecycle, ok := s.sessionStore.(sessionstore.LifecycleOutputStore); ok {
-		if _, err := lifecycle.MarkSessionKilledWithOutput(cleanupCtx, sessionID); err != nil {
-			return fmt.Errorf("mark session killed with output: %w", err)
-		}
-	} else if err := s.sessionStore.MarkSessionKilled(cleanupCtx, sessionID); err != nil {
-		return fmt.Errorf("mark session killed: %w", err)
+	if _, err := s.lifecycleStore.MarkSessionKilledWithOutput(cleanupCtx, sessionID); err != nil {
+		return fmt.Errorf("mark session killed with output: %w", err)
 	}
 
 	_, _ = s.inboxStore.CancelPendingInputs(cleanupCtx, []int64{sessionID}, "killed")
@@ -752,12 +748,7 @@ func (s *svc) convergeOrphanedStopStart(ctx context.Context, sessionID, inputID 
 //
 //nolint:funcorder // belongs beside the public Stop transition it completes.
 func (s *svc) completeExplicitStop(ctx context.Context, rootID, inputID int64) error {
-	store, ok := s.sessionStore.(sessionstore.StopCompletionStore)
-	if !ok {
-		return errors.New("stop completion store unavailable")
-	}
-
-	if _, err := store.CompleteExplicitStop(ctx, rootID, inputID); err != nil {
+	if _, err := s.lifecycleStore.CompleteExplicitStop(ctx, rootID, inputID); err != nil {
 		return fmt.Errorf("commit explicit stop completion: %w", err)
 	}
 
@@ -909,11 +900,11 @@ func (s *svc) clear(ctx context.Context, sessionID, inputID int64) (int64, error
 	var newRec *sessionstore.SessionRecord
 
 	//nolint:nestif // Owner-aware replacement is the one boundary that preserves a manager surface.
-	if roots, ok := s.sessionStore.(sessionstore.ManagerRootStore); ok && owner != "" {
+	if owner != "" {
 		if inputID > 0 {
-			newRec, _, err = roots.ReplaceManagerRootForInput(ctx, sessionID, inputID, projectName, workDir)
+			newRec, _, err = s.managerRoots.ReplaceManagerRootForInput(ctx, sessionID, inputID, projectName, workDir)
 		} else {
-			newRec, _, err = roots.ReplaceManagerRoot(ctx, sessionID, projectName, workDir)
+			newRec, _, err = s.managerRoots.ReplaceManagerRoot(ctx, sessionID, projectName, workDir)
 		}
 
 		if err != nil {
@@ -1164,8 +1155,7 @@ func (s *svc) enqueueUserSessionInput(
 	sessionID int64,
 	prompt string,
 ) (*sessionstore.InboxInput, error) {
-	modelInputs, ok := s.inboxStore.(sessionstore.ModelInputStore)
-	if !ok || isExactControlCommand(prompt) {
+	if isExactControlCommand(prompt) {
 		return s.enqueueGenericUserInput(ctx, sessionID, prompt)
 	}
 
@@ -1179,7 +1169,7 @@ func (s *svc) enqueueUserSessionInput(
 		return s.enqueueGenericUserInput(ctx, sessionID, prompt)
 	}
 
-	input, err := modelInputs.EnqueueModelInput(ctx, sessionID, prompt)
+	input, err := s.modelInputs.EnqueueModelInput(ctx, sessionID, prompt)
 	if err != nil {
 		return nil, fmt.Errorf("enqueue model input: %w", err)
 	}
@@ -1374,13 +1364,13 @@ func (s *svc) send(
 	var rec *sessionstore.SessionRecord
 	createdWithInput := false
 
-	if roots, ok := s.sessionStore.(sessionstore.ManagerRootStore); ok && owner != "" {
+	if owner != "" {
 		projectName, nameErr := s.store.GetProjectName(ctx, projectID)
 		if nameErr != nil {
 			return 0, fmt.Errorf("resolve project name: %w", nameErr)
 		}
 
-		rec, _, err = roots.CreateManagerRoot(ctx, sessionstore.ManagerRootCreate{
+		rec, _, err = s.managerRoots.CreateManagerRoot(ctx, sessionstore.ManagerRootCreate{
 			ProjectID: projectID, Model: model, ReasoningLevel: level, Attributes: attrs,
 			Prompt: prompt, StartEpisode: prompt != "" && !isExactControlCommand(prompt),
 			Name: projectName, WorkDir: workDir,

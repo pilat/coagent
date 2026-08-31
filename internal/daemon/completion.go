@@ -453,16 +453,13 @@ func (s *svc) Start(ctx context.Context) error {
 
 	owedStops := make(map[int64]int64)
 
-	completionStore, completionStoreOK := s.sessionStore.(sessionstore.StopCompletionStore)
-	if completionStoreOK {
-		stops, selectErr := completionStore.SelectInterruptedExplicitStops(ctx)
-		if selectErr != nil {
-			return fmt.Errorf("select interrupted explicit stops: %w", selectErr)
-		}
+	stops, selectErr := s.lifecycleStore.SelectInterruptedExplicitStops(ctx)
+	if selectErr != nil {
+		return fmt.Errorf("select interrupted explicit stops: %w", selectErr)
+	}
 
-		for _, stop := range stops {
-			owedStops[stop.SessionID] = stop.InputID
-		}
+	for _, stop := range stops {
+		owedStops[stop.SessionID] = stop.InputID
 	}
 
 	return s.finishStoppingRoots(ctx, records, stopping, owedStops)

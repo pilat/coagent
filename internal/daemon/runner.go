@@ -938,8 +938,6 @@ func (s *svc) createOrResumeSession(
 // openSession builds the session service. A settlement open never persists the
 // initial state: /stop settles a tree already marked stopping, and reactivating
 // it would lose the lifecycle fence.
-//
-//nolint:funlen // Session construction assembles one activation boundary.
 func (s *svc) openSession(
 	ctx context.Context,
 	sessionID int64,
@@ -1004,11 +1002,9 @@ func (s *svc) openSession(
 	}
 
 	if s.budgetSvc != nil && budgetGateNeeded {
-		if runtimeStore, ok := s.sessionStore.(sessionstore.RuntimeStore); ok {
-			opts.BudgetGate = &sessionBudgetGate{
-				daemon: s, service: s.budgetSvc, store: runtimeStore,
-				sessionID: rec.ID, rootID: sessionRootID(rec),
-			}
+		opts.BudgetGate = &sessionBudgetGate{
+			daemon: s, service: s.budgetSvc, store: s.runtimeStore,
+			sessionID: rec.ID, rootID: sessionRootID(rec),
 		}
 	}
 

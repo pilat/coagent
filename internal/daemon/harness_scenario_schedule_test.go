@@ -282,7 +282,9 @@ func buildScheduleRestartHarness(
 	schedules := schedule.NewStore(db)
 	factory := scheduleRestartFactory(workDir, sessionStore, respond)
 	mgr := newSvc(
-		factory, store, sessionStore, sessionStore, links, subagent.NewTransactions(db),
+		factory, store, sessionStore, sessionStore, sessionStore,
+		sessionStore, sessionStore, sessionStore, sessionStore,
+		links, subagent.NewTransactions(db),
 		budget.New(sessionStore), sessionStore, schedule.NewService(schedules), func() string {
 			return "fake-model"
 		})

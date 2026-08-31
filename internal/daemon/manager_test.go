@@ -286,6 +286,11 @@ func newTestManager(t *testing.T) (*svc, *mockFactory, Store) {
 		store,
 		sessStore,
 		sessStore,
+		sessStore,
+		sessStore,
+		sessStore,
+		sessStore,
+		sessStore,
 		subagent.NewStore(db),
 		subagent.NewTransactions(db),
 		nil,
@@ -312,7 +317,9 @@ func newTestManagerWithSchedule(t *testing.T) (*svc, *mockFactory, Store, schedu
 
 	factory := &mockFactory{}
 	mgr := newSvc(
-		factory, store, sessStore, sessStore, subagent.NewStore(db), subagent.NewTransactions(db),
+		factory, store, sessStore, sessStore, sessStore,
+		sessStore, sessStore, sessStore, sessStore,
+		subagent.NewStore(db), subagent.NewTransactions(db),
 		nil, sessStore, schedule.NewService(schedStore), nil,
 	)
 	return mgr, factory, store, schedStore

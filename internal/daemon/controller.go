@@ -38,7 +38,7 @@ type controller struct {
 }
 
 type outputStoreSource interface {
-	OutputStore() sessionstore.OutputStore
+	OutputStore() sessionstore.ManagerOutputStore
 }
 
 func NewController(
@@ -245,11 +245,6 @@ func (c *controller) RepairSessionSurface(ctx context.Context, sessionID int64, 
 		return errors.New("output delivery is unavailable")
 	}
 
-	history, ok := outputs.(sessionstore.LifecycleOutputHistoryStore)
-	if !ok {
-		return errors.New("output lifecycle history is unavailable")
-	}
-
 	record, err := c.svc.GetSession(ctx, sessionID)
 	if err != nil {
 		return fmt.Errorf("load session for surface repair: %w", err)
@@ -265,7 +260,7 @@ func (c *controller) RepairSessionSurface(ctx context.Context, sessionID int64, 
 		return fmt.Errorf("load repair work dir: %w", err)
 	}
 
-	lifecycleID, err := history.LatestLifecycleOutputID(ctx, sessionID)
+	lifecycleID, err := outputs.LatestLifecycleOutputID(ctx, sessionID)
 	if err != nil {
 		return fmt.Errorf("load surface repair lifecycle: %w", err)
 	}
@@ -295,7 +290,7 @@ func (c *controller) RepairSessionSurface(ctx context.Context, sessionID int64, 
 }
 
 //nolint:funcorder // helper stays beside the delivery capability it supports.
-func (c *controller) outputStore() sessionstore.OutputStore {
+func (c *controller) outputStore() sessionstore.ManagerOutputStore {
 	source, ok := c.svc.(outputStoreSource)
 	if !ok {
 		return nil
@@ -334,12 +329,7 @@ func (c *controller) UnresolvedOutputOwners(ctx context.Context) ([]string, erro
 		return nil, errors.New("output delivery is unavailable")
 	}
 
-	owners, ok := outputs.(sessionstore.OutputOwnerStore)
-	if !ok {
-		return nil, errors.New("output owner status is unavailable")
-	}
-
-	values, err := owners.ListUnresolvedOutputOwners(ctx)
+	values, err := outputs.ListUnresolvedOutputOwners(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("list unresolved output owners: %w", err)
 	}
