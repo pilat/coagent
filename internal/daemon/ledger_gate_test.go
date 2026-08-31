@@ -32,9 +32,7 @@ func TestLedgerFailure_SpawnRefusesInsteadOfDegrading(t *testing.T) {
 	h.waitForDelivery(ok.ChildID)
 	h.mgr.waitIdle(ok.ChildID)
 
-	h.mgr.mu.Lock()
-	loopsBefore := len(h.mgr.loops)
-	h.mgr.mu.Unlock()
+	loopsBefore := h.mgr.runners.Len()
 
 	childrenBefore := h.mgr.admit.LiveChildren()
 
@@ -46,9 +44,7 @@ func TestLedgerFailure_SpawnRefusesInsteadOfDegrading(t *testing.T) {
 	require.Error(t, err)
 	assert.Equal(t, childResult{}, res)
 
-	h.mgr.mu.Lock()
-	loopsAfter := len(h.mgr.loops)
-	h.mgr.mu.Unlock()
+	loopsAfter := h.mgr.runners.Len()
 
 	assert.Equal(t, loopsBefore, loopsAfter, "no runner was started")
 	assert.Equal(t, childrenBefore, h.mgr.admit.LiveChildren(), "no child slot was taken")

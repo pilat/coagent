@@ -164,9 +164,8 @@ func TestRunSession_TimeoutReadErrorRunsFullTeardown(t *testing.T) {
 		parentID:  parent.ID,
 	}
 
-	h.mgr.mu.Lock()
-	h.mgr.loops[childID] = rs
-	h.mgr.mu.Unlock()
+	_, registered := h.mgr.runners.Register(childID, rs)
+	require.True(t, registered)
 
 	flaky.failGetLink(1, childID)
 
@@ -220,9 +219,8 @@ func TestRunSession_TimeoutReadErrorFinalizesAsError(t *testing.T) {
 		parentID:  parent.ID,
 	}
 
-	h.mgr.mu.Lock()
-	h.mgr.loops[childID] = rs
-	h.mgr.mu.Unlock()
+	_, registered := h.mgr.runners.Register(childID, rs)
+	require.True(t, registered)
 
 	// Only applyChildTimeout's read fails; finalizeChild's reads succeed.
 	flaky.getLinkFailOnly = 1

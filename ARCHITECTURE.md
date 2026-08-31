@@ -99,6 +99,7 @@ does not imply a tier except where it expresses an implementation variant.
 - `internal/session` — isolated agent loop, tool gating and transcript projection.
 - `internal/sessionbus` — in-process session-event subscriptions and non-blocking fan-out.
 - `internal/sessionevent` — session-to-controller notification vocabulary.
+- `internal/sessionlifecycle` — synchronized active-runner ownership and shutdown registration fence.
 - `internal/sessionstore` — durable sessions, messages, inbox and atomic delivery primitives.
 - `internal/shellenv` — captured per-worktree shell environment for child processes.
 - `internal/subagent` — typed parent-child link vocabulary and durable subagent ledger access.
@@ -532,7 +533,8 @@ per-task execution and SQLite transaction ownership. The daemon creates runners,
 maintains durable-aware admission queues, routes session events, owns project
 identity and subagent coordination, and implements the manager controller.
 `admission` owns capacity decisions, `sessionbus` owns subscriber fan-out, and
-the subagent package owns the durable parent-child link ledger. The daemon must
+`sessionlifecycle` owns the synchronized active-runner registry; the subagent
+package owns the durable parent-child link ledger. The daemon must
 keep transient maps reconstructible and defer to stores for durable ordering/CAS
 decisions.
 

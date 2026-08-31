@@ -33,6 +33,7 @@ components:
   llmwire:        { in: internal/llmwire }
   humanize:       { in: internal/humanize }
   sessionevent:   { in: internal/sessionevent }
+  sessionlifecycle: { in: internal/sessionlifecycle }
   sessionbus:     { in: internal/sessionbus }
   controllerapi:  { in: internal/controllerapi }
   id:             { in: internal/id }
@@ -168,7 +169,7 @@ deps:
 
   # Orchestrator.
   daemon:
-    mayDependOn: [admission, budget, coagenthome, config, configapply, configops, configtools, controllerapi, git, id, inputruntime, llmwire, loader, logger, mcp, mcpstore, progress, progressruntime, projectpath, registry, schedule, session, sessionbus, sessionevent, sessionstore, subagent, todo, tool, transcript]
+    mayDependOn: [admission, budget, coagenthome, config, configapply, configops, configtools, controllerapi, git, id, inputruntime, llmwire, loader, logger, mcp, mcpstore, progress, progressruntime, projectpath, registry, schedule, session, sessionbus, sessionevent, sessionlifecycle, sessionstore, subagent, todo, tool, transcript]
 
   configops:
     mayDependOn: [coagenthome, config, logger]

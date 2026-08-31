@@ -496,9 +496,7 @@ func TestManager_Shutdown(t *testing.T) {
 
 	mgr.Shutdown(5 * time.Second)
 
-	mgr.mu.Lock()
-	remaining := len(mgr.loops)
-	mgr.mu.Unlock()
+	remaining := mgr.runners.Len()
 	assert.Zero(t, remaining, "all loops should be cleaned up after shutdown")
 }
 

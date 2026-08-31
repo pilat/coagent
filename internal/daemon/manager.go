@@ -28,6 +28,7 @@ import (
 	"github.com/pilat/coagent/internal/session"
 	"github.com/pilat/coagent/internal/sessionbus"
 	"github.com/pilat/coagent/internal/sessionevent"
+	"github.com/pilat/coagent/internal/sessionlifecycle"
 	"github.com/pilat/coagent/internal/sessionstore"
 	"github.com/pilat/coagent/internal/subagent"
 )
@@ -90,8 +91,7 @@ var (
 )
 
 type svc struct {
-	mu             sync.Mutex
-	loops          map[int64]*runner
+	runners        sessionlifecycle.Registry[*runner]
 	factory        session.Factory
 	store          Store
 	sessionStore   sessionstore.OrchestrationStore
@@ -134,8 +134,7 @@ type svc struct {
 	// routeMu linearizes owner claims with replacement-session creation. The
 	// daemon is single-instance, so this is the ownership CAS boundary.
 	routeMu sync.Mutex
-	// childMu guards the publication route caches only — never s.mu,
-	// which is held around runner starts and must not be contended by publish.
+	// childMu guards publication routes only; runner lifecycle has its own registry.
 	childMu    sync.Mutex
 	childCache map[int64]bool
 	ownerCache map[int64]string
@@ -240,7 +239,7 @@ func newSvc(
 ) *svc {
 	budgetCtx, budgetCancel := context.WithCancel(context.Background())
 	s := &svc{
-		loops:          make(map[int64]*runner),
+		runners:        sessionlifecycle.NewRegistry[*runner](),
 		factory:        factory,
 		store:          store,
 		sessionStore:   sessionStore,
@@ -309,10 +308,7 @@ func (s *svc) SendToSession(ctx context.Context, sessionID int64, prompt string)
 		return err
 	}
 
-	s.mu.Lock()
-	_, ok := s.loops[sessionID]
-	s.mu.Unlock()
-
+	_, ok := s.runners.Load(sessionID)
 	if ok {
 		return nil
 	}
@@ -341,13 +337,9 @@ func (s *svc) SendToSession(ctx context.Context, sessionID int64, prompt string)
 		return fmt.Errorf("resolve project %d: %w", rec.ProjectID, err)
 	}
 
-	s.mu.Lock()
-	if _, ok = s.loops[sessionID]; ok {
-		s.mu.Unlock()
-
+	if _, ok = s.runners.Load(sessionID); ok {
 		return nil
 	}
-	s.mu.Unlock()
 
 	if err := s.ensureRunner(ctx, sessionID, workDir, rec.ProjectID, nil); err != nil {
 		if errors.Is(err, admission.ErrNoCapacity) {
@@ -606,17 +598,13 @@ func (s *svc) List(ctx context.Context) ([]*sessionstore.SessionRecord, error) {
 }
 
 func (s *svc) HasActiveLoop(sessionID int64) bool {
-	s.mu.Lock()
-	_, ok := s.loops[sessionID]
-	s.mu.Unlock()
+	_, ok := s.runners.Load(sessionID)
 
 	return ok
 }
 
 func (s *svc) Kill(ctx context.Context, sessionID int64) error {
-	s.mu.Lock()
-	rs, ok := s.loops[sessionID]
-	s.mu.Unlock()
+	rs, ok := s.runners.Load(sessionID)
 
 	if ok {
 		s.publish(
@@ -808,9 +796,7 @@ func (s *svc) stopTreeCleanup(ctx context.Context, sessionID int64, keepRootStop
 
 	runners := make([]*runner, 0, len(ids))
 	for _, id := range ids {
-		s.mu.Lock()
-		rs := s.loops[id]
-		s.mu.Unlock()
+		rs, _ := s.runners.Load(id)
 
 		if rs != nil {
 			runners = append(runners, rs)
@@ -985,9 +971,7 @@ func (s *svc) SetModel(ctx context.Context, sessionID int64, model, reasoningLev
 		level = resolved
 	}
 
-	s.mu.Lock()
-	rs, ok := s.loops[sessionID]
-	s.mu.Unlock()
+	rs, ok := s.runners.Load(sessionID)
 
 	var sessSvc session.Service
 
@@ -1069,14 +1053,7 @@ func (s *svc) Shutdown(timeout time.Duration) {
 
 	recoveryDone := s.stopRecovery()
 
-	s.mu.Lock()
-	runners := make([]*runner, 0, len(s.loops))
-
-	for _, rs := range s.loops {
-		runners = append(runners, rs)
-	}
-
-	s.mu.Unlock()
+	runners := s.runners.CloseAndSnapshot()
 
 	done := make(chan struct{})
 
@@ -1244,18 +1221,12 @@ func (s *svc) checkModelConfigured(model string) error {
 }
 
 // appendIfLive appends the input to the session's live runner under the
-// manager lock, returning true if a live runner existed. Holding the lock across
+// registry lock, returning true if a live runner existed. Holding the lock across
 // the append serializes it with runner teardown (delete + leftover drain).
 func (s *svc) appendIfLive(sessionID int64, input queuedSessionInput) bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	if rs, ok := s.loops[sessionID]; ok {
+	return s.runners.Use(sessionID, func(rs *runner) {
 		rs.appendSessionInput(input)
-		return true
-	}
-
-	return false
+	})
 }
 
 func (s *svc) deliverSessionInput(ctx context.Context, sessionID int64, input sessionInput) (bool, error) {
@@ -1312,10 +1283,8 @@ func (s *svc) routeQueuedSessionInput(ctx context.Context, sessionID int64, inpu
 		return fmt.Errorf("session %d is %s", sessionID, rec.Status)
 	}
 
-	// Append under s.mu so the check-and-append is atomic against the runner's
-	// teardown (which deletes from s.loops under the same lock, then drains
-	// leftover inputs) — otherwise a completion racing an exiting suspended
-	// parent could be lost.
+	// Registry serialization prevents teardown from losing an input appended
+	// before entry deletion and the final leftover drain.
 	if s.appendIfLive(sessionID, input) {
 		return nil
 	}

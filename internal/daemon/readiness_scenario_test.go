@@ -65,16 +65,14 @@ func TestReadinessSuppressesIdleWhileRootIsActiveLoop(t *testing.T) {
 	controllers := newTestController(mgr, &config.Config{}, nil, nil)
 	notifications := controllers.ForManager("manager-readiness").Subscribe()
 
-	mgr.mu.Lock()
-	mgr.loops[sessionID] = &runner{done: make(chan struct{})}
-	mgr.mu.Unlock()
+	active := &runner{done: make(chan struct{})}
+	_, registered := mgr.runners.Register(sessionID, active)
+	require.True(t, registered)
 
 	require.NoError(t, mgr.ReconcileOutputReadiness(ctx, outputID))
 	requireNoManagerNotification(t, notifications)
 
-	mgr.mu.Lock()
-	delete(mgr.loops, sessionID)
-	mgr.mu.Unlock()
+	require.True(t, mgr.runners.Delete(sessionID, active))
 
 	require.NoError(t, mgr.ReconcileOutputReadiness(ctx, outputID))
 
@@ -130,15 +128,13 @@ func TestReconcileLatestReadinessPublishesIdleAfterTeardown(t *testing.T) {
 	controllers := newTestController(mgr, &config.Config{}, nil, nil)
 	notifications := controllers.ForManager("manager-readiness").Subscribe()
 
-	mgr.mu.Lock()
-	mgr.loops[record.ID] = &runner{done: make(chan struct{})}
-	mgr.mu.Unlock()
+	active := &runner{done: make(chan struct{})}
+	_, registered := mgr.runners.Register(record.ID, active)
+	require.True(t, registered)
 	mgr.reconcileLatestReadiness(ctx, record.ID)
 	requireNoManagerNotification(t, notifications)
 
-	mgr.mu.Lock()
-	delete(mgr.loops, record.ID)
-	mgr.mu.Unlock()
+	require.True(t, mgr.runners.Delete(record.ID, active))
 
 	mgr.reconcileLatestReadiness(ctx, record.ID)
 

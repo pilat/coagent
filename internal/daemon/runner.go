@@ -162,9 +162,7 @@ func (s *svc) finishRunner(
 		*errored = true
 	}
 
-	s.mu.Lock()
-	delete(s.loops, sessionID)
-	s.mu.Unlock()
+	s.runners.Delete(sessionID, rs)
 	s.admit.Release(rs.kind, rs.parentID)
 
 	cleanupCtx := context.WithoutCancel(ctx)
@@ -610,12 +608,9 @@ func (s *svc) closeOrphanedCalls(ctx context.Context, rec *sessionstore.SessionR
 }
 
 func (s *svc) ensureSessionRunner(ctx context.Context, sessionID int64) error {
-	s.mu.Lock()
-	if _, ok := s.loops[sessionID]; ok {
-		s.mu.Unlock()
+	if _, ok := s.runners.Load(sessionID); ok {
 		return nil
 	}
-	s.mu.Unlock()
 
 	rec, err := s.sessionStore.GetSession(ctx, sessionID)
 	if err != nil {
@@ -1344,17 +1339,13 @@ func (s *svc) ensureRunner(
 		return err
 	}
 
-	s.mu.Lock()
-	if existing, ok := s.loops[sessionID]; ok {
-		s.mu.Unlock()
-
+	if s.runners.Use(sessionID, func(existing *runner) {
 		for _, input := range inputs {
 			existing.appendSessionInput(input)
 		}
-
+	}) {
 		return nil
 	}
-	s.mu.Unlock()
 
 	// Classification precedes admission so a session never starts holding the
 	// wrong slot — or none at all.
@@ -1473,20 +1464,7 @@ func queuedInputsStartScheduledTurn(inputs []queuedSessionInput) bool {
 }
 
 func (s *svc) registerRunner(sessionID int64, rs *runner) (*runner, bool) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	if s.shuttingDown.Load() {
-		return nil, false
-	}
-
-	if existing, ok := s.loops[sessionID]; ok {
-		return existing, false
-	}
-
-	s.loops[sessionID] = rs
-
-	return nil, true
+	return s.runners.Register(sessionID, rs)
 }
 
 // slotInfo classifies a session for admission: a session with a subagent link is

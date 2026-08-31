@@ -96,7 +96,7 @@ func TestDrainQueue_UnknownChildStateDefers(t *testing.T) {
 	h.mgr.drainQueue(ctx)
 
 	assert.Equal(t, 3, h.queueLen(), "nothing is dropped and nothing recursed")
-	assert.Empty(t, h.mgr.loops, "no runner was created")
+	assert.Zero(t, h.mgr.runners.Len(), "no runner was created")
 	assert.NotEmpty(t, logs.FilterMessage("queued_child_state_unknown").All())
 }
 

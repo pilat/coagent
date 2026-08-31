@@ -166,9 +166,7 @@ func newModelAwareHarness(
 }
 
 func (h *subagentHarness) liveSession(sessionID int64) session.Service {
-	h.mgr.mu.Lock()
-	rs, ok := h.mgr.loops[sessionID]
-	h.mgr.mu.Unlock()
+	rs, ok := h.mgr.runners.Load(sessionID)
 
 	if !ok {
 		return nil
