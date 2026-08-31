@@ -168,8 +168,9 @@ func (s *svc) assembleCheckpointLocked(
 	headerSize, split, candIdx int,
 	candEnvelope string,
 	summaryMsg llmwire.Message,
-) ([]llmwire.Message, []int64) {
+) ([]llmwire.Message, []int64, []int64) {
 	messages := s.ms.messages
+	rowIDs := s.ms.rowIDs
 
 	carriedSkill := candIdx >= 0 && candIdx == cp.skillRowIdx
 
@@ -183,14 +184,23 @@ func (s *svc) assembleCheckpointLocked(
 	}
 
 	newMessages := make([]llmwire.Message, 0, headerSize+2+len(messages)-split)
+	newRowIDs := make([]int64, 0, cap(newMessages))
 	newMessages = append(newMessages, messages[:headerSize]...)
+	newRowIDs = append(newRowIDs, rowIDs[:headerSize]...)
 	newMessages = append(newMessages, summaryMsg)
+	newRowIDs = append(newRowIDs, 0)
 
 	if skillRow != nil {
 		newMessages = append(newMessages, *skillRow)
+		if carriedSkill {
+			newRowIDs = append(newRowIDs, rowIDs[cp.skillRowIdx])
+		} else {
+			newRowIDs = append(newRowIDs, 0)
+		}
 	}
 
 	newMessages = append(newMessages, messages[split:]...)
+	newRowIDs = append(newRowIDs, rowIDs[split:]...)
 
 	compactedIDs := make([]int64, 0, split-headerSize)
 
@@ -199,10 +209,10 @@ func (s *svc) assembleCheckpointLocked(
 			continue
 		}
 
-		if messages[i].DBID != 0 {
-			compactedIDs = append(compactedIDs, messages[i].DBID)
+		if rowIDs[i] != 0 {
+			compactedIDs = append(compactedIDs, rowIDs[i])
 		}
 	}
 
-	return newMessages, compactedIDs
+	return newMessages, newRowIDs, compactedIDs
 }

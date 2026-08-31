@@ -237,7 +237,9 @@ func appendMessages(t *testing.T, s *svc, msgs ...llmwire.Message) {
 	s.ms.mu.Lock()
 	defer s.ms.mu.Unlock()
 
-	s.ms.messages = append(s.ms.messages, msgs...)
+	for _, message := range msgs {
+		s.ms.appendLocked(message, 0)
+	}
 }
 
 // compactionSequences enumerates every command sequence of exactly depth steps.

@@ -124,11 +124,12 @@ func budgetedSvc(t *testing.T, gate *recordingBudgetGate, llm *compactionMockLLM
 	s := newCompactionTestSvc(llm)
 	s.budgetGate = gate
 	s.ms.setMessages([]llmwire.Message{
-		{Role: llmwire.RoleSystem, Content: "sys", DBID: 1},
-		{Role: llmwire.RoleUser, Content: "task", DBID: 2},
-		{Role: llmwire.RoleUser, Content: "raw one", DBID: 10},
-		{Role: llmwire.RoleUser, Content: "raw two", DBID: 11},
+		{Role: llmwire.RoleSystem, Content: "sys"},
+		{Role: llmwire.RoleUser, Content: "task"},
+		{Role: llmwire.RoleUser, Content: "raw one"},
+		{Role: llmwire.RoleUser, Content: "raw two"},
 	})
+	s.ms.rowIDs = []int64{1, 2, 10, 11}
 
 	return s
 }
@@ -155,12 +156,13 @@ func TestBudgetedCompactionCommitStampsGateRowIDs(t *testing.T) {
 	assert.True(t, s.budgetFired)
 
 	messages := s.ms.getMessages()
+	rowIDs := s.ms.getRowIDs()
 	require.Len(t, messages, 4, "header, summary and the verbatim tail")
-	assert.Equal(t, int64(50), messages[0].DBID)
-	assert.Equal(t, int64(51), messages[1].DBID)
-	assert.Equal(t, int64(52), messages[2].DBID, "the summary row carries the gate's id")
+	assert.Equal(t, int64(50), rowIDs[0])
+	assert.Equal(t, int64(51), rowIDs[1])
+	assert.Equal(t, int64(52), rowIDs[2], "the summary row carries the gate's id")
 	assert.True(t, isMarkedSummary(messages[2].Content))
-	assert.Equal(t, int64(53), messages[3].DBID, "the gate stamps every projected row in entry order")
+	assert.Equal(t, int64(53), rowIDs[3], "the gate stamps every projected row in entry order")
 }
 
 // A gate that returns the wrong number of row ids fails the whole commit.

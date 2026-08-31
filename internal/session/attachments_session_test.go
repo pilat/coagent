@@ -63,7 +63,9 @@ func appendImageToolResult(ctx context.Context, t *testing.T, ms *messageStore, 
 	}
 
 	if ms.store == nil {
-		ms.messages = append(ms.messages, msg)
+		ms.mu.Lock()
+		ms.appendLocked(msg, 0)
+		ms.mu.Unlock()
 
 		return
 	}
@@ -74,9 +76,8 @@ func appendImageToolResult(ctx context.Context, t *testing.T, ms *messageStore, 
 	dbID, err := ms.store.InsertMessage(ctx, ms.sessID, stored)
 	require.NoError(t, err)
 
-	msg.DBID = dbID
 	ms.mu.Lock()
-	ms.messages = append(ms.messages, msg)
+	ms.appendLocked(msg, dbID)
 	ms.mu.Unlock()
 }
 

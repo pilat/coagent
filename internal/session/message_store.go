@@ -16,6 +16,7 @@ import (
 type messageStore struct {
 	mu       sync.Mutex
 	messages []llmwire.Message
+	rowIDs   []int64
 	store    sessionstore.RuntimeStore // nil = in-memory only (tests without persistence)
 	sessID   int64                     // session ID for persistence
 }
@@ -23,6 +24,7 @@ type messageStore struct {
 func newMessageStore(store sessionstore.RuntimeStore, sessID int64) *messageStore {
 	return &messageStore{
 		messages: make([]llmwire.Message, 0),
+		rowIDs:   make([]int64, 0),
 		store:    store,
 		sessID:   sessID,
 	}
@@ -110,8 +112,7 @@ func (ms *messageStore) addToolResultOutput(
 		return fmt.Errorf("persist tool result with direct output: %w", err)
 	}
 
-	msg.DBID = id
-	ms.messages = append(ms.messages, msg)
+	ms.appendLocked(msg, id)
 
 	return nil
 }
@@ -120,7 +121,7 @@ func (ms *messageStore) addToolResultOutput(
 // the agent never reasons over a turn the store rejected. Caller must hold ms.mu.
 func (ms *messageStore) appendMessageLocked(ctx context.Context, msg *llmwire.Message) error {
 	if ms.store == nil {
-		ms.messages = append(ms.messages, *msg)
+		ms.appendLocked(*msg, 0)
 
 		return nil
 	}
@@ -135,8 +136,7 @@ func (ms *messageStore) appendMessageLocked(ctx context.Context, msg *llmwire.Me
 		return fmt.Errorf("persist %s message: %w", msg.Role, err)
 	}
 
-	msg.DBID = dbID
-	ms.messages = append(ms.messages, *msg)
+	ms.appendLocked(*msg, dbID)
 
 	return nil
 }
@@ -162,8 +162,7 @@ func (ms *messageStore) appendAssistantOutputLocked(
 		return fmt.Errorf("persist assistant output: %w", err)
 	}
 
-	msg.DBID = id
-	ms.messages = append(ms.messages, *msg)
+	ms.appendLocked(*msg, id)
 
 	return nil
 }
@@ -198,15 +197,17 @@ func (ms *messageStore) enqueueFinalAssistantOutput(ctx context.Context, content
 	// Only the last assistant message may be promoted: an already-terminal
 	// answer replays as a no-op under its own key, while an older turn's text
 	// would resurrect stale output the user must not see twice.
-	for _, message := range slices.Backward(ms.messages) {
-		if message.Role != llmwire.RoleAssistant || message.DBID == 0 ||
+	for i, message := range slices.Backward(ms.messages) {
+		rowID := ms.rowIDs[i]
+
+		if message.Role != llmwire.RoleAssistant || rowID == 0 ||
 			strings.TrimSpace(message.Content) == "" {
 			continue
 		}
 
 		_, err := outputStore.EnqueueOutput(ctx, sessionstore.OutputDraft{
 			SessionID: ms.sessID, Type: sessionstore.OutputMessagePersistent, Content: content,
-			SourceKey: fmt.Sprintf("message:%d:final", message.DBID),
+			SourceKey: fmt.Sprintf("message:%d:final", rowID),
 			Fingerprint: sessionstore.OutputFingerprintWithRelease(
 				sessionstore.OutputMessagePersistent, content, ms.sessID, nil, true,
 			),
@@ -222,29 +223,24 @@ func (ms *messageStore) enqueueFinalAssistantOutput(ctx context.Context, content
 	return nil
 }
 
+func (ms *messageStore) appendLocked(message llmwire.Message, rowID int64) {
+	ms.messages = append(ms.messages, message)
+	ms.rowIDs = append(ms.rowIDs, rowID)
+}
+
 func (ms *messageStore) replaceCompactedMessagesLocked(
 	ctx context.Context,
 	compactedIDs []int64,
 	messages []llmwire.Message,
+	rowIDs []int64,
 ) error {
 	if ms.store == nil {
 		return nil
 	}
 
-	entries := make([]sessionstore.CompactionEntry, len(messages))
-	for i := range messages {
-		if messages[i].DBID != 0 {
-			entries[i].ExistingID = messages[i].DBID
-
-			continue
-		}
-
-		message, err := storedMessage(&messages[i])
-		if err != nil {
-			return err
-		}
-
-		entries[i].Message = message
+	entries, err := compactionEntries(messages, rowIDs)
+	if err != nil {
+		return err
 	}
 
 	ids, err := ms.store.ReplaceCompactedMessages(ctx, ms.sessID, compactedIDs, entries)
@@ -256,9 +252,7 @@ func (ms *messageStore) replaceCompactedMessagesLocked(
 		return fmt.Errorf("replacement returned %d IDs for %d messages", len(ids), len(messages))
 	}
 
-	for i, id := range ids {
-		messages[i].DBID = id
-	}
+	copy(rowIDs, ids)
 
 	return nil
 }
@@ -270,13 +264,14 @@ func (ms *messageStore) completeCompactionCommandLocked(
 	input PendingInput,
 	compactedIDs []int64,
 	messages []llmwire.Message,
+	rowIDs []int64,
 ) error {
 	commandStore, ok := ms.store.(sessionstore.CompactionCommandStore)
 	if !ok {
-		return ms.replaceCompactedMessagesLocked(ctx, compactedIDs, messages)
+		return ms.replaceCompactedMessagesLocked(ctx, compactedIDs, messages, rowIDs)
 	}
 
-	entries, err := compactionEntries(messages)
+	entries, err := compactionEntries(messages, rowIDs)
 	if err != nil {
 		return err
 	}
@@ -292,18 +287,20 @@ func (ms *messageStore) completeCompactionCommandLocked(
 		return fmt.Errorf("compaction command returned %d ids for %d messages", len(ids), len(messages))
 	}
 
-	for i, id := range ids {
-		messages[i].DBID = id
-	}
+	copy(rowIDs, ids)
 
 	return nil
 }
 
-func compactionEntries(messages []llmwire.Message) ([]sessionstore.CompactionEntry, error) {
+func compactionEntries(messages []llmwire.Message, rowIDs []int64) ([]sessionstore.CompactionEntry, error) {
+	if len(messages) != len(rowIDs) {
+		return nil, fmt.Errorf("serialize %d compaction messages with %d row ids", len(messages), len(rowIDs))
+	}
+
 	entries := make([]sessionstore.CompactionEntry, len(messages))
 	for i := range messages {
-		if messages[i].DBID != 0 {
-			entries[i].ExistingID = messages[i].DBID
+		if rowIDs[i] != 0 {
+			entries[i].ExistingID = rowIDs[i]
 
 			continue
 		}
@@ -324,6 +321,7 @@ func (ms *messageStore) setMessages(msgs []llmwire.Message) {
 	defer ms.mu.Unlock()
 
 	ms.messages = msgs
+	ms.rowIDs = make([]int64, len(msgs))
 }
 
 func (ms *messageStore) getMessages() []llmwire.Message {
@@ -334,6 +332,13 @@ func (ms *messageStore) getMessages() []llmwire.Message {
 	copy(result, ms.messages)
 
 	return result
+}
+
+func (ms *messageStore) getRowIDs() []int64 {
+	ms.mu.Lock()
+	defer ms.mu.Unlock()
+
+	return append([]int64(nil), ms.rowIDs...)
 }
 
 // reloadMessages replaces in-memory messages with active messages from the store.
@@ -352,10 +357,10 @@ func (ms *messageStore) reloadMessages(ctx context.Context) error {
 	}
 
 	messages := make([]llmwire.Message, len(stored))
+	rowIDs := make([]int64, len(stored))
 
 	for i, sm := range stored {
 		msg := llmwire.Message{
-			DBID:             sm.ID,
 			Role:             sm.Role,
 			Content:          sm.Content,
 			ToolCallID:       sm.ToolCallID,
@@ -387,9 +392,11 @@ func (ms *messageStore) reloadMessages(ctx context.Context) error {
 		}
 
 		messages[i] = msg
+		rowIDs[i] = sm.ID
 	}
 
 	ms.messages = messages
+	ms.rowIDs = rowIDs
 
 	return nil
 }

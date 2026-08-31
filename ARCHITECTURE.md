@@ -518,6 +518,8 @@ projection, loop detection and the sole tool-gating API. It receives a prepared
 tool stack rather than reaching into daemon state. Session-store owns immutable
 messages, compaction metadata/replacement ordering and durable inbox sequencing;
 `transcript` owns the durable message-row vocabulary shared with producers.
+Session keeps row identities in a positional transcript sidecar; persistence
+metadata never enters the provider-facing `llmwire.Message`.
 Neither session nor manager may recreate a delivery by parsing message content.
 
 ### Tools and agent policy

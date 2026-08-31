@@ -11,7 +11,7 @@ import (
 	"github.com/pilat/coagent/internal/llmwire"
 )
 
-// The selected tail is the existing rows verbatim: same DBIDs, same bytes, same
+// The selected tail is the existing rows verbatim: same row IDs, same bytes, same
 // order — never copies.
 func TestCheckpointRetainsTheTailVerbatim(t *testing.T) {
 	const window = 32000
@@ -33,13 +33,15 @@ func TestCheckpointRetainsTheTailVerbatim(t *testing.T) {
 		s.ms.mu.Unlock()
 	}
 	before := s.ms.getMessages()
+	beforeRowIDs := s.ms.getRowIDs()
 
 	require.NoError(t, s.compactIfNeeded(ctx, window))
 
 	after := s.ms.getMessages()
+	afterRowIDs := s.ms.getRowIDs()
 
 	// The tail is a suffix of the original: find the marked summary row and
-	// compare everything after it byte-for-byte, DBIDs included.
+	// compare everything after it byte-for-byte, row IDs included.
 	splitAt := -1
 
 	for i, m := range after {
@@ -58,7 +60,9 @@ func TestCheckpointRetainsTheTailVerbatim(t *testing.T) {
 		require.GreaterOrEqual(t, originalOffset, splitAt)
 
 		assert.Equal(t, before[originalOffset], after[i],
-			"tail row %d is the original row, byte- and DBID-identical", i)
+			"tail row %d is the original row byte-for-byte", i)
+		assert.Equal(t, beforeRowIDs[originalOffset], afterRowIDs[i],
+			"tail row %d keeps its durable identity", i)
 	}
 }
 
@@ -121,6 +125,7 @@ func TestOutsideSnapshotCompletionLoadsAfterTheTailInBothReloadOrders(t *testing
 			require.NoError(t, s.compactIfNeeded(ctx, window))
 			require.NoError(t, s.ms.reloadMessages(ctx))
 			afterCompaction := s.ms.getMessages()
+			afterCompactionRowIDs := s.ms.getRowIDs()
 			require.True(t, hasSummaryRow(afterCompaction))
 
 			// The completion is committed by the store while the parent may hold
@@ -146,13 +151,14 @@ func TestOutsideSnapshotCompletionLoadsAfterTheTailInBothReloadOrders(t *testing
 			}
 
 			final := s.ms.getMessages()
+			finalRowIDs := s.ms.getRowIDs()
 
-			assert.Equal(t, 1, countMessagesWithDBID(final, asstID), "one in-memory copy of the completion call")
-			assert.Equal(t, 1, countMessagesWithDBID(final, resultID), "one in-memory copy of the completion result")
+			assert.Equal(t, 1, countRowID(finalRowIDs, asstID), "one in-memory copy of the completion call")
+			assert.Equal(t, 1, countRowID(finalRowIDs, resultID), "one in-memory copy of the completion result")
 
-			for _, m := range afterCompaction {
-				assert.Equal(t, 1, countMessagesWithDBID(final, m.DBID),
-					"checkpoint row %d appears exactly once after either reload order", m.DBID)
+			for _, rowID := range afterCompactionRowIDs {
+				assert.Equal(t, 1, countRowID(finalRowIDs, rowID),
+					"checkpoint row %d appears exactly once after either reload order", rowID)
 			}
 
 			// The outside-snapshot rows sort after the selected tail.
@@ -164,13 +170,14 @@ func TestOutsideSnapshotCompletionLoadsAfterTheTailInBothReloadOrders(t *testing
 			}
 
 			require.Positive(t, summaryAt)
-			assert.Greater(t, indexWithDBID(final, asstID), summaryAt,
+			assert.Greater(t, indexWithRowID(finalRowIDs, asstID), summaryAt,
 				"the completion lands after the marked summary and the tail")
 
 			// Both reload orders reach the same projection.
 			if order == "loop-reload-then-completion-reload" {
 				require.NoError(t, s.ms.reloadMessages(ctx))
 				assert.Equal(t, final, s.ms.getMessages())
+				assert.Equal(t, finalRowIDs, s.ms.getRowIDs())
 			}
 		})
 	}
@@ -189,11 +196,11 @@ func mkStoredResult(callID string) llmwire.Message {
 	}
 }
 
-func countMessagesWithDBID(msgs []llmwire.Message, id int64) int {
+func countRowID(rowIDs []int64, id int64) int {
 	count := 0
 
-	for _, m := range msgs {
-		if m.DBID == id {
+	for _, rowID := range rowIDs {
+		if rowID == id {
 			count++
 		}
 	}
@@ -201,9 +208,9 @@ func countMessagesWithDBID(msgs []llmwire.Message, id int64) int {
 	return count
 }
 
-func indexWithDBID(msgs []llmwire.Message, id int64) int {
-	for i, m := range msgs {
-		if m.DBID == id {
+func indexWithRowID(rowIDs []int64, id int64) int {
+	for i, rowID := range rowIDs {
+		if rowID == id {
 			return i
 		}
 	}

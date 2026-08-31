@@ -63,7 +63,7 @@ func TestMessageStore_FinalPromotionTargetsLastAssistantMessage(t *testing.T) {
 		ctx, final, sessionstore.OutputMessagePersistent, "✅ the final answer",
 	))
 
-	lastID := ms.messages[len(ms.messages)-1].DBID
+	lastID := ms.rowIDs[len(ms.rowIDs)-1]
 	require.NotZero(t, lastID)
 
 	require.NoError(t, ms.enqueueFinalAssistantOutput(ctx, "✅ the final answer"))

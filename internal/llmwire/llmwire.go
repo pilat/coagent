@@ -74,7 +74,6 @@ type ImageRef struct {
 }
 
 type Message struct {
-	DBID             int64  `json:"-"` // DB row ID for persistence; excluded from LLM serialization
 	Role             string // "user", "assistant", "tool"
 	Content          string
 	ToolCallID       string

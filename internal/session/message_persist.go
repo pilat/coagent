@@ -71,9 +71,8 @@ func (ms *messageStore) addToolNotificationPairOnce(
 		return false, nil
 	}
 
-	assistant.DBID = asstID
-	result.DBID = resultID
-	ms.messages = append(ms.messages, assistant, result)
+	ms.appendLocked(assistant, asstID)
+	ms.appendLocked(result, resultID)
 
 	return true, nil
 }
@@ -92,6 +91,7 @@ func (ms *messageStore) resetToOnce(
 
 	if ms.store == nil {
 		ms.messages = opening
+		ms.rowIDs = make([]int64, len(opening))
 
 		return true, nil
 	}
@@ -125,11 +125,9 @@ func (ms *messageStore) resetToOnce(
 		return false, fmt.Errorf("reset returned %d message ids for %d opening messages", len(ids), len(opening))
 	}
 
-	for i, dbID := range ids {
-		opening[i].DBID = dbID
-	}
-
 	ms.messages = opening
+
+	ms.rowIDs = append([]int64(nil), ids...)
 
 	return true, nil
 }

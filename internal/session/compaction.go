@@ -123,7 +123,9 @@ func (s *svc) compactLocked(
 
 	beforeCount := len(s.ms.messages)
 
-	newMessages, compactedIDs := s.assembleCheckpointLocked(cp, headerSize, split, candIdx, candEnvelope, summaryMsg)
+	newMessages, newRowIDs, compactedIDs := s.assembleCheckpointLocked(
+		cp, headerSize, split, candIdx, candEnvelope, summaryMsg,
+	)
 
 	// The candidate must actually relieve the pressure, equality included
 	// (shouldCompact fires on strict greater-than); otherwise nothing is written.
@@ -138,7 +140,7 @@ func (s *svc) compactLocked(
 		return false, errCompactionNonRelieving
 	}
 
-	if err := s.commitCheckpointLocked(ctx, newMessages, compactedIDs, commandInput); err != nil {
+	if err := s.commitCheckpointLocked(ctx, newMessages, newRowIDs, compactedIDs, commandInput); err != nil {
 		return false, err
 	}
 
@@ -146,7 +148,7 @@ func (s *svc) compactLocked(
 	s.clearPersistedBaseline(ctx)
 
 	if commandInput == nil {
-		s.compactionSummaryDBID = newMessages[headerSize].DBID
+		s.compactionSummaryDBID = newRowIDs[headerSize]
 	}
 
 	s.logCompactionLocked(log, beforeCount, len(newMessages), split-cp.rawStart, cp, summaryMsg)
@@ -236,10 +238,11 @@ func (s *svc) selectAndSerializeHeadLocked(cp checkpointPrefix, window, baseEsti
 func (s *svc) commitCheckpointLocked(
 	ctx context.Context,
 	newMessages []llmwire.Message,
+	newRowIDs []int64,
 	compactedIDs []int64,
 	commandInput *PendingInput,
 ) error {
-	entries, err := compactionEntries(newMessages)
+	entries, err := compactionEntries(newMessages, newRowIDs)
 	if err != nil {
 		return err
 	}
@@ -259,36 +262,37 @@ func (s *svc) commitCheckpointLocked(
 			return fmt.Errorf("replace budgeted compacted messages: %w", persistErr)
 		}
 
-		if err := stampCompactionIDs(newMessages, ids); err != nil {
+		if err := stampCompactionIDs(newRowIDs, ids); err != nil {
 			return err
 		}
 
 		s.budgetFired = fired
 	case commandInput != nil:
-		if err := s.ms.completeCompactionCommandLocked(ctx, *commandInput, compactedIDs, newMessages); err != nil {
+		if err := s.ms.completeCompactionCommandLocked(
+			ctx, *commandInput, compactedIDs, newMessages, newRowIDs,
+		); err != nil {
 			return err
 		}
 	default:
-		if err := s.ms.replaceCompactedMessagesLocked(ctx, compactedIDs, newMessages); err != nil {
+		if err := s.ms.replaceCompactedMessagesLocked(ctx, compactedIDs, newMessages, newRowIDs); err != nil {
 			return fmt.Errorf("replace compacted messages: %w", err)
 		}
 	}
 
 	s.ms.messages = newMessages
+	s.ms.rowIDs = newRowIDs
 
 	return s.publishCompactionProgress(ctx)
 }
 
 // stampCompactionIDs adopts the store's returned row IDs into the in-memory
 // projection, in entry order.
-func stampCompactionIDs(messages []llmwire.Message, ids []int64) error {
-	if len(ids) != len(messages) {
-		return fmt.Errorf("budgeted compaction returned %d ids for %d messages", len(ids), len(messages))
+func stampCompactionIDs(rowIDs, ids []int64) error {
+	if len(ids) != len(rowIDs) {
+		return fmt.Errorf("budgeted compaction returned %d ids for %d messages", len(ids), len(rowIDs))
 	}
 
-	for i := range messages {
-		messages[i].DBID = ids[i]
-	}
+	copy(rowIDs, ids)
 
 	return nil
 }

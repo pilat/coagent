@@ -96,6 +96,7 @@ func TestCompactLeavesTheTranscriptIntactOnFailure(t *testing.T) {
 
 			seedCompactableTranscript(ctx, t, s)
 			before := s.ms.getMessages()
+			beforeRowIDs := s.ms.getRowIDs()
 
 			ok, err := s.compact(ctx, nil)
 
@@ -103,12 +104,13 @@ func TestCompactLeavesTheTranscriptIntactOnFailure(t *testing.T) {
 			assert.False(t, ok)
 
 			after := s.ms.getMessages()
+			afterRowIDs := s.ms.getRowIDs()
 			require.Len(t, after, len(before))
 			for i := range before {
 				assert.Equal(t, before[i].Role, after[i].Role)
 				assert.Equal(t, before[i].Content, after[i].Content)
-				assert.Equal(t, before[i].DBID, after[i].DBID)
 			}
+			assert.Equal(t, beforeRowIDs, afterRowIDs)
 
 			assert.Zero(t, store.markCompacted, "nothing may be hidden without a committed checkpoint")
 			assert.False(t, hasSummaryRow(after), "no partial summary survives the failure")

@@ -57,7 +57,7 @@ func TestMessageStore_AppendFailureLeavesNothingInMemory(t *testing.T) {
 	}
 }
 
-func TestMessageStore_AppendStampsDBID(t *testing.T) {
+func TestMessageStore_AppendStoresRowIDs(t *testing.T) {
 	ctx := context.Background()
 	ms := newMessageStore(&mockSessionStore{}, 1)
 
@@ -66,10 +66,12 @@ func TestMessageStore_AppendStampsDBID(t *testing.T) {
 	require.NoError(t, ms.addToolResult(ctx, "c1", "read", "body"))
 
 	msgs := ms.getMessages()
+	rowIDs := ms.getRowIDs()
 	require.Len(t, msgs, 3)
+	require.Len(t, rowIDs, 3)
 
-	for i, m := range msgs {
-		assert.Equal(t, int64(i+1), m.DBID, "message %d carries the id the store handed back", i)
+	for i, rowID := range rowIDs {
+		assert.Equal(t, int64(i+1), rowID, "message %d carries the id the store handed back", i)
 	}
 }
 
@@ -102,10 +104,10 @@ func TestAddToolNotificationPairOnce_PersistsCallList(t *testing.T) {
 	require.NotNil(t, store.lastPairAsst)
 	assert.JSONEq(t, string(want), string(store.lastPairAsst.ToolCalls))
 
-	msgs := ms.getMessages()
-	require.Len(t, msgs, 2)
-	assert.NotZero(t, msgs[0].DBID)
-	assert.NotZero(t, msgs[1].DBID)
+	rowIDs := ms.getRowIDs()
+	require.Len(t, rowIDs, 2)
+	assert.NotZero(t, rowIDs[0])
+	assert.NotZero(t, rowIDs[1])
 }
 
 func TestBuildBackgroundSubagentCompletion_PersistsCallList(t *testing.T) {
