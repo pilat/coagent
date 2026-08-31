@@ -29,7 +29,7 @@ one function.
 The apply pipeline has **one slot per process image**, and a marker is consumed
 by **exactly one** boot resolution.
 
-- `ConfigApplier.ClaimApply`/`ReleaseApply` is the single gate. Session tools take
+- `configapply.Service.ClaimApply`/`ReleaseApply` is the single gate. Session tools take
   it through `svc.stageApply`; the bootstrap `set_provider` op takes it directly.
   A caller that cannot take the slot is refused **before** any side effect — the
   tool errors instead of suspending, so no call is left unowned, and

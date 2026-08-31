@@ -20,11 +20,13 @@ identity, and subagent round.
 
 ## System shape
 
-Coagent is a self-hosted, headless coding agent. One daemon owns durable state,
-session lifecycle, admission control, the MCP connection pool, and the private
-manager contract. It accepts no network listener. The only listener is a
-same-user Unix control socket, used by the built-in local chat, bootstrap, and
-documented local operations.
+Coagent is a self-hosted, headless coding agent. One daemon coordinates durable
+state, session lifecycle and admission, owns the MCP connection pool, and
+serves as the backend for the private manager contract implemented by
+`managercontrol`. Domain packages own their ledgers and in-memory governors
+beneath that coordinator. It accepts no network listener.
+The only listener is a same-user Unix control socket, used by the built-in local
+chat, bootstrap, and documented local operations.
 
 ```
 CLI / Telegram manager ── controller contract / control socket ──> daemon
@@ -36,10 +38,11 @@ CLI / Telegram manager ── controller contract / control socket ──> daemo
 
 A manager submits work as a session. A session owns one agent-loop activation:
 its model client, tool registry, prompt projection, and conversation handling.
-The daemon owns anything that crosses sessions, survives a process restart, or
-needs global admission decisions. Built-in managers program against the private
-controller contract, never the daemon implementation. Managers and the local
-control protocol are product surfaces, not a public plugin API.
+The daemon coordinates work that crosses sessions, survives a process restart,
+or needs global admission decisions; the owning domain package retains each
+ledger or governor. Built-in managers program against the private controller
+contract, never the daemon implementation. Managers and the local control
+protocol are product surfaces, not a public plugin API.
 
 The composition root is `cmd/coagent`. It constructs dependencies explicitly,
 registers operations before declaring the daemon ready, and stops components in
@@ -54,19 +57,22 @@ The map is an ownership index, not a list of exported symbols. Directory nesting
 does not imply a tier except where it expresses an implementation variant.
 
 - `cmd/coagent` — composition root, CLI product policy, onboarding and control-operation wiring.
+- `internal/admission` — in-memory runner capacity and per-parent subagent quotas.
 - `internal/bashsandbox` — native direct-write confinement for Bash and file-mutation tools.
 - `internal/budget` — one-shot root-tree budget policy and its user-authorized tool.
 - `internal/catalog` — external model metadata acquisition, caching and identifier matching.
 - `internal/coagenthome` — sole resolver and name owner for the coagent home directory.
 - `internal/config` — typed configuration and secrets resolution policy.
+- `internal/configapply` — serialized config-commit claim and restart trigger.
 - `internal/configops` — guarded configuration mutations, backups and restart verdict markers.
 - `internal/configtools` — agent-facing configuration tool schemas, parsing and semantic-operation adapters.
 - `internal/controllerapi` — private daemon-to-manager contract and DTO vocabulary.
 - `internal/ctl` — authenticated local control socket, operation registry and client multiplexing.
-- `internal/daemon` — global runtime coordinator, persistence integration and controller implementation.
+- `internal/daemon` — global runtime coordinator and persistence/integration backend.
 - `internal/git` — Git operations used by repository-facing features.
 - `internal/humanize` — presentation-only formatting helpers (human-readable sizes); stdlib only.
 - `internal/id` — local identity generation utilities.
+- `internal/inputruntime` — durable session-input promotion, activation and command boundary.
 - `internal/install` — platform service installation and lifecycle integration.
 - `internal/llm` — provider protocol drivers, client creation, retries and cost handling.
 - `internal/llmwire` — provider-neutral message, response and tool wire vocabulary.
@@ -82,18 +88,26 @@ does not imply a tier except where it expresses an implementation variant.
 - `internal/mcpstore` — durable MCP server definitions and scope precedence.
 - `internal/memory` — curated per-project long-term memory.
 - `internal/managerdelivery` — manager-neutral single-worker durable output drain and retry policy.
+- `internal/managercontrol` — manager-bound application use cases and controller adaptation.
+- `internal/managerdiscovery` — manager-facing project, model, skill and filesystem discovery.
 - `internal/migrate` — SQLite opening and schema migration with production backup policy.
 - `internal/progress` — controller-neutral progress snapshots and Markdown rendering.
+- `internal/progressruntime` — durable progress publication, output readiness and silence reconciliation lifecycle.
+- `internal/projectpath` — canonical project-root paths and project-name validation.
 - `internal/registry` — immutable per-session agent-type policy and prompt templates.
 - `cmd/releasebuilder` — build-time deterministic archive and checksum composition root.
 - `internal/schedule` — durable schedules, sleep ownership and scheduled delivery execution.
 - `internal/session` — isolated agent loop, tool gating and transcript projection.
+- `internal/sessionbus` — in-process session-event subscriptions and non-blocking fan-out.
 - `internal/sessionevent` — session-to-controller notification vocabulary.
+- `internal/sessionlifecycle` — runner ownership, recovery and durable stop coordination.
 - `internal/sessionstore` — durable sessions, messages, inbox and atomic delivery primitives.
 - `internal/shellenv` — captured per-worktree shell environment for child processes.
+- `internal/subagent` — typed parent-child link vocabulary and durable subagent ledger access.
 - `internal/todo` — session-local task tracking.
 - `internal/tool` — implementation-free tool protocol, registry and suspension sentinel.
 - `internal/tool/builtin` — built-in tools and their common stack construction.
+- `internal/transcript` — durable append-only conversation row vocabulary.
 - `internal/version` — build-stamped version vocabulary.
 - `migrations` — immutable SQLite schema migration assets.
 
@@ -116,6 +130,22 @@ delivery. The daemon owns orchestration across those facts: it must not recreate
 them from transcript text or infer correctness from a notification. Schedule,
 MCP, config-apply, and subagent packages each own their producer ledger; the
 daemon joins those ledgers into a session's runnable and waiting projections.
+Subagent link vocabulary, child creation, activation terminalization and
+parent-transcript delivery belong to `subagent`, not the daemon. Its store owns
+those cross-table transactions; session-store owns ordinary session runtime and
+transcript mutations.
+
+Session-store consumers receive four named ownership surfaces rather than its
+complete constructor type: agent runtime/checkpoint transactions, manager output
+delivery, manager-root creation/replacement, and lifecycle command settlement.
+These boundaries group operations by the invariant committed atomically, not by
+which table a query happens to touch.
+
+A live session receives transcript/checkpoint persistence and atomic output
+persistence as separate contracts; manager output cannot be enabled without the
+latter. Its in-memory model messages contain no database fields: a positional
+row-ID vector travels with the projection across factory resume and compaction,
+then keys durable replacement and idempotent final output.
 
 Manager-owned roots also carry a durable outbox obligation. `session_outbox`
 stores the closed output vocabulary, immutable owner identity, delivery receipt,
@@ -146,6 +176,10 @@ budget. A subagent is another session with an independent context and restricted
 policy, not a goroutine inside its parent. The daemon enforces total, child,
 per-parent and depth limits, retaining overflow in FIFO order. A suspended
 parent does not retain an execution slot; its durable pending work does.
+The `admission` governor owns capacity counters and quota decisions; the daemon
+supplies durable startability callbacks, while `sessionlifecycle` owns FIFO
+overflow queues, classification, registration and runner start around that
+verdict.
 
 The session is the only authority that registers a gated tool. The daemon may
 attach control-plane tools to a live session registry, but it cannot bypass
@@ -193,13 +227,14 @@ do not turn configuration into a mutable policy source.
 ### Session activation
 
 The daemon creates or resumes a session, loads its project context and policy,
-constructs the permitted tool stack, then hands control to the session loop. At
-each boundary the daemon promotes durable input in FIFO order. It does not append
-a user message directly into a live transcript while the session has unresolved
-external work. Completion, scheduling and user input use durable paths before a
-runner observes them. `/status` is the read-only exception to runner timing: the
-daemon resolves its durable inbox row and persistent full-progress output at
-admission, so an active model or tool call cannot delay the answer.
+constructs the permitted tool stack, then hands control to the session loop.
+`inputruntime` owns FIFO promotion, one-turn activation and atomic command output
+at that boundary. It does not append a user message while the session has
+unresolved external work. Completion, scheduling and user input use durable
+paths before a runner observes them. `/status` is the read-only exception to
+runner timing: the daemon resolves its durable inbox row and persistent
+full-progress output at admission, so an active model or tool call cannot delay
+the answer.
 
 Standalone scheduled work is a root-session capability: the daemon attaches
 `schedule` only to roots, while subagents retain `sleep` to resolve an existing
@@ -280,7 +315,8 @@ Each manager-owned root with a current autonomous episode has one canonical
 progress projection assembled from durable TODO state, transcript usage, tree
 topology, exact waits, budget state and output watermarks, with live context
 occupancy when a runner is available.
-The daemon owns one wakeable reconciler for all roots. Meaningful transitions
+`progressruntime` owns one wakeable reconciler for all roots and publishes idle
+only from the newest acknowledged releasing output. Meaningful transitions
 enqueue replaceable snapshots immediately; five minutes without newer semantic
 output creates a silence snapshot. Snapshots carry the captured generation and
 root status, and the inserting transaction discards them as superseded instead
@@ -323,11 +359,16 @@ answering a newer call.
 
 ### Subagent creation and completion
 
-The daemon owns the parent-child link ledger and admission decision; the child
-session owns its own loop and transcript. Link creation records the parent,
-child, activation sequence, delivery obligation and foreground/background mode
-before an outcome can be delivered. The `task` tool is registered by the daemon
-onto the parent registry, but the parent session remains the gating authority.
+The `subagent` package owns link vocabulary and persistence. Ordinary queries
+use `subagent.Store`; child creation, terminalization, completion delivery and
+re-arming use its explicit cross-table `Transactions` boundary ([ADR-0037](docs/adr/0037-subagent-ledger-owns-cross-table-transitions.md)).
+
+The daemon supplies parent-child application hooks; `sessionlifecycle` owns
+runner admission and completion ordering, while the child session owns its own
+loop and transcript. Link creation records the parent, child, activation
+sequence, delivery obligation and foreground/background mode before an outcome
+can be delivered. The `task` tool is registered by the daemon onto the parent
+registry, but the parent session remains the gating authority.
 
 Foreground work suspends the parent and owes one result to the parent call.
 Background work reports independently without blocking the parent. A child can
@@ -381,16 +422,19 @@ is a protocol, not a best-effort notification.
 
 ### Recovery and root-only publication
 
-The daemon rebuilds recovery state from sessions, durable inbox entries,
-schedules, config markers, subagent links and delivery records. It does not
-replay arbitrary notifications to reconstitute state. Startup may re-arm
-unfinished producer work, but it must validate exact delivery ownership before
-making a transcript mutation.
+The `sessionlifecycle` recovery worker invokes daemon integration callbacks that
+rebuild state from sessions, durable inbox entries, schedules, config markers,
+subagent links and delivery records. Recovery never replays arbitrary
+notifications to reconstitute state. Startup may re-arm unfinished producer
+work, but it must validate exact delivery ownership before making a transcript
+mutation.
 
 Only root sessions publish session events to managers, and each event reaches
 only the subscription matching the session's durable manager owner. Ownerless
 sessions fail closed. Subagent events remain inside their tree; parent
 completion is the explicit cross-boundary signal.
+The daemon resolves and caches that route; `sessionbus` owns subscriber state
+and bounded non-blocking fan-out after the route is known.
 Publication is best effort for an individual local control connection: a blocked
 push reader must not block RPC replies. The control client exposes a dropped-push
 counter; it provides observability, not replay or resynchronization. See
@@ -490,17 +534,36 @@ The `set_manager` tool is a presence-aware upsert: omitted fields preserve exist
 ### Daemon, sessions and persistence
 
 The daemon, session and session-store boundary divides global coordination,
-per-task execution and SQLite transaction ownership. The daemon creates runners,
-maintains admission queues and event fan-out, owns project identity and subagent
-links, and implements the manager controller. It must keep transient maps
-reconstructible and defer to stores for durable ordering/CAS decisions.
+per-task execution and SQLite transaction ownership. The daemon assembles
+session dependencies, routes session events, and owns project identity plus
+external integration callbacks. `managercontrol` implements the manager
+controller over that backend.
+`admission` owns capacity decisions, `sessionbus` owns subscriber fan-out, and
+`sessionlifecycle` owns the synchronized active-runner registry, shutdown fence,
+the two in-memory FIFO admission caches and the cancellable recovery worker; the
+same component serializes child spawn against the durable stop fence and owns
+stop-tree discovery, lifecycle settlement, interrupted-stop recovery and child
+terminalization/delivery ordering. Each runner's cancel/done boundary, live
+session reference, input queue and admission metadata live in that component as
+one mutex-owned state object. Its launcher owns classification, admission,
+registration and goroutine start; daemon supplies session assembly and loop
+callbacks ([ADR-0038](docs/adr/0038-runtime-owners-replace-daemon-capability-discovery.md)).
+The subagent package owns the durable parent-child link ledger. The daemon must
+keep transient maps reconstructible and defer to stores for durable ordering/CAS
+decisions.
 
 The session package owns prompt construction, model-tool iteration, context
 projection, loop detection and the sole tool-gating API. It receives a prepared
 tool stack rather than reaching into daemon state. Session-store owns immutable
-messages, compaction metadata/replacement ordering, durable inbox sequencing and
-atomic completion delivery. Neither session nor manager may recreate a delivery
-by parsing message content.
+messages, compaction metadata/replacement ordering and durable inbox sequencing;
+`transcript` owns the durable message-row vocabulary shared with producers.
+`progress` owns the neutral context and operator-snapshot vocabulary shared by
+the session projection and progress runtime.
+`inputruntime` implements the session-owned consumption seam without letting the
+agent loop discover daemon or store capabilities at runtime.
+Session keeps row identities in a positional transcript sidecar; persistence
+metadata never enters the provider-facing `llmwire.Message`.
+Neither session nor manager may recreate a delivery by parsing message content.
 
 ### Tools and agent policy
 
@@ -517,6 +580,9 @@ policy, while the live session registry controls what is actually callable.
 Todo tracking is root-session-local durable state. The tool replaces the whole
 list atomically, and progress treats it as planning state rather than a separate
 workflow engine.
+
+Budget policy and recovery access go through `budget.Service`; the daemon never
+discovers or calls the underlying budget-store capability at runtime.
 
 ### Language-server boundary
 
@@ -578,8 +644,9 @@ knowledge.
 Config owns parsing and secret-sink resolution; config operations own semantic
 mutation, backup retention and pending-apply recovery. Config tools own the
 agent-facing schemas, strict argument parsing and mapping to semantic config
-operations; the daemon gates their availability and owns the durable
-suspend-to-restart handoff. Migration owns SQLite opening and schema progression.
+operations. Config apply owns the process-wide commit claim and restart trigger;
+the daemon gates tool availability and owns the durable suspend-to-restart
+handoff. Migration owns SQLite opening and schema progression.
 A production upgrade of an existing database creates a consistent SQLite backup
 before applying pending migrations and fails closed if inspection, backup or
 publication fails; fixture migration runs do not surprise callers with a backup
@@ -594,8 +661,12 @@ helpers with no durable protocol ownership.
 
 The manager coordinator isolates manager failures. CLI and Telegram render
 controller state and submit controller requests; they do not directly manipulate
-session rows. The CLI is always available with a running daemon, while Telegram
-is configuration-dependent. The reserved `sys:coagent` logical name together
+session rows. `managercontrol` owns authorization, DTO conversion, project
+resolution and durable output-delivery use cases; `managerdiscovery` owns
+manager-facing project, model, skill and filesystem discovery. Their controller
+methods are thin adapters, and the composition root binds them to the daemon
+backend. The CLI is always available with a running daemon, while Telegram is
+configuration-dependent. The reserved `sys:coagent` logical name together
 with its canonical configured path, rather than a transport attribute or numeric
 session ID, marks the dedicated daemon-configuration root; its CLI attribute
 separately proves a terminal can answer a secret prompt. Session-event defines

@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/pilat/coagent/internal/budget"
 	"github.com/pilat/coagent/internal/config"
 	"github.com/pilat/coagent/internal/controllerapi"
 	"github.com/pilat/coagent/internal/llm"
@@ -18,8 +19,10 @@ import (
 	"github.com/pilat/coagent/internal/migrate"
 	"github.com/pilat/coagent/internal/schedule"
 	"github.com/pilat/coagent/internal/session"
+	"github.com/pilat/coagent/internal/sessionbus"
 	"github.com/pilat/coagent/internal/sessionevent"
 	"github.com/pilat/coagent/internal/sessionstore"
+	"github.com/pilat/coagent/internal/subagent"
 	"github.com/pilat/coagent/internal/tool"
 )
 
@@ -31,7 +34,7 @@ type scheduleRestartHarness struct {
 }
 
 type scheduleRunningObserver struct {
-	source       NotificationSource
+	source       sessionbus.Source
 	subscription <-chan controllerapi.SessionNotification
 	running      chan struct{}
 	done         chan struct{}
@@ -197,7 +200,7 @@ func assertNoRetryPublication(t *testing.T, events []controllerapi.SessionNotifi
 	}
 }
 
-func newScheduleRunningObserver(t *testing.T, source NotificationSource) *scheduleRunningObserver {
+func newScheduleRunningObserver(t *testing.T, source sessionbus.Source) *scheduleRunningObserver {
 	t.Helper()
 	o := &scheduleRunningObserver{
 		source: source, subscription: source.SubscribeManager("telegram-main"),
@@ -275,12 +278,16 @@ func buildScheduleRestartHarness(
 	t.Helper()
 	store := NewStore(db)
 	sessionStore := sessionstore.NewStore(db)
-	links := NewLinkStore(db)
+	links := subagent.NewStore(db)
 	schedules := schedule.NewStore(db)
 	factory := scheduleRestartFactory(workDir, sessionStore, respond)
-	mgr := newSvc(factory, store, sessionStore, sessionStore, links, schedule.NewService(schedules), func() string {
-		return "fake-model"
-	})
+	mgr := newSvc(
+		factory, store, sessionStore, sessionStore, sessionStore,
+		sessionStore, sessionStore, sessionStore, sessionStore,
+		links, subagent.NewTransactions(db),
+		budget.New(sessionStore), sessionStore, schedule.NewService(schedules), func() string {
+			return "fake-model"
+		})
 	projectID, err := store.GetOrCreateProject(context.Background(), workDir)
 	require.NoError(t, err)
 
@@ -297,7 +304,7 @@ func scheduleRestartFactory(
 ) session.Factory {
 	cfg := &config.Config{WorkDir: workDir, Model: "fake-model"}
 	return session.NewFactoryWithOptions(
-		cfg, nil, nil, store, nil, nil, nil, nil, nil,
+		cfg, nil, nil, store, store, nil, nil, nil, nil, nil,
 		session.WithLLMClientFactory(func(*config.Config) (llm.Client, error) {
 			return &scriptedLLM{respond: respond}, nil
 		}),

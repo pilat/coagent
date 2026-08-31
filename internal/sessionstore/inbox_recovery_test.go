@@ -8,6 +8,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/pilat/coagent/internal/transcript"
 )
 
 func TestInboxStore_PromoteReactivatesOnlyFirstAcceptance(t *testing.T) {
@@ -174,10 +176,10 @@ func createAcceptedRecoveryFixtures(
 
 		switch i {
 		case 1:
-			_, err = store.InsertMessage(ctx, rec.ID, &StoredMessage{Role: "tool", Content: "durable result"})
+			_, err = store.InsertMessage(ctx, rec.ID, &transcript.Message{Role: "tool", Content: "durable result"})
 			require.NoError(t, err)
 		case 2:
-			_, err = store.InsertMessage(ctx, rec.ID, &StoredMessage{Role: "assistant", Content: "durable final"})
+			_, err = store.InsertMessage(ctx, rec.ID, &transcript.Message{Role: "assistant", Content: "durable final"})
 			require.NoError(t, err)
 		}
 
@@ -224,7 +226,7 @@ func createExcludedRecoveryFixtures(ctx context.Context, t *testing.T, store Sto
 
 	headerOnly, err := store.CreateSession(ctx, projectID, "model", "", nil)
 	require.NoError(t, err)
-	_, err = store.InsertMessage(ctx, headerOnly.ID, &StoredMessage{Role: "user", Content: "AGENTS.md header"})
+	_, err = store.InsertMessage(ctx, headerOnly.ID, &transcript.Message{Role: "user", Content: "AGENTS.md header"})
 	require.NoError(t, err)
 	accepted, err := store.HasAcceptedInput(ctx, headerOnly.ID)
 	require.NoError(t, err)

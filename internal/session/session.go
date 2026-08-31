@@ -27,6 +27,7 @@ import (
 	"github.com/pilat/coagent/internal/todo"
 	"github.com/pilat/coagent/internal/tool"
 	"github.com/pilat/coagent/internal/tool/builtin"
+	"github.com/pilat/coagent/internal/transcript"
 )
 
 const (
@@ -96,13 +97,6 @@ type Service interface {
 	Close()
 }
 
-type ContextProjection struct {
-	Used        int
-	Max         int
-	Approximate bool
-	Available   bool
-}
-
 // ActiveSubagentInfo summarizes one of a session's in-flight children for the
 // pinned "# Active subagents" prompt section. The daemon (owner of the subagent
 // ledger) pushes these at session create/resume.
@@ -127,6 +121,7 @@ type svc struct {
 	agentsMD          string
 	memoryStore       memory.CuratedStore
 	store             sessionstore.RuntimeStore
+	outputStore       sessionstore.RuntimeOutputStore
 	rootID            int64
 	id                int64
 	model             string
@@ -182,6 +177,7 @@ type params struct {
 	Stack       *builtin.Stack
 	Registry    tool.Registry
 	Store       sessionstore.RuntimeStore
+	OutputStore sessionstore.RuntimeOutputStore
 	GitClient   git.Client
 	MemoryStore memory.CuratedStore
 }
@@ -195,6 +191,7 @@ type options struct {
 
 	// DB-based resume fields
 	ResumeMessages  []llmwire.Message
+	ResumeRowIDs    []int64
 	ResumeIteration int
 	ResumeTodoItems []*todo.Item
 	LastActivityAt  time.Time
@@ -310,6 +307,7 @@ func newSession(p params, opts options, workDir string, agentConfig registry.Age
 		memoryStore:     p.MemoryStore,
 		agentsMD:        agentsMD,
 		store:           p.Store,
+		outputStore:     p.OutputStore,
 		model:           p.Config.Model,
 		agentType:       agentConfig.Name,
 		reasoningLevel:  string(llm.ReasoningMedium),
@@ -333,7 +331,7 @@ func newSession(p params, opts options, workDir string, agentConfig registry.Age
 		msStore = s.store
 	}
 
-	s.ms = newMessageStore(msStore, opts.ID)
+	s.ms = newMessageStore(msStore, opts.ID, p.OutputStore)
 
 	return s
 }
@@ -429,19 +427,19 @@ func (s *svc) ResetContextAndInjectOnce(
 func BuildBlockingSubagentCompletion(
 	taskCallID string,
 	content string,
-) ([]*sessionstore.StoredMessage, error) {
+) ([]*transcript.Message, error) {
 	if taskCallID == "" {
 		return nil, errors.New("build blocking subagent completion: task call id is required")
 	}
 
-	stored := &sessionstore.StoredMessage{
+	stored := &transcript.Message{
 		Role:       llmwire.RoleTool,
 		Content:    content,
 		ToolCallID: taskCallID,
 		ToolName:   tool.IDTask,
 	}
 
-	return []*sessionstore.StoredMessage{stored}, nil
+	return []*transcript.Message{stored}, nil
 }
 
 // BuildBackgroundSubagentCompletion builds a standalone synthetic event for a
@@ -450,7 +448,7 @@ func BuildBlockingSubagentCompletion(
 func BuildBackgroundSubagentCompletion(
 	childID int64,
 	content string,
-) ([]*sessionstore.StoredMessage, error) {
+) ([]*transcript.Message, error) {
 	if childID <= 0 {
 		return nil, errors.New("build background subagent completion: positive child id is required")
 	}
@@ -464,13 +462,13 @@ func BuildBackgroundSubagentCompletion(
 		return nil, fmt.Errorf("marshal subagent completion tool call: %w", err)
 	}
 
-	asstStored := &sessionstore.StoredMessage{Role: llmwire.RoleAssistant, ToolCalls: toolCallsJSON}
+	asstStored := &transcript.Message{Role: llmwire.RoleAssistant, ToolCalls: toolCallsJSON}
 
-	resultStored := &sessionstore.StoredMessage{
+	resultStored := &transcript.Message{
 		Role: llmwire.RoleTool, Content: content, ToolCallID: callID, ToolName: subagentEventTool,
 	}
 
-	return []*sessionstore.StoredMessage{asstStored, resultStored}, nil
+	return []*transcript.Message{asstStored, resultStored}, nil
 }
 
 // ReloadDeliveredCompletion refreshes the live in-memory transcript from the
@@ -693,7 +691,11 @@ func (s *svc) applyResumeOrInit(ctx context.Context, opts options, log *zap.Logg
 	}
 
 	if opts.ResumeMessages != nil {
-		s.ms.setMessages(opts.ResumeMessages)
+		if opts.ResumeRowIDs == nil {
+			s.ms.setMessages(opts.ResumeMessages)
+		} else if err := s.ms.setMessagesWithRowIDs(opts.ResumeMessages, opts.ResumeRowIDs); err != nil {
+			return fmt.Errorf("restore transcript identities: %w", err)
+		}
 
 		s.iterationOffset = opts.ResumeIteration
 

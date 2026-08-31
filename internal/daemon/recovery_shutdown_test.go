@@ -8,10 +8,15 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/pilat/coagent/internal/admission"
+	"github.com/pilat/coagent/internal/progressruntime"
+	"github.com/pilat/coagent/internal/sessionlifecycle"
+	"github.com/pilat/coagent/internal/subagent"
 )
 
 type blockingRecoveryLinks struct {
-	LinkStore
+	subagent.Store
 
 	entered     chan struct{}
 	cancelled   chan struct{}
@@ -19,7 +24,21 @@ type blockingRecoveryLinks struct {
 	once        sync.Once
 }
 
-func (s *blockingRecoveryLinks) ListRunningChildLinks(ctx context.Context) ([]SubagentLink, error) {
+type blockingProgressStop struct {
+	progressruntime.Service
+
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (s *blockingProgressStop) Stop(context.Context) error {
+	close(s.entered)
+	<-s.release
+
+	return nil
+}
+
+func (s *blockingRecoveryLinks) ListRunningChildLinks(ctx context.Context) ([]subagent.Link, error) {
 	s.once.Do(func() { close(s.entered) })
 	<-ctx.Done()
 	close(s.cancelled)
@@ -32,7 +51,7 @@ func (s *blockingRecoveryLinks) ListRunningChildLinks(ctx context.Context) ([]Su
 func TestShutdownCancelsBackgroundRecovery(t *testing.T) {
 	h := newSubagentHarness(t)
 	links := &blockingRecoveryLinks{
-		LinkStore:   h.mgr.links,
+		Store:       h.mgr.links,
 		entered:     make(chan struct{}),
 		cancelled:   make(chan struct{}),
 		allowReturn: make(chan struct{}),
@@ -72,12 +91,56 @@ func TestShutdownCancelsBackgroundRecovery(t *testing.T) {
 	}
 }
 
+// Runner cancellation must not wait for an unrelated background owner to join:
+// the composition root may close persistence as soon as Shutdown returns.
+func TestShutdownCancelsRunnersBeforeWaitingForProgress(t *testing.T) {
+	mgr, _, _ := newTestManager(t)
+
+	runnerCtx, cancel := context.WithCancel(context.Background())
+	activeRunner := sessionlifecycle.NewRunner[queuedSessionInput](
+		cancel, t.TempDir(), 1, admission.Parent, 0, false, nil,
+	)
+	_, registered := mgr.runners.Register(1, activeRunner)
+	require.True(t, registered)
+
+	go func() {
+		<-runnerCtx.Done()
+		activeRunner.Complete()
+	}()
+
+	progress := &blockingProgressStop{entered: make(chan struct{}), release: make(chan struct{})}
+	mgr.progress = progress
+
+	shutdownDone := make(chan struct{})
+	go func() {
+		mgr.Shutdown(time.Second)
+		close(shutdownDone)
+	}()
+
+	<-progress.entered
+
+	select {
+	case <-runnerCtx.Done():
+		close(progress.release)
+	case <-time.After(250 * time.Millisecond):
+		close(progress.release)
+		<-shutdownDone
+		t.Fatal("runner cancellation waited for progress shutdown")
+	}
+
+	select {
+	case <-shutdownDone:
+	case <-time.After(time.Second):
+		t.Fatal("shutdown did not join the released progress owner and runner")
+	}
+}
+
 func TestStartDoesNotLaunchRecoveryAfterShutdown(t *testing.T) {
 	h := newSubagentHarness(t)
 	h.mgr.Shutdown(time.Second)
 
 	require.NoError(t, h.mgr.Start(h.ctx))
-	assert.Nil(t, h.mgr.recoveryDone)
+	assert.False(t, h.mgr.recovery.Active())
 }
 
 func TestEnsureRunnerRejectsShutdown(t *testing.T) {

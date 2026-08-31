@@ -7,6 +7,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/pilat/coagent/internal/transcript"
 )
 
 func TestBudgetStore_ArmFireAndReplayAreAtomic(t *testing.T) {
@@ -75,7 +77,7 @@ func TestBudgetStore_CrossingResponseCommitsUsageNonExecutionAndCheckpointTogeth
 
 	result, err := store.InsertBudgetedResponse(ctx, BudgetedResponse{
 		SessionID: root.ID, RootID: root.ID,
-		Message: &StoredMessage{
+		Message: &transcript.Message{
 			Role: "assistant", Content: "checkpoint summary", CostUSD: 0.75,
 			ToolCalls: json.RawMessage(`[{"id":"danger","name":"bash","arguments":{"command":"false"}}]`),
 		},
@@ -84,7 +86,7 @@ func TestBudgetStore_CrossingResponseCommitsUsageNonExecutionAndCheckpointTogeth
 	require.True(t, result.Fired)
 	late, err := store.InsertBudgetedResponse(ctx, BudgetedResponse{
 		SessionID: root.ID, RootID: root.ID,
-		Message: &StoredMessage{
+		Message: &transcript.Message{
 			Role: "assistant", Content: "late parallel response", CostUSD: 0.1,
 			ToolCalls: json.RawMessage(`[{"id":"late","name":"bash","arguments":{}}]`),
 		},
@@ -130,7 +132,7 @@ func TestBudgetStore_CompactionCrossingCommitsReplacementAndCheckpointTogether(t
 
 	result, err := store.ReplaceCompactedMessagesBudgeted(ctx, BudgetedCompaction{
 		SessionID: root.ID, RootID: root.ID,
-		Entries: []CompactionEntry{{Message: &StoredMessage{Role: "user", Content: "summary", CostUSD: 0.75}}},
+		Entries: []CompactionEntry{{Message: &transcript.Message{Role: "user", Content: "summary", CostUSD: 0.75}}},
 	})
 	require.NoError(t, err)
 	require.True(t, result.Fired)

@@ -55,9 +55,10 @@ func TestAutoCompaction_SuccessIsKeyedToItsSummaryMessage(t *testing.T) {
 	}
 	s := newCompactionTestSvc(llm)
 	s.store = h.store
+	s.outputStore = h.store
 	s.id = sessionID
 	s.outputEnabled = true
-	s.ms = newMessageStore(h.store, sessionID)
+	s.ms = newMessageStore(h.store, sessionID, h.store)
 	s.ms.setMessages(oversizedTranscript(32000))
 
 	var notes []string

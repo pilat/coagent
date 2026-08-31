@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"math"
 	"time"
+
+	"github.com/pilat/coagent/internal/transcript"
 )
 
 const budgetToolNotExecuted = "Not executed because the budget checkpoint fired."
@@ -15,7 +17,7 @@ const budgetToolNotExecuted = "Not executed because the budget checkpoint fired.
 type BudgetedResponse struct {
 	SessionID   int64
 	RootID      int64
-	Message     *StoredMessage
+	Message     *transcript.Message
 	DirectReply string
 	ObservedAt  time.Time
 }
@@ -261,7 +263,7 @@ func insertBudgetNonExecution(
 		return fmt.Errorf("decode crossing tool calls: %w", err)
 	}
 	for _, call := range calls {
-		_, err := insertToolResultOnce(ctx, tx, sessionID, &StoredMessage{
+		_, err := insertToolResultOnce(ctx, tx, sessionID, &transcript.Message{
 			Role: "tool", Content: budgetToolNotExecuted, ToolCallID: call.ID,
 			ToolName: call.Name, CreatedAt: now,
 		})

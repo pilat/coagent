@@ -10,10 +10,33 @@ import (
 	"go.uber.org/zap"
 	"go.uber.org/zap/zaptest/observer"
 
+	"github.com/pilat/coagent/internal/admission"
 	"github.com/pilat/coagent/internal/controllerapi"
 	"github.com/pilat/coagent/internal/logger"
 	"github.com/pilat/coagent/internal/sessionstore"
+	"github.com/pilat/coagent/internal/subagent"
 )
+
+type childStateLinkStore struct {
+	subagent.Store
+	link *subagent.Link
+}
+
+func (s childStateLinkStore) GetLink(context.Context, int64) (*subagent.Link, error) {
+	return s.link, nil
+}
+
+type childStateSessionStore struct {
+	sessionstore.OrchestrationStore
+	record *sessionstore.SessionRecord
+	reads  int
+}
+
+func (s *childStateSessionStore) GetSession(context.Context, int64) (*sessionstore.SessionRecord, error) {
+	s.reads++
+
+	return s.record, nil
+}
 
 // TestDrainPendingRunners_DerivesPromotedRecoveryAfterCapacityWait preserves the
 // crash obligation through an admission delay without relying on queue metadata.
@@ -21,13 +44,13 @@ func TestDrainPendingRunners_DerivesPromotedRecoveryAfterCapacityWait(t *testing
 	mgr, factory, projects := newTestManager(t)
 	ctx := context.Background()
 
-	reserved := maxTotalSlots
+	reserved := admission.MaxTotal
 	for range reserved {
-		require.True(t, mgr.admit.tryAdmit(slotParent, 0))
+		require.True(t, mgr.admit.TryAdmit(admission.Parent, 0))
 	}
 	t.Cleanup(func() {
 		for range reserved {
-			mgr.admit.release(slotParent, 0)
+			mgr.admit.Release(admission.Parent, 0)
 		}
 		mgr.Shutdown(3 * time.Second)
 	})
@@ -46,9 +69,9 @@ func TestDrainPendingRunners_DerivesPromotedRecoveryAfterCapacityWait(t *testing
 
 	require.NoError(t, mgr.ensureSessionRunner(ctx, rec.ID))
 	assert.False(t, mgr.HasActiveLoop(rec.ID))
-	require.Len(t, mgr.pendingRunners, 1)
+	require.Equal(t, 1, mgr.pendingQueue.Len())
 
-	mgr.admit.release(slotParent, 0)
+	mgr.admit.Release(admission.Parent, 0)
 	reserved--
 	mgr.drainPendingRunners(ctx)
 	waitForState(t, events, rec.ID, controllerapi.StateIdle, 3*time.Second)
@@ -64,7 +87,7 @@ func TestDrainPendingRunners_DerivesPromotedRecoveryAfterCapacityWait(t *testing
 func TestDrainQueue_UnknownChildStateDefers(t *testing.T) {
 	var flaky *flakyLinkStore
 
-	h := newSubagentHarnessDecorated(t, trivialRespond, func(inner LinkStore) LinkStore {
+	h := newSubagentHarnessDecorated(t, trivialRespond, func(inner subagent.Store) subagent.Store {
 		flaky = newFlakyLinkStore(inner)
 		return flaky
 	})
@@ -78,7 +101,7 @@ func TestDrainQueue_UnknownChildStateDefers(t *testing.T) {
 			h.ctx, h.projectID, parent.ID, parent.ID, "general", "fake-model", "",
 		)
 		require.NoError(t, cerr)
-		require.NoError(t, h.links.InsertSubagentLink(h.ctx, SubagentLink{
+		require.NoError(t, h.links.InsertSubagentLink(h.ctx, subagent.Link{
 			ParentID: parent.ID, ChildID: childID, TaskCallID: callID,
 		}))
 		h.mgr.enqueueChild(h.ctx, childID, parent.ID, "/tmp", h.projectID)
@@ -94,7 +117,7 @@ func TestDrainQueue_UnknownChildStateDefers(t *testing.T) {
 	h.mgr.drainQueue(ctx)
 
 	assert.Equal(t, 3, h.queueLen(), "nothing is dropped and nothing recursed")
-	assert.Empty(t, h.mgr.loops, "no runner was created")
+	assert.Zero(t, h.mgr.runners.Len(), "no runner was created")
 	assert.NotEmpty(t, logs.FilterMessage("queued_child_state_unknown").All())
 }
 
@@ -112,4 +135,46 @@ func TestChildTerminated_ReadErrorSurfaces(t *testing.T) {
 
 	_, err = h.mgr.childTerminated(h.ctx, h.childID)
 	require.ErrorIs(t, err, errLinkRead)
+}
+
+func TestChildTerminated_ClassifiesLedgerBeforeSessionFallback(t *testing.T) {
+	t.Parallel()
+
+	killedAt := time.Now()
+	tests := []struct {
+		name         string
+		link         *subagent.Link
+		record       *sessionstore.SessionRecord
+		want         bool
+		wantSessRead int
+	}{
+		{
+			name: "completed link", link: &subagent.Link{State: subagent.StateCompleted},
+			want: true,
+		},
+		{
+			name: "stopped link", link: &subagent.Link{State: subagent.StateStopped},
+			want: true,
+		},
+		{
+			name: "live link with killed session", link: &subagent.Link{State: subagent.StateRunning},
+			record: &sessionstore.SessionRecord{KilledAt: &killedAt}, want: true, wantSessRead: 1,
+		},
+		{
+			name: "missing link with live session", record: &sessionstore.SessionRecord{},
+			wantSessRead: 1,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sessions := &childStateSessionStore{record: tt.record}
+			mgr := &svc{links: childStateLinkStore{link: tt.link}, sessionStore: sessions}
+
+			got, err := mgr.childTerminated(t.Context(), 42)
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, got)
+			assert.Equal(t, tt.wantSessRead, sessions.reads)
+		})
+	}
 }

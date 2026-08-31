@@ -92,10 +92,11 @@ func TestCompactLeavesTheTranscriptIntactOnFailure(t *testing.T) {
 			store := &compactionRecordingStore{nextID: 1}
 			llm := tc.llm()
 			s := newCompactionTestSvc(llm)
-			s.ms = newMessageStore(store, 1)
+			s.ms = newMessageStore(store, 1, nil)
 
 			seedCompactableTranscript(ctx, t, s)
 			before := s.ms.getMessages()
+			beforeRowIDs := s.ms.getRowIDs()
 
 			ok, err := s.compact(ctx, nil)
 
@@ -103,12 +104,13 @@ func TestCompactLeavesTheTranscriptIntactOnFailure(t *testing.T) {
 			assert.False(t, ok)
 
 			after := s.ms.getMessages()
+			afterRowIDs := s.ms.getRowIDs()
 			require.Len(t, after, len(before))
 			for i := range before {
 				assert.Equal(t, before[i].Role, after[i].Role)
 				assert.Equal(t, before[i].Content, after[i].Content)
-				assert.Equal(t, before[i].DBID, after[i].DBID)
 			}
+			assert.Equal(t, beforeRowIDs, afterRowIDs)
 
 			assert.Zero(t, store.markCompacted, "nothing may be hidden without a committed checkpoint")
 			assert.False(t, hasSummaryRow(after), "no partial summary survives the failure")
@@ -131,7 +133,7 @@ func TestCompactKeepsTheOldTranscriptWhenTheDurableSwapFails(t *testing.T) {
 		contextWindow: 32000,
 	}
 	s := newCompactionTestSvc(llm)
-	s.ms = newMessageStore(store, 1)
+	s.ms = newMessageStore(store, 1, nil)
 
 	seedCompactableTranscript(ctx, t, s)
 
@@ -215,7 +217,7 @@ func TestCompactionMakesExactlyOneModelCall(t *testing.T) {
 		response:      &llmwire.Response{Text: validSummary, FinishType: llmwire.FinishStop},
 	}
 	s := newCompactionTestSvc(llm)
-	s.ms = newMessageStore(store, 1)
+	s.ms = newMessageStore(store, 1, nil)
 	s.ms.setMessages(oversizedTranscript(32000))
 
 	require.NoError(t, s.compactIfNeeded(ctx, 32000))

@@ -8,10 +8,12 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/pilat/coagent/internal/admission"
 	"github.com/pilat/coagent/internal/config"
 	"github.com/pilat/coagent/internal/controllerapi"
 	"github.com/pilat/coagent/internal/migrate"
 	"github.com/pilat/coagent/internal/sessionstore"
+	"github.com/pilat/coagent/internal/subagent"
 )
 
 // TestReadinessSuppressesIdleWhileRootIsActiveLoop pins plan decision 39: a
@@ -44,20 +46,35 @@ func TestReadinessSuppressesIdleWhileRootIsActiveLoop(t *testing.T) {
 		RETURNING id`,
 		sessionID).Scan(&outputID))
 
-	mgr := newSvc(&mockFactory{}, store, sessions, sessions, NewLinkStore(db), nil, nil)
-	controllers := NewController(mgr, &config.Config{}, nil, nil)
+	mgr := newSvc(
+		&mockFactory{},
+		store,
+		sessions,
+		sessions,
+		sessions,
+		sessions,
+		sessions,
+		sessions,
+		sessions,
+		subagent.NewStore(db),
+		subagent.NewTransactions(db),
+		nil,
+		sessions,
+		nil,
+		nil,
+	)
+	controllers := newTestController(mgr, &config.Config{}, nil, nil)
 	notifications := controllers.ForManager("manager-readiness").Subscribe()
 
-	mgr.mu.Lock()
-	mgr.loops[sessionID] = &runner{done: make(chan struct{})}
-	mgr.mu.Unlock()
+	active := newRunner(func() {}, "", 0, admission.Parent, 0, false, nil)
+	_, registered := mgr.runners.Register(sessionID, active)
+	require.True(t, registered)
 
 	require.NoError(t, mgr.ReconcileOutputReadiness(ctx, outputID))
 	requireNoManagerNotification(t, notifications)
 
-	mgr.mu.Lock()
-	delete(mgr.loops, sessionID)
-	mgr.mu.Unlock()
+	_, deleted := mgr.runners.Delete(sessionID)
+	require.True(t, deleted)
 
 	require.NoError(t, mgr.ReconcileOutputReadiness(ctx, outputID))
 
@@ -93,19 +110,34 @@ func TestReconcileLatestReadinessPublishesIdleAfterTeardown(t *testing.T) {
 		RETURNING id`,
 		record.ID).Scan(&outputID))
 
-	mgr := newSvc(&mockFactory{}, store, sessions, sessions, NewLinkStore(db), nil, nil)
-	controllers := NewController(mgr, &config.Config{}, nil, nil)
+	mgr := newSvc(
+		&mockFactory{},
+		store,
+		sessions,
+		sessions,
+		sessions,
+		sessions,
+		sessions,
+		sessions,
+		sessions,
+		subagent.NewStore(db),
+		subagent.NewTransactions(db),
+		nil,
+		sessions,
+		nil,
+		nil,
+	)
+	controllers := newTestController(mgr, &config.Config{}, nil, nil)
 	notifications := controllers.ForManager("manager-readiness").Subscribe()
 
-	mgr.mu.Lock()
-	mgr.loops[record.ID] = &runner{done: make(chan struct{})}
-	mgr.mu.Unlock()
+	active := newRunner(func() {}, "", 0, admission.Parent, 0, false, nil)
+	_, registered := mgr.runners.Register(record.ID, active)
+	require.True(t, registered)
 	mgr.reconcileLatestReadiness(ctx, record.ID)
 	requireNoManagerNotification(t, notifications)
 
-	mgr.mu.Lock()
-	delete(mgr.loops, record.ID)
-	mgr.mu.Unlock()
+	_, deleted := mgr.runners.Delete(record.ID)
+	require.True(t, deleted)
 
 	mgr.reconcileLatestReadiness(ctx, record.ID)
 

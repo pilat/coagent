@@ -14,7 +14,9 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/pilat/coagent/internal/bashsandbox"
+	"github.com/pilat/coagent/internal/budget"
 	"github.com/pilat/coagent/internal/config"
+	"github.com/pilat/coagent/internal/configapply"
 	"github.com/pilat/coagent/internal/configops"
 	"github.com/pilat/coagent/internal/controllerapi"
 	"github.com/pilat/coagent/internal/ctl"
@@ -23,6 +25,7 @@ import (
 	"github.com/pilat/coagent/internal/llm"
 	"github.com/pilat/coagent/internal/loader"
 	"github.com/pilat/coagent/internal/logger"
+	"github.com/pilat/coagent/internal/managercontrol"
 	"github.com/pilat/coagent/internal/managers"
 	"github.com/pilat/coagent/internal/managers/cli"
 	"github.com/pilat/coagent/internal/mcp"
@@ -34,6 +37,7 @@ import (
 	"github.com/pilat/coagent/internal/sessionevent"
 	"github.com/pilat/coagent/internal/sessionstore"
 	"github.com/pilat/coagent/internal/shellenv"
+	"github.com/pilat/coagent/internal/subagent"
 	"github.com/pilat/coagent/internal/version"
 )
 
@@ -330,7 +334,7 @@ func runDaemon(
 	a.onStop("ctl.lock", func(context.Context) error { return lock.Release() })
 
 	restart := make(chan struct{}, 1)
-	applier := daemon.NewConfigApplier(ops, func() {
+	applier := configapply.New(ops, func() {
 		select {
 		case restart <- struct{}{}:
 		default: // a restart is already on its way
@@ -503,7 +507,7 @@ func startCore(
 	a *app,
 	cfg *config.Config,
 	secrets config.Secrets,
-	applier *daemon.ConfigApplier,
+	applier configapply.Service,
 ) (*core, error) {
 	gitClient := git.New()
 
@@ -528,7 +532,9 @@ func startCore(
 	sessionStore := sessionstore.NewStore(db)
 	scheduleStore := schedule.NewStore(db)
 	curatedStore := memory.NewCuratedStore(db)
-	linkStore := daemon.NewLinkStore(db)
+	linkStore := subagent.NewStore(db)
+	subagentTx := subagent.NewTransactions(db)
+	budgetSvc := budget.New(sessionStore)
 	mcpRegistry := mcpstore.NewStore(db)
 
 	if _, err := sessionStore.RecoverInterruptedOutputs(ctx); err != nil {
@@ -538,14 +544,18 @@ func startCore(
 	scheduleSvc := schedule.NewService(scheduleStore)
 
 	factory := session.NewFactory(
-		cfg, secrets, curatedStore, sessionStore, gitClient, pool, mcpRegistry, cache, provider,
+		cfg, secrets, curatedStore, sessionStore, sessionStore,
+		gitClient, pool, mcpRegistry, cache, provider,
 	)
 
 	daemonSvc := daemon.New(
-		factory, daemonStore, sessionStore, sessionStore, linkStore, scheduleSvc, cfg, mcpRegistry, pool, applier,
+		factory, daemonStore, sessionStore, sessionStore, sessionStore,
+		sessionStore, sessionStore, sessionStore, sessionStore,
+		linkStore, subagentTx, budgetSvc, sessionStore,
+		scheduleSvc, cfg, mcpRegistry, pool, applier,
 	)
 
-	controller := daemon.NewController(daemonSvc, cfg, cache, scheduleSvc)
+	controller := managercontrol.New(daemonSvc, daemonSvc, sessionStore, cfg, cache)
 	if preparer, ok := daemonSvc.(daemon.LegacyCLIPreparer); ok {
 		if err := preparer.PrepareLegacyCLIRoots(ctx); err != nil {
 			return nil, fmt.Errorf("prepare legacy cli roots: %w", err)
@@ -588,7 +598,7 @@ func prepareControlSocket(
 	cfg *config.Config,
 	mgrs ctl.ManagerControl,
 	delivery controllerapi.OutputStatusFactory,
-	applier *daemon.ConfigApplier,
+	applier configapply.Service,
 	resolver secretRequestResolver,
 ) (*ctl.Server, error) {
 	path, err := ctl.SocketPath()

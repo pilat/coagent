@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/pilat/coagent/internal/configapply"
 	"github.com/pilat/coagent/internal/configops"
 	"github.com/pilat/coagent/internal/controllerapi"
 	"github.com/pilat/coagent/internal/llmwire"
@@ -18,6 +19,7 @@ import (
 	"github.com/pilat/coagent/internal/sessionevent"
 	"github.com/pilat/coagent/internal/sessionstore"
 	"github.com/pilat/coagent/internal/tool"
+	"github.com/pilat/coagent/internal/transcript"
 )
 
 // toolConfig is a valid starting point every config-tool test mutates from.
@@ -75,7 +77,7 @@ func newConfigHarness(t *testing.T) *configHarness {
 	require.NoError(t, err)
 	h.projectID = projectID
 	mgr.systemProject = systemWorkDir
-	mgr.applier = NewConfigApplier(configops.New(configPath, secretsPath), func() { h.restarts++ })
+	mgr.applier = configapply.New(configops.New(configPath, secretsPath), func() { h.restarts++ })
 
 	h.mgr = mgr
 	h.sessionID = h.liveSession(t)
@@ -126,7 +128,7 @@ func (h *configHarness) recordCall(t *testing.T, callID, toolName string) {
 	calls, err := json.Marshal([]llmwire.ToolCall{{ID: callID, Name: toolName}})
 	require.NoError(t, err)
 
-	_, err = h.sessions.InsertMessage(context.Background(), h.sessionID, &sessionstore.StoredMessage{
+	_, err = h.sessions.InsertMessage(context.Background(), h.sessionID, &transcript.Message{
 		Role:      llmwire.RoleAssistant,
 		ToolCalls: calls,
 	})
@@ -141,7 +143,7 @@ func (h *configHarness) restart(t *testing.T, callID, toolName string) {
 	h.mgr.applier.ReleaseApply()
 	h.mgr.staged.resolve(h.sessionID, callID)
 
-	_, err := h.sessions.InsertMessage(context.Background(), h.sessionID, &sessionstore.StoredMessage{
+	_, err := h.sessions.InsertMessage(context.Background(), h.sessionID, &transcript.Message{
 		Role:       llmwire.RoleTool,
 		ToolCallID: callID,
 		ToolName:   toolName,

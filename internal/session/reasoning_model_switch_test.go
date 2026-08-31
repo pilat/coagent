@@ -202,7 +202,7 @@ func newModelSwitchSession(t *testing.T, baseURL string) *svc {
 		llmClient:       client,
 		newLLMWithModel: llm.NewClientWithModel,
 		store:           store,
-		ms:              newMessageStore(store, record.ID),
+		ms:              newMessageStore(store, record.ID, nil),
 		loopDetector:    newLoopDetector(),
 		registry:        tool.NewRegistry(),
 		prompt:          newPromptBuilder(testPrompt, "", ""),

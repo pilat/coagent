@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"time"
+
+	"github.com/pilat/coagent/internal/transcript"
 )
 
 type OutputType string
@@ -139,7 +141,7 @@ type OutputStore interface {
 	InsertAssistantMessageWithOutput(
 		ctx context.Context,
 		sessionID int64,
-		message *StoredMessage,
+		message *transcript.Message,
 		outputType OutputType,
 		content string,
 	) (messageID int64, output *OutputCommit, err error)
@@ -159,6 +161,17 @@ type OutputStore interface {
 	RetryBlockedHead(ctx context.Context, managerID string) (bool, error)
 	WakeOutputHead(ctx context.Context, managerID string) (bool, error)
 	OutputQueueStatus(ctx context.Context, managerID string) (*OutputQueueStatus, error)
+}
+
+// RuntimeOutputStore is the atomic output surface required by a live session.
+// Delivery claims and acknowledgements remain outside the agent loop.
+type RuntimeOutputStore interface {
+	StateOutputStore
+	DirectOutputStore
+	CompactionCommandStore
+	CommandOutputStore
+	AssistantOutputStore
+	EnqueueOutput(ctx context.Context, draft OutputDraft) (*OutputCommit, error)
 }
 
 type OutputIdentityStore interface { //nolint:iface // Optional reconciliation capability.
@@ -185,15 +198,12 @@ type ReplacementStore interface {
 }
 
 // AssistantOutputStore commits an assistant transcript row and its manager
-// output together. Session uses it opportunistically so in-memory stores remain
-// usable in narrow unit tests.
-//
-//nolint:iface // optional runtime capability for persisted root sessions.
+// output together as part of RuntimeOutputStore.
 type AssistantOutputStore interface {
 	InsertAssistantMessageWithOutput(
 		ctx context.Context,
 		sessionID int64,
-		message *StoredMessage,
+		message *transcript.Message,
 		outputType OutputType,
 		content string,
 	) (messageID int64, output *OutputCommit, err error)

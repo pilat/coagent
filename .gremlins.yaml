@@ -1,4 +1,4 @@
-# Mutation testing config for `make mutation`.
+# Mutation testing config for the manual and nightly diagnostic targets.
 #
 # Mutation answers the question coverage cannot: would the test suite actually
 # FAIL if the logic were wrong. Gremlins applies one small mutation at a time

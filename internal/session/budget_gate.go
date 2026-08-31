@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/pilat/coagent/internal/sessionstore"
+	"github.com/pilat/coagent/internal/transcript"
 )
 
 var ErrBudgetCheckpoint = errors.New("budget checkpoint fired")
@@ -15,7 +16,7 @@ type BudgetGate interface {
 	Observe(ctx context.Context) (fired bool, err error)
 	PersistResponse(
 		ctx context.Context,
-		message *sessionstore.StoredMessage,
+		message *transcript.Message,
 		directReply string,
 	) (messageID int64, fired, replyPublished bool, err error)
 	PersistCompaction(

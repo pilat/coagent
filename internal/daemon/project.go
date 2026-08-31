@@ -5,19 +5,9 @@ import (
 	"fmt"
 	"path/filepath"
 	"sort"
-	"time"
 
 	"github.com/pilat/coagent/internal/controllerapi"
 )
-
-// RecentProject is a daemon-managed folder-project with its most recent
-// non-killed session activity (nil when it has no sessions yet).
-type RecentProject struct {
-	ID           int64
-	Name         string
-	WorkDir      string
-	LastActivity *time.Time
-}
 
 // ListRecentProjects returns the folder-projects that are direct children of
 // root, newest activity first. Only direct children: a pick reconstructs the
@@ -25,7 +15,7 @@ type RecentProject struct {
 // otherwise open the wrong directory. Projects with no sessions sort ahead of all
 // others (a just-provisioned project tops the list); every tie breaks by id desc.
 // root is expected pre-resolved (abs + clean) by the caller.
-func (s *svc) ListRecentProjects(ctx context.Context, root string) ([]RecentProject, error) {
+func (s *svc) ListRecentProjects(ctx context.Context, root string) ([]controllerapi.RecentProjectInfo, error) {
 	rows, err := s.store.ListProjects(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("list projects: %w", err)
@@ -50,10 +40,10 @@ func (s *svc) ListRecentProjects(ctx context.Context, root string) ([]RecentProj
 		return nil, fmt.Errorf("latest activity: %w", err)
 	}
 
-	projects := make([]RecentProject, 0, len(filtered))
+	projects := make([]controllerapi.RecentProjectInfo, 0, len(filtered))
 
 	for _, r := range filtered {
-		p := RecentProject{ID: r.ID, Name: r.Name, WorkDir: r.WorkDir}
+		p := controllerapi.RecentProjectInfo{ID: r.ID, Name: r.Name, Path: r.WorkDir}
 		if t, ok := activity[r.ID]; ok {
 			p.LastActivity = &t
 		}
@@ -69,7 +59,7 @@ func (s *svc) ListRecentProjects(ctx context.Context, root string) ([]RecentProj
 // sortRecentProjects orders newest-activity-first; a nil LastActivity (no
 // sessions) sorts ahead of any timestamped project, and every tie breaks by id
 // descending.
-func sortRecentProjects(projects []RecentProject) {
+func sortRecentProjects(projects []controllerapi.RecentProjectInfo) {
 	sort.SliceStable(projects, func(i, j int) bool {
 		a, b := projects[i], projects[j]
 

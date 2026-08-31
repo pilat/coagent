@@ -11,16 +11,19 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/pilat/coagent/internal/budget"
 	"github.com/pilat/coagent/internal/config"
 	"github.com/pilat/coagent/internal/controllerapi"
 	"github.com/pilat/coagent/internal/ctl"
 	"github.com/pilat/coagent/internal/daemon"
 	"github.com/pilat/coagent/internal/llm"
 	"github.com/pilat/coagent/internal/llmwire"
+	"github.com/pilat/coagent/internal/managercontrol"
 	"github.com/pilat/coagent/internal/migrate"
 	"github.com/pilat/coagent/internal/schedule"
 	"github.com/pilat/coagent/internal/session"
 	"github.com/pilat/coagent/internal/sessionstore"
+	"github.com/pilat/coagent/internal/subagent"
 )
 
 type delayedCLIHarness struct {
@@ -68,17 +71,18 @@ func newDelayedCLIHarness(t *testing.T) *delayedCLIHarness {
 		UnifiedConfig: &config.UnifiedConfig{ProjectsRoot: projectsRoot},
 	}
 	factory := session.NewFactoryWithOptions(
-		cfg, nil, nil, sessions, nil, nil, nil, nil, nil,
+		cfg, nil, nil, sessions, sessions, nil, nil, nil, nil, nil,
 		session.WithLLMClientFactory(func(*config.Config) (llm.Client, error) {
 			return delayedCLIClient{}, nil
 		}),
 	)
 	service := daemon.New(
-		factory, projects, sessions, sessions, daemon.NewLinkStore(db),
-		schedule.NewService(schedule.NewStore(db)), cfg, nil, nil, nil,
+		factory, projects, sessions, sessions, sessions, sessions, sessions, sessions, sessions,
+		subagent.NewStore(db), subagent.NewTransactions(db),
+		budget.New(sessions), sessions, schedule.NewService(schedule.NewStore(db)), cfg, nil, nil, nil,
 	)
 	t.Cleanup(func() { service.Shutdown(3 * time.Second) })
-	controllers := daemon.NewController(service, cfg, nil, nil)
+	controllers := managercontrol.New(service, service, sessions, cfg, nil)
 	controller := controllers.ForManager(controllerapi.BuiltinCLIManagerID)
 
 	return &delayedCLIHarness{

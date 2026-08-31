@@ -8,6 +8,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/pilat/coagent/internal/transcript"
 )
 
 func TestOutputStore_GlobalFIFOAndAttemptCAS(t *testing.T) {
@@ -379,7 +381,7 @@ func TestOutputStore_AssistantMessageAndOutputCommitTogether(t *testing.T) {
 	record, err := store.CreateSession(ctx, projectID, "model", "", map[string]any{"manager_id": "alpha"})
 	require.NoError(t, err)
 
-	messageID, output, err := store.InsertAssistantMessageWithOutput(ctx, record.ID, &StoredMessage{
+	messageID, output, err := store.InsertAssistantMessageWithOutput(ctx, record.ID, &transcript.Message{
 		Role: "assistant", Content: "answer",
 	}, OutputMessagePersistent, "✅ answer")
 	require.NoError(t, err)
@@ -636,7 +638,7 @@ func TestOutputStore_RejectsAssistantOutputAfterLifecycleFence(t *testing.T) {
 	record, err := store.CreateSession(ctx, projectID, "model", "", map[string]any{"manager_id": "telegram"})
 	require.NoError(t, err)
 	require.NoError(t, store.UpdateSessionStatus(ctx, record.ID, SessionStatusStopping))
-	_, _, err = store.InsertAssistantMessageWithOutput(ctx, record.ID, &StoredMessage{
+	_, _, err = store.InsertAssistantMessageWithOutput(ctx, record.ID, &transcript.Message{
 		Role: "assistant", Content: "late answer",
 	}, OutputMessagePersistent, "✅ late answer")
 	require.ErrorContains(t, err, "cannot commit ordinary output")

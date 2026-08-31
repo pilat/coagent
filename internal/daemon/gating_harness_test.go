@@ -13,7 +13,9 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/pilat/coagent/internal/budget"
 	"github.com/pilat/coagent/internal/config"
+	"github.com/pilat/coagent/internal/configapply"
 	"github.com/pilat/coagent/internal/configops"
 	"github.com/pilat/coagent/internal/controllerapi"
 	"github.com/pilat/coagent/internal/llm"
@@ -22,6 +24,7 @@ import (
 	"github.com/pilat/coagent/internal/schedule"
 	"github.com/pilat/coagent/internal/session"
 	"github.com/pilat/coagent/internal/sessionstore"
+	"github.com/pilat/coagent/internal/subagent"
 	"github.com/pilat/coagent/internal/tool"
 )
 
@@ -125,7 +128,7 @@ func newGatingHarness(
 
 	store := NewStore(db)
 	sessStore := sessionstore.NewStore(db)
-	links := NewLinkStore(db)
+	links := subagent.NewStore(db)
 	schedStore := schedule.NewStore(db)
 
 	workDir := t.TempDir()
@@ -139,20 +142,33 @@ func newGatingHarness(
 	cfg := &config.Config{WorkDir: workDir, Model: "fake-model"}
 
 	factory := session.NewFactoryWithOptions(
-		cfg, nil, nil, sessStore, nil, nil, nil, nil, nil,
+		cfg, nil, nil, sessStore, sessStore, nil, nil, nil, nil, nil,
 		session.WithLLMClientFactory(func(_ *config.Config) (llm.Client, error) {
 			return &recordingLLM{scriptedLLM: scriptedLLM{respond: respond}, rec: rec}, nil
 		}),
 	)
 
 	mgr := newSvc(
-		factory, store, sessStore, sessStore, links, schedule.NewService(schedStore),
+		factory,
+		store,
+		sessStore,
+		sessStore,
+		sessStore,
+		sessStore,
+		sessStore,
+		sessStore,
+		sessStore,
+		links,
+		subagent.NewTransactions(db),
+		budget.New(sessStore),
+		sessStore,
+		schedule.NewService(schedStore),
 		func() string { return "fake-model" },
 	)
 	if systemProject {
 		mgr.systemProject = workDir
 	}
-	mgr.applier = NewConfigApplier(newTestConfigOps(t, dir), func() {})
+	mgr.applier = configapply.New(newTestConfigOps(t, dir), func() {})
 
 	var pid int64
 	if systemProject {
@@ -199,10 +215,10 @@ func writeProjectAgents(t *testing.T, workDir string, agents map[string]string) 
 	}
 }
 
-func (h *gatingHarness) waitForLink(parentID int64, callID string) SubagentLink {
+func (h *gatingHarness) waitForLink(parentID int64, callID string) subagent.Link {
 	h.t.Helper()
 
-	var link *SubagentLink
+	var link *subagent.Link
 
 	require.Eventually(h.t, func() bool {
 		found, err := h.links.GetLinkByTaskCallID(h.ctx, parentID, callID)

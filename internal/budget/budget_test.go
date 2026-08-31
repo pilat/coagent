@@ -141,6 +141,11 @@ func TestBudgetServiceSetClearAndRearm(t *testing.T) {
 	assert.Nil(t, rearmed.CostLimitUSD, "a re-arm replaces the whole limit")
 	assert.Equal(t, "Budget armed: 2h0m0s wall time", receipt2)
 
+	both, bothReceipt, err := f.svc.Set(ctx, f.newGrant(ctx), &cost, ptrDuration(2*time.Hour))
+	require.NoError(t, err)
+	assert.Equal(t, int64(3), both.Generation)
+	assert.Equal(t, "Budget armed: $5.000000 additional persisted cost or 2h0m0s wall time", bothReceipt)
+
 	cleared, clearReceipt, err := f.svc.Clear(ctx, f.newGrant(ctx))
 	require.NoError(t, err)
 	assert.Equal(t, sessionstore.BudgetReleased, cleared.State)

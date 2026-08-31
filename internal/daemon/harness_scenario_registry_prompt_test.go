@@ -11,7 +11,9 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/pilat/coagent/internal/budget"
 	"github.com/pilat/coagent/internal/config"
+	"github.com/pilat/coagent/internal/configapply"
 	"github.com/pilat/coagent/internal/controllerapi"
 	"github.com/pilat/coagent/internal/llm"
 	"github.com/pilat/coagent/internal/llmwire"
@@ -21,6 +23,7 @@ import (
 	"github.com/pilat/coagent/internal/schedule"
 	"github.com/pilat/coagent/internal/session"
 	"github.com/pilat/coagent/internal/sessionstore"
+	"github.com/pilat/coagent/internal/subagent"
 )
 
 // activationSchemas stores each request's inventory separately. A union would
@@ -73,7 +76,8 @@ type registryPromptDeps struct {
 	ctx          context.Context
 	store        Store
 	sessionStore sessionstore.Store
-	links        LinkStore
+	links        subagent.Store
+	subagents    subagent.Transactions
 	schedules    schedule.Store
 	mcpRegistry  mcpstore.Store
 	mcpPool      mcp.Pool
@@ -130,7 +134,7 @@ func newRegistryPromptDeps(t *testing.T) registryPromptDeps {
 	t.Cleanup(mcpPool.Stop)
 	return registryPromptDeps{
 		ctx: ctx, store: NewStore(db), sessionStore: sessionstore.NewStore(db),
-		links: NewLinkStore(db), schedules: schedule.NewStore(db),
+		links: subagent.NewStore(db), subagents: subagent.NewTransactions(db), schedules: schedule.NewStore(db),
 		mcpRegistry: mcpstore.NewStore(db), mcpPool: mcpPool,
 	}
 }
@@ -170,7 +174,8 @@ func newRegistryPromptFactory(
 	prompts *promptRecorder,
 ) session.Factory {
 	return session.NewFactoryWithOptions(
-		cfg, nil, nil, deps.sessionStore, nil, deps.mcpPool, deps.mcpRegistry, nil, nil,
+		cfg, nil, nil, deps.sessionStore, deps.sessionStore,
+		nil, deps.mcpPool, deps.mcpRegistry, nil, nil,
 		session.WithLLMClientFactory(func(_ *config.Config) (llm.Client, error) {
 			return &registryPromptLLM{
 				scriptedLLM: scriptedLLM{respond: respond}, recorder: recorder, prompts: prompts,
@@ -186,13 +191,16 @@ func newRegistryPromptManager(
 	t *testing.T,
 ) *svc {
 	mgr := newSvc(
-		factory, deps.store, deps.sessionStore, deps.sessionStore, deps.links,
-		schedule.NewService(deps.schedules), func() string { return "fake-model" },
+		factory, deps.store, deps.sessionStore, deps.sessionStore, deps.sessionStore,
+		deps.sessionStore, deps.sessionStore, deps.sessionStore, deps.sessionStore,
+		deps.links, deps.subagents,
+		budget.New(deps.sessionStore), deps.sessionStore, schedule.NewService(deps.schedules),
+		func() string { return "fake-model" },
 	)
 	mgr.systemProject = workDir
 	mgr.mcpStore = deps.mcpRegistry
 	mgr.mcpPool = deps.mcpPool
-	mgr.applier = NewConfigApplier(newTestConfigOps(t, t.TempDir()), func() {})
+	mgr.applier = configapply.New(newTestConfigOps(t, t.TempDir()), func() {})
 
 	return mgr
 }

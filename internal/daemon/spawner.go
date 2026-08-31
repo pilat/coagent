@@ -6,28 +6,38 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/pilat/coagent/internal/admission"
 	"github.com/pilat/coagent/internal/session"
 	"github.com/pilat/coagent/internal/sessionstore"
+	"github.com/pilat/coagent/internal/subagent"
 )
 
 // Spawn creates a child session + durable link and starts it running in the
 // background. It never waits: the child id is returned immediately.
 func (s *svc) Spawn(ctx context.Context, req spawnRequest) (childResult, error) {
-	s.treeMu.Lock()
-	defer s.treeMu.Unlock()
+	var result childResult
 
-	childID, workDir, projectID, err := s.createChildSession(ctx, req)
+	err := s.stopper.GuardSpawn(func() error {
+		childID, workDir, projectID, createErr := s.createChildSession(ctx, req)
+		if createErr != nil {
+			return createErr
+		}
+
+		if startErr := s.ensureRunner(
+			context.WithoutCancel(ctx), childID, workDir, projectID, nil,
+		); startErr != nil {
+			return fmt.Errorf("start child runner: %w", startErr)
+		}
+
+		result = childResult{ChildID: childID, State: subagent.StateSpawned}
+
+		return nil
+	})
 	if err != nil {
-		return childResult{}, err
+		return childResult{}, fmt.Errorf("guard child spawn: %w", err)
 	}
 
-	// Start the child loop. Detached ctx so the parent's tool-call ctx (which may
-	// time out / cancel) never kills the child (Appendix G6).
-	if err := s.ensureRunner(context.WithoutCancel(ctx), childID, workDir, projectID, nil); err != nil {
-		return childResult{}, fmt.Errorf("start child runner: %w", err)
-	}
-
-	return childResult{ChildID: childID, State: LinkStateSpawned}, nil
+	return result, nil
 }
 
 // createChildSession validates the spawn request (nesting depth), then durably
@@ -46,7 +56,7 @@ func (s *svc) createChildSession(ctx context.Context, req spawnRequest) (int64, 
 		return 0, "", 0, err
 	}
 
-	if depth >= maxSubagentDepth {
+	if depth >= admission.MaxDepth {
 		return 0, "", 0, fmt.Errorf(
 			"subagent nesting limit reached (depth %d): do this work inline instead of delegating further",
 			depth,
@@ -66,8 +76,8 @@ func (s *svc) createChildSession(ctx context.Context, req spawnRequest) (int64, 
 	}
 
 	model := s.resolveChildModel(req, parentRec)
-	if budgets, ok := s.sessionStore.(sessionstore.BudgetStore); ok {
-		budgetRecord, budgetErr := budgets.GetBudget(ctx, rootID)
+	if s.budgetSvc != nil {
+		budgetRecord, budgetErr := s.budgetSvc.Get(ctx, rootID)
 		if budgetErr == nil && budgetRecord.State == sessionstore.BudgetArmed &&
 			budgetRecord.CostLimitUSD != nil && !s.modelHasPricing(model) {
 			return 0, "", 0, errors.New(
@@ -85,7 +95,7 @@ func (s *svc) createChildSession(ctx context.Context, req spawnRequest) (int64, 
 		return 0, "", 0, err
 	}
 
-	childID, err := s.sessionStore.CreateSubagentWithLink(ctx, sessionstore.SubagentCreate{
+	childID, err := s.subagents.Create(ctx, subagent.Create{
 		ProjectID:      parentRec.ProjectID,
 		ParentID:       req.ParentID,
 		RootID:         rootID,
@@ -95,7 +105,7 @@ func (s *svc) createChildSession(ctx context.Context, req spawnRequest) (int64, 
 		TaskCallID:     req.TaskCallID,
 		Blocking:       req.Blocking,
 		Depth:          depth,
-		LinkState:      string(LinkStateSpawned),
+		State:          subagent.StateSpawned,
 		TimeoutSec:     req.TimeoutSec,
 		InitialInput:   req.Prompt,
 	})
@@ -127,7 +137,7 @@ func (s *svc) SendToChild(ctx context.Context, childID int64, msg string) error 
 		return fmt.Errorf("subagent %d not found", childID)
 	}
 
-	if link.State == LinkStateKilled {
+	if link.State == subagent.StateKilled {
 		return fmt.Errorf("subagent %d is killed", childID)
 	}
 
@@ -146,7 +156,7 @@ func (s *svc) SendToChild(ctx context.Context, childID int64, msg string) error 
 		return fmt.Errorf("subagent %d disappeared after accepting follow-up", childID)
 	}
 
-	if link.State == LinkStateStopped {
+	if link.State == subagent.StateStopped {
 		rec, recErr := s.sessionStore.GetSession(ctx, childID)
 		if recErr != nil {
 			return fmt.Errorf("load stopped subagent session: %w", recErr)

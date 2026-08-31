@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/pilat/coagent/internal/llmwire"
+	"github.com/pilat/coagent/internal/transcript"
 )
 
 func TestScheduledDeliveryStore_ToolNotificationIsExactlyOnceAndConflictsFailClosed(t *testing.T) {
@@ -19,8 +20,8 @@ func TestScheduledDeliveryStore_ToolNotificationIsExactlyOnceAndConflictsFailClo
 	sess, err := store.CreateSession(ctx, projectID, "m", "", map[string]any{"manager_id": "telegram"})
 	require.NoError(t, err)
 
-	assistant := &StoredMessage{Role: llmwire.RoleAssistant, ToolCalls: []byte(`[{"id":"c1","name":"schedule"}]`)}
-	result := &StoredMessage{
+	assistant := &transcript.Message{Role: llmwire.RoleAssistant, ToolCalls: []byte(`[{"id":"c1","name":"schedule"}]`)}
+	result := &transcript.Message{
 		Role: llmwire.RoleTool, ToolCallID: "c1", ToolName: "schedule", Content: "due",
 	}
 
@@ -64,11 +65,11 @@ func TestScheduledDeliveryStore_ContextResetIsAtomicIdempotentAndClearsDerivedSt
 	sess, err := store.CreateSession(ctx, projectID, "m", "", nil)
 	require.NoError(t, err)
 
-	_, err = store.InsertMessage(ctx, sess.ID, &StoredMessage{Role: llmwire.RoleUser, Content: "old task"})
+	_, err = store.InsertMessage(ctx, sess.ID, &transcript.Message{Role: llmwire.RoleUser, Content: "old task"})
 	require.NoError(t, err)
 	require.NoError(t, store.UpdateSessionTodoItems(ctx, sess.ID, []byte(`[{"content":"old"}]`)))
 
-	opening := []*StoredMessage{
+	opening := []*transcript.Message{
 		{Role: llmwire.RoleUser, Content: "project context"},
 		{Role: llmwire.RoleUser, Content: "fresh task"},
 	}
@@ -105,7 +106,7 @@ func TestScheduledDeliveryStore_ContextResetRollsBackClaimAndTranscriptOnInsertF
 	sess, err := store.CreateSession(ctx, projectID, "m", "", nil)
 	require.NoError(t, err)
 
-	_, err = store.InsertMessage(ctx, sess.ID, &StoredMessage{Role: llmwire.RoleUser, Content: "old task"})
+	_, err = store.InsertMessage(ctx, sess.ID, &transcript.Message{Role: llmwire.RoleUser, Content: "old task"})
 	require.NoError(t, err)
 	require.NoError(t, store.UpdateSessionTodoItems(ctx, sess.ID, []byte(`[{"content":"keep"}]`)))
 
@@ -123,7 +124,7 @@ func TestScheduledDeliveryStore_ContextResetRollsBackClaimAndTranscriptOnInsertF
 		sess.ID,
 		"schedule:cron:9:20260814T1200Z",
 		"fresh-a",
-		[]*StoredMessage{
+		[]*transcript.Message{
 			{Role: llmwire.RoleUser, Content: "partial opening"},
 			{Role: llmwire.RoleUser, Content: "explode"},
 		},

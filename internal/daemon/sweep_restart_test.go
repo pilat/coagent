@@ -13,6 +13,7 @@ import (
 
 	"github.com/pilat/coagent/internal/llm"
 	"github.com/pilat/coagent/internal/llmwire"
+	"github.com/pilat/coagent/internal/subagent"
 )
 
 // errDeliveryCrash stands in for the process dying between a child's terminal
@@ -22,18 +23,18 @@ var errDeliveryCrash = errors.New("daemon died before the completion was committ
 // crashGateLinkStore rejects every link read taken while a completion is owed but
 // not yet committed, so a daemon can be torn down inside that exact window.
 type crashGateLinkStore struct {
-	LinkStore
+	subagent.Store
 
 	once     sync.Once
 	rejected chan struct{}
 }
 
-func newCrashGate(inner LinkStore) *crashGateLinkStore {
-	return &crashGateLinkStore{LinkStore: inner, rejected: make(chan struct{})}
+func newCrashGate(inner subagent.Store) *crashGateLinkStore {
+	return &crashGateLinkStore{Store: inner, rejected: make(chan struct{})}
 }
 
-func (g *crashGateLinkStore) GetLink(ctx context.Context, childID int64) (*SubagentLink, error) {
-	link, err := g.LinkStore.GetLink(ctx, childID)
+func (g *crashGateLinkStore) GetLink(ctx context.Context, childID int64) (*subagent.Link, error) {
+	link, err := g.Store.GetLink(ctx, childID)
 	if err != nil || link == nil || !link.Terminal() || link.DeliveredAt != 0 {
 		return link, err
 	}
@@ -99,7 +100,7 @@ func TestScenario_CrashBetweenFinalizationAndDeliveryRedeliversExactlyOnce(t *te
 
 			first := newSubagentHarnessOnDB(
 				t, dbPath, crashWindowRespond(tc.background),
-				func(inner LinkStore) LinkStore {
+				func(inner subagent.Store) subagent.Store {
 					gate = newCrashGate(inner)
 					return gate
 				},
@@ -187,7 +188,7 @@ func TestScenario_StoppedChildSurvivesARestartWithoutResurrection(t *testing.T) 
 
 	parked, err := first.links.GetLink(first.ctx, link.ChildID)
 	require.NoError(t, err)
-	require.Equal(t, LinkStateStopped, parked.State)
+	require.Equal(t, subagent.StateStopped, parked.State)
 
 	first.shutdown()
 
@@ -200,7 +201,7 @@ func TestScenario_StoppedChildSurvivesARestartWithoutResurrection(t *testing.T) 
 	require.Never(t, func() bool {
 		current, linkErr := second.links.GetLink(second.ctx, link.ChildID)
 		return linkErr == nil && current != nil &&
-			(current.State != LinkStateStopped || current.DeliveredAt != 0)
+			(current.State != subagent.StateStopped || current.DeliveredAt != 0)
 	}, 500*time.Millisecond, 25*time.Millisecond, "a stopped child stays parked across a restart")
 
 	assert.Zero(t, countSubagentEvents(second.parentMessages(parentID), link.ChildID),

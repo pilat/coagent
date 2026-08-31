@@ -107,10 +107,8 @@ func TestSecondCheckpointAnchorsOnThePreviousSummaryAndSendsOnlyTheDelta(t *test
 	require.Equal(t, 1, llm.callCount)
 
 	s.ms.mu.Lock()
-	s.ms.messages = append(s.ms.messages,
-		compactionAssistantCall("c3", "NEWLY-AGED"),
-		compactionToolResult("c3", "new result"),
-	)
+	s.ms.appendLocked(compactionAssistantCall("c3", "NEWLY-AGED"), 0)
+	s.ms.appendLocked(compactionToolResult("c3", "new result"), 0)
 	s.ms.mu.Unlock()
 
 	compacted, err := s.compact(t.Context(), nil)

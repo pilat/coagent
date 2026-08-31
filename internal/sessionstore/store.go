@@ -7,6 +7,8 @@ import (
 	"errors"
 	"fmt"
 	"time"
+
+	"github.com/pilat/coagent/internal/transcript"
 )
 
 const defaultReasoningLevel = "medium"
@@ -84,47 +86,10 @@ type SessionRecord struct {
 	ContextBaselineMessageCount int
 }
 
-// StoredMessage represents a row in the messages table.
-type StoredMessage struct {
-	ID               int64
-	SessionID        int64
-	Role             string
-	Content          string
-	ToolCallID       string
-	ToolName         string
-	ToolCalls        json.RawMessage
-	ReasoningContent string
-	ReasoningRaw     json.RawMessage
-	Attachments      json.RawMessage
-	CostUSD          float64
-	Usage            json.RawMessage
-	CompactedAt      *time.Time
-	CreatedAt        time.Time
-}
-
 // CompactionEntry is either an existing active row or a new message in rebuilt transcript order.
 type CompactionEntry struct {
 	ExistingID int64
-	Message    *StoredMessage
-}
-
-// SubagentCreate describes the two-row durable aggregate created for a spawned
-// subagent. Link lifecycle values are supplied by the daemon, which owns that
-// state machine; sessionstore only guarantees that the session row and its
-// initial link commit together.
-type SubagentCreate struct {
-	ProjectID      int64
-	ParentID       int64
-	RootID         int64
-	AgentType      string
-	Model          string
-	ReasoningLevel string
-	TaskCallID     string
-	Blocking       bool
-	Depth          int
-	LinkState      string
-	TimeoutSec     int
-	InitialInput   string
+	Message    *transcript.Message
 }
 
 // RuntimeStore is the persistence capability used by a live agent session. It
@@ -132,7 +97,7 @@ type SubagentCreate struct {
 // a session may checkpoint itself and mutate its transcript, but cannot create
 // or kill another session.
 type RuntimeStore interface {
-	InsertMessage(ctx context.Context, sessionID int64, msg *StoredMessage) (int64, error)
+	InsertMessage(ctx context.Context, sessionID int64, msg *transcript.Message) (int64, error)
 	MarkCompacted(ctx context.Context, ids []int64) error
 	ReplaceCompactedMessages(
 		ctx context.Context,
@@ -140,7 +105,7 @@ type RuntimeStore interface {
 		compactedIDs []int64,
 		entries []CompactionEntry,
 	) ([]int64, error)
-	LoadActiveMessages(ctx context.Context, sessionID int64) ([]*StoredMessage, error)
+	LoadActiveMessages(ctx context.Context, sessionID int64) ([]*transcript.Message, error)
 
 	UpdateSessionIteration(ctx context.Context, id int64, iteration int, status SessionStatus) error
 	UpdateSessionTodoItems(ctx context.Context, id int64, items json.RawMessage) error
@@ -167,13 +132,13 @@ type ScheduledDeliveryStore interface {
 		ctx context.Context,
 		sessionID int64,
 		deliveryID, fingerprint string,
-		assistant, toolResult *StoredMessage,
+		assistant, toolResult *transcript.Message,
 	) (asstID, resultID int64, inserted bool, err error)
 	ResetSessionContextOnce(
 		ctx context.Context,
 		sessionID int64,
 		deliveryID, fingerprint string,
-		opening []*StoredMessage,
+		opening []*transcript.Message,
 	) (messageIDs []int64, inserted bool, err error)
 }
 
@@ -193,10 +158,6 @@ type OrchestrationStore interface { //nolint:interfacebloat // one bounded orche
 		projectID, parentID, rootID int64,
 		agentType, model, reasoningLevel string,
 	) (int64, error)
-	// CreateSubagentWithLink atomically creates the child session and the initial
-	// durable completion-ledger row. Production spawn paths must use this method;
-	// CreateSubagentSession remains available for persistence-level setup/tests.
-	CreateSubagentWithLink(ctx context.Context, create SubagentCreate) (int64, error)
 	SetAttributes(ctx context.Context, id int64, attrs map[string]any) error
 	UpdateSessionModel(ctx context.Context, id int64, model, reasoningLevel string) error
 	GetSession(ctx context.Context, id int64) (*SessionRecord, error)
@@ -207,50 +168,20 @@ type OrchestrationStore interface { //nolint:interfacebloat // one bounded orche
 	MarkSessionKilled(ctx context.Context, id int64) error
 	UpdateSessionStatus(ctx context.Context, id int64, status SessionStatus) error
 	KillTerminatingSessions(ctx context.Context) error
-	LoadActiveMessages(ctx context.Context, sessionID int64) ([]*StoredMessage, error)
-
-	// DeliverCompletionAtomic CAS-stamps delivered_at for one exact activation
-	// and, only when it wins the CAS, inserts the completion message(s) into the
-	// parent's transcript — all in one transaction, so a crash commits both or
-	// neither. Returns the inserted
-	// message ids and whether this call won; won=false means another delivery
-	// already committed or the activation is stale and nothing was inserted.
-	// Empty message sets and a session
-	// ID that is not the link's parent are rejected without consuming the CAS. This
-	// is the SOLE writer of subagent_links.delivered_at/delivered_msg_id — the one
-	// link state the session store owns (the rest of the ledger lives in
-	// daemon.LinkStore).
-	DeliverCompletionAtomic(
-		ctx context.Context,
-		sessionID int64,
-		msgs []*StoredMessage,
-		childID int64,
-		activationSeq int64,
-	) (msgIDs []int64, won bool, err error)
-	TryFinalizeSubagentActivation(
-		ctx context.Context,
-		childID int64,
-		state, result, outcome string,
-	) (bool, error)
-	RearmDeliveredSubagentWithPendingInput(ctx context.Context, childID int64) (bool, error)
+	LoadActiveMessages(ctx context.Context, sessionID int64) ([]*transcript.Message, error)
 }
 
 // Store is the complete persistence surface returned by NewStore. Consumers
 // should accept RuntimeStore or OrchestrationStore unless they truly need both.
 type Store interface { //nolint:interfacebloat // Complete constructor result; consumers use narrow capabilities.
-	RuntimeStore
-	BudgetResponseStore
-	BudgetCompactionStore
+	AgentRuntimeStore
 	OrchestrationStore
 	InboxStore
-	OutputStore
-	ManagerRootStore
-	CommandOutputStore
-	LifecycleOutputStore
-	LifecycleCommandStore
-	ReplacementStore
+	ManagerOutputStore
+	RuntimeOutputStore
+	ManagerRootTransactions
+	SessionLifecycleStore
 	ActivationStore
-	DirectOutputStore
 	BudgetStore
 	ModelInputStore
 	ProgressStore
@@ -260,10 +191,13 @@ type Store interface { //nolint:interfacebloat // Complete constructor result; c
 
 var (
 	_ Store                 = (*store)(nil)
+	_ AgentRuntimeStore     = (*store)(nil)
 	_ RuntimeStore          = (*store)(nil)
 	_ OrchestrationStore    = (*store)(nil)
 	_ InboxStore            = (*store)(nil)
 	_ OutputStore           = (*store)(nil)
+	_ ManagerOutputStore    = (*store)(nil)
+	_ RuntimeOutputStore    = (*store)(nil)
 	_ ManagerRootStore      = (*store)(nil)
 	_ CommandOutputStore    = (*store)(nil)
 	_ LifecycleOutputStore  = (*store)(nil)
@@ -376,89 +310,6 @@ func (s *store) CreateSubagentSession(
 	}
 
 	return id, nil
-}
-
-func (s *store) CreateSubagentWithLink(ctx context.Context, create SubagentCreate) (int64, error) {
-	if create.ReasoningLevel == "" {
-		create.ReasoningLevel = defaultReasoningLevel
-	}
-
-	if create.LinkState == "" {
-		return 0, errors.New("create subagent: empty initial link state")
-	}
-
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return 0, fmt.Errorf("begin create subagent tx: %w", err)
-	}
-	defer func() { _ = tx.Rollback() }()
-
-	now := time.Now().UTC()
-
-	childID, err := insertSubagentSession(ctx, tx, create, now)
-	if err != nil {
-		return 0, err
-	}
-
-	_, err = tx.ExecContext(
-		ctx,
-		`INSERT INTO subagent_links (parent_id, child_id, task_call_id, blocking, depth, state, timeout_sec, created_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-		create.ParentID,
-		childID,
-		create.TaskCallID,
-		create.Blocking,
-		create.Depth,
-		create.LinkState,
-		create.TimeoutSec,
-		now.Unix(),
-	)
-	if err != nil {
-		return 0, fmt.Errorf("insert subagent link: %w", err)
-	}
-
-	if create.InitialInput != "" {
-		if _, err := tx.ExecContext(ctx, `
-			INSERT INTO session_inbox (session_id, source, raw_content, received_at)
-			VALUES (?, 'agent', ?, ?)`, childID, create.InitialInput, now); err != nil {
-			return 0, fmt.Errorf("insert subagent initial input: %w", err)
-		}
-	}
-
-	if err := tx.Commit(); err != nil {
-		return 0, fmt.Errorf("commit create subagent: %w", err)
-	}
-
-	return childID, nil
-}
-
-func insertSubagentSession(ctx context.Context, tx *sql.Tx, create SubagentCreate, now time.Time) (int64, error) {
-	result, err := tx.ExecContext(ctx, `
-		INSERT INTO sessions (project_id, parent_id, root_id, agent_type, model, reasoning_level, created_at, updated_at)
-		SELECT ?, ?, ?, ?, ?, ?, ?, ?
-		WHERE EXISTS (SELECT 1 FROM sessions WHERE id = ? AND status NOT IN ('stopping', 'stopped'))`,
-		create.ProjectID, create.ParentID, create.RootID, create.AgentType, create.Model,
-		create.ReasoningLevel, now, now, create.ParentID,
-	)
-	if err != nil {
-		return 0, fmt.Errorf("insert subagent session: %w", err)
-	}
-
-	rows, err := result.RowsAffected()
-	if err != nil {
-		return 0, fmt.Errorf("check parent session admission: %w", err)
-	}
-
-	if rows == 0 {
-		return 0, fmt.Errorf("parent session %d is not accepting subagents", create.ParentID)
-	}
-
-	childID, err := result.LastInsertId()
-	if err != nil {
-		return 0, fmt.Errorf("subagent session id: %w", err)
-	}
-
-	return childID, nil
 }
 
 func (s *store) SetAttributes(ctx context.Context, id int64, attrs map[string]any) error {
@@ -775,7 +626,7 @@ type execer interface {
 	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
 }
 
-func insertMessageWith(ctx context.Context, q execer, sessionID int64, msg *StoredMessage) (int64, error) {
+func insertMessageWith(ctx context.Context, q execer, sessionID int64, msg *transcript.Message) (int64, error) {
 	result, err := q.ExecContext(
 		ctx,
 		`INSERT INTO messages (session_id, role, content, tool_call_id, tool_name, tool_calls, reasoning_content, reasoning_raw, attachments, cost_usd, usage) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -803,7 +654,7 @@ func insertMessageWith(ctx context.Context, q execer, sessionID int64, msg *Stor
 	return id, nil
 }
 
-func (s *store) InsertMessage(ctx context.Context, sessionID int64, msg *StoredMessage) (int64, error) {
+func (s *store) InsertMessage(ctx context.Context, sessionID int64, msg *transcript.Message) (int64, error) {
 	return insertMessageWith(ctx, s.db, sessionID, msg)
 }
 
@@ -921,7 +772,7 @@ func replaceCompactedMessagesTx(
 	return ids, nil
 }
 
-func (s *store) LoadActiveMessages(ctx context.Context, sessionID int64) ([]*StoredMessage, error) {
+func (s *store) LoadActiveMessages(ctx context.Context, sessionID int64) ([]*transcript.Message, error) {
 	rows, err := s.db.QueryContext(
 		ctx,
 		`SELECT id, session_id, role, content, tool_call_id, tool_name, tool_calls, reasoning_content, reasoning_raw, attachments, cost_usd, usage, compacted_at, created_at
@@ -1144,11 +995,11 @@ func scanSessionFrom(sc rowScanner) (*SessionRecord, error) {
 	return &rec, nil
 }
 
-func scanMessages(rows *sql.Rows) ([]*StoredMessage, error) {
-	var messages []*StoredMessage
+func scanMessages(rows *sql.Rows) ([]*transcript.Message, error) {
+	var messages []*transcript.Message
 
 	for rows.Next() {
-		var msg StoredMessage
+		var msg transcript.Message
 
 		var toolCallID, toolName, toolCallsRaw, reasoningContent, reasoningRaw, attachmentsRaw, usageRaw sql.NullString
 		var compactedAt sql.NullTime

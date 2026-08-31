@@ -1,0 +1,62 @@
+name: Nightly Mutation
+
+# Diagnostic only: intentionally no pull_request or push trigger, and no job in
+# this workflow is a merge or branch-protection gate.
+on:
+  schedule:
+    - cron: "37 2 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nightly-mutation-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  mutation:
+    name: Mutation (${{ matrix.shard }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    strategy:
+      fail-fast: false
+      matrix:
+        shard:
+          - commands
+          - runtime
+          - persistence
+          - async
+          - managers
+          - models
+          - tooling
+          - config
+          - support
+          - daemon-lifecycle
+          - daemon-subagents
+          - daemon-ops
+          - daemon-output
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - name: Install mise
+        uses: jdx/mise-action@3c2e0cf82a5b2e5249f0d3635a4d83d0ae861518 # v4.2.5
+        with:
+          install: true
+          cache: true
+      - name: Bootstrap pinned tools
+        run: make tools
+      - name: Run diagnostic mutation shard
+        env:
+          NIGHTLY_MUTATION_SHARD: ${{ matrix.shard }}
+        run: make mutation.nightly
+      - name: Upload mutation report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: mutation-${{ matrix.shard }}-${{ github.run_id }}
+          path: mutation-reports/${{ matrix.shard }}/
+          if-no-files-found: warn
+          retention-days: 14

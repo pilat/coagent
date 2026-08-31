@@ -7,10 +7,13 @@ import (
 
 	"go.uber.org/zap"
 
+	"github.com/pilat/coagent/internal/admission"
 	"github.com/pilat/coagent/internal/logger"
 	"github.com/pilat/coagent/internal/session"
 	"github.com/pilat/coagent/internal/sessionstore"
+	"github.com/pilat/coagent/internal/subagent"
 	"github.com/pilat/coagent/internal/tool"
+	"github.com/pilat/coagent/internal/transcript"
 )
 
 // finalizeChild marks a subagent terminal (once its loop has fully exited and
@@ -18,121 +21,12 @@ import (
 // parent. No-op for non-subagent sessions and during shutdown (the startup
 // sweep re-delivers on restart). errored forces the error state (loop panic).
 func (s *svc) finalizeChild(ctx context.Context, childID int64, shuttingDown, errored bool) {
-	if shuttingDown {
-		return
-	}
-
-	link, err := s.links.GetLink(ctx, childID)
-	if err != nil {
-		// Without the link the parent id is unknown, so there is nobody to notify.
-		logger.Ctx(ctx).Named("daemon.completion").
-			Error("finalize_get_link", zap.Int64("child", childID), zap.Error(err))
-
-		return
-	}
-
-	if link == nil {
-		return // not a subagent
-	}
-
-	if link.Terminal() {
-		return // already finalized
-	}
-
-	if link.State == LinkStateStopped {
-		return // /stop parks the child without producing a completion
-	}
-
-	rec, err := s.sessionStore.GetSession(ctx, childID)
-	if err != nil {
-		logger.Ctx(ctx).Named("daemon.completion").
-			Error("finalize_get_session", zap.Int64("child", childID), zap.Error(err))
-		s.notifyChildFailure(ctx, link.ParentID, childID, "could not be finalized", err)
-
-		return
-	}
-
-	// A suspended child is waiting on an external wake (e.g. sleep), not done —
-	// unless its loop panicked, which is always terminal.
-	if rec.Status == sessionstore.SessionStatusSuspended && !errored {
-		return
-	}
-
-	// state (lifecycle column) keeps its existing derivation so Terminal() and the
-	// list queries are unchanged; outcome (the richer parent-facing signal) is
-	// derived separately and may differ (e.g. a max-iterations child is
-	// state=error but outcome=incomplete).
-	status := LinkStateCompleted
-	persistedStatus := sessionstore.SessionStatusCompleted
-
-	if errored || rec.Status == sessionstore.SessionStatusError {
-		status = LinkStateError
-		persistedStatus = sessionstore.SessionStatusError
-	}
-
-	result, outcome := s.deriveChildOutcome(ctx, childID, rec.Iteration, errored)
-
-	terminalized, err := s.finalizeActivationRetrying(ctx, childID, status, result, outcome)
-	if err != nil {
-		logger.Ctx(ctx).
-			Named("daemon.completion").
-			Error("mark_link_terminal", zap.Int64("child", childID), zap.Error(err))
-		s.notifyChildFailure(ctx, link.ParentID, childID, "completion could not be recorded", err)
-
-		return
-	}
-
-	if !terminalized {
-		return
-	}
-
-	if err := s.sessionStore.UpdateSessionStatus(ctx, childID, persistedStatus); err != nil {
-		logger.Ctx(ctx).
-			Named("daemon.completion").
-			Warn("update_child_status", zap.Int64("child", childID), zap.Error(err))
-	}
-
-	link.State = status
-	link.Result = result
-	link.Outcome = outcome
-	s.deliverCompletionToParent(ctx, *link)
-}
-
-// deriveChildOutcome computes the parent-facing result text + outcome from the
-// child's committed transcript: "error" if it crashed, "completed" if the LAST
-// assistant message is a text-only answer, else "incomplete". result carries the
-// answer, or a short context note when there is none.
-func (s *svc) deriveChildOutcome(
-	ctx context.Context,
-	childID int64,
-	iterations int,
-	errored bool,
-) (string, LinkOutcome) {
-	msgs, err := s.sessionStore.LoadActiveMessages(ctx, childID)
-	if err != nil {
-		msgs = nil
-	}
-
-	finalText := lastStoredAssistantText(msgs)
-
-	switch {
-	case errored:
-		result := finalText
-		if result == "" {
-			result = fmt.Sprintf("crashed after %d iterations", iterations)
-		}
-
-		return result, LinkOutcomeError
-	case lastStoredMessageIsFinalAnswer(msgs):
-		return finalText, LinkOutcomeCompleted
-	default:
-		return fmt.Sprintf("ended without a final answer after %d iterations", iterations), LinkOutcomeIncomplete
-	}
+	s.completions.Finalize(ctx, childID, shuttingDown, errored)
 }
 
 // deliverCompletionToParent routes a completion notification to the parent,
 // reviving it if idle. A killed parent rejects it (orphan policy).
-func (s *svc) deliverCompletionToParent(ctx context.Context, link SubagentLink) {
+func (s *svc) deliverCompletionToParent(ctx context.Context, link subagent.Link) {
 	var input sessionInput
 	if link.Blocking {
 		input = blockingSubagentCompletionInput{
@@ -251,56 +145,14 @@ func (s *svc) injectBackgroundCompletion(
 func (s *svc) persistCompletion(
 	ctx context.Context,
 	sess session.Service,
-	link SubagentLink,
-	stored []*sessionstore.StoredMessage,
+	link subagent.Link,
+	stored []*transcript.Message,
 ) error {
-	_, won, err := s.sessionStore.DeliverCompletionAtomic(
-		ctx, link.ParentID, stored, link.ChildID, link.ActivationSeq,
-	)
-	if err != nil {
-		return fmt.Errorf("deliver completion for child %d: %w", link.ChildID, err)
-	}
-
-	// The DB reload is authoritative: rows committed outside a concurrent
-	// compaction snapshot stay a newer NULL-position suffix. A failed reload
-	// loses nothing — the row is durable and the loop's mandatory reload before
-	// its next model call recovers it.
-	if won {
-		if reloadErr := sess.ReloadDeliveredCompletion(ctx); reloadErr != nil {
-			logger.Ctx(ctx).Named("daemon.completion").Warn(
-				"completion_reload_failed",
-				zap.Int64("child", link.ChildID),
-				zap.Int64("parent", link.ParentID),
-				zap.Error(reloadErr),
-			)
-		}
-	}
-
-	// A follow-up may have arrived while this activation was terminalizing.
-	// Delivery is the ordering barrier: only after the old outcome is present in
-	// the parent's transcript may the same child begin its next activation.
-	return s.rearmChildAfterDelivery(context.WithoutCancel(ctx), link.ChildID)
+	return s.completions.Persist(ctx, sess, link, stored) //nolint:wrapcheck // Component owns delivery context.
 }
 
 func (s *svc) rearmChildAfterDelivery(ctx context.Context, childID int64) error {
-	rearmed, err := s.sessionStore.RearmDeliveredSubagentWithPendingInput(ctx, childID)
-	if err != nil {
-		return fmt.Errorf("rearm child %d after completion delivery: %w", childID, err)
-	}
-
-	if !rearmed {
-		return nil
-	}
-
-	if err := s.sessionStore.UpdateSessionStatus(ctx, childID, sessionstore.SessionStatusActive); err != nil {
-		return fmt.Errorf("activate rearmed child %d: %w", childID, err)
-	}
-
-	if err := s.ensureSessionRunner(ctx, childID); err != nil {
-		return fmt.Errorf("start rearmed child %d: %w", childID, err)
-	}
-
-	return nil
+	return s.completions.Rearm(ctx, childID) //nolint:wrapcheck // Component owns rearm context.
 }
 
 // injectOwedCompletions drains terminal link-ledger entries that were previously
@@ -405,7 +257,7 @@ func (s *svc) finishInterruptedKills(ctx context.Context) error {
 
 // completionContent formats a terminal child's stored result + outcome for the
 // parent, via the shared formatter so it matches get_subagent_result verbatim.
-func (s *svc) completionContent(ctx context.Context, link SubagentLink) string {
+func (s *svc) completionContent(ctx context.Context, link subagent.Link) string {
 	res := childResult{
 		ChildID:  link.ChildID,
 		State:    link.State,
@@ -450,16 +302,13 @@ func (s *svc) Start(ctx context.Context) error {
 
 	owedStops := make(map[int64]int64)
 
-	completionStore, completionStoreOK := s.sessionStore.(sessionstore.StopCompletionStore)
-	if completionStoreOK {
-		stops, selectErr := completionStore.SelectInterruptedExplicitStops(ctx)
-		if selectErr != nil {
-			return fmt.Errorf("select interrupted explicit stops: %w", selectErr)
-		}
+	stops, selectErr := s.stopper.InterruptedExplicitStops(ctx)
+	if selectErr != nil {
+		return fmt.Errorf("select interrupted explicit stops: %w", selectErr)
+	}
 
-		for _, stop := range stops {
-			owedStops[stop.SessionID] = stop.InputID
-		}
+	for _, stop := range stops {
+		owedStops[stop.SessionID] = stop.InputID
 	}
 
 	return s.finishStoppingRoots(ctx, records, stopping, owedStops)
@@ -509,12 +358,14 @@ func (s *svc) finishStoppingRoots(
 		}
 	}
 
-	if budgets, ok := s.sessionStore.(sessionstore.BudgetStore); ok {
-		if err := s.reconcileArmedBudgets(ctx, budgets); err != nil {
-			return err
+	if s.budgetSvc != nil {
+		if s.progress != nil {
+			if err := s.progress.ReconcileArmedBudgets(ctx); err != nil {
+				return fmt.Errorf("reconcile armed budgets: %w", err)
+			}
 		}
 
-		pending, parkErr := budgets.ListPendingBudgetParks(ctx)
+		pending, parkErr := s.budgetSvc.ListPendingParks(ctx)
 		if parkErr != nil {
 			return fmt.Errorf("list pending budget parks: %w", parkErr)
 		}
@@ -534,62 +385,12 @@ func (s *svc) finishStoppingRoots(
 	return nil
 }
 
-//nolint:wsl_v5 // Startup reconciliation keeps capture, observe, and park ordered.
-func (s *svc) reconcileArmedBudgets(ctx context.Context, budgets sessionstore.BudgetStore) error {
-	if s.budgetSvc == nil {
-		return nil
-	}
-
-	progressStore, ok := s.sessionStore.(sessionstore.ProgressStore)
-	if !ok {
-		return nil
-	}
-
-	armed, err := budgets.ListArmedBudgets(ctx)
-	if err != nil {
-		return fmt.Errorf("list armed budgets: %w", err)
-	}
-
-	now := time.Now().UTC()
-	for _, budgetRecord := range armed {
-		facts, captureErr := progressStore.CaptureProgress(ctx, budgetRecord.RootSessionID)
-		if captureErr != nil {
-			return fmt.Errorf("capture budget progress for session %d: %w", budgetRecord.RootSessionID, captureErr)
-		}
-
-		record, fired, observeErr := s.budgetSvc.Observe(
-			ctx, budgetRecord.RootSessionID, facts.CostUSD, now, "",
-		)
-		if observeErr != nil {
-			return fmt.Errorf("reconcile budget for session %d: %w", budgetRecord.RootSessionID, observeErr)
-		}
-
-		if fired {
-			s.parkBudgetTree(ctx, record)
-		}
-	}
-
-	return nil
-}
-
 func (s *svc) startRecovery(ctx context.Context) {
-	s.recoveryMu.Lock()
-	defer s.recoveryMu.Unlock()
-
-	if s.shuttingDown.Load() || s.recoveryDone != nil {
+	if s.shuttingDown.Load() {
 		return
 	}
 
-	recoveryCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
-	done := make(chan struct{})
-	s.recoveryCancel = cancel
-	s.recoveryDone = done
-
-	go func() {
-		defer close(done)
-
-		s.resumeAfterRestart(recoveryCtx)
-	}()
+	s.recovery.Start(ctx, s.resumeAfterRestart)
 }
 
 // sweep is the whole boot recovery in order; Start splits it at the PASS 0
@@ -689,7 +490,7 @@ func (s *svc) resumeSessionsWithRecoverableInput(ctx context.Context) (int, erro
 			}
 
 			resumed++
-		case link.State == LinkStateStopped:
+		case link.State == subagent.StateStopped:
 			// Explicitly parked by /stop.
 		case link.Terminal() && link.DeliveredAt != 0:
 			if err := s.rearmChildAfterDelivery(ctx, sessionID); err != nil {
@@ -712,13 +513,12 @@ func (s *svc) resumeSessionsWithRecoverableInput(ctx context.Context) (int, erro
 // result/outcome survive and they are not mislabelled killed. deadline is one
 // retry budget shared by the whole walk, since Kill waits on it synchronously.
 func (s *svc) cascadeKillChildren(ctx context.Context, parentID int64, depth int, deadline time.Time) {
-	if depth >= maxSubagentDepth {
+	if depth >= admission.MaxDepth {
 		return
 	}
 
-	// ListPendingChildLinks = delivered_at IS NULL, which also includes terminal
-	// children whose completion was not yet delivered and queued children parked in
-	// s.queue — the Terminal() guard below keeps us from re-killing the former.
+	// Pending links include terminal-undelivered and queued children; the
+	// terminal guard preserves the former's stored outcome.
 	links, err := s.links.ListPendingChildLinks(ctx, parentID)
 	if err != nil {
 		// The walk stops here, so part of the subtree survives the teardown.
@@ -741,7 +541,7 @@ func (s *svc) cascadeKillChildren(ctx context.Context, parentID int64, depth int
 
 // warnKilledDescendant emits one audit line per non-terminal descendant torn down
 // by a cascade kill, using only fields already in hand (no message load).
-func (s *svc) warnKilledDescendant(ctx context.Context, link SubagentLink) {
+func (s *svc) warnKilledDescendant(ctx context.Context, link subagent.Link) {
 	iteration := 0
 	if rec, err := s.sessionStore.GetSession(ctx, link.ChildID); err == nil {
 		iteration = rec.Iteration
@@ -763,7 +563,7 @@ func (s *svc) warnKilledDescendant(ctx context.Context, link SubagentLink) {
 func (s *svc) killSubagent(ctx context.Context, childID int64, deadline time.Time) {
 	// Link-terminal must commit before the status write: it is the authoritative
 	// sweep signal, and MarkSessionKilled below hides a non-terminal link for good.
-	err := s.markLinkTerminalRetrying(ctx, deadline, childID, LinkStateKilled, "", LinkOutcomeKilled)
+	err := s.markLinkTerminalRetrying(ctx, deadline, childID, subagent.StateKilled, "", subagent.OutcomeKilled)
 	if err != nil {
 		// Skipping killed_at is what keeps the child recoverable: the sweep selects
 		// on `state IN ('spawned','running') AND killed_at IS NULL`.
@@ -778,12 +578,10 @@ func (s *svc) killSubagent(ctx context.Context, childID int64, deadline time.Tim
 
 	s.removeSchedules(ctx, childID)
 
-	s.mu.Lock()
-	rs, ok := s.loops[childID]
-	s.mu.Unlock()
+	rs, ok := s.runners.Load(childID)
 
 	if ok {
-		rs.stop()
+		rs.Stop()
 	}
 }
 
@@ -804,7 +602,7 @@ func (s *svc) markChildKilled(ctx context.Context, childID int64) {
 }
 
 // resumeChild restarts a child's runner so its loop can finish.
-func (s *svc) resumeChild(ctx context.Context, link SubagentLink) {
+func (s *svc) resumeChild(ctx context.Context, link subagent.Link) {
 	rec, err := s.sessionStore.GetSession(ctx, link.ChildID)
 	if err != nil {
 		return

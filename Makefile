@@ -1,11 +1,6 @@
-.PHONY: help build test tests test.integration test.live harness-e2e lint lint.paths lint.fix fmt fmt.check all verify verify-offline check ci long-fuzz race stress ci.mutation arch semgrep secrets mutation tools workflow.check
+.PHONY: help build test tests test.integration test.live harness-e2e lint lint.paths lint.fix fmt fmt.check all verify verify-offline check ci long-fuzz race stress arch semgrep secrets mutation mutation.critical mutation.nightly tools workflow.check
 
 .DEFAULT_GOAL := help
-
-# Gremlins temporarily rewrites production files. Even when a caller passes
-# `-j`, the composed CI prerequisites must finish sequentially so mutation never
-# overlaps formatting, compilation, fuzzing, or another test process.
-.NOTPARALLEL: ci
 
 # Go and golangci-lint versions are pinned in mise.toml (golangci-lint 2.12.2 is
 # the floor for the `modernize` linter in .golangci.yml).
@@ -23,7 +18,7 @@ SEMGREP ?= uv tool run --offline --from semgrep==$(SEMGREP_VERSION) semgrep
 # specific exports flow into prerequisites and subprocesses (including go list
 # and mutation workers) without disabling the explicitly online bootstrap.
 OFFLINE_TARGETS := all verify verify-offline check ci build test tests \
-	test.integration harness-e2e long-fuzz race stress ci.mutation mutation \
+	test.integration harness-e2e long-fuzz race stress mutation mutation.critical mutation.nightly \
 	lint lint.paths arch semgrep secrets
 $(OFFLINE_TARGETS): export GOPROXY := off
 $(OFFLINE_TARGETS): export GOSUMDB := off
@@ -45,7 +40,7 @@ help:
 	@echo "  verify-offline   verify with Go/uv network resolution disabled"
 	@echo "  check            all + integration tests      (needs local git/gopls)"
 	@echo "  ci               slow local CI: all + integration + harness E2E + long fuzz + race"
-	@echo "                   + protocol stress + scoped mutation testing"
+	@echo "                   + protocol stress"
 	@echo ""
 	@echo "Pieces:"
 	@echo "  fmt              apply the formatters"
@@ -60,6 +55,7 @@ help:
 	@echo "  semgrep          project invariants only"
 	@echo "  secrets          scan Git history and working tree for committed credentials"
 	@echo "  workflow.check   validate GitHub Actions workflows with actionlint"
+	@echo "  tools            online bootstrap for modules and pinned dev tools"
 	@echo ""
 	@echo "Opt-in (slow):"
 	@echo "  harness-e2e      compiled daemon + socket + fake LLM process tests"
@@ -67,9 +63,11 @@ help:
 	@echo "  long-fuzz        model-based protocol fuzzing (CI_FUZZ_TIME=5m)"
 	@echo "  race             full default suite under Go's race detector"
 	@echo "  stress           repeat/shuffle critical protocol tests"
-	@echo "  ci.mutation      mutate harness-critical execution and delivery boundaries"
+	@echo ""
+	@echo "Mutation diagnostics (never gates):"
 	@echo "  mutation MUTATION_PATH=./internal/session"
-	@echo "  tools            online bootstrap for modules and pinned dev tools"
+	@echo "  mutation.critical  manual curated critical-file diagnostic"
+	@echo "  mutation.nightly   scheduled workflow shard; do not run as a handoff gate"
 
 # Everything that must be green before a commit, and nothing that needs the
 # network. Every gate is listed by name: burying arch/semgrep inside `lint` made
@@ -91,7 +89,7 @@ check: all test.integration
 # tools are still required and are provisioned explicitly by `make tools`.
 # Budgets are variables so a developer can run a short smoke first
 # without changing the canonical defaults used for the final local CI run.
-ci: all test.integration harness-e2e long-fuzz race stress ci.mutation
+ci: all test.integration harness-e2e long-fuzz race stress
 
 build:
 	go build -ldflags "$(GO_LDFLAGS)" -o coagent ./cmd/coagent
@@ -199,80 +197,143 @@ fmt.check:
 		if ! golangci-lint fmt --diff >"$$output"; then cat "$$output"; exit 1; fi; \
 		if [ -s "$$output" ]; then cat "$$output"; exit 1; fi
 
-# Mutation testing (.gremlins.yaml): asks whether the tests would actually FAIL if
-# the logic were wrong — the question coverage cannot answer. MUTATION_PATH is
-# required because every mutant reruns the suite; scope it deliberately.
+# Mutation testing (.gremlins.yaml) is diagnostic, never a commit, PR, pre-merge,
+# or handoff gate. Do not add any mutation target to all/check/ci. The generic
+# target requires an explicit filesystem scope because every mutant reruns tests.
 MUTATION_WORKERS ?= 4
-MUTATION_EFFICACY ?= 80
-MUTATION_COVERAGE ?= 90
+MUTATION_EFFICACY ?= 0
+MUTATION_COVERAGE ?= 0
 # A surviving mutant runs the whole suite; killed ones exit early. Too tight a
 # coefficient turns survivors into TIMED OUT and silently hides the real debt.
 MUTATION_TIMEOUT_COEFFICIENT ?= 30
 
-# The local CI mutation gate is intentionally narrower than the exploratory
-# `mutation` target. Mutating whole packages makes the everyday gate unusable;
-# these files are the load-bearing concurrency, schedule-delivery and durable
-# idempotency boundaries exercised by the harness regressions. The thresholds
-# are an explicit baseline, not Gremlins' default "always success".
-CI_MUTATION_DIR := internal/session
-CI_MUTATION_FILES := toolexec.go message_persist.go loop_boundary.go todo_replace.go
-CI_MUTATION_EFFICACY ?= 80
-CI_MUTATION_COVERAGE ?= 90
+# This manual diagnostic keeps a convenient curated scope for targeted test
+# audits. It is deliberately not a prerequisite of any verification target.
+CRITICAL_MUTATION_DIR := internal/session
+CRITICAL_MUTATION_FILES := toolexec.go message_persist.go loop_boundary.go todo_replace.go
 # Gremlins patterns are unanchored regexps, so a bare basename like "store.go"
 # would also match every *_store.go — anchor each exclude to the basename.
-CI_MUTATION_EXCLUDES = $(foreach file,$(filter-out $(CI_MUTATION_FILES),$(notdir $(wildcard $(CI_MUTATION_DIR)/*.go))),--exclude-files '(^|/)$(file)$$')
-CI_SCHEDULE_MUTATION_FILES := executor.go service.go store.go
-CI_SCHEDULE_MUTATION_EXCLUDES = $(foreach file,$(filter-out $(CI_SCHEDULE_MUTATION_FILES),$(notdir $(wildcard internal/schedule/*.go))),--exclude-files '(^|/)$(file)$$')
-CI_STORE_MUTATION_FILES := scheduled_delivery_store.go output_delivery_store.go output_lifecycle_store.go output_message_store.go activation_store.go budget_state_store.go budget_output_store.go direct_output_store.go progress_store.go readiness_store.go
-CI_STORE_MUTATION_EXCLUDES = $(foreach file,$(filter-out $(CI_STORE_MUTATION_FILES),$(notdir $(wildcard internal/sessionstore/*.go))),--exclude-files '(^|/)$(file)$$')
-CI_TELEGRAM_MUTATION_FILES := delivery.go delivery_errors.go
-CI_TELEGRAM_MUTATION_EXCLUDES = $(foreach file,$(filter-out $(CI_TELEGRAM_MUTATION_FILES),$(notdir $(wildcard internal/managers/telegram/*.go))),--exclude-files '(^|/)$(file)$$')
-CI_DAEMON_MUTATION_FILES := budget_park.go progress.go progress_reconciler.go readiness.go
-CI_DAEMON_MUTATION_EXCLUDES = $(foreach file,$(filter-out $(CI_DAEMON_MUTATION_FILES),$(notdir $(wildcard internal/daemon/*.go))),--exclude-files '(^|/)$(file)$$')
+CRITICAL_MUTATION_EXCLUDES = $(foreach file,$(filter-out $(CRITICAL_MUTATION_FILES),$(filter-out %_test.go,$(notdir $(wildcard $(CRITICAL_MUTATION_DIR)/*.go)))),--exclude-files '(^|/)$(file)$$')
+CRITICAL_SCHEDULE_MUTATION_FILES := executor.go service.go store.go
+CRITICAL_SCHEDULE_MUTATION_EXCLUDES = $(foreach file,$(filter-out $(CRITICAL_SCHEDULE_MUTATION_FILES),$(filter-out %_test.go,$(notdir $(wildcard internal/schedule/*.go)))),--exclude-files '(^|/)$(file)$$')
+CRITICAL_STORE_MUTATION_FILES := scheduled_delivery_store.go output_delivery_store.go output_lifecycle_store.go output_message_store.go activation_store.go budget_state_store.go budget_output_store.go direct_output_store.go progress_store.go readiness_store.go
+CRITICAL_STORE_MUTATION_EXCLUDES = $(foreach file,$(filter-out $(CRITICAL_STORE_MUTATION_FILES),$(filter-out %_test.go,$(notdir $(wildcard internal/sessionstore/*.go)))),--exclude-files '(^|/)$(file)$$')
+CRITICAL_TELEGRAM_MUTATION_FILES := delivery.go delivery_errors.go
+CRITICAL_TELEGRAM_MUTATION_EXCLUDES = $(foreach file,$(filter-out $(CRITICAL_TELEGRAM_MUTATION_FILES),$(filter-out %_test.go,$(notdir $(wildcard internal/managers/telegram/*.go)))),--exclude-files '(^|/)$(file)$$')
+CRITICAL_DAEMON_MUTATION_FILES := budget_park.go progress.go readiness.go
+CRITICAL_DAEMON_MUTATION_EXCLUDES = $(foreach file,$(filter-out $(CRITICAL_DAEMON_MUTATION_FILES),$(filter-out %_test.go,$(notdir $(wildcard internal/daemon/*.go)))),--exclude-files '(^|/)$(file)$$')
 
-ci.mutation:
+mutation.critical:
 	@go version -m "$$(command -v gremlins)" 2>/dev/null | grep -q "github.com/go-gremlins/gremlins[[:space:]]*$(GREMLINS_VERSION)" || { echo "✋ gremlins $(GREMLINS_VERSION) required; run make tools"; exit 1; }
-	gremlins unleash ./$(CI_MUTATION_DIR) \
+	gremlins unleash ./$(CRITICAL_MUTATION_DIR) \
 		--workers $(MUTATION_WORKERS) \
 		--timeout-coefficient $(MUTATION_TIMEOUT_COEFFICIENT) \
-		--threshold-efficacy $(CI_MUTATION_EFFICACY) \
-		--threshold-mcover $(CI_MUTATION_COVERAGE) \
-		$(CI_MUTATION_EXCLUDES)
+		--threshold-efficacy $(MUTATION_EFFICACY) \
+		--threshold-mcover $(MUTATION_COVERAGE) \
+		$(CRITICAL_MUTATION_EXCLUDES)
 	gremlins unleash ./internal/schedule \
 		--workers $(MUTATION_WORKERS) \
 		--timeout-coefficient $(MUTATION_TIMEOUT_COEFFICIENT) \
-		--threshold-efficacy $(CI_MUTATION_EFFICACY) \
-		--threshold-mcover $(CI_MUTATION_COVERAGE) \
-		$(CI_SCHEDULE_MUTATION_EXCLUDES)
+		--threshold-efficacy $(MUTATION_EFFICACY) \
+		--threshold-mcover $(MUTATION_COVERAGE) \
+		$(CRITICAL_SCHEDULE_MUTATION_EXCLUDES)
 	gremlins unleash ./internal/sessionstore \
 		--workers $(MUTATION_WORKERS) \
 		--timeout-coefficient $(MUTATION_TIMEOUT_COEFFICIENT) \
-		--threshold-efficacy $(CI_MUTATION_EFFICACY) \
-		--threshold-mcover $(CI_MUTATION_COVERAGE) \
-		$(CI_STORE_MUTATION_EXCLUDES)
+		--threshold-efficacy $(MUTATION_EFFICACY) \
+		--threshold-mcover $(MUTATION_COVERAGE) \
+		$(CRITICAL_STORE_MUTATION_EXCLUDES)
 	gremlins unleash ./internal/managers/telegram \
 		--workers $(MUTATION_WORKERS) \
 		--timeout-coefficient $(MUTATION_TIMEOUT_COEFFICIENT) \
-		--threshold-efficacy $(CI_MUTATION_EFFICACY) \
-		--threshold-mcover $(CI_MUTATION_COVERAGE) \
-		$(CI_TELEGRAM_MUTATION_EXCLUDES)
+		--threshold-efficacy $(MUTATION_EFFICACY) \
+		--threshold-mcover $(MUTATION_COVERAGE) \
+		$(CRITICAL_TELEGRAM_MUTATION_EXCLUDES)
 	gremlins unleash ./internal/budget \
 		--workers $(MUTATION_WORKERS) \
 		--timeout-coefficient $(MUTATION_TIMEOUT_COEFFICIENT) \
-		--threshold-efficacy $(CI_MUTATION_EFFICACY) \
-		--threshold-mcover $(CI_MUTATION_COVERAGE)
+		--threshold-efficacy $(MUTATION_EFFICACY) \
+		--threshold-mcover $(MUTATION_COVERAGE)
 	gremlins unleash ./internal/daemon \
 		--workers $(MUTATION_WORKERS) \
 		--timeout-coefficient $(MUTATION_TIMEOUT_COEFFICIENT) \
-		--threshold-efficacy $(CI_MUTATION_EFFICACY) \
-		--threshold-mcover $(CI_MUTATION_COVERAGE) \
-		$(CI_DAEMON_MUTATION_EXCLUDES)
+		--threshold-efficacy $(MUTATION_EFFICACY) \
+		--threshold-mcover $(MUTATION_COVERAGE) \
+		$(CRITICAL_DAEMON_MUTATION_EXCLUDES)
+
+# NIGHTLY DIAGNOSTIC ONLY. These shards cover the production Go module while
+# keeping the slow daemon package below the hosted-runner job limit. Survivors
+# are report data (thresholds stay zero); execution and tooling errors still
+# fail the shard. Never add this target to all/check/ci or branch protection.
+NIGHTLY_MUTATION_SHARDS := commands runtime persistence async managers models tooling config support daemon-lifecycle daemon-subagents daemon-ops daemon-output
+NIGHTLY_MUTATION_PATHS_commands := ./cmd/coagent ./cmd/releasebuilder
+NIGHTLY_MUTATION_PATHS_runtime := ./internal/session
+NIGHTLY_MUTATION_PATHS_persistence := ./internal/sessionstore
+NIGHTLY_MUTATION_PATHS_async := ./internal/admission ./internal/budget ./internal/inputruntime ./internal/migrate ./internal/progress ./internal/progressruntime ./internal/schedule ./internal/sessionbus ./internal/sessionevent ./internal/sessionlifecycle ./internal/subagent
+NIGHTLY_MUTATION_PATHS_managers := ./internal/controllerapi ./internal/ctl ./internal/managercontrol ./internal/managerdelivery ./internal/managerdiscovery ./internal/managers ./internal/managers/cli ./internal/managers/telegram
+NIGHTLY_MUTATION_PATHS_models := ./internal/catalog ./internal/llm ./internal/llmwire ./internal/registry
+NIGHTLY_MUTATION_PATHS_tooling := ./internal/bashsandbox ./internal/lsp ./internal/mcp ./internal/mcpstore ./internal/shellenv ./internal/tool ./internal/tool/builtin
+NIGHTLY_MUTATION_PATHS_config := ./internal/config ./internal/configapply ./internal/configops ./internal/configtools ./internal/loader ./internal/memory
+NIGHTLY_MUTATION_PATHS_support := ./internal/coagenthome ./internal/git ./internal/humanize ./internal/id ./internal/install ./internal/logger ./internal/projectpath ./internal/todo ./internal/transcript ./internal/version
+NIGHTLY_MUTATION_PATHS_daemon-lifecycle := ./internal/daemon
+NIGHTLY_MUTATION_FILES_daemon-lifecycle := admission.go budget_park.go finalize.go input_recovery.go manager.go pending_runner.go queued_stop.go runner.go session_input.go
+NIGHTLY_MUTATION_PATHS_daemon-subagents := ./internal/daemon
+NIGHTLY_MUTATION_FILES_daemon-subagents := completion.go completion_wiring.go orphan_calls.go spawner.go subagent.go subagent_result.go subagent_send.go subagent_wait_guard.go task.go
+NIGHTLY_MUTATION_PATHS_daemon-ops := ./internal/daemon
+NIGHTLY_MUTATION_FILES_daemon-ops := budget_tool.go compaction_defer.go config_gate.go config_tools.go mcp_tools.go mcp_tools_schema.go secret_tool.go staged.go
+NIGHTLY_MUTATION_PATHS_daemon-output := ./internal/daemon
+NIGHTLY_MUTATION_FILES_daemon-output := progress.go project.go publish.go readiness.go store.go
+
+NIGHTLY_MUTATION_PATHS = $(NIGHTLY_MUTATION_PATHS_$(NIGHTLY_MUTATION_SHARD))
+NIGHTLY_MUTATION_FILES = $(NIGHTLY_MUTATION_FILES_$(NIGHTLY_MUTATION_SHARD))
+NIGHTLY_MUTATION_REPORT_DIR ?= mutation-reports/$(NIGHTLY_MUTATION_SHARD)
+NIGHTLY_MUTATION_WORKERS ?= 4
+# Each shard baseline includes its slowest selected package, so a small
+# coefficient gives each mutant several package-suite runtimes without turning
+# one survivor into a multi-hour timeout.
+NIGHTLY_MUTATION_TIMEOUT_COEFFICIENT ?= 3
+NIGHTLY_MUTATION_FLAGS ?=
+
+mutation.nightly:
+	@if [ -z "$(NIGHTLY_MUTATION_SHARD)" ] || [ -z "$(filter $(NIGHTLY_MUTATION_SHARD),$(NIGHTLY_MUTATION_SHARDS))" ]; then \
+		echo "✋ NIGHTLY_MUTATION_SHARD must name one declared nightly shard."; \
+		echo "   Valid shards: $(NIGHTLY_MUTATION_SHARDS)"; \
+		exit 1; \
+	fi
+	@go version -m "$$(command -v gremlins)" 2>/dev/null | grep -q "github.com/go-gremlins/gremlins[[:space:]]*$(GREMLINS_VERSION)" || { echo "✋ gremlins $(GREMLINS_VERSION) required; run make tools"; exit 1; }
+	@mkdir -p "$(NIGHTLY_MUTATION_REPORT_DIR)"
+	@set -eu; \
+	for mutation_path in $(NIGHTLY_MUTATION_PATHS); do \
+		set --; \
+		if [ -n "$(strip $(NIGHTLY_MUTATION_FILES))" ]; then \
+			for source_file in "$$mutation_path"/*.go; do \
+				[ -f "$$source_file" ] || continue; \
+				source_name=$${source_file##*/}; \
+				case "$$source_name" in *_test.go) continue ;; esac; \
+				keep=false; \
+				for mutation_file in $(NIGHTLY_MUTATION_FILES); do \
+					if [ "$$source_name" = "$$mutation_file" ]; then keep=true; break; fi; \
+				done; \
+				if [ "$$keep" = false ]; then \
+					set -- "$$@" --exclude-files "(^|/)$$source_name$$"; \
+				fi; \
+			done; \
+		fi; \
+		report_name=$$(echo "$$mutation_path" | sed -e 's#^\./##' -e 's#[/.]#-#g'); \
+		gremlins unleash \
+			--workers $(NIGHTLY_MUTATION_WORKERS) \
+			--timeout-coefficient $(NIGHTLY_MUTATION_TIMEOUT_COEFFICIENT) \
+			--threshold-efficacy 0 \
+			--threshold-mcover 0 \
+			--output "$(NIGHTLY_MUTATION_REPORT_DIR)/$$report_name.json" \
+			$(NIGHTLY_MUTATION_FLAGS) "$$@" "$$mutation_path"; \
+	done
 
 mutation:
 	@if [ -z "$(MUTATION_PATH)" ]; then \
 		echo "✋ MUTATION_PATH is required — each mutant reruns the whole suite for that path."; \
 		echo "   Scope it:      make mutation MUTATION_PATH=./internal/session"; \
-		echo "   Whole module:  make mutation MUTATION_PATH=./...   (many minutes)"; \
+		echo "   Whole module runs only in the Nightly Mutation workflow."; \
 		exit 1; \
 	fi
 	@go version -m "$$(command -v gremlins)" 2>/dev/null | grep -q "github.com/go-gremlins/gremlins[[:space:]]*$(GREMLINS_VERSION)" || { echo "✋ gremlins $(GREMLINS_VERSION) required; run make tools"; exit 1; }

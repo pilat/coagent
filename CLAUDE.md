@@ -22,7 +22,9 @@ make semgrep        # semgrep invariants (.semgrep/)
 make tools          # online bootstrap for modules and pinned development tools
 make all            # non-mutating format check + build + lint + arch + semgrep + tests
 make verify-offline # run the everyday gate with Go/uv resolution disabled
-make ci             # slow local CI: all + integration + E2E + 5m fuzz + race + stress + mutation
+make ci             # slow local CI: all + integration + E2E + 5m fuzz + race + stress
+make mutation       # explicit scoped mutation diagnostic; requires MUTATION_PATH
+make mutation.nightly # scheduled-CI shard only; never a commit or PR gate
 
 # Run a single test
 go test ./internal/session/ -run TestLoopDetect -v
@@ -53,13 +55,41 @@ them after every edit or agent turn.
 
 - During investigation and read-only work, run no verification gates.
 - After each coherent behavior or package-level checkpoint, follow the focused
-  test, lint, and mutation cadence in [`docs/testing.md`](docs/testing.md#development-cadence).
+  verification cadence in [`docs/testing.md`](docs/testing.md#development-cadence).
 - Run `make all` once after implementation is complete, immediately before the
   final handoff. If it fails, iterate with the specific failing target or focused
   test, then rerun `make all` once after the fix.
 - Do not repeat a successful command unless a relevant input changed. Reserve
   complete `make check` and `make ci` runs for an explicit request or the
   corresponding pre-merge gate.
+
+Mutation testing is a diagnostic, never a commit, pull-request, pre-merge, or
+final-handoff gate. Do not run `mutation`, `mutation.critical`, or
+`mutation.nightly` merely because a change is ready to hand off. Run a focused
+`make mutation MUTATION_PATH=./path/to/package` only when the task explicitly
+requests mutation evidence or when investigating whether a specific test would
+catch a load-bearing guard, retry, deduplication, or error-path defect.
+
+For an explicitly requested large mutation-testing cycle, finish the coherent
+implementation batch and run `make all` before collecting mutants. Let that
+mutation run finish and collect its complete report before changing tests. Fix
+the resulting test gaps as one batch, using only focused target tests while
+iterating; then run `make all` once and repeat the same mutation scope once. Do
+not interleave one mutant, one fix, and one full-suite run.
+
+Gremlins takes a filesystem path, not a Go package pattern: scoped manual runs
+use paths such as `./internal/session`, never `./...`. The nightly target owns
+whole-module shard selection. A run that generates zero mutants is not a pass.
+Neither is a timed-out mutant: calibrate the timeout from an uncached run of the
+slowest affected package, because a cached coverage baseline can make the
+derived mutation timeout too short.
+
+Whole-module mutation belongs exclusively to the sharded scheduled or manually
+triggered `Nightly Mutation` workflow. It may run for hours and publishes
+machine-readable reports. Agents must not run `make mutation.nightly` locally or
+add it to `all`, `check`, `ci`, branch protection, or another gate unless the
+user explicitly asks to debug that workflow. The nightly job is diagnostic:
+survivors are report data, while execution/tooling failures still fail a shard.
 
 ## Testing Strategy
 

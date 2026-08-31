@@ -7,6 +7,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/pilat/coagent/internal/transcript"
 )
 
 func seededOwnedSession(ctx context.Context, t *testing.T, store Store, projectID int64) *SessionRecord {
@@ -225,7 +227,7 @@ func TestDirectOutputFailsClosedBehindStopFence(t *testing.T) {
 	require.NoError(t, err)
 
 	_, _, err = store.InsertToolResultWithDirectOutput(ctx, session.ID,
-		&StoredMessage{Role: "tool", Content: "late", ToolCallID: "c9", ToolName: "bash"},
+		&transcript.Message{Role: "tool", Content: "late", ToolCallID: "c9", ToolName: "bash"},
 		[]string{"late direct output"})
 	require.Error(t, err, "direct output must fail closed behind the stop fence")
 }

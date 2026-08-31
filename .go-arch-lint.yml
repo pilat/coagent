@@ -25,12 +25,16 @@ excludeFiles:
 components:
   main:           { in: cmd/coagent }
 
+  admission:      { in: internal/admission }
   coagenthome:    { in: internal/coagenthome }
   config:         { in: internal/config }
+  configapply:    { in: internal/configapply }
   logger:         { in: internal/logger }
   llmwire:        { in: internal/llmwire }
   humanize:       { in: internal/humanize }
   sessionevent:   { in: internal/sessionevent }
+  sessionlifecycle: { in: internal/sessionlifecycle }
+  sessionbus:     { in: internal/sessionbus }
   controllerapi:  { in: internal/controllerapi }
   id:             { in: internal/id }
   git:            { in: internal/git }
@@ -46,8 +50,15 @@ components:
   memory:       { in: internal/memory }
   mcpstore:     { in: internal/mcpstore }
   sessionstore: { in: internal/sessionstore }
+  inputruntime: { in: internal/inputruntime }
+  subagent:     { in: internal/subagent }
+  transcript:   { in: internal/transcript }
   managerdelivery: { in: internal/managerdelivery }
+  managercontrol: { in: internal/managercontrol }
+  managerdiscovery: { in: internal/managerdiscovery }
   progress:      { in: internal/progress }
+  projectpath:   { in: internal/projectpath }
+  progressruntime: { in: internal/progressruntime }
   budget:        { in: internal/budget }
 
   tool:       { in: internal/tool }
@@ -90,6 +101,24 @@ deps:
     mayDependOn: [id]
   budget:
     mayDependOn: [sessionstore, tool]
+  sessionstore:
+    mayDependOn: [transcript]
+  inputruntime:
+    mayDependOn: [controllerapi, schedule, session, sessionstore, tool]
+  subagent:
+    mayDependOn: [transcript]
+  sessionbus:
+    mayDependOn: [controllerapi, logger, sessionevent]
+  sessionlifecycle:
+    mayDependOn: [admission, controllerapi, logger, session, sessionstore, subagent, transcript]
+  progressruntime:
+    mayDependOn: [budget, controllerapi, logger, progress, sessionevent, sessionstore, todo]
+  projectpath:
+    mayDependOn: [coagenthome, config, controllerapi]
+  managercontrol:
+    mayDependOn: [config, controllerapi, daemon, git, loader, managerdiscovery, projectpath, sessionbus, sessionevent, sessionstore]
+  managerdiscovery:
+    mayDependOn: [coagenthome, config, controllerapi, loader, projectpath, sessionstore]
 
   # Per-cwd shell activation, consumed by the three per-cwd spawners.
   bashsandbox:
@@ -124,7 +153,7 @@ deps:
 
   # ReAct loop — the heaviest service.
   session:
-    mayDependOn: [builtin, config, git, id, llm, llmwire, loader, logger, mcp, mcpstore, memory, registry, sessionevent, sessionstore, shellenv, todo, tool]
+    mayDependOn: [builtin, config, git, id, llm, llmwire, loader, logger, mcp, mcpstore, memory, progress, registry, sessionevent, sessionstore, shellenv, todo, tool, transcript]
 
   # schedule fires wake-ups only through its own SessionSender interface; it has
   # protocol/logging edges but cannot import session or daemon.
@@ -142,10 +171,13 @@ deps:
 
   # Orchestrator.
   daemon:
-    mayDependOn: [budget, coagenthome, config, configops, configtools, controllerapi, git, id, llmwire, loader, logger, mcp, mcpstore, progress, registry, schedule, session, sessionevent, sessionstore, todo, tool]
+    mayDependOn: [admission, budget, coagenthome, config, configapply, configops, configtools, controllerapi, git, id, inputruntime, llmwire, loader, logger, mcp, mcpstore, progress, progressruntime, projectpath, registry, schedule, session, sessionbus, sessionevent, sessionlifecycle, sessionstore, subagent, todo, tool, transcript]
 
   configops:
     mayDependOn: [coagenthome, config, logger]
+
+  configapply:
+    mayDependOn: [configops]
 
   configtools:
     mayDependOn: [coagenthome, config, configops, tool]

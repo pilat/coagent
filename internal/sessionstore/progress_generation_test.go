@@ -8,6 +8,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/pilat/coagent/internal/transcript"
 )
 
 func ownerAttrs(t *testing.T, db *sql.DB, outputID int64) map[string]any {
@@ -41,7 +43,7 @@ func TestMessageOutputsStampGenerationLifecycleOutputsDoNot(t *testing.T) {
 
 	// Assistant message output.
 	_, commit, err := store.InsertAssistantMessageWithOutput(ctx, session.ID,
-		&StoredMessage{Role: "assistant", Content: "working", ToolCalls: []byte(`[]`)},
+		&transcript.Message{Role: "assistant", Content: "working", ToolCalls: []byte(`[]`)},
 		OutputMessageReplaceable, "working")
 	require.NoError(t, err)
 	require.NotZero(t, commit.OutputID)
@@ -49,7 +51,7 @@ func TestMessageOutputsStampGenerationLifecycleOutputsDoNot(t *testing.T) {
 
 	// Direct output rides a tool result insertion.
 	_, outputs, err := store.InsertToolResultWithDirectOutput(ctx, session.ID,
-		&StoredMessage{Role: "tool", Content: "done", ToolCallID: "c1", ToolName: "bash"},
+		&transcript.Message{Role: "tool", Content: "done", ToolCallID: "c1", ToolName: "bash"},
 		[]string{"direct!"})
 	require.NoError(t, err)
 	require.Len(t, outputs, 1)
@@ -187,8 +189,8 @@ func TestCaptureProgressNoteScoping(t *testing.T) {
 	session, err := store.CreateSession(ctx, projectID, "m", "", map[string]any{"manager_id": "mgr"})
 	require.NoError(t, err)
 
-	assistant := func(content, toolCalls string) *StoredMessage {
-		return &StoredMessage{Role: "assistant", Content: content, ToolCalls: jsonRaw(toolCalls)}
+	assistant := func(content, toolCalls string) *transcript.Message {
+		return &transcript.Message{Role: "assistant", Content: content, ToolCalls: jsonRaw(toolCalls)}
 	}
 
 	// Pre-boundary narration from an old turn.
@@ -205,7 +207,7 @@ func TestCaptureProgressNoteScoping(t *testing.T) {
 	require.NoError(t, err)
 
 	// Reasoning-only row: text empty, reasoning set.
-	_, err = store.InsertMessage(ctx, session.ID, &StoredMessage{
+	_, err = store.InsertMessage(ctx, session.ID, &transcript.Message{
 		Role: "assistant", Content: "", ReasoningContent: "thinking",
 		ToolCalls: jsonRaw(`[{"id":"3","name":"bash","input":{}}]`),
 	})
@@ -249,7 +251,7 @@ func TestCaptureProgressExcludesPublishedDirectReply(t *testing.T) {
 	_, err = store.PromoteInput(ctx, input.ID, input.RawContent)
 	require.NoError(t, err)
 
-	_, output, err := store.InsertAssistantMessageWithOutput(ctx, session.ID, &StoredMessage{
+	_, output, err := store.InsertAssistantMessageWithOutput(ctx, session.ID, &transcript.Message{
 		Role: "assistant", Content: "Stopping the mutation run",
 		ToolCalls: jsonRaw(`[{"id":"stop","name":"bash","input":{}}]`),
 	}, OutputMessagePersistent, "Stopping the mutation run")
@@ -280,7 +282,7 @@ func TestScheduledTurnWithoutNarrationDoesNotReuseNote(t *testing.T) {
 	_, err = store.PromoteInput(ctx, input.ID, "go")
 	require.NoError(t, err)
 
-	_, err = store.InsertMessage(ctx, session.ID, &StoredMessage{
+	_, err = store.InsertMessage(ctx, session.ID, &transcript.Message{
 		Role: "assistant", Content: "old narration",
 		ToolCalls: jsonRaw(`[{"id":"1","name":"bash","input":{}}]`),
 	})
@@ -288,7 +290,7 @@ func TestScheduledTurnWithoutNarrationDoesNotReuseNote(t *testing.T) {
 
 	// A scheduled injection advances the boundary; its turn has no narration.
 	_, inserted, err := store.ResetSessionContextOnce(ctx, session.ID, "sched-1", "fp-s1",
-		[]*StoredMessage{{Role: "user", Content: "scheduled turn"}})
+		[]*transcript.Message{{Role: "user", Content: "scheduled turn"}})
 	require.NoError(t, err)
 	require.True(t, inserted)
 

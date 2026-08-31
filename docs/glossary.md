@@ -9,7 +9,12 @@ The shared vocabulary of coagent — the words that name its concepts, so code, 
 ## Actors & entities
 
 **daemon**:
-The single long-lived coagent process. It owns session lifecycle, persistence, the MCP pool, admission control, and the subagent ledger, and it *implements* the in-process `controllerapi.Controller`. It binds no *network* socket — the only thing it listens on is the **control socket**, a same-user unix socket.
+The single long-lived coagent process. It coordinates session lifecycle, durable
+producer ledgers and admission and owns the MCP pool. `managercontrol`
+implements the in-process `controllerapi.Controller` over the daemon's backend
+contract. Durable ledgers, runner lifecycle and capacity counters remain owned
+by their domain packages. It binds no *network* socket — the only thing it
+listens on is the **control socket**, a same-user unix socket.
 _Avoid_: server, gateway.
 
 **session**:
@@ -21,7 +26,12 @@ A unit of work a manager submits to the daemon. It has no Go type of its own —
 _Avoid_: job, request (for the work-unit); unqualified "task" in code.
 
 **Controller** (`controllerapi.Controller`):
-The private manager-bound in-process capability the daemon implements for built-in managers — create sessions, durably send messages, stop/kill them, and subscribe to their owned session events. The composition root binds one capability to each manager ID; session-addressed operations reject every other owner. It is an internal package boundary, not a supported external API.
+The private manager-bound in-process capability `managercontrol` implements over
+the daemon backend for built-in managers — create sessions, durably send
+messages, stop/kill them, and subscribe to their owned session events. The
+composition root binds one capability to each manager ID; session-addressed
+operations reject every other owner. It is an internal package boundary, not a
+supported external API.
 _Avoid_: using "controller" for a front-end integration — that is a manager.
 
 **manager**:
@@ -78,6 +88,13 @@ _Avoid_: setup agent, onboarding agent (it is not an agent type).
 **agent loop**:
 The core cycle a session runs: call the LLM, execute the returned tool calls, record the observations, repeat until done or capped. The function is `runLoop`.
 _Avoid_: ReAct loop (doc-only alias), main loop.
+
+**runner**:
+The in-memory lifecycle holder for one active session: cancel/done boundary,
+live session service, queued typed inputs and admission metadata. Its registry,
+launch, shutdown and terminal coordination belong to `sessionlifecycle`; it is
+reconstructible and never a durable work record.
+_Avoid_: session (the durable/live task identity), agent loop (the model/tool cycle).
 
 **iteration**:
 One turn of the agent loop — a single LLM call plus the tool executions it triggers. Bounded by a max-iterations cap. An iteration is a *sub-unit* of the loop, not another word for it.
@@ -252,10 +269,15 @@ New standalone work injected by a one-shot or cron schedule, rather than the res
 _Avoid_: sleep wake, subagent wake.
 
 **admission control**:
-The daemon's concurrency governor — caps on total, child, and per-parent sessions plus spawn depth, with a FIFO overflow queue.
+The `admission` package's concurrency governor — caps on total, child, and
+per-parent sessions plus spawn depth. `sessionlifecycle` coordinates its verdict
+with durable-aware FIFO overflow queues and runner registration.
 
-**subagent link ledger** (`LinkStore`):
-The daemon's durable record (`subagent_links` table) of parent↔child subagent relationships, serialized activation state (`activation_seq`), and parent-delivery state. A stopped link preserves the child session for explicit follow-up without making startup resume it.
+**subagent link ledger** (`subagent.Store`):
+The subagent package's durable record (`subagent_links` table) of parent↔child
+relationships, serialized activation state (`activation_seq`), and
+parent-delivery state. A stopped link preserves the child session for explicit
+follow-up without making startup resume it.
 
 **pending external call**:
 A tool call whose outcome comes from outside the loop — a sleep timer, a subagent, a config apply across a restart, a person typing at a terminal. The loop never re-executes one and never advances past it; transcript repair never stubs one; only an injection targeting its call id resolves it. The daemon's in-memory **staged-call ledger** records the ones it is itself answering.
@@ -264,8 +286,9 @@ _Avoid_: suspended call, blocked tool.
 **stop boundary**:
 The durable `/stop` transition for an active root tree. It fences producers,
 cancels and joins runners, settles active unresolved calls, then marks the tree
-stopped. Later root input and explicit child follow-up are new work; neither
-replays pre-stop calls.
+stopped. `sessionlifecycle` owns the tree fence and terminal settlement; daemon
+callbacks settle tool and schedule effects between those phases. Later root
+input and explicit child follow-up are new work; neither replays pre-stop calls.
 _Avoid_: cancellation alone, pause.
 
 **pending apply**:
@@ -345,9 +368,9 @@ The installed unit/plist no longer matching what the running version would rende
 
 Naming conflicts this vocabulary resolves. "Resolved" means the winner above is the term to use going forward; where existing code or prose still uses a loser, fix it on touch rather than in a sweep.
 
-- **controller vs manager** — *Resolved.* `controllerapi.Controller` is the daemon-implemented private interface; a built-in front end is a **manager**. It does not name a public extension point.
+- **controller vs manager** — *Resolved.* `controllerapi.Controller` is the private manager-bound interface implemented by `managercontrol` over the daemon backend; a built-in front end is a **manager**. It does not name a public extension point.
 - **task (work-unit) vs `task` tool** — *Resolved.* "task" is prose for a submitted unit of work, realized as a session with no `Task` type; the only code symbol named `task` is the subagent-spawning tool. Qualify in code contexts.
-- **state / status (three vocabularies)** — *Resolved.* Runtime **state** = `controllerapi.State*` (running/idle/error, in-memory); persisted **status** = active/completed/suspended/error; subagent **link state** = `LinkState*`. Don't treat "running" and "active" as one word.
+- **state / status (three vocabularies)** — *Resolved.* Runtime **state** = `controllerapi.State*` (running/idle/error, in-memory); persisted **status** = active/completed/suspended/error; subagent **link state** = `subagent.State*`. Don't treat "running" and "active" as one word.
 - **agent loop vs ReAct loop vs iteration** — *Resolved.* Canonical is **agent loop** (matches `runLoop`); "ReAct loop" is an acceptable doc alias; **iteration** is one turn, not a synonym for the loop.
 - **clearing vs compaction** — *Resolved.* **Compaction** is the whole operation and the only automatic pressure response; clearing (dropping tool-result bodies) was removed with [ADR-0035](adr/0035-compaction-summarizes-a-bounded-head.md) — summarizer evidence is serialized, never erased. The old "context ladder" is retired.
 - **Notification (overloaded type)** — *Resolved.* Use **session event** / `sessionevent.Notification` for session→controller events; it collides with `lsp.Notification` (JSON-RPC). Daemon transcript delivery is now a sealed typed `sessionInput`, not another notification bag.

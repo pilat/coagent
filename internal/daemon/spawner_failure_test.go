@@ -9,7 +9,9 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/pilat/coagent/internal/sessionlifecycle"
 	"github.com/pilat/coagent/internal/sessionstore"
+	"github.com/pilat/coagent/internal/subagent"
 )
 
 type stoppingGateStore struct {
@@ -83,7 +85,9 @@ func TestStopRejectsSpawnQueuedBehindDurableBoundary(t *testing.T) {
 	lock.permit <- struct{}{}
 	<-lock.permit
 	h.mgr.sessionStore = store
-	h.mgr.treeMu = lock
+	h.mgr.stopper = sessionlifecycle.NewStopperWithLock(
+		store, h.mgr.lifecycleStore, h.mgr.managerOutputs, h.mgr.links, lock,
+	)
 	t.Cleanup(func() {
 		store.releaseOnce.Do(func() { close(store.release) })
 		h.mgr.sessionStore = store.OrchestrationStore
@@ -134,7 +138,7 @@ func TestSpawnRejectsStoppedParent(t *testing.T) {
 func TestChildDepth_ReadErrorCancelsSpawn(t *testing.T) {
 	var flaky *flakyLinkStore
 
-	h := newSubagentHarnessDecorated(t, trivialRespond, func(inner LinkStore) LinkStore {
+	h := newSubagentHarnessDecorated(t, trivialRespond, func(inner subagent.Store) subagent.Store {
 		flaky = newFlakyLinkStore(inner)
 		return flaky
 	})

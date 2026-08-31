@@ -10,14 +10,15 @@ import (
 	"github.com/pilat/coagent/internal/session"
 	"github.com/pilat/coagent/internal/sessionstore"
 	"github.com/pilat/coagent/internal/tool"
+	"github.com/pilat/coagent/internal/transcript"
 )
 
-func storedAssistant(toolCalls string) *sessionstore.StoredMessage {
-	return &sessionstore.StoredMessage{Role: "assistant", ToolCalls: []byte(toolCalls)}
+func storedAssistant(toolCalls string) *transcript.Message {
+	return &transcript.Message{Role: "assistant", ToolCalls: []byte(toolCalls)}
 }
 
-func storedToolResult(callID string) *sessionstore.StoredMessage {
-	return &sessionstore.StoredMessage{Role: "tool", ToolCallID: callID, Content: "done"}
+func storedToolResult(callID string) *transcript.Message {
+	return &transcript.Message{Role: "tool", ToolCallID: callID, Content: "done"}
 }
 
 // The name-keyed pending set read from the durable transcript is what decides
@@ -25,28 +26,28 @@ func storedToolResult(callID string) *sessionstore.StoredMessage {
 func TestUnresolvedStoredExternalCalls(t *testing.T) {
 	tests := []struct {
 		name string
-		msgs []*sessionstore.StoredMessage
+		msgs []*transcript.Message
 		want []session.PendingToolCall
 	}{
 		{
 			name: "an unresolved external call is pending",
-			msgs: []*sessionstore.StoredMessage{storedAssistant(`[{"id":"c1","name":"request_secret"}]`)},
+			msgs: []*transcript.Message{storedAssistant(`[{"id":"c1","name":"request_secret"}]`)},
 			want: []session.PendingToolCall{{ID: "c1", Name: tool.IDRequestSecret}},
 		},
 		{
 			name: "an answered call is not",
-			msgs: []*sessionstore.StoredMessage{
+			msgs: []*transcript.Message{
 				storedAssistant(`[{"id":"c1","name":"request_secret"}]`),
 				storedToolResult("c1"),
 			},
 		},
 		{
 			name: "an in-loop tool is not external, however unresolved",
-			msgs: []*sessionstore.StoredMessage{storedAssistant(`[{"id":"c1","name":"bash"}]`)},
+			msgs: []*transcript.Message{storedAssistant(`[{"id":"c1","name":"bash"}]`)},
 		},
 		{
 			name: "a repeated call id is reported once",
-			msgs: []*sessionstore.StoredMessage{
+			msgs: []*transcript.Message{
 				storedAssistant(`[{"id":"c1","name":"sleep"}]`),
 				storedAssistant(`[{"id":"c1","name":"sleep"}]`),
 			},
@@ -54,7 +55,7 @@ func TestUnresolvedStoredExternalCalls(t *testing.T) {
 		},
 		{
 			name: "a call with no id cannot be answered and is skipped",
-			msgs: []*sessionstore.StoredMessage{storedAssistant(`[{"name":"sleep"}]`)},
+			msgs: []*transcript.Message{storedAssistant(`[{"name":"sleep"}]`)},
 		},
 	}
 
@@ -70,7 +71,7 @@ func TestUnresolvedStoredExternalCalls(t *testing.T) {
 // A transcript row nobody can decode must fail the session's sweep, not be read
 // as "nothing is pending here".
 func TestUnresolvedStoredExternalCalls_UndecodableRow(t *testing.T) {
-	_, err := unresolvedStoredExternalCalls([]*sessionstore.StoredMessage{storedAssistant(`{`)})
+	_, err := unresolvedStoredExternalCalls([]*transcript.Message{storedAssistant(`{`)})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "decode tool calls")
 }

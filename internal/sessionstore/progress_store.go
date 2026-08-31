@@ -47,6 +47,7 @@ type ProgressStore interface {
 	CaptureProgress(ctx context.Context, rootID int64) (*ProgressFacts, error)
 	ListAutonomousProgressRoots(ctx context.Context) ([]int64, error)
 	OutboxWatermark(ctx context.Context, sessionID int64) (int64, error)
+	OutputBySourceKey(ctx context.Context, sessionID int64, sourceKey string) (*OutputRecord, error)
 	// EnqueueProgressOutput commits one causal progress card: it succeeds only
 	// while the captured generation and status still own the session.
 	EnqueueProgressOutput(

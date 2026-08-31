@@ -8,9 +8,9 @@ import (
 	"strings"
 
 	"github.com/pilat/coagent/internal/config"
+	"github.com/pilat/coagent/internal/configapply"
 	"github.com/pilat/coagent/internal/configops"
 	"github.com/pilat/coagent/internal/ctl"
-	"github.com/pilat/coagent/internal/daemon"
 	"github.com/pilat/coagent/internal/llm"
 )
 
@@ -24,7 +24,7 @@ type replyHook interface {
 // registerConfigOps wires the bootstrap ops onto the control socket. They are
 // the deterministic half of onboarding: everything past the first provider key
 // happens in chat, through the session config tools.
-func registerConfigOps(srv *ctl.Server, applier *daemon.ConfigApplier, resolver secretRequestResolver) error {
+func registerConfigOps(srv *ctl.Server, applier configapply.Service, resolver secretRequestResolver) error {
 	setProviderHandler := func(_ context.Context, c *ctl.Conn, params json.RawMessage) (any, *ctl.Error) {
 		var p ctl.SetProviderParams
 		if err := json.Unmarshal(params, &p); err != nil {
@@ -71,7 +71,7 @@ func registerControlHandler(server *ctl.Server, op string, handler ctl.Handler) 
 // setProvider claims the apply slot before it touches anything: the slot is
 // daemon-wide (a session may already be suspended on a change of its own), and a
 // caller refused after the credential write would leave an orphan on disk.
-func setProvider(applier *daemon.ConfigApplier, c replyHook, p ctl.SetProviderParams) configops.Verdict {
+func setProvider(applier configapply.Service, c replyHook, p ctl.SetProviderParams) configops.Verdict {
 	if strings.TrimSpace(p.Name) == "" || strings.TrimSpace(p.Driver) == "" {
 		return configops.Reject("providers", errors.New("a provider needs a name and a driver"))
 	}
@@ -95,7 +95,7 @@ func setProvider(applier *daemon.ConfigApplier, c replyHook, p ctl.SetProviderPa
 // goes out first when it can, but a reply that never reaches the wire skips the
 // hook — and a committed change whose restart never runs leaves the daemon on
 // the superseded config, still holding the apply slot, for the rest of its life.
-func restartOnCommit(c replyHook, applier *daemon.ConfigApplier) {
+func restartOnCommit(c replyHook, applier configapply.Service) {
 	c.AfterReply(applier.Restart)
 
 	go func() {
@@ -109,7 +109,7 @@ func restartOnCommit(c replyHook, applier *daemon.ConfigApplier) {
 // second. The order is the invariant: a crash or a refusal between the two leaves
 // an orphan secret — inert, and overwritten by the retry — never a config
 // pointing at a ${VAR} that does not exist, which is fatal at the next boot.
-func commitProvider(applier *daemon.ConfigApplier, p ctl.SetProviderParams) configops.Verdict {
+func commitProvider(applier configapply.Service, p ctl.SetProviderParams) configops.Verdict {
 	ops := applier.Ops()
 
 	entry := config.ProviderEntry{
@@ -172,7 +172,7 @@ func providerModels(entry config.ProviderEntry, explicit []string) []string {
 // value, so it has to come back to pick up the new one.
 func setSecret(
 	ctx context.Context,
-	applier *daemon.ConfigApplier,
+	applier configapply.Service,
 	resolver secretRequestResolver,
 	c replyHook,
 	p ctl.SetSecretParams,

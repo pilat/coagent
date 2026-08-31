@@ -261,7 +261,6 @@ func budgetOutputByKey(
 	return &OutputCommit{OutputID: id, OwnerID: owner, Existing: true}, nil
 }
 
-//nolint:goconst // Release reasons deliberately mirror, but are not, session states.
 func validBudgetReleaseReason(reason string) bool {
 	switch reason {
 	case "cleared", "resumed", "completed", "error", "stopped", "killed", "replaced":

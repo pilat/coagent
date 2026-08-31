@@ -8,8 +8,10 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/pilat/coagent/internal/admission"
 	"github.com/pilat/coagent/internal/llm"
 	"github.com/pilat/coagent/internal/llmwire"
+	"github.com/pilat/coagent/internal/subagent"
 )
 
 // trivialRespond: every session finishes immediately. Used when the test drives
@@ -56,8 +58,11 @@ func lastAssistantTextDTO(msgs []llmwire.Message) string {
 // priority-inversion deadlock. If this relationship ever flips, durable blocking
 // fan-in can deadlock — fail loudly at compile/test time instead.
 func TestAdmissionCaps_ChildrenCappedBelowTotal(t *testing.T) {
-	assert.Less(t, maxChildSlots, maxTotalSlots, "maxChildSlots must stay strictly below maxTotalSlots")
-	assert.LessOrEqual(t, maxInFlightPerParent, maxChildSlots, "per-parent cap cannot exceed the child cap")
+	assert.Less(
+		t, admission.MaxChildren, admission.MaxTotal,
+		"admission.MaxChildren must stay strictly below admission.MaxTotal",
+	)
+	assert.LessOrEqual(t, admission.MaxPerParent, admission.MaxChildren, "per-parent cap cannot exceed the child cap")
 }
 
 func TestIntegration_DepthCapRejected(t *testing.T) {
@@ -111,9 +116,9 @@ func TestIntegration_SuspendedParentHoldsNoSlot(t *testing.T) {
 	// The parent suspends (loop exits, slot released); only the in-flight child
 	// holds a slot. The suspended parent holds ZERO.
 	h.waitUntil("parent suspended, only child holds a slot", func() bool {
-		return !h.mgr.HasActiveLoop(parentID) && h.mgr.admit.liveTotal() == 1
+		return !h.mgr.HasActiveLoop(parentID) && h.mgr.admit.LiveTotal() == 1
 	})
-	assert.Equal(t, int64(1), h.mgr.admit.liveChildren())
+	assert.Equal(t, int64(1), h.mgr.admit.LiveChildren())
 
 	closeOnce(release)
 	h.waitForDelivery(link.ChildID)
@@ -152,8 +157,8 @@ func TestIntegration_CascadeKillsBlockingChild(t *testing.T) {
 
 	childLink, err := h.links.GetLink(h.ctx, link.ChildID)
 	require.NoError(t, err)
-	assert.Equal(t, LinkStateKilled, childLink.State)
-	assert.Equal(t, LinkOutcomeKilled, childLink.Outcome, "a killed child reports the killed outcome")
+	assert.Equal(t, subagent.StateKilled, childLink.State)
+	assert.Equal(t, subagent.OutcomeKilled, childLink.Outcome, "a killed child reports the killed outcome")
 }
 
 func TestIntegration_ChildPanicMarksError(t *testing.T) {
@@ -173,8 +178,8 @@ func TestIntegration_ChildPanicMarksError(t *testing.T) {
 
 	res, err := h.mgr.Result(h.ctx, link.ChildID)
 	require.NoError(t, err)
-	assert.Equal(t, LinkStateError, res.State)
-	assert.Equal(t, LinkOutcomeError, res.Outcome, "a panicked child reports the error outcome")
+	assert.Equal(t, subagent.StateError, res.State)
+	assert.Equal(t, subagent.OutcomeError, res.Outcome, "a panicked child reports the error outcome")
 
 	msgs := h.parentMessages(parentID)
 	require.NoError(t, llm.ValidateToolPairing(msgs))
@@ -221,8 +226,8 @@ func TestIntegration_BlockingChildTimeout(t *testing.T) {
 
 	res, err := h.mgr.Result(h.ctx, link.ChildID)
 	require.NoError(t, err)
-	assert.Equal(t, LinkStateError, res.State, "a timed-out child is terminal-error")
-	assert.Equal(t, LinkOutcomeError, res.Outcome, "a timed-out child reports the error outcome")
+	assert.Equal(t, subagent.StateError, res.State, "a timed-out child is terminal-error")
+	assert.Equal(t, subagent.OutcomeError, res.Outcome, "a timed-out child reports the error outcome")
 
 	msgs := h.parentMessages(parentID)
 	require.NoError(t, llm.ValidateToolPairing(msgs))
@@ -260,8 +265,8 @@ func TestIntegration_StressBlockingNoDeadlock(t *testing.T) {
 	}
 
 	// Caps were never exceeded; everything drained back to idle.
-	assert.LessOrEqual(t, h.mgr.admit.liveChildren(), int64(maxChildSlots))
-	assert.LessOrEqual(t, h.mgr.admit.liveTotal(), int64(maxTotalSlots))
+	assert.LessOrEqual(t, h.mgr.admit.LiveChildren(), int64(admission.MaxChildren))
+	assert.LessOrEqual(t, h.mgr.admit.LiveTotal(), int64(admission.MaxTotal))
 }
 
 func TestIntegration_BackgroundQueueDrains(t *testing.T) {
@@ -308,7 +313,7 @@ func TestIntegration_BackgroundQueueDrains(t *testing.T) {
 	// Per-parent cap is 8: 8 children run (blocked on release), the other 2 are
 	// parked in the in-memory FIFO. Every link is persisted regardless.
 	h.waitUntil("8 admitted, 2 queued", func() bool {
-		return h.mgr.admit.liveChildren() == int64(maxInFlightPerParent) && h.queueLen() == 2
+		return h.mgr.admit.LiveChildren() == int64(admission.MaxPerParent) && h.queueLen() == 2
 	})
 
 	// Release: the 8 finish, freeing slots; drainQueue starts the 2 parked ones.
@@ -321,7 +326,7 @@ func TestIntegration_BackgroundQueueDrains(t *testing.T) {
 	}
 
 	h.waitUntil("queue drained", func() bool { return h.queueLen() == 0 })
-	assert.LessOrEqual(t, h.mgr.admit.liveChildren(), int64(maxChildSlots))
+	assert.LessOrEqual(t, h.mgr.admit.LiveChildren(), int64(admission.MaxChildren))
 }
 
 // closeOnce closes ch unless it is already closed (cleanup helper for hold channels).
@@ -334,13 +339,10 @@ func closeOnce(ch chan struct{}) {
 }
 
 func (h *subagentHarness) queueLen() int {
-	h.mgr.queueMu.Lock()
-	defer h.mgr.queueMu.Unlock()
-
-	return len(h.mgr.queue)
+	return h.mgr.childQueue.Len()
 }
 
-func (h *subagentHarness) waitForLinkByCall(parentID int64, callID string) SubagentLink {
+func (h *subagentHarness) waitForLinkByCall(parentID int64, callID string) subagent.Link {
 	h.t.Helper()
 	h.waitUntil("link for "+callID, func() bool {
 		link, err := h.links.GetLinkByTaskCallID(h.ctx, parentID, callID)

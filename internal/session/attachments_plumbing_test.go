@@ -46,7 +46,7 @@ func newImagePlumbAgent(t *testing.T) (*svc, *imageStubTool) {
 	registry.Register(stub)
 	s := &svc{
 		llmClient:    &compactionMockLLM{},
-		ms:           newMessageStore(store, sessionID),
+		ms:           newMessageStore(store, sessionID, nil),
 		loopDetector: newLoopDetector(),
 		registry:     registry,
 		prompt:       newPromptBuilder(testPrompt, "", ""),

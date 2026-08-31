@@ -39,7 +39,7 @@ func newScheduledDeliverySessionStore(t *testing.T) (sessionstore.Store, int64) 
 
 func TestMessageStore_ScheduledNotificationDeliveryIsExactlyOnce(t *testing.T) {
 	store, sessionID := newScheduledDeliverySessionStore(t)
-	ms := newMessageStore(store, sessionID)
+	ms := newMessageStore(store, sessionID, nil)
 
 	applied, err := ms.addToolNotificationPairOnce(
 		context.Background(), "schedule:one-shot:7", "call-1", "schedule", "due",
@@ -69,7 +69,7 @@ func TestSession_FreshScheduledDeliveryResetsExactlyOnce(t *testing.T) {
 	s := &svc{
 		id:           sessionID,
 		agentsMD:     "PROJECT RULES",
-		ms:           newMessageStore(store, sessionID),
+		ms:           newMessageStore(store, sessionID, nil),
 		loopDetector: newLoopDetector(),
 		todoStore:    todo.New(),
 		store:        store,

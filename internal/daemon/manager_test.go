@@ -19,6 +19,7 @@ import (
 	"github.com/pilat/coagent/internal/session"
 	"github.com/pilat/coagent/internal/sessionevent"
 	"github.com/pilat/coagent/internal/sessionstore"
+	"github.com/pilat/coagent/internal/subagent"
 	"github.com/pilat/coagent/internal/tool"
 )
 
@@ -280,7 +281,23 @@ func newTestManager(t *testing.T) (*svc, *mockFactory, Store) {
 	sessStore := sessionstore.NewStore(db)
 
 	factory := &mockFactory{}
-	mgr := newSvc(factory, store, sessStore, sessStore, NewLinkStore(db), nil, nil)
+	mgr := newSvc(
+		factory,
+		store,
+		sessStore,
+		sessStore,
+		sessStore,
+		sessStore,
+		sessStore,
+		sessStore,
+		sessStore,
+		subagent.NewStore(db),
+		subagent.NewTransactions(db),
+		nil,
+		sessStore,
+		nil,
+		nil,
+	)
 	return mgr, factory, store
 }
 
@@ -299,7 +316,12 @@ func newTestManagerWithSchedule(t *testing.T) (*svc, *mockFactory, Store, schedu
 	schedStore := schedule.NewStore(db)
 
 	factory := &mockFactory{}
-	mgr := newSvc(factory, store, sessStore, sessStore, NewLinkStore(db), schedule.NewService(schedStore), nil)
+	mgr := newSvc(
+		factory, store, sessStore, sessStore, sessStore,
+		sessStore, sessStore, sessStore, sessStore,
+		subagent.NewStore(db), subagent.NewTransactions(db),
+		nil, sessStore, schedule.NewService(schedStore), nil,
+	)
 	return mgr, factory, store, schedStore
 }
 
@@ -474,9 +496,7 @@ func TestManager_Shutdown(t *testing.T) {
 
 	mgr.Shutdown(5 * time.Second)
 
-	mgr.mu.Lock()
-	remaining := len(mgr.loops)
-	mgr.mu.Unlock()
+	remaining := mgr.runners.Len()
 	assert.Zero(t, remaining, "all loops should be cleaned up after shutdown")
 }
 

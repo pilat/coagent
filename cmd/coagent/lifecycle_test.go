@@ -13,10 +13,10 @@ import (
 
 	"github.com/pilat/coagent/internal/coagenthome"
 	"github.com/pilat/coagent/internal/config"
+	"github.com/pilat/coagent/internal/configapply"
 	"github.com/pilat/coagent/internal/configops"
 	"github.com/pilat/coagent/internal/controllerapi"
 	"github.com/pilat/coagent/internal/ctl"
-	"github.com/pilat/coagent/internal/daemon"
 	"github.com/pilat/coagent/internal/managers/cli"
 )
 
@@ -44,7 +44,7 @@ func TestStartCore_RegistersDatabaseAndDaemonLifecycle(t *testing.T) {
 		a,
 		lifecycleTestConfig(),
 		nil,
-		daemon.NewConfigApplier(nil, nil),
+		configapply.New(nil, nil),
 	)
 	require.NoError(t, err)
 	require.NotNil(t, core)
@@ -82,7 +82,7 @@ func TestStartCore_PartialStartLeavesOnlyCreatedComponentsForCleanup(t *testing.
 		a,
 		&config.Config{},
 		nil,
-		daemon.NewConfigApplier(nil, nil),
+		configapply.New(nil, nil),
 	)
 
 	require.Nil(t, core)

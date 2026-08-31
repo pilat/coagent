@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/pilat/coagent/internal/budget"
 	"github.com/pilat/coagent/internal/config"
 	"github.com/pilat/coagent/internal/controllerapi"
 	"github.com/pilat/coagent/internal/llm"
@@ -20,6 +21,7 @@ import (
 	"github.com/pilat/coagent/internal/session"
 	"github.com/pilat/coagent/internal/sessionevent"
 	"github.com/pilat/coagent/internal/sessionstore"
+	"github.com/pilat/coagent/internal/subagent"
 )
 
 // TestSetModelUnknownModelNeverReachesTheRecord drives the user-visible path: a
@@ -115,14 +117,14 @@ func newModelAwareHarness(
 
 	store := NewStore(db)
 	sessStore := sessionstore.NewStore(db)
-	links := NewLinkStore(db)
+	links := subagent.NewStore(db)
 	schedStore := schedule.NewStore(db)
 
 	workDir := t.TempDir()
 	cfg := &config.Config{WorkDir: workDir, Model: known[0]}
 
 	factory := session.NewFactoryWithOptions(
-		cfg, nil, nil, sessStore, nil, nil, nil, nil, nil,
+		cfg, nil, nil, sessStore, sessStore, nil, nil, nil, nil, nil,
 		session.WithLLMClientFactory(func(c *config.Config) (llm.Client, error) {
 			if !slices.Contains(known, c.Model) {
 				return nil, fmt.Errorf("model %q not found in config", c.Model)
@@ -133,7 +135,20 @@ func newModelAwareHarness(
 	)
 
 	mgr := newSvc(
-		factory, store, sessStore, sessStore, links, schedule.NewService(schedStore),
+		factory,
+		store,
+		sessStore,
+		sessStore,
+		sessStore,
+		sessStore,
+		sessStore,
+		sessStore,
+		sessStore,
+		links,
+		subagent.NewTransactions(db),
+		budget.New(sessStore),
+		sessStore,
+		schedule.NewService(schedStore),
 		func() string { return known[0] },
 	)
 
@@ -151,18 +166,13 @@ func newModelAwareHarness(
 }
 
 func (h *subagentHarness) liveSession(sessionID int64) session.Service {
-	h.mgr.mu.Lock()
-	rs, ok := h.mgr.loops[sessionID]
-	h.mgr.mu.Unlock()
+	rs, ok := h.mgr.runners.Load(sessionID)
 
 	if !ok {
 		return nil
 	}
 
-	rs.svcMu.Lock()
-	defer rs.svcMu.Unlock()
-
-	return rs.service
+	return rs.Service()
 }
 
 func countAssistantReplies(msgs []llmwire.Message) int {

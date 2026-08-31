@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/pilat/coagent/internal/llmwire"
+	"github.com/pilat/coagent/internal/transcript"
 )
 
 // A switch to a model with no effort choice must land an empty level, not a medium
@@ -82,14 +83,14 @@ func TestReasoningRawSurvivesReload(t *testing.T) {
 
 	envelope := json.RawMessage(`{"model":"claude-opus-5","payload":[{"type":"thinking","signature":"sig"}]}`)
 
-	_, err = store.InsertMessage(ctx, rec.ID, &StoredMessage{
+	_, err = store.InsertMessage(ctx, rec.ID, &transcript.Message{
 		Role:         "assistant",
 		Content:      "thinking out loud",
 		ReasoningRaw: envelope,
 	})
 	require.NoError(t, err)
 
-	_, err = store.InsertMessage(ctx, rec.ID, &StoredMessage{Role: "user", Content: "next"})
+	_, err = store.InsertMessage(ctx, rec.ID, &transcript.Message{Role: "user", Content: "next"})
 	require.NoError(t, err)
 
 	loaded, err := store.LoadActiveMessages(ctx, rec.ID)
@@ -109,7 +110,7 @@ func TestAttachmentsSurviveReload(t *testing.T) {
 
 	refs := json.RawMessage(`[{"path":"/tmp/coagent-a1b2.png","mime":"image/png","size":1234}]`)
 
-	_, err = store.InsertMessage(ctx, rec.ID, &StoredMessage{
+	_, err = store.InsertMessage(ctx, rec.ID, &transcript.Message{
 		Role:        llmwire.RoleTool,
 		Content:     "[/tmp/coagent-a1b2.png]",
 		ToolCallID:  "call-1",
@@ -117,7 +118,7 @@ func TestAttachmentsSurviveReload(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	_, err = store.InsertMessage(ctx, rec.ID, &StoredMessage{Role: llmwire.RoleUser, Content: "next"})
+	_, err = store.InsertMessage(ctx, rec.ID, &transcript.Message{Role: llmwire.RoleUser, Content: "next"})
 	require.NoError(t, err)
 
 	loaded, err := store.LoadActiveMessages(ctx, rec.ID)

@@ -14,6 +14,8 @@ import (
 
 	"github.com/pilat/coagent/internal/llmwire"
 	"github.com/pilat/coagent/internal/migrate"
+	"github.com/pilat/coagent/internal/subagent"
+	"github.com/pilat/coagent/internal/transcript"
 )
 
 // harnessCommand is deliberately smaller than the implementation API. These
@@ -124,6 +126,7 @@ type harnessProduction struct {
 	ctx    context.Context
 	db     *sql.DB
 	store  Store
+	links  subagent.Transactions
 	parent int64
 	child  int64
 	callID string
@@ -169,7 +172,7 @@ func newHarnessProduction(t *testing.T, migratedDB []byte) *harnessProduction {
 	seedLink(t, db, parent.ID, child, "model-task")
 
 	return &harnessProduction{
-		t: t, ctx: ctx, db: db, store: store,
+		t: t, ctx: ctx, db: db, store: store, links: subagent.NewTransactions(db),
 		parent: parent.ID, child: child, callID: "model-task",
 	}
 }
@@ -181,7 +184,7 @@ func (p *harnessProduction) apply(command harnessCommand) {
 
 	switch command {
 	case harnessFinish:
-		finalized, err := p.store.TryFinalizeSubagentActivation(
+		finalized, err := p.links.TryFinalizeActivation(
 			p.ctx, p.child, "completed", harnessCompletionText(snapshot.activationSeq), "completed",
 		)
 		require.NoError(p.t, err)
@@ -189,10 +192,10 @@ func (p *harnessProduction) apply(command harnessCommand) {
 			return
 		}
 
-		_, _, err = p.store.DeliverCompletionAtomic(
+		_, _, err = p.links.DeliverCompletion(
 			p.ctx,
 			p.parent,
-			[]*StoredMessage{{
+			[]*transcript.Message{{
 				Role: llmwire.RoleTool, Content: harnessCompletionText(snapshot.activationSeq),
 				ToolCallID: p.callID, ToolName: "subagent_event",
 			}},
@@ -200,7 +203,7 @@ func (p *harnessProduction) apply(command harnessCommand) {
 			snapshot.activationSeq,
 		)
 		require.NoError(p.t, err)
-		rearmed, err := p.store.RearmDeliveredSubagentWithPendingInput(p.ctx, p.child)
+		rearmed, err := p.links.RearmDeliveredWithPendingInput(p.ctx, p.child)
 		require.NoError(p.t, err)
 		wantRearmed := snapshot.pendingInputs > 0 &&
 			(snapshot.state == "completed" || snapshot.state == "error")
@@ -211,7 +214,7 @@ func (p *harnessProduction) apply(command harnessCommand) {
 			fmt.Sprintf("follow-up %d.%d", snapshot.activationSeq, snapshot.pendingInputs+1),
 		)
 		require.NoError(p.t, err)
-		rearmed, err := p.store.RearmDeliveredSubagentWithPendingInput(p.ctx, p.child)
+		rearmed, err := p.links.RearmDeliveredWithPendingInput(p.ctx, p.child)
 		require.NoError(p.t, err)
 		if snapshot.delivered && (snapshot.state == "completed" || snapshot.state == "error") {
 			require.True(p.t, rearmed)
@@ -233,10 +236,10 @@ func (p *harnessProduction) apply(command harnessCommand) {
 			return
 		}
 
-		_, won, err := p.store.DeliverCompletionAtomic(
+		_, won, err := p.links.DeliverCompletion(
 			p.ctx,
 			p.parent,
-			[]*StoredMessage{{
+			[]*transcript.Message{{
 				Role: llmwire.RoleTool, Content: "stale completion",
 				ToolCallID: p.callID, ToolName: "subagent_event",
 			}},
@@ -249,8 +252,9 @@ func (p *harnessProduction) apply(command harnessCommand) {
 		// The store carries no protocol state in memory. Reconstructing it over the
 		// same DB represents a daemon restart at this boundary.
 		p.store = NewStore(p.db)
+		p.links = subagent.NewTransactions(p.db)
 	case harnessFinalizeBeforeCrash:
-		finalized, err := p.store.TryFinalizeSubagentActivation(
+		finalized, err := p.links.TryFinalizeActivation(
 			p.ctx, p.child, "completed", harnessCompletionText(snapshot.activationSeq), "completed",
 		)
 		require.NoError(p.t, err)
@@ -263,11 +267,11 @@ func (p *harnessProduction) apply(command harnessCommand) {
 			p.parent,
 			"schedule:model:tick",
 			"schedule-model-fingerprint",
-			&StoredMessage{
+			&transcript.Message{
 				Role:      llmwire.RoleAssistant,
 				ToolCalls: []byte(`[{"id":"schedule-model","name":"schedule"}]`),
 			},
-			&StoredMessage{
+			&transcript.Message{
 				Role: llmwire.RoleTool, Content: "scheduled event",
 				ToolCallID: "schedule-model", ToolName: "schedule",
 			},
@@ -279,7 +283,7 @@ func (p *harnessProduction) apply(command harnessCommand) {
 			p.parent,
 			"schedule:model:fresh",
 			"fresh-model-fingerprint",
-			[]*StoredMessage{{Role: llmwire.RoleUser, Content: "fresh scheduled task"}},
+			[]*transcript.Message{{Role: llmwire.RoleUser, Content: "fresh scheduled task"}},
 		)
 		require.NoError(p.t, err)
 	case harnessScheduleConflict:
@@ -288,11 +292,11 @@ func (p *harnessProduction) apply(command harnessCommand) {
 			p.parent,
 			"schedule:model:tick",
 			"schedule-model-fingerprint",
-			&StoredMessage{
+			&transcript.Message{
 				Role:      llmwire.RoleAssistant,
 				ToolCalls: []byte(`[{"id":"schedule-model","name":"schedule"}]`),
 			},
-			&StoredMessage{
+			&transcript.Message{
 				Role: llmwire.RoleTool, Content: "scheduled event",
 				ToolCallID: "schedule-model", ToolName: "schedule",
 			},
@@ -304,8 +308,8 @@ func (p *harnessProduction) apply(command harnessCommand) {
 			p.parent,
 			"schedule:model:tick",
 			"conflicting-fingerprint",
-			&StoredMessage{Role: llmwire.RoleAssistant},
-			&StoredMessage{Role: llmwire.RoleTool, Content: "wrong"},
+			&transcript.Message{Role: llmwire.RoleAssistant},
+			&transcript.Message{Role: llmwire.RoleTool, Content: "wrong"},
 		)
 		require.ErrorIs(p.t, err, ErrDeliveryConflict)
 	case harnessCompact:
@@ -318,7 +322,7 @@ func (p *harnessProduction) apply(command harnessCommand) {
 		}
 
 		_, err = p.store.ReplaceCompactedMessages(p.ctx, p.parent, compacted, []CompactionEntry{
-			{Message: &StoredMessage{
+			{Message: &transcript.Message{
 				Role: llmwire.RoleUser, Content: "[CONTEXT SUMMARY - previous work condensed]",
 			}},
 		})
@@ -519,7 +523,7 @@ func TestHarnessModel_PromotedRootRemainsRunnableAcrossRestart(t *testing.T) {
 	production.store = NewStore(production.db)
 	requireRootRunnable()
 
-	_, err = production.store.InsertMessage(production.ctx, production.parent, &StoredMessage{
+	_, err = production.store.InsertMessage(production.ctx, production.parent, &transcript.Message{
 		Role: llmwire.RoleAssistant, Content: "answered",
 	})
 	require.NoError(t, err)

@@ -10,7 +10,9 @@ import (
 	"go.uber.org/zap"
 	"go.uber.org/zap/zaptest/observer"
 
+	"github.com/pilat/coagent/internal/admission"
 	"github.com/pilat/coagent/internal/logger"
+	"github.com/pilat/coagent/internal/subagent"
 )
 
 // TestEnsureRunner_ClassifyErrorBlocksStart: an unreadable ledger must abort the
@@ -19,7 +21,7 @@ import (
 func TestEnsureRunner_ClassifyErrorBlocksStart(t *testing.T) {
 	var flaky *flakyLinkStore
 
-	h := newSubagentHarnessDecorated(t, trivialRespond, func(inner LinkStore) LinkStore {
+	h := newSubagentHarnessDecorated(t, trivialRespond, func(inner subagent.Store) subagent.Store {
 		flaky = newFlakyLinkStore(inner)
 		return flaky
 	})
@@ -28,7 +30,7 @@ func TestEnsureRunner_ClassifyErrorBlocksStart(t *testing.T) {
 	rec, err := h.sessStore.CreateSession(h.ctx, h.projectID, "fake-model", "", nil)
 	require.NoError(t, err)
 
-	totalBefore, childrenBefore := h.mgr.admit.liveTotal(), h.mgr.admit.liveChildren()
+	totalBefore, childrenBefore := h.mgr.admit.LiveTotal(), h.mgr.admit.LiveChildren()
 
 	flaky.failGetLink(1, 0)
 
@@ -36,8 +38,8 @@ func TestEnsureRunner_ClassifyErrorBlocksStart(t *testing.T) {
 	require.ErrorIs(t, err, errLinkRead)
 
 	assert.False(t, h.mgr.HasActiveLoop(rec.ID), "no runner for an unclassifiable session")
-	assert.Equal(t, totalBefore, h.mgr.admit.liveTotal(), "no slot was taken")
-	assert.Equal(t, childrenBefore, h.mgr.admit.liveChildren())
+	assert.Equal(t, totalBefore, h.mgr.admit.LiveTotal(), "no slot was taken")
+	assert.Equal(t, childrenBefore, h.mgr.admit.LiveChildren())
 }
 
 // TestDrainQueue_StartErrorDoesNotRepark: a persistent ledger failure is not a
@@ -45,7 +47,7 @@ func TestEnsureRunner_ClassifyErrorBlocksStart(t *testing.T) {
 func TestDrainQueue_StartErrorDoesNotRepark(t *testing.T) {
 	var flaky *flakyLinkStore
 
-	h := newSubagentHarnessDecorated(t, trivialRespond, func(inner LinkStore) LinkStore {
+	h := newSubagentHarnessDecorated(t, trivialRespond, func(inner subagent.Store) subagent.Store {
 		flaky = newFlakyLinkStore(inner)
 		return flaky
 	})
@@ -58,7 +60,7 @@ func TestDrainQueue_StartErrorDoesNotRepark(t *testing.T) {
 		h.ctx, h.projectID, parent.ID, parent.ID, "general", "fake-model", "",
 	)
 	require.NoError(t, err)
-	require.NoError(t, h.links.InsertSubagentLink(h.ctx, SubagentLink{
+	require.NoError(t, h.links.InsertSubagentLink(h.ctx, subagent.Link{
 		ParentID: parent.ID, ChildID: childID, TaskCallID: "bg",
 	}))
 
@@ -96,7 +98,7 @@ func TestDrainQueue_CapacityReparks(t *testing.T) {
 	require.NoError(t, err)
 	// Blocking: a blocking child errors on admit-fail instead of self-queueing,
 	// which is the only way to reach the re-park branch.
-	require.NoError(t, h.links.InsertSubagentLink(h.ctx, SubagentLink{
+	require.NoError(t, h.links.InsertSubagentLink(h.ctx, subagent.Link{
 		ParentID: parent.ID, ChildID: childID, TaskCallID: "b", Blocking: true,
 	}))
 
@@ -106,19 +108,19 @@ func TestDrainQueue_CapacityReparks(t *testing.T) {
 
 	h.mgr.enqueueChild(h.ctx, childID, idleParentID, "/tmp", h.projectID)
 
-	for range maxInFlightPerParent {
-		require.True(t, h.mgr.admit.tryAdmit(slotChild, parent.ID))
+	for range admission.MaxPerParent {
+		require.True(t, h.mgr.admit.TryAdmit(admission.Child, parent.ID))
 	}
 
-	require.True(t, h.mgr.admit.canAdmitChild(idleParentID), "the peek must let this entry through")
+	require.True(t, h.mgr.admit.CanAdmitChild(idleParentID), "the peek must let this entry through")
 
 	h.mgr.drainQueue(h.ctx)
 
 	assert.Equal(t, 1, h.queueLen(), "a capacity miss parks the child again")
 	assert.False(t, h.mgr.HasActiveLoop(childID), "and does not start it")
 
-	for range maxInFlightPerParent {
-		h.mgr.admit.release(slotChild, parent.ID)
+	for range admission.MaxPerParent {
+		h.mgr.admit.Release(admission.Child, parent.ID)
 	}
 }
 
@@ -128,7 +130,7 @@ func TestDrainQueue_CapacityReparks(t *testing.T) {
 func TestRunSession_TimeoutReadErrorRunsFullTeardown(t *testing.T) {
 	var flaky *flakyLinkStore
 
-	h := newSubagentHarnessDecorated(t, trivialRespond, func(inner LinkStore) LinkStore {
+	h := newSubagentHarnessDecorated(t, trivialRespond, func(inner subagent.Store) subagent.Store {
 		flaky = newFlakyLinkStore(inner)
 		return flaky
 	})
@@ -141,43 +143,35 @@ func TestRunSession_TimeoutReadErrorRunsFullTeardown(t *testing.T) {
 		h.ctx, h.projectID, parent.ID, parent.ID, "general", "fake-model", "",
 	)
 	require.NoError(t, err)
-	require.NoError(t, h.links.InsertSubagentLink(h.ctx, SubagentLink{
+	require.NoError(t, h.links.InsertSubagentLink(h.ctx, subagent.Link{
 		ParentID: parent.ID, ChildID: childID, TaskCallID: "b", Blocking: true,
 	}))
 
-	childrenBefore := h.mgr.admit.liveChildren()
-	require.True(t, h.mgr.admit.tryAdmit(slotChild, parent.ID))
+	childrenBefore := h.mgr.admit.LiveChildren()
+	require.True(t, h.mgr.admit.TryAdmit(admission.Child, parent.ID))
 
 	core, logs := observer.New(zap.ErrorLevel)
 	loopCtx, loopCancel := context.WithCancel(logger.ToContext(context.Background(), zap.New(core)))
 
 	defer loopCancel()
 
-	rs := &runner{
-		cancel:    loopCancel,
-		done:      make(chan struct{}),
-		workDir:   "/tmp",
-		projectID: h.projectID,
-		kind:      slotChild,
-		parentID:  parent.ID,
-	}
+	rs := newRunner(loopCancel, "/tmp", h.projectID, admission.Child, parent.ID, false, nil)
 
-	h.mgr.mu.Lock()
-	h.mgr.loops[childID] = rs
-	h.mgr.mu.Unlock()
+	_, registered := h.mgr.runners.Register(childID, rs)
+	require.True(t, registered)
 
 	flaky.failGetLink(1, childID)
 
 	go h.mgr.runSession(loopCtx, childID, rs)
 
 	select {
-	case <-rs.done:
+	case <-rs.Done():
 	case <-time.After(5 * time.Second):
 		t.Fatal("runSession never closed rs.done — stop() would hang forever")
 	}
 
 	assert.False(t, h.mgr.HasActiveLoop(childID), "the runner is unregistered")
-	assert.Equal(t, childrenBefore, h.mgr.admit.liveChildren(), "the child slot is released")
+	assert.Equal(t, childrenBefore, h.mgr.admit.LiveChildren(), "the child slot is released")
 	assert.NotEmpty(t, logs.FilterMessage("child_timeout_unresolved").All())
 }
 
@@ -187,7 +181,7 @@ func TestRunSession_TimeoutReadErrorRunsFullTeardown(t *testing.T) {
 func TestRunSession_TimeoutReadErrorFinalizesAsError(t *testing.T) {
 	var flaky *flakyLinkStore
 
-	h := newSubagentHarnessDecorated(t, trivialRespond, func(inner LinkStore) LinkStore {
+	h := newSubagentHarnessDecorated(t, trivialRespond, func(inner subagent.Store) subagent.Store {
 		flaky = newFlakyLinkStore(inner)
 		return flaky
 	})
@@ -200,27 +194,19 @@ func TestRunSession_TimeoutReadErrorFinalizesAsError(t *testing.T) {
 		h.ctx, h.projectID, parent.ID, parent.ID, "general", "fake-model", "",
 	)
 	require.NoError(t, err)
-	require.NoError(t, h.links.InsertSubagentLink(h.ctx, SubagentLink{
+	require.NoError(t, h.links.InsertSubagentLink(h.ctx, subagent.Link{
 		ParentID: parent.ID, ChildID: childID, TaskCallID: "b", Blocking: true,
 	}))
 
-	require.True(t, h.mgr.admit.tryAdmit(slotChild, parent.ID))
+	require.True(t, h.mgr.admit.TryAdmit(admission.Child, parent.ID))
 
 	loopCtx, loopCancel := context.WithCancel(h.ctx)
 	defer loopCancel()
 
-	rs := &runner{
-		cancel:    loopCancel,
-		done:      make(chan struct{}),
-		workDir:   "/tmp",
-		projectID: h.projectID,
-		kind:      slotChild,
-		parentID:  parent.ID,
-	}
+	rs := newRunner(loopCancel, "/tmp", h.projectID, admission.Child, parent.ID, false, nil)
 
-	h.mgr.mu.Lock()
-	h.mgr.loops[childID] = rs
-	h.mgr.mu.Unlock()
+	_, registered := h.mgr.runners.Register(childID, rs)
+	require.True(t, registered)
 
 	// Only applyChildTimeout's read fails; finalizeChild's reads succeed.
 	flaky.getLinkFailOnly = 1
@@ -229,7 +215,7 @@ func TestRunSession_TimeoutReadErrorFinalizesAsError(t *testing.T) {
 	go h.mgr.runSession(loopCtx, childID, rs)
 
 	select {
-	case <-rs.done:
+	case <-rs.Done():
 	case <-time.After(5 * time.Second):
 		t.Fatal("runSession did not tear down")
 	}
@@ -237,7 +223,7 @@ func TestRunSession_TimeoutReadErrorFinalizesAsError(t *testing.T) {
 	link, err := h.links.GetLink(h.ctx, childID)
 	require.NoError(t, err)
 	require.NotNil(t, link)
-	assert.Equal(t, LinkStateError, link.State, "a child that never started is not completed")
+	assert.Equal(t, subagent.StateError, link.State, "a child that never started is not completed")
 }
 
 // TestApplyChildTimeout_Deadlines: the normal branches keep their behaviour —
@@ -254,7 +240,7 @@ func TestApplyChildTimeout_Deadlines(t *testing.T) {
 			h.ctx, h.projectID, parent.ID, parent.ID, "general", "fake-model", "",
 		)
 		require.NoError(t, cerr)
-		require.NoError(t, h.links.InsertSubagentLink(h.ctx, SubagentLink{
+		require.NoError(t, h.links.InsertSubagentLink(h.ctx, subagent.Link{
 			ParentID: parent.ID, ChildID: id, TaskCallID: callID,
 			Blocking: blocking, TimeoutSec: timeoutSec,
 		}))

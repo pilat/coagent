@@ -15,7 +15,9 @@ import (
 	"github.com/pilat/coagent/internal/config"
 	"github.com/pilat/coagent/internal/controllerapi"
 	"github.com/pilat/coagent/internal/migrate"
+	"github.com/pilat/coagent/internal/projectpath"
 	"github.com/pilat/coagent/internal/sessionstore"
+	"github.com/pilat/coagent/internal/subagent"
 )
 
 func newProjectTestManager(t *testing.T) (*svc, Store, *sql.DB) {
@@ -29,7 +31,23 @@ func newProjectTestManager(t *testing.T) (*svc, Store, *sql.DB) {
 
 	store := NewStore(db)
 	sessStore := sessionstore.NewStore(db)
-	mgr := newSvc(&mockFactory{}, store, sessStore, sessStore, NewLinkStore(db), nil, nil)
+	mgr := newSvc(
+		&mockFactory{},
+		store,
+		sessStore,
+		sessStore,
+		sessStore,
+		sessStore,
+		sessStore,
+		sessStore,
+		sessStore,
+		subagent.NewStore(db),
+		subagent.NewTransactions(db),
+		nil,
+		sessStore,
+		nil,
+		nil,
+	)
 
 	return mgr, store, db
 }
@@ -61,7 +79,7 @@ func TestSanitizeProjectName(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			got, err := sanitizeProjectName(tc.in)
+			got, err := projectpath.SanitizeName(tc.in)
 			if tc.wantErr {
 				require.Error(t, err)
 				assert.NotEmpty(t, err.Error(), "rejection must name a rule")
@@ -90,7 +108,7 @@ func TestCreateProject_MkdirGetOrCreateIdempotent(t *testing.T) {
 	ctx := context.Background()
 	mgr, _, _ := newProjectTestManager(t)
 	root := t.TempDir()
-	ctrl := NewController(mgr, &config.Config{
+	ctrl := newTestController(mgr, &config.Config{
 		UnifiedConfig: &config.UnifiedConfig{ProjectsRoot: root},
 	}, nil, nil).ForManager("test")
 
@@ -112,7 +130,7 @@ func TestCreateProject_MkdirGetOrCreateIdempotent(t *testing.T) {
 
 func TestCreateProject_RejectsBadName(t *testing.T) {
 	mgr, _, _ := newProjectTestManager(t)
-	ctrl := NewController(mgr, &config.Config{
+	ctrl := newTestController(mgr, &config.Config{
 		UnifiedConfig: &config.UnifiedConfig{ProjectsRoot: t.TempDir()},
 	}, nil, nil).ForManager("test")
 
@@ -125,7 +143,7 @@ func TestCreateProject_SystemIdentityUsesReservedNameAndDirectory(t *testing.T) 
 	mgr, store, _ := newProjectTestManager(t)
 	root := t.TempDir()
 	mgr.systemProject = filepath.Join(root, controllerapi.CoagentSystemProjectDir)
-	ctrl := NewController(mgr, &config.Config{
+	ctrl := newTestController(mgr, &config.Config{
 		UnifiedConfig: &config.UnifiedConfig{ProjectsRoot: root},
 	}, nil, nil).ForManager(controllerapi.BuiltinCLIManagerID)
 
@@ -147,7 +165,7 @@ func TestCreateSession_SystemProjectRequiresExplicitIdentity(t *testing.T) {
 	mgr, _, _ := newProjectTestManager(t)
 	root := t.TempDir()
 	mgr.systemProject = filepath.Join(root, controllerapi.CoagentSystemProjectDir)
-	ctrl := NewController(mgr, &config.Config{
+	ctrl := newTestController(mgr, &config.Config{
 		UnifiedConfig: &config.UnifiedConfig{ProjectsRoot: root},
 	}, nil, nil).ForManager(controllerapi.BuiltinCLIManagerID)
 
@@ -181,7 +199,7 @@ func TestCreateSession_SystemProjectRequiresExplicitIdentity(t *testing.T) {
 func TestCreateSession_PersistsOnlyTheBoundManagerOwner(t *testing.T) {
 	ctx := context.Background()
 	mgr, _, _ := newProjectTestManager(t)
-	ctrl := NewController(mgr, &config.Config{}, nil, nil).ForManager("alpha")
+	ctrl := newTestController(mgr, &config.Config{}, nil, nil).ForManager("alpha")
 	workDir := t.TempDir()
 
 	ownedID, err := ctrl.CreateSession(ctx, controllerapi.SessionCreateData{
@@ -216,19 +234,23 @@ func TestResolveProjectsRoot(t *testing.T) {
 
 	defaultRoot := filepath.Join(home, coagenthome.DirName, coagenthome.ProjectsDirName)
 
-	assert.Equal(t, defaultRoot, resolveProjectsRoot(nil), "nil config → default, ~-expanded")
-	assert.Equal(t, defaultRoot, resolveProjectsRoot(&config.UnifiedConfig{}), "empty → default")
-	assert.Equal(t, filepath.Join(home, "notes"), resolveProjectsRoot(&config.UnifiedConfig{ProjectsRoot: "~/notes"}))
+	assert.Equal(t, defaultRoot, projectpath.ResolveRoot(nil), "nil config → default, ~-expanded")
+	assert.Equal(t, defaultRoot, projectpath.ResolveRoot(&config.UnifiedConfig{}), "empty → default")
+	assert.Equal(
+		t,
+		filepath.Join(home, "notes"),
+		projectpath.ResolveRoot(&config.UnifiedConfig{ProjectsRoot: "~/notes"}),
+	)
 	assert.Equal(
 		t,
 		"/srv/proj",
-		resolveProjectsRoot(&config.UnifiedConfig{ProjectsRoot: "/srv/proj/"}),
+		projectpath.ResolveRoot(&config.UnifiedConfig{ProjectsRoot: "/srv/proj/"}),
 		"trailing slash cleaned",
 	)
 
 	// A relative root must be absolutized so it matches the abs work_dir the store
 	// records — otherwise the picker filter never matches anything.
-	got := resolveProjectsRoot(&config.UnifiedConfig{ProjectsRoot: "relnotes"})
+	got := projectpath.ResolveRoot(&config.UnifiedConfig{ProjectsRoot: "relnotes"})
 	assert.True(t, filepath.IsAbs(got), "relative root must be absolutized")
 	assert.Equal(t, "relnotes", filepath.Base(got))
 }

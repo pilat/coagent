@@ -3,6 +3,8 @@ package daemon
 import (
 	"context"
 	"fmt"
+
+	"github.com/pilat/coagent/internal/subagent"
 )
 
 // spawnRequest describes a subagent to create. Built by the task tool at Execute
@@ -22,11 +24,11 @@ type spawnRequest struct {
 // childResult is a snapshot of a child's state, returned by Spawn/Result.
 type childResult struct {
 	ChildID   int64
-	State     LinkState
+	State     subagent.State
 	Terminal  bool
 	Output    string // final answer text / context note; "" when not terminal
 	Iteration int
-	Outcome   LinkOutcome
+	Outcome   subagent.Outcome
 }
 
 // subagentInfo describes an available subagent type for the task tool.

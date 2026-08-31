@@ -11,6 +11,7 @@ import (
 	"github.com/pilat/coagent/internal/logger"
 	"github.com/pilat/coagent/internal/sessionevent"
 	"github.com/pilat/coagent/internal/sessionstore"
+	"github.com/pilat/coagent/internal/subagent"
 )
 
 const (
@@ -32,9 +33,9 @@ func (s *svc) markLinkTerminalRetrying(
 	ctx context.Context,
 	deadline time.Time,
 	childID int64,
-	state LinkState,
+	state subagent.State,
 	result string,
-	outcome LinkOutcome,
+	outcome subagent.Outcome,
 ) error {
 	var err error
 
@@ -54,33 +55,6 @@ func (s *svc) markLinkTerminalRetrying(
 	}
 
 	return fmt.Errorf("mark link terminal for child %d: %w", childID, err)
-}
-
-func (s *svc) finalizeActivationRetrying(
-	ctx context.Context,
-	childID int64,
-	state LinkState,
-	result string,
-	outcome LinkOutcome,
-) (bool, error) {
-	var err error
-
-	for attempt := range linkTerminalAttempts {
-		if attempt > 0 {
-			time.Sleep(linkTerminalBackoff)
-		}
-
-		var finalized bool
-
-		finalized, err = s.sessionStore.TryFinalizeSubagentActivation(
-			ctx, childID, string(state), result, string(outcome),
-		)
-		if err == nil {
-			return finalized, nil
-		}
-	}
-
-	return false, fmt.Errorf("finalize activation for child %d: %w", childID, err)
 }
 
 // reportTimeoutUnresolved stays silent when ctx is already dead: shutdown, kill

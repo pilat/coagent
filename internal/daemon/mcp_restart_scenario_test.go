@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/pilat/coagent/internal/budget"
 	"github.com/pilat/coagent/internal/config"
 	"github.com/pilat/coagent/internal/llm"
 	"github.com/pilat/coagent/internal/llmwire"
@@ -20,6 +21,7 @@ import (
 	"github.com/pilat/coagent/internal/schedule"
 	"github.com/pilat/coagent/internal/session"
 	"github.com/pilat/coagent/internal/sessionstore"
+	"github.com/pilat/coagent/internal/subagent"
 	"github.com/pilat/coagent/internal/tool"
 )
 
@@ -186,19 +188,32 @@ func newMCPRestartHarness(
 
 	store := NewStore(db)
 	sessStore := sessionstore.NewStore(db)
-	links := NewLinkStore(db)
+	links := subagent.NewStore(db)
 	schedStore := schedule.NewStore(db)
 	registry := mcpstore.NewStore(db)
 	pool := mcp.NewPool(nil)
 	cfg := &config.Config{WorkDir: workDir, Model: "fake-model"}
 	factory := session.NewFactoryWithOptions(
-		cfg, nil, nil, sessStore, nil, pool, registry, nil, nil,
+		cfg, nil, nil, sessStore, sessStore, nil, pool, registry, nil, nil,
 		session.WithLLMClientFactory(func(_ *config.Config) (llm.Client, error) {
 			return &scriptedLLM{respond: respond}, nil
 		}),
 	)
 	mgr := newSvc(
-		factory, store, sessStore, sessStore, links, schedule.NewService(schedStore),
+		factory,
+		store,
+		sessStore,
+		sessStore,
+		sessStore,
+		sessStore,
+		sessStore,
+		sessStore,
+		sessStore,
+		links,
+		subagent.NewTransactions(db),
+		budget.New(sessStore),
+		sessStore,
+		schedule.NewService(schedStore),
 		func() string { return "fake-model" },
 	)
 	mgr.mcpStore = registry

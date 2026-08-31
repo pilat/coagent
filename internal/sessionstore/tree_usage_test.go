@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/pilat/coagent/internal/llmwire"
+	"github.com/pilat/coagent/internal/transcript"
 )
 
 func insertUsageRow(
@@ -23,7 +24,7 @@ func insertUsageRow(
 	usage, err := json.Marshal(llmwire.MessageUsage{PromptTokens: prompt, CompletionTokens: completion})
 	require.NoError(t, err)
 
-	id, err := store.InsertMessage(context.Background(), sessionID, &StoredMessage{
+	id, err := store.InsertMessage(context.Background(), sessionID, &transcript.Message{
 		Role:    llmwire.RoleAssistant,
 		Content: "work",
 		CostUSD: cost,

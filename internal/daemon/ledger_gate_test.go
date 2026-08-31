@@ -5,6 +5,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/pilat/coagent/internal/subagent"
 )
 
 // TestLedgerFailure_SpawnRefusesInsteadOfDegrading is the summary gate: with the
@@ -13,7 +15,7 @@ import (
 func TestLedgerFailure_SpawnRefusesInsteadOfDegrading(t *testing.T) {
 	var flaky *flakyLinkStore
 
-	h := newSubagentHarnessDecorated(t, trivialRespond, func(inner LinkStore) LinkStore {
+	h := newSubagentHarnessDecorated(t, trivialRespond, func(inner subagent.Store) subagent.Store {
 		flaky = newFlakyLinkStore(inner)
 		return flaky
 	})
@@ -30,11 +32,9 @@ func TestLedgerFailure_SpawnRefusesInsteadOfDegrading(t *testing.T) {
 	h.waitForDelivery(ok.ChildID)
 	h.mgr.waitIdle(ok.ChildID)
 
-	h.mgr.mu.Lock()
-	loopsBefore := len(h.mgr.loops)
-	h.mgr.mu.Unlock()
+	loopsBefore := h.mgr.runners.Len()
 
-	childrenBefore := h.mgr.admit.liveChildren()
+	childrenBefore := h.mgr.admit.LiveChildren()
 
 	flaky.failGetLink(1, 0)
 
@@ -44,10 +44,8 @@ func TestLedgerFailure_SpawnRefusesInsteadOfDegrading(t *testing.T) {
 	require.Error(t, err)
 	assert.Equal(t, childResult{}, res)
 
-	h.mgr.mu.Lock()
-	loopsAfter := len(h.mgr.loops)
-	h.mgr.mu.Unlock()
+	loopsAfter := h.mgr.runners.Len()
 
 	assert.Equal(t, loopsBefore, loopsAfter, "no runner was started")
-	assert.Equal(t, childrenBefore, h.mgr.admit.liveChildren(), "no child slot was taken")
+	assert.Equal(t, childrenBefore, h.mgr.admit.LiveChildren(), "no child slot was taken")
 }

@@ -13,11 +13,13 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/pilat/coagent/internal/budget"
 	"github.com/pilat/coagent/internal/config"
 	"github.com/pilat/coagent/internal/migrate"
 	"github.com/pilat/coagent/internal/schedule"
 	"github.com/pilat/coagent/internal/session"
 	"github.com/pilat/coagent/internal/sessionstore"
+	"github.com/pilat/coagent/internal/subagent"
 )
 
 // TestSpawnSettlesTheChildEffortOnTheChildModel drives a spawn onto a model whose
@@ -188,7 +190,7 @@ func newSpawnEffortHarness(t *testing.T, baseURL string) *subagentHarness {
 
 	store := NewStore(db)
 	sessStore := sessionstore.NewStore(db)
-	links := NewLinkStore(db)
+	links := subagent.NewStore(db)
 	schedStore := schedule.NewStore(db)
 
 	workDir := t.TempDir()
@@ -202,10 +204,23 @@ func newSpawnEffortHarness(t *testing.T, baseURL string) *subagentHarness {
 		},
 	}}
 
-	factory := session.NewFactoryWithOptions(cfg, nil, nil, sessStore, nil, nil, nil, nil, nil)
+	factory := session.NewFactoryWithOptions(cfg, nil, nil, sessStore, sessStore, nil, nil, nil, nil, nil)
 
 	mgr := newSvc(
-		factory, store, sessStore, sessStore, links, schedule.NewService(schedStore),
+		factory,
+		store,
+		sessStore,
+		sessStore,
+		sessStore,
+		sessStore,
+		sessStore,
+		sessStore,
+		sessStore,
+		links,
+		subagent.NewTransactions(db),
+		budget.New(sessStore),
+		sessStore,
+		schedule.NewService(schedStore),
 		func() string { return "parent-model" },
 	)
 	mgr.loadModelCatalog(cfg.UnifiedConfig.Models)

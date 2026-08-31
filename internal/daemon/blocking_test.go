@@ -9,6 +9,7 @@ import (
 
 	"github.com/pilat/coagent/internal/llm"
 	"github.com/pilat/coagent/internal/llmwire"
+	"github.com/pilat/coagent/internal/subagent"
 )
 
 func (h *subagentHarness) waitUntil(label string, cond func() bool) {
@@ -87,8 +88,8 @@ func TestIntegration_BlockingTaskSuspendsAndResumes(t *testing.T) {
 
 	res, err := h.mgr.Result(h.ctx, link.ChildID)
 	require.NoError(t, err)
-	assert.Equal(t, LinkStateCompleted, res.State)
-	assert.Equal(t, LinkOutcomeCompleted, res.Outcome, "clean finish → completed outcome")
+	assert.Equal(t, subagent.StateCompleted, res.State)
+	assert.Equal(t, subagent.OutcomeCompleted, res.Outcome, "clean finish → completed outcome")
 	assert.Contains(t, res.Output, "blocking child done")
 }
 

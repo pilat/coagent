@@ -61,7 +61,7 @@ func TestImageTurns_ReadThroughDriverProjection(t *testing.T) {
 
 	s, _ := newImagePlumbAgent(t)
 	s.registry = stack.Registry
-	s.ms = newMessageStore(store, sess.ID)
+	s.ms = newMessageStore(store, sess.ID, nil)
 
 	// The synthetic upload turn is plain text everywhere — no refs exist yet.
 	require.NoError(t, s.ms.addUserMessage(ctx,

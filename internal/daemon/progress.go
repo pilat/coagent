@@ -1,212 +1,125 @@
-//nolint:wrapcheck // Snapshot assembly preserves durable projection errors.; nosemgrep: semgrep.coagent-no-preamble-before-package
 package daemon
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"time"
 
+	"github.com/pilat/coagent/internal/budget"
 	"github.com/pilat/coagent/internal/controllerapi"
-	"github.com/pilat/coagent/internal/logger"
 	"github.com/pilat/coagent/internal/progress"
-	"github.com/pilat/coagent/internal/session"
-	"github.com/pilat/coagent/internal/sessionstore"
-	"github.com/pilat/coagent/internal/todo"
+	"github.com/pilat/coagent/internal/progressruntime"
 )
 
-func (s *svc) CurrentProgress(
-	ctx context.Context,
-	rootID int64,
-) (*controllerapi.ProgressData, error) {
-	store, ok := s.sessionStore.(sessionstore.ProgressStore)
-	if !ok {
-		return nil, errors.New("progress store unavailable")
+var errProgressUnavailable = errors.New("progress runtime unavailable")
+
+func (s *svc) CurrentProgress(ctx context.Context, rootID int64) (*controllerapi.ProgressData, error) {
+	if s.progress == nil {
+		return nil, errProgressUnavailable
 	}
 
-	facts, err := store.CaptureProgress(ctx, rootID)
+	current, err := s.progress.Current(ctx, rootID)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("current progress: %w", err)
 	}
 
-	now := s.progressNow().UTC()
-
-	snapshot, err := s.progressSnapshot(facts, now)
-	if err != nil {
-		return nil, err
-	}
-
-	if contextProjection, ok := s.liveContextProjection(ctx, facts.RootID); ok {
-		snapshot.Context = progress.Context{
-			Used: contextProjection.Used, Max: contextProjection.Max,
-			Approximate: contextProjection.Approximate, Available: contextProjection.Available,
-		}
-	}
-
-	return &controllerapi.ProgressData{
-		SessionID: rootID, Revision: snapshot.Revision, OutboxWatermark: snapshot.OutboxWatermark,
-		ObservedAt: now, Rendered: progress.RenderFull(snapshot, logger.Redact),
-	}, nil
+	return current, nil
 }
 
 func (s *svc) RefreshProgress(ctx context.Context, rootID int64) error {
-	_, _, err := s.enqueueProgressChange(ctx, rootID)
-	// Supersession is successful suppression, never a failure: a manager that
-	// refreshes a just-fenced root must not treat the stale snapshot as an error.
-	if errors.Is(err, sessionstore.ErrProgressSuperseded) {
-		return nil
+	if s.progress == nil {
+		return errProgressUnavailable
 	}
 
-	if err == nil {
-		s.wakeProgress()
+	if err := s.progress.Refresh(ctx, rootID); err != nil {
+		return fmt.Errorf("refresh progress: %w", err)
 	}
 
-	return err
+	return nil
 }
 
 func (s *svc) renderFinalOutput(ctx context.Context, rootID int64, text string) (string, error) {
-	store, ok := s.sessionStore.(sessionstore.ProgressStore)
+	if s.progress == nil {
+		return text, nil
+	}
+
+	rendered, err := s.progress.RenderFinal(ctx, rootID, text)
+	if err != nil {
+		return "", fmt.Errorf("render final progress: %w", err)
+	}
+
+	return rendered, nil
+}
+
+func (s *svc) enqueueProgressChange(ctx context.Context, rootID int64) (string, bool, error) {
+	if s.progress == nil {
+		return "", false, errProgressUnavailable
+	}
+
+	content, published, err := s.progress.EnqueueChange(ctx, rootID)
+	if err != nil {
+		return "", false, fmt.Errorf("enqueue progress change: %w", err)
+	}
+
+	return content, published, nil
+}
+
+func (s *svc) enqueueProgressChangeFor(
+	ctx context.Context,
+	rootID int64,
+	causalID string,
+	recaptureOnSuperseded bool,
+) (string, bool, error) {
+	if s.progress == nil {
+		return "", false, errProgressUnavailable
+	}
+
+	content, published, err := s.progress.EnqueueChangeFor(ctx, rootID, causalID, recaptureOnSuperseded)
+	if err != nil {
+		return "", false, fmt.Errorf("enqueue causal progress change: %w", err)
+	}
+
+	return content, published, nil
+}
+
+func (s *svc) startProgressReconciler(ctx context.Context) {
+	if s.progress != nil {
+		s.progress.Start(ctx)
+	}
+}
+
+func (s *svc) liveContextProjection(ctx context.Context, rootID int64) (progress.Context, bool) {
+	activeRunner, ok := s.runners.Load(rootID)
 	if !ok {
-		return text, nil
+		return progress.Context{}, false
 	}
 
-	facts, err := store.CaptureProgress(ctx, rootID)
-	if err != nil {
-		return "", fmt.Errorf("capture final progress: %w", err)
-	}
-
-	snapshot, err := s.progressSnapshot(facts, s.progressNow().UTC())
-	if err != nil {
-		return "", err
-	}
-
-	footer := progress.RenderFooter(snapshot, logger.Redact)
-	if footer == "" {
-		return text, nil
-	}
-
-	if text == "" {
-		return footer, nil
-	}
-
-	return text + "\n\n" + footer, nil
-}
-
-func (s *svc) progressSnapshot(
-	facts *sessionstore.ProgressFacts,
-	observedAt time.Time,
-) (progress.Snapshot, error) {
-	var todoItems []*todo.Item
-	if err := json.Unmarshal(facts.TodoItems, &todoItems); err != nil {
-		return progress.Snapshot{}, fmt.Errorf("decode progress todo: %w", err)
-	}
-
-	snapshot := progress.Snapshot{
-		RootID: facts.RootID, DurableWatermark: facts.MessageWatermark,
-		OutboxWatermark: facts.OutboxWatermark, PersistedReason: string(facts.Status),
-		ObservedAt: observedAt, Model: facts.Model, RootIteration: facts.Iteration,
-		ChildCount: facts.ChildCount, ChildIterations: facts.ChildIterations,
-		Lifetime: progress.Usage{
-			PromptTokens:     facts.PromptTokens,
-			CompletionTokens: facts.CompletionTokens, CostUSD: facts.CostUSD, Available: true,
-		},
-		LatestModelProgress:  facts.LatestModelProgress,
-		LastSemanticOutputAt: facts.LastSemanticOutputAt,
-		ActiveSubagents:      facts.ActiveSubagents, BackgroundSubagents: facts.BackgroundSubagents,
-	}
-	if s.HasActiveLoop(facts.RootID) {
-		snapshot.RuntimeState = "running"
-	} else {
-		snapshot.RuntimeState = "idle"
-	}
-
-	if facts.EpisodeStartedAt != nil && !observedAt.Before(*facts.EpisodeStartedAt) {
-		elapsed := observedAt.Sub(*facts.EpisodeStartedAt)
-		snapshot.EpisodeElapsed = &elapsed
-	}
-
-	for _, item := range todoItems {
-		snapshot.Todos = append(snapshot.Todos, progress.TodoItem{
-			ID: item.ID, Content: item.Content, Status: string(item.Status), Priority: string(item.Priority),
-		})
-	}
-
-	for _, wait := range facts.Waiting {
-		snapshot.Waiting = append(snapshot.Waiting, progress.WaitingItem{
-			Kind: wait.Kind, Description: wait.Description, WakeAt: wait.WakeAt,
-		})
-	}
-
-	snapshot.Budget = progressBudget(facts.Budget, facts.CostUSD, observedAt)
-
-	payload, err := json.Marshal(snapshot) //nolint:musttag // Internal closed struct is not a wire contract.
-	if err != nil {
-		return progress.Snapshot{}, fmt.Errorf("marshal progress revision: %w", err)
-	}
-
-	digest := sha256.Sum256(payload)
-	snapshot.Revision = hex.EncodeToString(digest[:])
-
-	return snapshot, nil
-}
-
-//nolint:wsl_v5 // Runtime lookup is guarded at each ownership boundary.
-func (s *svc) liveContextProjection(ctx context.Context, rootID int64) (session.ContextProjection, bool) {
-	s.mu.Lock()
-	runner := s.loops[rootID]
-	s.mu.Unlock()
-	if runner == nil {
-		return session.ContextProjection{}, false
-	}
-
-	runner.svcMu.Lock()
-	service := runner.service
-	runner.svcMu.Unlock()
+	service := activeRunner.Service()
 	if service == nil {
-		return session.ContextProjection{}, false
+		return progress.Context{}, false
 	}
 
 	provider, ok := service.(interface {
-		ContextProjection(context.Context) session.ContextProjection
+		ContextProjection(context.Context) progress.Context
 	})
 	if !ok {
-		return session.ContextProjection{}, false
+		return progress.Context{}, false
 	}
 
 	return provider.ContextProjection(ctx), true
 }
 
-//nolint:wsl_v5 // Derived budget fields are assembled as one projection.
-func progressBudget(record *sessionstore.BudgetRecord, cost float64, now time.Time) *progress.Budget {
-	if record == nil {
+func newProgressRuntime(
+	store progressruntime.Store,
+	budgetSvc budget.Service,
+	daemon *svc,
+) progressruntime.Service {
+	if store == nil {
 		return nil
 	}
 
-	value := &progress.Budget{
-		State: string(record.State), Generation: record.Generation,
-		CostLimitUSD: record.CostLimitUSD, FiredReason: record.FiredReason,
-	}
-	used := cost - record.BaselineCostUSD
-	value.CostUsedUSD = &used
-	if record.CostLimitUSD != nil {
-		remaining := max(*record.CostLimitUSD-used, 0)
-		value.CostRemainingUSD = &remaining
-	}
-
-	if record.DurationSeconds != nil {
-		limit := time.Duration(*record.DurationSeconds) * time.Second
-		value.DurationLimit = &limit
-
-		if !now.Before(record.ArmedAt) {
-			elapsed := now.Sub(record.ArmedAt)
-			value.Elapsed = &elapsed
-			remaining := max(limit-elapsed, 0)
-			value.DurationRemaining = &remaining
-		}
-	}
-
-	return value
+	return progressruntime.New(
+		store, budgetSvc, daemon.HasActiveLoop, daemon.liveContextProjection,
+		daemon.startBudgetPark, daemon.publish,
+	)
 }

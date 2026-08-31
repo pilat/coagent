@@ -12,6 +12,7 @@ import (
 	"github.com/pilat/coagent/internal/session"
 	"github.com/pilat/coagent/internal/sessionstore"
 	"github.com/pilat/coagent/internal/tool"
+	"github.com/pilat/coagent/internal/transcript"
 )
 
 // resolveOrphanedCalls closes every external call whose producer did not survive
@@ -127,7 +128,7 @@ func (s *svc) orphanedCalls(ctx context.Context, sessionID int64) ([]session.Pen
 
 // unresolvedStoredExternalCalls is the name-keyed pending set read straight from
 // the durable transcript — what a provider would see dangling.
-func unresolvedStoredExternalCalls(msgs []*sessionstore.StoredMessage) ([]session.PendingToolCall, error) {
+func unresolvedStoredExternalCalls(msgs []*transcript.Message) ([]session.PendingToolCall, error) {
 	seen := make(map[string]bool)
 
 	for _, m := range msgs {

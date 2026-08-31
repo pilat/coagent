@@ -12,6 +12,7 @@ import (
 	"github.com/pilat/coagent/internal/llmwire"
 	"github.com/pilat/coagent/internal/sessionstore"
 	"github.com/pilat/coagent/internal/tool"
+	"github.com/pilat/coagent/internal/transcript"
 )
 
 type recordingActivationBoundary struct {
@@ -49,7 +50,7 @@ func (g *terminalBudgetGate) Admit(context.Context, time.Time) error { return g.
 func (g *terminalBudgetGate) Observe(context.Context) (bool, error)  { return false, nil }
 func (g *terminalBudgetGate) PersistResponse(
 	context.Context,
-	*sessionstore.StoredMessage,
+	*transcript.Message,
 	string,
 ) (int64, bool, bool, error) {
 	return 0, false, false, nil

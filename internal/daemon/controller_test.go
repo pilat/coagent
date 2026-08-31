@@ -11,10 +11,28 @@ import (
 
 	"github.com/pilat/coagent/internal/config"
 	"github.com/pilat/coagent/internal/controllerapi"
+	"github.com/pilat/coagent/internal/loader"
+	"github.com/pilat/coagent/internal/managercontrol"
 	"github.com/pilat/coagent/internal/migrate"
+	"github.com/pilat/coagent/internal/schedule"
 	"github.com/pilat/coagent/internal/sessionevent"
 	"github.com/pilat/coagent/internal/sessionstore"
+	"github.com/pilat/coagent/internal/subagent"
 )
+
+func newTestController(
+	svc *svc,
+	cfg *config.Config,
+	cache loader.MarketplaceCache,
+	_ schedule.Service,
+) controllerapi.ManagerControllerFactory {
+	var outputs sessionstore.ManagerOutputStore
+	if svc != nil {
+		outputs = svc.OutputStore()
+	}
+
+	return managercontrol.New(svc, svc, outputs, cfg, cache)
+}
 
 func TestControllerManagerSubscriptionIsExactAcrossRestart(t *testing.T) {
 	t.Parallel()
@@ -38,10 +56,11 @@ func TestControllerManagerSubscriptionIsExactAcrossRestart(t *testing.T) {
 	t.Cleanup(func() { _ = secondDB.Close() })
 	secondSessions := sessionstore.NewStore(secondDB)
 	mgr := newSvc(
-		&mockFactory{}, NewStore(secondDB), secondSessions, secondSessions,
-		NewLinkStore(secondDB), nil, nil,
+		&mockFactory{}, NewStore(secondDB), secondSessions, secondSessions, secondSessions,
+		secondSessions, secondSessions, secondSessions, secondSessions,
+		subagent.NewStore(secondDB), subagent.NewTransactions(secondDB), nil, secondSessions, nil, nil,
 	)
-	controllers := NewController(mgr, &config.Config{}, nil, nil)
+	controllers := newTestController(mgr, &config.Config{}, nil, nil)
 	subscriptions := make(map[string]<-chan controllerapi.SessionNotification, 10)
 	for i := range 10 {
 		managerID := fmt.Sprintf("manager-%d", i)
@@ -79,7 +98,7 @@ func TestListModelsMapsEnrichedEntries(t *testing.T) {
 		},
 	}}
 
-	controller := NewController(nil, cfg, nil, nil).ForManager("test")
+	controller := newTestController(nil, cfg, nil, nil).ForManager("test")
 
 	result, err := controller.ListModels(context.Background())
 	require.NoError(t, err)

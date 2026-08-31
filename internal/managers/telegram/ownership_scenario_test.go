@@ -14,12 +14,15 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/pilat/coagent/internal/budget"
 	"github.com/pilat/coagent/internal/config"
 	"github.com/pilat/coagent/internal/controllerapi"
 	"github.com/pilat/coagent/internal/daemon"
+	"github.com/pilat/coagent/internal/managercontrol"
 	"github.com/pilat/coagent/internal/managerdelivery"
 	"github.com/pilat/coagent/internal/migrate"
 	"github.com/pilat/coagent/internal/sessionstore"
+	"github.com/pilat/coagent/internal/subagent"
 )
 
 type telegramOwnershipHarness struct {
@@ -60,8 +63,12 @@ func newTelegramOwnershipHarness(t *testing.T) *telegramOwnershipHarness {
 	projects := daemon.NewStore(db)
 	sessions := sessionstore.NewStore(db)
 	cfg := &config.Config{UnifiedConfig: &config.UnifiedConfig{ProjectsRoot: filepath.Join(root, "projects")}}
-	svc := daemon.New(nil, projects, sessions, sessions, daemon.NewLinkStore(db), nil, cfg, nil, nil, nil)
-	controllers := daemon.NewController(svc, cfg, nil, nil)
+	svc := daemon.New(
+		nil, projects, sessions, sessions, sessions, sessions, sessions, sessions, sessions,
+		subagent.NewStore(db), subagent.NewTransactions(db),
+		budget.New(sessions), sessions, nil, cfg, nil, nil, nil,
+	)
+	controllers := managercontrol.New(svc, svc, sessions, cfg, nil)
 	telegramController := controllers.ForManager("telegram-main")
 	projectID, err := projects.GetOrCreateProject(ctx, filepath.Join(root, "project"))
 	require.NoError(t, err)

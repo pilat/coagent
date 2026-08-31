@@ -10,12 +10,13 @@ import (
 	"github.com/pilat/coagent/internal/budget"
 	"github.com/pilat/coagent/internal/session"
 	"github.com/pilat/coagent/internal/sessionstore"
+	"github.com/pilat/coagent/internal/transcript"
 )
 
 type sessionBudgetGate struct {
 	daemon    *svc
 	service   budget.Service
-	store     sessionstore.RuntimeStore
+	store     sessionstore.AgentRuntimeStore
 	sessionID int64
 	rootID    int64
 }
@@ -49,15 +50,10 @@ func (g *sessionBudgetGate) Admit(ctx context.Context, now time.Time) error {
 //nolint:wsl_v5 // Commit and park scheduling form one response boundary.
 func (g *sessionBudgetGate) PersistResponse(
 	ctx context.Context,
-	message *sessionstore.StoredMessage,
+	message *transcript.Message,
 	directReply string,
 ) (int64, bool, bool, error) {
-	store, ok := g.store.(sessionstore.BudgetResponseStore)
-	if !ok {
-		return 0, false, false, errors.New("budget response store unavailable")
-	}
-
-	result, err := store.InsertBudgetedResponse(ctx, sessionstore.BudgetedResponse{
+	result, err := g.store.InsertBudgetedResponse(ctx, sessionstore.BudgetedResponse{
 		SessionID: g.sessionID, RootID: g.rootID, Message: message,
 		DirectReply: directReply, ObservedAt: time.Now().UTC(),
 	})
@@ -90,13 +86,9 @@ func (g *sessionBudgetGate) PersistCompaction(
 	ctx context.Context,
 	compaction sessionstore.BudgetedCompaction,
 ) ([]int64, bool, error) {
-	store, ok := g.store.(sessionstore.BudgetCompactionStore)
-	if !ok {
-		return nil, false, errors.New("budget compaction store unavailable")
-	}
 	compaction.SessionID = g.sessionID
 	compaction.RootID = g.rootID
-	result, err := store.ReplaceCompactedMessagesBudgeted(ctx, compaction)
+	result, err := g.store.ReplaceCompactedMessagesBudgeted(ctx, compaction)
 	if err != nil {
 		return nil, false, err
 	}
@@ -152,12 +144,7 @@ func (s *svc) releaseArmedBudget(ctx context.Context, rootID int64, reason strin
 		return fmt.Errorf("load budget for terminal release: %w", err)
 	}
 
-	store, ok := s.sessionStore.(sessionstore.BudgetStore)
-	if !ok {
-		return errors.New("budget store unavailable")
-	}
-
-	if _, err := store.ReleaseBudget(ctx, rootID, record.Generation, reason); err != nil {
+	if _, err := s.budgetSvc.Release(ctx, rootID, record.Generation, reason); err != nil {
 		return fmt.Errorf("release terminal budget: %w", err)
 	}
 

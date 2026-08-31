@@ -10,66 +10,24 @@ import (
 	"fmt"
 	"slices"
 	"sort"
-	"sync"
 	"time"
 
 	"go.uber.org/zap"
 
+	"github.com/pilat/coagent/internal/admission"
 	"github.com/pilat/coagent/internal/configops"
 	"github.com/pilat/coagent/internal/controllerapi"
 	"github.com/pilat/coagent/internal/logger"
 	"github.com/pilat/coagent/internal/schedule"
 	"github.com/pilat/coagent/internal/session"
 	"github.com/pilat/coagent/internal/sessionevent"
+	"github.com/pilat/coagent/internal/sessionlifecycle"
 	"github.com/pilat/coagent/internal/sessionstore"
+	"github.com/pilat/coagent/internal/subagent"
 	"github.com/pilat/coagent/internal/tool"
 )
 
-// runner tracks an active session goroutine.
-// svcMu and inputMu protect independent fields and are never held together.
-type runner struct {
-	svcMu     sync.Mutex         // protects service field
-	service   session.Service    // nil between loop iterations
-	cancel    context.CancelFunc // used by stop to cancel context
-	done      chan struct{}      // closed when runSession goroutine exits
-	workDir   string
-	projectID int64
-	kind      slotKind // parent or child — for admission accounting on release
-	parentID  int64    // for per-parent slot accounting (0 for non-children)
-	hasRun    bool     // durable accepted-turn inference applies only before the first iteration
-
-	inputMu sync.Mutex
-	inputs  []queuedSessionInput
-
-	// preserveStopped reports a command-only activation of a stopped root: the
-	// run answers read-only boundary commands but must not reactivate the root.
-	preserveStopped bool
-}
-
-// stop cancels the runner's context and waits for the goroutine to exit.
-func (r *runner) stop() {
-	r.cancel()
-	<-r.done
-}
-
-// appendSessionInput queues an exact protocol variant for the next loop
-// iteration. The shared inbox signal wakes a live runner's forwarder.
-func (r *runner) appendSessionInput(input queuedSessionInput) {
-	r.inputMu.Lock()
-	r.inputs = append(r.inputs, input)
-	r.inputMu.Unlock()
-}
-
-// drainSessionInputs returns every queued delivery and clears the queue.
-func (r *runner) drainSessionInputs() []queuedSessionInput {
-	r.inputMu.Lock()
-	defer r.inputMu.Unlock()
-
-	inputs := r.inputs
-	r.inputs = nil
-
-	return inputs
-}
+type runner = sessionlifecycle.Runner[queuedSessionInput]
 
 // defaultBlockingTimeoutSec bounds a blocking child's wall-clock when the task
 // tool did not specify one (preserves the legacy 5-minute task timeout).
@@ -85,8 +43,8 @@ const maxEmptyLoopIterations = 3
 var errNoChildTimeout = errors.New("no timeout applies")
 
 // runSession is the main goroutine for a session.
-// ctx is already cancelable via rs.cancel (set in ensureRunner).
-func (s *svc) runSession(ctx context.Context, sessionID int64, rs *runner) {
+// ctx is already cancelable through rs (set in ensureRunner).
+func (s *svc) runSession(ctx context.Context, sessionID int64, rs runner) {
 	errored := false
 
 	// Registered before the timeout is applied so every exit below runs the full
@@ -142,7 +100,7 @@ func (s *svc) runSession(ctx context.Context, sessionID int64, rs *runner) {
 func (s *svc) finishRunner(
 	ctx context.Context,
 	sessionID int64,
-	rs *runner,
+	rs runner,
 	errored *bool,
 	timeoutCancel context.CancelFunc,
 	panicValue any,
@@ -160,10 +118,9 @@ func (s *svc) finishRunner(
 		*errored = true
 	}
 
-	s.mu.Lock()
-	delete(s.loops, sessionID)
-	s.mu.Unlock()
-	s.admit.release(rs.kind, rs.parentID)
+	s.runners.Delete(sessionID)
+	info := rs.Info()
+	s.admit.Release(info.Kind, info.ParentID)
 
 	cleanupCtx := context.WithoutCancel(ctx)
 
@@ -176,8 +133,8 @@ func (s *svc) finishRunner(
 		s.reconcileLatestReadiness(cleanupCtx, sessionID)
 	}
 
-	leftover := rs.drainSessionInputs()
-	close(rs.done)
+	leftover := rs.DrainInputs()
+	rs.Complete()
 
 	if !shuttingDown && ctx.Err() == nil {
 		for _, input := range leftover {
@@ -225,7 +182,7 @@ func (s *svc) restartPendingAfterExit(ctx context.Context, sessionID int64) {
 func (s *svc) runSessionIteration( //nolint:funlen,gocyclo // Linear lifecycle with explicit cleanup at each boundary.
 	ctx context.Context,
 	sessionID int64,
-	rs *runner,
+	rs runner,
 	notify func(sessionevent.Notification),
 	announced *bool,
 ) (bool, bool) {
@@ -241,7 +198,9 @@ func (s *svc) runSessionIteration( //nolint:funlen,gocyclo // Linear lifecycle w
 		s.announceSession(ctx, sessionID, rs, rec, notify)
 	}
 
-	sess, runErr := s.createOrResumeSession(ctx, sessionID, rs.workDir, rec, rs.preserveStopped)
+	info := rs.Info()
+
+	sess, runErr := s.createOrResumeSession(ctx, sessionID, info.WorkDir, rec, info.PreserveStopped)
 	if runErr != nil {
 		logger.Ctx(ctx).Warn("session_create_failed", zap.Int64("session_id", sessionID), zap.Error(runErr))
 		s.reportSessionUnstarted(ctx, sessionID, notify, runErr)
@@ -268,7 +227,7 @@ func (s *svc) runSessionIteration( //nolint:funlen,gocyclo // Linear lifecycle w
 	}
 
 	recoveringAcceptedTurn := false
-	if !hasDurableInput && len(inputs) == 0 && !sess.HasPendingWork() && !rs.hasRun {
+	if !hasDurableInput && len(inputs) == 0 && !sess.HasPendingWork() && !rs.HasRun() {
 		recoveringAcceptedTurn, runErr = s.recoverableInputRunnable(ctx, sessionID)
 		if runErr != nil {
 			sess.Close()
@@ -297,9 +256,7 @@ func (s *svc) runSessionIteration( //nolint:funlen,gocyclo // Linear lifecycle w
 		return false, false
 	}
 
-	rs.svcMu.Lock()
-	rs.service = sess
-	rs.svcMu.Unlock()
+	rs.SetService(sess)
 
 	s.registerScheduleTools(ctx, rec, sess)
 	s.registerSubagentTools(ctx, sessionID, sess)
@@ -308,7 +265,8 @@ func (s *svc) runSessionIteration( //nolint:funlen,gocyclo // Linear lifecycle w
 	s.registerSecretTool(ctx, rec, sess)
 	s.registerBudgetTool(ctx, rec, sess)
 
-	rs.hasRun = true
+	rs.MarkRun()
+
 	runResult, runErr := s.executeSession(ctx, sess, notify)
 
 	if rec.ParentID == 0 {
@@ -327,9 +285,7 @@ func (s *svc) runSessionIteration( //nolint:funlen,gocyclo // Linear lifecycle w
 	s.reconcileLatestReadiness(ctx, sessionID)
 	s.deferNotices.record(sessionID, runResult.CompactionDeferAnnounced)
 
-	rs.svcMu.Lock()
-	rs.service = nil
-	rs.svcMu.Unlock()
+	rs.SetService(nil)
 
 	sess.Close()
 
@@ -426,7 +382,7 @@ func (s *svc) collectWaitingProjections(ctx context.Context, sessionID int64) []
 		logger.Ctx(ctx).Named("daemon.waiting").Warn("list_subagents", zap.Error(err))
 	} else {
 		for _, link := range links {
-			if link.Blocking && !link.Terminal() && link.State != LinkStateStopped {
+			if link.Blocking && !link.Terminal() && link.State != subagent.StateStopped {
 				projections = append(projections, waitingProjection{
 					wait:     sessionevent.WaitItem{Kind: sessionevent.WaitSubagent, ChildID: link.ChildID},
 					display:  map[string]any{"child_id": link.ChildID},
@@ -445,8 +401,6 @@ func (s *svc) collectWaitingProjections(ctx context.Context, sessionID int64) []
 
 // recordWaitingProgress enqueues the durable waiting card for the projected
 // set; the canonical replaceable row is its own dedupe, so nothing is returned.
-//
-//nolint:wsl_v5 // Waiting projection and output reconciliation stay adjacent.
 func (s *svc) recordWaitingProgress(
 	ctx context.Context,
 	sessionID int64,
@@ -465,19 +419,9 @@ func (s *svc) recordWaitingProgress(
 
 	digest := sha256.Sum256(identity)
 	hash := hex.EncodeToString(digest[:])
-	progressStore, ok := s.sessionStore.(sessionstore.ProgressStore)
-	if !ok {
-		return nil
-	}
-
-	facts, err := progressStore.CaptureProgress(ctx, sessionID)
-	if err != nil {
-		return fmt.Errorf("capture progress: %w", err)
-	}
-
 	// A stale waiting card is dropped without a recapture retry: the newer
 	// transition that moved the generation owns the next card.
-	if _, _, err := s.enqueueProgressChangeFacts(ctx, facts, "waiting:"+hash, false); err != nil &&
+	if _, _, err := s.enqueueProgressChangeFor(ctx, sessionID, "waiting:"+hash, false); err != nil &&
 		!errors.Is(err, sessionstore.ErrProgressSuperseded) && !errors.Is(err, sessionstore.ErrOutputOwner) {
 		return fmt.Errorf("enqueue progress: %w", err)
 	}
@@ -620,12 +564,9 @@ func (s *svc) closeOrphanedCalls(ctx context.Context, rec *sessionstore.SessionR
 }
 
 func (s *svc) ensureSessionRunner(ctx context.Context, sessionID int64) error {
-	s.mu.Lock()
-	if _, ok := s.loops[sessionID]; ok {
-		s.mu.Unlock()
+	if _, ok := s.runners.Load(sessionID); ok {
 		return nil
 	}
-	s.mu.Unlock()
 
 	rec, err := s.sessionStore.GetSession(ctx, sessionID)
 	if err != nil {
@@ -646,7 +587,7 @@ func (s *svc) ensureSessionRunner(ctx context.Context, sessionID int64) error {
 	}
 
 	err = s.ensureRunner(ctx, sessionID, workDir, rec.ProjectID, nil)
-	if errors.Is(err, errNoCapacity) && rec.ParentID == 0 {
+	if errors.Is(err, admission.ErrNoCapacity) && rec.ParentID == 0 {
 		s.enqueuePendingRunner(sessionID, workDir, rec.ProjectID)
 		return nil
 	}
@@ -693,10 +634,10 @@ func (s *svc) reportSessionUnstarted(
 func (s *svc) prepareSessionInputs(
 	ctx context.Context,
 	sessionID int64,
-	rs *runner,
+	rs runner,
 	sess session.Service,
 ) ([]sessionInput, error) {
-	deliveries := rs.drainSessionInputs()
+	deliveries := rs.DrainInputs()
 	ordered := orderSessionInputs(deliveries)
 
 	applied, resolvedExternal, err := s.applyResolvingInputs(ctx, sessionID, sess, ordered)
@@ -879,16 +820,17 @@ func (s *svc) injectSessionInput(
 func (s *svc) announceSession(
 	ctx context.Context,
 	sessionID int64,
-	rs *runner,
+	rs runner,
 	rec *sessionstore.SessionRecord,
 	notify func(sessionevent.Notification),
 ) {
-	projectName, _ := s.store.GetProjectName(ctx, rs.projectID)
+	info := rs.Info()
+	projectName, _ := s.store.GetProjectName(ctx, info.ProjectID)
 	name := fmt.Sprintf("%s - %d", projectName, sessionID)
 	notify(sessionevent.Notification{
 		Type:       sessionevent.NotifySessionCreated,
 		Name:       name,
-		WorkDir:    rs.workDir,
+		WorkDir:    info.WorkDir,
 		Attributes: rec.Attributes,
 	})
 }
@@ -948,8 +890,6 @@ func (s *svc) createOrResumeSession(
 // openSession builds the session service. A settlement open never persists the
 // initial state: /stop settles a tree already marked stopping, and reactivating
 // it would lose the lifecycle fence.
-//
-//nolint:funlen // Session construction assembles one activation boundary.
 func (s *svc) openSession(
 	ctx context.Context,
 	sessionID int64,
@@ -979,11 +919,9 @@ func (s *svc) openSession(
 		StagedExternalCalls: externalCalls,
 
 		CompactionDeferAnnounced: s.deferNotices.announced(sessionID),
-		InputBoundary: &durableInputBoundary{
-			store:     s.inboxStore,
-			schedules: s.scheduleSvc,
-			sessionID: sessionID,
-			progress: func(ctx context.Context) (string, error) {
+		InputBoundary: s.inputFactory.Boundary(
+			sessionID,
+			func(ctx context.Context) (string, error) {
 				current, err := s.CurrentProgress(ctx, sessionID)
 				if err != nil {
 					return "", err
@@ -991,13 +929,13 @@ func (s *svc) openSession(
 
 				return current.Rendered, nil
 			},
-			progressChange: func(ctx context.Context) (string, bool, error) {
+			func(ctx context.Context) (string, bool, error) {
 				return s.enqueueProgressChange(ctx, sessionID)
 			},
-			finalOutput: func(ctx context.Context, text string) (string, error) {
+			func(ctx context.Context, text string) (string, error) {
 				return s.renderFinalOutput(ctx, sessionID, text)
 			},
-		},
+		),
 		SettlementOpen:        settlement,
 		PreserveStoppedStatus: preserveStopped,
 	}
@@ -1016,11 +954,9 @@ func (s *svc) openSession(
 	}
 
 	if s.budgetSvc != nil && budgetGateNeeded {
-		if runtimeStore, ok := s.sessionStore.(sessionstore.RuntimeStore); ok {
-			opts.BudgetGate = &sessionBudgetGate{
-				daemon: s, service: s.budgetSvc, store: runtimeStore,
-				sessionID: rec.ID, rootID: sessionRootID(rec),
-			}
+		opts.BudgetGate = &sessionBudgetGate{
+			daemon: s, service: s.budgetSvc, store: s.runtimeStore,
+			sessionID: rec.ID, rootID: sessionRootID(rec),
 		}
 	}
 
@@ -1350,78 +1286,9 @@ func (s *svc) ensureRunner(
 		return errDaemonShuttingDown
 	}
 
-	rec, err := s.sessionStore.GetSession(ctx, sessionID)
-	if err != nil {
-		return fmt.Errorf("load session %d before start: %w", sessionID, err)
+	if err := s.launcher.Ensure(ctx, sessionID, workDir, projectID, inputs); err != nil {
+		return fmt.Errorf("ensure session runner: %w", err)
 	}
-
-	preserveStopped, err := s.ensureRunnerStartable(ctx, rec, inputs)
-	if err != nil {
-		return err
-	}
-
-	s.mu.Lock()
-	if existing, ok := s.loops[sessionID]; ok {
-		s.mu.Unlock()
-
-		for _, input := range inputs {
-			existing.appendSessionInput(input)
-		}
-
-		return nil
-	}
-	s.mu.Unlock()
-
-	// Classification precedes admission so a session never starts holding the
-	// wrong slot — or none at all.
-	kind, parentID, blocking, err := s.slotInfo(ctx, sessionID)
-	if err != nil {
-		return err
-	}
-
-	// Non-blocking admission. On a child admit-fail: background children queue
-	// (run when a slot frees); blocking children error (the caps are surfaced as
-	// a tool_result and the model degrades).
-	if !s.admit.tryAdmit(kind, parentID) {
-		if kind == slotChild && !blocking {
-			s.enqueueChild(ctx, sessionID, parentID, workDir, projectID)
-			return nil
-		}
-
-		return errNoCapacity
-	}
-
-	// Session goroutine uses independent context — survives controller disconnect
-	loopCtx, loopCancel := context.WithCancel(context.Background())
-	rs := &runner{
-		cancel:          loopCancel,
-		done:            make(chan struct{}),
-		workDir:         workDir,
-		projectID:       projectID,
-		inputs:          inputs,
-		kind:            kind,
-		parentID:        parentID,
-		preserveStopped: preserveStopped,
-	}
-
-	existing, started := s.registerRunner(sessionID, rs)
-	if !started {
-		s.admit.release(kind, parentID)
-		loopCancel()
-
-		if existing == nil {
-			return errDaemonShuttingDown
-		}
-
-		for _, input := range inputs {
-			existing.appendSessionInput(input)
-		}
-
-		return nil
-	}
-
-	//nolint:contextcheck // deliberate: the session goroutine must outlive the caller's request ctx (see comment above)
-	go s.runSession(loopCtx, sessionID, rs)
 
 	return nil
 }
@@ -1488,49 +1355,17 @@ func queuedInputsStartScheduledTurn(inputs []queuedSessionInput) bool {
 	})
 }
 
-func (s *svc) registerRunner(sessionID int64, rs *runner) (*runner, bool) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	if s.shuttingDown.Load() {
-		return nil, false
-	}
-
-	if existing, ok := s.loops[sessionID]; ok {
-		return existing, false
-	}
-
-	s.loops[sessionID] = rs
-
-	return nil, true
-}
-
-// slotInfo classifies a session for admission: a session with a subagent link is
-// a child (carrying its parent id + blocking flag); otherwise a parent. An
-// unclassifiable session must not start: it would run outside admission entirely.
-func (s *svc) slotInfo(ctx context.Context, sessionID int64) (slotKind, int64, bool, error) {
-	link, err := s.links.GetLink(ctx, sessionID)
-	if err != nil {
-		return slotParent, 0, false, fmt.Errorf("classify session %d: %w", sessionID, err)
-	}
-
-	if link == nil {
-		return slotParent, 0, false, nil
-	}
-
-	return slotChild, link.ParentID, link.Blocking, nil
-}
-
 // startChildTimeout applies applyChildTimeout for runSession's setup, folding in
 // the error-vs-sentinel split so the caller only branches on whether to continue.
 // A genuine read failure sets *errored and returns ok=false (caller must return).
 func (s *svc) startChildTimeout(
 	ctx context.Context,
-	rs *runner,
+	rs runner,
 	sessionID int64,
 	errored *bool,
 ) (context.Context, context.CancelFunc, bool) {
-	if rs.kind != slotChild {
+	info := rs.Info()
+	if info.Kind != admission.Child {
 		return ctx, nil, true
 	}
 
@@ -1540,7 +1375,7 @@ func (s *svc) startChildTimeout(
 		// teardown finalizes it as completed once the ledger recovers.
 		*errored = true
 
-		s.reportTimeoutUnresolved(ctx, rs.parentID, sessionID, err)
+		s.reportTimeoutUnresolved(ctx, info.ParentID, sessionID, err)
 
 		return ctx, nil, false
 	}

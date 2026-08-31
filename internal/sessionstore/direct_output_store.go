@@ -8,6 +8,8 @@ import (
 	"errors"
 	"fmt"
 	"time"
+
+	"github.com/pilat/coagent/internal/transcript"
 )
 
 const (
@@ -20,7 +22,7 @@ type DirectOutputStore interface {
 	InsertToolResultWithDirectOutput(
 		ctx context.Context,
 		sessionID int64,
-		message *StoredMessage,
+		message *transcript.Message,
 		directMessages []string,
 	) (messageID int64, outputs []*OutputCommit, err error)
 }
@@ -30,7 +32,7 @@ var _ DirectOutputStore = (*store)(nil)
 func (s *store) InsertToolResultWithDirectOutput(
 	ctx context.Context,
 	sessionID int64,
-	message *StoredMessage,
+	message *transcript.Message,
 	directMessages []string,
 ) (int64, []*OutputCommit, error) {
 	if err := validateDirectOutput(message, directMessages); err != nil {
@@ -80,7 +82,7 @@ func (s *store) InsertToolResultWithDirectOutput(
 	return messageID, outputs, nil
 }
 
-func validateDirectOutput(message *StoredMessage, direct []string) error {
+func validateDirectOutput(message *transcript.Message, direct []string) error {
 	if message == nil || message.Role != "tool" || message.ToolCallID == "" || message.ToolName == "" {
 		return errors.New("invalid direct-output tool result")
 	}
@@ -110,7 +112,7 @@ func insertToolResultOnce(
 	ctx context.Context,
 	tx *sql.Tx,
 	sessionID int64,
-	message *StoredMessage,
+	message *transcript.Message,
 ) (int64, error) {
 	var existingID int64
 	var existingContent string

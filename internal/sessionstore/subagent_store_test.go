@@ -12,7 +12,13 @@ import (
 
 	"github.com/pilat/coagent/internal/llmwire"
 	"github.com/pilat/coagent/internal/migrate"
+	"github.com/pilat/coagent/internal/subagent"
+	"github.com/pilat/coagent/internal/transcript"
 )
+
+func newTestSubagentTransactions(db *sql.DB) subagent.Transactions {
+	return subagent.NewTransactions(db)
+}
 
 // newTestStore opens a migrated temp SQLite DB and returns a real store, its raw
 // DB handle (for seeding subagent_links rows the session store no longer writes),
@@ -38,9 +44,7 @@ func newTestStore(t *testing.T) (Store, *sql.DB, int64) {
 	return NewStore(db), db, projectID
 }
 
-// seedLink inserts a bare subagent_links row directly — the ledger now lives in
-// daemon.LinkStore, but DeliverCompletionAtomic still CAS-stamps delivered_at on
-// an existing row, so the session-side test seeds one to exercise that.
+// seedLink inserts a bare row for tests that exercise a specific ledger state.
 func seedLink(t *testing.T, db *sql.DB, parentID, childID int64, taskCallID string) {
 	t.Helper()
 
@@ -53,7 +57,7 @@ func seedLink(t *testing.T, db *sql.DB, parentID, childID int64, taskCallID stri
 	require.NoError(t, err)
 }
 
-// readLinkDelivery reads the delivery markers DeliverCompletionAtomic stamps.
+// readLinkDelivery reads the delivery markers DeliverCompletion stamps.
 func readLinkDelivery(t *testing.T, db *sql.DB, childID int64) (int64, int64) {
 	t.Helper()
 
@@ -88,14 +92,14 @@ func TestStore_CreateSubagentSession_PersistsRootAndModel(t *testing.T) {
 	assert.Equal(t, "high", rec.ReasoningLevel)
 }
 
-func TestStore_CreateSubagentWithLinkCommitsAggregate(t *testing.T) {
+func TestSubagentStore_CreateCommitsAggregate(t *testing.T) {
 	s, db, projectID := newTestStore(t)
 	ctx := context.Background()
 
 	parent, err := s.CreateSession(ctx, projectID, "parent-model", "", nil)
 	require.NoError(t, err)
 
-	childID, err := s.CreateSubagentWithLink(ctx, SubagentCreate{
+	childID, err := newTestSubagentTransactions(db).Create(ctx, subagent.Create{
 		ProjectID:      projectID,
 		ParentID:       parent.ID,
 		RootID:         parent.ID,
@@ -105,7 +109,7 @@ func TestStore_CreateSubagentWithLinkCommitsAggregate(t *testing.T) {
 		TaskCallID:     "task-1",
 		Blocking:       true,
 		Depth:          1,
-		LinkState:      "spawned",
+		State:          "spawned",
 		TimeoutSec:     30,
 		InitialInput:   "inspect the repository",
 	})
@@ -134,7 +138,7 @@ func TestStore_CreateSubagentWithLinkCommitsAggregate(t *testing.T) {
 	assert.Equal(t, "inspect the repository", input.RawContent)
 }
 
-func TestStore_CreateSubagentWithLinkRejectsStoppingParent(t *testing.T) {
+func TestSubagentStore_CreateRejectsStoppingParent(t *testing.T) {
 	s, db, projectID := newTestStore(t)
 	ctx := context.Background()
 
@@ -142,9 +146,9 @@ func TestStore_CreateSubagentWithLinkRejectsStoppingParent(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, s.UpdateSessionStatus(ctx, parent.ID, SessionStatusStopping))
 
-	_, err = s.CreateSubagentWithLink(ctx, SubagentCreate{
+	_, err = newTestSubagentTransactions(db).Create(ctx, subagent.Create{
 		ProjectID: projectID, ParentID: parent.ID, RootID: parent.ID,
-		Model: "child-model", TaskCallID: "task-1", LinkState: "spawned",
+		Model: "child-model", TaskCallID: "task-1", State: "spawned",
 	})
 	require.ErrorContains(t, err, "not accepting subagents")
 
@@ -155,7 +159,7 @@ func TestStore_CreateSubagentWithLinkRejectsStoppingParent(t *testing.T) {
 	assert.Zero(t, children)
 }
 
-func TestStore_CreateSubagentWithLinkRollsBackAggregateOnInboxFailure(t *testing.T) {
+func TestSubagentStore_CreateRollsBackAggregateOnInboxFailure(t *testing.T) {
 	s, db, projectID := newTestStore(t)
 	ctx := context.Background()
 	parent, err := s.CreateSession(ctx, projectID, "parent-model", "", nil)
@@ -169,9 +173,9 @@ func TestStore_CreateSubagentWithLinkRollsBackAggregateOnInboxFailure(t *testing
 	`)
 	require.NoError(t, err)
 
-	_, err = s.CreateSubagentWithLink(ctx, SubagentCreate{
+	_, err = newTestSubagentTransactions(db).Create(ctx, subagent.Create{
 		ProjectID: projectID, ParentID: parent.ID, RootID: parent.ID,
-		Model: "child-model", TaskCallID: "task-1", LinkState: "spawned",
+		Model: "child-model", TaskCallID: "task-1", State: "spawned",
 		InitialInput: "work",
 	})
 	require.ErrorContains(t, err, "insert subagent initial input")
@@ -185,7 +189,7 @@ func TestStore_CreateSubagentWithLinkRollsBackAggregateOnInboxFailure(t *testing
 	assert.Zero(t, links)
 }
 
-func TestStore_CreateSubagentWithLinkRollsBackOrphanOnLinkFailure(t *testing.T) {
+func TestSubagentStore_CreateRollsBackOrphanOnLinkFailure(t *testing.T) {
 	s, db, projectID := newTestStore(t)
 	ctx := context.Background()
 
@@ -200,7 +204,7 @@ func TestStore_CreateSubagentWithLinkRollsBackOrphanOnLinkFailure(t *testing.T) 
 	`)
 	require.NoError(t, err)
 
-	_, err = s.CreateSubagentWithLink(ctx, SubagentCreate{
+	_, err = newTestSubagentTransactions(db).Create(ctx, subagent.Create{
 		ProjectID:  projectID,
 		ParentID:   parent.ID,
 		RootID:     parent.ID,
@@ -208,7 +212,7 @@ func TestStore_CreateSubagentWithLinkRollsBackOrphanOnLinkFailure(t *testing.T) 
 		Model:      "child-model",
 		TaskCallID: "task-1",
 		Depth:      1,
-		LinkState:  "spawned",
+		State:      "spawned",
 	})
 	require.ErrorContains(t, err, "insert subagent link")
 
@@ -223,7 +227,7 @@ func TestStore_CreateSubagentWithLinkRollsBackOrphanOnLinkFailure(t *testing.T) 
 	assert.Zero(t, links)
 }
 
-func TestStore_DeliverCompletionAtomic_CAS(t *testing.T) {
+func TestSubagentStore_DeliverCompletion_CAS(t *testing.T) {
 	s, db, projectID := newTestStore(t)
 	ctx := context.Background()
 
@@ -233,16 +237,16 @@ func TestStore_DeliverCompletionAtomic_CAS(t *testing.T) {
 	require.NoError(t, err)
 	seedLink(t, db, parent.ID, childID, "c1")
 
-	msg := func(c string) []*StoredMessage {
-		return []*StoredMessage{{Role: llmwire.RoleTool, Content: c, ToolCallID: "c1", ToolName: "task"}}
+	msg := func(c string) []*transcript.Message {
+		return []*transcript.Message{{Role: llmwire.RoleTool, Content: c, ToolCallID: "c1", ToolName: "task"}}
 	}
 
-	ids, won, err := s.DeliverCompletionAtomic(ctx, parent.ID, msg("first"), childID, 1)
+	ids, won, err := newTestSubagentTransactions(db).DeliverCompletion(ctx, parent.ID, msg("first"), childID, 1)
 	require.NoError(t, err)
 	assert.True(t, won, "first delivery wins the CAS")
 	require.Len(t, ids, 1)
 
-	ids2, won2, err := s.DeliverCompletionAtomic(ctx, parent.ID, msg("second"), childID, 1)
+	ids2, won2, err := newTestSubagentTransactions(db).DeliverCompletion(ctx, parent.ID, msg("second"), childID, 1)
 	require.NoError(t, err)
 	assert.False(t, won2, "second delivery loses the CAS")
 	assert.Empty(t, ids2, "the loser inserts nothing")
@@ -269,13 +273,15 @@ func TestStore_StaleCompletionCannotCrossSubagentRearmBoundary(t *testing.T) {
 	require.NoError(t, err)
 	seedLink(t, db, parent.ID, childID, "c1")
 
-	completion := func(content string) []*StoredMessage {
-		return []*StoredMessage{{
+	completion := func(content string) []*transcript.Message {
+		return []*transcript.Message{{
 			Role: llmwire.RoleTool, Content: content, ToolCallID: "c1", ToolName: "task",
 		}}
 	}
 
-	_, won, err := s.DeliverCompletionAtomic(ctx, parent.ID, completion("activation one"), childID, 1)
+	_, won, err := newTestSubagentTransactions(db).DeliverCompletion(
+		ctx, parent.ID, completion("activation one"), childID, 1,
+	)
 	require.NoError(t, err)
 	require.True(t, won)
 	_, err = db.ExecContext(ctx, `UPDATE subagent_links SET state = 'completed' WHERE child_id = ?`, childID)
@@ -283,17 +289,17 @@ func TestStore_StaleCompletionCannotCrossSubagentRearmBoundary(t *testing.T) {
 	_, err = s.EnqueueInput(ctx, childID, InputSourceAgent, "follow-up")
 	require.NoError(t, err)
 
-	rearmed, err := s.RearmDeliveredSubagentWithPendingInput(ctx, childID)
+	rearmed, err := newTestSubagentTransactions(db).RearmDeliveredWithPendingInput(ctx, childID)
 	require.NoError(t, err)
 	require.True(t, rearmed)
 
-	_, staleWon, err := s.DeliverCompletionAtomic(
+	_, staleWon, err := newTestSubagentTransactions(db).DeliverCompletion(
 		ctx, parent.ID, completion("stale duplicate"), childID, 1,
 	)
 	require.NoError(t, err)
 	assert.False(t, staleWon, "activation one cannot deliver after activation two has begun")
 
-	_, currentWon, err := s.DeliverCompletionAtomic(
+	_, currentWon, err := newTestSubagentTransactions(db).DeliverCompletion(
 		ctx, parent.ID, completion("activation two"), childID, 2,
 	)
 	require.NoError(t, err)
@@ -308,7 +314,7 @@ func TestStore_StaleCompletionCannotCrossSubagentRearmBoundary(t *testing.T) {
 	assert.Equal(t, []string{"activation one", "activation two"}, contents)
 }
 
-func TestStore_DeliverCompletionAtomicRejectsWrongParent(t *testing.T) {
+func TestSubagentStore_DeliverCompletionRejectsWrongParent(t *testing.T) {
 	s, db, projectID := newTestStore(t)
 	ctx := context.Background()
 
@@ -320,7 +326,7 @@ func TestStore_DeliverCompletionAtomicRejectsWrongParent(t *testing.T) {
 	require.NoError(t, err)
 	seedLink(t, db, parent.ID, childID, "c1")
 
-	_, won, err := s.DeliverCompletionAtomic(ctx, otherParent.ID, []*StoredMessage{{
+	_, won, err := newTestSubagentTransactions(db).DeliverCompletion(ctx, otherParent.ID, []*transcript.Message{{
 		Role: llmwire.RoleTool, Content: "wrong parent", ToolCallID: "c1", ToolName: "task",
 	}}, childID, 1)
 	require.Error(t, err)
@@ -336,7 +342,7 @@ func TestStore_DeliverCompletionAtomicRejectsWrongParent(t *testing.T) {
 	assert.Empty(t, messages, "a rejected delivery must not contaminate another transcript")
 }
 
-func TestStore_DeliverCompletionAtomicRejectsEmptyCompletion(t *testing.T) {
+func TestSubagentStore_DeliverCompletionRejectsEmptyCompletion(t *testing.T) {
 	s, db, projectID := newTestStore(t)
 	ctx := context.Background()
 
@@ -346,7 +352,7 @@ func TestStore_DeliverCompletionAtomicRejectsEmptyCompletion(t *testing.T) {
 	require.NoError(t, err)
 	seedLink(t, db, parent.ID, childID, "c1")
 
-	_, won, err := s.DeliverCompletionAtomic(ctx, parent.ID, nil, childID, 1)
+	_, won, err := newTestSubagentTransactions(db).DeliverCompletion(ctx, parent.ID, nil, childID, 1)
 	require.Error(t, err)
 	assert.False(t, won)
 	require.ErrorContains(t, err, "no messages")
@@ -363,11 +369,11 @@ func TestStore_InsertToolNotificationPairOnce(t *testing.T) {
 	sess, err := s.CreateSession(ctx, projectID, "m", "", nil)
 	require.NoError(t, err)
 
-	assistant := &StoredMessage{
+	assistant := &transcript.Message{
 		Role:      llmwire.RoleAssistant,
 		ToolCalls: []byte(`[{"ID":"call-1","Name":"subagent_event"}]`),
 	}
-	toolResult := &StoredMessage{
+	toolResult := &transcript.Message{
 		Role:       llmwire.RoleTool,
 		ToolCallID: "call-1",
 		ToolName:   "subagent_event",
@@ -396,20 +402,24 @@ func TestStore_ReplaceCompactedMessagesPreservesReplacementOrder(t *testing.T) {
 	sess, err := s.CreateSession(ctx, projectID, "m", "", nil)
 	require.NoError(t, err)
 
-	headerID, err := s.InsertMessage(ctx, sess.ID, &StoredMessage{Role: llmwire.RoleUser, Content: "task"})
+	headerID, err := s.InsertMessage(ctx, sess.ID, &transcript.Message{Role: llmwire.RoleUser, Content: "task"})
 	require.NoError(t, err)
-	oldID, err := s.InsertMessage(ctx, sess.ID, &StoredMessage{Role: llmwire.RoleAssistant, Content: "old"})
+	oldID, err := s.InsertMessage(ctx, sess.ID, &transcript.Message{Role: llmwire.RoleAssistant, Content: "old"})
 	require.NoError(t, err)
-	retainedID, err := s.InsertMessage(ctx, sess.ID, &StoredMessage{Role: llmwire.RoleAssistant, Content: "retained"})
+	retainedID, err := s.InsertMessage(
+		ctx,
+		sess.ID,
+		&transcript.Message{Role: llmwire.RoleAssistant, Content: "retained"},
+	)
 	require.NoError(t, err)
-	_, err = s.InsertMessage(ctx, sess.ID, &StoredMessage{Role: llmwire.RoleUser, Content: "concurrent"})
+	_, err = s.InsertMessage(ctx, sess.ID, &transcript.Message{Role: llmwire.RoleUser, Content: "concurrent"})
 	require.NoError(t, err)
 
 	ids, err := s.ReplaceCompactedMessages(ctx, sess.ID, []int64{oldID}, []CompactionEntry{
 		{ExistingID: headerID},
-		{Message: &StoredMessage{Role: llmwire.RoleUser, Content: "summary"}},
-		{Message: &StoredMessage{Role: llmwire.RoleAssistant, Content: "ack"}},
-		{Message: &StoredMessage{Role: llmwire.RoleUser, Content: "skill"}},
+		{Message: &transcript.Message{Role: llmwire.RoleUser, Content: "summary"}},
+		{Message: &transcript.Message{Role: llmwire.RoleAssistant, Content: "ack"}},
+		{Message: &transcript.Message{Role: llmwire.RoleUser, Content: "skill"}},
 		{ExistingID: retainedID},
 	})
 	require.NoError(t, err)

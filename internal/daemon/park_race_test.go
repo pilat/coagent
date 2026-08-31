@@ -11,6 +11,7 @@ import (
 	"github.com/pilat/coagent/internal/controllerapi"
 	"github.com/pilat/coagent/internal/migrate"
 	"github.com/pilat/coagent/internal/sessionstore"
+	"github.com/pilat/coagent/internal/subagent"
 )
 
 // A user turn racing the park drain must be rejected with an actionable
@@ -48,7 +49,23 @@ func TestSendToSessionDuringBudgetDrainExplainsParking(t *testing.T) {
 	_, err = sessions.BeginBudgetDrain(ctx, root.ID, fired.Generation, fired.ParkOwner)
 	require.NoError(t, err)
 
-	mgr := newSvc(&mockFactory{}, store, sessions, sessions, NewLinkStore(db), nil, nil)
+	mgr := newSvc(
+		&mockFactory{},
+		store,
+		sessions,
+		sessions,
+		sessions,
+		sessions,
+		sessions,
+		sessions,
+		sessions,
+		subagent.NewStore(db),
+		subagent.NewTransactions(db),
+		nil,
+		sessions,
+		nil,
+		nil,
+	)
 	err = mgr.SendToSession(ctx, root.ID, "resume the work")
 	require.Error(t, err)
 

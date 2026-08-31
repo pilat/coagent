@@ -13,6 +13,7 @@ import (
 
 	"github.com/pilat/coagent/internal/llmwire"
 	"github.com/pilat/coagent/internal/logger"
+	"github.com/pilat/coagent/internal/progress"
 	"github.com/pilat/coagent/internal/sessionevent"
 	"github.com/pilat/coagent/internal/sessionstore"
 	"github.com/pilat/coagent/internal/tool"
@@ -48,10 +49,10 @@ type sessionStatus struct {
 	SubagentCount int
 }
 
-func (s *svc) ContextProjection(ctx context.Context) ContextProjection {
+func (s *svc) ContextProjection(ctx context.Context) progress.Context {
 	status := s.buildSessionStatus(ctx)
 
-	return ContextProjection{
+	return progress.Context{
 		Used: status.ContextUsed, Max: status.ContextMax, Approximate: status.ContextIsEst,
 		Available: status.ContextMax > 0 && status.ContextUsed > 0,
 	}

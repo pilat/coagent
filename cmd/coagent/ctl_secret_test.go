@@ -12,9 +12,9 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/pilat/coagent/internal/configapply"
 	"github.com/pilat/coagent/internal/configops"
 	"github.com/pilat/coagent/internal/ctl"
-	"github.com/pilat/coagent/internal/daemon"
 	"github.com/pilat/coagent/internal/sessionevent"
 )
 
@@ -109,13 +109,13 @@ func (f *fakeReplyHook) replied() {
 // without running the hook and tears the connection down.
 func (f *fakeReplyHook) dropped() { close(f.done) }
 
-func newSecretApplier(t *testing.T) (*daemon.ConfigApplier, string, chan struct{}) {
+func newSecretApplier(t *testing.T) (configapply.Service, string, chan struct{}) {
 	t.Helper()
 
 	return newSecretApplierOn(t, "models: []\n")
 }
 
-func newSecretApplierOn(t *testing.T, configBody string) (*daemon.ConfigApplier, string, chan struct{}) {
+func newSecretApplierOn(t *testing.T, configBody string) (configapply.Service, string, chan struct{}) {
 	t.Helper()
 
 	dir := t.TempDir()
@@ -126,7 +126,7 @@ func newSecretApplierOn(t *testing.T, configBody string) (*daemon.ConfigApplier,
 	ops := configops.New(filepath.Join(dir, "config.yaml"), secretsPath)
 	restarts := make(chan struct{}, 4)
 
-	return daemon.NewConfigApplier(ops, func() { restarts <- struct{}{} }), secretsPath, restarts
+	return configapply.New(ops, func() { restarts <- struct{}{} }), secretsPath, restarts
 }
 
 // awaitRestart fails the test if the daemon was never asked to come back.

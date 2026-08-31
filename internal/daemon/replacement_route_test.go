@@ -23,7 +23,7 @@ func TestSendSessionMessageResolvedFollowsOwnedReplacement(t *testing.T) {
 	newID, err := mgr.Clear(ctx, old.ID)
 	require.NoError(t, err)
 
-	controller := NewController(mgr, &config.Config{}, nil, nil).ForManager("cli")
+	controller := newTestController(mgr, &config.Config{}, nil, nil).ForManager("cli")
 	router, ok := controller.(controllerapi.SessionMessageRouter)
 	require.True(t, ok)
 	acceptedID, err := router.SendSessionMessageResolved(ctx, controllerapi.SessionMessageData{
