@@ -10,6 +10,7 @@ import (
 	"go.uber.org/zap"
 	"go.uber.org/zap/zaptest/observer"
 
+	"github.com/pilat/coagent/internal/admission"
 	"github.com/pilat/coagent/internal/controllerapi"
 	"github.com/pilat/coagent/internal/logger"
 	"github.com/pilat/coagent/internal/sessionstore"
@@ -22,13 +23,13 @@ func TestDrainPendingRunners_DerivesPromotedRecoveryAfterCapacityWait(t *testing
 	mgr, factory, projects := newTestManager(t)
 	ctx := context.Background()
 
-	reserved := maxTotalSlots
+	reserved := admission.MaxTotal
 	for range reserved {
-		require.True(t, mgr.admit.tryAdmit(slotParent, 0))
+		require.True(t, mgr.admit.TryAdmit(admission.Parent, 0))
 	}
 	t.Cleanup(func() {
 		for range reserved {
-			mgr.admit.release(slotParent, 0)
+			mgr.admit.Release(admission.Parent, 0)
 		}
 		mgr.Shutdown(3 * time.Second)
 	})
@@ -49,7 +50,7 @@ func TestDrainPendingRunners_DerivesPromotedRecoveryAfterCapacityWait(t *testing
 	assert.False(t, mgr.HasActiveLoop(rec.ID))
 	require.Len(t, mgr.pendingRunners, 1)
 
-	mgr.admit.release(slotParent, 0)
+	mgr.admit.Release(admission.Parent, 0)
 	reserved--
 	mgr.drainPendingRunners(ctx)
 	waitForState(t, events, rec.ID, controllerapi.StateIdle, 3*time.Second)

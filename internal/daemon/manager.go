@@ -13,6 +13,7 @@ import (
 
 	"go.uber.org/zap"
 
+	"github.com/pilat/coagent/internal/admission"
 	budgetservice "github.com/pilat/coagent/internal/budget"
 	"github.com/pilat/coagent/internal/config"
 	"github.com/pilat/coagent/internal/controllerapi"
@@ -98,7 +99,7 @@ type svc struct {
 	links          subagent.Store
 	subagents      subagent.Transactions
 	scheduleSvc    schedule.Service
-	admit          *admissionCtl
+	admit          admission.Governor
 	queueMu        sync.Mutex
 	queue          []queuedChild
 	pendingMu      sync.Mutex
@@ -236,7 +237,7 @@ func newSvc(
 		scheduleSvc:    scheduleSvc,
 		staged:         newStagedCalls(),
 		secrets:        newSecretRequests(),
-		admit:          newAdmissionCtl(),
+		admit:          admission.New(),
 		pubsub:         newPubSub(),
 		treeMu:         &sync.Mutex{},
 		defaultModelFn: defaultModelFn,
@@ -334,7 +335,7 @@ func (s *svc) SendToSession(ctx context.Context, sessionID int64, prompt string)
 	s.mu.Unlock()
 
 	if err := s.ensureRunner(ctx, sessionID, workDir, rec.ProjectID, nil); err != nil {
-		if errors.Is(err, errNoCapacity) {
+		if errors.Is(err, admission.ErrNoCapacity) {
 			s.enqueuePendingRunner(sessionID, workDir, rec.ProjectID)
 			return nil
 		}
@@ -1410,7 +1411,7 @@ func (s *svc) send(
 	}
 
 	if err := s.ensureRunner(ctx, rec.ID, workDir, projectID, nil); err != nil {
-		if errors.Is(err, errNoCapacity) {
+		if errors.Is(err, admission.ErrNoCapacity) {
 			s.enqueuePendingRunner(rec.ID, workDir, projectID)
 			return rec.ID, nil
 		}

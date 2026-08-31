@@ -4,129 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"sync"
-	"sync/atomic"
 
 	"go.uber.org/zap"
 
+	"github.com/pilat/coagent/internal/admission"
 	"github.com/pilat/coagent/internal/logger"
 	"github.com/pilat/coagent/internal/subagent"
 )
-
-// Concurrency limits. Children are capped below the total so ≥(total-child)
-// slots are always reservable by parents — a completing child can therefore
-// always re-admit its (suspended, slot-free) parent, which kills the
-// priority-inversion deadlock. Per-parent in-flight bounds fan-out; depth bounds
-// nesting (root → child → grandchild).
-const (
-	maxTotalSlots        = 16
-	maxChildSlots        = 12
-	maxInFlightPerParent = 8
-	maxSubagentDepth     = 3
-)
-
-// errNoCapacity is the only ensureRunner failure a caller may retry later; any
-// other error means the session cannot start at all, so re-parking it would spin.
-var errNoCapacity = errors.New("session capacity reached")
-
-type slotKind int
-
-const (
-	slotParent slotKind = iota // root or any non-subagent session
-	slotChild                  // a subagent session
-)
-
-// admissionCtl governs how many session loops run concurrently. It replaces the
-// bare weighted semaphore with kind-aware, per-parent-bounded admission and
-// atomic gauges for tests. Admission is non-blocking (tryAdmit), so a parent's
-// spawn never waits on a slot.
-type admissionCtl struct {
-	mu           sync.Mutex
-	running      int
-	runningChild int
-	perParent    map[int64]int
-
-	totalGauge atomic.Int64
-	childGauge atomic.Int64
-}
-
-func newAdmissionCtl() *admissionCtl {
-	return &admissionCtl{perParent: make(map[int64]int)}
-}
-
-// tryAdmit reserves a slot if the relevant caps allow, returning success.
-func (a *admissionCtl) tryAdmit(kind slotKind, parentID int64) bool {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-
-	if a.running >= maxTotalSlots {
-		return false
-	}
-
-	if kind == slotChild {
-		if a.runningChild >= maxChildSlots {
-			return false
-		}
-
-		if a.perParent[parentID] >= maxInFlightPerParent {
-			return false
-		}
-	}
-
-	a.running++
-	a.totalGauge.Store(int64(a.running))
-
-	if kind == slotChild {
-		a.runningChild++
-		a.perParent[parentID]++
-		a.childGauge.Store(int64(a.runningChild))
-	}
-
-	return true
-}
-
-// release frees a slot previously reserved by tryAdmit.
-func (a *admissionCtl) release(kind slotKind, parentID int64) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-
-	if a.running > 0 {
-		a.running--
-	}
-
-	a.totalGauge.Store(int64(a.running))
-
-	if kind != slotChild {
-		return
-	}
-
-	if a.runningChild > 0 {
-		a.runningChild--
-	}
-
-	a.childGauge.Store(int64(a.runningChild))
-
-	if a.perParent[parentID] > 0 {
-		a.perParent[parentID]--
-		if a.perParent[parentID] == 0 {
-			delete(a.perParent, parentID)
-		}
-	}
-}
-
-// canAdmitChild reports whether a child of parentID could be admitted right now
-// (used to peek before dequeuing a queued child).
-func (a *admissionCtl) canAdmitChild(parentID int64) bool {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-
-	return a.running < maxTotalSlots &&
-		a.runningChild < maxChildSlots &&
-		a.perParent[parentID] < maxInFlightPerParent
-}
-
-func (a *admissionCtl) liveTotal() int64    { return a.totalGauge.Load() }
-func (a *admissionCtl) liveChildren() int64 { return a.childGauge.Load() }
 
 // enqueueChild parks a background child that could not be admitted, preserving
 // its initial messages so the prompt survives until a slot frees.
@@ -156,7 +40,7 @@ func (s *svc) drainQueue(ctx context.Context) {
 	idx := -1
 
 	for i, q := range s.queue {
-		if s.admit.canAdmitChild(q.parentID) {
+		if s.admit.CanAdmitChild(q.parentID) {
 			idx = i
 			break
 		}
@@ -193,7 +77,7 @@ func (s *svc) drainQueue(ctx context.Context) {
 	}
 
 	err = s.ensureRunner(ctx, next.sessionID, next.workDir, next.projectID, nil)
-	if errors.Is(err, errNoCapacity) {
+	if errors.Is(err, admission.ErrNoCapacity) {
 		// Admission lost a race — park it again for the next release.
 		s.enqueueChild(ctx, next.sessionID, next.parentID, next.workDir, next.projectID)
 

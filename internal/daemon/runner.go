@@ -15,6 +15,7 @@ import (
 
 	"go.uber.org/zap"
 
+	"github.com/pilat/coagent/internal/admission"
 	"github.com/pilat/coagent/internal/configops"
 	"github.com/pilat/coagent/internal/controllerapi"
 	"github.com/pilat/coagent/internal/logger"
@@ -35,9 +36,9 @@ type runner struct {
 	done      chan struct{}      // closed when runSession goroutine exits
 	workDir   string
 	projectID int64
-	kind      slotKind // parent or child — for admission accounting on release
-	parentID  int64    // for per-parent slot accounting (0 for non-children)
-	hasRun    bool     // durable accepted-turn inference applies only before the first iteration
+	kind      admission.Kind // parent or child — for admission accounting on release
+	parentID  int64          // for per-parent slot accounting (0 for non-children)
+	hasRun    bool           // durable accepted-turn inference applies only before the first iteration
 
 	inputMu sync.Mutex
 	inputs  []queuedSessionInput
@@ -164,7 +165,7 @@ func (s *svc) finishRunner(
 	s.mu.Lock()
 	delete(s.loops, sessionID)
 	s.mu.Unlock()
-	s.admit.release(rs.kind, rs.parentID)
+	s.admit.Release(rs.kind, rs.parentID)
 
 	cleanupCtx := context.WithoutCancel(ctx)
 
@@ -647,7 +648,7 @@ func (s *svc) ensureSessionRunner(ctx context.Context, sessionID int64) error {
 	}
 
 	err = s.ensureRunner(ctx, sessionID, workDir, rec.ProjectID, nil)
-	if errors.Is(err, errNoCapacity) && rec.ParentID == 0 {
+	if errors.Is(err, admission.ErrNoCapacity) && rec.ParentID == 0 {
 		s.enqueuePendingRunner(sessionID, workDir, rec.ProjectID)
 		return nil
 	}
@@ -1383,13 +1384,13 @@ func (s *svc) ensureRunner(
 	// Non-blocking admission. On a child admit-fail: background children queue
 	// (run when a slot frees); blocking children error (the caps are surfaced as
 	// a tool_result and the model degrades).
-	if !s.admit.tryAdmit(kind, parentID) {
-		if kind == slotChild && !blocking {
+	if !s.admit.TryAdmit(kind, parentID) {
+		if kind == admission.Child && !blocking {
 			s.enqueueChild(ctx, sessionID, parentID, workDir, projectID)
 			return nil
 		}
 
-		return errNoCapacity
+		return admission.ErrNoCapacity
 	}
 
 	// Session goroutine uses independent context — survives controller disconnect
@@ -1407,7 +1408,7 @@ func (s *svc) ensureRunner(
 
 	existing, started := s.registerRunner(sessionID, rs)
 	if !started {
-		s.admit.release(kind, parentID)
+		s.admit.Release(kind, parentID)
 		loopCancel()
 
 		if existing == nil {
@@ -1509,17 +1510,17 @@ func (s *svc) registerRunner(sessionID int64, rs *runner) (*runner, bool) {
 // slotInfo classifies a session for admission: a session with a subagent link is
 // a child (carrying its parent id + blocking flag); otherwise a parent. An
 // unclassifiable session must not start: it would run outside admission entirely.
-func (s *svc) slotInfo(ctx context.Context, sessionID int64) (slotKind, int64, bool, error) {
+func (s *svc) slotInfo(ctx context.Context, sessionID int64) (admission.Kind, int64, bool, error) {
 	link, err := s.links.GetLink(ctx, sessionID)
 	if err != nil {
-		return slotParent, 0, false, fmt.Errorf("classify session %d: %w", sessionID, err)
+		return admission.Parent, 0, false, fmt.Errorf("classify session %d: %w", sessionID, err)
 	}
 
 	if link == nil {
-		return slotParent, 0, false, nil
+		return admission.Parent, 0, false, nil
 	}
 
-	return slotChild, link.ParentID, link.Blocking, nil
+	return admission.Child, link.ParentID, link.Blocking, nil
 }
 
 // startChildTimeout applies applyChildTimeout for runSession's setup, folding in
@@ -1531,7 +1532,7 @@ func (s *svc) startChildTimeout(
 	sessionID int64,
 	errored *bool,
 ) (context.Context, context.CancelFunc, bool) {
-	if rs.kind != slotChild {
+	if rs.kind != admission.Child {
 		return ctx, nil, true
 	}
 

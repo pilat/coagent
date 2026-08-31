@@ -54,6 +54,7 @@ The map is an ownership index, not a list of exported symbols. Directory nesting
 does not imply a tier except where it expresses an implementation variant.
 
 - `cmd/coagent` — composition root, CLI product policy, onboarding and control-operation wiring.
+- `internal/admission` — in-memory runner capacity and per-parent subagent quotas.
 - `internal/bashsandbox` — native direct-write confinement for Bash and file-mutation tools.
 - `internal/budget` — one-shot root-tree budget policy and its user-authorized tool.
 - `internal/catalog` — external model metadata acquisition, caching and identifier matching.
@@ -152,6 +153,8 @@ budget. A subagent is another session with an independent context and restricted
 policy, not a goroutine inside its parent. The daemon enforces total, child,
 per-parent and depth limits, retaining overflow in FIFO order. A suspended
 parent does not retain an execution slot; its durable pending work does.
+The `admission` governor owns capacity counters and quota decisions; the daemon
+owns the durable-aware queues and runner start policy around that verdict.
 
 The session is the only authority that registers a gated tool. The daemon may
 attach control-plane tools to a live session registry, but it cannot bypass

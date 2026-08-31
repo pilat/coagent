@@ -7,6 +7,7 @@ import (
 
 	"go.uber.org/zap"
 
+	"github.com/pilat/coagent/internal/admission"
 	"github.com/pilat/coagent/internal/logger"
 	"github.com/pilat/coagent/internal/session"
 	"github.com/pilat/coagent/internal/sessionstore"
@@ -713,7 +714,7 @@ func (s *svc) resumeSessionsWithRecoverableInput(ctx context.Context) (int, erro
 // result/outcome survive and they are not mislabelled killed. deadline is one
 // retry budget shared by the whole walk, since Kill waits on it synchronously.
 func (s *svc) cascadeKillChildren(ctx context.Context, parentID int64, depth int, deadline time.Time) {
-	if depth >= maxSubagentDepth {
+	if depth >= admission.MaxDepth {
 		return
 	}
 

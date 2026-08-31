@@ -10,6 +10,7 @@ import (
 	"go.uber.org/zap"
 	"go.uber.org/zap/zaptest/observer"
 
+	"github.com/pilat/coagent/internal/admission"
 	"github.com/pilat/coagent/internal/logger"
 	"github.com/pilat/coagent/internal/subagent"
 )
@@ -29,7 +30,7 @@ func TestEnsureRunner_ClassifyErrorBlocksStart(t *testing.T) {
 	rec, err := h.sessStore.CreateSession(h.ctx, h.projectID, "fake-model", "", nil)
 	require.NoError(t, err)
 
-	totalBefore, childrenBefore := h.mgr.admit.liveTotal(), h.mgr.admit.liveChildren()
+	totalBefore, childrenBefore := h.mgr.admit.LiveTotal(), h.mgr.admit.LiveChildren()
 
 	flaky.failGetLink(1, 0)
 
@@ -37,8 +38,8 @@ func TestEnsureRunner_ClassifyErrorBlocksStart(t *testing.T) {
 	require.ErrorIs(t, err, errLinkRead)
 
 	assert.False(t, h.mgr.HasActiveLoop(rec.ID), "no runner for an unclassifiable session")
-	assert.Equal(t, totalBefore, h.mgr.admit.liveTotal(), "no slot was taken")
-	assert.Equal(t, childrenBefore, h.mgr.admit.liveChildren())
+	assert.Equal(t, totalBefore, h.mgr.admit.LiveTotal(), "no slot was taken")
+	assert.Equal(t, childrenBefore, h.mgr.admit.LiveChildren())
 }
 
 // TestDrainQueue_StartErrorDoesNotRepark: a persistent ledger failure is not a
@@ -107,19 +108,19 @@ func TestDrainQueue_CapacityReparks(t *testing.T) {
 
 	h.mgr.enqueueChild(h.ctx, childID, idleParentID, "/tmp", h.projectID)
 
-	for range maxInFlightPerParent {
-		require.True(t, h.mgr.admit.tryAdmit(slotChild, parent.ID))
+	for range admission.MaxPerParent {
+		require.True(t, h.mgr.admit.TryAdmit(admission.Child, parent.ID))
 	}
 
-	require.True(t, h.mgr.admit.canAdmitChild(idleParentID), "the peek must let this entry through")
+	require.True(t, h.mgr.admit.CanAdmitChild(idleParentID), "the peek must let this entry through")
 
 	h.mgr.drainQueue(h.ctx)
 
 	assert.Equal(t, 1, h.queueLen(), "a capacity miss parks the child again")
 	assert.False(t, h.mgr.HasActiveLoop(childID), "and does not start it")
 
-	for range maxInFlightPerParent {
-		h.mgr.admit.release(slotChild, parent.ID)
+	for range admission.MaxPerParent {
+		h.mgr.admit.Release(admission.Child, parent.ID)
 	}
 }
 
@@ -146,8 +147,8 @@ func TestRunSession_TimeoutReadErrorRunsFullTeardown(t *testing.T) {
 		ParentID: parent.ID, ChildID: childID, TaskCallID: "b", Blocking: true,
 	}))
 
-	childrenBefore := h.mgr.admit.liveChildren()
-	require.True(t, h.mgr.admit.tryAdmit(slotChild, parent.ID))
+	childrenBefore := h.mgr.admit.LiveChildren()
+	require.True(t, h.mgr.admit.TryAdmit(admission.Child, parent.ID))
 
 	core, logs := observer.New(zap.ErrorLevel)
 	loopCtx, loopCancel := context.WithCancel(logger.ToContext(context.Background(), zap.New(core)))
@@ -159,7 +160,7 @@ func TestRunSession_TimeoutReadErrorRunsFullTeardown(t *testing.T) {
 		done:      make(chan struct{}),
 		workDir:   "/tmp",
 		projectID: h.projectID,
-		kind:      slotChild,
+		kind:      admission.Child,
 		parentID:  parent.ID,
 	}
 
@@ -178,7 +179,7 @@ func TestRunSession_TimeoutReadErrorRunsFullTeardown(t *testing.T) {
 	}
 
 	assert.False(t, h.mgr.HasActiveLoop(childID), "the runner is unregistered")
-	assert.Equal(t, childrenBefore, h.mgr.admit.liveChildren(), "the child slot is released")
+	assert.Equal(t, childrenBefore, h.mgr.admit.LiveChildren(), "the child slot is released")
 	assert.NotEmpty(t, logs.FilterMessage("child_timeout_unresolved").All())
 }
 
@@ -205,7 +206,7 @@ func TestRunSession_TimeoutReadErrorFinalizesAsError(t *testing.T) {
 		ParentID: parent.ID, ChildID: childID, TaskCallID: "b", Blocking: true,
 	}))
 
-	require.True(t, h.mgr.admit.tryAdmit(slotChild, parent.ID))
+	require.True(t, h.mgr.admit.TryAdmit(admission.Child, parent.ID))
 
 	loopCtx, loopCancel := context.WithCancel(h.ctx)
 	defer loopCancel()
@@ -215,7 +216,7 @@ func TestRunSession_TimeoutReadErrorFinalizesAsError(t *testing.T) {
 		done:      make(chan struct{}),
 		workDir:   "/tmp",
 		projectID: h.projectID,
-		kind:      slotChild,
+		kind:      admission.Child,
 		parentID:  parent.ID,
 	}
 

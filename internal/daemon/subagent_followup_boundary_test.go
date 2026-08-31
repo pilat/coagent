@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/pilat/coagent/internal/admission"
 	"github.com/pilat/coagent/internal/sessionstore"
 	"github.com/pilat/coagent/internal/subagent"
 )
@@ -39,9 +40,9 @@ func TestFollowUpAcceptedBeforeTerminalBoundaryStaysInSameActivation(t *testing.
 
 	// Keep the accepted child parked so the test can place finalization exactly
 	// after the durable enqueue and before any runner promotes the input.
-	for i := range maxChildSlots {
-		require.True(t, mgr.admit.tryAdmit(slotChild, int64(10_000+i)))
-		defer mgr.admit.release(slotChild, int64(10_000+i))
+	for i := range admission.MaxChildren {
+		require.True(t, mgr.admit.TryAdmit(admission.Child, int64(10_000+i)))
+		defer mgr.admit.Release(admission.Child, int64(10_000+i))
 	}
 
 	require.NoError(t, mgr.SendToChild(ctx, childID, "one more question"))

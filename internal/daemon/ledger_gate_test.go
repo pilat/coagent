@@ -36,7 +36,7 @@ func TestLedgerFailure_SpawnRefusesInsteadOfDegrading(t *testing.T) {
 	loopsBefore := len(h.mgr.loops)
 	h.mgr.mu.Unlock()
 
-	childrenBefore := h.mgr.admit.liveChildren()
+	childrenBefore := h.mgr.admit.LiveChildren()
 
 	flaky.failGetLink(1, 0)
 
@@ -51,5 +51,5 @@ func TestLedgerFailure_SpawnRefusesInsteadOfDegrading(t *testing.T) {
 	h.mgr.mu.Unlock()
 
 	assert.Equal(t, loopsBefore, loopsAfter, "no runner was started")
-	assert.Equal(t, childrenBefore, h.mgr.admit.liveChildren(), "no child slot was taken")
+	assert.Equal(t, childrenBefore, h.mgr.admit.LiveChildren(), "no child slot was taken")
 }

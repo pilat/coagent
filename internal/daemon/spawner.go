@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/pilat/coagent/internal/admission"
 	"github.com/pilat/coagent/internal/session"
 	"github.com/pilat/coagent/internal/sessionstore"
 	"github.com/pilat/coagent/internal/subagent"
@@ -47,7 +48,7 @@ func (s *svc) createChildSession(ctx context.Context, req spawnRequest) (int64, 
 		return 0, "", 0, err
 	}
 
-	if depth >= maxSubagentDepth {
+	if depth >= admission.MaxDepth {
 		return 0, "", 0, fmt.Errorf(
 			"subagent nesting limit reached (depth %d): do this work inline instead of delegating further",
 			depth,

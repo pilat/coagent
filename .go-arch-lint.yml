@@ -25,6 +25,7 @@ excludeFiles:
 components:
   main:           { in: cmd/coagent }
 
+  admission:      { in: internal/admission }
   coagenthome:    { in: internal/coagenthome }
   config:         { in: internal/config }
   logger:         { in: internal/logger }
@@ -148,7 +149,7 @@ deps:
 
   # Orchestrator.
   daemon:
-    mayDependOn: [budget, coagenthome, config, configops, configtools, controllerapi, git, id, llmwire, loader, logger, mcp, mcpstore, progress, registry, schedule, session, sessionevent, sessionstore, subagent, todo, tool]
+    mayDependOn: [admission, budget, coagenthome, config, configops, configtools, controllerapi, git, id, llmwire, loader, logger, mcp, mcpstore, progress, registry, schedule, session, sessionevent, sessionstore, subagent, todo, tool]
 
   configops:
     mayDependOn: [coagenthome, config, logger]
