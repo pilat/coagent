@@ -109,6 +109,8 @@ deps:
     mayDependOn: [transcript]
   sessionbus:
     mayDependOn: [controllerapi, logger, sessionevent]
+  sessionlifecycle:
+    mayDependOn: [logger]
   progressruntime:
     mayDependOn: [budget, controllerapi, logger, progress, sessionevent, sessionstore, todo]
   projectpath:

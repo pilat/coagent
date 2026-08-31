@@ -79,7 +79,7 @@ func TestStartDoesNotLaunchRecoveryAfterShutdown(t *testing.T) {
 	h.mgr.Shutdown(time.Second)
 
 	require.NoError(t, h.mgr.Start(h.ctx))
-	assert.Nil(t, h.mgr.recoveryDone)
+	assert.False(t, h.mgr.recovery.Active())
 }
 
 func TestEnsureRunnerRejectsShutdown(t *testing.T) {

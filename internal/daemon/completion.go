@@ -537,23 +537,11 @@ func (s *svc) finishStoppingRoots(
 }
 
 func (s *svc) startRecovery(ctx context.Context) {
-	s.recoveryMu.Lock()
-	defer s.recoveryMu.Unlock()
-
-	if s.shuttingDown.Load() || s.recoveryDone != nil {
+	if s.shuttingDown.Load() {
 		return
 	}
 
-	recoveryCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
-	done := make(chan struct{})
-	s.recoveryCancel = cancel
-	s.recoveryDone = done
-
-	go func() {
-		defer close(done)
-
-		s.resumeAfterRestart(recoveryCtx)
-	}()
+	s.recovery.Start(ctx, s.resumeAfterRestart)
 }
 
 // sweep is the whole boot recovery in order; Start splits it at the PASS 0

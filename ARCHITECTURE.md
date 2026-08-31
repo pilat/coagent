@@ -534,8 +534,8 @@ maintains durable-aware admission queues, routes session events, owns project
 identity and subagent coordination, and implements the manager controller.
 `admission` owns capacity decisions, `sessionbus` owns subscriber fan-out, and
 `sessionlifecycle` owns the synchronized active-runner registry, shutdown fence,
-and the two in-memory FIFO admission caches; the subagent package owns the
-durable parent-child link ledger. The daemon must
+the two in-memory FIFO admission caches and the cancellable recovery worker; the
+subagent package owns the durable parent-child link ledger. The daemon must
 keep transient maps reconstructible and defer to stores for durable ordering/CAS
 decisions.
 

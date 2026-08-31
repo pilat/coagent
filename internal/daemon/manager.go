@@ -120,9 +120,7 @@ type svc struct {
 	deferNotices   *deferAnnouncements
 	systemProject  string
 	shuttingDown   atomic.Bool
-	recoveryMu     sync.Mutex
-	recoveryCancel context.CancelFunc
-	recoveryDone   chan struct{}
+	recovery       sessionlifecycle.Recovery
 	progress       progressruntime.Service
 	budgetCtx      context.Context //nolint:containedctx // Daemon lifetime context for joined park workers.
 	budgetCancel   context.CancelFunc
@@ -257,6 +255,7 @@ func newSvc(
 		admit:          admission.New(),
 		childQueue:     sessionlifecycle.NewQueue[queuedChild](),
 		pendingQueue:   sessionlifecycle.NewQueue[queuedRunner](),
+		recovery:       sessionlifecycle.NewRecovery(),
 		pubsub:         sessionbus.New(),
 		treeMu:         &sync.Mutex{},
 		defaultModelFn: defaultModelFn,
@@ -1182,16 +1181,7 @@ func (s *svc) isRootScheduleTarget(ctx context.Context, sessionID int64) (bool, 
 }
 
 func (s *svc) stopRecovery() <-chan struct{} {
-	s.recoveryMu.Lock()
-	cancel := s.recoveryCancel
-	done := s.recoveryDone
-	s.recoveryMu.Unlock()
-
-	if cancel != nil {
-		cancel()
-	}
-
-	return done
+	return s.recovery.Close()
 }
 
 // loadModelCatalog records the configured models once: the subagent picker reads
