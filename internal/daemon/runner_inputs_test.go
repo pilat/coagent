@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/pilat/coagent/internal/admission"
 	"github.com/pilat/coagent/internal/controllerapi"
 	"github.com/pilat/coagent/internal/session"
 	"github.com/pilat/coagent/internal/sessionevent"
@@ -57,13 +58,7 @@ func TestSessionInputVariantsValidateTheirOwnIdentity(t *testing.T) {
 }
 
 func newInputsRunner(pid int64, inputs []queuedSessionInput) *runner {
-	return &runner{
-		cancel:    func() {},
-		done:      make(chan struct{}),
-		workDir:   "/tmp/test",
-		projectID: pid,
-		inputs:    inputs,
-	}
+	return newRunner(func() {}, "/tmp/test", pid, admission.Parent, 0, false, inputs)
 }
 
 // TestRunSessionIteration_InjectionFailureAbortsRun: a notification the store

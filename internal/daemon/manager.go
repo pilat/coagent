@@ -777,11 +777,11 @@ func (s *svc) stopTreeCleanup(ctx context.Context, sessionID int64, keepRootStop
 	// Signal the entire tree before waiting for any one runner: a foreground
 	// parent can otherwise keep a child alive while stop is waiting on it.
 	for _, rs := range runners {
-		rs.cancel()
+		rs.Cancel()
 	}
 
 	for _, rs := range runners {
-		<-rs.done
+		<-rs.Done()
 	}
 
 	if err := s.stopper.CancelInputs(cleanupCtx, plan); err != nil {
@@ -917,9 +917,7 @@ func (s *svc) SetModel(ctx context.Context, sessionID int64, model, reasoningLev
 	var sessSvc session.Service
 
 	if ok {
-		rs.svcMu.Lock()
-		sessSvc = rs.service
-		rs.svcMu.Unlock()
+		sessSvc = rs.Service()
 	}
 
 	if sessSvc != nil {

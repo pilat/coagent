@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/pilat/coagent/internal/admission"
 	"github.com/pilat/coagent/internal/config"
 	"github.com/pilat/coagent/internal/controllerapi"
 	"github.com/pilat/coagent/internal/migrate"
@@ -65,7 +66,7 @@ func TestReadinessSuppressesIdleWhileRootIsActiveLoop(t *testing.T) {
 	controllers := newTestController(mgr, &config.Config{}, nil, nil)
 	notifications := controllers.ForManager("manager-readiness").Subscribe()
 
-	active := &runner{done: make(chan struct{})}
+	active := newRunner(func() {}, "", 0, admission.Parent, 0, false, nil)
 	_, registered := mgr.runners.Register(sessionID, active)
 	require.True(t, registered)
 
@@ -128,7 +129,7 @@ func TestReconcileLatestReadinessPublishesIdleAfterTeardown(t *testing.T) {
 	controllers := newTestController(mgr, &config.Config{}, nil, nil)
 	notifications := controllers.ForManager("manager-readiness").Subscribe()
 
-	active := &runner{done: make(chan struct{})}
+	active := newRunner(func() {}, "", 0, admission.Parent, 0, false, nil)
 	_, registered := mgr.runners.Register(record.ID, active)
 	require.True(t, registered)
 	mgr.reconcileLatestReadiness(ctx, record.ID)

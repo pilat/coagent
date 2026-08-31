@@ -172,10 +172,7 @@ func (h *subagentHarness) liveSession(sessionID int64) session.Service {
 		return nil
 	}
 
-	rs.svcMu.Lock()
-	defer rs.svcMu.Unlock()
-
-	return rs.service
+	return rs.Service()
 }
 
 func countAssistantReplies(msgs []llmwire.Message) int {

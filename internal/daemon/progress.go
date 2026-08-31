@@ -88,16 +88,13 @@ func (s *svc) startProgressReconciler(ctx context.Context) {
 	}
 }
 
-//nolint:wsl_v5 // Runtime lookup is guarded at each ownership boundary.
 func (s *svc) liveContextProjection(ctx context.Context, rootID int64) (progress.Context, bool) {
 	runner, ok := s.runners.Load(rootID)
 	if !ok {
 		return progress.Context{}, false
 	}
 
-	runner.svcMu.Lock()
-	service := runner.service
-	runner.svcMu.Unlock()
+	service := runner.Service()
 	if service == nil {
 		return progress.Context{}, false
 	}

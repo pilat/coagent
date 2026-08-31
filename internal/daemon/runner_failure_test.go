@@ -155,14 +155,7 @@ func TestRunSession_TimeoutReadErrorRunsFullTeardown(t *testing.T) {
 
 	defer loopCancel()
 
-	rs := &runner{
-		cancel:    loopCancel,
-		done:      make(chan struct{}),
-		workDir:   "/tmp",
-		projectID: h.projectID,
-		kind:      admission.Child,
-		parentID:  parent.ID,
-	}
+	rs := newRunner(loopCancel, "/tmp", h.projectID, admission.Child, parent.ID, false, nil)
 
 	_, registered := h.mgr.runners.Register(childID, rs)
 	require.True(t, registered)
@@ -172,7 +165,7 @@ func TestRunSession_TimeoutReadErrorRunsFullTeardown(t *testing.T) {
 	go h.mgr.runSession(loopCtx, childID, rs)
 
 	select {
-	case <-rs.done:
+	case <-rs.Done():
 	case <-time.After(5 * time.Second):
 		t.Fatal("runSession never closed rs.done — stop() would hang forever")
 	}
@@ -210,14 +203,7 @@ func TestRunSession_TimeoutReadErrorFinalizesAsError(t *testing.T) {
 	loopCtx, loopCancel := context.WithCancel(h.ctx)
 	defer loopCancel()
 
-	rs := &runner{
-		cancel:    loopCancel,
-		done:      make(chan struct{}),
-		workDir:   "/tmp",
-		projectID: h.projectID,
-		kind:      admission.Child,
-		parentID:  parent.ID,
-	}
+	rs := newRunner(loopCancel, "/tmp", h.projectID, admission.Child, parent.ID, false, nil)
 
 	_, registered := h.mgr.runners.Register(childID, rs)
 	require.True(t, registered)
@@ -229,7 +215,7 @@ func TestRunSession_TimeoutReadErrorFinalizesAsError(t *testing.T) {
 	go h.mgr.runSession(loopCtx, childID, rs)
 
 	select {
-	case <-rs.done:
+	case <-rs.Done():
 	case <-time.After(5 * time.Second):
 		t.Fatal("runSession did not tear down")
 	}

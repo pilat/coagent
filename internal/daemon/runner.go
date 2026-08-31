@@ -10,7 +10,6 @@ import (
 	"fmt"
 	"slices"
 	"sort"
-	"sync"
 	"time"
 
 	"go.uber.org/zap"
@@ -22,55 +21,41 @@ import (
 	"github.com/pilat/coagent/internal/schedule"
 	"github.com/pilat/coagent/internal/session"
 	"github.com/pilat/coagent/internal/sessionevent"
+	"github.com/pilat/coagent/internal/sessionlifecycle"
 	"github.com/pilat/coagent/internal/sessionstore"
 	"github.com/pilat/coagent/internal/subagent"
 	"github.com/pilat/coagent/internal/tool"
 )
 
-// runner tracks an active session goroutine.
-// svcMu and inputMu protect independent fields and are never held together.
 type runner struct {
-	svcMu     sync.Mutex         // protects service field
-	service   session.Service    // nil between loop iterations
-	cancel    context.CancelFunc // used by stop to cancel context
-	done      chan struct{}      // closed when runSession goroutine exits
-	workDir   string
-	projectID int64
-	kind      admission.Kind // parent or child — for admission accounting on release
-	parentID  int64          // for per-parent slot accounting (0 for non-children)
-	hasRun    bool           // durable accepted-turn inference applies only before the first iteration
-
-	inputMu sync.Mutex
-	inputs  []queuedSessionInput
-
-	// preserveStopped reports a command-only activation of a stopped root: the
-	// run answers read-only boundary commands but must not reactivate the root.
-	preserveStopped bool
+	sessionlifecycle.Runner[queuedSessionInput]
 }
 
-// stop cancels the runner's context and waits for the goroutine to exit.
-func (r *runner) stop() {
-	r.cancel()
-	<-r.done
+func newRunner(
+	cancel context.CancelFunc,
+	workDir string,
+	projectID int64,
+	kind admission.Kind,
+	parentID int64,
+	preserveStopped bool,
+	inputs []queuedSessionInput,
+) *runner {
+	return &runner{Runner: sessionlifecycle.NewRunner(
+		cancel, workDir, projectID, kind, parentID, preserveStopped, inputs,
+	)}
 }
+
+func (r *runner) stop() { r.Stop() }
 
 // appendSessionInput queues an exact protocol variant for the next loop
 // iteration. The shared inbox signal wakes a live runner's forwarder.
 func (r *runner) appendSessionInput(input queuedSessionInput) {
-	r.inputMu.Lock()
-	r.inputs = append(r.inputs, input)
-	r.inputMu.Unlock()
+	r.AppendInput(input)
 }
 
 // drainSessionInputs returns every queued delivery and clears the queue.
 func (r *runner) drainSessionInputs() []queuedSessionInput {
-	r.inputMu.Lock()
-	defer r.inputMu.Unlock()
-
-	inputs := r.inputs
-	r.inputs = nil
-
-	return inputs
+	return r.DrainInputs()
 }
 
 // defaultBlockingTimeoutSec bounds a blocking child's wall-clock when the task
@@ -87,7 +72,7 @@ const maxEmptyLoopIterations = 3
 var errNoChildTimeout = errors.New("no timeout applies")
 
 // runSession is the main goroutine for a session.
-// ctx is already cancelable via rs.cancel (set in ensureRunner).
+// ctx is already cancelable through rs (set in ensureRunner).
 func (s *svc) runSession(ctx context.Context, sessionID int64, rs *runner) {
 	errored := false
 
@@ -163,7 +148,8 @@ func (s *svc) finishRunner(
 	}
 
 	s.runners.Delete(sessionID, rs)
-	s.admit.Release(rs.kind, rs.parentID)
+	info := rs.Info()
+	s.admit.Release(info.Kind, info.ParentID)
 
 	cleanupCtx := context.WithoutCancel(ctx)
 
@@ -177,7 +163,7 @@ func (s *svc) finishRunner(
 	}
 
 	leftover := rs.drainSessionInputs()
-	close(rs.done)
+	rs.Complete()
 
 	if !shuttingDown && ctx.Err() == nil {
 		for _, input := range leftover {
@@ -241,7 +227,9 @@ func (s *svc) runSessionIteration( //nolint:funlen,gocyclo // Linear lifecycle w
 		s.announceSession(ctx, sessionID, rs, rec, notify)
 	}
 
-	sess, runErr := s.createOrResumeSession(ctx, sessionID, rs.workDir, rec, rs.preserveStopped)
+	info := rs.Info()
+
+	sess, runErr := s.createOrResumeSession(ctx, sessionID, info.WorkDir, rec, info.PreserveStopped)
 	if runErr != nil {
 		logger.Ctx(ctx).Warn("session_create_failed", zap.Int64("session_id", sessionID), zap.Error(runErr))
 		s.reportSessionUnstarted(ctx, sessionID, notify, runErr)
@@ -268,7 +256,7 @@ func (s *svc) runSessionIteration( //nolint:funlen,gocyclo // Linear lifecycle w
 	}
 
 	recoveringAcceptedTurn := false
-	if !hasDurableInput && len(inputs) == 0 && !sess.HasPendingWork() && !rs.hasRun {
+	if !hasDurableInput && len(inputs) == 0 && !sess.HasPendingWork() && !rs.HasRun() {
 		recoveringAcceptedTurn, runErr = s.recoverableInputRunnable(ctx, sessionID)
 		if runErr != nil {
 			sess.Close()
@@ -297,9 +285,7 @@ func (s *svc) runSessionIteration( //nolint:funlen,gocyclo // Linear lifecycle w
 		return false, false
 	}
 
-	rs.svcMu.Lock()
-	rs.service = sess
-	rs.svcMu.Unlock()
+	rs.SetService(sess)
 
 	s.registerScheduleTools(ctx, rec, sess)
 	s.registerSubagentTools(ctx, sessionID, sess)
@@ -308,7 +294,8 @@ func (s *svc) runSessionIteration( //nolint:funlen,gocyclo // Linear lifecycle w
 	s.registerSecretTool(ctx, rec, sess)
 	s.registerBudgetTool(ctx, rec, sess)
 
-	rs.hasRun = true
+	rs.MarkRun()
+
 	runResult, runErr := s.executeSession(ctx, sess, notify)
 
 	if rec.ParentID == 0 {
@@ -327,9 +314,7 @@ func (s *svc) runSessionIteration( //nolint:funlen,gocyclo // Linear lifecycle w
 	s.reconcileLatestReadiness(ctx, sessionID)
 	s.deferNotices.record(sessionID, runResult.CompactionDeferAnnounced)
 
-	rs.svcMu.Lock()
-	rs.service = nil
-	rs.svcMu.Unlock()
+	rs.SetService(nil)
 
 	sess.Close()
 
@@ -868,12 +853,13 @@ func (s *svc) announceSession(
 	rec *sessionstore.SessionRecord,
 	notify func(sessionevent.Notification),
 ) {
-	projectName, _ := s.store.GetProjectName(ctx, rs.projectID)
+	info := rs.Info()
+	projectName, _ := s.store.GetProjectName(ctx, info.ProjectID)
 	name := fmt.Sprintf("%s - %d", projectName, sessionID)
 	notify(sessionevent.Notification{
 		Type:       sessionevent.NotifySessionCreated,
 		Name:       name,
-		WorkDir:    rs.workDir,
+		WorkDir:    info.WorkDir,
 		Attributes: rec.Attributes,
 	})
 }
@@ -1368,16 +1354,7 @@ func (s *svc) ensureRunner(
 
 	// Session goroutine uses independent context — survives controller disconnect
 	loopCtx, loopCancel := context.WithCancel(context.Background())
-	rs := &runner{
-		cancel:          loopCancel,
-		done:            make(chan struct{}),
-		workDir:         workDir,
-		projectID:       projectID,
-		inputs:          inputs,
-		kind:            kind,
-		parentID:        parentID,
-		preserveStopped: preserveStopped,
-	}
+	rs := newRunner(loopCancel, workDir, projectID, kind, parentID, preserveStopped, inputs)
 
 	existing, started := s.registerRunner(sessionID, rs)
 	if !started {
@@ -1492,7 +1469,8 @@ func (s *svc) startChildTimeout(
 	sessionID int64,
 	errored *bool,
 ) (context.Context, context.CancelFunc, bool) {
-	if rs.kind != admission.Child {
+	info := rs.Info()
+	if info.Kind != admission.Child {
 		return ctx, nil, true
 	}
 
@@ -1502,7 +1480,7 @@ func (s *svc) startChildTimeout(
 		// teardown finalizes it as completed once the ledger recovers.
 		*errored = true
 
-		s.reportTimeoutUnresolved(ctx, rs.parentID, sessionID, err)
+		s.reportTimeoutUnresolved(ctx, info.ParentID, sessionID, err)
 
 		return ctx, nil, false
 	}
