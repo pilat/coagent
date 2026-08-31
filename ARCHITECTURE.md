@@ -89,6 +89,7 @@ does not imply a tier except where it expresses an implementation variant.
 - `cmd/releasebuilder` — build-time deterministic archive and checksum composition root.
 - `internal/schedule` — durable schedules, sleep ownership and scheduled delivery execution.
 - `internal/session` — isolated agent loop, tool gating and transcript projection.
+- `internal/sessionbus` — in-process session-event subscriptions and non-blocking fan-out.
 - `internal/sessionevent` — session-to-controller notification vocabulary.
 - `internal/sessionstore` — durable sessions, messages, inbox and atomic delivery primitives.
 - `internal/shellenv` — captured per-worktree shell environment for child processes.
@@ -404,6 +405,8 @@ Only root sessions publish session events to managers, and each event reaches
 only the subscription matching the session's durable manager owner. Ownerless
 sessions fail closed. Subagent events remain inside their tree; parent
 completion is the explicit cross-boundary signal.
+The daemon resolves and caches that route; `sessionbus` owns subscriber state
+and bounded non-blocking fan-out after the route is known.
 Publication is best effort for an individual local control connection: a blocked
 push reader must not block RPC replies. The control client exposes a dropped-push
 counter; it provides observability, not replay or resynchronization. See

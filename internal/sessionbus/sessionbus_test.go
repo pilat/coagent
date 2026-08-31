@@ -1,4 +1,4 @@
-package daemon
+package sessionbus
 
 import (
 	"testing"
@@ -11,8 +11,8 @@ import (
 	"github.com/pilat/coagent/internal/sessionevent"
 )
 
-func TestPubSub_MultipleSubscribers(t *testing.T) {
-	ps := newPubSub()
+func TestBus_MultipleSubscribers(t *testing.T) {
+	ps := New()
 
 	ch1 := ps.Subscribe(int64(1))
 	ch2 := ps.Subscribe(int64(1))
@@ -35,8 +35,8 @@ func TestPubSub_MultipleSubscribers(t *testing.T) {
 	}
 }
 
-func TestPubSub_GlobalSubscriber(t *testing.T) {
-	ps := newPubSub()
+func TestBus_GlobalSubscriber(t *testing.T) {
+	ps := New()
 
 	ch := ps.SubscribeAll()
 
@@ -61,8 +61,8 @@ func TestPubSub_GlobalSubscriber(t *testing.T) {
 	assert.Contains(t, sessionIDs, int64(2))
 }
 
-func TestPubSub_ManagerSubscribersReceiveOnlyTheirOwner(t *testing.T) {
-	ps := newPubSub()
+func TestBus_ManagerSubscribersReceiveOnlyTheirOwner(t *testing.T) {
+	ps := New()
 	alpha := ps.SubscribeManager("alpha")
 	beta := ps.SubscribeManager("beta")
 	blank := ps.SubscribeManager("")
@@ -83,8 +83,8 @@ func TestPubSub_ManagerSubscribersReceiveOnlyTheirOwner(t *testing.T) {
 	assert.Equal(t, int64(42), requireManagerNotification(t, observer).SessionID)
 }
 
-func TestPubSub_UnsubscribeManager(t *testing.T) {
-	ps := newPubSub()
+func TestBus_UnsubscribeManager(t *testing.T) {
+	ps := New()
 	ch := ps.SubscribeManager("alpha")
 	ps.UnsubscribeManager(ch)
 
@@ -93,8 +93,8 @@ func TestPubSub_UnsubscribeManager(t *testing.T) {
 	requireNoManagerNotification(t, ch)
 }
 
-func TestPubSub_SlowSubscriber(t *testing.T) {
-	ps := newPubSub()
+func TestBus_SlowSubscriber(t *testing.T) {
+	ps := New()
 
 	ch := ps.Subscribe(int64(1))
 
@@ -130,8 +130,8 @@ func TestPubSub_SlowSubscriber(t *testing.T) {
 	}
 }
 
-func TestPubSub_Unsubscribe(t *testing.T) {
-	ps := newPubSub()
+func TestBus_Unsubscribe(t *testing.T) {
+	ps := New()
 
 	ch := ps.Subscribe(int64(1))
 	ps.Unsubscribe(int64(1), ch)
@@ -147,8 +147,8 @@ func TestPubSub_Unsubscribe(t *testing.T) {
 	}
 }
 
-func TestPubSub_UnsubscribeAll(t *testing.T) {
-	ps := newPubSub()
+func TestBus_UnsubscribeAll(t *testing.T) {
+	ps := New()
 
 	ch := ps.SubscribeAll()
 	ps.UnsubscribeAll(ch)
@@ -163,8 +163,8 @@ func TestPubSub_UnsubscribeAll(t *testing.T) {
 	}
 }
 
-func TestPubSub_PerSessionIsolation(t *testing.T) {
-	ps := newPubSub()
+func TestBus_PerSessionIsolation(t *testing.T) {
+	ps := New()
 
 	ch1 := ps.Subscribe(int64(1))
 	ch2 := ps.Subscribe(int64(2))

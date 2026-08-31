@@ -18,6 +18,7 @@ import (
 	"github.com/pilat/coagent/internal/migrate"
 	"github.com/pilat/coagent/internal/schedule"
 	"github.com/pilat/coagent/internal/session"
+	"github.com/pilat/coagent/internal/sessionbus"
 	"github.com/pilat/coagent/internal/sessionevent"
 	"github.com/pilat/coagent/internal/sessionstore"
 	"github.com/pilat/coagent/internal/subagent"
@@ -32,7 +33,7 @@ type scheduleRestartHarness struct {
 }
 
 type scheduleRunningObserver struct {
-	source       NotificationSource
+	source       sessionbus.Source
 	subscription <-chan controllerapi.SessionNotification
 	running      chan struct{}
 	done         chan struct{}
@@ -198,7 +199,7 @@ func assertNoRetryPublication(t *testing.T, events []controllerapi.SessionNotifi
 	}
 }
 
-func newScheduleRunningObserver(t *testing.T, source NotificationSource) *scheduleRunningObserver {
+func newScheduleRunningObserver(t *testing.T, source sessionbus.Source) *scheduleRunningObserver {
 	t.Helper()
 	o := &scheduleRunningObserver{
 		source: source, subscription: source.SubscribeManager("telegram-main"),

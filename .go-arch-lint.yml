@@ -32,6 +32,7 @@ components:
   llmwire:        { in: internal/llmwire }
   humanize:       { in: internal/humanize }
   sessionevent:   { in: internal/sessionevent }
+  sessionbus:     { in: internal/sessionbus }
   controllerapi:  { in: internal/controllerapi }
   id:             { in: internal/id }
   git:            { in: internal/git }
@@ -97,6 +98,8 @@ deps:
     mayDependOn: [transcript]
   subagent:
     mayDependOn: [transcript]
+  sessionbus:
+    mayDependOn: [controllerapi, logger, sessionevent]
 
   # Per-cwd shell activation, consumed by the three per-cwd spawners.
   bashsandbox:
@@ -149,7 +152,7 @@ deps:
 
   # Orchestrator.
   daemon:
-    mayDependOn: [admission, budget, coagenthome, config, configops, configtools, controllerapi, git, id, llmwire, loader, logger, mcp, mcpstore, progress, registry, schedule, session, sessionevent, sessionstore, subagent, todo, tool]
+    mayDependOn: [admission, budget, coagenthome, config, configops, configtools, controllerapi, git, id, llmwire, loader, logger, mcp, mcpstore, progress, registry, schedule, session, sessionbus, sessionevent, sessionstore, subagent, todo, tool]
 
   configops:
     mayDependOn: [coagenthome, config, logger]

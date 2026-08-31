@@ -22,6 +22,7 @@ import (
 	"github.com/pilat/coagent/internal/mcpstore"
 	"github.com/pilat/coagent/internal/schedule"
 	"github.com/pilat/coagent/internal/session"
+	"github.com/pilat/coagent/internal/sessionbus"
 	"github.com/pilat/coagent/internal/sessionevent"
 	"github.com/pilat/coagent/internal/sessionstore"
 	"github.com/pilat/coagent/internal/subagent"
@@ -48,7 +49,7 @@ type Service interface {
 	GetSession(ctx context.Context, id int64) (*sessionstore.SessionRecord, error)
 	List(ctx context.Context) ([]*sessionstore.SessionRecord, error)
 	HasActiveLoop(sessionID int64) bool
-	PubSub() NotificationSource
+	PubSub() sessionbus.Source
 	NotifySession(sessionID int64, n sessionevent.Notification)
 	Shutdown(timeout time.Duration)
 	GetOrCreateProject(ctx context.Context, workDir string) (int64, error)
@@ -64,15 +65,6 @@ type Service interface {
 //nolint:iface // composition root asserts the preparation capability structurally.
 type LegacyCLIPreparer interface {
 	PrepareLegacyCLIRoots(ctx context.Context) error
-}
-
-type NotificationSource interface {
-	Subscribe(sessionID int64) <-chan sessionevent.Notification
-	SubscribeManager(managerID string) <-chan controllerapi.SessionNotification
-	SubscribeAll() <-chan controllerapi.SessionNotification
-	Unsubscribe(sessionID int64, ch <-chan sessionevent.Notification)
-	UnsubscribeManager(ch <-chan controllerapi.SessionNotification)
-	UnsubscribeAll(ch <-chan controllerapi.SessionNotification)
 }
 
 const (
@@ -104,7 +96,7 @@ type svc struct {
 	queue          []queuedChild
 	pendingMu      sync.Mutex
 	pendingRunners []queuedRunner
-	pubsub         *pubSub
+	pubsub         sessionbus.Bus
 	defaultModelFn func() string
 	modelCatalog   []modelInfo
 	modelEntries   []config.ModelEntry
@@ -238,7 +230,7 @@ func newSvc(
 		staged:         newStagedCalls(),
 		secrets:        newSecretRequests(),
 		admit:          admission.New(),
-		pubsub:         newPubSub(),
+		pubsub:         sessionbus.New(),
 		treeMu:         &sync.Mutex{},
 		defaultModelFn: defaultModelFn,
 		childCache:     make(map[int64]bool),
@@ -257,7 +249,7 @@ func newSvc(
 	return s
 }
 
-func (s *svc) PubSub() NotificationSource {
+func (s *svc) PubSub() sessionbus.Source {
 	return s.pubsub
 }
 
