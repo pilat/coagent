@@ -538,6 +538,9 @@ Todo tracking is root-session-local durable state. The tool replaces the whole
 list atomically, and progress treats it as planning state rather than a separate
 workflow engine.
 
+Budget policy and recovery access go through `budget.Service`; the daemon never
+discovers or calls the underlying budget-store capability at runtime.
+
 ### Language-server boundary
 
 The LSP package owns language selection, project-root discovery, subprocess

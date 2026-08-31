@@ -185,13 +185,16 @@ func New(
 	inboxStore sessionstore.InboxStore,
 	links subagent.Store,
 	subagents subagent.Transactions,
+	budgetSvc budgetservice.Service,
 	scheduleSvc schedule.Service,
 	cfg *config.Config,
 	mcpStore mcpstore.Store,
 	mcpPool mcp.Pool,
 	applier configapply.Service,
 ) Service {
-	s := newSvc(factory, store, sessionStore, inboxStore, links, subagents, scheduleSvc, cfg.DefaultModel)
+	s := newSvc(
+		factory, store, sessionStore, inboxStore, links, subagents, budgetSvc, scheduleSvc, cfg.DefaultModel,
+	)
 	s.systemProject = filepath.Join(
 		resolveProjectsRoot(cfg.UnifiedConfig),
 		controllerapi.CoagentSystemProjectDir,
@@ -207,7 +210,6 @@ func New(
 	return s
 }
 
-//nolint:wsl_v5 // Lifetime contexts are created immediately before service assembly.
 func newSvc(
 	factory session.Factory,
 	store Store,
@@ -215,6 +217,7 @@ func newSvc(
 	inboxStore sessionstore.InboxStore,
 	links subagent.Store,
 	subagents subagent.Transactions,
+	budgetSvc budgetservice.Service,
 	scheduleSvc schedule.Service,
 	defaultModelFn func() string,
 ) *svc {
@@ -227,6 +230,7 @@ func newSvc(
 		inboxStore:     inboxStore,
 		links:          links,
 		subagents:      subagents,
+		budgetSvc:      budgetSvc,
 		scheduleSvc:    scheduleSvc,
 		staged:         newStagedCalls(),
 		secrets:        newSecretRequests(),
@@ -242,9 +246,6 @@ func newSvc(
 		progressTimer:  newRealProgressTimer,
 		budgetCtx:      budgetCtx,
 		budgetCancel:   budgetCancel,
-	}
-	if budgetStore, ok := sessionStore.(sessionstore.BudgetStore); ok {
-		s.budgetSvc = budgetservice.New(budgetStore)
 	}
 
 	return s
@@ -957,13 +958,13 @@ func (s *svc) SetModel(ctx context.Context, sessionID int64, model, reasoningLev
 		return err
 	}
 
-	if budgets, ok := s.sessionStore.(sessionstore.BudgetStore); ok {
+	if s.budgetSvc != nil {
 		record, loadErr := s.sessionStore.GetSession(ctx, sessionID)
 		if loadErr != nil {
 			return fmt.Errorf("load session for budgeted model switch: %w", loadErr)
 		}
 
-		budgetRecord, budgetErr := budgets.GetBudget(ctx, sessionRootID(record))
+		budgetRecord, budgetErr := s.budgetSvc.Get(ctx, sessionRootID(record))
 		if budgetErr == nil && budgetRecord.State == sessionstore.BudgetArmed &&
 			budgetRecord.CostLimitUSD != nil && !s.modelHasPricing(model) {
 			return errors.New("cannot switch an armed budget tree to a model without catalog pricing")

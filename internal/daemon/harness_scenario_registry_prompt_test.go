@@ -11,6 +11,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/pilat/coagent/internal/budget"
 	"github.com/pilat/coagent/internal/config"
 	"github.com/pilat/coagent/internal/configapply"
 	"github.com/pilat/coagent/internal/controllerapi"
@@ -190,7 +191,8 @@ func newRegistryPromptManager(
 ) *svc {
 	mgr := newSvc(
 		factory, deps.store, deps.sessionStore, deps.sessionStore, deps.links, deps.subagents,
-		schedule.NewService(deps.schedules), func() string { return "fake-model" },
+		budget.New(deps.sessionStore), schedule.NewService(deps.schedules),
+		func() string { return "fake-model" },
 	)
 	mgr.systemProject = workDir
 	mgr.mcpStore = deps.mcpRegistry

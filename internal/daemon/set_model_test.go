@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/pilat/coagent/internal/budget"
 	"github.com/pilat/coagent/internal/config"
 	"github.com/pilat/coagent/internal/controllerapi"
 	"github.com/pilat/coagent/internal/llm"
@@ -134,7 +135,14 @@ func newModelAwareHarness(
 	)
 
 	mgr := newSvc(
-		factory, store, sessStore, sessStore, links, subagent.NewTransactions(db), schedule.NewService(schedStore),
+		factory,
+		store,
+		sessStore,
+		sessStore,
+		links,
+		subagent.NewTransactions(db),
+		budget.New(sessStore),
+		schedule.NewService(schedStore),
 		func() string { return known[0] },
 	)
 

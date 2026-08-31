@@ -16,6 +16,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/pilat/coagent/internal/budget"
 	"github.com/pilat/coagent/internal/coagenthome"
 	"github.com/pilat/coagent/internal/config"
 	"github.com/pilat/coagent/internal/controllerapi"
@@ -94,7 +95,7 @@ func newDelayedTelegramHarness(t *testing.T) *delayedTelegramHarness {
 	)
 	service := daemon.New(
 		factory, projects, sessions, sessions, subagent.NewStore(db), subagent.NewTransactions(db),
-		schedule.NewService(schedule.NewStore(db)), cfg, nil, nil, nil,
+		budget.New(sessions), schedule.NewService(schedule.NewStore(db)), cfg, nil, nil, nil,
 	)
 	t.Cleanup(func() { service.Shutdown(3 * time.Second) })
 	controllers := daemon.NewController(service, cfg, nil, nil)

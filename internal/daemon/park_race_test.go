@@ -50,7 +50,7 @@ func TestSendToSessionDuringBudgetDrainExplainsParking(t *testing.T) {
 	require.NoError(t, err)
 
 	mgr := newSvc(
-		&mockFactory{}, store, sessions, sessions, subagent.NewStore(db), subagent.NewTransactions(db), nil, nil,
+		&mockFactory{}, store, sessions, sessions, subagent.NewStore(db), subagent.NewTransactions(db), nil, nil, nil,
 	)
 	err = mgr.SendToSession(ctx, root.ID, "resume the work")
 	require.Error(t, err)

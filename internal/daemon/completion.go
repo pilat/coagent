@@ -512,12 +512,12 @@ func (s *svc) finishStoppingRoots(
 		}
 	}
 
-	if budgets, ok := s.sessionStore.(sessionstore.BudgetStore); ok {
-		if err := s.reconcileArmedBudgets(ctx, budgets); err != nil {
+	if s.budgetSvc != nil {
+		if err := s.reconcileArmedBudgets(ctx); err != nil {
 			return err
 		}
 
-		pending, parkErr := budgets.ListPendingBudgetParks(ctx)
+		pending, parkErr := s.budgetSvc.ListPendingParks(ctx)
 		if parkErr != nil {
 			return fmt.Errorf("list pending budget parks: %w", parkErr)
 		}
@@ -538,7 +538,7 @@ func (s *svc) finishStoppingRoots(
 }
 
 //nolint:wsl_v5 // Startup reconciliation keeps capture, observe, and park ordered.
-func (s *svc) reconcileArmedBudgets(ctx context.Context, budgets sessionstore.BudgetStore) error {
+func (s *svc) reconcileArmedBudgets(ctx context.Context) error {
 	if s.budgetSvc == nil {
 		return nil
 	}
@@ -548,7 +548,7 @@ func (s *svc) reconcileArmedBudgets(ctx context.Context, budgets sessionstore.Bu
 		return nil
 	}
 
-	armed, err := budgets.ListArmedBudgets(ctx)
+	armed, err := s.budgetSvc.ListArmed(ctx)
 	if err != nil {
 		return fmt.Errorf("list armed budgets: %w", err)
 	}

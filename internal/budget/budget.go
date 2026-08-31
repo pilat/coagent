@@ -29,6 +29,9 @@ type Service interface {
 	Admit(ctx context.Context, rootID int64, now time.Time) error
 	BeginDrain(ctx context.Context, rootID, generation int64, owner string) (*sessionstore.BudgetRecord, error)
 	MarkParked(ctx context.Context, rootID, generation int64, owner string) (*sessionstore.BudgetRecord, error)
+	Release(ctx context.Context, rootID, generation int64, reason string) (*sessionstore.BudgetRecord, error)
+	ListPendingParks(ctx context.Context) ([]*sessionstore.BudgetRecord, error)
+	ListArmed(ctx context.Context) ([]*sessionstore.BudgetRecord, error)
 }
 
 type Grant struct {
@@ -73,6 +76,22 @@ func (s *svc) MarkParked(
 	}
 
 	return record, nil
+}
+
+func (s *svc) Release(
+	ctx context.Context,
+	rootID, generation int64,
+	reason string,
+) (*sessionstore.BudgetRecord, error) {
+	return s.store.ReleaseBudget(ctx, rootID, generation, reason)
+}
+
+func (s *svc) ListPendingParks(ctx context.Context) ([]*sessionstore.BudgetRecord, error) {
+	return s.store.ListPendingBudgetParks(ctx)
+}
+
+func (s *svc) ListArmed(ctx context.Context) ([]*sessionstore.BudgetRecord, error) {
+	return s.store.ListArmedBudgets(ctx)
 }
 
 func (s *svc) Get(ctx context.Context, rootID int64) (*sessionstore.BudgetRecord, error) {

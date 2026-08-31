@@ -68,8 +68,8 @@ func (s *svc) createChildSession(ctx context.Context, req spawnRequest) (int64, 
 	}
 
 	model := s.resolveChildModel(req, parentRec)
-	if budgets, ok := s.sessionStore.(sessionstore.BudgetStore); ok {
-		budgetRecord, budgetErr := budgets.GetBudget(ctx, rootID)
+	if s.budgetSvc != nil {
+		budgetRecord, budgetErr := s.budgetSvc.Get(ctx, rootID)
 		if budgetErr == nil && budgetRecord.State == sessionstore.BudgetArmed &&
 			budgetRecord.CostLimitUSD != nil && !s.modelHasPricing(model) {
 			return 0, "", 0, errors.New(

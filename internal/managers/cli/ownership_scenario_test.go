@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/pilat/coagent/internal/budget"
 	"github.com/pilat/coagent/internal/config"
 	"github.com/pilat/coagent/internal/controllerapi"
 	"github.com/pilat/coagent/internal/ctl"
@@ -59,7 +60,7 @@ func newCLIOwnershipHarness(t *testing.T) *cliOwnershipHarness {
 	cfg := &config.Config{UnifiedConfig: &config.UnifiedConfig{ProjectsRoot: filepath.Join(root, "projects")}}
 	svc := daemon.New(
 		nil, projects, sessions, sessions, subagent.NewStore(db), subagent.NewTransactions(db),
-		nil, cfg, nil, nil, nil,
+		budget.New(sessions), nil, cfg, nil, nil, nil,
 	)
 	controllers := daemon.NewController(svc, cfg, nil, nil)
 	cliController := controllers.ForManager(controllerapi.BuiltinCLIManagerID)

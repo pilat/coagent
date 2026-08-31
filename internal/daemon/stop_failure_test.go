@@ -61,7 +61,7 @@ func TestStopOnStoreFailureDoesNotPublishIdle(t *testing.T) {
 	}
 	failing.pending.Store(true)
 	mgr := newSvc(
-		&mockFactory{}, store, failing, sessions, subagent.NewStore(db), subagent.NewTransactions(db), nil, nil,
+		&mockFactory{}, store, failing, sessions, subagent.NewStore(db), subagent.NewTransactions(db), nil, nil, nil,
 	)
 	controllers := NewController(mgr, &config.Config{}, nil, nil)
 	notifications := controllers.ForManager("manager-stop").Subscribe()

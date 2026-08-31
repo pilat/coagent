@@ -46,7 +46,7 @@ func TestReadinessSuppressesIdleWhileRootIsActiveLoop(t *testing.T) {
 		sessionID).Scan(&outputID))
 
 	mgr := newSvc(
-		&mockFactory{}, store, sessions, sessions, subagent.NewStore(db), subagent.NewTransactions(db), nil, nil,
+		&mockFactory{}, store, sessions, sessions, subagent.NewStore(db), subagent.NewTransactions(db), nil, nil, nil,
 	)
 	controllers := NewController(mgr, &config.Config{}, nil, nil)
 	notifications := controllers.ForManager("manager-readiness").Subscribe()
@@ -97,7 +97,7 @@ func TestReconcileLatestReadinessPublishesIdleAfterTeardown(t *testing.T) {
 		record.ID).Scan(&outputID))
 
 	mgr := newSvc(
-		&mockFactory{}, store, sessions, sessions, subagent.NewStore(db), subagent.NewTransactions(db), nil, nil,
+		&mockFactory{}, store, sessions, sessions, subagent.NewStore(db), subagent.NewTransactions(db), nil, nil, nil,
 	)
 	controllers := NewController(mgr, &config.Config{}, nil, nil)
 	notifications := controllers.ForManager("manager-readiness").Subscribe()

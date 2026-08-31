@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/pilat/coagent/internal/budget"
 	"github.com/pilat/coagent/internal/config"
 	"github.com/pilat/coagent/internal/controllerapi"
 	"github.com/pilat/coagent/internal/llm"
@@ -282,7 +283,7 @@ func buildScheduleRestartHarness(
 	factory := scheduleRestartFactory(workDir, sessionStore, respond)
 	mgr := newSvc(
 		factory, store, sessionStore, sessionStore, links, subagent.NewTransactions(db),
-		schedule.NewService(schedules), func() string {
+		budget.New(sessionStore), schedule.NewService(schedules), func() string {
 			return "fake-model"
 		})
 	projectID, err := store.GetOrCreateProject(context.Background(), workDir)

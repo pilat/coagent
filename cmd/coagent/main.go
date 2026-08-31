@@ -14,6 +14,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/pilat/coagent/internal/bashsandbox"
+	"github.com/pilat/coagent/internal/budget"
 	"github.com/pilat/coagent/internal/config"
 	"github.com/pilat/coagent/internal/configapply"
 	"github.com/pilat/coagent/internal/configops"
@@ -532,6 +533,7 @@ func startCore(
 	curatedStore := memory.NewCuratedStore(db)
 	linkStore := subagent.NewStore(db)
 	subagentTx := subagent.NewTransactions(db)
+	budgetSvc := budget.New(sessionStore)
 	mcpRegistry := mcpstore.NewStore(db)
 
 	if _, err := sessionStore.RecoverInterruptedOutputs(ctx); err != nil {
@@ -545,7 +547,7 @@ func startCore(
 	)
 
 	daemonSvc := daemon.New(
-		factory, daemonStore, sessionStore, sessionStore, linkStore, subagentTx,
+		factory, daemonStore, sessionStore, sessionStore, linkStore, subagentTx, budgetSvc,
 		scheduleSvc, cfg, mcpRegistry, pool, applier,
 	)
 

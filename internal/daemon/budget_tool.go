@@ -153,12 +153,7 @@ func (s *svc) releaseArmedBudget(ctx context.Context, rootID int64, reason strin
 		return fmt.Errorf("load budget for terminal release: %w", err)
 	}
 
-	store, ok := s.sessionStore.(sessionstore.BudgetStore)
-	if !ok {
-		return errors.New("budget store unavailable")
-	}
-
-	if _, err := store.ReleaseBudget(ctx, rootID, record.Generation, reason); err != nil {
+	if _, err := s.budgetSvc.Release(ctx, rootID, record.Generation, reason); err != nil {
 		return fmt.Errorf("release terminal budget: %w", err)
 	}
 
