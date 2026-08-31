@@ -22,8 +22,9 @@ identity, and subagent round.
 
 Coagent is a self-hosted, headless coding agent. One daemon coordinates durable
 state, session lifecycle and admission, owns the MCP connection pool, and
-implements the private manager contract. Domain packages own their ledgers and
-in-memory governors beneath that coordinator. It accepts no network listener.
+serves as the backend for the private manager contract implemented by
+`managercontrol`. Domain packages own their ledgers and in-memory governors
+beneath that coordinator. It accepts no network listener.
 The only listener is a same-user Unix control socket, used by the built-in local
 chat, bootstrap, and documented local operations.
 
@@ -67,7 +68,7 @@ does not imply a tier except where it expresses an implementation variant.
 - `internal/configtools` — agent-facing configuration tool schemas, parsing and semantic-operation adapters.
 - `internal/controllerapi` — private daemon-to-manager contract and DTO vocabulary.
 - `internal/ctl` — authenticated local control socket, operation registry and client multiplexing.
-- `internal/daemon` — global runtime coordinator, persistence integration and controller implementation.
+- `internal/daemon` — global runtime coordinator and persistence/integration backend.
 - `internal/git` — Git operations used by repository-facing features.
 - `internal/humanize` — presentation-only formatting helpers (human-readable sizes); stdlib only.
 - `internal/id` — local identity generation utilities.
@@ -176,7 +177,9 @@ policy, not a goroutine inside its parent. The daemon enforces total, child,
 per-parent and depth limits, retaining overflow in FIFO order. A suspended
 parent does not retain an execution slot; its durable pending work does.
 The `admission` governor owns capacity counters and quota decisions; the daemon
-owns the durable-aware queues and runner start policy around that verdict.
+supplies durable startability callbacks, while `sessionlifecycle` owns FIFO
+overflow queues, classification, registration and runner start around that
+verdict.
 
 The session is the only authority that registers a gated tool. The daemon may
 attach control-plane tools to a live session registry, but it cannot bypass
@@ -360,11 +363,12 @@ The `subagent` package owns link vocabulary and persistence. Ordinary queries
 use `subagent.Store`; child creation, terminalization, completion delivery and
 re-arming use its explicit cross-table `Transactions` boundary ([ADR-0037](docs/adr/0037-subagent-ledger-owns-cross-table-transitions.md)).
 
-The daemon owns admission and coordinates the parent-child protocol; the child
-session owns its own loop and transcript. Link creation records the parent,
-child, activation sequence, delivery obligation and foreground/background mode
-before an outcome can be delivered. The `task` tool is registered by the daemon
-onto the parent registry, but the parent session remains the gating authority.
+The daemon supplies parent-child application hooks; `sessionlifecycle` owns
+runner admission and completion ordering, while the child session owns its own
+loop and transcript. Link creation records the parent, child, activation
+sequence, delivery obligation and foreground/background mode before an outcome
+can be delivered. The `task` tool is registered by the daemon onto the parent
+registry, but the parent session remains the gating authority.
 
 Foreground work suspends the parent and owes one result to the parent call.
 Background work reports independently without blocking the parent. A child can
@@ -418,11 +422,12 @@ is a protocol, not a best-effort notification.
 
 ### Recovery and root-only publication
 
-The daemon rebuilds recovery state from sessions, durable inbox entries,
-schedules, config markers, subagent links and delivery records. It does not
-replay arbitrary notifications to reconstitute state. Startup may re-arm
-unfinished producer work, but it must validate exact delivery ownership before
-making a transcript mutation.
+The `sessionlifecycle` recovery worker invokes daemon integration callbacks that
+rebuild state from sessions, durable inbox entries, schedules, config markers,
+subagent links and delivery records. Recovery never replays arbitrary
+notifications to reconstitute state. Startup may re-arm unfinished producer
+work, but it must validate exact delivery ownership before making a transcript
+mutation.
 
 Only root sessions publish session events to managers, and each event reaches
 only the subscription matching the session's durable manager owner. Ownerless
@@ -529,9 +534,10 @@ The `set_manager` tool is a presence-aware upsert: omitted fields preserve exist
 ### Daemon, sessions and persistence
 
 The daemon, session and session-store boundary divides global coordination,
-per-task execution and SQLite transaction ownership. The daemon creates runners,
-maintains durable-aware admission queues, routes session events, owns project
-identity and subagent coordination, and implements the manager controller.
+per-task execution and SQLite transaction ownership. The daemon assembles
+session dependencies, routes session events, and owns project identity plus
+external integration callbacks. `managercontrol` implements the manager
+controller over that backend.
 `admission` owns capacity decisions, `sessionbus` owns subscriber fan-out, and
 `sessionlifecycle` owns the synchronized active-runner registry, shutdown fence,
 the two in-memory FIFO admission caches and the cancellable recovery worker; the
@@ -541,7 +547,8 @@ terminalization/delivery ordering. Each runner's cancel/done boundary, live
 session reference, input queue and admission metadata live in that component as
 one mutex-owned state object. Its launcher owns classification, admission,
 registration and goroutine start; daemon supplies session assembly and loop
-callbacks. The subagent package owns the durable parent-child link ledger. The daemon must
+callbacks ([ADR-0038](docs/adr/0038-runtime-owners-replace-daemon-capability-discovery.md)).
+The subagent package owns the durable parent-child link ledger. The daemon must
 keep transient maps reconstructible and defer to stores for durable ordering/CAS
 decisions.
 
