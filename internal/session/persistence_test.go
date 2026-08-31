@@ -170,6 +170,14 @@ func (m *mockSessionStore) GetSessionTreeUsage(_ context.Context, _ int64) (int,
 	return 0, 0, 0, nil
 }
 
+func (m *mockSessionStore) SaveContextBaseline(_ context.Context, _ int64, _ sessionstore.ContextBaseline) error {
+	return nil
+}
+
+func (m *mockSessionStore) ClearContextBaseline(_ context.Context, _ int64) error {
+	return nil
+}
+
 func (m *mockSessionStore) InsertToolNotificationPair(
 	_ context.Context,
 	_ int64,

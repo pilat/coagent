@@ -331,6 +331,7 @@ func TestCompactionNeverRunsWithPendingCalls(t *testing.T) {
 			transcript: append(
 				pendingCallTranscript("c1", "read"),
 				llmwire.Message{Role: llmwire.RoleTool, ToolCallID: "c1", ToolName: "read", Content: "body"},
+				compactionUserMessage("carry on"),
 			),
 			explicit:    true,
 			wantRefused: false,

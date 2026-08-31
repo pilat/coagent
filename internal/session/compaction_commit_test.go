@@ -30,7 +30,8 @@ func summarySizedForProjection(t *testing.T, wantTailTokens int) string {
 }
 
 // equality at the 85% cutoff is relieving: the trigger is strict
-// greater-than, so a projection exactly on the cutoff commits.
+// greater-than, so a projection exactly on the cutoff commits. The retained
+// tail's own tokens participate in the projection and are subtracted up front.
 func TestCompactionCommitsAtExactCutoff(t *testing.T) {
 	const window = 32000
 
@@ -40,9 +41,14 @@ func TestCompactionCommitsAtExactCutoff(t *testing.T) {
 		{Role: llmwire.RoleSystem, Content: "sys"},
 		{Role: llmwire.RoleUser, Content: "task"},
 	}
-	s.ms.setMessages(append(header, compactionUserMessage("raw")))
+	retainedTail := []llmwire.Message{
+		compactionAssistantCall("c1", "work"),
+		compactionToolResult("c1", "result"),
+	}
+	s.ms.setMessages(append(header, append(
+		[]llmwire.Message{compactionUserMessage("raw")}, retainedTail...)...))
 
-	target := compactionCutoff(window) - estimateTokens(header) - s.requestOverhead()
+	target := compactionCutoff(window) - estimateTokens(header) - s.requestOverhead() - estimateTokens(retainedTail)
 	llm.response = &llmwire.Response{
 		Text:       summarySizedForProjection(t, target),
 		FinishType: llmwire.FinishStop,
@@ -67,9 +73,14 @@ func TestCompactionRejectsWhenOverheadPushesOverCutoff(t *testing.T) {
 		{Role: llmwire.RoleSystem, Content: "sys"},
 		{Role: llmwire.RoleUser, Content: "task"},
 	}
-	s.ms.setMessages(append(header, compactionUserMessage("raw")))
+	retainedTail := []llmwire.Message{
+		compactionAssistantCall("c1", "work"),
+		compactionToolResult("c1", "result"),
+	}
+	s.ms.setMessages(append(header, append(
+		[]llmwire.Message{compactionUserMessage("raw")}, retainedTail...)...))
 
-	target := compactionCutoff(window) - estimateTokens(header) - s.requestOverhead() + 1
+	target := compactionCutoff(window) - estimateTokens(header) - s.requestOverhead() - estimateTokens(retainedTail) + 1
 	llm.response = &llmwire.Response{
 		Text:       summarySizedForProjection(t, target),
 		FinishType: llmwire.FinishStop,
@@ -78,7 +89,7 @@ func TestCompactionRejectsWhenOverheadPushesOverCutoff(t *testing.T) {
 	ok, err := s.compact(context.Background(), nil)
 	require.ErrorIs(t, err, errCompactionNonRelieving)
 	assert.False(t, ok)
-	assert.Len(t, s.ms.getMessages(), 3, "a non-relieving candidate commits nothing")
+	assert.Len(t, s.ms.getMessages(), 5, "a non-relieving candidate commits nothing")
 }
 
 type recordingBudgetGate struct {
@@ -122,11 +133,12 @@ func budgetedSvc(t *testing.T, gate *recordingBudgetGate, llm *compactionMockLLM
 }
 
 // A budgeted commit persists through the gate, stamps the returned row ids
-// onto the projection in entry order and adopts the fired verdict.
+// onto the projection in entry order and adopts the fired verdict. The
+// verbatim tail keeps "raw two", so only the head row is marked compacted.
 func TestBudgetedCompactionCommitStampsGateRowIDs(t *testing.T) {
 	const window = 32000
 
-	gate := &recordingBudgetGate{ids: []int64{50, 51, 52}, fired: true}
+	gate := &recordingBudgetGate{ids: []int64{50, 51, 52, 53}, fired: true}
 	llm := &compactionMockLLM{
 		response:      &llmwire.Response{Text: validSummary, FinishType: llmwire.FinishStop},
 		contextWindow: window,
@@ -137,16 +149,17 @@ func TestBudgetedCompactionCommitStampsGateRowIDs(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, ok)
 
-	assert.Equal(t, []int64{10, 11}, gate.got.CompactedIDs, "only head rows are marked compacted")
+	assert.Equal(t, []int64{10}, gate.got.CompactedIDs, "only head rows are marked compacted")
 	assert.Zero(t, gate.got.InputID, "no command input behind an automatic compaction")
 	assert.True(t, s.budgetFired)
 
 	messages := s.ms.getMessages()
-	require.Len(t, messages, 3, "header, summary and no tail: the whole raw head left")
+	require.Len(t, messages, 4, "header, summary and the verbatim tail")
 	assert.Equal(t, int64(50), messages[0].DBID)
 	assert.Equal(t, int64(51), messages[1].DBID)
 	assert.Equal(t, int64(52), messages[2].DBID, "the summary row carries the gate's id")
 	assert.True(t, isMarkedSummary(messages[2].Content))
+	assert.Equal(t, int64(53), messages[3].DBID, "the gate stamps every projected row in entry order")
 }
 
 // A gate that returns the wrong number of row ids fails the whole commit.
@@ -162,7 +175,7 @@ func TestBudgetedCompactionCommitRejectsMismatchedRowIDs(t *testing.T) {
 
 	ok, err := s.compact(context.Background(), nil)
 	require.Error(t, err)
-	require.ErrorContains(t, err, "budgeted compaction returned 2 ids for 3 messages")
+	require.ErrorContains(t, err, "budgeted compaction returned 2 ids for 4 messages")
 	assert.False(t, ok)
 	assert.NotErrorIs(t, err, errCompactionNonRelieving)
 }

@@ -190,6 +190,8 @@ func TestMixedAssistantResponseKeepsSiblingCallsValid(t *testing.T) {
 		},
 		{Role: llmwire.RoleTool, ToolCallID: "skill-call", ToolName: "skill", Content: "[review]\n" + rendered.Content},
 		compactionToolResult("work-call", "body"),
+		compactionAssistantCall("c1", "later"),
+		compactionToolResult("c1", "later result"),
 	}
 	msgs[3] = llmwire.Message{
 		Role: llmwire.RoleTool, ToolCallID: "skill-call", ToolName: "skill",

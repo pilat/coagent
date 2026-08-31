@@ -121,7 +121,8 @@ func TestSecondCheckpointAnchorsOnThePreviousSummaryAndSendsOnlyTheDelta(t *test
 	prompt := llm.prompts[1]
 	assert.Contains(t, prompt, summarizePrevSection, "the previous marked summary is the anchor")
 	assert.Contains(t, prompt, validSummary, "the extracted model text anchors, not the wrapper")
-	assert.Contains(t, prompt, "NEWLY-AGED", "the delta is the raw group that left the tail")
+	assert.Contains(t, prompt, "recent work", "the delta is the raw group that left the tail")
+	assert.NotContains(t, prompt, "NEWLY-AGED", "the newest group stays verbatim in the non-empty tail")
 }
 
 func TestParseCheckpointPrefix(t *testing.T) {

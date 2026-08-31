@@ -69,6 +69,10 @@ type CreateOptions struct {
 	// re-executed nor advanced past, until the matching injection arrives.
 	StagedExternalCalls map[string]string
 
+	// ContextBaseline carries the persisted provider measurement back in on
+	// resume; nil when the previous run never measured.
+	ContextBaseline *sessionstore.ContextBaseline
+
 	// CompactionDeferAnnounced carries the previous run's verdict back in: the
 	// human is told once that a queued /compact is waiting, not once per wake.
 	CompactionDeferAnnounced bool
@@ -267,6 +271,7 @@ func (f *factory) build(
 		SettlementOpen:  opts.SettlementOpen,
 		PreserveStopped: opts.PreserveStoppedStatus,
 		ActiveSubagents: opts.ActiveSubagents,
+		ContextBaseline: opts.ContextBaseline,
 
 		ActiveSubagentsProvider:  opts.ActiveSubagentsProvider,
 		ExtraSkills:              opts.ExtraSkills,

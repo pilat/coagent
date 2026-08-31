@@ -202,6 +202,11 @@ type options struct {
 	OutputEnabled   bool
 	BudgetGate      BudgetGate
 
+	// ContextBaseline is the persisted provider measurement from the previous
+	// run; nil when none was taken. Installed only when it describes this
+	// session's model.
+	ContextBaseline *sessionstore.ContextBaseline
+
 	// SettlementOpen marks a lifecycle settlement open: it may not reactivate
 	// the root past a won stop/clear/kill fence (the store rejects such writes).
 	SettlementOpen bool
@@ -413,6 +418,7 @@ func (s *svc) ResetContextAndInjectOnce(
 	s.todoStore.Clear()
 	s.loopDetector.resetWindow()
 	s.resetContextBaseline()
+	s.clearPersistedBaseline(ctx)
 
 	return true, nil
 }
@@ -694,6 +700,8 @@ func (s *svc) applyResumeOrInit(ctx context.Context, opts options, log *zap.Logg
 		if len(opts.ResumeTodoItems) > 0 {
 			s.todoStore.Replace(opts.ResumeTodoItems)
 		}
+
+		s.installPersistedBaseline(opts.ContextBaseline)
 
 		log.Info("resumed_from_db", zap.Int64("root_id", s.rootID), zap.Int("iteration", opts.ResumeIteration))
 

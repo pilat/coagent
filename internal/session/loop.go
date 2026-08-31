@@ -423,7 +423,7 @@ func (r *loopRunner) callLLM(ctx context.Context) error {
 	}
 
 	if response.Usage != nil {
-		r.agent.recordContextBaseline(response.Usage.PromptTokens, sentCount, generation)
+		r.agent.recordContextBaseline(ctx, response.Usage.PromptTokens, sentCount, generation)
 	}
 
 	if r.agent.loopDetector.forceTextOnly && len(response.ToolCalls) == 0 {

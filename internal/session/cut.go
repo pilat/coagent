@@ -97,6 +97,26 @@ func (s *svc) summarizerBaseEstimateLocked(headerJSONL, prevSummary string) int 
 	return estimateText(base)
 }
 
+// tailLimit stages the tail constraints: the token floor with both low-water
+// ceilings, then the ceilings alone (D2 — the byte ceiling beats the token
+// floor), then nothing but legality (D3 — the tail is never empty, even when
+// a single legal group breaches the ceiling).
+type tailLimit struct {
+	floor    bool
+	ceilings bool
+}
+
+// tailLevels is the staged relaxation order every split search walks.
+func tailLevels() []tailLimit {
+	return []tailLimit{{floor: true, ceilings: true}, {ceilings: true}, {}}
+}
+
+// minTailTokens is the token floor the tail should meet: a tenth of the window,
+// degrading to half the raw history estimate when less history exists (D3).
+func minTailTokens(messages []llmwire.Message, base, window int) int {
+	return min(window/10, estimateTokens(messages[base:])/2)
+}
+
 // selectCheckpointSplit picks the maximal oldest raw prefix fitting half the
 // window while the verbatim tail keeps the minimum tail estimate. The request
 // estimate is not monotone in the split — a repair stub can exceed the real
@@ -112,14 +132,38 @@ func selectCheckpointSplit(
 		return 0, false
 	}
 
-	minTail := window / 10
-	if estimateTokens(messages[base:]) < minTail {
-		minTail = 0 // not that much active history exists
+	minTail := minTailTokens(messages, base, window)
+
+	for _, limit := range tailLevels() {
+		if split, ok := selectTailSplit(messages, base, minTail, requestBaseEstimate, window, limit); ok {
+			return split, true
+		}
 	}
 
-	for split := len(messages); split > base; split-- {
-		if estimateTokens(messages[split:]) < minTail {
+	return 0, false
+}
+
+// selectTailSplit scans from the largest head down, returning the first
+// candidate whose tail satisfies the staged limits, is a legal raw cut, and
+// whose head fits the summarizer window. The loop starts at len-1, not len:
+// the split never summarizes the whole raw range.
+func selectTailSplit(
+	messages []llmwire.Message,
+	base, minTail, requestBaseEstimate, window int,
+	limit tailLimit,
+) (int, bool) {
+	for split := len(messages) - 1; split > base; split-- {
+		if limit.floor && estimateTokens(messages[split:]) < minTail {
 			continue
+		}
+
+		if limit.ceilings {
+			if totalBytes, count := imagePressure(
+				messages[split:],
+			); totalBytes > imageBytesLowWater ||
+				count > imageCountLowWater {
+				continue
+			}
 		}
 
 		if !rawCutLegal(messages[split:]) {

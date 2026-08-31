@@ -4,6 +4,11 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"image"
+	// Decoders for the stdlib-decodable formats: DecodeConfig reads headers only.
+	_ "image/gif"
+	_ "image/jpeg"
+	_ "image/png"
 	"io"
 	"os"
 
@@ -14,10 +19,11 @@ import (
 	"github.com/pilat/coagent/internal/tool"
 )
 
-// maxImageBytes equals the strictest per-image provider limit across coagent's
-// driver families (Vertex/Bedrock). A slightly-over-cap image must fail here,
-// at read time, rather than enter history and poison every replayed turn.
-const maxImageBytes = 5 * 1024 * 1024
+// maxImageBytes is the strictest per-image provider limit across driver
+// families, enforced on the base64 length (5 MiB encoded = 3.75 MiB raw), so
+// a slightly-over-cap image must fail here, at read time, rather than enter
+// history and poison every replayed turn (ADR-0034).
+const maxImageBytes = 3932160 // 5 MiB × 3/4
 
 // sniffImageMIME returns the canonical wire MIME for files whose magic bytes
 // match, or "" otherwise. Sniffs bytes, never extensions.
@@ -53,6 +59,25 @@ func sniffImageMIME(path string) string {
 	}
 }
 
+// imageDimensions decodes the image header for pixel dimensions — config only,
+// never a full-pixel decode. WebP has no stdlib decoder and any failure leaves
+// both absent; token estimation falls back to size (T5).
+func imageDimensions(path string) (int, int) {
+	file, err := os.Open(path)
+	if err != nil {
+		return 0, 0
+	}
+
+	defer func() { _ = file.Close() }()
+
+	cfg, _, err := image.DecodeConfig(file)
+	if err != nil {
+		return 0, 0
+	}
+
+	return cfg.Width, cfg.Height
+}
+
 // readImage renders a supported image as a Result carrying the image ref. The
 // branch ignores offset/limit entirely: pixels have no line pagination.
 func (t *readTool) readImage(ctx context.Context, filePath, mime string) (*tool.Result, error) {
@@ -74,6 +99,8 @@ func (t *readTool) readImage(ctx context.Context, filePath, mime string) (*tool.
 
 	title := relativeTitle(t.workDir, filePath)
 
+	width, height := imageDimensions(filePath)
+
 	log.Debug("image_read", zap.String("filePath", filePath), zap.String("mime", mime))
 
 	return &tool.Result{
@@ -83,6 +110,8 @@ func (t *readTool) readImage(ctx context.Context, filePath, mime string) (*tool.
 			title, mime, info.Size(),
 		),
 		Metadata: map[string]any{"mime": mime},
-		Images:   []llmwire.ImageRef{{Path: filePath, Mime: mime, Size: info.Size()}},
+		Images: []llmwire.ImageRef{{
+			Path: filePath, Mime: mime, Size: info.Size(), Width: width, Height: height,
+		}},
 	}, nil
 }

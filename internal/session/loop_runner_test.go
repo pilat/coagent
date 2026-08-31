@@ -615,7 +615,10 @@ func TestRunLoopCompactionWithNothingToSummarizeStaysSilent(t *testing.T) {
 	_, err := runLoop(t.Context(), agent, loopOptions{Notify: notifier.fn}, iterationGuard(5))
 	require.NoError(t, err)
 
-	assert.Equal(t, 1, notifier.countWith("🔄 Compacting context..."))
+	// The verbatim tail is never empty (D3), so this transcript can never yield
+	// a split: the auto path pre-checks that and stays fully silent instead of
+	// announcing an attempt it can never make.
+	assert.Equal(t, 0, notifier.countWith("🔄 Compacting context..."))
 	assert.Equal(t, 0, notifier.countWith("✅ Context compacted"))
 	assert.Equal(t, 0, notifier.countWith("❌ Compaction failed"))
 	assert.Equal(t, 0, notifier.countWith("Nothing to compact"), "the auto path stays quiet")

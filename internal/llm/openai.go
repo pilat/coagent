@@ -122,7 +122,7 @@ func (c *openAICompatibleClient) Chat(
 	reqBody := oaiRequest{
 		Model:    c.model,
 		Messages: c.convertMessages(messages),
-		Stream:   false,
+		Stream:   c.isOpenRouter,
 	}
 
 	if c.isOpenRouter && c.sessionID != "" {

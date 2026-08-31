@@ -107,10 +107,24 @@ type subagentHarness struct {
 const taskCallID = "task-call-1"
 
 // respond drives both parent and child sessions. A user message containing
-// "CHILD_TASK" marks the child conversation.
+// "CHILD_TASK" marks the child conversation; the child does one tool round
+// before finishing, so its transcript holds two raw groups and a /compact on
+// it has something to summarize besides the never-empty tail.
 func subagentRespond(_ string, msgs []llmwire.Message) *llmwire.Response {
+	if isCompactionPrompt(msgs) {
+		return &llmwire.Response{Text: "child checkpoint: ran ls, finished 42"}
+	}
+
 	if hasUserContaining(msgs, "CHILD_TASK") {
-		return &llmwire.Response{Text: "child finished: 42"}
+		if hasToolResultFor(msgs, "ls") {
+			return &llmwire.Response{Text: "child finished: 42"}
+		}
+
+		return &llmwire.Response{ToolCalls: []llmwire.ToolCall{{
+			ID:        "child-ls-1",
+			Name:      "ls",
+			Arguments: []byte(`{"path":"."}`),
+		}}}
 	}
 
 	if hasToolResultFor(msgs, "task") || hasToolResultFor(msgs, "subagent_event") {

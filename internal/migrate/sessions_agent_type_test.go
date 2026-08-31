@@ -77,6 +77,14 @@ func TestMigrate_SessionsAgentTypeRebuildPreservesExistingDB(t *testing.T) {
 	rowsAfter := dumpRows(t, db, `SELECT * FROM sessions ORDER BY id`)
 	require.Len(t, rowsAfter, len(rowsBefore))
 
+	// 00030 adds the context baseline columns with NOT NULL defaults; the v21
+	// snapshot predates them, so the comparison drops them from the after side.
+	for i := range rowsAfter {
+		delete(rowsAfter[i], "context_baseline_model")
+		delete(rowsAfter[i], "context_baseline_prompt_tokens")
+		delete(rowsAfter[i], "context_baseline_message_count")
+	}
+
 	// Legacy NULLs get 00021's rule; every other row is byte-for-byte identical.
 	for i := range rowsBefore {
 		if rowsBefore[i]["id"].String == "1" {

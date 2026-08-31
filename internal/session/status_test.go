@@ -42,7 +42,7 @@ func TestBuildSessionStatus_LifetimeFromTreeOccupancyFromProjection(t *testing.T
 		{Role: llmwire.RoleUser, Content: "task"},
 		{Role: llmwire.RoleAssistant, Content: "big turn"},
 	})
-	s.recordContextBaseline(150000, 2, s.modelGeneration())
+	s.recordContextBaseline(context.Background(), 150000, 2, s.modelGeneration())
 
 	st := s.buildSessionStatus(context.Background())
 
