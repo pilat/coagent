@@ -1,9 +1,9 @@
-//nolint:wrapcheck // Readiness preserves store sentinel errors.
 package progressruntime
 
 import (
 	"context"
 	"errors"
+	"fmt"
 
 	"github.com/pilat/coagent/internal/controllerapi"
 	"github.com/pilat/coagent/internal/sessionevent"
@@ -17,7 +17,7 @@ func (r *runtime) ReconcileOutputReadiness(ctx context.Context, outputID int64) 
 	}
 
 	if err != nil {
-		return err
+		return fmt.Errorf("load output readiness: %w", err)
 	}
 
 	if !readiness.Ready || r.hasActiveLoop(readiness.SessionID) {

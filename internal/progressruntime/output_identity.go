@@ -1,9 +1,9 @@
-//nolint:wrapcheck // Store sentinels are part of the reconciliation contract.
 package progressruntime
 
 import (
 	"context"
 	"errors"
+	"fmt"
 
 	"github.com/pilat/coagent/internal/sessionstore"
 )
@@ -20,7 +20,7 @@ func (r *runtime) existingProgressOutput(
 	}
 
 	if err != nil {
-		return nil, false, err
+		return nil, false, fmt.Errorf("load progress output: %w", err)
 	}
 
 	return record, true, nil
