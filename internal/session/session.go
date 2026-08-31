@@ -97,13 +97,6 @@ type Service interface {
 	Close()
 }
 
-type ContextProjection struct {
-	Used        int
-	Max         int
-	Approximate bool
-	Available   bool
-}
-
 // ActiveSubagentInfo summarizes one of a session's in-flight children for the
 // pinned "# Active subagents" prompt section. The daemon (owner of the subagent
 // ledger) pushes these at session create/resume.

@@ -34,10 +34,7 @@ func (r *runtime) current(
 	}
 
 	if contextProjection, ok := r.liveContextProjection(ctx, facts.RootID); ok {
-		snapshot.Context = progress.Context{
-			Used: contextProjection.Used, Max: contextProjection.Max,
-			Approximate: contextProjection.Approximate, Available: contextProjection.Available,
-		}
+		snapshot.Context = contextProjection
 	}
 
 	return &controllerapi.ProgressData{

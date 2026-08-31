@@ -8,7 +8,7 @@ import (
 
 	"github.com/pilat/coagent/internal/budget"
 	"github.com/pilat/coagent/internal/controllerapi"
-	"github.com/pilat/coagent/internal/session"
+	"github.com/pilat/coagent/internal/progress"
 	"github.com/pilat/coagent/internal/sessionevent"
 	"github.com/pilat/coagent/internal/sessionstore"
 )
@@ -46,7 +46,7 @@ type runtime struct {
 	budgetSvc    budget.Service
 
 	hasActiveLoop         func(int64) bool
-	liveContextProjection func(context.Context, int64) (session.ContextProjection, bool)
+	liveContextProjection func(context.Context, int64) (progress.Context, bool)
 	startBudgetPark       func(*sessionstore.BudgetRecord)
 	publish               func(int64, sessionevent.Notification)
 
@@ -62,7 +62,7 @@ func New(
 	store Store,
 	budgetSvc budget.Service,
 	hasActiveLoop func(int64) bool,
-	contextProjection func(context.Context, int64) (session.ContextProjection, bool),
+	contextProjection func(context.Context, int64) (progress.Context, bool),
 	startBudgetPark func(*sessionstore.BudgetRecord),
 	publish func(int64, sessionevent.Notification),
 ) Service {

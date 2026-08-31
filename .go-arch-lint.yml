@@ -103,7 +103,7 @@ deps:
   sessionbus:
     mayDependOn: [controllerapi, logger, sessionevent]
   progressruntime:
-    mayDependOn: [budget, controllerapi, logger, progress, session, sessionevent, sessionstore, todo]
+    mayDependOn: [budget, controllerapi, logger, progress, sessionevent, sessionstore, todo]
 
   # Per-cwd shell activation, consumed by the three per-cwd spawners.
   bashsandbox:
@@ -138,7 +138,7 @@ deps:
 
   # ReAct loop — the heaviest service.
   session:
-    mayDependOn: [builtin, config, git, id, llm, llmwire, loader, logger, mcp, mcpstore, memory, registry, sessionevent, sessionstore, shellenv, todo, tool, transcript]
+    mayDependOn: [builtin, config, git, id, llm, llmwire, loader, logger, mcp, mcpstore, memory, progress, registry, sessionevent, sessionstore, shellenv, todo, tool, transcript]
 
   # schedule fires wake-ups only through its own SessionSender interface; it has
   # protocol/logging edges but cannot import session or daemon.

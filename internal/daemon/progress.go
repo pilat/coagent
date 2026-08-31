@@ -7,8 +7,8 @@ import (
 
 	"github.com/pilat/coagent/internal/budget"
 	"github.com/pilat/coagent/internal/controllerapi"
+	"github.com/pilat/coagent/internal/progress"
 	"github.com/pilat/coagent/internal/progressruntime"
-	"github.com/pilat/coagent/internal/session"
 )
 
 var errProgressUnavailable = errors.New("progress runtime unavailable")
@@ -89,26 +89,26 @@ func (s *svc) startProgressReconciler(ctx context.Context) {
 }
 
 //nolint:wsl_v5 // Runtime lookup is guarded at each ownership boundary.
-func (s *svc) liveContextProjection(ctx context.Context, rootID int64) (session.ContextProjection, bool) {
+func (s *svc) liveContextProjection(ctx context.Context, rootID int64) (progress.Context, bool) {
 	s.mu.Lock()
 	runner := s.loops[rootID]
 	s.mu.Unlock()
 	if runner == nil {
-		return session.ContextProjection{}, false
+		return progress.Context{}, false
 	}
 
 	runner.svcMu.Lock()
 	service := runner.service
 	runner.svcMu.Unlock()
 	if service == nil {
-		return session.ContextProjection{}, false
+		return progress.Context{}, false
 	}
 
 	provider, ok := service.(interface {
-		ContextProjection(context.Context) session.ContextProjection
+		ContextProjection(context.Context) progress.Context
 	})
 	if !ok {
-		return session.ContextProjection{}, false
+		return progress.Context{}, false
 	}
 
 	return provider.ContextProjection(ctx), true
