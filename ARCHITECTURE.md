@@ -99,7 +99,7 @@ does not imply a tier except where it expresses an implementation variant.
 - `internal/session` — isolated agent loop, tool gating and transcript projection.
 - `internal/sessionbus` — in-process session-event subscriptions and non-blocking fan-out.
 - `internal/sessionevent` — session-to-controller notification vocabulary.
-- `internal/sessionlifecycle` — synchronized active-runner ownership and shutdown registration fence.
+- `internal/sessionlifecycle` — runner ownership, recovery and durable stop coordination.
 - `internal/sessionstore` — durable sessions, messages, inbox and atomic delivery primitives.
 - `internal/shellenv` — captured per-worktree shell environment for child processes.
 - `internal/subagent` — typed parent-child link vocabulary and durable subagent ledger access.
@@ -535,6 +535,8 @@ identity and subagent coordination, and implements the manager controller.
 `admission` owns capacity decisions, `sessionbus` owns subscriber fan-out, and
 `sessionlifecycle` owns the synchronized active-runner registry, shutdown fence,
 the two in-memory FIFO admission caches and the cancellable recovery worker; the
+same component serializes child spawn against the durable stop fence and owns
+stop-tree discovery, lifecycle settlement and interrupted-stop recovery. The
 subagent package owns the durable parent-child link ledger. The daemon must
 keep transient maps reconstructible and defer to stores for durable ordering/CAS
 decisions.

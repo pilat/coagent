@@ -121,12 +121,11 @@ type svc struct {
 	systemProject  string
 	shuttingDown   atomic.Bool
 	recovery       sessionlifecycle.Recovery
+	stopper        sessionlifecycle.Stopper
 	progress       progressruntime.Service
 	budgetCtx      context.Context //nolint:containedctx // Daemon lifetime context for joined park workers.
 	budgetCancel   context.CancelFunc
 	budgetWG       sync.WaitGroup
-	// treeMu linearizes subagent admission with the durable stop boundary.
-	treeMu sync.Locker
 	// routeMu linearizes owner claims with replacement-session creation. The
 	// daemon is single-instance, so this is the ownership CAS boundary.
 	routeMu sync.Mutex
@@ -256,8 +255,10 @@ func newSvc(
 		childQueue:     sessionlifecycle.NewQueue[queuedChild](),
 		pendingQueue:   sessionlifecycle.NewQueue[queuedRunner](),
 		recovery:       sessionlifecycle.NewRecovery(),
+		stopper: sessionlifecycle.NewStopper(
+			sessionStore, lifecycleStore, managerOutputs, links,
+		),
 		pubsub:         sessionbus.New(),
-		treeMu:         &sync.Mutex{},
 		defaultModelFn: defaultModelFn,
 		childCache:     make(map[int64]bool),
 		ownerCache:     make(map[int64]string),
@@ -740,21 +741,7 @@ func (s *svc) convergeOrphanedStopStart(ctx context.Context, sessionID, inputID 
 //
 //nolint:funcorder // belongs beside the public Stop transition it completes.
 func (s *svc) completeExplicitStop(ctx context.Context, rootID, inputID int64) error {
-	if _, err := s.lifecycleStore.CompleteExplicitStop(ctx, rootID, inputID); err != nil {
-		return fmt.Errorf("commit explicit stop completion: %w", err)
-	}
-
-	record, err := s.sessionStore.GetSession(ctx, rootID)
-	if err != nil {
-		return nil //nolint:nilerr // the terminal fact is committed; the wake is best-effort
-	}
-
-	owner, _ := record.Attributes[controllerapi.SessionAttributeManagerID].(string)
-	if outputs := s.OutputStore(); outputs != nil && owner != "" {
-		_, _ = outputs.WakeOutputHead(ctx, owner)
-	}
-
-	return nil
+	return s.stopper.CompleteExplicit(ctx, rootID, inputID) //nolint:wrapcheck // Stopper owns terminal context.
 }
 
 // stopTreeCleanup durably parks a tree without publishing user-command events.
@@ -765,31 +752,14 @@ func (s *svc) completeExplicitStop(ctx context.Context, rootID, inputID int64) e
 //
 //nolint:funcorder // The second stop phase belongs beside the public Stop transition.
 func (s *svc) stopTreeCleanup(ctx context.Context, sessionID int64, keepRootStopping bool) error {
-	s.treeMu.Lock()
 	cleanupCtx := context.WithoutCancel(ctx)
 
-	ids, links, err := s.stopTree(cleanupCtx, sessionID)
+	plan, err := s.stopper.Begin(cleanupCtx, sessionID)
 	if err != nil {
-		s.treeMu.Unlock()
-		return err
+		return fmt.Errorf("begin stop tree: %w", err)
 	}
 
-	// Closing admission before cancellation prevents queued descendants from
-	// being launched while the tree is being parked.
-	for _, id := range ids {
-		if err := s.sessionStore.UpdateSessionStatus(cleanupCtx, id, sessionstore.SessionStatusStopping); err != nil {
-			s.treeMu.Unlock()
-			return fmt.Errorf("mark session %d stopping: %w", id, err)
-		}
-	}
-
-	for _, link := range links {
-		if err := s.links.MarkLinkStopped(cleanupCtx, link.ChildID); err != nil {
-			s.treeMu.Unlock()
-			return fmt.Errorf("mark subagent %d stopped: %w", link.ChildID, err)
-		}
-	}
-	s.treeMu.Unlock()
+	ids := plan.SessionIDs()
 
 	s.removeQueuedSessions(ids)
 
@@ -812,8 +782,8 @@ func (s *svc) stopTreeCleanup(ctx context.Context, sessionID int64, keepRootStop
 		<-rs.done
 	}
 
-	if _, err := s.inboxStore.CancelPendingInputs(cleanupCtx, ids, "stopped"); err != nil {
-		return fmt.Errorf("cancel stopped session input: %w", err)
+	if err := s.stopper.CancelInputs(cleanupCtx, plan); err != nil {
+		return fmt.Errorf("cancel stopped inputs: %w", err)
 	}
 
 	// With all writers joined, it is safe to close every outstanding tool_use in
@@ -831,37 +801,7 @@ func (s *svc) stopTreeCleanup(ctx context.Context, sessionID int64, keepRootStop
 		}
 	}
 
-	for _, link := range links {
-		if err := s.links.MakeStoppedLinkResumable(cleanupCtx, link.ChildID); err != nil {
-			return fmt.Errorf("detach stopped subagent %d: %w", link.ChildID, err)
-		}
-	}
-
-	return s.markStoppedTreeSessions(cleanupCtx, ids, sessionID, keepRootStopping)
-}
-
-// markStoppedTreeSessions commits the final stopped status of every parked
-// descendant; an explicit root stays in its fence for the caller's terminal
-// transaction.
-//
-//nolint:funcorder // completes the stop transition documented above.
-func (s *svc) markStoppedTreeSessions(
-	ctx context.Context,
-	ids []int64,
-	rootID int64,
-	keepRootStopping bool,
-) error {
-	for _, id := range ids {
-		if keepRootStopping && id == rootID {
-			continue
-		}
-
-		if err := s.sessionStore.UpdateSessionStatus(ctx, id, sessionstore.SessionStatusStopped); err != nil {
-			return fmt.Errorf("mark session %d stopped: %w", id, err)
-		}
-	}
-
-	return nil
+	return s.stopper.Finish(cleanupCtx, plan, keepRootStopping) //nolint:wrapcheck // Stopper owns phase context.
 }
 
 func (s *svc) Clear(ctx context.Context, sessionID int64) (int64, error) {

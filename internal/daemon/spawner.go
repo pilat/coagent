@@ -15,21 +15,29 @@ import (
 // Spawn creates a child session + durable link and starts it running in the
 // background. It never waits: the child id is returned immediately.
 func (s *svc) Spawn(ctx context.Context, req spawnRequest) (childResult, error) {
-	s.treeMu.Lock()
-	defer s.treeMu.Unlock()
+	var result childResult
 
-	childID, workDir, projectID, err := s.createChildSession(ctx, req)
+	err := s.stopper.GuardSpawn(func() error {
+		childID, workDir, projectID, createErr := s.createChildSession(ctx, req)
+		if createErr != nil {
+			return createErr
+		}
+
+		if startErr := s.ensureRunner(
+			context.WithoutCancel(ctx), childID, workDir, projectID, nil,
+		); startErr != nil {
+			return fmt.Errorf("start child runner: %w", startErr)
+		}
+
+		result = childResult{ChildID: childID, State: subagent.StateSpawned}
+
+		return nil
+	})
 	if err != nil {
-		return childResult{}, err
+		return childResult{}, fmt.Errorf("guard child spawn: %w", err)
 	}
 
-	// Start the child loop. Detached ctx so the parent's tool-call ctx (which may
-	// time out / cancel) never kills the child (Appendix G6).
-	if err := s.ensureRunner(context.WithoutCancel(ctx), childID, workDir, projectID, nil); err != nil {
-		return childResult{}, fmt.Errorf("start child runner: %w", err)
-	}
-
-	return childResult{ChildID: childID, State: subagent.StateSpawned}, nil
+	return result, nil
 }
 
 // createChildSession validates the spawn request (nesting depth), then durably

@@ -453,7 +453,7 @@ func (s *svc) Start(ctx context.Context) error {
 
 	owedStops := make(map[int64]int64)
 
-	stops, selectErr := s.lifecycleStore.SelectInterruptedExplicitStops(ctx)
+	stops, selectErr := s.stopper.InterruptedExplicitStops(ctx)
 	if selectErr != nil {
 		return fmt.Errorf("select interrupted explicit stops: %w", selectErr)
 	}

@@ -1,5 +1,7 @@
 package sessionstore
 
+import "context"
+
 // AgentRuntimeStore owns transcript/checkpoint persistence and the budgeted
 // response transactions used by one live agent loop.
 type AgentRuntimeStore interface {
@@ -31,6 +33,7 @@ type SessionLifecycleStore interface {
 	LifecycleCommandStore
 	LifecycleOutputStore
 	StopCompletionStore
+	CancelPendingInputs(context.Context, []int64, string) (int64, error)
 }
 
 var (
