@@ -163,6 +163,17 @@ type OutputStore interface {
 	OutputQueueStatus(ctx context.Context, managerID string) (*OutputQueueStatus, error)
 }
 
+// RuntimeOutputStore is the atomic output surface required by a live session.
+// Delivery claims and acknowledgements remain outside the agent loop.
+type RuntimeOutputStore interface {
+	StateOutputStore
+	DirectOutputStore
+	CompactionCommandStore
+	CommandOutputStore
+	AssistantOutputStore
+	EnqueueOutput(ctx context.Context, draft OutputDraft) (*OutputCommit, error)
+}
+
 type OutputIdentityStore interface { //nolint:iface // Optional reconciliation capability.
 	OutputBySourceKey(ctx context.Context, sessionID int64, sourceKey string) (*OutputRecord, error)
 }
@@ -187,10 +198,7 @@ type ReplacementStore interface {
 }
 
 // AssistantOutputStore commits an assistant transcript row and its manager
-// output together. Session uses it opportunistically so in-memory stores remain
-// usable in narrow unit tests.
-//
-//nolint:iface // optional runtime capability for persisted root sessions.
+// output together as part of RuntimeOutputStore.
 type AssistantOutputStore interface {
 	InsertAssistantMessageWithOutput(
 		ctx context.Context,

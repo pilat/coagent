@@ -506,7 +506,7 @@ func TestRunLoopEmptyResponseNudgeRecordFailureAborts(t *testing.T) {
 
 	agent := newTestAgent()
 	agent.llmClient = llmClient
-	agent.ms = newMessageStore(store, 1)
+	agent.ms = newMessageStore(store, 1, nil)
 	agent.maxIterations = 20
 
 	result, err := runLoop(t.Context(), agent, loopOptions{}, iterationGuard(20))
@@ -537,7 +537,7 @@ func TestRunLoopPendingToolRecordFailureAborts(t *testing.T) {
 
 	agent := newTestAgent(&stubTool{id: "read", result: "content"})
 	agent.llmClient = llmClient
-	agent.ms = newMessageStore(store, 1)
+	agent.ms = newMessageStore(store, 1, nil)
 	agent.maxIterations = 5
 
 	result, err := runLoop(t.Context(), agent, loopOptions{}, iterationGuard(5))
@@ -591,7 +591,7 @@ func TestRunLoopCompactionFailureIsReportedAndSurvived(t *testing.T) {
 
 	agent := newTestAgent()
 	agent.llmClient = summarizingLLM()
-	agent.ms = newMessageStore(&loopReloadStore{replaceErr: errors.New("write conflict")}, 1)
+	agent.ms = newMessageStore(&loopReloadStore{replaceErr: errors.New("write conflict")}, 1, nil)
 	agent.ms.setMessages(loopRounds(70, 4000))
 	agent.maxIterations = 5
 	agent.RequestCompaction()
@@ -763,7 +763,7 @@ func TestRunLoopAssistantRecordFailureAborts(t *testing.T) {
 
 	agent := newTestAgent()
 	agent.llmClient = llmClient
-	agent.ms = newMessageStore(store, 1)
+	agent.ms = newMessageStore(store, 1, nil)
 	agent.maxIterations = 5
 
 	result, err := runLoop(t.Context(), agent, loopOptions{}, iterationGuard(5))
@@ -885,7 +885,7 @@ func TestRunLoopReloadFailureIsLoggedAndSurvived(t *testing.T) {
 
 			agent := newTestAgent()
 			agent.llmClient = llmClient
-			agent.ms = newMessageStore(&loopReloadStore{loadErr: tt.loadErr}, 1)
+			agent.ms = newMessageStore(&loopReloadStore{loadErr: tt.loadErr}, 1, nil)
 			agent.maxIterations = 5
 
 			core, logs := observer.New(zapcore.WarnLevel)

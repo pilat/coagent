@@ -45,7 +45,7 @@ func newFinalOutputStore(t *testing.T) (*sql.DB, sessionstore.Store, int64) {
 func TestMessageStore_FinalPromotionTargetsLastAssistantMessage(t *testing.T) {
 	ctx := context.Background()
 	db, store, sessionID := newFinalOutputStore(t)
-	ms := newMessageStore(store, sessionID)
+	ms := newMessageStore(store, sessionID, store)
 
 	intermediate := &llmwire.Response{
 		Text: "reading the file first",

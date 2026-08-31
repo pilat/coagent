@@ -77,7 +77,7 @@ func TestModelSwitchDropsTheBaseline(t *testing.T) {
 		reasoningLevel: "medium",
 		prompt:         newPromptBuilder("", "", ""),
 		registry:       tool.NewRegistry(),
-		ms:             newMessageStore(nil, 0),
+		ms:             newMessageStore(nil, 0, nil),
 		newLLMWithModel: func(_ *config.Config, id string) (llm.Client, error) {
 			return &mockLLMClientTracked{model: id}, nil
 		},
@@ -117,7 +117,7 @@ func TestBaselineFromAnInFlightRequestIsDroppedAfterAModelSwitch(t *testing.T) {
 		reasoningLevel: "medium",
 		prompt:         newPromptBuilder("", "", ""),
 		registry:       tool.NewRegistry(),
-		ms:             newMessageStore(nil, 0),
+		ms:             newMessageStore(nil, 0, nil),
 		newLLMWithModel: func(_ *config.Config, id string) (llm.Client, error) {
 			return &mockLLMClientTracked{model: id}, nil
 		},

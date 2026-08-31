@@ -218,7 +218,7 @@ func newSubagentHarnessOnDBWithProject(
 	cfg := &config.Config{WorkDir: workDir, Model: "fake-model"}
 
 	factory := session.NewFactoryWithOptions(
-		cfg, nil, nil, sessStore, nil, nil, nil, nil, nil,
+		cfg, nil, nil, sessStore, sessStore, nil, nil, nil, nil, nil,
 		session.WithLLMClientFactory(func(_ *config.Config) (llm.Client, error) {
 			return &scriptedLLM{respond: respond}, nil
 		}),
@@ -938,7 +938,7 @@ func newMCPHarness(
 	cfg := &config.Config{WorkDir: workDir, Model: "fake-model"}
 
 	factory := session.NewFactoryWithOptions(
-		cfg, nil, nil, sessStore, nil, pool, registry, nil, nil,
+		cfg, nil, nil, sessStore, sessStore, nil, pool, registry, nil, nil,
 		session.WithLLMClientFactory(func(_ *config.Config) (llm.Client, error) {
 			return &scriptedLLM{respond: respond}, nil
 		}),

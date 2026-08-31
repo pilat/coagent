@@ -18,7 +18,7 @@ import (
 // The mock LLM returns a single text response and exits.
 func newMockSvc(t *testing.T, messages []llmwire.Message, agentsMD string) *svc {
 	t.Helper()
-	ms := newMessageStore(nil, 0)
+	ms := newMessageStore(nil, 0, nil)
 	if messages != nil {
 		ms.setMessages(messages)
 	}

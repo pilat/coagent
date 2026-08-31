@@ -127,6 +127,12 @@ parent-transcript delivery belong to `subagent`, not the daemon. Its store owns
 those cross-table transactions; session-store owns ordinary session runtime and
 transcript mutations.
 
+A live session receives transcript/checkpoint persistence and atomic output
+persistence as separate contracts; manager output cannot be enabled without the
+latter. Its in-memory model messages contain no database fields: a positional
+row-ID vector travels with the projection across factory resume and compaction,
+then keys durable replacement and idempotent final output.
+
 Manager-owned roots also carry a durable outbox obligation. `session_outbox`
 stores the closed output vocabulary, immutable owner identity, delivery receipt,
 host-stamped model-input generation, and `pending → delivering →

@@ -142,7 +142,7 @@ func newGatingHarness(
 	cfg := &config.Config{WorkDir: workDir, Model: "fake-model"}
 
 	factory := session.NewFactoryWithOptions(
-		cfg, nil, nil, sessStore, nil, nil, nil, nil, nil,
+		cfg, nil, nil, sessStore, sessStore, nil, nil, nil, nil, nil,
 		session.WithLLMClientFactory(func(_ *config.Config) (llm.Client, error) {
 			return &recordingLLM{scriptedLLM: scriptedLLM{respond: respond}, rec: rec}, nil
 		}),

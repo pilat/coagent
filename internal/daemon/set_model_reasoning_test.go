@@ -147,7 +147,7 @@ func newEffortHarness(t *testing.T, baseURL string) *subagentHarness {
 		},
 	}}
 
-	factory := session.NewFactoryWithOptions(cfg, nil, nil, sessStore, nil, nil, nil, nil, nil)
+	factory := session.NewFactoryWithOptions(cfg, nil, nil, sessStore, sessStore, nil, nil, nil, nil, nil)
 
 	mgr := newSvc(
 		factory,

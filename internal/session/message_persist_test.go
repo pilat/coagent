@@ -47,7 +47,7 @@ func TestMessageStore_AppendFailureLeavesNothingInMemory(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			ctx := context.Background()
-			ms := newMessageStore(&mockSessionStore{insertErr: errStoreDown}, 1)
+			ms := newMessageStore(&mockSessionStore{insertErr: errStoreDown}, 1, nil)
 
 			err := tt.add(ctx, ms)
 			require.Error(t, err)
@@ -59,7 +59,7 @@ func TestMessageStore_AppendFailureLeavesNothingInMemory(t *testing.T) {
 
 func TestMessageStore_AppendStoresRowIDs(t *testing.T) {
 	ctx := context.Background()
-	ms := newMessageStore(&mockSessionStore{}, 1)
+	ms := newMessageStore(&mockSessionStore{}, 1, nil)
 
 	require.NoError(t, ms.addUserMessage(ctx, "hello"))
 	require.NoError(t, ms.addAssistantMessage(ctx, &llmwire.Response{Text: "hi"}))
@@ -77,7 +77,7 @@ func TestMessageStore_AppendStoresRowIDs(t *testing.T) {
 
 func TestAddToolNotificationPairOnce_InsertFailure(t *testing.T) {
 	ctx := context.Background()
-	ms := newMessageStore(&mockSessionStore{pairErr: errStoreDown}, 1)
+	ms := newMessageStore(&mockSessionStore{pairErr: errStoreDown}, 1, nil)
 
 	_, err := ms.addToolNotificationPairOnce(ctx, "d1", "c1", "sleep", "woke up")
 	require.Error(t, err)
@@ -90,7 +90,7 @@ func TestAddToolNotificationPairOnce_InsertFailure(t *testing.T) {
 func TestAddToolNotificationPairOnce_PersistsCallList(t *testing.T) {
 	ctx := context.Background()
 	store := &mockSessionStore{}
-	ms := newMessageStore(store, 1)
+	ms := newMessageStore(store, 1, nil)
 
 	applied, err := ms.addToolNotificationPairOnce(ctx, "d1", "c1", "sleep", "woke up")
 	require.NoError(t, err)
@@ -161,7 +161,7 @@ func TestResetContextAndInjectOnce_OpeningInsertFailureKeepsTranscript(t *testin
 
 func TestResetContextAndInjectOnce_NoStore(t *testing.T) {
 	s := newResetTestSvc(nil)
-	s.ms = newMessageStore(nil, 0)
+	s.ms = newMessageStore(nil, 0, nil)
 	s.store = nil
 
 	applied, err := s.ResetContextAndInjectOnce(context.Background(), "reset:fresh:1", "do the fresh job")
@@ -194,7 +194,7 @@ func TestRun_OpeningWriteFailure_SkipsCheckpoint(t *testing.T) {
 	store := &mockSessionStore{insertErr: errStoreDown}
 	s := newMockSvc(t, nil, "")
 	s.store = store
-	s.ms = newMessageStore(store, 1)
+	s.ms = newMessageStore(store, 1, nil)
 
 	_, err := s.Run(context.Background(), "write tests")
 	require.Error(t, err)
@@ -209,7 +209,7 @@ func TestRun_LoopWriteFailure_KeepsOriginalError(t *testing.T) {
 	s := newMockSvc(t, nil, "")
 	s.llmClient = &mockLLMRunOnce{response: &llmwire.Response{Text: "done"}}
 	s.store = store
-	s.ms = newMessageStore(store, 1)
+	s.ms = newMessageStore(store, 1, nil)
 
 	_, err := s.Run(context.Background(), "write tests")
 	require.Error(t, err)
@@ -218,7 +218,7 @@ func TestRun_LoopWriteFailure_KeepsOriginalError(t *testing.T) {
 }
 
 func TestAddToolNotificationPairOnce_NoStore(t *testing.T) {
-	ms := newMessageStore(nil, 0)
+	ms := newMessageStore(nil, 0, nil)
 
 	_, err := ms.addToolNotificationPairOnce(context.Background(), "d1", "c1", "sleep", "woke up")
 	require.Error(t, err, "an idempotent notification without a durable store must fail closed")
@@ -260,7 +260,7 @@ func TestExecuteToolCalls_WriteFailurePropagates(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			agent := newTestAgent(&stubTool{id: "read", result: "content"})
-			agent.ms = newMessageStore(&mockSessionStore{insertErr: errStoreDown}, 1)
+			agent.ms = newMessageStore(&mockSessionStore{insertErr: errStoreDown}, 1, nil)
 			agent.loopDetector.blocked = tt.blocked
 
 			tc := llmwire.ToolCall{ID: "tc_1", Name: "read", Arguments: []byte(`{}`)}
@@ -280,7 +280,7 @@ func TestHandlePreviousResult_WriteErrorBeatsSuspend(t *testing.T) {
 		&stubTool{id: "sleep", err: tool.ErrSuspend},
 		&stubTool{id: "read", result: "content"},
 	)
-	agent.ms = newMessageStore(&mockSessionStore{insertErr: errStoreDown}, 1)
+	agent.ms = newMessageStore(&mockSessionStore{insertErr: errStoreDown}, 1, nil)
 	agent.ms.setMessages([]llmwire.Message{
 		{Role: llmwire.RoleUser, Content: "task"},
 		{Role: llmwire.RoleAssistant, ToolCalls: []llmwire.ToolCall{

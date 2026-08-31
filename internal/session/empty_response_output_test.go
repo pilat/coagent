@@ -38,8 +38,9 @@ func TestRunLoopEmptyResponseEmitsPersistentOutput(t *testing.T) {
 	agent.maxIterations = 20
 	agent.outputEnabled = true
 	agent.store = store
+	agent.outputStore = store
 	agent.id = record.ID
-	agent.ms = newMessageStore(store, record.ID)
+	agent.ms = newMessageStore(store, record.ID, store)
 
 	result, err := runLoop(ctx, agent, loopOptions{Notify: notifier.fn}, iterationGuard(20))
 	require.NoError(t, err)

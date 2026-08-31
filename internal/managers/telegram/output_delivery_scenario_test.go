@@ -88,7 +88,7 @@ func newDelayedTelegramHarness(t *testing.T) *delayedTelegramHarness {
 	workDir := filepath.Join(home, "project")
 	cfg := &config.Config{Model: "fake-model", WorkDir: workDir}
 	factory := session.NewFactoryWithOptions(
-		cfg, nil, nil, sessions, nil, nil, nil, nil, nil,
+		cfg, nil, nil, sessions, sessions, nil, nil, nil, nil, nil,
 		session.WithLLMClientFactory(func(*config.Config) (llm.Client, error) {
 			return delayedTelegramClient{}, nil
 		}),

@@ -124,7 +124,7 @@ func newModelAwareHarness(
 	cfg := &config.Config{WorkDir: workDir, Model: known[0]}
 
 	factory := session.NewFactoryWithOptions(
-		cfg, nil, nil, sessStore, nil, nil, nil, nil, nil,
+		cfg, nil, nil, sessStore, sessStore, nil, nil, nil, nil, nil,
 		session.WithLLMClientFactory(func(c *config.Config) (llm.Client, error) {
 			if !slices.Contains(known, c.Model) {
 				return nil, fmt.Errorf("model %q not found in config", c.Model)

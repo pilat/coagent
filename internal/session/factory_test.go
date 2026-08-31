@@ -26,6 +26,7 @@ func TestFactoryCreateClosesLLMClientOnBuildFailure(t *testing.T) {
 		nil,
 		nil,
 		nil,
+		nil,
 		WithLLMClientFactory(func(*config.Config) (llm.Client, error) { return client, nil }),
 	)
 
@@ -36,4 +37,18 @@ func TestFactoryCreateClosesLLMClientOnBuildFailure(t *testing.T) {
 	})
 	require.ErrorContains(t, err, "unmarshal todo items")
 	assert.True(t, client.closed, "factory must release the client when it cannot return a session")
+}
+
+func TestFactoryCreateRequiresOutputStoreForManagedRoot(t *testing.T) {
+	t.Parallel()
+
+	factory := NewFactoryWithOptions(
+		&config.Config{Model: "fake-model"},
+		nil, nil, nil, nil, nil, nil, nil, nil, nil,
+	)
+
+	_, err := factory.Create(context.Background(), CreateOptions{
+		ID: 1, WorkDir: t.TempDir(), OutputEnabled: true,
+	})
+	require.ErrorContains(t, err, "output store is required")
 }

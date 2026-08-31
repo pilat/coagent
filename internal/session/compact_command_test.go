@@ -135,7 +135,7 @@ func TestSlashCompact_CompactionFailureIsReported(t *testing.T) {
 	}
 	store := &compactionRecordingStore{nextID: 1, markCompactedErr: errors.New("write conflict")}
 	s := newCompactionTestSvc(llm)
-	s.ms = newMessageStore(store, 1)
+	s.ms = newMessageStore(store, 1, nil)
 	s.ms.setMessages(loopRounds(10, 4000))
 
 	var notes []string

@@ -263,7 +263,7 @@ func (s *svc) compactIfNeeded(ctx context.Context, window int) error {
 func newCompactionTestSvc(mockLLM *compactionMockLLM) *svc {
 	return &svc{
 		llmClient:    mockLLM,
-		ms:           newMessageStore(nil, 0),
+		ms:           newMessageStore(nil, 0, nil),
 		loopDetector: newLoopDetector(),
 		registry:     tool.NewRegistry(),
 		prompt:       newPromptBuilder(testPrompt, "", ""),
@@ -344,7 +344,7 @@ func TestCompactionAttributesOwnCostToSummaryRow(t *testing.T) {
 		},
 	}
 	s := newCompactionTestSvc(mockLLM)
-	s.ms = newMessageStore(store, 1)
+	s.ms = newMessageStore(store, 1, nil)
 
 	// Costed rounds big enough to cross the trigger.
 	msgs := []llmwire.Message{

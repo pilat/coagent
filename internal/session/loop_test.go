@@ -396,7 +396,7 @@ func newTestAgent(tools ...tool.Tool) *svc {
 	}
 	return &svc{
 		llmClient:    &mockLLMRunOnce{response: &llmwire.Response{Text: "ok"}},
-		ms:           newMessageStore(nil, 0),
+		ms:           newMessageStore(nil, 0, nil),
 		loopDetector: newLoopDetector(),
 		registry:     reg,
 		prompt:       newPromptBuilder("test", "", ""),

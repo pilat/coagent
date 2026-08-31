@@ -543,7 +543,8 @@ func startCore(
 	scheduleSvc := schedule.NewService(scheduleStore)
 
 	factory := session.NewFactory(
-		cfg, secrets, curatedStore, sessionStore, gitClient, pool, mcpRegistry, cache, provider,
+		cfg, secrets, curatedStore, sessionStore, sessionStore,
+		gitClient, pool, mcpRegistry, cache, provider,
 	)
 
 	daemonSvc := daemon.New(

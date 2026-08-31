@@ -94,7 +94,7 @@ func TestContextBaseline_CompactionClearsThePersistedRow(t *testing.T) {
 	s := newCompactionTestSvc(mockLLM)
 	s.store = store
 	s.id = sessionID
-	s.ms = newMessageStore(store, sessionID)
+	s.ms = newMessageStore(store, sessionID, nil)
 	s.ms.setMessages(oversizedTranscript(32_000))
 
 	s.recordContextBaseline(ctx, 150_000, 2, s.modelGeneration())

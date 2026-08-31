@@ -71,7 +71,7 @@ func TestReloadMessagesRestoresReasoningRaw(t *testing.T) {
 			{ID: 1, Role: llmwire.RoleUser, Content: "go"},
 			{ID: 2, Role: llmwire.RoleAssistant, Content: "sure", ReasoningRaw: reasoningBlob},
 		},
-	}, 1)
+	}, 1, nil)
 
 	require.NoError(t, ms.reloadMessages(context.Background()))
 

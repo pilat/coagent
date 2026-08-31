@@ -75,7 +75,7 @@ func (r *loopRunner) applyContextEvents(ctx context.Context) {
 	}
 
 	durableCommand := commandInput
-	if _, ok := r.agent.store.(sessionstore.CompactionCommandStore); !ok || !r.agent.outputEnabled {
+	if r.agent.outputStore == nil || !r.agent.outputEnabled {
 		durableCommand = nil
 	}
 
@@ -162,13 +162,12 @@ func (r *loopRunner) finishParkedCompaction(ctx context.Context, commandInput *P
 // notifyAutoCompactionOutcome keys the success row to its summary message, so a
 // crash between the summary commit and this enqueue replays as an idempotent no-op.
 func (r *loopRunner) notifyAutoCompactionOutcome(ctx context.Context, content string) {
-	outputs, ok := r.agent.store.(sessionstore.OutputStore)
-	if !ok || !r.agent.outputEnabled || r.agent.compactionSummaryDBID == 0 {
+	if r.agent.outputStore == nil || !r.agent.outputEnabled || r.agent.compactionSummaryDBID == 0 {
 		r.notifyPersistent(ctx, content)
 		return
 	}
 
-	_, err := outputs.EnqueueOutput(ctx, sessionstore.OutputDraft{
+	_, err := r.agent.outputStore.EnqueueOutput(ctx, sessionstore.OutputDraft{
 		SessionID:   r.agent.id,
 		Type:        sessionstore.OutputMessagePersistent,
 		Content:     content,
@@ -189,12 +188,11 @@ func (r *loopRunner) enqueueCompactionNotice(
 	kind sessionstore.OutputType,
 	content string,
 ) error {
-	outputs, ok := r.agent.store.(sessionstore.OutputStore)
-	if !ok || !r.agent.outputEnabled {
+	if r.agent.outputStore == nil || !r.agent.outputEnabled {
 		return nil
 	}
 
-	_, err := outputs.EnqueueOutput(ctx, sessionstore.OutputDraft{
+	_, err := r.agent.outputStore.EnqueueOutput(ctx, sessionstore.OutputDraft{
 		SessionID:   r.agent.id,
 		Type:        kind,
 		Content:     content,
@@ -213,9 +211,8 @@ func (r *loopRunner) finishCompactionCommand(
 	input PendingInput,
 	phase, content string,
 ) error {
-	outputs, ok := r.agent.store.(sessionstore.CommandOutputStore)
-	if ok && r.agent.outputEnabled {
-		_, err := outputs.HandleInputWithOutput(ctx, input.ID, "compact command", sessionstore.OutputDraft{
+	if r.agent.outputStore != nil && r.agent.outputEnabled {
+		_, err := r.agent.outputStore.HandleInputWithOutput(ctx, input.ID, "compact command", sessionstore.OutputDraft{
 			SessionID:   r.agent.id,
 			Type:        sessionstore.OutputMessagePersistent,
 			Content:     content,

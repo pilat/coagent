@@ -23,7 +23,7 @@ func TestCheckpointRetainsTheTailVerbatim(t *testing.T) {
 		contextWindow: window,
 	}
 	s := newCompactionTestSvc(llm)
-	s.ms = newMessageStore(store, 1)
+	s.ms = newMessageStore(store, 1, nil)
 
 	original := oversizedTranscript(window)
 	for i := range original {
@@ -112,7 +112,7 @@ func TestOutsideSnapshotCompletionLoadsAfterTheTailInBothReloadOrders(t *testing
 				contextWindow: window,
 			}
 			s := newCompactionTestSvc(llm)
-			s.ms = newMessageStore(store, 1)
+			s.ms = newMessageStore(store, 1, nil)
 
 			// Persist the transcript so the store owns the rows the loop reads.
 			for i := range oversizedTranscript(window) {

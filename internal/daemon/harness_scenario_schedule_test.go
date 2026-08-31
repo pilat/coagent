@@ -302,7 +302,7 @@ func scheduleRestartFactory(
 ) session.Factory {
 	cfg := &config.Config{WorkDir: workDir, Model: "fake-model"}
 	return session.NewFactoryWithOptions(
-		cfg, nil, nil, store, nil, nil, nil, nil, nil,
+		cfg, nil, nil, store, store, nil, nil, nil, nil, nil,
 		session.WithLLMClientFactory(func(*config.Config) (llm.Client, error) {
 			return &scriptedLLM{respond: respond}, nil
 		}),

@@ -160,8 +160,8 @@ func (s *svc) persistErrorState(ctx context.Context, iteration int, content stri
 		return nil
 	}
 
-	if outputs, ok := s.store.(sessionstore.StateOutputStore); ok && s.outputEnabled {
-		if _, err := outputs.UpdateSessionIterationWithOutput(
+	if s.outputStore != nil && s.outputEnabled {
+		if _, err := s.outputStore.UpdateSessionIterationWithOutput(
 			ctx, s.id, iteration, sessionstore.SessionStatusError, content,
 		); err != nil {
 			return fmt.Errorf("update session error with output: %w", err)

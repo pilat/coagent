@@ -194,7 +194,7 @@ func newMCPRestartHarness(
 	pool := mcp.NewPool(nil)
 	cfg := &config.Config{WorkDir: workDir, Model: "fake-model"}
 	factory := session.NewFactoryWithOptions(
-		cfg, nil, nil, sessStore, nil, pool, registry, nil, nil,
+		cfg, nil, nil, sessStore, sessStore, nil, pool, registry, nil, nil,
 		session.WithLLMClientFactory(func(_ *config.Config) (llm.Client, error) {
 			return &scriptedLLM{respond: respond}, nil
 		}),

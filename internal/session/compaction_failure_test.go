@@ -92,7 +92,7 @@ func TestCompactLeavesTheTranscriptIntactOnFailure(t *testing.T) {
 			store := &compactionRecordingStore{nextID: 1}
 			llm := tc.llm()
 			s := newCompactionTestSvc(llm)
-			s.ms = newMessageStore(store, 1)
+			s.ms = newMessageStore(store, 1, nil)
 
 			seedCompactableTranscript(ctx, t, s)
 			before := s.ms.getMessages()
@@ -133,7 +133,7 @@ func TestCompactKeepsTheOldTranscriptWhenTheDurableSwapFails(t *testing.T) {
 		contextWindow: 32000,
 	}
 	s := newCompactionTestSvc(llm)
-	s.ms = newMessageStore(store, 1)
+	s.ms = newMessageStore(store, 1, nil)
 
 	seedCompactableTranscript(ctx, t, s)
 
@@ -217,7 +217,7 @@ func TestCompactionMakesExactlyOneModelCall(t *testing.T) {
 		response:      &llmwire.Response{Text: validSummary, FinishType: llmwire.FinishStop},
 	}
 	s := newCompactionTestSvc(llm)
-	s.ms = newMessageStore(store, 1)
+	s.ms = newMessageStore(store, 1, nil)
 	s.ms.setMessages(oversizedTranscript(32000))
 
 	require.NoError(t, s.compactIfNeeded(ctx, 32000))

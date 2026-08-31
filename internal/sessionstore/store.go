@@ -180,13 +180,12 @@ type Store interface { //nolint:interfacebloat // Complete constructor result; c
 	OrchestrationStore
 	InboxStore
 	OutputStore
+	RuntimeOutputStore
 	ManagerRootStore
-	CommandOutputStore
 	LifecycleOutputStore
 	LifecycleCommandStore
 	ReplacementStore
 	ActivationStore
-	DirectOutputStore
 	BudgetStore
 	ModelInputStore
 	ProgressStore
@@ -200,6 +199,7 @@ var (
 	_ OrchestrationStore    = (*store)(nil)
 	_ InboxStore            = (*store)(nil)
 	_ OutputStore           = (*store)(nil)
+	_ RuntimeOutputStore    = (*store)(nil)
 	_ ManagerRootStore      = (*store)(nil)
 	_ CommandOutputStore    = (*store)(nil)
 	_ LifecycleOutputStore  = (*store)(nil)

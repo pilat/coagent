@@ -128,6 +128,7 @@ type svc struct {
 	agentsMD          string
 	memoryStore       memory.CuratedStore
 	store             sessionstore.RuntimeStore
+	outputStore       sessionstore.RuntimeOutputStore
 	rootID            int64
 	id                int64
 	model             string
@@ -183,6 +184,7 @@ type params struct {
 	Stack       *builtin.Stack
 	Registry    tool.Registry
 	Store       sessionstore.RuntimeStore
+	OutputStore sessionstore.RuntimeOutputStore
 	GitClient   git.Client
 	MemoryStore memory.CuratedStore
 }
@@ -196,6 +198,7 @@ type options struct {
 
 	// DB-based resume fields
 	ResumeMessages  []llmwire.Message
+	ResumeRowIDs    []int64
 	ResumeIteration int
 	ResumeTodoItems []*todo.Item
 	LastActivityAt  time.Time
@@ -311,6 +314,7 @@ func newSession(p params, opts options, workDir string, agentConfig registry.Age
 		memoryStore:     p.MemoryStore,
 		agentsMD:        agentsMD,
 		store:           p.Store,
+		outputStore:     p.OutputStore,
 		model:           p.Config.Model,
 		agentType:       agentConfig.Name,
 		reasoningLevel:  string(llm.ReasoningMedium),
@@ -334,7 +338,7 @@ func newSession(p params, opts options, workDir string, agentConfig registry.Age
 		msStore = s.store
 	}
 
-	s.ms = newMessageStore(msStore, opts.ID)
+	s.ms = newMessageStore(msStore, opts.ID, p.OutputStore)
 
 	return s
 }
@@ -694,7 +698,11 @@ func (s *svc) applyResumeOrInit(ctx context.Context, opts options, log *zap.Logg
 	}
 
 	if opts.ResumeMessages != nil {
-		s.ms.setMessages(opts.ResumeMessages)
+		if opts.ResumeRowIDs == nil {
+			s.ms.setMessages(opts.ResumeMessages)
+		} else if err := s.ms.setMessagesWithRowIDs(opts.ResumeMessages, opts.ResumeRowIDs); err != nil {
+			return fmt.Errorf("restore transcript identities: %w", err)
+		}
 
 		s.iterationOffset = opts.ResumeIteration
 

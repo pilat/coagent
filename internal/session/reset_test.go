@@ -15,7 +15,7 @@ func newResetTestSvc(store *compactionRecordingStore) *svc {
 	return &svc{
 		id:           1,
 		agentsMD:     "PROJECT RULES",
-		ms:           newMessageStore(store, 1),
+		ms:           newMessageStore(store, 1, nil),
 		loopDetector: newLoopDetector(),
 		todoStore:    todo.New(),
 		store:        store,
@@ -57,7 +57,7 @@ func TestResetContextAndInjectOnce_StartsBlankSlate(t *testing.T) {
 
 	// The persisted projection agrees: a reload sees only the fresh two rows —
 	// the old transcript is hidden (compacted), not deleted.
-	reloaded := newMessageStore(store, 1)
+	reloaded := newMessageStore(store, 1, nil)
 	require.NoError(t, reloaded.reloadMessages(ctx))
 	rl := reloaded.getMessages()
 	require.Len(t, rl, 2)

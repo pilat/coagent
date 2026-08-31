@@ -30,7 +30,7 @@ func TestRun_FailFastOnPersistError(t *testing.T) {
 		llmClient:     mockLLM,
 		todoStore:     todo.New(),
 		store:         mockStore,
-		ms:            newMessageStore(nil, 0),
+		ms:            newMessageStore(nil, 0, nil),
 		loopDetector:  newLoopDetector(),
 		prompt:        newPromptBuilder("test", "", ""),
 		maxIterations: 10,

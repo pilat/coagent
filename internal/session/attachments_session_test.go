@@ -86,11 +86,11 @@ func appendImageToolResult(ctx context.Context, t *testing.T, ms *messageStore, 
 func TestAttachments_SurviveRestart(t *testing.T) {
 	ctx := context.Background()
 	_, store, sessionID := newAttachmentsStore(t)
-	ms := newMessageStore(store, sessionID)
+	ms := newMessageStore(store, sessionID, nil)
 
 	appendImageToolResult(ctx, t, ms, "call-1")
 
-	reloaded := newMessageStore(store, sessionID)
+	reloaded := newMessageStore(store, sessionID, nil)
 	require.NoError(t, reloaded.reloadMessages(ctx))
 
 	got := reloaded.getMessages()

@@ -70,7 +70,7 @@ func newDelayedCLIHarness(t *testing.T) *delayedCLIHarness {
 		UnifiedConfig: &config.UnifiedConfig{ProjectsRoot: projectsRoot},
 	}
 	factory := session.NewFactoryWithOptions(
-		cfg, nil, nil, sessions, nil, nil, nil, nil, nil,
+		cfg, nil, nil, sessions, sessions, nil, nil, nil, nil, nil,
 		session.WithLLMClientFactory(func(*config.Config) (llm.Client, error) {
 			return delayedCLIClient{}, nil
 		}),
