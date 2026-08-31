@@ -61,6 +61,26 @@ them after every edit or agent turn.
   complete `make check` and `make ci` runs for an explicit request or the
   corresponding pre-merge gate.
 
+For a large mutation-testing cycle, finish the coherent implementation batch
+and run `make all` before collecting mutants. Let that mutation run finish and
+collect its complete report before changing tests. Fix the resulting test gaps
+as one batch, using only focused target tests while iterating; then run `make all`
+once and repeat the same mutation scope once. Do not interleave one mutant, one
+fix, and one full-suite run.
+
+Gremlins takes a filesystem path, not a Go package pattern: use
+`MUTATION_PATH=.` for the whole module, not `./...`. A run that generates zero
+mutants is not a pass. Neither is a timed-out mutant: calibrate the timeout from
+an uncached run of the slowest affected package, because a cached coverage
+baseline can make the derived mutation timeout too short.
+
+Keep whole-module mutation testing in a sharded scheduled or manually triggered
+CI job; it may run for hours and should publish a machine-readable report. The
+ordinary pull-request gate mutates only changed load-bearing packages or the
+curated critical-file scope. Until the repository has an accepted survivor
+baseline, the global job is diagnostic; afterward it should reject new survivors
+or a threshold regression per shard rather than re-failing every known gap.
+
 ## Testing Strategy
 
 Read **[docs/testing.md](docs/testing.md)** before designing tests for any change
