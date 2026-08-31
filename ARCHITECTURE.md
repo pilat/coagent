@@ -95,6 +95,7 @@ does not imply a tier except where it expresses an implementation variant.
 - `internal/todo` — session-local task tracking.
 - `internal/tool` — implementation-free tool protocol, registry and suspension sentinel.
 - `internal/tool/builtin` — built-in tools and their common stack construction.
+- `internal/transcript` — durable append-only conversation row vocabulary.
 - `internal/version` — build-stamped version vocabulary.
 - `migrations` — immutable SQLite schema migration assets.
 
@@ -117,9 +118,10 @@ delivery. The daemon owns orchestration across those facts: it must not recreate
 them from transcript text or infer correctness from a notification. Schedule,
 MCP, config-apply, and subagent packages each own their producer ledger; the
 daemon joins those ledgers into a session's runnable and waiting projections.
-Subagent link vocabulary and ordinary ledger access belong to `subagent`, not
-the daemon; session-store retains only the cross-table child creation,
-terminalization and parent-transcript delivery transactions.
+Subagent link vocabulary, child creation, activation terminalization and
+parent-transcript delivery belong to `subagent`, not the daemon. Its store owns
+those cross-table transactions; session-store owns ordinary session runtime and
+transcript mutations.
 
 Manager-owned roots also carry a durable outbox obligation. `session_outbox`
 stores the closed output vocabulary, immutable owner identity, delivery receipt,
@@ -327,7 +329,11 @@ answering a newer call.
 
 ### Subagent creation and completion
 
-The daemon owns the parent-child link ledger and admission decision; the child
+The `subagent` package owns link vocabulary and persistence. Ordinary queries
+use `subagent.Store`; child creation, terminalization, completion delivery and
+re-arming use its explicit cross-table `Transactions` boundary ([ADR-0037](docs/adr/0037-subagent-ledger-owns-cross-table-transitions.md)).
+
+The daemon owns admission and coordinates the parent-child protocol; the child
 session owns its own loop and transcript. Link creation records the parent,
 child, activation sequence, delivery obligation and foreground/background mode
 before an outcome can be delivered. The `task` tool is registered by the daemon

@@ -26,6 +26,7 @@ import (
 	"github.com/pilat/coagent/internal/schedule"
 	"github.com/pilat/coagent/internal/session"
 	"github.com/pilat/coagent/internal/sessionstore"
+	"github.com/pilat/coagent/internal/subagent"
 )
 
 const delayedTelegramManagerID = "telegram-delayed"
@@ -92,7 +93,7 @@ func newDelayedTelegramHarness(t *testing.T) *delayedTelegramHarness {
 		}),
 	)
 	service := daemon.New(
-		factory, projects, sessions, sessions, daemon.NewLinkStore(db),
+		factory, projects, sessions, sessions, subagent.NewStore(db), subagent.NewTransactions(db),
 		schedule.NewService(schedule.NewStore(db)), cfg, nil, nil, nil,
 	)
 	t.Cleanup(func() { service.Shutdown(3 * time.Second) })

@@ -14,114 +14,7 @@ const subagentLinkColumns = `parent_id, child_id, task_call_id, blocking, depth,
 // for queries that join subagent_links to sessions.
 const subagentLinkColumnsSL = `sl.parent_id, sl.child_id, sl.task_call_id, sl.blocking, sl.depth, sl.state, sl.delivered_at, sl.delivered_msg_id, sl.timeout_sec, sl.created_at, sl.result, sl.outcome, sl.activation_seq`
 
-// State enumerates subagent link states. Terminal states (completed/error/killed) mean the child
-// loop has exited; non-terminal states (spawned/running) mean it may still run. A
-// background child awaiting an admission slot keeps its durable 'spawned' state
-// (the in-memory FIFO queue is only an ordering cache) so the restart sweep
-// re-runs it.
-type State string
-
-const (
-	StateSpawned   State = "spawned"
-	StateRunning   State = "running"
-	StateCompleted State = "completed"
-	StateError     State = "error"
-	StateStopped   State = "stopped"
-	StateKilled    State = "killed"
-)
-
-// Outcome is the parent-facing result vocabulary. It is deliberately
-// distinct from State even where their serialized values coincide.
-type Outcome string
-
-const (
-	OutcomeCompleted  Outcome = "completed"
-	OutcomeError      Outcome = "error"
-	OutcomeKilled     Outcome = "killed"
-	OutcomeIncomplete Outcome = "incomplete"
-)
-
-func (s State) valid() bool {
-	switch s {
-	case StateSpawned, StateRunning, StateCompleted, StateError, StateStopped, StateKilled:
-		return true
-	default:
-		return false
-	}
-}
-
-func (o Outcome) valid() bool {
-	switch o {
-	case OutcomeCompleted, OutcomeError, OutcomeKilled, OutcomeIncomplete:
-		return true
-	default:
-		return false
-	}
-}
-
-func validTerminalLink(state State, outcome Outcome) bool {
-	switch state {
-	case StateCompleted:
-		return outcome == OutcomeCompleted || outcome == OutcomeIncomplete
-	case StateError:
-		return outcome == OutcomeError || outcome == OutcomeIncomplete
-	case StateKilled:
-		return outcome == OutcomeKilled
-	case StateSpawned, StateRunning, StateStopped:
-		return false
-	default:
-		return false
-	}
-}
-
 var _ Store = (*store)(nil)
-
-// Link is a durable parent→child relationship row in subagent_links.
-// It is the source of truth for "a completion is owed" and survives compaction,
-// restart, and lost in-memory notifications.
-type Link struct {
-	ParentID       int64
-	ChildID        int64
-	TaskCallID     string
-	Blocking       bool
-	Depth          int
-	State          State
-	DeliveredAt    int64 // unix seconds; 0 = undelivered
-	DeliveredMsgID int64
-	TimeoutSec     int
-	CreatedAt      int64
-	ActivationSeq  int64 // internal identity of this reusable child's current activation
-
-	// Result is the child's final answer text (or a short context note when it
-	// stopped without one); Outcome is the richer terminal signal (completed/
-	// error/killed/incomplete). Both are written at terminalization and read by
-	// the completion delivered to the parent — see OutcomeIncomplete.
-	Result  string
-	Outcome Outcome
-}
-
-// Store persists the subagent_links ledger — the subagent-owned durable record
-// of parent↔child relationships. It legitimately READS session liveness
-// (killed_at) in its JOIN queries but never writes the sessions table; the status
-// half of terminalization is the caller's separate UpdateSessionStatus.
-type Store interface {
-	InsertSubagentLink(ctx context.Context, link Link) error
-	GetLink(ctx context.Context, childID int64) (*Link, error)
-	GetLinkByTaskCallID(ctx context.Context, parentID int64, taskCallID string) (*Link, error)
-	ListPendingChildLinks(ctx context.Context, parentID int64) ([]Link, error)
-	ListRunningChildLinks(ctx context.Context) ([]Link, error)
-	ListUndeliveredParentLinks(ctx context.Context) ([]Link, error)
-	MarkLinkTerminal(
-		ctx context.Context,
-		childID int64,
-		state State,
-		result string,
-		outcome Outcome,
-	) error
-	ResetLinkRunning(ctx context.Context, childID int64) error
-	MarkLinkStopped(ctx context.Context, childID int64) error
-	MakeStoppedLinkResumable(ctx context.Context, childID int64) error
-}
 
 type store struct {
 	db *sql.DB
@@ -134,18 +27,6 @@ type rowScanner interface {
 
 func NewStore(db *sql.DB) Store {
 	return &store{db: db}
-}
-
-// Terminal reports whether the link is in a terminal state.
-func (l Link) Terminal() bool {
-	switch l.State {
-	case StateCompleted, StateError, StateKilled:
-		return true
-	case StateSpawned, StateRunning, StateStopped:
-		return false
-	default:
-		return false
-	}
 }
 
 func (s *store) InsertSubagentLink(ctx context.Context, link Link) error {

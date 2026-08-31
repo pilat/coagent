@@ -86,7 +86,7 @@ func (s *svc) createChildSession(ctx context.Context, req spawnRequest) (int64, 
 		return 0, "", 0, err
 	}
 
-	childID, err := s.sessionStore.CreateSubagentWithLink(ctx, sessionstore.SubagentCreate{
+	childID, err := s.subagents.Create(ctx, subagent.Create{
 		ProjectID:      parentRec.ProjectID,
 		ParentID:       req.ParentID,
 		RootID:         rootID,

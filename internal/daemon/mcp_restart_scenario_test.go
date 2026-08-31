@@ -20,6 +20,7 @@ import (
 	"github.com/pilat/coagent/internal/schedule"
 	"github.com/pilat/coagent/internal/session"
 	"github.com/pilat/coagent/internal/sessionstore"
+	"github.com/pilat/coagent/internal/subagent"
 	"github.com/pilat/coagent/internal/tool"
 )
 
@@ -186,7 +187,7 @@ func newMCPRestartHarness(
 
 	store := NewStore(db)
 	sessStore := sessionstore.NewStore(db)
-	links := NewLinkStore(db)
+	links := subagent.NewStore(db)
 	schedStore := schedule.NewStore(db)
 	registry := mcpstore.NewStore(db)
 	pool := mcp.NewPool(nil)
@@ -198,7 +199,7 @@ func newMCPRestartHarness(
 		}),
 	)
 	mgr := newSvc(
-		factory, store, sessStore, sessStore, links, schedule.NewService(schedStore),
+		factory, store, sessStore, sessStore, links, subagent.NewTransactions(db), schedule.NewService(schedStore),
 		func() string { return "fake-model" },
 	)
 	mgr.mcpStore = registry

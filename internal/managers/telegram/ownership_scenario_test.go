@@ -20,6 +20,7 @@ import (
 	"github.com/pilat/coagent/internal/managerdelivery"
 	"github.com/pilat/coagent/internal/migrate"
 	"github.com/pilat/coagent/internal/sessionstore"
+	"github.com/pilat/coagent/internal/subagent"
 )
 
 type telegramOwnershipHarness struct {
@@ -60,7 +61,10 @@ func newTelegramOwnershipHarness(t *testing.T) *telegramOwnershipHarness {
 	projects := daemon.NewStore(db)
 	sessions := sessionstore.NewStore(db)
 	cfg := &config.Config{UnifiedConfig: &config.UnifiedConfig{ProjectsRoot: filepath.Join(root, "projects")}}
-	svc := daemon.New(nil, projects, sessions, sessions, daemon.NewLinkStore(db), nil, cfg, nil, nil, nil)
+	svc := daemon.New(
+		nil, projects, sessions, sessions, subagent.NewStore(db), subagent.NewTransactions(db),
+		nil, cfg, nil, nil, nil,
+	)
 	controllers := daemon.NewController(svc, cfg, nil, nil)
 	telegramController := controllers.ForManager("telegram-main")
 	projectID, err := projects.GetOrCreateProject(ctx, filepath.Join(root, "project"))

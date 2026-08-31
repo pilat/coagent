@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/pilat/coagent/internal/llmwire"
+	"github.com/pilat/coagent/internal/subagent"
 )
 
 // A background child's completion commits in its own transaction. If it lands
@@ -43,7 +44,7 @@ func TestStore_CompactionKeepsACompletionPairCommittedOutsideItsSnapshot(t *test
 	snapshot := []int64{spawnID, ackID}
 
 	// The child completes in the window before the replacement commits.
-	msgIDs, won, err := s.DeliverCompletionAtomic(ctx, parent.ID, []*StoredMessage{
+	msgIDs, won, err := subagent.NewTransactions(db).DeliverCompletion(ctx, parent.ID, []*StoredMessage{
 		{Role: llmwire.RoleAssistant, ToolCalls: []byte(`[{"ID":"ev-1","Name":"subagent_event"}]`)},
 		{Role: llmwire.RoleTool, Content: "child done", ToolCallID: "ev-1", ToolName: "subagent_event"},
 	}, childID, 1)

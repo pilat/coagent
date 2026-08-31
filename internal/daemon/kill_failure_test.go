@@ -11,6 +11,7 @@ import (
 	"go.uber.org/zap/zaptest/observer"
 
 	"github.com/pilat/coagent/internal/logger"
+	"github.com/pilat/coagent/internal/subagent"
 )
 
 // TestInjectCompletion_ReadErrorIsReturned: without the link nothing is
@@ -67,7 +68,7 @@ func TestKillSubagent_TerminalMarkRetries(t *testing.T) {
 	link, err := h.links.GetLink(h.ctx, h.childID)
 	require.NoError(t, err)
 	require.NotNil(t, link)
-	assert.Equal(t, LinkStateKilled, link.State)
+	assert.Equal(t, subagent.StateKilled, link.State)
 
 	rec, err := h.sessStore.GetSession(h.ctx, h.childID)
 	require.NoError(t, err)
@@ -98,7 +99,7 @@ func TestKillSubagent_TerminalMarkExhausted(t *testing.T) {
 	running, err := h.links.ListRunningChildLinks(h.ctx)
 	require.NoError(t, err)
 	assert.True(t,
-		slices.ContainsFunc(running, func(l SubagentLink) bool { return l.ChildID == h.childID }),
+		slices.ContainsFunc(running, func(l subagent.Link) bool { return l.ChildID == h.childID }),
 		"the sweep can still recover it",
 	)
 }
@@ -114,7 +115,7 @@ func TestCascadeKill_RetryBudgetIsSharedAcrossTree(t *testing.T) {
 			h.ctx, h.projectID, h.parentID, h.parentID, "general", "fake-model", "",
 		)
 		require.NoError(t, err)
-		require.NoError(t, h.links.InsertSubagentLink(h.ctx, SubagentLink{
+		require.NoError(t, h.links.InsertSubagentLink(h.ctx, subagent.Link{
 			ParentID: h.parentID, ChildID: childID, TaskCallID: callID,
 		}))
 	}

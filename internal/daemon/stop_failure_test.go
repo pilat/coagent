@@ -14,6 +14,7 @@ import (
 	"github.com/pilat/coagent/internal/migrate"
 	"github.com/pilat/coagent/internal/sessionevent"
 	"github.com/pilat/coagent/internal/sessionstore"
+	"github.com/pilat/coagent/internal/subagent"
 )
 
 // failingGetSessionStore makes exactly one GetSession call fail, simulating a
@@ -59,7 +60,9 @@ func TestStopOnStoreFailureDoesNotPublishIdle(t *testing.T) {
 		err:                errors.New("disk hiccup"),
 	}
 	failing.pending.Store(true)
-	mgr := newSvc(&mockFactory{}, store, failing, sessions, NewLinkStore(db), nil, nil)
+	mgr := newSvc(
+		&mockFactory{}, store, failing, sessions, subagent.NewStore(db), subagent.NewTransactions(db), nil, nil,
+	)
 	controllers := NewController(mgr, &config.Config{}, nil, nil)
 	notifications := controllers.ForManager("manager-stop").Subscribe()
 

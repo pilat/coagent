@@ -73,7 +73,7 @@ func (s *svc) finalizeActivationRetrying(
 
 		var finalized bool
 
-		finalized, err = s.sessionStore.TryFinalizeSubagentActivation(ctx, childID, state, result, outcome)
+		finalized, err = s.subagents.TryFinalizeActivation(ctx, childID, state, result, outcome)
 		if err == nil {
 			return finalized, nil
 		}

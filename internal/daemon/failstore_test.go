@@ -5,18 +5,17 @@ import (
 	"errors"
 	"sync"
 
-	"github.com/pilat/coagent/internal/sessionstore"
 	"github.com/pilat/coagent/internal/subagent"
 )
 
 // errLinkRead is the sentinel every ledger-failure test asserts on.
 var errLinkRead = errors.New("link store unavailable")
 
-// flakyLinkStore decorates a real LinkStore so individual ledger operations can
+// flakyLinkStore decorates a real subagent.Store so individual ledger operations can
 // be made to fail on demand. Everything not overridden delegates to the embedded
 // store, so a live daemon keeps working around the injected failure.
 type flakyLinkStore struct {
-	LinkStore
+	subagent.Store
 
 	mu sync.Mutex
 
@@ -37,11 +36,11 @@ type flakyLinkStore struct {
 	listRunningFail bool
 }
 
-func newFlakyLinkStore(inner LinkStore) *flakyLinkStore {
-	return &flakyLinkStore{LinkStore: inner, getLinkCalls: make(map[int64]int)}
+func newFlakyLinkStore(inner subagent.Store) *flakyLinkStore {
+	return &flakyLinkStore{Store: inner, getLinkCalls: make(map[int64]int)}
 }
 
-func (f *flakyLinkStore) GetLink(ctx context.Context, childID int64) (*SubagentLink, error) {
+func (f *flakyLinkStore) GetLink(ctx context.Context, childID int64) (*subagent.Link, error) {
 	f.mu.Lock()
 	f.getLinkCalls[childID]++
 	n := f.getLinkCalls[childID]
@@ -58,15 +57,15 @@ func (f *flakyLinkStore) GetLink(ctx context.Context, childID int64) (*SubagentL
 		return nil, errLinkRead
 	}
 
-	return f.LinkStore.GetLink(ctx, childID)
+	return f.Store.GetLink(ctx, childID)
 }
 
 func (f *flakyLinkStore) MarkLinkTerminal(
 	ctx context.Context,
 	childID int64,
-	state LinkState,
+	state subagent.State,
 	result string,
-	outcome LinkOutcome,
+	outcome subagent.Outcome,
 ) error {
 	f.mu.Lock()
 	f.markTerminalCalls++
@@ -77,23 +76,23 @@ func (f *flakyLinkStore) MarkLinkTerminal(
 		return errLinkRead
 	}
 
-	return f.LinkStore.MarkLinkTerminal(ctx, childID, state, result, outcome)
+	return f.Store.MarkLinkTerminal(ctx, childID, state, result, outcome)
 }
 
-func (f *flakyLinkStore) ListPendingChildLinks(ctx context.Context, parentID int64) ([]SubagentLink, error) {
+func (f *flakyLinkStore) ListPendingChildLinks(ctx context.Context, parentID int64) ([]subagent.Link, error) {
 	if f.listPendingFail {
 		return nil, errLinkRead
 	}
 
-	return f.LinkStore.ListPendingChildLinks(ctx, parentID)
+	return f.Store.ListPendingChildLinks(ctx, parentID)
 }
 
-func (f *flakyLinkStore) ListRunningChildLinks(ctx context.Context) ([]SubagentLink, error) {
+func (f *flakyLinkStore) ListRunningChildLinks(ctx context.Context) ([]subagent.Link, error) {
 	if f.listRunningFail {
 		return nil, errLinkRead
 	}
 
-	return f.LinkStore.ListRunningChildLinks(ctx)
+	return f.Store.ListRunningChildLinks(ctx)
 }
 
 // markTerminalAttempts reports how many times MarkLinkTerminal was called.
@@ -115,14 +114,14 @@ func (f *flakyLinkStore) failGetLink(from int, childID int64) {
 }
 
 type flakyActivationStore struct {
-	sessionstore.Store
+	subagent.Transactions
 
 	mu    sync.Mutex
 	failN int
 	calls int
 }
 
-func (f *flakyActivationStore) TryFinalizeSubagentActivation(
+func (f *flakyActivationStore) TryFinalizeActivation(
 	ctx context.Context,
 	childID int64,
 	state subagent.State,
@@ -138,7 +137,7 @@ func (f *flakyActivationStore) TryFinalizeSubagentActivation(
 		return false, errLinkRead
 	}
 
-	return f.Store.TryFinalizeSubagentActivation(ctx, childID, state, result, outcome)
+	return f.Transactions.TryFinalizeActivation(ctx, childID, state, result, outcome)
 }
 
 func (f *flakyActivationStore) attempts() int {

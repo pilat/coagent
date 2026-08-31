@@ -5,6 +5,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/pilat/coagent/internal/subagent"
 )
 
 // TestLedgerFailure_SpawnRefusesInsteadOfDegrading is the summary gate: with the
@@ -13,7 +15,7 @@ import (
 func TestLedgerFailure_SpawnRefusesInsteadOfDegrading(t *testing.T) {
 	var flaky *flakyLinkStore
 
-	h := newSubagentHarnessDecorated(t, trivialRespond, func(inner LinkStore) LinkStore {
+	h := newSubagentHarnessDecorated(t, trivialRespond, func(inner subagent.Store) subagent.Store {
 		flaky = newFlakyLinkStore(inner)
 		return flaky
 	})

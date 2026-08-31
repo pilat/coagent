@@ -8,10 +8,12 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/pilat/coagent/internal/subagent"
 )
 
 type blockingRecoveryLinks struct {
-	LinkStore
+	subagent.Store
 
 	entered     chan struct{}
 	cancelled   chan struct{}
@@ -19,7 +21,7 @@ type blockingRecoveryLinks struct {
 	once        sync.Once
 }
 
-func (s *blockingRecoveryLinks) ListRunningChildLinks(ctx context.Context) ([]SubagentLink, error) {
+func (s *blockingRecoveryLinks) ListRunningChildLinks(ctx context.Context) ([]subagent.Link, error) {
 	s.once.Do(func() { close(s.entered) })
 	<-ctx.Done()
 	close(s.cancelled)
@@ -32,7 +34,7 @@ func (s *blockingRecoveryLinks) ListRunningChildLinks(ctx context.Context) ([]Su
 func TestShutdownCancelsBackgroundRecovery(t *testing.T) {
 	h := newSubagentHarness(t)
 	links := &blockingRecoveryLinks{
-		LinkStore:   h.mgr.links,
+		Store:       h.mgr.links,
 		entered:     make(chan struct{}),
 		cancelled:   make(chan struct{}),
 		allowReturn: make(chan struct{}),

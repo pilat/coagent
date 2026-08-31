@@ -46,7 +46,8 @@ components:
   memory:       { in: internal/memory }
   mcpstore:     { in: internal/mcpstore }
   sessionstore: { in: internal/sessionstore }
-  subagent:    { in: internal/subagent }
+  subagent:     { in: internal/subagent }
+  transcript:   { in: internal/transcript }
   managerdelivery: { in: internal/managerdelivery }
   progress:      { in: internal/progress }
   budget:        { in: internal/budget }
@@ -92,7 +93,9 @@ deps:
   budget:
     mayDependOn: [sessionstore, tool]
   sessionstore:
-    mayDependOn: [subagent]
+    mayDependOn: [transcript]
+  subagent:
+    mayDependOn: [transcript]
 
   # Per-cwd shell activation, consumed by the three per-cwd spawners.
   bashsandbox:

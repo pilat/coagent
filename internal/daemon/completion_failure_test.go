@@ -12,6 +12,7 @@ import (
 
 	"github.com/pilat/coagent/internal/logger"
 	"github.com/pilat/coagent/internal/sessionevent"
+	"github.com/pilat/coagent/internal/subagent"
 )
 
 // ledgerHarness is a live daemon whose link store fails on demand, plus the ids
@@ -30,13 +31,12 @@ func newLedgerHarness(t *testing.T) *ledgerHarness {
 
 	var flaky *flakyLinkStore
 
-	h := newSubagentHarnessDecorated(t, trivialRespond, func(inner LinkStore) LinkStore {
+	h := newSubagentHarnessDecorated(t, trivialRespond, func(inner subagent.Store) subagent.Store {
 		flaky = newFlakyLinkStore(inner)
 		return flaky
 	})
-	activation := &flakyActivationStore{Store: h.sessStore}
-	h.sessStore = activation
-	h.mgr.sessionStore = activation
+	activation := &flakyActivationStore{Transactions: h.mgr.subagents}
+	h.mgr.subagents = activation
 
 	parent, err := h.sessStore.CreateSession(h.ctx, h.projectID, "fake-model", "", nil)
 	require.NoError(t, err)
@@ -45,7 +45,7 @@ func newLedgerHarness(t *testing.T) *ledgerHarness {
 		h.ctx, h.projectID, parent.ID, parent.ID, "general", "fake-model", "",
 	)
 	require.NoError(t, err)
-	require.NoError(t, h.links.InsertSubagentLink(h.ctx, SubagentLink{
+	require.NoError(t, h.links.InsertSubagentLink(h.ctx, subagent.Link{
 		ParentID: parent.ID, ChildID: childID, TaskCallID: "bg",
 	}))
 
@@ -167,7 +167,7 @@ func TestFinalizeChild_TerminalMarkExhausted(t *testing.T) {
 	running, err := h.links.ListRunningChildLinks(h.ctx)
 	require.NoError(t, err)
 	assert.True(t,
-		slices.ContainsFunc(running, func(l SubagentLink) bool { return l.ChildID == h.childID }),
+		slices.ContainsFunc(running, func(l subagent.Link) bool { return l.ChildID == h.childID }),
 		"a non-terminal link is still recoverable by the sweep",
 	)
 }

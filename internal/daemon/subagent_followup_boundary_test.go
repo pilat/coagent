@@ -10,18 +10,19 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/pilat/coagent/internal/sessionstore"
+	"github.com/pilat/coagent/internal/subagent"
 )
 
 func createBackgroundChild(t *testing.T, mgr *svc, projectID, parentID int64) int64 {
 	t.Helper()
 
-	childID, err := mgr.sessionStore.CreateSubagentWithLink(context.Background(), sessionstore.SubagentCreate{
+	childID, err := mgr.subagents.Create(context.Background(), subagent.Create{
 		ProjectID:  projectID,
 		ParentID:   parentID,
 		RootID:     parentID,
 		Model:      "fake-model",
 		TaskCallID: "task-follow-up",
-		State:      LinkStateSpawned,
+		State:      subagent.StateSpawned,
 	})
 	require.NoError(t, err)
 
@@ -65,7 +66,7 @@ func TestTerminalChildDeliversPreviousOutcomeBeforeRearm(t *testing.T) {
 	childID := createBackgroundChild(t, mgr, projectID, parent.ID)
 
 	require.NoError(t, mgr.links.MarkLinkTerminal(
-		ctx, childID, LinkStateCompleted, "first outcome", LinkOutcomeCompleted,
+		ctx, childID, subagent.StateCompleted, "first outcome", subagent.OutcomeCompleted,
 	))
 	require.NoError(t, mgr.sessionStore.UpdateSessionStatus(ctx, childID, sessionstore.SessionStatusCompleted))
 
@@ -73,7 +74,7 @@ func TestTerminalChildDeliversPreviousOutcomeBeforeRearm(t *testing.T) {
 
 	require.Eventually(t, func() bool {
 		link, linkErr := mgr.links.GetLink(ctx, childID)
-		if linkErr != nil || link == nil || link.State != LinkStateRunning || link.DeliveredAt != 0 {
+		if linkErr != nil || link == nil || link.State != subagent.StateRunning || link.DeliveredAt != 0 {
 			return false
 		}
 
@@ -100,14 +101,14 @@ func TestStopParksWholeTreeAndExplicitFollowUpResumesOnlyChild(t *testing.T) {
 	parent, err := mgr.sessionStore.CreateSession(ctx, projectID, "fake-model", "", nil)
 	require.NoError(t, err)
 
-	childID, err := mgr.sessionStore.CreateSubagentWithLink(ctx, sessionstore.SubagentCreate{
+	childID, err := mgr.subagents.Create(ctx, subagent.Create{
 		ProjectID:  projectID,
 		ParentID:   parent.ID,
 		RootID:     parent.ID,
 		Model:      "fake-model",
 		TaskCallID: "blocking-task",
 		Blocking:   true,
-		State:      LinkStateRunning,
+		State:      subagent.StateRunning,
 	})
 	require.NoError(t, err)
 	_, err = mgr.inboxStore.EnqueueInput(ctx, childID, sessionstore.InputSourceAgent, "not consumed")
@@ -126,7 +127,7 @@ func TestStopParksWholeTreeAndExplicitFollowUpResumesOnlyChild(t *testing.T) {
 	link, err := mgr.links.GetLink(ctx, childID)
 	require.NoError(t, err)
 	require.NotNil(t, link)
-	assert.Equal(t, LinkStateStopped, link.State)
+	assert.Equal(t, subagent.StateStopped, link.State)
 	assert.False(
 		t,
 		link.Blocking,
@@ -136,7 +137,7 @@ func TestStopParksWholeTreeAndExplicitFollowUpResumesOnlyChild(t *testing.T) {
 	require.NoError(t, mgr.SendToChild(ctx, childID, "resume just this child"))
 	require.Eventually(t, func() bool {
 		resumed, getErr := mgr.links.GetLink(ctx, childID)
-		return getErr == nil && resumed != nil && resumed.State == LinkStateRunning
+		return getErr == nil && resumed != nil && resumed.State == subagent.StateRunning
 	}, 3*time.Second, 10*time.Millisecond)
 
 	parentRec, err := mgr.sessionStore.GetSession(ctx, parent.ID)
@@ -173,9 +174,9 @@ func TestStopDirectChildParksItsOwnLinkWithoutStoppingParent(t *testing.T) {
 	projectID := testProject(t, projects, "/tmp/stop-direct-child")
 	parent, err := mgr.sessionStore.CreateSession(ctx, projectID, "fake-model", "", nil)
 	require.NoError(t, err)
-	childID, err := mgr.sessionStore.CreateSubagentWithLink(ctx, sessionstore.SubagentCreate{
+	childID, err := mgr.subagents.Create(ctx, subagent.Create{
 		ProjectID: projectID, ParentID: parent.ID, RootID: parent.ID,
-		Model: "fake-model", TaskCallID: "background", State: LinkStateRunning,
+		Model: "fake-model", TaskCallID: "background", State: subagent.StateRunning,
 	})
 	require.NoError(t, err)
 
@@ -190,7 +191,7 @@ func TestStopDirectChildParksItsOwnLinkWithoutStoppingParent(t *testing.T) {
 	link, err := mgr.links.GetLink(ctx, childID)
 	require.NoError(t, err)
 	require.NotNil(t, link)
-	assert.Equal(t, LinkStateStopped, link.State)
+	assert.Equal(t, subagent.StateStopped, link.State)
 }
 
 func TestStartFinishesInterruptedStopBeforeRecoverySweep(t *testing.T) {
@@ -199,9 +200,9 @@ func TestStartFinishesInterruptedStopBeforeRecoverySweep(t *testing.T) {
 	projectID := testProject(t, projects, "/tmp/recover-stop")
 	parent, err := mgr.sessionStore.CreateSession(ctx, projectID, "fake-model", "", nil)
 	require.NoError(t, err)
-	childID, err := mgr.sessionStore.CreateSubagentWithLink(ctx, sessionstore.SubagentCreate{
+	childID, err := mgr.subagents.Create(ctx, subagent.Create{
 		ProjectID: projectID, ParentID: parent.ID, RootID: parent.ID,
-		Model: "fake-model", TaskCallID: "background", State: LinkStateRunning,
+		Model: "fake-model", TaskCallID: "background", State: subagent.StateRunning,
 	})
 	require.NoError(t, err)
 	require.NoError(t, mgr.sessionStore.UpdateSessionStatus(ctx, parent.ID, sessionstore.SessionStatusStopping))
@@ -217,7 +218,7 @@ func TestStartFinishesInterruptedStopBeforeRecoverySweep(t *testing.T) {
 	link, err := mgr.links.GetLink(ctx, childID)
 	require.NoError(t, err)
 	require.NotNil(t, link)
-	assert.Equal(t, LinkStateStopped, link.State)
+	assert.Equal(t, subagent.StateStopped, link.State)
 
 	mgr.Shutdown(3 * time.Second)
 }

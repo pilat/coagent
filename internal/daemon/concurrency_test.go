@@ -10,6 +10,7 @@ import (
 
 	"github.com/pilat/coagent/internal/llm"
 	"github.com/pilat/coagent/internal/llmwire"
+	"github.com/pilat/coagent/internal/subagent"
 )
 
 // trivialRespond: every session finishes immediately. Used when the test drives
@@ -152,8 +153,8 @@ func TestIntegration_CascadeKillsBlockingChild(t *testing.T) {
 
 	childLink, err := h.links.GetLink(h.ctx, link.ChildID)
 	require.NoError(t, err)
-	assert.Equal(t, LinkStateKilled, childLink.State)
-	assert.Equal(t, LinkOutcomeKilled, childLink.Outcome, "a killed child reports the killed outcome")
+	assert.Equal(t, subagent.StateKilled, childLink.State)
+	assert.Equal(t, subagent.OutcomeKilled, childLink.Outcome, "a killed child reports the killed outcome")
 }
 
 func TestIntegration_ChildPanicMarksError(t *testing.T) {
@@ -173,8 +174,8 @@ func TestIntegration_ChildPanicMarksError(t *testing.T) {
 
 	res, err := h.mgr.Result(h.ctx, link.ChildID)
 	require.NoError(t, err)
-	assert.Equal(t, LinkStateError, res.State)
-	assert.Equal(t, LinkOutcomeError, res.Outcome, "a panicked child reports the error outcome")
+	assert.Equal(t, subagent.StateError, res.State)
+	assert.Equal(t, subagent.OutcomeError, res.Outcome, "a panicked child reports the error outcome")
 
 	msgs := h.parentMessages(parentID)
 	require.NoError(t, llm.ValidateToolPairing(msgs))
@@ -221,8 +222,8 @@ func TestIntegration_BlockingChildTimeout(t *testing.T) {
 
 	res, err := h.mgr.Result(h.ctx, link.ChildID)
 	require.NoError(t, err)
-	assert.Equal(t, LinkStateError, res.State, "a timed-out child is terminal-error")
-	assert.Equal(t, LinkOutcomeError, res.Outcome, "a timed-out child reports the error outcome")
+	assert.Equal(t, subagent.StateError, res.State, "a timed-out child is terminal-error")
+	assert.Equal(t, subagent.OutcomeError, res.Outcome, "a timed-out child reports the error outcome")
 
 	msgs := h.parentMessages(parentID)
 	require.NoError(t, llm.ValidateToolPairing(msgs))
@@ -340,7 +341,7 @@ func (h *subagentHarness) queueLen() int {
 	return len(h.mgr.queue)
 }
 
-func (h *subagentHarness) waitForLinkByCall(parentID int64, callID string) SubagentLink {
+func (h *subagentHarness) waitForLinkByCall(parentID int64, callID string) subagent.Link {
 	h.t.Helper()
 	h.waitUntil("link for "+callID, func() bool {
 		link, err := h.links.GetLinkByTaskCallID(h.ctx, parentID, callID)

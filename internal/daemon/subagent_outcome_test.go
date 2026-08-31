@@ -13,6 +13,7 @@ import (
 	"github.com/pilat/coagent/internal/llmwire"
 	"github.com/pilat/coagent/internal/logger"
 	"github.com/pilat/coagent/internal/sessionstore"
+	"github.com/pilat/coagent/internal/subagent"
 )
 
 // TestFinalizeChild_IncompleteWhenNoFinalAnswer: a child that ran out of
@@ -37,7 +38,7 @@ func TestFinalizeChild_IncompleteWhenNoFinalAnswer(t *testing.T) {
 		"",
 	)
 	require.NoError(t, err)
-	require.NoError(t, h.links.InsertSubagentLink(ctx, SubagentLink{
+	require.NoError(t, h.links.InsertSubagentLink(ctx, subagent.Link{
 		ParentID: parent.ID, ChildID: childID, TaskCallID: "bg",
 	}))
 
@@ -57,10 +58,10 @@ func TestFinalizeChild_IncompleteWhenNoFinalAnswer(t *testing.T) {
 
 	link, err := h.links.GetLink(ctx, childID)
 	require.NoError(t, err)
-	assert.Equal(t, LinkOutcomeIncomplete, link.Outcome, "no final answer → incomplete")
+	assert.Equal(t, subagent.OutcomeIncomplete, link.Outcome, "no final answer → incomplete")
 	assert.Contains(t, link.Result, "without a final answer")
 	assert.Contains(t, link.Result, "12", "result note carries the iteration count")
-	assert.Equal(t, LinkStateError, link.State, "max-iterations keeps the state=error lifecycle value")
+	assert.Equal(t, subagent.StateError, link.State, "max-iterations keeps the state=error lifecycle value")
 
 	// The parent receives the explicit incomplete outcome, never a masked completed.
 	h.waitForDelivery(childID)
@@ -196,11 +197,11 @@ func TestCascadeKill_CompletedUndeliveredSurvives(t *testing.T) {
 		"",
 	)
 	require.NoError(t, err)
-	require.NoError(t, h.links.InsertSubagentLink(ctx, SubagentLink{
+	require.NoError(t, h.links.InsertSubagentLink(ctx, subagent.Link{
 		ParentID: parent.ID, ChildID: childID, TaskCallID: "bg",
 	}))
 	require.NoError(t, h.links.MarkLinkTerminal(
-		ctx, childID, LinkStateCompleted, "the result", LinkOutcomeCompleted,
+		ctx, childID, subagent.StateCompleted, "the result", subagent.OutcomeCompleted,
 	))
 	require.NoError(t, h.sessStore.UpdateSessionStatus(ctx, childID, sessionstore.SessionStatusCompleted))
 
@@ -208,8 +209,8 @@ func TestCascadeKill_CompletedUndeliveredSurvives(t *testing.T) {
 
 	link, err := h.links.GetLink(ctx, childID)
 	require.NoError(t, err)
-	assert.Equal(t, LinkStateCompleted, link.State, "completed-but-undelivered child not re-marked killed")
-	assert.Equal(t, LinkOutcomeCompleted, link.Outcome)
+	assert.Equal(t, subagent.StateCompleted, link.State, "completed-but-undelivered child not re-marked killed")
+	assert.Equal(t, subagent.OutcomeCompleted, link.Outcome)
 	assert.Equal(t, "the result", link.Result, "its stored result survives the cascade")
 }
 
@@ -234,7 +235,7 @@ func TestDrainQueue_SkipsKilledChild(t *testing.T) {
 		"",
 	)
 	require.NoError(t, err)
-	require.NoError(t, h.links.InsertSubagentLink(ctx, SubagentLink{
+	require.NoError(t, h.links.InsertSubagentLink(ctx, subagent.Link{
 		ParentID: parent.ID, ChildID: childID, TaskCallID: "bg",
 	}))
 

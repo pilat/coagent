@@ -10,6 +10,7 @@ import (
 
 	"github.com/pilat/coagent/internal/llm"
 	"github.com/pilat/coagent/internal/llmwire"
+	"github.com/pilat/coagent/internal/subagent"
 )
 
 const contextSummaryPrefix = "[CONTEXT SUMMARY"
@@ -119,7 +120,7 @@ func TestScenario_CompactWaitsForABlockingChildThenRuns(t *testing.T) {
 
 	res, err := h.mgr.Result(h.ctx, link.ChildID)
 	require.NoError(t, err)
-	assert.Equal(t, LinkStateCompleted, res.State, "no zombie link")
+	assert.Equal(t, subagent.StateCompleted, res.State, "no zombie link")
 }
 
 // The deferred request rides the durable inbox, so it survives the daemon dying

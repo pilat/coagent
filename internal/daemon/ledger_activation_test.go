@@ -14,6 +14,7 @@ import (
 	"github.com/pilat/coagent/internal/llm"
 	"github.com/pilat/coagent/internal/llmwire"
 	"github.com/pilat/coagent/internal/sessionstore"
+	"github.com/pilat/coagent/internal/subagent"
 )
 
 const backgroundChildArgs = `{"prompt":"CHILD_TASK do it","description":"c","subagent_type":"general","background":true}`
@@ -22,7 +23,7 @@ const backgroundChildArgs = `{"prompt":"CHILD_TASK do it","description":"c","sub
 // a delivered link as still owing — the read a sweep redelivery gets when it
 // races a delivery that is committing. Only the store CAS can then reject it.
 type completionProbe struct {
-	LinkStore
+	subagent.Store
 
 	mask atomic.Int64
 
@@ -30,12 +31,12 @@ type completionProbe struct {
 	reads map[int64]int
 }
 
-func newCompletionProbe(inner LinkStore) *completionProbe {
-	return &completionProbe{LinkStore: inner, reads: make(map[int64]int)}
+func newCompletionProbe(inner subagent.Store) *completionProbe {
+	return &completionProbe{Store: inner, reads: make(map[int64]int)}
 }
 
-func (p *completionProbe) GetLink(ctx context.Context, childID int64) (*SubagentLink, error) {
-	link, err := p.LinkStore.GetLink(ctx, childID)
+func (p *completionProbe) GetLink(ctx context.Context, childID int64) (*subagent.Link, error) {
+	link, err := p.Store.GetLink(ctx, childID)
 
 	p.mu.Lock()
 	p.reads[childID]++
@@ -59,7 +60,7 @@ func (p *completionProbe) readsFor(childID int64) int {
 	return p.reads[childID]
 }
 
-// casAttempt is one DeliverCompletionAtomic the daemon made, with its verdict.
+// casAttempt is one DeliverCompletion the daemon made, with its verdict.
 type casAttempt struct {
 	ActivationSeq int64
 	Won           bool
@@ -68,19 +69,19 @@ type casAttempt struct {
 // casProbe records every completion CAS so a test can prove the daemon reached
 // the exactly-once boundary instead of silently skipping it.
 type casProbe struct {
-	sessionstore.Store
+	subagent.Transactions
 
 	mu       sync.Mutex
 	attempts []casAttempt
 }
 
-func (p *casProbe) DeliverCompletionAtomic(
+func (p *casProbe) DeliverCompletion(
 	ctx context.Context,
 	sessionID int64,
 	msgs []*sessionstore.StoredMessage,
 	childID, activationSeq int64,
 ) ([]int64, bool, error) {
-	ids, won, err := p.Store.DeliverCompletionAtomic(ctx, sessionID, msgs, childID, activationSeq)
+	ids, won, err := p.Transactions.DeliverCompletion(ctx, sessionID, msgs, childID, activationSeq)
 	if err == nil {
 		p.mu.Lock()
 		p.attempts = append(p.attempts, casAttempt{ActivationSeq: activationSeq, Won: won})
@@ -99,9 +100,8 @@ func (p *casProbe) snapshot() []casAttempt {
 
 // probeCAS routes the harness's completion commits through a recording store.
 func probeCAS(h *subagentHarness) *casProbe {
-	probe := &casProbe{Store: h.sessStore}
-	h.sessStore = probe
-	h.mgr.sessionStore = probe
+	probe := &casProbe{Transactions: h.mgr.subagents}
+	h.mgr.subagents = probe
 
 	return probe
 }
@@ -166,7 +166,7 @@ func TestScenario_RedeliveryOfACommittedActivationIsANoOp(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			var links *completionProbe
 
-			h := newSubagentHarnessDecorated(t, activationRespond(nil), func(inner LinkStore) LinkStore {
+			h := newSubagentHarnessDecorated(t, activationRespond(nil), func(inner subagent.Store) subagent.Store {
 				links = newCompletionProbe(inner)
 				return links
 			})
@@ -242,7 +242,7 @@ func TestScenario_StaleActivationCompletionCannotFillTheNewActivation(t *testing
 
 	var links *completionProbe
 
-	second := newSubagentHarnessOnDB(t, dbPath, activationRespond(release), func(inner LinkStore) LinkStore {
+	second := newSubagentHarnessOnDB(t, dbPath, activationRespond(release), func(inner subagent.Store) subagent.Store {
 		links = newCompletionProbe(inner)
 		return links
 	})

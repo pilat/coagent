@@ -96,6 +96,7 @@ type svc struct {
 	sessionStore   sessionstore.OrchestrationStore
 	inboxStore     sessionstore.InboxStore
 	links          subagent.Store
+	subagents      subagent.Transactions
 	scheduleSvc    schedule.Service
 	admit          *admissionCtl
 	queueMu        sync.Mutex
@@ -189,13 +190,14 @@ func New(
 	sessionStore sessionstore.OrchestrationStore,
 	inboxStore sessionstore.InboxStore,
 	links subagent.Store,
+	subagents subagent.Transactions,
 	scheduleSvc schedule.Service,
 	cfg *config.Config,
 	mcpStore mcpstore.Store,
 	mcpPool mcp.Pool,
 	applier *ConfigApplier,
 ) Service {
-	s := newSvc(factory, store, sessionStore, inboxStore, links, scheduleSvc, cfg.DefaultModel)
+	s := newSvc(factory, store, sessionStore, inboxStore, links, subagents, scheduleSvc, cfg.DefaultModel)
 	s.systemProject = filepath.Join(
 		resolveProjectsRoot(cfg.UnifiedConfig),
 		controllerapi.CoagentSystemProjectDir,
@@ -218,6 +220,7 @@ func newSvc(
 	sessionStore sessionstore.OrchestrationStore,
 	inboxStore sessionstore.InboxStore,
 	links subagent.Store,
+	subagents subagent.Transactions,
 	scheduleSvc schedule.Service,
 	defaultModelFn func() string,
 ) *svc {
@@ -229,6 +232,7 @@ func newSvc(
 		sessionStore:   sessionStore,
 		inboxStore:     inboxStore,
 		links:          links,
+		subagents:      subagents,
 		scheduleSvc:    scheduleSvc,
 		staged:         newStagedCalls(),
 		secrets:        newSecretRequests(),

@@ -22,6 +22,7 @@ import (
 	"github.com/pilat/coagent/internal/schedule"
 	"github.com/pilat/coagent/internal/session"
 	"github.com/pilat/coagent/internal/sessionstore"
+	"github.com/pilat/coagent/internal/subagent"
 	"github.com/pilat/coagent/internal/tool"
 )
 
@@ -125,7 +126,7 @@ func newGatingHarness(
 
 	store := NewStore(db)
 	sessStore := sessionstore.NewStore(db)
-	links := NewLinkStore(db)
+	links := subagent.NewStore(db)
 	schedStore := schedule.NewStore(db)
 
 	workDir := t.TempDir()
@@ -146,7 +147,7 @@ func newGatingHarness(
 	)
 
 	mgr := newSvc(
-		factory, store, sessStore, sessStore, links, schedule.NewService(schedStore),
+		factory, store, sessStore, sessStore, links, subagent.NewTransactions(db), schedule.NewService(schedStore),
 		func() string { return "fake-model" },
 	)
 	if systemProject {
@@ -199,10 +200,10 @@ func writeProjectAgents(t *testing.T, workDir string, agents map[string]string) 
 	}
 }
 
-func (h *gatingHarness) waitForLink(parentID int64, callID string) SubagentLink {
+func (h *gatingHarness) waitForLink(parentID int64, callID string) subagent.Link {
 	h.t.Helper()
 
-	var link *SubagentLink
+	var link *subagent.Link
 
 	require.Eventually(h.t, func() bool {
 		found, err := h.links.GetLinkByTaskCallID(h.ctx, parentID, callID)

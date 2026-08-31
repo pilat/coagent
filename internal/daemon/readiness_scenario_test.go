@@ -12,6 +12,7 @@ import (
 	"github.com/pilat/coagent/internal/controllerapi"
 	"github.com/pilat/coagent/internal/migrate"
 	"github.com/pilat/coagent/internal/sessionstore"
+	"github.com/pilat/coagent/internal/subagent"
 )
 
 // TestReadinessSuppressesIdleWhileRootIsActiveLoop pins plan decision 39: a
@@ -44,7 +45,9 @@ func TestReadinessSuppressesIdleWhileRootIsActiveLoop(t *testing.T) {
 		RETURNING id`,
 		sessionID).Scan(&outputID))
 
-	mgr := newSvc(&mockFactory{}, store, sessions, sessions, NewLinkStore(db), nil, nil)
+	mgr := newSvc(
+		&mockFactory{}, store, sessions, sessions, subagent.NewStore(db), subagent.NewTransactions(db), nil, nil,
+	)
 	controllers := NewController(mgr, &config.Config{}, nil, nil)
 	notifications := controllers.ForManager("manager-readiness").Subscribe()
 
@@ -93,7 +96,9 @@ func TestReconcileLatestReadinessPublishesIdleAfterTeardown(t *testing.T) {
 		RETURNING id`,
 		record.ID).Scan(&outputID))
 
-	mgr := newSvc(&mockFactory{}, store, sessions, sessions, NewLinkStore(db), nil, nil)
+	mgr := newSvc(
+		&mockFactory{}, store, sessions, sessions, subagent.NewStore(db), subagent.NewTransactions(db), nil, nil,
+	)
 	controllers := NewController(mgr, &config.Config{}, nil, nil)
 	notifications := controllers.ForManager("manager-readiness").Subscribe()
 

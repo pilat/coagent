@@ -14,6 +14,7 @@ import (
 
 	"github.com/pilat/coagent/internal/llmwire"
 	"github.com/pilat/coagent/internal/migrate"
+	"github.com/pilat/coagent/internal/subagent"
 )
 
 // harnessCommand is deliberately smaller than the implementation API. These
@@ -124,6 +125,7 @@ type harnessProduction struct {
 	ctx    context.Context
 	db     *sql.DB
 	store  Store
+	links  subagent.Transactions
 	parent int64
 	child  int64
 	callID string
@@ -169,7 +171,7 @@ func newHarnessProduction(t *testing.T, migratedDB []byte) *harnessProduction {
 	seedLink(t, db, parent.ID, child, "model-task")
 
 	return &harnessProduction{
-		t: t, ctx: ctx, db: db, store: store,
+		t: t, ctx: ctx, db: db, store: store, links: subagent.NewTransactions(db),
 		parent: parent.ID, child: child, callID: "model-task",
 	}
 }
@@ -181,7 +183,7 @@ func (p *harnessProduction) apply(command harnessCommand) {
 
 	switch command {
 	case harnessFinish:
-		finalized, err := p.store.TryFinalizeSubagentActivation(
+		finalized, err := p.links.TryFinalizeActivation(
 			p.ctx, p.child, "completed", harnessCompletionText(snapshot.activationSeq), "completed",
 		)
 		require.NoError(p.t, err)
@@ -189,7 +191,7 @@ func (p *harnessProduction) apply(command harnessCommand) {
 			return
 		}
 
-		_, _, err = p.store.DeliverCompletionAtomic(
+		_, _, err = p.links.DeliverCompletion(
 			p.ctx,
 			p.parent,
 			[]*StoredMessage{{
@@ -200,7 +202,7 @@ func (p *harnessProduction) apply(command harnessCommand) {
 			snapshot.activationSeq,
 		)
 		require.NoError(p.t, err)
-		rearmed, err := p.store.RearmDeliveredSubagentWithPendingInput(p.ctx, p.child)
+		rearmed, err := p.links.RearmDeliveredWithPendingInput(p.ctx, p.child)
 		require.NoError(p.t, err)
 		wantRearmed := snapshot.pendingInputs > 0 &&
 			(snapshot.state == "completed" || snapshot.state == "error")
@@ -211,7 +213,7 @@ func (p *harnessProduction) apply(command harnessCommand) {
 			fmt.Sprintf("follow-up %d.%d", snapshot.activationSeq, snapshot.pendingInputs+1),
 		)
 		require.NoError(p.t, err)
-		rearmed, err := p.store.RearmDeliveredSubagentWithPendingInput(p.ctx, p.child)
+		rearmed, err := p.links.RearmDeliveredWithPendingInput(p.ctx, p.child)
 		require.NoError(p.t, err)
 		if snapshot.delivered && (snapshot.state == "completed" || snapshot.state == "error") {
 			require.True(p.t, rearmed)
@@ -233,7 +235,7 @@ func (p *harnessProduction) apply(command harnessCommand) {
 			return
 		}
 
-		_, won, err := p.store.DeliverCompletionAtomic(
+		_, won, err := p.links.DeliverCompletion(
 			p.ctx,
 			p.parent,
 			[]*StoredMessage{{
@@ -249,8 +251,9 @@ func (p *harnessProduction) apply(command harnessCommand) {
 		// The store carries no protocol state in memory. Reconstructing it over the
 		// same DB represents a daemon restart at this boundary.
 		p.store = NewStore(p.db)
+		p.links = subagent.NewTransactions(p.db)
 	case harnessFinalizeBeforeCrash:
-		finalized, err := p.store.TryFinalizeSubagentActivation(
+		finalized, err := p.links.TryFinalizeActivation(
 			p.ctx, p.child, "completed", harnessCompletionText(snapshot.activationSeq), "completed",
 		)
 		require.NoError(p.t, err)

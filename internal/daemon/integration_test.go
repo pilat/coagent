@@ -27,6 +27,7 @@ import (
 	"github.com/pilat/coagent/internal/session"
 	"github.com/pilat/coagent/internal/sessionevent"
 	"github.com/pilat/coagent/internal/sessionstore"
+	"github.com/pilat/coagent/internal/subagent"
 	"github.com/pilat/coagent/internal/tool"
 )
 
@@ -98,7 +99,7 @@ type subagentHarness struct {
 	db         *sql.DB
 	mgr        *svc
 	sessStore  sessionstore.Store
-	links      LinkStore
+	links      subagent.Store
 	schedStore schedule.Store
 	projectID  int64
 	ctx        context.Context
@@ -158,7 +159,7 @@ func newSubagentHarnessWith(
 func newSubagentHarnessDecorated(
 	t *testing.T,
 	respond func(system string, msgs []llmwire.Message) *llmwire.Response,
-	decorate func(LinkStore) LinkStore,
+	decorate func(subagent.Store) subagent.Store,
 ) *subagentHarness {
 	t.Helper()
 
@@ -171,7 +172,7 @@ func newSubagentHarnessOnDB(
 	t *testing.T,
 	dbPath string,
 	respond func(system string, msgs []llmwire.Message) *llmwire.Response,
-	decorate func(LinkStore) LinkStore,
+	decorate func(subagent.Store) subagent.Store,
 ) *subagentHarness {
 	return newSubagentHarnessOnDBWithProject(t, dbPath, respond, decorate, false)
 }
@@ -188,7 +189,7 @@ func newSubagentHarnessOnDBWithProject(
 	t *testing.T,
 	dbPath string,
 	respond func(system string, msgs []llmwire.Message) *llmwire.Response,
-	decorate func(LinkStore) LinkStore,
+	decorate func(subagent.Store) subagent.Store,
 	systemProject bool,
 ) *subagentHarness {
 	t.Helper()
@@ -200,7 +201,7 @@ func newSubagentHarnessOnDBWithProject(
 
 	store := NewStore(db)
 	sessStore := sessionstore.NewStore(db)
-	links := NewLinkStore(db)
+	links := subagent.NewStore(db)
 	schedStore := schedule.NewStore(db)
 
 	if decorate != nil {
@@ -222,7 +223,7 @@ func newSubagentHarnessOnDBWithProject(
 	)
 
 	mgr := newSvc(
-		factory, store, sessStore, sessStore, links, schedule.NewService(schedStore),
+		factory, store, sessStore, sessStore, links, subagent.NewTransactions(db), schedule.NewService(schedStore),
 		func() string { return "fake-model" },
 	)
 	if systemProject {
@@ -292,7 +293,7 @@ func countAssistantToolCallsFor(msgs []llmwire.Message, toolName string) int {
 
 func (h *subagentHarness) shutdown() { h.mgr.Shutdown(5 * time.Second) }
 
-func (h *subagentHarness) waitForChildLink(parentID int64) SubagentLink {
+func (h *subagentHarness) waitForChildLink(parentID int64) subagent.Link {
 	h.t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
 
@@ -309,7 +310,7 @@ func (h *subagentHarness) waitForChildLink(parentID int64) SubagentLink {
 
 	h.t.Fatalf("timed out waiting for child link of parent %d", parentID)
 
-	return SubagentLink{}
+	return subagent.Link{}
 }
 
 func (h *subagentHarness) waitForDelivery(childID int64) {
@@ -434,8 +435,8 @@ func TestIntegration_BackgroundSubagentCompletes(t *testing.T) {
 	res, err := h.mgr.Result(h.ctx, link.ChildID)
 	require.NoError(t, err)
 	assert.True(t, res.Terminal)
-	assert.Equal(t, LinkStateCompleted, res.State)
-	assert.Equal(t, LinkOutcomeCompleted, res.Outcome)
+	assert.Equal(t, subagent.StateCompleted, res.State)
+	assert.Equal(t, subagent.OutcomeCompleted, res.Outcome)
 	assert.Contains(t, res.Output, "child finished")
 	assert.Equal(t, formatChildResult(res), lastToolResultContent(msgs, "subagent_event"),
 		"auto-delivered completion and get_subagent_result format identically")
@@ -861,7 +862,7 @@ func TestIntegration_SweepRedeliversIdempotently(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	require.NoError(t, h.links.InsertSubagentLink(ctx, SubagentLink{
+	require.NoError(t, h.links.InsertSubagentLink(ctx, subagent.Link{
 		ParentID: parent.ID, ChildID: childID, TaskCallID: "orphan-call",
 	}))
 	// Child wrote its final message before dying; its result was stored on the link
@@ -871,7 +872,7 @@ func TestIntegration_SweepRedeliversIdempotently(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.NoError(t, h.links.MarkLinkTerminal(
-		ctx, childID, LinkStateCompleted, "child finished: 99", LinkOutcomeCompleted,
+		ctx, childID, subagent.StateCompleted, "child finished: 99", subagent.OutcomeCompleted,
 	))
 	require.NoError(t, h.sessStore.UpdateSessionStatus(ctx, childID, sessionstore.SessionStatusCompleted))
 
@@ -916,7 +917,7 @@ func newMCPHarness(
 
 	store := NewStore(db)
 	sessStore := sessionstore.NewStore(db)
-	links := NewLinkStore(db)
+	links := subagent.NewStore(db)
 	schedStore := schedule.NewStore(db)
 	registry := mcpstore.NewStore(db)
 	pool := mcp.NewPool(nil)
@@ -934,7 +935,7 @@ func newMCPHarness(
 	)
 
 	mgr := newSvc(
-		factory, store, sessStore, sessStore, links, schedule.NewService(schedStore),
+		factory, store, sessStore, sessStore, links, subagent.NewTransactions(db), schedule.NewService(schedStore),
 		func() string { return "fake-model" },
 	)
 	mgr.mcpStore = registry

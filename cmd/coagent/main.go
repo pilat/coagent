@@ -530,6 +530,7 @@ func startCore(
 	scheduleStore := schedule.NewStore(db)
 	curatedStore := memory.NewCuratedStore(db)
 	linkStore := subagent.NewStore(db)
+	subagentTx := subagent.NewTransactions(db)
 	mcpRegistry := mcpstore.NewStore(db)
 
 	if _, err := sessionStore.RecoverInterruptedOutputs(ctx); err != nil {
@@ -543,7 +544,8 @@ func startCore(
 	)
 
 	daemonSvc := daemon.New(
-		factory, daemonStore, sessionStore, sessionStore, linkStore, scheduleSvc, cfg, mcpRegistry, pool, applier,
+		factory, daemonStore, sessionStore, sessionStore, linkStore, subagentTx,
+		scheduleSvc, cfg, mcpRegistry, pool, applier,
 	)
 
 	controller := daemon.NewController(daemonSvc, cfg, cache, scheduleSvc)

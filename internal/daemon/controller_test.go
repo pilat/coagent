@@ -14,6 +14,7 @@ import (
 	"github.com/pilat/coagent/internal/migrate"
 	"github.com/pilat/coagent/internal/sessionevent"
 	"github.com/pilat/coagent/internal/sessionstore"
+	"github.com/pilat/coagent/internal/subagent"
 )
 
 func TestControllerManagerSubscriptionIsExactAcrossRestart(t *testing.T) {
@@ -39,7 +40,7 @@ func TestControllerManagerSubscriptionIsExactAcrossRestart(t *testing.T) {
 	secondSessions := sessionstore.NewStore(secondDB)
 	mgr := newSvc(
 		&mockFactory{}, NewStore(secondDB), secondSessions, secondSessions,
-		NewLinkStore(secondDB), nil, nil,
+		subagent.NewStore(secondDB), subagent.NewTransactions(secondDB), nil, nil,
 	)
 	controllers := NewController(mgr, &config.Config{}, nil, nil)
 	subscriptions := make(map[string]<-chan controllerapi.SessionNotification, 10)

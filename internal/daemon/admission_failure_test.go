@@ -13,6 +13,7 @@ import (
 	"github.com/pilat/coagent/internal/controllerapi"
 	"github.com/pilat/coagent/internal/logger"
 	"github.com/pilat/coagent/internal/sessionstore"
+	"github.com/pilat/coagent/internal/subagent"
 )
 
 // TestDrainPendingRunners_DerivesPromotedRecoveryAfterCapacityWait preserves the
@@ -64,7 +65,7 @@ func TestDrainPendingRunners_DerivesPromotedRecoveryAfterCapacityWait(t *testing
 func TestDrainQueue_UnknownChildStateDefers(t *testing.T) {
 	var flaky *flakyLinkStore
 
-	h := newSubagentHarnessDecorated(t, trivialRespond, func(inner LinkStore) LinkStore {
+	h := newSubagentHarnessDecorated(t, trivialRespond, func(inner subagent.Store) subagent.Store {
 		flaky = newFlakyLinkStore(inner)
 		return flaky
 	})
@@ -78,7 +79,7 @@ func TestDrainQueue_UnknownChildStateDefers(t *testing.T) {
 			h.ctx, h.projectID, parent.ID, parent.ID, "general", "fake-model", "",
 		)
 		require.NoError(t, cerr)
-		require.NoError(t, h.links.InsertSubagentLink(h.ctx, SubagentLink{
+		require.NoError(t, h.links.InsertSubagentLink(h.ctx, subagent.Link{
 			ParentID: parent.ID, ChildID: childID, TaskCallID: callID,
 		}))
 		h.mgr.enqueueChild(h.ctx, childID, parent.ID, "/tmp", h.projectID)

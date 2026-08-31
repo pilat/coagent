@@ -8,7 +8,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/pilat/coagent/internal/subagent"
+	"github.com/pilat/coagent/internal/transcript"
 )
 
 const defaultReasoningLevel = "medium"
@@ -86,45 +86,13 @@ type SessionRecord struct {
 	ContextBaselineMessageCount int
 }
 
-// StoredMessage represents a row in the messages table.
-type StoredMessage struct {
-	ID               int64
-	SessionID        int64
-	Role             string
-	Content          string
-	ToolCallID       string
-	ToolName         string
-	ToolCalls        json.RawMessage
-	ReasoningContent string
-	ReasoningRaw     json.RawMessage
-	Attachments      json.RawMessage
-	CostUSD          float64
-	Usage            json.RawMessage
-	CompactedAt      *time.Time
-	CreatedAt        time.Time
-}
+// StoredMessage is retained while transcript consumers migrate to its owner.
+type StoredMessage = transcript.Message
 
 // CompactionEntry is either an existing active row or a new message in rebuilt transcript order.
 type CompactionEntry struct {
 	ExistingID int64
 	Message    *StoredMessage
-}
-
-// SubagentCreate describes the child session, link, and input committed together.
-// Link lifecycle comes from subagent; sessionstore owns only the transaction.
-type SubagentCreate struct {
-	ProjectID      int64
-	ParentID       int64
-	RootID         int64
-	AgentType      string
-	Model          string
-	ReasoningLevel string
-	TaskCallID     string
-	Blocking       bool
-	Depth          int
-	State          subagent.State
-	TimeoutSec     int
-	InitialInput   string
 }
 
 // RuntimeStore is the persistence capability used by a live agent session. It
@@ -193,10 +161,6 @@ type OrchestrationStore interface { //nolint:interfacebloat // one bounded orche
 		projectID, parentID, rootID int64,
 		agentType, model, reasoningLevel string,
 	) (int64, error)
-	// CreateSubagentWithLink atomically creates the child session and the initial
-	// durable completion-ledger row. Production spawn paths must use this method;
-	// CreateSubagentSession remains available for persistence-level setup/tests.
-	CreateSubagentWithLink(ctx context.Context, create SubagentCreate) (int64, error)
 	SetAttributes(ctx context.Context, id int64, attrs map[string]any) error
 	UpdateSessionModel(ctx context.Context, id int64, model, reasoningLevel string) error
 	GetSession(ctx context.Context, id int64) (*SessionRecord, error)
@@ -208,33 +172,6 @@ type OrchestrationStore interface { //nolint:interfacebloat // one bounded orche
 	UpdateSessionStatus(ctx context.Context, id int64, status SessionStatus) error
 	KillTerminatingSessions(ctx context.Context) error
 	LoadActiveMessages(ctx context.Context, sessionID int64) ([]*StoredMessage, error)
-
-	// DeliverCompletionAtomic CAS-stamps delivered_at for one exact activation
-	// and, only when it wins the CAS, inserts the completion message(s) into the
-	// parent's transcript — all in one transaction, so a crash commits both or
-	// neither. Returns the inserted
-	// message ids and whether this call won; won=false means another delivery
-	// already committed or the activation is stale and nothing was inserted.
-	// Empty message sets and a session
-	// ID that is not the link's parent are rejected without consuming the CAS. This
-	// is the SOLE writer of subagent_links.delivered_at/delivered_msg_id — the one
-	// link state the session store owns (the rest of the ledger lives in
-	// subagent.Store).
-	DeliverCompletionAtomic(
-		ctx context.Context,
-		sessionID int64,
-		msgs []*StoredMessage,
-		childID int64,
-		activationSeq int64,
-	) (msgIDs []int64, won bool, err error)
-	TryFinalizeSubagentActivation(
-		ctx context.Context,
-		childID int64,
-		state subagent.State,
-		result string,
-		outcome subagent.Outcome,
-	) (bool, error)
-	RearmDeliveredSubagentWithPendingInput(ctx context.Context, childID int64) (bool, error)
 }
 
 // Store is the complete persistence surface returned by NewStore. Consumers
@@ -378,89 +315,6 @@ func (s *store) CreateSubagentSession(
 	}
 
 	return id, nil
-}
-
-func (s *store) CreateSubagentWithLink(ctx context.Context, create SubagentCreate) (int64, error) {
-	if create.ReasoningLevel == "" {
-		create.ReasoningLevel = defaultReasoningLevel
-	}
-
-	if create.State == "" {
-		return 0, errors.New("create subagent: empty initial link state")
-	}
-
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return 0, fmt.Errorf("begin create subagent tx: %w", err)
-	}
-	defer func() { _ = tx.Rollback() }()
-
-	now := time.Now().UTC()
-
-	childID, err := insertSubagentSession(ctx, tx, create, now)
-	if err != nil {
-		return 0, err
-	}
-
-	_, err = tx.ExecContext(
-		ctx,
-		`INSERT INTO subagent_links (parent_id, child_id, task_call_id, blocking, depth, state, timeout_sec, created_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-		create.ParentID,
-		childID,
-		create.TaskCallID,
-		create.Blocking,
-		create.Depth,
-		create.State,
-		create.TimeoutSec,
-		now.Unix(),
-	)
-	if err != nil {
-		return 0, fmt.Errorf("insert subagent link: %w", err)
-	}
-
-	if create.InitialInput != "" {
-		if _, err := tx.ExecContext(ctx, `
-			INSERT INTO session_inbox (session_id, source, raw_content, received_at)
-			VALUES (?, 'agent', ?, ?)`, childID, create.InitialInput, now); err != nil {
-			return 0, fmt.Errorf("insert subagent initial input: %w", err)
-		}
-	}
-
-	if err := tx.Commit(); err != nil {
-		return 0, fmt.Errorf("commit create subagent: %w", err)
-	}
-
-	return childID, nil
-}
-
-func insertSubagentSession(ctx context.Context, tx *sql.Tx, create SubagentCreate, now time.Time) (int64, error) {
-	result, err := tx.ExecContext(ctx, `
-		INSERT INTO sessions (project_id, parent_id, root_id, agent_type, model, reasoning_level, created_at, updated_at)
-		SELECT ?, ?, ?, ?, ?, ?, ?, ?
-		WHERE EXISTS (SELECT 1 FROM sessions WHERE id = ? AND status NOT IN ('stopping', 'stopped'))`,
-		create.ProjectID, create.ParentID, create.RootID, create.AgentType, create.Model,
-		create.ReasoningLevel, now, now, create.ParentID,
-	)
-	if err != nil {
-		return 0, fmt.Errorf("insert subagent session: %w", err)
-	}
-
-	rows, err := result.RowsAffected()
-	if err != nil {
-		return 0, fmt.Errorf("check parent session admission: %w", err)
-	}
-
-	if rows == 0 {
-		return 0, fmt.Errorf("parent session %d is not accepting subagents", create.ParentID)
-	}
-
-	childID, err := result.LastInsertId()
-	if err != nil {
-		return 0, fmt.Errorf("subagent session id: %w", err)
-	}
-
-	return childID, nil
 }
 
 func (s *store) SetAttributes(ctx context.Context, id int64, attrs map[string]any) error {

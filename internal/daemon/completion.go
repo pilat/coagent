@@ -255,7 +255,7 @@ func (s *svc) persistCompletion(
 	link subagent.Link,
 	stored []*sessionstore.StoredMessage,
 ) error {
-	_, won, err := s.sessionStore.DeliverCompletionAtomic(
+	_, won, err := s.subagents.DeliverCompletion(
 		ctx, link.ParentID, stored, link.ChildID, link.ActivationSeq,
 	)
 	if err != nil {
@@ -284,7 +284,7 @@ func (s *svc) persistCompletion(
 }
 
 func (s *svc) rearmChildAfterDelivery(ctx context.Context, childID int64) error {
-	rearmed, err := s.sessionStore.RearmDeliveredSubagentWithPendingInput(ctx, childID)
+	rearmed, err := s.subagents.RearmDeliveredWithPendingInput(ctx, childID)
 	if err != nil {
 		return fmt.Errorf("rearm child %d after completion delivery: %w", childID, err)
 	}

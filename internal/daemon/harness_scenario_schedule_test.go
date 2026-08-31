@@ -20,6 +20,7 @@ import (
 	"github.com/pilat/coagent/internal/session"
 	"github.com/pilat/coagent/internal/sessionevent"
 	"github.com/pilat/coagent/internal/sessionstore"
+	"github.com/pilat/coagent/internal/subagent"
 	"github.com/pilat/coagent/internal/tool"
 )
 
@@ -275,12 +276,14 @@ func buildScheduleRestartHarness(
 	t.Helper()
 	store := NewStore(db)
 	sessionStore := sessionstore.NewStore(db)
-	links := NewLinkStore(db)
+	links := subagent.NewStore(db)
 	schedules := schedule.NewStore(db)
 	factory := scheduleRestartFactory(workDir, sessionStore, respond)
-	mgr := newSvc(factory, store, sessionStore, sessionStore, links, schedule.NewService(schedules), func() string {
-		return "fake-model"
-	})
+	mgr := newSvc(
+		factory, store, sessionStore, sessionStore, links, subagent.NewTransactions(db),
+		schedule.NewService(schedules), func() string {
+			return "fake-model"
+		})
 	projectID, err := store.GetOrCreateProject(context.Background(), workDir)
 	require.NoError(t, err)
 

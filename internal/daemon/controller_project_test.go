@@ -16,6 +16,7 @@ import (
 	"github.com/pilat/coagent/internal/controllerapi"
 	"github.com/pilat/coagent/internal/migrate"
 	"github.com/pilat/coagent/internal/sessionstore"
+	"github.com/pilat/coagent/internal/subagent"
 )
 
 func newProjectTestManager(t *testing.T) (*svc, Store, *sql.DB) {
@@ -29,7 +30,9 @@ func newProjectTestManager(t *testing.T) (*svc, Store, *sql.DB) {
 
 	store := NewStore(db)
 	sessStore := sessionstore.NewStore(db)
-	mgr := newSvc(&mockFactory{}, store, sessStore, sessStore, NewLinkStore(db), nil, nil)
+	mgr := newSvc(
+		&mockFactory{}, store, sessStore, sessStore, subagent.NewStore(db), subagent.NewTransactions(db), nil, nil,
+	)
 
 	return mgr, store, db
 }

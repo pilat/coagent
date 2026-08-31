@@ -20,6 +20,7 @@ import (
 	"github.com/pilat/coagent/internal/session"
 	"github.com/pilat/coagent/internal/sessionevent"
 	"github.com/pilat/coagent/internal/sessionstore"
+	"github.com/pilat/coagent/internal/subagent"
 )
 
 // TestSetModelUnknownModelNeverReachesTheRecord drives the user-visible path: a
@@ -115,7 +116,7 @@ func newModelAwareHarness(
 
 	store := NewStore(db)
 	sessStore := sessionstore.NewStore(db)
-	links := NewLinkStore(db)
+	links := subagent.NewStore(db)
 	schedStore := schedule.NewStore(db)
 
 	workDir := t.TempDir()
@@ -133,7 +134,7 @@ func newModelAwareHarness(
 	)
 
 	mgr := newSvc(
-		factory, store, sessStore, sessStore, links, schedule.NewService(schedStore),
+		factory, store, sessStore, sessStore, links, subagent.NewTransactions(db), schedule.NewService(schedStore),
 		func() string { return known[0] },
 	)
 

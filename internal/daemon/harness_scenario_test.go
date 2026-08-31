@@ -13,6 +13,7 @@ import (
 	"github.com/pilat/coagent/internal/llm"
 	"github.com/pilat/coagent/internal/llmwire"
 	"github.com/pilat/coagent/internal/sessionevent"
+	"github.com/pilat/coagent/internal/subagent"
 	"github.com/pilat/coagent/internal/tool"
 )
 
@@ -120,7 +121,7 @@ func TestHarnessScenario_SubagentTextWithToolsCompletes(t *testing.T) {
 	link, err := h.links.GetLinkByTaskCallID(h.ctx, parentID, taskCallID)
 	require.NoError(t, err)
 	require.NotNil(t, link)
-	assert.Equal(t, LinkOutcomeCompleted, link.Outcome)
+	assert.Equal(t, subagent.OutcomeCompleted, link.Outcome)
 	assert.Equal(t, 1, countToolResultsFor(transcriptOf(h, link.ChildID), "ls"))
 
 	assertHarnessTrace(t, "subagent_text_with_tools.json", collector.snapshot(), parentID)

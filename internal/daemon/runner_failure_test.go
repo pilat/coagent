@@ -11,6 +11,7 @@ import (
 	"go.uber.org/zap/zaptest/observer"
 
 	"github.com/pilat/coagent/internal/logger"
+	"github.com/pilat/coagent/internal/subagent"
 )
 
 // TestEnsureRunner_ClassifyErrorBlocksStart: an unreadable ledger must abort the
@@ -19,7 +20,7 @@ import (
 func TestEnsureRunner_ClassifyErrorBlocksStart(t *testing.T) {
 	var flaky *flakyLinkStore
 
-	h := newSubagentHarnessDecorated(t, trivialRespond, func(inner LinkStore) LinkStore {
+	h := newSubagentHarnessDecorated(t, trivialRespond, func(inner subagent.Store) subagent.Store {
 		flaky = newFlakyLinkStore(inner)
 		return flaky
 	})
@@ -45,7 +46,7 @@ func TestEnsureRunner_ClassifyErrorBlocksStart(t *testing.T) {
 func TestDrainQueue_StartErrorDoesNotRepark(t *testing.T) {
 	var flaky *flakyLinkStore
 
-	h := newSubagentHarnessDecorated(t, trivialRespond, func(inner LinkStore) LinkStore {
+	h := newSubagentHarnessDecorated(t, trivialRespond, func(inner subagent.Store) subagent.Store {
 		flaky = newFlakyLinkStore(inner)
 		return flaky
 	})
@@ -58,7 +59,7 @@ func TestDrainQueue_StartErrorDoesNotRepark(t *testing.T) {
 		h.ctx, h.projectID, parent.ID, parent.ID, "general", "fake-model", "",
 	)
 	require.NoError(t, err)
-	require.NoError(t, h.links.InsertSubagentLink(h.ctx, SubagentLink{
+	require.NoError(t, h.links.InsertSubagentLink(h.ctx, subagent.Link{
 		ParentID: parent.ID, ChildID: childID, TaskCallID: "bg",
 	}))
 
@@ -96,7 +97,7 @@ func TestDrainQueue_CapacityReparks(t *testing.T) {
 	require.NoError(t, err)
 	// Blocking: a blocking child errors on admit-fail instead of self-queueing,
 	// which is the only way to reach the re-park branch.
-	require.NoError(t, h.links.InsertSubagentLink(h.ctx, SubagentLink{
+	require.NoError(t, h.links.InsertSubagentLink(h.ctx, subagent.Link{
 		ParentID: parent.ID, ChildID: childID, TaskCallID: "b", Blocking: true,
 	}))
 
@@ -128,7 +129,7 @@ func TestDrainQueue_CapacityReparks(t *testing.T) {
 func TestRunSession_TimeoutReadErrorRunsFullTeardown(t *testing.T) {
 	var flaky *flakyLinkStore
 
-	h := newSubagentHarnessDecorated(t, trivialRespond, func(inner LinkStore) LinkStore {
+	h := newSubagentHarnessDecorated(t, trivialRespond, func(inner subagent.Store) subagent.Store {
 		flaky = newFlakyLinkStore(inner)
 		return flaky
 	})
@@ -141,7 +142,7 @@ func TestRunSession_TimeoutReadErrorRunsFullTeardown(t *testing.T) {
 		h.ctx, h.projectID, parent.ID, parent.ID, "general", "fake-model", "",
 	)
 	require.NoError(t, err)
-	require.NoError(t, h.links.InsertSubagentLink(h.ctx, SubagentLink{
+	require.NoError(t, h.links.InsertSubagentLink(h.ctx, subagent.Link{
 		ParentID: parent.ID, ChildID: childID, TaskCallID: "b", Blocking: true,
 	}))
 
@@ -187,7 +188,7 @@ func TestRunSession_TimeoutReadErrorRunsFullTeardown(t *testing.T) {
 func TestRunSession_TimeoutReadErrorFinalizesAsError(t *testing.T) {
 	var flaky *flakyLinkStore
 
-	h := newSubagentHarnessDecorated(t, trivialRespond, func(inner LinkStore) LinkStore {
+	h := newSubagentHarnessDecorated(t, trivialRespond, func(inner subagent.Store) subagent.Store {
 		flaky = newFlakyLinkStore(inner)
 		return flaky
 	})
@@ -200,7 +201,7 @@ func TestRunSession_TimeoutReadErrorFinalizesAsError(t *testing.T) {
 		h.ctx, h.projectID, parent.ID, parent.ID, "general", "fake-model", "",
 	)
 	require.NoError(t, err)
-	require.NoError(t, h.links.InsertSubagentLink(h.ctx, SubagentLink{
+	require.NoError(t, h.links.InsertSubagentLink(h.ctx, subagent.Link{
 		ParentID: parent.ID, ChildID: childID, TaskCallID: "b", Blocking: true,
 	}))
 
@@ -237,7 +238,7 @@ func TestRunSession_TimeoutReadErrorFinalizesAsError(t *testing.T) {
 	link, err := h.links.GetLink(h.ctx, childID)
 	require.NoError(t, err)
 	require.NotNil(t, link)
-	assert.Equal(t, LinkStateError, link.State, "a child that never started is not completed")
+	assert.Equal(t, subagent.StateError, link.State, "a child that never started is not completed")
 }
 
 // TestApplyChildTimeout_Deadlines: the normal branches keep their behaviour —
@@ -254,7 +255,7 @@ func TestApplyChildTimeout_Deadlines(t *testing.T) {
 			h.ctx, h.projectID, parent.ID, parent.ID, "general", "fake-model", "",
 		)
 		require.NoError(t, cerr)
-		require.NoError(t, h.links.InsertSubagentLink(h.ctx, SubagentLink{
+		require.NoError(t, h.links.InsertSubagentLink(h.ctx, subagent.Link{
 			ParentID: parent.ID, ChildID: id, TaskCallID: callID,
 			Blocking: blocking, TimeoutSec: timeoutSec,
 		}))

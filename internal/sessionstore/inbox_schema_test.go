@@ -8,6 +8,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/pilat/coagent/internal/subagent"
 )
 
 func TestSessionInboxSchema_ResolutionTruthTable(t *testing.T) {
@@ -139,7 +141,7 @@ func TestSubagentLinkSchema_ActivationSequenceStartsAtOne(t *testing.T) {
 	store, db, projectID := newTestStore(t)
 	parent, err := store.CreateSession(ctx, projectID, "model", "", nil)
 	require.NoError(t, err)
-	childID, err := store.CreateSubagentWithLink(ctx, SubagentCreate{
+	childID, err := subagent.NewTransactions(db).Create(ctx, subagent.Create{
 		ProjectID: projectID, ParentID: parent.ID, RootID: parent.ID,
 		Model: "model", TaskCallID: "task-1", State: "spawned",
 	})
