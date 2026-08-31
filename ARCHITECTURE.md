@@ -87,9 +87,12 @@ does not imply a tier except where it expresses an implementation variant.
 - `internal/mcpstore` — durable MCP server definitions and scope precedence.
 - `internal/memory` — curated per-project long-term memory.
 - `internal/managerdelivery` — manager-neutral single-worker durable output drain and retry policy.
+- `internal/managercontrol` — manager-bound application use cases and controller adaptation.
+- `internal/managerdiscovery` — manager-facing project, model, skill and filesystem discovery.
 - `internal/migrate` — SQLite opening and schema migration with production backup policy.
 - `internal/progress` — controller-neutral progress snapshots and Markdown rendering.
 - `internal/progressruntime` — durable progress publication, output readiness and silence reconciliation lifecycle.
+- `internal/projectpath` — canonical project-root paths and project-name validation.
 - `internal/registry` — immutable per-session agent-type policy and prompt templates.
 - `cmd/releasebuilder` — build-time deterministic archive and checksum composition root.
 - `internal/schedule` — durable schedules, sleep ownership and scheduled delivery execution.
@@ -642,8 +645,12 @@ helpers with no durable protocol ownership.
 
 The manager coordinator isolates manager failures. CLI and Telegram render
 controller state and submit controller requests; they do not directly manipulate
-session rows. The CLI is always available with a running daemon, while Telegram
-is configuration-dependent. The reserved `sys:coagent` logical name together
+session rows. `managercontrol` owns authorization, DTO conversion, project
+resolution and durable output-delivery use cases; `managerdiscovery` owns
+manager-facing project, model, skill and filesystem discovery. Their controller
+methods are thin adapters, and the composition root binds them to the daemon
+backend. The CLI is always available with a running daemon, while Telegram is
+configuration-dependent. The reserved `sys:coagent` logical name together
 with its canonical configured path, rather than a transport attribute or numeric
 session ID, marks the dedicated daemon-configuration root; its CLI attribute
 separately proves a terminal can answer a secret prompt. Session-event defines

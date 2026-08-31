@@ -23,6 +23,7 @@ import (
 	"github.com/pilat/coagent/internal/daemon"
 	"github.com/pilat/coagent/internal/llm"
 	"github.com/pilat/coagent/internal/llmwire"
+	"github.com/pilat/coagent/internal/managercontrol"
 	"github.com/pilat/coagent/internal/migrate"
 	"github.com/pilat/coagent/internal/schedule"
 	"github.com/pilat/coagent/internal/session"
@@ -99,7 +100,7 @@ func newDelayedTelegramHarness(t *testing.T) *delayedTelegramHarness {
 		budget.New(sessions), sessions, schedule.NewService(schedule.NewStore(db)), cfg, nil, nil, nil,
 	)
 	t.Cleanup(func() { service.Shutdown(3 * time.Second) })
-	controllers := daemon.NewController(service, cfg, nil, nil)
+	controllers := managercontrol.New(service, service, sessions, cfg, nil)
 
 	return &delayedTelegramHarness{
 		controller: controllers.ForManager(delayedTelegramManagerID), sessions: sessions,

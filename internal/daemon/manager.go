@@ -23,6 +23,7 @@ import (
 	"github.com/pilat/coagent/internal/mcp"
 	"github.com/pilat/coagent/internal/mcpstore"
 	"github.com/pilat/coagent/internal/progressruntime"
+	"github.com/pilat/coagent/internal/projectpath"
 	"github.com/pilat/coagent/internal/schedule"
 	"github.com/pilat/coagent/internal/session"
 	"github.com/pilat/coagent/internal/sessionbus"
@@ -36,6 +37,7 @@ type Service interface {
 	Start(ctx context.Context) error
 	Send(ctx context.Context, projectID int64, prompt, model string, attrs map[string]any) (int64, error)
 	SendToSession(ctx context.Context, sessionID int64, prompt string) error
+	SendToSessionResolved(ctx context.Context, sessionID int64, prompt string) (int64, error)
 	DeliverPendingCallResult(
 		ctx context.Context, sessionID int64, callID, toolName, content string,
 	) (bool, error)
@@ -52,6 +54,9 @@ type Service interface {
 	GetSession(ctx context.Context, id int64) (*sessionstore.SessionRecord, error)
 	List(ctx context.Context) ([]*sessionstore.SessionRecord, error)
 	HasActiveLoop(sessionID int64) bool
+	CurrentProgress(ctx context.Context, rootID int64) (*controllerapi.ProgressData, error)
+	RefreshProgress(ctx context.Context, rootID int64) error
+	ReconcileOutputReadiness(ctx context.Context, outputID int64) error
 	PubSub() sessionbus.Source
 	NotifySession(sessionID int64, n sessionevent.Notification)
 	Shutdown(timeout time.Duration)
@@ -59,7 +64,7 @@ type Service interface {
 	GetOrCreateSystemProject(ctx context.Context, workDir, name string) (int64, error)
 	GetProjectWorkDir(ctx context.Context, projectID int64) (string, error)
 	GetProjectName(ctx context.Context, projectID int64) (string, error)
-	ListRecentProjects(ctx context.Context, root string) ([]RecentProject, error)
+	ListRecentProjects(ctx context.Context, root string) ([]controllerapi.RecentProjectInfo, error)
 }
 
 // LegacyCLIPreparer claims unambiguous pre-owner local-chat roots before the
@@ -202,7 +207,7 @@ func New(
 		scheduleSvc, cfg.DefaultModel,
 	)
 	s.systemProject = filepath.Join(
-		resolveProjectsRoot(cfg.UnifiedConfig),
+		projectpath.ResolveRoot(cfg.UnifiedConfig),
 		controllerapi.CoagentSystemProjectDir,
 	)
 	s.mcpStore = mcpStore
@@ -1120,7 +1125,7 @@ func (s *svc) GetOrCreateProject(ctx context.Context, workDir string) (int64, er
 }
 
 func (s *svc) GetOrCreateSystemProject(ctx context.Context, workDir, name string) (int64, error) {
-	if !sameProjectPath(workDir, s.systemProject) {
+	if !projectpath.Same(workDir, s.systemProject) {
 		return 0, errors.New("system project is outside the canonical configuration directory")
 	}
 

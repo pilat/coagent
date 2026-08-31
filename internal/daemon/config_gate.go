@@ -7,6 +7,7 @@ import (
 
 	"github.com/pilat/coagent/internal/controllerapi"
 	"github.com/pilat/coagent/internal/logger"
+	"github.com/pilat/coagent/internal/projectpath"
 	"github.com/pilat/coagent/internal/sessionstore"
 )
 
@@ -56,5 +57,5 @@ func (s *svc) isConfigurationSession(ctx context.Context, rec *sessionstore.Sess
 		return false
 	}
 
-	return sameProjectPath(workDir, s.systemProject)
+	return projectpath.Same(workDir, s.systemProject)
 }

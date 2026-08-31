@@ -26,7 +26,7 @@ func TestManagerBoundControllerRejectsEveryForeignSessionOperation(t *testing.T)
 		controllerapi.SessionAttributeManagerID: "beta",
 	})
 	require.NoError(t, err)
-	controller := NewController(mgr, &config.Config{}, nil, nil).ForManager("alpha")
+	controller := newTestController(mgr, &config.Config{}, nil, nil).ForManager("alpha")
 
 	sessions, err := controller.ListSessions(ctx)
 	require.NoError(t, err)
@@ -87,7 +87,7 @@ func TestManagerBoundControllerClaimsOnlyCanonicalLegacyCLIChat(t *testing.T) {
 		"channel": controllerapi.BuiltinCLIManagerID,
 	})
 	require.NoError(t, err)
-	factory := NewController(mgr, &config.Config{UnifiedConfig: &config.UnifiedConfig{
+	factory := newTestController(mgr, &config.Config{UnifiedConfig: &config.UnifiedConfig{
 		ProjectsRoot: root,
 	}}, nil, nil)
 	cliController := factory.ForManager(controllerapi.BuiltinCLIManagerID)

@@ -25,6 +25,7 @@ import (
 	"github.com/pilat/coagent/internal/llm"
 	"github.com/pilat/coagent/internal/loader"
 	"github.com/pilat/coagent/internal/logger"
+	"github.com/pilat/coagent/internal/managercontrol"
 	"github.com/pilat/coagent/internal/managers"
 	"github.com/pilat/coagent/internal/managers/cli"
 	"github.com/pilat/coagent/internal/mcp"
@@ -554,7 +555,7 @@ func startCore(
 		scheduleSvc, cfg, mcpRegistry, pool, applier,
 	)
 
-	controller := daemon.NewController(daemonSvc, cfg, cache, scheduleSvc)
+	controller := managercontrol.New(daemonSvc, daemonSvc, sessionStore, cfg, cache)
 	if preparer, ok := daemonSvc.(daemon.LegacyCLIPreparer); ok {
 		if err := preparer.PrepareLegacyCLIRoots(ctx); err != nil {
 			return nil, fmt.Errorf("prepare legacy cli roots: %w", err)

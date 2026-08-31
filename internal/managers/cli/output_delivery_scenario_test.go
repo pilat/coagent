@@ -18,6 +18,7 @@ import (
 	"github.com/pilat/coagent/internal/daemon"
 	"github.com/pilat/coagent/internal/llm"
 	"github.com/pilat/coagent/internal/llmwire"
+	"github.com/pilat/coagent/internal/managercontrol"
 	"github.com/pilat/coagent/internal/migrate"
 	"github.com/pilat/coagent/internal/schedule"
 	"github.com/pilat/coagent/internal/session"
@@ -81,7 +82,7 @@ func newDelayedCLIHarness(t *testing.T) *delayedCLIHarness {
 		budget.New(sessions), sessions, schedule.NewService(schedule.NewStore(db)), cfg, nil, nil, nil,
 	)
 	t.Cleanup(func() { service.Shutdown(3 * time.Second) })
-	controllers := daemon.NewController(service, cfg, nil, nil)
+	controllers := managercontrol.New(service, service, sessions, cfg, nil)
 	controller := controllers.ForManager(controllerapi.BuiltinCLIManagerID)
 
 	return &delayedCLIHarness{

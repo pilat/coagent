@@ -18,7 +18,7 @@ const scenarioManagerID = "telegram:main"
 func newChainController(t *testing.T, h *subagentHarness) controllerapi.OutputQueueController {
 	t.Helper()
 
-	queue, ok := NewController(h.mgr, &config.Config{}, nil, nil).
+	queue, ok := newTestController(h.mgr, &config.Config{}, nil, nil).
 		ForManager(scenarioManagerID).(controllerapi.OutputQueueController)
 	require.True(t, ok)
 	require.NoError(t, queue.BindOutputDelivery(t.Context(), controllerapi.OutputBindingData{

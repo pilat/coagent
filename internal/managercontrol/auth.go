@@ -1,4 +1,4 @@
-package daemon
+package managercontrol
 
 import (
 	"context"
@@ -7,65 +7,70 @@ import (
 	"maps"
 	"path/filepath"
 
-	"github.com/pilat/coagent/internal/config"
 	"github.com/pilat/coagent/internal/controllerapi"
+	"github.com/pilat/coagent/internal/projectpath"
 	"github.com/pilat/coagent/internal/sessionstore"
 )
 
-func (c *controller) requireManagerIdentity() error {
-	if c.managerID == "" {
+func requireManagerIdentity(managerID string) error {
+	if managerID == "" {
 		return errors.New("controller has no manager identity")
 	}
 
 	return nil
 }
 
-func (c *controller) requireOwnedSession(ctx context.Context, sessionID int64) error {
-	if err := c.requireManagerIdentity(); err != nil {
+func (s *service) requireOwnedSession(ctx context.Context, managerID string, sessionID int64) error {
+	if err := requireManagerIdentity(managerID); err != nil {
 		return err
 	}
 
-	record, err := c.svc.GetSession(ctx, sessionID)
+	record, err := s.backend.GetSession(ctx, sessionID)
 	if err != nil || record == nil {
 		return fmt.Errorf("session %d not found", sessionID)
 	}
 
 	owner, _ := record.Attributes[controllerapi.SessionAttributeManagerID].(string)
-	if owner != c.managerID {
+	if owner != managerID {
 		return fmt.Errorf("session %d belongs to another manager", sessionID)
 	}
 
 	return nil
 }
 
-func (c *controller) canListSession(ctx context.Context, record *sessionstore.SessionRecord) bool {
+func (s *service) canListSession(
+	ctx context.Context,
+	managerID string,
+	record *sessionstore.SessionRecord,
+) bool {
 	owner, _ := record.Attributes[controllerapi.SessionAttributeManagerID].(string)
-	if owner == c.managerID && owner != "" {
+	if owner == managerID && owner != "" {
 		return true
 	}
 
-	return owner == "" && c.isLegacyCLISession(ctx, record)
+	return owner == "" && s.isLegacyCLISession(ctx, managerID, record)
 }
 
-func (c *controller) authorizeAttributeUpdate(
+func (s *service) authorizeAttributeUpdate(
 	ctx context.Context,
+	managerID string,
 	data *controllerapi.SessionSetAttributesData,
 ) error {
-	if err := c.requireManagerIdentity(); err != nil {
+	if err := requireManagerIdentity(managerID); err != nil {
 		return err
 	}
 
-	record, err := c.svc.GetSession(ctx, data.SessionID)
+	record, err := s.backend.GetSession(ctx, data.SessionID)
 	if err != nil || record == nil {
 		return fmt.Errorf("session %d not found", data.SessionID)
 	}
 
 	owner, _ := record.Attributes[controllerapi.SessionAttributeManagerID].(string)
-	if owner != "" && owner != c.managerID {
+	if owner != "" && owner != managerID {
 		return fmt.Errorf("session %d belongs to another manager", data.SessionID)
 	}
 
-	if owner == "" && !c.isLegacyCLISession(ctx, record) {
+	if owner == "" && !s.isLegacyCLISession(ctx, managerID, record) {
 		return fmt.Errorf("session %d has no claimable manager owner", data.SessionID)
 	}
 
@@ -74,13 +79,17 @@ func (c *controller) authorizeAttributeUpdate(
 		data.Attributes = make(map[string]any)
 	}
 
-	data.Attributes[controllerapi.SessionAttributeManagerID] = c.managerID
+	data.Attributes[controllerapi.SessionAttributeManagerID] = managerID
 
 	return nil
 }
 
-func (c *controller) isLegacyCLISession(ctx context.Context, record *sessionstore.SessionRecord) bool {
-	if c.managerID != controllerapi.BuiltinCLIManagerID || record.ParentID != 0 {
+func (s *service) isLegacyCLISession(
+	ctx context.Context,
+	managerID string,
+	record *sessionstore.SessionRecord,
+) bool {
+	if managerID != controllerapi.BuiltinCLIManagerID || record.ParentID != 0 {
 		return false
 	}
 
@@ -89,22 +98,19 @@ func (c *controller) isLegacyCLISession(ctx context.Context, record *sessionstor
 		return false
 	}
 
-	name, err := c.svc.GetProjectName(ctx, record.ProjectID)
+	name, err := s.backend.GetProjectName(ctx, record.ProjectID)
 	if err != nil || name != controllerapi.CoagentSystemProjectName {
 		return false
 	}
 
-	workDir, err := c.svc.GetProjectWorkDir(ctx, record.ProjectID)
+	workDir, err := s.backend.GetProjectWorkDir(ctx, record.ProjectID)
 	if err != nil {
 		return false
 	}
 
-	var unified *config.UnifiedConfig
-	if c.cfg != nil {
-		unified = c.cfg.UnifiedConfig
-	}
+	expected := filepath.Join(
+		projectpath.ResolveRoot(s.unifiedConfig()), controllerapi.CoagentSystemProjectDir,
+	)
 
-	expected := filepath.Join(resolveProjectsRoot(unified), controllerapi.CoagentSystemProjectDir)
-
-	return sameProjectPath(workDir, expected)
+	return projectpath.Same(workDir, expected)
 }

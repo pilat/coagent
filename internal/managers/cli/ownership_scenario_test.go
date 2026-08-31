@@ -14,6 +14,7 @@ import (
 	"github.com/pilat/coagent/internal/controllerapi"
 	"github.com/pilat/coagent/internal/ctl"
 	"github.com/pilat/coagent/internal/daemon"
+	"github.com/pilat/coagent/internal/managercontrol"
 	"github.com/pilat/coagent/internal/migrate"
 	"github.com/pilat/coagent/internal/sessionevent"
 	"github.com/pilat/coagent/internal/sessionstore"
@@ -63,7 +64,7 @@ func newCLIOwnershipHarness(t *testing.T) *cliOwnershipHarness {
 		subagent.NewStore(db), subagent.NewTransactions(db),
 		budget.New(sessions), sessions, nil, cfg, nil, nil, nil,
 	)
-	controllers := daemon.NewController(svc, cfg, nil, nil)
+	controllers := managercontrol.New(svc, svc, sessions, cfg, nil)
 	cliController := controllers.ForManager(controllerapi.BuiltinCLIManagerID)
 	socket := scenarioSocket(t)
 	server, err := ctl.NewServer(ctx, socket, "test", ctl.Deps{})

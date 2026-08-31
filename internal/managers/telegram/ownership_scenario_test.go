@@ -18,6 +18,7 @@ import (
 	"github.com/pilat/coagent/internal/config"
 	"github.com/pilat/coagent/internal/controllerapi"
 	"github.com/pilat/coagent/internal/daemon"
+	"github.com/pilat/coagent/internal/managercontrol"
 	"github.com/pilat/coagent/internal/managerdelivery"
 	"github.com/pilat/coagent/internal/migrate"
 	"github.com/pilat/coagent/internal/sessionstore"
@@ -67,7 +68,7 @@ func newTelegramOwnershipHarness(t *testing.T) *telegramOwnershipHarness {
 		subagent.NewStore(db), subagent.NewTransactions(db),
 		budget.New(sessions), sessions, nil, cfg, nil, nil, nil,
 	)
-	controllers := daemon.NewController(svc, cfg, nil, nil)
+	controllers := managercontrol.New(svc, svc, sessions, cfg, nil)
 	telegramController := controllers.ForManager("telegram-main")
 	projectID, err := projects.GetOrCreateProject(ctx, filepath.Join(root, "project"))
 	require.NoError(t, err)

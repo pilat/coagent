@@ -62,7 +62,7 @@ func TestReadinessSuppressesIdleWhileRootIsActiveLoop(t *testing.T) {
 		nil,
 		nil,
 	)
-	controllers := NewController(mgr, &config.Config{}, nil, nil)
+	controllers := newTestController(mgr, &config.Config{}, nil, nil)
 	notifications := controllers.ForManager("manager-readiness").Subscribe()
 
 	mgr.mu.Lock()
@@ -127,7 +127,7 @@ func TestReconcileLatestReadinessPublishesIdleAfterTeardown(t *testing.T) {
 		nil,
 		nil,
 	)
-	controllers := NewController(mgr, &config.Config{}, nil, nil)
+	controllers := newTestController(mgr, &config.Config{}, nil, nil)
 	notifications := controllers.ForManager("manager-readiness").Subscribe()
 
 	mgr.mu.Lock()
