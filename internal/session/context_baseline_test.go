@@ -41,7 +41,7 @@ func TestCompactionLeavesNoBaselineBehind(t *testing.T) {
 	s := newCompactionTestSvc(mockLLM)
 
 	seedCompactableTranscript(ctx, t, s)
-	s.recordContextBaseline(150000, 2, s.modelGeneration())
+	s.recordContextBaseline(ctx, 150000, 2, s.modelGeneration())
 
 	ok, err := s.compact(ctx, nil)
 	require.NoError(t, err)
@@ -58,7 +58,7 @@ func TestFailedCompactionKeepsItsBaseline(t *testing.T) {
 	s := newCompactionTestSvc(mockLLM)
 
 	seedCompactableTranscript(ctx, t, s)
-	s.recordContextBaseline(150000, 2, s.modelGeneration())
+	s.recordContextBaseline(ctx, 150000, 2, s.modelGeneration())
 
 	_, err := s.compact(ctx, nil)
 	require.Error(t, err)
@@ -68,6 +68,8 @@ func TestFailedCompactionKeepsItsBaseline(t *testing.T) {
 
 // Another window and another tokenizer: the measurement describes neither.
 func TestModelSwitchDropsTheBaseline(t *testing.T) {
+	ctx := context.Background()
+
 	s := &svc{
 		cfg:            &config.Config{UnifiedConfig: unifiedCfgWithModels("m1", "m2")},
 		llmClient:      &mockLLMClientTracked{model: "m1"},
@@ -80,7 +82,7 @@ func TestModelSwitchDropsTheBaseline(t *testing.T) {
 			return &mockLLMClientTracked{model: id}, nil
 		},
 	}
-	s.recordContextBaseline(50000, 4, s.modelGeneration())
+	s.recordContextBaseline(ctx, 50000, 4, s.modelGeneration())
 
 	require.NoError(t, s.handleSetModel("m2", "medium"))
 
@@ -93,7 +95,7 @@ func TestContextResetDropsTheBaseline(t *testing.T) {
 	s := newResetTestSvc(store)
 
 	seedResetTranscript(ctx, t, s)
-	s.recordContextBaseline(50000, 3, s.modelGeneration())
+	s.recordContextBaseline(ctx, 50000, 3, s.modelGeneration())
 
 	inserted, err := s.ResetContextAndInjectOnce(ctx, "reset:fresh:1", "do the fresh job")
 	require.NoError(t, err)
@@ -106,6 +108,8 @@ func TestContextResetDropsTheBaseline(t *testing.T) {
 // that request's measurement: it describes a window and tokenizer the session
 // no longer uses.
 func TestBaselineFromAnInFlightRequestIsDroppedAfterAModelSwitch(t *testing.T) {
+	ctx := context.Background()
+
 	s := &svc{
 		cfg:            &config.Config{UnifiedConfig: unifiedCfgWithModels("m1", "m2")},
 		llmClient:      &mockLLMClientTracked{model: "m1"},
@@ -124,12 +128,12 @@ func TestBaselineFromAnInFlightRequestIsDroppedAfterAModelSwitch(t *testing.T) {
 
 	require.NoError(t, s.handleSetModel("m2", "medium"))
 
-	s.recordContextBaseline(150000, 4, generation)
+	s.recordContextBaseline(ctx, 150000, 4, generation)
 
 	assert.Nil(t, s.loadContextBaseline(), "the in-flight measurement belongs to the old model")
 
 	// A measurement taken after the switch is kept.
-	s.recordContextBaseline(1000, 1, s.modelGeneration())
+	s.recordContextBaseline(ctx, 1000, 1, s.modelGeneration())
 	assert.NotNil(t, s.loadContextBaseline())
 }
 
@@ -147,7 +151,7 @@ func TestNoOpCompactionKeepsTheBaseline(t *testing.T) {
 		{Role: llmwire.RoleSystem, Content: "sys"},
 		{Role: llmwire.RoleUser, Content: "task"},
 	})
-	s.recordContextBaseline(1234, 2, s.modelGeneration())
+	s.recordContextBaseline(ctx, 1234, 2, s.modelGeneration())
 
 	compacted, err := s.compact(ctx, nil)
 	require.NoError(t, err)

@@ -153,6 +153,7 @@ func TestSummarizationRequestCarriesTheFullOutputReserve(t *testing.T) {
 		compactionUserMessage("task"),
 		compactionAssistantCall("c1", "work"),
 		compactionToolResult("c1", "result"),
+		compactionUserMessage("recent note"),
 	})
 
 	_, err := s.compact(t.Context(), nil)

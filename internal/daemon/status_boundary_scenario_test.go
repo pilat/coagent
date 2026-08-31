@@ -117,7 +117,9 @@ func TestHarnessScenario_StatusMidActivationDoesNotStrandJustExecutedToolResults
 
 // /compact follows the same rule as /status: it may end the activation only
 // when nothing owes the model a turn, so interrupted work is still answered
-// after the requested compaction runs.
+// after the requested compaction runs. The first round settles before the
+// second hangs, so the raw range holds two groups when the /compact lands —
+// the never-empty tail needs something to keep.
 func TestHarnessScenario_CompactMidActivationStillAnswersTheInterruptedWork(t *testing.T) {
 	entered := make(chan struct{})
 	release := make(chan struct{})
@@ -131,12 +133,21 @@ func TestHarnessScenario_CompactMidActivationStillAnswersTheInterruptedWork(t *t
 			}
 		}
 
-		if hasToolResultFor(msgs, "ls") || hasSummaryRow(msgs) {
+		if hasToolResultFor(msgs, "read") || hasSummaryRow(msgs) {
 			return &llmwire.Response{Text: "work done"}
 		}
 
-		once.Do(func() { close(entered) })
-		<-release
+		if hasToolResultFor(msgs, "ls") {
+			// The second turn hangs until the /compact has landed mid-activation.
+			once.Do(func() { close(entered) })
+			<-release
+
+			return &llmwire.Response{ToolCalls: []llmwire.ToolCall{{
+				ID:        "read-call-1",
+				Name:      "read",
+				Arguments: []byte(`{"file_path":"go.mod"}`),
+			}}}
+		}
 
 		return &llmwire.Response{ToolCalls: []llmwire.ToolCall{{
 			ID:        "ls-call-1",

@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/http/httptrace"
+	"sync/atomic"
 	"time"
 
 	"go.uber.org/zap"
@@ -48,6 +50,60 @@ func (c *openaiClient) SetSessionID(id string) {
 	// No-op for base openaiClient; openAICompatibleClient overrides when isOpenRouter
 }
 
+// requestTrace records the request-path timestamps nobody could take before:
+// whether time went into uploading the body or waiting for a stalled upstream.
+// Do returning proves the body was accepted, not accepted quickly. Nanos are
+// atomic because GotFirstResponseByte can fire after Do returns on a stream.
+type requestTrace struct {
+	bodyBytes    int
+	wroteHeaders atomic.Int64
+	wroteRequest atomic.Int64
+	firstByte    atomic.Int64
+	firstEvent   atomic.Int64
+}
+
+func newRequestTrace(bodyBytes int) *requestTrace {
+	return &requestTrace{bodyBytes: bodyBytes}
+}
+
+func (t *requestTrace) attach(req *http.Request) *http.Request {
+	trace := &httptrace.ClientTrace{
+		WroteHeaders:         func() { t.wroteHeaders.Store(time.Now().UnixNano()) },
+		WroteRequest:         func(info httptrace.WroteRequestInfo) { t.wroteRequest.Store(time.Now().UnixNano()) },
+		GotFirstResponseByte: func() { t.firstByte.Store(time.Now().UnixNano()) },
+	}
+
+	return req.WithContext(httptrace.WithClientTrace(req.Context(), trace))
+}
+
+// logRequestTrace emits the upload/stall split: WroteRequest−WroteHeaders is
+// the upload, GotFirstResponseByte−WroteRequest the stall, and for streams the
+// first payload event closes the gap the response headers left open. A missing
+// endpoint logs as -1.
+func logRequestTrace(log *zap.Logger, t *requestTrace, err error) {
+	fields := []zap.Field{
+		zap.Int("body_bytes", t.bodyBytes),
+		zap.Int64("write_ms", spanMs(t.wroteHeaders.Load(), t.wroteRequest.Load())),
+		zap.Int64("first_byte_ms", spanMs(t.wroteRequest.Load(), t.firstByte.Load())),
+		zap.Int64("first_event_ms", spanMs(t.firstByte.Load(), t.firstEvent.Load())),
+	}
+
+	if err != nil {
+		log.Warn("request_trace_failed", append(fields, zap.Error(err))...)
+		return
+	}
+
+	log.Debug("request_trace", fields...)
+}
+
+func spanMs(from, to int64) int64 {
+	if from <= 0 || to <= 0 {
+		return -1
+	}
+
+	return (to - from) / int64(time.Millisecond)
+}
+
 func (c *openaiClient) makeRequest(ctx context.Context, reqBody oaiRequest) (*llmwire.Response, error) {
 	log := logger.Ctx(ctx).Named("llm.client")
 
@@ -73,11 +129,27 @@ func (c *openaiClient) makeRequest(ctx context.Context, reqBody oaiRequest) (*ll
 		return nil, err
 	}
 
+	trace := newRequestTrace(len(jsonBody))
+	req = trace.attach(req)
+
+	if reqBody.Stream {
+		resp, streamErr := c.makeStreamingRequest(log, req, trace, start)
+		logRequestTrace(log, trace, streamErr)
+
+		return resp, streamErr
+	}
+
 	body, err := c.executeHTTPRequest(ctx, log, req)
+	logRequestTrace(log, trace, err)
+
 	if err != nil {
 		return nil, err
 	}
 
+	return c.parseResponseBody(log, body, start)
+}
+
+func (c *openaiClient) parseResponseBody(log *zap.Logger, body []byte, start time.Time) (*llmwire.Response, error) {
 	var completionResp oaiResponse
 	if err := json.Unmarshal(body, &completionResp); err != nil {
 		return nil, fmt.Errorf("unmarshal response: %w", err)

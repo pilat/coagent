@@ -204,12 +204,21 @@ func TestHarnessScenario_LaterFreshTurnAfterStop(t *testing.T) {
 }
 
 // Explicit compact success remains the regression reference: a replaceable
-// start becomes a persistent terminal result.
+// start becomes a persistent terminal result. The first turn settles a tool
+// round so the /compact has two raw groups — the newest one stays verbatim.
 func TestHarnessScenario_CompactSuccessChain(t *testing.T) {
 	var calls int
-	respond := func(_ string, _ []llmwire.Message) *llmwire.Response {
+	respond := func(_ string, msgs []llmwire.Message) *llmwire.Response {
 		calls++
 		if calls == 1 {
+			return &llmwire.Response{ToolCalls: []llmwire.ToolCall{{
+				ID:        "ls-call-1",
+				Name:      "ls",
+				Arguments: []byte(`{"path":"."}`),
+			}}}
+		}
+
+		if calls == 2 {
 			return &llmwire.Response{Text: "First answer."}
 		}
 
@@ -230,6 +239,9 @@ func TestHarnessScenario_CompactSuccessChain(t *testing.T) {
 	require.NoError(t, err)
 
 	waitForVisibleMessage(t, collector, root, "First answer.")
+	// Wait for the loop teardown so the /compact deterministically re-announces
+	// the session instead of racing the runner cleanup.
+	h.waitUntil("first runner gone", func() bool { return !h.mgr.HasActiveLoop(root) })
 
 	require.NoError(t, h.mgr.SendToSession(h.ctx, root, "/compact keep the TODO state"))
 	collector.waitFor(t, "compaction finished", func(events []controllerapi.SessionNotification) bool {

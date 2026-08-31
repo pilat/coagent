@@ -90,7 +90,9 @@ func countSummaryRows(msgs []llmwire.Message) int {
 // TestScenario_AutomaticCompactionRunsInsideTheDaemon drives the threshold path
 // (not /compact) end to end on a real daemon: the provider reports usage over the
 // cutoff, the sanctioned compaction point fires, and the session keeps running on
-// the rebuilt transcript.
+// the rebuilt transcript. The follow-up round exists because the verbatim tail is
+// never empty: two raw groups give the split something to summarize and something
+// to keep.
 func TestScenario_AutomaticCompactionRunsInsideTheDaemon(t *testing.T) {
 	respond := func(_ string, msgs []llmwire.Message) *llmwire.Response {
 		switch {
@@ -98,8 +100,16 @@ func TestScenario_AutomaticCompactionRunsInsideTheDaemon(t *testing.T) {
 			return &llmwire.Response{Text: autoCompactionBrief}
 		case hasUserContaining(msgs, contextSummaryPrefix):
 			return &llmwire.Response{Text: "work complete"}
-		case hasToolResultFor(msgs, "ls"):
+		case hasToolResultFor(msgs, "read"):
 			return &llmwire.Response{Text: "uncompacted fallback"}
+		case hasToolResultFor(msgs, "ls"):
+			return &llmwire.Response{
+				ToolCalls: []llmwire.ToolCall{{
+					ID:        "read-followup",
+					Name:      "read",
+					Arguments: []byte(`{"file_path":"go.mod"}`),
+				}},
+			}
 		default:
 			return scriptedToolCall("ls", `{"path":"."}`)
 		}
@@ -122,22 +132,25 @@ func TestScenario_AutomaticCompactionRunsInsideTheDaemon(t *testing.T) {
 	msgs := h.parentMessages(parentID)
 	require.NoError(t, llm.ValidateToolPairing(msgs), "the rebuilt transcript must stay provider-valid")
 
-	// header → marked summary → the work the loop continued on the rebuilt
-	// transcript (no ack or primer is inserted by design).
+	// header → marked summary → the verbatim tail (the follow-up round) → the
+	// work the loop continued on the rebuilt transcript.
 	summaryAt := indexOfSummary(msgs)
 	require.Positive(t, summaryAt, "the header survives ahead of the summary")
 	require.Equal(t, 1, countSummaryRows(msgs), "exactly one summary row")
 	assert.Equal(t, llmwire.RoleUser, msgs[0].Role)
 	assert.Contains(t, msgs[0].Content, "start the scripted work")
 	assert.Contains(t, msgs[summaryAt].Content, autoCompactionBrief)
-	require.Greater(t, len(msgs), summaryAt+1)
-	assert.Equal(t, "work complete", msgs[summaryAt+1].Content, "the loop continued on the checkpoint")
+	require.Greater(t, len(msgs), summaryAt+2, "a verbatim tail survives behind the summary")
+	assert.Equal(t, "work complete", msgs[len(msgs)-1].Content, "the loop continued on the checkpoint")
 
 	// Everything the summary replaced is gone, including the settled tool pair.
 	assert.False(t, hasAssistantToolCall(msgs, "ls"), "the summarized tool_use is gone")
 	assert.Zero(t, countToolResultsFor(msgs, "ls"))
 
 	trace := events.snapshot()
+	for i, e := range trace {
+		t.Logf("TRACE %d: sess=%d type=%s msg=%q", i, e.SessionID, e.Notification.Type, e.Notification.Message)
+	}
 	assert.Equal(t, 1, countPublishedMessage(trace, parentID, compactionStartNotice))
 	assert.Equal(t, 1, countPublishedMessage(trace, parentID, compactionDoneNotice))
 	assert.Zero(t, countPublishedMessage(trace, parentID, "❌ Compaction failed"))
@@ -173,7 +186,17 @@ func TestScenario_AutoCompactionWhileABackgroundChildIsInFlight(t *testing.T) {
 		case hasUserContaining(msgs, contextSummaryPrefix):
 			return &llmwire.Response{Text: "parent continued after compaction"}
 		case hasToolResultFor(msgs, tool.IDTask):
-			return scriptedToolCall("ls", `{"path":"."}`)
+			// The follow-up round is deliberately unmeasured: it only exists so
+			// the raw range holds two groups when the threshold fires — the
+			// newest group stays verbatim in the tail, the launch pair (the
+			// thing this scenario watches mid-flight) is what gets summarized.
+			return &llmwire.Response{
+				ToolCalls: []llmwire.ToolCall{{
+					ID:        "ls-followup",
+					Name:      "ls",
+					Arguments: []byte(`{"path":"."}`),
+				}},
+			}
 		default:
 			return measuredResponse(&llmwire.Response{
 				ToolCalls: []llmwire.ToolCall{{

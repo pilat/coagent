@@ -46,7 +46,7 @@ func (s SessionStatus) valid() bool {
 	}
 }
 
-const sessionColumns = `id, project_id, model, reasoning_level, master_enabled, attributes, agent_type, parent_id, iteration, status, todo_items, created_at, updated_at, killed_at, root_id, model_input_generation, model_input_boundary`
+const sessionColumns = `id, project_id, model, reasoning_level, master_enabled, attributes, agent_type, parent_id, iteration, status, todo_items, created_at, updated_at, killed_at, root_id, model_input_generation, model_input_boundary, context_baseline_model, context_baseline_prompt_tokens, context_baseline_message_count`
 
 // errSessionNotFound signals a lookup query matched no row.
 var errSessionNotFound = errors.New("session not found")
@@ -75,6 +75,13 @@ type SessionRecord struct {
 	// ModelInputBoundary is the transcript message ID at which the current
 	// generation began. Nil only on sessions with generation 0 and no history.
 	ModelInputBoundary *int64
+
+	// Persisted context baseline: the last provider-measured prompt size and
+	// the transcript length it covered. Zero values mean nothing was measured;
+	// the model column guards the measurement against model switches.
+	ContextBaselineModel        string
+	ContextBaselinePromptTokens int
+	ContextBaselineMessageCount int
 }
 
 // StoredMessage represents a row in the messages table.
@@ -137,6 +144,10 @@ type RuntimeStore interface {
 
 	UpdateSessionIteration(ctx context.Context, id int64, iteration int, status SessionStatus) error
 	UpdateSessionTodoItems(ctx context.Context, id int64, items json.RawMessage) error
+	// SaveContextBaseline persists the last provider-measured context size;
+	// ClearContextBaseline drops it when the transcript it described is gone.
+	SaveContextBaseline(ctx context.Context, sessionID int64, b ContextBaseline) error
+	ClearContextBaseline(ctx context.Context, sessionID int64) error
 	GetChildSessionStats(ctx context.Context, rootID int64) (count int, totalIterations int, err error)
 	// GetSessionTreeUsage sums token usage and cost over the whole session tree
 	// rooted at rootID, including compacted rows.
@@ -1103,7 +1114,8 @@ func scanSessionFrom(sc rowScanner) (*SessionRecord, error) {
 	err := sc.Scan(&rec.ID, &projectID, &model, &reasoning, &masterEnabled, &attrsRaw,
 		&agentType, &parentID, &iteration, &status, &todoItems,
 		&rec.CreatedAt, &rec.UpdatedAt, &killedAt, &rootID,
-		&rec.ModelInputGeneration, &boundary)
+		&rec.ModelInputGeneration, &boundary,
+		&rec.ContextBaselineModel, &rec.ContextBaselinePromptTokens, &rec.ContextBaselineMessageCount)
 	if err != nil {
 		return nil, fmt.Errorf("scan session: %w", err)
 	}

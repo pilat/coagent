@@ -131,11 +131,19 @@ func (s *svc) compactLocked(
 		return false, errCompactionNonRelieving
 	}
 
+	if totalBytes, count := imagePressure(
+		newMessages,
+	); totalBytes > imageBytesHighWater ||
+		count > imageCountHighWater {
+		return false, errCompactionNonRelieving
+	}
+
 	if err := s.commitCheckpointLocked(ctx, newMessages, compactedIDs, commandInput); err != nil {
 		return false, err
 	}
 
 	s.resetContextBaseline() // the transcript the measurement described is gone
+	s.clearPersistedBaseline(ctx)
 
 	if commandInput == nil {
 		s.compactionSummaryDBID = newMessages[headerSize].DBID

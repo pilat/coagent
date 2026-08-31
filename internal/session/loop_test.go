@@ -49,6 +49,7 @@ func TestShouldCompact(t *testing.T) {
 			agent.ms.setMessages(buildMessagesWithTokens(tc.tokens))
 			if tc.baseline != nil {
 				agent.recordContextBaseline(
+					context.Background(),
 					tc.baseline.promptTokens,
 					tc.baseline.messageCount,
 					agent.modelGeneration(),

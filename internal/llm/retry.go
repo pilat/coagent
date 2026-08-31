@@ -2,6 +2,7 @@ package llm
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	"math/rand"
@@ -60,6 +61,8 @@ func (r *retryableClient) Chat(
 ) (*llmwire.Response, error) {
 	var lastErr error
 
+	oneShot := map[string]bool{}
+
 	loopCtx, cancel := context.WithTimeout(ctx, r.budget)
 	defer cancel()
 
@@ -105,7 +108,7 @@ func (r *retryableClient) Chat(
 			return nil, lastErr
 		}
 
-		if !r.shouldRetry(err) {
+		if !r.retryable(err, oneShot) {
 			logger.Ctx(ctx).Named("llm.client").Warn("non_retryable_error", zap.Error(err))
 			return nil, err
 		}
@@ -172,6 +175,36 @@ func (r *retryableClient) callOnce(
 	}
 
 	return resp, nil
+}
+
+// retryable classifies err for the loop, applying the one-shot policy: a class
+// named by oneShotClass is retried exactly once (recorded in used) and then
+// propagates. The one-shot check must precede the string ladder — the
+// idle-stream message contains deadline wording the generic branches would
+// otherwise claim, granting the default six retries.
+func (r *retryableClient) retryable(err error, used map[string]bool) bool {
+	if class, ok := oneShotClass(err); ok {
+		if used[class] {
+			return false
+		}
+
+		used[class] = true
+
+		return true
+	}
+
+	return r.shouldRetry(err)
+}
+
+// oneShotClass names error classes granted exactly one retry: a second attempt
+// may reach a different upstream, but six identical uploads of the same body
+// cannot help.
+func oneShotClass(err error) (string, bool) {
+	if errors.Is(err, errStreamIdle) {
+		return "sse-idle", true
+	}
+
+	return "", false
 }
 
 func (r *retryableClient) shouldRetry(err error) bool {

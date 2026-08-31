@@ -28,7 +28,7 @@ Usage:
 - You can optionally specify a line offset and limit for pagination (especially handy for long files)
 - Any lines longer than 2000 characters will be truncated
 - Each line is returned as "lineNum| content" (e.g., "42| some code here")
-- Image files (jpeg, png, gif, webp, up to 5 MB) are returned as viewable image attachments; text-only tools cannot see them otherwise
+- Image files (jpeg, png, gif, webp, up to 3.75 MB) are returned as viewable image attachments; text-only tools cannot see them otherwise
 - Other binary files cannot be read
 
 CRITICAL: You have the capability to call multiple tools in a single response. It is always better to speculatively read multiple files in parallel that are potentially useful.`

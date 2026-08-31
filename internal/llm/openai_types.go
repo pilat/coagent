@@ -121,6 +121,7 @@ type oaiMessage struct {
 
 // oaiToolCall represents a tool call.
 type oaiToolCall struct {
+	Index    int             `json:"index,omitempty"`
 	ID       string          `json:"id"`
 	Type     string          `json:"type"`
 	Function oaiFunctionCall `json:"function"`

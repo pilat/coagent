@@ -38,12 +38,17 @@ var compactionAlphabet = []compactionCommand{
 }
 
 // compactionProtocolModel is the reference: what a reader of the plan expects,
-// independent of how the session implements it.
+// independent of how the session implements it. The verbatim tail is never
+// empty (D3), so a compaction needs raw rows besides the newest legal group —
+// one group to summarize, one to keep. rawRows counts raw rows since the last
+// compaction; tailGroupRows is the newest legal group's size.
 type compactionProtocolModel struct {
 	queuedCompact    bool
 	externalPending  bool
 	workPending      bool
 	freshContent     bool
+	rawRows          int
+	tailGroupRows    int
 	compactionsRun   int
 	compactionsHoped int
 }
@@ -56,27 +61,35 @@ func (m *compactionProtocolModel) apply(command compactionCommand) {
 		if !m.externalPending && !m.workPending {
 			m.externalPending = true
 			m.freshContent = true
+			m.rawRows++
 		}
 	case cmdDeliverExternalResult:
 		if m.externalPending {
 			m.externalPending = false
 			m.freshContent = true
+			m.rawRows++
+			m.tailGroupRows = 2
 		}
 	case cmdEmitToolCall:
 		if !m.externalPending && !m.workPending {
 			m.workPending = true
 			m.freshContent = true
+			m.rawRows++
 		}
 	case cmdExecuteTools:
 		if m.workPending {
 			m.workPending = false
 			m.freshContent = true
+			m.rawRows++
+			m.tailGroupRows = 2
 		}
 	case cmdSupersedeWithUserTurn:
 		// A later user turn abandons a dangling ordinary call; an external call
 		// keeps its producer and stays pending.
 		m.workPending = false
 		m.freshContent = true
+		m.rawRows++
+		m.tailGroupRows = 1
 	case cmdRunLoopPoint:
 		if !m.queuedCompact || m.externalPending || m.workPending {
 			return
@@ -85,10 +98,12 @@ func (m *compactionProtocolModel) apply(command compactionCommand) {
 		m.queuedCompact = false
 
 		// A transcript holding only the previous compaction's own output has
-		// nothing left to summarize.
-		if m.freshContent {
+		// nothing left to summarize, and the whole raw range is never the head:
+		// at least one legal group stays verbatim.
+		if m.freshContent && m.rawRows > m.tailGroupRows {
 			m.compactionsHoped++
 			m.freshContent = false
+			m.rawRows = m.tailGroupRows
 		}
 	}
 }
@@ -126,8 +141,13 @@ func runCompactionSequence(t *testing.T, sequence []compactionCommand) {
 		compactionToolResult("seed", "result"),
 	})
 
-	// The seeded round is content the first compaction can summarize.
-	model := &compactionProtocolModel{freshContent: true}
+	// The seeded round is one legal group: content a compaction could
+	// summarize, but only once another row exists to keep verbatim.
+	model := &compactionProtocolModel{
+		freshContent:  true,
+		rawRows:       2,
+		tailGroupRows: 2,
+	}
 	next := 0
 
 	var notes []string

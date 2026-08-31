@@ -14,8 +14,11 @@ import (
 
 const contextSummaryPrefix = "[CONTEXT SUMMARY"
 
-// blockingCompactRespond drives a parent that spawns one blocking child and
+// blockingCompactRespond drives a parent that settles one tool round, spawns
+// one blocking child (the newest group — it stays verbatim in the tail), and
 // answers with a compaction brief whenever it is handed a summarization prompt.
+// The extra round exists because the verbatim tail is never empty: a deferred
+// /compact needs a summarizable group besides the launch pair.
 func blockingCompactRespond(release <-chan struct{}) func(string, []llmwire.Message) *llmwire.Response {
 	return func(_ string, msgs []llmwire.Message) *llmwire.Response {
 		if len(msgs) == 1 && strings.Contains(msgs[0].Content, "HISTORY TO SUMMARIZE") {
@@ -34,8 +37,16 @@ func blockingCompactRespond(release <-chan struct{}) func(string, []llmwire.Mess
 
 		// The deferred /compact continues the activation, so the parent may be
 		// asked again over the compacted transcript — answer, don't re-spawn.
-		if hasToolResultFor(msgs, "task") || hasSummaryRow(msgs) {
+		if hasSummaryRow(msgs) || hasToolResultFor(msgs, "task") {
 			return &llmwire.Response{Text: "parent got the child result"}
+		}
+
+		if !hasToolResultFor(msgs, "ls") {
+			return &llmwire.Response{ToolCalls: []llmwire.ToolCall{{
+				ID:        "ls-before-spawn",
+				Name:      "ls",
+				Arguments: []byte(`{"path":"."}`),
+			}}}
 		}
 
 		return &llmwire.Response{ToolCalls: []llmwire.ToolCall{{
@@ -101,7 +112,10 @@ func TestScenario_CompactWaitsForABlockingChildThenRuns(t *testing.T) {
 	final := h.parentMessages(parentID)
 	assert.True(t, hasSummaryRow(final), "the deferred /compact ran once the call was settled")
 	require.NoError(t, llm.ValidateToolPairing(final))
-	assert.False(t, hasAssistantToolCall(final, "task"), "the settled pair was compacted normally")
+	// The verbatim tail is never empty (D3): the settled launch pair is the
+	// newest group and stays verbatim instead of being summarized.
+	assert.True(t, hasAssistantToolCall(final, "task"), "the settled pair stays verbatim in the tail")
+	assert.Equal(t, 1, countToolResultsFor(final, "task"), "the result landed before the deferred compact ran")
 
 	res, err := h.mgr.Result(h.ctx, link.ChildID)
 	require.NoError(t, err)

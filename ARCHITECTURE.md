@@ -255,18 +255,24 @@ one no-tools model call over the repaired canonical JSONL projection — full to
 evidence, never placeholders — and commits the checkpoint as one atomic
 positioned replacement: header → marked summary → optional current-skill
 envelope → verbatim raw tail. The complete summarizer request stays within half
-the context window; a repair-free verbatim suffix of at least a tenth of the
-window survives when that much history exists. There is no continuous pruning
-ladder and no clearing stage. Manual compaction requests raise the same event; a
-request behind non-sleep external work waits in the durable inbox. A failed,
-empty, non-relieving or length-stopped attempt leaves the active transcript
-untouched.
+the context window; a repair-free verbatim tail survives when that much history
+exists — at least a tenth of the window, possibly shorter when the tail's image
+byte and count ceilings (half the trigger marks) demand it, never empty. There
+is no continuous pruning ladder and no clearing stage. Manual compaction
+requests raise the same event; a request behind non-sleep external work waits
+in the durable inbox. A failed, empty, non-relieving or length-stopped attempt
+leaves the active transcript untouched.
 
-The trigger combines the provider's last reported prompt tokens with an estimate
-of appended content; absent measurement is explicitly approximate. Repeated
-automatic attempts that cannot relieve pressure disable only the automatic path
-for that activation. The transcript remains the durable audit and recovery
-source even when its model projection is compacted.
+The trigger combines the provider's last reported prompt tokens with an
+estimate of appended content, and image pressure: attachments totalling over
+12 MB base64, or more than 20 of them, trigger compaction on their own because
+the token projection cannot see the request-size wall they create. The
+prompt-token measurement persists across restarts, is discarded when the
+session's model changed, and is cleared when compaction replaces the transcript
+it described; absent measurement is explicitly approximate. Repeated automatic
+attempts that cannot relieve pressure disable only the automatic path for that
+activation. The transcript remains the durable audit and recovery source even
+when its model projection is compacted.
 
 ### Operator progress and one-shot budgets
 

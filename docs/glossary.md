@@ -84,8 +84,8 @@ One turn of the agent loop — a single LLM call plus the tool executions it tri
 _Avoid_: using "iteration" and "agent loop" interchangeably.
 
 **compaction** (checkpoint):
-The single automatic answer to context pressure: one no-tools model call summarizes a bounded older head — the repaired canonical JSONL projection — and the committed checkpoint rebuilds the transcript as header → marked summary → optional current-skill envelope → verbatim raw tail. The complete summarizer request stays within half the context window; a repair-free verbatim suffix of at least a tenth of the window is retained when that much history exists. Runs at exactly one point in the loop, where no tool call is pending ([ADR-0035](adr/0035-compaction-summarizes-a-bounded-head.md)).
-_Avoid_: clearing (removed with ADR-0035); compression; "context ladder"; trim-before-summary (superseded).
+The single automatic answer to context pressure: one no-tools model call summarizes a bounded older head — the repaired canonical JSONL projection — and the committed checkpoint rebuilds the transcript as header → marked summary → optional current-skill envelope → verbatim raw tail. The trigger is the token projection crossing 0.85 of the window, or image pressure breaching its high-water marks (12 MB base64 across attachments, or more than 20 of them). The complete summarizer request stays within half the context window; the checkpoint retains a repair-free verbatim tail — at least a tenth of the window when that much history exists, possibly shorter under the tail's image byte/count ceilings (6 MB, 10), never empty. Runs at exactly one point in the loop, where no tool call is pending ([ADR-0035](adr/0035-compaction-summarizes-a-bounded-head.md)).
+_Avoid_: clearing (removed with ADR-0035); compression; "context ladder"; trim-before-summary (superseded); image eviction (rejected — image bytes are answered by compaction, not by pruning history between compactions).
 
 **checkpoint marker**:
 The host-authored wrapper around model-authored summary text inside a compaction summary row. It identifies the text as a lossy summary of older history and says later verbatim messages are newer and take precedence on conflict. Only the complete wrapper at the one allowed position (immediately after the header) is recognized as a previous checkpoint.
@@ -96,7 +96,7 @@ The lifetime of the pending external call that made a `/compact` wait in the dur
 _Avoid_: per-activation notice (the retired behavior).
 
 **compaction projection**:
-The number the compaction trigger and `/status` both read: the provider's last reported cache-inclusive `PromptTokens` plus a `len/4` estimate of everything appended since that measurement. With no measurement (fresh session, resume, subagent, right after a compaction, after a model switch) it is a plain whole-transcript estimate, and `/status` marks it with a tilde.
+The number the compaction trigger and `/status` both read: the provider's last reported cache-inclusive `PromptTokens` plus a `len/4` estimate of everything appended since that measurement. The measurement persists across restarts and is discarded when the model changed; with no measurement (fresh session, right after a compaction, after a model switch) it is a plain whole-transcript estimate, and `/status` marks it with a tilde.
 _Avoid_: calibration (the removed scale-factor machinery), token budget.
 
 **output reserve**:

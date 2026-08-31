@@ -47,8 +47,10 @@ func compactionNotices(events []controllerapi.SessionNotification, sessionID int
 	return out
 }
 
-// compactOnlyRespond answers summarization prompts with a brief and everything
-// else with plain text, so a session reaches idle in one turn.
+// compactOnlyRespond answers summarization prompts with a brief, does one
+// unmeasured tool round before settling (the verbatim tail is never empty, so
+// a compactable transcript needs two raw groups), and answers everything else
+// with plain text.
 func compactOnlyRespond(_ string, msgs []llmwire.Message) *llmwire.Response {
 	if len(msgs) == 1 && strings.Contains(msgs[0].Content, "HISTORY TO SUMMARIZE") {
 		return &llmwire.Response{
@@ -56,7 +58,17 @@ func compactOnlyRespond(_ string, msgs []llmwire.Message) *llmwire.Response {
 		}
 	}
 
-	return &llmwire.Response{Text: "work done"}
+	if hasToolResultFor(msgs, "ls") {
+		return &llmwire.Response{Text: "work done"}
+	}
+
+	return &llmwire.Response{
+		ToolCalls: []llmwire.ToolCall{{
+			ID:        "ls-1",
+			Name:      "ls",
+			Arguments: []byte(`{"path":"."}`),
+		}},
+	}
 }
 
 // The deferral notice announces a transition — "your /compact is now queued" —

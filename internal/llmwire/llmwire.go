@@ -61,12 +61,16 @@ type MessageUsage struct {
 
 // ImageRef points at image bytes on disk. Explicit tags pin its on-disk keys:
 // it is persisted verbatim in messages.attachments, so renaming a field must
-// not silently orphan existing rows. Valid on RoleUser and RoleTool; other
-// roles drop the field.
+// not silently orphan existing rows, and new fields must be absent-tolerant.
+// Valid on RoleUser and RoleTool; other roles drop the field.
 type ImageRef struct {
 	Path string `json:"path"`
 	Mime string `json:"mime"`
 	Size int64  `json:"size"`
+	// Decoded pixel dimensions when the format is stdlib-decodable; zero on
+	// rows written before they existed and on undecodable formats.
+	Width  int `json:"width,omitempty"`
+	Height int `json:"height,omitempty"`
 }
 
 type Message struct {

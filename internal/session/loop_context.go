@@ -39,6 +39,14 @@ func (r *loopRunner) applyContextEvents(ctx context.Context) {
 		return
 	}
 
+	// The verbatim tail is never empty (D3): when the raw range cannot yield a
+	// split, an automatic attempt would announce itself and then refuse
+	// silently. The transcript keeps growing, so the next crossing gets a real
+	// attempt; an explicit /compact still reports "Nothing to compact".
+	if !explicit && !r.agent.hasCompactionCandidate(window) {
+		return
+	}
+
 	// A fired budget parks the tree: /compact is read-only and answers with the
 	// parked explanation, never with a failure claim (and spends no model call).
 	if r.agent.budgetGate != nil {
