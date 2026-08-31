@@ -9,7 +9,11 @@ The shared vocabulary of coagent — the words that name its concepts, so code, 
 ## Actors & entities
 
 **daemon**:
-The single long-lived coagent process. It owns session lifecycle, persistence, the MCP pool, admission control, and the subagent ledger, and it *implements* the in-process `controllerapi.Controller`. It binds no *network* socket — the only thing it listens on is the **control socket**, a same-user unix socket.
+The single long-lived coagent process. It coordinates session lifecycle, durable
+producer ledgers and admission, owns the MCP pool, and *implements* the
+in-process `controllerapi.Controller`. Durable ledgers and capacity counters
+remain owned by their domain packages. It binds no *network* socket — the only
+thing it listens on is the **control socket**, a same-user unix socket.
 _Avoid_: server, gateway.
 
 **session**:
@@ -252,10 +256,15 @@ New standalone work injected by a one-shot or cron schedule, rather than the res
 _Avoid_: sleep wake, subagent wake.
 
 **admission control**:
-The daemon's concurrency governor — caps on total, child, and per-parent sessions plus spawn depth, with a FIFO overflow queue.
+The `admission` package's concurrency governor — caps on total, child, and
+per-parent sessions plus spawn depth. The daemon coordinates its verdict with
+durable-aware FIFO overflow queues.
 
-**subagent link ledger** (`LinkStore`):
-The daemon's durable record (`subagent_links` table) of parent↔child subagent relationships, serialized activation state (`activation_seq`), and parent-delivery state. A stopped link preserves the child session for explicit follow-up without making startup resume it.
+**subagent link ledger** (`subagent.Store`):
+The subagent package's durable record (`subagent_links` table) of parent↔child
+relationships, serialized activation state (`activation_seq`), and
+parent-delivery state. A stopped link preserves the child session for explicit
+follow-up without making startup resume it.
 
 **pending external call**:
 A tool call whose outcome comes from outside the loop — a sleep timer, a subagent, a config apply across a restart, a person typing at a terminal. The loop never re-executes one and never advances past it; transcript repair never stubs one; only an injection targeting its call id resolves it. The daemon's in-memory **staged-call ledger** records the ones it is itself answering.

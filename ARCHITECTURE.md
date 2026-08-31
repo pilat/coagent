@@ -20,11 +20,12 @@ identity, and subagent round.
 
 ## System shape
 
-Coagent is a self-hosted, headless coding agent. One daemon owns durable state,
-session lifecycle, admission control, the MCP connection pool, and the private
-manager contract. It accepts no network listener. The only listener is a
-same-user Unix control socket, used by the built-in local chat, bootstrap, and
-documented local operations.
+Coagent is a self-hosted, headless coding agent. One daemon coordinates durable
+state, session lifecycle and admission, owns the MCP connection pool, and
+implements the private manager contract. Domain packages own their ledgers and
+in-memory governors beneath that coordinator. It accepts no network listener.
+The only listener is a same-user Unix control socket, used by the built-in local
+chat, bootstrap, and documented local operations.
 
 ```
 CLI / Telegram manager ── controller contract / control socket ──> daemon
@@ -36,10 +37,11 @@ CLI / Telegram manager ── controller contract / control socket ──> daemo
 
 A manager submits work as a session. A session owns one agent-loop activation:
 its model client, tool registry, prompt projection, and conversation handling.
-The daemon owns anything that crosses sessions, survives a process restart, or
-needs global admission decisions. Built-in managers program against the private
-controller contract, never the daemon implementation. Managers and the local
-control protocol are product surfaces, not a public plugin API.
+The daemon coordinates work that crosses sessions, survives a process restart,
+or needs global admission decisions; the owning domain package retains each
+ledger or governor. Built-in managers program against the private controller
+contract, never the daemon implementation. Managers and the local control
+protocol are product surfaces, not a public plugin API.
 
 The composition root is `cmd/coagent`. It constructs dependencies explicitly,
 registers operations before declaring the daemon ready, and stops components in
@@ -516,10 +518,12 @@ The `set_manager` tool is a presence-aware upsert: omitted fields preserve exist
 
 The daemon, session and session-store boundary divides global coordination,
 per-task execution and SQLite transaction ownership. The daemon creates runners,
-maintains admission queues and event fan-out, owns project identity and subagent
-coordination, and implements the manager controller. The subagent package owns
-the durable parent-child link ledger. The daemon must keep transient maps
-reconstructible and defer to stores for durable ordering/CAS decisions.
+maintains durable-aware admission queues, routes session events, owns project
+identity and subagent coordination, and implements the manager controller.
+`admission` owns capacity decisions, `sessionbus` owns subscriber fan-out, and
+the subagent package owns the durable parent-child link ledger. The daemon must
+keep transient maps reconstructible and defer to stores for durable ordering/CAS
+decisions.
 
 The session package owns prompt construction, model-tool iteration, context
 projection, loop detection and the sole tool-gating API. It receives a prepared
