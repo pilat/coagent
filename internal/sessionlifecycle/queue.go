@@ -17,9 +17,7 @@ type queue[T any] struct {
 	values []T
 }
 
-func NewQueue[T any]() Queue[T] {
-	return &queue[T]{}
-}
+func NewQueue[T any]() Queue[T] { return &queue[T]{} }
 
 func (q *queue[T]) Push(value T) {
 	q.mu.Lock()

@@ -539,8 +539,9 @@ same component serializes child spawn against the durable stop fence and owns
 stop-tree discovery, lifecycle settlement, interrupted-stop recovery and child
 terminalization/delivery ordering. Each runner's cancel/done boundary, live
 session reference, input queue and admission metadata live in that component as
-one mutex-owned state object. The subagent package owns the durable parent-child
-link ledger. The daemon must
+one mutex-owned state object. Its launcher owns classification, admission,
+registration and goroutine start; daemon supplies session assembly and loop
+callbacks. The subagent package owns the durable parent-child link ledger. The daemon must
 keep transient maps reconstructible and defer to stores for durable ordering/CAS
 decisions.
 

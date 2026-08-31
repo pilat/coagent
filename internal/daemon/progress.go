@@ -89,12 +89,12 @@ func (s *svc) startProgressReconciler(ctx context.Context) {
 }
 
 func (s *svc) liveContextProjection(ctx context.Context, rootID int64) (progress.Context, bool) {
-	runner, ok := s.runners.Load(rootID)
+	activeRunner, ok := s.runners.Load(rootID)
 	if !ok {
 		return progress.Context{}, false
 	}
 
-	service := runner.Service()
+	service := activeRunner.Service()
 	if service == nil {
 		return progress.Context{}, false
 	}

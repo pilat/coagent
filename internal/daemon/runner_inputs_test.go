@@ -12,11 +12,26 @@ import (
 	"github.com/pilat/coagent/internal/controllerapi"
 	"github.com/pilat/coagent/internal/session"
 	"github.com/pilat/coagent/internal/sessionevent"
+	"github.com/pilat/coagent/internal/sessionlifecycle"
 	"github.com/pilat/coagent/internal/sessionstore"
 	"github.com/pilat/coagent/internal/tool"
 )
 
 var errInjectDown = errors.New("store is down")
+
+func newRunner(
+	cancel context.CancelFunc,
+	workDir string,
+	projectID int64,
+	kind admission.Kind,
+	parentID int64,
+	preserveStopped bool,
+	inputs []queuedSessionInput,
+) runner {
+	return sessionlifecycle.NewRunner(
+		cancel, workDir, projectID, kind, parentID, preserveStopped, inputs,
+	)
+}
 
 func TestSessionInputVariantsValidateTheirOwnIdentity(t *testing.T) {
 	tests := []struct {
@@ -57,7 +72,7 @@ func TestSessionInputVariantsValidateTheirOwnIdentity(t *testing.T) {
 	}
 }
 
-func newInputsRunner(pid int64, inputs []queuedSessionInput) *runner {
+func newInputsRunner(pid int64, inputs []queuedSessionInput) runner {
 	return newRunner(func() {}, "/tmp/test", pid, admission.Parent, 0, false, inputs)
 }
 

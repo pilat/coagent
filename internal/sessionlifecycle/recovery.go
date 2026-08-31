@@ -24,9 +24,7 @@ type recovery struct {
 	closed bool
 }
 
-func NewRecovery() Recovery {
-	return &recovery{}
-}
+func NewRecovery() Recovery { return &recovery{} }
 
 func (r *recovery) Start(ctx context.Context, run func(context.Context)) bool {
 	r.mu.Lock()

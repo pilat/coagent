@@ -87,11 +87,11 @@ var (
 	_ Service                = (*svc)(nil)
 	_ schedule.SessionSender = (*svc)(nil)
 
-	errDaemonShuttingDown = errors.New("daemon is shutting down")
+	errDaemonShuttingDown = sessionlifecycle.ErrShuttingDown
 )
 
 type svc struct {
-	runners        sessionlifecycle.Registry[*runner]
+	runners        sessionlifecycle.Registry[runner]
 	factory        session.Factory
 	store          Store
 	sessionStore   sessionstore.OrchestrationStore
@@ -123,6 +123,7 @@ type svc struct {
 	recovery       sessionlifecycle.Recovery
 	stopper        sessionlifecycle.Stopper
 	completions    sessionlifecycle.Completions
+	launcher       sessionlifecycle.Launcher[queuedSessionInput]
 	progress       progressruntime.Service
 	budgetCtx      context.Context //nolint:containedctx // Daemon lifetime context for joined park workers.
 	budgetCancel   context.CancelFunc
@@ -235,7 +236,7 @@ func newSvc(
 ) *svc {
 	budgetCtx, budgetCancel := context.WithCancel(context.Background())
 	s := &svc{
-		runners:        sessionlifecycle.NewRegistry[*runner](),
+		runners:        sessionlifecycle.NewRegistry[runner](),
 		factory:        factory,
 		store:          store,
 		sessionStore:   sessionStore,
@@ -269,6 +270,10 @@ func newSvc(
 	}
 	s.progress = newProgressRuntime(progressStore, budgetSvc, s)
 	s.completions = s.newCompletionCoordinator()
+	s.launcher = sessionlifecycle.NewLauncher(
+		sessionStore, links, s.admit, s.runners,
+		s.ensureRunnerStartable, s.enqueueChild, s.runSession,
+	)
 
 	return s
 }
@@ -617,7 +622,7 @@ func (s *svc) Kill(ctx context.Context, sessionID int64) error {
 			},
 		)
 
-		rs.stop()
+		rs.Stop()
 	}
 
 	rec, err := s.sessionStore.GetSession(ctx, sessionID)
@@ -765,7 +770,7 @@ func (s *svc) stopTreeCleanup(ctx context.Context, sessionID int64, keepRootStop
 
 	s.removeQueuedSessions(ids)
 
-	runners := make([]*runner, 0, len(ids))
+	runners := make([]runner, 0, len(ids))
 	for _, id := range ids {
 		rs, _ := s.runners.Load(id)
 
@@ -1006,10 +1011,10 @@ func (s *svc) Shutdown(timeout time.Duration) {
 		wg.Add(len(runners))
 
 		for _, rs := range runners {
-			go func(r *runner) {
+			go func(r runner) {
 				defer wg.Done()
 
-				r.stop()
+				r.Stop()
 			}(rs)
 		}
 
@@ -1154,8 +1159,8 @@ func (s *svc) checkModelConfigured(model string) error {
 // registry lock, returning true if a live runner existed. Holding the lock across
 // the append serializes it with runner teardown (delete + leftover drain).
 func (s *svc) appendIfLive(sessionID int64, input queuedSessionInput) bool {
-	return s.runners.Use(sessionID, func(rs *runner) {
-		rs.appendSessionInput(input)
+	return s.runners.Use(sessionID, func(rs runner) {
+		rs.AppendInput(input)
 	})
 }
 

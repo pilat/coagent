@@ -2,26 +2,25 @@ package sessionlifecycle
 
 import "sync"
 
-type Registry[T comparable] interface {
+type Registry[T any] interface {
 	Load(sessionID int64) (T, bool)
 	Use(sessionID int64, fn func(T)) bool
 	Register(sessionID int64, value T) (existing T, registered bool)
-	Delete(sessionID int64, value T) bool
+	Delete(sessionID int64) (T, bool)
 	CloseAndSnapshot() []T
+	Closed() bool
 	Len() int
 }
 
 var _ Registry[int] = (*registry[int])(nil)
 
-type registry[T comparable] struct {
+type registry[T any] struct {
 	mu     sync.Mutex
 	values map[int64]T
 	closed bool
 }
 
-func NewRegistry[T comparable]() Registry[T] {
-	return &registry[T]{values: make(map[int64]T)}
-}
+func NewRegistry[T any]() Registry[T] { return &registry[T]{values: make(map[int64]T)} }
 
 func (r *registry[T]) Load(sessionID int64) (T, bool) {
 	r.mu.Lock()
@@ -67,18 +66,20 @@ func (r *registry[T]) Register(sessionID int64, value T) (T, bool) {
 	return zero, true
 }
 
-func (r *registry[T]) Delete(sessionID int64, value T) bool {
+func (r *registry[T]) Delete(sessionID int64) (T, bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
 	existing, ok := r.values[sessionID]
-	if !ok || existing != value {
-		return false
+	if !ok {
+		var zero T
+
+		return zero, false
 	}
 
 	delete(r.values, sessionID)
 
-	return true
+	return existing, true
 }
 
 func (r *registry[T]) CloseAndSnapshot() []T {
@@ -93,6 +94,13 @@ func (r *registry[T]) CloseAndSnapshot() []T {
 	}
 
 	return values
+}
+
+func (r *registry[T]) Closed() bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	return r.closed
 }
 
 func (r *registry[T]) Len() int {

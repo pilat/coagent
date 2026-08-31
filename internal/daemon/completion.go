@@ -581,7 +581,7 @@ func (s *svc) killSubagent(ctx context.Context, childID int64, deadline time.Tim
 	rs, ok := s.runners.Load(childID)
 
 	if ok {
-		rs.stop()
+		rs.Stop()
 	}
 }
 

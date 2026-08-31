@@ -73,7 +73,8 @@ func TestReadinessSuppressesIdleWhileRootIsActiveLoop(t *testing.T) {
 	require.NoError(t, mgr.ReconcileOutputReadiness(ctx, outputID))
 	requireNoManagerNotification(t, notifications)
 
-	require.True(t, mgr.runners.Delete(sessionID, active))
+	_, deleted := mgr.runners.Delete(sessionID)
+	require.True(t, deleted)
 
 	require.NoError(t, mgr.ReconcileOutputReadiness(ctx, outputID))
 
@@ -135,7 +136,8 @@ func TestReconcileLatestReadinessPublishesIdleAfterTeardown(t *testing.T) {
 	mgr.reconcileLatestReadiness(ctx, record.ID)
 	requireNoManagerNotification(t, notifications)
 
-	require.True(t, mgr.runners.Delete(record.ID, active))
+	_, deleted := mgr.runners.Delete(record.ID)
+	require.True(t, deleted)
 
 	mgr.reconcileLatestReadiness(ctx, record.ID)
 

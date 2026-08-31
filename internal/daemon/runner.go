@@ -27,36 +27,7 @@ import (
 	"github.com/pilat/coagent/internal/tool"
 )
 
-type runner struct {
-	sessionlifecycle.Runner[queuedSessionInput]
-}
-
-func newRunner(
-	cancel context.CancelFunc,
-	workDir string,
-	projectID int64,
-	kind admission.Kind,
-	parentID int64,
-	preserveStopped bool,
-	inputs []queuedSessionInput,
-) *runner {
-	return &runner{Runner: sessionlifecycle.NewRunner(
-		cancel, workDir, projectID, kind, parentID, preserveStopped, inputs,
-	)}
-}
-
-func (r *runner) stop() { r.Stop() }
-
-// appendSessionInput queues an exact protocol variant for the next loop
-// iteration. The shared inbox signal wakes a live runner's forwarder.
-func (r *runner) appendSessionInput(input queuedSessionInput) {
-	r.AppendInput(input)
-}
-
-// drainSessionInputs returns every queued delivery and clears the queue.
-func (r *runner) drainSessionInputs() []queuedSessionInput {
-	return r.DrainInputs()
-}
+type runner = sessionlifecycle.Runner[queuedSessionInput]
 
 // defaultBlockingTimeoutSec bounds a blocking child's wall-clock when the task
 // tool did not specify one (preserves the legacy 5-minute task timeout).
@@ -73,7 +44,7 @@ var errNoChildTimeout = errors.New("no timeout applies")
 
 // runSession is the main goroutine for a session.
 // ctx is already cancelable through rs (set in ensureRunner).
-func (s *svc) runSession(ctx context.Context, sessionID int64, rs *runner) {
+func (s *svc) runSession(ctx context.Context, sessionID int64, rs runner) {
 	errored := false
 
 	// Registered before the timeout is applied so every exit below runs the full
@@ -129,7 +100,7 @@ func (s *svc) runSession(ctx context.Context, sessionID int64, rs *runner) {
 func (s *svc) finishRunner(
 	ctx context.Context,
 	sessionID int64,
-	rs *runner,
+	rs runner,
 	errored *bool,
 	timeoutCancel context.CancelFunc,
 	panicValue any,
@@ -147,7 +118,7 @@ func (s *svc) finishRunner(
 		*errored = true
 	}
 
-	s.runners.Delete(sessionID, rs)
+	s.runners.Delete(sessionID)
 	info := rs.Info()
 	s.admit.Release(info.Kind, info.ParentID)
 
@@ -162,7 +133,7 @@ func (s *svc) finishRunner(
 		s.reconcileLatestReadiness(cleanupCtx, sessionID)
 	}
 
-	leftover := rs.drainSessionInputs()
+	leftover := rs.DrainInputs()
 	rs.Complete()
 
 	if !shuttingDown && ctx.Err() == nil {
@@ -211,7 +182,7 @@ func (s *svc) restartPendingAfterExit(ctx context.Context, sessionID int64) {
 func (s *svc) runSessionIteration( //nolint:funlen,gocyclo // Linear lifecycle with explicit cleanup at each boundary.
 	ctx context.Context,
 	sessionID int64,
-	rs *runner,
+	rs runner,
 	notify func(sessionevent.Notification),
 	announced *bool,
 ) (bool, bool) {
@@ -663,10 +634,10 @@ func (s *svc) reportSessionUnstarted(
 func (s *svc) prepareSessionInputs(
 	ctx context.Context,
 	sessionID int64,
-	rs *runner,
+	rs runner,
 	sess session.Service,
 ) ([]sessionInput, error) {
-	deliveries := rs.drainSessionInputs()
+	deliveries := rs.DrainInputs()
 	ordered := orderSessionInputs(deliveries)
 
 	applied, resolvedExternal, err := s.applyResolvingInputs(ctx, sessionID, sess, ordered)
@@ -849,7 +820,7 @@ func (s *svc) injectSessionInput(
 func (s *svc) announceSession(
 	ctx context.Context,
 	sessionID int64,
-	rs *runner,
+	rs runner,
 	rec *sessionstore.SessionRecord,
 	notify func(sessionevent.Notification),
 ) {
@@ -1315,65 +1286,9 @@ func (s *svc) ensureRunner(
 		return errDaemonShuttingDown
 	}
 
-	rec, err := s.sessionStore.GetSession(ctx, sessionID)
-	if err != nil {
-		return fmt.Errorf("load session %d before start: %w", sessionID, err)
+	if err := s.launcher.Ensure(ctx, sessionID, workDir, projectID, inputs); err != nil {
+		return fmt.Errorf("ensure session runner: %w", err)
 	}
-
-	preserveStopped, err := s.ensureRunnerStartable(ctx, rec, inputs)
-	if err != nil {
-		return err
-	}
-
-	if s.runners.Use(sessionID, func(existing *runner) {
-		for _, input := range inputs {
-			existing.appendSessionInput(input)
-		}
-	}) {
-		return nil
-	}
-
-	// Classification precedes admission so a session never starts holding the
-	// wrong slot — or none at all.
-	kind, parentID, blocking, err := s.slotInfo(ctx, sessionID)
-	if err != nil {
-		return err
-	}
-
-	// Non-blocking admission. On a child admit-fail: background children queue
-	// (run when a slot frees); blocking children error (the caps are surfaced as
-	// a tool_result and the model degrades).
-	if !s.admit.TryAdmit(kind, parentID) {
-		if kind == admission.Child && !blocking {
-			s.enqueueChild(ctx, sessionID, parentID, workDir, projectID)
-			return nil
-		}
-
-		return admission.ErrNoCapacity
-	}
-
-	// Session goroutine uses independent context — survives controller disconnect
-	loopCtx, loopCancel := context.WithCancel(context.Background())
-	rs := newRunner(loopCancel, workDir, projectID, kind, parentID, preserveStopped, inputs)
-
-	existing, started := s.registerRunner(sessionID, rs)
-	if !started {
-		s.admit.Release(kind, parentID)
-		loopCancel()
-
-		if existing == nil {
-			return errDaemonShuttingDown
-		}
-
-		for _, input := range inputs {
-			existing.appendSessionInput(input)
-		}
-
-		return nil
-	}
-
-	//nolint:contextcheck // deliberate: the session goroutine must outlive the caller's request ctx (see comment above)
-	go s.runSession(loopCtx, sessionID, rs)
 
 	return nil
 }
@@ -1440,32 +1355,12 @@ func queuedInputsStartScheduledTurn(inputs []queuedSessionInput) bool {
 	})
 }
 
-func (s *svc) registerRunner(sessionID int64, rs *runner) (*runner, bool) {
-	return s.runners.Register(sessionID, rs)
-}
-
-// slotInfo classifies a session for admission: a session with a subagent link is
-// a child (carrying its parent id + blocking flag); otherwise a parent. An
-// unclassifiable session must not start: it would run outside admission entirely.
-func (s *svc) slotInfo(ctx context.Context, sessionID int64) (admission.Kind, int64, bool, error) {
-	link, err := s.links.GetLink(ctx, sessionID)
-	if err != nil {
-		return admission.Parent, 0, false, fmt.Errorf("classify session %d: %w", sessionID, err)
-	}
-
-	if link == nil {
-		return admission.Parent, 0, false, nil
-	}
-
-	return admission.Child, link.ParentID, link.Blocking, nil
-}
-
 // startChildTimeout applies applyChildTimeout for runSession's setup, folding in
 // the error-vs-sentinel split so the caller only branches on whether to continue.
 // A genuine read failure sets *errored and returns ok=false (caller must return).
 func (s *svc) startChildTimeout(
 	ctx context.Context,
-	rs *runner,
+	rs runner,
 	sessionID int64,
 	errored *bool,
 ) (context.Context, context.CancelFunc, bool) {

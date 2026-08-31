@@ -29,7 +29,10 @@ func TestRegistrySerializesUseWithDeletion(t *testing.T) {
 
 	<-entered
 	deleteDone := make(chan bool, 1)
-	go func() { deleteDone <- registry.Delete(1, &value) }()
+	go func() {
+		_, deleted := registry.Delete(1)
+		deleteDone <- deleted
+	}()
 
 	select {
 	case <-deleteDone:
