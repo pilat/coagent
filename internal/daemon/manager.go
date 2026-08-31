@@ -122,6 +122,7 @@ type svc struct {
 	shuttingDown   atomic.Bool
 	recovery       sessionlifecycle.Recovery
 	stopper        sessionlifecycle.Stopper
+	completions    sessionlifecycle.Completions
 	progress       progressruntime.Service
 	budgetCtx      context.Context //nolint:containedctx // Daemon lifetime context for joined park workers.
 	budgetCancel   context.CancelFunc
@@ -267,6 +268,7 @@ func newSvc(
 		budgetCancel:   budgetCancel,
 	}
 	s.progress = newProgressRuntime(progressStore, budgetSvc, s)
+	s.completions = s.newCompletionCoordinator()
 
 	return s
 }

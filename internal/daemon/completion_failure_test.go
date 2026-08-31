@@ -37,6 +37,7 @@ func newLedgerHarness(t *testing.T) *ledgerHarness {
 	})
 	activation := &flakyActivationStore{Transactions: h.mgr.subagents}
 	h.mgr.subagents = activation
+	h.mgr.completions = h.mgr.newCompletionCoordinator()
 
 	parent, err := h.sessStore.CreateSession(h.ctx, h.projectID, "fake-model", "", nil)
 	require.NoError(t, err)

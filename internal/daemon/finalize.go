@@ -57,31 +57,6 @@ func (s *svc) markLinkTerminalRetrying(
 	return fmt.Errorf("mark link terminal for child %d: %w", childID, err)
 }
 
-func (s *svc) finalizeActivationRetrying(
-	ctx context.Context,
-	childID int64,
-	state subagent.State,
-	result string,
-	outcome subagent.Outcome,
-) (bool, error) {
-	var err error
-
-	for attempt := range linkTerminalAttempts {
-		if attempt > 0 {
-			time.Sleep(linkTerminalBackoff)
-		}
-
-		var finalized bool
-
-		finalized, err = s.subagents.TryFinalizeActivation(ctx, childID, state, result, outcome)
-		if err == nil {
-			return finalized, nil
-		}
-	}
-
-	return false, fmt.Errorf("finalize activation for child %d: %w", childID, err)
-}
-
 // reportTimeoutUnresolved stays silent when ctx is already dead: shutdown, kill
 // and stop cancel the loop ctx, and that is what failed the read, not the ledger.
 func (s *svc) reportTimeoutUnresolved(ctx context.Context, parentID, childID int64, err error) {

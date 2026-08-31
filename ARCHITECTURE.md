@@ -536,8 +536,9 @@ identity and subagent coordination, and implements the manager controller.
 `sessionlifecycle` owns the synchronized active-runner registry, shutdown fence,
 the two in-memory FIFO admission caches and the cancellable recovery worker; the
 same component serializes child spawn against the durable stop fence and owns
-stop-tree discovery, lifecycle settlement and interrupted-stop recovery. The
-subagent package owns the durable parent-child link ledger. The daemon must
+stop-tree discovery, lifecycle settlement, interrupted-stop recovery and child
+terminalization/delivery ordering. The subagent package owns the durable
+parent-child link ledger. The daemon must
 keep transient maps reconstructible and defer to stores for durable ordering/CAS
 decisions.
 

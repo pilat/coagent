@@ -103,6 +103,7 @@ func (p *casProbe) snapshot() []casAttempt {
 func probeCAS(h *subagentHarness) *casProbe {
 	probe := &casProbe{Transactions: h.mgr.subagents}
 	h.mgr.subagents = probe
+	h.mgr.completions = h.mgr.newCompletionCoordinator()
 
 	return probe
 }

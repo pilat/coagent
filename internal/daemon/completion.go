@@ -21,116 +21,7 @@ import (
 // parent. No-op for non-subagent sessions and during shutdown (the startup
 // sweep re-delivers on restart). errored forces the error state (loop panic).
 func (s *svc) finalizeChild(ctx context.Context, childID int64, shuttingDown, errored bool) {
-	if shuttingDown {
-		return
-	}
-
-	link, err := s.links.GetLink(ctx, childID)
-	if err != nil {
-		// Without the link the parent id is unknown, so there is nobody to notify.
-		logger.Ctx(ctx).Named("daemon.completion").
-			Error("finalize_get_link", zap.Int64("child", childID), zap.Error(err))
-
-		return
-	}
-
-	if link == nil {
-		return // not a subagent
-	}
-
-	if link.Terminal() {
-		return // already finalized
-	}
-
-	if link.State == subagent.StateStopped {
-		return // /stop parks the child without producing a completion
-	}
-
-	rec, err := s.sessionStore.GetSession(ctx, childID)
-	if err != nil {
-		logger.Ctx(ctx).Named("daemon.completion").
-			Error("finalize_get_session", zap.Int64("child", childID), zap.Error(err))
-		s.notifyChildFailure(ctx, link.ParentID, childID, "could not be finalized", err)
-
-		return
-	}
-
-	// A suspended child is waiting on an external wake (e.g. sleep), not done —
-	// unless its loop panicked, which is always terminal.
-	if rec.Status == sessionstore.SessionStatusSuspended && !errored {
-		return
-	}
-
-	// state (lifecycle column) keeps its existing derivation so Terminal() and the
-	// list queries are unchanged; outcome (the richer parent-facing signal) is
-	// derived separately and may differ (e.g. a max-iterations child is
-	// state=error but outcome=incomplete).
-	status := subagent.StateCompleted
-	persistedStatus := sessionstore.SessionStatusCompleted
-
-	if errored || rec.Status == sessionstore.SessionStatusError {
-		status = subagent.StateError
-		persistedStatus = sessionstore.SessionStatusError
-	}
-
-	result, outcome := s.deriveChildOutcome(ctx, childID, rec.Iteration, errored)
-
-	terminalized, err := s.finalizeActivationRetrying(ctx, childID, status, result, outcome)
-	if err != nil {
-		logger.Ctx(ctx).
-			Named("daemon.completion").
-			Error("mark_link_terminal", zap.Int64("child", childID), zap.Error(err))
-		s.notifyChildFailure(ctx, link.ParentID, childID, "completion could not be recorded", err)
-
-		return
-	}
-
-	if !terminalized {
-		return
-	}
-
-	if err := s.sessionStore.UpdateSessionStatus(ctx, childID, persistedStatus); err != nil {
-		logger.Ctx(ctx).
-			Named("daemon.completion").
-			Warn("update_child_status", zap.Int64("child", childID), zap.Error(err))
-	}
-
-	link.State = status
-	link.Result = result
-	link.Outcome = outcome
-	s.deliverCompletionToParent(ctx, *link)
-}
-
-// deriveChildOutcome computes the parent-facing result text + outcome from the
-// child's committed transcript: "error" if it crashed, "completed" if the LAST
-// assistant message is a text-only answer, else "incomplete". result carries the
-// answer, or a short context note when there is none.
-func (s *svc) deriveChildOutcome(
-	ctx context.Context,
-	childID int64,
-	iterations int,
-	errored bool,
-) (string, subagent.Outcome) {
-	msgs, err := s.sessionStore.LoadActiveMessages(ctx, childID)
-	if err != nil {
-		msgs = nil
-	}
-
-	finalText := lastStoredAssistantText(msgs)
-
-	switch {
-	case errored:
-		result := finalText
-		if result == "" {
-			result = fmt.Sprintf("crashed after %d iterations", iterations)
-		}
-
-		return result, subagent.OutcomeError
-	case lastStoredMessageIsFinalAnswer(msgs):
-		return finalText, subagent.OutcomeCompleted
-	default:
-		return fmt.Sprintf("ended without a final answer after %d iterations", iterations), subagent.OutcomeIncomplete
-	}
+	s.completions.Finalize(ctx, childID, shuttingDown, errored)
 }
 
 // deliverCompletionToParent routes a completion notification to the parent,
@@ -257,53 +148,11 @@ func (s *svc) persistCompletion(
 	link subagent.Link,
 	stored []*transcript.Message,
 ) error {
-	_, won, err := s.subagents.DeliverCompletion(
-		ctx, link.ParentID, stored, link.ChildID, link.ActivationSeq,
-	)
-	if err != nil {
-		return fmt.Errorf("deliver completion for child %d: %w", link.ChildID, err)
-	}
-
-	// The DB reload is authoritative: rows committed outside a concurrent
-	// compaction snapshot stay a newer NULL-position suffix. A failed reload
-	// loses nothing — the row is durable and the loop's mandatory reload before
-	// its next model call recovers it.
-	if won {
-		if reloadErr := sess.ReloadDeliveredCompletion(ctx); reloadErr != nil {
-			logger.Ctx(ctx).Named("daemon.completion").Warn(
-				"completion_reload_failed",
-				zap.Int64("child", link.ChildID),
-				zap.Int64("parent", link.ParentID),
-				zap.Error(reloadErr),
-			)
-		}
-	}
-
-	// A follow-up may have arrived while this activation was terminalizing.
-	// Delivery is the ordering barrier: only after the old outcome is present in
-	// the parent's transcript may the same child begin its next activation.
-	return s.rearmChildAfterDelivery(context.WithoutCancel(ctx), link.ChildID)
+	return s.completions.Persist(ctx, sess, link, stored) //nolint:wrapcheck // Component owns delivery context.
 }
 
 func (s *svc) rearmChildAfterDelivery(ctx context.Context, childID int64) error {
-	rearmed, err := s.subagents.RearmDeliveredWithPendingInput(ctx, childID)
-	if err != nil {
-		return fmt.Errorf("rearm child %d after completion delivery: %w", childID, err)
-	}
-
-	if !rearmed {
-		return nil
-	}
-
-	if err := s.sessionStore.UpdateSessionStatus(ctx, childID, sessionstore.SessionStatusActive); err != nil {
-		return fmt.Errorf("activate rearmed child %d: %w", childID, err)
-	}
-
-	if err := s.ensureSessionRunner(ctx, childID); err != nil {
-		return fmt.Errorf("start rearmed child %d: %w", childID, err)
-	}
-
-	return nil
+	return s.completions.Rearm(ctx, childID) //nolint:wrapcheck // Component owns rearm context.
 }
 
 // injectOwedCompletions drains terminal link-ledger entries that were previously
