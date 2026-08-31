@@ -1002,23 +1002,17 @@ func (s *svc) Shutdown(timeout time.Duration) {
 	done := make(chan struct{})
 
 	go func() {
+		for _, rs := range runners {
+			rs.Cancel()
+		}
+
 		if s.progress != nil {
 			_ = s.progress.Stop(shutdownCtx)
 		}
 
-		var wg sync.WaitGroup
-
-		wg.Add(len(runners))
-
 		for _, rs := range runners {
-			go func(r runner) {
-				defer wg.Done()
-
-				r.Stop()
-			}(rs)
+			<-rs.Done()
 		}
-
-		wg.Wait()
 
 		if recoveryDone != nil {
 			<-recoveryDone
