@@ -211,14 +211,14 @@ func TestSetManagerSchemaCoversManagerFields(t *testing.T) {
 	typ := reflect.TypeFor[config.ManagerEntry]()
 	for i := range typ.NumField() {
 		field := typ.Field(i)
-		tag := strings.Split(field.Tag.Get("yaml"), ",")[0]
+		tag, _, _ := strings.Cut(field.Tag.Get("yaml"), ",")
 		if tag != "" && tag != "-" {
 			assert.Contains(t, properties, tag)
 		}
 	}
 	whisperType := reflect.TypeFor[config.ManagerWhisperEntry]()
 	for i := range whisperType.NumField() {
-		tag := strings.Split(whisperType.Field(i).Tag.Get("yaml"), ",")[0]
+		tag, _, _ := strings.Cut(whisperType.Field(i).Tag.Get("yaml"), ",")
 		assert.Contains(t, whisperProperties, tag)
 	}
 }

@@ -70,7 +70,7 @@ func TestReadToolTruncatesLinesExactlyAtMaxLineLength(t *testing.T) {
 			require.NoError(t, err)
 
 			body := strings.TrimPrefix(strings.SplitN(result.Output, "\n", 2)[1], "1| ")
-			line := strings.SplitN(body, "\n", 2)[0]
+			line, _, _ := strings.Cut(body, "\n")
 
 			assert.Equal(t, tt.wantSplit, strings.HasSuffix(line, "..."))
 			assert.Len(t, strings.TrimSuffix(line, "..."), tt.wantLen)

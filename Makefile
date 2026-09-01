@@ -4,7 +4,7 @@
 
 # Go and golangci-lint versions are pinned in mise.toml (golangci-lint 2.12.2 is
 # the floor for the `modernize` linter in .golangci.yml).
-GO_ARCH_LINT_VERSION ?= v1.16.0
+GO_ARCH_LINT_VERSION ?= v1.18.0
 GREMLINS_VERSION ?= v0.6.0
 GOPLS_VERSION ?= v0.20.0
 ACTIONLINT_VERSION ?= v1.7.12
