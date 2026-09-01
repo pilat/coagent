@@ -211,7 +211,7 @@ func TestBuildSkillsSectionUsesModelVisibilityAndBoundedDescriptions(t *testing.
 	assert.Contains(t, result, "**beta**: model only")
 	assert.NotContains(t, result, "gamma")
 
-	alphaLine := strings.Split(strings.Split(result, "**alpha**: ")[1], "\n")[0]
+	_, alphaLine, _ := strings.Cut(strings.Split(result, "**alpha**: ")[1], "\n")
 	assert.Equal(t, 1536, utf8.RuneCountInString(alphaLine))
 	assert.True(t, utf8.ValidString(alphaLine))
 }
