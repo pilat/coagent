@@ -171,8 +171,11 @@ do not maintain a second progress or result queue.
 
 ### Runtime isolation and admission
 
-Each session has separate LLM client, tool registry, history and iteration
-budget. A subagent is another session with an independent context and restricted
+Each session has separate LLM client, tool registry, and history. No session
+carries an iteration budget or a wall-clock lifetime: normal work ends when it
+ends, and the only loop cap is the internal 1000-iteration defect circuit
+breaker, which is not an agent-type setting or a tuning surface. A subagent is
+another session with an independent context and restricted
 policy, not a goroutine inside its parent. The daemon enforces total, child,
 per-parent and depth limits, retaining overflow in FIFO order. A suspended
 parent does not retain an execution slot; its durable pending work does.
@@ -242,7 +245,10 @@ call rather than create future work. Schedule delivery and stopped-root
 activation follow the durable protocol below.
 
 The loop asks the LLM, executes returned tools, records observations, and repeats
-until a final response, stop, error, suspension, or iteration limit. Retried
+until a final response, stop, error, or suspension — there is no host-imposed
+lifetime on foreground completion ([ADR-0039](docs/adr/0039-agent-lifetime-has-no-implicit-budget.md));
+the 1000-iteration defect breaker and provider/tool operation watchdogs are the
+only retained bounds. Retried
 provider requests are local to the client; durable operations must be idempotent
 across a process or producer retry. Loop detection terminates repetitive tool
 patterns rather than treating repeated calls as progress.
@@ -575,8 +581,8 @@ not be batched with ordinary synchronous tools because its result is delivered
 after the loop exits.
 
 Registry produces an immutable per-session agent-type set: built-ins plus
-project-local overlays. Agent type controls tool filtering, prompt and iteration
-policy, while the live session registry controls what is actually callable.
+project-local overlays. Agent type controls tool filtering, prompt and model
+selection, while the live session registry controls what is actually callable.
 Todo tracking is root-session-local durable state. The tool replaces the whole
 list atomically, and progress treats it as planning state rather than a separate
 workflow engine.

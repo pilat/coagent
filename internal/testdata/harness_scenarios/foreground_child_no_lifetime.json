@@ -1,0 +1,87 @@
+{
+  "source_test": "TestHarnessScenario_ForegroundChildHasNoLifetimeLimit",
+  "trace": [
+    {
+      "type": "session_created",
+      "name": "<name>",
+      "work_dir": "<workdir>",
+      "attributes": {
+        "manager_id": "telegram:main"
+      }
+    },
+    {
+      "type": "state_changed",
+      "status": "running"
+    },
+    {
+      "type": "waiting",
+      "message": "⏳ Waiting for subagent #1\n💬 New messages will be queued until this wait completes",
+      "waiting": [
+        {
+          "kind": "subagent",
+          "child": "#1"
+        }
+      ]
+    },
+    {
+      "type": "session_created",
+      "name": "<name>",
+      "work_dir": "<workdir>",
+      "attributes": {
+        "manager_id": "telegram:main"
+      }
+    },
+    {
+      "type": "state_changed",
+      "status": "running"
+    },
+    {
+      "type": "message",
+      "message": "parent collected the long child"
+    },
+    {
+      "type": "state_changed",
+      "status": "idle"
+    }
+  ],
+  "claims": [
+    {
+      "type": "session_opened",
+      "content": "",
+      "attributes": {
+        "manager_id": "telegram:main",
+        "name": "002",
+        "work_dir": "<workdir>"
+      },
+      "source_key": "session:1:opened",
+      "releases_input": false
+    },
+    {
+      "type": "message_replaceable",
+      "content": "**⏳ Waiting**\n\n🤖 `fake-model` · iteration 1\n⏱ <elapsed> · 💰 $0.0 total\n⏳ Waiting on 1 item",
+      "attributes": {
+        "manager_id": "telegram:main",
+        "model_input_generation": 1
+      },
+      "source_key": "progress:change:waiting:7428a4b8dda361de7b98490f260ecb627d550160e67bbf50ec4d055b22c1353e:g1",
+      "model_input_generation": 1,
+      "releases_input": false
+    },
+    {
+      "type": "message_persistent",
+      "content": "parent collected the long child",
+      "attributes": {
+        "manager_id": "telegram:main",
+        "model_input_generation": 1
+      },
+      "source_key": "message:30:final",
+      "model_input_generation": 1,
+      "previous_message_type": "message_replaceable",
+      "previous_model_input_generation": 1,
+      "previous_message_ids": [
+        "<msg-1>"
+      ],
+      "releases_input": true
+    }
+  ]
+}

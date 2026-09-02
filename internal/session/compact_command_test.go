@@ -213,7 +213,6 @@ func TestSlashCompact_InterruptsSleepInsteadOfDeferring(t *testing.T) {
 func TestRunLoopRunsADeferredCompactionBeforeReturning(t *testing.T) {
 	agent := newTestAgent()
 	agent.llmClient = summarizingLLM()
-	agent.maxIterations = 5
 	agent.ms.setMessages(loopRounds(10, 4000))
 
 	notifier := &loopNotifier{}
@@ -234,7 +233,6 @@ func TestRunLoopRunsADeferredCompactionBeforeReturning(t *testing.T) {
 func TestRunLoopDoesNotCompactOnASuspendPath(t *testing.T) {
 	agent := newTestAgent()
 	agent.llmClient = summarizingLLM()
-	agent.maxIterations = 5
 	agent.stagedCalls = map[string]string{"t1": tool.IDTask}
 	agent.ms.setMessages(pendingCallTranscript("t1", tool.IDTask))
 	agent.RequestCompaction()
@@ -266,7 +264,6 @@ func TestRunLoopExecutesOwedToolsBeforeAQueuedCompaction(t *testing.T) {
 	executed := make(chan string, 4)
 	agent := newTestAgent(&recordingTool{id: "read", result: "file body", seen: executed})
 	agent.llmClient = summarizingLLM()
-	agent.maxIterations = 5
 	agent.ms.setMessages(append(loopRounds(4, 4000), llmwire.Message{
 		Role:      llmwire.RoleAssistant,
 		Content:   "reading",

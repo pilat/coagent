@@ -50,9 +50,9 @@ func seedLink(t *testing.T, db *sql.DB, parentID, childID int64, taskCallID stri
 
 	_, err := db.ExecContext(
 		context.Background(),
-		`INSERT INTO subagent_links (parent_id, child_id, task_call_id, blocking, depth, state, timeout_sec, created_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-		parentID, childID, taskCallID, false, 0, "spawned", 0, time.Now().UTC().Unix(),
+		`INSERT INTO subagent_links (parent_id, child_id, task_call_id, blocking, depth, state, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		parentID, childID, taskCallID, false, 0, "spawned", time.Now().UTC().Unix(),
 	)
 	require.NoError(t, err)
 }
@@ -110,7 +110,6 @@ func TestSubagentStore_CreateCommitsAggregate(t *testing.T) {
 		Blocking:       true,
 		Depth:          1,
 		State:          "spawned",
-		TimeoutSec:     30,
 		InitialInput:   "inspect the repository",
 	})
 	require.NoError(t, err)

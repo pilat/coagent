@@ -134,7 +134,6 @@ func TestRun_PersistStateCalledPerIteration(t *testing.T) {
 	s.rootID = 6
 	s.id = 6
 	s.store = updater
-	s.maxIterations = 3
 
 	_, err := s.Run(context.Background(), "multi-step")
 	require.NoError(t, err)
@@ -149,7 +148,6 @@ func TestRunDaemon_PreservesNewToolSuspensionAcrossSessionBoundary(t *testing.T)
 	s.llmClient = &loopScriptLLM{responses: []*llmwire.Response{
 		toolCallResponse("sleep-call", tool.IDSleep),
 	}}
-	s.maxIterations = 5
 
 	result, err := s.RunDaemon(t.Context(), nil)
 	require.NoError(t, err)

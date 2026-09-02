@@ -14,32 +14,30 @@ import (
 	"github.com/pilat/coagent/internal/tool"
 )
 
-func TestNewWithOptions_AgentTypeMaxIterationsAndTools(t *testing.T) {
+// TestNewWithOptions_AgentTypeTools pins the agent-type contract: the type
+// selects tools only — there is no per-type lifetime value to assert.
+func TestNewWithOptions_AgentTypeTools(t *testing.T) {
 	tests := []struct {
 		name        string
 		agentType   registry.AgentType
-		wantMaxIter int
 		wantPresent []string
 		wantAbsent  []string
 	}{
 		{
-			name:        "general subagent: 25 iterations, no todo tools",
+			name:        "general subagent: no todo tools",
 			agentType:   registry.AgentTypeGeneral,
-			wantMaxIter: 25,
 			wantPresent: []string{"read", "write", "edit", "bash"},
 			wantAbsent:  []string{"todoread", "todowrite"},
 		},
 		{
-			name:        "explore subagent: 10 iterations, read-only set",
+			name:        "explore subagent: read-only set",
 			agentType:   registry.AgentTypeExplore,
-			wantMaxIter: 10,
 			wantPresent: []string{"read", "grep", "glob", "ls", "bash"},
 			wantAbsent:  []string{"write", "edit", "todoread", "todowrite"},
 		},
 		{
-			name:        "build primary: unlimited, keeps todo tools",
+			name:        "build primary: keeps todo tools",
 			agentType:   registry.AgentTypeBuild,
-			wantMaxIter: 0,
 			wantPresent: []string{"read", "write", "edit", "bash", "todoread", "todowrite"},
 		},
 	}
@@ -63,8 +61,6 @@ func TestNewWithOptions_AgentTypeMaxIterationsAndTools(t *testing.T) {
 			require.NoError(t, err)
 
 			s := sess.(*svc)
-			assert.Equal(t, tc.wantMaxIter, s.maxIterations)
-
 			for _, id := range tc.wantPresent {
 				assert.NotNil(t, s.registry.Get(id), "expected tool %q present", id)
 			}

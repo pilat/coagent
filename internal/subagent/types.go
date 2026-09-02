@@ -38,7 +38,6 @@ type Link struct {
 	State          State
 	DeliveredAt    int64
 	DeliveredMsgID int64
-	TimeoutSec     int
 	CreatedAt      int64
 	ActivationSeq  int64
 	Result         string
@@ -57,7 +56,6 @@ type Create struct {
 	Blocking       bool
 	Depth          int
 	State          State
-	TimeoutSec     int
 	InitialInput   string
 }
 

@@ -47,7 +47,7 @@ because several managers may share it.
 _Avoid_: channel ownership, transport ownership.
 
 **subagent**:
-An independent session with clean context, a restricted tool set, and its own iteration budget, spawned by a parent session's `task` tool. A subagent *is* a session (its own `SessionRecord` row) whose `ParentID` identifies another session — that is what separates it from a root session. Subagents may suspend with `sleep`, but standalone scheduled work belongs only to roots.
+An independent session with clean context and a restricted tool set, spawned by a parent session's `task` tool. A subagent *is* a session (its own `SessionRecord` row) whose `ParentID` identifies another session — that is what separates it from a root session. Subagents may suspend with `sleep`, but standalone scheduled work belongs only to roots.
 _Avoid_: worker, child process (it is a session, not an OS process); using child or descendant when the entity rather than its graph direction is meant.
 
 **subagent round**:
@@ -59,7 +59,7 @@ The identity a session runs in: one `projects` row keyed by absolute `work_dir` 
 _Avoid_: workspace, space; dialog (a dialog is a topic *on* a project, not the project).
 
 **agent type**:
-A named agent configuration — tool allowlist, prompt template, iteration cap, mode — that the `task` tool selects from. Built-ins: `build`, `general`, `explore`, `compaction`. Not every agent type is spawnable (`build`/`compaction` are not subagent types).
+A named agent configuration — tool allowlist, prompt template, model override, mode — that the `task` tool selects from. Built-ins: `build`, `general`, `explore`, `compaction`. Not every agent type is spawnable (`build`/`compaction` are not subagent types). Agent type selects behavior and tools, never a work budget.
 _Avoid_: role, persona, mode (mode is a separate axis on the same config).
 
 **control socket**:
@@ -97,8 +97,8 @@ reconstructible and never a durable work record.
 _Avoid_: session (the durable/live task identity), agent loop (the model/tool cycle).
 
 **iteration**:
-One turn of the agent loop — a single LLM call plus the tool executions it triggers. Bounded by a max-iterations cap. An iteration is a *sub-unit* of the loop, not another word for it.
-_Avoid_: using "iteration" and "agent loop" interchangeably.
+One turn of the agent loop — a single LLM call plus the tool executions it triggers. An observed count, not a limit: normal agent work has no iteration budget. The only cap is the internal 1000-iteration defect circuit breaker (`hardIterationCeiling`), which is not a tuning surface. An iteration is a *sub-unit* of the loop, not another word for it.
+_Avoid_: using "iteration" and "agent loop" interchangeably; "iteration cap" or "budget" as if a normal terminal.
 
 **compaction** (checkpoint):
 The single automatic answer to context pressure: one no-tools model call summarizes a bounded older head — the repaired canonical JSONL projection — and the committed checkpoint rebuilds the transcript as header → marked summary → optional current-skill envelope → verbatim raw tail. The trigger is the token projection crossing 0.85 of the window, or image pressure breaching its high-water marks (12 MB base64 across attachments, or more than 20 of them). The complete summarizer request stays within half the context window; the checkpoint retains a repair-free verbatim tail — at least a tenth of the window when that much history exists, possibly shorter under the tail's image byte/count ceilings (6 MB, 10), never empty. Runs at exactly one point in the loop, where no tool call is pending ([ADR-0035](adr/0035-compaction-summarizes-a-bounded-head.md)).

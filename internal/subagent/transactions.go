@@ -47,10 +47,10 @@ func (s *transactions) Create(ctx context.Context, create Create) (int64, error)
 	}
 
 	_, err = tx.ExecContext(ctx, `INSERT INTO subagent_links
-		(parent_id, child_id, task_call_id, blocking, depth, state, timeout_sec, created_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		(parent_id, child_id, task_call_id, blocking, depth, state, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?)`,
 		create.ParentID, childID, create.TaskCallID, create.Blocking,
-		create.Depth, create.State, create.TimeoutSec, now.Unix())
+		create.Depth, create.State, now.Unix())
 	if err != nil {
 		return 0, fmt.Errorf("insert subagent link: %w", err)
 	}

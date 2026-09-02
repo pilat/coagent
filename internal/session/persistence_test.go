@@ -24,17 +24,16 @@ func TestRun_FailFastOnPersistError(t *testing.T) {
 	mockLLM := &mockLLMRunOnce{response: &llmwire.Response{Text: "done"}}
 
 	s := &svc{
-		rootID:        1,
-		id:            1,
-		agentType:     registry.AgentTypeBuild,
-		llmClient:     mockLLM,
-		todoStore:     todo.New(),
-		store:         mockStore,
-		ms:            newMessageStore(nil, 0, nil),
-		loopDetector:  newLoopDetector(),
-		prompt:        newPromptBuilder("test", "", ""),
-		maxIterations: 10,
-		registry:      tool.NewRegistry(),
+		rootID:       1,
+		id:           1,
+		agentType:    registry.AgentTypeBuild,
+		llmClient:    mockLLM,
+		todoStore:    todo.New(),
+		store:        mockStore,
+		ms:           newMessageStore(nil, 0, nil),
+		loopDetector: newLoopDetector(),
+		prompt:       newPromptBuilder("test", "", ""),
+		registry:     tool.NewRegistry(),
 	}
 
 	_, err := s.Run(context.Background(), "do something")

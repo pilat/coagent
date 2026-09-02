@@ -3,6 +3,7 @@ package session
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -92,13 +93,16 @@ func TestRunLoopResolvesPendingGrantOnEveryTerminalExit(t *testing.T) {
 			wantExpire: true,
 		},
 		{
-			name: "iteration cap expires with receipt",
+			name: "hard iteration breaker expires with receipt",
 			setup: func(t *testing.T, agent *svc) {
-				agent.llmClient = &loopScriptLLM{responses: []*llmwire.Response{toolCallResponse("tc_1", "read")}}
-				agent.maxIterations = 1
+				agent.llmClient = &loopScriptLLM{
+					onCall: func(call int, _ []llmwire.Message) (*llmwire.Response, error) {
+						return toolCallResponse(fmt.Sprintf("tc_%d", call), "read"), nil
+					},
+				}
 			},
 			run: func(t *testing.T, ctx context.Context, agent *svc, boundary *recordingActivationBoundary) {
-				_, err := runLoop(ctx, agent, loopOptions{}, iterationGuard(10))
+				_, err := runLoop(ctx, agent, loopOptions{}, iterationGuard(hardIterationCeiling))
 				require.Error(t, err)
 			},
 			wantExpire: true,
@@ -107,7 +111,6 @@ func TestRunLoopResolvesPendingGrantOnEveryTerminalExit(t *testing.T) {
 			name: "empty response pause expires with receipt",
 			setup: func(t *testing.T, agent *svc) {
 				agent.llmClient = &loopScriptLLM{responses: []*llmwire.Response{{}}}
-				agent.maxIterations = 20
 			},
 			run: func(t *testing.T, ctx context.Context, agent *svc, boundary *recordingActivationBoundary) {
 				_, err := runLoop(ctx, agent, loopOptions{}, iterationGuard(20))
@@ -120,7 +123,6 @@ func TestRunLoopResolvesPendingGrantOnEveryTerminalExit(t *testing.T) {
 			setup: func(t *testing.T, agent *svc) {
 				agent.llmClient = &loopScriptLLM{responses: []*llmwire.Response{textResponse("working")}}
 				agent.budgetGate = &terminalBudgetGate{admitErr: ErrBudgetCheckpoint}
-				agent.maxIterations = 5
 			},
 			run: func(t *testing.T, ctx context.Context, agent *svc, boundary *recordingActivationBoundary) {
 				result, err := runLoop(ctx, agent, loopOptions{}, iterationGuard(5))
@@ -150,7 +152,6 @@ func TestRunLoopResolvesPendingGrantOnEveryTerminalExit(t *testing.T) {
 			boundary := newBoundary()
 			agent := newTestAgent(&stubTool{id: "read", result: "content"})
 			agent.boundary = boundary
-			agent.maxIterations = 5
 			boundary.arm(agent)
 			tt.setup(t, agent)
 
@@ -178,7 +179,6 @@ func TestRunLoopKeepsConsumedGrantAcrossTerminalError(t *testing.T) {
 	agent := newTestAgent()
 	agent.boundary = boundary
 	agent.llmClient = &loopScriptLLM{err: errors.New("provider down")}
-	agent.maxIterations = 5
 	consumed := tool.ActivationGrant{
 		SessionID: 1, InputID: 7, ToolID: "set_budget", Command: "/budget", ToolCallID: "tc_budget",
 	}

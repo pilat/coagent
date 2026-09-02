@@ -186,54 +186,6 @@ func TestIntegration_ChildPanicMarksError(t *testing.T) {
 	assert.Equal(t, 1, countToolResultsFor(msgs, "task"), "parent's task call is resolved with the error")
 }
 
-func TestIntegration_BlockingChildTimeout(t *testing.T) {
-	hang := make(chan struct{}) // closed only in cleanup — the child hangs until its timeout fires
-
-	respond := func(_ string, msgs []llmwire.Message) *llmwire.Response {
-		if hasUserContaining(msgs, "CHILD_TASK") {
-			<-hang
-
-			return &llmwire.Response{Text: "unreached"}
-		}
-
-		if hasToolResultFor(msgs, "task") {
-			return &llmwire.Response{Text: "parent done"}
-		}
-
-		return &llmwire.Response{ToolCalls: []llmwire.ToolCall{{
-			ID:        taskCallID,
-			Name:      "task",
-			Arguments: []byte(`{"prompt":"CHILD_TASK","description":"c","subagent_type":"general","timeout":1}`),
-		}}}
-	}
-
-	h := newSubagentHarnessWith(t, respond)
-	defer func() {
-		closeOnce(hang)
-		h.shutdown()
-	}()
-
-	parentID, err := h.mgr.Send(h.ctx, h.projectID, "spawn blocking", "fake-model", nil)
-	require.NoError(t, err)
-
-	link := h.waitForChildLink(parentID)
-	assert.Equal(t, 1, link.TimeoutSec, "task timeout param propagates to the link")
-
-	// The child hangs; its 1s wall-clock timeout fires, marking it terminal and
-	// unblocking the parent (which would otherwise wait forever).
-	h.waitForDelivery(link.ChildID)
-	h.mgr.waitIdle(parentID)
-
-	res, err := h.mgr.Result(h.ctx, link.ChildID)
-	require.NoError(t, err)
-	assert.Equal(t, subagent.StateError, res.State, "a timed-out child is terminal-error")
-	assert.Equal(t, subagent.OutcomeError, res.Outcome, "a timed-out child reports the error outcome")
-
-	msgs := h.parentMessages(parentID)
-	require.NoError(t, llm.ValidateToolPairing(msgs))
-	assert.Equal(t, 1, countToolResultsFor(msgs, "task"), "timed-out child still resolves the parent's task call")
-}
-
 func TestIntegration_StressBlockingNoDeadlock(t *testing.T) {
 	h := newSubagentHarnessWith(t, blockingParentRespond(func() *llmwire.Response {
 		return &llmwire.Response{Text: "child done"}

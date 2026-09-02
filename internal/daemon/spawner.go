@@ -106,7 +106,6 @@ func (s *svc) createChildSession(ctx context.Context, req spawnRequest) (int64, 
 		Blocking:       req.Blocking,
 		Depth:          depth,
 		State:          subagent.StateSpawned,
-		TimeoutSec:     req.TimeoutSec,
 		InitialInput:   req.Prompt,
 	})
 	if err != nil {

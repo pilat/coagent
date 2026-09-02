@@ -35,7 +35,6 @@ func TestRunLoopEmptyResponseEmitsPersistentOutput(t *testing.T) {
 
 	agent := newTestAgent()
 	agent.llmClient = llm
-	agent.maxIterations = 20
 	agent.outputEnabled = true
 	agent.store = store
 	agent.outputStore = store

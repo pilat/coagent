@@ -57,18 +57,6 @@ func (s *svc) markLinkTerminalRetrying(
 	return fmt.Errorf("mark link terminal for child %d: %w", childID, err)
 }
 
-// reportTimeoutUnresolved stays silent when ctx is already dead: shutdown, kill
-// and stop cancel the loop ctx, and that is what failed the read, not the ledger.
-func (s *svc) reportTimeoutUnresolved(ctx context.Context, parentID, childID int64, err error) {
-	if ctx.Err() != nil {
-		return
-	}
-
-	logger.Ctx(ctx).Named("daemon.runner").
-		Error("child_timeout_unresolved", zap.Int64("session_id", childID), zap.Error(err))
-	s.notifyChildFailure(ctx, parentID, childID, "could not resolve its wall-clock timeout", err)
-}
-
 // notifyChildFailure reports on the PARENT's topic: a child that never reached
 // announceSession has no topic of its own, so publishing to it reaches nobody.
 func (s *svc) notifyChildFailure(ctx context.Context, parentID, childID int64, what string, err error) {

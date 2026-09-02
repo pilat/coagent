@@ -32,11 +32,14 @@ func TestNewSet_IsolatesSameNamedSubagents(t *testing.T) {
 func TestNewSet_NormalizesSubagents(t *testing.T) {
 	name := AgentType("custom")
 
-	set := NewSet([]AgentTypeConfig{{Name: name, Mode: ModeSubagent, Tools: []string{"*"}}})
+	set := NewSet([]AgentTypeConfig{{
+		Name: name, Mode: ModeSubagent, Tools: []string{"*"}, Model: "model-a", Prompt: "custom prompt",
+	}})
 
 	cfg, ok := set.Get(name)
 	require.True(t, ok)
-	assert.Equal(t, defaultSubagentMaxIterations, cfg.MaxIterations)
+	assert.Equal(t, "model-a", cfg.Model)
+	assert.Equal(t, "custom prompt", cfg.Prompt)
 	assert.Contains(t, cfg.Tools, "-todoread")
 	assert.Contains(t, cfg.Tools, "-todowrite")
 }
