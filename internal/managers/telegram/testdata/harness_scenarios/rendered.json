@@ -151,6 +151,39 @@
       ]
     },
     {
+      "trace": "foreground_child_no_lifetime.json",
+      "source_test": "TestHarnessScenario_ForegroundChildHasNoLifetimeLimit",
+      "calls": [
+        {
+          "method": "createForumTopic",
+          "chat_id": -100123
+        },
+        {
+          "method": "editForumTopic",
+          "chat_id": -100123,
+          "thread_id": 7001
+        },
+        {
+          "method": "sendMessage",
+          "chat_id": -100123,
+          "thread_id": 7001,
+          "text": "<b>⏳ Waiting</b>\n\n🤖 <code>fake-model</code> · iteration 1\n⏱ &lt;elapsed&gt; · 💰 $0.0 total\n⏳ Waiting on 1 item",
+          "parse_mode": "HTML"
+        },
+        {
+          "method": "editForumTopic",
+          "chat_id": -100123,
+          "thread_id": 7001
+        },
+        {
+          "method": "editMessageText",
+          "chat_id": -100123,
+          "text": "parent collected the long child",
+          "parse_mode": "HTML"
+        }
+      ]
+    },
+    {
       "trace": "foreground_followup_no_sleep.json",
       "source_test": "TestHarnessScenario_ForegroundChildContinuesWithoutSleep",
       "calls": [

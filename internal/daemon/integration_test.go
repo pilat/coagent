@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"slices"
@@ -37,6 +38,17 @@ import (
 // test-supplied function inspecting the system prompt and messages.
 type scriptedLLM struct {
 	respond func(system string, msgs []llmwire.Message) *llmwire.Response
+
+	mu          sync.Mutex
+	sessionID   string
+	chatContext *contextInfo // the ctx of the most recent in-flight Chat
+	cancelSeen  bool         // a Chat returned because its ctx was cancelled
+}
+
+// contextInfo snapshots the seam observation the raw client can make: what the
+// runner actually handed the session loop.
+type contextInfo struct {
+	hasDeadline bool
 }
 
 func (c *scriptedLLM) Chat(
@@ -55,6 +67,11 @@ func (c *scriptedLLM) Chat(
 		panic any
 	}
 
+	_, hasDeadline := ctx.Deadline()
+	c.mu.Lock()
+	c.chatContext = &contextInfo{hasDeadline: hasDeadline}
+	c.mu.Unlock()
+
 	ch := make(chan outcome, 1)
 
 	go func() {
@@ -69,15 +86,25 @@ func (c *scriptedLLM) Chat(
 
 	select {
 	case <-ctx.Done():
+		c.mu.Lock()
+		c.cancelSeen = true
+		c.mu.Unlock()
+
 		return nil, ctx.Err()
 	case o := <-ch:
 		if o.panic != nil {
 			panic(o.panic)
 		}
 
+		// A nil response is the scripted way to say "provider failure": return
+		// it as an error, exactly as a real failing client would.
+		if o.resp == nil {
+			return nil, errors.New("scripted provider failure")
+		}
+
 		// The scripted harness bypasses provider parsing, so give an unparsed
 		// response the normal completion outcome a real client would report.
-		if o.resp != nil && o.resp.FinishType == "" && len(o.resp.ToolCalls) == 0 {
+		if o.resp.FinishType == "" && len(o.resp.ToolCalls) == 0 {
 			o.resp.FinishType = llmwire.FinishStop
 		}
 
@@ -92,7 +119,36 @@ func (c *scriptedLLM) Provider() string           { return "fake" }
 func (c *scriptedLLM) ContextWindow() int         { return 200000 }
 func (c *scriptedLLM) SetReasoningLevel(_ string) {}
 func (c *scriptedLLM) GetReasoningLevel() string  { return "medium" }
-func (c *scriptedLLM) SetSessionID(_ string)      {}
+func (c *scriptedLLM) SetSessionID(id string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	c.sessionID = id
+}
+
+// chatRanWithDeadline reports whether any Chat of this client ran under a ctx
+// that carried a deadline — the child-lifetime deadline the runner must not add.
+func (c *scriptedLLM) chatRanWithDeadline() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	return c.chatContext != nil && c.chatContext.hasDeadline
+}
+
+// hasChatContext reports whether the client has observed at least one Chat.
+func (c *scriptedLLM) hasChatContext() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	return c.chatContext != nil
+}
+
+func (c *scriptedLLM) sawCancellation() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	return c.cancelSeen
+}
 
 // subagentHarness wires a real session.Factory (fake LLM) + daemon svc over a
 // temp SQLite DB.
@@ -105,6 +161,28 @@ type subagentHarness struct {
 	schedStore schedule.Store
 	projectID  int64
 	ctx        context.Context
+
+	llmMu   sync.Mutex
+	llmRefs []*scriptedLLM // every client the session factory created
+}
+
+// sessionClient returns the scripted client bound to the session whose
+// SetSessionID matched id — the raw seam between runner and session loop.
+func (h *subagentHarness) sessionClient(sessionID string) *scriptedLLM {
+	h.llmMu.Lock()
+	defer h.llmMu.Unlock()
+
+	for _, c := range h.llmRefs {
+		c.mu.Lock()
+		id := c.sessionID
+		c.mu.Unlock()
+
+		if id == sessionID {
+			return c
+		}
+	}
+
+	return nil
 }
 
 const taskCallID = "task-call-1"
@@ -217,10 +295,32 @@ func newSubagentHarnessOnDBWithProject(
 	}
 	cfg := &config.Config{WorkDir: workDir, Model: "fake-model"}
 
+	var (
+		pid int64
+		h   = &subagentHarness{
+			t: t, db: db, sessStore: sessStore, links: links, schedStore: schedStore,
+			ctx: context.Background(),
+		}
+	)
+	if systemProject {
+		pid, err = store.GetOrCreateSystemProject(
+			context.Background(), workDir, controllerapi.CoagentSystemProjectName,
+		)
+	} else {
+		pid, err = store.GetOrCreateProject(context.Background(), workDir)
+	}
+	require.NoError(t, err)
+
 	factory := session.NewFactoryWithOptions(
 		cfg, nil, nil, sessStore, sessStore, nil, nil, nil, nil, nil,
 		session.WithLLMClientFactory(func(_ *config.Config) (llm.Client, error) {
-			return &scriptedLLM{respond: respond}, nil
+			client := &scriptedLLM{respond: respond}
+
+			h.llmMu.Lock()
+			h.llmRefs = append(h.llmRefs, client)
+			h.llmMu.Unlock()
+
+			return client, nil
 		}),
 	)
 
@@ -245,20 +345,10 @@ func newSubagentHarnessOnDBWithProject(
 		mgr.systemProject = workDir
 	}
 
-	var pid int64
-	if systemProject {
-		pid, err = store.GetOrCreateSystemProject(
-			context.Background(), workDir, controllerapi.CoagentSystemProjectName,
-		)
-	} else {
-		pid, err = store.GetOrCreateProject(context.Background(), workDir)
-	}
-	require.NoError(t, err)
+	h.mgr = mgr
+	h.projectID = pid
 
-	return &subagentHarness{
-		t: t, db: db, mgr: mgr, sessStore: sessStore, links: links, schedStore: schedStore,
-		projectID: pid, ctx: context.Background(),
-	}
+	return h
 }
 
 func hasAssistantToolCall(msgs []llmwire.Message, toolName string) bool {

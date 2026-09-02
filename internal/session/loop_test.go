@@ -82,7 +82,6 @@ func TestProjectContextSizeDiscardsAStaleBaseline(t *testing.T) {
 
 func TestCallLLMRecordsTheProviderBaseline(t *testing.T) {
 	agent := newTestAgent()
-	agent.maxIterations = 5
 	agent.llmClient = &loopScriptLLM{responses: []*llmwire.Response{
 		{Text: "done", Usage: &llmwire.MessageUsage{PromptTokens: 5000}},
 	}}
@@ -104,7 +103,6 @@ func TestCallLLMRecordsTheProviderBaseline(t *testing.T) {
 
 func TestCallLLMLeavesTheProjectionEstimatedWithoutUsage(t *testing.T) {
 	agent := newTestAgent()
-	agent.maxIterations = 5
 	agent.llmClient = &loopScriptLLM{responses: []*llmwire.Response{
 		{Text: "done", Usage: &llmwire.MessageUsage{PromptTokens: 0}},
 	}}

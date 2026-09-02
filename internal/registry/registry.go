@@ -19,40 +19,34 @@ const (
 	ModeHidden   = "hidden"
 )
 
-const defaultSubagentMaxIterations = 50
-
 var builtinAgentTypes = map[AgentType]AgentTypeConfig{
 	AgentTypeBuild: {
-		Name:          AgentTypeBuild,
-		Description:   "Primary build agent with full tool access",
-		Mode:          ModePrimary,
-		Tools:         []string{"*"},
-		Prompt:        BuildAgentPrompt,
-		MaxIterations: 0, // unlimited
+		Name:        AgentTypeBuild,
+		Description: "Primary build agent with full tool access",
+		Mode:        ModePrimary,
+		Tools:       []string{"*"},
+		Prompt:      BuildAgentPrompt,
 	},
 	AgentTypeGeneral: {
-		Name:          AgentTypeGeneral,
-		Description:   "Full-capability subagent — can read, write, edit files, run commands, fetch URLs, and use all available tools. Use for any task that requires action or modification: implementation, testing, running commands, data processing, multi-step operations.",
-		Mode:          ModeSubagent,
-		Tools:         []string{"*", "-todoread", "-todowrite"},
-		Prompt:        GeneralAgentPrompt,
-		MaxIterations: 25,
+		Name:        AgentTypeGeneral,
+		Description: "Full-capability subagent — can read, write, edit files, run commands, fetch URLs, and use all available tools. Use for any task that requires action or modification: implementation, testing, running commands, data processing, multi-step operations.",
+		Mode:        ModeSubagent,
+		Tools:       []string{"*", "-todoread", "-todowrite"},
+		Prompt:      GeneralAgentPrompt,
 	},
 	AgentTypeExplore: {
-		Name:          AgentTypeExplore,
-		Description:   "Read-only research subagent — can read files, search code (grep/glob), list directories, and run read-only shell commands (git log, find, wc). Cannot modify files. Use for investigation: tracing code paths, understanding architecture, finding usages, answering questions about the codebase.",
-		Mode:          ModeSubagent,
-		Tools:         []string{"read", "grep", "glob", "ls", "bash"},
-		Prompt:        ExploreAgentPrompt,
-		MaxIterations: 10,
+		Name:        AgentTypeExplore,
+		Description: "Read-only research subagent — can read files, search code (grep/glob), list directories, and run read-only shell commands (git log, find, wc). Cannot modify files. Use for investigation: tracing code paths, understanding architecture, finding usages, answering questions about the codebase.",
+		Mode:        ModeSubagent,
+		Tools:       []string{"read", "grep", "glob", "ls", "bash"},
+		Prompt:      ExploreAgentPrompt,
 	},
 	AgentTypeCompaction: {
-		Name:          AgentTypeCompaction,
-		Description:   "Context compression agent",
-		Mode:          ModeHidden,
-		Tools:         []string{},
-		Prompt:        CompactionSummaryPrompt,
-		MaxIterations: 0, // unlimited
+		Name:        AgentTypeCompaction,
+		Description: "Context compression agent",
+		Mode:        ModeHidden,
+		Tools:       []string{},
+		Prompt:      CompactionSummaryPrompt,
 	},
 }
 
@@ -62,13 +56,12 @@ type (
 
 	// AgentTypeConfig contains the configuration for a specific agent type.
 	AgentTypeConfig struct {
-		Name          AgentType
-		Description   string
-		Mode          string   // "primary", "subagent", "hidden"
-		Tools         []string // allowed tool IDs, "*" for all, "-toolname" to exclude
-		Prompt        string
-		Model         string // optional model override for this agent type
-		MaxIterations int    // 0 = unlimited
+		Name        AgentType
+		Description string
+		Mode        string   // "primary", "subagent", "hidden"
+		Tools       []string // allowed tool IDs, "*" for all, "-toolname" to exclude
+		Prompt      string
+		Model       string // optional model override for this agent type
 	}
 )
 
@@ -79,8 +72,8 @@ type Set struct {
 }
 
 // NewSet seeds the built-in agent types and overlays the session's project-local
-// subagents on top, normalizing each (subagent-mode todo exclusion, default
-// MaxIterations). A project subagent may shadow a built-in of the same name.
+// subagents on top, normalizing each (subagent-mode todo exclusion, default tool
+// inheritance). A project subagent may shadow a built-in of the same name.
 func NewSet(projectSubagents []AgentTypeConfig) *Set {
 	types := make(map[AgentType]AgentTypeConfig, len(builtinAgentTypes)+len(projectSubagents))
 
@@ -172,13 +165,9 @@ func cloneConfig(config AgentTypeConfig) AgentTypeConfig {
 	return config
 }
 
-// normalizeSubagent applies subagent defaults: the iteration cap, an omitted tool
-// list meaning "inherit everything", and todoread/todowrite left to the primary agent.
+// normalizeSubagent applies subagent defaults: an omitted tool list means
+// "inherit everything", and todoread/todowrite are left to the primary agent.
 func normalizeSubagent(config AgentTypeConfig) AgentTypeConfig {
-	if config.MaxIterations == 0 {
-		config.MaxIterations = defaultSubagentMaxIterations
-	}
-
 	// nil is "no tools: key", []string{} is an author asking for nothing.
 	if config.Tools == nil {
 		config.Tools = []string{"*"}

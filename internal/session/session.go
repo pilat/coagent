@@ -157,7 +157,6 @@ type svc struct {
 	// this svc on every wake, so per-run state would re-announce per wake.
 	compactionDeferAnnounced bool
 	suspended                bool
-	maxIterations            int
 	// stagedCalls are tool_call ids the daemon has already started outside work
 	// for (call id → tool name). Loop-read only; set once at construction.
 	stagedCalls map[string]string
@@ -315,7 +314,6 @@ func newSession(p params, opts options, workDir string, agentConfig registry.Age
 		cfg:             p.Config,
 		stamper:         timestamper{lastActivity: opts.LastActivityAt},
 		loopDetector:    newLoopDetector(),
-		maxIterations:   agentConfig.MaxIterations,
 		stagedCalls:     opts.StagedExternalCalls,
 		boundary:        opts.InputBoundary,
 		outputEnabled:   opts.OutputEnabled,

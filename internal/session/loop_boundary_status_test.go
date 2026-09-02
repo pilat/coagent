@@ -42,7 +42,6 @@ func TestRunLoopStatusAtBoundaryEndsOnlyASettledActivation(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			agent := newTestAgent(&stubTool{id: "read", result: "tool result"})
-			agent.maxIterations = 5
 			agent.ms.setMessages(tc.messages)
 			agent.boundary = &loopInputBoundary{
 				agent: agent,

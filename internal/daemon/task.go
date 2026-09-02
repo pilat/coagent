@@ -17,7 +17,6 @@ type TaskParams struct {
 	Description  string `json:"description"`
 	SubagentType string `json:"subagent_type"`
 	Model        string `json:"model,omitempty"`      // model for the subagent
-	Timeout      int    `json:"timeout,omitempty"`    // seconds
 	Background   bool   `json:"background,omitempty"` // true: spawn and return immediately
 }
 
@@ -111,7 +110,7 @@ The subagent has ZERO context from your conversation. Write a complete briefing:
 Bad: "Look into the auth bug and fix it"
 Good: "In internal/auth/service.go, refreshToken() at line 45 deletes the token before persist() completes. Verify this race by tracing the call sequence in service.go and store.go. Return root cause with file:line references. Do not edit code."
 
-Default timeout is 5 minutes. For longer tasks (test suites, large refactors), set the timeout parameter. Each new subagent starts with zero parent context. To continue an existing subagent while preserving its full context, use send_to_subagent with the id returned by task.%s`, typeList.String(), modelList)
+Each new subagent starts with zero parent context. To continue an existing subagent while preserving its full context, use send_to_subagent with the id returned by task.%s`, typeList.String(), modelList)
 }
 
 func (t *taskTool) Parameters() json.RawMessage {
@@ -141,10 +140,6 @@ func (t *taskTool) Parameters() json.RawMessage {
 			"model": {
 				"type": "string",
 				"description": "Optional tagged model ID from the available candidates. If omitted, inherits current session model."
-			},
-			"timeout": {
-				"type": "integer",
-				"description": "Timeout in seconds (default: 300). Applies to blocking tasks only."
 			},
 			"background": {
 				"type": "boolean",
@@ -192,7 +187,6 @@ func (t *taskTool) executeBackground(ctx context.Context, p TaskParams) (*tool.R
 		Model:      p.Model,
 		Blocking:   false,
 		TaskCallID: callID,
-		TimeoutSec: p.Timeout,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("spawn background subagent: %w", err)
@@ -250,7 +244,6 @@ func (t *taskTool) executeBlocking(ctx context.Context, p TaskParams) (*tool.Res
 		Model:      p.Model,
 		Blocking:   true,
 		TaskCallID: callID,
-		TimeoutSec: p.Timeout,
 	}); err != nil {
 		return nil, fmt.Errorf("spawn subagent: %w", err)
 	}

@@ -18,7 +18,6 @@ type spawnRequest struct {
 	ReasoningLevel string // "" = inherit parent / default
 	Blocking       bool   // true: parent suspends; false: background
 	TaskCallID     string // spawning task tool_call id (from CallIDFromContext)
-	TimeoutSec     int    // 0 = daemon default policy
 }
 
 // childResult is a snapshot of a child's state, returned by Spawn/Result.

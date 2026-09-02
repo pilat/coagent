@@ -25,9 +25,8 @@ const (
 	compactionAttemptCap = 3
 )
 
-// hardIterationCeiling caps agents declared "unlimited" (MaxIterations == 0): a
-// safety net for a loop-detector blind spot, not a normal terminal — real runs
-// end far below it.
+// hardIterationCeiling is an internal defect circuit breaker for a loop-detector
+// blind spot, not a normal terminal — real runs end far below it.
 const hardIterationCeiling = 1000
 
 //nolint:gosec // prompt text shown to the model, not a credential
@@ -72,7 +71,6 @@ type loopRunner struct {
 	cb                 iterationCallback
 	result             *loopResult
 	log                *zap.Logger
-	maxIter            int
 	emptyCount         int
 	lastResp           *llmwire.Response
 	handledControl     bool
@@ -85,16 +83,11 @@ type loopRunner struct {
 //nolint:funlen,wsl_v5 // Loop ordering is the session protocol.
 func runLoop(ctx context.Context, agent *svc, opts loopOptions, callback iterationCallback) (*loopResult, error) {
 	r := &loopRunner{
-		agent:   agent,
-		opts:    opts,
-		cb:      callback,
-		result:  &loopResult{},
-		log:     logger.Ctx(ctx).Named("session.loop"),
-		maxIter: agent.maxIterations,
-	}
-
-	if r.maxIter == 0 {
-		r.maxIter = hardIterationCeiling
+		agent:  agent,
+		opts:   opts,
+		cb:     callback,
+		result: &loopResult{},
+		log:    logger.Ctx(ctx).Named("session.loop"),
 	}
 
 	// A deferral episode is scoped to the call that caused it; with nothing out
@@ -107,13 +100,13 @@ func runLoop(ctx context.Context, agent *svc, opts loopOptions, callback iterati
 	defer hb.stop()
 
 	// Decision 21: every terminal exit resolves a still-pending grant exactly once,
-	// so no provider error, iteration cap, empty pause, budget fire or stop can
+	// so no provider error, the hard ceiling, empty pause, budget fire or stop can
 	// wedge later inbox rows behind it.
 	defer r.resolveTerminalGrant(ctx)
 
 	hb.start(ctx)
 
-	for r.result.Iterations < r.maxIter {
+	for r.result.Iterations < hardIterationCeiling {
 		select {
 		case <-ctx.Done():
 			r.result.Error = ctx.Err()
@@ -561,7 +554,7 @@ func (r *loopRunner) finalize(ctx context.Context) (*loopResult, error) {
 		}
 	}
 
-	r.result.Error = fmt.Errorf("maximum iterations (%d) reached", r.maxIter)
+	r.result.Error = fmt.Errorf("maximum iterations (%d) reached", hardIterationCeiling)
 
 	return r.result, r.result.Error
 }

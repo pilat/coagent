@@ -231,7 +231,6 @@ func TestRunLoopFinalTextResponseEndsRun(t *testing.T) {
 
 	agent := newTestAgent()
 	agent.llmClient = llmClient
-	agent.maxIterations = 5
 
 	result, err := runLoop(t.Context(), agent, loopOptions{Notify: notifier.fn}, iterationGuard(5))
 
@@ -243,7 +242,6 @@ func TestRunLoopFinalTextResponseEndsRun(t *testing.T) {
 
 func TestRunLoopDoesNotRepublishPreviousFinalBeforeAcceptingNextInput(t *testing.T) {
 	agent := newTestAgent()
-	agent.maxIterations = 5
 	agent.ms.setMessages([]llmwire.Message{
 		usr("old question"),
 		asst("old answer"),
@@ -272,7 +270,6 @@ func TestRunLoopDoesNotRepublishPreviousFinalBeforeAcceptingNextInput(t *testing
 
 func TestRunLoopExecutesPreviousToolsBeforeAcceptingNextInput(t *testing.T) {
 	agent := newTestAgent(&stubTool{id: "read", result: "tool result"})
-	agent.maxIterations = 5
 	agent.ms.setMessages([]llmwire.Message{
 		usr("old task"),
 		asst("", call("read-1", "read")),
@@ -298,7 +295,6 @@ func TestRunLoopExecutesPreviousToolsBeforeAcceptingNextInput(t *testing.T) {
 
 func TestRunLoopHandlesStatusAtBoundaryWithoutCallingModel(t *testing.T) {
 	agent := newTestAgent()
-	agent.maxIterations = 5
 	agent.boundary = &loopInputBoundary{
 		agent: agent,
 		input: &PendingInput{ID: 1, Content: "/status", ReceivedAt: time.Now()},
@@ -354,33 +350,17 @@ func TestAssistantOutput_DirectReplyPrecedesReplaceableProgress(t *testing.T) {
 	}
 }
 
-func TestRunLoopStopsExactlyAtMaxIterations(t *testing.T) {
+// TestRunLoopStopsExactlyAtHardCeiling pins the only loop termination cap: the
+// internal 1000-iteration defect breaker, with no configurable lower path.
+func TestRunLoopStopsExactlyAtHardCeiling(t *testing.T) {
 	llmClient := &loopScriptLLM{onCall: func(call int, _ []llmwire.Message) (*llmwire.Response, error) {
 		return toolCallResponse(fmt.Sprintf("tc_%d", call), "read"), nil
 	}}
 
 	agent := newTestAgent(&stubTool{id: "read", result: "content"})
 	agent.llmClient = llmClient
-	agent.maxIterations = 3
 
-	result, err := runLoop(t.Context(), agent, loopOptions{}, iterationGuard(10))
-
-	require.Error(t, err)
-	require.EqualError(t, err, "maximum iterations (3) reached")
-	assert.Equal(t, 3, result.Iterations)
-	assert.Equal(t, 3, llmClient.calls)
-}
-
-func TestRunLoopUnlimitedAgentFallsBackToHardCeiling(t *testing.T) {
-	llmClient := &loopScriptLLM{onCall: func(call int, _ []llmwire.Message) (*llmwire.Response, error) {
-		return toolCallResponse(fmt.Sprintf("tc_%d", call), "read"), nil
-	}}
-
-	agent := newTestAgent(&stubTool{id: "read", result: "content"})
-	agent.llmClient = llmClient
-	agent.maxIterations = 0
-
-	result, err := runLoop(t.Context(), agent, loopOptions{}, iterationGuard(hardIterationCeiling+5))
+	result, err := runLoop(t.Context(), agent, loopOptions{}, iterationGuard(hardIterationCeiling))
 
 	require.Error(t, err)
 	require.EqualError(t, err, fmt.Sprintf("maximum iterations (%d) reached", hardIterationCeiling))
@@ -392,7 +372,6 @@ func TestRunLoopCancelledContextStopsBeforeFirstCall(t *testing.T) {
 
 	agent := newTestAgent()
 	agent.llmClient = llmClient
-	agent.maxIterations = 5
 
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
@@ -414,7 +393,6 @@ func TestRunLoopAnnouncesAssistantTextBeforeExecutingItsTools(t *testing.T) {
 
 	agent := newTestAgent(&stubTool{id: "read", result: "content"})
 	agent.llmClient = llmClient
-	agent.maxIterations = 5
 
 	result, err := runLoop(t.Context(), agent, loopOptions{Notify: notifier.fn}, iterationGuard(5))
 
@@ -432,7 +410,6 @@ func TestRunLoopSilentToolTurnNotifiesNothing(t *testing.T) {
 
 	agent := newTestAgent(&stubTool{id: "read", result: "content"})
 	agent.llmClient = llmClient
-	agent.maxIterations = 5
 
 	_, err := runLoop(t.Context(), agent, loopOptions{Notify: notifier.fn}, iterationGuard(5))
 
@@ -446,7 +423,6 @@ func TestRunLoopEmptyResponseLadder(t *testing.T) {
 
 	agent := newTestAgent()
 	agent.llmClient = llmClient
-	agent.maxIterations = 20
 
 	result, err := runLoop(t.Context(), agent, loopOptions{Notify: notifier.fn}, iterationGuard(20))
 
@@ -477,23 +453,23 @@ func TestRunLoopEmptyResponseLadder(t *testing.T) {
 
 func TestRunLoopEmptyResponseStreakResetByProductiveTurn(t *testing.T) {
 	llmClient := &loopScriptLLM{onCall: func(call int, _ []llmwire.Message) (*llmwire.Response, error) {
-		if call == 3 {
+		switch call {
+		case 3:
 			return toolCallResponse("tc_break", "read"), nil
+		case 4:
+			return textResponse("done"), nil
+		default:
+			return &llmwire.Response{}, nil
 		}
-
-		return &llmwire.Response{}, nil
 	}}
 
 	agent := newTestAgent(&stubTool{id: "read", result: "content"})
 	agent.llmClient = llmClient
-	agent.maxIterations = 6
 
 	result, err := runLoop(t.Context(), agent, loopOptions{}, iterationGuard(10))
 
-	// The streak is broken at two, so the run exhausts its iterations instead of
-	// bailing out on six empties.
-	require.Error(t, err)
-	assert.Equal(t, 6, result.Iterations)
+	require.NoError(t, err)
+	assert.Equal(t, "done", result.FinalResponse)
 
 	for _, msg := range agent.ms.getMessages() {
 		assert.NotContains(t, msg.Content, "AUTOMATED WARNING")
@@ -507,7 +483,6 @@ func TestRunLoopEmptyResponseNudgeRecordFailureAborts(t *testing.T) {
 	agent := newTestAgent()
 	agent.llmClient = llmClient
 	agent.ms = newMessageStore(store, 1, nil)
-	agent.maxIterations = 20
 
 	result, err := runLoop(t.Context(), agent, loopOptions{}, iterationGuard(20))
 
@@ -521,7 +496,6 @@ func TestRunLoopSuspendedToolEndsRunWithoutError(t *testing.T) {
 
 	agent := newTestAgent(&stubTool{id: "sleep", err: tool.ErrSuspend})
 	agent.llmClient = llmClient
-	agent.maxIterations = 5
 
 	result, err := runLoop(t.Context(), agent, loopOptions{}, iterationGuard(5))
 
@@ -538,7 +512,6 @@ func TestRunLoopPendingToolRecordFailureAborts(t *testing.T) {
 	agent := newTestAgent(&stubTool{id: "read", result: "content"})
 	agent.llmClient = llmClient
 	agent.ms = newMessageStore(store, 1, nil)
-	agent.maxIterations = 5
 
 	result, err := runLoop(t.Context(), agent, loopOptions{}, iterationGuard(5))
 
@@ -555,7 +528,6 @@ func TestRunLoopThresholdCompactsWithoutAClearEvent(t *testing.T) {
 
 	agent := newTestAgent()
 	agent.llmClient = summarizingLLM()
-	agent.maxIterations = 5
 	agent.ms.setMessages(loopRounds(70, 4000))
 
 	require.True(t, agent.shouldCompact(compactionThreshold))
@@ -573,7 +545,6 @@ func TestRunLoopExplicitCompactionForcesSummarization(t *testing.T) {
 
 	agent := newTestAgent()
 	agent.llmClient = summarizingLLM()
-	agent.maxIterations = 5
 	agent.ms.setMessages(loopRounds(70, 4000))
 	agent.RequestCompaction()
 
@@ -593,7 +564,6 @@ func TestRunLoopCompactionFailureIsReportedAndSurvived(t *testing.T) {
 	agent.llmClient = summarizingLLM()
 	agent.ms = newMessageStore(&loopReloadStore{replaceErr: errors.New("write conflict")}, 1, nil)
 	agent.ms.setMessages(loopRounds(70, 4000))
-	agent.maxIterations = 5
 	agent.RequestCompaction()
 
 	result, err := runLoop(t.Context(), agent, loopOptions{Notify: notifier.fn}, iterationGuard(5))
@@ -610,7 +580,6 @@ func TestRunLoopCompactionWithNothingToSummarizeStaysSilent(t *testing.T) {
 
 	agent := newTestAgent()
 	agent.llmClient = llmClient
-	agent.maxIterations = 5
 	agent.ms.setMessages([]llmwire.Message{{Role: llmwire.RoleUser, Content: strings.Repeat("x", 400000)}})
 
 	_, err := runLoop(t.Context(), agent, loopOptions{Notify: notifier.fn}, iterationGuard(5))
@@ -645,7 +614,6 @@ func TestRunLoopForcedTextOnlyWithholdsToolsFromModel(t *testing.T) {
 				&stubTool{id: "grep", result: "b"},
 			)
 			agent.llmClient = llmClient
-			agent.maxIterations = 5
 			agent.loopDetector.forceTextOnly = tt.forceTextOnly
 
 			_, err := runLoop(t.Context(), agent, loopOptions{}, iterationGuard(5))
@@ -661,9 +629,10 @@ func TestRunLoopForcedTextOnlyClearedOnlyByTextResponse(t *testing.T) {
 		name     string
 		response *llmwire.Response
 		want     bool
+		wantErr  bool
 	}{
 		{name: "text response releases the model", response: textResponse("explaining myself"), want: false},
-		{name: "tool call keeps the clamp on", response: toolCallResponse("tc_1", "read"), want: true},
+		{name: "tool call keeps the clamp on", response: toolCallResponse("tc_1", "read"), want: true, wantErr: true},
 	}
 
 	for _, tt := range tests {
@@ -672,11 +641,16 @@ func TestRunLoopForcedTextOnlyClearedOnlyByTextResponse(t *testing.T) {
 
 			agent := newTestAgent(&stubTool{id: "read", result: "a"})
 			agent.llmClient = llmClient
-			agent.maxIterations = 1
 			agent.loopDetector.forceTextOnly = true
 
-			_, err := runLoop(t.Context(), agent, loopOptions{}, iterationGuard(5))
-			require.Error(t, err) // the single iteration is exhausted
+			// The guard bounds the tool-call case; the text case ends by itself
+			// before the guard trips.
+			_, err := runLoop(t.Context(), agent, loopOptions{}, iterationGuard(1))
+			if tt.wantErr {
+				require.Error(t, err)
+			} else {
+				require.NoError(t, err)
+			}
 
 			assert.Equal(t, tt.want, agent.loopDetector.forceTextOnly)
 		})
@@ -690,7 +664,6 @@ func TestRunLoopLLMErrorSurfacesToCallerAndUser(t *testing.T) {
 
 	agent := newTestAgent()
 	agent.llmClient = llmClient
-	agent.maxIterations = 5
 
 	result, err := runLoop(t.Context(), agent, loopOptions{Notify: notifier.fn}, iterationGuard(5))
 
@@ -714,7 +687,6 @@ func TestRunLoopCallbackSeesNumberedIterationAndToolCalls(t *testing.T) {
 
 	agent := newTestAgent(&stubTool{id: "read", result: "content"})
 	agent.llmClient = llmClient
-	agent.maxIterations = 5
 
 	var (
 		iterations []int
@@ -743,7 +715,6 @@ func TestRunLoopCallbackFailureAbortsBeforeRecordingTurn(t *testing.T) {
 
 	agent := newTestAgent()
 	agent.llmClient = llmClient
-	agent.maxIterations = 5
 
 	cbErr := errors.New("checkpoint failed")
 	cb := func(int, *llmwire.Response, []llmwire.ToolCall) error { return cbErr }
@@ -764,7 +735,6 @@ func TestRunLoopAssistantRecordFailureAborts(t *testing.T) {
 	agent := newTestAgent()
 	agent.llmClient = llmClient
 	agent.ms = newMessageStore(store, 1, nil)
-	agent.maxIterations = 5
 
 	result, err := runLoop(t.Context(), agent, loopOptions{}, iterationGuard(5))
 
@@ -773,18 +743,31 @@ func TestRunLoopAssistantRecordFailureAborts(t *testing.T) {
 	require.ErrorIs(t, result.Error, store.insertErr)
 }
 
+// finalizingRunner builds a loopRunner for the hard-breaker terminal routine:
+// last-text promotion, final-output enqueue, notification, and the ceiling error.
+func finalizingRunner(ctx context.Context, agent *svc, opts loopOptions) *loopRunner {
+	return &loopRunner{
+		agent:  agent,
+		opts:   opts,
+		result: &loopResult{},
+		log:    logger.Ctx(ctx).Named("session.loop"),
+	}
+}
+
 func TestRunLoopFinalizeRecoversLastAssistantText(t *testing.T) {
-	llmClient := &loopScriptLLM{responses: []*llmwire.Response{textResponse("partial answer")}}
 	notifier := &loopNotifier{}
 
 	agent := newTestAgent()
-	agent.llmClient = llmClient
-	agent.maxIterations = 1
+	agent.ms.setMessages([]llmwire.Message{
+		{Role: llmwire.RoleUser, Content: "task"},
+		{Role: llmwire.RoleAssistant, Content: "partial answer"},
+	})
 
-	result, err := runLoop(t.Context(), agent, loopOptions{Notify: notifier.fn}, iterationGuard(5))
+	r := finalizingRunner(t.Context(), agent, loopOptions{Notify: notifier.fn})
+	result, err := r.finalize(t.Context())
 
 	require.Error(t, err)
-	require.EqualError(t, err, "maximum iterations (1) reached")
+	require.EqualError(t, err, fmt.Sprintf("maximum iterations (%d) reached", hardIterationCeiling))
 	assert.Equal(t, "partial answer", result.FinalResponse)
 	assert.Equal(t, []string{"partial answer"}, notifier.all())
 }
@@ -801,19 +784,21 @@ func TestRunLoopFinalizeNotifyFailureIsLogged(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			llmClient := &loopScriptLLM{responses: []*llmwire.Response{textResponse("partial answer")}}
 			notifier := &loopNotifier{err: tt.notifyErr}
 
 			agent := newTestAgent()
-			agent.llmClient = llmClient
-			agent.maxIterations = 1
+			agent.ms.setMessages([]llmwire.Message{
+				{Role: llmwire.RoleUser, Content: "task"},
+				{Role: llmwire.RoleAssistant, Content: "partial answer"},
+			})
 
 			core, logs := observer.New(zapcore.WarnLevel)
 			ctx := logger.ToContext(t.Context(), zap.New(core))
 
-			result, err := runLoop(ctx, agent, loopOptions{Notify: notifier.fn}, iterationGuard(5))
+			r := finalizingRunner(ctx, agent, loopOptions{Notify: notifier.fn})
+			result, err := r.finalize(ctx)
 
-			require.Error(t, err) // the single iteration is exhausted
+			require.Error(t, err) // the hard-breaker terminal path always fails the run
 			assert.Equal(t, "partial answer", result.FinalResponse)
 			assert.Equal(t, []string{"partial answer"}, notifier.all())
 			assert.Len(t, logs.FilterMessage("notify_failed").All(), tt.wantLog)
@@ -822,17 +807,16 @@ func TestRunLoopFinalizeNotifyFailureIsLogged(t *testing.T) {
 }
 
 func TestRunLoopFinalizeIgnoresBlankAssistantText(t *testing.T) {
-	llmClient := &loopScriptLLM{responses: []*llmwire.Response{{
-		Text:      "   ",
-		ToolCalls: []llmwire.ToolCall{{ID: "tc_1", Name: "read", Arguments: []byte(`{}`)}},
-	}}}
 	notifier := &loopNotifier{}
 
-	agent := newTestAgent(&stubTool{id: "read", result: "content"})
-	agent.llmClient = llmClient
-	agent.maxIterations = 1
+	agent := newTestAgent()
+	agent.ms.setMessages([]llmwire.Message{
+		{Role: llmwire.RoleUser, Content: "task"},
+		{Role: llmwire.RoleAssistant, Content: "   "},
+	})
 
-	result, err := runLoop(t.Context(), agent, loopOptions{Notify: notifier.fn}, iterationGuard(5))
+	r := finalizingRunner(t.Context(), agent, loopOptions{Notify: notifier.fn})
+	result, err := r.finalize(t.Context())
 
 	require.Error(t, err)
 	assert.Empty(t, result.FinalResponse, "whitespace is not an answer")
@@ -850,7 +834,6 @@ func TestRunLoopIterationStartIsOneBased(t *testing.T) {
 
 	agent := newTestAgent(&stubTool{id: "read", result: "content"})
 	agent.llmClient = llmClient
-	agent.maxIterations = 5
 
 	core, logs := observer.New(zapcore.InfoLevel)
 	ctx := logger.ToContext(t.Context(), zap.New(core))
@@ -886,7 +869,6 @@ func TestRunLoopReloadFailureIsLoggedAndSurvived(t *testing.T) {
 			agent := newTestAgent()
 			agent.llmClient = llmClient
 			agent.ms = newMessageStore(&loopReloadStore{loadErr: tt.loadErr}, 1, nil)
-			agent.maxIterations = 5
 
 			core, logs := observer.New(zapcore.WarnLevel)
 			ctx := logger.ToContext(t.Context(), zap.New(core))
@@ -921,7 +903,6 @@ func TestRunLoopNotifyFailureIsLoggedNotFatal(t *testing.T) {
 
 			agent := newTestAgent()
 			agent.llmClient = llmClient
-			agent.maxIterations = 5
 
 			core, logs := observer.New(zapcore.WarnLevel)
 			ctx := logger.ToContext(t.Context(), zap.New(core))
@@ -954,7 +935,6 @@ func TestRunLoopLogsIterationCostOnlyWhenCharged(t *testing.T) {
 
 			agent := newTestAgent()
 			agent.llmClient = llmClient
-			agent.maxIterations = 5
 
 			core, logs := observer.New(zapcore.InfoLevel)
 			ctx := logger.ToContext(t.Context(), zap.New(core))

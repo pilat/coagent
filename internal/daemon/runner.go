@@ -29,41 +29,20 @@ import (
 
 type runner = sessionlifecycle.Runner[queuedSessionInput]
 
-// defaultBlockingTimeoutSec bounds a blocking child's wall-clock when the task
-// tool did not specify one (preserves the legacy 5-minute task timeout).
-const defaultBlockingTimeoutSec = 300
-
 // maxEmptyLoopIterations caps consecutive no-input iterations that still ask to
 // continue. A healthy drain re-loops at most once (then exits on no work); more
 // than this means the loop is spinning without progress (e.g. a stale pending-work
 // signal) — break instead of flooding notifications.
 const maxEmptyLoopIterations = 3
 
-// errNoChildTimeout is applyChildTimeout's non-error "no timeout applies" signal.
-var errNoChildTimeout = errors.New("no timeout applies")
-
 // runSession is the main goroutine for a session.
 // ctx is already cancelable through rs (set in ensureRunner).
 func (s *svc) runSession(ctx context.Context, sessionID int64, rs runner) {
 	errored := false
 
-	// Registered before the timeout is applied so every exit below runs the full
-	// teardown; cancelling last keeps ctx.Err() meaningful inside it.
-	var timeoutCancel context.CancelFunc
-
 	defer func() {
-		s.finishRunner(ctx, sessionID, rs, &errored, timeoutCancel, recover())
+		s.finishRunner(ctx, sessionID, rs, &errored, recover())
 	}()
-
-	// Blocking children get a wall-clock timeout; background children and parents
-	// do not (bounded by MaxIterations / parent-kill orphaning) — Appendix G6.
-	newCtx, cancel, ok := s.startChildTimeout(ctx, rs, sessionID, &errored)
-	if !ok {
-		return
-	}
-
-	ctx = newCtx
-	timeoutCancel = cancel
 
 	notify := func(n sessionevent.Notification) {
 		s.publish(sessionID, n)
@@ -102,7 +81,6 @@ func (s *svc) finishRunner(
 	sessionID int64,
 	rs runner,
 	errored *bool,
-	timeoutCancel context.CancelFunc,
 	panicValue any,
 ) {
 	shuttingDown := s.shuttingDown.Load()
@@ -151,10 +129,6 @@ func (s *svc) finishRunner(
 		for _, input := range leftover {
 			input.complete(false, fmt.Errorf("session %d stopped before input delivery", sessionID))
 		}
-	}
-
-	if timeoutCancel != nil {
-		timeoutCancel()
 	}
 }
 
@@ -1353,56 +1327,4 @@ func queuedInputsStartScheduledTurn(inputs []queuedSessionInput) bool {
 	return len(inputs) > 0 && !slices.ContainsFunc(inputs, func(input queuedSessionInput) bool {
 		return !inputIsScheduledTurn(input.input())
 	})
-}
-
-// startChildTimeout applies applyChildTimeout for runSession's setup, folding in
-// the error-vs-sentinel split so the caller only branches on whether to continue.
-// A genuine read failure sets *errored and returns ok=false (caller must return).
-func (s *svc) startChildTimeout(
-	ctx context.Context,
-	rs runner,
-	sessionID int64,
-	errored *bool,
-) (context.Context, context.CancelFunc, bool) {
-	info := rs.Info()
-	if info.Kind != admission.Child {
-		return ctx, nil, true
-	}
-
-	timeoutCtx, cancel, err := s.applyChildTimeout(ctx, sessionID)
-	if err != nil && !errors.Is(err, errNoChildTimeout) {
-		// A child that never entered its loop did not complete: without this the
-		// teardown finalizes it as completed once the ledger recovers.
-		*errored = true
-
-		s.reportTimeoutUnresolved(ctx, info.ParentID, sessionID, err)
-
-		return ctx, nil, false
-	}
-
-	return timeoutCtx, cancel, true
-}
-
-// applyChildTimeout wraps ctx with a deadline for a blocking child, returning the
-// derived ctx and its cancel func. errNoChildTimeout means no timeout applies
-// (background child, or non-blocking link) — the caller must not treat it as a
-// real failure. A read failure is a distinct, genuine error.
-func (s *svc) applyChildTimeout(ctx context.Context, sessionID int64) (context.Context, context.CancelFunc, error) {
-	link, err := s.links.GetLink(ctx, sessionID)
-	if err != nil {
-		return ctx, nil, fmt.Errorf("child timeout for session %d: %w", sessionID, err)
-	}
-
-	if link == nil || !link.Blocking {
-		return ctx, nil, errNoChildTimeout
-	}
-
-	secs := link.TimeoutSec
-	if secs <= 0 {
-		secs = defaultBlockingTimeoutSec
-	}
-
-	timeoutCtx, cancel := context.WithTimeout(ctx, time.Duration(secs)*time.Second)
-
-	return timeoutCtx, cancel, nil
 }

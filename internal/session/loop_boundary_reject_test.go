@@ -78,7 +78,6 @@ func TestRunLoopRejectsUnknownSkillAtBoundary(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			agent := newTestAgent(&stubTool{id: "read", result: "tool result"})
-			agent.maxIterations = 5
 			agent.loader = loader.New()
 			agent.ms.setMessages(tc.messages)
 

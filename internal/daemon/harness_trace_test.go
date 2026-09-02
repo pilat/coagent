@@ -181,6 +181,14 @@ func normalizeHarnessTrace(
 		}
 
 		n := event.Notification
+		if n.Type == sessionevent.NotifyHeartbeat {
+			// Heartbeats are 1-second periodic noise: their count depends on
+			// wall-clock speed, not on the conversation (the renderer only
+			// derives ephemeral typing from them). Recorded goldens stay
+			// deterministic by dropping them here.
+			continue
+		}
+
 		requireRecordableNotification(t, n)
 		recorded := harnessTraceEvent{
 			Type:   string(n.Type),

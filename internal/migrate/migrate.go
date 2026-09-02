@@ -76,6 +76,27 @@ func Run(ctx context.Context, db *sql.DB, dbPath string) error {
 	return run(ctx, db, dbPath, false)
 }
 
+// RunUpTo migrates to an exact version and stops there — boot-recovery scenarios
+// stage a pre-upgrade database, then hand it to a real daemon for the restart.
+func RunUpTo(ctx context.Context, db *sql.DB, version int64) error {
+	provider, err := goose.NewProvider(
+		goose.DialectSQLite3,
+		db,
+		migrations.FS,
+		goose.WithGoMigrations(legacyMigrations()...),
+		goose.WithLogger(goose.NopLogger()),
+	)
+	if err != nil {
+		return fmt.Errorf("create goose provider: %w", err)
+	}
+
+	if _, err := provider.UpTo(ctx, version); err != nil {
+		return fmt.Errorf("goose up to %d: %w", version, err)
+	}
+
+	return nil
+}
+
 func run(ctx context.Context, db *sql.DB, dbPath string, backup bool) error {
 	provider, err := goose.NewProvider(
 		goose.DialectSQLite3,

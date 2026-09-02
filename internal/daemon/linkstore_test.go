@@ -69,7 +69,6 @@ func TestLinkStore_InsertAndRead(t *testing.T) {
 		TaskCallID: "call-abc",
 		Blocking:   true,
 		Depth:      1,
-		TimeoutSec: 300,
 	}
 	require.NoError(t, ls.InsertSubagentLink(ctx, link))
 
@@ -82,7 +81,6 @@ func TestLinkStore_InsertAndRead(t *testing.T) {
 	assert.True(t, got.Blocking)
 	assert.Equal(t, 1, got.Depth)
 	assert.Equal(t, subagent.StateSpawned, got.State)
-	assert.Equal(t, 300, got.TimeoutSec)
 	assert.Zero(t, got.DeliveredAt)
 	assert.Positive(t, got.CreatedAt)
 

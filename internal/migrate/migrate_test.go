@@ -86,7 +86,59 @@ func TestMigrate_FreshDB(t *testing.T) {
 	assert.True(t, columnExists(t, db, "subagent_links", "task_call_id"), "subagent_links must exist")
 	assert.True(t, columnExists(t, db, "subagent_links", "result"), "subagent_links.result must exist")
 	assert.True(t, columnExists(t, db, "subagent_links", "outcome"), "subagent_links.outcome must exist")
+	assert.False(t, columnExists(t, db, "subagent_links", "timeout_sec"), "subagent_links.timeout_sec must be dropped")
 	assert.True(t, columnExists(t, db, "messages", "position"), "messages.position must exist")
+}
+
+// TestMigrate_SubagentLinksDropTimeout brings a DB to version 30 with a live
+// foreground link carrying a nonzero legacy timeout, applies 00031, and verifies
+// the column is dropped while every other link field survives unchanged.
+func TestMigrate_SubagentLinksDropTimeout(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "v30timeout.db")
+	db, err := OpenDB(context.Background(), dbPath)
+	require.NoError(t, err)
+	defer db.Close()
+
+	ctx := context.Background()
+
+	provider := newProvider(t, db)
+	_, err = provider.UpTo(ctx, 30)
+	require.NoError(t, err)
+
+	require.True(t, columnExists(t, db, "subagent_links", "timeout_sec"), "timeout_sec must exist at v30")
+
+	_, err = db.ExecContext(ctx, `INSERT INTO projects (id, work_dir, name) VALUES (1, '/tmp/p', 'p')`)
+	require.NoError(t, err)
+	_, err = db.ExecContext(ctx, `INSERT INTO sessions (id, project_id, agent_type) VALUES (1, 1, 'build')`)
+	require.NoError(t, err)
+	_, err = db.ExecContext(ctx,
+		`INSERT INTO sessions (id, project_id, parent_id, root_id, agent_type) VALUES (2, 1, 1, 1, 'general')`)
+	require.NoError(t, err)
+	_, err = db.ExecContext(ctx,
+		`INSERT INTO subagent_links (parent_id, child_id, task_call_id, blocking, depth, state, timeout_sec, created_at)
+		 VALUES (1, 2, 'call-1', 1, 1, 'spawned', 300, 100)`)
+	require.NoError(t, err)
+
+	_, err = provider.Up(ctx)
+	require.NoError(t, err)
+
+	assert.False(t, columnExists(t, db, "subagent_links", "timeout_sec"), "timeout_sec dropped by 00031")
+
+	var (
+		taskCallID string
+		blocking   bool
+		depth      int
+		state      string
+		createdAt  int64
+	)
+	require.NoError(t, db.QueryRowContext(ctx,
+		`SELECT task_call_id, blocking, depth, state, created_at FROM subagent_links WHERE child_id = 2`,
+	).Scan(&taskCallID, &blocking, &depth, &state, &createdAt))
+	assert.Equal(t, "call-1", taskCallID)
+	assert.True(t, blocking, "blocking survives the drop")
+	assert.Equal(t, 1, depth)
+	assert.Equal(t, "spawned", state)
+	assert.Equal(t, int64(100), createdAt)
 }
 
 // TestMigrate_SubagentResultColumns brings a DB to version 9 (subagent_links
