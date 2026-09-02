@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -134,6 +135,80 @@ func TestClient_GetRemoteURL_NotARepo(t *testing.T) {
 	notARepo := t.TempDir()
 	_, err := client.GetRemoteURL(context.Background(), notARepo)
 	assert.Error(t, err)
+}
+
+func TestClient_HealthCheck_HealthyClone(t *testing.T) {
+	sourceDir := t.TempDir()
+	initGitRepo(t, sourceDir)
+	createFile(t, sourceDir, "file.txt", "content")
+	commitAll(t, sourceDir, "Initial")
+
+	client := New()
+	clonePath := filepath.Join(t.TempDir(), "repo")
+	require.NoError(t, client.Clone(context.Background(), sourceDir, clonePath))
+
+	assert.NoError(t, client.HealthCheck(context.Background(), clonePath))
+}
+
+// AppleDouble ._pack-*.idx junk — the production corruption — must fail the
+// fsck probe: full fsck opens every pack index, unlike --connectivity-only.
+// The clone goes over file:// so it carries real pack files (local-path clones
+// hardlink loose objects and may have no pack dir at all).
+func TestClient_HealthCheck_AppleDoubleJunk(t *testing.T) {
+	sourceDir := t.TempDir()
+	initGitRepo(t, sourceDir)
+	createFile(t, sourceDir, "file.txt", "content")
+	commitAll(t, sourceDir, "Initial")
+
+	client := New()
+	clonePath := filepath.Join(t.TempDir(), "repo")
+	require.NoError(t, client.Clone(context.Background(), "file://"+sourceDir, clonePath))
+
+	packDir := filepath.Join(clonePath, ".git", "objects", "pack")
+	packEntries, err := os.ReadDir(packDir)
+	require.NoError(t, err)
+
+	foundPack := false
+	for _, e := range packEntries {
+		name := e.Name()
+		if !strings.HasSuffix(name, ".pack") || strings.HasPrefix(name, "._") {
+			continue
+		}
+
+		foundPack = true
+		// Production had sidecars for both the pack and its index.
+		require.NoError(t, os.WriteFile(filepath.Join(packDir, "._"+name), []byte("AppleDouble junk"), 0o644))
+		require.NoError(t, os.WriteFile(
+			filepath.Join(packDir, "._"+strings.TrimSuffix(name, ".pack")+".idx"), []byte("AppleDouble junk"), 0o644))
+	}
+	require.True(t, foundPack, "file:// clone must contain a pack file to corrupt")
+
+	err = client.HealthCheck(context.Background(), clonePath)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "git fsck failed")
+}
+
+func TestClient_HealthCheck_CorruptIndex(t *testing.T) {
+	sourceDir := t.TempDir()
+	initGitRepo(t, sourceDir)
+	createFile(t, sourceDir, "file.txt", "content")
+	commitAll(t, sourceDir, "Initial")
+
+	client := New()
+	clonePath := filepath.Join(t.TempDir(), "repo")
+	require.NoError(t, client.Clone(context.Background(), sourceDir, clonePath))
+
+	require.NoError(t, os.WriteFile(
+		filepath.Join(clonePath, ".git", "index"), []byte("garbage-not-an-index-file"), 0o644))
+
+	err := client.HealthCheck(context.Background(), clonePath)
+	require.Error(t, err)
+}
+
+func TestClient_HealthCheck_NotARepo(t *testing.T) {
+	client := New()
+	notARepo := t.TempDir()
+	assert.Error(t, client.HealthCheck(context.Background(), notARepo))
 }
 
 func initGitRepo(t *testing.T, dir string) {

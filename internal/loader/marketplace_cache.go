@@ -3,6 +3,7 @@ package loader
 import (
 	"context"
 	"fmt"
+	"os"
 	"sync"
 	"time"
 
@@ -59,9 +60,21 @@ func NewRepoResolver(gitClient git.Client) RepositoryResolver {
 		if gitClient.IsCloned(ctx, cacheDir) {
 			if err := gitClient.Pull(ctx, cacheDir); err != nil {
 				logger.Named("loader").Warn("marketplace_pull_failed", zap.String("url", url), zap.Error(err))
+
+				recoverMarketplace(ctx, gitClient, "https://"+url, cacheDir)
 			}
 
 			return cacheDir, nil
+		}
+
+		// A leftover dir that rev-parse rejects (half-removed, corrupted) would
+		// make Clone fail with ErrDestinationExists forever; replace it.
+		if _, err := os.Stat(cacheDir); err == nil {
+			logger.Named("loader").Debug("marketplace_stale_dir_removed", zap.String("path", cacheDir))
+
+			if err := os.RemoveAll(cacheDir); err != nil {
+				return "", fmt.Errorf("removing unusable cache dir: %w", err)
+			}
 		}
 
 		repoURL := "https://" + url
