@@ -26,6 +26,10 @@ import (
 	"github.com/pilat/coagent/internal/subagent"
 )
 
+// Delivery may claim the backlog before the terminal attaches, so this must
+// exceed the worker's first retry delay.
+const delayedCLIEventTimeout = 10 * time.Second
+
 type delayedCLIHarness struct {
 	controller        controllerapi.Controller
 	foreignController controllerapi.Controller
@@ -153,7 +157,7 @@ func waitForDelayedCLIEvent(t *testing.T, terminal *ctl.Client) Event {
 		require.NoError(t, json.Unmarshal(event.Params, &output))
 
 		return output
-	case <-time.After(3 * time.Second):
+	case <-time.After(delayedCLIEventTimeout):
 		t.Fatal("timed out waiting for CLI output")
 	}
 

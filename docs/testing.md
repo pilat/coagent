@@ -114,11 +114,13 @@ Neither half may replace the other. PubSub-only evidence cannot prove Telegram
 rendering, and renderer-only evidence cannot prove that the daemon emits each
 notification once.
 
-These tests are hermetic and belong in the default `go test ./...` suite. Do not
-add an `integration` build tag merely because several internal packages are used.
-The tag is reserved for tests requiring installed programs, containers, or other
-environment prerequisites. Canonical test targets do not call real network
-services; use local servers and temporary local Git repositories.
+These tests remain untagged and run in the complete CI suite. Packages dominated
+by lifecycle, migration or protocol scenarios are omitted from the bounded local
+`make test`; run one exact scenario with `-run` during local red/green work. Do
+not add an `integration` build tag merely because several internal packages are
+used. The tag is reserved for tests requiring installed programs, containers,
+or other environment prerequisites. Canonical test targets do not call real
+network services; use local servers and temporary local Git repositories.
 
 ### 4. End-to-end smoke tests
 
@@ -152,17 +154,13 @@ concern.
 
 At each checkpoint, run the narrowest tests from the evidence matrix and lint
 the affected packages with `make lint.paths LINT_PATHS=./path/to/package/...`.
-Mutation is not part of this routine cadence or any handoff gate. When a task
-explicitly requests mutation evidence, or a review is investigating whether a
-specific test protects a load-bearing guard, retry/dedup condition, or error
-path, run `make mutation MUTATION_PATH=./path/to/package` after the focused
-tests pass. Scope it to that area and run it once; rerun a successful diagnostic
-only when a relevant input changes.
+Mutation is not part of local development or any handoff gate. The nightly
+workflow owns it.
 
 After all checkpoints are complete, run `make all` once. Diagnose failures with
-the focused failing target and repeat the full gate only after the fix. Complete
-`make check` and `make ci` runs remain environment/pre-merge evidence, not an
-iteration loop.
+the focused failing target and repeat the local gate only after the fix. Complete
+Semgrep, secret scanning, and `make ci` runs are owned by CI/CD and reject local
+execution.
 
 ## Orthogonal test amplifiers
 
@@ -174,44 +172,48 @@ These strengthen an evidence level; they do not replace one:
   a reviewable table. Commit every minimized failure corpus. A fuzz failure in
   the reference model is still a real test defect and must be understood rather
   than deleted.
-- When mutation evidence is explicitly requested, target new load-bearing
-  guards, retry/dedup conditions, and error paths. Scope mutations to the
-  changed production area. Report killed, lived, and uncovered mutants
-  separately; a run that generated zero mutants is not a pass.
+- Nightly mutation diagnostics target load-bearing guards, retry/dedup
+  conditions, and error paths. Their reports distinguish killed, lived, and
+  uncovered mutants; a shard that generates zero mutants is not a pass.
 
 Coverage answers whether code ran. Mutation answers whether the assertions would
 notice relevant code becoming wrong. Neither proves a cross-package observable
 workflow; that remains the job of scenario or E2E evidence.
 
-## Local CI gate
+## CI/CD gates
 
-`make ci` is the canonical slow pre-merge gate. It composes `make all`,
-compiled-process harness E2E, build-tagged environment integration, long-running
-protocol fuzzing, the full race detector, and shuffled repeated protocol
-scenarios. Mutation testing is deliberately absent: its runtime and survivor
-baseline make it a scheduled diagnostic rather than merge evidence. The Make
-target is the source of truth for budgets and exact commands; this document
+`make ci` is the canonical pull-request and release gate. It runs the local
+static checks, Semgrep, secret scanning, and the full ordinary plus build-tagged
+integration suite. It does not invoke `make all`: the integration command
+already includes the ordinary suites, so the fast local subset is not run twice.
+
+Scheduled and manually dispatched CI composes `make ci` with compiled-process
+harness E2E, long-running protocol fuzzing, the full race detector, and shuffled
+repeated protocol scenarios. Mutation remains a separate scheduled diagnostic:
+its runtime and survivor baseline make it unsuitable for merge evidence. The
+Makefile is the source of truth for budgets and exact commands; this document
 defines why those checks exist.
 
-GitHub pull requests and main pushes run `make check` on Linux and macOS plus a
-compiled harness smoke on Linux. Scheduled and manually dispatched Linux jobs
-run default-budget `make ci`. A separate nightly/manual workflow mutation-tests
-the production Go module in named shards and publishes JSON reports; it never
-runs for pull requests or main pushes and is not a branch-protection signal.
-Hosted execution does not weaken the local contract: only an unmodified
-default-budget run may be reported as canonical CI. The privileged
+GitHub pull requests and main pushes run `make ci` on Linux and macOS, plus one
+compiled-harness smoke on Linux. Scheduled and manually dispatched CI runs the
+same gate plus default-budget E2E, fuzz, race, and stress amplifiers once on
+Linux. A separate nightly/manual workflow mutation-tests the production Go
+module in named shards and publishes JSON reports; it never runs for pull
+requests or main pushes and is not a branch-protection signal.
+These targets require the `CI=true` environment supplied by the workflow and
+must not be bypassed during local agent work. Only an unmodified default-budget
+run may be reported as canonical CI. The privileged
 Testcontainers Bubblewrap test remains explicit opt-in and is not implied by a
 green macOS or ordinary Linux workflow.
 
-`make check` adds build-tagged environment integration against locally installed
-programs such as `git` and `gopls`. Git repositories are temporary local
-fixtures: the suite must never clone a mutable network repository. `make ci`
-includes this tagged suite as well as repeated E2E, fuzz, race, and stress
-evidence.
+The build-tagged environment integration uses locally installed programs such as
+`git` and `gopls`. Git repositories are temporary local fixtures: the suite must
+never clone a mutable network repository. Scheduled/manual CI adds repeated E2E,
+fuzz, race, and stress evidence.
 
-Budget overrides are for iteration only. A shortened fuzz duration, stress
-count, or E2E count must be reported as a smoke run, never as a passing canonical
-CI run. The final gate uses the Makefile defaults.
+Budget overrides are for CI/CD diagnostics only. A shortened fuzz duration,
+stress count, or E2E count must be reported as a smoke run, never as a passing
+canonical CI run. The final gate uses the Makefile defaults.
 
 ## Hermetic filesystem and network boundary
 
@@ -247,7 +249,7 @@ the general rule remains that mutable upstream content is never a test oracle.
    command and invariant to the model-based layer, not only one scenario fixture.
 4. Make the smallest production change that restores the invariant.
 5. Run the focused red→green test and package suite at the checkpoint. Leave
-   the full `make all` run to the final handoff gate.
+   the local `make all` run to the final handoff gate.
 
 Every bug found in a real conversation becomes a permanent scenario fixture.
 Sanitize content if necessary, but preserve event order, concurrency boundary,
@@ -306,16 +308,11 @@ testing convention:
 The model protocol also includes scheduled-delivery duplicate, conflict, fresh
 reset and restart commands, and a `compact` command interleaving whole-transcript
 compaction with deliveries, restarts and stale completions. Nightly mutation
-diagnostics cover the production Go module in bounded shards; focused manual
-mutation remains available when a review needs proof that one exact assertion
-detects a relevant defect.
+diagnostics cover the production Go module in bounded shards.
 
 Useful focused commands:
 
 ```bash
 go test ./internal/sessionstore -run 'TestHarnessModel|FuzzHarnessProtocol'
 go test ./internal/daemon ./internal/managers/telegram -run TestHarnessScenario
-go test -tags=integration ./cmd/coagent -run TestHarnessE2E
-go test ./internal/sessionstore -run '^$' -fuzz FuzzHarnessProtocol -fuzztime=30s
-make mutation MUTATION_PATH=./internal/session
 ```

@@ -69,8 +69,6 @@ func deadWriterTerminal(t *testing.T) (*Manager, *terminal) {
 	manager.clients = []*terminal{term}
 	manager.mu.Unlock()
 
-	go term.run()
-
 	results := make(chan error, 1)
 	require.True(t, term.enqueue(push{
 		method: EventMethod,
@@ -78,10 +76,10 @@ func deadWriterTerminal(t *testing.T) (*Manager, *terminal) {
 		result: results,
 	}))
 
-	// The peer vanishing makes this push's socket write fail: the writer sends
-	// its error result and returns without anyone calling kill — drop has not
-	// run yet, which is precisely the window writeOutput can be called in.
-	require.NoError(t, raw.Close())
+	// Closing the server side is equivalent to peer disconnect for a push but
+	// avoids platform-dependent Unix-socket close detection.
+	require.NoError(t, conn.Close())
+	go term.run()
 
 	select {
 	case <-results:

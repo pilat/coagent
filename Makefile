@@ -1,4 +1,4 @@
-.PHONY: help build test tests test.integration test.live harness-e2e lint lint.paths lint.fix fmt fmt.check all verify verify-offline check ci long-fuzz race stress arch semgrep secrets mutation mutation.critical mutation.nightly tools workflow.check
+.PHONY: help build test tests test.integration test.live harness-e2e lint lint.paths lint.fix fmt fmt.check all verify verify-offline ci long-fuzz race stress arch semgrep secrets mutation mutation.critical mutation.nightly tools workflow.check
 
 .DEFAULT_GOAL := help
 
@@ -13,11 +13,35 @@ GITLEAKS_VERSION ?= v8.30.1
 
 GOLANGCI_RUN = golangci-lint run ./...
 SEMGREP ?= uv tool run --offline --from semgrep==$(SEMGREP_VERSION) semgrep
+MODULE_PATH := github.com/pilat/coagent
+
+# CI owns these lifecycle, migration, protocol, manager, and process suites.
+# Use exact -run selections locally; test.integration runs them all.
+CI_ONLY_TEST_PACKAGES := $(addprefix $(MODULE_PATH)/,\
+	cmd/coagent \
+	internal/daemon \
+	internal/git \
+	internal/lsp \
+	internal/managers/cli \
+	internal/managers/telegram \
+	internal/mcpstore \
+	internal/migrate \
+	internal/schedule \
+	internal/session \
+	internal/sessionstore)
+
+define require_ci
+@if [ "$${CI:-}" != "true" ]; then \
+	echo "✋ '$@' is intentionally CI-only because it is slow."; \
+	echo "   It runs during CI/CD. Use focused tests and lint during local agent work."; \
+	exit 1; \
+fi
+endef
 
 # Verification consumes only dependencies prepared by `make tools`. Target-
 # specific exports flow into prerequisites and subprocesses (including go list
 # and mutation workers) without disabling the explicitly online bootstrap.
-OFFLINE_TARGETS := all verify verify-offline check ci build test tests \
+OFFLINE_TARGETS := all verify verify-offline ci build test tests \
 	test.integration harness-e2e long-fuzz race stress mutation mutation.critical mutation.nightly \
 	lint lint.paths arch semgrep secrets
 $(OFFLINE_TARGETS): export GOPROXY := off
@@ -36,74 +60,78 @@ GO_LDFLAGS := -X $(VERSION_PKG).Version=$(VERSION)
 
 help:
 	@echo "Everyday gate:"
-	@echo "  all / verify     format check + build + lint + arch + semgrep + secret scan + tests"
+	@echo "  all / verify     format check + build + lint + architecture + fast tests"
 	@echo "  verify-offline   verify with Go/uv network resolution disabled"
-	@echo "  check            all + integration tests      (needs local git/gopls)"
-	@echo "  ci               slow local CI: all + integration + harness E2E + long fuzz + race"
-	@echo "                   + protocol stress"
 	@echo ""
 	@echo "Pieces:"
 	@echo "  fmt              apply the formatters"
 	@echo "  fmt.check        report formatting drift without modifying files"
 	@echo "  build            compile the binary"
-	@echo "  tests            go test ./... (build-tagged files excluded)"
-	@echo "  test.integration go test -tags=integration ./..."
+	@echo "  test / tests     fast package suites; CI-owned packages excluded"
 	@echo "  lint             golangci-lint over the whole module"
 	@echo "  lint.paths       scoped lint (LINT_PATHS=./internal/session/...)"
 	@echo "  lint.fix         apply every golangci-lint autofix"
-	@echo "  arch             go-arch-lint only"
-	@echo "  semgrep          project invariants only"
-	@echo "  secrets          scan Git history and working tree for committed credentials"
+	@echo "  arch             architecture boundaries and documentation contract"
 	@echo "  workflow.check   validate GitHub Actions workflows with actionlint"
 	@echo "  tools            online bootstrap for modules and pinned dev tools"
 	@echo ""
-	@echo "Opt-in (slow):"
+	@echo "Manual only:"
+	@echo "  test.live        credentialed network smoke tests (never automated)"
+	@echo ""
+	@echo "CI-only (slow):"
+	@echo "  ci               static gates + full ordinary and integration tests"
+	@echo "  semgrep          project invariants"
+	@echo "  secrets          Git history and working tree credential scan"
+	@echo "  test.integration full ordinary + integration suites (harness excluded)"
+	@echo ""
+	@echo "Scheduled/manual CI amplifiers:"
 	@echo "  harness-e2e      compiled daemon + socket + fake LLM process tests"
-	@echo "  test.live        credentialed network smoke tests (not part of CI)"
 	@echo "  long-fuzz        model-based protocol fuzzing (CI_FUZZ_TIME=5m)"
 	@echo "  race             full default suite under Go's race detector"
 	@echo "  stress           repeat/shuffle critical protocol tests"
 	@echo ""
-	@echo "Mutation diagnostics (never gates):"
+	@echo "CI-only mutation diagnostics:"
 	@echo "  mutation MUTATION_PATH=./internal/session"
-	@echo "  mutation.critical  manual curated critical-file diagnostic"
+	@echo "  mutation.critical  curated critical-file diagnostic"
 	@echo "  mutation.nightly   scheduled workflow shard; do not run as a handoff gate"
 
-# Everything that must be green before a commit, and nothing that needs the
-# network. Every gate is listed by name: burying arch/semgrep inside `lint` made
-# people read `all` and conclude they were missing.
-all verify: fmt.check build lint arch semgrep secrets tests
+# The bounded local handoff gate. Security, full lifecycle, integration, E2E,
+# fuzz, race, stress, and mutation belong to CI/CD.
+all verify: fmt.check build lint arch tests
 
 # Prove the warmed checkout does not need module or Python-package resolution.
 # Missing modules or uv tool state fail closed; only `tools` may populate them.
 verify-offline:
 	UV_OFFLINE=1 $(MAKE) verify
 
-# `all` plus hermetic suites that exercise installed programs (real gopls and
-# local-only git clone/pull). They never clone a network repository.
-check: all test.integration
-
-# Slow, reproducible, local pre-merge gate. Its test workloads are hermetic: the
-# compiled-process E2E uses a local fake LLM server, Git clones only temporary
-# local repositories, and the stress suite needs no external services. Local dev
-# tools are still required and are provisioned explicitly by `make tools`.
-# Budgets are variables so a developer can run a short smoke first
-# without changing the canonical defaults used for the final local CI run.
-ci: all test.integration harness-e2e long-fuzz race stress
+# Reproducible PR/release gate. It names the local checks directly instead of
+# invoking `all`: test.integration already includes the ordinary Go suites.
+ci:
+	$(require_ci)
+	$(MAKE) fmt.check build lint arch semgrep secrets test.integration
 
 build:
 	go build -ldflags "$(GO_LDFLAGS)" -o coagent ./cmd/coagent
 
 test tests:
-	go test ./...
+	@set -eu; \
+		all_packages="$$(go list ./...)"; \
+		local_packages=; \
+		for package in $$all_packages; do \
+			case " $(CI_ONLY_TEST_PACKAGES) " in *" $$package "*) continue ;; esac; \
+			local_packages="$$local_packages $$package"; \
+		done; \
+		[ -n "$$local_packages" ] || { echo "no local test packages found"; exit 1; }; \
+		go test $$local_packages
 
 # Integration tests are behind //go:build integration: they drive real local
 # programs such as gopls and git, so they stay out of the default run. Git tests
 # clone only temporary local repositories; no mutable network repository is a
-# test dependency. `lint` still compiles and lints these files (run.build-tags in
-# .golangci.yml).
+# test dependency. The repeated harness target owns its scenarios, avoiding a
+# redundant run here. `lint` still checks tagged files via .golangci.yml.
 test.integration:
-	go test -tags=integration -count=1 ./...
+	$(require_ci)
+	go test -tags=integration -count=1 -skip '^TestHarnessE2E_' ./...
 
 # Credentialed provider checks are intentionally outside every quality gate.
 # They require network access and explicit provider environment variables; the
@@ -114,6 +142,7 @@ test.live:
 CI_E2E_COUNT ?= 3
 
 harness-e2e:
+	$(require_ci)
 	go test -tags=integration -count=$(CI_E2E_COUNT) ./cmd/coagent -run '^TestHarnessE2E_'
 
 CI_FUZZ_TIME ?= 5m
@@ -123,11 +152,13 @@ CI_FUZZ_TIME ?= 5m
 # cache starves generation of the whole budget. Clearing it per run keeps the
 # baseline at the checked-in seeds; regression corpus lives in testdata/fuzz.
 long-fuzz:
+	$(require_ci)
 	go clean -fuzzcache
 	go test ./internal/sessionstore -run '^$$' -fuzz '^FuzzHarnessProtocol$$' -fuzztime=$(CI_FUZZ_TIME)
 	go test ./internal/sessionstore -run '^$$' -fuzz '^FuzzManagerOutputProtocol$$' -fuzztime=$(CI_FUZZ_TIME)
 
 race:
+	$(require_ci)
 	go test -race -count=1 -timeout=20m ./...
 
 CI_STRESS_COUNT ?= 25
@@ -136,6 +167,7 @@ CI_STRESS_PACKAGES := ./internal/session ./internal/sessionstore ./internal/daem
 CI_STRESS_RUN := Test(Harness|Worker|OutputTransport|ExecuteToolCalls_(RejectsSleepAlongside|RejectedSleepDoesNotSkip)|Integration_(StressBlockingNoDeadlock|BackgroundTaskRejectsCompetingSleepProtocol|ScatterGatherBlockingTasks|OneShotAckFailureRedeliversWithoutDuplicateTranscriptOrPublication|FreshScheduleDuplicateDoesNotResetOrRunTwice)|Executor_CronAckRetryKeepsCanonicalIdentityAndPayload|ScheduledDeliveryStore_ContextResetRollsBackClaimAndTranscriptOnInsertFailure|SendMessage_DoesNotDuplicateOnRateLimitOrAmbiguousTransportFailure|FollowUpAcceptedBeforeTerminalBoundaryStaysInSameActivation|Stop(ParksWholeTreeAndExplicitFollowUpResumesOnlyChild|DirectChildParksItsOwnLinkWithoutStoppingParent)|StartFinishesInterruptedStopBeforeRecoverySweep|SubagentWaitGuardRejectsSleepUntilCompletionDelivered|OpenDB_ExplicitTransactionsReserveWriterAtBegin|BudgetStore_ArmFireAndReplayAreAtomic)
 
 stress:
+	$(require_ci)
 	go test -shuffle=on -count=$(CI_STRESS_COUNT) -timeout=$(CI_STRESS_TIMEOUT) -run '$(CI_STRESS_RUN)' $(CI_STRESS_PACKAGES)
 
 # The only online bootstrap target. Go and uv themselves come from mise; all Go
@@ -161,10 +193,12 @@ arch:
 # Project invariants that are not expressible as a Go linter (.semgrep/). Every
 # rule there is at zero violations, so this is a hard gate with no baseline.
 semgrep:
+	$(require_ci)
 	@command -v uv >/dev/null 2>&1 || { echo "✋ uv missing (semgrep runs through it): curl -LsSf https://astral.sh/uv/install.sh | sh"; exit 1; }
 	$(SEMGREP) scan --config .semgrep/ --error --metrics=off --quiet .
 
 secrets:
+	$(require_ci)
 	@command -v gitleaks >/dev/null 2>&1 || { echo "✋ gitleaks missing; run make tools"; exit 1; }
 	@gitleaks_bin="$$(command -v gitleaks)"; \
 		go version -m "$$gitleaks_bin" | awk '$$1 == "mod" && $$2 == "github.com/zricethezav/gitleaks/v8" && $$3 == "$(GITLEAKS_VERSION)" { found = 1 } END { exit !found }' || { echo "✋ gitleaks $(GITLEAKS_VERSION) required; run make tools"; exit 1; }
@@ -197,9 +231,9 @@ fmt.check:
 		if ! golangci-lint fmt --diff >"$$output"; then cat "$$output"; exit 1; fi; \
 		if [ -s "$$output" ]; then cat "$$output"; exit 1; fi
 
-# Mutation testing (.gremlins.yaml) is diagnostic, never a commit, PR, pre-merge,
-# or handoff gate. Do not add any mutation target to all/check/ci. The generic
-# target requires an explicit filesystem scope because every mutant reruns tests.
+# Mutation testing (.gremlins.yaml) is CI-only diagnostic work, never a commit,
+# PR, pre-merge, or handoff gate. Do not add any mutation target to all or ci.
+# The generic target also requires an explicit filesystem scope.
 MUTATION_WORKERS ?= 4
 MUTATION_EFFICACY ?= 0
 MUTATION_COVERAGE ?= 0
@@ -207,8 +241,8 @@ MUTATION_COVERAGE ?= 0
 # coefficient turns survivors into TIMED OUT and silently hides the real debt.
 MUTATION_TIMEOUT_COEFFICIENT ?= 30
 
-# This manual diagnostic keeps a convenient curated scope for targeted test
-# audits. It is deliberately not a prerequisite of any verification target.
+# This CI-only diagnostic keeps a curated scope for targeted test audits. It is
+# deliberately not a prerequisite of any verification target.
 CRITICAL_MUTATION_DIR := internal/session
 CRITICAL_MUTATION_FILES := toolexec.go message_persist.go loop_boundary.go todo_replace.go
 # Gremlins patterns are unanchored regexps, so a bare basename like "store.go"
@@ -224,6 +258,7 @@ CRITICAL_DAEMON_MUTATION_FILES := budget_park.go progress.go readiness.go
 CRITICAL_DAEMON_MUTATION_EXCLUDES = $(foreach file,$(filter-out $(CRITICAL_DAEMON_MUTATION_FILES),$(filter-out %_test.go,$(notdir $(wildcard internal/daemon/*.go)))),--exclude-files '(^|/)$(file)$$')
 
 mutation.critical:
+	$(require_ci)
 	@go version -m "$$(command -v gremlins)" 2>/dev/null | grep -q "github.com/go-gremlins/gremlins[[:space:]]*$(GREMLINS_VERSION)" || { echo "✋ gremlins $(GREMLINS_VERSION) required; run make tools"; exit 1; }
 	gremlins unleash ./$(CRITICAL_MUTATION_DIR) \
 		--workers $(MUTATION_WORKERS) \
@@ -264,7 +299,7 @@ mutation.critical:
 # NIGHTLY DIAGNOSTIC ONLY. These shards cover the production Go module while
 # keeping the slow daemon package below the hosted-runner job limit. Survivors
 # are report data (thresholds stay zero); execution and tooling errors still
-# fail the shard. Never add this target to all/check/ci or branch protection.
+# fail the shard. Never add this target to all, ci, or branch protection.
 NIGHTLY_MUTATION_SHARDS := commands runtime persistence async managers models tooling config support daemon-lifecycle daemon-subagents daemon-ops daemon-output
 NIGHTLY_MUTATION_PATHS_commands := ./cmd/coagent ./cmd/releasebuilder
 NIGHTLY_MUTATION_PATHS_runtime := ./internal/session
@@ -295,6 +330,7 @@ NIGHTLY_MUTATION_TIMEOUT_COEFFICIENT ?= 3
 NIGHTLY_MUTATION_FLAGS ?=
 
 mutation.nightly:
+	$(require_ci)
 	@if [ -z "$(NIGHTLY_MUTATION_SHARD)" ] || [ -z "$(filter $(NIGHTLY_MUTATION_SHARD),$(NIGHTLY_MUTATION_SHARDS))" ]; then \
 		echo "✋ NIGHTLY_MUTATION_SHARD must name one declared nightly shard."; \
 		echo "   Valid shards: $(NIGHTLY_MUTATION_SHARDS)"; \
@@ -330,6 +366,7 @@ mutation.nightly:
 	done
 
 mutation:
+	$(require_ci)
 	@if [ -z "$(MUTATION_PATH)" ]; then \
 		echo "✋ MUTATION_PATH is required — each mutant reruns the whole suite for that path."; \
 		echo "   Scope it:      make mutation MUTATION_PATH=./internal/session"; \

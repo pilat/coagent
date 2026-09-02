@@ -14,26 +14,25 @@ Key differentiators:
 
 ```bash
 make build          # go build -o coagent ./cmd/coagent
-make test           # go test ./...
+make test           # fast package suites; CI-owned packages excluded
 make lint           # golangci-lint run ./...
 make fmt            # golangci-lint fmt
-make arch           # go-arch-lint check (.go-arch-lint.yml tier boundaries)
-make semgrep        # semgrep invariants (.semgrep/)
 make tools          # online bootstrap for modules and pinned development tools
-make all            # non-mutating format check + build + lint + arch + semgrep + tests
+make all            # local handoff gate with architecture and fast tests
 make verify-offline # run the everyday gate with Go/uv resolution disabled
-make ci             # slow local CI: all + integration + E2E + 5m fuzz + race + stress
-make mutation       # explicit scoped mutation diagnostic; requires MUTATION_PATH
-make mutation.nightly # scheduled-CI shard only; never a commit or PR gate
+make ci             # CI-only: static gates + full ordinary/integration tests
+make mutation.nightly # nightly workflow only; never a commit or PR gate
 
 # Run a single test
 go test ./internal/session/ -run TestLoopDetect -v
 
-# Run native Linux sandbox integration (requires a container runtime)
-COAGENT_TESTCONTAINERS_INTEGRATION=1 mise exec -- go test -count=1 -v -timeout 20m ./internal/bashsandbox -run '^TestLinuxSandboxInTestcontainer$'
 ```
 
 The Go toolchain is managed by [`mise.toml`](mise.toml).
+
+The complete suites for lifecycle, migrations, protocol stores, managers and
+external-process packages run in CI/CD. During local work, run an exact test
+from one of those packages with `-run`; never run its complete package suite.
 
 ## Commit Messages
 
@@ -59,37 +58,17 @@ them after every edit or agent turn.
 - Run `make all` once after implementation is complete, immediately before the
   final handoff. If it fails, iterate with the specific failing target or focused
   test, then rerun `make all` once after the fix.
-- Do not repeat a successful command unless a relevant input changed. Reserve
-  complete `make check` and `make ci` runs for an explicit request or the
-  corresponding pre-merge gate.
+- Do not repeat a successful command unless a relevant input changed.
+- `make ci`, Semgrep, secret scanning, integration, E2E, fuzz, race, stress,
+  and mutation targets are CI-only. Never set
+  `CI=true` locally to bypass their guard.
 
-Mutation testing is a diagnostic, never a commit, pull-request, pre-merge, or
-final-handoff gate. Do not run `mutation`, `mutation.critical`, or
-`mutation.nightly` merely because a change is ready to hand off. Run a focused
-`make mutation MUTATION_PATH=./path/to/package` only when the task explicitly
-requests mutation evidence or when investigating whether a specific test would
-catch a load-bearing guard, retry, deduplication, or error-path defect.
-
-For an explicitly requested large mutation-testing cycle, finish the coherent
-implementation batch and run `make all` before collecting mutants. Let that
-mutation run finish and collect its complete report before changing tests. Fix
-the resulting test gaps as one batch, using only focused target tests while
-iterating; then run `make all` once and repeat the same mutation scope once. Do
-not interleave one mutant, one fix, and one full-suite run.
-
-Gremlins takes a filesystem path, not a Go package pattern: scoped manual runs
-use paths such as `./internal/session`, never `./...`. The nightly target owns
-whole-module shard selection. A run that generates zero mutants is not a pass.
-Neither is a timed-out mutant: calibrate the timeout from an uncached run of the
-slowest affected package, because a cached coverage baseline can make the
-derived mutation timeout too short.
-
-Whole-module mutation belongs exclusively to the sharded scheduled or manually
+Mutation testing belongs exclusively to the sharded scheduled or manually
 triggered `Nightly Mutation` workflow. It may run for hours and publishes
-machine-readable reports. Agents must not run `make mutation.nightly` locally or
-add it to `all`, `check`, `ci`, branch protection, or another gate unless the
-user explicitly asks to debug that workflow. The nightly job is diagnostic:
-survivors are report data, while execution/tooling failures still fail a shard.
+machine-readable reports. Agents must not run any mutation target locally or
+add mutation to `all`, `ci`, branch protection, or another gate. The
+nightly job is diagnostic: survivors are report data, while execution/tooling
+failures still fail a shard.
 
 ## Testing Strategy
 
@@ -103,7 +82,7 @@ output. These are temporal protocols: unit tests alone are not sufficient.
 - **[docs/glossary.md](docs/glossary.md)** — the project vocabulary: what each coagent term means and which synonyms to avoid. Read it first; everything else is written in these words.
 - **[ARCHITECTURE.md](ARCHITECTURE.md)** — the single, bounded architecture document. Every production package appears exactly once in its grouped package map; only packages that own lifecycle, durable state, concurrency, trust boundaries or cross-package protocols receive a profile. Obey the anti-bloat contract at the top and never turn it into a file/member inventory, API reference, changelog or test plan.
 - **After implementing changes**, run `/pilat:arch-sync` to catch drift between the code and this document before committing.
-- Dependency tiers, package-map coverage, durable-protocol/trust headings and the architecture line budget are mechanically enforced by `make arch`; project invariants by `make semgrep`. Both are gated in `make all`.
+- Dependency tiers, package-map coverage, durable-protocol/trust headings and the architecture line budget are mechanically enforced locally by `make arch`; project invariants by `make semgrep` in CI/CD.
 
 ## Decision Records
 
