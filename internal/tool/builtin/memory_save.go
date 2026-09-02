@@ -34,7 +34,8 @@ func NewMemorySaveTool(store memory.CuratedStore, projectID int64, onChanged fun
 	return &memorySaveTool{store: store, projectID: projectID, onChanged: onChanged}
 }
 
-func (t *memorySaveTool) ID() string { return "memory_save" }
+func (t *memorySaveTool) ID() string         { return "memory_save" }
+func (t *memorySaveTool) ParallelSafe() bool { return false }
 
 func (t *memorySaveTool) Description() string {
 	return fmt.Sprintf(`Save a short per-project memory (max %d chars, max %d per project).

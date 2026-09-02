@@ -38,6 +38,8 @@ func NewTool(service Service, rootID int64, priced bool) tool.Tool {
 
 func (t *budgetTool) ID() string { return ToolID }
 
+func (t *budgetTool) ParallelSafe() bool { return false }
+
 func (t *budgetTool) Description() string {
 	return "Reads or changes the root session's one-shot cost/wall-time checkpoint. " +
 		"action=get is read-only; set and clear require the current real user message to begin with /budget."

@@ -66,6 +66,9 @@ func newTaskTool(
 
 func (t *taskTool) ID() string { return tool.IDTask }
 
+// Foreground scatter/gather depends on sibling task calls running together.
+func (t *taskTool) ParallelSafe() bool { return true }
+
 func (t *taskTool) Description() string {
 	types := t.subagentTypes
 	models := t.modelCatalog

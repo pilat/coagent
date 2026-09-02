@@ -35,6 +35,7 @@ func newTodoReadTool(store todo.Service) *todoReadTool {
 }
 
 func (t *todoReadTool) ID() string          { return "todoread" }
+func (t *todoReadTool) ParallelSafe() bool  { return true }
 func (t *todoReadTool) Description() string { return todoReadDescription }
 
 func (t *todoReadTool) Parameters() json.RawMessage {

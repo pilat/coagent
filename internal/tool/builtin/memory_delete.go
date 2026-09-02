@@ -28,7 +28,8 @@ func NewMemoryDeleteTool(store memory.CuratedStore, projectID int64, onChanged f
 	return &memoryDeleteTool{store: store, projectID: projectID, onChanged: onChanged}
 }
 
-func (t *memoryDeleteTool) ID() string { return "memory_delete" }
+func (t *memoryDeleteTool) ID() string         { return "memory_delete" }
+func (t *memoryDeleteTool) ParallelSafe() bool { return false }
 
 func (t *memoryDeleteTool) Description() string {
 	return `Delete a curated memory by ID.

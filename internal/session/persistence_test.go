@@ -115,6 +115,21 @@ type mockSessionStore struct {
 
 var _ sessionstore.RuntimeStore = (*mockSessionStore)(nil)
 
+func (m *mockSessionStore) InsertMessages(_ context.Context, _ int64, msgs []*transcript.Message) ([]int64, error) {
+	ids := make([]int64, len(msgs))
+	for i := range msgs {
+		m.insertCalls++
+		if m.insertErr != nil && (m.insertFailAt == 0 || m.insertCalls == m.insertFailAt) {
+			return nil, m.insertErr
+		}
+
+		m.nextMsgID++
+		ids[i] = m.nextMsgID
+	}
+
+	return ids, nil
+}
+
 func (m *mockSessionStore) InsertMessage(_ context.Context, _ int64, _ *transcript.Message) (int64, error) {
 	m.insertCalls++
 	if m.insertErr != nil && (m.insertFailAt == 0 || m.insertCalls == m.insertFailAt) {

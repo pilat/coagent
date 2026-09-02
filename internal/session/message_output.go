@@ -8,6 +8,7 @@ import (
 
 	"github.com/pilat/coagent/internal/llmwire"
 	"github.com/pilat/coagent/internal/sessionstore"
+	"github.com/pilat/coagent/internal/transcript"
 )
 
 func (ms *messageStore) addAssistantMessage(ctx context.Context, resp *llmwire.Response) error {
@@ -46,6 +47,18 @@ func (ms *messageStore) addToolResultOutput(
 	images []llmwire.ImageRef,
 	directMessages []string,
 ) error {
+	return ms.addToolResultOutputTyped(ctx, callID, toolName, content, images, directMessages, false)
+}
+
+// addToolResultOutputTyped is the single-row legacy path kept for injections,
+// settlements and block stubs; turn scheduling commits through commitToolResults.
+func (ms *messageStore) addToolResultOutputTyped(
+	ctx context.Context,
+	callID, toolName, content string,
+	images []llmwire.ImageRef,
+	directMessages []string,
+	toolError bool,
+) error {
 	ms.mu.Lock()
 	defer ms.mu.Unlock()
 
@@ -54,6 +67,7 @@ func (ms *messageStore) addToolResultOutput(
 		Content:    content,
 		ToolCallID: callID,
 		ToolName:   toolName,
+		ToolError:  toolError,
 		Images:     images,
 	}
 
@@ -72,6 +86,74 @@ func (ms *messageStore) addToolResultOutput(
 	}
 
 	ms.appendLocked(msg, id)
+
+	return nil
+}
+
+// toolResultCommit is one decided tool result row with its direct outputs.
+type toolResultCommit struct {
+	message llmwire.Message
+	direct  []string
+}
+
+// commitToolResults persists the complete decided set for one assistant turn —
+// result rows plus direct outputs — in a single transaction, and appends the
+// set to in-memory history only after that transaction succeeded.
+func (ms *messageStore) commitToolResults(ctx context.Context, commits []toolResultCommit) error {
+	ms.mu.Lock()
+	defer ms.mu.Unlock()
+
+	if len(commits) == 0 {
+		return nil
+	}
+
+	if ms.store == nil {
+		for _, c := range commits {
+			ms.appendLocked(c.message, 0)
+		}
+
+		return nil
+	}
+
+	stored := make([]*transcript.Message, len(commits))
+	for i := range commits {
+		m, err := storedMessage(&commits[i].message)
+		if err != nil {
+			return fmt.Errorf("serialize tool result %d: %w", i, err)
+		}
+
+		stored[i] = m
+	}
+
+	var (
+		ids []int64
+		err error
+	)
+
+	switch {
+	case ms.outputs != nil:
+		entries := make([]sessionstore.ToolResultEntry, len(commits))
+		for i := range commits {
+			entries[i] = sessionstore.ToolResultEntry{
+				Message:        stored[i],
+				DirectMessages: commits[i].direct,
+			}
+		}
+
+		// Output commits are deliberately dropped: the outbox rows become
+		// deliverable the moment this transaction commits.
+		ids, _, err = ms.outputs.InsertToolResultSetOnce(ctx, ms.sessID, entries)
+	default:
+		ids, err = ms.store.InsertMessages(ctx, ms.sessID, stored)
+	}
+
+	if err != nil {
+		return fmt.Errorf("persist tool result set: %w", err)
+	}
+
+	for i := range commits {
+		ms.appendLocked(commits[i].message, ids[i])
+	}
 
 	return nil
 }

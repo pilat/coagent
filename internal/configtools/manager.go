@@ -27,6 +27,8 @@ type setManagerTool struct{ deps }
 
 func (t *setManagerTool) ID() string { return tool.IDSetManager }
 
+func (t *setManagerTool) ParallelSafe() bool { return false }
+
 func (t *setManagerTool) Description() string {
 	return "Add a chat manager, or change one that exists. " +
 		"Omitted fields keep their existing values; present fields replace them. " +

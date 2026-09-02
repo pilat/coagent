@@ -135,6 +135,14 @@ A diversity-based detector that catches repetitive tool-call patterns and forces
 **tool**:
 A capability the agent invokes — id, description, parameters, execute. Three origins: **built-in** (bash, read, edit, …), **MCP** (discovered from external servers), and **control-plane** (`task`, `schedule` — registered onto the live registry from outside and owned by the package that holds their state).
 
+**parallel-safe tool**:
+A tool whose Execute may run concurrently with its siblings in one assistant response, declared in code by `ParallelSafe() bool` (a compile-time contract, not an annotation — [ADR-0040](adr/0040-tool-calls-use-declared-ordered-scheduling.md)). The initial allowlist is `read`, `ls`, `glob`, `grep`, `webfetch`, `todoread`, `task`; MCP and every unlisted tool are serialized.
+_Avoid_: thread-safe (an implementation property, not the declared scheduling policy), batch-able.
+
+**tool stage**:
+The unit of ordered scheduling (`internal/toolexec`): a maximal contiguous run of parallel-safe calls that executes concurrently through a four-slot rolling window; every other call is a singleton **barrier** stage that blocks later stages until it finishes. A failed, suspended, or cancelled call leaves later stages explicitly skipped (**fail-stop**), while its same-stage siblings still run. Result rows keep assistant call order regardless of completion order.
+_Avoid_: worker pool (there is no shared queue), fan-out (the removed unconditional concurrency).
+
 **skill**:
 A `SKILL.md` instruction bundle loaded from project, global, or marketplace dirs. Two *independent* discovery axes: `disable-model-invocation: true` hides it from the model's available-skills inventory and skill tool; `user-invocable: false` rejects `/skill <name>`. A leading `/skill <name> [args]` expands before the LLM call. Daemon-selected system instructions, currently the onboarding skill, may be activated directly without becoming model-invocable.
 _Avoid_: plugin (a plugin is a marketplace bundle), command.

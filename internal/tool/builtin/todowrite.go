@@ -81,6 +81,7 @@ func newTodoWriteTool(store todo.Service, replace TodoReplacement) *todoWriteToo
 }
 
 func (t *todoWriteTool) ID() string          { return "todowrite" }
+func (t *todoWriteTool) ParallelSafe() bool  { return false }
 func (t *todoWriteTool) Description() string { return todoWriteDescription }
 
 func (t *todoWriteTool) Parameters() json.RawMessage {

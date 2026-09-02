@@ -375,6 +375,7 @@ type recordingTool struct {
 func (r *recordingTool) ID() string                  { return r.id }
 func (r *recordingTool) Description() string         { return "records invocations" }
 func (r *recordingTool) Parameters() json.RawMessage { return json.RawMessage(`{}`) }
+func (r *recordingTool) ParallelSafe() bool          { return false }
 func (r *recordingTool) Execute(context.Context, json.RawMessage) (*tool.Result, error) {
 	r.seen <- r.id
 	return &tool.Result{Output: r.result}, nil

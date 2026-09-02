@@ -25,6 +25,7 @@ func NewSleepTool(svc Service, sessionID int64) tool.Tool {
 }
 
 func (t *sleepTool) ID() string          { return tool.IDSleep }
+func (t *sleepTool) ParallelSafe() bool  { return false }
 func (t *sleepTool) Description() string { return sleepDescription }
 
 func (t *sleepTool) Parameters() json.RawMessage {

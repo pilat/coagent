@@ -8,10 +8,11 @@ import (
 
 // mockTool is a simple tool implementation for testing.
 type mockTool struct {
-	id          string
-	description string
-	params      json.RawMessage
-	execFunc    func(ctx context.Context, params json.RawMessage) (*Result, error)
+	id           string
+	description  string
+	params       json.RawMessage
+	execFunc     func(ctx context.Context, params json.RawMessage) (*Result, error)
+	parallelSafe bool
 }
 
 type activatedMockTool struct {
@@ -24,6 +25,7 @@ func (t *activatedMockTool) ActivationCommands() []string { return t.commands }
 func (m *mockTool) ID() string                  { return m.id }
 func (m *mockTool) Description() string         { return m.description }
 func (m *mockTool) Parameters() json.RawMessage { return m.params }
+func (m *mockTool) ParallelSafe() bool          { return m.parallelSafe }
 func (m *mockTool) Execute(ctx context.Context, params json.RawMessage) (*Result, error) {
 	if m.execFunc != nil {
 		return m.execFunc(ctx, params)

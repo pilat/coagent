@@ -12,6 +12,7 @@ import (
 
 	"github.com/pilat/coagent/internal/llmwire"
 	"github.com/pilat/coagent/internal/tool"
+	"github.com/pilat/coagent/internal/toolexec"
 )
 
 func TestShouldCompact(t *testing.T) {
@@ -224,13 +225,17 @@ func TestExecuteToolCall_RejectsNilResult(t *testing.T) {
 	registry := tool.NewRegistry()
 	registry.Register(&nilResultTool{})
 
-	_, _, _, err := executeToolCall(t.Context(), registry, llmwire.ToolCall{
+	agent := newTestAgent(&nilResultTool{})
+
+	items := executeToolCallsInternal(t.Context(), agent, []llmwire.ToolCall{{
 		ID:        "call-1",
 		Name:      "nil-result",
 		Arguments: json.RawMessage(`{}`),
-	}, 200000)
+	}})
 
-	require.EqualError(t, err, "execute tool nil-result: tool returned nil result")
+	require.Len(t, items, 1)
+	require.Equal(t, toolexec.OutcomeFailed, items[0].outcome)
+	require.Equal(t, "Error: execute tool nil-result: tool returned nil result", items[0].content)
 }
 
 type nilResultTool struct{}
@@ -238,6 +243,7 @@ type nilResultTool struct{}
 func (*nilResultTool) ID() string                  { return "nil-result" }
 func (*nilResultTool) Description() string         { return "returns an invalid nil result" }
 func (*nilResultTool) Parameters() json.RawMessage { return json.RawMessage(`{}`) }
+func (*nilResultTool) ParallelSafe() bool          { return false }
 func (*nilResultTool) Execute(context.Context, json.RawMessage) (*tool.Result, error) {
 	return nil, nil
 }
@@ -336,10 +342,14 @@ func TestCountUniqueOutcomes(t *testing.T) {
 
 // stubTool is a minimal tool implementation for integration tests.
 type stubTool struct {
-	id     string
-	result string
-	err    error
+	id            string
+	result        string
+	err           error
+	parallelSafe  bool
+	resultIsError bool
 }
+
+func (s *stubTool) ParallelSafe() bool { return s.parallelSafe }
 
 type progressTrapBoundary struct {
 	*loopInputBoundary
@@ -360,7 +370,7 @@ func (s *stubTool) Execute(_ context.Context, _ json.RawMessage) (*tool.Result, 
 		return nil, s.err
 	}
 
-	return &tool.Result{Output: s.result}, nil
+	return &tool.Result{Output: s.result, IsError: s.resultIsError}, nil
 }
 
 func TestHandlePreviousResult_SubagentTextWithToolsSkipsProgress(t *testing.T) {
@@ -512,7 +522,7 @@ func TestExecuteToolCalls_RejectsSleepAlongsideSubagentFollowUpBeforeSideEffect(
 	assert.Contains(t, messages[1].Content, "subagent completion wakes the session automatically")
 }
 
-func TestExecuteToolCalls_RejectedSleepDoesNotSkipLaterIndependentTool(t *testing.T) {
+func TestExecuteToolCalls_RejectedSleepSkipsLaterStages(t *testing.T) {
 	followUpTool := &countingTool{id: tool.IDSendToSubagent}
 	sleepTool := &countingTool{id: tool.IDSleep}
 	readTool := &countingTool{id: "read"}
@@ -524,14 +534,20 @@ func TestExecuteToolCalls_RejectedSleepDoesNotSkipLaterIndependentTool(t *testin
 		{ID: "read-1", Name: "read", Arguments: []byte(`{"path":"next.go"}`)},
 	}))
 
+	// Plan decision: only sleep is invalid next to send_to_subagent — earlier
+	// stages run, the sleep fails as its own barrier stage, later stages skip.
 	assert.Equal(t, int64(1), followUpTool.runs.Load())
 	assert.Zero(t, sleepTool.runs.Load())
-	assert.Equal(t, int64(1), readTool.runs.Load(),
-		"rejecting one conflicting call must not truncate the parallel tool batch")
+	assert.Zero(t, readTool.runs.Load(),
+		"the failed sleep barrier must stop the read stage before any effect")
+
 	messages := agent.ms.getMessages()
 	require.Len(t, messages, 3)
+	assert.Equal(t, "ran", messages[0].Content)
 	assert.Contains(t, messages[1].Content, "subagent completion wakes the session automatically")
-	assert.Equal(t, "ran", messages[2].Content)
+	assert.True(t, messages[1].ToolError, "the rejected sleep persists as a typed failure")
+	assert.Contains(t, messages[2].Content, toolexec.ErrSkipped.Error())
+	assert.True(t, messages[2].ToolError, "the skipped call persists as an explicit error result")
 }
 
 func TestExecuteToolCalls_ForceTextOnly(t *testing.T) {

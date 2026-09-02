@@ -44,6 +44,7 @@ func newWriteTool(workDir string, lspMgr lsp.Manager, mutator fileMutator) *writ
 }
 
 func (t *writeTool) ID() string          { return "write" }
+func (t *writeTool) ParallelSafe() bool  { return false }
 func (t *writeTool) Description() string { return writeDescription }
 
 func (t *writeTool) Parameters() json.RawMessage {

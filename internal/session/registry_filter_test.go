@@ -103,6 +103,7 @@ type testTool struct {
 func (t testTool) ID() string                  { return t.id }
 func (t testTool) Description() string         { return "test tool" }
 func (t testTool) Parameters() json.RawMessage { return json.RawMessage(`{}`) }
+func (t testTool) ParallelSafe() bool          { return false }
 func (t testTool) Execute(_ context.Context, _ json.RawMessage) (*tool.Result, error) {
 	return &tool.Result{Output: "ok"}, nil
 }

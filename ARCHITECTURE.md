@@ -107,6 +107,7 @@ does not imply a tier except where it expresses an implementation variant.
 - `internal/todo` — session-local task tracking.
 - `internal/tool` — implementation-free tool protocol, registry and suspension sentinel.
 - `internal/tool/builtin` — built-in tools and their common stack construction.
+- `internal/toolexec` — ordered stage planner and bounded runner for model-issued tool calls.
 - `internal/transcript` — durable append-only conversation row vocabulary.
 - `internal/version` — build-stamped version vocabulary.
 - `migrations` — immutable SQLite schema migration assets.
@@ -347,6 +348,22 @@ closes admission before a generation drains and parks; managed park workers are
 cancelled and joined at shutdown. Startup reconciles armed and half-parked
 generations before normal session recovery. The next ordinary model-bound root
 input atomically releases a fired checkpoint and resumes only the root.
+
+### Tool-call scheduling: declared stages, fail-stop, atomic result sets
+
+Every tool declares `ParallelSafe() bool` — a compile-time choice, never an
+annotation. A maximal contiguous run of parallel-safe calls in one assistant
+response is one stage executed through a four-slot rolling window; every other
+call is a singleton barrier. Results keep assistant call order regardless of
+completion order. A Go error, recovered panic, typed `Result.IsError` or
+suspension blocks every later stage, which persists explicit skipped results;
+cancellation marks unadmitted calls cancelled — neither fabricates model-visible
+failures. The session commits one turn's complete non-pending result set, with
+its direct outputs, in a single transaction ([ADR-0040](docs/adr/0040-tool-calls-use-declared-ordered-scheduling.md)),
+so a crash cannot separate a persisted failure from its decided skips; a typed
+failure bit rides the durable row (legacy rows read false). The `batch`
+fallback runs its admissible nested calls through the same executor and the
+same validation, marking its combined result failed when any nested call did.
 
 ### Pending external calls: producer ledger and exact result
 

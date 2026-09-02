@@ -98,6 +98,9 @@ type CompactionEntry struct {
 // or kill another session.
 type RuntimeStore interface {
 	InsertMessage(ctx context.Context, sessionID int64, msg *transcript.Message) (int64, error)
+	// InsertMessages commits several transcript rows in one transaction and
+	// returns their ids in input order.
+	InsertMessages(ctx context.Context, sessionID int64, msgs []*transcript.Message) ([]int64, error)
 	MarkCompacted(ctx context.Context, ids []int64) error
 	ReplaceCompactedMessages(
 		ctx context.Context,
@@ -629,12 +632,13 @@ type execer interface {
 func insertMessageWith(ctx context.Context, q execer, sessionID int64, msg *transcript.Message) (int64, error) {
 	result, err := q.ExecContext(
 		ctx,
-		`INSERT INTO messages (session_id, role, content, tool_call_id, tool_name, tool_calls, reasoning_content, reasoning_raw, attachments, cost_usd, usage) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		`INSERT INTO messages (session_id, role, content, tool_call_id, tool_name, tool_error, tool_calls, reasoning_content, reasoning_raw, attachments, cost_usd, usage) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		sessionID,
 		msg.Role,
 		msg.Content,
 		nullString(msg.ToolCallID),
 		nullString(msg.ToolName),
+		msg.ToolError,
 		nullRawJSON(msg.ToolCalls),
 		msg.ReasoningContent,
 		nullRawJSON(msg.ReasoningRaw),
@@ -656,6 +660,31 @@ func insertMessageWith(ctx context.Context, q execer, sessionID int64, msg *tran
 
 func (s *store) InsertMessage(ctx context.Context, sessionID int64, msg *transcript.Message) (int64, error) {
 	return insertMessageWith(ctx, s.db, sessionID, msg)
+}
+
+func (s *store) InsertMessages(ctx context.Context, sessionID int64, msgs []*transcript.Message) ([]int64, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, fmt.Errorf("begin message set: %w", err)
+	}
+
+	defer func() { _ = tx.Rollback() }()
+
+	ids := make([]int64, len(msgs))
+	for i, msg := range msgs {
+		id, insertErr := insertMessageWith(ctx, tx, sessionID, msg)
+		if insertErr != nil {
+			return nil, insertErr
+		}
+
+		ids[i] = id
+	}
+
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("commit message set: %w", err)
+	}
+
+	return ids, nil
 }
 
 func (s *store) MarkCompacted(ctx context.Context, ids []int64) error {
@@ -775,7 +804,7 @@ func replaceCompactedMessagesTx(
 func (s *store) LoadActiveMessages(ctx context.Context, sessionID int64) ([]*transcript.Message, error) {
 	rows, err := s.db.QueryContext(
 		ctx,
-		`SELECT id, session_id, role, content, tool_call_id, tool_name, tool_calls, reasoning_content, reasoning_raw, attachments, cost_usd, usage, compacted_at, created_at
+		`SELECT id, session_id, role, content, tool_call_id, tool_name, tool_error, tool_calls, reasoning_content, reasoning_raw, attachments, cost_usd, usage, compacted_at, created_at
 		FROM messages WHERE session_id = ? AND compacted_at IS NULL ORDER BY position IS NULL, position, id`,
 		sessionID,
 	)
@@ -1007,7 +1036,7 @@ func scanMessages(rows *sql.Rows) ([]*transcript.Message, error) {
 
 		err := rows.Scan(
 			&msg.ID, &msg.SessionID, &msg.Role, &msg.Content,
-			&toolCallID, &toolName, &toolCallsRaw, &reasoningContent, &reasoningRaw,
+			&toolCallID, &toolName, &msg.ToolError, &toolCallsRaw, &reasoningContent, &reasoningRaw,
 			&attachmentsRaw,
 			&costUSD, &usageRaw, &compactedAt, &msg.CreatedAt,
 		)

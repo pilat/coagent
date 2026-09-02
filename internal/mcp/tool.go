@@ -27,6 +27,9 @@ func (t *mcpTool) ID() string {
 	return fmt.Sprintf("mcp__%s__%s", t.serverName, t.toolName)
 }
 
+// Remote concurrency annotations are hints, not a trusted contract.
+func (t *mcpTool) ParallelSafe() bool { return false }
+
 func (t *mcpTool) Description() string {
 	if t.client == nil {
 		return ""

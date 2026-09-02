@@ -21,6 +21,7 @@ type subagentWaitGuard struct {
 func (g *subagentWaitGuard) ID() string                  { return g.inner.ID() }
 func (g *subagentWaitGuard) Description() string         { return g.inner.Description() }
 func (g *subagentWaitGuard) Parameters() json.RawMessage { return g.inner.Parameters() }
+func (g *subagentWaitGuard) ParallelSafe() bool          { return g.inner.ParallelSafe() }
 
 func (g *subagentWaitGuard) Execute(ctx context.Context, params json.RawMessage) (*tool.Result, error) {
 	pending, err := g.hasPending(ctx)

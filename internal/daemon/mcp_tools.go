@@ -85,6 +85,8 @@ func newMCPTools(store mcpstore.Store, pool mcp.Pool, projectID int64) []tool.To
 
 func (t *mcpAddTool) ID() string { return tool.IDMCPAdd }
 
+func (t *mcpAddTool) ParallelSafe() bool { return false }
+
 func (t *mcpAddTool) Description() string {
 	return "Register an MCP server. " + nextRunNotice
 }
@@ -137,6 +139,8 @@ func (t *mcpAddTool) Execute(ctx context.Context, params json.RawMessage) (*tool
 
 func (t *mcpRemoveTool) ID() string { return tool.IDMCPRemove }
 
+func (t *mcpRemoveTool) ParallelSafe() bool { return false }
+
 func (t *mcpRemoveTool) Description() string {
 	return "Delete a registered MCP server. " + nextRunNotice
 }
@@ -160,6 +164,8 @@ func (t *mcpRemoveTool) Execute(ctx context.Context, params json.RawMessage) (*t
 
 func (t *mcpEnableTool) ID() string { return tool.IDMCPEnable }
 
+func (t *mcpEnableTool) ParallelSafe() bool { return false }
+
 func (t *mcpEnableTool) Description() string {
 	return "Switch a registered MCP server back on. " + nextRunNotice
 }
@@ -180,6 +186,8 @@ func (t *mcpEnableTool) Execute(ctx context.Context, params json.RawMessage) (*t
 }
 
 func (t *mcpDisableTool) ID() string { return tool.IDMCPDisable }
+
+func (t *mcpDisableTool) ParallelSafe() bool { return false }
 
 func (t *mcpDisableTool) Description() string {
 	return "Switch a registered MCP server off without deleting it. " + nextRunNotice
@@ -203,6 +211,8 @@ func (t *mcpDisableTool) Execute(ctx context.Context, params json.RawMessage) (*
 }
 
 func (t *mcpListTool) ID() string { return tool.IDMCPList }
+
+func (t *mcpListTool) ParallelSafe() bool { return false }
 
 func (t *mcpListTool) Description() string {
 	return "List registered MCP servers, global and project, enabled and disabled."

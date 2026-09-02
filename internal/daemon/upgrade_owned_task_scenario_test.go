@@ -15,7 +15,6 @@ import (
 	"github.com/pilat/coagent/internal/sessionstore"
 	"github.com/pilat/coagent/internal/subagent"
 	"github.com/pilat/coagent/internal/tool"
-	"github.com/pilat/coagent/internal/transcript"
 )
 
 // TestScenario_OwnedTaskCallSurvivesSchemaUpgradeAndRestarts stages a version-30
@@ -40,9 +39,12 @@ func TestScenario_OwnedTaskCallSurvivesSchemaUpgradeAndRestarts(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, stagedStore.UpdateSessionStatus(ctx, parent.ID, sessionstore.SessionStatusSuspended))
 
-	_, err = stagedStore.InsertMessage(ctx, parent.ID, &transcript.Message{
-		Role: llmwire.RoleUser, Content: "kick off the work",
-	})
+	// Stage through raw v30-shaped inserts: the v30 schema predates the
+	// tool_error column, so the session store's insert (which writes it)
+	// cannot run against this staged database.
+	_, err = staged.ExecContext(ctx,
+		`INSERT INTO messages (session_id, role, content) VALUES (?, 'user', 'kick off the work')`,
+		parent.ID)
 	require.NoError(t, err)
 
 	// Arguments serialize exactly as the session store persists them, with the
@@ -51,10 +53,9 @@ func TestScenario_OwnedTaskCallSurvivesSchemaUpgradeAndRestarts(t *testing.T) {
 		ID: "tc_staged", Name: tool.IDTask, Arguments: []byte(`{"prompt":"CHILD_STAGED","timeout":1}`),
 	})
 	require.NoError(t, err)
-	_, err = stagedStore.InsertMessage(ctx, parent.ID, &transcript.Message{
-		Role:      llmwire.RoleAssistant,
-		ToolCalls: json.RawMessage("[" + string(stagedArgs) + "]"),
-	})
+	_, err = staged.ExecContext(ctx,
+		`INSERT INTO messages (session_id, role, content, tool_calls) VALUES (?, 'assistant', '', ?)`,
+		parent.ID, "["+string(stagedArgs)+"]")
 	require.NoError(t, err)
 
 	childID, err := subagent.NewTransactions(staged).Create(ctx, subagent.Create{

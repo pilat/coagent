@@ -198,6 +198,8 @@ func (s *svc) finishSecretRequest(ctx context.Context, requestID, content string
 
 func (t *requestSecretTool) ID() string { return tool.IDRequestSecret }
 
+func (t *requestSecretTool) ParallelSafe() bool { return false }
+
 func (t *requestSecretTool) Description() string {
 	return "Ask the person at the terminal to type a credential. They see a masked prompt; you see only " +
 		"the variable name, and the value goes straight into " + secretsDisplayPath + ". Use this whenever a " +

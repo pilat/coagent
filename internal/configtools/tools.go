@@ -95,6 +95,8 @@ func New(ops Stager, stage StageApply) []tool.Tool {
 
 func (t *setProviderTool) ID() string { return tool.IDSetProvider }
 
+func (t *setProviderTool) ParallelSafe() bool { return false }
+
 func (t *setProviderTool) Description() string {
 	return "Add an LLM provider, or change one that exists. " +
 		"Leave api_key empty to keep the key an existing provider already has. " + restartNotice
@@ -132,6 +134,8 @@ func (t *setProviderTool) Execute(ctx context.Context, params json.RawMessage) (
 
 func (t *removeProviderTool) ID() string { return tool.IDRemoveProvider }
 
+func (t *removeProviderTool) ParallelSafe() bool { return false }
+
 func (t *removeProviderTool) Description() string {
 	return "Delete a provider. Refused if it is the only one, or if any model still uses it — " +
 		"remove those models first; nothing is deleted for you. " + restartNotice
@@ -149,6 +153,8 @@ func (t *removeProviderTool) Execute(ctx context.Context, params json.RawMessage
 }
 
 func (t *removeManagerTool) ID() string { return tool.IDRemoveManager }
+
+func (t *removeManagerTool) ParallelSafe() bool { return false }
 
 func (t *removeManagerTool) Description() string {
 	return "Delete a chat manager. " + restartNotice

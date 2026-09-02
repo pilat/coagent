@@ -52,6 +52,7 @@ func newEditTool(workDir string, lspMgr lsp.Manager, mutator fileMutator) *editT
 }
 
 func (t *editTool) ID() string          { return "edit" }
+func (t *editTool) ParallelSafe() bool  { return false }
 func (t *editTool) Description() string { return editDescription }
 
 func (t *editTool) Parameters() json.RawMessage {

@@ -183,6 +183,7 @@ func storedMessage(msg *llmwire.Message) (*transcript.Message, error) {
 		Content:          msg.Content,
 		ToolCallID:       msg.ToolCallID,
 		ToolName:         msg.ToolName,
+		ToolError:        msg.ToolError,
 		ToolCalls:        toolCallsJSON,
 		ReasoningContent: msg.ReasoningContent,
 		ReasoningRaw:     msg.ReasoningRaw,

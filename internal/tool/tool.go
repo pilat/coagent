@@ -73,6 +73,10 @@ type Tool interface {
 	Description() string
 	Parameters() json.RawMessage
 	Execute(ctx context.Context, params json.RawMessage) (*Result, error)
+	// ParallelSafe declares whether concurrent Execute invocations are safe.
+	// Every implementation must choose explicitly; absent declarations never
+	// become parallel-safe.
+	ParallelSafe() bool
 }
 
 // ActivationDeclarer marks mutations that require an exact user command turn.
@@ -113,8 +117,12 @@ type Result struct {
 	// Images carries referenced-not-stored pixel attachments this result
 	// produced (read on a supported image); stored on the role-tool row and
 	// materialized per request by the drivers. Stub/repair paths never set it.
-	Images         []llmwire.ImageRef `json:"images,omitempty"`
-	DirectMessages []string           `json:"direct_messages,omitempty"`
+	Images []llmwire.ImageRef `json:"images,omitempty"`
+	// IsError marks a typed failure: the payload is still model-visible, but
+	// every later tool stage stops. Tools set it; the scheduler never parses
+	// output text or metadata to classify results.
+	IsError        bool     `json:"is_error,omitempty"`
+	DirectMessages []string `json:"direct_messages,omitempty"`
 }
 
 // ActivationIndex returns the exact command owner map for a registry. Duplicate

@@ -56,6 +56,7 @@ func newWebFetchTool() *webFetchTool {
 }
 
 func (t *webFetchTool) ID() string          { return "webfetch" }
+func (t *webFetchTool) ParallelSafe() bool  { return true }
 func (t *webFetchTool) Description() string { return webfetchDescription }
 
 func (t *webFetchTool) Parameters() json.RawMessage {

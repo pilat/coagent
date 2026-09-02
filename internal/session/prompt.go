@@ -52,7 +52,7 @@ var toolDescriptions = map[string]string{
 	"ls":          "list directory",
 	"lsp":         "definitions, references, diagnostics",
 	"task":        "spawn/resume subagents",
-	batchToolName: "run independent tools simultaneously",
+	batchToolName: "group tool calls (fallback)",
 	"skill":       "load domain knowledge",
 	"webfetch":    "fetch known URL",
 	"schedule":    "wake-up timer",
@@ -220,7 +220,7 @@ func appendParallelSection(sb *strings.Builder, registered map[string]bool) {
 
 	sb.WriteString("\n# PARALLEL EXECUTION\n\n")
 	sb.WriteString(
-		"Use the `batch` tool to run independent tool calls simultaneously — reading multiple files, running grep + glob, combining unrelated commands. Do not batch operations where one depends on another's output.\n",
+		"Prefer native multiple tool calls for independent work; use `batch` only as a fallback.\n",
 	)
 }
 

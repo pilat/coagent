@@ -30,6 +30,8 @@ type setModelTagsParams struct {
 
 func (t *addModelTool) ID() string { return tool.IDAddModel }
 
+func (t *addModelTool) ParallelSafe() bool { return false }
+
 func (t *addModelTool) Description() string {
 	return "Enable a model. Its metadata comes from the provider's catalog at startup, so an id the " +
 		"catalog does not know keeps the daemon from starting and is rolled back. " +
@@ -60,6 +62,8 @@ func (t *addModelTool) Execute(ctx context.Context, params json.RawMessage) (*to
 }
 
 func (t *removeModelTool) ID() string { return tool.IDRemoveModel }
+
+func (t *removeModelTool) ParallelSafe() bool { return false }
 
 func (t *removeModelTool) Description() string {
 	return "Disable a model. " + defaultModelDoc +
@@ -92,6 +96,8 @@ func (t *removeModelTool) Execute(ctx context.Context, params json.RawMessage) (
 
 func (t *setDefaultModelTool) ID() string { return tool.IDSetDefaultModel }
 
+func (t *setDefaultModelTool) ParallelSafe() bool { return false }
+
 func (t *setDefaultModelTool) Description() string {
 	return "Make a configured model the default new sessions start on. " + restartNotice
 }
@@ -118,6 +124,8 @@ func (t *setDefaultModelTool) Execute(ctx context.Context, params json.RawMessag
 }
 
 func (t *setModelTagsTool) ID() string { return tool.IDSetModelTags }
+
+func (t *setModelTagsTool) ParallelSafe() bool { return false }
 
 func (t *setModelTagsTool) Description() string {
 	return "Replace a configured model's complete list of user-defined tags. Tags are lowercase letters, digits, _ or -; an empty list removes all tags. " + restartNotice

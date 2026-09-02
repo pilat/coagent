@@ -62,6 +62,7 @@ components:
   budget:        { in: internal/budget }
 
   tool:       { in: internal/tool }
+  toolexec:   { in: internal/toolexec }
   bashsandbox: { in: internal/bashsandbox }
   builtin:    { in: internal/tool/builtin }
   catalog:    { in: internal/catalog }
@@ -136,6 +137,11 @@ deps:
   tool:
     mayDependOn: [llmwire]
 
+  # Stage planner and bounded runner for model-issued tool calls: a leaf that
+  # knows no tool IDs, sessions or providers.
+  toolexec:
+    mayDependOn: [tool]
+
   # External model catalogs — the drivers' source of model metadata.
   catalog:
     mayDependOn: [coagenthome, config, logger]
@@ -149,11 +155,11 @@ deps:
 
   # Capability hub: tool implementations reach into a few leaf services.
   builtin:
-    mayDependOn: [bashsandbox, coagenthome, config, humanize, llmwire, loader, logger, lsp, mcp, memory, shellenv, todo, tool]
+    mayDependOn: [bashsandbox, coagenthome, config, humanize, llmwire, loader, logger, lsp, mcp, memory, shellenv, todo, toolexec, tool]
 
   # ReAct loop — the heaviest service.
   session:
-    mayDependOn: [builtin, config, git, id, llm, llmwire, loader, logger, mcp, mcpstore, memory, progress, registry, sessionevent, sessionstore, shellenv, todo, tool, transcript]
+    mayDependOn: [builtin, config, git, id, llm, llmwire, loader, logger, mcp, mcpstore, memory, progress, registry, sessionevent, sessionstore, shellenv, todo, toolexec, tool, transcript]
 
   # schedule fires wake-ups only through its own SessionSender interface; it has
   # protocol/logging edges but cannot import session or daemon.
