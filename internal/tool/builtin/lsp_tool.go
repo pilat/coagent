@@ -60,6 +60,7 @@ func newLspTool(workDir string, manager lsp.Manager) *lspTool {
 }
 
 func (t *lspTool) ID() string          { return "lsp" }
+func (t *lspTool) ParallelSafe() bool  { return false }
 func (t *lspTool) Description() string { return lspDescription }
 
 func (t *lspTool) Parameters() json.RawMessage {

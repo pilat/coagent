@@ -20,6 +20,7 @@ type imageStubTool struct {
 }
 
 func (t *imageStubTool) ID() string          { return t.id }
+func (t *imageStubTool) ParallelSafe() bool  { return false }
 func (t *imageStubTool) Description() string { return "stub" }
 func (t *imageStubTool) Parameters() json.RawMessage {
 	return json.RawMessage(`{"type":"object","properties":{}}`)

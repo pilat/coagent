@@ -162,3 +162,84 @@ func TestDriverMatrix_TextOnlyModelNeverGetsPixels(t *testing.T) {
 		})
 	}
 }
+
+// toolRunConversation is a native multi-call turn: one assistant call list and
+// three tool results (the typed failure last on the wire, out of call order).
+func toolRunConversation() []llmwire.Message {
+	return []llmwire.Message{
+		{Role: llmwire.RoleUser, Content: "go"},
+		{Role: llmwire.RoleAssistant, ToolCalls: []llmwire.ToolCall{
+			{ID: "call-1", Name: "read", Arguments: []byte(`{}`)},
+			{ID: "call-2", Name: "grep", Arguments: []byte(`{}`)},
+			{ID: "call-3", Name: "edit", Arguments: []byte(`{}`)},
+		}},
+		{
+			Role:       llmwire.RoleTool,
+			ToolCallID: "call-3",
+			ToolName:   "edit",
+			Content:    `{"output":"skipped"}`,
+			ToolError:  true,
+		},
+		{Role: llmwire.RoleTool, ToolCallID: "call-2", ToolName: "grep", Content: `{"output":"grep out"}`},
+		{Role: llmwire.RoleTool, ToolCallID: "call-1", ToolName: "read", Content: `{"output":"read out"}`},
+	}
+}
+
+// The Anthropic driver projects one multi-call turn as one assistant message
+// plus ONE user message whose tool_result blocks follow the assistant call
+// order and carry is_error only for the failed call. OpenAI-compatible drivers
+// keep separate ordered tool messages without any is_error field.
+func TestDriverMatrix_MultiCallToolRunProjection(t *testing.T) {
+	// Every registered driver family the matrix covers.
+	drivers := map[string]string{
+		"anthropic":  driverAnthropic,
+		"openai":     driverOpenAI,
+		"google-sa":  driverGoogleSA,
+		"openrouter": driverOpenRouter,
+	}
+
+	model := config.ModelEntry{ID: "matrix-model", MaxTokens: 1024, ContextWindow: 100000}
+
+	for name, driver := range drivers {
+		t.Run(name, func(t *testing.T) {
+			client := newMatrixClient(t, driver, model)
+
+			switch typed := client.(type) {
+			case *anthropicClient:
+				params := typed.buildMessageParams("", toolRunConversation(), nil, 256)
+				require.Len(t, params.Messages, 3, "%s: user + assistant + one grouped message", driver)
+
+				grouped := params.Messages[2]
+				require.Len(t, grouped.Content, 3, "all results merge into one user message")
+
+				var errs []bool
+				for _, block := range grouped.Content {
+					require.NotNil(t, block.OfToolResult, driver)
+					errs = append(errs, block.OfToolResult.IsError.Value)
+				}
+
+				assert.Equal(t, []bool{false, false, true}, errs, "is_error rides the typed bit in call order")
+			case *openAICompatibleClient:
+				req := oaiRequest{
+					Model:     typed.model,
+					Messages:  typed.convertMessages(toolRunConversation()),
+					MaxTokens: 256,
+				}
+
+				var roles []string
+				for _, msg := range req.Messages {
+					roles = append(roles, msg["role"].(string))
+				}
+
+				assert.Equal(t, []string{"user", "assistant", "tool", "tool", "tool"}, roles,
+					"%s keeps per-call tool messages in wire order", driver)
+
+				raw, err := json.Marshal(req)
+				require.NoError(t, err)
+				assert.NotContains(t, string(raw), "is_error", "%s sends no error field", driver)
+			default:
+				t.Fatalf("unexpected client type %T", client)
+			}
+		})
+	}
+}

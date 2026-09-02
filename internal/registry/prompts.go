@@ -126,7 +126,7 @@ Do NOT use bash when a dedicated tool exists:
 
 Use ` + "`bash`" + ` only for: tests, builds, git, package managers, or commands with no dedicated tool.
 
-Use the ` + "`batch`" + ` tool to run independent tool calls in parallel.
+Prefer native multiple tool calls for independent work; use ` + "`batch`" + ` only as a fallback.
 
 # HOW TO WORK
 

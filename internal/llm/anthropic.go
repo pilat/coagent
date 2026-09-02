@@ -190,22 +190,77 @@ func (c *anthropicClient) effortLevel() ReasoningLevel {
 func (c *anthropicClient) convertMessages(messages []llmwire.Message) []anthropic.MessageParam {
 	result := make([]anthropic.MessageParam, 0, len(messages))
 
-	for _, msg := range messages {
+	var lastAssistant *llmwire.Message
+
+	for i := 0; i < len(messages); {
+		msg := messages[i]
+
 		switch msg.Role {
 		case roleUser:
 			if blocks := c.userMessageBlocks(msg); len(blocks) > 0 {
 				result = append(result, anthropic.NewUserMessage(blocks...))
 			}
+
+			i++
 		case roleAssistant:
 			if blocks := c.buildAssistantBlocks(msg); len(blocks) > 0 {
 				result = append(result, anthropic.NewAssistantMessage(blocks...))
 			}
+
+			lastAssistant = &messages[i]
+			i++
 		case roleTool:
-			result = append(result, c.buildToolResultMessage(msg))
+			// The provider protocol delivers every tool result of one turn as
+			// user content: the whole contiguous run merges into ONE message.
+			j := i
+			for j < len(messages) && messages[j].Role == roleTool {
+				j++
+			}
+
+			result = append(result, anthropic.NewUserMessage(c.toolRunBlocks(messages[i:j], lastAssistant)...))
+			i = j
 		}
 	}
 
 	return result
+}
+
+// toolRunBlocks renders one tool-result run. Blocks follow the assistant call
+// list order; results with unknown call ids trail in their arrival order.
+func (c *anthropicClient) toolRunBlocks(
+	run []llmwire.Message,
+	assistant *llmwire.Message,
+) []anthropic.ContentBlockParamUnion {
+	if assistant != nil && len(assistant.ToolCalls) > 0 {
+		rank := make(map[string]int, len(assistant.ToolCalls))
+		for idx, tc := range assistant.ToolCalls {
+			rank[tc.ID] = idx
+		}
+
+		slices.SortStableFunc(run, func(a, b llmwire.Message) int {
+			ra, oka := rank[a.ToolCallID]
+			rb, okb := rank[b.ToolCallID]
+
+			switch {
+			case oka && okb:
+				return ra - rb
+			case oka:
+				return -1
+			case okb:
+				return 1
+			default:
+				return 0
+			}
+		})
+	}
+
+	blocks := make([]anthropic.ContentBlockParamUnion, 0, len(run))
+
+	for _, msg := range run {
+		blocks = append(blocks, c.toolResultBlock(msg))
+	}
+
+	return blocks
 }
 
 // userMessageBlocks renders a user message as text (if any) followed by its
@@ -284,11 +339,16 @@ func (c *anthropicClient) buildAssistantBlocks(msg llmwire.Message) []anthropic.
 	return blocks
 }
 
+// buildToolResultMessage renders a lone tool result as its own user message.
 func (c *anthropicClient) buildToolResultMessage(msg llmwire.Message) anthropic.MessageParam {
+	return anthropic.NewUserMessage(c.toolResultBlock(msg))
+}
+
+// toolResultBlock renders one tool_result; the durable error bit maps onto the
+// provider's is_error flag.
+func (c *anthropicClient) toolResultBlock(msg llmwire.Message) anthropic.ContentBlockParamUnion {
 	if len(msg.Images) == 0 {
-		return anthropic.NewUserMessage(
-			anthropic.NewToolResultBlock(msg.ToolCallID, toolResultPayloadJSON(msg.Content), false),
-		)
+		return anthropic.NewToolResultBlock(msg.ToolCallID, toolResultPayloadJSON(msg.Content), msg.ToolError)
 	}
 
 	// Image-bearing results nest sibling blocks inside the tool_result's content
@@ -320,13 +380,13 @@ func (c *anthropicClient) buildToolResultMessage(msg llmwire.Message) anthropic.
 		}
 	}
 
-	return anthropic.NewUserMessage(anthropic.ContentBlockParamUnion{
+	return anthropic.ContentBlockParamUnion{
 		OfToolResult: &anthropic.ToolResultBlockParam{
 			ToolUseID: msg.ToolCallID,
-			IsError:   anthropic.Bool(false),
+			IsError:   anthropic.Bool(msg.ToolError),
 			Content:   content,
 		},
-	})
+	}
 }
 
 // toolResultPayloadJSON preserves the historical wire shape: text that parses as

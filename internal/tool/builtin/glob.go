@@ -52,6 +52,7 @@ func newGlobTool(workDir string) *globTool {
 }
 
 func (t *globTool) ID() string          { return "glob" }
+func (t *globTool) ParallelSafe() bool  { return true }
 func (t *globTool) Description() string { return globDescription }
 
 func (t *globTool) Parameters() json.RawMessage {

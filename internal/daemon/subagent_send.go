@@ -30,6 +30,8 @@ func newSendToSubagentTool(sp spawner) tool.Tool {
 
 func (t *sendToSubagentTool) ID() string { return tool.IDSendToSubagent }
 
+func (t *sendToSubagentTool) ParallelSafe() bool { return false }
+
 func (t *sendToSubagentTool) Description() string {
 	return `Durably enqueue a follow-up message to the same subagent session previously launched with task, whether it was foreground or background.
 

@@ -24,6 +24,7 @@ type countingTool struct {
 func (c *countingTool) ID() string                  { return c.id }
 func (c *countingTool) Description() string         { return "counts" }
 func (c *countingTool) Parameters() json.RawMessage { return json.RawMessage(`{}`) }
+func (c *countingTool) ParallelSafe() bool          { return false }
 func (c *countingTool) Execute(context.Context, json.RawMessage) (*tool.Result, error) {
 	c.runs.Add(1)
 

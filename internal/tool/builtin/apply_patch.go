@@ -68,6 +68,7 @@ func newApplyPatchTool(workDir string, mutator fileMutator) *applyPatchTool {
 }
 
 func (t *applyPatchTool) ID() string          { return "apply_patch" }
+func (t *applyPatchTool) ParallelSafe() bool  { return false }
 func (t *applyPatchTool) Description() string { return applyPatchDescription }
 
 func (t *applyPatchTool) Parameters() json.RawMessage {

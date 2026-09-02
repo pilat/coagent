@@ -40,6 +40,8 @@ func NewScheduleTool(sessionID int64, svc Service, loc *time.Location) tool.Tool
 
 func (t *scheduleTool) ID() string { return tool.IDSchedule }
 
+func (t *scheduleTool) ParallelSafe() bool { return false }
+
 func (t *scheduleTool) Description() string {
 	tzName := t.location.String()
 	_, offset := time.Now().In(t.location).Zone()

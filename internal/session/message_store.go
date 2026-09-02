@@ -230,6 +230,7 @@ func (ms *messageStore) reloadMessages(ctx context.Context) error {
 			Content:          sm.Content,
 			ToolCallID:       sm.ToolCallID,
 			ToolName:         sm.ToolName,
+			ToolError:        sm.ToolError,
 			ReasoningContent: sm.ReasoningContent,
 			ReasoningRaw:     sm.ReasoningRaw,
 			CostUSD:          sm.CostUSD,

@@ -71,6 +71,7 @@ func newGrepTool(workDir string) *grepTool {
 }
 
 func (t *grepTool) ID() string          { return "grep" }
+func (t *grepTool) ParallelSafe() bool  { return true }
 func (t *grepTool) Description() string { return grepDescription }
 
 func (t *grepTool) Parameters() json.RawMessage {

@@ -6,44 +6,33 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-	"sync"
+
+	"go.uber.org/zap"
 
 	"github.com/pilat/coagent/internal/llmwire"
+	"github.com/pilat/coagent/internal/logger"
 	"github.com/pilat/coagent/internal/tool"
+	"github.com/pilat/coagent/internal/toolexec"
 )
 
-const (
-	batchDescription = `Executes multiple independent tool calls in parallel to reduce latency.
-
-USING THE BATCH TOOL WILL IMPROVE PERFORMANCE.
+// The description states the actual scheduling contract: parallel-safe tools
+// share stages, everything else is a barrier, and any failure stops later
+// stages. Native multiple tool calls remain the preferred model-facing form.
+const batchDescription = `Runs several tool calls from one fallback envelope. Prefer native multiple tool calls for independent work; use batch only as a fallback.
 
 Parameters format:
 {
   "calls": [
     {"tool": "read", "params": {"path": "src/main.go"}},
-    {"tool": "grep", "params": {"pattern": "func main", "path": "src"}},
-    {"tool": "bash", "params": {"command": "git status", "description": "Check git status"}}
+    {"tool": "grep", "params": {"pattern": "func main", "path": "src"}}
   ]
 }
 
-Limits:
+Limits and scheduling:
 - 1-25 tool calls per batch
-- All calls start in parallel; ordering NOT guaranteed
-- Partial failures do not stop other calls
-- Nested batch is NOT allowed
-
-Good use cases:
-- Read multiple files at once
-- grep + glob + read combos
-- Multiple independent bash commands
-- Multi-part edits on same or different files
-
-When NOT to use:
-- Operations that depend on prior tool output (e.g., create then read same file)
-- Ordered stateful mutations where sequence matters
-
-Batching tool calls yields 2-5x efficiency gain.`
-)
+- Calls run in order: parallel-safe tools in a run share up to four concurrent slots; every other tool runs alone as a barrier
+- A failed, skipped, or cancelled call stops every later stage; earlier results are kept
+- Nested batch is NOT allowed; skill, activation-only, suspending, and unknown tools must be invoked directly`
 
 type (
 	BatchParams struct {
@@ -59,11 +48,18 @@ type (
 		registry tool.Registry
 	}
 
-	callResult struct {
-		index  int
-		tool   string
+	// nestedToolCall pairs one batch entry with the registry instance resolved
+	// for it, so classification and execution cannot observe different registry
+	// states.
+	nestedToolCall struct {
+		call BatchCall
+		tool tool.Tool
+	}
+
+	// nestedResult carries one nested call's raw result; it is nil for calls
+	// that failed without producing a typed payload.
+	nestedResult struct {
 		result *tool.Result
-		err    error
 	}
 )
 
@@ -75,6 +71,10 @@ func NewBatchTool(registry tool.Registry) *BatchTool {
 
 func (t *BatchTool) ID() string          { return tool.IDBatch }
 func (t *BatchTool) Description() string { return batchDescription }
+
+// ParallelSafe is always false: nested calls are scheduled internally by the
+// common executor.
+func (t *BatchTool) ParallelSafe() bool { return false }
 
 // BindRegistry re-targets batch at the registry it is being served from, so a
 // filtered tool set stays the only thing a batch can reach.
@@ -88,7 +88,7 @@ func (t *BatchTool) Parameters() json.RawMessage {
 		"properties": {
 			"calls": {
 				"type": "array",
-				"description": "List of tool calls to execute in parallel",
+				"description": "List of tool calls to execute; parallel-safe tools share stages, others run alone",
 				"items": {
 					"type": "object",
 					"properties": {
@@ -119,9 +119,73 @@ func (t *BatchTool) Execute(ctx context.Context, params json.RawMessage) (*tool.
 		return nil, err
 	}
 
-	results := t.runParallel(ctx, p.Calls)
+	// Resolve each nested tool once: classification and execution see the
+	// same registry view the batch was served from.
+	calls := make([]toolexec.Call[nestedToolCall], len(p.Calls))
+	for i, call := range p.Calls {
+		tl := t.registry.Get(call.Tool)
 
-	return t.formatResult(results, len(p.Calls)), nil
+		calls[i] = toolexec.Call[nestedToolCall]{
+			Call: nestedToolCall{
+				call: call,
+				tool: tl,
+			},
+			ParallelSafe: tl != nil && tl.ParallelSafe(),
+		}
+	}
+
+	exec := func(callCtx context.Context, _ int, nc nestedToolCall) toolexec.Invocation[nestedResult] {
+		// Validation rejects unknown tools before planning; the nil guard
+		// keeps the executor contract honest if a registry view changes anyway.
+		if nc.tool == nil {
+			return nestedFailure(fmt.Errorf("unknown tool %q", nc.call.Tool))
+		}
+
+		result, err := nc.tool.Execute(callCtx, nc.call.Params)
+		if err != nil {
+			// Nested calls never carry pending-external semantics through the
+			// outer ID: a suspend attempt is an ordinary nested failure.
+			return nestedFailure(fmt.Errorf("execute %s: %w", nc.call.Tool, err))
+		}
+
+		if result == nil {
+			return nestedFailure(fmt.Errorf("execute %s: tool returned nil result", nc.call.Tool))
+		}
+
+		inv := toolexec.Invocation[nestedResult]{
+			Outcome: toolexec.OutcomeExecuted,
+			Result:  nestedResult{result: result},
+		}
+
+		if result.IsError {
+			inv.Outcome = toolexec.OutcomeFailed
+		}
+
+		return inv
+	}
+
+	report := toolexec.Schedule(ctx, calls, exec)
+
+	log := logger.Ctx(ctx).Named("tool.batch")
+	log.Info("tool_schedule",
+		zap.Int("calls", report.Summary.Calls),
+		zap.Int("stages", report.Summary.Stages),
+		zap.Int("max_parallel", report.Summary.MaxParallel),
+		zap.Int("executed", report.Summary.Executed),
+		zap.Int("skipped", report.Summary.Skipped),
+		zap.Int("failed", report.Summary.Failed),
+		zap.Int("suspended", report.Summary.Suspended),
+		zap.Int64("duration_ms", report.Summary.DurationMS),
+	)
+
+	return t.formatResult(p.Calls, report), nil
+}
+
+func nestedFailure(err error) toolexec.Invocation[nestedResult] {
+	return toolexec.Invocation[nestedResult]{
+		Outcome: toolexec.OutcomeFailed,
+		Err:     err,
+	}
 }
 
 func (t *BatchTool) validateCalls(calls []BatchCall) error {
@@ -136,6 +200,10 @@ func (t *BatchTool) validateCalls(calls []BatchCall) error {
 	}
 
 	for i, call := range calls {
+		if call.Params == nil {
+			return fmt.Errorf("call %d: params object is required", i+1)
+		}
+
 		if call.Tool == tool.IDBatch {
 			return fmt.Errorf("call %d: nested batch is not allowed", i+1)
 		}
@@ -162,73 +230,83 @@ func (t *BatchTool) validateCalls(calls []BatchCall) error {
 	return nil
 }
 
-func (t *BatchTool) runParallel(ctx context.Context, calls []BatchCall) []callResult {
-	results := make([]callResult, len(calls))
-
-	var wg sync.WaitGroup
-
-	for i, call := range calls {
-		wg.Add(1)
-
-		go func(idx int, c BatchCall) {
-			defer wg.Done()
-
-			impl := t.registry.Get(c.Tool)
-			result, err := impl.Execute(ctx, c.Params)
-			results[idx] = callResult{
-				index:  idx,
-				tool:   c.Tool,
-				result: result,
-				err:    err,
-			}
-		}(i, call)
-	}
-
-	wg.Wait()
-
-	return results
-}
-
-func (t *BatchTool) formatResult(results []callResult, total int) *tool.Result {
+// formatResult renders ordered nested outcomes back into one result. A typed
+// failure keeps its payload, images and direct messages; skipped and cancelled
+// calls fabricate neither.
+func (t *BatchTool) formatResult(calls []BatchCall, report toolexec.Report[nestedResult]) *tool.Result {
 	var output strings.Builder
+
 	direct := make([]string, 0)
 
 	successCount := 0
+
 	errorCount := 0
+
 	var images []llmwire.ImageRef
 
-	for _, r := range results {
-		fmt.Fprintf(&output, "=== %s (call %d) ===\n", r.tool, r.index+1)
+	for _, r := range report.Results {
+		call := calls[r.Index]
 
-		if r.err != nil {
-			fmt.Fprintf(&output, "Error: %v\n", r.err)
+		fmt.Fprintf(&output, "=== %s (call %d) ===\n", call.Tool, r.Index+1)
 
-			errorCount++
-		} else {
-			if r.result.Title != "" {
-				fmt.Fprintf(&output, "[%s]\n", r.result.Title)
+		switch r.Outcome {
+		case toolexec.OutcomeExecuted, toolexec.OutcomeFailed:
+			if r.Result.result != nil {
+				result := r.Result.result
+
+				if result.Title != "" {
+					fmt.Fprintf(&output, "[%s]\n", result.Title)
+				}
+
+				output.WriteString(result.Output)
+				output.WriteString("\n")
+
+				// Typed failures keep the attachments their real result carried
+				// (same contract as the native path); skipped/cancelled children
+				// fabricate none because they never produce a result at all.
+				images = append(images, result.Images...)
+
+				direct = append(direct, result.DirectMessages...)
+
+				if r.Outcome == toolexec.OutcomeExecuted {
+					successCount++
+				} else {
+					errorCount++
+				}
+
+				break
 			}
 
-			output.WriteString(r.result.Output)
-			output.WriteString("\n")
+			fmt.Fprintf(&output, "Error: %v\n", r.Err)
 
-			// Failed children produce no refs; successful ones keep their pixel
-			// attachments in nested call order.
-			images = append(images, r.result.Images...)
+			errorCount++
+		case toolexec.OutcomeSkipped, toolexec.OutcomeCancelled:
+			fmt.Fprintf(&output, "Error: %v\n", r.Err)
 
-			successCount++
+			errorCount++
+		case toolexec.OutcomeSuspended:
+			// Validation rejects suspending tools, so this is unreachable
+			// today; if it ever happens the call must not vanish silently.
+			fmt.Fprintf(&output, "Error: %v\n", r.Err)
 
-			direct = append(direct, r.result.DirectMessages...)
+			errorCount++
+		default:
+			// A contract violation upstream must not silently vanish from the
+			// success/error accounting.
+			fmt.Fprintf(&output, "Error: unexpected outcome %d\n", uint8(r.Outcome))
+
+			errorCount++
 		}
 
 		output.WriteString("\n")
 	}
 
 	return &tool.Result{
-		Title:  fmt.Sprintf("Batch: %d/%d succeeded", successCount, total),
-		Output: strings.TrimSpace(output.String()),
+		Title:   fmt.Sprintf("Batch: %d/%d succeeded", successCount, len(calls)),
+		Output:  strings.TrimSpace(output.String()),
+		IsError: errorCount > 0,
 		Metadata: map[string]any{
-			"total":   total,
+			"total":   len(calls),
 			"success": successCount,
 			"errors":  errorCount,
 		},

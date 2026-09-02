@@ -96,6 +96,7 @@ func newBashTool(workDir string, runner bashsandbox.Runner) *bashTool {
 }
 
 func (t *bashTool) ID() string          { return "bash" }
+func (t *bashTool) ParallelSafe() bool  { return false }
 func (t *bashTool) Description() string { return bashDescription }
 
 func (t *bashTool) Parameters() json.RawMessage {

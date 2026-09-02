@@ -14,6 +14,7 @@ import (
 type waitGuardTool struct{ calls int }
 
 func (t *waitGuardTool) ID() string                  { return tool.IDSleep }
+func (t *waitGuardTool) ParallelSafe() bool          { return false }
 func (t *waitGuardTool) Description() string         { return "sleep" }
 func (t *waitGuardTool) Parameters() json.RawMessage { return json.RawMessage(`{"type":"object"}`) }
 func (t *waitGuardTool) Execute(context.Context, json.RawMessage) (*tool.Result, error) {

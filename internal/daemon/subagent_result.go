@@ -28,6 +28,8 @@ func newGetSubagentResultTool(sp spawner) tool.Tool {
 
 func (t *getSubagentResultTool) ID() string { return "get_subagent_result" }
 
+func (t *getSubagentResultTool) ParallelSafe() bool { return false }
+
 func (t *getSubagentResultTool) Description() string {
 	return `Read a one-off diagnostic snapshot of a subagent previously launched with task.
 

@@ -13,9 +13,11 @@ import (
 )
 
 const (
-	maxDirectMessages     = 4
-	maxDirectMessageBytes = 16 * 1024
-	maxDirectTotalBytes   = 32 * 1024
+	// Caps one tool-result row's direct output; batch aggregation must fit
+	// the same budget because the combined result is a single row.
+	MaxDirectMessages     = 4
+	MaxDirectMessageBytes = 16 * 1024
+	MaxDirectTotalBytes   = 32 * 1024
 )
 
 type DirectOutputStore interface {
@@ -25,9 +27,117 @@ type DirectOutputStore interface {
 		message *transcript.Message,
 		directMessages []string,
 	) (messageID int64, outputs []*OutputCommit, err error)
+
+	// InsertToolResultSetOnce commits the complete decided result set for one
+	// assistant turn — tool result rows plus their direct outputs — in a single
+	// transaction, so a crash can never expose a failure row without the skips
+	// it decided. Idempotent by call ID; row ids and output commits return in
+	// call order.
+	InsertToolResultSetOnce(
+		ctx context.Context,
+		sessionID int64,
+		entries []ToolResultEntry,
+	) ([]int64, [][]*OutputCommit, error)
+}
+
+// ToolResultEntry is one decided tool result with its direct outputs.
+type ToolResultEntry struct {
+	Message        *transcript.Message
+	DirectMessages []string
 }
 
 var _ DirectOutputStore = (*store)(nil)
+
+func (s *store) InsertToolResultSetOnce(
+	ctx context.Context,
+	sessionID int64,
+	entries []ToolResultEntry,
+) ([]int64, [][]*OutputCommit, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, nil, fmt.Errorf("begin tool result set: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	owner, err := outputOwner(ctx, tx, sessionID)
+	if errors.Is(err, ErrOutputOwner) || errors.Is(err, ErrOutputNotRoot) {
+		// The same degrade rule as the single-result path: results still
+		// settle, their direct outputs do not.
+		owner = ""
+		entries = dropDirectMessages(entries)
+	} else if err != nil {
+		return nil, nil, err
+	}
+
+	if hasDirectMessages(entries) {
+		// Fail closed behind a stop/kill fence: no late direct output may
+		// appear below the stop result, even when its tool result settles.
+		if err := outputSessionWritable(ctx, tx, sessionID); err != nil {
+			return nil, nil, err
+		}
+	}
+
+	ids := make([]int64, len(entries))
+	outputs := make([][]*OutputCommit, len(entries))
+
+	for i, entry := range entries {
+		messageID, insertErr := insertToolResultOnce(ctx, tx, sessionID, entry.Message)
+		if insertErr != nil {
+			return nil, nil, insertErr
+		}
+
+		ids[i] = messageID
+
+		// Direct-output validation is a property of the outputs, not the row:
+		// results without direct messages settle as plain rows.
+		if len(entry.DirectMessages) == 0 {
+			outputs[i] = nil
+
+			continue
+		}
+
+		if err := validateDirectOutput(entry.Message, entry.DirectMessages); err != nil {
+			return nil, nil, err
+		}
+
+		commits := make([]*OutputCommit, 0, len(entry.DirectMessages))
+		for j, content := range entry.DirectMessages {
+			commit, directErr := insertDirectOutput(ctx, tx, sessionID, owner, entry.Message.ToolCallID, j, content)
+			if directErr != nil {
+				return nil, nil, directErr
+			}
+
+			commits = append(commits, commit)
+		}
+
+		outputs[i] = commits
+	}
+
+	if err := tx.Commit(); err != nil {
+		return nil, nil, fmt.Errorf("commit tool result set: %w", err)
+	}
+
+	return ids, outputs, nil
+}
+
+func dropDirectMessages(entries []ToolResultEntry) []ToolResultEntry {
+	stripped := make([]ToolResultEntry, len(entries))
+	for i, entry := range entries {
+		stripped[i] = ToolResultEntry{Message: entry.Message}
+	}
+
+	return stripped
+}
+
+func hasDirectMessages(entries []ToolResultEntry) bool {
+	for _, entry := range entries {
+		if len(entry.DirectMessages) > 0 {
+			return true
+		}
+	}
+
+	return false
+}
 
 func (s *store) InsertToolResultWithDirectOutput(
 	ctx context.Context,
@@ -87,21 +197,21 @@ func validateDirectOutput(message *transcript.Message, direct []string) error {
 		return errors.New("invalid direct-output tool result")
 	}
 
-	if len(direct) > maxDirectMessages {
-		return fmt.Errorf("direct output has %d messages; maximum is %d", len(direct), maxDirectMessages)
+	if len(direct) > MaxDirectMessages {
+		return fmt.Errorf("direct output has %d messages; maximum is %d", len(direct), MaxDirectMessages)
 	}
 
 	total := 0
 
 	for _, content := range direct {
-		if content == "" || len(content) > maxDirectMessageBytes {
+		if content == "" || len(content) > MaxDirectMessageBytes {
 			return errors.New("direct output contains an empty or oversized message")
 		}
 
 		total += len(content)
 	}
 
-	if total > maxDirectTotalBytes {
+	if total > MaxDirectTotalBytes {
 		return errors.New("direct output exceeds total size limit")
 	}
 
@@ -116,12 +226,15 @@ func insertToolResultOnce(
 ) (int64, error) {
 	var existingID int64
 	var existingContent string
+	var existingToolError bool
+	var existingToolName string
 
-	err := tx.QueryRowContext(ctx, `SELECT id, content FROM messages
+	err := tx.QueryRowContext(ctx, `SELECT id, content, tool_error, tool_name FROM messages
 		WHERE session_id = ? AND role = 'tool' AND tool_call_id = ? ORDER BY id LIMIT 1`,
-		sessionID, message.ToolCallID).Scan(&existingID, &existingContent)
+		sessionID, message.ToolCallID).Scan(&existingID, &existingContent, &existingToolError, &existingToolName)
 	if err == nil {
-		if existingContent != message.Content {
+		if existingContent != message.Content || existingToolError != message.ToolError ||
+			existingToolName != message.ToolName {
 			return 0, ErrOutputConflict
 		}
 
@@ -133,9 +246,9 @@ func insertToolResultOnce(
 	}
 
 	result, err := tx.ExecContext(ctx, `INSERT INTO messages
-		(session_id, role, content, tool_call_id, tool_name, created_at)
-		VALUES (?, 'tool', ?, ?, ?, ?)`,
-		sessionID, message.Content, message.ToolCallID, message.ToolName, message.CreatedAt)
+		(session_id, role, content, tool_call_id, tool_name, tool_error, created_at)
+		VALUES (?, 'tool', ?, ?, ?, ?, ?)`,
+		sessionID, message.Content, message.ToolCallID, message.ToolName, message.ToolError, message.CreatedAt)
 	if err != nil {
 		return 0, fmt.Errorf("insert direct-output tool result: %w", err)
 	}

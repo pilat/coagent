@@ -51,6 +51,7 @@ func newReadTool(workDir string) *readTool {
 }
 
 func (t *readTool) ID() string          { return "read" }
+func (t *readTool) ParallelSafe() bool  { return true }
 func (t *readTool) Description() string { return readDescription }
 
 func (t *readTool) Parameters() json.RawMessage {

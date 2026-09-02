@@ -74,10 +74,13 @@ type ImageRef struct {
 }
 
 type Message struct {
-	Role             string // "user", "assistant", "tool"
-	Content          string
-	ToolCallID       string
-	ToolName         string
+	Role       string // "user", "assistant", "tool"
+	Content    string
+	ToolCallID string
+	ToolName   string
+	// ToolError marks a durable typed failure on a tool result row; legacy
+	// rows and ordinary results read as false.
+	ToolError        bool
 	ToolCalls        []ToolCall      // For assistant messages that call tools
 	ReasoningContent string          // For OpenAI-compatible models that return reasoning_content
 	ReasoningRaw     json.RawMessage `json:"ReasoningRaw,omitempty"` // sealed ReasoningEnvelope; replayed verbatim

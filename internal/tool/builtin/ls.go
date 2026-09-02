@@ -43,6 +43,7 @@ func NewLsTool(workDir string) *LsTool {
 }
 
 func (t *LsTool) ID() string          { return "ls" }
+func (t *LsTool) ParallelSafe() bool  { return true }
 func (t *LsTool) Description() string { return lsDescription }
 
 func (t *LsTool) Parameters() json.RawMessage {

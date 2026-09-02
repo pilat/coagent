@@ -210,12 +210,12 @@ func loadMessage(ctx context.Context, q queryer, messageID int64) (*transcript.M
 	var costUSD sql.NullFloat64
 
 	err := q.QueryRowContext(ctx, `
-		SELECT id, session_id, role, content, tool_call_id, tool_name, tool_calls,
+		SELECT id, session_id, role, content, tool_call_id, tool_name, tool_error, tool_calls,
 			reasoning_content, reasoning_raw, attachments, cost_usd, usage, compacted_at, created_at
 		FROM messages WHERE id = ?`, messageID,
 	).Scan(
 		&msg.ID, &msg.SessionID, &msg.Role, &msg.Content,
-		&toolCallID, &toolName, &toolCallsRaw, &reasoningContent, &reasoningRaw,
+		&toolCallID, &toolName, &msg.ToolError, &toolCallsRaw, &reasoningContent, &reasoningRaw,
 		&attachmentsRaw,
 		&costUSD, &usageRaw, &compactedAt, &msg.CreatedAt,
 	)
