@@ -11,19 +11,18 @@ import (
 )
 
 const (
-	callbackNav       = "nav"
-	callbackLaunch    = "launch"
-	callbackLaunchGWT = "launch_gwt"
-	callbackMore      = "more"
-	callbackSpawn     = "spawn"
-	callbackKill      = "kill"
-	callbackModel     = "model"
-	callbackEffort    = "effort"
-	callbackNewPick   = "newpick"
-	callbackNewPage   = "newpage"
-	commandKill       = "/kill"
-	commandStop       = "/stop"
-	telegramChannel   = "telegram"
+	callbackNav     = "nav"
+	callbackLaunch  = "launch"
+	callbackMore    = "more"
+	callbackSpawn   = "spawn"
+	callbackKill    = "kill"
+	callbackModel   = "model"
+	callbackEffort  = "effort"
+	callbackNewPick = "newpick"
+	callbackNewPage = "newpage"
+	commandKill     = "/kill"
+	commandStop     = "/stop"
+	telegramChannel = "telegram"
 )
 
 type callbackAction struct {
@@ -64,6 +63,11 @@ func (m *Manager) handleServiceTopicMessage(ctx context.Context, text string) {
 		return
 	}
 
+	if _, ok := parseGwtCommand(text); ok {
+		_, _ = m.sendMessage(ctx, "Use /gwt inside a session topic.", nil, m.serviceTopicID)
+		return
+	}
+
 	switch text {
 	case "/start":
 		_, _ = m.sendMessage(ctx, "Use /spawn to create a session, or /kill to stop one.", nil, m.serviceTopicID)
@@ -93,6 +97,11 @@ func (m *Manager) handleSessionTopicMessage(ctx context.Context, sessionID, thre
 	// /new belongs to the service topic; steer it there instead of to the LLM.
 	if _, ok := parseNewCommand(text); ok {
 		_, _ = m.sendMessage(ctx, "Use this command in the service topic.", nil, threadID)
+		return
+	}
+
+	if name, ok := parseGwtCommand(text); ok {
+		m.handleGWT(ctx, sessionID, threadID, name)
 		return
 	}
 
@@ -263,7 +272,6 @@ func (m *Manager) buildSpawnDirKeyboard(
 
 	launchRow := []tgInlineButton{
 		{Text: "🚀 Launch here", CallbackData: "launch:" + strconv.FormatInt(m.navID(dir), 10)},
-		{Text: "🌿 GWT", CallbackData: "launch_gwt:" + strconv.FormatInt(m.navID(dir), 10)},
 	}
 
 	pagination := make([]tgInlineButton, 0, 2)
@@ -355,26 +363,12 @@ func (m *Manager) handleLaunch(ctx context.Context, dir string) {
 	}
 }
 
-func (m *Manager) handleLaunchGWT(ctx context.Context, dir string) {
-	_, _ = m.sendMessage(ctx, "🌿 Creating worktree session in "+m.displayDir(dir)+"...", nil, m.serviceTopicID)
-
-	_, err := m.controller.CreateSession(ctx, controllerapi.SessionCreateData{
-		WorkDir:     dir,
-		UseWorktree: true,
-		Attributes: map[string]any{
-			"channel": telegramChannel,
-		},
-	})
-	if err != nil {
-		_, _ = m.sendMessage(ctx, "❌ Session create failed: "+err.Error(), nil, m.serviceTopicID)
-	}
-}
-
 func (m *Manager) handleHelp(ctx context.Context, sessionID, threadID int64) {
 	lines := []string{
 		"<b>Commands:</b>",
 		"  /new — new dialog project by name (/new &lt;name&gt;), or bare /new to pick one",
 		"  /spawn — open folder picker for new session",
+		"  /gwt &lt;name&gt; — fork this project into a git worktree (session topic only)",
 		"  /kill — end this session (terminal)",
 		"  /stop — stop the current run (session stays, resumable)",
 		"  /clear — clear session (fresh start, same topic)",
@@ -466,8 +460,6 @@ func (m *Manager) handleCallback(ctx context.Context, cb *telegramCallbackData) 
 	switch action.Kind {
 	case callbackNav:
 		m.handleCallbackNav(ctx, cb, action)
-	case callbackLaunchGWT:
-		m.handleCallbackLaunchGWT(ctx, cb, action)
 	case callbackLaunch:
 		m.handleCallbackLaunch(ctx, cb, action)
 	case callbackMore:
@@ -494,15 +486,6 @@ func (m *Manager) handleCallbackNav(ctx context.Context, cb *telegramCallbackDat
 
 	if ok {
 		m.handleSpawn(ctx, dir, 0, cb.Message.MessageID)
-	}
-}
-
-func (m *Manager) handleCallbackLaunchGWT(ctx context.Context, cb *telegramCallbackData, action callbackAction) {
-	dir, ok := m.pathByNavID(action.DirID)
-	m.answerCallback(ctx, cb.ID, "Creating worktree...")
-
-	if ok {
-		m.handleLaunchGWT(ctx, dir)
 	}
 }
 
@@ -576,10 +559,6 @@ func (m *Manager) pathByNavID(id int64) (string, bool) {
 func parseCallbackData(data string) (callbackAction, bool) {
 	if id, ok := cutInt64(data, "nav:"); ok {
 		return callbackAction{Kind: callbackNav, DirID: id}, true
-	}
-
-	if id, ok := cutInt64(data, "launch_gwt:"); ok {
-		return callbackAction{Kind: callbackLaunchGWT, DirID: id}, true
 	}
 
 	if id, ok := cutInt64(data, "launch:"); ok {

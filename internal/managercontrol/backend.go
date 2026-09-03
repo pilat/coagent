@@ -29,6 +29,7 @@ type runtimeBackend interface {
 
 type projectBackend interface {
 	GetOrCreateProject(context.Context, string) (int64, error)
+	GetOrCreateNamedProject(context.Context, string, string) (int64, error)
 	GetOrCreateSystemProject(context.Context, string, string) (int64, error)
 	GetProjectWorkDir(context.Context, int64) (string, error)
 	GetProjectName(context.Context, int64) (string, error)

@@ -27,17 +27,26 @@ func (s *service) createSession(
 		return 0, fmt.Errorf("unknown system project %q", data.SystemProject)
 	}
 
-	if data.SystemProject != "" && data.UseWorktree {
+	if data.SystemProject != "" && data.WorktreeName != "" {
 		return 0, fmt.Errorf("system project %q cannot use a worktree", data.SystemProject)
 	}
 
-	if data.UseWorktree {
-		nextWorkDir, err := createWorktree(ctx, data.WorkDir)
+	var (
+		created             createdWorktree
+		worktreeProjectName string
+	)
+
+	if data.WorktreeName != "" {
+		next, err := s.createWorktree(ctx, data.WorkDir, data.WorktreeName)
 		if err != nil {
-			return 0, err
+			return 0, fmt.Errorf("worktree: %w", err)
 		}
 
-		data.WorkDir = nextWorkDir
+		data.WorkDir = next.path
+		// Consumed: the created worktree is registered below under its display name.
+		data.WorktreeName = ""
+		worktreeProjectName = next.displayName
+		created = next
 	}
 
 	data.Attributes = maps.Clone(data.Attributes)
@@ -47,14 +56,14 @@ func (s *service) createSession(
 
 	data.Attributes[controllerapi.SessionAttributeManagerID] = managerID
 
-	projectID, err := s.resolveSessionProject(ctx, data)
+	projectID, err := s.resolveSessionProject(ctx, data, worktreeProjectName)
 	if err != nil {
-		return 0, fmt.Errorf("resolve project: %w", err)
+		return 0, abandonWorktree(created, fmt.Errorf("resolve project: %w", err))
 	}
 
 	sessionID, err := s.backend.Send(ctx, projectID, data.Prompt, data.Model, data.Attributes)
 	if err != nil {
-		return 0, fmt.Errorf("send session: %w", err)
+		return 0, abandonWorktree(created, fmt.Errorf("send session: %w", err))
 	}
 
 	if data.Prompt != "" {
@@ -62,6 +71,22 @@ func (s *service) createSession(
 	}
 
 	return sessionID, nil
+}
+
+// abandonWorktree rolls a freshly created worktree back after a later
+// registration or launch failure, folding a rollback failure into the result.
+// A project registered before the failure may stay in the registry; with no
+// session it never surfaces in pickers or session lists.
+func abandonWorktree(created createdWorktree, err error) error {
+	if created.remove == nil {
+		return err
+	}
+
+	if removeErr := created.remove(); removeErr != nil {
+		return errors.Join(err, removeErr)
+	}
+
+	return err
 }
 
 func (s *service) sendSessionMessage(
@@ -104,7 +129,7 @@ func (s *service) listSessions(
 		projectName, _ := s.backend.GetProjectName(ctx, record.ProjectID)
 		infos = append(infos, controllerapi.SessionInfo{
 			ID: record.ID, Name: fmt.Sprintf("%s - %d", projectName, record.ID),
-			WorkDir: workDir, ProjectID: record.ProjectID,
+			WorkDir: workDir, ProjectID: record.ProjectID, ProjectName: projectName,
 			HasActiveLoop: s.backend.HasActiveLoop(record.ID), Model: record.Model,
 			ReasoningLevel: record.ReasoningLevel, Status: string(record.Status),
 			Attributes: record.Attributes, UpdatedAt: record.UpdatedAt, KilledAt: record.KilledAt,

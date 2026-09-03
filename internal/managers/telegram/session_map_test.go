@@ -33,6 +33,7 @@ type fakeController struct {
 	messageCalls []controllerapi.SessionMessageData
 
 	createSessionCalls  []controllerapi.SessionCreateData
+	createSessionErr    error
 	createProjectCalls  []controllerapi.ProjectCreateData
 	createProjectResult *controllerapi.ProjectCreateResultData
 	createProjectErr    error
@@ -49,7 +50,12 @@ type fakeController struct {
 
 func (f *fakeController) CreateSession(_ context.Context, data controllerapi.SessionCreateData) (int64, error) {
 	f.createSessionCalls = append(f.createSessionCalls, data)
-	return 0, nil
+	if f.createSessionErr != nil {
+		return 0, f.createSessionErr
+	}
+
+	// Distinct positive IDs: handlers map the returned session for follow-ups.
+	return int64(len(f.createSessionCalls)), nil
 }
 
 func (f *fakeController) CreateProject(

@@ -106,12 +106,15 @@ type State = sessionevent.State
 
 // SessionCreateData defines input for creating a session.
 type SessionCreateData struct {
-	WorkDir       string         `json:"work_dir"`
-	Prompt        string         `json:"prompt"`
-	Model         string         `json:"model,omitempty"`
-	Attributes    map[string]any `json:"attributes,omitempty"`
-	UseWorktree   bool           `json:"use_worktree,omitempty"`
-	SystemProject string         `json:"system_project,omitempty"`
+	WorkDir    string         `json:"work_dir"`
+	Prompt     string         `json:"prompt"`
+	Model      string         `json:"model,omitempty"`
+	Attributes map[string]any `json:"attributes,omitempty"`
+	// WorktreeName, when set, forks WorkDir's repository into a new git worktree
+	// of that name (branched off the repository's default branch pulled fresh
+	// from its remote) and runs the session there instead of in WorkDir.
+	WorktreeName  string `json:"worktree_name,omitempty"`
+	SystemProject string `json:"system_project,omitempty"`
 }
 
 // SessionMessageData defines one durable normal message for a session.
@@ -194,6 +197,7 @@ type SessionInfo struct {
 	Name           string         `json:"name"`
 	WorkDir        string         `json:"work_dir"`
 	ProjectID      int64          `json:"project_id,omitempty"`
+	ProjectName    string         `json:"project_name,omitempty"`
 	HasActiveLoop  bool           `json:"has_active_loop"`
 	Model          string         `json:"model,omitempty"`
 	ReasoningLevel string         `json:"reasoning_level,omitempty"`
