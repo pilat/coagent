@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -49,6 +50,10 @@ func (c *localRepoGitClient) IsCloned(ctx context.Context, repoPath string) bool
 
 func (c *localRepoGitClient) GetRemoteURL(ctx context.Context, repoPath string) (string, error) {
 	return c.delegate.GetRemoteURL(ctx, repoPath)
+}
+
+func (c *localRepoGitClient) HealthCheck(ctx context.Context, repoPath string) error {
+	return c.delegate.HealthCheck(ctx, repoPath)
 }
 
 func TestIntegration_Marketplace_LocalGitRepository(t *testing.T) {
@@ -113,6 +118,51 @@ func TestIntegration_Marketplace_DiskCachePullsLocalRepository(t *testing.T) {
 
 func fixtureMarketplaceEntry() config.MarketplaceEntry {
 	return config.MarketplaceEntry{URL: fixtureMarketplaceURL, Plugins: []string{fixturePluginName}}
+}
+
+// A cache clone whose local state git rejects must heal on the next resolve
+// instead of warning forever: the production failure was an index plus
+// AppleDouble ._-prefixed pack junk left behind by a restore from macOS.
+func TestIntegration_Marketplace_RecoversCorruptClone(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+
+	t.Setenv("HOME", t.TempDir())
+	sourceDir := newLocalMarketplaceRepository(t)
+	gitClient := &localRepoGitClient{delegate: coagentgit.New(), sourceDir: sourceDir}
+	entry := fixtureMarketplaceEntry()
+
+	first := New(NewMarketplaceCache(gitClient)).(*svc)
+	require.NoError(t, first.ProcessMarketplace(context.Background(), entry, nil))
+
+	owner, repo, err := parseGitHubURL(fixtureMarketplaceURL)
+	require.NoError(t, err)
+	cacheDir, err := cacheDirForMarketplace(owner, repo)
+	require.NoError(t, err)
+
+	require.NoError(t, os.WriteFile(
+		filepath.Join(cacheDir, ".git", "index"), []byte("garbage-not-an-index-file"), 0o644))
+
+	packDir := filepath.Join(cacheDir, ".git", "objects", "pack")
+	packEntries, err := os.ReadDir(packDir)
+	require.NoError(t, err)
+
+	for _, e := range packEntries {
+		if strings.HasSuffix(e.Name(), ".idx") {
+			require.NoError(t, os.WriteFile(
+				filepath.Join(packDir, "._"+e.Name()), []byte("AppleDouble junk"), 0o644))
+		}
+	}
+
+	addFixtureSkill(t, sourceDir, "recovered-skill")
+	commitLocalRepository(t, sourceDir, "add recovered skill")
+
+	second := New(NewMarketplaceCache(gitClient)).(*svc)
+	require.NoError(t, second.ProcessMarketplace(context.Background(), entry, nil))
+	require.NoError(t, second.LoadSkills(t.TempDir()))
+	assert.NotNil(t, second.GetSkill(fixturePluginName+":recovered-skill"),
+		"recovery must replace the broken clone with fresh content")
 }
 
 func newLocalMarketplaceRepository(t *testing.T) string {

@@ -29,6 +29,10 @@ type Client interface {
 	IsCloned(ctx context.Context, repoPath string) bool
 
 	GetRemoteURL(ctx context.Context, repoPath string) (string, error)
+
+	// HealthCheck reports whether the local clone passes git fsck; a non-nil
+	// error means the repository is corrupt and worth re-cloning from scratch.
+	HealthCheck(ctx context.Context, repoPath string) error
 }
 
 var _ Client = (*client)(nil)
@@ -104,6 +108,27 @@ func (c *client) IsCloned(ctx context.Context, repoPath string) bool {
 	return true
 }
 
+// HealthCheck runs a full git fsck (no --connectivity-only: it must open every
+// pack, which is what catches AppleDouble junk and truncated indexes). fsck
+// exits non-zero on broken objects/indexes and zero on a sound clone, so the
+// verdict is exit-code based — locale- and version-independent.
+func (c *client) HealthCheck(ctx context.Context, repoPath string) error {
+	ctx, cancel := context.WithTimeout(ctx, gitTimeout)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, "git", "fsck", "--no-dangling")
+	cmd.Dir = repoPath
+	cmd.Env = nonInteractiveGitEnv()
+	cmd.WaitDelay = gitWaitDelay
+
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("git fsck failed: %w (output: %s)", err, string(output))
+	}
+
+	return nil
+}
+
 func (c *client) GetRemoteURL(ctx context.Context, repoPath string) (string, error) {
 	if !c.IsCloned(ctx, repoPath) {
 		return "", fmt.Errorf("%w: %s", ErrNotARepo, repoPath)
@@ -122,9 +147,11 @@ func (c *client) GetRemoteURL(ctx context.Context, repoPath string) (string, err
 
 // nonInteractiveGitEnv disables every credential-prompt path so git fails fast
 // instead of blocking on stdin/GUI. os.Environ carries no secrets (they never
-// enter the process env), so this is safe to inherit.
+// enter the process env), so this is safe to inherit. LC_ALL=C pins git's
+// messages to English: log greps and error diagnosis rely on stable output.
 func nonInteractiveGitEnv() []string {
 	return append(os.Environ(),
+		"LC_ALL=C",
 		"GIT_TERMINAL_PROMPT=0",
 		"GCM_INTERACTIVE=never",
 		"GIT_ASKPASS=",
