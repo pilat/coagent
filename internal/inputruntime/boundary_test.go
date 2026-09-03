@@ -33,6 +33,23 @@ type commandBoundary interface {
 	HandleWithOutput(context.Context, session.PendingInput, string, string) error
 }
 
+func TestBoundaryPromotesInputAndWakesProgress(t *testing.T) {
+	t.Parallel()
+
+	ctx := t.Context()
+	store, sessionID := newBoundaryStore(t, nil)
+	queued, err := store.EnqueueInput(ctx, sessionID, sessionstore.InputSourceUser, "do the work")
+	require.NoError(t, err)
+
+	activity := 0
+	boundary := New(store, nil).Boundary(sessionID, nil, nil, func() { activity++ }, nil)
+	accepted, blocked, err := boundary.Accept(ctx, pendingInput(queued), "prepared", nil)
+	require.NoError(t, err)
+	assert.True(t, accepted)
+	assert.False(t, blocked)
+	assert.Equal(t, 1, activity)
+}
+
 func TestBoundaryPromotesInputWithActivation(t *testing.T) {
 	t.Parallel()
 
@@ -44,7 +61,8 @@ func TestBoundaryPromotesInputWithActivation(t *testing.T) {
 	require.NoError(t, err)
 
 	input := pendingInput(queued)
-	boundary := New(store, nil).Boundary(sessionID, nil, nil, nil)
+	activity := 0
+	boundary := New(store, nil).Boundary(sessionID, nil, nil, func() { activity++ }, nil)
 	activated, ok := boundary.(activationBoundary)
 	require.True(t, ok)
 
@@ -54,6 +72,7 @@ func TestBoundaryPromotesInputWithActivation(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, accepted)
 	assert.False(t, blocked)
+	assert.Equal(t, 1, activity)
 
 	grant, err := activated.PendingActivation(ctx)
 	require.NoError(t, err)
@@ -77,7 +96,7 @@ func TestBoundaryHandlesOwnedCommandWithOutputAtomically(t *testing.T) {
 
 	queued, err := store.EnqueueInput(ctx, sessionID, sessionstore.InputSourceUser, "/status")
 	require.NoError(t, err)
-	boundary := New(store, nil).Boundary(sessionID, nil, nil, nil)
+	boundary := New(store, nil).Boundary(sessionID, nil, nil, nil, nil)
 	commands, ok := boundary.(commandBoundary)
 	require.True(t, ok)
 

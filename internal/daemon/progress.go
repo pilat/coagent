@@ -5,10 +5,15 @@ import (
 	"errors"
 	"fmt"
 
+	"go.uber.org/zap"
+
 	"github.com/pilat/coagent/internal/budget"
 	"github.com/pilat/coagent/internal/controllerapi"
+	"github.com/pilat/coagent/internal/logger"
 	"github.com/pilat/coagent/internal/progress"
 	"github.com/pilat/coagent/internal/progressruntime"
+	"github.com/pilat/coagent/internal/sessionevent"
+	"github.com/pilat/coagent/internal/sessionstore"
 )
 
 var errProgressUnavailable = errors.New("progress runtime unavailable")
@@ -109,6 +114,74 @@ func (s *svc) liveContextProjection(ctx context.Context, rootID int64) (progress
 	return provider.ContextProjection(ctx), true
 }
 
+func (s *svc) mainModelWorking(rootID int64) bool {
+	activeRunner, ok := s.runners.Load(rootID)
+	if !ok {
+		return false
+	}
+
+	return activeRunner.Service() != nil
+}
+
+func (s *svc) wakeProgress() {
+	if s.progress != nil {
+		s.progress.Wake()
+	}
+}
+
+func (s *svc) publishSubagentProgress(ctx context.Context, childID int64) {
+	log := logger.Ctx(ctx).Named("daemon.progress")
+
+	record, err := s.sessionStore.GetSession(ctx, childID)
+	if err != nil {
+		log.Warn("load_subagent_progress_session", zap.Int64("child", childID), zap.Error(err))
+
+		return
+	}
+
+	if record.ParentID == 0 {
+		return
+	}
+
+	link, err := s.links.GetLink(ctx, childID)
+	if err != nil {
+		log.Warn("load_subagent_progress_link", zap.Int64("child", childID), zap.Error(err))
+
+		return
+	}
+
+	if link == nil {
+		return
+	}
+
+	causalID := fmt.Sprintf("subagent:%d:%d:%s", childID, link.ActivationSeq, link.State)
+	if link.Blocking && link.ParentID == record.RootID && !link.Terminal() {
+		causalID, err = waitingProgressCausalID(s.collectWaitingProjections(ctx, record.RootID))
+		if err != nil {
+			log.Warn("build_subagent_progress_identity", zap.Int64("child", childID), zap.Error(err))
+
+			return
+		}
+	}
+
+	content, published, err := s.enqueueProgressChangeFor(ctx, record.RootID, causalID, true)
+	if errors.Is(err, sessionstore.ErrOutputOwner) || errors.Is(err, sessionstore.ErrProgressSuperseded) {
+		return
+	}
+
+	if err != nil {
+		log.Warn("publish_subagent_progress", zap.Int64("child", childID), zap.Error(err))
+
+		return
+	}
+
+	if published {
+		s.publish(record.RootID, sessionevent.Notification{
+			Type: sessionevent.NotifyMessage, Message: content,
+		})
+	}
+}
+
 func newProgressRuntime(
 	store progressruntime.Store,
 	budgetSvc budget.Service,
@@ -119,7 +192,7 @@ func newProgressRuntime(
 	}
 
 	return progressruntime.New(
-		store, budgetSvc, daemon.HasActiveLoop, daemon.liveContextProjection,
+		store, budgetSvc, daemon.HasActiveLoop, daemon.mainModelWorking, daemon.liveContextProjection,
 		daemon.startBudgetPark, daemon.publish,
 	)
 }

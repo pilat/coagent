@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/pilat/coagent/internal/subagent"
 	"github.com/pilat/coagent/internal/transcript"
 )
 
@@ -297,4 +298,39 @@ func TestScheduledTurnWithoutNarrationDoesNotReuseNote(t *testing.T) {
 	facts, err := store.CaptureProgress(ctx, session.ID)
 	require.NoError(t, err)
 	assert.Empty(t, facts.LatestModelProgress, "the prior turn's note must not carry forward")
+}
+
+func TestCaptureProgressCountsActiveSubagentsAcrossRootTree(t *testing.T) {
+	t.Parallel()
+
+	store, db, projectID := newTestStore(t)
+	ctx := t.Context()
+
+	root, err := store.CreateSession(ctx, projectID, "m", "", nil)
+	require.NoError(t, err)
+	foreground, err := store.CreateSubagentSession(ctx, projectID, root.ID, root.ID, "general", "m", "")
+	require.NoError(t, err)
+	nestedForeground, err := store.CreateSubagentSession(
+		ctx, projectID, foreground, root.ID, "general", "m", "",
+	)
+	require.NoError(t, err)
+	background, err := store.CreateSubagentSession(ctx, projectID, root.ID, root.ID, "general", "m", "")
+	require.NoError(t, err)
+
+	links := subagent.NewStore(db)
+	require.NoError(t, links.InsertSubagentLink(ctx, subagent.Link{
+		ParentID: root.ID, ChildID: foreground, TaskCallID: "fg", Blocking: true,
+	}))
+	require.NoError(t, links.InsertSubagentLink(ctx, subagent.Link{
+		ParentID: foreground, ChildID: nestedForeground, TaskCallID: "nested-fg", Blocking: true,
+	}))
+	require.NoError(t, links.InsertSubagentLink(ctx, subagent.Link{
+		ParentID: root.ID, ChildID: background, TaskCallID: "bg", Blocking: false,
+	}))
+
+	facts, err := store.CaptureProgress(ctx, root.ID)
+	require.NoError(t, err)
+	assert.Equal(t, 3, facts.ActiveSubagents)
+	assert.Equal(t, 1, facts.BackgroundSubagents)
+	assert.Len(t, facts.Waiting, 1, "only a foreground child directly blocking the root is a root wait")
 }

@@ -324,16 +324,19 @@ topology, exact waits, budget state and output watermarks, with live context
 occupancy when a runner is available.
 `progressruntime` owns one wakeable reconciler for all roots and publishes idle
 only from the newest acknowledged releasing output. Meaningful transitions
-enqueue replaceable snapshots immediately; five minutes without newer semantic
-output creates a silence snapshot. Snapshots carry the captured generation and
-root status, and the inserting transaction discards them as superseded instead
-of stamping a stale card with a newer generation — so no progress card can
-appear below a stop fence or terminal stop result. Generation-scoped source keys
-and the outbox uniqueness boundary make restart and concurrent reconciliation
-idempotent. Automatic cards may lead with the latest unpublished
-current-generation assistant note and render TODO counts only; an already
-published direct reply stays separate, and `/status` keeps the full diagnostic
-view.
+enqueue replaceable snapshots immediately, including active subagent spawn,
+terminalization and re-arm. An active root loop refreshes after at most thirty
+seconds without newer semantic output; autonomous work without an active root
+loop retains the five-minute silence cadence. Snapshots carry the captured
+generation and root status, and the inserting transaction discards them as
+superseded instead of stamping a stale card with a newer generation — so no
+progress card can appear below a stop fence or terminal stop result.
+Generation-scoped source keys and the outbox uniqueness boundary make restart
+and concurrent reconciliation idempotent. Automatic cards may lead with the
+latest unpublished current-generation assistant note, mark active main-model
+work, render active foreground/background subagents across the root tree and
+show TODO counts only; an already published direct reply stays separate, and
+`/status` keeps the full diagnostic view.
 Final output adds only the non-empty TODO summary and budget parts of its
 compact footer; readiness appears only after the newest releasing output is
 acknowledged and terminal or parked state is current. Empty and

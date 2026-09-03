@@ -37,6 +37,7 @@ type Service interface {
 	ReconcileArmedBudgets(ctx context.Context) error
 	ReconcileOutputReadiness(ctx context.Context, outputID int64) error
 	ReconcileLatestReadiness(ctx context.Context, sessionID int64)
+	Wake()
 }
 
 var _ Service = (*runtime)(nil)
@@ -46,6 +47,7 @@ type runtime struct {
 	budgetSvc    budget.Service
 
 	hasActiveLoop         func(int64) bool
+	mainModelWorking      func(int64) bool
 	liveContextProjection func(context.Context, int64) (progress.Context, bool)
 	startBudgetPark       func(*sessionstore.BudgetRecord)
 	publish               func(int64, sessionevent.Notification)
@@ -62,16 +64,18 @@ func New(
 	store Store,
 	budgetSvc budget.Service,
 	hasActiveLoop func(int64) bool,
+	mainModelWorking func(int64) bool,
 	contextProjection func(context.Context, int64) (progress.Context, bool),
 	startBudgetPark func(*sessionstore.BudgetRecord),
 	publish func(int64, sessionevent.Notification),
 ) Service {
 	return &runtime{
 		sessionStore: store, budgetSvc: budgetSvc,
-		hasActiveLoop: hasActiveLoop, liveContextProjection: contextProjection,
-		startBudgetPark: startBudgetPark,
-		publish:         publish,
-		progressWake:    make(chan struct{}, 1), progressNow: time.Now, progressTimer: newRealProgressTimer,
+		hasActiveLoop: hasActiveLoop, mainModelWorking: mainModelWorking,
+		liveContextProjection: contextProjection,
+		startBudgetPark:       startBudgetPark,
+		publish:               publish,
+		progressWake:          make(chan struct{}, 1), progressNow: time.Now, progressTimer: newRealProgressTimer,
 	}
 }
 
@@ -111,7 +115,12 @@ func (r *runtime) RenderFinal(ctx context.Context, rootID int64, text string) (s
 }
 
 func (r *runtime) EnqueueChange(ctx context.Context, rootID int64) (string, bool, error) {
-	return r.enqueueProgressChange(ctx, rootID)
+	content, published, err := r.enqueueProgressChange(ctx, rootID)
+	if err == nil {
+		r.wakeProgress()
+	}
+
+	return content, published, err
 }
 
 func (r *runtime) EnqueueChangeFor(
@@ -125,7 +134,12 @@ func (r *runtime) EnqueueChangeFor(
 		return "", false, fmt.Errorf("capture progress: %w", err)
 	}
 
-	return r.enqueueProgressChangeFacts(ctx, facts, causalID, recaptureOnSuperseded)
+	content, published, err := r.enqueueProgressChangeFacts(ctx, facts, causalID, recaptureOnSuperseded)
+	if err == nil {
+		r.wakeProgress()
+	}
+
+	return content, published, err
 }
 
 func (r *runtime) Reconcile(ctx context.Context, now time.Time) time.Duration {
@@ -134,4 +148,8 @@ func (r *runtime) Reconcile(ctx context.Context, now time.Time) time.Duration {
 
 func (r *runtime) ReconcileArmedBudgets(ctx context.Context) error {
 	return r.reconcileArmedBudgets(ctx)
+}
+
+func (r *runtime) Wake() {
+	r.wakeProgress()
 }

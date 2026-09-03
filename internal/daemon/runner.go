@@ -232,6 +232,10 @@ func (s *svc) runSessionIteration( //nolint:funlen,gocyclo // Linear lifecycle w
 
 	rs.SetService(sess)
 
+	if rec.ParentID == 0 {
+		s.wakeProgress()
+	}
+
 	s.registerScheduleTools(ctx, rec, sess)
 	s.registerSubagentTools(ctx, sessionID, sess)
 	s.registerMCPTools(ctx, rec, sess)
@@ -260,6 +264,10 @@ func (s *svc) runSessionIteration( //nolint:funlen,gocyclo // Linear lifecycle w
 	s.deferNotices.record(sessionID, runResult.CompactionDeferAnnounced)
 
 	rs.SetService(nil)
+
+	if rec.ParentID == 0 {
+		s.wakeProgress()
+	}
 
 	sess.Close()
 
@@ -380,6 +388,22 @@ func (s *svc) recordWaitingProgress(
 	sessionID int64,
 	projections []waitingProjection,
 ) error {
+	causalID, err := waitingProgressCausalID(projections)
+	if err != nil {
+		return err
+	}
+
+	// A stale waiting card is dropped without a recapture retry: the newer
+	// transition that moved the generation owns the next card.
+	if _, _, err := s.enqueueProgressChangeFor(ctx, sessionID, causalID, false); err != nil &&
+		!errors.Is(err, sessionstore.ErrProgressSuperseded) && !errors.Is(err, sessionstore.ErrOutputOwner) {
+		return fmt.Errorf("enqueue progress: %w", err)
+	}
+
+	return nil
+}
+
+func waitingProgressCausalID(projections []waitingProjection) (string, error) {
 	identities := make([]map[string]any, len(projections))
 
 	for i, projection := range projections {
@@ -388,19 +412,13 @@ func (s *svc) recordWaitingProgress(
 
 	identity, err := canonicalWaitingIdentities(identities)
 	if err != nil {
-		return fmt.Errorf("encode waiting identities: %w", err)
+		return "", fmt.Errorf("encode waiting identities: %w", err)
 	}
 
 	digest := sha256.Sum256(identity)
 	hash := hex.EncodeToString(digest[:])
-	// A stale waiting card is dropped without a recapture retry: the newer
-	// transition that moved the generation owns the next card.
-	if _, _, err := s.enqueueProgressChangeFor(ctx, sessionID, "waiting:"+hash, false); err != nil &&
-		!errors.Is(err, sessionstore.ErrProgressSuperseded) && !errors.Is(err, sessionstore.ErrOutputOwner) {
-		return fmt.Errorf("enqueue progress: %w", err)
-	}
 
-	return nil
+	return "waiting:" + hash, nil
 }
 
 type waitingProjection struct {
@@ -861,6 +879,34 @@ func (s *svc) createOrResumeSession(
 	return s.openSession(ctx, sessionID, workDir, rec, false, preserveStopped)
 }
 
+func (s *svc) sessionInputBoundary(
+	sessionID int64,
+	rec *sessionstore.SessionRecord,
+) session.InputBoundary {
+	return s.inputFactory.Boundary(
+		sessionID,
+		func(ctx context.Context) (string, error) {
+			current, err := s.CurrentProgress(ctx, sessionID)
+			if err != nil {
+				return "", err
+			}
+
+			return current.Rendered, nil
+		},
+		func(ctx context.Context) (string, bool, error) {
+			return s.enqueueProgressChange(ctx, sessionID)
+		},
+		func() {
+			if rec.ParentID == 0 {
+				s.wakeProgress()
+			}
+		},
+		func(ctx context.Context, text string) (string, error) {
+			return s.renderFinalOutput(ctx, sessionID, text)
+		},
+	)
+}
+
 // openSession builds the session service. A settlement open never persists the
 // initial state: /stop settles a tree already marked stopping, and reactivating
 // it would lose the lifecycle fence.
@@ -893,25 +939,9 @@ func (s *svc) openSession(
 		StagedExternalCalls: externalCalls,
 
 		CompactionDeferAnnounced: s.deferNotices.announced(sessionID),
-		InputBoundary: s.inputFactory.Boundary(
-			sessionID,
-			func(ctx context.Context) (string, error) {
-				current, err := s.CurrentProgress(ctx, sessionID)
-				if err != nil {
-					return "", err
-				}
-
-				return current.Rendered, nil
-			},
-			func(ctx context.Context) (string, bool, error) {
-				return s.enqueueProgressChange(ctx, sessionID)
-			},
-			func(ctx context.Context, text string) (string, error) {
-				return s.renderFinalOutput(ctx, sessionID, text)
-			},
-		),
-		SettlementOpen:        settlement,
-		PreserveStoppedStatus: preserveStopped,
+		InputBoundary:            s.sessionInputBoundary(sessionID, rec),
+		SettlementOpen:           settlement,
+		PreserveStoppedStatus:    preserveStopped,
 	}
 	owner, _ := rec.Attributes[controllerapi.SessionAttributeManagerID].(string)
 

@@ -215,15 +215,16 @@ _Avoid_: final output, progress note.
 The interval of manager-owned root work that starts with initial or reactivating
 model-bound input, or an applied scheduled turn. Queued input keeps the current
 episode; empty roots and read-only commands do not create one. Its durable start
-anchors operator wall time and the five-minute silence deadline.
+anchors operator wall time and the progress-refresh deadline.
 _Avoid_: accepted task, queued message, run (ambiguous with one process activation).
 
 **progress snapshot**:
 The canonical root-session operator view: runtime/persisted state, live context
 projection when available, lifetime persisted usage, autonomous-episode wall
-time, durable TODO items, latest model progress, exact waits, subagent topology
-and an optional one-shot budget. Automatic cards, `/status`, reconnect and final
-footers render this shared transport-neutral value.
+time, durable TODO items, latest model progress, main-model activity, exact waits,
+active foreground/background subagent topology and an optional one-shot budget.
+Automatic cards, `/status`, reconnect and final footers render this shared
+transport-neutral value.
 _Avoid_: progress message (the output remains replaceable output), heartbeat.
 
 **one-shot budget**:

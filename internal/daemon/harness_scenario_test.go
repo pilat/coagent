@@ -280,15 +280,23 @@ func TestHarnessScenario_BackgroundChildIsTheWakeSource(t *testing.T) {
 		h.shutdown()
 	}()
 
-	parentID, err := h.mgr.Send(h.ctx, h.projectID, "start background child", "fake-model", nil)
+	parentID, err := h.mgr.Send(h.ctx, h.projectID, "start background child", "fake-model", map[string]any{
+		"manager_id": scenarioManagerID,
+	})
 	require.NoError(t, err)
 	waitForVisibleMessage(t, collector, parentID, "background launched; yielded without sleep")
-	waitForIdleAfterMessage(t, collector, parentID, "background launched; yielded without sleep")
 
 	link, err := h.links.GetLinkByTaskCallID(h.ctx, parentID, taskCallID)
 	require.NoError(t, err)
 	require.NotNil(t, link)
 	assert.False(t, link.Blocking)
+
+	var runningCard string
+	require.NoError(t, h.db.QueryRowContext(h.ctx, `SELECT content FROM session_outbox
+		WHERE session_id = ? AND source_key LIKE ? ORDER BY id DESC LIMIT 1`,
+		parentID, fmt.Sprintf("progress:change:subagent:%d:%%:spawned:g%%", link.ChildID)).
+		Scan(&runningCard))
+	assert.Contains(t, runningCard, "🧩 Subagents · 0 foreground · 1 background")
 
 	parentMessages := h.parentMessages(parentID)
 	assert.Equal(t, 1, countToolResultsFor(parentMessages, tool.IDSleep))
@@ -300,7 +308,15 @@ func TestHarnessScenario_BackgroundChildIsTheWakeSource(t *testing.T) {
 
 	close(childRelease)
 	waitForVisibleMessage(t, collector, parentID, "background completion delivered")
+	drainScenarioClaims(t, "background_child_no_sleep.json", newChainController(t, h))
 	waitForIdleAfterMessage(t, collector, parentID, "background completion delivered")
+
+	var stoppedCard string
+	require.NoError(t, h.db.QueryRowContext(h.ctx, `SELECT content FROM session_outbox
+		WHERE session_id = ? AND source_key LIKE ? ORDER BY id DESC LIMIT 1`,
+		parentID, fmt.Sprintf("progress:change:subagent:%d:%%:completed:g%%", link.ChildID)).
+		Scan(&stoppedCard))
+	assert.NotContains(t, stoppedCard, "Subagents")
 
 	assertHarnessTrace(t, "background_child_no_sleep.json", collector.snapshot(), parentID)
 }

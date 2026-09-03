@@ -51,6 +51,7 @@ type Snapshot struct {
 	ObservedAt           time.Time
 	Model                string
 	RootIteration        int
+	MainModelWorking     bool
 	ChildCount           int
 	ChildIterations      int
 	Context              Context

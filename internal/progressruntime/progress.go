@@ -94,7 +94,8 @@ func (r *runtime) progressSnapshot(
 		RootID: facts.RootID, DurableWatermark: facts.MessageWatermark,
 		OutboxWatermark: facts.OutboxWatermark, PersistedReason: string(facts.Status),
 		ObservedAt: observedAt, Model: facts.Model, RootIteration: facts.Iteration,
-		ChildCount: facts.ChildCount, ChildIterations: facts.ChildIterations,
+		MainModelWorking: r.mainModelWorking(facts.RootID),
+		ChildCount:       facts.ChildCount, ChildIterations: facts.ChildIterations,
 		Lifetime: progress.Usage{
 			PromptTokens:     facts.PromptTokens,
 			CompletionTokens: facts.CompletionTokens, CostUSD: facts.CostUSD, Available: true,

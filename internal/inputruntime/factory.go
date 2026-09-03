@@ -22,6 +22,7 @@ type Factory interface {
 		sessionID int64,
 		progress func(context.Context) (string, error),
 		progressChange func(context.Context) (string, bool, error),
+		progressActivity func(),
 		finalOutput func(context.Context, string) (string, error),
 	) session.InputBoundary
 }
@@ -41,10 +42,12 @@ func (f *factory) Boundary(
 	sessionID int64,
 	progress func(context.Context) (string, error),
 	progressChange func(context.Context) (string, bool, error),
+	progressActivity func(),
 	finalOutput func(context.Context, string) (string, error),
 ) session.InputBoundary {
 	return &boundary{
 		store: f.store, schedules: f.schedules, sessionID: sessionID,
-		progress: progress, progressChange: progressChange, finalOutput: finalOutput,
+		progress: progress, progressChange: progressChange,
+		progressActivity: progressActivity, finalOutput: finalOutput,
 	}
 }
