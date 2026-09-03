@@ -235,14 +235,16 @@ and `/schedules` are control commands and do not become model instructions.
 
 ```bash
 make tools          # online bootstrap: modules and pinned development tools
-make all            # format check + build + lint + architecture + semgrep + tests
+make test           # fast package suites; CI-owned packages excluded
+make all            # local format + build + lint + architecture + fast tests
 make verify-offline # prove a warmed checkout needs no dependency resolution
-make check          # all + local-program integration tests
-make ci             # canonical slow pre-merge gate
+make ci             # CI-only: static gates + full ordinary/integration tests
 ```
 
-Pull requests run `make check` on Linux and macOS. Scheduled and manual workflows
-run the same default-budget `make ci` used locally. Start with
+Pull requests, main pushes, and releases run `make ci`; Linux pull requests add
+a compiled-harness smoke. Scheduled/manual CI adds full E2E, fuzz, race, and
+stress amplifiers. CI-only slow targets require the workflow-provided `CI=true`
+environment and reject local execution. Start with
 [CONTRIBUTING.md](CONTRIBUTING.md), then see [docs/testing.md](docs/testing.md)
 for temporal-protocol test requirements and [ARCHITECTURE.md](ARCHITECTURE.md)
 for dependency boundaries.

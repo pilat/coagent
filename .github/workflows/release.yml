@@ -25,7 +25,7 @@ jobs:
       - name: Bootstrap pinned tools
         run: make tools
       - name: Verify source
-        run: make check workflow.check
+        run: make ci workflow.check
 
   publish:
     name: Build, attest, and publish

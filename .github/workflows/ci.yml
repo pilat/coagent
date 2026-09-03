@@ -18,6 +18,7 @@ concurrency:
 jobs:
   verify:
     name: Verify (${{ matrix.os }})
+    if: github.event_name == 'pull_request' || github.event_name == 'push'
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
     strategy:
@@ -38,14 +39,14 @@ jobs:
         run: make tools
       - name: Validate workflows
         run: make workflow.check
-      - name: Run integration verification
-        run: make check
+      - name: Run CI
+        run: make ci
       - name: Run compiled harness smoke
         if: runner.os == 'Linux'
         run: make harness-e2e CI_E2E_COUNT=1
 
   deep:
-    name: Canonical deep CI
+    name: Scheduled CI
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 360
@@ -61,5 +62,5 @@ jobs:
           cache: true
       - name: Bootstrap pinned tools
         run: make tools
-      - name: Run canonical local CI
-        run: make ci
+      - name: Run deep CI
+        run: make ci harness-e2e long-fuzz race stress
