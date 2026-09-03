@@ -34,6 +34,7 @@ func TestRenderCompact_ExactCard(t *testing.T) {
 	snapshot := Snapshot{
 		Model:               "z-ai/glm-5.3-flash",
 		RootIteration:       112,
+		MainModelWorking:    true,
 		EpisodeElapsed:      &elapsed,
 		Lifetime:            Usage{Available: true, CostUSD: cost},
 		Context:             Context{Available: true, Used: 72, Max: 100},
@@ -48,7 +49,7 @@ func TestRenderCompact_ExactCard(t *testing.T) {
 	}
 
 	assert.Equal(t, strings.Join([]string{
-		"**⚙️ Working**",
+		"**🟢 Working**",
 		"",
 		"reading the loop",
 		"",
@@ -59,6 +60,17 @@ func TestRenderCompact_ExactCard(t *testing.T) {
 	}, "\n"), RenderCompact(snapshot, nil))
 }
 
+func TestRenderCompact_ShowsActiveSubagentsByMode(t *testing.T) {
+	t.Parallel()
+
+	snapshot := Snapshot{ActiveSubagents: 3, BackgroundSubagents: 1}
+	rendered := RenderCompact(snapshot, nil)
+
+	assert.Contains(t, rendered, "🧩 Subagents · 2 foreground · 1 background")
+
+	assert.NotContains(t, RenderCompact(Snapshot{}, nil), "Subagents")
+}
+
 func TestRenderCompact_TitlePrecedence(t *testing.T) {
 	t.Parallel()
 
@@ -67,7 +79,12 @@ func TestRenderCompact_TitlePrecedence(t *testing.T) {
 
 	waiting := Snapshot{Waiting: []WaitingItem{{Kind: "sleep"}}}
 	assert.Contains(t, RenderCompact(waiting, nil), "**⏳ Waiting**")
-	assert.Equal(t, "**⚙️ Working**", RenderCompact(Snapshot{}, nil))
+	assert.Equal(t, "**⚪ Idle**", RenderCompact(Snapshot{}, nil))
+	assert.Equal(t, "**🟢 Working**", RenderCompact(Snapshot{MainModelWorking: true}, nil))
+	assert.Equal(t, strings.Join([]string{
+		"**🟣 Background work**",
+		"🧩 Subagents · 0 foreground · 1 background",
+	}, "\n"), RenderCompact(Snapshot{ActiveSubagents: 1, BackgroundSubagents: 1}, nil))
 
 	firedWaiting := waiting
 	firedWaiting.Budget = fired
@@ -77,13 +94,13 @@ func TestRenderCompact_TitlePrecedence(t *testing.T) {
 	armedWaiting.Budget = armed
 	assert.Contains(t, RenderCompact(armedWaiting, nil), "**⏳ Waiting**")
 
-	assert.Contains(t, RenderCompact(Snapshot{Budget: armed}, nil), "**⚙️ Working**")
+	assert.Contains(t, RenderCompact(Snapshot{Budget: armed}, nil), "**⚪ Idle**")
 }
 
 func TestRenderCompact_MissingFragmentsOmitted(t *testing.T) {
 	t.Parallel()
 
-	assert.Equal(t, "**⚙️ Working**", RenderCompact(Snapshot{}, nil))
+	assert.Equal(t, "**⚪ Idle**", RenderCompact(Snapshot{}, nil))
 
 	approximate := Snapshot{
 		Model:         "m",
@@ -91,7 +108,7 @@ func TestRenderCompact_MissingFragmentsOmitted(t *testing.T) {
 		Context:       Context{Available: true, Used: 7, Max: 100, Approximate: true},
 	}
 	assert.Equal(t, strings.Join([]string{
-		"**⚙️ Working**",
+		"**⚪ Idle**",
 		"",
 		"🤖 `m` · iteration 3",
 		"🧠 context ~7%",
@@ -99,7 +116,7 @@ func TestRenderCompact_MissingFragmentsOmitted(t *testing.T) {
 
 	noModel := Snapshot{EpisodeElapsed: durationPtr(time.Minute)}
 	assert.Equal(t, strings.Join([]string{
-		"**⚙️ Working**",
+		"**⚪ Idle**",
 		"⏱ 1m0s",
 	}, "\n"), RenderCompact(noModel, nil))
 }

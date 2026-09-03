@@ -101,7 +101,7 @@ func TestHarnessE2E_ForegroundFollowUpRejectsCompetingSleep(t *testing.T) {
 	})
 	acceptedAnswer := "follow-up accepted"
 	accepted := waitForHarnessChatTrace(t, client, started.SessionID, acceptedAnswer)
-	assert.Equal(t, []string{acceptedAnswer}, accepted.Messages)
+	assert.Contains(t, accepted.Messages, acceptedAnswer)
 	assert.Zero(t, accepted.Waiting,
 		"send_to_subagent+sleep must be rejected before a competing wait reaches a controller")
 	assert.Zero(t, accepted.Errors, "parent/child concurrency must not leak transient SQLite errors")

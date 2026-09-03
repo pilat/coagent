@@ -71,6 +71,17 @@
           "method": "sendMessage",
           "chat_id": -100123,
           "thread_id": 7001,
+          "text": "<b>🟢 Working</b>\n\n🤖 <code>fake-model</code> · iteration 1\n⏱ &lt;elapsed&gt; · 💰 $0.0 total\n🧩 Subagents · 0 foreground · 1 background",
+          "parse_mode": "HTML"
+        },
+        {
+          "method": "editForumTopic",
+          "chat_id": -100123,
+          "thread_id": 7001
+        },
+        {
+          "method": "editMessageText",
+          "chat_id": -100123,
           "text": "background launched; yielded without sleep",
           "parse_mode": "HTML"
         },
@@ -83,6 +94,17 @@
           "method": "sendMessage",
           "chat_id": -100123,
           "thread_id": 7001,
+          "text": "<b>⚪ Idle</b>\n\n🤖 <code>fake-model</code> · iteration 3\n⏱ &lt;elapsed&gt; · 💰 $0.0 total",
+          "parse_mode": "HTML"
+        },
+        {
+          "method": "editForumTopic",
+          "chat_id": -100123,
+          "thread_id": 7001
+        },
+        {
+          "method": "editMessageText",
+          "chat_id": -100123,
           "text": "background completion delivered",
           "parse_mode": "HTML"
         }
@@ -145,7 +167,7 @@
           "method": "sendMessage",
           "chat_id": -100123,
           "thread_id": 7001,
-          "text": "<b>⚙️ Working</b>\n\n🤖 <code>fake-model</code> · iteration 1\n⏱ &lt;elapsed&gt; · 💰 $0.0 total",
+          "text": "<b>🟢 Working</b>\n\n🤖 <code>fake-model</code> · iteration 2\n⏱ &lt;elapsed&gt; · 💰 $0.0 total",
           "parse_mode": "HTML"
         }
       ]
@@ -167,7 +189,18 @@
           "method": "sendMessage",
           "chat_id": -100123,
           "thread_id": 7001,
-          "text": "<b>⏳ Waiting</b>\n\n🤖 <code>fake-model</code> · iteration 1\n⏱ &lt;elapsed&gt; · 💰 $0.0 total\n⏳ Waiting on 1 item",
+          "text": "<b>⏳ Waiting</b>\n\n🤖 <code>fake-model</code> · iteration 1\n⏱ &lt;elapsed&gt; · 💰 $0.0 total\n🧩 Subagents · 1 foreground · 0 background\n⏳ Waiting on 1 item",
+          "parse_mode": "HTML"
+        },
+        {
+          "method": "editForumTopic",
+          "chat_id": -100123,
+          "thread_id": 7001
+        },
+        {
+          "method": "editMessageText",
+          "chat_id": -100123,
+          "text": "<b>⚪ Idle</b>\n\n🤖 <code>fake-model</code> · iteration 1\n⏱ &lt;elapsed&gt; · 💰 $0.0 total",
           "parse_mode": "HTML"
         },
         {
@@ -303,7 +336,7 @@
           "method": "sendMessage",
           "chat_id": -100123,
           "thread_id": 7001,
-          "text": "<b>⚙️ Working</b>\n\n🤖 <code>fake-model</code> · iteration 1\n⏱ &lt;elapsed&gt; · 💰 $0.0 total",
+          "text": "<b>🟢 Working</b>\n\n🤖 <code>fake-model</code> · iteration 1\n⏱ &lt;elapsed&gt; · 💰 $0.0 total",
           "parse_mode": "HTML"
         },
         {
@@ -327,7 +360,7 @@
           "method": "sendMessage",
           "chat_id": -100123,
           "thread_id": 7001,
-          "text": "<b>⚙️ Working</b>\n\n🤖 <code>fake-model</code> · iteration 2\n⏱ &lt;elapsed&gt; · 💰 $0.0 total",
+          "text": "<b>🟢 Working</b>\n\n🤖 <code>fake-model</code> · iteration 2\n⏱ &lt;elapsed&gt; · 💰 $0.0 total",
           "parse_mode": "HTML"
         },
         {
@@ -338,7 +371,7 @@
         {
           "method": "editMessageText",
           "chat_id": -100123,
-          "text": "<b>⚙️ Working</b>\n\n🤖 <code>fake-model</code> · iteration 2\n⏱ &lt;elapsed&gt; · 💰 $0.0 total",
+          "text": "<b>🟢 Working</b>\n\n🤖 <code>fake-model</code> · iteration 2\n⏱ &lt;elapsed&gt; · 💰 $0.0 total",
           "parse_mode": "HTML"
         },
         {
@@ -622,7 +655,7 @@
           "method": "sendMessage",
           "chat_id": -100123,
           "thread_id": 7001,
-          "text": "<b>⚙️ Working</b>\n\n🤖 <code>fake-model</code> · iteration 1\n⏱ &lt;elapsed&gt; · 💰 $0.0 total",
+          "text": "<b>🟢 Working</b>\n\n🤖 <code>fake-model</code> · iteration 1\n⏱ &lt;elapsed&gt; · 💰 $0.0 total",
           "parse_mode": "HTML"
         },
         {

@@ -3,6 +3,9 @@ package daemon
 import (
 	"encoding/json"
 	"os"
+	"slices"
+	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -10,8 +13,10 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/pilat/coagent/internal/controllerapi"
 	"github.com/pilat/coagent/internal/llmwire"
 	"github.com/pilat/coagent/internal/progressruntime"
+	"github.com/pilat/coagent/internal/sessionevent"
 	"github.com/pilat/coagent/internal/sessionstore"
 )
 
@@ -77,15 +82,20 @@ func TestHarnessScenario_LongSessionAcceptsInputWithoutChatReceipt(t *testing.T)
 	assert.Zero(t, acknowledgements, "input acceptance must not become a chat message")
 }
 
-func TestHarnessScenario_LongSessionSilenceDeadlineIsDurableAndDeduplicated(t *testing.T) {
+func TestHarnessScenario_WorkingMainModelRefreshesProgressEveryThirtySeconds(t *testing.T) {
 	release := make(chan struct{})
+	entered := make(chan struct{})
+	var enteredOnce sync.Once
 	h := newSubagentHarnessWith(t, func(_ string, _ []llmwire.Message) *llmwire.Response {
+		enteredOnce.Do(func() { close(entered) })
 		<-release
 
 		return &llmwire.Response{Text: "late response"}
 	})
+	collector := collectEvents(h.mgr.PubSub().SubscribeAll())
 	defer func() {
 		close(release)
+		collector.stop()
 		h.shutdown()
 	}()
 
@@ -93,23 +103,34 @@ func TestHarnessScenario_LongSessionSilenceDeadlineIsDurableAndDeduplicated(t *t
 		"manager_id": "telegram:main",
 	})
 	require.NoError(t, err)
+	waitForScenarioSignal(t, entered, "working main model call")
 	progressStore := h.sessStore.(sessionstore.ProgressStore)
 	facts, err := progressStore.CaptureProgress(h.ctx, sessionID)
 	require.NoError(t, err)
 	require.Nil(t, facts.LastSemanticOutputAt)
 	require.NotNil(t, facts.EpisodeStartedAt)
-	deadline := facts.EpisodeStartedAt.Add(5 * time.Minute)
+	deadline := facts.EpisodeStartedAt.Add(progressruntime.MainModelProgressInterval)
 
+	h.mgr.progress.Reconcile(h.ctx, deadline.Add(-time.Second))
+	assert.Equal(t, 0, countSilenceIntents(t, h, sessionID))
 	h.mgr.progress.Reconcile(h.ctx, deadline)
 	h.mgr.progress.Reconcile(h.ctx, deadline)
+	collector.waitFor(t, "working main model progress", func(events []controllerapi.SessionNotification) bool {
+		return slices.ContainsFunc(events, func(event controllerapi.SessionNotification) bool {
+			return event.SessionID == sessionID && event.Notification.Type == sessionevent.NotifyMessage &&
+				strings.Contains(event.Notification.Message, "**🟢 Working**")
+		})
+	})
 
-	var intents int
-	require.NoError(t, h.db.QueryRowContext(h.ctx, `SELECT COUNT(*) FROM session_outbox
-		WHERE session_id = ? AND source_key LIKE 'progress:silence:%'`, sessionID).Scan(&intents))
-	assert.Equal(t, 1, intents, "duplicate deadline ticks must reuse one durable progress intent")
+	assert.Equal(t, 1, countSilenceIntents(t, h, sessionID),
+		"duplicate deadline ticks must reuse one durable progress intent")
+
+	h.mgr.progress.Reconcile(h.ctx, deadline.Add(progressruntime.MainModelProgressInterval))
+	assert.Equal(t, 2, countSilenceIntents(t, h, sessionID),
+		"an active main model must refresh the card again after another interval")
 }
 
-func TestHarnessScenario_ReactivatedEpisodeGetsFullSilenceInterval(t *testing.T) {
+func TestHarnessScenario_ReactivatedEpisodeGetsFullMainModelInterval(t *testing.T) {
 	release := make(chan struct{})
 	enteredSecond := make(chan struct{})
 	var calls atomic.Int64
@@ -151,10 +172,13 @@ func TestHarnessScenario_ReactivatedEpisodeGetsFullSilenceInterval(t *testing.T)
 	require.NotNil(t, facts.LastSemanticOutputAt)
 	require.True(t, facts.EpisodeStartedAt.After(*facts.LastSemanticOutputAt))
 
-	h.mgr.progress.Reconcile(h.ctx, facts.EpisodeStartedAt.Add(progressruntime.SilenceInterval-time.Second))
+	h.mgr.progress.Reconcile(
+		h.ctx,
+		facts.EpisodeStartedAt.Add(progressruntime.MainModelProgressInterval-time.Second),
+	)
 	assert.Equal(t, 0, countSilenceIntents(t, h, sessionID))
 
-	h.mgr.progress.Reconcile(h.ctx, facts.EpisodeStartedAt.Add(progressruntime.SilenceInterval))
+	h.mgr.progress.Reconcile(h.ctx, facts.EpisodeStartedAt.Add(progressruntime.MainModelProgressInterval))
 	assert.Equal(t, 1, countSilenceIntents(t, h, sessionID))
 }
 

@@ -14,12 +14,13 @@ import (
 var _ session.InputBoundary = (*boundary)(nil)
 
 type boundary struct {
-	store          Store
-	schedules      schedule.Service
-	sessionID      int64
-	progress       func(context.Context) (string, error)
-	progressChange func(context.Context) (string, bool, error)
-	finalOutput    func(context.Context, string) (string, error)
+	store            Store
+	schedules        schedule.Service
+	sessionID        int64
+	progress         func(context.Context) (string, error)
+	progressChange   func(context.Context) (string, bool, error)
+	progressActivity func()
+	finalOutput      func(context.Context, string) (string, error)
 }
 
 func (b *boundary) FinalOutput(ctx context.Context, text string) (string, error) {
@@ -82,6 +83,10 @@ func (b *boundary) Accept(
 		return false, false, fmt.Errorf("promote session input: %w", err)
 	}
 
+	if b.progressActivity != nil {
+		b.progressActivity()
+	}
+
 	return true, false, nil
 }
 
@@ -101,6 +106,10 @@ func (b *boundary) AcceptActivated(
 	})
 	if err != nil {
 		return false, false, fmt.Errorf("promote activated input: %w", err)
+	}
+
+	if b.progressActivity != nil {
+		b.progressActivity()
 	}
 
 	return true, false, nil

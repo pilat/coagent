@@ -28,6 +28,10 @@ func RenderCompact(snapshot Snapshot, redact func(string) string) string {
 		lines = append(lines, metrics)
 	}
 
+	if subagents := renderSubagents(snapshot); subagents != "" {
+		lines = append(lines, subagents)
+	}
+
 	if len(snapshot.Waiting) > 0 {
 		lines = append(
 			lines,
@@ -59,6 +63,7 @@ func RenderFull(snapshot Snapshot, redact func(string) string) string {
 	}
 
 	lines = append(lines, "- State: "+state)
+
 	if snapshot.Model != "" {
 		lines = append(lines, fmt.Sprintf("- Model: `%s` · root iteration %d", snapshot.Model, snapshot.RootIteration))
 	}
@@ -77,6 +82,15 @@ func RenderFull(snapshot Snapshot, redact func(string) string) string {
 
 	if len(snapshot.Waiting) > 0 {
 		lines = append(lines, fmt.Sprintf("- Waiting: %d item(s)", len(snapshot.Waiting)))
+	}
+
+	if snapshot.ActiveSubagents > 0 {
+		foreground := snapshot.ActiveSubagents - snapshot.BackgroundSubagents
+		lines = append(lines, fmt.Sprintf(
+			"- Active subagents: %d foreground · %d background",
+			foreground,
+			snapshot.BackgroundSubagents,
+		))
 	}
 
 	if snapshot.Budget != nil {
@@ -112,8 +126,7 @@ func RenderFooter(snapshot Snapshot, redact func(string) string) string {
 	return strings.Join(parts, "\n\n")
 }
 
-// cardTitle precedence: a fired budget outranks waiting, which outranks working.
-// Armed and released budgets never select the budget title.
+// A fired budget and an exact root wait outrank live work; inactivity is explicit.
 func cardTitle(snapshot Snapshot) string {
 	if snapshot.Budget != nil && snapshot.Budget.State == "fired" {
 		return "🛑 Budget reached"
@@ -123,7 +136,15 @@ func cardTitle(snapshot Snapshot) string {
 		return "⏳ Waiting"
 	}
 
-	return "⚙️ Working"
+	if snapshot.MainModelWorking {
+		return "🟢 Working"
+	}
+
+	if snapshot.ActiveSubagents > 0 {
+		return "🟣 Background work"
+	}
+
+	return "⚪ Idle"
 }
 
 // renderCardMetrics joins only the available fragments; the whole line
@@ -151,6 +172,20 @@ func renderCardMetrics(snapshot Snapshot) string {
 	}
 
 	return strings.Join(fragments, " · ")
+}
+
+func renderSubagents(snapshot Snapshot) string {
+	if snapshot.ActiveSubagents == 0 {
+		return ""
+	}
+
+	foreground := snapshot.ActiveSubagents - snapshot.BackgroundSubagents
+
+	return fmt.Sprintf(
+		"🧩 Subagents · %d foreground · %d background",
+		foreground,
+		snapshot.BackgroundSubagents,
+	)
 }
 
 // renderCardTodos renders counts only — item text belongs to /status.

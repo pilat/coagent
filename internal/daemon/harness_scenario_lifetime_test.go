@@ -106,6 +106,20 @@ func TestHarnessScenario_ForegroundChildHasNoLifetimeLimit(t *testing.T) {
 		"the parent's task call is still unresolved")
 	waitForWaitKind(t, collector, parentID, sessionevent.WaitSubagent)
 
+	var waitingCard string
+	require.NoError(t, h.db.QueryRowContext(h.ctx, `SELECT content FROM session_outbox
+		WHERE session_id = ? AND type = 'message_replaceable' ORDER BY id DESC LIMIT 1`, parentID).
+		Scan(&waitingCard))
+	assert.Contains(t, waitingCard, "🧩 Subagents · 1 foreground · 0 background")
+	assert.NotContains(t, waitingCard, "🟢 Working",
+		"the suspended parent must not look active while its child works")
+
+	var waitingCards int
+	require.NoError(t, h.db.QueryRowContext(h.ctx, `SELECT COUNT(*) FROM session_outbox
+		WHERE session_id = ? AND type = 'message_replaceable'`, parentID).Scan(&waitingCards))
+	assert.Equal(t, 1, waitingCards,
+		"spawn and suspension must reuse one durable foreground waiting card")
+
 	close(childRelease)
 	released = true
 
@@ -117,6 +131,14 @@ func TestHarnessScenario_ForegroundChildHasNoLifetimeLimit(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, link)
 	assert.Equal(t, subagent.OutcomeCompleted, link.Outcome)
+
+	var stoppedCard string
+	require.NoError(t, h.db.QueryRowContext(h.ctx, `SELECT content FROM session_outbox
+		WHERE session_id = ? AND source_key LIKE ? ORDER BY id DESC LIMIT 1`,
+		parentID, fmt.Sprintf("progress:change:subagent:%d:%%:completed:g%%", link.ChildID)).
+		Scan(&stoppedCard))
+	assert.NotContains(t, stoppedCard, "Subagents",
+		"terminalization must publish the card that removes the finished child")
 
 	child := h.parentMessages(link.ChildID)
 	require.NoError(t, llm.ValidateToolPairing(child))

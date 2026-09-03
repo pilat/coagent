@@ -11,11 +11,16 @@ import (
 
 	"github.com/pilat/coagent/internal/logger"
 	"github.com/pilat/coagent/internal/progress"
+	"github.com/pilat/coagent/internal/sessionevent"
 	"github.com/pilat/coagent/internal/sessionstore"
 )
 
-// SilenceInterval is the maximum quiet period before a progress snapshot.
-const SilenceInterval = 5 * time.Minute
+const (
+	// MainModelProgressInterval is the maximum quiet period while the root loop is working.
+	MainModelProgressInterval = 30 * time.Second
+	// SilenceInterval is the maximum quiet period for autonomous work without an active root loop.
+	SilenceInterval = 5 * time.Minute
+)
 
 type progressTimer interface {
 	C() <-chan time.Time
@@ -153,6 +158,13 @@ func (r *runtime) reconcileProgress(
 			}
 		}
 
+		interval := SilenceInterval
+		if r.mainModelWorking(rootID) {
+			interval = MainModelProgressInterval
+		}
+
+		next = min(next, interval)
+
 		baseline := facts.EpisodeStartedAt
 		if facts.LastSemanticOutputAt != nil && (baseline == nil || facts.LastSemanticOutputAt.After(*baseline)) {
 			baseline = facts.LastSemanticOutputAt
@@ -162,7 +174,7 @@ func (r *runtime) reconcileProgress(
 			continue
 		}
 
-		deadline := baseline.Add(SilenceInterval)
+		deadline := baseline.Add(interval)
 		if now.Before(deadline) {
 			next = min(next, deadline.Sub(now))
 			continue
@@ -213,6 +225,10 @@ func (r *runtime) enqueueProgressSilence(
 		ctx, draft, facts.ModelInputGeneration, facts.Status,
 	); err != nil && !errors.Is(err, sessionstore.ErrProgressSuperseded) {
 		return err
+	} else if err == nil {
+		r.publish(facts.RootID, sessionevent.Notification{
+			Type: sessionevent.NotifyMessage, Message: draft.Content,
+		})
 	}
 
 	return nil

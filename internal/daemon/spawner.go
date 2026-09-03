@@ -112,6 +112,8 @@ func (s *svc) createChildSession(ctx context.Context, req spawnRequest) (int64, 
 		return 0, "", 0, fmt.Errorf("create subagent with link: %w", err)
 	}
 
+	s.publishSubagentProgress(ctx, childID)
+
 	return childID, workDir, parentRec.ProjectID, nil
 }
 
@@ -172,6 +174,8 @@ func (s *svc) SendToChild(ctx context.Context, childID int64, msg string) error 
 		if err := s.sessionStore.UpdateSessionStatus(ctx, childID, sessionstore.SessionStatusActive); err != nil {
 			return fmt.Errorf("resume stopped subagent session: %w", err)
 		}
+
+		s.publishSubagentProgress(ctx, childID)
 
 		return s.ensureSessionRunner(context.WithoutCancel(ctx), childID)
 	}

@@ -33,9 +33,10 @@ type completions struct {
 	links    subagent.Store
 	tx       subagent.Transactions
 
-	notifyFailure func(context.Context, int64, int64, string, error)
-	deliver       func(context.Context, subagent.Link)
-	startChild    func(context.Context, int64) error
+	notifyFailure   func(context.Context, int64, int64, string, error)
+	deliver         func(context.Context, subagent.Link)
+	startChild      func(context.Context, int64) error
+	subagentChanged func(context.Context, int64)
 }
 
 func NewCompletions(
@@ -45,10 +46,12 @@ func NewCompletions(
 	notifyFailure func(context.Context, int64, int64, string, error),
 	deliver func(context.Context, subagent.Link),
 	startChild func(context.Context, int64) error,
+	subagentChanged func(context.Context, int64),
 ) Completions {
 	return &completions{
 		sessions: sessions, links: links, tx: tx,
 		notifyFailure: notifyFailure, deliver: deliver, startChild: startChild,
+		subagentChanged: subagentChanged,
 	}
 }
 
@@ -117,6 +120,8 @@ func (c *completions) Finalize(ctx context.Context, childID int64, shuttingDown,
 	link.State = state
 	link.Result = result
 	link.Outcome = outcome
+
+	c.subagentChanged(ctx, childID)
 	c.deliver(ctx, *link)
 }
 
@@ -158,6 +163,8 @@ func (c *completions) Rearm(ctx context.Context, childID int64) error {
 	if err := c.sessions.UpdateSessionStatus(ctx, childID, sessionstore.SessionStatusActive); err != nil {
 		return fmt.Errorf("activate rearmed child %d: %w", childID, err)
 	}
+
+	c.subagentChanged(ctx, childID)
 
 	if err := c.startChild(ctx, childID); err != nil {
 		return fmt.Errorf("start rearmed child %d: %w", childID, err)

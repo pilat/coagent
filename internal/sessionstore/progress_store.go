@@ -156,28 +156,32 @@ func captureProgressWaiting(ctx context.Context, tx *sql.Tx, facts *ProgressFact
 
 //nolint:wsl_v5 // Projection loops keep scan and append adjacent.
 func captureProgressSubagents(ctx context.Context, tx *sql.Tx, facts *ProgressFacts) error {
-	rows, err := tx.QueryContext(ctx, `SELECT child_id, blocking FROM subagent_links
-		WHERE parent_id = ? AND state IN ('spawned', 'running') ORDER BY child_id`, facts.RootID)
+	rows, err := tx.QueryContext(ctx, `SELECT links.parent_id, links.child_id, links.blocking FROM subagent_links links
+		JOIN sessions child ON child.id = links.child_id
+		WHERE child.root_id = ? AND links.state IN ('spawned', 'running') ORDER BY links.child_id`, facts.RootID)
 	if err != nil {
 		return fmt.Errorf("load progress subagents: %w", err)
 	}
 	defer rows.Close()
 
 	for rows.Next() {
-		var childID int64
+		var parentID, childID int64
 
 		var blocking bool
-		if err := rows.Scan(&childID, &blocking); err != nil {
+		if err := rows.Scan(&parentID, &childID, &blocking); err != nil {
 			return fmt.Errorf("scan progress subagent: %w", err)
 		}
 
 		facts.ActiveSubagents++
-		if blocking {
+		if !blocking {
+			facts.BackgroundSubagents++
+			continue
+		}
+
+		if parentID == facts.RootID {
 			facts.Waiting = append(facts.Waiting, ProgressWait{
 				Kind: "subagent", Description: fmt.Sprintf("subagent #%d", childID),
 			})
-		} else {
-			facts.BackgroundSubagents++
 		}
 	}
 	if err := rows.Err(); err != nil {
