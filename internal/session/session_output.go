@@ -25,6 +25,7 @@ func (s *svc) renderSessionHelp() string {
 		"`/compact [focus]` — compact the context",
 		"`/schedules` — list schedules",
 		"`/budget <request>` — arm, replace, inspect, or clear a one-shot cost/wall-time checkpoint",
+		"`/gwt <name>` — fork into a worktree (Telegram session topics only)",
 	}
 	if s.loader == nil {
 		return strings.Join(lines, "\n")

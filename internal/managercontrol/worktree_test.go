@@ -40,6 +40,35 @@ func TestCreateWorktree_HappyPath(t *testing.T) {
 		"worktree project must not be a direct child of any picker root")
 }
 
+func TestCreateWorktree_FromLinkedWorktreeUsesFreshRemoteDefault(t *testing.T) {
+	clone := setupClone(t)
+	s := serviceWithWorktreesRoot(t)
+	ctx := context.Background()
+
+	linked := filepath.Join(t.TempDir(), "linked")
+	runGit(t, clone, "worktree", "add", "-b", "side", linked, "origin/trunk")
+
+	require.NoError(t, os.WriteFile(filepath.Join(clone, "f.txt"), []byte("remote-v2"), 0o644))
+	runGit(t, clone, "commit", "-am", "remote advance")
+	runGit(t, clone, "push", "origin", "trunk")
+	require.NoError(t, os.WriteFile(filepath.Join(clone, "f.txt"), []byte("local-main-v3"), 0o644))
+	runGit(t, clone, "commit", "-am", "local main advance")
+
+	require.NoError(t, os.WriteFile(filepath.Join(linked, "f.txt"), []byte("linked-dirty"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(linked, "linked-only.txt"), []byte("junk"), 0o644))
+
+	wt, err := s.createWorktree(ctx, linked, "api")
+	require.NoError(t, err)
+
+	assert.Equal(t, "remote-v2", readTestFile(t, filepath.Join(wt.path, "f.txt")))
+	assert.NoFileExists(t, filepath.Join(wt.path, "linked-only.txt"))
+	assert.Equal(t,
+		gitOutput(t, clone, "rev-parse", "refs/remotes/origin/trunk"),
+		gitOutput(t, clone, "rev-parse", "api"),
+		"the new branch must use the fetched remote default, not either worktree HEAD",
+	)
+}
+
 func TestCreateWorktree_RefusesBadNames(t *testing.T) {
 	clone := setupClone(t)
 	s := serviceWithWorktreesRoot(t)
@@ -207,6 +236,14 @@ func runGit(t *testing.T, dir string, args ...string) {
 	t.Helper()
 	out, err := exec.Command("git", append([]string{"-C", dir}, args...)...).CombinedOutput()
 	require.NoError(t, err, "git %v: %s", args, out)
+}
+
+func gitOutput(t *testing.T, dir string, args ...string) string {
+	t.Helper()
+	out, err := exec.Command("git", append([]string{"-C", dir}, args...)...).CombinedOutput()
+	require.NoError(t, err, "git %v: %s", args, out)
+
+	return strings.TrimSpace(string(out))
 }
 
 func readTestFile(t *testing.T, path string) string {

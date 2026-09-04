@@ -1,0 +1,83 @@
+{
+  "source_test": "TestHarnessScenario_HelpIncludesGWT",
+  "trace": [
+    {
+      "type": "session_created",
+      "name": "<name>",
+      "work_dir": "<workdir>",
+      "attributes": {
+        "channel": "telegram",
+        "manager_id": "telegram:main"
+      }
+    },
+    {
+      "type": "state_changed",
+      "status": "running"
+    },
+    {
+      "type": "message",
+      "message": "session ready"
+    },
+    {
+      "type": "session_created",
+      "name": "<name>",
+      "work_dir": "<workdir>",
+      "attributes": {
+        "channel": "telegram",
+        "manager_id": "telegram:main"
+      }
+    },
+    {
+      "type": "state_changed",
+      "status": "running"
+    },
+    {
+      "type": "message",
+      "message": "## Session commands\n`/status` — show session status\n`/stop` — stop the current run\n`/clear` — start a fresh session\n`/kill` — close this session\n`/compact [focus]` — compact the context\n`/schedules` — list schedules\n`/budget <request>` — arm, replace, inspect, or clear a one-shot cost/wall-time checkpoint\n`/gwt <name>` — fork into a worktree (Telegram session topics only)"
+    },
+    {
+      "type": "state_changed",
+      "status": "idle"
+    }
+  ],
+  "claims": [
+    {
+      "type": "session_opened",
+      "content": "",
+      "attributes": {
+        "manager_id": "telegram:main",
+        "name": "002",
+        "work_dir": "<workdir>"
+      },
+      "source_key": "session:1:opened",
+      "releases_input": false
+    },
+    {
+      "type": "message_persistent",
+      "content": "session ready",
+      "attributes": {
+        "manager_id": "telegram:main",
+        "model_input_generation": 1
+      },
+      "source_key": "message:2:final",
+      "model_input_generation": 1,
+      "releases_input": true
+    },
+    {
+      "type": "message_persistent",
+      "content": "## Session commands\n`/status` — show session status\n`/stop` — stop the current run\n`/clear` — start a fresh session\n`/kill` — close this session\n`/compact [focus]` — compact the context\n`/schedules` — list schedules\n`/budget <request>` — arm, replace, inspect, or clear a one-shot cost/wall-time checkpoint\n`/gwt <name>` — fork into a worktree (Telegram session topics only)",
+      "attributes": {
+        "manager_id": "telegram:main",
+        "model_input_generation": 1
+      },
+      "source_key": "input:2:help:result",
+      "model_input_generation": 1,
+      "previous_message_type": "message_persistent",
+      "previous_model_input_generation": 1,
+      "previous_message_ids": [
+        "<msg-1>"
+      ],
+      "releases_input": false
+    }
+  ]
+}
