@@ -151,7 +151,8 @@ _Avoid_: plugin (a plugin is a marketplace bundle), command.
 A git repo supplying loadable skills and subagent definitions, cloned and cached with a TTL. Configured under `marketplaces:` in `config.yaml`.
 
 **MCP pool**:
-The daemon-level pool of external MCP-server *connections*, keyed by a hash of command+args+env+workdir, refcounted, and reaped after 30 minutes idle — so servers aren't re-spawned per task. Distinct from the **MCP registry**, which says which servers exist at all.
+The daemon-level pool of external MCP-server *connections*, keyed by a hash of command+args+env+workdir, refcounted, and reaped after 30 minutes idle — so servers aren't re-spawned per task. Its **MCP catalog** is the pool-owned in-memory copy of a server's discovered tool metadata (name, description, schema): it survives process reaping for 15 days idle and clears on daemon restart, so an activation whose process was reaped still offers the same direct tools and starts the subprocess only on the model's first call. A lazy reconnect never rewrites the activation's catalog or schemas. Distinct from the **MCP registry**, which says which servers exist at all.
+_Avoid_: tool cache (the catalog is metadata, not a result cache); prompt cache (that is provider-side).
 
 **MCP registry**:
 The DB-backed set of MCP server *definitions* (`mcp_servers` table, `internal/mcpstore`), managed conversationally with `mcp_add` / `mcp_remove` / `mcp_enable` / `mcp_disable` / `mcp_list`. Rows carry an `enabled` flag; env values hold `${VAR}` references literally and are resolved at acquire time. Changes reach a session at its next run, never mid-run.

@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"fmt"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -90,18 +91,77 @@ func TestPool_AcquireSameConfigDifferentNames(t *testing.T) {
 	p := newPool(factory)
 	defer p.Stop()
 
-	clients, hashes, err := p.Acquire(context.Background(), map[string]ServerConfig{
+	snap, err := p.Acquire(context.Background(), map[string]ServerConfig{
 		"alias1": cfg,
 		"alias2": cfg,
 	})
 	require.NoError(t, err)
-	assert.Len(t, clients, 2)
-	assert.Len(t, hashes, 1, "same config should produce one hash")
+	assert.Len(t, snap.Clients, 2)
+	assert.Len(t, snap.Hashes, 1, "same config should produce one hash")
 
 	// Both names should resolve to the same underlying client.
-	assert.Same(t, clients["alias1"], clients["alias2"])
+	assert.Same(t, snap.Clients["alias1"], snap.Clients["alias2"])
 	// Factory should have been called only once.
 	assert.Equal(t, 1, created)
+}
+
+// Two concurrent starts of the same config race deliberately: both run the
+// factory, the winner is pooled, the loser's subprocess is closed, and both
+// callers leave holding one refcount each.
+func TestPool_ConcurrentStartsDeduplicateAndCloseLoser(t *testing.T) {
+	var created, closed atomic.Int32
+	release := make(chan struct{})
+	var entered sync.WaitGroup
+	entered.Add(2)
+
+	p := newPool(func(_ context.Context, name string, _ ServerConfig) (*Client, error) {
+		created.Add(1)
+		entered.Done()
+		<-release
+
+		c := mockPoolClient(name)
+		c.cancelRun = func() { closed.Add(1) }
+
+		return c, nil
+	})
+	defer p.Stop()
+
+	cfg := ServerConfig{Command: "cmd"}
+	hash := cfg.Hash()
+
+	const starters = 2
+	errs := make(chan error, starters)
+	for range starters {
+		go func() {
+			_, err := p.ClientFor(context.Background(), "srv", cfg)
+			errs <- err
+		}()
+	}
+
+	// Both starters must sit inside the factory before releasing them, or the
+	// late one joins the pooled entry and the race never happens.
+	entered.Wait()
+	close(release)
+
+	for range starters {
+		require.NoError(t, <-errs)
+	}
+
+	assert.Equal(t, int32(starters), created.Load(),
+		"the pool races concurrent starts instead of single-flighting them")
+
+	pp := p.(*pool)
+	pp.mu.Lock()
+	require.Len(t, pp.entries, 1)
+	assert.Equal(t, starters, pp.entries[hash].refcount)
+	pp.mu.Unlock()
+
+	assert.Equal(t, int32(1), closed.Load(), "exactly the loser's subprocess is closed")
+
+	p.Release([]string{hash, hash})
+	pp.mu.Lock()
+	assert.Equal(t, 0, pp.entries[hash].refcount)
+	pp.mu.Unlock()
 }
 
 func TestPool_AcquireDifferentConfigs(t *testing.T) {
@@ -117,14 +177,14 @@ func TestPool_AcquireDifferentConfigs(t *testing.T) {
 	p := newPool(factory)
 	defer p.Stop()
 
-	clients, hashes, err := p.Acquire(context.Background(), map[string]ServerConfig{
+	snap, err := p.Acquire(context.Background(), map[string]ServerConfig{
 		"svc1": cfg1,
 		"svc2": cfg2,
 	})
 	require.NoError(t, err)
-	assert.Len(t, clients, 2)
-	assert.Len(t, hashes, 2)
-	assert.NotSame(t, clients["svc1"], clients["svc2"])
+	assert.Len(t, snap.Clients, 2)
+	assert.Len(t, snap.Hashes, 2)
+	assert.NotSame(t, snap.Clients["svc1"], snap.Clients["svc2"])
 	assert.Equal(t, 2, created)
 }
 
@@ -138,7 +198,7 @@ func TestPool_ReleaseDecrementsRefcount(t *testing.T) {
 	p := newPool(factory)
 	defer p.Stop()
 
-	_, hashes, err := p.Acquire(context.Background(), map[string]ServerConfig{
+	snap, err := p.Acquire(context.Background(), map[string]ServerConfig{
 		"a": cfg,
 		"b": cfg,
 	})
@@ -152,7 +212,7 @@ func TestPool_ReleaseDecrementsRefcount(t *testing.T) {
 	assert.Equal(t, 1, pp.entries[hash].refcount)
 	pp.mu.Unlock()
 
-	p.Release(hashes)
+	p.Release(snap.Hashes)
 	pp.mu.Lock()
 	assert.Equal(t, 0, pp.entries[hash].refcount)
 	pp.mu.Unlock()
@@ -168,7 +228,7 @@ func TestPool_StopClosesAll(t *testing.T) {
 
 	p := newPool(factory)
 
-	_, _, err := p.Acquire(context.Background(), map[string]ServerConfig{
+	_, err := p.Acquire(context.Background(), map[string]ServerConfig{
 		"a": cfg1,
 		"b": cfg2,
 	})
@@ -196,7 +256,7 @@ func TestPool_StopClosesClientsAndClearsMaps(t *testing.T) {
 
 	p := newPool(factory)
 
-	_, _, err := p.Acquire(context.Background(), map[string]ServerConfig{
+	_, err := p.Acquire(context.Background(), map[string]ServerConfig{
 		"a": {Command: "cmd1"},
 		"b": {Command: "cmd2"},
 	})
@@ -208,6 +268,7 @@ func TestPool_StopClosesClientsAndClearsMaps(t *testing.T) {
 	pp.mu.Lock()
 	assert.Empty(t, pp.entries)
 	assert.Empty(t, pp.failed)
+	assert.Empty(t, pp.catalogs)
 	pp.mu.Unlock()
 
 	assert.Equal(t, int32(2), closed.Load(), "every pooled client must be closed by Stop")
@@ -233,7 +294,7 @@ func TestPool_StopClosesOutsideLock(t *testing.T) {
 
 	p := newPool(factory)
 
-	_, hashes, err := p.Acquire(context.Background(), map[string]ServerConfig{"a": {Command: "cmd1"}})
+	snap, err := p.Acquire(context.Background(), map[string]ServerConfig{"a": {Command: "cmd1"}})
 	require.NoError(t, err)
 
 	go p.Stop()
@@ -242,7 +303,7 @@ func TestPool_StopClosesOutsideLock(t *testing.T) {
 
 	relDone := make(chan struct{})
 	go func() {
-		p.Release(hashes)
+		p.Release(snap.Hashes)
 		close(relDone)
 	}()
 
@@ -288,7 +349,7 @@ func TestPool_AcquireAfterStop(t *testing.T) {
 	p := newPool(factory)
 	p.Stop()
 
-	_, _, err := p.Acquire(context.Background(), map[string]ServerConfig{
+	_, err := p.Acquire(context.Background(), map[string]ServerConfig{
 		"svc": {Command: "cmd"},
 	})
 	require.Error(t, err)
@@ -309,14 +370,14 @@ func TestPool_AcquireSkipsFailedServer(t *testing.T) {
 
 	// One server fails to start; the acquire must still succeed with the rest so
 	// a single broken MCP server never blocks the session from running.
-	clients, hashes, err := p.Acquire(context.Background(), map[string]ServerConfig{
+	snap, err := p.Acquire(context.Background(), map[string]ServerConfig{
 		"good": {Command: "cmd1"},
 		"bad":  {Command: "cmd2"},
 	})
 	require.NoError(t, err)
-	assert.Contains(t, clients, "good")
-	assert.NotContains(t, clients, "bad")
-	assert.Len(t, hashes, 1, "only the good server holds a refcount")
+	assert.Contains(t, snap.Clients, "good")
+	assert.NotContains(t, snap.Clients, "bad")
+	assert.Len(t, snap.Hashes, 1, "only the good server holds a refcount")
 }
 
 func TestPool_AcquireAllFailedReturnsEmpty(t *testing.T) {
@@ -329,13 +390,13 @@ func TestPool_AcquireAllFailedReturnsEmpty(t *testing.T) {
 
 	// Every server failing still yields a usable (empty) result, not an error —
 	// the session runs with no MCP tools rather than refusing to start.
-	clients, hashes, err := p.Acquire(context.Background(), map[string]ServerConfig{
+	snap, err := p.Acquire(context.Background(), map[string]ServerConfig{
 		"a": {Command: "x"},
 		"b": {Command: "y"},
 	})
 	require.NoError(t, err)
-	assert.Empty(t, clients)
-	assert.Empty(t, hashes)
+	assert.Empty(t, snap.Clients)
+	assert.Empty(t, snap.Hashes)
 }
 
 func TestPool_NegativeCacheSuppressesRetry(t *testing.T) {
@@ -351,12 +412,12 @@ func TestPool_NegativeCacheSuppressesRetry(t *testing.T) {
 	cfg := map[string]ServerConfig{"srv": {Command: "x"}}
 
 	// First acquire hits the factory and records the failure.
-	_, _, err := p.Acquire(context.Background(), cfg)
+	_, err := p.Acquire(context.Background(), cfg)
 	require.NoError(t, err)
 	assert.Equal(t, 1, calls)
 
 	// Second acquire within the cooldown must NOT respawn the known-dead server.
-	_, _, err = p.Acquire(context.Background(), cfg)
+	_, err = p.Acquire(context.Background(), cfg)
 	require.NoError(t, err)
 	assert.Equal(t, 1, calls, "dead server retried during cooldown")
 
@@ -368,7 +429,7 @@ func TestPool_NegativeCacheSuppressesRetry(t *testing.T) {
 	}
 	pp.mu.Unlock()
 
-	_, _, err = p.Acquire(context.Background(), cfg)
+	_, err = p.Acquire(context.Background(), cfg)
 	require.NoError(t, err)
 	assert.Equal(t, 2, calls, "server not retried after cooldown expired")
 }
@@ -389,7 +450,7 @@ func TestPool_NegativeCacheClearedOnRecovery(t *testing.T) {
 
 	cfg := map[string]ServerConfig{"srv": {Command: "x"}}
 
-	_, _, err := p.Acquire(context.Background(), cfg)
+	_, err := p.Acquire(context.Background(), cfg)
 	require.NoError(t, err)
 
 	// Age past the cooldown so the next acquire retries and succeeds.
@@ -400,9 +461,9 @@ func TestPool_NegativeCacheClearedOnRecovery(t *testing.T) {
 	}
 	pp.mu.Unlock()
 
-	clients, _, err := p.Acquire(context.Background(), cfg)
+	snap, err := p.Acquire(context.Background(), cfg)
 	require.NoError(t, err)
-	assert.Contains(t, clients, "srv")
+	assert.Contains(t, snap.Clients, "srv")
 
 	// Recovery must clear the cooldown entry so it can't linger.
 	pp.mu.Lock()
@@ -424,18 +485,18 @@ func TestPool_NegativeCacheInvalidatedByFingerprintChange(t *testing.T) {
 
 	cfg := map[string]ServerConfig{"srv": {Command: "x", WorkDir: "/w"}}
 
-	_, _, err := p.Acquire(context.Background(), cfg)
+	_, err := p.Acquire(context.Background(), cfg)
 	require.NoError(t, err)
 	assert.Equal(t, 1, calls)
 
 	// Same fingerprint, within cooldown → not retried.
-	_, _, err = p.Acquire(context.Background(), cfg)
+	_, err = p.Acquire(context.Background(), cfg)
 	require.NoError(t, err)
 	assert.Equal(t, 1, calls, "same env within cooldown must not retry")
 
 	// The env fingerprint changes (toolchain fixed) → retried at once despite the cooldown.
 	fp = "env-B"
-	_, _, err = p.Acquire(context.Background(), cfg)
+	_, err = p.Acquire(context.Background(), cfg)
 	require.NoError(t, err)
 	assert.Equal(t, 2, calls, "a fingerprint change must invalidate the cooldown")
 }
@@ -449,22 +510,24 @@ func closeTrackingFactory(closed *atomic.Int32) clientFactory {
 	}
 }
 
-func TestPoolEvictClosesAnIdleEntryImmediately(t *testing.T) {
+// Invalidate retires an idle entry immediately and, as part of the same
+// contract, drops its catalog so the next activation rediscovers from scratch.
+func TestPoolInvalidateClosesAnIdleEntryImmediately(t *testing.T) {
 	var closed atomic.Int32
 
 	p := newPool(closeTrackingFactory(&closed))
 	t.Cleanup(p.Stop)
 
-	_, hashes, err := p.Acquire(context.Background(), map[string]ServerConfig{
+	snap, err := p.Acquire(context.Background(), map[string]ServerConfig{
 		"gone": {Command: "cmd1"},
 		"kept": {Command: "cmd2"},
 	})
 	require.NoError(t, err)
 
-	p.Release(hashes)
+	p.Release(snap.Hashes)
 	require.Equal(t, int32(0), closed.Load(), "release alone leaves the entry pooled for the TTL")
 
-	p.Evict("gone")
+	p.Invalidate("gone")
 
 	assert.Equal(t, int32(1), closed.Load())
 
@@ -472,6 +535,7 @@ func TestPoolEvictClosesAnIdleEntryImmediately(t *testing.T) {
 	pp.mu.Lock()
 	defer pp.mu.Unlock()
 	require.Len(t, pp.entries, 1)
+	assert.NotContains(t, pp.catalogs, ServerConfig{Command: "cmd1"}.Hash(), "invalidation drops the catalog")
 
 	for _, entry := range pp.entries {
 		assert.Equal(t, "kept", entry.name)
@@ -480,25 +544,25 @@ func TestPoolEvictClosesAnIdleEntryImmediately(t *testing.T) {
 
 // A live stack keeps the tools it already registered, so an in-use entry must not
 // have its subprocess killed under an active call — it dies on the last release.
-func TestPoolEvictDefersCloseWhileInUse(t *testing.T) {
+func TestPoolInvalidateDefersCloseWhileInUse(t *testing.T) {
 	var closed atomic.Int32
 
 	p := newPool(closeTrackingFactory(&closed))
 	t.Cleanup(p.Stop)
 
-	_, first, err := p.Acquire(context.Background(), map[string]ServerConfig{"srv": {Command: "cmd"}})
+	first, err := p.Acquire(context.Background(), map[string]ServerConfig{"srv": {Command: "cmd"}})
 	require.NoError(t, err)
 
-	_, second, err := p.Acquire(context.Background(), map[string]ServerConfig{"srv": {Command: "cmd"}})
+	second, err := p.Acquire(context.Background(), map[string]ServerConfig{"srv": {Command: "cmd"}})
 	require.NoError(t, err)
 
-	p.Evict("srv")
+	p.Invalidate("srv")
 	assert.Equal(t, int32(0), closed.Load(), "still referenced")
 
-	p.Release(first)
+	p.Release(first.Hashes)
 	assert.Equal(t, int32(0), closed.Load(), "one holder left")
 
-	p.Release(second)
+	p.Release(second.Hashes)
 	assert.Equal(t, int32(1), closed.Load(), "last release retires the evicted entry")
 
 	pp := p.(*pool)
@@ -507,34 +571,34 @@ func TestPoolEvictDefersCloseWhileInUse(t *testing.T) {
 	pp.mu.Unlock()
 }
 
-func TestPoolEvictSpansEveryWorkdirOfAServer(t *testing.T) {
+func TestPoolInvalidateSpansEveryWorkdirOfAServer(t *testing.T) {
 	var closed atomic.Int32
 
 	p := newPool(closeTrackingFactory(&closed))
 	t.Cleanup(p.Stop)
 
-	_, hashes, err := p.Acquire(context.Background(), map[string]ServerConfig{"srv": {Command: "cmd", WorkDir: "/a"}})
+	snap, err := p.Acquire(context.Background(), map[string]ServerConfig{"srv": {Command: "cmd", WorkDir: "/a"}})
 	require.NoError(t, err)
-	p.Release(hashes)
+	p.Release(snap.Hashes)
 
-	_, hashes, err = p.Acquire(context.Background(), map[string]ServerConfig{"srv": {Command: "cmd", WorkDir: "/b"}})
+	snap, err = p.Acquire(context.Background(), map[string]ServerConfig{"srv": {Command: "cmd", WorkDir: "/b"}})
 	require.NoError(t, err)
-	p.Release(hashes)
+	p.Release(snap.Hashes)
 
-	p.Evict("srv")
+	p.Invalidate("srv")
 	assert.Equal(t, int32(2), closed.Load(), "one server name can back several workdir entries")
 }
 
-func TestPoolEvictUnknownNameIsANoop(t *testing.T) {
+func TestPoolInvalidateUnknownNameIsANoop(t *testing.T) {
 	var closed atomic.Int32
 
 	p := newPool(closeTrackingFactory(&closed))
 	t.Cleanup(p.Stop)
 
-	_, hashes, err := p.Acquire(context.Background(), map[string]ServerConfig{"srv": {Command: "cmd"}})
+	snap, err := p.Acquire(context.Background(), map[string]ServerConfig{"srv": {Command: "cmd"}})
 	require.NoError(t, err)
-	p.Release(hashes)
+	p.Release(snap.Hashes)
 
-	p.Evict("never-pooled")
+	p.Invalidate("never-pooled")
 	assert.Equal(t, int32(0), closed.Load())
 }

@@ -17,7 +17,7 @@ import (
 	"github.com/pilat/coagent/internal/tool"
 )
 
-func newMCPToolSet(t *testing.T) (map[string]tool.Tool, mcpstore.Store, *recordingEvictor, int64) {
+func newMCPToolSet(t *testing.T) (map[string]tool.Tool, mcpstore.Store, *recordingPool, int64) {
 	t.Helper()
 
 	ctx := context.Background()
@@ -35,14 +35,14 @@ func newMCPToolSet(t *testing.T) (map[string]tool.Tool, mcpstore.Store, *recordi
 	require.NoError(t, err)
 
 	store := mcpstore.NewStore(db)
-	evictor := &recordingEvictor{}
+	pool := &recordingPool{}
 
 	tools := make(map[string]tool.Tool)
-	for _, tl := range newMCPTools(store, evictor, projectID) {
+	for _, tl := range newMCPTools(store, pool, projectID) {
 		tools[tl.ID()] = tl
 	}
 
-	return tools, store, evictor, projectID
+	return tools, store, pool, projectID
 }
 
 func run(t *testing.T, tl tool.Tool, params string) (*tool.Result, error) {
@@ -111,24 +111,27 @@ func TestMCPAddRejectsDuplicateInSameScope(t *testing.T) {
 	require.NoError(t, err)
 }
 
-func TestMCPRemoveAndDisableEvictThePooledServer(t *testing.T) {
-	tools, _, evictor, _ := newMCPToolSet(t)
+func TestMCPRegistryMutationsInvalidatePoolMetadata(t *testing.T) {
+	tools, _, pool, _ := newMCPToolSet(t)
 
 	_, err := run(t, tools[tool.IDMCPAdd], `{"name":"tavily","scope":"global","command":"run"}`)
 	require.NoError(t, err)
-	assert.Empty(t, evictor.evicted, "adding a server evicts nothing")
+	assert.Equal(t, []string{"tavily"}, pool.invalidated, "adding a server invalidates by name")
 
-	_, err = run(t, tools[tool.IDMCPDisable], `{"name":"tavily","scope":"global"}`)
-	require.NoError(t, err)
+	for _, id := range []string{tool.IDMCPEnable, tool.IDMCPDisable, tool.IDMCPRemove} {
+		_, err = run(t, tools[id], `{"name":"tavily","scope":"global"}`)
+		require.NoError(t, err)
+		assert.Equal(t, []string{"tavily"}, pool.invalidated[len(pool.invalidated)-1:],
+			"every successful mutation invalidates by name")
+	}
+}
 
-	_, err = run(t, tools[tool.IDMCPEnable], `{"name":"tavily","scope":"global"}`)
-	require.NoError(t, err)
+func TestMCPFailedMutationInvalidatesNothing(t *testing.T) {
+	tools, _, pool, _ := newMCPToolSet(t)
 
-	_, err = run(t, tools[tool.IDMCPRemove], `{"name":"tavily","scope":"global"}`)
-	require.NoError(t, err)
-
-	assert.Equal(t, []string{"tavily", "tavily"}, evictor.evicted,
-		"only disable and remove retire the subprocess")
+	_, err := run(t, tools[tool.IDMCPDisable], `{"name":"ghost","scope":"global"}`)
+	require.ErrorIs(t, err, mcpstore.ErrNotFound)
+	assert.Empty(t, pool.invalidated, "a failed mutation must not touch pool metadata")
 }
 
 func TestMCPMutationsOnTheWrongScopeSayWhereItLives(t *testing.T) {
@@ -201,27 +204,30 @@ func TestMCPToolSchemasAreValidJSON(t *testing.T) {
 	}
 }
 
-// recordingEvictor is a Pool that only tracks eviction; the tools use nothing else.
-type recordingEvictor struct {
+// recordingPool is a Pool that only tracks invalidation; the tools use nothing else.
+type recordingPool struct {
 	stubPool
 
-	evicted []string
+	invalidated []string
 }
 
-func (p *recordingEvictor) Evict(name string) { p.evicted = append(p.evicted, name) }
+func (p *recordingPool) Invalidate(name string) { p.invalidated = append(p.invalidated, name) }
 
 type fakeRegistryStore struct{ mcpstore.Store }
 
-// stubPool satisfies the pool contract for tests that only care about eviction.
+// stubPool satisfies the pool contract for tests that only care about invalidation.
 type stubPool struct{}
 
-func (stubPool) Acquire(context.Context, map[string]mcp.ServerConfig) (map[string]*mcp.Client, []string, error) {
-	return nil, nil, nil
+func (stubPool) Acquire(context.Context, map[string]mcp.ServerConfig) (*mcp.Snapshot, error) {
+	return nil, nil
 }
 
 func (stubPool) Release([]string) {}
 func (stubPool) Stop()            {}
-func (stubPool) Evict(string)     {}
+func (stubPool) ClientFor(context.Context, string, mcp.ServerConfig) (*mcp.Client, error) {
+	return nil, nil
+}
+func (stubPool) Invalidate(string) {}
 
 // A subagent must not reshape the toolset its parent will run with, so the
 // registry tools are root-only.

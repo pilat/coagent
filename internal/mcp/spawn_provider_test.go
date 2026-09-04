@@ -90,10 +90,10 @@ func TestPooledSpawn_RoutesThroughProvider(t *testing.T) {
 		"srv": {Command: "my-mcp-server", WorkDir: "/pinned/workdir"},
 	}
 
-	clients, _, err := pool.Acquire(ctx, configs)
+	snap, err := pool.Acquire(ctx, configs)
 	// A failed spawn is skipped, not fatal — but it still routed through the provider.
 	require.NoError(t, err)
-	assert.Empty(t, clients)
+	assert.Empty(t, snap.Clients)
 
 	calls, workDir, _, _ := prov.snapshot()
 	assert.GreaterOrEqual(t, calls, 1, "pooled path must spawn via the provider")

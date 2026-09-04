@@ -36,8 +36,9 @@ var (
 )
 
 type (
-	// mcpDeps is what every registry tool needs: the store to write, the project it
-	// speaks for, and the pool to evict from on removal.
+	// mcpDeps is what every registry tool needs: the store to write, the project
+	// it speaks for, and the pool to invalidate cached MCP metadata from on
+	// every successful mutation.
 	mcpDeps struct {
 		store     mcpstore.Store
 		pool      mcp.Pool
@@ -134,6 +135,8 @@ func (t *mcpAddTool) Execute(ctx context.Context, params json.RawMessage) (*tool
 		return nil, fmt.Errorf("add mcp server: %w", err)
 	}
 
+	t.invalidate(p.Name)
+
 	return textResult(fmt.Sprintf("Added MCP server %q in %s scope. %s", p.Name, scope.label, nextRunNotice)), nil
 }
 
@@ -157,7 +160,7 @@ func (t *mcpRemoveTool) Execute(ctx context.Context, params json.RawMessage) (*t
 		return nil, fmt.Errorf("remove mcp server: %w", err)
 	}
 
-	t.evict(p.Name)
+	t.invalidate(p.Name)
 
 	return textResult(fmt.Sprintf("Removed MCP server %q from %s scope. %s", p.Name, scope.label, nextRunNotice)), nil
 }
@@ -182,6 +185,8 @@ func (t *mcpEnableTool) Execute(ctx context.Context, params json.RawMessage) (*t
 		return nil, fmt.Errorf("enable mcp server: %w", err)
 	}
 
+	t.invalidate(p.Name)
+
 	return textResult(fmt.Sprintf("Enabled MCP server %q in %s scope. %s", p.Name, scope.label, nextRunNotice)), nil
 }
 
@@ -205,7 +210,7 @@ func (t *mcpDisableTool) Execute(ctx context.Context, params json.RawMessage) (*
 		return nil, fmt.Errorf("disable mcp server: %w", err)
 	}
 
-	t.evict(p.Name)
+	t.invalidate(p.Name)
 
 	return textResult(fmt.Sprintf("Disabled MCP server %q in %s scope. %s", p.Name, scope.label, nextRunNotice)), nil
 }

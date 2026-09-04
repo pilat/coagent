@@ -117,7 +117,7 @@ func (h *registryModelHarness) apply(t *testing.T, command registryModelCommand)
 		h.rebuild(t)
 	case registryDisable:
 		require.NoError(t, h.store.SetEnabled(ctx, &h.projectID, "fake", false))
-		h.pool.Evict("fake")
+		h.pool.Invalidate("fake")
 		h.reference.enabled = false
 	case registryRelease:
 		if h.service != nil {
@@ -130,7 +130,7 @@ func (h *registryModelHarness) apply(t *testing.T, command registryModelCommand)
 		h.reference.enabled = true
 	case registryRemove:
 		require.NoError(t, h.store.Remove(ctx, &h.projectID, "fake"))
-		h.pool.Evict("fake")
+		h.pool.Invalidate("fake")
 		h.reference.registered = false
 		h.reference.enabled = false
 	case registryRestart:
