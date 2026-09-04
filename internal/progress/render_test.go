@@ -54,7 +54,7 @@ func TestRenderCompact_ExactCard(t *testing.T) {
 		"reading the loop",
 		"",
 		"🤖 `z-ai/glm-5.3-flash` · iteration 112",
-		"⏱ 1m36s · 💰 $0.281 total · 🧠 context 72%",
+		"⌚ 1m36s · 💰 $0.281 total · 🧠 context 72%",
 		"📋 TODO · 1 active · 2 remaining · 2 done · 1 cancelled",
 		"ℹ️ `/status` shows the full TODO list",
 	}, "\n"), RenderCompact(snapshot, nil))
@@ -117,7 +117,7 @@ func TestRenderCompact_MissingFragmentsOmitted(t *testing.T) {
 	noModel := Snapshot{EpisodeElapsed: durationPtr(time.Minute)}
 	assert.Equal(t, strings.Join([]string{
 		"**⚪ Idle**",
-		"⏱ 1m0s",
+		"⌚ 1m0s",
 	}, "\n"), RenderCompact(noModel, nil))
 }
 

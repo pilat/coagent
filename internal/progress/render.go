@@ -153,7 +153,7 @@ func renderCardMetrics(snapshot Snapshot) string {
 	var fragments []string
 
 	if snapshot.EpisodeElapsed != nil {
-		fragments = append(fragments, "⏱ "+snapshot.EpisodeElapsed.Round(1e9).String())
+		fragments = append(fragments, "⌚ "+snapshot.EpisodeElapsed.Round(1e9).String())
 	}
 
 	if snapshot.Lifetime.Available && !math.IsNaN(snapshot.Lifetime.CostUSD) &&

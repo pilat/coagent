@@ -39,7 +39,7 @@ var childRefPattern = regexp.MustCompile(`#(\d+)`)
 
 // elapsedPattern matches the wall-time fragment of an automatic card; its
 // value depends on scheduling and carries no conversation meaning.
-var elapsedPattern = regexp.MustCompile(`⏱ [0-9.]+[a-z0-9.]+`)
+var elapsedPattern = regexp.MustCompile(`⌚ [0-9.]+[a-z0-9.]+`)
 
 // harnessTraceFile is the shared artifact: the exact ordered notification trace
 // a daemon scenario published to a controller sink, plus the exact sanitized
@@ -251,7 +251,7 @@ func normalizeHarnessMessage(message string, children map[int64]string, wakes []
 		return ""
 	}
 
-	message = elapsedPattern.ReplaceAllString(message, "⏱ <elapsed>")
+	message = elapsedPattern.ReplaceAllString(message, "⌚ <elapsed>")
 
 	for _, wake := range wakes {
 		message = strings.ReplaceAll(message, wake, wakePlaceholder)
