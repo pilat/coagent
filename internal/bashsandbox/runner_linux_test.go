@@ -91,7 +91,7 @@ func TestBubblewrapRunnerShellCommandNoSnapshotUsesBash(t *testing.T) {
 func TestNewEnabledRunnerRequiresBubblewrap(t *testing.T) {
 	t.Setenv("PATH", t.TempDir())
 
-	runner, err := newEnabledRunner([]string{t.TempDir()})
+	runner, err := newEnabledRunner([]string{t.TempDir()}, nil)
 	require.Error(t, err)
 	assert.Nil(t, runner)
 	assert.Contains(t, err.Error(), "find Bubblewrap executable")

@@ -32,6 +32,13 @@ type (
 		Resume    bool
 		SessionID int64
 
+		// RepoRoot is the path to the main git repository (for worktree sessions).
+		// Empty for non-worktree sessions.
+		RepoRoot string
+		// GitDir is the path to the git directory file (for worktree sessions).
+		// Empty for non-worktree sessions.
+		GitDir string
+
 		// Unified config (loaded from ~/.coagent/config.yaml)
 		UnifiedConfig *UnifiedConfig
 

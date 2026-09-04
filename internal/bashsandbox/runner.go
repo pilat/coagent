@@ -34,6 +34,7 @@ type Config struct {
 	Enabled       bool
 	WorkDir       string
 	WritablePaths []string
+	ReadOnlyPaths []string // paths to mount read-only (for worktree git access)
 }
 
 // Runner constructs Bash commands with the configured sandbox policy.
@@ -60,7 +61,7 @@ type providerAware interface {
 	setProvider(p shellenv.Provider)
 }
 
-type runnerFactory func(writableRoots []string) (Runner, error)
+type runnerFactory func(writableRoots, readOnlyRoots []string) (Runner, error)
 
 type limitedBuffer struct {
 	buffer bytes.Buffer
@@ -96,11 +97,19 @@ func New(cfg Config, provider shellenv.Provider) (Runner, error) {
 		return nil, fmt.Errorf("normalize Bash sandbox writable roots: %w", err)
 	}
 
+	var readOnlyRoots []string
+	if len(cfg.ReadOnlyPaths) > 0 {
+		readOnlyRoots, err = normalizeWritableRoots(cfg.ReadOnlyPaths)
+		if err != nil {
+			return nil, fmt.Errorf("normalize Bash sandbox read-only roots: %w", err)
+		}
+	}
+
 	if err := Probe(); err != nil {
 		return nil, err
 	}
 
-	runner, err := newEnabledRunner(writableRoots)
+	runner, err := newEnabledRunner(writableRoots, readOnlyRoots)
 	if err != nil {
 		return nil, fmt.Errorf("create Bash sandbox runner: %w", err)
 	}
@@ -354,7 +363,7 @@ func probeEnforcement(newRunner runnerFactory) error {
 		return fmt.Errorf("create denied probe directory: %w", err)
 	}
 
-	runner, err := newRunner([]string{allowed})
+	runner, err := newRunner([]string{allowed}, nil)
 	if err != nil {
 		return fmt.Errorf("create probe runner: %w", err)
 	}

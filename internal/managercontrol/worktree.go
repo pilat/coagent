@@ -28,6 +28,7 @@ const maxDisplayNameRunes = 128
 type createdWorktree struct {
 	path        string
 	displayName string
+	repoRoot    string // path to the main repository (for sandbox git access)
 	remove      func() error
 }
 
@@ -125,7 +126,8 @@ func (s *service) createWorktree(ctx context.Context, workDir, name string) (cre
 			repoRoot,
 			maxDisplayNameRunes-1-utf8.RuneCountInString(name),
 		) + "/" + name,
-		remove: remove,
+		repoRoot: repoRoot,
+		remove:   remove,
 	}, nil
 }
 

@@ -115,6 +115,10 @@ type SessionCreateData struct {
 	// from its remote) and runs the session there instead of in WorkDir.
 	WorktreeName  string `json:"worktree_name,omitempty"`
 	SystemProject string `json:"system_project,omitempty"`
+	// RepoRoot is the path to the main git repository (for worktree sessions).
+	// Empty for non-worktree sessions. Used to grant sandbox access to the
+	// repository's .git directory while keeping the main repository read-only.
+	RepoRoot string `json:"repo_root,omitempty"`
 }
 
 // SessionMessageData defines one durable normal message for a session.
