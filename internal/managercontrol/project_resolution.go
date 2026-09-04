@@ -5,16 +5,18 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
-	"time"
 
 	"github.com/pilat/coagent/internal/controllerapi"
-	"github.com/pilat/coagent/internal/git"
 	"github.com/pilat/coagent/internal/projectpath"
 )
 
+// resolveSessionProject resolves the project a session runs in. worktreeName,
+// when set, is the /gwt display name ("<repo>/<branch>") registered against the
+// worktree directory instead of deriving the project name from its basename.
 func (s *service) resolveSessionProject(
 	ctx context.Context,
 	data controllerapi.SessionCreateData,
+	worktreeName string,
 ) (int64, error) {
 	if data.SystemProject != "" {
 		expected := filepath.Join(
@@ -32,6 +34,15 @@ func (s *service) resolveSessionProject(
 		return projectID, nil
 	}
 
+	if worktreeName != "" {
+		projectID, err := s.backend.GetOrCreateNamedProject(ctx, data.WorkDir, worktreeName)
+		if err != nil {
+			return 0, fmt.Errorf("get worktree project: %w", err)
+		}
+
+		return projectID, nil
+	}
+
 	if filepath.Base(filepath.Clean(data.WorkDir)) == controllerapi.CoagentSystemProjectDir {
 		return 0, errors.New("reserved system project requires its internal identity")
 	}
@@ -42,20 +53,4 @@ func (s *service) resolveSessionProject(
 	}
 
 	return projectID, nil
-}
-
-func createWorktree(ctx context.Context, workDir string) (string, error) {
-	client := git.NewWorktreeClient()
-
-	gitRoot, err := client.FindRoot(ctx, workDir)
-	if err != nil {
-		return "", fmt.Errorf("worktree: %w", err)
-	}
-
-	worktreePath, fullWorkDir, branchName := git.ComputeWorktreePaths(workDir, gitRoot, time.Now())
-	if err := client.CreateWorktree(ctx, gitRoot, worktreePath, branchName); err != nil {
-		return "", fmt.Errorf("worktree: %w", err)
-	}
-
-	return fullWorkDir, nil
 }

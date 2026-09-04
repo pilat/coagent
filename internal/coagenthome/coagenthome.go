@@ -21,6 +21,7 @@ const (
 	PendingApplyFileName = "pending-apply.json"
 
 	ProjectsDirName     = "projects"
+	WorktreesDirName    = "worktrees"
 	CacheDirName        = "cache"
 	CatalogDirName      = "catalog"
 	MarketplacesDirName = "marketplaces"

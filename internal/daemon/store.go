@@ -14,6 +14,7 @@ import (
 // Store persists daemon state (project registry) in SQLite.
 type Store interface {
 	GetOrCreateProject(ctx context.Context, workDir string) (int64, error)
+	GetOrCreateNamedProject(ctx context.Context, workDir, name string) (int64, error)
 	GetOrCreateSystemProject(ctx context.Context, workDir, name string) (int64, error)
 	GetProjectWorkDir(ctx context.Context, projectID int64) (string, error)
 	GetProjectName(ctx context.Context, projectID int64) (string, error)
@@ -46,6 +47,23 @@ func (s *store) GetOrCreateProject(ctx context.Context, workDir string) (int64, 
 	name := filepath.Base(absPath)
 	if name == controllerapi.CoagentSystemProjectDir || strings.ContainsRune(name, ':') {
 		return 0, fmt.Errorf("project directory name %q is reserved", name)
+	}
+
+	return s.getOrCreateProject(ctx, absPath, name, false)
+}
+
+// GetOrCreateNamedProject registers workDir under an explicit display name that
+// need not equal the directory basename. /gwt uses it so a worktree whose leaf is
+// a bare branch name reads as "<repo>/<branch>". The name is display-only; ':'
+// stays reserved for system-project identity.
+func (s *store) GetOrCreateNamedProject(ctx context.Context, workDir, name string) (int64, error) {
+	absPath, err := filepath.Abs(workDir)
+	if err != nil {
+		absPath = workDir
+	}
+
+	if name == "" || strings.ContainsRune(name, ':') {
+		return 0, fmt.Errorf("invalid project name %q", name)
 	}
 
 	return s.getOrCreateProject(ctx, absPath, name, false)

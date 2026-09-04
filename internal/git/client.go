@@ -20,6 +20,11 @@ var gitTimeout = 2 * time.Minute
 // block past gitTimeout without it. Wait force-closes the pipes after this grace.
 var gitWaitDelay = 10 * time.Second
 
+// worktreeAddTimeout bounds `git worktree add` including the repo's
+// post-checkout hook: hooks legitimately install dependencies, but a wedged
+// one must not pin the manager's poll loop.
+var worktreeAddTimeout = 10 * time.Minute
+
 type Client interface {
 	// Clone returns an error if destPath already exists.
 	Clone(ctx context.Context, repoURL, destPath string) error

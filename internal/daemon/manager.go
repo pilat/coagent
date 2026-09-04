@@ -62,6 +62,7 @@ type Service interface {
 	NotifySession(sessionID int64, n sessionevent.Notification)
 	Shutdown(timeout time.Duration)
 	GetOrCreateProject(ctx context.Context, workDir string) (int64, error)
+	GetOrCreateNamedProject(ctx context.Context, workDir, name string) (int64, error)
 	GetOrCreateSystemProject(ctx context.Context, workDir, name string) (int64, error)
 	GetProjectWorkDir(ctx context.Context, projectID int64) (string, error)
 	GetProjectName(ctx context.Context, projectID int64) (string, error)
@@ -1039,6 +1040,15 @@ func (s *svc) GetOrCreateProject(ctx context.Context, workDir string) (int64, er
 	return id, nil
 }
 
+func (s *svc) GetOrCreateNamedProject(ctx context.Context, workDir, name string) (int64, error) {
+	id, err := s.store.GetOrCreateNamedProject(ctx, workDir, name)
+	if err != nil {
+		return 0, fmt.Errorf("resolve named project: %w", err)
+	}
+
+	return id, nil
+}
+
 func (s *svc) GetOrCreateSystemProject(ctx context.Context, workDir, name string) (int64, error) {
 	if !projectpath.Same(workDir, s.systemProject) {
 		return 0, errors.New("system project is outside the canonical configuration directory")
@@ -1300,6 +1310,20 @@ func (s *svc) send(
 		if errors.Is(err, admission.ErrNoCapacity) {
 			s.enqueuePendingRunner(rec.ID, workDir, projectID)
 			return rec.ID, nil
+		}
+
+		// Cleanup: ensureRunner failed after the session/root was already committed.
+		// Mark the session killed so it doesn't appear alive to managers, even though
+		// the worktree (for /gwt failures) may already be gone. This prevents
+		// orphaned sessions in the store that reference deleted directories.
+		// WithoutCancel: the kill marker must land even if the request context
+		// died mid-launch.
+		if _, killErr := s.lifecycleStore.MarkSessionKilledWithOutput(
+			context.WithoutCancel(ctx),
+			rec.ID,
+		); killErr != nil {
+			logger.Ctx(ctx).Named("daemon.manager").Warn("cleanup_orphaned_session",
+				zap.Int64("session_id", rec.ID), zap.Error(killErr))
 		}
 
 		return 0, err

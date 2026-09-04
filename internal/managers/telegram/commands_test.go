@@ -43,6 +43,7 @@ func TestHandleCommandsPreservesCanonicalSkillNames(t *testing.T) {
 				"<b>Commands:</b>\n" +
 					"  /new — new dialog project by name (/new &lt;name&gt;), or bare /new to pick one\n" +
 					"  /spawn — open folder picker for new session\n" +
+					"  /gwt &lt;name&gt; — fork this project into a git worktree (session topic only)\n" +
 					"  /kill — end this session (terminal)\n" +
 					"  /stop — stop the current run (session stays, resumable)\n" +
 					"  /clear — clear session (fresh start, same topic)\n" +
@@ -137,12 +138,6 @@ func TestParseCallbackDataMatrix(t *testing.T) {
 	}{
 		{name: "nav", data: "nav:7", want: callbackAction{Kind: callbackNav, DirID: 7}, wantOK: true},
 		{name: "launch", data: "launch:9", want: callbackAction{Kind: callbackLaunch, DirID: 9}, wantOK: true},
-		{
-			name:   "launch_gwt",
-			data:   "launch_gwt:10",
-			want:   callbackAction{Kind: callbackLaunchGWT, DirID: 10},
-			wantOK: true,
-		},
 		{
 			name:   "more",
 			data:   "more:11:20",

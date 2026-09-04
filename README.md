@@ -124,9 +124,9 @@ opinionated product, not an agent framework with a public plugin API.
   policy allows it.
 - **Schedules:** cron expressions with `CRON_TZ` and one-shot wakes. Fresh
   schedules reset the transcript on every run while curated memory persists.
-- **Telegram:** one forum topic per session, repository picker, optional git
-  worktrees, model switching, cost/context status, schedules, and a hard user
-  allow-list.
+- **Telegram:** one forum topic per session, repository picker, git worktrees
+  via `/gwt <name>`, model switching, cost/context status, schedules, and a hard
+  user allow-list.
 
 ## Security model
 
@@ -209,7 +209,8 @@ are writable by default. Add language- or package-manager caches explicitly.
   network again but can fall back to the last valid disk snapshot. Arbitrary
   local model IDs need a matching catalog entry.
 - The local terminal chat uses its own persistent dialog project. Repository
-  selection and isolated worktree creation currently live in Telegram.
+  selection lives in Telegram, where `/gwt <name>` inside a session topic forks
+  that repository into a fresh worktree branched off its remote default branch.
 - Shell environment activation is Bash-based. zsh and fish users can still run
   coagent, but do not get automatic per-directory mise/asdf/nvm/direnv capture.
 - Language servers are user- or project-owned. Coagent discovers them through

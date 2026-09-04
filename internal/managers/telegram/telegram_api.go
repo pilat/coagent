@@ -199,6 +199,7 @@ func (m *Manager) setCommands(ctx context.Context) error {
 		"commands": []map[string]string{
 			{tgKeyCommand: "new", tgKeyDescription: "New dialog project by name, or pick one"},
 			{tgKeyCommand: "spawn", tgKeyDescription: "Open folder picker for new session"},
+			{tgKeyCommand: "gwt", tgKeyDescription: "Fork this project into a git worktree"},
 			{tgKeyCommand: "kill", tgKeyDescription: "End this session (terminal)"},
 			{tgKeyCommand: "stop", tgKeyDescription: "Stop the current run (keep session)"},
 			{tgKeyCommand: "clear", tgKeyDescription: "Clear session (fresh start, same topic)"},

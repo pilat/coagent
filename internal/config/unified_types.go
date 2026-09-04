@@ -113,7 +113,8 @@ type (
 		Marketplaces   []MarketplaceEntry       `yaml:"marketplaces,omitempty"`
 		Models         []ModelEntry             `yaml:"models,omitempty"`
 		SpawnFavorites []string                 `yaml:"spawn_favorites,omitempty"`
-		ProjectsRoot   string                   `yaml:"projects_root,omitempty"` // root for /new folder-projects; empty → ~/.coagent/projects (resolved in daemon)
+		ProjectsRoot   string                   `yaml:"projects_root,omitempty"`  // root for /new folder-projects; empty → ~/.coagent/projects (resolved in daemon)
+		WorktreesRoot  string                   `yaml:"worktrees_root,omitempty"` // root for /gwt worktrees; empty → ~/.coagent/worktrees (resolved in daemon)
 		Managers       []ManagerEntry           `yaml:"managers,omitempty"`
 		Tools          ToolsConfig              `yaml:"tools,omitempty"`
 	}
