@@ -39,6 +39,12 @@ type CreateOptions struct {
 	InputBoundary  InputBoundary
 	OutputEnabled  bool
 	BudgetGate     BudgetGate
+	// RepoRoot is the path to the main git repository (for worktree sessions).
+	// Empty for non-worktree sessions.
+	RepoRoot string
+	// GitDir is the path to the git directory file (for worktree sessions).
+	// Empty for non-worktree sessions.
+	GitDir string
 
 	// SettlementOpen marks a lifecycle settlement open: the initial state is not
 	// persisted, so a stopping root is never reactivated by /stop settlement.
@@ -163,6 +169,8 @@ func (f *factory) buildRegistry(
 ) (tool.Registry, *builtin.Stack, error) {
 	stack, err := builtin.BuildStack(ctx, builtin.StackConfig{
 		WorkDir:         cfg.WorkDir,
+		RepoRoot:        cfg.RepoRoot,
+		GitDir:          cfg.GitDir,
 		Pool:            f.mcpPool,
 		Servers:         resolveMCPServers(ctx, f.mcpStore, f.secrets, projectID),
 		Unified:         cfg.UnifiedConfig,

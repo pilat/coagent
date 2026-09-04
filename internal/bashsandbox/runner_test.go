@@ -184,7 +184,7 @@ func TestPreflight_BoundsLauncherOutput(t *testing.T) {
 }
 
 func TestProbeEnforcement_RejectsBackendThatRunsNothing(t *testing.T) {
-	err := probeEnforcement(func([]string) (Runner, error) {
+	err := probeEnforcement(func([]string, []string) (Runner, error) {
 		return noopRunner{}, nil
 	})
 	require.Error(t, err)
@@ -192,7 +192,7 @@ func TestProbeEnforcement_RejectsBackendThatRunsNothing(t *testing.T) {
 }
 
 func TestProbeEnforcement_RejectsBackendThatDoesNotConfine(t *testing.T) {
-	err := probeEnforcement(func([]string) (Runner, error) {
+	err := probeEnforcement(func([]string, []string) (Runner, error) {
 		return disabledRunner{}, nil
 	})
 	require.Error(t, err)
@@ -202,7 +202,7 @@ func TestProbeEnforcement_RejectsBackendThatDoesNotConfine(t *testing.T) {
 func TestProbeEnforcement_PropagatesBackendConstructionError(t *testing.T) {
 	want := errors.New("no backend")
 
-	err := probeEnforcement(func([]string) (Runner, error) {
+	err := probeEnforcement(func([]string, []string) (Runner, error) {
 		return nil, want
 	})
 	require.Error(t, err)

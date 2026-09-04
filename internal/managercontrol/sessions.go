@@ -45,6 +45,7 @@ func (s *service) createSession(
 		data.WorkDir = next.path
 		// Consumed: the created worktree is registered below under its display name.
 		data.WorktreeName = ""
+		data.RepoRoot = next.repoRoot // Set for sandbox git access
 		worktreeProjectName = next.displayName
 		created = next
 	}
@@ -55,6 +56,11 @@ func (s *service) createSession(
 	}
 
 	data.Attributes[controllerapi.SessionAttributeManagerID] = managerID
+
+	// Persist repo root for sandbox configuration on resume
+	if data.RepoRoot != "" {
+		data.Attributes["repo_root"] = data.RepoRoot
+	}
 
 	projectID, err := s.resolveSessionProject(ctx, data, worktreeProjectName)
 	if err != nil {

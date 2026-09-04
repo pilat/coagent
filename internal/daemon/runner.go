@@ -922,6 +922,9 @@ func (s *svc) openSession(
 		return nil, err
 	}
 
+	// Extract repo root from session attributes (set for worktree sessions)
+	repoRoot, _ := rec.Attributes["repo_root"].(string)
+
 	opts := session.CreateOptions{
 		ID:              sessionID,
 		WorkDir:         workDir,
@@ -934,6 +937,7 @@ func (s *svc) openSession(
 		TodoItems:       rec.TodoItems,
 		LastActivityAt:  rec.UpdatedAt,
 		ContextBaseline: rec.ContextBaseline(),
+		RepoRoot:        repoRoot,
 
 		ExtraSkills:         s.builtinSkillsFor(ctx, rec),
 		StagedExternalCalls: externalCalls,
