@@ -99,7 +99,7 @@
     },
     {
       "type": "message_replaceable",
-      "content": "**🟢 Working**\n\n🤖 `fake-model` · iteration 2\n⏱ <elapsed> · 💰 $0.0 total",
+      "content": "**🟢 Working**\n\n🤖 `fake-model` · iteration 2\n⌚ <elapsed> · 💰 $0.0 total",
       "attributes": {
         "manager_id": "telegram:main",
         "model_input_generation": 1

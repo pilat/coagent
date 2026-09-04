@@ -90,7 +90,7 @@ func drainScenarioClaims(t *testing.T, name string, controller controllerapi.Out
 // normalizeClaimContent keeps golden claims deterministic: wall time is the
 // only fragment inside card content that varies between runs.
 func normalizeClaimContent(content string) string {
-	return elapsedPattern.ReplaceAllString(content, "⏱ <elapsed>")
+	return elapsedPattern.ReplaceAllString(content, "⌚ <elapsed>")
 }
 
 // sanitizeClaimAttributes keeps only deterministic host metadata; progress
