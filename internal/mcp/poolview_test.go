@@ -11,6 +11,13 @@ import (
 	"github.com/pilat/coagent/internal/tool"
 )
 
+func testSnapshot(clients map[string]*Client) *Snapshot {
+	return &Snapshot{
+		Clients:  clients,
+		Catalogs: make(map[string]*Catalog),
+	}
+}
+
 func TestPoolView_RegisterTools(t *testing.T) {
 	client := &Client{
 		name:   "tavily",
@@ -21,7 +28,7 @@ func TestPoolView_RegisterTools(t *testing.T) {
 		},
 	}
 
-	view := newPoolView(nil, map[string]*Client{"tavily": client}, nil)
+	view := newPoolView(nil, testSnapshot(map[string]*Client{"tavily": client}), nil)
 	registry := tool.NewRegistry()
 
 	count := view.RegisterTools(registry)
@@ -32,7 +39,7 @@ func TestPoolView_RegisterTools(t *testing.T) {
 
 func TestPoolView_GetClient(t *testing.T) {
 	client := mockPoolClient("test")
-	view := newPoolView(nil, map[string]*Client{"test": client}, nil)
+	view := newPoolView(nil, testSnapshot(map[string]*Client{"test": client}), nil)
 
 	assert.NotNil(t, view.GetClient("test"))
 	assert.Nil(t, view.GetClient("missing"))
@@ -46,10 +53,10 @@ func TestPoolView_StopReleasesPool(t *testing.T) {
 	defer p.Stop()
 
 	cfg := ServerConfig{Command: "cmd"}
-	clients, hashes, err := p.Acquire(context.Background(), map[string]ServerConfig{"svc": cfg})
+	snap, err := p.Acquire(context.Background(), map[string]ServerConfig{"svc": cfg})
 	require.NoError(t, err)
 
-	view := newPoolView(p, clients, hashes)
+	view := newPoolView(p, snap, map[string]ServerConfig{"svc": cfg})
 
 	// Before Stop: refcount should be 1
 	pp := p.(*pool)
@@ -77,10 +84,10 @@ func TestPoolView_StopIsIdempotent(t *testing.T) {
 	defer p.Stop()
 
 	cfg := ServerConfig{Command: "cmd"}
-	clients, hashes, err := p.Acquire(context.Background(), map[string]ServerConfig{"svc": cfg})
+	snap, err := p.Acquire(context.Background(), map[string]ServerConfig{"svc": cfg})
 	require.NoError(t, err)
 
-	view := newPoolView(p, clients, hashes)
+	view := newPoolView(p, snap, map[string]ServerConfig{"svc": cfg})
 
 	// First Stop releases refcount to 0
 	view.Stop()
@@ -95,10 +102,10 @@ func TestPoolView_StopIsIdempotent(t *testing.T) {
 }
 
 func TestPoolView_Stats(t *testing.T) {
-	view := newPoolView(nil, map[string]*Client{
+	view := newPoolView(nil, testSnapshot(map[string]*Client{
 		"a": mockPoolClient("a"),
 		"b": mockPoolClient("b"),
-	}, nil)
+	}), nil)
 
 	stats := view.Stats()
 	assert.Equal(t, 2, stats.Total)
@@ -107,7 +114,7 @@ func TestPoolView_Stats(t *testing.T) {
 }
 
 func TestPoolView_StartIsNoop(t *testing.T) {
-	view := newPoolView(nil, map[string]*Client{}, nil)
+	view := newPoolView(nil, testSnapshot(map[string]*Client{}), nil)
 	stats, err := view.Start(context.Background(), nil)
 	require.NoError(t, err)
 	assert.Equal(t, 0, stats.Total)

@@ -51,7 +51,7 @@ func (m *mockMCPClient) CallTool(ctx context.Context, name string, args map[stri
 
 func TestMCPTool_ID(t *testing.T) {
 	client := newMockMCPClient()
-	mcpTool := newMCPTool("test_server", "test_tool", &Client{
+	mcpTool := newLiveMCPTool("test_server", "test_tool", &Client{
 		name:  "test_server",
 		tools: client.tools,
 	})
@@ -76,7 +76,7 @@ func TestMCPTool_ID_SpecialCharacters(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.serverName+"_"+tt.toolName, func(t *testing.T) {
 			client := &Client{name: tt.serverName, tools: map[string]mcp.Tool{}}
-			mcpTool := newMCPTool(tt.serverName, tt.toolName, client)
+			mcpTool := newLiveMCPTool(tt.serverName, tt.toolName, client)
 
 			if got := mcpTool.ID(); got != tt.expected {
 				t.Errorf("ID() = %q, want %q", got, tt.expected)
@@ -91,7 +91,7 @@ func TestMCPTool_Description(t *testing.T) {
 		name:  "test_server",
 		tools: client.tools,
 	}
-	mcpTool := newMCPTool("test_server", "test_tool", wrappedClient)
+	mcpTool := newLiveMCPTool("test_server", "test_tool", wrappedClient)
 
 	expected := "A test tool"
 	if got := mcpTool.Description(); got != expected {
@@ -104,9 +104,9 @@ func TestMCPTool_Description_NotFound(t *testing.T) {
 		name:  "test_server",
 		tools: map[string]mcp.Tool{},
 	}
-	mcpTool := newMCPTool("test_server", "nonexistent", client)
+	mcpTool := newLiveMCPTool("test_server", "nonexistent", client)
 
-	// Should return empty string for non-existent tool
+	// Should return empty string for a tool the client never discovered
 	if got := mcpTool.Description(); got != "" {
 		t.Errorf("Description() = %q, want empty string", got)
 	}
@@ -118,7 +118,7 @@ func TestMCPTool_Parameters(t *testing.T) {
 		name:  "test_server",
 		tools: client.tools,
 	}
-	mcpTool := newMCPTool("test_server", "test_tool", wrappedClient)
+	mcpTool := newLiveMCPTool("test_server", "test_tool", wrappedClient)
 
 	params := mcpTool.Parameters()
 	if params == nil {

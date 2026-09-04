@@ -102,6 +102,17 @@ func (f *fakeMCPServer) count(t *testing.T, event string) int {
 	return strings.Count(string(data), event+"\n")
 }
 
+// countNoFail samples the log without a testing.T, for observers that run on
+// session goroutines (scripted LLM responders). A read error returns -1.
+func (f *fakeMCPServer) countNoFail(event string) int {
+	data, err := os.ReadFile(f.log)
+	if err != nil {
+		return -1
+	}
+
+	return strings.Count(string(data), event+"\n")
+}
+
 func mcpPingCall(id string) *llmwire.Response {
 	return &llmwire.Response{ToolCalls: []llmwire.ToolCall{{
 		ID: id, Name: "mcp__fake__ping", Arguments: []byte(`{}`),

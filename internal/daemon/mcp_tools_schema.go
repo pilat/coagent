@@ -13,11 +13,12 @@ import (
 
 const mcpStatusEnabled = "enabled"
 
-// evict retires the server's pooled subprocess now (or on its last release)
-// instead of letting it idle out the pool TTL.
-func (d mcpDeps) evict(name string) {
+// invalidate drops the server's cached tool catalog and retires its pooled
+// subprocess now (or on its last release) instead of letting either idle out,
+// so the next activation rediscovers the mutated configuration from scratch.
+func (d mcpDeps) invalidate(name string) {
 	if d.pool != nil {
-		d.pool.Evict(name)
+		d.pool.Invalidate(name)
 	}
 }
 

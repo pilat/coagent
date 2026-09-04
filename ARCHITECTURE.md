@@ -84,7 +84,7 @@ does not imply a tier except where it expresses an implementation variant.
 - `internal/managers/telegram` — Telegram manager implementation. Each manager
   owns one bot account, immutable group- or bot-forum target, polling loop, and
   manager-scoped service-topic identity; failures remain isolated at startup.
-- `internal/mcp` — external MCP process lifecycle and daemon-level pooled connections.
+- `internal/mcp` — external MCP process lifecycle, daemon-level pooled connections and their in-memory tool catalogs.
 - `internal/mcpstore` — durable MCP server definitions and scope precedence.
 - `internal/memory` — curated per-project long-term memory.
 - `internal/managerdelivery` — manager-neutral single-worker durable output drain and retry policy.
@@ -654,10 +654,14 @@ and MCP subprocesses without merging the secrets map.
 ### MCP, schedules and memory
 
 MCP-store owns durable definitions; a project row overrides a global row by
-name, including a disabled row. MCP owns process acquisition and pooled lifecycle
-at daemon scope. Removal or disablement evicts the relevant pooled connection;
-new session iterations rebuild their stack so no configuration change takes effect
-mid tool call.
+name, including a disabled row. MCP owns process acquisition, pooled lifecycle
+and the in-memory tool catalogs of discovered metadata at daemon scope. Every
+registry mutation invalidates the name's cached catalogs and retires its pooled
+connections safely after the last release; new session iterations rebuild their
+stack so no configuration change takes effect mid tool call. An activation's
+tool snapshot is stable: ordinary idle reaping reconnects lazily on the model's
+first call without changing the offered tools or schemas
+([ADR-0041](docs/adr/0041-mcp-tool-catalogs-outlive-idle-clients.md)).
 
 Schedule owns cron validation, durable schedule records and execution of sleep
 and schedule tools. It depends on a narrow sender contract, not the daemon

@@ -27,12 +27,12 @@ func AcquireForWorkDir(
 	}
 
 	if pool != nil {
-		clients, hashes, err := pool.Acquire(ctx, configs)
+		snap, err := pool.Acquire(ctx, configs)
 		if err != nil {
 			return nil, fmt.Errorf("pool acquire: %w", err)
 		}
 
-		return newPoolView(pool, clients, hashes), nil
+		return newPoolView(pool, snap, configs), nil
 	}
 
 	return startDirect(ctx, workDir, configs, provider)

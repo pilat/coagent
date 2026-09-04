@@ -141,8 +141,7 @@ func (s *svc) RegisterTools(registry tool.Registry) int {
 
 	for serverName, client := range s.clients {
 		for toolName := range client.Tools() {
-			mcpToolWrapper := newMCPTool(serverName, toolName, client)
-			registry.Register(mcpToolWrapper)
+			registry.Register(newLiveMCPTool(serverName, toolName, client))
 
 			count++
 		}

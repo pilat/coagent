@@ -145,17 +145,20 @@ var _ mcp.Pool = (*stubMCPPool)(nil)
 func (p *stubMCPPool) Acquire(
 	_ context.Context,
 	_ map[string]mcp.ServerConfig,
-) (map[string]*mcp.Client, []string, error) {
+) (*mcp.Snapshot, error) {
 	if p.err != nil {
-		return nil, nil, p.err
+		return nil, p.err
 	}
 
-	return map[string]*mcp.Client{}, nil, nil
+	return &mcp.Snapshot{}, nil
 }
 
 func (p *stubMCPPool) Release([]string) {}
 func (p *stubMCPPool) Stop()            {}
-func (p *stubMCPPool) Evict(string)     {}
+func (p *stubMCPPool) ClientFor(context.Context, string, mcp.ServerConfig) (*mcp.Client, error) {
+	return nil, nil
+}
+func (p *stubMCPPool) Invalidate(string) {}
 
 // A broken MCP server degrades the stack to builtins, but it must not do so silently.
 func TestBuildStackLogsMCPAcquireFailure(t *testing.T) {

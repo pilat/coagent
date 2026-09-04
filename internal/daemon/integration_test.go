@@ -1010,6 +1010,17 @@ func newMCPHarness(
 	t *testing.T,
 	respond func(system string, msgs []llmwire.Message) *llmwire.Response,
 ) (*subagentHarness, mcpstore.Store, mcp.Pool) {
+	return newMCPHarnessWithIdleTTL(t, respond, 0)
+}
+
+// newMCPHarnessWithIdleTTL is newMCPHarness with a pool whose live-client idle
+// TTL is injected, so scenario tests can exercise idle reaping without waiting
+// the production 30 minutes. Zero keeps the default.
+func newMCPHarnessWithIdleTTL(
+	t *testing.T,
+	respond func(system string, msgs []llmwire.Message) *llmwire.Response,
+	idleTTL time.Duration,
+) (*subagentHarness, mcpstore.Store, mcp.Pool) {
 	t.Helper()
 
 	ctx := context.Background()
@@ -1025,7 +1036,13 @@ func newMCPHarness(
 	links := subagent.NewStore(db)
 	schedStore := schedule.NewStore(db)
 	registry := mcpstore.NewStore(db)
-	pool := mcp.NewPool(nil)
+
+	var pool mcp.Pool
+	if idleTTL > 0 {
+		pool = mcp.NewPoolWithIdleTTL(nil, idleTTL)
+	} else {
+		pool = mcp.NewPool(nil)
+	}
 
 	t.Cleanup(pool.Stop)
 
