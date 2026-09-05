@@ -644,6 +644,15 @@ driver's conversion step and gated fail-closed on catalog-declared input
 modalities — unknown or absent modality information degrades the slot to a
 placeholder shared by both driver families.
 
+Integrated search resolves at client construction: an explicit REST provider
+selects the builtin websearch tool and suppresses the drivers' native
+passthrough, an explicit disable removes all integrated search, and an
+unconfigured section falls back to the OpenRouter driver's server-side
+web-search injection
+([ADR-0043](docs/adr/0043-integrated-search-quality-first.md)). Tool-less
+requests — the compaction summarizer — carry no injection. Search precedence
+lives in config, so drivers and sessions read one resolver.
+
 Catalog owns externally fetched model metadata and cache validity, not product
 recommendation. Loader owns trusted local discovery and marketplace retrieval of
 instructions and subagent definitions. Loaded content influences a session

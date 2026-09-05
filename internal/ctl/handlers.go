@@ -82,6 +82,7 @@ func (s *Server) status(ctx context.Context) StatusResult {
 		out.Providers = providerStatuses(cfg.UnifiedConfig.Providers)
 		out.ModelCount = len(cfg.UnifiedConfig.Models)
 		out.DefaultModel = cfg.DefaultModel()
+		out.Search = searchStatus(cfg.UnifiedConfig, cfg.DefaultModel())
 		out.Managers = s.managerStatuses(ctx, cfg.UnifiedConfig.Managers)
 	}
 
@@ -208,6 +209,28 @@ func providerStatuses(providers map[string]config.ProviderEntry) []ProviderStatu
 	}
 
 	return out
+}
+
+// searchStatus renders the integrated-search state for `coagent status`. It
+// mirrors the session-side precedence: an explicit REST provider beats native
+// passthrough, an explicit disable beats everything.
+func searchStatus(unified *config.UnifiedConfig, defaultModel string) string {
+	search := unified.Tools.Search
+
+	switch {
+	case search.SearchDisabled():
+		return "disabled"
+	case search.Provider == config.SearchProviderTavily:
+		return "tavily"
+	case search.Provider == config.SearchProviderSearxng:
+		return "searxng (" + search.BaseURL + ")"
+	}
+
+	if unified.SearchNativeActive(defaultModel) {
+		return "native (openrouter)"
+	}
+
+	return ""
 }
 
 // logCall records every control op so a CLI action is traceable from the daemon

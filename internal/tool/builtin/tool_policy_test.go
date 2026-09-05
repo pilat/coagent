@@ -6,6 +6,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/pilat/coagent/internal/config"
 	"github.com/pilat/coagent/internal/tool"
 )
 
@@ -16,7 +17,12 @@ func TestCoreRegistry_ParallelSafePolicies(t *testing.T) {
 	require.NoError(t, err)
 
 	reg := tool.NewRegistry()
-	registerCoreTools(reg, t.TempDir(), nil, nil, nil, nil, nil, mutator)
+	unified := &config.UnifiedConfig{}
+	unified.Tools.Search = config.SearchToolConfig{
+		Provider: config.SearchProviderTavily,
+		APIKey:   "tvly-test",
+	}
+	registerCoreTools(reg, t.TempDir(), nil, nil, nil, nil, nil, mutator, unified)
 
 	want := map[string]bool{
 		"read":        true,
@@ -28,6 +34,7 @@ func TestCoreRegistry_ParallelSafePolicies(t *testing.T) {
 		"grep":        true,
 		"bash":        false,
 		"webfetch":    true,
+		"websearch":   true, // stateless HTTP, registered only when configured
 		"skill":       false,
 		"todoread":    true,
 		"todowrite":   false,

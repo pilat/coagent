@@ -276,6 +276,8 @@ func (s *svc) completionContent(ctx context.Context, link subagent.Link) string 
 // Start re-establishes in-flight children and re-delivers undelivered completions
 // after a restart. Only PASS 0 blocks; the resumes run asynchronously.
 func (s *svc) Start(ctx context.Context) error {
+	s.noticeSearchUnconfigured(ctx)
+
 	// Must precede the sweep: a session left mid-clear or mid-kill by the previous
 	// run would otherwise be resumed in that half-torn state.
 	if err := s.finishInterruptedKills(ctx); err != nil {

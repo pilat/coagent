@@ -19,7 +19,7 @@ type stubDriver struct {
 	calls  int
 }
 
-func (d *stubDriver) NewClient(config.ProviderEntry, config.ModelEntry) (Client, error) {
+func (d *stubDriver) NewClient(config.ProviderEntry, config.ModelEntry, DriverClientOpts) (Client, error) {
 	return nil, nil
 }
 

@@ -194,7 +194,7 @@ func TestDriverNewClient(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			client, err := drivers[tt.driverName].NewClient(tt.entry, tt.model)
+			client, err := drivers[tt.driverName].NewClient(tt.entry, tt.model, DriverClientOpts{})
 			require.NoError(t, err)
 
 			assert.Equal(t, tt.wantProvider, client.Provider())
@@ -208,12 +208,14 @@ func TestDriverNewClientRejectsAnthropicWithoutMaxTokens(t *testing.T) {
 	drivers := newDrivers(testFetcher())
 
 	_, err := drivers[driverAnthropic].NewClient(
-		config.ProviderEntry{APIKey: "key"}, config.ModelEntry{ID: "claude-opus-5"})
+		config.ProviderEntry{APIKey: "key"}, config.ModelEntry{ID: "claude-opus-5"}, DriverClientOpts{})
 	require.ErrorContains(t, err, "max_tokens")
 
 	_, err = drivers[driverOpenRouter].NewClient(
 		config.ProviderEntry{APIKey: "key", BaseURL: "https://openrouter.ai/api/v1"},
-		config.ModelEntry{ID: "anthropic/claude-opus-5"})
+		config.ModelEntry{ID: "anthropic/claude-opus-5"},
+		DriverClientOpts{},
+	)
 	require.ErrorContains(t, err, "max_tokens")
 }
 

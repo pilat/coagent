@@ -104,6 +104,15 @@ func (c *UnifiedConfig) resolveSecrets(secrets Secrets) error {
 		c.Managers[i].BotToken = botToken
 	}
 
+	if c.Tools.Search.APIKey != "" {
+		apiKey, err := secrets.Expand(c.Tools.Search.APIKey)
+		if err != nil {
+			return fmt.Errorf("tools.search api_key: %w", err)
+		}
+
+		c.Tools.Search.APIKey = apiKey
+	}
+
 	return nil
 }
 
@@ -144,6 +153,8 @@ func secretValues(secrets Secrets, unified *UnifiedConfig) []string {
 	for _, manager := range unified.Managers {
 		add(manager.BotToken)
 	}
+
+	add(unified.Tools.Search.APIKey)
 
 	return values
 }

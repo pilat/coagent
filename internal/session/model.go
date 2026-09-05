@@ -92,6 +92,9 @@ func (s *svc) handleSetModel(modelID, reasoning string) error {
 
 	// promptBuilder is self-synchronized, so this needs no modelMu.
 	s.prompt.setModelsSection(buildModelsSection(modelID))
+	// Search guidance follows the active client: a switch can flip the native
+	// passthrough on or off (and the section with it).
+	s.prompt.setModelSearch(s.registry, s.cfg.UnifiedConfig.SearchNativeActive(modelID))
 
 	// Swap the triplet under modelMu (the loop reads it via currentLLM /
 	// buildSessionStatus); close the old client outside the lock — Close is IO.

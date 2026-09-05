@@ -113,22 +113,25 @@ type svc struct {
 	defaultModelFn func() string
 	modelCatalog   []modelInfo
 	modelEntries   []config.ModelEntry
-	mcpStore       mcpstore.Store
-	mcpPool        mcp.Pool
-	applier        configapply.Service
-	staged         *stagedCalls
-	secrets        *secretRequests
-	deferNotices   *deferAnnouncements
-	systemProject  string
-	shuttingDown   atomic.Bool
-	recovery       sessionlifecycle.Recovery
-	stopper        sessionlifecycle.Stopper
-	completions    sessionlifecycle.Completions
-	launcher       sessionlifecycle.Launcher[queuedSessionInput]
-	progress       progressruntime.Service
-	budgetCtx      context.Context //nolint:containedctx // Daemon lifetime context for joined park workers.
-	budgetCancel   context.CancelFunc
-	budgetWG       sync.WaitGroup
+	// searchUnconfigured is the boot-time discoverability verdict: no
+	// tools.search section and no native-capable model.
+	searchUnconfigured bool
+	mcpStore           mcpstore.Store
+	mcpPool            mcp.Pool
+	applier            configapply.Service
+	staged             *stagedCalls
+	secrets            *secretRequests
+	deferNotices       *deferAnnouncements
+	systemProject      string
+	shuttingDown       atomic.Bool
+	recovery           sessionlifecycle.Recovery
+	stopper            sessionlifecycle.Stopper
+	completions        sessionlifecycle.Completions
+	launcher           sessionlifecycle.Launcher[queuedSessionInput]
+	progress           progressruntime.Service
+	budgetCtx          context.Context //nolint:containedctx // Daemon lifetime context for joined park workers.
+	budgetCancel       context.CancelFunc
+	budgetWG           sync.WaitGroup
 	// routeMu linearizes owner claims with replacement-session creation. The
 	// daemon is single-instance, so this is the ownership CAS boundary.
 	routeMu sync.Mutex
@@ -210,6 +213,7 @@ func New(
 	s.mcpStore = mcpStore
 	s.mcpPool = mcpPool
 	s.applier = applier
+	s.searchUnconfigured = searchUnconfigured(cfg.UnifiedConfig)
 
 	if cfg.UnifiedConfig != nil {
 		s.loadModelCatalog(cfg.UnifiedConfig.Models)

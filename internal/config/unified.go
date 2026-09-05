@@ -36,6 +36,13 @@ const (
 	driverOpenAI     = "openai"
 	driverOpenRouter = "openrouter"
 	driverGoogleSA   = "google-sa"
+
+	searchProviderTavily  = SearchProviderTavily
+	searchProviderSearxng = SearchProviderSearxng
+
+	defaultSearchMaxResults = 5
+	minSearchMaxResults     = 1
+	maxSearchMaxResults     = 10
 )
 
 var (
@@ -173,6 +180,10 @@ func (c *UnifiedConfig) validate() error {
 	}
 
 	if err := c.validateProviders(); err != nil {
+		return err
+	}
+
+	if err := c.validateSearch(); err != nil {
 		return err
 	}
 
@@ -360,6 +371,55 @@ func validateProvider(name string, p ProviderEntry) error {
 	}
 
 	return nil
+}
+
+// validateSearch checks the tools.search section. An explicitly disabled section
+// is inert: requirements are skipped and an undefined ${VAR} still fails load
+// in resolveSecrets like every other secrets reference.
+func (c *UnifiedConfig) validateSearch() error {
+	s := &c.Tools.Search
+
+	if s.Enabled != nil && !*s.Enabled {
+		return nil
+	}
+
+	if s.Provider == "" {
+		if s.Enabled == nil {
+			return nil
+		}
+
+		return errors.New("tools.search requires \"provider\" when \"enabled\" is true")
+	}
+
+	switch s.Provider {
+	case searchProviderTavily:
+		if s.APIKey == "" {
+			return fmt.Errorf("tools.search (provider: %s) requires \"api_key\" to be set", s.Provider)
+		}
+	case searchProviderSearxng:
+		if s.BaseURL == "" {
+			return fmt.Errorf("tools.search (provider: %s) requires \"base_url\" to be set", s.Provider)
+		}
+	default:
+		return fmt.Errorf(
+			"tools.search has unknown provider %q, must be one of: %s, %s",
+			s.Provider,
+			searchProviderTavily,
+			searchProviderSearxng,
+		)
+	}
+
+	s.MaxResults = clampSearchMaxResults(s.MaxResults)
+
+	return nil
+}
+
+func clampSearchMaxResults(n int) int {
+	if n == 0 {
+		return defaultSearchMaxResults
+	}
+
+	return min(max(n, minSearchMaxResults), maxSearchMaxResults)
 }
 
 func (c *UnifiedConfig) validateModels() error {

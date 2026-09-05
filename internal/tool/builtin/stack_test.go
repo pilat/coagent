@@ -143,6 +143,7 @@ func TestRegisterCoreTools_SharesFileMutator(t *testing.T) {
 		nil,
 		&bashRunnerStub{},
 		mutator,
+		nil,
 	)
 
 	assert.Equal(t, mutator, registry.Get("write").(*writeTool).mutator)

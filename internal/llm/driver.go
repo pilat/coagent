@@ -23,10 +23,19 @@ const (
 // models.dev so every driver pays for that catalog exactly once.
 var defaultDrivers = newDrivers(catalog.New())
 
+// DriverClientOpts carries session-resolved client decisions into driver
+// construction. Zero value is the default behavior.
+type DriverClientOpts struct {
+	// NativeSearch enables the driver's server-side web-search passthrough
+	// (OpenRouter server tools) for the constructed client. The precedence
+	// resolving this bit lives in config.SearchNativeActive.
+	NativeSearch bool
+}
+
 // driverProtocol owns one provider protocol end to end. Both methods are mandatory, so
 // the compiler will not let a new driver skip saying where its models come from.
 type driverProtocol interface {
-	NewClient(entry config.ProviderEntry, model config.ModelEntry) (Client, error)
+	NewClient(entry config.ProviderEntry, model config.ModelEntry, opts DriverClientOpts) (Client, error)
 	ListModels(
 		ctx context.Context,
 		providerKey string,
@@ -57,7 +66,11 @@ func newDrivers(f catalog.Fetcher) map[string]driverProtocol {
 	}
 }
 
-func (d *anthropicDriver) NewClient(entry config.ProviderEntry, model config.ModelEntry) (Client, error) {
+func (d *anthropicDriver) NewClient(
+	entry config.ProviderEntry,
+	model config.ModelEntry,
+	_ DriverClientOpts,
+) (Client, error) {
 	return newAnthropicClient(anthropicParams{APIKey: entry.APIKey, Model: model})
 }
 
@@ -69,7 +82,11 @@ func (d *anthropicDriver) ListModels(
 	return modelsDevSectionFor(ctx, d.catalog, entry, sectionAnthropic)
 }
 
-func (d *openAIDriver) NewClient(entry config.ProviderEntry, model config.ModelEntry) (Client, error) {
+func (d *openAIDriver) NewClient(
+	entry config.ProviderEntry,
+	model config.ModelEntry,
+	_ DriverClientOpts,
+) (Client, error) {
 	return newOpenAICompatibleClient(openAICompatibleParams{
 		BaseURL: entry.BaseURL,
 		APIKey:  entry.APIKey,
@@ -96,7 +113,11 @@ func (d *openAIDriver) ListModels(
 	return sectionOrError(sections, entry.Catalog)
 }
 
-func (d *googleSADriver) NewClient(entry config.ProviderEntry, model config.ModelEntry) (Client, error) {
+func (d *googleSADriver) NewClient(
+	entry config.ProviderEntry,
+	model config.ModelEntry,
+	_ DriverClientOpts,
+) (Client, error) {
 	if entry.BaseURL == "" {
 		return nil, errors.New("google-sa driver requires base_url")
 	}
@@ -125,12 +146,17 @@ func (d *googleSADriver) ListModels(
 	return modelsDevSectionFor(ctx, d.catalog, entry, sectionGoogleVertex)
 }
 
-func (d *openRouterDriver) NewClient(entry config.ProviderEntry, model config.ModelEntry) (Client, error) {
+func (d *openRouterDriver) NewClient(
+	entry config.ProviderEntry,
+	model config.ModelEntry,
+	opts DriverClientOpts,
+) (Client, error) {
 	return newOpenAICompatibleClient(openAICompatibleParams{
 		BaseURL:      entry.BaseURL,
 		APIKey:       entry.APIKey,
 		Model:        model,
 		IsOpenRouter: true,
+		NativeSearch: opts.NativeSearch,
 	})
 }
 
