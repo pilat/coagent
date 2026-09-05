@@ -2,6 +2,7 @@ package builtin
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -273,6 +274,15 @@ func applyFilePatches(
 
 	if err := mutator.WriteFile(ctx, filePath, []byte(result), true); err != nil {
 		return fmt.Errorf("write file: %w", err)
+	}
+
+	written, err := os.ReadFile(filePath)
+	if err != nil {
+		return fmt.Errorf("verify file: read written file: %w", err)
+	}
+
+	if !bytes.Equal(written, []byte(result)) {
+		return errors.New("verify file: written content does not match patch result")
 	}
 
 	return nil
