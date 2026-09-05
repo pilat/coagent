@@ -94,28 +94,17 @@ func decodeMountInfoPath(value string) (string, error) {
 }
 
 func buildMountOperations(writableRoots, mountPoints []string) []mountOperation {
-	return buildMountOperationsWithReadOnly(writableRoots, nil, mountPoints)
-}
-
-func buildMountOperationsWithReadOnly(allRoots, readOnlyRoots, mountPoints []string) []mountOperation {
-	// Create a set of read-only roots for quick lookup
-	readOnlySet := make(map[string]struct{}, len(readOnlyRoots))
-	for _, root := range readOnlyRoots {
-		readOnlySet[root] = struct{}{}
-	}
-
-	operations := make(map[string]mountOperation, len(allRoots)+len(mountPoints))
-	for _, root := range allRoots {
-		_, isReadOnly := readOnlySet[root]
-		operations[root] = mountOperation{path: root, readOnly: isReadOnly}
+	operations := make(map[string]mountOperation, len(writableRoots)+len(mountPoints))
+	for _, root := range writableRoots {
+		operations[root] = mountOperation{path: root}
 	}
 
 	for _, mountPoint := range mountPoints {
-		if _, explicitlyConfigured := operations[mountPoint]; explicitlyConfigured {
+		if _, explicitlyWritable := operations[mountPoint]; explicitlyWritable {
 			continue
 		}
 
-		for _, root := range allRoots {
+		for _, root := range writableRoots {
 			if mountPoint != root && pathWithinRoot(mountPoint, root) {
 				// A mount point inside an explicit root must stay read-only:
 				// special mounts (tmpfs, procfs) inside a writable root would

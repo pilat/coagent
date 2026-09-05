@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
-	"strings"
 
 	"go.uber.org/zap"
 
@@ -22,8 +21,7 @@ import (
 // StackConfig configures a session-scoped local tool stack.
 type StackConfig struct {
 	WorkDir         string
-	RepoRoot        string                      // may be set for worktree sessions (main repo path)
-	GitDir          string                      // may be set for worktree sessions (path to .git pointer)
+	RepoRoot        string                      // main repository path for worktree sessions; empty otherwise
 	Pool            mcp.Pool                    // may be nil
 	Servers         map[string]mcp.ServerConfig // resolved MCP definitions; empty = no MCP
 	Unified         *config.UnifiedConfig       // for the Bash sandbox config
@@ -130,19 +128,11 @@ func bashSandboxConfig(cfg StackConfig) bashsandbox.Config {
 	sandboxCfg.Enabled = cfg.Unified.Tools.Bash.Sandbox.Enabled
 	sandboxCfg.WritablePaths = cfg.Unified.Tools.Bash.Sandbox.WritablePaths
 
-	// Configure sandbox for worktree sessions: allow write access to worktree gitdir
-	// while keeping the main repository .git read-only
-	if cfg.RepoRoot != "" && cfg.WorkDir != "" {
-		mainGitDir := filepath.Join(cfg.RepoRoot, ".git")
-		sandboxCfg.ReadOnlyPaths = append(sandboxCfg.ReadOnlyPaths, mainGitDir)
-
-		// Extract worktree name from the workdir path
-		// WorkDir is typically: ~/.coagent/worktrees/<repo-hash>/<worktree-name>
-		worktreeName := filepath.Base(cfg.WorkDir)
-		if worktreeName != "" && !strings.ContainsAny(worktreeName, "../") {
-			worktreeGitDir := filepath.Join(mainGitDir, "worktrees", worktreeName)
-			sandboxCfg.WritablePaths = append(sandboxCfg.WritablePaths, worktreeGitDir)
-		}
+	// A linked work tree shares the object store and refs with the main
+	// repository, so git mutations must reach the main .git; the checkout
+	// of the main work tree stays read-only.
+	if cfg.RepoRoot != "" {
+		sandboxCfg.WritablePaths = append(sandboxCfg.WritablePaths, filepath.Join(cfg.RepoRoot, ".git"))
 	}
 
 	return sandboxCfg

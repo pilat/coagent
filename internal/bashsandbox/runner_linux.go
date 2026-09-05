@@ -24,11 +24,10 @@ var (
 )
 
 type bubblewrapRunner struct {
-	executable    string
-	mounts        []mountOperation
-	roots         []string
-	readOnlyRoots []string
-	provider      shellenv.Provider
+	executable string
+	mounts     []mountOperation
+	roots      []string
+	provider   shellenv.Provider
 }
 
 // Command constructs a Bash command confined by Bubblewrap.
@@ -68,7 +67,7 @@ func (r *bubblewrapRunner) WritableRoots() []string {
 
 func (r *bubblewrapRunner) setProvider(p shellenv.Provider) { r.provider = p }
 
-func newEnabledRunner(writableRoots, readOnlyRoots []string) (Runner, error) {
+func newEnabledRunner(writableRoots []string) (Runner, error) {
 	executable, err := resolveBubblewrapExecutable(writableRoots)
 	if err != nil {
 		return nil, err
@@ -79,16 +78,10 @@ func newEnabledRunner(writableRoots, readOnlyRoots []string) (Runner, error) {
 		return nil, fmt.Errorf("read Linux mount table: %w", err)
 	}
 
-	// Combine all roots for mount operations; readOnlyRoots will be marked read-only
-	allRoots := make([]string, 0, len(writableRoots)+len(readOnlyRoots))
-	allRoots = append(allRoots, writableRoots...)
-	allRoots = append(allRoots, readOnlyRoots...)
-
 	runner := &bubblewrapRunner{
-		executable:    executable,
-		mounts:        buildMountOperationsWithReadOnly(allRoots, readOnlyRoots, mountPoints),
-		roots:         writableRoots,
-		readOnlyRoots: readOnlyRoots,
+		executable: executable,
+		mounts:     buildMountOperations(writableRoots, mountPoints),
+		roots:      writableRoots,
 	}
 	if err := preflight(runner); err != nil {
 		return nil, fmt.Errorf("bubblewrap backend unusable: %w", err)
