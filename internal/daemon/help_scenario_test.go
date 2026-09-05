@@ -40,6 +40,12 @@ func TestHarnessScenario_HelpIncludesGWT(t *testing.T) {
 	})
 	require.NoError(t, err)
 	waitForVisibleMessage(t, collector, sessionID, "session ready")
+	// The golden expects the /help activation to announce a fresh session; the
+	// first runner must have exited, otherwise /help is appended to the live
+	// loop and no announcement is published.
+	h.waitUntil("first activation runner exits", func() bool {
+		return !h.mgr.HasActiveLoop(sessionID)
+	})
 
 	require.NoError(t, h.mgr.SendToSession(h.ctx, sessionID, "/help"))
 	waitForVisibleMessage(t, collector, sessionID, helpWithGWT)

@@ -38,6 +38,11 @@ type Client interface {
 	// HealthCheck reports whether the local clone passes git fsck; a non-nil
 	// error means the repository is corrupt and worth re-cloning from scratch.
 	HealthCheck(ctx context.Context, repoPath string) error
+
+	// RepositoryState collects a bounded, read-only snapshot of workDir's Git
+	// state. A non-repository is (NotRepository, nil); a failed probe is
+	// (Unavailable, err) where err never carries raw command output.
+	RepositoryState(ctx context.Context, workDir string) (RepositoryState, error)
 }
 
 var _ Client = (*client)(nil)

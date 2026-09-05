@@ -110,6 +110,7 @@ var _ Service = (*svc)(nil)
 
 type svc struct {
 	workDir           string
+	gitClient         git.Client
 	projectID         int64
 	llmClient         llm.Client
 	stack             *builtin.Stack
@@ -314,6 +315,7 @@ func newSession(p params, opts options, workDir string, agentConfig registry.Age
 		agentType:       agentConfig.Name,
 		reasoningLevel:  string(llm.ReasoningMedium),
 		newLLMWithModel: llm.NewClientWithModel,
+		gitClient:       p.GitClient,
 		cfg:             p.Config,
 		stamper:         timestamper{lastActivity: opts.LastActivityAt},
 		loopDetector:    newLoopDetector(),

@@ -130,6 +130,9 @@ func (r *loopRunner) drainBoundary(ctx context.Context) (bool, error) {
 		}
 
 		prepared = r.agent.stamper.stampAt(prepared, input.ReceivedAt)
+		// The Git delta rides on fresh input bytes: history below stays
+		// byte-identical, so provider prompt caching is never disturbed.
+		prepared = r.agent.appendGitStateDelta(ctx, prepared)
 		pendingCalls := r.agent.PendingExternalCalls()
 
 		if onlySleepCalls(pendingCalls) {
