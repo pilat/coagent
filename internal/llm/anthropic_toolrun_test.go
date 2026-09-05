@@ -82,6 +82,66 @@ func TestAnthropicConvertMessages_ToolRunGroupsAndOrdersResults(t *testing.T) {
 	}, got, "blocks follow the assistant call order; only the failed call is an error")
 }
 
+func TestAnthropicConvertMessages_ToolRunOrdersUnknownCallIdsLast(t *testing.T) {
+	c := &anthropicClient{model: "claude-3-5-haiku-latest"}
+
+	assistant := llmwire.Message{
+		Role: llmwire.RoleAssistant,
+		ToolCalls: []llmwire.ToolCall{
+			{ID: "call-a", Name: "read"},
+			{ID: "call-b", Name: "grep"},
+		},
+	}
+
+	messages := []llmwire.Message{
+		{Role: llmwire.RoleUser, Content: "go"},
+		assistant,
+		{Role: llmwire.RoleTool, ToolCallID: "call-late", Content: `{"output":"late"}`},
+		{Role: llmwire.RoleTool, ToolCallID: "call-b", Content: `{"output":"b"}`},
+		{Role: llmwire.RoleTool, ToolCallID: "call-a", Content: `{"output":"a"}`},
+	}
+
+	result := c.convertMessages(messages)
+	require.Len(t, result, 3)
+
+	ids := make([]string, 0, 3)
+
+	for _, block := range result[2].Content {
+		require.NotNil(t, block.OfToolResult)
+		ids = append(ids, block.OfToolResult.ToolUseID)
+	}
+
+	assert.Equal(
+		t,
+		[]string{"call-a", "call-b", "call-late"},
+		ids,
+		"known ids rank first, unknown trail in arrival order",
+	)
+}
+
+func TestAnthropicConvertMessages_ToolRunWithoutAssistantCallList(t *testing.T) {
+	c := &anthropicClient{model: "claude-3-5-haiku-latest"}
+
+	// No assistant message precedes the run, so there is no call list to rank against.
+	messages := []llmwire.Message{
+		{Role: llmwire.RoleUser, Content: "go"},
+		{Role: llmwire.RoleTool, ToolCallID: "call-b", Content: `{"output":"b"}`},
+		{Role: llmwire.RoleTool, ToolCallID: "call-a", Content: `{"output":"a"}`},
+	}
+
+	result := c.convertMessages(messages)
+	require.Len(t, result, 2, "user + ONE grouped tool-result message")
+
+	ids := make([]string, 0, 2)
+
+	for _, block := range result[1].Content {
+		require.NotNil(t, block.OfToolResult)
+		ids = append(ids, block.OfToolResult.ToolUseID)
+	}
+
+	assert.Equal(t, []string{"call-b", "call-a"}, ids, "arrival order stands without a call list")
+}
+
 func blockText(t *testing.T, param anthropic.MessageParam) string {
 	t.Helper()
 
