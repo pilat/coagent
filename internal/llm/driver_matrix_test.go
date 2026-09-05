@@ -54,7 +54,7 @@ func newMatrixClient(t *testing.T, driver string, model config.ModelEntry) Clien
 		entry.SAFile = saFile(t)
 	}
 
-	client, err := newDrivers(nil)[driver].NewClient(entry, model)
+	client, err := newDrivers(nil)[driver].NewClient(entry, model, DriverClientOpts{})
 	require.NoError(t, err)
 
 	return client

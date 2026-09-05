@@ -25,7 +25,7 @@ func TestBuildToolsSection_TypicalSet(t *testing.T) {
 	reg.Register(&stubTool{id: "memory_delete"})
 	reg.Register(&stubTool{id: "batch"})
 
-	result := buildToolsSection(reg)
+	result := buildToolsSection(reg, false)
 
 	assert.Contains(t, result, "File operations: read (view file), write (create/overwrite)")
 	assert.Contains(t, result, "Shell: bash")
@@ -42,7 +42,7 @@ func TestBuildToolsSection_CuratedOnly(t *testing.T) {
 	reg.Register(&stubTool{id: "memory_save"})
 	reg.Register(&stubTool{id: "memory_delete"})
 
-	result := buildToolsSection(reg)
+	result := buildToolsSection(reg, false)
 
 	assert.Contains(t, result, "# PERSISTENT MEMORY")
 	assert.Contains(t, result, "Curated memories")
@@ -59,8 +59,8 @@ func TestBuildToolsSection_Deterministic(t *testing.T) {
 	reg.Register(&stubTool{id: "schedule"})
 	reg.Register(&stubTool{id: "sleep"})
 
-	first := buildToolsSection(reg)
-	second := buildToolsSection(reg)
+	first := buildToolsSection(reg, false)
+	second := buildToolsSection(reg, false)
 
 	require.Equal(t, first, second, "buildToolsSection must be deterministic")
 }
@@ -69,7 +69,7 @@ func TestBuildToolsSection_ScheduleOnly(t *testing.T) {
 	reg := tool.NewRegistry()
 	reg.Register(&stubTool{id: "schedule"})
 
-	result := buildToolsSection(reg)
+	result := buildToolsSection(reg, false)
 
 	assert.Contains(t, result, "# SCHEDULING")
 	assert.Contains(t, result, "Use schedule to set a wake-up timer")
@@ -80,7 +80,7 @@ func TestBuildToolsSection_SleepOnly(t *testing.T) {
 	reg := tool.NewRegistry()
 	reg.Register(&stubTool{id: "sleep"})
 
-	result := buildToolsSection(reg)
+	result := buildToolsSection(reg, false)
 
 	assert.Contains(t, result, "# SCHEDULING")
 	assert.Contains(t, result, "Use sleep to pause execution")
@@ -91,7 +91,7 @@ func TestBuildToolsSection_BothScheduleAndSleep(t *testing.T) {
 	reg.Register(&stubTool{id: "schedule"})
 	reg.Register(&stubTool{id: "sleep"})
 
-	result := buildToolsSection(reg)
+	result := buildToolsSection(reg, false)
 
 	assert.Contains(t, result, "Prefer schedule over sleep")
 }
@@ -103,7 +103,7 @@ func TestBuildToolsSection_SubagentsMustNotUseSleepOrPollingToWait(t *testing.T)
 	reg.Register(&stubTool{id: "schedule"})
 	reg.Register(&stubTool{id: "sleep"})
 
-	result := buildToolsSection(reg)
+	result := buildToolsSection(reg, false)
 
 	assert.Contains(t, result, "A sleep call cannot order or delay another tool call from the same assistant response")
 	assert.Contains(t, result, "calls emitted together may execute concurrently")
@@ -132,7 +132,7 @@ func TestBuildToolsSection_WebSearchGuidance_Tavily(t *testing.T) {
 	reg.Register(&stubTool{id: "mcp__tavily__tavily_search"})
 	reg.Register(&stubTool{id: "mcp__tavily__tavily_extract"})
 
-	result := buildToolsSection(reg)
+	result := buildToolsSection(reg, false)
 
 	assert.Contains(t, result, "# WEB SEARCH")
 	assert.Contains(t, result, "mcp__tavily__tavily_search")
@@ -147,7 +147,7 @@ func TestBuildToolsSection_WebSearchGuidance_NoSearchMCP(t *testing.T) {
 	reg.Register(&stubTool{id: "webfetch"})
 	reg.Register(&stubTool{id: "mcp__context7__query-docs"})
 
-	result := buildToolsSection(reg)
+	result := buildToolsSection(reg, false)
 
 	assert.NotContains(t, result, "# WEB SEARCH")
 }
@@ -156,7 +156,7 @@ func TestBuildToolsSection_WebSearchGuidance_BraveSearch(t *testing.T) {
 	reg := tool.NewRegistry()
 	reg.Register(&stubTool{id: "mcp__brave-search__brave_web_search"})
 
-	result := buildToolsSection(reg)
+	result := buildToolsSection(reg, false)
 
 	assert.Contains(t, result, "# WEB SEARCH")
 	assert.Contains(t, result, "mcp__brave-search__brave_web_search")
@@ -165,7 +165,7 @@ func TestBuildToolsSection_WebSearchGuidance_BraveSearch(t *testing.T) {
 func TestBuildToolsSection_EmptyRegistry(t *testing.T) {
 	reg := tool.NewRegistry()
 
-	result := buildToolsSection(reg)
+	result := buildToolsSection(reg, false)
 
 	assert.Contains(t, result, "# TOOLS")
 	assert.NotContains(t, result, "# PERSISTENT MEMORY")

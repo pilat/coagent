@@ -42,6 +42,9 @@ type openAICompatibleClient struct {
 	isOpenRouter bool
 	// sessionID for OpenRouter UI session grouping
 	sessionID string
+	// nativeSearch enables the OpenRouter server-tool web-search passthrough.
+	// Injection happens per request and only alongside client-side tools.
+	nativeSearch bool
 }
 
 type openAICompatibleParams struct {
@@ -50,6 +53,7 @@ type openAICompatibleParams struct {
 	Model        config.ModelEntry  // catalog-enriched: limits, pricing, reasoning capability
 	TokenSource  oauth2.TokenSource // optional: for Google SA auto-refresh (overrides APIKey)
 	IsOpenRouter bool               // enables OpenRouter-specific features (session_id, reasoning)
+	NativeSearch bool               // OpenRouter server-tool web-search passthrough
 }
 
 // newOpenAICompatibleClient creates a new OpenAI-compatible client.
@@ -99,6 +103,7 @@ func newOpenAICompatibleClient(params openAICompatibleParams) (Client, error) {
 		isDeepSeek:   isDeepSeek,
 		isAnthropic:  isAnthropic,
 		isOpenRouter: params.IsOpenRouter,
+		nativeSearch: params.IsOpenRouter && params.NativeSearch,
 	}, nil
 }
 
@@ -182,6 +187,16 @@ func (c *openAICompatibleClient) Chat(
 	if len(oaiTools) > 0 {
 		reqBody.Tools = oaiTools
 		reqBody.ToolChoice = "auto"
+
+		// OpenRouter executes the server-side search inside the same request
+		// (its interception loop, capped by max_tool_calls). Tool-less requests
+		// — e.g. the compaction summarizer — carry no injection: they must
+		// neither pay for nor fail on server-side searches. The injected entry
+		// has no parameters in v1 (defaults; engine auto).
+		if c.nativeSearch {
+			reqBody.Tools = append(reqBody.Tools, oaiToolDef{Type: openRouterServerSearch})
+			reqBody.MaxToolCalls = maxNativeSearchToolCalls
+		}
 	}
 
 	// Arbitrary OpenAI-compatible endpoints can 400 on an unknown field, so only

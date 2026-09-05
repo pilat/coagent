@@ -23,23 +23,33 @@ const (
 	oaiTypeFunction = "function"
 	oaiTypeText     = "text"
 
+	// openRouterServerSearch is the OpenRouter web-search server tool injected
+	// alongside client-side function tools.
+	openRouterServerSearch = "openrouter:web_search"
+	// maxNativeSearchToolCalls caps the server-side search steps per request.
+	// The provider default is 30; our cap is the only search-spend bound.
+	maxNativeSearchToolCalls = 5
+
 	bodyLogLimit = 2000 // provider response bodies are capped at this length when logged
 )
 
 // oaiRequest represents the request body for OpenAI-compatible chat APIs.
 type oaiRequest struct {
-	Model              string           `json:"model"`
-	Messages           []map[string]any `json:"messages"`
-	Tools              []oaiToolDef     `json:"tools,omitempty"`
-	ToolChoice         string           `json:"tool_choice,omitempty"`
-	Stream             bool             `json:"stream,omitempty"`
-	Temperature        float32          `json:"temperature,omitempty"`
-	MaxTokens          int              `json:"max_tokens,omitempty"`
-	ChatTemplateKwargs map[string]any   `json:"chat_template_kwargs,omitempty"` // DeepSeek thinking
-	Thinking           map[string]any   `json:"thinking,omitempty"`             // OpenAI-style (GLM-5, etc.)
-	Reasoning          map[string]any   `json:"reasoning,omitempty"`            // OpenAI o1-style reasoning
-	Provider           *oaiProvider     `json:"provider,omitempty"`             // OpenRouter-specific provider config
-	SessionID          string           `json:"session_id,omitempty"`           // OpenRouter UI session grouping
+	Model      string           `json:"model"`
+	Messages   []map[string]any `json:"messages"`
+	Tools      []oaiToolDef     `json:"tools,omitempty"`
+	ToolChoice string           `json:"tool_choice,omitempty"`
+	// MaxToolCalls is OpenRouter's top-level server-tool budget (sibling of
+	// messages/tools), set alongside the injected web-search server tool.
+	MaxToolCalls       int            `json:"max_tool_calls,omitempty"`
+	Stream             bool           `json:"stream,omitempty"`
+	Temperature        float32        `json:"temperature,omitempty"`
+	MaxTokens          int            `json:"max_tokens,omitempty"`
+	ChatTemplateKwargs map[string]any `json:"chat_template_kwargs,omitempty"` // DeepSeek thinking
+	Thinking           map[string]any `json:"thinking,omitempty"`             // OpenAI-style (GLM-5, etc.)
+	Reasoning          map[string]any `json:"reasoning,omitempty"`            // OpenAI o1-style reasoning
+	Provider           *oaiProvider   `json:"provider,omitempty"`             // OpenRouter-specific provider config
+	SessionID          string         `json:"session_id,omitempty"`           // OpenRouter UI session grouping
 }
 
 // oaiProvider holds OpenRouter provider configuration.
@@ -98,6 +108,13 @@ type oaiUsage struct {
 	Cost             *float64 `json:"cost,omitempty"` // OpenRouter returns cost in usage; nil = not returned, 0 = free model
 	// Cache tokens from prompt_tokens_details (OpenAI-style)
 	PromptTokensDetails *oaiPromptTokensDetails `json:"prompt_tokens_details,omitempty"`
+	// OpenRouter server-tool accounting: surfaced to logs, not billed by us.
+	ServerToolUse *oaiServerToolUse `json:"server_tool_use,omitempty"`
+}
+
+// oaiServerToolUse mirrors OpenRouter's usage.server_tool_use block.
+type oaiServerToolUse struct {
+	WebSearchRequests int `json:"web_search_requests"`
 }
 
 // oaiPromptTokensDetails holds detailed prompt token info.
@@ -133,10 +150,12 @@ type oaiFunctionCall struct {
 	Arguments string `json:"arguments"`
 }
 
-// oaiToolDef represents a tool definition.
+// oaiToolDef represents a tool definition. Function is a pointer so the
+// OpenRouter server-tool entries ("openrouter:web_search") serialize without
+// an empty function object.
 type oaiToolDef struct {
-	Type     string         `json:"type"`
-	Function oaiFunctionDef `json:"function"`
+	Type     string          `json:"type"`
+	Function *oaiFunctionDef `json:"function,omitempty"`
 }
 
 // oaiFunctionDef represents function definition.

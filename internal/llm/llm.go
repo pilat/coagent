@@ -121,7 +121,12 @@ func newClientForModel(cfg *config.Config, model string) (Client, error) {
 		)
 	}
 
-	inner, err := driver.NewClient(provider, modelEntry)
+	// The native-search decision rides the client: explicit REST config or an
+	// explicit disable suppresses it, an unconfigured section falls back to
+	// native for OR-driver models (config.SearchNativeActive).
+	opts := DriverClientOpts{NativeSearch: cfg.UnifiedConfig.SearchNativeActive(model)}
+
+	inner, err := driver.NewClient(provider, modelEntry, opts)
 	if err != nil {
 		return nil, fmt.Errorf("model %q: %w", model, err)
 	}

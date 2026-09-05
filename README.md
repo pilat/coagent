@@ -202,6 +202,46 @@ tools:
 The workspace, system temporary directory, and an existing user cache directory
 are writable by default. Add language- or package-manager caches explicitly.
 
+### Web search
+
+Sessions have no search by default. Three ways to add it, in precedence order —
+an explicit REST provider beats the native default, and an explicit disable
+beats everything:
+
+```yaml
+tools:
+  search:
+    provider: tavily            # builtin websearch tool, needs api_key
+    api_key: ${TAVILY_API_KEY}  # from ~/.coagent/secrets
+    max_results: 5              # 1-10, default 5
+```
+
+```yaml
+tools:
+  search:
+    provider: searxng           # builtin websearch tool, self-hosted
+    base_url: https://searx.example.com
+```
+
+A SearXNG instance must allow JSON output — add `json` to `formats` under the
+`search:` section of its settings.yml — or the tool reports the misconfiguration
+instead of parsing garbage.
+
+With no `tools.search` section at all, a model on an `openrouter`-driver
+provider gets native search by default: OpenRouter executes searches
+server-side inside the model turn (billed to your OpenRouter credits, capped at
+5 searches per request). Explicitly disabling everything:
+
+```yaml
+tools:
+  search:
+    enabled: false
+```
+
+MCP search servers (e.g. Tavily MCP) keep working unchanged. At most one
+*integrated* mechanism is active per session — the builtin REST tool or the
+native injection — while configured MCP search tools coexist alongside it.
+
 ## Know before you run
 
 - Linux and macOS are supported. Enabling the sandbox elsewhere fails loudly.

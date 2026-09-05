@@ -3,6 +3,7 @@ package builtin
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"path/filepath"
 
 	"go.uber.org/zap"
@@ -57,7 +58,17 @@ func BuildStack(ctx context.Context, cfg StackConfig) (*Stack, error) {
 	registry := tool.NewRegistry()
 	lspMgr := lsp.NewManager(cfg.Provider)
 
-	registerCoreTools(registry, cfg.WorkDir, cfg.Loader, cfg.Todo, cfg.TodoReplacement, lspMgr, bashRunner, mutator)
+	registerCoreTools(
+		registry,
+		cfg.WorkDir,
+		cfg.Loader,
+		cfg.Todo,
+		cfg.TodoReplacement,
+		lspMgr,
+		bashRunner,
+		mutator,
+		cfg.Unified,
+	)
 
 	// MCP failure degrades to a builtin-only stack: a broken MCP server must not block sessions.
 	mcpSvc, err := mcp.AcquireForWorkDir(ctx, cfg.Pool, cfg.Servers, cfg.WorkDir, cfg.Provider)
@@ -85,8 +96,9 @@ func (s *Stack) Close() error {
 	return nil
 }
 
-// registerCoreTools registers the filesystem/shell/skill builtins.
-// Registration order feeds the LLM prompt-cache key — do not reorder.
+// registerCoreTools registers the filesystem/shell/skill builtins. Registration
+// order never reaches the wire — List() sorts by ID and that sorted membership
+// is what feeds the LLM prompt-cache key.
 func registerCoreTools(
 	registry tool.Registry,
 	workDir string,
@@ -96,6 +108,7 @@ func registerCoreTools(
 	lspMgr lsp.Manager,
 	bashRunner bashsandbox.Runner,
 	fileMutator fileMutator,
+	unified *config.UnifiedConfig,
 ) {
 	registry.Register(newReadTool(workDir))
 	registry.Register(newWriteTool(workDir, lspMgr, fileMutator))
@@ -117,6 +130,46 @@ func registerCoreTools(
 	registry.Register(NewBatchTool(registry))
 
 	registry.Register(newLspTool(workDir, lspMgr))
+
+	// Conditional registration: a model never sees a search tool that always
+	// errors. With no tools.search config the tool is absent from the registry
+	// and from the prompt.
+	if searchTool := newSearchToolFromConfig(unified); searchTool != nil {
+		registry.Register(searchTool)
+	}
+}
+
+// newSearchToolFromConfig builds the builtin websearch tool when the unified
+// config selects a provider, nil otherwise. Registration is skipped entirely
+// for an unconfigured or disabled section.
+func newSearchToolFromConfig(unified *config.UnifiedConfig) tool.Tool {
+	if unified == nil {
+		return nil
+	}
+
+	s := unified.Tools.Search
+	if !s.SearchActive() {
+		return nil
+	}
+
+	client := &http.Client{
+		Timeout:   webFetchTimeout,
+		Transport: newRestrictedTransport(),
+	}
+
+	var provider searchProvider
+
+	switch s.Provider {
+	case config.SearchProviderTavily:
+		provider = &tavilySearchProvider{client: client, apiKey: s.APIKey}
+	case config.SearchProviderSearxng:
+		provider = &searxngSearchProvider{client: client, baseURL: s.BaseURL}
+	default:
+		// Config validation rejects unknown providers before this point.
+		return nil
+	}
+
+	return newWebSearchTool(provider, s.MaxResults)
 }
 
 func bashSandboxConfig(cfg StackConfig) bashsandbox.Config {

@@ -14,12 +14,13 @@ import (
 
 // Tool-name constants for the dynamic tool inventory rendered in the system prompt.
 const (
-	batchToolName = "batch"
-	readToolName  = "read"
-	writeToolName = "write"
-	editToolName  = "edit"
-	grepToolName  = "grep"
-	globToolName  = "glob"
+	batchToolName     = "batch"
+	readToolName      = "read"
+	writeToolName     = "write"
+	editToolName      = "edit"
+	grepToolName      = "grep"
+	globToolName      = "glob"
+	websearchToolName = "websearch"
 )
 
 // toolCategories defines the order and grouping for the dynamic tool inventory.
@@ -38,25 +39,26 @@ var toolCategories = []struct {
 	{"Sub-agents", []string{"task"}},
 	{"Parallel execution", []string{batchToolName}},
 	{"Skills", []string{"skill"}},
-	{"Web", []string{"webfetch"}},
+	{"Web", []string{"webfetch", websearchToolName}},
 	{"Scheduling", []string{"schedule", "sleep"}},
 }
 
 var toolDescriptions = map[string]string{
-	readToolName:  "view file",
-	writeToolName: "create/overwrite",
-	editToolName:  "find-replace",
-	"apply_patch": "unified diff",
-	globToolName:  "find by pattern",
-	grepToolName:  "search contents",
-	"ls":          "list directory",
-	"lsp":         "definitions, references, diagnostics",
-	"task":        "spawn/resume subagents",
-	batchToolName: "group tool calls (fallback)",
-	"skill":       "load domain knowledge",
-	"webfetch":    "fetch known URL",
-	"schedule":    "wake-up timer",
-	"sleep":       "fixed delay",
+	readToolName:      "view file",
+	writeToolName:     "create/overwrite",
+	editToolName:      "find-replace",
+	"apply_patch":     "unified diff",
+	globToolName:      "find by pattern",
+	grepToolName:      "search contents",
+	"ls":              "list directory",
+	"lsp":             "definitions, references, diagnostics",
+	"task":            "spawn/resume subagents",
+	batchToolName:     "group tool calls (fallback)",
+	"skill":           "load domain knowledge",
+	"webfetch":        "fetch known URL",
+	websearchToolName: "web search",
+	"schedule":        "wake-up timer",
+	"sleep":           "fixed delay",
 }
 
 // knownSearchMCPs lists MCP server config keys known to provide web search.
@@ -85,6 +87,9 @@ type promptBuilder struct {
 	memoriesSection        string
 	modelsSection          string
 	activeSubagentsSection string
+	// nativeSearch reports whether the active model's driver supplies search
+	// natively. It follows the model triplet and only feeds prompt wording.
+	nativeSearch bool
 }
 
 func newPromptBuilder(
@@ -140,14 +145,6 @@ func (p *promptBuilder) setActiveSubagentsSection(section string) {
 	p.mu.Unlock()
 }
 
-// setToolsSection replaces the tools section of the system prompt.
-// Called after tool registration is complete.
-func (p *promptBuilder) setToolsSection(section string) {
-	p.mu.Lock()
-	p.toolsSection = section
-	p.mu.Unlock()
-}
-
 // setSkillsSection replaces the model-invocable skills inventory.
 func (p *promptBuilder) setSkillsSection(section string) {
 	p.mu.Lock()
@@ -162,8 +159,40 @@ func (p *promptBuilder) setSubagentsSection(section string) {
 	p.mu.Unlock()
 }
 
+// setNativeSearch records whether the active model's driver supplies search
+// natively. Call before the first tools-section build; a model switch uses
+// setModelSearch, which swaps the section atomically with the flag.
+func (p *promptBuilder) setNativeSearch(active bool) {
+	p.mu.Lock()
+	p.nativeSearch = active
+	p.mu.Unlock()
+}
+
+// setModelSearch swaps native-search availability together with the tools
+// section rebuild so a reader never sees a section built from the previous
+// model's guidance. A nil registry (narrow tests) skips the rebuild.
+func (p *promptBuilder) setModelSearch(reg tool.Registry, native bool) {
+	p.mu.Lock()
+
+	if reg != nil {
+		p.nativeSearch = native
+		p.toolsSection = buildToolsSection(reg, native)
+	}
+
+	p.mu.Unlock()
+}
+
+// refreshToolsSection rebuilds the tools section from the session's current
+// registry and the native-search availability of the active client. Building
+// under the write lock keeps the flag+section pair atomic against model switches.
+func (p *promptBuilder) refreshToolsSection(reg tool.Registry) {
+	p.mu.Lock()
+	p.toolsSection = buildToolsSection(reg, p.nativeSearch)
+	p.mu.Unlock()
+}
+
 // buildToolsSection generates the dynamic TOOLS section from actual registered tool IDs.
-func buildToolsSection(reg tool.Registry) string {
+func buildToolsSection(reg tool.Registry, nativeSearch bool) string {
 	ids := reg.IDs()
 	registered := make(map[string]bool, len(ids))
 
@@ -197,7 +226,7 @@ func buildToolsSection(reg tool.Registry) string {
 	appendMemorySection(&sb, registered)
 	appendParallelSection(&sb, registered)
 	appendScheduleSection(&sb, registered)
-	appendWebSearchSection(&sb, ids, registered)
+	appendWebSearchSection(&sb, ids, registered, nativeSearch)
 
 	return sb.String()
 }
@@ -260,8 +289,12 @@ func appendScheduleSection(sb *strings.Builder, registered map[string]bool) {
 	}
 }
 
-func appendWebSearchSection(sb *strings.Builder, ids []string, registered map[string]bool) {
+func appendWebSearchSection(sb *strings.Builder, ids []string, registered map[string]bool, nativeSearch bool) {
 	var searchTools []string
+
+	if registered[websearchToolName] {
+		searchTools = append(searchTools, websearchToolName)
+	}
 
 	for _, key := range knownSearchMCPs {
 		prefix := "mcp__" + key + "__"
@@ -272,14 +305,31 @@ func appendWebSearchSection(sb *strings.Builder, ids []string, registered map[st
 		}
 	}
 
-	if len(searchTools) == 0 {
+	switch {
+	case len(searchTools) > 0:
+		sb.WriteString("\n# WEB SEARCH\n\n")
+		sb.WriteString("You have web search capability via: ")
+		sb.WriteString(strings.Join(searchTools, ", ") + "\n\n")
+	case nativeSearch:
+		// Native search names no tool: the provider runs searches server-side
+		// inside the model turn, so there is no tool call to announce.
+		sb.WriteString("\n# WEB SEARCH\n\n")
+		sb.WriteString(
+			"Web search is provided natively by your model provider. Request current information " +
+				"directly; the provider executes the search and returns grounded, cited results. " +
+				"No local search tool exists in this session.\n\n",
+		)
+	default:
 		return
 	}
 
-	sb.WriteString("\n# WEB SEARCH\n\n")
-	sb.WriteString("You have web search capability via: ")
-	sb.WriteString(strings.Join(searchTools, ", "))
-	sb.WriteString("\n\nUse web search for:\n")
+	appendWebSearchUsage(sb, registered)
+}
+
+// appendWebSearchUsage writes the guidance body shared by the tool-based and
+// native search modes.
+func appendWebSearchUsage(sb *strings.Builder, registered map[string]bool) {
+	sb.WriteString("Use web search for:\n")
 	sb.WriteString("- Information beyond your knowledge cutoff\n")
 	sb.WriteString("- Current documentation, recent changes, latest versions\n")
 

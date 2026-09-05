@@ -1,5 +1,11 @@
 package config
 
+// Search provider names accepted by tools.search.provider.
+const (
+	SearchProviderTavily  = "tavily"
+	SearchProviderSearxng = "searxng"
+)
+
 // The yaml tags carry omitempty throughout: config.yaml is machine-written once
 // a config tool touches it, and a file padded with empty defaults is one a human
 // can no longer read.
@@ -103,8 +109,22 @@ type (
 		Sandbox BashSandboxConfig `yaml:"sandbox,omitempty"`
 	}
 
+	// SearchToolConfig configures the builtin websearch tool. An empty section
+	// means unconfigured: no builtin tool, native passthrough if the driver
+	// supports it. Explicitly enabled=false switches integrated search off.
+	SearchToolConfig struct {
+		Provider   string `yaml:"provider,omitempty"` // SearchProviderTavily | SearchProviderSearxng
+		APIKey     string `yaml:"api_key,omitempty"`  // tavily credential; ${VAR} references resolved from secrets
+		BaseURL    string `yaml:"base_url,omitempty"` // searxng instance root, e.g. https://searx.example.com
+		MaxResults int    `yaml:"max_results,omitempty"`
+		// Enabled is tri-state: nil = follow defaults, false = all integrated
+		// search off, true = require an explicit provider.
+		Enabled *bool `yaml:"enabled,omitempty"`
+	}
+
 	ToolsConfig struct {
-		Bash BashToolConfig `yaml:"bash,omitempty"`
+		Bash   BashToolConfig   `yaml:"bash,omitempty"`
+		Search SearchToolConfig `yaml:"search,omitempty"`
 	}
 
 	// UnifiedConfig represents the unified configuration file (~/.coagent/config.yaml)
@@ -119,3 +139,52 @@ type (
 		Tools          ToolsConfig              `yaml:"tools,omitempty"`
 	}
 )
+
+// SearchActive reports whether the section selects the builtin REST search
+// tool: a provider set and not explicitly disabled.
+func (s SearchToolConfig) SearchActive() bool {
+	return s.Provider != "" && (s.Enabled == nil || *s.Enabled)
+}
+
+// SearchDisabled reports whether integrated search is explicitly switched off —
+// the builtin REST tool and the drivers' native passthrough both stay off.
+func (s SearchToolConfig) SearchDisabled() bool {
+	return s.Enabled != nil && !*s.Enabled
+}
+
+// SearchNativeActive reports whether integrated search falls back to the
+// driver's native passthrough for the named model: nothing explicitly
+// configured in tools.search and the model's driver executes searches
+// server-side (openrouter only today).
+func (c *UnifiedConfig) SearchNativeActive(model string) bool {
+	if c == nil {
+		return false
+	}
+
+	search := c.Tools.Search
+	if search.SearchDisabled() || search.SearchActive() {
+		return false
+	}
+
+	modelEntry, ok := c.findModel(model)
+	if !ok {
+		return false
+	}
+
+	provider, ok := c.Providers[modelEntry.Provider]
+	if !ok {
+		return false
+	}
+
+	return provider.Driver == driverOpenRouter
+}
+
+func (c *UnifiedConfig) findModel(id string) (ModelEntry, bool) {
+	for _, m := range c.Models {
+		if m.ID == id {
+			return m, true
+		}
+	}
+
+	return ModelEntry{}, false
+}

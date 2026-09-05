@@ -263,6 +263,9 @@ func newWithOptions(ctx context.Context, p params, opts options) (Service, error
 	session := newSession(p, opts, workDir, agentConfig, agentsMD)
 	session.agentTypes = set
 	session.prompt = buildPrompt(ctx, p, opts, workDir, agentConfig)
+	// The native-search bit must precede setupRegistry: the tools section it
+	// builds reports search guidance for the active client.
+	session.prompt.setNativeSearch(p.Config.UnifiedConfig.SearchNativeActive(p.Config.Model))
 	session.setupRegistry(p, agentConfig)
 
 	if err := session.applyResumeOrInit(ctx, opts, log); err != nil {
@@ -594,7 +597,7 @@ func (s *svc) setupRegistry(p params, agentConfig registry.AgentTypeConfig) {
 // refreshRegistrySections recomputes the prompt sections derived from the live tool
 // registry, which the daemon extends after construction. Once per activation.
 func (s *svc) refreshRegistrySections() {
-	s.prompt.setToolsSection(buildToolsSection(s.registry))
+	s.prompt.refreshToolsSection(s.registry)
 
 	var skills string
 	if s.registry.Get(tool.IDSkill) != nil {

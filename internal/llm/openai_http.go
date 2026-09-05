@@ -187,8 +187,17 @@ func (c *openaiClient) parseResponseBody(log *zap.Logger, body []byte, start tim
 
 	usage := extractUsage(&completionResp, c.provider, c.model, c.pricing)
 	attachUsage(result, usage)
+	logServerToolUse(log, completionResp.Usage)
 
 	return result, nil
+}
+
+// logServerToolUse surfaces OpenRouter's server-tool accounting (native web
+// searches) in the response log — usage measurement is manual, from logs.
+func logServerToolUse(log *zap.Logger, usage oaiUsage) {
+	if usage.ServerToolUse != nil && usage.ServerToolUse.WebSearchRequests > 0 {
+		log.Info("server_tool_use", zap.Int("web_search_requests", usage.ServerToolUse.WebSearchRequests))
+	}
 }
 
 func (c *openaiClient) logResponse(log *zap.Logger, finishReason string, result *llmwire.Response, durationMs int64) {
@@ -371,7 +380,7 @@ func (c *openaiClient) convertTools(tools []llmwire.ToolSchema) []oaiToolDef {
 
 		result = append(result, oaiToolDef{
 			Type: oaiTypeFunction,
-			Function: oaiFunctionDef{
+			Function: &oaiFunctionDef{
 				Name:        t.Name,
 				Description: t.Description,
 				Parameters:  schema,

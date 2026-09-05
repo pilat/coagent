@@ -122,6 +122,7 @@ func (c *openaiClient) finishStreamingResponse(
 	}
 
 	attachUsage(result, extractUsage(&completionResp, c.provider, c.model, c.pricing))
+	logServerToolUse(log, aggregate.usage)
 
 	return result, nil
 }
