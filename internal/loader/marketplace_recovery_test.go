@@ -58,6 +58,10 @@ func (f *recoveryGitClient) HealthCheck(_ context.Context, _ string) error {
 	return f.healthErr
 }
 
+func (f *recoveryGitClient) RepositoryState(_ context.Context, _ string) (git.RepositoryState, error) {
+	return git.RepositoryState{Status: git.RepositoryNotRepository}, nil
+}
+
 func recoveryTestResolver(t *testing.T, gc *recoveryGitClient) (RepositoryResolver, string) {
 	t.Helper()
 
