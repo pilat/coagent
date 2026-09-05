@@ -112,6 +112,24 @@ func TestBashSandboxConfig_Configured(t *testing.T) {
 	assert.Equal(t, []string{"~/.cache", "/tmp/build-cache"}, cfg.WritablePaths)
 }
 
+func TestBashSandboxConfig_WorktreeTrustsMainGitDir(t *testing.T) {
+	unified := &config.UnifiedConfig{}
+	unified.Tools.Bash.Sandbox.Enabled = true
+
+	// The work tree name contains a dot: the trusted path must not be
+	// derived from the work tree basename.
+	cfg := bashSandboxConfig(StackConfig{
+		WorkDir:  "/home/user/.coagent/worktrees/repo-a1b2/fix-release.v2",
+		RepoRoot: "/home/user/projects/repo",
+		Unified:  unified,
+	})
+
+	assert.Equal(t, []string{"/home/user/projects/repo/.git"}, cfg.WritablePaths)
+
+	plain := bashSandboxConfig(StackConfig{WorkDir: "/home/user/projects/repo", Unified: unified})
+	assert.Empty(t, plain.WritablePaths)
+}
+
 func TestRegisterCoreTools_SharesFileMutator(t *testing.T) {
 	registry := tool.NewRegistry()
 	mutator := &recordingFileMutator{}

@@ -116,8 +116,9 @@ type SessionCreateData struct {
 	WorktreeName  string `json:"worktree_name,omitempty"`
 	SystemProject string `json:"system_project,omitempty"`
 	// RepoRoot is the path to the main git repository (for worktree sessions).
-	// Empty for non-worktree sessions. Used to grant sandbox access to the
-	// repository's .git directory while keeping the main repository read-only.
+	// Empty for non-worktree sessions. Its .git directory becomes a sandbox
+	// writable root: linked work trees share the object store and refs with
+	// the main repository.
 	RepoRoot string `json:"repo_root,omitempty"`
 }
 

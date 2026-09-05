@@ -27,7 +27,7 @@ func TestBubblewrapIntegration(t *testing.T) {
 	require.NoError(t, os.Mkdir(denied, 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(denied, "readable"), []byte("host data"), 0o644))
 
-	runner, err := newEnabledRunner([]string{allowed}, nil)
+	runner, err := newEnabledRunner([]string{allowed})
 	require.NoError(t, err)
 
 	devShmName := "coagent-bwrap-" + filepath.Base(base)
@@ -66,9 +66,7 @@ func TestBubblewrapProbeConfirmsEnforcement(t *testing.T) {
 		t.Skip("bwrap is not installed")
 	}
 
-	require.NoError(t, probeEnforcement(func(writable, readOnly []string) (Runner, error) {
-		return newEnabledRunner(writable, readOnly)
-	}))
+	require.NoError(t, probeEnforcement(newEnabledRunner))
 }
 
 func TestBubblewrapIntegrationProtectsNestedMount(t *testing.T) {
@@ -94,7 +92,7 @@ func TestBubblewrapIntegrationProtectsNestedMount(t *testing.T) {
 		}
 	})
 
-	runner, err := newEnabledRunner([]string{allowed}, nil)
+	runner, err := newEnabledRunner([]string{allowed})
 	require.NoError(t, err)
 
 	outerFile := filepath.Join(allowed, "outer-write")

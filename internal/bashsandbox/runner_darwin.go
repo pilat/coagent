@@ -40,7 +40,7 @@ type darwinRunner struct {
 	provider   shellenv.Provider
 }
 
-func newEnabledRunner(writableRoots, readOnlyRoots []string) (Runner, error) {
+func newEnabledRunner(writableRoots []string) (Runner, error) {
 	info, err := os.Stat(seatbeltExecutable)
 	if err != nil {
 		return nil, fmt.Errorf("locate Seatbelt executable %q: %w", seatbeltExecutable, err)

@@ -28,7 +28,7 @@ func (f *factory) Create(ctx context.Context, opts CreateOptions) (Service, erro
 		return nil, errors.New("output store is required when output is enabled")
 	}
 
-	cfg := f.sessionConfig(opts.WorkDir, opts.Model, opts.RepoRoot, opts.GitDir)
+	cfg := f.sessionConfig(opts.WorkDir, opts.Model, opts.RepoRoot)
 
 	llmClient, err := f.newLLMClient(cfg)
 	if err != nil {
@@ -61,11 +61,10 @@ func (f *factory) Create(ctx context.Context, opts CreateOptions) (Service, erro
 	return sess, nil
 }
 
-func (f *factory) sessionConfig(workDir, model, repoRoot, gitDir string) *config.Config {
+func (f *factory) sessionConfig(workDir, model, repoRoot string) *config.Config {
 	cfg := *f.cfg
 	cfg.WorkDir = workDir
 	cfg.RepoRoot = repoRoot
-	cfg.GitDir = gitDir
 
 	if model != "" {
 		cfg.Model = model
