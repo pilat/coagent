@@ -192,8 +192,10 @@ func (c *anthropicClient) convertMessages(messages []llmwire.Message) []anthropi
 
 	var lastAssistant *llmwire.Message
 
-	for i := 0; i < len(messages); {
-		msg := messages[i]
+	// Consuming the slice from the front keeps every branch advancing
+	// unconditionally; a cursor that can strand would loop forever.
+	for len(messages) > 0 {
+		msg := messages[0]
 
 		switch msg.Role {
 		case roleUser:
@@ -201,28 +203,40 @@ func (c *anthropicClient) convertMessages(messages []llmwire.Message) []anthropi
 				result = append(result, anthropic.NewUserMessage(blocks...))
 			}
 
-			i++
+			messages = messages[1:]
 		case roleAssistant:
 			if blocks := c.buildAssistantBlocks(msg); len(blocks) > 0 {
 				result = append(result, anthropic.NewAssistantMessage(blocks...))
 			}
 
-			lastAssistant = &messages[i]
-			i++
+			lastAssistant = &messages[0]
+			messages = messages[1:]
 		case roleTool:
 			// The provider protocol delivers every tool result of one turn as
 			// user content: the whole contiguous run merges into ONE message.
-			j := i
-			for j < len(messages) && messages[j].Role == roleTool {
-				j++
-			}
+			n := toolRunLength(messages)
 
-			result = append(result, anthropic.NewUserMessage(c.toolRunBlocks(messages[i:j], lastAssistant)...))
-			i = j
+			result = append(result, anthropic.NewUserMessage(c.toolRunBlocks(messages[:n], lastAssistant)...))
+			messages = messages[n:]
+		default:
+			// llmwire also carries roleSystem; the Anthropic path folds the
+			// system prompt into the request separately.
+			messages = messages[1:]
 		}
 	}
 
 	return result
+}
+
+// toolRunLength measures the contiguous tool-result run at the front of the
+// slice; the caller only dispatches roleTool messages here, so it is never 0.
+func toolRunLength(messages []llmwire.Message) int {
+	n := 1
+	for n < len(messages) && messages[n].Role == roleTool {
+		n++
+	}
+
+	return n
 }
 
 // toolRunBlocks renders one tool-result run. Blocks follow the assistant call

@@ -6,6 +6,11 @@ on:
   schedule:
     - cron: "37 2 * * *"
   workflow_dispatch:
+    inputs:
+      shard:
+        description: "Optional: run a single shard (e.g. models) instead of all"
+        required: false
+        default: ""
 
 permissions:
   contents: read
@@ -15,27 +20,31 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      shards: ${{ steps.pick.outputs.shards }}
+    steps:
+      - name: Pick shards
+        id: pick
+        env:
+          SHARD: ${{ inputs.shard }}
+        run: |
+          if [ -n "$SHARD" ]; then
+            echo "shards=[\"$SHARD\"]" >> "$GITHUB_OUTPUT"
+          else
+            echo 'shards=["commands","runtime","persistence","async","managers","models","tooling","config","support","daemon-lifecycle","daemon-subagents","daemon-ops","daemon-output"]' >> "$GITHUB_OUTPUT"
+          fi
+
   mutation:
     name: Mutation (${{ matrix.shard }})
+    needs: plan
     runs-on: ubuntu-latest
     timeout-minutes: 360
     strategy:
       fail-fast: false
       matrix:
-        shard:
-          - commands
-          - runtime
-          - persistence
-          - async
-          - managers
-          - models
-          - tooling
-          - config
-          - support
-          - daemon-lifecycle
-          - daemon-subagents
-          - daemon-ops
-          - daemon-output
+        shard: ${{ fromJSON(needs.plan.outputs.shards) }}
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
