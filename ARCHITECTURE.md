@@ -94,7 +94,10 @@ does not imply a tier except where it expresses an implementation variant.
 - `internal/progress` — controller-neutral progress snapshots and Markdown rendering.
 - `internal/progressruntime` — durable progress publication, output readiness and silence reconciliation lifecycle.
 - `internal/projectpath` — canonical project-root paths and project-name validation.
-- `internal/registry` — immutable per-session agent-type policy and prompt templates.
+- `internal/registry` — immutable per-session agent-type policy and prompt
+  templates. The build-agent template owns the runtime identity contract: the
+  agent presents as Coagent with the repo URL and does not volunteer the
+  underlying model vendor.
 - `cmd/releasebuilder` — build-time deterministic archive and checksum composition root.
 - `internal/schedule` — durable schedules, sleep ownership and scheduled delivery execution.
 - `internal/session` — isolated agent loop, tool gating and transcript projection.

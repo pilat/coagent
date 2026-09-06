@@ -106,7 +106,7 @@ func TestHarnessScenario_FinalIncludesNonEmptyTodoAndBudget(t *testing.T) {
 	releaseModel()
 	want := "task answer\n\n" +
 		"📋 TODO · 1 active · 1 remaining · 0 done · /status shows the full list\n\n" +
-		"- Budget: armed (generation 1) · $0.000000 / $1.000000 · $1.000000 remaining"
+		"💸 Budget: armed (generation 1) · $0.000000 / $1.000000 · $1.000000 remaining"
 	h.mgr.waitIdle(sessionID)
 
 	var final string
