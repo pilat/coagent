@@ -15,7 +15,7 @@ func TestStampWorkDirBindsAndFiltersDisabled(t *testing.T) {
 		"on":       {Command: "run"},
 		"off":      {Command: "run", Disabled: true},
 		"off-flag": {Command: "run", Enabled: &disabled},
-	}, "/work")
+	}, "/work", nil, nil)
 
 	require.Len(t, got, 1)
 	assert.Equal(t, "/work", got["on"].WorkDir)
@@ -33,7 +33,7 @@ func TestAcquireForWorkDirWithNoServers(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			svc, err := AcquireForWorkDir(context.Background(), nil, tt.servers, "/work", nil)
+			svc, err := AcquireForWorkDir(context.Background(), nil, tt.servers, "/work", nil, nil)
 			require.NoError(t, err)
 			assert.Nil(t, svc)
 		})
@@ -45,9 +45,9 @@ func TestAcquireForWorkDirWithNoServers(t *testing.T) {
 func TestStampWorkDirChangesTheIdentityHash(t *testing.T) {
 	def := map[string]ServerConfig{"srv": {Command: "run", Args: []string{"-x"}}}
 
-	a := stampWorkDir(def, "/one")["srv"]
-	b := stampWorkDir(def, "/two")["srv"]
+	a := stampWorkDir(def, "/one", nil, nil)["srv"]
+	b := stampWorkDir(def, "/two", nil, nil)["srv"]
 
 	assert.NotEqual(t, a.Hash(), b.Hash())
-	assert.Equal(t, a.Hash(), stampWorkDir(def, "/one")["srv"].Hash())
+	assert.Equal(t, a.Hash(), stampWorkDir(def, "/one", nil, nil)["srv"].Hash())
 }

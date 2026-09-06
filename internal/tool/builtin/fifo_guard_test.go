@@ -109,7 +109,7 @@ func TestApplyFilePatches_FIFORejectedPromptly(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		done <- applyFilePatches(context.Background(), directFileMutator{}, fifo, nil)
+		done <- applyFilePatches(context.Background(), nil, directFileMutator{}, fifo, nil)
 	}()
 
 	select {

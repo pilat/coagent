@@ -36,6 +36,7 @@ type completions struct {
 	notifyFailure   func(context.Context, int64, int64, string, error)
 	deliver         func(context.Context, subagent.Link)
 	startChild      func(context.Context, int64) error
+	guardChild      func(context.Context, int64, func(context.Context) error) error
 	subagentChanged func(context.Context, int64)
 }
 
@@ -46,11 +47,12 @@ func NewCompletions(
 	notifyFailure func(context.Context, int64, int64, string, error),
 	deliver func(context.Context, subagent.Link),
 	startChild func(context.Context, int64) error,
+	guardChild func(context.Context, int64, func(context.Context) error) error,
 	subagentChanged func(context.Context, int64),
 ) Completions {
 	return &completions{
 		sessions: sessions, links: links, tx: tx,
-		notifyFailure: notifyFailure, deliver: deliver, startChild: startChild,
+		notifyFailure: notifyFailure, deliver: deliver, startChild: startChild, guardChild: guardChild,
 		subagentChanged: subagentChanged,
 	}
 }
@@ -147,10 +149,20 @@ func (c *completions) Persist(
 		}
 	}
 
-	return c.Rearm(context.WithoutCancel(ctx), link.ChildID)
+	return c.Rearm(ctx, link.ChildID)
 }
 
 func (c *completions) Rearm(ctx context.Context, childID int64) error {
+	if c.guardChild != nil {
+		return c.guardChild(ctx, childID, func(guarded context.Context) error {
+			return c.rearm(guarded, childID)
+		})
+	}
+
+	return c.rearm(ctx, childID)
+}
+
+func (c *completions) rearm(ctx context.Context, childID int64) error {
 	rearmed, err := c.tx.RearmDeliveredWithPendingInput(ctx, childID)
 	if err != nil {
 		return fmt.Errorf("rearm child %d after completion delivery: %w", childID, err)

@@ -65,7 +65,7 @@
         "manager_id": "telegram:main",
         "model_input_generation": 1
       },
-      "source_key": "progress:change:subagent:2:1:spawned:g1",
+      "source_key": "progress:change:subagent:2:1:spawned:g1:shields:false:i0",
       "model_input_generation": 1,
       "releases_input": false
     },
@@ -92,7 +92,7 @@
         "manager_id": "telegram:main",
         "model_input_generation": 1
       },
-      "source_key": "progress:change:subagent:2:1:completed:g1",
+      "source_key": "progress:change:subagent:2:1:completed:g1:shields:false:i0",
       "model_input_generation": 1,
       "previous_message_type": "message_persistent",
       "previous_model_input_generation": 1,

@@ -30,8 +30,12 @@ exception. A raised session bypasses shell activation and provides no temporary
 storage outside the project; Git metadata outside a linked work tree is not part
 of the project boundary. Lowering shields restores host-readable process and
 file-tool behavior while retaining the write sandbox. Only a manager-originated
-command may change the state, and subagents inherit it. Trusted skill text and
-the built-in web fetch and search tools remain available in both states.
+command may change the state, and subagents inherit it. Project-local
+instruction sources use rooted project access; global and marketplace
+instruction sources remain trusted daemon inputs outside that boundary. The
+built-in web fetch and search tools remain available in both states. Network
+egress and inherited environment values are unchanged; resolver, host-name,
+account, loader, and certificate files may remain readable runtime substrate.
 _Avoid_: sandbox mode (the write sandbox is a separate permanent boundary), safe
 session (shields do not make untrusted project data confidential).
 
@@ -344,7 +348,15 @@ The append-only transcript of a session's messages — what the agent loop reads
 _Avoid_: memory.
 
 **attachment** (referenced image attachment):
-A disk reference (`{path, mime, size}`) stored on a tool-result row in `messages.attachments` — never the pixels themselves. Produced by `read` on a supported image; drivers re-materialize it into content blocks on every request, gated fail-closed on the catalog's input modalities, degrading to an inline placeholder when unmaterializable. Telegram uploads produce metadata text only; seeing pixels always takes a `read` roundtrip ([ADR-0034](adr/0034-vision-via-referenced-tool-result-attachments.md)).
+A disk reference stored on a tool-result row in `messages.attachments` — never
+the pixels themselves. Alongside path, MIME, and size, a shielded read persists
+its canonical read root so later materialization cannot follow a replacement
+path outside the original authority. Produced by `read` on a supported image;
+drivers re-materialize it into content blocks on every request, gated
+fail-closed on the catalog's input modalities, degrading to an inline
+placeholder when unmaterializable. Telegram uploads produce metadata text only;
+seeing pixels always takes a `read` roundtrip
+([ADR-0034](adr/0034-vision-via-referenced-tool-result-attachments.md)).
 _Avoid_: "image message", inline base64, upload-attached media.
 
 ## Configuration & isolation
@@ -355,7 +367,9 @@ _Avoid_: "config dir" for the whole directory; conflating it with the project-le
 
 **LSP server**:
 A user- or project-owned language-server executable discovered through the
-project's activated shell PATH. Coagent neither downloads, installs, nor pins it.
+project's activated shell PATH while shields are down, or through inherited
+PATH with project/runtime-substrate containment while raised. Coagent neither
+downloads, installs, nor pins it.
 _Avoid_: managed LSP installation, PATH fallback.
 
 **provider**:
@@ -383,7 +397,11 @@ The in-memory credential map parsed from `~/.coagent/secrets`, deliberately kept
 A per-cwd snapshot of a login+interactive shell (mise / asdf / nvm / direnv toolchain activation), captured, cached (validated by a fingerprint of the on-disk toolchain state, with a 30-min backstop — see [ADR-0001](adr/0001-shellenv-fingerprint-invalidation.md)), and replayed for Bash / LSP / MCP subprocess spawns while session shields are down. Raised sessions bypass capture and replay. Captures `os.Environ()` only — never a secrets map.
 
 **filesystem-write sandbox**:
-Optional native write-confinement for Bash descendants and the `write` / `edit` / `apply_patch` tools (Seatbelt on macOS, Bubblewrap on Linux). It is an *integrity* boundary — not confidentiality: it does not confine reads or network egress.
+Default-on native write confinement for Bash descendants, LSP and stdio MCP
+processes, and the `write` / `edit` / `apply_patch` tools (Seatbelt on macOS,
+Bubblewrap on Linux). Operators may disable it explicitly. By itself it is an
+*integrity* boundary — not confidentiality: it does not confine reads or network
+egress. Session shields add the separate operator-controlled read boundary.
 _Avoid_: sandbox (unqualified — implies more isolation than it gives).
 
 **composition root**:

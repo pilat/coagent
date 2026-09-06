@@ -134,6 +134,7 @@ type ManagerRootCreate struct {
 	StartEpisode   bool
 	Name           string
 	WorkDir        string
+	ShieldsUp      bool
 }
 
 type OutputStore interface {

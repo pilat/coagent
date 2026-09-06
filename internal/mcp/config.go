@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/pilat/coagent/internal/procexec"
+	"github.com/pilat/coagent/internal/shellenv"
 )
 
 type Config struct {
@@ -15,13 +16,15 @@ type Config struct {
 }
 
 type ServerConfig struct {
-	Command  string            `json:"command"`
-	Args     []string          `json:"args,omitempty"`
-	Env      map[string]string `json:"env,omitempty"`
-	WorkDir  string            `json:"work_dir,omitempty"`
-	Disabled bool              `json:"disabled,omitempty"`
-	Enabled  *bool             `json:"enabled,omitempty"`
-	runner   procexec.Runner
+	Command     string            `json:"command"`
+	Args        []string          `json:"args,omitempty"`
+	Env         map[string]string `json:"env,omitempty"`
+	WorkDir     string            `json:"work_dir,omitempty"`
+	Disabled    bool              `json:"disabled,omitempty"`
+	Enabled     *bool             `json:"enabled,omitempty"`
+	runner      procexec.Runner
+	provider    shellenv.Provider
+	providerSet bool
 }
 
 // Hash returns a deterministic SHA-256 hex digest of the server config.

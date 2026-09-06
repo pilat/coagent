@@ -11,18 +11,20 @@ import (
 )
 
 const (
-	callbackNav     = "nav"
-	callbackLaunch  = "launch"
-	callbackMore    = "more"
-	callbackSpawn   = "spawn"
-	callbackKill    = "kill"
-	callbackModel   = "model"
-	callbackEffort  = "effort"
-	callbackNewPick = "newpick"
-	callbackNewPage = "newpage"
-	commandKill     = "/kill"
-	commandStop     = "/stop"
-	telegramChannel = "telegram"
+	callbackNav        = "nav"
+	callbackLaunch     = "launch"
+	callbackMore       = "more"
+	callbackSpawn      = "spawn"
+	callbackKill       = "kill"
+	callbackModel      = "model"
+	callbackEffort     = "effort"
+	callbackNewPick    = "newpick"
+	callbackNewPage    = "newpage"
+	commandKill        = "/kill"
+	commandStop        = "/stop"
+	commandShieldsUp   = "/shieldsup"
+	commandShieldsDown = "/shieldsdown"
+	telegramChannel    = "telegram"
 )
 
 type callbackAction struct {
@@ -77,6 +79,8 @@ func (m *Manager) handleServiceTopicMessage(ctx context.Context, text string) {
 		m.handleKill(ctx, 0, m.serviceTopicID)
 	case commandStop:
 		_, _ = m.sendMessage(ctx, "Use /stop inside a session topic.", nil, m.serviceTopicID)
+	case commandShieldsUp, commandShieldsDown:
+		_, _ = m.sendMessage(ctx, "Use this command inside a session topic.", nil, m.serviceTopicID)
 	case "/model":
 		_, _ = m.sendMessage(ctx, "Use /model inside a session topic.", nil, m.serviceTopicID)
 	case "/schedules":
@@ -116,6 +120,8 @@ func (m *Manager) handleSessionTopicMessage(ctx context.Context, sessionID, thre
 		_ = m.controller.SendSessionMessage(ctx, controllerapi.SessionMessageData{
 			SessionID: sessionID, Message: "/clear",
 		})
+	case commandShieldsUp, commandShieldsDown:
+		m.handleSessionMessage(ctx, sessionID, text, threadID)
 	case "/model":
 		m.handleModel(ctx, sessionID, threadID)
 	case "/schedules":
@@ -371,6 +377,8 @@ func (m *Manager) handleHelp(ctx context.Context, sessionID, threadID int64) {
 		"  /gwt &lt;name&gt; — fork this project into a git worktree (session topic only)",
 		"  /kill — end this session (terminal)",
 		"  /stop — stop the current run (session stays, resumable)",
+		"  /shieldsup — raise project filesystem shields",
+		"  /shieldsdown — lower project filesystem shields",
 		"  /clear — clear session (fresh start, same topic)",
 		"  /compact — compact context now; /compact &lt;focus&gt; to steer the summary",
 		"  /model — choose LLM model",
@@ -383,7 +391,7 @@ func (m *Manager) handleHelp(ctx context.Context, sessionID, threadID int64) {
 	if sessionID == 0 {
 		lines = append(
 			lines,
-			"\n<i>/status, /stop, /clear, /compact, /model, /schedules, /budget work inside a session topic only.</i>",
+			"\n<i>/status, /stop, /shieldsup, /shieldsdown, /clear, /compact, /model, /schedules, /budget work inside a session topic only.</i>",
 		)
 	}
 

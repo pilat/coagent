@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/pilat/coagent/internal/controllerapi"
 	"github.com/pilat/coagent/internal/schedule"
 	"github.com/pilat/coagent/internal/session"
 	"github.com/pilat/coagent/internal/sessionstore"
@@ -60,7 +61,14 @@ func (b *boundary) Peek(ctx context.Context) (*session.PendingInput, error) {
 	return &session.PendingInput{
 		ID: input.ID, Content: input.RawContent,
 		Attributes: input.Attributes, ReceivedAt: input.ReceivedAt,
+		ManagerOwned: managerOwnedInput(input),
 	}, nil
+}
+
+func managerOwnedInput(input *sessionstore.InboxInput) bool {
+	owner, _ := input.Attributes[controllerapi.SessionAttributeManagerID].(string)
+
+	return input.Source == sessionstore.InputSourceUser && owner != ""
 }
 
 func (b *boundary) Accept(

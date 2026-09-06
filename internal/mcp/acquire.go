@@ -22,13 +22,9 @@ func AcquireForWorkDir(
 	servers map[string]ServerConfig,
 	workDir string,
 	provider shellenv.Provider,
-	runners ...procexec.Runner,
+	runner procexec.Runner,
 ) (Service, error) {
-	var runner procexec.Runner
-	if len(runners) > 0 {
-		runner = runners[0]
-	}
-	configs := stampWorkDir(servers, workDir, runner)
+	configs := stampWorkDir(servers, workDir, provider, runner)
 	if len(configs) == 0 {
 		return nil, nil
 	}
@@ -47,11 +43,12 @@ func AcquireForWorkDir(
 
 // stampWorkDir binds caller-supplied definitions to this session's workdir, which
 // is part of the pool's identity hash. Callers leave WorkDir empty.
-func stampWorkDir(servers map[string]ServerConfig, workDir string, runners ...procexec.Runner) map[string]ServerConfig {
-	var runner procexec.Runner
-	if len(runners) > 0 {
-		runner = runners[0]
-	}
+func stampWorkDir(
+	servers map[string]ServerConfig,
+	workDir string,
+	provider shellenv.Provider,
+	runner procexec.Runner,
+) map[string]ServerConfig {
 	configs := make(map[string]ServerConfig, len(servers))
 
 	for name, server := range servers {
@@ -61,6 +58,8 @@ func stampWorkDir(servers map[string]ServerConfig, workDir string, runners ...pr
 
 		server.WorkDir = workDir
 		server.runner = runner
+		server.provider = provider
+		server.providerSet = true
 		configs[name] = server
 	}
 

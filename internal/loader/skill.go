@@ -30,10 +30,10 @@ func (s *svc) LoadSkills(workDir string) error {
 	}
 
 	searchSources = append(searchSources,
-		sourceInfo{path: projectAgentsSkillsDir(workDir)},
-		sourceInfo{path: projectCoagentSkillsDir(workDir)},
-		sourceInfo{path: projectCommandsDir(workDir)},
-		sourceInfo{path: projectSkillsDir(workDir)},
+		sourceInfo{path: projectAgentsSkillsDir(workDir), project: true},
+		sourceInfo{path: projectCoagentSkillsDir(workDir), project: true},
+		sourceInfo{path: projectCommandsDir(workDir), project: true},
+		sourceInfo{path: projectSkillsDir(workDir), project: true},
 	)
 
 	// A broken source is skipped, not fatal: aborting the scan would silently drop
@@ -45,7 +45,7 @@ func (s *svc) LoadSkills(workDir string) error {
 			continue
 		}
 
-		err := s.loadSkillsFromPath(src.path, src.pluginName)
+		err := s.loadSkillsFromPath(src)
 		if err == nil || errors.Is(err, os.ErrNotExist) {
 			continue
 		}
@@ -56,20 +56,20 @@ func (s *svc) LoadSkills(workDir string) error {
 	return errors.Join(errs...)
 }
 
-func (s *svc) loadSkillsFromPath(searchPath, pluginName string) error {
-	entries, err := os.ReadDir(searchPath)
+func (s *svc) loadSkillsFromPath(source sourceInfo) error {
+	entries, err := s.readSourceDir(source.path, source.project)
 	if err != nil {
-		return fmt.Errorf("scan skill directory %s: %w", searchPath, err)
+		return fmt.Errorf("scan skill directory %s: %w", source.path, err)
 	}
 
 	for _, entry := range entries {
-		skill, skillName, ok := s.parseSkillEntry(searchPath, entry)
+		skill, skillName, ok := s.parseSkillEntry(source, entry)
 		if !ok {
 			continue
 		}
 
-		if pluginName != "" {
-			skillName = pluginName + ":" + skillName
+		if source.pluginName != "" {
+			skillName = source.pluginName + ":" + skillName
 		}
 
 		skill.Name = skillName
@@ -79,18 +79,18 @@ func (s *svc) loadSkillsFromPath(searchPath, pluginName string) error {
 	return nil
 }
 
-func (s *svc) parseSkillEntry(searchPath string, entry os.DirEntry) (*Skill, string, bool) {
+func (s *svc) parseSkillEntry(source sourceInfo, entry os.DirEntry) (*Skill, string, bool) {
 	isDir := entry.IsDir()
 	if entry.Type()&os.ModeSymlink != 0 {
-		if info, err := os.Stat(filepath.Join(searchPath, entry.Name())); err == nil {
+		if info, err := s.statSource(filepath.Join(source.path, entry.Name()), source.project); err == nil {
 			isDir = info.IsDir()
 		}
 	}
 
 	if isDir {
-		skillPath := filepath.Join(searchPath, entry.Name(), config.SkillFileName)
+		skillPath := filepath.Join(source.path, entry.Name(), config.SkillFileName)
 
-		skill, err := s.parseSkillFile(skillPath)
+		skill, err := s.parseSkillFile(skillPath, source.project)
 		if err != nil {
 			return nil, "", false
 		}
@@ -107,9 +107,9 @@ func (s *svc) parseSkillEntry(searchPath string, entry os.DirEntry) (*Skill, str
 		return nil, "", false
 	}
 
-	skillPath := filepath.Join(searchPath, entry.Name())
+	skillPath := filepath.Join(source.path, entry.Name())
 
-	skill, err := s.parseSkillFile(skillPath)
+	skill, err := s.parseSkillFile(skillPath, source.project)
 	if err != nil {
 		return nil, "", false
 	}
@@ -122,8 +122,8 @@ func (s *svc) parseSkillEntry(searchPath string, entry os.DirEntry) (*Skill, str
 	return skill, skillName, true
 }
 
-func (s *svc) parseSkillFile(path string) (*Skill, error) {
-	frontmatter, content, err := parseFrontmatterFile(path)
+func (s *svc) parseSkillFile(path string, project bool) (*Skill, error) {
+	frontmatter, content, err := s.parseSourceFrontmatter(path, project)
 	if err != nil {
 		return nil, err
 	}

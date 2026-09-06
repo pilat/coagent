@@ -24,6 +24,7 @@ LOG="$1"
 PONG="$2"
 RELEASE="$3"
 echo spawn >> "$LOG"
+trap 'echo exit >> "$LOG"' EXIT
 while IFS= read -r line; do
   id=$(printf '%s' "$line" | sed -n 's/.*"id":\([0-9]*\).*/\1/p')
   [ -n "$id" ] || continue

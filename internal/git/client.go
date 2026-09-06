@@ -70,10 +70,20 @@ func (c *client) Clone(ctx context.Context, repoURL, destPath string) error {
 	ctx, cancel := context.WithTimeout(ctx, gitTimeout)
 	defer cancel()
 
-	cmd, err := c.command(ctx, parentDir, nonInteractiveGitEnv(), "clone", "--depth", strconv.Itoa(CloneDepth), repoURL, destPath)
+	cmd, err := c.command(
+		ctx,
+		parentDir,
+		nonInteractiveGitEnv(),
+		"clone",
+		"--depth",
+		strconv.Itoa(CloneDepth),
+		repoURL,
+		destPath,
+	)
 	if err != nil {
 		return fmt.Errorf("construct git clone: %w", err)
 	}
+
 	cmd.WaitDelay = gitWaitDelay
 
 	output, err := cmd.CombinedOutput()
@@ -97,6 +107,7 @@ func (c *client) Pull(ctx context.Context, repoPath string) error {
 	if err != nil {
 		return fmt.Errorf("construct git pull: %w", err)
 	}
+
 	cmd.WaitDelay = gitWaitDelay
 
 	output, err := cmd.CombinedOutput()
@@ -139,6 +150,7 @@ func (c *client) HealthCheck(ctx context.Context, repoPath string) error {
 	if err != nil {
 		return fmt.Errorf("construct git fsck: %w", err)
 	}
+
 	cmd.WaitDelay = gitWaitDelay
 
 	output, err := cmd.CombinedOutput()
@@ -172,6 +184,7 @@ func (c *client) command(ctx context.Context, workDir string, env []string, args
 		cmd := exec.CommandContext(ctx, "git", args...)
 		cmd.Dir = workDir
 		cmd.Env = env
+
 		return cmd, nil
 	}
 

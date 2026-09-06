@@ -62,6 +62,7 @@ type Snapshot struct {
 	Waiting              []WaitingItem
 	ActiveSubagents      int
 	BackgroundSubagents  int
+	ShieldsUp            bool
 	Budget               *Budget
 	LastSemanticOutputAt *time.Time
 }

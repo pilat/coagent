@@ -33,6 +33,7 @@ import (
 	"github.com/pilat/coagent/internal/mcpstore"
 	"github.com/pilat/coagent/internal/memory"
 	"github.com/pilat/coagent/internal/migrate"
+	"github.com/pilat/coagent/internal/procexec"
 	"github.com/pilat/coagent/internal/schedule"
 	"github.com/pilat/coagent/internal/session"
 	"github.com/pilat/coagent/internal/sessionevent"
@@ -174,11 +175,17 @@ func resolvePendingApply(
 	}
 
 	log := logger.Named("main.apply")
-	log.Info("pending_apply_resolved",
+
+	fields := []zap.Field{
 		zap.Bool("applied", outcome.Verdict.Applied),
 		zap.Bool("rolled_back", outcome.RolledBack),
 		zap.Int64("session_id", outcome.Pending.SessionID),
-	)
+	}
+	if bootErr != nil {
+		fields = append(fields, zap.String("boot_error", logger.Redact(bootErr.Error())))
+	}
+
+	log.Info("pending_apply_resolved", fields...)
 
 	if !outcome.RolledBack {
 		return state, &outcome, bootErr
@@ -511,26 +518,10 @@ func startCore(
 	applier configapply.Service,
 ) (*core, error) {
 	gitClient := git.New()
-	marketplaceGitClient := gitClient
-	if cfg != nil && cfg.UnifiedConfig != nil && cfg.UnifiedConfig.Sandbox.Enabled {
-		marketplaceDir, err := coagenthome.Join(coagenthome.CacheDirName, coagenthome.MarketplacesDirName)
-		if err != nil {
-			return nil, fmt.Errorf("resolve marketplace cache directory: %w", err)
-		}
-		if err := os.MkdirAll(marketplaceDir, 0o700); err != nil {
-			return nil, fmt.Errorf("create marketplace cache directory: %w", err)
-		}
 
-		runner, err := bashsandbox.New(bashsandbox.Config{
-			Enabled:                     true,
-			WorkDir:                     marketplaceDir,
-			SessionKey:                  "marketplace",
-			ExcludeSessionWritableRoots: true,
-		}, nil)
-		if err != nil {
-			return nil, fmt.Errorf("create marketplace sandbox: %w", err)
-		}
-		marketplaceGitClient = git.NewSandboxed(runner)
+	marketplaceGitClient, err := newMarketplaceGitClient(ctx, cfg)
+	if err != nil {
+		return nil, err
 	}
 
 	provider := shellenv.New()
@@ -597,6 +588,34 @@ func startCore(
 		verdictSender:  daemonSvc,
 		secretResolver: daemonSvc,
 	}, nil
+}
+
+func newMarketplaceGitClient(_ context.Context, cfg *config.Config) (git.Client, error) {
+	if cfg == nil || cfg.UnifiedConfig == nil || !cfg.UnifiedConfig.Sandbox.Enabled {
+		return git.New(), nil
+	}
+
+	marketplaceDir, err := coagenthome.Join(coagenthome.CacheDirName, coagenthome.MarketplacesDirName)
+	if err != nil {
+		return nil, fmt.Errorf("resolve marketplace cache directory: %w", err)
+	}
+
+	if err := os.MkdirAll(marketplaceDir, 0o700); err != nil {
+		return nil, fmt.Errorf("create marketplace cache directory: %w", err)
+	}
+
+	//nolint:contextcheck // Sandbox preflight owns a bounded process-wide context.
+	runner, err := bashsandbox.New(bashsandbox.Config{
+		Enabled:                     true,
+		WorkDir:                     marketplaceDir,
+		SessionKey:                  "marketplace",
+		ExcludeSessionWritableRoots: true,
+	}, nil)
+	if err != nil {
+		return nil, fmt.Errorf("create marketplace sandbox: %w", err)
+	}
+
+	return git.NewSandboxed(procexec.Runner(runner)), nil
 }
 
 func acquireInstanceLock() (*ctl.Lock, error) {

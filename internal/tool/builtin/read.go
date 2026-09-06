@@ -13,6 +13,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/pilat/coagent/internal/logger"
+	"github.com/pilat/coagent/internal/safefile"
 	"github.com/pilat/coagent/internal/tool"
 )
 
@@ -44,10 +45,15 @@ type readParams struct {
 
 type readTool struct {
 	workDir string
+	access  safefile.Access
 }
 
 func newReadTool(workDir string) *readTool {
 	return &readTool{workDir: workDir}
+}
+
+func newReadToolWithAccess(workDir string, access safefile.Access) *readTool {
+	return &readTool{workDir: workDir, access: access}
 }
 
 func (t *readTool) ID() string          { return "read" }
@@ -84,6 +90,9 @@ func (t *readTool) Execute(ctx context.Context, params json.RawMessage) (*tool.R
 	}
 
 	filePath := resolvePath(t.workDir, p.FilePath)
+	if t.access != nil {
+		return t.executeOpened(ctx, p, log)
+	}
 
 	// Supported images route to the pixel branch ahead of binary rejection;
 	// offset/limit do not apply there. Stat first without opening: a FIFO must
@@ -119,8 +128,62 @@ func (t *readTool) Execute(ctx context.Context, params json.RawMessage) (*tool.R
 		Output: output,
 		Metadata: map[string]any{
 			"lines":          len(lines),
-			"total":          totalLines,
+			metaKeyTotal:     totalLines,
 			metaKeyTruncated: truncated,
+		},
+	}, nil
+}
+
+//nolint:wsl_v5 // The rooted handle remains stable across classification and scanning.
+func (t *readTool) executeOpened(
+	ctx context.Context,
+	p readParams,
+	log *zap.Logger,
+) (*tool.Result, error) {
+	resolved, err := t.access.Resolve(p.FilePath)
+	if err != nil {
+		return nil, fmt.Errorf("authorize read path: %w", err)
+	}
+	unlock := lockFileRead(resolved.Canonical)
+	defer unlock()
+
+	opened, err := t.access.Open(resolved.Canonical)
+	if err != nil {
+		return nil, fmt.Errorf("open authorized read path: %w", err)
+	}
+	defer func() { _ = opened.File.Close() }()
+
+	info, err := opened.File.Stat()
+	if err != nil {
+		return nil, fmt.Errorf("stat file: %w", err)
+	}
+	if !info.Mode().IsRegular() {
+		return nil, fmt.Errorf("not a regular file: %s", opened.Path.Display)
+	}
+	if mime := sniffImageMIMEFile(opened.File); mime != "" {
+		return t.readOpenedImage(ctx, opened, info, mime)
+	}
+	if isBinaryReader(opened.File, opened.Path.Canonical) {
+		return nil, fmt.Errorf("cannot read binary file: %s", opened.Path.Display)
+	}
+	if _, err := opened.File.Seek(0, 0); err != nil {
+		return nil, fmt.Errorf("rewind file: %w", err)
+	}
+
+	offset, limit := normalizeReadBounds(p.Offset, p.Limit)
+	lines, total, truncated, err := scanReader(opened.File, offset, limit)
+	if err != nil {
+		return nil, err
+	}
+	output := formatReadOutput(lines, offset, total, truncated)
+	title := relativeTitle(t.workDir, opened.Path.Display)
+
+	log.Debug("complete", zap.String("filePath", opened.Path.Display), zap.Int("linesRead", len(lines)))
+	return &tool.Result{
+		Title: title, Output: output,
+		Metadata: map[string]any{
+			"lines": len(lines), metaKeyTotal: total,
+			metaKeyTruncated: total > offset+len(lines) || truncated,
 		},
 	}, nil
 }
@@ -229,6 +292,10 @@ func (t *readTool) scanFile(
 
 	defer func() { _ = file.Close() }()
 
+	return scanReader(file, offset, limit)
+}
+
+func scanReader(file *os.File, offset, limit int) ([]string, int, bool, error) {
 	var bytesRead int
 	var lines []string
 	var totalLines int
@@ -308,6 +375,17 @@ func formatReadOutput(lines []string, offset, totalLines int, truncatedByBytes b
 
 // isBinaryFile checks if a file is binary by examining its contents.
 func isBinaryFile(path string) bool {
+	file, err := os.Open(path)
+	if err != nil {
+		return false
+	}
+
+	defer func() { _ = file.Close() }()
+
+	return isBinaryReader(file, path)
+}
+
+func isBinaryReader(file *os.File, path string) bool {
 	ext := strings.ToLower(filepath.Ext(path))
 	binaryExts := map[string]bool{
 		".zip": true, ".tar": true, ".gz": true, ".exe": true,
@@ -328,13 +406,6 @@ func isBinaryFile(path string) bool {
 	}
 
 	// Check first 4KB for null bytes or high ratio of non-printable chars
-	file, err := os.Open(path)
-	if err != nil {
-		return false
-	}
-
-	defer func() { _ = file.Close() }()
-
 	buf := make([]byte, 4096)
 
 	n, err := file.Read(buf)

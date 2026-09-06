@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -15,6 +16,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/pilat/coagent/internal/logger"
+	"github.com/pilat/coagent/internal/safefile"
 	"github.com/pilat/coagent/internal/tool"
 )
 
@@ -57,6 +59,7 @@ type grepParams struct {
 
 type grepTool struct {
 	workDir string
+	access  safefile.Access
 }
 
 type grepMatch struct {
@@ -68,6 +71,10 @@ type grepMatch struct {
 
 func newGrepTool(workDir string) *grepTool {
 	return &grepTool{workDir: workDir}
+}
+
+func newGrepToolWithAccess(workDir string, access safefile.Access) *grepTool {
+	return &grepTool{workDir: workDir, access: access}
 }
 
 func (t *grepTool) ID() string          { return "grep" }
@@ -187,6 +194,10 @@ func (t *grepTool) parseGrepParams(params json.RawMessage, log *zap.Logger) (gre
 }
 
 func (t *grepTool) resolveFiles(p grepParams) (string, []string, error) {
+	if t.access != nil && t.access.Scope() == safefile.ProjectConfined {
+		return t.resolveAccessFiles(p)
+	}
+
 	searchPath := p.Path
 	if searchPath == "" {
 		searchPath = t.workDir
@@ -225,6 +236,58 @@ func (t *grepTool) resolveFiles(p grepParams) (string, []string, error) {
 	return searchPath, files, nil
 }
 
+//nolint:wsl_v5 // Rooted traversal and pattern admission form one search plan.
+func (t *grepTool) resolveAccessFiles(p grepParams) (string, []string, error) {
+	name := p.Path
+	if name == "" {
+		name = "."
+	}
+	info, path, err := t.access.Stat(name)
+	if err != nil {
+		return "", nil, fmt.Errorf("authorize grep path: %w", err)
+	}
+	if !info.IsDir() {
+		if !info.Mode().IsRegular() {
+			return "", nil, fmt.Errorf("not a regular file: %s", path.Display)
+		}
+		return path.Display, []string{path.Display}, nil
+	}
+
+	pattern := "**/*"
+	if p.Glob != "" {
+		pattern = p.Glob
+	}
+	rooted, err := t.access.OpenRoot(path.Display)
+	if err != nil {
+		return "", nil, fmt.Errorf("open grep root: %w", err)
+	}
+	defer func() { _ = rooted.Root.Close() }()
+
+	var files []string
+	err = fs.WalkDir(rooted.Root.FS(), ".", func(name string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return nil //nolint:nilerr // An inaccessible symlinked subtree is skipped.
+		}
+		if name == "." || entry.IsDir() {
+			return nil
+		}
+		matched, err := doublestar.PathMatch(pattern, filepath.ToSlash(name))
+		if err != nil {
+			return fmt.Errorf("invalid glob pattern: %w", err)
+		}
+		if matched {
+			files = append(files, filepath.Join(path.Display, filepath.FromSlash(name)))
+		}
+		return nil
+	})
+	if err != nil {
+		return "", nil, fmt.Errorf("walk grep root: %w", err)
+	}
+
+	return path.Display, files, nil
+}
+
+//nolint:wsl_v5 // Per-file admission and bounded aggregation share one search pass.
 func (t *grepTool) searchFiles(files []string, re *regexp.Regexp, contextLines int) ([]grepMatch, []string, int) {
 	matches := make([]grepMatch, 0, len(files))
 	matchingFiles := make([]string, 0, len(files))
@@ -237,12 +300,18 @@ func (t *grepTool) searchFiles(files []string, re *regexp.Regexp, contextLines i
 
 		// !IsRegular covers dirs and FIFOs/devices/sockets — os.Open on a writer-less
 		// FIFO would block uncancelably in searchFile.
-		fileInfo, err := os.Stat(file)
+		var fileInfo fs.FileInfo
+		var err error
+		if t.access != nil && t.access.Scope() == safefile.ProjectConfined {
+			fileInfo, _, err = t.access.Stat(file)
+		} else {
+			fileInfo, err = os.Stat(file)
+		}
 		if err != nil || !fileInfo.Mode().IsRegular() || fileInfo.Size() > grepMaxFileSize {
 			continue
 		}
 
-		if isBinaryFile(file) {
+		if t.fileIsBinary(file) {
 			continue
 		}
 
@@ -264,6 +333,20 @@ func (t *grepTool) searchFiles(files []string, re *regexp.Regexp, contextLines i
 	}
 
 	return matches, matchingFiles, totalMatches
+}
+
+//nolint:wsl_v5 // Rooted handle lifetime covers the complete binary check.
+func (t *grepTool) fileIsBinary(path string) bool {
+	if t.access == nil || t.access.Scope() != safefile.ProjectConfined {
+		return isBinaryFile(path)
+	}
+	opened, err := t.access.Open(path)
+	if err != nil {
+		return true
+	}
+	defer func() { _ = opened.File.Close() }()
+
+	return isBinaryReader(opened.File, opened.Path.Canonical)
 }
 
 func buildGrepOutput(filesOnly bool, matches []grepMatch, matchingFiles []string, truncated bool) string {
@@ -313,14 +396,34 @@ func buildGrepOutput(filesOnly bool, matches []grepMatch, matchingFiles []string
 	return output.String()
 }
 
+//nolint:wsl_v5 // Rooted and host-readable paths converge on one scanner.
 func (t *grepTool) searchFile(path string, re *regexp.Regexp, contextLines, maxMatches int) []grepMatch {
-	file, err := os.Open(path)
+	var file *os.File
+	var err error
+	if t.access != nil && t.access.Scope() == safefile.ProjectConfined {
+		opened, openErr := t.access.Open(path)
+		if openErr != nil {
+			return nil
+		}
+		file = opened.File
+	} else {
+		file, err = os.Open(path)
+	}
 	if err != nil {
 		return nil
 	}
 
 	defer func() { _ = file.Close() }()
 
+	return searchReader(file, path, re, contextLines, maxMatches)
+}
+
+func searchReader(
+	file *os.File,
+	path string,
+	re *regexp.Regexp,
+	contextLines, maxMatches int,
+) []grepMatch {
 	var lines []string
 
 	scanner := bufio.NewScanner(file)

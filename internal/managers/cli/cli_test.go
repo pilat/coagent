@@ -73,6 +73,17 @@ func TestChatSend_FirstMessageCreatesTheSessionOnTheCLIChannel(t *testing.T) {
 	assert.Equal(t, controllerapi.CoagentSystemProjectName, h.ctrl.created[0].SystemProject)
 }
 
+func TestChatSend_ShieldsCommandRequiresExistingSession(t *testing.T) {
+	h := newHarness(t)
+	client := h.dial(t)
+	openChat(t, client)
+
+	err := client.Call(context.Background(), OpChatSend, SendParams{Text: "/shieldsup"}, nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "No active session for shields command.")
+	assert.Empty(t, h.ctrl.created)
+}
+
 func TestChatSend_FirstMessageUsesModelSelectedBeforeSessionExists(t *testing.T) {
 	h := newHarness(t)
 	c := h.dial(t)

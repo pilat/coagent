@@ -115,9 +115,11 @@ opinionated product, not an agent framework with a public plugin API.
 - **Coding tools:** Bash, file operations, unified patches, search, LSP code
   intelligence, web fetch, parallel batches, todos, and persistent per-project
   memory. Language servers are supplied by the project or user toolchain and
-  must be available on the activated project `PATH`.
+  must be available on the activated project `PATH` while shields are down or
+  on the inherited `PATH` within the fixed execution substrate while raised.
 - **MCP:** global and project-scoped servers stored in SQLite. Connections are
-  pooled across sessions and reaped after 30 minutes idle.
+  pooled per session process policy and reaped after 30 minutes idle; sessions
+  never share a live client or cached tool catalog.
 - **Skills and subagents:** project and user `SKILL.md` files, project-defined
   agent types, and opt-in git marketplaces. Tool restrictions are enforced by
   the registered tool set, but Bash remains a powerful escape hatch wherever a
@@ -143,17 +145,36 @@ What is enforced:
   children, so do not start it with unrelated credentials exported.
 - **Write confinement by default.** On supported Linux and macOS systems, Bash
   descendants, LSP and stdio MCP processes, and dedicated file-mutation tools
-  are restricted to the workspace and explicit writable paths using Bubblewrap
+  are restricted to the project and explicit writable paths using Bubblewrap
   or Seatbelt. Startup fails if the enabled backend cannot enforce the policy.
+- **Operator-controlled session shields.** `/shieldsup` durably confines the
+  complete session tree's built-in file tools and session-owned processes to
+  its project, apart from a fixed read-only system runtime needed to start
+  ordinary commands.
+  Subagents inherit the state, `/clear` preserves it, and every progress card
+  plus `/status` shows the shield while it is raised. `/shieldsdown` restores
+  ordinary host-readable behavior when the complete tree is idle.
 - **Configuration fails closed.** Unknown YAML keys, missing secret references,
   and catalog-unknown models are errors rather than silent fallbacks.
 
 What is not enforced:
 
-- The write sandbox is **not** a confidentiality boundary. Read
-  tools and Bash can read anything available to the daemon user, including the
-  secrets file. Bash network egress is unrestricted. Set `sandbox.enabled: false`
-  to disable write confinement explicitly.
+- With shields down, the write sandbox is **not** a confidentiality boundary.
+  Read tools and session processes can read anything available to the daemon
+  user. Set `sandbox.enabled: false` to disable write confinement explicitly;
+  shields cannot be raised while it is disabled.
+- Raised shields restrict host filesystem access, not network egress, inherited
+  environment variables, or use of data already inside the project or model
+  history. The read-only command runtime includes resolver, host-name, account,
+  loader, and certificate data needed by system tools. Bash can still make
+  arbitrary remote requests, and built-in web tools retain their existing
+  network behavior.
+- On macOS, Seatbelt requires reading the exact filesystem root directory while
+  launching a confined process. Its top-level names remain enumerable, while
+  data and metadata below non-runtime roots remain denied.
+- Global and marketplace instruction sources remain trusted daemon inputs and
+  are read outside the project boundary. Project-local instructions, skills,
+  and subagent definitions use the same rooted project access as file tools.
 - Network and Unix-socket effects are outside the filesystem write sandbox.
 - Web fetch blocks link-local and cloud metadata destinations, but deliberately
   permits loopback and private networks. It is a targeted mitigation, not a
@@ -200,8 +221,17 @@ sandbox:
 The sandbox is enabled when `sandbox.enabled` is omitted; set it to `false` to
 disable write confinement explicitly.
 
-The workspace, system temporary directory, and an existing user cache directory
+The project, system temporary directory, and an existing user cache directory
 are writable by default. Add language- or package-manager caches explicitly.
+
+Session shields are runtime state, not configuration. Send `/shieldsup` inside
+an existing session to confine its root and current or future subagents to the
+canonical project. The first version supplies no writable or private `/tmp`,
+ignores configured writable paths while raised, bypasses shell activation, and
+does not expose linked-worktree Git metadata stored outside the project.
+Commands whose complete runtime is in the fixed system substrate continue to
+work; other user toolchains fail normally instead of widening the boundary.
+Send `/shieldsdown` while the tree is idle to restore the ordinary read policy.
 
 ### Web search
 
@@ -245,17 +275,21 @@ native injection — while configured MCP search tools coexist alongside it.
 
 ## Know before you run
 
-- Linux and macOS are supported. Enabling the sandbox elsewhere fails loudly.
+- Linux requires Bubblewrap; macOS uses its built-in Seatbelt runtime. Enabling
+  the sandbox without its platform runtime, or on another OS, fails loudly.
 - The first model-catalog lookup needs network access. Later starts try the
   network again but can fall back to the last valid disk snapshot. Arbitrary
   local model IDs need a matching catalog entry.
 - The local terminal chat uses its own persistent dialog project. Repository
   selection lives in Telegram, where `/gwt <name>` inside a session topic forks
   that repository into a fresh worktree branched off its remote default branch.
-- Shell environment activation is Bash-based. zsh and fish users can still run
-  coagent, but do not get automatic per-directory mise/asdf/nvm/direnv capture.
+- Shell environment activation is Bash-based and applies only while shields are
+  down. zsh and fish users can still run coagent, but do not get automatic
+  per-directory mise/asdf/nvm/direnv capture.
 - Language servers are user- or project-owned. Coagent discovers them through
-  the project's activated shell PATH and never downloads or installs them.
+  the project's activated shell PATH while shields are down. Raised sessions
+  bypass activation and admit only inherited-PATH executables inside the project
+  or fixed execution substrate. Coagent never downloads or installs them.
 - Config, storage schema, and internal manager contracts may still change before
   1.0. Database migrations are automatic and forward-only.
 
@@ -270,8 +304,9 @@ coagent daemon install  install and start the service
 coagent daemon uninstall|start|stop|restart
 ```
 
-Inside a Telegram session, `/status`, `/stop`, `/clear`, `/compact`, `/model`,
-and `/schedules` are control commands and do not become model instructions.
+Inside a Telegram session, `/status`, `/stop`, `/shieldsup`, `/shieldsdown`,
+`/clear`, `/compact`, `/model`, and `/schedules` are control commands and do not
+become model instructions.
 
 ## Development
 

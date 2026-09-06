@@ -13,6 +13,7 @@ import (
 
 	"github.com/pilat/coagent/internal/logger"
 	"github.com/pilat/coagent/internal/lsp"
+	"github.com/pilat/coagent/internal/safefile"
 	"github.com/pilat/coagent/internal/tool"
 )
 
@@ -45,6 +46,16 @@ type editTool struct {
 	workDir string
 	lspMgr  lsp.Manager
 	mutator fileMutator
+	access  safefile.Access
+}
+
+func newEditToolWithAccess(
+	workDir string,
+	access safefile.Access,
+	lspMgr lsp.Manager,
+	mutator fileMutator,
+) *editTool {
+	return &editTool{workDir: workDir, access: access, lspMgr: lspMgr, mutator: mutator}
 }
 
 func newEditTool(workDir string, lspMgr lsp.Manager, mutator fileMutator) *editTool {
@@ -88,7 +99,10 @@ func (t *editTool) Execute(ctx context.Context, params json.RawMessage) (*tool.R
 		return nil, err
 	}
 
-	filePath := resolvePath(t.workDir, p.FilePath)
+	filePath, err := resolveAccessTarget(t.access, t.workDir, p.FilePath)
+	if err != nil {
+		return nil, err
+	}
 
 	newContent, finalRanges, hasReplaceAll, err := t.applyEdit(ctx, filePath, p)
 	if err != nil {
@@ -149,13 +163,13 @@ func (t *editTool) applyEdit(
 	unlock := lockFileWrite(filePath)
 	defer unlock()
 
-	if err := rejectNonRegular(filePath); err != nil {
+	if err := rejectNonRegularAccess(t.access, filePath); err != nil {
 		return "", nil, false, err
 	}
 
-	content, err := os.ReadFile(filePath)
+	content, err := readAccessFile(t.access, filePath)
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, os.ErrNotExist) {
 			return "", nil, false, fmt.Errorf("file not found: %s", filePath)
 		}
 

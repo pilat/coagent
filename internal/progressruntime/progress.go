@@ -103,6 +103,7 @@ func (r *runtime) progressSnapshot(
 		LatestModelProgress:  facts.LatestModelProgress,
 		LastSemanticOutputAt: facts.LastSemanticOutputAt,
 		ActiveSubagents:      facts.ActiveSubagents, BackgroundSubagents: facts.BackgroundSubagents,
+		ShieldsUp: facts.ShieldsUp,
 	}
 	if r.hasActiveLoop(facts.RootID) {
 		snapshot.RuntimeState = "running"

@@ -78,10 +78,12 @@ type LegacyCLIPreparer interface {
 }
 
 const (
-	stopCommand    = "/stop"
-	clearCommand   = "/clear"
-	killCommand    = "/kill"
-	compactCommand = "/compact"
+	stopCommand        = "/stop"
+	clearCommand       = "/clear"
+	killCommand        = "/kill"
+	compactCommand     = "/compact"
+	shieldsUpCommand   = "/shieldsup"
+	shieldsDownCommand = "/shieldsdown"
 )
 
 var (
@@ -132,6 +134,13 @@ type svc struct {
 	budgetCtx          context.Context //nolint:containedctx // Daemon lifetime context for joined park workers.
 	budgetCancel       context.CancelFunc
 	budgetWG           sync.WaitGroup
+	sandboxEnabled     bool
+	treeStore          sessionstore.OrchestrationStore
+	treeLocks          sync.Map
+	// Tree locks precede routeMu, processPolicyMu, and childMu; never acquire a
+	// tree lock while holding one of those narrower locks.
+	processPolicyMu sync.Mutex
+	processPolicies map[int64]map[string]struct{}
 	// routeMu linearizes owner claims with replacement-session creation. The
 	// daemon is single-instance, so this is the ownership CAS boundary.
 	routeMu sync.Mutex
@@ -214,6 +223,7 @@ func New(
 	s.mcpPool = mcpPool
 	s.applier = applier
 	s.searchUnconfigured = searchUnconfigured(cfg.UnifiedConfig)
+	s.sandboxEnabled = cfg.UnifiedConfig != nil && cfg.UnifiedConfig.Sandbox.Enabled
 
 	if cfg.UnifiedConfig != nil {
 		s.loadModelCatalog(cfg.UnifiedConfig.Models)
@@ -245,6 +255,7 @@ func newSvc(
 		factory:        factory,
 		store:          store,
 		sessionStore:   sessionStore,
+		treeStore:      sessionStore,
 		inboxStore:     inboxStore,
 		runtimeStore:   runtimeStore,
 		managerOutputs: managerOutputs,
@@ -265,13 +276,14 @@ func newSvc(
 		stopper: sessionlifecycle.NewStopper(
 			sessionStore, lifecycleStore, managerOutputs, links,
 		),
-		pubsub:         sessionbus.New(),
-		defaultModelFn: defaultModelFn,
-		childCache:     make(map[int64]bool),
-		ownerCache:     make(map[int64]string),
-		deferNotices:   newDeferAnnouncements(),
-		budgetCtx:      budgetCtx,
-		budgetCancel:   budgetCancel,
+		pubsub:          sessionbus.New(),
+		defaultModelFn:  defaultModelFn,
+		childCache:      make(map[int64]bool),
+		ownerCache:      make(map[int64]string),
+		deferNotices:    newDeferAnnouncements(),
+		processPolicies: make(map[int64]map[string]struct{}),
+		budgetCtx:       budgetCtx,
+		budgetCancel:    budgetCancel,
 	}
 	s.progress = newProgressRuntime(progressStore, budgetSvc, s)
 	s.completions = s.newCompletionCoordinator()
@@ -398,7 +410,7 @@ func isExactControlCommand(content string) bool {
 	content = strings.TrimSpace(content)
 
 	return isReadOnlyBoundaryCommand(content) || content == stopCommand || content == clearCommand ||
-		content == killCommand
+		content == killCommand || content == shieldsUpCommand || content == shieldsDownCommand
 }
 
 //nolint:funcorder // Command dispatch remains beside durable input admission and lifecycle fencing.
@@ -411,9 +423,24 @@ func (s *svc) handleGenericCommand(ctx context.Context, input *sessionstore.Inbo
 		return true, s.handleStatusInput(ctx, input)
 	}
 
+	content := strings.TrimSpace(input.RawContent)
+	if content == shieldsUpCommand || content == shieldsDownCommand {
+		if owner, _ := input.Attributes[controllerapi.SessionAttributeManagerID].(string); owner == "" {
+			return false, nil
+		}
+
+		return true, s.handlePendingShieldCommands(context.WithoutCancel(ctx), input.SessionID)
+	}
+
 	if input.RawContent != stopCommand && input.RawContent != clearCommand && input.RawContent != killCommand {
 		return false, nil
 	}
+
+	unlock, err := s.lockSessionTree(ctx, input.SessionID)
+	if err != nil {
+		return true, err
+	}
+	defer unlock()
 
 	switch input.RawContent {
 	case stopCommand:
@@ -430,9 +457,9 @@ func (s *svc) handleGenericCommand(ctx context.Context, input *sessionstore.Inbo
 			return true, err
 		}
 
-		return true, s.Stop(ctx, input.SessionID, input.ID)
+		return true, s.stopLocked(ctx, input.SessionID, input.ID)
 	case clearCommand:
-		if _, err := s.clear(ctx, input.SessionID, input.ID); err != nil {
+		if _, err := s.clearLocked(ctx, input.SessionID, input.ID); err != nil {
 			return true, err
 		}
 
@@ -442,9 +469,98 @@ func (s *svc) handleGenericCommand(ctx context.Context, input *sessionstore.Inbo
 			return true, err
 		}
 
-		return true, s.Kill(ctx, input.SessionID)
+		return true, s.killLocked(ctx, input.SessionID)
 	default:
 		return false, nil
+	}
+}
+
+//nolint:funcorder // Shield dispatch stays beside the generic command boundary.
+func (s *svc) handlePendingShieldCommands(ctx context.Context, sessionID int64) error {
+	unlock, err := s.lockSessionTree(ctx, sessionID)
+	if err != nil {
+		return err
+	}
+	defer unlock()
+
+	return s.handlePendingShieldCommandsLocked(ctx, sessionID, false)
+}
+
+//nolint:funcorder,wsl_v5 // Ordered shield commands share one tree-locked protocol.
+func (s *svc) handlePendingShieldCommandsLocked(ctx context.Context, sessionID int64, forceActive bool) error {
+	inputs, err := s.inboxStore.ListPendingShieldCommands(ctx, sessionID)
+	if err != nil {
+		return fmt.Errorf("list pending shield commands: %w", err)
+	}
+
+	var activeRaise *sessionstore.ShieldRaise
+
+drain:
+	for _, input := range inputs {
+		active := forceActive || s.treeHasActiveLoop(ctx, sessionID)
+		switch strings.TrimSpace(input.RawContent) {
+		case shieldsUpCommand:
+			raise, commit, err := s.lifecycleStore.BeginShieldRaise(
+				ctx, input.ID, active, s.sandboxEnabled,
+			)
+			if err != nil {
+				return fmt.Errorf("begin shield raise: %w", err)
+			}
+			s.wakeShieldOutput(ctx, commit)
+			if !raise.Changed {
+				continue
+			}
+			if raise.NeedsStop {
+				activeRaise = raise
+				break drain
+			}
+			if err := s.retireShieldPolicy(ctx, raise.RootID); err != nil {
+				return err
+			}
+			completed, err := s.lifecycleStore.CompleteShieldRaise(ctx, raise.RootID, raise.InputID)
+			if err != nil {
+				return fmt.Errorf("complete idle shield raise: %w", err)
+			}
+			s.wakeShieldOutput(ctx, completed)
+		case shieldsDownCommand:
+			commit, err := s.lifecycleStore.ResolveShieldDown(ctx, input.ID, active)
+			if err != nil {
+				return fmt.Errorf("resolve shield lowering: %w", err)
+			}
+			s.wakeShieldOutput(ctx, commit)
+		}
+	}
+
+	if activeRaise == nil {
+		return nil
+	}
+	if err := s.stopTreeCleanup(ctx, activeRaise.RootID, stopTreeOptions{
+		keepRootStopping: true, preserveShieldCommands: true,
+	}); err != nil {
+		return fmt.Errorf("park tree for shield raise: %w", err)
+	}
+	if err := s.retireShieldPolicy(ctx, activeRaise.RootID); err != nil {
+		return err
+	}
+	completed, err := s.lifecycleStore.CompleteShieldRaise(ctx, activeRaise.RootID, activeRaise.InputID)
+	if err != nil {
+		return fmt.Errorf("complete active shield raise: %w", err)
+	}
+	s.wakeShieldOutput(ctx, completed)
+
+	return s.handlePendingShieldCommandsLocked(ctx, sessionID, false)
+}
+
+//nolint:funcorder // Shield delivery stays beside the command transaction.
+func (s *svc) wakeShieldOutput(ctx context.Context, commit *sessionstore.OutputCommit) {
+	if commit == nil || commit.OwnerID == "" || s.managerOutputs == nil {
+		return
+	}
+
+	if _, err := s.managerOutputs.WakeOutputHead(ctx, commit.OwnerID); err != nil {
+		logger.Ctx(ctx).Named("daemon.shields").Warn(
+			"wake_output_failed", zap.String("owner_id", commit.OwnerID), zap.Error(err),
+		)
 	}
 }
 
@@ -616,6 +732,17 @@ func (s *svc) HasActiveLoop(sessionID int64) bool {
 }
 
 func (s *svc) Kill(ctx context.Context, sessionID int64) error {
+	unlock, err := s.lockSessionTree(ctx, sessionID)
+	if err != nil {
+		return err
+	}
+	defer unlock()
+
+	return s.killLocked(ctx, sessionID)
+}
+
+//nolint:funcorder // Public lifecycle methods delegate into the shared tree lock.
+func (s *svc) killLocked(ctx context.Context, sessionID int64) error {
 	rs, ok := s.runners.Load(sessionID)
 
 	if ok {
@@ -682,6 +809,17 @@ func (s *svc) Kill(ctx context.Context, sessionID int64) error {
 // the budget release and the final stopped status. A failure before that
 // commit leaves the root stopping and publishes no success.
 func (s *svc) Stop(ctx context.Context, sessionID, inputID int64) error {
+	unlock, err := s.lockSessionTree(ctx, sessionID)
+	if err != nil {
+		return err
+	}
+	defer unlock()
+
+	return s.stopLocked(ctx, sessionID, inputID)
+}
+
+//nolint:funcorder // Public lifecycle methods delegate into the shared tree lock.
+func (s *svc) stopLocked(ctx context.Context, sessionID, inputID int64) error {
 	record, getErr := s.sessionStore.GetSession(ctx, sessionID)
 	if getErr != nil {
 		// Fail closed: an unread session must not be classified as ownerless,
@@ -701,7 +839,7 @@ func (s *svc) Stop(ctx context.Context, sessionID, inputID int64) error {
 		})
 	}
 
-	if err := s.stopTreeCleanup(ctx, sessionID, explicit); err != nil {
+	if err := s.stopTreeCleanup(ctx, sessionID, stopTreeOptions{keepRootStopping: explicit}); err != nil {
 		return err
 	}
 
@@ -761,12 +899,20 @@ func (s *svc) completeExplicitStop(ctx context.Context, rootID, inputID int64) e
 // without replaying UI. With keepRootStopping the explicit root stays in its
 // stopping fence: the caller owns the single terminal transaction that moves it
 // to `stopped` together with the visible completion output.
-//
-//nolint:funcorder // The second stop phase belongs beside the public Stop transition.
-func (s *svc) stopTreeCleanup(ctx context.Context, sessionID int64, keepRootStopping bool) error {
+type stopTreeOptions struct {
+	keepRootStopping       bool
+	preserveShieldCommands bool
+}
+
+//nolint:funcorder,wsl_v5 // The second stop phase belongs beside the public Stop transition.
+func (s *svc) stopTreeCleanup(ctx context.Context, sessionID int64, options stopTreeOptions) error {
 	cleanupCtx := context.WithoutCancel(ctx)
 
-	plan, err := s.stopper.Begin(cleanupCtx, sessionID)
+	liveSessionIDs, err := s.liveTreeRunnerIDs(cleanupCtx, sessionID)
+	if err != nil {
+		return err
+	}
+	plan, err := s.stopper.Begin(cleanupCtx, sessionID, liveSessionIDs)
 	if err != nil {
 		return fmt.Errorf("begin stop tree: %w", err)
 	}
@@ -794,7 +940,13 @@ func (s *svc) stopTreeCleanup(ctx context.Context, sessionID int64, keepRootStop
 		<-rs.Done()
 	}
 
-	if err := s.stopper.CancelInputs(cleanupCtx, plan); err != nil {
+	if options.preserveShieldCommands {
+		if _, err := s.lifecycleStore.CancelPendingInputsPreservingShieldCommands(
+			cleanupCtx, ids, "stopped",
+		); err != nil {
+			return fmt.Errorf("cancel stopped inputs while preserving shield commands: %w", err)
+		}
+	} else if err := s.stopper.CancelInputs(cleanupCtx, plan); err != nil {
 		return fmt.Errorf("cancel stopped inputs: %w", err)
 	}
 
@@ -813,7 +965,31 @@ func (s *svc) stopTreeCleanup(ctx context.Context, sessionID int64, keepRootStop
 		}
 	}
 
-	return s.stopper.Finish(cleanupCtx, plan, keepRootStopping) //nolint:wrapcheck // Stopper owns phase context.
+	if err := s.stopper.Finish(cleanupCtx, plan, options.keepRootStopping); err != nil {
+		return fmt.Errorf("finish stop tree: %w", err)
+	}
+
+	return nil
+}
+
+//nolint:funcorder,wsl_v5 // Runner discovery must immediately precede stop planning.
+func (s *svc) liveTreeRunnerIDs(ctx context.Context, rootID int64) ([]int64, error) {
+	records, err := s.sessionStore.ListAllSessions(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list live tree runners: %w", err)
+	}
+
+	var ids []int64
+	for _, record := range records {
+		if record.ID != rootID && record.RootID != rootID {
+			continue
+		}
+		if _, ok := s.runners.Load(record.ID); ok {
+			ids = append(ids, record.ID)
+		}
+	}
+
+	return ids, nil
 }
 
 func (s *svc) Clear(ctx context.Context, sessionID int64) (int64, error) {
@@ -822,6 +998,17 @@ func (s *svc) Clear(ctx context.Context, sessionID int64) (int64, error) {
 
 //nolint:funcorder // Clear's command variant shares one replacement transaction with Clear.
 func (s *svc) clear(ctx context.Context, sessionID, inputID int64) (int64, error) {
+	unlock, err := s.lockSessionTree(ctx, sessionID)
+	if err != nil {
+		return 0, err
+	}
+	defer unlock()
+
+	return s.clearLocked(ctx, sessionID, inputID)
+}
+
+//nolint:funcorder // Public lifecycle methods delegate into the shared tree lock.
+func (s *svc) clearLocked(ctx context.Context, sessionID, inputID int64) (int64, error) {
 	log := logger.Ctx(ctx).Named("manager.clear")
 
 	s.routeMu.Lock()
@@ -853,15 +1040,7 @@ func (s *svc) clear(ctx context.Context, sessionID, inputID int64) (int64, error
 			return 0, fmt.Errorf("replace manager session: %w", err)
 		}
 	} else {
-		if err := s.sessionStore.UpdateSessionStatus(
-			ctx,
-			sessionID,
-			sessionstore.SessionStatusTerminating,
-		); err != nil {
-			log.Warn("clear_set_terminating_failed", zap.Int64("session_id", sessionID), zap.Error(err))
-		}
-
-		newRec, err = s.sessionStore.CreateSession(ctx, rec.ProjectID, rec.Model, rec.ReasoningLevel, rec.Attributes)
+		newRec, err = s.sessionStore.CreateReplacementSession(ctx, sessionID)
 		if err != nil {
 			return 0, fmt.Errorf("create replacement session: %w", err)
 		}
@@ -877,7 +1056,7 @@ func (s *svc) clear(ctx context.Context, sessionID, inputID int64) (int64, error
 		Attributes:   rec.Attributes,
 	})
 
-	if err := s.Kill(ctx, sessionID); err != nil {
+	if err := s.killLocked(ctx, sessionID); err != nil {
 		log.Warn("clear_kill_old_session_failed", zap.Int64("session_id", sessionID), zap.Error(err))
 	}
 

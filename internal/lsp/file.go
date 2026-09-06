@@ -7,11 +7,29 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/pilat/coagent/internal/safefile"
 )
 
 type fileIdentity struct {
 	path string
 	uri  string
+}
+
+//nolint:wsl_v5 // Rooted resolution precedes URI construction as one trust boundary.
+func (m *manager) resolveFile(workDir, file string) (fileIdentity, error) {
+	if m.access == nil || m.access.Scope() != safefile.ProjectConfined {
+		return resolveFile(workDir, file)
+	}
+	if file == "" {
+		return fileIdentity{}, errors.New("empty file path")
+	}
+	path, err := m.access.Resolve(file)
+	if err != nil {
+		return fileIdentity{}, fmt.Errorf("authorize LSP file: %w", err)
+	}
+
+	return fileIdentity{path: path.Canonical, uri: fileURI(path.Canonical)}, nil
 }
 
 func resolveFile(workDir, file string) (fileIdentity, error) {

@@ -17,6 +17,7 @@ import (
 
 	"github.com/pilat/coagent/internal/config"
 	"github.com/pilat/coagent/internal/llmwire"
+	"github.com/pilat/coagent/internal/safefile"
 )
 
 // The matrix constructs a real client for every registered driver name, so the
@@ -132,6 +133,33 @@ func TestDriverMatrix_ImageInToolRoleContent(t *testing.T) {
 			assert.NotContains(t, raw, llmwire.ImagePlaceholder(llmwire.ImageOmitReasonNoVision),
 				"%s: no degradation on a vision-capable catalog", tt.driver)
 		})
+	}
+}
+
+func TestDriverMatrix_RootedAuthorityNeverReachesProviderWire(t *testing.T) {
+	project := t.TempDir()
+	pngPath := filepath.Join(project, "coagent-x.png")
+	png := []byte{0x89, 'P', 'N', 'G', 0x0d, 0x0a, 0x1a, 0x0a}
+	require.NoError(t, os.WriteFile(pngPath, png, 0o600))
+	access, err := safefile.New(project, safefile.ProjectConfined)
+	require.NoError(t, err)
+	path, err := access.Resolve(pngPath)
+	require.NoError(t, err)
+	require.NoError(t, access.Close())
+	messages := imageConversation(pngPath)
+	messages[2].Images[0].Path = path.Canonical
+	messages[2].Images[0].ReadRoot = path.ReadRoot
+	messages[2].Images[0].ReadRootID = path.ReadRootID
+	vision := config.ModelEntry{
+		ID: "vision-model", MaxTokens: 1024, ContextWindow: 100000,
+		InputModalities: []string{"text", "image"},
+	}
+
+	for _, driver := range []string{driverAnthropic, driverOpenAI, driverGoogleSA, driverOpenRouter} {
+		raw := serializeChatBody(t, newMatrixClient(t, driver, vision), messages)
+		assert.NotContains(t, raw, "read_root")
+		assert.NotContains(t, raw, path.ReadRootID)
+		assert.Contains(t, raw, base64.StdEncoding.EncodeToString(png))
 	}
 }
 

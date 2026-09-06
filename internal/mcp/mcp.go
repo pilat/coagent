@@ -45,12 +45,7 @@ type svc struct {
 
 // New creates a new MCP manager. provider (may be nil) routes each server spawn
 // through workDir shell activation.
-func New(workDir string, provider shellenv.Provider, runners ...procexec.Runner) Service {
-	var runner procexec.Runner
-	if len(runners) > 0 {
-		runner = runners[0]
-	}
-
+func New(workDir string, provider shellenv.Provider, runner procexec.Runner) Service {
 	return &svc{
 		clients:  make(map[string]*Client),
 		workDir:  workDir,

@@ -21,6 +21,7 @@ import (
 )
 
 const (
+	bashExecutable       = "bash"
 	preflightOutputLimit = 8 * 1024
 	preflightTimeout     = 3 * time.Second
 )
@@ -36,7 +37,9 @@ var enforcement struct {
 type Config struct {
 	Enabled                     bool
 	WorkDir                     string
+	CanonicalWorkDir            string
 	SessionKey                  string
+	ReadScope                   ReadScope
 	ExcludeSessionWritableRoots bool
 	WritablePaths               []string
 }
@@ -57,6 +60,7 @@ type Runner interface {
 	// WritableRoots reports the normalized filesystem roots the sandbox allows
 	// writes under; nil when confinement is disabled.
 	WritableRoots() []string
+	ReadScope() ReadScope
 }
 
 var _ Runner = disabledRunner{}
@@ -67,50 +71,50 @@ type providerAware interface {
 	setProvider(p shellenv.Provider)
 }
 
-type runnerFactory func(writableRoots []string) (Runner, error)
+type runnerFactory func(policy processPolicy) (Runner, error)
 
 type limitedBuffer struct {
 	buffer bytes.Buffer
 }
 
+type shieldProbeFixture struct {
+	base    string
+	project string
+	denied  string
+	secret  string
+}
+
+type environmentEntry struct {
+	name  string
+	value string
+	raw   string
+}
+
 type disabledRunner struct {
-	provider shellenv.Provider
+	provider  shellenv.Provider
+	policyKey string
 }
 
 // New constructs a Bash command runner. provider may be nil: ShellCommand then
 // degrades to plain `bash -c`.
 func New(cfg Config, provider shellenv.Provider) (Runner, error) {
 	if !cfg.Enabled {
-		return disabledRunner{provider: provider}, nil
+		return disabledRunner{
+			provider:  provider,
+			policyKey: policyKey(nil, fmt.Sprintf("%d:%s", cfg.ReadScope, cfg.SessionKey)),
+		}, nil
 	}
 
-	paths := make([]string, 0, len(cfg.WritablePaths)+4)
-	paths = append(paths, cfg.WorkDir)
-	if !cfg.ExcludeSessionWritableRoots {
-		paths = append(paths, os.TempDir(), "/tmp")
-
-		cacheDir, err := existingUserCacheDir()
-		if err != nil {
-			return nil, fmt.Errorf("resolve user cache directory: %w", err)
-		}
-
-		if cacheDir != "" {
-			paths = append(paths, cacheDir)
-		}
-	}
-
-	paths = append(paths, cfg.WritablePaths...)
-
-	writableRoots, err := normalizeWritableRoots(paths)
+	policy, err := preparePolicy(cfg)
 	if err != nil {
-		return nil, fmt.Errorf("normalize Bash sandbox writable roots: %w", err)
+		return nil, err
 	}
 
 	if err := Probe(); err != nil {
 		return nil, err
 	}
 
-	runner, err := newEnabledRunner(writableRoots, cfg.SessionKey)
+	runner, err := newEnabledRunner(policy)
 	if err != nil {
 		return nil, fmt.Errorf("create Bash sandbox runner: %w", err)
 	}
@@ -122,6 +126,40 @@ func New(cfg Config, provider shellenv.Provider) (Runner, error) {
 	return runner, nil
 }
 
+//nolint:wsl_v5 // Writable-root normalization is intentionally one fail-closed pipeline.
+func preparePolicy(cfg Config) (processPolicy, error) {
+	paths := make([]string, 0, len(cfg.WritablePaths)+4)
+	paths = append(paths, cfg.WorkDir)
+	if cfg.ReadScope == HostReadable && !cfg.ExcludeSessionWritableRoots {
+		paths = append(paths, os.TempDir(), "/tmp")
+
+		cacheDir, err := existingUserCacheDir()
+		if err != nil {
+			return processPolicy{}, fmt.Errorf("resolve user cache directory: %w", err)
+		}
+
+		if cacheDir != "" {
+			paths = append(paths, cacheDir)
+		}
+	}
+
+	if cfg.ReadScope == HostReadable {
+		paths = append(paths, cfg.WritablePaths...)
+	}
+
+	writableRoots, err := normalizeWritableRoots(paths)
+	if err != nil {
+		return processPolicy{}, fmt.Errorf("normalize Bash sandbox writable roots: %w", err)
+	}
+
+	policy, err := buildProcessPolicy(cfg, writableRoots)
+	if err != nil {
+		return processPolicy{}, fmt.Errorf("build Bash sandbox policy: %w", err)
+	}
+
+	return policy, nil
+}
+
 // Probe verifies that the platform backend actually confines writes: a write
 // inside a writable root must succeed, one outside must fail and leave no file.
 // It runs at most once per process — New calls it lazily, main calls it at
@@ -129,9 +167,10 @@ func New(cfg Config, provider shellenv.Provider) (Runner, error) {
 // first session.
 func Probe() error {
 	enforcement.once.Do(func() {
-		enforcement.err = probeEnforcement(func(roots []string) (Runner, error) {
-			return newEnabledRunner(roots)
-		})
+		enforcement.err = probeEnforcement(newEnabledRunner)
+		if enforcement.err == nil {
+			enforcement.err = probeShieldEnforcement(newEnabledRunner)
+		}
 	})
 
 	return enforcement.err
@@ -147,7 +186,7 @@ func (r disabledRunner) Command(ctx context.Context, request procexec.Request) (
 
 func (r disabledRunner) BashCommand(ctx context.Context, command, workDir string, args ...string) (*exec.Cmd, error) {
 	return r.Command(ctx, procexec.Request{
-		Path:    "bash",
+		Path:    bashExecutable,
 		Args:    append([]string{"-c", command}, args...),
 		WorkDir: workDir,
 	})
@@ -167,7 +206,8 @@ func (r disabledRunner) ShellCommand(ctx context.Context, command, workDir strin
 }
 
 func (disabledRunner) WritableRoots() []string { return nil }
-func (disabledRunner) PolicyKey() string       { return "unconfined" }
+func (r disabledRunner) PolicyKey() string     { return r.policyKey }
+func (disabledRunner) ReadScope() ReadScope    { return HostReadable }
 
 // snapshotFor resolves the shell and snapshot path for workDir, or ("", "") when
 // snapshotting is unavailable (nil provider or graceful degradation).
@@ -187,6 +227,38 @@ func snapshotFor(ctx context.Context, provider shellenv.Provider, workDir string
 // sourceLine builds `source <snap>; <command>` with the snapshot path quoted.
 func sourceLine(snap, command string) string {
 	return "source " + shellPath(snap) + "; " + command
+}
+
+//nolint:wsl_v5 // Environment validation and PWD replacement are one normalization pass.
+func innerEnvironment(configured []string, workDir string) ([]environmentEntry, error) {
+	values := configured
+	if values == nil {
+		values = os.Environ()
+	}
+
+	entries := make([]environmentEntry, 0, len(values)+1)
+	foundPWD := false
+	for _, raw := range values {
+		name, value, ok := strings.Cut(raw, "=")
+		if !ok || name == "" || strings.ContainsRune(name, '\x00') || strings.ContainsRune(value, '\x00') {
+			return nil, fmt.Errorf("invalid process environment entry %q", raw)
+		}
+		if name == "PWD" {
+			value = workDir
+			raw = name + "=" + value
+			foundPWD = true
+		}
+		entries = append(entries, environmentEntry{name: name, value: value, raw: raw})
+	}
+	if !foundPWD {
+		entries = append(entries, environmentEntry{name: "PWD", value: workDir, raw: "PWD=" + workDir})
+	}
+
+	return entries, nil
+}
+
+func sandboxLauncherEnvironment() []string {
+	return []string{"PATH=/usr/bin:/bin:/usr/sbin:/sbin"}
 }
 
 func (b *limitedBuffer) Write(data []byte) (int, error) {
@@ -314,11 +386,11 @@ func existingUserCacheDir() (string, error) {
 	return cacheDir, nil
 }
 
-func preflight(runner Runner) error {
+func preflight(runner Runner, workDir string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), preflightTimeout)
 	defer cancel()
 
-	cmd, err := runner.BashCommand(ctx, ":", "/")
+	cmd, err := runner.BashCommand(ctx, ":", workDir)
 	if err != nil {
 		return fmt.Errorf("construct preflight command: %w", err)
 	}
@@ -326,6 +398,7 @@ func preflight(runner Runner) error {
 	var output limitedBuffer
 	cmd.Stdout = &output
 	cmd.Stderr = &output
+	cmd.WaitDelay = preflightTimeout
 
 	err = cmd.Run()
 	if err == nil {
@@ -369,7 +442,10 @@ func probeEnforcement(newRunner runnerFactory) error {
 		return fmt.Errorf("create denied probe directory: %w", err)
 	}
 
-	runner, err := newRunner([]string{allowed})
+	runner, err := newRunner(processPolicy{
+		readScope: HostReadable, workDir: allowed, projectRoot: allowed,
+		writableRoots: []string{allowed}, sessionKey: "probe",
+	})
 	if err != nil {
 		return fmt.Errorf("create probe runner: %w", err)
 	}
@@ -379,6 +455,83 @@ func probeEnforcement(newRunner runnerFactory) error {
 	}
 
 	return probeDeniedWrite(runner, denied)
+}
+
+//nolint:wsl_v5 // The probe keeps allowed and denied observations in one auditable sequence.
+func probeShieldEnforcement(newRunner runnerFactory) error {
+	fixture, err := newShieldProbeFixture()
+	if err != nil {
+		return err
+	}
+	defer func() { _ = os.RemoveAll(fixture.base) }()
+
+	mounts, err := executionSubstrate()
+	if err != nil {
+		return err
+	}
+	runner, err := newRunner(processPolicy{
+		readScope: ProjectConfined, workDir: fixture.project, projectRoot: fixture.project,
+		writableRoots: []string{fixture.project}, readMounts: mounts, sessionKey: "probe-shields",
+	})
+	if err != nil {
+		return fmt.Errorf("create shields probe runner: %w", err)
+	}
+
+	inside := filepath.Join(fixture.project, "inside")
+	if output, err := runProbeIn(
+		runner,
+		"printf allowed >"+shellPath(inside)+" && cat "+shellPath(inside),
+		fixture.project,
+	); err != nil {
+		return fmt.Errorf("shielded project access probe: %w: %s", err, output)
+	}
+	if output, err := runProbeIn(runner, "cat "+shellPath(fixture.secret), fixture.project); err == nil {
+		return fmt.Errorf("shielded probe read denied path %q: %s", fixture.secret, output)
+	}
+	if output, err := runProbeIn(
+		runner,
+		"printf denied >"+shellPath(filepath.Join(fixture.denied, "write")),
+		fixture.project,
+	); err == nil {
+		return fmt.Errorf("shielded probe wrote denied path %q: %s", fixture.denied, output)
+	}
+
+	return nil
+}
+
+//nolint:wsl_v5 // Fixture construction cleans each partial filesystem state before returning.
+func newShieldProbeFixture() (shieldProbeFixture, error) {
+	base, err := os.MkdirTemp("", "coagent-shields-probe-")
+	if err != nil {
+		return shieldProbeFixture{}, fmt.Errorf("create shields probe directory: %w", err)
+	}
+	base, err = filepath.EvalSymlinks(base)
+	if err != nil {
+		_ = os.RemoveAll(base)
+
+		return shieldProbeFixture{}, fmt.Errorf("resolve shields probe directory: %w", err)
+	}
+	fixture := shieldProbeFixture{
+		base: base, project: filepath.Join(base, "project"), denied: filepath.Join(base, "denied"),
+	}
+	fixture.secret = filepath.Join(fixture.denied, "secret")
+	if err := os.Mkdir(fixture.project, 0o700); err != nil {
+		_ = os.RemoveAll(base)
+
+		return shieldProbeFixture{}, fmt.Errorf("create shields project: %w", err)
+	}
+	if err := os.Mkdir(fixture.denied, 0o700); err != nil {
+		_ = os.RemoveAll(base)
+
+		return shieldProbeFixture{}, fmt.Errorf("create shields denied directory: %w", err)
+	}
+	if err := os.WriteFile(fixture.secret, []byte("secret"), 0o600); err != nil {
+		_ = os.RemoveAll(base)
+
+		return shieldProbeFixture{}, fmt.Errorf("write shields denied probe: %w", err)
+	}
+
+	return fixture, nil
 }
 
 func probeAllowedWrite(runner Runner, dir string) error {
@@ -426,10 +579,14 @@ func probeDeniedWrite(runner Runner, dir string) error {
 }
 
 func runProbe(runner Runner, command string) (string, error) {
+	return runProbeIn(runner, command, "/")
+}
+
+func runProbeIn(runner Runner, command, workDir string) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), preflightTimeout)
 	defer cancel()
 
-	cmd, err := runner.BashCommand(ctx, command, "/")
+	cmd, err := runner.BashCommand(ctx, command, workDir)
 	if err != nil {
 		return "", fmt.Errorf("construct probe command: %w", err)
 	}
@@ -437,6 +594,7 @@ func runProbe(runner Runner, command string) (string, error) {
 	var output limitedBuffer
 	cmd.Stdout = &output
 	cmd.Stderr = &output
+	cmd.WaitDelay = preflightTimeout
 
 	err = cmd.Run()
 	detail := strings.TrimSpace(output.String())
@@ -460,12 +618,4 @@ func policyKey(roots []string, sessionKey string) string {
 	hash := sha256.Sum256([]byte(strings.Join(roots, "\x00") + "\x1f" + sessionKey))
 
 	return hex.EncodeToString(hash[:])
-}
-
-func firstSessionKey(keys []string) string {
-	if len(keys) == 0 {
-		return ""
-	}
-
-	return keys[0]
 }

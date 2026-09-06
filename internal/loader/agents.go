@@ -1,6 +1,7 @@
 package loader
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -16,9 +17,9 @@ func (s *svc) LoadAgentsMD(workDir string) (string, error) {
 	var contents []string
 
 	for _, path := range paths {
-		content, err := os.ReadFile(path)
+		content, err := s.readSourceFile(path, s.projectPath(workDir, path))
 		if err != nil {
-			if os.IsNotExist(err) {
+			if errors.Is(err, os.ErrNotExist) {
 				continue
 			}
 

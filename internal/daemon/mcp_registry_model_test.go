@@ -155,7 +155,7 @@ func (h *registryModelHarness) rebuild(t *testing.T) {
 		configs[def.Name] = mcp.ServerConfig{Command: def.Command, Args: def.Args, Env: def.Env}
 	}
 
-	service, err := mcp.AcquireForWorkDir(context.Background(), h.pool, configs, h.workDir, nil)
+	service, err := mcp.AcquireForWorkDir(context.Background(), h.pool, configs, h.workDir, nil, nil)
 	require.NoError(t, err)
 	h.service = service
 	actual := service != nil && service.Stats().Started == 1

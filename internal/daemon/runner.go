@@ -556,6 +556,16 @@ func (s *svc) closeOrphanedCalls(ctx context.Context, rec *sessionstore.SessionR
 }
 
 func (s *svc) ensureSessionRunner(ctx context.Context, sessionID int64) error {
+	unlock, err := s.lockSessionTree(ctx, sessionID)
+	if err != nil {
+		return err
+	}
+	defer unlock()
+
+	return s.ensureSessionRunnerLocked(ctx, sessionID)
+}
+
+func (s *svc) ensureSessionRunnerLocked(ctx context.Context, sessionID int64) error {
 	if _, ok := s.runners.Load(sessionID); ok {
 		return nil
 	}
@@ -578,7 +588,7 @@ func (s *svc) ensureSessionRunner(ctx context.Context, sessionID int64) error {
 		return fmt.Errorf("resolve project %d: %w", rec.ProjectID, err)
 	}
 
-	err = s.ensureRunner(ctx, sessionID, workDir, rec.ProjectID, nil)
+	err = s.ensureRunnerLocked(ctx, sessionID, workDir, rec.ProjectID, nil)
 	if errors.Is(err, admission.ErrNoCapacity) && rec.ParentID == 0 {
 		s.enqueuePendingRunner(sessionID, workDir, rec.ProjectID)
 		return nil
@@ -938,6 +948,10 @@ func (s *svc) openSession(
 		LastActivityAt:  rec.UpdatedAt,
 		ContextBaseline: rec.ContextBaseline(),
 		RepoRoot:        repoRoot,
+		ShieldsUp:       rec.ShieldsUp,
+		ObserveProcessPolicy: func(key string) {
+			s.recordProcessPolicy(sessionID, key)
+		},
 
 		ExtraSkills:         s.builtinSkillsFor(ctx, rec),
 		StagedExternalCalls: externalCalls,
@@ -1284,6 +1298,26 @@ func registerLogged(ctx context.Context, sess session.Service, t tool.Tool) {
 }
 
 func (s *svc) ensureRunner(
+	ctx context.Context,
+	sessionID int64,
+	workDir string,
+	projectID int64,
+	inputs []queuedSessionInput,
+) error {
+	if s.shuttingDown.Load() {
+		return errDaemonShuttingDown
+	}
+
+	unlock, err := s.lockSessionTree(ctx, sessionID)
+	if err != nil {
+		return err
+	}
+	defer unlock()
+
+	return s.ensureRunnerLocked(ctx, sessionID, workDir, projectID, inputs)
+}
+
+func (s *svc) ensureRunnerLocked(
 	ctx context.Context,
 	sessionID int64,
 	workDir string,

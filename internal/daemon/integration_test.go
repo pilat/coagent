@@ -272,6 +272,19 @@ func newSubagentHarnessOnDBWithProject(
 	decorate func(subagent.Store) subagent.Store,
 	systemProject bool,
 ) *subagentHarness {
+	return newSubagentHarnessOnDBWithProjectConfig(
+		t, dbPath, respond, decorate, systemProject, nil,
+	)
+}
+
+func newSubagentHarnessOnDBWithProjectConfig(
+	t *testing.T,
+	dbPath string,
+	respond func(system string, msgs []llmwire.Message) *llmwire.Response,
+	decorate func(subagent.Store) subagent.Store,
+	systemProject bool,
+	configure func(*config.Config),
+) *subagentHarness {
 	t.Helper()
 
 	db, err := migrate.OpenDB(context.Background(), dbPath)
@@ -294,6 +307,9 @@ func newSubagentHarnessOnDBWithProject(
 		require.NoError(t, os.MkdirAll(workDir, 0o755))
 	}
 	cfg := &config.Config{WorkDir: workDir, Model: "fake-model"}
+	if configure != nil {
+		configure(cfg)
+	}
 
 	var (
 		pid int64
@@ -1021,6 +1037,15 @@ func newMCPHarnessWithIdleTTL(
 	respond func(system string, msgs []llmwire.Message) *llmwire.Response,
 	idleTTL time.Duration,
 ) (*subagentHarness, mcpstore.Store, mcp.Pool) {
+	return newMCPHarnessConfigured(t, respond, idleTTL, nil)
+}
+
+func newMCPHarnessConfigured(
+	t *testing.T,
+	respond func(system string, msgs []llmwire.Message) *llmwire.Response,
+	idleTTL time.Duration,
+	configure func(*config.Config),
+) (*subagentHarness, mcpstore.Store, mcp.Pool) {
 	t.Helper()
 
 	ctx := context.Background()
@@ -1048,6 +1073,9 @@ func newMCPHarnessWithIdleTTL(
 
 	workDir := t.TempDir()
 	cfg := &config.Config{WorkDir: workDir, Model: "fake-model"}
+	if configure != nil {
+		configure(cfg)
+	}
 
 	factory := session.NewFactoryWithOptions(
 		cfg, nil, nil, sessStore, sessStore, nil, pool, registry, nil, nil,

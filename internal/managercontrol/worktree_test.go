@@ -218,6 +218,7 @@ func setupNamedClone(t *testing.T, name string) string {
 	require.NoError(t, exec.Command("git", "init", "-q", "-b", "trunk", seed).Run())
 	runGit(t, seed, "config", "user.email", "t@t.t")
 	runGit(t, seed, "config", "user.name", "t")
+	runGit(t, seed, "config", "commit.gpgSign", "false")
 	require.NoError(t, os.WriteFile(filepath.Join(seed, "f.txt"), []byte("v1"), 0o644))
 	runGit(t, seed, "add", "-A")
 	runGit(t, seed, "commit", "-m", "init")
@@ -228,6 +229,7 @@ func setupNamedClone(t *testing.T, name string) string {
 	require.NoError(t, exec.Command("git", "clone", "-q", remote, clone).Run())
 	runGit(t, clone, "config", "user.email", "t@t.t")
 	runGit(t, clone, "config", "user.name", "t")
+	runGit(t, clone, "config", "commit.gpgSign", "false")
 
 	return clone
 }

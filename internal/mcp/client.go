@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"sync"
 	"time"
 
 	"github.com/mark3labs/mcp-go/client"
@@ -33,6 +34,8 @@ type Client struct {
 	client    client.MCPClient
 	tools     map[string]mcp.Tool
 	cancelRun context.CancelFunc // force-kills the server subprocess on close
+	closeOnce sync.Once
+	closeErr  error
 }
 
 // buildEnv builds environment variables from config. ${VAR} references were
@@ -53,11 +56,19 @@ func buildEnv(envMap map[string]string) []string {
 // NewClient creates a new MCP client for a server. WorkDir is set per-subprocess
 // via WithCommandFunc (no global os.Chdir). provider may be nil: the server then
 // spawns with the daemon's inherited env instead of workDir's activated toolchain.
-func NewClient(ctx context.Context, name string, cfg ServerConfig, provider shellenv.Provider, runners ...procexec.Runner) (*Client, error) {
+//
+//nolint:wsl_v5 // Command activation and runner wrapping form one spawn boundary.
+func NewClient(
+	ctx context.Context,
+	name string,
+	cfg ServerConfig,
+	provider shellenv.Provider,
+	runner procexec.Runner,
+) (*Client, error) {
 	env := buildEnv(cfg.Env)
 
 	var opts []transport.StdioOption
-	if cfg.WorkDir != "" || cfg.runner != nil || len(runners) > 0 {
+	if cfg.WorkDir != "" || cfg.runner != nil || runner != nil {
 		opts = append(opts, transport.WithCommandFunc(
 			func(ctx context.Context, command string, envList []string, args []string) (*exec.Cmd, error) {
 				cmd, err := activatedServerCommand(ctx, cfg.WorkDir, provider, command, envList, args)
@@ -65,11 +76,11 @@ func NewClient(ctx context.Context, name string, cfg ServerConfig, provider shel
 					return nil, err
 				}
 
-				runner := cfg.runner
-				if runner == nil && len(runners) > 0 {
-					runner = runners[0]
+				processRunner := cfg.runner
+				if processRunner == nil {
+					processRunner = runner
 				}
-				if runner == nil {
+				if processRunner == nil {
 					return cmd, nil
 				}
 
@@ -78,7 +89,7 @@ func NewClient(ctx context.Context, name string, cfg ServerConfig, provider shel
 					return nil, fmt.Errorf("prepare MCP sandbox command: %w", err)
 				}
 
-				return runner.Command(ctx, request)
+				return processRunner.Command(ctx, request)
 			},
 		))
 	}
@@ -132,6 +143,7 @@ func NewClient(ctx context.Context, name string, cfg ServerConfig, provider shel
 	}, nil
 }
 
+//nolint:wsl_v5 // Activation and inherited-environment construction are exclusive branches.
 func activatedServerCommand(
 	ctx context.Context,
 	workDir string,
@@ -140,7 +152,12 @@ func activatedServerCommand(
 	envList, args []string,
 ) (*exec.Cmd, error) {
 	if provider != nil {
-		return provider.WrapExec(ctx, workDir, append([]string{command}, args...), envList)
+		cmd, err := provider.WrapExec(ctx, workDir, append([]string{command}, args...), envList)
+		if err != nil {
+			return nil, fmt.Errorf("activate MCP server command: %w", err)
+		}
+
+		return cmd, nil
 	}
 
 	cmd := exec.CommandContext(ctx, command, args...)
@@ -220,17 +237,24 @@ func (c *Client) CallTool(ctx context.Context, name string, args map[string]any)
 }
 
 func (c *Client) Close() error {
-	// Kill first: client.Close()'s cmd.Wait() would otherwise block forever on a
-	// live server that ignores stdin-close (and callers hold pool.mu across it).
-	if c.cancelRun != nil {
-		c.cancelRun()
-	}
+	c.closeOnce.Do(func() {
+		// Kill first: client.Close()'s cmd.Wait() would otherwise block forever on
+		// a live server that ignores stdin-close.
+		if c.cancelRun != nil {
+			c.cancelRun()
+		}
 
-	if err := c.client.Close(); err != nil {
-		return fmt.Errorf("close MCP client: %w", err)
-	}
+		if err := c.client.Close(); err != nil {
+			var exitErr *exec.ExitError
+			if c.cancelRun != nil && (errors.Is(err, context.Canceled) || errors.As(err, &exitErr)) {
+				return
+			}
 
-	return nil
+			c.closeErr = fmt.Errorf("close MCP client: %w", err)
+		}
+	})
+
+	return c.closeErr
 }
 
 func (c *Client) ToolSchema(name string) (json.RawMessage, error) {

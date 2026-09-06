@@ -7,18 +7,20 @@ import (
 )
 
 // ErrProgressSuperseded reports that a progress snapshot no longer describes the
-// session: its generation or status moved on (or the root stopped) before the
-// card committed. Nothing is inserted and no observer message may be published.
+// session: its generation, status, or shields state moved on (or the root
+// stopped) before the card committed. Nothing is inserted and no observer
+// message may be published.
 var ErrProgressSuperseded = errors.New("progress snapshot superseded")
 
 // EnqueueProgressOutput inserts one replaceable progress card only while the
-// session still sits at the snapshot's generation and status, so a stale card
-// is discarded instead of publishing below a newer transition.
+// session still sits at the snapshot's generation, status, and shields state,
+// so a stale card is discarded instead of publishing below a newer transition.
 func (s *store) EnqueueProgressOutput(
 	ctx context.Context,
 	draft OutputDraft,
 	expectedGeneration int64,
 	expectedStatus SessionStatus,
+	expectedShieldsUp bool,
 ) (*OutputCommit, error) {
 	if err := validateOutputDraft(draft); err != nil {
 		return nil, err
@@ -37,14 +39,15 @@ func (s *store) EnqueueProgressOutput(
 	var (
 		generation int64
 		status     SessionStatus
+		shieldsUp  bool
 	)
 	if err := tx.QueryRowContext(ctx,
-		`SELECT model_input_generation, status FROM sessions WHERE id = ?`, draft.SessionID,
-	).Scan(&generation, &status); err != nil {
+		`SELECT model_input_generation, status, shields_up FROM sessions WHERE id = ?`, draft.SessionID,
+	).Scan(&generation, &status, &shieldsUp); err != nil {
 		return nil, fmt.Errorf("load progress eligibility: %w", err)
 	}
 
-	if generation != expectedGeneration || status != expectedStatus ||
+	if generation != expectedGeneration || status != expectedStatus || shieldsUp != expectedShieldsUp ||
 		status == SessionStatusStopping || status == SessionStatusStopped {
 		return nil, ErrProgressSuperseded
 	}

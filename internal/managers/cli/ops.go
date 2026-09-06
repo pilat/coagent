@@ -246,6 +246,14 @@ func (m *Manager) send(ctx context.Context, c *ctl.Conn, p SendParams) (SendResu
 	}
 
 	if sessionID == 0 {
+		text := strings.TrimSpace(p.Text)
+		if text == "/shieldsup" || text == "/shieldsdown" {
+			//nolint:revive,staticcheck // This protocol error is user-facing and specified exactly.
+			return SendResult{}, errors.New(
+				"No active session for shields command.",
+			)
+		}
+
 		return m.create(ctx, p.Text, p.Model)
 	}
 

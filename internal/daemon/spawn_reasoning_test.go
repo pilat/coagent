@@ -150,7 +150,11 @@ func newSpawnEffortProvider(t *testing.T) *spawnEffortProvider {
 			} `json:"reasoning"`
 		}
 
-		require.NoError(t, json.NewDecoder(r.Body).Decode(&body))
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+
+			return
+		}
 
 		p.mu.Lock()
 		p.efforts[body.Model] = body.Reasoning.Effort

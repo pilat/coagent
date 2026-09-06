@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/bmatcuk/doublestar/v4"
 
+	"github.com/pilat/coagent/internal/safefile"
 	"github.com/pilat/coagent/internal/tool"
 )
 
@@ -40,6 +42,7 @@ type globParams struct {
 
 type globTool struct {
 	workDir string
+	access  safefile.Access
 }
 
 type fileMatch struct {
@@ -49,6 +52,10 @@ type fileMatch struct {
 
 func newGlobTool(workDir string) *globTool {
 	return &globTool{workDir: workDir}
+}
+
+func newGlobToolWithAccess(workDir string, access safefile.Access) *globTool {
+	return &globTool{workDir: workDir, access: access}
 }
 
 func (t *globTool) ID() string          { return "glob" }
@@ -113,7 +120,23 @@ func (t *globTool) Execute(ctx context.Context, params json.RawMessage) (*tool.R
 	}, nil
 }
 
+//nolint:wsl_v5 // Rooted path validation is one trust-boundary operation.
 func (t *globTool) resolveSearchPath(path string) (string, error) {
+	if t.access != nil {
+		name := path
+		if name == "" {
+			name = "."
+		}
+		info, resolved, err := t.access.Stat(name)
+		if err != nil {
+			return "", fmt.Errorf("authorize glob path: %w", err)
+		}
+		if !info.IsDir() {
+			return "", fmt.Errorf("path is not a directory: %s", resolved.Display)
+		}
+		return resolved.Display, nil
+	}
+
 	if path == "" {
 		return t.workDir, nil
 	}
@@ -137,6 +160,10 @@ func (t *globTool) resolveSearchPath(path string) (string, error) {
 }
 
 func (t *globTool) findFiles(searchPath, pattern string) ([]fileMatch, bool, error) {
+	if t.access != nil && t.access.Scope() == safefile.ProjectConfined {
+		return t.findAccessFiles(searchPath, pattern)
+	}
+
 	matches, err := doublestar.FilepathGlob(filepath.Join(searchPath, pattern))
 	if err != nil {
 		return nil, false, fmt.Errorf("invalid glob pattern: %w", err)
@@ -157,6 +184,54 @@ func (t *globTool) findFiles(searchPath, pattern string) ([]fileMatch, bool, err
 		return files[i].mtime > files[j].mtime
 	})
 
+	truncated := len(files) > globLimit
+	if truncated {
+		files = files[:globLimit]
+	}
+
+	return files, truncated, nil
+}
+
+//nolint:wsl_v5 // Rooted walk, admission, and deterministic sorting form one scan.
+func (t *globTool) findAccessFiles(searchPath, pattern string) ([]fileMatch, bool, error) {
+	rooted, err := t.access.OpenRoot(searchPath)
+	if err != nil {
+		return nil, false, fmt.Errorf("open glob root: %w", err)
+	}
+	defer func() { _ = rooted.Root.Close() }()
+
+	var files []fileMatch
+	err = fs.WalkDir(rooted.Root.FS(), ".", func(path string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return nil //nolint:nilerr // An inaccessible symlinked subtree is skipped.
+		}
+		if path == "." || entry.IsDir() {
+			return nil
+		}
+		matched, err := doublestar.PathMatch(pattern, filepath.ToSlash(path))
+		if err != nil {
+			return fmt.Errorf("invalid glob pattern: %w", err)
+		}
+		if !matched {
+			return nil
+		}
+		info, _, err := t.access.Stat(filepath.Join(searchPath, filepath.FromSlash(path)))
+		if err != nil {
+			return nil //nolint:nilerr // A raced or escaping symlink is omitted.
+		}
+		if !info.Mode().IsRegular() {
+			return nil
+		}
+		files = append(files, fileMatch{
+			path: filepath.Join(searchPath, filepath.FromSlash(path)), mtime: info.ModTime().UnixNano(),
+		})
+		return nil
+	})
+	if err != nil {
+		return nil, false, fmt.Errorf("walk glob root: %w", err)
+	}
+
+	sort.Slice(files, func(i, j int) bool { return files[i].mtime > files[j].mtime })
 	truncated := len(files) > globLimit
 	if truncated {
 		files = files[:globLimit]

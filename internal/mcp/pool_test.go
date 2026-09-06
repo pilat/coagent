@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os/exec"
 	"sync"
@@ -30,6 +31,27 @@ func (r policyRunner) PolicyKey() string { return r.key }
 type nopMCPClient struct{ mcpclient.MCPClient }
 
 func (nopMCPClient) Close() error { return nil }
+
+type errorCloseMCPClient struct {
+	mcpclient.MCPClient
+	err error
+}
+
+func (c errorCloseMCPClient) Close() error { return c.err }
+
+type gatedCloseMCPClient struct {
+	mcpclient.MCPClient
+	started chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func (c *gatedCloseMCPClient) Close() error {
+	c.once.Do(func() { close(c.started) })
+	<-c.release
+
+	return nil
+}
 
 // mockPoolClient creates a minimal Client for testing purposes.
 func mockPoolClient(name string) *Client {
@@ -67,6 +89,186 @@ func TestHash_IncludesProcessPolicy(t *testing.T) {
 	sandboxed.runner = policyRunner{key: "session-a"}
 
 	assert.NotEqual(t, plain.Hash(), sandboxed.Hash())
+}
+
+func TestPool_RetirePolicyClosesOnlyExactSessionPolicy(t *testing.T) {
+	var closed atomic.Int32
+	p := newPool(closeTrackingFactory(&closed)).(*pool)
+	t.Cleanup(p.Stop)
+
+	first := ServerConfig{Command: "cmd", runner: policyRunner{key: "session-a:down"}}
+	second := ServerConfig{Command: "cmd", runner: policyRunner{key: "session-b:down"}}
+	firstSnap, err := p.Acquire(context.Background(), map[string]ServerConfig{"srv": first})
+	require.NoError(t, err)
+	secondSnap, err := p.Acquire(context.Background(), map[string]ServerConfig{"srv": second})
+	require.NoError(t, err)
+	p.Release(firstSnap.Hashes)
+	p.Release(secondSnap.Hashes)
+
+	require.NoError(t, p.RetirePolicy("session-a:down"))
+	assert.Equal(t, int32(1), closed.Load())
+	assert.NotContains(t, p.entries, first.Hash())
+	assert.NotContains(t, p.catalogs, first.Hash())
+	assert.Contains(t, p.entries, second.Hash())
+	assert.Contains(t, p.catalogs, second.Hash())
+}
+
+func TestPool_RetirePolicyRetainsFailedCloseObligation(t *testing.T) {
+	closeErr := errors.New("close failed")
+	p := newPool(func(_ context.Context, name string, _ ServerConfig) (*Client, error) {
+		return &Client{name: name, client: errorCloseMCPClient{err: closeErr}}, nil
+	}).(*pool)
+	t.Cleanup(p.Stop)
+	cfg := ServerConfig{Command: "cmd", runner: policyRunner{key: "session-a:raised"}}
+	snapshot, err := p.Acquire(t.Context(), map[string]ServerConfig{"srv": cfg})
+	require.NoError(t, err)
+	p.Release(snapshot.Hashes)
+
+	err = p.RetirePolicy("session-a:raised")
+	require.ErrorIs(t, err, closeErr)
+	assert.Contains(t, p.entries, cfg.Hash())
+	assert.Contains(t, p.policies["session-a:raised"], cfg.Hash())
+	require.ErrorIs(t, p.RetirePolicy("session-a:raised"), closeErr)
+}
+
+func TestPool_RetirePolicyRetainsInvalidatedFactoryCloseObligation(t *testing.T) {
+	closeErr := errors.New("factory client close failed")
+	started := make(chan struct{})
+	release := make(chan struct{})
+	p := newPool(func(_ context.Context, name string, _ ServerConfig) (*Client, error) {
+		close(started)
+		<-release
+
+		return &Client{name: name, client: errorCloseMCPClient{err: closeErr}}, nil
+	}).(*pool)
+	t.Cleanup(p.Stop)
+	cfg := ServerConfig{Command: "cmd", runner: policyRunner{key: "session-race:down"}}
+	result := make(chan error, 1)
+	go func() {
+		_, err := p.ClientFor(t.Context(), "srv", cfg)
+		result <- err
+	}()
+	<-started
+	p.Invalidate("srv")
+	close(release)
+	require.ErrorIs(t, <-result, errInvalidated)
+
+	require.ErrorIs(t, p.RetirePolicy("session-race:down"), closeErr)
+	p.mu.Lock()
+	assert.Contains(t, p.closing, cfg.Hash())
+	assert.Contains(t, p.policies["session-race:down"], cfg.Hash())
+	p.mu.Unlock()
+}
+
+func TestPool_RetirePolicyRetainsConcurrentLoserCloseObligation(t *testing.T) {
+	closeErr := errors.New("loser close failed")
+	started := make(chan int, 2)
+	winnerRelease := make(chan struct{})
+	loserRelease := make(chan struct{})
+	var calls atomic.Int32
+	p := newPool(func(_ context.Context, name string, _ ServerConfig) (*Client, error) {
+		call := int(calls.Add(1))
+		started <- call
+		if call == 1 {
+			<-winnerRelease
+
+			return mockPoolClient(name), nil
+		}
+		<-loserRelease
+
+		return &Client{name: name, client: errorCloseMCPClient{err: closeErr}}, nil
+	}).(*pool)
+	t.Cleanup(p.Stop)
+	cfg := ServerConfig{Command: "cmd", runner: policyRunner{key: "session-race:down"}}
+	results := make(chan error, 2)
+	for range 2 {
+		go func() {
+			_, err := p.ClientFor(t.Context(), "srv", cfg)
+			results <- err
+		}()
+	}
+	<-started
+	<-started
+	close(winnerRelease)
+	require.Eventually(t, func() bool {
+		p.mu.Lock()
+		defer p.mu.Unlock()
+
+		return p.entries[cfg.Hash()] != nil
+	}, time.Second, time.Millisecond)
+	close(loserRelease)
+	require.NoError(t, <-results)
+	require.NoError(t, <-results)
+	p.Release([]string{cfg.Hash(), cfg.Hash()})
+
+	require.ErrorIs(t, p.RetirePolicy("session-race:down"), closeErr)
+	p.mu.Lock()
+	assert.Contains(t, p.closing, cfg.Hash())
+	p.mu.Unlock()
+}
+
+func TestPool_ConcurrentLoserCloseRacingStopReturnsPoolStopped(t *testing.T) {
+	started := make(chan int, 2)
+	winnerRelease := make(chan struct{})
+	loserRelease := make(chan struct{})
+	closeStarted := make(chan struct{})
+	closeRelease := make(chan struct{})
+	var calls atomic.Int32
+	p := newPool(func(_ context.Context, name string, _ ServerConfig) (*Client, error) {
+		call := int(calls.Add(1))
+		started <- call
+		if call == 1 {
+			<-winnerRelease
+
+			return mockPoolClient(name), nil
+		}
+		<-loserRelease
+
+		return &Client{name: name, client: &gatedCloseMCPClient{
+			started: closeStarted, release: closeRelease,
+		}}, nil
+	}).(*pool)
+	cfg := ServerConfig{Command: "cmd", runner: policyRunner{key: "session-race:down"}}
+	results := make(chan error, 2)
+	for range 2 {
+		go func() {
+			_, err := p.ClientFor(t.Context(), "srv", cfg)
+			results <- err
+		}()
+	}
+	<-started
+	<-started
+	close(winnerRelease)
+	require.NoError(t, <-results)
+	close(loserRelease)
+	<-closeStarted
+	stopped := make(chan struct{})
+	go func() { p.Stop(); close(stopped) }()
+	require.Eventually(t, func() bool {
+		p.mu.Lock()
+		defer p.mu.Unlock()
+
+		return p.stopped
+	}, time.Second, time.Millisecond)
+	close(closeRelease)
+	require.ErrorIs(t, <-results, errPoolStopped)
+	select {
+	case <-stopped:
+	case <-time.After(time.Second):
+		t.Fatal("pool Stop did not finish after loser Close")
+	}
+}
+
+func TestPool_PrunePoliciesDropsUnreferencedHashes(t *testing.T) {
+	p := newPool(closeTrackingFactory(new(atomic.Int32))).(*pool)
+	t.Cleanup(p.Stop)
+	p.mu.Lock()
+	p.policies["gone"] = map[string]struct{}{"hash": {}}
+	p.prunePoliciesLocked()
+	_, exists := p.policies["gone"]
+	p.mu.Unlock()
+
+	assert.False(t, exists)
 }
 
 func TestHash_IgnoresDisabledEnabled(t *testing.T) {

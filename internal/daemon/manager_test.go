@@ -50,23 +50,23 @@ type blockingCreateSessionStore struct {
 	release chan struct{}
 }
 
-func (s *blockingCreateSessionStore) CreateSession(
+func (s *blockingCreateSessionStore) CreateReplacementSession(
 	ctx context.Context,
-	projectID int64,
-	model, reasoningLevel string,
-	attrs map[string]any,
+	oldSessionID int64,
 ) (*sessionstore.SessionRecord, error) {
 	close(s.entered)
 	<-s.release
 
-	return s.OrchestrationStore.CreateSession(ctx, projectID, model, reasoningLevel, attrs)
+	return s.OrchestrationStore.CreateReplacementSession(ctx, oldSessionID)
 }
 
 // mockFactory implements session.Factory for testing.
 type mockFactory struct {
-	mu       sync.Mutex
-	sessions []*mockSession
-	nextSess session.Service // allows injecting any session.Service implementation
+	mu               sync.Mutex
+	sessions         []*mockSession
+	options          []session.CreateOptions
+	nextSess         session.Service // allows injecting any session.Service implementation
+	processPolicyKey string
 }
 
 func (m *mockSession) RunDaemon(
@@ -243,6 +243,10 @@ func (m *mockSession) Close() {
 func (f *mockFactory) Create(ctx context.Context, opts session.CreateOptions) (session.Service, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.options = append(f.options, opts)
+	if opts.ObserveProcessPolicy != nil {
+		opts.ObserveProcessPolicy(f.processPolicyKey)
+	}
 
 	// The production session consumes durable input at its loop boundary. These
 	// daemon tests use a minimal mock service, so model that boundary here to keep

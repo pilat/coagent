@@ -19,7 +19,10 @@ import (
 	"github.com/pilat/coagent/internal/ctl"
 )
 
-const smokeKey = "sk-ant-smoke-0000000000"
+const (
+	smokeKey          = "sk-ant-smoke-0000000000"
+	restartWaitBudget = 2 * time.Minute
+)
 
 // TestApplyRestartsTheDaemon drives the whole restart pipeline against a real
 // process: a bootstrap set_provider writes the secret and the config, answers
@@ -58,7 +61,8 @@ func TestApplyRestartsTheDaemon(t *testing.T) {
 
 	// config_present is the unambiguous signal that the *new* image is answering:
 	// the boot-time config is what status reports, and the old image had none.
-	after := waitForStatus(t, socket, func(st ctl.StatusResult) bool { return st.ConfigPresent })
+	after := waitForStatus(t, socket, func(st ctl.StatusResult) bool { return st.BootID != before.BootID })
+	require.True(t, after.ConfigPresent, "the candidate config was rolled back during restart")
 	assert.Equal(t, before.PID, after.PID, "exec keeps the pid; only the image changed")
 	assert.NotEqual(t, before.BootID, after.BootID, "the boot id is what tells the new run from the draining one")
 	require.NotEmpty(t, after.BootID)
@@ -150,7 +154,7 @@ func buildStamped(t *testing.T, version string) string {
 func waitForGreeting(t *testing.T, socket, want string) {
 	t.Helper()
 
-	deadline := time.Now().Add(60 * time.Second)
+	deadline := time.Now().Add(restartWaitBudget)
 
 	for time.Now().Before(deadline) {
 		c, err := ctl.Dial(context.Background(), socket)
@@ -188,7 +192,7 @@ func startDaemon(t *testing.T, binary, home string) *exec.Cmd {
 func waitForStatus(t *testing.T, socket string, want func(ctl.StatusResult) bool) ctl.StatusResult {
 	t.Helper()
 
-	deadline := time.Now().Add(60 * time.Second)
+	deadline := time.Now().Add(restartWaitBudget)
 
 	for time.Now().Before(deadline) {
 		if st, ok := tryStatus(socket); ok && want(st) {

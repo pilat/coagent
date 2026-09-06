@@ -66,7 +66,7 @@ func MainFunc() {
 `
 	require.NoError(t, os.WriteFile(testFile, []byte(goContent), 0o644))
 
-	mgr := NewManager(nil)
+	mgr := NewManager(nil, nil)
 	t.Cleanup(func() { mgr.Close() })
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)

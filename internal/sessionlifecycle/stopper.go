@@ -22,7 +22,7 @@ func (p *StopPlan) SessionIDs() []int64 {
 
 type Stopper interface {
 	GuardSpawn(run func() error) error
-	Begin(ctx context.Context, rootID int64) (*StopPlan, error)
+	Begin(ctx context.Context, rootID int64, liveSessionIDs []int64) (*StopPlan, error)
 	CancelInputs(ctx context.Context, plan *StopPlan) error
 	Finish(ctx context.Context, plan *StopPlan, keepRootStopping bool) error
 	CompleteExplicit(ctx context.Context, rootID, inputID int64) error
@@ -67,11 +67,11 @@ func (s *stopper) GuardSpawn(run func() error) error {
 	return run()
 }
 
-func (s *stopper) Begin(ctx context.Context, rootID int64) (*StopPlan, error) {
+func (s *stopper) Begin(ctx context.Context, rootID int64, liveSessionIDs []int64) (*StopPlan, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	plan, err := s.stopPlan(ctx, rootID)
+	plan, err := s.stopPlan(ctx, rootID, liveSessionIDs)
 	if err != nil {
 		return nil, err
 	}
@@ -148,16 +148,19 @@ func (s *stopper) InterruptedExplicitStops(
 	return stops, nil
 }
 
-func (s *stopper) stopPlan(ctx context.Context, rootID int64) (*StopPlan, error) {
+//nolint:wsl_v5 // Persisted tree membership and live-runner repair form one plan.
+func (s *stopper) stopPlan(ctx context.Context, rootID int64, liveSessionIDs []int64) (*StopPlan, error) {
 	records, err := s.sessions.ListAllSessions(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("list sessions for stop tree: %w", err)
 	}
 
 	byParent := make(map[int64][]*sessionstore.SessionRecord)
+	byID := make(map[int64]*sessionstore.SessionRecord, len(records))
 	foundRoot := false
 
 	for _, record := range records {
+		byID[record.ID] = record
 		if record.ID == rootID {
 			foundRoot = true
 		}
@@ -172,6 +175,19 @@ func (s *stopper) stopPlan(ctx context.Context, rootID int64) (*StopPlan, error)
 	}
 
 	ids := activeTreeIDs(rootID, byParent)
+	included := make(map[int64]bool, len(ids)+len(liveSessionIDs))
+	for _, id := range ids {
+		included[id] = true
+	}
+	for _, id := range liveSessionIDs {
+		record := byID[id]
+		if record == nil || record.KilledAt != nil ||
+			(record.ID != rootID && record.RootID != rootID) || included[id] {
+			continue
+		}
+		ids = append(ids, id)
+		included[id] = true
+	}
 
 	links := make([]subagent.Link, 0, len(ids))
 	for _, id := range ids {

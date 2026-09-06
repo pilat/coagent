@@ -80,7 +80,9 @@ func TestImageTurns_ReadThroughDriverProjection(t *testing.T) {
 
 	require.Len(t, msgs[2].Images, 1, "the read result row persists its image ref")
 	ref := msgs[2].Images[0]
-	assert.Equal(t, imagePath, ref.Path)
+	canonicalImagePath, err := filepath.EvalSymlinks(imagePath)
+	require.NoError(t, err)
+	assert.Equal(t, canonicalImagePath, ref.Path)
 	assert.Equal(t, llmwire.MimeImagePng, ref.Mime)
 	assert.Empty(t, msgs[1].Images, "the synthetic upload turn itself never carries refs")
 

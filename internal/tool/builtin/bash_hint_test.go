@@ -7,6 +7,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/pilat/coagent/internal/bashsandbox"
 )
 
 func TestSandboxHint(t *testing.T) {
@@ -35,7 +37,7 @@ func TestSandboxHint(t *testing.T) {
 
 	for name, tt := range tests {
 		t.Run(name, func(t *testing.T) {
-			hint := sandboxHint(tt.output, tt.roots)
+			hint := sandboxHint(tt.output, tt.roots, bashsandbox.HostReadable, "/work")
 
 			if !tt.want {
 				assert.Empty(t, hint)

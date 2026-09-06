@@ -137,6 +137,7 @@ func TestRegisterCoreTools_SharesFileMutator(t *testing.T) {
 	registerCoreTools(
 		registry,
 		t.TempDir(),
+		nil,
 		loader.New(),
 		todo.New(),
 		nil,
@@ -177,7 +178,8 @@ func (p *stubMCPPool) Stop()            {}
 func (p *stubMCPPool) ClientFor(context.Context, string, mcp.ServerConfig) (*mcp.Client, error) {
 	return nil, nil
 }
-func (p *stubMCPPool) Invalidate(string) {}
+func (p *stubMCPPool) Invalidate(string)         {}
+func (p *stubMCPPool) RetirePolicy(string) error { return nil }
 
 // A broken MCP server degrades the stack to builtins, but it must not do so silently.
 func TestBuildStackLogsMCPAcquireFailure(t *testing.T) {

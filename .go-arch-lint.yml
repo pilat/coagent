@@ -32,6 +32,7 @@ components:
   logger:         { in: internal/logger }
   llmwire:        { in: internal/llmwire }
   humanize:       { in: internal/humanize }
+  safefile:       { in: internal/safefile }
   sessionevent:   { in: internal/sessionevent }
   sessionlifecycle: { in: internal/sessionlifecycle }
   sessionbus:     { in: internal/sessionbus }
@@ -117,6 +118,8 @@ deps:
     mayDependOn: [budget, controllerapi, logger, progress, sessionevent, sessionstore, todo]
   projectpath:
     mayDependOn: [coagenthome, config, controllerapi]
+  safefile:
+    mayDependOn: [coagenthome]
   managercontrol:
     mayDependOn: [config, controllerapi, daemon, git, loader, managerdiscovery, projectpath, sessionbus, sessionevent, sessionstore]
   managerdiscovery:
@@ -128,9 +131,9 @@ deps:
   git:
     mayDependOn: [procexec]
   lsp:
-    mayDependOn: [coagenthome, logger, procexec, shellenv]
+    mayDependOn: [coagenthome, logger, procexec, safefile, shellenv]
   loader:
-    mayDependOn: [coagenthome, config, git, logger]
+    mayDependOn: [coagenthome, config, git, logger, safefile]
   mcp:
     mayDependOn: [logger, procexec, shellenv, tool]
   procexec:
@@ -152,7 +155,7 @@ deps:
   catalog:
     mayDependOn: [coagenthome, config, logger]
   llm:
-    mayDependOn: [catalog, config, llmwire, logger]
+    mayDependOn: [catalog, config, llmwire, logger, safefile]
 
   # Presentation-only formatting helpers shared across packages; stdlib only.
   humanize:
@@ -161,7 +164,7 @@ deps:
 
   # Capability hub: tool implementations reach into a few leaf services.
   builtin:
-    mayDependOn: [bashsandbox, coagenthome, config, humanize, llmwire, loader, logger, lsp, mcp, memory, shellenv, todo, toolexec, tool]
+    mayDependOn: [bashsandbox, coagenthome, config, humanize, llmwire, loader, logger, lsp, mcp, memory, procexec, safefile, shellenv, todo, toolexec, tool]
 
   # ReAct loop — the heaviest service.
   session:

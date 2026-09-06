@@ -35,6 +35,12 @@ jobs:
         with:
           install: true
           cache: true
+      - name: Install Linux sandbox runtime
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y bubblewrap
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
       - name: Bootstrap pinned tools
         run: make tools
       - name: Validate workflows
@@ -60,6 +66,11 @@ jobs:
         with:
           install: true
           cache: true
+      - name: Install Linux sandbox runtime
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y bubblewrap
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
       - name: Bootstrap pinned tools
         run: make tools
       - name: Run deep CI

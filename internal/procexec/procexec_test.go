@@ -16,7 +16,11 @@ func TestFromCommandPreservesPreparedProcess(t *testing.T) {
 
 	request, err := FromCommand(command)
 	require.NoError(t, err)
-	assert.Equal(t, Request{Path: "/usr/bin/tool", Args: []string{"arg"}, WorkDir: "/work", Env: []string{"KEY=value"}}, request)
+	assert.Equal(
+		t,
+		Request{Path: "/usr/bin/tool", Args: []string{"arg"}, WorkDir: "/work", Env: []string{"KEY=value"}},
+		request,
+	)
 
 	command.Args[1] = "changed"
 	command.Env[0] = "CHANGED=value"

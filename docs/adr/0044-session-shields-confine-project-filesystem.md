@@ -36,8 +36,11 @@ OS-specific execution substrate for base executables, loaders, libraries,
 resolver data, certificates, and devices. Raised sessions do not capture,
 replay, or refresh shell activation.
 
-All tool surfaces stay registered. Skills remain readable as trusted text, and
-the web fetch/search tools and network access keep their existing behavior.
+Built-in tool classes stay registered. MCP tools retain their ordinary
+discovery behavior and may be absent when a raised-policy server cannot start.
+Project-local instruction sources use rooted
+project access; global and marketplace instructions remain trusted daemon
+inputs. The web fetch/search tools and network access keep their existing behavior.
 Shields constrain filesystem authority; they do not promise project-data
 confidentiality, environment-variable filtering, remote-side-effect control,
 Unix-socket isolation, or multi-tenant isolation.
@@ -48,6 +51,10 @@ processes. Lowering shields never expands a running tree: an active raised tree
 must become idle before the command succeeds. Shields cannot be raised when the
 native sandbox is disabled.
 
+This narrows the filesystem grant in
+[ADR-0042](0042-work-tree-sessions-write-the-main-repository-git.md) only while
+shields are raised; shields-down work-tree sessions keep that decision intact.
+
 ## Consequences
 
 - One durable state explains both in-process and subprocess filesystem access;
@@ -56,6 +63,10 @@ native sandbox is disabled.
   their complete runtime fits the fixed substrate, but developer toolchains that
   depend on home directories, caches, host `/tmp`, or external Git metadata can
   fail normally.
+- macOS Seatbelt requires exact read access to the filesystem root directory to
+  launch a confined process. Top-level names remain enumerable there, but data
+  and metadata below roots outside the project and execution substrate stay
+  denied.
 - A raised session can still transmit project data or secrets already present in
   its environment. Operators must not treat shields as a confidentiality or
   multi-user boundary.

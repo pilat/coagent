@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/pilat/coagent/internal/safefile"
 	"github.com/pilat/coagent/internal/tool"
 )
 
@@ -44,6 +45,15 @@ type applyPatchParams struct {
 type applyPatchTool struct {
 	workDir string
 	mutator fileMutator
+	access  safefile.Access
+}
+
+func newApplyPatchToolWithAccess(
+	workDir string,
+	access safefile.Access,
+	mutator fileMutator,
+) *applyPatchTool {
+	return &applyPatchTool{workDir: workDir, access: access, mutator: mutator}
 }
 
 type patchFile struct {
@@ -107,9 +117,12 @@ func (t *applyPatchTool) Execute(ctx context.Context, params json.RawMessage) (*
 	modified := make([]string, 0, len(files))
 
 	for _, file := range files {
-		filePath := resolvePath(t.workDir, file.Path)
+		filePath, err := resolveAccessTarget(t.access, t.workDir, file.Path)
+		if err != nil {
+			return nil, err
+		}
 
-		if err := applyFilePatches(ctx, t.mutator, filePath, file.Hunks); err != nil {
+		if err := applyFilePatches(ctx, t.access, t.mutator, filePath, file.Hunks); err != nil {
 			return nil, fmt.Errorf("apply patch to %s: %w", file.Path, err)
 		}
 
@@ -243,6 +256,7 @@ func appendPatchLine(hunk *patchHunk, line string) {
 
 func applyFilePatches(
 	ctx context.Context,
+	access safefile.Access,
 	mutator fileMutator,
 	filePath string,
 	hunks []patchHunk,
@@ -252,12 +266,12 @@ func applyFilePatches(
 
 	var lines []string
 
-	if err := rejectNonRegular(filePath); err != nil {
+	if err := rejectNonRegularAccess(access, filePath); err != nil {
 		return err
 	}
 
-	content, err := os.ReadFile(filePath)
-	if err != nil && !os.IsNotExist(err) {
+	content, err := readAccessFile(access, filePath)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("read file: %w", err)
 	}
 

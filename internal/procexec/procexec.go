@@ -1,11 +1,9 @@
-// Package procexec defines the process-construction seam used by sandboxed
-// process owners. It deliberately does not prescribe the confinement backend.
 package procexec
 
 import (
 	"context"
 	"errors"
-	"os/exec"
+	"os/exec" //nolint:depguard // The neutral runner contract constructs exec.Cmd values.
 )
 
 // Request describes a prepared process without deciding how it is isolated.

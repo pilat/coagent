@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/pilat/coagent/internal/bashsandbox"
 	"github.com/pilat/coagent/internal/procexec"
 )
 
@@ -38,7 +39,10 @@ func (r *bashRunnerStub) Command(ctx context.Context, request procexec.Request) 
 }
 
 func (r *bashRunnerStub) BashCommand(ctx context.Context, command, workDir string, args ...string) (*exec.Cmd, error) {
-	return r.Command(ctx, procexec.Request{Path: "bash", Args: append([]string{"-c", command}, args...), WorkDir: workDir})
+	return r.Command(
+		ctx,
+		procexec.Request{Path: "bash", Args: append([]string{"-c", command}, args...), WorkDir: workDir},
+	)
 }
 
 // ShellCommand mirrors Command: the bash tool calls this path, and tests assert
@@ -47,8 +51,9 @@ func (r *bashRunnerStub) ShellCommand(ctx context.Context, command, workDir stri
 	return r.BashCommand(ctx, command, workDir)
 }
 
-func (r *bashRunnerStub) WritableRoots() []string { return r.roots }
-func (r *bashRunnerStub) PolicyKey() string       { return "stub" }
+func (r *bashRunnerStub) WritableRoots() []string          { return r.roots }
+func (r *bashRunnerStub) PolicyKey() string                { return "stub" }
+func (r *bashRunnerStub) ReadScope() bashsandbox.ReadScope { return bashsandbox.HostReadable }
 
 func TestBashTool_Execute(t *testing.T) {
 	tmpDir, err := os.MkdirTemp("", "bash_test")

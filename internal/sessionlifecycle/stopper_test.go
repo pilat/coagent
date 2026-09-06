@@ -33,7 +33,7 @@ func TestStopperOwnsTreeFenceAndTerminalStatuses(t *testing.T) {
 	require.NoError(t, err)
 
 	stopper := NewStopper(sessions, sessions, sessions, subagent.NewStore(db))
-	plan, err := stopper.Begin(ctx, root.ID)
+	plan, err := stopper.Begin(ctx, root.ID, nil)
 	require.NoError(t, err)
 	assert.ElementsMatch(t, []int64{root.ID, childID}, plan.SessionIDs())
 

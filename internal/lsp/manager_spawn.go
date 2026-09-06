@@ -25,6 +25,8 @@ func (m *manager) wrappedServerCommand(
 		if err != nil {
 			return nil, fmt.Errorf("wrap %s spawn: %w", server.ID, err)
 		}
+	} else if cmd.Dir == "" {
+		cmd.Dir = root
 	}
 
 	if m.runner != nil {
@@ -57,9 +59,15 @@ func (m *manager) spawnServer(ctx context.Context, server *serverConfig, root st
 
 	path, err := lookupExecutable(ctx, m.provider, root, server.PathNames)
 	if err != nil {
-		return nil, fmt.Errorf("%w: %s is not on the activated PATH for %s: %w",
+		pathKind := "inherited"
+		if m.provider != nil {
+			pathKind = "activated"
+		}
+
+		return nil, fmt.Errorf("%w: %s is not on the %s PATH for %s: %w",
 			ErrServerUnavailable,
 			strings.Join(server.PathNames, " or "),
+			pathKind,
 			root,
 			err,
 		)

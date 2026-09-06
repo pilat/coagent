@@ -72,9 +72,10 @@ func (s *transactions) Create(ctx context.Context, create Create) (int64, error)
 
 func insertSession(ctx context.Context, tx *sql.Tx, create Create, now time.Time) (int64, error) {
 	result, err := tx.ExecContext(ctx, `INSERT INTO sessions
-		(project_id, parent_id, root_id, agent_type, model, reasoning_level, created_at, updated_at)
-		SELECT ?, ?, ?, ?, ?, ?, ?, ?
-		WHERE EXISTS (SELECT 1 FROM sessions WHERE id = ? AND status NOT IN ('stopping', 'stopped'))`,
+		(project_id, parent_id, root_id, agent_type, model, reasoning_level, created_at, updated_at, shields_up)
+		SELECT ?, ?, ?, ?, ?, ?, ?, ?, parent.shields_up
+		FROM sessions parent
+		WHERE parent.id = ? AND parent.status NOT IN ('stopping', 'stopped')`,
 		create.ProjectID, create.ParentID, create.RootID, create.AgentType, create.Model,
 		create.ReasoningLevel, now, now, create.ParentID)
 	if err != nil {

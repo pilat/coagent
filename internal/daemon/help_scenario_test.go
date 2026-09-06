@@ -14,6 +14,8 @@ import (
 const helpWithGWT = "## Session commands\n" +
 	"`/status` — show session status\n" +
 	"`/stop` — stop the current run\n" +
+	"`/shieldsup` — raise project filesystem shields\n" +
+	"`/shieldsdown` — lower project filesystem shields\n" +
 	"`/clear` — start a fresh session\n" +
 	"`/kill` — close this session\n" +
 	"`/compact [focus]` — compact the context\n" +
@@ -40,6 +42,7 @@ func TestHarnessScenario_HelpIncludesGWT(t *testing.T) {
 	})
 	require.NoError(t, err)
 	waitForVisibleMessage(t, collector, sessionID, "session ready")
+	h.mgr.waitIdle(sessionID)
 
 	require.NoError(t, h.mgr.SendToSession(h.ctx, sessionID, "/help"))
 	waitForVisibleMessage(t, collector, sessionID, helpWithGWT)

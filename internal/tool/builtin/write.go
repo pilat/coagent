@@ -12,6 +12,7 @@ import (
 
 	"github.com/pilat/coagent/internal/logger"
 	"github.com/pilat/coagent/internal/lsp"
+	"github.com/pilat/coagent/internal/safefile"
 	"github.com/pilat/coagent/internal/tool"
 )
 
@@ -37,6 +38,16 @@ type writeTool struct {
 	workDir string
 	lspMgr  lsp.Manager
 	mutator fileMutator
+	access  safefile.Access
+}
+
+func newWriteToolWithAccess(
+	workDir string,
+	access safefile.Access,
+	lspMgr lsp.Manager,
+	mutator fileMutator,
+) *writeTool {
+	return &writeTool{workDir: workDir, access: access, lspMgr: lspMgr, mutator: mutator}
 }
 
 func newWriteTool(workDir string, lspMgr lsp.Manager, mutator fileMutator) *writeTool {
@@ -64,6 +75,7 @@ func (t *writeTool) Parameters() json.RawMessage {
 	}`)
 }
 
+//nolint:wsl_v5 // Target authorization precedes every mutation side effect.
 func (t *writeTool) Execute(ctx context.Context, params json.RawMessage) (*tool.Result, error) {
 	log := logger.Ctx(ctx).Named("tool.write")
 
@@ -73,7 +85,10 @@ func (t *writeTool) Execute(ctx context.Context, params json.RawMessage) (*tool.
 	}
 
 	log.Debug("executing", zap.String("filePath", p.FilePath), zap.Int("contentLength", len(p.Content)))
-	filePath := resolvePath(t.workDir, p.FilePath)
+	filePath, err := resolveAccessTarget(t.access, t.workDir, p.FilePath)
+	if err != nil {
+		return nil, err
+	}
 
 	isNew, err := t.writeFile(ctx, filePath, p.Content, log)
 	if err != nil {
@@ -149,6 +164,7 @@ func parseWriteParams(params json.RawMessage, log *zap.Logger) (writeParams, err
 	return parsed, nil
 }
 
+//nolint:wsl_v5 // Rooted metadata and sandboxed replacement stay under one file lock.
 func (t *writeTool) writeFile(
 	ctx context.Context,
 	filePath, content string,
@@ -157,12 +173,17 @@ func (t *writeTool) writeFile(
 	unlock := lockFileWrite(filePath)
 	defer unlock()
 
-	if info, err := os.Stat(filePath); err == nil && info.IsDir() {
+	var info os.FileInfo
+	var statErr error
+	if t.access != nil && t.access.Scope() == safefile.ProjectConfined {
+		info, _, statErr = t.access.Stat(filePath)
+	} else {
+		info, statErr = os.Stat(filePath)
+	}
+	if statErr == nil && info.IsDir() {
 		return false, fmt.Errorf("path is a directory, not a file: %s", filePath)
 	}
-
-	_, statErr := os.Stat(filePath)
-	isNew := os.IsNotExist(statErr)
+	isNew := errors.Is(statErr, os.ErrNotExist)
 
 	if err := t.mutator.WriteFile(ctx, filePath, []byte(content), true); err != nil {
 		log.Warn("write_failed", zap.String("filePath", filePath), zap.Error(err))

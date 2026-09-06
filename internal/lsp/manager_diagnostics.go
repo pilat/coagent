@@ -15,7 +15,7 @@ import (
 func (m *manager) GetDiagnostics(ctx context.Context, workDir, file string) ([]Diagnostic, error) {
 	log := logger.Ctx(ctx).Named("lsp.manager")
 
-	identity, err := resolveFile(workDir, file)
+	identity, err := m.resolveFile(workDir, file)
 	if err != nil {
 		return nil, err
 	}

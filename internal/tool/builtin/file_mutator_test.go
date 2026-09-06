@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/pilat/coagent/internal/bashsandbox"
 	"github.com/pilat/coagent/internal/procexec"
 )
 
@@ -70,8 +71,9 @@ func (r fixedCommandRunner) BashCommand(ctx context.Context, _, workDir string, 
 	return r.Command(ctx, procexec.Request{Path: "bash", Args: []string{"-c", r.command}, WorkDir: workDir})
 }
 
-func (fixedCommandRunner) WritableRoots() []string { return nil }
-func (fixedCommandRunner) PolicyKey() string       { return "fixed" }
+func (fixedCommandRunner) WritableRoots() []string          { return nil }
+func (fixedCommandRunner) PolicyKey() string                { return "fixed" }
+func (fixedCommandRunner) ReadScope() bashsandbox.ReadScope { return bashsandbox.HostReadable }
 
 // methodSpyRunner records whether the snapshot-sourcing ShellCommand path is ever
 // taken. Command runs a real bash so the mutation actually writes.
@@ -90,10 +92,14 @@ func (r *methodSpyRunner) ShellCommand(ctx context.Context, command, _ string) (
 	return exec.CommandContext(ctx, "bash", "-c", command), nil
 }
 
-func (*methodSpyRunner) WritableRoots() []string { return nil }
-func (*methodSpyRunner) PolicyKey() string       { return "spy" }
+func (*methodSpyRunner) WritableRoots() []string          { return nil }
+func (*methodSpyRunner) PolicyKey() string                { return "spy" }
+func (*methodSpyRunner) ReadScope() bashsandbox.ReadScope { return bashsandbox.HostReadable }
 func (r *methodSpyRunner) BashCommand(ctx context.Context, command, workDir string, args ...string) (*exec.Cmd, error) {
-	return r.Command(ctx, procexec.Request{Path: "bash", Args: append([]string{"-c", command}, args...), WorkDir: workDir})
+	return r.Command(
+		ctx,
+		procexec.Request{Path: "bash", Args: append([]string{"-c", command}, args...), WorkDir: workDir},
+	)
 }
 
 // TestSandboxFileMutator_NeverSourcesSnapshot guards the write-safety seam: file
