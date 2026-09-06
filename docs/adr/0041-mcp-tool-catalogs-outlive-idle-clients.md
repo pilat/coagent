@@ -1,6 +1,6 @@
 # ADR-0041: MCP tool catalogs outlive idle clients
 
-- **Status:** Accepted
+- **Status:** Superseded by [ADR-0045](0045-session-bound-mcp-process-identity.md)
 - **Date:** 2026-09-04
 
 ## Context

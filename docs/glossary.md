@@ -21,6 +21,20 @@ _Avoid_: server, gateway.
 One task's isolated runtime — its own LLM client, tool registry, and conversation history — that runs the agent loop. "Session" names both the live object and the persisted `SessionRecord` row; the append-only design keeps those two deliberately distinct.
 _Avoid_: conversation (that's the history), job.
 
+**session shields**:
+The durable, operator-controlled `shields_up` state of a session. Shields are
+down by default. Raising them confines built-in file tools and session-owned
+Bash, LSP, and MCP processes to the project and their minimal runtime files;
+configured writable paths, the user cache, and host temporary storage grant no
+exception. A raised session bypasses shell activation and provides no temporary
+storage outside the project; Git metadata outside a linked work tree is not part
+of the project boundary. Lowering shields restores host-readable process and
+file-tool behavior while retaining the write sandbox. Only a manager-originated
+command may change the state, and subagents inherit it. Trusted skill text and
+the built-in web fetch and search tools remain available in both states.
+_Avoid_: sandbox mode (the write sandbox is a separate permanent boundary), safe
+session (shields do not make untrusted project data confidential).
+
 **task**:
 A unit of work a manager submits to the daemon. It has no Go type of its own — a task is realized as a **session** created from a prompt. Beware: the bare word `task` in code means only the **`task` tool** (which spawns subagents), never the work-unit — qualify accordingly.
 _Avoid_: job, request (for the work-unit); unqualified "task" in code.
@@ -155,7 +169,17 @@ _Avoid_: plugin (a plugin is a marketplace bundle), command.
 A git repo supplying loadable skills and subagent definitions, cloned and cached with a TTL. Configured under `marketplaces:` in `config.yaml`.
 
 **MCP pool**:
-The daemon-level pool of external MCP-server *connections*, keyed by a hash of command+args+env+workdir, refcounted, and reaped after 30 minutes idle — so servers aren't re-spawned per task. Its **MCP catalog** is the pool-owned in-memory copy of a server's discovered tool metadata (name, description, schema): it survives process reaping for 15 days idle and clears on daemon restart, so an activation whose process was reaped still offers the same direct tools and starts the subprocess only on the model's first call. A lazy reconnect never rewrites the activation's catalog or schemas. Distinct from the **MCP registry**, which says which servers exist at all.
+The daemon-owned lifecycle container for external MCP-server connections. A
+connection and its catalog are keyed by server config, workdir, and the owning
+session's process-policy identity, so they may be reused across activations of
+that session but never shared with another session. Idle connections are reaped
+after 30 minutes. The **MCP catalog** is the pool-owned in-memory copy of one
+session-bound server's discovered tool metadata (name, description, schema): it
+survives process reaping for 15 days idle and clears on daemon restart, so an
+activation whose process was reaped still offers the same direct tools and
+starts the subprocess only on the model's first call. A lazy reconnect never
+rewrites the activation's catalog or schemas. Distinct from the **MCP registry**,
+which says which servers exist at all.
 _Avoid_: tool cache (the catalog is metadata, not a result cache); prompt cache (that is provider-side).
 
 **MCP registry**:
@@ -356,7 +380,7 @@ _Avoid_: capability, model role.
 The in-memory credential map parsed from `~/.coagent/secrets`, deliberately kept out of the process environment (tool subprocesses inherit no credentials) and scrubbed from all log output.
 
 **shellenv**:
-A per-cwd snapshot of a login+interactive shell (mise / asdf / nvm / direnv toolchain activation), captured, cached (validated by a fingerprint of the on-disk toolchain state, with a 30-min backstop — see [ADR-0001](adr/0001-shellenv-fingerprint-invalidation.md)), and replayed for bash / LSP / MCP subprocess spawns. Captures `os.Environ()` only — never a secrets map.
+A per-cwd snapshot of a login+interactive shell (mise / asdf / nvm / direnv toolchain activation), captured, cached (validated by a fingerprint of the on-disk toolchain state, with a 30-min backstop — see [ADR-0001](adr/0001-shellenv-fingerprint-invalidation.md)), and replayed for Bash / LSP / MCP subprocess spawns while session shields are down. Raised sessions bypass capture and replay. Captures `os.Environ()` only — never a secrets map.
 
 **filesystem-write sandbox**:
 Optional native write-confinement for Bash descendants and the `write` / `edit` / `apply_patch` tools (Seatbelt on macOS, Bubblewrap on Linux). It is an *integrity* boundary — not confidentiality: it does not confine reads or network egress.
