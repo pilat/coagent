@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/pilat/coagent/internal/sessionstore"
 	"github.com/pilat/coagent/internal/todo"
@@ -28,6 +29,20 @@ func (r *todoReplacement) ReplaceTodo(
 	items, err := normalizeTodoReplacement(callID, input)
 	if err != nil {
 		return nil, err
+	}
+
+	// The replacement schema has no timestamp field: generated timestamps must
+	// land in the durable JSON too, or restart projections lose their ordering inputs.
+	now := time.Now().UTC()
+
+	for _, item := range items {
+		if item.CreatedAt.IsZero() {
+			item.CreatedAt = now
+		}
+
+		if item.UpdatedAt.IsZero() {
+			item.UpdatedAt = now
+		}
 	}
 
 	encoded, err := json.Marshal(items)

@@ -63,3 +63,23 @@ func TestTodoReplacement_StoreFailureLeavesMemoryUntouched(t *testing.T) {
 	require.ErrorContains(t, err, "persist todo replacement")
 	assert.NotNil(t, memory.Get(kept.ID))
 }
+
+// The durable JSON is the restart projection's only ordering input, so
+// generated timestamps must be persisted, not just held in memory.
+func TestTodoReplacement_PersistsGeneratedTimestamps(t *testing.T) {
+	store := &todoReplacementStore{}
+	replacement := &todoReplacement{store: store, sessionID: 7, memory: todo.New()}
+
+	_, err := replacement.ReplaceTodo(t.Context(), "call-1", []builtin.TodoReplacementItem{
+		{Content: "first"},
+		{ID: &[]string{"kept"}[0], Content: "kept"},
+	})
+	require.NoError(t, err)
+
+	var persisted []*todo.Item
+	require.NoError(t, json.Unmarshal(store.encoded, &persisted))
+	require.Len(t, persisted, 2)
+	assert.False(t, persisted[0].CreatedAt.IsZero(), "new item needs a durable CreatedAt")
+	assert.False(t, persisted[0].UpdatedAt.IsZero(), "new item needs a durable UpdatedAt")
+	assert.False(t, persisted[1].CreatedAt.IsZero(), "explicitly identified item still gets a durable CreatedAt")
+}

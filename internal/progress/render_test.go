@@ -223,12 +223,54 @@ func TestRenderFull_KeepsDiagnosticsAndFullNote(t *testing.T) {
 	assert.Contains(t, rendered, "- Persisted cost: $0.500000 · 10 prompt / 20 completion tokens")
 	assert.Contains(t, rendered, "- Wall time: 1m0s")
 	assert.Contains(t, rendered, "- TODO: 1 active · 2 remaining · 0 done")
-	assert.Contains(t, rendered, "  - [in_progress] ship change")
-	assert.Contains(t, rendered, "  - [weird] mystery")
+	assert.Contains(t, rendered, "  - 🔄 ship change")
+	assert.Contains(t, rendered, "  - ❔ mystery")
+	assert.Contains(t, rendered, "Legend: ⏳ pending · 🔄 in progress · ✅ completed · 🚫 cancelled")
 	assert.Contains(t, rendered, "- Latest agent note: "+note)
 	assert.Contains(t, rendered, "- Waiting: 1 item(s)")
 	assert.Contains(t, rendered, "- Children: 2 · child iterations 9")
 	assert.Contains(t, rendered, "- Observed: 2026-08-29 12:00:00 UTC · revision `rev`")
+}
+
+// Icon-only rows use the exact shape `  - <emoji> <content>`; the legend follows
+// one blank line after the rows and disappears with the list itself.
+func TestRenderFull_TodoRowsAndLegend(t *testing.T) {
+	t.Parallel()
+
+	empty := RenderFull(Snapshot{}, nil)
+	assert.Contains(t, empty, "- TODO: no TODO is declared")
+	assert.NotContains(t, empty, "Legend:")
+	assert.NotContains(t, empty, "⏳")
+
+	snapshot := Snapshot{
+		Todos: []TodoItem{
+			{ID: "1", Content: "inspect secret-value", Status: "pending"},
+			{ID: "2", Content: "ship change", Status: "in_progress"},
+			{ID: "3", Content: "done deal", Status: "completed"},
+			{ID: "4", Content: "gone", Status: "cancelled"},
+			{ID: "5", Content: "mystery", Status: "weird"},
+		},
+	}
+
+	assert.Equal(t, strings.Join([]string{
+		"## Session progress",
+		"- State: unavailable",
+		"- Context: unavailable",
+		"- Lifetime usage: unavailable",
+		"- Wall time: unavailable",
+		"- TODO: 1 active · 3 remaining · 1 done · 1 cancelled",
+		"  - ⏳ inspect [REDACTED]",
+		"  - 🔄 ship change",
+		"  - ✅ done deal",
+		"  - 🚫 gone",
+		"  - ❔ mystery",
+		"",
+		"Legend: ⏳ pending · 🔄 in progress · ✅ completed · 🚫 cancelled",
+		"- Children: 0 · child iterations 0",
+		"- Observed: 0001-01-01 00:00:00 UTC · revision ``",
+	}, "\n"), RenderFull(snapshot, func(value string) string {
+		return strings.ReplaceAll(value, "secret-value", "[REDACTED]")
+	}))
 }
 
 func TestRenderFooter_SummariesOnly(t *testing.T) {
