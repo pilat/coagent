@@ -277,3 +277,77 @@ func TestHarnessScenario_StatusIsAnsweredWhileABlockingChildIsOut(t *testing.T) 
 	assert.Equal(t, 1, countToolResultsFor(msgs, "task"))
 	assert.Len(t, statusReports(collector.snapshot(), parentID), 1, "still exactly one status report")
 }
+
+// The durable TODO JSON mirrors a real todowrite: mixed priorities, an exact
+// priority/time tie resolved by ID, and one legacy item without a timestamp.
+// The full /status list must render canonical order, icon-only rows, no
+// priority text, and the legend after one blank line.
+func TestHarnessScenario_StatusFullTodoListOrderingAndIcons(t *testing.T) {
+	h := newSubagentHarnessWith(t, trivialRespond)
+	collector := collectEvents(h.mgr.PubSub().SubscribeAll())
+	defer func() {
+		collector.stop()
+		h.shutdown()
+	}()
+
+	root, err := h.mgr.Send(h.ctx, h.projectID, "plan the work", "fake-model", map[string]any{
+		"manager_id": scenarioManagerID,
+	})
+	require.NoError(t, err)
+	h.mgr.waitIdle(root)
+
+	base := time.Now().UTC().Add(-time.Hour)
+	stamp := func(d time.Duration) string { return base.Add(d).Format(time.RFC3339Nano) }
+	todos := `[` +
+		`{"id":"low","content":"low task","status":"pending","priority":"low","created_at":"` + stamp(0) + `"},` +
+		`{"id":"high-late","content":"high late","status":"in_progress","priority":"high","created_at":"` + stamp(time.Minute) + `"},` +
+		`{"id":"tie-b","content":"tie b","status":"pending","priority":"high","created_at":"` + stamp(0) + `"},` +
+		`{"id":"high-early","content":"high early","status":"completed","priority":"high","created_at":"` + stamp(0) + `"},` +
+		`{"id":"tie-a","content":"tie a","status":"cancelled","priority":"high","created_at":"` + stamp(0) + `"},` +
+		`{"id":"legacy","content":"legacy item","status":"pending","priority":"medium"}` +
+		`]`
+	require.NoError(t, h.sessStore.UpdateSessionTodoItems(h.ctx, root, []byte(todos)))
+
+	require.NoError(t, h.mgr.SendToSession(h.ctx, root, "/status"))
+	collector.waitFor(t, "full /status TODO list", func(e []controllerapi.SessionNotification) bool {
+		return len(statusReports(e, root)) > 0
+	})
+	h.mgr.waitIdle(root)
+
+	reports := statusReports(collector.snapshot(), root)
+	report := reports[len(reports)-1]
+	assert.Contains(t, report, "- TODO: 1 active · 4 remaining · 1 done · 1 cancelled")
+	// Canonical order: priority, then created_at, then ID for exact ties.
+	assert.Equal(t, []string{
+		"  - ✅ high early",
+		"  - 🚫 tie a",
+		"  - ⏳ tie b",
+		"  - 🔄 high late",
+		"  - ⏳ legacy item",
+		"  - ⏳ low task",
+	}, todoRows(report))
+	// Priority is ordering-only metadata, never visible text.
+	assert.NotContains(t, report, "[high]")
+	assert.NotContains(t, report, "[medium]")
+	assert.NotContains(t, report, "[low]")
+	assert.NotContains(t, report, "[in_progress]")
+	// The legend follows the rows after one blank line.
+	assert.Contains(t, report,
+		"  - ⏳ low task\n\nLegend: ⏳ pending · 🔄 in progress · ✅ completed · 🚫 cancelled")
+	h.requireInboxDrained(root)
+}
+
+// todoRows extracts the icon-only TODO rows from a rendered status report.
+func todoRows(report string) []string {
+	var rows []string
+
+	for line := range strings.SplitSeq(report, "\n") {
+		for _, icon := range []string{"⏳", "🔄", "✅", "🚫", "❔"} {
+			if strings.HasPrefix(line, "  - "+icon+" ") {
+				rows = append(rows, line)
+			}
+		}
+	}
+
+	return rows
+}

@@ -76,9 +76,25 @@ func TestTodoReadOnEmptyList(t *testing.T) {
 	assert.Equal(t, 0, result.Metadata[metaKeyCount])
 }
 
-func TestPriorityOrder(t *testing.T) {
-	assert.Equal(t, 0, priorityOrder(todo.PriorityHigh))
-	assert.Equal(t, 1, priorityOrder(todo.PriorityMedium))
-	assert.Equal(t, 2, priorityOrder(todo.PriorityLow))
-	assert.Equal(t, 3, priorityOrder(todo.Priority("")))
+func TestTodoReadExactTiesAreDeterministic(t *testing.T) {
+	base := time.Now().Add(-time.Hour)
+	store := todo.New()
+	store.Replace([]*todo.Item{
+		{ID: "b", Content: "b", Priority: todo.PriorityHigh, CreatedAt: base},
+		{ID: "a", Content: "a", Priority: todo.PriorityHigh, CreatedAt: base},
+		{ID: "c", Content: "c", Priority: todo.PriorityHigh, CreatedAt: base},
+	})
+
+	result, err := newTodoReadTool(store).Execute(context.Background(), json.RawMessage(`{}`))
+	require.NoError(t, err)
+
+	var items []todo.Item
+	require.NoError(t, json.Unmarshal([]byte(result.Output), &items))
+
+	ids := make([]string, 0, len(items))
+	for _, item := range items {
+		ids = append(ids, item.ID)
+	}
+
+	assert.Equal(t, []string{"a", "b", "c"}, ids)
 }

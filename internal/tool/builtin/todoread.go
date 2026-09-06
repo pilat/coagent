@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"sort"
 
 	"github.com/pilat/coagent/internal/todo"
 	"github.com/pilat/coagent/internal/tool"
@@ -49,14 +48,7 @@ func (t *todoReadTool) Parameters() json.RawMessage {
 func (t *todoReadTool) Execute(ctx context.Context, params json.RawMessage) (*tool.Result, error) {
 	items := t.store.List()
 
-	sort.Slice(items, func(i, j int) bool {
-		pi, pj := priorityOrder(items[i].Priority), priorityOrder(items[j].Priority)
-		if pi != pj {
-			return pi < pj
-		}
-
-		return items[i].CreatedAt.Before(items[j].CreatedAt)
-	})
+	todo.SortCanonical(items)
 
 	output, err := json.MarshalIndent(items, "", "  ")
 	if err != nil {
@@ -70,17 +62,4 @@ func (t *todoReadTool) Execute(ctx context.Context, params json.RawMessage) (*to
 			metaKeyCount: len(items),
 		},
 	}, nil
-}
-
-func priorityOrder(p todo.Priority) int {
-	switch p {
-	case todo.PriorityHigh:
-		return 0
-	case todo.PriorityMedium:
-		return 1
-	case todo.PriorityLow:
-		return 2
-	default:
-		return 3
-	}
 }

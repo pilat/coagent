@@ -267,10 +267,27 @@ func renderTodos(items []TodoItem, redact func(string) string) []string {
 	}
 
 	for _, item := range items {
-		lines = append(lines, fmt.Sprintf("  - [%s] %s", item.Status, redact(item.Content)))
+		lines = append(lines, fmt.Sprintf("  - %s %s", todoStatusIcon(item.Status), redact(item.Content)))
 	}
 
+	lines = append(lines, "", "Legend: ⏳ pending · 🔄 in progress · ✅ completed · 🚫 cancelled")
+
 	return lines
+}
+
+func todoStatusIcon(status string) string {
+	switch status {
+	case "pending":
+		return "⏳"
+	case "in_progress":
+		return "🔄"
+	case "completed":
+		return "✅"
+	case "cancelled":
+		return "🚫"
+	default:
+		return "❔"
+	}
 }
 
 func renderBudget(value Budget) string {

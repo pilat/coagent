@@ -90,6 +90,10 @@ func (r *runtime) progressSnapshot(
 		return progress.Snapshot{}, fmt.Errorf("decode progress todo: %w", err)
 	}
 
+	// Durable items must reach /status in the same canonical order todoread
+	// reports; sort before conversion because progress.TodoItem has no timestamps.
+	todo.SortCanonical(todoItems)
+
 	snapshot := progress.Snapshot{
 		RootID: facts.RootID, DurableWatermark: facts.MessageWatermark,
 		OutboxWatermark: facts.OutboxWatermark, PersistedReason: string(facts.Status),
