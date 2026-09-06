@@ -242,8 +242,8 @@ func newNativeToolSandbox(t *testing.T) nativeToolSandbox {
 	}
 
 	unified := &config.UnifiedConfig{}
-	unified.Tools.Bash.Sandbox.Enabled = true
-	unified.Tools.Bash.Sandbox.WritablePaths = []string{configured}
+	unified.Sandbox.Enabled = true
+	unified.Sandbox.WritablePaths = []string{configured}
 	stack, err := BuildStack(context.Background(), StackConfig{
 		WorkDir: workDir,
 		Unified: unified,

@@ -3,6 +3,8 @@ package bashsandbox
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
@@ -14,6 +16,7 @@ import (
 	"time"
 
 	"github.com/pilat/coagent/internal/coagenthome"
+	"github.com/pilat/coagent/internal/procexec"
 	"github.com/pilat/coagent/internal/shellenv"
 )
 
@@ -29,18 +32,22 @@ var enforcement struct {
 	err  error
 }
 
-// Config configures Bash filesystem write confinement.
+// Config configures session process filesystem write confinement.
 type Config struct {
-	Enabled       bool
-	WorkDir       string
-	WritablePaths []string
+	Enabled                     bool
+	WorkDir                     string
+	SessionKey                  string
+	ExcludeSessionWritableRoots bool
+	WritablePaths               []string
 }
 
-// Runner constructs Bash commands with the configured sandbox policy.
+// Runner constructs processes with the configured sandbox policy.
 type Runner interface {
-	// Command builds a plain `bash -c` command that never sources a shell-env
+	procexec.Runner
+
+	// BashCommand builds a plain `bash -c` command that never sources a shell-env
 	// snapshot. Internal helpers only (file mutation, probes) — use ShellCommand.
-	Command(ctx context.Context, command, workDir string, args ...string) (*exec.Cmd, error)
+	BashCommand(ctx context.Context, command, workDir string, args ...string) (*exec.Cmd, error)
 
 	// ShellCommand builds a user shell command, sourcing workDir's shell-env
 	// snapshot when one is available so the command sees the project's activated
@@ -78,15 +85,18 @@ func New(cfg Config, provider shellenv.Provider) (Runner, error) {
 	}
 
 	paths := make([]string, 0, len(cfg.WritablePaths)+4)
-	paths = append(paths, cfg.WorkDir, os.TempDir(), "/tmp")
+	paths = append(paths, cfg.WorkDir)
+	if !cfg.ExcludeSessionWritableRoots {
+		paths = append(paths, os.TempDir(), "/tmp")
 
-	cacheDir, err := existingUserCacheDir()
-	if err != nil {
-		return nil, fmt.Errorf("resolve user cache directory: %w", err)
-	}
+		cacheDir, err := existingUserCacheDir()
+		if err != nil {
+			return nil, fmt.Errorf("resolve user cache directory: %w", err)
+		}
 
-	if cacheDir != "" {
-		paths = append(paths, cacheDir)
+		if cacheDir != "" {
+			paths = append(paths, cacheDir)
+		}
 	}
 
 	paths = append(paths, cfg.WritablePaths...)
@@ -100,7 +110,7 @@ func New(cfg Config, provider shellenv.Provider) (Runner, error) {
 		return nil, err
 	}
 
-	runner, err := newEnabledRunner(writableRoots)
+	runner, err := newEnabledRunner(writableRoots, cfg.SessionKey)
 	if err != nil {
 		return nil, fmt.Errorf("create Bash sandbox runner: %w", err)
 	}
@@ -119,40 +129,45 @@ func New(cfg Config, provider shellenv.Provider) (Runner, error) {
 // first session.
 func Probe() error {
 	enforcement.once.Do(func() {
-		enforcement.err = probeEnforcement(newEnabledRunner)
+		enforcement.err = probeEnforcement(func(roots []string) (Runner, error) {
+			return newEnabledRunner(roots)
+		})
 	})
 
 	return enforcement.err
 }
 
-func (disabledRunner) Command(
-	ctx context.Context,
-	command, workDir string,
-	args ...string,
-) (*exec.Cmd, error) {
-	commandArgs := append([]string{"-c", command}, args...)
-	cmd := exec.CommandContext(ctx, "bash", commandArgs...)
-	cmd.Dir = workDir
+func (r disabledRunner) Command(ctx context.Context, request procexec.Request) (*exec.Cmd, error) {
+	cmd := exec.CommandContext(ctx, request.Path, request.Args...)
+	cmd.Dir = request.WorkDir
+	cmd.Env = request.Env
 
 	return cmd, nil
+}
+
+func (r disabledRunner) BashCommand(ctx context.Context, command, workDir string, args ...string) (*exec.Cmd, error) {
+	return r.Command(ctx, procexec.Request{
+		Path:    "bash",
+		Args:    append([]string{"-c", command}, args...),
+		WorkDir: workDir,
+	})
 }
 
 func (r disabledRunner) ShellCommand(ctx context.Context, command, workDir string) (*exec.Cmd, error) {
 	shell, snap := snapshotFor(ctx, r.provider, workDir)
 	if snap == "" {
-		cmd := exec.CommandContext(ctx, "bash", "-c", command)
-		cmd.Dir = workDir
-
-		return cmd, nil
+		return r.BashCommand(ctx, command, workDir)
 	}
 
-	cmd := exec.CommandContext(ctx, shell, "-c", sourceLine(snap, command))
-	cmd.Dir = workDir
-
-	return cmd, nil
+	return r.Command(ctx, procexec.Request{
+		Path:    shell,
+		Args:    []string{"-c", sourceLine(snap, command)},
+		WorkDir: workDir,
+	})
 }
 
 func (disabledRunner) WritableRoots() []string { return nil }
+func (disabledRunner) PolicyKey() string       { return "unconfined" }
 
 // snapshotFor resolves the shell and snapshot path for workDir, or ("", "") when
 // snapshotting is unavailable (nil provider or graceful degradation).
@@ -303,7 +318,7 @@ func preflight(runner Runner) error {
 	ctx, cancel := context.WithTimeout(context.Background(), preflightTimeout)
 	defer cancel()
 
-	cmd, err := runner.Command(ctx, ":", "/")
+	cmd, err := runner.BashCommand(ctx, ":", "/")
 	if err != nil {
 		return fmt.Errorf("construct preflight command: %w", err)
 	}
@@ -414,7 +429,7 @@ func runProbe(runner Runner, command string) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), preflightTimeout)
 	defer cancel()
 
-	cmd, err := runner.Command(ctx, command, "/")
+	cmd, err := runner.BashCommand(ctx, command, "/")
 	if err != nil {
 		return "", fmt.Errorf("construct probe command: %w", err)
 	}
@@ -439,4 +454,18 @@ func runProbe(runner Runner, command string) (string, error) {
 
 func shellPath(path string) string {
 	return "'" + strings.ReplaceAll(path, "'", "'\\''") + "'"
+}
+
+func policyKey(roots []string, sessionKey string) string {
+	hash := sha256.Sum256([]byte(strings.Join(roots, "\x00") + "\x1f" + sessionKey))
+
+	return hex.EncodeToString(hash[:])
+}
+
+func firstSessionKey(keys []string) string {
+	if len(keys) == 0 {
+		return ""
+	}
+
+	return keys[0]
 }

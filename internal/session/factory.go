@@ -165,6 +165,7 @@ func (f *factory) buildRegistry(
 	projectID, sessionID int64,
 ) (tool.Registry, *builtin.Stack, error) {
 	stack, err := builtin.BuildStack(ctx, builtin.StackConfig{
+		SessionID:       sessionID,
 		WorkDir:         cfg.WorkDir,
 		RepoRoot:        cfg.RepoRoot,
 		Pool:            f.mcpPool,

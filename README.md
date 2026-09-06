@@ -141,20 +141,20 @@ What is enforced:
   secrets file is parsed into memory rather than loaded into the environment.
   Ordinary environment variables inherited by the daemon remain visible to its
   children, so do not start it with unrelated credentials exported.
-- **Optional write confinement.** On supported Linux and macOS systems, Bash
-  descendants and dedicated file-mutation tools can be restricted to the
-  workspace and explicit writable paths using Bubblewrap or Seatbelt. Startup
-  fails if the enabled backend cannot enforce the policy.
+- **Write confinement by default.** On supported Linux and macOS systems, Bash
+  descendants, LSP and stdio MCP processes, and dedicated file-mutation tools
+  are restricted to the workspace and explicit writable paths using Bubblewrap
+  or Seatbelt. Startup fails if the enabled backend cannot enforce the policy.
 - **Configuration fails closed.** Unknown YAML keys, missing secret references,
   and catalog-unknown models are errors rather than silent fallbacks.
 
 What is not enforced:
 
-- The write sandbox is opt-in and is **not** a confidentiality boundary. Read
+- The write sandbox is **not** a confidentiality boundary. Read
   tools and Bash can read anything available to the daemon user, including the
-  secrets file. Bash network egress is unrestricted.
-- MCP and LSP processes, network effects, and Unix-socket effects are outside
-  the write sandbox.
+  secrets file. Bash network egress is unrestricted. Set `sandbox.enabled: false`
+  to disable write confinement explicitly.
+- Network and Unix-socket effects are outside the filesystem write sandbox.
 - Web fetch blocks link-local and cloud metadata destinations, but deliberately
   permits loopback and private networks. It is a targeted mitigation, not a
   complete SSRF boundary.
@@ -188,16 +188,17 @@ from `.agents/`, `.coagent/`, and `.claude/`, and subagent definitions from
 `.coagent/agents` and `.claude/agents`. Later, more local sources win when names
 collide.
 
-Optional write confinement:
+Write confinement:
 
 ```yaml
-tools:
-  bash:
-    sandbox:
-      enabled: true
-      writable_paths:
-        - ~/.npm
+sandbox:
+  enabled: true
+  writable_paths:
+    - ~/.npm
 ```
+
+The sandbox is enabled when `sandbox.enabled` is omitted; set it to `false` to
+disable write confinement explicitly.
 
 The workspace, system temporary directory, and an existing user cache directory
 are writable by default. Add language- or package-manager caches explicitly.

@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/pilat/coagent/internal/procexec"
 	"github.com/pilat/coagent/internal/shellenv"
 )
 
@@ -38,9 +39,10 @@ type darwinRunner struct {
 	parameters []string
 	roots      []string
 	provider   shellenv.Provider
+	policyKey  string
 }
 
-func newEnabledRunner(writableRoots []string) (Runner, error) {
+func newEnabledRunner(writableRoots []string, sessionKey ...string) (Runner, error) {
 	info, err := os.Stat(seatbeltExecutable)
 	if err != nil {
 		return nil, fmt.Errorf("locate Seatbelt executable %q: %w", seatbeltExecutable, err)
@@ -55,6 +57,7 @@ func newEnabledRunner(writableRoots []string) (Runner, error) {
 		profile:    seatbeltProfile(len(writableRoots)),
 		parameters: seatbeltParameters(writableRoots),
 		roots:      writableRoots,
+		policyKey:  policyKey(writableRoots, firstSessionKey(sessionKey)),
 	}
 
 	if err := preflight(runner); err != nil {
@@ -66,21 +69,29 @@ func newEnabledRunner(writableRoots []string) (Runner, error) {
 
 func (r *darwinRunner) Command(
 	ctx context.Context,
-	command, workDir string,
-	commandArgs ...string,
+	request procexec.Request,
 ) (*exec.Cmd, error) {
 	args := make([]string, 0, len(r.parameters)*2+5)
 	for i, value := range r.parameters {
 		args = append(args, "-D", seatbeltParamName(i)+"="+value)
 	}
 
-	args = append(args, "-p", r.profile, "bash", "-c", command)
-	args = append(args, commandArgs...)
+	args = append(args, "-p", r.profile, request.Path)
+	args = append(args, request.Args...)
 
 	cmd := exec.CommandContext(ctx, r.executable, args...)
-	cmd.Dir = workDir
+	cmd.Dir = request.WorkDir
+	cmd.Env = request.Env
 
 	return cmd, nil
+}
+
+func (r *darwinRunner) BashCommand(ctx context.Context, command, workDir string, commandArgs ...string) (*exec.Cmd, error) {
+	return r.Command(ctx, procexec.Request{
+		Path:    "bash",
+		Args:    append([]string{"-c", command}, commandArgs...),
+		WorkDir: workDir,
+	})
 }
 
 // ShellCommand runs a user command confined by Seatbelt, sourcing workDir's
@@ -94,23 +105,14 @@ func (r *darwinRunner) ShellCommand(ctx context.Context, command, workDir string
 		progArgs = []string{"-c", sourceLine(snap, command)}
 	}
 
-	args := make([]string, 0, len(r.parameters)*2+5)
-	for i, value := range r.parameters {
-		args = append(args, "-D", seatbeltParamName(i)+"="+value)
-	}
-
-	args = append(args, "-p", r.profile, prog)
-	args = append(args, progArgs...)
-
-	cmd := exec.CommandContext(ctx, r.executable, args...)
-	cmd.Dir = workDir
-
-	return cmd, nil
+	return r.Command(ctx, procexec.Request{Path: prog, Args: progArgs, WorkDir: workDir})
 }
 
 func (r *darwinRunner) WritableRoots() []string {
 	return append([]string(nil), r.roots...)
 }
+
+func (r *darwinRunner) PolicyKey() string { return r.policyKey }
 
 func (r *darwinRunner) setProvider(p shellenv.Provider) { r.provider = p }
 

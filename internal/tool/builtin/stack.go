@@ -21,11 +21,12 @@ import (
 
 // StackConfig configures a session-scoped local tool stack.
 type StackConfig struct {
+	SessionID       int64
 	WorkDir         string
 	RepoRoot        string                      // main repository path for worktree sessions; empty otherwise
 	Pool            mcp.Pool                    // may be nil
 	Servers         map[string]mcp.ServerConfig // resolved MCP definitions; empty = no MCP
-	Unified         *config.UnifiedConfig       // for the Bash sandbox config
+	Unified         *config.UnifiedConfig       // for the sandbox config
 	Loader          loader.Service
 	Todo            todo.Service
 	TodoReplacement TodoReplacement
@@ -56,7 +57,7 @@ func BuildStack(ctx context.Context, cfg StackConfig) (*Stack, error) {
 	}
 
 	registry := tool.NewRegistry()
-	lspMgr := lsp.NewManager(cfg.Provider)
+	lspMgr := lsp.NewManager(cfg.Provider, bashRunner)
 
 	registerCoreTools(
 		registry,
@@ -71,7 +72,7 @@ func BuildStack(ctx context.Context, cfg StackConfig) (*Stack, error) {
 	)
 
 	// MCP failure degrades to a builtin-only stack: a broken MCP server must not block sessions.
-	mcpSvc, err := mcp.AcquireForWorkDir(ctx, cfg.Pool, cfg.Servers, cfg.WorkDir, cfg.Provider)
+	mcpSvc, err := mcp.AcquireForWorkDir(ctx, cfg.Pool, cfg.Servers, cfg.WorkDir, cfg.Provider, bashRunner)
 	if err != nil {
 		logger.Ctx(ctx).Warn("mcp_acquire_failed", zap.Error(err))
 	}
@@ -173,13 +174,13 @@ func newSearchToolFromConfig(unified *config.UnifiedConfig) tool.Tool {
 }
 
 func bashSandboxConfig(cfg StackConfig) bashsandbox.Config {
-	sandboxCfg := bashsandbox.Config{WorkDir: cfg.WorkDir}
+	sandboxCfg := bashsandbox.Config{WorkDir: cfg.WorkDir, SessionKey: fmt.Sprintf("session:%d", cfg.SessionID)}
 	if cfg.Unified == nil {
 		return sandboxCfg
 	}
 
-	sandboxCfg.Enabled = cfg.Unified.Tools.Bash.Sandbox.Enabled
-	sandboxCfg.WritablePaths = cfg.Unified.Tools.Bash.Sandbox.WritablePaths
+	sandboxCfg.Enabled = cfg.Unified.Sandbox.Enabled
+	sandboxCfg.WritablePaths = cfg.Unified.Sandbox.WritablePaths
 
 	// A linked work tree shares the object store and refs with the main
 	// repository, so git mutations must reach the main .git; the checkout

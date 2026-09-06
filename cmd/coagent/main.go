@@ -15,6 +15,7 @@ import (
 
 	"github.com/pilat/coagent/internal/bashsandbox"
 	"github.com/pilat/coagent/internal/budget"
+	"github.com/pilat/coagent/internal/coagenthome"
 	"github.com/pilat/coagent/internal/config"
 	"github.com/pilat/coagent/internal/configapply"
 	"github.com/pilat/coagent/internal/configops"
@@ -292,14 +293,14 @@ func logConfigStatus(cfg *config.Config) {
 
 	log.Info("config loaded",
 		zap.Int("marketplaces", len(cfg.UnifiedConfig.Marketplaces)),
-		zap.Bool("bash_sandbox_enabled", cfg.UnifiedConfig.Tools.Bash.Sandbox.Enabled),
+		zap.Bool("write_sandbox_enabled", cfg.UnifiedConfig.Sandbox.Enabled),
 	)
 }
 
 // probeBashSandbox fails startup when Bash confinement is configured but the
 // platform backend cannot enforce it, so sessions never run unconfined.
 func probeBashSandbox(cfg *config.Config) error {
-	if cfg.UnifiedConfig == nil || !cfg.UnifiedConfig.Tools.Bash.Sandbox.Enabled {
+	if cfg.UnifiedConfig == nil || !cfg.UnifiedConfig.Sandbox.Enabled {
 		return nil
 	}
 
@@ -510,6 +511,27 @@ func startCore(
 	applier configapply.Service,
 ) (*core, error) {
 	gitClient := git.New()
+	marketplaceGitClient := gitClient
+	if cfg != nil && cfg.UnifiedConfig != nil && cfg.UnifiedConfig.Sandbox.Enabled {
+		marketplaceDir, err := coagenthome.Join(coagenthome.CacheDirName, coagenthome.MarketplacesDirName)
+		if err != nil {
+			return nil, fmt.Errorf("resolve marketplace cache directory: %w", err)
+		}
+		if err := os.MkdirAll(marketplaceDir, 0o700); err != nil {
+			return nil, fmt.Errorf("create marketplace cache directory: %w", err)
+		}
+
+		runner, err := bashsandbox.New(bashsandbox.Config{
+			Enabled:                     true,
+			WorkDir:                     marketplaceDir,
+			SessionKey:                  "marketplace",
+			ExcludeSessionWritableRoots: true,
+		}, nil)
+		if err != nil {
+			return nil, fmt.Errorf("create marketplace sandbox: %w", err)
+		}
+		marketplaceGitClient = git.NewSandboxed(runner)
+	}
 
 	provider := shellenv.New()
 
@@ -519,7 +541,7 @@ func startCore(
 
 	a.onStop("mcp.pool", func(context.Context) error { pool.Stop(); return nil })
 
-	cache := loader.NewMarketplaceCache(gitClient)
+	cache := loader.NewMarketplaceCache(marketplaceGitClient)
 
 	db, err := migrate.Open(ctx)
 	if err != nil {

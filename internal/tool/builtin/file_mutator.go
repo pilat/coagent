@@ -94,7 +94,7 @@ func (m *sandboxFileMutator) WriteFile(
 		createParentsArg = "1"
 	}
 
-	cmd, err := m.runner.Command(
+	cmd, err := m.runner.BashCommand(
 		ctx,
 		sandboxMutationCommand,
 		string(os.PathSeparator),

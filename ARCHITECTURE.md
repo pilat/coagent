@@ -58,7 +58,7 @@ does not imply a tier except where it expresses an implementation variant.
 
 - `cmd/coagent` — composition root, CLI product policy, onboarding and control-operation wiring.
 - `internal/admission` — in-memory runner capacity and per-parent subagent quotas.
-- `internal/bashsandbox` — native direct-write confinement for Bash and file-mutation tools.
+- `internal/bashsandbox` — native write confinement and process-launch implementation for session-owned processes.
 - `internal/budget` — one-shot root-tree budget policy and its user-authorized tool.
 - `internal/catalog` — external model metadata acquisition, caching and identifier matching.
 - `internal/coagenthome` — sole resolver and name owner for the coagent home directory.
@@ -94,6 +94,7 @@ does not imply a tier except where it expresses an implementation variant.
 - `internal/progress` — controller-neutral progress snapshots and Markdown rendering.
 - `internal/progressruntime` — durable progress publication, output readiness and silence reconciliation lifecycle.
 - `internal/projectpath` — canonical project-root paths and project-name validation.
+- `internal/procexec` — implementation-neutral process request and confinement-runner contract.
 - `internal/registry` — immutable per-session agent-type policy and prompt
   templates. The build-agent template owns the runtime identity contract: the
   agent presents as Coagent with the repo URL and does not volunteer the
@@ -487,12 +488,15 @@ invent inconsistent or test-leaking state locations.
 
 ### Filesystem and egress boundary
 
-The optional native sandbox confines direct writes by Bash descendants and
-dedicated mutation tools to configured writable roots. On macOS it uses the
-platform sandbox; on Linux it requires a trusted root-owned Bubblewrap. It is an
-integrity boundary, not a confidentiality, network or multi-tenant boundary:
-the daemon user can still read files it can ordinarily read, and MCP/LSP/network
-effects remain outside this confinement.
+The native write sandbox, enabled by default unless top-level
+`sandbox.enabled: false` is configured, confines direct writes by Bash
+descendants, dedicated mutation tools, LSP servers and stdio MCP servers to
+configured writable roots. On macOS it uses the platform sandbox; on Linux it
+requires a trusted root-owned Bubblewrap. It is an integrity boundary, not a
+confidentiality, network or multi-tenant boundary: the daemon user can still
+read files it can ordinarily read. Marketplace Git uses a separate runner
+whose only writable root is the marketplace cache; it does not inherit a
+session workspace or configured writable paths.
 
 Web fetching rejects link-local and known cloud-metadata destinations after
 resolution and immediately before connect, including redirects. It intentionally
@@ -599,7 +603,7 @@ Neither session nor manager may recreate a delivery by parsing message content.
 The tool package is a pure protocol leaf. It defines the tool registry and the
 suspension sentinel without depending on tool implementations, LLM drivers or
 the daemon. Built-in tools build a stack from session-scoped dependencies and
-delegate direct mutations through the optional sandbox. A suspending tool may
+delegate direct mutations through the native write sandbox. A suspending tool may
 not be batched with ordinary synchronous tools because its result is delivered
 after the loop exits.
 
@@ -622,9 +626,11 @@ selection, synchronization, requests or diagnostic aggregation. Workspace
 symbol requests use an explicit file anchor rather than an arbitrary cached
 client.
 
-Language servers are user- or project-owned executables. Resolution and process
-spawning use the captured project shell environment, so per-directory toolchain
-activation determines the PATH; coagent neither downloads nor installs servers.
+Language servers are user- or project-owned executables. Resolution and shell
+environment preparation use the captured project shell environment, while the
+resulting process spawn goes through the session runner. Per-directory
+toolchain activation determines the PATH; coagent neither downloads nor
+installs servers.
 
 Each client serializes writes, distinguishes requests, notifications and
 responses by their JSON-RPC shape, and answers server requests through the same
@@ -661,7 +667,10 @@ recommendation. Loader owns trusted local discovery and marketplace retrieval of
 instructions and subagent definitions. Loaded content influences a session
 prompt and policy input; it never gains an implicit controller or daemon API.
 Shell environment capture is per working directory and replayed for Bash, LSP
-and MCP subprocesses without merging the secrets map.
+and MCP subprocesses without merging the secrets map. The prepared command is
+then converted to the shared process request contract, so each session's Bash,
+LSP and stdio MCP processes use the same runner and policy identity. Marketplace
+Git is intentionally separate and cache-scoped.
 
 ### MCP, schedules and memory
 

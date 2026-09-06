@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"syscall"
 
+	"github.com/pilat/coagent/internal/procexec"
 	"github.com/pilat/coagent/internal/shellenv"
 )
 
@@ -27,19 +28,30 @@ type bubblewrapRunner struct {
 	executable string
 	mounts     []mountOperation
 	roots      []string
+	policyKey  string
 	provider   shellenv.Provider
 }
 
-// Command constructs a Bash command confined by Bubblewrap.
+// Command constructs a process confined by Bubblewrap.
 func (r *bubblewrapRunner) Command(
 	ctx context.Context,
-	command, workDir string,
-	commandArgs ...string,
+	request procexec.Request,
 ) (*exec.Cmd, error) {
-	cmd := exec.CommandContext(ctx, r.executable, r.args(command, commandArgs)...)
-	cmd.Dir = workDir
+	args := append(r.wrapPrefix(), request.Path)
+	args = append(args, request.Args...)
+	cmd := exec.CommandContext(ctx, r.executable, args...)
+	cmd.Dir = request.WorkDir
+	cmd.Env = request.Env
 
 	return cmd, nil
+}
+
+func (r *bubblewrapRunner) BashCommand(ctx context.Context, command, workDir string, commandArgs ...string) (*exec.Cmd, error) {
+	return r.Command(ctx, procexec.Request{
+		Path:    "bash",
+		Args:    append([]string{"-c", command}, commandArgs...),
+		WorkDir: workDir,
+	})
 }
 
 // ShellCommand runs a user command confined by Bubblewrap, sourcing workDir's
@@ -48,26 +60,25 @@ func (r *bubblewrapRunner) Command(
 func (r *bubblewrapRunner) ShellCommand(ctx context.Context, command, workDir string) (*exec.Cmd, error) {
 	shell, snap := snapshotFor(ctx, r.provider, workDir)
 	if snap == "" {
-		cmd := exec.CommandContext(ctx, r.executable, r.args(command, nil)...)
-		cmd.Dir = workDir
-
-		return cmd, nil
+		return r.BashCommand(ctx, command, workDir)
 	}
 
-	args := append(r.wrapPrefix(), shell, "-c", sourceLine(snap, command))
-	cmd := exec.CommandContext(ctx, r.executable, args...)
-	cmd.Dir = workDir
-
-	return cmd, nil
+	return r.Command(ctx, procexec.Request{
+		Path:    shell,
+		Args:    []string{"-c", sourceLine(snap, command)},
+		WorkDir: workDir,
+	})
 }
 
 func (r *bubblewrapRunner) WritableRoots() []string {
 	return append([]string(nil), r.roots...)
 }
 
+func (r *bubblewrapRunner) PolicyKey() string { return r.policyKey }
+
 func (r *bubblewrapRunner) setProvider(p shellenv.Provider) { r.provider = p }
 
-func newEnabledRunner(writableRoots []string) (Runner, error) {
+func newEnabledRunner(writableRoots []string, sessionKey ...string) (Runner, error) {
 	executable, err := resolveBubblewrapExecutable(writableRoots)
 	if err != nil {
 		return nil, err
@@ -82,18 +93,13 @@ func newEnabledRunner(writableRoots []string) (Runner, error) {
 		executable: executable,
 		mounts:     buildMountOperations(writableRoots, mountPoints),
 		roots:      writableRoots,
+		policyKey:  policyKey(writableRoots, firstSessionKey(sessionKey)),
 	}
 	if err := preflight(runner); err != nil {
 		return nil, fmt.Errorf("bubblewrap backend unusable: %w", err)
 	}
 
 	return runner, nil
-}
-
-func (r *bubblewrapRunner) args(command string, commandArgs []string) []string {
-	args := append(r.wrapPrefix(), "bash", "-c", command)
-
-	return append(args, commandArgs...)
 }
 
 // wrapPrefix builds the bwrap flags up to and including the `--` separator; the

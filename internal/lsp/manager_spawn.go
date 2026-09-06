@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"strings"
 
+	"github.com/pilat/coagent/internal/procexec"
 	"github.com/pilat/coagent/internal/shellenv"
 )
 
@@ -23,6 +24,18 @@ func (m *manager) wrappedServerCommand(
 		cmd, err = m.provider.WrapExec(ctx, root, cmd.Args, nil)
 		if err != nil {
 			return nil, fmt.Errorf("wrap %s spawn: %w", server.ID, err)
+		}
+	}
+
+	if m.runner != nil {
+		request, requestErr := procexec.FromCommand(cmd)
+		if requestErr != nil {
+			return nil, fmt.Errorf("prepare %s sandbox command: %w", server.ID, requestErr)
+		}
+
+		cmd, err = m.runner.Command(ctx, request)
+		if err != nil {
+			return nil, fmt.Errorf("sandbox %s spawn: %w", server.ID, err)
 		}
 	}
 

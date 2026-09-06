@@ -23,7 +23,7 @@ func TestDarwinRunner_CommandUsesParameters(t *testing.T) {
 	}
 
 	commandArgs := []string{"hostile ;$()", "line\nbreak", "-leading=equals"}
-	cmd, err := runner.Command(context.Background(), "printf '%s' hello", "/tmp", commandArgs...)
+	cmd, err := runner.BashCommand(context.Background(), "printf '%s' hello", "/tmp", commandArgs...)
 	require.NoError(t, err)
 
 	assert.Equal(t, seatbeltExecutable, cmd.Path)
@@ -66,7 +66,7 @@ func TestDarwinRunner_SeatbeltPolicy(t *testing.T) {
 
 	run := func(t *testing.T, command, workDir string) (string, error) {
 		t.Helper()
-		cmd, err := runner.Command(context.Background(), command, workDir)
+		cmd, err := runner.BashCommand(context.Background(), command, workDir)
 		require.NoError(t, err)
 		output, err := cmd.CombinedOutput()
 		return string(output), err
@@ -143,14 +143,16 @@ func TestDarwinRunner_ProbeConfirmsEnforcement(t *testing.T) {
 		t.Skipf("Seatbelt executable unavailable: %v", err)
 	}
 
-	require.NoError(t, probeEnforcement(newEnabledRunner))
+	require.NoError(t, probeEnforcement(func(roots []string) (Runner, error) {
+		return newEnabledRunner(roots)
+	}))
 }
 
 func TestDarwinRunner_CommandExitStatusIsPreserved(t *testing.T) {
 	runner, err := New(Config{Enabled: true, WorkDir: t.TempDir()}, nil)
 	require.NoError(t, err)
 
-	cmd, err := runner.Command(context.Background(), "exit 17", t.TempDir())
+	cmd, err := runner.BashCommand(context.Background(), "exit 17", t.TempDir())
 	require.NoError(t, err)
 
 	err = cmd.Run()

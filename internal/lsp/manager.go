@@ -11,6 +11,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/pilat/coagent/internal/logger"
+	"github.com/pilat/coagent/internal/procexec"
 	"github.com/pilat/coagent/internal/shellenv"
 )
 
@@ -43,6 +44,7 @@ type manager struct {
 	clients  map[clientKey]*client
 	keyLocks sync.Map          // map[key]*sync.Mutex — per-root spawn dedupe without holding mu
 	provider shellenv.Provider // per-cwd shell activation; may be nil (fallback)
+	runner   procexec.Runner   // session process confinement; nil for unconfined callers
 	mu       sync.RWMutex
 	closed   bool
 }
@@ -56,11 +58,17 @@ func (k clientKey) String() string { return k.serverID + ":" + k.root }
 
 // NewManager creates a new LSP manager. provider may be nil: servers then spawn
 // with the daemon's inherited env instead of the project's activated toolchain.
-func NewManager(provider shellenv.Provider) Manager {
+func NewManager(provider shellenv.Provider, runners ...procexec.Runner) Manager {
+	var runner procexec.Runner
+	if len(runners) > 0 {
+		runner = runners[0]
+	}
+
 	return &manager{
 		servers:  defaultServers(),
 		clients:  make(map[clientKey]*client),
 		provider: provider,
+		runner:   runner,
 	}
 }
 

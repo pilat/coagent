@@ -48,7 +48,7 @@ func TestBubblewrapIntegration(t *testing.T) {
 		"printf '%s' \"$COAGENT_BWRAP_TEST\"",
 	}, " && ")
 
-	cmd, err := runner.Command(context.Background(), command, denied)
+	cmd, err := runner.BashCommand(context.Background(), command, denied)
 	require.NoError(t, err)
 	cmd.Env = append(os.Environ(), "COAGENT_BWRAP_TEST=inherited")
 	output, err := cmd.CombinedOutput()
@@ -66,7 +66,9 @@ func TestBubblewrapProbeConfirmsEnforcement(t *testing.T) {
 		t.Skip("bwrap is not installed")
 	}
 
-	require.NoError(t, probeEnforcement(newEnabledRunner))
+	require.NoError(t, probeEnforcement(func(roots []string) (Runner, error) {
+		return newEnabledRunner(roots)
+	}))
 }
 
 func TestBubblewrapIntegrationProtectsNestedMount(t *testing.T) {
@@ -98,7 +100,7 @@ func TestBubblewrapIntegrationProtectsNestedMount(t *testing.T) {
 	outerFile := filepath.Join(allowed, "outer-write")
 	nestedFile := filepath.Join(nested, "blocked-write")
 	command := "touch " + shellQuote(outerFile) + " && ! touch " + shellQuote(nestedFile)
-	cmd, err := runner.Command(context.Background(), command, allowed)
+	cmd, err := runner.BashCommand(context.Background(), command, allowed)
 	require.NoError(t, err)
 	output, err = cmd.CombinedOutput()
 	require.NoError(t, err, string(output))

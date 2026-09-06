@@ -64,6 +64,7 @@ components:
   tool:       { in: internal/tool }
   toolexec:   { in: internal/toolexec }
   bashsandbox: { in: internal/bashsandbox }
+  procexec:   { in: internal/procexec }
   builtin:    { in: internal/tool/builtin }
   catalog:    { in: internal/catalog }
   llm:        { in: internal/llm }
@@ -123,13 +124,18 @@ deps:
 
   # Per-cwd shell activation, consumed by the three per-cwd spawners.
   bashsandbox:
-    mayDependOn: [coagenthome, shellenv]
+    mayDependOn: [coagenthome, procexec, shellenv]
+  git:
+    mayDependOn: [procexec]
   lsp:
-    mayDependOn: [coagenthome, logger, shellenv]
+    mayDependOn: [coagenthome, logger, procexec, shellenv]
   loader:
     mayDependOn: [coagenthome, config, git, logger]
   mcp:
-    mayDependOn: [logger, shellenv, tool]
+    mayDependOn: [logger, procexec, shellenv, tool]
+  procexec:
+    anyProjectDeps: false
+    anyVendorDeps: true
   shellenv:
     mayDependOn: [coagenthome, logger]
 

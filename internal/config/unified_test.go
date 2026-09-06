@@ -189,33 +189,72 @@ func TestUnifiedConfig_EmptyIsValid(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, cfg.Providers)
 	assert.Empty(t, cfg.Models)
-	assert.False(t, cfg.Tools.Bash.Sandbox.Enabled)
-	assert.Empty(t, cfg.Tools.Bash.Sandbox.WritablePaths)
+	assert.True(t, cfg.Sandbox.Enabled)
+	assert.Empty(t, cfg.Sandbox.WritablePaths)
 }
 
-func TestUnifiedConfig_BashSandbox(t *testing.T) {
+func TestUnifiedConfig_Sandbox(t *testing.T) {
+	path := writeConfig(t, `
+sandbox:
+  enabled: true
+  writable_paths:
+    - ~/.cache
+    - /tmp/build-cache
+`)
+
+	cfg, err := LoadUnifiedConfig(path, nil)
+	require.NoError(t, err)
+	assert.True(t, cfg.Sandbox.Enabled)
+	assert.Equal(t, []string{"~/.cache", "/tmp/build-cache"}, cfg.Sandbox.WritablePaths)
+}
+
+func TestUnifiedConfig_SandboxDefaultsEnabledWhenOmitted(t *testing.T) {
+	path := writeConfig(t, `
+sandbox:
+  writable_paths:
+    - ~/.cache
+`)
+
+	cfg, err := LoadUnifiedConfig(path, nil)
+	require.NoError(t, err)
+	assert.True(t, cfg.Sandbox.Enabled)
+}
+
+func TestUnifiedConfig_SandboxEnabledCanBeDisabled(t *testing.T) {
+	path := writeConfig(t, `
+sandbox:
+  enabled: false
+`)
+
+	cfg, err := LoadUnifiedConfig(path, nil)
+	require.NoError(t, err)
+	assert.False(t, cfg.Sandbox.Enabled)
+
+	raw, err := MarshalUnifiedConfig(cfg)
+	require.NoError(t, err)
+	assert.Contains(t, string(raw), "enabled: false")
+	roundTripped, err := ParseAndResolve(raw, nil)
+	require.NoError(t, err)
+	assert.False(t, roundTripped.Sandbox.Enabled)
+}
+
+func TestUnifiedConfig_RejectsNestedBashSandbox(t *testing.T) {
 	path := writeConfig(t, `
 tools:
   bash:
     sandbox:
       enabled: true
-      writable_paths:
-        - ~/.cache
-        - /tmp/build-cache
 `)
 
-	cfg, err := LoadUnifiedConfig(path, nil)
-	require.NoError(t, err)
-	assert.True(t, cfg.Tools.Bash.Sandbox.Enabled)
-	assert.Equal(t, []string{"~/.cache", "/tmp/build-cache"}, cfg.Tools.Bash.Sandbox.WritablePaths)
+	_, err := LoadUnifiedConfig(path, nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "field bash not found")
 }
 
-func TestUnifiedConfig_RejectsUnknownBashSandboxField(t *testing.T) {
+func TestUnifiedConfig_RejectsUnknownSandboxField(t *testing.T) {
 	path := writeConfig(t, `
-tools:
-  bash:
-    sandbox:
-      enable: true
+sandbox:
+  enable: true
 `)
 
 	_, err := LoadUnifiedConfig(path, nil)
@@ -227,10 +266,8 @@ func TestUnifiedConfig_RejectsTrailingYAMLDocument(t *testing.T) {
 	tests := map[string]string{
 		"mapping": `{}
 ---
-tools:
-  bash:
-    sandbox:
-      enabled: true
+sandbox:
+  enabled: true
 `,
 		"empty": `{}
 ---

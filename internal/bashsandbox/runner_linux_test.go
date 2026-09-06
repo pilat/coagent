@@ -27,7 +27,7 @@ func TestBubblewrapRunnerCommand(t *testing.T) {
 	command := "printf '%s\\n' \"$HOME\"; exit 7"
 	commandArgs := []string{"hostile ;$()", "line\nbreak", "-leading=equals"}
 
-	cmd, err := runner.Command(context.Background(), command, "/tmp/work dir", commandArgs...)
+	cmd, err := runner.BashCommand(context.Background(), command, "/tmp/work dir", commandArgs...)
 	require.NoError(t, err)
 	assert.Equal(t, "/usr/bin/bwrap", cmd.Path)
 	assert.Equal(t, "/tmp/work dir", cmd.Dir)

@@ -78,8 +78,8 @@ func TestBuildStack_ToolCount(t *testing.T) {
 func TestBuildStack_BashSandboxConfigurationError(t *testing.T) {
 	workDir := t.TempDir()
 	unified := &config.UnifiedConfig{}
-	unified.Tools.Bash.Sandbox.Enabled = true
-	unified.Tools.Bash.Sandbox.WritablePaths = []string{filepath.Join(workDir, "missing")}
+	unified.Sandbox.Enabled = true
+	unified.Sandbox.WritablePaths = []string{filepath.Join(workDir, "missing")}
 
 	stack, err := BuildStack(context.Background(), StackConfig{
 		WorkDir: workDir,
@@ -102,8 +102,8 @@ func TestBashSandboxConfig_NilUnified(t *testing.T) {
 
 func TestBashSandboxConfig_Configured(t *testing.T) {
 	unified := &config.UnifiedConfig{}
-	unified.Tools.Bash.Sandbox.Enabled = true
-	unified.Tools.Bash.Sandbox.WritablePaths = []string{"~/.cache", "/tmp/build-cache"}
+	unified.Sandbox.Enabled = true
+	unified.Sandbox.WritablePaths = []string{"~/.cache", "/tmp/build-cache"}
 
 	cfg := bashSandboxConfig(StackConfig{WorkDir: "/tmp/project", Unified: unified})
 
@@ -114,7 +114,7 @@ func TestBashSandboxConfig_Configured(t *testing.T) {
 
 func TestBashSandboxConfig_WorktreeTrustsMainGitDir(t *testing.T) {
 	unified := &config.UnifiedConfig{}
-	unified.Tools.Bash.Sandbox.Enabled = true
+	unified.Sandbox.Enabled = true
 
 	// The work tree name contains a dot: the trusted path must not be
 	// derived from the work tree basename.

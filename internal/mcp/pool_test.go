@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"fmt"
+	"os/exec"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -12,7 +13,17 @@ import (
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/pilat/coagent/internal/procexec"
 )
+
+type policyRunner struct{ key string }
+
+func (r policyRunner) Command(ctx context.Context, request procexec.Request) (*exec.Cmd, error) {
+	return exec.CommandContext(ctx, request.Path, request.Args...), nil
+}
+
+func (r policyRunner) PolicyKey() string { return r.key }
 
 // nopMCPClient is a minimal mock that satisfies client.MCPClient
 // with a no-op Close. Other methods will panic if called (they shouldn't be).
@@ -48,6 +59,14 @@ func TestHash_DifferentConfigs(t *testing.T) {
 	cfg2 := ServerConfig{Command: "cmd2", Args: []string{"a"}}
 
 	assert.NotEqual(t, cfg1.Hash(), cfg2.Hash())
+}
+
+func TestHash_IncludesProcessPolicy(t *testing.T) {
+	plain := ServerConfig{Command: "cmd"}
+	sandboxed := plain
+	sandboxed.runner = policyRunner{key: "session-a"}
+
+	assert.NotEqual(t, plain.Hash(), sandboxed.Hash())
 }
 
 func TestHash_IgnoresDisabledEnabled(t *testing.T) {

@@ -11,6 +11,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/pilat/coagent/internal/procexec"
 )
 
 type bashRunnerStub struct {
@@ -21,32 +23,32 @@ type bashRunnerStub struct {
 	roots   []string
 }
 
-func (r *bashRunnerStub) Command(
-	ctx context.Context,
-	command, workDir string,
-	args ...string,
-) (*exec.Cmd, error) {
-	r.command = command
-	r.workDir = workDir
-	r.args = append([]string(nil), args...)
+func (r *bashRunnerStub) Command(ctx context.Context, request procexec.Request) (*exec.Cmd, error) {
+	r.command = request.Args[1]
+	r.workDir = request.WorkDir
+	r.args = append([]string(nil), request.Args[2:]...)
 	if r.err != nil {
 		return nil, r.err
 	}
 
-	commandArgs := append([]string{"-c", command}, args...)
-	cmd := exec.CommandContext(ctx, "bash", commandArgs...)
-	cmd.Dir = workDir
+	cmd := exec.CommandContext(ctx, request.Path, request.Args...)
+	cmd.Dir = request.WorkDir
 
 	return cmd, nil
+}
+
+func (r *bashRunnerStub) BashCommand(ctx context.Context, command, workDir string, args ...string) (*exec.Cmd, error) {
+	return r.Command(ctx, procexec.Request{Path: "bash", Args: append([]string{"-c", command}, args...), WorkDir: workDir})
 }
 
 // ShellCommand mirrors Command: the bash tool calls this path, and tests assert
 // on the recorded command/workDir.
 func (r *bashRunnerStub) ShellCommand(ctx context.Context, command, workDir string) (*exec.Cmd, error) {
-	return r.Command(ctx, command, workDir)
+	return r.BashCommand(ctx, command, workDir)
 }
 
 func (r *bashRunnerStub) WritableRoots() []string { return r.roots }
+func (r *bashRunnerStub) PolicyKey() string       { return "stub" }
 
 func TestBashTool_Execute(t *testing.T) {
 	tmpDir, err := os.MkdirTemp("", "bash_test")

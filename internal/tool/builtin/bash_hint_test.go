@@ -43,7 +43,7 @@ func TestSandboxHint(t *testing.T) {
 			}
 
 			require.NotEmpty(t, hint)
-			assert.Contains(t, hint, "tools.bash.sandbox.writable_paths")
+			assert.Contains(t, hint, "sandbox.writable_paths")
 			assert.Contains(t, hint, "/work, /tmp")
 		})
 	}
@@ -62,7 +62,7 @@ func TestBashTool_SandboxHint(t *testing.T) {
 		require.NoError(t, err)
 
 		assert.Equal(t, 1, result.Metadata["exitCode"])
-		assert.Contains(t, result.Output, "tools.bash.sandbox.writable_paths")
+		assert.Contains(t, result.Output, "sandbox.writable_paths")
 		assert.Contains(t, result.Output, tmpDir)
 	})
 

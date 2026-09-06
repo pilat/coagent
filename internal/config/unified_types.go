@@ -6,9 +6,8 @@ const (
 	SearchProviderSearxng = "searxng"
 )
 
-// The yaml tags carry omitempty throughout: config.yaml is machine-written once
-// a config tool touches it, and a file padded with empty defaults is one a human
-// can no longer read.
+// The yaml tags carry omitempty throughout, except sandbox.enabled: its explicit
+// false must survive the default-on behavior when config.yaml is rewritten.
 type (
 	MarketplaceEntry struct {
 		URL     string   `yaml:"url"`
@@ -100,13 +99,9 @@ type (
 		Whisper *ManagerWhisperEntry `yaml:"whisper,omitempty"`
 	}
 
-	BashSandboxConfig struct {
-		Enabled       bool     `yaml:"enabled,omitempty"`
+	SandboxConfig struct {
+		Enabled       bool     `yaml:"enabled"`
 		WritablePaths []string `yaml:"writable_paths,omitempty"`
-	}
-
-	BashToolConfig struct {
-		Sandbox BashSandboxConfig `yaml:"sandbox,omitempty"`
 	}
 
 	// SearchToolConfig configures the builtin websearch tool. An empty section
@@ -123,7 +118,6 @@ type (
 	}
 
 	ToolsConfig struct {
-		Bash   BashToolConfig   `yaml:"bash,omitempty"`
 		Search SearchToolConfig `yaml:"search,omitempty"`
 	}
 
@@ -136,6 +130,7 @@ type (
 		ProjectsRoot   string                   `yaml:"projects_root,omitempty"`  // root for /new folder-projects; empty → ~/.coagent/projects (resolved in daemon)
 		WorktreesRoot  string                   `yaml:"worktrees_root,omitempty"` // root for /gwt worktrees; empty → ~/.coagent/worktrees (resolved in daemon)
 		Managers       []ManagerEntry           `yaml:"managers,omitempty"`
+		Sandbox        SandboxConfig            `yaml:"sandbox"`
 		Tools          ToolsConfig              `yaml:"tools,omitempty"`
 	}
 )

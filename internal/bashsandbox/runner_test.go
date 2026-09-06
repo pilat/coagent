@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/pilat/coagent/internal/coagenthome"
+	"github.com/pilat/coagent/internal/procexec"
 	"github.com/pilat/coagent/internal/shellenv"
 )
 
@@ -61,7 +62,7 @@ func TestNew_DisabledPreservesCommand(t *testing.T) {
 	}, nil)
 	require.NoError(t, err)
 
-	cmd, err := runner.Command(
+	cmd, err := runner.BashCommand(
 		context.Background(),
 		"printf '%s' \"$1\"",
 		"/chosen/workdir",
@@ -209,9 +210,15 @@ func TestProbeEnforcement_PropagatesBackendConstructionError(t *testing.T) {
 	assert.ErrorIs(t, err, want)
 }
 
-func (r errorRunner) Command(context.Context, string, string, ...string) (*exec.Cmd, error) {
+func (r errorRunner) Command(context.Context, procexec.Request) (*exec.Cmd, error) {
 	return nil, r.err
 }
+
+func (r errorRunner) BashCommand(context.Context, string, string, ...string) (*exec.Cmd, error) {
+	return nil, r.err
+}
+
+func (errorRunner) PolicyKey() string { return "error" }
 
 func (errorRunner) WritableRoots() []string { return nil }
 
@@ -219,9 +226,15 @@ func (r errorRunner) ShellCommand(context.Context, string, string) (*exec.Cmd, e
 	return nil, r.err
 }
 
-func (noopRunner) Command(ctx context.Context, _, _ string, _ ...string) (*exec.Cmd, error) {
+func (noopRunner) Command(ctx context.Context, request procexec.Request) (*exec.Cmd, error) {
+	return exec.CommandContext(ctx, request.Path, request.Args...), nil
+}
+
+func (noopRunner) BashCommand(ctx context.Context, _, _ string, _ ...string) (*exec.Cmd, error) {
 	return exec.CommandContext(ctx, "bash", "-c", ":"), nil
 }
+
+func (noopRunner) PolicyKey() string { return "noop" }
 
 func (noopRunner) WritableRoots() []string { return nil }
 
@@ -229,9 +242,15 @@ func (noopRunner) ShellCommand(ctx context.Context, _, _ string) (*exec.Cmd, err
 	return exec.CommandContext(ctx, "bash", "-c", ":"), nil
 }
 
-func (noisyRunner) Command(ctx context.Context, _, _ string, _ ...string) (*exec.Cmd, error) {
+func (noisyRunner) Command(ctx context.Context, request procexec.Request) (*exec.Cmd, error) {
 	return exec.CommandContext(ctx, "bash", "-c", "printf '%0100000d' 0 >&2; exit 1"), nil
 }
+
+func (noisyRunner) BashCommand(ctx context.Context, _, _ string, _ ...string) (*exec.Cmd, error) {
+	return exec.CommandContext(ctx, "bash", "-c", "printf '%0100000d' 0 >&2; exit 1"), nil
+}
+
+func (noisyRunner) PolicyKey() string { return "noisy" }
 
 func (noisyRunner) WritableRoots() []string { return nil }
 

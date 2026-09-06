@@ -9,6 +9,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/pilat/coagent/internal/logger"
+	"github.com/pilat/coagent/internal/procexec"
 	"github.com/pilat/coagent/internal/shellenv"
 )
 
@@ -114,22 +115,28 @@ type pool struct {
 
 // NewPool creates a new MCP connection pool with TTL-based lifecycle. The reaper
 // goroutine starts immediately; caller owns Stop. provider (may be nil) is folded
-// into the factory so every pooled server spawn routes through workDir activation.
-func NewPool(provider shellenv.Provider) Pool {
-	return NewPoolWithIdleTTL(provider, defaultTTL)
+// into the factory so every pooled server spawn routes through workDir
+// activation and the stamped process policy.
+func NewPool(provider shellenv.Provider, runners ...procexec.Runner) Pool {
+	return NewPoolWithIdleTTL(provider, defaultTTL, runners...)
 }
 
 // NewPoolWithIdleTTL builds a pool with a non-default live-client idle TTL. It
 // exists so scenario tests can exercise idle reaping against real subprocesses;
 // production wiring uses NewPool.
-func NewPoolWithIdleTTL(provider shellenv.Provider, ttl time.Duration) Pool {
+func NewPoolWithIdleTTL(provider shellenv.Provider, ttl time.Duration, runners ...procexec.Runner) Pool {
 	var fpFn func(string) string
 	if provider != nil {
 		fpFn = provider.Fingerprint
 	}
 
 	return newPoolFP(ttl, fpFn, func(ctx context.Context, name string, cfg ServerConfig) (*Client, error) {
-		return NewClient(ctx, name, cfg, provider)
+		runner := cfg.runner
+		if runner == nil && len(runners) > 0 {
+			runner = runners[0]
+		}
+
+		return NewClient(ctx, name, cfg, provider, runner)
 	})
 }
 

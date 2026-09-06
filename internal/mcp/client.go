@@ -15,6 +15,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/pilat/coagent/internal/logger"
+	"github.com/pilat/coagent/internal/procexec"
 	"github.com/pilat/coagent/internal/shellenv"
 )
 
@@ -52,23 +53,32 @@ func buildEnv(envMap map[string]string) []string {
 // NewClient creates a new MCP client for a server. WorkDir is set per-subprocess
 // via WithCommandFunc (no global os.Chdir). provider may be nil: the server then
 // spawns with the daemon's inherited env instead of workDir's activated toolchain.
-func NewClient(ctx context.Context, name string, cfg ServerConfig, provider shellenv.Provider) (*Client, error) {
+func NewClient(ctx context.Context, name string, cfg ServerConfig, provider shellenv.Provider, runners ...procexec.Runner) (*Client, error) {
 	env := buildEnv(cfg.Env)
 
 	var opts []transport.StdioOption
-	if cfg.WorkDir != "" {
+	if cfg.WorkDir != "" || cfg.runner != nil || len(runners) > 0 {
 		opts = append(opts, transport.WithCommandFunc(
 			func(ctx context.Context, command string, envList []string, args []string) (*exec.Cmd, error) {
-				if provider != nil {
-					return provider.WrapExec(ctx, cfg.WorkDir, append([]string{command}, args...), envList)
+				cmd, err := activatedServerCommand(ctx, cfg.WorkDir, provider, command, envList, args)
+				if err != nil {
+					return nil, err
 				}
 
-				cmd := exec.CommandContext(ctx, command, args...)
+				runner := cfg.runner
+				if runner == nil && len(runners) > 0 {
+					runner = runners[0]
+				}
+				if runner == nil {
+					return cmd, nil
+				}
 
-				cmd.Env = append(os.Environ(), envList...)
-				cmd.Dir = cfg.WorkDir
+				request, err := procexec.FromCommand(cmd)
+				if err != nil {
+					return nil, fmt.Errorf("prepare MCP sandbox command: %w", err)
+				}
 
-				return cmd, nil
+				return runner.Command(ctx, request)
 			},
 		))
 	}
@@ -120,6 +130,24 @@ func NewClient(ctx context.Context, name string, cfg ServerConfig, provider shel
 		tools:     tools,
 		cancelRun: cancelRun,
 	}, nil
+}
+
+func activatedServerCommand(
+	ctx context.Context,
+	workDir string,
+	provider shellenv.Provider,
+	command string,
+	envList, args []string,
+) (*exec.Cmd, error) {
+	if provider != nil {
+		return provider.WrapExec(ctx, workDir, append([]string{command}, args...), envList)
+	}
+
+	cmd := exec.CommandContext(ctx, command, args...)
+	cmd.Env = append(os.Environ(), envList...)
+	cmd.Dir = workDir
+
+	return cmd, nil
 }
 
 // handshake runs Initialize then ListTools, each under its own initTimeout so a

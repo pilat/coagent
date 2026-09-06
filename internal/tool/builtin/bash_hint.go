@@ -35,6 +35,6 @@ func sandboxHint(output string, writableRoots []string) string {
 	return "Note: bash commands run under a filesystem-write sandbox; writable roots: " +
 		strings.Join(writableRoots, ", ") +
 		". If the failed write is legitimate (e.g. a toolchain or package cache), " +
-		"the operator can add the path to tools.bash.sandbox.writable_paths in the " +
+		"the operator can add the path to sandbox.writable_paths in the " +
 		"coagent config (daemon restart required)."
 }
