@@ -12,6 +12,26 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+type silentFileMutator struct{}
+
+type redirectedFileMutator struct {
+	path string
+}
+
+func (silentFileMutator) WriteFile(context.Context, string, []byte, bool) error {
+	return nil
+}
+
+func (m redirectedFileMutator) WriteFile(_ context.Context, _ string, content []byte, createParents bool) error {
+	if createParents {
+		if err := os.MkdirAll(filepath.Dir(m.path), 0o755); err != nil {
+			return err
+		}
+	}
+
+	return os.WriteFile(m.path, content, 0o644)
+}
+
 func TestApplyPatchTool_CreateRelativeFile(t *testing.T) {
 	workDir := t.TempDir()
 	tool := newApplyPatchTool(workDir, directFileMutator{})
@@ -46,6 +66,68 @@ func TestApplyPatchTool_UpdatesExistingFile(t *testing.T) {
 	content, err := os.ReadFile(path)
 	require.NoError(t, err)
 	assert.Equal(t, "after\n", string(content))
+}
+
+func TestApplyPatchTool_SandboxUpdatesTargetFile(t *testing.T) {
+	workDir := t.TempDir()
+	path := filepath.Join(workDir, "tmp", "patch-bug-repro.txt")
+	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
+	require.NoError(t, os.WriteFile(path, []byte("alpha\nbeta"), 0o644))
+
+	tool := newApplyPatchTool(workDir, &sandboxFileMutator{runner: &bashRunnerStub{}})
+	params := marshalApplyPatchParams(t, `--- a/tmp/patch-bug-repro.txt
++++ b/tmp/patch-bug-repro.txt
+@@ -1,2 +1,3 @@
+ alpha
++inserted line
+ beta`)
+
+	result, err := tool.Execute(context.Background(), params)
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	content, err := os.ReadFile(path)
+	require.NoError(t, err)
+	assert.Equal(t, "alpha\ninserted line\nbeta", string(content))
+}
+
+func TestApplyPatchTool_RejectsSilentMutation(t *testing.T) {
+	workDir := t.TempDir()
+	path := filepath.Join(workDir, "file.txt")
+	require.NoError(t, os.WriteFile(path, []byte("before"), 0o644))
+	tool := newApplyPatchTool(workDir, silentFileMutator{})
+	params := marshalApplyPatchParams(t, `--- a/file.txt
++++ b/file.txt
+@@ -1,1 +1,1 @@
+-before
++after`)
+
+	result, err := tool.Execute(context.Background(), params)
+
+	require.Error(t, err)
+	assert.Nil(t, result)
+	assert.Contains(t, err.Error(), "verify")
+}
+
+func TestApplyPatchTool_RejectsRedirectedMutation(t *testing.T) {
+	workDir := t.TempDir()
+	path := filepath.Join(workDir, "file.txt")
+	redirect := filepath.Join(workDir, "redirected.txt")
+	require.NoError(t, os.WriteFile(path, []byte("before"), 0o644))
+	tool := newApplyPatchTool(workDir, redirectedFileMutator{path: redirect})
+	params := marshalApplyPatchParams(t, `--- a/file.txt
++++ b/file.txt
+@@ -1,1 +1,1 @@
+-before
++after`)
+
+	result, err := tool.Execute(context.Background(), params)
+
+	require.Error(t, err)
+	assert.Nil(t, result)
+	content, err := os.ReadFile(path)
+	require.NoError(t, err)
+	assert.Equal(t, "before", string(content))
 }
 
 func TestApplyPatchTool_MultipleFilesRemainSequential(t *testing.T) {
