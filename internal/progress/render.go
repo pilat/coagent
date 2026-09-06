@@ -274,7 +274,7 @@ func renderTodos(items []TodoItem, redact func(string) string) []string {
 }
 
 func renderBudget(value Budget) string {
-	line := fmt.Sprintf("- Budget: %s (generation %d)", value.State, value.Generation)
+	line := fmt.Sprintf("💸 Budget: %s (generation %d)", value.State, value.Generation)
 	if value.State == "fired" {
 		return line + " · limiter is no longer armed · reason: " + value.FiredReason
 	}

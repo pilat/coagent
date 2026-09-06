@@ -179,7 +179,7 @@ func TestRenderCompact_BudgetDetailBelowTODOBlock(t *testing.T) {
 		"**🛑 Budget reached**",
 		"📋 TODO · 0 active · 1 remaining · 0 done",
 		"ℹ️ `/status` shows the full TODO list",
-		"- Budget: fired (generation 2) · limiter is no longer armed · reason: cost",
+		"💸 Budget: fired (generation 2) · limiter is no longer armed · reason: cost",
 	}, "\n"), rendered)
 }
 
@@ -253,10 +253,10 @@ func TestRenderFooter_SummariesOnly(t *testing.T) {
 		Todos:  []TodoItem{{ID: "1", Status: "completed"}},
 		Budget: &Budget{State: "armed", Generation: 1},
 	}, nil)
-	assert.Equal(t, "✅ TODO complete · 1 done\n\n- Budget: armed (generation 1)", both)
+	assert.Equal(t, "✅ TODO complete · 1 done\n\n💸 Budget: armed (generation 1)", both)
 
 	budgetOnly := RenderFooter(Snapshot{Budget: &Budget{State: "armed", Generation: 1}}, nil)
-	assert.Equal(t, "- Budget: armed (generation 1)", budgetOnly)
+	assert.Equal(t, "💸 Budget: armed (generation 1)", budgetOnly)
 }
 
 func durationPtr(value time.Duration) *time.Duration {
