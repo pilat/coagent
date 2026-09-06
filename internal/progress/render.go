@@ -15,6 +15,9 @@ func RenderCompact(snapshot Snapshot, redact func(string) string) string {
 	}
 
 	lines := []string{"**" + cardTitle(snapshot) + "**"}
+	if snapshot.ShieldsUp {
+		lines = append(lines, "🛡️ Shields raised")
+	}
 
 	if note := strings.TrimSpace(redact(snapshot.LatestModelProgress)); note != "" {
 		lines = append(lines, "", note)
@@ -63,6 +66,9 @@ func RenderFull(snapshot Snapshot, redact func(string) string) string {
 	}
 
 	lines = append(lines, "- State: "+state)
+	if snapshot.ShieldsUp {
+		lines = append(lines, "- Shields: raised")
+	}
 
 	if snapshot.Model != "" {
 		lines = append(lines, fmt.Sprintf("- Model: `%s` · root iteration %d", snapshot.Model, snapshot.RootIteration))

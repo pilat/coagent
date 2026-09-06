@@ -10,12 +10,14 @@ import (
 	"path/filepath"
 	"syscall"
 
+	"github.com/pilat/coagent/internal/procexec"
 	"github.com/pilat/coagent/internal/shellenv"
 )
 
 const (
-	bubblewrapExecutable = "bwrap"
-	mountInfoPath        = "/proc/self/mountinfo"
+	bubblewrapExecutable   = "bwrap"
+	bubblewrapReadOnlyBind = "--ro-bind"
+	mountInfoPath          = "/proc/self/mountinfo"
 )
 
 var (
@@ -24,22 +26,68 @@ var (
 )
 
 type bubblewrapRunner struct {
-	executable string
-	mounts     []mountOperation
-	roots      []string
-	provider   shellenv.Provider
+	executable   string
+	mounts       []mountOperation
+	shieldMounts []shieldMountOperation
+	roots        []string
+	policyKey    string
+	provider     shellenv.Provider
+	policy       processPolicy
 }
 
-// Command constructs a Bash command confined by Bubblewrap.
+// Command constructs a process confined by Bubblewrap.
+//
+//nolint:wsl_v5 // Request validation must precede command construction without shared state.
 func (r *bubblewrapRunner) Command(
+	ctx context.Context,
+	request procexec.Request,
+) (*exec.Cmd, error) {
+	environment, err := innerEnvironment(request.Env, request.WorkDir)
+	if err != nil {
+		return nil, err
+	}
+
+	path := request.Path
+	if r.policy.readScope == ProjectConfined {
+		if err := r.policy.validateWorkDir(request.WorkDir); err != nil {
+			return nil, err
+		}
+		var err error
+		path, err = r.policy.resolveExecutable(path, request.WorkDir)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	prefix := r.wrapPrefix(request.WorkDir)
+	args := append([]string(nil), prefix[:len(prefix)-1]...)
+	args = append(args, "--clearenv")
+	for _, entry := range environment {
+		args = append(args, "--setenv", entry.name, entry.value)
+	}
+	args = append(args, "--", path)
+	args = append(args, request.Args...)
+	cmd := exec.CommandContext(ctx, r.executable, args...)
+	if r.policy.readScope == ProjectConfined {
+		cmd.Dir = "/"
+	} else {
+		cmd.Dir = request.WorkDir
+	}
+	cmd.Env = sandboxLauncherEnvironment()
+
+	return cmd, nil
+}
+
+func (r *bubblewrapRunner) BashCommand(
 	ctx context.Context,
 	command, workDir string,
 	commandArgs ...string,
 ) (*exec.Cmd, error) {
-	cmd := exec.CommandContext(ctx, r.executable, r.args(command, commandArgs)...)
-	cmd.Dir = workDir
-
-	return cmd, nil
+	return r.Command(ctx, procexec.Request{
+		Path:    bashExecutable,
+		Args:    append([]string{"-c", command}, commandArgs...),
+		WorkDir: workDir,
+	})
 }
 
 // ShellCommand runs a user command confined by Bubblewrap, sourcing workDir's
@@ -48,27 +96,28 @@ func (r *bubblewrapRunner) Command(
 func (r *bubblewrapRunner) ShellCommand(ctx context.Context, command, workDir string) (*exec.Cmd, error) {
 	shell, snap := snapshotFor(ctx, r.provider, workDir)
 	if snap == "" {
-		cmd := exec.CommandContext(ctx, r.executable, r.args(command, nil)...)
-		cmd.Dir = workDir
-
-		return cmd, nil
+		return r.BashCommand(ctx, command, workDir)
 	}
 
-	args := append(r.wrapPrefix(), shell, "-c", sourceLine(snap, command))
-	cmd := exec.CommandContext(ctx, r.executable, args...)
-	cmd.Dir = workDir
-
-	return cmd, nil
+	return r.Command(ctx, procexec.Request{
+		Path:    shell,
+		Args:    []string{"-c", sourceLine(snap, command)},
+		WorkDir: workDir,
+	})
 }
 
 func (r *bubblewrapRunner) WritableRoots() []string {
 	return append([]string(nil), r.roots...)
 }
 
+func (r *bubblewrapRunner) PolicyKey() string    { return r.policyKey }
+func (r *bubblewrapRunner) ReadScope() ReadScope { return r.policy.readScope }
+
 func (r *bubblewrapRunner) setProvider(p shellenv.Provider) { r.provider = p }
 
-func newEnabledRunner(writableRoots []string) (Runner, error) {
-	executable, err := resolveBubblewrapExecutable(writableRoots)
+//nolint:wsl_v5 // Platform discovery and preflight are one runner construction boundary.
+func newEnabledRunner(policy processPolicy) (Runner, error) {
+	executable, err := resolveBubblewrapExecutable(policy.writableRoots)
 	if err != nil {
 		return nil, err
 	}
@@ -80,35 +129,38 @@ func newEnabledRunner(writableRoots []string) (Runner, error) {
 
 	runner := &bubblewrapRunner{
 		executable: executable,
-		mounts:     buildMountOperations(writableRoots, mountPoints),
-		roots:      writableRoots,
+		mounts:     buildMountOperations(policy.writableRoots, mountPoints),
+		roots:      policy.writableRoots,
+		policyKey:  policy.key(),
+		policy:     policy,
 	}
-	if err := preflight(runner); err != nil {
+	if policy.readScope == ProjectConfined {
+		runner.shieldMounts = buildShieldMountOperations(policy, mountPoints)
+	}
+	if err := preflight(runner, policy.workDir); err != nil {
 		return nil, fmt.Errorf("bubblewrap backend unusable: %w", err)
 	}
 
 	return runner, nil
 }
 
-func (r *bubblewrapRunner) args(command string, commandArgs []string) []string {
-	args := append(r.wrapPrefix(), "bash", "-c", command)
-
-	return append(args, commandArgs...)
-}
-
 // wrapPrefix builds the bwrap flags up to and including the `--` separator; the
 // caller appends the program and its arguments.
-func (r *bubblewrapRunner) wrapPrefix() []string {
+func (r *bubblewrapRunner) wrapPrefix(workDir string) []string {
+	if r.policy.readScope == ProjectConfined {
+		return r.shieldPrefix(workDir)
+	}
+
 	args := []string{
 		"--die-with-parent",
-		"--ro-bind", "/", "/",
+		bubblewrapReadOnlyBind, "/", "/",
 		"--dev", "/dev",
 	}
 
 	for _, mount := range r.mounts {
 		operation := "--bind"
 		if mount.readOnly {
-			operation = "--ro-bind"
+			operation = bubblewrapReadOnlyBind
 		}
 
 		args = append(args, operation, mount.path, mount.path)
@@ -119,6 +171,32 @@ func (r *bubblewrapRunner) wrapPrefix() []string {
 		"--cap-drop", "ALL",
 		"--",
 	)
+}
+
+//nolint:wsl_v5 // Namespace assembly follows the required mount order.
+func (r *bubblewrapRunner) shieldPrefix(workDir string) []string {
+	args := []string{
+		"--die-with-parent",
+		"--unshare-user",
+		"--unshare-pid",
+		"--cap-drop", "ALL",
+		"--tmpfs", "/",
+		"--dev", "/dev",
+		"--proc", "/proc",
+	}
+
+	for _, dir := range shieldMountDirectories(r.shieldMounts) {
+		args = append(args, "--dir", dir)
+	}
+	for _, mount := range r.shieldMounts {
+		operation := "--bind"
+		if mount.readOnly {
+			operation = bubblewrapReadOnlyBind
+		}
+		args = append(args, operation, mount.source, mount.target)
+	}
+
+	return append(args, "--remount-ro", "/", "--chdir", workDir, "--")
 }
 
 func resolveBubblewrapExecutable(writableRoots []string) (string, error) {

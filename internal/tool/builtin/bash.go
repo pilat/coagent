@@ -255,7 +255,7 @@ func (t *bashTool) handleErr(
 			output = noOutput
 		}
 
-		if hint := sandboxHint(output, t.runner.WritableRoots()); hint != "" {
+		if hint := sandboxHint(output, t.runner.WritableRoots(), t.runner.ReadScope(), t.workDir); hint != "" {
 			output += "\n\n" + hint
 		}
 

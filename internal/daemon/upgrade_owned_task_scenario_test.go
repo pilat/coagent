@@ -58,22 +58,20 @@ func TestScenario_OwnedTaskCallSurvivesSchemaUpgradeAndRestarts(t *testing.T) {
 		parent.ID, "["+string(stagedArgs)+"]")
 	require.NoError(t, err)
 
-	childID, err := subagent.NewTransactions(staged).Create(ctx, subagent.Create{
-		ProjectID:    1,
-		ParentID:     parent.ID,
-		RootID:       parent.ID,
-		AgentType:    "general",
-		Model:        "fake-model",
-		TaskCallID:   "tc_staged",
-		Blocking:     true,
-		Depth:        1,
-		State:        subagent.StateSpawned,
-		InitialInput: "CHILD_STAGED do the staged work",
-	})
+	result, err := staged.ExecContext(ctx, `INSERT INTO sessions
+		(project_id, parent_id, root_id, agent_type, model, reasoning_level, created_at, updated_at)
+		VALUES (1, ?, ?, 'general', 'fake-model', 'medium', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
+		parent.ID, parent.ID)
 	require.NoError(t, err)
-
-	// The legacy value the v30 daemon would have persisted for this child.
-	_, err = staged.ExecContext(ctx, `UPDATE subagent_links SET timeout_sec = 1 WHERE child_id = ?`, childID)
+	childID, err := result.LastInsertId()
+	require.NoError(t, err)
+	_, err = staged.ExecContext(ctx, `INSERT INTO subagent_links
+		(parent_id, child_id, task_call_id, blocking, depth, state, created_at, timeout_sec)
+		VALUES (?, ?, 'tc_staged', 1, 1, 'spawned', 1, 1)`, parent.ID, childID)
+	require.NoError(t, err)
+	_, err = staged.ExecContext(ctx, `INSERT INTO session_inbox
+		(session_id, source, raw_content, received_at)
+		VALUES (?, 'agent', 'CHILD_STAGED do the staged work', CURRENT_TIMESTAMP)`, childID)
 	require.NoError(t, err)
 
 	var linkCount int
@@ -82,7 +80,7 @@ func TestScenario_OwnedTaskCallSurvivesSchemaUpgradeAndRestarts(t *testing.T) {
 	require.Equal(t, 1, linkCount)
 	require.NoError(t, staged.Close())
 
-	// Boot a real daemon on the staged database: Run migrates to 31.
+	// Boot a real daemon on the staged database: Run applies every later migration.
 	respond := func(_ string, msgs []llmwire.Message) *llmwire.Response {
 		if hasUserContaining(msgs, "CHILD_STAGED") {
 			return &llmwire.Response{Text: "staged child finished"}

@@ -58,7 +58,7 @@ func UseCalculator(c Calculator) int {
 		t.Fatalf("Failed to write test.go: %v", err)
 	}
 
-	mgr := lsp.NewManager(nil)
+	mgr := lsp.NewManager(nil, nil)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()

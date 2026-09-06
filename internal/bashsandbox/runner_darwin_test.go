@@ -12,6 +12,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/pilat/coagent/internal/procexec"
 )
 
 func TestDarwinRunner_CommandUsesParameters(t *testing.T) {
@@ -23,7 +25,10 @@ func TestDarwinRunner_CommandUsesParameters(t *testing.T) {
 	}
 
 	commandArgs := []string{"hostile ;$()", "line\nbreak", "-leading=equals"}
-	cmd, err := runner.Command(context.Background(), "printf '%s' hello", "/tmp", commandArgs...)
+	cmd, err := runner.Command(context.Background(), procexec.Request{
+		Path: bashExecutable, Args: append([]string{"-c", "printf '%s' hello"}, commandArgs...),
+		WorkDir: "/tmp", Env: []string{"KEEP=value"},
+	})
 	require.NoError(t, err)
 
 	assert.Equal(t, seatbeltExecutable, cmd.Path)
@@ -33,6 +38,7 @@ func TestDarwinRunner_CommandUsesParameters(t *testing.T) {
 		"-D", "WRITABLE_0=/tmp/path with spaces",
 		"-D", "WRITABLE_1=/tmp/-cache=value",
 		"-p", runner.profile,
+		"/usr/bin/env", "-i", "--", "KEEP=value", "PWD=/tmp",
 		"bash", "-c", "printf '%s' hello",
 		"hostile ;$()", "line\nbreak", "-leading=equals",
 	}, cmd.Args)
@@ -66,7 +72,7 @@ func TestDarwinRunner_SeatbeltPolicy(t *testing.T) {
 
 	run := func(t *testing.T, command, workDir string) (string, error) {
 		t.Helper()
-		cmd, err := runner.Command(context.Background(), command, workDir)
+		cmd, err := runner.BashCommand(context.Background(), command, workDir)
 		require.NoError(t, err)
 		output, err := cmd.CombinedOutput()
 		return string(output), err
@@ -138,19 +144,95 @@ func TestDarwinRunner_SeatbeltPolicy(t *testing.T) {
 	})
 }
 
+func TestDarwinRunner_ShieldedCommandUsesDenyReadProfile(t *testing.T) {
+	project := t.TempDir()
+	mounts, err := executionSubstrate()
+	require.NoError(t, err)
+	canonicalProject, err := filepath.EvalSymlinks(project)
+	require.NoError(t, err)
+	policy := processPolicy{
+		readScope: ProjectConfined, workDir: project, projectRoot: canonicalProject,
+		writableRoots: []string{canonicalProject}, readMounts: mounts, sessionKey: "session:1",
+	}
+	profile, names, parameters := shieldedSeatbeltPolicy(policy)
+	runner := &darwinRunner{
+		executable: seatbeltExecutable, profile: profile, parameterNames: names,
+		parameters: parameters, roots: policy.writableRoots, policy: policy,
+	}
+
+	cmd, err := runner.BashCommand(context.Background(), "pwd", project)
+	require.NoError(t, err)
+	assert.Equal(t, canonicalProject, cmd.Dir)
+	assert.Contains(t, profile, "(deny file-read*")
+	assert.Contains(t, profile, "(deny file-read-data")
+	assert.Contains(t, profile, `(path-ancestors (param "PROJECT_ROOT"))`)
+	assert.Contains(t, profile, `(literal "/")`)
+	assert.NotContains(t, profile, `(subpath "/")`)
+	assert.Contains(t, profile, "(deny file-write*")
+	assert.NotContains(t, profile, project)
+	assert.Contains(t, cmd.Args, "PROJECT_ROOT="+canonicalProject)
+	assert.Contains(t, cmd.Args, "/bin/sh")
+	assert.Contains(t, cmd.Args, "coagent-shield")
+}
+
+func TestDarwinRunner_ShieldedSeatbeltPolicy(t *testing.T) {
+	if _, err := os.Stat(seatbeltExecutable); err != nil {
+		t.Skipf("Seatbelt executable unavailable: %v", err)
+	}
+
+	base := t.TempDir()
+	project := filepath.Join(base, "project")
+	outside := filepath.Join(base, "outside")
+	require.NoError(t, os.Mkdir(project, 0o755))
+	require.NoError(t, os.WriteFile(outside, []byte("outside"), 0o600))
+	runner, err := New(Config{
+		Enabled: true, WorkDir: project, SessionKey: "session:1", ReadScope: ProjectConfined,
+	}, nil)
+	require.NoError(t, err)
+
+	projectFile := filepath.Join(project, "inside")
+	cmd, err := runner.BashCommand(
+		context.Background(), "printf inside >"+shellQuote(projectFile)+" && cat "+shellQuote(projectFile), project,
+	)
+	require.NoError(t, err)
+	output, err := cmd.CombinedOutput()
+	require.NoError(t, err, string(output))
+	assert.Equal(t, "inside", string(output))
+
+	cmd, err = runner.BashCommand(context.Background(), "cat "+shellQuote(outside), project)
+	require.NoError(t, err)
+	output, err = cmd.CombinedOutput()
+	require.Error(t, err, string(output))
+
+	_, err = runner.BashCommand(context.Background(), "true", base)
+	require.ErrorContains(t, err, "outside the shielded project")
+}
+
 func TestDarwinRunner_ProbeConfirmsEnforcement(t *testing.T) {
 	if _, err := os.Stat(seatbeltExecutable); err != nil {
 		t.Skipf("Seatbelt executable unavailable: %v", err)
 	}
 
-	require.NoError(t, probeEnforcement(newEnabledRunner))
+	require.NoError(t, probeEnforcement(func(policy processPolicy) (Runner, error) {
+		return newEnabledRunner(policy)
+	}))
+}
+
+func TestDarwinRunner_ShieldProbeConfirmsEnforcement(t *testing.T) {
+	if _, err := os.Stat(seatbeltExecutable); err != nil {
+		t.Skipf("Seatbelt executable unavailable: %v", err)
+	}
+
+	require.NoError(t, probeShieldEnforcement(func(policy processPolicy) (Runner, error) {
+		return newEnabledRunner(policy)
+	}))
 }
 
 func TestDarwinRunner_CommandExitStatusIsPreserved(t *testing.T) {
 	runner, err := New(Config{Enabled: true, WorkDir: t.TempDir()}, nil)
 	require.NoError(t, err)
 
-	cmd, err := runner.Command(context.Background(), "exit 17", t.TempDir())
+	cmd, err := runner.BashCommand(context.Background(), "exit 17", t.TempDir())
 	require.NoError(t, err)
 
 	err = cmd.Run()

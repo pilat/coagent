@@ -19,6 +19,8 @@ import (
 	"github.com/pilat/coagent/internal/tool/builtin"
 )
 
+var _ Factory = (*factory)(nil)
+
 // Factory creates isolated session instances for different workdirs.
 type Factory interface {
 	Create(ctx context.Context, opts CreateOptions) (Service, error)
@@ -75,17 +77,10 @@ type CreateOptions struct {
 	// CompactionDeferAnnounced carries the previous run's verdict back in: the
 	// human is told once that a queued /compact is waiting, not once per wake.
 	CompactionDeferAnnounced bool
-}
-
-var _ Factory = (*factory)(nil)
-
-// FactoryOption customizes a factory (test seams).
-type FactoryOption func(*factory)
-
-// WithLLMClientFactory overrides how per-session LLM clients are constructed.
-// Used by tests to inject a scripted fake LLM.
-func WithLLMClientFactory(fn func(cfg *config.Config) (llm.Client, error)) FactoryOption {
-	return func(f *factory) { f.newLLMClient = fn }
+	ShieldsUp                bool
+	// ObserveProcessPolicy records the exact stack policy before later build
+	// failures can release a pooled MCP client without returning a Service.
+	ObserveProcessPolicy func(string)
 }
 
 type factory struct {
@@ -100,6 +95,15 @@ type factory struct {
 	marketplaceCache loader.MarketplaceCache
 	provider         shellenv.Provider
 	newLLMClient     func(cfg *config.Config) (llm.Client, error)
+}
+
+// FactoryOption customizes a factory (test seams).
+type FactoryOption func(*factory)
+
+// WithLLMClientFactory overrides how per-session LLM clients are constructed.
+// Used by tests to inject a scripted fake LLM.
+func WithLLMClientFactory(fn func(cfg *config.Config) (llm.Client, error)) FactoryOption {
+	return func(f *factory) { f.newLLMClient = fn }
 }
 
 // NewFactory creates a session factory with shared dependencies.
@@ -163,8 +167,10 @@ func (f *factory) buildRegistry(
 	ldr loader.Service,
 	todoSvc todo.Service,
 	projectID, sessionID int64,
+	shieldsUp bool,
 ) (tool.Registry, *builtin.Stack, error) {
 	stack, err := builtin.BuildStack(ctx, builtin.StackConfig{
+		SessionID:       sessionID,
 		WorkDir:         cfg.WorkDir,
 		RepoRoot:        cfg.RepoRoot,
 		Pool:            f.mcpPool,
@@ -174,6 +180,7 @@ func (f *factory) buildRegistry(
 		Todo:            todoSvc,
 		TodoReplacement: &todoReplacement{store: f.store, sessionID: sessionID, memory: todoSvc},
 		Provider:        f.provider,
+		ShieldsUp:       shieldsUp,
 	})
 	if err != nil {
 		return nil, nil, fmt.Errorf("build tool stack: %w", err)

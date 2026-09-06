@@ -8,7 +8,8 @@ Key differentiators:
 - **Built-in managers**: Telegram and local chat share the daemon's private in-process controller contract
 - **Pluggable LLM backends**: Anthropic, Google Gemini, OpenAI-compatible (including local models)
 - **Unattended execution**: sessions persist to SQLite, survive crashes, and resume automatically
-- **MCP-first**: MCP server connections are pooled at the daemon level and shared across sessions
+- **MCP-first**: the daemon pools session-bound MCP clients and catalogs without cross-session reuse
+- **Session shields**: an operator can durably confine a complete session tree to its project while retaining tools and network access
 
 ## Build & Development Commands
 

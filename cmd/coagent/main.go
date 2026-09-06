@@ -15,6 +15,7 @@ import (
 
 	"github.com/pilat/coagent/internal/bashsandbox"
 	"github.com/pilat/coagent/internal/budget"
+	"github.com/pilat/coagent/internal/coagenthome"
 	"github.com/pilat/coagent/internal/config"
 	"github.com/pilat/coagent/internal/configapply"
 	"github.com/pilat/coagent/internal/configops"
@@ -32,6 +33,7 @@ import (
 	"github.com/pilat/coagent/internal/mcpstore"
 	"github.com/pilat/coagent/internal/memory"
 	"github.com/pilat/coagent/internal/migrate"
+	"github.com/pilat/coagent/internal/procexec"
 	"github.com/pilat/coagent/internal/schedule"
 	"github.com/pilat/coagent/internal/session"
 	"github.com/pilat/coagent/internal/sessionevent"
@@ -173,11 +175,17 @@ func resolvePendingApply(
 	}
 
 	log := logger.Named("main.apply")
-	log.Info("pending_apply_resolved",
+
+	fields := []zap.Field{
 		zap.Bool("applied", outcome.Verdict.Applied),
 		zap.Bool("rolled_back", outcome.RolledBack),
 		zap.Int64("session_id", outcome.Pending.SessionID),
-	)
+	}
+	if bootErr != nil {
+		fields = append(fields, zap.String("boot_error", logger.Redact(bootErr.Error())))
+	}
+
+	log.Info("pending_apply_resolved", fields...)
 
 	if !outcome.RolledBack {
 		return state, &outcome, bootErr
@@ -292,14 +300,14 @@ func logConfigStatus(cfg *config.Config) {
 
 	log.Info("config loaded",
 		zap.Int("marketplaces", len(cfg.UnifiedConfig.Marketplaces)),
-		zap.Bool("bash_sandbox_enabled", cfg.UnifiedConfig.Tools.Bash.Sandbox.Enabled),
+		zap.Bool("write_sandbox_enabled", cfg.UnifiedConfig.Sandbox.Enabled),
 	)
 }
 
 // probeBashSandbox fails startup when Bash confinement is configured but the
 // platform backend cannot enforce it, so sessions never run unconfined.
 func probeBashSandbox(cfg *config.Config) error {
-	if cfg.UnifiedConfig == nil || !cfg.UnifiedConfig.Tools.Bash.Sandbox.Enabled {
+	if cfg.UnifiedConfig == nil || !cfg.UnifiedConfig.Sandbox.Enabled {
 		return nil
 	}
 
@@ -511,6 +519,11 @@ func startCore(
 ) (*core, error) {
 	gitClient := git.New()
 
+	marketplaceGitClient, err := newMarketplaceGitClient(ctx, cfg)
+	if err != nil {
+		return nil, err
+	}
+
 	provider := shellenv.New()
 
 	a.onStop("shellenv", func(context.Context) error { return provider.Close() })
@@ -519,7 +532,7 @@ func startCore(
 
 	a.onStop("mcp.pool", func(context.Context) error { pool.Stop(); return nil })
 
-	cache := loader.NewMarketplaceCache(gitClient)
+	cache := loader.NewMarketplaceCache(marketplaceGitClient)
 
 	db, err := migrate.Open(ctx)
 	if err != nil {
@@ -575,6 +588,34 @@ func startCore(
 		verdictSender:  daemonSvc,
 		secretResolver: daemonSvc,
 	}, nil
+}
+
+func newMarketplaceGitClient(_ context.Context, cfg *config.Config) (git.Client, error) {
+	if cfg == nil || cfg.UnifiedConfig == nil || !cfg.UnifiedConfig.Sandbox.Enabled {
+		return git.New(), nil
+	}
+
+	marketplaceDir, err := coagenthome.Join(coagenthome.CacheDirName, coagenthome.MarketplacesDirName)
+	if err != nil {
+		return nil, fmt.Errorf("resolve marketplace cache directory: %w", err)
+	}
+
+	if err := os.MkdirAll(marketplaceDir, 0o700); err != nil {
+		return nil, fmt.Errorf("create marketplace cache directory: %w", err)
+	}
+
+	//nolint:contextcheck // Sandbox preflight owns a bounded process-wide context.
+	runner, err := bashsandbox.New(bashsandbox.Config{
+		Enabled:                     true,
+		WorkDir:                     marketplaceDir,
+		SessionKey:                  "marketplace",
+		ExcludeSessionWritableRoots: true,
+	}, nil)
+	if err != nil {
+		return nil, fmt.Errorf("create marketplace sandbox: %w", err)
+	}
+
+	return git.NewSandboxed(procexec.Runner(runner)), nil
 }
 
 func acquireInstanceLock() (*ctl.Lock, error) {

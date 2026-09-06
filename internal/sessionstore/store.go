@@ -48,7 +48,7 @@ func (s SessionStatus) valid() bool {
 	}
 }
 
-const sessionColumns = `id, project_id, model, reasoning_level, master_enabled, attributes, agent_type, parent_id, iteration, status, todo_items, created_at, updated_at, killed_at, root_id, model_input_generation, model_input_boundary, context_baseline_model, context_baseline_prompt_tokens, context_baseline_message_count`
+const sessionColumns = `id, project_id, model, reasoning_level, master_enabled, attributes, agent_type, parent_id, iteration, status, todo_items, created_at, updated_at, killed_at, root_id, model_input_generation, model_input_boundary, context_baseline_model, context_baseline_prompt_tokens, context_baseline_message_count, shields_up`
 
 // errSessionNotFound signals a lookup query matched no row.
 var errSessionNotFound = errors.New("session not found")
@@ -66,6 +66,7 @@ type SessionRecord struct {
 	RootID         int64
 	Iteration      int
 	Status         SessionStatus
+	ShieldsUp      bool
 	TodoItems      string
 	CreatedAt      time.Time
 	UpdatedAt      time.Time
@@ -156,6 +157,7 @@ type OrchestrationStore interface { //nolint:interfacebloat // one bounded orche
 		model, reasoningLevel string,
 		attrs map[string]any,
 	) (*SessionRecord, error)
+	CreateReplacementSession(ctx context.Context, oldSessionID int64) (*SessionRecord, error)
 	CreateSubagentSession(
 		ctx context.Context,
 		projectID, parentID, rootID int64,
@@ -190,6 +192,7 @@ type Store interface { //nolint:interfacebloat // Complete constructor result; c
 	ProgressStore
 	ReadinessStore
 	StopCompletionStore
+	ShieldCommandStore
 }
 
 var (
@@ -213,6 +216,7 @@ var (
 	_ ProgressStore         = (*store)(nil)
 	_ ReadinessStore        = (*store)(nil)
 	_ StopCompletionStore   = (*store)(nil)
+	_ ShieldCommandStore    = (*store)(nil)
 )
 
 type store struct {
@@ -292,8 +296,9 @@ func (s *store) CreateSubagentSession(
 
 	result, err := s.db.ExecContext(
 		ctx,
-		`INSERT INTO sessions (project_id, parent_id, root_id, agent_type, model, reasoning_level, created_at, updated_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		`INSERT INTO sessions
+			(project_id, parent_id, root_id, agent_type, model, reasoning_level, created_at, updated_at, shields_up)
+		 SELECT ?, ?, ?, ?, ?, ?, ?, ?, shields_up FROM sessions WHERE id = ?`,
 		projectID,
 		parentID,
 		rootID,
@@ -302,9 +307,19 @@ func (s *store) CreateSubagentSession(
 		reasoningLevel,
 		now,
 		now,
+		parentID,
 	)
 	if err != nil {
 		return 0, fmt.Errorf("insert subagent session: %w", err)
+	}
+
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("check parent session inheritance: %w", err)
+	}
+
+	if rows == 0 {
+		return 0, fmt.Errorf("parent session %d not found", parentID)
 	}
 
 	id, err := result.LastInsertId()
@@ -313,6 +328,60 @@ func (s *store) CreateSubagentSession(
 	}
 
 	return id, nil
+}
+
+//nolint:wsl_v5 // Fencing and replacement creation must remain one transaction.
+func (s *store) CreateReplacementSession(
+	ctx context.Context,
+	oldSessionID int64,
+) (*SessionRecord, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, fmt.Errorf("begin ownerless replacement: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	old, err := scanSession(
+		tx.QueryRowContext(ctx, `SELECT `+sessionColumns+` FROM sessions WHERE id = ?`, oldSessionID),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("load ownerless replacement: %w", err)
+	}
+	now := time.Now().UTC()
+	result, err := tx.ExecContext(ctx, `UPDATE sessions SET status = 'terminating', updated_at = ?
+		WHERE id = ? AND parent_id = 0 AND killed_at IS NULL
+			AND status NOT IN ('terminating', 'killed')`, now, oldSessionID)
+	if err != nil {
+		return nil, fmt.Errorf("fence ownerless replacement: %w", err)
+	}
+	if err := requireOneSessionUpdate(result, oldSessionID); err != nil {
+		return nil, err
+	}
+
+	attrs, err := json.Marshal(old.Attributes)
+	if err != nil {
+		return nil, fmt.Errorf("marshal ownerless replacement attributes: %w", err)
+	}
+	result, err = tx.ExecContext(ctx, `INSERT INTO sessions
+		(project_id, model, reasoning_level, attributes, agent_type, created_at, updated_at, shields_up)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		old.ProjectID, old.Model, old.ReasoningLevel, string(attrs), rootAgentType, now, now, old.ShieldsUp)
+	if err != nil {
+		return nil, fmt.Errorf("insert ownerless replacement: %w", err)
+	}
+	id, err := result.LastInsertId()
+	if err != nil {
+		return nil, fmt.Errorf("ownerless replacement id: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("commit ownerless replacement: %w", err)
+	}
+
+	return &SessionRecord{
+		ID: id, ProjectID: old.ProjectID, Model: old.Model, ReasoningLevel: old.ReasoningLevel,
+		Status: SessionStatusActive, AgentType: rootAgentType, Attributes: old.Attributes,
+		ShieldsUp: old.ShieldsUp, CreatedAt: now, UpdatedAt: now,
+	}, nil
 }
 
 func (s *store) SetAttributes(ctx context.Context, id int64, attrs map[string]any) error {
@@ -990,12 +1059,14 @@ func scanSessionFrom(sc rowScanner) (*SessionRecord, error) {
 	var projectID, parentID, iteration, rootID sql.NullInt64
 	var killedAt sql.NullTime
 	var boundary sql.NullInt64
+	var shieldsUp sql.NullBool
 
 	err := sc.Scan(&rec.ID, &projectID, &model, &reasoning, &masterEnabled, &attrsRaw,
 		&agentType, &parentID, &iteration, &status, &todoItems,
 		&rec.CreatedAt, &rec.UpdatedAt, &killedAt, &rootID,
 		&rec.ModelInputGeneration, &boundary,
-		&rec.ContextBaselineModel, &rec.ContextBaselinePromptTokens, &rec.ContextBaselineMessageCount)
+		&rec.ContextBaselineModel, &rec.ContextBaselinePromptTokens, &rec.ContextBaselineMessageCount,
+		&shieldsUp)
 	if err != nil {
 		return nil, fmt.Errorf("scan session: %w", err)
 	}
@@ -1011,6 +1082,7 @@ func scanSessionFrom(sc rowScanner) (*SessionRecord, error) {
 	rec.RootID = rootID.Int64
 	rec.Iteration = int(iteration.Int64)
 	rec.Status = SessionStatus(status.String)
+	rec.ShieldsUp = shieldsUp.Bool
 	rec.TodoItems = todoItems.String
 
 	if killedAt.Valid {

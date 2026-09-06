@@ -86,7 +86,7 @@ type budgetStopperProbe struct {
 	beginCalls chan struct{}
 }
 
-func (s budgetStopperProbe) Begin(context.Context, int64) (*sessionlifecycle.StopPlan, error) {
+func (s budgetStopperProbe) Begin(context.Context, int64, []int64) (*sessionlifecycle.StopPlan, error) {
 	s.beginCalls <- struct{}{}
 
 	return nil, errBudgetParkProbe

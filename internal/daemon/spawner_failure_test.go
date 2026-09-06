@@ -110,7 +110,12 @@ func TestStopRejectsSpawnQueuedBehindDurableBoundary(t *testing.T) {
 		spawnDone <- spawnErr
 	}()
 
-	requireBarrierSignal(t, lock.attempted, "spawn did not queue behind the stop boundary")
+	select {
+	case spawnErr := <-spawnDone:
+		t.Fatalf("spawn crossed the active stop boundary: %v", spawnErr)
+	default:
+	}
+
 	store.releaseOnce.Do(func() { close(store.release) })
 	require.NoError(t, <-stopDone)
 	require.ErrorContains(t, <-spawnDone, "not accepting subagents")

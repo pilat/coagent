@@ -209,9 +209,14 @@ type recordingPool struct {
 	stubPool
 
 	invalidated []string
+	retired     []string
 }
 
 func (p *recordingPool) Invalidate(name string) { p.invalidated = append(p.invalidated, name) }
+func (p *recordingPool) RetirePolicy(key string) error {
+	p.retired = append(p.retired, key)
+	return nil
+}
 
 type fakeRegistryStore struct{ mcpstore.Store }
 
@@ -227,7 +232,8 @@ func (stubPool) Stop()            {}
 func (stubPool) ClientFor(context.Context, string, mcp.ServerConfig) (*mcp.Client, error) {
 	return nil, nil
 }
-func (stubPool) Invalidate(string) {}
+func (stubPool) Invalidate(string)         {}
+func (stubPool) RetirePolicy(string) error { return nil }
 
 // A subagent must not reshape the toolset its parent will run with, so the
 // registry tools are root-only.

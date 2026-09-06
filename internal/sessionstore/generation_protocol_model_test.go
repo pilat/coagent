@@ -293,7 +293,9 @@ func (p *generationProduction) apply(command generationProtocolCommand) {
 			SourceKey:   "progress:stale:" + strconv.FormatInt(p.inputs, 10),
 			Fingerprint: OutputFingerprint(OutputMessageReplaceable, "stale card", p.root, nil),
 		}
-		_, err := p.store.EnqueueProgressOutput(p.ctx, draft, p.currentGeneration()-1, SessionStatusActive)
+		_, err := p.store.EnqueueProgressOutput(
+			p.ctx, draft, p.currentGeneration()-1, SessionStatusActive, false,
+		)
 		require.ErrorIs(p.t, err, ErrProgressSuperseded)
 	case genStopStart:
 		if p.rootStopping() {

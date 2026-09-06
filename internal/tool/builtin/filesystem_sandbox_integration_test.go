@@ -6,6 +6,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -28,6 +30,55 @@ type nativeToolSandbox struct {
 	configured string
 	denied     string
 }
+
+type activationSentinelProvider struct {
+	path string
+}
+
+func (p activationSentinelProvider) mark() {
+	_ = os.WriteFile(p.path, []byte("activation ran"), 0o600)
+}
+
+func (p activationSentinelProvider) Snapshot(context.Context, string) string {
+	p.mark()
+
+	return ""
+}
+
+func (p activationSentinelProvider) Shell() string {
+	p.mark()
+
+	return ""
+}
+
+func (p activationSentinelProvider) Fingerprint(string) string {
+	p.mark()
+
+	return ""
+}
+
+func (p activationSentinelProvider) Invalidate(string) { p.mark() }
+
+func (p activationSentinelProvider) WrapExec(
+	ctx context.Context,
+	workDir string,
+	argv, extraEnv []string,
+) (*exec.Cmd, error) {
+	p.mark()
+	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
+	cmd.Dir = workDir
+	cmd.Env = append(os.Environ(), extraEnv...)
+
+	return cmd, nil
+}
+
+func (p activationSentinelProvider) LookPath(_ context.Context, _ string, names []string) (string, error) {
+	p.mark()
+
+	return exec.LookPath(names[0])
+}
+
+func (activationSentinelProvider) Close() error { return nil }
 
 func TestFilesystemTools_NativeSandboxMutationPolicy(t *testing.T) {
 	fixture := newNativeToolSandbox(t)
@@ -164,6 +215,121 @@ func TestFilesystemTools_NativeSandboxReadsRemainUnrestricted(t *testing.T) {
 	}
 }
 
+func TestFilesystemTools_ShieldedStackDeniesHostReads(t *testing.T) {
+	if runtime.GOOS == "linux" {
+		if _, err := exec.LookPath("bwrap"); err != nil {
+			t.Skip("bwrap is not installed")
+		}
+	}
+
+	base := t.TempDir()
+	project := filepath.Join(base, "project")
+	outside := filepath.Join(base, "outside-secret")
+	home := filepath.Join(base, "home")
+	require.NoError(t, os.Mkdir(project, 0o755))
+	require.NoError(t, os.Mkdir(home, 0o755))
+	require.NoError(t, os.WriteFile(outside, []byte("outside"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(home, "home-secret"), []byte("home"), 0o600))
+	t.Setenv("HOME", home)
+	externalBin := filepath.Join(base, "external-bin")
+	require.NoError(t, os.Mkdir(externalBin, 0o755))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(externalBin, "shield-host-tool"), []byte("#!/bin/sh\nexit 0\n"), 0o755,
+	))
+	t.Setenv("PATH", externalBin+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		_, _ = writer.Write([]byte("network retained"))
+	}))
+	t.Cleanup(server.Close)
+	tlsServer := httptest.NewTLSServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		_, _ = writer.Write([]byte("tls retained"))
+	}))
+	t.Cleanup(tlsServer.Close)
+	httpURL := strings.Replace(server.URL, "127.0.0.1", "localhost", 1)
+	tlsURL := strings.Replace(tlsServer.URL, "127.0.0.1", "localhost", 1)
+
+	unified := &config.UnifiedConfig{}
+	unified.Sandbox.Enabled = true
+	activationSentinel := filepath.Join(base, "activation-ran")
+	stack, err := BuildStack(context.Background(), StackConfig{
+		SessionID: 41, WorkDir: project, Unified: unified, ShieldsUp: true,
+		Loader: loader.New(), Todo: todo.New(), Provider: activationSentinelProvider{path: activationSentinel},
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, stack.Close()) })
+	assert.NoFileExists(t, activationSentinel)
+
+	command := strings.Join([]string{
+		"test ! -e " + quoteShell(outside),
+		"test ! -e " + quoteShell(filepath.Join(home, "home-secret")),
+		"! command -v shield-host-tool",
+		"test -r /etc/hosts",
+		"test ! -w /tmp",
+		"test ! -e /dev/sda",
+		"test $(find /proc -maxdepth 1 -type d -name '[0-9]*' | wc -l) -le 8",
+		"test \"$(curl --noproxy '*' -fsS " + quoteShell(httpURL) + ")\" = 'network retained'",
+		"test \"$(curl --noproxy '*' -kfsS " + quoteShell(tlsURL) + ")\" = 'tls retained'",
+	}, " && ")
+	result, err := stack.Registry.Get("bash").Execute(
+		context.Background(), marshalToolParams(t, bashParams{Command: command, WorkDir: project}),
+	)
+	require.NoError(t, err)
+	assert.Equal(t, 0, result.Metadata[metaKeyExitCode], result.Output)
+	assert.NoFileExists(t, activationSentinel)
+
+	nestedWrite := filepath.Join(project, "generated", "write.txt")
+	_, err = stack.Registry.Get("write").Execute(context.Background(), marshalToolParams(t, writeParams{
+		FilePath: nestedWrite, Content: "written",
+	}))
+	require.NoError(t, err)
+	assertTestFileContent(t, nestedWrite, "written")
+
+	nestedPatch := filepath.Join(project, "patched", "new.txt")
+	patch := `--- /dev/null
++++ b/patched/new.txt
+@@ -0,0 +1,1 @@
++patched`
+	_, err = stack.Registry.Get("apply_patch").Execute(
+		context.Background(), marshalApplyPatchParams(t, patch),
+	)
+	require.NoError(t, err)
+	assertTestFileContent(t, nestedPatch, "patched")
+
+	writeTestFile(t, filepath.Join(project, "inside.txt"), "inside")
+	require.NoError(t, os.Symlink(outside, filepath.Join(project, "outside-link")))
+	grepResult, err := stack.Registry.Get("grep").Execute(context.Background(), marshalToolParams(t, grepParams{
+		Pattern: "outside", Path: project,
+	}))
+	require.NoError(t, err)
+	assert.NotContains(t, grepResult.Output, outside)
+	for _, call := range []struct {
+		toolID string
+		params any
+	}{
+		{toolID: "read", params: readParams{FilePath: outside}},
+		{toolID: "ls", params: LsParams{Path: base}},
+		{toolID: "glob", params: globParams{Pattern: "*", Path: base}},
+		{toolID: "grep", params: grepParams{Pattern: "outside", Path: outside}},
+		{toolID: "write", params: writeParams{FilePath: outside, Content: "changed"}},
+		{toolID: "edit", params: editParams{FilePath: outside, OldString: "outside", NewString: "changed"}},
+	} {
+		t.Run("denies_"+call.toolID, func(t *testing.T) {
+			_, err := stack.Registry.Get(call.toolID).Execute(context.Background(), marshalToolParams(t, call.params))
+			require.Error(t, err)
+			assert.ErrorContains(t, err, "Coagent shields are raised; filesystem access is confined to the project.")
+		})
+	}
+
+	outsidePatch := fmt.Sprintf("--- %[1]s\n+++ %[1]s\n@@ -1,1 +1,1 @@\n-outside\n+changed", outside)
+	_, err = stack.Registry.Get("apply_patch").Execute(
+		context.Background(), marshalApplyPatchParams(t, outsidePatch),
+	)
+	require.Error(t, err)
+	require.ErrorContains(t, err, "Coagent shields are raised; filesystem access is confined to the project.")
+	assertTestFileContent(t, outside, "outside")
+}
+
 func TestFilesystemTools_NativeSandboxBatchCannotBypassWritePolicy(t *testing.T) {
 	fixture := newNativeToolSandbox(t)
 	path := filepath.Join(fixture.denied, "batch-denied.txt")
@@ -242,8 +408,8 @@ func newNativeToolSandbox(t *testing.T) nativeToolSandbox {
 	}
 
 	unified := &config.UnifiedConfig{}
-	unified.Tools.Bash.Sandbox.Enabled = true
-	unified.Tools.Bash.Sandbox.WritablePaths = []string{configured}
+	unified.Sandbox.Enabled = true
+	unified.Sandbox.WritablePaths = []string{configured}
 	stack, err := BuildStack(context.Background(), StackConfig{
 		WorkDir: workDir,
 		Unified: unified,

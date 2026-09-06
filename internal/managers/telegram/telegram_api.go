@@ -202,6 +202,8 @@ func (m *Manager) setCommands(ctx context.Context) error {
 			{tgKeyCommand: "gwt", tgKeyDescription: "Fork this project into a git worktree"},
 			{tgKeyCommand: "kill", tgKeyDescription: "End this session (terminal)"},
 			{tgKeyCommand: "stop", tgKeyDescription: "Stop the current run (keep session)"},
+			{tgKeyCommand: "shieldsup", tgKeyDescription: "raise project filesystem shields"},
+			{tgKeyCommand: "shieldsdown", tgKeyDescription: "lower project filesystem shields"},
 			{tgKeyCommand: "clear", tgKeyDescription: "Clear session (fresh start, same topic)"},
 			{tgKeyCommand: "model", tgKeyDescription: "Choose LLM model"},
 			{tgKeyCommand: "status", tgKeyDescription: "Show session stats (tokens, cost, context)"},

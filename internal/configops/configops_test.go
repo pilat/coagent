@@ -138,6 +138,20 @@ func modelIDs(cfg *config.UnifiedConfig) []string {
 	return out
 }
 
+func TestCloneConfig_ClonesSandboxWritablePaths(t *testing.T) {
+	original := &config.UnifiedConfig{
+		Sandbox: config.SandboxConfig{
+			Enabled:       true,
+			WritablePaths: []string{"~/.cache"},
+		},
+	}
+
+	clone := cloneConfig(original)
+	clone.Sandbox.WritablePaths[0] = "/tmp/build-cache"
+
+	assert.Equal(t, []string{"~/.cache"}, original.Sandbox.WritablePaths)
+}
+
 func TestStage_RejectsCredentialValueInEveryCredentialField(t *testing.T) {
 	tests := []struct {
 		name string

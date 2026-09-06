@@ -8,10 +8,11 @@ import (
 // PendingInput is one durable normal message waiting to enter the transcript.
 // ID defines FIFO order; ReceivedAt is the user-visible arrival time.
 type PendingInput struct {
-	ID         int64
-	Content    string
-	Attributes map[string]any
-	ReceivedAt time.Time
+	ID           int64
+	Content      string
+	Attributes   map[string]any
+	ReceivedAt   time.Time
+	ManagerOwned bool
 }
 
 // InputBoundary is the session-owned consumption seam for durable normal input.

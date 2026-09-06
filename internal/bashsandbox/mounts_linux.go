@@ -19,6 +19,12 @@ type mountOperation struct {
 	readOnly bool
 }
 
+type shieldMountOperation struct {
+	source   string
+	target   string
+	readOnly bool
+}
+
 func readMountPoints(path string) ([]string, error) {
 	file, err := os.Open(path)
 	if err != nil {
@@ -135,15 +141,76 @@ func buildMountOperations(writableRoots, mountPoints []string) []mountOperation 
 	return ordered
 }
 
-func pathWithinRoot(path, root string) bool {
-	relative, err := filepath.Rel(root, path)
-	if err != nil {
-		return false
+//nolint:wsl_v5 // Mount construction keeps each ordering constraint adjacent to its mutation.
+func buildShieldMountOperations(policy processPolicy, mountPoints []string) []shieldMountOperation {
+	mounts := make(map[string]shieldMountOperation)
+	add := func(source, target string, readOnly bool) {
+		if existing, ok := mounts[target]; ok && !existing.readOnly {
+			return
+		}
+		mounts[target] = shieldMountOperation{source: source, target: target, readOnly: readOnly}
 	}
 
-	return relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator))
+	add(policy.projectRoot, policy.projectRoot, false)
+	add(policy.projectRoot, policy.workDir, false)
+	for _, mount := range policy.readMounts {
+		add(mount.source, mount.target, true)
+	}
+
+	bases := make([]shieldMountOperation, 0, len(mounts))
+	for _, mount := range mounts {
+		bases = append(bases, mount)
+	}
+	for _, base := range bases {
+		for _, mountPoint := range mountPoints {
+			if mountPoint == base.source || !pathWithinRoot(mountPoint, base.source) {
+				continue
+			}
+			rel, err := filepath.Rel(base.source, mountPoint)
+			if err != nil {
+				continue
+			}
+			add(mountPoint, filepath.Join(base.target, rel), true)
+		}
+	}
+
+	ordered := make([]shieldMountOperation, 0, len(mounts))
+	for _, mount := range mounts {
+		ordered = append(ordered, mount)
+	}
+	sort.Slice(ordered, func(i, j int) bool {
+		left, right := pathDepth(ordered[i].target), pathDepth(ordered[j].target)
+		if left != right {
+			return left < right
+		}
+		return ordered[i].target < ordered[j].target
+	})
+
+	return ordered
 }
 
-func pathDepth(path string) int {
-	return strings.Count(filepath.Clean(path), string(filepath.Separator))
+//nolint:wsl_v5 // Parent collection and depth ordering form one mount preparation pass.
+func shieldMountDirectories(mounts []shieldMountOperation) []string {
+	seen := map[string]struct{}{"/": {}}
+	for _, mount := range mounts {
+		for dir := filepath.Dir(mount.target); dir != "/" && dir != "."; dir = filepath.Dir(dir) {
+			seen[dir] = struct{}{}
+		}
+	}
+
+	dirs := make([]string, 0, len(seen)-1)
+	for dir := range seen {
+		if dir != "/" {
+			dirs = append(dirs, dir)
+		}
+	}
+	sort.Slice(dirs, func(i, j int) bool {
+		left, right := pathDepth(dirs[i]), pathDepth(dirs[j])
+		if left != right {
+			return left < right
+		}
+		return dirs[i] < dirs[j]
+	})
+
+	return dirs
 }

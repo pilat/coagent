@@ -64,9 +64,11 @@ type MessageUsage struct {
 // not silently orphan existing rows, and new fields must be absent-tolerant.
 // Valid on RoleUser and RoleTool; other roles drop the field.
 type ImageRef struct {
-	Path string `json:"path"`
-	Mime string `json:"mime"`
-	Size int64  `json:"size"`
+	Path       string `json:"path"`
+	ReadRoot   string `json:"read_root,omitempty"`
+	ReadRootID string `json:"read_root_id,omitempty"`
+	Mime       string `json:"mime"`
+	Size       int64  `json:"size"`
 	// Decoded pixel dimensions when the format is stdlib-decodable; zero on
 	// rows written before they existed and on undecodable formats.
 	Width  int `json:"width,omitempty"`

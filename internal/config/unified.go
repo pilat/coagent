@@ -108,7 +108,9 @@ func ParseUnifiedConfig(data []byte) (*UnifiedConfig, error) {
 	decoder := yaml.NewDecoder(bytes.NewReader(data))
 	decoder.KnownFields(true)
 
-	var cfg UnifiedConfig
+	// Write confinement is enabled unless explicitly disabled. Initializing the
+	// field before decoding also covers configs that omit the sandbox section.
+	cfg := UnifiedConfig{Sandbox: SandboxConfig{Enabled: true}}
 	if err := decoder.Decode(&cfg); err != nil && !errors.Is(err, io.EOF) {
 		return nil, fmt.Errorf("parsing config file: %w", err)
 	}

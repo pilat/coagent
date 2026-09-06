@@ -6,7 +6,7 @@ import (
 )
 
 func (m *manager) openFile(ctx context.Context, workDir, file string) (*client, fileIdentity, error) {
-	identity, err := resolveFile(workDir, file)
+	identity, err := m.resolveFile(workDir, file)
 	if err != nil {
 		return nil, fileIdentity{}, err
 	}

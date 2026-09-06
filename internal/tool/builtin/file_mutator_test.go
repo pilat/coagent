@@ -11,6 +11,9 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/pilat/coagent/internal/bashsandbox"
+	"github.com/pilat/coagent/internal/procexec"
 )
 
 type fileMutationCall struct {
@@ -48,27 +51,29 @@ func (m *recordingFileMutator) WriteFile(
 	return m.err
 }
 
-func (r fixedCommandRunner) Command(
-	ctx context.Context,
-	_, workDir string,
-	_ ...string,
-) (*exec.Cmd, error) {
+func (r fixedCommandRunner) Command(ctx context.Context, request procexec.Request) (*exec.Cmd, error) {
 	if r.err != nil {
 		return nil, r.err
 	}
 
 	cmd := exec.CommandContext(ctx, "bash", "-c", r.command)
-	cmd.Dir = workDir
+	cmd.Dir = request.WorkDir
 
 	return cmd, nil
 }
 
 // ShellCommand exists only to satisfy Runner; the file mutator uses Command.
 func (r fixedCommandRunner) ShellCommand(ctx context.Context, command, workDir string) (*exec.Cmd, error) {
-	return r.Command(ctx, command, workDir)
+	return r.BashCommand(ctx, command, workDir)
 }
 
-func (fixedCommandRunner) WritableRoots() []string { return nil }
+func (r fixedCommandRunner) BashCommand(ctx context.Context, _, workDir string, _ ...string) (*exec.Cmd, error) {
+	return r.Command(ctx, procexec.Request{Path: "bash", Args: []string{"-c", r.command}, WorkDir: workDir})
+}
+
+func (fixedCommandRunner) WritableRoots() []string          { return nil }
+func (fixedCommandRunner) PolicyKey() string                { return "fixed" }
+func (fixedCommandRunner) ReadScope() bashsandbox.ReadScope { return bashsandbox.HostReadable }
 
 // methodSpyRunner records whether the snapshot-sourcing ShellCommand path is ever
 // taken. Command runs a real bash so the mutation actually writes.
@@ -76,8 +81,10 @@ type methodSpyRunner struct {
 	shellCommandCalled bool
 }
 
-func (r *methodSpyRunner) Command(ctx context.Context, command, workDir string, args ...string) (*exec.Cmd, error) {
-	return exec.CommandContext(ctx, "bash", append([]string{"-c", command}, args...)...), nil
+func (r *methodSpyRunner) Command(ctx context.Context, request procexec.Request) (*exec.Cmd, error) {
+	cmd := exec.CommandContext(ctx, request.Path, request.Args...)
+	cmd.Dir = request.WorkDir
+	return cmd, nil
 }
 
 func (r *methodSpyRunner) ShellCommand(ctx context.Context, command, _ string) (*exec.Cmd, error) {
@@ -85,7 +92,15 @@ func (r *methodSpyRunner) ShellCommand(ctx context.Context, command, _ string) (
 	return exec.CommandContext(ctx, "bash", "-c", command), nil
 }
 
-func (*methodSpyRunner) WritableRoots() []string { return nil }
+func (*methodSpyRunner) WritableRoots() []string          { return nil }
+func (*methodSpyRunner) PolicyKey() string                { return "spy" }
+func (*methodSpyRunner) ReadScope() bashsandbox.ReadScope { return bashsandbox.HostReadable }
+func (r *methodSpyRunner) BashCommand(ctx context.Context, command, workDir string, args ...string) (*exec.Cmd, error) {
+	return r.Command(
+		ctx,
+		procexec.Request{Path: "bash", Args: append([]string{"-c", command}, args...), WorkDir: workDir},
+	)
+}
 
 // TestSandboxFileMutator_NeverSourcesSnapshot guards the write-safety seam: file
 // mutations must go through plain Command, never ShellCommand — so a user alias

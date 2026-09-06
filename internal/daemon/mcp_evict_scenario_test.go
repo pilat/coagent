@@ -72,6 +72,7 @@ func TestScenario_MCPDisableEvictsThePoolWithoutBreakingAnInFlightSession(t *tes
 	h.waitUntil("registration lands", func() bool {
 		return lastAssistantTextDTO(h.parentMessages(holder)) == "registered"
 	})
+	h.mgr.waitIdle(holder)
 
 	// The holder's next run acquires the pooled client and parks inside tools/call.
 	require.NoError(t, h.mgr.SendToSession(h.ctx, holder, "HOLD_IT while I reconfigure"))
@@ -99,8 +100,8 @@ func TestScenario_MCPDisableEvictsThePoolWithoutBreakingAnInFlightSession(t *tes
 
 	require.NoError(t, llm.ValidateToolPairing(h.parentMessages(disabler)))
 
-	// The retired subprocess is gone rather than idling in the pool: re-enabling and
-	// using the server again has to spawn a second one.
+	// The retired subprocess is gone rather than idling in the pool. The disabler
+	// has its own session policy, and re-enabling the holder starts a third process.
 	require.NoError(t, h.mgr.SendToSession(h.ctx, holder, "ENABLE_IT again"))
 	h.waitUntil("re-enable lands", func() bool {
 		return lastAssistantTextDTO(h.parentMessages(holder)) == "enabled"
@@ -114,7 +115,7 @@ func TestScenario_MCPDisableEvictsThePoolWithoutBreakingAnInFlightSession(t *tes
 	msgs := h.parentMessages(holder)
 	require.NoError(t, llm.ValidateToolPairing(msgs))
 	assert.Contains(t, toolResultForCallID(msgs, "ping-again"), "pong from held run")
-	assert.Equal(t, 2, fake.count(t, "spawn"), "the evicted subprocess was retired, not reused")
+	assert.Equal(t, 3, fake.count(t, "spawn"), "the evicted session-bound subprocesses were retired, not reused")
 }
 
 // A disabled server is absent from the next run's tool inventory — the mutation

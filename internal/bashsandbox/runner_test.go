@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/pilat/coagent/internal/coagenthome"
+	"github.com/pilat/coagent/internal/procexec"
 	"github.com/pilat/coagent/internal/shellenv"
 )
 
@@ -61,7 +62,7 @@ func TestNew_DisabledPreservesCommand(t *testing.T) {
 	}, nil)
 	require.NoError(t, err)
 
-	cmd, err := runner.Command(
+	cmd, err := runner.BashCommand(
 		context.Background(),
 		"printf '%s' \"$1\"",
 		"/chosen/workdir",
@@ -74,6 +75,18 @@ func TestNew_DisabledPreservesCommand(t *testing.T) {
 		"bash", "-c", "printf '%s' \"$1\"", "coagent-test", "hello world",
 	}, cmd.Args)
 	assert.Equal(t, "/chosen/workdir", cmd.Dir)
+}
+
+func TestNew_DisabledPolicyKeyIncludesSessionIdentity(t *testing.T) {
+	first, err := New(Config{SessionKey: "session:1"}, nil)
+	require.NoError(t, err)
+	second, err := New(Config{SessionKey: "session:2"}, nil)
+	require.NoError(t, err)
+	repeat, err := New(Config{SessionKey: "session:1"}, nil)
+	require.NoError(t, err)
+
+	assert.NotEqual(t, first.PolicyKey(), second.PolicyKey())
+	assert.Equal(t, first.PolicyKey(), repeat.PolicyKey())
 }
 
 func TestDisabledRunner_ShellCommandSourcesSnapshot(t *testing.T) {
@@ -172,19 +185,19 @@ func TestNew_RejectsDangerousTempRoot(t *testing.T) {
 
 func TestPreflight_PropagatesCommandConstructionError(t *testing.T) {
 	want := errors.New("no command")
-	err := preflight(errorRunner{err: want})
+	err := preflight(errorRunner{err: want}, "/")
 	require.Error(t, err)
 	assert.ErrorIs(t, err, want)
 }
 
 func TestPreflight_BoundsLauncherOutput(t *testing.T) {
-	err := preflight(noisyRunner{})
+	err := preflight(noisyRunner{}, "/")
 	require.Error(t, err)
 	assert.LessOrEqual(t, len(err.Error()), preflightOutputLimit+100)
 }
 
 func TestProbeEnforcement_RejectsBackendThatRunsNothing(t *testing.T) {
-	err := probeEnforcement(func([]string) (Runner, error) {
+	err := probeEnforcement(func(processPolicy) (Runner, error) {
 		return noopRunner{}, nil
 	})
 	require.Error(t, err)
@@ -192,7 +205,7 @@ func TestProbeEnforcement_RejectsBackendThatRunsNothing(t *testing.T) {
 }
 
 func TestProbeEnforcement_RejectsBackendThatDoesNotConfine(t *testing.T) {
-	err := probeEnforcement(func([]string) (Runner, error) {
+	err := probeEnforcement(func(processPolicy) (Runner, error) {
 		return disabledRunner{}, nil
 	})
 	require.Error(t, err)
@@ -202,38 +215,59 @@ func TestProbeEnforcement_RejectsBackendThatDoesNotConfine(t *testing.T) {
 func TestProbeEnforcement_PropagatesBackendConstructionError(t *testing.T) {
 	want := errors.New("no backend")
 
-	err := probeEnforcement(func([]string) (Runner, error) {
+	err := probeEnforcement(func(processPolicy) (Runner, error) {
 		return nil, want
 	})
 	require.Error(t, err)
 	assert.ErrorIs(t, err, want)
 }
 
-func (r errorRunner) Command(context.Context, string, string, ...string) (*exec.Cmd, error) {
+func (r errorRunner) Command(context.Context, procexec.Request) (*exec.Cmd, error) {
 	return nil, r.err
 }
 
+func (r errorRunner) BashCommand(context.Context, string, string, ...string) (*exec.Cmd, error) {
+	return nil, r.err
+}
+
+func (errorRunner) PolicyKey() string { return "error" }
+
 func (errorRunner) WritableRoots() []string { return nil }
+func (errorRunner) ReadScope() ReadScope    { return HostReadable }
 
 func (r errorRunner) ShellCommand(context.Context, string, string) (*exec.Cmd, error) {
 	return nil, r.err
 }
 
-func (noopRunner) Command(ctx context.Context, _, _ string, _ ...string) (*exec.Cmd, error) {
+func (noopRunner) Command(ctx context.Context, request procexec.Request) (*exec.Cmd, error) {
+	return exec.CommandContext(ctx, request.Path, request.Args...), nil
+}
+
+func (noopRunner) BashCommand(ctx context.Context, _, _ string, _ ...string) (*exec.Cmd, error) {
 	return exec.CommandContext(ctx, "bash", "-c", ":"), nil
 }
 
+func (noopRunner) PolicyKey() string { return "noop" }
+
 func (noopRunner) WritableRoots() []string { return nil }
+func (noopRunner) ReadScope() ReadScope    { return HostReadable }
 
 func (noopRunner) ShellCommand(ctx context.Context, _, _ string) (*exec.Cmd, error) {
 	return exec.CommandContext(ctx, "bash", "-c", ":"), nil
 }
 
-func (noisyRunner) Command(ctx context.Context, _, _ string, _ ...string) (*exec.Cmd, error) {
+func (noisyRunner) Command(ctx context.Context, request procexec.Request) (*exec.Cmd, error) {
 	return exec.CommandContext(ctx, "bash", "-c", "printf '%0100000d' 0 >&2; exit 1"), nil
 }
 
+func (noisyRunner) BashCommand(ctx context.Context, _, _ string, _ ...string) (*exec.Cmd, error) {
+	return exec.CommandContext(ctx, "bash", "-c", "printf '%0100000d' 0 >&2; exit 1"), nil
+}
+
+func (noisyRunner) PolicyKey() string { return "noisy" }
+
 func (noisyRunner) WritableRoots() []string { return nil }
+func (noisyRunner) ReadScope() ReadScope    { return HostReadable }
 
 func (noisyRunner) ShellCommand(ctx context.Context, _, _ string) (*exec.Cmd, error) {
 	return exec.CommandContext(ctx, "bash", "-c", "printf '%0100000d' 0 >&2; exit 1"), nil

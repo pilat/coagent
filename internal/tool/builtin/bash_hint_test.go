@@ -7,6 +7,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/pilat/coagent/internal/bashsandbox"
 )
 
 func TestSandboxHint(t *testing.T) {
@@ -35,7 +37,7 @@ func TestSandboxHint(t *testing.T) {
 
 	for name, tt := range tests {
 		t.Run(name, func(t *testing.T) {
-			hint := sandboxHint(tt.output, tt.roots)
+			hint := sandboxHint(tt.output, tt.roots, bashsandbox.HostReadable, "/work")
 
 			if !tt.want {
 				assert.Empty(t, hint)
@@ -43,7 +45,7 @@ func TestSandboxHint(t *testing.T) {
 			}
 
 			require.NotEmpty(t, hint)
-			assert.Contains(t, hint, "tools.bash.sandbox.writable_paths")
+			assert.Contains(t, hint, "sandbox.writable_paths")
 			assert.Contains(t, hint, "/work, /tmp")
 		})
 	}
@@ -62,7 +64,7 @@ func TestBashTool_SandboxHint(t *testing.T) {
 		require.NoError(t, err)
 
 		assert.Equal(t, 1, result.Metadata["exitCode"])
-		assert.Contains(t, result.Output, "tools.bash.sandbox.writable_paths")
+		assert.Contains(t, result.Output, "sandbox.writable_paths")
 		assert.Contains(t, result.Output, tmpDir)
 	})
 

@@ -20,6 +20,8 @@ func (s *svc) renderSessionHelp() string {
 		"## Session commands",
 		"`/status` — show session status",
 		"`/stop` — stop the current run",
+		"`/shieldsup` — raise project filesystem shields",
+		"`/shieldsdown` — lower project filesystem shields",
 		"`/clear` — start a fresh session",
 		"`/kill` — close this session",
 		"`/compact [focus]` — compact the context",

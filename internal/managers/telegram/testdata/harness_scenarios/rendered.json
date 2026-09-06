@@ -302,7 +302,7 @@
           "method": "sendMessage",
           "chat_id": -100123,
           "thread_id": 7001,
-          "text": "<b><u>Session commands</u></b>\n<code>/status</code> — show session status\n<code>/stop</code> — stop the current run\n<code>/clear</code> — start a fresh session\n<code>/kill</code> — close this session\n<code>/compact [focus]</code> — compact the context\n<code>/schedules</code> — list schedules\n<code>/budget &lt;request&gt;</code> — arm, replace, inspect, or clear a one-shot cost/wall-time checkpoint\n<code>/gwt &lt;name&gt;</code> — fork into a worktree (Telegram session topics only)",
+          "text": "<b><u>Session commands</u></b>\n<code>/status</code> — show session status\n<code>/stop</code> — stop the current run\n<code>/shieldsup</code> — raise project filesystem shields\n<code>/shieldsdown</code> — lower project filesystem shields\n<code>/clear</code> — start a fresh session\n<code>/kill</code> — close this session\n<code>/compact [focus]</code> — compact the context\n<code>/schedules</code> — list schedules\n<code>/budget &lt;request&gt;</code> — arm, replace, inspect, or clear a one-shot cost/wall-time checkpoint\n<code>/gwt &lt;name&gt;</code> — fork into a worktree (Telegram session topics only)",
           "parse_mode": "HTML"
         }
       ]

@@ -9,6 +9,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/pilat/coagent/internal/procexec"
 )
 
 // gitTimeout bounds each network git op (clone/pull) so a slow TLS / DNS
@@ -42,10 +44,17 @@ type Client interface {
 
 var _ Client = (*client)(nil)
 
-type client struct{}
+type client struct {
+	runner procexec.Runner
+}
 
 func New() Client {
 	return &client{}
+}
+
+// NewSandboxed creates a client whose Git subprocesses run through runner.
+func NewSandboxed(runner procexec.Runner) Client {
+	return &client{runner: runner}
 }
 
 func (c *client) Clone(ctx context.Context, repoURL, destPath string) error {
@@ -61,8 +70,20 @@ func (c *client) Clone(ctx context.Context, repoURL, destPath string) error {
 	ctx, cancel := context.WithTimeout(ctx, gitTimeout)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, "git", "clone", "--depth", strconv.Itoa(CloneDepth), repoURL, destPath)
-	cmd.Env = nonInteractiveGitEnv()
+	cmd, err := c.command(
+		ctx,
+		parentDir,
+		nonInteractiveGitEnv(),
+		"clone",
+		"--depth",
+		strconv.Itoa(CloneDepth),
+		repoURL,
+		destPath,
+	)
+	if err != nil {
+		return fmt.Errorf("construct git clone: %w", err)
+	}
+
 	cmd.WaitDelay = gitWaitDelay
 
 	output, err := cmd.CombinedOutput()
@@ -82,9 +103,11 @@ func (c *client) Pull(ctx context.Context, repoPath string) error {
 	ctx, cancel := context.WithTimeout(ctx, gitTimeout)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, "git", "pull")
-	cmd.Dir = repoPath
-	cmd.Env = nonInteractiveGitEnv()
+	cmd, err := c.command(ctx, repoPath, nonInteractiveGitEnv(), "pull")
+	if err != nil {
+		return fmt.Errorf("construct git pull: %w", err)
+	}
+
 	cmd.WaitDelay = gitWaitDelay
 
 	output, err := cmd.CombinedOutput()
@@ -103,8 +126,10 @@ func (c *client) IsCloned(ctx context.Context, repoPath string) bool {
 		return false
 	}
 
-	cmd := exec.CommandContext(ctx, "git", "rev-parse", "--git-dir")
-	cmd.Dir = repoPath
+	cmd, err := c.command(ctx, repoPath, nil, "rev-parse", "--git-dir")
+	if err != nil {
+		return false
+	}
 
 	if err := cmd.Run(); err != nil {
 		return false
@@ -121,9 +146,11 @@ func (c *client) HealthCheck(ctx context.Context, repoPath string) error {
 	ctx, cancel := context.WithTimeout(ctx, gitTimeout)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, "git", "fsck", "--no-dangling")
-	cmd.Dir = repoPath
-	cmd.Env = nonInteractiveGitEnv()
+	cmd, err := c.command(ctx, repoPath, nonInteractiveGitEnv(), "fsck", "--no-dangling")
+	if err != nil {
+		return fmt.Errorf("construct git fsck: %w", err)
+	}
+
 	cmd.WaitDelay = gitWaitDelay
 
 	output, err := cmd.CombinedOutput()
@@ -139,8 +166,10 @@ func (c *client) GetRemoteURL(ctx context.Context, repoPath string) (string, err
 		return "", fmt.Errorf("%w: %s", ErrNotARepo, repoPath)
 	}
 
-	cmd := exec.CommandContext(ctx, "git", "remote", "get-url", "origin")
-	cmd.Dir = repoPath
+	cmd, err := c.command(ctx, repoPath, nil, "remote", "get-url", "origin")
+	if err != nil {
+		return "", fmt.Errorf("construct git remote lookup: %w", err)
+	}
 
 	output, err := cmd.Output()
 	if err != nil {
@@ -148,6 +177,28 @@ func (c *client) GetRemoteURL(ctx context.Context, repoPath string) (string, err
 	}
 
 	return strings.TrimSpace(string(output)), nil
+}
+
+func (c *client) command(ctx context.Context, workDir string, env []string, args ...string) (*exec.Cmd, error) {
+	if c.runner == nil {
+		cmd := exec.CommandContext(ctx, "git", args...)
+		cmd.Dir = workDir
+		cmd.Env = env
+
+		return cmd, nil
+	}
+
+	cmd, err := c.runner.Command(ctx, procexec.Request{
+		Path:    "git",
+		Args:    args,
+		WorkDir: workDir,
+		Env:     env,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("sandbox git command: %w", err)
+	}
+
+	return cmd, nil
 }
 
 // nonInteractiveGitEnv disables every credential-prompt path so git fails fast

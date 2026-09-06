@@ -66,6 +66,7 @@ func TestStopOnStoreFailureDoesNotPublishIdle(t *testing.T) {
 		subagent.NewStore(db), subagent.NewTransactions(db),
 		nil, sessions, nil, nil,
 	)
+	mgr.treeStore = sessions
 	controllers := newTestController(mgr, &config.Config{}, nil, nil)
 	notifications := controllers.ForManager("manager-stop").Subscribe()
 

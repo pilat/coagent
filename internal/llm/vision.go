@@ -1,12 +1,12 @@
 package llm
 
 import (
-	"os"
 	"slices"
 
 	"go.uber.org/zap"
 
 	"github.com/pilat/coagent/internal/llmwire"
+	"github.com/pilat/coagent/internal/safefile"
 )
 
 // Shared capability gate + disk materialization for both driver families
@@ -29,7 +29,7 @@ func classifyImage(inputModalities []string, ref llmwire.ImageRef) string {
 		return llmwire.ImageOmitReasonUnsupported
 	}
 
-	if _, err := os.Stat(ref.Path); err != nil {
+	if _, err := safefile.ReadFileAtRoot(ref.ReadRoot, ref.ReadRootID, ref.Path); err != nil {
 		return llmwire.ImageOmitReasonUnreadable
 	}
 
@@ -47,7 +47,7 @@ func resolveImage(inputModalities []string, ref llmwire.ImageRef, log *zap.Logge
 		return nil, reason
 	}
 
-	data, err := os.ReadFile(ref.Path)
+	data, err := safefile.ReadFileAtRoot(ref.ReadRoot, ref.ReadRootID, ref.Path)
 	if err != nil {
 		log.Debug("image_degraded", zap.String("path", ref.Path), zap.Error(err))
 

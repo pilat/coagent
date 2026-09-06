@@ -54,12 +54,78 @@ type InboxInput struct {
 type InboxStore interface {
 	EnqueueInput(ctx context.Context, sessionID int64, source InputSource, rawContent string) (*InboxInput, error)
 	PeekPending(ctx context.Context, sessionID int64) (*InboxInput, error)
+	ListPendingShieldCommands(ctx context.Context, sessionID int64) ([]*InboxInput, error)
+	ListRootsWithPendingShieldCommands(ctx context.Context) ([]int64, error)
 	PromoteInput(ctx context.Context, inputID int64, preparedContent string) (*transcript.Message, error)
 	HandleInput(ctx context.Context, inputID int64, reason string) error
 	RejectInput(ctx context.Context, inputID int64, reason string) error
 	CancelPendingInputs(ctx context.Context, sessionIDs []int64, reason string) (int64, error)
 	HasAcceptedInput(ctx context.Context, sessionID int64) (bool, error)
 	ListSessionsWithRecoverableInput(ctx context.Context) ([]int64, error)
+}
+
+//nolint:wsl_v5 // Ordered scanning is one recovery projection.
+func (s *store) ListRootsWithPendingShieldCommands(ctx context.Context) ([]int64, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT input.session_id
+		FROM session_inbox input
+		JOIN sessions root ON root.id = input.session_id
+		WHERE input.source = 'user' AND input.state = 'pending'
+			AND trim(input.raw_content) IN ('/shieldsup', '/shieldsdown')
+			AND root.parent_id = 0 AND root.killed_at IS NULL
+			AND root.status NOT IN ('terminating', 'killed')
+			AND json_type(input.attributes, '$.manager_id') = 'text'
+			AND json_extract(input.attributes, '$.manager_id') =
+				json_extract(root.attributes, '$.manager_id')
+		GROUP BY input.session_id
+		ORDER BY MIN(input.id), input.session_id`)
+	if err != nil {
+		return nil, fmt.Errorf("list roots with pending shield commands: %w", err)
+	}
+	defer rows.Close()
+
+	var sessionIDs []int64
+	for rows.Next() {
+		var sessionID int64
+		if err := rows.Scan(&sessionID); err != nil {
+			return nil, fmt.Errorf("scan root with pending shield command: %w", err)
+		}
+		sessionIDs = append(sessionIDs, sessionID)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate roots with pending shield commands: %w", err)
+	}
+
+	return sessionIDs, nil
+}
+
+// ListPendingShieldCommands returns manager-owned shield commands in durable order.
+//
+//nolint:wsl_v5 // Ordered row scanning is one durable command projection.
+func (s *store) ListPendingShieldCommands(ctx context.Context, sessionID int64) ([]*InboxInput, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT `+inboxColumns+` FROM session_inbox
+		WHERE session_id = ? AND source = 'user' AND state = 'pending'
+			AND trim(raw_content) IN ('/shieldsup', '/shieldsdown')
+			AND json_type(attributes, '$.manager_id') = 'text'
+			AND json_extract(attributes, '$.manager_id') <> ''
+		ORDER BY id`, sessionID)
+	if err != nil {
+		return nil, fmt.Errorf("list pending shield commands: %w", err)
+	}
+	defer rows.Close()
+
+	var inputs []*InboxInput
+	for rows.Next() {
+		input, err := scanInboxInput(rows)
+		if err != nil {
+			return nil, err
+		}
+		inputs = append(inputs, input)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate pending shield commands: %w", err)
+	}
+
+	return inputs, nil
 }
 
 // HandleInput resolves a controller command without inserting it into the model

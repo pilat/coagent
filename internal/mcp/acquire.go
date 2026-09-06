@@ -7,11 +7,13 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/pilat/coagent/internal/logger"
+	"github.com/pilat/coagent/internal/procexec"
 	"github.com/pilat/coagent/internal/shellenv"
 )
 
 // AcquireForWorkDir builds per-workdir MCP access from already-resolved definitions,
-// pooled when a pool is given. provider is used only on the direct path.
+// pooled when a pool is given. provider prepares the activated environment and
+// runner applies the session process policy on both paths.
 //
 //nolint:nilnil // nil,nil means "no MCP configured", not failure; the only caller (tool/builtin) already checks Service != nil
 func AcquireForWorkDir(
@@ -20,8 +22,9 @@ func AcquireForWorkDir(
 	servers map[string]ServerConfig,
 	workDir string,
 	provider shellenv.Provider,
+	runner procexec.Runner,
 ) (Service, error) {
-	configs := stampWorkDir(servers, workDir)
+	configs := stampWorkDir(servers, workDir, provider, runner)
 	if len(configs) == 0 {
 		return nil, nil
 	}
@@ -35,12 +38,17 @@ func AcquireForWorkDir(
 		return newPoolView(pool, snap, configs), nil
 	}
 
-	return startDirect(ctx, workDir, configs, provider)
+	return startDirect(ctx, workDir, configs, provider, runner)
 }
 
 // stampWorkDir binds caller-supplied definitions to this session's workdir, which
 // is part of the pool's identity hash. Callers leave WorkDir empty.
-func stampWorkDir(servers map[string]ServerConfig, workDir string) map[string]ServerConfig {
+func stampWorkDir(
+	servers map[string]ServerConfig,
+	workDir string,
+	provider shellenv.Provider,
+	runner procexec.Runner,
+) map[string]ServerConfig {
 	configs := make(map[string]ServerConfig, len(servers))
 
 	for name, server := range servers {
@@ -49,6 +57,9 @@ func stampWorkDir(servers map[string]ServerConfig, workDir string) map[string]Se
 		}
 
 		server.WorkDir = workDir
+		server.runner = runner
+		server.provider = provider
+		server.providerSet = true
 		configs[name] = server
 	}
 
@@ -62,9 +73,10 @@ func startDirect(
 	workDir string,
 	configs map[string]ServerConfig,
 	provider shellenv.Provider,
+	runner procexec.Runner,
 ) (Service, error) {
 	log := logger.Ctx(ctx).Named("mcp.acquire")
-	mgr := New(workDir, provider)
+	mgr := New(workDir, provider, runner)
 
 	stats, err := mgr.Start(ctx, &Config{Servers: configs})
 	if err != nil {

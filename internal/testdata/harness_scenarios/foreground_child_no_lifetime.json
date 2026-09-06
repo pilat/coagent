@@ -71,7 +71,7 @@
         "manager_id": "telegram:main",
         "model_input_generation": 1
       },
-      "source_key": "progress:change:waiting:7428a4b8dda361de7b98490f260ecb627d550160e67bbf50ec4d055b22c1353e:g1",
+      "source_key": "progress:change:waiting:7428a4b8dda361de7b98490f260ecb627d550160e67bbf50ec4d055b22c1353e:g1:shields:false:i0",
       "model_input_generation": 1,
       "releases_input": false
     },
@@ -82,7 +82,7 @@
         "manager_id": "telegram:main",
         "model_input_generation": 1
       },
-      "source_key": "progress:change:subagent:2:1:completed:g1",
+      "source_key": "progress:change:subagent:2:1:completed:g1:shields:false:i0",
       "model_input_generation": 1,
       "previous_message_type": "message_replaceable",
       "previous_model_input_generation": 1,

@@ -17,13 +17,19 @@ import (
 func (s *svc) Spawn(ctx context.Context, req spawnRequest) (childResult, error) {
 	var result childResult
 
-	err := s.stopper.GuardSpawn(func() error {
+	unlock, err := s.lockSessionTree(ctx, req.ParentID)
+	if err != nil {
+		return childResult{}, err
+	}
+	defer unlock()
+
+	err = s.stopper.GuardSpawn(func() error {
 		childID, workDir, projectID, createErr := s.createChildSession(ctx, req)
 		if createErr != nil {
 			return createErr
 		}
 
-		if startErr := s.ensureRunner(
+		if startErr := s.ensureRunnerLocked(
 			context.WithoutCancel(ctx), childID, workDir, projectID, nil,
 		); startErr != nil {
 			return fmt.Errorf("start child runner: %w", startErr)
@@ -128,7 +134,22 @@ func (s *svc) Result(ctx context.Context, childID int64) (childResult, error) {
 // first; persistCompletion then re-arms and starts the next activation. A
 // completed foreground child becomes a background continuation because its
 // original task call has already been resolved.
+//
+//nolint:wsl_v5 // Durable enqueue and guarded rearm form one serialized transition.
 func (s *svc) SendToChild(ctx context.Context, childID int64, msg string) error {
+	requestCtx := ctx
+	unlock, err := s.lockSessionTree(ctx, childID)
+	if err != nil {
+		return err
+	}
+	locked := true
+	defer func() {
+		if locked {
+			unlock()
+		}
+	}()
+	ctx = context.WithoutCancel(ctx)
+
 	link, err := s.links.GetLink(ctx, childID)
 	if err != nil {
 		return fmt.Errorf("load subagent link: %w", err)
@@ -177,20 +198,26 @@ func (s *svc) SendToChild(ctx context.Context, childID int64, msg string) error 
 
 		s.publishSubagentProgress(ctx, childID)
 
-		return s.ensureSessionRunner(context.WithoutCancel(ctx), childID)
+		return s.ensureSessionRunnerLocked(ctx, childID)
 	}
 
 	if link.Terminal() {
+		unlock()
+		locked = false
+
 		if link.DeliveredAt != 0 {
-			return s.rearmChildAfterDelivery(context.WithoutCancel(ctx), childID)
+			return s.rearmChildAfterDelivery(requestCtx, childID)
 		}
 
-		s.deliverCompletionToParent(context.WithoutCancel(ctx), *link)
+		s.deliverCompletionToParent(requestCtx, *link)
 
 		return nil
 	}
 
-	return s.ensureSessionRunner(context.WithoutCancel(ctx), childID)
+	unlock()
+	locked = false
+
+	return s.ensureSessionRunner(requestCtx, childID)
 }
 
 // LinkPending reports whether a link already exists for this task call — the

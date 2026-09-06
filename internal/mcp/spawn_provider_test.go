@@ -17,20 +17,32 @@ var errRecorded = errors.New("recorded spawn")
 // recordingProvider records WrapExec calls and returns an error so the spawn
 // fails immediately — no real subprocess, no MCP handshake to hang on.
 type recordingProvider struct {
-	mu      sync.Mutex
-	calls   int
-	workDir string
-	argv    []string
-	env     []string
+	mu           sync.Mutex
+	calls        int
+	workDir      string
+	argv         []string
+	env          []string
+	fingerprints int
 }
 
 func (p *recordingProvider) Snapshot(context.Context, string) string { return "" }
 func (p *recordingProvider) Shell() string                           { return "" }
-func (p *recordingProvider) Fingerprint(string) string               { return "" }
-func (p *recordingProvider) Invalidate(string)                       {}
-func (p *recordingProvider) Close() error                            { return nil }
+func (p *recordingProvider) Fingerprint(string) string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.fingerprints++
+	return ""
+}
+func (p *recordingProvider) Invalidate(string) {}
+func (p *recordingProvider) Close() error      { return nil }
 func (p *recordingProvider) LookPath(context.Context, string, []string) (string, error) {
 	return "", errRecorded
+}
+
+func (p *recordingProvider) fingerprintCalls() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.fingerprints
 }
 
 func (p *recordingProvider) WrapExec(
@@ -68,7 +80,7 @@ func TestNewClient_RoutesSpawnThroughProvider(t *testing.T) {
 		WorkDir: "/pinned/workdir",
 	}
 
-	_, err := NewClient(ctx, "srv", cfg, prov)
+	_, err := NewClient(ctx, "srv", cfg, prov, nil)
 	require.Error(t, err)
 
 	calls, workDir, argv, env := prov.snapshot()
@@ -100,6 +112,25 @@ func TestPooledSpawn_RoutesThroughProvider(t *testing.T) {
 	assert.Equal(t, "/pinned/workdir", workDir)
 }
 
+func TestPooledSpawn_ExplicitNilProviderBypassesActivation(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	prov := &recordingProvider{}
+	pool := NewPool(prov)
+	t.Cleanup(pool.Stop)
+	configs := stampWorkDir(
+		map[string]ServerConfig{"srv": {Command: "missing-mcp-server"}},
+		"/pinned/workdir", nil, policyRunner{key: "session:raised"},
+	)
+
+	_, err := pool.Acquire(ctx, configs)
+	require.NoError(t, err)
+	assert.Zero(t, prov.fingerprintCalls())
+	calls, _, _, _ := prov.snapshot()
+	assert.Zero(t, calls)
+}
+
 func TestDirectSpawn_RoutesThroughProvider(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -112,6 +143,7 @@ func TestDirectSpawn_RoutesThroughProvider(t *testing.T) {
 		map[string]ServerConfig{"srv": {Command: "my-mcp-server"}},
 		"/pinned/workdir",
 		prov,
+		nil,
 	)
 	require.NoError(t, err) // direct start logs failures, never returns them
 	require.NotNil(t, svc)

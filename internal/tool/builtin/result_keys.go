@@ -7,4 +7,5 @@ const (
 	metaKeyTruncated = "truncated"
 	metaKeyExitCode  = "exitCode"
 	metaKeyTimedOut  = "timedOut"
+	metaKeyTotal     = "total"
 )

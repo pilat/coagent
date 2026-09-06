@@ -46,6 +46,8 @@ func TestHandleCommandsPreservesCanonicalSkillNames(t *testing.T) {
 					"  /gwt &lt;name&gt; — fork this project into a git worktree (session topic only)\n" +
 					"  /kill — end this session (terminal)\n" +
 					"  /stop — stop the current run (session stays, resumable)\n" +
+					"  /shieldsup — raise project filesystem shields\n" +
+					"  /shieldsdown — lower project filesystem shields\n" +
 					"  /clear — clear session (fresh start, same topic)\n" +
 					"  /compact — compact context now; /compact &lt;focus&gt; to steer the summary\n" +
 					"  /model — choose LLM model\n" +
@@ -80,6 +82,20 @@ func TestHandleCommandsPreservesCanonicalSkillNames(t *testing.T) {
 			assert.Equal(t, tc.want, messages)
 		})
 	}
+}
+
+func TestShieldCommandsUseDurableSessionPath(t *testing.T) {
+	ctrl := &fakeController{}
+	m := &Manager{controller: ctrl}
+
+	for _, command := range []string{commandShieldsUp, commandShieldsDown} {
+		m.handleSessionTopicMessage(context.Background(), 42, 99, command)
+	}
+
+	assert.Equal(t, []controllerapi.SessionMessageData{
+		{SessionID: 42, Message: commandShieldsUp},
+		{SessionID: 42, Message: commandShieldsDown},
+	}, ctrl.messageCalls)
 }
 
 // Generic commands are durable inbox rows: the manager only forwards the

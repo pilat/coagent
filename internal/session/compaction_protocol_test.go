@@ -43,13 +43,18 @@ func TestSerializeCanonicalDeterministic(t *testing.T) {
 		{
 			Role:    llmwire.RoleTool,
 			Content: "with attachment",
-			Images:  []llmwire.ImageRef{{Path: "/tmp/p.png", Mime: "image/png", Size: 42}},
+			Images: []llmwire.ImageRef{{
+				Path: "/tmp/p.png", ReadRoot: "/private/authority", ReadRootID: "1a:2b",
+				Mime: "image/png", Size: 42,
+			}},
 		},
 	}
 
 	out, err := serializeCanonical(msgs)
 	require.NoError(t, err)
 	assert.Contains(t, out, `"path":"/tmp/p.png","mime":"image/png","size":42`)
+	assert.NotContains(t, out, "read_root", "compaction projection omits filesystem authority")
+	assert.NotContains(t, out, "/private/authority")
 	assert.NotContains(t, out, `"reasoning`, "opaque reasoning payloads and usage never enter the projection")
 }
 

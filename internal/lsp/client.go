@@ -10,6 +10,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/pilat/coagent/internal/safefile"
 )
 
 const (
@@ -62,6 +64,7 @@ type client struct {
 	exitOnce       sync.Once
 	processOnce    sync.Once
 	exited         atomic.Bool
+	access         safefile.Access
 }
 
 type rpcResult struct {

@@ -305,6 +305,7 @@ func TestHarnessScenario_BackgroundChildIsTheWakeSource(t *testing.T) {
 	schedules, err := h.schedStore.ListSchedules(h.ctx, parentID)
 	require.NoError(t, err)
 	assert.Empty(t, schedules, "pending child must remain the sole wake source")
+	h.mgr.waitIdle(parentID)
 
 	close(childRelease)
 	waitForVisibleMessage(t, collector, parentID, "background completion delivered")

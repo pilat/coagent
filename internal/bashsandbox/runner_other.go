@@ -7,6 +7,6 @@ import (
 	"runtime"
 )
 
-func newEnabledRunner([]string) (Runner, error) {
+func newEnabledRunner(processPolicy) (Runner, error) {
 	return nil, fmt.Errorf("Bash sandbox is unsupported on %s", runtime.GOOS)
 }

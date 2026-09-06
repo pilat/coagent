@@ -284,6 +284,10 @@ func (s *svc) Start(ctx context.Context) error {
 		logger.Ctx(ctx).Named("daemon.manager").Warn("finish_interrupted_kills_failed", zap.Error(err))
 	}
 
+	if err := s.finishInterruptedShieldRaises(ctx); err != nil {
+		return err
+	}
+
 	// /stop is a durable two-phase park. If the process died after writing
 	// stopping, finish the same idempotent operation before any recovery sweep can
 	// restart work from that tree. An explicit stop whose terminal output is still
@@ -316,6 +320,72 @@ func (s *svc) Start(ctx context.Context) error {
 	return s.finishStoppingRoots(ctx, records, stopping, owedStops)
 }
 
+//nolint:wsl_v5 // Recovery keeps each durable phase transition adjacent to its side effect.
+func (s *svc) finishInterruptedShieldRaises(ctx context.Context) error {
+	raises, err := s.lifecycleStore.SelectInterruptedShieldRaises(ctx)
+	if err != nil {
+		return fmt.Errorf("select interrupted shield raises: %w", err)
+	}
+
+	for _, raise := range raises {
+		unlock, err := s.lockSessionTree(ctx, raise.SessionID)
+		if err != nil {
+			return fmt.Errorf("lock interrupted shield raise %d: %w", raise.InputID, err)
+		}
+
+		record, err := s.sessionStore.GetSession(ctx, raise.SessionID)
+		if err != nil {
+			unlock()
+
+			return fmt.Errorf("load interrupted shield raise %d: %w", raise.InputID, err)
+		}
+		if record.Status == sessionstore.SessionStatusStopping {
+			if err := s.stopTreeCleanup(ctx, raise.SessionID, stopTreeOptions{
+				keepRootStopping: true, preserveShieldCommands: true,
+			}); err != nil {
+				unlock()
+
+				return fmt.Errorf("recover shield raise tree %d: %w", raise.SessionID, err)
+			}
+		}
+		if err := s.retireShieldPolicy(ctx, raise.SessionID); err != nil {
+			unlock()
+
+			return err
+		}
+		commit, err := s.lifecycleStore.CompleteShieldRaise(ctx, raise.SessionID, raise.InputID)
+		if err != nil {
+			unlock()
+
+			return fmt.Errorf("complete interrupted shield raise %d: %w", raise.InputID, err)
+		}
+		s.wakeShieldOutput(ctx, commit)
+		if err := s.handlePendingShieldCommandsLocked(ctx, raise.SessionID, false); err != nil {
+			unlock()
+
+			return fmt.Errorf("resolve shield commands after raise %d: %w", raise.InputID, err)
+		}
+		unlock()
+	}
+
+	return nil
+}
+
+func (s *svc) finishPendingShieldCommands(ctx context.Context) error {
+	sessionIDs, err := s.inboxStore.ListRootsWithPendingShieldCommands(ctx)
+	if err != nil {
+		return fmt.Errorf("select pending shield commands: %w", err)
+	}
+
+	for _, sessionID := range sessionIDs {
+		if err := s.handlePendingShieldCommands(ctx, sessionID); err != nil {
+			return fmt.Errorf("recover pending shield commands for session %d: %w", sessionID, err)
+		}
+	}
+
+	return nil
+}
+
 // finishStoppingRoots completes every interrupted stop before ordinary resume:
 // stopping trees finish their cleanup (and owed terminal output), while a
 // stopped root whose fence committed through the non-explicit fallback gets the
@@ -332,7 +402,7 @@ func (s *svc) finishStoppingRoots(
 		}
 
 		if inputID, owed := owedStops[rec.ID]; owed {
-			if err := s.stopTreeCleanup(ctx, rec.ID, true); err != nil {
+			if err := s.stopTreeCleanup(ctx, rec.ID, stopTreeOptions{keepRootStopping: true}); err != nil {
 				return fmt.Errorf("recover stopping session %d: %w", rec.ID, err)
 			}
 
@@ -343,7 +413,7 @@ func (s *svc) finishStoppingRoots(
 			continue
 		}
 
-		if err := s.stopTreeCleanup(ctx, rec.ID, false); err != nil {
+		if err := s.stopTreeCleanup(ctx, rec.ID, stopTreeOptions{}); err != nil {
 			return fmt.Errorf("recover stopping session %d: %w", rec.ID, err)
 		}
 	}
@@ -358,6 +428,10 @@ func (s *svc) finishStoppingRoots(
 				return fmt.Errorf("converge explicit stop for session %d: %w", rec.ID, err)
 			}
 		}
+	}
+
+	if err := s.finishPendingShieldCommands(ctx); err != nil {
+		return err
 	}
 
 	if s.budgetSvc != nil {
@@ -476,6 +550,11 @@ func (s *svc) resumeSessionsWithRecoverableInput(ctx context.Context) (int, erro
 
 		switch {
 		case link == nil:
+			if err := s.handlePendingShieldCommands(ctx, sessionID); err != nil {
+				log.Error("recover_shield_command", zap.Int64("session_id", sessionID), zap.Error(err))
+				continue
+			}
+
 			runnable, runnableErr := s.recoverableInputRunnable(ctx, sessionID)
 			if runnableErr != nil {
 				log.Error("classify_recoverable_root", zap.Int64("session_id", sessionID), zap.Error(runnableErr))

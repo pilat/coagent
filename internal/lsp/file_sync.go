@@ -3,6 +3,7 @@ package lsp
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 )
 
@@ -25,7 +26,7 @@ func (c *client) ensureFileOpen(ctx context.Context, file string) error {
 }
 
 func (c *client) syncFile(ctx context.Context, file string) (documentSync, error) {
-	content, err := readRegularFile(file)
+	content, err := c.readRegularFile(file)
 	if err != nil {
 		return documentSync{}, err
 	}
@@ -60,6 +61,31 @@ func (c *client) syncFile(ctx context.Context, file string) (documentSync, error
 	}
 
 	return documentSync{uri: uri, version: version, changed: true, generation: generation}, nil
+}
+
+//nolint:wsl_v5 // The rooted handle must remain open across stat and read.
+func (c *client) readRegularFile(file string) ([]byte, error) {
+	if c.access == nil {
+		return readRegularFile(file)
+	}
+	opened, err := c.access.Open(file)
+	if err != nil {
+		return nil, fmt.Errorf("open LSP document: %w", err)
+	}
+	defer func() { _ = opened.File.Close() }()
+	info, err := opened.File.Stat()
+	if err != nil {
+		return nil, fmt.Errorf("stat file: %w", err)
+	}
+	if !info.Mode().IsRegular() {
+		return nil, fmt.Errorf("not a regular file: %s", file)
+	}
+	content, err := io.ReadAll(opened.File)
+	if err != nil {
+		return nil, fmt.Errorf("read file: %w", err)
+	}
+
+	return content, nil
 }
 
 func (c *client) notifySync(ctx context.Context, method string, params any, uri string) (uint64, error) {

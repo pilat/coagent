@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"context"
+	"errors"
 	"os/exec"
 	"testing"
 	"time"
@@ -29,6 +30,10 @@ type blockingMCPClient struct {
 	mcpclient.MCPClient
 	killed chan struct{}
 }
+
+type exitErrorMCPClient struct{ mcpclient.MCPClient }
+
+func (exitErrorMCPClient) Close() error { return &exec.ExitError{} }
 
 func (b *blockingMCPClient) Close() error {
 	<-b.killed
@@ -59,7 +64,7 @@ func TestNewClient_UnresponsiveServerTimesOut(t *testing.T) {
 	start := time.Now()
 
 	go func() {
-		_, err := NewClient(context.Background(), "hang", cfg, nil)
+		_, err := NewClient(context.Background(), "hang", cfg, nil, nil)
 		done <- err
 	}()
 
@@ -118,4 +123,23 @@ func TestClient_CloseKillsBeforeBlockingClose(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("Close hung — cancelRun not called before the blocking client.Close")
 	}
+}
+
+func TestClient_CloseTreatsPostCancelProcessExitAsSuccess(t *testing.T) {
+	c := &Client{client: exitErrorMCPClient{}, cancelRun: func() {}}
+	require.NoError(t, c.Close())
+	require.NoError(t, c.Close())
+}
+
+func TestClient_CloseTreatsPostCancelContextErrorAsSuccess(t *testing.T) {
+	c := &Client{client: errorCloseMCPClient{err: context.Canceled}, cancelRun: func() {}}
+	require.NoError(t, c.Close())
+	require.NoError(t, c.Close())
+}
+
+func TestClient_CloseRetainsNonProcessError(t *testing.T) {
+	closeErr := errors.New("close failed")
+	c := &Client{client: errorCloseMCPClient{err: closeErr}, cancelRun: func() {}}
+	require.ErrorIs(t, c.Close(), closeErr)
+	require.ErrorIs(t, c.Close(), closeErr)
 }

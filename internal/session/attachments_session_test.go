@@ -40,7 +40,10 @@ func newAttachmentsStore(t *testing.T) (*sql.DB, sessionstore.RuntimeStore, int6
 }
 
 var demoRefs = []llmwire.ImageRef{
-	{Path: "/tmp/coagent-a.png", Mime: llmwire.MimeImagePng, Size: 4096},
+	{
+		Path: "/project/coagent-a.png", ReadRoot: "/project", ReadRootID: "1a:2b",
+		Mime: llmwire.MimeImagePng, Size: 4096,
+	},
 	{Path: "/tmp/coagent-b.jpg", Mime: llmwire.MimeImageJpeg, Size: 8192},
 }
 

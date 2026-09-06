@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"time"
 
@@ -52,6 +53,9 @@ type Pool interface {
 	// Idle entries close now; in-use entries close on their last Release.
 	Invalidate(serverName string)
 
+	// RetirePolicy retires clients and catalogs for one session process policy.
+	RetirePolicy(policyKey string) error
+
 	// Stop shuts down all MCP clients, clears catalogs, and stops the reaper.
 	Stop()
 }
@@ -83,6 +87,16 @@ type poolEntry struct {
 	lastUsed time.Time
 }
 
+type closingEntry struct {
+	hash  string
+	entry *poolEntry
+}
+
+type closingClient struct {
+	hash   string
+	client *Client
+}
+
 // failedEntry records a failed start for the retry cooldown: when, and the
 // workdir env fingerprint then — a fingerprint change invalidates the cooldown.
 type failedEntry struct {
@@ -101,11 +115,13 @@ type pool struct {
 	entries       map[string]*poolEntry          // keyed by config hash
 	catalogs      map[string]*Catalog            // config hash → cached tool metadata
 	names         map[string]map[string]struct{} // server name → hashes acquired under it
+	policies      map[string]map[string]struct{} // process policy key → config hashes
 	failed        map[string]failedEntry         // hash → last start failure, for retry cooldown
 	inflight      map[string]map[*startToken]struct{}
-	fingerprintFn func(workDir string) string // env fingerprint source; nil → cooldown is TTL-only
-	ttl           time.Duration               // live-client idle TTL
-	catalogTTL    time.Duration               // catalog idle TTL
+	closing       map[string]map[*Client]struct{} // unpooled clients whose Close has not succeeded
+	fingerprintFn func(workDir string) string     // env fingerprint source; nil → cooldown is TTL-only
+	ttl           time.Duration                   // live-client idle TTL
+	catalogTTL    time.Duration                   // catalog idle TTL
 	factory       clientFactory
 	done          chan struct{}
 	reaperOnce    sync.Once
@@ -114,7 +130,8 @@ type pool struct {
 
 // NewPool creates a new MCP connection pool with TTL-based lifecycle. The reaper
 // goroutine starts immediately; caller owns Stop. provider (may be nil) is folded
-// into the factory so every pooled server spawn routes through workDir activation.
+// into the factory so every pooled server spawn routes through workDir
+// activation and the stamped process policy.
 func NewPool(provider shellenv.Provider) Pool {
 	return NewPoolWithIdleTTL(provider, defaultTTL)
 }
@@ -129,7 +146,12 @@ func NewPoolWithIdleTTL(provider shellenv.Provider, ttl time.Duration) Pool {
 	}
 
 	return newPoolFP(ttl, fpFn, func(ctx context.Context, name string, cfg ServerConfig) (*Client, error) {
-		return NewClient(ctx, name, cfg, provider)
+		spawnProvider := provider
+		if cfg.providerSet {
+			spawnProvider = cfg.provider
+		}
+
+		return NewClient(ctx, name, cfg, spawnProvider, cfg.runner)
 	})
 }
 
@@ -142,8 +164,10 @@ func newPoolFP(ttl time.Duration, fpFn func(string) string, factory clientFactor
 		entries:       make(map[string]*poolEntry),
 		catalogs:      make(map[string]*Catalog),
 		names:         make(map[string]map[string]struct{}),
+		policies:      make(map[string]map[string]struct{}),
 		failed:        make(map[string]failedEntry),
 		inflight:      make(map[string]map[*startToken]struct{}),
+		closing:       make(map[string]map[*Client]struct{}),
 		fingerprintFn: fpFn,
 		ttl:           ttl,
 		catalogTTL:    defaultCatalogTTL,
@@ -155,13 +179,15 @@ func newPoolFP(ttl time.Duration, fpFn func(string) string, factory clientFactor
 	return p
 }
 
+//nolint:wsl_v5 // Pool acquisition keeps every hash transition adjacent under one lock.
 func (p *pool) Acquire(ctx context.Context, configs map[string]ServerConfig) (*Snapshot, error) {
 	// Fingerprint stat-walks the workdir; compute it before the lock so it never
 	// runs under pool.mu, which gates every session's acquire/release.
 	fps := make(map[string]string, len(configs))
 	for _, cfg := range configs {
-		if _, ok := fps[cfg.WorkDir]; !ok {
-			fps[cfg.WorkDir] = p.fpOf(cfg.WorkDir)
+		hash := cfg.Hash()
+		if _, ok := fps[hash]; !ok {
+			fps[hash] = p.fpOfConfig(cfg)
 		}
 	}
 
@@ -183,8 +209,12 @@ func (p *pool) Acquire(ctx context.Context, configs map[string]ServerConfig) (*S
 		hash := cfg.Hash()
 
 		p.trackNameLocked(name, hash)
+		p.trackPolicyLocked(policyKey(cfg.runner), hash)
 
 		if entry, ok := p.entries[hash]; ok {
+			if entry.evicted && entry.refcount == 0 {
+				continue
+			}
 			p.joinEntry(entry, hash, name, acquired, snap)
 
 			if cat, ok := p.catalogs[hash]; ok {
@@ -207,11 +237,11 @@ func (p *pool) Acquire(ctx context.Context, configs map[string]ServerConfig) (*S
 			continue
 		}
 
-		if e, ok := p.failed[hash]; ok && now.Sub(e.at) < failedTTL && e.fp == fps[cfg.WorkDir] {
+		if e, ok := p.failed[hash]; ok && now.Sub(e.at) < failedTTL && e.fp == fps[hash] {
 			continue // cooldown, and the env that broke it is unchanged — don't respawn
 		}
 
-		client, err := p.startOrJoinClient(ctx, name, cfg, fps[cfg.WorkDir])
+		client, err := p.startOrJoinClient(ctx, name, cfg, fps[hash])
 		if err != nil {
 			if errors.Is(err, errPoolStopped) {
 				p.rollbackLocked(acquired)
@@ -239,8 +269,10 @@ func (p *pool) Acquire(ctx context.Context, configs map[string]ServerConfig) (*S
 // Catalogs are deliberately neither consulted nor written: a lazy reconnect
 // must not replace the metadata an activation already serves or that a registry
 // mutation invalidated.
+//
+//nolint:wsl_v5 // Lazy acquisition mirrors the guarded pooled transition.
 func (p *pool) ClientFor(ctx context.Context, name string, cfg ServerConfig) (*Client, error) {
-	fp := p.fpOf(cfg.WorkDir)
+	fp := p.fpOfConfig(cfg)
 
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -252,8 +284,12 @@ func (p *pool) ClientFor(ctx context.Context, name string, cfg ServerConfig) (*C
 	hash := cfg.Hash()
 
 	p.trackNameLocked(name, hash)
+	p.trackPolicyLocked(policyKey(cfg.runner), hash)
 
 	if entry, ok := p.entries[hash]; ok {
+		if entry.evicted && entry.refcount == 0 {
+			return nil, errInvalidated
+		}
 		entry.refcount++
 
 		return entry.client, nil
@@ -267,7 +303,7 @@ func (p *pool) ClientFor(ctx context.Context, name string, cfg ServerConfig) (*C
 }
 
 func (p *pool) Release(hashes []string) {
-	var closing []*Client
+	var closing []closingEntry
 
 	p.mu.Lock()
 
@@ -286,15 +322,13 @@ func (p *pool) Release(hashes []string) {
 		entry.lastUsed = time.Now()
 
 		if entry.evicted {
-			delete(p.entries, hash)
-
-			closing = append(closing, entry.client)
+			closing = append(closing, closingEntry{hash: hash, entry: entry})
 		}
 	}
 
 	p.mu.Unlock()
 
-	closeClients(closing, "released")
+	p.closeEntries(closing, "released")
 }
 
 // Invalidate drops a server's cached catalogs and retires its live entries by
@@ -304,7 +338,7 @@ func (p *pool) Release(hashes []string) {
 func (p *pool) Invalidate(serverName string) {
 	p.mu.Lock()
 
-	var closing []*Client
+	var closing []closingEntry
 
 	for hash := range p.names[serverName] {
 		delete(p.catalogs, hash)
@@ -326,30 +360,116 @@ func (p *pool) Invalidate(serverName string) {
 			continue
 		}
 
-		delete(p.entries, hash)
-
-		closing = append(closing, entry.client)
+		entry.evicted = true
+		closing = append(closing, closingEntry{hash: hash, entry: entry})
 	}
 
 	p.mu.Unlock()
 
-	closeClients(closing, serverName)
+	p.closeEntries(closing, serverName)
 }
 
-func closeClients(clients []*Client, serverName string) {
-	if len(clients) == 0 {
-		return
+//nolint:funlen,wsl_v5 // Catalog, inflight, and live-client invalidation are one locked transition.
+func (p *pool) RetirePolicy(key string) error {
+	if key == "" {
+		return errors.New("empty MCP process policy key")
 	}
 
-	log := logger.Named("mcp.pool")
+	p.mu.Lock()
+	var closing []closingEntry
+	var detached []closingClient
+	busy := false
 
-	for _, c := range clients {
-		if err := c.Close(); err != nil {
-			log.Warn("mcp_evict_close_failed", zap.String("name", serverName), zap.Error(err))
+	for hash := range p.policies[key] {
+		delete(p.catalogs, hash)
+		delete(p.failed, hash)
+		for token := range p.inflight[hash] {
+			token.kill = true
+			busy = true
 		}
+		for client := range p.closing[hash] {
+			detached = append(detached, closingClient{hash: hash, client: client})
+		}
+
+		entry, ok := p.entries[hash]
+		if !ok {
+			if len(p.inflight[hash]) == 0 && len(p.closing[hash]) == 0 {
+				delete(p.policies[key], hash)
+			}
+
+			continue
+		}
+		if entry.refcount > 0 {
+			entry.evicted = true
+			busy = true
+			continue
+		}
+
+		entry.evicted = true
+		closing = append(closing, closingEntry{hash: hash, entry: entry})
+	}
+	if len(p.policies[key]) == 0 {
+		delete(p.policies, key)
+	}
+	p.mu.Unlock()
+
+	var closeErr error
+	for _, candidate := range detached {
+		if err := candidate.client.Close(); err != nil {
+			closeErr = errors.Join(closeErr, err)
+
+			continue
+		}
+		p.mu.Lock()
+		p.removeClosingLocked(candidate.hash, candidate.client)
+		p.mu.Unlock()
+	}
+	for _, candidate := range closing {
+		if err := candidate.entry.client.Close(); err != nil {
+			closeErr = errors.Join(closeErr, err)
+
+			continue
+		}
+
+		p.mu.Lock()
+		if current := p.entries[candidate.hash]; current == candidate.entry && current.refcount == 0 {
+			delete(p.entries, candidate.hash)
+		}
+		p.mu.Unlock()
+	}
+	p.mu.Lock()
+	p.prunePoliciesLocked()
+	busy = busy || len(p.policies[key]) > 0
+	p.mu.Unlock()
+	if closeErr != nil {
+		return fmt.Errorf("close MCP clients for retired policy: %w", closeErr)
+	}
+	if busy {
+		return errors.New("MCP process policy is still in use")
+	}
+
+	return nil
+}
+
+//nolint:funcorder,wsl_v5 // Close completion follows each eviction transition that schedules it.
+func (p *pool) closeEntries(entries []closingEntry, reason string) {
+	log := logger.Named("mcp.pool")
+	for _, candidate := range entries {
+		if err := candidate.entry.client.Close(); err != nil {
+			log.Warn("mcp_evict_close_failed", zap.String("name", reason), zap.Error(err))
+
+			continue
+		}
+
+		p.mu.Lock()
+		if current := p.entries[candidate.hash]; current == candidate.entry && current.refcount == 0 {
+			delete(p.entries, candidate.hash)
+		}
+		p.mu.Unlock()
 	}
 }
 
+//nolint:wsl_v5 // Shutdown snapshots all client ownership before closing outside the lock.
 func (p *pool) Stop() {
 	log := logger.Named("mcp.pool")
 
@@ -369,16 +489,27 @@ func (p *pool) Stop() {
 	// and p.mu gates every session's Acquire/Release, which N sequential closes would
 	// serialize for the sum.
 	entries := p.entries
+	clients := make(map[*Client]struct{}, len(entries))
+	for _, entry := range entries {
+		clients[entry.client] = struct{}{}
+	}
+	for _, obligations := range p.closing {
+		for client := range obligations {
+			clients[client] = struct{}{}
+		}
+	}
 	p.entries = make(map[string]*poolEntry)
 	p.catalogs = make(map[string]*Catalog)
 	p.names = make(map[string]map[string]struct{})
+	p.policies = make(map[string]map[string]struct{})
 	p.inflight = make(map[string]map[*startToken]struct{})
+	p.closing = make(map[string]map[*Client]struct{})
 
 	p.mu.Unlock()
 
-	for _, entry := range entries {
-		log.Info("closing_client", zap.String("name", entry.name))
-		_ = entry.client.Close()
+	for client := range clients {
+		log.Info("closing_client")
+		_ = client.Close()
 	}
 }
 
@@ -387,6 +518,8 @@ func (p *pool) Stop() {
 // factory runs with the lock released. Concurrent starters of the same hash
 // race deliberately: one winner is stored, the loser's client is closed —
 // no single-flight is added.
+//
+//nolint:funlen,wsl_v5 // Factory arbitration is one locked state transition split around process startup.
 func (p *pool) startOrJoinClient(
 	ctx context.Context,
 	name string,
@@ -417,18 +550,29 @@ func (p *pool) startOrJoinClient(
 	// name association whose hash has neither entry nor catalog — re-track so
 	// invalidation by name can still find the entry we may create below.
 	p.trackNameLocked(name, hash)
+	p.trackPolicyLocked(policyKey(cfg.runner), hash)
 
 	// Invalidate can land mid-factory. A start that raced it must not gain a
 	// pool entry the invalidation already handled: discard the subprocess.
 	if tok.kill {
 		if client != nil {
-			_ = client.Close()
+			_ = p.closeUnpooledLocked(hash, client)
+		}
+		if p.stopped {
+			return nil, errPoolStopped
 		}
 
 		return nil, errInvalidated
 	}
 
 	if err != nil {
+		if client != nil {
+			_ = p.closeUnpooledLocked(hash, client)
+		}
+		if p.stopped {
+			return nil, errPoolStopped
+		}
+
 		// A broken server must not fail the whole acquire — the caller skips it
 		// (session still starts) and the failure enters the retry cooldown.
 		p.failed[hash] = failedEntry{at: time.Now(), fp: fp}
@@ -446,8 +590,18 @@ func (p *pool) startOrJoinClient(
 	delete(p.failed, hash) // recovered — clear any prior failure cooldown
 
 	// Another goroutine may have created the same hash while we were unlocked.
-	if entry, ok := p.entries[hash]; ok {
-		_ = client.Close()
+	if _, ok := p.entries[hash]; ok {
+		_ = p.closeUnpooledLocked(hash, client)
+		if p.stopped {
+			return nil, errPoolStopped
+		}
+		entry, ok := p.entries[hash]
+		if !ok {
+			return nil, errInvalidated
+		}
+		if entry.evicted && entry.refcount == 0 {
+			return nil, errInvalidated
+		}
 
 		entry.refcount++
 
@@ -461,6 +615,32 @@ func (p *pool) startOrJoinClient(
 	}
 
 	return client, nil
+}
+
+//nolint:wsl_v5 // The obligation is visible before Close runs without the pool lock.
+func (p *pool) closeUnpooledLocked(hash string, client *Client) error {
+	obligations := p.closing[hash]
+	if obligations == nil {
+		obligations = make(map[*Client]struct{})
+		p.closing[hash] = obligations
+	}
+	obligations[client] = struct{}{}
+	p.mu.Unlock()
+	err := client.Close()
+	p.mu.Lock()
+	if err == nil {
+		p.removeClosingLocked(hash, client)
+	}
+
+	return err
+}
+
+//nolint:wsl_v5 // Obligation removal also prunes its empty hash bucket.
+func (p *pool) removeClosingLocked(hash string, client *Client) {
+	delete(p.closing[hash], client)
+	if len(p.closing[hash]) == 0 {
+		delete(p.closing, hash)
+	}
 }
 
 func (p *pool) addInflightLocked(hash string, tok *startToken) {
@@ -507,6 +687,16 @@ func (p *pool) trackNameLocked(name, hash string) {
 	hashes[hash] = struct{}{}
 }
 
+func (p *pool) trackPolicyLocked(key, hash string) {
+	hashes, ok := p.policies[key]
+	if !ok {
+		hashes = make(map[string]struct{})
+		p.policies[key] = hashes
+	}
+
+	hashes[hash] = struct{}{}
+}
+
 func (p *pool) startReaper() {
 	p.reaperOnce.Do(func() {
 		go p.reaper(reaperTick(p.ttl, p.catalogTTL))
@@ -541,6 +731,7 @@ func (p *pool) reaper(tick time.Duration) {
 	}
 }
 
+//nolint:wsl_v5 // Reaping computes all related lifecycle sets under one lock.
 func (p *pool) reap() {
 	log := logger.Named("mcp.pool")
 
@@ -548,13 +739,12 @@ func (p *pool) reap() {
 
 	p.mu.Lock()
 
-	var toClose []*poolEntry
+	var toClose []closingEntry
 
 	for hash, entry := range p.entries {
 		if entry.refcount == 0 && now.Sub(entry.lastUsed) > p.ttl {
-			toClose = append(toClose, entry)
-
-			delete(p.entries, hash)
+			entry.evicted = true
+			toClose = append(toClose, closingEntry{hash: hash, entry: entry})
 		}
 	}
 
@@ -565,6 +755,7 @@ func (p *pool) reap() {
 			delete(p.failed, hash)
 		}
 	}
+	p.prunePoliciesLocked()
 
 	p.mu.Unlock()
 
@@ -574,9 +765,27 @@ func (p *pool) reap() {
 
 	// Close outside p.mu so a bounded-but-nonzero Close can't serialize every
 	// session's Acquire/Release behind the reaper.
-	for _, entry := range toClose {
-		log.Info("reaping_idle_client", zap.String("name", entry.name))
-		_ = entry.client.Close()
+	for _, candidate := range toClose {
+		log.Info("reaping_idle_client", zap.String("name", candidate.entry.name))
+	}
+	p.closeEntries(toClose, "idle")
+}
+
+//nolint:wsl_v5 // Policy pruning evaluates all retained obligations together.
+func (p *pool) prunePoliciesLocked() {
+	for key, hashes := range p.policies {
+		for hash := range hashes {
+			_, hasEntry := p.entries[hash]
+			_, hasCatalog := p.catalogs[hash]
+			_, hasFailure := p.failed[hash]
+			if !hasEntry && !hasCatalog && !hasFailure &&
+				len(p.inflight[hash]) == 0 && len(p.closing[hash]) == 0 {
+				delete(hashes, hash)
+			}
+		}
+		if len(hashes) == 0 {
+			delete(p.policies, key)
+		}
 	}
 }
 
@@ -586,6 +795,14 @@ func (p *pool) fpOf(workDir string) string {
 	}
 
 	return p.fingerprintFn(workDir)
+}
+
+func (p *pool) fpOfConfig(cfg ServerConfig) string {
+	if cfg.providerSet && cfg.provider == nil {
+		return ""
+	}
+
+	return p.fpOf(cfg.WorkDir)
 }
 
 // joinEntry attaches an already-pooled entry to the in-progress acquire,

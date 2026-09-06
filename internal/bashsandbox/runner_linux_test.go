@@ -27,17 +27,13 @@ func TestBubblewrapRunnerCommand(t *testing.T) {
 	command := "printf '%s\\n' \"$HOME\"; exit 7"
 	commandArgs := []string{"hostile ;$()", "line\nbreak", "-leading=equals"}
 
-	cmd, err := runner.Command(context.Background(), command, "/tmp/work dir", commandArgs...)
+	cmd, err := runner.BashCommand(context.Background(), command, "/tmp/work dir", commandArgs...)
 	require.NoError(t, err)
 	assert.Equal(t, "/usr/bin/bwrap", cmd.Path)
 	assert.Equal(t, "/tmp/work dir", cmd.Dir)
 	assert.Equal(t, []string{
-		"--unshare-user",
-		"--cap-drop", "ALL",
-		"--",
-		"bash", "-c", command,
-		"hostile ;$()", "line\nbreak", "-leading=equals",
-	}, cmd.Args[len(cmd.Args)-10:])
+		"--", "bash", "-c", command, "hostile ;$()", "line\nbreak", "-leading=equals",
+	}, cmd.Args[len(cmd.Args)-7:])
 
 	args := cmd.Args[1:]
 	assert.Equal(t, "--die-with-parent", args[0])
@@ -52,6 +48,8 @@ func TestBubblewrapRunnerCommand(t *testing.T) {
 	assert.NotContains(t, args, "--dev-bind")
 	assert.Contains(t, args, "--unshare-user")
 	assert.Contains(t, args, "--cap-drop")
+	assert.Contains(t, args, "--clearenv")
+	assertBubblewrapEnvironment(t, args, "PWD", "/tmp/work dir")
 
 	assertMountPair(t, args, "--ro-bind", "/tmp/root/child")
 	assertBindPair(t, args, "/tmp/root with spaces")
@@ -71,9 +69,9 @@ func TestBubblewrapRunnerShellCommand(t *testing.T) {
 
 	assert.Equal(t, "/tmp/work", cmd.Dir)
 	assert.Equal(t, []string{
-		"--unshare-user", "--cap-drop", "ALL", "--",
-		"/bin/bash", "-c", "source '/tmp/snap dir/s'; go version",
-	}, cmd.Args[len(cmd.Args)-7:])
+		"--", "/bin/bash", "-c", "source '/tmp/snap dir/s'; go version",
+	}, cmd.Args[len(cmd.Args)-4:])
+	assertBubblewrapEnvironment(t, cmd.Args, "PWD", "/tmp/work")
 }
 
 func TestBubblewrapRunnerShellCommandNoSnapshotUsesBash(t *testing.T) {
@@ -82,16 +80,28 @@ func TestBubblewrapRunnerShellCommandNoSnapshotUsesBash(t *testing.T) {
 	cmd, err := runner.ShellCommand(context.Background(), "go version", "/tmp/work")
 	require.NoError(t, err)
 
-	assert.Equal(t, []string{
-		"--unshare-user", "--cap-drop", "ALL", "--",
-		"bash", "-c", "go version",
-	}, cmd.Args[len(cmd.Args)-7:])
+	assert.Equal(t, []string{"--", "bash", "-c", "go version"}, cmd.Args[len(cmd.Args)-4:])
+	assertBubblewrapEnvironment(t, cmd.Args, "PWD", "/tmp/work")
+}
+
+func assertBubblewrapEnvironment(t *testing.T, args []string, name, value string) {
+	t.Helper()
+	for i := 0; i+2 < len(args); i++ {
+		if args[i] == "--setenv" && args[i+1] == name && args[i+2] == value {
+			return
+		}
+	}
+	t.Fatalf("missing --setenv %s %s in %q", name, value, args)
 }
 
 func TestNewEnabledRunnerRequiresBubblewrap(t *testing.T) {
 	t.Setenv("PATH", t.TempDir())
 
-	runner, err := newEnabledRunner([]string{t.TempDir()})
+	root := t.TempDir()
+	runner, err := newEnabledRunner(processPolicy{
+		readScope: HostReadable, workDir: root, projectRoot: root,
+		writableRoots: []string{root}, sessionKey: "test",
+	})
 	require.Error(t, err)
 	assert.Nil(t, runner)
 	assert.Contains(t, err.Error(), "find Bubblewrap executable")
@@ -130,6 +140,50 @@ func TestBuildMountOperationsKeepsExactMountExplicitlyWritable(t *testing.T) {
 		{path: "/workspace/mounted"},
 		{path: "/workspace/mounted/nested", readOnly: true},
 	}, operations)
+}
+
+func TestBuildShieldMountOperationsProtectsNestedProjectMounts(t *testing.T) {
+	policy := processPolicy{
+		readScope: ProjectConfined, projectRoot: "/canonical/project", workDir: "/visible/project",
+		readMounts: []policyMount{{source: "/usr/bin", target: "/usr/bin", directory: true}},
+	}
+
+	operations := buildShieldMountOperations(policy, []string{
+		"/canonical/project/nested", "/usr/bin/separate-mount",
+	})
+
+	assert.Equal(t, []shieldMountOperation{
+		{source: "/canonical/project", target: "/canonical/project"},
+		{source: "/usr/bin", target: "/usr/bin", readOnly: true},
+		{source: "/canonical/project", target: "/visible/project"},
+		{
+			source: "/canonical/project/nested", target: "/canonical/project/nested", readOnly: true,
+		},
+		{
+			source: "/usr/bin/separate-mount", target: "/usr/bin/separate-mount", readOnly: true,
+		},
+		{
+			source: "/canonical/project/nested", target: "/visible/project/nested", readOnly: true,
+		},
+	}, operations)
+}
+
+func TestBubblewrapShieldPrefixBuildsEmptyNamespace(t *testing.T) {
+	runner := &bubblewrapRunner{
+		policy: processPolicy{readScope: ProjectConfined},
+		shieldMounts: []shieldMountOperation{
+			{source: "/project", target: "/project"},
+			{source: "/usr/bin", target: "/usr/bin", readOnly: true},
+		},
+	}
+
+	args := runner.shieldPrefix("/project")
+	assert.Contains(t, args, "--tmpfs")
+	assert.Contains(t, args, "--unshare-pid")
+	assert.Contains(t, args, "--proc")
+	assert.Contains(t, args, "--remount-ro")
+	assert.NotContains(t, args, "/tmp")
+	assert.NotContains(t, strings.Join(args, " "), "--ro-bind / /")
 }
 
 func TestParseMountInfo(t *testing.T) {

@@ -33,6 +33,7 @@ type SessionLifecycleStore interface {
 	LifecycleCommandStore
 	LifecycleOutputStore
 	StopCompletionStore
+	ShieldCommandStore
 	CancelPendingInputs(context.Context, []int64, string) (int64, error)
 }
 

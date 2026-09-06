@@ -35,6 +35,8 @@ type ProgressFacts struct {
 	Waiting              []ProgressWait
 	ActiveSubagents      int
 	BackgroundSubagents  int
+	ShieldsUp            bool
+	ShieldInputID        int64
 }
 
 type ProgressWait struct {
@@ -49,12 +51,13 @@ type ProgressStore interface {
 	OutboxWatermark(ctx context.Context, sessionID int64) (int64, error)
 	OutputBySourceKey(ctx context.Context, sessionID int64, sourceKey string) (*OutputRecord, error)
 	// EnqueueProgressOutput commits one causal progress card: it succeeds only
-	// while the captured generation and status still own the session.
+	// while the captured generation, status, and shields state still own the session.
 	EnqueueProgressOutput(
 		ctx context.Context,
 		draft OutputDraft,
 		expectedGeneration int64,
 		expectedStatus SessionStatus,
+		expectedShieldsUp bool,
 	) (*OutputCommit, error)
 }
 
@@ -68,24 +71,9 @@ func (s *store) CaptureProgress(ctx context.Context, rootID int64) (*ProgressFac
 	defer func() { _ = tx.Rollback() }()
 
 	facts := &ProgressFacts{RootID: rootID}
-	var todos string
-	var boundary sql.NullInt64
-
-	err = tx.QueryRowContext(ctx, `SELECT model, iteration, status, todo_items,
-		model_input_generation, model_input_boundary
-		FROM sessions WHERE id = ? AND parent_id = 0`, rootID).
-		Scan(&facts.Model, &facts.Iteration, &facts.Status, &todos,
-			&facts.ModelInputGeneration, &boundary)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, ErrOutputNotRoot
+	if err := captureProgressRoot(ctx, tx, facts); err != nil {
+		return nil, err
 	}
-
-	if err != nil {
-		return nil, fmt.Errorf("load progress root: %w", err)
-	}
-
-	facts.TodoItems = json.RawMessage(todos)
-	facts.ModelInputBoundary = boundary.Int64
 
 	err = tx.QueryRowContext(ctx, `SELECT
 		COALESCE(SUM(json_extract(messages.usage, '$.promptTokens')), 0),
@@ -144,6 +132,32 @@ func (s *store) CaptureProgress(ctx context.Context, rootID int64) (*ProgressFac
 	}
 
 	return facts, nil
+}
+
+func captureProgressRoot(ctx context.Context, tx *sql.Tx, facts *ProgressFacts) error {
+	var todos string
+	var boundary sql.NullInt64
+
+	err := tx.QueryRowContext(ctx, `SELECT model, iteration, status, todo_items,
+		model_input_generation, model_input_boundary, shields_up,
+		COALESCE((SELECT MAX(input.id) FROM session_inbox input
+			WHERE input.session_id = sessions.id AND input.state = 'handled'
+				AND input.resolution_reason IN ('shieldsup', 'shieldsdown')), 0)
+		FROM sessions WHERE id = ? AND parent_id = 0`, facts.RootID).
+		Scan(&facts.Model, &facts.Iteration, &facts.Status, &todos,
+			&facts.ModelInputGeneration, &boundary, &facts.ShieldsUp, &facts.ShieldInputID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ErrOutputNotRoot
+	}
+
+	if err != nil {
+		return fmt.Errorf("load progress root: %w", err)
+	}
+
+	facts.TodoItems = json.RawMessage(todos)
+	facts.ModelInputBoundary = boundary.Int64
+
+	return nil
 }
 
 func captureProgressWaiting(ctx context.Context, tx *sql.Tx, facts *ProgressFacts) error {

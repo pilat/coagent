@@ -121,6 +121,15 @@ func TestRenderCompact_MissingFragmentsOmitted(t *testing.T) {
 	}, "\n"), RenderCompact(noModel, nil))
 }
 
+func TestRenderShieldsOnlyWhileRaised(t *testing.T) {
+	raised := Snapshot{ShieldsUp: true}
+	assert.Contains(t, RenderCompact(raised, nil), "🛡️ Shields raised")
+	assert.Contains(t, RenderFull(raised, nil), "- Shields: raised")
+
+	assert.NotContains(t, RenderCompact(Snapshot{}, nil), "Shields")
+	assert.NotContains(t, RenderFull(Snapshot{}, nil), "Shields")
+}
+
 func TestRenderCompact_USDTrimming(t *testing.T) {
 	t.Parallel()
 

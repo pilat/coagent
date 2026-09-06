@@ -16,6 +16,7 @@ import (
 
 	"github.com/pilat/coagent/internal/llmwire"
 	"github.com/pilat/coagent/internal/logger"
+	"github.com/pilat/coagent/internal/safefile"
 	"github.com/pilat/coagent/internal/tool"
 )
 
@@ -28,14 +29,19 @@ const maxImageBytes = 3932160 // 5 MiB × 3/4
 // sniffImageMIME returns the canonical wire MIME for files whose magic bytes
 // match, or "" otherwise. Sniffs bytes, never extensions.
 func sniffImageMIME(path string) string {
-	buf := make([]byte, 12)
-
 	file, err := os.Open(path)
 	if err != nil {
 		return ""
 	}
 
 	defer func() { _ = file.Close() }()
+
+	return sniffImageMIMEFile(file)
+}
+
+func sniffImageMIMEFile(file *os.File) string {
+	buf := make([]byte, 12)
+	_, _ = file.Seek(0, 0)
 
 	// (n>0, io.EOF) is legal for Readers; judge by populated bytes only.
 	n, _ := io.ReadFull(file, buf)
@@ -70,12 +76,51 @@ func imageDimensions(path string) (int, int) {
 
 	defer func() { _ = file.Close() }()
 
+	return imageDimensionsFile(file)
+}
+
+func imageDimensionsFile(file *os.File) (int, int) {
+	_, _ = file.Seek(0, 0)
+
 	cfg, _, err := image.DecodeConfig(file)
 	if err != nil {
 		return 0, 0
 	}
 
 	return cfg.Width, cfg.Height
+}
+
+//nolint:wsl_v5 // Size and dimension validation share the same rooted handle.
+func (t *readTool) readOpenedImage(
+	ctx context.Context,
+	opened *safefile.Opened,
+	info os.FileInfo,
+	mime string,
+) (*tool.Result, error) {
+	log := logger.Ctx(ctx).Named("tool.read")
+	if info.Size() > maxImageBytes {
+		return nil, fmt.Errorf(
+			"cannot read image %s: %d bytes exceeds the %d byte limit; resize or convert it first",
+			opened.Path.Display, info.Size(), maxImageBytes,
+		)
+	}
+
+	title := relativeTitle(t.workDir, opened.Path.Display)
+	width, height := imageDimensionsFile(opened.File)
+	log.Debug("image_read", zap.String("filePath", opened.Path.Display), zap.String("mime", mime))
+
+	return &tool.Result{
+		Title: title,
+		Output: fmt.Sprintf(
+			"<image>\npath: %s\ntype: %s\nsize: %d bytes\n</image>\n(Image attached to this result for viewing)",
+			title, mime, info.Size(),
+		),
+		Metadata: map[string]any{"mime": mime},
+		Images: []llmwire.ImageRef{{
+			Path: opened.Path.Canonical, ReadRoot: opened.Path.ReadRoot, ReadRootID: opened.Path.ReadRootID,
+			Mime: mime, Size: info.Size(), Width: width, Height: height,
+		}},
+	}, nil
 }
 
 // readImage renders a supported image as a Result carrying the image ref. The

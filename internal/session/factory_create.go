@@ -77,6 +77,7 @@ func (f *factory) sessionConfig(workDir, model, repoRoot string) *config.Config 
 	return &cfg
 }
 
+//nolint:wsl_v5 // Session construction preserves cleanup adjacency across stack ownership transfer.
 func (f *factory) build(
 	ctx context.Context,
 	cfg *config.Config,
@@ -96,10 +97,11 @@ func (f *factory) build(
 	todoSvc := todo.New()
 	ldr := loader.New(f.marketplaceCache)
 
-	reg, stack, err := f.buildRegistry(ctx, cfg, ldr, todoSvc, opts.ProjectID, opts.ID)
+	reg, stack, err := f.buildRegistry(ctx, cfg, ldr, todoSvc, opts.ProjectID, opts.ID, opts.ShieldsUp)
 	if err != nil {
 		return nil, err
 	}
+	observeProcessPolicy(opts.ObserveProcessPolicy, stack.ProcessPolicyKey())
 
 	var resumeMessages []llmwire.Message
 	var resumeRowIDs []int64
@@ -157,4 +159,10 @@ func (f *factory) build(
 	}
 
 	return sess, nil
+}
+
+func observeProcessPolicy(observe func(string), key string) {
+	if observe != nil {
+		observe(key)
+	}
 }

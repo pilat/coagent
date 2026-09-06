@@ -87,7 +87,7 @@ func TestBashTool_SandboxHintOnDeniedWrite(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.NotEqual(t, 0, result.Metadata[metaKeyExitCode])
-	assert.Contains(t, result.Output, "tools.bash.sandbox.writable_paths")
+	assert.Contains(t, result.Output, "sandbox.writable_paths")
 	assert.NoFileExists(t, target)
 }
 

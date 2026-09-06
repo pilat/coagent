@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/pilat/coagent/internal/humanize"
+	"github.com/pilat/coagent/internal/safefile"
 	"github.com/pilat/coagent/internal/tool"
 )
 
@@ -28,6 +29,7 @@ type LsParams struct {
 
 type LsTool struct {
 	workDir string
+	access  safefile.Access
 }
 
 var _ tool.Tool = (*LsTool)(nil)
@@ -40,6 +42,10 @@ type entryInfo struct {
 
 func NewLsTool(workDir string) *LsTool {
 	return &LsTool{workDir: workDir}
+}
+
+func newLsTool(workDir string, access safefile.Access) *LsTool {
+	return &LsTool{workDir: workDir, access: access}
 }
 
 func (t *LsTool) ID() string          { return "ls" }
@@ -59,6 +65,7 @@ func (t *LsTool) Parameters() json.RawMessage {
 	}`)
 }
 
+//nolint:wsl_v5 // Scope dispatch and rendering form one tool execution.
 func (t *LsTool) Execute(_ context.Context, params json.RawMessage) (*tool.Result, error) {
 	var p LsParams
 	if err := json.Unmarshal(params, &p); err != nil {
@@ -71,8 +78,13 @@ func (t *LsTool) Execute(_ context.Context, params json.RawMessage) (*tool.Resul
 	}
 
 	path = resolvePath(t.workDir, path)
-
-	infos, err := readDirEntries(path)
+	var infos []entryInfo
+	var err error
+	if t.access != nil {
+		infos, path, err = readAccessDirEntries(t.access, p.Path)
+	} else {
+		infos, err = readDirEntries(path)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -95,6 +107,32 @@ func (t *LsTool) Execute(_ context.Context, params json.RawMessage) (*tool.Resul
 			metaKeyCount: len(infos),
 		},
 	}, nil
+}
+
+//nolint:wsl_v5 // Rooted listing and metadata collection share one directory snapshot.
+func readAccessDirEntries(access safefile.Access, name string) ([]entryInfo, string, error) {
+	if name == "" {
+		name = "."
+	}
+	entries, path, err := access.ReadDir(name)
+	if err != nil {
+		return nil, "", fmt.Errorf("read authorized directory: %w", err)
+	}
+
+	infos := make([]entryInfo, 0, len(entries))
+	for _, entry := range entries {
+		if strings.HasPrefix(entry.Name(), ".") {
+			continue
+		}
+		var size int64
+		if info, err := entry.Info(); err == nil {
+			size = info.Size()
+		}
+		infos = append(infos, entryInfo{name: entry.Name(), isDir: entry.IsDir(), size: size})
+	}
+	sortEntryInfos(infos)
+
+	return infos, path.Display, nil
 }
 
 func readDirEntries(path string) ([]entryInfo, error) {
@@ -135,6 +173,12 @@ func readDirEntries(path string) ([]entryInfo, error) {
 		})
 	}
 
+	sortEntryInfos(infos)
+
+	return infos, nil
+}
+
+func sortEntryInfos(infos []entryInfo) {
 	sort.Slice(infos, func(i, j int) bool {
 		if infos[i].isDir != infos[j].isDir {
 			return infos[i].isDir
@@ -142,8 +186,6 @@ func readDirEntries(path string) ([]entryInfo, error) {
 
 		return infos[i].name < infos[j].name
 	})
-
-	return infos, nil
 }
 
 func buildLsOutput(infos []entryInfo) string {

@@ -11,6 +11,8 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/pilat/coagent/internal/logger"
+	"github.com/pilat/coagent/internal/procexec"
+	"github.com/pilat/coagent/internal/safefile"
 	"github.com/pilat/coagent/internal/shellenv"
 )
 
@@ -43,6 +45,8 @@ type manager struct {
 	clients  map[clientKey]*client
 	keyLocks sync.Map          // map[key]*sync.Mutex — per-root spawn dedupe without holding mu
 	provider shellenv.Provider // per-cwd shell activation; may be nil (fallback)
+	runner   procexec.Runner   // session process confinement; nil for unconfined callers
+	access   safefile.Access
 	mu       sync.RWMutex
 	closed   bool
 }
@@ -56,12 +60,26 @@ func (k clientKey) String() string { return k.serverID + ":" + k.root }
 
 // NewManager creates a new LSP manager. provider may be nil: servers then spawn
 // with the daemon's inherited env instead of the project's activated toolchain.
-func NewManager(provider shellenv.Provider) Manager {
+func NewManager(provider shellenv.Provider, runner procexec.Runner) Manager {
 	return &manager{
 		servers:  defaultServers(),
 		clients:  make(map[clientKey]*client),
 		provider: provider,
+		runner:   runner,
 	}
+}
+
+func NewManagerWithAccess(
+	provider shellenv.Provider,
+	runner procexec.Runner,
+	access safefile.Access,
+) Manager {
+	result := &manager{
+		servers: defaultServers(), clients: make(map[clientKey]*client),
+		provider: provider, runner: runner, access: access,
+	}
+
+	return result
 }
 
 // Close stops all cached LSP clients. Clients are collected under mu and stopped
@@ -79,7 +97,7 @@ func (m *manager) Close() {
 }
 
 func (m *manager) getClient(ctx context.Context, workDir, file string) (*client, error) {
-	identity, err := resolveFile(workDir, file)
+	identity, err := m.resolveFile(workDir, file)
 	if err != nil {
 		return nil, err
 	}
@@ -90,15 +108,21 @@ func (m *manager) getClient(ctx context.Context, workDir, file string) (*client,
 	}
 
 	workDir = filepath.Clean(workDir)
+	if m.access != nil && m.access.Scope() == safefile.ProjectConfined {
+		workDir = m.access.CanonicalRoot()
+	}
 
 	server := m.serverFor(identity.path)
 	if server == nil {
 		return nil, fmt.Errorf("no LSP server for file %s", file)
 	}
 
-	root, err := server.RootFinder(workDir, identity.path)
-	if err != nil {
-		return nil, fmt.Errorf("find root: %w", err)
+	root := workDir
+	if m.access == nil || m.access.Scope() != safefile.ProjectConfined {
+		root, err = server.RootFinder(workDir, identity.path)
+		if err != nil {
+			return nil, fmt.Errorf("find root: %w", err)
+		}
 	}
 
 	key := clientKey{serverID: server.ID, root: root}
@@ -191,6 +215,7 @@ func (m *manager) createClient(
 
 	cl := newClient()
 	cl.languageID = languageID
+	cl.access = m.access
 
 	cl.onExit = func() { m.evictClient(context.Background(), key, cl) } //nolint:contextcheck // process exit has no request owner.
 	if err := cl.startWithCommand(initCtx, cmd, root); err != nil {

@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/pilat/coagent/internal/config"
+	"github.com/pilat/coagent/internal/safefile"
 )
 
 // Loader handles setup-time operations: loading artifacts from disk.
@@ -13,6 +14,7 @@ type Loader interface {
 	LoadAgentsMD(workDir string) (string, error)
 	LoadSkills(workDir string) error
 	LoadSubagents(workDir string) error
+	SetProjectAccess(access safefile.Access)
 }
 
 // Registry provides runtime access to loaded artifacts.
@@ -44,6 +46,7 @@ type svc struct {
 	marketplaceSkillPaths []sourceInfo
 	marketplaceAgentPaths []sourceInfo
 	marketplaceCache      MarketplaceCache
+	projectAccess         safefile.Access
 }
 
 // New creates a new loader service. Optional cache enables daemon-level marketplace caching.
@@ -57,4 +60,8 @@ func New(cache ...MarketplaceCache) Service {
 	}
 
 	return s
+}
+
+func (s *svc) SetProjectAccess(access safefile.Access) {
+	s.projectAccess = access
 }

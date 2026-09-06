@@ -306,9 +306,9 @@ func (t *BatchTool) formatResult(calls []BatchCall, report toolexec.Report[neste
 		Output:  strings.TrimSpace(output.String()),
 		IsError: errorCount > 0,
 		Metadata: map[string]any{
-			"total":   len(calls),
-			"success": successCount,
-			"errors":  errorCount,
+			metaKeyTotal: len(calls),
+			"success":    successCount,
+			"errors":     errorCount,
 		},
 		Images:         images,
 		DirectMessages: direct,

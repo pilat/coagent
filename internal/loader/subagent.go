@@ -24,8 +24,8 @@ func (s *svc) LoadSubagents(workDir string) error {
 	searchSources = append(searchSources, s.marketplaceAgentPaths...)
 	searchSources = append(searchSources,
 		sourceInfo{path: globalAgentsDir()},
-		sourceInfo{path: projectCoagentAgentsDir(workDir)},
-		sourceInfo{path: projectAgentsDir(workDir)},
+		sourceInfo{path: projectCoagentAgentsDir(workDir), project: true},
+		sourceInfo{path: projectAgentsDir(workDir), project: true},
 	)
 
 	// A broken source is skipped, not fatal: aborting the scan would silently drop
@@ -37,7 +37,7 @@ func (s *svc) LoadSubagents(workDir string) error {
 			continue
 		}
 
-		err := s.loadSubagentsFromPath(src.path, src.pluginName)
+		err := s.loadSubagentsFromPath(src)
 		if err == nil || errors.Is(err, os.ErrNotExist) {
 			continue
 		}
@@ -48,10 +48,10 @@ func (s *svc) LoadSubagents(workDir string) error {
 	return errors.Join(errs...)
 }
 
-func (s *svc) loadSubagentsFromPath(searchPath, pluginName string) error {
-	entries, err := os.ReadDir(searchPath)
+func (s *svc) loadSubagentsFromPath(source sourceInfo) error {
+	entries, err := s.readSourceDir(source.path, source.project)
 	if err != nil {
-		return fmt.Errorf("scan subagent directory %s: %w", searchPath, err)
+		return fmt.Errorf("scan subagent directory %s: %w", source.path, err)
 	}
 
 	for _, entry := range entries {
@@ -59,9 +59,9 @@ func (s *svc) loadSubagentsFromPath(searchPath, pluginName string) error {
 			continue
 		}
 
-		agentPath := filepath.Join(searchPath, entry.Name())
+		agentPath := filepath.Join(source.path, entry.Name())
 
-		agent, err := s.parseSubagentFile(agentPath)
+		agent, err := s.parseSubagentFile(agentPath, source.project)
 		if err != nil {
 			continue
 		}
@@ -70,8 +70,8 @@ func (s *svc) loadSubagentsFromPath(searchPath, pluginName string) error {
 			agent.Name = strings.TrimSuffix(entry.Name(), ".md")
 		}
 
-		if pluginName != "" {
-			agent.Name = pluginName + ":" + agent.Name
+		if source.pluginName != "" {
+			agent.Name = source.pluginName + ":" + agent.Name
 		}
 
 		s.subagents[agent.Name] = agent
@@ -80,8 +80,8 @@ func (s *svc) loadSubagentsFromPath(searchPath, pluginName string) error {
 	return nil
 }
 
-func (s *svc) parseSubagentFile(path string) (*Subagent, error) {
-	frontmatter, content, err := parseFrontmatterFile(path)
+func (s *svc) parseSubagentFile(path string, project bool) (*Subagent, error) {
+	frontmatter, content, err := s.parseSourceFrontmatter(path, project)
 	if err != nil {
 		return nil, err
 	}

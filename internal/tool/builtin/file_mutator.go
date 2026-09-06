@@ -19,6 +19,10 @@ const (
 if [ "$2" = "1" ]; then
   mkdir -p -- "$3"
 fi
+if [ -e "$1" ] && [ ! -f "$1" ]; then
+  printf 'refusing to mutate non-regular file: %s\n' "$1" >&2
+  exit 1
+fi
 cat > "$1"`
 )
 
@@ -79,25 +83,30 @@ func (directFileMutator) WriteFile(
 	return nil
 }
 
+//nolint:wsl_v5 // The process request and bounded result handling are one mutation boundary.
 func (m *sandboxFileMutator) WriteFile(
 	ctx context.Context,
 	path string,
 	content []byte,
 	createParents bool,
 ) error {
-	if err := rejectNonRegular(path); err != nil {
-		return err
-	}
-
 	createParentsArg := "0"
 	if createParents {
 		createParentsArg = "1"
 	}
+	workDir := string(os.PathSeparator)
+	if m.runner.ReadScope() == bashsandbox.ProjectConfined {
+		roots := m.runner.WritableRoots()
+		if len(roots) == 0 {
+			return errors.New("shielded file mutator has no project root")
+		}
+		workDir = roots[0]
+	}
 
-	cmd, err := m.runner.Command(
+	cmd, err := m.runner.BashCommand(
 		ctx,
 		sandboxMutationCommand,
-		string(os.PathSeparator),
+		workDir,
 		"coagent-file-mutator",
 		path,
 		createParentsArg,

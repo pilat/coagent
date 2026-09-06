@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"sync"
 	"time"
 
 	"github.com/mark3labs/mcp-go/client"
@@ -15,6 +16,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/pilat/coagent/internal/logger"
+	"github.com/pilat/coagent/internal/procexec"
 	"github.com/pilat/coagent/internal/shellenv"
 )
 
@@ -32,6 +34,8 @@ type Client struct {
 	client    client.MCPClient
 	tools     map[string]mcp.Tool
 	cancelRun context.CancelFunc // force-kills the server subprocess on close
+	closeOnce sync.Once
+	closeErr  error
 }
 
 // buildEnv builds environment variables from config. ${VAR} references were
@@ -52,23 +56,40 @@ func buildEnv(envMap map[string]string) []string {
 // NewClient creates a new MCP client for a server. WorkDir is set per-subprocess
 // via WithCommandFunc (no global os.Chdir). provider may be nil: the server then
 // spawns with the daemon's inherited env instead of workDir's activated toolchain.
-func NewClient(ctx context.Context, name string, cfg ServerConfig, provider shellenv.Provider) (*Client, error) {
+//
+//nolint:wsl_v5 // Command activation and runner wrapping form one spawn boundary.
+func NewClient(
+	ctx context.Context,
+	name string,
+	cfg ServerConfig,
+	provider shellenv.Provider,
+	runner procexec.Runner,
+) (*Client, error) {
 	env := buildEnv(cfg.Env)
 
 	var opts []transport.StdioOption
-	if cfg.WorkDir != "" {
+	if cfg.WorkDir != "" || cfg.runner != nil || runner != nil {
 		opts = append(opts, transport.WithCommandFunc(
 			func(ctx context.Context, command string, envList []string, args []string) (*exec.Cmd, error) {
-				if provider != nil {
-					return provider.WrapExec(ctx, cfg.WorkDir, append([]string{command}, args...), envList)
+				cmd, err := activatedServerCommand(ctx, cfg.WorkDir, provider, command, envList, args)
+				if err != nil {
+					return nil, err
 				}
 
-				cmd := exec.CommandContext(ctx, command, args...)
+				processRunner := cfg.runner
+				if processRunner == nil {
+					processRunner = runner
+				}
+				if processRunner == nil {
+					return cmd, nil
+				}
 
-				cmd.Env = append(os.Environ(), envList...)
-				cmd.Dir = cfg.WorkDir
+				request, err := procexec.FromCommand(cmd)
+				if err != nil {
+					return nil, fmt.Errorf("prepare MCP sandbox command: %w", err)
+				}
 
-				return cmd, nil
+				return processRunner.Command(ctx, request)
 			},
 		))
 	}
@@ -120,6 +141,30 @@ func NewClient(ctx context.Context, name string, cfg ServerConfig, provider shel
 		tools:     tools,
 		cancelRun: cancelRun,
 	}, nil
+}
+
+//nolint:wsl_v5 // Activation and inherited-environment construction are exclusive branches.
+func activatedServerCommand(
+	ctx context.Context,
+	workDir string,
+	provider shellenv.Provider,
+	command string,
+	envList, args []string,
+) (*exec.Cmd, error) {
+	if provider != nil {
+		cmd, err := provider.WrapExec(ctx, workDir, append([]string{command}, args...), envList)
+		if err != nil {
+			return nil, fmt.Errorf("activate MCP server command: %w", err)
+		}
+
+		return cmd, nil
+	}
+
+	cmd := exec.CommandContext(ctx, command, args...)
+	cmd.Env = append(os.Environ(), envList...)
+	cmd.Dir = workDir
+
+	return cmd, nil
 }
 
 // handshake runs Initialize then ListTools, each under its own initTimeout so a
@@ -192,17 +237,24 @@ func (c *Client) CallTool(ctx context.Context, name string, args map[string]any)
 }
 
 func (c *Client) Close() error {
-	// Kill first: client.Close()'s cmd.Wait() would otherwise block forever on a
-	// live server that ignores stdin-close (and callers hold pool.mu across it).
-	if c.cancelRun != nil {
-		c.cancelRun()
-	}
+	c.closeOnce.Do(func() {
+		// Kill first: client.Close()'s cmd.Wait() would otherwise block forever on
+		// a live server that ignores stdin-close.
+		if c.cancelRun != nil {
+			c.cancelRun()
+		}
 
-	if err := c.client.Close(); err != nil {
-		return fmt.Errorf("close MCP client: %w", err)
-	}
+		if err := c.client.Close(); err != nil {
+			var exitErr *exec.ExitError
+			if c.cancelRun != nil && (errors.Is(err, context.Canceled) || errors.As(err, &exitErr)) {
+				return
+			}
 
-	return nil
+			c.closeErr = fmt.Errorf("close MCP client: %w", err)
+		}
+	})
+
+	return c.closeErr
 }
 
 func (c *Client) ToolSchema(name string) (json.RawMessage, error) {

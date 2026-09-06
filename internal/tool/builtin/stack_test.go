@@ -78,8 +78,8 @@ func TestBuildStack_ToolCount(t *testing.T) {
 func TestBuildStack_BashSandboxConfigurationError(t *testing.T) {
 	workDir := t.TempDir()
 	unified := &config.UnifiedConfig{}
-	unified.Tools.Bash.Sandbox.Enabled = true
-	unified.Tools.Bash.Sandbox.WritablePaths = []string{filepath.Join(workDir, "missing")}
+	unified.Sandbox.Enabled = true
+	unified.Sandbox.WritablePaths = []string{filepath.Join(workDir, "missing")}
 
 	stack, err := BuildStack(context.Background(), StackConfig{
 		WorkDir: workDir,
@@ -102,8 +102,8 @@ func TestBashSandboxConfig_NilUnified(t *testing.T) {
 
 func TestBashSandboxConfig_Configured(t *testing.T) {
 	unified := &config.UnifiedConfig{}
-	unified.Tools.Bash.Sandbox.Enabled = true
-	unified.Tools.Bash.Sandbox.WritablePaths = []string{"~/.cache", "/tmp/build-cache"}
+	unified.Sandbox.Enabled = true
+	unified.Sandbox.WritablePaths = []string{"~/.cache", "/tmp/build-cache"}
 
 	cfg := bashSandboxConfig(StackConfig{WorkDir: "/tmp/project", Unified: unified})
 
@@ -114,7 +114,7 @@ func TestBashSandboxConfig_Configured(t *testing.T) {
 
 func TestBashSandboxConfig_WorktreeTrustsMainGitDir(t *testing.T) {
 	unified := &config.UnifiedConfig{}
-	unified.Tools.Bash.Sandbox.Enabled = true
+	unified.Sandbox.Enabled = true
 
 	// The work tree name contains a dot: the trusted path must not be
 	// derived from the work tree basename.
@@ -137,6 +137,7 @@ func TestRegisterCoreTools_SharesFileMutator(t *testing.T) {
 	registerCoreTools(
 		registry,
 		t.TempDir(),
+		nil,
 		loader.New(),
 		todo.New(),
 		nil,
@@ -177,7 +178,8 @@ func (p *stubMCPPool) Stop()            {}
 func (p *stubMCPPool) ClientFor(context.Context, string, mcp.ServerConfig) (*mcp.Client, error) {
 	return nil, nil
 }
-func (p *stubMCPPool) Invalidate(string) {}
+func (p *stubMCPPool) Invalidate(string)         {}
+func (p *stubMCPPool) RetirePolicy(string) error { return nil }
 
 // A broken MCP server degrades the stack to builtins, but it must not do so silently.
 func TestBuildStackLogsMCPAcquireFailure(t *testing.T) {

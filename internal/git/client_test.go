@@ -10,7 +10,31 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/pilat/coagent/internal/procexec"
 )
+
+type recordingProcessRunner struct {
+	request procexec.Request
+}
+
+func (r *recordingProcessRunner) Command(ctx context.Context, request procexec.Request) (*exec.Cmd, error) {
+	r.request = request
+	return exec.CommandContext(ctx, "true"), nil
+}
+
+func (*recordingProcessRunner) PolicyKey() string { return "recording" }
+
+func TestSandboxedClientRoutesGitProcess(t *testing.T) {
+	repo := t.TempDir()
+	require.NoError(t, os.Mkdir(filepath.Join(repo, ".git"), 0o755))
+	runner := &recordingProcessRunner{}
+
+	client := NewSandboxed(runner)
+	assert.True(t, client.IsCloned(context.Background(), repo))
+	assert.Equal(t, "git", runner.request.Path)
+	assert.Equal(t, repo, runner.request.WorkDir)
+}
 
 func TestClient_Clone_Success(t *testing.T) {
 	sourceDir := t.TempDir()

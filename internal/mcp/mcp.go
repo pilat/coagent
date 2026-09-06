@@ -9,6 +9,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/pilat/coagent/internal/logger"
+	"github.com/pilat/coagent/internal/procexec"
 	"github.com/pilat/coagent/internal/shellenv"
 	"github.com/pilat/coagent/internal/tool"
 )
@@ -38,16 +39,18 @@ type svc struct {
 	clients  map[string]*Client
 	workDir  string
 	provider shellenv.Provider
+	runner   procexec.Runner
 	stats    ServerStats
 }
 
 // New creates a new MCP manager. provider (may be nil) routes each server spawn
 // through workDir shell activation.
-func New(workDir string, provider shellenv.Provider) Service {
+func New(workDir string, provider shellenv.Provider, runner procexec.Runner) Service {
 	return &svc{
 		clients:  make(map[string]*Client),
 		workDir:  workDir,
 		provider: provider,
+		runner:   runner,
 	}
 }
 
@@ -179,7 +182,7 @@ func (s *svc) startServer(ctx context.Context, name string, cfg ServerConfig) er
 	resultCh := make(chan result, 1)
 
 	go func() {
-		client, err := NewClient(startCtx, name, cfg, s.provider)
+		client, err := NewClient(startCtx, name, cfg, s.provider, s.runner)
 		// Use non-blocking send with select to avoid goroutine leak
 		select {
 		case resultCh <- result{client, err}:

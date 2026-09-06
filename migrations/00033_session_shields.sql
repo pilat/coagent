@@ -1,0 +1,3 @@
+-- +goose Up
+
+ALTER TABLE sessions ADD COLUMN shields_up BOOLEAN NOT NULL DEFAULT FALSE;

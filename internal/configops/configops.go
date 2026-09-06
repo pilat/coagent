@@ -160,7 +160,7 @@ func (s *svc) Commit(staged *Staged, p Pending) Verdict {
 func (s *svc) rawDraft() (*config.UnifiedConfig, error) {
 	draft, err := config.LoadRawUnifiedConfig(s.configPath)
 	if errors.Is(err, os.ErrNotExist) {
-		return &config.UnifiedConfig{}, nil
+		return &config.UnifiedConfig{Sandbox: config.SandboxConfig{Enabled: true}}, nil
 	}
 
 	if err != nil {
@@ -179,7 +179,7 @@ func cloneConfig(c *config.UnifiedConfig) *config.UnifiedConfig {
 	out.Models = slices.Clone(c.Models)
 	out.Managers = slices.Clone(c.Managers)
 	out.SpawnFavorites = slices.Clone(c.SpawnFavorites)
-	out.Tools.Bash.Sandbox.WritablePaths = slices.Clone(c.Tools.Bash.Sandbox.WritablePaths)
+	out.Sandbox.WritablePaths = slices.Clone(c.Sandbox.WritablePaths)
 
 	return &out
 }

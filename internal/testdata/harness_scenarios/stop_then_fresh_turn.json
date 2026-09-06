@@ -76,7 +76,7 @@
         "manager_id": "telegram:main",
         "model_input_generation": 1
       },
-      "source_key": "progress:change:message:2:g1",
+      "source_key": "progress:change:message:2:g1:shields:false:i0",
       "model_input_generation": 1,
       "previous_message_type": "message_persistent",
       "previous_model_input_generation": 1,
