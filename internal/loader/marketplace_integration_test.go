@@ -56,6 +56,10 @@ func (c *localRepoGitClient) HealthCheck(ctx context.Context, repoPath string) e
 	return c.delegate.HealthCheck(ctx, repoPath)
 }
 
+func (c *localRepoGitClient) RepositoryState(ctx context.Context, workDir string) (coagentgit.RepositoryState, error) {
+	return c.delegate.RepositoryState(ctx, workDir)
+}
+
 func TestIntegration_Marketplace_LocalGitRepository(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")

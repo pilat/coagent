@@ -196,7 +196,8 @@ func (s *svc) prepareRunMessages(ctx context.Context, prompt string) error {
 			return nil
 		}
 
-		if err := s.ms.addUserMessage(ctx, s.stamper.stamp(prompt)); err != nil {
+		stamped := s.stamper.stamp(prompt)
+		if err := s.ms.addUserMessage(ctx, s.appendGitStateDelta(ctx, stamped)); err != nil {
 			return fmt.Errorf("inject user message: %w", err)
 		}
 
