@@ -23,7 +23,7 @@ const batchDescription = `Runs several tool calls from one fallback envelope. Pr
 Parameters format:
 {
   "calls": [
-    {"tool": "read", "params": {"path": "src/main.go"}},
+    {"tool": "read", "params": {"file_path": "src/main.go"}},
     {"tool": "grep", "params": {"pattern": "func main", "path": "src"}}
   ]
 }

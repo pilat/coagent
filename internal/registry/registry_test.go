@@ -71,6 +71,20 @@ func TestNewSet_ProjectSubagentShadowsBuiltIn(t *testing.T) {
 	assert.Equal(t, "custom general", cfg.Description)
 }
 
+func TestNewSet_ProjectExploreOverrideKeepsFullContext(t *testing.T) {
+	t.Parallel()
+
+	builtins := NewSet(nil)
+	builtInExplore, ok := builtins.Get(AgentTypeExplore)
+	require.True(t, ok)
+	assert.True(t, builtInExplore.OmitProjectContext)
+
+	overridden := NewSet([]AgentTypeConfig{{Name: AgentTypeExplore, Mode: ModeSubagent}})
+	projectExplore, ok := overridden.Get(AgentTypeExplore)
+	require.True(t, ok)
+	assert.False(t, projectExplore.OmitProjectContext)
+}
+
 func TestNewSet_ClonesProjectToolsBeforeNormalization(t *testing.T) {
 	t.Parallel()
 
@@ -154,6 +168,7 @@ func TestSet_FilterTools(t *testing.T) {
 	explore := set.FilterTools(all, AgentTypeExplore)
 	assert.Contains(t, explore, "read")
 	assert.NotContains(t, explore, "write")
+	assert.NotContains(t, explore, "bash")
 
 	assert.Nil(t, set.FilterTools(all, AgentType("nonexistent")))
 }

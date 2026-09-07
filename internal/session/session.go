@@ -251,21 +251,23 @@ func newWithOptions(ctx context.Context, p params, opts options) (Service, error
 		agentType = registry.AgentTypeBuild
 	}
 
-	// Setup runs before type resolution: it loads project-local subagents, which
-	// seed the immutable Set the session's own agent type resolves against.
-	agentsMD, projectSubagents := loadProjectContext(ctx, p, workDir)
-
-	// Injected before the prompt is built: a skill registered after the skills
-	// section is rendered is one the model never learns exists.
-	for _, skill := range opts.ExtraSkills {
-		p.Loader.RegisterSkill(skill)
-	}
-
+	projectSubagents := loadProjectSubagents(ctx, p, workDir)
 	set := registry.NewSet(projectSubagents)
 
 	agentConfig, ok := set.Get(agentType)
 	if !ok {
 		return nil, fmt.Errorf("unknown agent type: %s", agentType)
+	}
+
+	var agentsMD string
+	if !agentConfig.OmitProjectContext {
+		agentsMD = loadProjectInstructions(ctx, p, workDir)
+
+		// Injected before the prompt is built: a skill registered after the skills
+		// section is rendered is one the model never learns exists.
+		for _, skill := range opts.ExtraSkills {
+			p.Loader.RegisterSkill(skill)
+		}
 	}
 
 	session := newSession(p, opts, workDir, agentConfig, agentsMD)
@@ -322,7 +324,7 @@ func newSession(p params, opts options, workDir string, agentConfig registry.Age
 		agentType:       agentConfig.Name,
 		reasoningLevel:  string(llm.ReasoningMedium),
 		newLLMWithModel: llm.NewClientWithModel,
-		gitClient:       p.GitClient,
+		gitClient:       projectContextGitClient(p.GitClient, agentConfig),
 		cfg:             p.Config,
 		stamper:         timestamper{lastActivity: opts.LastActivityAt},
 		loopDetector:    newLoopDetector(),
@@ -651,17 +653,37 @@ func buildPrompt(
 			localTimezone(),
 		)
 
-	var memoriesSection string
-	if p.MemoryStore != nil && opts.ProjectID != 0 {
+	var memoriesSection, modelsSection string
+	if !agentConfig.OmitProjectContext && p.MemoryStore != nil && opts.ProjectID != 0 {
 		memoriesSection = buildMemoriesSection(ctx, p.MemoryStore, opts.ProjectID)
+	}
+
+	if !agentConfig.OmitProjectContext {
+		modelsSection = buildModelsSection(p.Config.Model)
 	}
 
 	return newPromptBuilder(
 		basePrompt,
 		memoriesSection,
-		buildModelsSection(p.Config.Model),
-		opts.ExtraSkills...,
+		modelsSection,
+		activeProjectSkills(opts.ExtraSkills, agentConfig)...,
 	)
+}
+
+func projectContextGitClient(client git.Client, agentConfig registry.AgentTypeConfig) git.Client {
+	if agentConfig.OmitProjectContext {
+		return nil
+	}
+
+	return client
+}
+
+func activeProjectSkills(skills []*loader.Skill, agentConfig registry.AgentTypeConfig) []*loader.Skill {
+	if agentConfig.OmitProjectContext {
+		return nil
+	}
+
+	return skills
 }
 
 // filterRegistryForAgent creates a filtered copy of the registry based on agent
@@ -724,7 +746,7 @@ func (s *svc) setupRegistry(p params, agentConfig registry.AgentTypeConfig) {
 
 	filtered := filterRegistryForAgent(s.agentTypes, p.Registry, agentConfig)
 	s.registry = filtered
-	registerSessionTools(filtered, s)
+	registerSessionTools(s)
 	s.refreshRegistrySections()
 }
 

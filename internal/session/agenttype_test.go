@@ -32,8 +32,8 @@ func TestNewWithOptions_AgentTypeTools(t *testing.T) {
 		{
 			name:        "explore subagent: read-only set",
 			agentType:   registry.AgentTypeExplore,
-			wantPresent: []string{"read", "grep", "glob", "ls", "bash"},
-			wantAbsent:  []string{"write", "edit", "todoread", "todowrite"},
+			wantPresent: []string{"read", "grep", "glob", "ls"},
+			wantAbsent:  []string{"write", "edit", "bash", "todoread", "todowrite"},
 		},
 		{
 			name:        "build primary: keeps todo tools",

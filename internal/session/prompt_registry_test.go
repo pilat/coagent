@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 
@@ -11,8 +12,10 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/pilat/coagent/internal/config"
+	"github.com/pilat/coagent/internal/git"
 	"github.com/pilat/coagent/internal/llmwire"
 	"github.com/pilat/coagent/internal/loader"
+	"github.com/pilat/coagent/internal/memory"
 	"github.com/pilat/coagent/internal/registry"
 	"github.com/pilat/coagent/internal/todo"
 	"github.com/pilat/coagent/internal/tool"
@@ -95,12 +98,13 @@ func TestSystemPrompt_DoesNotAdvertiseConfiguredModelCatalog(t *testing.T) {
 	}
 
 	for _, tc := range []struct {
-		name      string
-		agentType registry.AgentType
-		withTask  bool
+		name          string
+		agentType     registry.AgentType
+		withTask      bool
+		wantModelName bool
 	}{
-		{name: "root with task", agentType: registry.AgentTypeBuild, withTask: true},
-		{name: "restricted subagent without task", agentType: registry.AgentTypeExplore},
+		{name: "root with task", agentType: registry.AgentTypeBuild, withTask: true, wantModelName: true},
+		{name: "lean explore without task", agentType: registry.AgentTypeExplore},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			s, llmClient := newPromptTestSession(t, t.TempDir(), loader.New(), tc.agentType, models...)
@@ -112,13 +116,73 @@ func TestSystemPrompt_DoesNotAdvertiseConfiguredModelCatalog(t *testing.T) {
 			require.NoError(t, err)
 
 			prompt := llmClient.firstPrompt(t)
-			assert.Contains(t, prompt, "- Model: test-model")
+			if tc.wantModelName {
+				assert.Contains(t, prompt, "- Model: test-model")
+			} else {
+				assert.NotContains(t, prompt, "- Model: test-model")
+			}
 			assert.NotContains(t, prompt, "## Available Models")
 			assert.NotContains(t, prompt, "hidden-model")
 			assert.NotContains(t, prompt, "tagged-model")
 			assert.NotContains(t, prompt, "100k context")
 		})
 	}
+}
+
+func TestBuiltInExplore_OmitsProjectContext(t *testing.T) {
+	workDir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(workDir, "AGENTS.md"), []byte("PROJECT INSTRUCTIONS"), 0o600))
+
+	reg := tool.NewRegistry()
+	for _, id := range []string{"read", "write", "grep", "glob", "ls", "bash", tool.IDSkill} {
+		reg.Register(testTool{id: id})
+	}
+
+	p := params{
+		Config:      &config.Config{WorkDir: workDir, Model: "test-model"},
+		LLMClient:   &promptRecordingLLM{},
+		TodoStore:   todo.New(),
+		Loader:      loader.New(),
+		Registry:    reg,
+		MemoryStore: &stubMemoryStore{entries: []memory.MemoryEntry{{ID: 1, Text: "PROJECT MEMORY"}}},
+		GitClient: &fakeRepoStateClient{state: git.RepositoryState{
+			Status: git.RepositoryAvailable, Branch: "main", Hash: "abc123",
+		}},
+	}
+
+	service, err := newWithOptions(context.Background(), p, options{
+		ID: 1, AgentType: registry.AgentTypeExplore, ProjectID: 1,
+	})
+	require.NoError(t, err)
+
+	s := service.(*svc)
+	system := s.prompt.systemPrompt()
+	assert.True(t, strings.HasPrefix(system, registry.ExploreAgentPrompt))
+	assert.Contains(t, system, "# Environment")
+	assert.Contains(t, system, "# TOOLS")
+	assert.NotContains(t, system, "PROJECT MEMORY")
+	assert.NotContains(t, system, "- Model: test-model")
+	assert.Empty(t, s.agentsMD)
+	assert.Nil(t, s.registry.Get("memory_save"))
+	assert.Nil(t, s.registry.Get("memory_delete"))
+	assert.Equal(t, "task", s.appendGitStateDelta(context.Background(), "task"))
+}
+
+func TestProjectExploreOverride_KeepsProjectContext(t *testing.T) {
+	workDir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(workDir, "AGENTS.md"), []byte("PROJECT INSTRUCTIONS"), 0o600))
+	writeProjectAgent(
+		t,
+		workDir,
+		"explore",
+		"---\nname: explore\ndescription: Custom explorer\n---\nCUSTOM EXPLORE PROMPT\n",
+	)
+
+	s, _ := newPromptTestSession(t, workDir, loader.New(), registry.AgentTypeExplore)
+
+	assert.Contains(t, s.prompt.systemPrompt(), "CUSTOM EXPLORE PROMPT")
+	assert.Contains(t, s.prompt.systemPrompt(), "- Model: test-model")
+	assert.Equal(t, "PROJECT INSTRUCTIONS", s.agentsMD)
 }
 
 func writeProjectAgent(t *testing.T, workDir, name, body string) {

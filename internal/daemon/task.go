@@ -92,15 +92,16 @@ func (t *taskTool) Description() string {
 Available subagent types:
 %s
 When to use task:
-- Work requiring more than 3 tool calls — delegate instead of grinding
-- 2+ independent work items — launch in parallel (multiple task calls in one response)
-- Research before implementation — explore first, then general
+- Bounded research whose raw searches and file reads would add noise to the parent context
+- A coherent implementation slice with clear ownership that can proceed independently
+- Multiple independent work items that can run in parallel
 
 When NOT to use task:
-- 3 or fewer total tool calls — just do it directly
-- Single file read, search, or edit — use the dedicated tool
+- Small or tightly coupled work already understood from the current context
+- Work that blocks the parent's immediate next decision and is faster to do directly
+- A task another subagent is already covering
 
-ALWAYS launch independent tasks in parallel. Multiple task tool calls in one response, not sequential.
+Launch independent tasks together in one response when useful. Keep dependent work sequential.
 
 Choose the execution mode deliberately:
 - Foreground (background omitted or false): use when you need the answer before continuing. The task call waits and returns the subagent's answer as its result. Multiple independent foreground task calls issued together wait for all of their results.
@@ -108,12 +109,13 @@ Choose the execution mode deliberately:
 
 Never use sleep, schedule, or repeated get_subagent_result calls to wait for subagents. get_subagent_result is a diagnostic snapshot only.
 
-The subagent has ZERO context from your conversation. Write a complete briefing: what to do and why, what you already know or ruled out, file paths and constraints, whether to MODIFY code or RESEARCH only, and what to return.
+The subagent does not receive the parent conversation. Built-in explore skips project instructions and memories; include relevant constraints explicitly. Other agent types may also load project context separately. State the question or outcome, known facts, paths, constraints, whether to MODIFY code or RESEARCH only, and what to return. For implementation, include relevant verification requirements.
 
-Bad: "Look into the auth bug and fix it"
-Good: "In internal/auth/service.go, refreshToken() at line 45 deletes the token before persist() completes. Verify this race by tracing the call sequence in service.go and store.go. Return root cause with file:line references. Do not edit code."
+For explore, request one self-contained answer with file:line evidence and material gaps. State the question's boundaries; simple lookups need less detail than a cross-package trace. Use its supported findings directly; do not duplicate the subagent's work. Resolve small gaps locally, or start a new bounded exploration for a substantial unanswered question. Do not routinely resume explore or ask it to confirm its answer.
 
-Each new subagent starts with zero parent context. To continue an existing subagent while preserving its full context, use send_to_subagent with the id returned by task.%s`, typeList.String(), modelList)
+Example research prompt: "Trace refresh-token deletion and session persistence in internal/auth/service.go and store.go. Determine their order and what happens if persistence fails. Return the answer, file:line evidence, and any gaps. Do not edit code."
+
+For related follow-up work on a general or custom subagent's assignment, use send_to_subagent with the id returned by task to retain its context. Review changed code and relevant verification before integrating its work.%s`, typeList.String(), modelList)
 }
 
 func (t *taskTool) Parameters() json.RawMessage {
@@ -197,9 +199,8 @@ func (t *taskTool) executeBackground(ctx context.Context, p TaskParams) (*tool.R
 
 	output := fmt.Sprintf(
 		"Launched background subagent #%d (%s). Continue useful independent work. "+
-			"Its completion will be delivered automatically and wake this session; do not use sleep or poll get_subagent_result to wait for it. "+
-			"Use send_to_subagent(id=%d, ...) only to add follow-up work.",
-		res.ChildID, p.SubagentType, res.ChildID,
+			"Its completion will be delivered automatically and wake this session; do not use sleep or poll get_subagent_result to wait for it.",
+		res.ChildID, p.SubagentType,
 	)
 
 	return &tool.Result{

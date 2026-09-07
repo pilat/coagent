@@ -24,6 +24,8 @@ func TestBuildToolsSection_TypicalSet(t *testing.T) {
 	reg.Register(&stubTool{id: "memory_save"})
 	reg.Register(&stubTool{id: "memory_delete"})
 	reg.Register(&stubTool{id: "batch"})
+	reg.Register(&stubTool{id: "send_to_subagent"})
+	reg.Register(&stubTool{id: "get_subagent_result"})
 
 	result := buildToolsSection(reg, false)
 
@@ -32,6 +34,12 @@ func TestBuildToolsSection_TypicalSet(t *testing.T) {
 	assert.Contains(t, result, "# PERSISTENT MEMORY")
 	assert.Contains(t, result, "Curated memories")
 	assert.Contains(t, result, "# PARALLEL EXECUTION")
+	assert.Contains(
+		t,
+		result,
+		"Sub-agents: send_to_subagent (continue/resume an existing subagent), get_subagent_result (diagnostic snapshot)",
+	)
+	assert.NotContains(t, result, "task (start a subagent assignment)")
 	assert.NotContains(t, result, "Scheduling")
 	assert.NotContains(t, result, "lsp")
 }
@@ -171,6 +179,7 @@ func TestBuildToolsSection_EmptyRegistry(t *testing.T) {
 	assert.NotContains(t, result, "# PERSISTENT MEMORY")
 	assert.NotContains(t, result, "# PARALLEL EXECUTION")
 	assert.NotContains(t, result, "# SCHEDULING")
+	assert.NotContains(t, result, "Sub-agents:")
 }
 
 // stubMemoryStore serves the prompt builder's only read.

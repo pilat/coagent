@@ -77,7 +77,7 @@ The identity a session runs in: one `projects` row keyed by absolute `work_dir` 
 _Avoid_: workspace, space; dialog (a dialog is a topic *on* a project, not the project).
 
 **agent type**:
-A named agent configuration — tool allowlist, prompt template, model override, mode — that the `task` tool selects from. Built-ins: `build`, `general`, `explore`, `compaction`. Not every agent type is spawnable (`build`/`compaction` are not subagent types). Agent type selects behavior and tools, never a work budget.
+A named agent configuration — tool allowlist, prompt template, model override, mode and optional project-context omission — that the `task` tool selects from. Built-ins: `build`, `general`, `explore`, `compaction`. Not every agent type is spawnable (`build`/`compaction` are not subagent types). The built-in `explore` type is deliberately lean: it has read-only code-search tools and starts without project instructions, skills, curated memory, Git state or model catalog; its assignment must supply relevant constraints. Agent type selects behavior and tools, never a work budget.
 _Avoid_: role, persona, mode (mode is a separate axis on the same config).
 
 **control socket**:

@@ -30,7 +30,7 @@ Usage:
 - The path parameter can be absolute or relative to the working directory
 - Directories are excluded from results
 
-CRITICAL: You can call multiple tools in a single response. When searching, run multiple glob/grep calls in parallel for optimal performance.`
+Group independent searches in one response. Narrow the pattern or path when results reach the limit.`
 )
 
 var _ tool.Tool = (*globTool)(nil)

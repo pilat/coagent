@@ -29,17 +29,18 @@ var builtinAgentTypes = map[AgentType]AgentTypeConfig{
 	},
 	AgentTypeGeneral: {
 		Name:        AgentTypeGeneral,
-		Description: "Full-capability subagent — can read, write, edit files, run commands, fetch URLs, and use all available tools. Use for any task that requires action or modification: implementation, testing, running commands, data processing, multi-step operations.",
+		Description: "General subagent for bounded implementation, testing, or research requiring commands or web access. Can modify files. Give a self-contained assignment and verification requirements; use the same session for related follow-up work.",
 		Mode:        ModeSubagent,
 		Tools:       []string{"*", "-todoread", "-todowrite"},
 		Prompt:      GeneralAgentPrompt,
 	},
 	AgentTypeExplore: {
-		Name:        AgentTypeExplore,
-		Description: "Read-only research subagent — can read files, search code (grep/glob), list directories, and run read-only shell commands (git log, find, wc). Cannot modify files. Use for investigation: tracing code paths, understanding architecture, finding usages, answering questions about the codebase.",
-		Mode:        ModeSubagent,
-		Tools:       []string{"read", "grep", "glob", "ls", "bash"},
-		Prompt:      ExploreAgentPrompt,
+		Name:               AgentTypeExplore,
+		Description:        "Read-only codebase research: trace behavior, locate usages, and answer bounded questions. Returns a concise answer with file:line evidence and material gaps. Has file search, read, and directory listing; no shell or web tools. Include relevant project constraints in the assignment.",
+		Mode:               ModeSubagent,
+		Tools:              []string{"read", "grep", "glob", "ls"},
+		Prompt:             ExploreAgentPrompt,
+		OmitProjectContext: true,
 	},
 	AgentTypeCompaction: {
 		Name:        AgentTypeCompaction,
@@ -62,6 +63,9 @@ type (
 		Tools       []string // allowed tool IDs, "*" for all, "-toolname" to exclude
 		Prompt      string
 		Model       string // optional model override for this agent type
+		// OmitProjectContext keeps a built-in specialist's startup prompt lean.
+		// Project-defined subagents default to the full session context.
+		OmitProjectContext bool
 	}
 )
 
