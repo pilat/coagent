@@ -382,7 +382,10 @@ func (t *bashTool) inlineOutput(ctx context.Context, record backgroundprocess.Pr
 		return "(output unavailable)"
 	}
 
-	_ = t.process.RemoveOutput(ctx, record.ID)
+	// The direct path owns no ledger row to clean up.
+	if t.process != nil {
+		_ = t.process.RemoveOutput(ctx, record.ID)
+	}
 
 	return "Output exceeded the inline limit (" + fmt.Sprintf("%.1f", float64(record.OutputSize)/(100*1024)) +
 		" KB); read a suffix of " + record.OutputPath + " with the tail tool"
