@@ -10,24 +10,41 @@ import (
 	"github.com/pilat/coagent/internal/tool/builtin"
 )
 
-// PrepareUserMessage expands a leading skill command and leaves ordinary messages unchanged.
-func (s *svc) PrepareUserMessage(message string) (string, error) {
-	expanded, matched, err := s.expandSkillCommand(message)
-	if !matched {
-		return message, nil
-	}
-
-	return expanded, err
+// PreparedMessage is an input prepared for the transcript. SkillName carries
+// the canonical name of a successfully expanded leading /skill command; it is
+// the receipt identity, not user-provided text.
+type PreparedMessage struct {
+	Content   string
+	SkillName string
 }
 
-func (s *svc) expandSkillCommand(message string) (string, bool, error) {
+// PrepareUserMessage expands a leading skill command and leaves ordinary
+// messages unchanged.
+func (s *svc) PrepareUserMessage(message string) (string, error) {
+	prepared, err := s.PrepareUserMessageDetailed(message)
+
+	return prepared.Content, err
+}
+
+// PrepareUserMessageDetailed is PrepareUserMessage with the activation receipt
+// identity: the canonical skill name, empty for ordinary messages.
+func (s *svc) PrepareUserMessageDetailed(message string) (PreparedMessage, error) {
+	expanded, skillName, matched, err := s.expandSkillCommand(message)
+	if !matched {
+		return PreparedMessage{Content: message}, nil
+	}
+
+	return PreparedMessage{Content: expanded, SkillName: skillName}, err
+}
+
+func (s *svc) expandSkillCommand(message string) (string, string, bool, error) {
 	name, args, matched, err := parseSkillCommand(message)
 	if !matched || err != nil {
-		return message, matched, err
+		return message, "", matched, err
 	}
 
 	if s.loader == nil {
-		return "", true, errors.New("no skills are available")
+		return "", "", true, errors.New("no skills are available")
 	}
 
 	sk := s.loader.GetSkill(name)
@@ -39,10 +56,10 @@ func (s *svc) expandSkillCommand(message string) (string, bool, error) {
 			names[i] = available.Name
 		}
 
-		return "", true, fmt.Errorf("skill unavailable: %s\nAvailable skills: %v", name, names)
+		return "", "", true, fmt.Errorf("skill unavailable: %s\nAvailable skills: %v", name, names)
 	}
 
-	return builtin.RenderSkill(sk, args), true, nil
+	return builtin.RenderSkill(sk, args), sk.Name, true, nil
 }
 
 func parseSkillCommand(message string) (string, string, bool, error) {

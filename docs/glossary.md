@@ -244,6 +244,15 @@ progress uses a new replaceable output. A published direct reply is excluded
 from progress narration rather than repeated inside the card.
 _Avoid_: final output, progress note.
 
+**skill activation receipt**:
+The manager-visible persistent output that confirms one explicit skill
+activation — `🔧 Activated skill: <canonical-name>`, nothing else. An explicit
+`/skill` command commits it inside its promotion transaction (releasing, keyed
+idempotently by the accepted input); the skill tool returns it as an ordinary
+direct tool output. Only manager-owned roots publish it; system-injected
+skills and auto-activation produce none.
+_Avoid_: activation notice, skill notification.
+
 **autonomous episode**:
 The interval of manager-owned root work that starts with initial or reactivating
 model-bound input, or an applied scheduled turn. Queued input keeps the current
