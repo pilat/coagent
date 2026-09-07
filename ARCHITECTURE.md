@@ -175,7 +175,11 @@ manager input commits as a non-releasing persistent direct reply before its
 replaceable progress chain; budget observation and that reply share the response
 transaction. Replaceable progress snapshots, direct tool receipts, checkpoint
 output and final readiness reuse the outbox and manager receipt chain; managers
-do not maintain a second progress or result queue.
+do not maintain a second progress or result queue. An explicit manager-owned
+skill activation commits one persistent, releasing receipt inside its promotion
+transaction — keyed idempotently by the accepted input and carrying only the
+canonical skill name; the skill tool's receipt is an ordinary direct tool
+output, and system-injected skills produce none.
 
 ### Runtime isolation and admission
 

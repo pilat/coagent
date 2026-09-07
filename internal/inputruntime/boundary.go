@@ -12,7 +12,10 @@ import (
 	"github.com/pilat/coagent/internal/tool"
 )
 
-var _ session.InputBoundary = (*boundary)(nil)
+var (
+	_ session.InputBoundary   = (*boundary)(nil)
+	_ session.ReceiptBoundary = (*boundary)(nil)
+)
 
 type boundary struct {
 	store            Store
@@ -77,25 +80,49 @@ func (b *boundary) Accept(
 	prepared string,
 	pendingCalls []session.PendingToolCall,
 ) (bool, bool, error) {
+	accepted, blocked, _, err := b.AcceptWithReceipt(ctx, input, prepared, pendingCalls, "")
+
+	return accepted, blocked, err
+}
+
+// AcceptWithReceipt is Accept with one optional persistent receipt committed in
+// the same transaction as the promotion. A committed receipt row returns its
+// output id so the caller can notify only after the durable commit.
+func (b *boundary) AcceptWithReceipt(
+	ctx context.Context,
+	input session.PendingInput,
+	prepared string,
+	pendingCalls []session.PendingToolCall,
+	receipt string,
+) (bool, bool, int64, error) {
 	if blockedByPendingCall(pendingCalls) {
-		return false, true, nil
+		return false, true, 0, nil
 	}
 
 	if len(pendingCalls) > 0 && b.schedules != nil {
 		if _, err := b.schedules.CancelPendingSleeps(ctx, b.sessionID); err != nil {
-			return false, false, fmt.Errorf("cancel interrupted sleep: %w", err)
+			return false, false, 0, fmt.Errorf("cancel interrupted sleep: %w", err)
 		}
 	}
 
-	if _, err := b.store.PromoteInput(ctx, input.ID, prepared); err != nil {
-		return false, false, fmt.Errorf("promote session input: %w", err)
+	_, commit, err := b.store.PromoteInputWithReceipt(ctx, input.ID, prepared, sessionstore.OutputDraft{
+		Type:    sessionstore.OutputMessagePersistent,
+		Content: receipt,
+	})
+	if err != nil {
+		return false, false, 0, fmt.Errorf("promote session input: %w", err)
 	}
 
 	if b.progressActivity != nil {
 		b.progressActivity()
 	}
 
-	return true, false, nil
+	var receiptID int64
+	if commit != nil {
+		receiptID = commit.OutputID
+	}
+
+	return true, false, receiptID, nil
 }
 
 func (b *boundary) AcceptActivated(

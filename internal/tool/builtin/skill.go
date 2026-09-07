@@ -13,6 +13,10 @@ import (
 	"github.com/pilat/coagent/internal/tool"
 )
 
+// SkillReceiptPrefix is the manager-visible activation receipt prefix for one
+// skill. Presentation-only: it names the canonical skill and nothing else.
+const SkillReceiptPrefix = "🔧 Activated skill: "
+
 var batchCallHeaderPattern = regexp.MustCompile(`(?m)^=== [^\n]+ \(call \d+\) ===\n`)
 
 // RenderedSkill is a canonical skill envelope found in conversation content.
@@ -165,7 +169,15 @@ func (t *skillTool) Execute(ctx context.Context, params json.RawMessage) (*tool.
 			metaKeyPath: sk.Path,
 			"args":      p.Args,
 		},
+		// The receipt commits atomically with this result; owner filtering
+		// happens at the store boundary.
+		DirectMessages: []string{SkillReceipt(sk.Name)},
 	}, nil
+}
+
+// SkillReceipt renders the manager-visible activation receipt for one skill.
+func SkillReceipt(name string) string {
+	return SkillReceiptPrefix + name
 }
 
 func (t *skillTool) buildDescription() string {

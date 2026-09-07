@@ -9,6 +9,7 @@ import (
 
 	"github.com/pilat/coagent/internal/sessionstore"
 	"github.com/pilat/coagent/internal/tool"
+	"github.com/pilat/coagent/internal/tool/builtin"
 )
 
 const (
@@ -116,7 +117,7 @@ func (r *loopRunner) drainBoundary(ctx context.Context) (bool, error) {
 		case commandNotRecognized:
 		}
 
-		prepared, err := r.agent.PrepareUserMessage(input.Content)
+		prepared, err := r.agent.PrepareUserMessageDetailed(input.Content)
 		if err != nil {
 			if rejectErr := r.agent.boundary.Reject(ctx, *input, err.Error()); rejectErr != nil {
 				return acceptedAny, fmt.Errorf("reject durable input: %w", rejectErr)
@@ -131,10 +132,10 @@ func (r *loopRunner) drainBoundary(ctx context.Context) (bool, error) {
 			continue
 		}
 
-		prepared = r.agent.stamper.stampAt(prepared, input.ReceivedAt)
+		content := r.agent.stamper.stampAt(prepared.Content, input.ReceivedAt)
 		// The Git delta rides on fresh input bytes: history below stays
 		// byte-identical, so provider prompt caching is never disturbed.
-		prepared = r.agent.appendGitStateDelta(ctx, prepared)
+		content = r.agent.appendGitStateDelta(ctx, content)
 		pendingCalls := r.agent.PendingExternalCalls()
 
 		if onlySleepCalls(pendingCalls) {
@@ -147,21 +148,47 @@ func (r *loopRunner) drainBoundary(ctx context.Context) (bool, error) {
 		var grant *tool.ActivationGrant
 		var accepted, blocked bool
 
-		if toolID != "" {
+		switch {
+		case toolID != "":
 			value := tool.ActivationGrant{
 				SessionID: r.agent.id, InputID: input.ID, ToolID: toolID, Command: command,
 			}
-			prepared += activationInstruction(toolID, command)
+			content += activationInstruction(toolID, command)
 
 			boundary, ok := r.agent.boundary.(activatedInputBoundary)
 			if !ok {
 				return acceptedAny, errors.New("activation boundary unavailable")
 			}
 
-			accepted, blocked, err = boundary.AcceptActivated(ctx, *input, prepared, pendingCalls, value)
+			accepted, blocked, err = boundary.AcceptActivated(ctx, *input, content, pendingCalls, value)
 			grant = &value
-		} else {
-			accepted, blocked, err = r.agent.boundary.Accept(ctx, *input, prepared, pendingCalls)
+		case prepared.SkillName != "" && input.ManagerOwned:
+			accepted, blocked, err = r.acceptWithSkillReceipt(ctx, *input, content, pendingCalls, prepared.SkillName)
+			if err != nil {
+				return acceptedAny, fmt.Errorf("accept durable input: %w", err)
+			}
+
+			if accepted {
+				acceptedAny = true
+			}
+
+			if blocked {
+				return acceptedAny, nil
+			}
+
+			if !accepted {
+				continue
+			}
+
+			if command != "" {
+				return acceptedAny, nil
+			}
+
+			r.agent.loopDetector.resetWindow()
+
+			continue
+		default:
+			accepted, blocked, err = r.agent.boundary.Accept(ctx, *input, content, pendingCalls)
 		}
 
 		if err != nil {
@@ -193,6 +220,45 @@ func (r *loopRunner) drainBoundary(ctx context.Context) (bool, error) {
 
 		r.agent.loopDetector.resetWindow()
 	}
+}
+
+// acceptWithSkillReceipt promotes one manager-owned skill command with its
+// persistent activation receipt in the promotion transaction. The human is
+// notified only after that commit; the receipt row itself is never re-inserted.
+// The receipt closes the drain turn: this input never reaches the model queue.
+func (r *loopRunner) acceptWithSkillReceipt(
+	ctx context.Context,
+	input PendingInput,
+	content string,
+	pendingCalls []PendingToolCall,
+	skillName string,
+) (bool, bool, error) {
+	receiptBoundary, ok := r.agent.boundary.(ReceiptBoundary)
+	if !ok {
+		return false, false, errors.New("receipt boundary unavailable")
+	}
+
+	receipt := builtin.SkillReceipt(skillName)
+
+	accepted, blocked, _, err := receiptBoundary.AcceptWithReceipt(
+		ctx, input, content, pendingCalls, receipt,
+	)
+	if err != nil {
+		return false, false, fmt.Errorf("promote skill input with receipt: %w", err)
+	}
+
+	if blocked || !accepted {
+		return accepted, blocked, nil
+	}
+
+	if err := r.agent.ms.reloadMessages(ctx); err != nil {
+		return true, false, fmt.Errorf("reload durable input: %w", err)
+	}
+
+	// The receipt row is durable; only now may the human see it.
+	r.notify(ctx, receipt)
+
+	return true, false, nil
 }
 
 func leadingSlashCommand(content string) string {

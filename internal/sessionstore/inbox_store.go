@@ -57,6 +57,15 @@ type InboxStore interface {
 	ListPendingShieldCommands(ctx context.Context, sessionID int64) ([]*InboxInput, error)
 	ListRootsWithPendingShieldCommands(ctx context.Context) ([]int64, error)
 	PromoteInput(ctx context.Context, inputID int64, preparedContent string) (*transcript.Message, error)
+	// PromoteInputWithReceipt is PromoteInput plus one persistent output row
+	// committed in the same transaction. An empty receipt content inserts no
+	// output; a non-root or ownerless session resolves no receipt.
+	PromoteInputWithReceipt(
+		ctx context.Context,
+		inputID int64,
+		preparedContent string,
+		receipt OutputDraft,
+	) (*transcript.Message, *OutputCommit, error)
 	HandleInput(ctx context.Context, inputID int64, reason string) error
 	RejectInput(ctx context.Context, inputID int64, reason string) error
 	CancelPendingInputs(ctx context.Context, sessionIDs []int64, reason string) (int64, error)
@@ -243,9 +252,24 @@ func (s *store) PeekPending(ctx context.Context, sessionID int64) (*InboxInput, 
 }
 
 func (s *store) PromoteInput(ctx context.Context, inputID int64, preparedContent string) (*transcript.Message, error) {
-	message, _, err := s.promoteInput(ctx, inputID, preparedContent, nil)
+	message, _, _, err := s.promoteInput(ctx, inputID, preparedContent, nil, "")
 
 	return message, err
+}
+
+func (s *store) PromoteInputWithReceipt(
+	ctx context.Context,
+	inputID int64,
+	preparedContent string,
+	receipt OutputDraft,
+) (*transcript.Message, *OutputCommit, error) {
+	if receipt.Type != OutputMessagePersistent {
+		return nil, nil, fmt.Errorf("invalid promotion receipt type %q", receipt.Type)
+	}
+
+	message, _, commit, err := s.promoteInput(ctx, inputID, preparedContent, nil, receipt.Content)
+
+	return message, commit, err
 }
 
 func (s *store) PromoteInputWithActivation(
@@ -258,90 +282,182 @@ func (s *store) PromoteInputWithActivation(
 		return nil, nil, ErrActivationConflict
 	}
 
-	return s.promoteInput(ctx, inputID, preparedContent, &activation)
+	message, grant, _, err := s.promoteInput(ctx, inputID, preparedContent, &activation, "")
+
+	return message, grant, err
 }
 
+// promoteInput accepts one pending input in one transaction: the transcript
+// row, optional activation grant, input acceptance, session activation, the
+// model-input generation advance, and the optional persistent receipt.
+//
+//nolint:funlen // The accepted-replay and fresh-promotion branches share one ordered transaction.
 func (s *store) promoteInput(
 	ctx context.Context,
 	inputID int64,
 	preparedContent string,
 	activation *ActivationDraft,
-) (*transcript.Message, *ToolActivation, error) {
+	receiptContent string,
+) (*transcript.Message, *ToolActivation, *OutputCommit, error) {
 	if preparedContent == "" {
-		return nil, nil, errors.New("empty prepared input content")
+		return nil, nil, nil, errors.New("empty prepared input content")
 	}
 
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
-		return nil, nil, fmt.Errorf("begin promote input: %w", err)
+		return nil, nil, nil, fmt.Errorf("begin promote input: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
 
 	input, err := loadInboxInput(ctx, tx, inputID)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 
 	if input.State == InputStateAccepted {
 		message, loadErr := loadMessage(ctx, tx, input.AcceptedMessageID)
 		if loadErr != nil {
-			return nil, nil, loadErr
+			return nil, nil, nil, loadErr
 		}
 
 		if activation == nil {
-			return message, nil, nil
+			return message, nil, nil, nil
 		}
 
 		existing, loadErr := scanActivation(tx.QueryRowContext(ctx, `SELECT input_id, session_id, tool_id,
 			command, state, COALESCE(tool_call_id, ''), created_at, resolved_at
 			FROM session_tool_activations WHERE input_id = ?`, inputID))
 		if loadErr != nil {
-			return nil, nil, fmt.Errorf("load promoted activation: %w", loadErr)
+			return nil, nil, nil, fmt.Errorf("load promoted activation: %w", loadErr)
 		}
 
 		if existing.ToolID != activation.ToolID || existing.Command != activation.Command {
-			return nil, nil, ErrActivationConflict
+			return nil, nil, nil, ErrActivationConflict
 		}
 
-		return message, existing, nil
+		return message, existing, nil, nil
 	}
 
 	if input.State != InputStatePending {
-		return nil, nil, fmt.Errorf("%w: input %d is %s", ErrInputResolved, inputID, input.State)
+		return nil, nil, nil, fmt.Errorf("%w: input %d is %s", ErrInputResolved, inputID, input.State)
 	}
 
 	now := time.Now().UTC()
 
 	msg, err := insertPromotedMessage(ctx, tx, input, preparedContent)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 
 	var grant *ToolActivation
 	if activation != nil {
 		grant, err = insertActivation(ctx, tx, input, *activation, now)
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, nil, err
 		}
 	}
 
 	if err := acceptPendingInput(ctx, tx, inputID, msg.ID, now); err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 
 	if err := activatePromotedInputSession(ctx, tx, input.SessionID, inputID, now); err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 
 	if err := advanceModelInputGeneration(ctx, tx, input.SessionID, msg.ID); err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
+	}
+
+	commit, err := insertPromotionReceipt(ctx, tx, input, receiptContent)
+	if err != nil {
+		return nil, nil, nil, err
 	}
 
 	if err := tx.Commit(); err != nil {
-		return nil, nil, fmt.Errorf("commit promote input %d: %w", inputID, err)
+		return nil, nil, nil, fmt.Errorf("commit promote input %d: %w", inputID, err)
 	}
 
-	return msg, grant, nil
+	return msg, grant, commit, nil
+}
+
+// insertPromotionReceipt inserts the promotion's persistent receipt after the
+// model-input generation advanced, so the row snapshots the new generation. It
+// releases the accepted command turn and is keyed by the accepted input id, so
+// a replay resolves the original row instead of inserting a second receipt.
+//
+//nolint:nilnil // Absence of a receipt is the normal non-manager outcome, not an error.
+func insertPromotionReceipt(
+	ctx context.Context,
+	tx *sql.Tx,
+	input *InboxInput,
+	content string,
+) (*OutputCommit, error) {
+	if content == "" {
+		return nil, nil
+	}
+
+	// The owner is read live like every other message-output producer: a stale
+	// manager id on the inbox row snapshot must not misattribute the receipt.
+	owner, err := outputOwner(ctx, tx, input.SessionID)
+	if errors.Is(err, ErrOutputOwner) || errors.Is(err, ErrOutputNotRoot) {
+		return nil, nil //nolint:nilnil // Ownerless and subagent sessions resolve no receipt.
+	}
+
+	if err != nil {
+		return nil, err
+	}
+
+	if err := outputSessionWritable(ctx, tx, input.SessionID); err != nil {
+		return nil, err
+	}
+
+	attributes, err := stampMessageOutputAttributes(ctx, tx, input.SessionID, owner, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	encoded, err := json.Marshal(attributes)
+	if err != nil {
+		return nil, fmt.Errorf("marshal promotion receipt attributes: %w", err)
+	}
+
+	sourceKey := fmt.Sprintf("input:%d:skill_receipt", input.ID)
+	fingerprint := outputFingerprintWithRelease(
+		OutputMessagePersistent, content, input.SessionID, nil, true,
+	)
+
+	result, err := tx.ExecContext(ctx, `
+		INSERT INTO session_outbox
+			(session_id, type, content, attributes, source_key, fingerprint, created_at, releases_input)
+		VALUES (?, 'message_persistent', ?, ?, ?, ?, ?, 1)`,
+		input.SessionID, content, string(encoded), sourceKey, fingerprint, time.Now().UTC(),
+	)
+	if err == nil {
+		outputID, idErr := result.LastInsertId()
+		if idErr != nil {
+			return nil, fmt.Errorf("promotion receipt id: %w", idErr)
+		}
+
+		return &OutputCommit{OutputID: outputID, OwnerID: owner}, nil
+	}
+
+	if !isUniqueConstraintError(err) {
+		return nil, fmt.Errorf("insert promotion receipt: %w", err)
+	}
+
+	var existing string
+	if err := tx.QueryRowContext(ctx, `SELECT fingerprint FROM session_outbox
+		WHERE session_id = ? AND source_key = ?`, input.SessionID, sourceKey,
+	).Scan(&existing); err != nil {
+		return nil, fmt.Errorf("load promotion receipt replay: %w", err)
+	}
+
+	if existing != fingerprint {
+		return nil, fmt.Errorf("%w: promotion receipt for input %d", ErrOutputConflict, input.ID)
+	}
+
+	return &OutputCommit{OwnerID: owner, Existing: true}, nil
 }
 
 func insertActivation(
@@ -394,6 +510,25 @@ func (s *store) RejectInput(ctx context.Context, inputID int64, reason string) e
 	return requireOnePendingResolution(ctx, s.db, result, inputID)
 }
 
+func (s *store) ListSessionsWithRecoverableInput(ctx context.Context) ([]int64, error) {
+	rows, err := s.db.QueryContext(ctx, recoverableInputQuery)
+	if err != nil {
+		return nil, fmt.Errorf("list sessions with recoverable input: %w", err)
+	}
+	defer rows.Close()
+
+	return scanSessionIDs(rows, "recoverable")
+}
+
+func (s *store) HasAcceptedInput(ctx context.Context, sessionID int64) (bool, error) {
+	var accepted bool
+	if err := s.db.QueryRowContext(ctx, acceptedInputExistsQuery, sessionID).Scan(&accepted); err != nil {
+		return false, fmt.Errorf("check accepted input for session %d: %w", sessionID, err)
+	}
+
+	return accepted, nil
+}
+
 func (s *store) CancelPendingInputs(
 	ctx context.Context,
 	sessionIDs []int64,
@@ -429,23 +564,4 @@ func (s *store) CancelPendingInputs(
 	}
 
 	return affected, nil
-}
-
-func (s *store) ListSessionsWithRecoverableInput(ctx context.Context) ([]int64, error) {
-	rows, err := s.db.QueryContext(ctx, recoverableInputQuery)
-	if err != nil {
-		return nil, fmt.Errorf("list sessions with recoverable input: %w", err)
-	}
-	defer rows.Close()
-
-	return scanSessionIDs(rows, "recoverable")
-}
-
-func (s *store) HasAcceptedInput(ctx context.Context, sessionID int64) (bool, error) {
-	var accepted bool
-	if err := s.db.QueryRowContext(ctx, acceptedInputExistsQuery, sessionID).Scan(&accepted); err != nil {
-		return false, fmt.Errorf("check accepted input for session %d: %w", sessionID, err)
-	}
-
-	return accepted, nil
 }

@@ -14,6 +14,23 @@ import (
 	"github.com/pilat/coagent/internal/tool"
 )
 
+func TestSkillToolDirectReceiptNamesCanonicalSkillOnly(t *testing.T) {
+	ldr := loader.New()
+	ldr.RegisterSkill(&loader.Skill{Name: "both", Content: "content for $ARGUMENTS"})
+
+	skillTool := NewSkillTool(ldr)
+
+	result, err := skillTool.Execute(context.Background(), json.RawMessage(`{"name":"both","args":"issue 42"}`))
+	require.NoError(t, err)
+	require.Len(t, result.DirectMessages, 1)
+	assert.Equal(t, "🔧 Activated skill: both", result.DirectMessages[0])
+	assert.NotContains(t, result.DirectMessages[0], "issue 42")
+	assert.NotContains(t, result.DirectMessages[0], "content for")
+
+	_, err = skillTool.Execute(context.Background(), json.RawMessage(`{"name":"missing"}`))
+	require.Error(t, err)
+}
+
 func TestSkillToolUsesModelVisibility(t *testing.T) {
 	userDisabled := false
 	ldr := loader.New()
