@@ -134,12 +134,7 @@ func (c *openAICompatibleClient) Chat(
 		reqBody.SessionID = c.sessionID
 	}
 
-	if c.openrouterConfig != nil && (len(c.openrouterConfig.Only) > 0 || len(c.openrouterConfig.Order) > 0) {
-		reqBody.Provider = &oaiProvider{
-			Only:  c.openrouterConfig.Only,
-			Order: c.openrouterConfig.Order,
-		}
-	}
+	c.applyOpenRouterProvider(&reqBody)
 
 	// OpenRouter normalizes max_tokens for all providers (including OpenAI).
 	// Do NOT send max_completion_tokens — it's not in OpenRouter's supported_parameters.
@@ -208,6 +203,28 @@ func (c *openAICompatibleClient) Chat(
 	}
 
 	return c.makeRequest(ctx, reqBody)
+}
+
+func (c *openAICompatibleClient) applyOpenRouterProvider(req *oaiRequest) {
+	if !c.openrouterConfig.HasPreferences() {
+		return
+	}
+
+	req.Provider = &oaiProvider{
+		AllowFallbacks:         c.openrouterConfig.AllowFallbacks,
+		DataCollection:         c.openrouterConfig.DataCollection,
+		EnforceDistillableText: c.openrouterConfig.EnforceDistillableText,
+		Ignore:                 c.openrouterConfig.Ignore,
+		MaxPrice:               c.openrouterConfig.MaxPrice,
+		Only:                   c.openrouterConfig.Only,
+		Order:                  c.openrouterConfig.Order,
+		PreferredMaxLatency:    c.openrouterConfig.PreferredMaxLatency,
+		PreferredMinThroughput: c.openrouterConfig.PreferredMinThroughput,
+		Quantizations:          c.openrouterConfig.Quantizations,
+		RequireParameters:      c.openrouterConfig.RequireParameters,
+		Sort:                   c.openrouterConfig.Sort,
+		ZDR:                    c.openrouterConfig.ZDR,
+	}
 }
 
 // effortParam reports the level to put on the wire, clamped to what the model

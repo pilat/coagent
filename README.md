@@ -203,6 +203,33 @@ is intentionally inspectable:
 MCP servers are managed with `mcp_add`, `mcp_remove`, `mcp_enable`,
 `mcp_disable`, and `mcp_list`; they do not live in `config.yaml`.
 
+OpenRouter routing preferences are configured per model. Omitted fields are not
+sent, so OpenRouter's account and request defaults remain authoritative:
+
+```yaml
+models:
+  - id: example/model
+    provider: openrouter
+    openrouter_config:
+      sort: latency # price, throughput, latency, or exacto; mutually exclusive with order
+      preferred_max_latency: {p50: 5, p90: 20}
+      preferred_min_throughput: 40 # scalar shorthand applies to p50
+      allow_fallbacks: true
+      require_parameters: true
+      data_collection: deny
+      zdr: true
+      enforce_distillable_text: true
+      only: [preferred-provider]
+      ignore: [excluded-provider]
+      quantizations: [fp8, bf16]
+      max_price: {prompt: 1.5, completion: 4}
+```
+
+`order` accepts provider slugs in exact priority order as an alternative to
+`sort`. Performance thresholds are preferences rather than hard filters.
+`max_price` uses USD per million prompt/completion tokens, per request, or per
+image/audio unit according to the selected field.
+
 For each repository, coagent understands existing agent conventions instead of
 requiring a proprietary project file. It loads `AGENTS.md`, `CLAUDE.md`, skills
 from `.agents/`, `.coagent/`, and `.claude/`, and subagent definitions from

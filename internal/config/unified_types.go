@@ -65,8 +65,37 @@ type (
 
 	// OpenRouterConfig holds OpenRouter-specific provider configuration.
 	OpenRouterConfig struct {
-		Only  []string `json:"only"  yaml:"only,omitempty"`
-		Order []string `json:"order" yaml:"order,omitempty"`
+		AllowFallbacks         *bool                 `json:"allow_fallbacks,omitempty"          yaml:"allow_fallbacks,omitempty"`
+		DataCollection         string                `json:"data_collection,omitempty"          yaml:"data_collection,omitempty"`
+		EnforceDistillableText *bool                 `json:"enforce_distillable_text,omitempty" yaml:"enforce_distillable_text,omitempty"`
+		Ignore                 []string              `json:"ignore,omitempty"                   yaml:"ignore,omitempty"`
+		MaxPrice               *OpenRouterMaxPrice   `json:"max_price,omitempty"                yaml:"max_price,omitempty"`
+		Only                   []string              `json:"only,omitempty"                     yaml:"only,omitempty"`
+		Order                  []string              `json:"order,omitempty"                    yaml:"order,omitempty"`
+		PreferredMaxLatency    *OpenRouterPreference `json:"preferred_max_latency,omitempty"    yaml:"preferred_max_latency,omitempty"`
+		PreferredMinThroughput *OpenRouterPreference `json:"preferred_min_throughput,omitempty" yaml:"preferred_min_throughput,omitempty"`
+		Quantizations          []string              `json:"quantizations,omitempty"            yaml:"quantizations,omitempty"`
+		RequireParameters      *bool                 `json:"require_parameters,omitempty"       yaml:"require_parameters,omitempty"`
+		Sort                   string                `json:"sort,omitempty"                     yaml:"sort,omitempty"`
+		ZDR                    *bool                 `json:"zdr,omitempty"                      yaml:"zdr,omitempty"`
+	}
+
+	// OpenRouterMaxPrice caps provider prices for one model request.
+	OpenRouterMaxPrice struct {
+		Audio      *float64 `json:"audio,omitempty"      yaml:"audio,omitempty"`
+		Completion *float64 `json:"completion,omitempty" yaml:"completion,omitempty"`
+		Image      *float64 `json:"image,omitempty"      yaml:"image,omitempty"`
+		Prompt     *float64 `json:"prompt,omitempty"     yaml:"prompt,omitempty"`
+		Request    *float64 `json:"request,omitempty"    yaml:"request,omitempty"`
+	}
+
+	// OpenRouterPreference is either a scalar p50 threshold or percentile-specific cutoffs.
+	OpenRouterPreference struct {
+		Value *float64 `json:"-"             yaml:"-"`
+		P50   *float64 `json:"p50,omitempty" yaml:"p50,omitempty"`
+		P75   *float64 `json:"p75,omitempty" yaml:"p75,omitempty"`
+		P90   *float64 `json:"p90,omitempty" yaml:"p90,omitempty"`
+		P99   *float64 `json:"p99,omitempty" yaml:"p99,omitempty"`
 	}
 
 	// ModelPricing is a model's catalog-resolved cost. All prices are USD per 1M tokens.
