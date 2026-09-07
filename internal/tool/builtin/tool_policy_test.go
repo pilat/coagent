@@ -33,6 +33,7 @@ func TestCoreRegistry_ParallelSafePolicies(t *testing.T) {
 		"glob":        true,
 		"grep":        true,
 		"bash":        false,
+		"tail":        true,
 		"webfetch":    true,
 		"websearch":   true, // stateless HTTP, registered only when configured
 		"skill":       false,
