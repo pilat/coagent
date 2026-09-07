@@ -223,6 +223,10 @@ func (t *bashTool) run(
 
 	start := time.Now()
 
+	if t.process == nil {
+		return t.runDirect(ctx, p, workDir, deadline)
+	}
+
 	record, err := t.process.Start(ctx, spec, func(processCtx context.Context) (*exec.Cmd, error) {
 		// The command-construction authority stays with the sandbox runner;
 		// only the lifetime context is owned by the process service.
@@ -382,6 +386,58 @@ func (t *bashTool) inlineOutput(ctx context.Context, record backgroundprocess.Pr
 
 	return "Output exceeded the inline limit (" + fmt.Sprintf("%.1f", float64(record.OutputSize)/(100*1024)) +
 		" KB); read a suffix of " + record.OutputPath + " with the tail tool"
+}
+
+// runDirect is the fallback execution path when no process service is
+// wired: the command runs foreground-only with no ledger and no wake.
+func (t *bashTool) runDirect(
+	ctx context.Context,
+	p bashParams,
+	workDir string,
+	deadline time.Duration,
+) (*tool.Result, error) {
+	if p.Background {
+		return nil, errors.New("background mode is unavailable: no process service")
+	}
+
+	processCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), deadline)
+	defer cancel()
+
+	cmd, err := t.runner.ShellCommand(processCtx, p.Command, workDir)
+	if err != nil {
+		return nil, fmt.Errorf("create bash command: %w", err)
+	}
+
+	output, runErr := cmd.CombinedOutput()
+
+	code := 0
+	state := backgroundprocess.StateCompleted
+
+	if runErr != nil {
+		state = backgroundprocess.StateFailed
+
+		var exitErr *exec.ExitError
+		if errors.As(runErr, &exitErr) {
+			code = exitErr.ExitCode()
+		} else {
+			code = -1
+		}
+	}
+
+	if err := processCtx.Err(); err != nil && errors.Is(err, context.DeadlineExceeded) {
+		state = backgroundprocess.StateTimedOut
+		code = -1
+	}
+
+	record := backgroundprocess.Process{
+		State:    state,
+		ExitCode: &code,
+	}
+
+	result := t.foregroundResult(ctx, record)
+	result.Output = string(output)
+
+	return result, nil
 }
 
 func (t *bashTool) title(record backgroundprocess.Process) string {
