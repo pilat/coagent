@@ -197,6 +197,7 @@ type queuedRunner struct {
 }
 
 func New(
+	ctx context.Context,
 	factory session.Factory,
 	store Store,
 	sessionStore sessionstore.OrchestrationStore,
@@ -217,7 +218,7 @@ func New(
 	applier configapply.Service,
 ) Service {
 	s, processSvc := newSvc(
-		context.Background(),
+		ctx,
 		factory, store, sessionStore, inboxStore, runtimeStore,
 		managerOutputs, managerRoots, lifecycleStore, modelInputs,
 		links, subagents, budgetSvc, progressStore,

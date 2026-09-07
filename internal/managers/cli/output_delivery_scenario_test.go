@@ -81,7 +81,7 @@ func newDelayedCLIHarness(t *testing.T) *delayedCLIHarness {
 		}),
 	)
 	service := daemon.New(
-		factory, projects, sessions, sessions, sessions, sessions, sessions, sessions, sessions,
+		context.Background(), factory, projects, sessions, sessions, sessions, sessions, sessions, sessions, sessions,
 		subagent.NewStore(db), subagent.NewTransactions(db),
 		budget.New(sessions), sessions, schedule.NewService(schedule.NewStore(db)), cfg, nil, nil, nil,
 	)
