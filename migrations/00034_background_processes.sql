@@ -26,13 +26,40 @@ CREATE TABLE background_processes (
     )),
     delivery_target_session_id INTEGER REFERENCES sessions(id),
     delivered_at DATETIME,
-    CHECK (state <> 'running' OR finished_at IS NULL),
+    CHECK ((state = 'running' AND finished_at IS NULL)
+           OR (state <> 'running' AND finished_at IS NOT NULL)),
     CHECK (state NOT IN ('completed', 'failed') OR exit_code IS NOT NULL),
-    CHECK (delivery_state = 'pending' OR delivery_target_session_id IS NOT NULL),
+    CHECK ((delivery_state = 'pending' AND delivery_target_session_id IS NULL)
+           OR (delivery_state <> 'pending' AND delivery_target_session_id IS NOT NULL)),
     CHECK (delivery_state NOT IN ('delivered', 'suppressed') OR delivered_at IS NOT NULL),
-    CHECK (delivery_state <> 'claimed' OR delivered_at IS NULL),
-    CHECK (host_intent = '' OR state <> 'completed' OR host_intent NOT IN (''))
+    CHECK (delivery_state NOT IN ('pending', 'claimed') OR delivered_at IS NULL),
+    CHECK (state <> 'running' OR delivery_state = 'pending'),
+    -- drain-timeout and group-kill outcomes have no meaningful exit code.
+    CHECK (state NOT IN ('timed_out', 'output_limit_exceeded',
+                         'output_drain_timeout', 'cancelled', 'interrupted')
+           OR exit_code IS NULL),
+    CHECK (host_intent = ''
+           OR (host_intent = 'deadline' AND state IN ('running', 'timed_out'))
+           OR (host_intent = 'output_limit_exceeded'
+               AND state IN ('running', 'output_limit_exceeded'))
+           OR (host_intent IN ('session_stopped', 'session_killed')
+               AND state IN ('running', 'cancelled'))
+           OR (host_intent = 'daemon_shutdown' AND state IN ('running', 'interrupted')))
 );
+
+-- +goose StatementBegin
+CREATE TRIGGER background_processes_validate_owner
+BEFORE INSERT ON background_processes
+WHEN NOT EXISTS (
+    SELECT 1 FROM sessions owner
+    WHERE owner.id = NEW.session_id
+      AND ((owner.parent_id = 0 AND NEW.root_session_id = owner.id)
+           OR (owner.parent_id <> 0 AND NEW.root_session_id = owner.root_id))
+)
+BEGIN
+    SELECT RAISE(ABORT, 'background process owner/root mismatch');
+END;
+-- +goose StatementEnd
 
 CREATE INDEX IF NOT EXISTS idx_background_processes_root_running
     ON background_processes(root_session_id)

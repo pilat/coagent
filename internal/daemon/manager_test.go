@@ -66,6 +66,7 @@ type mockFactory struct {
 	sessions         []*mockSession
 	options          []session.CreateOptions
 	nextSess         session.Service // allows injecting any session.Service implementation
+	createErrOnce    error
 	processPolicyKey string
 }
 
@@ -253,6 +254,13 @@ func (f *mockFactory) Create(ctx context.Context, opts session.CreateOptions) (s
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.options = append(f.options, opts)
+	if f.createErrOnce != nil {
+		err := f.createErrOnce
+		f.createErrOnce = nil
+
+		return nil, err
+	}
+
 	if opts.ObserveProcessPolicy != nil {
 		opts.ObserveProcessPolicy(f.processPolicyKey)
 	}

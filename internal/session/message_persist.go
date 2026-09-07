@@ -21,9 +21,6 @@ func (ms *messageStore) addToolNotificationPairOnce(
 	deliveryID, callID, toolName string,
 	content string,
 ) (bool, error) {
-	ms.mu.Lock()
-	defer ms.mu.Unlock()
-
 	args := json.RawMessage("{}")
 
 	assistant := llmwire.Message{
@@ -37,31 +34,70 @@ func (ms *messageStore) addToolNotificationPairOnce(
 		ToolName:   toolName,
 	}
 
-	if ms.store == nil {
-		return false, errors.New("idempotent tool notification requires durable store")
-	}
-
 	toolCallsJSON, err := json.Marshal(assistant.ToolCalls)
 	if err != nil {
 		return false, fmt.Errorf("marshal idempotent notification tool call: %w", err)
 	}
 
-	asstStored := &transcript.Message{Role: assistant.Role, ToolCalls: toolCallsJSON}
-	resultStored := &transcript.Message{
-		Role:       result.Role,
-		Content:    result.Content,
-		ToolCallID: result.ToolCallID,
-		ToolName:   result.ToolName,
+	return ms.addStoredToolNotificationPairOnce(ctx, deliveryID, []*transcript.Message{
+		{Role: assistant.Role, ToolCalls: toolCallsJSON},
+		{
+			Role:       result.Role,
+			Content:    result.Content,
+			ToolCallID: result.ToolCallID,
+			ToolName:   result.ToolName,
+		},
+	})
+}
+
+// addStoredToolNotificationPairOnce commits a prebuilt synthetic pair under a
+// durable delivery identity. The args carried by the pair (non-empty only for
+// events with a real argument contract) join the delivery fingerprint, so a
+// re-delivery of the same identity with different arguments is rejected rather
+// than silently appended twice.
+func (ms *messageStore) addStoredToolNotificationPairOnce(
+	ctx context.Context,
+	deliveryID string,
+	pair []*transcript.Message,
+) (bool, error) {
+	if len(pair) != 2 {
+		return false, fmt.Errorf("idempotent notification requires a pair, got %d messages", len(pair))
 	}
-	fingerprint := deliveryFingerprint("tool_notification", toolName, string(args), content)
+
+	ms.mu.Lock()
+	defer ms.mu.Unlock()
+
+	if ms.store == nil {
+		return false, errors.New("idempotent tool notification requires durable store")
+	}
+
+	assistant, result := pair[0], pair[1]
+
+	calls, err := decodeStoredToolCalls(assistant.ToolCalls)
+	if err != nil {
+		return false, err
+	}
+
+	if len(calls) != 1 {
+		return false, fmt.Errorf("idempotent notification requires one tool call, got %d", len(calls))
+	}
+
+	args, err := json.Marshal(calls[0].Arguments)
+	if err != nil {
+		return false, fmt.Errorf("marshal notification arguments: %w", err)
+	}
+
+	fingerprint := deliveryFingerprint(
+		"tool_notification", calls[0].Name, string(args), result.Content,
+	)
 
 	asstID, resultID, inserted, err := ms.store.InsertToolNotificationPairOnce(
 		ctx,
 		ms.sessID,
 		deliveryID,
 		fingerprint,
-		asstStored,
-		resultStored,
+		assistant,
+		result,
 	)
 	if err != nil {
 		return false, fmt.Errorf("persist idempotent tool notification pair: %w", err)
@@ -71,10 +107,33 @@ func (ms *messageStore) addToolNotificationPairOnce(
 		return false, nil
 	}
 
-	ms.appendLocked(assistant, asstID)
-	ms.appendLocked(result, resultID)
+	ms.appendLocked(llmwire.Message{
+		Role:      assistant.Role,
+		ToolCalls: calls,
+	}, asstID)
+	ms.appendLocked(llmwire.Message{
+		Role:       result.Role,
+		Content:    result.Content,
+		ToolCallID: result.ToolCallID,
+		ToolName:   result.ToolName,
+	}, resultID)
 
 	return true, nil
+}
+
+// decodeStoredToolCalls parses the persisted tool-call JSON back into wire
+// calls for the in-memory projection.
+func decodeStoredToolCalls(data json.RawMessage) ([]llmwire.ToolCall, error) {
+	if len(data) == 0 {
+		return nil, nil
+	}
+
+	var calls []llmwire.ToolCall
+	if err := json.Unmarshal(data, &calls); err != nil {
+		return nil, fmt.Errorf("decode stored tool calls: %w", err)
+	}
+
+	return calls, nil
 }
 
 // resetToOnce reopens the conversation with opening under a durable delivery

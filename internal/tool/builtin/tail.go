@@ -1,29 +1,28 @@
 package builtin
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"os"
-	"path/filepath"
-	"slices"
 	"strings"
+	"syscall"
+	"unicode/utf8"
 
 	"go.uber.org/zap"
 
+	"github.com/pilat/coagent/internal/backgroundprocess"
 	"github.com/pilat/coagent/internal/logger"
 	"github.com/pilat/coagent/internal/safefile"
 	"github.com/pilat/coagent/internal/tool"
 )
 
 const (
-	defaultTailLines  = 50
-	maxTailLines      = 2000
-	tailMaxBytes      = 50 * 1024
-	tailBlockReadSize = 8 * 1024
+	defaultTailLines = 50
+	maxTailLines     = 2000
+	tailMaxBytes     = 50 * 1024
+	tailNotice       = "\n\n(tail truncated to fit the byte limit)"
 
 	tailDescription = `Reads the final lines of a text file efficiently from the end without scanning the complete file.
 
@@ -40,7 +39,7 @@ var _ tool.Tool = (*tailTool)(nil)
 
 type tailParams struct {
 	FilePath string `json:"file_path"`
-	Lines    int    `json:"lines,omitempty"`
+	Lines    *int   `json:"lines,omitempty"`
 }
 
 type tailTool struct {
@@ -87,57 +86,40 @@ func (t *tailTool) Execute(ctx context.Context, params json.RawMessage) (*tool.R
 		return nil, errors.New("file_path is required")
 	}
 
-	lines := p.Lines
-	if lines <= 0 {
-		lines = defaultTailLines
-	}
-
-	if lines > maxTailLines {
-		lines = maxTailLines
+	lines, err := tailLines(p.Lines)
+	if err != nil {
+		return nil, err
 	}
 
 	filePath := resolvePath(t.workDir, p.FilePath)
 
-	var (
-		file *os.File
-		err  error
-	)
-
+	lockPath := filePath
 	if t.access != nil {
-		var opened *safefile.Opened
-
-		opened, err = t.access.Open(filePath)
+		resolved, err := t.access.Resolve(filePath)
 		if err != nil {
 			return nil, fmt.Errorf("authorize read path: %w", err)
 		}
 
-		file = opened.File
-	} else {
-		file, err = os.Open(filePath)
+		lockPath = resolved.Canonical
 	}
 
+	unlock := lockFileRead(lockPath)
+	defer unlock()
+
+	file, info, err := t.openRegularFile(filePath)
 	if err != nil {
-		return nil, fmt.Errorf("open file: %w", err)
+		return nil, err
 	}
 
 	defer file.Close()
 
-	info, err := file.Stat()
-	if err != nil {
-		return nil, fmt.Errorf("stat file: %w", err)
-	}
-
-	if !info.Mode().IsRegular() {
-		return nil, errors.New("tail requires a regular file")
-	}
-
-	output, truncated, err := tailFromFile(file, info.Size(), lines, log)
+	output, truncated, err := tailFromFile(file, info.Size(), lines, filePath)
 	if err != nil {
 		return nil, err
 	}
 
 	if truncated {
-		output += "\n\n(tail truncated to fit the byte limit)"
+		output += tailNotice
 	}
 
 	return &tool.Result{
@@ -150,140 +132,91 @@ func (t *tailTool) Execute(ctx context.Context, params json.RawMessage) (*tool.R
 	}, nil
 }
 
-// tailState accumulates the newest complete lines within the budgets.
-type tailState struct {
-	collected [][]byte
-	total     int64
-	full      bool
-}
-
-func (t *tailState) accept(line []byte, lines int) bool {
-	if len(t.collected) >= lines || t.total+int64(len(line)) > tailMaxBytes {
-		t.full = true
-
-		return false
+func tailLines(requested *int) (int, error) {
+	if requested == nil {
+		return defaultTailLines, nil
 	}
 
-	t.collected = append(t.collected, line)
-	t.total += int64(len(line))
-
-	return true
-}
-
-// acceptChunk feeds every line of the (older-first) chunk to accept.
-func (t *tailState) acceptChunk(chunk []byte, lines int) {
-	for line := range bytes.SplitSeq(chunk, []byte{'\n'}) {
-		if len(line) == 0 && (t.total > 0 || len(t.collected) > 0) {
-			continue
-		}
-
-		if !t.accept(line, lines) {
-			return
-		}
+	if *requested <= 0 {
+		return 0, errors.New("lines must be positive")
 	}
+
+	return min(*requested, maxTailLines), nil
 }
 
-// tailFromFile reads backward in blocks and assembles the bounded final lines.
-func tailFromFile(file *os.File, size int64, lines int, log *zap.Logger) (string, bool, error) {
+func (t *tailTool) openRegularFile(filePath string) (*os.File, os.FileInfo, error) {
+	file, err := t.openFile(filePath)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	info, err := file.Stat()
+	if err != nil {
+		_ = file.Close()
+
+		return nil, nil, fmt.Errorf("stat file: %w", err)
+	}
+
+	if !info.Mode().IsRegular() {
+		_ = file.Close()
+
+		return nil, nil, errors.New("tail requires a regular file")
+	}
+
+	return file, info, nil
+}
+
+func (t *tailTool) openFile(filePath string) (*os.File, error) {
+	flags := os.O_RDONLY | syscall.O_NONBLOCK
+
+	if t.access == nil {
+		file, err := os.OpenFile(filePath, flags, 0)
+		if err != nil {
+			return nil, fmt.Errorf("open file: %w", err)
+		}
+
+		return file, nil
+	}
+
+	opened, err := t.access.OpenFile(filePath, flags, 0)
+	if err != nil {
+		return nil, fmt.Errorf("authorize read path: %w", err)
+	}
+
+	return opened.File, nil
+}
+
+// tailFromFile reads backward in blocks and assembles the bounded final lines
+// in file order.
+func tailFromFile(file *os.File, size int64, lines int, filePath string) (string, bool, error) {
 	if size == 0 {
 		return "(no output)", false, nil
 	}
 
-	if err := rejectBinary(file, size); err != nil {
-		return "", false, err
+	if isBinaryReader(file, filePath) {
+		return "", false, errors.New("tail requires a text file")
 	}
 
-	state := &tailState{}
-	var carry []byte
-
-	offset := size
-
-	for offset > 0 && !state.full && len(state.collected) <= lines {
-		block := min(int64(tailBlockReadSize), offset)
-		offset -= block
-
-		buf := make([]byte, block+int64(len(carry)))
-		if _, err := file.ReadAt(buf[:block], offset); err != nil && !errors.Is(err, io.EOF) {
-			return "", false, fmt.Errorf("read file tail: %w", err)
-		}
-
-		copy(buf[block:], carry)
-		chunk := buf
-
-		// A leading fragment without a preceding newline belongs to the next
-		// (older) block unless this is the file start, where it is a line.
-		lead := bytes.LastIndexByte(chunk, '\n')
-		if lead >= 0 {
-			lead++
-		}
-
-		if lead == 0 && offset != 0 {
-			carry = chunk
-
-			continue
-		}
-
-		if lead < len(chunk) && offset != 0 {
-			carry = chunk[lead:]
-			chunk = chunk[:lead]
-		} else {
-			carry = nil
-		}
-
-		state.acceptChunk(chunk, lines)
+	collected, full, err := backgroundprocess.ScanTailLines(
+		file, size, lines, tailMaxBytes-int64(len(tailNotice)), maxLineLength,
+	)
+	if err != nil {
+		return "", false, fmt.Errorf("scan file tail: %w", err)
 	}
-
-	// Newest-first collection reverses for output order.
-	slices.Reverse(state.collected)
 
 	var out strings.Builder
 
-	for i, line := range state.collected {
+	for i, line := range collected {
 		if i > 0 {
 			out.WriteByte('\n')
 		}
 
-		out.Write(truncateTailLine(line, log))
+		out.Write(line)
 	}
 
-	return out.String(), state.full, nil
+	if !utf8.ValidString(out.String()) {
+		return "", false, errors.New("tail requires valid UTF-8 text")
+	}
+
+	return out.String(), full, nil
 }
-
-// truncateTailLine applies read's per-line cap to one extracted line.
-func truncateTailLine(line []byte, log *zap.Logger) []byte {
-	const maxLen = maxLineLength
-
-	_ = log
-
-	return line[:min(len(line), maxLen)]
-}
-
-// rejectBinary sniffs the head of the file for binary content.
-func rejectBinary(file *os.File, size int64) error {
-	head := min(int64(4*1024), size)
-
-	buf := make([]byte, head)
-	if _, err := file.ReadAt(buf, 0); err != nil && !errors.Is(err, io.EOF) {
-		return fmt.Errorf("sniff file: %w", err)
-	}
-
-	nonPrintable := 0
-
-	for _, b := range buf {
-		if b == 0 {
-			return errors.New("tail requires a text file")
-		}
-
-		if b < 32 && b != '\n' && b != '\r' && b != '\t' {
-			nonPrintable++
-		}
-	}
-
-	if len(buf) > 0 && nonPrintable*100 > len(buf)*30 {
-		return errors.New("tail requires a text file")
-	}
-
-	return nil
-}
-
-var _ = filepath.Join

@@ -2,6 +2,7 @@ package sessionstore
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -18,14 +19,19 @@ var ErrStopNotStopping = errors.New("explicit stop requires a stopping root")
 // InterruptedExplicitStop is one handled /stop whose visible terminal fact is
 // still owed: it has a started (or legacy :result) output and no completion.
 type InterruptedExplicitStop struct {
-	SessionID int64
-	InputID   int64
+	SessionID  int64
+	InputID    int64
+	ReceivedAt time.Time
 }
 
 // StopCompletionStore commits the explicit stop's terminal fact atomically with
 // the root's final status and the armed-budget release.
 type StopCompletionStore interface {
-	CompleteExplicitStop(ctx context.Context, rootID, inputID int64) (*OutputCommit, error)
+	CompleteExplicitStop(
+		ctx context.Context,
+		rootID, inputID int64,
+		cancelledProcesses int,
+	) (*OutputCommit, error)
 	// SelectInterruptedExplicitStops lists roots whose newest qualifying /stop
 	// input still owes its terminal output. Startup may finish only these.
 	SelectInterruptedExplicitStops(ctx context.Context) ([]InterruptedExplicitStop, error)
@@ -42,6 +48,7 @@ var _ StopCompletionStore = (*store)(nil)
 func (s *store) CompleteExplicitStop(
 	ctx context.Context,
 	rootID, inputID int64,
+	cancelledProcesses int,
 ) (*OutputCommit, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -78,43 +85,11 @@ func (s *store) CompleteExplicitStop(
 		return nil, err
 	}
 
-	attributes, err := stampMessageOutputAttributes(ctx, tx, rootID, owner, nil)
+	outputID, err := insertExplicitStopOutput(
+		ctx, tx, rootID, inputID, cancelledProcesses, owner, now,
+	)
 	if err != nil {
 		return nil, err
-	}
-
-	encoded, err := json.Marshal(attributes)
-	if err != nil {
-		return nil, fmt.Errorf("marshal stop completion attributes: %w", err)
-	}
-
-	key := fmt.Sprintf("input:%d:stop:completed", inputID)
-	fingerprint := outputFingerprintWithRelease(
-		OutputMessagePersistent, StopTerminalContent, rootID, nil, true,
-	)
-
-	result, err = tx.ExecContext(ctx, `
-		INSERT INTO session_outbox (session_id, type, content, attributes, source_key, fingerprint, created_at, releases_input)
-		VALUES (?, 'message_persistent', ?, ?, ?, ?, ?, 1)
-		ON CONFLICT DO NOTHING`,
-		rootID, StopTerminalContent, string(encoded), key, fingerprint, now)
-	if err != nil {
-		return nil, fmt.Errorf("insert stop completion output: %w", err)
-	}
-
-	outputID, err := result.LastInsertId()
-	if err != nil {
-		return nil, fmt.Errorf("stop completion output id: %w", err)
-	}
-
-	if inserted, insertErr := result.RowsAffected(); insertErr != nil || inserted == 0 {
-		// The row already exists: replay must return the originally stored
-		// completion, not whatever rowid the connection last handed out.
-		err = tx.QueryRowContext(ctx, `SELECT id FROM session_outbox
-			WHERE session_id = ? AND source_key = ?`, rootID, key).Scan(&outputID)
-		if err != nil {
-			return nil, fmt.Errorf("load stored stop completion: %w", err)
-		}
 	}
 
 	if err := tx.Commit(); err != nil {
@@ -124,11 +99,62 @@ func (s *store) CompleteExplicitStop(
 	return &OutputCommit{OutputID: outputID, OwnerID: owner}, nil
 }
 
+func insertExplicitStopOutput(
+	ctx context.Context,
+	tx *sql.Tx,
+	rootID, inputID int64,
+	cancelledProcesses int,
+	owner string,
+	now time.Time,
+) (int64, error) {
+	attributes, err := stampMessageOutputAttributes(ctx, tx, rootID, owner, nil)
+	if err != nil {
+		return 0, err
+	}
+
+	encoded, err := json.Marshal(attributes)
+	if err != nil {
+		return 0, fmt.Errorf("marshal stop completion attributes: %w", err)
+	}
+
+	key := fmt.Sprintf("input:%d:stop:completed", inputID)
+	content := fmt.Sprintf("%s\nCancelled background processes: %d", StopTerminalContent, cancelledProcesses)
+	fingerprint := outputFingerprintWithRelease(
+		OutputMessagePersistent, content, rootID, nil, true,
+	)
+
+	result, err := tx.ExecContext(ctx, `
+		INSERT INTO session_outbox (session_id, type, content, attributes, source_key, fingerprint, created_at, releases_input)
+		VALUES (?, 'message_persistent', ?, ?, ?, ?, ?, 1)
+		ON CONFLICT DO NOTHING`,
+		rootID, content, string(encoded), key, fingerprint, now)
+	if err != nil {
+		return 0, fmt.Errorf("insert stop completion output: %w", err)
+	}
+
+	outputID, err := result.LastInsertId()
+	if err != nil {
+		return 0, fmt.Errorf("stop completion output id: %w", err)
+	}
+
+	if inserted, insertErr := result.RowsAffected(); insertErr != nil || inserted == 0 {
+		// The row already exists: replay must return the originally stored
+		// completion, not whatever rowid the connection last handed out.
+		err = tx.QueryRowContext(ctx, `SELECT id FROM session_outbox
+			WHERE session_id = ? AND source_key = ?`, rootID, key).Scan(&outputID)
+		if err != nil {
+			return 0, fmt.Errorf("load stored stop completion: %w", err)
+		}
+	}
+
+	return outputID, nil
+}
+
 func (s *store) SelectInterruptedExplicitStops(
 	ctx context.Context,
 ) ([]InterruptedExplicitStop, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT MAX(i.id), i.session_id
+		SELECT i.id, i.session_id, i.received_at
 		FROM session_inbox i
 		WHERE i.state = 'handled' AND i.resolution_reason = 'stop'
 			AND EXISTS (
@@ -142,7 +168,11 @@ func (s *store) SelectInterruptedExplicitStops(
 				WHERE c.session_id = i.session_id
 					AND c.source_key = 'input:' || i.id || ':stop:completed'
 			)
-		GROUP BY i.session_id
+		  AND i.id = (
+			SELECT MAX(latest.id) FROM session_inbox latest
+			WHERE latest.session_id = i.session_id
+			  AND latest.state = 'handled' AND latest.resolution_reason = 'stop'
+		  )
 		ORDER BY i.session_id`)
 	if err != nil {
 		return nil, fmt.Errorf("list interrupted explicit stops: %w", err)
@@ -153,7 +183,7 @@ func (s *store) SelectInterruptedExplicitStops(
 
 	for rows.Next() {
 		var stop InterruptedExplicitStop
-		if err := rows.Scan(&stop.InputID, &stop.SessionID); err != nil {
+		if err := rows.Scan(&stop.InputID, &stop.SessionID, &stop.ReceivedAt); err != nil {
 			return nil, fmt.Errorf("scan interrupted explicit stop: %w", err)
 		}
 

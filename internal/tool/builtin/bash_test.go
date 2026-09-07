@@ -63,7 +63,7 @@ func (r *bashRunnerStub) ReadScope() bashsandbox.ReadScope { return bashsandbox.
 
 // newTestProcessService builds a real background-process service over a
 // migrated temp SQLite database. It returns the service and a cleanup.
-func newTestProcessService(t *testing.T) (*backgroundprocess.Service, int64) {
+func newTestProcessService(t *testing.T) (backgroundprocess.Service, int64) {
 	t.Helper()
 
 	ctx := context.Background()
@@ -87,11 +87,14 @@ func newTestProcessService(t *testing.T) (*backgroundprocess.Service, int64) {
 		backgroundprocess.NewStore(db),
 		backgroundprocess.Options{OutputDir: t.TempDir()},
 	)
+	t.Cleanup(func() {
+		_, _ = service.CancelAll(context.Background(), backgroundprocess.IntentSessionKilled)
+	})
 
 	return service, 1
 }
 
-func newTestBashTool(t *testing.T) (*bashTool, *backgroundprocess.Service) {
+func newTestBashTool(t *testing.T) (*bashTool, backgroundprocess.Service) {
 	t.Helper()
 
 	service, sessionID := newTestProcessService(t)
@@ -167,6 +170,16 @@ func TestBashTool_Execute(t *testing.T) {
 		assert.True(t, result.IsError)
 		assert.Equal(t, true, result.Metadata[metaKeyTimedOut])
 		assert.Contains(t, result.Output, "timed out")
+	})
+
+	t.Run("short deadline ignores explicit background request", func(t *testing.T) {
+		params, _ := json.Marshal(bashParams{Command: "sleep 5", Timeout: 100, Background: true})
+		result, err := bash.Execute(ctx, params)
+		require.NoError(t, err)
+
+		assert.True(t, result.IsError)
+		assert.Equal(t, true, result.Metadata[metaKeyTimedOut])
+		assert.NotContains(t, result.Output, "runs in the background")
 	})
 
 	t.Run("empty command", func(t *testing.T) {
@@ -296,6 +309,7 @@ func TestProcessDeadlineResolution(t *testing.T) {
 		{name: "in-range is honoured", ms: 45000, want: 45 * time.Second},
 		{name: "exactly the cap is honoured", ms: int(maxProcessDeadline / time.Millisecond), want: maxProcessDeadline},
 		{name: "over the cap is clamped", ms: int(maxProcessDeadline/time.Millisecond) + 1, want: maxProcessDeadline},
+		{name: "overflow clamps instead of wrapping negative", ms: 10_000_000_000_000, want: maxProcessDeadline},
 	}
 
 	for _, tt := range tests {

@@ -22,8 +22,8 @@ func seedBackgroundProcessSessions(ctx context.Context, t *testing.T, db *sql.DB
 	require.NoError(t, err)
 
 	_, err = db.ExecContext(ctx, `
-		INSERT INTO sessions (id, project_id, model, agent_type)
-		VALUES (2, 1, 'm', 'general')`)
+		INSERT INTO sessions (id, project_id, model, agent_type, parent_id, root_id)
+		VALUES (2, 1, 'm', 'general', 1, 1)`)
 	require.NoError(t, err)
 }
 
@@ -81,6 +81,16 @@ func TestMigrate_34_BackgroundProcessesFreshDB(t *testing.T) {
 		name string
 		sql  string
 	}{
+		{
+			name: "owner root mismatch",
+			sql: `INSERT INTO background_processes (
+					id, session_id, root_session_id, tool_call_id, output_path,
+					deadline_at, created_at
+				) VALUES (
+					'bad_owner', 2, 2, 'call', '/tmp/x', '2026-09-07 00:10:00',
+					'2026-09-07 00:00:00'
+				)`,
+		},
 		{
 			name: "invalid state",
 			sql: `INSERT INTO background_processes (
@@ -143,6 +153,59 @@ func TestMigrate_34_BackgroundProcessesFreshDB(t *testing.T) {
 				) VALUES (
 					'bad6', 1, 1, 'call', '/tmp/x', '2026-09-07 00:10:00',
 					'2026-09-07 00:00:00', 'completed', '2026-09-07 00:05:00'
+				)`,
+		},
+		{
+			name: "terminal row without finished time",
+			sql: `INSERT INTO background_processes (
+					id, session_id, root_session_id, tool_call_id, output_path,
+					deadline_at, created_at, state, exit_code
+				) VALUES (
+					'bad7', 1, 1, 'call', '/tmp/x', '2026-09-07 00:10:00',
+					'2026-09-07 00:00:00', 'failed', 1
+				)`,
+		},
+		{
+			name: "deadline intent with completed outcome",
+			sql: `INSERT INTO background_processes (
+					id, session_id, root_session_id, tool_call_id, output_path,
+					deadline_at, created_at, host_intent, state, exit_code, finished_at
+				) VALUES (
+					'bad8', 1, 1, 'call', '/tmp/x', '2026-09-07 00:10:00',
+					'2026-09-07 00:00:00', 'deadline', 'completed', 0,
+					'2026-09-07 00:05:00'
+				)`,
+		},
+		{
+			name: "timed out row with exit code",
+			sql: `INSERT INTO background_processes (
+					id, session_id, root_session_id, tool_call_id, output_path,
+					deadline_at, created_at, host_intent, state, exit_code, finished_at
+				) VALUES (
+					'bad9', 1, 1, 'call', '/tmp/x', '2026-09-07 00:10:00',
+					'2026-09-07 00:00:00', 'deadline', 'timed_out', -1,
+					'2026-09-07 00:05:00'
+				)`,
+		},
+		{
+			name: "pending delivery with target",
+			sql: `INSERT INTO background_processes (
+					id, session_id, root_session_id, tool_call_id, output_path,
+					deadline_at, created_at, state, delivery_target_session_id
+				) VALUES (
+					'bad10', 1, 1, 'call', '/tmp/x', '2026-09-07 00:10:00',
+					'2026-09-07 00:00:00', 'running', 1
+				)`,
+		},
+		{
+			name: "running row with claimed delivery",
+			sql: `INSERT INTO background_processes (
+					id, session_id, root_session_id, tool_call_id, output_path,
+					deadline_at, created_at, state, delivery_state,
+					delivery_target_session_id
+				) VALUES (
+					'bad11', 1, 1, 'call', '/tmp/x', '2026-09-07 00:10:00',
+					'2026-09-07 00:00:00', 'running', 'claimed', 1
 				)`,
 		},
 	}

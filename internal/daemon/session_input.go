@@ -142,6 +142,12 @@ func inputSleepInterruption(input sessionInput) string {
 	}
 }
 
+func isProcessCompletionInput(input sessionInput) bool {
+	_, ok := input.(processCompletionInput)
+
+	return ok
+}
+
 // queuedSessionInput separates delivery mechanics from the payload protocol.
 // Async child completions need no waiter because their link is the durable retry
 // ledger; schedules and exact external results wait for transcript acceptance.

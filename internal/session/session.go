@@ -392,10 +392,10 @@ func (s *svc) InjectToolNotificationOnce(
 	)
 }
 
-// InjectProcessCompletion delivers one background-process completion through
-// the same durable pair transaction as InjectToolNotificationOnce, keeping a
-// single exactly-once mechanism. The process ID is the delivery identity and
-// the fingerprint binds the full event content.
+// InjectProcessCompletion delivers one background-process completion as a
+// synthetic process_event pair with proper arguments. The process ID is the
+// delivery identity, so re-delivery across restarts is exactly-once; the
+// fingerprint binds the full event content.
 func (s *svc) InjectProcessCompletion(
 	ctx context.Context,
 	deliveryID string,
@@ -414,15 +414,12 @@ func (s *svc) InjectProcessCompletion(
 		)
 	}
 
-	content := formatProcessEventContent(event)
+	stored, err := BuildProcessEventCompletion(event)
+	if err != nil {
+		return false, fmt.Errorf("inject process event %s: %w", deliveryID, err)
+	}
 
-	return s.ms.addToolNotificationPairOnce(
-		ctx,
-		deliveryID,
-		id.Generate(),
-		processEventTool,
-		content,
-	)
+	return s.ms.addStoredToolNotificationPairOnce(ctx, deliveryID, stored)
 }
 
 func (s *svc) ResetContextAndInjectOnce(

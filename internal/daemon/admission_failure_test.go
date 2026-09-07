@@ -83,7 +83,8 @@ func TestDrainPendingRunners_DerivesPromotedRecoveryAfterCapacityWait(t *testing
 }
 
 // TestDrainQueue_UnknownChildStateDefers: reading the failure as "terminated"
-// would recurse and silently flush every live entry behind it.
+// would recurse and silently flush every live entry behind it. The retry is
+// delayed, so the failing drain returns with the queue intact before recovery.
 func TestDrainQueue_UnknownChildStateDefers(t *testing.T) {
 	var flaky *flakyLinkStore
 
@@ -119,6 +120,13 @@ func TestDrainQueue_UnknownChildStateDefers(t *testing.T) {
 	assert.Equal(t, 3, h.queueLen(), "nothing is dropped and nothing recursed")
 	assert.Zero(t, h.mgr.runners.Len(), "no runner was created")
 	assert.NotEmpty(t, logs.FilterMessage("queued_child_state_unknown").All())
+
+	flaky.mu.Lock()
+	flaky.getLinkFailFrom = 0
+	flaky.mu.Unlock()
+	require.Eventually(t, func() bool {
+		return h.queueLen() < 3 || h.mgr.runners.Len() > 0
+	}, time.Second, 10*time.Millisecond, "the delayed retry must not wait for another slot release")
 }
 
 // TestChildTerminated_ReadErrorSurfaces: the mirrored form of the same defect —

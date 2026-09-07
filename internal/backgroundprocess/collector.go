@@ -48,10 +48,6 @@ func (c *collector) Write(p []byte) (int, error) {
 		}
 
 		c.written += int64(n)
-		if c.written >= c.quota {
-			c.overflow = true
-			c.onQuota()
-		}
 
 		return n, nil
 	}
@@ -98,4 +94,11 @@ func (c *collector) Size() int64 {
 	defer c.mu.Unlock()
 
 	return c.written
+}
+
+func (c *collector) overflowed() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	return c.overflow
 }

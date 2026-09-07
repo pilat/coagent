@@ -6,6 +6,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/pilat/coagent/internal/backgroundprocess"
 	"github.com/pilat/coagent/internal/controllerapi"
 	"github.com/pilat/coagent/internal/llmwire"
 	"github.com/pilat/coagent/internal/sessionevent"
@@ -86,6 +87,8 @@ func TestHarnessScenario_LiveStopChain(t *testing.T) {
 	})
 	require.NoError(t, err)
 	waitForScenarioSignal(t, entered, "model call")
+	service := installScenarioProcessService(t, h)
+	process := startScenarioProcess(t, service, root, root, "sleep 30")
 
 	require.NoError(t, h.mgr.SendToSession(h.ctx, root, "/stop"))
 	h.waitUntil("root stopped", func() bool {
@@ -93,6 +96,8 @@ func TestHarnessScenario_LiveStopChain(t *testing.T) {
 
 		return loadErr == nil && record.Status == sessionstore.SessionStatusStopped
 	})
+	stoppedProcess := waitScenarioProcessState(t, h, process.ID, backgroundprocess.StateCancelled)
+	require.Equal(t, "suppressed", stoppedProcess.DeliveryState)
 
 	controller := newChainController(t, h)
 	drainScenarioClaims(t, "stop_live_chain.json", controller)

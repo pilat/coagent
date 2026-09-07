@@ -135,7 +135,7 @@ func TestFinalizeChild_LinkReadErrorStopsShort(t *testing.T) {
 	ctx := logger.ToContext(h.ctx, zap.New(core))
 
 	h.flaky.failGetLink(1, h.childID)
-	h.mgr.finalizeChild(ctx, h.childID, false, false)
+	h.mgr.finalizeChild(ctx, h.childID)
 
 	assert.Zero(t, h.activation.attempts(), "nothing is written on an unreadable link")
 
@@ -161,7 +161,7 @@ func TestFinalizeChild_NoLinkIsSilent(t *testing.T) {
 	core, logs := observer.New(zap.DebugLevel)
 	ctx := logger.ToContext(h.ctx, zap.New(core))
 
-	h.mgr.finalizeChild(ctx, rec.ID, false, false)
+	h.mgr.finalizeChild(ctx, rec.ID)
 
 	assert.Zero(t, logs.Len(), "a root session's exit logs nothing")
 	assert.Empty(t, drainNotifications(sub))
@@ -176,7 +176,7 @@ func TestFinalizeChild_TerminalMarkRetries(t *testing.T) {
 	h.activation.failN = 2
 
 	start := time.Now()
-	h.mgr.finalizeChild(h.ctx, h.childID, false, false)
+	h.mgr.finalizeChild(h.ctx, h.childID)
 	elapsed := time.Since(start)
 
 	assert.Equal(t, 3, h.activation.attempts(), "two failures then a success")
@@ -207,7 +207,7 @@ func TestFinalizeChild_TerminalMarkExhausted(t *testing.T) {
 	core, logs := observer.New(zap.ErrorLevel)
 	ctx := logger.ToContext(h.ctx, zap.New(core))
 
-	h.mgr.finalizeChild(ctx, h.childID, false, false)
+	h.mgr.finalizeChild(ctx, h.childID)
 
 	assert.Equal(t, linkTerminalAttempts, h.activation.attempts())
 	assert.NotEmpty(t, logs.FilterMessage("mark_link_terminal").All())

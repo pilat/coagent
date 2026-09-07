@@ -75,10 +75,34 @@ func (t *outputTransport) closeSession(
 		}
 	}
 
+	if count, ok := nonnegativeInteger(claim.Attributes["cancelled_processes"]); ok {
+		message := fmt.Sprintf(
+			"Session %d killed. Cancelled background processes: %d",
+			claim.SessionID,
+			count,
+		)
+		if _, err := t.manager.sendMessage(ctx, message, nil, t.manager.serviceTopicID); err != nil {
+			return t.deliveryFailure(err)
+		}
+	}
+
 	t.manager.unregisterTopic(claim.SessionID)
 	t.manager.deleteWorkDir(claim.SessionID)
 
 	return managerdelivery.Result{}
+}
+
+func nonnegativeInteger(value any) (int64, bool) {
+	switch number := value.(type) {
+	case int:
+		return int64(number), number >= 0
+	case int64:
+		return number, number >= 0
+	case float64:
+		return int64(number), number >= 0 && number == float64(int64(number))
+	default:
+		return 0, false
+	}
 }
 
 func (t *outputTransport) ensureSessionTopic(

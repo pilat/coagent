@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"os/exec"
-	"strings"
 	"time"
 
 	"go.uber.org/zap"
@@ -21,10 +20,6 @@ const (
 	// foregroundGrace is how long a command runs inline before promotion.
 	foregroundGrace = 10 * time.Second
 
-	// foregroundJoinMargin covers terminalization commit after a
-	// sub-grace deadline expires in the foreground.
-	foregroundJoinMargin = 2 * time.Second
-
 	// defaultProcessDeadline is the model-facing absolute process deadline.
 	defaultProcessDeadline = 10 * time.Minute
 
@@ -35,67 +30,6 @@ const (
 	noOutput      = "(no output)"
 
 	metaKeyProcessID = "process_id"
-
-	bashDescription = `Executes a given bash command in a shell session with optional timeout.
-
-IMPORTANT: This tool is for terminal operations like git, npm, docker, build commands, etc. DO NOT use it for file operations (reading, writing, editing, searching, finding files) - use the dedicated tools for this instead.
-
-Avoid using Bash with find, grep, cat, head, tail, sed, awk, or echo commands, unless explicitly instructed. Instead, always prefer using the dedicated tools:
-- File search: Use Glob (NOT find or ls)
-- Content search: Use Grep (NOT grep or rg)
-- Read files: Use Read (NOT cat/head/tail)
-- Edit files: Use Edit (NOT sed/awk)
-- Write files: Use Write (NOT echo >/cat <<EOF)
-
-Command Execution:
-- Always quote file paths that contain spaces with double quotes (e.g., rm "path with spaces/file.txt")
-- The command argument is required
-- Both stdout and stderr are captured into one combined stream
-
-Parallel vs Sequential Commands:
-- If the commands are independent and can run in parallel, make multiple Bash tool calls in a single response
-- If the commands depend on each other and must run sequentially, use a single Bash call with '&&' to chain them together
-- Use ';' only when you need to run commands sequentially but don't care if earlier commands fail
-- DO NOT use newlines to separate commands (newlines are ok in quoted strings)
-- AVOID using 'cd <directory> && <command>'. Use the work_dir parameter to change directories instead
-
-Limits:
-- Output is truncated at 100KB inline; larger output stays in the reported output file
-- Foreground failures (nonzero exit, timeout, output overflow) are reported as errors
-
-Git Safety Protocol:
-- NEVER update the git config
-- NEVER run destructive/irreversible git commands (like push --force, hard reset, etc.) unless explicitly requested
-- NEVER skip hooks (--no-verify, --no-gpg-sign, etc.) unless explicitly requested
-- NEVER run force push to main/master, warn the user if they request it
-- Avoid git commit --amend. ONLY use --amend when ALL conditions are met:
-  (1) User explicitly requested amend, OR commit SUCCEEDED but pre-commit hook auto-modified files that need including
-  (2) HEAD commit was created by you in this conversation
-  (3) Commit has NOT been pushed to remote
-- CRITICAL: If commit FAILED or was REJECTED by hook, NEVER amend - fix the issue and create a NEW commit
-- CRITICAL: If you already pushed to remote, NEVER amend unless user explicitly requests it (requires force push)
-- NEVER commit changes unless the user explicitly asks you to
-- If there are no changes to commit, do not create an empty commit
-
-Pull Requests:
-- Use gh command via Bash tool for ALL GitHub-related tasks
-- When creating PRs, analyze ALL commits that will be included (not just the latest)
-- Return the PR URL when done so the user can see it
-
-Examples:
-- "git status"
-- "npm install"
-- "go build ./..."`
-
-	backgroundDescriptionSuffix = `
-
-Background Execution:
-- Long-running commands (builds, test suites, servers under 30 minutes) run automatically in the background after 10 seconds
-- Set "background": true to background immediately without the 10-second wait
-- A backgrounded command returns a process ID and an absolute output path; completion is delivered to you automatically and wakes this session - do NOT poll
-- If you need current output while working independently, read a small suffix of the output file with the tail tool
-- "timeout" is the absolute process deadline in milliseconds (default 600000, max 1800000); a deadline below 10000 expires in the foreground
-- Only finite commands are supported; a command reaching its deadline is killed as a complete process group`
 )
 
 var _ tool.Tool = (*bashTool)(nil)
@@ -111,7 +45,7 @@ type bashParams struct {
 type bashTool struct {
 	workDir string
 	runner  bashsandbox.Runner
-	process *backgroundprocess.Service
+	process backgroundprocess.Service
 	session int64
 	root    int64
 }
@@ -119,7 +53,7 @@ type bashTool struct {
 func newBashTool(
 	workDir string,
 	runner bashsandbox.Runner,
-	process *backgroundprocess.Service,
+	process backgroundprocess.Service,
 	sessionID, rootID int64,
 ) *bashTool {
 	return &bashTool{
@@ -193,18 +127,19 @@ func (t *bashTool) Execute(ctx context.Context, params json.RawMessage) (*tool.R
 }
 
 // processDeadline resolves the model-provided timeout: omitted/nonpositive
-// selects the default; values above the cap clamp to it.
+// selects the default; clamping happens on the millisecond value so an
+// overflow cannot wrap negative and bypass the cap.
 func processDeadline(ms int) time.Duration {
 	if ms <= 0 {
 		return defaultProcessDeadline
 	}
 
-	d := time.Duration(ms) * time.Millisecond
-	if d > maxProcessDeadline {
+	const capMs = int64(maxProcessDeadline / time.Millisecond)
+	if int64(ms) >= capMs {
 		return maxProcessDeadline
 	}
 
-	return d
+	return time.Duration(ms) * time.Millisecond
 }
 
 func (t *bashTool) run(
@@ -213,18 +148,22 @@ func (t *bashTool) run(
 	workDir string,
 	deadline time.Duration,
 ) (*tool.Result, error) {
+	start := time.Now()
+	foregroundOnly := deadline < foregroundGrace
+
+	if t.process == nil {
+		return t.runDirect(ctx, p, workDir, deadline)
+	}
+
+	// Explicit background requests advertise at spawn; automatic promotion
+	// starts unadvertised so a command finishing inside the grace never
+	// appears in status/progress, and only becomes visible at the boundary.
 	spec := backgroundprocess.Spec{
 		SessionID:     t.session,
 		RootSessionID: t.root,
 		ToolCallID:    tool.CallIDFromContext(ctx),
 		Deadline:      deadline,
-		Advertise:     p.Background,
-	}
-
-	start := time.Now()
-
-	if t.process == nil {
-		return t.runDirect(ctx, p, workDir, deadline)
+		Advertise:     p.Background && !foregroundOnly,
 	}
 
 	record, err := t.process.Start(ctx, spec, func(processCtx context.Context) (*exec.Cmd, error) {
@@ -241,234 +180,60 @@ func (t *bashTool) run(
 		return nil, fmt.Errorf("start process: %w", err)
 	}
 
-	// Foreground wait: a deadline shorter than the grace can only expire in
-	// the foreground, with a small margin for terminalization to commit; a
-	// normal command waits exactly the grace and prefers an available result
-	// at the boundary before advertising.
-	wait := deadline
-	if wait < foregroundGrace {
-		wait += foregroundJoinMargin
-	} else {
-		wait = foregroundGrace
+	if foregroundOnly {
+		return t.waitForegroundTerminal(ctx, record, p.Command)
 	}
 
-	if !p.Background {
-		if result, ok := t.waitForeground(ctx, record, start.Add(wait)); ok {
-			return result, nil
-		}
+	if p.Background {
+		return t.backgroundedResult(record), nil
 	}
 
-	return t.backgroundedResult(record), nil
+	return t.finishForegroundGrace(ctx, record, p.Command, start.Add(foregroundGrace))
 }
 
-// waitForeground polls the ledger until the grace expires; the completion
-// fact for the foreground path is produced here, not through the wake event.
-func (t *bashTool) waitForeground(
+func (t *bashTool) finishForegroundGrace(
 	ctx context.Context,
 	record backgroundprocess.Process,
+	command string,
 	until time.Time,
-) (*tool.Result, bool) {
-	for time.Now().Before(until) {
-		current, err := t.process.Store().GetProcess(ctx, record.ID)
-		if err != nil {
-			return nil, false
-		}
-
-		if current.State.Terminal() {
-			return t.foregroundResult(ctx, current), true
-		}
-
-		time.Sleep(25 * time.Millisecond)
-	}
-
-	current, err := t.process.Store().GetProcess(ctx, record.ID)
-	if err == nil && current.State.Terminal() {
-		return t.foregroundResult(ctx, current), true
-	}
-
-	return nil, false
-}
-
-func (t *bashTool) foregroundResult(ctx context.Context, record backgroundprocess.Process) *tool.Result {
-	title := t.title(record)
-
-	// Only terminal states reach this; the default covers the cancelled,
-	// interrupted, and drain-timeout outcomes. Running cannot be observed here
-	// because waitForeground gates on Terminal().
-	//nolint:exhaustive // Terminal states only; see comment above.
-	switch record.State {
-	case backgroundprocess.StateCompleted:
-		output := t.inlineOutput(ctx, record, false)
-
-		return &tool.Result{
-			Title:  title,
-			Output: output,
-			Metadata: map[string]any{
-				metaKeyProcessID: record.ID,
-				metaKeyExitCode:  *record.ExitCode,
-				metaKeyTimedOut:  false,
-				metaKeyTruncated: record.OutputSize > maxOutputSize,
-			},
-		}
-	case backgroundprocess.StateFailed:
-		output := t.inlineOutput(ctx, record, true)
-		if hint := t.failureHint(output); hint != "" {
-			output += "\n\n" + hint
-		}
-
-		return &tool.Result{
-			Title:   title,
-			Output:  output,
-			IsError: true,
-			Metadata: map[string]any{
-				metaKeyExitCode:  *record.ExitCode,
-				metaKeyTimedOut:  false,
-				metaKeyTruncated: record.OutputSize > maxOutputSize,
-			},
-		}
-	case backgroundprocess.StateTimedOut:
-		output := t.inlineOutput(ctx, record, true) +
-			"\n\n(Command timed out after " + record.Deadline.Sub(record.CreatedAt).String() + ")"
-
-		return &tool.Result{
-			Title:   title,
-			Output:  output,
-			IsError: true,
-			Metadata: map[string]any{
-				metaKeyExitCode:  -1,
-				metaKeyTimedOut:  true,
-				metaKeyTruncated: false,
-			},
-		}
-	case backgroundprocess.StateOutputLimitExceeded:
-		return &tool.Result{
-			Title: title,
-			Output: "Output exceeded the 100 MiB capture cap; the process group was killed." +
-				"\nFull output: " + record.OutputPath,
-			IsError: true,
-			Metadata: map[string]any{
-				metaKeyProcessID: record.ID,
-			},
-		}
-	default:
-		output := t.inlineOutput(ctx, record, true)
-
-		return &tool.Result{
-			Title:   title,
-			Output:  output + "\n\n(command terminated: " + string(record.State) + ")",
-			IsError: true,
-			Metadata: map[string]any{
-				metaKeyExitCode:  -1,
-				metaKeyTimedOut:  false,
-				metaKeyTruncated: false,
-			},
-		}
-	}
-}
-
-// inlineOutput renders a bounded preview from the output file. keepFile
-// preserves the file for a failed result's path reference; a successful
-// inline result removes the unadvertised candidate file.
-func (t *bashTool) inlineOutput(ctx context.Context, record backgroundprocess.Process, keepFile bool) string {
-	if text, ok := backgroundprocess.ExtractTail(record.OutputPath, 100000, maxOutputSize); ok {
-		if strings.TrimSpace(text) == "" {
-			return noOutput
-		}
-
-		return strings.TrimSuffix(text, "\n")
-	}
-
-	if keepFile {
-		return "(output unavailable)"
-	}
-
-	// The direct path owns no ledger row to clean up.
-	if t.process != nil {
-		_ = t.process.RemoveOutput(ctx, record.ID)
-	}
-
-	return "Output exceeded the inline limit (" + fmt.Sprintf("%.1f", float64(record.OutputSize)/(100*1024)) +
-		" KB); read a suffix of " + record.OutputPath + " with the tail tool"
-}
-
-// runDirect is the fallback execution path when no process service is
-// wired: the command runs foreground-only with no ledger and no wake.
-func (t *bashTool) runDirect(
-	ctx context.Context,
-	p bashParams,
-	workDir string,
-	deadline time.Duration,
 ) (*tool.Result, error) {
-	if p.Background {
-		return nil, errors.New("background mode is unavailable: no process service")
+	if result, ok := t.waitForeground(ctx, record, until, command); ok {
+		return result, nil
 	}
 
-	processCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), deadline)
-	defer cancel()
+	lifecycleCtx := context.WithoutCancel(ctx)
 
-	cmd, err := t.runner.ShellCommand(processCtx, p.Command, workDir)
+	advertised, err := t.process.Advertise(lifecycleCtx, record.ID)
 	if err != nil {
-		return nil, fmt.Errorf("create bash command: %w", err)
+		return nil, t.abortCandidate(lifecycleCtx, record,
+			fmt.Errorf("promote background process: %w", err))
 	}
 
-	output, runErr := cmd.CombinedOutput()
+	current, err := t.process.Store().GetProcess(lifecycleCtx, record.ID)
 
-	code := 0
-	state := backgroundprocess.StateCompleted
-
-	if runErr != nil {
-		state = backgroundprocess.StateFailed
-
-		var exitErr *exec.ExitError
-		if errors.As(runErr, &exitErr) {
-			code = exitErr.ExitCode()
-		} else {
-			code = -1
-		}
+	if err != nil && advertised {
+		return t.backgroundedResult(record), nil
 	}
 
-	if err := processCtx.Err(); err != nil && errors.Is(err, context.DeadlineExceeded) {
-		state = backgroundprocess.StateTimedOut
-		code = -1
+	if err != nil {
+		return nil, t.abortCandidate(lifecycleCtx, record,
+			fmt.Errorf("load promoted process: %w", err))
 	}
 
-	record := backgroundprocess.Process{
-		State:    state,
-		ExitCode: &code,
+	if !advertised && current.State.Terminal() {
+		return t.foregroundResult(ctx, current, command), nil
 	}
 
-	result := t.foregroundResult(ctx, record)
-	result.Output = string(output)
-
-	return result, nil
+	return t.backgroundedResult(current), nil
 }
 
-func (t *bashTool) title(record backgroundprocess.Process) string {
-	_ = record
+func (t *bashTool) abortCandidate(
+	ctx context.Context,
+	record backgroundprocess.Process,
+	cause error,
+) error {
+	_, cancelErr := t.process.CancelProcess(ctx, record.ID, backgroundprocess.IntentDaemonShutdown)
+	removeErr := t.process.RemoveOutput(ctx, record.ID)
 
-	return "command"
-}
-
-// failureHint appends the sandbox self-diagnosis hint to a failed foreground
-// result when the observed output looks like a sandbox write denial.
-func (t *bashTool) failureHint(output string) string {
-	if hint := sandboxHint(output, t.runner.WritableRoots(), t.runner.ReadScope(), t.workDir); hint != "" {
-		return hint
-	}
-
-	return ""
-}
-
-// backgroundedResult is the immediate response for an advertised process.
-func (t *bashTool) backgroundedResult(record backgroundprocess.Process) *tool.Result {
-	return &tool.Result{
-		Title: "background process started",
-		Output: "Process " + record.ID + " runs in the background." +
-			"\nOutput file: " + record.OutputPath +
-			"\nCompletion will be delivered automatically and will wake this session; do not poll." +
-			"\nUse the tail tool on the output file if you need current output for independent work.",
-		Metadata: map[string]any{
-			metaKeyProcessID: record.ID,
-		},
-	}
+	return errors.Join(cause, cancelErr, removeErr)
 }

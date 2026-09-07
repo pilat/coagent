@@ -4,6 +4,7 @@ import (
 	"context"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -145,4 +146,26 @@ func TestReconcileLatestReadinessPublishesIdleAfterTeardown(t *testing.T) {
 
 	notification := requireManagerNotification(t, notifications)
 	assert.Equal(t, controllerapi.StateIdle, notification.Notification.Status)
+}
+
+func TestOwnerlessIdleIsSuppressedByReplacementRunner(t *testing.T) {
+	mgr, _, projects := newTestManager(t)
+	defer mgr.Shutdown(time.Second)
+
+	ctx := context.Background()
+	projectID := testProject(t, projects, "/tmp/replacement-idle")
+	record, err := mgr.sessionStore.CreateSession(ctx, projectID, "fake-model", "", nil)
+	require.NoError(t, err)
+	notifications := mgr.PubSub().SubscribeAll()
+
+	replacement := newRunner(func() {}, "", projectID, admission.Parent, 0, false, nil)
+	_, registered := mgr.runners.Register(record.ID, replacement)
+	require.True(t, registered)
+
+	mgr.publishOwnerlessIdleAfterTeardown(ctx, record.ID, true, false, false, false)
+	requireNoNotification(t, notifications)
+
+	_, deleted := mgr.runners.Delete(record.ID)
+	require.True(t, deleted)
+	replacement.Complete()
 }

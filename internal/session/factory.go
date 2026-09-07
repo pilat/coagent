@@ -96,7 +96,7 @@ type factory struct {
 	marketplaceCache loader.MarketplaceCache
 	provider         shellenv.Provider
 	newLLMClient     func(cfg *config.Config) (llm.Client, error)
-	processSvc       *backgroundprocess.Service
+	processSvc       backgroundprocess.Service
 }
 
 // FactoryOption customizes a factory (test seams).
@@ -110,14 +110,14 @@ func WithLLMClientFactory(fn func(cfg *config.Config) (llm.Client, error)) Facto
 
 // WithProcessService injects the daemon-owned background-process lifecycle
 // service. When nil, the Bash tool starts no background processes.
-func WithProcessService(service *backgroundprocess.Service) FactoryOption {
+func WithProcessService(service backgroundprocess.Service) FactoryOption {
 	return func(f *factory) { f.processSvc = service }
 }
 
 // WithFactoryProcessService re-wraps an already-built Factory with the
 // daemon-owned process service. Used when the daemon constructs the service
 // after the base factory.
-func WithFactoryProcessService(base Factory, service *backgroundprocess.Service) Factory {
+func WithFactoryProcessService(base Factory, service backgroundprocess.Service) Factory {
 	if f, ok := base.(*factory); ok {
 		clone := *f
 		clone.processSvc = service

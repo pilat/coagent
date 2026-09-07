@@ -80,7 +80,7 @@ func TestCompleteExplicitStopAtomic(t *testing.T) {
 		VALUES (?, 'armed', 1, datetime('now'), 0, 1)`, session.ID)
 	require.NoError(t, err)
 
-	commit, err := store.CompleteExplicitStop(ctx, session.ID, input.ID)
+	commit, err := store.CompleteExplicitStop(ctx, session.ID, input.ID, 2)
 	require.NoError(t, err)
 	require.NotZero(t, commit.OutputID)
 
@@ -99,12 +99,12 @@ func TestCompleteExplicitStopAtomic(t *testing.T) {
 	require.NoError(t, db.QueryRow(`SELECT type, content, COALESCE(source_key, ''), releases_input
 		FROM session_outbox WHERE id = ?`, commit.OutputID).Scan(&kind, &content, &sourceKey, &releases))
 	assert.Equal(t, "message_persistent", kind)
-	assert.Equal(t, "⏸️ Session stopped", content)
+	assert.Equal(t, "⏸️ Session stopped\nCancelled background processes: 2", content)
 	assert.Equal(t, "input:"+strconv.FormatInt(input.ID, 10)+":stop:completed", sourceKey)
 	assert.True(t, releases)
 
 	// Idempotent replay returns the original row, not a duplicate.
-	replay, err := store.CompleteExplicitStop(ctx, session.ID, input.ID)
+	replay, err := store.CompleteExplicitStop(ctx, session.ID, input.ID, 9)
 	require.NoError(t, err)
 	assert.Equal(t, commit.OutputID, replay.OutputID)
 
@@ -120,7 +120,7 @@ func TestCompleteExplicitStopRejectsActiveRoot(t *testing.T) {
 
 	session := seededOwnedSession(ctx, t, store, projectID)
 
-	_, err := store.CompleteExplicitStop(ctx, session.ID, 1)
+	_, err := store.CompleteExplicitStop(ctx, session.ID, 1, 0)
 	require.ErrorIs(t, err, ErrStopNotStopping)
 
 	var status string
@@ -146,7 +146,7 @@ func TestSelectInterruptedExplicitStops(t *testing.T) {
 	require.NoError(t, err)
 	_, err = db.Exec(`UPDATE sessions SET status = 'stopped' WHERE id = ?`, session.ID)
 	require.NoError(t, err)
-	_, err = store.CompleteExplicitStop(ctx, session.ID, old.ID)
+	_, err = store.CompleteExplicitStop(ctx, session.ID, old.ID, 0)
 	require.NoError(t, err)
 
 	// A legacy interrupted stop: only the old :result row exists.
@@ -186,7 +186,7 @@ func TestOutputReadinessOnlyNewestReleasingRow(t *testing.T) {
 	require.NoError(t, err)
 	startCommit, err := store.BeginLifecycleInput(ctx, input.ID, "stop", "⏳ Stopping…")
 	require.NoError(t, err)
-	stopCommit, err := store.CompleteExplicitStop(ctx, session.ID, input.ID)
+	stopCommit, err := store.CompleteExplicitStop(ctx, session.ID, input.ID, 0)
 	require.NoError(t, err)
 
 	// Deliver the old final, the stop start, then reach the completion.

@@ -1,0 +1,226 @@
+package backgroundprocess
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"time"
+)
+
+func (s *svc) reserve(sessionID int64) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.closed {
+		return ErrFenced
+	}
+
+	if s.live[sessionID] >= LiveProcessLimit {
+		return ErrSlotLimit
+	}
+
+	s.live[sessionID]++
+
+	return nil
+}
+
+func (s *svc) closeAdmission() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.closed = true
+}
+
+func (s *svc) admissionClosed() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	return s.closed
+}
+
+func (s *svc) waitForNoLive(ctx context.Context) error {
+	for {
+		s.mu.Lock()
+
+		live := 0
+		for _, count := range s.live {
+			live += count
+		}
+		s.mu.Unlock()
+
+		if live == 0 {
+			return nil
+		}
+
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("join %d admitted processes: %w", live, ctx.Err())
+		case <-time.After(20 * time.Millisecond):
+		}
+	}
+}
+
+func (s *svc) release(sessionID int64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.live[sessionID] > 0 {
+		s.live[sessionID]--
+	}
+}
+
+func (s *svc) liveCount(sessionID int64) int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	return s.live[sessionID]
+}
+
+func (s *svc) track(process Process, cancel context.CancelFunc) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.cancels[process.ID] = cancel
+	s.liveRecords[process.ID] = process
+}
+
+func (s *svc) untrack(processID string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	delete(s.cancels, processID)
+	delete(s.liveRecords, processID)
+	delete(s.fallbackIntents, processID)
+}
+
+func (s *svc) releaseTracked(processID string, sessionID int64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.cancels[processID] == nil {
+		return
+	}
+
+	delete(s.cancels, processID)
+	delete(s.liveRecords, processID)
+	delete(s.fallbackIntents, processID)
+
+	if s.live[sessionID] > 0 {
+		s.live[sessionID]--
+	}
+}
+
+func (s *svc) trackedCancel(processID string) context.CancelFunc {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	return s.cancels[processID]
+}
+
+func (s *svc) recordFallbackIntent(processID string, intent HostIntent) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.cancels[processID] == nil {
+		return
+	}
+
+	if s.fallbackIntents[processID] == IntentNone {
+		s.fallbackIntents[processID] = intent
+	}
+}
+
+func (s *svc) trackedCancelWithFallback(
+	processID string,
+	intent HostIntent,
+) context.CancelFunc {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	cancel := s.cancels[processID]
+	if cancel != nil && s.fallbackIntents[processID] == IntentNone {
+		s.fallbackIntents[processID] = intent
+	}
+
+	return cancel
+}
+
+func (s *svc) finalizeTracked(
+	ctx context.Context,
+	launched *launchResult,
+	natural State,
+	exitCode *int,
+) (Process, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	processID := launched.record.ID
+	fallbackIntent := s.fallbackIntents[processID]
+
+	var finalized Process
+	var won bool
+	var err error
+
+	if fallbackIntent != IntentNone {
+		finalized, won, err = s.store.FinalizeWithIntent(
+			ctx, processID, fallbackIntent, launched.collector.Size(),
+		)
+	} else {
+		finalized, won, err = s.store.Finalize(
+			ctx, processID, natural, exitCode, launched.collector.Size(),
+		)
+	}
+
+	delete(s.cancels, processID)
+	delete(s.liveRecords, processID)
+	delete(s.fallbackIntents, processID)
+
+	if s.live[launched.record.SessionID] > 0 {
+		s.live[launched.record.SessionID]--
+	}
+
+	if err != nil {
+		err = fmt.Errorf("finalize tracked process: %w", err)
+	}
+
+	return finalized, won, err
+}
+
+func (s *svc) cancelTrackedMatching(
+	ctx context.Context,
+	intent HostIntent,
+	matches func(Process) bool,
+) (int, error) {
+	s.mu.Lock()
+
+	type tracked struct {
+		id     string
+		cancel context.CancelFunc
+	}
+
+	trackedProcesses := make([]tracked, 0, len(s.cancels))
+	for processID, cancel := range s.cancels {
+		if !matches(s.liveRecords[processID]) {
+			continue
+		}
+
+		if s.fallbackIntents[processID] == IntentNone {
+			s.fallbackIntents[processID] = intent
+		}
+
+		trackedProcesses = append(trackedProcesses, tracked{id: processID, cancel: cancel})
+	}
+	s.mu.Unlock()
+
+	var joinErr error
+
+	for _, process := range trackedProcesses {
+		process.cancel()
+	}
+
+	for _, process := range trackedProcesses {
+		joinErr = errors.Join(joinErr, s.waitForUntracked(ctx, process.id))
+	}
+
+	return len(trackedProcesses), joinErr
+}

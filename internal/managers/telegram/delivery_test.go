@@ -64,6 +64,68 @@ func TestOutputTransport_TreatsMissingEditTargetAsNewMessage(t *testing.T) {
 	assert.Equal(t, []string{"456"}, result.MessageIDs)
 }
 
+func TestOutputTransport_RendersProcessCancellationCountBeforeClosingSession(t *testing.T) {
+	var calls []telegramHarnessCall
+	manager := newTelegramHarnessManager(t, &fakeController{}, &calls)
+	manager.serviceTopicID = 6001
+	manager.registerTopic(42, harnessTopicID)
+	transport := &outputTransport{manager: manager}
+
+	result := transport.Deliver(t.Context(), outputItem(&controllerapi.OutputClaimData{
+		SessionID: 42,
+		Type:      controllerapi.OutputSessionClosed,
+		Attributes: map[string]any{
+			"cancelled_processes": float64(3),
+		},
+	}))
+	require.Empty(t, result.Error)
+	require.Len(t, calls, 2)
+	assert.Equal(t, "deleteForumTopic", calls[0].Method)
+	assert.Equal(t, telegramHarnessCall{
+		Method: "sendMessage", ChatID: harnessChatID, ThreadID: 6001,
+		Text: "Session 42 killed. Cancelled background processes: 3", ParseMode: "HTML",
+	}, calls[1])
+}
+
+func TestOutputTransport_RetryDoesNotDuplicateProcessCancellationCount(t *testing.T) {
+	var calls []telegramHarnessCall
+	manager := newTelegramHarnessManager(t, &fakeController{}, &calls)
+	manager.serviceTopicID = 6001
+	manager.registerTopic(42, harnessTopicID)
+
+	record := telegramHarnessRecorder(t, &calls)
+	failDelete := true
+	manager.httpClient = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		response, err := record(req)
+		if filepath.Base(req.URL.Path) == "deleteForumTopic" && failDelete {
+			failDelete = false
+
+			return harnessResponse(req,
+				`{"ok":false,"error_code":500,"description":"temporary delete failure"}`), nil
+		}
+
+		return response, err
+	})}
+	transport := &outputTransport{manager: manager}
+	claim := &controllerapi.OutputClaimData{
+		SessionID: 42, Type: controllerapi.OutputSessionClosed,
+		Attributes: map[string]any{"cancelled_processes": float64(3)},
+	}
+
+	first := transport.Deliver(t.Context(), outputItem(claim))
+	require.NotEmpty(t, first.Error)
+	second := transport.Deliver(t.Context(), outputItem(claim))
+	require.Empty(t, second.Error)
+
+	sends := 0
+	for _, call := range calls {
+		if call.Method == "sendMessage" {
+			sends++
+		}
+	}
+	assert.Equal(t, 1, sends)
+}
+
 // A shorter replaceable edits the common prefix and deletes every surplus
 // chunk, so the receipt shrinks with the content.
 func TestOutputTransport_ShorterReplacementDeletesSurplusChunks(t *testing.T) {

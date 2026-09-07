@@ -88,7 +88,8 @@ func TestBashTool_SandboxHintOnDeniedWrite(t *testing.T) {
 	params, err := json.Marshal(bashParams{Command: "touch " + quoteShell(target)})
 	require.NoError(t, err)
 
-	result, err := newTestBashToolRunner(t, workDir, runner).Execute(tool.WithCallID(context.Background(), "call_hint"), params)
+	result, err := newTestBashToolRunner(t, workDir, runner).
+		Execute(tool.WithCallID(context.Background(), "call_hint"), params)
 	require.NoError(t, err)
 
 	assert.NotEqual(t, 0, result.Metadata[metaKeyExitCode])

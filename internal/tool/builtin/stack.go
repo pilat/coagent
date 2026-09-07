@@ -36,8 +36,8 @@ type StackConfig struct {
 	TodoReplacement   TodoReplacement
 	Provider          shellenv.Provider // per-cwd shell activation; may be nil (fallback)
 	ShieldsUp         bool
-	ProcessService    *backgroundprocess.Service // session-bound process lifecycle; may be nil
-	OutputDirOverride string                     // test-only output root override; empty = default
+	ProcessService    backgroundprocess.Service // session-bound process lifecycle; may be nil
+	OutputDirOverride string                    // test-only output root override; empty = default
 }
 
 // Stack is a session-scoped local tool set. It owns the LSP manager and MCP access
@@ -166,7 +166,7 @@ func registerCoreTools(
 	bashRunner bashsandbox.Runner,
 	fileMutator fileMutator,
 	unified *config.UnifiedConfig,
-	processService *backgroundprocess.Service,
+	processService backgroundprocess.Service,
 	sessionID, rootID int64,
 ) {
 	registry.Register(newReadToolWithAccess(workDir, access))

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"go.uber.org/zap"
 
@@ -11,6 +12,8 @@ import (
 	"github.com/pilat/coagent/internal/logger"
 	"github.com/pilat/coagent/internal/subagent"
 )
+
+const childQueueRetryDelay = 100 * time.Millisecond
 
 // enqueueChild parks a background child that could not be admitted, preserving
 // its initial messages so the prompt survives until a slot frees.
@@ -28,6 +31,19 @@ func (s *svc) enqueueChild(
 	})
 
 	logger.Ctx(ctx).Named("daemon.admission").Info("subagent_queued", zap.Int64("child", sessionID))
+}
+
+func (s *svc) enqueueCapacityBlockedChild(
+	ctx context.Context,
+	sessionID, parentID int64,
+	workDir string,
+	projectID int64,
+) {
+	s.enqueueChild(ctx, sessionID, parentID, workDir, projectID)
+
+	if s.admit.CanAdmitChild(parentID) {
+		go s.drainQueue(context.WithoutCancel(ctx))
+	}
 }
 
 // drainQueue starts one queued child whose parent now has capacity. Called after
@@ -50,6 +66,7 @@ func (s *svc) drainQueue(ctx context.Context) {
 		logger.Ctx(ctx).Named("daemon.admission").
 			Error("queued_child_state_unknown", zap.Int64("child", next.sessionID), zap.Error(err))
 		s.enqueueChild(ctx, next.sessionID, next.parentID, next.workDir, next.projectID)
+		s.scheduleChildQueueRetry(ctx)
 
 		return
 	}
@@ -74,6 +91,42 @@ func (s *svc) drainQueue(ctx context.Context) {
 		logger.Ctx(ctx).Named("daemon.admission").
 			Error("queued_child_start_failed", zap.Int64("child", next.sessionID), zap.Error(err))
 	}
+}
+
+func (s *svc) scheduleChildQueueRetry(ctx context.Context) {
+	s.queueRetryMu.Lock()
+	if s.shuttingDown.Load() || s.queueRetryPending {
+		s.queueRetryMu.Unlock()
+
+		return
+	}
+
+	s.queueRetryPending = true
+	s.workerWG.Add(1)
+	s.queueRetryMu.Unlock()
+
+	go func() {
+		defer s.workerWG.Done()
+
+		retryCtx, cancel := s.newDaemonWorkerContext(ctx)
+		defer cancel()
+
+		timer := time.NewTimer(childQueueRetryDelay)
+		defer timer.Stop()
+
+		select {
+		case <-timer.C:
+		case <-retryCtx.Done():
+		}
+
+		s.queueRetryMu.Lock()
+		s.queueRetryPending = false
+		s.queueRetryMu.Unlock()
+
+		if retryCtx.Err() == nil && !s.shuttingDown.Load() {
+			s.drainQueue(retryCtx)
+		}
+	}()
 }
 
 // childTerminated reports whether a queued child was killed/terminalized before it

@@ -170,24 +170,29 @@ func hasReplacementRow(
 
 func insertClosedOutput(ctx context.Context, q interface {
 	ExecContext(context.Context, string, ...any) (sql.Result, error)
-}, sessionID int64, owner string, now time.Time,
+}, sessionID int64, owner string, now time.Time, cancelledProcesses int,
 ) (int64, error) {
-	attributes, err := json.Marshal(map[string]any{managerIDAttribute: owner, "reason": killedReason})
+	producer := map[string]any{"reason": killedReason, "cancelled_processes": cancelledProcesses}
+
+	attributes, err := json.Marshal(map[string]any{
+		managerIDAttribute: owner, "reason": killedReason, "cancelled_processes": cancelledProcesses,
+	})
 	if err != nil {
 		return 0, fmt.Errorf("marshal closed output attributes: %w", err)
 	}
 
 	key := fmt.Sprintf("session:%d:closed", sessionID)
+	content := fmt.Sprintf("Session killed. Cancelled background processes: %d", cancelledProcesses)
 
 	fingerprint := outputFingerprintWithRelease(
-		OutputSessionClosed, "", sessionID, map[string]any{"reason": killedReason}, true,
+		OutputSessionClosed, content, sessionID, producer, true,
 	)
 
 	result, err := q.ExecContext(ctx, `
 		INSERT INTO session_outbox
 			(session_id, type, content, attributes, source_key, fingerprint, created_at, releases_input)
-		VALUES (?, ?, '', ?, ?, ?, ?, 1)`,
-		sessionID, OutputSessionClosed, string(attributes), key, fingerprint, now)
+		VALUES (?, ?, ?, ?, ?, ?, ?, 1)`,
+		sessionID, OutputSessionClosed, content, string(attributes), key, fingerprint, now)
 	if err != nil {
 		return 0, fmt.Errorf("insert session closed output: %w", err)
 	}
@@ -257,7 +262,11 @@ func (s *store) ResolveReplacement(ctx context.Context, sessionID int64, manager
 
 // MarkSessionKilledWithOutput omits a close row for a terminating old root;
 // clear transfers that manager surface to its replacement.
-func (s *store) MarkSessionKilledWithOutput(ctx context.Context, sessionID int64) (*OutputCommit, error) {
+func (s *store) MarkSessionKilledWithOutput(
+	ctx context.Context,
+	sessionID int64,
+	cancelledProcesses int,
+) (*OutputCommit, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, fmt.Errorf("begin killed output: %w", err)
@@ -307,7 +316,7 @@ func (s *store) MarkSessionKilledWithOutput(ctx context.Context, sessionID int64
 		return nil, nil
 	}
 
-	outputID, err := insertClosedOutput(ctx, tx, sessionID, owner, now)
+	outputID, err := insertClosedOutput(ctx, tx, sessionID, owner, now, cancelledProcesses)
 	if err != nil {
 		return nil, err
 	}

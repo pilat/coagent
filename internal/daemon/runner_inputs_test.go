@@ -9,7 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/pilat/coagent/internal/admission"
-	"github.com/pilat/coagent/internal/controllerapi"
+	"github.com/pilat/coagent/internal/backgroundprocess"
 	"github.com/pilat/coagent/internal/session"
 	"github.com/pilat/coagent/internal/sessionevent"
 	"github.com/pilat/coagent/internal/sessionlifecycle"
@@ -57,6 +57,10 @@ func TestSessionInputVariantsValidateTheirOwnIdentity(t *testing.T) {
 		{name: "empty tick", input: scheduleTickInput{}},
 		{name: "fresh task", input: freshScheduleInput{DeliveryID: "d2", Prompt: "work"}, valid: true},
 		{name: "empty fresh task", input: freshScheduleInput{}},
+		{name: "process completion", input: processCompletionInput{Completion: backgroundprocess.Completion{
+			ProcessID: "bgp_1", SessionID: 2, RootID: 1,
+		}}, valid: true},
+		{name: "process completion without identity", input: processCompletionInput{}},
 	}
 
 	for _, tt := range tests {
@@ -70,6 +74,22 @@ func TestSessionInputVariantsValidateTheirOwnIdentity(t *testing.T) {
 			require.Error(t, err)
 		})
 	}
+}
+
+func TestValidateRunnerStartDoesNotReviveTerminalSubagentForProcessCompletion(t *testing.T) {
+	t.Parallel()
+
+	record := &sessionstore.SessionRecord{
+		ID: 2, ParentID: 1, RootID: 1, Status: sessionstore.SessionStatusCompleted,
+	}
+	inputs := []queuedSessionInput{asyncSessionInput{value: processCompletionInput{
+		Completion: backgroundprocess.Completion{ProcessID: "bgp_1", SessionID: 2, RootID: 1},
+	}}}
+
+	require.ErrorContains(t, validateRunnerStart(record, inputs, false), "process completion remains owed")
+	require.NoError(t, validateRunnerStart(&sessionstore.SessionRecord{
+		ID: 1, Status: sessionstore.SessionStatusCompleted,
+	}, inputs, false), "a completed root may be revived by a process event")
 }
 
 func newInputsRunner(pid int64, inputs []queuedSessionInput) runner {
@@ -100,12 +120,14 @@ func TestRunSessionIteration_InjectionFailureAbortsRun(t *testing.T) {
 	var notes []sessionevent.Notification
 
 	announced := true
+	publishIdle := false
 	cont, hadInput := mgr.runSessionIteration(
 		ctx,
 		rec.ID,
 		rs,
 		func(n sessionevent.Notification) { notes = append(notes, n) },
 		&announced,
+		&publishIdle,
 	)
 
 	assert.False(t, cont, "the loop must not continue")
@@ -118,11 +140,10 @@ func TestRunSessionIteration_InjectionFailureAbortsRun(t *testing.T) {
 	assert.False(t, ran, "the session never entered its loop")
 	assert.True(t, closed, "the created session is released")
 
-	require.Len(t, notes, 2)
+	require.Len(t, notes, 1)
 	assert.Equal(t, sessionevent.NotifyMessage, notes[0].Type)
 	assert.Contains(t, notes[0].Message, errInjectDown.Error())
-	assert.Equal(t, sessionevent.NotifyStateChanged, notes[1].Type)
-	assert.Equal(t, controllerapi.StateIdle, notes[1].Status)
+	assert.True(t, publishIdle, "idle is published only after runner teardown")
 
 	input, err := mgr.inboxStore.PeekPending(ctx, rec.ID)
 	require.NoError(t, err)

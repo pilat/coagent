@@ -3,6 +3,7 @@ package backgroundprocess
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -19,19 +20,34 @@ type store struct {
 }
 
 // Store owns ordinary durable background-process ledger access.
-type Store interface {
+type Store interface { //nolint:interfacebloat // One process row owns lifecycle and delivery transitions.
 	InsertProcess(ctx context.Context, process Process) error
 	GetProcess(ctx context.Context, id string) (Process, error)
 	ListRunning(ctx context.Context) ([]Process, error)
 	ListRunningAdvertised(ctx context.Context) ([]Process, error)
 	ListRunningByRoot(ctx context.Context, rootSessionID int64) ([]Process, error)
+	ListRunningBySessions(ctx context.Context, sessionIDs []int64) ([]Process, error)
 	RecordIntent(ctx context.Context, id string, intent HostIntent) (bool, error)
-	Finalize(ctx context.Context, id string, natural State, exitCode *int) (Process, bool, error)
-	ClaimDelivery(ctx context.Context, id string, targetSessionID int64) (bool, error)
+	Advertise(ctx context.Context, id string, at time.Time) (bool, error)
+	Finalize(ctx context.Context, id string, natural State, exitCode *int, outputSize int64) (Process, bool, error)
+	FinalizeWithIntent(
+		ctx context.Context,
+		id string,
+		intent HostIntent,
+		outputSize int64,
+	) (Process, bool, error)
+	ClaimDelivery(ctx context.Context, id string) (target int64, won bool, err error)
 	MarkDelivered(ctx context.Context, id string) (bool, error)
 	MarkSuppressed(ctx context.Context, id string) (bool, error)
 	UpdateOutputSize(ctx context.Context, id string, size int64) error
 	ListUndelivered(ctx context.Context) ([]Process, error)
+	ListUndeliveredForTarget(ctx context.Context, targetSessionID int64) ([]Process, error)
+	CountTerminalByIntentSince(
+		ctx context.Context,
+		rootSessionID int64,
+		intent HostIntent,
+		since time.Time,
+	) (int, error)
 }
 
 // NewStore returns the SQL-backed process ledger.
@@ -98,6 +114,18 @@ func (s *store) ListRunningByRoot(ctx context.Context, rootSessionID int64) ([]P
 	)
 }
 
+func (s *store) ListRunningBySessions(ctx context.Context, sessionIDs []int64) ([]Process, error) {
+	encoded, err := json.Marshal(sessionIDs)
+	if err != nil {
+		return nil, fmt.Errorf("encode process owner sessions: %w", err)
+	}
+
+	return s.list(ctx,
+		`SELECT `+processColumns+` FROM background_processes
+		 WHERE session_id IN (SELECT value FROM json_each(?)) AND state = 'running'`, encoded,
+	)
+}
+
 // RecordIntent durably records the first terminal cause. It fails only when
 // the process already left the running state; an existing intent is kept.
 func (s *store) RecordIntent(ctx context.Context, id string, intent HostIntent) (bool, error) {
@@ -122,6 +150,27 @@ func (s *store) RecordIntent(ctx context.Context, id string, intent HostIntent) 
 	return rows == 1, nil
 }
 
+// Advertise promotes a still-running unadvertised candidate at the
+// foreground-grace boundary. won=false means the process already
+// terminalized; the foreground result then wins over background promotion.
+func (s *store) Advertise(ctx context.Context, id string, at time.Time) (bool, error) {
+	res, err := s.db.ExecContext(ctx, `
+		UPDATE background_processes SET advertised_at = ?
+		WHERE id = ? AND advertised_at IS NULL AND state = 'running'`,
+		at, id,
+	)
+	if err != nil {
+		return false, fmt.Errorf("advertise process: %w", err)
+	}
+
+	rows, err := res.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("advertise process: %w", err)
+	}
+
+	return rows == 1, nil
+}
+
 // Finalize terminalizes the process with first-intent precedence: a recorded
 // host intent decides the outcome, natural exit wins only without one. The
 // losing caller re-reads the winning row. Returns won=false when already
@@ -131,6 +180,42 @@ func (s *store) Finalize(
 	id string,
 	natural State,
 	exitCode *int,
+	outputSize int64,
+) (Process, bool, error) {
+	return s.finalize(ctx, id, natural, exitCode, outputSize, IntentNone)
+}
+
+func (s *store) FinalizeWithIntent(
+	ctx context.Context,
+	id string,
+	intent HostIntent,
+	outputSize int64,
+) (Process, bool, error) {
+	if intent == IntentNone {
+		return Process{}, false, errors.New("finalize with intent: empty intent")
+	}
+
+	return s.finalize(ctx, id, IntentToState(intent), nil, outputSize, intent)
+}
+
+func (s *store) UpdateOutputSize(ctx context.Context, id string, size int64) error {
+	_, err := s.db.ExecContext(ctx,
+		`UPDATE background_processes SET output_size = ? WHERE id = ?`, size, id,
+	)
+	if err != nil {
+		return fmt.Errorf("update process output size: %w", err)
+	}
+
+	return nil
+}
+
+func (s *store) finalize(
+	ctx context.Context,
+	id string,
+	natural State,
+	exitCode *int,
+	outputSize int64,
+	fallbackIntent HostIntent,
 ) (Process, bool, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -150,7 +235,9 @@ func (s *store) Finalize(
 	}
 
 	if state != string(StateRunning) {
-		winner, err := s.GetProcess(ctx, id)
+		winner, err := scanProcess(tx.QueryRowContext(ctx,
+			`SELECT `+processColumns+` FROM background_processes WHERE id = ?`, id,
+		))
 		if err != nil {
 			return Process{}, false, err
 		}
@@ -159,41 +246,31 @@ func (s *store) Finalize(
 	}
 
 	outcome := natural
+	persistedFallback := IntentNone
+
 	if HostIntent(intent) != IntentNone {
 		outcome = IntentToState(HostIntent(intent))
+	} else if fallbackIntent != IntentNone {
+		outcome = IntentToState(fallbackIntent)
+		persistedFallback = fallbackIntent
 	}
 
-	now := time.Now().UTC()
-
-	res, err := tx.ExecContext(ctx, `
-		UPDATE background_processes
-		SET state = ?, exit_code = COALESCE(?, exit_code), finished_at = ?
-		WHERE id = ? AND state = 'running'`,
-		string(outcome), exitCode, now, id,
+	winner, won, err := s.finalizeRunning(
+		ctx, tx, id, outcome, exitCode, outputSize, persistedFallback,
 	)
 	if err != nil {
-		return Process{}, false, fmt.Errorf("finalize process: %w", err)
+		return Process{}, false, err
 	}
 
-	rows, err := res.RowsAffected()
-	if err != nil {
-		return Process{}, false, fmt.Errorf("finalize process: %w", err)
-	}
+	if !won {
+		_ = tx.Rollback()
 
-	if rows != 1 {
-		winner, err := s.GetProcess(ctx, id)
+		latest, err := s.GetProcess(ctx, id)
 		if err != nil {
 			return Process{}, false, err
 		}
 
-		return winner, false, nil
-	}
-
-	winner, err := scanProcess(tx.QueryRowContext(ctx,
-		`SELECT `+processColumns+` FROM background_processes WHERE id = ?`, id,
-	))
-	if err != nil {
-		return Process{}, false, fmt.Errorf("finalize process: %w", err)
+		return latest, false, nil
 	}
 
 	if err := tx.Commit(); err != nil {
@@ -201,152 +278,4 @@ func (s *store) Finalize(
 	}
 
 	return winner, true, nil
-}
-
-func (s *store) ClaimDelivery(ctx context.Context, id string, targetSessionID int64) (bool, error) {
-	return s.claim(ctx, id, targetSessionID, false)
-}
-
-func (s *store) MarkDelivered(ctx context.Context, id string) (bool, error) {
-	return s.completeDelivery(ctx, id, "delivered")
-}
-
-func (s *store) MarkSuppressed(ctx context.Context, id string) (bool, error) {
-	return s.completeDelivery(ctx, id, "suppressed")
-}
-
-func (s *store) UpdateOutputSize(ctx context.Context, id string, size int64) error {
-	_, err := s.db.ExecContext(ctx,
-		`UPDATE background_processes SET output_size = ? WHERE id = ?`, size, id,
-	)
-	if err != nil {
-		return fmt.Errorf("update process output size: %w", err)
-	}
-
-	return nil
-}
-
-// ListUndelivered returns terminal records whose completion was claimed but
-// never confirmed delivered, plus terminal records still pending. Startup
-// recovery re-routes them exactly once.
-func (s *store) ListUndelivered(ctx context.Context) ([]Process, error) {
-	return s.list(ctx,
-		`SELECT `+processColumns+` FROM background_processes
-		 WHERE state <> 'running'
-		   AND delivery_state IN ('pending', 'claimed')
-		   AND advertised_at IS NOT NULL`,
-	)
-}
-
-func (s *store) claim(
-	ctx context.Context,
-	id string,
-	targetSessionID int64,
-	_ bool,
-) (bool, error) {
-	res, err := s.db.ExecContext(ctx, `
-		UPDATE background_processes
-		SET delivery_state = 'claimed', delivery_target_session_id = ?
-		WHERE id = ? AND delivery_state = 'pending'`,
-		targetSessionID, id,
-	)
-	if err != nil {
-		return false, fmt.Errorf("claim process delivery: %w", err)
-	}
-
-	rows, err := res.RowsAffected()
-	if err != nil {
-		return false, fmt.Errorf("claim process delivery: %w", err)
-	}
-
-	return rows == 1, nil
-}
-
-func (s *store) completeDelivery(ctx context.Context, id, deliveryState string) (bool, error) {
-	res, err := s.db.ExecContext(ctx, `
-		UPDATE background_processes
-		SET delivery_state = ?, delivered_at = ?
-		WHERE id = ? AND delivery_state = 'claimed'`,
-		deliveryState, time.Now().UTC(), id,
-	)
-	if err != nil {
-		return false, fmt.Errorf("complete process delivery: %w", err)
-	}
-
-	rows, err := res.RowsAffected()
-	if err != nil {
-		return false, fmt.Errorf("complete process delivery: %w", err)
-	}
-
-	return rows == 1, nil
-}
-
-func (s *store) list(ctx context.Context, query string, args ...any) ([]Process, error) {
-	rows, err := s.db.QueryContext(ctx, query, args...)
-	if err != nil {
-		return nil, fmt.Errorf("list background processes: %w", err)
-	}
-
-	defer rows.Close()
-
-	var processes []Process
-
-	for rows.Next() {
-		process, err := scanProcess(rows)
-		if err != nil {
-			return nil, err
-		}
-
-		processes = append(processes, process)
-	}
-
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("list background processes: %w", err)
-	}
-
-	return processes, nil
-}
-
-type rowScanner interface {
-	Scan(dest ...any) error
-}
-
-func scanProcess(row rowScanner) (Process, error) {
-	var process Process
-	var hostIntent string
-	var state string
-	var deliveryState string
-	var targetSessionID sql.NullInt64
-
-	err := row.Scan(
-		&process.ID,
-		&process.SessionID,
-		&process.RootSessionID,
-		&process.ToolCallID,
-		&process.OutputPath,
-		&process.Deadline,
-		&process.CreatedAt,
-		&process.AdvertisedAt,
-		&process.OutputSize,
-		&process.ExitCode,
-		&hostIntent,
-		&state,
-		&process.FinishedAt,
-		&deliveryState,
-		&targetSessionID,
-		&process.DeliveredAt,
-	)
-	if err != nil {
-		return Process{}, fmt.Errorf("scan background process row: %w", err)
-	}
-
-	if targetSessionID.Valid {
-		process.DeliveryTargetSessionID = targetSessionID.Int64
-	}
-
-	process.HostIntent = HostIntent(hostIntent)
-	process.State = State(state)
-	process.DeliveryState = deliveryState
-
-	return process, nil
 }
