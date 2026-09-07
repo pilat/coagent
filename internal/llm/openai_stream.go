@@ -130,7 +130,7 @@ func (c *openaiClient) finishStreamingResponse(
 var (
 	// sseFirstEventDeadline bounds the silent wait for the first payload event.
 	// Provider keep-alives are SSE comments and never count as events.
-	sseFirstEventDeadline = 120 * time.Second
+	sseFirstEventDeadline = 600 * time.Second
 	// sseIdleEventDeadline bounds the gap between two payload events.
 	sseIdleEventDeadline = 120 * time.Second
 )

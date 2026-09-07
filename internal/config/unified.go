@@ -466,5 +466,5 @@ func (c *UnifiedConfig) validateModel(m ModelEntry) error {
 		}
 	}
 
-	return nil
+	return validateOpenRouterConfig(m.ID, m.OpenRouterConfig)
 }

@@ -41,6 +41,11 @@ func newStreamTestClient(t *testing.T, url string) Client {
 	return client
 }
 
+func TestOpenRouterStreamDefaultDeadlines(t *testing.T) {
+	assert.Equal(t, 10*time.Minute, sseFirstEventDeadline)
+	assert.Equal(t, 2*time.Minute, sseIdleEventDeadline)
+}
+
 // commentOnlyStreamHandler writes one OpenRouter-style keep-alive comment and
 // then goes silent — the incident shape that no byte-idle timer can catch.
 func commentOnlyStreamHandler(w http.ResponseWriter, r *http.Request) {

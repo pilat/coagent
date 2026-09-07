@@ -25,7 +25,7 @@ providers:
     driver: anthropic
     api_key: sk-ant-test
   openrouter:
-    driver: openai
+    driver: openrouter
     api_key: sk-or-test
     base_url: https://openrouter.ai/api/v1
 
@@ -36,7 +36,22 @@ models:
     provider: openrouter
     timeout_sec: 900
     openrouter_config:
+      allow_fallbacks: false
+      data_collection: deny
+      enforce_distillable_text: true
+      ignore: [slow-provider]
+      max_price:
+        prompt: 1.25
+        completion: 2.5
       only: [inceptron/fp8]
+      preferred_max_latency: 8
+      preferred_min_throughput:
+        p50: 40
+        p90: 20
+      quantizations: [fp8, mxfp8]
+      require_parameters: true
+      sort: latency
+      zdr: true
 `)
 
 	cfg, err := LoadUnifiedConfig(path, nil)
@@ -47,7 +62,66 @@ models:
 	assert.Equal(t, "anthropic", cfg.Providers["anthropic"].Driver)
 	assert.Equal(t, "openrouter", cfg.Models[1].Provider)
 	assert.Equal(t, 900, cfg.Models[1].TimeoutSec)
-	assert.Equal(t, []string{"inceptron/fp8"}, cfg.Models[1].OpenRouterConfig.Only)
+
+	routing := cfg.Models[1].OpenRouterConfig
+	require.NotNil(t, routing)
+	require.NotNil(t, routing.AllowFallbacks)
+	assert.False(t, *routing.AllowFallbacks)
+	assert.Equal(t, "deny", routing.DataCollection)
+	assert.Equal(t, []string{"slow-provider"}, routing.Ignore)
+	assert.Equal(t, []string{"inceptron/fp8"}, routing.Only)
+	assert.Equal(t, []string{"fp8", "mxfp8"}, routing.Quantizations)
+	assert.Equal(t, "latency", routing.Sort)
+	require.NotNil(t, routing.PreferredMaxLatency.Value)
+	assert.InDelta(t, 8.0, *routing.PreferredMaxLatency.Value, 0.0001)
+	require.NotNil(t, routing.PreferredMinThroughput.P50)
+	assert.InDelta(t, 40.0, *routing.PreferredMinThroughput.P50, 0.0001)
+
+	raw, err := MarshalUnifiedConfig(cfg)
+	require.NoError(t, err)
+	roundTripped, err := ParseAndResolve(raw, nil)
+	require.NoError(t, err)
+	assert.Equal(t, routing, roundTripped.Models[1].OpenRouterConfig)
+}
+
+func TestUnifiedConfig_RejectsInvalidOpenRouterPreferences(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		config  string
+		wantErr string
+	}{
+		{"sort", "sort: fastest", "invalid openrouter_config.sort"},
+		{"sort with order", "sort: latency\n      order: [preferred]", "cannot set both"},
+		{"data collection", "data_collection: sometimes", "invalid openrouter_config.data_collection"},
+		{"quantization", "quantizations: [fp3]", "invalid openrouter_config.quantizations"},
+		{"negative threshold", "preferred_max_latency: -1", "must be finite and non-negative"},
+		{"empty max price", "max_price: {}", "must set at least one price"},
+		{"unknown percentile", "preferred_min_throughput: {p95: 10}", "unknown OpenRouter percentile"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			path := writeConfig(t, `
+providers:
+  or:
+    driver: openrouter
+    api_key: test
+    base_url: https://openrouter.ai/api/v1
+models:
+  - id: test/model
+    provider: or
+    openrouter_config:
+      `+tt.config+`
+`)
+			_, err := LoadUnifiedConfig(path, nil)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tt.wantErr)
+		})
+	}
 }
 
 func TestUnifiedConfig_ModelTagsValidateAndRoundTrip(t *testing.T) {

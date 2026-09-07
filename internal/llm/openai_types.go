@@ -54,8 +54,19 @@ type oaiRequest struct {
 
 // oaiProvider holds OpenRouter provider configuration.
 type oaiProvider struct {
-	Only  []string `json:"only,omitempty"`
-	Order []string `json:"order,omitempty"`
+	AllowFallbacks         *bool                        `json:"allow_fallbacks,omitempty"`
+	DataCollection         string                       `json:"data_collection,omitempty"`
+	EnforceDistillableText *bool                        `json:"enforce_distillable_text,omitempty"`
+	Ignore                 []string                     `json:"ignore,omitempty"`
+	MaxPrice               *config.OpenRouterMaxPrice   `json:"max_price,omitempty"`
+	Only                   []string                     `json:"only,omitempty"`
+	Order                  []string                     `json:"order,omitempty"`
+	PreferredMaxLatency    *config.OpenRouterPreference `json:"preferred_max_latency,omitempty"`
+	PreferredMinThroughput *config.OpenRouterPreference `json:"preferred_min_throughput,omitempty"`
+	Quantizations          []string                     `json:"quantizations,omitempty"`
+	RequireParameters      *bool                        `json:"require_parameters,omitempty"`
+	Sort                   string                       `json:"sort,omitempty"`
+	ZDR                    *bool                        `json:"zdr,omitempty"`
 }
 
 // oaiResponse represents a non-streaming response.

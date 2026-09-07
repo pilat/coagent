@@ -566,6 +566,10 @@ reported rather than silently overwritten.
 The unified YAML configuration names providers, models, managers, marketplaces
 and tool policy; unknown fields fail closed. Model entries identify a provider
 and model ID, while model dimensions and pricing come from the provider catalog.
+An OpenRouter model may also carry validated per-request preferences for the
+provider endpoints serving that same configured model ID. Omitted preferences
+produce no provider object on the wire, so the external router's defaults
+remain authoritative rather than becoming implicit coagent policy.
 Model IDs are globally unique. Optional user-defined tags are preserved as YAML
 policy: `/model` exposes every configured model to people, while `task` exposes
 inheritance and only tagged models for autonomous explicit selection.
