@@ -8,6 +8,7 @@ import (
 
 	"go.uber.org/zap"
 
+	"github.com/pilat/coagent/internal/backgroundprocess"
 	"github.com/pilat/coagent/internal/bashsandbox"
 	"github.com/pilat/coagent/internal/config"
 	"github.com/pilat/coagent/internal/loader"
@@ -23,17 +24,20 @@ import (
 
 // StackConfig configures a session-scoped local tool stack.
 type StackConfig struct {
-	SessionID       int64
-	WorkDir         string
-	RepoRoot        string                      // main repository path for worktree sessions; empty otherwise
-	Pool            mcp.Pool                    // may be nil
-	Servers         map[string]mcp.ServerConfig // resolved MCP definitions; empty = no MCP
-	Unified         *config.UnifiedConfig       // for the sandbox config
-	Loader          loader.Service
-	Todo            todo.Service
-	TodoReplacement TodoReplacement
-	Provider        shellenv.Provider // per-cwd shell activation; may be nil (fallback)
-	ShieldsUp       bool
+	SessionID         int64
+	RootSessionID     int64 // 0 = this session is its own root
+	WorkDir           string
+	RepoRoot          string                      // main repository path for worktree sessions; empty otherwise
+	Pool              mcp.Pool                    // may be nil
+	Servers           map[string]mcp.ServerConfig // resolved MCP definitions; empty = no MCP
+	Unified           *config.UnifiedConfig       // for the sandbox config
+	Loader            loader.Service
+	Todo              todo.Service
+	TodoReplacement   TodoReplacement
+	Provider          shellenv.Provider // per-cwd shell activation; may be nil (fallback)
+	ShieldsUp         bool
+	ProcessService    *backgroundprocess.Service // session-bound process lifecycle; may be nil
+	OutputDirOverride string                     // test-only output root override; empty = default
 }
 
 // Stack is a session-scoped local tool set. It owns the LSP manager and MCP access
@@ -99,6 +103,9 @@ func BuildStack(ctx context.Context, cfg StackConfig) (*Stack, error) {
 		bashRunner,
 		mutator,
 		cfg.Unified,
+		cfg.ProcessService,
+		cfg.SessionID,
+		rootSessionID(cfg),
 	)
 
 	// MCP failure degrades to a builtin-only stack: a broken MCP server must not block sessions.
@@ -159,6 +166,8 @@ func registerCoreTools(
 	bashRunner bashsandbox.Runner,
 	fileMutator fileMutator,
 	unified *config.UnifiedConfig,
+	processService *backgroundprocess.Service,
+	sessionID, rootID int64,
 ) {
 	registry.Register(newReadToolWithAccess(workDir, access))
 	registry.Register(newWriteToolWithAccess(workDir, access, lspMgr, fileMutator))
@@ -169,7 +178,15 @@ func registerCoreTools(
 	registry.Register(newGlobToolWithAccess(workDir, access))
 	registry.Register(newGrepToolWithAccess(workDir, access))
 
-	registry.Register(newBashTool(workDir, bashRunner))
+	registry.Register(newBashTool(
+		workDir,
+		bashRunner,
+		processService,
+		sessionID,
+		rootID,
+	))
+
+	registry.Register(newTailTool(workDir, access))
 
 	registry.Register(newWebFetchTool())
 
@@ -187,6 +204,14 @@ func registerCoreTools(
 	if searchTool := newSearchToolFromConfig(unified); searchTool != nil {
 		registry.Register(searchTool)
 	}
+}
+
+func rootSessionID(cfg StackConfig) int64 {
+	if cfg.RootSessionID != 0 {
+		return cfg.RootSessionID
+	}
+
+	return cfg.SessionID
 }
 
 // newSearchToolFromConfig builds the builtin websearch tool when the unified

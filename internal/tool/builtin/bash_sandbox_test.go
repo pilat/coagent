@@ -17,6 +17,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/pilat/coagent/internal/bashsandbox"
+	"github.com/pilat/coagent/internal/tool"
 )
 
 func TestBashTool_TimeoutKillsDescendants(t *testing.T) {
@@ -45,7 +46,11 @@ func TestBashTool_TimeoutKillsDescendants(t *testing.T) {
 			params, err := json.Marshal(bashParams{Command: command, Timeout: 150})
 			require.NoError(t, err)
 
-			result, err := newBashTool(workDir, runner).Execute(context.Background(), params)
+			result, err := newTestBashToolRunner(
+				t,
+				workDir,
+				runner,
+			).Execute(tool.WithCallID(context.Background(), "call_test"), params)
 			require.NoError(t, err)
 			assert.Equal(t, true, result.Metadata[metaKeyTimedOut])
 
@@ -83,7 +88,7 @@ func TestBashTool_SandboxHintOnDeniedWrite(t *testing.T) {
 	params, err := json.Marshal(bashParams{Command: "touch " + quoteShell(target)})
 	require.NoError(t, err)
 
-	result, err := newBashTool(workDir, runner).Execute(context.Background(), params)
+	result, err := newTestBashToolRunner(t, workDir, runner).Execute(context.Background(), params)
 	require.NoError(t, err)
 
 	assert.NotEqual(t, 0, result.Metadata[metaKeyExitCode])

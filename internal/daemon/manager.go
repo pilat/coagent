@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"maps"
@@ -14,7 +15,9 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/pilat/coagent/internal/admission"
+	"github.com/pilat/coagent/internal/backgroundprocess"
 	budgetservice "github.com/pilat/coagent/internal/budget"
+	"github.com/pilat/coagent/internal/coagenthome"
 	"github.com/pilat/coagent/internal/config"
 	"github.com/pilat/coagent/internal/configapply"
 	"github.com/pilat/coagent/internal/controllerapi"
@@ -149,6 +152,10 @@ type svc struct {
 	childCache map[int64]bool
 	ownerCache map[int64]string
 	budgetSvc  budgetservice.Service
+	// processStore and processCoord own background Bash process facts: the
+	// ledger plus the completion routing coordinator.
+	processStore backgroundprocess.Store
+	processCoord *processCoordinator
 }
 
 // OutputStore exposes the narrow manager-delivery ledger without widening the
@@ -209,7 +216,8 @@ func New(
 	mcpPool mcp.Pool,
 	applier configapply.Service,
 ) Service {
-	s := newSvc(
+	s, processSvc := newSvc(
+		context.Background(),
 		factory, store, sessionStore, inboxStore, runtimeStore,
 		managerOutputs, managerRoots, lifecycleStore, modelInputs,
 		links, subagents, budgetSvc, progressStore,
@@ -229,10 +237,15 @@ func New(
 		s.loadModelCatalog(cfg.UnifiedConfig.Models)
 	}
 
+	if processSvc != nil {
+		s.factory = session.WithFactoryProcessService(factory, processSvc)
+	}
+
 	return s
 }
 
 func newSvc(
+	ctx context.Context,
 	factory session.Factory,
 	store Store,
 	sessionStore sessionstore.OrchestrationStore,
@@ -248,7 +261,7 @@ func newSvc(
 	progressStore progressruntime.Store,
 	scheduleSvc schedule.Service,
 	defaultModelFn func() string,
-) *svc {
+) (*svc, *backgroundprocess.Service) {
 	budgetCtx, budgetCancel := context.WithCancel(context.Background())
 	s := &svc{
 		runners:        sessionlifecycle.NewRegistry[runner](),
@@ -292,7 +305,28 @@ func newSvc(
 		s.ensureRunnerStartable, s.enqueueChild, s.runSession,
 	)
 
-	return s
+	// Background Bash processes: the ledger lives in the daemon database; the
+	// coordinator routes terminal facts to owner or root sessions. The factory
+	// shares one lifecycle service so all session stacks admit through it.
+
+	var processSvc *backgroundprocess.Service
+
+	if rawStore, ok := store.(interface{ DB() *sql.DB }); ok {
+		if db := rawStore.DB(); db != nil {
+			s.processStore = backgroundprocess.NewStore(db)
+			s.processCoord = newProcessCoordinator(
+				s.processStore,
+				s,
+				func(ctx context.Context, id int64) (*sessionstore.SessionRecord, error) {
+					return sessionStore.GetSession(ctx, id)
+				},
+			)
+
+			processSvc = s.newProcessService(ctx)
+		}
+	}
+
+	return s, processSvc
 }
 
 func (s *svc) PubSub() sessionbus.Source {
@@ -936,6 +970,17 @@ func (s *svc) stopTreeCleanup(ctx context.Context, sessionID int64, options stop
 		rs.Cancel()
 	}
 
+	// Cancel every background Bash process owned by the tree, including
+	// processes started by already-terminal subagents. This joins their
+	// terminalization and suppresses their individual wake events before the
+	// stop fence completes.
+	if s.processStore != nil {
+		processSvc := backgroundprocess.NewService(s.processStore, backgroundprocess.Options{})
+		if _, err := processSvc.CancelTree(cleanupCtx, sessionID, backgroundprocess.IntentSessionStopped); err != nil {
+			return fmt.Errorf("cancel background processes: %w", err)
+		}
+	}
+
 	for _, rs := range runners {
 		<-rs.Done()
 	}
@@ -1190,6 +1235,15 @@ func (s *svc) Shutdown(timeout time.Duration) {
 			rs.Cancel()
 		}
 
+		// Controlled shutdown cancels and joins every owned process group;
+		// their completions stay owed as interrupted for the next startup.
+		if s.processStore != nil {
+			processSvc := backgroundprocess.NewService(s.processStore, backgroundprocess.Options{})
+			if _, err := processSvc.CancelAll(shutdownCtx, backgroundprocess.IntentDaemonShutdown); err != nil {
+				logger.Ctx(shutdownCtx).Named("daemon.process").Warn("shutdown_cancel_failed", zap.Error(err))
+			}
+		}
+
 		if s.progress != nil {
 			_ = s.progress.Stop(shutdownCtx)
 		}
@@ -1261,6 +1315,26 @@ func (s *svc) GetProjectName(ctx context.Context, projectID int64) (string, erro
 	}
 
 	return name, nil
+}
+
+// newProcessService builds the background-process lifecycle service with the
+// tree fence wired to the stopper and completion routing to the coordinator.
+func (s *svc) newProcessService(ctx context.Context) *backgroundprocess.Service {
+	outputRoot, err := coagenthome.Join(coagenthome.ProcessesDirName)
+	if err != nil {
+		logger.Ctx(ctx).Named("daemon.process").Warn("process_output_dir", zap.Error(err))
+
+		return backgroundprocess.NewService(s.processStore, backgroundprocess.Options{})
+	}
+
+	return backgroundprocess.NewService(s.processStore, backgroundprocess.Options{
+		OutputDir: outputRoot,
+		OnCompletion: func(ctx context.Context, completion backgroundprocess.Completion) {
+			if s.processCoord != nil {
+				s.processCoord.Route(ctx, completion)
+			}
+		},
+	})
 }
 
 func (s *svc) enqueueUserSessionInput(

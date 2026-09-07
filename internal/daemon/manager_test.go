@@ -213,6 +213,15 @@ func (m *mockSession) InjectToolNotificationOnce(
 	return err == nil, err
 }
 
+func (m *mockSession) InjectProcessCompletion(
+	ctx context.Context,
+	_ string,
+	event session.ProcessEvent,
+) (bool, error) {
+	err := m.InjectToolNotification(ctx, "process_event", event.Tail)
+	return err == nil, err
+}
+
 func (m *mockSession) ResetContextAndInject(_ context.Context, _ string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -285,7 +294,8 @@ func newTestManager(t *testing.T) (*svc, *mockFactory, Store) {
 	sessStore := sessionstore.NewStore(db)
 
 	factory := &mockFactory{}
-	mgr := newSvc(
+	mgr, _ := newSvc(
+		context.Background(),
 		factory,
 		store,
 		sessStore,
@@ -320,7 +330,8 @@ func newTestManagerWithSchedule(t *testing.T) (*svc, *mockFactory, Store, schedu
 	schedStore := schedule.NewStore(db)
 
 	factory := &mockFactory{}
-	mgr := newSvc(
+	mgr, _ := newSvc(
+		context.Background(),
 		factory, store, sessStore, sessStore, sessStore,
 		sessStore, sessStore, sessStore, sessStore,
 		subagent.NewStore(db), subagent.NewTransactions(db),

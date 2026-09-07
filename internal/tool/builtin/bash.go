@@ -1,7 +1,6 @@
 package builtin
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -12,17 +11,32 @@ import (
 
 	"go.uber.org/zap"
 
+	"github.com/pilat/coagent/internal/backgroundprocess"
 	"github.com/pilat/coagent/internal/bashsandbox"
 	"github.com/pilat/coagent/internal/logger"
 	"github.com/pilat/coagent/internal/tool"
 )
 
 const (
-	defaultBashTimeout = 2 * time.Minute
-	maxBashTimeout     = 10 * time.Minute
-	maxOutputSize      = 100 * 1024 // 100KB
-	noOutput           = "(no output)"
-	bashDescription    = `Executes a given bash command in a shell session with optional timeout.
+	// foregroundGrace is how long a command runs inline before promotion.
+	foregroundGrace = 10 * time.Second
+
+	// foregroundJoinMargin covers terminalization commit after a
+	// sub-grace deadline expires in the foreground.
+	foregroundJoinMargin = 2 * time.Second
+
+	// defaultProcessDeadline is the model-facing absolute process deadline.
+	defaultProcessDeadline = 10 * time.Minute
+
+	// maxProcessDeadline is the thirty-minute hard cap.
+	maxProcessDeadline = 30 * time.Minute
+
+	maxOutputSize = 100 * 1024 // 100KB inline cap
+	noOutput      = "(no output)"
+
+	metaKeyProcessID = "process_id"
+
+	bashDescription = `Executes a given bash command in a shell session with optional timeout.
 
 IMPORTANT: This tool is for terminal operations like git, npm, docker, build commands, etc. DO NOT use it for file operations (reading, writing, editing, searching, finding files) - use the dedicated tools for this instead.
 
@@ -36,9 +50,7 @@ Avoid using Bash with find, grep, cat, head, tail, sed, awk, or echo commands, u
 Command Execution:
 - Always quote file paths that contain spaces with double quotes (e.g., rm "path with spaces/file.txt")
 - The command argument is required
-- You can specify an optional timeout in milliseconds (default: 120000, max: 600000)
-- It is very helpful if you write a clear, concise description of what this command does in 5-10 words
-- Both stdout and stderr are captured
+- Both stdout and stderr are captured into one combined stream
 
 Parallel vs Sequential Commands:
 - If the commands are independent and can run in parallel, make multiple Bash tool calls in a single response
@@ -48,8 +60,8 @@ Parallel vs Sequential Commands:
 - AVOID using 'cd <directory> && <command>'. Use the work_dir parameter to change directories instead
 
 Limits:
-- Output is truncated at 100KB
-- Commands timing out are killed and partial output is returned
+- Output is truncated at 100KB inline; larger output stays in the reported output file
+- Foreground failures (nonzero exit, timeout, output overflow) are reported as errors
 
 Git Safety Protocol:
 - NEVER update the git config
@@ -72,32 +84,56 @@ Pull Requests:
 
 Examples:
 - "git status"
-- "git add . && git commit -m 'message'"
 - "npm install"
 - "go build ./..."`
+
+	backgroundDescriptionSuffix = `
+
+Background Execution:
+- Long-running commands (builds, test suites, servers under 30 minutes) run automatically in the background after 10 seconds
+- Set "background": true to background immediately without the 10-second wait
+- A backgrounded command returns a process ID and an absolute output path; completion is delivered to you automatically and wakes this session - do NOT poll
+- If you need current output while working independently, read a small suffix of the output file with the tail tool
+- "timeout" is the absolute process deadline in milliseconds (default 600000, max 1800000); a deadline below 10000 expires in the foreground
+- Only finite commands are supported; a command reaching its deadline is killed as a complete process group`
 )
 
 var _ tool.Tool = (*bashTool)(nil)
 
 // bashParams are the parameters for the bash tool.
 type bashParams struct {
-	Command string `json:"command"`
-	Timeout int    `json:"timeout,omitempty"` // milliseconds
-	WorkDir string `json:"work_dir,omitempty"`
+	Command    string `json:"command"`
+	Timeout    int    `json:"timeout,omitempty"`    // milliseconds
+	WorkDir    string `json:"work_dir,omitempty"`   //
+	Background bool   `json:"background,omitempty"` //
 }
 
 type bashTool struct {
 	workDir string
 	runner  bashsandbox.Runner
+	process *backgroundprocess.Service
+	session int64
+	root    int64
 }
 
-func newBashTool(workDir string, runner bashsandbox.Runner) *bashTool {
-	return &bashTool{workDir: workDir, runner: runner}
+func newBashTool(
+	workDir string,
+	runner bashsandbox.Runner,
+	process *backgroundprocess.Service,
+	sessionID, rootID int64,
+) *bashTool {
+	return &bashTool{
+		workDir: workDir,
+		runner:  runner,
+		process: process,
+		session: sessionID,
+		root:    rootID,
+	}
 }
 
 func (t *bashTool) ID() string          { return "bash" }
 func (t *bashTool) ParallelSafe() bool  { return false }
-func (t *bashTool) Description() string { return bashDescription }
+func (t *bashTool) Description() string { return bashDescription + backgroundDescriptionSuffix }
 
 func (t *bashTool) Parameters() json.RawMessage {
 	return json.RawMessage(`{
@@ -109,11 +145,15 @@ func (t *bashTool) Parameters() json.RawMessage {
 			},
 			"timeout": {
 				"type": "integer",
-				"description": "Timeout in milliseconds (max 600000, default 120000)"
+				"description": "Absolute process deadline in milliseconds (default 600000, max 1800000; below 10000 expires in the foreground)"
 			},
 			"work_dir": {
 				"type": "string",
 				"description": "Working directory for the command (defaults to tool's working directory)"
+			},
+			"background": {
+				"type": "boolean",
+				"description": "Run immediately as a background process and return its ID and output path"
 			}
 		},
 		"required": ["command"]
@@ -126,181 +166,250 @@ func (t *bashTool) Execute(ctx context.Context, params json.RawMessage) (*tool.R
 	var p bashParams
 	if err := json.Unmarshal(params, &p); err != nil {
 		log.Warn("invalid_parameters", zap.Error(err))
+
 		return nil, fmt.Errorf("invalid parameters: %w", err)
 	}
 
 	if p.Command == "" {
 		log.Warn("empty_command")
+
 		return nil, errors.New("command is required")
 	}
 
-	timeout := bashTimeout(p.Timeout)
-
+	deadline := processDeadline(p.Timeout)
 	workDir := t.workDir
+
 	if p.WorkDir != "" {
 		workDir = p.WorkDir
 	}
 
-	ctx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
-
 	log.Debug("executing",
-		zap.String("command", p.Command),
 		zap.String("workDir", workDir),
-		zap.Duration("timeout", timeout),
+		zap.Duration("deadline", deadline),
+		zap.Bool("background", p.Background),
 	)
 
-	return t.run(ctx, log, p.Command, workDir, timeout)
+	return t.run(ctx, p, workDir, deadline)
 }
 
-func bashTimeout(ms int) time.Duration {
+// processDeadline resolves the model-provided timeout: omitted/nonpositive
+// selects the default; values above the cap clamp to it.
+func processDeadline(ms int) time.Duration {
 	if ms <= 0 {
-		return defaultBashTimeout
+		return defaultProcessDeadline
 	}
 
-	t := time.Duration(ms) * time.Millisecond
-	if t > maxBashTimeout {
-		return maxBashTimeout
+	d := time.Duration(ms) * time.Millisecond
+	if d > maxProcessDeadline {
+		return maxProcessDeadline
 	}
 
-	return t
+	return d
 }
 
 func (t *bashTool) run(
 	ctx context.Context,
-	log *zap.Logger,
-	command, workDir string,
-	timeout time.Duration,
+	p bashParams,
+	workDir string,
+	deadline time.Duration,
 ) (*tool.Result, error) {
-	cmd, err := t.runner.ShellCommand(ctx, command, workDir)
+	spec := backgroundprocess.Spec{
+		SessionID:     t.session,
+		RootSessionID: t.root,
+		ToolCallID:    tool.CallIDFromContext(ctx),
+		Deadline:      deadline,
+		Advertise:     p.Background,
+	}
+
+	start := time.Now()
+
+	record, err := t.process.Start(ctx, spec, func(processCtx context.Context) (*exec.Cmd, error) {
+		// The command-construction authority stays with the sandbox runner;
+		// only the lifetime context is owned by the process service.
+		cmd, cmdErr := t.runner.ShellCommand(processCtx, p.Command, workDir)
+		if cmdErr != nil {
+			return nil, fmt.Errorf("create bash command: %w", cmdErr)
+		}
+
+		return cmd, nil
+	})
 	if err != nil {
-		return nil, fmt.Errorf("create bash command: %w", err)
+		return nil, fmt.Errorf("start process: %w", err)
 	}
 
-	configureCommandCancellation(cmd)
-
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-
-	err = cmd.Run()
-
-	stdoutLen, stderrLen := stdout.Len(), stderr.Len()
-	output, truncated := combineOutput(&stdout, &stderr)
-
-	title := command
-	if len(title) > 50 {
-		title = title[:50] + "..."
+	// Foreground wait: a deadline shorter than the grace can only expire in
+	// the foreground, with a small margin for terminalization to commit; a
+	// normal command waits exactly the grace and prefers an available result
+	// at the boundary before advertising.
+	wait := deadline
+	if wait < foregroundGrace {
+		wait += foregroundJoinMargin
+	} else {
+		wait = foregroundGrace
 	}
 
-	if err != nil {
-		return t.handleErr(ctx, log, command, title, output, timeout, truncated, err)
+	if !p.Background {
+		if result, ok := t.waitForeground(ctx, record, start.Add(wait)); ok {
+			return result, nil
+		}
 	}
 
-	if output == "" {
-		output = noOutput
-	}
-
-	log.Debug("complete",
-		zap.String("command", command),
-		zap.Int("exitCode", 0),
-		zap.Int("stdout", stdoutLen),
-		zap.Int("stderr", stderrLen),
-		zap.Bool("truncated", truncated))
-	log.Info("executed",
-		zap.String("command", command),
-		zap.Int("exitCode", 0),
-		zap.Int("outputSize", len(output)),
-	)
-
-	return &tool.Result{
-		Title:  title,
-		Output: strings.TrimSuffix(output, "\n"),
-		Metadata: map[string]any{
-			metaKeyExitCode:  0,
-			metaKeyTimedOut:  false,
-			metaKeyTruncated: truncated,
-		},
-	}, nil
+	return t.backgroundedResult(record), nil
 }
 
-func (t *bashTool) handleErr(
+// waitForeground polls the ledger until the grace expires; the completion
+// fact for the foreground path is produced here, not through the wake event.
+func (t *bashTool) waitForeground(
 	ctx context.Context,
-	log *zap.Logger,
-	command, title, output string,
-	timeout time.Duration,
-	truncated bool,
-	err error,
-) (*tool.Result, error) {
-	if ctx.Err() == context.DeadlineExceeded {
-		log.Warn("command_timeout", zap.String("command", command), zap.Duration("timeout", timeout))
+	record backgroundprocess.Process,
+	until time.Time,
+) (*tool.Result, bool) {
+	for time.Now().Before(until) {
+		current, err := t.process.Store().GetProcess(ctx, record.ID)
+		if err != nil {
+			return nil, false
+		}
+
+		if current.State.Terminal() {
+			return t.foregroundResult(ctx, current), true
+		}
+
+		time.Sleep(25 * time.Millisecond)
+	}
+
+	current, err := t.process.Store().GetProcess(ctx, record.ID)
+	if err == nil && current.State.Terminal() {
+		return t.foregroundResult(ctx, current), true
+	}
+
+	return nil, false
+}
+
+func (t *bashTool) foregroundResult(ctx context.Context, record backgroundprocess.Process) *tool.Result {
+	title := t.title(record)
+
+	// Only terminal states reach this; the default covers the cancelled,
+	// interrupted, and drain-timeout outcomes. Running cannot be observed here
+	// because waitForeground gates on Terminal().
+	//nolint:exhaustive // Terminal states only; see comment above.
+	switch record.State {
+	case backgroundprocess.StateCompleted:
+		output := t.inlineOutput(ctx, record, false)
 
 		return &tool.Result{
 			Title:  title,
-			Output: output + "\n\n(Command timed out after " + timeout.String() + ")",
+			Output: output,
 			Metadata: map[string]any{
-				metaKeyExitCode:  -1,
-				metaKeyTimedOut:  true,
-				metaKeyTruncated: truncated,
+				metaKeyProcessID: record.ID,
+				metaKeyExitCode:  *record.ExitCode,
+				metaKeyTimedOut:  false,
+				metaKeyTruncated: record.OutputSize > maxOutputSize,
 			},
-		}, nil
-	}
-
-	exitErr := &exec.ExitError{}
-	if errors.As(err, &exitErr) {
-		exitCode := exitErr.ExitCode()
-		log.Debug("command_failed", zap.String("command", command), zap.Int("exitCode", exitCode))
-
-		if output == "" {
-			output = noOutput
 		}
-
-		if hint := sandboxHint(output, t.runner.WritableRoots(), t.runner.ReadScope(), t.workDir); hint != "" {
+	case backgroundprocess.StateFailed:
+		output := t.inlineOutput(ctx, record, true)
+		if hint := t.failureHint(output); hint != "" {
 			output += "\n\n" + hint
 		}
 
-		log.Info(
-			"executed",
-			zap.String("command", command),
-			zap.Int("exitCode", exitCode),
-			zap.Int("outputSize", len(output)),
-		)
+		return &tool.Result{
+			Title:   title,
+			Output:  output,
+			IsError: true,
+			Metadata: map[string]any{
+				metaKeyExitCode:  *record.ExitCode,
+				metaKeyTimedOut:  false,
+				metaKeyTruncated: record.OutputSize > maxOutputSize,
+			},
+		}
+	case backgroundprocess.StateTimedOut:
+		output := t.inlineOutput(ctx, record, true) +
+			"\n\n(Command timed out after " + record.Deadline.Sub(record.CreatedAt).String() + ")"
 
 		return &tool.Result{
-			Title:  title,
-			Output: strings.TrimSuffix(output, "\n"),
+			Title:   title,
+			Output:  output,
+			IsError: true,
 			Metadata: map[string]any{
-				metaKeyExitCode:  exitCode,
-				metaKeyTimedOut:  false,
-				metaKeyTruncated: truncated,
+				metaKeyExitCode:  -1,
+				metaKeyTimedOut:  true,
+				metaKeyTruncated: false,
 			},
-		}, nil
+		}
+	case backgroundprocess.StateOutputLimitExceeded:
+		return &tool.Result{
+			Title: title,
+			Output: "Output exceeded the 100 MiB capture cap; the process group was killed." +
+				"\nFull output: " + record.OutputPath,
+			IsError: true,
+			Metadata: map[string]any{
+				metaKeyProcessID: record.ID,
+			},
+		}
+	default:
+		output := t.inlineOutput(ctx, record, true)
+
+		return &tool.Result{
+			Title:   title,
+			Output:  output + "\n\n(command terminated: " + string(record.State) + ")",
+			IsError: true,
+			Metadata: map[string]any{
+				metaKeyExitCode:  -1,
+				metaKeyTimedOut:  false,
+				metaKeyTruncated: false,
+			},
+		}
 	}
-
-	log.Warn("execution_error", zap.String("command", command), zap.Error(err))
-
-	return nil, fmt.Errorf("execute command: %w", err)
 }
 
-func combineOutput(stdout, stderr *bytes.Buffer) (string, bool) {
-	var out strings.Builder
-	if stdout.Len() > 0 {
-		out.Write(stdout.Bytes())
-	}
-
-	if stderr.Len() > 0 {
-		if out.Len() > 0 {
-			out.WriteString("\n")
+// inlineOutput renders a bounded preview from the output file. keepFile
+// preserves the file for a failed result's path reference; a successful
+// inline result removes the unadvertised candidate file.
+func (t *bashTool) inlineOutput(ctx context.Context, record backgroundprocess.Process, keepFile bool) string {
+	if text, ok := backgroundprocess.ExtractTail(record.OutputPath, 100000, maxOutputSize); ok {
+		if strings.TrimSpace(text) == "" {
+			return noOutput
 		}
 
-		out.WriteString("[stderr]\n")
-		out.Write(stderr.Bytes())
+		return strings.TrimSuffix(text, "\n")
 	}
 
-	result := out.String()
-	if len(result) > maxOutputSize {
-		return result[:maxOutputSize] + "\n\n(Output truncated)", true
+	if keepFile {
+		return "(output unavailable)"
 	}
 
-	return result, false
+	_ = t.process.RemoveOutput(ctx, record.ID)
+
+	return "Output exceeded the inline limit (" + fmt.Sprintf("%.1f", float64(record.OutputSize)/(100*1024)) +
+		" KB); read a suffix of " + record.OutputPath + " with the tail tool"
+}
+
+func (t *bashTool) title(record backgroundprocess.Process) string {
+	_ = record
+
+	return "command"
+}
+
+// failureHint appends the sandbox self-diagnosis hint to a failed foreground
+// result when the observed output looks like a sandbox write denial.
+func (t *bashTool) failureHint(output string) string {
+	if hint := sandboxHint(output, t.runner.WritableRoots(), t.runner.ReadScope(), t.workDir); hint != "" {
+		return hint
+	}
+
+	return ""
+}
+
+// backgroundedResult is the immediate response for an advertised process.
+func (t *bashTool) backgroundedResult(record backgroundprocess.Process) *tool.Result {
+	return &tool.Result{
+		Title: "background process started",
+		Output: "Process " + record.ID + " runs in the background." +
+			"\nOutput file: " + record.OutputPath +
+			"\nCompletion will be delivered automatically and will wake this session; do not poll." +
+			"\nUse the tail tool on the output file if you need current output for independent work.",
+		Metadata: map[string]any{
+			metaKeyProcessID: record.ID,
+		},
+	}
 }

@@ -94,6 +94,7 @@ does not imply a tier except where it expresses an implementation variant.
 - `internal/progress` — controller-neutral progress snapshots and Markdown rendering.
 - `internal/progressruntime` — durable progress publication, output readiness and silence reconciliation lifecycle.
 - `internal/projectpath` — canonical project-root paths and project-name validation.
+- `internal/backgroundprocess` — session-owned background Bash process ledger: per-session admission, combined bounded output capture, deadline/overflow/stop terminalization, and completion-fact emission.
 - `internal/procexec` — implementation-neutral process request and confinement-runner contract.
 - `internal/safefile` — traversal-safe rooted filesystem access for project-confined in-process consumers.
 - `internal/registry` — immutable per-session agent-type policy and prompt
@@ -124,8 +125,9 @@ does not imply a tier except where it expresses an implementation variant.
 SQLite is the source of truth for runtime facts that must survive restart:
 projects, sessions, append-only messages, durable inbox entries, delivery
 identity, subagent links, schedules, curated memory, MCP definitions, and
-delivery records, including tool-activation grants, root-tree budgets and
-durable TODO state. Each session row also carries its current session-shields
+delivery records, including tool-activation grants, root-tree budgets,
+durable TODO state and the background-process lifecycle ledger. Each session
+row also carries its current session-shields
 state; a root command changes the complete tree transactionally and child or
 replacement creation inherits it inside the creating transaction. Configuration files, their recoverable backups and the
 pending-apply marker are atomic filesystem state owned by config operations.

@@ -281,7 +281,8 @@ func buildScheduleRestartHarness(
 	links := subagent.NewStore(db)
 	schedules := schedule.NewStore(db)
 	factory := scheduleRestartFactory(workDir, sessionStore, respond)
-	mgr := newSvc(
+	mgr, _ := newSvc(
+		context.Background(),
 		factory, store, sessionStore, sessionStore, sessionStore,
 		sessionStore, sessionStore, sessionStore, sessionStore,
 		links, subagent.NewTransactions(db),

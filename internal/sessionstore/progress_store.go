@@ -35,8 +35,21 @@ type ProgressFacts struct {
 	Waiting              []ProgressWait
 	ActiveSubagents      int
 	BackgroundSubagents  int
+	BackgroundProcesses  []ProcessProgress
 	ShieldsUp            bool
 	ShieldInputID        int64
+}
+
+// ProcessProgress projects one live background Bash process into status
+// output. It never carries command text or captured output bytes.
+type ProcessProgress struct {
+	ProcessID  string
+	OwnerID    int64
+	IsRoot     bool
+	State      string
+	StartedAt  time.Time
+	DeadlineAt time.Time
+	OutputSize int64
 }
 
 type ProgressWait struct {
@@ -117,6 +130,10 @@ func (s *store) CaptureProgress(ctx context.Context, rootID int64) (*ProgressFac
 	}
 
 	if err := captureProgressWaiting(ctx, tx, facts); err != nil {
+		return nil, err
+	}
+
+	if err := captureProgressProcesses(ctx, tx, facts); err != nil {
 		return nil, err
 	}
 
@@ -306,4 +323,41 @@ func (s *store) ListAutonomousProgressRoots(ctx context.Context) ([]int64, error
 	}
 
 	return ids, nil
+}
+
+// captureProgressProcesses projects advertised running processes owned by the
+// root tree. Unadvertised foreground candidates stay invisible.
+func captureProgressProcesses(ctx context.Context, tx *sql.Tx, facts *ProgressFacts) error {
+	rows, err := tx.QueryContext(ctx, `
+		SELECT id, session_id, session_id = root_session_id, state, created_at, deadline_at, output_size
+		FROM background_processes
+		WHERE root_session_id = ? AND state = 'running' AND advertised_at IS NOT NULL
+		ORDER BY created_at`, facts.RootID)
+	if err != nil {
+		return fmt.Errorf("load progress background processes: %w", err)
+	}
+
+	defer rows.Close()
+
+	for rows.Next() {
+		var process ProcessProgress
+
+		var isRoot bool
+
+		if err := rows.Scan(
+			&process.ProcessID, &process.OwnerID, &isRoot, &process.State,
+			&process.StartedAt, &process.DeadlineAt, &process.OutputSize,
+		); err != nil {
+			return fmt.Errorf("scan progress background process: %w", err)
+		}
+
+		process.IsRoot = isRoot
+		facts.BackgroundProcesses = append(facts.BackgroundProcesses, process)
+	}
+
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("iterate progress background processes: %w", err)
+	}
+
+	return nil
 }

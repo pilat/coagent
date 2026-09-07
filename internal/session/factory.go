@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/pilat/coagent/internal/backgroundprocess"
 	"github.com/pilat/coagent/internal/config"
 	"github.com/pilat/coagent/internal/git"
 	"github.com/pilat/coagent/internal/llm"
@@ -95,6 +96,7 @@ type factory struct {
 	marketplaceCache loader.MarketplaceCache
 	provider         shellenv.Provider
 	newLLMClient     func(cfg *config.Config) (llm.Client, error)
+	processSvc       *backgroundprocess.Service
 }
 
 // FactoryOption customizes a factory (test seams).
@@ -104,6 +106,26 @@ type FactoryOption func(*factory)
 // Used by tests to inject a scripted fake LLM.
 func WithLLMClientFactory(fn func(cfg *config.Config) (llm.Client, error)) FactoryOption {
 	return func(f *factory) { f.newLLMClient = fn }
+}
+
+// WithProcessService injects the daemon-owned background-process lifecycle
+// service. When nil, the Bash tool starts no background processes.
+func WithProcessService(service *backgroundprocess.Service) FactoryOption {
+	return func(f *factory) { f.processSvc = service }
+}
+
+// WithFactoryProcessService re-wraps an already-built Factory with the
+// daemon-owned process service. Used when the daemon constructs the service
+// after the base factory.
+func WithFactoryProcessService(base Factory, service *backgroundprocess.Service) Factory {
+	if f, ok := base.(*factory); ok {
+		clone := *f
+		clone.processSvc = service
+
+		return &clone
+	}
+
+	return base
 }
 
 // NewFactory creates a session factory with shared dependencies.
@@ -166,11 +188,12 @@ func (f *factory) buildRegistry(
 	cfg *config.Config,
 	ldr loader.Service,
 	todoSvc todo.Service,
-	projectID, sessionID int64,
+	projectID, sessionID, rootID int64,
 	shieldsUp bool,
 ) (tool.Registry, *builtin.Stack, error) {
 	stack, err := builtin.BuildStack(ctx, builtin.StackConfig{
 		SessionID:       sessionID,
+		RootSessionID:   rootID,
 		WorkDir:         cfg.WorkDir,
 		RepoRoot:        cfg.RepoRoot,
 		Pool:            f.mcpPool,
@@ -181,6 +204,7 @@ func (f *factory) buildRegistry(
 		TodoReplacement: &todoReplacement{store: f.store, sessionID: sessionID, memory: todoSvc},
 		Provider:        f.provider,
 		ShieldsUp:       shieldsUp,
+		ProcessService:  f.processSvc,
 	})
 	if err != nil {
 		return nil, nil, fmt.Errorf("build tool stack: %w", err)

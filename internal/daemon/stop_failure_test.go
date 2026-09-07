@@ -60,7 +60,8 @@ func TestStopOnStoreFailureDoesNotPublishIdle(t *testing.T) {
 		err:                errors.New("disk hiccup"),
 	}
 	failing.pending.Store(true)
-	mgr := newSvc(
+	mgr, _ := newSvc(
+		context.Background(),
 		&mockFactory{}, store, failing, sessions, sessions,
 		sessions, sessions, sessions, sessions,
 		subagent.NewStore(db), subagent.NewTransactions(db),

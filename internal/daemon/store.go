@@ -132,6 +132,11 @@ func (s *store) ListProjects(ctx context.Context) ([]ProjectRow, error) {
 	return projects, nil
 }
 
+// DB exposes the underlying database for the background-process ledger.
+func (s *store) DB() *sql.DB {
+	return s.db
+}
+
 func (s *store) getOrCreateProject(ctx context.Context, absPath, name string, system bool) (int64, error) {
 	query := `INSERT OR IGNORE INTO projects (work_dir, name) VALUES (?, ?)`
 	if system {

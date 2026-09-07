@@ -199,7 +199,8 @@ func newMCPRestartHarness(
 			return &scriptedLLM{respond: respond}, nil
 		}),
 	)
-	mgr := newSvc(
+	mgr, _ := newSvc(
+		context.Background(),
 		factory,
 		store,
 		sessStore,

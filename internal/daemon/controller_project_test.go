@@ -31,7 +31,8 @@ func newProjectTestManager(t *testing.T) (*svc, Store, *sql.DB) {
 
 	store := NewStore(db)
 	sessStore := sessionstore.NewStore(db)
-	mgr := newSvc(
+	mgr, _ := newSvc(
+		context.Background(),
 		&mockFactory{},
 		store,
 		sessStore,

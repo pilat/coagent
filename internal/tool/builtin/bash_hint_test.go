@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/pilat/coagent/internal/bashsandbox"
+	toolpkg "github.com/pilat/coagent/internal/tool"
 )
 
 func TestSandboxHint(t *testing.T) {
@@ -55,12 +56,13 @@ func TestBashTool_SandboxHint(t *testing.T) {
 	tmpDir := t.TempDir()
 
 	t.Run("hints on write denial under confinement", func(t *testing.T) {
-		tool := newBashTool(tmpDir, &bashRunnerStub{roots: []string{tmpDir, "/tmp"}})
+		service, sessionID := newTestProcessService(t)
+		tool := newBashTool(tmpDir, &bashRunnerStub{roots: []string{tmpDir, "/tmp"}}, service, sessionID, sessionID)
 
 		params, err := json.Marshal(bashParams{Command: "echo 'touch: /denied/x: Read-only file system' >&2; exit 1"})
 		require.NoError(t, err)
 
-		result, err := tool.Execute(context.Background(), params)
+		result, err := tool.Execute(toolCtx(context.Background()), params)
 		require.NoError(t, err)
 
 		assert.Equal(t, 1, result.Metadata["exitCode"])
@@ -69,26 +71,33 @@ func TestBashTool_SandboxHint(t *testing.T) {
 	})
 
 	t.Run("no hint on success even with marker in output", func(t *testing.T) {
-		tool := newBashTool(tmpDir, &bashRunnerStub{roots: []string{tmpDir}})
+		service, sessionID := newTestProcessService(t)
+		tool := newBashTool(tmpDir, &bashRunnerStub{roots: []string{tmpDir}}, service, sessionID, sessionID)
 
 		params, err := json.Marshal(bashParams{Command: "echo 'Read-only file system'"})
 		require.NoError(t, err)
 
-		result, err := tool.Execute(context.Background(), params)
+		result, err := tool.Execute(toolCtx(context.Background()), params)
 		require.NoError(t, err)
 
 		assert.NotContains(t, result.Output, "writable_paths")
 	})
 
 	t.Run("no hint when unconfined", func(t *testing.T) {
-		tool := newBashTool(tmpDir, &bashRunnerStub{})
+		service, sessionID := newTestProcessService(t)
+		tool := newBashTool(tmpDir, &bashRunnerStub{}, service, sessionID, sessionID)
 
 		params, err := json.Marshal(bashParams{Command: "echo 'Read-only file system' >&2; exit 1"})
 		require.NoError(t, err)
 
-		result, err := tool.Execute(context.Background(), params)
+		result, err := tool.Execute(toolCtx(context.Background()), params)
 		require.NoError(t, err)
 
 		assert.NotContains(t, result.Output, "writable_paths")
 	})
+}
+
+// toolCtx carries a synthetic tool-call id for the process ledger.
+func toolCtx(base context.Context) context.Context {
+	return toolpkg.WithCallID(base, "call_test")
 }

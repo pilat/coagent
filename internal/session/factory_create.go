@@ -97,7 +97,7 @@ func (f *factory) build(
 	todoSvc := todo.New()
 	ldr := loader.New(f.marketplaceCache)
 
-	reg, stack, err := f.buildRegistry(ctx, cfg, ldr, todoSvc, opts.ProjectID, opts.ID, opts.ShieldsUp)
+	reg, stack, err := f.buildRegistry(ctx, cfg, ldr, todoSvc, opts.ProjectID, opts.ID, opts.RootID, opts.ShieldsUp)
 	if err != nil {
 		return nil, err
 	}

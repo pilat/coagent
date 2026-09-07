@@ -41,6 +41,17 @@ type Budget struct {
 	FiredReason       string
 }
 
+// ProcessStatus is one live background Bash process in operator-visible
+// status. Command text and captured output never appear here.
+type ProcessStatus struct {
+	ProcessID  string
+	Owner      string
+	State      string
+	Elapsed    time.Duration
+	DeadlineAt time.Time
+	OutputSize int64
+}
+
 type Snapshot struct {
 	RootID               int64
 	Revision             string
@@ -62,6 +73,7 @@ type Snapshot struct {
 	Waiting              []WaitingItem
 	ActiveSubagents      int
 	BackgroundSubagents  int
+	BackgroundProcesses  []ProcessStatus
 	ShieldsUp            bool
 	Budget               *Budget
 	LastSemanticOutputAt *time.Time

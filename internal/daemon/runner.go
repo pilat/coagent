@@ -806,6 +806,8 @@ func (s *svc) injectSessionInput(
 		}
 
 		return applied, nil
+	case processCompletionInput:
+		return true, s.injectProcessCompletion(ctx, sess, value.Completion)
 	case freshScheduleInput:
 		applied, err := sess.ResetContextAndInjectOnce(ctx, value.DeliveryID, value.Prompt)
 		if err != nil {

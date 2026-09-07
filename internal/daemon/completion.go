@@ -8,6 +8,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/pilat/coagent/internal/admission"
+	"github.com/pilat/coagent/internal/backgroundprocess"
 	"github.com/pilat/coagent/internal/logger"
 	"github.com/pilat/coagent/internal/session"
 	"github.com/pilat/coagent/internal/sessionstore"
@@ -317,7 +318,55 @@ func (s *svc) Start(ctx context.Context) error {
 		owedStops[stop.SessionID] = stop.InputID
 	}
 
+	// Startup interruption sweep for background Bash processes: durably
+	// terminalize every leftover advertised running record as interrupted,
+	// then route one completion event per record using owner-state rules.
+	// Idempotent: already-terminal records are skipped by the CAS.
+	if s.processStore != nil {
+		if err := s.recoverProcessInterruptions(ctx); err != nil {
+			return fmt.Errorf("recover background process interruptions: %w", err)
+		}
+	}
+
 	return s.finishStoppingRoots(ctx, records, stopping, owedStops)
+}
+
+// recoverProcessInterruptions terminalizes leftover advertised running
+// processes and re-routes claimed-but-undelivered completions. It runs after
+// the interrupted-stop fence so records covered by an operator stop stay
+// cancelled with no wake event.
+func (s *svc) recoverProcessInterruptions(ctx context.Context) error {
+	processSvc := backgroundprocess.NewService(s.processStore, backgroundprocess.Options{})
+
+	if _, err := processSvc.InterruptNonterminal(ctx); err != nil {
+		return fmt.Errorf("interrupt nonterminal processes: %w", err)
+	}
+
+	// Re-deliver completions whose routing committed but whose wake never
+	// reached the transcript (crash between claim and injection).
+	undelivered, err := s.processStore.ListUndelivered(ctx)
+	if err != nil {
+		return fmt.Errorf("list undelivered process completions: %w", err)
+	}
+
+	for _, record := range undelivered {
+		if record.WakeSuppressed() {
+			if _, err := s.processStore.MarkSuppressed(ctx, record.ID); err != nil {
+				return fmt.Errorf("suppress process delivery %s: %w", record.ID, err)
+			}
+
+			continue
+		}
+
+		target := record.DeliveryTargetSessionID
+		if target == 0 {
+			target = record.RootSessionID
+		}
+
+		s.processCoord.RouteRestarted(ctx, record, target)
+	}
+
+	return nil
 }
 
 //nolint:wsl_v5 // Recovery keeps each durable phase transition adjacent to its side effect.
