@@ -210,7 +210,17 @@ func (m *mockSessionStore) InsertToolNotificationPair(
 	return m.nextMsgID - 1, m.nextMsgID, nil
 }
 
-func (m *mockSessionStore) InsertToolNotificationPairOnce(
+func (m *mockSessionStore) InsertScheduledToolNotificationPairOnce(
+	ctx context.Context,
+	sessionID int64,
+	_, _ string,
+	asst, result *transcript.Message,
+) (int64, int64, bool, error) {
+	asstID, resultID, err := m.InsertToolNotificationPair(ctx, sessionID, asst, result)
+	return asstID, resultID, err == nil, err
+}
+
+func (m *mockSessionStore) InsertInternalToolNotificationPairOnce(
 	ctx context.Context,
 	sessionID int64,
 	_, _ string,

@@ -82,6 +82,10 @@ func TestReadinessSuppressesIdleWhileRootIsActiveLoop(t *testing.T) {
 
 	notification := requireManagerNotification(t, notifications)
 	assert.Equal(t, controllerapi.StateIdle, notification.Notification.Status)
+
+	require.NoError(t, mgr.ReconcileOutputReadiness(ctx, outputID))
+	mgr.reconcileLatestReadiness(ctx, record.ID)
+	requireNoManagerNotification(t, notifications)
 }
 
 // The runner-teardown reconcile must consult the latest releasing output and

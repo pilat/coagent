@@ -18,12 +18,50 @@ const (
 	deliveryKindContextReset     = "context_reset"
 )
 
+type toolNotificationEffects uint8
+
+const (
+	internalNotificationEffects toolNotificationEffects = iota
+	scheduledTurnEffects
+)
+
+// InsertScheduledToolNotificationPairOnce commits a scheduled turn together
+// with its model-input boundary and manager announcement.
+//
 //nolint:nonamedreturns // two same-typed int64 results are ambiguous at call sites without names
-func (s *store) InsertToolNotificationPairOnce(
+func (s *store) InsertScheduledToolNotificationPairOnce(
 	ctx context.Context,
 	sessionID int64,
 	deliveryID, fingerprint string,
 	assistant, toolResult *transcript.Message,
+) (asstID, resultID int64, inserted bool, err error) {
+	return s.insertToolNotificationPairOnce(
+		ctx, sessionID, deliveryID, fingerprint, assistant, toolResult, scheduledTurnEffects,
+	)
+}
+
+// InsertInternalToolNotificationPairOnce commits model-only external input
+// without advancing the model-input generation or creating manager output.
+//
+//nolint:nonamedreturns // two same-typed int64 results are ambiguous at call sites without names
+func (s *store) InsertInternalToolNotificationPairOnce(
+	ctx context.Context,
+	sessionID int64,
+	deliveryID, fingerprint string,
+	assistant, toolResult *transcript.Message,
+) (asstID, resultID int64, inserted bool, err error) {
+	return s.insertToolNotificationPairOnce(
+		ctx, sessionID, deliveryID, fingerprint, assistant, toolResult, internalNotificationEffects,
+	)
+}
+
+//nolint:nonamedreturns // two same-typed int64 results are ambiguous at call sites without names
+func (s *store) insertToolNotificationPairOnce(
+	ctx context.Context,
+	sessionID int64,
+	deliveryID, fingerprint string,
+	assistant, toolResult *transcript.Message,
+	effects toolNotificationEffects,
 ) (asstID, resultID int64, inserted bool, err error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -42,8 +80,10 @@ func (s *store) InsertToolNotificationPairOnce(
 		return 0, 0, false, nil
 	}
 
-	if err := startScheduledEpisode(ctx, tx, sessionID); err != nil {
-		return 0, 0, false, err
+	if effects == scheduledTurnEffects {
+		if err := startScheduledEpisode(ctx, tx, sessionID); err != nil {
+			return 0, 0, false, err
+		}
 	}
 
 	asstID, err = insertMessageWith(ctx, tx, sessionID, assistant)
@@ -56,12 +96,14 @@ func (s *store) InsertToolNotificationPairOnce(
 		return 0, 0, false, fmt.Errorf("insert idempotent tool result: %w", err)
 	}
 
-	if err := advanceModelInputGeneration(ctx, tx, sessionID, resultID); err != nil {
-		return 0, 0, false, err
-	}
+	if effects == scheduledTurnEffects {
+		if err := advanceModelInputGeneration(ctx, tx, sessionID, resultID); err != nil {
+			return 0, 0, false, err
+		}
 
-	if err := insertScheduledOutput(ctx, tx, sessionID, deliveryID, toolResult.Content); err != nil {
-		return 0, 0, false, err
+		if err := insertScheduledOutput(ctx, tx, sessionID, deliveryID, toolResult.Content); err != nil {
+			return 0, 0, false, err
+		}
 	}
 
 	if err := tx.Commit(); err != nil {

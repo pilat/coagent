@@ -224,7 +224,7 @@ func (p *generationProduction) apply(command generationProtocolCommand) {
 		_, err = p.store.PromoteInput(p.ctx, input.ID, input.RawContent)
 		require.NoError(p.t, err)
 	case genScheduleTick:
-		_, _, _, err := p.store.InsertToolNotificationPairOnce(
+		_, _, _, err := p.store.InsertScheduledToolNotificationPairOnce(
 			p.ctx, p.root, "schedule:model:tick", "schedule-model-fingerprint",
 			&transcript.Message{
 				Role: llmwire.RoleAssistant, ToolCalls: []byte(`[{"id":"s1","name":"schedule"}]`),

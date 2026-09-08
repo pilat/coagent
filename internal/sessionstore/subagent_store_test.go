@@ -361,7 +361,7 @@ func TestSubagentStore_DeliverCompletionRejectsEmptyCompletion(t *testing.T) {
 	assert.Zero(t, deliveredMsgID)
 }
 
-func TestStore_InsertToolNotificationPairOnce(t *testing.T) {
+func TestStore_InsertInternalToolNotificationPairOnce(t *testing.T) {
 	s, _, projectID := newTestStore(t)
 	ctx := context.Background()
 
@@ -379,7 +379,7 @@ func TestStore_InsertToolNotificationPairOnce(t *testing.T) {
 		Content:    "child 5 done",
 	}
 
-	asstID, resultID, inserted, err := s.InsertToolNotificationPairOnce(
+	asstID, resultID, inserted, err := s.InsertInternalToolNotificationPairOnce(
 		ctx, sess.ID, "d1", "fp1", assistant, toolResult,
 	)
 	require.NoError(t, err)

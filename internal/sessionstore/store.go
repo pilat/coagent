@@ -125,14 +125,20 @@ type RuntimeStore interface {
 		rootID int64,
 	) (promptTokens int, completionTokens int, costUSD float64, err error)
 
-	ScheduledDeliveryStore
+	SyntheticDeliveryStore
 }
 
-// ScheduledDeliveryStore linearizes a transcript mutation with the durable
+// SyntheticDeliveryStore linearizes a transcript mutation with the durable
 // identity supplied by its external producer. Re-delivery of the same identity
 // and fingerprint is a successful no-op; reuse with different semantics fails.
-type ScheduledDeliveryStore interface {
-	InsertToolNotificationPairOnce(
+type SyntheticDeliveryStore interface {
+	InsertScheduledToolNotificationPairOnce(
+		ctx context.Context,
+		sessionID int64,
+		deliveryID, fingerprint string,
+		assistant, toolResult *transcript.Message,
+	) (asstID, resultID int64, inserted bool, err error)
+	InsertInternalToolNotificationPairOnce(
 		ctx context.Context,
 		sessionID int64,
 		deliveryID, fingerprint string,

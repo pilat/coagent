@@ -537,9 +537,19 @@ func waitForVisibleMessage(
 	sessionID int64,
 	message string,
 ) {
+	waitForVisibleMessageCount(t, collector, sessionID, message, 1)
+}
+
+func waitForVisibleMessageCount(
+	t *testing.T,
+	collector *eventCollector,
+	sessionID int64,
+	message string,
+	want int,
+) {
 	t.Helper()
 	collector.waitFor(t, message, func(events []controllerapi.SessionNotification) bool {
-		return countPublishedMessage(events, sessionID, message) == 1
+		return countPublishedMessage(events, sessionID, message) == want
 	})
 }
 

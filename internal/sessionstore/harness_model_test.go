@@ -262,7 +262,7 @@ func (p *harnessProduction) apply(command harnessCommand) {
 			(snapshot.state == "spawned" || snapshot.state == "running")
 		assert.Equal(p.t, wantFinalized, finalized)
 	case harnessScheduleTick:
-		_, _, _, err := p.store.InsertToolNotificationPairOnce(
+		_, _, _, err := p.store.InsertScheduledToolNotificationPairOnce(
 			p.ctx,
 			p.parent,
 			"schedule:model:tick",
@@ -287,7 +287,7 @@ func (p *harnessProduction) apply(command harnessCommand) {
 		)
 		require.NoError(p.t, err)
 	case harnessScheduleConflict:
-		_, _, _, err := p.store.InsertToolNotificationPairOnce(
+		_, _, _, err := p.store.InsertScheduledToolNotificationPairOnce(
 			p.ctx,
 			p.parent,
 			"schedule:model:tick",
@@ -303,7 +303,7 @@ func (p *harnessProduction) apply(command harnessCommand) {
 		)
 		require.NoError(p.t, err)
 
-		_, _, _, err = p.store.InsertToolNotificationPairOnce(
+		_, _, _, err = p.store.InsertScheduledToolNotificationPairOnce(
 			p.ctx,
 			p.parent,
 			"schedule:model:tick",

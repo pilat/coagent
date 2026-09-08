@@ -100,7 +100,7 @@ func TestScheduledDeliveryAdvancesGenerationOnce(t *testing.T) {
 	assistant := &transcript.Message{Role: "assistant", Content: ""}
 	toolResult := &transcript.Message{Role: "tool", Content: "scheduled work", ToolCallID: "call1"}
 
-	asstID, resultID, inserted, err := store.InsertToolNotificationPairOnce(
+	asstID, resultID, inserted, err := store.InsertScheduledToolNotificationPairOnce(
 		ctx, session.ID, "delivery-1", "fp-1", assistant, toolResult)
 	require.NoError(t, err)
 	require.True(t, inserted)
@@ -114,7 +114,7 @@ func TestScheduledDeliveryAdvancesGenerationOnce(t *testing.T) {
 	assert.Equal(t, resultID, boundary.Int64)
 
 	// Duplicate delivery: no advancement.
-	_, _, inserted, err = store.InsertToolNotificationPairOnce(
+	_, _, inserted, err = store.InsertScheduledToolNotificationPairOnce(
 		ctx, session.ID, "delivery-1", "fp-1", assistant, toolResult)
 	require.NoError(t, err)
 	require.False(t, inserted)
@@ -124,7 +124,7 @@ func TestScheduledDeliveryAdvancesGenerationOnce(t *testing.T) {
 
 	// A second distinct delivery advances once more.
 	var resultID2 int64
-	_, resultID2, inserted, err = store.InsertToolNotificationPairOnce(
+	_, resultID2, inserted, err = store.InsertScheduledToolNotificationPairOnce(
 		ctx, session.ID, "delivery-2", "fp-2", assistant, toolResult)
 	require.NoError(t, err)
 	require.True(t, inserted)

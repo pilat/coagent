@@ -38,6 +38,7 @@ func skillScenarioHasEnvelope(msgs []llmwire.Message) bool {
 // chain: one persistent receipt per activation, ordered after the accepted
 // input and before any later progress reuses the pre-activation card.
 func TestHarnessScenario_SkillActivationReceiptOrdersTheOutputChain(t *testing.T) {
+	modelFollowUpQueued := make(chan struct{})
 	respond := func(_ string, msgs []llmwire.Message) *llmwire.Response {
 		if hasToolResultFor(msgs, "skill") {
 			return &llmwire.Response{Text: "model activation complete"}
@@ -50,6 +51,10 @@ func TestHarnessScenario_SkillActivationReceiptOrdersTheOutputChain(t *testing.T
 		}
 
 		if skillScenarioHasEnvelope(msgs) || hasToolResultFor(msgs, "ls") {
+			if skillScenarioHasEnvelope(msgs) {
+				<-modelFollowUpQueued
+			}
+
 			return &llmwire.Response{Text: "probe answer"}
 		}
 
@@ -63,6 +68,7 @@ func TestHarnessScenario_SkillActivationReceiptOrdersTheOutputChain(t *testing.T
 
 	h := newSkillScenarioHarness(t, respond)
 	defer h.shutdown()
+	defer closeOnce(modelFollowUpQueued)
 
 	collector := collectEvents(h.mgr.PubSub().SubscribeAll())
 	defer collector.stop()
@@ -79,10 +85,11 @@ func TestHarnessScenario_SkillActivationReceiptOrdersTheOutputChain(t *testing.T
 	// Explicit /skill activation through the durable input boundary.
 	require.NoError(t, h.mgr.SendToSession(h.ctx, root, "/skill review"))
 	waitForVisibleMessage(t, collector, root, "🔧 Activated skill: review")
-	waitForVisibleMessage(t, collector, root, "probe answer")
 
 	// Model-initiated activation through the skill tool.
 	require.NoError(t, h.mgr.SendToSession(h.ctx, root, "invoke the skill yourself"))
+	closeOnce(modelFollowUpQueued)
+	waitForVisibleMessageCount(t, collector, root, "probe answer", 2)
 	waitForVisibleMessage(t, collector, root, "model activation complete")
 
 	controller := newChainController(t, h)

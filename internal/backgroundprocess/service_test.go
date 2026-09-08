@@ -758,7 +758,11 @@ func TestService_ShutdownRacingFastInsertInterruptsBeforeSupervision(t *testing.
 
 	close(store.proceed)
 	require.ErrorIs(t, <-startDone, ErrFenced)
-	require.NoError(t, <-cancelDone)
+	// Shutdown may snapshot before or after the inserted row; a visible row
+	// surfaces the injected persistence error while both paths still converge.
+	if err := <-cancelDone; err != nil {
+		require.ErrorContains(t, err, "injected shutdown intent failure")
+	}
 	final := waitState(t, store, record.ID, StateInterrupted, 5*time.Second)
 	assert.Equal(t, IntentDaemonShutdown, final.HostIntent)
 	assert.Equal(t, "pending", final.DeliveryState)

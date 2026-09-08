@@ -2,6 +2,7 @@ package sessionstore
 
 import (
 	"context"
+	"database/sql"
 	"testing"
 	"time"
 
@@ -11,6 +12,43 @@ import (
 	"github.com/pilat/coagent/internal/llmwire"
 	"github.com/pilat/coagent/internal/transcript"
 )
+
+func TestScheduledDeliveryStore_InternalNotificationStaysOutOfManagerOutput(t *testing.T) {
+	t.Parallel()
+
+	store, db, projectID := newTestStore(t)
+	ctx := context.Background()
+	sess, err := store.CreateSession(ctx, projectID, "m", "", map[string]any{"manager_id": "telegram"})
+	require.NoError(t, err)
+
+	assistant := &transcript.Message{
+		Role: llmwire.RoleAssistant,
+		ToolCalls: []byte(`[{
+			"id":"process-event-1","name":"process_event",
+			"arguments":{"process_id":"bgp_1","origin_session_id":1,"event":"completed"}
+		}]`),
+	}
+	result := &transcript.Message{
+		Role: llmwire.RoleTool, ToolCallID: "process-event-1", ToolName: "process_event",
+		Content: "Background process bgp_1 completed: completed",
+	}
+
+	_, _, inserted, err := store.InsertInternalToolNotificationPairOnce(
+		ctx, sess.ID, "bgp_1", "fingerprint-a", assistant, result,
+	)
+	require.NoError(t, err)
+	assert.True(t, inserted)
+
+	var outputs, generation int64
+	var episodeStartedAt sql.NullTime
+	require.NoError(t, db.QueryRowContext(ctx, `SELECT
+		(SELECT COUNT(*) FROM session_outbox WHERE session_id = sessions.id),
+		model_input_generation, episode_started_at
+		FROM sessions WHERE id = ?`, sess.ID).Scan(&outputs, &generation, &episodeStartedAt))
+	assert.Zero(t, outputs)
+	assert.Zero(t, generation)
+	assert.False(t, episodeStartedAt.Valid)
+}
 
 func TestScheduledDeliveryStore_ToolNotificationIsExactlyOnceAndConflictsFailClosed(t *testing.T) {
 	t.Parallel()
@@ -25,7 +63,7 @@ func TestScheduledDeliveryStore_ToolNotificationIsExactlyOnceAndConflictsFailClo
 		Role: llmwire.RoleTool, ToolCallID: "c1", ToolName: "schedule", Content: "due",
 	}
 
-	asstID, resultID, inserted, err := store.InsertToolNotificationPairOnce(
+	asstID, resultID, inserted, err := store.InsertScheduledToolNotificationPairOnce(
 		ctx, sess.ID, "schedule:one-shot:7", "fingerprint-a", assistant, result,
 	)
 	require.NoError(t, err)
@@ -37,7 +75,7 @@ func TestScheduledDeliveryStore_ToolNotificationIsExactlyOnceAndConflictsFailClo
 		`SELECT episode_started_at FROM sessions WHERE id = ?`, sess.ID).Scan(&episodeStartedAt))
 	assert.False(t, episodeStartedAt.IsZero())
 
-	asstID, resultID, inserted, err = store.InsertToolNotificationPairOnce(
+	asstID, resultID, inserted, err = store.InsertScheduledToolNotificationPairOnce(
 		ctx, sess.ID, "schedule:one-shot:7", "fingerprint-a", assistant, result,
 	)
 	require.NoError(t, err)
@@ -49,7 +87,7 @@ func TestScheduledDeliveryStore_ToolNotificationIsExactlyOnceAndConflictsFailClo
 		`SELECT episode_started_at FROM sessions WHERE id = ?`, sess.ID).Scan(&replayedEpisodeStart))
 	assert.Equal(t, episodeStartedAt, replayedEpisodeStart)
 
-	_, _, _, err = store.InsertToolNotificationPairOnce(
+	_, _, _, err = store.InsertScheduledToolNotificationPairOnce(
 		ctx, sess.ID, "schedule:one-shot:7", "different-payload", assistant, result,
 	)
 	require.ErrorIs(t, err, ErrDeliveryConflict)

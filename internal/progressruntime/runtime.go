@@ -53,6 +53,7 @@ type runtime struct {
 	publish               func(int64, sessionevent.Notification)
 
 	mu             sync.Mutex
+	readyOutputs   map[int64]int64
 	progressCancel context.CancelFunc
 	progressDone   chan struct{}
 	progressWake   chan struct{}
@@ -75,6 +76,7 @@ func New(
 		liveContextProjection: contextProjection,
 		startBudgetPark:       startBudgetPark,
 		publish:               publish,
+		readyOutputs:          make(map[int64]int64),
 		progressWake:          make(chan struct{}, 1), progressNow: time.Now, progressTimer: newRealProgressTimer,
 	}
 }
