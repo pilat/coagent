@@ -66,6 +66,7 @@ components:
   toolexec:   { in: internal/toolexec }
   bashsandbox: { in: internal/bashsandbox }
   procexec:   { in: internal/procexec }
+  backgroundprocess: { in: internal/backgroundprocess }
   builtin:    { in: internal/tool/builtin }
   catalog:    { in: internal/catalog }
   llm:        { in: internal/llm }
@@ -139,6 +140,8 @@ deps:
   procexec:
     anyProjectDeps: false
     anyVendorDeps: true
+  backgroundprocess:
+    mayDependOn: [logger]
   shellenv:
     mayDependOn: [coagenthome, logger]
 
@@ -164,11 +167,11 @@ deps:
 
   # Capability hub: tool implementations reach into a few leaf services.
   builtin:
-    mayDependOn: [bashsandbox, coagenthome, config, humanize, llmwire, loader, logger, lsp, mcp, memory, procexec, safefile, shellenv, todo, toolexec, tool]
+    mayDependOn: [backgroundprocess, bashsandbox, coagenthome, config, humanize, llmwire, loader, logger, lsp, mcp, memory, procexec, safefile, shellenv, todo, toolexec, tool]
 
   # ReAct loop — the heaviest service.
   session:
-    mayDependOn: [builtin, config, git, id, llm, llmwire, loader, logger, mcp, mcpstore, memory, progress, registry, sessionevent, sessionstore, shellenv, todo, toolexec, tool, transcript]
+    mayDependOn: [backgroundprocess, builtin, config, git, id, llm, llmwire, loader, logger, mcp, mcpstore, memory, progress, registry, sessionevent, sessionstore, shellenv, todo, toolexec, tool, transcript]
 
   # schedule fires wake-ups only through its own SessionSender interface; it has
   # protocol/logging edges but cannot import session or daemon.
@@ -186,7 +189,7 @@ deps:
 
   # Orchestrator.
   daemon:
-    mayDependOn: [admission, budget, coagenthome, config, configapply, configops, configtools, controllerapi, git, id, inputruntime, llmwire, loader, logger, mcp, mcpstore, progress, progressruntime, projectpath, registry, schedule, session, sessionbus, sessionevent, sessionlifecycle, sessionstore, subagent, todo, tool, transcript]
+    mayDependOn: [admission, backgroundprocess, budget, coagenthome, config, configapply, configops, configtools, controllerapi, git, id, inputruntime, llmwire, loader, logger, mcp, mcpstore, progress, progressruntime, projectpath, registry, schedule, session, sessionbus, sessionevent, sessionlifecycle, sessionstore, subagent, todo, tool, transcript]
 
   configops:
     mayDependOn: [coagenthome, config, logger]

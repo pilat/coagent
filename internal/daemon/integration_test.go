@@ -340,7 +340,8 @@ func newSubagentHarnessOnDBWithProjectConfig(
 		}),
 	)
 
-	mgr := newSvc(
+	mgr, _ := newSvc(
+		context.Background(),
 		factory,
 		store,
 		sessStore,
@@ -1084,7 +1085,8 @@ func newMCPHarnessConfigured(
 		}),
 	)
 
-	mgr := newSvc(
+	mgr, _ := newSvc(
+		context.Background(),
 		factory,
 		store,
 		sessStore,

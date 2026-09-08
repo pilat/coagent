@@ -25,7 +25,7 @@ type Stopper interface {
 	Begin(ctx context.Context, rootID int64, liveSessionIDs []int64) (*StopPlan, error)
 	CancelInputs(ctx context.Context, plan *StopPlan) error
 	Finish(ctx context.Context, plan *StopPlan, keepRootStopping bool) error
-	CompleteExplicit(ctx context.Context, rootID, inputID int64) error
+	CompleteExplicit(ctx context.Context, rootID, inputID int64, cancelledProcesses int) error
 	InterruptedExplicitStops(ctx context.Context) ([]sessionstore.InterruptedExplicitStop, error)
 }
 
@@ -119,8 +119,12 @@ func (s *stopper) Finish(ctx context.Context, plan *StopPlan, keepRootStopping b
 	return nil
 }
 
-func (s *stopper) CompleteExplicit(ctx context.Context, rootID, inputID int64) error {
-	if _, err := s.lifecycle.CompleteExplicitStop(ctx, rootID, inputID); err != nil {
+func (s *stopper) CompleteExplicit(
+	ctx context.Context,
+	rootID, inputID int64,
+	cancelledProcesses int,
+) error {
+	if _, err := s.lifecycle.CompleteExplicitStop(ctx, rootID, inputID, cancelledProcesses); err != nil {
 		return fmt.Errorf("commit explicit stop completion: %w", err)
 	}
 

@@ -21,7 +21,7 @@ const (
 )
 
 type Completions interface {
-	Finalize(ctx context.Context, childID int64, shuttingDown, errored bool)
+	Finalize(ctx context.Context, childID int64, shuttingDown, errored bool) func()
 	Persist(ctx context.Context, parent session.Service, link subagent.Link, messages []*transcript.Message) error
 	Rearm(ctx context.Context, childID int64) error
 }
@@ -57,9 +57,9 @@ func NewCompletions(
 	}
 }
 
-func (c *completions) Finalize(ctx context.Context, childID int64, shuttingDown, errored bool) {
+func (c *completions) Finalize(ctx context.Context, childID int64, shuttingDown, errored bool) func() {
 	if shuttingDown {
-		return
+		return nil
 	}
 
 	link, err := c.links.GetLink(ctx, childID)
@@ -68,11 +68,11 @@ func (c *completions) Finalize(ctx context.Context, childID int64, shuttingDown,
 			"finalize_get_link", zap.Int64("child", childID), zap.Error(err),
 		)
 
-		return
+		return nil
 	}
 
 	if link == nil || link.Terminal() || link.State == subagent.StateStopped {
-		return
+		return nil
 	}
 
 	record, err := c.sessions.GetSession(ctx, childID)
@@ -82,11 +82,11 @@ func (c *completions) Finalize(ctx context.Context, childID int64, shuttingDown,
 		)
 		c.notifyFailure(ctx, link.ParentID, childID, "could not be finalized", err)
 
-		return
+		return nil
 	}
 
 	if record.Status == sessionstore.SessionStatusSuspended && !errored {
-		return
+		return nil
 	}
 
 	state := subagent.StateCompleted
@@ -106,11 +106,11 @@ func (c *completions) Finalize(ctx context.Context, childID int64, shuttingDown,
 		)
 		c.notifyFailure(ctx, link.ParentID, childID, "completion could not be recorded", err)
 
-		return
+		return nil
 	}
 
 	if !terminalized {
-		return
+		return nil
 	}
 
 	if err := c.sessions.UpdateSessionStatus(ctx, childID, persistedStatus); err != nil {
@@ -124,7 +124,8 @@ func (c *completions) Finalize(ctx context.Context, childID int64, shuttingDown,
 	link.Outcome = outcome
 
 	c.subagentChanged(ctx, childID)
-	c.deliver(ctx, *link)
+
+	return func() { c.deliver(ctx, *link) }
 }
 
 func (c *completions) Persist(

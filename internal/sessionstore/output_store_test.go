@@ -435,19 +435,24 @@ func TestOutputStore_MarkSessionKilledWithOutputCommitsBoth(t *testing.T) {
 	record, err := store.CreateSession(ctx, projectID, "model", "", map[string]any{"manager_id": "alpha"})
 	require.NoError(t, err)
 
-	output, err := store.MarkSessionKilledWithOutput(ctx, record.ID)
+	output, err := store.MarkSessionKilledWithOutput(ctx, record.ID, 3)
 	require.NoError(t, err)
 	require.NotNil(t, output)
 
-	var status, outputType string
+	var status, outputType, content string
+	var cancelledProcesses int
 	var killedAt time.Time
 	require.NoError(t, db.QueryRowContext(ctx,
 		`SELECT status, killed_at FROM sessions WHERE id = ?`, record.ID).Scan(&status, &killedAt))
-	require.NoError(t, db.QueryRowContext(ctx,
-		`SELECT type FROM session_outbox WHERE id = ?`, output.OutputID).Scan(&outputType))
+	require.NoError(t, db.QueryRowContext(ctx, `
+		SELECT type, content, json_extract(attributes, '$.cancelled_processes')
+		FROM session_outbox WHERE id = ?`, output.OutputID,
+	).Scan(&outputType, &content, &cancelledProcesses))
 	assert.Equal(t, string(SessionStatusKilled), status)
 	assert.False(t, killedAt.IsZero())
 	assert.Equal(t, string(OutputSessionClosed), outputType)
+	assert.Equal(t, "Session killed. Cancelled background processes: 3", content)
+	assert.Equal(t, 3, cancelledProcesses)
 }
 
 func TestOutputStore_CreatesManagerRootWithLifecycleAndInitialInputAtomically(t *testing.T) {
@@ -654,7 +659,7 @@ func TestOutputStore_ResolvesManagerOwnedReplacementChain(t *testing.T) {
 	require.NoError(t, err)
 	newRecord, _, err := store.ReplaceManagerRoot(ctx, old.ID, "project", "/work/project")
 	require.NoError(t, err)
-	_, err = store.MarkSessionKilledWithOutput(ctx, old.ID)
+	_, err = store.MarkSessionKilledWithOutput(ctx, old.ID, 0)
 	require.NoError(t, err)
 
 	resolved, err := store.ResolveReplacement(ctx, old.ID, "cli")

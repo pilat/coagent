@@ -29,15 +29,38 @@ func (s *svc) parkBudgetTree(ctx context.Context, record *sessionstore.BudgetRec
 		}
 	}
 
-	for s.treeHasActiveLoop(ctx, record.RootSessionID) {
-		select {
-		case <-ctx.Done():
-			return
-		case <-time.After(50 * time.Millisecond):
+	var unlock func()
+
+	for {
+		for s.treeHasActiveLoop(ctx, record.RootSessionID) {
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(50 * time.Millisecond):
+			}
 		}
+
+		var err error
+
+		unlock, err = s.lockSessionTree(ctx, record.RootSessionID)
+		if err != nil {
+			logger.Ctx(ctx).Named("daemon.budget").Warn("lock_park_tree_failed", zap.Error(err))
+			return
+		}
+
+		if s.treeHasActiveLoop(ctx, record.RootSessionID) {
+			unlock()
+			continue
+		}
+
+		break
 	}
 
-	if err := s.stopTreeCleanup(ctx, record.RootSessionID, stopTreeOptions{}); err != nil {
+	defer unlock()
+
+	if err := s.stopTreeCleanup(ctx, record.RootSessionID, stopTreeOptions{
+		preserveBackgroundProcesses: true,
+	}); err != nil {
 		logger.Ctx(ctx).Named("daemon.budget").Warn("park_cleanup_failed", zap.Error(err))
 		return
 	}

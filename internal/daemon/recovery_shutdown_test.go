@@ -139,8 +139,32 @@ func TestStartDoesNotLaunchRecoveryAfterShutdown(t *testing.T) {
 	h := newSubagentHarness(t)
 	h.mgr.Shutdown(time.Second)
 
-	require.NoError(t, h.mgr.Start(h.ctx))
+	require.ErrorIs(t, h.mgr.Start(h.ctx), errDaemonShuttingDown)
 	assert.False(t, h.mgr.recovery.Active())
+}
+
+func TestShutdownWaitsForStartupProcessRecovery(t *testing.T) {
+	mgr, _, _ := newTestManager(t)
+	finishRecovery := mgr.beginProcessRecovery()
+
+	shutdownDone := make(chan struct{})
+	go func() {
+		mgr.Shutdown(time.Second)
+		close(shutdownDone)
+	}()
+
+	select {
+	case <-shutdownDone:
+		t.Fatal("shutdown returned before startup process recovery")
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	finishRecovery()
+	select {
+	case <-shutdownDone:
+	case <-time.After(time.Second):
+		t.Fatal("shutdown did not join startup process recovery")
+	}
 }
 
 func TestEnsureRunnerRejectsShutdown(t *testing.T) {

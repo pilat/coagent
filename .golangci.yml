@@ -272,6 +272,7 @@ linters:
             # The service installer's whole job is running systemctl/launchctl,
             # and onboarding re-invokes this binary under sudo to use it.
             - "!**/internal/install/**"
+            - "!**/internal/backgroundprocess/**"
             - "!**/cmd/coagent/**"
             - "!**/*_test.go"
           deny:

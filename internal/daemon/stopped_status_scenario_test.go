@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"slices"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -70,7 +71,7 @@ func TestScenario_StoppedRootAnswersStatusWithoutReactivating(t *testing.T) {
 }
 
 func lastIdleStatus(events []controllerapi.SessionNotification, sessionID int64) *sessionevent.Notification {
-	for _, event := range events {
+	for _, event := range slices.Backward(events) {
 		if event.SessionID == sessionID && event.Notification.Type == sessionevent.NotifyStateChanged &&
 			event.Notification.Status == controllerapi.StateIdle {
 			n := event.Notification

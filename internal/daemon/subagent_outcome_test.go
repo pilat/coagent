@@ -55,7 +55,7 @@ func TestFinalizeChild_IncompleteWhenNoFinalAnswer(t *testing.T) {
 		ctx, childID, 12, sessionstore.SessionStatusError,
 	))
 
-	h.mgr.finalizeChild(ctx, childID, false, false)
+	h.mgr.finalizeChild(ctx, childID)
 
 	link, err := h.links.GetLink(ctx, childID)
 	require.NoError(t, err)

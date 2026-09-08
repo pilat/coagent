@@ -116,7 +116,9 @@ func TestMigrationsApplyToAnExistingDatabase(t *testing.T) {
 		`ALTER TABLE sessions DROP COLUMN context_baseline_prompt_tokens`,
 		`ALTER TABLE sessions DROP COLUMN context_baseline_message_count`,
 		`ALTER TABLE sessions DROP COLUMN shields_up`,
-		`DELETE FROM goose_db_version WHERE version_id IN (16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33)`,
+		// 00034 added the background-process ledger.
+		`DROP TABLE background_processes`,
+		`DELETE FROM goose_db_version WHERE version_id IN (16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34)`,
 	} {
 		_, err = db.ExecContext(ctx, stmt)
 		require.NoError(t, err, stmt)

@@ -325,7 +325,7 @@ func (p *generationProduction) apply(command generationProtocolCommand) {
 		}
 
 		p.lastStopInputID = inputID.Int64
-		_, err := p.store.CompleteExplicitStop(p.ctx, p.root, inputID.Int64)
+		_, err := p.store.CompleteExplicitStop(p.ctx, p.root, inputID.Int64, 0)
 		require.NoError(p.t, err)
 	case genRestart:
 		p.store = NewStore(p.db)

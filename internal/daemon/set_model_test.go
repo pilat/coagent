@@ -134,7 +134,8 @@ func newModelAwareHarness(
 		}),
 	)
 
-	mgr := newSvc(
+	mgr, _ := newSvc(
+		context.Background(),
 		factory,
 		store,
 		sessStore,

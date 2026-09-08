@@ -5,6 +5,7 @@ import (
 	"math"
 	"strconv"
 	"strings"
+	"time"
 )
 
 const todoHint = "ℹ️ `/status` shows the full TODO list"
@@ -98,6 +99,8 @@ func RenderFull(snapshot Snapshot, redact func(string) string) string {
 			snapshot.BackgroundSubagents,
 		))
 	}
+
+	lines = append(lines, renderProcesses(snapshot.BackgroundProcesses)...)
 
 	if snapshot.Budget != nil {
 		lines = append(lines, renderBudget(*snapshot.Budget))
@@ -336,4 +339,41 @@ func plural(count int) string {
 	}
 
 	return "s"
+}
+
+// renderProcesses projects live background Bash processes. Only stable
+// identities, state, and bounded counters appear here — never command text.
+func renderProcesses(processes []ProcessStatus) []string {
+	if len(processes) == 0 {
+		return nil
+	}
+
+	lines := []string{fmt.Sprintf("- Background processes: %d running", len(processes))}
+
+	for _, process := range processes {
+		deadline := process.DeadlineAt.UTC().Format("15:04:05")
+		lines = append(lines, fmt.Sprintf(
+			"  - %s · owner %s · %s · elapsed %s · deadline %s UTC · output %s",
+			process.ProcessID, process.Owner, process.State,
+			process.Elapsed.Truncate(time.Second), deadline,
+			humanBytes(process.OutputSize),
+		))
+	}
+
+	return lines
+}
+
+func humanBytes(size int64) string {
+	const unit = 1024
+
+	switch {
+	case size >= unit*unit*unit:
+		return fmt.Sprintf("%.1f GiB", float64(size)/(unit*unit*unit))
+	case size >= unit*unit:
+		return fmt.Sprintf("%.1f MiB", float64(size)/(unit*unit))
+	case size >= unit:
+		return fmt.Sprintf("%.1f KiB", float64(size)/unit)
+	default:
+		return fmt.Sprintf("%d B", size)
+	}
 }

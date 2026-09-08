@@ -39,9 +39,10 @@ const maxEmptyLoopIterations = 3
 // ctx is already cancelable through rs (set in ensureRunner).
 func (s *svc) runSession(ctx context.Context, sessionID int64, rs runner) {
 	errored := false
+	publishIdle := false
 
 	defer func() {
-		s.finishRunner(ctx, sessionID, rs, &errored, recover())
+		s.finishRunner(ctx, sessionID, rs, &errored, publishIdle, recover())
 	}()
 
 	notify := func(n sessionevent.Notification) {
@@ -52,7 +53,9 @@ func (s *svc) runSession(ctx context.Context, sessionID int64, rs runner) {
 	emptyRuns := 0
 
 	for {
-		cont, hadInput := s.runSessionIteration(ctx, sessionID, rs, notify, &announced)
+		cont, hadInput := s.runSessionIteration(
+			ctx, sessionID, rs, notify, &announced, &publishIdle,
+		)
 		if !cont {
 			return
 		}
@@ -81,6 +84,7 @@ func (s *svc) finishRunner(
 	sessionID int64,
 	rs runner,
 	errored *bool,
+	publishIdle bool,
 	panicValue any,
 ) {
 	shuttingDown := s.shuttingDown.Load()
@@ -96,32 +100,50 @@ func (s *svc) finishRunner(
 		*errored = true
 	}
 
-	s.runners.Delete(sessionID)
-	info := rs.Info()
-	s.admit.Release(info.Kind, info.ParentID)
-
 	cleanupCtx := context.WithoutCancel(ctx)
-
 	if !shuttingDown {
 		s.abandonStagedApply(cleanupCtx, sessionID)
 	}
 
-	s.finalizeChild(cleanupCtx, sessionID, shuttingDown, *errored)
-	if !shuttingDown {
-		s.reconcileLatestReadiness(cleanupCtx, sessionID)
+	var unlock func()
+	var lockErr error
+	fenced := !shuttingDown && ctx.Err() == nil
+	if fenced {
+		unlock, lockErr = s.lockSessionTree(ctx, sessionID)
+		if lockErr != nil {
+			logger.Ctx(cleanupCtx).Named("daemon.runner").Error(
+				"finish_runner_fence_failed", zap.Int64("session_id", sessionID), zap.Error(lockErr),
+			)
+		}
+	}
+	normalFence := fenced && lockErr == nil
+
+	leftover, deliver, continued := s.finishRunnerLocked(
+		cleanupCtx, ctx.Err(), sessionID, rs, shuttingDown, *errored, normalFence,
+	)
+	if unlock != nil {
+		s.publishOwnerlessIdleAfterTeardown(
+			cleanupCtx, sessionID, publishIdle, shuttingDown, ctx.Err() != nil, continued,
+		)
+		unlock()
 	}
 
-	leftover := rs.DrainInputs()
-	rs.Complete()
+	if !shuttingDown && !normalFence {
+		leftover, deliver, continued = s.finishCancelledRunner(
+			cleanupCtx, sessionID, leftover, *errored,
+		)
+	}
+
+	if deliver != nil {
+		deliver()
+	}
 
 	if !shuttingDown && ctx.Err() == nil {
-		for _, input := range leftover {
-			_ = s.routeQueuedSessionInput(cleanupCtx, sessionID, input)
-		}
-
 		s.drainPendingRunners(cleanupCtx)
 		s.drainQueue(cleanupCtx)
-		s.restartPendingAfterExit(cleanupCtx, sessionID)
+		if !continued {
+			s.restartPendingAfterExit(cleanupCtx, sessionID)
+		}
 	} else if !shuttingDown {
 		// /stop or /kill may win after a typed delivery was appended to the
 		// runner. Complete awaited senders explicitly; durable ledgers retain the
@@ -130,6 +152,168 @@ func (s *svc) finishRunner(
 			input.complete(false, fmt.Errorf("session %d stopped before input delivery", sessionID))
 		}
 	}
+}
+
+func (s *svc) finishCancelledRunner(
+	ctx context.Context,
+	sessionID int64,
+	leftover []queuedSessionInput,
+	errored bool,
+) ([]queuedSessionInput, func(), bool) {
+	unlock, err := s.lockSessionTree(ctx, sessionID)
+	if err != nil {
+		logger.Ctx(ctx).Named("daemon.runner").Error(
+			"finalize_cancelled_runner_failed", zap.Int64("session_id", sessionID), zap.Error(err),
+		)
+
+		return leftover, nil, false
+	}
+	defer unlock()
+
+	processInputs, remaining := splitProcessInputs(leftover)
+	if s.rerouteRunnerInputsLocked(ctx, sessionID, processInputs) {
+		return remaining, nil, true
+	}
+
+	return leftover, s.finalizeChildLocked(ctx, sessionID, false, errored), false
+}
+
+func splitProcessInputs(inputs []queuedSessionInput) ([]queuedSessionInput, []queuedSessionInput) {
+	processInputs := make([]queuedSessionInput, 0, len(inputs))
+	remaining := make([]queuedSessionInput, 0, len(inputs))
+
+	for _, input := range inputs {
+		if isProcessCompletionInput(input.input()) {
+			processInputs = append(processInputs, input)
+		} else {
+			remaining = append(remaining, input)
+		}
+	}
+
+	return processInputs, remaining
+}
+
+func (s *svc) finishRunnerLocked(
+	ctx context.Context,
+	runErr error,
+	sessionID int64,
+	rs runner,
+	shuttingDown, errored, fenced bool,
+) ([]queuedSessionInput, func(), bool) {
+	s.runners.Delete(sessionID)
+
+	info := rs.Info()
+	s.admit.Release(info.Kind, info.ParentID)
+
+	hadRun := rs.HasRun()
+	leftover := rs.DrainInputs()
+	rs.Complete()
+
+	if fenced && !shuttingDown && runErr == nil && !hadRun &&
+		s.deferProcessInputs(ctx, sessionID, leftover) {
+		s.reconcileLatestReadiness(ctx, sessionID)
+
+		return nil, nil, true
+	}
+
+	if fenced && !shuttingDown && runErr == nil && s.rerouteRunnerInputsLocked(ctx, sessionID, leftover) {
+		s.reconcileLatestReadiness(ctx, sessionID)
+
+		return nil, nil, true
+	}
+
+	var deliver func()
+
+	if fenced {
+		deliver = s.finalizeChildLocked(ctx, sessionID, shuttingDown, errored)
+	}
+
+	if !shuttingDown {
+		s.reconcileLatestReadiness(ctx, sessionID)
+	}
+
+	return leftover, deliver, false
+}
+
+func (s *svc) deferProcessInputs(
+	ctx context.Context,
+	sessionID int64,
+	inputs []queuedSessionInput,
+) bool {
+	deferred := false
+	err := errors.New("session setup failed before process completion delivery")
+
+	for _, input := range inputs {
+		process, ok := input.input().(processCompletionInput)
+		if !ok {
+			input.complete(false, err)
+
+			continue
+		}
+
+		deferred = true
+
+		s.scheduleProcessRetry(context.WithoutCancel(ctx), sessionID, process.Completion)
+	}
+
+	return deferred
+}
+
+func (s *svc) rerouteRunnerInputsLocked(
+	ctx context.Context,
+	sessionID int64,
+	inputs []queuedSessionInput,
+) bool {
+	routed := false
+
+	for _, input := range inputs {
+		if isProcessCompletionInput(input.input()) {
+			if err := s.reactivateClaimedProcessTarget(ctx, sessionID); err != nil {
+				input.complete(false, err)
+
+				continue
+			}
+		}
+
+		if err := s.routeQueuedSessionInputLocked(ctx, sessionID, input); err != nil {
+			if errors.Is(err, admission.ErrNoCapacity) && isProcessCompletionInput(input.input()) {
+				queueErr := s.queueCapacityBlockedProcessTargetLocked(ctx, sessionID)
+				if queueErr == nil {
+					routed = true
+
+					continue
+				}
+
+				err = errors.Join(err, queueErr)
+			}
+
+			input.complete(false, err)
+
+			continue
+		}
+
+		routed = true
+	}
+
+	return routed
+}
+
+func (s *svc) reactivateClaimedProcessTarget(ctx context.Context, sessionID int64) error {
+	record, err := s.sessionStore.GetSession(ctx, sessionID)
+	if err != nil {
+		return fmt.Errorf("load claimed process target %d: %w", sessionID, err)
+	}
+
+	if record.ParentID == 0 || (record.Status != sessionstore.SessionStatusCompleted &&
+		record.Status != sessionstore.SessionStatusError) {
+		return nil
+	}
+
+	if err := s.sessionStore.UpdateSessionStatus(ctx, sessionID, sessionstore.SessionStatusActive); err != nil {
+		return fmt.Errorf("reactivate claimed process target %d: %w", sessionID, err)
+	}
+
+	return nil
 }
 
 func (s *svc) restartPendingAfterExit(ctx context.Context, sessionID int64) {
@@ -159,6 +343,7 @@ func (s *svc) runSessionIteration( //nolint:funlen,gocyclo // Linear lifecycle w
 	rs runner,
 	notify func(sessionevent.Notification),
 	announced *bool,
+	publishIdle *bool,
 ) (bool, bool) {
 	rec, err := s.sessionStore.GetSession(ctx, sessionID)
 	if err != nil {
@@ -173,9 +358,12 @@ func (s *svc) runSessionIteration( //nolint:funlen,gocyclo // Linear lifecycle w
 	}
 
 	info := rs.Info()
+	idleEligible := ownerlessSession(rec)
 
 	sess, runErr := s.createOrResumeSession(ctx, sessionID, info.WorkDir, rec, info.PreserveStopped)
 	if runErr != nil {
+		*publishIdle = idleEligible
+
 		logger.Ctx(ctx).Warn("session_create_failed", zap.Int64("session_id", sessionID), zap.Error(runErr))
 		s.reportSessionUnstarted(ctx, sessionID, notify, runErr)
 
@@ -184,6 +372,8 @@ func (s *svc) runSessionIteration( //nolint:funlen,gocyclo // Linear lifecycle w
 
 	inputs, runErr := s.prepareSessionInputs(ctx, sessionID, rs, sess)
 	if runErr != nil {
+		*publishIdle = idleEligible
+
 		sess.Close()
 		logger.Ctx(ctx).Named("daemon.runner").
 			Error("session_inputs_failed", zap.Int64("session_id", sessionID), zap.Error(runErr))
@@ -194,6 +384,8 @@ func (s *svc) runSessionIteration( //nolint:funlen,gocyclo // Linear lifecycle w
 
 	hasDurableInput, pendingErr := s.hasPendingDurableInput(ctx, sessionID)
 	if pendingErr != nil {
+		*publishIdle = idleEligible
+
 		sess.Close()
 		s.reportSessionUnstarted(ctx, sessionID, notify, pendingErr)
 
@@ -204,6 +396,8 @@ func (s *svc) runSessionIteration( //nolint:funlen,gocyclo // Linear lifecycle w
 	if !hasDurableInput && len(inputs) == 0 && !sess.HasPendingWork() && !rs.HasRun() {
 		recoveringAcceptedTurn, runErr = s.recoverableInputRunnable(ctx, sessionID)
 		if runErr != nil {
+			*publishIdle = idleEligible
+
 			sess.Close()
 			s.reportSessionUnstarted(ctx, sessionID, notify, runErr)
 
@@ -214,16 +408,16 @@ func (s *svc) runSessionIteration( //nolint:funlen,gocyclo // Linear lifecycle w
 	hadInput := hasDurableInput || len(inputs) > 0 || recoveringAcceptedTurn
 
 	if !hadInput && !sess.HasPendingWork() {
-		sess.Close()
+		*publishIdle = idleEligible
 
-		if ownerlessSession(rec) {
-			notify(sessionevent.Notification{Type: sessionevent.NotifyStateChanged, Status: controllerapi.StateIdle})
-		}
+		sess.Close()
 
 		return false, false
 	}
 
 	if err := s.activateStoppedRootForScheduledTurn(ctx, rec, inputs); err != nil {
+		*publishIdle = idleEligible
+
 		sess.Close()
 		s.reportSessionUnstarted(ctx, sessionID, notify, err)
 
@@ -276,11 +470,9 @@ func (s *svc) runSessionIteration( //nolint:funlen,gocyclo // Linear lifecycle w
 	s.runStagedApply(ctx, sessionID)
 
 	if runErr != nil {
-		s.handleRunError(ctx, sessionID, runResult.ErrorNotice, runErr, notify)
+		*publishIdle = idleEligible
 
-		if ownerlessSession(rec) {
-			notify(sessionevent.Notification{Type: sessionevent.NotifyStateChanged, Status: controllerapi.StateIdle})
-		}
+		s.handleRunError(ctx, sessionID, runResult.ErrorNotice, runErr, notify)
 
 		return false, hadInput
 	}
@@ -623,10 +815,41 @@ func (s *svc) reportSessionUnstarted(
 		Type:    sessionevent.NotifyMessage,
 		Message: message,
 	})
+}
 
-	if record, err := s.sessionStore.GetSession(ctx, sessionID); err != nil || ownerlessSession(record) {
-		notify(sessionevent.Notification{Type: sessionevent.NotifyStateChanged, Status: controllerapi.StateIdle})
+func (s *svc) publishOwnerlessIdle(ctx context.Context, sessionID int64) {
+	if s.HasActiveLoop(sessionID) {
+		return
 	}
+
+	record, err := s.sessionStore.GetSession(ctx, sessionID)
+	if err != nil {
+		logger.Ctx(ctx).Named("daemon.runner").Warn(
+			"idle_owner_lookup_failed", zap.Int64("session_id", sessionID), zap.Error(err),
+		)
+
+		return
+	}
+
+	if !ownerlessSession(record) {
+		return
+	}
+
+	s.publish(sessionID, sessionevent.Notification{
+		Type: sessionevent.NotifyStateChanged, Status: controllerapi.StateIdle,
+	})
+}
+
+func (s *svc) publishOwnerlessIdleAfterTeardown(
+	ctx context.Context,
+	sessionID int64,
+	publishIdle, shuttingDown, stopped, continued bool,
+) {
+	if !publishIdle || shuttingDown || stopped || continued {
+		return
+	}
+
+	s.publishOwnerlessIdle(ctx, sessionID)
 }
 
 // prepareSessionInputs applies causal results before standalone events, regardless
@@ -662,6 +885,10 @@ func (s *svc) prepareSessionInputs(
 		}
 	}
 
+	if err := s.injectOwedProcessCompletions(ctx, sess, sessionID); err != nil {
+		return nil, err
+	}
+
 	return applied, nil
 }
 
@@ -681,6 +908,10 @@ func (s *svc) applyResolvingInputs(
 
 		wasApplied, err := s.injectSessionInput(ctx, sessionID, sess, input)
 		if err != nil {
+			if process, ok := input.(processCompletionInput); ok {
+				s.scheduleProcessRetry(context.WithoutCancel(ctx), sessionID, process.Completion)
+			}
+
 			delivery.complete(false, err)
 			completeUnprocessedInputs(ordered[idx+1:], err)
 
@@ -738,6 +969,10 @@ func (s *svc) applyStandaloneInputs(
 
 		wasApplied, err := s.injectSessionInput(ctx, sessionID, sess, input)
 		if err != nil {
+			if process, ok := input.(processCompletionInput); ok {
+				s.scheduleProcessRetry(context.WithoutCancel(ctx), sessionID, process.Completion)
+			}
+
 			delivery.complete(false, err)
 			completeUnprocessedInputs(ordered, err)
 
@@ -806,6 +1041,8 @@ func (s *svc) injectSessionInput(
 		}
 
 		return applied, nil
+	case processCompletionInput:
+		return s.injectProcessCompletion(ctx, sess, sessionID, value.Completion)
 	case freshScheduleInput:
 		applied, err := sess.ResetContextAndInjectOnce(ctx, value.DeliveryID, value.Prompt)
 		if err != nil {
@@ -1363,7 +1600,18 @@ func validateRunnerStart(rec *sessionstore.SessionRecord, inputs []queuedSession
 		return fmt.Errorf("session %d is %s", rec.ID, rec.Status)
 	}
 
+	if rec.ParentID != 0 && rec.Status != sessionstore.SessionStatusActive &&
+		rec.Status != sessionstore.SessionStatusSuspended && hasProcessCompletionInput(inputs) {
+		return fmt.Errorf("session %d is terminal; process completion remains owed", rec.ID)
+	}
+
 	return nil
+}
+
+func hasProcessCompletionInput(inputs []queuedSessionInput) bool {
+	return slices.ContainsFunc(inputs, func(input queuedSessionInput) bool {
+		return isProcessCompletionInput(input.input())
+	})
 }
 
 // commandOnlyStoppedRoot reports whether a stopped root is being woken for a

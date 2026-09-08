@@ -984,7 +984,7 @@ func (s *store) killTerminatingTarget(ctx context.Context, id int64, owner strin
 	}
 
 	if !replaced {
-		if _, err := insertClosedOutput(ctx, tx, id, owner, now); err != nil {
+		if _, err := insertClosedOutput(ctx, tx, id, owner, now, 0); err != nil {
 			return err
 		}
 	}

@@ -22,7 +22,7 @@ func TestCoreRegistry_ParallelSafePolicies(t *testing.T) {
 		Provider: config.SearchProviderTavily,
 		APIKey:   "tvly-test",
 	}
-	registerCoreTools(reg, t.TempDir(), nil, nil, nil, nil, nil, nil, mutator, unified)
+	registerCoreTools(reg, t.TempDir(), nil, nil, nil, nil, nil, nil, mutator, unified, nil, 1, 1)
 
 	want := map[string]bool{
 		"read":        true,
@@ -33,6 +33,7 @@ func TestCoreRegistry_ParallelSafePolicies(t *testing.T) {
 		"glob":        true,
 		"grep":        true,
 		"bash":        false,
+		"tail":        true,
 		"webfetch":    true,
 		"websearch":   true, // stateless HTTP, registered only when configured
 		"skill":       false,

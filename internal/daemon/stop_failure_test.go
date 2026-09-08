@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -60,7 +61,8 @@ func TestStopOnStoreFailureDoesNotPublishIdle(t *testing.T) {
 		err:                errors.New("disk hiccup"),
 	}
 	failing.pending.Store(true)
-	mgr := newSvc(
+	mgr, _ := newSvc(
+		context.Background(),
 		&mockFactory{}, store, failing, sessions, sessions,
 		sessions, sessions, sessions, sessions,
 		subagent.NewStore(db), subagent.NewTransactions(db),
@@ -78,4 +80,41 @@ func TestStopOnStoreFailureDoesNotPublishIdle(t *testing.T) {
 	stopping := requireManagerNotification(t, notifications)
 	require.Equal(t, sessionevent.NotifyMessage, stopping.Notification.Type)
 	requireNoManagerNotification(t, notifications)
+}
+
+func TestTeardownOnStoreFailureDoesNotPublishIdle(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	db, err := migrate.OpenDB(ctx, filepath.Join(t.TempDir(), "teardownfail.db"))
+	require.NoError(t, err)
+	require.NoError(t, migrate.Run(ctx, db, filepath.Join(t.TempDir(), "unused.db")))
+	t.Cleanup(func() { _ = db.Close() })
+
+	sessions := sessionstore.NewStore(db)
+	store := NewStore(db)
+	projectID := testProject(t, store, "/tmp/teardown-failure")
+	record, err := sessions.CreateSession(ctx, projectID, "model", "", map[string]any{
+		controllerapi.SessionAttributeManagerID: "manager-teardown",
+	})
+	require.NoError(t, err)
+
+	failing := &failingGetSessionStore{
+		OrchestrationStore: sessions,
+		err:                errors.New("disk hiccup"),
+	}
+	failing.pending.Store(true)
+	mgr, _ := newSvc(
+		context.Background(),
+		&mockFactory{}, store, failing, sessions, sessions,
+		sessions, sessions, sessions, sessions,
+		subagent.NewStore(db), subagent.NewTransactions(db),
+		nil, sessions, nil, nil,
+	)
+	controllers := newTestController(mgr, &config.Config{}, nil, nil)
+	notifications := controllers.ForManager("manager-teardown").Subscribe()
+
+	mgr.publishOwnerlessIdleAfterTeardown(ctx, record.ID, true, false, false, false)
+	requireNoManagerNotification(t, notifications)
+	mgr.Shutdown(time.Second)
 }

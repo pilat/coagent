@@ -66,7 +66,7 @@ func TestBashTool_ShellEnvActivation(t *testing.T) {
 			params, err := json.Marshal(bashParams{Command: "printf '%s' \"$COAGENT_MARKER\"", WorkDir: wd})
 			require.NoError(t, err)
 
-			res, err := newBashTool(wd, runner).Execute(context.Background(), params)
+			res, err := newTestBashToolRunner(t, wd, runner).Execute(context.Background(), params)
 			require.NoError(t, err)
 			assert.Equal(t, "PINNED", res.Output, "bash tool must see the per-cwd activated env")
 		})

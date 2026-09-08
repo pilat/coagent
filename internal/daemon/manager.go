@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"maps"
@@ -14,7 +15,9 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/pilat/coagent/internal/admission"
+	"github.com/pilat/coagent/internal/backgroundprocess"
 	budgetservice "github.com/pilat/coagent/internal/budget"
+	"github.com/pilat/coagent/internal/coagenthome"
 	"github.com/pilat/coagent/internal/config"
 	"github.com/pilat/coagent/internal/configapply"
 	"github.com/pilat/coagent/internal/controllerapi"
@@ -149,6 +152,19 @@ type svc struct {
 	childCache map[int64]bool
 	ownerCache map[int64]string
 	budgetSvc  budgetservice.Service
+	// processSvc owns live cancellation handles; processStore owns durability.
+	processStore      backgroundprocess.Store
+	processCoord      *processCoordinator
+	processSvc        backgroundprocess.Service
+	processRecoveryMu sync.Mutex
+	processRecovery   chan struct{}
+	workerCtx         context.Context //nolint:containedctx // Daemon lifetime context for joined workers.
+	workerCancel      context.CancelFunc
+	workerWG          sync.WaitGroup
+	processRetryMu    sync.Mutex
+	processRetries    map[string]processRetryState
+	queueRetryMu      sync.Mutex
+	queueRetryPending bool
 }
 
 // OutputStore exposes the narrow manager-delivery ledger without widening the
@@ -190,6 +206,7 @@ type queuedRunner struct {
 }
 
 func New(
+	ctx context.Context,
 	factory session.Factory,
 	store Store,
 	sessionStore sessionstore.OrchestrationStore,
@@ -209,7 +226,8 @@ func New(
 	mcpPool mcp.Pool,
 	applier configapply.Service,
 ) Service {
-	s := newSvc(
+	s, processSvc := newSvc(
+		ctx,
 		factory, store, sessionStore, inboxStore, runtimeStore,
 		managerOutputs, managerRoots, lifecycleStore, modelInputs,
 		links, subagents, budgetSvc, progressStore,
@@ -229,10 +247,15 @@ func New(
 		s.loadModelCatalog(cfg.UnifiedConfig.Models)
 	}
 
+	if processSvc != nil {
+		s.factory = session.WithFactoryProcessService(factory, processSvc)
+	}
+
 	return s
 }
 
 func newSvc(
+	ctx context.Context,
 	factory session.Factory,
 	store Store,
 	sessionStore sessionstore.OrchestrationStore,
@@ -248,8 +271,9 @@ func newSvc(
 	progressStore progressruntime.Store,
 	scheduleSvc schedule.Service,
 	defaultModelFn func() string,
-) *svc {
+) (*svc, backgroundprocess.Service) {
 	budgetCtx, budgetCancel := context.WithCancel(context.Background())
+	workerCtx, workerCancel := context.WithCancel(context.Background())
 	s := &svc{
 		runners:        sessionlifecycle.NewRegistry[runner](),
 		factory:        factory,
@@ -282,6 +306,9 @@ func newSvc(
 		ownerCache:      make(map[int64]string),
 		deferNotices:    newDeferAnnouncements(),
 		processPolicies: make(map[int64]map[string]struct{}),
+		processRetries:  make(map[string]processRetryState),
+		workerCtx:       workerCtx,
+		workerCancel:    workerCancel,
 		budgetCtx:       budgetCtx,
 		budgetCancel:    budgetCancel,
 	}
@@ -289,10 +316,26 @@ func newSvc(
 	s.completions = s.newCompletionCoordinator()
 	s.launcher = sessionlifecycle.NewLauncher(
 		sessionStore, links, s.admit, s.runners,
-		s.ensureRunnerStartable, s.enqueueChild, s.runSession,
+		s.ensureRunnerStartable, s.enqueueCapacityBlockedChild, s.runSession,
 	)
 
-	return s
+	// Background Bash processes: the ledger lives in the daemon database; the
+	// coordinator routes terminal facts to owner or root sessions. The factory
+	// shares one lifecycle service so all session stacks admit through it.
+
+	var processSvc backgroundprocess.Service
+
+	if rawStore, ok := store.(interface{ DB() *sql.DB }); ok {
+		if db := rawStore.DB(); db != nil {
+			s.processStore = backgroundprocess.NewStore(db)
+			s.processCoord = newProcessCoordinator(s.processStore, s)
+
+			processSvc = s.newProcessService(ctx)
+			s.processSvc = processSvc
+		}
+	}
+
+	return s, processSvc
 }
 
 func (s *svc) PubSub() sessionbus.Source {
@@ -588,6 +631,9 @@ func (s *svc) handleStatusInput(ctx context.Context, input *sessionstore.InboxIn
 	s.publish(input.SessionID, sessionevent.Notification{
 		Type: sessionevent.NotifyMessage, Message: current.Rendered,
 	})
+	s.publish(input.SessionID, sessionevent.Notification{
+		Type: sessionevent.NotifyStateChanged, Status: controllerapi.StateIdle,
+	})
 
 	return nil
 }
@@ -776,7 +822,19 @@ func (s *svc) killLocked(ctx context.Context, sessionID int64) error {
 	// from request-scoped cancellation while keeping logger values.
 	cleanupCtx := context.WithoutCancel(ctx)
 
-	if _, err := s.lifecycleStore.MarkSessionKilledWithOutput(cleanupCtx, sessionID); err != nil {
+	cancelledProcesses := 0
+	if s.processSvc != nil {
+		cancelledProcesses, err = s.cancelSessionSubtreeProcesses(
+			cleanupCtx, sessionID, backgroundprocess.IntentSessionKilled,
+		)
+		if err != nil {
+			return fmt.Errorf("cancel background processes: %w", err)
+		}
+	}
+
+	if _, err := s.lifecycleStore.MarkSessionKilledWithOutput(
+		cleanupCtx, sessionID, cancelledProcesses,
+	); err != nil {
 		return fmt.Errorf("mark session killed with output: %w", err)
 	}
 
@@ -839,19 +897,22 @@ func (s *svc) stopLocked(ctx context.Context, sessionID, inputID int64) error {
 		})
 	}
 
-	if err := s.stopTreeCleanup(ctx, sessionID, stopTreeOptions{keepRootStopping: explicit}); err != nil {
+	cancelledProcesses := 0
+	if err := s.stopTreeCleanup(ctx, sessionID, stopTreeOptions{
+		keepRootStopping: explicit, cancelledProcesses: &cancelledProcesses,
+	}); err != nil {
 		return err
 	}
 
 	if explicit {
-		return s.completeExplicitStop(ctx, sessionID, inputID)
+		return s.completeExplicitStop(ctx, sessionID, inputID, cancelledProcesses)
 	}
 
 	if err := s.releaseArmedBudget(ctx, sessionID, "stopped"); err != nil {
 		return err
 	}
 
-	if err := s.convergeOrphanedStopStart(ctx, sessionID, inputID); err != nil {
+	if err := s.convergeOrphanedStopStart(ctx, sessionID, inputID, cancelledProcesses); err != nil {
 		return err
 	}
 
@@ -870,7 +931,11 @@ func (s *svc) stopLocked(ctx context.Context, sessionID, inputID int64) error {
 // recovery path, because startup only converges roots still in `stopping`.
 //
 //nolint:funcorder // completes the stop transition documented above.
-func (s *svc) convergeOrphanedStopStart(ctx context.Context, sessionID, inputID int64) error {
+func (s *svc) convergeOrphanedStopStart(
+	ctx context.Context,
+	sessionID, inputID int64,
+	cancelledProcesses int,
+) error {
 	if inputID <= 0 {
 		return nil
 	}
@@ -879,7 +944,7 @@ func (s *svc) convergeOrphanedStopStart(ctx context.Context, sessionID, inputID 
 	// Ownerless stops have no start row to converge; an unread session stays a
 	// startup-recovery case rather than a terminal fact published blind.
 	if recordErr == nil && !ownerlessSession(record) {
-		return s.completeExplicitStop(ctx, sessionID, inputID)
+		return s.completeExplicitStop(ctx, sessionID, inputID, cancelledProcesses)
 	}
 
 	return nil
@@ -890,8 +955,14 @@ func (s *svc) convergeOrphanedStopStart(ctx context.Context, sessionID, inputID 
 // rescan. The outbox remains the source of truth either way.
 //
 //nolint:funcorder // belongs beside the public Stop transition it completes.
-func (s *svc) completeExplicitStop(ctx context.Context, rootID, inputID int64) error {
-	return s.stopper.CompleteExplicit(ctx, rootID, inputID) //nolint:wrapcheck // Stopper owns terminal context.
+func (s *svc) completeExplicitStop(
+	ctx context.Context,
+	rootID, inputID int64,
+	cancelledProcesses int,
+) error {
+	return s.stopper.CompleteExplicit( //nolint:wrapcheck // Stopper owns terminal context.
+		ctx, rootID, inputID, cancelledProcesses,
+	)
 }
 
 // stopTreeCleanup durably parks a tree without publishing user-command events.
@@ -900,8 +971,10 @@ func (s *svc) completeExplicitStop(ctx context.Context, rootID, inputID int64) e
 // stopping fence: the caller owns the single terminal transaction that moves it
 // to `stopped` together with the visible completion output.
 type stopTreeOptions struct {
-	keepRootStopping       bool
-	preserveShieldCommands bool
+	keepRootStopping            bool
+	preserveShieldCommands      bool
+	preserveBackgroundProcesses bool
+	cancelledProcesses          *int
 }
 
 //nolint:funcorder,wsl_v5 // The second stop phase belongs beside the public Stop transition.
@@ -934,6 +1007,23 @@ func (s *svc) stopTreeCleanup(ctx context.Context, sessionID int64, options stop
 	// parent can otherwise keep a child alive while stop is waiting on it.
 	for _, rs := range runners {
 		rs.Cancel()
+	}
+
+	// Cancel every background Bash process owned by the tree, including
+	// processes started by already-terminal subagents. The shared lifecycle
+	// service signals the in-memory handles, joins terminalization, and
+	// suppresses the individual wake events before the stop fence completes.
+	if s.processSvc != nil && !options.preserveBackgroundProcesses {
+		cancelled, err := s.cancelSessionSubtreeProcesses(
+			cleanupCtx, sessionID, backgroundprocess.IntentSessionStopped,
+		)
+		if err != nil {
+			return fmt.Errorf("cancel background processes: %w", err)
+		}
+
+		if options.cancelledProcesses != nil {
+			*options.cancelledProcesses = cancelled
+		}
 	}
 
 	for _, rs := range runners {
@@ -1174,12 +1264,20 @@ func (s *svc) Shutdown(timeout time.Duration) {
 	defer cancel()
 
 	s.shuttingDown.Store(true)
+	s.processRetryMu.Lock()
+	s.queueRetryMu.Lock()
+	if s.workerCancel != nil {
+		s.workerCancel()
+	}
+	s.queueRetryMu.Unlock()
+	s.processRetryMu.Unlock()
 
 	if s.budgetCancel != nil {
 		s.budgetCancel()
 	}
 
 	recoveryDone := s.stopRecovery()
+	processRecoveryDone := s.currentProcessRecovery()
 
 	runners := s.runners.CloseAndSnapshot()
 
@@ -1188,6 +1286,15 @@ func (s *svc) Shutdown(timeout time.Duration) {
 	go func() {
 		for _, rs := range runners {
 			rs.Cancel()
+		}
+
+		// Controlled shutdown cancels and joins every owned process group
+		// through the shared lifecycle service; their completions stay owed
+		// as interrupted for the next startup.
+		if s.processSvc != nil {
+			if _, err := s.processSvc.CancelAll(shutdownCtx, backgroundprocess.IntentDaemonShutdown); err != nil {
+				logger.Ctx(shutdownCtx).Named("daemon.process").Warn("shutdown_cancel_failed", zap.Error(err))
+			}
 		}
 
 		if s.progress != nil {
@@ -1202,7 +1309,12 @@ func (s *svc) Shutdown(timeout time.Duration) {
 			<-recoveryDone
 		}
 
+		if processRecoveryDone != nil {
+			<-processRecoveryDone
+		}
+
 		s.budgetWG.Wait()
+		s.workerWG.Wait()
 
 		close(done)
 	}()
@@ -1263,6 +1375,62 @@ func (s *svc) GetProjectName(ctx context.Context, projectID int64) (string, erro
 	return name, nil
 }
 
+// newProcessService shares the tree lock between process admission and stop.
+func (s *svc) newProcessService(ctx context.Context) backgroundprocess.Service {
+	fence := func(fenceCtx context.Context, rootSessionID int64) (func(), error) {
+		unlock, err := s.lockSessionTree(fenceCtx, rootSessionID)
+		if err != nil {
+			return nil, fmt.Errorf("lock process tree %d: %w", rootSessionID, err)
+		}
+
+		if s.shuttingDown.Load() {
+			unlock()
+
+			return nil, backgroundprocess.ErrFenced
+		}
+
+		rec, err := s.sessionStore.GetSession(fenceCtx, rootSessionID)
+		if err != nil {
+			unlock()
+
+			if errors.Is(err, sql.ErrNoRows) {
+				return nil, backgroundprocess.ErrFenced
+			}
+
+			return nil, fmt.Errorf("fence session %d lookup: %w", rootSessionID, err)
+		}
+
+		if rec.Status == sessionstore.SessionStatusStopping ||
+			rec.Status == sessionstore.SessionStatusTerminating ||
+			rec.KilledAt != nil {
+			unlock()
+
+			return nil, backgroundprocess.ErrFenced
+		}
+
+		return unlock, nil
+	}
+
+	outputRoot, err := coagenthome.Join(coagenthome.ProcessesDirName)
+	if err != nil {
+		logger.Ctx(ctx).Named("daemon.process").Warn("process_output_dir", zap.Error(err))
+
+		return backgroundprocess.NewService(s.processStore, backgroundprocess.Options{
+			TreeFence: fence,
+		})
+	}
+
+	return backgroundprocess.NewService(s.processStore, backgroundprocess.Options{
+		OutputDir: outputRoot,
+		OnCompletion: func(ctx context.Context, completion backgroundprocess.Completion) {
+			if s.processCoord != nil {
+				s.routeProcessCompletion(ctx, completion)
+			}
+		},
+		TreeFence: fence,
+	})
+}
+
 func (s *svc) enqueueUserSessionInput(
 	ctx context.Context,
 	sessionID int64,
@@ -1314,6 +1482,31 @@ func (s *svc) isRootScheduleTarget(ctx context.Context, sessionID int64) (bool, 
 
 func (s *svc) stopRecovery() <-chan struct{} {
 	return s.recovery.Close()
+}
+
+func (s *svc) beginProcessRecovery() func() {
+	done := make(chan struct{})
+
+	s.processRecoveryMu.Lock()
+	s.processRecovery = done
+	s.processRecoveryMu.Unlock()
+
+	return func() {
+		close(done)
+
+		s.processRecoveryMu.Lock()
+		if s.processRecovery == done {
+			s.processRecovery = nil
+		}
+		s.processRecoveryMu.Unlock()
+	}
+}
+
+func (s *svc) currentProcessRecovery() <-chan struct{} {
+	s.processRecoveryMu.Lock()
+	defer s.processRecoveryMu.Unlock()
+
+	return s.processRecovery
 }
 
 // loadModelCatalog records the configured models once: the subagent picker reads
@@ -1382,6 +1575,23 @@ func (s *svc) enqueueSessionInput(ctx context.Context, sessionID int64, input se
 // lazily revives an idle session. It rejects killed sessions; awaited callers
 // receive the actual injection outcome through their delivery object.
 func (s *svc) routeQueuedSessionInput(ctx context.Context, sessionID int64, input queuedSessionInput) error {
+	return s.routeQueuedSessionInputWithEnsure(ctx, sessionID, input, s.ensureRunner)
+}
+
+func (s *svc) routeQueuedSessionInputLocked(
+	ctx context.Context,
+	sessionID int64,
+	input queuedSessionInput,
+) error {
+	return s.routeQueuedSessionInputWithEnsure(ctx, sessionID, input, s.ensureRunnerLocked)
+}
+
+func (s *svc) routeQueuedSessionInputWithEnsure(
+	ctx context.Context,
+	sessionID int64,
+	input queuedSessionInput,
+	ensure func(context.Context, int64, string, int64, []queuedSessionInput) error,
+) error {
 	if err := input.input().validate(); err != nil {
 		input.complete(false, err)
 		return err
@@ -1405,6 +1615,11 @@ func (s *svc) routeQueuedSessionInput(ctx context.Context, sessionID int64, inpu
 		return fmt.Errorf("session %d is %s", sessionID, rec.Status)
 	}
 
+	if rec.ParentID != 0 && rec.Status != sessionstore.SessionStatusActive &&
+		rec.Status != sessionstore.SessionStatusSuspended && isProcessCompletionInput(input.input()) {
+		return fmt.Errorf("session %d is terminal; process completion remains owed", sessionID)
+	}
+
 	// Registry serialization prevents teardown from losing an input appended
 	// before entry deletion and the final leftover drain.
 	if s.appendIfLive(sessionID, input) {
@@ -1420,7 +1635,7 @@ func (s *svc) routeQueuedSessionInput(ctx context.Context, sessionID int64, inpu
 		return nil
 	}
 
-	return s.ensureRunner(ctx, sessionID, workDir, rec.ProjectID, []queuedSessionInput{input})
+	return ensure(ctx, sessionID, workDir, rec.ProjectID, []queuedSessionInput{input})
 }
 
 // removeSchedules deletes all schedules (one-shot and cron) for a killed session.
@@ -1504,6 +1719,7 @@ func (s *svc) send(
 		if _, killErr := s.lifecycleStore.MarkSessionKilledWithOutput(
 			context.WithoutCancel(ctx),
 			rec.ID,
+			0,
 		); killErr != nil {
 			logger.Ctx(ctx).Named("daemon.manager").Warn("cleanup_orphaned_session",
 				zap.Int64("session_id", rec.ID), zap.Error(killErr))

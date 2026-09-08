@@ -8,6 +8,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/pilat/coagent/internal/admission"
+	"github.com/pilat/coagent/internal/backgroundprocess"
 	"github.com/pilat/coagent/internal/logger"
 	"github.com/pilat/coagent/internal/session"
 	"github.com/pilat/coagent/internal/sessionstore"
@@ -18,10 +19,34 @@ import (
 
 // finalizeChild marks a subagent terminal (once its loop has fully exited and
 // its final message is durably written) and delivers its completion to the
-// parent. No-op for non-subagent sessions and during shutdown (the startup
-// sweep re-delivers on restart). errored forces the error state (loop panic).
-func (s *svc) finalizeChild(ctx context.Context, childID int64, shuttingDown, errored bool) {
-	s.completions.Finalize(ctx, childID, shuttingDown, errored)
+// parent. No-op for non-subagent sessions. errored forces the error state.
+func (s *svc) finalizeChild(ctx context.Context, childID int64) {
+	var deliver func()
+
+	err := s.guardChildTransition(ctx, childID, func(guarded context.Context) error {
+		deliver = s.finalizeChildLocked(guarded, childID, false, false)
+
+		return nil
+	})
+	if err != nil {
+		logger.Ctx(ctx).Named("daemon.completion").Error(
+			"finalize_child_fence_failed", zap.Int64("child", childID), zap.Error(err),
+		)
+
+		return
+	}
+
+	if deliver != nil {
+		deliver()
+	}
+}
+
+func (s *svc) finalizeChildLocked(
+	ctx context.Context,
+	childID int64,
+	shuttingDown, errored bool,
+) func() {
+	return s.completions.Finalize(ctx, childID, shuttingDown, errored)
 }
 
 // deliverCompletionToParent routes a completion notification to the parent,
@@ -215,6 +240,48 @@ func (s *svc) injectOwedCompletions(
 	return nil
 }
 
+func (s *svc) recoveredStopCancellationCount(
+	ctx context.Context,
+	rootID int64,
+	since time.Time,
+) (int, error) {
+	if s.processStore == nil {
+		return 0, nil
+	}
+
+	count, err := s.processStore.CountTerminalByIntentSince(
+		ctx, rootID, backgroundprocess.IntentSessionStopped, since,
+	)
+	if err != nil {
+		return 0, fmt.Errorf("count stopped processes for session %d: %w", rootID, err)
+	}
+
+	return count, nil
+}
+
+func (s *svc) injectOwedProcessCompletions(
+	ctx context.Context,
+	sess session.Service,
+	sessionID int64,
+) error {
+	if s.processStore == nil || len(sess.PendingExternalCalls()) > 0 {
+		return nil
+	}
+
+	processes, err := s.processStore.ListUndeliveredForTarget(ctx, sessionID)
+	if err != nil {
+		return fmt.Errorf("list owed process completions for session %d: %w", sessionID, err)
+	}
+
+	for _, process := range processes {
+		if _, err := s.injectProcessCompletion(ctx, sess, sessionID, restartCompletion(process)); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
 // finishInterruptedKills completes a /kill or /clear whose process died
 // between the durable terminating fence and the final transition: the store
 // kills the root (emitting its close output when no replacement took over),
@@ -225,11 +292,11 @@ func (s *svc) finishInterruptedKills(ctx context.Context) error {
 		return fmt.Errorf("list sessions for kill recovery: %w", err)
 	}
 
-	interrupted := make([]int64, 0)
+	interrupted := make([]*sessionstore.SessionRecord, 0)
 
 	for _, rec := range records {
 		if rec.Status == sessionstore.SessionStatusTerminating && rec.KilledAt == nil {
-			interrupted = append(interrupted, rec.ID)
+			interrupted = append(interrupted, rec)
 		}
 	}
 
@@ -237,19 +304,42 @@ func (s *svc) finishInterruptedKills(ctx context.Context) error {
 		return nil
 	}
 
-	if err := s.sessionStore.KillTerminatingSessions(ctx); err != nil {
-		return fmt.Errorf("kill terminating sessions: %w", err)
-	}
-
 	cleanupCtx := context.WithoutCancel(ctx)
 
-	for _, id := range interrupted {
-		if _, err := s.inboxStore.CancelPendingInputs(cleanupCtx, []int64{id}, "killed"); err != nil {
-			return fmt.Errorf("cancel killed session input %d: %w", id, err)
+	for _, record := range interrupted {
+		if _, err := s.cancelSessionSubtreeProcesses(
+			cleanupCtx, record.ID, backgroundprocess.IntentSessionKilled,
+		); err != nil {
+			return fmt.Errorf("cancel processes for interrupted kill %d: %w", record.ID, err)
+		}
+	}
+
+	for _, record := range interrupted {
+		cancelled := 0
+
+		if s.processStore != nil {
+			var err error
+
+			cancelled, err = s.processStore.CountTerminalByIntentSince(
+				cleanupCtx, record.ID, backgroundprocess.IntentSessionKilled, record.UpdatedAt,
+			)
+			if err != nil {
+				return fmt.Errorf("count processes for interrupted kill %d: %w", record.ID, err)
+			}
 		}
 
-		s.removeSchedules(cleanupCtx, id)
-		s.cascadeKillChildren(cleanupCtx, id, 0, time.Now().Add(cascadeRetryBudget))
+		if _, err := s.lifecycleStore.MarkSessionKilledWithOutput(
+			cleanupCtx, record.ID, cancelled,
+		); err != nil {
+			return fmt.Errorf("finish killed session %d: %w", record.ID, err)
+		}
+
+		if _, err := s.inboxStore.CancelPendingInputs(cleanupCtx, []int64{record.ID}, "killed"); err != nil {
+			return fmt.Errorf("cancel killed session input %d: %w", record.ID, err)
+		}
+
+		s.removeSchedules(cleanupCtx, record.ID)
+		s.cascadeKillChildren(cleanupCtx, record.ID, 0, time.Now().Add(cascadeRetryBudget))
 	}
 
 	return nil
@@ -276,12 +366,19 @@ func (s *svc) completionContent(ctx context.Context, link subagent.Link) string 
 // Start re-establishes in-flight children and re-delivers undelivered completions
 // after a restart. Only PASS 0 blocks; the resumes run asynchronously.
 func (s *svc) Start(ctx context.Context) error {
+	finishProcessRecovery := s.beginProcessRecovery()
+	defer finishProcessRecovery()
+
+	if s.shuttingDown.Load() {
+		return errDaemonShuttingDown
+	}
+
 	s.noticeSearchUnconfigured(ctx)
 
 	// Must precede the sweep: a session left mid-clear or mid-kill by the previous
 	// run would otherwise be resumed in that half-torn state.
 	if err := s.finishInterruptedKills(ctx); err != nil {
-		logger.Ctx(ctx).Named("daemon.manager").Warn("finish_interrupted_kills_failed", zap.Error(err))
+		return fmt.Errorf("finish interrupted kills: %w", err)
 	}
 
 	if err := s.finishInterruptedShieldRaises(ctx); err != nil {
@@ -306,7 +403,7 @@ func (s *svc) Start(ctx context.Context) error {
 		}
 	}
 
-	owedStops := make(map[int64]int64)
+	owedStops := make(map[int64]sessionstore.InterruptedExplicitStop)
 
 	stops, selectErr := s.stopper.InterruptedExplicitStops(ctx)
 	if selectErr != nil {
@@ -314,10 +411,60 @@ func (s *svc) Start(ctx context.Context) error {
 	}
 
 	for _, stop := range stops {
-		owedStops[stop.SessionID] = stop.InputID
+		owedStops[stop.SessionID] = stop
 	}
 
-	return s.finishStoppingRoots(ctx, records, stopping, owedStops)
+	// Startup interruption sweep for background Bash processes runs after the
+	// stop-fence recovery below: a root mid-stop must finish its operator
+	// fence first, so records it covers stay cancelled with no wake event.
+	return s.finishStoppingRoots(ctx, records, stopping, owedStops, func() error {
+		if s.processStore == nil {
+			return nil
+		}
+
+		if err := s.recoverProcessInterruptions(ctx); err != nil {
+			return fmt.Errorf("recover background process interruptions: %w", err)
+		}
+
+		return nil
+	})
+}
+
+// recoverProcessInterruptions terminalizes leftover advertised running
+// processes and re-routes claimed-but-undelivered completions. It runs after
+// the interrupted-stop fence so records covered by an operator stop stay
+// cancelled with no wake event.
+func (s *svc) recoverProcessInterruptions(ctx context.Context) error {
+	if _, err := s.processSvc.InterruptNonterminal(ctx); err != nil {
+		return fmt.Errorf("interrupt nonterminal processes: %w", err)
+	}
+
+	// Re-deliver completions whose routing committed but whose wake never
+	// reached the transcript (crash between claim and injection).
+	undelivered, err := s.processStore.ListUndelivered(ctx)
+	if err != nil {
+		return fmt.Errorf("list undelivered process completions: %w", err)
+	}
+
+	for _, record := range undelivered {
+		if record.WakeSuppressed() {
+			if _, err := s.processStore.MarkSuppressed(ctx, record.ID); err != nil {
+				return fmt.Errorf("suppress process delivery %s: %w", record.ID, err)
+			}
+
+			continue
+		}
+
+		if record.DeliveryState == "pending" {
+			s.routeProcessCompletion(ctx, restartCompletion(record))
+
+			continue
+		}
+
+		s.routeRestartedProcessCompletion(ctx, record, record.DeliveryTargetSessionID)
+	}
+
+	return nil
 }
 
 //nolint:wsl_v5 // Recovery keeps each durable phase transition adjacent to its side effect.
@@ -394,19 +541,48 @@ func (s *svc) finishStoppingRoots(
 	ctx context.Context,
 	records []*sessionstore.SessionRecord,
 	stopping map[int64]bool,
-	owedStops map[int64]int64,
+	owedStops map[int64]sessionstore.InterruptedExplicitStop,
+	afterStops func() error,
+) error {
+	if err := s.recoverStoppingSessions(ctx, records, stopping, owedStops); err != nil {
+		return err
+	}
+
+	if err := s.convergeStoppedSessions(ctx, records, owedStops); err != nil {
+		return err
+	}
+
+	if afterStops != nil {
+		if err := afterStops(); err != nil {
+			return err
+		}
+	}
+
+	return s.finishRecoveredServices(ctx)
+}
+
+func (s *svc) recoverStoppingSessions(
+	ctx context.Context,
+	records []*sessionstore.SessionRecord,
+	stopping map[int64]bool,
+	owedStops map[int64]sessionstore.InterruptedExplicitStop,
 ) error {
 	for _, rec := range records {
 		if !stopping[rec.ID] || stopping[rec.ParentID] {
 			continue
 		}
 
-		if inputID, owed := owedStops[rec.ID]; owed {
+		if stop, owed := owedStops[rec.ID]; owed {
 			if err := s.stopTreeCleanup(ctx, rec.ID, stopTreeOptions{keepRootStopping: true}); err != nil {
 				return fmt.Errorf("recover stopping session %d: %w", rec.ID, err)
 			}
 
-			if err := s.completeExplicitStop(ctx, rec.ID, inputID); err != nil {
+			cancelled, err := s.recoveredStopCancellationCount(ctx, rec.ID, stop.ReceivedAt)
+			if err != nil {
+				return err
+			}
+
+			if err := s.completeExplicitStop(ctx, rec.ID, stop.InputID, cancelled); err != nil {
 				return fmt.Errorf("recover explicit stop for session %d: %w", rec.ID, err)
 			}
 
@@ -418,18 +594,35 @@ func (s *svc) finishStoppingRoots(
 		}
 	}
 
+	return nil
+}
+
+func (s *svc) convergeStoppedSessions(
+	ctx context.Context,
+	records []*sessionstore.SessionRecord,
+	owedStops map[int64]sessionstore.InterruptedExplicitStop,
+) error {
 	for _, rec := range records {
 		if rec.Status != sessionstore.SessionStatusStopped {
 			continue
 		}
 
-		if inputID, owed := owedStops[rec.ID]; owed {
-			if err := s.completeExplicitStop(ctx, rec.ID, inputID); err != nil {
+		if stop, owed := owedStops[rec.ID]; owed {
+			cancelled, err := s.recoveredStopCancellationCount(ctx, rec.ID, stop.ReceivedAt)
+			if err != nil {
+				return err
+			}
+
+			if err := s.completeExplicitStop(ctx, rec.ID, stop.InputID, cancelled); err != nil {
 				return fmt.Errorf("converge explicit stop for session %d: %w", rec.ID, err)
 			}
 		}
 	}
 
+	return nil
+}
+
+func (s *svc) finishRecoveredServices(ctx context.Context) error {
 	if err := s.finishPendingShieldCommands(ctx); err != nil {
 		return err
 	}

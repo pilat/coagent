@@ -87,9 +87,17 @@ func validateProducerAttributes(kind OutputType, attributes map[string]any) erro
 		}
 	case OutputSessionClosed:
 		allowed["reason"] = struct{}{}
+		allowed["cancelled_processes"] = struct{}{}
 
 		if attributes["reason"] != killedReason {
 			return errors.New("session closed output requires killed reason")
+		}
+
+		if rawCount, exists := attributes["cancelled_processes"]; exists {
+			count, ok := rawCount.(float64)
+			if !ok || count < 0 || count != float64(int(count)) {
+				return errors.New("session closed output requires a nonnegative process count")
+			}
 		}
 	}
 

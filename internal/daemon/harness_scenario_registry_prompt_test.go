@@ -190,7 +190,8 @@ func newRegistryPromptManager(
 	workDir string,
 	t *testing.T,
 ) *svc {
-	mgr := newSvc(
+	mgr, _ := newSvc(
+		context.Background(),
 		factory, deps.store, deps.sessionStore, deps.sessionStore, deps.sessionStore,
 		deps.sessionStore, deps.sessionStore, deps.sessionStore, deps.sessionStore,
 		deps.links, deps.subagents,

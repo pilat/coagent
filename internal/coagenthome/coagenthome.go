@@ -25,6 +25,7 @@ const (
 	CacheDirName        = "cache"
 	CatalogDirName      = "catalog"
 	MarketplacesDirName = "marketplaces"
+	ProcessesDirName    = "processes"
 
 	// TelegramServiceFilePattern is the legacy target-chat-keyed service record.
 	TelegramServiceFilePattern = "tg-service-%d.json"

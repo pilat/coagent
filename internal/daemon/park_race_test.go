@@ -49,7 +49,8 @@ func TestSendToSessionDuringBudgetDrainExplainsParking(t *testing.T) {
 	_, err = sessions.BeginBudgetDrain(ctx, root.ID, fired.Generation, fired.ParkOwner)
 	require.NoError(t, err)
 
-	mgr := newSvc(
+	mgr, _ := newSvc(
+		context.Background(),
 		&mockFactory{},
 		store,
 		sessions,

@@ -2,6 +2,9 @@ package daemon
 
 import (
 	"context"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -10,6 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/pilat/coagent/internal/admission"
+	"github.com/pilat/coagent/internal/backgroundprocess"
 	"github.com/pilat/coagent/internal/sessionstore"
 	"github.com/pilat/coagent/internal/subagent"
 )
@@ -46,7 +50,7 @@ func TestFollowUpAcceptedBeforeTerminalBoundaryStaysInSameActivation(t *testing.
 	}
 
 	require.NoError(t, mgr.SendToChild(ctx, childID, "one more question"))
-	mgr.finalizeChild(ctx, childID, false, false)
+	mgr.finalizeChild(ctx, childID)
 
 	link, err := mgr.links.GetLink(ctx, childID)
 	require.NoError(t, err)
@@ -209,6 +213,15 @@ func TestStartFinishesInterruptedStopBeforeRecoverySweep(t *testing.T) {
 	require.NoError(t, mgr.sessionStore.UpdateSessionStatus(ctx, parent.ID, sessionstore.SessionStatusStopping))
 	require.NoError(t, mgr.sessionStore.UpdateSessionStatus(ctx, childID, sessionstore.SessionStatusStopping))
 
+	outputPath := filepath.Join(t.TempDir(), "stopping.output")
+	require.NoError(t, os.WriteFile(outputPath, []byte("partial"), 0o600))
+	now := time.Now().UTC()
+	require.NoError(t, mgr.processStore.InsertProcess(ctx, backgroundprocess.Process{
+		ID: "stopping-process", SessionID: childID, RootSessionID: parent.ID,
+		ToolCallID: "stopping-call", OutputPath: outputPath, CreatedAt: now,
+		Deadline: now.Add(time.Minute), AdvertisedAt: &now, State: backgroundprocess.StateRunning,
+	}))
+
 	require.NoError(t, mgr.Start(ctx))
 
 	for _, id := range []int64{parent.ID, childID} {
@@ -220,8 +233,43 @@ func TestStartFinishesInterruptedStopBeforeRecoverySweep(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, link)
 	assert.Equal(t, subagent.StateStopped, link.State)
+	process, err := mgr.processStore.GetProcess(ctx, "stopping-process")
+	require.NoError(t, err)
+	assert.Equal(t, backgroundprocess.StateCancelled, process.State)
+	assert.Equal(t, "suppressed", process.DeliveryState)
+	messages, err := mgr.sessionStore.LoadActiveMessages(ctx, parent.ID)
+	require.NoError(t, err)
+	assert.Equal(t, 0, countToolResultsFor(toDTO(messages), "process_event"))
 
 	mgr.Shutdown(3 * time.Second)
+}
+
+func TestStopTreeCleanupPreservesBackgroundProcessesForBudgetPark(t *testing.T) {
+	ctx := context.Background()
+	mgr, _, projects := newTestManager(t)
+	projectID := testProject(t, projects, "/tmp/budget-process")
+	root, err := mgr.sessionStore.CreateSession(ctx, projectID, "fake-model", "", nil)
+	require.NoError(t, err)
+
+	service := backgroundprocess.NewService(mgr.processStore, backgroundprocess.Options{OutputDir: t.TempDir()})
+	mgr.processSvc = service
+	process, err := service.Start(ctx, backgroundprocess.Spec{
+		SessionID: root.ID, RootSessionID: root.ID, ToolCallID: "budget-process",
+		Deadline: time.Minute, Advertise: true,
+	}, func(ctx context.Context) (*exec.Cmd, error) {
+		return exec.CommandContext(ctx, "sleep", "30"), nil
+	})
+	require.NoError(t, err)
+
+	require.NoError(t, mgr.stopTreeCleanup(ctx, root.ID, stopTreeOptions{
+		preserveBackgroundProcesses: true,
+	}))
+	record, err := mgr.processStore.GetProcess(ctx, process.ID)
+	require.NoError(t, err)
+	assert.Equal(t, backgroundprocess.StateRunning, record.State)
+
+	_, err = service.CancelAll(ctx, backgroundprocess.IntentDaemonShutdown)
+	require.NoError(t, err)
 }
 
 func containsAll(value string, needles ...string) bool {

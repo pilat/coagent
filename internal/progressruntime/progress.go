@@ -132,6 +132,20 @@ func (r *runtime) progressSnapshot(
 		})
 	}
 
+	// Owner is rendered as "main" for the root session, else the subagent id.
+	for _, process := range facts.BackgroundProcesses {
+		owner := "main"
+		if !process.IsRoot {
+			owner = fmt.Sprintf("subagent %d", process.OwnerID)
+		}
+
+		snapshot.BackgroundProcesses = append(snapshot.BackgroundProcesses, progress.ProcessStatus{
+			ProcessID: process.ProcessID, Owner: owner, State: process.State,
+			Elapsed: observedAt.Sub(process.StartedAt), DeadlineAt: process.DeadlineAt,
+			OutputSize: process.OutputSize,
+		})
+	}
+
 	snapshot.Budget = progressBudget(facts.Budget, facts.CostUSD, observedAt)
 
 	payload, err := json.Marshal(snapshot) //nolint:musttag // Internal closed struct is not a wire contract.

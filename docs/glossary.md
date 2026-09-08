@@ -202,6 +202,14 @@ Which sessions a registry row applies to: `global` (`project_id IS NULL` — eve
 
 ## State, notifications & lifecycle
 
+**background Bash process**:
+A finite shell command whose lifetime outlives one Bash tool call. It is owned by the exact session (root or subagent) that started it, capped at four live processes per owning session, captured to one combined output file under `~/.coagent/processes/<session-id>/` (100 MiB per process), and killed with its deadline as a complete process group. Its terminal outcome (`completed`, `failed`, `timed_out`, `output_limit_exceeded`, `output_drain_timeout`, `cancelled`, `interrupted`) is a durable ledger row (`background_processes`, `internal/backgroundprocess`), never inferred from output text or a PID. See [ADR-0046](adr/0046-background-bash-process-lifecycle.md).
+_Avoid_: daemon-owned process (the owner is the session, the daemon only administers), job.
+
+**process event**:
+The synthetic `process_event` tool-call pair inserted into the owning (or root) transcript when a background Bash process terminalizes. Completion is pushed — the model never polls — and the event carries only bounded facts (state, exit code, duration, output path, a 50-line/8-KiB preview); the output file stays the source for more. Explicit stop/kill cancels a tree's processes and suppresses their individual events.
+_Avoid_: process notification (the delivery is one exactly-once pair), output passthrough.
+
 **session state**:
 The runtime status a controller sees — `running` / `idle` / `error` (`controllerapi.State*`), derived from the daemon's in-memory map and never persisted. Distinct from the persisted session **status** (`active` / `completed` / `suspended` / `stopping` / `stopped` / `error`) and from subagent **link state**.
 _Avoid_: treating "running" (runtime) and "active" (persisted) as the same word.

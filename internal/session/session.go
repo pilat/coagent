@@ -8,6 +8,7 @@ import (
 	"runtime"
 	"slices"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -33,6 +34,7 @@ import (
 const (
 	compactionThreshold = 80000
 	subagentEventTool   = "subagent_event"
+	processEventTool    = "process_event"
 )
 
 // Service manages the state for a single agent session.
@@ -74,6 +76,11 @@ type Service interface {
 	// applying one externally identified event at most once, including across
 	// process restart and producer acknowledgement failure.
 	InjectToolNotificationOnce(ctx context.Context, deliveryID, toolName, content string) (bool, error)
+
+	// InjectProcessCompletion delivers one background-process completion as a
+	// synthetic process_event pair with proper arguments. The process ID is the
+	// delivery identity, so re-delivery across restarts is exactly-once.
+	InjectProcessCompletion(ctx context.Context, deliveryID string, event ProcessEvent) (bool, error)
 
 	// ResetContextAndInjectOnce discards the session's accumulated context
 	// (transcript, compaction brief, todos) and starts a fresh turn with prompt as
@@ -385,6 +392,36 @@ func (s *svc) InjectToolNotificationOnce(
 	)
 }
 
+// InjectProcessCompletion delivers one background-process completion as a
+// synthetic process_event pair with proper arguments. The process ID is the
+// delivery identity, so re-delivery across restarts is exactly-once; the
+// fingerprint binds the full event content.
+func (s *svc) InjectProcessCompletion(
+	ctx context.Context,
+	deliveryID string,
+	event ProcessEvent,
+) (bool, error) {
+	if deliveryID == "" {
+		return false, errors.New("inject process completion: empty process id")
+	}
+
+	if pending := s.PendingExternalCalls(); len(pending) > 0 {
+		return false, fmt.Errorf(
+			"inject process event %s: external call %s (%s) is still pending",
+			deliveryID,
+			pending[0].ID,
+			pending[0].Name,
+		)
+	}
+
+	stored, err := BuildProcessEventCompletion(event)
+	if err != nil {
+		return false, fmt.Errorf("inject process event %s: %w", deliveryID, err)
+	}
+
+	return s.ms.addStoredToolNotificationPairOnce(ctx, deliveryID, stored)
+}
+
 func (s *svc) ResetContextAndInjectOnce(
 	ctx context.Context,
 	deliveryID, prompt string,
@@ -472,6 +509,101 @@ func BuildBackgroundSubagentCompletion(
 	}
 
 	return []*transcript.Message{asstStored, resultStored}, nil
+}
+
+// ProcessEvent is the bounded host-owned fact describing one terminal
+// background process.
+type ProcessEvent struct {
+	ProcessID       string
+	OriginSessionID int64
+	State           string
+	ExitCode        int
+	HasExitCode     bool
+	Duration        time.Duration
+	OutputPath      string
+	Tail            string
+	TailOmitted     bool
+	OriginSubagent  string
+}
+
+// BuildProcessEventCompletion builds a standalone synthetic tool-call pair for
+// a background Bash process completion. Arguments carry only stable IDs; the
+// bounded result text carries state, duration, path, and the tail preview.
+func BuildProcessEventCompletion(event ProcessEvent) ([]*transcript.Message, error) {
+	if event.ProcessID == "" {
+		return nil, errors.New("build process event: process id is required")
+	}
+
+	if event.OriginSessionID <= 0 {
+		return nil, errors.New("build process event: positive origin session id is required")
+	}
+
+	args := fmt.Sprintf(
+		`{"process_id":%q,"origin_session_id":%d,"event":"completed"}`,
+		event.ProcessID, event.OriginSessionID,
+	)
+
+	callID := id.Generate()
+	toolCalls := []llmwire.ToolCall{{
+		ID: callID, Name: processEventTool, Arguments: json.RawMessage(args),
+	}}
+
+	toolCallsJSON, err := json.Marshal(toolCalls)
+	if err != nil {
+		return nil, fmt.Errorf("marshal process event tool call: %w", err)
+	}
+
+	content := formatProcessEventContent(event)
+
+	asstStored := &transcript.Message{Role: llmwire.RoleAssistant, ToolCalls: toolCallsJSON}
+
+	resultStored := &transcript.Message{
+		Role: llmwire.RoleTool, Content: content, ToolCallID: callID, ToolName: processEventTool,
+	}
+
+	return []*transcript.Message{asstStored, resultStored}, nil
+}
+
+// formatProcessEventContent renders the bounded completion result text. It
+// never embeds complete process output — paths and a bounded preview only.
+func formatProcessEventContent(event ProcessEvent) string {
+	var b strings.Builder
+
+	fmt.Fprintf(&b, "Background process %s completed: %s", event.ProcessID, event.State)
+
+	if event.HasExitCode {
+		fmt.Fprintf(&b, " (exit code %d)", event.ExitCode)
+	}
+
+	fmt.Fprintf(&b, "\nDuration: %s", event.Duration)
+
+	fmt.Fprintf(&b, "\nOrigin session: %d", event.OriginSessionID)
+
+	if event.OriginSubagent != "" {
+		fmt.Fprintf(
+			&b,
+			" (subagent %s; it is terminal — only an explicit send_to_subagent follow-up can start its next round)",
+			event.OriginSubagent,
+		)
+	}
+
+	fmt.Fprintf(&b, "\nOutput file: %s", event.OutputPath)
+	fmt.Fprintf(&b, "\nInspect additional output by reading a suffix of the file with the tail tool; do not poll.")
+
+	if event.TailOmitted {
+		b.WriteString("\n--- final output preview omitted (binary output preview omitted) ---")
+
+		return b.String()
+	}
+
+	if event.Tail == "" {
+		return b.String()
+	}
+
+	b.WriteString("\n--- final output ---\n")
+	b.WriteString(event.Tail)
+
+	return b.String()
 }
 
 // ReloadDeliveredCompletion refreshes the live in-memory transcript from the

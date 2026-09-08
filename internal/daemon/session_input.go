@@ -106,7 +106,7 @@ func inputResolvesExistingCall(input sessionInput) bool {
 	switch input.(type) {
 	case pendingCallResultInput, blockingSubagentCompletionInput:
 		return true
-	case backgroundSubagentCompletionInput, scheduleTickInput, freshScheduleInput:
+	case backgroundSubagentCompletionInput, scheduleTickInput, freshScheduleInput, processCompletionInput:
 		return false
 	default:
 		return false
@@ -117,7 +117,10 @@ func inputIsScheduledTurn(input sessionInput) bool {
 	switch input.(type) {
 	case scheduleTickInput, freshScheduleInput:
 		return true
-	case pendingCallResultInput, blockingSubagentCompletionInput, backgroundSubagentCompletionInput:
+	case pendingCallResultInput,
+		blockingSubagentCompletionInput,
+		backgroundSubagentCompletionInput,
+		processCompletionInput:
 		return false
 	default:
 		return false
@@ -128,6 +131,8 @@ func inputSleepInterruption(input sessionInput) string {
 	switch input.(type) {
 	case backgroundSubagentCompletionInput:
 		return "Sleep interrupted — a subagent completed."
+	case processCompletionInput:
+		return "Sleep interrupted — a background process completed."
 	case scheduleTickInput, freshScheduleInput:
 		return "Sleep interrupted — a scheduled task became due."
 	case pendingCallResultInput, blockingSubagentCompletionInput:
@@ -135,6 +140,12 @@ func inputSleepInterruption(input sessionInput) string {
 	default:
 		return ""
 	}
+}
+
+func isProcessCompletionInput(input sessionInput) bool {
+	_, ok := input.(processCompletionInput)
+
+	return ok
 }
 
 // queuedSessionInput separates delivery mechanics from the payload protocol.

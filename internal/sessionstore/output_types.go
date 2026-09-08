@@ -187,7 +187,11 @@ type CommandOutputStore interface {
 
 // LifecycleOutputStore commits terminal state with its manager-visible output.
 type LifecycleOutputStore interface {
-	MarkSessionKilledWithOutput(ctx context.Context, sessionID int64) (*OutputCommit, error)
+	MarkSessionKilledWithOutput(
+		ctx context.Context,
+		sessionID int64,
+		cancelledProcesses int,
+	) (*OutputCommit, error)
 }
 
 type LifecycleCommandStore interface {

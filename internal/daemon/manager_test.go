@@ -66,6 +66,7 @@ type mockFactory struct {
 	sessions         []*mockSession
 	options          []session.CreateOptions
 	nextSess         session.Service // allows injecting any session.Service implementation
+	createErrOnce    error
 	processPolicyKey string
 }
 
@@ -213,6 +214,15 @@ func (m *mockSession) InjectToolNotificationOnce(
 	return err == nil, err
 }
 
+func (m *mockSession) InjectProcessCompletion(
+	ctx context.Context,
+	_ string,
+	event session.ProcessEvent,
+) (bool, error) {
+	err := m.InjectToolNotification(ctx, "process_event", event.Tail)
+	return err == nil, err
+}
+
 func (m *mockSession) ResetContextAndInject(_ context.Context, _ string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -244,6 +254,13 @@ func (f *mockFactory) Create(ctx context.Context, opts session.CreateOptions) (s
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.options = append(f.options, opts)
+	if f.createErrOnce != nil {
+		err := f.createErrOnce
+		f.createErrOnce = nil
+
+		return nil, err
+	}
+
 	if opts.ObserveProcessPolicy != nil {
 		opts.ObserveProcessPolicy(f.processPolicyKey)
 	}
@@ -285,7 +302,8 @@ func newTestManager(t *testing.T) (*svc, *mockFactory, Store) {
 	sessStore := sessionstore.NewStore(db)
 
 	factory := &mockFactory{}
-	mgr := newSvc(
+	mgr, _ := newSvc(
+		context.Background(),
 		factory,
 		store,
 		sessStore,
@@ -320,7 +338,8 @@ func newTestManagerWithSchedule(t *testing.T) (*svc, *mockFactory, Store, schedu
 	schedStore := schedule.NewStore(db)
 
 	factory := &mockFactory{}
-	mgr := newSvc(
+	mgr, _ := newSvc(
+		context.Background(),
 		factory, store, sessStore, sessStore, sessStore,
 		sessStore, sessStore, sessStore, sessStore,
 		subagent.NewStore(db), subagent.NewTransactions(db),
