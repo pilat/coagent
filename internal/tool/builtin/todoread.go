@@ -9,15 +9,7 @@ import (
 	"github.com/pilat/coagent/internal/tool"
 )
 
-const todoReadDescription = `Reads the current todo list for the session. Use this tool proactively and frequently to ensure you are aware of the task status.
-
-Use this tool:
-- At the beginning of conversations to see what's pending
-- Before starting new tasks to prioritize work
-- When the user asks about previous tasks or plans
-- Whenever you're uncertain what to do next
-- After completing tasks to update your understanding
-- After every few messages to ensure you're on track
+const todoReadDescription = `Reads the current todo list for the session. Use when you need the saved plan or item IDs and they are not already known from the current context. Do not re-read an unchanged list after each update or every few messages.
 
 Returns:
 - List of todos sorted by priority (high first), then creation time

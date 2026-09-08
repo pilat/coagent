@@ -15,6 +15,8 @@ const (
 	lspOperationWorkspaceSymbol = "workspaceSymbol"
 	lspDescription              = `Interact with Language Server Protocol (LSP) servers to get code intelligence features.
 
+Prefer LSP for a known symbol's definition, references, type, implementations, or callers. Use grep for literal text and glob for file discovery. Read the relevant code to locate the symbol before a position-based request; do not guess its position. Before changing a shared symbol, use references or callers to identify affected code.
+
 Supported operations:
 - goToDefinition: Find where a symbol is defined
 - findReferences: Find all references to a symbol
@@ -37,7 +39,9 @@ Optional parameters (required only for position-based operations):
 Additional parameters:
 - query: Query string (only used by workspaceSymbol operation)
 
-Note: LSP servers must be configured for the file type. If no server is available, an error will be returned.`
+LSP servers must be configured for the file type. If the server or operation is unavailable, use grep and read instead of repeating the failed request. Results are limited to the server's language workspace; an empty result is not proof of absence everywhere.
+
+This tool has no diagnostics operation. The edit and write tools include LSP diagnostics in their results when available. Address relevant errors they report; missing diagnostics do not prove the code is correct or replace required tests.`
 )
 
 var _ tool.Tool = (*lspTool)(nil)
@@ -78,11 +82,11 @@ func (t *lspTool) Parameters() json.RawMessage {
 			},
 			"line": {
 				"type": "integer",
-				"description": "The line number (1-based, as shown in editors). Optional for workspaceSymbol."
+				"description": "The line number (1-based). Required except for documentSymbol and workspaceSymbol."
 			},
 			"character": {
 				"type": "integer",
-				"description": "The character offset (1-based, as shown in editors). Optional for workspaceSymbol."
+				"description": "The UTF-16 code-unit offset within the line (1-based). Required except for documentSymbol and workspaceSymbol."
 			},
 			"query": {
 				"type": "string",

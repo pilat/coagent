@@ -31,6 +31,7 @@ func TestLedgerFailure_SpawnRefusesInsteadOfDegrading(t *testing.T) {
 	require.NotZero(t, ok.ChildID)
 	h.waitForDelivery(ok.ChildID)
 	h.mgr.waitIdle(ok.ChildID)
+	h.waitUntil("healthy child runner removed", func() bool { return h.mgr.runners.Len() == 0 })
 
 	loopsBefore := h.mgr.runners.Len()
 

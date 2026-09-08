@@ -37,7 +37,7 @@ Usage:
 - Use ignore_case for case-insensitive matching
 - Use files_only to only return matching file paths
 
-CRITICAL: You can call multiple tools in a single response. When searching, run multiple grep/glob calls in parallel for optimal performance.
+Group independent searches in one response. Narrow the path or glob when results are capped; an empty result applies only to the files searched.
 
 Limits:
 - Maximum 100 total matches

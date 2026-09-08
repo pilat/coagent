@@ -684,6 +684,9 @@ after the loop exits.
 Registry produces an immutable per-session agent-type set: built-ins plus
 project-local overlays. Agent type controls tool filtering, prompt and model
 selection, while the live session registry controls what is actually callable.
+The built-in `explore` type deliberately starts without project instructions,
+skills, curated memory, Git state or the model catalog, and receives only
+read-only code-search tools; its parent supplies constraints in the assignment.
 Todo tracking is root-session-local durable state. The tool replaces the whole
 list atomically, and progress treats it as planning state rather than a separate
 workflow engine.

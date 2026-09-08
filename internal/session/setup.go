@@ -13,7 +13,6 @@ import (
 	"github.com/pilat/coagent/internal/logger"
 	"github.com/pilat/coagent/internal/registry"
 	"github.com/pilat/coagent/internal/sessionstore"
-	"github.com/pilat/coagent/internal/tool"
 	"github.com/pilat/coagent/internal/tool/builtin"
 )
 
@@ -39,23 +38,12 @@ func loadMarketplaces(ctx context.Context, p params, log *zap.Logger) {
 	p.Loader.ProcessMarketplaces(ctx, p.Config.UnifiedConfig.Marketplaces, resolver)
 }
 
-// loadProjectContext loads marketplace plugins, AGENTS.md, skills, and subagent
-// definitions from the project directory, returning the AGENTS.md text and the
-// project-local subagent configs for the session's agent-type set.
-func loadProjectContext(ctx context.Context, p params, workDir string) (string, []registry.AgentTypeConfig) {
+// loadProjectSubagents loads the definitions needed to resolve the session's
+// agent type. Instructions and skills load only after that type is known.
+func loadProjectSubagents(ctx context.Context, p params, workDir string) []registry.AgentTypeConfig {
 	log := logger.Ctx(ctx).Named("session.setup")
 
-	// Load marketplaces first
 	loadMarketplaces(ctx, p, log)
-
-	agentsMD, err := p.Loader.LoadAgentsMD(workDir)
-	if err != nil {
-		log.Warn("loading_agents_md", zap.Error(err))
-	}
-
-	if err := p.Loader.LoadSkills(workDir); err != nil {
-		log.Warn("loading_skills", zap.Error(err))
-	}
 
 	if err := p.Loader.LoadSubagents(workDir); err != nil {
 		log.Warn("loading_subagents", zap.Error(err))
@@ -66,7 +54,24 @@ func loadProjectContext(ctx context.Context, p params, workDir string) (string, 
 		models = p.Config.UnifiedConfig.Models
 	}
 
-	return agentsMD, subagentConfigs(ctx, p.Loader, models)
+	return subagentConfigs(ctx, p.Loader, models)
+}
+
+// loadProjectInstructions loads context intended for a normal session. Lean
+// built-in specialists skip this path entirely.
+func loadProjectInstructions(ctx context.Context, p params, workDir string) string {
+	log := logger.Ctx(ctx).Named("session.setup")
+
+	agentsMD, err := p.Loader.LoadAgentsMD(workDir)
+	if err != nil {
+		log.Warn("loading_agents_md", zap.Error(err))
+	}
+
+	if err := p.Loader.LoadSkills(workDir); err != nil {
+		log.Warn("loading_skills", zap.Error(err))
+	}
+
+	return agentsMD
 }
 
 // subagentConfigs converts project-local subagent definitions into agent-type
@@ -116,14 +121,14 @@ func modelConfigured(models []config.ModelEntry, model string) bool {
 }
 
 // registerSessionTools creates and registers tools that depend on the session.
-func registerSessionTools(reg tool.Registry, session *svc) {
+func registerSessionTools(session *svc) {
 	// Curated memory tools (memory_save / memory_delete).
 	if session.projectID != 0 && session.memoryStore != nil {
 		refreshFn := func(ctx context.Context) {
 			session.prompt.refreshMemories(ctx, session.memoryStore, session.projectID)
 		}
-		reg.Register(builtin.NewMemorySaveTool(session.memoryStore, session.projectID, refreshFn))
-		reg.Register(builtin.NewMemoryDeleteTool(session.memoryStore, session.projectID, refreshFn))
+		session.RegisterGatedTool(builtin.NewMemorySaveTool(session.memoryStore, session.projectID, refreshFn))
+		session.RegisterGatedTool(builtin.NewMemoryDeleteTool(session.memoryStore, session.projectID, refreshFn))
 	}
 
 	// Subagent tools (task / get_subagent_result / send_to_subagent) are

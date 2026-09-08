@@ -120,6 +120,15 @@ func TestSubagentToolDescriptionsTeachExecutionContract(t *testing.T) {
 	}
 
 	for _, want := range []string{
+		"Bounded research whose raw searches and file reads would add noise to the parent context",
+		"Keep dependent work sequential",
+		"does not receive the parent conversation",
+		"may also load project context separately",
+		"one self-contained answer with file:line evidence and material gaps",
+		"do not duplicate the subagent's work",
+		"Do not routinely resume explore or ask it to confirm its answer",
+		"general or custom subagent's assignment",
+		"use send_to_subagent with the id returned by task",
 		"Foreground (background omitted or false): use when you need the answer before continuing",
 		"Background (background=true): use only when you can continue useful independent work",
 		"completion is delivered automatically as a subagent_event and wakes you",
@@ -127,6 +136,12 @@ func TestSubagentToolDescriptionsTeachExecutionContract(t *testing.T) {
 	} {
 		if !strings.Contains(taskDescription, want) {
 			t.Errorf("task description missing %q:\n%s", want, taskDescription)
+		}
+	}
+
+	for _, forbidden := range []string{"3 or fewer total tool calls", "ALWAYS launch independent tasks", "ZERO context"} {
+		if strings.Contains(taskDescription, forbidden) {
+			t.Errorf("task description retains brittle guidance %q:\n%s", forbidden, taskDescription)
 		}
 	}
 

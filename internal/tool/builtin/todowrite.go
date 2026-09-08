@@ -10,42 +10,18 @@ import (
 	"github.com/pilat/coagent/internal/tool"
 )
 
-const todoWriteDescription = `Creates and manages a structured task list for complex coding sessions. This helps track progress and organize work.
+const todoWriteDescription = `Replaces the session's complete todo list. For large work with multiple deliverables, packages, or dependent phases, create the list before implementation and use it to guide the work. Also use it when the user requests a plan. Small, straightforward tasks need no list.
 
-## When to Use This Tool
+Each item should describe a concrete outcome, not an individual tool call. Send the full list on every update: omitted items are removed. Preserve existing item IDs when updating them. Send items=[] to clear the list when it is no longer useful.
 
-Use this tool proactively in these scenarios:
-1. Complex multistep tasks (3+ distinct steps)
-2. Non-trivial tasks requiring careful planning
-3. User explicitly requests a todo list
-4. User provides multiple tasks (numbered or comma-separated)
-5. After receiving new instructions - immediately capture requirements
-6. After completing a task - mark complete and add follow-ups
-7. When starting a new task, mark it in_progress
-
-## When NOT to Use This Tool
-
-Skip using this tool when:
-1. Only a single, straightforward task
-2. The task is trivial and tracking provides no benefit
-3. The task can be completed in less than 3 trivial steps
-4. The task is purely conversational or informational
-
-## Task States
+Task states:
 
 - pending: Task not yet started
 - in_progress: Currently working on (limit to ONE task at a time)
 - completed: Task finished successfully
 - cancelled: Task no longer needed
 
-## Best Practices
-
-- Update task status in real-time as you work
-- Mark tasks complete IMMEDIATELY after finishing
-- Only have ONE task in_progress at any time
-- Complete current tasks before starting new ones
-- Create specific, actionable items
-- Break complex tasks into smaller, manageable steps`
+Mark the current item in_progress before starting it. Mark it completed immediately after the outcome and required verification are done, then choose the next pending item. Delegated work stays unfinished until its result is received and reviewed. Revise the list when requirements, findings, or blockers change the plan. Before the final response, reconcile the list with the actual result; keep unresolved work visible. Do not invent follow-up work merely to keep the list populated.`
 
 var _ tool.Tool = (*todoWriteTool)(nil)
 

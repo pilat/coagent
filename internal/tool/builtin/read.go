@@ -21,7 +21,7 @@ const (
 	defaultReadLimit = 2000
 	maxLineLength    = 2000
 	maxBytes         = 50 * 1024
-	readDescription  = `Reads a file from the filesystem. You can access any file directly using this tool.
+	readDescription  = `Reads a file within the session's filesystem permissions.
 
 Usage:
 - The file_path parameter can be absolute or relative to the working directory
@@ -32,7 +32,7 @@ Usage:
 - Image files (jpeg, png, gif, webp, up to 3.75 MB) are returned as viewable image attachments; text-only tools cannot see them otherwise
 - Other binary files cannot be read
 
-CRITICAL: You have the capability to call multiple tools in a single response. It is always better to speculatively read multiple files in parallel that are potentially useful.`
+Read the ranges needed for the current question. Group independent reads in one response; choose follow-up reads after inspecting the results.`
 )
 
 var _ tool.Tool = (*readTool)(nil)
