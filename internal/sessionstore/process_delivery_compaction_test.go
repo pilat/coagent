@@ -41,7 +41,7 @@ func TestProcessDeliverySurvivesCompactionConcurrentInputAndRetry(t *testing.T) 
 
 	go func() {
 		<-start
-		_, _, inserted, insertErr := store.InsertToolNotificationPairOnce(
+		_, _, inserted, insertErr := store.InsertInternalToolNotificationPairOnce(
 			ctx, session.ID, "bgp_1", "process-fingerprint", assistant, result,
 		)
 		insertedResult <- inserted
@@ -74,7 +74,7 @@ func TestProcessDeliverySurvivesCompactionConcurrentInputAndRetry(t *testing.T) 
 	}
 	require.True(t, <-insertedResult)
 
-	_, _, inserted, err := store.InsertToolNotificationPairOnce(
+	_, _, inserted, err := store.InsertInternalToolNotificationPairOnce(
 		ctx, session.ID, "bgp_1", "process-fingerprint", assistant, result,
 	)
 	require.NoError(t, err)

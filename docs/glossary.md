@@ -208,6 +208,7 @@ _Avoid_: daemon-owned process (the owner is the session, the daemon only adminis
 
 **process event**:
 The synthetic `process_event` tool-call pair inserted into the owning (or root) transcript when a background Bash process terminalizes. Completion is pushed — the model never polls — and the event carries only bounded facts (state, exit code, duration, output path, a 50-line/8-KiB preview); the output file stays the source for more. Explicit stop/kill cancels a tree's processes and suppresses their individual events.
+The pair is model input only: it never enters `session_outbox` or manager output directly.
 _Avoid_: process notification (the delivery is one exactly-once pair), output passthrough.
 
 **session state**:

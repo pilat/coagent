@@ -41,20 +41,20 @@ func TestMessageStore_ScheduledNotificationDeliveryIsExactlyOnce(t *testing.T) {
 	store, sessionID := newScheduledDeliverySessionStore(t)
 	ms := newMessageStore(store, sessionID, nil)
 
-	applied, err := ms.addToolNotificationPairOnce(
+	applied, err := ms.addScheduledToolNotificationPairOnce(
 		context.Background(), "schedule:one-shot:7", "call-1", "schedule", "due",
 	)
 	require.NoError(t, err)
 	assert.True(t, applied)
 
-	applied, err = ms.addToolNotificationPairOnce(
+	applied, err = ms.addScheduledToolNotificationPairOnce(
 		context.Background(), "schedule:one-shot:7", "call-2", "schedule", "due",
 	)
 	require.NoError(t, err)
 	assert.False(t, applied)
 	assert.Len(t, ms.getMessages(), 2)
 
-	_, err = ms.addToolNotificationPairOnce(
+	_, err = ms.addScheduledToolNotificationPairOnce(
 		context.Background(), "schedule:one-shot:7", "call-3", "schedule", "different",
 	)
 	require.ErrorIs(t, err, sessionstore.ErrDeliveryConflict)

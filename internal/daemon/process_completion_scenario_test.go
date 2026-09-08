@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"database/sql"
 	"os/exec"
 	"testing"
 	"time"
@@ -92,7 +93,9 @@ func TestScenario_ProcessCompletionRevivesCompletedRootOnce(t *testing.T) {
 		h.shutdown()
 	}()
 
-	root, err := h.sessStore.CreateSession(h.ctx, h.projectID, "fake-model", "", nil)
+	root, err := h.sessStore.CreateSession(h.ctx, h.projectID, "fake-model", "", map[string]any{
+		"manager_id": scenarioManagerID,
+	})
 	require.NoError(t, err)
 	require.NoError(t, h.sessStore.UpdateSessionStatus(h.ctx, root.ID, sessionstore.SessionStatusCompleted))
 
@@ -102,6 +105,23 @@ func TestScenario_ProcessCompletionRevivesCompletedRootOnce(t *testing.T) {
 
 	assert.Equal(t, "delivered", record.DeliveryState)
 	assert.Equal(t, 1, processEventCount(t, h, root.ID))
+
+	var leakedAnnouncements, leakedContent int
+	require.NoError(t, h.db.QueryRowContext(h.ctx, `SELECT COUNT(*) FROM session_outbox
+		WHERE session_id = ? AND source_key = ?`, root.ID,
+		"schedule:"+process.ID+":announcement").Scan(&leakedAnnouncements))
+	assert.Zero(t, leakedAnnouncements, "process events are internal model input, not scheduled manager output")
+	require.NoError(t, h.db.QueryRowContext(h.ctx, `SELECT COUNT(*) FROM session_outbox
+		WHERE session_id = ? AND content LIKE ?`, root.ID,
+		"%Background process "+process.ID+" completed:%").Scan(&leakedContent))
+	assert.Zero(t, leakedContent, "bounded process details must remain model-only")
+
+	var generation int64
+	var episodeStartedAt sql.NullTime
+	require.NoError(t, h.db.QueryRowContext(h.ctx, `SELECT model_input_generation, episode_started_at
+		FROM sessions WHERE id = ?`, root.ID).Scan(&generation, &episodeStartedAt))
+	assert.Zero(t, generation, "external-call completion must not advance model-input generation")
+	assert.False(t, episodeStartedAt.Valid, "external-call completion must not start a scheduled episode")
 
 	require.NoError(t, h.mgr.processCoord.RouteRestarted(h.ctx, record, root.ID))
 	h.waitUntil("duplicate completion settles without a model turn", func() bool {

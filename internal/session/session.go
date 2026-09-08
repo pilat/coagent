@@ -385,7 +385,7 @@ func (s *svc) InjectToolNotificationOnce(
 		)
 	}
 
-	return s.ms.addToolNotificationPairOnce(
+	return s.ms.addScheduledToolNotificationPairOnce(
 		ctx,
 		deliveryID,
 		id.Generate(),

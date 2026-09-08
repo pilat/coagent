@@ -366,9 +366,12 @@ session state: an active or suspended owning subagent remains the target;
 otherwise delivery falls back to the root. The daemon serializes that claim with
 child terminalization, injects one bounded `process_event` pair through the
 session delivery identity, and acknowledges the process ledger only after the
-transcript commit. A capped-backoff watchdog retains the producer obligation
-across claim, enqueue, runner, injection and acknowledgement failures until the
-row is delivered, suppressed or shutdown transfers recovery to the next boot.
+transcript commit. The pair remains internal model input: it neither advances
+the model-input generation nor enters manager output; only the session's
+subsequent ordinary output is published. A capped-backoff watchdog retains the
+producer obligation across claim, enqueue, runner, injection and acknowledgement
+failures until the row is delivered, suppressed or shutdown transfers recovery
+to the next boot.
 Status and events expose stable IDs, state, timing, size, path and bounded text
 previews, never raw command text or complete output.
 
@@ -397,7 +400,9 @@ show TODO counts only; an already published direct reply stays separate, and
 `/status` keeps the full diagnostic view.
 Final output adds only the non-empty TODO summary and budget parts of its
 compact footer; readiness appears only after the newest releasing output is
-acknowledged and terminal or parked state is current. Empty and
+acknowledged and terminal or parked state is current. Concurrent acknowledgement
+and runner teardown reconcile one output idempotently, so it publishes at most
+one idle event per daemon lifetime. Empty and
 read-only-command-only roots have no episode clock and produce no silence
 snapshots; the first model-bound input or an applied scheduled turn starts one.
 

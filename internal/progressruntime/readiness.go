@@ -24,11 +24,28 @@ func (r *runtime) ReconcileOutputReadiness(ctx context.Context, outputID int64) 
 		return nil
 	}
 
+	if !r.claimOutputReadiness(readiness.SessionID, readiness.OutputID) {
+		return nil
+	}
+
 	r.publish(readiness.SessionID, sessionevent.Notification{
 		Type: sessionevent.NotifyStateChanged, Status: controllerapi.StateIdle, Reason: readiness.Reason,
 	})
 
 	return nil
+}
+
+func (r *runtime) claimOutputReadiness(sessionID, outputID int64) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if r.readyOutputs[sessionID] >= outputID {
+		return false
+	}
+
+	r.readyOutputs[sessionID] = outputID
+
+	return true
 }
 
 func (r *runtime) ReconcileLatestReadiness(ctx context.Context, sessionID int64) {

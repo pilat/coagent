@@ -79,7 +79,7 @@ func TestAddToolNotificationPairOnce_InsertFailure(t *testing.T) {
 	ctx := context.Background()
 	ms := newMessageStore(&mockSessionStore{pairErr: errStoreDown}, 1, nil)
 
-	_, err := ms.addToolNotificationPairOnce(ctx, "d1", "c1", "sleep", "woke up")
+	_, err := ms.addScheduledToolNotificationPairOnce(ctx, "d1", "c1", "sleep", "woke up")
 	require.Error(t, err)
 	require.ErrorIs(t, err, errStoreDown)
 	assert.Empty(t, ms.getMessages())
@@ -92,7 +92,7 @@ func TestAddToolNotificationPairOnce_PersistsCallList(t *testing.T) {
 	store := &mockSessionStore{}
 	ms := newMessageStore(store, 1, nil)
 
-	applied, err := ms.addToolNotificationPairOnce(ctx, "d1", "c1", "sleep", "woke up")
+	applied, err := ms.addScheduledToolNotificationPairOnce(ctx, "d1", "c1", "sleep", "woke up")
 	require.NoError(t, err)
 	require.True(t, applied)
 
@@ -220,7 +220,7 @@ func TestRun_LoopWriteFailure_KeepsOriginalError(t *testing.T) {
 func TestAddToolNotificationPairOnce_NoStore(t *testing.T) {
 	ms := newMessageStore(nil, 0, nil)
 
-	_, err := ms.addToolNotificationPairOnce(context.Background(), "d1", "c1", "sleep", "woke up")
+	_, err := ms.addScheduledToolNotificationPairOnce(context.Background(), "d1", "c1", "sleep", "woke up")
 	require.Error(t, err, "an idempotent notification without a durable store must fail closed")
 	assert.Empty(t, ms.getMessages())
 }
