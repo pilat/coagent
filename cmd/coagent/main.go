@@ -13,6 +13,7 @@ import (
 
 	"go.uber.org/zap"
 
+	"github.com/pilat/coagent/internal/backgroundprocess"
 	"github.com/pilat/coagent/internal/bashsandbox"
 	"github.com/pilat/coagent/internal/budget"
 	"github.com/pilat/coagent/internal/coagenthome"
@@ -98,6 +99,16 @@ func main() {
 // run keeps os.Exit out of any deferred-cleanup scope: main calls it exactly
 // once, after every defer in this function has already unwound.
 func run() int {
+	if handled, err := backgroundprocess.RunGuardian(os.Args[1:]); handled {
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "%v\n", err)
+
+			return 1
+		}
+
+		return 0
+	}
+
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 

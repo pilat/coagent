@@ -24,6 +24,7 @@ type Completions interface {
 	Finalize(ctx context.Context, childID int64, shuttingDown, errored bool) func()
 	Persist(ctx context.Context, parent session.Service, link subagent.Link, messages []*transcript.Message) error
 	Rearm(ctx context.Context, childID int64) error
+	RearmLocked(ctx context.Context, childID int64) error
 }
 
 var _ Completions = (*completions)(nil)
@@ -160,6 +161,11 @@ func (c *completions) Rearm(ctx context.Context, childID int64) error {
 		})
 	}
 
+	return c.rearm(ctx, childID)
+}
+
+// RearmLocked re-arms a child while the caller holds its session-tree fence.
+func (c *completions) RearmLocked(ctx context.Context, childID int64) error {
 	return c.rearm(ctx, childID)
 }
 

@@ -97,7 +97,7 @@ func TestHarnessScenario_LiveStopChain(t *testing.T) {
 		return loadErr == nil && record.Status == sessionstore.SessionStatusStopped
 	})
 	stoppedProcess := waitScenarioProcessState(t, h, process.ID, backgroundprocess.StateCancelled)
-	require.Equal(t, "suppressed", stoppedProcess.DeliveryState)
+	require.Equal(t, backgroundprocess.IntentSessionStopped, stoppedProcess.HostIntent)
 
 	controller := newChainController(t, h)
 	drainScenarioClaims(t, "stop_live_chain.json", controller)

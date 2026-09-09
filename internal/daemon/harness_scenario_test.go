@@ -2,9 +2,13 @@ package daemon
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"slices"
+	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -13,6 +17,7 @@ import (
 	"github.com/pilat/coagent/internal/llm"
 	"github.com/pilat/coagent/internal/llmwire"
 	"github.com/pilat/coagent/internal/sessionevent"
+	"github.com/pilat/coagent/internal/sessionstore"
 	"github.com/pilat/coagent/internal/subagent"
 	"github.com/pilat/coagent/internal/tool"
 )
@@ -148,7 +153,7 @@ func TestHarnessScenario_ForegroundChildContinuesWithoutSleep(t *testing.T) {
 			return &llmwire.Response{Text: "child initial answer"}
 		}
 
-		if hasToolResultFor(messages, "subagent_event") {
+		if hasUserContaining(messages, "<subagent_completion>") {
 			return &llmwire.Response{Text: "continuation delivered"}
 		}
 
@@ -247,7 +252,7 @@ func TestHarnessScenario_BackgroundChildIsTheWakeSource(t *testing.T) {
 			return &llmwire.Response{Text: "background child answer"}
 		}
 
-		if hasToolResultFor(messages, "subagent_event") {
+		if hasUserContaining(messages, "<subagent_completion>") {
 			return &llmwire.Response{Text: "background completion delivered"}
 		}
 
@@ -320,6 +325,130 @@ func TestHarnessScenario_BackgroundChildIsTheWakeSource(t *testing.T) {
 	assert.NotContains(t, stoppedCard, "Subagents")
 
 	assertHarnessTrace(t, "background_child_no_sleep.json", collector.snapshot(), parentID)
+}
+
+func TestHarnessScenario_BackgroundWaitCanaryResumesWithoutPolling(t *testing.T) {
+	childRelease := make(chan struct{})
+	var rootCalls atomic.Int64
+
+	respond := func(_ string, messages []llmwire.Message) *llmwire.Response {
+		if hasUserContaining(messages, "CHILD_CANARY") {
+			<-childRelease
+
+			return &llmwire.Response{Text: "canary child complete"}
+		}
+		rootCalls.Add(1)
+
+		if hasUserContaining(messages, "<subagent_completion>") {
+			return &llmwire.Response{Text: "completion after wait"}
+		}
+
+		if hasToolResultFor(messages, tool.IDTask) {
+			return &llmwire.Response{
+				Text: "waiting for child\n<WAITING/>",
+				ToolCalls: []llmwire.ToolCall{{
+					ID: "forbidden-poll", Name: "ls", Arguments: []byte(`{"path":"."}`),
+				}},
+			}
+		}
+
+		return &llmwire.Response{ToolCalls: []llmwire.ToolCall{{
+			ID: taskCallID, Name: tool.IDTask,
+			Arguments: []byte(
+				`{"prompt":"CHILD_CANARY","description":"scenario","subagent_type":"general","background":true}`,
+			),
+		}}}
+	}
+
+	h := newSubagentHarnessWith(t, respond)
+	collector := collectEvents(h.mgr.PubSub().SubscribeAll())
+	defer func() {
+		closeOnce(childRelease)
+		collector.stop()
+		h.shutdown()
+	}()
+
+	parentID, err := h.mgr.Send(h.ctx, h.projectID, "start canary child", "fake-model", map[string]any{
+		"manager_id": scenarioManagerID,
+	})
+	require.NoError(t, err)
+	waitForVisibleMessage(t, collector, parentID, "waiting for child")
+
+	parentMessages := h.parentMessages(parentID)
+	assert.Zero(t, countToolResultsFor(parentMessages, "ls"))
+	require.True(t, slices.ContainsFunc(parentMessages, func(message llmwire.Message) bool {
+		return message.Role == llmwire.RoleAssistant &&
+			message.Content == "waiting for child\n<WAITING/>" && len(message.ToolCalls) == 0
+	}))
+
+	var outputType, output string
+	require.NoError(t, h.db.QueryRowContext(h.ctx, `SELECT type, content FROM session_outbox
+		WHERE session_id = ? AND content = 'waiting for child' ORDER BY id DESC LIMIT 1`, parentID).
+		Scan(&outputType, &output))
+	assert.Equal(t, string(sessionstore.OutputMessageReplaceable), outputType)
+	assert.Equal(t, "waiting for child", output)
+
+	close(childRelease)
+	waitForVisibleMessage(t, collector, parentID, "completion after wait")
+	drainScenarioClaims(t, "background_wait_canary.json", newChainController(t, h))
+	waitForIdleAfterMessage(t, collector, parentID, "completion after wait")
+	assert.Equal(t, int64(3), rootCalls.Load())
+	assertHarnessTrace(t, "background_wait_canary.json", collector.snapshot(), parentID)
+}
+
+func TestHarnessScenario_SkillSeededTaskStartsWithRenderedEnvelope(t *testing.T) {
+	childInput := make(chan string, 1)
+	respond := func(_ string, messages []llmwire.Message) *llmwire.Response {
+		if hasUserContaining(messages, "<name>review</name>") {
+			for _, message := range messages {
+				if message.Role == llmwire.RoleUser && strings.Contains(message.Content, "<name>review</name>") {
+					select {
+					case childInput <- message.Content:
+					default:
+					}
+					break
+				}
+			}
+
+			return &llmwire.Response{Text: "skill child done"}
+		}
+		if hasToolResultFor(messages, tool.IDTask) {
+			return &llmwire.Response{Text: "skill task delivered"}
+		}
+
+		return &llmwire.Response{ToolCalls: []llmwire.ToolCall{{
+			ID: taskCallID, Name: tool.IDTask,
+			Arguments: []byte(
+				`{"skill":" REVIEW ","skill_args":"the diff","description":"review","subagent_type":"general"}`,
+			),
+		}}}
+	}
+
+	h := newSubagentHarnessWith(t, respond)
+	defer h.shutdown()
+	workDir, err := h.mgr.store.GetProjectWorkDir(h.ctx, h.projectID)
+	require.NoError(t, err)
+	skillDir := filepath.Join(workDir, ".claude", "skills", "review")
+	require.NoError(t, os.MkdirAll(skillDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte(`---
+name: review
+description: Review changes
+---
+Review $ARGUMENTS.
+`), 0o600))
+
+	parentID, err := h.mgr.Send(h.ctx, h.projectID, "run review skill", "fake-model", nil)
+	require.NoError(t, err)
+	h.mgr.waitIdle(parentID)
+
+	select {
+	case input := <-childInput:
+		assert.Contains(t, input, "<skill>\n<name>review</name>")
+		assert.Contains(t, input, "Review the diff.\n</skill>")
+		assert.True(t, strings.HasPrefix(input, "[+0s "), input)
+	case <-time.After(5 * time.Second):
+		t.Fatal("skill-seeded child input was not observed")
+	}
 }
 
 func TestHarnessScenario_ForegroundScatterGatherProjectsShrinkingAllWaitSet(t *testing.T) {

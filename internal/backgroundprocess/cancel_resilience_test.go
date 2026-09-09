@@ -22,6 +22,14 @@ type blockingFinalizeStore struct {
 	release chan struct{}
 }
 
+type transientFinalizeStore struct {
+	Store
+	finalizeFailures   int
+	withIntentFailures int
+	finalizeAttempts   int
+	withIntentAttempts int
+}
+
 func (s *blockingFinalizeStore) Finalize(
 	ctx context.Context,
 	id string,
@@ -33,6 +41,35 @@ func (s *blockingFinalizeStore) Finalize(
 	<-s.release
 
 	return s.Store.Finalize(ctx, id, natural, exitCode, outputSize)
+}
+
+func (s *transientFinalizeStore) Finalize(
+	ctx context.Context,
+	id string,
+	natural State,
+	exitCode *int,
+	outputSize int64,
+) (Process, bool, error) {
+	s.finalizeAttempts++
+	if s.finalizeAttempts <= s.finalizeFailures {
+		return Process{}, false, errors.New("injected transient finalize failure")
+	}
+
+	return s.Store.Finalize(ctx, id, natural, exitCode, outputSize)
+}
+
+func (s *transientFinalizeStore) FinalizeWithIntent(
+	ctx context.Context,
+	id string,
+	intent HostIntent,
+	outputSize int64,
+) (Process, bool, error) {
+	s.withIntentAttempts++
+	if s.withIntentAttempts <= s.withIntentFailures {
+		return Process{}, false, errors.New("injected transient finalize-with-intent failure")
+	}
+
+	return s.Store.FinalizeWithIntent(ctx, id, intent, outputSize)
 }
 
 type listRunningFailStore struct {
@@ -136,8 +173,7 @@ func TestService_CancelAllJoinsEveryHandleAfterIntentFailure(t *testing.T) {
 	assert.Equal(t, 1, cancelled)
 	assert.Zero(t, service.liveCount(2))
 	assert.Zero(t, service.liveCount(3))
-	failedIntent := waitState(t, base, first.ID, StateInterrupted, 5*time.Second)
-	assert.Equal(t, "pending", failedIntent.DeliveryState)
+	_ = waitState(t, base, first.ID, StateInterrupted, 5*time.Second)
 	assert.Equal(t, StateInterrupted, waitState(
 		t, base, second.ID, StateInterrupted, 5*time.Second,
 	).State)
@@ -145,13 +181,12 @@ func TestService_CancelAllJoinsEveryHandleAfterIntentFailure(t *testing.T) {
 
 func TestService_FallbackIntentPreservesCancellationOutcome(t *testing.T) {
 	tests := []struct {
-		intent        HostIntent
-		state         State
-		deliveryState string
+		intent HostIntent
+		state  State
 	}{
-		{intent: IntentSessionStopped, state: StateCancelled, deliveryState: "suppressed"},
-		{intent: IntentSessionKilled, state: StateCancelled, deliveryState: "suppressed"},
-		{intent: IntentDaemonShutdown, state: StateInterrupted, deliveryState: "pending"},
+		{intent: IntentSessionStopped, state: StateCancelled},
+		{intent: IntentSessionKilled, state: StateCancelled},
+		{intent: IntentDaemonShutdown, state: StateInterrupted},
 	}
 
 	for _, tt := range tests {
@@ -168,7 +203,6 @@ func TestService_FallbackIntentPreservesCancellationOutcome(t *testing.T) {
 			assert.Zero(t, cancelled)
 
 			final := waitState(t, base, process.ID, tt.state, 5*time.Second)
-			assert.Equal(t, tt.deliveryState, final.DeliveryState)
 			assert.Equal(t, tt.intent, final.HostIntent)
 
 			count, err := base.CountTerminalByIntentSince(ctx, 1, tt.intent, time.Time{})
@@ -223,7 +257,6 @@ func TestService_CancelAllListFailureStillInterruptsEveryHandle(t *testing.T) {
 
 	for _, process := range []Process{first, second} {
 		final := waitState(t, base, process.ID, StateInterrupted, 5*time.Second)
-		assert.Equal(t, "pending", final.DeliveryState)
 		assert.Equal(t, IntentDaemonShutdown, final.HostIntent)
 	}
 	assert.Zero(t, service.liveCount(2))
@@ -243,7 +276,6 @@ func TestService_CancelProcessReadFailurePreservesIntent(t *testing.T) {
 
 	final := waitState(t, base, process.ID, StateCancelled, 5*time.Second)
 	assert.Equal(t, IntentSessionStopped, final.HostIntent)
-	assert.Equal(t, "suppressed", final.DeliveryState)
 }
 
 func TestService_DetachedCancellationFailurePersistsIntent(t *testing.T) {
@@ -259,7 +291,49 @@ func TestService_DetachedCancellationFailurePersistsIntent(t *testing.T) {
 
 	final := waitState(t, base, process.ID, StateCancelled, 5*time.Second)
 	assert.Equal(t, IntentSessionKilled, final.HostIntent)
-	assert.Equal(t, "suppressed", final.DeliveryState)
+}
+
+func TestService_DetachedCancellationRetriesTerminalization(t *testing.T) {
+	tests := []struct {
+		name              string
+		failIntent        bool
+		wantCancelErr     bool
+		wantFinalizeCalls int
+		wantFallbackCalls int
+	}{
+		{name: "stored intent", wantFinalizeCalls: 3},
+		{name: "fallback intent", failIntent: true, wantCancelErr: true, wantFallbackCalls: 3},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := context.Background()
+			base := newTestStore(t)
+			process := runningRecord(t, base, 2)
+			transient := &transientFinalizeStore{
+				Store: base, finalizeFailures: 2, withIntentFailures: 2,
+			}
+			var store Store = transient
+			if tt.failIntent {
+				store = &recordIntentFailStore{Store: transient, failID: process.ID}
+			}
+			service := newTestService(t, store, nil, nil)
+
+			cancelled, err := service.CancelSessions(ctx, []int64{2}, IntentSessionKilled)
+			if tt.wantCancelErr {
+				require.ErrorContains(t, err, "injected intent failure")
+				assert.Zero(t, cancelled)
+			} else {
+				require.NoError(t, err)
+				assert.Equal(t, 1, cancelled)
+			}
+
+			assert.Equal(t, tt.wantFinalizeCalls, transient.finalizeAttempts)
+			assert.Equal(t, tt.wantFallbackCalls, transient.withIntentAttempts)
+			final := waitState(t, base, process.ID, StateCancelled, 5*time.Second)
+			assert.Equal(t, IntentSessionKilled, final.HostIntent)
+		})
+	}
 }
 
 func TestService_ScopedListFailureCancelsMatchingHandles(t *testing.T) {
@@ -293,7 +367,8 @@ func TestService_ScopedListFailureCancelsMatchingHandles(t *testing.T) {
 			sibling := startTestProcess(t, service, testSpec(3), "sleep 30")
 			if tt.name == "tree" {
 				sibling = startTestProcess(t, service, Spec{
-					SessionID: 4, RootSessionID: 4, ToolCallID: "outside", Deadline: time.Minute,
+					ProjectDir: "project-1",
+					SessionID:  4, RootSessionID: 4, ToolCallID: "outside", Deadline: time.Minute,
 				}, "sleep 30")
 			}
 

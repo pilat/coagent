@@ -135,7 +135,7 @@ func (s *svc) Result(ctx context.Context, childID int64) (childResult, error) {
 // completed foreground child becomes a background continuation because its
 // original task call has already been resolved.
 //
-//nolint:wsl_v5 // Durable enqueue and guarded rearm form one serialized transition.
+//nolint:funlen,wsl_v5 // Durable enqueue and guarded rearm form one serialized transition.
 func (s *svc) SendToChild(ctx context.Context, childID int64, msg string) error {
 	requestCtx := ctx
 	unlock, err := s.lockSessionTree(ctx, childID)
@@ -188,17 +188,10 @@ func (s *svc) SendToChild(ctx context.Context, childID int64, msg string) error 
 			return nil // /stop won; it will cancel this accepted input
 		}
 
-		if err := s.links.ResetLinkRunning(ctx, childID); err != nil {
-			return fmt.Errorf("resume stopped subagent link: %w", err)
-		}
-
-		if err := s.sessionStore.UpdateSessionStatus(ctx, childID, sessionstore.SessionStatusActive); err != nil {
-			return fmt.Errorf("resume stopped subagent session: %w", err)
-		}
-
-		s.publishSubagentProgress(ctx, childID)
-
-		return s.ensureSessionRunnerLocked(ctx, childID)
+		return s.resumeChildWithPendingInputLocked(ctx, childID)
+	}
+	if link.State == subagent.StateError && link.DeliveredAt != 0 {
+		return s.resumeChildWithPendingInputLocked(ctx, childID)
 	}
 
 	if link.Terminal() {
@@ -210,14 +203,40 @@ func (s *svc) SendToChild(ctx context.Context, childID int64, msg string) error 
 		}
 
 		s.deliverCompletionToParent(requestCtx, *link)
+		updated, err := s.links.GetLink(requestCtx, childID)
+		if err != nil {
+			return fmt.Errorf("reload delivered subagent link: %w", err)
+		}
+		if updated == nil || updated.DeliveredAt == 0 {
+			return nil
+		}
+		if updated.State != subagent.StateError {
+			return s.rearmChildAfterDelivery(requestCtx, childID)
+		}
 
-		return nil
+		return s.guardChildTransition(requestCtx, childID, func(guarded context.Context) error {
+			return s.resumeChildWithPendingInputLocked(guarded, childID)
+		})
 	}
 
 	unlock()
 	locked = false
 
 	return s.ensureSessionRunner(requestCtx, childID)
+}
+
+func (s *svc) resumeChildWithPendingInputLocked(ctx context.Context, childID int64) error {
+	if err := s.links.ResetLinkRunning(ctx, childID); err != nil {
+		return fmt.Errorf("resume subagent link: %w", err)
+	}
+
+	if err := s.sessionStore.UpdateSessionStatus(ctx, childID, sessionstore.SessionStatusActive); err != nil {
+		return fmt.Errorf("resume subagent session: %w", err)
+	}
+
+	s.publishSubagentProgress(ctx, childID)
+
+	return s.ensureSessionRunnerLocked(ctx, childID)
 }
 
 // LinkPending reports whether a link already exists for this task call — the

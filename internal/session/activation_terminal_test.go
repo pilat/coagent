@@ -52,7 +52,9 @@ func (g *terminalBudgetGate) Observe(context.Context) (bool, error)  { return fa
 func (g *terminalBudgetGate) PersistResponse(
 	context.Context,
 	*transcript.Message,
+	sessionstore.OutputType,
 	string,
+	bool,
 ) (int64, bool, bool, error) {
 	return 0, false, false, nil
 }

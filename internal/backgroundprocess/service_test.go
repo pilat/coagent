@@ -4,9 +4,11 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -62,17 +64,9 @@ func newTestStore(t *testing.T) Store {
 	return NewStore(db)
 }
 
-func setTestSessionStatus(t *testing.T, ledger Store, sessionID int64, status string) {
-	t.Helper()
-
-	_, err := ledger.(*store).db.ExecContext(
-		context.Background(), `UPDATE sessions SET status = ? WHERE id = ?`, status, sessionID,
-	)
-	require.NoError(t, err)
-}
-
 func testSpec(sessionID int64) Spec {
 	return Spec{
+		ProjectDir:    "project-1",
 		SessionID:     sessionID,
 		RootSessionID: 1,
 		ToolCallID:    "call_1",
@@ -178,47 +172,120 @@ func TestStore_FinalizeNaturalExitWithoutIntent(t *testing.T) {
 	assert.Equal(t, 7, *finalized.ExitCode)
 }
 
-func TestStore_DeliveryClaimCAS(t *testing.T) {
+func TestStore_FinalizeInsertsProcessInboxInput(t *testing.T) {
 	ctx := context.Background()
-	store := newTestStore(t)
-
+	db := newTestDB(t)
+	require.NoError(t, migrate.Run(ctx, db, ""))
+	require.NoError(t, seedProcessTestSessions(ctx, db))
+	store := NewStore(db)
 	record := runningRecord(t, store, 2)
 	zero := 0
 	_, won, err := store.Finalize(ctx, record.ID, StateCompleted, &zero, 0)
 	require.NoError(t, err)
 	require.True(t, won)
 
-	// An active subagent owner wakes itself.
-	target, won, err := store.ClaimDelivery(ctx, record.ID)
-	require.NoError(t, err)
-	require.True(t, won)
-	assert.Equal(t, int64(2), target)
+	var (
+		source         string
+		inputSessionID int64
+		content        string
+	)
+	require.NoError(t, db.QueryRowContext(ctx, `SELECT session_id, source, raw_content
+		FROM session_inbox WHERE json_extract(attributes, '$.process_id') = ?`, record.ID).
+		Scan(&inputSessionID, &source, &content))
+	assert.Equal(t, record.SessionID, inputSessionID)
+	assert.Equal(t, "process", source)
+	assert.Contains(t, content, "<process_completion>")
+	assert.Contains(t, content, "process_id: "+record.ID)
+}
 
-	// A second claim loses and keeps the first target.
-	_, won, err = store.ClaimDelivery(ctx, record.ID)
-	require.NoError(t, err)
-	assert.False(t, won, "a second claim must lose")
+func TestStore_FinalizeRetainsFactsBySessionStatus(t *testing.T) {
+	tests := []struct {
+		status string
+		killed bool
+		want   int
+	}{
+		{status: "active", want: 1},
+		{status: "suspended", want: 1},
+		{status: "completed", want: 1},
+		{status: "stopped", want: 1},
+		{status: "error", want: 1},
+		{status: "stopping", want: 1},
+		{status: "terminating"},
+		{status: "killed", killed: true},
+	}
 
-	delivered, err := store.MarkDelivered(ctx, record.ID)
-	require.NoError(t, err)
-	require.True(t, delivered)
+	for _, tt := range tests {
+		t.Run(tt.status, func(t *testing.T) {
+			ctx := context.Background()
+			db := newTestDB(t)
+			require.NoError(t, migrate.Run(ctx, db, ""))
+			require.NoError(t, seedProcessTestSessions(ctx, db))
+			var killedAt any
+			if tt.killed {
+				killedAt = time.Now().UTC()
+			}
+			_, err := db.ExecContext(ctx, `UPDATE sessions SET status = ?, killed_at = ? WHERE id = 2`,
+				tt.status, killedAt)
+			require.NoError(t, err)
 
-	final, err := store.GetProcess(ctx, record.ID)
-	require.NoError(t, err)
-	assert.Equal(t, "delivered", final.DeliveryState)
-	assert.Equal(t, int64(2), final.DeliveryTargetSessionID)
-	assert.NotNil(t, final.DeliveredAt)
+			ledger := NewStore(db)
+			record := runningRecord(t, ledger, 2)
+			zero := 0
+			_, won, err := ledger.Finalize(ctx, record.ID, StateCompleted, &zero, 0)
+			require.NoError(t, err)
+			require.True(t, won)
 
-	// A terminal owner falls back to the root inside the same transaction.
-	record2 := runningRecord(t, store, 3)
-	setTestSessionStatus(t, store, 3, "completed")
-	_, won, err = store.Finalize(ctx, record2.ID, StateCompleted, &zero, 0)
-	require.NoError(t, err)
-	require.True(t, won)
-	target, won, err = store.ClaimDelivery(ctx, record2.ID)
-	require.NoError(t, err)
-	require.True(t, won)
-	assert.Equal(t, int64(1), target, "a terminal owner wakes the root")
+			var count int
+			require.NoError(t, db.QueryRowContext(ctx, `SELECT COUNT(*) FROM session_inbox
+				WHERE source = 'process' AND json_extract(attributes, '$.process_id') = ?`, record.ID).
+				Scan(&count))
+			assert.Equal(t, tt.want, count)
+		})
+	}
+}
+
+func TestFormatCompletionEscapesDynamicValues(t *testing.T) {
+	created := time.Date(2026, 9, 9, 0, 0, 0, 0, time.UTC)
+	finished := created.Add(1500 * time.Millisecond)
+	output := filepath.Join(t.TempDir(), "result.output")
+	require.NoError(t, os.WriteFile(output, []byte("<done>&\n"), 0o600))
+	code := 0
+
+	content := formatCompletion(Process{
+		ID: "bgp_<one>", SessionID: 7, State: StateCompleted, ExitCode: &code,
+		OutputPath: output, CreatedAt: created, FinishedAt: &finished,
+	})
+	assert.Equal(t, strings.Join([]string{
+		"<process_completion>",
+		"process_id: bgp_&lt;one&gt;",
+		"state: completed",
+		"exit_code: 0",
+		"duration: 1.5s",
+		"origin_session_id: 7",
+		"output_file: " + output,
+		"preview_status: text",
+		"final_output_preview:",
+		"&lt;done&gt;&amp;",
+		"</process_completion>",
+	}, "\n"), content)
+}
+
+func seedProcessTestSessions(ctx context.Context, db *sql.DB) error {
+	if _, err := db.ExecContext(
+		ctx,
+		`INSERT INTO projects (id, work_dir, name) VALUES (1, '/tmp/p', 'p')`,
+	); err != nil {
+		return err
+	}
+	if _, err := db.ExecContext(
+		ctx,
+		`INSERT INTO sessions (id, project_id, model, agent_type) VALUES (1, 1, 'm', 'build')`,
+	); err != nil {
+		return err
+	}
+	_, err := db.ExecContext(ctx, `INSERT INTO sessions (id, project_id, parent_id, root_id, model, agent_type)
+		VALUES (2, 1, 1, 1, 'm', 'general')`)
+	return err
 }
 
 func TestStore_ListQueries(t *testing.T) {
@@ -298,11 +365,36 @@ func newTestService(
 	t.Helper()
 
 	return NewService(store, Options{
-		OutputDir:    t.TempDir(),
-		OnCompletion: onCompletion,
-		TreeFence:    fence,
-		Now:          func() time.Time { return time.Now().UTC() },
+		OutputDir:       t.TempDir(),
+		OnCompletion:    onCompletion,
+		TreeFence:       fence,
+		Now:             func() time.Time { return time.Now().UTC() },
+		GuardianCommand: testGuardianCommand,
 	}).(*svc)
+}
+
+func TestProcessGuardianHelper(t *testing.T) {
+	if os.Getenv("COAGENT_TEST_PROCESS_GUARDIAN") != "1" {
+		return
+	}
+
+	separator := -1
+	for i, arg := range os.Args {
+		if arg == "--" {
+			separator = i
+			break
+		}
+	}
+	if separator < 0 {
+		fmt.Fprintln(os.Stderr, "guardian helper separator is missing")
+		os.Exit(1)
+	}
+
+	_, err := RunGuardian(os.Args[separator+1:])
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
 }
 
 func TestService_SlotLimitPerSession(t *testing.T) {
@@ -360,6 +452,7 @@ func TestService_ForegroundCompletion(t *testing.T) {
 		})
 	require.NoError(t, err)
 	assert.NotEmpty(t, record.ID)
+	assert.Contains(t, record.OutputPath, filepath.Join("project-1", "2"))
 
 	assert.Eventually(t, func() bool {
 		mu.Lock()
@@ -518,6 +611,28 @@ func TestService_TreeFenceRejectsStart(t *testing.T) {
 		})
 	require.ErrorIs(t, err, ErrFenced)
 	assert.Equal(t, 0, service.liveCount(2))
+}
+
+func TestService_GuardianExecFailureStartsNoCommand(t *testing.T) {
+	ctx := context.Background()
+	store := newTestStore(t)
+	marker := filepath.Join(t.TempDir(), "started")
+	service := NewService(store, Options{
+		OutputDir: t.TempDir(),
+		GuardianCommand: func(string, *os.File, *os.File) *exec.Cmd {
+			return exec.Command(filepath.Join(t.TempDir(), "missing-guardian"))
+		},
+	})
+
+	_, err := service.Start(ctx, testSpec(2), func(ctx context.Context) (*exec.Cmd, error) {
+		return exec.CommandContext(ctx, "sh", "-c", "touch "+marker), nil
+	})
+	require.ErrorContains(t, err, "start process guardian")
+	assert.NoFileExists(t, marker)
+
+	running, err := store.ListRunning(ctx)
+	require.NoError(t, err)
+	assert.Empty(t, running)
 }
 
 func TestService_InterruptNonterminalSweepsAdvertised(t *testing.T) {
@@ -765,7 +880,6 @@ func TestService_ShutdownRacingFastInsertInterruptsBeforeSupervision(t *testing.
 	}
 	final := waitState(t, store, record.ID, StateInterrupted, 5*time.Second)
 	assert.Equal(t, IntentDaemonShutdown, final.HostIntent)
-	assert.Equal(t, "pending", final.DeliveryState)
 }
 
 func TestService_RepeatedInterruptIsIdempotent(t *testing.T) {
@@ -795,12 +909,12 @@ func TestService_RepeatedInterruptIsIdempotent(t *testing.T) {
 	assert.NotNil(t, final.FinishedAt)
 }
 
-func TestService_RestartedServiceInterruptsLeftoverWork(t *testing.T) {
+func TestService_RestartSweepDoesNotDuplicateJoinedShutdown(t *testing.T) {
 	ctx := context.Background()
 	store := newTestStore(t)
 	outputDir := t.TempDir()
 
-	first := NewService(store, Options{OutputDir: outputDir})
+	first := NewService(store, Options{OutputDir: outputDir, GuardianCommand: testGuardianCommand})
 	spec := testSpec(2)
 
 	record, err := first.Start(ctx, spec,
@@ -809,13 +923,14 @@ func TestService_RestartedServiceInterruptsLeftoverWork(t *testing.T) {
 		})
 	require.NoError(t, err)
 
-	// Simulate daemon death: no CancelAll, just a fresh service over the
-	// same store and output root.
-	second := NewService(store, Options{OutputDir: outputDir})
+	_, err = first.CancelAll(ctx, IntentDaemonShutdown)
+	require.NoError(t, err)
+
+	second := NewService(store, Options{OutputDir: outputDir, GuardianCommand: testGuardianCommand})
 
 	count, err := second.InterruptNonterminal(ctx)
 	require.NoError(t, err)
-	assert.Equal(t, 1, count)
+	assert.Equal(t, 0, count)
 
 	final, err := store.GetProcess(ctx, record.ID)
 	require.NoError(t, err)
@@ -826,4 +941,45 @@ func TestService_RestartedServiceInterruptsLeftoverWork(t *testing.T) {
 	require.NoError(t, err, "a partial output file survives the restart sweep")
 
 	_ = data
+}
+
+func isolatedGuardianEnv(environ []string, home string) []string {
+	keys := []string{"HOME", "USERPROFILE", "XDG_CACHE_HOME", "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME"}
+	replaced := make(map[string]bool, len(keys))
+	for _, key := range keys {
+		replaced[key] = true
+	}
+
+	result := make([]string, 0, len(environ)+len(keys))
+	for _, entry := range environ {
+		key, _, _ := strings.Cut(entry, "=")
+		if !replaced[key] {
+			result = append(result, entry)
+		}
+	}
+
+	values := []string{
+		home,
+		home,
+		filepath.Join(home, ".cache"),
+		filepath.Join(home, ".config"),
+		filepath.Join(home, ".local", "share"),
+		filepath.Join(home, ".local", "state"),
+	}
+	for i, key := range keys {
+		result = append(result, key+"="+values[i])
+	}
+
+	return result
+}
+
+func testGuardianCommand(guardPath string, readyWriter, leaseReader *os.File) *exec.Cmd {
+	cmd := exec.Command( //nolint:gosec // The current test binary is the hermetic helper.
+		os.Args[0], "-test.run=^TestProcessGuardianHelper$", "--", guardianMode, guardPath,
+	)
+	cmd.Env = append(isolatedGuardianEnv(os.Environ(), filepath.Dir(guardPath)),
+		"COAGENT_TEST_PROCESS_GUARDIAN=1")
+	cmd.ExtraFiles = []*os.File{readyWriter, leaseReader}
+
+	return cmd
 }

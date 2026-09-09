@@ -12,13 +12,6 @@ import (
 	"github.com/pilat/coagent/internal/transcript"
 )
 
-type toolNotificationDelivery uint8
-
-const (
-	internalToolNotification toolNotificationDelivery = iota
-	scheduledToolNotification
-)
-
 // addScheduledToolNotificationPairOnce commits one scheduled turn and its
 // manager announcement under the producer's durable identity.
 func (ms *messageStore) addScheduledToolNotificationPairOnce(
@@ -52,29 +45,13 @@ func (ms *messageStore) addScheduledToolNotificationPairOnce(
 			ToolCallID: result.ToolCallID,
 			ToolName:   result.ToolName,
 		},
-	}, scheduledToolNotification)
-}
-
-// addStoredToolNotificationPairOnce commits a prebuilt synthetic pair under a
-// durable delivery identity. The args carried by the pair (non-empty only for
-// events with a real argument contract) join the delivery fingerprint, so a
-// re-delivery of the same identity with different arguments is rejected rather
-// than silently appended twice.
-func (ms *messageStore) addStoredToolNotificationPairOnce(
-	ctx context.Context,
-	deliveryID string,
-	pair []*transcript.Message,
-) (bool, error) {
-	return ms.persistStoredToolNotificationPairOnce(
-		ctx, deliveryID, pair, internalToolNotification,
-	)
+	})
 }
 
 func (ms *messageStore) persistStoredToolNotificationPairOnce(
 	ctx context.Context,
 	deliveryID string,
 	pair []*transcript.Message,
-	delivery toolNotificationDelivery,
 ) (bool, error) {
 	if len(pair) != 2 {
 		return false, fmt.Errorf("idempotent notification requires a pair, got %d messages", len(pair))
@@ -107,22 +84,9 @@ func (ms *messageStore) persistStoredToolNotificationPairOnce(
 		"tool_notification", calls[0].Name, string(args), result.Content,
 	)
 
-	var asstID, resultID int64
-	var inserted bool
-
-	switch delivery {
-	case internalToolNotification:
-		asstID, resultID, inserted, err = ms.store.InsertInternalToolNotificationPairOnce(
-			ctx, ms.sessID, deliveryID, fingerprint, assistant, result,
-		)
-	case scheduledToolNotification:
-		asstID, resultID, inserted, err = ms.store.InsertScheduledToolNotificationPairOnce(
-			ctx, ms.sessID, deliveryID, fingerprint, assistant, result,
-		)
-	default:
-		return false, fmt.Errorf("unknown tool notification delivery %d", delivery)
-	}
-
+	asstID, resultID, inserted, err := ms.store.InsertScheduledToolNotificationPairOnce(
+		ctx, ms.sessID, deliveryID, fingerprint, assistant, result,
+	)
 	if err != nil {
 		return false, fmt.Errorf("persist idempotent tool notification pair: %w", err)
 	}

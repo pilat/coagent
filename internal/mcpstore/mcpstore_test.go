@@ -95,6 +95,7 @@ func TestMigrationsApplyToAnExistingDatabase(t *testing.T) {
 		`DROP TABLE mcp_servers`,
 		`ALTER TABLE messages DROP COLUMN reasoning_raw`,
 		`ALTER TABLE messages DROP COLUMN attachments`,
+		`ALTER TABLE subagent_links DROP COLUMN delivered_input_id`,
 		`DROP TABLE session_inbox`,
 		`ALTER TABLE sessions DROP COLUMN episode_started_at`,
 		`ALTER TABLE subagent_links DROP COLUMN activation_seq`,
@@ -118,7 +119,7 @@ func TestMigrationsApplyToAnExistingDatabase(t *testing.T) {
 		`ALTER TABLE sessions DROP COLUMN shields_up`,
 		// 00034 added the background-process ledger.
 		`DROP TABLE background_processes`,
-		`DELETE FROM goose_db_version WHERE version_id BETWEEN 16 AND 35`,
+		`DELETE FROM goose_db_version WHERE version_id BETWEEN 16 AND 36`,
 	} {
 		_, err = db.ExecContext(ctx, stmt)
 		require.NoError(t, err, stmt)

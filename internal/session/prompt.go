@@ -268,11 +268,13 @@ func appendScheduleSection(sb *strings.Builder, registered map[string]bool) {
 	switch {
 	case hasSchedule && hasSleep:
 		sb.WriteString(
-			"Use schedule to set a wake-up timer when waiting for an external process (build, deploy, long test run). Use sleep for short fixed delays. Prefer schedule over sleep for longer waits — it frees resources.\n",
+			"Use schedule only for recurring future work or reminders. Use sleep for a one-time fixed delay. " +
+				"Never use schedule to poll the status or completion of already-started work, including processes, builds, tests, CI runs, deployments, subagents, or output files.\n",
 		)
 	case hasSchedule:
 		sb.WriteString(
-			"Use schedule to set a wake-up timer when waiting for an external process (build, deploy, long test run).\n",
+			"Use schedule only for recurring future work or reminders. " +
+				"Never use it to poll the status or completion of already-started work, including processes, builds, tests, CI runs, deployments, subagents, or output files.\n",
 		)
 	default:
 		sb.WriteString("Use sleep to pause execution for a specified duration.\n")
@@ -430,7 +432,7 @@ func buildActiveSubagentsSection(links []ActiveSubagentInfo) string {
 	b.WriteString(backgroundSectionMarker)
 	b.WriteString(
 		"Subagents you spawned that are still running or awaiting result delivery. " +
-			"Each completion is delivered automatically as a subagent_event and wakes this session. " +
+			"Each completion is delivered automatically as a user turn and wakes this session. " +
 			"Do not wait with sleep or poll get_subagent_result; that tool is only a diagnostic snapshot.\n",
 	)
 

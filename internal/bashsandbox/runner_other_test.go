@@ -10,6 +10,8 @@ import (
 )
 
 func TestNew_EnabledUnsupportedPlatform(t *testing.T) {
+	isolateCoagentHome(t)
+
 	_, err := New(Config{Enabled: true, WorkDir: t.TempDir()}, nil)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "unsupported")

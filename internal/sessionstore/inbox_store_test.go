@@ -42,6 +42,73 @@ func TestInboxStore_EnqueuePeekAndListFIFO(t *testing.T) {
 	assert.Equal(t, []int64{secondSession.ID, firstSession.ID}, sessionIDs)
 }
 
+func TestInboxStore_MixedSourcesShareFIFO(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	store, _, projectID := newTestStore(t)
+	record, err := store.CreateSession(ctx, projectID, "model", "", nil)
+	require.NoError(t, err)
+
+	process, err := store.EnqueueAsyncInput(ctx, record.ID, InputSourceProcess, "process", map[string]any{
+		"process_id": "bgp_1",
+	})
+	require.NoError(t, err)
+	user, err := store.EnqueueInput(ctx, record.ID, InputSourceUser, "user")
+	require.NoError(t, err)
+	subagent, err := store.EnqueueAsyncInput(ctx, record.ID, InputSourceSubagent, "subagent", map[string]any{
+		"child_id": 2, "activation_seq": 1,
+	})
+	require.NoError(t, err)
+	assert.Less(t, process.ID, user.ID)
+	assert.Less(t, user.ID, subagent.ID)
+
+	for _, want := range []*InboxInput{process, user, subagent} {
+		got, err := store.PeekPending(ctx, record.ID)
+		require.NoError(t, err)
+		assert.Equal(t, want.ID, got.ID)
+		_, err = store.PromoteInput(ctx, got.ID, got.RawContent)
+		require.NoError(t, err)
+	}
+}
+
+func TestInboxStore_StopPreservesAsyncFactsAndKillCancelsThem(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	store, db, projectID := newTestStore(t)
+	record, err := store.CreateSession(ctx, projectID, "model", "", nil)
+	require.NoError(t, err)
+	user, err := store.EnqueueInput(ctx, record.ID, InputSourceUser, "user")
+	require.NoError(t, err)
+	process, err := store.EnqueueAsyncInput(ctx, record.ID, InputSourceProcess, "process", nil)
+	require.NoError(t, err)
+	subagent, err := store.EnqueueAsyncInput(ctx, record.ID, InputSourceSubagent, "subagent", nil)
+	require.NoError(t, err)
+
+	count, err := store.CancelPendingInputsForStop(ctx, []int64{record.ID}, "stopped")
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), count)
+	assertInputState(t, db, user.ID, InputStateCancelled)
+	assertInputState(t, db, process.ID, InputStatePending)
+	assertInputState(t, db, subagent.ID, InputStatePending)
+
+	count, err = store.CancelPendingInputs(ctx, []int64{record.ID}, "killed")
+	require.NoError(t, err)
+	assert.Equal(t, int64(2), count)
+	assertInputState(t, db, process.ID, InputStateCancelled)
+	assertInputState(t, db, subagent.ID, InputStateCancelled)
+}
+
+func assertInputState(t *testing.T, db *sql.DB, inputID int64, want InputState) {
+	t.Helper()
+
+	var state string
+	require.NoError(t, db.QueryRowContext(context.Background(),
+		`SELECT state FROM session_inbox WHERE id = ?`, inputID).Scan(&state))
+	assert.Equal(t, string(want), state)
+}
+
 func TestInboxStore_EnqueueRejectsInvalidInput(t *testing.T) {
 	t.Parallel()
 

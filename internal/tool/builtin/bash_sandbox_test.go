@@ -17,10 +17,14 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/pilat/coagent/internal/bashsandbox"
+	"github.com/pilat/coagent/internal/coagenthome"
 	"github.com/pilat/coagent/internal/tool"
 )
 
 func TestBashTool_TimeoutKillsDescendants(t *testing.T) {
+	restore := coagenthome.Override(t.TempDir())
+	defer restore()
+
 	tests := []struct {
 		name    string
 		enabled bool
@@ -67,6 +71,9 @@ func TestBashTool_TimeoutKillsDescendants(t *testing.T) {
 // TestBashTool_SandboxHintOnDeniedWrite drives the real backend end to end: a
 // write outside the writable roots must fail AND carry the self-diagnosis hint.
 func TestBashTool_SandboxHintOnDeniedWrite(t *testing.T) {
+	restore := coagenthome.Override(t.TempDir())
+	defer restore()
+
 	if runtime.GOOS == "linux" {
 		if _, err := exec.LookPath("bwrap"); err != nil {
 			t.Skip("bwrap is not installed")

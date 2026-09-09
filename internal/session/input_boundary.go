@@ -3,6 +3,8 @@ package session
 import (
 	"context"
 	"time"
+
+	"github.com/pilat/coagent/internal/sessionstore"
 )
 
 // PendingInput is one durable normal message waiting to enter the transcript.
@@ -13,6 +15,7 @@ type PendingInput struct {
 	Attributes   map[string]any
 	ReceivedAt   time.Time
 	ManagerOwned bool
+	Source       sessionstore.InputSource
 }
 
 // InputBoundary is the session-owned consumption seam for durable normal input.

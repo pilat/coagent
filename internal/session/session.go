@@ -2,13 +2,11 @@ package session
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"runtime"
 	"slices"
 	"strconv"
-	"strings"
 	"sync"
 	"time"
 
@@ -33,8 +31,6 @@ import (
 
 const (
 	compactionThreshold = 80000
-	subagentEventTool   = "subagent_event"
-	processEventTool    = "process_event"
 )
 
 // Service manages the state for a single agent session.
@@ -76,11 +72,6 @@ type Service interface {
 	// applying one externally identified event at most once, including across
 	// process restart and producer acknowledgement failure.
 	InjectToolNotificationOnce(ctx context.Context, deliveryID, toolName, content string) (bool, error)
-
-	// InjectProcessCompletion delivers one background-process completion as a
-	// synthetic process_event pair with proper arguments. The process ID is the
-	// delivery identity, so re-delivery across restarts is exactly-once.
-	InjectProcessCompletion(ctx context.Context, deliveryID string, event ProcessEvent) (bool, error)
 
 	// ResetContextAndInjectOnce discards the session's accumulated context
 	// (transcript, compaction brief, todos) and starts a fresh turn with prompt as
@@ -170,6 +161,7 @@ type svc struct {
 	stagedCalls map[string]string
 	// Reads the daemon's subagent-link ledger live; nil outside a daemon.
 	activeSubagentsProvider func(context.Context) []ActiveSubagentInfo
+	hasLiveWakeSource       func(context.Context) bool
 	// Under modelMu with the model triplet: a measurement describes one model's
 	// window and tokenizer. nil baseline = nothing measured.
 	baseline   *contextBaseline
@@ -226,6 +218,9 @@ type options struct {
 	// ActiveSubagentsProvider reads the same ledger live, at the moment a
 	// compaction writes its summary — the create-time snapshot is stale by then.
 	ActiveSubagentsProvider func(context.Context) []ActiveSubagentInfo
+
+	// HasLiveWakeSource reports a daemon-owned asynchronous completion source.
+	HasLiveWakeSource func(context.Context) bool
 
 	// ExtraSkills are daemon-injected, session-scoped skills that are registered
 	// for discovery and activated directly in the system prompt.
@@ -336,6 +331,7 @@ func newSession(p params, opts options, workDir string, agentConfig registry.Age
 
 		compactionDeferAnnounced: opts.CompactionDeferAnnounced,
 		activeSubagentsProvider:  opts.ActiveSubagentsProvider,
+		hasLiveWakeSource:        opts.HasLiveWakeSource,
 	}
 	var msStore sessionstore.RuntimeStore
 
@@ -354,6 +350,10 @@ func (s *svc) SetModel(model, reasoningLevel string) error {
 
 func (s *svc) AgentTypes() *registry.Set {
 	return s.agentTypes
+}
+
+func (s *svc) SkillCatalog() loader.SkillCatalog {
+	return s.loader
 }
 
 // RegisterGatedTool applies the same agent-type filter used at construction
@@ -392,36 +392,6 @@ func (s *svc) InjectToolNotificationOnce(
 		toolName,
 		content,
 	)
-}
-
-// InjectProcessCompletion delivers one background-process completion as a
-// synthetic process_event pair with proper arguments. The process ID is the
-// delivery identity, so re-delivery across restarts is exactly-once; the
-// fingerprint binds the full event content.
-func (s *svc) InjectProcessCompletion(
-	ctx context.Context,
-	deliveryID string,
-	event ProcessEvent,
-) (bool, error) {
-	if deliveryID == "" {
-		return false, errors.New("inject process completion: empty process id")
-	}
-
-	if pending := s.PendingExternalCalls(); len(pending) > 0 {
-		return false, fmt.Errorf(
-			"inject process event %s: external call %s (%s) is still pending",
-			deliveryID,
-			pending[0].ID,
-			pending[0].Name,
-		)
-	}
-
-	stored, err := BuildProcessEventCompletion(event)
-	if err != nil {
-		return false, fmt.Errorf("inject process event %s: %w", deliveryID, err)
-	}
-
-	return s.ms.addStoredToolNotificationPairOnce(ctx, deliveryID, stored)
 }
 
 func (s *svc) ResetContextAndInjectOnce(
@@ -482,130 +452,6 @@ func BuildBlockingSubagentCompletion(
 	}
 
 	return []*transcript.Message{stored}, nil
-}
-
-// BuildBackgroundSubagentCompletion builds a standalone synthetic event for a
-// background child. It never answers the task call that originally launched the
-// child (that call already has its launch result).
-func BuildBackgroundSubagentCompletion(
-	childID int64,
-	content string,
-) ([]*transcript.Message, error) {
-	if childID <= 0 {
-		return nil, errors.New("build background subagent completion: positive child id is required")
-	}
-
-	callID := id.Generate()
-	args := json.RawMessage(fmt.Sprintf(`{"child_id":%d,"event":"completed"}`, childID))
-	toolCalls := []llmwire.ToolCall{{ID: callID, Name: subagentEventTool, Arguments: args}}
-
-	toolCallsJSON, err := json.Marshal(toolCalls)
-	if err != nil {
-		return nil, fmt.Errorf("marshal subagent completion tool call: %w", err)
-	}
-
-	asstStored := &transcript.Message{Role: llmwire.RoleAssistant, ToolCalls: toolCallsJSON}
-
-	resultStored := &transcript.Message{
-		Role: llmwire.RoleTool, Content: content, ToolCallID: callID, ToolName: subagentEventTool,
-	}
-
-	return []*transcript.Message{asstStored, resultStored}, nil
-}
-
-// ProcessEvent is the bounded host-owned fact describing one terminal
-// background process.
-type ProcessEvent struct {
-	ProcessID       string
-	OriginSessionID int64
-	State           string
-	ExitCode        int
-	HasExitCode     bool
-	Duration        time.Duration
-	OutputPath      string
-	Tail            string
-	TailOmitted     bool
-	OriginSubagent  string
-}
-
-// BuildProcessEventCompletion builds a standalone synthetic tool-call pair for
-// a background Bash process completion. Arguments carry only stable IDs; the
-// bounded result text carries state, duration, path, and the tail preview.
-func BuildProcessEventCompletion(event ProcessEvent) ([]*transcript.Message, error) {
-	if event.ProcessID == "" {
-		return nil, errors.New("build process event: process id is required")
-	}
-
-	if event.OriginSessionID <= 0 {
-		return nil, errors.New("build process event: positive origin session id is required")
-	}
-
-	args := fmt.Sprintf(
-		`{"process_id":%q,"origin_session_id":%d,"event":"completed"}`,
-		event.ProcessID, event.OriginSessionID,
-	)
-
-	callID := id.Generate()
-	toolCalls := []llmwire.ToolCall{{
-		ID: callID, Name: processEventTool, Arguments: json.RawMessage(args),
-	}}
-
-	toolCallsJSON, err := json.Marshal(toolCalls)
-	if err != nil {
-		return nil, fmt.Errorf("marshal process event tool call: %w", err)
-	}
-
-	content := formatProcessEventContent(event)
-
-	asstStored := &transcript.Message{Role: llmwire.RoleAssistant, ToolCalls: toolCallsJSON}
-
-	resultStored := &transcript.Message{
-		Role: llmwire.RoleTool, Content: content, ToolCallID: callID, ToolName: processEventTool,
-	}
-
-	return []*transcript.Message{asstStored, resultStored}, nil
-}
-
-// formatProcessEventContent renders the bounded completion result text. It
-// never embeds complete process output — paths and a bounded preview only.
-func formatProcessEventContent(event ProcessEvent) string {
-	var b strings.Builder
-
-	fmt.Fprintf(&b, "Background process %s completed: %s", event.ProcessID, event.State)
-
-	if event.HasExitCode {
-		fmt.Fprintf(&b, " (exit code %d)", event.ExitCode)
-	}
-
-	fmt.Fprintf(&b, "\nDuration: %s", event.Duration)
-
-	fmt.Fprintf(&b, "\nOrigin session: %d", event.OriginSessionID)
-
-	if event.OriginSubagent != "" {
-		fmt.Fprintf(
-			&b,
-			" (subagent %s; it is terminal — only an explicit send_to_subagent follow-up can start its next round)",
-			event.OriginSubagent,
-		)
-	}
-
-	fmt.Fprintf(&b, "\nOutput file: %s", event.OutputPath)
-	fmt.Fprintf(&b, "\nInspect additional output by reading a suffix of the file with the tail tool; do not poll.")
-
-	if event.TailOmitted {
-		b.WriteString("\n--- final output preview omitted (binary output preview omitted) ---")
-
-		return b.String()
-	}
-
-	if event.Tail == "" {
-		return b.String()
-	}
-
-	b.WriteString("\n--- final output ---\n")
-	b.WriteString(event.Tail)
-
-	return b.String()
 }
 
 // ReloadDeliveredCompletion refreshes the live in-memory transcript from the

@@ -14,8 +14,10 @@ import (
 type InputSource string
 
 const (
-	InputSourceUser  InputSource = "user"
-	InputSourceAgent InputSource = "agent"
+	InputSourceUser     InputSource = "user"
+	InputSourceAgent    InputSource = "agent"
+	InputSourceProcess  InputSource = "process"
+	InputSourceSubagent InputSource = "subagent"
 )
 
 type InputState string
@@ -51,8 +53,15 @@ type InboxInput struct {
 }
 
 // InboxStore persists controller-accepted input before any runner observes it.
-type InboxStore interface {
+type InboxStore interface { //nolint:interfacebloat // One durable FIFO boundary owns its full row lifecycle.
 	EnqueueInput(ctx context.Context, sessionID int64, source InputSource, rawContent string) (*InboxInput, error)
+	EnqueueAsyncInput(
+		ctx context.Context,
+		sessionID int64,
+		source InputSource,
+		rawContent string,
+		attributes map[string]any,
+	) (*InboxInput, error)
 	PeekPending(ctx context.Context, sessionID int64) (*InboxInput, error)
 	ListPendingShieldCommands(ctx context.Context, sessionID int64) ([]*InboxInput, error)
 	ListRootsWithPendingShieldCommands(ctx context.Context) ([]int64, error)
@@ -69,6 +78,7 @@ type InboxStore interface {
 	HandleInput(ctx context.Context, inputID int64, reason string) error
 	RejectInput(ctx context.Context, inputID int64, reason string) error
 	CancelPendingInputs(ctx context.Context, sessionIDs []int64, reason string) (int64, error)
+	CancelPendingInputsForStop(ctx context.Context, sessionIDs []int64, reason string) (int64, error)
 	HasAcceptedInput(ctx context.Context, sessionID int64) (bool, error)
 	ListSessionsWithRecoverableInput(ctx context.Context) ([]int64, error)
 }
@@ -228,6 +238,59 @@ func (s *store) EnqueueInput(
 		Attributes: attributes,
 		ReceivedAt: receivedAt,
 		State:      InputStatePending,
+	}, nil
+}
+
+// EnqueueAsyncInput persists a completion producer fact without manager
+// ownership semantics. Stopped and errored sessions retain it for explicit resume.
+func (s *store) EnqueueAsyncInput(
+	ctx context.Context,
+	sessionID int64,
+	source InputSource,
+	rawContent string,
+	attributes map[string]any,
+) (*InboxInput, error) {
+	if source != InputSourceProcess && source != InputSourceSubagent {
+		return nil, fmt.Errorf("invalid asynchronous input source %q", source)
+	}
+
+	if rawContent == "" {
+		return nil, errors.New("empty input content")
+	}
+
+	if attributes == nil {
+		attributes = map[string]any{}
+	}
+
+	encoded, err := json.Marshal(attributes)
+	if err != nil {
+		return nil, fmt.Errorf("encode asynchronous input attributes: %w", err)
+	}
+
+	now := time.Now().UTC()
+
+	result, err := s.db.ExecContext(ctx, `INSERT INTO session_inbox
+		(session_id, source, raw_content, attributes, received_at)
+		SELECT id, ?, ?, ?, ? FROM sessions WHERE id = ? AND killed_at IS NULL
+			AND status NOT IN ('killed', 'terminating', 'stopping')`, source, rawContent, string(encoded), now, sessionID)
+	if err != nil {
+		return nil, fmt.Errorf("enqueue asynchronous input for session %d: %w", sessionID, err)
+	}
+
+	if rows, err := result.RowsAffected(); err != nil {
+		return nil, fmt.Errorf("enqueue asynchronous input rows affected: %w", err)
+	} else if rows != 1 {
+		return nil, fmt.Errorf("%w: session %d", ErrSessionNotAcceptingInput, sessionID)
+	}
+
+	id, err := result.LastInsertId()
+	if err != nil {
+		return nil, fmt.Errorf("asynchronous input id: %w", err)
+	}
+
+	return &InboxInput{
+		ID: id, SessionID: sessionID, Source: source, RawContent: rawContent,
+		Attributes: attributes, ReceivedAt: now, State: InputStatePending,
 	}, nil
 }
 
@@ -561,6 +624,45 @@ func (s *store) CancelPendingInputs(
 	affected, err := result.RowsAffected()
 	if err != nil {
 		return 0, fmt.Errorf("cancel inputs rows affected: %w", err)
+	}
+
+	return affected, nil
+}
+
+// CancelPendingInputsForStop preserves independently committed completion
+// facts. A later explicit user resume observes them in the original FIFO.
+func (s *store) CancelPendingInputsForStop(
+	ctx context.Context,
+	sessionIDs []int64,
+	reason string,
+) (int64, error) {
+	if len(sessionIDs) == 0 {
+		return 0, nil
+	}
+
+	if reason == "" {
+		return 0, errors.New("empty input cancellation reason")
+	}
+
+	sessionIDsJSON, err := json.Marshal(sessionIDs)
+	if err != nil {
+		return 0, fmt.Errorf("marshal session ids: %w", err)
+	}
+
+	result, err := s.db.ExecContext(ctx, `UPDATE session_inbox
+		SET state = 'cancelled', resolved_at = ?, resolution_reason = ?
+		WHERE state = 'pending'
+			AND source NOT IN ('process', 'subagent')
+			AND session_id IN (SELECT value FROM json_each(?))`,
+		time.Now().UTC(), reason, sessionIDsJSON,
+	)
+	if err != nil {
+		return 0, fmt.Errorf("cancel stopped session inputs: %w", err)
+	}
+
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("cancel stopped inputs rows affected: %w", err)
 	}
 
 	return affected, nil

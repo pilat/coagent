@@ -46,7 +46,7 @@ func TestMessageOutputsStampGenerationLifecycleOutputsDoNot(t *testing.T) {
 	// Assistant message output.
 	_, commit, err := store.InsertAssistantMessageWithOutput(ctx, session.ID,
 		&transcript.Message{Role: "assistant", Content: "working", ToolCalls: []byte(`[]`)},
-		OutputMessageReplaceable, "working")
+		OutputMessageReplaceable, "working", false)
 	require.NoError(t, err)
 	require.NotZero(t, commit.OutputID)
 	assert.InDelta(t, float64(1), ownerAttrs(t, db, commit.OutputID)["model_input_generation"].(float64), 0)
@@ -286,7 +286,7 @@ func TestCaptureProgressExcludesPublishedDirectReply(t *testing.T) {
 	_, output, err := store.InsertAssistantMessageWithOutput(ctx, session.ID, &transcript.Message{
 		Role: "assistant", Content: "Stopping the mutation run",
 		ToolCalls: jsonRaw(`[{"id":"stop","name":"bash","input":{}}]`),
-	}, OutputMessagePersistent, "Stopping the mutation run")
+	}, OutputMessagePersistent, "Stopping the mutation run", false)
 	require.NoError(t, err)
 	require.NotNil(t, output)
 

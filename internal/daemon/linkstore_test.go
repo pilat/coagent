@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"path/filepath"
+	"strconv"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -92,6 +93,127 @@ func TestLinkStore_InsertAndRead(t *testing.T) {
 	missing, err := ls.GetLink(ctx, 999999)
 	require.NoError(t, err)
 	assert.Nil(t, missing)
+}
+
+func TestLinkStore_DeliverBackgroundCompletionToInbox(t *testing.T) {
+	ss, links, tx, projectID := newTestLinkStore(t)
+	ctx := context.Background()
+	parent, err := ss.CreateSession(ctx, projectID, "m", "", nil)
+	require.NoError(t, err)
+	childID, err := ss.CreateSubagentSession(ctx, projectID, parent.ID, parent.ID, "general", "m", "")
+	require.NoError(t, err)
+	link := subagent.Link{ParentID: parent.ID, ChildID: childID, TaskCallID: "call", Depth: 1}
+	require.NoError(t, links.InsertSubagentLink(ctx, link))
+	require.NoError(t, links.MarkLinkTerminal(ctx, childID, subagent.StateCompleted, "done", subagent.OutcomeCompleted))
+	storedLink, err := links.GetLink(ctx, childID)
+	require.NoError(t, err)
+	require.NotNil(t, storedLink)
+	won, err := tx.DeliverBackgroundCompletion(ctx, *storedLink, 3)
+	require.NoError(t, err)
+	require.True(t, won)
+	updated, err := links.GetLink(ctx, childID)
+	require.NoError(t, err)
+	require.Positive(t, updated.DeliveredInputID)
+	assert.Zero(t, updated.DeliveredMsgID)
+
+	input, err := ss.PeekPending(ctx, parent.ID)
+	require.NoError(t, err)
+	assert.Equal(t, sessionstore.InputSourceSubagent, input.Source)
+	assert.EqualValues(t, childID, input.Attributes["child_id"])
+	assert.EqualValues(t, 1, input.Attributes["activation_seq"])
+	assert.Equal(t, `<subagent_completion>
+child_id: `+strconv.FormatInt(childID, 10)+`
+activation_seq: 1
+outcome: completed
+iterations: 3
+result:
+done
+</subagent_completion>`, input.RawContent)
+
+	won, err = tx.DeliverBackgroundCompletion(ctx, *storedLink, 3)
+	require.NoError(t, err)
+	assert.False(t, won)
+	second, err := ss.PeekPending(ctx, parent.ID)
+	require.NoError(t, err)
+	assert.Equal(t, input.ID, second.ID)
+}
+
+func TestLinkStore_KilledParentRecoversBackgroundCompletionForSuppression(t *testing.T) {
+	ss, links, tx, projectID := newTestLinkStore(t)
+	ctx := context.Background()
+	parent, err := ss.CreateSession(ctx, projectID, "m", "", nil)
+	require.NoError(t, err)
+
+	createTerminal := func(callID string, blocking bool) int64 {
+		t.Helper()
+
+		childID, createErr := ss.CreateSubagentSession(
+			ctx, projectID, parent.ID, parent.ID, "general", "m", "",
+		)
+		require.NoError(t, createErr)
+		require.NoError(t, links.InsertSubagentLink(ctx, subagent.Link{
+			ParentID: parent.ID, ChildID: childID, TaskCallID: callID, Blocking: blocking,
+		}))
+		require.NoError(t, links.MarkLinkTerminal(
+			ctx, childID, subagent.StateCompleted, "done", subagent.OutcomeCompleted,
+		))
+
+		return childID
+	}
+
+	backgroundID := createTerminal("background", false)
+	_ = createTerminal("blocking", true)
+	require.NoError(t, ss.MarkSessionKilled(ctx, parent.ID))
+
+	undelivered, err := links.ListUndeliveredParentLinks(ctx)
+	require.NoError(t, err)
+	require.Len(t, undelivered, 1)
+	assert.Equal(t, backgroundID, undelivered[0].ChildID)
+
+	won, err := tx.DeliverBackgroundCompletion(ctx, undelivered[0], 1)
+	require.NoError(t, err)
+	require.True(t, won)
+	updated, err := links.GetLink(ctx, backgroundID)
+	require.NoError(t, err)
+	require.NotNil(t, updated)
+	assert.Positive(t, updated.DeliveredAt)
+	assert.Zero(t, updated.DeliveredInputID)
+	_, err = ss.PeekPending(ctx, parent.ID)
+	require.ErrorIs(t, err, sessionstore.ErrNoPendingInput)
+}
+
+func TestLinkStore_BackgroundCompletionRejectsStaleIdentity(t *testing.T) {
+	ss, links, tx, projectID := newTestLinkStore(t)
+	ctx := context.Background()
+	parent, err := ss.CreateSession(ctx, projectID, "m", "", nil)
+	require.NoError(t, err)
+	otherParent, err := ss.CreateSession(ctx, projectID, "m", "", nil)
+	require.NoError(t, err)
+	childID, err := ss.CreateSubagentSession(ctx, projectID, parent.ID, parent.ID, "general", "m", "")
+	require.NoError(t, err)
+	require.NoError(t, links.InsertSubagentLink(ctx, subagent.Link{
+		ParentID: parent.ID, ChildID: childID, TaskCallID: "call", Depth: 1,
+	}))
+	require.NoError(t, links.MarkLinkTerminal(
+		ctx, childID, subagent.StateCompleted, "done", subagent.OutcomeCompleted,
+	))
+	link, err := links.GetLink(ctx, childID)
+	require.NoError(t, err)
+	require.NotNil(t, link)
+
+	wrongParent := *link
+	wrongParent.ParentID = otherParent.ID
+	_, err = tx.DeliverBackgroundCompletion(ctx, wrongParent, 1)
+	require.Error(t, err)
+	stale := *link
+	stale.ActivationSeq++
+	_, err = tx.DeliverBackgroundCompletion(ctx, stale, 1)
+	require.Error(t, err)
+
+	_, err = ss.PeekPending(ctx, parent.ID)
+	require.ErrorIs(t, err, sessionstore.ErrNoPendingInput)
+	_, err = ss.PeekPending(ctx, otherParent.ID)
+	require.ErrorIs(t, err, sessionstore.ErrNoPendingInput)
 }
 
 func TestLinkStore_MarkTerminal(t *testing.T) {

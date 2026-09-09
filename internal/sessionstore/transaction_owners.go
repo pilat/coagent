@@ -35,6 +35,7 @@ type SessionLifecycleStore interface {
 	StopCompletionStore
 	ShieldCommandStore
 	CancelPendingInputs(context.Context, []int64, string) (int64, error)
+	CancelPendingInputsForStop(context.Context, []int64, string) (int64, error)
 }
 
 var (

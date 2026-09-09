@@ -146,6 +146,7 @@ func TestRegisterCoreTools_SharesFileMutator(t *testing.T) {
 		mutator,
 		nil,
 		nil,
+		"project-1",
 		1,
 		1,
 	)

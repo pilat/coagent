@@ -14,24 +14,6 @@ import (
 	"github.com/pilat/coagent/internal/subagent"
 )
 
-// TestInjectCompletion_ReadErrorIsReturned: without the link nothing is
-// injected; the caller gets a real failure instead of a log-only pseudo-success.
-func TestInjectCompletion_ReadErrorIsLoud(t *testing.T) {
-	h := newLedgerHarness(t)
-	defer h.shutdown()
-
-	before := h.parentMessages(h.parentID)
-
-	link, linkErr := h.links.GetLink(h.ctx, h.childID)
-	require.NoError(t, linkErr)
-	require.NotNil(t, link)
-	h.flaky.failGetLink(1, h.childID)
-	err := h.mgr.injectBackgroundCompletion(h.ctx, &mockSession{}, h.childID, link.ActivationSeq)
-
-	require.ErrorContains(t, err, "load background completion link")
-	assert.Len(t, h.parentMessages(h.parentID), len(before), "the parent transcript is untouched")
-}
-
 // TestCascadeKill_ListErrorIsLoud: a failed listing means part of the tree stays
 // alive, which must not look like "no descendants to kill".
 func TestCascadeKill_ListErrorIsLoud(t *testing.T) {

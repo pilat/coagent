@@ -48,7 +48,7 @@ func TestIntegration_ExploreChildIsDeniedControlPlaneTools(t *testing.T) {
 			return probeMissingTools(msgs, "explore", controlPlaneTools)
 		}
 
-		if hasToolResultFor(msgs, tool.IDTask) || hasToolResultFor(msgs, "subagent_event") {
+		if hasToolResultFor(msgs, tool.IDTask) || hasUserContaining(msgs, "<subagent_completion>") {
 			return &llmwire.Response{Text: "parent done"}
 		}
 
@@ -176,7 +176,7 @@ func TestIntegration_ProjectSubagentToolGating(t *testing.T) {
 			return probeMissingTools(msgs, "wide", append(configPlaneTools, tool.IDSchedule))
 		}
 
-		if hasToolResultFor(msgs, tool.IDTask) || hasToolResultFor(msgs, "subagent_event") {
+		if hasToolResultFor(msgs, tool.IDTask) || hasUserContaining(msgs, "<subagent_completion>") {
 			return &llmwire.Response{Text: "parent done"}
 		}
 
@@ -222,7 +222,7 @@ func TestIntegration_GeneralSubagentCannotScheduleButCanSleep(t *testing.T) {
 			return probeMissingTools(msgs, "general", []string{tool.IDSchedule})
 		}
 
-		if hasToolResultFor(msgs, tool.IDTask) || hasToolResultFor(msgs, "subagent_event") {
+		if hasToolResultFor(msgs, tool.IDTask) || hasUserContaining(msgs, "<subagent_completion>") {
 			return &llmwire.Response{Text: "parent done"}
 		}
 

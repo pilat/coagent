@@ -49,6 +49,8 @@ func TestDarwinRunner_CommandUsesParameters(t *testing.T) {
 }
 
 func TestDarwinRunner_SeatbeltPolicy(t *testing.T) {
+	isolateCoagentHome(t)
+
 	if _, err := os.Stat(seatbeltExecutable); err != nil {
 		t.Skipf("Seatbelt executable unavailable: %v", err)
 	}
@@ -229,6 +231,8 @@ func TestDarwinRunner_ShieldProbeConfirmsEnforcement(t *testing.T) {
 }
 
 func TestDarwinRunner_CommandExitStatusIsPreserved(t *testing.T) {
+	isolateCoagentHome(t)
+
 	runner, err := New(Config{Enabled: true, WorkDir: t.TempDir()}, nil)
 	require.NoError(t, err)
 

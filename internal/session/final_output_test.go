@@ -54,13 +54,13 @@ func TestMessageStore_FinalPromotionTargetsLastAssistantMessage(t *testing.T) {
 		},
 	}
 	require.NoError(t, ms.addAssistantMessageOutput(
-		ctx, intermediate, sessionstore.OutputMessageReplaceable, intermediate.Text,
+		ctx, intermediate, sessionstore.OutputMessageReplaceable, intermediate.Text, false,
 	))
 	require.NoError(t, ms.addToolResult(ctx, "call-1", "read", "file body"))
 
 	final := &llmwire.Response{Text: "the final answer"}
 	require.NoError(t, ms.addAssistantMessageOutput(
-		ctx, final, sessionstore.OutputMessagePersistent, "✅ the final answer",
+		ctx, final, sessionstore.OutputMessagePersistent, "✅ the final answer", true,
 	))
 
 	lastID := ms.rowIDs[len(ms.rowIDs)-1]

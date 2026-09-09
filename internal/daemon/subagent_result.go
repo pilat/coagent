@@ -33,7 +33,7 @@ func (t *getSubagentResultTool) ParallelSafe() bool { return false }
 func (t *getSubagentResultTool) Description() string {
 	return `Read a one-off diagnostic snapshot of a subagent previously launched with task.
 
-Returns the subagent's current state (running, completed, error, killed) and, once terminal, its final output. This is for inspection and troubleshooting, not waiting: do not poll this tool and do not call sleep or schedule for a subagent. Completion is delivered automatically as a subagent_event and wakes the parent session.`
+Returns the subagent's current state (running, completed, error, killed) and, once terminal, its final output. This is for inspection and troubleshooting, not waiting: do not poll this tool and do not call sleep or schedule for a subagent. Completion is delivered automatically as a user turn and wakes the parent session.`
 }
 
 func (t *getSubagentResultTool) Parameters() json.RawMessage {

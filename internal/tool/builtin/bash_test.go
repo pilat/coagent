@@ -99,7 +99,7 @@ func newTestBashTool(t *testing.T) (*bashTool, backgroundprocess.Service) {
 
 	service, sessionID := newTestProcessService(t)
 
-	return newBashTool(t.TempDir(), &bashRunnerStub{}, service, sessionID, sessionID), service
+	return newBashTool(t.TempDir(), &bashRunnerStub{}, service, "project-1", sessionID, sessionID), service
 }
 
 // newTestBashToolRunner builds a bash tool over a caller-supplied sandbox
@@ -109,7 +109,7 @@ func newTestBashToolRunner(t *testing.T, workDir string, runner bashsandbox.Runn
 
 	service, sessionID := newTestProcessService(t)
 
-	return newBashTool(workDir, runner, service, sessionID, sessionID)
+	return newBashTool(workDir, runner, service, "project-1", sessionID, sessionID)
 }
 
 func TestBashTool_Execute(t *testing.T) {
@@ -274,7 +274,7 @@ func TestBashTool_DelegatesCommandConstruction(t *testing.T) {
 	service, sessionID := newTestProcessService(t)
 	runner := &bashRunnerStub{}
 	workDir := t.TempDir()
-	bash := newBashTool(workDir, runner, service, sessionID, sessionID)
+	bash := newBashTool(workDir, runner, service, "project-1", sessionID, sessionID)
 
 	params, err := json.Marshal(bashParams{Command: "printf delegated"})
 	require.NoError(t, err)
@@ -288,7 +288,7 @@ func TestBashTool_DelegatesCommandConstruction(t *testing.T) {
 func TestBashTool_CommandConstructionError(t *testing.T) {
 	service, sessionID := newTestProcessService(t)
 	runnerErr := errors.New("sandbox unavailable")
-	bash := newBashTool(t.TempDir(), &bashRunnerStub{err: runnerErr}, service, sessionID, sessionID)
+	bash := newBashTool(t.TempDir(), &bashRunnerStub{err: runnerErr}, service, "project-1", sessionID, sessionID)
 
 	params, err := json.Marshal(bashParams{Command: "true"})
 	require.NoError(t, err)

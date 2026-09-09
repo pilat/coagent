@@ -4,12 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/pilat/coagent/internal/loader"
 	"github.com/pilat/coagent/internal/registry"
 	"github.com/pilat/coagent/internal/tool"
 )
@@ -66,6 +68,73 @@ func (m *mockSpawner) LinkPending(ctx context.Context, parentID int64, taskCallI
 
 func taskToolWith(sp *mockSpawner) tool.Tool {
 	return newTaskTool(sp, 7, registry.NewSet(nil), nil)
+}
+
+func taskToolWithSkills(sp *mockSpawner, skills ...*loader.Skill) tool.Tool {
+	catalog := loader.New()
+	for _, skill := range skills {
+		catalog.RegisterSkill(skill)
+	}
+
+	return newTaskTool(sp, 7, registry.NewSet(nil), nil, catalog)
+}
+
+func TestTaskTool_SkillSeedsForegroundAndBackground(t *testing.T) {
+	for _, background := range []bool{false, true} {
+		t.Run(fmt.Sprintf("background_%t", background), func(t *testing.T) {
+			sp := &mockSpawner{}
+			task := taskToolWithSkills(sp, &loader.Skill{
+				Name: "pilat:review", Description: "Review changes", Content: "Inspect $ARGUMENTS.",
+			})
+			params, err := json.Marshal(TaskParams{
+				Skill: " review ", SkillArgs: "the diff", Description: "review task",
+				SubagentType: "general", Background: background,
+			})
+			require.NoError(t, err)
+
+			_, err = task.Execute(tool.WithCallID(context.Background(), "skill-call"), params)
+			if background {
+				require.NoError(t, err)
+			} else {
+				require.ErrorIs(t, err, tool.ErrSuspend)
+			}
+			assert.Contains(t, sp.lastReq.Prompt, "<name>pilat:review</name>")
+			assert.Contains(t, sp.lastReq.Prompt, "Inspect the diff.")
+			assert.Equal(t, 1, sp.spawnCount)
+		})
+	}
+}
+
+func TestTaskTool_SkillFailuresDoNotSpawn(t *testing.T) {
+	tests := []TaskParams{
+		{Prompt: "prompt", Skill: "review", Description: "task", SubagentType: "general"},
+		{SkillArgs: "args", Description: "task", SubagentType: "general"},
+		{Skill: "missing", Description: "task", SubagentType: "general"},
+	}
+	for _, params := range tests {
+		sp := &mockSpawner{}
+		task := taskToolWithSkills(sp, &loader.Skill{Name: "review", Content: "Review."})
+		encoded, err := json.Marshal(params)
+		require.NoError(t, err)
+		_, err = task.Execute(tool.WithCallID(context.Background(), "skill-failure"), encoded)
+		require.Error(t, err)
+		assert.Zero(t, sp.spawnCount)
+	}
+}
+
+func TestTaskTool_BlockingReplayDoesNotResolveSkillAgain(t *testing.T) {
+	sp := &mockSpawner{linkPendingFn: func(context.Context, int64, string) (bool, error) {
+		return true, nil
+	}}
+	task := newTaskTool(sp, 7, registry.NewSet(nil), nil, nil)
+	params, err := json.Marshal(TaskParams{
+		Skill: "removed-skill", Description: "task", SubagentType: "general",
+	})
+	require.NoError(t, err)
+
+	_, err = task.Execute(tool.WithCallID(context.Background(), "replayed-call"), params)
+	require.ErrorIs(t, err, tool.ErrSuspend)
+	assert.Zero(t, sp.spawnCount)
 }
 
 func TestTaskTool_BackgroundSpawns(t *testing.T) {
@@ -131,8 +200,11 @@ func TestSubagentToolDescriptionsTeachExecutionContract(t *testing.T) {
 		"use send_to_subagent with the id returned by task",
 		"Foreground (background omitted or false): use when you need the answer before continuing",
 		"Background (background=true): use only when you can continue useful independent work",
-		"completion is delivered automatically as a subagent_event and wakes you",
+		"completion is delivered automatically as a user turn and wakes you",
 		"Never use sleep, schedule, or repeated get_subagent_result calls to wait for subagents",
+		"Provide exactly one opening input",
+		"Never send prompt and skill together",
+		"optional skill_args replace its $ARGUMENTS placeholder",
 	} {
 		if !strings.Contains(taskDescription, want) {
 			t.Errorf("task description missing %q:\n%s", want, taskDescription)
@@ -153,6 +225,10 @@ func TestSubagentToolDescriptionsTeachExecutionContract(t *testing.T) {
 		"Set true only when you can continue useful independent work without the answer",
 		"completion is delivered automatically and wakes the parent",
 		"Never use sleep or get_subagent_result polling to wait for it",
+		`"oneOf"`,
+		`"required": ["prompt"]`,
+		`"required": ["skill"]`,
+		"Optional arguments for skill",
 	} {
 		if !strings.Contains(taskParameters, want) {
 			t.Errorf("background parameter missing %q: %s", want, taskParameters)
@@ -164,7 +240,7 @@ func TestSubagentToolDescriptionsTeachExecutionContract(t *testing.T) {
 	for _, want := range []string{
 		"one-off diagnostic snapshot",
 		"not waiting: do not poll this tool",
-		"Completion is delivered automatically as a subagent_event and wakes the parent session",
+		"Completion is delivered automatically as a user turn and wakes the parent session",
 	} {
 		if !strings.Contains(resultDescription, want) {
 			t.Errorf("get_subagent_result description missing %q:\n%s", want, resultDescription)

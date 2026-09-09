@@ -136,7 +136,7 @@ func TestSessionBudgetGateStartsRequestedPark(t *testing.T) {
 		{
 			name: "response",
 			run: func(gate *sessionBudgetGate) error {
-				_, _, _, err := gate.PersistResponse(t.Context(), &transcript.Message{Role: "assistant"}, "")
+				_, _, _, err := gate.PersistResponse(t.Context(), &transcript.Message{Role: "assistant"}, "", "", false)
 
 				return err
 			},
@@ -175,7 +175,7 @@ func TestSessionBudgetGateDoesNotStartUnfiredPark(t *testing.T) {
 		{
 			name: "response",
 			run: func(gate *sessionBudgetGate) error {
-				_, _, _, err := gate.PersistResponse(t.Context(), &transcript.Message{Role: "assistant"}, "")
+				_, _, _, err := gate.PersistResponse(t.Context(), &transcript.Message{Role: "assistant"}, "", "", false)
 
 				return err
 			},
@@ -214,7 +214,7 @@ func TestSessionBudgetGateOnlyStartsRequestedPhase(t *testing.T) {
 		{
 			name: "response",
 			run: func(gate *sessionBudgetGate) error {
-				_, _, _, err := gate.PersistResponse(t.Context(), &transcript.Message{Role: "assistant"}, "")
+				_, _, _, err := gate.PersistResponse(t.Context(), &transcript.Message{Role: "assistant"}, "", "", false)
 
 				return err
 			},

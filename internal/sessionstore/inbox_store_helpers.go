@@ -16,14 +16,41 @@ type queryer interface {
 }
 
 const recoverableInputQuery = `
-	WITH pending AS (
-		SELECT session_inbox.session_id, MIN(session_inbox.id) AS first_input_id
+	WITH candidate_input AS (
+		SELECT id, session_id, source, state, trim(raw_content, char(
+			9, 10, 11, 12, 13, 32, 133, 160, 5760,
+			8192, 8193, 8194, 8195, 8196, 8197, 8198, 8199, 8200, 8201, 8202,
+			8232, 8233, 8239, 8287, 12288
+		)) AS content
 		FROM session_inbox
-		JOIN sessions ON sessions.id = session_inbox.session_id
-		WHERE session_inbox.state = 'pending'
+	),
+	pending AS (
+		SELECT candidate_input.session_id, MIN(candidate_input.id) AS first_input_id
+		FROM candidate_input
+		JOIN sessions ON sessions.id = candidate_input.session_id
+		WHERE candidate_input.state = 'pending'
 			AND sessions.killed_at IS NULL
-			AND sessions.status NOT IN ('stopping', 'stopped', 'terminating', 'killed')
-		GROUP BY session_inbox.session_id
+			AND sessions.status NOT IN ('stopping', 'terminating', 'killed')
+			AND (sessions.status NOT IN ('stopped', 'error')
+				OR EXISTS (
+					SELECT 1 FROM candidate_input resumable
+					WHERE resumable.session_id = sessions.id AND resumable.state = 'pending'
+						AND (resumable.source = 'agent' OR (
+							resumable.source = 'user'
+							AND resumable.content NOT IN ('/status', '/help', '/schedules', '/compact')
+							AND resumable.content NOT GLOB '/compact *'
+						))
+				)
+				OR (sessions.status = 'stopped' AND candidate_input.source = 'user'
+					AND (candidate_input.content IN ('/status', '/help', '/schedules', '/compact')
+						OR candidate_input.content GLOB '/compact *')
+					AND NOT EXISTS (
+						SELECT 1 FROM candidate_input earlier
+						WHERE earlier.session_id = sessions.id AND earlier.state = 'pending'
+							AND earlier.id < candidate_input.id
+					))
+			)
+		GROUP BY candidate_input.session_id
 	),
 	active_accepted AS (
 		SELECT sessions.id AS session_id, MIN(session_inbox.id) AS first_input_id
@@ -174,6 +201,33 @@ func acceptPendingInput(
 	return nil
 }
 
+func cancelPendingInputTree(
+	ctx context.Context,
+	tx *sql.Tx,
+	sessionID int64,
+	includeDescendants bool,
+	now time.Time,
+) error {
+	result, err := tx.ExecContext(ctx, `
+		UPDATE session_inbox
+		SET state = 'cancelled', resolved_at = ?, resolution_reason = 'killed'
+		WHERE state = 'pending' AND session_id IN (
+			SELECT id FROM sessions
+			WHERE id = ? OR (? AND root_id = ?)
+		)`,
+		now, sessionID, includeDescendants, sessionID,
+	)
+	if err != nil {
+		return fmt.Errorf("cancel killed session input: %w", err)
+	}
+
+	if _, err := result.RowsAffected(); err != nil {
+		return fmt.Errorf("cancel killed input rows affected: %w", err)
+	}
+
+	return nil
+}
+
 func activatePromotedInputSession(
 	ctx context.Context,
 	tx *sql.Tx,
@@ -184,8 +238,13 @@ func activatePromotedInputSession(
 		UPDATE sessions
 		SET status = 'active', updated_at = ?
 		WHERE id = ? AND killed_at IS NULL
-			AND status NOT IN ('stopping', 'stopped', 'terminating', 'killed')`,
-		now, sessionID,
+			AND status NOT IN ('stopping', 'terminating', 'killed')
+			AND (status <> 'stopped' OR EXISTS (
+				SELECT 1 FROM session_inbox resume
+				WHERE resume.id = ? AND resume.session_id = sessions.id
+					AND resume.source IN ('user', 'agent')
+			))`,
+		now, sessionID, inputID,
 	)
 	if err != nil {
 		return fmt.Errorf("activate session %d for input %d: %w", sessionID, inputID, err)

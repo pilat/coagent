@@ -12,7 +12,7 @@ import (
 )
 
 func (ms *messageStore) addAssistantMessage(ctx context.Context, resp *llmwire.Response) error {
-	return ms.addAssistantMessageOutput(ctx, resp, "", "")
+	return ms.addAssistantMessageOutput(ctx, resp, "", "", false)
 }
 
 func (ms *messageStore) addAssistantMessageOutput(
@@ -20,6 +20,7 @@ func (ms *messageStore) addAssistantMessageOutput(
 	resp *llmwire.Response,
 	outputType sessionstore.OutputType,
 	output string,
+	releasesInput bool,
 ) error {
 	ms.mu.Lock()
 	defer ms.mu.Unlock()
@@ -38,7 +39,7 @@ func (ms *messageStore) addAssistantMessageOutput(
 		return ms.appendMessageLocked(ctx, &msg)
 	}
 
-	return ms.appendAssistantOutputLocked(ctx, &msg, outputType, output)
+	return ms.appendAssistantOutputLocked(ctx, &msg, outputType, output, releasesInput)
 }
 
 func (ms *messageStore) addToolResultOutput(
@@ -163,6 +164,7 @@ func (ms *messageStore) appendAssistantOutputLocked(
 	msg *llmwire.Message,
 	outputType sessionstore.OutputType,
 	output string,
+	releasesInput bool,
 ) error {
 	if ms.outputs == nil {
 		return ms.appendMessageLocked(ctx, msg)
@@ -173,7 +175,9 @@ func (ms *messageStore) appendAssistantOutputLocked(
 		return fmt.Errorf("serialize assistant message: %w", err)
 	}
 
-	id, _, err := ms.outputs.InsertAssistantMessageWithOutput(ctx, ms.sessID, stored, outputType, output)
+	id, _, err := ms.outputs.InsertAssistantMessageWithOutput(
+		ctx, ms.sessID, stored, outputType, output, releasesInput,
+	)
 	if err != nil {
 		return fmt.Errorf("persist assistant output: %w", err)
 	}

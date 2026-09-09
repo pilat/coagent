@@ -181,7 +181,7 @@ func TestScenario_AutoCompactionWhileABackgroundChildIsInFlight(t *testing.T) {
 			<-childRelease
 
 			return &llmwire.Response{Text: "background child done: 7"}
-		case hasToolResultFor(msgs, "subagent_event"):
+		case hasUserContaining(msgs, "<subagent_completion>"):
 			return &llmwire.Response{Text: "child completion handled"}
 		case hasUserContaining(msgs, contextSummaryPrefix):
 			return &llmwire.Response{Text: "parent continued after compaction"}
@@ -247,8 +247,8 @@ func TestScenario_AutoCompactionWhileABackgroundChildIsInFlight(t *testing.T) {
 	require.NoError(t, llm.ValidateToolPairing(msgs),
 		"a completion committed around a compaction must not cross or orphan a tool pair")
 	assert.Equal(t, 1, countSummaryRows(msgs), "exactly one summary row")
-	assert.Equal(t, 1, countSubagentEvents(msgs, link.ChildID), "exactly one completion record")
-	assert.Equal(t, 1, countToolResultsFor(msgs, "subagent_event"))
+	assert.Equal(t, 1, countSubagentCompletions(msgs, link.ChildID), "exactly one completion record")
+	assert.Zero(t, countToolResultsFor(msgs, "subagent_event"))
 
 	// The launch pair was summarized away while the child was still out; the
 	// completion is a self-contained event, so it still lands transcript-valid.
@@ -258,7 +258,7 @@ func TestScenario_AutoCompactionWhileABackgroundChildIsInFlight(t *testing.T) {
 	// The completion is reachable by the model: it survives after the summary.
 	summaryAt := indexOfSummary(msgs)
 	require.GreaterOrEqual(t, summaryAt, 0)
-	assert.Greater(t, indexOfSubagentEvent(msgs), summaryAt,
+	assert.Greater(t, indexOfSubagentCompletion(msgs), summaryAt,
 		"the completion appended around compaction must not sort ahead of the summary")
 
 	assert.Equal(t, "child completion handled", lastAssistantTextDTO(msgs),
@@ -269,9 +269,9 @@ func TestScenario_AutoCompactionWhileABackgroundChildIsInFlight(t *testing.T) {
 	assert.Equal(t, 1, countPublishedMessage(trace, parentID, compactionDoneNotice))
 }
 
-func indexOfSubagentEvent(msgs []llmwire.Message) int {
+func indexOfSubagentCompletion(msgs []llmwire.Message) int {
 	for i, m := range msgs {
-		if m.Role == llmwire.RoleTool && m.ToolName == "subagent_event" {
+		if m.Role == llmwire.RoleUser && strings.Contains(m.Content, "<subagent_completion>") {
 			return i
 		}
 	}

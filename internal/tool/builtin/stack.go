@@ -10,6 +10,7 @@ import (
 
 	"github.com/pilat/coagent/internal/backgroundprocess"
 	"github.com/pilat/coagent/internal/bashsandbox"
+	"github.com/pilat/coagent/internal/coagenthome"
 	"github.com/pilat/coagent/internal/config"
 	"github.com/pilat/coagent/internal/loader"
 	"github.com/pilat/coagent/internal/logger"
@@ -24,6 +25,7 @@ import (
 
 // StackConfig configures a session-scoped local tool stack.
 type StackConfig struct {
+	ProjectID         int64
 	SessionID         int64
 	RootSessionID     int64 // 0 = this session is its own root
 	WorkDir           string
@@ -91,6 +93,15 @@ func BuildStack(ctx context.Context, cfg StackConfig) (*Stack, error) {
 	registry := tool.NewRegistry()
 	processRunner := procexec.Runner(bashRunner)
 	lspMgr := lsp.NewManagerWithAccess(provider, processRunner, access)
+	processProjectDir := ""
+	if cfg.ProjectID > 0 {
+		processProjectDir, err = coagenthome.ProcessProjectDirName(cfg.ProjectID)
+		if err != nil {
+			_ = access.Close()
+
+			return nil, fmt.Errorf("resolve process project directory: %w", err)
+		}
+	}
 
 	registerCoreTools(
 		registry,
@@ -104,6 +115,7 @@ func BuildStack(ctx context.Context, cfg StackConfig) (*Stack, error) {
 		mutator,
 		cfg.Unified,
 		cfg.ProcessService,
+		processProjectDir,
 		cfg.SessionID,
 		rootSessionID(cfg),
 	)
@@ -167,6 +179,7 @@ func registerCoreTools(
 	fileMutator fileMutator,
 	unified *config.UnifiedConfig,
 	processService backgroundprocess.Service,
+	processProjectDir string,
 	sessionID, rootID int64,
 ) {
 	registry.Register(newReadToolWithAccess(workDir, access))
@@ -182,6 +195,7 @@ func registerCoreTools(
 		workDir,
 		bashRunner,
 		processService,
+		processProjectDir,
 		sessionID,
 		rootID,
 	))
@@ -249,7 +263,10 @@ func newSearchToolFromConfig(unified *config.UnifiedConfig) tool.Tool {
 
 //nolint:wsl_v5 // Unified sandbox defaults are normalized at one boundary.
 func bashSandboxConfig(cfg StackConfig) bashsandbox.Config {
-	sandboxCfg := bashsandbox.Config{WorkDir: cfg.WorkDir, SessionKey: fmt.Sprintf("session:%d", cfg.SessionID)}
+	sandboxCfg := bashsandbox.Config{
+		ProjectID: cfg.ProjectID, WorkDir: cfg.WorkDir,
+		SessionKey: fmt.Sprintf("session:%d", cfg.SessionID),
+	}
 	if cfg.ShieldsUp {
 		sandboxCfg.ReadScope = bashsandbox.ProjectConfined
 	}

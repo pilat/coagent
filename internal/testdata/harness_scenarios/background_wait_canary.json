@@ -1,0 +1,121 @@
+{
+  "source_test": "TestHarnessScenario_BackgroundWaitCanaryResumesWithoutPolling",
+  "trace": [
+    {
+      "type": "session_created",
+      "name": "<name>",
+      "work_dir": "<workdir>",
+      "attributes": {
+        "manager_id": "telegram:main"
+      }
+    },
+    {
+      "type": "state_changed",
+      "status": "running"
+    },
+    {
+      "type": "message",
+      "message": "**🟢 Working**\n\n🤖 `fake-model` · iteration 1\n⌚ <elapsed> · 💰 $0.0 total\n🧩 Subagents · 0 foreground · 1 background"
+    },
+    {
+      "type": "message",
+      "message": "waiting for child"
+    },
+    {
+      "type": "message",
+      "message": "**⚪ Idle**\n\n🤖 `fake-model` · iteration 2\n⌚ <elapsed> · 💰 $0.0 total"
+    },
+    {
+      "type": "session_created",
+      "name": "<name>",
+      "work_dir": "<workdir>",
+      "attributes": {
+        "manager_id": "telegram:main"
+      }
+    },
+    {
+      "type": "state_changed",
+      "status": "running"
+    },
+    {
+      "type": "message",
+      "message": "completion after wait"
+    },
+    {
+      "type": "state_changed",
+      "status": "idle"
+    }
+  ],
+  "claims": [
+    {
+      "type": "session_opened",
+      "content": "",
+      "attributes": {
+        "manager_id": "telegram:main",
+        "name": "002",
+        "work_dir": "<workdir>"
+      },
+      "source_key": "session:1:opened",
+      "releases_input": false
+    },
+    {
+      "type": "message_replaceable",
+      "content": "**🟢 Working**\n\n🤖 `fake-model` · iteration 1\n⌚ <elapsed> · 💰 $0.0 total\n🧩 Subagents · 0 foreground · 1 background",
+      "attributes": {
+        "manager_id": "telegram:main",
+        "model_input_generation": 1
+      },
+      "source_key": "progress:change:subagent:2:1:spawned:g1:shields:false:i0",
+      "model_input_generation": 1,
+      "releases_input": false
+    },
+    {
+      "type": "message_replaceable",
+      "content": "waiting for child",
+      "attributes": {
+        "manager_id": "telegram:main",
+        "model_input_generation": 1
+      },
+      "source_key": "message:4:progress",
+      "model_input_generation": 1,
+      "previous_message_type": "message_replaceable",
+      "previous_model_input_generation": 1,
+      "previous_message_ids": [
+        "<msg-1>"
+      ],
+      "releases_input": false
+    },
+    {
+      "type": "message_replaceable",
+      "content": "**⚪ Idle**\n\n🤖 `fake-model` · iteration 2\n⌚ <elapsed> · 💰 $0.0 total",
+      "attributes": {
+        "manager_id": "telegram:main",
+        "model_input_generation": 1
+      },
+      "source_key": "progress:change:subagent:2:1:completed:g1:shields:false:i0",
+      "model_input_generation": 1,
+      "previous_message_type": "message_replaceable",
+      "previous_model_input_generation": 1,
+      "previous_message_ids": [
+        "<msg-2>"
+      ],
+      "releases_input": false
+    },
+    {
+      "type": "message_replaceable",
+      "content": "completion after wait",
+      "attributes": {
+        "manager_id": "telegram:main",
+        "model_input_generation": 2
+      },
+      "source_key": "message:8:progress",
+      "model_input_generation": 2,
+      "previous_message_type": "message_replaceable",
+      "previous_model_input_generation": 1,
+      "previous_message_ids": [
+        "<msg-3>"
+      ],
+      "releases_input": true
+    }
+  ]
+}

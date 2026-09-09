@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -52,13 +53,13 @@ func (s *svc) finalizeChildLocked(
 // deliverCompletionToParent routes a completion notification to the parent,
 // reviving it if idle. A killed parent rejects it (orphan policy).
 func (s *svc) deliverCompletionToParent(ctx context.Context, link subagent.Link) {
-	var input sessionInput
-	if link.Blocking {
-		input = blockingSubagentCompletionInput{
-			ChildID: link.ChildID, CallID: link.TaskCallID, ActivationSeq: link.ActivationSeq,
-		}
-	} else {
-		input = backgroundSubagentCompletionInput{ChildID: link.ChildID, ActivationSeq: link.ActivationSeq}
+	if !link.Blocking {
+		s.deliverBackgroundCompletion(ctx, link)
+		return
+	}
+
+	var input sessionInput = blockingSubagentCompletionInput{
+		ChildID: link.ChildID, CallID: link.TaskCallID, ActivationSeq: link.ActivationSeq,
 	}
 
 	if err := s.enqueueSessionInput(ctx, link.ParentID, input); err != nil {
@@ -67,6 +68,36 @@ func (s *svc) deliverCompletionToParent(ctx context.Context, link subagent.Link)
 			zap.Int64("child", link.ChildID),
 			zap.Int64("parent", link.ParentID),
 			zap.Error(err),
+		)
+	}
+}
+
+func (s *svc) deliverBackgroundCompletion(ctx context.Context, link subagent.Link) {
+	child, err := s.sessionStore.GetSession(ctx, link.ChildID)
+	if err != nil {
+		logger.Ctx(ctx).Named("daemon.completion").Error(
+			"load_background_child", zap.Int64("child", link.ChildID), zap.Error(err),
+		)
+
+		return
+	}
+
+	won, err := s.subagents.DeliverBackgroundCompletion(ctx, link, child.Iteration)
+	if err != nil {
+		logger.Ctx(ctx).Named("daemon.completion").Error(
+			"deliver_background_completion", zap.Int64("child", link.ChildID), zap.Error(err),
+		)
+
+		return
+	}
+
+	if !won {
+		return
+	}
+
+	if err := s.inputReady(ctx, link.ParentID); err != nil {
+		logger.Ctx(ctx).Named("daemon.completion").Warn(
+			"background_completion_input_ready", zap.Int64("child", link.ChildID), zap.Error(err),
 		)
 	}
 }
@@ -115,48 +146,6 @@ func (s *svc) injectBlockingCompletion(
 	)
 	if err != nil {
 		return fmt.Errorf("build blocking completion for child %d: %w", childID, err)
-	}
-
-	return s.persistCompletion(ctx, sess, *link, stored)
-}
-
-func (s *svc) injectBackgroundCompletion(
-	ctx context.Context,
-	sess session.Service,
-	childID int64,
-	activationSeq int64,
-) error {
-	link, err := s.links.GetLink(ctx, childID)
-	if err != nil {
-		return fmt.Errorf("load background completion link for child %d: %w", childID, err)
-	}
-
-	if link == nil {
-		return fmt.Errorf("background completion link for child %d not found", childID)
-	}
-
-	if link.DeliveredAt != 0 {
-		return nil
-	}
-
-	if link.ActivationSeq != activationSeq {
-		return nil // delayed duplicate from an earlier activation
-	}
-
-	if link.Blocking {
-		return fmt.Errorf("background completion input for blocking child %d", childID)
-	}
-
-	if pending := sess.PendingExternalCalls(); len(pending) > 0 {
-		return fmt.Errorf("%w: %s (%s)", errSessionInputDeferred, pending[0].ID, pending[0].Name)
-	}
-
-	stored, err := session.BuildBackgroundSubagentCompletion(
-		childID,
-		s.completionContent(ctx, *link),
-	)
-	if err != nil {
-		return fmt.Errorf("build background completion for child %d: %w", childID, err)
 	}
 
 	return s.persistCompletion(ctx, sess, *link, stored)
@@ -214,29 +203,6 @@ func (s *svc) injectOwedCompletions(
 		}
 	}
 
-	for _, link := range links {
-		if !link.Terminal() || link.Blocking {
-			continue
-		}
-
-		if _, err := s.interruptPendingSleeps(
-			ctx,
-			parentID,
-			sess,
-			"Sleep interrupted — a subagent completed.",
-		); err != nil {
-			return err
-		}
-
-		if pending := sess.PendingExternalCalls(); len(pending) > 0 {
-			return nil
-		}
-
-		if err := s.injectBackgroundCompletion(ctx, sess, link.ChildID, link.ActivationSeq); err != nil {
-			return err
-		}
-	}
-
 	return nil
 }
 
@@ -257,29 +223,6 @@ func (s *svc) recoveredStopCancellationCount(
 	}
 
 	return count, nil
-}
-
-func (s *svc) injectOwedProcessCompletions(
-	ctx context.Context,
-	sess session.Service,
-	sessionID int64,
-) error {
-	if s.processStore == nil || len(sess.PendingExternalCalls()) > 0 {
-		return nil
-	}
-
-	processes, err := s.processStore.ListUndeliveredForTarget(ctx, sessionID)
-	if err != nil {
-		return fmt.Errorf("list owed process completions for session %d: %w", sessionID, err)
-	}
-
-	for _, process := range processes {
-		if _, err := s.injectProcessCompletion(ctx, sess, sessionID, restartCompletion(process)); err != nil {
-			return err
-		}
-	}
-
-	return nil
 }
 
 // finishInterruptedKills completes a /kill or /clear whose process died
@@ -334,12 +277,10 @@ func (s *svc) finishInterruptedKills(ctx context.Context) error {
 			return fmt.Errorf("finish killed session %d: %w", record.ID, err)
 		}
 
-		if _, err := s.inboxStore.CancelPendingInputs(cleanupCtx, []int64{record.ID}, "killed"); err != nil {
-			return fmt.Errorf("cancel killed session input %d: %w", record.ID, err)
-		}
-
 		s.removeSchedules(cleanupCtx, record.ID)
-		s.cascadeKillChildren(cleanupCtx, record.ID, 0, time.Now().Add(cascadeRetryBudget))
+		s.cascadeKillChildrenForKilledTree(
+			cleanupCtx, record.ID, 0, time.Now().Add(cascadeRetryBudget),
+		)
 	}
 
 	return nil
@@ -430,38 +371,11 @@ func (s *svc) Start(ctx context.Context) error {
 	})
 }
 
-// recoverProcessInterruptions terminalizes leftover advertised running
-// processes and re-routes claimed-but-undelivered completions. It runs after
-// the interrupted-stop fence so records covered by an operator stop stay
-// cancelled with no wake event.
+// recoverProcessInterruptions terminalizes leftover processes. Finalization
+// atomically records any owed inbox fact for ordinary input recovery.
 func (s *svc) recoverProcessInterruptions(ctx context.Context) error {
 	if _, err := s.processSvc.InterruptNonterminal(ctx); err != nil {
 		return fmt.Errorf("interrupt nonterminal processes: %w", err)
-	}
-
-	// Re-deliver completions whose routing committed but whose wake never
-	// reached the transcript (crash between claim and injection).
-	undelivered, err := s.processStore.ListUndelivered(ctx)
-	if err != nil {
-		return fmt.Errorf("list undelivered process completions: %w", err)
-	}
-
-	for _, record := range undelivered {
-		if record.WakeSuppressed() {
-			if _, err := s.processStore.MarkSuppressed(ctx, record.ID); err != nil {
-				return fmt.Errorf("suppress process delivery %s: %w", record.ID, err)
-			}
-
-			continue
-		}
-
-		if record.DeliveryState == "pending" {
-			s.routeProcessCompletion(ctx, restartCompletion(record))
-
-			continue
-		}
-
-		s.routeRestartedProcessCompletion(ctx, record, record.DeliveryTargetSessionID)
 	}
 
 	return nil
@@ -743,29 +657,29 @@ func (s *svc) resumeSessionsWithRecoverableInput(ctx context.Context) (int, erro
 
 		switch {
 		case link == nil:
-			if err := s.handlePendingShieldCommands(ctx, sessionID); err != nil {
-				log.Error("recover_shield_command", zap.Int64("session_id", sessionID), zap.Error(err))
+			started, resumeErr := s.resumeRecoverableRoot(ctx, sessionID)
+			if resumeErr != nil {
+				log.Error("resume_recoverable_session", zap.Int64("session_id", sessionID), zap.Error(resumeErr))
 				continue
 			}
 
-			runnable, runnableErr := s.recoverableInputRunnable(ctx, sessionID)
-			if runnableErr != nil {
-				log.Error("classify_recoverable_root", zap.Int64("session_id", sessionID), zap.Error(runnableErr))
-				continue
+			if started {
+				resumed++
 			}
-
-			if !runnable {
-				continue
-			}
-
-			if err := s.ensureSessionRunner(ctx, sessionID); err != nil {
-				log.Error("resume_recoverable_session", zap.Int64("session_id", sessionID), zap.Error(err))
+		case link.State == subagent.StateStopped:
+			if err := s.resumeRecoverableChild(ctx, sessionID); err != nil {
+				log.Error("resume_stopped_child", zap.Int64("child", sessionID), zap.Error(err))
 				continue
 			}
 
 			resumed++
-		case link.State == subagent.StateStopped:
-			// Explicitly parked by /stop.
+		case link.State == subagent.StateError && link.DeliveredAt != 0:
+			if err := s.resumeRecoverableChild(ctx, sessionID); err != nil {
+				log.Error("resume_errored_child", zap.Int64("child", sessionID), zap.Error(err))
+				continue
+			}
+
+			resumed++
 		case link.Terminal() && link.DeliveredAt != 0:
 			if err := s.rearmChildAfterDelivery(ctx, sessionID); err != nil {
 				log.Error("rearm_pending_child", zap.Int64("child", sessionID), zap.Error(err))
@@ -779,6 +693,76 @@ func (s *svc) resumeSessionsWithRecoverableInput(ctx context.Context) (int, erro
 	return resumed, listErr
 }
 
+func (s *svc) resumeRecoverableRoot(ctx context.Context, sessionID int64) (bool, error) {
+	unlock, err := s.lockSessionTree(ctx, sessionID)
+	if err != nil {
+		return false, err
+	}
+	defer unlock()
+
+	ctx = context.WithoutCancel(ctx)
+
+	if err := s.handlePendingShieldCommandsLocked(ctx, sessionID, false); err != nil {
+		return false, fmt.Errorf("recover shield command: %w", err)
+	}
+
+	record, err := s.sessionStore.GetSession(ctx, sessionID)
+	if err != nil {
+		return false, fmt.Errorf("load recoverable root: %w", err)
+	}
+
+	runnable, err := s.recoverableInputRunnable(ctx, sessionID)
+	if err != nil || !runnable {
+		return false, err
+	}
+
+	if record.Status == sessionstore.SessionStatusStopped {
+		preserveStopped, preserveErr := s.commandOnlyStoppedRoot(ctx, record)
+		if preserveErr != nil {
+			return false, preserveErr
+		}
+
+		if !preserveStopped {
+			if err := s.sessionStore.UpdateSessionStatus(ctx, sessionID, sessionstore.SessionStatusActive); err != nil {
+				return false, fmt.Errorf("resume stopped root: %w", err)
+			}
+		}
+	}
+
+	workDir, err := s.store.GetProjectWorkDir(ctx, record.ProjectID)
+	if err != nil {
+		return false, fmt.Errorf("resolve recoverable root project: %w", err)
+	}
+
+	if err := s.ensureRunnerLocked(ctx, sessionID, workDir, record.ProjectID, nil); err != nil {
+		if errors.Is(err, admission.ErrNoCapacity) {
+			s.enqueuePendingRunner(sessionID, workDir, record.ProjectID)
+
+			return true, nil
+		}
+
+		return false, err
+	}
+
+	return true, nil
+}
+
+func (s *svc) resumeRecoverableChild(ctx context.Context, childID int64) error {
+	return s.guardChildTransition(ctx, childID, func(guarded context.Context) error {
+		link, err := s.links.GetLink(guarded, childID)
+		if err != nil {
+			return fmt.Errorf("reload recoverable child link: %w", err)
+		}
+
+		if link == nil || (link.State != subagent.StateStopped &&
+			(link.State != subagent.StateError || link.DeliveredAt == 0)) {
+			return nil
+		}
+
+		return s.resumeChildWithPendingInputLocked(guarded, childID)
+	})
+}
+
 // cascadeKillChildren recursively kills a session's in-flight descendants —
 // blocking AND background (depth-bounded). A deliberate tree teardown (Kill/Clear)
 // leaves no live receiver, so a surviving background descendant would keep
@@ -787,6 +771,25 @@ func (s *svc) resumeSessionsWithRecoverableInput(ctx context.Context) (int, erro
 // result/outcome survive and they are not mislabelled killed. deadline is one
 // retry budget shared by the whole walk, since Kill waits on it synchronously.
 func (s *svc) cascadeKillChildren(ctx context.Context, parentID int64, depth int, deadline time.Time) {
+	s.cascadeKillChildrenMode(ctx, parentID, depth, deadline, false)
+}
+
+func (s *svc) cascadeKillChildrenForKilledTree(
+	ctx context.Context,
+	parentID int64,
+	depth int,
+	deadline time.Time,
+) {
+	s.cascadeKillChildrenMode(ctx, parentID, depth, deadline, true)
+}
+
+func (s *svc) cascadeKillChildrenMode(
+	ctx context.Context,
+	parentID int64,
+	depth int,
+	deadline time.Time,
+	suppressTerminal bool,
+) {
 	if depth >= admission.MaxDepth {
 		return
 	}
@@ -804,10 +807,14 @@ func (s *svc) cascadeKillChildren(ctx context.Context, parentID int64, depth int
 
 	for _, link := range links {
 		if link.Terminal() {
+			if suppressTerminal && !link.Blocking {
+				s.deliverBackgroundCompletion(ctx, link)
+			}
+
 			continue // already done (e.g. completed-but-undelivered) — keep its result
 		}
 
-		s.cascadeKillChildren(ctx, link.ChildID, depth+1, deadline)
+		s.cascadeKillChildrenMode(ctx, link.ChildID, depth+1, deadline, suppressTerminal)
 		s.warnKilledDescendant(ctx, link)
 		s.killSubagent(ctx, link.ChildID, deadline)
 	}
@@ -862,12 +869,6 @@ func (s *svc) killSubagent(ctx context.Context, childID int64, deadline time.Tim
 // markChildKilled writes the session half of a kill. Called only once the link is
 // terminal — the two writes together are what make the child invisible to the sweep.
 func (s *svc) markChildKilled(ctx context.Context, childID int64) {
-	if err := s.sessionStore.UpdateSessionStatus(ctx, childID, sessionstore.SessionStatusKilled); err != nil {
-		logger.Ctx(ctx).
-			Named("daemon.completion").
-			Error("kill_child_status", zap.Int64("child", childID), zap.Error(err))
-	}
-
 	if err := s.sessionStore.MarkSessionKilled(ctx, childID); err != nil {
 		logger.Ctx(ctx).
 			Named("daemon.completion").

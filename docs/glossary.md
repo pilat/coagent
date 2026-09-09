@@ -167,6 +167,7 @@ _Avoid_: worker pool (there is no shared queue), fan-out (the removed unconditio
 
 **skill**:
 A `SKILL.md` instruction bundle loaded from project, global, or marketplace dirs. Two *independent* discovery axes: `disable-model-invocation: true` hides it from the model's available-skills inventory and skill tool; `user-invocable: false` rejects `/skill <name>`. A leading `/skill <name> [args]` expands before the LLM call. Daemon-selected system instructions, currently the onboarding skill, may be activated directly without becoming model-invocable.
+The `task` tool may also seed a new subagent from one model-invocable skill: the parent resolves the canonical name and renders the envelope before spawn, so the child receives content rather than rediscovering the skill.
 _Avoid_: plugin (a plugin is a marketplace bundle), command.
 
 **marketplace**:
@@ -203,13 +204,13 @@ Which sessions a registry row applies to: `global` (`project_id IS NULL` — eve
 ## State, notifications & lifecycle
 
 **background Bash process**:
-A finite shell command whose lifetime outlives one Bash tool call. It is owned by the exact session (root or subagent) that started it, capped at four live processes per owning session, captured to one combined output file under `~/.coagent/processes/<session-id>/` (100 MiB per process), and killed with its deadline as a complete process group. Its terminal outcome (`completed`, `failed`, `timed_out`, `output_limit_exceeded`, `output_drain_timeout`, `cancelled`, `interrupted`) is a durable ledger row (`background_processes`, `internal/backgroundprocess`), never inferred from output text or a PID. See [ADR-0046](adr/0046-background-bash-process-lifecycle.md).
+A finite shell command whose lifetime outlives one Bash tool call. It is owned by the exact session (root or subagent) that started it, capped at four live processes per owning session, captured to one combined output file under `~/.coagent/processes/project-<project-id>/<session-id>/` (100 MiB per process), and killed with its deadline as a complete process group. Its terminal outcome (`completed`, `failed`, `timed_out`, `output_limit_exceeded`, `output_drain_timeout`, `cancelled`, `interrupted`) is a durable ledger row (`background_processes`, `internal/backgroundprocess`), never inferred from output text or a PID. See [ADR-0046](adr/0046-background-bash-process-lifecycle.md).
 _Avoid_: daemon-owned process (the owner is the session, the daemon only administers), job.
 
-**process event**:
-The synthetic `process_event` tool-call pair inserted into the owning (or root) transcript when a background Bash process terminalizes. Completion is pushed — the model never polls — and the event carries only bounded facts (state, exit code, duration, output path, a 50-line/8-KiB preview); the output file stays the source for more. Explicit stop/kill cancels a tree's processes and suppresses their individual events.
-The pair is model input only: it never enters `session_outbox` or manager output directly.
-_Avoid_: process notification (the delivery is one exactly-once pair), output passthrough.
+**process completion input**:
+A pending `source=process` row in the exact owning session's durable inbox, inserted atomically with an advertised background Bash process's terminal state. The loop promotes it as one bounded `<process_completion>` user-role turn carrying state, exit code, duration, output path and a 50-line/8-KiB preview; the output file stays the source for more. Explicit stop/kill cancellation creates no completion input, while a fact committed before stop remains pending.
+It is model input only: it never enters manager output directly.
+_Avoid_: process event (the removed synthetic tool pair), output passthrough.
 
 **session state**:
 The runtime status a controller sees — `running` / `idle` / `error` (`controllerapi.State*`), derived from the daemon's in-memory map and never persisted. Distinct from the persisted session **status** (`active` / `completed` / `suspended` / `stopping` / `stopped` / `error`) and from subagent **link state**.
@@ -302,10 +303,15 @@ _Avoid_: message ID (singular), cursor.
 **suspend** (`ErrSuspend`):
 A sentinel error `sleep` returns to checkpoint and exit the agent loop *without* recording a result; the timer's exact result is injected on resume. The persisted status is `suspended`. Standalone `schedule` creates future work but does not suspend the calling session.
 
+**background wait**:
+A cooperative suspension requested by a standalone `<WAITING/>` line while the exact session has an advertised running process or undelivered background subagent round. The complete assistant text is retained as model history, returned tool calls are discarded, and the marker alone is hidden from manager presentation. A ready inbox row is not a live wake source and must be consumed instead; without an authoritative live source the marker has no control effect.
+_Avoid_: polling loop, sleep (background wait owns no timer or pending tool call).
+
 **session input**:
-A user or agent action addressed to an existing session and accepted into the
-durable `session_inbox` FIFO before any consumer observes it. A normal message
-is promoted into the append-only transcript; a generic session command is
+A user/agent action or independent process/subagent completion addressed to an
+existing session and accepted into the durable `session_inbox` FIFO before any
+consumer observes it. A normal message or bounded completion envelope is
+promoted into the append-only transcript; a generic session command is
 handled from the same ledger without entering the LLM. Manager-specific UI
 actions such as project spawning, pickers and masked secret prompts remain with
 the manager. The same input path handles a live, idle, suspended, or stopped

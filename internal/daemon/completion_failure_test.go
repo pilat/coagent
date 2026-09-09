@@ -235,7 +235,7 @@ func TestDeliverCompletionLogsRejectedParent(t *testing.T) {
 	ctx := logger.ToContext(t.Context(), zap.New(core))
 
 	manager.deliverCompletionToParent(ctx, subagent.Link{
-		ParentID: 7, ChildID: 8, ActivationSeq: 1,
+		ParentID: 7, ChildID: 8, ActivationSeq: 1, Blocking: true,
 	})
 
 	entries := logs.FilterMessage("deliver_completion_dropped").All()
@@ -333,42 +333,32 @@ func TestInjectOwedCompletionsSkipsRunningChild(t *testing.T) {
 func TestInjectOwedCompletionsContinuesPastRunningChild(t *testing.T) {
 	t.Parallel()
 
-	for _, blocking := range []bool{true, false} {
-		name := "background"
-		if blocking {
-			name = "blocking"
-		}
-
-		t.Run(name, func(t *testing.T) {
-			links := []subagent.Link{
-				{
-					ParentID: 7, ChildID: 8, TaskCallID: "running", Blocking: blocking,
-					State: subagent.StateRunning, ActivationSeq: 1,
-				},
-				{
-					ParentID: 7, ChildID: 9, TaskCallID: "terminal", Blocking: blocking,
-					State: subagent.StateCompleted, ActivationSeq: 1,
-				},
-			}
-			persistErr := errors.New("terminal persistence reached")
-			persist := &completionPersistProbe{err: persistErr}
-			manager := &svc{
-				links:       pendingCompletionLinkStore{links: links},
-				completions: persist,
-				sessionStore: &childStateSessionStore{
-					record: &sessionstore.SessionRecord{ID: links[1].ChildID},
-				},
-			}
-			sess := &mockSession{}
-			if blocking {
-				sess.pendingCalls = []session.PendingToolCall{{ID: "terminal", Name: tool.IDTask}}
-			}
-
-			err := manager.injectOwedCompletions(t.Context(), sess, 7)
-			require.ErrorIs(t, err, persistErr)
-			assert.Equal(t, 1, persist.calls)
-		})
+	links := []subagent.Link{
+		{
+			ParentID: 7, ChildID: 8, TaskCallID: "running", Blocking: true,
+			State: subagent.StateRunning, ActivationSeq: 1,
+		},
+		{
+			ParentID: 7, ChildID: 9, TaskCallID: "terminal", Blocking: true,
+			State: subagent.StateCompleted, ActivationSeq: 1,
+		},
 	}
+	persistErr := errors.New("terminal persistence reached")
+	persist := &completionPersistProbe{err: persistErr}
+	manager := &svc{
+		links:       pendingCompletionLinkStore{links: links},
+		completions: persist,
+		sessionStore: &childStateSessionStore{
+			record: &sessionstore.SessionRecord{ID: links[1].ChildID},
+		},
+	}
+	sess := &mockSession{
+		pendingCalls: []session.PendingToolCall{{ID: "terminal", Name: tool.IDTask}},
+	}
+
+	err := manager.injectOwedCompletions(t.Context(), sess, 7)
+	require.ErrorIs(t, err, persistErr)
+	assert.Equal(t, 1, persist.calls)
 }
 
 func TestCompletionContentIncludesPersistedIteration(t *testing.T) {

@@ -137,6 +137,9 @@ func TestNormalizeWritableRoots_CanonicalizesDeduplicatesAndOrders(t *testing.T)
 
 func TestNormalizeWritableRoot_ExpandsHome(t *testing.T) {
 	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CACHE_HOME", filepath.Join(home, "cache"))
+	require.NoError(t, os.MkdirAll(filepath.Join(home, "cache"), 0o700))
 	restore := coagenthome.Override(home)
 	defer restore()
 
@@ -147,6 +150,56 @@ func TestNormalizeWritableRoot_ExpandsHome(t *testing.T) {
 	expanded, err = expandHome("~")
 	require.NoError(t, err)
 	assert.Equal(t, home, expanded)
+}
+
+func TestPreparePolicy_ProcessArtifactsFollowShieldBoundary(t *testing.T) {
+	home := t.TempDir()
+	restore := coagenthome.Override(home)
+	defer restore()
+
+	workDir := t.TempDir()
+	ordinary, err := preparePolicy(Config{
+		Enabled: true, ProjectID: 7, WorkDir: workDir, CanonicalWorkDir: workDir,
+		SessionKey: "session:1", ReadScope: HostReadable,
+	})
+	require.NoError(t, err)
+	processRoot, err := coagenthome.ProcessProjectDir(7)
+	require.NoError(t, err)
+	allProcessesRoot, err := coagenthome.Join(coagenthome.ProcessesDirName)
+	require.NoError(t, err)
+	processRoot, err = filepath.EvalSymlinks(processRoot)
+	require.NoError(t, err)
+	allProcessesRoot, err = filepath.EvalSymlinks(allProcessesRoot)
+	require.NoError(t, err)
+	foreignProcessRoot := filepath.Join(allProcessesRoot, "project-8")
+	assert.Contains(t, ordinary.writableRoots, processRoot)
+	assert.NotContains(t, ordinary.writableRoots, allProcessesRoot)
+	assert.NotContains(t, ordinary.writableRoots, foreignProcessRoot)
+	_, err = os.Stat(processRoot)
+	require.NoError(t, err)
+	assert.NotEqual(t,
+		policyKey(ordinary.writableRoots, "ordinary"),
+		policyKey(shieldedRootsWithout(processRoot, ordinary.writableRoots), "ordinary"),
+	)
+
+	shielded, err := preparePolicy(Config{
+		Enabled: true, WorkDir: workDir, CanonicalWorkDir: workDir,
+		SessionKey: "session:1", ReadScope: ProjectConfined,
+		ExcludeSessionWritableRoots: true,
+	})
+	require.NoError(t, err)
+	assert.NotContains(t, shielded.writableRoots, processRoot)
+}
+
+func shieldedRootsWithout(path string, roots []string) []string {
+	filtered := make([]string, 0, len(roots))
+	for _, root := range roots {
+		if root != path {
+			filtered = append(filtered, root)
+		}
+	}
+
+	return filtered
 }
 
 func TestNormalizeWritableRoot_RejectsInvalidPaths(t *testing.T) {
@@ -175,12 +228,21 @@ func TestNormalizeWritableRoot_RejectsInvalidPaths(t *testing.T) {
 }
 
 func TestNew_RejectsDangerousTempRoot(t *testing.T) {
+	isolateCoagentHome(t)
+
 	workDir := t.TempDir()
 	t.Setenv("TMPDIR", string(os.PathSeparator))
 
 	_, err := New(Config{Enabled: true, WorkDir: workDir}, nil)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "resolves to filesystem root")
+}
+
+func isolateCoagentHome(t *testing.T) {
+	t.Helper()
+
+	restore := coagenthome.Override(t.TempDir())
+	t.Cleanup(restore)
 }
 
 func TestPreflight_PropagatesCommandConstructionError(t *testing.T) {

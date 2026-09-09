@@ -57,7 +57,10 @@ func TestBashTool_SandboxHint(t *testing.T) {
 
 	t.Run("hints on write denial under confinement", func(t *testing.T) {
 		service, sessionID := newTestProcessService(t)
-		tool := newBashTool(tmpDir, &bashRunnerStub{roots: []string{tmpDir, "/tmp"}}, service, sessionID, sessionID)
+		tool := newBashTool(
+			tmpDir, &bashRunnerStub{roots: []string{tmpDir, "/tmp"}},
+			service, "project-1", sessionID, sessionID,
+		)
 
 		params, err := json.Marshal(bashParams{Command: "echo 'touch: /denied/x: Read-only file system' >&2; exit 1"})
 		require.NoError(t, err)
@@ -72,7 +75,10 @@ func TestBashTool_SandboxHint(t *testing.T) {
 
 	t.Run("no hint on success even with marker in output", func(t *testing.T) {
 		service, sessionID := newTestProcessService(t)
-		tool := newBashTool(tmpDir, &bashRunnerStub{roots: []string{tmpDir}}, service, sessionID, sessionID)
+		tool := newBashTool(
+			tmpDir, &bashRunnerStub{roots: []string{tmpDir}},
+			service, "project-1", sessionID, sessionID,
+		)
 
 		params, err := json.Marshal(bashParams{Command: "echo 'Read-only file system'"})
 		require.NoError(t, err)
@@ -85,7 +91,9 @@ func TestBashTool_SandboxHint(t *testing.T) {
 
 	t.Run("no hint when unconfined", func(t *testing.T) {
 		service, sessionID := newTestProcessService(t)
-		tool := newBashTool(tmpDir, &bashRunnerStub{}, service, sessionID, sessionID)
+		tool := newBashTool(
+			tmpDir, &bashRunnerStub{}, service, "project-1", sessionID, sessionID,
+		)
 
 		params, err := json.Marshal(bashParams{Command: "echo 'Read-only file system' >&2; exit 1"})
 		require.NoError(t, err)

@@ -103,7 +103,7 @@ func TestIntegration_CompletedForegroundChildAcceptsFollowUpInSameSession(t *tes
 			return &llmwire.Response{Text: "child initial answer"}
 		}
 
-		if hasToolResultFor(msgs, "subagent_event") {
+		if hasUserContaining(msgs, "<subagent_completion>") {
 			return &llmwire.Response{Text: "parent received continuation"}
 		}
 
@@ -145,7 +145,7 @@ func TestIntegration_CompletedForegroundChildAcceptsFollowUpInSameSession(t *tes
 
 	messages := h.parentMessages(parentID)
 	assert.Equal(t, 1, countToolResultsFor(messages, "task"))
-	assert.Equal(t, 1, countToolResultsFor(messages, "subagent_event"))
+	assert.Equal(t, 1, countSubagentCompletions(messages, link.ChildID))
 	assert.Equal(t, "parent received continuation", lastAssistantTextDTO(messages))
 }
 

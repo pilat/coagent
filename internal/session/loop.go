@@ -66,18 +66,20 @@ type loopOptions struct {
 
 // loopRunner holds per-run state for a single runLoop invocation.
 type loopRunner struct {
-	agent              *svc
-	opts               loopOptions
-	cb                 iterationCallback
-	result             *loopResult
-	log                *zap.Logger
-	emptyCount         int
-	lastResp           *llmwire.Response
-	handledControl     bool
-	replyToInput       bool
-	publishedReply     bool
-	compactionFailures int
-	autoCompactionOff  bool
+	agent                *svc
+	opts                 loopOptions
+	cb                   iterationCallback
+	result               *loopResult
+	log                  *zap.Logger
+	emptyCount           int
+	lastResp             *llmwire.Response
+	handledControl       bool
+	replyToInput         bool
+	publishedReply       bool
+	acceptedManagerInput bool
+	compactionFailures   int
+	autoCompactionOff    bool
+	waitingRequested     bool
 }
 
 //nolint:funlen,wsl_v5 // Loop ordering is the session protocol.
@@ -116,6 +118,7 @@ func runLoop(ctx context.Context, agent *svc, opts loopOptions, callback iterati
 
 		r.log.Info("iteration_start", zap.Int("iter", r.result.Iterations+1))
 		r.handledControl = false
+		r.acceptedManagerInput = false
 
 		// An already-staged external call may be interrupted only through the
 		// durable boundary (currently sleep). In every ordinary turn the previous
@@ -160,7 +163,7 @@ func runLoop(ctx context.Context, agent *svc, opts loopOptions, callback iterati
 		if err := r.callLLM(ctx); err != nil {
 			return r.result, err
 		}
-		r.replyToInput = accepted
+		r.replyToInput = r.acceptedManagerInput
 		if r.agent.budgetFired {
 			r.result.Suspended = true
 
@@ -169,6 +172,10 @@ func runLoop(ctx context.Context, agent *svc, opts loopOptions, callback iterati
 
 		if err := r.recordIteration(ctx); err != nil {
 			return r.result, err
+		}
+		if r.waitingRequested {
+			r.result.Suspended = true
+			return r.result, nil
 		}
 
 		if r.agent.budgetFired {
@@ -429,9 +436,14 @@ func (r *loopRunner) callLLM(ctx context.Context) error {
 	return nil
 }
 
-//nolint:funlen,gocyclo,nestif,wsl_v5 // Budget persistence, direct replies, and final selection share one boundary.
+//nolint:funlen,gocognit,gocyclo,nestif,wsl_v5 // Budget persistence, direct replies, and final selection share one boundary.
 func (r *loopRunner) recordIteration(ctx context.Context) error {
 	r.result.Iterations++
+	replyToInput := r.replyToInput
+	if r.hasLiveWakeSource(ctx) && hasWaitingMarker(r.lastResp.Text) {
+		r.lastResp.ToolCalls = nil
+		r.waitingRequested = true
+	}
 
 	if r.cb != nil {
 		if callbackErr := r.cb(r.result.Iterations, r.lastResp, r.lastResp.ToolCalls); callbackErr != nil {
@@ -443,8 +455,16 @@ func (r *loopRunner) recordIteration(ctx context.Context) error {
 	outputType, output := assistantOutput(
 		r.lastResp,
 		r.agent.outputEnabled,
-		r.replyToInput,
+		replyToInput,
 	)
+	if r.waitingRequested {
+		output = withoutWaitingMarker(output)
+		if output != "" && r.agent.outputEnabled {
+			outputType = sessionstore.OutputMessageReplaceable
+		} else {
+			outputType = ""
+		}
+	}
 	if outputType == sessionstore.OutputMessagePersistent && len(r.lastResp.ToolCalls) == 0 {
 		if renderer, ok := r.agent.boundary.(finalOutputBoundary); ok {
 			var renderErr error
@@ -466,11 +486,14 @@ func (r *loopRunner) recordIteration(ctx context.Context) error {
 		if err != nil {
 			return fmt.Errorf("serialize budgeted response: %w", err)
 		}
-		directReply := ""
-		if outputType == sessionstore.OutputMessagePersistent && len(r.lastResp.ToolCalls) > 0 {
-			directReply = output
+		budgetOutputType, budgetOutput := outputType, output
+		if outputType == sessionstore.OutputMessagePersistent && len(r.lastResp.ToolCalls) == 0 {
+			budgetOutputType, budgetOutput = "", ""
 		}
-		_, fired, replyPublished, err := r.agent.budgetGate.PersistResponse(ctx, stored, directReply)
+		_, fired, replyPublished, err := r.agent.budgetGate.PersistResponse(
+			ctx, stored, budgetOutputType, budgetOutput,
+			!r.waitingRequested && len(r.lastResp.ToolCalls) == 0,
+		)
 		if err != nil {
 			return fmt.Errorf("persist budgeted response: %w", err)
 		}
@@ -479,13 +502,19 @@ func (r *loopRunner) recordIteration(ctx context.Context) error {
 		}
 		r.agent.budgetFired = fired
 		r.publishedReply = replyPublished
-	} else if err := r.agent.ms.addAssistantMessageOutput(ctx, r.lastResp, outputType, output); err != nil {
+	} else if err := r.agent.ms.addAssistantMessageOutput(
+		ctx, r.lastResp, outputType, output,
+		!r.waitingRequested && len(r.lastResp.ToolCalls) == 0,
+	); err != nil {
 		r.result.Error = err
 
 		return fmt.Errorf("record assistant message: %w", err)
 	}
 	if r.agent.budgetGate == nil {
 		r.publishedReply = outputType == sessionstore.OutputMessagePersistent && len(r.lastResp.ToolCalls) > 0
+	}
+	if r.waitingRequested && output != "" {
+		r.notify(ctx, output)
 	}
 	r.replyToInput = false
 
@@ -498,7 +527,8 @@ func (r *loopRunner) recordIteration(ctx context.Context) error {
 	}
 
 	if r.agent.budgetGate != nil {
-		if !r.agent.budgetFired && len(r.lastResp.ToolCalls) == 0 && strings.TrimSpace(r.lastResp.Text) != "" {
+		if replyToInput && !r.waitingRequested && !r.agent.budgetFired && len(r.lastResp.ToolCalls) == 0 &&
+			strings.TrimSpace(r.lastResp.Text) != "" {
 			output := r.lastResp.Text
 			var err error
 			if renderer, ok := r.agent.boundary.(finalOutputBoundary); ok {
@@ -519,6 +549,47 @@ func (r *loopRunner) recordIteration(ctx context.Context) error {
 	return nil
 }
 
+func (r *loopRunner) hasLiveWakeSource(ctx context.Context) bool {
+	if r.agent.hasLiveWakeSource != nil && r.agent.hasLiveWakeSource(ctx) {
+		return true
+	}
+
+	if r.agent.activeSubagentsProvider == nil {
+		return false
+	}
+
+	for _, child := range r.agent.activeSubagentsProvider(ctx) {
+		if !child.Blocking && (child.State == "spawned" || child.State == "running") {
+			return true
+		}
+	}
+
+	return false
+}
+
+func hasWaitingMarker(text string) bool {
+	for line := range strings.SplitSeq(text, "\n") {
+		if strings.TrimSpace(line) == "<WAITING/>" {
+			return true
+		}
+	}
+
+	return false
+}
+
+func withoutWaitingMarker(text string) string {
+	lines := strings.Split(text, "\n")
+
+	kept := lines[:0]
+	for _, line := range lines {
+		if strings.TrimSpace(line) != "<WAITING/>" {
+			kept = append(kept, line)
+		}
+	}
+
+	return strings.TrimSpace(strings.Join(kept, "\n"))
+}
+
 func assistantOutput(response *llmwire.Response, enabled, replyToInput bool) (sessionstore.OutputType, string) {
 	if !enabled || strings.TrimSpace(response.Text) == "" {
 		return "", ""
@@ -532,7 +603,11 @@ func assistantOutput(response *llmwire.Response, enabled, replyToInput bool) (se
 		return "", ""
 	}
 
-	return sessionstore.OutputMessagePersistent, response.Text
+	if replyToInput {
+		return sessionstore.OutputMessagePersistent, response.Text
+	}
+
+	return sessionstore.OutputMessageReplaceable, response.Text
 }
 
 func (r *loopRunner) finalize(ctx context.Context) (*loopResult, error) {

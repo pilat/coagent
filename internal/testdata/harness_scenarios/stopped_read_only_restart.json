@@ -1,0 +1,34 @@
+{
+  "source_test": "TestHarnessScenario_RestartConsumesReadOnlyInputQueuedOnStoppedRoot",
+  "trace": [
+    {
+      "type": "session_created",
+      "name": "<name>",
+      "work_dir": "<workdir>",
+      "attributes": {
+        "manager_id": "telegram:main"
+      }
+    },
+    {
+      "type": "state_changed",
+      "status": "running"
+    },
+    {
+      "type": "message",
+      "message": "## Session commands\n`/status` — show session status\n`/stop` — stop the current run\n`/shieldsup` — raise project filesystem shields\n`/shieldsdown` — lower project filesystem shields\n`/clear` — start a fresh session\n`/kill` — close this session\n`/compact [focus]` — compact the context\n`/schedules` — list schedules\n`/budget <request>` — arm, replace, inspect, or clear a one-shot cost/wall-time checkpoint\n`/gwt <name>` — fork into a worktree (Telegram session topics only)"
+    }
+  ],
+  "claims": [
+    {
+      "type": "message_persistent",
+      "content": "## Session commands\n`/status` — show session status\n`/stop` — stop the current run\n`/shieldsup` — raise project filesystem shields\n`/shieldsdown` — lower project filesystem shields\n`/clear` — start a fresh session\n`/kill` — close this session\n`/compact [focus]` — compact the context\n`/schedules` — list schedules\n`/budget <request>` — arm, replace, inspect, or clear a one-shot cost/wall-time checkpoint\n`/gwt <name>` — fork into a worktree (Telegram session topics only)",
+      "attributes": {
+        "manager_id": "telegram:main",
+        "model_input_generation": 0
+      },
+      "source_key": "input:1:help:result",
+      "model_input_generation": 0,
+      "releases_input": false
+    }
+  ]
+}

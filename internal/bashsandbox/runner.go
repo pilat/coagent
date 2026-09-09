@@ -36,6 +36,7 @@ var enforcement struct {
 // Config configures session process filesystem write confinement.
 type Config struct {
 	Enabled                     bool
+	ProjectID                   int64
 	WorkDir                     string
 	CanonicalWorkDir            string
 	SessionKey                  string
@@ -133,6 +134,14 @@ func preparePolicy(cfg Config) (processPolicy, error) {
 	if cfg.ReadScope == HostReadable && !cfg.ExcludeSessionWritableRoots {
 		paths = append(paths, os.TempDir(), "/tmp")
 
+		processesDir, err := processProjectWritableRoot(cfg.ProjectID)
+		if err != nil {
+			return processPolicy{}, err
+		}
+		if processesDir != "" {
+			paths = append(paths, processesDir)
+		}
+
 		cacheDir, err := existingUserCacheDir()
 		if err != nil {
 			return processPolicy{}, fmt.Errorf("resolve user cache directory: %w", err)
@@ -158,6 +167,23 @@ func preparePolicy(cfg Config) (processPolicy, error) {
 	}
 
 	return policy, nil
+}
+
+func processProjectWritableRoot(projectID int64) (string, error) {
+	if projectID <= 0 {
+		return "", nil
+	}
+
+	processesDir, err := coagenthome.ProcessProjectDir(projectID)
+	if err != nil {
+		return "", fmt.Errorf("resolve process output directory: %w", err)
+	}
+
+	if err := os.MkdirAll(processesDir, 0o700); err != nil {
+		return "", fmt.Errorf("create process output directory: %w", err)
+	}
+
+	return processesDir, nil
 }
 
 // Probe verifies that the platform backend actually confines writes: a write

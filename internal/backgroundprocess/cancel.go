@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"syscall"
 	"time"
 )
 
@@ -103,7 +105,7 @@ func (s *svc) CancelAll(ctx context.Context, intent HostIntent) (int, error) {
 }
 
 func (s *svc) InterruptNonterminal(ctx context.Context) (int, error) {
-	running, err := s.store.ListRunningAdvertised(ctx)
+	running, err := s.store.ListRunning(ctx)
 	if err != nil {
 		return 0, fmt.Errorf("list leftover processes: %w", err)
 	}
@@ -111,7 +113,35 @@ func (s *svc) InterruptNonterminal(ctx context.Context) (int, error) {
 	interrupted := 0
 
 	for _, process := range running {
-		_, ok, err := s.store.Finalize(ctx, process.ID, StateInterrupted, nil, process.OutputSize)
+		cancel := s.trackedCancel(process.ID)
+		if cancel != nil {
+			_, _ = s.store.RecordIntent(ctx, process.ID, IntentDaemonShutdown)
+
+			cancel()
+
+			if err := s.waitForUntracked(ctx, process.ID); err != nil {
+				return interrupted, err
+			}
+
+			final, err := s.store.GetProcess(ctx, process.ID)
+			if err != nil {
+				return interrupted, fmt.Errorf("load interrupted process %s: %w", process.ID, err)
+			}
+
+			if final.State == StateInterrupted {
+				interrupted++
+			}
+
+			continue
+		}
+
+		if err := waitForGuardRelease(ctx, process.OutputPath+".guard"); err != nil {
+			return interrupted, fmt.Errorf("join old process group %s: %w", process.ID, err)
+		}
+
+		_, ok, err := s.finalizeWithRetry(
+			ctx, process.ID, IntentNone, StateInterrupted, nil, process.OutputSize,
+		)
 		if err != nil {
 			return interrupted, fmt.Errorf("interrupt process %s: %w", process.ID, err)
 		}
@@ -121,17 +151,42 @@ func (s *svc) InterruptNonterminal(ctx context.Context) (int, error) {
 		}
 
 		interrupted++
-
-		s.mu.Lock()
-		cancel := s.cancels[process.ID]
-		s.mu.Unlock()
-
-		if cancel != nil {
-			cancel()
-		}
 	}
 
 	return interrupted, nil
+}
+
+func waitForGuardRelease(ctx context.Context, path string) error {
+	guard, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return fmt.Errorf("open guard: %w", err)
+	}
+	defer guard.Close()
+
+	deadline := time.Now().Add(joinGrace)
+
+	for {
+		err := syscall.Flock(int(guard.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
+		if err == nil {
+			_ = syscall.Flock(int(guard.Fd()), syscall.LOCK_UN)
+
+			return nil
+		}
+
+		if !errors.Is(err, syscall.EWOULDBLOCK) && !errors.Is(err, syscall.EAGAIN) {
+			return fmt.Errorf("lock guard: %w", err)
+		}
+
+		if time.Now().After(deadline) {
+			return context.DeadlineExceeded
+		}
+
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(20 * time.Millisecond):
+		}
+	}
 }
 
 func (s *svc) cancelRecords(
@@ -182,15 +237,14 @@ func (s *svc) cancelRecord(ctx context.Context, process Process, intent HostInte
 		return won, recordErr
 	}
 
-	var finalizeErr error
-
+	fallbackIntent := IntentNone
 	if recordErr != nil {
-		_, _, finalizeErr = s.store.FinalizeWithIntent(ctx, process.ID, intent, process.OutputSize)
-	} else {
-		_, _, finalizeErr = s.store.Finalize(
-			ctx, process.ID, IntentToState(terminalIntent), nil, process.OutputSize,
-		)
+		fallbackIntent = intent
 	}
+
+	_, _, finalizeErr := s.finalizeWithRetry(
+		ctx, process.ID, fallbackIntent, IntentToState(terminalIntent), nil, process.OutputSize,
+	)
 
 	if finalizeErr != nil {
 		finalizeErr = fmt.Errorf("terminalize detached process %s: %w", process.ID, finalizeErr)

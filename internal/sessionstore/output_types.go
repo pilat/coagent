@@ -145,6 +145,7 @@ type OutputStore interface {
 		message *transcript.Message,
 		outputType OutputType,
 		content string,
+		releasesInput bool,
 	) (messageID int64, output *OutputCommit, err error)
 	BindManager(ctx context.Context, managerID, driver string, attributes map[string]any) error
 	ClaimOutputHead(ctx context.Context, managerID string) (*OutputClaim, error)
@@ -211,5 +212,6 @@ type AssistantOutputStore interface {
 		message *transcript.Message,
 		outputType OutputType,
 		content string,
+		releasesInput bool,
 	) (messageID int64, output *OutputCommit, err error)
 }
