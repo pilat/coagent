@@ -1077,6 +1077,7 @@ func newMCPHarnessConfigured(
 	configure func(*config.Config),
 ) (*subagentHarness, mcpstore.Store, mcp.Pool) {
 	t.Helper()
+	t.Setenv("HOME", t.TempDir())
 
 	ctx := context.Background()
 	dbPath := filepath.Join(t.TempDir(), "test.db")
