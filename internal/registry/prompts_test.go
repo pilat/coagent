@@ -45,9 +45,20 @@ func TestBuildAgentPrompt_DescribesActualSubagentContinuation(t *testing.T) {
 
 	assert.Contains(t, BuildAgentPrompt, "does not receive your conversation history")
 	assert.Contains(t, BuildAgentPrompt, "general or custom subagent's assignment")
-	assert.Contains(t, BuildAgentPrompt, "use `send_to_subagent` with the id returned by task")
+	assert.Contains(t, BuildAgentPrompt, "numeric subagent_id shown in the task result")
 	assert.Contains(t, BuildAgentPrompt, "do not routinely resume it or ask it to confirm its answer")
 	assert.NotContains(t, BuildAgentPrompt, "Pass it back to the task tool")
+}
+
+func TestBuildAgentPrompt_TeachesCooperativeBackgroundWait(t *testing.T) {
+	t.Parallel()
+
+	assert.Contains(t, BuildAgentPrompt, "background process or subagent")
+	assert.Contains(t, BuildAgentPrompt, "standalone <WAITING/> line and no tool calls")
+	assert.Contains(t, BuildAgentPrompt, "receive its result automatically in a new turn")
+	assert.Contains(t, BuildAgentPrompt, "I_WOULD_USE_<WAITING/>")
+	assert.Contains(t, GeneralAgentPrompt, "standalone <WAITING/> line and no tool calls")
+	assert.Contains(t, CompactionSummaryPrompt, "advertised processes and pending subagents")
 }
 
 func TestCompactionPrompt_ForbidsInventedState(t *testing.T) {

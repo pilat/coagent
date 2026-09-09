@@ -32,7 +32,7 @@ var toolCategories = []struct {
 		"File operations",
 		[]string{readToolName, writeToolName, editToolName, "apply_patch", globToolName, grepToolName, "ls"},
 	},
-	{"Shell", []string{"bash"}},
+	{"Shell", []string{"bash", tool.IDCancelProcess}},
 	{"Code intelligence", []string{"lsp"}},
 	{"Task tracking", []string{"todoread", "todowrite"}},
 	{"Memory", []string{"memory_save", "memory_delete"}},
@@ -61,6 +61,7 @@ var toolDescriptions = map[string]string{
 	websearchToolName:     "web search",
 	"schedule":            "wake-up timer",
 	"sleep":               "fixed delay",
+	tool.IDCancelProcess:  "stop an owned background process",
 }
 
 // knownSearchMCPs lists MCP server config keys known to provide web search.
@@ -80,15 +81,15 @@ var knownSearchMCPs = []string{
 // promptBuilder encapsulates the system prompt assembly: static base + dynamic sections.
 // Thread-safe — the agent loop reads systemPrompt() while model switches and memory refreshes write.
 type promptBuilder struct {
-	mu                     sync.RWMutex
-	basePrompt             string
-	activeSkillsSection    string
-	toolsSection           string
-	skillsSection          string
-	subagentsSection       string
-	memoriesSection        string
-	modelsSection          string
-	activeSubagentsSection string
+	mu                      sync.RWMutex
+	basePrompt              string
+	activeSkillsSection     string
+	toolsSection            string
+	skillsSection           string
+	subagentsSection        string
+	memoriesSection         string
+	modelsSection           string
+	activeBackgroundSection string
 	// nativeSearch reports whether the active model's driver supplies search
 	// natively. It follows the model triplet and only feeds prompt wording.
 	nativeSearch bool
@@ -113,7 +114,7 @@ func (p *promptBuilder) systemPrompt() string {
 	defer p.mu.RUnlock()
 
 	return p.basePrompt + p.activeSkillsSection + p.toolsSection + p.skillsSection + p.subagentsSection +
-		p.memoriesSection + p.modelsSection + p.activeSubagentsSection
+		p.memoriesSection + p.modelsSection + p.activeBackgroundSection
 }
 
 // buildActiveSkillsSection embeds daemon-selected instructions directly in the
@@ -139,11 +140,11 @@ func buildActiveSkillsSection(skills []*loader.Skill) string {
 	return section.String()
 }
 
-// setActiveSubagentsSection replaces the pinned "# Active subagents" section.
-// Refreshed on session create/resume from the durable subagent_links rows.
-func (p *promptBuilder) setActiveSubagentsSection(section string) {
+// setActiveBackgroundSection replaces the pinned active-background section.
+// Refreshed on session create/resume from the durable producer ledgers.
+func (p *promptBuilder) setActiveBackgroundSection(section string) {
 	p.mu.Lock()
-	p.activeSubagentsSection = section
+	p.activeBackgroundSection = section
 	p.mu.Unlock()
 }
 
@@ -288,7 +289,7 @@ func appendScheduleSection(sb *strings.Builder, registered map[string]bool) {
 
 	if registered[tool.IDTask] {
 		sb.WriteString(
-			"Never use sleep, schedule, or get_subagent_result polling to wait for subagents. Use foreground task when you need the answer now; background task completion is delivered automatically and wakes this session.\n",
+			"Never use sleep, schedule, or get_subagent_result polling to wait for subagents. Use foreground task when you need the answer now; a background task result arrives automatically in a new turn.\n",
 		)
 	}
 }
@@ -420,21 +421,26 @@ func buildSkillsSection(ldr loader.Registry) string {
 	return b.String()
 }
 
-// buildActiveSubagentsSection lists the parent's in-flight / awaiting-delivery
-// children (pushed by the daemon) so a "subagent N finished" event never
-// references an unknown N (the spawning task result may be compacted).
-func buildActiveSubagentsSection(links []ActiveSubagentInfo) string {
-	if len(links) == 0 {
+// buildActiveBackgroundSection keeps live process and subagent context across compaction.
+func buildActiveBackgroundSection(processes []ActiveProcessInfo, links []ActiveSubagentInfo) string {
+	if len(processes) == 0 && len(links) == 0 {
 		return ""
 	}
 
 	var b strings.Builder
 	b.WriteString(backgroundSectionMarker)
 	b.WriteString(
-		"Subagents you spawned that are still running or awaiting result delivery. " +
-			"Each completion is delivered automatically as a user turn and wakes this session. " +
-			"Do not wait with sleep or poll get_subagent_result; that tool is only a diagnostic snapshot.\n",
+		"These processes and subagents are still running or awaiting result delivery. " +
+			"Their result arrives automatically in a new turn; do not poll. " +
+			"Do not poll with Bash, ps, sleep, schedule, Read, Tail, or get_subagent_result. " +
+			"Do not poll with tools; continue only useful independent work. " +
+			"When this is your only remaining work, reply with a standalone <WAITING/> line and no tool calls. " +
+			"If you would otherwise poll, reply with a standalone I_WOULD_USE_<WAITING/> line and no tool calls instead.\n",
 	)
+
+	for _, process := range processes {
+		fmt.Fprintf(&b, "- process %s (running): output %s\n", process.ID, process.OutputPath)
+	}
 
 	for _, l := range links {
 		kind := "background"

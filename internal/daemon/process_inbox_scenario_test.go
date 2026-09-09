@@ -18,6 +18,7 @@ import (
 	"github.com/pilat/coagent/internal/backgroundprocess"
 	"github.com/pilat/coagent/internal/controllerapi"
 	"github.com/pilat/coagent/internal/llmwire"
+	"github.com/pilat/coagent/internal/session"
 	"github.com/pilat/coagent/internal/sessionevent"
 	"github.com/pilat/coagent/internal/sessionstore"
 	"github.com/pilat/coagent/internal/tool"
@@ -90,6 +91,63 @@ func TestHarnessScenario_ProcessCompletionAtBusyToolBoundary(t *testing.T) {
 	waitForIdleAfterMessage(t, collector, rootID, "busy process completion observed")
 	assert.Equal(t, int64(2), modelCalls.Load())
 	assertHarnessTrace(t, "process_busy_boundary.json", collector.snapshot(), rootID)
+}
+
+func TestHarnessScenario_AgentCancelsOwnedBackgroundProcess(t *testing.T) {
+	var processID atomic.Value
+	respond := func(_ string, messages []llmwire.Message) *llmwire.Response {
+		if hasToolResultFor(messages, tool.IDCancelProcess) {
+			return &llmwire.Response{Text: "unused background process cancelled"}
+		}
+		if hasToolResultFor(messages, "bash") {
+			const prefix = "Background process ID (not an operating-system PID): "
+			content := lastToolResultContent(messages, "bash")
+			_, after, found := strings.Cut(content, prefix)
+			if !found {
+				return &llmwire.Response{Text: "background process ID missing"}
+			}
+
+			id, _, _ := strings.Cut(after, "\n")
+			processID.Store(id)
+
+			return &llmwire.Response{ToolCalls: []llmwire.ToolCall{{
+				ID: "cancel-background", Name: tool.IDCancelProcess,
+				Arguments: []byte(`{"process_id":"` + id + `"}`),
+			}}}
+		}
+
+		return &llmwire.Response{ToolCalls: []llmwire.ToolCall{{
+			ID: "start-background", Name: "bash",
+			Arguments: []byte(`{"command":"sleep 30","background":true}`),
+		}}}
+	}
+
+	h := newSubagentHarnessWith(t, respond)
+	service := installScenarioProcessService(t, h)
+	h.mgr.factory = session.WithFactoryProcessService(h.mgr.factory, service)
+	collector := collectEvents(h.mgr.PubSub().SubscribeAll())
+	defer func() {
+		collector.stop()
+		h.shutdown()
+	}()
+
+	rootID, err := h.mgr.Send(h.ctx, h.projectID, "start then cancel background work", "fake-model", map[string]any{
+		"manager_id": scenarioManagerID,
+	})
+	require.NoError(t, err)
+	waitForVisibleMessage(t, collector, rootID, "unused background process cancelled")
+
+	id, ok := processID.Load().(string)
+	require.True(t, ok)
+	process, err := h.mgr.processStore.GetProcess(h.ctx, id)
+	require.NoError(t, err)
+	assert.Equal(t, backgroundprocess.StateCancelled, process.State)
+	assert.Equal(t, backgroundprocess.IntentAgentCancelled, process.HostIntent)
+
+	var completions int
+	require.NoError(t, h.db.QueryRowContext(h.ctx, `SELECT COUNT(*) FROM session_inbox
+		WHERE source = 'process' AND json_extract(attributes, '$.process_id') = ?`, id).Scan(&completions))
+	assert.Zero(t, completions, "explicit cancellation must not schedule a later completion")
 }
 
 func TestHarnessScenario_ProcessCompletionAtIdleTransition(t *testing.T) {

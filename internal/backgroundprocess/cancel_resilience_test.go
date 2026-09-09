@@ -186,6 +186,7 @@ func TestService_FallbackIntentPreservesCancellationOutcome(t *testing.T) {
 	}{
 		{intent: IntentSessionStopped, state: StateCancelled},
 		{intent: IntentSessionKilled, state: StateCancelled},
+		{intent: IntentAgentCancelled, state: StateCancelled},
 		{intent: IntentDaemonShutdown, state: StateInterrupted},
 	}
 

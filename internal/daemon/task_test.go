@@ -167,12 +167,18 @@ func TestTaskTool_BackgroundSpawns(t *testing.T) {
 		t.Errorf("parent id not propagated: %+v", sp.lastReq)
 	}
 
-	if !strings.Contains(result.Output, "id: 123") {
+	if !strings.Contains(result.Output, "subagent_id: 123") {
 		t.Errorf("output missing child id metadata: %s", result.Output)
 	}
 
-	if !strings.Contains(result.Output, "delivered automatically and wake this session") {
+	if !strings.Contains(result.Output, "result will arrive automatically in a new turn") {
 		t.Errorf("output must explain automatic wake-up: %s", result.Output)
+	}
+	if strings.Count(strings.ToLower(result.Output), "do not poll") < 3 ||
+		!strings.Contains(result.Output, "<WAITING/>") ||
+		!strings.Contains(result.Output, "I_WOULD_USE_<WAITING/>") ||
+		!strings.Contains(result.Output, "no tool calls") {
+		t.Errorf("output must repeat the no-poll canary contract: %s", result.Output)
 	}
 
 	if strings.Contains(result.Output, "Poll its progress") {
@@ -197,10 +203,10 @@ func TestSubagentToolDescriptionsTeachExecutionContract(t *testing.T) {
 		"do not duplicate the subagent's work",
 		"Do not routinely resume explore or ask it to confirm its answer",
 		"general or custom subagent's assignment",
-		"use send_to_subagent with the id returned by task",
+		"numeric subagent_id shown in the task result",
 		"Foreground (background omitted or false): use when you need the answer before continuing",
 		"Background (background=true): use only when you can continue useful independent work",
-		"completion is delivered automatically as a user turn and wakes you",
+		"receive the result automatically in a later turn",
 		"Never use sleep, schedule, or repeated get_subagent_result calls to wait for subagents",
 		"Provide exactly one opening input",
 		"Never send prompt and skill together",
@@ -223,7 +229,7 @@ func TestSubagentToolDescriptionsTeachExecutionContract(t *testing.T) {
 
 	for _, want := range []string{
 		"Set true only when you can continue useful independent work without the answer",
-		"completion is delivered automatically and wakes the parent",
+		"parent receives the result automatically in a later turn",
 		"Never use sleep or get_subagent_result polling to wait for it",
 		`"oneOf"`,
 		`"required": ["prompt"]`,
@@ -240,7 +246,9 @@ func TestSubagentToolDescriptionsTeachExecutionContract(t *testing.T) {
 	for _, want := range []string{
 		"one-off diagnostic snapshot",
 		"not waiting: do not poll this tool",
-		"Completion is delivered automatically as a user turn and wakes the parent session",
+		"parent receives the result automatically in a new turn",
+		"standalone <WAITING/> line and no tool calls",
+		"I_WOULD_USE_<WAITING/>",
 	} {
 		if !strings.Contains(resultDescription, want) {
 			t.Errorf("get_subagent_result description missing %q:\n%s", want, resultDescription)
@@ -259,8 +267,10 @@ func TestSubagentToolDescriptionsTeachExecutionContract(t *testing.T) {
 		"same subagent session previously launched with task, whether it was foreground or background",
 		"preserving that session's full context",
 		"not a status check or a way to wait",
-		"completion is delivered automatically and wakes the parent session",
+		"parent receives the next result automatically in a new turn",
 		"Do not use sleep, schedule, or polling",
+		"standalone <WAITING/> line and no tool calls",
+		"I_WOULD_USE_<WAITING/>",
 	} {
 		if !strings.Contains(sendDescription, want) {
 			t.Errorf("send_to_subagent description missing %q:\n%s", want, sendDescription)
@@ -280,8 +290,14 @@ func TestGetSubagentResult_RunningOutputIsDiagnosticNotPollingPrompt(t *testing.
 	}
 
 	if !strings.Contains(result.Output, "diagnostic snapshot") ||
-		!strings.Contains(result.Output, "delivered automatically and wake this session") {
+		!strings.Contains(result.Output, "result will arrive automatically in a new turn") {
 		t.Errorf("running output must explain snapshot and automatic wake-up: %s", result.Output)
+	}
+	if strings.Count(strings.ToLower(result.Output), "do not poll") < 3 ||
+		!strings.Contains(result.Output, "<WAITING/>") ||
+		!strings.Contains(result.Output, "I_WOULD_USE_<WAITING/>") ||
+		!strings.Contains(result.Output, "no tool calls") {
+		t.Errorf("running output must repeat the no-poll canary contract: %s", result.Output)
 	}
 	if strings.Contains(result.Output, "check again") {
 		t.Errorf("running output must not encourage polling: %s", result.Output)
@@ -298,8 +314,14 @@ func TestSendToSubagent_OutputConfirmsDurableAcceptance(t *testing.T) {
 	}
 
 	if !strings.Contains(result.Output, "Follow-up durably accepted for subagent session #123") ||
-		!strings.Contains(result.Output, "delivered automatically and wake this session") {
+		!strings.Contains(result.Output, "next result will arrive automatically in a new turn") {
 		t.Errorf("send output must confirm durable acceptance and automatic wake-up: %s", result.Output)
+	}
+	if strings.Count(strings.ToLower(result.Output), "do not poll") < 3 ||
+		!strings.Contains(result.Output, "<WAITING/>") ||
+		!strings.Contains(result.Output, "I_WOULD_USE_<WAITING/>") ||
+		!strings.Contains(result.Output, "no tool calls") {
+		t.Errorf("send output must repeat the no-poll canary contract: %s", result.Output)
 	}
 }
 
@@ -436,7 +458,7 @@ func TestTaskTool_NoSpawnerErrors(t *testing.T) {
 func TestTaskTool_MetadataFormat(t *testing.T) {
 	id := int64(789)
 	got := taskMetadata(id)
-	expected := "\n\n<task_metadata>\nid: 789\n</task_metadata>"
+	expected := "\n\n<task_metadata>\nsubagent_id: 789\n</task_metadata>"
 
 	if got != expected {
 		t.Errorf("taskMetadata() = %q, want %q", got, expected)

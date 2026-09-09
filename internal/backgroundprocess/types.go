@@ -26,6 +26,7 @@ const (
 	IntentOutputLimit    HostIntent = "output_limit_exceeded"
 	IntentSessionStopped HostIntent = "session_stopped"
 	IntentSessionKilled  HostIntent = "session_killed"
+	IntentAgentCancelled HostIntent = "agent_cancelled"
 	IntentDaemonShutdown HostIntent = "daemon_shutdown"
 )
 
@@ -36,7 +37,7 @@ func IntentToState(intent HostIntent) State {
 		return StateTimedOut
 	case IntentOutputLimit:
 		return StateOutputLimitExceeded
-	case IntentSessionStopped, IntentSessionKilled:
+	case IntentSessionStopped, IntentSessionKilled, IntentAgentCancelled:
 		return StateCancelled
 	case IntentDaemonShutdown:
 		return StateInterrupted
@@ -69,7 +70,8 @@ func (s State) Terminal() bool {
 	return s != StateRunning
 }
 
-// WakeSuppressed reports whether stop/kill suppressed this process's wake event.
+// WakeSuppressed reports whether deliberate cancellation suppresses this process's wake event.
 func (p Process) WakeSuppressed() bool {
-	return p.HostIntent == IntentSessionStopped || p.HostIntent == IntentSessionKilled
+	return p.HostIntent == IntentSessionStopped || p.HostIntent == IntentSessionKilled ||
+		p.HostIntent == IntentAgentCancelled
 }

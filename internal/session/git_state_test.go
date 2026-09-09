@@ -93,19 +93,7 @@ func newDeltaSession(t *testing.T, workDir string, gc git.Client, llmClient llm.
 
 // gitDelta extracts the last <git-state> block from a transcript message.
 func gitDelta(content string) (string, bool) {
-	start := strings.LastIndex(content, gitStateMarker)
-	if start < 0 {
-		return "", false
-	}
-
-	end := strings.LastIndex(content[:start], gitStateMarker)
-	if end < 0 {
-		return "", false
-	}
-
-	report := content[end+len(gitStateMarker) : start]
-
-	return strings.TrimPrefix(strings.TrimSuffix(report, "\n"), "\n"), true
+	return extractGitState(content)
 }
 
 func TestAppendGitStateDelta_FirstInputSendsFullSnapshot(t *testing.T) {
@@ -123,6 +111,7 @@ func TestAppendGitStateDelta_FirstInputSendsFullSnapshot(t *testing.T) {
 	assert.Equal(t, "Git repository: yes\nBranch: \"main\"\nHEAD: abcdef123456\n"+
 		"Working tree: dirty (staged: 1, unstaged: 2, untracked: 1, conflicted: 0)", report)
 	assert.True(t, strings.HasPrefix(out, "user text\n\n<git-state>"), "delta rides after the user text")
+	assert.Contains(t, out, "\n</git-state>")
 }
 
 func TestAppendGitStateDelta_UnchangedStateIsSuppressed(t *testing.T) {
@@ -131,7 +120,7 @@ func TestAppendGitStateDelta_UnchangedStateIsSuppressed(t *testing.T) {
 	s := newDeltaSession(t, t.TempDir(), gc, &promptRecordingLLM{})
 
 	require.NoError(t, s.ms.addUserMessage(context.Background(), "first\n\n<git-state>\n"+
-		renderGitState(state)+"\n<git-state>"))
+		renderGitState(state)+"\n</git-state>"))
 
 	out := s.appendGitStateDelta(context.Background(), "second input")
 
@@ -148,7 +137,7 @@ func TestAppendGitStateDelta_ChangedStateIsSent(t *testing.T) {
 	s := newDeltaSession(t, t.TempDir(), gc, &promptRecordingLLM{})
 
 	require.NoError(t, s.ms.addUserMessage(context.Background(), "first\n\n<git-state>\n"+
-		renderGitState(gc.state)+"\n<git-state>"))
+		renderGitState(gc.state)+"\n</git-state>"))
 
 	gc.mu.Lock()
 	gc.state = git.RepositoryState{
@@ -228,15 +217,24 @@ func TestLastGitState_ScansFromTail(t *testing.T) {
 	updated := "Git repository: yes\nBranch: \"new\"\nHEAD: bbbbbbbbbbbb\nWorking tree: clean"
 
 	messages := []llmwire.Message{
-		{Role: llmwire.RoleUser, Content: "first\n\n<git-state>\n" + old + "\n<git-state>"},
+		{Role: llmwire.RoleUser, Content: "first\n\n<git-state>\n" + old + "\n</git-state>"},
 		{Role: llmwire.RoleAssistant, Content: "hi"},
-		{Role: llmwire.RoleUser, Content: "second\n\n<git-state>\n" + updated + "\n<git-state>"},
+		{Role: llmwire.RoleUser, Content: "second\n\n<git-state>\n" + updated + "\n</git-state>"},
 	}
 
 	got, ok := gitDelta(messages[len(messages)-1].Content)
 	require.True(t, ok)
 	assert.Equal(t, updated, got)
 	assert.Equal(t, updated, lastGitState(messages))
+}
+
+func TestLastGitState_ReadsLegacySymmetricEnvelope(t *testing.T) {
+	report := "Git repository: yes\nBranch: \"main\"\nHEAD: aaaaaaaaaaaa\nWorking tree: clean"
+	messages := []llmwire.Message{{
+		Role: llmwire.RoleUser, Content: "first\n\n<git-state>\n" + report + "\n<git-state>",
+	}}
+
+	assert.Equal(t, report, lastGitState(messages))
 }
 
 func TestLastGitState_NoneOrMalformedSendsAgain(t *testing.T) {
@@ -247,6 +245,11 @@ func TestLastGitState_NoneOrMalformedSendsAgain(t *testing.T) {
 		{Role: llmwire.RoleUser, Content: "broken\n\n<git-state>\nno closing marker"},
 	}
 	assert.Empty(t, lastGitState(malformed))
+
+	malformed = append([]llmwire.Message{{
+		Role: llmwire.RoleUser, Content: "old\n\n<git-state>\nold state\n</git-state>",
+	}}, malformed...)
+	assert.Empty(t, lastGitState(malformed), "a newer malformed envelope must not expose stale state")
 }
 
 func TestRenderGitState_NotRepositoryAndUnborn(t *testing.T) {

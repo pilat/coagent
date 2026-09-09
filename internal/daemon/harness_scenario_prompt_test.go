@@ -1,12 +1,17 @@
 package daemon
 
 import (
+	"context"
+	"path/filepath"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/pilat/coagent/internal/backgroundprocess"
+	"github.com/pilat/coagent/internal/controllerapi"
 	"github.com/pilat/coagent/internal/llmwire"
 	"github.com/pilat/coagent/internal/tool"
 )
@@ -93,4 +98,64 @@ func TestHarnessScenario_SystemPromptMatchesTheDaemonRegisteredToolset(t *testin
 	assert.NotContains(t, child, "## Available Subagents", "explore has no task tool to spawn them with")
 	assert.NotContains(t, child, "# SCHEDULING")
 	assert.NotContains(t, child, "Sub-agents: task")
+}
+
+func TestHarnessScenario_ActiveProcessPromptAndSleepGuard(t *testing.T) {
+	prompts := newPromptRecorder()
+	respond := func(system string, messages []llmwire.Message) *llmwire.Response {
+		prompts.record("root", system)
+		if hasToolResultFor(messages, tool.IDSleep) {
+			return &llmwire.Response{Text: "background process polling rejected"}
+		}
+
+		return &llmwire.Response{ToolCalls: []llmwire.ToolCall{{
+			ID: "poll-process", Name: tool.IDSleep,
+			Arguments: []byte(`{"duration":"1h","reason":"poll background process"}`),
+		}}}
+	}
+
+	h := newSubagentHarnessWith(t, respond)
+	collector := collectEvents(h.mgr.PubSub().SubscribeAll())
+	defer func() {
+		collector.stop()
+		h.shutdown()
+	}()
+
+	root, err := h.sessStore.CreateSession(h.ctx, h.projectID, "fake-model", "", map[string]any{
+		controllerapi.SessionAttributeManagerID: scenarioManagerID,
+	})
+	require.NoError(t, err)
+	now := time.Now().UTC()
+	require.NoError(t, h.mgr.processStore.InsertProcess(context.Background(), backgroundprocess.Process{
+		ID: "bgp_prompt_guard", SessionID: root.ID, RootSessionID: root.ID,
+		ToolCallID: "background-bash", OutputPath: filepath.Join(t.TempDir(), "process.out"),
+		Deadline: now.Add(time.Hour), CreatedAt: now, AdvertisedAt: &now, State: backgroundprocess.StateRunning,
+	}))
+	t.Cleanup(func() {
+		_, _, _ = h.mgr.processStore.FinalizeWithIntent(
+			context.Background(), "bgp_prompt_guard", backgroundprocess.IntentSessionKilled, 0,
+		)
+	})
+
+	require.NoError(t, h.mgr.SendToSession(h.ctx, root.ID, "wait for the process"))
+	waitForVisibleMessage(t, collector, root.ID, "background process polling rejected")
+	_, _, err = h.mgr.processStore.FinalizeWithIntent(
+		context.Background(), "bgp_prompt_guard", backgroundprocess.IntentSessionKilled, 0,
+	)
+	require.NoError(t, err)
+
+	prompt := prompts.first(t, "root")
+	assert.Contains(t, prompt, "# Active background work")
+	assert.Contains(t, prompt, "process bgp_prompt_guard (running)")
+	assert.Contains(t, prompt, "<WAITING/>")
+
+	messages := h.parentMessages(root.ID)
+	require.Equal(t, 1, countToolResultsFor(messages, tool.IDSleep))
+	assert.Contains(t, lastToolResultContent(messages, tool.IDSleep), "sleep is unavailable")
+	assert.Contains(t, lastToolResultContent(messages, tool.IDSleep), "<WAITING/>")
+	assert.Equal(t, llmwire.RoleAssistant, messages[len(messages)-1].Role)
+
+	schedules, err := h.schedStore.ListSchedules(h.ctx, root.ID)
+	require.NoError(t, err)
+	assert.Empty(t, schedules)
 }

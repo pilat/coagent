@@ -49,8 +49,8 @@ func TestProductionTools_ParallelSafePolicies(t *testing.T) {
 	assert.Equal(t, want, got)
 
 	// The wait guard must not outvote its wrapped tool.
-	guard := &subagentWaitGuard{inner: tools[tool.IDTask]}
+	guard := &backgroundWaitGuard{inner: tools[tool.IDTask]}
 	assert.True(t, guard.ParallelSafe())
-	guardSleep := &subagentWaitGuard{inner: tools[tool.IDSleep]}
+	guardSleep := &backgroundWaitGuard{inner: tools[tool.IDSleep]}
 	assert.False(t, guardSleep.ParallelSafe())
 }

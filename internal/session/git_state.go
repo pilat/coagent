@@ -11,11 +11,9 @@ import (
 	"github.com/pilat/coagent/internal/logger"
 )
 
-// gitStateMarker delimits an injected Git-state delta inside a user-role
-// transcript row. lastGitState scans for this exact marker from the tail, so
-// compaction (which preserves the verbatim raw tail) cannot lose it.
 const (
-	gitStateMarker = "<git-state>"
+	gitStateOpenMarker  = "<git-state>"
+	gitStateCloseMarker = "</git-state>"
 
 	// noGitStateReport prefixes the report when the probe itself failed.
 	noGitStateReport = "Git state: unavailable"
@@ -104,10 +102,10 @@ func (s *svc) appendGitStateDelta(ctx context.Context, content string) string {
 		return content
 	}
 
-	return content + "\n\n" + gitStateMarker + "\n" + state + "\n" + gitStateMarker
+	return content + "\n\n" + gitStateOpenMarker + "\n" + state + "\n" + gitStateCloseMarker
 }
 
-// lastGitState returns the report inside the most recent gitStateMarker pair,
+// lastGitState returns the report inside the most recent Git-state envelope,
 // or "" when none is present. Any malformed match returns "": the caller then
 // sends a fresh delta, which is always the safe direction.
 func lastGitState(messages []llmwire.Message) string {
@@ -116,20 +114,47 @@ func lastGitState(messages []llmwire.Message) string {
 			continue
 		}
 
-		start := strings.LastIndex(m.Content, gitStateMarker)
-		if start < 0 {
+		if !strings.Contains(m.Content, gitStateOpenMarker) &&
+			!strings.Contains(m.Content, gitStateCloseMarker) {
 			continue
 		}
 
-		end := strings.LastIndex(m.Content[:start], gitStateMarker)
-		if end < 0 {
-			return ""
+		report, found := extractGitState(m.Content)
+		if found {
+			return report
 		}
 
-		report := m.Content[end+len(gitStateMarker) : start]
-
-		return strings.TrimPrefix(strings.TrimSuffix(report, "\n"), "\n")
+		return ""
 	}
 
 	return ""
+}
+
+func extractGitState(content string) (string, bool) {
+	end := strings.LastIndex(content, gitStateCloseMarker)
+	if end >= 0 {
+		start := strings.LastIndex(content[:end], gitStateOpenMarker)
+		if start < 0 {
+			return "", false
+		}
+
+		return trimGitState(content[start+len(gitStateOpenMarker) : end]), true
+	}
+
+	// Older transcript rows used a second opening marker as the closer.
+	end = strings.LastIndex(content, gitStateOpenMarker)
+	if end < 0 {
+		return "", false
+	}
+
+	start := strings.LastIndex(content[:end], gitStateOpenMarker)
+	if start < 0 {
+		return "", false
+	}
+
+	return trimGitState(content[start+len(gitStateOpenMarker) : end]), true
+}
+
+func trimGitState(report string) string {
+	return strings.TrimPrefix(strings.TrimSuffix(report, "\n"), "\n")
 }

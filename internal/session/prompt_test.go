@@ -122,20 +122,26 @@ func TestBuildToolsSection_SubagentsMustNotUseSleepOrPollingToWait(t *testing.T)
 	assert.Contains(t, result, "calls emitted together may execute concurrently")
 	assert.Contains(t, result, "Never use sleep, schedule, or get_subagent_result polling to wait for subagents")
 	assert.Contains(t, result, "Use foreground task when you need the answer now")
-	assert.Contains(t, result, "background task completion is delivered automatically and wakes this session")
+	assert.Contains(t, result, "background task result arrives automatically in a new turn")
 }
 
-func TestBuildActiveSubagentsSection_TeachesAutomaticWakeNotPolling(t *testing.T) {
-	result := buildActiveSubagentsSection([]ActiveSubagentInfo{{
+func TestBuildActiveBackgroundSection_TeachesAutomaticWakeNotPolling(t *testing.T) {
+	result := buildActiveBackgroundSection([]ActiveProcessInfo{{
+		ID: "bgp_1", OutputPath: "/tmp/process.out",
+	}}, []ActiveSubagentInfo{{
 		ChildID:  42,
 		Blocking: false,
 		State:    "running",
 	}})
 
-	assert.Contains(t, result, "Each completion is delivered automatically as a user turn and wakes this session")
-	assert.Contains(t, result, "Do not wait with sleep or poll get_subagent_result")
-	assert.Contains(t, result, "only a diagnostic snapshot")
-	assert.NotContains(t, result, "poll status with")
+	assert.Contains(t, result, "# Active background work")
+	assert.Contains(t, result, "process bgp_1 (running): output /tmp/process.out")
+	assert.Contains(t, result, "#42 (background): running")
+	assert.Contains(t, result, "result arrives automatically in a new turn")
+	assert.GreaterOrEqual(t, strings.Count(strings.ToLower(result), "do not poll"), 3)
+	assert.Contains(t, result, "<WAITING/>")
+	assert.Contains(t, result, "I_WOULD_USE_<WAITING/>")
+	assert.Contains(t, result, "no tool calls")
 }
 
 func TestBuildToolsSection_WebSearchGuidance_Tavily(t *testing.T) {

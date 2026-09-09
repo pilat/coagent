@@ -272,12 +272,17 @@ across a process or producer retry. Loop detection terminates repetitive tool
 patterns rather than treating repeated calls as progress.
 
 When the exact session has a live background process or undelivered background
-subagent round, a standalone `<WAITING/>` line cooperatively suspends the loop.
+subagent round, a standalone `<WAITING/>` or `I_WOULD_USE_<WAITING/>` line
+cooperatively suspends the loop. The second form is a polling-temptation canary.
 The complete assistant text remains in model history, returned tool calls are
 not executed, and only the marker is removed from root manager presentation.
 The projection is fail-open: without an authoritative live wake source the
 marker is ordinary text, and a ready inbox row is consumed rather than treated
-as something still pending.
+as something still pending. Session construction and compaction project
+advertised process identities and pending subagent links into one host-owned
+active-background prompt section. While either ledger still owns completion,
+the daemon rejects `sleep` as a competing timer and directs the model back to
+independent work or the cooperative marker.
 
 ### Shutdown and restart
 
@@ -369,6 +374,11 @@ suppresses cancellation input. Each launch first arms a same-binary guardian
 that holds an output-path guard lock and a daemon lease; lease loss kills the
 tracked process group. Startup waits for that lock before atomically changing a
 leftover advertised process to `interrupted` with its completion input.
+
+The model may cancel one process owned by its exact session using the opaque
+`bgp_…` ID advertised at background start. Cancellation records the distinct
+`agent_cancelled` host intent, joins the process group, releases its session slot
+and suppresses completion input; operating-system PIDs are never model-facing.
 
 The winning running-to-terminal transaction inserts one bounded
 `source=process` row into the exact owning session's `session_inbox`. That insert

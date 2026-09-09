@@ -56,12 +56,14 @@ type CreateOptions struct {
 	PreserveStoppedStatus bool
 
 	// ActiveSubagents is the daemon-pushed set of this session's in-flight
-	// children, rendered into the pinned "# Active subagents" prompt section.
+	// children, rendered into the pinned active-background prompt section.
 	ActiveSubagents []ActiveSubagentInfo
 
 	// ActiveSubagentsProvider reads the same ledger live, for the section a
 	// compaction summary carries. Nil outside a daemon.
 	ActiveSubagentsProvider func(context.Context) []ActiveSubagentInfo
+	ActiveProcesses         []ActiveProcessInfo
+	ActiveProcessesProvider func(context.Context) []ActiveProcessInfo
 	HasLiveWakeSource       func(context.Context) bool
 
 	// ExtraSkills are session-scoped instructions the daemon registers and

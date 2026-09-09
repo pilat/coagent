@@ -45,8 +45,15 @@ func parseMarkedSummary(content string) (string, string, bool) {
 	inner = strings.TrimPrefix(inner, "\n\n")
 	inner = strings.TrimSuffix(inner, "\n")
 
-	if idx := strings.LastIndex(inner, backgroundSectionMarker); idx >= 0 {
-		return strings.TrimSuffix(inner[:idx], "\n"), inner[idx:], true
+	backgroundIdx := strings.LastIndex(inner, backgroundSectionMarker)
+
+	legacyIdx := strings.LastIndex(inner, legacyBackgroundSectionMarker)
+	if legacyIdx > backgroundIdx {
+		backgroundIdx = legacyIdx
+	}
+
+	if backgroundIdx >= 0 {
+		return strings.TrimSuffix(inner[:backgroundIdx], "\n"), inner[backgroundIdx:], true
 	}
 
 	return inner, "", true
