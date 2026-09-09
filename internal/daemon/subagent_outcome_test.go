@@ -75,9 +75,11 @@ func TestFinalizeChild_IncompleteWhenNoFinalAnswer(t *testing.T) {
 // unfinished descendant produces exactly one WARN audit line.
 func TestCascadeKill_BackgroundDescendant(t *testing.T) {
 	release := make(chan struct{})
+	entered := make(chan struct{}, 2)
 
 	respond := func(_ string, msgs []llmwire.Message) *llmwire.Response {
 		if hasUserContaining(msgs, "HANG") {
+			entered <- struct{}{}
 			<-release // hang until kill cancels the loop ctx
 
 			return &llmwire.Response{Text: "unreached"}
@@ -102,12 +104,14 @@ func TestCascadeKill_BackgroundDescendant(t *testing.T) {
 	})
 	require.NoError(t, err)
 	h.waitUntil("background child running", func() bool { return h.mgr.HasActiveLoop(child.ChildID) })
+	h.waitUntil("background child entered model call", func() bool { return len(entered) >= 1 })
 
 	grandchild, err := h.mgr.Spawn(ctx, spawnRequest{
 		ParentID: child.ChildID, AgentType: "general", Prompt: "HANG", Blocking: false,
 	})
 	require.NoError(t, err)
 	h.waitUntil("background grandchild running", func() bool { return h.mgr.HasActiveLoop(grandchild.ChildID) })
+	h.waitUntil("background grandchild entered model call", func() bool { return len(entered) >= 2 })
 	childInput, err := h.sessStore.EnqueueAsyncInput(
 		ctx, child.ChildID, sessionstore.InputSourceProcess, "pending", nil,
 	)
