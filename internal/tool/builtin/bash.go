@@ -181,6 +181,18 @@ func (t *bashTool) run(
 		return cmd, nil
 	})
 	if err != nil {
+		if errors.Is(err, backgroundprocess.ErrSlotLimit) {
+			return nil, fmt.Errorf(
+				"start process: %w; do not retry with another command. "+
+					"Cancel a wrong, stuck, or redundant existing process with cancel_process and its bgp_... ID. "+
+					"Do not poll existing processes with Bash, ps, sleep, schedule, Read, or Tail. "+
+					"Do not poll with tools; continue only useful independent work. "+
+					"When waiting is your only remaining action, reply with a standalone <WAITING/> line and no tool calls. "+
+					"If you would otherwise poll, reply with a standalone I_WOULD_USE_<WAITING/> line and no tool calls instead",
+				err,
+			)
+		}
+
 		return nil, fmt.Errorf("start process: %w", err)
 	}
 
@@ -189,7 +201,7 @@ func (t *bashTool) run(
 	}
 
 	if p.Background {
-		return t.backgroundedResult(record), nil
+		return t.backgroundedResult(record, false), nil
 	}
 
 	return t.finishForegroundGrace(ctx, record, p.Command, start.Add(foregroundGrace))
@@ -216,7 +228,7 @@ func (t *bashTool) finishForegroundGrace(
 	current, err := t.process.Store().GetProcess(lifecycleCtx, record.ID)
 
 	if err != nil && advertised {
-		return t.backgroundedResult(record), nil
+		return t.backgroundedResult(record, true), nil
 	}
 
 	if err != nil {
@@ -228,7 +240,7 @@ func (t *bashTool) finishForegroundGrace(
 		return t.foregroundResult(ctx, current, command), nil
 	}
 
-	return t.backgroundedResult(current), nil
+	return t.backgroundedResult(current, true), nil
 }
 
 func (t *bashTool) abortCandidate(

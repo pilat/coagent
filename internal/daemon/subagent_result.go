@@ -33,7 +33,7 @@ func (t *getSubagentResultTool) ParallelSafe() bool { return false }
 func (t *getSubagentResultTool) Description() string {
 	return `Read a one-off diagnostic snapshot of a subagent previously launched with task.
 
-Returns the subagent's current state (running, completed, error, killed) and, once terminal, its final output. This is for inspection and troubleshooting, not waiting: do not poll this tool and do not call sleep or schedule for a subagent. Completion is delivered automatically as a user turn and wakes the parent session.`
+Returns the subagent's current state (running, completed, error, killed) and, once terminal, its final output. This is for inspection and troubleshooting, not waiting: do not poll this tool and do not call sleep or schedule for a subagent. The parent receives the result automatically in a new turn. When it is your only remaining work, reply with a standalone <WAITING/> line and no tool calls. If you would otherwise poll, reply with a standalone I_WOULD_USE_<WAITING/> line and no tool calls instead.`
 }
 
 func (t *getSubagentResultTool) Parameters() json.RawMessage {
@@ -42,7 +42,7 @@ func (t *getSubagentResultTool) Parameters() json.RawMessage {
 		"properties": {
 			"id": {
 				"type": "integer",
-				"description": "The subagent id returned by task"
+				"description": "Numeric subagent_id shown in the task result; not a process ID or tool-call ID"
 			}
 		},
 		"required": ["id"]
@@ -73,7 +73,12 @@ func (t *getSubagentResultTool) Execute(ctx context.Context, params json.RawMess
 		output = formatChildResult(res)
 	} else {
 		output = fmt.Sprintf(
-			"Subagent #%d is %s (%d iterations). No result yet. This is a diagnostic snapshot; its completion will be delivered automatically and wake this session.",
+			"Subagent #%d is %s (%d iterations). No result yet. This is a diagnostic snapshot. "+
+				"Its result will arrive automatically in a new turn; do not poll. "+
+				"Do not poll with sleep, schedule, or get_subagent_result. "+
+				"Do not poll with tools; continue only useful independent work. "+
+				"When this is your only remaining work, reply with a standalone <WAITING/> line and no tool calls. "+
+				"If you would otherwise poll, reply with a standalone I_WOULD_USE_<WAITING/> line and no tool calls instead.",
 			res.ChildID,
 			res.State,
 			res.Iteration,

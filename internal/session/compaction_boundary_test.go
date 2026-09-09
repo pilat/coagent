@@ -1,6 +1,7 @@
 package session
 
 import (
+	"context"
 	"strings"
 	"testing"
 
@@ -194,7 +195,7 @@ func TestParseCheckpointPrefix(t *testing.T) {
 }
 
 func TestMarkedSummaryRoundTrips(t *testing.T) {
-	background := "\n\n# Active subagents\n- #42 (background): running\n"
+	background := "\n\n# Active background work\n- #42 (background): running\n"
 
 	content := renderMarkedSummary("model text", background)
 	assert.True(t, isMarkedSummary(content))
@@ -213,4 +214,27 @@ func TestMarkedSummaryRoundTrips(t *testing.T) {
 
 	_, _, ok = parseMarkedSummary("not a summary at all")
 	assert.False(t, ok)
+}
+
+func TestMarkedSummaryReadsLegacyActiveSubagentsSection(t *testing.T) {
+	background := "\n\n# Active subagents\n- #42 (background): running\n"
+	modelText, got, ok := parseMarkedSummary(renderMarkedSummary("model text", background))
+	require.True(t, ok)
+	assert.Equal(t, "model text", modelText)
+	assert.Equal(t, strings.TrimRight(background, "\n"), got)
+}
+
+func TestActiveBackgroundSectionReadsLiveProcessAndSubagentProviders(t *testing.T) {
+	agent := newTestAgent()
+	agent.activeProcessesProvider = func(context.Context) []ActiveProcessInfo {
+		return []ActiveProcessInfo{{ID: "bgp_1", OutputPath: "/tmp/process.out"}}
+	}
+	agent.activeSubagentsProvider = func(context.Context) []ActiveSubagentInfo {
+		return []ActiveSubagentInfo{{ChildID: 42, State: "running"}}
+	}
+
+	section := agent.activeBackgroundSection(t.Context())
+	assert.Contains(t, section, "process bgp_1 (running): output /tmp/process.out")
+	assert.Contains(t, section, "#42 (background): running")
+	assert.Contains(t, section, "<WAITING/>")
 }

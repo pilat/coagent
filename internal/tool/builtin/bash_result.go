@@ -253,13 +253,23 @@ func (t *bashTool) failureHint(output string) string {
 	return ""
 }
 
-func (t *bashTool) backgroundedResult(record backgroundprocess.Process) *tool.Result {
+func (t *bashTool) backgroundedResult(record backgroundprocess.Process, automatic bool) *tool.Result {
+	status := "Background execution was requested, so the command is now running in the background."
+	if automatic {
+		status = "The command was still running after 10 seconds, so it was moved to the background and is still running."
+	}
+
 	return &tool.Result{
 		Title: "background process started",
-		Output: "Process " + record.ID + " runs in the background." +
+		Output: status +
+			"\nBackground process ID (not an operating-system PID): " + record.ID +
 			"\nOutput file: " + record.OutputPath +
-			"\nCompletion will be delivered automatically and will wake this session; do not poll." +
-			"\nUse the tail tool on the output file if you need current output for independent work.",
+			"\nIf this command is wrong, stuck, redundant, or no longer needed, stop it with cancel_process using this background process ID." +
+			"\nThe final result will arrive automatically in a new turn; do not poll." +
+			"\nDo not poll with Bash, ps, sleep, schedule, Read, or Tail." +
+			"\nDo not poll with tools or launch an overlapping command for the same goal; continue only useful independent work." +
+			"\nWhen this is your only remaining work, reply with a standalone <WAITING/> line and no tool calls." +
+			"\nIf you would otherwise poll, reply with a standalone I_WOULD_USE_<WAITING/> line and no tool calls instead.",
 		Metadata: map[string]any{
 			metaKeyProcessID: record.ID,
 		},

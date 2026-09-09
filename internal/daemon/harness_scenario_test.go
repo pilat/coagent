@@ -306,7 +306,7 @@ func TestHarnessScenario_BackgroundChildIsTheWakeSource(t *testing.T) {
 	parentMessages := h.parentMessages(parentID)
 	assert.Equal(t, 1, countToolResultsFor(parentMessages, tool.IDSleep))
 	assert.Contains(t, lastToolResultContent(parentMessages, tool.IDSleep),
-		"subagent will wake the session automatically")
+		"result arrives automatically in a new turn")
 	schedules, err := h.schedStore.ListSchedules(h.ctx, parentID)
 	require.NoError(t, err)
 	assert.Empty(t, schedules, "pending child must remain the sole wake source")

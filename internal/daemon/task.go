@@ -121,11 +121,11 @@ Never send prompt and skill together, and never send skill_args without skill. T
 
 Choose the execution mode deliberately:
 - Foreground (background omitted or false): use when you need the answer before continuing. The task call waits and returns the subagent's answer as its result. Multiple independent foreground task calls issued together wait for all of their results.
-- Background (background=true): use only when you can continue useful independent work without the answer. The call returns an id immediately; completion is delivered automatically as a user turn and wakes you in a later turn.
+- Background (background=true): use only when you can continue useful independent work without the answer. The call returns an id immediately; you receive the result automatically in a later turn.
 
 Never use sleep, schedule, or repeated get_subagent_result calls to wait for subagents. get_subagent_result is a diagnostic snapshot only.
 
-When a background subagent is your only remaining work, reply with a standalone <WAITING/> line and no tool calls. Do not poll it; completion arrives automatically.
+When a background subagent is your only remaining work, reply with a standalone <WAITING/> line and no tool calls. Do not poll it; the result arrives automatically in a new turn. If you would otherwise poll, reply with a standalone I_WOULD_USE_<WAITING/> line and no tool calls instead.
 
 The subagent does not receive the parent conversation. Built-in explore skips project instructions and memories; include relevant constraints explicitly. Other agent types may also load project context separately. State the question or outcome, known facts, paths, constraints, whether to MODIFY code or RESEARCH only, and what to return. For implementation, include relevant verification requirements.
 
@@ -133,7 +133,7 @@ For explore, request one self-contained answer with file:line evidence and mater
 
 Example research prompt: "Trace refresh-token deletion and session persistence in internal/auth/service.go and store.go. Determine their order and what happens if persistence fails. Return the answer, file:line evidence, and any gaps. Do not edit code."
 
-For related follow-up work on a general or custom subagent's assignment, use send_to_subagent with the id returned by task to retain its context. Review changed code and relevant verification before integrating its work.%s`, typeList.String(), modelList)
+For related follow-up work on a general or custom subagent's assignment, use send_to_subagent with the numeric subagent_id shown in the task result to retain its context. Review changed code and relevant verification before integrating its work.%s`, typeList.String(), modelList)
 }
 
 func (t *taskTool) Parameters() json.RawMessage {
@@ -168,7 +168,7 @@ func (t *taskTool) Parameters() json.RawMessage {
 			},
 			"background": {
 				"type": "boolean",
-				"description": "When false or omitted, wait for the answer before continuing. Set true only when you can continue useful independent work without the answer: the call returns the subagent id immediately, and completion is delivered automatically and wakes the parent. Never use sleep or get_subagent_result polling to wait for it."
+				"description": "When false or omitted, wait for the answer before continuing. Set true only when you can continue useful independent work without the answer: the call returns a numeric subagent_id immediately, and the parent receives the result automatically in a later turn. Never use sleep or get_subagent_result polling to wait for it."
 			}
 		},
 		"required": ["description", "subagent_type"],
@@ -227,9 +227,10 @@ func (t *taskTool) executeBackground(ctx context.Context, p TaskParams) (*tool.R
 
 	output := fmt.Sprintf(
 		"Launched background subagent #%d (%s). Continue useful independent work. "+
-			"Its completion will be delivered automatically and wake this session; do not poll for it. "+
+			"Its result will arrive automatically in a new turn; do not poll for it. "+
 			"Do not poll with sleep, schedule, or get_subagent_result. "+
-			"Do not poll with tools; when this is your only remaining work, reply with a standalone <WAITING/> line and no tool calls.",
+			"Do not poll with tools; when this is your only remaining work, reply with a standalone <WAITING/> line and no tool calls. "+
+			"If you would otherwise poll, reply with a standalone I_WOULD_USE_<WAITING/> line and no tool calls instead.",
 		res.ChildID, p.SubagentType,
 	)
 
@@ -362,5 +363,5 @@ func (t *taskTool) agentModel(subagentType string) string {
 }
 
 func taskMetadata(id int64) string {
-	return fmt.Sprintf("\n\n<task_metadata>\nid: %d\n</task_metadata>", id)
+	return fmt.Sprintf("\n\n<task_metadata>\nsubagent_id: %d\n</task_metadata>", id)
 }

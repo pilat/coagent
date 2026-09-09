@@ -200,6 +200,10 @@ func registerCoreTools(
 		rootID,
 	))
 
+	if processService != nil {
+		registry.Register(newCancelProcessTool(processService, sessionID))
+	}
+
 	registry.Register(newTailTool(workDir, access))
 
 	registry.Register(newWebFetchTool())

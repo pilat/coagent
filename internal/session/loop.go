@@ -19,6 +19,8 @@ import (
 const (
 	emptyResponseWarnThreshold  = 3
 	emptyResponseBreakThreshold = 6
+	waitingMarker               = "<WAITING/>"
+	wouldUseWaitingMarker       = "I_WOULD_USE_<WAITING/>"
 
 	// compactionAttemptCap is how many consecutive automatic compactions may fail
 	// to relieve the pressure before the automatic path stops trying.
@@ -569,7 +571,7 @@ func (r *loopRunner) hasLiveWakeSource(ctx context.Context) bool {
 
 func hasWaitingMarker(text string) bool {
 	for line := range strings.SplitSeq(text, "\n") {
-		if strings.TrimSpace(line) == "<WAITING/>" {
+		if isWaitingMarker(line) {
 			return true
 		}
 	}
@@ -582,12 +584,18 @@ func withoutWaitingMarker(text string) string {
 
 	kept := lines[:0]
 	for _, line := range lines {
-		if strings.TrimSpace(line) != "<WAITING/>" {
+		if !isWaitingMarker(line) {
 			kept = append(kept, line)
 		}
 	}
 
 	return strings.TrimSpace(strings.Join(kept, "\n"))
+}
+
+func isWaitingMarker(line string) bool {
+	line = strings.TrimSpace(line)
+
+	return line == waitingMarker || line == wouldUseWaitingMarker
 }
 
 func assistantOutput(response *llmwire.Response, enabled, replyToInput bool) (sessionstore.OutputType, string) {

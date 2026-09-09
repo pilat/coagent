@@ -141,9 +141,11 @@ func (f *factory) build(
 		SettlementOpen:  opts.SettlementOpen,
 		PreserveStopped: opts.PreserveStoppedStatus,
 		ActiveSubagents: opts.ActiveSubagents,
+		ActiveProcesses: opts.ActiveProcesses,
 		ContextBaseline: opts.ContextBaseline,
 
 		ActiveSubagentsProvider:  opts.ActiveSubagentsProvider,
+		ActiveProcessesProvider:  opts.ActiveProcessesProvider,
 		HasLiveWakeSource:        opts.HasLiveWakeSource,
 		ExtraSkills:              opts.ExtraSkills,
 		StagedExternalCalls:      opts.StagedExternalCalls,

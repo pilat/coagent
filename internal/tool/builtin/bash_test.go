@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -28,6 +29,16 @@ type bashRunnerStub struct {
 	args    []string
 	err     error
 	roots   []string
+}
+
+func TestBackgroundToolDescriptionsPreventPollingAndDuplicateVerification(t *testing.T) {
+	description := bashDescription + backgroundDescriptionSuffix
+	assert.GreaterOrEqual(t, strings.Count(strings.ToLower(description), "do not poll"), 3)
+	assert.Contains(t, description, "<WAITING/>")
+	assert.Contains(t, description, "I_WOULD_USE_<WAITING/>")
+	assert.Contains(t, description, "Overlapping builds, test suites, or verification commands")
+	assert.Contains(t, tailDescription, "Do not use tail on a running background process")
+	assert.Contains(t, tailDescription, "final result arrives automatically in a new turn")
 }
 
 func (r *bashRunnerStub) Command(ctx context.Context, request procexec.Request) (*exec.Cmd, error) {
@@ -224,6 +235,14 @@ func TestBashTool_ImmediateBackground(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Contains(t, result.Output, "do not poll")
+	assert.GreaterOrEqual(t, strings.Count(strings.ToLower(result.Output), "do not poll"), 3)
+	assert.Contains(t, result.Output, "<WAITING/>")
+	assert.Contains(t, result.Output, "no tool calls")
+	assert.Contains(t, result.Output, "overlapping command")
+	assert.Contains(t, result.Output, "Background execution was requested")
+	assert.Contains(t, result.Output, "Background process ID (not an operating-system PID): bgp_")
+	assert.Contains(t, result.Output, "cancel_process using this background process ID")
+	assert.Contains(t, result.Output, "I_WOULD_USE_<WAITING/>")
 	assert.Contains(t, result.Output, "Output file:")
 
 	processID, _ := result.Metadata[metaKeyProcessID].(string)
@@ -242,12 +261,35 @@ func TestBashTool_AutomaticPromotion(t *testing.T) {
 
 	assert.GreaterOrEqual(t, time.Since(start), 9*time.Second, "promotion waits the grace period")
 	assert.Contains(t, result.Output, "do not poll")
+	assert.GreaterOrEqual(t, strings.Count(strings.ToLower(result.Output), "do not poll"), 3)
+	assert.Contains(t, result.Output, "<WAITING/>")
+	assert.Contains(t, result.Output, "still running after 10 seconds")
+	assert.Contains(t, result.Output, "moved to the background")
 
 	processID, _ := result.Metadata[metaKeyProcessID].(string)
 	require.NotEmpty(t, processID)
 
 	// Cleanup: the service owns the process; cancel via tree intent.
 	_, _ = bash.process.CancelTree(context.Background(), 1, backgroundprocess.IntentSessionKilled)
+}
+
+func TestBashTool_ProcessSlotLimitRedirectsToBackgroundWait(t *testing.T) {
+	bash, _ := newTestBashTool(t)
+	params, _ := json.Marshal(bashParams{Command: "sleep 30", Background: true})
+
+	for i := range backgroundprocess.LiveProcessLimit {
+		ctx := tool.WithCallID(context.Background(), fmt.Sprintf("slot-%d", i))
+		_, err := bash.Execute(ctx, params)
+		require.NoError(t, err)
+	}
+
+	ctx := tool.WithCallID(context.Background(), "slot-overflow")
+	_, err := bash.Execute(ctx, params)
+	require.ErrorIs(t, err, backgroundprocess.ErrSlotLimit)
+	require.ErrorContains(t, err, "do not retry with another command")
+	require.ErrorContains(t, err, "cancel_process and its bgp_... ID")
+	require.ErrorContains(t, err, "<WAITING/>")
+	require.ErrorContains(t, err, "no tool calls")
 }
 
 func TestBashTool_Metadata(t *testing.T) {

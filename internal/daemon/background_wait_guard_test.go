@@ -22,17 +22,19 @@ func (t *waitGuardTool) Execute(context.Context, json.RawMessage) (*tool.Result,
 	return &tool.Result{Output: "slept"}, nil
 }
 
-func TestSubagentWaitGuardRejectsSleepUntilCompletionDelivered(t *testing.T) {
+func TestBackgroundWaitGuardRejectsSleepUntilCompletionDelivered(t *testing.T) {
 	inner := &waitGuardTool{}
 	pending := true
-	guard := &subagentWaitGuard{
+	guard := &backgroundWaitGuard{
 		inner:      inner,
 		hasPending: func(context.Context) (bool, error) { return pending, nil },
 	}
 
 	_, err := guard.Execute(t.Context(), nil)
 	require.Error(t, err)
-	require.ErrorContains(t, err, "subagent will wake the session automatically")
+	require.ErrorContains(t, err, "result arrives automatically in a new turn")
+	require.ErrorContains(t, err, "<WAITING/>")
+	require.ErrorContains(t, err, "I_WOULD_USE_<WAITING/>")
 	assert.Zero(t, inner.calls, "the sleep side effect must not be staged")
 
 	pending = false

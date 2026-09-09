@@ -20,6 +20,7 @@ const (
 	IDSendToSubagent = "send_to_subagent"
 	IDBatch          = "batch"
 	IDSkill          = "skill"
+	IDCancelProcess  = "cancel_process"
 	IDMCPAdd         = "mcp_add"
 	IDMCPRemove      = "mcp_remove"
 	IDMCPEnable      = "mcp_enable"

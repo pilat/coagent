@@ -1162,6 +1162,10 @@ func (s *svc) openSession(
 	opts.ActiveSubagentsProvider = func(ctx context.Context) []session.ActiveSubagentInfo {
 		return s.activeSubagentInfos(ctx, sessionID)
 	}
+	opts.ActiveProcesses = s.activeProcessInfos(ctx, sessionID)
+	opts.ActiveProcessesProvider = func(ctx context.Context) []session.ActiveProcessInfo {
+		return s.activeProcessInfos(ctx, sessionID)
+	}
 	opts.HasLiveWakeSource = func(ctx context.Context) bool {
 		if s.processStore == nil {
 			return false
@@ -1239,7 +1243,7 @@ func (s *svc) pendingExternalCallsForSession(ctx context.Context, sessionID int6
 }
 
 // activeSubagentInfos maps a session's pending (undelivered) child links to the
-// summary the session pins in its "# Active subagents" prompt section. Empty for
+// summary the session pins in its active-background prompt section. Empty for
 // a leaf session with no children.
 func (s *svc) activeSubagentInfos(ctx context.Context, sessionID int64) []session.ActiveSubagentInfo {
 	links, err := s.links.ListPendingChildLinks(ctx, sessionID)
@@ -1262,6 +1266,33 @@ func (s *svc) activeSubagentInfos(ctx context.Context, sessionID int64) []sessio
 			State:    string(l.State),
 		})
 	}
+
+	return infos
+}
+
+func (s *svc) activeProcessInfos(ctx context.Context, sessionID int64) []session.ActiveProcessInfo {
+	if s.processStore == nil {
+		return nil
+	}
+
+	processes, err := s.processStore.ListRunningBySessions(ctx, []int64{sessionID})
+	if err != nil {
+		logger.Ctx(ctx).Named("daemon.runner").
+			Warn("list_running_processes", zap.Int64("session_id", sessionID), zap.Error(err))
+
+		return nil
+	}
+
+	infos := make([]session.ActiveProcessInfo, 0, len(processes))
+	for _, process := range processes {
+		if process.AdvertisedAt == nil {
+			continue
+		}
+
+		infos = append(infos, session.ActiveProcessInfo{ID: process.ID, OutputPath: process.OutputPath})
+	}
+
+	sort.Slice(infos, func(i, j int) bool { return infos[i].ID < infos[j].ID })
 
 	return infos
 }
@@ -1325,7 +1356,7 @@ func (s *svc) registerScheduleTools(
 	registerLogged(
 		ctx,
 		sess,
-		s.guardSleepWhileSubagentsPending(rec.ID, schedule.NewSleepTool(s.scheduleSvc, rec.ID)),
+		s.guardSleepWhileBackgroundPending(rec.ID, schedule.NewSleepTool(s.scheduleSvc, rec.ID)),
 	)
 }
 

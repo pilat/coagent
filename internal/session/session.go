@@ -96,12 +96,18 @@ type Service interface {
 }
 
 // ActiveSubagentInfo summarizes one of a session's in-flight children for the
-// pinned "# Active subagents" prompt section. The daemon (owner of the subagent
+// pinned active-background prompt section. The daemon (owner of the subagent
 // ledger) pushes these at session create/resume.
 type ActiveSubagentInfo struct {
 	ChildID  int64
 	Blocking bool
 	State    string
+}
+
+// ActiveProcessInfo summarizes one advertised process owned by this session.
+type ActiveProcessInfo struct {
+	ID         string
+	OutputPath string
 }
 
 var _ Service = (*svc)(nil)
@@ -159,8 +165,9 @@ type svc struct {
 	// stagedCalls are tool_call ids the daemon has already started outside work
 	// for (call id → tool name). Loop-read only; set once at construction.
 	stagedCalls map[string]string
-	// Reads the daemon's subagent-link ledger live; nil outside a daemon.
+	// Reads the daemon's background ledgers live; nil outside a daemon.
 	activeSubagentsProvider func(context.Context) []ActiveSubagentInfo
+	activeProcessesProvider func(context.Context) []ActiveProcessInfo
 	hasLiveWakeSource       func(context.Context) bool
 	// Under modelMu with the model triplet: a measurement describes one model's
 	// window and tokenizer. nil baseline = nothing measured.
@@ -212,12 +219,14 @@ type options struct {
 	PreserveStopped bool
 
 	// ActiveSubagents is the daemon-pushed set of this session's in-flight
-	// children, rendered into the pinned "# Active subagents" prompt section.
+	// children, rendered into the pinned active-background prompt section.
 	ActiveSubagents []ActiveSubagentInfo
+	ActiveProcesses []ActiveProcessInfo
 
 	// ActiveSubagentsProvider reads the same ledger live, at the moment a
 	// compaction writes its summary — the create-time snapshot is stale by then.
 	ActiveSubagentsProvider func(context.Context) []ActiveSubagentInfo
+	ActiveProcessesProvider func(context.Context) []ActiveProcessInfo
 
 	// HasLiveWakeSource reports a daemon-owned asynchronous completion source.
 	HasLiveWakeSource func(context.Context) bool
@@ -277,7 +286,10 @@ func newWithOptions(ctx context.Context, p params, opts options) (Service, error
 		return nil, err
 	}
 
-	session.prompt.setActiveSubagentsSection(buildActiveSubagentsSection(opts.ActiveSubagents))
+	session.prompt.setActiveBackgroundSection(buildActiveBackgroundSection(
+		opts.ActiveProcesses,
+		opts.ActiveSubagents,
+	))
 
 	if opts.ReasoningLevel != "" {
 		session.reasoningLevel = opts.ReasoningLevel
@@ -331,6 +343,7 @@ func newSession(p params, opts options, workDir string, agentConfig registry.Age
 
 		compactionDeferAnnounced: opts.CompactionDeferAnnounced,
 		activeSubagentsProvider:  opts.ActiveSubagentsProvider,
+		activeProcessesProvider:  opts.ActiveProcessesProvider,
 		hasLiveWakeSource:        opts.HasLiveWakeSource,
 	}
 	var msStore sessionstore.RuntimeStore
