@@ -8,6 +8,7 @@ type AgentRuntimeStore interface {
 	RuntimeStore
 	BudgetResponseStore
 	BudgetCompactionStore
+	FileReadStore
 }
 
 // ManagerOutputStore owns the durable delivery ledger and its manager-facing

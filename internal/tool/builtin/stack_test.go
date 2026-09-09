@@ -149,6 +149,7 @@ func TestRegisterCoreTools_SharesFileMutator(t *testing.T) {
 		"project-1",
 		1,
 		1,
+		nil,
 	)
 
 	assert.Equal(t, mutator, registry.Get("write").(*writeTool).mutator)

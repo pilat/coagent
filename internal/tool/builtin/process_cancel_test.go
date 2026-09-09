@@ -59,7 +59,7 @@ func TestRegisterCoreTools_ExposesCancelOnlyWithProcessLifecycle(t *testing.T) {
 
 	registerCoreTools(
 		registry, t.TempDir(), nil, nil, nil, nil, nil, nil, mutator, nil,
-		service, "project-1", sessionID, sessionID,
+		service, "project-1", sessionID, sessionID, nil,
 	)
 	assert.NotNil(t, registry.Get(tool.IDCancelProcess))
 }

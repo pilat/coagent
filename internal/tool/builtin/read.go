@@ -46,14 +46,15 @@ type readParams struct {
 type readTool struct {
 	workDir string
 	access  safefile.Access
+	tracker FileReadTracker
 }
 
 func newReadTool(workDir string) *readTool {
 	return &readTool{workDir: workDir}
 }
 
-func newReadToolWithAccess(workDir string, access safefile.Access) *readTool {
-	return &readTool{workDir: workDir, access: access}
+func newReadToolWithAccess(workDir string, access safefile.Access, tracker FileReadTracker) *readTool {
+	return &readTool{workDir: workDir, access: access, tracker: tracker}
 }
 
 func (t *readTool) ID() string          { return "read" }
@@ -97,15 +98,29 @@ func (t *readTool) Execute(ctx context.Context, params json.RawMessage) (*tool.R
 	// Supported images route to the pixel branch ahead of binary rejection;
 	// offset/limit do not apply there. Stat first without opening: a FIFO must
 	// never reach an open() call.
+	//nolint:nestif // Image classification must precede text/binary scanning.
 	if info, statErr := os.Stat(filePath); statErr == nil && info.Mode().IsRegular() {
 		if mime := sniffImageMIME(filePath); mime != "" {
-			return t.readImage(ctx, filePath, mime)
+			unlock := lockFileRead(filePath)
+
+			result, err := t.readImage(ctx, filePath, mime)
+			if err == nil {
+				err = t.recordReadLocked(ctx, p.FilePath)
+			}
+
+			unlock()
+
+			if err != nil {
+				return nil, err
+			}
+
+			return result, nil
 		}
 	}
 
 	offset, limit := normalizeReadBounds(p.Offset, p.Limit)
 
-	lines, totalLines, truncatedByBytes, err := t.readLocked(filePath, offset, limit, log)
+	lines, totalLines, truncatedByBytes, err := t.readLocked(ctx, filePath, offset, limit, log)
 	if err != nil {
 		return nil, err
 	}
@@ -161,7 +176,14 @@ func (t *readTool) executeOpened(
 		return nil, fmt.Errorf("not a regular file: %s", opened.Path.Display)
 	}
 	if mime := sniffImageMIMEFile(opened.File); mime != "" {
-		return t.readOpenedImage(ctx, opened, info, mime)
+		result, err := t.readOpenedImage(ctx, opened, info, mime)
+		if err != nil {
+			return nil, err
+		}
+		if err := t.recordRead(ctx, p.FilePath); err != nil {
+			return nil, err
+		}
+		return result, nil
 	}
 	if isBinaryReader(opened.File, opened.Path.Canonical) {
 		return nil, fmt.Errorf("cannot read binary file: %s", opened.Path.Display)
@@ -176,6 +198,9 @@ func (t *readTool) executeOpened(
 		return nil, err
 	}
 	output := formatReadOutput(lines, offset, total, truncated)
+	if err := t.recordRead(ctx, p.FilePath); err != nil {
+		return nil, err
+	}
 	title := relativeTitle(t.workDir, opened.Path.Display)
 
 	log.Debug("complete", zap.String("filePath", opened.Path.Display), zap.Int("linesRead", len(lines)))
@@ -192,6 +217,7 @@ func (t *readTool) executeOpened(
 // mutation in the same batch rewrites the whole file, and an unsynchronized
 // scan can observe it half-written.
 func (t *readTool) readLocked(
+	ctx context.Context,
 	filePath string,
 	offset, limit int,
 	log *zap.Logger,
@@ -203,7 +229,49 @@ func (t *readTool) readLocked(
 		return nil, 0, false, err
 	}
 
-	return t.scanFile(filePath, offset, limit)
+	lines, total, truncated, err := t.scanFile(filePath, offset, limit)
+	if err != nil {
+		return nil, 0, false, err
+	}
+
+	if err := t.recordReadLocked(ctx, filePath); err != nil {
+		return nil, 0, false, err
+	}
+
+	return lines, total, truncated, nil
+}
+
+func (t *readTool) recordRead(ctx context.Context, name string) error {
+	if t.tracker == nil {
+		return nil
+	}
+
+	path, err := ledgerPath(t.access, t.workDir, name)
+	if err != nil {
+		return err
+	}
+
+	unlock := lockFileRead(path)
+	defer unlock()
+
+	return t.recordReadLocked(ctx, name)
+}
+
+func (t *readTool) recordReadLocked(ctx context.Context, name string) error {
+	if t.tracker == nil {
+		return nil
+	}
+
+	path, record, err := recordFingerprint(t.access, t.workDir, name)
+	if err != nil {
+		return err
+	}
+
+	if err := t.tracker.RecordRead(ctx, path, record); err != nil {
+		return fmt.Errorf("record read file: %w", err)
+	}
+
+	return nil
 }
 
 func (t *readTool) parseReadParams(params json.RawMessage, log *zap.Logger) (readParams, error) {

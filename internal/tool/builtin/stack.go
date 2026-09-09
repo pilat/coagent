@@ -36,6 +36,7 @@ type StackConfig struct {
 	Loader            loader.Service
 	Todo              todo.Service
 	TodoReplacement   TodoReplacement
+	FileReadTracker   FileReadTracker
 	Provider          shellenv.Provider // per-cwd shell activation; may be nil (fallback)
 	ShieldsUp         bool
 	ProcessService    backgroundprocess.Service // session-bound process lifecycle; may be nil
@@ -118,6 +119,7 @@ func BuildStack(ctx context.Context, cfg StackConfig) (*Stack, error) {
 		processProjectDir,
 		cfg.SessionID,
 		rootSessionID(cfg),
+		cfg.FileReadTracker,
 	)
 
 	// MCP failure degrades to a builtin-only stack: a broken MCP server must not block sessions.
@@ -181,11 +183,12 @@ func registerCoreTools(
 	processService backgroundprocess.Service,
 	processProjectDir string,
 	sessionID, rootID int64,
+	tracker FileReadTracker,
 ) {
-	registry.Register(newReadToolWithAccess(workDir, access))
-	registry.Register(newWriteToolWithAccess(workDir, access, lspMgr, fileMutator))
-	registry.Register(newEditToolWithAccess(workDir, access, lspMgr, fileMutator))
-	registry.Register(newApplyPatchToolWithAccess(workDir, access, fileMutator))
+	registry.Register(newReadToolWithAccess(workDir, access, tracker))
+	registry.Register(newWriteToolWithAccess(workDir, access, lspMgr, fileMutator, tracker))
+	registry.Register(newEditToolWithAccess(workDir, access, lspMgr, fileMutator, tracker))
+	registry.Register(newApplyPatchToolWithAccess(workDir, access, fileMutator, tracker))
 
 	registry.Register(newLsTool(workDir, access))
 	registry.Register(newGlobToolWithAccess(workDir, access))

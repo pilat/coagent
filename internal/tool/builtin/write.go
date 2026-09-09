@@ -2,6 +2,8 @@ package builtin
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -39,6 +41,7 @@ type writeTool struct {
 	lspMgr  lsp.Manager
 	mutator fileMutator
 	access  safefile.Access
+	tracker FileReadTracker
 }
 
 func newWriteToolWithAccess(
@@ -46,8 +49,9 @@ func newWriteToolWithAccess(
 	access safefile.Access,
 	lspMgr lsp.Manager,
 	mutator fileMutator,
+	tracker FileReadTracker,
 ) *writeTool {
-	return &writeTool{workDir: workDir, access: access, lspMgr: lspMgr, mutator: mutator}
+	return &writeTool{workDir: workDir, access: access, lspMgr: lspMgr, mutator: mutator, tracker: tracker}
 }
 
 func newWriteTool(workDir string, lspMgr lsp.Manager, mutator fileMutator) *writeTool {
@@ -184,13 +188,86 @@ func (t *writeTool) writeFile(
 		return false, fmt.Errorf("path is a directory, not a file: %s", filePath)
 	}
 	isNew := errors.Is(statErr, os.ErrNotExist)
+	if !isNew {
+		if err := t.authorizeOverwrite(ctx, filePath); err != nil {
+			return false, err
+		}
+	}
 
 	if err := t.mutator.WriteFile(ctx, filePath, []byte(content), true); err != nil {
 		log.Warn("write_failed", zap.String("filePath", filePath), zap.Error(err))
 		return false, fmt.Errorf("write file: %w", err)
 	}
+	if err := t.refreshRead(ctx, filePath); err != nil {
+		return false, err
+	}
 
 	return isNew, nil
+}
+
+//nolint:wsl_v5 // Authorization deliberately stays inside the file lock.
+func (t *writeTool) authorizeOverwrite(ctx context.Context, filePath string) error {
+	if t.tracker == nil {
+		return nil
+	}
+
+	key, err := ledgerPath(t.access, t.workDir, filePath)
+	if err != nil {
+		return fmt.Errorf("authorize write path: %w", err)
+	}
+	recorded, found, err := t.tracker.LookupRead(ctx, key)
+	if err != nil {
+		return fmt.Errorf("look up file read: %w", err)
+	}
+	if !found {
+		return errors.New("refusing to overwrite existing file: read the file first")
+	}
+
+	var info os.FileInfo
+	if t.access != nil && t.access.Scope() == safefile.ProjectConfined {
+		info, _, err = t.access.Stat(filePath)
+	} else {
+		info, err = os.Stat(filePath)
+	}
+	if err != nil {
+		return fmt.Errorf("inspect file before write: %w", err)
+	}
+	if info.ModTime().UnixNano() == recorded.MtimeUnixNano && info.Size() == recorded.Size {
+		return nil
+	}
+
+	content, err := readAccessFile(t.access, filePath)
+	if err != nil {
+		return fmt.Errorf("re-read file before write: %w", err)
+	}
+	sum := sha256.Sum256(content)
+	if hex.EncodeToString(sum[:]) != recorded.Hash {
+		return errors.New("refusing to overwrite file: read it again, it changed since you read it")
+	}
+
+	if err := t.tracker.RecordRead(ctx, key, ReadRecord{
+		MtimeUnixNano: info.ModTime().UnixNano(),
+		Size:          info.Size(),
+		Hash:          recorded.Hash,
+	}); err != nil {
+		return fmt.Errorf("refresh authorized file read: %w", err)
+	}
+	return nil
+}
+
+//nolint:wsl_v5 // Refresh is the post-mutation ledger boundary.
+func (t *writeTool) refreshRead(ctx context.Context, filePath string) error {
+	if t.tracker == nil {
+		return nil
+	}
+	key, record, err := recordFingerprint(t.access, t.workDir, filePath)
+	if err != nil {
+		return err
+	}
+	if err := t.tracker.RecordRead(ctx, key, record); err != nil {
+		return fmt.Errorf("refresh written file read: %w", err)
+	}
+	return nil
 }
 
 func (t *writeTool) writeLSPDiagnostics(ctx context.Context, filePath string, log *zap.Logger) (string, error) {

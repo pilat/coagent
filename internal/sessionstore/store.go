@@ -199,6 +199,7 @@ type Store interface { //nolint:interfacebloat // Complete constructor result; c
 	ReadinessStore
 	StopCompletionStore
 	ShieldCommandStore
+	FileReadStore
 }
 
 var (

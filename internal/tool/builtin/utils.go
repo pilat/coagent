@@ -55,7 +55,7 @@ func resolveAccessTarget(access safefile.Access, workDir, name string) (string, 
 		return "", fmt.Errorf("authorize filesystem target: %w", err)
 	}
 
-	return path.Canonical, nil
+	return canonicalExistingPath(path.Canonical), nil
 }
 
 //nolint:wsl_v5 // The rooted handle remains open through validation and read.

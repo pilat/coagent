@@ -206,6 +206,7 @@ func (f *factory) buildRegistry(
 		Loader:          ldr,
 		Todo:            todoSvc,
 		TodoReplacement: &todoReplacement{store: f.store, sessionID: sessionID, memory: todoSvc},
+		FileReadTracker: &fileReadTracker{store: f.store, sessionID: sessionID},
 		Provider:        f.provider,
 		ShieldsUp:       shieldsUp,
 		ProcessService:  f.processSvc,
