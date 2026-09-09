@@ -63,7 +63,9 @@ Set "fresh": true to instead wipe the session's context on every tick and run th
 use it for independent recurring jobs so stale data from earlier runs can't leak in or bloat the context. A fresh
 schedule requires a "prompt"; persist anything the next run needs via memory, since the conversation is discarded.
 
-Use this for: recurring wake-ups, periodic monitoring, daily stand-ups, hourly checks, alarm clocks, repeated reminders, CI polling.
+Use this for: recurring independent work, daily stand-ups, alarm clocks, and repeated reminders.
+Never use a schedule to poll the status or completion of already-started work, including processes, builds, tests,
+CI runs, deployments, subagents, or output files. Completion-capable work must remain its own wake source.
 For one-time delays (wait 5 minutes, sleep until 9am), use the "sleep" tool instead.`,
 		tzName,
 		offsetHours,

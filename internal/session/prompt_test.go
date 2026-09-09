@@ -80,7 +80,9 @@ func TestBuildToolsSection_ScheduleOnly(t *testing.T) {
 	result := buildToolsSection(reg, false)
 
 	assert.Contains(t, result, "# SCHEDULING")
-	assert.Contains(t, result, "Use schedule to set a wake-up timer")
+	assert.Contains(t, result, "Use schedule only for recurring future work or reminders")
+	assert.Contains(t, result, "Never use it to poll the status or completion of already-started work")
+	assert.NotContains(t, result, "waiting for an external process")
 	assert.NotContains(t, result, "sleep")
 }
 
@@ -101,7 +103,10 @@ func TestBuildToolsSection_BothScheduleAndSleep(t *testing.T) {
 
 	result := buildToolsSection(reg, false)
 
-	assert.Contains(t, result, "Prefer schedule over sleep")
+	assert.Contains(t, result, "Use schedule only for recurring future work or reminders")
+	assert.Contains(t, result, "Never use schedule to poll the status or completion of already-started work")
+	assert.Contains(t, result, "Use sleep for a one-time fixed delay")
+	assert.NotContains(t, result, "waiting for an external process")
 }
 
 func TestBuildToolsSection_SubagentsMustNotUseSleepOrPollingToWait(t *testing.T) {

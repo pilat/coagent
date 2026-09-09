@@ -137,6 +137,16 @@ func TestScheduleTool_Create_Cron(t *testing.T) {
 	assert.Equal(t, "CRON_TZ=UTC 0 9 * * *", store.schedules[0].cronExpr)
 }
 
+func TestScheduleTool_DescriptionRejectsStatusPolling(t *testing.T) {
+	tl := schedule.NewScheduleTool(int64(1), &mockScheduleStore{}, nil)
+
+	description := tl.Description()
+
+	assert.Contains(t, description, "Never use a schedule to poll the status or completion")
+	assert.Contains(t, description, "Completion-capable work must remain its own wake source")
+	assert.NotContains(t, description, "CI polling")
+}
+
 func TestScheduleTool_Create_Fresh(t *testing.T) {
 	store := &mockScheduleStore{nextID: 3}
 	tl := schedule.NewScheduleTool(int64(1), store, nil)
