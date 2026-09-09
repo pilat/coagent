@@ -558,6 +558,11 @@ func (s *store) MarkSessionKilled(ctx context.Context, id int64) error {
 
 	now := time.Now().UTC()
 
+	var parentID int64
+	if err := tx.QueryRowContext(ctx, `SELECT parent_id FROM sessions WHERE id = ?`, id).Scan(&parentID); err != nil {
+		return fmt.Errorf("load session for kill: %w", err)
+	}
+
 	result, err := tx.ExecContext(
 		ctx,
 		`UPDATE sessions SET status = 'killed', killed_at = ?, updated_at = ? WHERE id = ?`,
@@ -576,6 +581,10 @@ func (s *store) MarkSessionKilled(ctx context.Context, id int64) error {
 
 	if rows == 0 {
 		return fmt.Errorf("session %d not found", id)
+	}
+
+	if err := cancelPendingInputTree(ctx, tx, id, parentID == 0, now); err != nil {
+		return err
 	}
 
 	if err := tx.Commit(); err != nil {

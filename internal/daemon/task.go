@@ -7,13 +7,16 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/pilat/coagent/internal/loader"
 	"github.com/pilat/coagent/internal/registry"
 	"github.com/pilat/coagent/internal/tool"
 )
 
 // TaskParams are the parameters for the task tool.
 type TaskParams struct {
-	Prompt       string `json:"prompt"`
+	Prompt       string `json:"prompt,omitempty"`
+	Skill        string `json:"skill,omitempty"`
+	SkillArgs    string `json:"skill_args,omitempty"`
 	Description  string `json:"description"`
 	SubagentType string `json:"subagent_type"`
 	Model        string `json:"model,omitempty"`      // model for the subagent
@@ -27,6 +30,7 @@ type taskTool struct {
 	set           *registry.Set
 	subagentTypes []subagentInfo
 	modelCatalog  []modelInfo
+	skillCatalog  loader.SkillCatalog
 }
 
 var _ tool.Tool = (*taskTool)(nil)
@@ -40,6 +44,7 @@ func newTaskTool(
 	parentID int64,
 	set *registry.Set,
 	modelCatalog []modelInfo,
+	skillCatalog ...loader.SkillCatalog,
 ) tool.Tool {
 	subagents := set.ListSubagents()
 
@@ -55,12 +60,18 @@ func newTaskTool(
 		}
 	}
 
+	var catalog loader.SkillCatalog
+	if len(skillCatalog) > 0 {
+		catalog = skillCatalog[0]
+	}
+
 	return &taskTool{
 		spawner:       sp,
 		parentID:      parentID,
 		set:           set,
 		subagentTypes: subagentTypes,
 		modelCatalog:  candidates,
+		skillCatalog:  catalog,
 	}
 }
 
@@ -103,11 +114,18 @@ When NOT to use task:
 
 Launch independent tasks together in one response when useful. Keep dependent work sequential.
 
+Provide exactly one opening input:
+- prompt: a free-form assignment written for the subagent
+- skill: the canonical name of a model-invocable skill from Available Skills; optional skill_args replace its $ARGUMENTS placeholder
+Never send prompt and skill together, and never send skill_args without skill. The parent resolves and renders the skill before spawn; the child does not invoke it by name.
+
 Choose the execution mode deliberately:
 - Foreground (background omitted or false): use when you need the answer before continuing. The task call waits and returns the subagent's answer as its result. Multiple independent foreground task calls issued together wait for all of their results.
-- Background (background=true): use only when you can continue useful independent work without the answer. The call returns an id immediately; completion is delivered automatically as a subagent_event and wakes you in a later turn.
+- Background (background=true): use only when you can continue useful independent work without the answer. The call returns an id immediately; completion is delivered automatically as a user turn and wakes you in a later turn.
 
 Never use sleep, schedule, or repeated get_subagent_result calls to wait for subagents. get_subagent_result is a diagnostic snapshot only.
+
+When a background subagent is your only remaining work, reply with a standalone <WAITING/> line and no tool calls. Do not poll it; completion arrives automatically.
 
 The subagent does not receive the parent conversation. Built-in explore skips project instructions and memories; include relevant constraints explicitly. Other agent types may also load project context separately. State the question or outcome, known facts, paths, constraints, whether to MODIFY code or RESEARCH only, and what to return. For implementation, include relevant verification requirements.
 
@@ -133,6 +151,8 @@ func (t *taskTool) Parameters() json.RawMessage {
 				"type": "string",
 				"description": "The detailed task description for the subagent"
 			},
+			"skill": {"type": "string", "description": "A model-invocable skill to seed the subagent"},
+			"skill_args": {"type": "string", "description": "Optional arguments for skill"},
 			"description": {
 				"type": "string",
 				"description": "A short (3-5 word) description of the task"
@@ -151,7 +171,11 @@ func (t *taskTool) Parameters() json.RawMessage {
 				"description": "When false or omitted, wait for the answer before continuing. Set true only when you can continue useful independent work without the answer: the call returns the subagent id immediately, and completion is delivered automatically and wakes the parent. Never use sleep or get_subagent_result polling to wait for it."
 			}
 		},
-		"required": ["prompt", "description", "subagent_type"]
+		"required": ["description", "subagent_type"],
+		"oneOf": [
+			{"required": ["prompt"]},
+			{"required": ["skill"]}
+		]
 	}`, enumStr))
 }
 
@@ -166,6 +190,10 @@ func (t *taskTool) Execute(ctx context.Context, params json.RawMessage) (*tool.R
 	}
 
 	if p.Background {
+		if err := t.renderOpeningInput(&p); err != nil {
+			return nil, err
+		}
+
 		return t.executeBackground(ctx, p)
 	}
 
@@ -173,7 +201,7 @@ func (t *taskTool) Execute(ctx context.Context, params json.RawMessage) (*tool.R
 }
 
 // executeBackground spawns a child via the daemon and returns its id immediately.
-// Completion arrives later as a synthetic subagent_event pair.
+// Completion arrives later as a durable user turn.
 func (t *taskTool) executeBackground(ctx context.Context, p TaskParams) (*tool.Result, error) {
 	if t.spawner == nil {
 		return nil, errors.New("background subagents are not available in this context")
@@ -199,7 +227,9 @@ func (t *taskTool) executeBackground(ctx context.Context, p TaskParams) (*tool.R
 
 	output := fmt.Sprintf(
 		"Launched background subagent #%d (%s). Continue useful independent work. "+
-			"Its completion will be delivered automatically and wake this session; do not use sleep or poll get_subagent_result to wait for it.",
+			"Its completion will be delivered automatically and wake this session; do not poll for it. "+
+			"Do not poll with sleep, schedule, or get_subagent_result. "+
+			"Do not poll with tools; when this is your only remaining work, reply with a standalone <WAITING/> line and no tool calls.",
 		res.ChildID, p.SubagentType,
 	)
 
@@ -240,6 +270,10 @@ func (t *taskTool) executeBlocking(ctx context.Context, p TaskParams) (*tool.Res
 		}
 	}
 
+	if err := t.renderOpeningInput(&p); err != nil {
+		return nil, err
+	}
+
 	if _, err := t.spawner.Spawn(ctx, spawnRequest{
 		ParentID:   t.parentID,
 		AgentType:  p.SubagentType,
@@ -258,8 +292,15 @@ func (t *taskTool) executeBlocking(ctx context.Context, p TaskParams) (*tool.Res
 }
 
 func (t *taskTool) validateParams(p TaskParams) error {
-	if p.Prompt == "" {
-		return errors.New("prompt is required")
+	prompt := strings.TrimSpace(p.Prompt)
+
+	skill := strings.TrimSpace(p.Skill)
+	if strings.TrimSpace(p.SkillArgs) != "" && skill == "" {
+		return errors.New("skill_args requires skill")
+	}
+
+	if (prompt == "") == (skill == "") {
+		return errors.New("exactly one of prompt or skill is required")
 	}
 
 	if p.SubagentType == "" {
@@ -282,6 +323,21 @@ func (t *taskTool) validateParams(p TaskParams) error {
 	}
 
 	return fmt.Errorf("invalid subagent_type: %s (available: %s)", p.SubagentType, strings.Join(typeNames, ", "))
+}
+
+func (t *taskTool) renderOpeningInput(p *TaskParams) error {
+	if strings.TrimSpace(p.Skill) == "" {
+		return nil
+	}
+
+	skill, err := loader.ResolveModelInvocableSkill(t.skillCatalog, p.Skill)
+	if err != nil {
+		return fmt.Errorf("resolve task skill: %w", err)
+	}
+
+	p.Prompt = loader.RenderSkillInvocation(skill, p.SkillArgs)
+
+	return nil
 }
 
 func (t *taskTool) isCandidateModel(id string) bool {

@@ -20,6 +20,8 @@ func (s *svc) supervise(ctx context.Context, launched *launchResult) {
 	defer release()
 
 	natural, exitCode := s.waitForExit(ctx, launched)
+	s.joinGuardian(launched)
+
 	if err := launched.collector.Close(); err != nil {
 		natural = StateOutputDrainTimeout
 		exitCode = nil
@@ -66,7 +68,7 @@ func (s *svc) waitForExit(ctx context.Context, launched *launchResult) (State, *
 		case err := <-waitErr:
 			state, exitCode := classifyExit(err)
 			if errors.Is(err, exec.ErrWaitDelay) {
-				_ = killGroup(launched.cmd)
+				_ = killProcessGroup(launched.processGroup)
 			}
 
 			return state, exitCode
@@ -77,7 +79,7 @@ func (s *svc) waitForExit(ctx context.Context, launched *launchResult) (State, *
 				)
 			}
 
-			_ = killGroup(launched.cmd)
+			_ = killProcessGroup(launched.processGroup)
 
 			<-waitErr
 
@@ -90,6 +92,11 @@ func (s *svc) waitForExit(ctx context.Context, launched *launchResult) (State, *
 			}
 		}
 	}
+}
+
+func (s *svc) joinGuardian(launched *launchResult) {
+	_ = launched.leaseWriter.Close()
+	_ = launched.guardian.Wait()
 }
 
 func classifyExit(err error) (State, *int) {

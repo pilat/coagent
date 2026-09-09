@@ -334,8 +334,13 @@ func TestAssistantOutput_DirectReplyPrecedesReplaceableProgress(t *testing.T) {
 			wantType: sessionstore.OutputMessagePersistent, wantOutput: "stopping the mutation run",
 		},
 		{
-			name: "terminal answer", response: textResponse("done"), enabled: true,
-			wantType: sessionstore.OutputMessagePersistent, wantOutput: "done",
+			name: "asynchronous terminal progress", response: textResponse("done"), enabled: true,
+			wantType: sessionstore.OutputMessageReplaceable, wantOutput: "done",
+		},
+		{
+			name: "manager-owned terminal answer", response: textResponse("done"), enabled: true,
+			replyToInput: true,
+			wantType:     sessionstore.OutputMessagePersistent, wantOutput: "done",
 		},
 	}
 
@@ -850,6 +855,46 @@ func TestRunLoopIterationStartIsOneBased(t *testing.T) {
 	}
 
 	assert.Equal(t, []any{int64(1), int64(2), int64(3)}, seen)
+}
+
+func TestRunLoop_AsyncInputArrivingDuringModelCallWaitsForNextSafeBoundary(t *testing.T) {
+	read := &countingTool{id: "read"}
+	agent := newTestAgent(read)
+	boundary := &loopInputBoundary{agent: agent}
+	agent.boundary = boundary
+	agent.llmClient = &loopScriptLLM{onCall: func(call int, messages []llmwire.Message) (*llmwire.Response, error) {
+		switch call {
+		case 1:
+			assert.False(t, hasMessageContent(messages, "<process_completion>"))
+			boundary.input = &PendingInput{
+				ID: 1, Content: "<process_completion>\nprocess_id: bgp_1\n</process_completion>",
+				Source: sessionstore.InputSourceProcess, ReceivedAt: time.Now(),
+			}
+
+			return toolCallResponse("read-before-completion", "read"), nil
+		case 2:
+			require.Len(t, messages, 3)
+			assert.Equal(t, llmwire.RoleAssistant, messages[0].Role)
+			assert.Equal(t, llmwire.RoleTool, messages[1].Role)
+			assert.Equal(t, llmwire.RoleUser, messages[2].Role)
+			assert.Contains(t, messages[2].Content, "<process_completion>")
+
+			return textResponse("done"), nil
+		default:
+			return nil, fmt.Errorf("unexpected model call %d", call)
+		}
+	}}
+
+	result, err := runLoop(t.Context(), agent, loopOptions{}, iterationGuard(5))
+	require.NoError(t, err)
+	assert.Equal(t, "done", result.FinalResponse)
+	assert.Equal(t, int64(1), read.runs.Load())
+}
+
+func hasMessageContent(messages []llmwire.Message, fragment string) bool {
+	return slices.ContainsFunc(messages, func(message llmwire.Message) bool {
+		return strings.Contains(message.Content, fragment)
+	})
 }
 
 func TestRunLoopReloadFailureIsLoggedAndSurvived(t *testing.T) {

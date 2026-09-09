@@ -280,12 +280,21 @@ func (s *store) MarkSessionKilledWithOutput(
 		return nil, err
 	}
 
+	now := time.Now().UTC()
+	includeDescendants := record.ParentID == 0
+
 	if record.KilledAt != nil {
+		if err := cancelPendingInputTree(ctx, tx, sessionID, includeDescendants, now); err != nil {
+			return nil, err
+		}
+
+		if err := tx.Commit(); err != nil {
+			return nil, fmt.Errorf("commit killed input cleanup: %w", err)
+		}
+
 		//nolint:nilnil // an already-closed root has no further lifecycle output.
 		return nil, nil
 	}
-
-	now := time.Now().UTC()
 
 	result, err := tx.ExecContext(ctx,
 		`UPDATE sessions SET status = 'killed', killed_at = ?, updated_at = ? WHERE id = ? AND killed_at IS NULL`,
@@ -295,6 +304,10 @@ func (s *store) MarkSessionKilledWithOutput(
 	}
 
 	if err := requireOneSessionUpdate(result, sessionID); err != nil {
+		return nil, err
+	}
+
+	if err := cancelPendingInputTree(ctx, tx, sessionID, includeDescendants, now); err != nil {
 		return nil, err
 	}
 

@@ -14,8 +14,55 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/pilat/coagent/internal/coagenthome"
 	"github.com/pilat/coagent/internal/procexec"
 )
+
+func TestSandboxProcessArtifactAccessFollowsShield(t *testing.T) {
+	if _, err := exec.LookPath(bubblewrapExecutable); err != nil {
+		t.Skip("bwrap is not installed")
+	}
+
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CACHE_HOME", filepath.Join(home, "cache"))
+	require.NoError(t, os.MkdirAll(filepath.Join(home, "cache"), 0o700))
+	restore := coagenthome.Override(home)
+	defer restore()
+
+	project := t.TempDir()
+	ordinaryPolicy, err := preparePolicy(Config{
+		Enabled: true, ProjectID: 7, WorkDir: project, CanonicalWorkDir: project,
+		SessionKey: "artifact:ordinary", ReadScope: HostReadable,
+	})
+	require.NoError(t, err)
+	ordinary, err := newEnabledRunner(ordinaryPolicy)
+	require.NoError(t, err)
+	processRoot, err := coagenthome.ProcessProjectDir(7)
+	require.NoError(t, err)
+	artifact := filepath.Join(processRoot, "1", "result.output")
+	require.NoError(t, os.MkdirAll(filepath.Dir(artifact), 0o700))
+
+	command := "printf artifact > " + shellQuote(artifact) + " && grep -q artifact " + shellQuote(artifact)
+	cmd, err := ordinary.BashCommand(t.Context(), command, project)
+	require.NoError(t, err)
+	output, err := cmd.CombinedOutput()
+	require.NoError(t, err, string(output))
+	assert.FileExists(t, artifact)
+
+	shieldedPolicy, err := preparePolicy(Config{
+		Enabled: true, WorkDir: project, CanonicalWorkDir: project,
+		SessionKey: "artifact:shielded", ReadScope: ProjectConfined,
+		ExcludeSessionWritableRoots: true,
+	})
+	require.NoError(t, err)
+	shielded, err := newEnabledRunner(shieldedPolicy)
+	require.NoError(t, err)
+	cmd, err = shielded.BashCommand(t.Context(), "test ! -e "+shellQuote(artifact), project)
+	require.NoError(t, err)
+	output, err = cmd.CombinedOutput()
+	require.NoError(t, err, string(output))
+}
 
 func TestBubblewrapIntegration(t *testing.T) {
 	if _, err := exec.LookPath(bubblewrapExecutable); err != nil {

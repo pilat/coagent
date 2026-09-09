@@ -262,7 +262,7 @@ func (p *generationProduction) apply(command generationProtocolCommand) {
 		_, _, err := p.store.InsertAssistantMessageWithOutput(p.ctx, p.root, &transcript.Message{
 			Role: "assistant", Content: "reply before tool",
 			ToolCalls: []byte(`[{"id":"reply-tool","name":"bash"}]`),
-		}, OutputMessagePersistent, "reply before tool")
+		}, OutputMessagePersistent, "reply before tool", false)
 		require.NoError(p.t, err)
 	case genClaim:
 		if p.claim != nil {

@@ -64,6 +64,7 @@ func (b *boundary) Peek(ctx context.Context) (*session.PendingInput, error) {
 	return &session.PendingInput{
 		ID: input.ID, Content: input.RawContent,
 		Attributes: input.Attributes, ReceivedAt: input.ReceivedAt,
+		Source:       input.Source,
 		ManagerOwned: managerOwnedInput(input),
 	}, nil
 }

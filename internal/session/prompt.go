@@ -430,7 +430,7 @@ func buildActiveSubagentsSection(links []ActiveSubagentInfo) string {
 	b.WriteString(backgroundSectionMarker)
 	b.WriteString(
 		"Subagents you spawned that are still running or awaiting result delivery. " +
-			"Each completion is delivered automatically as a subagent_event and wakes this session. " +
+			"Each completion is delivered automatically as a user turn and wakes this session. " +
 			"Do not wait with sleep or poll get_subagent_result; that tool is only a diagnostic snapshot.\n",
 	)
 

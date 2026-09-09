@@ -30,6 +30,7 @@ func (s *store) CancelPendingInputsPreservingShieldCommands(
 	result, err := s.db.ExecContext(ctx, `UPDATE session_inbox
 		SET state = 'cancelled', resolved_at = ?, resolution_reason = ?
 		WHERE state = 'pending' AND session_id IN (SELECT value FROM json_each(?))
+			AND source NOT IN ('process', 'subagent')
 			AND NOT (source = 'user' AND trim(raw_content) IN ('/shieldsup', '/shieldsdown')
 				AND json_type(attributes, '$.manager_id') = 'text'
 				AND json_extract(attributes, '$.manager_id') <> '')`,

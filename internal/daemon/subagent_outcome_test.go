@@ -67,7 +67,7 @@ func TestFinalizeChild_IncompleteWhenNoFinalAnswer(t *testing.T) {
 	// The parent receives the explicit incomplete outcome, never a masked completed.
 	h.waitForDelivery(childID)
 	h.mgr.waitIdle(parent.ID)
-	assert.Contains(t, lastToolResultContent(h.parentMessages(parent.ID), "subagent_event"), "incomplete")
+	assert.Contains(t, lastSubagentCompletion(h.parentMessages(parent.ID), childID), "outcome: incomplete")
 }
 
 // TestCascadeKill_BackgroundDescendant: killing a parent stops every non-terminal
@@ -108,6 +108,14 @@ func TestCascadeKill_BackgroundDescendant(t *testing.T) {
 	})
 	require.NoError(t, err)
 	h.waitUntil("background grandchild running", func() bool { return h.mgr.HasActiveLoop(grandchild.ChildID) })
+	childInput, err := h.sessStore.EnqueueAsyncInput(
+		ctx, child.ChildID, sessionstore.InputSourceProcess, "pending", nil,
+	)
+	require.NoError(t, err)
+	grandchildInput, err := h.sessStore.EnqueueAsyncInput(
+		ctx, grandchild.ChildID, sessionstore.InputSourceSubagent, "complete", nil,
+	)
+	require.NoError(t, err)
 
 	// Capture WARN audit lines emitted during the cascade kill.
 	core, logs := observer.New(zap.WarnLevel)
@@ -123,6 +131,13 @@ func TestCascadeKill_BackgroundDescendant(t *testing.T) {
 		rec, gerr := h.sessStore.GetSession(ctx, id)
 		require.NoError(t, gerr)
 		assert.NotNil(t, rec.KilledAt, "descendant %d is killed with its tree", id)
+	}
+	for _, inputID := range []int64{childInput.ID, grandchildInput.ID} {
+		var state string
+		require.NoError(t, h.db.QueryRowContext(ctx,
+			`SELECT state FROM session_inbox WHERE id = ?`, inputID,
+		).Scan(&state))
+		assert.Equal(t, string(sessionstore.InputStateCancelled), state)
 	}
 
 	assert.Len(t, logs.FilterMessage("cascade_killed_descendant").All(), 2,
@@ -213,6 +228,36 @@ func TestCascadeKill_CompletedUndeliveredSurvives(t *testing.T) {
 	assert.Equal(t, subagent.StateCompleted, link.State, "completed-but-undelivered child not re-marked killed")
 	assert.Equal(t, subagent.OutcomeCompleted, link.Outcome)
 	assert.Equal(t, "the result", link.Result, "its stored result survives the cascade")
+}
+
+func TestCascadeKill_KilledTreeSuppressesTerminalBackgroundCompletion(t *testing.T) {
+	h := newSubagentHarnessWith(t, trivialRespond)
+	defer h.shutdown()
+
+	parent, err := h.sessStore.CreateSession(h.ctx, h.projectID, "fake-model", "", nil)
+	require.NoError(t, err)
+	childID, err := h.sessStore.CreateSubagentSession(
+		h.ctx, h.projectID, parent.ID, parent.ID, "general", "fake-model", "",
+	)
+	require.NoError(t, err)
+	require.NoError(t, h.links.InsertSubagentLink(h.ctx, subagent.Link{
+		ParentID: parent.ID, ChildID: childID, TaskCallID: "background",
+	}))
+	require.NoError(t, h.links.MarkLinkTerminal(
+		h.ctx, childID, subagent.StateCompleted, "done", subagent.OutcomeCompleted,
+	))
+	require.NoError(t, h.sessStore.MarkSessionKilled(h.ctx, parent.ID))
+
+	h.mgr.cascadeKillChildrenForKilledTree(h.ctx, parent.ID, 0, time.Time{})
+
+	link, err := h.links.GetLink(h.ctx, childID)
+	require.NoError(t, err)
+	require.NotNil(t, link)
+	assert.Positive(t, link.DeliveredAt)
+	assert.Zero(t, link.DeliveredInputID)
+	assert.Zero(t, link.DeliveredMsgID)
+	_, err = h.sessStore.PeekPending(h.ctx, parent.ID)
+	require.ErrorIs(t, err, sessionstore.ErrNoPendingInput)
 }
 
 // TestDrainQueue_SkipsKilledChild: a queued child cascade-killed before it ran is

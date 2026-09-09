@@ -119,7 +119,7 @@ func TestBuildBackgroundSubagentCompletion_PersistsCallList(t *testing.T) {
 	require.NoError(t, json.Unmarshal(stored[0].ToolCalls, &calls))
 	require.Len(t, calls, 1)
 	assert.Equal(t, subagentEventTool, calls[0].Name)
-	assert.JSONEq(t, `{"child_id":42,"event":"completed"}`, string(calls[0].Arguments))
+	assert.JSONEq(t, `{"child_id":42}`, string(calls[0].Arguments))
 }
 
 func TestResetContextAndInjectOnce_MarkCompactedFailureKeepsTranscript(t *testing.T) {

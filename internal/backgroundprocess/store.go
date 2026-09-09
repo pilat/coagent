@@ -11,7 +11,7 @@ import (
 
 const processColumns = `id, session_id, root_session_id, tool_call_id, output_path,
 	deadline_at, created_at, advertised_at, output_size, exit_code, host_intent,
-	state, finished_at, delivery_state, delivery_target_session_id, delivered_at`
+	state, finished_at`
 
 var _ Store = (*store)(nil)
 
@@ -20,7 +20,7 @@ type store struct {
 }
 
 // Store owns ordinary durable background-process ledger access.
-type Store interface { //nolint:interfacebloat // One process row owns lifecycle and delivery transitions.
+type Store interface {
 	InsertProcess(ctx context.Context, process Process) error
 	GetProcess(ctx context.Context, id string) (Process, error)
 	ListRunning(ctx context.Context) ([]Process, error)
@@ -36,12 +36,7 @@ type Store interface { //nolint:interfacebloat // One process row owns lifecycle
 		intent HostIntent,
 		outputSize int64,
 	) (Process, bool, error)
-	ClaimDelivery(ctx context.Context, id string) (target int64, won bool, err error)
-	MarkDelivered(ctx context.Context, id string) (bool, error)
-	MarkSuppressed(ctx context.Context, id string) (bool, error)
 	UpdateOutputSize(ctx context.Context, id string, size int64) error
-	ListUndelivered(ctx context.Context) ([]Process, error)
-	ListUndeliveredForTarget(ctx context.Context, targetSessionID int64) ([]Process, error)
 	CountTerminalByIntentSince(
 		ctx context.Context,
 		rootSessionID int64,
@@ -64,9 +59,8 @@ func (s *store) InsertProcess(ctx context.Context, process Process) error {
 	_, err := s.db.ExecContext(ctx, `
 		INSERT INTO background_processes (
 			id, session_id, root_session_id, tool_call_id, output_path,
-			deadline_at, created_at, advertised_at, output_size, host_intent, state,
-			delivery_state
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')`,
+			deadline_at, created_at, advertised_at, output_size, host_intent, state
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		process.ID,
 		process.SessionID,
 		process.RootSessionID,
@@ -207,6 +201,24 @@ func (s *store) UpdateOutputSize(ctx context.Context, id string, size int64) err
 	}
 
 	return nil
+}
+
+func (s *store) CountTerminalByIntentSince(
+	ctx context.Context,
+	rootSessionID int64,
+	intent HostIntent,
+	since time.Time,
+) (int, error) {
+	var count int
+
+	err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM background_processes
+		WHERE root_session_id = ? AND host_intent = ? AND state <> 'running' AND finished_at >= ?`,
+		rootSessionID, string(intent), since).Scan(&count)
+	if err != nil {
+		return 0, fmt.Errorf("count terminal processes by intent: %w", err)
+	}
+
+	return count, nil
 }
 
 func (s *store) finalize(

@@ -154,15 +154,12 @@ type svc struct {
 	budgetSvc  budgetservice.Service
 	// processSvc owns live cancellation handles; processStore owns durability.
 	processStore      backgroundprocess.Store
-	processCoord      *processCoordinator
 	processSvc        backgroundprocess.Service
 	processRecoveryMu sync.Mutex
 	processRecovery   chan struct{}
 	workerCtx         context.Context //nolint:containedctx // Daemon lifetime context for joined workers.
 	workerCancel      context.CancelFunc
 	workerWG          sync.WaitGroup
-	processRetryMu    sync.Mutex
-	processRetries    map[string]processRetryState
 	queueRetryMu      sync.Mutex
 	queueRetryPending bool
 }
@@ -306,7 +303,6 @@ func newSvc(
 		ownerCache:      make(map[int64]string),
 		deferNotices:    newDeferAnnouncements(),
 		processPolicies: make(map[int64]map[string]struct{}),
-		processRetries:  make(map[string]processRetryState),
 		workerCtx:       workerCtx,
 		workerCancel:    workerCancel,
 		budgetCtx:       budgetCtx,
@@ -328,8 +324,6 @@ func newSvc(
 	if rawStore, ok := store.(interface{ DB() *sql.DB }); ok {
 		if db := rawStore.DB(); db != nil {
 			s.processStore = backgroundprocess.NewStore(db)
-			s.processCoord = newProcessCoordinator(s.processStore, s)
-
 			processSvc = s.newProcessService(ctx)
 			s.processSvc = processSvc
 		}
@@ -393,10 +387,13 @@ func (s *svc) SendToSession(ctx context.Context, sessionID int64, prompt string)
 		return fmt.Errorf("session %d is stopping", sessionID)
 	}
 
-	if rec.Status == sessionstore.SessionStatusStopped && !isReadOnlyBoundaryCommand(prompt) {
-		if err := s.sessionStore.UpdateSessionStatus(ctx, sessionID, sessionstore.SessionStatusActive); err != nil {
-			return fmt.Errorf("resume stopped session %d: %w", sessionID, err)
-		}
+	parked, err := s.prepareStoppedSessionInput(ctx, rec, prompt)
+	if err != nil {
+		return err
+	}
+
+	if parked {
+		return nil
 	}
 
 	workDir, err := s.store.GetProjectWorkDir(ctx, rec.ProjectID)
@@ -838,14 +835,15 @@ func (s *svc) killLocked(ctx context.Context, sessionID int64) error {
 		return fmt.Errorf("mark session killed with output: %w", err)
 	}
 
-	_, _ = s.inboxStore.CancelPendingInputs(cleanupCtx, []int64{sessionID}, "killed")
 	s.removeSchedules(cleanupCtx, sessionID)
 
 	// Cascade-kill every non-terminal descendant (blocking and background): this is
 	// a deliberate tree teardown, so background work that would outlive it and
 	// report to nobody is stopped too. Completed-but-undelivered children keep their
 	// result (see cascadeKillChildren).
-	s.cascadeKillChildren(cleanupCtx, sessionID, 0, time.Now().Add(cascadeRetryBudget))
+	s.cascadeKillChildrenForKilledTree(
+		cleanupCtx, sessionID, 0, time.Now().Add(cascadeRetryBudget),
+	)
 
 	if ownerlessSession(rec) {
 		s.publish(sessionID, sessionevent.Notification{
@@ -1264,13 +1262,11 @@ func (s *svc) Shutdown(timeout time.Duration) {
 	defer cancel()
 
 	s.shuttingDown.Store(true)
-	s.processRetryMu.Lock()
 	s.queueRetryMu.Lock()
 	if s.workerCancel != nil {
 		s.workerCancel()
 	}
 	s.queueRetryMu.Unlock()
-	s.processRetryMu.Unlock()
 
 	if s.budgetCancel != nil {
 		s.budgetCancel()
@@ -1375,6 +1371,33 @@ func (s *svc) GetProjectName(ctx context.Context, projectID int64) (string, erro
 	return name, nil
 }
 
+func (s *svc) prepareStoppedSessionInput(
+	ctx context.Context,
+	record *sessionstore.SessionRecord,
+	prompt string,
+) (bool, error) {
+	if record.Status != sessionstore.SessionStatusStopped {
+		return false, nil
+	}
+
+	if !isReadOnlyBoundaryCommand(prompt) {
+		if err := s.sessionStore.UpdateSessionStatus(
+			ctx, record.ID, sessionstore.SessionStatusActive,
+		); err != nil {
+			return false, fmt.Errorf("resume stopped session %d: %w", record.ID, err)
+		}
+
+		return false, nil
+	}
+
+	commandOnly, err := s.commandOnlyStoppedRoot(ctx, record)
+	if err != nil {
+		return false, err
+	}
+
+	return !commandOnly, nil
+}
+
 // newProcessService shares the tree lock between process admission and stop.
 func (s *svc) newProcessService(ctx context.Context) backgroundprocess.Service {
 	fence := func(fenceCtx context.Context, rootSessionID int64) (func(), error) {
@@ -1423,9 +1446,7 @@ func (s *svc) newProcessService(ctx context.Context) backgroundprocess.Service {
 	return backgroundprocess.NewService(s.processStore, backgroundprocess.Options{
 		OutputDir: outputRoot,
 		OnCompletion: func(ctx context.Context, completion backgroundprocess.Completion) {
-			if s.processCoord != nil {
-				s.routeProcessCompletion(ctx, completion)
-			}
+			s.routeProcessCompletion(ctx, completion)
 		},
 		TreeFence: fence,
 	})
@@ -1613,11 +1634,6 @@ func (s *svc) routeQueuedSessionInputWithEnsure(
 	if rec.Status == sessionstore.SessionStatusStopped &&
 		(rec.ParentID != 0 || !inputIsScheduledTurn(input.input())) {
 		return fmt.Errorf("session %d is %s", sessionID, rec.Status)
-	}
-
-	if rec.ParentID != 0 && rec.Status != sessionstore.SessionStatusActive &&
-		rec.Status != sessionstore.SessionStatusSuspended && isProcessCompletionInput(input.input()) {
-		return fmt.Errorf("session %d is terminal; process completion remains owed", sessionID)
 	}
 
 	// Registry serialization prevents teardown from losing an input appended

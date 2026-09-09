@@ -104,7 +104,9 @@ func (g *recordingBudgetGate) Observe(context.Context) (bool, error)  { return f
 func (g *recordingBudgetGate) PersistResponse(
 	context.Context,
 	*transcript.Message,
+	sessionstore.OutputType,
 	string,
+	bool,
 ) (int64, bool, bool, error) {
 	return 0, false, false, nil
 }

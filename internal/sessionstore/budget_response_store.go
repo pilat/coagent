@@ -15,11 +15,13 @@ import (
 const budgetToolNotExecuted = "Not executed because the budget checkpoint fired."
 
 type BudgetedResponse struct {
-	SessionID   int64
-	RootID      int64
-	Message     *transcript.Message
-	DirectReply string
-	ObservedAt  time.Time
+	SessionID     int64
+	RootID        int64
+	Message       *transcript.Message
+	OutputType    OutputType
+	Output        string
+	ReleasesInput bool
+	ObservedAt    time.Time
 }
 
 type BudgetedResponseResult struct {
@@ -79,7 +81,7 @@ func (s *store) InsertBudgetedResponse(
 		return &BudgetedResponseResult{MessageID: messageID, Fired: true, Budget: record}, nil
 	}
 	if errors.Is(err, sql.ErrNoRows) || (err == nil && record.State != BudgetArmed) {
-		published, publishErr := insertBudgetedDirectReply(ctx, tx, response, messageID, observedAt)
+		published, publishErr := insertBudgetedOutput(ctx, tx, response, messageID, observedAt)
 		if publishErr != nil {
 			return nil, publishErr
 		}
@@ -100,7 +102,7 @@ func (s *store) InsertBudgetedResponse(
 		return nil, err
 	}
 	if reason == "" {
-		published, publishErr := insertBudgetedDirectReply(ctx, tx, response, messageID, observedAt)
+		published, publishErr := insertBudgetedOutput(ctx, tx, response, messageID, observedAt)
 		if publishErr != nil {
 			return nil, publishErr
 		}
@@ -131,19 +133,38 @@ func (s *store) InsertBudgetedResponse(
 	return &BudgetedResponseResult{MessageID: messageID, Fired: true, Budget: record}, nil
 }
 
-func insertBudgetedDirectReply(
+func insertBudgetedOutput(
 	ctx context.Context,
 	tx *sql.Tx,
 	response BudgetedResponse,
 	messageID int64,
 	now time.Time,
 ) (bool, error) {
-	if response.DirectReply == "" {
+	outputType := response.OutputType
+	output := response.Output
+
+	if output == "" {
 		return false, nil
 	}
 
-	if response.SessionID != response.RootID || response.DirectReply != response.Message.Content ||
-		!storedMessageHasToolCalls(response.Message) {
+	if response.ReleasesInput && storedMessageHasToolCalls(response.Message) {
+		return false, ErrBudgetConflict
+	}
+
+	if response.SessionID != response.RootID {
+		return false, ErrBudgetConflict
+	}
+
+	if outputType == OutputMessagePersistent &&
+		(output != response.Message.Content || !storedMessageHasToolCalls(response.Message)) {
+		return false, ErrBudgetConflict
+	}
+
+	if outputType == OutputMessageReplaceable && storedMessageHasToolCalls(response.Message) {
+		return false, ErrBudgetConflict
+	}
+
+	if outputType != OutputMessagePersistent && outputType != OutputMessageReplaceable {
 		return false, ErrBudgetConflict
 	}
 
@@ -152,12 +173,50 @@ func insertBudgetedDirectReply(
 		return false, err
 	}
 
-	_, err = insertMessageOutput(
-		ctx, tx, response.RootID, owner, response.DirectReply,
-		fmt.Sprintf("message:%d:reply", messageID), now, false,
-	)
+	if outputType == OutputMessagePersistent {
+		_, err = insertMessageOutput(
+			ctx, tx, response.RootID, owner, output,
+			fmt.Sprintf("message:%d:reply", messageID), now, false,
+		)
+	} else {
+		err = insertBudgetedProgress(
+			ctx, tx, response.RootID, owner, output, messageID, now, response.ReleasesInput,
+		)
+	}
 
 	return err == nil, err
+}
+
+func insertBudgetedProgress(
+	ctx context.Context,
+	tx *sql.Tx,
+	sessionID int64,
+	owner, content string,
+	messageID int64,
+	now time.Time,
+	releasesInput bool,
+) error {
+	attributes, err := stampMessageOutputAttributes(ctx, tx, sessionID, owner, nil)
+	if err != nil {
+		return err
+	}
+
+	encoded, err := json.Marshal(attributes)
+	if err != nil {
+		return fmt.Errorf("marshal budgeted progress attributes: %w", err)
+	}
+
+	_, err = tx.ExecContext(ctx, `INSERT INTO session_outbox
+		(session_id, type, content, attributes, source_key, fingerprint, created_at, releases_input)
+		VALUES (?, 'message_replaceable', ?, ?, ?, ?, ?, ?)`,
+		sessionID, content, string(encoded), fmt.Sprintf("message:%d:progress", messageID),
+		outputFingerprintWithRelease(OutputMessageReplaceable, content, sessionID, nil, releasesInput),
+		now, releasesInput)
+	if err != nil {
+		return fmt.Errorf("insert budgeted progress: %w", err)
+	}
+
+	return nil
 }
 
 //nolint:wsl_v5 // The usage query directly precedes threshold selection.
@@ -234,8 +293,12 @@ func fireBudgetedResponse(
 	content := fmt.Sprintf(
 		"Budget checkpoint reached (%s). Persisted cost: $%.6f. The limiter is no longer armed.", reason, delta,
 	)
-	if response.SessionID == response.RootID && response.Message.Content != "" {
-		content = response.Message.Content + "\n\n" + content
+	modelOutput := response.Output
+	if modelOutput == "" {
+		modelOutput = response.Message.Content
+	}
+	if response.SessionID == response.RootID && modelOutput != "" {
+		content = modelOutput + "\n\n" + content
 	}
 
 	_, err = insertMessageOutput(ctx, tx, response.RootID, owner, content,

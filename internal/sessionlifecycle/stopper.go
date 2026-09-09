@@ -92,7 +92,7 @@ func (s *stopper) Begin(ctx context.Context, rootID int64, liveSessionIDs []int6
 }
 
 func (s *stopper) CancelInputs(ctx context.Context, plan *StopPlan) error {
-	if _, err := s.lifecycle.CancelPendingInputs(ctx, plan.sessionIDs, "stopped"); err != nil {
+	if _, err := s.lifecycle.CancelPendingInputsForStop(ctx, plan.sessionIDs, "stopped"); err != nil {
 		return fmt.Errorf("cancel stopped session input: %w", err)
 	}
 

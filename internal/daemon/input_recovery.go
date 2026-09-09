@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 
 	"github.com/pilat/coagent/internal/sessionstore"
 	"github.com/pilat/coagent/internal/tool"
@@ -48,6 +49,22 @@ func (s *svc) pendingInputRunnable(ctx context.Context, sessionID int64) (bool, 
 // recoverableInputRunnable accepts both forms PASS 3 owns: an inbox row still
 // pending, or an active turn backed by a durable accepted-message identity.
 func (s *svc) recoverableInputRunnable(ctx context.Context, sessionID int64) (bool, error) {
+	record, err := s.sessionStore.GetSession(ctx, sessionID)
+	if err != nil {
+		return false, fmt.Errorf("load recoverable session %d: %w", sessionID, err)
+	}
+
+	if record.Status == sessionstore.SessionStatusStopped || record.Status == sessionstore.SessionStatusError {
+		sessionIDs, listErr := s.inboxStore.ListSessionsWithRecoverableInput(ctx)
+		if listErr != nil {
+			return false, fmt.Errorf("classify recoverable session %d: %w", sessionID, listErr)
+		}
+
+		if !slices.Contains(sessionIDs, sessionID) {
+			return false, nil
+		}
+	}
+
 	pending, err := s.hasPendingDurableInput(ctx, sessionID)
 	if err != nil {
 		return false, err
@@ -57,12 +74,7 @@ func (s *svc) recoverableInputRunnable(ctx context.Context, sessionID int64) (bo
 		return s.pendingInputRunnable(ctx, sessionID)
 	}
 
-	rec, err := s.sessionStore.GetSession(ctx, sessionID)
-	if err != nil {
-		return false, fmt.Errorf("load recoverable session %d: %w", sessionID, err)
-	}
-
-	accepted, err := s.hasAcceptedInput(ctx, rec)
+	accepted, err := s.hasAcceptedInput(ctx, record)
 	if err != nil {
 		return false, err
 	}

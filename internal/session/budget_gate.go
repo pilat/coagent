@@ -17,7 +17,9 @@ type BudgetGate interface {
 	PersistResponse(
 		ctx context.Context,
 		message *transcript.Message,
-		directReply string,
+		outputType sessionstore.OutputType,
+		output string,
+		releasesInput bool,
 	) (messageID int64, fired, replyPublished bool, err error)
 	PersistCompaction(
 		ctx context.Context,

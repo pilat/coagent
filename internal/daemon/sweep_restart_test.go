@@ -56,7 +56,7 @@ func crashWindowRespond(background bool) func(string, []llmwire.Message) *llmwir
 		switch {
 		case hasUserContaining(msgs, "CHILD_TASK"):
 			return &llmwire.Response{Text: "child finished: 42"}
-		case hasToolResultFor(msgs, "subagent_event"):
+		case hasUserContaining(msgs, "<subagent_completion>"):
 			return &llmwire.Response{Text: "parent got the child result"}
 		case hasToolResultFor(msgs, "task") && background:
 			return &llmwire.Response{Text: "child launched"}
@@ -86,9 +86,9 @@ func TestScenario_CrashBetweenFinalizationAndDeliveryRedeliversExactlyOnce(t *te
 			},
 		},
 		{
-			name:        "background child arrives as a subagent event",
+			name:        "background child arrives through the parent inbox",
 			background:  true,
-			completions: countSubagentEvents,
+			completions: countSubagentCompletions,
 		},
 	}
 
@@ -126,12 +126,21 @@ func TestScenario_CrashBetweenFinalizationAndDeliveryRedeliversExactlyOnce(t *te
 			require.NoError(t, err)
 			require.NotNil(t, owed)
 			require.True(t, owed.Terminal(), "the child was finalized before the crash")
-			require.Zero(t, owed.DeliveredAt, "but its completion never reached the parent")
+			if tc.background {
+				require.Positive(t, owed.DeliveredAt,
+					"the parent inbox handoff owns a background completion before consumption")
+			} else {
+				require.Zero(t, owed.DeliveredAt, "the blocking task result never reached the parent")
+			}
 			require.Zero(t, tc.completions(second.parentMessages(parentID), link.ChildID))
 
 			require.NoError(t, second.mgr.Start(second.ctx))
 
 			second.waitUntil("sweep redelivered the owed completion", func() bool {
+				if tc.background {
+					return tc.completions(second.parentMessages(parentID), link.ChildID) == 1
+				}
+
 				current, linkErr := second.links.GetLink(second.ctx, link.ChildID)
 				return linkErr == nil && current != nil && current.DeliveredAt != 0
 			})
@@ -204,7 +213,7 @@ func TestScenario_StoppedChildSurvivesARestartWithoutResurrection(t *testing.T) 
 			(current.State != subagent.StateStopped || current.DeliveredAt != 0)
 	}, 500*time.Millisecond, 25*time.Millisecond, "a stopped child stays parked across a restart")
 
-	assert.Zero(t, countSubagentEvents(second.parentMessages(parentID), link.ChildID),
+	assert.Zero(t, countSubagentCompletions(second.parentMessages(parentID), link.ChildID),
 		"a stopped child owes the parent nothing")
 	assert.False(t, second.mgr.HasActiveLoop(link.ChildID), "the sweep must not start a stopped child")
 }

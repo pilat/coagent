@@ -8,11 +8,11 @@ import (
 	"time"
 )
 
-const subagentLinkColumns = `parent_id, child_id, task_call_id, blocking, depth, state, delivered_at, delivered_msg_id, created_at, result, outcome, activation_seq`
+const subagentLinkColumns = `parent_id, child_id, task_call_id, blocking, depth, state, delivered_at, delivered_msg_id, delivered_input_id, created_at, result, outcome, activation_seq`
 
 // subagentLinkColumnsSL is subagentLinkColumns qualified with the "sl" alias,
 // for queries that join subagent_links to sessions.
-const subagentLinkColumnsSL = `sl.parent_id, sl.child_id, sl.task_call_id, sl.blocking, sl.depth, sl.state, sl.delivered_at, sl.delivered_msg_id, sl.created_at, sl.result, sl.outcome, sl.activation_seq`
+const subagentLinkColumnsSL = `sl.parent_id, sl.child_id, sl.task_call_id, sl.blocking, sl.depth, sl.state, sl.delivered_at, sl.delivered_msg_id, sl.delivered_input_id, sl.created_at, sl.result, sl.outcome, sl.activation_seq`
 
 var _ Store = (*store)(nil)
 
@@ -115,13 +115,17 @@ func (s *store) ListRunningChildLinks(ctx context.Context) ([]Link, error) {
 }
 
 func (s *store) ListUndeliveredParentLinks(ctx context.Context) ([]Link, error) {
-	// The JOIN reads sessions.killed_at (read-only) to skip killed parents — the
-	// ledger observing session liveness, never writing it.
+	// Background outcomes for killed parents remain recoverable only so their
+	// durable delivery obligation can be suppressed without creating inbox input.
 	rows, err := s.db.QueryContext(
 		ctx,
 		`SELECT `+subagentLinkColumnsSL+` FROM subagent_links sl
 		 JOIN sessions p ON p.id = sl.parent_id
-		 WHERE sl.state IN ('completed', 'error', 'killed') AND sl.delivered_at IS NULL AND p.killed_at IS NULL
+		 JOIN sessions root ON root.id = CASE WHEN p.parent_id = 0 THEN p.id ELSE p.root_id END
+		 WHERE sl.state IN ('completed', 'error', 'killed') AND sl.delivered_at IS NULL
+			AND ((p.killed_at IS NULL AND root.killed_at IS NULL) OR (
+				sl.blocking = 0 AND sl.state IN ('completed', 'error')
+			))
 		 ORDER BY sl.child_id`,
 	)
 	if err != nil {
@@ -177,7 +181,7 @@ func (s *store) ResetLinkRunning(ctx context.Context, childID int64) error {
 		ctx,
 		`UPDATE subagent_links
 		 SET state = ?, blocking = 0, activation_seq = activation_seq + 1,
-		     delivered_at = NULL, delivered_msg_id = NULL
+		     delivered_at = NULL, delivered_msg_id = NULL, delivered_input_id = NULL
 		 WHERE child_id = ?`,
 		StateRunning, childID,
 	)
@@ -261,12 +265,12 @@ func scanLinkRows(rows *sql.Rows) ([]Link, error) {
 
 func scanLinkFrom(sc rowScanner) (*Link, error) {
 	var link Link
-	var deliveredAt, deliveredMsgID sql.NullInt64
+	var deliveredAt, deliveredMsgID, deliveredInputID sql.NullInt64
 	var state, outcome string
 
 	err := sc.Scan(
 		&link.ParentID, &link.ChildID, &link.TaskCallID, &link.Blocking, &link.Depth,
-		&state, &deliveredAt, &deliveredMsgID, &link.CreatedAt,
+		&state, &deliveredAt, &deliveredMsgID, &deliveredInputID, &link.CreatedAt,
 		&link.Result, &outcome, &link.ActivationSeq,
 	)
 	if err != nil {
@@ -276,6 +280,7 @@ func scanLinkFrom(sc rowScanner) (*Link, error) {
 
 	link.DeliveredAt = deliveredAt.Int64
 	link.DeliveredMsgID = deliveredMsgID.Int64
+	link.DeliveredInputID = deliveredInputID.Int64
 	link.State = State(state)
 
 	link.Outcome = Outcome(outcome)

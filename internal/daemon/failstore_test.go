@@ -95,7 +95,6 @@ func (f *flakyLinkStore) ListRunningChildLinks(ctx context.Context) ([]subagent.
 	return f.Store.ListRunningChildLinks(ctx)
 }
 
-// markTerminalAttempts reports how many times MarkLinkTerminal was called.
 func (f *flakyLinkStore) markTerminalAttempts() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()

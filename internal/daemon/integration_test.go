@@ -208,7 +208,7 @@ func subagentRespond(_ string, msgs []llmwire.Message) *llmwire.Response {
 		}}}
 	}
 
-	if hasToolResultFor(msgs, "task") || hasToolResultFor(msgs, "subagent_event") {
+	if hasToolResultFor(msgs, "task") || hasUserContaining(msgs, "<subagent_completion>") {
 		return &llmwire.Response{Text: "all set, child launched"}
 	}
 
@@ -453,6 +453,18 @@ func (h *subagentHarness) waitForDelivery(childID int64) {
 	h.t.Fatalf("timed out waiting for completion delivery of child %d", childID)
 }
 
+func (h *subagentHarness) waitForParentCompletions(parentID, childID int64, want int) {
+	h.t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if countSubagentCompletions(h.parentMessages(parentID), childID) >= want {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	h.t.Fatalf("timed out waiting for %d parent inbox completions for child %d", want, childID)
+}
+
 func (h *subagentHarness) parentMessages(parentID int64) []llmwire.Message {
 	h.t.Helper()
 	stored, err := h.sessStore.LoadActiveMessages(h.ctx, parentID)
@@ -509,23 +521,29 @@ func lastToolResultContent(msgs []llmwire.Message, toolName string) string {
 	return ""
 }
 
-func countSubagentEvents(msgs []llmwire.Message, childID int64) int {
-	needle := "\"child_id\":" + strconv.FormatInt(childID, 10)
+func countSubagentCompletions(messages []llmwire.Message, childID int64) int {
+	needle := "child_id: " + strconv.FormatInt(childID, 10)
 	count := 0
-
-	for _, m := range msgs {
-		if m.Role != llmwire.RoleAssistant {
-			continue
-		}
-
-		for _, tc := range m.ToolCalls {
-			if tc.Name == "subagent_event" && strings.Contains(string(tc.Arguments), needle) {
-				count++
-			}
+	for _, message := range messages {
+		if message.Role == llmwire.RoleUser && strings.Contains(message.Content, "<subagent_completion>") &&
+			strings.Contains(message.Content, needle) {
+			count++
 		}
 	}
 
 	return count
+}
+
+func lastSubagentCompletion(messages []llmwire.Message, childID int64) string {
+	needle := "child_id: " + strconv.FormatInt(childID, 10)
+	for _, message := range slices.Backward(messages) {
+		if message.Role == llmwire.RoleUser && strings.Contains(message.Content, "<subagent_completion>") &&
+			strings.Contains(message.Content, needle) {
+			return message.Content
+		}
+	}
+
+	return ""
 }
 
 func TestIntegration_BackgroundSubagentCompletes(t *testing.T) {
@@ -544,13 +562,14 @@ func TestIntegration_BackgroundSubagentCompletes(t *testing.T) {
 	// parent must still survive its background child and be revived by the child's
 	// completion — only a deliberately killed tree drops background descendants.
 	h.waitForDelivery(link.ChildID)
+	h.waitForParentCompletions(parentID, link.ChildID, 1)
 
 	// Parent transcript is a valid tool_use/tool_result pairing.
 	msgs := h.parentMessages(parentID)
 	require.NoError(t, llm.ValidateToolPairing(msgs), "parent transcript must be transcript-valid")
 
 	// Exactly one completion record for the child.
-	assert.Equal(t, 1, countSubagentEvents(msgs, link.ChildID), "exactly one completion record")
+	assert.Equal(t, 1, countSubagentCompletions(msgs, link.ChildID), "exactly one completion record")
 
 	// get_subagent_result returns completed + output, and the auto-delivered
 	// completion shows the SAME formatted string as get_subagent_result.
@@ -560,8 +579,9 @@ func TestIntegration_BackgroundSubagentCompletes(t *testing.T) {
 	assert.Equal(t, subagent.StateCompleted, res.State)
 	assert.Equal(t, subagent.OutcomeCompleted, res.Outcome)
 	assert.Contains(t, res.Output, "child finished")
-	assert.Equal(t, formatChildResult(res), lastToolResultContent(msgs, "subagent_event"),
-		"auto-delivered completion and get_subagent_result format identically")
+	completion := lastSubagentCompletion(msgs, link.ChildID)
+	assert.Contains(t, completion, "outcome: completed")
+	assert.Contains(t, completion, "result:\nchild finished: 42")
 }
 
 // A model-authored task+sleep batch is not a valid join: both tools execute
@@ -578,7 +598,7 @@ func TestIntegration_BackgroundTaskRejectsCompetingSleepProtocol(t *testing.T) {
 			return &llmwire.Response{Text: "child finished while parent slept"}
 		}
 
-		if hasToolResultFor(msgs, "subagent_event") {
+		if hasUserContaining(msgs, "<subagent_completion>") {
 			return &llmwire.Response{Text: "child completion handled"}
 		}
 
@@ -617,13 +637,14 @@ func TestIntegration_BackgroundTaskRejectsCompetingSleepProtocol(t *testing.T) {
 
 	close(childRelease)
 	h.waitForDelivery(link.ChildID)
+	h.waitForParentCompletions(parentID, link.ChildID, 1)
 	h.mgr.waitIdle(parentID)
 
 	msgs := h.parentMessages(parentID)
 	require.NoError(t, llm.ValidateToolPairing(msgs), "the whole transcript must remain provider-valid")
 	assert.Equal(t, 1, countAssistantToolCallsFor(msgs, tool.IDSleep))
 	assert.Equal(t, 1, countToolResultsFor(msgs, tool.IDSleep), "the rejected call gets one error result")
-	assert.Equal(t, 1, countSubagentEvents(msgs, link.ChildID), "the child completion is delivered exactly once")
+	assert.Equal(t, 1, countSubagentCompletions(msgs, link.ChildID), "the child completion is delivered exactly once")
 
 	var sleepResult *llmwire.Message
 	for i := range msgs {
@@ -945,18 +966,20 @@ func TestIntegration_SendToSubagentReNotifies(t *testing.T) {
 
 	link := h.waitForChildLink(parentID)
 	h.waitForDelivery(link.ChildID)
+	h.waitForParentCompletions(parentID, link.ChildID, 1)
 
 	// Re-engage the finished child with follow-up work.
 	require.NoError(t, h.mgr.SendToChild(h.ctx, link.ChildID, "MORE_WORK for the CHILD_TASK"))
 
 	// A new completion is owed and re-delivered.
 	h.waitForDelivery(link.ChildID)
+	h.waitForParentCompletions(parentID, link.ChildID, 2)
 
 	msgs := h.parentMessages(parentID)
 	require.NoError(t, llm.ValidateToolPairing(msgs))
 	assert.GreaterOrEqual(
 		t,
-		countSubagentEvents(msgs, link.ChildID),
+		countSubagentCompletions(msgs, link.ChildID),
 		2,
 		"follow-up produces a second completion record",
 	)
@@ -1001,11 +1024,12 @@ func TestIntegration_SweepRedeliversIdempotently(t *testing.T) {
 	// First sweep delivers exactly one completion.
 	h.mgr.sweep(ctx)
 	h.waitForDelivery(childID)
+	h.waitForParentCompletions(parent.ID, childID, 1)
 	h.mgr.waitIdle(parent.ID)
 
 	msgs := h.parentMessages(parent.ID)
 	require.NoError(t, llm.ValidateToolPairing(msgs))
-	assert.Equal(t, 1, countSubagentEvents(msgs, childID), "exactly one record after first sweep")
+	assert.Equal(t, 1, countSubagentCompletions(msgs, childID), "exactly one record after first sweep")
 
 	// Second sweep is idempotent: the link is now delivered (delivered_at set by the
 	// atomic CAS), so it is excluded from the undelivered set and re-injects nothing
@@ -1014,10 +1038,15 @@ func TestIntegration_SweepRedeliversIdempotently(t *testing.T) {
 	h.mgr.waitIdle(parent.ID)
 
 	msgs = h.parentMessages(parent.ID)
-	assert.Equal(t, 1, countSubagentEvents(msgs, childID), "still exactly one record after second sweep (never zero)")
+	assert.Equal(
+		t,
+		1,
+		countSubagentCompletions(msgs, childID),
+		"still exactly one record after second sweep (never zero)",
+	)
 
 	// The delivered completion reflects the stored result + outcome.
-	require.Contains(t, lastToolResultContent(msgs, "subagent_event"), "completed")
+	require.Contains(t, lastSubagentCompletion(msgs, childID), "outcome: completed")
 }
 
 // newMCPHarness is newSubagentHarnessWith plus the MCP wiring cmd/coagent does:

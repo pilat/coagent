@@ -49,22 +49,19 @@ func IntentToState(intent HostIntent) State {
 
 // Process is the durable background-process ledger row.
 type Process struct {
-	ID                      string
-	SessionID               int64
-	RootSessionID           int64
-	ToolCallID              string
-	OutputPath              string
-	Deadline                time.Time
-	CreatedAt               time.Time
-	AdvertisedAt            *time.Time
-	OutputSize              int64
-	ExitCode                *int
-	HostIntent              HostIntent
-	State                   State
-	FinishedAt              *time.Time
-	DeliveryState           string
-	DeliveryTargetSessionID int64
-	DeliveredAt             *time.Time
+	ID            string
+	SessionID     int64
+	RootSessionID int64
+	ToolCallID    string
+	OutputPath    string
+	Deadline      time.Time
+	CreatedAt     time.Time
+	AdvertisedAt  *time.Time
+	OutputSize    int64
+	ExitCode      *int
+	HostIntent    HostIntent
+	State         State
+	FinishedAt    *time.Time
 }
 
 // Terminal reports whether the process reached a terminal state.

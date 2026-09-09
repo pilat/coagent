@@ -1,6 +1,6 @@
 # ADR-0046: Background Bash processes use durable completion events
 
-- **Status:** Accepted
+- **Status:** Superseded by [ADR-0050](0050-asynchronous-completions-use-session-inbox.md)
 - **Date:** 2026-09-07
 
 ## Context

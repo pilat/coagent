@@ -4,19 +4,182 @@ import (
 	"encoding/json"
 	"path/filepath"
 	"slices"
+	"strings"
 	"sync/atomic"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/pilat/coagent/internal/admission"
 	"github.com/pilat/coagent/internal/controllerapi"
 	"github.com/pilat/coagent/internal/llm"
 	"github.com/pilat/coagent/internal/llmwire"
 	"github.com/pilat/coagent/internal/sessionevent"
 	"github.com/pilat/coagent/internal/sessionstore"
+	"github.com/pilat/coagent/internal/subagent"
 	"github.com/pilat/coagent/internal/transcript"
 )
+
+func TestHarnessScenario_RestartResumesExplicitInputQueuedOnStoppedRoot(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "stopped-explicit-resume.db")
+	var modelCalls atomic.Int64
+	respond := func(_ string, messages []llmwire.Message) *llmwire.Response {
+		modelCalls.Add(1)
+		require.True(t, hasUserContaining(messages, "retained process fact"))
+		require.True(t, hasUserContaining(messages, "explicit resume after stop"))
+
+		return &llmwire.Response{Text: "stopped root resumed after restart"}
+	}
+
+	first := newSubagentHarnessOnDB(t, dbPath, respond, nil)
+	root, err := first.sessStore.CreateSession(first.ctx, first.projectID, "fake-model", "", map[string]any{
+		"manager_id": scenarioManagerID,
+	})
+	require.NoError(t, err)
+	require.NoError(t, first.sessStore.UpdateSessionStatus(
+		first.ctx, root.ID, sessionstore.SessionStatusStopped,
+	))
+	_, err = first.sessStore.EnqueueAsyncInput(
+		first.ctx, root.ID, sessionstore.InputSourceProcess, "retained process fact", nil,
+	)
+	require.NoError(t, err)
+	_, err = first.sessStore.EnqueueInput(
+		first.ctx, root.ID, sessionstore.InputSourceUser, "explicit resume after stop",
+	)
+	require.NoError(t, err)
+	first.shutdown()
+
+	second := newSubagentHarnessOnDB(t, dbPath, respond, nil)
+	collector := collectEvents(second.mgr.PubSub().SubscribeAll())
+	defer func() {
+		collector.stop()
+		second.shutdown()
+	}()
+	second.mgr.sweep(second.ctx)
+	waitForVisibleMessage(t, collector, root.ID, "stopped root resumed after restart")
+	drainScenarioClaims(t, "explicit_stopped_resume_restart.json", newChainController(t, second))
+	waitForIdleAfterMessage(t, collector, root.ID, "stopped root resumed after restart")
+	assert.Equal(t, int64(1), modelCalls.Load())
+	assertHarnessTrace(t, "explicit_stopped_resume_restart.json", collector.snapshot(), root.ID)
+}
+
+func TestHarnessScenario_RestartConsumesReadOnlyInputQueuedOnStoppedRoot(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "stopped-read-only.db")
+	var modelCalls atomic.Int64
+	respond := func(string, []llmwire.Message) *llmwire.Response {
+		modelCalls.Add(1)
+
+		return &llmwire.Response{Text: "must not call model"}
+	}
+
+	first := newSubagentHarnessOnDB(t, dbPath, respond, nil)
+	root, err := first.sessStore.CreateSession(first.ctx, first.projectID, "fake-model", "", map[string]any{
+		"manager_id": scenarioManagerID,
+	})
+	require.NoError(t, err)
+	require.NoError(t, first.sessStore.UpdateSessionStatus(
+		first.ctx, root.ID, sessionstore.SessionStatusStopped,
+	))
+	_, err = first.sessStore.EnqueueInput(first.ctx, root.ID, sessionstore.InputSourceUser, "/help")
+	require.NoError(t, err)
+	asyncInput, err := first.sessStore.EnqueueAsyncInput(
+		first.ctx, root.ID, sessionstore.InputSourceProcess, "retained process fact", nil,
+	)
+	require.NoError(t, err)
+	first.shutdown()
+
+	second := newSubagentHarnessOnDB(t, dbPath, respond, nil)
+	beforeRecovery, err := second.sessStore.GetSession(second.ctx, root.ID)
+	require.NoError(t, err)
+	preserveStopped, err := second.mgr.commandOnlyStoppedRoot(second.ctx, beforeRecovery)
+	require.NoError(t, err)
+	require.True(t, preserveStopped)
+	collector := collectEvents(second.mgr.PubSub().SubscribeAll())
+	defer func() {
+		collector.stop()
+		second.shutdown()
+	}()
+	second.mgr.sweep(second.ctx)
+	collector.waitFor(t, "session help", func(events []controllerapi.SessionNotification) bool {
+		return slices.ContainsFunc(events, func(event controllerapi.SessionNotification) bool {
+			return event.SessionID == root.ID && event.Notification.Type == sessionevent.NotifyMessage &&
+				strings.Contains(event.Notification.Message, "## Session commands")
+		})
+	})
+	drainScenarioClaims(t, "stopped_read_only_restart.json", newChainController(t, second))
+	second.waitUntil("read-only recovery preserved stop", func() bool {
+		record, getErr := second.sessStore.GetSession(second.ctx, root.ID)
+
+		return getErr == nil && record.Status == sessionstore.SessionStatusStopped &&
+			!second.mgr.HasActiveLoop(root.ID)
+	})
+
+	record, err := second.sessStore.GetSession(second.ctx, root.ID)
+	require.NoError(t, err)
+	assert.Equal(t, sessionstore.SessionStatusStopped, record.Status)
+	assert.Zero(t, modelCalls.Load())
+	pending, err := second.sessStore.PeekPending(second.ctx, root.ID)
+	require.NoError(t, err)
+	assert.Equal(t, asyncInput.ID, pending.ID)
+	assert.Equal(t, sessionstore.InputSourceProcess, pending.Source)
+	assertHarnessTrace(t, "stopped_read_only_restart.json", collector.snapshot(), root.ID)
+}
+
+func TestScenario_RestartResumesExplicitInputQueuedOnErroredChild(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "errored-child-explicit-resume.db")
+	first := newSubagentHarnessOnDB(t, dbPath, func(string, []llmwire.Message) *llmwire.Response {
+		return &llmwire.Response{Text: "must remain queued"}
+	}, nil)
+	root, err := first.sessStore.CreateSession(first.ctx, first.projectID, "fake-model", "", nil)
+	require.NoError(t, err)
+	childID, err := first.mgr.subagents.Create(first.ctx, subagent.Create{
+		ProjectID: first.projectID, ParentID: root.ID, RootID: root.ID,
+		Model: "fake-model", TaskCallID: "errored-child", State: subagent.StateRunning,
+	})
+	require.NoError(t, err)
+	require.NoError(t, first.links.MarkLinkTerminal(
+		first.ctx, childID, subagent.StateError, "old failure", subagent.OutcomeError,
+	))
+	require.NoError(t, first.sessStore.UpdateSessionStatus(
+		first.ctx, childID, sessionstore.SessionStatusError,
+	))
+	link, err := first.links.GetLink(first.ctx, childID)
+	require.NoError(t, err)
+	require.NotNil(t, link)
+	won, err := first.mgr.subagents.DeliverBackgroundCompletion(first.ctx, *link, 1)
+	require.NoError(t, err)
+	require.True(t, won)
+	_, err = first.sessStore.EnqueueInput(
+		first.ctx, childID, sessionstore.InputSourceAgent, "explicit retry after error",
+	)
+	require.NoError(t, err)
+	require.NoError(t, first.sessStore.UpdateSessionStatus(
+		first.ctx, root.ID, sessionstore.SessionStatusStopped,
+	))
+	first.shutdown()
+
+	second := newSubagentHarnessOnDB(t, dbPath, func(string, []llmwire.Message) *llmwire.Response {
+		return &llmwire.Response{Text: "must remain queued"}
+	}, nil)
+	defer second.shutdown()
+	for i := range admission.MaxChildren {
+		require.True(t, second.mgr.admit.TryAdmit(admission.Child, int64(30_000+i)))
+		defer second.mgr.admit.Release(admission.Child, int64(30_000+i))
+	}
+
+	resumed, err := second.mgr.resumeSessionsWithRecoverableInput(second.ctx)
+	require.NoError(t, err)
+	assert.Equal(t, 1, resumed)
+	link, err = second.links.GetLink(second.ctx, childID)
+	require.NoError(t, err)
+	require.NotNil(t, link)
+	assert.Equal(t, subagent.StateRunning, link.State)
+	assert.Equal(t, int64(2), link.ActivationSeq)
+	pending, err := second.sessStore.PeekPending(second.ctx, childID)
+	require.NoError(t, err)
+	assert.Equal(t, "explicit retry after error", pending.RawContent)
+}
 
 func TestHarnessScenario_RestartResumesAcceptedInputWithoutAssistant(t *testing.T) {
 	runAcceptedInputRestartScenario(t, nil, "accepted_input_restart_recovery.json")

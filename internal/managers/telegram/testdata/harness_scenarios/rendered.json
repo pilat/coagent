@@ -111,6 +111,62 @@
       ]
     },
     {
+      "trace": "background_wait_canary.json",
+      "source_test": "TestHarnessScenario_BackgroundWaitCanaryResumesWithoutPolling",
+      "calls": [
+        {
+          "method": "createForumTopic",
+          "chat_id": -100123
+        },
+        {
+          "method": "editForumTopic",
+          "chat_id": -100123,
+          "thread_id": 7001
+        },
+        {
+          "method": "sendMessage",
+          "chat_id": -100123,
+          "thread_id": 7001,
+          "text": "<b>🟢 Working</b>\n\n🤖 <code>fake-model</code> · iteration 1\n⌚ &lt;elapsed&gt; · 💰 $0.0 total\n🧩 Subagents · 0 foreground · 1 background",
+          "parse_mode": "HTML"
+        },
+        {
+          "method": "editForumTopic",
+          "chat_id": -100123,
+          "thread_id": 7001
+        },
+        {
+          "method": "editMessageText",
+          "chat_id": -100123,
+          "text": "waiting for child",
+          "parse_mode": "HTML"
+        },
+        {
+          "method": "editForumTopic",
+          "chat_id": -100123,
+          "thread_id": 7001
+        },
+        {
+          "method": "editMessageText",
+          "chat_id": -100123,
+          "text": "<b>⚪ Idle</b>\n\n🤖 <code>fake-model</code> · iteration 2\n⌚ &lt;elapsed&gt; · 💰 $0.0 total",
+          "parse_mode": "HTML"
+        },
+        {
+          "method": "editForumTopic",
+          "chat_id": -100123,
+          "thread_id": 7001
+        },
+        {
+          "method": "sendMessage",
+          "chat_id": -100123,
+          "thread_id": 7001,
+          "text": "completion after wait",
+          "parse_mode": "HTML"
+        }
+      ]
+    },
+    {
       "trace": "cli_conversation_manager_owned.json",
       "source_test": "TestHarnessScenario_CLIConversationIsManagerOwned",
       "calls": null
@@ -168,6 +224,23 @@
           "chat_id": -100123,
           "thread_id": 7001,
           "text": "<b>🟢 Working</b>\n\n🤖 <code>fake-model</code> · iteration 2\n⌚ &lt;elapsed&gt; · 💰 $0.0 total",
+          "parse_mode": "HTML"
+        }
+      ]
+    },
+    {
+      "trace": "explicit_stopped_resume_restart.json",
+      "source_test": "TestHarnessScenario_RestartResumesExplicitInputQueuedOnStoppedRoot",
+      "calls": [
+        {
+          "method": "createForumTopic",
+          "chat_id": -100123
+        },
+        {
+          "method": "sendMessage",
+          "chat_id": -100123,
+          "thread_id": 7001,
+          "text": "stopped root resumed after restart",
           "parse_mode": "HTML"
         }
       ]
@@ -417,6 +490,158 @@
           "method": "editMessageText",
           "chat_id": -100123,
           "text": "All done.",
+          "parse_mode": "HTML"
+        }
+      ]
+    },
+    {
+      "trace": "process_busy_boundary.json",
+      "source_test": "TestHarnessScenario_ProcessCompletionAtBusyToolBoundary",
+      "calls": [
+        {
+          "method": "createForumTopic",
+          "chat_id": -100123
+        },
+        {
+          "method": "editForumTopic",
+          "chat_id": -100123,
+          "thread_id": 7001
+        },
+        {
+          "method": "sendMessage",
+          "chat_id": -100123,
+          "thread_id": 7001,
+          "text": "busy process completion observed",
+          "parse_mode": "HTML"
+        }
+      ]
+    },
+    {
+      "trace": "process_completed_root.json",
+      "source_test": "TestHarnessScenario_ProcessCompletionRevivesCompletedRoot",
+      "calls": [
+        {
+          "method": "createForumTopic",
+          "chat_id": -100123
+        },
+        {
+          "method": "sendMessage",
+          "chat_id": -100123,
+          "thread_id": 7001,
+          "text": "idle process completion observed",
+          "parse_mode": "HTML"
+        }
+      ]
+    },
+    {
+      "trace": "process_crash_restart.json",
+      "source_test": "TestHarnessScenario_ProcessCrashRestartDeliversInterruptedOnce",
+      "calls": [
+        {
+          "method": "createForumTopic",
+          "chat_id": -100123
+        },
+        {
+          "method": "sendMessage",
+          "chat_id": -100123,
+          "thread_id": 7001,
+          "text": "interrupted process recovered",
+          "parse_mode": "HTML"
+        }
+      ]
+    },
+    {
+      "trace": "process_idle_transition.json",
+      "source_test": "TestHarnessScenario_ProcessCompletionAtIdleTransition",
+      "calls": [
+        {
+          "method": "createForumTopic",
+          "chat_id": -100123
+        },
+        {
+          "method": "sendMessage",
+          "chat_id": -100123,
+          "thread_id": 7001,
+          "text": "idle-transition completion observed",
+          "parse_mode": "HTML"
+        }
+      ]
+    },
+    {
+      "trace": "process_interrupts_sleep.json",
+      "source_test": "TestHarnessScenario_ProcessCompletionInterruptsSleep",
+      "calls": [
+        {
+          "method": "createForumTopic",
+          "chat_id": -100123
+        },
+        {
+          "method": "editForumTopic",
+          "chat_id": -100123,
+          "thread_id": 7001
+        },
+        {
+          "method": "sendMessage",
+          "chat_id": -100123,
+          "thread_id": 7001,
+          "text": "<b>⏳ Waiting</b>\n\n🤖 <code>fake-model</code> · iteration 1\n⌚ &lt;elapsed&gt; · 💰 $0.0 total\n⏳ Waiting on 1 item",
+          "parse_mode": "HTML"
+        },
+        {
+          "method": "editForumTopic",
+          "chat_id": -100123,
+          "thread_id": 7001
+        },
+        {
+          "method": "sendMessage",
+          "chat_id": -100123,
+          "thread_id": 7001,
+          "text": "process interrupted sleep",
+          "parse_mode": "HTML"
+        }
+      ]
+    },
+    {
+      "trace": "process_waits_for_foreground.json",
+      "source_test": "TestHarnessScenario_ProcessCompletionWaitsForForegroundChild",
+      "calls": [
+        {
+          "method": "createForumTopic",
+          "chat_id": -100123
+        },
+        {
+          "method": "editForumTopic",
+          "chat_id": -100123,
+          "thread_id": 7001
+        },
+        {
+          "method": "sendMessage",
+          "chat_id": -100123,
+          "thread_id": 7001,
+          "text": "<b>⏳ Waiting</b>\n\n🤖 <code>fake-model</code> · iteration 1\n⌚ &lt;elapsed&gt; · 💰 $0.0 total\n🧩 Subagents · 1 foreground · 0 background\n⏳ Waiting on 1 item",
+          "parse_mode": "HTML"
+        },
+        {
+          "method": "editForumTopic",
+          "chat_id": -100123,
+          "thread_id": 7001
+        },
+        {
+          "method": "editMessageText",
+          "chat_id": -100123,
+          "text": "<b>🟢 Working</b>\n\n🤖 <code>fake-model</code> · iteration 1\n⌚ &lt;elapsed&gt; · 💰 $0.0 total",
+          "parse_mode": "HTML"
+        },
+        {
+          "method": "editForumTopic",
+          "chat_id": -100123,
+          "thread_id": 7001
+        },
+        {
+          "method": "sendMessage",
+          "chat_id": -100123,
+          "thread_id": 7001,
+          "text": "foreground result preceded process input",
           "parse_mode": "HTML"
         }
       ]
@@ -829,6 +1054,23 @@
           "chat_id": -100123,
           "thread_id": 7001,
           "text": "Resumed and done.",
+          "parse_mode": "HTML"
+        }
+      ]
+    },
+    {
+      "trace": "stopped_read_only_restart.json",
+      "source_test": "TestHarnessScenario_RestartConsumesReadOnlyInputQueuedOnStoppedRoot",
+      "calls": [
+        {
+          "method": "createForumTopic",
+          "chat_id": -100123
+        },
+        {
+          "method": "sendMessage",
+          "chat_id": -100123,
+          "thread_id": 7001,
+          "text": "<b><u>Session commands</u></b>\n<code>/status</code> — show session status\n<code>/stop</code> — stop the current run\n<code>/shieldsup</code> — raise project filesystem shields\n<code>/shieldsdown</code> — lower project filesystem shields\n<code>/clear</code> — start a fresh session\n<code>/kill</code> — close this session\n<code>/compact [focus]</code> — compact the context\n<code>/schedules</code> — list schedules\n<code>/budget &lt;request&gt;</code> — arm, replace, inspect, or clear a one-shot cost/wall-time checkpoint\n<code>/gwt &lt;name&gt;</code> — fork into a worktree (Telegram session topics only)",
           "parse_mode": "HTML"
         }
       ]

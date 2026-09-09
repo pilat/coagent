@@ -53,12 +53,6 @@ func TestInboxStore_PromoteRollsBackWhenLifecycleGuardLoses(t *testing.T) {
 			},
 		},
 		{
-			name: "stopped",
-			block: func(t *testing.T, ctx context.Context, store Store, _ *sql.DB, sessionID int64) {
-				require.NoError(t, store.UpdateSessionStatus(ctx, sessionID, SessionStatusStopped))
-			},
-		},
-		{
 			name: "terminating",
 			block: func(t *testing.T, ctx context.Context, store Store, _ *sql.DB, sessionID int64) {
 				require.NoError(t, store.UpdateSessionStatus(ctx, sessionID, SessionStatusTerminating))
@@ -116,6 +110,64 @@ func TestInboxStore_PromoteRollsBackWhenLifecycleGuardLoses(t *testing.T) {
 	}
 }
 
+func TestInboxStore_StoppedSessionPromotionRequiresExplicitInput(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		source  InputSource
+		wantErr bool
+	}{
+		{name: "user resumes", source: InputSourceUser},
+		{name: "agent resumes", source: InputSourceAgent},
+		{name: "process stays parked", source: InputSourceProcess, wantErr: true},
+		{name: "subagent stays parked", source: InputSourceSubagent, wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			ctx := context.Background()
+			store, db, projectID := newTestStore(t)
+			record, err := store.CreateSession(ctx, projectID, "model", "", nil)
+			require.NoError(t, err)
+			var input *InboxInput
+			if tt.source == InputSourceProcess || tt.source == InputSourceSubagent {
+				input, err = store.EnqueueAsyncInput(ctx, record.ID, tt.source, "durable input", nil)
+			} else {
+				input, err = store.EnqueueInput(ctx, record.ID, tt.source, "durable input")
+			}
+			require.NoError(t, err)
+			require.NoError(t, store.UpdateSessionStatus(ctx, record.ID, SessionStatusStopped))
+
+			_, err = store.PromoteInput(ctx, input.ID, "[stamp] durable input")
+			if tt.wantErr {
+				require.ErrorIs(t, err, ErrSessionNotAcceptingInput)
+			} else {
+				require.NoError(t, err)
+			}
+
+			reloaded, err := store.GetSession(ctx, record.ID)
+			require.NoError(t, err)
+			if tt.wantErr {
+				assert.Equal(t, SessionStatusStopped, reloaded.Status)
+				pending, peekErr := store.PeekPending(ctx, record.ID)
+				require.NoError(t, peekErr)
+				assert.Equal(t, input.ID, pending.ID)
+
+				var messages int
+				require.NoError(t, db.QueryRowContext(ctx,
+					`SELECT COUNT(*) FROM messages WHERE session_id = ?`, record.ID,
+				).Scan(&messages))
+				assert.Zero(t, messages)
+			} else {
+				assert.Equal(t, SessionStatusActive, reloaded.Status)
+			}
+		})
+	}
+}
+
 func TestInboxStore_ListSessionsWithRecoverableInput(t *testing.T) {
 	t.Parallel()
 
@@ -128,6 +180,76 @@ func TestInboxStore_ListSessionsWithRecoverableInput(t *testing.T) {
 	recoverable, err := store.ListSessionsWithRecoverableInput(ctx)
 	require.NoError(t, err)
 	assert.Equal(t, append(pending, accepted...), recoverable)
+}
+
+func TestInboxStore_AsyncOnlyErrorAndStoppedSessionsStayParked(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	store, _, projectID := newTestStore(t)
+	errorSession, err := store.CreateSession(ctx, projectID, "model", "", nil)
+	require.NoError(t, err)
+	_, err = store.EnqueueAsyncInput(ctx, errorSession.ID, InputSourceProcess, "process", nil)
+	require.NoError(t, err)
+	require.NoError(t, store.UpdateSessionStatus(ctx, errorSession.ID, SessionStatusError))
+
+	stopped, err := store.CreateSession(ctx, projectID, "model", "", nil)
+	require.NoError(t, err)
+	_, err = store.EnqueueAsyncInput(ctx, stopped.ID, InputSourceSubagent, "subagent", nil)
+	require.NoError(t, err)
+	require.NoError(t, store.UpdateSessionStatus(ctx, stopped.ID, SessionStatusStopped))
+
+	recoverable, err := store.ListSessionsWithRecoverableInput(ctx)
+	require.NoError(t, err)
+	assert.NotContains(t, recoverable, errorSession.ID)
+	assert.NotContains(t, recoverable, stopped.ID)
+
+	_, err = store.EnqueueInput(ctx, errorSession.ID, InputSourceUser, "retry")
+	require.NoError(t, err)
+	_, err = store.EnqueueInput(ctx, stopped.ID, InputSourceAgent, "resume")
+	require.NoError(t, err)
+	recoverable, err = store.ListSessionsWithRecoverableInput(ctx)
+	require.NoError(t, err)
+	assert.Contains(t, recoverable, errorSession.ID)
+	assert.Contains(t, recoverable, stopped.ID)
+}
+
+func TestInboxStore_ReadOnlyCommandBehindAsyncInputDoesNotResumeStoppedSession(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	store, _, projectID := newTestStore(t)
+	record, err := store.CreateSession(ctx, projectID, "model", "", nil)
+	require.NoError(t, err)
+	_, err = store.EnqueueAsyncInput(ctx, record.ID, InputSourceProcess, "process", nil)
+	require.NoError(t, err)
+	_, err = store.EnqueueInput(ctx, record.ID, InputSourceUser, "\t/help\n")
+	require.NoError(t, err)
+	require.NoError(t, store.UpdateSessionStatus(ctx, record.ID, SessionStatusStopped))
+
+	recoverable, err := store.ListSessionsWithRecoverableInput(ctx)
+
+	require.NoError(t, err)
+	assert.NotContains(t, recoverable, record.ID)
+}
+
+func TestInboxStore_ReadOnlyCommandAtFIFOHeadRunsWithoutReleasingAsyncInput(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	store, _, projectID := newTestStore(t)
+	record, err := store.CreateSession(ctx, projectID, "model", "", nil)
+	require.NoError(t, err)
+	_, err = store.EnqueueInput(ctx, record.ID, InputSourceUser, "\t/help\n")
+	require.NoError(t, err)
+	_, err = store.EnqueueAsyncInput(ctx, record.ID, InputSourceProcess, "process", nil)
+	require.NoError(t, err)
+	require.NoError(t, store.UpdateSessionStatus(ctx, record.ID, SessionStatusStopped))
+
+	recoverable, err := store.ListSessionsWithRecoverableInput(ctx)
+
+	require.NoError(t, err)
+	assert.Contains(t, recoverable, record.ID)
 }
 
 func createPendingRecoveryFixtures(ctx context.Context, t *testing.T, store Store, projectID int64) []int64 {
@@ -147,6 +269,7 @@ func createPendingRecoveryFixtures(ctx context.Context, t *testing.T, store Stor
 	_, err = store.EnqueueInput(ctx, stopped.ID, InputSourceUser, "parked pending")
 	require.NoError(t, err)
 	require.NoError(t, store.UpdateSessionStatus(ctx, stopped.ID, SessionStatusStopped))
+	ids = append(ids, stopped.ID)
 
 	killed, err := store.CreateSession(ctx, projectID, "model", "", nil)
 	require.NoError(t, err)

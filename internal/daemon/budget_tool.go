@@ -51,11 +51,13 @@ func (g *sessionBudgetGate) Admit(ctx context.Context, now time.Time) error {
 func (g *sessionBudgetGate) PersistResponse(
 	ctx context.Context,
 	message *transcript.Message,
-	directReply string,
+	outputType sessionstore.OutputType,
+	output string,
+	releasesInput bool,
 ) (int64, bool, bool, error) {
 	result, err := g.store.InsertBudgetedResponse(ctx, sessionstore.BudgetedResponse{
 		SessionID: g.sessionID, RootID: g.rootID, Message: message,
-		DirectReply: directReply, ObservedAt: time.Now().UTC(),
+		OutputType: outputType, Output: output, ReleasesInput: releasesInput, ObservedAt: time.Now().UTC(),
 	})
 	if err != nil {
 		return 0, false, false, err

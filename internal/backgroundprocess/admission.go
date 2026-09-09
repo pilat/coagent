@@ -157,19 +157,9 @@ func (s *svc) finalizeTracked(
 	processID := launched.record.ID
 	fallbackIntent := s.fallbackIntents[processID]
 
-	var finalized Process
-	var won bool
-	var err error
-
-	if fallbackIntent != IntentNone {
-		finalized, won, err = s.store.FinalizeWithIntent(
-			ctx, processID, fallbackIntent, launched.collector.Size(),
-		)
-	} else {
-		finalized, won, err = s.store.Finalize(
-			ctx, processID, natural, exitCode, launched.collector.Size(),
-		)
-	}
+	finalized, won, err := s.finalizeWithRetry(
+		ctx, processID, fallbackIntent, natural, exitCode, launched.collector.Size(),
+	)
 
 	delete(s.cancels, processID)
 	delete(s.liveRecords, processID)
@@ -184,6 +174,45 @@ func (s *svc) finalizeTracked(
 	}
 
 	return finalized, won, err
+}
+
+// finalizeWithRetry retries only an uncommitted terminalization transaction.
+// A committed transaction already owns its inbox fact and must never be replayed.
+func (s *svc) finalizeWithRetry(
+	ctx context.Context,
+	processID string,
+	fallbackIntent HostIntent,
+	natural State,
+	exitCode *int,
+	outputSize int64,
+) (Process, bool, error) {
+	var finalized Process
+	var won bool
+	var err error
+
+	for attempt := range 3 {
+		if fallbackIntent != IntentNone {
+			finalized, won, err = s.store.FinalizeWithIntent(ctx, processID, fallbackIntent, outputSize)
+		} else {
+			finalized, won, err = s.store.Finalize(ctx, processID, natural, exitCode, outputSize)
+		}
+
+		if err == nil {
+			return finalized, won, nil
+		}
+
+		if attempt == 2 {
+			break
+		}
+
+		select {
+		case <-ctx.Done():
+			return Process{}, false, fmt.Errorf("finalize process: %w", ctx.Err())
+		case <-time.After(150 * time.Millisecond):
+		}
+	}
+
+	return Process{}, false, fmt.Errorf("finalize process after retries: %w", err)
 }
 
 func (s *svc) cancelTrackedMatching(

@@ -77,7 +77,7 @@ func (f *factory) sessionConfig(workDir, model, repoRoot string) *config.Config 
 	return &cfg
 }
 
-//nolint:wsl_v5 // Session construction preserves cleanup adjacency across stack ownership transfer.
+//nolint:funlen,wsl_v5 // Session construction preserves cleanup adjacency across stack ownership transfer.
 func (f *factory) build(
 	ctx context.Context,
 	cfg *config.Config,
@@ -144,6 +144,7 @@ func (f *factory) build(
 		ContextBaseline: opts.ContextBaseline,
 
 		ActiveSubagentsProvider:  opts.ActiveSubagentsProvider,
+		HasLiveWakeSource:        opts.HasLiveWakeSource,
 		ExtraSkills:              opts.ExtraSkills,
 		StagedExternalCalls:      opts.StagedExternalCalls,
 		CompactionDeferAnnounced: opts.CompactionDeferAnnounced,

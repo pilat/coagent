@@ -383,7 +383,7 @@ func TestOutputStore_AssistantMessageAndOutputCommitTogether(t *testing.T) {
 
 	messageID, output, err := store.InsertAssistantMessageWithOutput(ctx, record.ID, &transcript.Message{
 		Role: "assistant", Content: "answer",
-	}, OutputMessagePersistent, "✅ answer")
+	}, OutputMessagePersistent, "✅ answer", true)
 	require.NoError(t, err)
 	require.NotZero(t, messageID)
 	require.NotZero(t, output.OutputID)
@@ -434,6 +434,14 @@ func TestOutputStore_MarkSessionKilledWithOutputCommitsBoth(t *testing.T) {
 	store, db, projectID := newTestStore(t)
 	record, err := store.CreateSession(ctx, projectID, "model", "", map[string]any{"manager_id": "alpha"})
 	require.NoError(t, err)
+	childID, err := store.CreateSubagentSession(
+		ctx, projectID, record.ID, record.ID, "general", "model", "",
+	)
+	require.NoError(t, err)
+	rootInput, err := store.EnqueueAsyncInput(ctx, record.ID, InputSourceProcess, "root process", nil)
+	require.NoError(t, err)
+	childInput, err := store.EnqueueAsyncInput(ctx, childID, InputSourceSubagent, "child completion", nil)
+	require.NoError(t, err)
 
 	output, err := store.MarkSessionKilledWithOutput(ctx, record.ID, 3)
 	require.NoError(t, err)
@@ -453,6 +461,8 @@ func TestOutputStore_MarkSessionKilledWithOutputCommitsBoth(t *testing.T) {
 	assert.Equal(t, string(OutputSessionClosed), outputType)
 	assert.Equal(t, "Session killed. Cancelled background processes: 3", content)
 	assert.Equal(t, 3, cancelledProcesses)
+	assertInputState(t, db, rootInput.ID, InputStateCancelled)
+	assertInputState(t, db, childInput.ID, InputStateCancelled)
 }
 
 func TestOutputStore_CreatesManagerRootWithLifecycleAndInitialInputAtomically(t *testing.T) {
@@ -645,7 +655,7 @@ func TestOutputStore_RejectsAssistantOutputAfterLifecycleFence(t *testing.T) {
 	require.NoError(t, store.UpdateSessionStatus(ctx, record.ID, SessionStatusStopping))
 	_, _, err = store.InsertAssistantMessageWithOutput(ctx, record.ID, &transcript.Message{
 		Role: "assistant", Content: "late answer",
-	}, OutputMessagePersistent, "✅ late answer")
+	}, OutputMessagePersistent, "✅ late answer", true)
 	require.ErrorContains(t, err, "cannot commit ordinary output")
 }
 

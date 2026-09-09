@@ -1,0 +1,87 @@
+{
+  "source_test": "TestHarnessScenario_ProcessCompletionInterruptsSleep",
+  "trace": [
+    {
+      "type": "session_created",
+      "name": "<name>",
+      "work_dir": "<workdir>",
+      "attributes": {
+        "manager_id": "telegram:main"
+      }
+    },
+    {
+      "type": "state_changed",
+      "status": "running"
+    },
+    {
+      "type": "waiting",
+      "message": "⏳ Sleeping until <wake>\n💬 Send a message to interrupt sleep",
+      "waiting": [
+        {
+          "kind": "sleep",
+          "wake": "<wake>"
+        }
+      ]
+    },
+    {
+      "type": "session_created",
+      "name": "<name>",
+      "work_dir": "<workdir>",
+      "attributes": {
+        "manager_id": "telegram:main"
+      }
+    },
+    {
+      "type": "state_changed",
+      "status": "running"
+    },
+    {
+      "type": "message",
+      "message": "process interrupted sleep"
+    },
+    {
+      "type": "state_changed",
+      "status": "idle"
+    }
+  ],
+  "claims": [
+    {
+      "type": "session_opened",
+      "content": "",
+      "attributes": {
+        "manager_id": "telegram:main",
+        "name": "002",
+        "work_dir": "<workdir>"
+      },
+      "source_key": "session:1:opened",
+      "releases_input": false
+    },
+    {
+      "type": "message_replaceable",
+      "content": "**⏳ Waiting**\n\n🤖 `fake-model` · iteration 1\n⌚ <elapsed> · 💰 $0.0 total\n⏳ Waiting on 1 item",
+      "attributes": {
+        "manager_id": "telegram:main",
+        "model_input_generation": 1
+      },
+      "source_key": "progress:change:waiting:43be6c0f21655309f3c7b2477923ee3b54d24031cf212696177a5e6b206f3404:g1:shields:false:i0",
+      "model_input_generation": 1,
+      "releases_input": false
+    },
+    {
+      "type": "message_replaceable",
+      "content": "process interrupted sleep",
+      "attributes": {
+        "manager_id": "telegram:main",
+        "model_input_generation": 2
+      },
+      "source_key": "message:5:progress",
+      "model_input_generation": 2,
+      "previous_message_type": "message_replaceable",
+      "previous_model_input_generation": 1,
+      "previous_message_ids": [
+        "<msg-1>"
+      ],
+      "releases_input": true
+    }
+  ]
+}

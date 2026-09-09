@@ -1,0 +1,38 @@
+{
+  "source_test": "TestHarnessScenario_RestartResumesExplicitInputQueuedOnStoppedRoot",
+  "trace": [
+    {
+      "type": "session_created",
+      "name": "<name>",
+      "work_dir": "<workdir>",
+      "attributes": {
+        "manager_id": "telegram:main"
+      }
+    },
+    {
+      "type": "state_changed",
+      "status": "running"
+    },
+    {
+      "type": "message",
+      "message": "stopped root resumed after restart"
+    },
+    {
+      "type": "state_changed",
+      "status": "idle"
+    }
+  ],
+  "claims": [
+    {
+      "type": "message_persistent",
+      "content": "stopped root resumed after restart",
+      "attributes": {
+        "manager_id": "telegram:main",
+        "model_input_generation": 2
+      },
+      "source_key": "message:3:final",
+      "model_input_generation": 2,
+      "releases_input": true
+    }
+  ]
+}

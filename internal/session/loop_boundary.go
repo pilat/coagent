@@ -117,6 +117,11 @@ func (r *loopRunner) drainBoundary(ctx context.Context) (bool, error) {
 		case commandNotRecognized:
 		}
 
+		if r.agent.preserveStopped &&
+			(input.Source == sessionstore.InputSourceProcess || input.Source == sessionstore.InputSourceSubagent) {
+			return acceptedAny, nil
+		}
+
 		prepared, err := r.agent.PrepareUserMessageDetailed(input.Content)
 		if err != nil {
 			if rejectErr := r.agent.boundary.Reject(ctx, *input, err.Error()); rejectErr != nil {
@@ -180,6 +185,8 @@ func (r *loopRunner) drainBoundary(ctx context.Context) (bool, error) {
 				continue
 			}
 
+			r.releaseStoppedPreservation(*input)
+
 			if command != "" {
 				return acceptedAny, nil
 			}
@@ -203,11 +210,17 @@ func (r *loopRunner) drainBoundary(ctx context.Context) (bool, error) {
 			continue
 		}
 
+		r.releaseStoppedPreservation(*input)
+
 		if err := r.agent.ms.reloadMessages(ctx); err != nil {
 			return acceptedAny, fmt.Errorf("reload durable input: %w", err)
 		}
 
 		acceptedAny = true
+
+		if input.ManagerOwned {
+			r.acceptedManagerInput = true
+		}
 
 		if grant != nil {
 			r.agent.currentActivation = grant
@@ -219,6 +232,12 @@ func (r *loopRunner) drainBoundary(ctx context.Context) (bool, error) {
 		}
 
 		r.agent.loopDetector.resetWindow()
+	}
+}
+
+func (r *loopRunner) releaseStoppedPreservation(input PendingInput) {
+	if input.Source == sessionstore.InputSourceUser || input.Source == sessionstore.InputSourceAgent {
+		r.agent.preserveStopped = false
 	}
 }
 
@@ -313,6 +332,10 @@ func (r *loopRunner) handleBoundaryCommand(ctx context.Context, input PendingInp
 
 		return commandConsumed, nil
 	case trimmed == "/help":
+		if r.nothingToAnswer() {
+			r.handledControl = true
+		}
+
 		output := r.agent.renderSessionHelp()
 		if err := r.handleCommandOutput(ctx, input, "help command", output); err != nil {
 			return commandNotRecognized, err

@@ -35,6 +35,8 @@ func TestSessionInboxSchema_ResolutionTruthTable(t *testing.T) {
 		wantErr   bool
 	}{
 		{name: "pending", source: "user", content: "x", state: "pending"},
+		{name: "pending process", source: "process", content: "x", state: "pending"},
+		{name: "pending subagent", source: "subagent", content: "x", state: "pending"},
 		{name: "accepted", source: "agent", content: "x", state: "accepted", resolved: now, messageID: messageID},
 		{name: "handled", source: "user", content: "/status", state: "handled", resolved: now, reason: "status"},
 		{name: "rejected", source: "user", content: "x", state: "rejected", resolved: now, reason: "bad"},

@@ -37,6 +37,7 @@ var (
 
 // Spec describes process ownership and execution limits.
 type Spec struct {
+	ProjectDir    string
 	SessionID     int64
 	RootSessionID int64
 	ToolCallID    string
@@ -69,10 +70,11 @@ type TreeFence func(ctx context.Context, rootSessionID int64) (release func(), e
 
 // Options configures process storage, delivery, and admission.
 type Options struct {
-	OutputDir    string
-	OnCompletion OnCompletion
-	TreeFence    TreeFence
-	Now          func() time.Time
+	OutputDir       string
+	OnCompletion    OnCompletion
+	TreeFence       TreeFence
+	Now             func() time.Time
+	GuardianCommand func(guardPath string, readyWriter, leaseReader *os.File) *exec.Cmd
 }
 
 // Service owns process execution and durable lifecycle transitions.
@@ -103,17 +105,24 @@ type svc struct {
 }
 
 type launchResult struct {
-	cmd        *exec.Cmd
-	collector  *collector
-	record     Process
-	quotaReady chan<- bool
-	cancel     context.CancelFunc
+	cmd          *exec.Cmd
+	guardian     *exec.Cmd
+	leaseWriter  *os.File
+	processGroup int
+	collector    *collector
+	record       Process
+	quotaReady   chan<- bool
+	cancel       context.CancelFunc
 }
 
 // NewService constructs a process lifecycle service.
 func NewService(store Store, opts Options) Service {
 	if opts.Now == nil {
 		opts.Now = time.Now
+	}
+
+	if opts.GuardianCommand == nil {
+		opts.GuardianCommand = newGuardianCommand
 	}
 
 	return &svc{
@@ -139,6 +148,10 @@ func (s *svc) RemoveOutput(ctx context.Context, processID string) error {
 
 	if err := os.Remove(record.OutputPath); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("remove candidate output file: %w", err)
+	}
+
+	if err := os.Remove(record.OutputPath + ".guard"); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("remove candidate guard file: %w", err)
 	}
 
 	return nil
@@ -210,10 +223,11 @@ func (s *svc) Advertise(ctx context.Context, processID string) (bool, error) {
 }
 
 func (s *svc) abortUnpersisted(sessionID int64, launched *launchResult, insertErr error) error {
-	_ = killGroup(launched.cmd)
+	_ = killProcessGroup(launched.processGroup)
 	launched.quotaReady <- false
 
 	_ = launched.cmd.Wait()
+	s.joinGuardian(launched)
 	_ = launched.collector.Close()
 	s.untrack(launched.record.ID)
 	launched.cancel()

@@ -282,7 +282,7 @@ func newHarnessChildModelServer(t *testing.T) (*httptest.Server, chan struct{}, 
 				<-releaseInitial
 				writeHarnessTextCompletion(t, response, "child initial answer")
 			}
-		case body.hasToolResult("subagent_event"):
+		case body.hasUser("<subagent_completion>"):
 			writeHarnessTextCompletion(t, response, "continuation delivered")
 		case body.hasUser("continue the same child"):
 			if body.hasToolResult("send_to_subagent") {

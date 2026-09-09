@@ -46,6 +46,7 @@ type bashTool struct {
 	workDir string
 	runner  bashsandbox.Runner
 	process backgroundprocess.Service
+	project string
 	session int64
 	root    int64
 }
@@ -54,12 +55,14 @@ func newBashTool(
 	workDir string,
 	runner bashsandbox.Runner,
 	process backgroundprocess.Service,
+	projectDir string,
 	sessionID, rootID int64,
 ) *bashTool {
 	return &bashTool{
 		workDir: workDir,
 		runner:  runner,
 		process: process,
+		project: projectDir,
 		session: sessionID,
 		root:    rootID,
 	}
@@ -159,6 +162,7 @@ func (t *bashTool) run(
 	// starts unadvertised so a command finishing inside the grace never
 	// appears in status/progress, and only becomes visible at the boundary.
 	spec := backgroundprocess.Spec{
+		ProjectDir:    t.project,
 		SessionID:     t.session,
 		RootSessionID: t.root,
 		ToolCallID:    tool.CallIDFromContext(ctx),

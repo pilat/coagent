@@ -18,6 +18,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/pilat/coagent/internal/coagenthome"
 	"github.com/pilat/coagent/internal/config"
 	"github.com/pilat/coagent/internal/loader"
 	"github.com/pilat/coagent/internal/todo"
@@ -328,6 +329,68 @@ func TestFilesystemTools_ShieldedStackDeniesHostReads(t *testing.T) {
 	require.Error(t, err)
 	require.ErrorContains(t, err, "Coagent shields are raised; filesystem access is confined to the project.")
 	assertTestFileContent(t, outside, "outside")
+}
+
+func TestSandboxProcessArtifactShieldBoundary(t *testing.T) {
+	if runtime.GOOS == "linux" {
+		if _, err := exec.LookPath("bwrap"); err != nil {
+			t.Skip("bwrap is not installed")
+		}
+	}
+
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	project := t.TempDir()
+	processRoot, err := coagenthome.ProcessProjectDir(7)
+	require.NoError(t, err)
+	require.NoError(t, os.MkdirAll(processRoot, 0o700))
+	artifact := filepath.Join(processRoot, "1", "artifact.output")
+	writeTestFile(t, artifact, "before\nlast line\n")
+
+	unified := &config.UnifiedConfig{}
+	unified.Sandbox.Enabled = true
+	ordinary, err := BuildStack(context.Background(), StackConfig{
+		ProjectID: 7, SessionID: 1, WorkDir: project, Unified: unified,
+		Loader: loader.New(), Todo: todo.New(),
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, ordinary.Close()) })
+
+	for _, toolID := range []string{"read", "tail"} {
+		params := any(readParams{FilePath: artifact})
+		if toolID == "tail" {
+			params = tailParams{FilePath: artifact}
+		}
+		result, executeErr := ordinary.Registry.Get(toolID).Execute(
+			context.Background(), marshalToolParams(t, params),
+		)
+		require.NoError(t, executeErr)
+		assert.Contains(t, result.Output, "last line")
+	}
+	require.NoError(t, executeToolMutation(t, ordinary.Registry.Get("write"), artifact))
+	assertTestFileContent(t, artifact, "after")
+
+	shielded, err := BuildStack(context.Background(), StackConfig{
+		ProjectID: 7, SessionID: 1, WorkDir: project, Unified: unified, ShieldsUp: true,
+		Loader: loader.New(), Todo: todo.New(),
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, shielded.Close()) })
+	for _, toolID := range []string{"read", "tail", "write"} {
+		impl := shielded.Registry.Get(toolID)
+		require.NotNil(t, impl)
+		var executeErr error
+		if toolID == "write" {
+			executeErr = executeToolMutation(t, impl, artifact)
+		} else {
+			params := any(readParams{FilePath: artifact})
+			if toolID == "tail" {
+				params = tailParams{FilePath: artifact}
+			}
+			_, executeErr = impl.Execute(context.Background(), marshalToolParams(t, params))
+		}
+		require.Error(t, executeErr, "%s must reject an external process artifact under shields", toolID)
+	}
 }
 
 func TestFilesystemTools_NativeSandboxBatchCannotBypassWritePolicy(t *testing.T) {

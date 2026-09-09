@@ -46,7 +46,7 @@ func TestHarnessScenario_BatchCannotEscapeSubagentAllowlist(t *testing.T) {
 			}}}
 		}
 
-		if hasToolResultFor(msgs, tool.IDTask) || hasToolResultFor(msgs, "subagent_event") {
+		if hasToolResultFor(msgs, tool.IDTask) || hasUserContaining(msgs, "<subagent_completion>") {
 			return &llmwire.Response{Text: "parent done"}
 		}
 

@@ -42,29 +42,7 @@ func NewSkillTool(ldr loader.Registry) tool.Tool {
 
 // RenderSkill renders the canonical conversation envelope for a skill invocation.
 func RenderSkill(sk *loader.Skill, args string) string {
-	body := strings.ReplaceAll(sk.Content, "$ARGUMENTS", args)
-	if args != "" && !strings.Contains(sk.Content, "$ARGUMENTS") {
-		body += "\n\nARGUMENTS: " + args
-	}
-
-	var output strings.Builder
-	output.WriteString("<skill>\n")
-	fmt.Fprintf(&output, "<name>%s</name>\n", html.EscapeString(sk.Name))
-
-	if sk.Description != "" {
-		fmt.Fprintf(&output, "<description>%s</description>\n", html.EscapeString(sk.Description))
-	}
-
-	output.WriteString("---\n")
-	output.WriteString(body)
-
-	if !strings.HasSuffix(body, "\n") {
-		output.WriteString("\n")
-	}
-
-	output.WriteString("</skill>")
-
-	return output.String()
+	return loader.RenderSkillInvocation(sk, args)
 }
 
 // ExtractRenderedSkill extracts a canonical skill envelope from transport-prefixed content.
@@ -149,16 +127,9 @@ func (t *skillTool) Execute(ctx context.Context, params json.RawMessage) (*tool.
 		return nil, errors.New("skill name is required")
 	}
 
-	sk := t.loader.GetSkill(p.Name)
-	if sk == nil || !sk.IsModelInvocable() {
-		skills := t.loader.ListModelInvocableSkills()
-		names := make([]string, len(skills))
-
-		for i, s := range skills {
-			names[i] = s.Name
-		}
-
-		return nil, fmt.Errorf("skill unavailable: %s\nAvailable skills: %v", p.Name, names)
+	sk, err := loader.ResolveModelInvocableSkill(t.loader, p.Name)
+	if err != nil {
+		return nil, fmt.Errorf("resolve skill: %w", err)
 	}
 
 	return &tool.Result{

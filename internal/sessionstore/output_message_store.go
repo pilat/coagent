@@ -19,9 +19,14 @@ func (s *store) InsertAssistantMessageWithOutput(
 	message *transcript.Message,
 	outputType OutputType,
 	content string,
+	releasesInput bool,
 ) (messageID int64, output *OutputCommit, err error) {
 	if message == nil || message.Role != "assistant" || !isMessageOutput(outputType) || content == "" {
 		return 0, nil, errors.New("invalid assistant output")
+	}
+
+	if releasesInput && storedMessageHasToolCalls(message) {
+		return 0, nil, errors.New("assistant progress with tools cannot release input")
 	}
 
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -44,17 +49,14 @@ func (s *store) InsertAssistantMessageWithOutput(
 		return 0, nil, err
 	}
 
-	terminal := outputType == OutputMessagePersistent && !storedMessageHasToolCalls(message)
-
 	phase := "progress"
-	if terminal {
+	if releasesInput {
 		phase = "final"
 	} else if outputType == OutputMessagePersistent {
 		phase = "reply"
 	}
 
 	key := fmt.Sprintf("message:%d:%s", messageID, phase)
-	releasesInput := terminal
 	fingerprint := outputFingerprintWithRelease(outputType, content, sessionID, nil, releasesInput)
 
 	attributes, err := stampMessageOutputAttributes(ctx, tx, sessionID, owner, nil)

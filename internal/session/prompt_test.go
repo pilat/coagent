@@ -127,7 +127,7 @@ func TestBuildActiveSubagentsSection_TeachesAutomaticWakeNotPolling(t *testing.T
 		State:    "running",
 	}})
 
-	assert.Contains(t, result, "Each completion is delivered automatically as a subagent_event and wakes this session")
+	assert.Contains(t, result, "Each completion is delivered automatically as a user turn and wakes this session")
 	assert.Contains(t, result, "Do not wait with sleep or poll get_subagent_result")
 	assert.Contains(t, result, "only a diagnostic snapshot")
 	assert.NotContains(t, result, "poll status with")

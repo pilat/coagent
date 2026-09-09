@@ -57,6 +57,9 @@ Background Execution:
 - Long-running commands (builds, test suites, servers under 30 minutes) run automatically in the background after 10 seconds
 - Set "background": true to background immediately without the 10-second wait
 - A backgrounded command returns a process ID and an absolute output path; completion is delivered to you automatically and wakes this session - do NOT poll
+- Do NOT poll background processes with Bash, ps, sleep, schedule, Read, or Tail; keep working on independent tasks instead
+- Do NOT poll background processes: their completion arrives as a user turn automatically
+- When background work is your only remaining action, reply with a standalone <WAITING/> line and no tool calls
 - If you need current output while working independently, read a small suffix of the output file with the tail tool
 - "timeout" is the absolute process deadline in milliseconds (default 600000, max 1800000); a deadline below 10000 expires in the foreground
 - Only finite commands are supported; a command reaching its deadline is killed as a complete process group`

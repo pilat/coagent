@@ -249,9 +249,10 @@ constructs the permitted tool stack, then hands control to the session loop.
 at that boundary. It does not append a user message while the session has
 unresolved external work. Completion, scheduling and user input use durable
 paths before a runner observes them. `/status` is the read-only exception to
-runner timing: the daemon resolves its durable inbox row and persistent
-full-progress output at admission, so an active model or tool call cannot delay
-the answer.
+model invocation: the loop resolves its durable inbox row and persistent
+full-progress output at a safe input boundary without sending it to the model.
+A stopped root may consume a read-only command at the FIFO head without
+reactivating; asynchronous rows ahead of that command remain parked.
 Manager-owned `/shieldsup` and `/shieldsdown` inputs use the same durable inbox
 but remain host-handled control commands. A live loop reserves those rows for
 the daemon, while agent-originated identical text remains ordinary input.
@@ -269,6 +270,14 @@ only retained bounds. Retried
 provider requests are local to the client; durable operations must be idempotent
 across a process or producer retry. Loop detection terminates repetitive tool
 patterns rather than treating repeated calls as progress.
+
+When the exact session has a live background process or undelivered background
+subagent round, a standalone `<WAITING/>` line cooperatively suspends the loop.
+The complete assistant text remains in model history, returned tool calls are
+not executed, and only the marker is removed from root manager presentation.
+The projection is fail-open: without an authoritative live wake source the
+marker is ordinary text, and a ready inbox row is consumed rather than treated
+as something still pending.
 
 ### Shutdown and restart
 
@@ -351,27 +360,27 @@ root or subagent session owns four independent live slots. Output is one combine
 file capped per process; deadlines, overflow and descriptor-drain failure kill
 the process group and become typed terminal outcomes. A command remains an
 unadvertised foreground candidate for ten seconds, then promotion is a durable
-compare-and-swap; only advertised processes appear in progress or emit events.
+compare-and-swap; only advertised processes appear in progress or produce completion input.
 
 Process admission and root-tree stop share the daemon tree fence. Natural
 session completion leaves processes running, while explicit stop or kill records
 the first host intent, cancels and joins the complete matching process set, and
-suppresses individual wake events. Controlled daemon shutdown closes admission,
-cancels and joins live groups, and leaves advertised work durably interrupted
-and owed for startup recovery. In-memory handles and retry workers are
-daemon-lifetime resources and are cancelled and joined before shutdown returns.
+suppresses cancellation input. Each launch first arms a same-binary guardian
+that holds an output-path guard lock and a daemon lease; lease loss kills the
+tracked process group. Startup waits for that lock before atomically changing a
+leftover advertised process to `interrupted` with its completion input.
 
-A terminal advertised row atomically claims its delivery target from current
-session state: an active or suspended owning subagent remains the target;
-otherwise delivery falls back to the root. The daemon serializes that claim with
-child terminalization, injects one bounded `process_event` pair through the
-session delivery identity, and acknowledges the process ledger only after the
-transcript commit. The pair remains internal model input: it neither advances
-the model-input generation nor enters manager output; only the session's
-subsequent ordinary output is published. A capped-backoff watchdog retains the
-producer obligation across claim, enqueue, runner, injection and acknowledgement
-failures until the row is delivered, suppressed or shutdown transfers recovery
-to the next boot.
+The winning running-to-terminal transaction inserts one bounded
+`source=process` row into the exact owning session's `session_inbox`. That insert
+is the producer acknowledgement; process rows have no delivery state or target,
+and there is no delivery retry worker. The shared loop promotes process and
+background-subagent rows as tagged user-role input after the preceding complete
+assistant/tool-result batch and before the next model request. Stopped and
+errored sessions retain these facts without waking. A root kill commits pending
+inbox cancellation for the complete session tree with its terminal state;
+completion committed later observes the killed root and suppresses its handoff.
+Clear uses the same killed-tree boundary.
+Only a manager-owned user row creates a direct-reply obligation.
 Status and events expose stable IDs, state, timing, size, path and bounded text
 previews, never raw command text or complete output.
 
@@ -462,14 +471,15 @@ registry, but the parent session remains the gating authority.
 Foreground work suspends the parent and owes one result to the parent call.
 Background work reports independently without blocking the parent. A child can
 have serialized rounds: an activation sequence rejects delayed completions from
-an earlier round. Completion delivery uses a transactional compare-and-swap with
-the link state, so producer retries are at-least-once but parent transcript
-delivery is at-most-once. A winning commit refreshes the live transcript by
-reloading the authoritative active-message projection from SQLite — rows
-committed outside a concurrent compaction snapshot load after the positioned
-tail, so either reload order yields one copy of each row. Cascade stop, failed
-delivery and restart recovery preserve the link's obligation until it is
-resolved or explicitly stopped.
+an earlier round. Foreground completion uses a transactional link compare-and-swap
+with exact parent transcript insertion. Background completion instead commits its
+delivery acknowledgement with one `source=subagent` parent inbox row; the shared
+loop later promotes that bounded envelope. If the parent or its root was killed,
+the same transaction closes the link obligation without creating inbox input;
+startup recovery retains that suppression path across a crash window. A winning foreground commit refreshes
+the live transcript from SQLite so rows committed across compaction retain their
+position. Cascade stop, failed delivery and restart recovery preserve the link's
+obligation until it is resolved or explicitly stopped.
 
 ### Schedule delivery identity
 
@@ -557,6 +567,13 @@ read files it can ordinarily read. Marketplace Git uses a separate runner
 whose only writable root is the marketplace cache; it does not inherit a
 session project or configured writable paths.
 
+With shields down, the built-in writable roots include the session worktree,
+host temporary storage, the user cache and only the current project's
+`~/.coagent/processes/project-<project-id>/` subtree, so ordinary Bash and
+mutation tools can inspect that project's process artifacts without gaining
+write access to another project's files. This root is not a configurable
+exception and is removed with the other host roots when shields are raised.
+
 Session shields add a durable project-confined read variant without removing
 built-in tool classes. MCP tools may be absent when raised-policy discovery
 cannot start their server. Built-in file tools use one rooted project handle, and
@@ -624,7 +641,10 @@ default instead of making every spawn fail. Skill model visibility and direct
 user invocation are independent controls; a leading `/skill` command is
 expanded before model invocation. Daemon-selected system skills can instead be
 activated directly in the static prompt without being offered to the model for
-invocation.
+invocation. The `task` tool accepts either a free-form prompt or one
+model-invocable skill plus arguments. The parent resolves and renders that skill
+before creating the subagent, then sends the canonical envelope through the
+child's ordinary initial-input path; the child does not rediscover it by name.
 
 Bare invocation performs deterministic bootstrap, including the initial provider
 credential collection over the control socket, and then hands further setup to

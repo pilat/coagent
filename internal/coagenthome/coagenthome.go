@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 )
@@ -89,6 +90,25 @@ func Join(elem ...string) (string, error) {
 	}
 
 	return filepath.Join(append([]string{dir}, elem...)...), nil
+}
+
+// ProcessProjectDir returns the process-artifact directory owned by one project.
+func ProcessProjectDir(projectID int64) (string, error) {
+	name, err := ProcessProjectDirName(projectID)
+	if err != nil {
+		return "", err
+	}
+
+	return Join(ProcessesDirName, name)
+}
+
+// ProcessProjectDirName returns the stable directory name beneath processes.
+func ProcessProjectDirName(projectID int64) (string, error) {
+	if projectID <= 0 {
+		return "", fmt.Errorf("invalid process project id %d", projectID)
+	}
+
+	return "project-" + strconv.FormatInt(projectID, 10), nil
 }
 
 // Override forces UserHome to return dir — or to fail when dir is empty —

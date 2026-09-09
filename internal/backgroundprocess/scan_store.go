@@ -2,7 +2,6 @@ package backgroundprocess
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 )
 
@@ -39,8 +38,6 @@ func scanProcess(row rowScanner) (Process, error) {
 	var process Process
 	var hostIntent string
 	var state string
-	var deliveryState string
-	var targetSessionID sql.NullInt64
 
 	err := row.Scan(
 		&process.ID,
@@ -56,21 +53,13 @@ func scanProcess(row rowScanner) (Process, error) {
 		&hostIntent,
 		&state,
 		&process.FinishedAt,
-		&deliveryState,
-		&targetSessionID,
-		&process.DeliveredAt,
 	)
 	if err != nil {
 		return Process{}, fmt.Errorf("scan background process row: %w", err)
 	}
 
-	if targetSessionID.Valid {
-		process.DeliveryTargetSessionID = targetSessionID.Int64
-	}
-
 	process.HostIntent = HostIntent(hostIntent)
 	process.State = State(state)
-	process.DeliveryState = deliveryState
 
 	return process, nil
 }

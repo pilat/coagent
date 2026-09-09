@@ -62,6 +62,7 @@ type CreateOptions struct {
 	// ActiveSubagentsProvider reads the same ledger live, for the section a
 	// compaction summary carries. Nil outside a daemon.
 	ActiveSubagentsProvider func(context.Context) []ActiveSubagentInfo
+	HasLiveWakeSource       func(context.Context) bool
 
 	// ExtraSkills are session-scoped instructions the daemon registers and
 	// activates in the system prompt without waiting for a model tool call.
@@ -192,6 +193,7 @@ func (f *factory) buildRegistry(
 	shieldsUp bool,
 ) (tool.Registry, *builtin.Stack, error) {
 	stack, err := builtin.BuildStack(ctx, builtin.StackConfig{
+		ProjectID:       projectID,
 		SessionID:       sessionID,
 		RootSessionID:   rootID,
 		WorkDir:         cfg.WorkDir,

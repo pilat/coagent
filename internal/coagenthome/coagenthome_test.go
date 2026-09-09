@@ -32,6 +32,18 @@ func TestJoin(t *testing.T) {
 	assert.Equal(t, filepath.Join("/fake/home", DirName), got)
 }
 
+func TestProcessProjectDir(t *testing.T) {
+	restore := Override("/fake/home")
+	defer restore()
+
+	dir, err := ProcessProjectDir(42)
+	require.NoError(t, err)
+	assert.Equal(t, filepath.Join("/fake/home", DirName, ProcessesDirName, "project-42"), dir)
+
+	_, err = ProcessProjectDir(0)
+	require.Error(t, err)
+}
+
 func TestUserHomeConcurrentWithOverride(t *testing.T) {
 	var wg sync.WaitGroup
 

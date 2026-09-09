@@ -6,6 +6,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"html"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/pilat/coagent/internal/transcript"
@@ -139,10 +142,13 @@ func (s *transactions) TryFinalizeActivation(
 func (s *transactions) RearmDeliveredWithPendingInput(ctx context.Context, childID int64) (bool, error) {
 	execResult, err := s.db.ExecContext(ctx, `UPDATE subagent_links
 		SET state = 'running', blocking = 0, activation_seq = activation_seq + 1,
-			delivered_at = NULL, delivered_msg_id = NULL
-		WHERE child_id = ? AND state IN ('completed', 'error') AND delivered_at IS NOT NULL
-			AND EXISTS (SELECT 1 FROM session_inbox input
-				WHERE input.session_id = subagent_links.child_id AND input.state = 'pending')`, childID)
+			delivered_at = NULL, delivered_msg_id = NULL, delivered_input_id = NULL
+		WHERE child_id = ? AND delivered_at IS NOT NULL
+			AND ((state = 'completed' AND EXISTS (SELECT 1 FROM session_inbox input
+				WHERE input.session_id = subagent_links.child_id AND input.state = 'pending'))
+			OR (state = 'error' AND EXISTS (SELECT 1 FROM session_inbox input
+				WHERE input.session_id = subagent_links.child_id AND input.state = 'pending'
+					AND input.source IN ('user', 'agent'))))`, childID)
 	if err != nil {
 		return false, fmt.Errorf("rearm delivered subagent activation: %w", err)
 	}
@@ -153,6 +159,156 @@ func (s *transactions) RearmDeliveredWithPendingInput(ctx context.Context, child
 	}
 
 	return rows == 1, nil
+}
+
+// DeliverBackgroundCompletion atomically transfers a terminal child outcome
+// into its parent's FIFO inbox. The inbox row is the durable delivery ACK.
+//
+//nolint:funlen,gocyclo // Validation, suppression, insert, and ACK are one SQLite transaction.
+func (s *transactions) DeliverBackgroundCompletion(ctx context.Context, link Link, iterations int) (bool, error) {
+	if link.Blocking {
+		return false, fmt.Errorf("background delivery for blocking child %d", link.ChildID)
+	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return false, fmt.Errorf("begin background completion tx: %w", err)
+	}
+
+	defer func() { _ = tx.Rollback() }()
+
+	var deliveredAt sql.NullInt64
+	var blocking bool
+	var state string
+	var activationSeq int64
+
+	err = tx.QueryRowContext(ctx, `SELECT delivered_at, blocking, state, activation_seq
+		FROM subagent_links WHERE child_id = ? AND parent_id = ?`, link.ChildID, link.ParentID).
+		Scan(&deliveredAt, &blocking, &state, &activationSeq)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, fmt.Errorf("background completion link %d not found for parent %d", link.ChildID, link.ParentID)
+	}
+
+	if err != nil {
+		return false, fmt.Errorf("load background completion link: %w", err)
+	}
+
+	if deliveredAt.Valid {
+		return false, nil
+	}
+
+	if blocking || activationSeq != link.ActivationSeq ||
+		(State(state) != StateCompleted && State(state) != StateError) {
+		return false, fmt.Errorf("background completion link %d changed before delivery", link.ChildID)
+	}
+
+	var parentKilled bool
+
+	err = tx.QueryRowContext(ctx, `SELECT
+			parent.killed_at IS NOT NULL OR parent.status IN ('terminating', 'killed')
+			OR root.killed_at IS NOT NULL OR root.status IN ('terminating', 'killed')
+		FROM sessions parent
+		JOIN sessions root ON root.id = CASE
+			WHEN parent.parent_id = 0 THEN parent.id ELSE parent.root_id
+		END
+		WHERE parent.id = ?`, link.ParentID).
+		Scan(&parentKilled)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, fmt.Errorf("background completion parent %d not found", link.ParentID)
+	}
+
+	if err != nil {
+		return false, fmt.Errorf("load background completion parent: %w", err)
+	}
+
+	now := time.Now().UTC()
+	if parentKilled {
+		res, err := tx.ExecContext(ctx, `UPDATE subagent_links SET delivered_at = ?
+			WHERE child_id = ? AND parent_id = ? AND activation_seq = ? AND delivered_at IS NULL`,
+			now.Unix(), link.ChildID, link.ParentID, link.ActivationSeq)
+		if err != nil {
+			return false, fmt.Errorf("suppress killed-parent completion: %w", err)
+		}
+
+		rows, err := res.RowsAffected()
+		if err != nil {
+			return false, fmt.Errorf("suppressed completion rows affected: %w", err)
+		}
+
+		if err := tx.Commit(); err != nil {
+			return false, fmt.Errorf("commit suppressed completion: %w", err)
+		}
+
+		return rows == 1, nil
+	}
+
+	attrs, err := json.Marshal(map[string]any{"child_id": link.ChildID, "activation_seq": link.ActivationSeq})
+	if err != nil {
+		return false, fmt.Errorf("encode subagent completion attributes: %w", err)
+	}
+
+	result := link.Result
+	if result == "" {
+		result = "(no output)"
+	}
+
+	content := strings.Join([]string{
+		"<subagent_completion>",
+		"child_id: " + strconv.FormatInt(link.ChildID, 10),
+		"activation_seq: " + strconv.FormatInt(
+			link.ActivationSeq,
+			10,
+		),
+		"outcome: " + html.EscapeString(string(link.Outcome)),
+		"iterations: " + strconv.Itoa(iterations),
+		"result:",
+		html.EscapeString(result),
+		"</subagent_completion>",
+	}, "\n")
+
+	insert, err := tx.ExecContext(
+		ctx,
+		`INSERT INTO session_inbox (session_id, source, raw_content, attributes, received_at)
+		VALUES (?, 'subagent', ?, ?, ?)`,
+		link.ParentID,
+		content,
+		string(attrs),
+		now,
+	)
+	if err != nil {
+		return false, fmt.Errorf("insert background completion input: %w", err)
+	}
+
+	inputID, err := insert.LastInsertId()
+	if err != nil {
+		return false, fmt.Errorf("background completion input id: %w", err)
+	}
+
+	res, err := tx.ExecContext(ctx, `UPDATE subagent_links
+		SET delivered_at = ?, delivered_input_id = ?
+		WHERE child_id = ? AND parent_id = ? AND activation_seq = ? AND delivered_at IS NULL
+			AND EXISTS (SELECT 1 FROM session_inbox WHERE id = ? AND session_id = ? AND source = 'subagent'
+				AND json_extract(attributes, '$.child_id') = ? AND json_extract(attributes, '$.activation_seq') = ?)`,
+		now.Unix(), inputID, link.ChildID, link.ParentID, link.ActivationSeq,
+		inputID, link.ParentID, link.ChildID, link.ActivationSeq)
+	if err != nil {
+		return false, fmt.Errorf("ack background completion input: %w", err)
+	}
+
+	rows, err := res.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("background completion rows affected: %w", err)
+	}
+
+	if rows != 1 {
+		return false, fmt.Errorf("background completion link %d changed during delivery", link.ChildID)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return false, fmt.Errorf("commit background completion: %w", err)
+	}
+
+	return true, nil
 }
 
 // DeliverCompletion commits the exact activation CAS and parent messages together.

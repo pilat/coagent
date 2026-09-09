@@ -88,8 +88,8 @@ func TestTerminalChildDeliversPreviousOutcomeBeforeRearm(t *testing.T) {
 			return false
 		}
 		for _, message := range messages {
-			if message.Role == "tool" && message.ToolName == "subagent_event" &&
-				containsAll(message.Content, "first outcome", "completed") {
+			if message.Role == "user" &&
+				containsAll(message.Content, "<subagent_completion>", "first outcome", "outcome: completed") {
 				return true
 			}
 		}
@@ -97,6 +97,123 @@ func TestTerminalChildDeliversPreviousOutcomeBeforeRearm(t *testing.T) {
 	}, 5*time.Second, 10*time.Millisecond)
 
 	mgr.Shutdown(3 * time.Second)
+}
+
+func TestProcessInputRearmsCompletedChildAfterPriorOutcomeHandoff(t *testing.T) {
+	ctx := context.Background()
+	mgr, _, projects := newTestManager(t)
+	projectID := testProject(t, projects, "/tmp/process-rearm")
+	parent, err := mgr.sessionStore.CreateSession(ctx, projectID, "fake-model", "", nil)
+	require.NoError(t, err)
+	childID := createBackgroundChild(t, mgr, projectID, parent.ID)
+
+	for i := range admission.MaxChildren {
+		require.True(t, mgr.admit.TryAdmit(admission.Child, int64(20_000+i)))
+		defer mgr.admit.Release(admission.Child, int64(20_000+i))
+	}
+
+	require.NoError(t, mgr.links.MarkLinkTerminal(
+		ctx, childID, subagent.StateCompleted, "first outcome", subagent.OutcomeCompleted,
+	))
+	require.NoError(t, mgr.sessionStore.UpdateSessionStatus(ctx, childID, sessionstore.SessionStatusCompleted))
+	processInput, err := mgr.inboxStore.EnqueueAsyncInput(
+		ctx,
+		childID,
+		sessionstore.InputSourceProcess,
+		"<process_completion>late process</process_completion>",
+		map[string]any{"process_id": "late-process"},
+	)
+	require.NoError(t, err)
+
+	require.NoError(t, mgr.inputReady(ctx, childID))
+
+	link, err := mgr.links.GetLink(ctx, childID)
+	require.NoError(t, err)
+	require.NotNil(t, link)
+	assert.Equal(t, subagent.StateRunning, link.State)
+	assert.Equal(t, int64(2), link.ActivationSeq)
+	assert.False(t, link.Blocking)
+	assert.Zero(t, link.DeliveredAt)
+
+	pending, err := mgr.inboxStore.PeekPending(ctx, childID)
+	require.NoError(t, err)
+	assert.Equal(t, processInput.ID, pending.ID)
+	assert.Equal(t, sessionstore.InputSourceProcess, pending.Source)
+
+	require.Eventually(t, func() bool {
+		messages, msgErr := mgr.sessionStore.LoadActiveMessages(ctx, parent.ID)
+		if msgErr != nil {
+			return false
+		}
+
+		for _, message := range messages {
+			if message.Role == "user" &&
+				containsAll(message.Content, "<subagent_completion>", "first outcome", "outcome: completed") {
+				return true
+			}
+		}
+
+		return false
+	}, 5*time.Second, 10*time.Millisecond)
+
+	mgr.Shutdown(3 * time.Second)
+}
+
+func TestProcessInputDoesNotRearmCompletedChildAfterRootStops(t *testing.T) {
+	assertProcessInputDoesNotRearmAfterStop(t, false)
+}
+
+func TestProcessInputDoesNotRearmCompletedChildAfterDirectStop(t *testing.T) {
+	assertProcessInputDoesNotRearmAfterStop(t, true)
+}
+
+func assertProcessInputDoesNotRearmAfterStop(t *testing.T, stopChild bool) {
+	t.Helper()
+
+	ctx := context.Background()
+	mgr, _, projects := newTestManager(t)
+	projectID := testProject(t, projects, "/tmp/process-stop-rearm")
+	root, err := mgr.sessionStore.CreateSession(ctx, projectID, "fake-model", "", nil)
+	require.NoError(t, err)
+	childID := createBackgroundChild(t, mgr, projectID, root.ID)
+
+	require.NoError(t, mgr.links.MarkLinkTerminal(
+		ctx, childID, subagent.StateCompleted, "first outcome", subagent.OutcomeCompleted,
+	))
+	require.NoError(t, mgr.sessionStore.UpdateSessionStatus(ctx, childID, sessionstore.SessionStatusCompleted))
+	link, err := mgr.links.GetLink(ctx, childID)
+	require.NoError(t, err)
+	require.NotNil(t, link)
+	won, err := mgr.subagents.DeliverBackgroundCompletion(ctx, *link, 1)
+	require.NoError(t, err)
+	require.True(t, won)
+	_, err = mgr.inboxStore.EnqueueAsyncInput(
+		ctx, childID, sessionstore.InputSourceProcess,
+		"<process_completion>late process</process_completion>",
+		map[string]any{"process_id": "late-process"},
+	)
+	require.NoError(t, err)
+
+	unlock, err := mgr.lockSessionTree(ctx, root.ID)
+	require.NoError(t, err)
+	ready := make(chan error, 1)
+	go func() { ready <- mgr.inputReady(ctx, childID) }()
+	stopID := root.ID
+	if stopChild {
+		stopID = childID
+	}
+	require.NoError(t, mgr.sessionStore.UpdateSessionStatus(ctx, stopID, sessionstore.SessionStatusStopped))
+	unlock()
+	require.NoError(t, <-ready)
+
+	link, err = mgr.links.GetLink(ctx, childID)
+	require.NoError(t, err)
+	require.NotNil(t, link)
+	assert.Equal(t, subagent.StateCompleted, link.State)
+	assert.Equal(t, int64(1), link.ActivationSeq)
+	pending, err := mgr.inboxStore.PeekPending(ctx, childID)
+	require.NoError(t, err)
+	assert.Equal(t, sessionstore.InputSourceProcess, pending.Source)
 }
 
 func TestStopParksWholeTreeAndExplicitFollowUpResumesOnlyChild(t *testing.T) {
@@ -236,7 +353,6 @@ func TestStartFinishesInterruptedStopBeforeRecoverySweep(t *testing.T) {
 	process, err := mgr.processStore.GetProcess(ctx, "stopping-process")
 	require.NoError(t, err)
 	assert.Equal(t, backgroundprocess.StateCancelled, process.State)
-	assert.Equal(t, "suppressed", process.DeliveryState)
 	messages, err := mgr.sessionStore.LoadActiveMessages(ctx, parent.ID)
 	require.NoError(t, err)
 	assert.Equal(t, 0, countToolResultsFor(toDTO(messages), "process_event"))
@@ -254,7 +370,7 @@ func TestStopTreeCleanupPreservesBackgroundProcessesForBudgetPark(t *testing.T) 
 	service := backgroundprocess.NewService(mgr.processStore, backgroundprocess.Options{OutputDir: t.TempDir()})
 	mgr.processSvc = service
 	process, err := service.Start(ctx, backgroundprocess.Spec{
-		SessionID: root.ID, RootSessionID: root.ID, ToolCallID: "budget-process",
+		ProjectDir: "project-test", SessionID: root.ID, RootSessionID: root.ID, ToolCallID: "budget-process",
 		Deadline: time.Minute, Advertise: true,
 	}, func(ctx context.Context) (*exec.Cmd, error) {
 		return exec.CommandContext(ctx, "sleep", "30"), nil

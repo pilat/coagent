@@ -57,21 +57,6 @@ func (i blockingSubagentCompletionInput) validate() error {
 	return nil
 }
 
-type backgroundSubagentCompletionInput struct {
-	ChildID       int64
-	ActivationSeq int64
-}
-
-func (backgroundSubagentCompletionInput) isSessionInput() {}
-
-func (i backgroundSubagentCompletionInput) validate() error {
-	if i.ChildID <= 0 || i.ActivationSeq <= 0 {
-		return errors.New("background subagent completion requires a positive child id and activation sequence")
-	}
-
-	return nil
-}
-
 type scheduleTickInput struct {
 	DeliveryID string
 	Content    string
@@ -92,6 +77,13 @@ type freshScheduleInput struct {
 	Prompt     string
 }
 
+// inboxReadyInput wakes a runner after a producer committed a durable inbox row.
+// The loop, rather than this hint, owns transcript promotion.
+type inboxReadyInput struct{}
+
+func (inboxReadyInput) isSessionInput() {}
+func (inboxReadyInput) validate() error { return nil }
+
 func (freshScheduleInput) isSessionInput() {}
 
 func (i freshScheduleInput) validate() error {
@@ -106,7 +98,7 @@ func inputResolvesExistingCall(input sessionInput) bool {
 	switch input.(type) {
 	case pendingCallResultInput, blockingSubagentCompletionInput:
 		return true
-	case backgroundSubagentCompletionInput, scheduleTickInput, freshScheduleInput, processCompletionInput:
+	case scheduleTickInput, freshScheduleInput, inboxReadyInput:
 		return false
 	default:
 		return false
@@ -119,8 +111,7 @@ func inputIsScheduledTurn(input sessionInput) bool {
 		return true
 	case pendingCallResultInput,
 		blockingSubagentCompletionInput,
-		backgroundSubagentCompletionInput,
-		processCompletionInput:
+		inboxReadyInput:
 		return false
 	default:
 		return false
@@ -129,23 +120,13 @@ func inputIsScheduledTurn(input sessionInput) bool {
 
 func inputSleepInterruption(input sessionInput) string {
 	switch input.(type) {
-	case backgroundSubagentCompletionInput:
-		return "Sleep interrupted — a subagent completed."
-	case processCompletionInput:
-		return "Sleep interrupted — a background process completed."
 	case scheduleTickInput, freshScheduleInput:
 		return "Sleep interrupted — a scheduled task became due."
-	case pendingCallResultInput, blockingSubagentCompletionInput:
+	case pendingCallResultInput, blockingSubagentCompletionInput, inboxReadyInput:
 		return ""
 	default:
 		return ""
 	}
-}
-
-func isProcessCompletionInput(input sessionInput) bool {
-	_, ok := input.(processCompletionInput)
-
-	return ok
 }
 
 // queuedSessionInput separates delivery mechanics from the payload protocol.
