@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-const todoHint = "ℹ️ `/status` shows the full TODO list"
+const todoHint = "ℹ️ /status shows the full TODO list"
 
 func RenderCompact(snapshot Snapshot, redact func(string) string) string {
 	if redact == nil {
@@ -25,7 +25,8 @@ func RenderCompact(snapshot Snapshot, redact func(string) string) string {
 	}
 
 	if snapshot.Model != "" {
-		lines = append(lines, "", fmt.Sprintf("🤖 `%s` · iteration %d", snapshot.Model, snapshot.RootIteration))
+		iteration := snapshot.RootIteration + snapshot.ChildIterations
+		lines = append(lines, "", fmt.Sprintf("🤖 `%s` · iteration %d", snapshot.Model, iteration))
 	}
 
 	if metrics := renderCardMetrics(snapshot); metrics != "" {

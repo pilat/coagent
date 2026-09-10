@@ -139,3 +139,10 @@ func TestDisableLinkPreviewRespectsCaller(t *testing.T) {
 
 	assert.Equal(t, preset, params[tgKeyLinkPreview])
 }
+
+func TestTextToTelegramHTMLCommandHintStaysPlain(t *testing.T) {
+	const hint = "ℹ️ /status shows the full TODO list"
+
+	assert.Equal(t, hint, textToTelegramHTML(hint))
+	assert.NotContains(t, textToTelegramHTML(hint), "<code>")
+}

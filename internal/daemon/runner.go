@@ -1137,6 +1137,12 @@ func (s *svc) openSession(
 		SettlementOpen:           settlement,
 		PreserveStoppedStatus:    preserveStopped,
 	}
+	if rec.ParentID != 0 {
+		opts.OnIterationPersisted = func(ctx context.Context, iteration int) {
+			s.publishSubagentIterationProgress(ctx, sessionID, int64(iteration))
+		}
+	}
+
 	owner, _ := rec.Attributes[controllerapi.SessionAttributeManagerID].(string)
 
 	opts.OutputEnabled = rec.ParentID == 0 && owner != ""

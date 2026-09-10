@@ -139,6 +139,10 @@ func (s *svc) run(ctx context.Context, prompt string) (*loopResult, error) {
 				return fmt.Errorf("persist checkpoint (iteration %d): %w", totalIteration, saveErr)
 			}
 
+			if s.onIterationPersisted != nil {
+				s.onIterationPersisted(ctx, totalIteration)
+			}
+
 			return nil
 		},
 	)

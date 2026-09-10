@@ -19,6 +19,7 @@ const (
 	maxTopicNameRunes    = 128 // Telegram forum-topic name limit
 	reconnectBackoffBase = 3 * time.Second
 	reconnectBackoffMax  = 60 * time.Second
+	startupRetryTimeout  = 30 * time.Second
 )
 
 var _ interface {
@@ -187,11 +188,16 @@ func (m *Manager) ID() string {
 	return m.id
 }
 
-//nolint:contextcheck,funlen // Startup owns the long-lived context and orders identity, repair, then delivery.
+//nolint:contextcheck,funlen // Startup orders identity, repair, then delivery; cleanup outlives run context.
 func (m *Manager) Start(ctx context.Context) error {
-	runCtx, cancel := context.WithCancel(context.Background())
+	runCtx, cancel := context.WithCancel(ctx)
+	done := make(chan struct{})
 
+	m.mu.Lock()
 	m.cancel = cancel
+	m.done = done
+	m.mu.Unlock()
+
 	if m.target.chatID == 0 {
 		target, err := m.resolveForumTarget()
 		if err != nil {
@@ -202,33 +208,28 @@ func (m *Manager) Start(ctx context.Context) error {
 		m.target = target
 	}
 
-	// done is read by Alive from whichever goroutine asks for status, so the
-	// handoff to the loops is published under the lock.
-	done := make(chan struct{})
-
 	started := false
 	defer func() {
 		if !started {
 			cancel()
 
-			if m.subscription != nil {
-				m.controller.Unsubscribe(m.subscription)
+			m.mu.RLock()
+			subscription := m.subscription
+			m.mu.RUnlock()
+
+			if subscription != nil {
+				m.controller.Unsubscribe(subscription)
 			}
 
 			close(done)
 		}
 	}()
 
-	m.mu.Lock()
-	m.done = done
-	m.mu.Unlock()
-
-	if err := m.preflight(runCtx); err != nil {
+	if err := m.preflightWithRetry(runCtx, defaultStartupRetryPolicy()); err != nil {
 		cancel()
 		return fmt.Errorf("preflight forum target: %w", err)
 	}
 
-	//nolint:contextcheck // runCtx is the manager's own long-lived root context, canceled by Stop, not derived from Start's caller ctx
 	serviceTopicID, err := m.ensureServiceTopic(runCtx)
 	if err != nil {
 		cancel()
@@ -237,7 +238,11 @@ func (m *Manager) Start(ctx context.Context) error {
 
 	m.serviceTopicID = serviceTopicID
 
-	m.subscription = m.controller.Subscribe()
+	subscription := m.controller.Subscribe()
+	m.mu.Lock()
+	m.subscription = subscription
+	m.mu.Unlock()
+
 	if queue, ok := m.controller.(controllerapi.OutputQueueController); ok {
 		if err := queue.BindOutputDelivery(runCtx, controllerapi.OutputBindingData{
 			Driver: telegramChannel,
@@ -253,10 +258,14 @@ func (m *Manager) Start(ctx context.Context) error {
 
 		var deliveryQueue managerdelivery.Queue = newOutputQueue(queue)
 		var transport managerdelivery.Transport = &outputTransport{manager: m}
-		m.delivery = managerdelivery.New(deliveryQueue, transport)
+		delivery := managerdelivery.New(deliveryQueue, transport)
+		delivery.Start(runCtx)
+
+		m.mu.Lock()
+		m.delivery = delivery
+		m.mu.Unlock()
 	}
 
-	//nolint:contextcheck // same long-lived runCtx as above
 	if err := m.reconcileOnStartup(runCtx); err != nil {
 		cancel()
 		return fmt.Errorf("reconcile sessions: %w", err)
@@ -279,21 +288,20 @@ func (m *Manager) Start(ctx context.Context) error {
 		}
 	}
 
-	//nolint:contextcheck // same long-lived runCtx as above
 	if err := m.setCommands(runCtx); err != nil {
 		cancel()
 		return fmt.Errorf("set commands: %w", err)
 	}
 
-	if m.delivery != nil {
-		m.delivery.Start(runCtx)
-	}
-
 	go func() {
 		defer close(done)
 		defer func() {
-			if m.delivery != nil {
-				_ = m.delivery.Stop(context.Background())
+			m.mu.RLock()
+			delivery := m.delivery
+			m.mu.RUnlock()
+
+			if delivery != nil {
+				_ = delivery.Stop(context.Background())
 			}
 		}()
 		var wg sync.WaitGroup
@@ -339,26 +347,33 @@ func (m *Manager) Alive() bool {
 }
 
 func (m *Manager) Stop(ctx context.Context) error {
-	if m.cancel != nil {
-		m.cancel()
+	m.mu.RLock()
+	cancel := m.cancel
+	delivery := m.delivery
+	subscription := m.subscription
+	done := m.done
+	m.mu.RUnlock()
+
+	if cancel != nil {
+		cancel()
 	}
 
-	if m.delivery != nil {
-		if err := m.delivery.Stop(ctx); err != nil {
+	if delivery != nil {
+		if err := delivery.Stop(ctx); err != nil {
 			return fmt.Errorf("stop telegram output delivery: %w", err)
 		}
 	}
 
-	if m.subscription != nil {
-		m.controller.Unsubscribe(m.subscription)
+	if subscription != nil {
+		m.controller.Unsubscribe(subscription)
 	}
 
-	if m.done == nil {
+	if done == nil {
 		return nil
 	}
 
 	select {
-	case <-m.done:
+	case <-done:
 		return nil
 	case <-ctx.Done():
 		return ctx.Err()

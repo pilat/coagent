@@ -100,7 +100,32 @@ func (m *Manager) tg(ctx context.Context, method string, params map[string]any, 
 
 	var parsed tgAPIResponse
 	if err := json.Unmarshal(raw, &parsed); err != nil {
+		if isRetryableHTTPStatus(resp.StatusCode) {
+			return &tgAPIError{
+				Method:      method,
+				Description: httpStatusDescription(resp),
+				ErrorCode:   resp.StatusCode,
+			}
+		}
+
 		return fmt.Errorf("parse telegram response: %w", err)
+	}
+
+	if isRetryableHTTPStatus(resp.StatusCode) {
+		apiErr := &tgAPIError{
+			Method:      method,
+			Description: parsed.Description,
+			ErrorCode:   resp.StatusCode,
+		}
+		if apiErr.Description == "" {
+			apiErr.Description = httpStatusDescription(resp)
+		}
+
+		if parsed.Parameters != nil {
+			apiErr.RetryAfter = parsed.Parameters.RetryAfter
+		}
+
+		return apiErr
 	}
 
 	if !parsed.OK {
@@ -125,6 +150,19 @@ func (m *Manager) tg(ctx context.Context, method string, params map[string]any, 
 	}
 
 	return nil
+}
+
+func isRetryableHTTPStatus(status int) bool {
+	return status == http.StatusTooManyRequests ||
+		(status >= http.StatusInternalServerError && status < 600)
+}
+
+func httpStatusDescription(resp *http.Response) string {
+	if resp.Status != "" {
+		return resp.Status
+	}
+
+	return fmt.Sprintf("HTTP status %d", resp.StatusCode)
 }
 
 // sanitizeTransportError drops the *url.Error wrapper, whose text embeds the

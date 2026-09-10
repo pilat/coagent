@@ -29,7 +29,7 @@
     },
     {
       "type": "message",
-      "message": "**⚪ Idle**\n\n🤖 `fake-model` · iteration 1\n⌚ <elapsed> · 💰 $0.0 total"
+      "message": "**⚪ Idle**\n\n🤖 `fake-model` · iteration 14\n⌚ <elapsed> · 💰 $0.0 total"
     },
     {
       "type": "session_created",
@@ -77,7 +77,7 @@
     },
     {
       "type": "message_replaceable",
-      "content": "**⚪ Idle**\n\n🤖 `fake-model` · iteration 1\n⌚ <elapsed> · 💰 $0.0 total",
+      "content": "**⚪ Idle**\n\n🤖 `fake-model` · iteration 14\n⌚ <elapsed> · 💰 $0.0 total",
       "attributes": {
         "manager_id": "telegram:main",
         "model_input_generation": 1
@@ -92,13 +92,13 @@
       "releases_input": false
     },
     {
-      "type": "message_persistent",
+      "type": "message_replaceable",
       "content": "parent collected the long child",
       "attributes": {
         "manager_id": "telegram:main",
         "model_input_generation": 1
       },
-      "source_key": "message:30:final",
+      "source_key": "message:30:progress",
       "model_input_generation": 1,
       "previous_message_type": "message_replaceable",
       "previous_model_input_generation": 1,

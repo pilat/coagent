@@ -55,6 +55,14 @@ func TestScenario_StoppedRootAnswersStatusWithoutReactivating(t *testing.T) {
 	collector.waitFor(t, "status report reaches the controller", func(e []controllerapi.SessionNotification) bool {
 		return len(statusReports(e, sessionID)) == 1
 	})
+	collector.waitFor(t, "status processing becomes idle", func(e []controllerapi.SessionNotification) bool {
+		return slices.ContainsFunc(e, func(event controllerapi.SessionNotification) bool {
+			return event.SessionID == sessionID &&
+				event.Notification.Type == sessionevent.NotifyStateChanged &&
+				event.Notification.Status == controllerapi.StateIdle &&
+				event.Notification.Reason == ""
+		})
+	})
 	h.mgr.waitIdle(sessionID)
 
 	assert.Len(t, statusReports(collector.snapshot(), sessionID), 1, "the stopped root answers /status")
