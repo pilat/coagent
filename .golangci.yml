@@ -363,6 +363,11 @@ linters:
       - linters: [tagliatelle]
         path: internal/loader/types\.go
 
+      # Go 1.27 enables these modernize analyzers across pre-existing code. Keep
+      # dependency-only Renovate PRs focused; adopt the rewrites separately.
+      - linters: [modernize]
+        text: "(newexpr|errorsastype|stditerators)"
+
 formatters:
   enable:
     - gofumpt
