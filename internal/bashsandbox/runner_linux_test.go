@@ -55,6 +55,10 @@ func TestBubblewrapRunnerCommand(t *testing.T) {
 	assertBindPair(t, args, "/tmp/root with spaces")
 	assertBindPair(t, args, "/tmp/-leading=equals")
 	assertBindPair(t, args, "/tmp/root")
+	procIndex := slices.Index(args, "/proc")
+	require.Positive(t, procIndex)
+	assert.Equal(t, "--proc", args[procIndex-1])
+	assert.Equal(t, "--unshare-user", args[procIndex+1])
 }
 
 func TestBubblewrapRunnerShellCommand(t *testing.T) {
@@ -150,7 +154,7 @@ func TestBuildShieldMountOperationsProtectsNestedProjectMounts(t *testing.T) {
 
 	operations := buildShieldMountOperations(policy, []string{
 		"/canonical/project/nested", "/usr/bin/separate-mount",
-	})
+	}, nil)
 
 	assert.Equal(t, []shieldMountOperation{
 		{source: "/canonical/project", target: "/canonical/project"},
@@ -168,6 +172,20 @@ func TestBuildShieldMountOperationsProtectsNestedProjectMounts(t *testing.T) {
 	}, operations)
 }
 
+func TestBuildShieldMountOperationsSkipsProcMounts(t *testing.T) {
+	policy := processPolicy{
+		readScope: ProjectConfined, projectRoot: "/canonical/project", workDir: "/visible/project",
+		readMounts: []policyMount{{source: "/usr/bin", target: "/usr/bin", directory: true}},
+	}
+
+	operations := buildShieldMountOperations(policy,
+		[]string{"/canonical/project/proc", "/usr/bin/proc"},
+		[]string{"/canonical/project/proc", "/usr/bin/proc"},
+	)
+
+	assert.Empty(t, operations)
+}
+
 func TestBubblewrapShieldPrefixBuildsEmptyNamespace(t *testing.T) {
 	runner := &bubblewrapRunner{
 		policy: processPolicy{readScope: ProjectConfined},
@@ -182,8 +200,23 @@ func TestBubblewrapShieldPrefixBuildsEmptyNamespace(t *testing.T) {
 	assert.Contains(t, args, "--unshare-pid")
 	assert.Contains(t, args, "--proc")
 	assert.Contains(t, args, "--remount-ro")
+	procIndex := slices.Index(args, "/proc")
+	bindIndex := slices.Index(args, "--bind")
+	require.Positive(t, procIndex)
+	require.Positive(t, bindIndex)
+	assert.Greater(t, procIndex, bindIndex)
 	assert.NotContains(t, args, "/tmp")
 	assert.NotContains(t, strings.Join(args, " "), "--ro-bind / /")
+}
+
+func TestNormalizeWritableRootRejectsLinuxSpecialRoots(t *testing.T) {
+	for _, path := range []string{"/proc", "/dev", "/sys"} {
+		t.Run(path, func(t *testing.T) {
+			_, err := normalizeWritableRoot(path)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "cannot be under protected Linux root")
+		})
+	}
 }
 
 func TestParseMountInfo(t *testing.T) {
@@ -203,6 +236,19 @@ func TestParseMountInfo(t *testing.T) {
 	}, mountPoints)
 }
 
+func TestParseMountInfoEntriesRetainsProcOnDuplicateMountPoint(t *testing.T) {
+	mountInfo := strings.Join([]string{
+		"36 29 0:32 / /workspace rw - tmpfs tmpfs rw",
+		"37 36 0:33 / /workspace rw - proc proc rw",
+	}, "\n")
+
+	entries, err := parseMountInfoEntries(strings.NewReader(mountInfo))
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+	assert.Equal(t, "/workspace", entries[0].mountPoint)
+	assert.Equal(t, "proc", entries[0].fsType)
+}
+
 func TestParseMountInfoRejectsMalformedEscape(t *testing.T) {
 	_, err := parseMountInfo(strings.NewReader(`37 36 0:33 / /workspace/bad\04 rw - tmpfs tmpfs rw`))
 	require.Error(t, err)
@@ -213,15 +259,17 @@ func TestValidateBubblewrapExecutable(t *testing.T) {
 	tests := map[string]struct {
 		mode    os.FileMode
 		uid     uint32
+		nested  bool
 		roots   []string
 		message string
 	}{
-		"root owned immutable": {mode: 0o755, uid: 0},
-		"not regular":          {mode: os.ModeDir | 0o755, uid: 0, message: "not an executable regular file"},
-		"not executable":       {mode: 0o644, uid: 0, message: "not an executable regular file"},
-		"not root owned":       {mode: 0o755, uid: 1000, message: "not owned by root"},
-		"group writable":       {mode: 0o775, uid: 0, message: "group- or world-writable"},
-		"world writable":       {mode: 0o757, uid: 0, message: "group- or world-writable"},
+		"root owned immutable":           {mode: 0o755, uid: 0},
+		"not regular":                    {mode: os.ModeDir | 0o755, uid: 0, message: "not an executable regular file"},
+		"not executable":                 {mode: 0o644, uid: 0, message: "not an executable regular file"},
+		"not root owned":                 {mode: 0o755, uid: 1000, message: "not owned by root"},
+		"root owner in nested namespace": {mode: 0o755, uid: 0, nested: true, message: "not owned by root"},
+		"group writable":                 {mode: 0o775, uid: 0, message: "group- or world-writable"},
+		"world writable":                 {mode: 0o757, uid: 0, message: "group- or world-writable"},
 		"under writable root": {
 			mode: 0o755, uid: 0, roots: []string{"/nix/store/package"}, message: "under writable root",
 		},
@@ -229,7 +277,7 @@ func TestValidateBubblewrapExecutable(t *testing.T) {
 
 	for name, tt := range tests {
 		t.Run(name, func(t *testing.T) {
-			err := validateBubblewrapExecutable("/nix/store/package/bin/bwrap", tt.mode, tt.uid, tt.roots)
+			err := validateBubblewrapExecutable("/nix/store/package/bin/bwrap", tt.mode, tt.uid, tt.nested, tt.roots)
 			if tt.message == "" {
 				require.NoError(t, err)
 				return
@@ -237,6 +285,139 @@ func TestValidateBubblewrapExecutable(t *testing.T) {
 
 			require.Error(t, err)
 			assert.Contains(t, err.Error(), tt.message)
+		})
+	}
+}
+
+func TestTrustedUnmappedRootOwner(t *testing.T) {
+	const overflowUID = uint32(65534)
+
+	tests := map[string]struct {
+		executable string
+		uid        uint32
+		nested     bool
+		readOnly   bool
+		roots      []string
+		want       bool
+	}{
+		"nested read-only system path": {
+			executable: "/usr/bin/bwrap",
+			uid:        overflowUID,
+			nested:     true,
+			readOnly:   true,
+			roots:      []string{"/workspace"},
+			want:       true,
+		},
+		"initial namespace": {
+			executable: "/usr/bin/bwrap",
+			uid:        overflowUID,
+			nested:     false,
+			readOnly:   true,
+			want:       false,
+		},
+		"writable mount": {
+			executable: "/usr/bin/bwrap",
+			uid:        overflowUID,
+			nested:     true,
+			readOnly:   false,
+			want:       false,
+		},
+		"writable root": {
+			executable: "/workspace/bwrap",
+			uid:        overflowUID,
+			nested:     true,
+			readOnly:   true,
+			roots:      []string{"/workspace"},
+			want:       false,
+		},
+		"different owner": {
+			executable: "/usr/bin/bwrap",
+			uid:        1000,
+			nested:     true,
+			readOnly:   true,
+			want:       false,
+		},
+		"zero overflow owner": {
+			executable: "/usr/bin/bwrap",
+			uid:        0,
+			nested:     true,
+			readOnly:   true,
+			want:       false,
+		},
+	}
+
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			assert.Equal(t, tt.want, trustedUnmappedRootOwnerWith(
+				tt.executable,
+				tt.uid,
+				overflowUID,
+				tt.nested,
+				tt.readOnly,
+				tt.roots,
+			))
+		})
+	}
+}
+
+func TestParseUserNamespaceMap(t *testing.T) {
+	tests := map[string]struct {
+		uidMap    string
+		want      bool
+		wantError bool
+	}{
+		"initial": {
+			uidMap: "0 0 4294967295\n",
+			want:   false,
+		},
+		"rootless": {
+			uidMap: "1000 0 1\n",
+			want:   true,
+		},
+		"multiple mappings": {
+			uidMap: "0 1000 1\n1 1001 1\n",
+			want:   true,
+		},
+		"empty": {
+			uidMap:    "",
+			wantError: true,
+		},
+		"malformed field count": {
+			uidMap:    "0 0\n",
+			wantError: true,
+		},
+		"malformed number": {
+			uidMap:    "0 nope 1\n",
+			wantError: true,
+		},
+		"zero length": {
+			uidMap:    "0 0 0\n",
+			wantError: true,
+		},
+		"range overflow": {
+			uidMap:    "0 0 4294967296\n",
+			wantError: true,
+		},
+		"overlap": {
+			uidMap:    "0 1000 2\n1 2000 1\n",
+			wantError: true,
+		},
+		"too many extents": {
+			uidMap:    "0 1000 1\n1 1001 1\n2 1002 1\n3 1003 1\n4 1004 1\n5 1005 1\n",
+			wantError: true,
+		},
+	}
+
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			nested, err := parseUserNamespaceMap(tt.uidMap)
+			if tt.wantError {
+				require.Error(t, err)
+				return
+			}
+
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, nested)
 		})
 	}
 }

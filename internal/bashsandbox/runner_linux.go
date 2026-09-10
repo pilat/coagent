@@ -4,11 +4,16 @@ package bashsandbox
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"syscall"
+
+	"golang.org/x/sys/unix"
 
 	"github.com/pilat/coagent/internal/procexec"
 	"github.com/pilat/coagent/internal/shellenv"
@@ -18,6 +23,8 @@ const (
 	bubblewrapExecutable   = "bwrap"
 	bubblewrapReadOnlyBind = "--ro-bind"
 	mountInfoPath          = "/proc/self/mountinfo"
+	maxUIDMapExtents       = 5
+	maxUIDValue            = uint64(^uint32(0))
 )
 
 var (
@@ -33,6 +40,12 @@ type bubblewrapRunner struct {
 	policyKey    string
 	provider     shellenv.Provider
 	policy       processPolicy
+}
+
+type uidMapExtent struct {
+	inside  uint64
+	outside uint64
+	length  uint64
 }
 
 // Command constructs a process confined by Bubblewrap.
@@ -126,6 +139,10 @@ func newEnabledRunner(policy processPolicy) (Runner, error) {
 	if err != nil {
 		return nil, fmt.Errorf("read Linux mount table: %w", err)
 	}
+	procMountPoints, err := readProcMountPoints(mountInfoPath)
+	if err != nil {
+		return nil, fmt.Errorf("read Linux proc mounts: %w", err)
+	}
 
 	runner := &bubblewrapRunner{
 		executable: executable,
@@ -135,13 +152,37 @@ func newEnabledRunner(policy processPolicy) (Runner, error) {
 		policy:     policy,
 	}
 	if policy.readScope == ProjectConfined {
-		runner.shieldMounts = buildShieldMountOperations(policy, mountPoints)
+		if shieldedPolicyOverlapsProc(policy, procMountPoints) {
+			return nil, errors.New("shielded policy overlaps a procfs mount")
+		}
+
+		runner.shieldMounts = buildShieldMountOperations(policy, mountPoints, procMountPoints)
 	}
 	if err := preflight(runner, policy.workDir); err != nil {
 		return nil, fmt.Errorf("bubblewrap backend unusable: %w", err)
 	}
 
 	return runner, nil
+}
+
+func shieldedPolicyOverlapsProc(policy processPolicy, procMountPoints []string) bool {
+	projectOverlap := pathOverlapsMount(policy.projectRoot, procMountPoints)
+
+	workDirOverlap := pathOverlapsMount(policy.workDir, procMountPoints)
+	if projectOverlap || workDirOverlap {
+		return true
+	}
+
+	for _, mount := range policy.readMounts {
+		sourceOverlap := pathOverlapsMount(mount.source, procMountPoints)
+
+		targetOverlap := pathOverlapsMount(mount.target, procMountPoints)
+		if sourceOverlap || targetOverlap {
+			return true
+		}
+	}
+
+	return false
 }
 
 // wrapPrefix builds the bwrap flags up to and including the `--` separator; the
@@ -154,7 +195,7 @@ func (r *bubblewrapRunner) wrapPrefix(workDir string) []string {
 	args := []string{
 		"--die-with-parent",
 		bubblewrapReadOnlyBind, "/", "/",
-		"--dev", "/dev",
+		"--dev", devPath,
 	}
 
 	for _, mount := range r.mounts {
@@ -165,6 +206,8 @@ func (r *bubblewrapRunner) wrapPrefix(workDir string) []string {
 
 		args = append(args, operation, mount.path, mount.path)
 	}
+
+	args = append(args, "--proc", "/proc")
 
 	return append(args,
 		"--unshare-user",
@@ -181,8 +224,7 @@ func (r *bubblewrapRunner) shieldPrefix(workDir string) []string {
 		"--unshare-pid",
 		"--cap-drop", "ALL",
 		"--tmpfs", "/",
-		"--dev", "/dev",
-		"--proc", "/proc",
+		"--dev", devPath,
 	}
 
 	for _, dir := range shieldMountDirectories(r.shieldMounts) {
@@ -196,10 +238,17 @@ func (r *bubblewrapRunner) shieldPrefix(workDir string) []string {
 		args = append(args, operation, mount.source, mount.target)
 	}
 
+	args = append(args, "--proc", "/proc")
+
 	return append(args, "--remount-ro", "/", "--chdir", workDir, "--")
 }
 
 func resolveBubblewrapExecutable(writableRoots []string) (string, error) {
+	nested, err := inUserNamespace()
+	if err != nil {
+		return "", fmt.Errorf("detect Linux user namespace: %w", err)
+	}
+
 	executable, err := exec.LookPath(bubblewrapExecutable)
 	if err != nil {
 		return "", fmt.Errorf("find Bubblewrap executable: %w", err)
@@ -225,7 +274,7 @@ func resolveBubblewrapExecutable(writableRoots []string) (string, error) {
 		return "", fmt.Errorf("inspect Bubblewrap executable %q ownership", executable)
 	}
 
-	if err := validateBubblewrapExecutable(executable, info.Mode(), stat.Uid, writableRoots); err != nil {
+	if err := validateBubblewrapExecutable(executable, info.Mode(), stat.Uid, nested, writableRoots); err != nil {
 		return "", err
 	}
 
@@ -236,13 +285,14 @@ func validateBubblewrapExecutable(
 	executable string,
 	mode os.FileMode,
 	uid uint32,
+	nested bool,
 	writableRoots []string,
 ) error {
 	if !mode.IsRegular() || mode.Perm()&0o111 == 0 {
 		return fmt.Errorf("bubblewrap executable %q is not an executable regular file", executable)
 	}
 
-	if uid != 0 {
+	if !trustedBubblewrapOwner(executable, uid, nested, writableRoots) {
 		return fmt.Errorf("bubblewrap executable %q is not owned by root", executable)
 	}
 
@@ -257,4 +307,163 @@ func validateBubblewrapExecutable(
 	}
 
 	return nil
+}
+
+func trustedBubblewrapOwner(
+	executable string,
+	uid uint32,
+	nested bool,
+	writableRoots []string,
+) bool {
+	if !nested {
+		return uid == 0
+	}
+
+	if uid == 0 {
+		return false
+	}
+
+	return trustedUnmappedRootOwner(executable, uid, nested, writableRoots)
+}
+
+// Root-owned files appear as the kernel overflow UID inside a rootless outer
+// user namespace. Trust that view only on a read-only mount outside writable roots.
+func trustedUnmappedRootOwner(
+	executable string,
+	uid uint32,
+	nested bool,
+	writableRoots []string,
+) bool {
+	expectedUID, err := overflowUID()
+	if err != nil {
+		return false
+	}
+
+	var stat unix.Statfs_t
+	if err := unix.Statfs(executable, &stat); err != nil {
+		return false
+	}
+
+	return trustedUnmappedRootOwnerWith(
+		executable,
+		uid,
+		expectedUID,
+		nested,
+		stat.Flags&unix.ST_RDONLY != 0,
+		writableRoots,
+	)
+}
+
+func trustedUnmappedRootOwnerWith(
+	executable string,
+	uid, overflowUID uint32,
+	nested, readOnly bool,
+	writableRoots []string,
+) bool {
+	if uid != overflowUID || overflowUID == 0 || !nested || !readOnly {
+		return false
+	}
+
+	for _, root := range writableRoots {
+		if pathWithinRoot(executable, root) {
+			return false
+		}
+	}
+
+	return true
+}
+
+func overflowUID() (uint32, error) {
+	value, err := os.ReadFile("/proc/sys/kernel/overflowuid")
+	if err != nil {
+		return 0, fmt.Errorf("read kernel overflow UID: %w", err)
+	}
+
+	uid, err := strconv.ParseUint(strings.TrimSpace(string(value)), 10, 32)
+	if err != nil {
+		return 0, fmt.Errorf("parse kernel overflow UID: %w", err)
+	}
+
+	return uint32(uid), nil
+}
+
+func inUserNamespace() (bool, error) {
+	value, err := os.ReadFile("/proc/self/uid_map")
+	if err != nil {
+		return false, fmt.Errorf("read user namespace UID map: %w", err)
+	}
+
+	return parseUserNamespaceMap(string(value))
+}
+
+func parseUserNamespaceMap(value string) (bool, error) {
+	lines := strings.Split(strings.TrimSpace(value), "\n")
+	if len(lines) == 1 && lines[0] == "" {
+		return false, errors.New("user namespace UID map is empty")
+	}
+
+	if len(lines) > maxUIDMapExtents {
+		return false, fmt.Errorf("user namespace UID map has %d extents", len(lines))
+	}
+
+	extents := make([]uidMapExtent, 0, len(lines))
+	for _, line := range lines {
+		fields := strings.Fields(line)
+		if len(fields) != 3 {
+			return false, fmt.Errorf("user namespace UID map line %q has %d fields", line, len(fields))
+		}
+
+		values := [3]uint64{}
+
+		for index, field := range fields {
+			parsed, err := strconv.ParseUint(field, 10, 64)
+			if err != nil {
+				return false, fmt.Errorf("parse user namespace UID map field %q: %w", field, err)
+			}
+
+			values[index] = parsed
+		}
+
+		extent := uidMapExtent{inside: values[0], outside: values[1], length: values[2]}
+		if err := validateUIDMapExtent(extent); err != nil {
+			return false, err
+		}
+
+		for _, existing := range extents {
+			if uidMapRangesOverlap(existing.inside, existing.length, extent.inside, extent.length) ||
+				uidMapRangesOverlap(existing.outside, existing.length, extent.outside, extent.length) {
+				return false, errors.New("user namespace UID map has overlapping extents")
+			}
+		}
+
+		extents = append(extents, extent)
+	}
+
+	if len(extents) != 1 {
+		return true, nil
+	}
+
+	first := extents[0]
+
+	return first.inside != 0 || first.outside != 0 || first.length != maxUIDValue, nil
+}
+
+func validateUIDMapExtent(extent uidMapExtent) error {
+	if extent.length == 0 {
+		return errors.New("user namespace UID map has a zero-length extent")
+	}
+
+	if extent.inside > maxUIDValue || extent.outside > maxUIDValue || extent.length > maxUIDValue {
+		return errors.New("user namespace UID map extent exceeds UID range")
+	}
+
+	if extent.inside > maxUIDValue+1-extent.length || extent.outside > maxUIDValue+1-extent.length {
+		return errors.New("user namespace UID map extent overflows UID range")
+	}
+
+	return nil
+}
+
+func uidMapRangesOverlap(leftStart, leftLength, rightStart, rightLength uint64) bool {
+	return leftStart < rightStart+rightLength && rightStart < leftStart+leftLength
 }
