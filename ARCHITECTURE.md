@@ -571,12 +571,17 @@ invent inconsistent or test-leaking state locations.
 The native filesystem-write sandbox, enabled by default unless top-level
 `sandbox.enabled: false` is configured, confines direct writes by Bash
 descendants, dedicated mutation tools, LSP servers and stdio MCP servers to
-configured writable roots. On macOS it uses the platform sandbox; on Linux it
-requires a trusted root-owned Bubblewrap. It is an integrity boundary, not a
-confidentiality, network or multi-tenant boundary: the daemon user can still
-read files it can ordinarily read. Marketplace Git uses a separate runner
-whose only writable root is the marketplace cache; it does not inherit a
-session project or configured writable paths.
+configured writable roots. On macOS it uses the platform sandbox. On Linux it
+requires Bubblewrap that is UID 0 in a valid initial namespace, or appears as
+the kernel overflow UID only from a valid non-initial namespace when its
+filesystem is read-only and outside writable roots. Shields-down Linux profiles
+mount a fresh `/proc` after other binds for nested user-namespace setup.
+Writable roots under `/proc`, `/dev`, and `/sys` are rejected, and shields-up
+filters procfs mount aliases instead of mirroring them into the project. It is
+an integrity boundary, not a confidentiality, network or multi-tenant boundary:
+the daemon user can still read files it can ordinarily read. Marketplace Git
+uses a separate runner whose only writable root is the marketplace cache; it
+does not inherit a session project or configured writable paths.
 
 With shields down, the built-in writable roots include the session worktree,
 host temporary storage, the user cache and only the current project's

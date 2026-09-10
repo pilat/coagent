@@ -225,6 +225,14 @@ func TestNormalizeWritableRoot_RejectsInvalidPaths(t *testing.T) {
 			assert.Contains(t, err.Error(), tt.message)
 		})
 	}
+
+	if _, err := os.Stat("/proc"); err == nil {
+		t.Run("proc", func(t *testing.T) {
+			_, err := normalizeWritableRoot("/proc")
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "cannot be under protected Linux root")
+		})
+	}
 }
 
 func TestNew_RejectsDangerousTempRoot(t *testing.T) {

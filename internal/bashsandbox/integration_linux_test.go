@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -261,6 +262,83 @@ func TestBubblewrapIntegrationProtectsNestedMount(t *testing.T) {
 	output, err = cmd.CombinedOutput()
 	require.NoError(t, err, string(output))
 	assert.NoFileExists(t, filepath.Join(nested, "shielded-blocked"))
+}
+
+func TestNestedRootlessBubblewrap(t *testing.T) {
+	const childEnv = "COAGENT_NESTED_BWRAP_CHILD"
+
+	if os.Getenv(childEnv) == "1" {
+		nested, err := inUserNamespace()
+		require.NoError(t, err)
+		require.True(t, nested)
+
+		outerPIDNamespace, err := os.Readlink("/proc/self/ns/pid")
+		require.NoError(t, err)
+		t.Setenv("COAGENT_OUTER_PID_NAMESPACE", outerPIDNamespace)
+
+		project := t.TempDir()
+		runner, err := New(Config{
+			Enabled: true, WorkDir: project, CanonicalWorkDir: project,
+			SessionKey: "nested-rootless", ReadScope: HostReadable,
+		}, nil)
+		require.NoError(t, err)
+
+		cmd, err := runner.BashCommand(t.Context(), "printf nested-ok", project)
+		require.NoError(t, err)
+		output, err := cmd.CombinedOutput()
+		require.NoError(t, err, string(output))
+		assert.Contains(t, string(output), "nested-ok")
+
+		shielded, err := New(Config{
+			Enabled: true, WorkDir: project, CanonicalWorkDir: project,
+			SessionKey: "nested-rootless-shielded", ReadScope: ProjectConfined,
+		}, nil)
+		require.NoError(t, err)
+		cmd, err = shielded.BashCommand(
+			t.Context(),
+			`test "$(readlink /proc/self/ns/pid)" != "$COAGENT_OUTER_PID_NAMESPACE" && test ! -w /tmp`,
+			project,
+		)
+		require.NoError(t, err)
+		output, err = cmd.CombinedOutput()
+		require.NoError(t, err, string(output))
+		return
+	}
+
+	if _, err := exec.LookPath(bubblewrapExecutable); err != nil {
+		t.Skip("bwrap is not installed")
+	}
+
+	workDir := t.TempDir()
+	testBinary, err := os.Executable()
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, bubblewrapExecutable,
+		"--die-with-parent",
+		bubblewrapReadOnlyBind, "/", "/",
+		"--dev", devPath,
+		"--bind", "/tmp", "/tmp",
+		"--bind", workDir, workDir,
+		"--proc", "/proc",
+		"--unshare-user",
+		"--cap-drop", "ALL",
+		"--clearenv",
+		"--setenv", "PATH", "/usr/bin:/bin",
+		"--setenv", "HOME", workDir,
+		"--setenv", "TMPDIR", workDir,
+		"--setenv", "XDG_CACHE_HOME", filepath.Join(workDir, "cache"),
+		"--setenv", childEnv, "1",
+		"--",
+		testBinary,
+		"-test.run=^TestNestedRootlessBubblewrap$",
+		"-test.v",
+	)
+	cmd.Dir = workDir
+	output, err := cmd.CombinedOutput()
+	require.NoError(t, err, string(output))
+	assert.Contains(t, string(output), "--- PASS: TestNestedRootlessBubblewrap")
 }
 
 func shellQuote(value string) string {

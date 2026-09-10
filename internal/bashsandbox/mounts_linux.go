@@ -25,25 +25,102 @@ type shieldMountOperation struct {
 	readOnly bool
 }
 
-func readMountPoints(path string) ([]string, error) {
+type mountInfoEntry struct {
+	mountPoint string
+	fsType     string
+}
+
+func readMountInfo(path string) ([]mountInfoEntry, error) {
 	file, err := os.Open(path)
 	if err != nil {
 		return nil, fmt.Errorf("open mountinfo %q: %w", path, err)
 	}
 	defer func() { _ = file.Close() }()
 
-	return parseMountInfo(file)
+	return parseMountInfoEntries(file)
+}
+
+func readMountPoints(path string) ([]string, error) {
+	entries, err := readMountInfo(path)
+	if err != nil {
+		return nil, err
+	}
+
+	mountPoints := make([]string, 0, len(entries))
+
+	for _, entry := range entries {
+		mountPoints = append(mountPoints, entry.mountPoint)
+	}
+
+	return mountPoints, nil
+}
+
+func readProcMountPoints(path string) ([]string, error) {
+	entries, err := readMountInfo(path)
+	if err != nil {
+		return nil, err
+	}
+
+	mountPoints := make([]string, 0)
+
+	for _, entry := range entries {
+		if entry.fsType == "proc" {
+			mountPoints = append(mountPoints, entry.mountPoint)
+		}
+	}
+
+	return mountPoints, nil
+}
+
+func pathOverlapsMount(path string, mountPoints []string) bool {
+	for _, mountPoint := range mountPoints {
+		if pathWithinRoot(path, mountPoint) || pathWithinRoot(mountPoint, path) {
+			return true
+		}
+	}
+
+	return false
 }
 
 func parseMountInfo(reader io.Reader) ([]string, error) {
-	var mountPoints []string
-	seen := make(map[string]struct{})
+	entries, err := parseMountInfoEntries(reader)
+	if err != nil {
+		return nil, err
+	}
+
+	mountPoints := make([]string, 0, len(entries))
+
+	for _, entry := range entries {
+		mountPoints = append(mountPoints, entry.mountPoint)
+	}
+
+	return mountPoints, nil
+}
+
+func parseMountInfoEntries(reader io.Reader) ([]mountInfoEntry, error) {
+	var entries []mountInfoEntry
+	seen := make(map[string]int)
 
 	scanner := bufio.NewScanner(reader)
 	for scanner.Scan() {
-		fields := strings.Fields(scanner.Text())
+		line := scanner.Text()
+
+		fields := strings.Fields(line)
 		if len(fields) < 6 {
-			return nil, fmt.Errorf("malformed mountinfo line %q", scanner.Text())
+			return nil, fmt.Errorf("malformed mountinfo line %q", line)
+		}
+
+		separator := -1
+
+		for index := 5; index < len(fields); index++ {
+			if fields[index] == "-" {
+				separator = index
+				break
+			}
+		}
+
+		if separator < 0 || separator+1 >= len(fields) {
+			return nil, fmt.Errorf("mountinfo line %q has no filesystem type", line)
 		}
 
 		mountPoint, err := decodeMountInfoPath(fields[4])
@@ -56,19 +133,27 @@ func parseMountInfo(reader io.Reader) ([]string, error) {
 			return nil, fmt.Errorf("mount point %q is not absolute", mountPoint)
 		}
 
-		if _, ok := seen[mountPoint]; ok {
+		fsType := fields[separator+1]
+		if index, ok := seen[mountPoint]; ok {
+			if fsType == "proc" {
+				entries[index].fsType = fsType
+			}
+
 			continue
 		}
 
-		seen[mountPoint] = struct{}{}
-		mountPoints = append(mountPoints, mountPoint)
+		seen[mountPoint] = len(entries)
+		entries = append(entries, mountInfoEntry{
+			mountPoint: mountPoint,
+			fsType:     fsType,
+		})
 	}
 
 	if err := scanner.Err(); err != nil {
 		return nil, fmt.Errorf("scan mountinfo: %w", err)
 	}
 
-	return mountPoints, nil
+	return entries, nil
 }
 
 func decodeMountInfoPath(value string) (string, error) {
@@ -142,9 +227,16 @@ func buildMountOperations(writableRoots, mountPoints []string) []mountOperation 
 }
 
 //nolint:wsl_v5 // Mount construction keeps each ordering constraint adjacent to its mutation.
-func buildShieldMountOperations(policy processPolicy, mountPoints []string) []shieldMountOperation {
+func buildShieldMountOperations(
+	policy processPolicy,
+	mountPoints, procMountPoints []string,
+) []shieldMountOperation {
 	mounts := make(map[string]shieldMountOperation)
 	add := func(source, target string, readOnly bool) {
+		if pathOverlapsMount(source, procMountPoints) || pathOverlapsMount(target, procMountPoints) {
+			return
+		}
+
 		if existing, ok := mounts[target]; ok && !existing.readOnly {
 			return
 		}

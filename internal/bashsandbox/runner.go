@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -22,6 +23,7 @@ import (
 
 const (
 	bashExecutable       = "bash"
+	devPath              = "/dev"
 	preflightOutputLimit = 8 * 1024
 	preflightTimeout     = 3 * time.Second
 )
@@ -364,6 +366,14 @@ func normalizeWritableRoot(path string) (string, error) {
 
 	if filepath.Dir(resolved) == resolved {
 		return "", fmt.Errorf("writable path %q resolves to filesystem root", path)
+	}
+
+	if runtime.GOOS == "linux" {
+		for _, protectedRoot := range []string{"/proc", devPath, "/sys"} {
+			if pathWithinRoot(resolved, protectedRoot) {
+				return "", fmt.Errorf("writable path %q cannot be under protected Linux root %q", path, protectedRoot)
+			}
+		}
 	}
 
 	return resolved, nil
