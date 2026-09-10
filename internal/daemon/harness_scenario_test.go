@@ -327,6 +327,96 @@ func TestHarnessScenario_BackgroundChildIsTheWakeSource(t *testing.T) {
 	assertHarnessTrace(t, "background_child_no_sleep.json", collector.snapshot(), parentID)
 }
 
+func TestHarnessScenario_BackgroundChildCheckpointUpdatesRootCard(t *testing.T) {
+	childSecondEntered := make(chan struct{})
+	childSecondRelease := make(chan struct{})
+	released := false
+
+	respond := func(_ string, messages []llmwire.Message) *llmwire.Response {
+		if hasUserContaining(messages, "CHILD_PROGRESS") {
+			if hasToolResultFor(messages, "ls") {
+				close(childSecondEntered)
+				<-childSecondRelease
+
+				return &llmwire.Response{Text: "background child answer"}
+			}
+
+			return &llmwire.Response{ToolCalls: []llmwire.ToolCall{{
+				ID: "child-progress", Name: "ls", Arguments: []byte(`{"path":"."}`),
+			}}}
+		}
+
+		if hasUserContaining(messages, "<subagent_completion>") {
+			return &llmwire.Response{Text: "background completion delivered"}
+		}
+
+		if hasToolResultFor(messages, tool.IDSleep) {
+			return &llmwire.Response{Text: "background launched; yielded without sleep"}
+		}
+
+		if hasToolResultFor(messages, tool.IDTask) {
+			return &llmwire.Response{ToolCalls: []llmwire.ToolCall{{
+				ID:        "sleep-after-task-result",
+				Name:      tool.IDSleep,
+				Arguments: []byte(`{"duration":"1h","reason":"wait for background child"}`),
+			}}}
+		}
+
+		return &llmwire.Response{ToolCalls: []llmwire.ToolCall{{
+			ID:   taskCallID,
+			Name: tool.IDTask,
+			Arguments: []byte(
+				`{"prompt":"CHILD_PROGRESS","description":"scenario","subagent_type":"general","background":true}`,
+			),
+		}}}
+	}
+
+	h := newSubagentHarnessWith(t, respond)
+	collector := collectEvents(h.mgr.PubSub().SubscribeAll())
+	defer func() {
+		if !released {
+			close(childSecondRelease)
+		}
+		collector.stop()
+		h.shutdown()
+	}()
+
+	parentID, err := h.mgr.Send(h.ctx, h.projectID, "start background child", "fake-model", map[string]any{
+		"manager_id": scenarioManagerID,
+	})
+	require.NoError(t, err)
+	waitForVisibleMessage(t, collector, parentID, "background launched; yielded without sleep")
+
+	link, err := h.links.GetLinkByTaskCallID(h.ctx, parentID, taskCallID)
+	require.NoError(t, err)
+	require.NotNil(t, link)
+	require.False(t, link.Blocking)
+	waitForScenarioSignal(t, childSecondEntered, "child second model call")
+
+	var checkpointCard string
+	var checkpointOwner int64
+	checkpointSource := fmt.Sprintf(
+		"progress:change:subagent:%d:%d:checkpoint:1:g%%",
+		link.ChildID,
+		link.ActivationSeq,
+	)
+	require.Eventually(t, func() bool {
+		return h.db.QueryRowContext(h.ctx, `SELECT session_id, content FROM session_outbox
+			WHERE session_id = ? AND source_key LIKE ? ORDER BY id DESC LIMIT 1`,
+			parentID, checkpointSource).Scan(&checkpointOwner, &checkpointCard) == nil
+	}, 5*time.Second, 10*time.Millisecond, "child checkpoint progress card")
+
+	assert.Contains(t, checkpointCard, "iteration ")
+	assert.NotContains(t, checkpointCard, "root iteration")
+	assert.NotContains(t, checkpointCard, "child iterations")
+	assert.NotContains(t, checkpointCard, "tree iterations")
+	assert.Equal(t, parentID, checkpointOwner, "checkpoint output must remain root-owned")
+
+	close(childSecondRelease)
+	released = true
+	waitForVisibleMessage(t, collector, parentID, "background completion delivered")
+}
+
 func TestHarnessScenario_BackgroundWaitCanaryResumesWithoutPolling(t *testing.T) {
 	childRelease := make(chan struct{})
 	var rootCalls atomic.Int64

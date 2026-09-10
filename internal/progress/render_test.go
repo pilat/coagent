@@ -34,6 +34,8 @@ func TestRenderCompact_ExactCard(t *testing.T) {
 	snapshot := Snapshot{
 		Model:               "z-ai/glm-5.3-flash",
 		RootIteration:       112,
+		ChildCount:          2,
+		ChildIterations:     9,
 		MainModelWorking:    true,
 		EpisodeElapsed:      &elapsed,
 		Lifetime:            Usage{Available: true, CostUSD: cost},
@@ -53,10 +55,10 @@ func TestRenderCompact_ExactCard(t *testing.T) {
 		"",
 		"reading the loop",
 		"",
-		"🤖 `z-ai/glm-5.3-flash` · iteration 112",
+		"🤖 `z-ai/glm-5.3-flash` · iteration 121",
 		"⌚ 1m36s · 💰 $0.281 total · 🧠 context 72%",
 		"📋 TODO · 1 active · 2 remaining · 2 done · 1 cancelled",
-		"ℹ️ `/status` shows the full TODO list",
+		"ℹ️ /status shows the full TODO list",
 	}, "\n"), RenderCompact(snapshot, nil))
 }
 
@@ -187,7 +189,7 @@ func TestRenderCompact_BudgetDetailBelowTODOBlock(t *testing.T) {
 	assert.Equal(t, strings.Join([]string{
 		"**🛑 Budget reached**",
 		"📋 TODO · 0 active · 1 remaining · 0 done",
-		"ℹ️ `/status` shows the full TODO list",
+		"ℹ️ /status shows the full TODO list",
 		"💸 Budget: fired (generation 2) · limiter is no longer armed · reason: cost",
 	}, "\n"), rendered)
 }

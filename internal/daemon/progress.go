@@ -130,6 +130,18 @@ func (s *svc) wakeProgress() {
 }
 
 func (s *svc) publishSubagentProgress(ctx context.Context, childID int64) {
+	s.publishSubagentProgressWithIteration(ctx, childID, nil)
+}
+
+func (s *svc) publishSubagentIterationProgress(ctx context.Context, childID, iteration int64) {
+	s.publishSubagentProgressWithIteration(ctx, childID, &iteration)
+}
+
+func (s *svc) publishSubagentProgressWithIteration(
+	ctx context.Context,
+	childID int64,
+	checkpointIteration *int64,
+) {
 	log := logger.Ctx(ctx).Named("daemon.progress")
 
 	record, err := s.sessionStore.GetSession(ctx, childID)
@@ -154,13 +166,27 @@ func (s *svc) publishSubagentProgress(ctx context.Context, childID int64) {
 		return
 	}
 
-	causalID := fmt.Sprintf("subagent:%d:%d:%s", childID, link.ActivationSeq, link.State)
-	if link.Blocking && link.ParentID == record.RootID && !link.Terminal() {
-		causalID, err = waitingProgressCausalID(s.collectWaitingProjections(ctx, record.RootID))
-		if err != nil {
-			log.Warn("build_subagent_progress_identity", zap.Int64("child", childID), zap.Error(err))
+	if checkpointIteration != nil && link.Blocking {
+		return
+	}
 
-			return
+	var causalID string
+	if checkpointIteration != nil {
+		causalID = fmt.Sprintf(
+			"subagent:%d:%d:checkpoint:%d",
+			childID,
+			link.ActivationSeq,
+			*checkpointIteration,
+		)
+	} else {
+		causalID = fmt.Sprintf("subagent:%d:%d:%s", childID, link.ActivationSeq, link.State)
+		if link.Blocking && link.ParentID == record.RootID && !link.Terminal() {
+			causalID, err = waitingProgressCausalID(s.collectWaitingProjections(ctx, record.RootID))
+			if err != nil {
+				log.Warn("build_subagent_progress_identity", zap.Int64("child", childID), zap.Error(err))
+
+				return
+			}
 		}
 	}
 

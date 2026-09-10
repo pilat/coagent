@@ -262,7 +262,11 @@ func (m *Manager) handleNotification(ctx context.Context, sn controllerapi.Sessi
 }
 
 func (m *Manager) wakeDelivery() {
-	if m.delivery != nil {
-		m.delivery.Wake()
+	m.mu.RLock()
+	delivery := m.delivery
+	m.mu.RUnlock()
+
+	if delivery != nil {
+		delivery.Wake()
 	}
 }

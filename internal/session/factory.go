@@ -82,6 +82,10 @@ type CreateOptions struct {
 	// human is told once that a queued /compact is waiting, not once per wake.
 	CompactionDeferAnnounced bool
 	ShieldsUp                bool
+	// OnIterationPersisted observes a durable checkpoint after each model response.
+	// It is nil outside daemon-managed child sessions.
+	OnIterationPersisted func(context.Context, int)
+
 	// ObserveProcessPolicy records the exact stack policy before later build
 	// failures can release a pooled MCP client without returning a Service.
 	ObserveProcessPolicy func(string)

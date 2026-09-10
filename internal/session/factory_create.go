@@ -147,6 +147,7 @@ func (f *factory) build(
 		ActiveSubagentsProvider:  opts.ActiveSubagentsProvider,
 		ActiveProcessesProvider:  opts.ActiveProcessesProvider,
 		HasLiveWakeSource:        opts.HasLiveWakeSource,
+		OnIterationPersisted:     opts.OnIterationPersisted,
 		ExtraSkills:              opts.ExtraSkills,
 		StagedExternalCalls:      opts.StagedExternalCalls,
 		CompactionDeferAnnounced: opts.CompactionDeferAnnounced,

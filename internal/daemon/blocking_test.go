@@ -135,6 +135,12 @@ func TestIntegration_CompletedForegroundChildAcceptsFollowUpInSameSession(t *tes
 		return linkErr == nil && current != nil && current.Terminal() &&
 			current.DeliveredAt != 0 && current.ActivationSeq == 2
 	})
+	h.waitUntil("parent consumed continuation", func() bool {
+		messages := h.parentMessages(parentID)
+
+		return countSubagentCompletions(messages, link.ChildID) == 1 &&
+			lastAssistantTextDTO(messages) == "parent received continuation"
+	})
 	h.mgr.waitIdle(parentID)
 
 	continued, err := h.links.GetLink(h.ctx, link.ChildID)

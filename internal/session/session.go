@@ -169,6 +169,7 @@ type svc struct {
 	activeSubagentsProvider func(context.Context) []ActiveSubagentInfo
 	activeProcessesProvider func(context.Context) []ActiveProcessInfo
 	hasLiveWakeSource       func(context.Context) bool
+	onIterationPersisted    func(context.Context, int)
 	// Under modelMu with the model triplet: a measurement describes one model's
 	// window and tokenizer. nil baseline = nothing measured.
 	baseline   *contextBaseline
@@ -230,6 +231,9 @@ type options struct {
 
 	// HasLiveWakeSource reports a daemon-owned asynchronous completion source.
 	HasLiveWakeSource func(context.Context) bool
+
+	// OnIterationPersisted observes a durable checkpoint after each model response.
+	OnIterationPersisted func(context.Context, int)
 
 	// ExtraSkills are daemon-injected, session-scoped skills that are registered
 	// for discovery and activated directly in the system prompt.
@@ -345,6 +349,7 @@ func newSession(p params, opts options, workDir string, agentConfig registry.Age
 		activeSubagentsProvider:  opts.ActiveSubagentsProvider,
 		activeProcessesProvider:  opts.ActiveProcessesProvider,
 		hasLiveWakeSource:        opts.HasLiveWakeSource,
+		onIterationPersisted:     opts.OnIterationPersisted,
 	}
 	var msStore sessionstore.RuntimeStore
 
