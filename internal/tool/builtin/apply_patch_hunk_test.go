@@ -172,45 +172,43 @@ func TestApplyHunkReplacesTargetRange(t *testing.T) {
 	}{
 		{
 			name: "replace a single line in place",
-			hunk: patchHunk{OldStart: 2, OldCount: 1, Lines: []patchLine{{Type: '+', Content: "B"}}},
+			hunk: patchHunk{
+				OldStart: 2,
+				OldCount: 1,
+				NewCount: 1,
+				Lines:    []patchLine{{Type: '-', Content: "b"}, {Type: '+', Content: "B"}},
+			},
 			want: []string{"a", "B", "c", "d", "e"},
 		},
 		{
 			name: "context lines are kept alongside additions",
-			hunk: patchHunk{OldStart: 2, OldCount: 2, Lines: []patchLine{
-				{Type: ' ', Content: "b"}, {Type: '+', Content: "b2"}, {Type: '-', Content: "c"},
+			hunk: patchHunk{OldStart: 2, OldCount: 2, NewCount: 3, Lines: []patchLine{
+				{
+					Type:    ' ',
+					Content: "b",
+				},
+				{Type: '+', Content: "b2"},
+				{Type: '-', Content: "c"},
+				{Type: '+', Content: "c2"},
 			}},
-			want: []string{"a", "b", "b2", "d", "e"},
+			want: []string{"a", "b", "b2", "c2", "d", "e"},
 		},
 		{
 			name: "deletion removes the range",
 			hunk: patchHunk{
 				OldStart: 2,
 				OldCount: 2,
+				NewCount: 0,
 				Lines:    []patchLine{{Type: '-', Content: "b"}, {Type: '-', Content: "c"}},
 			},
 			want: []string{"a", "d", "e"},
-		},
-		{
-			name: "start before the file is clamped to the top",
-			hunk: patchHunk{OldStart: 0, OldCount: 1, Lines: []patchLine{{Type: '+', Content: "A"}}},
-			want: []string{"A", "b", "c", "d", "e"},
-		},
-		{
-			name: "start past the end appends",
-			hunk: patchHunk{OldStart: 99, OldCount: 1, Lines: []patchLine{{Type: '+', Content: "f"}}},
-			want: []string{"a", "b", "c", "d", "e", "f"},
-		},
-		{
-			name: "count past the end is clamped",
-			hunk: patchHunk{OldStart: 4, OldCount: 4, Lines: []patchLine{{Type: '+', Content: "D"}}},
-			want: []string{"a", "b", "c", "D"},
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assert.Equal(t, tt.want, applyHunk(lines, tt.hunk))
+			got := applyHunk(lines, tt.hunk)
+			assert.Equal(t, tt.want, got)
 		})
 	}
 }
@@ -243,45 +241,7 @@ func TestParsePatchFlushesHunklessFileBeforeTheNextOne(t *testing.T) {
 	}, got)
 }
 
-// A hunk header is model-written text: it may claim more lines than the file has.
-func TestApplyHunkSurvivesOversizedHunkHeader(t *testing.T) {
-	lines := []string{"a", "b", "c", "d", "e"}
-
-	tests := []struct {
-		name string
-		hunk patchHunk
-		want []string
-	}{
-		{
-			name: "count far past the end replaces the tail",
-			hunk: patchHunk{OldStart: 2, OldCount: 999, Lines: []patchLine{{Type: '+', Content: "B"}}},
-			want: []string{"a", "B"},
-		},
-		{
-			name: "count past the end from the first line replaces everything",
-			hunk: patchHunk{OldStart: 1, OldCount: 999, Lines: []patchLine{{Type: '+', Content: "only"}}},
-			want: []string{"only"},
-		},
-		{
-			name: "start and count both past the end append",
-			hunk: patchHunk{OldStart: 99, OldCount: 999, Lines: []patchLine{{Type: '+', Content: "f"}}},
-			want: []string{"a", "b", "c", "d", "e", "f"},
-		},
-		{
-			name: "oversized deletion empties the file",
-			hunk: patchHunk{OldStart: 1, OldCount: 999},
-			want: []string{},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			assert.Equal(t, tt.want, applyHunk(lines, tt.hunk))
-		})
-	}
-}
-
-func TestApplyPatchToolSurvivesOversizedHunkHeader(t *testing.T) {
+func TestApplyPatchToolRejectsOversizedHunkHeader(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "short.txt")
 	require.NoError(t, os.WriteFile(path, []byte("one\ntwo\n"), 0o644))
@@ -292,11 +252,82 @@ func TestApplyPatchToolSurvivesOversizedHunkHeader(t *testing.T) {
 	require.NoError(t, err)
 
 	result, err := newApplyPatchTool(dir, directFileMutator{}).Execute(context.Background(), raw)
-	require.NoError(t, err)
-
-	assert.Contains(t, result.Output, "short.txt")
+	require.Error(t, err)
+	assert.Nil(t, result)
 
 	content, err := os.ReadFile(path)
 	require.NoError(t, err)
-	assert.Equal(t, "only", string(content))
+	assert.Equal(t, "one\ntwo\n", string(content))
+}
+
+func TestApplyHunkUsesExactAnchorWhenLineHintIsStale(t *testing.T) {
+	hunk := patchHunk{
+		OldStart: 99,
+		OldCount: 1,
+		NewCount: 1,
+		Lines:    []patchLine{{Type: '-', Content: "target"}, {Type: '+', Content: "updated"}},
+	}
+	got, _, err := applyHunkAt([]string{"header", "target", "tail"}, hunk, 98, false)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"header", "updated", "tail"}, got)
+}
+
+func TestApplyHunkRejectsMissingOldBlock(t *testing.T) {
+	hunk := patchHunk{
+		OldStart: 1,
+		OldCount: 1,
+		NewCount: 1,
+		Lines:    []patchLine{{Type: '-', Content: "missing"}, {Type: '+', Content: "new"}},
+	}
+	_, _, err := applyHunkAt([]string{"present"}, hunk, 0, false)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "old block not found")
+}
+
+func TestApplyHunkFallsBackToTrailingWhitespace(t *testing.T) {
+	hunk := patchHunk{
+		OldStart: 1,
+		OldCount: 1,
+		NewCount: 1,
+		Lines:    []patchLine{{Type: '-', Content: "target"}, {Type: '+', Content: "updated"}},
+	}
+	got, _, err := applyHunkAt([]string{"target   "}, hunk, 0, false)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"updated"}, got)
+}
+
+func TestApplyHunkRejectsAmbiguousTie(t *testing.T) {
+	hunk := patchHunk{
+		OldStart: 2,
+		OldCount: 1,
+		NewCount: 1,
+		Lines:    []patchLine{{Type: '-', Content: "target"}, {Type: '+', Content: "updated"}},
+	}
+	_, _, err := applyHunkAt([]string{"target", "other", "target"}, hunk, 1, false)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "ambiguous")
+}
+
+func TestApplyHunkPrefersExactRunningContentMetric(t *testing.T) {
+	hunk := patchHunk{
+		OldStart: 1,
+		OldCount: 1,
+		NewCount: 1,
+		Lines:    []patchLine{{Type: '-', Content: "target"}, {Type: '+', Content: "updated"}},
+	}
+	got, _, err := applyHunkAt([]string{"target ", "other", "target"}, hunk, 0, false)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"target ", "other", "updated"}, got)
+}
+
+func TestApplyHunkRejectsContextOnMissingFile(t *testing.T) {
+	hunk := patchHunk{
+		OldStart: 1,
+		OldCount: 1,
+		NewCount: 2,
+		Lines:    []patchLine{{Type: ' ', Content: "context"}, {Type: '+', Content: "new"}},
+	}
+	_, _, err := applyHunkAt(nil, hunk, 0, true)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "old block not found")
 }

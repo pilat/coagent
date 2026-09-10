@@ -45,7 +45,7 @@ func lockFileRead(path string) func() {
 }
 
 func (p *pathLocks) acquire(path string) (*pathLockEntry, string) {
-	key := filepath.Clean(path)
+	key := canonicalExistingPath(filepath.Clean(path))
 
 	p.mu.Lock()
 	defer p.mu.Unlock()

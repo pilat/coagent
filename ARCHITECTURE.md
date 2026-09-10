@@ -107,7 +107,7 @@ does not imply a tier except where it expresses an implementation variant.
 - `internal/sessionbus` — in-process session-event subscriptions and non-blocking fan-out.
 - `internal/sessionevent` — session-to-controller notification vocabulary.
 - `internal/sessionlifecycle` — runner ownership, recovery and durable stop coordination.
-- `internal/sessionstore` — durable sessions, messages, inbox and atomic delivery primitives.
+- `internal/sessionstore` — durable sessions, messages, inbox, atomic delivery primitives, and the session-file-read ledger for write-guard checks.
 - `internal/shellenv` — captured per-worktree shell environment for child processes.
 - `internal/subagent` — typed parent-child link vocabulary and durable subagent ledger access.
 - `internal/todo` — session-local task tracking.
@@ -125,8 +125,9 @@ does not imply a tier except where it expresses an implementation variant.
 SQLite is the source of truth for runtime facts that must survive restart:
 projects, sessions, append-only messages, durable inbox entries, delivery
 identity, subagent links, schedules, curated memory, MCP definitions, and
-delivery records, including tool-activation grants, root-tree budgets,
-durable TODO state and the background-process lifecycle ledger. Each session
+delivery records, including tool-activation grants, root-tree budgets, durable
+TODO state, per-session file-read ledger (storing `{mtime_unix_nano, size, hash}`
+for write-guard checks) and the background-process lifecycle ledger. Each session
 row also carries its current session-shields
 state; a root command changes the complete tree transactionally and child or
 replacement creation inherits it inside the creating transaction. Configuration files, their recoverable backups and the
@@ -695,8 +696,11 @@ decisions.
 The session package owns prompt construction, model-tool iteration, context
 projection, loop detection and the sole tool-gating API. It receives a prepared
 tool stack rather than reaching into daemon state. Session-store owns immutable
-messages, compaction metadata/replacement ordering and durable inbox sequencing;
-`transcript` owns the durable message-row vocabulary shared with producers.
+messages, compaction metadata/replacement ordering and durable inbox sequencing.
+It also owns the `session_file_reads` ledger (`(session_id, path)` PK) storing
+`{mtime_unix_nano, size, hash}`; `write` checks it before overwriting existing files,
+while `apply_patch` and `edit` refresh it post-mutation without rejecting on
+mismatch. `transcript` owns the durable message-row vocabulary shared with producers.
 `progress` owns the neutral context and operator-snapshot vocabulary shared by
 the session projection and progress runtime.
 `inputruntime` implements the session-owned consumption seam without letting the

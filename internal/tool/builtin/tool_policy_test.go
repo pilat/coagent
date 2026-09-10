@@ -22,7 +22,7 @@ func TestCoreRegistry_ParallelSafePolicies(t *testing.T) {
 		Provider: config.SearchProviderTavily,
 		APIKey:   "tvly-test",
 	}
-	registerCoreTools(reg, t.TempDir(), nil, nil, nil, nil, nil, nil, mutator, unified, nil, "project-1", 1, 1)
+	registerCoreTools(reg, t.TempDir(), nil, nil, nil, nil, nil, nil, mutator, unified, nil, "", 1, 1, nil)
 
 	want := map[string]bool{
 		"read":        true,

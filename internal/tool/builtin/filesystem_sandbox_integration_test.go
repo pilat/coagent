@@ -427,7 +427,7 @@ func TestFilesystemTools_NativeSandboxPatchRemainsSequential(t *testing.T) {
 
 	require.Error(t, err)
 	assert.Nil(t, result)
-	assertTestFileContent(t, allowed, "after")
+	assertTestFileContent(t, allowed, "before")
 	assertTestFileContent(t, denied, "before")
 }
 

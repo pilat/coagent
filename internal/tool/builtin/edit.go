@@ -31,7 +31,9 @@ Examples:
 - Replace a line: old_string: "    old line content\n", new_string: "    new line content\n"
 - Delete lines: old_string: "line to delete\n", new_string: ""
 - Insert after a line: old_string: "existing line\n", new_string: "existing line\nnew inserted line\n"
-- Rename everywhere: old_string: "oldName", new_string: "newName", replace_all: true`
+- Rename everywhere: old_string: "oldName", new_string: "newName", replace_all: true
+
+Editing a file also counts as having read it for a later write.`
 
 var _ tool.Tool = (*editTool)(nil)
 
@@ -47,6 +49,7 @@ type editTool struct {
 	lspMgr  lsp.Manager
 	mutator fileMutator
 	access  safefile.Access
+	tracker FileReadTracker
 }
 
 func newEditToolWithAccess(
@@ -54,8 +57,9 @@ func newEditToolWithAccess(
 	access safefile.Access,
 	lspMgr lsp.Manager,
 	mutator fileMutator,
+	tracker FileReadTracker,
 ) *editTool {
-	return &editTool{workDir: workDir, access: access, lspMgr: lspMgr, mutator: mutator}
+	return &editTool{workDir: workDir, access: access, lspMgr: lspMgr, mutator: mutator, tracker: tracker}
 }
 
 func newEditTool(workDir string, lspMgr lsp.Manager, mutator fileMutator) *editTool {
@@ -155,6 +159,7 @@ func (t *editTool) parseEditParams(params json.RawMessage, log *zap.Logger) (edi
 	return p, nil
 }
 
+//nolint:wsl_v5 // Exact replacement and ledger refresh share one file lock.
 func (t *editTool) applyEdit(
 	ctx context.Context,
 	filePath string,
@@ -192,8 +197,27 @@ func (t *editTool) applyEdit(
 	if err := t.mutator.WriteFile(ctx, filePath, []byte(newContent), false); err != nil {
 		return "", nil, false, fmt.Errorf("write file: %w", err)
 	}
+	if err := t.recordMutation(ctx, filePath); err != nil {
+		return "", nil, false, err
+	}
 
 	return newContent, finalRanges, p.ReplaceAll, nil
+}
+
+//nolint:wsl_v5 // Fingerprint persistence is the post-mutation ledger boundary.
+func (t *editTool) recordMutation(ctx context.Context, filePath string) error {
+	if t.tracker == nil {
+		return nil
+	}
+
+	path, record, err := recordFingerprint(t.access, t.workDir, filePath)
+	if err != nil {
+		return err
+	}
+	if err := t.tracker.RecordRead(ctx, path, record); err != nil {
+		return fmt.Errorf("record edited file read: %w", err)
+	}
+	return nil
 }
 
 func (t *editTool) buildOutput(newContent string, finalRanges []editRange, hasReplaceAll bool) string {

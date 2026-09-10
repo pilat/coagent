@@ -153,6 +153,23 @@ func TestApplyPatchTool_MultipleFilesRemainSequential(t *testing.T) {
 	assert.Equal(t, "two", string(two))
 }
 
+func TestApplyPatchTool_PlansAllFilesBeforeWriting(t *testing.T) {
+	workDir := t.TempDir()
+	first := filepath.Join(workDir, "first.txt")
+	require.NoError(t, os.WriteFile(first, []byte("before\n"), 0o644))
+	tool := newApplyPatchTool(workDir, directFileMutator{})
+	patch := "--- a/first.txt\n+++ b/first.txt\n@@ -1,1 +1,1 @@\n-before\n+after\n" +
+		"--- a/second.txt\n+++ b/second.txt\n@@ -1,1 +1,1 @@\n-missing\n+new"
+
+	result, err := tool.Execute(context.Background(), marshalApplyPatchParams(t, patch))
+
+	require.Error(t, err)
+	assert.Nil(t, result)
+	content, readErr := os.ReadFile(first)
+	require.NoError(t, readErr)
+	assert.Equal(t, "before\n", string(content))
+}
+
 func TestApplyPatchTool_RejectsEmptyAndMalformedPatch(t *testing.T) {
 	tool := newApplyPatchTool(t.TempDir(), directFileMutator{})
 
@@ -188,11 +205,13 @@ func TestApplyPatchTool_DelegatesMutation(t *testing.T) {
 
 	require.ErrorIs(t, err, want)
 	assert.Nil(t, result)
-	require.Len(t, mutator.calls, 1)
+	require.Len(t, mutator.calls, 2)
 	assert.Equal(t, path, mutator.calls[0].path)
 	assert.Equal(t, []byte("after\n"), mutator.calls[0].content)
 	assert.True(t, mutator.calls[0].createParents)
 	assert.Equal(t, "marker", mutator.calls[0].ctx.Value(mutationContextKey{}))
+	assert.Equal(t, path, mutator.calls[1].path)
+	assert.Equal(t, []byte("before\n"), mutator.calls[1].content)
 
 	content, readErr := os.ReadFile(path)
 	require.NoError(t, readErr)
