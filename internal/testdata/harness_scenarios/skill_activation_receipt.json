@@ -95,7 +95,7 @@
     },
     {
       "type": "message_persistent",
-      "content": "probe answer",
+      "content": "probe answer\n\n🤖 `fake-model` · iteration 2\n⌚ <elapsed> · 💰 $0.0 total",
       "attributes": {
         "manager_id": "telegram:main",
         "model_input_generation": 1
@@ -126,13 +126,13 @@
       "releases_input": true
     },
     {
-      "type": "message_persistent",
+      "type": "message_replaceable",
       "content": "probe answer",
       "attributes": {
         "manager_id": "telegram:main",
         "model_input_generation": 2
       },
-      "source_key": "message:6:final",
+      "source_key": "message:6:progress",
       "model_input_generation": 2,
       "previous_message_type": "message_persistent",
       "previous_model_input_generation": 2,
@@ -150,7 +150,7 @@
       },
       "source_key": "tool:receipt-skill:direct:0",
       "model_input_generation": 3,
-      "previous_message_type": "message_persistent",
+      "previous_message_type": "message_replaceable",
       "previous_model_input_generation": 2,
       "previous_message_ids": [
         "<msg-5>"
@@ -159,7 +159,7 @@
     },
     {
       "type": "message_persistent",
-      "content": "model activation complete",
+      "content": "model activation complete\n\n🤖 `fake-model` · iteration 5\n⌚ <elapsed> · 💰 $0.0 total",
       "attributes": {
         "manager_id": "telegram:main",
         "model_input_generation": 3

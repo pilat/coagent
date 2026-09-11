@@ -236,5 +236,5 @@ func TestActiveBackgroundSectionReadsLiveProcessAndSubagentProviders(t *testing.
 	section := agent.activeBackgroundSection(t.Context())
 	assert.Contains(t, section, "process bgp_1 (running): output /tmp/process.out")
 	assert.Contains(t, section, "#42 (background): running")
-	assert.Contains(t, section, "<WAITING/>")
+	assert.Contains(t, section, "Snapshot from activation start")
 }

@@ -19,7 +19,6 @@ import (
 const (
 	emptyResponseWarnThreshold  = 3
 	emptyResponseBreakThreshold = 6
-	waitingMarker               = "<WAITING/>"
 
 	// compactionAttemptCap is how many consecutive automatic compactions may fail
 	// to relieve the pressure before the automatic path stops trying.
@@ -86,7 +85,6 @@ type loopRunner struct {
 	acceptedManagerInput bool
 	compactionFailures   int
 	autoCompactionOff    bool
-	waitingRequested     bool
 }
 
 //nolint:funlen,gocyclo,wsl_v5 // Loop ordering is the session protocol.
@@ -185,11 +183,6 @@ func runLoop(ctx context.Context, agent *svc, opts loopOptions, callback iterati
 		if err := r.recordIteration(ctx); err != nil {
 			return r.result, err
 		}
-		if r.waitingRequested {
-			r.result.Suspended = true
-			return r.result, nil
-		}
-
 		if r.agent.budgetFired {
 			r.result.Suspended = true
 
@@ -459,7 +452,7 @@ func normalizedFinishType(finishType string) string {
 	}
 }
 
-//nolint:funlen,gocognit,gocyclo,nestif,wsl_v5 // Budget persistence, direct replies, and final selection share one boundary.
+//nolint:funlen,gocyclo,nestif,wsl_v5 // Budget persistence, direct replies, and final selection share one boundary.
 func (r *loopRunner) recordIteration(ctx context.Context) error {
 	r.result.Iterations++
 	if r.lastResp.FinishType == llmwire.FinishLength || r.lastResp.FinishType == llmwire.FinishUnknown {
@@ -467,14 +460,6 @@ func (r *loopRunner) recordIteration(ctx context.Context) error {
 	}
 
 	replyToInput := r.replyToInput
-	// The marker outranks tool calls: a poll next to <WAITING/> is forbidden, and the
-	// tool result would wake the session it parked.
-	if r.hasLiveWakeSource(ctx) && hasWaitingMarker(r.lastResp.Text) {
-		r.lastResp.ToolCalls = nil
-		r.lastResp.FinishType = llmwire.FinishStop
-		r.waitingRequested = true
-	}
-
 	if r.cb != nil {
 		if callbackErr := r.cb(r.result.Iterations, r.lastResp, r.lastResp.ToolCalls, false); callbackErr != nil {
 			r.result.Error = callbackErr
@@ -487,15 +472,6 @@ func (r *loopRunner) recordIteration(ctx context.Context) error {
 		r.agent.outputEnabled,
 		replyToInput,
 	)
-	if r.waitingRequested {
-		// Strip the waiting marker before notifying.
-		output = withoutWaitingMarker(output)
-		if output != "" && r.agent.outputEnabled {
-			outputType = sessionstore.OutputMessageReplaceable
-		} else {
-			outputType = ""
-		}
-	}
 	if outputType == sessionstore.OutputMessagePersistent && len(r.lastResp.ToolCalls) == 0 {
 		if renderer, ok := r.agent.boundary.(finalOutputBoundary); ok {
 			var renderErr error
@@ -524,7 +500,7 @@ func (r *loopRunner) recordIteration(ctx context.Context) error {
 		}
 		_, fired, replyPublished, err := r.agent.budgetGate.PersistResponse(
 			ctx, stored, budgetOutputType, budgetOutput,
-			!r.waitingRequested && len(r.lastResp.ToolCalls) == 0 && r.lastResp.FinishType == llmwire.FinishStop,
+			len(r.lastResp.ToolCalls) == 0 && r.lastResp.FinishType == llmwire.FinishStop,
 		)
 		if err != nil {
 			return fmt.Errorf("persist budgeted response: %w", err)
@@ -536,7 +512,7 @@ func (r *loopRunner) recordIteration(ctx context.Context) error {
 		r.publishedReply = replyPublished
 	} else if err := r.agent.ms.addAssistantMessageOutput(
 		ctx, r.lastResp, outputType, output,
-		!r.waitingRequested && len(r.lastResp.ToolCalls) == 0 && r.lastResp.FinishType == llmwire.FinishStop,
+		len(r.lastResp.ToolCalls) == 0 && r.lastResp.FinishType == llmwire.FinishStop,
 	); err != nil {
 		r.result.Error = err
 
@@ -545,10 +521,7 @@ func (r *loopRunner) recordIteration(ctx context.Context) error {
 	if r.agent.budgetGate == nil {
 		r.publishedReply = outputType == sessionstore.OutputMessagePersistent && len(r.lastResp.ToolCalls) > 0
 	}
-	if r.waitingRequested && output != "" {
-		r.notify(ctx, output)
-	}
-	r.replyToInput = false
+	r.replyToInput = replyToInput && len(r.lastResp.ToolCalls) > 0
 
 	if r.lastResp.CostUSD > 0 {
 		r.log.Info(
@@ -559,7 +532,7 @@ func (r *loopRunner) recordIteration(ctx context.Context) error {
 	}
 
 	if r.agent.budgetGate != nil {
-		if replyToInput && !r.waitingRequested && !r.agent.budgetFired && len(r.lastResp.ToolCalls) == 0 &&
+		if replyToInput && !r.agent.budgetFired && len(r.lastResp.ToolCalls) == 0 &&
 			r.lastResp.FinishType == llmwire.FinishStop &&
 			strings.TrimSpace(r.lastResp.Text) != "" {
 			output := r.lastResp.Text
@@ -580,53 +553,6 @@ func (r *loopRunner) recordIteration(ctx context.Context) error {
 	r.log.Info("iteration_end", zap.Int("iter", r.result.Iterations))
 
 	return nil
-}
-
-func (r *loopRunner) hasLiveWakeSource(ctx context.Context) bool {
-	if r.agent.hasLiveWakeSource != nil && r.agent.hasLiveWakeSource(ctx) {
-		return true
-	}
-
-	if r.agent.activeSubagentsProvider == nil {
-		return false
-	}
-
-	for _, child := range r.agent.activeSubagentsProvider(ctx) {
-		if !child.Blocking && (child.State == "spawned" || child.State == "running") {
-			return true
-		}
-	}
-
-	return false
-}
-
-func hasWaitingMarker(text string) bool {
-	for line := range strings.SplitSeq(text, "\n") {
-		if isWaitingMarker(line) {
-			return true
-		}
-	}
-
-	return false
-}
-
-func withoutWaitingMarker(text string) string {
-	lines := strings.Split(text, "\n")
-
-	kept := lines[:0]
-	for _, line := range lines {
-		if !isWaitingMarker(line) {
-			kept = append(kept, line)
-		}
-	}
-
-	return strings.TrimSpace(strings.Join(kept, "\n"))
-}
-
-func isWaitingMarker(line string) bool {
-	line = strings.TrimSpace(line)
-
-	return line == waitingMarker
 }
 
 func assistantOutput(response *llmwire.Response, enabled, replyToInput bool) (sessionstore.OutputType, string) {
@@ -659,9 +585,6 @@ func (r *loopRunner) finalize(ctx context.Context) (*loopResult, error) {
 			r.result.FinalResponse = state.Text
 		}
 	}
-
-	// Strip waiting marker from final response before persisting/notifying.
-	r.result.FinalResponse = withoutWaitingMarker(r.result.FinalResponse)
 
 	if strings.TrimSpace(r.result.FinalResponse) != "" && r.agent.outputEnabled {
 		if err := r.agent.ms.enqueueFinalAssistantOutput(ctx, r.result.FinalResponse); err != nil {

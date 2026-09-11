@@ -13,6 +13,7 @@ import (
 	"github.com/pilat/coagent/internal/config"
 	"github.com/pilat/coagent/internal/sessionlifecycle"
 	"github.com/pilat/coagent/internal/sessionstore"
+	"github.com/pilat/coagent/internal/subagent"
 	"github.com/pilat/coagent/internal/transcript"
 )
 
@@ -25,6 +26,46 @@ type budgetServiceProbe struct {
 	releaseErr   error
 	releaseCalls int
 	beginCalls   chan struct{}
+}
+
+func TestBackgroundObligationProjectsTreeLedgersAndInbox(t *testing.T) {
+	h := newSubagentHarnessWith(t, trivialRespond)
+	defer h.shutdown()
+
+	root, err := h.sessStore.CreateSession(h.ctx, h.projectID, "fake-model", "", nil)
+	require.NoError(t, err)
+	child, err := h.sessStore.CreateSubagentSession(
+		h.ctx, h.projectID, root.ID, root.ID, "general", "fake-model", "",
+	)
+	require.NoError(t, err)
+
+	obligation, err := h.mgr.hasBackgroundObligation(h.ctx, root.ID)
+	require.NoError(t, err)
+	assert.False(t, obligation)
+
+	require.NoError(t, h.links.InsertSubagentLink(h.ctx, subagent.Link{
+		ParentID: root.ID, ChildID: child, TaskCallID: "background", Blocking: false,
+		State: subagent.StateRunning,
+	}))
+	obligation, err = h.mgr.hasBackgroundObligation(h.ctx, root.ID)
+	require.NoError(t, err)
+	assert.True(t, obligation)
+	budgetProbe := &budgetServiceProbe{record: &sessionstore.BudgetRecord{
+		State: sessionstore.BudgetArmed, Generation: 1,
+	}}
+	h.mgr.budgetSvc = budgetProbe
+	retained, err := h.mgr.retainBudgetForBackground(h.ctx, root.ID)
+	require.NoError(t, err)
+	assert.True(t, retained)
+	assert.Zero(t, budgetProbe.releaseCalls)
+
+	other, err := h.sessStore.CreateSession(h.ctx, h.projectID, "fake-model", "", nil)
+	require.NoError(t, err)
+	_, err = h.sessStore.EnqueueAsyncInput(h.ctx, other.ID, sessionstore.InputSourceProcess, "other", nil)
+	require.NoError(t, err)
+	obligation, err = h.mgr.hasBackgroundObligation(h.ctx, other.ID)
+	require.NoError(t, err)
+	assert.True(t, obligation)
 }
 
 func (s *budgetServiceProbe) Get(context.Context, int64) (*sessionstore.BudgetRecord, error) {

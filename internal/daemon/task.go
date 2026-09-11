@@ -223,8 +223,8 @@ func (t *taskTool) executeBackground(ctx context.Context, p TaskParams) (*tool.R
 	output := fmt.Sprintf(
 		"Launched background subagent #%d (%s). Continue useful independent work. "+
 			"Its result will arrive automatically in a new turn; do not poll for it. "+
-			"Do not poll with sleep, schedule, or get_subagent_result. "+
-			"Do not poll with tools; when this is your only remaining work, reply with a standalone <WAITING/> line and no tool calls. ",
+			"Do not poll with sleep or schedule. "+
+			"When no useful independent work remains, briefly report what is still running and end the response. ",
 		res.ChildID, p.SubagentType,
 	)
 

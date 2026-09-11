@@ -406,7 +406,7 @@ func TestService_SlotLimitPerSession(t *testing.T) {
 		return exec.CommandContext(ctx, "sleep", "30"), nil
 	}
 
-	for range LiveProcessLimit {
+	for range BackgroundProcessLimit {
 		_, err := service.Start(ctx, testSpec(2), spawn)
 		require.NoError(t, err)
 	}
@@ -415,7 +415,7 @@ func TestService_SlotLimitPerSession(t *testing.T) {
 	require.ErrorIs(t, err, ErrSlotLimit)
 
 	// A different exact session owns an independent allowance.
-	for range LiveProcessLimit {
+	for range BackgroundProcessLimit {
 		_, err := service.Start(ctx, testSpec(3), spawn)
 		require.NoError(t, err)
 	}
@@ -430,6 +430,68 @@ func TestService_SlotLimitPerSession(t *testing.T) {
 	assert.Eventually(t, func() bool {
 		return service.liveCount(2) == 0 && service.liveCount(3) == 0
 	}, 10*time.Second, 20*time.Millisecond)
+}
+
+func TestService_AdmissionSeparatesCandidateAndBackgroundCapacity(t *testing.T) {
+	ctx := context.Background()
+	store := newTestStore(t)
+	service := newTestService(t, store, nil, nil)
+	spawn := func(ctx context.Context) (*exec.Cmd, error) {
+		return exec.CommandContext(ctx, "sleep", "30"), nil
+	}
+
+	for range BackgroundProcessLimit {
+		_, err := service.Start(ctx, testSpec(2), spawn)
+		require.NoError(t, err)
+	}
+
+	candidateSpec := testSpec(2)
+	candidateSpec.Advertise = false
+	candidate, err := service.Start(ctx, candidateSpec, spawn)
+	require.NoError(t, err)
+	_, err = service.Start(ctx, candidateSpec, spawn)
+	require.ErrorIs(t, err, ErrCandidateLimit)
+
+	advertised, err := service.Advertise(ctx, candidate.ID)
+	require.ErrorIs(t, err, ErrSlotLimit)
+	assert.False(t, advertised)
+	stored, err := store.GetProcess(ctx, candidate.ID)
+	require.NoError(t, err)
+	assert.Nil(t, stored.AdvertisedAt)
+
+	_, err = service.CancelTree(ctx, 1, IntentSessionKilled)
+	require.NoError(t, err)
+}
+
+func TestService_AdvertisePromotesCandidateAdmissionClass(t *testing.T) {
+	ctx := context.Background()
+	store := newTestStore(t)
+	service := newTestService(t, store, nil, nil)
+	spawn := func(ctx context.Context) (*exec.Cmd, error) {
+		return exec.CommandContext(ctx, "sleep", "30"), nil
+	}
+
+	for range BackgroundProcessLimit - 1 {
+		_, err := service.Start(ctx, testSpec(2), spawn)
+		require.NoError(t, err)
+	}
+	candidateSpec := testSpec(2)
+	candidateSpec.Advertise = false
+	candidate, err := service.Start(ctx, candidateSpec, spawn)
+	require.NoError(t, err)
+
+	advertised, err := service.Advertise(ctx, candidate.ID)
+	require.NoError(t, err)
+	assert.True(t, advertised)
+	service.mu.Lock()
+	assert.Equal(t, BackgroundProcessLimit, service.background[2])
+	assert.Zero(t, service.candidates[2])
+	assert.Equal(t, admissionBackground, service.classes[candidate.ID])
+	service.mu.Unlock()
+
+	_, err = service.CancelTree(ctx, 1, IntentSessionKilled)
+	require.NoError(t, err)
+	assert.Eventually(t, func() bool { return service.liveCount(2) == 0 }, 10*time.Second, 20*time.Millisecond)
 }
 
 func TestService_ForegroundCompletion(t *testing.T) {

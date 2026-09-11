@@ -82,7 +82,7 @@
         {
           "method": "editMessageText",
           "chat_id": -100123,
-          "text": "background launched; yielded without sleep",
+          "text": "background launched; yielded without sleep\n\n🤖 <code>fake-model</code> · iteration 3\n⌚ &lt;elapsed&gt; · 💰 $0.0 total",
           "parse_mode": "HTML"
         },
         {
@@ -91,8 +91,9 @@
           "thread_id": 7001
         },
         {
-          "method": "editMessageText",
+          "method": "sendMessage",
           "chat_id": -100123,
+          "thread_id": 7001,
           "text": "<b>🟣 Background work</b>\n\n🤖 <code>fake-model</code> · iteration 4\n⌚ &lt;elapsed&gt; · 💰 $0.0 total\n🧩 Subagents · 0 foreground · 1 background",
           "parse_mode": "HTML"
         },
@@ -123,7 +124,7 @@
     },
     {
       "trace": "background_wait_canary.json",
-      "source_test": "TestHarnessScenario_BackgroundWaitCanaryResumesWithoutPolling",
+      "source_test": "TestHarnessScenario_BackgroundFinalResponseResumesOnCompletion",
       "calls": [
         {
           "method": "createForumTopic",
@@ -149,7 +150,7 @@
         {
           "method": "editMessageText",
           "chat_id": -100123,
-          "text": "waiting for child",
+          "text": "child still running\n\n🤖 <code>fake-model</code> · iteration 2\n⌚ &lt;elapsed&gt; · 💰 $0.0 total",
           "parse_mode": "HTML"
         },
         {
@@ -158,8 +159,9 @@
           "thread_id": 7001
         },
         {
-          "method": "editMessageText",
+          "method": "sendMessage",
           "chat_id": -100123,
+          "thread_id": 7001,
           "text": "<b>🟣 Background work</b>\n\n🤖 <code>fake-model</code> · iteration 3\n⌚ &lt;elapsed&gt; · 💰 $0.0 total\n🧩 Subagents · 0 foreground · 1 background",
           "parse_mode": "HTML"
         },
@@ -210,7 +212,7 @@
           "method": "sendMessage",
           "chat_id": -100123,
           "thread_id": 7001,
-          "text": "First answer.",
+          "text": "First answer.\n\n🤖 <code>fake-model</code> · iteration 2\n⌚ &lt;elapsed&gt; · 💰 $0.0 total",
           "parse_mode": "HTML"
         },
         {
@@ -262,7 +264,7 @@
           "method": "sendMessage",
           "chat_id": -100123,
           "thread_id": 7001,
-          "text": "stopped root resumed after restart",
+          "text": "stopped root resumed after restart\n\n🤖 <code>fake-model</code> · iteration 1\n💰 $0.0 total",
           "parse_mode": "HTML"
         }
       ]
@@ -385,7 +387,7 @@
           "method": "sendMessage",
           "chat_id": -100123,
           "thread_id": 7001,
-          "text": "session ready",
+          "text": "session ready\n\n🤖 <code>fake-model</code> · iteration 1\n⌚ &lt;elapsed&gt; · 💰 $0.0 total",
           "parse_mode": "HTML"
         },
         {
@@ -441,7 +443,7 @@
           "method": "sendMessage",
           "chat_id": -100123,
           "thread_id": 7001,
-          "text": "recovered complete answer",
+          "text": "recovered complete answer\n\n🤖 <code>fake-model</code> · iteration 2\n⌚ &lt;elapsed&gt; · 💰 $0.5 total",
           "parse_mode": "HTML"
         }
       ]
@@ -577,7 +579,7 @@
         {
           "method": "editMessageText",
           "chat_id": -100123,
-          "text": "All done.",
+          "text": "All done.\n\n🤖 <code>fake-model</code> · iteration 3\n⌚ &lt;elapsed&gt; · 💰 $0.0 total",
           "parse_mode": "HTML"
         }
       ]
@@ -806,7 +808,7 @@
           "method": "sendMessage",
           "chat_id": -100123,
           "thread_id": 7001,
-          "text": "Hi there.",
+          "text": "Hi there.\n\n🤖 <code>fake-model</code> · iteration 1\n⌚ &lt;elapsed&gt; · 💰 $0.0 total",
           "parse_mode": "HTML"
         },
         {
@@ -919,7 +921,7 @@
         {
           "method": "editMessageText",
           "chat_id": -100123,
-          "text": "probe answer",
+          "text": "probe answer\n\n🤖 <code>fake-model</code> · iteration 2\n⌚ &lt;elapsed&gt; · 💰 $0.0 total",
           "parse_mode": "HTML"
         },
         {
@@ -967,7 +969,7 @@
           "method": "sendMessage",
           "chat_id": -100123,
           "thread_id": 7001,
-          "text": "model activation complete",
+          "text": "model activation complete\n\n🤖 <code>fake-model</code> · iteration 5\n⌚ &lt;elapsed&gt; · 💰 $0.0 total",
           "parse_mode": "HTML"
         }
       ]
@@ -1028,7 +1030,7 @@
         {
           "method": "editMessageText",
           "chat_id": -100123,
-          "text": "⏸️ Session stopped",
+          "text": "⏸️ Session stopped\nCancelled background processes: 0",
           "parse_mode": "HTML"
         }
       ]
@@ -1061,7 +1063,7 @@
         {
           "method": "editMessageText",
           "chat_id": -100123,
-          "text": "⏸️ Session stopped",
+          "text": "⏸️ Session stopped\nCancelled background processes: 1",
           "parse_mode": "HTML"
         }
       ]
@@ -1106,7 +1108,7 @@
         {
           "method": "editMessageText",
           "chat_id": -100123,
-          "text": "Working on it, done for now.",
+          "text": "Working on it, done for now.\n\n🤖 <code>fake-model</code> · iteration 2\n⌚ &lt;elapsed&gt; · 💰 $0.0 total",
           "parse_mode": "HTML"
         },
         {
@@ -1129,7 +1131,7 @@
         {
           "method": "editMessageText",
           "chat_id": -100123,
-          "text": "⏸️ Session stopped",
+          "text": "⏸️ Session stopped\nCancelled background processes: 0",
           "parse_mode": "HTML"
         },
         {
@@ -1141,7 +1143,7 @@
           "method": "sendMessage",
           "chat_id": -100123,
           "thread_id": 7001,
-          "text": "Resumed and done.",
+          "text": "Resumed and done.\n\n🤖 <code>fake-model</code> · iteration 3\n⌚ &lt;elapsed&gt; · 💰 $0.0 total",
           "parse_mode": "HTML"
         }
       ]

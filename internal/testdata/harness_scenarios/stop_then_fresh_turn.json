@@ -87,7 +87,7 @@
     },
     {
       "type": "message_persistent",
-      "content": "Working on it, done for now.",
+      "content": "Working on it, done for now.\n\n🤖 `fake-model` · iteration 2\n⌚ <elapsed> · 💰 $0.0 total",
       "attributes": {
         "manager_id": "telegram:main",
         "model_input_generation": 1
@@ -119,7 +119,7 @@
     },
     {
       "type": "message_persistent",
-      "content": "⏸️ Session stopped",
+      "content": "⏸️ Session stopped\nCancelled background processes: 0",
       "attributes": {
         "manager_id": "telegram:main",
         "model_input_generation": 1
@@ -135,7 +135,7 @@
     },
     {
       "type": "message_persistent",
-      "content": "Resumed and done.",
+      "content": "Resumed and done.\n\n🤖 `fake-model` · iteration 3\n⌚ <elapsed> · 💰 $0.0 total",
       "attributes": {
         "manager_id": "telegram:main",
         "model_input_generation": 2

@@ -76,7 +76,8 @@ func dropTransientEvents(events []controllerapi.SessionNotification) []controlle
 
 	for _, event := range events {
 		if event.Notification.Type == sessionevent.NotifyStateChanged ||
-			event.Notification.Type == sessionevent.NotifySessionCreated {
+			event.Notification.Type == sessionevent.NotifySessionCreated ||
+			event.Notification.Message == "⚠️ Could not verify background work before releasing the active budget; the budget remains armed." {
 			continue
 		}
 

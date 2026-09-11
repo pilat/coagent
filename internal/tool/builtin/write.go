@@ -220,7 +220,9 @@ func (t *writeTool) authorizeOverwrite(ctx context.Context, filePath string) err
 		return fmt.Errorf("look up file read: %w", err)
 	}
 	if !found {
-		return errors.New("refusing to overwrite existing file: read the file first")
+		return errors.New(
+			"refusing to overwrite existing file: Bash output is not a recorded read; use read on the file first",
+		)
 	}
 
 	var info os.FileInfo

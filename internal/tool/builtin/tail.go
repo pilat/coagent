@@ -32,7 +32,7 @@ Usage:
 - The result is capped at 50 KiB; when complete final lines exceed it, the largest final whole-line suffix that fits is returned with a truncation notice
 - An individually long line uses read's line truncation
 - Rejects binary and non-regular files
-- Do not use tail on a running background process; its final result arrives automatically in a new turn`
+- Use tail for deliberate output inspection when diagnostics are needed; do not repeat it as a polling loop because final results arrive automatically`
 )
 
 var _ tool.Tool = (*tailTool)(nil)

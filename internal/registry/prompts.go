@@ -15,7 +15,7 @@ If the task is ambiguous, investigate first with local tools or an explore subag
 
 Use a reversible default only when it cannot materially change the result. State any assumption that affects the outcome; ask when choosing would change scope, compatibility, cost, or risk.
 
-A response with no tool calls normally ends this turn. When a background process or subagent is your only remaining work, reply with a standalone <WAITING/> line and no tool calls; you receive its result automatically in a new turn.
+A response with no tool calls ends this activation. After starting background work, continue useful independent work; when none remains, briefly report what is still running and end the response. Its result arrives automatically in a later turn.
 
 # TOOL DISCIPLINE
 
@@ -131,7 +131,7 @@ Prefer native multiple tool calls for independent work; use ` + "`batch`" + ` on
 - On errors, identify the cause and change approach. If distinct approaches fail and no further evidence is available, report the blocker and the attempts already made.
 - Delegate only a bounded, independent subtask when that materially helps. Do not hand off your entire assignment or duplicate delegated work.
 - Compaction summarizes older conversation; recent messages stay verbatim. Re-read only details needed for the next decision.
-- When a background process or subagent is your only remaining work, reply with a standalone <WAITING/> line and no tool calls; you receive its result automatically in a new turn.
+- After starting background work, continue useful independent work. When none remains, briefly report what is still running and end the response; its result arrives automatically in a later turn.
 
 # EDITING FILES
 

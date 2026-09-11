@@ -306,7 +306,7 @@ func TestHarnessScenario_BackgroundChildIsTheWakeSource(t *testing.T) {
 	parentMessages := h.parentMessages(parentID)
 	assert.Equal(t, 1, countToolResultsFor(parentMessages, tool.IDSleep))
 	assert.Contains(t, lastToolResultContent(parentMessages, tool.IDSleep),
-		"result arrives automatically in a new turn")
+		"result arrives automatically in a later turn")
 	schedules, err := h.schedStore.ListSchedules(h.ctx, parentID)
 	require.NoError(t, err)
 	assert.Empty(t, schedules, "pending child must remain the sole wake source")
@@ -417,7 +417,7 @@ func TestHarnessScenario_BackgroundChildCheckpointUpdatesRootCard(t *testing.T) 
 	waitForVisibleMessage(t, collector, parentID, "background completion delivered")
 }
 
-func TestHarnessScenario_BackgroundWaitCanaryResumesWithoutPolling(t *testing.T) {
+func TestHarnessScenario_BackgroundFinalResponseResumesOnCompletion(t *testing.T) {
 	childRelease := make(chan struct{})
 	var rootCalls atomic.Int64
 
@@ -434,12 +434,7 @@ func TestHarnessScenario_BackgroundWaitCanaryResumesWithoutPolling(t *testing.T)
 		}
 
 		if hasToolResultFor(messages, tool.IDTask) {
-			return &llmwire.Response{
-				Text: "waiting for child\n<WAITING/>",
-				ToolCalls: []llmwire.ToolCall{{
-					ID: "forbidden-poll", Name: "ls", Arguments: []byte(`{"path":"."}`),
-				}},
-			}
+			return &llmwire.Response{Text: "child still running"}
 		}
 
 		return &llmwire.Response{ToolCalls: []llmwire.ToolCall{{
@@ -462,21 +457,20 @@ func TestHarnessScenario_BackgroundWaitCanaryResumesWithoutPolling(t *testing.T)
 		"manager_id": scenarioManagerID,
 	})
 	require.NoError(t, err)
-	waitForVisibleMessage(t, collector, parentID, "waiting for child")
+	waitForVisibleMessage(t, collector, parentID, "child still running")
 
 	parentMessages := h.parentMessages(parentID)
-	assert.Zero(t, countToolResultsFor(parentMessages, "ls"))
 	require.True(t, slices.ContainsFunc(parentMessages, func(message llmwire.Message) bool {
 		return message.Role == llmwire.RoleAssistant &&
-			message.Content == "waiting for child\n<WAITING/>" && len(message.ToolCalls) == 0
+			message.Content == "child still running" && len(message.ToolCalls) == 0
 	}))
 
 	var outputType, output string
 	require.NoError(t, h.db.QueryRowContext(h.ctx, `SELECT type, content FROM session_outbox
-		WHERE session_id = ? AND content = 'waiting for child' ORDER BY id DESC LIMIT 1`, parentID).
+		WHERE session_id = ? AND content LIKE 'child still running%' ORDER BY id DESC LIMIT 1`, parentID).
 		Scan(&outputType, &output))
-	assert.Equal(t, string(sessionstore.OutputMessageReplaceable), outputType)
-	assert.Equal(t, "waiting for child", output)
+	assert.Equal(t, string(sessionstore.OutputMessagePersistent), outputType)
+	assert.Contains(t, output, "child still running")
 
 	close(childRelease)
 	waitForVisibleMessage(t, collector, parentID, "completion after wait")

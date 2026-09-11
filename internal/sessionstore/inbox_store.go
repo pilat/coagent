@@ -65,6 +65,7 @@ type InboxStore interface { //nolint:interfacebloat // One durable FIFO boundary
 	PeekPending(ctx context.Context, sessionID int64) (*InboxInput, error)
 	ListPendingShieldCommands(ctx context.Context, sessionID int64) ([]*InboxInput, error)
 	ListRootsWithPendingShieldCommands(ctx context.Context) ([]int64, error)
+	HasPendingAsyncInputByRoot(ctx context.Context, rootID int64) (bool, error)
 	PromoteInput(ctx context.Context, inputID int64, preparedContent string) (*transcript.Message, error)
 	// PromoteInputWithReceipt is PromoteInput plus one persistent output row
 	// committed in the same transaction. An empty receipt content inserts no
@@ -81,6 +82,24 @@ type InboxStore interface { //nolint:interfacebloat // One durable FIFO boundary
 	CancelPendingInputsForStop(ctx context.Context, sessionIDs []int64, reason string) (int64, error)
 	HasAcceptedInput(ctx context.Context, sessionID int64) (bool, error)
 	ListSessionsWithRecoverableInput(ctx context.Context) ([]int64, error)
+}
+
+// HasPendingAsyncInputByRoot reports process or subagent input addressed to the root tree.
+//
+//nolint:wsl_v5 // The EXISTS query is one bounded projection.
+func (s *store) HasPendingAsyncInputByRoot(ctx context.Context, rootID int64) (bool, error) {
+	var exists bool
+	err := s.db.QueryRowContext(ctx, `SELECT EXISTS(
+		SELECT 1 FROM session_inbox input
+		JOIN sessions owner ON owner.id = input.session_id
+		WHERE (owner.id = ? OR owner.root_id = ?)
+			AND input.state = 'pending' AND input.source IN ('process', 'subagent')
+	)`, rootID, rootID).Scan(&exists)
+	if err != nil {
+		return false, fmt.Errorf("query pending async input by root: %w", err)
+	}
+
+	return exists, nil
 }
 
 //nolint:wsl_v5 // Ordered scanning is one recovery projection.

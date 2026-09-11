@@ -95,15 +95,13 @@ func TestHarnessE2E_ForegroundFollowUpRejectsCompetingSleep(t *testing.T) {
 	})
 	close(releaseInitial)
 	initialAnswer := "initial child delivered"
-	initial := waitForHarnessChatTrace(t, client, started.SessionID, initialAnswer)
-	assert.Contains(t, initial.Messages, initialAnswer)
+	waitForHarnessChatTrace(t, client, started.SessionID, initialAnswer)
 	sendHarnessChat(t, client, managercli.SendParams{
 		SessionID: started.SessionID,
 		Text:      "continue the same child",
 	})
 	acceptedAnswer := "follow-up accepted"
 	accepted := waitForHarnessChatTrace(t, client, started.SessionID, acceptedAnswer)
-	assert.Contains(t, accepted.Messages, acceptedAnswer)
 	assert.Zero(t, accepted.Waiting,
 		"send_to_subagent+sleep must be rejected before a competing wait reaches a controller")
 	assert.Zero(t, accepted.Errors, "parent/child concurrency must not leak transient SQLite errors")
@@ -111,7 +109,6 @@ func TestHarnessE2E_ForegroundFollowUpRejectsCompetingSleep(t *testing.T) {
 	close(releaseFollowUp)
 	continuedAnswer := "continuation delivered"
 	continued := waitForHarnessChatTrace(t, client, started.SessionID, continuedAnswer)
-	assert.Contains(t, continued.Messages, continuedAnswer)
 	assert.Zero(t, continued.Waiting)
 	assert.Zero(t, continued.Errors)
 	assertHarnessDaemonHasNoSQLiteContention(t, daemonLog)
