@@ -107,6 +107,7 @@ func TestTaskTool_SkillSeedsForegroundAndBackground(t *testing.T) {
 
 func TestTaskTool_SkillFailuresDoNotSpawn(t *testing.T) {
 	tests := []TaskParams{
+		{Description: "task", SubagentType: "general"},
 		{Prompt: "prompt", Skill: "review", Description: "task", SubagentType: "general"},
 		{SkillArgs: "args", Description: "task", SubagentType: "general"},
 		{Skill: "missing", Description: "task", SubagentType: "general"},
@@ -190,6 +191,18 @@ func TestSubagentToolDescriptionsTeachExecutionContract(t *testing.T) {
 	task := taskToolWith(&mockSpawner{})
 	taskDescription := task.Description()
 	taskParameters := string(task.Parameters())
+	var schema map[string]any
+	require.NoError(t, json.Unmarshal(task.Parameters(), &schema))
+	assert.Equal(t, "object", schema["type"])
+	assert.NotContains(t, schema, "oneOf")
+	assert.NotContains(t, schema, "anyOf")
+	assert.Equal(t, []any{"description", "subagent_type"}, schema["required"])
+	properties, ok := schema["properties"].(map[string]any)
+	require.True(t, ok)
+	for _, name := range []string{"prompt", "skill", "skill_args", "description", "subagent_type", "model", "background"} {
+		assert.Contains(t, properties, name)
+	}
+
 	if strings.Contains(taskParameters, `"id"`) {
 		t.Errorf("task must not advertise the removed fake resume path: %s", taskParameters)
 	}
@@ -231,10 +244,8 @@ func TestSubagentToolDescriptionsTeachExecutionContract(t *testing.T) {
 		"Set true only when you can continue useful independent work without the answer",
 		"parent receives the result automatically in a later turn",
 		"Never use sleep or get_subagent_result polling to wait for it",
-		`"oneOf"`,
-		`"required": ["prompt"]`,
-		`"required": ["skill"]`,
-		"Optional arguments for skill",
+		"Use exactly one of prompt or skill",
+		"only valid when skill is set",
 	} {
 		if !strings.Contains(taskParameters, want) {
 			t.Errorf("background parameter missing %q: %s", want, taskParameters)

@@ -149,10 +149,10 @@ func (t *taskTool) Parameters() json.RawMessage {
 		"properties": {
 			"prompt": {
 				"type": "string",
-				"description": "The detailed task description for the subagent"
+				"description": "The detailed task description for the subagent. Use exactly one of prompt or skill."
 			},
-			"skill": {"type": "string", "description": "A model-invocable skill to seed the subagent"},
-			"skill_args": {"type": "string", "description": "Optional arguments for skill"},
+			"skill": {"type": "string", "description": "A model-invocable skill to seed the subagent. Use exactly one of prompt or skill."},
+			"skill_args": {"type": "string", "description": "Optional arguments for skill; only valid when skill is set"},
 			"description": {
 				"type": "string",
 				"description": "A short (3-5 word) description of the task"
@@ -171,11 +171,7 @@ func (t *taskTool) Parameters() json.RawMessage {
 				"description": "When false or omitted, wait for the answer before continuing. Set true only when you can continue useful independent work without the answer: the call returns a numeric subagent_id immediately, and the parent receives the result automatically in a later turn. Never use sleep or get_subagent_result polling to wait for it."
 			}
 		},
-		"required": ["description", "subagent_type"],
-		"oneOf": [
-			{"required": ["prompt"]},
-			{"required": ["skill"]}
-		]
+		"required": ["description", "subagent_type"]
 	}`, enumStr))
 }
 
