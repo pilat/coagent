@@ -16,8 +16,8 @@ func TestSetManagerPatch_CreateSummary(t *testing.T) {
 	require.True(t, v.Applied)
 
 	staged, v := f.svc.Stage(SetManagerPatch(ManagerPatch{
-		ID: "tg2", Driver: strptr("telegram"), BotToken: strptr(Ref("MANAGER_TG2_BOT_TOKEN")),
-		AllowedUserIDs: &[]int64{7}, TargetChatID: int64ptr(-100),
+		ID: "tg2", Driver: new("telegram"), BotToken: new(Ref("MANAGER_TG2_BOT_TOKEN")),
+		AllowedUserIDs: &[]int64{7}, TargetChatID: new(int64(-100)),
 	}))
 	require.True(t, v.Applied)
 	assert.Equal(t, `add manager "tg2"`, staged.Summary)
@@ -37,7 +37,7 @@ func TestSetManagerPatch_NoOpSummary(t *testing.T) {
 	f := newFixture(t, baseConfig, baseSecrets)
 
 	staged, v := f.svc.Stage(SetManagerPatch(ManagerPatch{
-		ID: "tg", Driver: strptr("telegram"),
+		ID: "tg", Driver: new("telegram"),
 	}))
 	require.True(t, v.Applied)
 	assert.Equal(t, `reapply manager "tg" (no config changes)`, staged.Summary)
@@ -48,7 +48,7 @@ func TestSetManagerPatch_ReservedCliID(t *testing.T) {
 	f := newFixture(t, baseConfig, baseSecrets)
 
 	v := f.rejected(t, SetManagerPatch(ManagerPatch{
-		ID: "cli", Driver: strptr("telegram"), BotToken: strptr(Ref("TOK")),
+		ID: "cli", Driver: new("telegram"), BotToken: new(Ref("TOK")),
 		AllowedUserIDs: &[]int64{7},
 	}))
 	assert.Contains(t, v.Reason(), `reserved`)
@@ -121,7 +121,7 @@ func TestSetManagerPatch_DriverCannotChange(t *testing.T) {
 	f := newFixture(t, baseConfig, baseSecrets)
 
 	v := f.rejected(t, SetManagerPatch(ManagerPatch{
-		ID: "tg", Driver: strptr("slack"),
+		ID: "tg", Driver: new("slack"),
 	}))
 	assert.Contains(t, v.Reason(), "driver cannot change")
 }
@@ -130,7 +130,7 @@ func TestSetManagerPatch_TargetChatIDCannotChange(t *testing.T) {
 	f := newFixture(t, baseConfig, baseSecrets)
 
 	v := f.rejected(t, SetManagerPatch(ManagerPatch{
-		ID: "tg", TargetChatID: int64ptr(-200),
+		ID: "tg", TargetChatID: new(int64(-200)),
 	}))
 	assert.Contains(t, v.Reason(), "forum target cannot change")
 }
@@ -160,7 +160,7 @@ func TestSetManagerPatch_CreationNeedsDriver(t *testing.T) {
 	f := newFixture(t, baseConfig, baseSecrets)
 
 	v := f.rejected(t, SetManagerPatch(ManagerPatch{
-		ID: "tg2", BotToken: strptr(Ref("TOK")),
+		ID: "tg2", BotToken: new(Ref("TOK")),
 		AllowedUserIDs: &[]int64{7},
 	}))
 	assert.Contains(t, v.Reason(), "needs a driver")
@@ -170,7 +170,7 @@ func TestSetManagerPatch_CreationNeedsToken(t *testing.T) {
 	f := newFixture(t, baseConfig, baseSecrets)
 
 	v := f.rejected(t, SetManagerPatch(ManagerPatch{
-		ID: "tg2", Driver: strptr("telegram"),
+		ID: "tg2", Driver: new("telegram"),
 		AllowedUserIDs: &[]int64{7},
 	}))
 	assert.Contains(t, v.Reason(), "bot_token reference")
@@ -183,8 +183,8 @@ func TestSetManagerPatch_EnabledDefaultsToTrueOnCreate(t *testing.T) {
 	require.True(t, v.Applied)
 
 	cfg := f.applied(t, SetManagerPatch(ManagerPatch{
-		ID: "tg2", Driver: strptr("telegram"), BotToken: strptr(Ref("MANAGER_TG2_BOT_TOKEN")),
-		AllowedUserIDs: &[]int64{7}, TargetChatID: int64ptr(-1001),
+		ID: "tg2", Driver: new("telegram"), BotToken: new(Ref("MANAGER_TG2_BOT_TOKEN")),
+		AllowedUserIDs: &[]int64{7}, TargetChatID: new(int64(-1001)),
 	}))
 
 	require.Len(t, cfg.Managers, 2)
@@ -197,7 +197,7 @@ func TestSetManagerPatch_NoOpDoesNotWrite(t *testing.T) {
 
 	before := f.raw(t).Managers[0]
 	f.applied(t, SetManagerPatch(ManagerPatch{
-		ID: "tg", Driver: strptr("telegram"),
+		ID: "tg", Driver: new("telegram"),
 	}))
 	after := f.raw(t).Managers[0]
 
@@ -208,7 +208,7 @@ func TestSetManagerPatch_CanDisableExistingManager(t *testing.T) {
 	f := newFixture(t, baseConfig, baseSecrets)
 
 	cfg := f.applied(t, SetManagerPatch(ManagerPatch{
-		ID: "tg", Enabled: boolptr(false),
+		ID: "tg", Enabled: new(false),
 	}))
 
 	require.NotNil(t, cfg.Managers[0].Enabled)

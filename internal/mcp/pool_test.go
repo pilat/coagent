@@ -274,7 +274,7 @@ func TestPool_PrunePoliciesDropsUnreferencedHashes(t *testing.T) {
 func TestHash_IgnoresDisabledEnabled(t *testing.T) {
 	cfg1 := ServerConfig{Command: "cmd", Disabled: false}
 	cfg2 := ServerConfig{Command: "cmd", Disabled: true}
-	cfg3 := ServerConfig{Command: "cmd", Enabled: boolPtr(false)}
+	cfg3 := ServerConfig{Command: "cmd", Enabled: new(false)}
 
 	assert.Equal(t, cfg1.Hash(), cfg2.Hash())
 	assert.Equal(t, cfg1.Hash(), cfg3.Hash())

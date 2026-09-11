@@ -150,7 +150,7 @@ func telegramResponse(req *http.Request, payload string) *http.Response {
 }
 
 func TestServiceTopicPath(t *testing.T) {
-	m := &Manager{id: "telegram-main", cfg: config.ManagerEntry{TargetChatID: targetID(-100123)}}
+	m := &Manager{id: "telegram-main", cfg: config.ManagerEntry{TargetChatID: new(int64(-100123))}}
 
 	home := t.TempDir()
 	restoreHome := coagenthome.Override(home)
@@ -178,7 +178,7 @@ func TestEnsureServiceTopicPersistsBeforeReturning(t *testing.T) {
 	m := &Manager{
 		cfg: config.ManagerEntry{
 			BotToken:     "token",
-			TargetChatID: targetID(-100123),
+			TargetChatID: new(int64(-100123)),
 		},
 		httpClient: &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 			methods = append(methods, filepath.Base(req.URL.Path))
@@ -206,7 +206,7 @@ func TestEnsureServiceTopicCompensatesPersistenceFailure(t *testing.T) {
 	m := &Manager{
 		cfg: config.ManagerEntry{
 			BotToken:     "token",
-			TargetChatID: targetID(-100123),
+			TargetChatID: new(int64(-100123)),
 		},
 		httpClient: &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 			method := filepath.Base(req.URL.Path)
@@ -248,7 +248,7 @@ func TestEnsureServiceTopicRejectsCorruptDurableRecord(t *testing.T) {
 
 	called := false
 	m := &Manager{
-		cfg: config.ManagerEntry{BotToken: "token", TargetChatID: targetID(-100123)},
+		cfg: config.ManagerEntry{BotToken: "token", TargetChatID: new(int64(-100123))},
 		httpClient: &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 			called = true
 
@@ -295,7 +295,7 @@ func TestResolveSessionByTopicID_UsesMetadataFallback(t *testing.T) {
 			ID:               "telegram-main",
 			Enabled:          &enabled,
 			BotToken:         "token",
-			TargetChatID:     targetID(-100123),
+			TargetChatID:     new(int64(-100123)),
 			SendChunkDelayMS: 0,
 			PollTimeoutSec:   30,
 		},
@@ -347,7 +347,7 @@ func TestReconcileOnStartup_IgnoresKilledSessions(t *testing.T) {
 			ID:               "telegram-main",
 			Enabled:          &enabled,
 			BotToken:         "token",
-			TargetChatID:     targetID(-100123),
+			TargetChatID:     new(int64(-100123)),
 			SendChunkDelayMS: 0,
 			PollTimeoutSec:   30,
 		},
@@ -384,7 +384,7 @@ func TestHandleCallback_KillDispatchesController(t *testing.T) {
 			ID:               "telegram-main",
 			Enabled:          &enabled,
 			BotToken:         "token",
-			TargetChatID:     targetID(-100123),
+			TargetChatID:     new(int64(-100123)),
 			AllowedUserIDs:   []int64{42},
 			SendChunkDelayMS: 0,
 			PollTimeoutSec:   30,
@@ -426,7 +426,7 @@ func TestHandleCallback_KillRejectsAForeignRetainedButton(t *testing.T) {
 		id: "telegram-main",
 		cfg: config.ManagerEntry{
 			ID: "telegram-main", Enabled: &enabled, BotToken: "token",
-			TargetChatID: targetID(-100123), AllowedUserIDs: []int64{42},
+			TargetChatID: new(int64(-100123)), AllowedUserIDs: []int64{42},
 		},
 		controller:     ctrl,
 		httpClient:     &http.Client{Transport: roundTripFunc(okTelegramRoundTrip)},

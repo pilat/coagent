@@ -48,8 +48,7 @@ func (t *bashTool) runDirect(
 	if runErr != nil {
 		state = backgroundprocess.StateFailed
 
-		var exitErr *exec.ExitError
-		if errors.As(runErr, &exitErr) {
+		if exitErr, ok := errors.AsType[*exec.ExitError](runErr); ok {
 			code = exitErr.ExitCode()
 		} else {
 			code = -1

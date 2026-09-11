@@ -81,7 +81,7 @@ func (h *serviceTopicHarness) manager() *Manager {
 	return &Manager{
 		id: "telegram-main",
 		cfg: config.ManagerEntry{
-			ID: "telegram-main", BotToken: "test", TargetChatID: targetID(-100123),
+			ID: "telegram-main", BotToken: "test", TargetChatID: new(int64(-100123)),
 			ServiceTopicName: "Group support", ServiceTopicIconEmojiID: "777",
 		},
 		target: forumTarget{chatID: -100123, topology: forumTopologyGroup},

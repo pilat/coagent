@@ -20,10 +20,10 @@ func TestBudgetCrossingReason(t *testing.T) {
 		State: BudgetArmed, CostLimitUSD: &limit, BaselineCostUSD: 0, ArmedAt: armedAt,
 	}
 	durationBudget := &BudgetRecord{
-		State: BudgetArmed, DurationSeconds: intPtr(3600), BaselineCostUSD: 0, ArmedAt: armedAt,
+		State: BudgetArmed, DurationSeconds: new(int64(3600)), BaselineCostUSD: 0, ArmedAt: armedAt,
 	}
 	bothBudget := &BudgetRecord{
-		State: BudgetArmed, CostLimitUSD: &limit, DurationSeconds: intPtr(3600),
+		State: BudgetArmed, CostLimitUSD: &limit, DurationSeconds: new(int64(3600)),
 		BaselineCostUSD: 0, ArmedAt: armedAt,
 	}
 
@@ -98,5 +98,3 @@ func TestBudgetCrossingReason(t *testing.T) {
 		})
 	}
 }
-
-func intPtr(v int64) *int64 { return &v }

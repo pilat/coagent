@@ -33,8 +33,8 @@ func TestNormalizeCost(t *testing.T) {
 		{name: "zero rejected", value: &zero, wantErr: costErr},
 		{name: "negative rejected", value: &negative, wantErr: costErr},
 		{name: "over cap rejected", value: &over, wantErr: costErr},
-		{name: "NaN rejected", value: ptrFloat(math.NaN()), wantErr: costErr},
-		{name: "Inf rejected", value: ptrFloat(math.Inf(1)), wantErr: costErr},
+		{name: "NaN rejected", value: new(math.NaN()), wantErr: costErr},
+		{name: "Inf rejected", value: new(math.Inf(1)), wantErr: costErr},
 	}
 
 	for _, tt := range tests {
@@ -63,8 +63,6 @@ func TestNormalizeCost(t *testing.T) {
 	}
 }
 
-func ptrFloat(value float64) *float64 { return &value }
-
 // TestParseRelativeDuration pins the relative-only subset: Go durations and the
 // integer d/w suffixes pass; RFC3339 timestamps must never sneak through.
 func TestParseRelativeDuration(t *testing.T) {
@@ -81,9 +79,9 @@ func TestParseRelativeDuration(t *testing.T) {
 	}{
 		{name: "empty is omitted", value: "", want: nil},
 		{name: "go duration", value: "90s", want: &minuteAndAHalf},
-		{name: "exact one minute boundary", value: "1m", want: ptrDuration(time.Minute)},
-		{name: "exact 365 day boundary", value: "365d", want: ptrDuration(365 * 24 * time.Hour)},
-		{name: "day suffix", value: "3d", want: ptrDuration(72 * time.Hour)},
+		{name: "exact one minute boundary", value: "1m", want: new(time.Minute)},
+		{name: "exact 365 day boundary", value: "365d", want: new(365 * 24 * time.Hour)},
+		{name: "day suffix", value: "3d", want: new(72 * time.Hour)},
 		{name: "week suffix", value: "1w", want: &week},
 		{name: "below one minute", value: "30s", wantErr: "duration must be between 1 minute and 365 days"},
 		{name: "over one year", value: "400d", wantErr: "duration must be between 1 minute and 365 days"},
@@ -120,5 +118,3 @@ func TestParseRelativeDuration(t *testing.T) {
 		})
 	}
 }
-
-func ptrDuration(value time.Duration) *time.Duration { return &value }

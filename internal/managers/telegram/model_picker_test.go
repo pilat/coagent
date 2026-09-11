@@ -31,7 +31,7 @@ func pickerManager(t *testing.T, ctrl *fakeController, calls *[]tgCall) *Manager
 		id: "telegram-main",
 		cfg: config.ManagerEntry{
 			ID: "telegram-main", Enabled: &enabled, BotToken: "token",
-			TargetChatID: targetID(-100123), PollTimeoutSec: 30,
+			TargetChatID: new(int64(-100123)), PollTimeoutSec: 30,
 		},
 		controller:     ctrl,
 		httpClient:     &http.Client{Transport: telegramCallRecorder(t, calls)},

@@ -134,14 +134,14 @@ func TestBudgetServiceSetClearAndRearm(t *testing.T) {
 	assert.Equal(t, armed.Generation, replayed.Generation)
 	assert.Equal(t, receipt, replayReceipt)
 
-	rearmed, receipt2, err := f.svc.Set(ctx, f.newGrant(ctx), nil, ptrDuration(2*time.Hour))
+	rearmed, receipt2, err := f.svc.Set(ctx, f.newGrant(ctx), nil, new(2*time.Hour))
 	require.NoError(t, err)
 	assert.Equal(t, int64(2), rearmed.Generation, "a re-arm bumps the generation")
 	assert.Equal(t, sessionstore.BudgetArmed, rearmed.State)
 	assert.Nil(t, rearmed.CostLimitUSD, "a re-arm replaces the whole limit")
 	assert.Equal(t, "Budget armed: 2h0m0s wall time", receipt2)
 
-	both, bothReceipt, err := f.svc.Set(ctx, f.newGrant(ctx), &cost, ptrDuration(2*time.Hour))
+	both, bothReceipt, err := f.svc.Set(ctx, f.newGrant(ctx), &cost, new(2*time.Hour))
 	require.NoError(t, err)
 	assert.Equal(t, int64(3), both.Generation)
 	assert.Equal(t, "Budget armed: $5.000000 additional persisted cost or 2h0m0s wall time", bothReceipt)
@@ -203,7 +203,7 @@ func TestBudgetServiceObserveFirePrecedence(t *testing.T) {
 	t.Run("below both limits does not fire", func(t *testing.T) {
 		t.Parallel()
 
-		f := armWithDuration(t, ptrFloat(5), time.Hour)
+		f := armWithDuration(t, new(float64(5)), time.Hour)
 		f.seedCost(ctx, 1)
 		_, fired, err := f.svc.Observe(ctx, f.rootID, 0, time.Now().UTC(), "")
 		require.NoError(t, err)
@@ -216,7 +216,7 @@ func TestBudgetServiceObserveFirePrecedence(t *testing.T) {
 		f := newBudgetFixture(ctx, t)
 		f.seedCost(ctx, 1.25)
 		cost := 5.0
-		_, _, err := f.svc.Set(ctx, f.grant(), &cost, ptrDuration(365*24*time.Hour))
+		_, _, err := f.svc.Set(ctx, f.grant(), &cost, new(365*24*time.Hour))
 		require.NoError(t, err)
 		// Delta counts only cost accumulated after the arm baseline: the arm saw
 		// 1.25, the observation's own transaction sums 6.25.
@@ -245,7 +245,7 @@ func TestBudgetServiceObserveFirePrecedence(t *testing.T) {
 		f := newBudgetFixture(ctx, t)
 		f.seedCost(ctx, 0.25)
 		cost := 5.0
-		_, _, err := f.svc.Set(ctx, f.grant(), &cost, ptrDuration(365*24*time.Hour))
+		_, _, err := f.svc.Set(ctx, f.grant(), &cost, new(365*24*time.Hour))
 		require.NoError(t, err)
 		f.seedCost(ctx, 5)
 		record, _, err := f.svc.Observe(
@@ -258,7 +258,7 @@ func TestBudgetServiceObserveFirePrecedence(t *testing.T) {
 	t.Run("duration deadline crossed at observation wins over cost", func(t *testing.T) {
 		t.Parallel()
 
-		f := armWithDuration(t, ptrFloat(0.01), time.Hour)
+		f := armWithDuration(t, new(0.01), time.Hour)
 		f.seedCost(ctx, 5)
 		armedAt := time.Now().UTC()
 		record, fired, err := f.svc.Observe(
@@ -273,7 +273,7 @@ func TestBudgetServiceObserveFirePrecedence(t *testing.T) {
 	t.Run("cost wins while the duration deadline is still ahead", func(t *testing.T) {
 		t.Parallel()
 
-		f := armWithDuration(t, ptrFloat(0.01), time.Hour)
+		f := armWithDuration(t, new(0.01), time.Hour)
 		f.seedCost(ctx, 5)
 		armedAt := time.Now().UTC()
 		record, fired, err := f.svc.Observe(
@@ -288,7 +288,7 @@ func TestBudgetServiceObserveFirePrecedence(t *testing.T) {
 	t.Run("released budget stops observing", func(t *testing.T) {
 		t.Parallel()
 
-		f := armWithDuration(t, ptrFloat(5), time.Hour)
+		f := armWithDuration(t, new(float64(5)), time.Hour)
 		_, err := budgetStore(f).ReleaseBudget(ctx, f.rootID, 1, "resumed")
 		require.NoError(t, err)
 

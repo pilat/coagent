@@ -252,7 +252,7 @@ func newTelegramHarnessManager(
 	return &Manager{
 		id: "telegram-main",
 		cfg: config.ManagerEntry{
-			ID: "telegram-main", BotToken: "test-token", TargetChatID: targetID(harnessChatID),
+			ID: "telegram-main", BotToken: "test-token", TargetChatID: new(int64(harnessChatID)),
 			SendChunkDelayMS: 0,
 		},
 		controller:     controller,

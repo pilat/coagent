@@ -339,10 +339,10 @@ func TestHandleSetModel_RaceWithLoopRead(t *testing.T) {
 
 func TestHandleSetModelWaitsForInFlightChatBeforeClosingOldClient(t *testing.T) {
 	oldClient := &blockingLLMClient{
-		mockLLMClientTracked: mockLLMClientTracked{model: "m1"},
-		started:              make(chan struct{}),
-		release:              make(chan struct{}),
-		closed:               make(chan struct{}),
+		model:   "m1",
+		started: make(chan struct{}),
+		release: make(chan struct{}),
+		closed:  make(chan struct{}),
 	}
 	newClientBuilt := make(chan struct{})
 	s := &svc{
@@ -441,7 +441,7 @@ func TestHandleSetModel_PreservesSessionID(t *testing.T) {
 		prompt:    newPromptBuilder("", "", ""),
 		ms:        newMessageStore(nil, 0, nil),
 		newLLMWithModel: func(_ *config.Config, _ string) (llm.Client, error) {
-			newClient = &mockLLMWithSessionTracking{mockLLMClientTracked: mockLLMClientTracked{model: "new-model"}}
+			newClient = &mockLLMWithSessionTracking{model: "new-model"}
 			return newClient, nil
 		},
 	}
@@ -467,7 +467,7 @@ func TestHandleSetModel_PreservesSubagentSessionID(t *testing.T) {
 		prompt:    newPromptBuilder("", "", ""),
 		ms:        newMessageStore(nil, 0, nil),
 		newLLMWithModel: func(_ *config.Config, _ string) (llm.Client, error) {
-			newClient = &mockLLMWithSessionTracking{mockLLMClientTracked: mockLLMClientTracked{model: "new-model"}}
+			newClient = &mockLLMWithSessionTracking{model: "new-model"}
 			return newClient, nil
 		},
 	}

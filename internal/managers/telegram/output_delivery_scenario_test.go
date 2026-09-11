@@ -49,7 +49,7 @@ func TestHarnessScenario_DelayedTelegramManagerDrainsRealSessionOutput(t *testin
 	h.waitForBacklog(t)
 
 	manager, err := New(config.ManagerEntry{
-		ID: delayedTelegramManagerID, BotToken: "test-token", TargetChatID: targetID(harnessChatID),
+		ID: delayedTelegramManagerID, BotToken: "test-token", TargetChatID: new(int64(harnessChatID)),
 	}, &config.UnifiedConfig{}, h.controller)
 	require.NoError(t, err)
 	manager.httpClient = &http.Client{Transport: h.recorder}

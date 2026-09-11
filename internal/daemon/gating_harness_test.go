@@ -144,7 +144,7 @@ func newGatingHarness(
 	factory := session.NewFactoryWithOptions(
 		cfg, nil, nil, sessStore, sessStore, nil, nil, nil, nil, nil,
 		session.WithLLMClientFactory(func(_ *config.Config) (llm.Client, error) {
-			return &recordingLLM{scriptedLLM: scriptedLLM{respond: respond}, rec: rec}, nil
+			return &recordingLLM{respond: respond, rec: rec}, nil
 		}),
 	)
 

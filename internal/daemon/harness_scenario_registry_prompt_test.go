@@ -178,7 +178,7 @@ func newRegistryPromptFactory(
 		nil, deps.mcpPool, deps.mcpRegistry, nil, nil,
 		session.WithLLMClientFactory(func(_ *config.Config) (llm.Client, error) {
 			return &registryPromptLLM{
-				scriptedLLM: scriptedLLM{respond: respond}, recorder: recorder, prompts: prompts,
+				respond: respond, recorder: recorder, prompts: prompts,
 			}, nil
 		}),
 	)

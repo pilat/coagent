@@ -166,8 +166,8 @@ func TestStage_RejectsCredentialValueInEveryCredentialField(t *testing.T) {
 		{
 			name: "manager bot_token",
 			op: SetManagerPatch(ManagerPatch{
-				ID: "tg2", Driver: strptr("telegram"), BotToken: strptr(fakeBotToken),
-				AllowedUserIDs: &[]int64{7}, TargetChatID: int64ptr(-100),
+				ID: "tg2", Driver: new("telegram"), BotToken: new(fakeBotToken),
+				AllowedUserIDs: &[]int64{7}, TargetChatID: new(int64(-100)),
 			}),
 		},
 		{
@@ -308,8 +308,8 @@ func TestSetManager_SetsEnabledExplicitly(t *testing.T) {
 	require.True(t, v.Applied)
 
 	cfg := f.applied(t, SetManagerPatch(ManagerPatch{
-		ID: "tg2", Driver: strptr("telegram"), BotToken: strptr(Ref("MANAGER_TG2_BOT_TOKEN")),
-		AllowedUserIDs: &[]int64{7}, TargetChatID: int64ptr(-1001),
+		ID: "tg2", Driver: new("telegram"), BotToken: new(Ref("MANAGER_TG2_BOT_TOKEN")),
+		AllowedUserIDs: &[]int64{7}, TargetChatID: new(int64(-1001)),
 	}))
 
 	require.Len(t, cfg.Managers, 2)
@@ -594,7 +594,7 @@ func TestSetManager_NewManagerNeedsATokenReference(t *testing.T) {
 	f := newFixture(t, baseConfig, baseSecrets)
 
 	v := f.rejected(t, SetManagerPatch(ManagerPatch{
-		ID: "tg2", Driver: strptr("telegram"), AllowedUserIDs: &[]int64{7}, TargetChatID: int64ptr(-100),
+		ID: "tg2", Driver: new("telegram"), AllowedUserIDs: &[]int64{7}, TargetChatID: new(int64(-100)),
 	}))
 	assert.Contains(t, v.Reason(), "bot_token reference")
 }
@@ -605,7 +605,7 @@ func TestSetManager_EmptyTokenKeepsTheExistingReference(t *testing.T) {
 	f := newFixture(t, baseConfig, baseSecrets)
 
 	cfg := f.applied(t, SetManagerPatch(ManagerPatch{
-		ID: "tg", Driver: strptr("telegram"), AllowedUserIDs: &[]int64{7, 9}, TargetChatID: int64ptr(-100),
+		ID: "tg", Driver: new("telegram"), AllowedUserIDs: &[]int64{7, 9}, TargetChatID: new(int64(-100)),
 	}))
 
 	require.Len(t, cfg.Managers, 1)

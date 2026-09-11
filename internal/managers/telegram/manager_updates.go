@@ -47,8 +47,7 @@ func (m *Manager) pollLoop(ctx context.Context) {
 }
 
 func nextPollWait(err error, backoff *time.Duration, fatalWarned *bool, log *zap.Logger) time.Duration {
-	var apiErr *tgAPIError
-	if errors.As(err, &apiErr) {
+	if apiErr, ok := errors.AsType[*tgAPIError](err); ok {
 		if apiErr.RetryAfter > 0 {
 			log.Warn("getupdates_rate_limited", zap.Int("retry_after", apiErr.RetryAfter))
 			return time.Duration(apiErr.RetryAfter) * time.Second

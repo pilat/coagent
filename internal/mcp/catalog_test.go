@@ -189,8 +189,7 @@ func TestCatalog_RetainsNoClientReferences(t *testing.T) {
 		reflect.TypeFor[Catalog](),
 		reflect.TypeFor[ToolMeta](),
 	} {
-		for i := range typ.NumField() {
-			field := typ.Field(i)
+		for field := range typ.Fields() {
 			assert.NotEqual(t, reflect.Pointer, field.Type.Kind(),
 				"%s.%s must not hold a reference", typ.Name(), field.Name)
 		}
