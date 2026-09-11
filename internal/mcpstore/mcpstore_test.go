@@ -121,7 +121,13 @@ func TestMigrationsApplyToAnExistingDatabase(t *testing.T) {
 		`DROP TABLE background_processes`,
 		// 00038 added the read-before-write ledger.
 		`DROP TABLE session_file_reads`,
-		`DELETE FROM goose_db_version WHERE version_id BETWEEN 16 AND 38`,
+		// 00039 added message finish-integrity columns. rejected_reason's CHECK
+		// references finish_type, so it must be dropped before finish_type.
+		`ALTER TABLE messages DROP COLUMN rejected_reason`,
+		`ALTER TABLE messages DROP COLUMN finish_type`,
+		`ALTER TABLE messages DROP COLUMN provider_finish_reason`,
+		`ALTER TABLE messages DROP COLUMN retry_of_message_id`,
+		`DELETE FROM goose_db_version WHERE version_id BETWEEN 16 AND 39`,
 	} {
 		_, err = db.ExecContext(ctx, stmt)
 		require.NoError(t, err, stmt)

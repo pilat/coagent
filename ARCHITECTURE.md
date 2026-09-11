@@ -272,6 +272,14 @@ provider requests are local to the client; durable operations must be idempotent
 across a process or producer retry. Loop detection terminates repetitive tool
 patterns rather than treating repeated calls as progress.
 
+The provider's normalized and native finish reasons are independent of response
+shape. Only an accepted `stop` without calls is terminal; actual calls returned
+with `stop` or `tool_calls` retain structural tool routing, while `tool_calls`
+without calls follows empty-response recovery. An ordinary `length` or unknown
+finish is rejected before output, waiting or tool execution. The first `length`
+adds one linked recovery input; a repeated `length` or unknown finish commits a
+terminal error. Compaction model calls retain their separate no-retry contract.
+
 When the exact session has a live background process or undelivered background
 subagent round, a standalone `<WAITING/>` or `I_WOULD_USE_<WAITING/>` line
 cooperatively suspends the loop. The second form is a polling-temptation canary.
@@ -324,6 +332,10 @@ Stored message content never changes after insertion. The model-visible
 conversation is a projection of rows plus context metadata, which keeps an
 unchanged prompt prefix byte-stable between context events. Oversized tool output
 is capped before insertion; the system never retroactively rewrites history.
+Every ordinary model attempt retains its response and finish evidence in this
+history. Rejected attempts remain included in lifetime usage, cost and message
+watermarks, but are excluded from provider, compaction, progress, manager,
+subagent-result and orphan-call projections.
 Image-bearing tool results store disk references (`messages.attachments`), not
 pixels. A project-confined read also persists its canonical rooted-read
 authority and root identity; drivers reopen through that root, so a renamed
@@ -434,6 +446,13 @@ closes admission before a generation drains and parks; managed park workers are
 cancelled and joined at shutdown. Startup reconciles armed and half-parked
 generations before normal session recovery. The next ordinary model-bound root
 input atomically releases a fired checkpoint and resumes only the root.
+
+For a rejected ordinary model attempt, session-store atomically advances the
+iteration, records usage and finish evidence, observes the root-tree budget and
+selects exactly one recovery, terminal-error or budget-park outcome. Budget
+crossing takes precedence. Recovery identity is the explicit link from its
+host-authored input to the rejected attempt; later manager input supersedes an
+unfinished chain through durable inbox provenance rather than transcript text.
 
 ### Tool-call scheduling: declared stages, fail-stop, atomic result sets
 

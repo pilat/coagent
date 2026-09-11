@@ -226,16 +226,18 @@ func storedMessage(msg *llmwire.Message) (*transcript.Message, error) {
 	}
 
 	return &transcript.Message{
-		Role:             msg.Role,
-		Content:          msg.Content,
-		ToolCallID:       msg.ToolCallID,
-		ToolName:         msg.ToolName,
-		ToolError:        msg.ToolError,
-		ToolCalls:        toolCallsJSON,
-		ReasoningContent: msg.ReasoningContent,
-		ReasoningRaw:     msg.ReasoningRaw,
-		Attachments:      attachmentsJSON,
-		CostUSD:          msg.CostUSD,
-		Usage:            usageJSON,
+		Role:                 msg.Role,
+		Content:              msg.Content,
+		ToolCallID:           msg.ToolCallID,
+		ToolName:             msg.ToolName,
+		ToolError:            msg.ToolError,
+		ToolCalls:            toolCallsJSON,
+		ReasoningContent:     msg.ReasoningContent,
+		ReasoningRaw:         msg.ReasoningRaw,
+		Attachments:          attachmentsJSON,
+		CostUSD:              msg.CostUSD,
+		Usage:                usageJSON,
+		FinishType:           msg.FinishType,
+		ProviderFinishReason: msg.ProviderFinishReason,
 	}, nil
 }

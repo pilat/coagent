@@ -72,8 +72,6 @@ func (s *svc) Run(ctx context.Context, prompt string) (string, error) {
 // the historical text-only API for direct callers, while RunDaemon must carry
 // suspension across the session boundary without reconstructing it from
 // producer ledgers that may have been created during this run.
-//
-//nolint:funlen // Run keeps setup, loop, and durable terminalization in causal order.
 func (s *svc) run(ctx context.Context, prompt string) (*loopResult, error) {
 	ctx = logger.With(ctx, zap.Int64("session_id", s.rootID), zap.Int64("agent_id", s.id))
 	log := logger.Ctx(ctx).Named("session.run")
@@ -114,36 +112,8 @@ func (s *svc) run(ctx context.Context, prompt string) (*loopResult, error) {
 		ctx,
 		s,
 		s.loopOpts,
-		func(iteration int, response *llmwire.Response, toolCalls []llmwire.ToolCall) error {
-			totalIteration := s.iterationOffset + iteration
-
-			s.stamper.touch()
-			log.Info("iteration", zap.Int("iter", iteration))
-
-			if response.Thoughts != "" {
-				log.Debug("thoughts", zap.String("text", response.Thoughts))
-			}
-
-			if response.Text != "" {
-				log.Info("response", zap.String("text", response.Text))
-			}
-
-			if len(toolCalls) > 0 {
-				for _, tc := range toolCalls {
-					args := logger.FormatArgs(tc.Arguments, 200)
-					log.Info("tool_call", zap.String("name", tc.Name), zap.String("args", args))
-				}
-			}
-
-			if saveErr := s.persistState(ctx, totalIteration, s.activationStatus()); saveErr != nil {
-				return fmt.Errorf("persist checkpoint (iteration %d): %w", totalIteration, saveErr)
-			}
-
-			if s.onIterationPersisted != nil {
-				s.onIterationPersisted(ctx, totalIteration)
-			}
-
-			return nil
+		func(iteration int, response *llmwire.Response, toolCalls []llmwire.ToolCall, alreadyPersisted bool) error {
+			return s.afterIteration(ctx, log, iteration, response, toolCalls, alreadyPersisted)
 		},
 	)
 
@@ -159,8 +129,10 @@ func (s *svc) run(ctx context.Context, prompt string) (*loopResult, error) {
 			result.ErrorNotice = notice
 		}
 
-		if saveErr := s.persistErrorState(ctx, totalIterations, notice); saveErr != nil {
-			return nil, errors.Join(err, fmt.Errorf("persist checkpoint error state: %w", saveErr))
+		if !result.TerminalStateCommitted {
+			if saveErr := s.persistErrorState(ctx, totalIterations, notice); saveErr != nil {
+				return nil, errors.Join(err, fmt.Errorf("persist checkpoint error state: %w", saveErr))
+			}
 		}
 
 		return result, err
@@ -182,6 +154,53 @@ func (s *svc) run(ctx context.Context, prompt string) (*loopResult, error) {
 	}
 
 	return result, nil
+}
+
+func (s *svc) afterIteration(
+	ctx context.Context,
+	log *zap.Logger,
+	iteration int,
+	response *llmwire.Response,
+	toolCalls []llmwire.ToolCall,
+	alreadyPersisted bool,
+) error {
+	totalIteration := s.iterationOffset + iteration
+	s.stamper.touch()
+	log.Info("iteration", zap.Int("iter", iteration))
+
+	if alreadyPersisted {
+		log.Info("model_response_rejected", zap.String("finish_type", response.FinishType))
+	} else {
+		logModelResponse(log, response, toolCalls)
+
+		if saveErr := s.persistState(ctx, totalIteration, s.activationStatus()); saveErr != nil {
+			return fmt.Errorf("persist checkpoint (iteration %d): %w", totalIteration, saveErr)
+		}
+	}
+
+	if s.onIterationPersisted != nil {
+		s.onIterationPersisted(ctx, totalIteration)
+	}
+
+	return nil
+}
+
+func logModelResponse(log *zap.Logger, response *llmwire.Response, toolCalls []llmwire.ToolCall) {
+	if response.Thoughts != "" {
+		log.Debug("thoughts", zap.String("text", response.Thoughts))
+	}
+
+	if response.Text != "" {
+		log.Info("response", zap.String("text", response.Text))
+	}
+
+	for _, call := range toolCalls {
+		log.Info(
+			"tool_call",
+			zap.String("name", call.Name),
+			zap.String("args", logger.FormatArgs(call.Arguments, 200)),
+		)
+	}
 }
 
 // activationStatus is the status a per-iteration checkpoint writes while the

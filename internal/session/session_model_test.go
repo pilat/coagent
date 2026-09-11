@@ -63,7 +63,7 @@ func (m *mockLLMClientTracked) Chat(
 	_ []llmwire.ToolSchema,
 	_ ...llmwire.ChatOption,
 ) (*llmwire.Response, error) {
-	return &llmwire.Response{Text: "done"}, nil
+	return &llmwire.Response{Text: "done", FinishType: llmwire.FinishStop}, nil
 }
 
 func (m *mockLLMClientTracked) Model() string                  { return m.model }
@@ -92,7 +92,7 @@ func (m *blockingLLMClient) Chat(
 	close(m.started)
 	<-m.release
 
-	return &llmwire.Response{Text: "done"}, nil
+	return &llmwire.Response{Text: "done", FinishType: llmwire.FinishStop}, nil
 }
 
 func (m *blockingLLMClient) Close() error {

@@ -104,8 +104,12 @@ func (c *scriptedLLM) Chat(
 
 		// The scripted harness bypasses provider parsing, so give an unparsed
 		// response the normal completion outcome a real client would report.
-		if o.resp.FinishType == "" && len(o.resp.ToolCalls) == 0 {
-			o.resp.FinishType = llmwire.FinishStop
+		if o.resp.FinishType == "" {
+			if len(o.resp.ToolCalls) > 0 {
+				o.resp.FinishType = llmwire.FinishToolCalls
+			} else {
+				o.resp.FinishType = llmwire.FinishStop
+			}
 		}
 
 		return o.resp, nil

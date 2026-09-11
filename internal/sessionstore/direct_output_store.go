@@ -59,6 +59,8 @@ func (s *store) InsertToolResultSetOnce(
 	}
 	defer func() { _ = tx.Rollback() }()
 
+	transactionTime := time.Now().UTC()
+
 	owner, err := outputOwner(ctx, tx, sessionID)
 	if errors.Is(err, ErrOutputOwner) || errors.Is(err, ErrOutputNotRoot) {
 		// The same degrade rule as the single-result path: results still
@@ -81,7 +83,7 @@ func (s *store) InsertToolResultSetOnce(
 	outputs := make([][]*OutputCommit, len(entries))
 
 	for i, entry := range entries {
-		messageID, insertErr := insertToolResultOnce(ctx, tx, sessionID, entry.Message)
+		messageID, insertErr := insertToolResultOnceAt(ctx, tx, sessionID, entry.Message, transactionTime)
 		if insertErr != nil {
 			return nil, nil, insertErr
 		}
@@ -155,6 +157,8 @@ func (s *store) InsertToolResultWithDirectOutput(
 	}
 	defer func() { _ = tx.Rollback() }()
 
+	transactionTime := time.Now().UTC()
+
 	owner, err := outputOwner(ctx, tx, sessionID)
 	if errors.Is(err, ErrOutputOwner) || errors.Is(err, ErrOutputNotRoot) {
 		directMessages = nil
@@ -170,7 +174,7 @@ func (s *store) InsertToolResultWithDirectOutput(
 		}
 	}
 
-	messageID, err := insertToolResultOnce(ctx, tx, sessionID, message)
+	messageID, err := insertToolResultOnceAt(ctx, tx, sessionID, message, transactionTime)
 	if err != nil {
 		return 0, nil, err
 	}
@@ -224,6 +228,16 @@ func insertToolResultOnce(
 	sessionID int64,
 	message *transcript.Message,
 ) (int64, error) {
+	return insertToolResultOnceAt(ctx, tx, sessionID, message, time.Now().UTC())
+}
+
+func insertToolResultOnceAt(
+	ctx context.Context,
+	tx *sql.Tx,
+	sessionID int64,
+	message *transcript.Message,
+	transactionTime time.Time,
+) (int64, error) {
 	var existingID int64
 	var existingContent string
 	var existingToolError bool
@@ -245,10 +259,15 @@ func insertToolResultOnce(
 		return 0, fmt.Errorf("load direct-output tool result: %w", err)
 	}
 
+	createdAt := message.CreatedAt
+	if createdAt.IsZero() {
+		createdAt = transactionTime
+	}
+
 	result, err := tx.ExecContext(ctx, `INSERT INTO messages
 		(session_id, role, content, tool_call_id, tool_name, tool_error, created_at)
 		VALUES (?, 'tool', ?, ?, ?, ?, ?)`,
-		sessionID, message.Content, message.ToolCallID, message.ToolName, message.ToolError, message.CreatedAt)
+		sessionID, message.Content, message.ToolCallID, message.ToolName, message.ToolError, createdAt)
 	if err != nil {
 		return 0, fmt.Errorf("insert direct-output tool result: %w", err)
 	}

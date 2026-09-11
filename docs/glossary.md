@@ -369,8 +369,23 @@ The *curated* per-project long-term store (`CuratedStore` over the `memories` ta
 _Avoid_: history, context (those are the transcript, not memory).
 
 **conversation history** (message store):
-The append-only transcript of a session's messages — what the agent loop reads and writes each turn. Distinct from **memory**.
-_Avoid_: memory.
+The append-only durable history of a session's message rows. The agent loop
+derives the **provider transcript** from it; durable rows excluded by projection
+remain history without becoming model input. Distinct from **memory**.
+_Avoid_: memory, provider transcript (that is a projection of this history).
+
+**provider transcript**:
+The ordered message projection submitted to a model call. It is derived from
+conversation history and may omit durable rows that are not valid model input.
+_Avoid_: conversation history (that also includes rows outside the projection).
+
+**model attempt**:
+One completed provider call and its returned response, including normalized and
+provider-native finish reasons, content, reasoning, tool calls and usage.
+Acceptance into the provider transcript is a separate session decision; a
+rejected attempt remains durable evidence.
+_Avoid_: iteration (one loop iteration may include other durable transitions),
+assistant message (only an accepted attempt has that transcript role).
 
 **attachment** (referenced image attachment):
 A disk reference stored on a tool-result row in `messages.attachments` — never

@@ -41,14 +41,20 @@ const loopBlockMessage = `[BLOCKED: Tool execution blocked — you were warned a
 const loopFailureWarningTemplate = `[LOOP WARNING: The %s tool has returned the same error %d times in a row. Repeating the identical call will not help — fix the arguments or change your approach, or stop and explain the problem in text.]`
 
 type loopResult struct {
-	FinalResponse string
-	ErrorNotice   string
-	Iterations    int
-	Error         error
-	Suspended     bool // true when a tool (e.g., sleep) requested session suspend
+	FinalResponse          string
+	ErrorNotice            string
+	Iterations             int
+	Error                  error
+	Suspended              bool // true when a tool (e.g., sleep) requested session suspend
+	TerminalStateCommitted bool
 }
 
-type iterationCallback func(iteration int, response *llmwire.Response, toolCalls []llmwire.ToolCall) error
+type iterationCallback func(
+	iteration int,
+	response *llmwire.Response,
+	toolCalls []llmwire.ToolCall,
+	alreadyPersisted bool,
+) error
 
 // assistantState describes the state of the last assistant message for resume handling.
 type assistantState struct {
@@ -84,7 +90,7 @@ type loopRunner struct {
 	waitingRequested     bool
 }
 
-//nolint:funlen,wsl_v5 // Loop ordering is the session protocol.
+//nolint:funlen,gocyclo,wsl_v5 // Loop ordering is the session protocol.
 func runLoop(ctx context.Context, agent *svc, opts loopOptions, callback iterationCallback) (*loopResult, error) {
 	r := &loopRunner{
 		agent:  agent,
@@ -165,7 +171,12 @@ func runLoop(ctx context.Context, agent *svc, opts loopOptions, callback iterati
 		if err := r.callLLM(ctx); err != nil {
 			return r.result, err
 		}
-		r.replyToInput = r.acceptedManagerInput
+		recoveryReply, err := r.hasOutstandingResponseRecovery(ctx)
+		if err != nil {
+			return r.result, err
+		}
+
+		r.replyToInput = r.replyToInput || r.acceptedManagerInput || recoveryReply
 		if r.agent.budgetFired {
 			r.result.Suspended = true
 
@@ -428,6 +439,8 @@ func (r *loopRunner) callLLM(ctx context.Context) error {
 		r.agent.recordContextBaseline(ctx, response.Usage.PromptTokens, sentCount, generation)
 	}
 
+	response.FinishType = normalizedFinishType(response.FinishType)
+
 	if r.agent.loopDetector.forceTextOnly && len(response.ToolCalls) == 0 {
 		r.agent.loopDetector.clearForceTextOnly()
 		r.log.Info("force_text_only_cleared", zap.String("reason", "LLM produced text response"))
@@ -438,17 +451,34 @@ func (r *loopRunner) callLLM(ctx context.Context) error {
 	return nil
 }
 
+func normalizedFinishType(finishType string) string {
+	switch finishType {
+	case llmwire.FinishStop, llmwire.FinishToolCalls, llmwire.FinishLength, llmwire.FinishUnknown:
+		return finishType
+	default:
+		return llmwire.FinishUnknown
+	}
+}
+
 //nolint:funlen,gocognit,gocyclo,nestif,wsl_v5 // Budget persistence, direct replies, and final selection share one boundary.
 func (r *loopRunner) recordIteration(ctx context.Context) error {
 	r.result.Iterations++
+	if r.lastResp.FinishType == llmwire.FinishLength || r.lastResp.FinishType == llmwire.FinishUnknown {
+		return r.recordRejectedIteration(ctx)
+	}
+
 	replyToInput := r.replyToInput
-	if r.hasLiveWakeSource(ctx) && hasWaitingMarker(r.lastResp.Text) {
+	// The marker outranks tool calls regardless of finish reason: a poll next to
+	// <WAITING/> is forbidden, and the tool result would wake the session it parked.
+	if (r.lastResp.FinishType == llmwire.FinishStop || r.lastResp.FinishType == llmwire.FinishToolCalls) &&
+		r.hasLiveWakeSource(ctx) && hasWaitingMarker(r.lastResp.Text) {
 		r.lastResp.ToolCalls = nil
+		r.lastResp.FinishType = llmwire.FinishStop
 		r.waitingRequested = true
 	}
 
 	if r.cb != nil {
-		if callbackErr := r.cb(r.result.Iterations, r.lastResp, r.lastResp.ToolCalls); callbackErr != nil {
+		if callbackErr := r.cb(r.result.Iterations, r.lastResp, r.lastResp.ToolCalls, false); callbackErr != nil {
 			r.result.Error = callbackErr
 			return fmt.Errorf("iteration callback failed: %w", callbackErr)
 		}
@@ -483,6 +513,7 @@ func (r *loopRunner) recordIteration(ctx context.Context) error {
 			Role: llmwire.RoleAssistant, Content: r.lastResp.Text, ToolCalls: r.lastResp.ToolCalls,
 			ReasoningContent: r.lastResp.ReasoningContent, ReasoningRaw: r.lastResp.ReasoningRaw,
 			CostUSD: r.lastResp.CostUSD, Usage: r.lastResp.Usage,
+			FinishType: r.lastResp.FinishType, ProviderFinishReason: r.lastResp.ProviderFinishReason,
 		}
 		stored, err := storedMessage(&message)
 		if err != nil {
@@ -494,7 +525,7 @@ func (r *loopRunner) recordIteration(ctx context.Context) error {
 		}
 		_, fired, replyPublished, err := r.agent.budgetGate.PersistResponse(
 			ctx, stored, budgetOutputType, budgetOutput,
-			!r.waitingRequested && len(r.lastResp.ToolCalls) == 0,
+			!r.waitingRequested && len(r.lastResp.ToolCalls) == 0 && r.lastResp.FinishType == llmwire.FinishStop,
 		)
 		if err != nil {
 			return fmt.Errorf("persist budgeted response: %w", err)
@@ -506,7 +537,7 @@ func (r *loopRunner) recordIteration(ctx context.Context) error {
 		r.publishedReply = replyPublished
 	} else if err := r.agent.ms.addAssistantMessageOutput(
 		ctx, r.lastResp, outputType, output,
-		!r.waitingRequested && len(r.lastResp.ToolCalls) == 0,
+		!r.waitingRequested && len(r.lastResp.ToolCalls) == 0 && r.lastResp.FinishType == llmwire.FinishStop,
 	); err != nil {
 		r.result.Error = err
 
@@ -530,6 +561,7 @@ func (r *loopRunner) recordIteration(ctx context.Context) error {
 
 	if r.agent.budgetGate != nil {
 		if replyToInput && !r.waitingRequested && !r.agent.budgetFired && len(r.lastResp.ToolCalls) == 0 &&
+			r.lastResp.FinishType == llmwire.FinishStop &&
 			strings.TrimSpace(r.lastResp.Text) != "" {
 			output := r.lastResp.Text
 			var err error
@@ -603,6 +635,10 @@ func assistantOutput(response *llmwire.Response, enabled, replyToInput bool) (se
 		return "", ""
 	}
 
+	if response.FinishType == llmwire.FinishToolCalls && len(response.ToolCalls) == 0 {
+		return "", ""
+	}
+
 	if len(response.ToolCalls) > 0 {
 		if replyToInput {
 			return sessionstore.OutputMessagePersistent, response.Text
@@ -669,6 +705,10 @@ func lastAssistantState(messages []llmwire.Message) *assistantState {
 	assistant := messages[lastIdx]
 
 	if len(assistant.ToolCalls) == 0 {
+		if assistant.FinishType == llmwire.FinishToolCalls {
+			return &assistantState{}
+		}
+
 		if strings.TrimSpace(assistant.Content) != "" {
 			return &assistantState{HasText: true, Text: assistant.Content}
 		}

@@ -181,10 +181,6 @@ func (c *openaiClient) parseResponseBody(log *zap.Logger, body []byte, start tim
 	durationMs := time.Since(start).Milliseconds()
 	c.logResponse(log, choice.FinishReason, result, durationMs)
 
-	if err := c.checkEmptyResponse(log, result, choice.FinishReason, body, &completionResp); err != nil {
-		return nil, err
-	}
-
 	usage := extractUsage(&completionResp, c.provider, c.model, c.pricing)
 	attachUsage(result, usage)
 	logServerToolUse(log, completionResp.Usage)
@@ -209,35 +205,6 @@ func (c *openaiClient) logResponse(log *zap.Logger, finishReason string, result 
 	log.Debug("response", zap.String("provider", c.provider), zap.String("model", c.model),
 		zap.String("finish_reason", finishReason), zap.Int("tool_calls", len(result.ToolCalls)),
 		zap.Int("text_len", textLen), zap.Int64("duration_ms", durationMs))
-}
-
-func (c *openaiClient) checkEmptyResponse(
-	log *zap.Logger,
-	result *llmwire.Response,
-	finishReason string,
-	body []byte,
-	completionResp *oaiResponse,
-) error {
-	if result.Text != "" || len(result.ToolCalls) != 0 {
-		return nil
-	}
-
-	rawBody := truncateBody(body)
-
-	log.Warn("empty_response_body",
-		zap.String("provider", c.provider),
-		zap.String("finish_reason", finishReason),
-		zap.String("raw", rawBody),
-	)
-
-	if completionResp.Usage.CompletionTokens == 0 {
-		return fmt.Errorf(
-			"%s: model returned empty response with 0 completion tokens (possible model overload or incompatibility)",
-			c.provider,
-		)
-	}
-
-	return nil
 }
 
 // truncateBody caps a raw provider response for logging.

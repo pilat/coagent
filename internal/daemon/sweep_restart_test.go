@@ -126,23 +126,21 @@ func TestScenario_CrashBetweenFinalizationAndDeliveryRedeliversExactlyOnce(t *te
 			require.NoError(t, err)
 			require.NotNil(t, owed)
 			require.True(t, owed.Terminal(), "the child was finalized before the crash")
-			if tc.background {
-				require.Positive(t, owed.DeliveredAt,
-					"the parent inbox handoff owns a background completion before consumption")
-			} else {
+			// The background inbox handoff runs detached and races the crash: it
+			// either committed (input recovery promotes it) or lost (the sweep
+			// redelivers); both must converge to exactly one consumption below.
+			if !tc.background {
 				require.Zero(t, owed.DeliveredAt, "the blocking task result never reached the parent")
+				require.Zero(t, tc.completions(second.parentMessages(parentID), link.ChildID),
+					"the blocking completion must not reach the transcript before the restart")
 			}
-			require.Zero(t, tc.completions(second.parentMessages(parentID), link.ChildID))
 
 			require.NoError(t, second.mgr.Start(second.ctx))
 
+			// Waiting for one completion is not enough: it becomes visible when
+			// the parent's turn accepts it, before the turn's own reply commits.
 			second.waitUntil("sweep redelivered the owed completion", func() bool {
-				if tc.background {
-					return tc.completions(second.parentMessages(parentID), link.ChildID) == 1
-				}
-
-				current, linkErr := second.links.GetLink(second.ctx, link.ChildID)
-				return linkErr == nil && current != nil && current.DeliveredAt != 0
+				return lastAssistantTextDTO(second.parentMessages(parentID)) == "parent got the child result"
 			})
 			second.mgr.waitIdle(parentID)
 

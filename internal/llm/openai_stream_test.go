@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/pilat/coagent/internal/config"
+	"github.com/pilat/coagent/internal/llmwire"
 )
 
 func TestOpenRouterChatStreamsAndAggregatesResponse(t *testing.T) {
@@ -43,6 +44,11 @@ func TestOpenRouterChatStreamsAndAggregatesResponse(t *testing.T) {
 
 	resp, err := client.Chat(context.Background(), "", nil, nil)
 	require.NoError(t, err)
+	assertOpenRouterAggregatedResponse(t, resp)
+}
+
+func assertOpenRouterAggregatedResponse(t *testing.T, resp *llmwire.Response) {
+	t.Helper()
 	assert.Equal(t, "done", resp.Text)
 	assert.Equal(t, "think again", resp.ReasoningContent)
 	require.Len(t, resp.ToolCalls, 1)
@@ -50,6 +56,7 @@ func TestOpenRouterChatStreamsAndAggregatesResponse(t *testing.T) {
 	assert.Equal(t, "bash", resp.ToolCalls[0].Name)
 	assert.JSONEq(t, `{"command":"pwd"}`, string(resp.ToolCalls[0].Arguments))
 	assert.Equal(t, "tool_calls", resp.FinishType)
+	assert.Equal(t, "tool_calls", resp.ProviderFinishReason)
 	assert.InDelta(t, 0.25, resp.CostUSD, 0.000001)
 	require.NotNil(t, resp.Usage)
 	assert.Equal(t, 12, resp.Usage.PromptTokens)
@@ -104,6 +111,7 @@ func TestOpenRouterChatAggregatesTextFinish(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "hello", resp.Text)
 	assert.Equal(t, "length", resp.FinishType)
+	assert.Equal(t, "length", resp.ProviderFinishReason)
 	assert.Empty(t, resp.ToolCalls)
 }
 

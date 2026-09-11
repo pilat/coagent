@@ -21,6 +21,10 @@ type BudgetGate interface {
 		output string,
 		releasesInput bool,
 	) (messageID int64, fired, replyPublished bool, err error)
+	PersistRejectedResponse(
+		ctx context.Context,
+		rejection sessionstore.RejectedResponse,
+	) (*sessionstore.RejectedResponseResult, error)
 	PersistCompaction(
 		ctx context.Context,
 		compaction sessionstore.BudgetedCompaction,

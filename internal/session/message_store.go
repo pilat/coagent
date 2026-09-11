@@ -3,6 +3,7 @@ package session
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sync"
 
@@ -77,6 +78,21 @@ func (ms *messageStore) appendMessageLocked(ctx context.Context, msg *llmwire.Me
 func (ms *messageStore) appendLocked(message llmwire.Message, rowID int64) {
 	ms.messages = append(ms.messages, message)
 	ms.rowIDs = append(ms.rowIDs, rowID)
+}
+
+func (ms *messageStore) adoptRecoveryMessage(rowID int64) error {
+	if rowID <= 0 {
+		return errors.New("response recovery has no durable message id")
+	}
+
+	ms.mu.Lock()
+	defer ms.mu.Unlock()
+
+	ms.appendLocked(llmwire.Message{
+		Role: llmwire.RoleUser, Content: sessionstore.OutputLengthRecoveryPrompt,
+	}, rowID)
+
+	return nil
 }
 
 func (ms *messageStore) replaceCompactedMessagesLocked(
@@ -226,14 +242,16 @@ func (ms *messageStore) reloadMessages(ctx context.Context) error {
 
 	for i, sm := range stored {
 		msg := llmwire.Message{
-			Role:             sm.Role,
-			Content:          sm.Content,
-			ToolCallID:       sm.ToolCallID,
-			ToolName:         sm.ToolName,
-			ToolError:        sm.ToolError,
-			ReasoningContent: sm.ReasoningContent,
-			ReasoningRaw:     sm.ReasoningRaw,
-			CostUSD:          sm.CostUSD,
+			Role:                 sm.Role,
+			Content:              sm.Content,
+			ToolCallID:           sm.ToolCallID,
+			ToolName:             sm.ToolName,
+			ToolError:            sm.ToolError,
+			ReasoningContent:     sm.ReasoningContent,
+			ReasoningRaw:         sm.ReasoningRaw,
+			CostUSD:              sm.CostUSD,
+			FinishType:           sm.FinishType,
+			ProviderFinishReason: sm.ProviderFinishReason,
 		}
 
 		if len(sm.ToolCalls) > 0 {

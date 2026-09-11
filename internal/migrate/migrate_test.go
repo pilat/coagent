@@ -89,6 +89,81 @@ func TestMigrate_FreshDB(t *testing.T) {
 	assert.False(t, columnExists(t, db, "subagent_links", "timeout_sec"), "subagent_links.timeout_sec must be dropped")
 	assert.True(t, columnExists(t, db, "messages", "position"), "messages.position must exist")
 	assert.True(t, columnExists(t, db, "sessions", "shields_up"), "sessions.shields_up must exist")
+	assert.True(t, columnExists(t, db, "messages", "finish_type"), "messages.finish_type must exist")
+	assert.True(t, columnExists(t, db, "messages", "provider_finish_reason"),
+		"messages.provider_finish_reason must exist")
+	assert.True(t, columnExists(t, db, "messages", "rejected_reason"),
+		"messages.rejected_reason must exist")
+	assert.True(t, columnExists(t, db, "messages", "retry_of_message_id"),
+		"messages.retry_of_message_id must exist")
+}
+
+func TestMigrate_MessageFinishIntegrityPreservesLegacyRowsAndEnforcesShape(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "v38-finish-integrity.db")
+	db, err := OpenDB(context.Background(), dbPath)
+	require.NoError(t, err)
+	defer db.Close()
+
+	ctx := context.Background()
+	provider := newProvider(t, db)
+	_, err = provider.UpTo(ctx, 38)
+	require.NoError(t, err)
+
+	_, err = db.ExecContext(ctx, `INSERT INTO projects (id, work_dir, name) VALUES (1, '/tmp/p', 'p')`)
+	require.NoError(t, err)
+	_, err = db.ExecContext(ctx, `INSERT INTO sessions (id, project_id, agent_type) VALUES (1, 1, 'build')`)
+	require.NoError(t, err)
+	legacy, err := db.ExecContext(ctx, `INSERT INTO messages (session_id, role, content)
+		VALUES (1, 'assistant', 'legacy')`)
+	require.NoError(t, err)
+	legacyID, err := legacy.LastInsertId()
+	require.NoError(t, err)
+
+	_, err = provider.Up(ctx)
+	require.NoError(t, err)
+
+	var finishType, providerReason, rejectedReason sql.NullString
+	var retryID sql.NullInt64
+	require.NoError(t, db.QueryRowContext(ctx, `SELECT finish_type, provider_finish_reason,
+		rejected_reason, retry_of_message_id FROM messages WHERE id = ?`, legacyID).
+		Scan(&finishType, &providerReason, &rejectedReason, &retryID))
+	assert.False(t, finishType.Valid)
+	assert.False(t, providerReason.Valid)
+	assert.False(t, rejectedReason.Valid)
+	assert.False(t, retryID.Valid)
+	assertMessageFinishIntegrityConstraints(ctx, t, db, legacyID)
+}
+
+func assertMessageFinishIntegrityConstraints(ctx context.Context, t *testing.T, db *sql.DB, legacyID int64) {
+	t.Helper()
+	_, err := db.ExecContext(ctx, `INSERT INTO messages
+		(session_id, role, finish_type, rejected_reason) VALUES (1, 'assistant', 'truncated', 'output_length')`)
+	require.Error(t, err)
+	_, err = db.ExecContext(ctx, `INSERT INTO messages
+		(session_id, role, finish_type, rejected_reason) VALUES (1, 'user', 'length', 'output_length')`)
+	require.Error(t, err)
+	_, err = db.ExecContext(ctx, `INSERT INTO messages
+		(session_id, role, finish_type, rejected_reason) VALUES (1, 'assistant', 'unknown', 'output_length')`)
+	require.Error(t, err)
+	_, err = db.ExecContext(ctx, `INSERT INTO messages
+		(session_id, role, rejected_reason) VALUES (1, 'assistant', 'output_length')`)
+	require.Error(t, err)
+	_, err = db.ExecContext(ctx, `INSERT INTO messages
+		(session_id, role, rejected_reason) VALUES (1, 'assistant', 'unknown_finish')`)
+	require.Error(t, err)
+	_, err = db.ExecContext(ctx, `INSERT INTO messages
+		(session_id, role, retry_of_message_id) VALUES (1, 'assistant', ?)`, legacyID)
+	require.Error(t, err)
+
+	accepted, err := db.ExecContext(ctx, `INSERT INTO messages
+		(session_id, role, finish_type, provider_finish_reason, rejected_reason)
+		VALUES (1, 'assistant', 'length', 'MAX_TOKENS', 'output_length')`)
+	require.NoError(t, err)
+	attemptID, err := accepted.LastInsertId()
+	require.NoError(t, err)
+	_, err = db.ExecContext(ctx, `INSERT INTO messages
+		(session_id, role, content, retry_of_message_id) VALUES (1, 'user', 'recovery', ?)`, attemptID)
+	require.NoError(t, err)
 }
 
 func TestMigrate_SessionShieldsDefaultDown(t *testing.T) {

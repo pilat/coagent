@@ -1,0 +1,50 @@
+{
+  "source_test": "TestHarnessScenario_UnknownFinishPublishesCanonicalError",
+  "trace": [
+    {
+      "type": "session_created",
+      "name": "<name>",
+      "work_dir": "<workdir>",
+      "attributes": {
+        "manager_id": "telegram:main"
+      }
+    },
+    {
+      "type": "state_changed",
+      "status": "running"
+    },
+    {
+      "type": "message",
+      "message": "❌ LLM error: Model response ended with an unknown finish reason."
+    },
+    {
+      "type": "state_changed",
+      "status": "idle",
+      "reason": "error"
+    }
+  ],
+  "claims": [
+    {
+      "type": "session_opened",
+      "content": "",
+      "attributes": {
+        "manager_id": "telegram:main",
+        "name": "002",
+        "work_dir": "<workdir>"
+      },
+      "source_key": "session:1:opened",
+      "releases_input": false
+    },
+    {
+      "type": "message_persistent",
+      "content": "❌ LLM error: Model response ended with an unknown finish reason.",
+      "attributes": {
+        "manager_id": "telegram:main",
+        "model_input_generation": 1
+      },
+      "source_key": "integrity:1:error",
+      "model_input_generation": 1,
+      "releases_input": true
+    }
+  ]
+}

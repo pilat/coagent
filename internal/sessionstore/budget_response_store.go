@@ -43,7 +43,7 @@ func (s *store) InsertBudgetedResponse(
 	response BudgetedResponse,
 ) (*BudgetedResponseResult, error) {
 	if response.SessionID <= 0 || response.RootID <= 0 || response.Message == nil ||
-		response.Message.Role != "assistant" {
+		response.Message.Role != assistantRole {
 		return nil, ErrBudgetConflict
 	}
 

@@ -59,6 +59,13 @@ func (g *terminalBudgetGate) PersistResponse(
 	return 0, false, false, nil
 }
 
+func (g *terminalBudgetGate) PersistRejectedResponse(
+	context.Context,
+	sessionstore.RejectedResponse,
+) (*sessionstore.RejectedResponseResult, error) {
+	return nil, nil
+}
+
 func (g *terminalBudgetGate) PersistCompaction(
 	context.Context,
 	sessionstore.BudgetedCompaction,
