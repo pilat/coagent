@@ -50,7 +50,9 @@ func TestHarnessE2E_SecondInputDoesNotReplayPreviousFinal(t *testing.T) {
 	firstSession := sendHarnessChat(t, client, managercli.SendParams{Text: "first question"})
 	firstAnswer := "first answer"
 	firstTrace := waitForHarnessChatMessage(t, client, firstSession.SessionID, firstAnswer)
-	assert.Equal(t, []string{firstAnswer}, firstTrace)
+	require.Len(t, firstTrace, 1)
+	assert.True(t, strings.HasPrefix(firstTrace[0], firstAnswer),
+		"the first answer must carry the compact progress footer: %q", firstTrace[0])
 
 	secondSession := sendHarnessChat(t, client, managercli.SendParams{
 		SessionID: firstSession.SessionID,
@@ -60,8 +62,8 @@ func TestHarnessE2E_SecondInputDoesNotReplayPreviousFinal(t *testing.T) {
 	secondAnswer := "second answer"
 	secondTrace := waitForHarnessChatMessage(t, client, secondSession.SessionID, secondAnswer)
 	require.Len(t, secondTrace, 1)
-	assert.Equal(t, secondAnswer, secondTrace[0],
-		"the compiled daemon must not replay history as a new controller event")
+	assert.True(t, strings.HasPrefix(secondTrace[0], secondAnswer) && !strings.Contains(secondTrace[0], firstAnswer),
+		"the compiled daemon must not replay history as a new controller event: %q", secondTrace[0])
 }
 
 func TestHarnessE2E_ForegroundFollowUpRejectsCompetingSleep(t *testing.T) {
@@ -152,7 +154,9 @@ func TestHarnessE2E_RestartReplaysCommittedOutputToReconnectedCLI(t *testing.T) 
 	require.NoError(t, reconnected.Call(t.Context(), managercli.OpChatOpen, struct{}{}, &managercli.OpenResult{}))
 	restartAnswer := "restart answer"
 	trace := waitForHarnessChatTrace(t, reconnected, session.SessionID, restartAnswer)
-	assert.Equal(t, []string{restartAnswer}, trace.Messages)
+	require.Len(t, trace.Messages, 1)
+	assert.True(t, strings.HasPrefix(trace.Messages[0], restartAnswer),
+		"the reconnected terminal must replay the committed answer: %q", trace.Messages[0])
 }
 
 func newHarnessModelServer(t *testing.T) *httptest.Server {
@@ -544,7 +548,9 @@ func waitForHarnessChatTrace(
 
 			if event.Type == "message" {
 				trace.Messages = append(trace.Messages, event.Message)
-				if event.Message == target {
+				// Final outputs carry the compact progress footer appended by
+				// the session loop, so targets match by prefix, not equality.
+				if strings.HasPrefix(event.Message, target) {
 					targetSeen = true
 				}
 			}
@@ -579,11 +585,13 @@ func waitForCommittedHarnessOutput(t *testing.T, path string, sessionID int64, c
 	timer := time.NewTimer(20 * time.Second)
 	defer timer.Stop()
 	for {
+		// The committed final output carries the compact progress footer, so
+		// the persisted content matches by prefix, not equality.
 		var committed bool
 		err := db.QueryRowContext(t.Context(), `SELECT EXISTS(
 			SELECT 1 FROM sessions JOIN session_outbox ON session_outbox.session_id = sessions.id
 			WHERE sessions.id = ? AND sessions.status = 'completed'
-				AND session_outbox.content = ? AND session_outbox.state <> 'delivered'
+				AND session_outbox.content LIKE ? || '%' AND session_outbox.state <> 'delivered'
 		)`, sessionID, content).Scan(&committed)
 		require.NoError(t, err)
 		if committed {

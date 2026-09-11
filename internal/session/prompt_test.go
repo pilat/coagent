@@ -140,7 +140,6 @@ func TestBuildActiveBackgroundSection_TeachesAutomaticWakeNotPolling(t *testing.
 	assert.Contains(t, result, "result arrives automatically in a new turn")
 	assert.GreaterOrEqual(t, strings.Count(strings.ToLower(result), "do not poll"), 3)
 	assert.Contains(t, result, "<WAITING/>")
-	assert.Contains(t, result, "I_WOULD_USE_<WAITING/>")
 	assert.Contains(t, result, "no tool calls")
 }
 

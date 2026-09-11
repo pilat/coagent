@@ -187,8 +187,7 @@ func (t *bashTool) run(
 					"Cancel a wrong, stuck, or redundant existing process with cancel_process and its bgp_... ID. "+
 					"Do not poll existing processes with Bash, ps, sleep, schedule, Read, or Tail. "+
 					"Do not poll with tools; continue only useful independent work. "+
-					"When waiting is your only remaining action, reply with a standalone <WAITING/> line and no tool calls. "+
-					"If you would otherwise poll, reply with a standalone I_WOULD_USE_<WAITING/> line and no tool calls instead",
+					"When waiting is your only remaining action, reply with a standalone <WAITING/> line and no tool calls",
 				err,
 			)
 		}

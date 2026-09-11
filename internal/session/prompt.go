@@ -434,8 +434,7 @@ func buildActiveBackgroundSection(processes []ActiveProcessInfo, links []ActiveS
 			"Their result arrives automatically in a new turn; do not poll. " +
 			"Do not poll with Bash, ps, sleep, schedule, Read, Tail, or get_subagent_result. " +
 			"Do not poll with tools; continue only useful independent work. " +
-			"When this is your only remaining work, reply with a standalone <WAITING/> line and no tool calls. " +
-			"If you would otherwise poll, reply with a standalone I_WOULD_USE_<WAITING/> line and no tool calls instead.\n",
+			"When this is your only remaining work, reply with a standalone <WAITING/> line and no tool calls.\n",
 	)
 
 	for _, process := range processes {

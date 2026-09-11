@@ -281,7 +281,7 @@ adds one linked recovery input; a repeated `length` or unknown finish commits a
 terminal error. Compaction model calls retain their separate no-retry contract.
 
 When the exact session has a live background process or undelivered background
-subagent round, a standalone `<WAITING/>` or `I_WOULD_USE_<WAITING/>` line
+subagent round, a standalone `<WAITING/>` line
 cooperatively suspends the loop. The second form is a polling-temptation canary.
 The complete assistant text remains in model history, returned tool calls are
 not executed, and only the marker is removed from root manager presentation.

@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -51,7 +52,11 @@ func TestHarnessScenario_DelayedCLIManagerDrainsRealSessionOutput(t *testing.T) 
 
 	opened := openChat(t, terminal)
 	require.Equal(t, sessionID, opened.SessionID)
-	assert.Equal(t, "delayed cli answer", waitForDelayedCLIMessage(t, terminal, sessionID).Message)
+	message := waitForDelayedCLIMessage(t, terminal, sessionID).Message
+	// The final output carries the compact progress footer appended by the
+	// session loop; the drained answer must still lead the combined text.
+	assert.True(t, strings.HasPrefix(message, "delayed cli answer\n\n"), message)
+	assert.Contains(t, message, "🤖 `fake-model` · iteration 1")
 	require.Eventually(t, func() bool {
 		status, statusErr := h.sessions.OutputQueueStatus(t.Context(), controllerapi.BuiltinCLIManagerID)
 		return statusErr == nil && status.Pending == 0

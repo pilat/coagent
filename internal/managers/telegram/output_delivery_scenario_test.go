@@ -57,7 +57,7 @@ func TestHarnessScenario_DelayedTelegramManagerDrainsRealSessionOutput(t *testin
 	t.Cleanup(func() { require.NoError(t, manager.Stop(context.Background())) })
 
 	require.Eventually(t, func() bool {
-		return h.recorder.hasMessage("delayed telegram answer")
+		return h.recorder.hasMessagePrefix("delayed telegram answer\n\n")
 	}, 5*time.Second, 10*time.Millisecond, "the delayed manager must render its persisted answer")
 	require.Eventually(t, func() bool {
 		status, statusErr := h.sessions.OutputQueueStatus(t.Context(), delayedTelegramManagerID)
@@ -67,7 +67,7 @@ func TestHarnessScenario_DelayedTelegramManagerDrainsRealSessionOutput(t *testin
 	calls := h.recorder.snapshot()
 	assert.True(t, hasTelegramMethod(calls, "createForumTopic"), "session delivery must establish a forum topic")
 	assert.False(t, hasTelegramMessage(calls, "Task accepted"))
-	assert.True(t, hasTelegramMessage(calls, "delayed telegram answer"))
+	assert.True(t, hasTelegramMessagePrefix(calls, "delayed telegram answer\n\n"))
 	assert.NotZero(t, sessionID)
 }
 
@@ -202,8 +202,8 @@ func (r *delayedTelegramRecorder) RoundTrip(request *http.Request) (*http.Respon
 	}, nil
 }
 
-func (r *delayedTelegramRecorder) hasMessage(text string) bool {
-	return hasTelegramMessage(r.snapshot(), text)
+func (r *delayedTelegramRecorder) hasMessagePrefix(prefix string) bool {
+	return hasTelegramMessagePrefix(r.snapshot(), prefix)
 }
 
 func (r *delayedTelegramRecorder) snapshot() []delayedTelegramCall {
@@ -226,6 +226,18 @@ func hasTelegramMethod(calls []delayedTelegramCall, method string) bool {
 func hasTelegramMessage(calls []delayedTelegramCall, text string) bool {
 	for _, call := range calls {
 		if call.Method == "sendMessage" && call.Text == text {
+			return true
+		}
+	}
+
+	return false
+}
+
+// The final output carries the compact progress footer appended by the session
+// loop, so the drained answer is matched by prefix, not by full equality.
+func hasTelegramMessagePrefix(calls []delayedTelegramCall, prefix string) bool {
+	for _, call := range calls {
+		if call.Method == "sendMessage" && strings.HasPrefix(call.Text, prefix) {
 			return true
 		}
 	}

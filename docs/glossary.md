@@ -305,7 +305,7 @@ _Avoid_: message ID (singular), cursor.
 A sentinel error `sleep` returns to checkpoint and exit the agent loop *without* recording a result; the timer's exact result is injected on resume. The persisted status is `suspended`. Standalone `schedule` creates future work but does not suspend the calling session.
 
 **background wait**:
-A cooperative suspension requested by a standalone `<WAITING/>` line, or by the polling-temptation canary `I_WOULD_USE_<WAITING/>`, while the exact session has an advertised running process or undelivered background subagent round. The complete assistant text is retained as model history, returned tool calls are discarded, and the marker line is hidden from manager presentation. A ready inbox row is not a live wake source and must be consumed instead; without an authoritative live source the marker has no control effect.
+A cooperative suspension requested by a standalone `<WAITING/>` line, while the exact session has an advertised running process or undelivered background subagent round. The complete assistant text is retained as model history, returned tool calls are discarded, and the marker line is hidden from manager presentation. A ready inbox row is not a live wake source and must be consumed instead; without an authoritative live source the marker has no control effect.
 _Avoid_: polling loop, sleep (background wait owns no timer or pending tool call).
 
 **session input**:

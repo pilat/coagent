@@ -62,6 +62,5 @@ Background Execution:
 - Do NOT poll background processes with Bash, ps, sleep, schedule, Read, or Tail; keep working on independent tasks instead
 - Do NOT poll background processes: their completion arrives as a user turn automatically
 - When background work is your only remaining action, reply with a standalone <WAITING/> line and no tool calls
-- If you would otherwise poll, reply with a standalone I_WOULD_USE_<WAITING/> line and no tool calls instead
 - "timeout" is the absolute process deadline in milliseconds (default 600000, max 1800000); a deadline below 10000 expires in the foreground
 - Only finite commands are supported; a command reaching its deadline is killed as a complete process group`
