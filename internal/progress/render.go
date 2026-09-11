@@ -55,6 +55,36 @@ func RenderCompact(snapshot Snapshot, redact func(string) string) string {
 	return strings.Join(lines, "\n")
 }
 
+// RenderFinalCompact is a trimmed progress footer for final output: model/iteration,
+// metrics, TODO, and budget. It renders counts only — no raw text, so no redact
+// is needed. Skipped when nothing is available.
+func RenderFinalCompact(snapshot Snapshot) string {
+	var lines []string
+
+	if snapshot.Model != "" {
+		iteration := snapshot.RootIteration + snapshot.ChildIterations
+		lines = append(lines, fmt.Sprintf("🤖 `%s` · iteration %d", snapshot.Model, iteration))
+	}
+
+	if metrics := renderCardMetrics(snapshot); metrics != "" {
+		lines = append(lines, metrics)
+	}
+
+	if todoBlock := renderCardTodos(snapshot.Todos); len(todoBlock) > 0 {
+		lines = append(lines, todoBlock...)
+	}
+
+	if snapshot.Budget != nil {
+		lines = append(lines, renderBudget(*snapshot.Budget))
+	}
+
+	if len(lines) == 0 {
+		return ""
+	}
+
+	return strings.Join(lines, "\n")
+}
+
 func RenderFull(snapshot Snapshot, redact func(string) string) string {
 	if redact == nil {
 		redact = func(value string) string { return value }

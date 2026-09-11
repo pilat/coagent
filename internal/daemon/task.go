@@ -125,7 +125,6 @@ Choose the execution mode deliberately:
 
 Never use sleep, schedule, or repeated get_subagent_result calls to wait for subagents. get_subagent_result is a diagnostic snapshot only.
 
-When a background subagent is your only remaining work, reply with a standalone <WAITING/> line and no tool calls. Do not poll it; the result arrives automatically in a new turn. If you would otherwise poll, reply with a standalone I_WOULD_USE_<WAITING/> line and no tool calls instead.
 
 The subagent does not receive the parent conversation. Built-in explore skips project instructions and memories; include relevant constraints explicitly. Other agent types may also load project context separately. State the question or outcome, known facts, paths, constraints, whether to MODIFY code or RESEARCH only, and what to return. For implementation, include relevant verification requirements.
 
@@ -225,8 +224,7 @@ func (t *taskTool) executeBackground(ctx context.Context, p TaskParams) (*tool.R
 		"Launched background subagent #%d (%s). Continue useful independent work. "+
 			"Its result will arrive automatically in a new turn; do not poll for it. "+
 			"Do not poll with sleep, schedule, or get_subagent_result. "+
-			"Do not poll with tools; when this is your only remaining work, reply with a standalone <WAITING/> line and no tool calls. "+
-			"If you would otherwise poll, reply with a standalone I_WOULD_USE_<WAITING/> line and no tool calls instead.",
+			"Do not poll with tools; when this is your only remaining work, reply with a standalone <WAITING/> line and no tool calls. ",
 		res.ChildID, p.SubagentType,
 	)
 

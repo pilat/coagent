@@ -30,8 +30,7 @@ func (g *backgroundWaitGuard) Execute(ctx context.Context, params json.RawMessag
 		return nil, errors.New(
 			"sleep is unavailable while background completion is pending; do not poll. " +
 				"Do not poll with sleep or another timer. Do not poll with tools; continue only useful independent work. " +
-				"When waiting is your only remaining action, reply with a standalone <WAITING/> line and no tool calls; the result arrives automatically in a new turn. " +
-				"If you would otherwise poll, reply with a standalone I_WOULD_USE_<WAITING/> line and no tool calls instead",
+				"When waiting is your only remaining action, reply with a standalone <WAITING/> line and no tool calls; the result arrives automatically in a new turn",
 		)
 	}
 

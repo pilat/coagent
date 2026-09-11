@@ -69,7 +69,7 @@ func (r *runtime) renderFinalOutput(ctx context.Context, rootID int64, text stri
 		return "", err
 	}
 
-	footer := progress.RenderFooter(snapshot, logger.Redact)
+	footer := progress.RenderFinalCompact(snapshot)
 	if footer == "" {
 		return text, nil
 	}

@@ -56,7 +56,6 @@ func TestBuildAgentPrompt_TeachesCooperativeBackgroundWait(t *testing.T) {
 	assert.Contains(t, BuildAgentPrompt, "background process or subagent")
 	assert.Contains(t, BuildAgentPrompt, "standalone <WAITING/> line and no tool calls")
 	assert.Contains(t, BuildAgentPrompt, "receive its result automatically in a new turn")
-	assert.Contains(t, BuildAgentPrompt, "I_WOULD_USE_<WAITING/>")
 	assert.Contains(t, GeneralAgentPrompt, "standalone <WAITING/> line and no tool calls")
 	assert.Contains(t, CompactionSummaryPrompt, "advertised processes and pending subagents")
 }

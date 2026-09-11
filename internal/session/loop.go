@@ -20,7 +20,6 @@ const (
 	emptyResponseWarnThreshold  = 3
 	emptyResponseBreakThreshold = 6
 	waitingMarker               = "<WAITING/>"
-	wouldUseWaitingMarker       = "I_WOULD_USE_<WAITING/>"
 
 	// compactionAttemptCap is how many consecutive automatic compactions may fail
 	// to relieve the pressure before the automatic path stops trying.
@@ -468,10 +467,9 @@ func (r *loopRunner) recordIteration(ctx context.Context) error {
 	}
 
 	replyToInput := r.replyToInput
-	// The marker outranks tool calls regardless of finish reason: a poll next to
-	// <WAITING/> is forbidden, and the tool result would wake the session it parked.
-	if (r.lastResp.FinishType == llmwire.FinishStop || r.lastResp.FinishType == llmwire.FinishToolCalls) &&
-		r.hasLiveWakeSource(ctx) && hasWaitingMarker(r.lastResp.Text) {
+	// The marker outranks tool calls: a poll next to <WAITING/> is forbidden, and the
+	// tool result would wake the session it parked.
+	if r.hasLiveWakeSource(ctx) && hasWaitingMarker(r.lastResp.Text) {
 		r.lastResp.ToolCalls = nil
 		r.lastResp.FinishType = llmwire.FinishStop
 		r.waitingRequested = true
@@ -490,6 +488,7 @@ func (r *loopRunner) recordIteration(ctx context.Context) error {
 		replyToInput,
 	)
 	if r.waitingRequested {
+		// Strip the waiting marker before notifying.
 		output = withoutWaitingMarker(output)
 		if output != "" && r.agent.outputEnabled {
 			outputType = sessionstore.OutputMessageReplaceable
@@ -627,7 +626,7 @@ func withoutWaitingMarker(text string) string {
 func isWaitingMarker(line string) bool {
 	line = strings.TrimSpace(line)
 
-	return line == waitingMarker || line == wouldUseWaitingMarker
+	return line == waitingMarker
 }
 
 func assistantOutput(response *llmwire.Response, enabled, replyToInput bool) (sessionstore.OutputType, string) {
@@ -661,14 +660,30 @@ func (r *loopRunner) finalize(ctx context.Context) (*loopResult, error) {
 		}
 	}
 
+	// Strip waiting marker from final response before persisting/notifying.
+	r.result.FinalResponse = withoutWaitingMarker(r.result.FinalResponse)
+
 	if strings.TrimSpace(r.result.FinalResponse) != "" && r.agent.outputEnabled {
 		if err := r.agent.ms.enqueueFinalAssistantOutput(ctx, r.result.FinalResponse); err != nil {
 			return r.result, err
 		}
 	}
 
-	if strings.TrimSpace(r.result.FinalResponse) != "" && r.opts.Notify != nil {
-		if err := r.opts.Notify(ctx, r.result.FinalResponse); err != nil {
+	// Append progress footer to final response before notifying.
+	footer := r.result.FinalResponse
+
+	if renderer, ok := r.agent.boundary.(finalOutputBoundary); ok {
+		var err error
+
+		footer, err = renderer.FinalOutput(ctx, footer)
+		if err != nil {
+			r.log.Warn("render_final_output_failed", zap.Error(err))
+			footer = r.result.FinalResponse
+		}
+	}
+
+	if strings.TrimSpace(footer) != "" && r.opts.Notify != nil {
+		if err := r.opts.Notify(ctx, footer); err != nil {
 			r.log.Warn("notify_failed", zap.Error(err))
 		}
 	}

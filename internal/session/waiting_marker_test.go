@@ -19,9 +19,7 @@ func TestHasWaitingMarker(t *testing.T) {
 	}{
 		{text: "<WAITING/>", want: true},
 		{text: "reasoning\n <WAITING/> \nmore", want: true},
-		{text: "I_WOULD_USE_<WAITING/>", want: true},
 		{text: "wait <WAITING/> now", want: false},
-		{text: "wait I_WOULD_USE_<WAITING/> now", want: false},
 		{text: "<WAITING>", want: false},
 	}
 	for _, tt := range tests {
@@ -34,32 +32,9 @@ func TestHasWaitingMarker(t *testing.T) {
 func TestWithoutWaitingMarker(t *testing.T) {
 	t.Parallel()
 
-	if got := withoutWaitingMarker("progress\n<WAITING/>\nI_WOULD_USE_<WAITING/>\nmore"); got != "progress\nmore" {
+	if got := withoutWaitingMarker("progress\n<WAITING/>\nmore"); got != "progress\nmore" {
 		t.Fatalf("withoutWaitingMarker = %q", got)
 	}
-}
-
-func TestRunLoop_AlternativeWaitingMarkerPersistsAndSuppressesTools(t *testing.T) {
-	t.Parallel()
-
-	read := &countingTool{id: "read"}
-	agent := newTestAgent(read)
-	agent.hasLiveWakeSource = func(context.Context) bool { return true }
-	agent.llmClient = &loopScriptLLM{responses: []*llmwire.Response{{
-		Text:       "I_WOULD_USE_<WAITING/>",
-		FinishType: llmwire.FinishStop,
-		ToolCalls:  []llmwire.ToolCall{{ID: "poll", Name: "read", Arguments: []byte(`{}`)}},
-	}}}
-
-	result, err := runLoop(t.Context(), agent, loopOptions{}, iterationGuard(5))
-	require.NoError(t, err)
-	assert.True(t, result.Suspended)
-	assert.Zero(t, read.runs.Load())
-
-	messages := agent.ms.getMessages()
-	require.Len(t, messages, 1)
-	assert.Equal(t, "I_WOULD_USE_<WAITING/>", messages[0].Content)
-	assert.Empty(t, messages[0].ToolCalls)
 }
 
 func TestRunLoop_WaitingMarkerPersistsTextAndSuppressesTools(t *testing.T) {

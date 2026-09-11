@@ -104,8 +104,13 @@ func TestHarnessScenario_FinalIncludesNonEmptyTodoAndBudget(t *testing.T) {
 	require.NoError(t, err)
 
 	releaseModel()
+	// The compact progress footer now leads the trailing block: model/iteration,
+	// metrics, TODO counts with the hint on its own line, then the budget line.
 	want := "task answer\n\n" +
-		"📋 TODO · 1 active · 1 remaining · 0 done · /status shows the full list\n\n" +
+		"🤖 `fake-model` · iteration 1\n" +
+		"⌚ 0s · 💰 $0.0 total\n" +
+		"📋 TODO · 1 active · 1 remaining · 0 done\n" +
+		"ℹ️ /status shows the full TODO list\n" +
 		"💸 Budget: armed (generation 1) · $0.000000 / $1.000000 · $1.000000 remaining"
 	h.mgr.waitIdle(sessionID)
 

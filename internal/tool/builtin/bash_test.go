@@ -35,7 +35,6 @@ func TestBackgroundToolDescriptionsPreventPollingAndDuplicateVerification(t *tes
 	description := bashDescription + backgroundDescriptionSuffix
 	assert.GreaterOrEqual(t, strings.Count(strings.ToLower(description), "do not poll"), 3)
 	assert.Contains(t, description, "<WAITING/>")
-	assert.Contains(t, description, "I_WOULD_USE_<WAITING/>")
 	assert.Contains(t, description, "Overlapping builds, test suites, or verification commands")
 	assert.Contains(t, tailDescription, "Do not use tail on a running background process")
 	assert.Contains(t, tailDescription, "final result arrives automatically in a new turn")
@@ -242,7 +241,6 @@ func TestBashTool_ImmediateBackground(t *testing.T) {
 	assert.Contains(t, result.Output, "Background execution was requested")
 	assert.Contains(t, result.Output, "Background process ID (not an operating-system PID): bgp_")
 	assert.Contains(t, result.Output, "cancel_process using this background process ID")
-	assert.Contains(t, result.Output, "I_WOULD_USE_<WAITING/>")
 	assert.Contains(t, result.Output, "Output file:")
 
 	processID, _ := result.Metadata[metaKeyProcessID].(string)

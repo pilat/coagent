@@ -177,7 +177,6 @@ func TestTaskTool_BackgroundSpawns(t *testing.T) {
 	}
 	if strings.Count(strings.ToLower(result.Output), "do not poll") < 3 ||
 		!strings.Contains(result.Output, "<WAITING/>") ||
-		!strings.Contains(result.Output, "I_WOULD_USE_<WAITING/>") ||
 		!strings.Contains(result.Output, "no tool calls") {
 		t.Errorf("output must repeat the no-poll canary contract: %s", result.Output)
 	}
@@ -259,7 +258,6 @@ func TestSubagentToolDescriptionsTeachExecutionContract(t *testing.T) {
 		"not waiting: do not poll this tool",
 		"parent receives the result automatically in a new turn",
 		"standalone <WAITING/> line and no tool calls",
-		"I_WOULD_USE_<WAITING/>",
 	} {
 		if !strings.Contains(resultDescription, want) {
 			t.Errorf("get_subagent_result description missing %q:\n%s", want, resultDescription)
@@ -281,7 +279,6 @@ func TestSubagentToolDescriptionsTeachExecutionContract(t *testing.T) {
 		"parent receives the next result automatically in a new turn",
 		"Do not use sleep, schedule, or polling",
 		"standalone <WAITING/> line and no tool calls",
-		"I_WOULD_USE_<WAITING/>",
 	} {
 		if !strings.Contains(sendDescription, want) {
 			t.Errorf("send_to_subagent description missing %q:\n%s", want, sendDescription)
@@ -306,7 +303,6 @@ func TestGetSubagentResult_RunningOutputIsDiagnosticNotPollingPrompt(t *testing.
 	}
 	if strings.Count(strings.ToLower(result.Output), "do not poll") < 3 ||
 		!strings.Contains(result.Output, "<WAITING/>") ||
-		!strings.Contains(result.Output, "I_WOULD_USE_<WAITING/>") ||
 		!strings.Contains(result.Output, "no tool calls") {
 		t.Errorf("running output must repeat the no-poll canary contract: %s", result.Output)
 	}
@@ -330,7 +326,6 @@ func TestSendToSubagent_OutputConfirmsDurableAcceptance(t *testing.T) {
 	}
 	if strings.Count(strings.ToLower(result.Output), "do not poll") < 3 ||
 		!strings.Contains(result.Output, "<WAITING/>") ||
-		!strings.Contains(result.Output, "I_WOULD_USE_<WAITING/>") ||
 		!strings.Contains(result.Output, "no tool calls") {
 		t.Errorf("send output must repeat the no-poll canary contract: %s", result.Output)
 	}

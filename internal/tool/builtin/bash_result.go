@@ -268,8 +268,7 @@ func (t *bashTool) backgroundedResult(record backgroundprocess.Process, automati
 			"\nThe final result will arrive automatically in a new turn; do not poll." +
 			"\nDo not poll with Bash, ps, sleep, schedule, Read, or Tail." +
 			"\nDo not poll with tools or launch an overlapping command for the same goal; continue only useful independent work." +
-			"\nWhen this is your only remaining work, reply with a standalone <WAITING/> line and no tool calls." +
-			"\nIf you would otherwise poll, reply with a standalone I_WOULD_USE_<WAITING/> line and no tool calls instead.",
+			"\nWhen this is your only remaining work, reply with a standalone <WAITING/> line and no tool calls.",
 		Metadata: map[string]any{
 			metaKeyProcessID: record.ID,
 		},

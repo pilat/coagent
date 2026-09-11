@@ -33,7 +33,7 @@ func (t *getSubagentResultTool) ParallelSafe() bool { return false }
 func (t *getSubagentResultTool) Description() string {
 	return `Read a one-off diagnostic snapshot of a subagent previously launched with task.
 
-Returns the subagent's current state (running, completed, error, killed) and, once terminal, its final output. This is for inspection and troubleshooting, not waiting: do not poll this tool and do not call sleep or schedule for a subagent. The parent receives the result automatically in a new turn. When it is your only remaining work, reply with a standalone <WAITING/> line and no tool calls. If you would otherwise poll, reply with a standalone I_WOULD_USE_<WAITING/> line and no tool calls instead.`
+Returns the subagent's current state (running, completed, error, killed) and, once terminal, its final output. This is for inspection and troubleshooting, not waiting: do not poll this tool and do not call sleep or schedule for a subagent. The parent receives the result automatically in a new turn. When it is your only remaining work, reply with a standalone <WAITING/> line and no tool calls.`
 }
 
 func (t *getSubagentResultTool) Parameters() json.RawMessage {
@@ -77,8 +77,7 @@ func (t *getSubagentResultTool) Execute(ctx context.Context, params json.RawMess
 				"Its result will arrive automatically in a new turn; do not poll. "+
 				"Do not poll with sleep, schedule, or get_subagent_result. "+
 				"Do not poll with tools; continue only useful independent work. "+
-				"When this is your only remaining work, reply with a standalone <WAITING/> line and no tool calls. "+
-				"If you would otherwise poll, reply with a standalone I_WOULD_USE_<WAITING/> line and no tool calls instead.",
+				"When this is your only remaining work, reply with a standalone <WAITING/> line and no tool calls. ",
 			res.ChildID,
 			res.State,
 			res.Iteration,
