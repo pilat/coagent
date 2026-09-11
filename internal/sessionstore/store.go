@@ -11,7 +11,10 @@ import (
 	"github.com/pilat/coagent/internal/transcript"
 )
 
-const defaultReasoningLevel = "medium"
+const (
+	defaultReasoningLevel = "medium"
+	assistantRole         = "assistant"
+)
 
 // Written explicitly on every root session: the column's schema default is
 // 'general', a subagent type that strips the primary agent's todo tools.
@@ -97,7 +100,7 @@ type CompactionEntry struct {
 // deliberately excludes session creation, discovery and lifecycle orchestration:
 // a session may checkpoint itself and mutate its transcript, but cannot create
 // or kill another session.
-type RuntimeStore interface {
+type RuntimeStore interface { //nolint:interfacebloat // Response integrity joins the existing live-loop transaction surface.
 	InsertMessage(ctx context.Context, sessionID int64, msg *transcript.Message) (int64, error)
 	// InsertMessages commits several transcript rows in one transaction and
 	// returns their ids in input order.
@@ -124,6 +127,7 @@ type RuntimeStore interface {
 		ctx context.Context,
 		rootID int64,
 	) (promptTokens int, completionTokens int, costUSD float64, err error)
+	ResponseIntegrityStore
 
 	SyntheticDeliveryStore
 }
@@ -180,6 +184,7 @@ type OrchestrationStore interface { //nolint:interfacebloat // one bounded orche
 	UpdateSessionStatus(ctx context.Context, id int64, status SessionStatus) error
 	KillTerminatingSessions(ctx context.Context) error
 	LoadActiveMessages(ctx context.Context, sessionID int64) ([]*transcript.Message, error)
+	TerminalRejectionStore
 }
 
 // Store is the complete persistence surface returned by NewStore. Consumers
@@ -712,12 +717,20 @@ func (s *store) GetSessionTreeUsage(
 // execer is satisfied by both *sql.DB and *sql.Tx.
 type execer interface {
 	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
+	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
 }
 
 func insertMessageWith(ctx context.Context, q execer, sessionID int64, msg *transcript.Message) (int64, error) {
+	if err := validateRetryReference(ctx, q, sessionID, msg.RetryOfMessageID); err != nil {
+		return 0, err
+	}
+
 	result, err := q.ExecContext(
 		ctx,
-		`INSERT INTO messages (session_id, role, content, tool_call_id, tool_name, tool_error, tool_calls, reasoning_content, reasoning_raw, attachments, cost_usd, usage) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		`INSERT INTO messages (session_id, role, content, tool_call_id, tool_name, tool_error,
+			tool_calls, reasoning_content, reasoning_raw, attachments, cost_usd, usage,
+			finish_type, provider_finish_reason, rejected_reason, retry_of_message_id)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		sessionID,
 		msg.Role,
 		msg.Content,
@@ -730,6 +743,10 @@ func insertMessageWith(ctx context.Context, q execer, sessionID int64, msg *tran
 		nullRawJSON(msg.Attachments),
 		msg.CostUSD,
 		nullRawJSON(msg.Usage),
+		nullString(msg.FinishType),
+		nullString(msg.ProviderFinishReason),
+		nullString(msg.RejectedReason),
+		nullMessageID(msg.RetryOfMessageID),
 	)
 	if err != nil {
 		return 0, fmt.Errorf("insert message: %w", err)
@@ -741,6 +758,28 @@ func insertMessageWith(ctx context.Context, q execer, sessionID int64, msg *tran
 	}
 
 	return id, nil
+}
+
+func validateRetryReference(ctx context.Context, q execer, sessionID, retryOfMessageID int64) error {
+	if retryOfMessageID == 0 {
+		return nil
+	}
+
+	var referencedSessionID int64
+	var role string
+	var rejectedReason sql.NullString
+
+	err := q.QueryRowContext(ctx, `SELECT session_id, role, rejected_reason FROM messages WHERE id = ?`,
+		retryOfMessageID).Scan(&referencedSessionID, &role, &rejectedReason)
+	if err != nil {
+		return fmt.Errorf("load retry attempt: %w", err)
+	}
+
+	if referencedSessionID != sessionID || role != assistantRole || !rejectedReason.Valid {
+		return errors.New("retry message does not reference a rejected assistant attempt in the same session")
+	}
+
+	return nil
 }
 
 func (s *store) InsertMessage(ctx context.Context, sessionID int64, msg *transcript.Message) (int64, error) {
@@ -889,8 +928,11 @@ func replaceCompactedMessagesTx(
 func (s *store) LoadActiveMessages(ctx context.Context, sessionID int64) ([]*transcript.Message, error) {
 	rows, err := s.db.QueryContext(
 		ctx,
-		`SELECT id, session_id, role, content, tool_call_id, tool_name, tool_error, tool_calls, reasoning_content, reasoning_raw, attachments, cost_usd, usage, compacted_at, created_at
-		FROM messages WHERE session_id = ? AND compacted_at IS NULL ORDER BY position IS NULL, position, id`,
+		`SELECT id, session_id, role, content, tool_call_id, tool_name, tool_error, tool_calls,
+			reasoning_content, reasoning_raw, attachments, cost_usd, usage, finish_type,
+			provider_finish_reason, rejected_reason, retry_of_message_id, compacted_at, created_at
+		FROM messages WHERE session_id = ? AND compacted_at IS NULL AND rejected_reason IS NULL
+		ORDER BY position IS NULL, position, id`,
 		sessionID,
 	)
 	if err != nil {
@@ -1050,6 +1092,15 @@ type rowScanner interface {
 	Scan(dest ...any) error
 }
 
+type scannedMessageValues struct {
+	toolCallID, toolName, toolCallsRaw, reasoningContent, reasoningRaw sql.NullString
+	attachmentsRaw, usageRaw, finishType, providerFinishReason         sql.NullString
+	rejectedReason                                                     sql.NullString
+	retryOfMessageID                                                   sql.NullInt64
+	compactedAt                                                        sql.NullTime
+	costUSD                                                            sql.NullFloat64
+}
+
 func scanSession(row *sql.Row) (*SessionRecord, error) {
 	rec, err := scanSessionFrom(row)
 	if err != nil {
@@ -1116,50 +1167,12 @@ func scanMessages(rows *sql.Rows) ([]*transcript.Message, error) {
 	var messages []*transcript.Message
 
 	for rows.Next() {
-		var msg transcript.Message
-
-		var toolCallID, toolName, toolCallsRaw, reasoningContent, reasoningRaw, attachmentsRaw, usageRaw sql.NullString
-		var compactedAt sql.NullTime
-		var costUSD sql.NullFloat64
-
-		err := rows.Scan(
-			&msg.ID, &msg.SessionID, &msg.Role, &msg.Content,
-			&toolCallID, &toolName, &msg.ToolError, &toolCallsRaw, &reasoningContent, &reasoningRaw,
-			&attachmentsRaw,
-			&costUSD, &usageRaw, &compactedAt, &msg.CreatedAt,
-		)
+		msg, err := scanMessage(rows)
 		if err != nil {
-			return nil, fmt.Errorf("scan message: %w", err)
+			return nil, err
 		}
 
-		msg.ToolCallID = toolCallID.String
-		msg.ToolName = toolName.String
-
-		if toolCallsRaw.Valid && toolCallsRaw.String != "" {
-			msg.ToolCalls = json.RawMessage(toolCallsRaw.String)
-		}
-
-		msg.ReasoningContent = reasoningContent.String
-
-		if reasoningRaw.Valid && reasoningRaw.String != "" {
-			msg.ReasoningRaw = json.RawMessage(reasoningRaw.String)
-		}
-
-		if attachmentsRaw.Valid && attachmentsRaw.String != "" {
-			msg.Attachments = json.RawMessage(attachmentsRaw.String)
-		}
-
-		msg.CostUSD = costUSD.Float64
-
-		if usageRaw.Valid && usageRaw.String != "" {
-			msg.Usage = json.RawMessage(usageRaw.String)
-		}
-
-		if compactedAt.Valid {
-			msg.CompactedAt = &compactedAt.Time
-		}
-
-		messages = append(messages, &msg)
+		messages = append(messages, msg)
 	}
 
 	if err := rows.Err(); err != nil {
@@ -1167,6 +1180,68 @@ func scanMessages(rows *sql.Rows) ([]*transcript.Message, error) {
 	}
 
 	return messages, nil
+}
+
+func scanMessage(sc rowScanner) (*transcript.Message, error) {
+	var msg transcript.Message
+	var values scannedMessageValues
+
+	err := sc.Scan(
+		&msg.ID, &msg.SessionID, &msg.Role, &msg.Content,
+		&values.toolCallID, &values.toolName, &msg.ToolError, &values.toolCallsRaw,
+		&values.reasoningContent, &values.reasoningRaw, &values.attachmentsRaw,
+		&values.costUSD, &values.usageRaw, &values.finishType, &values.providerFinishReason,
+		&values.rejectedReason, &values.retryOfMessageID, &values.compactedAt, &msg.CreatedAt,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("scan message: %w", err)
+	}
+
+	values.apply(&msg)
+
+	return &msg, nil
+}
+
+func (v scannedMessageValues) apply(msg *transcript.Message) {
+	msg.ToolCallID = v.toolCallID.String
+	msg.ToolName = v.toolName.String
+
+	if v.toolCallsRaw.Valid && v.toolCallsRaw.String != "" {
+		msg.ToolCalls = json.RawMessage(v.toolCallsRaw.String)
+	}
+
+	msg.ReasoningContent = v.reasoningContent.String
+
+	if v.reasoningRaw.Valid && v.reasoningRaw.String != "" {
+		msg.ReasoningRaw = json.RawMessage(v.reasoningRaw.String)
+	}
+
+	if v.attachmentsRaw.Valid && v.attachmentsRaw.String != "" {
+		msg.Attachments = json.RawMessage(v.attachmentsRaw.String)
+	}
+
+	msg.CostUSD = v.costUSD.Float64
+
+	if v.usageRaw.Valid && v.usageRaw.String != "" {
+		msg.Usage = json.RawMessage(v.usageRaw.String)
+	}
+
+	msg.FinishType = v.finishType.String
+	msg.ProviderFinishReason = v.providerFinishReason.String
+	msg.RejectedReason = v.rejectedReason.String
+	msg.RetryOfMessageID = v.retryOfMessageID.Int64
+
+	if v.compactedAt.Valid {
+		msg.CompactedAt = &v.compactedAt.Time
+	}
+}
+
+func nullMessageID(value int64) any {
+	if value == 0 {
+		return nil
+	}
+
+	return value
 }
 
 func unmarshalAttributes(raw string) map[string]any {

@@ -38,16 +38,6 @@ define require_ci
 fi
 endef
 
-# Verification consumes only dependencies prepared by `make tools`. Target-
-# specific exports flow into prerequisites and subprocesses (including go list
-# and mutation workers) without disabling the explicitly online bootstrap.
-OFFLINE_TARGETS := all verify verify-offline ci build test tests \
-	test.integration harness-e2e long-fuzz race stress mutation mutation.critical mutation.nightly \
-	lint lint.paths arch semgrep secrets
-$(OFFLINE_TARGETS): export GOPROXY := off
-$(OFFLINE_TARGETS): export GOSUMDB := off
-$(OFFLINE_TARGETS): export GOTOOLCHAIN := local
-
 # The binary version is stamped from git. The fallback is "dev", not a
 # plausible-looking number: a build without tags must be obvious in a version-skew
 # report, not silently claim to be a release.
@@ -102,7 +92,7 @@ all verify: fmt.check build lint arch tests
 # Prove the warmed checkout does not need module or Python-package resolution.
 # Missing modules or uv tool state fail closed; only `tools` may populate them.
 verify-offline:
-	UV_OFFLINE=1 $(MAKE) verify
+	GOPROXY=off GOSUMDB=off GOTOOLCHAIN=local UV_OFFLINE=1 $(MAKE) verify
 
 # Reproducible PR/release gate. It names the local checks directly instead of
 # invoking `all`: test.integration already includes the ordinary Go suites.

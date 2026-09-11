@@ -525,7 +525,7 @@ func mapAnthropicFinish(reason anthropic.StopReason) string {
 
 func (c *anthropicClient) parseResponse(message *anthropic.Message) (*llmwire.Response, error) {
 	resp := &llmwire.Response{
-		FinishType: llmwire.FinishStop,
+		FinishType: llmwire.FinishUnknown,
 	}
 
 	if message == nil {
@@ -533,6 +533,7 @@ func (c *anthropicClient) parseResponse(message *anthropic.Message) (*llmwire.Re
 	}
 
 	resp.FinishType = mapAnthropicFinish(message.StopReason)
+	resp.ProviderFinishReason = string(message.StopReason)
 
 	var thinking []anthropicThinkingBlock
 
@@ -562,7 +563,6 @@ func (c *anthropicClient) parseResponse(message *anthropic.Message) (*llmwire.Re
 				Name:      block.Name,
 				Arguments: inputJSON,
 			})
-			resp.FinishType = llmwire.FinishToolCalls
 		}
 	}
 

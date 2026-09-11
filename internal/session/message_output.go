@@ -26,13 +26,15 @@ func (ms *messageStore) addAssistantMessageOutput(
 	defer ms.mu.Unlock()
 
 	msg := llmwire.Message{
-		Role:             llmwire.RoleAssistant,
-		Content:          resp.Text,
-		ToolCalls:        resp.ToolCalls,
-		ReasoningContent: resp.ReasoningContent,
-		ReasoningRaw:     resp.ReasoningRaw,
-		CostUSD:          resp.CostUSD,
-		Usage:            resp.Usage,
+		Role:                 llmwire.RoleAssistant,
+		Content:              resp.Text,
+		ToolCalls:            resp.ToolCalls,
+		ReasoningContent:     resp.ReasoningContent,
+		ReasoningRaw:         resp.ReasoningRaw,
+		CostUSD:              resp.CostUSD,
+		Usage:                resp.Usage,
+		FinishType:           resp.FinishType,
+		ProviderFinishReason: resp.ProviderFinishReason,
 	}
 
 	if outputType == "" {

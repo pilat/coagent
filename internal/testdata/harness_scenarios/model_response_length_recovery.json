@@ -1,0 +1,49 @@
+{
+  "source_test": "TestHarnessScenario_LengthAttemptIsDiscardedBeforeToolExecution",
+  "trace": [
+    {
+      "type": "session_created",
+      "name": "<name>",
+      "work_dir": "<workdir>",
+      "attributes": {
+        "manager_id": "telegram:main"
+      }
+    },
+    {
+      "type": "state_changed",
+      "status": "running"
+    },
+    {
+      "type": "message",
+      "message": "recovered complete answer"
+    },
+    {
+      "type": "state_changed",
+      "status": "idle"
+    }
+  ],
+  "claims": [
+    {
+      "type": "session_opened",
+      "content": "",
+      "attributes": {
+        "manager_id": "telegram:main",
+        "name": "002",
+        "work_dir": "<workdir>"
+      },
+      "source_key": "session:1:opened",
+      "releases_input": false
+    },
+    {
+      "type": "message_persistent",
+      "content": "recovered complete answer",
+      "attributes": {
+        "manager_id": "telegram:main",
+        "model_input_generation": 1
+      },
+      "source_key": "message:4:final",
+      "model_input_generation": 1,
+      "releases_input": true
+    }
+  ]
+}

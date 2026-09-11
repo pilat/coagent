@@ -266,7 +266,8 @@ func TestParseResponse_NilMessage(t *testing.T) {
 	c := &anthropicClient{}
 	resp, err := c.parseResponse(nil)
 	require.NoError(t, err)
-	assert.Equal(t, "stop", resp.FinishType)
+	assert.Equal(t, llmwire.FinishUnknown, resp.FinishType)
+	assert.Empty(t, resp.ProviderFinishReason)
 	assert.Empty(t, resp.Text)
 }
 

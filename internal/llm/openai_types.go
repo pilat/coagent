@@ -1,6 +1,7 @@
 package llm
 
 import (
+	"bytes"
 	"encoding/json"
 	"net/http"
 	"strings"
@@ -197,7 +198,7 @@ type openaiClient struct {
 // content extracts text from RawContent, handling both string and array formats.
 // Array format: [{"type":"text","text":"..."},{"type":"text","text":"..."}]
 func (m *oaiMessage) content() string {
-	if len(m.RawContent) == 0 {
+	if len(m.RawContent) == 0 || bytes.Equal(bytes.TrimSpace(m.RawContent), []byte("null")) {
 		return ""
 	}
 

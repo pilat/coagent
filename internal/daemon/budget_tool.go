@@ -69,6 +69,23 @@ func (g *sessionBudgetGate) PersistResponse(
 	return result.MessageID, result.Fired, result.ReplyPublished, nil
 }
 
+func (g *sessionBudgetGate) PersistRejectedResponse(
+	ctx context.Context,
+	rejection sessionstore.RejectedResponse,
+) (*sessionstore.RejectedResponseResult, error) {
+	result, err := g.store.CommitRejectedResponse(ctx, rejection)
+	if err != nil {
+		return nil, err
+	}
+
+	if result.Outcome == sessionstore.RejectedResponseBudgetSuppressed &&
+		result.Budget != nil && result.Budget.ParkPhase == budgetParkRequested {
+		g.daemon.startBudgetPark(result.Budget)
+	}
+
+	return result, nil
+}
+
 func (g *sessionBudgetGate) Observe(ctx context.Context) (bool, error) {
 	_, _, cost, err := g.store.GetSessionTreeUsage(ctx, g.rootID)
 	if err != nil {

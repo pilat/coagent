@@ -173,7 +173,7 @@ func (delayedCLIClient) Chat(
 	[]llmwire.ToolSchema,
 	...llmwire.ChatOption,
 ) (*llmwire.Response, error) {
-	return &llmwire.Response{Text: "delayed cli answer"}, nil
+	return &llmwire.Response{Text: "delayed cli answer", FinishType: llmwire.FinishStop}, nil
 }
 
 func (delayedCLIClient) Model() string             { return "fake-model" }

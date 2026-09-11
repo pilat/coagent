@@ -115,6 +115,17 @@ type mockSessionStore struct {
 
 var _ sessionstore.RuntimeStore = (*mockSessionStore)(nil)
 
+func (m *mockSessionStore) CommitRejectedResponse(
+	context.Context,
+	sessionstore.RejectedResponse,
+) (*sessionstore.RejectedResponseResult, error) {
+	return nil, fmt.Errorf("mock rejected response is not configured")
+}
+
+func (m *mockSessionStore) HasOutstandingResponseRecovery(context.Context, int64) (bool, error) {
+	return false, nil
+}
+
 func (m *mockSessionStore) InsertMessages(_ context.Context, _ int64, msgs []*transcript.Message) ([]int64, error) {
 	ids := make([]int64, len(msgs))
 	for i := range msgs {
@@ -268,7 +279,7 @@ func (m *mockLLMClient) Chat(
 	_ []llmwire.ToolSchema,
 	_ ...llmwire.ChatOption,
 ) (*llmwire.Response, error) {
-	return &llmwire.Response{Text: "done"}, nil
+	return textResponse("done"), nil
 }
 func (m *mockLLMClient) Model() string                  { return "mock-model" }
 func (m *mockLLMClient) APIKey() string                 { return "mock-key" }
@@ -295,7 +306,7 @@ func (m *mockLLMRunOnce) Chat(
 	_ ...llmwire.ChatOption,
 ) (*llmwire.Response, error) {
 	m.called = true
-	return m.response, nil
+	return normalizeScriptedResponse(m.response), nil
 }
 func (m *mockLLMRunOnce) Model() string                  { return testMockModel }
 func (m *mockLLMRunOnce) APIKey() string                 { return "" }
@@ -323,9 +334,9 @@ func (m *mockLLMSequence) Chat(
 	idx := m.callCount
 	m.callCount++
 	if idx < len(m.responses) {
-		return m.responses[idx], nil
+		return normalizeScriptedResponse(m.responses[idx]), nil
 	}
-	return m.responses[len(m.responses)-1], nil
+	return normalizeScriptedResponse(m.responses[len(m.responses)-1]), nil
 }
 func (m *mockLLMSequence) Model() string                  { return testMockModel }
 func (m *mockLLMSequence) APIKey() string                 { return "" }

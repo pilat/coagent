@@ -40,7 +40,7 @@ func (m *promptRecordingLLM) Chat(
 	m.prompts = append(m.prompts, system)
 	m.mu.Unlock()
 
-	return &llmwire.Response{Text: "done"}, nil
+	return &llmwire.Response{Text: "done", FinishType: llmwire.FinishStop}, nil
 }
 
 func (m *promptRecordingLLM) firstPrompt(t *testing.T) string {

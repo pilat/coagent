@@ -46,8 +46,9 @@ func TestRunLoop_AlternativeWaitingMarkerPersistsAndSuppressesTools(t *testing.T
 	agent := newTestAgent(read)
 	agent.hasLiveWakeSource = func(context.Context) bool { return true }
 	agent.llmClient = &loopScriptLLM{responses: []*llmwire.Response{{
-		Text:      "I_WOULD_USE_<WAITING/>",
-		ToolCalls: []llmwire.ToolCall{{ID: "poll", Name: "read", Arguments: []byte(`{}`)}},
+		Text:       "I_WOULD_USE_<WAITING/>",
+		FinishType: llmwire.FinishStop,
+		ToolCalls:  []llmwire.ToolCall{{ID: "poll", Name: "read", Arguments: []byte(`{}`)}},
 	}}}
 
 	result, err := runLoop(t.Context(), agent, loopOptions{}, iterationGuard(5))
@@ -68,8 +69,9 @@ func TestRunLoop_WaitingMarkerPersistsTextAndSuppressesTools(t *testing.T) {
 	agent := newTestAgent(read)
 	agent.hasLiveWakeSource = func(context.Context) bool { return true }
 	agent.llmClient = &loopScriptLLM{responses: []*llmwire.Response{{
-		Text:      "still working\n<WAITING/>\npark now",
-		ToolCalls: []llmwire.ToolCall{{ID: "poll", Name: "read", Arguments: []byte(`{}`)}},
+		Text:       "still working\n<WAITING/>\npark now",
+		FinishType: llmwire.FinishStop,
+		ToolCalls:  []llmwire.ToolCall{{ID: "poll", Name: "read", Arguments: []byte(`{}`)}},
 	}}}
 
 	result, err := runLoop(t.Context(), agent, loopOptions{}, iterationGuard(5))

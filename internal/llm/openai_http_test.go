@@ -75,6 +75,12 @@ func TestNoChoicesBodySurfacesProviderError(t *testing.T) {
 	}
 }
 
+func TestMalformedBodyReturnsDecodeError(t *testing.T) {
+	err := chatWithBody(t, `{`)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unmarshal response")
+}
+
 func TestTruncateBody(t *testing.T) {
 	assert.Equal(t, "short", truncateBody([]byte("short")))
 	assert.Equal(t, string(make([]byte, bodyLogLimit))+"...", truncateBody(make([]byte, bodyLogLimit+10)))

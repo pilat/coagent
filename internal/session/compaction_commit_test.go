@@ -111,6 +111,13 @@ func (g *recordingBudgetGate) PersistResponse(
 	return 0, false, false, nil
 }
 
+func (g *recordingBudgetGate) PersistRejectedResponse(
+	context.Context,
+	sessionstore.RejectedResponse,
+) (*sessionstore.RejectedResponseResult, error) {
+	return nil, nil
+}
+
 func (g *recordingBudgetGate) PersistCompaction(
 	_ context.Context,
 	compaction sessionstore.BudgetedCompaction,

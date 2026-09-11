@@ -403,6 +403,72 @@
       ]
     },
     {
+      "trace": "model_response_length_exhausted.json",
+      "source_test": "TestHarnessScenario_RepeatedLengthPublishesCanonicalError",
+      "calls": [
+        {
+          "method": "createForumTopic",
+          "chat_id": -100123
+        },
+        {
+          "method": "editForumTopic",
+          "chat_id": -100123,
+          "thread_id": 7001
+        },
+        {
+          "method": "sendMessage",
+          "chat_id": -100123,
+          "thread_id": 7001,
+          "text": "❌ LLM error: Model response reached the output limit twice.",
+          "parse_mode": "HTML"
+        }
+      ]
+    },
+    {
+      "trace": "model_response_length_recovery.json",
+      "source_test": "TestHarnessScenario_LengthAttemptIsDiscardedBeforeToolExecution",
+      "calls": [
+        {
+          "method": "createForumTopic",
+          "chat_id": -100123
+        },
+        {
+          "method": "editForumTopic",
+          "chat_id": -100123,
+          "thread_id": 7001
+        },
+        {
+          "method": "sendMessage",
+          "chat_id": -100123,
+          "thread_id": 7001,
+          "text": "recovered complete answer",
+          "parse_mode": "HTML"
+        }
+      ]
+    },
+    {
+      "trace": "model_response_unknown_finish.json",
+      "source_test": "TestHarnessScenario_UnknownFinishPublishesCanonicalError",
+      "calls": [
+        {
+          "method": "createForumTopic",
+          "chat_id": -100123
+        },
+        {
+          "method": "editForumTopic",
+          "chat_id": -100123,
+          "thread_id": 7001
+        },
+        {
+          "method": "sendMessage",
+          "chat_id": -100123,
+          "thread_id": 7001,
+          "text": "❌ LLM error: Model response ended with an unknown finish reason.",
+          "parse_mode": "HTML"
+        }
+      ]
+    },
+    {
       "trace": "one_shot_ack_retry_restart.json",
       "source_test": "TestHarnessScenario_OneShotAckRetrySurvivesDaemonRestartAndRendersOnce",
       "calls": [

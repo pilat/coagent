@@ -3,7 +3,6 @@ package sessionlifecycle
 import (
 	"context"
 	"fmt"
-	"slices"
 	"time"
 
 	"go.uber.org/zap"
@@ -98,7 +97,9 @@ func (c *completions) Finalize(ctx context.Context, childID int64, shuttingDown,
 		persistedStatus = sessionstore.SessionStatusError
 	}
 
-	result, outcome := c.deriveOutcome(ctx, childID, record.Iteration, errored)
+	result, outcome := c.deriveOutcome(
+		ctx, childID, record.Iteration, errored, record.Status == sessionstore.SessionStatusError,
+	)
 
 	terminalized, err := c.finalizeActivation(ctx, childID, state, result, outcome)
 	if err != nil {
@@ -192,33 +193,6 @@ func (c *completions) rearm(ctx context.Context, childID int64) error {
 	return nil
 }
 
-func (c *completions) deriveOutcome(
-	ctx context.Context,
-	childID int64,
-	iterations int,
-	errored bool,
-) (string, subagent.Outcome) {
-	messages, err := c.sessions.LoadActiveMessages(ctx, childID)
-	if err != nil {
-		messages = nil
-	}
-
-	finalText := lastAssistantText(messages)
-	switch {
-	case errored:
-		if finalText == "" {
-			finalText = fmt.Sprintf("crashed after %d iterations", iterations)
-		}
-
-		return finalText, subagent.OutcomeError
-	case lastMessageIsFinalAnswer(messages):
-		return finalText, subagent.OutcomeCompleted
-	default:
-		return fmt.Sprintf("ended without a final answer after %d iterations", iterations),
-			subagent.OutcomeIncomplete
-	}
-}
-
 func (c *completions) finalizeActivation(
 	ctx context.Context,
 	childID int64,
@@ -242,27 +216,4 @@ func (c *completions) finalizeActivation(
 	}
 
 	return false, fmt.Errorf("finalize activation for child %d: %w", childID, err)
-}
-
-func lastAssistantText(messages []*transcript.Message) string {
-	for _, message := range slices.Backward(messages) {
-		if message.Role == "assistant" && len(message.ToolCalls) == 0 && message.Content != "" {
-			return message.Content
-		}
-	}
-
-	return ""
-}
-
-func lastMessageIsFinalAnswer(messages []*transcript.Message) bool {
-	for _, message := range slices.Backward(messages) {
-		switch message.Role {
-		case "assistant":
-			return len(message.ToolCalls) == 0 && message.Content != ""
-		case "user":
-			return false
-		}
-	}
-
-	return false
 }

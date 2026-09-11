@@ -95,14 +95,28 @@ func (m *loopScriptLLM) Chat(
 	m.lastTools = tools
 
 	if m.onCall != nil {
-		return m.onCall(m.calls, msgs)
+		response, err := m.onCall(m.calls, msgs)
+		return normalizeScriptedResponse(response), err
 	}
 
 	if m.err != nil {
 		return nil, m.err
 	}
 
-	return m.responses[min(m.calls-1, len(m.responses)-1)], nil
+	return normalizeScriptedResponse(m.responses[min(m.calls-1, len(m.responses)-1)]), nil
+}
+
+func normalizeScriptedResponse(response *llmwire.Response) *llmwire.Response {
+	if response == nil || response.FinishType != "" {
+		return response
+	}
+	if len(response.ToolCalls) > 0 {
+		response.FinishType = llmwire.FinishToolCalls
+	} else {
+		response.FinishType = llmwire.FinishStop
+	}
+
+	return response
 }
 
 func (m *loopScriptLLM) Model() string             { return testMockModel }
@@ -181,7 +195,7 @@ func summarizingLLM() *loopScriptLLM {
 func iterationGuard(limit int) iterationCallback {
 	calls := 0
 
-	return func(int, *llmwire.Response, []llmwire.ToolCall) error {
+	return func(int, *llmwire.Response, []llmwire.ToolCall, bool) error {
 		calls++
 		if calls > limit {
 			return fmt.Errorf("loop ran past %d iterations", limit)
@@ -221,7 +235,8 @@ func textResponse(text string) *llmwire.Response {
 
 func toolCallResponse(id, name string) *llmwire.Response {
 	return &llmwire.Response{
-		ToolCalls: []llmwire.ToolCall{{ID: id, Name: name, Arguments: []byte(`{}`)}},
+		ToolCalls:  []llmwire.ToolCall{{ID: id, Name: name, Arguments: []byte(`{}`)}},
+		FinishType: llmwire.FinishToolCalls,
 	}
 }
 
@@ -698,7 +713,7 @@ func TestRunLoopCallbackSeesNumberedIterationAndToolCalls(t *testing.T) {
 		seenCalls  [][]llmwire.ToolCall
 	)
 
-	cb := func(iteration int, resp *llmwire.Response, toolCalls []llmwire.ToolCall) error {
+	cb := func(iteration int, resp *llmwire.Response, toolCalls []llmwire.ToolCall, _ bool) error {
 		iterations = append(iterations, iteration)
 		seenCalls = append(seenCalls, toolCalls)
 		assert.NotNil(t, resp)
@@ -722,7 +737,7 @@ func TestRunLoopCallbackFailureAbortsBeforeRecordingTurn(t *testing.T) {
 	agent.llmClient = llmClient
 
 	cbErr := errors.New("checkpoint failed")
-	cb := func(int, *llmwire.Response, []llmwire.ToolCall) error { return cbErr }
+	cb := func(int, *llmwire.Response, []llmwire.ToolCall, bool) error { return cbErr }
 
 	result, err := runLoop(t.Context(), agent, loopOptions{}, cb)
 

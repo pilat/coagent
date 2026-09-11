@@ -113,7 +113,8 @@ func (s *store) CaptureProgress(ctx context.Context, rootID int64) (*ProgressFac
 
 		err = tx.QueryRowContext(ctx, `SELECT messages.content FROM messages
 			WHERE messages.session_id = ? AND messages.role = 'assistant' AND messages.id > ?
-			AND messages.compacted_at IS NULL AND TRIM(COALESCE(messages.content, '')) <> ''
+			AND messages.compacted_at IS NULL AND messages.rejected_reason IS NULL
+			AND TRIM(COALESCE(messages.content, '')) <> ''
 			AND json_type(messages.tool_calls) = 'array' AND json_array_length(messages.tool_calls) > 0
 			AND NOT EXISTS (SELECT 1 FROM session_outbox WHERE session_outbox.session_id = messages.session_id
 				AND session_outbox.source_key = 'message:' || messages.id || ':reply')

@@ -135,7 +135,7 @@ func (delayedTelegramClient) Chat(
 	[]llmwire.ToolSchema,
 	...llmwire.ChatOption,
 ) (*llmwire.Response, error) {
-	return &llmwire.Response{Text: "delayed telegram answer"}, nil
+	return &llmwire.Response{Text: "delayed telegram answer", FinishType: llmwire.FinishStop}, nil
 }
 
 func (delayedTelegramClient) Model() string             { return "fake-model" }

@@ -27,7 +27,8 @@ func mapOpenAIFinish(reason string) string {
 
 func (c *openaiClient) parseMessage(message *oaiMessage, finishReason string) (*llmwire.Response, error) {
 	resp := &llmwire.Response{
-		FinishType: mapOpenAIFinish(finishReason),
+		FinishType:           mapOpenAIFinish(finishReason),
+		ProviderFinishReason: finishReason,
 	}
 
 	if message == nil {
@@ -55,7 +56,6 @@ func (c *openaiClient) parseMessage(message *oaiMessage, finishReason string) (*
 				Name:      tc.Function.Name,
 				Arguments: []byte(tc.Function.Arguments),
 			})
-			resp.FinishType = llmwire.FinishToolCalls
 		}
 	}
 

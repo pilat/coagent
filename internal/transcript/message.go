@@ -15,13 +15,17 @@ type Message struct {
 	ToolName   string
 	// ToolError is the typed failure bit on tool result rows; pre-00032 rows
 	// read as false.
-	ToolError        bool
-	ToolCalls        json.RawMessage
-	ReasoningContent string
-	ReasoningRaw     json.RawMessage
-	Attachments      json.RawMessage
-	CostUSD          float64
-	Usage            json.RawMessage
-	CompactedAt      *time.Time
-	CreatedAt        time.Time
+	ToolError            bool
+	ToolCalls            json.RawMessage
+	ReasoningContent     string
+	ReasoningRaw         json.RawMessage
+	Attachments          json.RawMessage
+	CostUSD              float64
+	Usage                json.RawMessage
+	FinishType           string
+	ProviderFinishReason string
+	RejectedReason       string
+	RetryOfMessageID     int64
+	CompactedAt          *time.Time
+	CreatedAt            time.Time
 }

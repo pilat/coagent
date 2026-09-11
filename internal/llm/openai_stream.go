@@ -117,10 +117,6 @@ func (c *openaiClient) finishStreamingResponse(
 	c.logResponse(log, aggregate.finishReason, result, time.Since(start).Milliseconds())
 
 	completionResp := oaiResponse{Usage: aggregate.usage}
-	if err := c.checkEmptyResponse(log, result, aggregate.finishReason, nil, &completionResp); err != nil {
-		return nil, err
-	}
-
 	attachUsage(result, extractUsage(&completionResp, c.provider, c.model, c.pricing))
 	logServerToolUse(log, aggregate.usage)
 

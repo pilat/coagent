@@ -21,7 +21,7 @@ func (s *store) InsertAssistantMessageWithOutput(
 	content string,
 	releasesInput bool,
 ) (messageID int64, output *OutputCommit, err error) {
-	if message == nil || message.Role != "assistant" || !isMessageOutput(outputType) || content == "" {
+	if message == nil || message.Role != assistantRole || !isMessageOutput(outputType) || content == "" {
 		return 0, nil, errors.New("invalid assistant output")
 	}
 

@@ -82,13 +82,15 @@ type Message struct {
 	ToolName   string
 	// ToolError marks a durable typed failure on a tool result row; legacy
 	// rows and ordinary results read as false.
-	ToolError        bool
-	ToolCalls        []ToolCall      // For assistant messages that call tools
-	ReasoningContent string          // For OpenAI-compatible models that return reasoning_content
-	ReasoningRaw     json.RawMessage `json:"ReasoningRaw,omitempty"` // sealed ReasoningEnvelope; replayed verbatim
-	Images           []ImageRef      `json:"Images,omitempty"`       // referenced-not-stored attachments (tool results)
-	CostUSD          float64         `json:"CostUSD,omitempty"`
-	Usage            *MessageUsage   `json:"Usage,omitempty"`
+	ToolError            bool
+	ToolCalls            []ToolCall      // For assistant messages that call tools
+	ReasoningContent     string          // For OpenAI-compatible models that return reasoning_content
+	ReasoningRaw         json.RawMessage `json:"ReasoningRaw,omitempty"` // sealed ReasoningEnvelope; replayed verbatim
+	Images               []ImageRef      `json:"Images,omitempty"`       // referenced-not-stored attachments (tool results)
+	FinishType           string
+	ProviderFinishReason string
+	CostUSD              float64       `json:"CostUSD,omitempty"`
+	Usage                *MessageUsage `json:"Usage,omitempty"`
 }
 
 // FinishType is the portable outcome vocabulary every driver reports on
@@ -102,14 +104,15 @@ const (
 )
 
 type Response struct {
-	Text             string
-	Thoughts         string // Model's reasoning/thinking (if available)
-	ToolCalls        []ToolCall
-	FinishType       string          // FinishStop, FinishToolCalls, FinishLength, FinishUnknown
-	ReasoningContent string          // For OpenAI-compatible models that return reasoning_content
-	ReasoningRaw     json.RawMessage // sealed ReasoningEnvelope; persisted and replayed verbatim
-	CostUSD          float64
-	Usage            *MessageUsage
+	Text                 string
+	Thoughts             string // Model's reasoning/thinking (if available)
+	ToolCalls            []ToolCall
+	FinishType           string          // FinishStop, FinishToolCalls, FinishLength, FinishUnknown
+	ProviderFinishReason string          // Exact native provider finish/stop reason
+	ReasoningContent     string          // For OpenAI-compatible models that return reasoning_content
+	ReasoningRaw         json.RawMessage // sealed ReasoningEnvelope; persisted and replayed verbatim
+	CostUSD              float64
+	Usage                *MessageUsage
 }
 
 // ToolCall uses explicit tags to pin its on-disk keys: the struct is persisted
