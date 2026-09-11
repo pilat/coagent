@@ -22,7 +22,7 @@ func TestPreflightWithRetry_RetriesEachTransientRemoteCall(t *testing.T) {
 	attempts := make(map[string]int)
 
 	manager := &Manager{
-		cfg:    config.ManagerEntry{BotToken: "token", TargetChatID: targetID(-100123)},
+		cfg:    config.ManagerEntry{BotToken: "token", TargetChatID: new(int64(-100123))},
 		target: forumTarget{chatID: -100123, topology: forumTopologyGroup},
 		httpClient: &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 			method := filepath.Base(req.URL.Path)
@@ -273,7 +273,7 @@ func (permanentNetworkError) Temporary() bool { return false }
 func managerBlockedInPreflight(requestStarted chan<- struct{}) *Manager {
 	return &Manager{
 		id:         "telegram-test",
-		cfg:        config.ManagerEntry{BotToken: "token", TargetChatID: targetID(-100123)},
+		cfg:        config.ManagerEntry{BotToken: "token", TargetChatID: new(int64(-100123))},
 		target:     forumTarget{chatID: -100123, topology: forumTopologyGroup},
 		controller: &fakeController{},
 		httpClient: &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {

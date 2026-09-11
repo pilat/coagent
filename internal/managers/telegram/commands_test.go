@@ -66,7 +66,7 @@ func TestHandleCommandsPreservesCanonicalSkillNames(t *testing.T) {
 			m := &Manager{
 				cfg: config.ManagerEntry{
 					BotToken:     "token",
-					TargetChatID: targetID(-100123),
+					TargetChatID: new(int64(-100123)),
 				},
 				controller: &fakeController{
 					listSkills: []controllerapi.ConfigSkillInfo{{
@@ -104,7 +104,7 @@ func TestSchedulesCommandEntersDurableInbox(t *testing.T) {
 	var messages []string
 	ctrl := &fakeController{}
 	m := &Manager{
-		cfg:        config.ManagerEntry{BotToken: "token", TargetChatID: targetID(-100123)},
+		cfg:        config.ManagerEntry{BotToken: "token", TargetChatID: new(int64(-100123))},
 		controller: ctrl,
 		httpClient: &http.Client{Transport: telegramMessageRecorder(t, &messages)},
 	}
@@ -120,7 +120,7 @@ func TestStopCommandStopsWithoutSteering(t *testing.T) {
 	var messages []string
 	ctrl := &fakeController{}
 	m := &Manager{
-		cfg:        config.ManagerEntry{BotToken: "token", TargetChatID: targetID(-100123)},
+		cfg:        config.ManagerEntry{BotToken: "token", TargetChatID: new(int64(-100123))},
 		controller: ctrl,
 		httpClient: &http.Client{Transport: telegramMessageRecorder(t, &messages)},
 	}

@@ -186,8 +186,8 @@ func TestHarnessScenario_SetManagerPatchPreservesFields(t *testing.T) {
 	resolved, err := config.LoadUnifiedConfig(filepath.Join(configDir, "config.yaml"), secrets)
 	require.NoError(t, err)
 	assert.Equal(t, config.ManagerEntry{
-		ID: "tg", Driver: "telegram", Enabled: boolPtr(true), BotToken: "1234:tg-token",
-		AllowedUserIDs: []int64{7, 9}, TargetChatID: int64Ptr(-100), ServiceTopicName: "Support",
+		ID: "tg", Driver: "telegram", Enabled: new(true), BotToken: "1234:tg-token",
+		AllowedUserIDs: []int64{7, 9}, TargetChatID: new(int64(-100)), ServiceTopicName: "Support",
 		ServiceTopicIconEmojiID: "123", SessionTopicIconEmojiID: "456", SendChunkDelayMS: 200,
 		PollTimeoutSec: 45, Whisper: &config.ManagerWhisperEntry{Provider: "whisper", Model: "whisper-1"},
 	}, resolved.Managers[1])
@@ -270,7 +270,3 @@ func newApplyConfigDirWithSecrets(t *testing.T, configYAML, secrets string) stri
 
 	return dir
 }
-
-func boolPtr(value bool) *bool { return &value }
-
-func int64Ptr(value int64) *int64 { return &value }

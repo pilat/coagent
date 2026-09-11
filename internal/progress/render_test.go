@@ -116,7 +116,7 @@ func TestRenderCompact_MissingFragmentsOmitted(t *testing.T) {
 		"🧠 context ~7%",
 	}, "\n"), RenderCompact(approximate, nil))
 
-	noModel := Snapshot{EpisodeElapsed: durationPtr(time.Minute)}
+	noModel := Snapshot{EpisodeElapsed: new(time.Minute)}
 	assert.Equal(t, strings.Join([]string{
 		"**⚪ Idle**",
 		"⌚ 1m0s",
@@ -209,7 +209,7 @@ func TestRenderFull_KeepsDiagnosticsAndFullNote(t *testing.T) {
 		ChildIterations:     9,
 		Context:             Context{Available: true, Used: 1000, Max: 8000},
 		Lifetime:            Usage{Available: true, PromptTokens: 10, CompletionTokens: 20, CostUSD: 0.5},
-		EpisodeElapsed:      durationPtr(time.Minute),
+		EpisodeElapsed:      new(time.Minute),
 		LatestModelProgress: note,
 		Todos: []TodoItem{
 			{ID: "1", Content: "ship change", Status: "in_progress"},
@@ -310,8 +310,4 @@ func TestRenderFooter_SummariesOnly(t *testing.T) {
 
 	budgetOnly := RenderFooter(Snapshot{Budget: &Budget{State: "armed", Generation: 1}}, nil)
 	assert.Equal(t, "💸 Budget: armed (generation 1)", budgetOnly)
-}
-
-func durationPtr(value time.Duration) *time.Duration {
-	return &value
 }

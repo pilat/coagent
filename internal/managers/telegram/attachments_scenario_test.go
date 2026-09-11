@@ -35,7 +35,7 @@ func TestHarnessScenario_AttachmentBecomesDurableSyntheticMessage(t *testing.T) 
 	payload := []byte("%PDF-1.4 body")
 	api := &fakeAttachmentAPI{getFilePath: "documents/report_1.pdf", payload: payload}
 	manager, err := New(config.ManagerEntry{
-		ID: delayedTelegramManagerID, BotToken: "test-token", TargetChatID: targetID(harnessChatID),
+		ID: delayedTelegramManagerID, BotToken: "test-token", TargetChatID: new(int64(harnessChatID)),
 	}, &config.UnifiedConfig{}, h.controller)
 	require.NoError(t, err)
 	client := &http.Client{Transport: roundTripFunc(api.RoundTrip)}

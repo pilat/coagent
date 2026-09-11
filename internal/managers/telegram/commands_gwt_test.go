@@ -38,7 +38,7 @@ func TestGwtDispatchCreatesWorktreeSession(t *testing.T) {
 	var messages []string
 	ctrl := &fakeController{}
 	m := &Manager{
-		cfg:        config.ManagerEntry{BotToken: "token", TargetChatID: targetID(-100123)},
+		cfg:        config.ManagerEntry{BotToken: "token", TargetChatID: new(int64(-100123))},
 		controller: ctrl,
 		httpClient: &http.Client{Transport: telegramMessageRecorder(t, &messages)},
 		workDirs:   map[int64]string{42: "/repo/work"},
@@ -63,7 +63,7 @@ func TestGwtEditsProgressIntoCreatedWithProjectName(t *testing.T) {
 		}},
 	}
 	m := &Manager{
-		cfg:        config.ManagerEntry{BotToken: "token", TargetChatID: targetID(-100123)},
+		cfg:        config.ManagerEntry{BotToken: "token", TargetChatID: new(int64(-100123))},
 		controller: ctrl,
 		httpClient: &http.Client{Transport: telegramMessageRecorder(t, &messages)},
 		workDirs:   map[int64]string{42: "/repo/work"},
@@ -83,7 +83,7 @@ func TestGwtFailureEditsProgressIntoError(t *testing.T) {
 	var messages []string
 	ctrl := &fakeController{createSessionErr: errors.New("boom")}
 	m := &Manager{
-		cfg:        config.ManagerEntry{BotToken: "token", TargetChatID: targetID(-100123)},
+		cfg:        config.ManagerEntry{BotToken: "token", TargetChatID: new(int64(-100123))},
 		controller: ctrl,
 		httpClient: &http.Client{Transport: telegramMessageRecorder(t, &messages)},
 		workDirs:   map[int64]string{42: "/repo/work"},
@@ -100,7 +100,7 @@ func TestGwtBareShowsUsage(t *testing.T) {
 	var messages []string
 	ctrl := &fakeController{}
 	m := &Manager{
-		cfg:        config.ManagerEntry{BotToken: "token", TargetChatID: targetID(-100123)},
+		cfg:        config.ManagerEntry{BotToken: "token", TargetChatID: new(int64(-100123))},
 		controller: ctrl,
 		httpClient: &http.Client{Transport: telegramMessageRecorder(t, &messages)},
 		workDirs:   map[int64]string{42: "/repo/work"},
@@ -117,7 +117,7 @@ func TestGwtInServiceTopicSteersToSession(t *testing.T) {
 	var messages []string
 	ctrl := &fakeController{}
 	m := &Manager{
-		cfg:            config.ManagerEntry{BotToken: "token", TargetChatID: targetID(-100123)},
+		cfg:            config.ManagerEntry{BotToken: "token", TargetChatID: new(int64(-100123))},
 		controller:     ctrl,
 		httpClient:     &http.Client{Transport: telegramMessageRecorder(t, &messages)},
 		serviceTopicID: 7,

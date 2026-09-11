@@ -18,12 +18,12 @@ func TestServerConfig_IsEnabled(t *testing.T) {
 		},
 		{
 			name:     "explicitly enabled",
-			config:   ServerConfig{Enabled: boolPtr(true)},
+			config:   ServerConfig{Enabled: new(true)},
 			expected: true,
 		},
 		{
 			name:     "explicitly disabled via Enabled field",
-			config:   ServerConfig{Enabled: boolPtr(false)},
+			config:   ServerConfig{Enabled: new(false)},
 			expected: false,
 		},
 		{
@@ -33,7 +33,7 @@ func TestServerConfig_IsEnabled(t *testing.T) {
 		},
 		{
 			name:     "Disabled field takes precedence over Enabled",
-			config:   ServerConfig{Disabled: true, Enabled: boolPtr(true)},
+			config:   ServerConfig{Disabled: true, Enabled: new(true)},
 			expected: false,
 		},
 	}
@@ -102,8 +102,4 @@ func TestBuildEnv(t *testing.T) {
 			}
 		})
 	}
-}
-
-func boolPtr(b bool) *bool {
-	return &b
 }

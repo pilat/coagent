@@ -109,8 +109,7 @@ func classifyExit(err error) (State, *int) {
 		return StateCompleted, &code
 	}
 
-	var exitErr *exec.ExitError
-	if errors.As(err, &exitErr) {
+	if exitErr, ok := errors.AsType[*exec.ExitError](err); ok {
 		failed := exitErr.ExitCode()
 
 		return StateFailed, &failed

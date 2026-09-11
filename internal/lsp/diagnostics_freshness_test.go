@@ -27,7 +27,7 @@ func TestClientAwaitDiagnosticsRequiresCurrentVersion(t *testing.T) {
 	}()
 
 	processed := c.diagSignal
-	c.publishDiagnostics(t, uri, intPtr(1), "stale")
+	c.publishDiagnostics(t, uri, new(1), "stale")
 	<-processed
 	select {
 	case <-result:
@@ -35,7 +35,7 @@ func TestClientAwaitDiagnosticsRequiresCurrentVersion(t *testing.T) {
 	default:
 	}
 
-	c.publishDiagnostics(t, uri, intPtr(2), "fresh")
+	c.publishDiagnostics(t, uri, new(2), "fresh")
 	require.NoError(t, <-errs)
 	diagnostics := <-result
 	require.Len(t, diagnostics, 1)
@@ -78,9 +78,9 @@ func TestClientDiagnosticsRejectNullAndImpossibleVersions(t *testing.T) {
 	c := newClient()
 	uri := "file:///workspace/main.go"
 	c.files[uri] = documentState{version: 2}
-	c.publishDiagnostics(t, uri, intPtr(2), "current")
-	c.publishDiagnostics(t, uri, intPtr(1), "stale")
-	c.publishDiagnostics(t, uri, intPtr(3), "newer")
+	c.publishDiagnostics(t, uri, new(2), "current")
+	c.publishDiagnostics(t, uri, new(1), "stale")
+	c.publishDiagnostics(t, uri, new(3), "newer")
 
 	diagnostics := c.getDiagnostics(uri)
 	require.Len(t, diagnostics, 1)
@@ -149,8 +149,6 @@ func (c *client) publishDiagnostics(t *testing.T, uri string, version *int, mess
 	}
 	c.handleNotification(context.Background(), &Notification{Method: "textDocument/publishDiagnostics", Params: params})
 }
-
-func intPtr(value int) *int { return &value }
 
 type syncWriteCloser struct{ io.Writer }
 

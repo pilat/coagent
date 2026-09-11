@@ -78,7 +78,7 @@ func newAttachmentTestManager(t *testing.T, api *fakeAttachmentAPI, controller *
 
 	return &Manager{
 		id:             "telegram-main",
-		cfg:            config.ManagerEntry{ID: "telegram-main", BotToken: "tok", TargetChatID: targetID(1)},
+		cfg:            config.ManagerEntry{ID: "telegram-main", BotToken: "tok", TargetChatID: new(int64(1))},
 		controller:     controller,
 		httpClient:     client,
 		downloadClient: client,

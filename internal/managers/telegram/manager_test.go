@@ -64,7 +64,7 @@ func TestStartDoesNotAnnounceStartup(t *testing.T) {
 		cfg: config.ManagerEntry{
 			ID:             "telegram-main",
 			BotToken:       "token",
-			TargetChatID:   targetID(-100123),
+			TargetChatID:   new(int64(-100123)),
 			PollTimeoutSec: 30,
 		},
 		target:     forumTarget{chatID: -100123, topology: forumTopologyGroup},

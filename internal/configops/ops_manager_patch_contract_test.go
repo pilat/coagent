@@ -20,8 +20,8 @@ func TestSetManagerPatch_ResetsRawValuesToResolvedDefaults(t *testing.T) {
 		SessionTopicIconEmojiID: &empty, SendChunkDelayMS: &zero, PollTimeoutSec: &zero,
 	}))
 	assert.Equal(t, config.ManagerEntry{
-		ID: "tg", Driver: "telegram", Enabled: boolptr(true), BotToken: Ref("MANAGER_TG_BOT_TOKEN"),
-		AllowedUserIDs: []int64{7}, TargetChatID: int64ptr(-100),
+		ID: "tg", Driver: "telegram", Enabled: new(true), BotToken: Ref("MANAGER_TG_BOT_TOKEN"),
+		AllowedUserIDs: []int64{7}, TargetChatID: new(int64(-100)),
 	}, raw.Managers[0])
 
 	secrets, err := config.LoadSecretsFrom(f.secretPath)
@@ -40,8 +40,8 @@ func TestSetManagerPatch_CreateCanBeDisabledAndRotateReference(t *testing.T) {
 	require.True(t, verdict.Applied)
 
 	cfg := f.applied(t, SetManagerPatch(ManagerPatch{
-		ID: "tg2", Driver: strptr("telegram"), Enabled: boolptr(false), BotToken: &newRef,
-		AllowedUserIDs: &[]int64{8}, TargetChatID: int64ptr(-101),
+		ID: "tg2", Driver: new("telegram"), Enabled: new(false), BotToken: &newRef,
+		AllowedUserIDs: &[]int64{8}, TargetChatID: new(int64(-101)),
 	}))
 	require.NotNil(t, cfg.Managers[1].Enabled)
 	assert.False(t, *cfg.Managers[1].Enabled)
@@ -53,7 +53,7 @@ func TestSetManagerPatch_CreateCanBeDisabledAndRotateReference(t *testing.T) {
 func TestSetManagerPatch_TargetAndSummaryContract(t *testing.T) {
 	f := newFixture(t, baseConfig, baseSecrets)
 
-	staged, verdict := f.svc.Stage(SetManagerPatch(ManagerPatch{ID: "tg", TargetChatID: int64ptr(-100)}))
+	staged, verdict := f.svc.Stage(SetManagerPatch(ManagerPatch{ID: "tg", TargetChatID: new(int64(-100))}))
 	require.True(t, verdict.Applied)
 	assert.Equal(t, `reapply manager "tg" (no config changes)`, staged.Summary)
 
@@ -64,8 +64,8 @@ func TestSetManagerPatch_TargetAndSummaryContract(t *testing.T) {
 	_, verdict = f.svc.SetSecret("CONTROL_TOKEN", "6666:control-token")
 	require.True(t, verdict.Applied)
 	staged, verdict = f.svc.Stage(SetManagerPatch(ManagerPatch{
-		ID: "tg\nname", Driver: strptr("telegram"), BotToken: strptr(Ref("CONTROL_TOKEN")),
-		AllowedUserIDs: &[]int64{9}, TargetChatID: int64ptr(-102),
+		ID: "tg\nname", Driver: new("telegram"), BotToken: new(Ref("CONTROL_TOKEN")),
+		AllowedUserIDs: &[]int64{9}, TargetChatID: new(int64(-102)),
 	}))
 	require.True(t, verdict.Applied)
 	assert.Equal(t, `add manager "tg\nname"`, staged.Summary)

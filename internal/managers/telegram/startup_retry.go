@@ -99,8 +99,7 @@ func isRetryableStartupError(err error) bool {
 		return false
 	}
 
-	var apiErr *tgAPIError
-	if errors.As(err, &apiErr) {
+	if apiErr, ok := errors.AsType[*tgAPIError](err); ok {
 		return apiErr.ErrorCode == http.StatusTooManyRequests ||
 			(apiErr.ErrorCode >= http.StatusInternalServerError && apiErr.ErrorCode < 600)
 	}

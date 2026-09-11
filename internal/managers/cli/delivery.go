@@ -25,8 +25,7 @@ func newOutputQueue(controller controllerapi.OutputQueueController, manager *Man
 func (q *outputQueue) Claim(ctx context.Context) (*managerdelivery.Item, error) {
 	claim, err := q.ClaimOutput(ctx)
 
-	var retryPending *controllerapi.OutputRetryPendingError
-	if errors.As(err, &retryPending) {
+	if retryPending, ok := errors.AsType[*controllerapi.OutputRetryPendingError](err); ok {
 		return nil, &managerdelivery.RetryPendingError{NextAt: retryPending.NextAt}
 	}
 

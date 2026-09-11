@@ -209,16 +209,15 @@ func TestSetManagerSchemaCoversManagerFields(t *testing.T) {
 	require.NoError(t, json.Unmarshal(whisper["properties"], &whisperProperties))
 
 	typ := reflect.TypeFor[config.ManagerEntry]()
-	for i := range typ.NumField() {
-		field := typ.Field(i)
+	for field := range typ.Fields() {
 		tag, _, _ := strings.Cut(field.Tag.Get("yaml"), ",")
 		if tag != "" && tag != "-" {
 			assert.Contains(t, properties, tag)
 		}
 	}
 	whisperType := reflect.TypeFor[config.ManagerWhisperEntry]()
-	for i := range whisperType.NumField() {
-		tag, _, _ := strings.Cut(whisperType.Field(i).Tag.Get("yaml"), ",")
+	for field := range whisperType.Fields() {
+		tag, _, _ := strings.Cut(field.Tag.Get("yaml"), ",")
 		assert.Contains(t, whisperProperties, tag)
 	}
 }

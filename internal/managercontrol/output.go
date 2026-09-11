@@ -47,8 +47,7 @@ func (s *service) claimOutput(
 
 	claim, err := s.outputs.ClaimOutputHead(ctx, managerID)
 
-	var pending *sessionstore.OutputRetryPendingError
-	if errors.As(err, &pending) {
+	if pending, ok := errors.AsType[*sessionstore.OutputRetryPendingError](err); ok {
 		return nil, &controllerapi.OutputRetryPendingError{NextAt: pending.NextAt}
 	}
 

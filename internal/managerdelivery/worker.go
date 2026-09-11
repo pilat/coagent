@@ -178,8 +178,7 @@ func (w *worker) drain(ctx context.Context) time.Duration {
 			return 0
 		}
 
-		var retryPending *RetryPendingError
-		if errors.As(err, &retryPending) {
+		if retryPending, ok := errors.AsType[*RetryPendingError](err); ok {
 			return max(time.Until(retryPending.NextAt), 0)
 		}
 
