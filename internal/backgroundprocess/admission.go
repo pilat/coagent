@@ -7,21 +7,39 @@ import (
 	"time"
 )
 
-func (s *svc) reserve(sessionID int64) error {
+type admissionClass uint8
+
+const (
+	admissionCandidate admissionClass = iota + 1
+	admissionBackground
+)
+
+//nolint:wsl_v5 // Candidate/background accounting is clearer as one locked transition.
+func (s *svc) reserve(spec Spec) (admissionClass, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	if s.closed {
-		return ErrFenced
+		return 0, ErrFenced
 	}
 
-	if s.live[sessionID] >= LiveProcessLimit {
-		return ErrSlotLimit
+	class := admissionCandidate
+	if spec.Advertise {
+		class = admissionBackground
+		if s.background[spec.SessionID] >= BackgroundProcessLimit {
+			return 0, ErrSlotLimit
+		}
+		s.background[spec.SessionID]++
+	} else {
+		if s.candidates[spec.SessionID] >= ForegroundCandidateLimit {
+			return 0, ErrCandidateLimit
+		}
+		s.candidates[spec.SessionID]++
 	}
 
-	s.live[sessionID]++
+	s.live[spec.SessionID]++
 
-	return nil
+	return class, nil
 }
 
 func (s *svc) closeAdmission() {
@@ -60,12 +78,23 @@ func (s *svc) waitForNoLive(ctx context.Context) error {
 	}
 }
 
-func (s *svc) release(sessionID int64) {
+//nolint:wsl_v5 // The locked helper owns all admission counters.
+func (s *svc) releaseReservation(sessionID int64, class admissionClass) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.releaseLocked(sessionID, class)
+}
 
+//nolint:wsl_v5 // Counter decrements form one exact-class release.
+func (s *svc) releaseLocked(sessionID int64, class admissionClass) {
 	if s.live[sessionID] > 0 {
 		s.live[sessionID]--
+	}
+	if class == admissionBackground && s.background[sessionID] > 0 {
+		s.background[sessionID]--
+	}
+	if class == admissionCandidate && s.candidates[sessionID] > 0 {
+		s.candidates[sessionID]--
 	}
 }
 
@@ -76,12 +105,13 @@ func (s *svc) liveCount(sessionID int64) int {
 	return s.live[sessionID]
 }
 
-func (s *svc) track(process Process, cancel context.CancelFunc) {
+func (s *svc) track(process Process, cancel context.CancelFunc, class admissionClass) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	s.cancels[process.ID] = cancel
 	s.liveRecords[process.ID] = process
+	s.classes[process.ID] = class
 }
 
 func (s *svc) untrack(processID string) {
@@ -90,6 +120,7 @@ func (s *svc) untrack(processID string) {
 
 	delete(s.cancels, processID)
 	delete(s.liveRecords, processID)
+	delete(s.classes, processID)
 	delete(s.fallbackIntents, processID)
 }
 
@@ -102,12 +133,12 @@ func (s *svc) releaseTracked(processID string, sessionID int64) {
 	}
 
 	delete(s.cancels, processID)
+	class := s.classes[processID]
 	delete(s.liveRecords, processID)
+	delete(s.classes, processID)
 	delete(s.fallbackIntents, processID)
 
-	if s.live[sessionID] > 0 {
-		s.live[sessionID]--
-	}
+	s.releaseLocked(sessionID, class)
 }
 
 func (s *svc) trackedCancel(processID string) context.CancelFunc {
@@ -162,12 +193,12 @@ func (s *svc) finalizeTracked(
 	)
 
 	delete(s.cancels, processID)
+	class := s.classes[processID]
 	delete(s.liveRecords, processID)
+	delete(s.classes, processID)
 	delete(s.fallbackIntents, processID)
 
-	if s.live[launched.record.SessionID] > 0 {
-		s.live[launched.record.SessionID]--
-	}
+	s.releaseLocked(launched.record.SessionID, class)
 
 	if err != nil {
 		err = fmt.Errorf("finalize tracked process: %w", err)

@@ -32,8 +32,8 @@ func TestBackgroundWaitGuardRejectsSleepUntilCompletionDelivered(t *testing.T) {
 
 	_, err := guard.Execute(t.Context(), nil)
 	require.Error(t, err)
-	require.ErrorContains(t, err, "result arrives automatically in a new turn")
-	require.ErrorContains(t, err, "<WAITING/>")
+	require.ErrorContains(t, err, "result arrives automatically in a later turn")
+	require.ErrorContains(t, err, "end the response")
 	assert.Zero(t, inner.calls, "the sleep side effect must not be staged")
 
 	pending = false

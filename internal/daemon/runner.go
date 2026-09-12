@@ -380,16 +380,7 @@ func (s *svc) runSessionIteration( //nolint:funlen,gocyclo // Linear lifecycle w
 	runResult, runErr := s.executeSession(ctx, sess, notify)
 
 	if rec.ParentID == 0 {
-		releaseReason := "completed"
-		if runErr != nil {
-			releaseReason = "error"
-		}
-
-		if !runResult.Suspended || runErr != nil {
-			if releaseErr := s.releaseArmedBudget(ctx, sessionID, releaseReason); releaseErr != nil {
-				runErr = errors.Join(runErr, releaseErr)
-			}
-		}
+		runErr = errors.Join(runErr, s.settleRootBudget(ctx, sessionID, runResult.Suspended, runErr, notify))
 	}
 
 	s.reconcileLatestReadiness(ctx, sessionID)
@@ -1171,25 +1162,6 @@ func (s *svc) openSession(
 	opts.ActiveProcesses = s.activeProcessInfos(ctx, sessionID)
 	opts.ActiveProcessesProvider = func(ctx context.Context) []session.ActiveProcessInfo {
 		return s.activeProcessInfos(ctx, sessionID)
-	}
-	opts.HasLiveWakeSource = func(ctx context.Context) bool {
-		if s.processStore == nil {
-			return false
-		}
-
-		processes, err := s.processStore.ListRunningBySessions(ctx, []int64{sessionID})
-		if err != nil {
-			logger.Ctx(ctx).Named("daemon.waiting").Warn("list_running_processes", zap.Error(err))
-			return false
-		}
-
-		for _, process := range processes {
-			if process.AdvertisedAt != nil {
-				return true
-			}
-		}
-
-		return false
 	}
 
 	sess, err := s.factory.Create(ctx, opts)

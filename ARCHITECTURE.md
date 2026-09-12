@@ -280,18 +280,13 @@ finish is rejected before output, waiting or tool execution. The first `length`
 adds one linked recovery input; a repeated `length` or unknown finish commits a
 terminal error. Compaction model calls retain their separate no-retry contract.
 
-When the exact session has a live background process or undelivered background
-subagent round, a standalone `<WAITING/>` line
-cooperatively suspends the loop. The second form is a polling-temptation canary.
-The complete assistant text remains in model history, returned tool calls are
-not executed, and only the marker is removed from root manager presentation.
-The projection is fail-open: without an authoritative live wake source the
-marker is ordinary text, and a ready inbox row is consumed rather than treated
-as something still pending. Session construction and compaction project
-advertised process identities and pending subagent links into one host-owned
-active-background prompt section. While either ledger still owns completion,
-the daemon rejects `sleep` as a competing timer and directs the model back to
-independent work or the cooperative marker.
+A no-tool `stop` response completes the current activation even while a
+background process or subagent remains. Completion input in `session_inbox`
+reactivates that completed session for one later turn. Session construction and
+compaction project advertised process identities and pending subagent links into
+one byte-stable active-background snapshot; later transcript observations take
+precedence. While a producer owns future completion, the daemon rejects `sleep`
+as a competing timer but leaves deliberate process-output diagnostics available.
 
 ### Shutdown and restart
 
@@ -373,12 +368,15 @@ when its model projection is compacted.
 ### Background Bash process lifecycle and delivery
 
 `backgroundprocess` owns each finite Bash process from successful launch through
-the single wait, bounded output drain and terminal ledger transition. The exact
-root or subagent session owns four independent live slots. Output is one combined
-file capped per process; deadlines, overflow and descriptor-drain failure kill
+the single wait, bounded output drain and terminal ledger transition. Each exact
+session owns four advertised-background slots and one separate
+foreground-candidate slot. Output is one combined file capped per process;
+deadlines, overflow and descriptor-drain failure kill
 the process group and become typed terminal outcomes. A command remains an
-unadvertised foreground candidate for ten seconds, then promotion is a durable
-compare-and-swap; only advertised processes appear in progress or produce completion input.
+unadvertised foreground candidate for ten seconds, then promotion atomically
+switches admission class with the durable compare-and-swap when background
+capacity remains. A refused promotion stays foreground; only advertised
+processes appear in progress or produce completion input.
 
 Process admission and root-tree stop share the daemon tree fence. Natural
 session completion leaves processes running, while explicit stop or kill records
@@ -446,6 +444,11 @@ closes admission before a generation drains and parks; managed park workers are
 cancelled and joined at shutdown. Startup reconciles armed and half-parked
 generations before normal session recovery. The next ordinary model-bound root
 input atomically releases a fired checkpoint and resumes only the root.
+
+An armed generation remains armed across an ordinary final response while the
+tree has an advertised running process, an undelivered background child, or
+pending asynchronous completion input. Producer ledgers are checked before the
+inbox so their atomic terminal-to-input transition cannot disappear between reads.
 
 For a rejected ordinary model attempt, session-store atomically advances the
 iteration, records usage and finish evidence, observes the root-tree budget and
@@ -608,6 +611,12 @@ host temporary storage, the user cache and only the current project's
 mutation tools can inspect that project's process artifacts without gaining
 write access to another project's files. This root is not a configurable
 exception and is removed with the other host roots when shields are raised.
+
+Before process admission, the Bash tool parses a direct simple `cat` command
+without an explicit working directory and pushes regular project-file operands
+to the native `read` tool. Dynamic or compound shell syntax and paths outside
+the project remain Bash operations. This is model-facing ergonomics only;
+rooted file access and the read-fingerprint ledger remain authoritative.
 
 Session shields add a durable project-confined read variant without removing
 built-in tool classes. MCP tools may be absent when raised-policy discovery

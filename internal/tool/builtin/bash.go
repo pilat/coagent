@@ -13,6 +13,7 @@ import (
 	"github.com/pilat/coagent/internal/backgroundprocess"
 	"github.com/pilat/coagent/internal/bashsandbox"
 	"github.com/pilat/coagent/internal/logger"
+	"github.com/pilat/coagent/internal/safefile"
 	"github.com/pilat/coagent/internal/tool"
 )
 
@@ -49,14 +50,27 @@ type bashTool struct {
 	project string
 	session int64
 	root    int64
+	access  safefile.Access
 }
 
+//nolint:unparam // Tests use the stable synthetic project directory; production injects access below.
 func newBashTool(
 	workDir string,
 	runner bashsandbox.Runner,
 	process backgroundprocess.Service,
 	projectDir string,
 	sessionID, rootID int64,
+) *bashTool {
+	return newBashToolWithAccess(workDir, runner, process, projectDir, sessionID, rootID, nil)
+}
+
+func newBashToolWithAccess(
+	workDir string,
+	runner bashsandbox.Runner,
+	process backgroundprocess.Service,
+	projectDir string,
+	sessionID, rootID int64,
+	access safefile.Access,
 ) *bashTool {
 	return &bashTool{
 		workDir: workDir,
@@ -65,6 +79,7 @@ func newBashTool(
 		project: projectDir,
 		session: sessionID,
 		root:    rootID,
+		access:  access,
 	}
 }
 
@@ -97,6 +112,7 @@ func (t *bashTool) Parameters() json.RawMessage {
 	}`)
 }
 
+//nolint:wsl_v5 // Validation and the pre-admission policy are intentionally adjacent.
 func (t *bashTool) Execute(ctx context.Context, params json.RawMessage) (*tool.Result, error) {
 	log := logger.Ctx(ctx).Named("tool.bash")
 
@@ -111,6 +127,15 @@ func (t *bashTool) Execute(ctx context.Context, params json.RawMessage) (*tool.R
 		log.Warn("empty_command")
 
 		return nil, errors.New("command is required")
+	}
+	if p.WorkDir == "" && !p.Background {
+		if targets, reject := directProjectCatTargets(p.Command, t.access); reject {
+			return &tool.Result{
+				Title:   "use read for project files",
+				Output:  catPolicyResult(targets),
+				IsError: true,
+			}, nil
+		}
 	}
 
 	deadline := processDeadline(p.Timeout)
@@ -185,9 +210,9 @@ func (t *bashTool) run(
 			return nil, fmt.Errorf(
 				"start process: %w; do not retry with another command. "+
 					"Cancel a wrong, stuck, or redundant existing process with cancel_process and its bgp_... ID. "+
-					"Do not poll existing processes with Bash, ps, sleep, schedule, Read, or Tail. "+
-					"Do not poll with tools; continue only useful independent work. "+
-					"When waiting is your only remaining action, reply with a standalone <WAITING/> line and no tool calls",
+					"Do not use sleep or another timer to poll existing processes. "+
+					"Continue only useful independent work. "+
+					"When none remains, briefly report what is still running and end the response",
 				err,
 			)
 		}
@@ -206,6 +231,7 @@ func (t *bashTool) run(
 	return t.finishForegroundGrace(ctx, record, p.Command, start.Add(foregroundGrace))
 }
 
+//nolint:wsl_v5 // Promotion outcomes form one lifecycle decision.
 func (t *bashTool) finishForegroundGrace(
 	ctx context.Context,
 	record backgroundprocess.Process,
@@ -219,6 +245,9 @@ func (t *bashTool) finishForegroundGrace(
 	lifecycleCtx := context.WithoutCancel(ctx)
 
 	advertised, err := t.process.Advertise(lifecycleCtx, record.ID)
+	if errors.Is(err, backgroundprocess.ErrSlotLimit) {
+		return t.waitForegroundTerminal(ctx, record, command)
+	}
 	if err != nil {
 		return nil, t.abortCandidate(lifecycleCtx, record,
 			fmt.Errorf("promote background process: %w", err))

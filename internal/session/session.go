@@ -168,7 +168,6 @@ type svc struct {
 	// Reads the daemon's background ledgers live; nil outside a daemon.
 	activeSubagentsProvider func(context.Context) []ActiveSubagentInfo
 	activeProcessesProvider func(context.Context) []ActiveProcessInfo
-	hasLiveWakeSource       func(context.Context) bool
 	onIterationPersisted    func(context.Context, int)
 	// Under modelMu with the model triplet: a measurement describes one model's
 	// window and tokenizer. nil baseline = nothing measured.
@@ -228,9 +227,6 @@ type options struct {
 	// compaction writes its summary — the create-time snapshot is stale by then.
 	ActiveSubagentsProvider func(context.Context) []ActiveSubagentInfo
 	ActiveProcessesProvider func(context.Context) []ActiveProcessInfo
-
-	// HasLiveWakeSource reports a daemon-owned asynchronous completion source.
-	HasLiveWakeSource func(context.Context) bool
 
 	// OnIterationPersisted observes a durable checkpoint after each model response.
 	OnIterationPersisted func(context.Context, int)
@@ -348,7 +344,6 @@ func newSession(p params, opts options, workDir string, agentConfig registry.Age
 		compactionDeferAnnounced: opts.CompactionDeferAnnounced,
 		activeSubagentsProvider:  opts.ActiveSubagentsProvider,
 		activeProcessesProvider:  opts.ActiveProcessesProvider,
-		hasLiveWakeSource:        opts.HasLiveWakeSource,
 		onIterationPersisted:     opts.OnIterationPersisted,
 	}
 	var msStore sessionstore.RuntimeStore

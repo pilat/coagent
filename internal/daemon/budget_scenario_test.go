@@ -59,6 +59,65 @@ func TestHarnessScenario_BudgetMutationRequiresAndConsumesUserGrant(t *testing.T
 	assert.Equal(t, 1, receipts)
 }
 
+func TestHarnessScenario_BackgroundChildRetainsBudgetUntilCompletion(t *testing.T) {
+	childRelease := make(chan struct{})
+	respond := func(_ string, messages []llmwire.Message) *llmwire.Response {
+		if hasUserContaining(messages, "BUDGET_CHILD") {
+			<-childRelease
+			return &llmwire.Response{Text: "budget child complete"}
+		}
+		if hasUserContaining(messages, "<subagent_completion>") {
+			return &llmwire.Response{Text: "budget completion handled"}
+		}
+		if hasToolResultFor(messages, "task") {
+			return &llmwire.Response{Text: "budget child still running"}
+		}
+		if hasToolResultFor(messages, "set_budget") {
+			return &llmwire.Response{ToolCalls: []llmwire.ToolCall{
+				{
+					ID:   "budget-child-call",
+					Name: "task",
+					Arguments: []byte(
+						`{"prompt":"BUDGET_CHILD","description":"budget child","subagent_type":"general","background":true}`,
+					),
+				},
+			}}
+		}
+
+		return &llmwire.Response{ToolCalls: []llmwire.ToolCall{{
+			ID: "budget-arm", Name: "set_budget", Arguments: []byte(`{"action":"set","duration":"1m"}`),
+		}}}
+	}
+
+	h := newSubagentHarnessWith(t, respond)
+	collector := collectEvents(h.mgr.PubSub().SubscribeAll())
+	defer func() {
+		closeOnce(childRelease)
+		collector.stop()
+		h.shutdown()
+	}()
+
+	sessionID, err := h.mgr.Send(h.ctx, h.projectID, "/budget run a background child", "fake-model", map[string]any{
+		"manager_id": scenarioManagerID,
+	})
+	require.NoError(t, err)
+	waitForVisibleMessage(t, collector, sessionID, "budget child still running")
+	record, err := h.sessStore.GetBudget(h.ctx, sessionID)
+	require.NoError(t, err)
+	assert.Equal(t, sessionstore.BudgetArmed, record.State)
+	generation := record.Generation
+
+	close(childRelease)
+	waitForVisibleMessage(t, collector, sessionID, "budget completion handled")
+	h.waitUntil("budget released after completion", func() bool {
+		current, loadErr := h.sessStore.GetBudget(h.ctx, sessionID)
+		return loadErr == nil && current.State == sessionstore.BudgetReleased
+	})
+	record, err = h.sessStore.GetBudget(h.ctx, sessionID)
+	require.NoError(t, err)
+	assert.Equal(t, generation, record.Generation)
+}
+
 func TestHarnessScenario_AgentInputCannotActivateBudget(t *testing.T) {
 	h := newSubagentHarnessWith(t, trivialRespond)
 	defer h.shutdown()

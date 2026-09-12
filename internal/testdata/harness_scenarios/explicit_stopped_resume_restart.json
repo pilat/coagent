@@ -25,7 +25,7 @@
   "claims": [
     {
       "type": "message_persistent",
-      "content": "stopped root resumed after restart",
+      "content": "stopped root resumed after restart\n\n🤖 `fake-model` · iteration 1\n💰 $0.0 total",
       "attributes": {
         "manager_id": "telegram:main",
         "model_input_generation": 2

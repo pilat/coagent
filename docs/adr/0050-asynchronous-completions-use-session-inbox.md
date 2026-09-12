@@ -1,6 +1,6 @@
 # ADR-0050: Asynchronous completions use the session inbox
 
-- **Status:** Accepted
+- **Status:** Superseded by [ADR-0053](0053-background-handoff-uses-ordinary-completion.md)
 - **Date:** 2026-09-09
 
 ## Context

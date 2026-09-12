@@ -20,8 +20,59 @@ import (
 	"github.com/pilat/coagent/internal/bashsandbox"
 	"github.com/pilat/coagent/internal/migrate"
 	"github.com/pilat/coagent/internal/procexec"
+	"github.com/pilat/coagent/internal/safefile"
 	"github.com/pilat/coagent/internal/tool"
 )
+
+func TestBashPolicy_DirectProjectCat(t *testing.T) {
+	root := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(root, "a.go"), []byte("package a\n"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(root, "a b.go"), []byte("package a\n"), 0o600))
+	access, err := safefile.New(root, safefile.HostReadable)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, access.Close()) })
+
+	for _, command := range []string{`cat a.go`, `cat 'a b.go'`, `"cat" a.go`, `ca't' a.go`, "cat a.go # note"} {
+		t.Run(command, func(t *testing.T) {
+			t.Parallel()
+			targets, rejected := directProjectCatTargets(command, access)
+			require.True(t, rejected)
+			require.NotEmpty(t, targets)
+		})
+	}
+
+	for _, command := range []string{`cat`, `cat -`, `cat -- a.go`, `cat "$FILE"`, `cat a.go > out`, `cat a.go | wc -l`, `(cat a.go)`, `cat a.go &`, `cat a.go;`, "cat a.go\necho x", `cat missing`} {
+		t.Run("pass_"+command, func(t *testing.T) {
+			t.Parallel()
+			_, rejected := directProjectCatTargets(command, access)
+			assert.False(t, rejected)
+		})
+	}
+}
+
+func TestBashTool_DirectCatPolicyRunsBeforeProcessAdmission(t *testing.T) {
+	root := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(root, "a.go"), []byte("package a\n"), 0o600))
+	access, err := safefile.New(root, safefile.HostReadable)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, access.Close()) })
+	runner := &bashRunnerStub{}
+	bash := newBashToolWithAccess(root, runner, nil, "project-1", 1, 1, access)
+
+	params, _ := json.Marshal(bashParams{Command: "cat a.go"})
+	result, err := bash.Execute(context.Background(), params)
+	require.NoError(t, err)
+	assert.True(t, result.IsError)
+	canonicalPath, err := filepath.EvalSymlinks(filepath.Join(root, "a.go"))
+	require.NoError(t, err)
+	assert.Contains(t, result.Output, `read {"file_path":"`+canonicalPath+`"}`)
+	assert.Empty(t, runner.command, "policy rejection must happen before shell construction")
+
+	params, _ = json.Marshal(bashParams{Command: "cat a.go", WorkDir: root, Timeout: 5000})
+	result, err = bash.Execute(context.Background(), params)
+	require.NoError(t, err)
+	assert.Equal(t, "package a", result.Output)
+}
 
 type bashRunnerStub struct {
 	command string
@@ -33,11 +84,11 @@ type bashRunnerStub struct {
 
 func TestBackgroundToolDescriptionsPreventPollingAndDuplicateVerification(t *testing.T) {
 	description := bashDescription + backgroundDescriptionSuffix
-	assert.GreaterOrEqual(t, strings.Count(strings.ToLower(description), "do not poll"), 3)
-	assert.Contains(t, description, "<WAITING/>")
+	assert.Contains(t, strings.ToLower(description), "do not poll")
+	assert.Contains(t, description, "end the response")
 	assert.Contains(t, description, "Overlapping builds, test suites, or verification commands")
-	assert.Contains(t, tailDescription, "Do not use tail on a running background process")
-	assert.Contains(t, tailDescription, "final result arrives automatically in a new turn")
+	assert.Contains(t, tailDescription, "deliberate output inspection")
+	assert.Contains(t, tailDescription, "final results arrive automatically")
 }
 
 func (r *bashRunnerStub) Command(ctx context.Context, request procexec.Request) (*exec.Cmd, error) {
@@ -234,9 +285,8 @@ func TestBashTool_ImmediateBackground(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Contains(t, result.Output, "do not poll")
-	assert.GreaterOrEqual(t, strings.Count(strings.ToLower(result.Output), "do not poll"), 3)
-	assert.Contains(t, result.Output, "<WAITING/>")
-	assert.Contains(t, result.Output, "no tool calls")
+	assert.Contains(t, result.Output, "end the response")
+	assert.Contains(t, result.Output, "deliberate output inspection")
 	assert.Contains(t, result.Output, "overlapping command")
 	assert.Contains(t, result.Output, "Background execution was requested")
 	assert.Contains(t, result.Output, "Background process ID (not an operating-system PID): bgp_")
@@ -259,8 +309,8 @@ func TestBashTool_AutomaticPromotion(t *testing.T) {
 
 	assert.GreaterOrEqual(t, time.Since(start), 9*time.Second, "promotion waits the grace period")
 	assert.Contains(t, result.Output, "do not poll")
-	assert.GreaterOrEqual(t, strings.Count(strings.ToLower(result.Output), "do not poll"), 3)
-	assert.Contains(t, result.Output, "<WAITING/>")
+	assert.Contains(t, strings.ToLower(result.Output), "do not poll")
+	assert.Contains(t, result.Output, "end the response")
 	assert.Contains(t, result.Output, "still running after 10 seconds")
 	assert.Contains(t, result.Output, "moved to the background")
 
@@ -275,7 +325,7 @@ func TestBashTool_ProcessSlotLimitRedirectsToBackgroundWait(t *testing.T) {
 	bash, _ := newTestBashTool(t)
 	params, _ := json.Marshal(bashParams{Command: "sleep 30", Background: true})
 
-	for i := range backgroundprocess.LiveProcessLimit {
+	for i := range backgroundprocess.BackgroundProcessLimit {
 		ctx := tool.WithCallID(context.Background(), fmt.Sprintf("slot-%d", i))
 		_, err := bash.Execute(ctx, params)
 		require.NoError(t, err)
@@ -286,8 +336,39 @@ func TestBashTool_ProcessSlotLimitRedirectsToBackgroundWait(t *testing.T) {
 	require.ErrorIs(t, err, backgroundprocess.ErrSlotLimit)
 	require.ErrorContains(t, err, "do not retry with another command")
 	require.ErrorContains(t, err, "cancel_process and its bgp_... ID")
-	require.ErrorContains(t, err, "<WAITING/>")
-	require.ErrorContains(t, err, "no tool calls")
+	require.ErrorContains(t, err, "end the response")
+}
+
+func TestBashTool_ForegroundRunsAtBackgroundCapacity(t *testing.T) {
+	bash, _ := newTestBashTool(t)
+	background, _ := json.Marshal(bashParams{Command: "sleep 30", Background: true})
+
+	for i := range backgroundprocess.BackgroundProcessLimit {
+		ctx := tool.WithCallID(context.Background(), fmt.Sprintf("background-%d", i))
+		_, err := bash.Execute(ctx, background)
+		require.NoError(t, err)
+	}
+
+	foreground, _ := json.Marshal(bashParams{Command: "printf foreground", Timeout: 5000})
+	result, err := bash.Execute(tool.WithCallID(context.Background(), "foreground"), foreground)
+	require.NoError(t, err)
+	assert.Equal(t, "foreground", result.Output)
+}
+
+func TestBashTool_FailedAutomaticPromotionWaitsForForegroundResult(t *testing.T) {
+	bash, _ := newTestBashTool(t)
+	background, _ := json.Marshal(bashParams{Command: "sleep 30", Background: true})
+	for i := range backgroundprocess.BackgroundProcessLimit {
+		ctx := tool.WithCallID(context.Background(), fmt.Sprintf("occupied-%d", i))
+		_, err := bash.Execute(ctx, background)
+		require.NoError(t, err)
+	}
+
+	command, _ := json.Marshal(bashParams{Command: "sleep 11; printf completed-inline", Timeout: 15000})
+	result, err := bash.Execute(tool.WithCallID(context.Background(), "candidate"), command)
+	require.NoError(t, err)
+	assert.Equal(t, "completed-inline", result.Output)
+	assert.NotContains(t, result.Output, "Background process ID")
 }
 
 func TestBashTool_Metadata(t *testing.T) {

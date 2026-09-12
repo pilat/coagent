@@ -147,12 +147,12 @@ func TestHarnessScenario_ActiveProcessPromptAndSleepGuard(t *testing.T) {
 	prompt := prompts.first(t, "root")
 	assert.Contains(t, prompt, "# Active background work")
 	assert.Contains(t, prompt, "process bgp_prompt_guard (running)")
-	assert.Contains(t, prompt, "<WAITING/>")
+	assert.Contains(t, prompt, "Snapshot from activation start")
 
 	messages := h.parentMessages(root.ID)
 	require.Equal(t, 1, countToolResultsFor(messages, tool.IDSleep))
 	assert.Contains(t, lastToolResultContent(messages, tool.IDSleep), "sleep is unavailable")
-	assert.Contains(t, lastToolResultContent(messages, tool.IDSleep), "<WAITING/>")
+	assert.Contains(t, lastToolResultContent(messages, tool.IDSleep), "end the response")
 	assert.Equal(t, llmwire.RoleAssistant, messages[len(messages)-1].Role)
 
 	schedules, err := h.schedStore.ListSchedules(h.ctx, root.ID)

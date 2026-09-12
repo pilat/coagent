@@ -56,7 +56,7 @@
     },
     {
       "type": "message_persistent",
-      "content": "First answer.",
+      "content": "First answer.\n\n🤖 `fake-model` · iteration 2\n⌚ <elapsed> · 💰 $0.0 total",
       "attributes": {
         "manager_id": "telegram:main",
         "model_input_generation": 1

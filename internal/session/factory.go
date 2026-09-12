@@ -64,7 +64,6 @@ type CreateOptions struct {
 	ActiveSubagentsProvider func(context.Context) []ActiveSubagentInfo
 	ActiveProcesses         []ActiveProcessInfo
 	ActiveProcessesProvider func(context.Context) []ActiveProcessInfo
-	HasLiveWakeSource       func(context.Context) bool
 
 	// ExtraSkills are session-scoped instructions the daemon registers and
 	// activates in the system prompt without waiting for a model tool call.

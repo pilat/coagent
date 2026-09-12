@@ -175,9 +175,7 @@ func TestTaskTool_BackgroundSpawns(t *testing.T) {
 	if !strings.Contains(result.Output, "result will arrive automatically in a new turn") {
 		t.Errorf("output must explain automatic wake-up: %s", result.Output)
 	}
-	if strings.Count(strings.ToLower(result.Output), "do not poll") < 3 ||
-		!strings.Contains(result.Output, "<WAITING/>") ||
-		!strings.Contains(result.Output, "no tool calls") {
+	if !strings.Contains(result.Output, "end the response") {
 		t.Errorf("output must repeat the no-poll canary contract: %s", result.Output)
 	}
 
@@ -255,9 +253,9 @@ func TestSubagentToolDescriptionsTeachExecutionContract(t *testing.T) {
 	resultDescription := resultTool.Description()
 	for _, want := range []string{
 		"one-off diagnostic snapshot",
-		"not waiting: do not poll this tool",
-		"parent receives the result automatically in a new turn",
-		"standalone <WAITING/> line and no tool calls",
+		"deliberate inspection and troubleshooting",
+		"parent receives the result automatically in a later turn",
+		"end the response",
 	} {
 		if !strings.Contains(resultDescription, want) {
 			t.Errorf("get_subagent_result description missing %q:\n%s", want, resultDescription)
@@ -276,9 +274,9 @@ func TestSubagentToolDescriptionsTeachExecutionContract(t *testing.T) {
 		"same subagent session previously launched with task, whether it was foreground or background",
 		"preserving that session's full context",
 		"not a status check or a way to wait",
-		"parent receives the next result automatically in a new turn",
-		"Do not use sleep, schedule, or polling",
-		"standalone <WAITING/> line and no tool calls",
+		"parent receives the next result automatically in a later turn",
+		"Do not use sleep or schedule to poll",
+		"end the response",
 	} {
 		if !strings.Contains(sendDescription, want) {
 			t.Errorf("send_to_subagent description missing %q:\n%s", want, sendDescription)
@@ -301,9 +299,7 @@ func TestGetSubagentResult_RunningOutputIsDiagnosticNotPollingPrompt(t *testing.
 		!strings.Contains(result.Output, "result will arrive automatically in a new turn") {
 		t.Errorf("running output must explain snapshot and automatic wake-up: %s", result.Output)
 	}
-	if strings.Count(strings.ToLower(result.Output), "do not poll") < 3 ||
-		!strings.Contains(result.Output, "<WAITING/>") ||
-		!strings.Contains(result.Output, "no tool calls") {
+	if !strings.Contains(result.Output, "end the response") {
 		t.Errorf("running output must repeat the no-poll canary contract: %s", result.Output)
 	}
 	if strings.Contains(result.Output, "check again") {
@@ -324,9 +320,7 @@ func TestSendToSubagent_OutputConfirmsDurableAcceptance(t *testing.T) {
 		!strings.Contains(result.Output, "next result will arrive automatically in a new turn") {
 		t.Errorf("send output must confirm durable acceptance and automatic wake-up: %s", result.Output)
 	}
-	if strings.Count(strings.ToLower(result.Output), "do not poll") < 3 ||
-		!strings.Contains(result.Output, "<WAITING/>") ||
-		!strings.Contains(result.Output, "no tool calls") {
+	if !strings.Contains(result.Output, "end the response") {
 		t.Errorf("send output must repeat the no-poll canary contract: %s", result.Output)
 	}
 }

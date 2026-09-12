@@ -194,13 +194,14 @@ func registerCoreTools(
 	registry.Register(newGlobToolWithAccess(workDir, access))
 	registry.Register(newGrepToolWithAccess(workDir, access))
 
-	registry.Register(newBashTool(
+	registry.Register(newBashToolWithAccess(
 		workDir,
 		bashRunner,
 		processService,
 		processProjectDir,
 		sessionID,
 		rootID,
+		access,
 	))
 
 	if processService != nil {

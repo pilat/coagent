@@ -15,8 +15,10 @@ import (
 )
 
 const (
-	// LiveProcessLimit bounds concurrent processes owned by one session.
-	LiveProcessLimit = 4
+	// BackgroundProcessLimit bounds advertised processes owned by one session.
+	BackgroundProcessLimit = 4
+	// ForegroundCandidateLimit bounds unadvertised processes owned by one session.
+	ForegroundCandidateLimit = 1
 	// MaxOutputBytes is the per-process output file limit.
 	MaxOutputBytes = 100 * 1024 * 1024
 	// TailPreviewLines bounds completion previews.
@@ -29,8 +31,10 @@ const (
 )
 
 var (
-	// ErrSlotLimit reports that a session has exhausted its process slots.
-	ErrSlotLimit = errors.New("process slot limit reached for session")
+	// ErrSlotLimit reports that a session has exhausted its background slots.
+	ErrSlotLimit = errors.New("background process slot limit reached for session")
+	// ErrCandidateLimit reports that a session already owns a foreground candidate.
+	ErrCandidateLimit = errors.New("foreground candidate limit reached for session")
 	// ErrFenced reports that the session tree no longer accepts processes.
 	ErrFenced = errors.New("session tree is being stopped")
 )
@@ -97,6 +101,9 @@ type svc struct {
 	opts            Options
 	mu              sync.Mutex
 	live            map[int64]int
+	background      map[int64]int
+	candidates      map[int64]int
+	classes         map[string]admissionClass
 	cancels         map[string]context.CancelFunc
 	liveRecords     map[string]Process
 	fallbackIntents map[string]HostIntent
@@ -111,6 +118,7 @@ type launchResult struct {
 	processGroup int
 	collector    *collector
 	record       Process
+	class        admissionClass
 	quotaReady   chan<- bool
 	cancel       context.CancelFunc
 }
@@ -127,6 +135,8 @@ func NewService(store Store, opts Options) Service {
 
 	return &svc{
 		store: store, opts: opts, live: make(map[int64]int),
+		background: make(map[int64]int), candidates: make(map[int64]int),
+		classes: make(map[string]admissionClass),
 		cancels: make(map[string]context.CancelFunc), liveRecords: make(map[string]Process),
 		fallbackIntents: make(map[string]HostIntent),
 	}
@@ -174,18 +184,20 @@ func (s *svc) Start(
 		defer releaseFence()
 	}
 
-	if err := s.reserve(spec.SessionID); err != nil {
+	class, err := s.reserve(spec)
+	if err != nil {
 		return Process{}, err
 	}
 
 	launched, err := s.launch(ctx, spec, spawn)
 	if err != nil {
-		s.release(spec.SessionID)
+		s.releaseReservation(spec.SessionID, class)
 
 		return Process{}, err
 	}
 
-	s.track(launched.record, launched.cancel)
+	launched.class = class
+	s.track(launched.record, launched.cancel, class)
 
 	if err := s.store.InsertProcess(ctx, launched.record); err != nil {
 		return Process{}, s.abortUnpersisted(spec.SessionID, launched, err)
@@ -213,10 +225,33 @@ func (s *svc) Start(
 	return launched.record, nil
 }
 
+//nolint:wsl_v5 // Capacity, durable CAS, and class switch are one locked transition.
 func (s *svc) Advertise(ctx context.Context, processID string) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	record, tracked := s.liveRecords[processID]
+	if !tracked || s.classes[processID] != admissionCandidate {
+		advertised, err := s.store.Advertise(ctx, processID, s.opts.Now())
+		if err != nil {
+			return false, fmt.Errorf("advertise untracked process: %w", err)
+		}
+
+		return advertised, nil
+	}
+	if s.background[record.SessionID] >= BackgroundProcessLimit {
+		return false, ErrSlotLimit
+	}
+
 	advertised, err := s.store.Advertise(ctx, processID, s.opts.Now())
 	if err != nil {
 		return false, fmt.Errorf("advertise process: %w", err)
+	}
+
+	if advertised {
+		s.candidates[record.SessionID]--
+		s.background[record.SessionID]++
+		s.classes[processID] = admissionBackground
 	}
 
 	return advertised, nil
@@ -231,7 +266,7 @@ func (s *svc) abortUnpersisted(sessionID int64, launched *launchResult, insertEr
 	_ = launched.collector.Close()
 	s.untrack(launched.record.ID)
 	launched.cancel()
-	s.release(sessionID)
+	s.releaseReservation(sessionID, launched.class)
 
 	return fmt.Errorf("persist background process: %w", insertErr)
 }

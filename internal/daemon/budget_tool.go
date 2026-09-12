@@ -7,8 +7,12 @@ import (
 	"fmt"
 	"time"
 
+	"go.uber.org/zap"
+
 	"github.com/pilat/coagent/internal/budget"
+	"github.com/pilat/coagent/internal/logger"
 	"github.com/pilat/coagent/internal/session"
+	"github.com/pilat/coagent/internal/sessionevent"
 	"github.com/pilat/coagent/internal/sessionstore"
 	"github.com/pilat/coagent/internal/transcript"
 )
@@ -168,4 +172,100 @@ func (s *svc) releaseArmedBudget(ctx context.Context, rootID int64, reason strin
 	}
 
 	return nil
+}
+
+//nolint:wsl_v5 // Terminal budget policy remains a flat sequence of exclusive outcomes.
+func (s *svc) settleRootBudget(
+	ctx context.Context,
+	rootID int64,
+	suspended bool,
+	runErr error,
+	notify func(sessionevent.Notification),
+) error {
+	if suspended && runErr == nil {
+		return nil
+	}
+	if runErr != nil {
+		return s.releaseArmedBudget(ctx, rootID, "error")
+	}
+
+	retain, projectionErr := s.retainBudgetForBackground(ctx, rootID)
+	if projectionErr != nil {
+		logger.Ctx(ctx).Named("daemon.runner").Error(
+			"background_obligation_projection_failed",
+			zap.Int64("session_id", rootID), zap.Error(projectionErr),
+		)
+		notify(sessionevent.Notification{
+			Type:    sessionevent.NotifyMessage,
+			Message: "⚠️ Could not verify background work before releasing the active budget; the budget remains armed.",
+		})
+
+		return nil
+	}
+	if retain {
+		return nil
+	}
+
+	return s.releaseArmedBudget(ctx, rootID, "completed")
+}
+
+//nolint:wsl_v5 // Budget state gates the more expensive tree projection.
+func (s *svc) retainBudgetForBackground(ctx context.Context, rootID int64) (bool, error) {
+	if s.budgetSvc == nil {
+		return false, nil
+	}
+
+	record, err := s.budgetSvc.Get(ctx, rootID)
+	if errors.Is(err, sessionstore.ErrBudgetNotFound) ||
+		(err == nil && record.State != sessionstore.BudgetArmed) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("load budget for background projection: %w", err)
+	}
+
+	retained, err := s.hasBackgroundObligation(ctx, rootID)
+	if err != nil {
+		return true, fmt.Errorf("project background obligation: %w", err)
+	}
+
+	return retained, nil
+}
+
+//nolint:wsl_v5 // Ledger-first ordering is the producer-to-inbox race closure.
+func (s *svc) hasBackgroundObligation(ctx context.Context, rootID int64) (bool, error) {
+	if s.processStore != nil {
+		processes, err := s.processStore.ListRunningByRoot(ctx, rootID)
+		if err != nil {
+			return false, fmt.Errorf("list running processes: %w", err)
+		}
+		for _, process := range processes {
+			if process.AdvertisedAt != nil {
+				return true, nil
+			}
+		}
+	}
+
+	ids, err := s.sessionSubtreeIDs(ctx, rootID)
+	if err != nil {
+		return false, err
+	}
+	for _, sessionID := range ids {
+		links, err := s.links.ListPendingChildLinks(ctx, sessionID)
+		if err != nil {
+			return false, fmt.Errorf("list pending child links for %d: %w", sessionID, err)
+		}
+		for _, link := range links {
+			if !link.Blocking {
+				return true, nil
+			}
+		}
+	}
+
+	pending, err := s.inboxStore.HasPendingAsyncInputByRoot(ctx, rootID)
+	if err != nil {
+		return false, err
+	}
+
+	return pending, nil
 }

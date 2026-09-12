@@ -44,7 +44,7 @@
     },
     {
       "type": "message_persistent",
-      "content": "⏸️ Session stopped",
+      "content": "⏸️ Session stopped\nCancelled background processes: 1",
       "attributes": {
         "manager_id": "telegram:main",
         "model_input_generation": 1

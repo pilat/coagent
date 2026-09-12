@@ -59,8 +59,8 @@ Background Execution:
 - A command without background=true stays in the foreground for 10 seconds; only if it is still running then is it moved to the background
 - Set "background": true to background immediately without the 10-second wait
 - A backgrounded command returns a process ID and an absolute output path; its final result arrives automatically in a new turn - do NOT poll
-- Do NOT poll background processes with Bash, ps, sleep, schedule, Read, or Tail; keep working on independent tasks instead
+- Do NOT use sleep or another timer to poll background processes; deliberate output inspection remains available
 - Do NOT poll background processes: their completion arrives as a user turn automatically
-- When background work is your only remaining action, reply with a standalone <WAITING/> line and no tool calls
+- When no independent work remains, briefly report what is still running and end the response
 - "timeout" is the absolute process deadline in milliseconds (default 600000, max 1800000); a deadline below 10000 expires in the foreground
 - Only finite commands are supported; a command reaching its deadline is killed as a complete process group`

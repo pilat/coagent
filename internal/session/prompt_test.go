@@ -137,10 +137,11 @@ func TestBuildActiveBackgroundSection_TeachesAutomaticWakeNotPolling(t *testing.
 	assert.Contains(t, result, "# Active background work")
 	assert.Contains(t, result, "process bgp_1 (running): output /tmp/process.out")
 	assert.Contains(t, result, "#42 (background): running")
-	assert.Contains(t, result, "result arrives automatically in a new turn")
-	assert.GreaterOrEqual(t, strings.Count(strings.ToLower(result), "do not poll"), 3)
-	assert.Contains(t, result, "<WAITING/>")
-	assert.Contains(t, result, "no tool calls")
+	assert.Contains(t, result, "result arrives automatically in a later turn")
+	assert.Contains(t, result, "do not use timers to poll")
+	assert.Contains(t, result, "Snapshot from activation start")
+	assert.Contains(t, result, "Later Bash, task, cancellation, and completion observations take precedence")
+	assert.Contains(t, result, "end the response")
 }
 
 func TestBuildToolsSection_WebSearchGuidance_Tavily(t *testing.T) {

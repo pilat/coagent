@@ -266,9 +266,9 @@ func (t *bashTool) backgroundedResult(record backgroundprocess.Process, automati
 			"\nOutput file: " + record.OutputPath +
 			"\nIf this command is wrong, stuck, redundant, or no longer needed, stop it with cancel_process using this background process ID." +
 			"\nThe final result will arrive automatically in a new turn; do not poll." +
-			"\nDo not poll with Bash, ps, sleep, schedule, Read, or Tail." +
-			"\nDo not poll with tools or launch an overlapping command for the same goal; continue only useful independent work." +
-			"\nWhen this is your only remaining work, reply with a standalone <WAITING/> line and no tool calls.",
+			"\nDo not use sleep or another timer to poll; deliberate output inspection remains available." +
+			"\nDo not launch an overlapping command for the same goal; continue only useful independent work." +
+			"\nWhen none remains, briefly report what is still running and end the response.",
 		Metadata: map[string]any{
 			metaKeyProcessID: record.ID,
 		},

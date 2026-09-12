@@ -50,13 +50,13 @@ func TestBuildAgentPrompt_DescribesActualSubagentContinuation(t *testing.T) {
 	assert.NotContains(t, BuildAgentPrompt, "Pass it back to the task tool")
 }
 
-func TestBuildAgentPrompt_TeachesCooperativeBackgroundWait(t *testing.T) {
+func TestBuildAgentPrompt_TeachesOrdinaryBackgroundHandoff(t *testing.T) {
 	t.Parallel()
 
-	assert.Contains(t, BuildAgentPrompt, "background process or subagent")
-	assert.Contains(t, BuildAgentPrompt, "standalone <WAITING/> line and no tool calls")
-	assert.Contains(t, BuildAgentPrompt, "receive its result automatically in a new turn")
-	assert.Contains(t, GeneralAgentPrompt, "standalone <WAITING/> line and no tool calls")
+	assert.Contains(t, BuildAgentPrompt, "After starting background work")
+	assert.Contains(t, BuildAgentPrompt, "briefly report what is still running and end the response")
+	assert.Contains(t, BuildAgentPrompt, "result arrives automatically in a later turn")
+	assert.Contains(t, GeneralAgentPrompt, "briefly report what is still running and end the response")
 	assert.Contains(t, CompactionSummaryPrompt, "advertised processes and pending subagents")
 }
 

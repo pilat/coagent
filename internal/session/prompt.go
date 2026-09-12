@@ -430,11 +430,10 @@ func buildActiveBackgroundSection(processes []ActiveProcessInfo, links []ActiveS
 	var b strings.Builder
 	b.WriteString(backgroundSectionMarker)
 	b.WriteString(
-		"These processes and subagents are still running or awaiting result delivery. " +
-			"Their result arrives automatically in a new turn; do not poll. " +
-			"Do not poll with Bash, ps, sleep, schedule, Read, Tail, or get_subagent_result. " +
-			"Do not poll with tools; continue only useful independent work. " +
-			"When this is your only remaining work, reply with a standalone <WAITING/> line and no tool calls.\n",
+		"Snapshot from activation start: these processes and subagents were running or awaiting result delivery. " +
+			"Later Bash, task, cancellation, and completion observations take precedence. " +
+			"Their result arrives automatically in a later turn; do not use timers to poll. " +
+			"Continue useful independent work; when none remains, briefly report what is still running and end the response.\n",
 	)
 
 	for _, process := range processes {

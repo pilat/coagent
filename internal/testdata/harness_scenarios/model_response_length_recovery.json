@@ -36,7 +36,7 @@
     },
     {
       "type": "message_persistent",
-      "content": "recovered complete answer",
+      "content": "recovered complete answer\n\n🤖 `fake-model` · iteration 2\n⌚ <elapsed> · 💰 $0.5 total",
       "attributes": {
         "manager_id": "telegram:main",
         "model_input_generation": 1

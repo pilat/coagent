@@ -1,5 +1,5 @@
 {
-  "source_test": "TestHarnessScenario_BackgroundWaitCanaryResumesWithoutPolling",
+  "source_test": "TestHarnessScenario_BackgroundFinalResponseResumesOnCompletion",
   "trace": [
     {
       "type": "session_created",
@@ -19,7 +19,7 @@
     },
     {
       "type": "message",
-      "message": "waiting for child"
+      "message": "child still running"
     },
     {
       "type": "message",
@@ -74,20 +74,20 @@
       "releases_input": false
     },
     {
-      "type": "message_replaceable",
-      "content": "waiting for child",
+      "type": "message_persistent",
+      "content": "child still running\n\n🤖 `fake-model` · iteration 2\n⌚ <elapsed> · 💰 $0.0 total",
       "attributes": {
         "manager_id": "telegram:main",
         "model_input_generation": 1
       },
-      "source_key": "message:4:progress",
+      "source_key": "message:4:final",
       "model_input_generation": 1,
       "previous_message_type": "message_replaceable",
       "previous_model_input_generation": 1,
       "previous_message_ids": [
         "<msg-1>"
       ],
-      "releases_input": false
+      "releases_input": true
     },
     {
       "type": "message_replaceable",
@@ -98,7 +98,7 @@
       },
       "source_key": "progress:change:subagent:2:1:checkpoint:1:g1:shields:false:i0",
       "model_input_generation": 1,
-      "previous_message_type": "message_replaceable",
+      "previous_message_type": "message_persistent",
       "previous_model_input_generation": 1,
       "previous_message_ids": [
         "<msg-2>"

@@ -72,6 +72,38 @@ func TestInboxStore_MixedSourcesShareFIFO(t *testing.T) {
 	}
 }
 
+func TestInboxStore_HasPendingAsyncInputByRoot(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	store, _, projectID := newTestStore(t)
+	root, err := store.CreateSession(ctx, projectID, "model", "", nil)
+	require.NoError(t, err)
+	child, err := store.CreateSubagentSession(ctx, projectID, root.ID, root.ID, "general", "model", "")
+	require.NoError(t, err)
+	other, err := store.CreateSession(ctx, projectID, "model", "", nil)
+	require.NoError(t, err)
+
+	_, err = store.EnqueueInput(ctx, root.ID, InputSourceUser, "ordinary")
+	require.NoError(t, err)
+	pending, err := store.HasPendingAsyncInputByRoot(ctx, root.ID)
+	require.NoError(t, err)
+	assert.False(t, pending)
+
+	input, err := store.EnqueueAsyncInput(ctx, child, InputSourceProcess, "done", nil)
+	require.NoError(t, err)
+	pending, err = store.HasPendingAsyncInputByRoot(ctx, root.ID)
+	require.NoError(t, err)
+	assert.True(t, pending)
+
+	require.NoError(t, store.HandleInput(ctx, input.ID, "tested"))
+	_, err = store.EnqueueAsyncInput(ctx, other.ID, InputSourceSubagent, "unrelated", nil)
+	require.NoError(t, err)
+	pending, err = store.HasPendingAsyncInputByRoot(ctx, root.ID)
+	require.NoError(t, err)
+	assert.False(t, pending)
+}
+
 func TestInboxStore_StopPreservesAsyncFactsAndKillCancelsThem(t *testing.T) {
 	t.Parallel()
 
