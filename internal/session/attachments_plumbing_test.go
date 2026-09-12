@@ -50,7 +50,7 @@ func newImagePlumbAgent(t *testing.T) (*svc, *imageStubTool) {
 		ms:           newMessageStore(store, sessionID, nil),
 		loopDetector: newLoopDetector(),
 		registry:     registry,
-		prompt:       newPromptBuilder(testPrompt, "", ""),
+		prompt:       newPromptBuilder(testPrompt, ""),
 	}
 
 	return s, stub

@@ -248,11 +248,11 @@ chain's external messages; otherwise it creates new external messages.
 _Avoid_: final output (persistent output is not necessarily a task result).
 
 **direct reply**:
-The first non-empty assistant text produced for newly promoted manager input
-when that same response also calls tools. It is persistent but non-releasing,
-so the human's message keeps an adjacent immutable answer while subsequent
-progress uses a new replaceable output. A published direct reply is excluded
-from progress narration rather than repeated inside the card.
+The persistent, non-releasing text published only when the first assistant
+response after newly promoted manager input contains both text and tool calls.
+That response consumes eligibility even when it is tool-only or rejected, so
+later narration feeds replaceable progress instead. A published direct reply is
+excluded from progress narration rather than repeated inside the card.
 _Avoid_: final output, progress note.
 
 **skill activation receipt**:
@@ -361,7 +361,11 @@ _Avoid_: transaction, staged config (that is the pre-write `Staged`).
 ## Memory & persistence
 
 **memory**:
-The *curated* per-project long-term store (`CuratedStore` over the `memories` table), surfaced in the system prompt and edited via `memory_save` / `memory_delete`. It is not the conversation transcript.
+The *curated* per-project long-term store (`CuratedStore` over the `memories`
+table), edited via `memory_save` / `memory_delete`. A best-effort inventory is
+persisted with project instructions in a fresh session's marked opening row and
+remains frozen for that session; later opening turns read the updated store. It
+is not the conversation transcript.
 _Avoid_: history, context (those are the transcript, not memory).
 
 **conversation history** (message store):

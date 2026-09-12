@@ -133,7 +133,7 @@ func TestHeaderCheckCountsTheSystemPrompt(t *testing.T) {
 
 	assert.True(t, s.headerFitsLocked(2))
 
-	s.prompt = newPromptBuilder(strings.Repeat("s", 40000), "", "")
+	s.prompt = newPromptBuilder(strings.Repeat("s", 40000), "")
 	assert.False(t, s.headerFitsLocked(2))
 }
 

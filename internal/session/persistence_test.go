@@ -32,7 +32,7 @@ func TestRun_FailFastOnPersistError(t *testing.T) {
 		store:        mockStore,
 		ms:           newMessageStore(nil, 0, nil),
 		loopDetector: newLoopDetector(),
-		prompt:       newPromptBuilder("test", "", ""),
+		prompt:       newPromptBuilder("test", ""),
 		registry:     tool.NewRegistry(),
 	}
 

@@ -21,11 +21,10 @@ type memoryDeleteParams struct {
 type memoryDeleteTool struct {
 	store     memory.CuratedStore
 	projectID int64
-	onChanged func(context.Context)
 }
 
-func NewMemoryDeleteTool(store memory.CuratedStore, projectID int64, onChanged func(context.Context)) tool.Tool {
-	return &memoryDeleteTool{store: store, projectID: projectID, onChanged: onChanged}
+func NewMemoryDeleteTool(store memory.CuratedStore, projectID int64) tool.Tool {
+	return &memoryDeleteTool{store: store, projectID: projectID}
 }
 
 func (t *memoryDeleteTool) ID() string         { return "memory_delete" }
@@ -34,7 +33,7 @@ func (t *memoryDeleteTool) ParallelSafe() bool { return false }
 func (t *memoryDeleteTool) Description() string {
 	return `Delete a curated memory by ID.
 
-Use when a memory is outdated or needs to be replaced.`
+Use when a memory is outdated or needs to be replaced. The change is loaded into new opening turns; the current session retains its opening snapshot.`
 }
 
 func (t *memoryDeleteTool) Parameters() json.RawMessage {
@@ -62,10 +61,6 @@ func (t *memoryDeleteTool) Execute(ctx context.Context, params json.RawMessage) 
 
 	if err := t.store.DeleteMemory(ctx, t.projectID, p.ID); err != nil {
 		return nil, fmt.Errorf("delete memory: %w", err)
-	}
-
-	if t.onChanged != nil {
-		t.onChanged(ctx)
 	}
 
 	// Show remaining memories

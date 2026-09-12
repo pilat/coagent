@@ -173,10 +173,14 @@ advances only when inbox promotion or scheduled injection enters history.
 Manager replay edits a previous external message only when the adjacent outbox
 rows carry equal generations (or both carry none under the legacy rule), so a
 consumed follow-up or scheduled turn starts a new external message without
-querying session state at claim time. A narrated first response to promoted
-manager input commits as a non-releasing persistent direct reply before its
-replaceable progress chain; budget observation and that reply share the response
-transaction. Replaceable progress snapshots, direct tool receipts, checkpoint
+querying session state at claim time. A first response to promoted manager input
+is the only response eligible for a non-releasing persistent direct reply; it
+commits one only when it contains text and tool calls, and eligibility is
+consumed even by a tool-only or rejected response. The causal obligation to
+answer that input survives tool iterations, so later narration feeds its
+replaceable progress chain and the terminal answer is persistent, releasing,
+and closes that chain. Budget observation and an eligible direct reply share the
+response transaction. Replaceable progress snapshots, direct tool receipts, checkpoint
 output and final readiness reuse the outbox and manager receipt chain; managers
 do not maintain a second progress or result queue. An explicit manager-owned
 skill activation commits one persistent, releasing receipt inside its promotion
@@ -246,6 +250,11 @@ do not turn configuration into a mutable policy source.
 
 The daemon creates or resumes a session, loads its project context and policy,
 constructs the permitted tool stack, then hands control to the session loop.
+On a fresh opening turn, project instructions and the best-effort curated-memory
+inventory share one marked, persisted user-role row before the exact opening
+task. Resume uses those stored rows unchanged; the system prompt contains only
+stable environment and registry context, while new timestamped input carries
+local time, zone abbreviation and numeric offset.
 `inputruntime` owns FIFO promotion, one-turn activation and atomic command output
 at that boundary. It does not append a user message while the session has
 unresolved external work. Completion, scheduling and user input use durable
@@ -282,11 +291,15 @@ terminal error. Compaction model calls retain their separate no-retry contract.
 
 A no-tool `stop` response completes the current activation even while a
 background process or subagent remains. Completion input in `session_inbox`
-reactivates that completed session for one later turn. Session construction and
-compaction project advertised process identities and pending subagent links into
-one byte-stable active-background snapshot; later transcript observations take
-precedence. While a producer owns future completion, the daemon rejects `sleep`
-as a competing timer but leaves deliberate process-output diagnostics available.
+reactivates that completed session for one later turn. Session construction
+captures advertised process identities and pending subagent links; after budget
+admission, the first provider call durably appends a non-empty snapshot as
+user-role activation context. Each later model-running activation appends its
+own snapshot without deduplication. Compaction independently refreshes the live
+ledger projection inside its marked checkpoint. Later transcript observations
+take precedence over either older view. While a producer owns future completion,
+the daemon rejects `sleep` as a competing timer but leaves deliberate
+process-output diagnostics available.
 
 ### Shutdown and restart
 
@@ -844,9 +857,10 @@ first call without changing the offered tools or schemas
 
 Schedule owns cron validation, durable schedule records and execution of sleep
 and schedule tools. It depends on a narrow sender contract, not the daemon
-implementation. Curated memory is distinct from conversation history, scoped to
-a project, and surfaced through the system prompt only as deliberate retained
-knowledge.
+implementation. Curated memory is distinct from conversation history and scoped
+to a project. A best-effort inventory is frozen into a fresh opening turn's
+marked project-context row; save/delete results inform the current transcript,
+while later opening turns read the updated store.
 
 ### Configuration, migration and host lifecycle
 

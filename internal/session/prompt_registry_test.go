@@ -168,6 +168,90 @@ func TestBuiltInExplore_OmitsProjectContext(t *testing.T) {
 	assert.Equal(t, "task", s.appendGitStateDelta(context.Background(), "task"))
 }
 
+func TestSystemPromptExcludesVolatileOpeningAndBackgroundContext(t *testing.T) {
+	workDir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(workDir, "AGENTS.md"), []byte("PROJECT INSTRUCTIONS"), 0o600))
+
+	p := params{
+		Config:      &config.Config{WorkDir: workDir, Model: "test-model"},
+		LLMClient:   &promptRecordingLLM{},
+		TodoStore:   todo.New(),
+		Loader:      loader.New(),
+		Registry:    tool.NewRegistry(),
+		MemoryStore: &stubMemoryStore{entries: []memory.MemoryEntry{{ID: 7, Text: "PROJECT MEMORY"}}},
+	}
+	service, err := newWithOptions(t.Context(), p, options{
+		ID: 1, ProjectID: 1,
+		ActiveProcesses: []ActiveProcessInfo{{ID: "bgp_1", OutputPath: "/tmp/output"}},
+	})
+	require.NoError(t, err)
+
+	s := service.(*svc)
+	system := s.prompt.systemPrompt()
+	assert.NotContains(t, system, "Date:")
+	assert.NotContains(t, system, "Timezone:")
+	assert.NotContains(t, system, "PROJECT MEMORY")
+	assert.NotContains(t, system, "Active background work")
+
+	opening := s.openingTurn("task")
+	require.Len(t, opening, 2)
+	assert.True(t, strings.HasPrefix(opening[0].Content, agentsMDMessagePrefix))
+	assert.Contains(t, opening[0].Content, "PROJECT INSTRUCTIONS")
+	assert.Contains(t, opening[0].Content, "- [7] PROJECT MEMORY")
+	assert.Contains(t, s.activeBackgroundSnapshot, "process bgp_1")
+}
+
+func TestOpeningTurnRecognizesMemoryOnlyProjectContext(t *testing.T) {
+	s := &svc{agentsMD: buildMemoriesSection(t.Context(), &stubMemoryStore{entries: []memory.MemoryEntry{{
+		ID: 3, Text: "memory only",
+	}}}, 1)}
+
+	opening := s.openingTurn("task")
+	require.Len(t, opening, 2)
+	assert.True(t, strings.HasPrefix(opening[0].Content, agentsMDMessagePrefix))
+	assert.Contains(t, opening[0].Content, "- [3] memory only")
+	assert.Equal(t, 2, compactionHeaderSize(opening))
+}
+
+func TestResumeKeepsPersistedOpeningContextAndStableSystemPrompt(t *testing.T) {
+	workDir := t.TempDir()
+	agentsPath := filepath.Join(workDir, "AGENTS.md")
+	require.NoError(t, os.WriteFile(agentsPath, []byte("ORIGINAL RULES"), 0o600))
+	memoryStore := &stubMemoryStore{entries: []memory.MemoryEntry{{ID: 1, Text: "original memory"}}}
+
+	newParams := func() params {
+		return params{
+			Config:      &config.Config{WorkDir: workDir, Model: "test-model"},
+			LLMClient:   &promptRecordingLLM{},
+			TodoStore:   todo.New(),
+			Loader:      loader.New(),
+			Registry:    tool.NewRegistry(),
+			MemoryStore: memoryStore,
+		}
+	}
+
+	firstService, err := newWithOptions(t.Context(), newParams(), options{ID: 1, ProjectID: 1})
+	require.NoError(t, err)
+	first := firstService.(*svc)
+	opening := first.openingTurn("original task")
+	system := first.prompt.systemPrompt()
+
+	require.NoError(t, os.WriteFile(agentsPath, []byte("CHANGED RULES"), 0o600))
+	memoryStore.entries = []memory.MemoryEntry{{ID: 2, Text: "changed memory"}}
+	resumedService, err := newWithOptions(t.Context(), newParams(), options{
+		ID: 1, ProjectID: 1, ResumeMessages: opening,
+	})
+	require.NoError(t, err)
+	resumed := resumedService.(*svc)
+
+	assert.Equal(t, system, resumed.prompt.systemPrompt())
+	assert.Equal(t, opening, resumed.ms.getMessages())
+	assert.Contains(t, resumed.ms.getMessages()[0].Content, "ORIGINAL RULES")
+	assert.Contains(t, resumed.ms.getMessages()[0].Content, "original memory")
+	assert.NotContains(t, resumed.ms.getMessages()[0].Content, "CHANGED RULES")
+	assert.NotContains(t, resumed.ms.getMessages()[0].Content, "changed memory")
+}
+
 func TestProjectExploreOverride_KeepsProjectContext(t *testing.T) {
 	workDir := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(workDir, "AGENTS.md"), []byte("PROJECT INSTRUCTIONS"), 0o600))

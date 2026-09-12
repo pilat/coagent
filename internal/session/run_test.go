@@ -31,7 +31,7 @@ func newMockSvc(t *testing.T, messages []llmwire.Message, agentsMD string) *svc 
 		ms:           ms,
 		loopDetector: newLoopDetector(),
 		llmClient:    &mockLLMClient{},
-		prompt:       newPromptBuilder("test", "", ""),
+		prompt:       newPromptBuilder("test", ""),
 		registry:     tool.NewRegistry(),
 	}
 }
@@ -52,7 +52,7 @@ func TestRun_FreshSessionInjectsAgentsMDAndPrompt(t *testing.T) {
 	assert.True(t, strings.HasPrefix(msgs[0].Content, "User preferences from AGENTS.md"))
 	assert.Equal(t, llmwire.RoleUser, msgs[1].Role)
 	assert.Contains(t, msgs[1].Content, "write tests")
-	assert.Regexp(t, `^\[\w+ \d{4}-\d{2}-\d{2} \d{2}:\d{2}\]`, msgs[1].Content)
+	assert.Regexp(t, `^\[\w+ \d{4}-\d{2}-\d{2} \d{2}:\d{2} \w+ [+-]\d{2}:\d{2}\]`, msgs[1].Content)
 }
 
 func TestRun_FreshSessionNoAgentsMD(t *testing.T) {
@@ -66,7 +66,7 @@ func TestRun_FreshSessionNoAgentsMD(t *testing.T) {
 	msgs := s.ms.getMessages()
 	require.GreaterOrEqual(t, len(msgs), 1)
 	assert.Contains(t, msgs[0].Content, "hello")
-	assert.Regexp(t, `^\[\w+ \d{4}-\d{2}-\d{2} \d{2}:\d{2}\]`, msgs[0].Content)
+	assert.Regexp(t, `^\[\w+ \d{4}-\d{2}-\d{2} \d{2}:\d{2} \w+ [+-]\d{2}:\d{2}\]`, msgs[0].Content)
 }
 
 func TestRun_FreshSessionEmptyPromptGetsDefault(t *testing.T) {

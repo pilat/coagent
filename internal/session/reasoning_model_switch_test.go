@@ -205,6 +205,6 @@ func newModelSwitchSession(t *testing.T, baseURL string) *svc {
 		ms:              newMessageStore(store, record.ID, nil),
 		loopDetector:    newLoopDetector(),
 		registry:        tool.NewRegistry(),
-		prompt:          newPromptBuilder(testPrompt, "", ""),
+		prompt:          newPromptBuilder(testPrompt, ""),
 	}
 }
