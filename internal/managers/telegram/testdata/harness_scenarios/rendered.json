@@ -505,6 +505,73 @@
       ]
     },
     {
+      "trace": "output_chain_narrated_tools.json",
+      "source_test": "TestHarnessScenario_OutputChainNarratedToolIterations",
+      "calls": [
+        {
+          "method": "createForumTopic",
+          "chat_id": -100123
+        },
+        {
+          "method": "editForumTopic",
+          "chat_id": -100123,
+          "thread_id": 7001
+        },
+        {
+          "method": "sendMessage",
+          "chat_id": -100123,
+          "thread_id": 7001,
+          "text": "Reading the repo",
+          "parse_mode": "HTML"
+        },
+        {
+          "method": "editForumTopic",
+          "chat_id": -100123,
+          "thread_id": 7001
+        },
+        {
+          "method": "sendMessage",
+          "chat_id": -100123,
+          "thread_id": 7001,
+          "text": "<b>🟢 Working</b>\n\n🤖 <code>fake-model</code> · iteration 1\n⌚ &lt;elapsed&gt; · 💰 $0.0 total",
+          "parse_mode": "HTML"
+        },
+        {
+          "method": "editForumTopic",
+          "chat_id": -100123,
+          "thread_id": 7001
+        },
+        {
+          "method": "editMessageText",
+          "chat_id": -100123,
+          "text": "<b>🟢 Working</b>\n\nUpdating the task list\n\n🤖 <code>fake-model</code> · iteration 2\n⌚ &lt;elapsed&gt; · 💰 $0.0 total",
+          "parse_mode": "HTML"
+        },
+        {
+          "method": "editForumTopic",
+          "chat_id": -100123,
+          "thread_id": 7001
+        },
+        {
+          "method": "editMessageText",
+          "chat_id": -100123,
+          "text": "<b>🟢 Working</b>\n\nUpdating the task list\n\n🤖 <code>fake-model</code> · iteration 2\n⌚ &lt;elapsed&gt; · 💰 $0.0 total",
+          "parse_mode": "HTML"
+        },
+        {
+          "method": "editForumTopic",
+          "chat_id": -100123,
+          "thread_id": 7001
+        },
+        {
+          "method": "editMessageText",
+          "chat_id": -100123,
+          "text": "All done.\n\n🤖 <code>fake-model</code> · iteration 3\n⌚ &lt;elapsed&gt; · 💰 $0.0 total",
+          "parse_mode": "HTML"
+        }
+      ]
+    },
+    {
       "trace": "output_chain_reported_order.json",
       "source_test": "TestHarnessScenario_OutputChainReportedOrder",
       "calls": [

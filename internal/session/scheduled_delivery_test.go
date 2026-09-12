@@ -73,7 +73,7 @@ func TestSession_FreshScheduledDeliveryResetsExactlyOnce(t *testing.T) {
 		loopDetector: newLoopDetector(),
 		todoStore:    todo.New(),
 		store:        store,
-		prompt:       newPromptBuilder(testPrompt, "", ""),
+		prompt:       newPromptBuilder(testPrompt, ""),
 	}
 	require.NoError(t, s.ms.addUserMessage(context.Background(), "old task"))
 

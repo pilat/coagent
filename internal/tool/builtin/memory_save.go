@@ -27,11 +27,10 @@ type memorySaveParams struct {
 type memorySaveTool struct {
 	store     memory.CuratedStore
 	projectID int64
-	onChanged func(context.Context) // callback to refresh session's memoriesSection
 }
 
-func NewMemorySaveTool(store memory.CuratedStore, projectID int64, onChanged func(context.Context)) tool.Tool {
-	return &memorySaveTool{store: store, projectID: projectID, onChanged: onChanged}
+func NewMemorySaveTool(store memory.CuratedStore, projectID int64) tool.Tool {
+	return &memorySaveTool{store: store, projectID: projectID}
 }
 
 func (t *memorySaveTool) ID() string         { return "memory_save" }
@@ -40,7 +39,7 @@ func (t *memorySaveTool) ParallelSafe() bool { return false }
 func (t *memorySaveTool) Description() string {
 	return fmt.Sprintf(`Save a short per-project memory (max %d chars, max %d per project).
 
-Use when the user asks you to remember something. Memories are injected into every system prompt.`, memoryMaxTextLen, memoryMaxCount)
+Use when the user asks you to remember something. Saved memories are loaded into new opening turns; the current session retains its opening snapshot.`, memoryMaxTextLen, memoryMaxCount)
 }
 
 func (t *memorySaveTool) Parameters() json.RawMessage {
@@ -90,10 +89,6 @@ func (t *memorySaveTool) Execute(ctx context.Context, params json.RawMessage) (*
 	id, err := t.store.SaveMemory(ctx, t.projectID, p.Text)
 	if err != nil {
 		return nil, fmt.Errorf("save memory: %w", err)
-	}
-
-	if t.onChanged != nil {
-		t.onChanged(ctx)
 	}
 
 	return &tool.Result{

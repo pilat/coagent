@@ -119,7 +119,7 @@ func TestHandleSetModel_SearchGuidanceFollowsActiveClient(t *testing.T) {
 			cfg:       cfgOR,
 			llmClient: &mockLLMClientTracked{model: "or-model"},
 			model:     "or-model",
-			prompt:    newPromptBuilder("", "", ""),
+			prompt:    newPromptBuilder("", ""),
 			ms:        newMessageStore(nil, 0, nil),
 			registry:  registryWithTools("read", "webfetch"),
 			newLLMWithModel: func(_ *config.Config, _ string) (llm.Client, error) {
@@ -142,7 +142,7 @@ func TestHandleSetModel_SearchGuidanceFollowsActiveClient(t *testing.T) {
 			cfg:       cfgANT,
 			llmClient: &mockLLMClientTracked{model: "ant-model"},
 			model:     "ant-model",
-			prompt:    newPromptBuilder("", "", ""),
+			prompt:    newPromptBuilder("", ""),
 			ms:        newMessageStore(nil, 0, nil),
 			registry:  registryWithTools("read", "webfetch"),
 			newLLMWithModel: func(_ *config.Config, _ string) (llm.Client, error) {

@@ -258,7 +258,7 @@ func TestSetupRegistryAnnouncesSkillsOnlyWhenToolIsAvailable(t *testing.T) {
 			s := &svc{
 				agentTypes: set,
 				loader:     ldr,
-				prompt:     newPromptBuilder("base", "", ""),
+				prompt:     newPromptBuilder("base", ""),
 			}
 			s.setupRegistry(params{Registry: reg}, config)
 

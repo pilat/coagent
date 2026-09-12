@@ -19,7 +19,7 @@ func newResetTestSvc(store *compactionRecordingStore) *svc {
 		loopDetector: newLoopDetector(),
 		todoStore:    todo.New(),
 		store:        store,
-		prompt:       newPromptBuilder(testPrompt, "", ""),
+		prompt:       newPromptBuilder(testPrompt, ""),
 	}
 }
 

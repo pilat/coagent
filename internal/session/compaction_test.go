@@ -266,7 +266,7 @@ func newCompactionTestSvc(mockLLM *compactionMockLLM) *svc {
 		ms:           newMessageStore(nil, 0, nil),
 		loopDetector: newLoopDetector(),
 		registry:     tool.NewRegistry(),
-		prompt:       newPromptBuilder(testPrompt, "", ""),
+		prompt:       newPromptBuilder(testPrompt, ""),
 	}
 }
 

@@ -79,30 +79,27 @@ var knownSearchMCPs = []string{
 }
 
 // promptBuilder encapsulates the system prompt assembly: static base + dynamic sections.
-// Thread-safe — the agent loop reads systemPrompt() while model switches and memory refreshes write.
+// Thread-safe — the agent loop reads systemPrompt() while model switches update it.
 type promptBuilder struct {
-	mu                      sync.RWMutex
-	basePrompt              string
-	activeSkillsSection     string
-	toolsSection            string
-	skillsSection           string
-	subagentsSection        string
-	memoriesSection         string
-	modelsSection           string
-	activeBackgroundSection string
+	mu                  sync.RWMutex
+	basePrompt          string
+	activeSkillsSection string
+	toolsSection        string
+	skillsSection       string
+	subagentsSection    string
+	modelsSection       string
 	// nativeSearch reports whether the active model's driver supplies search
 	// natively. It follows the model triplet and only feeds prompt wording.
 	nativeSearch bool
 }
 
 func newPromptBuilder(
-	basePrompt, memoriesSection, modelsSection string,
+	basePrompt, modelsSection string,
 	activeSkills ...*loader.Skill,
 ) *promptBuilder {
 	return &promptBuilder{
 		basePrompt:          basePrompt,
 		activeSkillsSection: buildActiveSkillsSection(activeSkills),
-		memoriesSection:     memoriesSection,
 		modelsSection:       modelsSection,
 	}
 }
@@ -114,7 +111,7 @@ func (p *promptBuilder) systemPrompt() string {
 	defer p.mu.RUnlock()
 
 	return p.basePrompt + p.activeSkillsSection + p.toolsSection + p.skillsSection + p.subagentsSection +
-		p.memoriesSection + p.modelsSection + p.activeBackgroundSection
+		p.modelsSection
 }
 
 // buildActiveSkillsSection embeds daemon-selected instructions directly in the
@@ -138,14 +135,6 @@ func buildActiveSkillsSection(skills []*loader.Skill) string {
 	}
 
 	return section.String()
-}
-
-// setActiveBackgroundSection replaces the pinned active-background section.
-// Refreshed on session create/resume from the durable producer ledgers.
-func (p *promptBuilder) setActiveBackgroundSection(section string) {
-	p.mu.Lock()
-	p.activeBackgroundSection = section
-	p.mu.Unlock()
 }
 
 // setSkillsSection replaces the model-invocable skills inventory.
@@ -350,20 +339,6 @@ func appendWebSearchUsage(sb *strings.Builder, registered map[string]bool) {
 	)
 }
 
-// refreshMemories reloads curated memories from the store and rebuilds the memoriesSection.
-// Called after memory_save/memory_delete.
-func (p *promptBuilder) refreshMemories(ctx context.Context, store memory.CuratedStore, projectID int64) {
-	if store == nil {
-		return
-	}
-
-	section := buildMemoriesSection(ctx, store, projectID)
-
-	p.mu.Lock()
-	p.memoriesSection = section
-	p.mu.Unlock()
-}
-
 // setModelsSection replaces the models section of the system prompt.
 // Called after model switch.
 func (p *promptBuilder) setModelsSection(section string) {
@@ -372,7 +347,7 @@ func (p *promptBuilder) setModelsSection(section string) {
 	p.mu.Unlock()
 }
 
-// buildMemoriesSection formats curated memories for the system prompt.
+// buildMemoriesSection formats curated memories for persisted opening context.
 func buildMemoriesSection(ctx context.Context, store memory.CuratedStore, projectID int64) string {
 	memories, err := store.ListMemoryTexts(ctx, projectID)
 	if err != nil || len(memories) == 0 {

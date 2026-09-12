@@ -81,8 +81,10 @@ type loopRunner struct {
 	lastResp             *llmwire.Response
 	handledControl       bool
 	replyToInput         bool
+	directReplyEligible  bool
 	publishedReply       bool
 	acceptedManagerInput bool
+	backgroundInserted   bool
 	compactionFailures   int
 	autoCompactionOff    bool
 }
@@ -173,7 +175,12 @@ func runLoop(ctx context.Context, agent *svc, opts loopOptions, callback iterati
 			return r.result, err
 		}
 
-		r.replyToInput = r.replyToInput || r.acceptedManagerInput || recoveryReply
+		if r.acceptedManagerInput {
+			r.replyToInput = true
+			r.directReplyEligible = true
+		} else if recoveryReply {
+			r.replyToInput = true
+		}
 		if r.agent.budgetFired {
 			r.result.Suspended = true
 
@@ -396,6 +403,14 @@ func (r *loopRunner) callLLM(ctx context.Context) error {
 		}
 	}
 
+	if !r.backgroundInserted && r.agent.activeBackgroundSnapshot != "" {
+		if err := r.agent.ms.addUserMessage(ctx, r.agent.activeBackgroundSnapshot); err != nil {
+			return fmt.Errorf("record active background snapshot: %w", err)
+		}
+
+		r.backgroundInserted = true
+	}
+
 	activeTools := r.agent.registry.List()
 
 	if r.agent.loopDetector.forceTextOnly {
@@ -456,7 +471,13 @@ func normalizedFinishType(finishType string) string {
 func (r *loopRunner) recordIteration(ctx context.Context) error {
 	r.result.Iterations++
 	if r.lastResp.FinishType == llmwire.FinishLength || r.lastResp.FinishType == llmwire.FinishUnknown {
-		return r.recordRejectedIteration(ctx)
+		if err := r.recordRejectedIteration(ctx); err != nil {
+			return err
+		}
+
+		r.directReplyEligible = false
+
+		return nil
 	}
 
 	replyToInput := r.replyToInput
@@ -471,6 +492,7 @@ func (r *loopRunner) recordIteration(ctx context.Context) error {
 		r.lastResp,
 		r.agent.outputEnabled,
 		replyToInput,
+		r.directReplyEligible,
 	)
 	if outputType == sessionstore.OutputMessagePersistent && len(r.lastResp.ToolCalls) == 0 {
 		if renderer, ok := r.agent.boundary.(finalOutputBoundary); ok {
@@ -522,6 +544,7 @@ func (r *loopRunner) recordIteration(ctx context.Context) error {
 		r.publishedReply = outputType == sessionstore.OutputMessagePersistent && len(r.lastResp.ToolCalls) > 0
 	}
 	r.replyToInput = replyToInput && len(r.lastResp.ToolCalls) > 0
+	r.directReplyEligible = false
 
 	if r.lastResp.CostUSD > 0 {
 		r.log.Info(
@@ -555,7 +578,10 @@ func (r *loopRunner) recordIteration(ctx context.Context) error {
 	return nil
 }
 
-func assistantOutput(response *llmwire.Response, enabled, replyToInput bool) (sessionstore.OutputType, string) {
+func assistantOutput(
+	response *llmwire.Response,
+	enabled, replyToInput, directReplyEligible bool,
+) (sessionstore.OutputType, string) {
 	if !enabled || strings.TrimSpace(response.Text) == "" {
 		return "", ""
 	}
@@ -565,7 +591,7 @@ func assistantOutput(response *llmwire.Response, enabled, replyToInput bool) (se
 	}
 
 	if len(response.ToolCalls) > 0 {
-		if replyToInput {
+		if directReplyEligible {
 			return sessionstore.OutputMessagePersistent, response.Text
 		}
 

@@ -46,7 +46,7 @@ func TestShouldCompact(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			agent := newTestAgent()
-			agent.prompt = newPromptBuilder("", "", "") // zero overhead: the cutoff cases are exact
+			agent.prompt = newPromptBuilder("", "") // zero overhead: the cutoff cases are exact
 			agent.ms.setMessages(buildMessagesWithTokens(tc.tokens))
 			if tc.baseline != nil {
 				agent.recordContextBaseline(
@@ -407,7 +407,7 @@ func newTestAgent(tools ...tool.Tool) *svc {
 		ms:           newMessageStore(nil, 0, nil),
 		loopDetector: newLoopDetector(),
 		registry:     reg,
-		prompt:       newPromptBuilder("test", "", ""),
+		prompt:       newPromptBuilder("test", ""),
 	}
 }
 

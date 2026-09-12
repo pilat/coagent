@@ -99,3 +99,52 @@ func TestHarnessScenario_OutputChainReportedOrder(t *testing.T) {
 
 	assertHarnessTrace(t, "output_chain_reported_order.json", collector.snapshot(), root)
 }
+
+// One manager-owned input keeps its causal obligation through every tool
+// iteration while direct-reply eligibility is consumed by the first response.
+func TestHarnessScenario_OutputChainNarratedToolIterations(t *testing.T) {
+	var calls int
+	respond := func(_ string, _ []llmwire.Message) *llmwire.Response {
+		calls++
+		switch calls {
+		case 1:
+			return &llmwire.Response{
+				Text: "Reading the repo",
+				ToolCalls: []llmwire.ToolCall{{
+					ID: "narrated-ls", Name: "ls", Arguments: []byte(`{"path":"."}`),
+				}},
+			}
+		case 2:
+			return &llmwire.Response{
+				Text: "Updating the task list",
+				ToolCalls: []llmwire.ToolCall{{
+					ID:   "narrated-todo",
+					Name: "todowrite",
+					Arguments: []byte(
+						`{"todos":[{"id":"t1","content":"ship the change","status":"in_progress","priority":"high"}]}`,
+					),
+				}},
+			}
+		default:
+			return &llmwire.Response{Text: "All done."}
+		}
+	}
+
+	h := newSubagentHarnessWith(t, respond)
+	defer h.shutdown()
+
+	collector := collectEvents(h.mgr.PubSub().SubscribeAll())
+	defer collector.stop()
+
+	root, err := h.mgr.Send(h.ctx, h.projectID, "do the work", "fake-model", map[string]any{
+		"manager_id": scenarioManagerID,
+	})
+	require.NoError(t, err)
+	waitForVisibleMessage(t, collector, root, "All done.")
+
+	controller := newChainController(t, h)
+	drainScenarioClaims(t, "output_chain_narrated_tools.json", controller)
+	waitForIdleAfterMessage(t, collector, root, "All done.")
+
+	assertHarnessTrace(t, "output_chain_narrated_tools.json", collector.snapshot(), root)
+}

@@ -211,7 +211,7 @@ func TestHandleSetModel_SwitchesLLMClientAndClosesOld(t *testing.T) {
 		},
 		llmClient: oldClient,
 		model:     "old-model",
-		prompt:    newPromptBuilder("", "", ""),
+		prompt:    newPromptBuilder("", ""),
 		ms:        newMessageStore(nil, 0, nil),
 		newLLMWithModel: func(_ *config.Config, _ string) (llm.Client, error) {
 			return newClient, nil
@@ -234,7 +234,7 @@ func TestHandleSetModel_UpdatesModelField(t *testing.T) {
 		},
 		llmClient: &mockLLMClientTracked{model: "old"},
 		model:     "old",
-		prompt:    newPromptBuilder("", "", ""),
+		prompt:    newPromptBuilder("", ""),
 		ms:        newMessageStore(nil, 0, nil),
 		newLLMWithModel: func(_ *config.Config, _ string) (llm.Client, error) {
 			return newClient, nil
@@ -255,7 +255,7 @@ func TestHandleSetModel_SetsReasoningLevelOnNewClient(t *testing.T) {
 			UnifiedConfig: unifiedCfgWithModels("gpt-4o"),
 		},
 		llmClient: &mockLLMClientTracked{model: "old"},
-		prompt:    newPromptBuilder("", "", ""),
+		prompt:    newPromptBuilder("", ""),
 		ms:        newMessageStore(nil, 0, nil),
 		newLLMWithModel: func(_ *config.Config, _ string) (llm.Client, error) {
 			return newClient, nil
@@ -295,7 +295,7 @@ func TestHandleSetModel_RaceWithLoopRead(t *testing.T) {
 		llmClient:      &mockLLMClientTracked{model: "m1"},
 		model:          "m1",
 		reasoningLevel: "medium",
-		prompt:         newPromptBuilder("", "", ""),
+		prompt:         newPromptBuilder("", ""),
 		registry:       tool.NewRegistry(),
 		ms:             newMessageStore(nil, 0, nil),
 		newLLMWithModel: func(_ *config.Config, id string) (llm.Client, error) {
@@ -350,7 +350,7 @@ func TestHandleSetModelWaitsForInFlightChatBeforeClosingOldClient(t *testing.T) 
 		llmClient:      oldClient,
 		model:          "m1",
 		reasoningLevel: "medium",
-		prompt:         newPromptBuilder("", "", ""),
+		prompt:         newPromptBuilder("", ""),
 		newLLMWithModel: func(_ *config.Config, id string) (llm.Client, error) {
 			close(newClientBuilt)
 			return &mockLLMClientTracked{model: id}, nil
@@ -404,7 +404,7 @@ func TestHandleSetModel_DoesNotExposeOtherConfiguredModels(t *testing.T) {
 		cfg:       &config.Config{UnifiedConfig: uc},
 		llmClient: &mockLLMClientTracked{model: "old-model"},
 		model:     "old-model",
-		prompt:    newPromptBuilder("", "", buildModelsSection("old-model")),
+		prompt:    newPromptBuilder("", buildModelsSection("old-model")),
 		ms:        newMessageStore(nil, 0, nil),
 		newLLMWithModel: func(_ *config.Config, _ string) (llm.Client, error) {
 			return &mockLLMClientTracked{model: "new-model"}, nil
@@ -438,7 +438,7 @@ func TestHandleSetModel_PreservesSessionID(t *testing.T) {
 		id:        42,
 		rootID:    42,
 		model:     "old-model",
-		prompt:    newPromptBuilder("", "", ""),
+		prompt:    newPromptBuilder("", ""),
 		ms:        newMessageStore(nil, 0, nil),
 		newLLMWithModel: func(_ *config.Config, _ string) (llm.Client, error) {
 			newClient = &mockLLMWithSessionTracking{model: "new-model"}
@@ -464,7 +464,7 @@ func TestHandleSetModel_PreservesSubagentSessionID(t *testing.T) {
 		id:        99,
 		rootID:    1, // different from id = subagent
 		model:     "old-model",
-		prompt:    newPromptBuilder("", "", ""),
+		prompt:    newPromptBuilder("", ""),
 		ms:        newMessageStore(nil, 0, nil),
 		newLLMWithModel: func(_ *config.Config, _ string) (llm.Client, error) {
 			newClient = &mockLLMWithSessionTracking{model: "new-model"}

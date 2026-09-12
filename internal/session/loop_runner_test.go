@@ -50,6 +50,36 @@ type loopReloadStore struct {
 	replaceErr error
 }
 
+type classificationBudgetGate struct {
+	terminalBudgetGate
+	types    []sessionstore.OutputType
+	contents []string
+	releases []bool
+}
+
+func (g *classificationBudgetGate) PersistResponse(
+	_ context.Context,
+	_ *transcript.Message,
+	outputType sessionstore.OutputType,
+	content string,
+	releasesInput bool,
+) (int64, bool, bool, error) {
+	g.types = append(g.types, outputType)
+	g.contents = append(g.contents, content)
+	g.releases = append(g.releases, releasesInput)
+
+	return int64(len(g.types)), false, outputType == sessionstore.OutputMessagePersistent, nil
+}
+
+func (g *classificationBudgetGate) PersistRejectedResponse(
+	context.Context,
+	sessionstore.RejectedResponse,
+) (*sessionstore.RejectedResponseResult, error) {
+	return &sessionstore.RejectedResponseResult{
+		Outcome: sessionstore.RejectedResponseRecoveryQueued, RecoveryMessageID: 1,
+	}, nil
+}
+
 type loopInputBoundary struct {
 	agent    *svc
 	input    *PendingInput
@@ -316,6 +346,7 @@ func TestRunLoopHandlesStatusAtBoundaryWithoutCallingModel(t *testing.T) {
 	}
 	llmClient := &loopScriptLLM{responses: []*llmwire.Response{textResponse("must not run")}}
 	agent.llmClient = llmClient
+	agent.activeBackgroundSnapshot = "\n\n# Active background work\nprocess bgp_1"
 	notifier := &loopNotifier{}
 
 	_, err := runLoop(t.Context(), agent, loopOptions{Notify: notifier.fn}, iterationGuard(5))
@@ -326,12 +357,83 @@ func TestRunLoopHandlesStatusAtBoundaryWithoutCallingModel(t *testing.T) {
 	assert.Equal(t, 1, notifier.countWith("Session Status"))
 }
 
+func TestCallLLMAppendsActiveBackgroundSnapshotOncePerActivation(t *testing.T) {
+	const snapshot = "\n\n# Active background work\nprocess bgp_1"
+
+	seen := make([][]llmwire.Message, 0, 2)
+	agent := newTestAgent()
+	agent.activeBackgroundSnapshot = snapshot
+	agent.llmClient = &loopScriptLLM{onCall: func(_ int, msgs []llmwire.Message) (*llmwire.Response, error) {
+		seen = append(seen, append([]llmwire.Message(nil), msgs...))
+		return textResponse("done"), nil
+	}}
+	runner := &loopRunner{agent: agent, result: &loopResult{}, log: zap.NewNop()}
+
+	require.NoError(t, runner.callLLM(t.Context()))
+	require.NoError(t, runner.callLLM(t.Context()))
+
+	require.Len(t, seen, 2)
+	for _, messages := range seen {
+		count := 0
+		for _, msg := range messages {
+			if msg.Role == llmwire.RoleUser && msg.Content == snapshot {
+				count++
+			}
+		}
+		assert.Equal(t, 1, count)
+	}
+	count := 0
+	for _, msg := range agent.ms.getMessages() {
+		if msg.Role == llmwire.RoleUser && msg.Content == snapshot {
+			count++
+		}
+	}
+	assert.Equal(t, 1, count)
+}
+
+func TestCallLLMAppendsActiveBackgroundSnapshotAgainOnLaterActivation(t *testing.T) {
+	agent := newTestAgent()
+	agent.activeBackgroundSnapshot = "\n\n# Active background work\nprocess bgp_1"
+	agent.llmClient = &loopScriptLLM{responses: []*llmwire.Response{textResponse("done")}}
+
+	for range 2 {
+		runner := &loopRunner{agent: agent, result: &loopResult{}, log: zap.NewNop()}
+		require.NoError(t, runner.callLLM(t.Context()))
+	}
+
+	count := 0
+	for _, msg := range agent.ms.getMessages() {
+		if msg.Role == llmwire.RoleUser && msg.Content == agent.activeBackgroundSnapshot {
+			count++
+		}
+	}
+	assert.Equal(t, 2, count)
+}
+
+func TestCallLLMFailsBeforeProviderWhenBackgroundSnapshotPersistenceFails(t *testing.T) {
+	store := &mockSessionStore{insertErr: errors.New("disk full")}
+	agent := newTestAgent()
+	agent.ms = newMessageStore(store, 1, nil)
+	agent.activeBackgroundSnapshot = "\n\n# Active background work\nprocess bgp_1"
+	client := &loopScriptLLM{responses: []*llmwire.Response{textResponse("must not run")}}
+	agent.llmClient = client
+	runner := &loopRunner{agent: agent, result: &loopResult{}, log: zap.NewNop()}
+
+	err := runner.callLLM(t.Context())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "record active background snapshot")
+	assert.Zero(t, client.calls)
+	assert.Empty(t, agent.ms.getMessages())
+	assert.False(t, runner.backgroundInserted)
+}
+
 func TestAssistantOutput_DirectReplyPrecedesReplaceableProgress(t *testing.T) {
 	tests := []struct {
 		name         string
 		response     *llmwire.Response
 		enabled      bool
 		replyToInput bool
+		directReply  bool
 		wantType     sessionstore.OutputType
 		wantOutput   string
 	}{
@@ -345,8 +447,13 @@ func TestAssistantOutput_DirectReplyPrecedesReplaceableProgress(t *testing.T) {
 		{
 			name: "direct reply with tool", response: &llmwire.Response{
 				Text: "stopping the mutation run", ToolCalls: []llmwire.ToolCall{call("reply", "bash")},
-			}, enabled: true, replyToInput: true,
+			}, enabled: true, replyToInput: true, directReply: true,
 			wantType: sessionstore.OutputMessagePersistent, wantOutput: "stopping the mutation run",
+		},
+		{
+			name: "later manager progress narration", response: &llmwire.Response{
+				Text: "still working", ToolCalls: []llmwire.ToolCall{call("later", "read")},
+			}, enabled: true, replyToInput: true,
 		},
 		{
 			name: "asynchronous terminal progress", response: textResponse("done"), enabled: true,
@@ -363,11 +470,60 @@ func TestAssistantOutput_DirectReplyPrecedesReplaceableProgress(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			outputType, output := assistantOutput(tc.response, tc.enabled, tc.replyToInput)
+			outputType, output := assistantOutput(tc.response, tc.enabled, tc.replyToInput, tc.directReply)
 			assert.Equal(t, tc.wantType, outputType)
 			assert.Equal(t, tc.wantOutput, output)
 		})
 	}
+}
+
+func TestRecordIterationBudgetedConsumesDirectReplyButKeepsTerminalObligation(t *testing.T) {
+	agent := newTestAgent()
+	agent.outputEnabled = true
+	gate := &classificationBudgetGate{}
+	agent.budgetGate = gate
+	runner := &loopRunner{
+		agent: agent, result: &loopResult{}, log: zap.NewNop(),
+		replyToInput: true, directReplyEligible: true,
+	}
+
+	responses := []*llmwire.Response{
+		{Text: "first", ToolCalls: []llmwire.ToolCall{call("one", "read")}, FinishType: llmwire.FinishToolCalls},
+		{Text: "second", ToolCalls: []llmwire.ToolCall{call("two", "read")}, FinishType: llmwire.FinishToolCalls},
+		textResponse("done"),
+	}
+	for _, response := range responses {
+		runner.lastResp = response
+		require.NoError(t, runner.recordIteration(t.Context()))
+	}
+
+	assert.Equal(t, []sessionstore.OutputType{sessionstore.OutputMessagePersistent, "", ""}, gate.types)
+	assert.Equal(t, []string{"first", "", ""}, gate.contents)
+	assert.Equal(t, []bool{false, false, true}, gate.releases)
+	assert.False(t, runner.replyToInput)
+	assert.False(t, runner.directReplyEligible)
+}
+
+func TestRecordIterationRejectedResponseConsumesDirectReplyEligibility(t *testing.T) {
+	agent := newTestAgent()
+	agent.budgetGate = &classificationBudgetGate{}
+	runner := &loopRunner{
+		agent: agent, result: &loopResult{}, log: zap.NewNop(),
+		replyToInput: true, directReplyEligible: true,
+		lastResp: &llmwire.Response{Text: "truncated", FinishType: llmwire.FinishLength},
+	}
+
+	require.NoError(t, runner.recordIteration(t.Context()))
+	assert.True(t, runner.replyToInput)
+	assert.False(t, runner.directReplyEligible)
+
+	runner.lastResp = &llmwire.Response{
+		Text: "recovering", ToolCalls: []llmwire.ToolCall{call("recover", "read")},
+		FinishType: llmwire.FinishToolCalls,
+	}
+	require.NoError(t, runner.recordIteration(t.Context()))
+	assert.True(t, runner.replyToInput)
+	assert.False(t, runner.publishedReply)
 }
 
 // TestRunLoopStopsExactlyAtHardCeiling pins the only loop termination cap: the

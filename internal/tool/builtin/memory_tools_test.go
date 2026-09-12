@@ -88,11 +88,9 @@ func TestMemoryDeleteRefusesForeignProjectAgainstRealStore(t *testing.T) {
 	raw, err := json.Marshal(memoryDeleteParams{ID: idB})
 	require.NoError(t, err)
 
-	changed := 0
-	_, err = NewMemoryDeleteTool(store, pidA, func(context.Context) { changed++ }).Execute(context.Background(), raw)
+	_, err = NewMemoryDeleteTool(store, pidA).Execute(context.Background(), raw)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "not found")
-	assert.Zero(t, changed, "a refused delete must not refresh the prompt")
 
 	remaining, err := store.ListMemories(context.Background(), pidB)
 	require.NoError(t, err)
@@ -118,7 +116,7 @@ func TestMemorySaveTextLengthBoundary(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			store := &fakeCuratedStore{saveID: 7}
-			saveTool := NewMemorySaveTool(store, 1, nil)
+			saveTool := NewMemorySaveTool(store, 1)
 
 			raw, err := json.Marshal(memorySaveParams{Text: strings.Repeat("m", tt.length)})
 			require.NoError(t, err)
@@ -152,15 +150,13 @@ func TestMemorySaveCountBoundary(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			store := &fakeCuratedStore{count: tt.count, saveID: 3}
 
-			changed := 0
-			saveTool := NewMemorySaveTool(store, 1, func(context.Context) { changed++ })
+			saveTool := NewMemorySaveTool(store, 1)
 
 			result, err := saveTool.Execute(context.Background(), json.RawMessage(`{"text":"note"}`))
 			require.NoError(t, err)
 
 			assert.Contains(t, result.Output, tt.wantText)
 			assert.Equal(t, tt.wantSaved, len(store.saved) == 1)
-			assert.Equal(t, tt.wantSaved, changed == 1, "the prompt refresh must follow a real save")
 		})
 	}
 }
@@ -190,7 +186,7 @@ func TestMemorySaveSurfacesStoreErrors(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := NewMemorySaveTool(tt.store, 1, nil).Execute(context.Background(), json.RawMessage(tt.raw))
+			_, err := NewMemorySaveTool(tt.store, 1).Execute(context.Background(), json.RawMessage(tt.raw))
 			require.Error(t, err)
 			assert.Contains(t, err.Error(), tt.wantErr)
 		})
@@ -200,19 +196,17 @@ func TestMemorySaveSurfacesStoreErrors(t *testing.T) {
 func TestMemoryDeleteListsRemaining(t *testing.T) {
 	store := &fakeCuratedStore{remaining: []memory.MemoryEntry{{ID: 2, Text: "kept"}}}
 
-	changed := 0
-	result, err := NewMemoryDeleteTool(store, 42, func(context.Context) { changed++ }).
+	result, err := NewMemoryDeleteTool(store, 42).
 		Execute(context.Background(), json.RawMessage(`{"id":5}`))
 	require.NoError(t, err)
 
 	assert.Equal(t, []int64{5}, store.deleted)
 	assert.Equal(t, []int64{42}, store.deletedScopes, "the delete must carry the session's project scope")
-	assert.Equal(t, 1, changed)
 	assert.Equal(t, "Deleted memory 5. Remaining memories (1):\n- [2] kept\n", result.Output)
 }
 
 func TestMemoryDeleteReportsEmptyRemainder(t *testing.T) {
-	result, err := NewMemoryDeleteTool(&fakeCuratedStore{}, 1, nil).
+	result, err := NewMemoryDeleteTool(&fakeCuratedStore{}, 1).
 		Execute(context.Background(), json.RawMessage(`{"id":5}`))
 	require.NoError(t, err)
 
@@ -222,7 +216,7 @@ func TestMemoryDeleteReportsEmptyRemainder(t *testing.T) {
 func TestMemoryDeleteReportsListFailureWithoutFailingTheDelete(t *testing.T) {
 	store := &fakeCuratedStore{listErr: errors.New("db down")}
 
-	result, err := NewMemoryDeleteTool(store, 1, nil).
+	result, err := NewMemoryDeleteTool(store, 1).
 		Execute(context.Background(), json.RawMessage(`{"id":5}`))
 	require.NoError(t, err)
 
@@ -249,7 +243,7 @@ func TestMemoryDeleteSurfacesErrors(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := NewMemoryDeleteTool(tt.store, 1, nil).Execute(context.Background(), json.RawMessage(tt.raw))
+			_, err := NewMemoryDeleteTool(tt.store, 1).Execute(context.Background(), json.RawMessage(tt.raw))
 			require.Error(t, err)
 			assert.Contains(t, err.Error(), tt.wantErr)
 		})

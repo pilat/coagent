@@ -96,8 +96,8 @@ type Service interface {
 }
 
 // ActiveSubagentInfo summarizes one of a session's in-flight children for the
-// pinned active-background prompt section. The daemon (owner of the subagent
-// ledger) pushes these at session create/resume.
+// activation-start context snapshot. The daemon (owner of the subagent ledger)
+// pushes these at session create/resume.
 type ActiveSubagentInfo struct {
 	ChildID  int64
 	Blocking bool
@@ -166,9 +166,10 @@ type svc struct {
 	// for (call id → tool name). Loop-read only; set once at construction.
 	stagedCalls map[string]string
 	// Reads the daemon's background ledgers live; nil outside a daemon.
-	activeSubagentsProvider func(context.Context) []ActiveSubagentInfo
-	activeProcessesProvider func(context.Context) []ActiveProcessInfo
-	onIterationPersisted    func(context.Context, int)
+	activeSubagentsProvider  func(context.Context) []ActiveSubagentInfo
+	activeProcessesProvider  func(context.Context) []ActiveProcessInfo
+	activeBackgroundSnapshot string
+	onIterationPersisted     func(context.Context, int)
 	// Under modelMu with the model triplet: a measurement describes one model's
 	// window and tokenizer. nil baseline = nothing measured.
 	baseline   *contextBaseline
@@ -219,7 +220,7 @@ type options struct {
 	PreserveStopped bool
 
 	// ActiveSubagents is the daemon-pushed set of this session's in-flight
-	// children, rendered into the pinned active-background prompt section.
+	// children, rendered into activation-start context.
 	ActiveSubagents []ActiveSubagentInfo
 	ActiveProcesses []ActiveProcessInfo
 
@@ -263,9 +264,12 @@ func newWithOptions(ctx context.Context, p params, opts options) (Service, error
 		return nil, fmt.Errorf("unknown agent type: %s", agentType)
 	}
 
-	var agentsMD string
+	var openingContext string
 	if !agentConfig.OmitProjectContext {
-		agentsMD = loadProjectInstructions(ctx, p, workDir)
+		openingContext = loadProjectInstructions(ctx, p, workDir)
+		if p.MemoryStore != nil && opts.ProjectID != 0 {
+			openingContext += buildMemoriesSection(ctx, p.MemoryStore, opts.ProjectID)
+		}
 
 		// Injected before the prompt is built: a skill registered after the skills
 		// section is rendered is one the model never learns exists.
@@ -274,9 +278,9 @@ func newWithOptions(ctx context.Context, p params, opts options) (Service, error
 		}
 	}
 
-	session := newSession(p, opts, workDir, agentConfig, agentsMD)
+	session := newSession(p, opts, workDir, agentConfig, openingContext)
 	session.agentTypes = set
-	session.prompt = buildPrompt(ctx, p, opts, workDir, agentConfig)
+	session.prompt = buildPrompt(p, opts, workDir, agentConfig)
 	// The native-search bit must precede setupRegistry: the tools section it
 	// builds reports search guidance for the active client.
 	session.prompt.setNativeSearch(p.Config.UnifiedConfig.SearchNativeActive(p.Config.Model))
@@ -286,10 +290,10 @@ func newWithOptions(ctx context.Context, p params, opts options) (Service, error
 		return nil, err
 	}
 
-	session.prompt.setActiveBackgroundSection(buildActiveBackgroundSection(
+	session.activeBackgroundSnapshot = buildActiveBackgroundSection(
 		opts.ActiveProcesses,
 		opts.ActiveSubagents,
-	))
+	)
 
 	if opts.ReasoningLevel != "" {
 		session.reasoningLevel = opts.ReasoningLevel
@@ -423,8 +427,8 @@ func (s *svc) ResetContextAndInjectOnce(
 		)
 	}
 
-	// The opening turn is the same one a brand-new session starts from: AGENTS.md
-	// header (the fresh systemPrompt already carries curated memory) plus the task.
+	// The opening turn is the same one a brand-new session starts from: frozen
+	// project context plus the exact task protected from lossy compaction.
 	opening := s.openingTurn(prompt)
 	fingerprint := deliveryFingerprint("context_reset", s.agentsMD, prompt)
 
@@ -496,7 +500,6 @@ func (s *svc) RequestCompaction() {
 // buildPrompt assembles the promptBuilder for a session before tool registration.
 // Registry-derived sections stay empty until refreshRegistrySections runs.
 func buildPrompt(
-	ctx context.Context,
 	p params,
 	opts options,
 	workDir string,
@@ -504,26 +507,19 @@ func buildPrompt(
 ) *promptBuilder {
 	basePrompt := agentConfig.Prompt +
 		fmt.Sprintf(
-			"\n\n# Environment\n- Working directory: %s\n- Platform: %s/%s\n- Date: %s\n- Timezone: %s\n- Each user message is prefixed with `[+elapsed DOW YYYY-MM-DD HH:MM]` showing time since last activity and current timestamp. Use this for temporal reasoning.",
+			"\n\n# Environment\n- Working directory: %s\n- Platform: %s/%s\n- Timestamped user input is prefixed with `[+elapsed DOW YYYY-MM-DD HH:MM ZONE ±HH:MM]`, where `+elapsed` is optional. Use it for temporal reasoning.",
 			workDir,
 			runtime.GOOS,
 			runtime.GOARCH,
-			time.Now().Format("2006-01-02 (Mon)"),
-			localTimezone(),
 		)
 
-	var memoriesSection, modelsSection string
-	if !agentConfig.OmitProjectContext && p.MemoryStore != nil && opts.ProjectID != 0 {
-		memoriesSection = buildMemoriesSection(ctx, p.MemoryStore, opts.ProjectID)
-	}
-
+	var modelsSection string
 	if !agentConfig.OmitProjectContext {
 		modelsSection = buildModelsSection(p.Config.Model)
 	}
 
 	return newPromptBuilder(
 		basePrompt,
-		memoriesSection,
 		modelsSection,
 		activeProjectSkills(opts.ExtraSkills, agentConfig)...,
 	)

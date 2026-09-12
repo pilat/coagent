@@ -27,7 +27,7 @@ func (t *timestamper) touch() {
 	t.lastActivity = t.now()
 }
 
-// stamp prefixes msg with "[+elapsed DOW YYYY-MM-DD HH:MM]".
+// stamp prefixes msg with "[+elapsed DOW YYYY-MM-DD HH:MM ZONE ±HH:MM]".
 // Empty messages pass through unchanged without advancing the clock.
 func (t *timestamper) stamp(msg string) string {
 	return t.stampAt(msg, t.now())
@@ -44,11 +44,11 @@ func (t *timestamper) stampAt(msg string, now time.Time) string {
 
 	if t.lastActivity.IsZero() {
 		// First message in session — no elapsed.
-		prefix = fmt.Sprintf("[%s]", now.Format("Mon 2006-01-02 15:04"))
+		prefix = fmt.Sprintf("[%s]", now.Format("Mon 2006-01-02 15:04 MST -07:00"))
 	} else {
 		elapsed := max(now.Sub(t.lastActivity), 0)
 
-		prefix = fmt.Sprintf("[%s %s]", formatElapsed(elapsed), now.Format("Mon 2006-01-02 15:04"))
+		prefix = fmt.Sprintf("[%s %s]", formatElapsed(elapsed), now.Format("Mon 2006-01-02 15:04 MST -07:00"))
 	}
 
 	if now.After(t.lastActivity) {
@@ -56,21 +56,6 @@ func (t *timestamper) stampAt(msg string, now time.Time) string {
 	}
 
 	return prefix + " " + msg
-}
-
-// localTimezone returns the local timezone name. Falls back to the abbreviation
-// (e.g., "CET", "UTC") when Location().String() returns "Local" (common in containers).
-func localTimezone() string {
-	now := time.Now()
-
-	loc := now.Location().String()
-	if loc != "Local" {
-		return loc
-	}
-
-	abbrev, _ := now.Zone()
-
-	return abbrev
 }
 
 // formatElapsed formats a duration as a compound human-readable string:

@@ -102,8 +102,15 @@ func TestHarnessScenario_SystemPromptMatchesTheDaemonRegisteredToolset(t *testin
 
 func TestHarnessScenario_ActiveProcessPromptAndSleepGuard(t *testing.T) {
 	prompts := newPromptRecorder()
+	var requestMessages []llmwire.Message
+	var requestMu sync.Mutex
 	respond := func(system string, messages []llmwire.Message) *llmwire.Response {
 		prompts.record("root", system)
+		requestMu.Lock()
+		if requestMessages == nil {
+			requestMessages = append([]llmwire.Message(nil), messages...)
+		}
+		requestMu.Unlock()
 		if hasToolResultFor(messages, tool.IDSleep) {
 			return &llmwire.Response{Text: "background process polling rejected"}
 		}
@@ -145,9 +152,13 @@ func TestHarnessScenario_ActiveProcessPromptAndSleepGuard(t *testing.T) {
 	require.NoError(t, err)
 
 	prompt := prompts.first(t, "root")
-	assert.Contains(t, prompt, "# Active background work")
-	assert.Contains(t, prompt, "process bgp_prompt_guard (running)")
-	assert.Contains(t, prompt, "Snapshot from activation start")
+	assert.NotContains(t, prompt, "# Active background work")
+	requestMu.Lock()
+	firstRequest := append([]llmwire.Message(nil), requestMessages...)
+	requestMu.Unlock()
+	require.Equal(t, 1, countMessageContentContaining(firstRequest, "# Active background work"))
+	assert.True(t, hasUserContaining(firstRequest, "process bgp_prompt_guard (running)"))
+	assert.True(t, hasUserContaining(firstRequest, "Snapshot from activation start"))
 
 	messages := h.parentMessages(root.ID)
 	require.Equal(t, 1, countToolResultsFor(messages, tool.IDSleep))
@@ -158,4 +169,30 @@ func TestHarnessScenario_ActiveProcessPromptAndSleepGuard(t *testing.T) {
 	schedules, err := h.schedStore.ListSchedules(h.ctx, root.ID)
 	require.NoError(t, err)
 	assert.Empty(t, schedules)
+}
+
+func TestHarnessScenario_EmptyActiveBackgroundAddsNoProviderRow(t *testing.T) {
+	var requestMessages []llmwire.Message
+	var requestMu sync.Mutex
+	respond := func(system string, messages []llmwire.Message) *llmwire.Response {
+		assert.NotContains(t, system, "# Active background work")
+		requestMu.Lock()
+		requestMessages = append([]llmwire.Message(nil), messages...)
+		requestMu.Unlock()
+
+		return &llmwire.Response{Text: "done"}
+	}
+
+	h := newSubagentHarnessWith(t, respond)
+	defer h.shutdown()
+
+	root, err := h.mgr.Send(h.ctx, h.projectID, "ordinary task", "fake-model", nil)
+	require.NoError(t, err)
+	h.mgr.waitIdle(root)
+
+	requestMu.Lock()
+	recorded := append([]llmwire.Message(nil), requestMessages...)
+	requestMu.Unlock()
+	require.NotEmpty(t, recorded)
+	assert.Zero(t, countMessageContentContaining(recorded, "# Active background work"))
 }

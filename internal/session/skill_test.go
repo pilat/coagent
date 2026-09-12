@@ -97,7 +97,7 @@ func TestSetupRegistrySkillToolUsesSessionLoader(t *testing.T) {
 	s := &svc{
 		agentTypes: agentTypes,
 		loader:     ldr,
-		prompt:     newPromptBuilder("base", "", ""),
+		prompt:     newPromptBuilder("base", ""),
 	}
 	s.setupRegistry(params{Registry: incomingRegistry, Loader: ldr}, agentConfig)
 

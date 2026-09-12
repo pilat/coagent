@@ -124,11 +124,8 @@ func modelConfigured(models []config.ModelEntry, model string) bool {
 func registerSessionTools(session *svc) {
 	// Curated memory tools (memory_save / memory_delete).
 	if session.projectID != 0 && session.memoryStore != nil {
-		refreshFn := func(ctx context.Context) {
-			session.prompt.refreshMemories(ctx, session.memoryStore, session.projectID)
-		}
-		session.RegisterGatedTool(builtin.NewMemorySaveTool(session.memoryStore, session.projectID, refreshFn))
-		session.RegisterGatedTool(builtin.NewMemoryDeleteTool(session.memoryStore, session.projectID, refreshFn))
+		session.RegisterGatedTool(builtin.NewMemorySaveTool(session.memoryStore, session.projectID))
+		session.RegisterGatedTool(builtin.NewMemoryDeleteTool(session.memoryStore, session.projectID))
 	}
 
 	// Subagent tools (task / get_subagent_result / send_to_subagent) are
