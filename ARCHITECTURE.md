@@ -355,17 +355,22 @@ changed message onward; authority fields never enter provider or compaction wire
 
 Compaction is the sole automatic response to context pressure. At one safe loop
 point, when no tool call is pending, it summarizes a bounded older head through
-one no-tools model call over the repaired canonical JSONL projection — full tool
-evidence, never placeholders — and commits the checkpoint as one atomic
-positioned replacement: header → marked summary → optional current-skill
-envelope → verbatim raw tail. The complete summarizer request stays within half
-the context window; a repair-free verbatim tail survives when that much history
-exists — at least a tenth of the window, possibly shorter when the tail's image
-byte and count ceilings (half the trigger marks) demand it, never empty. There
-is no continuous pruning ladder and no clearing stage. Manual compaction
-requests raise the same event; a request behind non-sleep external work waits
-in the durable inbox. A failed, empty, non-relieving or length-stopped attempt
-leaves the active transcript untouched.
+one no-tools model call over the native repaired conversation prefix — full tool
+evidence, never placeholders — replayed as ordinary messages with the ordinary
+system prompt, schemas and tool choice, plus one final checkpoint instruction,
+and commits the checkpoint as one atomic positioned replacement: header →
+marked summary → optional current-skill envelope → verbatim raw tail. The
+complete summarizer request targets half the context window, repeating the
+search under the ordinary 85% input ceiling only when no legal candidate fits;
+a repair-free verbatim tail survives when that much history exists — at least a
+tenth of the window, possibly shorter when the tail's image byte and count
+ceilings (half the trigger marks) demand it, never empty. Repeated compaction
+replays the then-current prefix from the transcript beginning, prior marked
+summary included. There is no continuous pruning ladder and no clearing stage.
+Manual compaction requests raise the same event; a request behind non-sleep
+external work waits in the durable inbox. A failed, empty, non-relieving or
+length-stopped attempt leaves the active transcript untouched; a summarizer
+tool-call answer gets one in-role tools-unavailable nudge and a single retry.
 
 The trigger combines the provider's last reported prompt tokens with an
 estimate of appended content, and image pressure: attachments totalling over

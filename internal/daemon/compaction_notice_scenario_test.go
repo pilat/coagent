@@ -1,7 +1,6 @@
 package daemon
 
 import (
-	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -52,7 +51,7 @@ func compactionNotices(events []controllerapi.SessionNotification, sessionID int
 // a compactable transcript needs two raw groups), and answers everything else
 // with plain text.
 func compactOnlyRespond(_ string, msgs []llmwire.Message) *llmwire.Response {
-	if len(msgs) == 1 && strings.Contains(msgs[0].Content, "HISTORY TO SUMMARIZE") {
+	if isCompactionInstruction(msgs) {
 		return &llmwire.Response{
 			Text: "## Goal\nsome work\n## Progress\n- done\n## Context for Continuation\ncarry on",
 		}

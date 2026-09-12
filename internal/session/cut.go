@@ -7,6 +7,7 @@ import (
 
 	"github.com/pilat/coagent/internal/llm"
 	"github.com/pilat/coagent/internal/llmwire"
+	"github.com/pilat/coagent/internal/tool"
 )
 
 // rawCutLegal requires the repaired projection field-equal to the raw suffix
@@ -87,14 +88,19 @@ func validateRawGrouping(messages []llmwire.Message) error {
 }
 
 // summarizerBaseEstimateLocked estimates everything the summarizer request
-// carries besides the canonical head: system prompt, instruction, focus, header
-// reference and previous summary. Every byte participates in the 50% bound.
-func (s *svc) summarizerBaseEstimateLocked(headerJSONL, prevSummary string) int {
-	base := s.prompt.systemPrompt() +
-		buildSummarizerPrompt(headerJSONL, prevSummary, "", s.focusSection()) +
-		historySectionHeader()
+// carries besides the replayed transcript prefix: system prompt, final
+// instruction, focus and the active tool schemas. Every byte participates in
+// the request bound.
+func (s *svc) summarizerBaseEstimateLocked() int {
+	schemas := tool.ToSchemas(s.registry.List())
+	if s.loopDetector.forceTextOnly {
+		schemas = nil
+	}
 
-	return estimateText(base)
+	base := s.prompt.systemPrompt() +
+		compactionInstructionMessage(s.focusSection()).Content
+
+	return estimateText(base) + estimateSchemas(schemas)
 }
 
 // tailLimit stages the tail constraints: the token floor with both low-water
@@ -117,8 +123,13 @@ func minTailTokens(messages []llmwire.Message, base, window int) int {
 	return min(window/10, estimateTokens(messages[base:])/2)
 }
 
-// selectCheckpointSplit picks the maximal oldest raw prefix fitting half the
-// window while the verbatim tail keeps the minimum tail estimate. The request
+// compactionRequestFraction is the normal share of the window the complete
+// summarizer request targets.
+const compactionRequestFraction = 0.5
+
+// selectCheckpointSplit picks the maximal oldest raw prefix whose repaired
+// native projection plus instruction and schemas fits the request bound,
+// while the verbatim tail keeps the minimum tail estimate. The request
 // estimate is not monotone in the split — a repair stub can exceed the real
 // result it replaces — so every candidate is measured exactly.
 func selectCheckpointSplit(
@@ -134,44 +145,61 @@ func selectCheckpointSplit(
 
 	minTail := minTailTokens(messages, base, window)
 
-	for _, limit := range tailLevels() {
-		if split, ok := selectTailSplit(messages, base, minTail, requestBaseEstimate, window, limit); ok {
-			return split, true
+	// The 50% target is soft: the fallback rerun under the ordinary 85% input
+	// ceiling keeps mandatory request input from failing an otherwise legal cut.
+	for _, fraction := range []float64{compactionRequestFraction, llmwire.ContextInputFraction} {
+		for _, limit := range tailLevels() {
+			args := selectTailSplitArgs{
+				messages: messages, base: base, minTail: minTail,
+				requestBaseEstimate: requestBaseEstimate, window: window, limit: limit, inputFraction: fraction,
+			}
+			if split, ok := selectTailSplit(args); ok {
+				return split, true
+			}
 		}
 	}
 
 	return 0, false
 }
 
+// selectTailSplitArgs carries one split-search walk's inputs; the parameter
+// set outgrew a readable positional call at both call sites.
+type selectTailSplitArgs struct {
+	messages            []llmwire.Message
+	base                int
+	minTail             int
+	requestBaseEstimate int
+	window              int
+	limit               tailLimit
+	inputFraction       float64
+}
+
 // selectTailSplit scans from the largest head down, returning the first
 // candidate whose tail satisfies the staged limits, is a legal raw cut, and
-// whose head fits the summarizer window. The loop starts at len-1, not len:
-// the split never summarizes the whole raw range.
-func selectTailSplit(
-	messages []llmwire.Message,
-	base, minTail, requestBaseEstimate, window int,
-	limit tailLimit,
-) (int, bool) {
-	for split := len(messages) - 1; split > base; split-- {
-		if limit.floor && estimateTokens(messages[split:]) < minTail {
+// whose native prefix plus instruction fits the bound. The loop starts at
+// len-1, not len: the split never summarizes the whole raw range.
+func selectTailSplit(args selectTailSplitArgs) (int, bool) {
+	bound := int(args.inputFraction * float64(args.window))
+
+	for split := len(args.messages) - 1; split > args.base; split-- {
+		if args.limit.floor && estimateTokens(args.messages[split:]) < args.minTail {
 			continue
 		}
 
-		if limit.ceilings {
+		if args.limit.ceilings {
 			if totalBytes, count := imagePressure(
-				messages[split:],
+				args.messages[split:],
 			); totalBytes > imageBytesLowWater ||
 				count > imageCountLowWater {
 				continue
 			}
 		}
 
-		if !rawCutLegal(messages[split:]) {
+		if !rawCutLegal(args.messages[split:]) {
 			continue
 		}
 
-		serialized, err := serializeCanonical(repairTranscript(messages[base:split]))
-		if err != nil || requestBaseEstimate+estimateText(serialized) > window/2 {
+		if args.requestBaseEstimate+estimateTokens(repairTranscript(args.messages[:split])) > bound {
 			continue
 		}
 

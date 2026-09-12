@@ -217,17 +217,18 @@ func (s *svc) hasCompactionCandidate(window int) bool {
 		return false
 	}
 
-	headerJSONL, err := serializeCanonical(s.ms.messages[:headerSize])
-	if err != nil {
-		return false
-	}
-
-	baseEstimate := s.summarizerBaseEstimateLocked(headerJSONL, cp.prevSummary)
+	baseEstimate := s.summarizerBaseEstimateLocked()
 	minTail := minTailTokens(s.ms.messages, cp.rawStart, window)
 
-	for _, limit := range tailLevels() {
-		if _, ok := selectTailSplit(s.ms.messages, cp.rawStart, minTail, baseEstimate, window, limit); ok {
-			return true
+	for _, fraction := range []float64{compactionRequestFraction, llmwire.ContextInputFraction} {
+		for _, limit := range tailLevels() {
+			args := selectTailSplitArgs{
+				messages: s.ms.messages, base: cp.rawStart, minTail: minTail,
+				requestBaseEstimate: baseEstimate, window: window, limit: limit, inputFraction: fraction,
+			}
+			if _, ok := selectTailSplit(args); ok {
+				return true
+			}
 		}
 	}
 

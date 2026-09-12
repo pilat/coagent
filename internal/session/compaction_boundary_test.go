@@ -84,9 +84,10 @@ func TestSecondCompactionRightAfterOneFindsNothing(t *testing.T) {
 	assert.Equal(t, 1, llm.callCount, "no second summarization request")
 }
 
-// A repeated checkpoint feeds the previous summary as the anchor and only the
-// delta as HISTORY TO SUMMARIZE.
-func TestSecondCheckpointAnchorsOnThePreviousSummaryAndSendsOnlyTheDelta(t *testing.T) {
+// A repeated checkpoint replays the then-current prefix from the beginning:
+// the complete previous marked summary and the former-tail rows that have aged
+// above the split ride along; there is no separate anchor or delta request.
+func TestSecondCheckpointReplaysTheNativePrefixFromTheStart(t *testing.T) {
 	window := 1 << 20
 
 	llm := &compactionMockLLM{
@@ -117,11 +118,25 @@ func TestSecondCheckpointAnchorsOnThePreviousSummaryAndSendsOnlyTheDelta(t *test
 	require.True(t, compacted)
 	require.Equal(t, 2, llm.callCount)
 
-	prompt := llm.prompts[1]
-	assert.Contains(t, prompt, summarizePrevSection, "the previous marked summary is the anchor")
-	assert.Contains(t, prompt, validSummary, "the extracted model text anchors, not the wrapper")
-	assert.Contains(t, prompt, "recent work", "the delta is the raw group that left the tail")
-	assert.NotContains(t, prompt, "NEWLY-AGED", "the newest group stays verbatim in the non-empty tail")
+	// The second call is a fresh projection of the whole current transcript
+	// (loaded rows plus the instruction): prior summary included, newest group
+	// still in the tail.
+	input := llm.lastMessages
+	require.NotEmpty(t, input)
+
+	assert.True(t, isMarkedSummary(input[2].Content), "the previous marked summary is replayed as its row")
+	assert.Contains(t, input[2].Content, validSummary)
+	assert.Contains(t, transcriptText(input), "recent work", "former-tail rows above the split ride along")
+	assert.NotContains(t, transcriptText(input), "NEWLY-AGED", "the newest group stays verbatim in the non-empty tail")
+
+	for _, m := range input {
+		assert.NotContains(t, m.Content, "HISTORY TO SUMMARIZE", "no canonical JSONL sections remain")
+		assert.NotContains(t, m.Content, "PREVIOUS SUMMARY")
+	}
+
+	last := input[len(input)-1]
+	assert.Equal(t, llmwire.RoleUser, last.Role)
+	assert.Contains(t, last.Content, "continuation checkpoint", "the instruction is final")
 }
 
 func TestParseCheckpointPrefix(t *testing.T) {

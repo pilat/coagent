@@ -199,10 +199,9 @@ func TestRejectedAttemptIsAbsentFromReloadedCompactionInput(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, ms.reloadMessages(t.Context()))
 
-	serialized, err := serializeCanonical(ms.getMessages())
-	require.NoError(t, err)
-	assert.NotContains(t, serialized, "rejected compaction text")
-	assert.Contains(t, serialized, sessionstore.OutputLengthRecoveryPrompt)
+	active := ms.getMessages()
+	assert.NotContains(t, transcriptText(active), "rejected compaction text")
+	assert.Contains(t, transcriptText(active), sessionstore.OutputLengthRecoveryPrompt)
 }
 
 type integrityRow struct {

@@ -126,8 +126,9 @@ func TestTwentySuccessiveCompactionsKeepTheCurrentEnvelopeExactlyOnce(t *testing
 }
 
 // A current skill whose activation falls inside the head is reattached
-// byte-identically between the summary and the tail, and its activation rows
-// are excluded from the summarizer input.
+// byte-identically between the summary and the tail; the summarizer input may
+// carry the ordinary activation rows, but the committed transcript keeps
+// exactly one byte-identical envelope.
 func TestCurrentSkillInHeadIsReattachedByteIdentically(t *testing.T) {
 	const window = 200000
 
@@ -159,14 +160,15 @@ func TestCurrentSkillInHeadIsReattachedByteIdentically(t *testing.T) {
 	assert.Equal(t, llmwire.RoleUser, skills[0].Role)
 	assert.Equal(t, rendered.Content, skills[0].Content)
 
-	// The summarized history must not contain the skill body.
-	require.Len(t, llm.prompts, 1)
-	assert.NotContains(t, llm.prompts[0], "Review carefully.",
-		"the current envelope is reattached verbatim, never summarized")
+	// The replayed input is the ordinary repaired prefix plus the final
+	// instruction; the committed transcript, not the summarizer request, owns
+	// the single envelope.
+	require.Len(t, llm.lastMessages, 7)
 }
 
-// A latest skill invoked alongside other calls keeps those remaining calls as
-// valid pairs; only the skill call/result is omitted from the projection.
+// A latest skill invoked alongside other calls keeps the committed transcript
+// provider-valid and exactly one envelope: the ordinary repaired projection is
+// committed as-is, so sibling calls of a mixed response stay valid pairs.
 func TestMixedAssistantResponseKeepsSiblingCallsValid(t *testing.T) {
 	window := 200000
 
@@ -192,10 +194,6 @@ func TestMixedAssistantResponseKeepsSiblingCallsValid(t *testing.T) {
 		compactionToolResult("work-call", "body"),
 		compactionAssistantCall("c1", "later"),
 		compactionToolResult("c1", "later result"),
-	}
-	msgs[3] = llmwire.Message{
-		Role: llmwire.RoleTool, ToolCallID: "skill-call", ToolName: "skill",
-		Content: "[review]\n" + rendered.Content,
 	}
 
 	s.ms.setMessages(msgs)

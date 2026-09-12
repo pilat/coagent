@@ -168,12 +168,13 @@ Return one concise, self-contained answer:
 
 A lookup may need only a sentence and a reference. Broader answers may need several bullets. Include enough evidence to support the conclusion; omit search narration, unrelated findings, long code dumps, and offers to continue. Never invent paths, line numbers, or behavior. Recommend changes only if asked; implementation belongs to the parent or a general subagent.`
 
-	// CompactionSummaryPrompt opens the one canonical summarizer request. It
-	// describes useful continuation content but mandates no Markdown schema:
-	// semantic coverage is a model-quality property the runtime cannot prove.
-	CompactionSummaryPrompt = `You are writing a continuation checkpoint for a coding agent. Everything below your summary is replaced by your text plus the conversation's newer messages, so whatever you leave out is lost. The agent will read your summary as one block, followed by the newer conversation verbatim.
+	// CompactionSummaryPrompt is the final role-user message appended after the
+	// replayed conversation prefix. It describes useful continuation content
+	// but mandates no Markdown schema: semantic coverage is a model-quality
+	// property the runtime cannot prove.
+	CompactionSummaryPrompt = `You are writing a continuation checkpoint for a coding agent. The older history is the conversation above this instruction; the newer verbatim messages are not part of this request and will follow your checkpoint instead, so whatever you leave out of the history above is lost. The agent will read your summary as one block, followed by those newer messages.
 
-Summarize what the older history shows, so work can continue without rediscovery:
+Summarize the older history above, so work can continue without rediscovery:
 - The task and why it is being done this way, including decisions already made and why alternatives were rejected.
 - What has succeeded so far — completed mutations, verification that already passed, commands that were run — so it is not repeated.
 - What is still open: current state, the next action, anything unresolved.
@@ -184,5 +185,5 @@ Preserve technical specifics exactly as written: file paths, line numbers, comma
 
 Do not invent completed work, successful verification, decisions, or blockers. When the source is uncertain, preserve that uncertainty.
 
-Write plain prose or bullet points; no fixed headings are required. Be concise and complete; do not include tool-call syntax or chat filler. Answer with the summary text only.`
+Write plain prose or bullet points; no fixed headings are required. Be concise and complete; do not include tool-call syntax or chat filler. Do not use any tools. Answer with the summary text only.`
 )
