@@ -122,7 +122,8 @@ func modelConfigured(models []config.ModelEntry, model string) bool {
 
 // registerSessionTools creates and registers tools that depend on the session.
 func registerSessionTools(session *svc) {
-	// Curated memory tools (memory_save / memory_delete).
+	// Curated memory tools (memory_save / memory_delete). No prompt refresh:
+	// the model just made the write, so it knows the state it produced.
 	if session.projectID != 0 && session.memoryStore != nil {
 		session.RegisterGatedTool(builtin.NewMemorySaveTool(session.memoryStore, session.projectID))
 		session.RegisterGatedTool(builtin.NewMemoryDeleteTool(session.memoryStore, session.projectID))

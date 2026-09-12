@@ -180,10 +180,11 @@ func TestSystemPromptExcludesVolatileOpeningAndBackgroundContext(t *testing.T) {
 		Registry:    tool.NewRegistry(),
 		MemoryStore: &stubMemoryStore{entries: []memory.MemoryEntry{{ID: 7, Text: "PROJECT MEMORY"}}},
 	}
-	service, err := newWithOptions(t.Context(), p, options{
+	opts := options{
 		ID: 1, ProjectID: 1,
 		ActiveProcesses: []ActiveProcessInfo{{ID: "bgp_1", OutputPath: "/tmp/output"}},
-	})
+	}
+	service, err := newWithOptions(t.Context(), p, opts)
 	require.NoError(t, err)
 
 	s := service.(*svc)
@@ -198,7 +199,7 @@ func TestSystemPromptExcludesVolatileOpeningAndBackgroundContext(t *testing.T) {
 	assert.True(t, strings.HasPrefix(opening[0].Content, agentsMDMessagePrefix))
 	assert.Contains(t, opening[0].Content, "PROJECT INSTRUCTIONS")
 	assert.Contains(t, opening[0].Content, "- [7] PROJECT MEMORY")
-	assert.Contains(t, s.activeBackgroundSnapshot, "process bgp_1")
+	assert.Contains(t, buildActiveBackgroundSection(opts.ActiveProcesses, nil), "process bgp_1")
 }
 
 func TestOpeningTurnRecognizesMemoryOnlyProjectContext(t *testing.T) {

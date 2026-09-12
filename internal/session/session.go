@@ -505,6 +505,8 @@ func buildPrompt(
 	workDir string,
 	agentConfig registry.AgentTypeConfig,
 ) *promptBuilder {
+	// No Date here: every user-message stamp carries the full date, so a frozen
+	// value would be stale and a live one would rebuild the system prompt.
 	basePrompt := agentConfig.Prompt +
 		fmt.Sprintf(
 			"\n\n# Environment\n- Working directory: %s\n- Platform: %s/%s\n- Timestamped user input is prefixed with `[+elapsed DOW YYYY-MM-DD HH:MM ZONE ±HH:MM]`, where `+elapsed` is optional. Use it for temporal reasoning.",

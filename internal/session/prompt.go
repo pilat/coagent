@@ -349,12 +349,18 @@ func (p *promptBuilder) setModelsSection(section string) {
 
 // buildMemoriesSection formats curated memories for persisted opening context.
 func buildMemoriesSection(ctx context.Context, store memory.CuratedStore, projectID int64) string {
+	if store == nil || projectID == 0 {
+		return ""
+	}
+
 	memories, err := store.ListMemoryTexts(ctx, projectID)
 	if err != nil || len(memories) == 0 {
 		return ""
 	}
 	var sb strings.Builder
-	sb.WriteString("\n\n# YOUR MEMORIES\nPer-project memories. Manage with memory_save / memory_delete.\n\n")
+	sb.WriteString(
+		"\n\n# YOUR MEMORIES\nPer-project memories, frozen at session start. New memory_save writes are already in this conversation.\n\n",
+	)
 
 	// The id is the only handle memory_delete accepts; without it the model guesses.
 	for _, m := range memories {
@@ -396,7 +402,9 @@ func buildSkillsSection(ldr loader.Registry) string {
 	return b.String()
 }
 
-// buildActiveBackgroundSection keeps live process and subagent context across compaction.
+// buildActiveBackgroundSection renders the activation-start background snapshot.
+// It rides in user-role content (activation start, compaction summary), never in
+// the system prompt: the ledgers behind it change between activations.
 func buildActiveBackgroundSection(processes []ActiveProcessInfo, links []ActiveSubagentInfo) string {
 	if len(processes) == 0 && len(links) == 0 {
 		return ""
