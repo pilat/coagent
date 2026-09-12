@@ -1,6 +1,6 @@
 # ADR-0035: Compaction summarizes a bounded head and retains a verbatim tail
 
-- **Status:** Accepted
+- **Status:** Superseded by [ADR-0056](0056-compaction-replays-the-native-bounded-prefix.md)
 - **Date:** 2026-08-29
 
 ## Context

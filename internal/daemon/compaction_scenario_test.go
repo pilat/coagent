@@ -15,6 +15,19 @@ import (
 
 const contextSummaryPrefix = "[CONTEXT SUMMARY"
 
+// isCompactionInstruction recognises the summarization call: a multi-message
+// request whose final message is the checkpoint instruction, not an ordinary
+// user turn.
+func isCompactionInstruction(msgs []llmwire.Message) bool {
+	if len(msgs) == 0 {
+		return false
+	}
+
+	last := msgs[len(msgs)-1]
+
+	return strings.Contains(last.Content, "continuation checkpoint")
+}
+
 // blockingCompactRespond drives a parent that settles one tool round, spawns
 // one blocking child (the newest group — it stays verbatim in the tail), and
 // answers with a compaction brief whenever it is handed a summarization prompt.
@@ -22,7 +35,7 @@ const contextSummaryPrefix = "[CONTEXT SUMMARY"
 // /compact needs a summarizable group besides the launch pair.
 func blockingCompactRespond(release <-chan struct{}) func(string, []llmwire.Message) *llmwire.Response {
 	return func(_ string, msgs []llmwire.Message) *llmwire.Response {
-		if len(msgs) == 1 && strings.Contains(msgs[0].Content, "HISTORY TO SUMMARIZE") {
+		if isCompactionInstruction(msgs) {
 			return &llmwire.Response{
 				Text: "## Goal\nspawn work\n## Progress\n- child ran\n## Context for Continuation\ncarry on",
 			}

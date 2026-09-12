@@ -14,10 +14,6 @@ import (
 const (
 	compactionMarkOpen  = "[CONTEXT SUMMARY of older history — lossy; later verbatim messages are newer and take precedence on conflict]"
 	compactionMarkClose = "[/CONTEXT SUMMARY]"
-
-	summarizeHeaderSection  = "IMMUTABLE HEADER REFERENCE"
-	summarizePrevSection    = "PREVIOUS SUMMARY"
-	summarizeHistorySection = "HISTORY TO SUMMARIZE"
 )
 
 // checkpointPrefix describes the scaffolding a previous successful compaction

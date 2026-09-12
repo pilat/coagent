@@ -81,7 +81,9 @@ func (s *svc) compact(ctx context.Context, commandInput *PendingInput) (bool, er
 		return false, errCompactionPendingCall
 	}
 
-	// Read the ledger before taking the transcript lock: the provider does IO.
+	// Read the ledger and snapshot the transcript before taking the transcript
+	// lock: the provider does IO, and repair reads ms.mu through
+	// pendingExternalCallIDs — calling it under the lock would deadlock.
 	background := s.activeBackgroundSection(ctx)
 
 	s.ms.mu.Lock()
@@ -98,6 +100,10 @@ func (s *svc) compactLocked(
 ) (bool, error) {
 	log := logger.Ctx(ctx).Named("session.compaction")
 
+	// The loop gate already refuses pending calls; the snapshot must match the
+	// ordinary request's repair, which excludes genuinely-pending external calls.
+	pendingExternal := s.pendingExternalCallIDsLocked(s.ms.messages)
+
 	headerSize := compactionHeaderSize(s.ms.messages)
 	if err := validateCompactionHeader(s.ms.messages[:headerSize]); err != nil {
 		return false, err
@@ -112,7 +118,7 @@ func (s *svc) compactLocked(
 
 	candIdx, candEnvelope := selectCurrentSkill(s.ms.messages, headerSize, cp.summaryRowIdx)
 
-	split, summaryMsg, err := s.buildCheckpointCandidate(ctx, cp, background, window)
+	split, summaryMsg, err := s.buildCheckpointCandidate(ctx, cp, background, pendingExternal, window)
 	if err != nil {
 		if errors.Is(err, errNothingToCompact) {
 			return false, nil
@@ -167,7 +173,7 @@ func (s *svc) logCompactionLocked(
 		zap.Int("after_messages", afterMessages),
 		zap.Int("summarized", summarized),
 		zap.Int("summary_len", len(summaryMsg.Content)),
-		zap.Bool("incremental", cp.summaryRowIdx >= 0),
+		zap.Bool("repeated", cp.summaryRowIdx >= 0),
 	)
 }
 
@@ -177,21 +183,15 @@ func (s *svc) buildCheckpointCandidate(
 	ctx context.Context,
 	cp checkpointPrefix,
 	background string,
+	pendingExternal map[string]bool,
 	window int,
 ) (int, llmwire.Message, error) {
-	headerRef, err := serializeCanonical(s.ms.messages[:compactionHeaderSize(s.ms.messages)])
-	if err != nil {
-		return 0, llmwire.Message{}, err
+	split, ok := selectCheckpointSplit(s.ms.messages, cp, s.summarizerBaseEstimateLocked(), window)
+	if !ok {
+		return 0, llmwire.Message{}, errNothingToCompact
 	}
 
-	baseEstimate := s.summarizerBaseEstimateLocked(headerRef, cp.prevSummary)
-
-	split, headJSONL, err := s.selectAndSerializeHeadLocked(cp, window, baseEstimate)
-	if err != nil {
-		return 0, llmwire.Message{}, err
-	}
-
-	summaryText, acc, err := s.summarizeCheckpoint(ctx, headerRef, cp.prevSummary, headJSONL, window)
+	summaryText, acc, err := s.summarizeCheckpoint(ctx, split, pendingExternal, window)
 	if err != nil {
 		return 0, llmwire.Message{}, fmt.Errorf("compaction failed: %w", err)
 	}
@@ -204,32 +204,6 @@ func (s *svc) buildCheckpointCandidate(
 	}
 
 	return split, summaryMsg, nil
-}
-
-// selectAndSerializeHeadLocked picks the split, builds the canonical head and
-// validates both the raw cut and the post-exclusion projection. Returns
-// ( "", nil ) only via the nothing-to-compact path.
-func (s *svc) selectAndSerializeHeadLocked(cp checkpointPrefix, window, baseEstimate int) (int, string, error) {
-	split, ok := selectCheckpointSplit(s.ms.messages, cp, baseEstimate, window)
-	if !ok {
-		return 0, "", errNothingToCompact
-	}
-
-	head := canonicalHead(s.ms.messages, cp, split)
-
-	// The sanitized projection is what the checkpoint serializes; validating
-	// the raw head here would reject aborted turns sanitizeIncompleteCalls
-	// exists to strip.
-	if err := validateRawHead(head); err != nil {
-		return 0, "", fmt.Errorf("compaction head is not provider-valid: %w", err)
-	}
-
-	headJSONL, err := serializeCanonical(head)
-	if err != nil {
-		return 0, "", err
-	}
-
-	return split, headJSONL, nil
 }
 
 // commitCheckpointLocked persists the replacement in the transaction the

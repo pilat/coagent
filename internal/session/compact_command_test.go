@@ -123,8 +123,11 @@ func TestSlashCompact_FocusThreadsIntoTheSummarizationPrompt(t *testing.T) {
 
 	r.applyContextEvents(t.Context())
 
-	require.NotEmpty(t, llm.prompts)
-	assert.Contains(t, llm.prompts[0], "Priority for this summary: focus on the auth bug")
+	// The focus rides the final instruction message, not the first replayed row.
+	require.NotEmpty(t, llm.lastMessages)
+	instruction := llm.lastMessages[len(llm.lastMessages)-1]
+	assert.Equal(t, llmwire.RoleUser, instruction.Role)
+	assert.Contains(t, instruction.Content, "Priority for this summary: focus on the auth bug")
 	assert.Empty(t, s.compactionFocus)
 }
 

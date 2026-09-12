@@ -66,3 +66,13 @@ func TestCompactionPrompt_ForbidsInventedState(t *testing.T) {
 	assert.Contains(t, CompactionSummaryPrompt, "Do not invent completed work")
 	assert.Contains(t, CompactionSummaryPrompt, "preserve that uncertainty")
 }
+
+// The instruction is appended after the replayed prefix, so it must describe
+// the history as "above" and the tail as following the checkpoint later.
+func TestCompactionPrompt_IsOrderCorrectForTheFinalInstruction(t *testing.T) {
+	t.Parallel()
+
+	assert.Contains(t, CompactionSummaryPrompt, "conversation above this instruction")
+	assert.Contains(t, CompactionSummaryPrompt, "will follow your checkpoint")
+	assert.Contains(t, CompactionSummaryPrompt, "Do not use any tools")
+}

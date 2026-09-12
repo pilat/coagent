@@ -60,7 +60,7 @@ func TestCompactLeavesTheTranscriptIntactOnFailure(t *testing.T) {
 			},
 		},
 		{
-			name: "tool-calling response",
+			name: "tool-calling response that persists after the nudge",
 			llm: func() *compactionMockLLM {
 				return &compactionMockLLM{response: &llmwire.Response{
 					Text: "let me call a tool", FinishType: llmwire.FinishToolCalls,
@@ -283,4 +283,57 @@ func TestAcceptedCheckpointTextRejections(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, "brief", brief, "output is not rejected for being shorter than the reserve")
 	})
+}
+
+// A summarizer that answers with a tool call gets one tools-unavailable nudge
+// restating the demand; the retry's cost joins the summary row and no tool
+// result is persisted — the nudge lives only inside the summarizer request.
+func TestSummarizerToolCallGetsOneNudgeAndRetries(t *testing.T) {
+	ctx := context.Background()
+	llm := &compactionMockLLM{
+		contextWindow: 32000,
+		chat: func(call int, _ string) (*llmwire.Response, error) {
+			if call == 1 {
+				return &llmwire.Response{
+					FinishType: llmwire.FinishToolCalls,
+					ToolCalls:  []llmwire.ToolCall{{ID: "c1", Name: "read"}},
+					Usage:      &llmwire.MessageUsage{PromptTokens: 10, CompletionTokens: 5},
+				}, nil
+			}
+
+			return &llmwire.Response{Text: validSummary, FinishType: llmwire.FinishStop}, nil
+		},
+	}
+	s := newCompactionTestSvc(llm)
+	s.ms.setMessages(oversizedTranscript(32000))
+
+	ok, err := s.compact(ctx, nil)
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Equal(t, 2, llm.callCount, "one nudge, one retry, no more")
+
+	// The nudge is an in-request role-tool reply to the attempted call.
+	lastCall := llm.lastMessages
+	toolReply := lastCall[len(lastCall)-1]
+	assert.Equal(t, llmwire.RoleTool, toolReply.Role)
+	assert.Equal(t, "c1", toolReply.ToolCallID)
+	assert.Contains(t, toolReply.Content, "TOOLS ARE UNAVAILABLE")
+
+	summary := findSummaryRow(t, s.ms.getMessages())
+	assert.Contains(t, summary.Content, validSummary)
+}
+
+// findSummaryRow locates the committed marked summary row in a projection.
+func findSummaryRow(t *testing.T, messages []llmwire.Message) llmwire.Message {
+	t.Helper()
+
+	for _, m := range messages {
+		if isMarkedSummary(m.Content) {
+			return m
+		}
+	}
+
+	t.Fatal("marked summary not found")
+
+	return llmwire.Message{}
 }

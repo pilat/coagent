@@ -59,10 +59,10 @@ func scriptedToolCall(name, args string) *llmwire.Response {
 	})
 }
 
-// isCompactionPrompt recognises the summarization call: one user message
-// carrying the whole rendered conversation.
+// isCompactionPrompt recognises the summarization call: the replayed prefix
+// plus one final checkpoint instruction.
 func isCompactionPrompt(msgs []llmwire.Message) bool {
-	return len(msgs) == 1 && strings.Contains(msgs[0].Content, "HISTORY TO SUMMARIZE")
+	return isCompactionInstruction(msgs)
 }
 
 func indexOfSummary(msgs []llmwire.Message) int {

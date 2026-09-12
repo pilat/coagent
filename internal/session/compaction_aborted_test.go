@@ -34,8 +34,8 @@ func transcriptWithAbortedCall(window int) []llmwire.Message {
 	return msgs
 }
 
-// An aborted assistant turn is history, not a pairable call: the canonical
-// head sanitizes it away and compaction succeeds around it.
+// An aborted assistant turn is history, not a pairable call: the ordinary
+// repair stubs it in the head projection and compaction succeeds around it.
 func TestCompactionSucceedsAroundAnAbortedToolCall(t *testing.T) {
 	const window = 32000
 
