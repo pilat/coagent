@@ -71,6 +71,32 @@ add mutation to `all`, `ci`, branch protection, or another gate. The
 nightly job is diagnostic: survivors are report data, while execution/tooling
 failures still fail a shard.
 
+## Reading Files and Logs
+
+Never read files or logs one grep/sed slice at a time. Read in blocks of at
+least 50 lines (`read` with offset/limit, or `tail -n 100` for the tail of a
+long log), then work from the block. One-line pokes around a file are the most
+expensive way to find anything — they cost a full tool round-trip each and
+miss the context lines that actually explain the hit. Grep only to *locate*
+what to read; then read the surrounding block.
+
+## Agent Verification Discipline (implementation sessions)
+
+During an implementation session run by a coding agent:
+
+- Write code first; run tests selectively by target (`go test ./pkg/ -run TestX`)
+  at each checkpoint. Do not run full package suites or linters until the end.
+- Only at the very end: run `make test` (the full local suite) once and fix what
+  it surfaces.
+- Then hand the review to a subagent (same model as the session) as the skill
+  prescribes; apply the fixes it returns.
+- After all tasks: delegate `make lint` to a subagent (same model) and apply its
+  fixes in that same subagent, not in the session.
+- Then delegate `make ci` (with the `CI=true` special parameter, which is
+  permitted only inside that subagent run) to a subagent (same model); the
+  subagent's job is only to report what to do next — the session decides and
+  performs the fixes.
+
 ## Testing Strategy
 
 Read **[docs/testing.md](docs/testing.md)** before designing tests for any change

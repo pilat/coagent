@@ -153,7 +153,7 @@ func (b *boundary) AcceptActivated(
 
 func (b *boundary) ExpireActivation(ctx context.Context, grant tool.ActivationGrant) error {
 	_, _, err := b.store.ExpireActivationWithOutput(
-		ctx, grant.InputID, grant.SessionID, "Budget was not changed",
+		ctx, grant.InputID, grant.SessionID, grant.Command+" was not changed",
 	)
 	if err != nil {
 		return fmt.Errorf("expire activation with output: %w", err)

@@ -45,6 +45,7 @@ type Service interface {
 	DeliverPendingCallResult(
 		ctx context.Context, sessionID int64, callID, toolName, content string,
 	) (bool, error)
+	ConsumeConfigEditActivation(ctx context.Context, sessionID int64, callID string)
 	DeliverScheduleTick(ctx context.Context, sessionID int64, deliveryID, content string) (bool, error)
 	DeliverFreshSchedule(ctx context.Context, sessionID int64, deliveryID, content string) (bool, error)
 	ResolveSecretRequest(ctx context.Context, requestID, name string) error
@@ -97,27 +98,28 @@ var (
 )
 
 type svc struct {
-	runners        sessionlifecycle.Registry[runner]
-	factory        session.Factory
-	store          Store
-	sessionStore   sessionstore.OrchestrationStore
-	inboxStore     sessionstore.InboxStore
-	runtimeStore   sessionstore.AgentRuntimeStore
-	managerOutputs sessionstore.ManagerOutputStore
-	managerRoots   sessionstore.ManagerRootTransactions
-	lifecycleStore sessionstore.SessionLifecycleStore
-	modelInputs    sessionstore.ModelInputStore
-	inputFactory   inputruntime.Factory
-	links          subagent.Store
-	subagents      subagent.Transactions
-	scheduleSvc    schedule.Service
-	admit          admission.Governor
-	childQueue     sessionlifecycle.Queue[queuedChild]
-	pendingQueue   sessionlifecycle.Queue[queuedRunner]
-	pubsub         sessionbus.Bus
-	defaultModelFn func() string
-	modelCatalog   []modelInfo
-	modelEntries   []config.ModelEntry
+	runners         sessionlifecycle.Registry[runner]
+	factory         session.Factory
+	store           Store
+	sessionStore    sessionstore.OrchestrationStore
+	inboxStore      sessionstore.InboxStore
+	activationStore sessionstore.ActivationStore
+	runtimeStore    sessionstore.AgentRuntimeStore
+	managerOutputs  sessionstore.ManagerOutputStore
+	managerRoots    sessionstore.ManagerRootTransactions
+	lifecycleStore  sessionstore.SessionLifecycleStore
+	modelInputs     sessionstore.ModelInputStore
+	inputFactory    inputruntime.Factory
+	links           subagent.Store
+	subagents       subagent.Transactions
+	scheduleSvc     schedule.Service
+	admit           admission.Governor
+	childQueue      sessionlifecycle.Queue[queuedChild]
+	pendingQueue    sessionlifecycle.Queue[queuedRunner]
+	pubsub          sessionbus.Bus
+	defaultModelFn  func() string
+	modelCatalog    []modelInfo
+	modelEntries    []config.ModelEntry
 	// searchUnconfigured is the boot-time discoverability verdict: no
 	// tools.search section and no native-capable model.
 	searchUnconfigured bool
@@ -272,28 +274,29 @@ func newSvc(
 	budgetCtx, budgetCancel := context.WithCancel(context.Background())
 	workerCtx, workerCancel := context.WithCancel(context.Background())
 	s := &svc{
-		runners:        sessionlifecycle.NewRegistry[runner](),
-		factory:        factory,
-		store:          store,
-		sessionStore:   sessionStore,
-		treeStore:      sessionStore,
-		inboxStore:     inboxStore,
-		runtimeStore:   runtimeStore,
-		managerOutputs: managerOutputs,
-		managerRoots:   managerRoots,
-		lifecycleStore: lifecycleStore,
-		modelInputs:    modelInputs,
-		inputFactory:   inputruntime.New(inboxStore, scheduleSvc),
-		links:          links,
-		subagents:      subagents,
-		budgetSvc:      budgetSvc,
-		scheduleSvc:    scheduleSvc,
-		staged:         newStagedCalls(),
-		secrets:        newSecretRequests(),
-		admit:          admission.New(),
-		childQueue:     sessionlifecycle.NewQueue[queuedChild](),
-		pendingQueue:   sessionlifecycle.NewQueue[queuedRunner](),
-		recovery:       sessionlifecycle.NewRecovery(),
+		runners:         sessionlifecycle.NewRegistry[runner](),
+		factory:         factory,
+		store:           store,
+		sessionStore:    sessionStore,
+		treeStore:       sessionStore,
+		inboxStore:      inboxStore,
+		activationStore: inboxStore,
+		runtimeStore:    runtimeStore,
+		managerOutputs:  managerOutputs,
+		managerRoots:    managerRoots,
+		lifecycleStore:  lifecycleStore,
+		modelInputs:     modelInputs,
+		inputFactory:    inputruntime.New(inboxStore, scheduleSvc),
+		links:           links,
+		subagents:       subagents,
+		budgetSvc:       budgetSvc,
+		scheduleSvc:     scheduleSvc,
+		staged:          newStagedCalls(),
+		secrets:         newSecretRequests(),
+		admit:           admission.New(),
+		childQueue:      sessionlifecycle.NewQueue[queuedChild](),
+		pendingQueue:    sessionlifecycle.NewQueue[queuedRunner](),
+		recovery:        sessionlifecycle.NewRecovery(),
 		stopper: sessionlifecycle.NewStopper(
 			sessionStore, lifecycleStore, managerOutputs, links,
 		),
@@ -1043,6 +1046,13 @@ func (s *svc) stopTreeCleanup(ctx context.Context, sessionID int64, options stop
 	// replaying a sleep/config/task call that no longer exists.
 	for _, id := range ids {
 		if err := s.settleStoppedCalls(cleanupCtx, id); err != nil {
+			return err
+		}
+
+		// The settlement just answered every pending call, so a pending grant
+		// can never be spent anymore; expire it store-only or its row sits
+		// pending until the next wake burns a model turn on the receipt.
+		if err := s.expirePendingActivation(cleanupCtx, id); err != nil {
 			return err
 		}
 

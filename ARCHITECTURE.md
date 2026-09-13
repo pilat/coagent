@@ -455,7 +455,8 @@ read-only-command-only roots have no episode clock and produce no silence
 snapshots; the first model-bound input or an applied scheduled turn starts one.
 
 `/budget` grants one exact manager-user input authority to arm, replace or clear
-a one-shot root-tree cost/duration checkpoint. Model responses and successful
+a one-shot root-tree cost/duration checkpoint, consuming the grant inside the
+same transaction as the mutation it authorizes. Model responses and successful
 compaction summaries commit usage, fire comparison, skipped returned-tool
 results and checkpoint intent in one session-store transaction. The daemon
 closes admission before a generation drains and parks; managed park workers are
@@ -870,11 +871,16 @@ while later opening turns read the updated store.
 ### Configuration, migration and host lifecycle
 
 Config owns parsing and secret-sink resolution; config operations own semantic
-mutation, backup retention and pending-apply recovery. Config tools own the
-agent-facing schemas, strict argument parsing and mapping to semantic config
-operations. Config apply owns the process-wide commit claim and restart trigger;
-the daemon gates tool availability and owns the durable suspend-to-restart
-handoff. Migration owns SQLite opening and schema progression.
+mutation, full-document staging with credential-refusal, backup retention and
+pending-apply recovery. Config tools own the agent-facing schemas, strict
+argument parsing and mapping to semantic config operations; the `/config`
+activation-gated full-document tool registers on every root session, while typed
+ops stay on the reserved configuration root. Config apply owns the process-wide
+commit claim and restart trigger; the daemon gates tool availability and owns
+the durable suspend-to-restart handoff: one-shot `/config` grant settlement
+rides the commit in the apply process, falls back to the boot's marker
+resolution, and the stop path expires grants their settlement orphaned.
+Migration owns SQLite opening and schema progression.
 A production upgrade of an existing database creates a consistent SQLite backup
 before applying pending migrations and fails closed if inspection, backup or
 publication fails; fixture migration runs do not surprise callers with a backup

@@ -78,7 +78,7 @@ func (s *store) ArmBudget(
 		return nil, nil, fmt.Errorf("arm budget: %w", err)
 	}
 
-	if err := consumeActivationTx(ctx, tx, mutation, now); err != nil {
+	if err := consumeActivationTx(ctx, tx, mutation); err != nil {
 		return nil, nil, err
 	}
 
@@ -155,7 +155,7 @@ func (s *store) ClearBudget(
 		}
 	}
 
-	if err := consumeActivationTx(ctx, tx, mutation, now); err != nil {
+	if err := consumeActivationTx(ctx, tx, mutation); err != nil {
 		return nil, nil, err
 	}
 
@@ -196,17 +196,17 @@ func validateBudgetMutation(mutation BudgetMutation, arm bool) error {
 	return nil
 }
 
-func consumeActivationTx(ctx context.Context, tx *sql.Tx, mutation BudgetMutation, now time.Time) error {
-	result, err := tx.ExecContext(ctx, `UPDATE session_tool_activations
-		SET state = 'consumed', tool_call_id = ?, resolved_at = ?
-		WHERE input_id = ? AND session_id = ? AND tool_id = ? AND command = ? AND state = 'pending'`,
-		mutation.ToolCallID, now, mutation.InputID, mutation.RootSessionID, mutation.ToolID, mutation.Command)
-	if err != nil {
-		return fmt.Errorf("consume budget activation: %w", err)
+func consumeActivationTx(ctx context.Context, tx *sql.Tx, mutation BudgetMutation) error {
+	err := ConsumeActivationTx(ctx, tx, ActivationBinding{
+		InputID: mutation.InputID, SessionID: mutation.RootSessionID,
+		ToolID: mutation.ToolID, Command: mutation.Command, ToolCallID: mutation.ToolCallID,
+	})
+	if errors.Is(err, ErrActivationConflict) {
+		return ErrBudgetConflict
 	}
 
-	if err := requireActivationChanged(result); err != nil {
-		return ErrBudgetConflict
+	if err != nil {
+		return fmt.Errorf("consume budget activation: %w", err)
 	}
 
 	return nil
