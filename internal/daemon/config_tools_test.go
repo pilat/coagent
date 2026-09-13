@@ -442,6 +442,7 @@ type panicSession struct{ *mockSession }
 func (p *panicSession) RunDaemon(
 	context.Context,
 	func(sessionevent.Notification),
+	func(bool),
 ) (session.RunResult, error) {
 	panic("session loop bug")
 }

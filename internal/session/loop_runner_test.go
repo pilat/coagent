@@ -285,6 +285,67 @@ func TestRunLoopFinalTextResponseEndsRun(t *testing.T) {
 	assert.Equal(t, []string{"all done"}, notifier.all())
 }
 
+func TestRunLoopClearsWorkingBeforeFinalResponse(t *testing.T) {
+	events := []string{}
+	agent := newTestAgent()
+	agent.llmClient = &loopScriptLLM{responses: []*llmwire.Response{textResponse("all done")}}
+
+	_, err := runLoop(t.Context(), agent, loopOptions{
+		Notify: func(_ context.Context, msg string) error {
+			events = append(events, "notify:"+msg)
+
+			return nil
+		},
+		Working: func(active bool) {
+			if active {
+				events = append(events, "working")
+			} else {
+				events = append(events, "idle")
+			}
+		},
+	}, iterationGuard(5))
+
+	require.NoError(t, err)
+	assert.Equal(t, []string{"working", "idle", "notify:all done"}, events,
+		"Working must clear before the final response is published")
+}
+
+func TestRunLoopReassertsWorkingWhenFinalResponseIsFollowedByInput(t *testing.T) {
+	events := []string{}
+	agent := newTestAgent()
+	boundary := &loopInputBoundary{agent: agent}
+	agent.boundary = boundary
+	agent.llmClient = &loopScriptLLM{onCall: func(call int, _ []llmwire.Message) (*llmwire.Response, error) {
+		if call == 1 {
+			boundary.input = &PendingInput{ID: 1, Content: "next", ReceivedAt: time.Now()}
+
+			return textResponse("first done"), nil
+		}
+
+		return textResponse("second done"), nil
+	}}
+
+	_, err := runLoop(t.Context(), agent, loopOptions{
+		Notify: func(_ context.Context, msg string) error {
+			events = append(events, "notify:"+msg)
+
+			return nil
+		},
+		Working: func(active bool) {
+			if active {
+				events = append(events, "working")
+			} else {
+				events = append(events, "idle")
+			}
+		},
+	}, iterationGuard(5))
+
+	require.NoError(t, err)
+	assert.Equal(t, []string{
+		"working", "idle", "notify:first done", "working", "idle", "notify:second done",
+	}, events, "a continued loop must re-assert Working after the final response")
+}
+
 func TestRunLoopDoesNotRepublishPreviousFinalBeforeAcceptingNextInput(t *testing.T) {
 	agent := newTestAgent()
 	agent.ms.setMessages([]llmwire.Message{

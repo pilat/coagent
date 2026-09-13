@@ -379,7 +379,16 @@ func (s *svc) runSessionIteration( //nolint:funlen,gocyclo // Linear lifecycle w
 
 	rs.MarkRun()
 
-	runResult, runErr := s.executeSession(ctx, sess, notify)
+	// The live "main model working" flag follows the loop's engagement: the
+	// session clears it before publishing a final response, so progress cards
+	// rendered after the message reads background work, not working.
+	runResult, runErr := s.executeSession(ctx, sess, notify, func(active bool) {
+		if active {
+			rs.SetService(sess)
+		} else {
+			rs.SetService(nil)
+		}
+	})
 
 	if rec.ParentID == 0 {
 		runErr = errors.Join(runErr, s.settleRootBudget(ctx, sessionID, runResult.Suspended, runErr, notify))
@@ -1281,10 +1290,11 @@ func (s *svc) executeSession(
 	ctx context.Context,
 	sess session.Service,
 	notify func(sessionevent.Notification),
+	working func(bool),
 ) (session.RunResult, error) {
 	notify(sessionevent.Notification{Type: sessionevent.NotifyStateChanged, Status: controllerapi.StateRunning})
 
-	result, runErr := sess.RunDaemon(ctx, notify)
+	result, runErr := sess.RunDaemon(ctx, notify, working)
 
 	if runErr != nil {
 		return result, fmt.Errorf("run session: %w", runErr)

@@ -243,9 +243,12 @@ func (s *svc) prepareRunMessages(ctx context.Context, prompt string) error {
 }
 
 // RunDaemon runs the session with durable boundary input and notifications.
+// working reports main-model engagement so the host can clear its live
+// "main model working" flag before a final response is published.
 func (s *svc) RunDaemon(
 	ctx context.Context,
 	notify func(sessionevent.Notification),
+	working func(bool),
 ) (RunResult, error) {
 	if notify != nil {
 		s.loopOpts = loopOptions{
@@ -256,6 +259,7 @@ func (s *svc) RunDaemon(
 			Heartbeat: func(_ context.Context) {
 				notify(sessionevent.Notification{Type: sessionevent.NotifyHeartbeat})
 			},
+			Working: working,
 		}
 	}
 

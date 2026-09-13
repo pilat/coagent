@@ -149,7 +149,7 @@ func TestRunDaemon_PreservesNewToolSuspensionAcrossSessionBoundary(t *testing.T)
 		toolCallResponse("sleep-call", tool.IDSleep),
 	}}
 
-	result, err := s.RunDaemon(t.Context(), nil)
+	result, err := s.RunDaemon(t.Context(), nil, nil)
 	require.NoError(t, err)
 	assert.True(t, result.Suspended,
 		"RunDaemon must return the loop result, not reconstruct suspension from pre-run ledgers")
@@ -162,7 +162,7 @@ func TestRunDaemon_PreservesNewToolSuspensionAcrossSessionBoundary(t *testing.T)
 	})
 	s.llmClient = &mockLLMRunOnce{response: &llmwire.Response{Text: "unused"}}
 
-	result, err = s.RunDaemon(t.Context(), nil)
+	result, err = s.RunDaemon(t.Context(), nil, nil)
 	require.NoError(t, err)
 	assert.False(t, result.Suspended)
 }
