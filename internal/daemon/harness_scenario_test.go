@@ -472,6 +472,9 @@ func TestHarnessScenario_BackgroundFinalResponseResumesOnCompletion(t *testing.T
 	assert.Equal(t, string(sessionstore.OutputMessagePersistent), outputType)
 	assert.Contains(t, output, "child still running")
 
+	// Settle the root's runner before releasing the child: the golden trace pins
+	// the resume as a fresh session loop, which requires the old runner to be gone.
+	h.mgr.waitIdle(parentID)
 	close(childRelease)
 	waitForVisibleMessage(t, collector, parentID, "completion after wait")
 	drainScenarioClaims(t, "background_wait_canary.json", newChainController(t, h))

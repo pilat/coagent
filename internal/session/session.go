@@ -38,9 +38,12 @@ const (
 //nolint:interfacebloat // Daemon lifecycle needs one session-scoped capability.
 type Service interface {
 	// RunDaemon runs the session with durable boundary input and notifications.
+	// working reports main-model engagement so the host can clear its live
+	// "main model working" flag before a final response is published.
 	RunDaemon(
 		ctx context.Context,
 		notify func(sessionevent.Notification),
+		working func(bool),
 	) (RunResult, error)
 	PrepareUserMessage(message string) (string, error)
 

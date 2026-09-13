@@ -68,6 +68,7 @@ type assistantState struct {
 type loopOptions struct {
 	Notify    func(ctx context.Context, message string) error // callback to deliver messages to the human
 	Heartbeat func(ctx context.Context)                       // fire-and-forget activity signal; nil for subagents
+	Working   func(active bool)                               // main-model engagement; nil for subagents
 }
 
 // loopRunner holds per-run state for a single runLoop invocation.
@@ -159,6 +160,9 @@ func runLoop(ctx context.Context, agent *svc, opts loopOptions, callback iterati
 
 			return r.result, nil
 		}
+
+		// A final response cleared Working; a continued loop re-asserts it.
+		r.setWorking(true)
 
 		r.applyContextEvents(ctx)
 
@@ -278,6 +282,9 @@ func (r *loopRunner) handlePreviousResult(ctx context.Context) (bool, error) {
 				return false, err
 			}
 
+			// The final response ends the loop's engagement: clear Working before
+			// the message goes out so later cards read background work, not working.
+			r.setWorking(false)
 			r.result.FinalResponse = state.Text
 			r.notify(ctx, state.Text)
 		}
@@ -400,6 +407,14 @@ func (r *loopRunner) notify(ctx context.Context, msg string) {
 		if err := r.opts.Notify(ctx, msg); err != nil {
 			r.log.Warn("notify_failed", zap.Error(err))
 		}
+	}
+}
+
+// setWorking reports main-model engagement to the host. A final response ends
+// the engagement before it is published; a continued loop re-asserts it.
+func (r *loopRunner) setWorking(active bool) {
+	if r.opts.Working != nil {
+		r.opts.Working(active)
 	}
 }
 
@@ -653,6 +668,9 @@ func (r *loopRunner) finalize(ctx context.Context) (*loopResult, error) {
 	}
 
 	if strings.TrimSpace(footer) != "" && r.opts.Notify != nil {
+		// The ceiling response is the loop's final word; clear Working first.
+		r.setWorking(false)
+
 		if err := r.opts.Notify(ctx, footer); err != nil {
 			r.log.Warn("notify_failed", zap.Error(err))
 		}

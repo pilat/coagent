@@ -73,6 +73,7 @@ type mockFactory struct {
 func (m *mockSession) RunDaemon(
 	ctx context.Context,
 	notify func(sessionevent.Notification),
+	_ func(bool),
 ) (session.RunResult, error) {
 	m.mu.Lock()
 	m.ran = true
