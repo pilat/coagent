@@ -30,8 +30,9 @@ models:
 `
 
 type stubVerdictSender struct {
-	calls int
-	err   error
+	calls   int
+	consume int
+	err     error
 	// rec is what GetSession reports; a nil rec with no lookup error is a
 	// session the store no longer has.
 	rec       *sessionstore.SessionRecord
@@ -44,6 +45,10 @@ func (s *stubVerdictSender) DeliverPendingCallResult(
 	s.calls++
 
 	return s.err == nil, s.err
+}
+
+func (s *stubVerdictSender) ConsumeConfigEditActivation(_ context.Context, _ int64, _ string) {
+	s.consume++
 }
 
 func (s *stubVerdictSender) GetSession(_ context.Context, _ int64) (*sessionstore.SessionRecord, error) {

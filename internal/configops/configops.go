@@ -1,6 +1,7 @@
 package configops
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -23,6 +24,12 @@ type Service interface {
 	// models that make it usable in one write, because either alone is a config
 	// that cannot serve a session.
 	Stage(ops ...Op) (*Staged, Verdict)
+	// StageDocument validates a caller-supplied complete candidate document the
+	// same way Stage validates its ops — strict parse, ${VAR} references kept
+	// raw, secrets resolved, defaults and semantic checks applied — and returns
+	// the staged candidate without writing. It is the raw-document editing path
+	// for config_edit; typed ops keep using Stage.
+	StageDocument(candidate []byte) (*Staged, Verdict)
 	// Commit replaces config.yaml with a staged candidate, leaving behind the
 	// pending-apply marker that lets the daemon explain itself after the restart.
 	Commit(staged *Staged, p Pending) Verdict
@@ -121,6 +128,68 @@ func (s *svc) Stage(ops ...Op) (*Staged, Verdict) {
 		Hash:    hex.EncodeToString(sum[:]),
 		Summary: strings.Join(summaries, "; "),
 	}, OK()
+}
+
+// StageDocument validates the complete candidate in its raw form. Credential
+// sinks are checked before resolution, so a literal can no more reach
+// config.yaml by riding a full document than by riding a typed op; semantic
+// validation resolves against a fresh disk read exactly like Stage. The staged
+// bytes are the validated candidate verbatim — user formatting is preserved
+// and the hash matches what a boot will parse.
+func (s *svc) StageDocument(candidate []byte) (*Staged, Verdict) {
+	if len(bytes.TrimSpace(candidate)) == 0 {
+		return nil, Reject("", errors.New("empty configuration document"))
+	}
+
+	raw, err := config.ParseUnifiedConfig(candidate)
+	if err != nil {
+		return nil, Reject("", err)
+	}
+
+	if err := checkDocumentCredentials(raw); err != nil {
+		return nil, Reject("", err)
+	}
+
+	secrets, err := config.LoadSecretsFrom(s.secretsPath)
+	if err != nil {
+		return nil, Reject("", err)
+	}
+
+	if _, err := config.ParseAndResolve(candidate, secrets); err != nil {
+		return nil, Reject("", err)
+	}
+
+	sum := sha256.Sum256(candidate)
+
+	return &Staged{
+		Data:    candidate,
+		Hash:    hex.EncodeToString(sum[:]),
+		Summary: "replace configuration document",
+	}, OK()
+}
+
+// checkDocumentCredentials enforces the ${VAR}-only rule on every credential
+// sink a full-document candidate could carry. It runs on the raw draft because
+// resolution replaces references with values, which would make every
+// credential look like a literal.
+func checkDocumentCredentials(raw *config.UnifiedConfig) error {
+	for name, provider := range raw.Providers {
+		if err := checkCredential("api_key", provider.APIKey); err != nil {
+			return fmt.Errorf("provider %q %w", name, err)
+		}
+	}
+
+	for _, manager := range raw.Managers {
+		if err := checkCredential("bot_token", manager.BotToken); err != nil {
+			return fmt.Errorf("manager %q %w", manager.ID, err)
+		}
+	}
+
+	if err := checkCredential("api_key", raw.Tools.Search.APIKey); err != nil {
+		return fmt.Errorf("tools.search %w", err)
+	}
+
+	return nil
 }
 
 // Commit's write order is the contract — backup, marker, config. The marker's

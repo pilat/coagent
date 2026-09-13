@@ -35,6 +35,7 @@ const (
 	IDRemoveModel     = "remove_model"
 	IDSetDefaultModel = "set_default_model"
 	IDSetModelTags    = "set_model_tags"
+	IDConfigEdit      = "config_edit"
 	IDRequestSecret   = "request_secret"
 )
 
@@ -51,6 +52,7 @@ var externalCallTools = map[string]bool{
 	IDRemoveModel:     true,
 	IDSetDefaultModel: true,
 	IDSetModelTags:    true,
+	IDConfigEdit:      true,
 	IDRequestSecret:   true,
 }
 

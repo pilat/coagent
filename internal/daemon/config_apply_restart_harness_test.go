@@ -73,7 +73,8 @@ func (d *applyDaemon) waitForRestart(t *testing.T) {
 }
 
 // bootVerdict replays what cmd/coagent's boot does with a marker: resolve it,
-// then hand the verdict to the session that suspended.
+// spend the grant behind an applied verdict, then hand the verdict to the
+// session that suspended.
 func (d *applyDaemon) bootVerdict(t *testing.T) (configops.Outcome, error) {
 	t.Helper()
 
@@ -83,6 +84,12 @@ func (d *applyDaemon) bootVerdict(t *testing.T) (configops.Outcome, error) {
 
 	outcome, err := d.ops.ResolvePending(*pending, nil)
 	require.NoError(t, err)
+
+	if !outcome.Verdict.Failed() {
+		d.mgr.ConsumeConfigEditActivation(
+			d.ctx, outcome.Pending.SessionID, outcome.Pending.ToolCallID,
+		)
+	}
 
 	message := "Config applied: " + outcome.Pending.Summary
 	if outcome.Verdict.Failed() {

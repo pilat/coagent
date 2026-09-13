@@ -442,6 +442,16 @@ func deliverApplyVerdict(
 	log := logger.Named("main.apply")
 
 	if outcome.Pending.SessionID != 0 {
+		// An applied verdict confirms the commit, so spend the /config grant the
+		// apply's own process may have died before spending. A failed verdict is
+		// left to the loop's terminal settlement — nothing was kept, so its
+		// "was not changed" receipt is true.
+		if !outcome.Verdict.Failed() {
+			sender.ConsumeConfigEditActivation(
+				ctx, outcome.Pending.SessionID, outcome.Pending.ToolCallID,
+			)
+		}
+
 		message := "Config applied: " + outcome.Pending.Summary
 		if outcome.Verdict.Failed() {
 			message = "Config change rejected — " + outcome.Verdict.Reason()
@@ -500,13 +510,15 @@ type core struct {
 	secretResolver secretRequestResolver
 }
 
-// applyVerdictSender is what verdict delivery needs — delivery plus the session
-// state separating "not now" from "never" — so it is testable without a daemon.
+// applyVerdictSender is what verdict delivery needs — delivery, the session
+// state separating "not now" from "never", and the grant settlement a confirmed
+// commit owes — so it is testable without a daemon.
 type applyVerdictSender interface {
 	DeliverPendingCallResult(
 		ctx context.Context, sessionID int64, callID, toolName, content string,
 	) (bool, error)
 	GetSession(ctx context.Context, id int64) (*sessionstore.SessionRecord, error)
+	ConsumeConfigEditActivation(ctx context.Context, sessionID int64, callID string)
 }
 
 // secretRequestResolver is the masked-prompt lifecycle, kept separate so an RPC

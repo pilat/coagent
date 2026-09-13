@@ -16,6 +16,7 @@ import (
 
 	"github.com/pilat/coagent/internal/admission"
 	"github.com/pilat/coagent/internal/configops"
+	"github.com/pilat/coagent/internal/configtools"
 	"github.com/pilat/coagent/internal/controllerapi"
 	"github.com/pilat/coagent/internal/loader"
 	"github.com/pilat/coagent/internal/logger"
@@ -372,6 +373,7 @@ func (s *svc) runSessionIteration( //nolint:funlen,gocyclo // Linear lifecycle w
 	s.registerSubagentTools(ctx, sessionID, sess)
 	s.registerMCPTools(ctx, rec, sess)
 	s.registerConfigTools(ctx, rec, sess)
+	s.registerConfigEditTool(ctx, rec, sess)
 	s.registerSecretTool(ctx, rec, sess)
 	s.registerBudgetTool(ctx, rec, sess)
 
@@ -1362,6 +1364,22 @@ func (s *svc) registerConfigTools(ctx context.Context, rec *sessionstore.Session
 	}
 }
 
+// registerConfigEditTool registers the /config-gated full-document editing tool
+// on every root session with an applier. Subagents are excluded: they cannot
+// acquire a manager-owned activation grant, and the tool must not be reachable
+// from them at all.
+func (s *svc) registerConfigEditTool(
+	ctx context.Context,
+	rec *sessionstore.SessionRecord,
+	sess session.Service,
+) {
+	if s.applier == nil || rec.ParentID != 0 {
+		return
+	}
+
+	registerLogged(ctx, sess, newConfigEditTool(s, rec.ID))
+}
+
 // runStagedApply commits after the suspend is persisted, so a daemon that dies
 // mid-apply leaves a session matching what was done. A rejected commit never
 // restarts, so its verdict is delivered here.
@@ -1392,6 +1410,12 @@ func (s *svc) runStagedApply(ctx context.Context, sessionID int64) {
 	if !v.Failed() {
 		log.Info("apply_committed", zap.Int64("session_id", sessionID), zap.String("tool", sc.toolName))
 
+		// The owed verdict answers the call, so the grant is spent here: left
+		// pending it would wedge the durable FIFO behind a mutation that
+		// already happened. A death before this line is settled by the next
+		// boot's ConsumeConfigEditActivation, which runs off the marker.
+		s.ConsumeConfigEditActivation(ctx, sessionID, callID)
+
 		return
 	}
 
@@ -1404,6 +1428,54 @@ func (s *svc) runStagedApply(ctx context.Context, sessionID int64) {
 		Content: "Config change rejected — " + v.Reason(),
 	}); err != nil {
 		log.Error("rejection_delivery_failed", zap.Int64("session_id", sessionID), zap.Error(err))
+	}
+}
+
+// expirePendingActivation expires a session's pending tool grant when its call
+// was just answered by the stop settlement. Store-only: any output was already
+// produced, and a consumed grant cannot expire — that is a conflict, not a no-op.
+func (s *svc) expirePendingActivation(ctx context.Context, sessionID int64) error {
+	activation, err := s.activationStore.PendingActivation(ctx, sessionID)
+	if errors.Is(err, sessionstore.ErrActivationNotFound) {
+		return nil
+	}
+
+	if err != nil {
+		return fmt.Errorf("load pending activation for session %d: %w", sessionID, err)
+	}
+
+	if _, err := s.activationStore.ExpireActivation(ctx, activation.InputID, sessionID); err != nil {
+		return fmt.Errorf("expire activation for session %d: %w", sessionID, err)
+	}
+
+	return nil
+}
+
+// ConsumeConfigEditActivation spends the /config grant whose config_edit call
+// just committed, on the boot path or in the apply's own process. Idempotent by
+// contract: a replayed consume is a no-op.
+func (s *svc) ConsumeConfigEditActivation(ctx context.Context, sessionID int64, callID string) {
+	activation, err := s.activationStore.CurrentActivation(ctx, sessionID)
+	if err != nil {
+		if !errors.Is(err, sessionstore.ErrActivationNotFound) {
+			logger.Ctx(ctx).Named("daemon.apply").Warn(
+				"read_config_edit_activation", zap.Int64("session_id", sessionID), zap.Error(err))
+		}
+
+		return
+	}
+
+	if activation.ToolID != tool.IDConfigEdit || activation.Command != configtools.ConfigEditCommand {
+		return
+	}
+
+	binding := sessionstore.ActivationBinding{
+		InputID: activation.InputID, SessionID: sessionID,
+		ToolID: activation.ToolID, Command: activation.Command, ToolCallID: callID,
+	}
+	if err := s.activationStore.ConsumeActivationBinding(ctx, binding); err != nil {
+		logger.Ctx(ctx).Named("daemon.apply").Warn(
+			"consume_config_edit_activation", zap.Int64("session_id", sessionID), zap.Error(err))
 	}
 }
 

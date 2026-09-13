@@ -340,10 +340,17 @@ func (r *loopRunner) expireCurrentActivation(ctx context.Context) error {
 }
 
 // resolveTerminalGrant runs once per runLoop exit. A consumed grant is left
-// alone: it belongs to the owed-call replay contract, not to expiry.
+// alone: it belongs to the owed-call replay contract, not to expiry. A suspend
+// whose unresolved tool call is the activated tool's own is left alone too —
+// the daemon spends that grant when the staged mutation commits, and a terminal
+// receipt here would falsely claim the command did nothing.
 func (r *loopRunner) resolveTerminalGrant(ctx context.Context) {
 	grant := r.agent.currentActivation
 	if grant == nil || grant.ToolCallID != "" {
+		return
+	}
+
+	if r.result.Suspended && ctx.Err() == nil && r.activationCallPending() {
 		return
 	}
 
@@ -371,6 +378,20 @@ func (r *loopRunner) resolveTerminalGrant(ctx context.Context) {
 	if err := r.expireCurrentActivation(runCtx); err != nil {
 		r.log.Warn("expire_activation_on_terminal_failed", zap.Error(err))
 	}
+}
+
+// activationCallPending reports whether the suspended turn leaves the activated
+// tool's call unanswered — the daemon still owns that call's settlement.
+func (r *loopRunner) activationCallPending() bool {
+	pending := unresolvedToolCalls(r.agent.ms.getMessages())
+
+	for _, toolID := range pending {
+		if toolID == r.agent.currentActivation.ToolID {
+			return true
+		}
+	}
+
+	return false
 }
 
 // notify sends a message to the user without adding it to the model's conversation history.
