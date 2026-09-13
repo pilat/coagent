@@ -51,7 +51,7 @@ Use subagents when isolation or parallel work materially helps:
 
 ## Subagent prompts
 
-The subagent does not receive your conversation history. Built-in explore also skips project instructions and memories; include any relevant constraints yourself. Other agent types may load project context separately. Give a self-contained assignment:
+The subagent does not receive your conversation history. general and project-defined subagents load the same context files (global, project, and local) and memories as you; built-in explore skips them, so include any relevant constraints yourself. Give a self-contained assignment:
 - State the goal and why it matters.
 - Describe what you already know or ruled out.
 - Give enough context for judgment calls, not a brittle script.

@@ -10,6 +10,8 @@ import (
 	"strings"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/pilat/coagent/internal/safefile"
 )
 
 // LoadSubagents finds and parses all subagent definition files.
@@ -24,20 +26,29 @@ func (s *svc) LoadSubagents(workDir string) error {
 	searchSources = append(searchSources, s.marketplaceAgentPaths...)
 	searchSources = append(searchSources,
 		sourceInfo{path: globalAgentsDir()},
-		sourceInfo{path: projectCoagentAgentsDir(workDir), project: true},
-		sourceInfo{path: projectAgentsDir(workDir), project: true},
+		sourceInfo{path: projectCoagentAgentsDir(workDir), root: workDir},
+		sourceInfo{path: projectAgentsDir(workDir), root: workDir},
 	)
+
+	// Every source reads through its containment root: an escaping symlink is
+	// denied, not followed. A failed root only drops its own sources.
+	accesses, errs := sourceAccesses(searchSources)
+	defer closeAccesses(accesses)
 
 	// A broken source is skipped, not fatal: aborting the scan would silently drop
 	// every higher-priority source behind it.
-	var errs []error
 
 	for _, src := range searchSources {
 		if src.path == "" {
 			continue
 		}
 
-		err := s.loadSubagentsFromPath(src)
+		access, opened := accesses[src.root]
+		if src.root != "" && !opened {
+			continue
+		}
+
+		err := s.loadSubagentsFromPath(src, access)
 		if err == nil || errors.Is(err, os.ErrNotExist) {
 			continue
 		}
@@ -48,8 +59,8 @@ func (s *svc) LoadSubagents(workDir string) error {
 	return errors.Join(errs...)
 }
 
-func (s *svc) loadSubagentsFromPath(source sourceInfo) error {
-	entries, err := s.readSourceDir(source.path, source.project)
+func (s *svc) loadSubagentsFromPath(source sourceInfo, access safefile.Access) error {
+	entries, err := readSourceDir(source.path, access)
 	if err != nil {
 		return fmt.Errorf("scan subagent directory %s: %w", source.path, err)
 	}
@@ -61,7 +72,7 @@ func (s *svc) loadSubagentsFromPath(source sourceInfo) error {
 
 		agentPath := filepath.Join(source.path, entry.Name())
 
-		agent, err := s.parseSubagentFile(agentPath, source.project)
+		agent, err := parseSubagentFile(agentPath, access)
 		if err != nil {
 			continue
 		}
@@ -80,8 +91,8 @@ func (s *svc) loadSubagentsFromPath(source sourceInfo) error {
 	return nil
 }
 
-func (s *svc) parseSubagentFile(path string, project bool) (*Subagent, error) {
-	frontmatter, content, err := s.parseSourceFrontmatter(path, project)
+func parseSubagentFile(path string, access safefile.Access) (*Subagent, error) {
+	frontmatter, content, err := parseSourceFrontmatter(path, access)
 	if err != nil {
 		return nil, err
 	}

@@ -162,7 +162,7 @@ func processPlugin(repoPath, pluginName string) ([]sourceInfo, []sourceInfo, err
 
 	skillsDir := filepath.Join(pluginDir, config.SkillsDirName)
 	if si, err := os.Stat(skillsDir); err == nil && si.IsDir() {
-		skills = []sourceInfo{{path: skillsDir, pluginName: pluginName}}
+		skills = []sourceInfo{{path: skillsDir, pluginName: pluginName, root: repoPath}}
 	}
 
 	// Collect agents (try "agents" first, fallback to "commands")
@@ -170,11 +170,11 @@ func processPlugin(repoPath, pluginName string) ([]sourceInfo, []sourceInfo, err
 
 	agentsDir := filepath.Join(pluginDir, config.AgentsDirName)
 	if si, err := os.Stat(agentsDir); err == nil && si.IsDir() {
-		agents = []sourceInfo{{path: agentsDir, pluginName: pluginName}}
+		agents = []sourceInfo{{path: agentsDir, pluginName: pluginName, root: repoPath}}
 	} else {
 		commandsDir := filepath.Join(pluginDir, config.CommandsDirName)
 		if si, err := os.Stat(commandsDir); err == nil && si.IsDir() {
-			agents = []sourceInfo{{path: commandsDir, pluginName: pluginName}}
+			agents = []sourceInfo{{path: commandsDir, pluginName: pluginName, root: repoPath}}
 		}
 	}
 

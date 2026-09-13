@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 )
 
-const ShieldDeniedMessage = "Coagent shields are raised; filesystem access is confined to the project."
+const ShieldDeniedMessage = "Filesystem access is confined to the project."
 
 type Scope uint8
 

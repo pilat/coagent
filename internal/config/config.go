@@ -10,16 +10,17 @@ import (
 
 // Directory and file name constants
 const (
-	ProjectConfigDir   = ".claude"
-	ProjectCoagentDir  = ".coagent"
-	ContextFileName    = "CLAUDE.md"
-	AgentsFileName     = "AGENTS.md"
-	LocalContextSuffix = ".local"
-	SkillsDirName      = "skills"
-	AgentsDirName      = "agents"
-	CommandsDirName    = "commands"
-	AgentsConfigDir    = ".agents"
-	SkillFileName      = "SKILL.md"
+	ProjectConfigDir     = ".claude"
+	ProjectCoagentDir    = ".coagent"
+	ContextFileName      = "CLAUDE.md"
+	AgentsFileName       = "AGENTS.md"
+	ContextLocalFileName = "CLAUDE.local.md"
+	AgentsLocalFileName  = "AGENTS.local.md"
+	SkillsDirName        = "skills"
+	AgentsDirName        = "agents"
+	CommandsDirName      = "commands"
+	AgentsConfigDir      = ".agents"
+	SkillFileName        = "SKILL.md"
 )
 
 type (

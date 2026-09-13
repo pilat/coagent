@@ -62,23 +62,38 @@ func projectAgentsSkillsDir(cwd string) string {
 	return filepath.Join(cwd, config.AgentsConfigDir, config.SkillsDirName)
 }
 
-// contextFilePaths returns the ordered list of constitution file paths to search.
-// Order: global AGENTS -> project AGENTS -> project CLAUDE -> local CLAUDE
-func contextFilePaths(cwd string) []string {
-	var paths []string
-
-	if gd := globalDir(); gd != "" {
-		paths = append(paths, filepath.Join(gd, config.AgentsFileName))
+// globalContextCandidates returns the ordered candidate paths for the global
+// context artifact. Empty when the user home cannot be resolved.
+func globalContextCandidates() []string {
+	home, err := coagenthome.UserHome()
+	if err != nil {
+		return nil
 	}
 
-	paths = append(paths,
-		filepath.Join(cwd, config.AgentsFileName),
-		filepath.Join(cwd, config.ContextFileName),
-		filepath.Join(projectDir(cwd), config.ContextFileName),
-	)
+	return []string{
+		filepath.Join(home, coagenthome.DirName, config.AgentsFileName),
+		filepath.Join(home, ".claude", config.ContextFileName),
+		filepath.Join(home, ".codex", config.AgentsFileName),
+		filepath.Join(home, ".config", "opencode", config.AgentsFileName),
+		filepath.Join(home, ".gemini", "GEMINI.md"),
+	}
+}
 
-	localFileName := "CLAUDE" + config.LocalContextSuffix + ".md"
-	paths = append(paths, filepath.Join(cwd, localFileName))
+// projectContextCandidates returns the ordered candidate paths for the project
+// context artifact.
+func projectContextCandidates(workDir string) []string {
+	return []string{
+		filepath.Join(workDir, config.AgentsFileName),
+		filepath.Join(workDir, config.ContextFileName),
+		filepath.Join(projectDir(workDir), config.ContextFileName),
+	}
+}
 
-	return paths
+// localContextCandidates returns the ordered candidate paths for the local
+// context artifact.
+func localContextCandidates(workDir string) []string {
+	return []string{
+		filepath.Join(workDir, config.AgentsLocalFileName),
+		filepath.Join(workDir, config.ContextLocalFileName),
+	}
 }

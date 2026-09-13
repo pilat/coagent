@@ -21,6 +21,7 @@ import (
 	"github.com/pilat/coagent/internal/coagenthome"
 	"github.com/pilat/coagent/internal/config"
 	"github.com/pilat/coagent/internal/loader"
+	"github.com/pilat/coagent/internal/safefile"
 	"github.com/pilat/coagent/internal/todo"
 	"github.com/pilat/coagent/internal/tool"
 )
@@ -318,7 +319,7 @@ func TestFilesystemTools_ShieldedStackDeniesHostReads(t *testing.T) {
 		t.Run("denies_"+call.toolID, func(t *testing.T) {
 			_, err := stack.Registry.Get(call.toolID).Execute(context.Background(), marshalToolParams(t, call.params))
 			require.Error(t, err)
-			assert.ErrorContains(t, err, "Coagent shields are raised; filesystem access is confined to the project.")
+			assert.ErrorContains(t, err, safefile.ShieldDeniedMessage)
 		})
 	}
 
@@ -327,7 +328,7 @@ func TestFilesystemTools_ShieldedStackDeniesHostReads(t *testing.T) {
 		context.Background(), marshalApplyPatchParams(t, outsidePatch),
 	)
 	require.Error(t, err)
-	require.ErrorContains(t, err, "Coagent shields are raised; filesystem access is confined to the project.")
+	require.ErrorContains(t, err, safefile.ShieldDeniedMessage)
 	assertTestFileContent(t, outside, "outside")
 }
 
