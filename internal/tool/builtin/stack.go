@@ -70,9 +70,6 @@ func BuildStack(ctx context.Context, cfg StackConfig) (*Stack, error) {
 	if err != nil {
 		return nil, fmt.Errorf("create filesystem access: %w", err)
 	}
-	if cfg.Loader != nil {
-		cfg.Loader.SetProjectAccess(access)
-	}
 	sandboxCfg := bashSandboxConfig(cfg)
 	sandboxCfg.CanonicalWorkDir = access.CanonicalRoot()
 

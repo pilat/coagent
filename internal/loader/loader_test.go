@@ -12,6 +12,7 @@ import (
 
 	"github.com/pilat/coagent/internal/coagenthome"
 	"github.com/pilat/coagent/internal/config"
+	"github.com/pilat/coagent/internal/safefile"
 )
 
 func TestNew(t *testing.T) {
@@ -572,16 +573,26 @@ Follow these guidelines when working on this project.`
 }
 
 func TestLoadAgentsMD_MultipleFiles(t *testing.T) {
-	tempDir := t.TempDir()
-	t.Setenv("HOME", tempDir)
-	claudeDir := filepath.Join(tempDir, config.ProjectConfigDir)
+	tmpHome := t.TempDir()
+	t.Setenv("HOME", tmpHome)
+	workDir := t.TempDir()
+	claudeDir := filepath.Join(workDir, config.ProjectConfigDir)
 	require.NoError(t, os.MkdirAll(claudeDir, 0o755))
+
+	agentsContent := `# Agents Guidelines
+
+Agents level guidelines.`
+	require.NoError(t, os.WriteFile(
+		filepath.Join(workDir, config.AgentsFileName),
+		[]byte(agentsContent),
+		0o644,
+	))
 
 	rootContent := `# Root Guidelines
 
 Root level guidelines.`
 	require.NoError(t, os.WriteFile(
-		filepath.Join(tempDir, config.ContextFileName),
+		filepath.Join(workDir, config.ContextFileName),
 		[]byte(rootContent),
 		0o644,
 	))
@@ -596,11 +607,11 @@ Config directory guidelines.`
 	))
 
 	svc := New()
-	result, err := svc.LoadAgentsMD(tempDir)
+	result, err := svc.LoadAgentsMD(workDir)
 	require.NoError(t, err)
-	assert.Contains(t, result, "Root Guidelines")
-	assert.Contains(t, result, "Config Guidelines")
-	assert.Contains(t, result, contextSeparator)
+	assert.Equal(t, "[project] "+filepath.Join(workDir, config.AgentsFileName)+"\n\n"+agentsContent, result)
+	assert.NotContains(t, result, "Root Guidelines")
+	assert.NotContains(t, result, "Config Guidelines")
 }
 
 func TestLoadAgentsMD_NoFiles(t *testing.T) {
@@ -615,14 +626,14 @@ func TestLoadAgentsMD_NoFiles(t *testing.T) {
 }
 
 func TestLoadAgentsMD_EmptyFiles(t *testing.T) {
-	tempDir := t.TempDir()
-	// Isolate from global CLAUDE.md in ~/.codex
-	t.Setenv("HOME", tempDir)
-	claudeDir := filepath.Join(tempDir, config.ProjectConfigDir)
+	tmpHome := t.TempDir()
+	t.Setenv("HOME", tmpHome)
+	workDir := t.TempDir()
+	claudeDir := filepath.Join(workDir, config.ProjectConfigDir)
 	require.NoError(t, os.MkdirAll(claudeDir, 0o755))
 
 	require.NoError(t, os.WriteFile(
-		filepath.Join(tempDir, config.ContextFileName),
+		filepath.Join(workDir, config.ContextFileName),
 		[]byte("   \n\t\n  "),
 		0o644,
 	))
@@ -634,16 +645,19 @@ func TestLoadAgentsMD_EmptyFiles(t *testing.T) {
 	))
 
 	svc := New()
-	result, err := svc.LoadAgentsMD(tempDir)
+	result, err := svc.LoadAgentsMD(workDir)
 	require.NoError(t, err)
-	assert.Equal(t, "Valid content", result)
-	assert.NotContains(t, result, contextSeparator)
+	assert.Equal(
+		t,
+		"[project] "+filepath.Join(workDir, config.ProjectConfigDir, config.ContextFileName)+"\n\nValid content",
+		result,
+	)
 }
 
 func TestLoadAgentsMD_WhitespaceTrimming(t *testing.T) {
-	tempDir := t.TempDir()
-	// Isolate from global CLAUDE.md in ~/.codex
-	t.Setenv("HOME", tempDir)
+	tmpHome := t.TempDir()
+	t.Setenv("HOME", tmpHome)
+	workDir := t.TempDir()
 
 	content := `
 
@@ -654,15 +668,386 @@ With surrounding whitespace.
 
 `
 	require.NoError(t, os.WriteFile(
-		filepath.Join(tempDir, config.ContextFileName),
+		filepath.Join(workDir, config.ContextFileName),
 		[]byte(content),
 		0o644,
 	))
 
 	svc := New()
-	result, err := svc.LoadAgentsMD(tempDir)
+	result, err := svc.LoadAgentsMD(workDir)
 	require.NoError(t, err)
-	assert.Equal(t, "# Content\n\nWith surrounding whitespace.", result)
+	assert.Equal(
+		t,
+		"[project] "+filepath.Join(workDir, config.ContextFileName)+"\n\n# Content\n\nWith surrounding whitespace.",
+		result,
+	)
+}
+
+func TestLoadAgentsMD_GlobalChainFirstNonEmptyWins(t *testing.T) {
+	tmpHome := t.TempDir()
+	t.Setenv("HOME", tmpHome)
+	workDir := t.TempDir()
+
+	bodies := []struct {
+		path string
+		body string
+	}{
+		{filepath.Join(tmpHome, coagenthome.DirName, config.AgentsFileName), "coagent global body"},
+		{filepath.Join(tmpHome, ".claude", config.ContextFileName), "claude global body"},
+		{filepath.Join(tmpHome, ".codex", config.AgentsFileName), "codex global body"},
+		{filepath.Join(tmpHome, ".config", "opencode", config.AgentsFileName), "opencode global body"},
+		{filepath.Join(tmpHome, ".gemini", "GEMINI.md"), "gemini global body"},
+	}
+	for _, c := range bodies {
+		require.NoError(t, os.MkdirAll(filepath.Dir(c.path), 0o755))
+		require.NoError(t, os.WriteFile(c.path, []byte(c.body), 0o644))
+	}
+
+	svc := New()
+	result, err := svc.LoadAgentsMD(workDir)
+	require.NoError(t, err)
+	assert.Equal(
+		t,
+		"[global] ~/"+coagenthome.DirName+"/"+config.AgentsFileName+"\n\ncoagent global body",
+		result,
+	)
+	for _, c := range bodies[1:] {
+		assert.NotContains(t, result, c.body)
+	}
+}
+
+func TestLoadAgentsMD_GlobalFallbackToClaude(t *testing.T) {
+	tmpHome := t.TempDir()
+	t.Setenv("HOME", tmpHome)
+	workDir := t.TempDir()
+
+	claudePath := filepath.Join(tmpHome, ".claude", config.ContextFileName)
+	require.NoError(t, os.MkdirAll(filepath.Dir(claudePath), 0o755))
+	require.NoError(t, os.WriteFile(claudePath, []byte("claude global body"), 0o644))
+
+	svc := New()
+	result, err := svc.LoadAgentsMD(workDir)
+	require.NoError(t, err)
+	assert.Equal(t, "[global] ~/.claude/"+config.ContextFileName+"\n\nclaude global body", result)
+}
+
+func TestLoadAgentsMD_GlobalBrokenSymlinkSkipped(t *testing.T) {
+	tmpHome := t.TempDir()
+	t.Setenv("HOME", tmpHome)
+	workDir := t.TempDir()
+
+	coagentPath := filepath.Join(tmpHome, coagenthome.DirName, config.AgentsFileName)
+	require.NoError(t, os.MkdirAll(filepath.Dir(coagentPath), 0o755))
+	require.NoError(t, os.Symlink(filepath.Join(tmpHome, "deleted-target.md"), coagentPath))
+
+	claudePath := filepath.Join(tmpHome, ".claude", config.ContextFileName)
+	require.NoError(t, os.MkdirAll(filepath.Dir(claudePath), 0o755))
+	require.NoError(t, os.WriteFile(claudePath, []byte("claude global body"), 0o644))
+
+	svc := New()
+	result, err := svc.LoadAgentsMD(workDir)
+	require.NoError(t, err)
+	assert.Equal(t, "[global] ~/.claude/"+config.ContextFileName+"\n\nclaude global body", result)
+}
+
+func TestLoadAgentsMD_ProjectChainFirstNonEmptyWins(t *testing.T) {
+	tmpHome := t.TempDir()
+	t.Setenv("HOME", tmpHome)
+	workDir := t.TempDir()
+	claudeDir := filepath.Join(workDir, config.ProjectConfigDir)
+	require.NoError(t, os.MkdirAll(claudeDir, 0o755))
+
+	require.NoError(t, os.WriteFile(
+		filepath.Join(workDir, config.AgentsFileName),
+		[]byte("agents body"),
+		0o644,
+	))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(workDir, config.ContextFileName),
+		[]byte("claude body"),
+		0o644,
+	))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(claudeDir, config.ContextFileName),
+		[]byte("nested claude body"),
+		0o644,
+	))
+
+	svc := New()
+	result, err := svc.LoadAgentsMD(workDir)
+	require.NoError(t, err)
+	assert.Equal(
+		t,
+		"[project] "+filepath.Join(workDir, config.AgentsFileName)+"\n\nagents body",
+		result,
+	)
+	assert.NotContains(t, result, "claude body")
+	assert.NotContains(t, result, "nested claude body")
+}
+
+func TestLoadAgentsMD_SymlinkAliasLoadedOnce(t *testing.T) {
+	tmpHome := t.TempDir()
+	t.Setenv("HOME", tmpHome)
+	workDir := t.TempDir()
+
+	body := "aliased body"
+	require.NoError(t, os.WriteFile(
+		filepath.Join(workDir, config.ContextFileName),
+		[]byte(body),
+		0o644,
+	))
+	require.NoError(t, os.Symlink(
+		filepath.Join(workDir, config.ContextFileName),
+		filepath.Join(workDir, config.AgentsFileName),
+	))
+
+	svc := New()
+	result, err := svc.LoadAgentsMD(workDir)
+	require.NoError(t, err)
+	assert.Equal(t, "[project] "+filepath.Join(workDir, config.AgentsFileName)+"\n\n"+body, result)
+	assert.Equal(t, 1, strings.Count(result, body))
+}
+
+func TestLoadAgentsMD_LocalIsAppendNotReplacement(t *testing.T) {
+	tmpHome := t.TempDir()
+	t.Setenv("HOME", tmpHome)
+	workDir := t.TempDir()
+
+	claudeLocal := config.ContextLocalFileName
+	require.NoError(t, os.WriteFile(
+		filepath.Join(workDir, config.ContextFileName),
+		[]byte("project body"),
+		0o644,
+	))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(workDir, claudeLocal),
+		[]byte("local body"),
+		0o644,
+	))
+
+	svc := New()
+	result, err := svc.LoadAgentsMD(workDir)
+	require.NoError(t, err)
+	assert.Equal(
+		t,
+		"[project] "+filepath.Join(workDir, config.ContextFileName)+"\n\nproject body\n\n"+
+			"[local] "+filepath.Join(workDir, claudeLocal)+"\n\nlocal body",
+		result,
+	)
+}
+
+func TestLoadAgentsMD_LocalChainAGENTSFirst(t *testing.T) {
+	tmpHome := t.TempDir()
+	t.Setenv("HOME", tmpHome)
+	workDir := t.TempDir()
+
+	agentsLocal := config.AgentsLocalFileName
+	claudeLocal := config.ContextLocalFileName
+	require.NoError(t, os.WriteFile(filepath.Join(workDir, agentsLocal), []byte("agents local body"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(workDir, claudeLocal), []byte("claude local body"), 0o644))
+
+	svc := New()
+	result, err := svc.LoadAgentsMD(workDir)
+	require.NoError(t, err)
+	assert.Equal(t, "[local] "+filepath.Join(workDir, agentsLocal)+"\n\nagents local body", result)
+	assert.NotContains(t, result, "claude local body")
+}
+
+func TestLoadAgentsMD_MergeLabelsAndTildeRendering(t *testing.T) {
+	t.Run("workDir under HOME renders the tilde prefix", func(t *testing.T) {
+		tmpHome := t.TempDir()
+		t.Setenv("HOME", tmpHome)
+		workDir := filepath.Join(tmpHome, "project")
+		require.NoError(t, os.MkdirAll(workDir, 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(workDir, config.AgentsFileName), []byte("project body"), 0o644))
+
+		svc := New()
+		result, err := svc.LoadAgentsMD(workDir)
+		require.NoError(t, err)
+		assert.Equal(t, "[project] ~/project/"+config.AgentsFileName+"\n\nproject body", result)
+	})
+
+	t.Run("workDir outside HOME renders the absolute path", func(t *testing.T) {
+		tmpHome := t.TempDir()
+		t.Setenv("HOME", tmpHome)
+		workDir := t.TempDir()
+		require.NoError(t, os.WriteFile(filepath.Join(workDir, config.AgentsFileName), []byte("project body"), 0o644))
+
+		svc := New()
+		result, err := svc.LoadAgentsMD(workDir)
+		require.NoError(t, err)
+		assert.Equal(t, "[project] "+filepath.Join(workDir, config.AgentsFileName)+"\n\nproject body", result)
+	})
+}
+
+func TestLoadAgentsMD_NoArtifacts(t *testing.T) {
+	tmpHome := t.TempDir()
+	t.Setenv("HOME", tmpHome)
+	workDir := t.TempDir()
+
+	svc := New()
+	result, err := svc.LoadAgentsMD(workDir)
+	require.NoError(t, err)
+	assert.Empty(t, result)
+}
+
+func TestLoadAgentsMD_DirectoryCandidateSkippedWithRecordedError(t *testing.T) {
+	tmpHome := t.TempDir()
+	t.Setenv("HOME", tmpHome)
+	workDir := t.TempDir()
+
+	agentsPath := filepath.Join(workDir, config.AgentsFileName)
+	require.NoError(t, os.MkdirAll(agentsPath, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(workDir, config.ContextFileName), []byte("claude body"), 0o644))
+
+	svc := New()
+	result, err := svc.LoadAgentsMD(workDir)
+	require.Error(t, err)
+	require.ErrorContains(t, err, agentsPath)
+	assert.Equal(t, "[project] "+filepath.Join(workDir, config.ContextFileName)+"\n\nclaude body", result)
+}
+
+func TestLoadAgentsMD_EscapingSymlinkRejected(t *testing.T) {
+	base := t.TempDir()
+	project := filepath.Join(base, "project")
+	outside := filepath.Join(base, "outside")
+	require.NoError(t, os.MkdirAll(project, 0o755))
+	require.NoError(t, os.MkdirAll(outside, 0o755))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(outside, config.AgentsFileName),
+		[]byte("outside context"),
+		0o644,
+	))
+	require.NoError(t, os.Symlink(
+		filepath.Join(outside, config.AgentsFileName),
+		filepath.Join(project, config.AgentsFileName),
+	))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(project, config.ContextFileName),
+		[]byte("project claude body"),
+		0o644,
+	))
+
+	svc := New()
+	result, err := svc.LoadAgentsMD(project)
+	require.Error(t, err)
+	require.ErrorContains(t, err, safefile.ErrOutsideProject.Error())
+	assert.NotContains(t, result, "outside context")
+	assert.Equal(
+		t,
+		"[project] "+filepath.Join(project, config.ContextFileName)+"\n\nproject claude body",
+		result,
+	)
+}
+
+func TestLoadAgentsMD_EscapingSymlinkOnlyCandidate(t *testing.T) {
+	base := t.TempDir()
+	project := filepath.Join(base, "project")
+	outside := filepath.Join(base, "outside")
+	require.NoError(t, os.MkdirAll(project, 0o755))
+	require.NoError(t, os.MkdirAll(outside, 0o755))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(outside, config.AgentsFileName),
+		[]byte("outside context"),
+		0o644,
+	))
+	require.NoError(t, os.Symlink(
+		filepath.Join(outside, config.AgentsFileName),
+		filepath.Join(project, config.AgentsFileName),
+	))
+
+	svc := New()
+	result, err := svc.LoadAgentsMD(project)
+	require.Error(t, err)
+	require.ErrorContains(t, err, safefile.ErrOutsideProject.Error())
+	assert.Empty(t, result)
+}
+
+func TestLoadSkills_MissingWorkDirKeepsGlobalSources(t *testing.T) {
+	tmpHome := t.TempDir()
+	t.Setenv("HOME", tmpHome)
+
+	globalSkillDir := filepath.Join(tmpHome, config.ProjectCoagentDir, config.SkillsDirName, "demo")
+	require.NoError(t, os.MkdirAll(globalSkillDir, 0o755))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(globalSkillDir, config.SkillFileName),
+		[]byte("global skill body"),
+		0o644,
+	))
+
+	svc := New()
+	err := svc.LoadSkills(filepath.Join(tmpHome, "missing-workdir"))
+	require.Error(t, err)
+	require.NotNil(t, svc.GetSkill("demo"))
+}
+
+func TestLoadSubagents_MissingWorkDirKeepsGlobalSources(t *testing.T) {
+	tmpHome := t.TempDir()
+	t.Setenv("HOME", tmpHome)
+
+	require.NoError(t, os.MkdirAll(
+		filepath.Join(tmpHome, config.ProjectCoagentDir, config.AgentsDirName),
+		0o755,
+	))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(tmpHome, config.ProjectCoagentDir, config.AgentsDirName, "demo.md"),
+		[]byte("global subagent body"),
+		0o644,
+	))
+
+	svc := New()
+	err := svc.LoadSubagents(filepath.Join(tmpHome, "missing-workdir"))
+	require.Error(t, err)
+	require.NotNil(t, svc.GetSubagent("demo"))
+}
+
+func TestLoadSkills_MarketplaceEscapingSymlinkRejected(t *testing.T) {
+	base := t.TempDir()
+	repo := filepath.Join(base, "repo")
+	skillsDir := filepath.Join(repo, "plugins", "plug", config.SkillsDirName)
+	outside := filepath.Join(base, "outside")
+	require.NoError(t, os.MkdirAll(skillsDir, 0o755))
+	require.NoError(t, os.MkdirAll(outside, 0o755))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(outside, "secrets.txt"),
+		[]byte("outside secret"),
+		0o644,
+	))
+	require.NoError(t, os.Symlink(
+		filepath.Join(outside, "secrets.txt"),
+		filepath.Join(skillsDir, "escape.md"),
+	))
+	require.NoError(t, os.WriteFile(filepath.Join(skillsDir, "ok.md"), []byte("fine skill"), 0o644))
+
+	svc := New().(*svc)
+	svc.marketplaceSkillPaths = []sourceInfo{{path: skillsDir, pluginName: "plug", root: repo}}
+	require.NoError(t, svc.LoadSkills(t.TempDir()))
+
+	assert.Nil(t, svc.GetSkill("plug:escape"))
+	require.NotNil(t, svc.GetSkill("plug:ok"))
+}
+
+// The containment root is the repository clone, not the cache base: a symlink
+// crossing to a sibling repo under the same cache base must be denied.
+func TestLoadSkills_MarketplaceSiblingRepoSymlinkRejected(t *testing.T) {
+	base := t.TempDir()
+	cacheBase := filepath.Join(base, "cache")
+	repoA := filepath.Join(cacheBase, "owner", "repo-a")
+	repoB := filepath.Join(cacheBase, "owner", "repo-b")
+	skillsDir := filepath.Join(repoA, "plugins", "plug", config.SkillsDirName)
+	require.NoError(t, os.MkdirAll(skillsDir, 0o755))
+	require.NoError(t, os.MkdirAll(repoB, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(repoB, "secret.md"), []byte("sibling secret"), 0o644))
+	require.NoError(t, os.Symlink(
+		filepath.Join(repoB, "secret.md"),
+		filepath.Join(skillsDir, "sneak.md"),
+	))
+
+	svc := New().(*svc)
+	svc.marketplaceSkillPaths = []sourceInfo{{path: skillsDir, pluginName: "plug", root: repoA}}
+	require.NoError(t, svc.LoadSkills(t.TempDir()))
+
+	assert.Nil(t, svc.GetSkill("plug:sneak"))
 }
 
 func TestIntegration_LoadAll(t *testing.T) {

@@ -5,28 +5,18 @@ import (
 	"io"
 	"io/fs"
 	"os"
-	"path/filepath"
-	"strings"
+
+	"github.com/pilat/coagent/internal/safefile"
 )
 
-//nolint:wsl_v5 // Both relative escape forms are part of one containment verdict.
-func (s *svc) projectPath(workDir, path string) bool {
-	root, err := filepath.Abs(workDir)
-	if err != nil {
-		return false
-	}
-
-	relative, err := filepath.Rel(filepath.Clean(root), filepath.Clean(path))
-	return err == nil && relative != ".." &&
-		!strings.HasPrefix(relative, ".."+string(filepath.Separator))
-}
-
-func (s *svc) readSourceFile(path string, project bool) ([]byte, error) {
-	if !project || s.projectAccess == nil {
+// readSourceFile reads one source file. A nil access marks a trusted host
+// input; project sources read through the project-confined root.
+func readSourceFile(path string, access safefile.Access) ([]byte, error) {
+	if access == nil {
 		return os.ReadFile(path) //nolint:wrapcheck // Caller adds source context.
 	}
 
-	opened, err := s.projectAccess.Open(path)
+	opened, err := access.Open(path)
 	if err != nil {
 		return nil, fmt.Errorf("open rooted project source: %w", err)
 	}
@@ -40,12 +30,12 @@ func (s *svc) readSourceFile(path string, project bool) ([]byte, error) {
 	return content, nil
 }
 
-func (s *svc) readSourceDir(path string, project bool) ([]fs.DirEntry, error) {
-	if !project || s.projectAccess == nil {
+func readSourceDir(path string, access safefile.Access) ([]fs.DirEntry, error) {
+	if access == nil {
 		return os.ReadDir(path) //nolint:wrapcheck // Caller adds source context.
 	}
 
-	entries, _, err := s.projectAccess.ReadDir(path)
+	entries, _, err := access.ReadDir(path)
 	if err != nil {
 		return nil, fmt.Errorf("read rooted project source directory: %w", err)
 	}
@@ -53,12 +43,12 @@ func (s *svc) readSourceDir(path string, project bool) ([]fs.DirEntry, error) {
 	return entries, nil
 }
 
-func (s *svc) statSource(path string, project bool) (fs.FileInfo, error) {
-	if !project || s.projectAccess == nil {
+func statSource(path string, access safefile.Access) (fs.FileInfo, error) {
+	if access == nil {
 		return os.Stat(path) //nolint:wrapcheck // Caller treats absence as a skipped source.
 	}
 
-	info, _, err := s.projectAccess.Stat(path)
+	info, _, err := access.Stat(path)
 	if err != nil {
 		return nil, fmt.Errorf("stat rooted project source: %w", err)
 	}
@@ -66,16 +56,49 @@ func (s *svc) statSource(path string, project bool) (fs.FileInfo, error) {
 	return info, nil
 }
 
-func (s *svc) parseSourceFrontmatter(path string, project bool) ([]byte, string, error) {
-	if !project || s.projectAccess == nil {
+func parseSourceFrontmatter(path string, access safefile.Access) ([]byte, string, error) {
+	if access == nil {
 		return parseFrontmatterFile(path)
 	}
 
-	opened, err := s.projectAccess.Open(path)
+	opened, err := access.Open(path)
 	if err != nil {
 		return nil, "", fmt.Errorf("open rooted project frontmatter: %w", err)
 	}
 	defer func() { _ = opened.File.Close() }()
 
 	return parseFrontmatter(opened.File, path)
+}
+
+// sourceAccesses opens one project-confined root per distinct non-empty source
+// root; a failed root is recorded so the caller drops only its own sources.
+func sourceAccesses(sources []sourceInfo) (map[string]safefile.Access, []error) {
+	roots := make(map[string]struct{})
+
+	for _, src := range sources {
+		if src.root != "" {
+			roots[src.root] = struct{}{}
+		}
+	}
+
+	var errs []error
+	accesses := make(map[string]safefile.Access, len(roots))
+
+	for root := range roots {
+		access, err := safefile.New(root, safefile.ProjectConfined)
+		if err != nil {
+			errs = append(errs, fmt.Errorf("contain sources rooted at %s: %w", root, err))
+			continue
+		}
+
+		accesses[root] = access
+	}
+
+	return accesses, errs
+}
+
+func closeAccesses(accesses map[string]safefile.Access) {
+	for _, access := range accesses {
+		_ = access.Close()
+	}
 }

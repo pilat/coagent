@@ -15,7 +15,7 @@ const skillDescriptionMaxRunes = 1536
 type sourceInfo struct {
 	path       string // filesystem path to the skill/agent directory or file
 	pluginName string // plugin name for marketplace items, empty for local
-	project    bool
+	root       string // containment root for this source; empty = trusted host input
 }
 
 type Skill struct {

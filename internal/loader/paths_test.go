@@ -183,57 +183,75 @@ func TestProjectAgentsSkillsDir(t *testing.T) {
 	}
 }
 
-func TestContextFilePaths(t *testing.T) {
-	t.Run("returns correct paths in order when HOME is set", func(t *testing.T) {
+func TestContextCandidateLists(t *testing.T) {
+	t.Run("global candidates are the five home-relative paths in order", func(t *testing.T) {
 		tmpHome := t.TempDir()
 		t.Setenv("HOME", tmpHome)
-		cwd := "/home/user/project"
 
-		paths := contextFilePaths(cwd)
-		require.Len(t, paths, 5)
+		candidates := globalContextCandidates()
+		require.Len(t, candidates, 5)
 
 		assert.Equal(
 			t,
 			filepath.Join(tmpHome, coagenthome.DirName, config.AgentsFileName),
-			paths[0],
-			"global AGENTS",
+			candidates[0],
+			"coagent global AGENTS",
 		)
-		assert.Equal(t, filepath.Join(cwd, config.AgentsFileName), paths[1], "project AGENTS")
-		assert.Equal(t, filepath.Join(cwd, config.ContextFileName), paths[2], "project root CLAUDE")
+		assert.Equal(
+			t,
+			filepath.Join(tmpHome, ".claude", config.ContextFileName),
+			candidates[1],
+			"claude global",
+		)
+		assert.Equal(
+			t,
+			filepath.Join(tmpHome, ".codex", config.AgentsFileName),
+			candidates[2],
+			"codex global AGENTS",
+		)
+		assert.Equal(
+			t,
+			filepath.Join(tmpHome, ".config", "opencode", config.AgentsFileName),
+			candidates[3],
+			"opencode global AGENTS",
+		)
+		assert.Equal(t, filepath.Join(tmpHome, ".gemini", "GEMINI.md"), candidates[4], "gemini global")
+	})
+
+	t.Run("global candidates are empty when HOME is not set", func(t *testing.T) {
+		t.Setenv("HOME", "")
+		t.Setenv("USERPROFILE", "")
+
+		assert.Empty(t, globalContextCandidates())
+	})
+
+	t.Run("project candidates are workDir-relative in order", func(t *testing.T) {
+		cwd := "/home/user/project"
+
+		candidates := projectContextCandidates(cwd)
+		require.Len(t, candidates, 3)
+
+		assert.Equal(t, filepath.Join(cwd, config.AgentsFileName), candidates[0], "project AGENTS")
+		assert.Equal(t, filepath.Join(cwd, config.ContextFileName), candidates[1], "project root CLAUDE")
 		assert.Equal(
 			t,
 			filepath.Join(cwd, config.ProjectConfigDir, config.ContextFileName),
-			paths[3],
+			candidates[2],
 			"project config dir CLAUDE",
 		)
-		assert.Equal(t, filepath.Join(cwd, "CLAUDE.local.md"), paths[4], "local")
 	})
 
-	t.Run("returns 4 paths when HOME is not set", func(t *testing.T) {
-		t.Setenv("HOME", "")
-		t.Setenv("USERPROFILE", "")
+	t.Run("local candidates are workDir-relative in order", func(t *testing.T) {
 		cwd := "/home/user/project"
 
-		paths := contextFilePaths(cwd)
-		require.Len(t, paths, 4)
+		candidates := localContextCandidates(cwd)
+		require.Len(t, candidates, 2)
 
-		assert.Equal(t, filepath.Join(cwd, config.AgentsFileName), paths[0], "project AGENTS")
+		assert.Equal(t, filepath.Join(cwd, config.AgentsLocalFileName), candidates[0], "local AGENTS")
+		assert.Equal(t, filepath.Join(cwd, config.ContextLocalFileName), candidates[1], "local CLAUDE")
 	})
 
-	t.Run("uses correct local file naming", func(t *testing.T) {
-		cwd := "/tmp/test"
-		paths := contextFilePaths(cwd)
-
-		lastPath := paths[len(paths)-1]
-		assert.True(
-			t,
-			strings.HasSuffix(lastPath, "CLAUDE.local.md"),
-			"local path = %q, should end with CLAUDE.local.md",
-			lastPath,
-		)
-	})
-
-	t.Run("handles different working directories", func(t *testing.T) {
+	t.Run("project and local candidates track different working directories", func(t *testing.T) {
 		cwds := []string{
 			"/home/user/project",
 			"/very/long/path/to/the/project/directory",
@@ -241,13 +259,7 @@ func TestContextFilePaths(t *testing.T) {
 		}
 
 		for _, cwd := range cwds {
-			paths := contextFilePaths(cwd)
-			require.GreaterOrEqual(t, len(paths), 3, "contextFilePaths(%q)", cwd)
-
-			for _, p := range paths {
-				if strings.Contains(p, coagenthome.DirName) {
-					continue
-				}
+			for _, p := range append(projectContextCandidates(cwd), localContextCandidates(cwd)...) {
 				assert.Contains(t, p, cwd, "path should contain cwd")
 			}
 		}

@@ -266,7 +266,11 @@ func TestProjectExploreOverride_KeepsProjectContext(t *testing.T) {
 
 	assert.Contains(t, s.prompt.systemPrompt(), "CUSTOM EXPLORE PROMPT")
 	assert.Contains(t, s.prompt.systemPrompt(), "- Model: test-model")
-	assert.Equal(t, "PROJECT INSTRUCTIONS", s.agentsMD)
+	assert.Equal(
+		t,
+		"[project] "+filepath.Join(workDir, "AGENTS.md")+"\n\nPROJECT INSTRUCTIONS",
+		s.agentsMD,
+	)
 }
 
 func writeProjectAgent(t *testing.T, workDir, name, body string) {

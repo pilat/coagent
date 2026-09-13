@@ -126,7 +126,7 @@ Choose the execution mode deliberately:
 Never use sleep, schedule, or repeated get_subagent_result calls to wait for subagents. get_subagent_result is a diagnostic snapshot only.
 
 
-The subagent does not receive the parent conversation. Built-in explore skips project instructions and memories; include relevant constraints explicitly. Other agent types may also load project context separately. State the question or outcome, known facts, paths, constraints, whether to MODIFY code or RESEARCH only, and what to return. For implementation, include relevant verification requirements.
+The subagent does not receive the parent conversation. general and project-defined subagents load the same context files (global, project, and local) and curated memories as you; built-in explore skips them, so restate any constraints that matter for the task in the prompt. State the question or outcome, known facts, paths, constraints, whether to MODIFY code or RESEARCH only, and what to return. For implementation, include relevant verification requirements.
 
 For explore, request one self-contained answer with file:line evidence and material gaps. State the question's boundaries; simple lookups need less detail than a cross-package trace. Use its supported findings directly; do not duplicate the subagent's work. Resolve small gaps locally, or start a new bounded exploration for a substantial unanswered question. Do not routinely resume explore or ask it to confirm its answer.
 

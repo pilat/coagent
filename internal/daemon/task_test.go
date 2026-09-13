@@ -208,7 +208,7 @@ func TestSubagentToolDescriptionsTeachExecutionContract(t *testing.T) {
 		"Bounded research whose raw searches and file reads would add noise to the parent context",
 		"Keep dependent work sequential",
 		"does not receive the parent conversation",
-		"may also load project context separately",
+		"the same context files (global, project, and local) and curated memories as you",
 		"one self-contained answer with file:line evidence and material gaps",
 		"do not duplicate the subagent's work",
 		"Do not routinely resume explore or ask it to confirm its answer",

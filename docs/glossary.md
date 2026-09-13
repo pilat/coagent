@@ -31,8 +31,9 @@ storage outside the project; Git metadata outside a linked work tree is not part
 of the project boundary. Lowering shields restores host-readable process and
 file-tool behavior while retaining the write sandbox. Only a manager-originated
 command may change the state, and subagents inherit it. Project-local
-instruction sources use rooted project access; global and marketplace
-instruction sources remain trusted daemon inputs outside that boundary. The
+instruction sources use rooted project access, and marketplace sources a root
+confined to their own repository clone; global instruction sources remain
+trusted daemon inputs outside those boundaries. The
 built-in web fetch and search tools remain available in both states. Network
 egress and inherited environment values are unchanged; resolver, host-name,
 account, loader, and certificate files may remain readable runtime substrate.
@@ -102,6 +103,10 @@ The setup protocol embedded in the binary (`internal/loader/builtin/onboarding`)
 _Avoid_: setup agent, onboarding agent (it is not an agent type).
 
 ## Agent loop & context management
+
+**context artifact**:
+One of the three instruction files a session loads at open — **global**, **project**, or **local** — each resolved by a first-match-wins search over an ordered candidate list, then merged into the opening context as a `[role] <path>` labeled section with the home directory abbreviated to `~`. The section's path is the winning candidate, not the resolved symlink target.
+_Avoid_: project instructions (the pre-rename name for the merged string), AGENTS.md (one candidate, not the resolved artifact).
 
 **agent loop**:
 The core cycle a session runs: call the LLM, execute the returned tool calls, record the observations, repeat until done or capped. The function is `runLoop`.

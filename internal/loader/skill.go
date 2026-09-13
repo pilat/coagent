@@ -12,6 +12,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/pilat/coagent/internal/config"
+	"github.com/pilat/coagent/internal/safefile"
 )
 
 // LoadSkills finds and parses all SKILL.md files from search paths.
@@ -30,22 +31,31 @@ func (s *svc) LoadSkills(workDir string) error {
 	}
 
 	searchSources = append(searchSources,
-		sourceInfo{path: projectAgentsSkillsDir(workDir), project: true},
-		sourceInfo{path: projectCoagentSkillsDir(workDir), project: true},
-		sourceInfo{path: projectCommandsDir(workDir), project: true},
-		sourceInfo{path: projectSkillsDir(workDir), project: true},
+		sourceInfo{path: projectAgentsSkillsDir(workDir), root: workDir},
+		sourceInfo{path: projectCoagentSkillsDir(workDir), root: workDir},
+		sourceInfo{path: projectCommandsDir(workDir), root: workDir},
+		sourceInfo{path: projectSkillsDir(workDir), root: workDir},
 	)
+
+	// Every source reads through its containment root: an escaping symlink is
+	// denied, not followed. A failed root only drops its own sources.
+	accesses, errs := sourceAccesses(searchSources)
+	defer closeAccesses(accesses)
 
 	// A broken source is skipped, not fatal: aborting the scan would silently drop
 	// every higher-priority source behind it.
-	var errs []error
 
 	for _, src := range searchSources {
 		if src.path == "" {
 			continue
 		}
 
-		err := s.loadSkillsFromPath(src)
+		access, opened := accesses[src.root]
+		if src.root != "" && !opened {
+			continue
+		}
+
+		err := s.loadSkillsFromPath(src, access)
 		if err == nil || errors.Is(err, os.ErrNotExist) {
 			continue
 		}
@@ -56,14 +66,14 @@ func (s *svc) LoadSkills(workDir string) error {
 	return errors.Join(errs...)
 }
 
-func (s *svc) loadSkillsFromPath(source sourceInfo) error {
-	entries, err := s.readSourceDir(source.path, source.project)
+func (s *svc) loadSkillsFromPath(source sourceInfo, access safefile.Access) error {
+	entries, err := readSourceDir(source.path, access)
 	if err != nil {
 		return fmt.Errorf("scan skill directory %s: %w", source.path, err)
 	}
 
 	for _, entry := range entries {
-		skill, skillName, ok := s.parseSkillEntry(source, entry)
+		skill, skillName, ok := s.parseSkillEntry(source, entry, access)
 		if !ok {
 			continue
 		}
@@ -79,10 +89,10 @@ func (s *svc) loadSkillsFromPath(source sourceInfo) error {
 	return nil
 }
 
-func (s *svc) parseSkillEntry(source sourceInfo, entry os.DirEntry) (*Skill, string, bool) {
+func (s *svc) parseSkillEntry(source sourceInfo, entry os.DirEntry, access safefile.Access) (*Skill, string, bool) {
 	isDir := entry.IsDir()
 	if entry.Type()&os.ModeSymlink != 0 {
-		if info, err := s.statSource(filepath.Join(source.path, entry.Name()), source.project); err == nil {
+		if info, err := statSource(filepath.Join(source.path, entry.Name()), access); err == nil {
 			isDir = info.IsDir()
 		}
 	}
@@ -90,7 +100,7 @@ func (s *svc) parseSkillEntry(source sourceInfo, entry os.DirEntry) (*Skill, str
 	if isDir {
 		skillPath := filepath.Join(source.path, entry.Name(), config.SkillFileName)
 
-		skill, err := s.parseSkillFile(skillPath, source.project)
+		skill, err := parseSkillFile(skillPath, access)
 		if err != nil {
 			return nil, "", false
 		}
@@ -109,7 +119,7 @@ func (s *svc) parseSkillEntry(source sourceInfo, entry os.DirEntry) (*Skill, str
 
 	skillPath := filepath.Join(source.path, entry.Name())
 
-	skill, err := s.parseSkillFile(skillPath, source.project)
+	skill, err := parseSkillFile(skillPath, access)
 	if err != nil {
 		return nil, "", false
 	}
@@ -122,8 +132,8 @@ func (s *svc) parseSkillEntry(source sourceInfo, entry os.DirEntry) (*Skill, str
 	return skill, skillName, true
 }
 
-func (s *svc) parseSkillFile(path string, project bool) (*Skill, error) {
-	frontmatter, content, err := s.parseSourceFrontmatter(path, project)
+func parseSkillFile(path string, access safefile.Access) (*Skill, error) {
+	frontmatter, content, err := parseSourceFrontmatter(path, access)
 	if err != nil {
 		return nil, err
 	}

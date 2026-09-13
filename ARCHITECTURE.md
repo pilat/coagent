@@ -646,10 +646,12 @@ system execution substrate. Linux also supplies a private PID `/proc` and
 synthetic devices; host temporary storage, home data, user caches, configured
 writable exceptions, external linked-worktree Git metadata and captured `PATH`
 directories are absent. Raised sessions bypass shell activation. Project-local
-instructions use rooted access, while global and marketplace instructions
-remain trusted daemon inputs. Network egress, inherited environment values,
-prior conversation data and deliberately detached descendants are outside this
-boundary ([ADR-0044](docs/adr/0044-session-shields-confine-project-filesystem.md)).
+instructions read through a project-confined root regardless of shield state,
+marketplace instructions through a root confined to their own repository clone,
+and global instructions remain trusted daemon inputs. Network egress, inherited
+environment values, prior conversation data and deliberately detached
+descendants are outside this boundary
+([ADR-0044](docs/adr/0044-session-shields-confine-project-filesystem.md)).
 
 Web fetching rejects link-local and known cloud-metadata destinations after
 resolution and immediately before connect, including redirects. It intentionally
@@ -835,8 +837,9 @@ lives in config, so drivers and sessions read one resolver.
 
 Catalog owns externally fetched model metadata and cache validity, not product
 recommendation. Loader owns trusted local discovery and marketplace retrieval of
-instructions and subagent definitions. Project-local sources use the session's
-rooted project access; global and marketplace sources remain trusted host reads.
+instructions and subagent definitions. Project-local sources read through a
+project-confined root, marketplace sources through a root confined to their own
+repository clone, and global sources remain trusted host reads.
 Loaded content influences a session prompt and policy input; it never gains an
 implicit controller or daemon API. Shell environment capture is per project and
 replayed for Bash, LSP and MCP subprocesses only while shields are down, without
