@@ -1,7 +1,7 @@
 #!/bin/sh
 # Minimal MCP stdio server for tests: answers the handshake, advertises one tool,
-# ignores everything else. A script rather than a Go binary so the test needs
-# neither a compiler nor an ad-hoc process spawn of its own.
+# rejects unknown methods with JSON-RPC MethodNotFound (mcp-go v1 probes first).
+# A script rather than a Go binary so the test needs no compiler of its own.
 while IFS= read -r line; do
   id=$(printf '%s' "$line" | sed -n 's/.*"id":\([0-9]*\).*/\1/p')
   [ -n "$id" ] || continue
