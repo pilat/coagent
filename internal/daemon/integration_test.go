@@ -481,7 +481,10 @@ func toDTO(stored []*transcript.Message) []llmwire.Message {
 	msgs := make([]llmwire.Message, 0, len(stored))
 
 	for _, m := range stored {
-		msg := llmwire.Message{Role: m.Role, Content: m.Content, ToolCallID: m.ToolCallID, ToolName: m.ToolName}
+		msg := llmwire.Message{
+			Role: m.Role, Content: m.Content, ToolCallID: m.ToolCallID, ToolName: m.ToolName,
+			ToolError: m.ToolError,
+		}
 		if len(m.ToolCalls) > 0 {
 			var tcs []llmwire.ToolCall
 			if err := json.Unmarshal(m.ToolCalls, &tcs); err == nil {

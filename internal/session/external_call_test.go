@@ -157,6 +157,45 @@ func TestSettleStoppedCalls_ClosesOnlyCurrentAndExternalCallsInTranscriptOrder(t
 	assert.Equal(t, []string{"external:sleep", "ordinary-two:read"}, settled)
 }
 
+func TestResolveInterruptedCalls_ClosesCurrentTurnCallsWithTypedFailure(t *testing.T) {
+	agent := newTestAgent()
+	agent.ms.setMessages([]llmwire.Message{
+		usr("run the work"),
+		asst("running", call("b1", "bash"), call("r1", "read")),
+	})
+
+	require.NoError(t, agent.ResolveInterruptedCalls(context.Background(), []PendingToolCall{
+		{ID: "b1", Name: "bash"},
+		{ID: "missing", Name: "bash"},
+	}, "interrupted notice"))
+
+	messages := agent.ms.getMessages()
+	require.Len(t, messages, 3)
+	result := messages[2]
+	assert.Equal(t, llmwire.RoleTool, result.Role)
+	assert.Equal(t, "bash", result.ToolName)
+	assert.True(t, result.ToolError, "an interrupted call must resolve as a typed failure")
+	assert.Equal(t, "interrupted notice", result.Content)
+}
+
+// A call superseded by a newer user message is abandoned, not pending: the
+// boot sweep must not settle it, and repair stubs it for API validity.
+func TestResolveInterruptedCalls_SkipsSupersededTurn(t *testing.T) {
+	agent := newTestAgent()
+	agent.ms.setMessages([]llmwire.Message{
+		asst("", call("stale", "bash")),
+		usr("new request supersedes the old bash"),
+	})
+
+	require.NoError(t, agent.ResolveInterruptedCalls(context.Background(), []PendingToolCall{
+		{ID: "stale", Name: "bash"},
+	}, "interrupted notice"))
+
+	for _, msg := range agent.ms.getMessages() {
+		assert.NotEqual(t, "stale", msg.ToolCallID, "a superseded call is not settled")
+	}
+}
+
 func TestResolvePendingCall_RejectsDishonestIdentity(t *testing.T) {
 	agent := newTestAgent()
 	agent.stagedCalls = map[string]string{"sleep-call-1": tool.IDSleep}

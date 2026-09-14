@@ -71,6 +71,11 @@ type Service interface {
 	// current assistant turn after lifecycle code has fenced their producers.
 	SettleStoppedCalls(ctx context.Context, content string) error
 
+	// ResolveInterruptedCalls durably closes the given in-loop calls with a typed
+	// failure. The boot sweep uses it to settle calls left pending by a daemon
+	// restart; calls not in the current turn are skipped.
+	ResolveInterruptedCalls(ctx context.Context, calls []PendingToolCall, content string) error
+
 	// InjectToolNotificationOnce adds a synthetic tool_call + tool_result pair,
 	// applying one externally identified event at most once, including across
 	// process restart and producer acknowledgement failure.

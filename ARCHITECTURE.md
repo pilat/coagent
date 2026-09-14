@@ -305,8 +305,12 @@ process-output diagnostics available.
 
 Shutdown stops admission, drains or checkpoints work according to its durable
 state, stops managers and pooled resources, then closes stores. Startup recovery
-rebuilds runnable sessions from persisted rows and producer ledgers. A stopped
-link is retained for explicit follow-up but is not automatically resumed.
+rebuilds runnable sessions from persisted rows and producer ledgers. Before any
+session resumes, a PASS 0 sweep settles every pending in-loop tool call as a
+typed failure ([ADR-0059](docs/adr/0059-pending-tool-calls-are-never-reexecuted-on-resume.md)):
+the loop never re-executes an operation the model did not watch complete, and
+the model retries explicitly. A stopped link is retained for explicit follow-up
+but is not automatically resumed.
 `/stop` is stronger than an ordinary interruption: it fences an active tree,
 cancels and joins its runners, settles each active unresolved call in the
 append-only transcript, and only then parks it. An explicit manager-owned stop
