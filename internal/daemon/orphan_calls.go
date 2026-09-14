@@ -129,6 +129,15 @@ func (s *svc) orphanedCalls(ctx context.Context, sessionID int64) ([]session.Pen
 // unresolvedStoredExternalCalls is the name-keyed pending set read straight from
 // the durable transcript — what a provider would see dangling.
 func unresolvedStoredExternalCalls(msgs []*transcript.Message) ([]session.PendingToolCall, error) {
+	return unresolvedStoredCalls(msgs, tool.IsExternalCall)
+}
+
+// unresolvedStoredCalls lists unresolved calls matching the predicate, in
+// transcript order.
+func unresolvedStoredCalls(
+	msgs []*transcript.Message,
+	matches func(name string) bool,
+) ([]session.PendingToolCall, error) {
 	seen := make(map[string]bool)
 
 	for _, m := range msgs {
@@ -150,7 +159,7 @@ func unresolvedStoredExternalCalls(msgs []*transcript.Message) ([]session.Pendin
 		}
 
 		for _, tc := range calls {
-			if tc.ID == "" || seen[tc.ID] || !tool.IsExternalCall(tc.Name) {
+			if tc.ID == "" || seen[tc.ID] || !matches(tc.Name) {
 				continue
 			}
 

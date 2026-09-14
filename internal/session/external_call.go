@@ -123,6 +123,26 @@ func (s *svc) SettleStoppedCalls(ctx context.Context, content string) error {
 	return nil
 }
 
+// ResolveInterruptedCalls closes the given in-loop calls with a typed failure.
+// The boot sweep uses it to settle every pending call left by a daemon restart:
+// re-executing an operation the model never saw complete is unsafe, so the
+// model must decide whether to retry.
+func (s *svc) ResolveInterruptedCalls(ctx context.Context, calls []PendingToolCall, content string) error {
+	current := unresolvedToolCalls(s.ms.getMessages())
+
+	for _, call := range calls {
+		if current[call.ID] != call.Name {
+			continue
+		}
+
+		if err := s.ms.addToolResultOutputTyped(ctx, call.ID, call.Name, content, nil, nil, true); err != nil {
+			return fmt.Errorf("resolve interrupted call %q: %w", call.ID, err)
+		}
+	}
+
+	return nil
+}
+
 // HasPendingWork reports whether the current assistant turn has unresolved
 // in-loop tools. External calls are excluded even if an erroneous newer turn
 // exists; handlePreviousResult suspends on their global ledger first.

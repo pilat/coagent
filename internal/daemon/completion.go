@@ -561,6 +561,7 @@ func (s *svc) finishRecoveredServices(ctx context.Context) error {
 	// PASS 0 is the one blocking phase. Controllers and the schedule executor start
 	// the moment Start returns, and a runner they open makes it skip that session.
 	s.resolveOrphanedCalls(ctx)
+	s.resolveInterruptedCalls(ctx)
 	s.startProgressReconciler(ctx)
 
 	s.startRecovery(ctx)
@@ -580,6 +581,7 @@ func (s *svc) startRecovery(ctx context.Context) {
 // boundary, which is where the blocking prefix ends.
 func (s *svc) sweep(ctx context.Context) {
 	s.resolveOrphanedCalls(ctx)
+	s.resolveInterruptedCalls(ctx)
 	s.resumeAfterRestart(ctx)
 }
 

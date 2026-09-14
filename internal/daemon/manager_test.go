@@ -44,6 +44,10 @@ type mockSession struct {
 
 func (m *mockSession) SettleStoppedCalls(context.Context, string) error { return nil }
 
+func (m *mockSession) ResolveInterruptedCalls(context.Context, []session.PendingToolCall, string) error {
+	return nil
+}
+
 type blockingCreateSessionStore struct {
 	sessionstore.OrchestrationStore
 	entered chan struct{}

@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"slices"
@@ -22,6 +23,7 @@ import (
 	"github.com/pilat/coagent/internal/sessionevent"
 	"github.com/pilat/coagent/internal/sessionstore"
 	"github.com/pilat/coagent/internal/tool"
+	"github.com/pilat/coagent/internal/transcript"
 )
 
 func TestHarnessScenario_ProcessCompletionAtBusyToolBoundary(t *testing.T) {
@@ -414,6 +416,80 @@ func TestHarnessScenario_ProcessCrashRestartDeliversInterruptedOnce(t *testing.T
 		WHERE source = 'process' AND json_extract(attributes, '$.process_id') = ?`, process.ID).Scan(&inputs))
 	assert.Equal(t, 1, inputs)
 	assertHarnessTrace(t, "process_crash_restart.json", collector.snapshot(), root.ID)
+}
+
+func TestHarnessScenario_ForegroundBashCrashRestartResolvesInterruptedCall(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "foreground-bash-crash-restart.db")
+	var modelCalls atomic.Int64
+	respond := func(_ string, messages []llmwire.Message) *llmwire.Response {
+		modelCalls.Add(1)
+		if hasToolResultFor(messages, "bash") {
+			return &llmwire.Response{Text: "interrupted bash resolved"}
+		}
+
+		return &llmwire.Response{Text: "unexpected activation"}
+	}
+
+	first := newSubagentHarnessOnDB(t, dbPath, respond, nil)
+	root, err := first.sessStore.CreateSession(first.ctx, first.projectID, "fake-model", "", nil)
+	require.NoError(t, err)
+	input, err := first.sessStore.EnqueueInput(first.ctx, root.ID, sessionstore.InputSourceUser, "run the command")
+	require.NoError(t, err)
+	_, err = first.sessStore.PromoteInput(first.ctx, input.ID, "run the command")
+	require.NoError(t, err)
+
+	toolCalls, err := json.Marshal([]llmwire.ToolCall{
+		{ID: "fg-bash", Name: "bash", Arguments: []byte(`{"command":"printf 'hello\\n'"}`)},
+		{ID: "fg-read", Name: "read", Arguments: []byte(`{"path":"a.go"}`)},
+	})
+	require.NoError(t, err)
+	_, err = first.sessStore.InsertMessage(first.ctx, root.ID, &transcript.Message{
+		Role: "assistant", Content: "running the command", ToolCalls: toolCalls,
+	})
+	require.NoError(t, err)
+
+	now := time.Now().UTC()
+	process := backgroundprocess.Process{
+		ID: "crashed-fg-bash", SessionID: root.ID, RootSessionID: root.ID,
+		ToolCallID: "fg-bash", OutputPath: filepath.Join(t.TempDir(), "fg-bash.output"),
+		CreatedAt: now, Deadline: now.Add(time.Minute), OutputSize: 0,
+		State: backgroundprocess.StateRunning,
+	}
+	require.NoError(t, first.mgr.processStore.InsertProcess(first.ctx, process))
+
+	second := newSubagentHarnessOnDB(t, dbPath, respond, nil)
+	collector := collectEvents(second.mgr.PubSub().SubscribeAll())
+	defer func() {
+		collector.stop()
+		second.shutdown()
+		first.shutdown()
+	}()
+	require.NoError(t, second.mgr.Start(second.ctx))
+	waitForVisibleMessage(t, collector, root.ID, "interrupted bash resolved")
+	waitForIdleAfterMessage(t, collector, root.ID, "interrupted bash resolved")
+
+	final, err := second.mgr.processStore.GetProcess(second.ctx, process.ID)
+	require.NoError(t, err)
+	assert.Equal(t, backgroundprocess.StateInterrupted, final.State)
+	assert.Equal(t, int64(1), modelCalls.Load())
+
+	var bashResults, readResults int
+	for _, message := range second.parentMessages(root.ID) {
+		if message.Role != llmwire.RoleTool {
+			continue
+		}
+
+		switch message.ToolName {
+		case "bash":
+			bashResults++
+			assert.True(t, message.ToolError, "interrupted bash must resolve as a typed failure")
+		case "read":
+			readResults++
+			assert.True(t, message.ToolError, "interrupted read must resolve as a typed failure")
+		}
+	}
+	assert.Equal(t, 1, bashResults)
+	assert.Equal(t, 1, readResults)
 }
 
 func TestProcessCompletionRetainsInputWithoutWakingStoppedOrErroredSession(t *testing.T) {

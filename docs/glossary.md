@@ -351,6 +351,10 @@ follow-up without making startup resume it.
 A tool call whose outcome comes from outside the loop — a sleep timer, a subagent, a config apply across a restart, a person typing at a terminal. The loop never re-executes one and never advances past it; transcript repair never stubs one; only an injection targeting its call id resolves it. The daemon's in-memory **staged-call ledger** records the ones it is itself answering.
 _Avoid_: suspended call, blocked tool.
 
+**interrupted in-loop call**:
+A non-external tool call left pending in the transcript by a daemon restart. The boot sweep settles it as a typed failure before the session resumes, so the loop never re-executes an operation the model did not watch complete; the model retries explicitly. See [ADR-0059](adr/0059-pending-tool-calls-are-never-reexecuted-on-resume.md).
+_Avoid_: orphaned call (the orphaned-call pass covers external calls only), re-executed call.
+
 **stop boundary**:
 The durable `/stop` transition for an active root tree. It fences producers,
 cancels and joins runners, settles active unresolved calls, then marks the tree
