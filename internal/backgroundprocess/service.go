@@ -216,13 +216,16 @@ func (s *svc) Start(
 		launched.cancel()
 	}
 
+	// The supervisor goroutine rewrites launched.record on finalize; hand
+	// back the as-launched copy so the return path never races that write.
+	record := launched.record
 	s.startSupervisor(context.WithoutCancel(ctx), launched)
 
 	if closed {
 		return Process{}, ErrFenced
 	}
 
-	return launched.record, nil
+	return record, nil
 }
 
 //nolint:wsl_v5 // Capacity, durable CAS, and class switch are one locked transition.
