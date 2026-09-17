@@ -79,6 +79,8 @@ type loopRunner struct {
 	result               *loopResult
 	log                  *zap.Logger
 	emptyCount           int
+	emptyStopTerminal    bool
+	dispositionTerminal  bool
 	lastResp             *llmwire.Response
 	handledControl       bool
 	replyToInput         bool
@@ -104,6 +106,14 @@ func runLoop(ctx context.Context, agent *svc, opts loopOptions, callback iterati
 	// with the world, an announcement carried in from an earlier one is stale.
 	if !agent.HasPendingExternalCall() {
 		agent.compactionDeferAnnounced = false
+	}
+
+	// Durable completion state resumes obligations, not decisions: the empty
+	// streak escalates from the committed count the disposition transaction
+	// reads, and the reply cache reconciles from the durable manager-reply
+	// obligation.
+	if agent.resumeCompletion != nil {
+		r.replyToInput = agent.resumeCompletion.ManagerReplyPending
 	}
 
 	hb := newHeartbeatTicker(opts.Heartbeat)
@@ -194,6 +204,20 @@ func runLoop(ctx context.Context, agent *svc, opts loopOptions, callback iterati
 		if err := r.recordIteration(ctx); err != nil {
 			return r.result, err
 		}
+		if r.emptyStopTerminal || r.dispositionTerminal {
+			// The disposition committed a durable terminal outcome (sixth
+			// empty notice or projection-error settlement); the activation
+			// ends through that commit — no further model call, and no
+			// second generic error persistence over the committed one.
+			// A committed projection error still reports its error so the
+			// daemon settles the budget and notifies as an error, mirroring
+			// the rejected-response terminal path.
+			if r.result.Error != nil {
+				return r.result, r.result.Error
+			}
+
+			return r.result, nil
+		}
 		if r.agent.budgetFired {
 			r.result.Suspended = true
 
@@ -204,7 +228,7 @@ func runLoop(ctx context.Context, agent *svc, opts loopOptions, callback iterati
 	return r.finalize(ctx)
 }
 
-//nolint:funlen,nestif // One discriminated prior-response protocol is clearer kept together.
+//nolint:funlen,gocyclo,nestif // One discriminated prior-response protocol is clearer kept together.
 func (r *loopRunner) handlePreviousResult(ctx context.Context) (bool, error) {
 	// A call that is out with the world outranks everything: re-executing it
 	// would apply the same change twice, and advancing past it would send the
@@ -292,36 +316,40 @@ func (r *loopRunner) handlePreviousResult(ctx context.Context) (bool, error) {
 		return true, nil
 	}
 
-	// Empty assistant (no text, no tools) — nudge
-	r.emptyCount++
-	r.log.Warn("empty_stop_response", zap.Int("iter", r.result.Iterations), zap.Int("consecutive", r.emptyCount))
+	// Empty assistant (no text, no tools) — nudge. With the durable disposition
+	// path the recordIteration commit already counted this attempt, advanced
+	// the streak, and appended its nudge; the legacy branch must not re-count.
+	if r.agent.dispositions == nil {
+		r.emptyCount++
+		r.log.Warn("empty_stop_response", zap.Int("iter", r.result.Iterations), zap.Int("consecutive", r.emptyCount))
 
-	if r.emptyCount >= emptyResponseBreakThreshold {
-		r.log.Warn("empty_response_notify_user", zap.Int("count", r.emptyCount))
+		if r.emptyCount >= emptyResponseBreakThreshold {
+			r.log.Warn("empty_response_notify_user", zap.Int("count", r.emptyCount))
 
-		r.notifyPersistent(
-			ctx,
-			fmt.Sprintf(
-				"⚠️ Model returned %d consecutive empty responses. Session paused — waiting for input.",
+			r.notifyPersistent(
+				ctx,
+				fmt.Sprintf(
+					"⚠️ Model returned %d consecutive empty responses. Session paused — waiting for input.",
+					r.emptyCount,
+				),
+			)
+
+			return true, nil
+		}
+
+		nudge := "You returned an empty response with no tool calls. Please continue working on the task, or explain what you need."
+		if r.emptyCount == emptyResponseWarnThreshold {
+			nudge = fmt.Sprintf(
+				"[AUTOMATED WARNING: You have returned %d consecutive empty responses (no text, no tool calls). You MUST either use a tool or respond with text. If you cannot proceed, explain why.]",
 				r.emptyCount,
-			),
-		)
+			)
+		}
 
-		return true, nil
-	}
+		if err := r.agent.ms.addUserMessage(ctx, nudge); err != nil {
+			r.result.Error = err
 
-	nudge := "You returned an empty response with no tool calls. Please continue working on the task, or explain what you need."
-	if r.emptyCount == emptyResponseWarnThreshold {
-		nudge = fmt.Sprintf(
-			"[AUTOMATED WARNING: You have returned %d consecutive empty responses (no text, no tool calls). You MUST either use a tool or respond with text. If you cannot proceed, explain why.]",
-			r.emptyCount,
-		)
-	}
-
-	if err := r.agent.ms.addUserMessage(ctx, nudge); err != nil {
-		r.result.Error = err
-
-		return false, fmt.Errorf("record empty-response nudge: %w", err)
+			return false, fmt.Errorf("record empty-response nudge: %w", err)
+		}
 	}
 
 	return false, nil
@@ -503,7 +531,7 @@ func normalizedFinishType(finishType string) string {
 	}
 }
 
-//nolint:funlen,gocyclo,nestif,wsl_v5 // Budget persistence, direct replies, and final selection share one boundary.
+//nolint:funlen,gocyclo,nestif,wsl_v5,gocognit // Budget persistence, direct replies, and final selection share one boundary.
 func (r *loopRunner) recordIteration(ctx context.Context) error {
 	r.result.Iterations++
 	if r.lastResp.FinishType == llmwire.FinishLength || r.lastResp.FinishType == llmwire.FinishUnknown {
@@ -514,6 +542,13 @@ func (r *loopRunner) recordIteration(ctx context.Context) error {
 		r.directReplyEligible = false
 
 		return nil
+	}
+
+	// The durable disposition path owns accepted-response persistence when the
+	// store offers it: one transaction for message, completion check, empty
+	// streak, budget verdict, nudge, and optional manager output.
+	if r.agent.dispositions != nil {
+		return r.recordDispositionIteration(ctx)
 	}
 
 	replyToInput := r.replyToInput
@@ -622,10 +657,6 @@ func assistantOutput(
 		return "", ""
 	}
 
-	if response.FinishType == llmwire.FinishToolCalls && len(response.ToolCalls) == 0 {
-		return "", ""
-	}
-
 	if len(response.ToolCalls) > 0 {
 		if directReplyEligible {
 			return sessionstore.OutputMessagePersistent, response.Text
@@ -682,7 +713,9 @@ func (r *loopRunner) finalize(ctx context.Context) (*loopResult, error) {
 }
 
 // lastAssistantState inspects the message history and returns the state of the
-// last assistant message for resume/iteration handling.
+// last assistant message for resume/iteration handling. Any trailing user
+// message — including the host completion nudge — ends the scan: the nudge
+// must reach the model so a pending candidate gets its confirmation call.
 func lastAssistantState(messages []llmwire.Message) *assistantState {
 	if len(messages) == 0 {
 		return nil
@@ -709,6 +742,8 @@ func lastAssistantState(messages []llmwire.Message) *assistantState {
 
 	if len(assistant.ToolCalls) == 0 {
 		if assistant.FinishType == llmwire.FinishToolCalls {
+			// Empty-response recovery: the body is not a final answer even
+			// when text rides along, so it stays hidden from publication.
 			return &assistantState{}
 		}
 

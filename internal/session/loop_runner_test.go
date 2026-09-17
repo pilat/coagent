@@ -80,6 +80,8 @@ func (g *classificationBudgetGate) PersistRejectedResponse(
 	}, nil
 }
 
+func (g *classificationBudgetGate) BudgetFired(*sessionstore.BudgetRecord) {}
+
 type loopInputBoundary struct {
 	agent    *svc
 	input    *PendingInput

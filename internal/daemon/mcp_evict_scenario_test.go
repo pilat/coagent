@@ -13,10 +13,15 @@ import (
 )
 
 func lastUserText(msgs []llmwire.Message) string {
+	const nudgePrefix = "You ended your previous response without calling a tool."
+
 	text := ""
 
 	for _, m := range msgs {
-		if m.Role == llmwire.RoleUser {
+		// The host completion nudge is not a user turn: the confirmation turn
+		// must answer the task prompt again, not fall through to the default
+		// registration branch.
+		if m.Role == llmwire.RoleUser && !strings.HasPrefix(m.Content, nudgePrefix) {
 			text = m.Content
 		}
 	}
@@ -106,11 +111,13 @@ func TestScenario_MCPDisableEvictsThePoolWithoutBreakingAnInFlightSession(t *tes
 	h.waitUntil("re-enable lands", func() bool {
 		return lastAssistantTextDTO(h.parentMessages(holder)) == "enabled"
 	})
+	h.mgr.waitIdle(holder)
 
 	require.NoError(t, h.mgr.SendToSession(h.ctx, holder, "USE_AGAIN please"))
 	h.waitUntil("the server answers again", func() bool {
 		return lastAssistantTextDTO(h.parentMessages(holder)) == "used again"
 	})
+	h.mgr.waitIdle(holder)
 
 	msgs := h.parentMessages(holder)
 	require.NoError(t, llm.ValidateToolPairing(msgs))
@@ -159,6 +166,7 @@ func TestScenario_MCPDisableRemovesTheToolFromTheNextRun(t *testing.T) {
 	h.waitUntil("the disable lands", func() bool {
 		return lastAssistantTextDTO(h.parentMessages(sessionID)) == "disabled"
 	})
+	h.mgr.waitIdle(sessionID)
 
 	// The disabling run still had the server, so it spawned one; the next one must not.
 	spawnsBefore := fake.count(t, "spawn")
@@ -167,6 +175,7 @@ func TestScenario_MCPDisableRemovesTheToolFromTheNextRun(t *testing.T) {
 	h.waitUntil("the run finishes", func() bool {
 		return lastAssistantTextDTO(h.parentMessages(sessionID)) == "tried it"
 	})
+	h.mgr.waitIdle(sessionID)
 
 	msgs := h.parentMessages(sessionID)
 	require.NoError(t, llm.ValidateToolPairing(msgs))

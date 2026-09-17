@@ -55,6 +55,8 @@ func (ms *messageStore) addToolResultOutput(
 
 // addToolResultOutputTyped is the single-row legacy path kept for injections,
 // settlements and block stubs; turn scheduling commits through commitToolResults.
+// Every model-visible tool result settles through the once-at store boundary so
+// its transaction also invalidates any pending completion check (D8).
 func (ms *messageStore) addToolResultOutputTyped(
 	ctx context.Context,
 	callID, toolName, content string,
@@ -74,7 +76,7 @@ func (ms *messageStore) addToolResultOutputTyped(
 		Images:     images,
 	}
 
-	if len(directMessages) == 0 || ms.outputs == nil {
+	if ms.outputs == nil {
 		return ms.appendMessageLocked(ctx, &msg)
 	}
 
@@ -83,12 +85,14 @@ func (ms *messageStore) addToolResultOutputTyped(
 		return fmt.Errorf("serialize tool result: %w", err)
 	}
 
-	id, _, err := ms.outputs.InsertToolResultWithDirectOutput(ctx, ms.sessID, stored, directMessages)
+	ids, _, err := ms.outputs.InsertToolResultSetOnce(ctx, ms.sessID, []sessionstore.ToolResultEntry{
+		{Message: stored, DirectMessages: directMessages},
+	})
 	if err != nil {
 		return fmt.Errorf("persist tool result with direct output: %w", err)
 	}
 
-	ms.appendLocked(msg, id)
+	ms.appendLocked(msg, ids[0])
 
 	return nil
 }

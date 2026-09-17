@@ -25,12 +25,12 @@
   "claims": [
     {
       "type": "message_replaceable",
-      "content": "idle-transition completion observed",
+      "content": "idle-transition completion observed\n\n🤖 `fake-model` · iteration 2",
       "attributes": {
         "manager_id": "telegram:main",
         "model_input_generation": 1
       },
-      "source_key": "message:2:progress",
+      "source_key": "message:4:final",
       "model_input_generation": 1,
       "releases_input": true
     }

@@ -89,16 +89,22 @@ func (c *completions) Finalize(ctx context.Context, childID int64, shuttingDown,
 		return nil
 	}
 
+	// A child that ended through the terminal empty-stop notice completed
+	// successfully regardless of how the runner observed its exit: the
+	// durable streak is the recovery evidence, so its link stays completed.
+	terminalEmptyStop := record.EmptyStopStreak >= sessionstore.EmptyStopTerminalStreak
+
 	state := subagent.StateCompleted
 	persistedStatus := sessionstore.SessionStatusCompleted
 
-	if errored || record.Status == sessionstore.SessionStatusError {
+	if (errored || record.Status == sessionstore.SessionStatusError) && !terminalEmptyStop {
 		state = subagent.StateError
 		persistedStatus = sessionstore.SessionStatusError
 	}
 
 	result, outcome := c.deriveOutcome(
 		ctx, childID, record.Iteration, errored, record.Status == sessionstore.SessionStatusError,
+		record.EmptyStopStreak,
 	)
 
 	terminalized, err := c.finalizeActivation(ctx, childID, state, result, outcome)

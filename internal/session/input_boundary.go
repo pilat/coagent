@@ -45,3 +45,9 @@ type ReceiptBoundary interface {
 		receipt string,
 	) (accepted bool, blocked bool, receiptID int64, err error)
 }
+
+// WakeSourceBoundary is implemented by boundaries that can project whether
+// the exact session owns a durable background wake source.
+type WakeSourceBoundary interface {
+	HasBackgroundWakeSource(ctx context.Context) (bool, error)
+}

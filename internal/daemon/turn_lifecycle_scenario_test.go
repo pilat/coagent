@@ -223,7 +223,9 @@ func TestHarnessScenario_CompactSuccessChain(t *testing.T) {
 			}}}
 		}
 
-		if calls == 2 {
+		if calls == 2 || calls == 3 {
+			// The first stop is the hidden candidate; the confirmation turn
+			// answers the same prompt again.
 			return &llmwire.Response{Text: "First answer."}
 		}
 

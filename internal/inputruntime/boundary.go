@@ -13,8 +13,9 @@ import (
 )
 
 var (
-	_ session.InputBoundary   = (*boundary)(nil)
-	_ session.ReceiptBoundary = (*boundary)(nil)
+	_ session.InputBoundary      = (*boundary)(nil)
+	_ session.ReceiptBoundary    = (*boundary)(nil)
+	_ session.WakeSourceBoundary = (*boundary)(nil)
 )
 
 type boundary struct {
@@ -33,6 +34,17 @@ func (b *boundary) FinalOutput(ctx context.Context, text string) (string, error)
 	}
 
 	return b.finalOutput(ctx, text)
+}
+
+// HasBackgroundWakeSource projects whether this exact session owns a durable
+// wake source, through the same store the boundary already uses.
+func (b *boundary) HasBackgroundWakeSource(ctx context.Context) (bool, error) {
+	has, err := b.store.HasBackgroundWakeSource(ctx, b.sessionID)
+	if err != nil {
+		return false, fmt.Errorf("query background wake source: %w", err)
+	}
+
+	return has, nil
 }
 
 func (b *boundary) ProgressChange(ctx context.Context) (string, bool, error) {

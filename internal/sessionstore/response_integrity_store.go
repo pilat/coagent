@@ -200,7 +200,7 @@ func commitRejectedLength(
 	result.Outcome = RejectedResponseRecoveryQueued
 
 	result.RecoveryMessageID, err = insertMessageWith(ctx, tx, rejection.SessionID, &transcript.Message{
-		Role: "user", Content: OutputLengthRecoveryPrompt, RetryOfMessageID: messageID,
+		Role: userRole, Content: OutputLengthRecoveryPrompt, RetryOfMessageID: messageID,
 	})
 	if err != nil {
 		return err

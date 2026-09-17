@@ -66,6 +66,38 @@ func TestBackgroundObligationProjectsTreeLedgersAndInbox(t *testing.T) {
 	obligation, err = h.mgr.hasBackgroundObligation(h.ctx, other.ID)
 	require.NoError(t, err)
 	assert.True(t, obligation)
+
+	// A stopped or killed link promises no wake: it neither bypasses the
+	// completion check nor retains the budget on that promise (D4/D5).
+	for _, state := range []subagent.State{subagent.StateStopped, subagent.StateKilled} {
+		stoppedChild, err := h.sessStore.CreateSubagentSession(
+			h.ctx, h.projectID, root.ID, root.ID, "general", "fake-model", "",
+		)
+		require.NoError(t, err)
+		require.NoError(t, h.links.InsertSubagentLink(h.ctx, subagent.Link{
+			ParentID: root.ID, ChildID: stoppedChild,
+			TaskCallID: "background-" + string(state), Blocking: false, State: state,
+		}))
+	}
+
+	otherRoot, err := h.sessStore.CreateSession(h.ctx, h.projectID, "fake-model", "", nil)
+	require.NoError(t, err)
+	for _, state := range []subagent.State{subagent.StateStopped, subagent.StateKilled} {
+		otherChild, err := h.sessStore.CreateSubagentSession(
+			h.ctx, h.projectID, otherRoot.ID, otherRoot.ID, "general", "fake-model", "",
+		)
+		require.NoError(t, err)
+		require.NoError(t, h.links.InsertSubagentLink(h.ctx, subagent.Link{
+			ParentID: otherRoot.ID, ChildID: otherChild,
+			TaskCallID: "background-" + string(state), Blocking: false, State: state,
+		}))
+	}
+	obligation, err = h.mgr.hasBackgroundObligation(h.ctx, otherRoot.ID)
+	require.NoError(t, err)
+	assert.False(t, obligation)
+	retained, err = h.mgr.retainBudgetForBackground(h.ctx, otherRoot.ID)
+	require.NoError(t, err)
+	assert.False(t, retained)
 }
 
 func (s *budgetServiceProbe) Get(context.Context, int64) (*sessionstore.BudgetRecord, error) {

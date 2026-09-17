@@ -101,16 +101,35 @@ func TestResponseIntegrity_ReusedChildReportsCurrentErrorInsteadOfPriorAnswer(t 
 }
 
 func TestResponseIntegrity_ChildEmptyFinishCannotLeakText(t *testing.T) {
-	runIncompleteChildResponse(t, &llmwire.Response{
+	// A tool_calls finish with no calls follows empty-response recovery: the
+	// child runs the durable streak to its terminal notice, so the riding
+	// text never becomes a final answer.
+	h, current := runIncompleteChildResponse(t, &llmwire.Response{
 		Text: "hidden child text", FinishType: llmwire.FinishToolCalls,
 	})
+	_ = h
+	assert.NotContains(t, current.Result, "hidden child text")
+	assert.Contains(t, current.Result, sessionstore.EmptyStopTerminalNotice(sessionstore.EmptyStopTerminalStreak))
+	assert.Equal(t, subagent.OutcomeCompleted, current.Outcome)
 }
 
 func TestResponseIntegrity_ChildWhitespaceStopCannotBecomeCompletion(t *testing.T) {
-	runIncompleteChildResponse(t, &llmwire.Response{Text: " \n\t ", FinishType: llmwire.FinishStop})
+	// Whitespace is an empty stop: the child runs the durable streak to its
+	// terminal notice and finalizes successfully on that shared host text,
+	// never on its own whitespace body.
+	h, current := runIncompleteChildResponse(t, &llmwire.Response{
+		Text: " \n\t ", FinishType: llmwire.FinishStop,
+	})
+	_ = h
+	assert.NotContains(t, current.Result, " \n\t ")
+	assert.Contains(t, current.Result, sessionstore.EmptyStopTerminalNotice(sessionstore.EmptyStopTerminalStreak))
+	assert.Equal(t, subagent.OutcomeCompleted, current.Outcome)
 }
 
-func runIncompleteChildResponse(t *testing.T, childResponse *llmwire.Response) {
+func runIncompleteChildResponse(
+	t *testing.T,
+	childResponse *llmwire.Response,
+) (*subagentHarness, subagent.Link) {
 	t.Helper()
 	respond := func(_ string, messages []llmwire.Message) *llmwire.Response {
 		if hasUserContaining(messages, "CHILD_EMPTY_TOOL_FINISH") {
@@ -124,7 +143,7 @@ func runIncompleteChildResponse(t *testing.T, childResponse *llmwire.Response) {
 	}
 
 	h := newSubagentHarnessWith(t, respond)
-	defer h.shutdown()
+	t.Cleanup(h.shutdown)
 	parentID, err := h.mgr.Send(h.ctx, h.projectID, "start empty-finish child", "fake-model", nil)
 	require.NoError(t, err)
 	link := h.waitForChildLink(parentID)
@@ -132,8 +151,8 @@ func runIncompleteChildResponse(t *testing.T, childResponse *llmwire.Response) {
 	h.mgr.waitIdle(parentID)
 	current, err := h.links.GetLink(h.ctx, link.ChildID)
 	require.NoError(t, err)
-	assert.Equal(t, subagent.OutcomeIncomplete, current.Outcome)
-	assert.NotContains(t, current.Result, childResponse.Text)
+
+	return h, *current
 }
 
 func TestResponseIntegrity_MissingTerminalRejectionNeverReusesOlderAnswer(t *testing.T) {

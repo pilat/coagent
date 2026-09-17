@@ -54,12 +54,12 @@
     },
     {
       "type": "message_persistent",
-      "content": "session ready\n\n🤖 `fake-model` · iteration 1\n⌚ <elapsed> · 💰 $0.0 total",
+      "content": "session ready\n\n🤖 `fake-model` · iteration 2",
       "attributes": {
         "manager_id": "telegram:main",
         "model_input_generation": 1
       },
-      "source_key": "message:2:final",
+      "source_key": "message:4:final",
       "model_input_generation": 1,
       "releases_input": true
     },

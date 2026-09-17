@@ -183,6 +183,7 @@ func TestScenario_MCPAddReachesTheNextRunOnly(t *testing.T) {
 	h.waitUntil("registering run finishes", func() bool {
 		return lastAssistantTextDTO(h.parentMessages(sessionID)) == "registered"
 	})
+	h.mgr.waitIdle(sessionID)
 
 	msgs := h.parentMessages(sessionID)
 	require.NoError(t, llm.ValidateToolPairing(msgs))
@@ -195,6 +196,7 @@ func TestScenario_MCPAddReachesTheNextRunOnly(t *testing.T) {
 	h.waitUntil("next run uses the server", func() bool {
 		return lastAssistantTextDTO(h.parentMessages(sessionID)) == "used it"
 	})
+	h.mgr.waitIdle(sessionID)
 
 	msgs = h.parentMessages(sessionID)
 	require.NoError(t, llm.ValidateToolPairing(msgs))
@@ -237,11 +239,13 @@ func TestScenario_ProjectMCPServerOverridesTheGlobalOfTheSameName(t *testing.T) 
 	h.waitUntil("both registrations land", func() bool {
 		return lastAssistantTextDTO(h.parentMessages(sessionID)) == "registered both"
 	})
+	h.mgr.waitIdle(sessionID)
 
 	require.NoError(t, h.mgr.SendToSession(h.ctx, sessionID, "USE_IT now"))
 	h.waitUntil("next run uses the server", func() bool {
 		return lastAssistantTextDTO(h.parentMessages(sessionID)) == "used it"
 	})
+	h.mgr.waitIdle(sessionID)
 
 	msgs := h.parentMessages(sessionID)
 	require.NoError(t, llm.ValidateToolPairing(msgs))

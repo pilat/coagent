@@ -479,7 +479,9 @@ func TestHarnessScenario_BackgroundFinalResponseResumesOnCompletion(t *testing.T
 	waitForVisibleMessage(t, collector, parentID, "completion after wait")
 	drainScenarioClaims(t, "background_wait_canary.json", newChainController(t, h))
 	waitForIdleAfterMessage(t, collector, parentID, "completion after wait")
-	assert.Equal(t, int64(3), rootCalls.Load())
+	// The completion wake's candidate and its confirmation plus the earlier
+	// task turn and its yield: four root calls under the two-phase check.
+	assert.Equal(t, int64(4), rootCalls.Load())
 	assertHarnessTrace(t, "background_wait_canary.json", collector.snapshot(), parentID)
 }
 

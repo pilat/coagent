@@ -392,6 +392,29 @@ rejected attempt remains durable evidence.
 _Avoid_: iteration (one loop iteration may include other durable transitions),
 assistant message (only an accepted attempt has that transcript role).
 
+**model finish reason**:
+The provider-reported reason a model attempt stopped generating, preserved in
+native form and normalized as `llmwire.FinishType` for response-integrity
+routing. `stop` / `end_turn` means the response ended normally; it does not by
+itself prove that the requested task is complete. Whether an accepted response
+ends an activation is a separate agent-loop decision.
+_Avoid_: task completion, final answer, terminal signal.
+
+**background wake source**:
+A durable process or subagent obligation that will deliver model-bound input
+after the current activation ends, including a completion already queued in the
+session inbox. It is established from producer ledgers and inbox state, not from
+prompt text or a process-local snapshot, and therefore survives daemon restart.
+_Avoid_: unfinished todo, pending external call, background prompt snapshot.
+
+**completion check**:
+The session-wide second-look transition for a non-empty `stop` response with no
+tool calls and no background wake source. The first response is a hidden final
+candidate; a host-authored model input asks the same agent to continue or
+confirm stopping. A later external model-bound input or tool-bearing response
+invalidates the check; an empty response remains subject to loop detection.
+_Avoid_: stop marker, magic acknowledgement, final-answer tool.
+
 **attachment** (referenced image attachment):
 A disk reference stored on a tool-result row in `messages.attachments` — never
 the pixels themselves. Alongside path, MIME, and size, a shielded read persists

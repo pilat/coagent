@@ -12,6 +12,13 @@ import (
 	"github.com/pilat/coagent/internal/transcript"
 )
 
+// Outbox source-key phases: they join the message id in the idempotency key.
+const (
+	outputPhaseProgress = "progress"
+	outputPhaseReply    = "reply"
+	outputPhaseFinal    = "final"
+)
+
 //nolint:nonamedreturns // message and output identities need named results.
 func (s *store) InsertAssistantMessageWithOutput(
 	ctx context.Context,
@@ -49,11 +56,11 @@ func (s *store) InsertAssistantMessageWithOutput(
 		return 0, nil, err
 	}
 
-	phase := "progress"
+	phase := outputPhaseProgress
 	if releasesInput {
-		phase = "final"
+		phase = outputPhaseFinal
 	} else if outputType == OutputMessagePersistent {
-		phase = "reply"
+		phase = outputPhaseReply
 	}
 
 	key := fmt.Sprintf("message:%d:%s", messageID, phase)

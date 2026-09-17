@@ -24,7 +24,15 @@ func (c *completions) deriveOutcome(
 	iterations int,
 	errored bool,
 	persistedError bool,
+	emptyStopStreak int,
 ) (string, subagent.Outcome) {
+	// A durable terminal empty streak is recovery evidence, not an error: the
+	// shared host notice is the child's successful result even when the daemon
+	// restarts before link terminalization.
+	if emptyStopStreak >= sessionstore.EmptyStopTerminalStreak {
+		return sessionstore.EmptyStopTerminalNotice(emptyStopStreak), subagent.OutcomeCompleted
+	}
+
 	if persistedError {
 		if result, outcome, ok := c.currentIntegrityOutcome(ctx, childID); ok {
 			return result, outcome

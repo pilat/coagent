@@ -136,10 +136,10 @@ func TestHarnessScenario_AgentInputCannotActivateBudget(t *testing.T) {
 func TestHarnessScenario_FinalIncludesNonEmptyTodoAndBudget(t *testing.T) {
 	release := make(chan struct{})
 	entered := make(chan struct{})
-	var releaseOnce sync.Once
+	var enterOnce, releaseOnce sync.Once
 	releaseModel := func() { releaseOnce.Do(func() { close(release) }) }
 	h := newSubagentHarnessWith(t, func(_ string, _ []llmwire.Message) *llmwire.Response {
-		close(entered)
+		enterOnce.Do(func() { close(entered) })
 		<-release
 
 		return &llmwire.Response{Text: "task answer"}
@@ -163,19 +163,27 @@ func TestHarnessScenario_FinalIncludesNonEmptyTodoAndBudget(t *testing.T) {
 	require.NoError(t, err)
 
 	releaseModel()
-	// The compact progress footer now leads the trailing block: model/iteration,
-	// metrics, TODO counts with the hint on its own line, then the budget line.
+	// The first stop is a hidden candidate; the confirmation is the second
+	// model call. The compact progress footer leads the trailing block:
+	// model/iteration, metrics, TODO counts, then the budget line.
 	want := "task answer\n\n" +
-		"🤖 `fake-model` · iteration 1\n" +
-		"⌚ 0s · 💰 $0.0 total\n" +
+		"🤖 `fake-model` · iteration 2\n" +
 		"📋 TODO · 1 active · 1 remaining · 0 done\n" +
 		"ℹ️ /status shows the full TODO list\n" +
 		"💸 Budget: armed (generation 1) · $0.000000 / $1.000000 · $1.000000 remaining"
 	h.mgr.waitIdle(sessionID)
 
-	var final string
-	require.NoError(t, h.db.QueryRowContext(h.ctx, `SELECT content FROM session_outbox
-		WHERE session_id = ? AND source_key LIKE 'message:%:final' ORDER BY id DESC LIMIT 1`, sessionID).
-		Scan(&final))
-	assert.Equal(t, want, final)
+	var finals []string
+	rows, err := h.db.QueryContext(h.ctx, `SELECT content FROM session_outbox
+		WHERE session_id = ? AND source_key LIKE 'message:%:final' ORDER BY id`, sessionID)
+	require.NoError(t, err)
+	defer rows.Close()
+	for rows.Next() {
+		var content string
+		require.NoError(t, rows.Scan(&content))
+		finals = append(finals, content)
+	}
+	require.NoError(t, rows.Err())
+	require.Len(t, finals, 1, "the manager sees exactly the confirmed answer")
+	assert.Equal(t, want, finals[0])
 }

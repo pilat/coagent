@@ -280,16 +280,30 @@ across a process or producer retry. Loop detection terminates repetitive tool
 patterns rather than treating repeated calls as progress.
 
 The provider's normalized and native finish reasons are independent of response
-shape. Only an accepted `stop` without calls is terminal; actual calls returned
-with `stop` or `tool_calls` retain structural tool routing, while `tool_calls`
-without calls follows empty-response recovery. An ordinary `length` or unknown
-finish is rejected before output, waiting or tool execution. The first `length`
-adds one linked recovery input; a repeated `length` or unknown finish commits a
-terminal error. Compaction model calls retain their separate no-retry contract.
+shape. They describe one attempt, never task completion ([ADR-0060](docs/adr/0060-wake-aware-model-completion-check.md)).
+Actual calls returned with `stop` or `tool_calls` retain structural tool
+routing, while `tool_calls` without calls follows empty-response recovery. An
+ordinary `length` or unknown finish is rejected before output, waiting or tool
+execution. The first `length` adds one linked recovery input; a repeated
+`length` or unknown finish commits a terminal error. Compaction model calls
+retain their separate no-retry contract.
 
-A no-tool `stop` response completes the current activation even while a
-background process or subagent remains. Completion input in `session_inbox`
-reactivates that completed session for one later turn. Session construction
+A no-tool `stop` completes the current activation immediately only when the
+exact session owns a durable background wake source: an advertised running
+process, an undelivered non-blocking child link in `spawned`, `running`,
+`completed` or `error`, or pending process/subagent inbox input. Without a
+wake source the first non-empty stop commits a hidden candidate plus one
+host-authored completion nudge and keeps the session active; the next accepted
+non-empty stop is the deliberate confirmation that publishes and finishes.
+Empty no-wake stops are a durable anti-loop signal instead: the third receives
+the strong warning, the sixth commits one host notice and ends the activation
+through ordinary successful completion. Every accepted response commits its
+assistant message, iteration, completion state, empty streak, budget verdict,
+nudge and optional manager output in one SQLite disposition transaction.
+
+A no-tool `stop` with a wake source completes the current activation even
+while a background process or subagent remains. Completion input in
+`session_inbox` reactivates that completed session for one later turn. Session construction
 captures advertised process identities and pending subagent links; after budget
 admission, the first provider call durably appends a non-empty snapshot as
 user-role activation context. Each later model-running activation appends its
@@ -303,9 +317,13 @@ process-output diagnostics available.
 
 Shutdown stops admission, drains or checkpoints work according to its durable
 state, stops managers and pooled resources, then closes stores. Startup recovery
-rebuilds runnable sessions from persisted rows and producer ledgers. Before any
-session resumes, a PASS 0 sweep settles every pending in-loop tool call as a
-typed failure ([ADR-0059](docs/adr/0059-pending-tool-calls-are-never-reexecuted-on-resume.md)):
+rebuilds runnable sessions from persisted rows and producer ledgers. Restart
+replays obligations, not decisions: a crash after candidate+nudge commit
+resumes the one owed confirmation without another nudge, a crash after
+confirmed final or background yield observes the accepted output and completes
+without another model call, and a pending empty streak resumes at its durable
+count. Before any session resumes, a PASS 0 sweep settles every pending
+in-loop tool call as a typed failure ([ADR-0059](docs/adr/0059-pending-tool-calls-are-never-reexecuted-on-resume.md)):
 the loop never re-executes an operation the model did not watch complete, and
 the model retries explicitly. A stopped link is retained for explicit follow-up
 but is not automatically resumed.
@@ -373,6 +391,11 @@ Manual compaction requests raise the same event; a request behind non-sleep
 external work waits in the durable inbox. A failed, empty, non-relieving or
 length-stopped attempt leaves the active transcript untouched; a summarizer
 tool-call answer gets one in-role tools-unavailable nudge and a single retry.
+While a completion check is pending, every legal split stays at or before the
+candidate row, so the candidate and its nudge survive as verbatim tail rows;
+older history may still compact, and a pressure that cannot retain the pair
+keeps the existing non-relieving behavior instead of summarizing the evidence
+being confirmed.
 
 The trigger combines the provider's last reported prompt tokens with an
 estimate of appended content, and image pressure: attachments totalling over
@@ -478,6 +501,17 @@ crossing takes precedence. Recovery identity is the explicit link from its
 host-authored input to the rejected attempt; later manager input supersedes an
 unfinished chain through durable inbox provenance rather than transcript text.
 
+For an accepted ordinary model attempt the same single-commit principle holds:
+the disposition transaction inserts the assistant row, advances the iteration,
+sets or clears the completion-check candidate, stamps the empty-stop streak,
+captures post-disposition progress facts and renders the final footer from
+them database-free, then inserts the optional manager output. A budget
+crossing on an unconfirmed candidate suppresses the candidate text and
+publishes only the host checkpoint; a projection failure retains the paid
+attempt and commits the existing durable error outcome once. A separate
+durable manager-reply flag survives candidate resets, tools and restarts and
+clears only with a releasing output or a superseding terminal settlement.
+
 ### Tool-call scheduling: declared stages, fail-stop, atomic result sets
 
 Every tool declares `ParallelSafe() bool` — a compile-time choice, never an
@@ -533,7 +567,12 @@ the same transaction closes the link obligation without creating inbox input;
 startup recovery retains that suppression path across a crash window. A winning foreground commit refreshes
 the live transcript from SQLite so rows committed across compaction retain their
 position. Cascade stop, failed delivery and restart recovery preserve the link's
-obligation until it is resolved or explicitly stopped.
+obligation until it is resolved or explicitly stopped. The same completion
+rules apply to roots and every subagent type: a child with no todo list
+receives the same generic second look, only its confirmed response becomes the
+parent-facing result, and a child that ended through the terminal empty-stop
+notice finalizes with that shared host notice as its successful result —
+recovered from the durable streak, never fabricated.
 
 ### Schedule delivery identity
 

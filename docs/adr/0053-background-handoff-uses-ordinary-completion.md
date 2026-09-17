@@ -1,6 +1,6 @@
 # ADR-0053: Background handoff uses ordinary completion
 
-- **Status:** Accepted
+- **Status:** Superseded by [ADR-0060](0060-wake-aware-model-completion-check.md)
 - **Date:** 2026-09-11
 
 ## Context

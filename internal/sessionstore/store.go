@@ -14,6 +14,7 @@ import (
 const (
 	defaultReasoningLevel = "medium"
 	assistantRole         = "assistant"
+	userRole              = "user"
 )
 
 // Written explicitly on every root session: the column's schema default is
@@ -51,7 +52,7 @@ func (s SessionStatus) valid() bool {
 	}
 }
 
-const sessionColumns = `id, project_id, model, reasoning_level, master_enabled, attributes, agent_type, parent_id, iteration, status, todo_items, created_at, updated_at, killed_at, root_id, model_input_generation, model_input_boundary, context_baseline_model, context_baseline_prompt_tokens, context_baseline_message_count, shields_up`
+const sessionColumns = `id, project_id, model, reasoning_level, master_enabled, attributes, agent_type, parent_id, iteration, status, todo_items, created_at, updated_at, killed_at, root_id, model_input_generation, model_input_boundary, context_baseline_model, context_baseline_prompt_tokens, context_baseline_message_count, shields_up, completion_check_candidate_id, manager_reply_pending, empty_stop_streak`
 
 // errSessionNotFound signals a lookup query matched no row.
 var errSessionNotFound = errors.New("session not found")
@@ -88,6 +89,17 @@ type SessionRecord struct {
 	ContextBaselineModel        string
 	ContextBaselinePromptTokens int
 	ContextBaselineMessageCount int
+
+	// CompletionCheckCandidateID points at the hidden final-candidate assistant
+	// message awaiting its deliberate second stop. Nil means no check pending.
+	CompletionCheckCandidateID *int64
+	// ManagerReplyPending is the durable manager-reply obligation: set when a
+	// manager-owned model input is promoted, cleared only by a releasing output
+	// or a terminal settlement that supersedes the turn.
+	ManagerReplyPending bool
+	// EmptyStopStreak is the durable trailing count of empty no-wake stop
+	// responses feeding loop detection's 3/6 escalation.
+	EmptyStopStreak int
 }
 
 // CompactionEntry is either an existing active row or a new message in rebuilt transcript order.
@@ -204,6 +216,7 @@ type Store interface { //nolint:interfacebloat // Complete constructor result; c
 	ReadinessStore
 	StopCompletionStore
 	ShieldCommandStore
+	WakeSourceStore
 	FileReadStore
 }
 
@@ -1127,13 +1140,16 @@ func scanSessionFrom(sc rowScanner) (*SessionRecord, error) {
 	var killedAt sql.NullTime
 	var boundary sql.NullInt64
 	var shieldsUp sql.NullBool
+	var candidateID sql.NullInt64
+	var managerReplyPending sql.NullBool
+	var emptyStopStreak sql.NullInt64
 
 	err := sc.Scan(&rec.ID, &projectID, &model, &reasoning, &masterEnabled, &attrsRaw,
 		&agentType, &parentID, &iteration, &status, &todoItems,
 		&rec.CreatedAt, &rec.UpdatedAt, &killedAt, &rootID,
 		&rec.ModelInputGeneration, &boundary,
 		&rec.ContextBaselineModel, &rec.ContextBaselinePromptTokens, &rec.ContextBaselineMessageCount,
-		&shieldsUp)
+		&shieldsUp, &candidateID, &managerReplyPending, &emptyStopStreak)
 	if err != nil {
 		return nil, fmt.Errorf("scan session: %w", err)
 	}
@@ -1159,6 +1175,13 @@ func scanSessionFrom(sc rowScanner) (*SessionRecord, error) {
 	if boundary.Valid {
 		rec.ModelInputBoundary = &boundary.Int64
 	}
+
+	if candidateID.Valid {
+		rec.CompletionCheckCandidateID = &candidateID.Int64
+	}
+
+	rec.ManagerReplyPending = managerReplyPending.Bool
+	rec.EmptyStopStreak = int(emptyStopStreak.Int64)
 
 	return &rec, nil
 }

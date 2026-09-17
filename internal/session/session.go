@@ -135,6 +135,7 @@ type svc struct {
 	memoryStore       memory.CuratedStore
 	store             sessionstore.RuntimeStore
 	outputStore       sessionstore.RuntimeOutputStore
+	dispositions      sessionstore.ResponseDispositionStore
 	rootID            int64
 	id                int64
 	model             string
@@ -158,8 +159,12 @@ type svc struct {
 	budgetFired     bool
 
 	// Loop execution state
-	ms                *messageStore
-	loopDetector      *loopDetector
+	ms           *messageStore
+	loopDetector *loopDetector
+	// resumeCompletion seeds the reply cache on resume; the loop re-reads
+	// SQLite per turn, so a crash between resume and the next turn still
+	// observes the durable state.
+	resumeCompletion  *sessionstore.CompletionCheckState
 	compactionFocus   string // optional /compact focus, set for one compact() then cleared
 	pendingCompaction bool
 	compactionInput   *PendingInput
@@ -193,8 +198,11 @@ type params struct {
 	Registry    tool.Registry
 	Store       sessionstore.RuntimeStore
 	OutputStore sessionstore.RuntimeOutputStore
-	GitClient   git.Client
-	MemoryStore memory.CuratedStore
+	// Dispositions commits every accepted assistant response; nil only in
+	// tests without persistence, where the loop keeps the legacy paths.
+	Dispositions sessionstore.ResponseDispositionStore
+	GitClient    git.Client
+	MemoryStore  memory.CuratedStore
 }
 
 type options struct {
@@ -246,6 +254,11 @@ type options struct {
 
 	// StagedExternalCalls are tool_call ids the daemon owes a result for.
 	StagedExternalCalls map[string]string
+
+	// ResumeCompletionState is the durable check, reply obligation, and empty
+	// streak the daemon hands back on resume. SQLite stays authoritative; the
+	// loop re-reads it per turn, these fields only seed the in-memory caches.
+	ResumeCompletionState *sessionstore.CompletionCheckState
 
 	// CompactionDeferAnnounced is the previous run's deferral-notice verdict.
 	CompactionDeferAnnounced bool
@@ -339,6 +352,7 @@ func newSession(p params, opts options, workDir string, agentConfig registry.Age
 		agentsMD:        agentsMD,
 		store:           p.Store,
 		outputStore:     p.OutputStore,
+		dispositions:    p.Dispositions,
 		model:           p.Config.Model,
 		agentType:       agentConfig.Name,
 		reasoningLevel:  string(llm.ReasoningMedium),
@@ -354,6 +368,7 @@ func newSession(p params, opts options, workDir string, agentConfig registry.Age
 		preserveStopped: opts.PreserveStopped,
 
 		compactionDeferAnnounced: opts.CompactionDeferAnnounced,
+		resumeCompletion:         opts.ResumeCompletionState,
 		activeSubagentsProvider:  opts.ActiveSubagentsProvider,
 		activeProcessesProvider:  opts.ActiveProcessesProvider,
 		onIterationPersisted:     opts.OnIterationPersisted,
@@ -697,6 +712,13 @@ func (s *svc) contextWindow() int {
 	return compactionThreshold
 }
 
+// seedResumeCompletion installs the durable completion projection into the
+// in-memory reply cache. The loop still re-reads SQLite per turn, so this is
+// a seed, not authority.
+func (s *svc) seedResumeCompletion(state *sessionstore.CompletionCheckState) {
+	s.resumeCompletion = state
+}
+
 // applyResumeOrInit sets session IDs and either restores state from DB or persists the initial state.
 func (s *svc) applyResumeOrInit(ctx context.Context, opts options, log *zap.Logger) error {
 	if opts.ID == 0 {
@@ -722,6 +744,8 @@ func (s *svc) applyResumeOrInit(ctx context.Context, opts options, log *zap.Logg
 		if len(opts.ResumeTodoItems) > 0 {
 			s.todoStore.Replace(opts.ResumeTodoItems)
 		}
+
+		s.seedResumeCompletion(opts.ResumeCompletionState)
 
 		s.installPersistedBaseline(opts.ContextBaseline)
 

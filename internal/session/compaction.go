@@ -85,11 +85,39 @@ func (s *svc) compact(ctx context.Context, commandInput *PendingInput) (bool, er
 	// lock: the provider does IO, and repair reads ms.mu through
 	// pendingExternalCallIDs — calling it under the lock would deadlock.
 	background := s.activeBackgroundSection(ctx)
+	completionPin, completionPending := s.completionCompactionPin(ctx)
 
 	s.ms.mu.Lock()
 	defer s.ms.mu.Unlock()
 
-	return s.compactLocked(ctx, background, commandInput)
+	return s.compactLocked(ctx, background, commandInput, completionPin, completionPending)
+}
+
+// completionCompactionPin resolves the pending candidate's transcript position
+// the split search may never summarize past: candidate and nudge stay verbatim
+// tail rows until the check resolves. The second result reports that a durable
+// check is pending at all, so a candidate the live transcript cannot place
+// keeps compaction non-relieving instead of relaxing the tail cap.
+func (s *svc) completionCompactionPin(ctx context.Context) (int, bool) {
+	if s.dispositions == nil {
+		return 0, false
+	}
+
+	state, err := s.dispositions.LoadCompletionCheckState(ctx, s.id)
+	if err != nil || state == nil || state.CandidateID == nil {
+		return 0, false
+	}
+
+	s.ms.mu.Lock()
+	defer s.ms.mu.Unlock()
+
+	for i, rowID := range s.ms.rowIDs {
+		if rowID == *state.CandidateID {
+			return i, true
+		}
+	}
+
+	return 0, true
 }
 
 // compactLocked is compact's transcript-mutating half, under s.ms.mu.
@@ -97,8 +125,18 @@ func (s *svc) compactLocked(
 	ctx context.Context,
 	background string,
 	commandInput *PendingInput,
+	completionPin int,
+	completionPending bool,
 ) (bool, error) {
 	log := logger.Ctx(ctx).Named("session.compaction")
+
+	// A pending check whose candidate the live transcript cannot place cannot
+	// retain the verbatim pair, so the attempt stays non-relieving instead of
+	// summarizing the evidence being confirmed.
+	if completionPending && completionPin == 0 {
+		log.Warn("completion_pin_unresolved", zap.Int64("session_id", s.id))
+		return false, nil
+	}
 
 	// The loop gate already refuses pending calls; the snapshot must match the
 	// ordinary request's repair, which excludes genuinely-pending external calls.
@@ -118,7 +156,7 @@ func (s *svc) compactLocked(
 
 	candIdx, candEnvelope := selectCurrentSkill(s.ms.messages, headerSize, cp.summaryRowIdx)
 
-	split, summaryMsg, err := s.buildCheckpointCandidate(ctx, cp, background, pendingExternal, window)
+	split, summaryMsg, err := s.buildCheckpointCandidate(ctx, cp, background, pendingExternal, window, completionPin)
 	if err != nil {
 		if errors.Is(err, errNothingToCompact) {
 			return false, nil
@@ -185,8 +223,9 @@ func (s *svc) buildCheckpointCandidate(
 	background string,
 	pendingExternal map[string]bool,
 	window int,
+	completionPin int,
 ) (int, llmwire.Message, error) {
-	split, ok := selectCheckpointSplit(s.ms.messages, cp, s.summarizerBaseEstimateLocked(), window)
+	split, ok := selectCheckpointSplit(s.ms.messages, cp, s.summarizerBaseEstimateLocked(), window, completionPin)
 	if !ok {
 		return 0, llmwire.Message{}, errNothingToCompact
 	}

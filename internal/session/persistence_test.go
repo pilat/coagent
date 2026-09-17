@@ -268,6 +268,20 @@ func (m *mockSessionStore) ResetSessionContextOnce(
 	return ids, err == nil, err
 }
 
+func (m *mockSessionStore) CommitAcceptedResponseDisposition(
+	context.Context,
+	sessionstore.AcceptedResponseDisposition,
+) (*sessionstore.AcceptedResponseResult, error) {
+	return nil, fmt.Errorf("mock response disposition is not configured")
+}
+
+func (m *mockSessionStore) LoadCompletionCheckState(
+	context.Context,
+	int64,
+) (*sessionstore.CompletionCheckState, error) {
+	return &sessionstore.CompletionCheckState{}, nil
+}
+
 // Mock LLM clients for session tests.
 
 type mockLLMClient struct{}

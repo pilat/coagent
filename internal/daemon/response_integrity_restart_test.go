@@ -64,7 +64,9 @@ func completeRecoveryAfterRestart(t *testing.T, dbPath string, rootID int64) {
 	waitForVisibleMessage(t, collector, rootID, "recovered after restart")
 	drainScenarioClaims(t, "unused-response-restart.json", newChainController(t, second))
 	waitForIdleAfterMessage(t, collector, rootID, "recovered after restart")
-	assert.Equal(t, 1, resumedCalls)
+	// The recovery retry is a no-wake non-empty stop, so the two-phase check
+	// spends one hidden candidate call and one confirming call.
+	assert.Equal(t, 2, resumedCalls)
 	second.shutdown()
 	collector.stop()
 
@@ -83,7 +85,8 @@ func completeRecoveryAfterRestart(t *testing.T, dbPath string, rootID int64) {
 		COUNT(*) FILTER (WHERE role = 'assistant' AND rejected_reason IS NULL AND finish_type = 'stop')
 		FROM messages WHERE session_id = ?`, rootID).Scan(&rejectedRows, &acceptedRows))
 	assert.Equal(t, 1, rejectedRows)
-	assert.Equal(t, 1, acceptedRows)
+	// The candidate and its confirmation carry the same recovered text.
+	assert.Equal(t, 2, acceptedRows)
 }
 
 func TestResponseIntegrity_RestartAfterTerminalFailureDoesNotRetry(t *testing.T) {
