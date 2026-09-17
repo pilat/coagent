@@ -14,13 +14,7 @@ import (
 	"github.com/pilat/coagent/internal/logger"
 )
 
-// mutatingOps change daemon state and are worth an info line each.
-var mutatingOps = map[string]bool{
-	OpSetProvider: true,
-	OpSetSecret:   true,
-}
-
-func (s *Server) dispatch(ctx context.Context, c *Conn, line []byte) Response {
+func (s *Server) dispatch(ctx context.Context, line []byte) Response {
 	var req Request
 	if err := json.Unmarshal(line, &req); err != nil {
 		return errorResponse(nil, CodeParse, "malformed request: "+err.Error())
@@ -30,7 +24,7 @@ func (s *Server) dispatch(ctx context.Context, c *Conn, line []byte) Response {
 		return errorResponse(req.ID, CodeInvalidRequest, "method is required")
 	}
 
-	result, rpcErr := s.call(ctx, c, req)
+	result, rpcErr := s.call(ctx, req)
 
 	logCall(req, rpcErr)
 
@@ -46,7 +40,7 @@ func (s *Server) dispatch(ctx context.Context, c *Conn, line []byte) Response {
 	return Response{JSONRPC: jsonrpcVersion, ID: req.ID, Result: encoded}
 }
 
-func (s *Server) call(ctx context.Context, c *Conn, req Request) (any, *Error) {
+func (s *Server) call(ctx context.Context, req Request) (any, *Error) {
 	// One answer for every op while booting, status included: the managers it
 	// would report have not started, so "running: false" would be a lie.
 	if !s.isReady() {
@@ -57,12 +51,7 @@ func (s *Server) call(ctx context.Context, c *Conn, req Request) (any, *Error) {
 		return s.status(ctx), nil
 	}
 
-	h, ok := s.handler(req.Method)
-	if !ok {
-		return nil, &Error{Code: CodeMethodNotFound, Message: "unknown method " + req.Method}
-	}
-
-	return h(ctx, c, req.Params)
+	return nil, &Error{Code: CodeMethodNotFound, Message: "unknown method " + req.Method}
 }
 
 func (s *Server) status(ctx context.Context) StatusResult {
@@ -84,21 +73,6 @@ func (s *Server) status(ctx context.Context) StatusResult {
 		out.DefaultModel = cfg.DefaultModel()
 		out.Search = searchStatus(cfg.UnifiedConfig, cfg.DefaultModel())
 		out.Managers = s.managerStatuses(ctx, cfg.UnifiedConfig.Managers)
-	}
-
-	if s.deps.Builtin != nil {
-		builtin := ManagerStatus{ID: s.deps.Builtin.ID(), Driver: "cli", Enabled: true, Running: s.deps.Builtin.Alive()}
-		if s.deps.Delivery != nil {
-			health, err := s.deps.Delivery.OutputQueueStatus(ctx, builtin.ID)
-			if err == nil {
-				builtin.PendingOutputs = health.Pending
-				builtin.BlockedOutputID = health.BlockedID
-				builtin.BlockedForSeconds = health.BlockedForSec
-				builtin.DeliveryError = health.DeliveryError
-			}
-		}
-
-		out.Managers = append(out.Managers, builtin)
 	}
 
 	s.appendRemovedManagerBacklogs(ctx, &out)
@@ -233,10 +207,8 @@ func searchStatus(unified *config.UnifiedConfig, defaultModel string) string {
 	return ""
 }
 
-// logCall records every control op so a CLI action is traceable from the daemon
-// side. Params are never logged: they carry credentials. Mutations log at info;
-// the reads a client polls on a timer stay at debug so the journal is not
-// drowned.
+// logCall records every control op at one level so a CLI action is traceable
+// from the daemon side. Params are never logged: they carry credentials.
 func logCall(req Request, rpcErr *Error) {
 	log := logger.Named("ctl")
 
@@ -249,13 +221,7 @@ func logCall(req Request, rpcErr *Error) {
 		return
 	}
 
-	if mutatingOps[req.Method] {
-		log.Info("ctl_request", zap.String("method", req.Method))
-
-		return
-	}
-
-	log.Debug("ctl_request", zap.String("method", req.Method))
+	log.Info("ctl_request", zap.String("method", req.Method))
 }
 
 func errorResponse(id json.RawMessage, code int, message string) Response {

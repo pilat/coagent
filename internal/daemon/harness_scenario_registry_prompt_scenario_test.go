@@ -91,7 +91,7 @@ func assertInitialRegistryProjection(
 	assert.NotContains(t, firstPrompt, "mcp__fake__ping")
 
 	childSchemas := schemas.first(t, childID)
-	for _, id := range []string{tool.IDTask, tool.IDSchedule, tool.IDSleep, tool.IDMCPAdd, tool.IDSetProvider} {
+	for _, id := range []string{tool.IDTask, tool.IDSchedule, tool.IDSleep, tool.IDMCPAdd, tool.IDConfigEdit} {
 		assert.NotContains(t, childSchemas, id, "child registry must gate %q", id)
 	}
 	childPrompt := prompts.first(t, strconv.FormatInt(childID, 10))
@@ -110,7 +110,7 @@ func assertNextRegistryProjection(
 	lastSchemas := schemas.last(t, parentID)
 	assert.Contains(t, lastSchemas, "mcp__fake__ping")
 	assert.Contains(t, lastSchemas, tool.IDTask)
-	assert.Contains(t, lastSchemas, tool.IDSetProvider)
+	assert.Contains(t, lastSchemas, tool.IDConfigEdit)
 	assert.Contains(t, toolResultForCallID(h.parentMessages(parentID), "ping-next-activation"), "pong from registry")
 
 	lastPrompt := prompts.last(t, strconv.FormatInt(parentID, 10))
@@ -126,9 +126,5 @@ func dynamicRootTools() []string {
 }
 
 func configToolsForPromptScenario() []string {
-	return []string{
-		tool.IDSetProvider, tool.IDRemoveProvider, tool.IDSetManager, tool.IDRemoveManager,
-		tool.IDAddModel, tool.IDRemoveModel, tool.IDSetDefaultModel, tool.IDSetModelTags,
-		tool.IDRequestSecret,
-	}
+	return []string{tool.IDConfigEdit}
 }

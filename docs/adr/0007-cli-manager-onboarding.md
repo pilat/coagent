@@ -1,6 +1,6 @@
 # ADR-0007: Onboarding runs as an AI chat through a built-in CLI manager on a unix socket
 
-- **Status:** Accepted
+- **Status:** Superseded by [ADR-0060](0060-telegram-service-topics-own-daemon-management.md)
 - **Date:** 2026-08-08
 
 ## Context

@@ -25,10 +25,9 @@ func TestProductionTools_ParallelSafePolicies(t *testing.T) {
 		tool.IDSchedule:       schedule.NewScheduleTool(0, nil, nil),
 		tool.IDSleep:          schedule.NewSleepTool(nil, 0),
 		budget.ToolID:         budget.NewTool(nil, 0, false),
-		tool.IDRequestSecret:  &requestSecretTool{},
 	}
 
-	for _, tl := range configtools.New(nil, nil) {
+	for _, tl := range []tool.Tool{configtools.NewConfigEdit(nil, nil)} {
 		tools[tl.ID()] = tl
 	}
 

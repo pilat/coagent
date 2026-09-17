@@ -48,12 +48,7 @@ func (s *store) BindManager(ctx context.Context, managerID, driver string, attri
 }
 
 func validateManagerBinding(driver string, attributes map[string]any) error {
-	switch driver {
-	case "cli":
-		if len(attributes) != 1 || attributes["local"] != true {
-			return fmt.Errorf("%w: invalid cli identity", ErrManagerBinding)
-		}
-	case "telegram":
+	if driver == "telegram" {
 		_, botOK := positiveInt64(attributes["bot_user_id"])
 		chatOK := validBindingInt64(attributes["chat_id"])
 

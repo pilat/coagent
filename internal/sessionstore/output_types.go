@@ -113,6 +113,13 @@ type OutputQueueStatus struct {
 // narrow store fakes do not acquire a second creation API.
 type ManagerRootStore interface {
 	CreateManagerRoot(ctx context.Context, create ManagerRootCreate) (*SessionRecord, *OutputCommit, error)
+	EnsureManagementRoot(
+		ctx context.Context,
+		projectID int64,
+		owner string,
+		topicID int64,
+		name, workDir string,
+	) (*SessionRecord, *OutputCommit, error)
 	ReplaceManagerRoot(
 		ctx context.Context,
 		oldSessionID int64,

@@ -27,33 +27,15 @@ const (
 	IDMCPDisable     = "mcp_disable"
 	IDMCPList        = "mcp_list"
 
-	IDSetProvider     = "set_provider"
-	IDRemoveProvider  = "remove_provider"
-	IDSetManager      = "set_manager"
-	IDRemoveManager   = "remove_manager"
-	IDAddModel        = "add_model"
-	IDRemoveModel     = "remove_model"
-	IDSetDefaultModel = "set_default_model"
-	IDSetModelTags    = "set_model_tags"
-	IDConfigEdit      = "config_edit"
-	IDRequestSecret   = "request_secret"
+	IDConfigEdit = "config_edit"
 )
 
 // externalCallTools suspend the loop awaiting an outcome produced outside it.
 // Never re-executed, never stubbed by repair; only an injection resolves one.
 var externalCallTools = map[string]bool{
-	IDSleep:           true,
-	IDTask:            true,
-	IDSetProvider:     true,
-	IDRemoveProvider:  true,
-	IDSetManager:      true,
-	IDRemoveManager:   true,
-	IDAddModel:        true,
-	IDRemoveModel:     true,
-	IDSetDefaultModel: true,
-	IDSetModelTags:    true,
-	IDConfigEdit:      true,
-	IDRequestSecret:   true,
+	IDSleep:      true,
+	IDTask:       true,
+	IDConfigEdit: true,
 }
 
 // IsExternalCall reports whether a tool's pending call waits on the outside

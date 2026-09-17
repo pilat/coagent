@@ -1,6 +1,6 @@
 # ADR-0022: A reserved logical project identifies the coagent configuration session
 
-- **Status:** Accepted
+- **Status:** Superseded by [ADR-0060](0060-telegram-service-topics-own-daemon-management.md)
 - **Date:** 2026-08-19
 
 ## Context

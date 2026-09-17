@@ -21,16 +21,16 @@ func TestPrepareSessionInputs_VerdictResolvesTheStagedCall(t *testing.T) {
 	rec, err := mgr.sessionStore.CreateSession(ctx, pid, "fake-model", "", nil)
 	require.NoError(t, err)
 
-	mgr.staged.stage(rec.ID, "call-7", tool.IDSetProvider)
+	mgr.staged.stage(rec.ID, "call-7", tool.IDConfigEdit)
 	require.True(t, mgr.staged.has(rec.ID))
 
 	rs := newInputsRunner(pid, []queuedSessionInput{asyncSessionInput{value: pendingCallResultInput{
-		Call:    session.PendingToolCall{ID: "call-7", Name: tool.IDSetProvider},
+		Call:    session.PendingToolCall{ID: "call-7", Name: tool.IDConfigEdit},
 		Content: "applied",
 	}}})
 
 	notifs, err := mgr.prepareSessionInputs(ctx, rec.ID, rs, &mockSession{
-		pendingCalls: []session.PendingToolCall{{ID: "call-7", Name: tool.IDSetProvider}},
+		pendingCalls: []session.PendingToolCall{{ID: "call-7", Name: tool.IDConfigEdit}},
 	})
 	require.NoError(t, err)
 	require.Len(t, notifs, 1)
@@ -44,18 +44,18 @@ func TestStagedCalls_Lifecycle(t *testing.T) {
 	assert.False(t, c.has(1))
 	assert.Nil(t, c.forSession(1))
 
-	c.stage(1, "a", tool.IDSetProvider)
-	c.stage(1, "b", tool.IDRequestSecret)
+	c.stage(1, "a", tool.IDConfigEdit)
+	c.stage(1, "b", tool.IDConfigEdit)
 
 	assert.True(t, c.has(1))
-	assert.Equal(t, map[string]string{"a": tool.IDSetProvider, "b": tool.IDRequestSecret}, c.forSession(1))
+	assert.Equal(t, map[string]string{"a": tool.IDConfigEdit, "b": tool.IDConfigEdit}, c.forSession(1))
 
 	// The copy is a copy: mutating it must not reach the ledger.
 	c.forSession(1)["a"] = "tampered"
-	assert.Equal(t, tool.IDSetProvider, c.forSession(1)["a"])
+	assert.Equal(t, tool.IDConfigEdit, c.forSession(1)["a"])
 
 	c.resolve(1, "a")
-	assert.Equal(t, map[string]string{"b": tool.IDRequestSecret}, c.forSession(1))
+	assert.Equal(t, map[string]string{"b": tool.IDConfigEdit}, c.forSession(1))
 
 	c.resolve(1, "b")
 	assert.False(t, c.has(1))

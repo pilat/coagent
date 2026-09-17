@@ -17,7 +17,6 @@ import (
 	"github.com/pilat/coagent/internal/configops"
 	"github.com/pilat/coagent/internal/controllerapi"
 	"github.com/pilat/coagent/internal/ctl"
-	"github.com/pilat/coagent/internal/managers/cli"
 )
 
 func TestAppShutdown_StopsInReverseOrderAndContinuesAfterError(t *testing.T) {
@@ -52,14 +51,13 @@ func TestStartCore_RegistersDatabaseAndDaemonLifecycle(t *testing.T) {
 	require.NotNil(t, core.scheduleStore)
 	require.NotNil(t, core.scheduleSender)
 	require.NotNil(t, core.verdictSender)
-	require.NotNil(t, core.secretResolver)
 
 	assert.Equal(t, []string{"shellenv", "mcp.pool", "db", "daemon"}, stopNames(a))
 	assert.FileExists(t, filepath.Join(home, coagenthome.DirName, coagenthome.DBFileName))
 
 	projectDir := filepath.Join(home, coagenthome.DirName, coagenthome.ProjectsDirName, "lifecycle")
 	require.NoError(t, os.MkdirAll(projectDir, 0o755))
-	controller := core.controller.ForManager(controllerapi.BuiltinCLIManagerID)
+	controller := core.controller.ForManager("lifecycle-test")
 	sessionID, err := controller.CreateSession(context.Background(), controllerapi.SessionCreateData{
 		WorkDir: projectDir,
 	})
@@ -94,9 +92,9 @@ func TestStartCore_PartialStartLeavesOnlyCreatedComponentsForCleanup(t *testing.
 	a.shutdown(context.Background())
 }
 
-// A restart reply must be observable only after the whole control plane is
-// ready, and returning from runDaemon must have released its bound socket.
-func TestRunDaemon_ReadinessPrecedesRestartAndDeferredShutdownClosesSocket(t *testing.T) {
+// A client must observe status only after the whole control plane is ready,
+// and returning from runDaemon must have released its bound socket.
+func TestRunDaemon_ReadinessPrecedesStatusAndDeferredShutdownClosesSocket(t *testing.T) {
 	home, err := os.MkdirTemp("/tmp", "coa-life")
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = os.RemoveAll(home) })
@@ -117,18 +115,20 @@ func TestRunDaemon_ReadinessPrecedesRestartAndDeferredShutdownClosesSocket(t *te
 
 	socket, err := ctl.SocketPath()
 	require.NoError(t, err)
-	client := waitForReadyChat(t, socket, result)
+	client := waitForReadyStatus(t, socket, result)
 	t.Cleanup(func() { _ = client.Close() })
 
-	var restart ctl.RestartResult
-	require.NoError(t, client.Call(t.Context(), ctl.OpRestartDaemon, nil, &restart))
-	assert.True(t, restart.Restarting)
+	st, err := client.Status(t.Context())
+	require.NoError(t, err)
+	assert.False(t, st.ConfigPresent, "no config file was provided")
+
+	cancel()
 
 	select {
 	case err := <-result:
-		require.ErrorIs(t, err, errRestartRequested)
+		require.NoError(t, err)
 	case <-time.After(10 * time.Second):
-		t.Fatal("runDaemon did not drain after accepting the restart reply")
+		t.Fatal("runDaemon did not drain after context cancel")
 	}
 
 	require.Eventually(t, func() bool {
@@ -143,7 +143,7 @@ func TestRunDaemon_ReadinessPrecedesRestartAndDeferredShutdownClosesSocket(t *te
 	}, time.Second, 10*time.Millisecond, "deferred shutdown must close the control socket")
 }
 
-func waitForReadyChat(t *testing.T, socket string, result <-chan error) *ctl.Client {
+func waitForReadyStatus(t *testing.T, socket string, result <-chan error) *ctl.Client {
 	t.Helper()
 
 	var (
@@ -161,9 +161,7 @@ func waitForReadyChat(t *testing.T, socket string, result <-chan error) *ctl.Cli
 
 		candidate, err := ctl.Dial(context.Background(), socket)
 		if err == nil {
-			var opened cli.OpenResult
-			err = candidate.Call(t.Context(), cli.OpChatOpen, struct{}{}, &opened)
-			if err == nil {
+			if _, err := candidate.Status(t.Context()); err == nil {
 				client = candidate
 				return true
 			}
@@ -172,9 +170,9 @@ func waitForReadyChat(t *testing.T, socket string, result <-chan error) *ctl.Cli
 		}
 
 		return false
-	}, 10*time.Second, 10*time.Millisecond, "local chat readiness")
+	}, 10*time.Second, 10*time.Millisecond, "daemon readiness")
 
-	require.False(t, returned, "runDaemon stopped before the local chat became ready: %v", runErr)
+	require.False(t, returned, "runDaemon stopped before status became ready: %v", runErr)
 	require.NotNil(t, client)
 
 	return client

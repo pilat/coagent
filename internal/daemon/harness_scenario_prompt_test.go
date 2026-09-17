@@ -77,7 +77,7 @@ func TestHarnessScenario_SystemPromptMatchesTheDaemonRegisteredToolset(t *testin
 		}
 	}
 
-	h := newGatingHarness(t, false, map[string]string{"reviewer.md": promptReviewerAgentFile}, respond)
+	h := newGatingHarness(t, map[string]string{"reviewer.md": promptReviewerAgentFile}, respond)
 	defer h.shutdown()
 
 	parentID, err := h.mgr.Send(h.ctx, h.projectID, "spawn an explore child", "fake-model", nil)

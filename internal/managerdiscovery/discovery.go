@@ -76,7 +76,7 @@ func (s *service) ListSkills(
 }
 
 func (s *service) ListDir(
-	_ context.Context,
+	ctx context.Context,
 	data controllerapi.FsListDirData,
 ) (*controllerapi.FsListDirResultData, error) {
 	var favorites []string
@@ -99,7 +99,7 @@ func (s *service) ListDir(
 		path = home
 	}
 
-	dirs, err := readSubdirs(path)
+	dirs, err := s.readSubdirs(ctx, path)
 	if err != nil {
 		return nil, err
 	}
@@ -114,11 +114,13 @@ func (s *service) ListDir(
 	}, nil
 }
 
-func readSubdirs(path string) ([]controllerapi.FsDirEntry, error) {
+func (s *service) readSubdirs(ctx context.Context, path string) ([]controllerapi.FsDirEntry, error) {
 	entries, err := os.ReadDir(path)
 	if err != nil {
 		return nil, fmt.Errorf("readdir: %w", err)
 	}
+
+	hiddenDirs := s.hiddenDirNames(ctx)
 
 	type dirWithMtime struct {
 		name  string
@@ -130,6 +132,11 @@ func readSubdirs(path string) ([]controllerapi.FsDirEntry, error) {
 	for _, entry := range entries {
 		name := entry.Name()
 		if !entry.IsDir() || name == "" || name[0] == '.' {
+			continue
+		}
+
+		full := filepath.Join(path, name)
+		if hiddenDirs[filepath.Clean(full)] {
 			continue
 		}
 

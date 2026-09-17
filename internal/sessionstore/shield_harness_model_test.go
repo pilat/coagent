@@ -55,7 +55,7 @@ func newShieldHarnessProduction(t *testing.T) *shieldHarnessProduction {
 	t.Helper()
 	store, db, projectID := newTestStore(t)
 	root, _, err := store.CreateManagerRoot(context.Background(), ManagerRootCreate{
-		ProjectID: projectID, Model: "model", Attributes: map[string]any{"manager_id": "cli"},
+		ProjectID: projectID, Model: "model", Attributes: map[string]any{"manager_id": "telegram-test"},
 		Name: "project", WorkDir: t.TempDir(),
 	})
 	require.NoError(t, err)

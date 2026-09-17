@@ -20,7 +20,7 @@ func TestOperatorProtocolModel_UserInputRacesPark(t *testing.T) {
 		t.Helper()
 
 		store, _, projectID := newTestStore(t) //nolint:contextcheck // test helper owns its own bootstrap context
-		root, err := store.CreateSession(ctx, projectID, "priced", "", map[string]any{"manager_id": "cli"})
+		root, err := store.CreateSession(ctx, projectID, "priced", "", map[string]any{"manager_id": "telegram-test"})
 		require.NoError(t, err)
 		input, err := store.EnqueueInput(ctx, root.ID, InputSourceUser, "/budget")
 		require.NoError(t, err)

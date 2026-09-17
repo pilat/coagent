@@ -85,18 +85,24 @@ const (
 	StateError   = sessionevent.StateError
 )
 
-// CoagentSystemProjectName is the durable logical identity of the local
-// configuration project. Its directory is separate because ':' is reserved
-// from user project names.
+// CoagentManagementProjectDir is the reserved directory of the shared hidden
+// ordinary project that hosts every Telegram manager's management root.
+// The name is reserved from user-created /new projects; the hidden flag is
+// discovery-only and grants no authority.
 const (
-	CoagentSystemProjectName = "sys:coagent"
-	CoagentSystemProjectDir  = "sys_coagent"
-	// BuiltinCLIManagerID is the reserved owner of the local configuration chat.
-	BuiltinCLIManagerID = "cli"
+	CoagentManagementProjectDir = "sys_coagent"
 	// SessionAttributeManagerID is the durable owner of a root session. Manager
 	// subscriptions are routed by this value, so one manager never receives
 	// another manager's conversation.
 	SessionAttributeManagerID = "manager_id"
+	// SessionAttributeManagementSurface marks a manager-owned root as the
+	// service-topic management conversation. It selects routing and the
+	// management instruction only; it grants no authority.
+	SessionAttributeManagementSurface = "management_surface"
+	// SessionAttributeTelegramTopicID binds a root to the manager's current
+	// service topic, so restart reconciliation patches output there instead of
+	// creating another topic.
+	SessionAttributeTelegramTopicID = "telegram_topic_id"
 )
 
 // State aliases the notification-layer runtime state for controller clients.
@@ -113,8 +119,7 @@ type SessionCreateData struct {
 	// WorktreeName, when set, forks WorkDir's repository into a new git worktree
 	// of that name (branched off the repository's default branch pulled fresh
 	// from its remote) and runs the session there instead of in WorkDir.
-	WorktreeName  string `json:"worktree_name,omitempty"`
-	SystemProject string `json:"system_project,omitempty"`
+	WorktreeName string `json:"worktree_name,omitempty"`
 	// RepoRoot is the path to the main git repository (for worktree sessions).
 	// Empty for non-worktree sessions. Its .git directory becomes a sandbox
 	// writable root: linked work trees share the object store and refs with
@@ -170,9 +175,10 @@ type FsListDirData struct {
 
 // ProjectCreateData defines input for provisioning (get-or-create) a
 // daemon-managed folder-project by name under the configured projects root.
+// Every project created here is visible; the hidden management project is
+// ensured only through the management-root path.
 type ProjectCreateData struct {
-	Name   string `json:"name"`
-	System bool   `json:"system,omitempty"`
+	Name string `json:"name"`
 }
 
 // ProjectCreateResultData is the payload for a created-or-opened project.

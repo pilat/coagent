@@ -31,13 +31,13 @@ func TestUnresolvedStoredExternalCalls(t *testing.T) {
 	}{
 		{
 			name: "an unresolved external call is pending",
-			msgs: []*transcript.Message{storedAssistant(`[{"id":"c1","name":"request_secret"}]`)},
-			want: []session.PendingToolCall{{ID: "c1", Name: tool.IDRequestSecret}},
+			msgs: []*transcript.Message{storedAssistant(`[{"id":"c1","name":"config_edit"}]`)},
+			want: []session.PendingToolCall{{ID: "c1", Name: tool.IDConfigEdit}},
 		},
 		{
 			name: "an answered call is not",
 			msgs: []*transcript.Message{
-				storedAssistant(`[{"id":"c1","name":"request_secret"}]`),
+				storedAssistant(`[{"id":"c1","name":"config_edit"}]`),
 				storedToolResult("c1"),
 			},
 		},
@@ -109,7 +109,6 @@ func TestOrphanSweepCandidate(t *testing.T) {
 // The notice tells the model what it can do next, and the terminal prompt is the
 // one case where "ask again" is the whole answer.
 func TestOrphanedCallNotice(t *testing.T) {
-	assert.Contains(t, orphanedCallNotice(tool.IDRequestSecret), "Ask again")
-	assert.Contains(t, orphanedCallNotice(tool.IDSetDefaultModel), "check the current state")
-	assert.Contains(t, orphanedCallNotice(tool.IDSetDefaultModel), "restarted")
+	assert.Contains(t, orphanedCallNotice(tool.IDConfigEdit), "check the current state")
+	assert.Contains(t, orphanedCallNotice(tool.IDConfigEdit), "restarted")
 }

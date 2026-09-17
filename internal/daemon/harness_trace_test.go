@@ -230,7 +230,6 @@ func normalizeHarnessTrace(
 func requireRecordableNotification(t *testing.T, n sessionevent.Notification) {
 	t.Helper()
 
-	require.Empty(t, n.RequestID, "extend the trace schema before recording secret requests")
 	require.Zero(t, n.OldSessionID, "extend the trace schema before recording session clears")
 	require.Zero(t, n.NewSessionID, "extend the trace schema before recording session clears")
 }

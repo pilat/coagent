@@ -5,10 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"maps"
-	"path/filepath"
 
 	"github.com/pilat/coagent/internal/controllerapi"
-	"github.com/pilat/coagent/internal/projectpath"
 	"github.com/pilat/coagent/internal/sessionstore"
 )
 
@@ -39,16 +37,13 @@ func (s *service) requireOwnedSession(ctx context.Context, managerID string, ses
 }
 
 func (s *service) canListSession(
-	ctx context.Context,
+	_ context.Context,
 	managerID string,
 	record *sessionstore.SessionRecord,
 ) bool {
 	owner, _ := record.Attributes[controllerapi.SessionAttributeManagerID].(string)
-	if owner == managerID && owner != "" {
-		return true
-	}
 
-	return owner == "" && s.isLegacyCLISession(ctx, managerID, record)
+	return owner == managerID && owner != ""
 }
 
 func (s *service) authorizeAttributeUpdate(
@@ -66,12 +61,12 @@ func (s *service) authorizeAttributeUpdate(
 	}
 
 	owner, _ := record.Attributes[controllerapi.SessionAttributeManagerID].(string)
-	if owner != "" && owner != managerID {
-		return fmt.Errorf("session %d belongs to another manager", data.SessionID)
+	if owner == "" {
+		return fmt.Errorf("session %d has no claimable manager owner", data.SessionID)
 	}
 
-	if owner == "" && !s.isLegacyCLISession(ctx, managerID, record) {
-		return fmt.Errorf("session %d has no claimable manager owner", data.SessionID)
+	if owner != managerID {
+		return fmt.Errorf("session %d belongs to another manager", data.SessionID)
 	}
 
 	data.Attributes = maps.Clone(data.Attributes)
@@ -82,35 +77,4 @@ func (s *service) authorizeAttributeUpdate(
 	data.Attributes[controllerapi.SessionAttributeManagerID] = managerID
 
 	return nil
-}
-
-func (s *service) isLegacyCLISession(
-	ctx context.Context,
-	managerID string,
-	record *sessionstore.SessionRecord,
-) bool {
-	if managerID != controllerapi.BuiltinCLIManagerID || record.ParentID != 0 {
-		return false
-	}
-
-	channel, _ := record.Attributes["channel"].(string)
-	if channel != controllerapi.BuiltinCLIManagerID {
-		return false
-	}
-
-	name, err := s.backend.GetProjectName(ctx, record.ProjectID)
-	if err != nil || name != controllerapi.CoagentSystemProjectName {
-		return false
-	}
-
-	workDir, err := s.backend.GetProjectWorkDir(ctx, record.ProjectID)
-	if err != nil {
-		return false
-	}
-
-	expected := filepath.Join(
-		projectpath.ResolveRoot(s.unifiedConfig()), controllerapi.CoagentSystemProjectDir,
-	)
-
-	return projectpath.Same(workDir, expected)
 }

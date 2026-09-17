@@ -27,7 +27,7 @@ func TestRunLoopEmptyResponseEmitsPersistentOutput(t *testing.T) {
 	require.NoError(t, err)
 
 	store := sessionstore.NewStore(db)
-	record, err := store.CreateSession(ctx, 1, "model", "", map[string]any{"manager_id": "cli"})
+	record, err := store.CreateSession(ctx, 1, "model", "", map[string]any{"manager_id": "telegram-test"})
 	require.NoError(t, err)
 
 	llm := &loopScriptLLM{responses: []*llmwire.Response{{}}}

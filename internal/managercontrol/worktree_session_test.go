@@ -63,8 +63,14 @@ func (f *stubWorktreeBackend) GetOrCreateProject(context.Context, string) (int64
 	return 0, nil
 }
 
-func (f *stubWorktreeBackend) GetOrCreateSystemProject(context.Context, string, string) (int64, error) {
+func (f *stubWorktreeBackend) GetOrCreateHiddenProject(context.Context, string) (int64, error) {
 	return 0, nil
+}
+
+func (f *stubWorktreeBackend) EnsureManagementRoot(
+	context.Context, int64, string, int64, string, string,
+) (*sessionstore.SessionRecord, *sessionstore.OutputCommit, error) {
+	return nil, nil, nil
 }
 
 func (f *stubWorktreeBackend) GetProjectWorkDir(context.Context, int64) (string, error) {

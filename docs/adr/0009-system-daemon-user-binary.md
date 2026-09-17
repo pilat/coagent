@@ -1,6 +1,6 @@
 # ADR-0009: System-scope daemon, user-home binary, sudo-free updates
 
-- **Status:** Accepted
+- **Status:** Superseded by [ADR-0060](0060-telegram-service-topics-own-daemon-management.md): its required sudo-free socket update path is removed with the automatic update path; the system-service layout remains historical
 - **Date:** 2026-08-09
 
 ## Context

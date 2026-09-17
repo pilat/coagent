@@ -14,7 +14,7 @@ import (
 func TestStore_CompleteCompactionInputCommitsReplacementAndOutcomeTogether(t *testing.T) {
 	ctx := context.Background()
 	store, db, projectID := newTestStore(t)
-	record, err := store.CreateSession(ctx, projectID, "model", "", map[string]any{"manager_id": "cli"})
+	record, err := store.CreateSession(ctx, projectID, "model", "", map[string]any{"manager_id": "telegram-test"})
 	require.NoError(t, err)
 	input, err := store.EnqueueInput(ctx, record.ID, InputSourceUser, "/compact focus")
 	require.NoError(t, err)

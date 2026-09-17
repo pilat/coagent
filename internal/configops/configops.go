@@ -5,30 +5,18 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
-	"fmt"
-	"maps"
-	"os"
-	"slices"
-	"strings"
 	"time"
 
 	"github.com/pilat/coagent/internal/config"
 )
 
-// Service is the one semantic mutation layer, so guards, ${VAR} discipline and
-// validation cannot diverge between the facades that use it.
+// Service is the whole-document mutation layer: config_edit stages a complete
+// candidate, the daemon commits it and resolves the pending marker on boot.
 type Service interface {
-	// Stage validates ops against the config on disk, in order, and renders the
-	// candidate bytes. Nothing is written; a failed verdict comes with a nil
-	// Staged. A set is all-or-nothing: the bootstrap adds a provider and the
-	// models that make it usable in one write, because either alone is a config
-	// that cannot serve a session.
-	Stage(ops ...Op) (*Staged, Verdict)
-	// StageDocument validates a caller-supplied complete candidate document the
-	// same way Stage validates its ops — strict parse, ${VAR} references kept
-	// raw, secrets resolved, defaults and semantic checks applied — and returns
-	// the staged candidate without writing. It is the raw-document editing path
-	// for config_edit; typed ops keep using Stage.
+	// StageDocument validates a caller-supplied complete candidate document —
+	// strict parse, secrets resolved, defaults and semantic checks applied —
+	// and returns the staged candidate without writing. It is the raw-document
+	// editing path for config_edit.
 	StageDocument(candidate []byte) (*Staged, Verdict)
 	// Commit replaces config.yaml with a staged candidate, leaving behind the
 	// pending-apply marker that lets the daemon explain itself after the restart.
@@ -43,10 +31,6 @@ type Service interface {
 	ClearPending(p Pending) error
 	// ConfigHash is the current file's sha256, "" when there is no file.
 	ConfigHash() (string, error)
-	// SetSecret writes one credential into the secrets file and registers it for
-	// log redaction. Referenced reports whether config.yaml already resolves
-	// ${name}, which makes the write a rotation the daemon must restart to see.
-	SetSecret(name, value string) (bool, Verdict)
 	// ConfigPath is where the config this service mutates lives.
 	ConfigPath() string
 }
@@ -78,75 +62,16 @@ func New(configPath, secretsPath string) Service {
 
 func (s *svc) ConfigPath() string { return s.configPath }
 
-// Stage works on a raw draft so credentials stay ${VAR}, and resolves against a
-// fresh disk read so a secret written seconds ago already counts.
-func (s *svc) Stage(ops ...Op) (*Staged, Verdict) {
-	if len(ops) == 0 {
-		return nil, Reject("", errors.New("nothing to apply"))
-	}
-
-	draft, err := s.rawDraft()
-	if err != nil {
-		return nil, Reject("", err)
-	}
-
-	summaries := make([]string, 0, len(ops))
-
-	for _, op := range ops {
-		if err := op.apply(draft); err != nil {
-			return nil, Reject(op.Path(), err)
-		}
-
-		summaries = append(summaries, op.Summary())
-	}
-
-	// The whole set is anchored at one path only when it is one op; a set that
-	// spans sections has no field to point at.
-	path := ""
-	if len(ops) == 1 {
-		path = ops[0].Path()
-	}
-
-	data, err := config.MarshalUnifiedConfig(draft)
-	if err != nil {
-		return nil, Reject(path, fmt.Errorf("render config: %w", err))
-	}
-
-	secrets, err := config.LoadSecretsFrom(s.secretsPath)
-	if err != nil {
-		return nil, Reject("", err)
-	}
-
-	if _, err := config.ParseAndResolve(data, secrets); err != nil {
-		return nil, Reject(path, err)
-	}
-
-	sum := sha256.Sum256(data)
-
-	return &Staged{
-		Data:    data,
-		Hash:    hex.EncodeToString(sum[:]),
-		Summary: strings.Join(summaries, "; "),
-	}, OK()
-}
-
-// StageDocument validates the complete candidate in its raw form. Credential
-// sinks are checked before resolution, so a literal can no more reach
-// config.yaml by riding a full document than by riding a typed op; semantic
-// validation resolves against a fresh disk read exactly like Stage. The staged
-// bytes are the validated candidate verbatim — user formatting is preserved
-// and the hash matches what a boot will parse.
+// StageDocument validates the complete candidate as given. Credentials may be
+// literal values or ${VAR} references; semantic validation resolves against a
+// fresh disk read. The staged bytes are the validated candidate verbatim —
+// user formatting is preserved and the hash matches what a boot will parse.
 func (s *svc) StageDocument(candidate []byte) (*Staged, Verdict) {
 	if len(bytes.TrimSpace(candidate)) == 0 {
 		return nil, Reject("", errors.New("empty configuration document"))
 	}
 
-	raw, err := config.ParseUnifiedConfig(candidate)
-	if err != nil {
-		return nil, Reject("", err)
-	}
-
-	if err := checkDocumentCredentials(raw); err != nil {
+	if _, err := config.ParseUnifiedConfig(candidate); err != nil {
 		return nil, Reject("", err)
 	}
 
@@ -166,30 +91,6 @@ func (s *svc) StageDocument(candidate []byte) (*Staged, Verdict) {
 		Hash:    hex.EncodeToString(sum[:]),
 		Summary: "replace configuration document",
 	}, OK()
-}
-
-// checkDocumentCredentials enforces the ${VAR}-only rule on every credential
-// sink a full-document candidate could carry. It runs on the raw draft because
-// resolution replaces references with values, which would make every
-// credential look like a literal.
-func checkDocumentCredentials(raw *config.UnifiedConfig) error {
-	for name, provider := range raw.Providers {
-		if err := checkCredential("api_key", provider.APIKey); err != nil {
-			return fmt.Errorf("provider %q %w", name, err)
-		}
-	}
-
-	for _, manager := range raw.Managers {
-		if err := checkCredential("bot_token", manager.BotToken); err != nil {
-			return fmt.Errorf("manager %q %w", manager.ID, err)
-		}
-	}
-
-	if err := checkCredential("api_key", raw.Tools.Search.APIKey); err != nil {
-		return fmt.Errorf("tools.search %w", err)
-	}
-
-	return nil
 }
 
 // Commit's write order is the contract — backup, marker, config. The marker's
@@ -222,33 +123,4 @@ func (s *svc) Commit(staged *Staged, p Pending) Verdict {
 	pruneBackups(s.configPath)
 
 	return OK()
-}
-
-// rawDraft loads the config without resolving secrets. A missing file is the
-// pre-onboarding state, not an error: the first op writes the file.
-func (s *svc) rawDraft() (*config.UnifiedConfig, error) {
-	draft, err := config.LoadRawUnifiedConfig(s.configPath)
-	if errors.Is(err, os.ErrNotExist) {
-		return &config.UnifiedConfig{Sandbox: config.SandboxConfig{Enabled: true}}, nil
-	}
-
-	if err != nil {
-		return nil, fmt.Errorf("load config draft: %w", err)
-	}
-
-	return cloneConfig(draft), nil
-}
-
-// cloneConfig deep-copies the mutable parts of a draft, so an op that fails
-// halfway cannot leave a partially mutated draft behind.
-func cloneConfig(c *config.UnifiedConfig) *config.UnifiedConfig {
-	out := *c
-	out.Providers = maps.Clone(c.Providers)
-	out.Marketplaces = slices.Clone(c.Marketplaces)
-	out.Models = slices.Clone(c.Models)
-	out.Managers = slices.Clone(c.Managers)
-	out.SpawnFavorites = slices.Clone(c.SpawnFavorites)
-	out.Sandbox.WritablePaths = slices.Clone(c.Sandbox.WritablePaths)
-
-	return &out
 }

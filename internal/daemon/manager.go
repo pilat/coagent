@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"maps"
-	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -26,7 +25,6 @@ import (
 	"github.com/pilat/coagent/internal/mcp"
 	"github.com/pilat/coagent/internal/mcpstore"
 	"github.com/pilat/coagent/internal/progressruntime"
-	"github.com/pilat/coagent/internal/projectpath"
 	"github.com/pilat/coagent/internal/schedule"
 	"github.com/pilat/coagent/internal/session"
 	"github.com/pilat/coagent/internal/sessionbus"
@@ -48,9 +46,6 @@ type Service interface {
 	ConsumeConfigEditActivation(ctx context.Context, sessionID int64, callID string)
 	DeliverScheduleTick(ctx context.Context, sessionID int64, deliveryID, content string) (bool, error)
 	DeliverFreshSchedule(ctx context.Context, sessionID int64, deliveryID, content string) (bool, error)
-	ResolveSecretRequest(ctx context.Context, requestID, name string) error
-	CancelSecretRequest(ctx context.Context, requestID string) error
-	PendingSecretRequests(sessionID int64) []sessionevent.Notification
 	Kill(ctx context.Context, sessionID int64) error
 	Stop(ctx context.Context, sessionID, inputID int64) error
 	Clear(ctx context.Context, sessionID int64) (int64, error)
@@ -67,18 +62,14 @@ type Service interface {
 	Shutdown(timeout time.Duration)
 	GetOrCreateProject(ctx context.Context, workDir string) (int64, error)
 	GetOrCreateNamedProject(ctx context.Context, workDir, name string) (int64, error)
-	GetOrCreateSystemProject(ctx context.Context, workDir, name string) (int64, error)
+	GetOrCreateHiddenProject(ctx context.Context, workDir string) (int64, error)
+	EnsureManagementRoot(
+		ctx context.Context, projectID int64, owner string, topicID int64, name, workDir string,
+	) (*sessionstore.SessionRecord, *sessionstore.OutputCommit, error)
+	ListHiddenProjectDirs(ctx context.Context) ([]string, error)
 	GetProjectWorkDir(ctx context.Context, projectID int64) (string, error)
 	GetProjectName(ctx context.Context, projectID int64) (string, error)
 	ListRecentProjects(ctx context.Context, root string) ([]controllerapi.RecentProjectInfo, error)
-}
-
-// LegacyCLIPreparer claims unambiguous pre-owner local-chat roots before the
-// recovery sweep can construct a root session without durable output ownership.
-//
-//nolint:iface // composition root asserts the preparation capability structurally.
-type LegacyCLIPreparer interface {
-	PrepareLegacyCLIRoots(ctx context.Context) error
 }
 
 const (
@@ -127,9 +118,7 @@ type svc struct {
 	mcpPool            mcp.Pool
 	applier            configapply.Service
 	staged             *stagedCalls
-	secrets            *secretRequests
 	deferNotices       *deferAnnouncements
-	systemProject      string
 	shuttingDown       atomic.Bool
 	recovery           sessionlifecycle.Recovery
 	stopper            sessionlifecycle.Stopper
@@ -170,20 +159,6 @@ type svc struct {
 // daemon's general Service interface used by controller fakes.
 func (s *svc) OutputStore() sessionstore.ManagerOutputStore {
 	return s.managerOutputs
-}
-
-func (s *svc) PrepareLegacyCLIRoots(ctx context.Context) error {
-	if err := s.managerRoots.ClaimLegacyCLIRoots(
-		ctx,
-		controllerapi.CoagentSystemProjectName,
-		s.systemProject,
-		"cli",
-		controllerapi.BuiltinCLIManagerID,
-	); err != nil {
-		return fmt.Errorf("claim legacy cli roots: %w", err)
-	}
-
-	return nil
 }
 
 // queuedChild is a background child that could not be admitted immediately and
@@ -231,10 +206,6 @@ func New(
 		managerOutputs, managerRoots, lifecycleStore, modelInputs,
 		links, subagents, budgetSvc, progressStore,
 		scheduleSvc, cfg.DefaultModel,
-	)
-	s.systemProject = filepath.Join(
-		projectpath.ResolveRoot(cfg.UnifiedConfig),
-		controllerapi.CoagentSystemProjectDir,
 	)
 	s.mcpStore = mcpStore
 	s.mcpPool = mcpPool
@@ -292,7 +263,6 @@ func newSvc(
 		budgetSvc:       budgetSvc,
 		scheduleSvc:     scheduleSvc,
 		staged:          newStagedCalls(),
-		secrets:         newSecretRequests(),
 		admit:           admission.New(),
 		childQueue:      sessionlifecycle.NewQueue[queuedChild](),
 		pendingQueue:    sessionlifecycle.NewQueue[queuedRunner](),
@@ -1350,17 +1320,49 @@ func (s *svc) GetOrCreateNamedProject(ctx context.Context, workDir, name string)
 	return id, nil
 }
 
-func (s *svc) GetOrCreateSystemProject(ctx context.Context, workDir, name string) (int64, error) {
-	if !projectpath.Same(workDir, s.systemProject) {
-		return 0, errors.New("system project is outside the canonical configuration directory")
-	}
-
-	id, err := s.store.GetOrCreateSystemProject(ctx, workDir, name)
+func (s *svc) GetOrCreateHiddenProject(ctx context.Context, workDir string) (int64, error) {
+	id, err := s.store.GetOrCreateHiddenProject(ctx, workDir)
 	if err != nil {
-		return 0, fmt.Errorf("resolve system project: %w", err)
+		return 0, fmt.Errorf("resolve hidden project: %w", err)
 	}
 
 	return id, nil
+}
+
+// EnsureManagementRoot delegates the atomic management-root ensure to the
+// session store; the manager-bound controller resolves the hidden project.
+func (s *svc) EnsureManagementRoot(
+	ctx context.Context,
+	projectID int64,
+	owner string,
+	topicID int64,
+	name, workDir string,
+) (*sessionstore.SessionRecord, *sessionstore.OutputCommit, error) {
+	record, commit, err := s.managerRoots.EnsureManagementRoot(ctx, projectID, owner, topicID, name, workDir)
+	if err != nil {
+		return nil, nil, fmt.Errorf("ensure management root: %w", err)
+	}
+
+	return record, commit, nil
+}
+
+// ListHiddenProjectDirs exposes hidden project work dirs so /spawn navigation
+// omits their directories without inferring hidden state from a basename.
+func (s *svc) ListHiddenProjectDirs(ctx context.Context) ([]string, error) {
+	rows, err := s.store.ListProjects(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list hidden projects: %w", err)
+	}
+
+	var dirs []string
+
+	for _, row := range rows {
+		if row.Hidden {
+			dirs = append(dirs, row.WorkDir)
+		}
+	}
+
+	return dirs, nil
 }
 
 func (s *svc) GetProjectWorkDir(ctx context.Context, projectID int64) (string, error) {

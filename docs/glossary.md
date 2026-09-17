@@ -54,7 +54,7 @@ supported external API.
 _Avoid_: using "controller" for a front-end integration — that is a manager.
 
 **manager**:
-A built-in front end (Telegram or local chat today) that drives the daemon through `controllerapi.Controller`. A new manager is a source-level contribution, not a third-party plugin.
+A built-in front end (Telegram today) that drives the daemon through `controllerapi.Controller`. A new manager is a source-level contribution, not a third-party plugin.
 _Avoid_: controller, bot, adapter, integration.
 
 **manager ownership**:
@@ -82,25 +82,21 @@ A named agent configuration — tool allowlist, prompt template, model override,
 _Avoid_: role, persona, mode (mode is a separate axis on the same config).
 
 **control socket**:
-`~/.coagent/daemon.sock`, mode 0600 — newline-delimited JSON-RPC 2.0, the daemon's local API (`internal/ctl`). It carries `status`, the bootstrap config ops, `restart_daemon`, and the CLI chat, in both directions: responses and server pushes share one connection. A unix socket is not a network listener; the "no inbound listener" rule is about the network.
+`~/.coagent/daemon.sock`, mode 0600 — newline-delimited JSON-RPC 2.0, the daemon's local API (`internal/ctl`). It carries the read-only `status` method and nothing else: no mutations, no chat, no server pushes. A unix socket is not a network listener; the "no inbound listener" rule is about the network.
 The daemon begins accepting only after every startup op owner has registered, so a greeting is also a control-plane readiness boundary rather than a partially initialized view.
 _Avoid_: RPC server, API server, IPC channel.
 
-**CLI manager** (`internal/managers/cli`):
-The built-in local chat — a peer of the Telegram manager that drives the same `controllerapi.Controller` over the control socket. It is not a config entry: it exists whenever the daemon runs, because it is how a daemon with no config gets one.
-_Avoid_: TUI, configurator, console UI.
+**management session**:
+The one live root session each Telegram manager owns in its service topic, marked by a durable management-surface session attribute. All managers' management sessions share one hidden ordinary project at `<projects_root>/sys_coagent` while keeping their own transcripts and manager ownership. The attribute — never the project's `hidden` flag — selects the management instruction and service-topic routing; it grants no tools or authority.
+_Avoid_: admin session, system session, CLI session.
 
-**coagent project**:
-The reserved system project (`sys:coagent`) that owns the CLI configuration chat. Its identity is the logical name together with the canonical `<projects_root>/sys_coagent` path: user project names cannot contain `:`, user project creation cannot claim that directory, and an internal marker cannot grant authority to another path.
-_Avoid_: admin project, ordinary CLI project.
+**management project**:
+The hidden ordinary project at `<projects_root>/sys_coagent` that all Telegram managers' management sessions share. `hidden` is a discovery-only flag: the project never appears in `/new`, recent-project results, or `/spawn` navigation, and grants no tools, instructions, or daemon authority. The directory name is reserved so a user project cannot claim it.
+_Avoid_: admin project, system project, privileged project.
 
-**bootstrap**:
-The deterministic half of a first run, before any model is involved: install-or-update the daemon, then collect one provider and its key over the control socket. Everything past that is the chat.
-_Avoid_: wizard, setup flow (for the chat half).
-
-**onboarding skill**:
-The setup protocol embedded in the binary (`internal/loader/builtin/onboarding`) and automatically active only in the coagent project's terminal root session. Its script calls `request_secret`, which requires both that project identity and the CLI channel.
-_Avoid_: setup agent, onboarding agent (it is not an agent type).
+**management instruction**:
+The coagent administration guide embedded in the binary (`internal/loader/builtin/management`), activated directly only in a management session. It explains coagent's active configuration, status, project, manager, and command behavior and grants no authority; `/config` there remains gated by its own durable activation.
+_Avoid_: setup agent, onboarding skill (removed).
 
 ## Agent loop & context management
 
@@ -171,7 +167,7 @@ The unit of ordered scheduling (`internal/toolexec`): a maximal contiguous run o
 _Avoid_: worker pool (there is no shared queue), fan-out (the removed unconditional concurrency).
 
 **skill**:
-A `SKILL.md` instruction bundle loaded from project, global, or marketplace dirs. Two *independent* discovery axes: `disable-model-invocation: true` hides it from the model's available-skills inventory and skill tool; `user-invocable: false` rejects `/skill <name>`. A leading `/skill <name> [args]` expands before the LLM call. Daemon-selected system instructions, currently the onboarding skill, may be activated directly without becoming model-invocable.
+A `SKILL.md` instruction bundle loaded from project, global, or marketplace dirs. Two *independent* discovery axes: `disable-model-invocation: true` hides it from the model's available-skills inventory and skill tool; `user-invocable: false` rejects `/skill <name>`. A leading `/skill <name> [args]` expands before the LLM call. Daemon-selected system instructions, currently the management instruction, may be activated directly without becoming model-invocable.
 The `task` tool may also seed a new subagent from one model-invocable skill: the parent resolves the canonical name and renders the envelope before spawn, so the child receives content rather than rediscovering the skill.
 _Avoid_: plugin (a plugin is a marketplace bundle), command.
 

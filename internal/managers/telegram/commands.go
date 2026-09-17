@@ -22,6 +22,7 @@ const (
 	callbackNewPage    = "newpage"
 	commandKill        = "/kill"
 	commandStop        = "/stop"
+	commandClear       = "/clear"
 	commandShieldsUp   = "/shieldsup"
 	commandShieldsDown = "/shieldsdown"
 	telegramChannel    = "telegram"
@@ -70,6 +71,8 @@ func (m *Manager) handleServiceTopicMessage(ctx context.Context, text string) {
 		return
 	}
 
+	// Session-capable controls ride the management root's ordinary session
+	// paths; creation controls stay manager-level.
 	switch text {
 	case "/start":
 		_, _ = m.sendMessage(ctx, "Use /spawn to create a session, or /kill to stop one.", nil, m.serviceTopicID)
@@ -77,23 +80,55 @@ func (m *Manager) handleServiceTopicMessage(ctx context.Context, text string) {
 		m.handleSpawn(ctx, "", 0, 0)
 	case commandKill:
 		m.handleKill(ctx, 0, m.serviceTopicID)
-	case commandStop:
-		_, _ = m.sendMessage(ctx, "Use /stop inside a session topic.", nil, m.serviceTopicID)
-	case commandShieldsUp, commandShieldsDown:
-		_, _ = m.sendMessage(ctx, "Use this command inside a session topic.", nil, m.serviceTopicID)
-	case "/model":
-		_, _ = m.sendMessage(ctx, "Use /model inside a session topic.", nil, m.serviceTopicID)
-	case "/schedules":
-		_, _ = m.sendMessage(ctx, "Use /schedules inside a session topic.", nil, m.serviceTopicID)
+	case "/config", commandClear, commandStop, commandShieldsUp, commandShieldsDown,
+		"/model", "/schedules", "/budget", "/compact", "/status":
+		if rootID := m.managementRootID; rootID > 0 {
+			m.handleSessionTopicMessage(ctx, rootID, m.serviceTopicID, text)
+			return
+		}
+
+		_, _ = m.sendMessage(ctx, "Management session is not ready yet; try again shortly.", nil, m.serviceTopicID)
 	case "/help":
-		m.handleHelp(ctx, 0, m.serviceTopicID)
+		m.handleServiceTopicHelp(ctx)
 	default:
+		if rootID := m.managementRootID; rootID > 0 {
+			m.handleSessionMessage(ctx, rootID, text, m.serviceTopicID)
+			return
+		}
+
 		_, _ = m.sendMessage(
 			ctx,
-			"Send messages in a session topic, or use /spawn to create one.",
+			"Management session is not ready yet; try again shortly.",
 			nil,
 			m.serviceTopicID,
 		)
+	}
+}
+
+// handleServiceTopicHelp presents manager-level creation controls plus the
+// session controls valid in the service topic through the management root.
+func (m *Manager) handleServiceTopicHelp(ctx context.Context) {
+	lines := []string{
+		"<b>Commands:</b>",
+		"  /new — new dialog project by name (/new &lt;name&gt;), or bare /new to pick one",
+		"  /spawn — open folder picker for new session",
+		"  /kill — pick a session to end",
+		"  /config — edit the daemon configuration",
+		"  /clear — clear this management session (fresh start, same topic)",
+		"  /stop — stop the current run (session stays, resumable)",
+		"  /model — choose LLM model",
+		"  /status — show session stats (tokens, cost, context)",
+		"  /schedules — list this session's schedules (ask me to add/change them)",
+		"  /budget &lt;request&gt; — arm or clear a one-shot cost/wall-time checkpoint",
+		"  /compact — compact context now; /compact &lt;focus&gt; to steer the summary",
+		"  /shieldsup / /shieldsdown — project filesystem shields",
+		"  /help — this message",
+	}
+
+	_, _ = m.sendRawHTML(ctx, strings.Join(lines, "\n"), nil, m.serviceTopicID)
+
+	if rootID := m.managementRootID; rootID > 0 {
+		m.handleCommands(ctx, rootID, m.serviceTopicID)
 	}
 }
 
@@ -116,9 +151,9 @@ func (m *Manager) handleSessionTopicMessage(ctx context.Context, sessionID, thre
 		_ = m.controller.SendSessionMessage(ctx, controllerapi.SessionMessageData{
 			SessionID: sessionID, Message: commandStop,
 		})
-	case "/clear":
+	case commandClear:
 		_ = m.controller.SendSessionMessage(ctx, controllerapi.SessionMessageData{
-			SessionID: sessionID, Message: "/clear",
+			SessionID: sessionID, Message: commandClear,
 		})
 	case commandShieldsUp, commandShieldsDown:
 		m.handleSessionMessage(ctx, sessionID, text, threadID)
@@ -321,6 +356,11 @@ func (m *Manager) handleKill(ctx context.Context, sessionID, threadID int64) {
 	}
 
 	sessions = m.filterOwnedActiveSessions(sessions)
+
+	// The management root is never offered or destroyed by /kill: the service
+	// topic must survive, and a replacement comes from ensure/clear paths.
+	sessions = filterOutManagementRoot(sessions, m.managementRootID)
+
 	if len(sessions) == 0 {
 		_, _ = m.sendMessage(ctx, "No sessions to kill.", nil, m.serviceTopicID)
 		return
@@ -518,6 +558,13 @@ func (m *Manager) handleCallbackMore(ctx context.Context, cb *telegramCallbackDa
 func (m *Manager) handleCallbackKill(ctx context.Context, cb *telegramCallbackData, action callbackAction) {
 	if !m.ownsActiveSessionID(ctx, action.Session) {
 		m.answerCallback(ctx, cb.ID, "Session is no longer available")
+		return
+	}
+
+	// A forged kill:<id> callback must not reach the management root: the
+	// picker never offers it, and this guard closes the bypass.
+	if action.Session == m.managementRootID && action.Session > 0 {
+		m.answerCallback(ctx, cb.ID, "The management session cannot be killed")
 		return
 	}
 

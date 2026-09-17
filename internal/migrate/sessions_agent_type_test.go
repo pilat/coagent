@@ -120,9 +120,10 @@ func TestMigrate_SessionsAgentTypeRebuildPreservesExistingDB(t *testing.T) {
 	}
 
 	indexesAfter := dumpRows(t, db, sessionIndexes)
-	require.Len(t, indexesAfter, 2, "the operator contract adds the root history index")
-	assert.Equal(t, indexesBefore[0], indexesAfter[0], "the existing sessions index is recreated verbatim")
-	assert.Equal(t, "idx_sessions_root_history", indexesAfter[1]["name"].String)
+	require.Len(t, indexesAfter, 3, "the operator contract adds the root history index and 00041 the management index")
+	assert.Equal(t, indexesBefore[0], indexesAfter[1], "the existing sessions index is recreated verbatim")
+	assert.Equal(t, "idx_sessions_management_root", indexesAfter[0]["name"].String)
+	assert.Equal(t, "idx_sessions_root_history", indexesAfter[2]["name"].String)
 
 	assert.Empty(t, dumpRows(t, db, `PRAGMA foreign_key_check`), "no dangling references after the rebuild")
 

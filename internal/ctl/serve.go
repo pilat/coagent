@@ -18,7 +18,7 @@ func (s *Server) Serve(ctx context.Context) error {
 }
 
 // ServeStarting accepts before the daemon is ready — connect success is the liveness
-// test. Every op replies CodeStarting until MarkReady, so registering now is safe.
+// test. Every op replies CodeStarting until MarkReady, so booting never reads as down.
 func (s *Server) ServeStarting(ctx context.Context) error {
 	s.mu.Lock()
 	if s.serving {
@@ -34,19 +34,12 @@ func (s *Server) ServeStarting(ctx context.Context) error {
 	return s.accept(ctx)
 }
 
-// MarkReady opens the registered ops and closes registration. Idempotent: the
-// restart path and Serve both reach it.
+// MarkReady opens the status op. Idempotent: the restart path and Serve both reach it.
 func (s *Server) MarkReady() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	s.ready = true
-}
-
-func (s *Server) SetBuiltinManager(manager BuiltinManagerControl) {
-	s.mu.Lock()
-	s.deps.Builtin = manager
-	s.mu.Unlock()
 }
 
 func (s *Server) accept(ctx context.Context) error {

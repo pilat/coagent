@@ -10,7 +10,7 @@ import (
 	"runtime"
 )
 
-// Lifecycle verbs. The CLI, the unit file and the onboarding sudo handoff agree
+// Lifecycle verbs. The CLI, the unit file and the sudo handoff agree
 // on these names, so they are spelled once.
 const (
 	ActionInstall   = "install"

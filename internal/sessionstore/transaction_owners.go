@@ -19,12 +19,10 @@ type ManagerOutputStore interface {
 	OutputOwnerStore
 }
 
-// ManagerRootTransactions owns atomic root creation, replacement, and legacy
-// ownership claims.
+// ManagerRootTransactions owns atomic root creation and replacement.
 type ManagerRootTransactions interface {
 	ManagerRootStore
 	ReplacementStore
-	LegacyCLIClaimStore
 }
 
 // SessionLifecycleStore owns command settlement and terminal output

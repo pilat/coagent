@@ -39,7 +39,7 @@ type OutputOwnerStatusFactory interface {
 
 // ChatController is the capability surface needed by an interactive chat
 // transport. Keeping it separate means adding an administrative or discovery
-// operation cannot break the CLI harness.
+// operation cannot break existing manager harnesses.
 type ChatController interface {
 	CreateSession(ctx context.Context, data SessionCreateData) (int64, error)
 	SendSessionMessage(ctx context.Context, data SessionMessageData) error
@@ -53,7 +53,7 @@ type ChatController interface {
 }
 
 // SessionMessageRouter returns the root session that durably accepted a
-// message, which may be a replacement of the ID supplied by a terminal.
+// message, which may be a replacement of the ID supplied by the caller.
 //
 //nolint:iface // optional extension keeps ordinary ChatController fakes narrow.
 type SessionMessageRouter interface {
@@ -68,11 +68,27 @@ type ProgressController interface {
 	RefreshProgress(ctx context.Context, sessionID int64) error
 }
 
+// ManagementRootEnsureData defines input for ensuring one manager's live
+// service-topic management root. TopicID is stored in the ordinary Telegram
+// topic attribute, so restart reconciliation rebinds output to the existing
+// service topic instead of creating another.
+type ManagementRootEnsureData struct {
+	TopicID int64 `json:"topic_id"`
+}
+
+// ManagementRootController is the manager-bound capability that provisions
+// the hidden management project and the one live management root per manager.
+// The manager ID belongs to the capability, never a request field.
+type ManagementRootController interface {
+	EnsureManagementRoot(ctx context.Context, data ManagementRootEnsureData) (int64, error)
+}
+
 // Controller is the complete in-process API the daemon exposes to rich
 // built-in managers such as Telegram. Narrower consumers should depend on a named
 // capability interface such as ChatController instead of this aggregate.
 type Controller interface {
 	ChatController
+	ManagementRootController
 	ListDir(ctx context.Context, data FsListDirData) (*FsListDirResultData, error)
 	ListSkills(ctx context.Context, data ConfigSkillsData) (*ConfigSkillsResultData, error)
 	ListRecentProjects(ctx context.Context) (*ProjectListResultData, error)

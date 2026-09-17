@@ -8,19 +8,14 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 )
 
 // dialTimeout bounds the connect and the greeting: a local socket answers at once
 // or is still booting, which is a different answer than down. A var only for tests.
 var dialTimeout = 3 * time.Second
-
-// notifyBuffer is how far the push stream may run ahead of its reader. Pushes
-// share the read loop with responses, so a wedged consumer must lose events
-// rather than stall every pending call.
-const notifyBuffer = 1024
 
 // ErrNotRunning means the socket is absent or refuses connections — the daemon
 // is not running. Connect success is the liveness check, so this is the whole
@@ -31,20 +26,14 @@ var ErrNotRunning = errors.New("coagent daemon is not running")
 // coming up, not broken, so a client waits instead of reporting a failure.
 var ErrStarting = errors.New("coagent daemon is starting")
 
-// ErrClosed means the connection dropped while a call was in flight. During a
-// restart-apply this is expected: the daemon execs itself and the client
-// reconnects.
+// ErrClosed means the connection dropped while a call was in flight.
 var ErrClosed = errors.New("control connection closed")
 
-// Client is a control-socket connection. It multiplexes: one read loop sorts
-// inbound lines into pending call replies and pushes, so a notification arriving
-// between a request and its response is never mistaken for the response.
+// Client is a control-socket connection. One read loop delivers replies to
+// pending calls; the socket carries responses only.
 type Client struct {
 	conn     net.Conn
 	greeting Greeting
-
-	notifications chan Notification
-	dropped       atomic.Uint64
 
 	mu      sync.Mutex
 	nextID  int64
@@ -71,9 +60,8 @@ func Dial(ctx context.Context, path string) (*Client, error) {
 	}
 
 	c := &Client{
-		conn:          conn,
-		notifications: make(chan Notification, notifyBuffer),
-		pending:       make(map[int64]chan frame),
+		conn:    conn,
+		pending: make(map[int64]chan frame),
 	}
 
 	reader := bufio.NewReader(conn)
@@ -102,27 +90,24 @@ func (c *Client) Greeting() Greeting { return c.greeting }
 // SkewsFrom reports whether the daemon's protocol differs from this binary's.
 func (c *Client) SkewsFrom() bool { return c.greeting.ProtocolVersion != ProtocolVersion }
 
-// Notifications is the server→client push stream. It closes when the connection
-// drops, which is how a chat client learns the daemon went away to restart.
-func (c *Client) Notifications() <-chan Notification { return c.notifications }
-
-// DroppedNotifications reports pushes discarded because Notifications was full.
-// Push delivery is deliberately best effort so an unread consumer cannot stall
-// RPC replies; this counter lets internal callers observe that loss.
-func (c *Client) DroppedNotifications() uint64 { return c.dropped.Load() }
-
 // Close ends the connection and fails every call still waiting on it.
+// Idempotent: the read loop and the server both close independently.
 func (c *Client) Close() error {
-	if err := c.conn.Close(); err != nil {
+	if err := c.conn.Close(); err != nil && !isClosedConnError(err) {
 		return fmt.Errorf("close control connection: %w", err)
 	}
 
 	return nil
 }
 
+// isClosedConnError reports the "already closed" error every Close after the
+// first returns: the read loop, the server shutdown, and the caller all close.
+func isClosedConnError(err error) bool {
+	return strings.Contains(err.Error(), "use of closed network connection")
+}
+
 // Call sends one request and decodes the result into out. A JSON-RPC error comes
-// back as an error; a rejection verdict is a successful call whose result
-// carries applied=false.
+// back as an error.
 func (c *Client) Call(ctx context.Context, method string, params, out any) error {
 	req, err := c.newRequest(method, params)
 	if err != nil {
@@ -227,8 +212,8 @@ func (c *Client) closedErr(method string) error {
 	return fmt.Errorf("%s: %w", method, ErrClosed)
 }
 
-// readLoop is the demultiplexer. It runs for the connection's whole life and is
-// the only reader, so responses and pushes cannot be confused for one another.
+// readLoop delivers replies to pending calls. It is the only reader, so a reply
+// always reaches the call that asked for it.
 func (c *Client) readLoop(reader *bufio.Reader) {
 	for {
 		line, err := reader.ReadBytes('\n')
@@ -245,18 +230,6 @@ func (c *Client) readLoop(reader *bufio.Reader) {
 
 		if f.isResponse() {
 			c.deliver(f)
-
-			continue
-		}
-
-		if f.Method == "" {
-			continue
-		}
-
-		select {
-		case c.notifications <- Notification{JSONRPC: jsonrpcVersion, Method: f.Method, Params: f.Params}:
-		default:
-			c.dropped.Add(1)
 		}
 	}
 }
@@ -304,8 +277,6 @@ func (c *Client) shutdown(err error) {
 	for _, ch := range waiters {
 		close(ch)
 	}
-
-	close(c.notifications)
 }
 
 func (c *Client) readGreeting(reader *bufio.Reader) error {

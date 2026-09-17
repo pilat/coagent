@@ -39,13 +39,14 @@ type Manager struct {
 
 	mu sync.RWMutex
 
-	serviceTopicID  int64
-	target          forumTarget
-	botUserID       int64
-	updateOffset    int64
-	daemonHome      string
-	availableModels []controllerapi.ConfigModelInfo
-	availableSkills []controllerapi.ConfigSkillInfo
+	serviceTopicID   int64
+	managementRootID int64
+	target           forumTarget
+	botUserID        int64
+	updateOffset     int64
+	daemonHome       string
+	availableModels  []controllerapi.ConfigModelInfo
+	availableSkills  []controllerapi.ConfigSkillInfo
 
 	navCounter int64
 	navPaths   map[int64]string
@@ -238,6 +239,17 @@ func (m *Manager) Start(ctx context.Context) error {
 
 	m.serviceTopicID = serviceTopicID
 
+	// The management root must exist and match this service topic before any
+	// output can deliver: queued work may already target this conversation.
+	rootID, err := m.ensureManagementRoot(runCtx, serviceTopicID)
+	if err != nil {
+		cancel()
+		return fmt.Errorf("ensure management root: %w", err)
+	}
+
+	m.managementRootID = rootID
+	m.registerTopic(rootID, serviceTopicID)
+
 	subscription := m.controller.Subscribe()
 	m.mu.Lock()
 	m.subscription = subscription
@@ -259,7 +271,6 @@ func (m *Manager) Start(ctx context.Context) error {
 		var deliveryQueue managerdelivery.Queue = newOutputQueue(queue)
 		var transport managerdelivery.Transport = &outputTransport{manager: m}
 		delivery := managerdelivery.New(deliveryQueue, transport)
-		delivery.Start(runCtx)
 
 		m.mu.Lock()
 		m.delivery = delivery
@@ -269,6 +280,12 @@ func (m *Manager) Start(ctx context.Context) error {
 	if err := m.reconcileOnStartup(runCtx); err != nil {
 		cancel()
 		return fmt.Errorf("reconcile sessions: %w", err)
+	}
+
+	// The worker starts only after reconciliation: a queued output with a stale
+	// service-topic binding must not race startup into creating a session topic.
+	if m.delivery != nil {
+		m.delivery.Start(runCtx)
 	}
 
 	if progressController, ok := m.controller.(controllerapi.ProgressController); ok {

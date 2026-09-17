@@ -28,14 +28,9 @@ const (
 	CodeStarting = -32000
 )
 
-// Op names. They are snake_case, and they are the contract — docs/control-api.md
-// documents each one's params and result.
-const (
-	OpStatus        = "status"
-	OpSetProvider   = "set_provider"
-	OpSetSecret     = "set_secret"
-	OpRestartDaemon = "restart_daemon"
-)
+// OpStatus is the socket's only op. `status` is read-only by design: every
+// configuration change travels through a manager session instead.
+const OpStatus = "status"
 
 // Greeting is the unsolicited first line the server writes on connect. Reading
 // it is how a client learns the daemon's version without spending a round trip,
@@ -54,24 +49,11 @@ type Request struct {
 }
 
 // Response is a JSON-RPC 2.0 response. Exactly one of Result and Error is set.
-//
-// A rejected mutation is a *successful* response carrying a verdict with
-// applied=false. Error is reserved for transport and malformed requests, so a
-// client can always tell "your input was wrong" from "the daemon is broken".
 type Response struct {
 	JSONRPC string          `json:"jsonrpc"`
 	ID      json.RawMessage `json:"id"`
 	Result  json.RawMessage `json:"result,omitempty"`
 	Error   *Error          `json:"error,omitempty"`
-}
-
-// Notification is a server→client push — a JSON-RPC notification, meaning a
-// request with no id. Chat output and secret prompts ride these, on the same
-// connection as responses.
-type Notification struct {
-	JSONRPC string          `json:"jsonrpc"`
-	Method  string          `json:"method"`
-	Params  json.RawMessage `json:"params,omitempty"`
 }
 
 type Error struct {
@@ -81,13 +63,10 @@ type Error struct {
 
 func (e *Error) Error() string { return e.Message }
 
-// frame is one inbound line on the client side. Responses and pushes share the
-// connection, so the client tells them apart by shape rather than by order: a
-// response carries an id, a notification carries a method and none.
+// frame is one inbound line on the client side. The socket carries responses
+// only, so a line without a request id is ignored rather than dispatched.
 type frame struct {
 	ID     json.RawMessage `json:"id"`
-	Method string          `json:"method"`
-	Params json.RawMessage `json:"params"`
 	Result json.RawMessage `json:"result"`
 	Error  *Error          `json:"error"`
 }

@@ -2,7 +2,6 @@ package daemon
 
 import (
 	"context"
-	"encoding/json"
 	"path/filepath"
 	"testing"
 
@@ -24,8 +23,8 @@ func TestRunStagedApply_RefusesToCommitForASuspendTheTranscriptDoesNotCarry(t *t
 
 	// The tool stages and suspends, but the assistant turn carrying c1 never
 	// reached the store — nothing in the transcript is waiting for a verdict.
-	_, err := h.tools[tool.IDSetDefaultModel].Execute(
-		tool.WithCallID(ctx, "c1"), json.RawMessage(`{"id":"claude-opus-5"}`),
+	_, err := h.tools[tool.IDConfigEdit].Execute(
+		grantedCall(ctx, h.sessionID, "c1"), configEditArgs(configHarnessCandidate),
 	)
 	require.ErrorIs(t, err, tool.ErrSuspend)
 
@@ -39,7 +38,7 @@ func TestRunStagedApply_RefusesToCommitForASuspendTheTranscriptDoesNotCarry(t *t
 	assert.Nil(t, pending, "no marker is armed for a call no boot could answer")
 
 	assert.False(t, h.mgr.staged.has(h.sessionID), "the call is settled in-process, not across a restart")
-	assert.True(t, h.mgr.stageApply(h.sessionID, "c2", tool.IDAddModel, &configops.Staged{}),
+	assert.True(t, h.mgr.stageApply(h.sessionID, "c2", tool.IDConfigEdit, &configops.Staged{}),
 		"the slot is free for the next change")
 }
 
@@ -49,13 +48,13 @@ func TestRunStagedApply_ADurableSuspendAfterAnUnbackedOneStillApplies(t *testing
 	ctx := context.Background()
 	h := newConfigHarness(t)
 
-	_, err := h.tools[tool.IDSetDefaultModel].Execute(
-		tool.WithCallID(ctx, "c1"), json.RawMessage(`{"id":"claude-opus-5"}`),
+	_, err := h.tools[tool.IDConfigEdit].Execute(
+		grantedCall(ctx, h.sessionID, "c1"), configEditArgs(configHarnessCandidate),
 	)
 	require.ErrorIs(t, err, tool.ErrSuspend)
 	h.mgr.runStagedApply(ctx, h.sessionID)
 
-	require.ErrorIs(t, h.call(t, tool.IDSetDefaultModel, "c2", `{"id":"claude-opus-5"}`), tool.ErrSuspend)
+	require.ErrorIs(t, h.grantedCall(t, "c2", configHarnessCandidate), tool.ErrSuspend)
 	h.mgr.runStagedApply(ctx, h.sessionID)
 
 	assert.Equal(t, 1, h.restarts)
@@ -84,14 +83,14 @@ func TestScenario_AMarkerForACallTheTranscriptDoesNotCarryIsNeverConsumed(t *tes
 	require.NoError(t, err)
 	d.mgr.waitIdle(sessionID)
 
-	staged, v := d.ops.Stage(configops.SetDefaultModel("claude-opus-5"))
+	staged, v := d.ops.StageDocument([]byte(toolConfig))
 	require.False(t, v.Failed(), "%s", v.Reason())
 	require.False(t, d.ops.Commit(staged, configops.Pending{
-		SessionID: sessionID, ToolCallID: "ghost-call", ToolName: tool.IDSetDefaultModel,
+		SessionID: sessionID, ToolCallID: "ghost-call", ToolName: tool.IDConfigEdit,
 	}).Failed())
 
 	_, err = d.mgr.DeliverPendingCallResult(
-		d.ctx, sessionID, "ghost-call", tool.IDSetDefaultModel, "Config applied: default model",
+		d.ctx, sessionID, "ghost-call", tool.IDConfigEdit, "Config applied: default model",
 	)
 	require.Error(t, err, "there is no such call in the transcript to answer")
 

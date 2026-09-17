@@ -103,6 +103,13 @@ func (r *loopRunner) drainBoundary(ctx context.Context) (bool, error) {
 			return acceptedAny, nil
 		}
 
+		// An ordinary message waits behind a real external call: the transcript
+		// may not grow between the tool_use and its result. Sleep is exempt; it
+		// yields to input through its own interrupt path below.
+		if command == "" && r.agent.HasPendingExternalCall() && !onlySleepCalls(r.agent.PendingExternalCalls()) {
+			return acceptedAny, nil
+		}
+
 		outcome, err := r.handleBoundaryCommand(ctx, *input)
 		if err != nil {
 			return acceptedAny, err

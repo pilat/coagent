@@ -14,8 +14,6 @@ const (
 	NotifyInputReceived  NotificationType = "input_received"
 	NotifySessionCreated NotificationType = "session_created"
 	NotifySessionCleared NotificationType = "session_cleared"
-	NotifySecretRequest  NotificationType = "secret_request"
-	NotifySecretResolved NotificationType = "secret_resolved"
 	NotifyWaiting        NotificationType = "waiting"
 )
 
@@ -71,13 +69,7 @@ type Notification struct {
 	NewSessionID  int64          // only for NotifySessionCleared
 	AfterOutputID int64          // only for NotifyStateChanged; 0 has no output barrier
 
-	// RequestID correlates a NotifySecretRequest with the value that answers it,
-	// and with the NotifySecretResolved that closes it everywhere else. The
-	// credential itself never travels through a notification.
-	RequestID string
-	// SecretName is the variable a secret-request notification is about.
-	SecretName string
-	Waiting    []WaitItem
+	Waiting []WaitItem
 }
 
 // Validate checks the discriminated-union contract carried by Notification.
@@ -115,10 +107,6 @@ func (n Notification) variantContract() (map[string]bool, error) {
 		return fields("name", "work_dir", "attributes"), n.require(n.WorkDir != "", "work_dir")
 	case NotifySessionCleared:
 		return fields("name", "work_dir", "attributes", "old_session_id", "new_session_id"), n.validateClear()
-	case NotifySecretRequest:
-		return fields("message", "request_id", "secret_name"), n.validateSecretRequest()
-	case NotifySecretResolved:
-		return fields("request_id", "secret_name"), n.validateSecretRequest()
 	case NotifyWaiting:
 		return fields("message", "waiting"), n.validateWaiting()
 	default:
@@ -217,14 +205,6 @@ func (n Notification) validateClear() error {
 	return nil
 }
 
-func (n Notification) validateSecretRequest() error {
-	if err := n.require(n.RequestID != "", "request_id"); err != nil {
-		return err
-	}
-
-	return n.require(n.SecretName != "", "secret_name")
-}
-
 func (n Notification) require(ok bool, field string) error {
 	if !ok {
 		return fmt.Errorf("%s notification requires %s", n.Type, field)
@@ -272,8 +252,6 @@ func (n Notification) presentFields() map[string]bool {
 		"attributes":     n.Attributes != nil,
 		"old_session_id": n.OldSessionID != 0,
 		"new_session_id": n.NewSessionID != 0,
-		"request_id":     n.RequestID != "",
-		"secret_name":    n.SecretName != "",
 		"waiting":        len(n.Waiting) > 0,
 	}
 }

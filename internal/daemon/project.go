@@ -27,7 +27,7 @@ func (s *svc) ListRecentProjects(ctx context.Context, root string) ([]controller
 	)
 
 	for _, r := range rows {
-		if filepath.Dir(r.WorkDir) != root || r.Name == controllerapi.CoagentSystemProjectName {
+		if filepath.Dir(r.WorkDir) != root || r.Hidden {
 			continue
 		}
 

@@ -100,19 +100,21 @@ func TestOutputStore_RetryBlockAndOwnership(t *testing.T) {
 	store, _, projectID := newTestStore(t)
 	telegram, err := store.CreateSession(ctx, projectID, "model", "", map[string]any{"manager_id": "telegram"})
 	require.NoError(t, err)
-	cli, err := store.CreateSession(ctx, projectID, "model", "", map[string]any{"manager_id": "cli"})
+	other, err := store.CreateSession(ctx, projectID, "model", "", map[string]any{"manager_id": "telegram-other"})
 	require.NoError(t, err)
 	require.NoError(t, store.BindManager(ctx, "telegram", "telegram", map[string]any{
 		"bot_user_id": int64(1), "chat_id": int64(2), "topology": "group",
 	}))
-	require.NoError(t, store.BindManager(ctx, "cli", "cli", map[string]any{"local": true}))
+	require.NoError(t, store.BindManager(ctx, "telegram-other", "telegram", map[string]any{
+		"bot_user_id": int64(3), "chat_id": int64(4), "topology": "group",
+	}))
 
 	entry, err := store.EnqueueOutput(
 		ctx,
 		OutputDraft{SessionID: telegram.ID, Type: OutputMessageReplaceable, Content: "hello"},
 	)
 	require.NoError(t, err)
-	_, err = store.EnqueueOutput(ctx, OutputDraft{SessionID: cli.ID, Type: OutputMessagePersistent, Content: "local"})
+	_, err = store.EnqueueOutput(ctx, OutputDraft{SessionID: other.ID, Type: OutputMessagePersistent, Content: "other"})
 	require.NoError(t, err)
 	claim, err := store.ClaimOutputHead(ctx, "telegram")
 	require.NoError(t, err)
@@ -129,9 +131,12 @@ func TestOutputStore_RetryBlockAndOwnership(t *testing.T) {
 	)
 	_, err = store.ClaimOutputHead(ctx, "telegram")
 	require.ErrorIs(t, err, ErrNoOutput)
-	cliClaim, err := store.ClaimOutputHead(ctx, "cli")
+	otherClaim, err := store.ClaimOutputHead(ctx, "telegram-other")
 	require.NoError(t, err, "one manager's delayed head must not block another")
-	require.NoError(t, store.AckOutput(ctx, "cli", cliClaim.Output.ID, cliClaim.Output.AttemptID, []string{}, nil))
+	require.NoError(
+		t,
+		store.AckOutput(ctx, "telegram-other", otherClaim.Output.ID, otherClaim.Output.AttemptID, []string{}, nil),
+	)
 
 	recovered, err := store.RecoverInterruptedOutputs(ctx)
 	require.NoError(t, err)
@@ -191,9 +196,11 @@ func TestOutputStore_RejectsIdentityAndOwnershipViolations(t *testing.T) {
 	)
 	require.ErrorIs(t, err, ErrOutputConflict)
 
-	require.NoError(t, store.BindManager(ctx, "alpha", "cli", map[string]any{"local": true}))
-	err = store.BindManager(ctx, "alpha", "telegram", map[string]any{
+	require.NoError(t, store.BindManager(ctx, "alpha", "telegram", map[string]any{
 		"bot_user_id": int64(1), "chat_id": int64(2), "topology": "group",
+	}))
+	err = store.BindManager(ctx, "alpha", "telegram", map[string]any{
+		"bot_user_id": int64(9), "chat_id": int64(2), "topology": "group",
 	})
 	require.ErrorIs(t, err, ErrManagerBinding)
 	assert.NotErrorIs(t, err, ErrNoOutput)
@@ -226,7 +233,7 @@ func TestOutputStore_RejectsIncompleteBuiltInManagerBinding(t *testing.T) {
 	err := store.BindManager(ctx, "telegram", "telegram", map[string]any{"bot_user_id": int64(1)})
 	require.ErrorIs(t, err, ErrManagerBinding)
 
-	err = store.BindManager(ctx, "cli", "cli", map[string]any{"local": false})
+	err = store.BindManager(ctx, "telegram", "telegram", map[string]any{"local": false})
 	require.ErrorIs(t, err, ErrManagerBinding)
 }
 
@@ -355,24 +362,26 @@ func TestOutputStore_RejectsEachInvalidAttemptResolutionArgument(t *testing.T) {
 func TestOutputStore_AcceptsMaximumLengthAttemptErrors(t *testing.T) {
 	store, _, projectID := newTestStore(t)
 	ctx := context.Background()
-	record, err := store.CreateSession(ctx, projectID, "model", "", map[string]any{"manager_id": "cli"})
+	record, err := store.CreateSession(ctx, projectID, "model", "", map[string]any{"manager_id": "telegram"})
 	require.NoError(t, err)
-	require.NoError(t, store.BindManager(ctx, "cli", "cli", map[string]any{"local": true}))
+	require.NoError(t, store.BindManager(ctx, "telegram", "telegram", map[string]any{
+		"bot_user_id": int64(1), "chat_id": int64(2), "topology": "group",
+	}))
 	_, err = store.EnqueueOutput(ctx, OutputDraft{
 		SessionID: record.ID, Type: OutputMessagePersistent, Content: "answer",
 	})
 	require.NoError(t, err)
 
-	claim, err := store.ClaimOutputHead(ctx, "cli")
+	claim, err := store.ClaimOutputHead(ctx, "telegram")
 	require.NoError(t, err)
 	failure := string(make([]byte, 512))
 	require.NoError(t, store.RetryOutput(
-		ctx, "cli", claim.Output.ID, claim.Output.AttemptID, failure, time.Now().UTC(),
+		ctx, "telegram", claim.Output.ID, claim.Output.AttemptID, failure, time.Now().UTC(),
 	))
 
-	claim, err = store.ClaimOutputHead(ctx, "cli")
+	claim, err = store.ClaimOutputHead(ctx, "telegram")
 	require.NoError(t, err)
-	require.NoError(t, store.BlockOutput(ctx, "cli", claim.Output.ID, claim.Output.AttemptID, failure))
+	require.NoError(t, store.BlockOutput(ctx, "telegram", claim.Output.ID, claim.Output.AttemptID, failure))
 }
 
 func TestOutputStore_AssistantMessageAndOutputCommitTogether(t *testing.T) {
@@ -663,7 +672,7 @@ func TestOutputStore_ResolvesManagerOwnedReplacementChain(t *testing.T) {
 	ctx := context.Background()
 	store, _, projectID := newTestStore(t)
 	old, _, err := store.CreateManagerRoot(ctx, ManagerRootCreate{
-		ProjectID: projectID, Model: "model", Attributes: map[string]any{"manager_id": "cli"},
+		ProjectID: projectID, Model: "model", Attributes: map[string]any{"manager_id": "telegram-test"},
 		Name: "project", WorkDir: "/work/project",
 	})
 	require.NoError(t, err)
@@ -672,7 +681,7 @@ func TestOutputStore_ResolvesManagerOwnedReplacementChain(t *testing.T) {
 	_, err = store.MarkSessionKilledWithOutput(ctx, old.ID, 0)
 	require.NoError(t, err)
 
-	resolved, err := store.ResolveReplacement(ctx, old.ID, "cli")
+	resolved, err := store.ResolveReplacement(ctx, old.ID, "telegram-test")
 	require.NoError(t, err)
 	assert.Equal(t, newRecord.ID, resolved)
 }

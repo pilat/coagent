@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
-	"os"
 	"path/filepath"
 	"slices"
 	"strconv"
@@ -19,7 +18,6 @@ import (
 
 	"github.com/pilat/coagent/internal/budget"
 	"github.com/pilat/coagent/internal/config"
-	"github.com/pilat/coagent/internal/controllerapi"
 	"github.com/pilat/coagent/internal/llm"
 	"github.com/pilat/coagent/internal/llmwire"
 	"github.com/pilat/coagent/internal/mcp"
@@ -258,26 +256,8 @@ func newSubagentHarnessOnDB(
 	respond func(system string, msgs []llmwire.Message) *llmwire.Response,
 	decorate func(subagent.Store) subagent.Store,
 ) *subagentHarness {
-	return newSubagentHarnessOnDBWithProject(t, dbPath, respond, decorate, false)
-}
-
-func newSubagentHarnessOnSystemProjectDB(
-	t *testing.T,
-	dbPath string,
-	respond func(system string, msgs []llmwire.Message) *llmwire.Response,
-) *subagentHarness {
-	return newSubagentHarnessOnDBWithProject(t, dbPath, respond, nil, true)
-}
-
-func newSubagentHarnessOnDBWithProject(
-	t *testing.T,
-	dbPath string,
-	respond func(system string, msgs []llmwire.Message) *llmwire.Response,
-	decorate func(subagent.Store) subagent.Store,
-	systemProject bool,
-) *subagentHarness {
 	return newSubagentHarnessOnDBWithProjectConfig(
-		t, dbPath, respond, decorate, systemProject, nil,
+		t, dbPath, respond, decorate, nil,
 	)
 }
 
@@ -286,7 +266,6 @@ func newSubagentHarnessOnDBWithProjectConfig(
 	dbPath string,
 	respond func(system string, msgs []llmwire.Message) *llmwire.Response,
 	decorate func(subagent.Store) subagent.Store,
-	systemProject bool,
 	configure func(*config.Config),
 ) *subagentHarness {
 	t.Helper()
@@ -306,10 +285,6 @@ func newSubagentHarnessOnDBWithProjectConfig(
 	}
 
 	workDir := t.TempDir()
-	if systemProject {
-		workDir = filepath.Join(workDir, controllerapi.CoagentSystemProjectDir)
-		require.NoError(t, os.MkdirAll(workDir, 0o755))
-	}
 	cfg := &config.Config{WorkDir: workDir, Model: "fake-model"}
 	if configure != nil {
 		configure(cfg)
@@ -322,13 +297,7 @@ func newSubagentHarnessOnDBWithProjectConfig(
 			ctx: context.Background(),
 		}
 	)
-	if systemProject {
-		pid, err = store.GetOrCreateSystemProject(
-			context.Background(), workDir, controllerapi.CoagentSystemProjectName,
-		)
-	} else {
-		pid, err = store.GetOrCreateProject(context.Background(), workDir)
-	}
+	pid, err = store.GetOrCreateProject(context.Background(), workDir)
 	require.NoError(t, err)
 
 	factory := session.NewFactoryWithOptions(
@@ -362,9 +331,6 @@ func newSubagentHarnessOnDBWithProjectConfig(
 		schedule.NewService(schedStore),
 		func() string { return "fake-model" },
 	)
-	if systemProject {
-		mgr.systemProject = workDir
-	}
 
 	h.mgr = mgr
 	h.projectID = pid

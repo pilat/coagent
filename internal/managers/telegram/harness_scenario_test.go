@@ -96,10 +96,10 @@ type telegramHarnessCall struct {
 	ParseMode string `json:"parse_mode,omitempty"`
 }
 
-// This is the exact reported cross-manager leak: a local CLI conversation is
-// visible on the global notification subscription, but it must produce no
-// Telegram traffic — neither a topic nor the model's answer.
-func TestHarnessScenario_CLIConversationIsNotRenderedInTelegram(t *testing.T) {
+// This is the exact reported cross-manager leak: another manager's
+// conversation is visible on the global notification subscription, but it must
+// produce no Telegram traffic — neither a topic nor the model's answer.
+func TestHarnessScenario_ForeignConversationIsNotRenderedInTelegram(t *testing.T) {
 	var calls []telegramHarnessCall
 	manager := newTelegramHarnessManager(t, &fakeController{}, &calls)
 
@@ -107,9 +107,9 @@ func TestHarnessScenario_CLIConversationIsNotRenderedInTelegram(t *testing.T) {
 		SessionID: harnessSessionID,
 		Notification: sessionevent.Notification{
 			Type:       sessionevent.NotifySessionCreated,
-			Name:       "sys:coagent - 42",
-			WorkDir:    "/tmp/projects/sys_coagent",
-			Attributes: map[string]any{"manager_id": "cli", "channel": "cli"},
+			Name:       "other - 42",
+			WorkDir:    "/tmp/projects/other",
+			Attributes: map[string]any{"manager_id": "telegram-other"},
 		},
 	})
 	manager.handleNotification(t.Context(), controllerapi.SessionNotification{

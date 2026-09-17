@@ -14,7 +14,7 @@ import (
 func TestShieldCommands_ToggleTreeAndReplay(t *testing.T) {
 	ctx := context.Background()
 	store, db, projectID := newTestStore(t)
-	root, err := store.CreateSession(ctx, projectID, "model", "", map[string]any{"manager_id": "cli"})
+	root, err := store.CreateSession(ctx, projectID, "model", "", map[string]any{"manager_id": "telegram-test"})
 	require.NoError(t, err)
 	child, err := store.CreateSubagentSession(ctx, projectID, root.ID, root.ID, "general", "model", "")
 	require.NoError(t, err)
@@ -68,7 +68,7 @@ func TestShieldCommands_ToggleTreeAndReplay(t *testing.T) {
 func TestShieldRaise_ActiveTreeParksRootAtCompletion(t *testing.T) {
 	ctx := context.Background()
 	store, _, projectID := newTestStore(t)
-	root, err := store.CreateSession(ctx, projectID, "model", "", map[string]any{"manager_id": "cli"})
+	root, err := store.CreateSession(ctx, projectID, "model", "", map[string]any{"manager_id": "telegram-test"})
 	require.NoError(t, err)
 	input, err := store.EnqueueInput(ctx, root.ID, InputSourceUser, "/shieldsup")
 	require.NoError(t, err)
@@ -91,7 +91,7 @@ func TestShieldRaise_ActiveTreeParksRootAtCompletion(t *testing.T) {
 func TestShieldRaise_RequiresSandboxAndManagerOwnedRootInput(t *testing.T) {
 	ctx := context.Background()
 	store, db, projectID := newTestStore(t)
-	root, err := store.CreateSession(ctx, projectID, "model", "", map[string]any{"manager_id": "cli"})
+	root, err := store.CreateSession(ctx, projectID, "model", "", map[string]any{"manager_id": "telegram-test"})
 	require.NoError(t, err)
 
 	input, err := store.EnqueueInput(ctx, root.ID, InputSourceUser, "/shieldsup")
@@ -113,7 +113,7 @@ func TestSessionShields_InheritOnChildAndClearReplacement(t *testing.T) {
 	ctx := context.Background()
 	store, db, projectID := newTestStore(t)
 	root, _, err := store.CreateManagerRoot(ctx, ManagerRootCreate{
-		ProjectID: projectID, Model: "model", Attributes: map[string]any{"manager_id": "cli"},
+		ProjectID: projectID, Model: "model", Attributes: map[string]any{"manager_id": "telegram-test"},
 		Name: "project", WorkDir: t.TempDir(),
 	})
 	require.NoError(t, err)
