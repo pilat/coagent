@@ -3,6 +3,8 @@ package main
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -13,21 +15,9 @@ import (
 	"github.com/pilat/coagent/internal/ctl"
 )
 
-// A daemon whose socket is bound while its managers start must not send bare
-// `coagent` home — it is coming up, so the install path's wait is the right answer.
-func TestEnsureDaemon_WaitsOutABootingDaemon(t *testing.T) {
-	srv, socket := newBootingDaemon(t)
-
-	go func() {
-		time.Sleep(200 * time.Millisecond)
-		srv.MarkReady()
-	}()
-
-	st, code := ensureDaemon(context.Background(), socket)
-
-	require.Equal(t, exitOK, code)
-	assert.True(t, st.ConfigPresent)
-}
+// maxSocketPath is the sun_path limit, checked here because a deep TMPDIR makes
+// t.TempDir() unusable for a unix socket.
+const maxSocketPath = 100
 
 // `coagent status` must report a booting daemon as a retryable state, not as
 // "could not ask" — a supervisor treats those differently.
@@ -81,4 +71,37 @@ func newBootingDaemon(t *testing.T) (*ctl.Server, string) {
 	waitServing(t, socket)
 
 	return srv, socket
+}
+
+// socketPath keeps the unix path under the sun_path limit even when TMPDIR is
+// deep, which a plain t.TempDir() join does not guarantee.
+func socketPath(t *testing.T) string {
+	t.Helper()
+
+	if p := filepath.Join(t.TempDir(), "d.sock"); len(p) <= maxSocketPath {
+		return p
+	}
+
+	short, err := os.MkdirTemp("/tmp", "coagentctl")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = os.RemoveAll(short) })
+
+	return filepath.Join(short, "d.sock")
+}
+
+// waitServing blocks until the socket answers with a greeting: the listener is
+// bound before Serve runs, so connecting alone proves nothing.
+func waitServing(t *testing.T, socket string) {
+	t.Helper()
+
+	require.Eventually(t, func() bool {
+		client, err := ctl.Dial(context.Background(), socket)
+		if err != nil {
+			return false
+		}
+
+		_ = client.Close()
+
+		return true
+	}, 10*time.Second, 10*time.Millisecond)
 }

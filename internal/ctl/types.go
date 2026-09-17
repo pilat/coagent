@@ -12,19 +12,13 @@ type ManagerControl interface {
 	StartError(id string) error
 }
 
-type BuiltinManagerControl interface {
-	ID() string
-	Alive() bool
-}
-
-// Deps is what the built-in ops answer from. Config may carry a nil
-// UnifiedConfig — that is the legal pre-onboarding state, not an error.
+// Deps is what the status op answers from. Config may carry a nil
+// UnifiedConfig — that is the legal pre-configuration state, not an error.
 type Deps struct {
 	Config     *config.Config
 	ConfigPath string
 	Managers   ManagerControl
 	Delivery   controllerapi.OutputStatusFactory
-	Builtin    BuiltinManagerControl
 }
 
 // StatusResult answers `status`: daemon state, and nothing that has to be
@@ -47,38 +41,6 @@ type StatusResult struct {
 	// unconfigured. Additive; no protocol-version bump.
 	Search   string          `json:"search,omitempty"`
 	Managers []ManagerStatus `json:"managers,omitempty"`
-}
-
-// SetProviderParams is the bootstrap's provider form.
-//
-// APIKey is the one place a credential value crosses this socket, and it travels
-// exactly once: the daemon writes it into the secrets file and puts only a
-// ${VAR} reference into config.yaml. It is never echoed back by any op.
-type SetProviderParams struct {
-	Name    string `json:"name"`
-	Driver  string `json:"driver"`
-	APIKey  string `json:"api_key,omitempty"`
-	SAFile  string `json:"sa_file,omitempty"`
-	BaseURL string `json:"base_url,omitempty"`
-	Catalog string `json:"catalog,omitempty"`
-	// Models are model ids to enable alongside the provider. A provider with no
-	// usable model is a config that cannot serve a session, so they land in the
-	// same write.
-	Models []string `json:"models,omitempty"`
-}
-
-// RestartResult acknowledges restart_daemon. The restart begins after this is on
-// the wire, so "accepted" is the whole answer — the proof is the reconnect.
-type RestartResult struct {
-	Restarting bool `json:"restarting"`
-}
-
-// SetSecretParams carries one credential inbound. RequestID correlates it with
-// the secret_request push that asked for it.
-type SetSecretParams struct {
-	Name      string `json:"name"`
-	Value     string `json:"value"`
-	RequestID string `json:"request_id,omitempty"`
 }
 
 // ProviderStatus is one configured provider. No credential, not even a hint:

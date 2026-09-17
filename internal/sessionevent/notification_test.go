@@ -59,29 +59,6 @@ func TestNotificationValidate(t *testing.T) {
 			n:       Notification{Type: NotifySessionCleared, WorkDir: "/tmp/work", OldSessionID: 2, NewSessionID: 2},
 			wantErr: "distinct session IDs",
 		},
-		{
-			name: "secret",
-			n:    Notification{Type: NotifySecretRequest, RequestID: "r1", SecretName: "TOKEN", Message: "why"},
-		},
-		{
-			name:    "secret missing correlation",
-			n:       Notification{Type: NotifySecretRequest, SecretName: "TOKEN"},
-			wantErr: "request_id",
-		},
-		{
-			name: "secret resolved",
-			n:    Notification{Type: NotifySecretResolved, RequestID: "r1", SecretName: "TOKEN"},
-		},
-		{
-			name:    "secret resolved missing correlation",
-			n:       Notification{Type: NotifySecretResolved, SecretName: "TOKEN"},
-			wantErr: "request_id",
-		},
-		{
-			name:    "secret resolved carrying prose",
-			n:       Notification{Type: NotifySecretResolved, RequestID: "r1", SecretName: "TOKEN", Message: "why"},
-			wantErr: "unexpected message",
-		},
 		{name: "unknown", n: Notification{Type: "surprise"}, wantErr: "unknown notification type"},
 	}
 

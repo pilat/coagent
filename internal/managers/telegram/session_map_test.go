@@ -32,6 +32,9 @@ type fakeController struct {
 	listSkills   []controllerapi.ConfigSkillInfo
 	messageCalls []controllerapi.SessionMessageData
 
+	ensureRootID        int64
+	ensureRootErr       error
+	ensureCalls         []controllerapi.ManagementRootEnsureData
 	createSessionCalls  []controllerapi.SessionCreateData
 	createSessionErr    error
 	createProjectCalls  []controllerapi.ProjectCreateData
@@ -132,6 +135,18 @@ func (f *fakeController) Subscribe() <-chan controllerapi.SessionNotification {
 }
 
 func (f *fakeController) Unsubscribe(ch <-chan controllerapi.SessionNotification) {}
+
+func (f *fakeController) EnsureManagementRoot(
+	_ context.Context,
+	data controllerapi.ManagementRootEnsureData,
+) (int64, error) {
+	f.ensureCalls = append(f.ensureCalls, data)
+	if f.ensureRootErr != nil {
+		return 0, f.ensureRootErr
+	}
+
+	return f.ensureRootID, nil
+}
 
 func okTelegramRoundTrip(req *http.Request) (*http.Response, error) {
 	payload := `{"ok":true,"result":{"message_id":123}}`

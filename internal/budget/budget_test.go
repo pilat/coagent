@@ -45,7 +45,7 @@ func newBudgetFixture(ctx context.Context, t *testing.T) *budgetFixture {
 	require.NoError(t, err)
 
 	store := sessionstore.NewStore(db)
-	root, err := store.CreateSession(ctx, projectID, "priced", "", map[string]any{"manager_id": "cli"})
+	root, err := store.CreateSession(ctx, projectID, "priced", "", map[string]any{"manager_id": "telegram-test"})
 	require.NoError(t, err)
 	input := fGrant(ctx, t, store, root.ID)
 

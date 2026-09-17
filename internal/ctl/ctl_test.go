@@ -2,13 +2,11 @@ package ctl
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -79,10 +77,6 @@ func (f fakeDeliveryStatus) OutputQueueStatus(
 }
 
 func newHarness(t *testing.T, cfg *config.Config) *harness {
-	return newHarnessWithRegistration(t, cfg, nil)
-}
-
-func newHarnessWithRegistration(t *testing.T, cfg *config.Config, register func(*Server)) *harness {
 	t.Helper()
 
 	mgrs := &fakeManagers{}
@@ -98,9 +92,6 @@ func newHarnessWithRegistration(t *testing.T, cfg *config.Config, register func(
 	require.NoError(t, err)
 
 	h.server = srv
-	if register != nil {
-		register(srv)
-	}
 
 	go func() { _ = srv.Serve(context.Background()) }()
 	<-srv.serveReady
@@ -278,41 +269,7 @@ func TestStatus_ADownManagerCarriesItsOwnReasonOnly(t *testing.T) {
 	assert.Empty(t, st.Managers[1].Error, "tg-two is down for its own reason, not tg-one's")
 }
 
-// A push that lands between a request and its response must not be read as the
-// response. This is the whole reason the client is a demultiplexer.
-func TestClient_NotificationBetweenRequestAndResponse(t *testing.T) {
-	h := newHarnessWithRegistration(t, &config.Config{}, func(server *Server) {
-		require.NoError(t, server.Register("slow_echo", func(
-			_ context.Context,
-			conn *Conn,
-			params json.RawMessage,
-		) (any, *Error) {
-			for i := range 3 {
-				require.NoError(t, conn.Notify("chat_event", map[string]int{"seq": i}))
-			}
-
-			return map[string]json.RawMessage{"echo": params}, nil
-		}))
-	})
-
-	c := h.dial(t)
-
-	var out map[string]any
-
-	require.NoError(t, c.Call(context.Background(), "slow_echo", map[string]string{"say": "hi"}, &out))
-	assert.Equal(t, map[string]any{"say": "hi"}, out["echo"])
-
-	for i := range 3 {
-		select {
-		case n := <-c.Notifications():
-			assert.Equal(t, "chat_event", n.Method)
-			assert.JSONEq(t, `{"seq":`+string(rune('0'+i))+`}`, string(n.Params))
-		case <-time.After(2 * time.Second):
-			t.Fatalf("notification %d never arrived", i)
-		}
-	}
-}
-
+// `status` is the only op: every other method is an RPC error, never a push.
 func TestClient_UnknownMethodIsAnRPCError(t *testing.T) {
 	c := newHarness(t, &config.Config{}).dial(t)
 
@@ -321,111 +278,14 @@ func TestClient_UnknownMethodIsAnRPCError(t *testing.T) {
 	assert.Contains(t, err.Error(), "unknown method no_such_op")
 }
 
-func TestClient_HandlerErrorIsAnRPCError(t *testing.T) {
-	h := newHarnessWithRegistration(t, &config.Config{}, func(server *Server) {
-		require.NoError(t, server.Register("boom", func(context.Context, *Conn, json.RawMessage) (any, *Error) {
-			return nil, &Error{Code: CodeInvalidParams, Message: "name is required"}
-		}))
-	})
+func TestClient_RemovedMutationsAreUnknownMethods(t *testing.T) {
+	c := newHarness(t, &config.Config{}).dial(t)
 
-	err := h.dial(t).Call(context.Background(), "boom", nil, nil)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "name is required")
-}
-
-func TestServer_RejectsHandlerRegistrationAfterServing(t *testing.T) {
-	h := newHarness(t, &config.Config{})
-
-	err := h.server.Register("late", func(context.Context, *Conn, json.RawMessage) (any, *Error) {
-		return nil, nil
-	})
-	require.ErrorIs(t, err, ErrRegistrationClosed)
-}
-
-func TestServer_RejectsInvalidHandlerRegistrations(t *testing.T) {
-	server, err := NewServer(context.Background(), socketPath(t), "test", Deps{})
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, server.Close()) })
-
-	handler := func(context.Context, *Conn, json.RawMessage) (any, *Error) { return "first", nil }
-	require.NoError(t, server.Register("custom", handler))
-
-	tests := []struct {
-		name    string
-		op      string
-		handler Handler
-		wantErr error
-	}{
-		{name: "empty operation", handler: handler, wantErr: ErrInvalidRegistration},
-		{name: "blank operation", op: "  ", handler: handler, wantErr: ErrInvalidRegistration},
-		{name: "nil handler", op: "nil_handler", wantErr: ErrInvalidRegistration},
-		{name: "built-in status", op: OpStatus, handler: handler, wantErr: ErrOperationReserved},
-		{name: "duplicate", op: "custom", handler: handler, wantErr: ErrHandlerRegistered},
+	for _, method := range []string{"set_provider", "set_secret", "restart_daemon", "chat_open"} {
+		err := c.Call(context.Background(), method, nil, nil)
+		require.Error(t, err, method)
+		assert.Contains(t, err.Error(), "unknown method "+method)
 	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			err := server.Register(tt.op, tt.handler)
-			require.ErrorIs(t, err, tt.wantErr)
-		})
-	}
-
-	registered, ok := server.handler("custom")
-	require.True(t, ok)
-	got, rpcErr := registered(context.Background(), nil, nil)
-	require.Nil(t, rpcErr)
-	assert.Equal(t, "first", got, "a rejected duplicate must not replace the original handler")
-}
-
-func TestServer_RejectsHandlerRegistrationAfterClose(t *testing.T) {
-	server, err := NewServer(context.Background(), socketPath(t), "test", Deps{})
-	require.NoError(t, err)
-	require.NoError(t, server.Close())
-
-	err = server.Register("late", func(context.Context, *Conn, json.RawMessage) (any, *Error) {
-		return nil, nil
-	})
-	require.ErrorIs(t, err, ErrRegistrationClosed)
-}
-
-func TestServer_ConcurrentDuplicateRegistrationKeepsExactlyOneHandler(t *testing.T) {
-	server, err := NewServer(context.Background(), socketPath(t), "test", Deps{})
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, server.Close()) })
-
-	const candidates = 16
-	errs := make(chan error, candidates)
-	for candidate := range candidates {
-		go func() {
-			err := server.Register("contended", func(context.Context, *Conn, json.RawMessage) (any, *Error) {
-				return candidate, nil
-			})
-			errs <- err
-		}()
-	}
-
-	var accepted int
-	for range candidates {
-		err := <-errs
-		if err == nil {
-			accepted++
-			continue
-		}
-
-		require.ErrorIs(t, err, ErrHandlerRegistered)
-	}
-	assert.Equal(t, 1, accepted)
-
-	registered, ok := server.handler("contended")
-	require.True(t, ok)
-	got, rpcErr := registered(context.Background(), nil, nil)
-	require.Nil(t, rpcErr)
-	assert.IsType(t, int(0), got)
-}
-
-func TestDial_NotRunning(t *testing.T) {
-	_, err := Dial(context.Background(), filepath.Join(t.TempDir(), "absent.sock"))
-	require.ErrorIs(t, err, ErrNotRunning)
 }
 
 func TestClient_CallAfterServerCloseFails(t *testing.T) {
@@ -433,14 +293,6 @@ func TestClient_CallAfterServerCloseFails(t *testing.T) {
 	c := h.dial(t)
 
 	require.NoError(t, h.server.Close())
-
-	// The push stream closing is how a chat client learns the daemon went away.
-	select {
-	case _, ok := <-c.Notifications():
-		assert.False(t, ok)
-	case <-time.After(2 * time.Second):
-		t.Fatal("notification stream never closed")
-	}
 
 	err := c.Call(context.Background(), OpStatus, nil, nil)
 	require.Error(t, err)

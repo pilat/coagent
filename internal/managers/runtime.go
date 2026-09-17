@@ -45,9 +45,8 @@ func NewRuntime(cfg *config.Config, controllers controllerapi.ManagerControllerF
 	return r
 }
 
-// Start brings up every enabled manager. A manager that refuses to start is
-// recorded and skipped rather than fatal: the CLI chat is how a bad bot token
-// gets fixed, and it needs the daemon alive to happen.
+// Start brings up every enabled manager. A failure is recorded and skipped
+// rather than fatal; repair the config by hand and `coagent daemon restart`.
 func (r *runtime) Start(ctx context.Context) error {
 	if r.cfg.UnifiedConfig == nil || len(r.cfg.UnifiedConfig.Managers) == 0 {
 		return nil
@@ -153,10 +152,6 @@ func (r *runtime) StartError(id string) error {
 }
 
 func (r *runtime) startOne(ctx context.Context, entry config.ManagerEntry) (Manager, error) {
-	if entry.ID == controllerapi.BuiltinCLIManagerID {
-		return nil, fmt.Errorf("manager id %q is reserved for the built-in local chat", entry.ID)
-	}
-
 	mgr, err := r.builder(entry)
 	if err != nil {
 		return nil, err

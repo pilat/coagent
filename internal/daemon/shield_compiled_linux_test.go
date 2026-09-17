@@ -62,7 +62,7 @@ func TestShieldedCompiledSessionBlocksReportedHostAudit(t *testing.T) {
 		}}}
 	}
 	h := newSubagentHarnessOnDBWithProjectConfig(
-		t, filepath.Join(t.TempDir(), "shielded.db"), respond, nil, false,
+		t, filepath.Join(t.TempDir(), "shielded.db"), respond, nil,
 		func(cfg *config.Config) {
 			cfg.UnifiedConfig = &config.UnifiedConfig{}
 			cfg.UnifiedConfig.Sandbox.Enabled = true

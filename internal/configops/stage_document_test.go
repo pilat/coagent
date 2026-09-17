@@ -25,9 +25,30 @@ models:
 	require.NotNil(t, staged)
 	assert.NotEmpty(t, staged.Hash)
 	assert.NotEmpty(t, staged.Summary)
-	assert.Equal(t, candidate, string(staged.Data), "raw ${VAR} references stay intact")
-	assert.NotContains(t, string(staged.Data), fakeKeyValue, "no credential value is copied")
+	assert.Equal(t, candidate, string(staged.Data), "the candidate stages verbatim")
 
+	assert.Equal(t, baseConfig, f.configBytes(t), "staging leaves the on-disk config unchanged")
+}
+
+// Literal credentials are valid YAML values: the operator may keep secrets in
+// the document itself instead of the secrets file.
+func TestStageDocument_LiteralCredentialStages(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t, baseConfig, baseSecrets)
+
+	candidate := `providers:
+    work:
+        driver: anthropic
+        api_key: sk-ant-a-real-looking-key
+models:
+    - id: claude-sonnet-5
+      provider: work
+`
+	staged, v := f.svc.StageDocument([]byte(candidate))
+	require.True(t, v.Applied, "stage rejected: %s", v.Reason())
+	require.NotNil(t, staged)
+	assert.Equal(t, candidate, string(staged.Data))
 	assert.Equal(t, baseConfig, f.configBytes(t), "staging leaves the on-disk config unchanged")
 }
 
@@ -111,17 +132,4 @@ models:
 	assert.False(t, v.Applied)
 	assert.Nil(t, staged)
 	assert.Equal(t, baseConfig, f.configBytes(t))
-}
-
-func TestStageDocument_TypedOpsUnchanged(t *testing.T) {
-	t.Parallel()
-
-	f := newFixture(t, baseConfig, baseSecrets)
-	staged, v := f.svc.Stage(SetDefaultModel("claude-sonnet-5"))
-	require.True(t, v.Applied, "%s", v.Reason())
-	require.True(t, f.svc.Commit(staged, Pending{}).Applied)
-
-	cfg := f.raw(t)
-	require.NotEmpty(t, cfg.Models)
-	assert.Equal(t, "claude-sonnet-5", cfg.Models[0].ID)
 }

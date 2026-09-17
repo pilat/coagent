@@ -19,18 +19,6 @@ func (s *service) createSession(
 		return 0, err
 	}
 
-	if data.SystemProject != "" && managerID != controllerapi.BuiltinCLIManagerID {
-		return 0, errors.New("the reserved system project belongs to the local chat")
-	}
-
-	if data.SystemProject != "" && data.SystemProject != controllerapi.CoagentSystemProjectName {
-		return 0, fmt.Errorf("unknown system project %q", data.SystemProject)
-	}
-
-	if data.SystemProject != "" && data.WorktreeName != "" {
-		return 0, fmt.Errorf("system project %q cannot use a worktree", data.SystemProject)
-	}
-
 	var (
 		created             createdWorktree
 		worktreeProjectName string

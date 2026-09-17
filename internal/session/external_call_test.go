@@ -44,13 +44,13 @@ func TestHandlePreviousResult_StagedCallIsNeverReExecuted(t *testing.T) {
 	}{
 		{
 			name: "suspended on the call",
-			msgs: []llmwire.Message{usr("add the provider"), asst("", call("c1", tool.IDSetProvider))},
+			msgs: []llmwire.Message{usr("replace the config"), asst("", call("c1", tool.IDConfigEdit))},
 		},
 		{
 			name: "a user message raced the verdict",
 			msgs: []llmwire.Message{
-				usr("add the provider"),
-				asst("", call("c1", tool.IDSetProvider)),
+				usr("replace the config"),
+				asst("", call("c1", tool.IDConfigEdit)),
 				usr("actually, hurry up"),
 			},
 		},
@@ -58,9 +58,9 @@ func TestHandlePreviousResult_StagedCallIsNeverReExecuted(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			counter := &countingTool{id: tool.IDSetProvider}
+			counter := &countingTool{id: tool.IDConfigEdit}
 			agent := newTestAgent(counter)
-			agent.stagedCalls = map[string]string{"c1": tool.IDSetProvider}
+			agent.stagedCalls = map[string]string{"c1": tool.IDConfigEdit}
 			agent.ms.setMessages(tt.msgs)
 
 			r := stagedRunner(agent)
@@ -250,12 +250,12 @@ func TestSyntheticInputsCannotJumpPendingExternalCall(t *testing.T) {
 
 // Once the verdict is injected the call is answered and the loop moves on.
 func TestHandlePreviousResult_ResolvedStagedCallReleasesTheLoop(t *testing.T) {
-	counter := &countingTool{id: tool.IDSetProvider}
+	counter := &countingTool{id: tool.IDConfigEdit}
 	agent := newTestAgent(counter)
-	agent.stagedCalls = map[string]string{"c1": tool.IDSetProvider}
+	agent.stagedCalls = map[string]string{"c1": tool.IDConfigEdit}
 	agent.ms.setMessages([]llmwire.Message{
-		usr("add the provider"),
-		asst("", call("c1", tool.IDSetProvider)),
+		usr("replace the config"),
+		asst("", call("c1", tool.IDConfigEdit)),
 		toolRes("c1"),
 	})
 
@@ -271,9 +271,9 @@ func TestHandlePreviousResult_ResolvedStagedCallReleasesTheLoop(t *testing.T) {
 // A call nobody staged has never run: re-executing it is the correct outcome, and
 // is how a daemon that died before doing any work recovers.
 func TestHandlePreviousResult_UnstagedCallStillExecutes(t *testing.T) {
-	counter := &countingTool{id: tool.IDSetProvider}
+	counter := &countingTool{id: tool.IDConfigEdit}
 	agent := newTestAgent(counter)
-	agent.ms.setMessages([]llmwire.Message{usr("add it"), asst("", call("c1", tool.IDSetProvider))})
+	agent.ms.setMessages([]llmwire.Message{usr("replace it"), asst("", call("c1", tool.IDConfigEdit))})
 
 	r := stagedRunner(agent)
 
@@ -292,27 +292,27 @@ func TestHasPendingExternalCall(t *testing.T) {
 	}{
 		{
 			name:   "staged and unanswered",
-			staged: map[string]string{"c1": tool.IDSetManager},
-			msgs:   []llmwire.Message{asst("", call("c1", tool.IDSetManager))},
+			staged: map[string]string{"c1": tool.IDConfigEdit},
+			msgs:   []llmwire.Message{asst("", call("c1", tool.IDConfigEdit))},
 			want:   true,
 		},
 		{
 			name:   "staged and answered",
-			staged: map[string]string{"c1": tool.IDSetManager},
-			msgs:   []llmwire.Message{asst("", call("c1", tool.IDSetManager)), toolRes("c1")},
+			staged: map[string]string{"c1": tool.IDConfigEdit},
+			msgs:   []llmwire.Message{asst("", call("c1", tool.IDConfigEdit)), toolRes("c1")},
 			want:   false,
 		},
 		{
 			name:   "nothing staged",
 			staged: nil,
-			msgs:   []llmwire.Message{asst("", call("c1", tool.IDSetManager))},
+			msgs:   []llmwire.Message{asst("", call("c1", tool.IDConfigEdit))},
 			want:   false,
 		},
 		{
 			name:   "staged in a superseded turn",
-			staged: map[string]string{"c1": tool.IDSetManager},
+			staged: map[string]string{"c1": tool.IDConfigEdit},
 			msgs: []llmwire.Message{
-				asst("", call("c1", tool.IDSetManager)),
+				asst("", call("c1", tool.IDConfigEdit)),
 				toolRes("c1"),
 				usr("next"),
 				asst("", call("c2", "read")),
@@ -348,7 +348,7 @@ func TestPendingExternalCallIDs(t *testing.T) {
 		},
 		{
 			name: "a config call is protected by name",
-			msgs: []llmwire.Message{asst("", call("c1", tool.IDRemoveModel))},
+			msgs: []llmwire.Message{asst("", call("c1", tool.IDConfigEdit))},
 			want: []string{"c1"},
 		},
 		{
@@ -358,7 +358,7 @@ func TestPendingExternalCallIDs(t *testing.T) {
 		},
 		{
 			name: "protection survives a trailing user message",
-			msgs: []llmwire.Message{asst("", call("c1", tool.IDSetProvider)), usr("hurry up")},
+			msgs: []llmwire.Message{asst("", call("c1", tool.IDConfigEdit)), usr("hurry up")},
 			want: []string{"c1"},
 		},
 		{
@@ -395,8 +395,8 @@ func TestPendingExternalCallIDs(t *testing.T) {
 // that tool_use still open to land on.
 func TestRepair_LeavesAPendingExternalCallAlone(t *testing.T) {
 	msgs := []llmwire.Message{
-		usr("add the provider"),
-		asst("", call("c1", tool.IDSetProvider)),
+		usr("replace the config"),
+		asst("", call("c1", tool.IDConfigEdit)),
 		usr("hurry up"),
 	}
 

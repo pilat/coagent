@@ -68,26 +68,61 @@ func newConfigHarness(t *testing.T) *configHarness {
 	h.sessions = sessions
 	h.store = store
 	h.factory = factory
-	systemWorkDir := filepath.Join(t.TempDir(), controllerapi.CoagentSystemProjectDir)
-	projectID, err := store.GetOrCreateSystemProject(
-		context.Background(),
-		systemWorkDir,
-		controllerapi.CoagentSystemProjectName,
-	)
+	projectID, err := store.GetOrCreateProject(context.Background(), t.TempDir())
 	require.NoError(t, err)
 	h.projectID = projectID
-	mgr.systemProject = systemWorkDir
 	mgr.applier = configapply.New(configops.New(configPath, secretsPath), func() { h.restarts++ })
 
 	h.mgr = mgr
 	h.sessionID = h.liveSession(t)
-	h.tools = make(map[string]tool.Tool)
-
-	for _, tl := range newConfigTools(mgr, h.sessionID) {
-		h.tools[tl.ID()] = tl
-	}
+	h.tools = map[string]tool.Tool{tool.IDConfigEdit: newConfigEditTool(mgr, h.sessionID)}
 
 	return h
+}
+
+// configHarnessCandidate reorders the models, so staging it visibly changes the file.
+const configHarnessCandidate = `providers:
+    work:
+        driver: anthropic
+        api_key: ${WORK_API_KEY}
+models:
+    - id: claude-opus-5
+      provider: work
+    - id: claude-sonnet-5
+      provider: work
+`
+
+// grantedCall carries what config_edit demands: the call id plus the durable
+// /config grant the tool revalidates before staging.
+func grantedCall(ctx context.Context, sessionID int64, callID string) context.Context {
+	ctx = tool.WithCallID(ctx, callID)
+
+	return tool.WithActivationGrant(ctx, tool.ActivationGrant{
+		SessionID: sessionID, ToolID: tool.IDConfigEdit, Command: "/config", ToolCallID: callID,
+	})
+}
+
+func configEditArgs(document string) json.RawMessage {
+	encoded, err := json.Marshal(document)
+	if err != nil {
+		panic(err)
+	}
+
+	return json.RawMessage(`{"document":` + string(encoded) + `}`)
+}
+
+// grantedCall runs config_edit the way the loop does: the assistant turn is
+// persisted first, then the tool executes with the grant in context.
+func (h *configHarness) grantedCall(t *testing.T, callID, document string) error {
+	t.Helper()
+
+	h.recordCall(t, callID, tool.IDConfigEdit)
+
+	_, err := h.tools[tool.IDConfigEdit].Execute(
+		grantedCall(context.Background(), h.sessionID, callID), configEditArgs(document),
+	)
+
+	return err
 }
 
 const testSessionID = 42
@@ -104,20 +139,6 @@ func (h *configHarness) liveSession(t *testing.T) int64 {
 	require.NoError(t, err)
 
 	return rec.ID
-}
-
-// call runs a tool the way the loop does: the assistant turn carrying the
-// tool_call is persisted first, then the tool executes with that id in context.
-func (h *configHarness) call(t *testing.T, id, callID, params string) error {
-	t.Helper()
-
-	h.recordCall(t, callID, id)
-
-	ctx := tool.WithCallID(context.Background(), callID)
-
-	_, err := h.tools[id].Execute(ctx, json.RawMessage(params))
-
-	return err
 }
 
 // recordCall appends the assistant turn a tool_call arrives in, which is what
@@ -166,12 +187,11 @@ func (h *configHarness) configBytes(t *testing.T) string {
 func TestConfigTool_SuccessStagesAndSuspends(t *testing.T) {
 	h := newConfigHarness(t)
 
-	err := h.call(t, tool.IDSetDefaultModel, "c1", `{"id":"claude-opus-5"}`)
-	require.ErrorIs(t, err, tool.ErrSuspend)
+	require.ErrorIs(t, h.grantedCall(t, "c1", configHarnessCandidate), tool.ErrSuspend)
 
 	assert.Equal(t, toolConfig, h.configBytes(t), "nothing is written by the tool itself")
 	assert.True(t, h.mgr.staged.has(h.sessionID))
-	assert.Equal(t, map[string]string{"c1": tool.IDSetDefaultModel}, h.mgr.staged.forSession(h.sessionID))
+	assert.Equal(t, map[string]string{"c1": tool.IDConfigEdit}, h.mgr.staged.forSession(h.sessionID))
 	assert.Equal(t, 0, h.restarts)
 
 	h.mgr.runStagedApply(context.Background(), h.sessionID)
@@ -184,70 +204,35 @@ func TestConfigTool_SuccessStagesAndSuspends(t *testing.T) {
 // Guard violations are ordinary tool errors: nothing staged, no suspend, no
 // restart — the model can correct itself in the same turn.
 func TestConfigTool_GuardViolationsAreImmediateErrors(t *testing.T) {
-	tests := []struct {
-		name   string
-		id     string
-		params string
-		want   string
-	}{
-		{
-			name:   "removing the only provider",
-			id:     tool.IDRemoveProvider,
-			params: `{"name":"work"}`,
-			want:   "only provider",
-		},
-		{
-			name:   "removing the default model without a replacement",
-			id:     tool.IDRemoveModel,
-			params: `{"id":"claude-sonnet-5"}`,
-			want:   "name its replacement",
-		},
-		{
-			name:   "a literal credential",
-			id:     tool.IDSetProvider,
-			params: `{"name":"second","driver":"anthropic","api_key":"sk-ant-literal-value"}`,
-			want:   "${VAR} reference",
-		},
-		{
-			name:   "a model whose provider does not exist",
-			id:     tool.IDAddModel,
-			params: `{"id":"x","provider":"ghost"}`,
-			want:   `no provider named "ghost"`,
-		},
-		{
-			name:   "an unknown default",
-			id:     tool.IDSetDefaultModel,
-			params: `{"id":"nope"}`,
-			want:   `no model named "nope"`,
-		},
-		{
-			name:   "a manager with no token to reference",
-			id:     tool.IDSetManager,
-			params: `{"id":"tg","driver":"telegram"}`,
-			want:   "bot_token reference",
-		},
-		{
-			name:   "ambiguous manager parameters",
-			id:     tool.IDSetManager,
-			params: `{"id":"tg","id":"tg2"}`,
-			want:   "duplicate key",
-		},
-	}
+	h := newConfigHarness(t)
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			h := newConfigHarness(t)
+	t.Run("missing activation grant", func(t *testing.T) {
+		h.recordCall(t, "c-grant", tool.IDConfigEdit)
 
-			err := h.call(t, tt.id, "c1", tt.params)
-			require.Error(t, err)
-			require.NotErrorIs(t, err, tool.ErrSuspend, "a refusal must not suspend the session")
-			assert.Contains(t, err.Error(), tt.want)
+		_, err := h.tools[tool.IDConfigEdit].Execute(
+			tool.WithCallID(context.Background(), "c-grant"), configEditArgs(configHarnessCandidate),
+		)
+		require.Error(t, err)
+		require.NotErrorIs(t, err, tool.ErrSuspend)
+		assert.Contains(t, err.Error(), "/config")
+	})
 
-			assert.False(t, h.mgr.staged.has(h.sessionID))
-			assert.Equal(t, 0, h.restarts)
-			assert.Equal(t, toolConfig, h.configBytes(t))
-		})
-	}
+	t.Run("invalid document", func(t *testing.T) {
+		err := h.grantedCall(t, "c-var", "providers: [unclosed\n")
+		require.Error(t, err)
+		require.NotErrorIs(t, err, tool.ErrSuspend, "a refusal must not suspend the session")
+	})
+
+	t.Run("empty document", func(t *testing.T) {
+		err := h.grantedCall(t, "c-doc", "")
+		require.Error(t, err)
+		require.NotErrorIs(t, err, tool.ErrSuspend)
+		assert.Contains(t, err.Error(), "document is required")
+	})
+
+	assert.False(t, h.mgr.staged.has(h.sessionID))
+	assert.Equal(t, 0, h.restarts)
+	assert.Equal(t, toolConfig, h.configBytes(t))
 }
 
 // The apply pipeline hands over a staged change exactly once, so a second run —
@@ -255,7 +240,7 @@ func TestConfigTool_GuardViolationsAreImmediateErrors(t *testing.T) {
 func TestRunStagedApply_HandsOverExactlyOnce(t *testing.T) {
 	h := newConfigHarness(t)
 
-	require.ErrorIs(t, h.call(t, tool.IDSetDefaultModel, "c1", `{"id":"claude-opus-5"}`), tool.ErrSuspend)
+	require.ErrorIs(t, h.grantedCall(t, "c1", configHarnessCandidate), tool.ErrSuspend)
 
 	h.mgr.runStagedApply(context.Background(), h.sessionID)
 	h.mgr.runStagedApply(context.Background(), h.sessionID)
@@ -269,14 +254,14 @@ func TestConfigTool_TwoAppliesInSequence(t *testing.T) {
 	ctx := context.Background()
 	h := newConfigHarness(t)
 
-	require.ErrorIs(t, h.call(t, tool.IDSetDefaultModel, "c1", `{"id":"claude-opus-5"}`), tool.ErrSuspend)
+	require.ErrorIs(t, h.grantedCall(t, "c1", configHarnessCandidate), tool.ErrSuspend)
 	h.mgr.runStagedApply(ctx, h.sessionID)
 
 	// The daemon comes back and delivers the verdict.
-	h.restart(t, "c1", tool.IDSetDefaultModel)
+	h.restart(t, "c1", tool.IDConfigEdit)
 	assert.False(t, h.mgr.staged.has(h.sessionID))
 
-	require.ErrorIs(t, h.call(t, tool.IDSetDefaultModel, "c2", `{"id":"claude-sonnet-5"}`), tool.ErrSuspend)
+	require.ErrorIs(t, h.grantedCall(t, "c2", toolConfig), tool.ErrSuspend)
 	h.mgr.runStagedApply(ctx, h.sessionID)
 
 	assert.Equal(t, 2, h.restarts)
@@ -288,63 +273,43 @@ func TestConfigTool_TwoAppliesInSequence(t *testing.T) {
 func TestConfigTool_RefusesWithoutACallID(t *testing.T) {
 	h := newConfigHarness(t)
 
-	_, err := h.tools[tool.IDSetDefaultModel].Execute(
-		context.Background(), json.RawMessage(`{"id":"claude-opus-5"}`),
+	_, err := h.tools[tool.IDConfigEdit].Execute(
+		tool.WithActivationGrant(context.Background(), tool.ActivationGrant{
+			SessionID: h.sessionID, ToolID: tool.IDConfigEdit, Command: "/config",
+		}),
+		configEditArgs(configHarnessCandidate),
 	)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "tool_call id")
 }
 
-// Configuration belongs to the reserved system project. Neither a root in an
-// ordinary project nor a child may reshape the daemon.
-func TestRegisterConfigTools_SystemProjectRootOnly(t *testing.T) {
+// config_edit lives on every root session with an applier, never on children.
+func TestRegisterConfigEditTool_RootsOnly(t *testing.T) {
 	ctx := context.Background()
 	h := newConfigHarness(t)
-	ordinaryProjectID := testProject(t, h.store, t.TempDir())
-	rogueProjectID, err := h.store.GetOrCreateSystemProject(
-		ctx,
-		filepath.Join(t.TempDir(), controllerapi.CoagentSystemProjectDir),
-		controllerapi.CoagentSystemProjectName,
-	)
-	require.NoError(t, err)
-	ids := []string{
-		tool.IDSetProvider, tool.IDRemoveProvider, tool.IDSetManager, tool.IDRemoveManager,
-		tool.IDAddModel, tool.IDRemoveModel, tool.IDSetDefaultModel, tool.IDSetModelTags,
-	}
+
 	tests := []struct {
 		name string
 		rec  *sessionstore.SessionRecord
 		want bool
 	}{
 		{
-			name: "configuration root without channel",
-			rec: &sessionstore.SessionRecord{
-				ID: testSessionID, ProjectID: h.projectID,
-			},
+			name: "ordinary root",
+			rec:  &sessionstore.SessionRecord{ID: testSessionID, ProjectID: h.projectID},
 			want: true,
 		},
 		{
-			name: "ordinary cli root",
-			rec: &sessionstore.SessionRecord{
-				ID: testSessionID, ProjectID: ordinaryProjectID,
-				Attributes: map[string]any{"channel": "cli"},
-			},
-		},
-		{
-			name: "foreign manager in configuration project",
+			name: "manager-owned root",
 			rec: &sessionstore.SessionRecord{
 				ID: testSessionID, ProjectID: h.projectID,
 				Attributes: map[string]any{
 					controllerapi.SessionAttributeManagerID: "telegram-main",
 				},
 			},
+			want: true,
 		},
 		{
-			name: "system name outside canonical directory",
-			rec:  &sessionstore.SessionRecord{ID: testSessionID, ProjectID: rogueProjectID},
-		},
-		{
-			name: "configuration child",
+			name: "child",
 			rec: &sessionstore.SessionRecord{
 				ID: 43, ProjectID: h.projectID, ParentID: testSessionID,
 			},
@@ -354,43 +319,17 @@ func TestRegisterConfigTools_SystemProjectRootOnly(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			sess := &mockSession{}
-			h.mgr.registerConfigTools(ctx, tt.rec, sess)
-
-			for _, id := range ids {
-				assert.Equal(t, tt.want, sess.hasTool(id), id)
-			}
+			h.mgr.registerConfigEditTool(ctx, tt.rec, sess)
+			assert.Equal(t, tt.want, sess.hasTool(tool.IDConfigEdit))
 		})
 	}
 }
 
-func TestRegisterConfigTools_SystemProjectIdentitySurvivesClear(t *testing.T) {
-	h := newConfigHarness(t)
-
-	newID, err := h.mgr.Clear(context.Background(), h.sessionID)
-	require.NoError(t, err)
-
-	rec, err := h.mgr.sessionStore.GetSession(context.Background(), newID)
-	require.NoError(t, err)
-	assert.Equal(t, h.projectID, rec.ProjectID)
-
-	sess := &mockSession{}
-	h.mgr.registerConfigTools(context.Background(), rec, sess)
-	assert.True(t, sess.hasTool(tool.IDSetProvider))
-	assert.True(t, sess.hasTool(tool.IDSetDefaultModel))
-}
-
-// Every mutating tool has to say what a caller cannot see: the restart, and the
-// ${VAR}-only rule wherever a credential is accepted.
+// The tool description states the restart contract a caller cannot see.
 func TestConfigTool_DescriptionsCarryTheContract(t *testing.T) {
 	h := newConfigHarness(t)
 
-	for id, tl := range h.tools {
-		assert.Contains(t, tl.Description(), "restarts the daemon", id)
-	}
-
-	for _, id := range []string{tool.IDSetProvider, tool.IDSetManager} {
-		assert.Contains(t, string(h.tools[id].Parameters()), "never the value itself", id)
-	}
+	assert.Contains(t, h.tools[tool.IDConfigEdit].Description(), "restarts the daemon")
 }
 
 // Two config changes in one turn: the second is refused outright. An apply ends
@@ -400,14 +339,14 @@ func TestConfigTool_DescriptionsCarryTheContract(t *testing.T) {
 func TestConfigTool_RefusesASecondApplyInTheSameTurn(t *testing.T) {
 	h := newConfigHarness(t)
 
-	require.ErrorIs(t, h.call(t, tool.IDSetDefaultModel, "c1", `{"id":"claude-opus-5"}`), tool.ErrSuspend)
+	require.ErrorIs(t, h.grantedCall(t, "c1", configHarnessCandidate), tool.ErrSuspend)
 
-	err := h.call(t, tool.IDAddModel, "c2", `{"id":"claude-haiku-4-5","provider":"work"}`)
+	err := h.grantedCall(t, "c2", toolConfig)
 	require.Error(t, err)
 	require.NotErrorIs(t, err, tool.ErrSuspend, "a refused stage must not suspend a second call")
 	assert.Contains(t, err.Error(), "one change at a time")
 
-	assert.Equal(t, map[string]string{"c1": tool.IDSetDefaultModel}, h.mgr.staged.forSession(h.sessionID))
+	assert.Equal(t, map[string]string{"c1": tool.IDConfigEdit}, h.mgr.staged.forSession(h.sessionID))
 
 	h.mgr.runStagedApply(context.Background(), h.sessionID)
 	assert.Equal(t, 1, h.restarts)
@@ -419,19 +358,19 @@ func TestConfigTool_RefusesASecondApplyInTheSameTurn(t *testing.T) {
 func TestStagedCalls_ApplySlotIsDaemonWide(t *testing.T) {
 	h := newConfigHarness(t)
 
-	assert.True(t, h.mgr.stageApply(1, "a", tool.IDAddModel, &configops.Staged{}))
-	assert.False(t, h.mgr.stageApply(1, "b", tool.IDAddModel, &configops.Staged{}))
-	assert.False(t, h.mgr.stageApply(2, "a", tool.IDAddModel, &configops.Staged{}),
+	assert.True(t, h.mgr.stageApply(1, "a", tool.IDConfigEdit, &configops.Staged{}))
+	assert.False(t, h.mgr.stageApply(1, "b", tool.IDConfigEdit, &configops.Staged{}))
+	assert.False(t, h.mgr.stageApply(2, "a", tool.IDConfigEdit, &configops.Staged{}),
 		"another session writes the same config file")
 
 	_, _, ok := h.mgr.staged.takePendingApply(1)
 	require.True(t, ok)
 
-	assert.False(t, h.mgr.stageApply(1, "b", tool.IDAddModel, &configops.Staged{}),
+	assert.False(t, h.mgr.stageApply(1, "b", tool.IDConfigEdit, &configops.Staged{}),
 		"handing the change to the pipeline does not free the slot — only a commit that failed does")
 
 	h.mgr.applier.ReleaseApply()
-	assert.True(t, h.mgr.stageApply(1, "b", tool.IDAddModel, &configops.Staged{}))
+	assert.True(t, h.mgr.stageApply(1, "b", tool.IDConfigEdit, &configops.Staged{}))
 }
 
 // panicSession is a session whose loop dies the way a bug in it would: the
@@ -450,7 +389,7 @@ func (p *panicSession) RunDaemon(
 // The apply slot is process-global and is given back by exactly two things: a
 // commit that failed, or the restart a commit that landed causes. A loop that
 // dies in between does neither — so the runner teardown has to, or no session
-// and no bootstrap op can ever change the config again on this image.
+// can ever change the config again on this image.
 func TestRunSession_ALoopThatDiesAfterClaimingGivesTheApplySlotBack(t *testing.T) {
 	ctx := context.Background()
 	h := newConfigHarness(t)
@@ -458,14 +397,10 @@ func TestRunSession_ALoopThatDiesAfterClaimingGivesTheApplySlotBack(t *testing.T
 	defer h.mgr.Shutdown(5 * time.Second)
 
 	sessionID := h.liveSession(t)
-	tools := make(map[string]tool.Tool)
+	tools := map[string]tool.Tool{tool.IDConfigEdit: newConfigEditTool(h.mgr, sessionID)}
 
-	for _, tl := range newConfigTools(h.mgr, sessionID) {
-		tools[tl.ID()] = tl
-	}
-
-	_, err := tools[tool.IDSetDefaultModel].Execute(
-		tool.WithCallID(ctx, "c1"), json.RawMessage(`{"id":"claude-opus-5"}`),
+	_, err := tools[tool.IDConfigEdit].Execute(
+		grantedCall(ctx, sessionID, "c1"), configEditArgs(configHarnessCandidate),
 	)
 	require.ErrorIs(t, err, tool.ErrSuspend)
 
@@ -476,75 +411,29 @@ func TestRunSession_ALoopThatDiesAfterClaimingGivesTheApplySlotBack(t *testing.T
 		return !h.mgr.staged.has(sessionID)
 	}, 5*time.Second, 10*time.Millisecond, "the call the dead loop owed is never answered")
 
-	assert.True(t, h.mgr.stageApply(sessionID, "c2", tool.IDAddModel, &configops.Staged{}),
+	assert.True(t, h.mgr.stageApply(sessionID, "c2", tool.IDConfigEdit, &configops.Staged{}),
 		"the apply slot was never given back")
 	assert.Equal(t, toolConfig, h.configBytes(t), "a change that died before the commit writes nothing")
 }
 
-// Every tool's params have to reach the config bytes. One success path each,
-// because a tool that stages the wrong op fails silently — the verdict says
-// "applied" either way.
-func TestConfigTool_ParamsReachTheConfig(t *testing.T) {
-	tests := []struct {
-		name   string
-		id     string
-		params string
-		want   string
-	}{
-		{
-			name:   "set_provider",
-			id:     tool.IDSetProvider,
-			params: `{"name":"second","driver":"anthropic","api_key":"${WORK_API_KEY}","catalog":"anthropic"}`,
-			want:   "catalog: anthropic",
-		},
-		{
-			name:   "add_model",
-			id:     tool.IDAddModel,
-			params: `{"id":"claude-haiku-4-5","provider":"work"}`,
-			want:   "id: claude-haiku-4-5",
-		},
-		{
-			name:   "set_model_tags",
-			id:     tool.IDSetModelTags,
-			params: `{"id":"claude-opus-5","tags":["coding","review","coding"]}`,
-			want:   "tags:\n        - coding\n        - review",
-		},
-		{
-			name:   "remove_model with a replacement default",
-			id:     tool.IDRemoveModel,
-			params: `{"id":"claude-sonnet-5","new_default":"claude-opus-5"}`,
-			want:   "- id: claude-opus-5",
-		},
-		{
-			name:   "set_manager",
-			id:     tool.IDSetManager,
-			params: `{"id":"tg","driver":"telegram","bot_token":"${WORK_API_KEY}","allowed_user_ids":[7],"target_chat_id":-100}`,
-			want:   "target_chat_id: -100",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			h := newConfigHarness(t)
-
-			require.ErrorIs(t, h.call(t, tt.id, "c1", tt.params), tool.ErrSuspend)
-			h.mgr.runStagedApply(context.Background(), h.sessionID)
-
-			assert.Contains(t, h.configBytes(t), tt.want)
-		})
-	}
-}
-
-func TestConfigTool_SetModelTagsDeliversOneVerdictAfterRestart(t *testing.T) {
+// The whole document replaces the config: a literal credential and an extra
+// model land in the file exactly as written.
+func TestConfigTool_WholeDocumentReachesTheConfig(t *testing.T) {
 	h := newConfigHarness(t)
 
-	require.ErrorIs(
-		t,
-		h.call(t, tool.IDSetModelTags, "tags-1", `{"id":"claude-opus-5","tags":["coding"]}`),
-		tool.ErrSuspend,
-	)
+	document := toolConfig + "    - id: claude-haiku-4-5\n      provider: work\n"
+	require.ErrorIs(t, h.grantedCall(t, "c1", document), tool.ErrSuspend)
 	h.mgr.runStagedApply(context.Background(), h.sessionID)
-	h.restart(t, "tags-1", tool.IDSetModelTags)
+
+	assert.Contains(t, h.configBytes(t), "id: claude-haiku-4-5")
+}
+
+func TestConfigTool_DeliversOneVerdictAfterRestart(t *testing.T) {
+	h := newConfigHarness(t)
+
+	require.ErrorIs(t, h.grantedCall(t, "tags-1", configHarnessCandidate), tool.ErrSuspend)
+	h.mgr.runStagedApply(context.Background(), h.sessionID)
+	h.restart(t, "tags-1", tool.IDConfigEdit)
 
 	assert.False(t, h.mgr.staged.has(h.sessionID))
 	assert.Equal(t, 1, h.restarts)
@@ -552,48 +441,9 @@ func TestConfigTool_SetModelTagsDeliversOneVerdictAfterRestart(t *testing.T) {
 	require.NoError(t, err)
 	var verdicts int
 	for _, message := range messages {
-		if message.ToolName == tool.IDSetModelTags && message.Content == "Config applied." {
+		if message.ToolName == tool.IDConfigEdit && message.Content == "Config applied." {
 			verdicts++
 		}
 	}
 	assert.Equal(t, 1, verdicts)
-}
-
-// remove_provider and remove_manager both need a success path, and each has a
-// precondition the shared table cannot set up.
-func TestConfigTool_RemovalSuccessPaths(t *testing.T) {
-	t.Run("remove_provider once nothing references it", func(t *testing.T) {
-		ctx := context.Background()
-		h := newConfigHarness(t)
-
-		require.ErrorIs(t, h.call(t, tool.IDSetProvider, "c1",
-			`{"name":"second","driver":"anthropic","api_key":"${WORK_API_KEY}"}`), tool.ErrSuspend)
-		h.mgr.runStagedApply(ctx, h.sessionID)
-		h.restart(t, "c1", tool.IDSetDefaultModel)
-
-		require.ErrorIs(t, h.call(t, tool.IDRemoveProvider, "c2", `{"name":"second"}`), tool.ErrSuspend)
-		h.mgr.runStagedApply(ctx, h.sessionID)
-
-		assert.NotContains(t, h.configBytes(t), "second")
-	})
-
-	t.Run("remove_manager", func(t *testing.T) {
-		ctx := context.Background()
-		h := newConfigHarness(t)
-
-		require.ErrorIs(t, h.call(
-			t,
-			tool.IDSetManager,
-			"c1",
-			`{"id":"tg","driver":"telegram","bot_token":"${WORK_API_KEY}","allowed_user_ids":[7],"target_chat_id":-100}`,
-		),
-			tool.ErrSuspend)
-		h.mgr.runStagedApply(ctx, h.sessionID)
-		h.restart(t, "c1", tool.IDSetDefaultModel)
-
-		require.ErrorIs(t, h.call(t, tool.IDRemoveManager, "c2", `{"name":"tg"}`), tool.ErrSuspend)
-		h.mgr.runStagedApply(ctx, h.sessionID)
-
-		assert.NotContains(t, h.configBytes(t), "managers:")
-	})
 }

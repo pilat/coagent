@@ -1,6 +1,6 @@
 # ADR-0008: Config mutations are configuration-project tools; apply = file write + daemon self-restart
 
-- **Status:** Accepted
+- **Status:** Superseded by [ADR-0060](0060-telegram-service-topics-own-daemon-management.md)
 - **Date:** 2026-08-08
 
 ## Context

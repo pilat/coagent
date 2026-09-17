@@ -2,7 +2,6 @@ package daemon
 
 import (
 	"context"
-	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -14,7 +13,6 @@ import (
 	"github.com/pilat/coagent/internal/budget"
 	"github.com/pilat/coagent/internal/config"
 	"github.com/pilat/coagent/internal/configapply"
-	"github.com/pilat/coagent/internal/controllerapi"
 	"github.com/pilat/coagent/internal/llm"
 	"github.com/pilat/coagent/internal/llmwire"
 	"github.com/pilat/coagent/internal/mcp"
@@ -139,8 +137,8 @@ func newRegistryPromptDeps(t *testing.T) registryPromptDeps {
 	}
 }
 
-// newRegistryPromptHarness is the composition-root MCP wiring with a system
-// project and a scripted LLM that records each live registry projection.
+// newRegistryPromptHarness is the composition-root MCP wiring over an ordinary
+// project with a scripted LLM that records each live registry projection.
 func newRegistryPromptHarness(
 	t *testing.T,
 	respond func(string, []llmwire.Message) *llmwire.Response,
@@ -149,15 +147,14 @@ func newRegistryPromptHarness(
 
 	deps := newRegistryPromptDeps(t)
 
-	workDir := filepath.Join(t.TempDir(), controllerapi.CoagentSystemProjectDir)
-	require.NoError(t, os.MkdirAll(workDir, 0o755))
+	workDir := t.TempDir()
 	cfg := &config.Config{WorkDir: workDir, Model: "fake-model"}
 	recorder := &activationSchemas{byID: make(map[int64][][]string)}
 	prompts := newPromptRecorder()
 
 	factory := newRegistryPromptFactory(cfg, deps, respond, recorder, prompts)
-	mgr := newRegistryPromptManager(deps, factory, workDir, t)
-	projectID, err := deps.store.GetOrCreateSystemProject(deps.ctx, workDir, controllerapi.CoagentSystemProjectName)
+	mgr := newRegistryPromptManager(deps, factory, t)
+	projectID, err := deps.store.GetOrCreateProject(deps.ctx, workDir)
 	require.NoError(t, err)
 
 	return &subagentHarness{
@@ -187,7 +184,6 @@ func newRegistryPromptFactory(
 func newRegistryPromptManager(
 	deps registryPromptDeps,
 	factory session.Factory,
-	workDir string,
 	t *testing.T,
 ) *svc {
 	mgr, _ := newSvc(
@@ -198,7 +194,6 @@ func newRegistryPromptManager(
 		budget.New(deps.sessionStore), deps.sessionStore, schedule.NewService(deps.schedules),
 		func() string { return "fake-model" },
 	)
-	mgr.systemProject = workDir
 	mgr.mcpStore = deps.mcpRegistry
 	mgr.mcpPool = deps.mcpPool
 	mgr.applier = configapply.New(newTestConfigOps(t, t.TempDir()), func() {})

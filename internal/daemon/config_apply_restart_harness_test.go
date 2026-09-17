@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
@@ -9,6 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/pilat/coagent/internal/configops"
+	"github.com/pilat/coagent/internal/configtools"
 	"github.com/pilat/coagent/internal/llmwire"
 	"github.com/pilat/coagent/internal/tool"
 )
@@ -24,18 +26,23 @@ type applyDaemon struct {
 	restarts chan struct{}
 }
 
-// configApplyRespond calls one config tool, then answers once its verdict is in
-// the transcript. A second call would mean the suspended call was re-executed.
+// configApplyRespond calls config_edit once the /config grant exists, then
+// answers once its verdict is in the transcript. A second call would mean the
+// suspended call was re-executed.
 func configApplyRespond(_ string, msgs []llmwire.Message) *llmwire.Response {
-	if hasToolResultFor(msgs, tool.IDSetDefaultModel) {
-		return &llmwire.Response{Text: "default model switched"}
+	if hasToolResultFor(msgs, tool.IDConfigEdit) {
+		return &llmwire.Response{Text: "configuration replaced"}
 	}
 
-	return &llmwire.Response{ToolCalls: []llmwire.ToolCall{{
-		ID:        applyCallID,
-		Name:      tool.IDSetDefaultModel,
-		Arguments: []byte(`{"id":"claude-opus-5"}`),
-	}}}
+	if hasUserContaining(msgs, configtools.ConfigEditCommand) {
+		return &llmwire.Response{ToolCalls: []llmwire.ToolCall{{
+			ID:        applyCallID,
+			Name:      tool.IDConfigEdit,
+			Arguments: json.RawMessage(`{"document":` + mustQuoteJSON(configEditCandidate) + `}`),
+		}}}
+	}
+
+	return &llmwire.Response{Text: "ready to reconfigure"}
 }
 
 func newApplyConfigDir(t *testing.T) string {
@@ -113,9 +120,16 @@ func stageApplyAndStop(t *testing.T, dbPath, configDir string) int64 {
 	first := newApplyDaemon(t, dbPath, configDir)
 
 	sessionID, err := first.mgr.Send(
-		first.ctx, first.projectID, "switch the default model", "fake-model", map[string]any{"channel": "cli"},
+		first.ctx, first.projectID, "reconfigure the daemon", "fake-model",
+		map[string]any{"manager_id": "telegram:main"},
 	)
 	require.NoError(t, err)
+	first.waitUntil("opener turn settled", func() bool {
+		return !first.mgr.HasActiveLoop(sessionID)
+	})
+	first.mgr.waitIdle(sessionID)
+
+	require.NoError(t, first.mgr.SendToSession(first.ctx, sessionID, configtools.ConfigEditCommand))
 
 	first.waitForRestart(t)
 	first.waitUntil("session suspended on the config call", func() bool {
@@ -127,11 +141,11 @@ func stageApplyAndStop(t *testing.T, dbPath, configDir string) int64 {
 	require.NotNil(t, pending, "the commit leaves a marker naming the waiting session")
 	require.Equal(t, sessionID, pending.SessionID)
 	require.Equal(t, applyCallID, pending.ToolCallID)
-	require.Equal(t, tool.IDSetDefaultModel, pending.ToolName)
+	require.Equal(t, tool.IDConfigEdit, pending.ToolName)
 
 	msgs := first.parentMessages(sessionID)
-	require.Equal(t, 1, countAssistantToolCallsFor(msgs, tool.IDSetDefaultModel))
-	require.Zero(t, countToolResultsFor(msgs, tool.IDSetDefaultModel), "the call is out with the world")
+	require.Equal(t, 1, countAssistantToolCallsFor(msgs, tool.IDConfigEdit))
+	require.Zero(t, countToolResultsFor(msgs, tool.IDConfigEdit), "the call is out with the world")
 
 	first.shutdown()
 

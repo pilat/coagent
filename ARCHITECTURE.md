@@ -25,11 +25,11 @@ state, session lifecycle and admission, owns the MCP connection pool, and
 serves as the backend for the private manager contract implemented by
 `managercontrol`. Domain packages own their ledgers and in-memory governors
 beneath that coordinator. It accepts no network listener.
-The only listener is a same-user Unix control socket, used by the built-in local
-chat, bootstrap, and documented local operations.
+The only listener is a same-user Unix control socket serving the read-only
+status protocol used by `coagent status`.
 
 ```
-CLI / Telegram manager ── controller contract / control socket ──> daemon
+Telegram manager ── controller contract / status-only control socket ──> daemon
                                                                   │
                 SQLite <── session lifecycle <── per-task session │
                                                                   │
@@ -56,7 +56,7 @@ or extend a small contract at the owning boundary instead.
 The map is an ownership index, not a list of exported symbols. Directory nesting
 does not imply a tier except where it expresses an implementation variant.
 
-- `cmd/coagent` — composition root, CLI product policy, onboarding and control-operation wiring.
+- `cmd/coagent` — composition root, CLI product policy and daemon lifecycle commands.
 - `internal/admission` — in-memory runner capacity and per-parent subagent quotas.
 - `internal/bashsandbox` — native filesystem confinement and process-launch implementation for session-owned processes.
 - `internal/budget` — one-shot root-tree budget policy and its user-authorized tool.
@@ -64,10 +64,10 @@ does not imply a tier except where it expresses an implementation variant.
 - `internal/coagenthome` — sole resolver and name owner for the coagent home directory.
 - `internal/config` — typed configuration and secrets resolution policy.
 - `internal/configapply` — serialized config-commit claim and restart trigger.
-- `internal/configops` — guarded configuration mutations, backups and restart verdict markers.
-- `internal/configtools` — agent-facing configuration tool schemas, parsing and semantic-operation adapters.
+- `internal/configops` — guarded whole-document configuration staging, backups and restart verdict markers.
+- `internal/configtools` — the agent-facing `config_edit` tool schema and parsing.
 - `internal/controllerapi` — private daemon-to-manager contract and DTO vocabulary.
-- `internal/ctl` — authenticated local control socket, operation registry and client multiplexing.
+- `internal/ctl` — authenticated local control socket, status operation registry and client.
 - `internal/daemon` — global runtime coordinator and persistence/integration backend.
 - `internal/git` — Git operations used by repository-facing features.
 - `internal/humanize` — presentation-only formatting helpers (human-readable sizes); stdlib only.
@@ -80,7 +80,6 @@ does not imply a tier except where it expresses an implementation variant.
 - `internal/logger` — structured logging and registered-secret redaction.
 - `internal/lsp` — language-server process client for code-intelligence tools.
 - `internal/managers` — manager lifecycle coordinator.
-- `internal/managers/cli` — built-in local chat over the control socket.
 - `internal/managers/telegram` — Telegram manager implementation. Each manager
   owns one bot account, immutable group- or bot-forum target, polling loop, and
   manager-scoped service-topic identity; failures remain isolated at startup.
@@ -226,8 +225,7 @@ because several configured managers may share them.
 
 Agent-type policy is immutable after construction. Registry inputs and returned
 configs are copied so a caller cannot mutate global capability policy or another
-session's policy. Model metadata belongs to catalogs and drivers; CLI model
-recommendations are composition-root product policy rather than catalog data.
+session's policy. Model metadata belongs to catalogs and drivers.
 
 ## Runtime lifecycle
 
@@ -238,8 +236,8 @@ migrates SQLite, builds durable stores and daemon services, starts pooled
 resources and managers, then marks the daemon ready. The control socket is
 bound early so local callers can distinguish starting from absent, but it answers
 startup status until every operation owner is registered. A manager startup
-failure is isolated to that manager: the daemon and local chat remain available
-to repair configuration.
+failure is isolated to that manager: the daemon remains up while the operator
+repairs configuration by hand.
 
 Catalog enrichment occurs at startup. Configured models are validated against
 their provider's catalog, so unknown model metadata fails startup rather than
@@ -590,10 +588,9 @@ sessions fail closed. Subagent events remain inside their tree; parent
 completion is the explicit cross-boundary signal.
 The daemon resolves and caches that route; `sessionbus` owns subscriber state
 and bounded non-blocking fan-out after the route is known.
-Publication is best effort for an individual local control connection: a blocked
-push reader must not block RPC replies. The control client exposes a dropped-push
-counter; it provides observability, not replay or resynchronization. See
-ADR-0021 and ADR-0023 for these boundaries.
+Publication is in-process only: managers subscribe through `sessionbus`, and
+the control socket carries no event traffic and no server pushes
+([ADR-0060](docs/adr/0060-telegram-service-topics-own-daemon-management.md)).
 
 ## Security and Trust Boundaries
 
@@ -667,21 +664,14 @@ boundary. Bash egress remains unrestricted.
 
 The control socket is a mode-0600, same-user Unix socket; it is not a network
 API and no inbound network listener is opened. It uses newline-delimited
-JSON-RPC with a greeting/readiness distinction. One client read loop demultiplexes
-responses and server pushes. A bounded push channel may discard pushes for an
-unread consumer so response progress is preserved; durable session state is the
-recovery source.
-
-The local-chat client treats a closed push stream as a restart boundary and
-performs one bounded, coalesced reattachment without waiting for new user input,
-so the new daemon can deliver the accepted turn's answer. Outstanding secret
-requests replay idempotently by request ID; if reattachment fails, every terminal
-input mode exits and restores unmasked input rather than waiting silently.
+JSON-RPC with a greeting/readiness distinction and carries the read-only
+`status` method only: no chat, pushes, configuration mutations, secrets, or
+restart operation ([ADR-0060](docs/adr/0060-telegram-service-topics-own-daemon-management.md)).
 
 Service installation uses the supported platform service mechanism while running
-the daemon as the login user from a user-owned binary. Update/restart flows go
-through the control operation, avoiding repeated elevation. Unit drift is
-reported rather than silently overwritten.
+the daemon as the login user from a user-owned binary. Lifecycle verbs are
+explicit `coagent daemon ...` commands; the config-apply restart is an
+in-process lifecycle signal that never crosses the socket.
 
 ## Configuration and product surfaces
 
@@ -715,18 +705,16 @@ model-invocable skill plus arguments. The parent resolves and renders that skill
 before creating the subagent, then sends the canonical envelope through the
 child's ordinary initial-input path; the child does not rediscover it by name.
 
-Bare invocation performs deterministic bootstrap, including the initial provider
-credential collection over the control socket, and then hands further setup to
-the local chat. That chat owns the reserved logical project `sys:coagent`
-at the canonical `<projects_root>/sys_coagent` path, which user projects and
-internal markers for other paths cannot claim. Only its root receives
-daemon-wide provider, model and manager tools; terminal-dependent
-secret prompting additionally requires its CLI channel. The full onboarding
-skill is automatically active there. Telegram, ordinary project roots and
-subagents receive none of these configuration surfaces. Telegram is optional: a
-bad manager configuration must not prevent the chat used to repair it.
-
-The `set_manager` tool is a presence-aware upsert: omitted fields preserve existing raw configuration, present fields replace their complete value, and immutable manager identity (ID, driver, Telegram forum identity) cannot change in place. A no-op patch that changes no value is valid and still restarts the daemon, supplying the retry path after external Telegram capability or permission repair. Secret rotation for an existing token reference uses `request_secret`, which restarts without a configuration edit.
+Every configured Telegram manager ensures the same hidden ordinary project at
+the canonical `<projects_root>/sys_coagent` path — a directory user projects
+cannot claim — and owns exactly one live management root in its service topic.
+A durable management-surface session attribute, not the project's discovery-only
+`hidden` flag, selects the embedded management instruction and service-topic
+delivery routing for that root; the attribute grants no tools or authority.
+The `config_edit` tool remains advertised on root sessions and can commit only
+under the durable activation created by a manager-owned `/config` command;
+its apply restarts, boot-validates, and rolls back on failure. Ordinary project
+roots and subagents receive none of these management surfaces.
 
 ## Package profiles
 
@@ -877,12 +865,12 @@ while later opening turns read the updated store.
 
 ### Configuration, migration and host lifecycle
 
-Config owns parsing and secret-sink resolution; config operations own semantic
-mutation, full-document staging with credential-refusal, backup retention and
-pending-apply recovery. Config tools own the agent-facing schemas, strict
-argument parsing and mapping to semantic config operations; the `/config`
-activation-gated full-document tool registers on every root session, while typed
-ops stay on the reserved configuration root. Config apply owns the process-wide
+Config owns parsing and secret-sink resolution; config operations own
+whole-document staging that accepts literal credential values and `${VAR}`
+references alike, backup retention and pending-apply recovery. Config tools own
+the agent-facing schema and strict argument parsing; the `/config`
+activation-gated full-document tool registers on every root session and can
+commit only under the durable `/config` activation. Config apply owns the process-wide
 commit claim and restart trigger; the daemon gates tool availability and owns
 the durable suspend-to-restart handoff: one-shot `/config` grant settlement
 rides the commit in the apply process, falls back to the boot's marker
@@ -900,22 +888,21 @@ helpers with no durable protocol ownership.
 
 ### Managers, control and releases
 
-The manager coordinator isolates manager failures. CLI and Telegram render
-controller state and submit controller requests; they do not directly manipulate
+The manager coordinator isolates manager failures. Telegram renders
+controller state and submits controller requests; it does not directly manipulate
 session rows. `managercontrol` owns authorization, DTO conversion, project
 resolution and durable output-delivery use cases; `managerdiscovery` owns
-manager-facing project, model, skill and filesystem discovery. Their controller
+manager-facing project, model, skill and filesystem discovery. Its controller
 methods are thin adapters, and the composition root binds them to the daemon
-backend. The CLI is always available with a running daemon, while Telegram is
-configuration-dependent. The reserved `sys:coagent` logical name together
-with its canonical configured path, rather than a transport attribute or numeric
-session ID, marks the dedicated daemon-configuration root; its CLI attribute
-separately proves a terminal can answer a secret prompt. Session-event defines
+backend. The durable management-surface session attribute, rather than a
+transport attribute or numeric session ID, marks each manager's management root;
+its delivery always resolves the manager's current service topic, and management
+roots are excluded from manager-level kill flows. Session-event defines
 the event vocabulary shared at this boundary.
 
-Control owns socket framing, readiness, operation registration, single-instance
-coordination and push/reply multiplexing. Its best-effort push policy must remain
-visible to callers and must not turn an unread client into a daemon-wide stall.
+Control owns socket framing, greeting/readiness behavior, `status` registration
+and single-instance coordination. The socket carries responses only, so a slow
+or unread client is disconnected rather than allowed to stall the daemon.
 Release builder owns reproducible archive layout and checksum generation; the
 release workflow supplies clean tagged source and platform binaries. Official
 artifacts target Linux and macOS on amd64 and arm64, include a license and sorted

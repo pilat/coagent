@@ -20,7 +20,13 @@ func TestOperatorProtocolModel_ParallelCrossingReleaseAndReplay(t *testing.T) {
 			t.Parallel()
 			ctx := context.Background()
 			store, db, projectID := newTestStore(t)
-			root, err := store.CreateSession(ctx, projectID, "priced", "", map[string]any{"manager_id": "cli"})
+			root, err := store.CreateSession(
+				ctx,
+				projectID,
+				"priced",
+				"",
+				map[string]any{"manager_id": "telegram-test"},
+			)
 			require.NoError(t, err)
 			input, err := store.EnqueueInput(ctx, root.ID, InputSourceUser, "/budget")
 			require.NoError(t, err)

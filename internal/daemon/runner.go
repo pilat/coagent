@@ -372,9 +372,7 @@ func (s *svc) runSessionIteration( //nolint:funlen,gocyclo // Linear lifecycle w
 	s.registerScheduleTools(ctx, rec, sess)
 	s.registerSubagentTools(ctx, sessionID, sess)
 	s.registerMCPTools(ctx, rec, sess)
-	s.registerConfigTools(ctx, rec, sess)
 	s.registerConfigEditTool(ctx, rec, sess)
-	s.registerSecretTool(ctx, rec, sess)
 	s.registerBudgetTool(ctx, rec, sess)
 
 	rs.MarkRun()
@@ -1093,6 +1091,25 @@ func (s *svc) sessionInputBoundary(
 	)
 }
 
+// isManagementSurface reports the service-topic role. Attributes cross JSON,
+// so the marker may arrive as a bool or a string; only an explicit false-like
+// value opts out.
+func isManagementSurface(attrs map[string]any) bool {
+	v, ok := attrs[controllerapi.SessionAttributeManagementSurface]
+	if !ok || v == nil {
+		return false
+	}
+
+	switch v := v.(type) {
+	case bool:
+		return v
+	case string:
+		return v != "" && v != "false" && v != "0"
+	default:
+		return true
+	}
+}
+
 // openSession builds the session service. A settlement open never persists the
 // initial state: /stop settles a tree already marked stopping, and reactivating
 // it would lose the lifecycle fence.
@@ -1131,7 +1148,6 @@ func (s *svc) openSession(
 			s.recordProcessPolicy(sessionID, key)
 		},
 
-		ExtraSkills:         s.builtinSkillsFor(ctx, rec),
 		StagedExternalCalls: externalCalls,
 
 		CompactionDeferAnnounced: s.deferNotices.announced(sessionID),
@@ -1173,6 +1189,17 @@ func (s *svc) openSession(
 	opts.ActiveProcesses = s.activeProcessInfos(ctx, sessionID)
 	opts.ActiveProcessesProvider = func(ctx context.Context) []session.ActiveProcessInfo {
 		return s.activeProcessInfos(ctx, sessionID)
+	}
+
+	// Subagents never carry the instruction: the attribute marks roots only,
+	// and a resumed root reattaches it through this same open path.
+	if rec.ParentID == 0 && isManagementSurface(rec.Attributes) {
+		skill, err := loader.BuiltinSkill(loader.ManagementSkillName)
+		if err != nil {
+			return nil, fmt.Errorf("load management skill: %w", err)
+		}
+
+		opts.ExtraSkills = append(opts.ExtraSkills, skill)
 	}
 
 	sess, err := s.factory.Create(ctx, opts)
@@ -1358,18 +1385,6 @@ func (s *svc) registerMCPTools(ctx context.Context, rec *sessionstore.SessionRec
 	}
 
 	for _, t := range newMCPTools(s.mcpStore, s.mcpPool, rec.ProjectID) {
-		registerLogged(ctx, sess, t)
-	}
-}
-
-// registerConfigTools registers config mutation only on the reserved system
-// project. Other project roots and subagents must not reshape the daemon.
-func (s *svc) registerConfigTools(ctx context.Context, rec *sessionstore.SessionRecord, sess session.Service) {
-	if s.applier == nil || !s.isConfigurationSession(ctx, rec) {
-		return
-	}
-
-	for _, t := range newConfigTools(s, rec.ID) {
 		registerLogged(ctx, sess, t)
 	}
 }

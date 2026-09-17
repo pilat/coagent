@@ -15,7 +15,7 @@ func TestDirectOutputStore_CommitsToolResultAndOrderedOutputs(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	store, db, projectID := newTestStore(t)
-	root, err := store.CreateSession(ctx, projectID, "model", "", map[string]any{"manager_id": "cli"})
+	root, err := store.CreateSession(ctx, projectID, "model", "", map[string]any{"manager_id": "telegram-test"})
 	require.NoError(t, err)
 	message := &transcript.Message{
 		Role: "tool", Content: "model result", ToolCallID: "call-1",
@@ -70,7 +70,7 @@ func TestDirectOutputStore_ZeroTimestampUsesUTCTransactionTime(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	store, db, projectID := newTestStore(t)
-	root, err := store.CreateSession(ctx, projectID, "model", "", map[string]any{"manager_id": "cli"})
+	root, err := store.CreateSession(ctx, projectID, "model", "", map[string]any{"manager_id": "telegram-test"})
 	require.NoError(t, err)
 
 	message := &transcript.Message{
@@ -92,7 +92,7 @@ func TestDirectOutputStore_ZeroTimestampWithDirectOutputUsesUTCTransactionTime(t
 	t.Parallel()
 	ctx := context.Background()
 	store, db, projectID := newTestStore(t)
-	root, err := store.CreateSession(ctx, projectID, "model", "", map[string]any{"manager_id": "cli"})
+	root, err := store.CreateSession(ctx, projectID, "model", "", map[string]any{"manager_id": "telegram-test"})
 	require.NoError(t, err)
 
 	message := &transcript.Message{
@@ -116,7 +116,7 @@ func TestDirectOutputStore_ExplicitTimestampSurvivesReplay(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	store, db, projectID := newTestStore(t)
-	root, err := store.CreateSession(ctx, projectID, "model", "", map[string]any{"manager_id": "cli"})
+	root, err := store.CreateSession(ctx, projectID, "model", "", map[string]any{"manager_id": "telegram-test"})
 	require.NoError(t, err)
 
 	explicit := time.Date(2025, time.February, 3, 4, 5, 6, 789, time.UTC)

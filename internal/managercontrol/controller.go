@@ -91,6 +91,13 @@ func (c *controller) CreateSession(ctx context.Context, data controllerapi.Sessi
 	return c.app.createSession(ctx, c.managerID, data)
 }
 
+func (c *controller) EnsureManagementRoot(
+	ctx context.Context,
+	data controllerapi.ManagementRootEnsureData,
+) (int64, error) {
+	return c.app.ensureManagementRoot(ctx, c.managerID, data.TopicID)
+}
+
 func (c *controller) SendSessionMessage(ctx context.Context, data controllerapi.SessionMessageData) error {
 	_, err := c.app.sendSessionMessage(ctx, c.managerID, data)
 

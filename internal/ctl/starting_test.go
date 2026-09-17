@@ -2,7 +2,6 @@ package ctl
 
 import (
 	"context"
-	"encoding/json"
 	"testing"
 	"time"
 
@@ -29,14 +28,10 @@ func TestDial_BoundButSilentIsStarting(t *testing.T) {
 	require.ErrorIs(t, err, ErrStarting)
 }
 
-// Every op answers "starting" while the control plane is assembled, including one
-// already registered: a half-built registry must never read as "unknown method".
+// Every op answers "starting" while the control plane is assembled: a
+// half-built daemon must never read as "unknown method".
 func TestServer_StartingPhaseRefusesEveryOpWithOneAnswer(t *testing.T) {
 	srv, socket := newStartingServer(t)
-
-	require.NoError(t, srv.Register("chat_open", func(context.Context, *Conn, json.RawMessage) (any, *Error) {
-		return "opened", nil
-	}))
 
 	c, err := Dial(context.Background(), socket)
 	require.NoError(t, err)
@@ -45,7 +40,6 @@ func TestServer_StartingPhaseRefusesEveryOpWithOneAnswer(t *testing.T) {
 	_, err = c.Status(context.Background())
 	require.ErrorIs(t, err, ErrStarting)
 
-	require.ErrorIs(t, c.Call(context.Background(), "chat_open", nil, nil), ErrStarting)
 	require.ErrorIs(t, c.Call(context.Background(), "no_such_op", nil, nil), ErrStarting)
 
 	srv.MarkReady()
@@ -55,25 +49,6 @@ func TestServer_StartingPhaseRefusesEveryOpWithOneAnswer(t *testing.T) {
 	st, err := c.Status(context.Background())
 	require.NoError(t, err)
 	assert.Equal(t, testVersion, st.BinaryVersion)
-
-	var out string
-
-	require.NoError(t, c.Call(context.Background(), "chat_open", nil, &out))
-	assert.Equal(t, "opened", out)
-}
-
-// Registration stays open through the starting phase — that is what the phase is
-// for — and closes when the daemon declares itself ready.
-func TestServer_RegistrationClosesOnReadyNotOnAccept(t *testing.T) {
-	srv, _ := newStartingServer(t)
-
-	handler := func(context.Context, *Conn, json.RawMessage) (any, *Error) { return nil, nil }
-
-	require.NoError(t, srv.Register("during_boot", handler))
-
-	srv.MarkReady()
-
-	require.ErrorIs(t, srv.Register("after_ready", handler), ErrRegistrationClosed)
 }
 
 func TestServer_UnknownMethodOnAReadyDaemonIsNotStarting(t *testing.T) {

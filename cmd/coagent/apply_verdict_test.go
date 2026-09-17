@@ -73,13 +73,13 @@ func commitMarker(t *testing.T, sessionID int64) (configops.Service, string) {
 
 	ops := configops.New(configPath, filepath.Join(dir, "secrets"))
 
-	staged, v := ops.Stage(configops.SetDefaultModel("claude-opus-5"))
+	staged, v := ops.StageDocument([]byte(verdictConfig))
 	require.True(t, v.Applied, v.Reason())
 
 	v = ops.Commit(staged, configops.Pending{
 		SessionID:  sessionID,
 		ToolCallID: "c1",
-		ToolName:   tool.IDSetDefaultModel,
+		ToolName:   tool.IDConfigEdit,
 	})
 	require.True(t, v.Applied, v.Reason())
 
@@ -97,7 +97,7 @@ func TestDeliverApplyVerdict_MarkerClearedOnlyAfterDelivery(t *testing.T) {
 		wantCleared bool
 	}{
 		{
-			name:        "bootstrap marker has nobody to tell",
+			name:        "sessionless marker has nobody to tell",
 			sessionID:   0,
 			wantCalls:   0,
 			wantCleared: true,
@@ -194,9 +194,8 @@ func TestDeliverApplyVerdict_UndeliverableVerdictConsumesTheMarker(t *testing.T)
 	}
 }
 
-// A rolled-back bootstrap apply has no session to receive the verdict, which is
-// why the bootstrap reads the outcome off the daemon it reconnects to.
-func TestDeliverApplyVerdict_RolledBackBootstrapApplyHasNobodyToTell(t *testing.T) {
+// A rolled-back unattended apply has no session to receive the verdict.
+func TestDeliverApplyVerdict_RolledBackUnattendedApplyHasNobodyToTell(t *testing.T) {
 	ops, markerPath := commitMarker(t, 0)
 
 	pending, err := ops.LoadPending()

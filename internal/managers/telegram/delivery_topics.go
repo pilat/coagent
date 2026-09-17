@@ -60,6 +60,15 @@ func (t *outputTransport) closeSession(
 	ctx context.Context,
 	claim *controllerapi.OutputClaimData,
 ) managerdelivery.Result {
+	// Killing or closing a management root must never delete the service
+	// topic; a replacement arrives through ensure or /clear.
+	if isManagementSession(claim.SessionAttributes) {
+		t.manager.unregisterTopic(claim.SessionID)
+		t.manager.deleteWorkDir(claim.SessionID)
+
+		return managerdelivery.Result{}
+	}
+
 	topicID, ok := topicIDFromAttributes(claim.SessionAttributes)
 	if !ok {
 		topicID, ok = t.manager.getTopicBySessionID(claim.SessionID)
@@ -109,6 +118,14 @@ func (t *outputTransport) ensureSessionTopic(
 	ctx context.Context,
 	claim *controllerapi.OutputClaimData,
 ) (int64, map[string]any, error) {
+	// A management-surface session always renders in the manager's current
+	// service topic: patch a stale binding, never create or delete a topic.
+	if isManagementSession(claim.SessionAttributes) {
+		t.manager.registerTopic(claim.SessionID, t.manager.serviceTopicID)
+
+		return t.manager.serviceTopicID, topicPatch(claim.SessionAttributes, t.manager.serviceTopicID), nil
+	}
+
 	if topicID, ok := t.manager.getTopicBySessionID(claim.SessionID); ok {
 		exists, err := t.manager.forumTopicExists(ctx, topicID)
 		if err != nil {

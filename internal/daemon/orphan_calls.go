@@ -72,12 +72,7 @@ func orphanSweepCandidate(rec *sessionstore.SessionRecord) bool {
 
 // orphanedCallNotice is the deliberate cancellation an unowned call is answered
 // with — an owned outcome, not a repair stub.
-func orphanedCallNotice(toolName string) string {
-	if toolName == tool.IDRequestSecret {
-		return "The terminal prompt was lost (the daemon restarted) and nobody answered it. " +
-			"Ask again if the secret is still needed."
-	}
-
+func orphanedCallNotice(_ string) string {
 	return "The daemon restarted while this call was out with the world, and its producer did not survive. " +
 		"The outcome is unknown — check the current state before retrying."
 }

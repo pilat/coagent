@@ -175,6 +175,16 @@ func (m *Manager) reconcileOnStartup(ctx context.Context) error {
 	for _, s := range m.filterOwnedActiveSessions(sessions) {
 		m.setWorkDir(s.ID, s.WorkDir)
 
+		// The management root always binds to the manager's current service
+		// topic: no separate topic, no repair, no deletion.
+		if isManagementSession(s.Attributes) {
+			if s.ID == m.managementRootID {
+				m.registerTopic(s.ID, m.serviceTopicID)
+			}
+
+			continue
+		}
+
 		if topicID, ok := topicIDFromAttributes(s.Attributes); ok {
 			exists, err := m.forumTopicExists(ctx, topicID)
 			if err != nil {
@@ -236,15 +246,23 @@ func topicIDFromAttributes(attrs map[string]any) (int64, bool) {
 
 // handleNotification treats observer events as hints only: ordinary output is
 // rendered from the durable outbox, so a notification at most wakes the worker.
+// A cleared management root refreshes the exclusion ID so /kill keeps skipping
+// the successor.
 func (m *Manager) handleNotification(ctx context.Context, sn controllerapi.SessionNotification) {
 	n := sn.Notification
 
 	switch n.Type {
 	case sessionevent.NotifySessionCreated,
-		sessionevent.NotifySessionCleared,
 		sessionevent.NotifyMessage,
 		sessionevent.NotifyWaiting,
 		sessionevent.NotifyInputReceived:
+		m.wakeDelivery()
+	case sessionevent.NotifySessionCleared:
+		if n.OldSessionID == m.managementRootID && n.NewSessionID > 0 {
+			m.managementRootID = n.NewSessionID
+			m.registerTopic(n.NewSessionID, m.serviceTopicID)
+		}
+
 		m.wakeDelivery()
 	case sessionevent.NotifyStateChanged:
 		if n.Reason == "killed" {
@@ -255,9 +273,6 @@ func (m *Manager) handleNotification(ctx context.Context, sn controllerapi.Sessi
 		if topicID, ok := m.getTopicBySessionID(sn.SessionID); ok {
 			_ = m.sendTyping(ctx, topicID)
 		}
-	case sessionevent.NotifySecretRequest, sessionevent.NotifySecretResolved:
-		// A masked prompt needs a terminal. Telegram sessions never carry the
-		// tool that raises this, so reaching here would be a routing bug.
 	}
 }
 

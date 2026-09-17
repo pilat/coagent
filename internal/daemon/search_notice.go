@@ -15,7 +15,7 @@ import (
 // choice, not an omission, and stays silent — as does any configured provider.
 func searchUnconfigured(unified *config.UnifiedConfig) bool {
 	if unified == nil {
-		return false // no config yet; onboarding decides what exists
+		return false // no config yet; nothing configured search
 	}
 
 	search := unified.Tools.Search

@@ -1,7 +1,6 @@
 package daemon
 
 import (
-	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -16,7 +15,7 @@ import (
 // A subagent must never reach the control plane, whatever its allowlist says.
 var controlPlaneTools = []string{tool.IDSleep, tool.IDTask, tool.IDSchedule}
 
-var configPlaneTools = []string{tool.IDSetProvider, tool.IDSetDefaultModel, tool.IDSetModelTags}
+var configPlaneTools = []string{tool.IDConfigEdit}
 
 const scoutAgentFile = `---
 name: scout
@@ -57,7 +56,7 @@ func TestIntegration_ExploreChildIsDeniedControlPlaneTools(t *testing.T) {
 		}
 	}
 
-	h := newGatingHarness(t, true, nil, respond)
+	h := newGatingHarness(t, nil, respond)
 	defer h.shutdown()
 
 	parentID, err := h.mgr.Send(
@@ -85,25 +84,26 @@ func TestIntegration_ExploreChildIsDeniedControlPlaneTools(t *testing.T) {
 	require.NoError(t, llm.ValidateToolPairing(h.parentMessages(parentID)))
 }
 
-func TestIntegration_ConfigToolsOnlyReachSystemProjectRoot(t *testing.T) {
+// config_edit reaches every root session whatever its channel or manager
+// attributes; children never receive it.
+func TestIntegration_ConfigEditReachesEveryRootNoChild(t *testing.T) {
 	tests := []struct {
-		name          string
-		systemProject bool
-		attrs         map[string]any
-		want          bool
+		name  string
+		attrs map[string]any
 	}{
-		{name: "configuration project without channel", systemProject: true, want: true},
+		{name: "channel-less root"},
+		{name: "ordinary cli root", attrs: map[string]any{"channel": "cli"}},
 		{
-			name: "foreign manager in configuration project", systemProject: true,
-			attrs: map[string]any{controllerapi.SessionAttributeManagerID: "telegram-main"},
+			name: "manager-owned root",
+			attrs: map[string]any{
+				controllerapi.SessionAttributeManagerID: "telegram-main",
+			},
 		},
-		{name: "ordinary cli project", attrs: map[string]any{"channel": "cli"}},
-		{name: "ordinary channel-less project"},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			h := newGatingHarness(t, tt.systemProject, nil, func(string, []llmwire.Message) *llmwire.Response {
+			h := newGatingHarness(t, nil, func(string, []llmwire.Message) *llmwire.Response {
 				return &llmwire.Response{Text: "done"}
 			})
 			defer h.shutdown()
@@ -112,50 +112,41 @@ func TestIntegration_ConfigToolsOnlyReachSystemProjectRoot(t *testing.T) {
 			require.NoError(t, err)
 			h.mgr.waitIdle(sessionID)
 
-			offered := h.schemas.offered(sessionID)
-			for _, id := range configPlaneTools {
-				assert.Equal(t, tt.want, offered[id], id)
-			}
+			assert.Contains(t, h.schemas.offered(sessionID), tool.IDConfigEdit)
 		})
 	}
-}
 
-func TestIntegration_ConfigurationProjectAutoActivatesOnboardingSkill(t *testing.T) {
-	tests := []struct {
-		name          string
-		systemProject bool
-		want          bool
-	}{
-		{name: "configuration project", systemProject: true, want: true},
-		{name: "ordinary cli project"},
-	}
+	t.Run("child", func(t *testing.T) {
+		const exploreCallID = "task-explore-config-edit"
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			prompts := newPromptRecorder()
-			h := newGatingHarness(t, tt.systemProject, nil, func(system string, _ []llmwire.Message) *llmwire.Response {
-				prompts.record("root", system)
-
-				return &llmwire.Response{Text: "done"}
-			})
-			defer h.shutdown()
-
-			sessionID, err := h.mgr.Send(
-				h.ctx, h.projectID, "configure", "fake-model", map[string]any{"channel": "cli"},
-			)
-			require.NoError(t, err)
-			h.mgr.waitIdle(sessionID)
-
-			system := prompts.first(t, "root")
-			assert.Equal(t, tt.want, strings.Contains(system, "<name>onboarding</name>"))
-			assert.Equal(t, tt.want, strings.Contains(system, "Never ask for a credential in the chat"))
-			if tt.want {
-				assert.Equal(t, 1, strings.Count(system, "<name>onboarding</name>"))
-				assert.NotContains(t, system, "- **onboarding**",
-					"an automatically active skill must not also be offered for model invocation")
+		respond := func(_ string, msgs []llmwire.Message) *llmwire.Response {
+			if hasUserContaining(msgs, "CHILD_EXPLORE") {
+				return probeMissingTools(msgs, "explore", configPlaneTools)
 			}
-		})
-	}
+
+			if hasToolResultFor(msgs, tool.IDTask) || hasUserContaining(msgs, "<subagent_completion>") {
+				return &llmwire.Response{Text: "parent done"}
+			}
+
+			return &llmwire.Response{
+				ToolCalls: []llmwire.ToolCall{spawnTaskCall(exploreCallID, "explore", "CHILD_EXPLORE")},
+			}
+		}
+
+		h := newGatingHarness(t, nil, respond)
+		defer h.shutdown()
+
+		parentID, err := h.mgr.Send(h.ctx, h.projectID, "spawn an explore child", "fake-model", nil)
+		require.NoError(t, err)
+
+		link := h.waitForLink(parentID, exploreCallID)
+		h.waitForDelivery(link.ChildID)
+		h.mgr.waitIdle(parentID)
+
+		h.assertUnknownTools(link.ChildID, configPlaneTools)
+		assertNotOffered(t, h.schemas.offered(link.ChildID), configPlaneTools)
+		assert.Contains(t, h.schemas.offered(parentID), tool.IDConfigEdit)
+	})
 }
 
 // Project-defined subagents are outside the built-in taxonomy: a restricted one
@@ -188,7 +179,7 @@ func TestIntegration_ProjectSubagentToolGating(t *testing.T) {
 
 	agents := map[string]string{"scout.md": scoutAgentFile, "wide.md": wideAgentFile}
 
-	h := newGatingHarness(t, false, agents, respond)
+	h := newGatingHarness(t, agents, respond)
 	defer h.shutdown()
 
 	parentID, err := h.mgr.Send(h.ctx, h.projectID, "spawn project children", "fake-model", nil)
@@ -231,7 +222,7 @@ func TestIntegration_GeneralSubagentCannotScheduleButCanSleep(t *testing.T) {
 		}}
 	}
 
-	h := newGatingHarness(t, false, nil, respond)
+	h := newGatingHarness(t, nil, respond)
 	defer h.shutdown()
 
 	parentID, err := h.mgr.Send(h.ctx, h.projectID, "spawn general subagent", "fake-model", nil)

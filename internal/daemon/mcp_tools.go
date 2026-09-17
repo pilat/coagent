@@ -7,10 +7,14 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/pilat/coagent/internal/coagenthome"
 	"github.com/pilat/coagent/internal/mcp"
 	"github.com/pilat/coagent/internal/mcpstore"
 	"github.com/pilat/coagent/internal/tool"
 )
+
+// secretsDisplayPath is the secrets file path as shown to the model.
+const secretsDisplayPath = "~/" + coagenthome.DirName + "/" + coagenthome.SecretsFileName
 
 // nextRunNotice is on every mutating result: a change lands in the tool set at the
 // next run, never the current one.

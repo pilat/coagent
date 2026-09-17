@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"maps"
 	"os"
 	"os/signal"
 	"slices"
@@ -29,7 +28,6 @@ import (
 	"github.com/pilat/coagent/internal/logger"
 	"github.com/pilat/coagent/internal/managercontrol"
 	"github.com/pilat/coagent/internal/managers"
-	"github.com/pilat/coagent/internal/managers/cli"
 	"github.com/pilat/coagent/internal/mcp"
 	"github.com/pilat/coagent/internal/mcpstore"
 	"github.com/pilat/coagent/internal/memory"
@@ -37,7 +35,6 @@ import (
 	"github.com/pilat/coagent/internal/procexec"
 	"github.com/pilat/coagent/internal/schedule"
 	"github.com/pilat/coagent/internal/session"
-	"github.com/pilat/coagent/internal/sessionevent"
 	"github.com/pilat/coagent/internal/sessionstore"
 	"github.com/pilat/coagent/internal/shellenv"
 	"github.com/pilat/coagent/internal/subagent"
@@ -270,35 +267,6 @@ func execSelf() int {
 	return 1
 }
 
-// onboardingModel picks what the local chat runs on: a provider's onboarding
-// recommendation when that model is actually enabled, else the daemon's default.
-// The rule is unconditional — there is no "am I onboarding" signal to read, and
-// the recommendation is a good chat model whether or not it is a first run.
-func onboardingModel(cfg *config.Config) string {
-	if cfg.UnifiedConfig == nil {
-		return ""
-	}
-
-	enabled := make(map[string]bool, len(cfg.UnifiedConfig.Models))
-	for _, m := range cfg.UnifiedConfig.Models {
-		enabled[m.ID] = true
-	}
-
-	for _, name := range slices.Sorted(maps.Keys(cfg.UnifiedConfig.Providers)) {
-		section, ok := llm.CatalogSection(cfg.UnifiedConfig.Providers[name])
-		if !ok {
-			continue
-		}
-
-		rec, ok := recommend(section)
-		if ok && enabled[rec.Onboarding] {
-			return rec.Onboarding
-		}
-	}
-
-	return cfg.DefaultModel()
-}
-
 // logConfigStatus reports the unified-config load outcome; config itself stays
 // a pure leaf and does not log.
 func logConfigStatus(cfg *config.Config) {
@@ -325,7 +293,6 @@ func probeBashSandbox(cfg *config.Config) error {
 	return bashsandbox.Probe()
 }
 
-//nolint:funlen // Composition-root ordering keeps control readiness and manager startup auditable together.
 func runDaemon(
 	ctx context.Context,
 	state startupState,
@@ -374,7 +341,7 @@ func runDaemon(
 
 	deliveryStatus, _ := core.controller.(controllerapi.OutputStatusFactory)
 
-	ctlSrv, err := prepareControlSocket(ctx, cfg, runtime, deliveryStatus, applier, core.secretResolver)
+	ctlSrv, err := prepareControlSocket(ctx, cfg, runtime, deliveryStatus)
 	if err != nil {
 		return err
 	}
@@ -384,25 +351,6 @@ func runDaemon(
 	// Answering starts with the bind, not with readiness: connect success is the
 	// liveness test, so a bound socket nobody answers reads as a broken daemon.
 	serveControlSocket(ctx, ctlSrv)
-
-	// The local chat is built and started outside the config-driven loop: it is
-	// how a daemon with no config gets one, so it cannot be a config entry.
-	// The chat sees only its own contract type, never main's wider resolver.
-	var secretPushes cli.SecretRequests = core.secretResolver
-
-	chat := cli.New(
-		core.controller.ForManager(controllerapi.BuiltinCLIManagerID),
-		ctlSrv,
-		onboardingModel(cfg),
-		secretPushes,
-	)
-	if err := chat.Start(ctx); err != nil {
-		return fmt.Errorf("start local chat: %w", err)
-	}
-
-	ctlSrv.SetBuiltinManager(chat)
-
-	a.onStop("managers.cli", chat.Stop)
 
 	if err := runtime.Start(ctx); err != nil {
 		return fmt.Errorf("start managers: %w", err)
@@ -428,7 +376,7 @@ func runDaemon(
 // clears the marker. A delivery that failed keeps it: the marker is the only
 // record of a session suspended on a config call, and the next boot re-delivers
 // against a transcript where a second result is a no-op. A marker with no
-// session came from a bootstrap op, which already had its answer over the socket.
+// session came from an unattended apply, which already had its answer.
 func deliverApplyVerdict(
 	ctx context.Context,
 	sender applyVerdictSender,
@@ -507,7 +455,6 @@ type core struct {
 	scheduleStore  schedule.Store
 	scheduleSender schedule.SessionSender
 	verdictSender  applyVerdictSender
-	secretResolver secretRequestResolver
 }
 
 // applyVerdictSender is what verdict delivery needs — delivery, the session
@@ -519,15 +466,6 @@ type applyVerdictSender interface {
 	) (bool, error)
 	GetSession(ctx context.Context, id int64) (*sessionstore.SessionRecord, error)
 	ConsumeConfigEditActivation(ctx context.Context, sessionID int64, callID string)
-}
-
-// secretRequestResolver is the masked-prompt lifecycle, kept separate so an RPC
-// handler cannot acquire the full session-control surface by accident. It names
-// cli.SecretRequests' methods structurally: main's type must not flow into the chat.
-type secretRequestResolver interface {
-	PendingSecretRequests(sessionID int64) []sessionevent.Notification
-	CancelSecretRequest(ctx context.Context, requestID string) error
-	ResolveSecretRequest(ctx context.Context, requestID, name string) error
 }
 
 // startCore brings up everything below the control plane — shell activation, the
@@ -592,11 +530,6 @@ func startCore(
 	)
 
 	controller := managercontrol.New(daemonSvc, daemonSvc, sessionStore, cfg, cache)
-	if preparer, ok := daemonSvc.(daemon.LegacyCLIPreparer); ok {
-		if err := preparer.PrepareLegacyCLIRoots(ctx); err != nil {
-			return nil, fmt.Errorf("prepare legacy cli roots: %w", err)
-		}
-	}
 
 	if err := daemonSvc.Start(ctx); err != nil {
 		return nil, fmt.Errorf("start daemon: %w", err)
@@ -609,7 +542,6 @@ func startCore(
 		scheduleStore:  scheduleStore,
 		scheduleSender: daemonSvc,
 		verdictSender:  daemonSvc,
-		secretResolver: daemonSvc,
 	}, nil
 }
 
@@ -655,15 +587,13 @@ func acquireInstanceLock() (*ctl.Lock, error) {
 	return lock, nil
 }
 
-// prepareControlSocket binds and registers the core ops. Readiness is marked only
-// once the managers register theirs, so a client sees "starting", not unknown op.
+// prepareControlSocket binds the status-only control socket. Readiness is marked
+// only once the managers register theirs, so a client sees "starting", not unknown op.
 func prepareControlSocket(
 	ctx context.Context,
 	cfg *config.Config,
 	mgrs ctl.ManagerControl,
 	delivery controllerapi.OutputStatusFactory,
-	applier configapply.Service,
-	resolver secretRequestResolver,
 ) (*ctl.Server, error) {
 	path, err := ctl.SocketPath()
 	if err != nil {
@@ -678,12 +608,6 @@ func prepareControlSocket(
 	})
 	if err != nil {
 		return nil, fmt.Errorf("control socket: %w", err)
-	}
-
-	if err := registerConfigOps(srv, applier, resolver); err != nil {
-		_ = srv.Close()
-
-		return nil, fmt.Errorf("register control ops: %w", err)
 	}
 
 	return srv, nil

@@ -38,10 +38,10 @@ func TestScenario_ConfigApplyVerdictReachesTheSessionAfterRestart(t *testing.T) 
 
 	msgs := second.parentMessages(sessionID)
 	require.NoError(t, llm.ValidateToolPairing(msgs))
-	assert.Equal(t, 1, countAssistantToolCallsFor(msgs, tool.IDSetDefaultModel),
+	assert.Equal(t, 1, countAssistantToolCallsFor(msgs, tool.IDConfigEdit),
 		"the suspended call is answered, never re-executed")
-	assert.Equal(t, 1, countToolResultsFor(msgs, tool.IDSetDefaultModel), "exactly one result for the call")
-	assert.Contains(t, lastToolResultContent(msgs, tool.IDSetDefaultModel), "Config applied")
+	assert.Equal(t, 1, countToolResultsFor(msgs, tool.IDConfigEdit), "exactly one result for the call")
+	assert.Contains(t, lastToolResultContent(msgs, tool.IDConfigEdit), "Config applied")
 	assert.Equal(t, 0, second.restartCount(), "answering a verdict must not stage another apply")
 
 	assert.NoFileExists(t, filepath.Join(configDir, coagenthome.PendingApplyFileName),
@@ -80,8 +80,8 @@ func TestScenario_ConfigApplyVerdictSurvivesADaemonThatDiesBeforeDelivering(t *t
 
 	msgs := third.parentMessages(sessionID)
 	require.NoError(t, llm.ValidateToolPairing(msgs))
-	assert.Equal(t, 1, countToolResultsFor(msgs, tool.IDSetDefaultModel))
-	assert.Equal(t, 1, countAssistantToolCallsFor(msgs, tool.IDSetDefaultModel))
+	assert.Equal(t, 1, countToolResultsFor(msgs, tool.IDConfigEdit))
+	assert.Equal(t, 1, countAssistantToolCallsFor(msgs, tool.IDConfigEdit))
 }
 
 // A session woken for another reason before its verdict arrives still owes the
@@ -114,8 +114,8 @@ func TestScenario_ConfigApplyCallIsNotReExecutedBeforeItsVerdict(t *testing.T) {
 	second.mgr.waitIdle(sessionID)
 
 	msgs := second.parentMessages(sessionID)
-	assert.Equal(t, 1, countAssistantToolCallsFor(msgs, tool.IDSetDefaultModel), "the apply was not repeated")
-	assert.Zero(t, countToolResultsFor(msgs, tool.IDSetDefaultModel), "the call is still out with the world")
+	assert.Equal(t, 1, countAssistantToolCallsFor(msgs, tool.IDConfigEdit), "the apply was not repeated")
+	assert.Zero(t, countToolResultsFor(msgs, tool.IDConfigEdit), "the call is still out with the world")
 	assert.Zero(t, second.restartCount(), "a wake-up must not stage a second apply")
 
 	// The queued message waited behind the call; the verdict still lands first.
@@ -126,7 +126,7 @@ func TestScenario_ConfigApplyCallIsNotReExecutedBeforeItsVerdict(t *testing.T) {
 
 	final := second.parentMessages(sessionID)
 	require.NoError(t, llm.ValidateToolPairing(final))
-	assert.Equal(t, 1, countToolResultsFor(final, tool.IDSetDefaultModel))
+	assert.Equal(t, 1, countToolResultsFor(final, tool.IDConfigEdit))
 	assert.True(t, hasUserContaining(final, "are you done yet?"), "the queued message runs after the verdict")
 }
 
@@ -151,21 +151,18 @@ func TestScenario_ConfigApplyRejectionReachesTheSessionInProcess(t *testing.T) {
 
 	d.mgr.applier = configapply.New(failingCommitOps{d.ops}, func() { d.restarts <- struct{}{} })
 
-	sessionID, err := d.mgr.Send(
-		d.ctx, d.projectID, "switch the default model", "fake-model", map[string]any{"channel": "cli"},
-	)
-	require.NoError(t, err)
+	sessionID := startConfigEditSession(t, d, "switch the default model")
 
 	d.waitUntil("the rejection reached the transcript", func() bool {
-		return countToolResultsFor(d.parentMessages(sessionID), tool.IDSetDefaultModel) == 1
+		return countToolResultsFor(d.parentMessages(sessionID), tool.IDConfigEdit) == 1
 	})
 
 	d.mgr.waitIdle(sessionID)
 
 	msgs := d.parentMessages(sessionID)
 	require.NoError(t, llm.ValidateToolPairing(msgs))
-	assert.Contains(t, lastToolResultContent(msgs, tool.IDSetDefaultModel), "rejected")
-	assert.Equal(t, 1, countAssistantToolCallsFor(msgs, tool.IDSetDefaultModel))
+	assert.Contains(t, lastToolResultContent(msgs, tool.IDConfigEdit), "rejected")
+	assert.Equal(t, 1, countAssistantToolCallsFor(msgs, tool.IDConfigEdit))
 	assert.Zero(t, d.restartCount(), "a rejected commit never restarts")
 	assert.NoFileExists(t, filepath.Join(configDir, coagenthome.PendingApplyFileName))
 }
@@ -189,7 +186,7 @@ func TestScenario_ConfigApplyVerdictRedeliveryIsIdempotent(t *testing.T) {
 	require.NoError(t, err)
 
 	applied, err := second.mgr.DeliverPendingCallResult(
-		second.ctx, sessionID, applyCallID, tool.IDSetDefaultModel, "Config applied: default model",
+		second.ctx, sessionID, applyCallID, tool.IDConfigEdit, "Config applied: default model",
 	)
 	require.NoError(t, err)
 	require.True(t, applied)
@@ -210,7 +207,7 @@ func TestScenario_ConfigApplyVerdictRedeliveryIsIdempotent(t *testing.T) {
 	require.NoError(t, err)
 
 	applied, err = third.mgr.DeliverPendingCallResult(
-		third.ctx, sessionID, applyCallID, tool.IDSetDefaultModel, "Config applied: default model",
+		third.ctx, sessionID, applyCallID, tool.IDConfigEdit, "Config applied: default model",
 	)
 	require.NoError(t, err)
 	assert.False(t, applied, "a replayed verdict for the same call inserts nothing")
@@ -221,6 +218,6 @@ func TestScenario_ConfigApplyVerdictRedeliveryIsIdempotent(t *testing.T) {
 
 	msgs := third.parentMessages(sessionID)
 	require.NoError(t, llm.ValidateToolPairing(msgs))
-	assert.Equal(t, 1, countToolResultsFor(msgs, tool.IDSetDefaultModel))
-	assert.Equal(t, 1, countAssistantToolCallsFor(msgs, tool.IDSetDefaultModel))
+	assert.Equal(t, 1, countToolResultsFor(msgs, tool.IDConfigEdit))
+	assert.Equal(t, 1, countAssistantToolCallsFor(msgs, tool.IDConfigEdit))
 }

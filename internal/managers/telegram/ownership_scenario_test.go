@@ -26,23 +26,24 @@ import (
 )
 
 type telegramOwnershipHarness struct {
-	svc           daemon.Service
-	sessions      sessionstore.Store
-	projectID     int64
-	manager       *Manager
-	cliController controllerapi.Controller
-	recorder      *ownershipTelegramRecorder
+	svc               daemon.Service
+	sessions          sessionstore.Store
+	projectID         int64
+	manager           *Manager
+	foreignController controllerapi.Controller
+	recorder          *ownershipTelegramRecorder
 }
 
-// A CLI-owned session must not create a topic or send a message through this manager.
+// A session owned by another manager must not create a topic or send a message
+// through this manager.
 func TestHarnessScenario_DurableManagerOwnershipReachesOnlyTelegramRenderer(t *testing.T) {
 	h := newTelegramOwnershipHarness(t)
 	owned, foreign := h.createSessions(t)
-	cliEvents := h.cliController.Subscribe()
-	t.Cleanup(func() { h.cliController.Unsubscribe(cliEvents) })
+	foreignEvents := h.foreignController.Subscribe()
+	t.Cleanup(func() { h.foreignController.Unsubscribe(foreignEvents) })
 
 	h.publish(t, owned, openedTelegramSession())
-	h.publish(t, foreign, openedCLISession())
+	h.publish(t, foreign, openedForeignSession())
 	h.publish(t, owned, persistentMessage("✅ telegram owner answer"))
 	h.publish(t, foreign, persistentMessage("❌ local chat answer"))
 	h.publish(t, owned, persistentMessage("✅ telegram owner barrier"))
@@ -103,7 +104,7 @@ func newTelegramOwnershipHarness(t *testing.T) *telegramOwnershipHarness {
 
 	return &telegramOwnershipHarness{
 		svc: svc, sessions: sessions, projectID: projectID, manager: manager, recorder: recorder,
-		cliController: controllers.ForManager(controllerapi.BuiltinCLIManagerID),
+		foreignController: controllers.ForManager("telegram-other"),
 	}
 }
 
@@ -114,7 +115,7 @@ func (h *telegramOwnershipHarness) createSessions(t *testing.T) (int64, int64) {
 	})
 	require.NoError(t, err)
 	foreign, err := h.sessions.CreateSession(context.Background(), h.projectID, "test-model", "", map[string]any{
-		controllerapi.SessionAttributeManagerID: controllerapi.BuiltinCLIManagerID,
+		controllerapi.SessionAttributeManagerID: "telegram-other",
 	})
 	require.NoError(t, err)
 
@@ -128,10 +129,10 @@ func openedTelegramSession() sessionstore.OutputDraft {
 	}
 }
 
-func openedCLISession() sessionstore.OutputDraft {
+func openedForeignSession() sessionstore.OutputDraft {
 	return sessionstore.OutputDraft{
 		Type:       sessionstore.OutputSessionOpened,
-		Attributes: map[string]any{"name": "project - cli", "work_dir": filepath.Join("/tmp", "project")},
+		Attributes: map[string]any{"name": "project - other", "work_dir": filepath.Join("/tmp", "project")},
 	}
 }
 

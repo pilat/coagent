@@ -1,11 +1,11 @@
 # coagent
 
-Coagent is a self-hosted headless coding agent. It runs as a daemon, receives tasks from its built-in Telegram and local-chat managers or from schedules, executes them autonomously via a ReAct loop with tool calling and MCP support, and reports results back. Unlike interactive coding assistants (Claude Code, OpenCode, Roo Code), coagent is designed to work unattended — you send a task and get back the result. The daemon and built-in managers share a private in-process `controllerapi.Controller` contract; coagent does not expose a public controller or plugin API. The binary opens no inbound *network* listener, and the only thing it listens on is a same-user unix socket (`~/.coagent/daemon.sock`, mode 0600) that carries `coagent status`, the onboarding bootstrap and the built-in local chat.
+Coagent is a self-hosted headless coding agent. It runs as a daemon, receives tasks from its built-in Telegram manager or from schedules, executes them autonomously via a ReAct loop with tool calling and MCP support, and reports results back. Unlike interactive coding assistants (Claude Code, OpenCode, Roo Code), coagent is designed to work unattended — you send a task and get back the result. The daemon and the built-in manager share a private in-process `controllerapi.Controller` contract; coagent does not expose a public controller or plugin API. The binary opens no inbound *network* listener, and the only thing it listens on is a same-user unix socket (`~/.coagent/daemon.sock`, mode 0600) that carries the read-only `coagent status` method and nothing else.
 
 Key differentiators:
 - **Headless**: no TUI, no IDE extension, no web UI — pure daemon
 - **Multi-session**: each task runs in an isolated session with its own LLM client, tool registry, and conversation history
-- **Built-in managers**: Telegram and local chat share the daemon's private in-process controller contract
+- **Built-in manager**: the Telegram manager and future built-in managers share the daemon's private in-process controller contract
 - **Pluggable LLM backends**: Anthropic, Google Gemini, OpenAI-compatible (including local models)
 - **Unattended execution**: sessions persist to SQLite, survive crashes, and resume automatically
 - **MCP-first**: the daemon pools session-bound MCP clients and catalogs without cross-session reuse

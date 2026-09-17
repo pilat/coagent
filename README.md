@@ -4,8 +4,8 @@
 precise blocker.**
 
 coagent is a self-hosted, headless coding agent that runs as a long-lived
-daemon. Give it work from Telegram, let a schedule wake it later, or use the
-built-in local chat to configure it. It can inspect and edit code, run commands
+daemon. Give it work from Telegram, or let a schedule wake it later. It can
+inspect and edit code, run commands
 and tests, delegate parts of the work to subagents, and report back when it
 finishes or needs a decision.
 
@@ -29,29 +29,41 @@ cd coagent
 mise install
 mise exec -- go mod download
 mise exec -- make build
-./coagent
 ```
 
-On first launch, coagent offers to install and start its system service. The
-initial service installation needs `sudo`; normal chat, configuration, and
-binary updates do not. The binary remains user-owned under `~/.local/bin`, while
-the systemd unit or launchd plist runs it as your login user.
+There is no first-run wizard: a daemon without a valid model and Telegram
+configuration has nothing to talk to. Author `~/.coagent/config.yaml` by hand —
+at minimum one provider with a model and one Telegram manager — and keep the
+credential values in `~/.coagent/secrets`, referenced from the config as
+`${VAR}`. Then install and start the daemon as a system service:
 
-Next, choose a provider. API-key providers collect the key at a masked prompt
-and store it in `~/.coagent/secrets`; Google service-account auth asks for the
-JSON file path instead. coagent restarts the daemon and opens the local chat.
-From there you can ask it to configure models, a Telegram manager, MCP servers,
-and schedules. When a new secret is needed, coagent asks through a masked
-terminal prompt instead of sending it through the model conversation.
+```bash
+./coagent daemon install   # the one step that needs sudo
+./coagent daemon start
+./coagent status           # exit code 0 means running
+```
 
-The local chat owns a persistent dialog project and is primarily the onboarding
-and configuration surface. For one person, Telegram setup recommends a private
-bot forum: enable Threaded Mode in BotFather, disallow users from creating
-topics, send the bot `/start`, and give the local chat your numeric user ID. For
-a shared group, use a forum-enabled supergroup and provide its numeric chat ID.
-Each manager needs its own bot token; changing a forum target requires a new
-manager ID. The local chat requests the token privately. Then send `/spawn` to
-the bot, choose an existing checkout, and hand off the task:
+The binary stays user-owned under `~/.local/bin`, while the systemd unit or
+launchd plist runs it as your login user. Updating is a manual binary replace
+plus `coagent daemon restart`.
+
+For Telegram, create a private bot with BotFather, enable Threaded Mode, and
+disallow users from creating topics; send the bot `/start`, and give the manager
+your numeric user ID. For a shared group, use a forum-enabled supergroup and
+provide its numeric chat ID. Each manager needs its own bot token; changing a
+forum target requires a new manager ID.
+
+Each configured manager owns a *service topic* — the daemon's management
+surface. It hosts the management session that reports the daemon's active
+configuration, status, projects, managers and command behavior, and `/config`
+there is the only model-facing configuration mutation: it applies a complete
+candidate `config.yaml` behind an explicit activation, restarts the daemon, and
+rolls back if the new configuration cannot boot. Secrets stay in
+`~/.coagent/secrets`, maintained by hand outside the conversation — never paste
+a credential into a chat.
+
+Then send `/spawn` to the bot, choose an existing checkout, and hand off the
+task:
 
 ```text
 Find why TestSettlement occasionally hangs. Reproduce it, fix the root cause,
@@ -71,8 +83,7 @@ Telegram connection.
   history, model client, tools, and project context. Admission control bounds
   concurrent sessions and child agents.
 - **Waiting is a state, not a worker.** A session can suspend without holding a
-  run slot while it waits for a timer, a blocking subagent, a daemon restart, or
-  a credential entered at the terminal.
+  run slot while it waits for a timer, a blocking subagent, or a daemon restart.
 - **Subagents are real sessions.** Children start with clean context and their
   own tool policy. They can run in the background and deliver their result back
   through a durable ledger.
@@ -89,7 +100,7 @@ live in [the ADRs](docs/adr/).
 ## How it works
 
 ```text
-Telegram (outbound polling)          local terminal
+Telegram (outbound polling)          local CLI (`coagent status`)
             │                              │
             │ built-in manager             │ same-user Unix socket
             └──────────────┬───────────────┘
@@ -189,13 +200,14 @@ for vulnerability reporting.
 
 ## Configuration and project context
 
-The preferred configuration interface is the local chat. The underlying state
-is intentionally inspectable:
+Configuration is a hand-edited `~/.coagent/config.yaml`, or a whole-document
+`/config` apply from the Telegram service topic's management session. The
+underlying state is intentionally inspectable:
 
 - `~/.coagent/config.yaml` — providers, models, managers, marketplaces, and tool
   policy; YAML parsing is strict.
 - `~/.coagent/secrets` — credential values referenced as `${VAR}` from the
-  allowed secret-bearing fields.
+  allowed secret-bearing fields, maintained by hand.
 - `~/.coagent/daemon.db` — sessions, messages, schedules, memories, MCP registry,
   and delivery ledgers.
 - `~/.coagent/cache` — model catalogs and marketplace checkouts.
@@ -307,9 +319,9 @@ native injection — while configured MCP search tools coexist alongside it.
 - The first model-catalog lookup needs network access. Later starts try the
   network again but can fall back to the last valid disk snapshot. Arbitrary
   local model IDs need a matching catalog entry.
-- The local terminal chat uses its own persistent dialog project. Repository
-  selection lives in Telegram, where `/gwt <name>` inside a session topic forks
-  that repository into a fresh worktree branched off its remote default branch.
+- Repository selection lives in Telegram, where `/gwt <name>` inside a session
+  topic forks that repository into a fresh worktree branched off its remote
+  default branch.
 - Shell environment activation is Bash-based and applies only while shields are
   down. zsh and fish users can still run coagent, but do not get automatic
   per-directory mise/asdf/nvm/direnv capture.
@@ -323,7 +335,7 @@ native injection — while configured MCP search tools coexist alongside it.
 ## Command surface
 
 ```text
-coagent                 set up and chat with the daemon
+coagent                 print command usage
 coagent status          report daemon state (0 running, 2 not running, 1 error)
 coagent version         print the binary version
 coagent daemon          run in the foreground

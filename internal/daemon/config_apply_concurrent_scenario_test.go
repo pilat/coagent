@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/pilat/coagent/internal/configapply"
 	"github.com/pilat/coagent/internal/configops"
+	"github.com/pilat/coagent/internal/configtools"
 	"github.com/pilat/coagent/internal/llm"
 	"github.com/pilat/coagent/internal/llmwire"
 	"github.com/pilat/coagent/internal/tool"
@@ -24,27 +26,54 @@ const (
 )
 
 // twoSessionApplyRespond drives two root sessions that both reach for the same
-// config knob. The prompt tells them apart and the call ids differ, so a call
-// left unanswered is visible in the transcript it belongs to.
+// config knob after their /config grant lands. The opener prompt tells the
+// sessions apart and the call ids differ, so a call left unanswered is visible
+// in the transcript it belongs to.
 func twoSessionApplyRespond(_ string, msgs []llmwire.Message) *llmwire.Response {
-	if hasToolResultFor(msgs, tool.IDSetDefaultModel) {
-		return &llmwire.Response{Text: "default model handled"}
+	if hasToolResultFor(msgs, tool.IDConfigEdit) {
+		return &llmwire.Response{Text: "configuration replaced"}
+	}
+
+	if !hasUserContaining(msgs, configtools.ConfigEditCommand) {
+		return &llmwire.Response{Text: "ready to reconfigure"}
 	}
 
 	if hasUserContaining(msgs, "APPLY_B") {
 		return &llmwire.Response{ToolCalls: []llmwire.ToolCall{{
 			ID:        applyCallB,
-			Name:      tool.IDSetDefaultModel,
-			Arguments: []byte(`{"id":"claude-sonnet-5"}`),
+			Name:      tool.IDConfigEdit,
+			Arguments: json.RawMessage(`{"document":` + mustQuoteJSON(configEditCandidateB) + `}`),
 		}}}
 	}
 
 	return &llmwire.Response{ToolCalls: []llmwire.ToolCall{{
 		ID:        applyCallA,
-		Name:      tool.IDSetDefaultModel,
-		Arguments: []byte(`{"id":"claude-opus-5"}`),
+		Name:      tool.IDConfigEdit,
+		Arguments: json.RawMessage(`{"document":` + mustQuoteJSON(configEditCandidateA) + `}`),
 	}}}
 }
+
+const configEditCandidateA = `providers:
+    work:
+        driver: anthropic
+        api_key: ${WORK_API_KEY}
+models:
+    - id: claude-opus-5
+      provider: work
+    - id: claude-sonnet-5
+      provider: work
+`
+
+const configEditCandidateB = `providers:
+    work:
+        driver: anthropic
+        api_key: ${WORK_API_KEY}
+models:
+    - id: claude-sonnet-5
+      provider: work
+    - id: claude-opus-5
+      provider: work
+`
 
 func newApplyDaemonWith(
 	t *testing.T,
@@ -53,7 +82,7 @@ func newApplyDaemonWith(
 ) *applyDaemon {
 	t.Helper()
 
-	h := newSubagentHarnessOnSystemProjectDB(t, dbPath, respond)
+	h := newSubagentHarnessOnDB(t, dbPath, respond, nil)
 	ops := configops.New(filepath.Join(configDir, "config.yaml"), filepath.Join(configDir, "secrets"))
 	restarts := make(chan struct{}, 4)
 
@@ -91,18 +120,26 @@ func TestScenario_ASecondSessionCannotOverwriteAStagedApply(t *testing.T) {
 	first := newApplyDaemonWith(t, dbPath, configDir, twoSessionApplyRespond)
 
 	sessionA, err := first.mgr.Send(
-		first.ctx, first.projectID, "APPLY_A switch the default model", "fake-model", map[string]any{"channel": "cli"},
+		first.ctx, first.projectID, "APPLY_A switch the default model", "fake-model",
+		map[string]any{"manager_id": "telegram:main"},
 	)
 	require.NoError(t, err)
+	first.waitUntil("A's opener settled", func() bool { return !first.mgr.HasActiveLoop(sessionA) })
+	first.mgr.waitIdle(sessionA)
+	require.NoError(t, first.mgr.SendToSession(first.ctx, sessionA, configtools.ConfigEditCommand))
 
 	first.waitForRestart(t)
 	first.waitUntil("A suspended on its config call", func() bool { return !first.mgr.HasActiveLoop(sessionA) })
 
 	// B stages against the config A is already restarting into.
 	sessionB, err := first.mgr.Send(
-		first.ctx, first.projectID, "APPLY_B switch the default model", "fake-model", map[string]any{"channel": "cli"},
+		first.ctx, first.projectID, "APPLY_B switch the default model", "fake-model",
+		map[string]any{"manager_id": "telegram:main"},
 	)
 	require.NoError(t, err)
+	first.waitUntil("B's opener settled", func() bool { return !first.mgr.HasActiveLoop(sessionB) })
+	first.mgr.waitIdle(sessionB)
+	require.NoError(t, first.mgr.SendToSession(first.ctx, sessionB, configtools.ConfigEditCommand))
 
 	first.mgr.waitIdle(sessionB)
 
@@ -116,8 +153,8 @@ func TestScenario_ASecondSessionCannotOverwriteAStagedApply(t *testing.T) {
 
 	msgsB := first.parentMessages(sessionB)
 	require.NoError(t, llm.ValidateToolPairing(msgsB))
-	assert.Equal(t, 1, countToolResultsFor(msgsB, tool.IDSetDefaultModel), "B is answered in-process")
-	assert.Contains(t, lastToolResultContent(msgsB, tool.IDSetDefaultModel), "config change")
+	assert.Equal(t, 1, countToolResultsFor(msgsB, tool.IDConfigEdit), "B is answered in-process")
+	assert.Contains(t, lastToolResultContent(msgsB, tool.IDConfigEdit), "config change")
 
 	first.shutdown()
 
@@ -134,9 +171,9 @@ func TestScenario_ASecondSessionCannotOverwriteAStagedApply(t *testing.T) {
 
 	msgsA := second.parentMessages(sessionA)
 	require.NoError(t, llm.ValidateToolPairing(msgsA))
-	assert.Equal(t, 1, countAssistantToolCallsFor(msgsA, tool.IDSetDefaultModel))
-	assert.Equal(t, 1, countToolResultsFor(msgsA, tool.IDSetDefaultModel), "A's call is resolved exactly once")
-	assert.Contains(t, lastToolResultContent(msgsA, tool.IDSetDefaultModel), "Config applied")
+	assert.Equal(t, 1, countAssistantToolCallsFor(msgsA, tool.IDConfigEdit))
+	assert.Equal(t, 1, countToolResultsFor(msgsA, tool.IDConfigEdit), "A's call is resolved exactly once")
+	assert.Contains(t, lastToolResultContent(msgsA, tool.IDConfigEdit), "Config applied")
 }
 
 // The boot decides "this verdict can never be delivered" from the session
@@ -187,7 +224,8 @@ func TestScenario_ConcurrentAppliesResolveExactlyOnce(t *testing.T) {
 	for _, prompt := range []string{"APPLY_A switch the default model", "APPLY_B switch the default model"} {
 		wg.Go(func() {
 			id, err := first.mgr.Send(
-				first.ctx, first.projectID, prompt, "fake-model", map[string]any{"channel": "cli"},
+				first.ctx, first.projectID, prompt, "fake-model",
+				map[string]any{"manager_id": "telegram:main"},
 			)
 
 			mu.Lock()
@@ -201,6 +239,16 @@ func TestScenario_ConcurrentAppliesResolveExactlyOnce(t *testing.T) {
 	require.NoError(t, errors.Join(sendErrs...))
 
 	sessionA, sessionB := sessions["APPLY_A"], sessions["APPLY_B"]
+
+	first.waitUntil("both openers settled", func() bool {
+		return !first.mgr.HasActiveLoop(sessionA) && !first.mgr.HasActiveLoop(sessionB)
+	})
+	first.mgr.waitIdle(sessionA)
+	first.mgr.waitIdle(sessionB)
+
+	for _, session := range []int64{sessionA, sessionB} {
+		require.NoError(t, first.mgr.SendToSession(first.ctx, session, configtools.ConfigEditCommand))
+	}
 
 	first.waitForRestart(t)
 	first.waitUntil("both sessions settled", func() bool {
@@ -223,7 +271,7 @@ func TestScenario_ConcurrentAppliesResolveExactlyOnce(t *testing.T) {
 
 	msgsLoser := first.parentMessages(loser)
 	require.NoError(t, llm.ValidateToolPairing(msgsLoser))
-	assert.Equal(t, 1, countToolResultsFor(msgsLoser, tool.IDSetDefaultModel),
+	assert.Equal(t, 1, countToolResultsFor(msgsLoser, tool.IDConfigEdit),
 		"the refused call is answered rather than suspended")
 
 	first.shutdown()
@@ -240,6 +288,6 @@ func TestScenario_ConcurrentAppliesResolveExactlyOnce(t *testing.T) {
 
 	msgsWinner := second.parentMessages(winner)
 	require.NoError(t, llm.ValidateToolPairing(msgsWinner))
-	assert.Equal(t, 1, countAssistantToolCallsFor(msgsWinner, tool.IDSetDefaultModel))
-	assert.Equal(t, 1, countToolResultsFor(msgsWinner, tool.IDSetDefaultModel))
+	assert.Equal(t, 1, countAssistantToolCallsFor(msgsWinner, tool.IDConfigEdit))
+	assert.Equal(t, 1, countToolResultsFor(msgsWinner, tool.IDConfigEdit))
 }

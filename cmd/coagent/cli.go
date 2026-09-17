@@ -6,9 +6,6 @@ import (
 	"io"
 	"os"
 
-	"golang.org/x/term"
-
-	"github.com/pilat/coagent/internal/ctl"
 	"github.com/pilat/coagent/internal/logger"
 	"github.com/pilat/coagent/internal/version"
 )
@@ -28,7 +25,7 @@ const devVersion = "dev"
 const usage = `coagent — a self-hosted headless coding agent.
 
 Usage:
-  coagent                 set up and chat with the daemon (requires a terminal)
+  coagent                 print this help
   coagent daemon          run the daemon in the foreground
   coagent status          report daemon state      (0 running, 2 not running, 1 error)
   coagent version         print the binary version
@@ -39,9 +36,9 @@ Usage:
 // the code that acts on them.
 func dispatch(ctx context.Context, args []string) int {
 	if len(args) == 0 {
-		silenceLogs()
+		fmt.Print(usage)
 
-		return runBare(ctx)
+		return exitOK
 	}
 
 	switch args[0] {
@@ -66,39 +63,8 @@ func dispatch(ctx context.Context, args []string) int {
 	}
 }
 
-// runBare is what `coagent` alone does. Without a terminal it prints usage and
-// fails: the legacy service unit invoked the bare binary, and exiting 0 there
-// would let the unit die silently instead of visibly failing.
-func runBare(ctx context.Context) int {
-	if !term.IsTerminal(int(os.Stdin.Fd())) || !term.IsTerminal(int(os.Stdout.Fd())) {
-		fmt.Fprint(os.Stderr, usage)
-
-		return exitError
-	}
-
-	return runOnboarding(ctx)
-}
-
-// runOnboarding is bare `coagent`: make sure there is a daemon worth talking to,
-// then hand the terminal to the chat.
-func runOnboarding(ctx context.Context) int {
-	socket, err := ctl.SocketPath()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "%v\n", err)
-
-		return exitError
-	}
-
-	if code := bootstrap(ctx, socket); code != exitOK {
-		return code
-	}
-
-	return runChat(ctx, socket)
-}
-
 // silenceLogs muzzles zap for the client verbs. The logger defaults to debug on
-// stderr for the daemon's benefit; a CLI talks to its user with fmt, and a chat
-// REPL cannot share the terminal with a log stream.
+// stderr for the daemon's benefit; a CLI talks to its user with fmt.
 func silenceLogs() {
 	logger.Init(logger.WithConsoleOutput(io.Discard))
 }

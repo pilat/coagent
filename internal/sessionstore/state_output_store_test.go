@@ -11,7 +11,7 @@ import (
 func TestStore_StateErrorAndOutputCommitTogether(t *testing.T) {
 	ctx := context.Background()
 	store, db, projectID := newTestStore(t)
-	record, err := store.CreateSession(ctx, projectID, "model", "", map[string]any{"manager_id": "cli"})
+	record, err := store.CreateSession(ctx, projectID, "model", "", map[string]any{"manager_id": "telegram-test"})
 	require.NoError(t, err)
 	states, ok := store.(StateOutputStore)
 	require.True(t, ok)
@@ -33,7 +33,7 @@ func TestStore_StateErrorAndOutputCommitTogether(t *testing.T) {
 func TestStore_StateErrorCannotOverwriteLifecycleFence(t *testing.T) {
 	ctx := context.Background()
 	store, db, projectID := newTestStore(t)
-	record, err := store.CreateSession(ctx, projectID, "model", "", map[string]any{"manager_id": "cli"})
+	record, err := store.CreateSession(ctx, projectID, "model", "", map[string]any{"manager_id": "telegram-test"})
 	require.NoError(t, err)
 	require.NoError(t, store.UpdateSessionStatus(ctx, record.ID, SessionStatusStopping))
 	states := store.(StateOutputStore)

@@ -18,10 +18,7 @@ import (
 	"github.com/pilat/coagent/internal/tool"
 )
 
-const (
-	secretCallID      = "secret-call-1"
-	orphanSleepCallID = "sleep-call-orphan"
-)
+const orphanTaskCallID = "orphan-task-1"
 
 // modelRequests records every transcript the provider was shown, so a test can
 // assert no request ever carried a dangling tool_use.
@@ -30,35 +27,22 @@ type modelRequests struct {
 	seen [][]llmwire.Message
 }
 
-// askForSecretRespond asks for a credential once, then reacts to whatever came
-// back for it.
-func askForSecretRespond(_ string, msgs []llmwire.Message) *llmwire.Response {
-	if hasToolResultFor(msgs, tool.IDRequestSecret) {
-		return &llmwire.Response{Text: "noted: " + lastToolResultContent(msgs, tool.IDRequestSecret)}
+// askForBlockingTaskRespond parks the session on a blocking child once, then reacts
+// to whatever came back for it.
+func askForBlockingTaskRespond(_ string, msgs []llmwire.Message) *llmwire.Response {
+	if hasToolResultFor(msgs, tool.IDTask) {
+		return &llmwire.Response{Text: "noted: " + lastToolResultContent(msgs, tool.IDTask)}
 	}
 
 	return &llmwire.Response{ToolCalls: []llmwire.ToolCall{{
-		ID:        secretCallID,
-		Name:      tool.IDRequestSecret,
-		Arguments: []byte(`{"name":"MANAGER_TG_BOT_TOKEN","purpose":"the bot token from BotFather"}`),
-	}}}
-}
-
-// longSleepRespond parks the session on a timer that outlives the process.
-func longSleepRespond(_ string, msgs []llmwire.Message) *llmwire.Response {
-	if hasToolResultFor(msgs, tool.IDSleep) {
-		return &llmwire.Response{Text: "awake again"}
-	}
-
-	return &llmwire.Response{ToolCalls: []llmwire.ToolCall{{
-		ID:        orphanSleepCallID,
-		Name:      tool.IDSleep,
-		Arguments: []byte(`{"duration":"1h","reason":"wait for the world"}`),
+		ID:        orphanTaskCallID,
+		Name:      tool.IDTask,
+		Arguments: []byte(`{"prompt":"do the thing","description":"orphan probe","subagent_type":"general"}`),
 	}}}
 }
 
 // newExternalCallDaemon is one daemon image with a config applier wired, so a
-// terminal session is served request_secret and the config tools.
+// session can suspend on an external call and on config_edit.
 func newExternalCallDaemon(
 	t *testing.T,
 	dbPath, configDir string,
@@ -66,7 +50,7 @@ func newExternalCallDaemon(
 ) *applyDaemon {
 	t.Helper()
 
-	h := newSubagentHarnessOnSystemProjectDB(t, dbPath, respond)
+	h := newSubagentHarnessOnDB(t, dbPath, respond, nil)
 	ops := configops.New(filepath.Join(configDir, "config.yaml"), filepath.Join(configDir, "secrets"))
 	restarts := make(chan struct{}, 4)
 
@@ -75,25 +59,38 @@ func newExternalCallDaemon(
 	return &applyDaemon{subagentHarness: h, ops: ops, restarts: restarts}
 }
 
-// stageSecretRequestAndStop runs a terminal session up to the masked prompt and
-// takes the daemon down with nobody having typed anything.
-func stageSecretRequestAndStop(t *testing.T, dbPath, configDir string, seen *modelRequests) int64 {
+// stageTaskAndStop parks a session on a blocking child, marks the child link
+// killed (a child that did not survive the shutdown), and takes the daemon down
+// with the task call dangling in the transcript.
+func stageTaskAndStop(t *testing.T, dbPath, configDir string, seen *modelRequests) int64 {
 	t.Helper()
 
-	first := newExternalCallDaemon(t, dbPath, configDir, seen.wrap(askForSecretRespond))
+	first := newExternalCallDaemon(t, dbPath, configDir, seen.wrap(askForBlockingTaskRespond))
 
 	sessionID, err := first.mgr.Send(
-		first.ctx, first.projectID, "set up the telegram bot", "fake-model", map[string]any{"channel": "cli"},
+		first.ctx, first.projectID, "do work then spawn", "fake-model", nil,
 	)
 	require.NoError(t, err)
 
-	first.waitUntil("the session suspended on the masked prompt", func() bool {
-		return first.mgr.staged.has(sessionID) && !first.mgr.HasActiveLoop(sessionID)
+	first.waitUntil("the parent parked on the child", func() bool {
+		return countAssistantToolCallsFor(first.parentMessages(sessionID), tool.IDTask) == 1 &&
+			!first.mgr.HasActiveLoop(sessionID)
 	})
 
 	msgs := first.parentMessages(sessionID)
-	require.Equal(t, 1, countAssistantToolCallsFor(msgs, tool.IDRequestSecret))
-	require.Zero(t, countToolResultsFor(msgs, tool.IDRequestSecret), "the prompt is out with the person")
+	require.Equal(t, 1, countAssistantToolCallsFor(msgs, tool.IDTask))
+	require.Zero(t, countToolResultsFor(msgs, tool.IDTask), "the task is out with the world")
+
+	link, err := first.links.GetLinkByTaskCallID(first.ctx, sessionID, orphanTaskCallID)
+	require.NoError(t, err)
+	require.NotNil(t, link, "the suspended parent owes its call to a child link")
+
+	// The producer ledger is the link row; a child that did not survive the
+	// restart owns nothing, so its link must not claim the call either.
+	_, err = first.db.ExecContext(
+		first.ctx, `DELETE FROM subagent_links WHERE child_id = ?`, link.ChildID,
+	)
+	require.NoError(t, err)
 
 	first.shutdown()
 
@@ -166,50 +163,52 @@ func TestHarnessModel_PendingExternalCallOwnershipAgreesAfterRestart(t *testing.
 			"an unresolved external call the provider can see must have a producer that can resolve it")
 	}
 
-	t.Run("a secret request loses its producer and is closed", func(t *testing.T) {
-		dbPath := filepath.Join(t.TempDir(), "secret.db")
+	t.Run("a task loses its producer and is closed", func(t *testing.T) {
+		dbPath := filepath.Join(t.TempDir(), "orphan.db")
 		configDir := newApplyConfigDir(t)
 
 		var seen modelRequests
 
-		sessionID := stageSecretRequestAndStop(t, dbPath, configDir, &seen)
+		sessionID := stageTaskAndStop(t, dbPath, configDir, &seen)
 
-		second := newExternalCallDaemon(t, dbPath, configDir, seen.wrap(askForSecretRespond))
+		second := newExternalCallDaemon(t, dbPath, configDir, seen.wrap(askForBlockingTaskRespond))
 		defer second.shutdown()
 
-		second.mgr.sweep(second.ctx)
+		require.NoError(t, second.mgr.Start(second.ctx))
 
 		assertAgrees(t, second, sessionID)
 
 		msgs := second.parentMessages(sessionID)
 		require.NoError(t, llm.ValidateToolPairing(msgs))
-		assert.Equal(t, 1, countToolResultsFor(msgs, tool.IDRequestSecret),
-			"the orphaned prompt is closed exactly once")
+		assert.Equal(t, 1, countToolResultsFor(msgs, tool.IDTask),
+			"the orphaned task is closed exactly once")
 	})
 
-	t.Run("a sleep keeps its durable timer", func(t *testing.T) {
-		dbPath := filepath.Join(t.TempDir(), "sleep.db")
+	t.Run("a task keeps its live child", func(t *testing.T) {
+		dbPath := filepath.Join(t.TempDir(), "task.db")
 		configDir := newApplyConfigDir(t)
 
-		first := newExternalCallDaemon(t, dbPath, configDir, longSleepRespond)
+		var seen modelRequests
 
-		sessionID, err := first.mgr.Send(first.ctx, first.projectID, "wait a while", "fake-model", nil)
+		first := newExternalCallDaemon(t, dbPath, configDir, seen.wrap(askForBlockingTaskRespond))
+
+		sessionID, err := first.mgr.Send(first.ctx, first.projectID, "do work then spawn", "fake-model", nil)
 		require.NoError(t, err)
 
-		first.waitUntil("the session parked on the timer", func() bool {
-			return countAssistantToolCallsFor(first.parentMessages(sessionID), tool.IDSleep) == 1 &&
+		first.waitUntil("the parent parked on the child", func() bool {
+			return countAssistantToolCallsFor(first.parentMessages(sessionID), tool.IDTask) == 1 &&
 				!first.mgr.HasActiveLoop(sessionID)
 		})
+
+		// No shutdown: the child link is still live, so the sweep must leave
+		// the call pending instead of closing it as orphaned.
+		first.mgr.sweep(first.ctx)
+
+		assertAgrees(t, first, sessionID)
+		assert.Zero(t, countToolResultsFor(first.parentMessages(sessionID), tool.IDTask),
+			"a call whose child survived must stay pending")
+
 		first.shutdown()
-
-		second := newExternalCallDaemon(t, dbPath, configDir, longSleepRespond)
-		defer second.shutdown()
-
-		second.mgr.sweep(second.ctx)
-
-		assertAgrees(t, second, sessionID)
-		assert.Zero(t, countToolResultsFor(second.parentMessages(sessionID), tool.IDSleep),
-			"a call whose producer survived must stay pending")
 	})
 
 	t.Run("a config apply keeps its marker", func(t *testing.T) {
@@ -224,7 +223,7 @@ func TestHarnessModel_PendingExternalCallOwnershipAgreesAfterRestart(t *testing.
 		second.mgr.sweep(second.ctx)
 
 		assertAgrees(t, second, sessionID)
-		assert.Zero(t, countToolResultsFor(second.parentMessages(sessionID), tool.IDSetDefaultModel),
+		assert.Zero(t, countToolResultsFor(second.parentMessages(sessionID), tool.IDConfigEdit),
 			"the marker still owes this call its verdict")
 
 		_, err := second.bootVerdict(t)
@@ -247,12 +246,12 @@ func TestHarnessModel_PendingExternalCallOwnershipAgreesAfterRestart(t *testing.
 
 		msgs := second.parentMessages(sessionID)
 		require.NoError(t, llm.ValidateToolPairing(msgs))
-		assert.Equal(t, 1, countToolResultsFor(msgs, tool.IDSetDefaultModel),
+		assert.Equal(t, 1, countToolResultsFor(msgs, tool.IDConfigEdit),
 			"a verdict nobody can produce must be closed, not left dangling")
 
 		// The apply slot is in-memory, so a claim the previous image never gave
 		// back cannot reach this one: only a strand inside one image is dangerous.
-		assert.True(t, second.mgr.stageApply(sessionID, "later", tool.IDAddModel, &configops.Staged{}),
+		assert.True(t, second.mgr.stageApply(sessionID, "later", tool.IDConfigEdit, &configops.Staged{}),
 			"a new image starts with a free apply slot")
 	})
 }

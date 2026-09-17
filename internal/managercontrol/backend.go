@@ -16,6 +16,9 @@ type sessionBackend interface {
 	List(context.Context) ([]*sessionstore.SessionRecord, error)
 	SetModel(context.Context, int64, string, string) error
 	SetAttributes(context.Context, int64, map[string]any) error
+	EnsureManagementRoot(
+		context.Context, int64, string, int64, string, string,
+	) (*sessionstore.SessionRecord, *sessionstore.OutputCommit, error)
 }
 
 type runtimeBackend interface {
@@ -30,7 +33,7 @@ type runtimeBackend interface {
 type projectBackend interface {
 	GetOrCreateProject(context.Context, string) (int64, error)
 	GetOrCreateNamedProject(context.Context, string, string) (int64, error)
-	GetOrCreateSystemProject(context.Context, string, string) (int64, error)
+	GetOrCreateHiddenProject(context.Context, string) (int64, error)
 	GetProjectWorkDir(context.Context, int64) (string, error)
 	GetProjectName(context.Context, int64) (string, error)
 }

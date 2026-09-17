@@ -14,9 +14,9 @@ import (
 //go:embed builtin/*/SKILL.md
 var builtinSkills embed.FS
 
-// OnboardingSkillName is the setup guide activated by the daemon only where its
-// configuration tools exist.
-const OnboardingSkillName = "onboarding"
+// ManagementSkillName is the service-topic instruction, active only on
+// management-surface roots.
+const ManagementSkillName = "management"
 
 // BuiltinSkill parses one embedded skill by name.
 func BuiltinSkill(name string) (*Skill, error) {

@@ -10,7 +10,6 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/pilat/coagent/internal/coagenthome"
-	"github.com/pilat/coagent/internal/config"
 )
 
 var errEnrichment = errors.New("model catalog: claude-sonnet-5 is not in the anthropic catalog")
@@ -19,20 +18,26 @@ func markerFile(f *fixture) string {
 	return filepath.Join(filepath.Dir(f.configPath), coagenthome.PendingApplyFileName)
 }
 
-// commit stages an op and commits it with a marker, as an apply does.
-func (f *fixture) commit(t *testing.T, op Op, p Pending) {
+// commit stages a document and commits it with a marker, as an apply does.
+func (f *fixture) commit(t *testing.T, candidate string, p Pending) {
 	t.Helper()
 
-	staged, v := f.svc.Stage(op)
-	require.True(t, v.Applied, v.Reason())
+	staged := f.stageDocument(t, candidate)
 	require.True(t, f.svc.Commit(staged, p).Applied)
 }
 
 func TestCommit_WritesTheMarkerNamingTheBackupAndTheNewHash(t *testing.T) {
 	f := newFixture(t, baseConfig, baseSecrets)
 
-	f.commit(t, SetDefaultModel("anthropic/claude-sonnet-5"), Pending{
-		SessionID: 42, ToolCallID: "call-1", ToolName: "set_default_model",
+	f.commit(t, `providers:
+    work:
+        driver: anthropic
+        api_key: ${WORK_API_KEY}
+models:
+    - id: claude-sonnet-5
+      provider: work
+`, Pending{
+		SessionID: 42, ToolCallID: "call-1", ToolName: "config_edit",
 	})
 
 	p, err := f.svc.LoadPending()
@@ -41,7 +46,7 @@ func TestCommit_WritesTheMarkerNamingTheBackupAndTheNewHash(t *testing.T) {
 
 	assert.Equal(t, int64(42), p.SessionID)
 	assert.Equal(t, "call-1", p.ToolCallID)
-	assert.Equal(t, "set default model anthropic/claude-sonnet-5", p.Summary)
+	assert.Equal(t, "replace configuration document", p.Summary)
 
 	// The backup names the file that was live, and the hash the one that landed.
 	require.NotEmpty(t, p.BakPath)
@@ -56,7 +61,7 @@ func TestCommit_WritesTheMarkerNamingTheBackupAndTheNewHash(t *testing.T) {
 
 func TestResolvePending_AppliedWhenTheBootSucceeds(t *testing.T) {
 	f := newFixture(t, baseConfig, baseSecrets)
-	f.commit(t, SetDefaultModel("anthropic/claude-sonnet-5"), Pending{SessionID: 7, ToolCallID: "c"})
+	f.commit(t, singleModelDocument, Pending{SessionID: 7, ToolCallID: "c"})
 
 	p, err := f.svc.LoadPending()
 	require.NoError(t, err)
@@ -78,7 +83,7 @@ func TestResolvePending_AppliedWhenTheBootSucceeds(t *testing.T) {
 // catalog enrichment, most of all.
 func TestResolvePending_RollsBackWhenTheBootFails(t *testing.T) {
 	f := newFixture(t, baseConfig, baseSecrets)
-	f.commit(t, SetDefaultModel("anthropic/claude-sonnet-5"), Pending{SessionID: 7, ToolCallID: "c"})
+	f.commit(t, singleModelDocument, Pending{SessionID: 7, ToolCallID: "c"})
 
 	p, err := f.svc.LoadPending()
 	require.NoError(t, err)
@@ -114,12 +119,14 @@ func TestResolvePending_HashMismatchMeansTheWriteNeverLanded(t *testing.T) {
 func TestResolvePending_RollsBackTheFirstConfigByRemovingIt(t *testing.T) {
 	f := newFixture(t, "", "")
 
-	_, v := f.svc.SetSecret("FIRST_API_KEY", "sk-ant-first-00000000")
-	require.True(t, v.Applied)
-
-	f.commit(t, SetProvider("work", config.ProviderEntry{
-		Driver: "anthropic", APIKey: Ref("FIRST_API_KEY"),
-	}), Pending{})
+	f.commit(t, `providers:
+    work:
+        driver: anthropic
+        api_key: sk-ant-first-00000000
+models:
+    - id: claude-sonnet-5
+      provider: work
+`, Pending{})
 
 	p, err := f.svc.LoadPending()
 	require.NoError(t, err)
@@ -144,13 +151,13 @@ func TestLoadPending_AbsentMarkerIsNotAnError(t *testing.T) {
 // another waiting call, and deleting that one would strand it.
 func TestClearPending_OnlyRemovesTheMarkerItResolved(t *testing.T) {
 	f := newFixture(t, baseConfig, baseSecrets)
-	f.commit(t, SetDefaultModel("claude-sonnet-5"), Pending{SessionID: 1, ToolCallID: "c1"})
+	f.commit(t, singleModelDocument, Pending{SessionID: 1, ToolCallID: "c1"})
 
 	first, err := f.svc.LoadPending()
 	require.NoError(t, err)
 	require.NotNil(t, first)
 
-	f.commit(t, SetDefaultModel("anthropic/claude-sonnet-5"), Pending{SessionID: 2, ToolCallID: "c2"})
+	f.commit(t, twoModelDocument, Pending{SessionID: 2, ToolCallID: "c2"})
 
 	require.NoError(t, f.svc.ClearPending(*first))
 
@@ -167,7 +174,7 @@ func TestClearPending_OnlyRemovesTheMarkerItResolved(t *testing.T) {
 // there is simply nobody to tell.
 func TestResolvePending_BootstrapMarkerCarriesNoSession(t *testing.T) {
 	f := newFixture(t, baseConfig, baseSecrets)
-	f.commit(t, SetDefaultModel("anthropic/claude-sonnet-5"), Pending{})
+	f.commit(t, singleModelDocument, Pending{})
 
 	p, err := f.svc.LoadPending()
 	require.NoError(t, err)
@@ -178,3 +185,27 @@ func TestResolvePending_BootstrapMarkerCarriesNoSession(t *testing.T) {
 	assert.Equal(t, int64(0), out.Pending.SessionID)
 	assert.True(t, out.RolledBack)
 }
+
+const singleModelDocument = `providers:
+    work:
+        driver: anthropic
+        api_key: ${WORK_API_KEY}
+models:
+    - id: claude-sonnet-5
+      provider: work
+`
+
+const twoModelDocument = `providers:
+    work:
+        driver: anthropic
+        api_key: ${WORK_API_KEY}
+    router:
+        driver: openrouter
+        api_key: ${ROUTER_API_KEY}
+        base_url: https://openrouter.ai/api/v1
+models:
+    - id: anthropic/claude-sonnet-5
+      provider: router
+    - id: claude-sonnet-5
+      provider: work
+`

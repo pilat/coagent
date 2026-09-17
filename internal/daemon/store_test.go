@@ -8,7 +8,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/pilat/coagent/internal/controllerapi"
 	"github.com/pilat/coagent/internal/migrate"
 	"github.com/pilat/coagent/internal/schedule"
 )
@@ -75,18 +74,5 @@ func TestStore_GetOrCreateProject(t *testing.T) {
 
 		_, err := s.GetOrCreateProject(context.Background(), "/tmp/sys_coagent")
 		require.Error(t, err)
-	})
-
-	t.Run("system project stores explicit logical name", func(t *testing.T) {
-		s := newTestStore(t)
-
-		id, err := s.GetOrCreateSystemProject(
-			context.Background(), "/tmp/sys_coagent", controllerapi.CoagentSystemProjectName,
-		)
-		require.NoError(t, err)
-
-		name, err := s.GetProjectName(context.Background(), id)
-		require.NoError(t, err)
-		assert.Equal(t, controllerapi.CoagentSystemProjectName, name)
 	})
 }

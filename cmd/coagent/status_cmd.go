@@ -65,7 +65,7 @@ func printStatus(st ctl.StatusResult, g ctl.Greeting) {
 	fmt.Printf("running · pid %d · up %s · %s\n", st.PID, humanDuration(st.UptimeSeconds), st.BinaryVersion)
 
 	if skewed(g.BinaryVersion, version.Version) {
-		fmt.Printf("version skew · daemon %s ≠ cli %s — `coagent` offers the update\n",
+		fmt.Printf("version skew · daemon %s ≠ cli %s — restart the daemon on the new binary\n",
 			g.BinaryVersion, version.Version)
 	}
 

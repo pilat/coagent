@@ -77,7 +77,7 @@ components:
   schedule:   { in: internal/schedule }
 
   telegram:   { in: internal/managers/telegram }
-  managercli: { in: internal/managers/cli }
+
   managers:   { in: internal/managers }
   daemon:     { in: internal/daemon }
 
@@ -183,9 +183,6 @@ deps:
     mayDependOn: [coagenthome, config, controllerapi, humanize, llmwire, logger, managerdelivery, sessionevent]
   managers:
     mayDependOn: [config, controllerapi, logger, telegram]
-  # The local chat rides the control socket the way telegram rides HTTP.
-  managercli:
-    mayDependOn: [controllerapi, ctl, logger, managerdelivery, sessionevent]
 
   # Orchestrator.
   daemon:

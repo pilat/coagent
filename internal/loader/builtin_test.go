@@ -9,49 +9,59 @@ import (
 )
 
 // The skill ships inside the binary, so a machine with no config, no
-// marketplaces and no project files still has the setup guide.
-func TestBuiltinSkill_Onboarding(t *testing.T) {
-	skill, err := BuiltinSkill(OnboardingSkillName)
+// marketplaces and no project files still has the management instruction.
+func TestBuiltinSkill_Management(t *testing.T) {
+	skill, err := BuiltinSkill(ManagementSkillName)
 	require.NoError(t, err)
 
-	assert.Equal(t, OnboardingSkillName, skill.Name)
+	assert.Equal(t, ManagementSkillName, skill.Name)
 	assert.NotEmpty(t, skill.Description)
 	assert.True(t, skill.IsUserInvocable())
 	assert.True(t, skill.DisableModelInvocation, "the automatically active skill must not be offered again")
 
-	// The parts a first run cannot do without.
+	// The parts a service-topic conversation cannot do without.
 	for _, want := range []string{
-		"request_secret",
-		"exactly one config-tool call at a time",
-		"deterministic first-run bootstrap",
-		"Status does not test provider",
-		"a guard\n   refusal returns without restarting",
-		"If the user declines",
+		"single-operator daemon",
+		"Do not call the `management` skill",
+		"/config",
+		"replaces the complete application configuration",
+		"restarts the daemon",
+		"maintains by hand",
+		"Never ask for a credential",
+		"rotate",
 		"`coagent status`",
 		"/status",
-		"google-sa",
-		"sa_file",
-		"provider **name**",
-		"Do not add a model merely because",
-		"shows only their count and the default",
-		"@BotFather",
-		"@userinfobot",
-		"web.telegram.org",
-		"Topics",
-		"set_manager",
-		"restarts the daemon",
-		"reports a rollback",
-		"If startup failed",
-		"Do not call the\n`onboarding` skill",
-		"preserves every omitted field",
-		"no-op patch",
-		"restarts the daemon without a config",
+		"/new",
+		"/spawn",
+		"/kill",
+		"never\nthis management root",
+		"/clear",
+		"same service topic",
+		"/stop",
+		"/model",
+		"/schedules",
+		"/budget",
+		"/compact",
+		"/shieldsup",
+		"/shieldsdown",
+		"grants nothing",
 	} {
 		assert.Contains(t, skill.Content, want, want)
 	}
 
-	// The warning has to be there in words, not implied.
-	assert.Contains(t, strings.ToLower(skill.Content), "never ask for a credential in the chat")
+	// The removed onboarding vocabulary must stay out.
+	lowered := strings.ToLower(skill.Content)
+	for _, banned := range []string{
+		"request_secret",
+		"set_provider",
+		"terminal",
+		"first-run",
+		"wizard",
+		"sys:coagent",
+		"botfather",
+	} {
+		assert.NotContains(t, lowered, banned, banned)
+	}
 }
 
 func TestBuiltinSkill_UnknownName(t *testing.T) {

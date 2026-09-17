@@ -12,7 +12,7 @@ import (
 func TestWaitingOutputChainRetainsRepeatedSet(t *testing.T) {
 	ctx := context.Background()
 	store, _, projectID := newTestStore(t)
-	record, err := store.CreateSession(ctx, projectID, "model", "", map[string]any{"manager_id": "cli"})
+	record, err := store.CreateSession(ctx, projectID, "model", "", map[string]any{"manager_id": "telegram-test"})
 	require.NoError(t, err)
 
 	var previous int64

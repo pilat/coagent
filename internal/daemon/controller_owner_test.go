@@ -2,7 +2,6 @@ package daemon
 
 import (
 	"context"
-	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -69,44 +68,4 @@ func TestManagerBoundControllerRejectsEveryForeignSessionOperation(t *testing.T)
 	assert.Nil(t, stored.KilledAt)
 	assert.Equal(t, "model", stored.Model)
 	assert.NotContains(t, stored.Attributes, "topic")
-}
-
-func TestManagerBoundControllerClaimsOnlyCanonicalLegacyCLIChat(t *testing.T) {
-	t.Parallel()
-
-	mgr, _, store := newTestManager(t)
-	ctx := context.Background()
-	root := t.TempDir()
-	workDir := filepath.Join(root, controllerapi.CoagentSystemProjectDir)
-	mgr.systemProject = workDir
-	projectID, err := store.GetOrCreateSystemProject(
-		ctx, workDir, controllerapi.CoagentSystemProjectName,
-	)
-	require.NoError(t, err)
-	legacy, err := mgr.sessionStore.CreateSession(ctx, projectID, "model", "", map[string]any{
-		"channel": controllerapi.BuiltinCLIManagerID,
-	})
-	require.NoError(t, err)
-	factory := newTestController(mgr, &config.Config{UnifiedConfig: &config.UnifiedConfig{
-		ProjectsRoot: root,
-	}}, nil, nil)
-	cliController := factory.ForManager(controllerapi.BuiltinCLIManagerID)
-	telegramController := factory.ForManager("telegram-main")
-
-	cliSessions, err := cliController.ListSessions(ctx)
-	require.NoError(t, err)
-	require.Len(t, cliSessions, 1)
-	telegramSessions, err := telegramController.ListSessions(ctx)
-	require.NoError(t, err)
-	assert.Empty(t, telegramSessions)
-
-	require.Error(t, telegramController.SetSessionAttributes(ctx, controllerapi.SessionSetAttributesData{
-		SessionID: legacy.ID, Attributes: legacy.Attributes,
-	}))
-	require.NoError(t, cliController.SetSessionAttributes(ctx, controllerapi.SessionSetAttributesData{
-		SessionID: legacy.ID, Attributes: legacy.Attributes,
-	}))
-	claimed, err := mgr.sessionStore.GetSession(ctx, legacy.ID)
-	require.NoError(t, err)
-	assert.Equal(t, controllerapi.BuiltinCLIManagerID, claimed.Attributes[controllerapi.SessionAttributeManagerID])
 }

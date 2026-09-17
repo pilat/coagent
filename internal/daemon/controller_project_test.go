@@ -139,64 +139,6 @@ func TestCreateProject_RejectsBadName(t *testing.T) {
 	require.Error(t, err)
 }
 
-func TestCreateProject_SystemIdentityUsesReservedNameAndDirectory(t *testing.T) {
-	ctx := context.Background()
-	mgr, store, _ := newProjectTestManager(t)
-	root := t.TempDir()
-	mgr.systemProject = filepath.Join(root, controllerapi.CoagentSystemProjectDir)
-	ctrl := newTestController(mgr, &config.Config{
-		UnifiedConfig: &config.UnifiedConfig{ProjectsRoot: root},
-	}, nil, nil).ForManager(controllerapi.BuiltinCLIManagerID)
-
-	res, err := ctrl.CreateProject(ctx, controllerapi.ProjectCreateData{
-		Name:   controllerapi.CoagentSystemProjectName,
-		System: true,
-	})
-	require.NoError(t, err)
-	assert.Equal(t, controllerapi.CoagentSystemProjectName, res.Name)
-	assert.Equal(t, filepath.Join(root, controllerapi.CoagentSystemProjectDir), res.Path)
-
-	stored, err := store.GetProjectName(ctx, res.ID)
-	require.NoError(t, err)
-	assert.Equal(t, controllerapi.CoagentSystemProjectName, stored)
-}
-
-func TestCreateSession_SystemProjectRequiresExplicitIdentity(t *testing.T) {
-	ctx := context.Background()
-	mgr, _, _ := newProjectTestManager(t)
-	root := t.TempDir()
-	mgr.systemProject = filepath.Join(root, controllerapi.CoagentSystemProjectDir)
-	ctrl := newTestController(mgr, &config.Config{
-		UnifiedConfig: &config.UnifiedConfig{ProjectsRoot: root},
-	}, nil, nil).ForManager(controllerapi.BuiltinCLIManagerID)
-
-	project, err := ctrl.CreateProject(ctx, controllerapi.ProjectCreateData{
-		Name:   controllerapi.CoagentSystemProjectName,
-		System: true,
-	})
-	require.NoError(t, err)
-
-	_, err = ctrl.CreateSession(ctx, controllerapi.SessionCreateData{WorkDir: project.Path})
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "reserved system project")
-
-	_, err = ctrl.CreateSession(ctx, controllerapi.SessionCreateData{
-		WorkDir:       project.Path,
-		SystemProject: controllerapi.CoagentSystemProjectName,
-	})
-	require.NoError(t, err)
-
-	roguePath := filepath.Join(t.TempDir(), controllerapi.CoagentSystemProjectDir)
-	require.NoError(t, os.MkdirAll(roguePath, 0o755))
-
-	_, err = ctrl.CreateSession(ctx, controllerapi.SessionCreateData{
-		WorkDir:       roguePath,
-		SystemProject: controllerapi.CoagentSystemProjectName,
-	})
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "canonical configuration directory")
-}
-
 func TestCreateSession_PersistsOnlyTheBoundManagerOwner(t *testing.T) {
 	ctx := context.Background()
 	mgr, _, _ := newProjectTestManager(t)
@@ -278,26 +220,6 @@ func TestListRecentProjects_ExcludesNestedProjects(t *testing.T) {
 
 	assert.Contains(t, ids, direct)
 	assert.NotContains(t, ids, nested, "only direct children of root are listed")
-}
-
-func TestListRecentProjects_ExcludesSystemProjects(t *testing.T) {
-	ctx := context.Background()
-	mgr, store, _ := newProjectTestManager(t)
-	root := t.TempDir()
-
-	userID, err := store.GetOrCreateProject(ctx, filepath.Join(root, "notes"))
-	require.NoError(t, err)
-	_, err = store.GetOrCreateSystemProject(
-		ctx,
-		filepath.Join(root, controllerapi.CoagentSystemProjectDir),
-		controllerapi.CoagentSystemProjectName,
-	)
-	require.NoError(t, err)
-
-	got, err := mgr.ListRecentProjects(ctx, root)
-	require.NoError(t, err)
-	require.Len(t, got, 1)
-	assert.Equal(t, userID, got[0].ID)
 }
 
 func TestListProjects_ReturnsIDNameWorkDir(t *testing.T) {

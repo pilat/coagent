@@ -513,7 +513,7 @@ func seedProjectTree(t *testing.T, db *sql.DB, projectID int64, node, workDir st
 	require.NoError(t, err)
 }
 
-func countRows(t *testing.T, db *sql.DB, table, where string) int {
+func countRows(t *testing.T, db *sql.DB, table, where string, args ...any) int {
 	t.Helper()
 
 	query := "SELECT COUNT(*) FROM " + table
@@ -522,7 +522,7 @@ func countRows(t *testing.T, db *sql.DB, table, where string) int {
 	}
 
 	var n int
-	require.NoError(t, db.QueryRowContext(context.Background(), query).Scan(&n))
+	require.NoError(t, db.QueryRowContext(context.Background(), query, args...).Scan(&n))
 
 	return n
 }
