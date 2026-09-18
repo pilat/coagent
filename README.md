@@ -38,14 +38,13 @@ credential values in `~/.coagent/secrets`, referenced from the config as
 `${VAR}`. Then install and start the daemon as a system service:
 
 ```bash
-./coagent daemon install   # the one step that needs sudo
-./coagent daemon start
-./coagent status           # exit code 0 means running
+./coagent install   # sets up and starts the service; auto-escalates via sudo
+./coagent status    # exit code 0 means running
 ```
 
 The binary stays user-owned under `~/.local/bin`, while the systemd unit or
 launchd plist runs it as your login user. Updating is a manual binary replace
-plus `coagent daemon restart`.
+plus `coagent restart`.
 
 For Telegram, create a private bot with BotFather, enable Threaded Mode, and
 disallow users from creating topics; send the bot `/start`, and give the manager
@@ -336,11 +335,11 @@ native injection — while configured MCP search tools coexist alongside it.
 
 ```text
 coagent                 print command usage
-coagent status          report daemon state (0 running, 2 not running, 1 error)
+coagent status          report daemon state
 coagent version         print the binary version
+coagent install         install and start the service
+coagent uninstall|start|stop|restart   manage the service
 coagent daemon          run in the foreground
-coagent daemon install  install and start the service
-coagent daemon uninstall|start|stop|restart
 ```
 
 Inside a Telegram session, `/status`, `/stop`, `/shieldsup`, `/shieldsdown`,

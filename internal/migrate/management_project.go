@@ -29,6 +29,12 @@ func migrateManagementProject(ctx context.Context, db *sql.DB) error {
 	}
 	defer func() { _ = tx.Rollback() }()
 
+	// sessions ⇄ messages is a foreign-key cycle, so no single delete order is
+	// valid mid-transaction; defer the checks to commit, where the graph is gone.
+	if _, err := tx.ExecContext(ctx, `PRAGMA defer_foreign_keys = ON`); err != nil {
+		return fmt.Errorf("defer foreign keys: %w", err)
+	}
+
 	if _, err := tx.ExecContext(
 		ctx,
 		`ALTER TABLE projects ADD COLUMN hidden BOOLEAN NOT NULL DEFAULT FALSE`,

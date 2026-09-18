@@ -124,4 +124,4 @@ pushes. All are gone. Any other method name answers:
 There are no compatibility no-ops: no supported client exists, and a silent
 no-op would conceal a stale caller instead of failing it (ADR-0060). There is
 nothing to fall back to — the operator edits `~/.coagent/config.yaml` and
-`~/.coagent/secrets` by hand and uses explicit `coagent daemon ...` commands.
+`~/.coagent/secrets` by hand and uses explicit `coagent ...` commands.

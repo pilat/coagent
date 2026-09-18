@@ -15,7 +15,7 @@ import (
 func TestSudoCommand(t *testing.T) {
 	cmd := sudoCommand(context.Background(), install.ActionInstall)
 
-	assert.Equal(t, []string{"sudo", selfExecPath, "daemon", "install"}, cmd.Args)
+	assert.Equal(t, []string{"sudo", selfExecPath, "install"}, cmd.Args)
 	assert.Equal(t, os.Stdin, cmd.Stdin)
 	assert.Equal(t, os.Stdout, cmd.Stdout)
 	assert.Equal(t, os.Stderr, cmd.Stderr)

@@ -45,7 +45,7 @@ VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 VERSION_PKG := github.com/pilat/coagent/internal/version
 GO_LDFLAGS := -X $(VERSION_PKG).Version=$(VERSION)
 
-# Service installation is `coagent daemon install`, not a target here: it runs on
+# Service installation is `coagent install`, not a target here: it runs on
 # the target machine and has to pick the unit scope and copy the binary itself.
 
 help:
