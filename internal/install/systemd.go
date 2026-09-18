@@ -115,7 +115,7 @@ func (m *systemdManager) Plan() Plan {
 		UnitPath:    m.unitPath,
 		BinaryPath:  m.binaryPath,
 		RunAsUser:   m.target.name,
-		Command:     "sudo coagent daemon install",
+		Command:     "coagent install",
 		NeedsRoot:   true,
 	}
 }

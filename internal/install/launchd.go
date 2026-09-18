@@ -129,7 +129,7 @@ func (m *launchdManager) Plan() Plan {
 		UnitPath:    m.plistPath,
 		BinaryPath:  m.binaryPath,
 		RunAsUser:   m.target.name,
-		Command:     "sudo coagent daemon install",
+		Command:     "coagent install",
 		NeedsRoot:   true,
 	}
 }

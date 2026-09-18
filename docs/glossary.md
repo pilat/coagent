@@ -480,7 +480,7 @@ The one install layout per platform ([ADR-0009](adr/0009-system-daemon-user-bina
 _Avoid_: install scope, user install, `--user` (there is no second mode — "scope" belongs to the MCP registry).
 
 **escalation gate**:
-`runDaemonVerb` — the single place that decides a `coagent daemon <verb>` needs root and re-execs itself under `sudo`. Everything below it is privilege-blind.
+`runDaemonVerb` — the single place that decides a `coagent <verb>` (install/uninstall/start/stop/restart) needs root and re-execs itself under `sudo`. Everything below it is privilege-blind.
 _Avoid_: sudo wrapper, privilege helper (nothing here is a persistent helper process).
 
 **unit drift**:

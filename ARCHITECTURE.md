@@ -709,7 +709,7 @@ restart operation ([ADR-0060](docs/adr/0060-telegram-service-topics-own-daemon-m
 
 Service installation uses the supported platform service mechanism while running
 the daemon as the login user from a user-owned binary. Lifecycle verbs are
-explicit `coagent daemon ...` commands; the config-apply restart is an
+explicit `coagent ...` commands; the config-apply restart is an
 in-process lifecycle signal that never crosses the socket.
 
 ## Configuration and product surfaces

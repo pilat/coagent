@@ -46,7 +46,7 @@ func NewRuntime(cfg *config.Config, controllers controllerapi.ManagerControllerF
 }
 
 // Start brings up every enabled manager. A failure is recorded and skipped
-// rather than fatal; repair the config by hand and `coagent daemon restart`.
+// rather than fatal; repair the config by hand and `coagent restart`.
 func (r *runtime) Start(ctx context.Context) error {
 	if r.cfg.UnifiedConfig == nil || len(r.cfg.UnifiedConfig.Managers) == 0 {
 		return nil

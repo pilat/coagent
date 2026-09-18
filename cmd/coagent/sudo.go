@@ -27,7 +27,7 @@ func runDaemonVerb(ctx context.Context, action string) int {
 // a machine whose owner declines sudo gets no daemon.
 func escalate(ctx context.Context, action string) int {
 	if err := sudoCommand(ctx, action).Run(); err != nil {
-		fmt.Fprintf(os.Stderr, "sudo coagent daemon %s: %v\nrun it yourself to see why\n", action, err)
+		fmt.Fprintf(os.Stderr, "sudo coagent %s: %v\nrun it yourself to see why\n", action, err)
 
 		return exitError
 	}
@@ -44,7 +44,7 @@ func shouldEscalate(action string) bool {
 func sudoCommand(ctx context.Context, action string) *exec.Cmd {
 	// Path captured at boot, verb one of needsRoot's constants — neither is input.
 	//nolint:gosec // G702: re-executing this same binary with a fixed verb
-	cmd := exec.CommandContext(ctx, "sudo", selfExecPath, "daemon", action)
+	cmd := exec.CommandContext(ctx, "sudo", selfExecPath, action)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
 
 	return cmd
