@@ -156,16 +156,18 @@ func TestScenario_CompactPublishesItsOrderedNoticeTrace(t *testing.T) {
 
 	require.True(t, hasSummaryRow(h.parentMessages(sessionID)))
 
-	// A second /compact finds only what the first one wrote, so it has nothing
-	// left to summarize — and must say so rather than silently doing nothing.
+	// The confirmation turn the completion check added after the first
+	// compact is a fresh raw group, so a second /compact summarizes it and
+	// reports success again; the "Nothing to compact" branch is covered by
+	// the loop-level compact command tests.
 	require.NoError(t, h.mgr.SendToSession(h.ctx, sessionID, "/compact"))
 	collector.waitFor(t, "second compaction reported", func(events []controllerapi.SessionNotification) bool {
-		return countPublishedMessage(events, sessionID, noticeNothingToCompact) == 1
+		return countPublishedMessage(events, sessionID, noticeCompacted) == 2
 	})
 	h.mgr.waitIdle(sessionID)
 
 	assert.Equal(t,
-		[]string{noticeCompacting, noticeCompacted, noticeCompacting, noticeNothingToCompact},
+		[]string{noticeCompacting, noticeCompacted, noticeCompacting, noticeCompacted},
 		compactionNotices(collector.snapshot(), sessionID),
 	)
 }

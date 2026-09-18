@@ -474,6 +474,25 @@ func TestOutputStore_MarkSessionKilledWithOutputCommitsBoth(t *testing.T) {
 	assertInputState(t, db, childInput.ID, InputStateCancelled)
 }
 
+func TestOutputStore_MarkSessionKilledClearsManagerReplyPending(t *testing.T) {
+	ctx := context.Background()
+	store, db, projectID := newTestStore(t)
+	record, err := store.CreateSession(ctx, projectID, "model", "", map[string]any{"manager_id": "alpha"})
+	require.NoError(t, err)
+
+	_, err = db.ExecContext(ctx, `UPDATE sessions SET manager_reply_pending = TRUE WHERE id = ?`, record.ID)
+	require.NoError(t, err)
+
+	output, err := store.MarkSessionKilledWithOutput(ctx, record.ID, 0)
+	require.NoError(t, err)
+	require.NotNil(t, output)
+
+	var replyPending bool
+	require.NoError(t, db.QueryRowContext(ctx,
+		`SELECT manager_reply_pending FROM sessions WHERE id = ?`, record.ID).Scan(&replyPending))
+	assert.False(t, replyPending, "a kill supersedes the owed manager reply")
+}
+
 func TestOutputStore_CreatesManagerRootWithLifecycleAndInitialInputAtomically(t *testing.T) {
 	ctx := context.Background()
 	store, db, projectID := newTestStore(t)

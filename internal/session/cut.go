@@ -131,12 +131,15 @@ const compactionRequestFraction = 0.5
 // native projection plus instruction and schemas fits the request bound,
 // while the verbatim tail keeps the minimum tail estimate. The request
 // estimate is not monotone in the split — a repair stub can exceed the real
-// result it replaces — so every candidate is measured exactly.
+// result it replaces — so every candidate is measured exactly. completionPin
+// is a transcript position no legal split may cross: the pending completion
+// candidate and its nudge stay verbatim tail rows.
 func selectCheckpointSplit(
 	messages []llmwire.Message,
 	cp checkpointPrefix,
 	requestBaseEstimate int,
 	window int,
+	completionPin int,
 ) (int, bool) {
 	base := cp.rawStart
 	if base >= len(messages) {
@@ -145,12 +148,20 @@ func selectCheckpointSplit(
 
 	minTail := minTailTokens(messages, base, window)
 
+	// The pinned pair's first row defines the hard tail boundary; before it
+	// sits the nudge, and past it nothing may summarize. A candidate at index
+	// 0 is outside every legal raw range, so pin=0 stays the unpinned marker.
+	tailCap := len(messages)
+	if completionPin > base {
+		tailCap = completionPin
+	}
+
 	// The 50% target is soft: the fallback rerun under the ordinary 85% input
 	// ceiling keeps mandatory request input from failing an otherwise legal cut.
 	for _, fraction := range []float64{compactionRequestFraction, llmwire.ContextInputFraction} {
 		for _, limit := range tailLevels() {
 			args := selectTailSplitArgs{
-				messages: messages, base: base, minTail: minTail,
+				messages: messages, base: base, minTail: minTail, tailCap: tailCap,
 				requestBaseEstimate: requestBaseEstimate, window: window, limit: limit, inputFraction: fraction,
 			}
 			if split, ok := selectTailSplit(args); ok {
@@ -168,6 +179,7 @@ type selectTailSplitArgs struct {
 	messages            []llmwire.Message
 	base                int
 	minTail             int
+	tailCap             int
 	requestBaseEstimate int
 	window              int
 	limit               tailLimit
@@ -177,11 +189,17 @@ type selectTailSplitArgs struct {
 // selectTailSplit scans from the largest head down, returning the first
 // candidate whose tail satisfies the staged limits, is a legal raw cut, and
 // whose native prefix plus instruction fits the bound. The loop starts at
-// len-1, not len: the split never summarizes the whole raw range.
+// len-1, not len: the split never summarizes the whole raw range. tailCap
+// bounds every split at or before the pinned completion rows.
 func selectTailSplit(args selectTailSplitArgs) (int, bool) {
 	bound := int(args.inputFraction * float64(args.window))
 
-	for split := len(args.messages) - 1; split > args.base; split-- {
+	split := len(args.messages) - 1
+	if args.tailCap > 0 && args.tailCap < split {
+		split = args.tailCap
+	}
+
+	for ; split > args.base; split-- {
 		if args.limit.floor && estimateTokens(args.messages[split:]) < args.minTail {
 			continue
 		}

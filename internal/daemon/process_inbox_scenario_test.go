@@ -91,7 +91,9 @@ func TestHarnessScenario_ProcessCompletionAtBusyToolBoundary(t *testing.T) {
 	assert.Equal(t, string(sessionstore.InputStateAccepted), state)
 	drainScenarioClaims(t, "process_busy_boundary.json", newChainController(t, h))
 	waitForIdleAfterMessage(t, collector, rootID, "busy process completion observed")
-	assert.Equal(t, int64(2), modelCalls.Load())
+	// The completion wake opened the two-phase check; the confirming stop
+	// adds one model call.
+	assert.Equal(t, int64(3), modelCalls.Load())
 	assertHarnessTrace(t, "process_busy_boundary.json", collector.snapshot(), rootID)
 }
 
@@ -201,7 +203,9 @@ func TestHarnessScenario_ProcessCompletionAtIdleTransition(t *testing.T) {
 	waitForVisibleMessage(t, collector, root.ID, "idle-transition completion observed")
 	drainScenarioClaims(t, "process_idle_transition.json", newChainController(t, h))
 	waitForIdleAfterMessage(t, collector, root.ID, "idle-transition completion observed")
-	assert.Equal(t, int64(1), modelCalls.Load())
+	// The confirmed stop costs a second model call; the completion wake itself
+	// opened the two-phase check with call one.
+	assert.Equal(t, int64(2), modelCalls.Load())
 	assertHarnessTrace(t, "process_idle_transition.json", collector.snapshot(), root.ID)
 }
 
@@ -233,13 +237,16 @@ func TestHarnessScenario_ProcessCompletionRevivesCompletedRoot(t *testing.T) {
 	drainScenarioClaims(t, "process_completed_root.json", newChainController(t, h))
 	waitForIdleAfterMessage(t, collector, root.ID, "idle process completion observed")
 
-	assert.Equal(t, int64(1), calls.Load())
+	// The wake's first stop is the hidden candidate; the confirmed second stop
+	// publishes the replaceable completion (rendered with its final footer) and
+	// releases the accepted input.
+	assert.Equal(t, int64(2), calls.Load())
 	assert.Equal(t, 1, countUserCompletions(h.parentMessages(root.ID), "<process_completion>"))
 	var persistent, replaceable, releasing int
 	require.NoError(t, h.db.QueryRowContext(h.ctx, `SELECT
-		COUNT(*) FILTER (WHERE type = 'message_persistent' AND content = 'idle process completion observed'),
-		COUNT(*) FILTER (WHERE type = 'message_replaceable' AND content = 'idle process completion observed'),
-		COUNT(*) FILTER (WHERE releases_input = 1 AND content = 'idle process completion observed')
+		COUNT(*) FILTER (WHERE type = 'message_persistent' AND content LIKE 'idle process completion observed%'),
+		COUNT(*) FILTER (WHERE type = 'message_replaceable' AND content LIKE 'idle process completion observed%'),
+		COUNT(*) FILTER (WHERE releases_input = 1 AND content LIKE 'idle process completion observed%')
 		FROM session_outbox WHERE session_id = ?`, root.ID).Scan(&persistent, &replaceable, &releasing))
 	assert.Zero(t, persistent, "process-only input must not create a manager direct reply")
 	assert.Equal(t, 1, replaceable)
@@ -284,7 +291,9 @@ func TestHarnessScenario_ProcessCompletionInterruptsSleep(t *testing.T) {
 	waitForIdleAfterMessage(t, collector, rootID, "process interrupted sleep")
 
 	messages := h.parentMessages(rootID)
-	assert.Equal(t, int64(2), modelCalls.Load())
+	// The completion wake's stop is the hidden candidate; the confirmation
+	// adds the second stop of the two-phase check.
+	assert.Equal(t, int64(3), modelCalls.Load())
 	assert.Equal(t, 1, countUserCompletions(messages, "<process_completion>"))
 	assert.Equal(t, 1, countToolResultsFor(messages, tool.IDSleep))
 	assert.Contains(t, lastToolResultContent(messages, tool.IDSleep), "Sleep interrupted")
@@ -359,7 +368,10 @@ func TestHarnessScenario_ProcessCompletionWaitsForForegroundChild(t *testing.T) 
 
 	messages := h.parentMessages(rootID)
 	assert.False(t, missingTaskResult.Load())
-	assert.Equal(t, int64(2), parentCalls.Load())
+	// The child's completion wake runs the two-phase check (two calls); the
+	// process completion arrives while the confirming call is still out and
+	// is answered by that same confirmation stop.
+	assert.Equal(t, int64(3), parentCalls.Load())
 	assert.Equal(t, 1, countToolResultsFor(messages, tool.IDTask))
 	assert.Equal(t, 1, countUserCompletions(messages, "<process_completion>"))
 	assertHarnessTrace(t, "process_waits_for_foreground.json", collector.snapshot(), rootID)
@@ -410,7 +422,9 @@ func TestHarnessScenario_ProcessCrashRestartDeliversInterruptedOnce(t *testing.T
 	final, err := second.mgr.processStore.GetProcess(second.ctx, process.ID)
 	require.NoError(t, err)
 	assert.Equal(t, backgroundprocess.StateInterrupted, final.State)
-	assert.Equal(t, int64(1), modelCalls.Load())
+	// The recovered wake opens the two-phase check; the confirmation call
+	// publishes the recovery answer.
+	assert.Equal(t, int64(2), modelCalls.Load())
 	var inputs int
 	require.NoError(t, second.db.QueryRowContext(second.ctx, `SELECT COUNT(*) FROM session_inbox
 		WHERE source = 'process' AND json_extract(attributes, '$.process_id') = ?`, process.ID).Scan(&inputs))
@@ -471,7 +485,9 @@ func TestHarnessScenario_ForegroundBashCrashRestartResolvesInterruptedCall(t *te
 	final, err := second.mgr.processStore.GetProcess(second.ctx, process.ID)
 	require.NoError(t, err)
 	assert.Equal(t, backgroundprocess.StateInterrupted, final.State)
-	assert.Equal(t, int64(1), modelCalls.Load())
+	// The recovered wake's stop opens the two-phase check; the confirmation
+	// call publishes the resolved answer.
+	assert.Equal(t, int64(2), modelCalls.Load())
 
 	var bashResults, readResults int
 	for _, message := range second.parentMessages(root.ID) {

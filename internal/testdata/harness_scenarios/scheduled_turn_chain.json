@@ -52,12 +52,12 @@
     },
     {
       "type": "message_persistent",
-      "content": "Hi there.\n\n🤖 `fake-model` · iteration 1\n⌚ <elapsed> · 💰 $0.0 total",
+      "content": "Hi there.\n\n🤖 `fake-model` · iteration 2",
       "attributes": {
         "manager_id": "telegram:main",
         "model_input_generation": 1
       },
-      "source_key": "message:2:final",
+      "source_key": "message:4:final",
       "model_input_generation": 1,
       "releases_input": true
     },
@@ -80,12 +80,12 @@
     },
     {
       "type": "message_replaceable",
-      "content": "Report ready.",
+      "content": "Report ready.\n\n🤖 `fake-model` · iteration 4",
       "attributes": {
         "manager_id": "telegram:main",
         "model_input_generation": 2
       },
-      "source_key": "message:5:progress",
+      "source_key": "message:9:final",
       "model_input_generation": 2,
       "previous_message_type": "message_persistent",
       "previous_model_input_generation": 2,

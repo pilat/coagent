@@ -80,6 +80,12 @@ func (s *store) CompleteExplicitStop(
 		return nil, fmt.Errorf("%w: session %d", ErrStopNotStopping, rootID)
 	}
 
+	// The terminal settlement supersedes the owed model reply.
+	if _, err := tx.ExecContext(ctx, `UPDATE sessions
+		SET manager_reply_pending = FALSE WHERE id = ? AND manager_reply_pending = TRUE`, rootID); err != nil {
+		return nil, fmt.Errorf("clear manager reply obligation for stop: %w", err)
+	}
+
 	owner, err := outputOwner(ctx, tx, rootID)
 	if err != nil {
 		return nil, err

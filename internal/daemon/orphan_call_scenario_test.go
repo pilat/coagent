@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/pilat/coagent/internal/llm"
+	"github.com/pilat/coagent/internal/llmwire"
 	"github.com/pilat/coagent/internal/sessionstore"
 	"github.com/pilat/coagent/internal/tool"
 )
@@ -111,8 +112,25 @@ func TestScenario_MessageQueuedBehindAnOrphanedTaskRunsAfterRecovery(t *testing.
 	configDir := newApplyConfigDir(t)
 
 	var seen modelRequests
+	// The child must stay parked, or its completion wakes the parent before
+	// the queued message is ever observed waiting behind the task.
+	childHeld := make(chan struct{})
+	heldRespond := func(system string, msgs []llmwire.Message) *llmwire.Response {
+		if !hasToolResultFor(msgs, tool.IDTask) && hasUserContaining(msgs, "do the thing") {
+			<-childHeld
+		}
 
-	first := newExternalCallDaemon(t, dbPath, configDir, seen.wrap(askForBlockingTaskRespond))
+		return askForBlockingTaskRespond(system, msgs)
+	}
+
+	first := newExternalCallDaemon(t, dbPath, configDir, seen.wrap(heldRespond))
+	defer func() {
+		select {
+		case <-childHeld:
+		default:
+			close(childHeld)
+		}
+	}()
 
 	sessionID, err := first.mgr.Send(
 		first.ctx, first.projectID, "do work then spawn", "fake-model", nil,

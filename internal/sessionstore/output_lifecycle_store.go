@@ -307,6 +307,12 @@ func (s *store) MarkSessionKilledWithOutput(
 		return nil, err
 	}
 
+	// A kill supersedes the owed manager reply on this session row even when
+	// a replacement inherits the manager surface.
+	if err := clearManagerReplyPendingTx(ctx, tx, sessionID, now); err != nil {
+		return nil, err
+	}
+
 	if err := cancelPendingInputTree(ctx, tx, sessionID, includeDescendants, now); err != nil {
 		return nil, err
 	}

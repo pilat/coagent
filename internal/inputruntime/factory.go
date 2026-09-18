@@ -14,6 +14,7 @@ type Store interface {
 	sessionstore.InboxStore
 	sessionstore.ActivationStore
 	sessionstore.CommandOutputStore
+	sessionstore.WakeSourceStore
 }
 
 // Factory creates one durable boundary per live session.

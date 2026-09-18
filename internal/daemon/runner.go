@@ -219,6 +219,9 @@ func (s *svc) finishRunnerLocked(
 		deliver = s.finalizeChildLocked(ctx, sessionID, shuttingDown, errored)
 	}
 
+	// The runner is already deregistered above, so the teardown reconcile
+	// observes no live loop and may publish idle for the latest releasing
+	// output. An ack arriving later re-runs readiness through the controller.
 	if !shuttingDown {
 		s.reconcileLatestReadiness(ctx, sessionID)
 	}
@@ -1142,8 +1145,13 @@ func (s *svc) openSession(
 		TodoItems:       rec.TodoItems,
 		LastActivityAt:  rec.UpdatedAt,
 		ContextBaseline: rec.ContextBaseline(),
-		RepoRoot:        repoRoot,
-		ShieldsUp:       rec.ShieldsUp,
+		ResumeCompletionState: &sessionstore.CompletionCheckState{
+			CandidateID:         rec.CompletionCheckCandidateID,
+			ManagerReplyPending: rec.ManagerReplyPending,
+			EmptyStopStreak:     rec.EmptyStopStreak,
+		},
+		RepoRoot:  repoRoot,
+		ShieldsUp: rec.ShieldsUp,
 		ObserveProcessPolicy: func(key string) {
 			s.recordProcessPolicy(sessionID, key)
 		},

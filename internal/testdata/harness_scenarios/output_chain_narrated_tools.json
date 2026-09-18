@@ -111,12 +111,12 @@
     },
     {
       "type": "message_persistent",
-      "content": "All done.\n\n🤖 `fake-model` · iteration 3\n⌚ <elapsed> · 💰 $0.0 total",
+      "content": "All done.\n\n🤖 `fake-model` · iteration 4",
       "attributes": {
         "manager_id": "telegram:main",
         "model_input_generation": 1
       },
-      "source_key": "message:6:final",
+      "source_key": "message:8:final",
       "model_input_generation": 1,
       "previous_message_type": "message_replaceable",
       "previous_model_input_generation": 1,

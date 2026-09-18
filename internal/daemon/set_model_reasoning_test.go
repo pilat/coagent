@@ -33,8 +33,10 @@ func TestSetModelRecordsTheEffortTheNextRunSends(t *testing.T) {
 
 	id, err := h.mgr.Send(h.ctx, h.projectID, "first", "plain-model", nil)
 	require.NoError(t, err)
+	// The two-phase check spends a hidden candidate and a confirmation, both
+	// "answer N" from the stub, so one visible turn is two assistant rows.
 	h.waitUntil("first turn answered", func() bool {
-		return countAssistantReplies(h.parentMessages(id)) == 1
+		return countAssistantReplies(h.parentMessages(id)) == 2
 	})
 	h.mgr.waitIdle(id)
 
@@ -47,16 +49,17 @@ func TestSetModelRecordsTheEffortTheNextRunSends(t *testing.T) {
 
 	require.NoError(t, h.mgr.SendToSession(h.ctx, id, "second"))
 	h.waitUntil("second turn answered", func() bool {
-		return countAssistantReplies(h.parentMessages(id)) == 2
+		return countAssistantReplies(h.parentMessages(id)) == 4
 	})
+	h.mgr.waitIdle(id)
 
 	reqs := provider.snapshot()
-	require.Len(t, reqs, 2)
+	require.Len(t, reqs, 4)
 	assert.Equal(t, "plain-model", reqs[0].model)
 	assert.Empty(t, reqs[0].effort, "a model with no effort selector carries none")
 
-	assert.Equal(t, "thinker", reqs[1].model)
-	assert.Equal(t, "high", reqs[1].effort,
+	assert.Equal(t, "thinker", reqs[2].model)
+	assert.Equal(t, "high", reqs[2].effort,
 		"the run recreated from the record must ask for the level the switch settled on")
 }
 

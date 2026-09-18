@@ -34,8 +34,10 @@ func TestSpawnSettlesTheChildEffortOnTheChildModel(t *testing.T) {
 
 	parentID, err := h.mgr.Send(h.ctx, h.projectID, "parent work", "parent-model", nil)
 	require.NoError(t, err)
+	// The two-phase check spends a hidden candidate and a confirmation, both
+	// "done" from the stub, so one visible turn is two assistant rows.
 	h.waitUntil("parent answered", func() bool {
-		return countAssistantReplies(h.parentMessages(parentID)) == 1
+		return countAssistantReplies(h.parentMessages(parentID)) == 2
 	})
 	h.mgr.waitIdle(parentID)
 

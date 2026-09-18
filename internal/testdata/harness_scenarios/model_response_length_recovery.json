@@ -36,12 +36,12 @@
     },
     {
       "type": "message_persistent",
-      "content": "recovered complete answer\n\n🤖 `fake-model` · iteration 2\n⌚ <elapsed> · 💰 $0.5 total",
+      "content": "recovered complete answer\n\n🤖 `fake-model` · iteration 3\n💰 $0.5 total",
       "attributes": {
         "manager_id": "telegram:main",
         "model_input_generation": 1
       },
-      "source_key": "message:4:final",
+      "source_key": "message:6:final",
       "model_input_generation": 1,
       "releases_input": true
     }

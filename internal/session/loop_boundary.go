@@ -317,7 +317,7 @@ func (r *loopRunner) handleBoundaryCommand(ctx context.Context, input PendingInp
 	case input.ManagerOwned && (trimmed == shieldsUpCommand || trimmed == shieldsDownCommand):
 		return commandDeferred, nil
 	case trimmed == "/status":
-		if r.nothingToAnswer() {
+		if r.nothingToAnswer() || r.completionNudgePending(ctx) {
 			r.handledControl = true
 		}
 
@@ -339,7 +339,7 @@ func (r *loopRunner) handleBoundaryCommand(ctx context.Context, input PendingInp
 
 		return commandConsumed, nil
 	case trimmed == "/help":
-		if r.nothingToAnswer() {
+		if r.nothingToAnswer() || r.completionNudgePending(ctx) {
 			r.handledControl = true
 		}
 

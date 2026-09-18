@@ -73,6 +73,8 @@ func (g *terminalBudgetGate) PersistCompaction(
 	return nil, false, nil
 }
 
+func (g *terminalBudgetGate) BudgetFired(*sessionstore.BudgetRecord) {}
+
 // TestRunLoopResolvesPendingGrantOnEveryTerminalExit pins plan decision 21:
 // no terminal path may leave a pending activation grant behind, because a
 // pending grant blocks the durable inbox FIFO for every later user input.

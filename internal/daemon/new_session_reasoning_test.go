@@ -17,8 +17,10 @@ func TestNewSessionSettlesTheEffortOnItsModel(t *testing.T) {
 
 	id, err := h.mgr.Send(h.ctx, h.projectID, "work", "parent-model", nil)
 	require.NoError(t, err)
+	// The two-phase check spends a hidden candidate and a confirmation, both
+	// "done" from the stub, so one visible turn is two assistant rows.
 	h.waitUntil("answered", func() bool {
-		return countAssistantReplies(h.parentMessages(id)) == 1
+		return countAssistantReplies(h.parentMessages(id)) == 2
 	})
 	h.mgr.waitIdle(id)
 

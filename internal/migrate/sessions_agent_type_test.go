@@ -85,6 +85,14 @@ func TestMigrate_SessionsAgentTypeRebuildPreservesExistingDB(t *testing.T) {
 		delete(rowsAfter[i], "context_baseline_message_count")
 		assert.Equal(t, "0", rowsAfter[i]["shields_up"].String)
 		delete(rowsAfter[i], "shields_up")
+		// 00042 adds durable completion-check state; legacy rows carry no
+		// pending candidate, no reply obligation, and a zero empty streak.
+		assert.False(t, rowsAfter[i]["completion_check_candidate_id"].Valid)
+		delete(rowsAfter[i], "completion_check_candidate_id")
+		assert.Equal(t, "0", rowsAfter[i]["manager_reply_pending"].String)
+		delete(rowsAfter[i], "manager_reply_pending")
+		assert.Equal(t, "0", rowsAfter[i]["empty_stop_streak"].String)
+		delete(rowsAfter[i], "empty_stop_streak")
 	}
 
 	// Legacy NULLs get 00021's rule; every other row is byte-for-byte identical.

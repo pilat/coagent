@@ -115,7 +115,7 @@ func TestSelectCheckpointSplitNeverSummarizesWholeShortHistory(t *testing.T) {
 
 	const window = 80_000
 
-	split, ok := selectCheckpointSplit(messages, checkpointPrefix{rawStart: 0}, 0, window)
+	split, ok := selectCheckpointSplit(messages, checkpointPrefix{rawStart: 0}, 0, window, 0)
 	require.True(t, ok)
 	assert.Less(t, split, len(messages), "the tail is never empty")
 	assert.Positive(t, split)
@@ -144,7 +144,7 @@ func TestSelectCheckpointSplitImageTailCeiling(t *testing.T) {
 		)
 	}
 
-	split, ok := selectCheckpointSplit(messages, checkpointPrefix{rawStart: 0}, 0, window)
+	split, ok := selectCheckpointSplit(messages, checkpointPrefix{rawStart: 0}, 0, window, 0)
 	require.True(t, ok)
 
 	tail := messages[split:]

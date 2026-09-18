@@ -73,6 +73,14 @@ func (g *sessionBudgetGate) PersistResponse(
 	return result.MessageID, result.Fired, result.ReplyPublished, nil
 }
 
+// BudgetFired routes a disposition-committed budget verdict to the same park
+// scheduler the legacy PersistResponse path uses.
+func (g *sessionBudgetGate) BudgetFired(record *sessionstore.BudgetRecord) {
+	if record != nil && record.ParkPhase == budgetParkRequested {
+		g.daemon.startBudgetPark(record)
+	}
+}
+
 func (g *sessionBudgetGate) PersistRejectedResponse(
 	ctx context.Context,
 	rejection sessionstore.RejectedResponse,
@@ -232,40 +240,14 @@ func (s *svc) retainBudgetForBackground(ctx context.Context, rootID int64) (bool
 	return retained, nil
 }
 
-//nolint:wsl_v5 // Ledger-first ordering is the producer-to-inbox race closure.
+// hasBackgroundObligation shares the ledger-first wake-source predicate at
+// root-tree scope: budget retention must not release while any tree session
+// could still deliver model-bound input.
 func (s *svc) hasBackgroundObligation(ctx context.Context, rootID int64) (bool, error) {
-	if s.processStore != nil {
-		processes, err := s.processStore.ListRunningByRoot(ctx, rootID)
-		if err != nil {
-			return false, fmt.Errorf("list running processes: %w", err)
-		}
-		for _, process := range processes {
-			if process.AdvertisedAt != nil {
-				return true, nil
-			}
-		}
+	obligations, ok := s.sessionStore.(sessionstore.BackgroundObligationStore)
+	if !ok {
+		return false, errors.New("background obligation projection unavailable")
 	}
 
-	ids, err := s.sessionSubtreeIDs(ctx, rootID)
-	if err != nil {
-		return false, err
-	}
-	for _, sessionID := range ids {
-		links, err := s.links.ListPendingChildLinks(ctx, sessionID)
-		if err != nil {
-			return false, fmt.Errorf("list pending child links for %d: %w", sessionID, err)
-		}
-		for _, link := range links {
-			if !link.Blocking {
-				return true, nil
-			}
-		}
-	}
-
-	pending, err := s.inboxStore.HasPendingAsyncInputByRoot(ctx, rootID)
-	if err != nil {
-		return false, err
-	}
-
-	return pending, nil
+	return obligations.HasBackgroundObligationByRoot(ctx, rootID)
 }

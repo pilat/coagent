@@ -133,13 +133,17 @@ func TestHarnessScenario_WorkingMainModelRefreshesProgressEveryThirtySeconds(t *
 func TestHarnessScenario_ReactivatedEpisodeGetsFullMainModelInterval(t *testing.T) {
 	release := make(chan struct{})
 	enteredSecond := make(chan struct{})
+	secondOnce := sync.Once{}
 	var calls atomic.Int64
 	h := newSubagentHarnessWith(t, func(_ string, _ []llmwire.Message) *llmwire.Response {
-		if calls.Add(1) == 1 {
+		// Episodes one and two each spend a candidate call and a confirming
+		// call; only episode two's first call arms the progress probe.
+		switch calls.Add(1) {
+		case 1, 2:
 			return &llmwire.Response{Text: "old final"}
 		}
 
-		close(enteredSecond)
+		secondOnce.Do(func() { close(enteredSecond) })
 		<-release
 
 		return &llmwire.Response{Text: "new final"}
@@ -185,8 +189,9 @@ func TestHarnessScenario_ReactivatedEpisodeGetsFullMainModelInterval(t *testing.
 func TestHarnessScenario_EmptyRootStartsEpisodeWithFirstInput(t *testing.T) {
 	release := make(chan struct{})
 	entered := make(chan struct{})
+	enteredOnce := sync.Once{}
 	h := newSubagentHarnessWith(t, func(_ string, _ []llmwire.Message) *llmwire.Response {
-		close(entered)
+		enteredOnce.Do(func() { close(entered) })
 		<-release
 
 		return &llmwire.Response{Text: "done"}

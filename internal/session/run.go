@@ -86,20 +86,8 @@ func (s *svc) run(ctx context.Context, prompt string) (*loopResult, error) {
 	}
 
 	s.activationIndex = activationIndex
-	if boundary, ok := s.boundary.(activationStateBoundary); ok {
-		grant, loadErr := boundary.PendingActivation(ctx)
-		if loadErr != nil {
-			return nil, fmt.Errorf("load pending activation: %w", loadErr)
-		}
-
-		if grant != nil && grant.ToolCallID != "" {
-			pending := unresolvedToolCalls(s.ms.getMessages())
-			if pending[grant.ToolCallID] != grant.ToolID {
-				grant = nil
-			}
-		}
-
-		s.currentActivation = grant
+	if err := s.loadPendingActivation(ctx); err != nil {
+		return nil, err
 	}
 
 	if err := s.prepareRunMessages(ctx, prompt); err != nil {
@@ -138,6 +126,13 @@ func (s *svc) run(ctx context.Context, prompt string) (*loopResult, error) {
 		return result, err
 	}
 
+	// A terminal-committed disposition (integrity error or wake-projection
+	// failure) already persisted the durable terminal status and iteration;
+	// writing completed/suspended here would override the committed outcome.
+	if result.TerminalStateCommitted {
+		return result, nil
+	}
+
 	finalStatus := sessionstore.SessionStatusCompleted
 	if result.Suspended {
 		finalStatus = sessionstore.SessionStatusSuspended
@@ -154,6 +149,31 @@ func (s *svc) run(ctx context.Context, prompt string) (*loopResult, error) {
 	}
 
 	return result, nil
+}
+
+// loadPendingActivation adopts a persisted activation grant whose tool call is
+// still unresolved in the transcript; a mismatched grant is discarded.
+func (s *svc) loadPendingActivation(ctx context.Context) error {
+	boundary, ok := s.boundary.(activationStateBoundary)
+	if !ok {
+		return nil
+	}
+
+	grant, err := boundary.PendingActivation(ctx)
+	if err != nil {
+		return fmt.Errorf("load pending activation: %w", err)
+	}
+
+	if grant != nil && grant.ToolCallID != "" {
+		pending := unresolvedToolCalls(s.ms.getMessages())
+		if pending[grant.ToolCallID] != grant.ToolID {
+			grant = nil
+		}
+	}
+
+	s.currentActivation = grant
+
+	return nil
 }
 
 func (s *svc) afterIteration(

@@ -508,6 +508,10 @@ func startCore(
 	curatedStore := memory.NewCuratedStore(db)
 	linkStore := subagent.NewStore(db)
 	subagentTx := subagent.NewTransactions(db)
+	subagent.SetCompletionCheckInvalidator(
+		subagentTx, sessionstore.InvalidateCompletionCheckTx,
+	)
+
 	budgetSvc := budget.New(sessionStore)
 	mcpRegistry := mcpstore.NewStore(db)
 

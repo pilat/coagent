@@ -96,6 +96,13 @@ func (s *store) insertToolNotificationPairOnce(
 		return 0, 0, false, fmt.Errorf("insert idempotent tool result: %w", err)
 	}
 
+	// Both scheduled and internal synthetic results are model-visible input:
+	// they invalidate a stale completion check in the same commit. Scheduled
+	// turns additionally advance the generation and announce to the manager.
+	if err := invalidateCompletionCheckTx(ctx, tx, sessionID); err != nil {
+		return 0, 0, false, err
+	}
+
 	if effects == scheduledTurnEffects {
 		if err := advanceModelInputGeneration(ctx, tx, sessionID, resultID); err != nil {
 			return 0, 0, false, err
@@ -174,25 +181,15 @@ func (s *store) resetSessionContextTx(
 		ids[i] = id
 	}
 
-	result, err := tx.ExecContext(
-		ctx,
-		`UPDATE sessions SET todo_items = '[]' WHERE id = ?`,
-		sessionID,
-	)
-	if err != nil {
-		return nil, false, fmt.Errorf("clear context-derived session state: %w", err)
-	}
-
-	rows, err := result.RowsAffected()
-	if err != nil {
-		return nil, false, fmt.Errorf("context reset session rows affected: %w", err)
-	}
-
-	if rows != 1 {
-		return nil, false, fmt.Errorf("session %d not found during context reset", sessionID)
+	if err := clearContextDerivedSessionState(ctx, tx, sessionID); err != nil {
+		return nil, false, err
 	}
 
 	if err := advanceModelInputGeneration(ctx, tx, sessionID, ids[len(ids)-1]); err != nil {
+		return nil, false, err
+	}
+
+	if err := invalidateCompletionCheckTx(ctx, tx, sessionID); err != nil {
 		return nil, false, err
 	}
 
@@ -205,6 +202,26 @@ func (s *store) resetSessionContextTx(
 	}
 
 	return ids, true, nil
+}
+
+// clearContextDerivedSessionState resets the todo projection the previous
+// episode left behind; a reset context must not inherit its stale items.
+func clearContextDerivedSessionState(ctx context.Context, tx *sql.Tx, sessionID int64) error {
+	result, err := tx.ExecContext(ctx, `UPDATE sessions SET todo_items = '[]' WHERE id = ?`, sessionID)
+	if err != nil {
+		return fmt.Errorf("clear context-derived session state: %w", err)
+	}
+
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("context reset session rows affected: %w", err)
+	}
+
+	if rows != 1 {
+		return fmt.Errorf("session %d not found during context reset", sessionID)
+	}
+
+	return nil
 }
 
 func startScheduledEpisode(ctx context.Context, tx *sql.Tx, sessionID int64) error {

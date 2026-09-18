@@ -130,7 +130,11 @@ func TestMigrationsApplyToAnExistingDatabase(t *testing.T) {
 		// 00040 added the hidden-project flag; 00041 added the management-root index.
 		`ALTER TABLE projects DROP COLUMN hidden`,
 		`DROP INDEX IF EXISTS idx_sessions_management_root`,
-		`DELETE FROM goose_db_version WHERE version_id BETWEEN 16 AND 41`,
+		// 00042 added durable completion-check state to sessions.
+		`ALTER TABLE sessions DROP COLUMN completion_check_candidate_id`,
+		`ALTER TABLE sessions DROP COLUMN manager_reply_pending`,
+		`ALTER TABLE sessions DROP COLUMN empty_stop_streak`,
+		`DELETE FROM goose_db_version WHERE version_id BETWEEN 16 AND 42`,
 	} {
 		_, err = db.ExecContext(ctx, stmt)
 		require.NoError(t, err, stmt)

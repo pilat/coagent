@@ -96,6 +96,12 @@ func TestMigrate_FreshDB(t *testing.T) {
 		"messages.rejected_reason must exist")
 	assert.True(t, columnExists(t, db, "messages", "retry_of_message_id"),
 		"messages.retry_of_message_id must exist")
+	assert.True(t, columnExists(t, db, "sessions", "completion_check_candidate_id"),
+		"sessions.completion_check_candidate_id must exist")
+	assert.True(t, columnExists(t, db, "sessions", "manager_reply_pending"),
+		"sessions.manager_reply_pending must exist")
+	assert.True(t, columnExists(t, db, "sessions", "empty_stop_streak"),
+		"sessions.empty_stop_streak must exist")
 }
 
 func TestMigrate_MessageFinishIntegrityPreservesLegacyRowsAndEnforcesShape(t *testing.T) {

@@ -11,6 +11,7 @@ import (
 	"github.com/pilat/coagent/internal/llmwire"
 	"github.com/pilat/coagent/internal/loader"
 	"github.com/pilat/coagent/internal/registry"
+	"github.com/pilat/coagent/internal/sessionstore"
 	"github.com/pilat/coagent/internal/todo"
 )
 
@@ -112,37 +113,39 @@ func (f *factory) build(
 	}
 
 	p := params{
-		Config:      cfg,
-		LLMClient:   llmClient,
-		TodoStore:   todoSvc,
-		Loader:      ldr,
-		Stack:       stack,
-		Registry:    reg,
-		Store:       f.store,
-		OutputStore: f.outputStore,
-		GitClient:   f.gitClient,
-		MemoryStore: f.memoryStore,
+		Config:       cfg,
+		LLMClient:    llmClient,
+		TodoStore:    todoSvc,
+		Loader:       ldr,
+		Stack:        stack,
+		Registry:     reg,
+		Store:        f.store,
+		OutputStore:  f.outputStore,
+		Dispositions: dispositionsStore(f.store),
+		GitClient:    f.gitClient,
+		MemoryStore:  f.memoryStore,
 	}
 
 	sessOpts := options{
-		ID:              opts.ID,
-		AgentType:       registry.AgentType(opts.AgentType),
-		ProjectID:       opts.ProjectID,
-		RootID:          opts.RootID,
-		ReasoningLevel:  opts.ReasoningLevel,
-		ResumeMessages:  resumeMessages,
-		ResumeRowIDs:    resumeRowIDs,
-		ResumeIteration: opts.Iteration,
-		ResumeTodoItems: todoItems,
-		LastActivityAt:  opts.LastActivityAt,
-		InputBoundary:   opts.InputBoundary,
-		OutputEnabled:   opts.OutputEnabled,
-		BudgetGate:      opts.BudgetGate,
-		SettlementOpen:  opts.SettlementOpen,
-		PreserveStopped: opts.PreserveStoppedStatus,
-		ActiveSubagents: opts.ActiveSubagents,
-		ActiveProcesses: opts.ActiveProcesses,
-		ContextBaseline: opts.ContextBaseline,
+		ID:                    opts.ID,
+		AgentType:             registry.AgentType(opts.AgentType),
+		ProjectID:             opts.ProjectID,
+		RootID:                opts.RootID,
+		ReasoningLevel:        opts.ReasoningLevel,
+		ResumeMessages:        resumeMessages,
+		ResumeRowIDs:          resumeRowIDs,
+		ResumeIteration:       opts.Iteration,
+		ResumeTodoItems:       todoItems,
+		LastActivityAt:        opts.LastActivityAt,
+		InputBoundary:         opts.InputBoundary,
+		OutputEnabled:         opts.OutputEnabled,
+		BudgetGate:            opts.BudgetGate,
+		SettlementOpen:        opts.SettlementOpen,
+		PreserveStopped:       opts.PreserveStoppedStatus,
+		ActiveSubagents:       opts.ActiveSubagents,
+		ActiveProcesses:       opts.ActiveProcesses,
+		ContextBaseline:       opts.ContextBaseline,
+		ResumeCompletionState: opts.ResumeCompletionState,
 
 		ActiveSubagentsProvider:  opts.ActiveSubagentsProvider,
 		ActiveProcessesProvider:  opts.ActiveProcessesProvider,
@@ -168,4 +171,18 @@ func observeProcessPolicy(observe func(string), key string) {
 	if observe != nil {
 		observe(key)
 	}
+}
+
+// dispositionsStore projects the response-disposition capability off the
+// runtime store; nil store keeps the loop on its in-memory test paths.
+func dispositionsStore(store sessionstore.RuntimeStore) sessionstore.ResponseDispositionStore {
+	if store == nil {
+		return nil
+	}
+
+	if d, ok := store.(sessionstore.ResponseDispositionStore); ok {
+		return d
+	}
+
+	return nil
 }

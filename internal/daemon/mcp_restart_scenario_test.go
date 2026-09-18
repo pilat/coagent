@@ -41,20 +41,25 @@ func TestScenario_MCPDisablePersistsAcrossDaemonRestart(t *testing.T) {
 	first := newMCPRestartHarness(t, dbPath, workDir, respond)
 	sessionID, err := first.mgr.Send(first.ctx, first.projectID, "register the fake server", "fake-model", nil)
 	require.NoError(t, err)
+	// waitIdle, not just the text: the candidate stop carries the same text as
+	// the confirmation, and the next input must not race the pending check.
 	first.waitUntil("registration finishes", func() bool {
 		return lastAssistantTextDTO(first.parentMessages(sessionID)) == "registered"
 	})
+	first.mgr.waitIdle(sessionID)
 
 	require.NoError(t, first.mgr.SendToSession(first.ctx, sessionID, "USE_IT now"))
 	first.waitUntil("pooled call finishes", func() bool {
 		return lastAssistantTextDTO(first.parentMessages(sessionID)) == "used before restart"
 	})
+	first.mgr.waitIdle(sessionID)
 	assert.Equal(t, 1, fake.count(t, "spawn"))
 
 	require.NoError(t, first.mgr.SendToSession(first.ctx, sessionID, "DISABLE_IT now"))
 	first.waitUntil("disable finishes", func() bool {
 		return lastAssistantTextDTO(first.parentMessages(sessionID)) == "disabled"
 	})
+	first.mgr.waitIdle(sessionID)
 	defs, err := first.registry.ListForProject(first.ctx, first.projectID)
 	require.NoError(t, err)
 	assert.Empty(t, defs, "the disabled row is absent from the session's enabled projection")
@@ -66,6 +71,7 @@ func TestScenario_MCPDisablePersistsAcrossDaemonRestart(t *testing.T) {
 	second.waitUntil("post-restart run finishes", func() bool {
 		return lastAssistantTextDTO(second.parentMessages(sessionID)) == "used after restart"
 	})
+	second.mgr.waitIdle(sessionID)
 
 	messages := second.parentMessages(sessionID)
 	require.NoError(t, llm.ValidateToolPairing(messages))
@@ -114,21 +120,25 @@ func TestScenario_MCPRemoveEvictsPooledProcessBeforeTheNextRun(t *testing.T) {
 	h.waitUntil("registration finishes", func() bool {
 		return lastAssistantTextDTO(h.parentMessages(sessionID)) == "registered"
 	})
+	h.mgr.waitIdle(sessionID)
 	require.NoError(t, h.mgr.SendToSession(h.ctx, sessionID, "USE_IT now"))
 	h.waitUntil("pooled call finishes", func() bool {
 		return lastAssistantTextDTO(h.parentMessages(sessionID)) == "used before remove"
 	})
+	h.mgr.waitIdle(sessionID)
 	assert.Equal(t, 1, fake.count(t, "spawn"))
 
 	require.NoError(t, h.mgr.SendToSession(h.ctx, sessionID, "REMOVE_IT now"))
 	h.waitUntil("removal finishes", func() bool {
 		return lastAssistantTextDTO(h.parentMessages(sessionID)) == "removed"
 	})
+	h.mgr.waitIdle(sessionID)
 	fake.waitForExit(t)
 	require.NoError(t, h.mgr.SendToSession(h.ctx, sessionID, "USE_AFTER_REMOVE now"))
 	h.waitUntil("post-removal run finishes", func() bool {
 		return lastAssistantTextDTO(h.parentMessages(sessionID)) == "used after remove"
 	})
+	h.mgr.waitIdle(sessionID)
 
 	messages := h.parentMessages(sessionID)
 	require.NoError(t, llm.ValidateToolPairing(messages))

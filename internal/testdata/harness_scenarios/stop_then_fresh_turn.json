@@ -87,12 +87,12 @@
     },
     {
       "type": "message_persistent",
-      "content": "Working on it, done for now.\n\n🤖 `fake-model` · iteration 2\n⌚ <elapsed> · 💰 $0.0 total",
+      "content": "Working on it, done for now.\n\n🤖 `fake-model` · iteration 3",
       "attributes": {
         "manager_id": "telegram:main",
         "model_input_generation": 1
       },
-      "source_key": "message:4:final",
+      "source_key": "message:6:final",
       "model_input_generation": 1,
       "previous_message_type": "message_replaceable",
       "previous_model_input_generation": 1,
@@ -135,12 +135,12 @@
     },
     {
       "type": "message_persistent",
-      "content": "Resumed and done.\n\n🤖 `fake-model` · iteration 3\n⌚ <elapsed> · 💰 $0.0 total",
+      "content": "Resumed and done.\n\n🤖 `fake-model` · iteration 5",
       "attributes": {
         "manager_id": "telegram:main",
         "model_input_generation": 2
       },
-      "source_key": "message:6:final",
+      "source_key": "message:10:final",
       "model_input_generation": 2,
       "previous_message_type": "message_persistent",
       "previous_model_input_generation": 1,

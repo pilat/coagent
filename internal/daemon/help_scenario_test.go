@@ -51,6 +51,9 @@ func TestHarnessScenario_HelpIncludesGWT(t *testing.T) {
 	drainScenarioClaims(t, "help_includes_gwt.json", controller)
 	waitForIdleAfterMessage(t, collector, sessionID, helpWithGWT)
 
-	assert.Equal(t, int64(1), modelCalls.Load(), "/help must not invoke the model")
+	// The opening turn runs the two-phase check: candidate response, then the
+	// confirmation call after the host nudge. /help itself must not invoke
+	// the model.
+	assert.Equal(t, int64(2), modelCalls.Load(), "/help must not invoke the model")
 	assertHarnessTrace(t, "help_includes_gwt.json", collector.snapshot(), sessionID)
 }

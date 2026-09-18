@@ -8,6 +8,7 @@ type AgentRuntimeStore interface {
 	RuntimeStore
 	BudgetResponseStore
 	BudgetCompactionStore
+	ResponseDispositionStore
 	FileReadStore
 }
 

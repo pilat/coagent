@@ -77,6 +77,10 @@ type CreateOptions struct {
 	// resume; nil when the previous run never measured.
 	ContextBaseline *sessionstore.ContextBaseline
 
+	// ResumeCompletionState carries the durable completion projection back in:
+	// pending candidate, manager-reply obligation, and empty-stop streak.
+	ResumeCompletionState *sessionstore.CompletionCheckState
+
 	// CompactionDeferAnnounced carries the previous run's verdict back in: the
 	// human is told once that a queued /compact is waiting, not once per wake.
 	CompactionDeferAnnounced bool

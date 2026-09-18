@@ -40,8 +40,10 @@ func TestSetModelUnknownModelNeverReachesTheRecord(t *testing.T) {
 
 	id, err := h.mgr.Send(h.ctx, h.projectID, "first", "fake-model", nil)
 	require.NoError(t, err)
+	// The no-wake two-phase check finishes one turn as two assistant rows: the
+	// hidden candidate plus the confirmation, both "done" from the stub.
 	h.waitUntil("first turn answered", func() bool {
-		return countAssistantReplies(h.parentMessages(id)) == 1
+		return countAssistantReplies(h.parentMessages(id)) == 2
 	})
 	h.mgr.waitIdle(id)
 
@@ -55,11 +57,11 @@ func TestSetModelUnknownModelNeverReachesTheRecord(t *testing.T) {
 
 	require.NoError(t, h.mgr.SendToSession(h.ctx, id, "second"))
 	h.waitUntil("second turn settled", func() bool {
-		return countAssistantReplies(h.parentMessages(id)) == 2 || hasSessionErrorNotice(events.snapshot())
+		return countAssistantReplies(h.parentMessages(id)) == 4 || hasSessionErrorNotice(events.snapshot())
 	})
 
 	assert.False(t, hasSessionErrorNotice(events.snapshot()), "the session must still be resumable")
-	assert.Equal(t, 2, countAssistantReplies(h.parentMessages(id)))
+	assert.Equal(t, 4, countAssistantReplies(h.parentMessages(id)))
 }
 
 // TestSetModelLiveRefusalDoesNotPersist covers the running-loop branch: the live

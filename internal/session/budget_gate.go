@@ -29,4 +29,8 @@ type BudgetGate interface {
 		ctx context.Context,
 		compaction sessionstore.BudgetedCompaction,
 	) (messageIDs []int64, fired bool, err error)
+	// BudgetFired schedules the host park for a budget the response
+	// transaction itself committed. The disposition commit replaces
+	// PersistResponse, so its fired verdict routes through here.
+	BudgetFired(record *sessionstore.BudgetRecord)
 }

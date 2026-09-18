@@ -24,6 +24,10 @@ func (b *boundary) HandleWithOutput(
 		SessionID: b.sessionID,
 		Type:      sessionstore.OutputMessagePersistent,
 		Content:   content,
+		// The receipt settles the accepted command turn, so it releases the
+		// input exactly like a confirmed final response does: readiness for
+		// the command's idle follows its delivery ack.
+		ReleasesInput: true,
 	})
 	if err != nil {
 		return fmt.Errorf("handle session input with output: %w", err)

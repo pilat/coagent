@@ -83,20 +83,35 @@ func (s *store) CaptureProgress(ctx context.Context, rootID int64) (*ProgressFac
 	}
 	defer func() { _ = tx.Rollback() }()
 
+	facts, err := CaptureProgressTx(ctx, tx, rootID)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("commit progress capture: %w", err)
+	}
+
+	return facts, nil
+}
+
+// CaptureProgressTx projects post-disposition progress facts through the
+// caller's open transaction, so a response disposition can render its final
+// output from the exact state it commits. Read-only: performs no writes.
+func CaptureProgressTx(ctx context.Context, tx *sql.Tx, rootID int64) (*ProgressFacts, error) {
 	facts := &ProgressFacts{RootID: rootID}
 	if err := captureProgressRoot(ctx, tx, facts); err != nil {
 		return nil, err
 	}
 
-	err = tx.QueryRowContext(ctx, `SELECT
+	if err := tx.QueryRowContext(ctx, `SELECT
 		COALESCE(SUM(json_extract(messages.usage, '$.promptTokens')), 0),
 		COALESCE(SUM(json_extract(messages.usage, '$.completionTokens')), 0),
 		COALESCE(SUM(messages.cost_usd), 0),
 		COALESCE(MAX(messages.id), 0)
 		FROM sessions LEFT JOIN messages ON messages.session_id = sessions.id
 		WHERE sessions.id = ? OR sessions.root_id = ?`, rootID, rootID).
-		Scan(&facts.PromptTokens, &facts.CompletionTokens, &facts.CostUSD, &facts.MessageWatermark)
-	if err != nil {
+		Scan(&facts.PromptTokens, &facts.CompletionTokens, &facts.CostUSD, &facts.MessageWatermark); err != nil {
 		return nil, fmt.Errorf("load progress tree usage: %w", err)
 	}
 
@@ -111,7 +126,7 @@ func (s *store) CaptureProgress(ctx context.Context, rootID int64) (*ProgressFac
 	if facts.ModelInputBoundary > 0 {
 		var latest sql.NullString
 
-		err = tx.QueryRowContext(ctx, `SELECT messages.content FROM messages
+		scanErr := tx.QueryRowContext(ctx, `SELECT messages.content FROM messages
 			WHERE messages.session_id = ? AND messages.role = 'assistant' AND messages.id > ?
 			AND messages.compacted_at IS NULL AND messages.rejected_reason IS NULL
 			AND TRIM(COALESCE(messages.content, '')) <> ''
@@ -119,8 +134,8 @@ func (s *store) CaptureProgress(ctx context.Context, rootID int64) (*ProgressFac
 			AND NOT EXISTS (SELECT 1 FROM session_outbox WHERE session_outbox.session_id = messages.session_id
 				AND session_outbox.source_key = 'message:' || messages.id || ':reply')
 			ORDER BY messages.id DESC LIMIT 1`, rootID, facts.ModelInputBoundary).Scan(&latest)
-		if err != nil && !errors.Is(err, sql.ErrNoRows) {
-			return nil, fmt.Errorf("load latest model progress: %w", err)
+		if scanErr != nil && !errors.Is(scanErr, sql.ErrNoRows) {
+			return nil, fmt.Errorf("load latest model progress: %w", scanErr)
 		}
 
 		facts.LatestModelProgress = latest.String
@@ -143,10 +158,6 @@ func (s *store) CaptureProgress(ctx context.Context, rootID int64) (*ProgressFac
 		facts.Budget = budget
 	} else if !errors.Is(err, sql.ErrNoRows) {
 		return nil, fmt.Errorf("load progress budget: %w", err)
-	}
-
-	if err := tx.Commit(); err != nil {
-		return nil, fmt.Errorf("commit progress capture: %w", err)
 	}
 
 	return facts, nil

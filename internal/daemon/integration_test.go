@@ -916,7 +916,9 @@ func TestIntegration_FreshScheduleDuplicateDoesNotResetOrRunTwice(t *testing.T) 
 	messages := h.parentMessages(parentID)
 	require.NoError(t, llm.ValidateToolPairing(messages))
 	assert.Equal(t, 1, countMessageContentContaining(messages, "fresh scheduled work"))
-	assert.Equal(t, 1, countMessageContentContaining(messages, "fresh handled once"))
+	// The confirmed stop publishes one answer; its hidden candidate row stays
+	// in the transcript with the same text.
+	assert.Equal(t, 2, countMessageContentContaining(messages, "fresh handled once"))
 }
 
 func countMessageContentContaining(messages []llmwire.Message, fragment string) int {

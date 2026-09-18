@@ -53,6 +53,16 @@ func (s *store) UpdateSessionIterationWithOutput(
 		return nil, err
 	}
 
+	// A terminal lifecycle output supersedes the owed model reply; an error
+	// settlement the session may recover from leaves it intact.
+	if status == SessionStatusStopped || status == SessionStatusKilled ||
+		status == SessionStatusCompleted {
+		if _, err := tx.ExecContext(ctx, `UPDATE sessions
+			SET manager_reply_pending = FALSE WHERE id = ? AND manager_reply_pending = TRUE`, sessionID); err != nil {
+			return nil, fmt.Errorf("clear manager reply obligation: %w", err)
+		}
+	}
+
 	owner, err := outputOwner(ctx, tx, sessionID)
 	if errors.Is(err, ErrOutputOwner) || errors.Is(err, ErrOutputNotRoot) {
 		if err := tx.Commit(); err != nil {

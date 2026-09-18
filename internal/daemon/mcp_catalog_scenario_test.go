@@ -137,6 +137,7 @@ func TestScenario_ReapedMCPClientServesTheNextRunFromTheCatalog(t *testing.T) {
 	h.waitUntil("cold run finishes", func() bool {
 		return lastAssistantTextDTO(h.parentMessages(sessionID)) == "used it"
 	})
+	h.mgr.waitIdle(sessionID)
 	msgs := h.parentMessages(sessionID)
 	require.NoError(t, llm.ValidateToolPairing(msgs))
 	assert.Equal(t, 1, fake.count(t, "spawn"), "the first run performs exactly one cold discovery")

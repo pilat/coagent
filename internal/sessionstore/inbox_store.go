@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/pilat/coagent/internal/transcript"
@@ -38,6 +39,20 @@ var (
 )
 
 const inboxColumns = `id, session_id, source, raw_content, attributes, received_at, state, resolved_at, resolution_reason, accepted_message_id`
+
+// readOnlyCommandReceipts mirrors the recovery query's read-only set: these
+// manager-owned inputs answer the manager directly and owe no model reply.
+func readOnlyCommandReceipt(content string) bool {
+	trimmed := strings.TrimSpace(content)
+
+	switch {
+	case trimmed == "/status", trimmed == "/help", trimmed == "/schedules",
+		trimmed == "/compact", strings.HasPrefix(trimmed, "/compact "):
+		return true
+	default:
+		return false
+	}
+}
 
 type InboxInput struct {
 	ID                int64
@@ -373,7 +388,7 @@ func (s *store) PromoteInputWithActivation(
 // row, optional activation grant, input acceptance, session activation, the
 // model-input generation advance, and the optional persistent receipt.
 //
-//nolint:funlen // The accepted-replay and fresh-promotion branches share one ordered transaction.
+//nolint:funlen,gocyclo // The accepted-replay and fresh-promotion branches share one ordered transaction.
 func (s *store) promoteInput(
 	ctx context.Context,
 	inputID int64,
@@ -449,6 +464,18 @@ func (s *store) promoteInput(
 
 	if err := advanceModelInputGeneration(ctx, tx, input.SessionID, msg.ID); err != nil {
 		return nil, nil, nil, err
+	}
+
+	// Fresh model-visible input invalidates any stale completion check; a
+	// manager-owned input additionally opens the durable reply obligation.
+	if err := invalidateCompletionCheckTx(ctx, tx, input.SessionID); err != nil {
+		return nil, nil, nil, err
+	}
+
+	if _, owned := input.Attributes["manager_id"]; owned && !readOnlyCommandReceipt(preparedContent) {
+		if err := setManagerReplyPendingTx(ctx, tx, input.SessionID); err != nil {
+			return nil, nil, nil, err
+		}
 	}
 
 	commit, err := insertPromotionReceipt(ctx, tx, input, receiptContent)

@@ -161,6 +161,13 @@ func finishImmediateShieldRaise(
 	if err != nil {
 		return nil, nil, err
 	}
+	// The idle raise answers the manager turn, so it clears the owed reply
+	// in the same transaction as its releasing output.
+	if _, err := tx.ExecContext(ctx, `UPDATE sessions
+		SET manager_reply_pending = FALSE WHERE id = ? AND manager_reply_pending = TRUE`,
+		input.SessionID); err != nil {
+		return nil, nil, fmt.Errorf("clear manager reply obligation for shield raise: %w", err)
+	}
 	if err := tx.Commit(); err != nil {
 		return nil, nil, fmt.Errorf("commit immediate shield raise: %w", err)
 	}
@@ -207,6 +214,11 @@ func (s *store) CompleteShieldRaise(
 		if _, err := tx.ExecContext(ctx, `UPDATE sessions SET status = 'stopped', updated_at = ?
 			WHERE id = ? AND status = 'stopping'`, now, rootID); err != nil {
 			return nil, fmt.Errorf("park raised root: %w", err)
+		}
+		// The terminal shield settlement supersedes the owed model reply.
+		if _, err := tx.ExecContext(ctx, `UPDATE sessions
+			SET manager_reply_pending = FALSE WHERE id = ? AND manager_reply_pending = TRUE`, rootID); err != nil {
+			return nil, fmt.Errorf("clear manager reply obligation for shield raise: %w", err)
 		}
 	}
 
@@ -272,6 +284,13 @@ func (s *store) ResolveShieldDown(
 	)
 	if err != nil {
 		return nil, err
+	}
+	// The lowering answers the manager turn, so it clears the owed reply in
+	// the same transaction as its releasing output.
+	if _, err := tx.ExecContext(ctx, `UPDATE sessions
+		SET manager_reply_pending = FALSE WHERE id = ? AND manager_reply_pending = TRUE`,
+		input.SessionID); err != nil {
+		return nil, fmt.Errorf("clear manager reply obligation for shield lowering: %w", err)
 	}
 	if err := tx.Commit(); err != nil {
 		return nil, fmt.Errorf("commit shield lowering: %w", err)

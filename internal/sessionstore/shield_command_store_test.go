@@ -65,6 +65,54 @@ func TestShieldCommands_ToggleTreeAndReplay(t *testing.T) {
 	assert.Zero(t, transcriptCount(t, db, root.ID))
 }
 
+// An immediate shield raise (already-up or sandbox-disabled) answers the
+// manager turn, so it clears the owed reply in its own transaction; the
+// lowering does the same on every non-replay path.
+func TestShieldCommands_ReleasingOutputsClearManagerReplyPending(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("immediate raise", func(t *testing.T) {
+		store, db, projectID := newTestStore(t) //nolint:contextcheck // test helper owns its own bootstrap context
+		root, err := store.CreateSession(ctx, projectID, "model", "", map[string]any{"manager_id": "telegram-test"})
+		require.NoError(t, err)
+		// Shields already up: the raise answers immediately without a change.
+		_, err = db.ExecContext(ctx, `UPDATE sessions SET shields_up = TRUE WHERE id = ?`, root.ID)
+		require.NoError(t, err)
+
+		input, err := store.EnqueueInput(ctx, root.ID, InputSourceUser, "/shieldsup")
+		require.NoError(t, err)
+		_, err = db.ExecContext(ctx, `UPDATE sessions SET manager_reply_pending = TRUE WHERE id = ?`, root.ID)
+		require.NoError(t, err)
+
+		_, _, err = store.BeginShieldRaise(ctx, input.ID, false, true)
+		require.NoError(t, err)
+
+		var replyPending bool
+		require.NoError(t, db.QueryRowContext(ctx,
+			`SELECT manager_reply_pending FROM sessions WHERE id = ?`, root.ID).Scan(&replyPending))
+		assert.False(t, replyPending, "an immediate raise releases the owed manager reply")
+	})
+
+	t.Run("lowering", func(t *testing.T) {
+		store, db, projectID := newTestStore(t) //nolint:contextcheck // test helper owns its own bootstrap context
+		root, err := store.CreateSession(ctx, projectID, "model", "", map[string]any{"manager_id": "telegram-test"})
+		require.NoError(t, err)
+
+		input, err := store.EnqueueInput(ctx, root.ID, InputSourceUser, "/shieldsdown")
+		require.NoError(t, err)
+		_, err = db.ExecContext(ctx, `UPDATE sessions SET manager_reply_pending = TRUE WHERE id = ?`, root.ID)
+		require.NoError(t, err)
+
+		_, err = store.ResolveShieldDown(ctx, input.ID, false)
+		require.NoError(t, err)
+
+		var replyPending bool
+		require.NoError(t, db.QueryRowContext(ctx,
+			`SELECT manager_reply_pending FROM sessions WHERE id = ?`, root.ID).Scan(&replyPending))
+		assert.False(t, replyPending, "a lowering releases the owed manager reply")
+	})
+}
+
 func TestShieldRaise_ActiveTreeParksRootAtCompletion(t *testing.T) {
 	ctx := context.Background()
 	store, _, projectID := newTestStore(t)

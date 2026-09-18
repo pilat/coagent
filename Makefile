@@ -121,7 +121,7 @@ test tests:
 # redundant run here. `lint` still checks tagged files via .golangci.yml.
 test.integration:
 	$(require_ci)
-	go test -tags=integration -count=1 -skip '^TestHarnessE2E_' ./...
+	go test -tags=integration -count=1 -timeout=20m -skip '^TestHarnessE2E_' ./...
 
 # Credentialed provider checks are intentionally outside every quality gate.
 # They require network access and explicit provider environment variables; the

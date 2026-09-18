@@ -86,10 +86,12 @@ func TestHarnessScenario_SkillActivationReceiptOrdersTheOutputChain(t *testing.T
 	require.NoError(t, h.mgr.SendToSession(h.ctx, root, "/skill review"))
 	waitForVisibleMessage(t, collector, root, "🔧 Activated skill: review")
 
-	// Model-initiated activation through the skill tool.
+	// Model-initiated activation through the skill tool. The skill tool
+	// commits its result in-activation, so the model's next stop answers the
+	// activation directly; the envelope follow-up branch of the responder
+	// never runs under the two-phase check.
 	require.NoError(t, h.mgr.SendToSession(h.ctx, root, "invoke the skill yourself"))
 	closeOnce(modelFollowUpQueued)
-	waitForVisibleMessageCount(t, collector, root, "probe answer", 2)
 	waitForVisibleMessage(t, collector, root, "model activation complete")
 
 	controller := newChainController(t, h)

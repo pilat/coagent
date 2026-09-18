@@ -127,6 +127,8 @@ func (g *recordingBudgetGate) PersistCompaction(
 	return g.ids, g.fired, nil
 }
 
+func (g *recordingBudgetGate) BudgetFired(*sessionstore.BudgetRecord) {}
+
 func budgetedSvc(t *testing.T, gate *recordingBudgetGate, llm *compactionMockLLM) *svc {
 	t.Helper()
 

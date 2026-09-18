@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"fmt"
+	"sync"
 	"testing"
 	"time"
 
@@ -90,9 +91,13 @@ func stoppedRootScheduleResponder(
 	started chan<- struct{},
 	release <-chan struct{},
 ) func(string, []llmwire.Message) *llmwire.Response {
+	// The completion check calls the model twice for one scheduled turn; only
+	// the first call arms the signal.
+	var once sync.Once
+
 	return func(_ string, messages []llmwire.Message) *llmwire.Response {
 		if scheduledTurnRequested(tc, messages) {
-			close(started)
+			once.Do(func() { close(started) })
 			<-release
 
 			return &llmwire.Response{Text: tc.answer}
@@ -155,8 +160,10 @@ func assertStoppedRootScheduleResult(t *testing.T, h *subagentHarness, rootID in
 	t.Helper()
 	messages := h.parentMessages(rootID)
 	if tc.fresh {
+		// The confirmed stop publishes one answer; its hidden candidate row
+		// stays in the transcript with the same text.
 		assert.Equal(t, 1, countMessageContentContaining(messages, tc.prompt))
-		assert.Equal(t, 1, countMessageContentContaining(messages, tc.answer))
+		assert.Equal(t, 2, countMessageContentContaining(messages, tc.answer))
 
 		return
 	}

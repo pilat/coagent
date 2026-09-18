@@ -83,12 +83,22 @@ func (s *store) InsertToolResultSetOnce(
 	outputs := make([][]*OutputCommit, len(entries))
 
 	for i, entry := range entries {
-		messageID, insertErr := insertToolResultOnceAt(ctx, tx, sessionID, entry.Message, transactionTime)
+		messageID, fresh, insertErr := insertToolResultOnceAt(ctx, tx, sessionID, entry.Message, transactionTime)
 		if insertErr != nil {
 			return nil, nil, insertErr
 		}
 
 		ids[i] = messageID
+
+		// A replayed row settles nothing new: it must not disturb a newer
+		// check a later turn already opened.
+		if fresh {
+			// Fresh model-visible input invalidates any stale completion check
+			// in the same commit that settles the result superseding it.
+			if err := invalidateCompletionCheckTx(ctx, tx, sessionID); err != nil {
+				return nil, nil, err
+			}
+		}
 
 		// Direct-output validation is a property of the outputs, not the row:
 		// results without direct messages settle as plain rows.
@@ -174,9 +184,19 @@ func (s *store) InsertToolResultWithDirectOutput(
 		}
 	}
 
-	messageID, err := insertToolResultOnceAt(ctx, tx, sessionID, message, transactionTime)
+	messageID, fresh, err := insertToolResultOnceAt(ctx, tx, sessionID, message, transactionTime)
 	if err != nil {
 		return 0, nil, err
+	}
+
+	// A replayed row settles nothing new: it must not disturb a newer check
+	// a later turn already opened.
+	if fresh {
+		// Fresh model-visible input invalidates any stale completion check in
+		// the same commit that settles the result superseding it.
+		if err := invalidateCompletionCheckTx(ctx, tx, sessionID); err != nil {
+			return 0, nil, err
+		}
 	}
 
 	outputs := make([]*OutputCommit, 0, len(directMessages))
@@ -228,7 +248,9 @@ func insertToolResultOnce(
 	sessionID int64,
 	message *transcript.Message,
 ) (int64, error) {
-	return insertToolResultOnceAt(ctx, tx, sessionID, message, time.Now().UTC())
+	messageID, _, err := insertToolResultOnceAt(ctx, tx, sessionID, message, time.Now().UTC())
+
+	return messageID, err
 }
 
 func insertToolResultOnceAt(
@@ -237,7 +259,7 @@ func insertToolResultOnceAt(
 	sessionID int64,
 	message *transcript.Message,
 	transactionTime time.Time,
-) (int64, error) {
+) (int64, bool, error) {
 	var existingID int64
 	var existingContent string
 	var existingToolError bool
@@ -249,14 +271,16 @@ func insertToolResultOnceAt(
 	if err == nil {
 		if existingContent != message.Content || existingToolError != message.ToolError ||
 			existingToolName != message.ToolName {
-			return 0, ErrOutputConflict
+			return 0, false, ErrOutputConflict
 		}
 
-		return existingID, nil
+		// A replayed row settles nothing new: the caller must not disturb a
+		// newer check a later turn already opened.
+		return existingID, false, nil
 	}
 
 	if !errors.Is(err, sql.ErrNoRows) {
-		return 0, fmt.Errorf("load direct-output tool result: %w", err)
+		return 0, false, fmt.Errorf("load direct-output tool result: %w", err)
 	}
 
 	createdAt := message.CreatedAt
@@ -269,10 +293,15 @@ func insertToolResultOnceAt(
 		VALUES (?, 'tool', ?, ?, ?, ?, ?)`,
 		sessionID, message.Content, message.ToolCallID, message.ToolName, message.ToolError, createdAt)
 	if err != nil {
-		return 0, fmt.Errorf("insert direct-output tool result: %w", err)
+		return 0, false, fmt.Errorf("insert direct-output tool result: %w", err)
 	}
 
-	return result.LastInsertId()
+	messageID, err := result.LastInsertId()
+	if err != nil {
+		return 0, false, fmt.Errorf("direct-output tool result id: %w", err)
+	}
+
+	return messageID, true, nil
 }
 
 func insertDirectOutput(

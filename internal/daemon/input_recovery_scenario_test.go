@@ -60,7 +60,9 @@ func TestHarnessScenario_RestartResumesExplicitInputQueuedOnStoppedRoot(t *testi
 	waitForVisibleMessage(t, collector, root.ID, "stopped root resumed after restart")
 	drainScenarioClaims(t, "explicit_stopped_resume_restart.json", newChainController(t, second))
 	waitForIdleAfterMessage(t, collector, root.ID, "stopped root resumed after restart")
-	assert.Equal(t, int64(1), modelCalls.Load())
+	// The explicit resume turn still runs the two-phase check: candidate
+	// response, then the confirmation call after the host nudge.
+	assert.Equal(t, int64(2), modelCalls.Load())
 	assertHarnessTrace(t, "explicit_stopped_resume_restart.json", collector.snapshot(), root.ID)
 }
 

@@ -167,7 +167,7 @@ func insertPromotedMessage(
 	return &transcript.Message{
 		ID:        messageID,
 		SessionID: input.SessionID,
-		Role:      "user",
+		Role:      userRole,
 		Content:   preparedContent,
 		CreatedAt: input.ReceivedAt,
 	}, nil
