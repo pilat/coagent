@@ -77,6 +77,9 @@ type Snapshot struct {
 	ShieldsUp            bool
 	Budget               *Budget
 	LastSemanticOutputAt *time.Time
+	// IsBackgroundYield marks final output released to a wake source; the
+	// compact final renderer prepends the 🟣 badge from it. See FinalFacts.
+	IsBackgroundYield bool
 }
 
 // TodoCounts applies the operator-visible arithmetic: active counts only

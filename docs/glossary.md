@@ -409,9 +409,12 @@ _Avoid_: unfinished todo, pending external call, background prompt snapshot.
 
 **completion check**:
 The session-wide second-look transition for a non-empty `stop` response with no
-tool calls and no background wake source. The first response is a hidden final
-candidate; a host-authored model input asks the same agent to continue or
-confirm stopping. A later external model-bound input or tool-bearing response
+tool calls and no background wake source. The first response is a final
+candidate — hidden from delivery, but shown as the progress card's note — and a
+host-authored model input asks the same agent to continue or confirm stopping.
+The confirmation publishes the candidate's text, not the confirming response;
+a durable pointer to the candidate row lets a subagent's parent receive the
+same answer. A later external model-bound input or tool-bearing response
 invalidates the check; an empty response remains subject to loop detection.
 _Avoid_: stop marker, magic acknowledgement, final-answer tool.
 

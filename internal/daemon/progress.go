@@ -14,9 +14,12 @@ import (
 	"github.com/pilat/coagent/internal/progressruntime"
 	"github.com/pilat/coagent/internal/sessionevent"
 	"github.com/pilat/coagent/internal/sessionstore"
+	"github.com/pilat/coagent/internal/subagent"
 )
 
 var errProgressUnavailable = errors.New("progress runtime unavailable")
+
+var errWaitingSlotNotSuspended = errors.New("waiting slot requires a suspended root")
 
 func (s *svc) CurrentProgress(ctx context.Context, rootID int64) (*controllerapi.ProgressData, error) {
 	if s.progress == nil {
@@ -115,6 +118,15 @@ func (s *svc) liveContextProjection(ctx context.Context, rootID int64) (progress
 }
 
 func (s *svc) mainModelWorking(rootID int64) bool {
+	// The durable status outranks the runner flag: a root parked on an
+	// external call owns no runner service by the time its waiting card is
+	// captured, but a concurrent capture can still observe the live loop
+	// before finishRunner clears it — a suspended root is never "working".
+	record, err := s.sessionStore.GetSession(context.Background(), rootID)
+	if err != nil || record.Status == sessionstore.SessionStatusSuspended {
+		return false
+	}
+
 	activeRunner, ok := s.runners.Load(rootID)
 	if !ok {
 		return false
@@ -178,19 +190,59 @@ func (s *svc) publishSubagentProgressWithIteration(
 			link.ActivationSeq,
 			*checkpointIteration,
 		)
-	} else {
-		causalID = fmt.Sprintf("subagent:%d:%d:%s", childID, link.ActivationSeq, link.State)
-		if link.Blocking && link.ParentID == record.RootID && !link.Terminal() {
-			causalID, err = waitingProgressCausalID(s.collectWaitingProjections(ctx, record.RootID))
-			if err != nil {
-				log.Warn("build_subagent_progress_identity", zap.Int64("child", childID), zap.Error(err))
 
-				return
-			}
-		}
+		content, published, err := s.enqueueProgressChangeFor(ctx, record.RootID, causalID, true)
+		s.settleSubagentProgress(log, record.RootID, childID, content, published, err)
+
+		return
+	}
+
+	causalID, err = s.subagentStateCausalID(ctx, log, record, link, childID)
+	if err != nil {
+		return
 	}
 
 	content, published, err := s.enqueueProgressChangeFor(ctx, record.RootID, causalID, true)
+	s.settleSubagentProgress(log, record.RootID, childID, content, published, err)
+}
+
+// subagentStateCausalID builds the state-transition causal identity. A
+// blocking undelivered link publishes the root's whole waiting set instead.
+func (s *svc) subagentStateCausalID(
+	ctx context.Context,
+	log *zap.Logger,
+	record *sessionstore.SessionRecord,
+	link *subagent.Link,
+	childID int64,
+) (string, error) {
+	blockingRootLink := link.Blocking && link.ParentID == record.RootID
+	if !blockingRootLink || link.Terminal() {
+		return fmt.Sprintf("subagent:%d:%d:%s", childID, link.ActivationSeq, link.State), nil
+	}
+
+	root, err := s.sessionStore.GetSession(ctx, record.RootID)
+	if err != nil {
+		log.Warn("load_subagent_progress_root", zap.Int64("root", record.RootID), zap.Error(err))
+
+		return "", fmt.Errorf("load progress root: %w", err)
+	}
+
+	// The waiting slot belongs to the suspension transition (publishWaiting):
+	// a capture before suspension commits would freeze a stale card there.
+	if root.Status != sessionstore.SessionStatusSuspended {
+		return "", errWaitingSlotNotSuspended
+	}
+
+	return waitingProgressCausalID(s.collectWaitingProjections(ctx, record.RootID))
+}
+
+func (s *svc) settleSubagentProgress(
+	log *zap.Logger,
+	rootID, childID int64,
+	content string,
+	published bool,
+	err error,
+) {
 	if errors.Is(err, sessionstore.ErrOutputOwner) || errors.Is(err, sessionstore.ErrProgressSuperseded) {
 		return
 	}
@@ -202,7 +254,7 @@ func (s *svc) publishSubagentProgressWithIteration(
 	}
 
 	if published {
-		s.publish(record.RootID, sessionevent.Notification{
+		s.publish(rootID, sessionevent.Notification{
 			Type: sessionevent.NotifyMessage, Message: content,
 		})
 	}

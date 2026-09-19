@@ -14,10 +14,6 @@
       "status": "running"
     },
     {
-      "type": "message",
-      "message": "**⏳ Waiting**\n\n🤖 `fake-model` · iteration 1\n⌚ <elapsed> · 💰 $0.0 total\n🧩 Subagents · 1 foreground · 0 background\n⏳ Waiting on 1 item"
-    },
-    {
       "type": "waiting",
       "message": "⏳ Waiting for subagent #1\n💬 New messages will be queued until this wait completes",
       "waiting": [
@@ -66,7 +62,7 @@
     },
     {
       "type": "message_replaceable",
-      "content": "**⏳ Waiting**\n\n🤖 `fake-model` · iteration 1\n⌚ <elapsed> · 💰 $0.0 total\n🧩 Subagents · 1 foreground · 0 background\n⏳ Waiting on 1 item",
+      "content": "**🟣 Background**\n\n🤖 `fake-model` · iteration 1\n⌚ <elapsed> · 💰 $0.0 total\n🧩 Subagents · 1 foreground · 0 background",
       "attributes": {
         "manager_id": "telegram:main",
         "model_input_generation": 1

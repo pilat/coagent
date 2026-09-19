@@ -41,7 +41,14 @@ func (c *completions) deriveOutcome(
 
 	messages, err := c.sessions.LoadActiveMessages(ctx, childID)
 	if err != nil {
-		messages = nil
+		// A load failure is not an empty transcript: nil messages would
+		// masquerade as "no final answer" below, so report the error.
+		logger.Ctx(ctx).Named("sessionlifecycle.completion").Error(
+			"load_active_messages", zap.Int64("child", childID), zap.Error(err),
+		)
+
+		return fmt.Sprintf("could not load final messages after %d iterations", iterations),
+			subagent.OutcomeError
 	}
 
 	finalText := lastAssistantText(messages)
@@ -52,6 +59,20 @@ func (c *completions) deriveOutcome(
 	case persistedError || errored:
 		return fmt.Sprintf("crashed after %d iterations", iterations), subagent.OutcomeError
 	case lastMessageIsFinalAnswer(messages):
+		// A confirmed completion check leaves a durable pointer at the
+		// candidate row: the child's answer is that full text, not the
+		// trailing ack. Error and terminal-empty outcomes above keep
+		// precedence; without the pointer the final text stands (a
+		// background-yield child).
+		if record, recordErr := c.sessions.GetSession(ctx, childID); recordErr == nil &&
+			record.CompletionCheckConfirmedAnswerID != nil {
+			if answer, answerErr := c.sessions.LoadMessageContentByID(
+				ctx, childID, *record.CompletionCheckConfirmedAnswerID,
+			); answerErr == nil && strings.TrimSpace(answer) != "" {
+				return answer, subagent.OutcomeCompleted
+			}
+		}
+
 		return finalText, subagent.OutcomeCompleted
 	default:
 		return fmt.Sprintf("ended without a final answer after %d iterations", iterations),

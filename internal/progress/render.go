@@ -37,13 +37,6 @@ func RenderCompact(snapshot Snapshot, redact func(string) string) string {
 		lines = append(lines, subagents)
 	}
 
-	if len(snapshot.Waiting) > 0 {
-		lines = append(
-			lines,
-			fmt.Sprintf("⏳ Waiting on %d item%s", len(snapshot.Waiting), plural(len(snapshot.Waiting))),
-		)
-	}
-
 	if todoBlock := renderCardTodos(snapshot.Todos); len(todoBlock) > 0 {
 		lines = append(lines, todoBlock...)
 	}
@@ -57,9 +50,15 @@ func RenderCompact(snapshot Snapshot, redact func(string) string) string {
 
 // RenderFinalCompact is a trimmed progress footer for final output: model/iteration,
 // metrics, TODO, and budget. It renders counts only — no raw text, so no redact
-// is needed. Skipped when nothing is available.
+// is needed. Skipped when nothing is available. A background-yield final
+// prepends the 🟣 badge so the released card never reads as "your turn"; a
+// confirmed terminal stop stays badge-less.
 func RenderFinalCompact(snapshot Snapshot) string {
 	var lines []string
+
+	if snapshot.IsBackgroundYield {
+		lines = append(lines, "🟣 Background")
+	}
 
 	if snapshot.Model != "" {
 		iteration := snapshot.RootIteration + snapshot.ChildIterations
@@ -166,22 +165,20 @@ func RenderFooter(snapshot Snapshot, redact func(string) string) string {
 	return strings.Join(parts, "\n\n")
 }
 
-// A fired budget and an exact root wait outrank live work; inactivity is explicit.
+// A fired budget outranks live work; inactivity is explicit. Waiting items,
+// live subagents, and background processes all read as "in background, nothing
+// for the operator to do", so they share one title below 🟢.
 func cardTitle(snapshot Snapshot) string {
 	if snapshot.Budget != nil && snapshot.Budget.State == "fired" {
 		return "🛑 Budget reached"
-	}
-
-	if len(snapshot.Waiting) > 0 {
-		return "⏳ Waiting"
 	}
 
 	if snapshot.MainModelWorking {
 		return "🟢 Working"
 	}
 
-	if snapshot.ActiveSubagents > 0 {
-		return "🟣 Background work"
+	if len(snapshot.Waiting) > 0 || snapshot.ActiveSubagents > 0 || len(snapshot.BackgroundProcesses) > 0 {
+		return "🟣 Background"
 	}
 
 	return "⚪ Idle"
@@ -362,14 +359,6 @@ func formatUSD(value float64) string {
 	}
 
 	return fixed
-}
-
-func plural(count int) string {
-	if count == 1 {
-		return ""
-	}
-
-	return "s"
 }
 
 // renderProcesses projects live background Bash processes. Only stable

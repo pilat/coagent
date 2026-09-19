@@ -293,8 +293,12 @@ exact session owns a durable background wake source: an advertised running
 process, an undelivered non-blocking child link in `spawned`, `running`,
 `completed` or `error`, or pending process/subagent inbox input. Without a
 wake source the first non-empty stop commits a hidden candidate plus one
-host-authored completion nudge and keeps the session active; the next accepted
-non-empty stop is the deliberate confirmation that publishes and finishes.
+host-authored completion nudge and keeps the session active; the candidate's
+text is meanwhile the live progress card's note, and the next accepted
+non-empty stop is the deliberate confirmation that publishes the candidate's
+text — not the confirming stop's own ack — and finishes
+([ADR-0060](docs/adr/0060-wake-aware-model-completion-check.md), amended by
+[ADR-0061](docs/adr/0061-completion-check-publishes-the-candidate-answer.md)).
 Empty no-wake stops are a durable anti-loop signal instead: the third receives
 the strong warning, the sixth commits one host notice and ends the activation
 through ordinary successful completion. Every accepted response commits its
@@ -505,10 +509,12 @@ For an accepted ordinary model attempt the same single-commit principle holds:
 the disposition transaction inserts the assistant row, advances the iteration,
 sets or clears the completion-check candidate, stamps the empty-stop streak,
 captures post-disposition progress facts and renders the final footer from
-them database-free, then inserts the optional manager output. A budget
-crossing on an unconfirmed candidate suppresses the candidate text and
-publishes only the host checkpoint; a projection failure retains the paid
-attempt and commits the existing durable error outcome once. A separate
+them database-free, then inserts the optional manager output. A confirmed
+check records the candidate's message id in a durable confirmed-answer column
+the same commit, so a finalizing child derives the full answer instead of the
+ack. A budget crossing on an unconfirmed candidate suppresses the candidate
+text and publishes only the host checkpoint; a projection failure retains the
+paid attempt and commits the existing durable error outcome once. A separate
 durable manager-reply flag survives candidate resets, tools and restarts and
 clears only with a releasing output or a superseding terminal settlement.
 

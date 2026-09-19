@@ -109,7 +109,11 @@ type ResponseDispositionStore interface {
 
 // CompletionCheckState is the durable projection a loop turn resumes from.
 type CompletionCheckState struct {
-	CandidateID         *int64
+	CandidateID *int64
+	// CandidateText resolves CandidateID's messages.content in the same read,
+	// so a confirming disposition can publish the candidate instead of the
+	// nudge ack. Empty when no candidate is pending.
+	CandidateText       string
 	ManagerReplyPending bool
 	EmptyStopStreak     int
 }
@@ -211,6 +215,18 @@ func applyDispositionState(
 			return err
 		}
 
+		// The confirmed answer pointer outlives the check: a finalizing child
+		// resolves it to the candidate's full text instead of the ack. Cleared
+		// again by the next external model-visible input.
+		if disposition.ExpectedCandidateID != 0 {
+			if _, err := tx.ExecContext(ctx, `UPDATE sessions
+				SET completion_check_confirmed_answer_id = ?
+				WHERE id = ? AND completion_check_candidate_id IS NULL`,
+				disposition.ExpectedCandidateID, disposition.SessionID); err != nil {
+				return fmt.Errorf("set confirmed answer pointer: %w", err)
+			}
+		}
+
 		return commitDispositionOutput(ctx, tx, disposition, messageID, now, result, true)
 	case ResponseDispositionBackgroundYield:
 		return commitDispositionOutput(ctx, tx, disposition, messageID, now, result, true)
@@ -259,8 +275,8 @@ func applyDispositionState(
 }
 
 // applyCandidateDisposition commits the hidden first candidate. A budget
-// crossing on this attempt keeps it hidden, skips the nudge, and publishes
-// only the host checkpoint.
+// crossing on this attempt drops it with the suppressed answer, skips the
+// nudge, and publishes only the host checkpoint.
 func applyCandidateDisposition(
 	ctx context.Context,
 	tx *sql.Tx,
@@ -276,7 +292,14 @@ func applyCandidateDisposition(
 
 	result.Budget = record
 
-	if err := setCompletionCandidate(ctx, tx, disposition.SessionID, 0, messageID, now); err != nil {
+	// A fired budget suppresses this attempt's own answer: leaving the check
+	// pending would resurface the text on the card note and as a later confirm.
+	next := messageID
+	if suppressed {
+		next = 0
+	}
+
+	if err := setCompletionCandidate(ctx, tx, disposition.SessionID, 0, next, now); err != nil {
 		return err
 	}
 
@@ -351,11 +374,8 @@ func setCompletionCandidate(
 			return fmt.Errorf("load completion check state: %w", scanErr)
 		}
 
-		if current.Int64 == expected && current.Valid == (expected != 0) {
-			return requireOneSessionUpdate(result, sessionID)
-		}
-
-		return fmt.Errorf("%w: session %d", ErrCompletionCheckConflict, sessionID)
+		return fmt.Errorf("%w: session %d (expected %d, current %d valid %t)",
+			ErrCompletionCheckConflict, sessionID, expected, current.Int64, current.Valid)
 	}
 
 	return requireOneSessionUpdate(result, sessionID)
@@ -691,15 +711,19 @@ func commitDispositionProjectionError(
 }
 
 // LoadCompletionCheckState reads the durable check, reply obligation, and
-// empty streak one loop turn resumes from.
+// empty streak one loop turn resumes from, resolving the pending candidate's
+// text in the same query.
 func (s *store) LoadCompletionCheckState(ctx context.Context, sessionID int64) (*CompletionCheckState, error) {
 	var candidate sql.NullInt64
+	var candidateText sql.NullString
 	var replyPending sql.NullBool
 	var streak sql.NullInt64
 
-	err := s.db.QueryRowContext(ctx, `SELECT completion_check_candidate_id,
-		manager_reply_pending, empty_stop_streak FROM sessions WHERE id = ?`, sessionID).
-		Scan(&candidate, &replyPending, &streak)
+	err := s.db.QueryRowContext(ctx, `SELECT sessions.completion_check_candidate_id,
+		messages.content, sessions.manager_reply_pending, sessions.empty_stop_streak
+		FROM sessions LEFT JOIN messages ON messages.id = sessions.completion_check_candidate_id
+		WHERE sessions.id = ?`, sessionID).
+		Scan(&candidate, &candidateText, &replyPending, &streak)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, errSessionNotFound
 	}
@@ -709,6 +733,7 @@ func (s *store) LoadCompletionCheckState(ctx context.Context, sessionID int64) (
 	}
 
 	state := &CompletionCheckState{
+		CandidateText:       candidateText.String,
 		ManagerReplyPending: replyPending.Bool,
 		EmptyStopStreak:     int(streak.Int64),
 	}
