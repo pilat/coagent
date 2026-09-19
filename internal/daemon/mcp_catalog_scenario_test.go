@@ -132,6 +132,20 @@ func TestScenario_ReapedMCPClientServesTheNextRunFromTheCatalog(t *testing.T) {
 	h.waitUntil("registration lands", func() bool {
 		return lastAssistantTextDTO(h.parentMessages(sessionID)) == "registered"
 	})
+	// The registering loop must be gone before USE_IT lands: a live runner
+	// serves queued input from its own run, whose session predates the new
+	// server — the ping call would then resolve against no such tool.
+	h.mgr.waitIdle(sessionID)
+
+	// The registering run's tail iteration may have built a session after the
+	// registration and cold-started a client for it. Reap every spawned client
+	// before USE_IT so the first measured run deterministically starts exactly
+	// one subprocess itself — whether from a catalog hit or a cold discovery —
+	// instead of racing the reaper's 50ms TTL.
+	require.Eventually(t, func() bool {
+		return fake.count(t, "exit") >= fake.count(t, "spawn")
+	}, 5*time.Second, 10*time.Millisecond, "the registering run's clients were reaped")
+	spawnBase := fake.count(t, "spawn")
 
 	require.NoError(t, h.mgr.SendToSession(h.ctx, sessionID, "USE_IT now"))
 	h.waitUntil("cold run finishes", func() bool {
@@ -140,13 +154,15 @@ func TestScenario_ReapedMCPClientServesTheNextRunFromTheCatalog(t *testing.T) {
 	h.mgr.waitIdle(sessionID)
 	msgs := h.parentMessages(sessionID)
 	require.NoError(t, llm.ValidateToolPairing(msgs))
-	assert.Equal(t, 1, fake.count(t, "spawn"), "the first run performs exactly one cold discovery")
+	assert.Equal(t, spawnBase+1, fake.count(t, "spawn"), "the first run performs exactly one cold discovery")
 	assert.Equal(t, 1, fake.count(t, "call"))
 
 	// The run released its stack; the pool's short TTL reaps the client while
-	// the catalog of discovered metadata stays.
+	// the catalog of discovered metadata stays. Wait until every spawned
+	// client is reaped (not just one): otherwise the next run would join a
+	// still-live client instead of starting its own replacement subprocess.
 	require.Eventually(t, func() bool {
-		return fake.count(t, "exit") >= 1
+		return fake.count(t, "exit") >= fake.count(t, "spawn")
 	}, 5*time.Second, 10*time.Millisecond, "the idle client was reaped")
 
 	require.NoError(t, h.mgr.SendToSession(h.ctx, sessionID, "USE_AGAIN please"))
@@ -162,10 +178,10 @@ func TestScenario_ReapedMCPClientServesTheNextRunFromTheCatalog(t *testing.T) {
 	mu.Lock()
 	spawns := spawnsAtCatalogCall
 	mu.Unlock()
-	assert.Equal(t, 1, spawns,
+	assert.Equal(t, spawnBase+1, spawns,
 		"the run that issues the cached tool call has not started a replacement subprocess yet")
 
-	assert.Equal(t, 2, fake.count(t, "spawn"),
+	assert.Equal(t, spawnBase+2, fake.count(t, "spawn"),
 		"the model's tool call starts exactly one replacement subprocess")
 	assert.Equal(t, 2, fake.count(t, "call"), "both runs executed the ping tool once")
 
@@ -175,7 +191,7 @@ func TestScenario_ReapedMCPClientServesTheNextRunFromTheCatalog(t *testing.T) {
 	// knows nothing about ping2 — its call resolves to "unknown tool" without
 	// starting any process.
 	require.Eventually(t, func() bool {
-		return fake.countNoFail("exit") >= 2
+		return fake.countNoFail("exit") >= fake.countNoFail("spawn")
 	}, 5*time.Second, 10*time.Millisecond, "the replacement client idled out and was reaped")
 
 	require.NoError(t, h.mgr.SendToSession(h.ctx, sessionID, "USE_THIRD now"))
@@ -187,7 +203,7 @@ func TestScenario_ReapedMCPClientServesTheNextRunFromTheCatalog(t *testing.T) {
 	require.NoError(t, llm.ValidateToolPairing(msgs))
 	assert.Contains(t, toolResultForCallID(msgs, "ping2-catalog"), "unknown tool",
 		"the reconnect's changed tools/list must not have leaked into the daemon catalog")
-	assert.Equal(t, 2, fake.count(t, "spawn"),
+	assert.Equal(t, spawnBase+2, fake.count(t, "spawn"),
 		"a polluted catalog would have spawned to serve ping2")
 	assert.Equal(t, 2, fake.count(t, "call"),
 		"the server must never have received a ping2 call")
