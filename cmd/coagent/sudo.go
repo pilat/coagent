@@ -14,7 +14,8 @@ import (
 var geteuid = os.Geteuid
 
 // runDaemonVerb is the single escalation gate: every lifecycle verb writes to
-// /etc or the system launchd domain, so runServiceAction stays privilege-blind.
+// /etc/systemd or the user's binary path, so runServiceAction stays
+// privilege-blind.
 func runDaemonVerb(ctx context.Context, action string) int {
 	if shouldEscalate(action) {
 		return escalate(ctx, action)

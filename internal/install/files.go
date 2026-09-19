@@ -159,26 +159,26 @@ func writeFileAtomic(path, content string) error {
 	return nil
 }
 
-// run executes a service-manager command and folds its output into the error.
-// The output is the whole diagnostic value of systemctl and launchctl failures.
-func run(ctx context.Context, name string, args ...string) error {
-	cmd := exec.CommandContext(ctx, name, args...)
+// runSystemctl executes a systemctl command and folds its output into the
+// error. The output is the whole diagnostic value of systemctl failures.
+func runSystemctl(ctx context.Context, args ...string) error {
+	cmd := exec.CommandContext(ctx, "systemctl", args...)
 
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		text := strings.TrimSpace(string(out))
 		if text == "" {
-			return fmt.Errorf("%s %s: %w", name, strings.Join(args, " "), err)
+			return fmt.Errorf("systemctl %s: %w", strings.Join(args, " "), err)
 		}
 
-		return fmt.Errorf("%s %s: %w: %s", name, strings.Join(args, " "), err, text)
+		return fmt.Errorf("systemctl %s: %w: %s", strings.Join(args, " "), err, text)
 	}
 
 	return nil
 }
 
-// succeeds reports whether a query command exited zero, which is how both
-// service managers answer "is this thing running".
+// succeeds reports whether a query command exited zero, which is how the
+// service manager answers "is this thing running".
 func succeeds(ctx context.Context, name string, args ...string) bool {
 	return exec.CommandContext(ctx, name, args...).Run() == nil
 }

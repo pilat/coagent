@@ -1,4 +1,4 @@
-//go:build integration
+//go:build integration && linux
 
 package loader
 
@@ -126,7 +126,7 @@ func fixtureMarketplaceEntry() config.MarketplaceEntry {
 
 // A cache clone whose local state git rejects must heal on the next resolve
 // instead of warning forever: the production failure was an index plus
-// AppleDouble ._-prefixed pack junk left behind by a restore from macOS.
+// AppleDouble ._-prefixed pack junk left behind by a foreign-metadata restore.
 func TestIntegration_Marketplace_RecoversCorruptClone(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")

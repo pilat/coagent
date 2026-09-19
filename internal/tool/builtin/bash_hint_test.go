@@ -30,7 +30,7 @@ func TestSandboxHint(t *testing.T) {
 			roots:  roots,
 			want:   true,
 		},
-		"seatbelt denial":       {output: "touch: /etc/x: Operation not permitted", roots: roots, want: true},
+		"permission denial":     {output: "touch: /etc/x: Operation not permitted", roots: roots, want: true},
 		"unrelated failure":     {output: "compile error: undefined symbol", roots: roots, want: false},
 		"denial but unconfined": {output: "Read-only file system", roots: nil, want: false},
 		"empty output":          {output: "", roots: roots, want: false},

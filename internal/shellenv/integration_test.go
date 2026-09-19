@@ -1,4 +1,4 @@
-//go:build linux || darwin
+//go:build linux
 
 package shellenv
 
@@ -8,7 +8,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -91,10 +90,6 @@ func TestSnapshot_Integration_PerCwdActivation(t *testing.T) {
 func TestWrapExec_Integration_ActivatesChildEnviron(t *testing.T) {
 	if os.Getenv("COAGENT_SHELLENV_INTEGRATION") == "" {
 		t.Skip("set COAGENT_SHELLENV_INTEGRATION=1 to run the interactive-shell integration test")
-	}
-
-	if runtime.GOOS != "linux" {
-		t.Skip("/proc/<pid>/environ inspection is linux-only")
 	}
 
 	bash, err := exec.LookPath("bash")

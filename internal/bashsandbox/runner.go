@@ -461,7 +461,7 @@ func probeEnforcement(newRunner runnerFactory) error {
 
 	defer func() { _ = os.RemoveAll(base) }()
 
-	// The macOS temp root is a symlink; both backends match canonical paths.
+	// The temp root may be a symlink; enforcement matches canonical paths.
 	base, err = filepath.EvalSymlinks(base)
 	if err != nil {
 		return fmt.Errorf("resolve probe directory: %w", err)

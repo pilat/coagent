@@ -16,11 +16,23 @@ func TestRenderUnit(t *testing.T) {
 	assert.Equal(t, golden(t, "coagent.service"), got)
 }
 
-func TestRenderPlist(t *testing.T) {
-	_, got, err := expectedPlist(target{name: "testuser", home: "/Users/testuser"})
-	require.NoError(t, err)
+// TestUnsupportedPlatformRefusesBeforeTargetResolution pins the product
+// boundary: direct package callers get the platform refusal without any target
+// discovery, since the CLI guard may have been bypassed.
+func TestUnsupportedPlatformRefusesBeforeTargetResolution(t *testing.T) {
+	t.Setenv("SUDO_USER", "nonexistent-target-that-must-never-be-looked-up")
 
-	assert.Equal(t, golden(t, "com.pilat.coagent.plist"), got)
+	require.ErrorIs(t, updateBinaryOn("darwin"), errUnsupported)
+	require.ErrorIs(t, updateBinaryOn("windows"), errUnsupported)
+
+	_, err := unitStaleOn("darwin")
+	require.ErrorIs(t, err, errUnsupported)
+
+	_, err = unitStaleOn("windows")
+	require.ErrorIs(t, err, errUnsupported)
+
+	assert.True(t, platformSupported("linux"))
+	assert.False(t, platformSupported("darwin"))
 }
 
 // TestInstallBinaryReplacesRunning covers the reinstall-over-running case: the

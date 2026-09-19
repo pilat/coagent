@@ -1,4 +1,4 @@
-//go:build darwin || linux
+//go:build linux
 
 package builtin
 
@@ -8,7 +8,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -35,7 +34,7 @@ func TestBashTool_TimeoutKillsDescendants(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if tt.enabled && runtime.GOOS == "linux" {
+			if tt.enabled {
 				if _, err := exec.LookPath("bwrap"); err != nil {
 					t.Skip("bwrap is not installed")
 				}
@@ -74,10 +73,8 @@ func TestBashTool_SandboxHintOnDeniedWrite(t *testing.T) {
 	restore := coagenthome.Override(t.TempDir())
 	defer restore()
 
-	if runtime.GOOS == "linux" {
-		if _, err := exec.LookPath("bwrap"); err != nil {
-			t.Skip("bwrap is not installed")
-		}
+	if _, err := exec.LookPath("bwrap"); err != nil {
+		t.Skip("bwrap is not installed")
 	}
 
 	deniedRoot, err := os.MkdirTemp(".", ".coagent-sandbox-hint-test-")

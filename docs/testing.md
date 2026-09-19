@@ -194,8 +194,8 @@ its runtime and survivor baseline make it unsuitable for merge evidence. The
 Makefile is the source of truth for budgets and exact commands; this document
 defines why those checks exist.
 
-GitHub pull requests and main pushes run `make ci` on Linux and macOS, plus one
-compiled-harness smoke on Linux. Scheduled and manually dispatched CI runs the
+GitHub pull requests and main pushes run `make ci` on Linux plus one
+compiled-harness smoke. Scheduled and manually dispatched CI runs the
 same gate plus default-budget E2E, fuzz, race, and stress amplifiers once on
 Linux. A separate nightly/manual workflow mutation-tests the production Go
 module in named shards and publishes JSON reports; it never runs for pull
@@ -203,8 +203,8 @@ requests or main pushes and is not a branch-protection signal.
 These targets require the `CI=true` environment supplied by the workflow and
 must not be bypassed during local agent work. Only an unmodified default-budget
 run may be reported as canonical CI. The privileged
-Testcontainers Bubblewrap test remains explicit opt-in and is not implied by a
-green macOS or ordinary Linux workflow.
+Testcontainers Bubblewrap test remains explicit opt-in and is not implied by an
+ordinary Linux workflow.
 
 The build-tagged environment integration uses locally installed programs such as
 `git` and `gopls`. Git repositories are temporary local fixtures: the suite must

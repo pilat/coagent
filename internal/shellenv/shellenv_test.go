@@ -5,7 +5,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"testing"
 	"time"
 
@@ -200,11 +199,11 @@ func TestLookPathResolvesRelativePathAgainstWorkDir(t *testing.T) {
 }
 
 func TestEnsureCacheDir_Mode0700(t *testing.T) {
-	if runtime.GOOS == "darwin" {
-		t.Skip("UserCacheDir ignores XDG_CACHE_HOME on darwin")
-	}
-
-	t.Setenv("XDG_CACHE_HOME", t.TempDir())
+	// Both HOME and XDG_CACHE_HOME sit beneath test-owned temp dirs, so
+	// os.UserCacheDir cannot resolve to a real user cache on any host.
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CACHE_HOME", filepath.Join(home, "cache"))
 
 	p := &provider{instanceID: "inst", ttl: time.Minute}
 	dir, err := p.ensureCacheDir()

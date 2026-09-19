@@ -1,4 +1,4 @@
-//go:build darwin || linux
+//go:build linux
 
 package builtin
 
@@ -11,7 +11,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 
@@ -218,10 +217,8 @@ func TestFilesystemTools_NativeSandboxReadsRemainUnrestricted(t *testing.T) {
 }
 
 func TestFilesystemTools_ShieldedStackDeniesHostReads(t *testing.T) {
-	if runtime.GOOS == "linux" {
-		if _, err := exec.LookPath("bwrap"); err != nil {
-			t.Skip("bwrap is not installed")
-		}
+	if _, err := exec.LookPath("bwrap"); err != nil {
+		t.Skip("bwrap is not installed")
 	}
 
 	base := t.TempDir()
@@ -333,10 +330,8 @@ func TestFilesystemTools_ShieldedStackDeniesHostReads(t *testing.T) {
 }
 
 func TestSandboxProcessArtifactShieldBoundary(t *testing.T) {
-	if runtime.GOOS == "linux" {
-		if _, err := exec.LookPath("bwrap"); err != nil {
-			t.Skip("bwrap is not installed")
-		}
+	if _, err := exec.LookPath("bwrap"); err != nil {
+		t.Skip("bwrap is not installed")
 	}
 
 	home := t.TempDir()
@@ -436,10 +431,8 @@ func newNativeToolSandbox(t *testing.T) nativeToolSandbox {
 	t.Helper()
 	t.Setenv("HOME", t.TempDir())
 
-	if runtime.GOOS == "linux" {
-		if _, err := exec.LookPath("bwrap"); err != nil {
-			t.Skip("bwrap is not installed")
-		}
+	if _, err := exec.LookPath("bwrap"); err != nil {
+		t.Skip("bwrap is not installed")
 	}
 
 	base, err := os.MkdirTemp(".", ".coagent-tool-sandbox-test-")
