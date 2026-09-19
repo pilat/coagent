@@ -47,9 +47,11 @@ func defaultInvalidateCompletionCheck(ctx context.Context, tx *sql.Tx, sessionID
 	// The WHERE skips the write when nothing is pending, so idle sessions keep
 	// their updated_at.
 	if _, err := tx.ExecContext(ctx, `UPDATE sessions
-		SET completion_check_candidate_id = NULL, empty_stop_streak = 0, updated_at = ?
+		SET completion_check_candidate_id = NULL, empty_stop_streak = 0,
+			completion_check_confirmed_answer_id = NULL, updated_at = ?
 		WHERE id = ?
-			AND (completion_check_candidate_id IS NOT NULL OR empty_stop_streak != 0)`,
+			AND (completion_check_candidate_id IS NOT NULL OR empty_stop_streak != 0
+				OR completion_check_confirmed_answer_id IS NOT NULL)`,
 		now, sessionID); err != nil {
 		return fmt.Errorf("invalidate completion check: %w", err)
 	}

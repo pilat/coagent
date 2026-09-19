@@ -1,6 +1,7 @@
 package session
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -38,4 +39,29 @@ func TestFinalFactsFromProgress_RejectsBadTodo(t *testing.T) {
 		TodoItems: []byte(`not json`),
 	}, time.Now().UTC())
 	require.Error(t, err)
+}
+
+// The disposition kind decides the badge: a background yield keeps the
+// "nothing for you to do" signal, a confirmed terminal stop stays badge-less.
+func TestRenderDispositionFinal_BackgroundYieldBadgeByKind(t *testing.T) {
+	t.Parallel()
+
+	var runner loopRunner
+	facts := &sessionstore.ProgressFacts{
+		Model: "m", Iteration: 3, TodoItems: []byte("[]"),
+	}
+	observed := time.Date(2026, 9, 18, 12, 0, 0, 0, time.UTC)
+
+	yield := runner.renderDispositionFinal(dispositionDecision{
+		kind:   sessionstore.ResponseDispositionBackgroundYield,
+		output: "yielded answer",
+	}, observed)(facts)
+	assert.True(t, strings.HasPrefix(yield, "🟣 Background"), "got %q", yield)
+
+	confirmed := runner.renderDispositionFinal(dispositionDecision{
+		kind:   sessionstore.ResponseDispositionConfirmed,
+		output: "confirmed answer",
+	}, observed)(facts)
+	assert.NotContains(t, confirmed, "🟣")
+	assert.Contains(t, confirmed, "confirmed answer")
 }

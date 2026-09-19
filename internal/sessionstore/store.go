@@ -52,7 +52,7 @@ func (s SessionStatus) valid() bool {
 	}
 }
 
-const sessionColumns = `id, project_id, model, reasoning_level, master_enabled, attributes, agent_type, parent_id, iteration, status, todo_items, created_at, updated_at, killed_at, root_id, model_input_generation, model_input_boundary, context_baseline_model, context_baseline_prompt_tokens, context_baseline_message_count, shields_up, completion_check_candidate_id, manager_reply_pending, empty_stop_streak`
+const sessionColumns = `id, project_id, model, reasoning_level, master_enabled, attributes, agent_type, parent_id, iteration, status, todo_items, created_at, updated_at, killed_at, root_id, model_input_generation, model_input_boundary, context_baseline_model, context_baseline_prompt_tokens, context_baseline_message_count, shields_up, completion_check_candidate_id, manager_reply_pending, empty_stop_streak, completion_check_confirmed_answer_id`
 
 // errSessionNotFound signals a lookup query matched no row.
 var errSessionNotFound = errors.New("session not found")
@@ -93,6 +93,10 @@ type SessionRecord struct {
 	// CompletionCheckCandidateID points at the hidden final-candidate assistant
 	// message awaiting its deliberate second stop. Nil means no check pending.
 	CompletionCheckCandidateID *int64
+	// CompletionCheckConfirmedAnswerID points at the candidate row the last
+	// confirmed check published: a finalizing child resolves it to the full
+	// answer instead of the ack. Nil when no confirmed answer is outstanding.
+	CompletionCheckConfirmedAnswerID *int64
 	// ManagerReplyPending is the durable manager-reply obligation: set when a
 	// manager-owned model input is promoted, cleared only by a releasing output
 	// or a terminal settlement that supersedes the turn.
@@ -196,6 +200,10 @@ type OrchestrationStore interface { //nolint:interfacebloat // one bounded orche
 	UpdateSessionStatus(ctx context.Context, id int64, status SessionStatus) error
 	KillTerminatingSessions(ctx context.Context) error
 	LoadActiveMessages(ctx context.Context, sessionID int64) ([]*transcript.Message, error)
+	// LoadMessageContentByID resolves one message's text regardless of
+	// compaction state: compaction never rewrites content, so a confirmed
+	// answer pointer stays resolvable for the session's whole life.
+	LoadMessageContentByID(ctx context.Context, sessionID, messageID int64) (string, error)
 	TerminalRejectionStore
 }
 
@@ -938,6 +946,27 @@ func replaceCompactedMessagesTx(
 	return ids, nil
 }
 
+// LoadMessageContentByID resolves one message's text regardless of compaction
+// state: compaction only stamps compacted_at and never rewrites content, so a
+// confirmed answer pointer stays resolvable for the session's whole life.
+func (s *store) LoadMessageContentByID(ctx context.Context, sessionID, messageID int64) (string, error) {
+	var content sql.NullString
+
+	err := s.db.QueryRowContext(ctx,
+		`SELECT content FROM messages WHERE session_id = ? AND id = ?`,
+		sessionID, messageID,
+	).Scan(&content)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", errSessionNotFound
+	}
+
+	if err != nil {
+		return "", fmt.Errorf("load message content by id: %w", err)
+	}
+
+	return content.String, nil
+}
+
 func (s *store) LoadActiveMessages(ctx context.Context, sessionID int64) ([]*transcript.Message, error) {
 	rows, err := s.db.QueryContext(
 		ctx,
@@ -1143,13 +1172,14 @@ func scanSessionFrom(sc rowScanner) (*SessionRecord, error) {
 	var candidateID sql.NullInt64
 	var managerReplyPending sql.NullBool
 	var emptyStopStreak sql.NullInt64
+	var confirmedAnswerID sql.NullInt64
 
 	err := sc.Scan(&rec.ID, &projectID, &model, &reasoning, &masterEnabled, &attrsRaw,
 		&agentType, &parentID, &iteration, &status, &todoItems,
 		&rec.CreatedAt, &rec.UpdatedAt, &killedAt, &rootID,
 		&rec.ModelInputGeneration, &boundary,
 		&rec.ContextBaselineModel, &rec.ContextBaselinePromptTokens, &rec.ContextBaselineMessageCount,
-		&shieldsUp, &candidateID, &managerReplyPending, &emptyStopStreak)
+		&shieldsUp, &candidateID, &managerReplyPending, &emptyStopStreak, &confirmedAnswerID)
 	if err != nil {
 		return nil, fmt.Errorf("scan session: %w", err)
 	}
@@ -1178,6 +1208,10 @@ func scanSessionFrom(sc rowScanner) (*SessionRecord, error) {
 
 	if candidateID.Valid {
 		rec.CompletionCheckCandidateID = &candidateID.Int64
+	}
+
+	if confirmedAnswerID.Valid {
+		rec.CompletionCheckConfirmedAnswerID = &confirmedAnswerID.Int64
 	}
 
 	rec.ManagerReplyPending = managerReplyPending.Bool

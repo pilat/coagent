@@ -121,24 +121,30 @@ func CaptureProgressTx(ctx context.Context, tx *sql.Tx, rootID int64) (*Progress
 	}
 
 	// The current-generation note is the newest unpublished assistant narration
-	// after the generation boundary. A direct reply already has its own durable
-	// output and must not be duplicated inside the replaceable progress card.
+	// after the generation boundary. A pending completion-check candidate
+	// outranks it: the model's deliberate no-tool stop is its newest statement,
+	// and the Working card must carry it while the confirm turn is pending. A
+	// direct reply already has its own durable output and must not be
+	// duplicated inside the replaceable progress card.
 	if facts.ModelInputBoundary > 0 {
 		var latest sql.NullString
 
 		scanErr := tx.QueryRowContext(ctx, `SELECT messages.content FROM messages
-			WHERE messages.session_id = ? AND messages.role = 'assistant' AND messages.id > ?
-			AND messages.compacted_at IS NULL AND messages.rejected_reason IS NULL
-			AND TRIM(COALESCE(messages.content, '')) <> ''
-			AND json_type(messages.tool_calls) = 'array' AND json_array_length(messages.tool_calls) > 0
-			AND NOT EXISTS (SELECT 1 FROM session_outbox WHERE session_outbox.session_id = messages.session_id
-				AND session_outbox.source_key = 'message:' || messages.id || ':reply')
-			ORDER BY messages.id DESC LIMIT 1`, rootID, facts.ModelInputBoundary).Scan(&latest)
-		if scanErr != nil && !errors.Is(scanErr, sql.ErrNoRows) {
-			return nil, fmt.Errorf("load latest model progress: %w", scanErr)
+			JOIN sessions ON sessions.completion_check_candidate_id = messages.id
+			WHERE messages.session_id = ? AND messages.role = 'assistant'
+			AND messages.id > ? AND TRIM(COALESCE(messages.content, '')) <> ''
+			AND COALESCE(json_array_length(messages.tool_calls), 0) = 0`,
+			rootID, facts.ModelInputBoundary).Scan(&latest)
+		switch {
+		case scanErr == nil:
+			facts.LatestModelProgress = latest.String
+		case errors.Is(scanErr, sql.ErrNoRows):
+			if err := captureProgressNarrationNote(ctx, tx, facts); err != nil {
+				return nil, err
+			}
+		default:
+			return nil, fmt.Errorf("load pending candidate note: %w", scanErr)
 		}
-
-		facts.LatestModelProgress = latest.String
 	}
 
 	if err := captureProgressTimes(ctx, tx, facts); err != nil {
@@ -161,6 +167,28 @@ func CaptureProgressTx(ctx context.Context, tx *sql.Tx, rootID int64) (*Progress
 	}
 
 	return facts, nil
+}
+
+// captureProgressNarrationNote is the legacy note path: the newest unpublished
+// tool-bearing assistant narration after the generation boundary.
+func captureProgressNarrationNote(ctx context.Context, tx *sql.Tx, facts *ProgressFacts) error {
+	var latest sql.NullString
+
+	scanErr := tx.QueryRowContext(ctx, `SELECT messages.content FROM messages
+		WHERE messages.session_id = ? AND messages.role = 'assistant' AND messages.id > ?
+		AND messages.compacted_at IS NULL AND messages.rejected_reason IS NULL
+		AND TRIM(COALESCE(messages.content, '')) <> ''
+		AND json_type(messages.tool_calls) = 'array' AND json_array_length(messages.tool_calls) > 0
+		AND NOT EXISTS (SELECT 1 FROM session_outbox WHERE session_outbox.session_id = messages.session_id
+			AND session_outbox.source_key = 'message:' || messages.id || ':reply')
+		ORDER BY messages.id DESC LIMIT 1`, facts.RootID, facts.ModelInputBoundary).Scan(&latest)
+	if scanErr != nil && !errors.Is(scanErr, sql.ErrNoRows) {
+		return fmt.Errorf("load latest model progress: %w", scanErr)
+	}
+
+	facts.LatestModelProgress = latest.String
+
+	return nil
 }
 
 func captureProgressRoot(ctx context.Context, tx *sql.Tx, facts *ProgressFacts) error {

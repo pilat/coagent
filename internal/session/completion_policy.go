@@ -94,6 +94,15 @@ func (r *loopRunner) decideDisposition(
 		r.lastResp, r.agent.outputEnabled, r.replyToInput, r.directReplyEligible,
 	)
 
+	// The pending candidate is the full considered answer; the confirming
+	// stop's own text is by construction a terse "why I'm stopping" ack and is
+	// discarded. Type and releasing semantics stay as they are; an
+	// output-disabled child still publishes nothing (owner guard), but its
+	// recovery value is the candidate.
+	if state != nil && strings.TrimSpace(state.CandidateText) != "" {
+		decision.output = state.CandidateText
+	}
+
 	return decision
 }
 
@@ -355,8 +364,11 @@ func (r *loopRunner) afterCommittedDisposition(
 
 	// Only a completed transcript is a final response; a budget checkpoint or
 	// a terminal error never publishes the model text through run()'s result.
+	// The published content is decision.output — the candidate text on a
+	// confirmed check, not the nudge ack.
 	if decision.kind == sessionstore.ResponseDispositionConfirmed {
-		r.result.FinalResponse = r.lastResp.Text
+		r.result.FinalResponse = decision.output
+		r.confirmedFinal = true
 	}
 }
 
@@ -419,6 +431,8 @@ func (r *loopRunner) renderDispositionFinal(
 		if err != nil {
 			return decision.output
 		}
+
+		composed.IsBackgroundYield = decision.kind == sessionstore.ResponseDispositionBackgroundYield
 
 		return progress.RenderFinalFromFacts(decision.output, composed)
 	}

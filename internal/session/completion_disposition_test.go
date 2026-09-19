@@ -3,6 +3,7 @@ package session
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"testing"
 	"time"
 
@@ -58,17 +59,19 @@ func outboxRows(t *testing.T, db *sql.DB, sessionID int64) []map[string]any {
 	t.Helper()
 
 	rows, err := db.QueryContext(context.Background(),
-		`SELECT type, content, releases_input FROM session_outbox WHERE session_id = ? ORDER BY id`,
+		`SELECT type, content, releases_input, source_key FROM session_outbox WHERE session_id = ? ORDER BY id`,
 		sessionID)
 	require.NoError(t, err)
 	defer rows.Close()
 
 	var out []map[string]any
 	for rows.Next() {
-		var typ, content string
+		var typ, content, sourceKey string
 		var releases bool
-		require.NoError(t, rows.Scan(&typ, &content, &releases))
-		out = append(out, map[string]any{"type": typ, "content": content, "releases": releases})
+		require.NoError(t, rows.Scan(&typ, &content, &releases, &sourceKey))
+		out = append(out, map[string]any{
+			"type": typ, "content": content, "releases": releases, "source_key": sourceKey,
+		})
 	}
 	require.NoError(t, rows.Err())
 
@@ -111,7 +114,9 @@ func TestCompletionDisposition_CandidateStaysHidden(t *testing.T) {
 }
 
 // The second non-empty stop publishes exactly one persistent releasing output
-// carrying the confirmed text, clears the check, and settles FinalResponse.
+// carrying the *candidate's* text — the considered answer — while the
+// confirming stop's own terse ack is discarded. The check clears and
+// FinalResponse settles on the candidate.
 func TestCompletionDisposition_ConfirmationPublishesOnce(t *testing.T) {
 	_, db, store, sessionID, runner := newDispositionLoop(t)
 	ctx := context.Background()
@@ -122,20 +127,27 @@ func TestCompletionDisposition_ConfirmationPublishesOnce(t *testing.T) {
 	runner.lastResp = textResponse("first answer")
 	require.NoError(t, runner.recordIteration(ctx))
 
-	runner.lastResp = textResponse("confirmed answer")
+	runner.lastResp = textResponse("why I am stopping")
 	require.NoError(t, runner.recordIteration(ctx))
 
 	rows := outboxRows(t, db, sessionID)
 	require.Len(t, rows, 1, "confirmation publishes exactly one output")
 	assert.Equal(t, string(sessionstore.OutputMessagePersistent), rows[0]["type"])
 	assert.True(t, rows[0]["releases"].(bool), "the confirmed output releases the manager input")
-	assert.NotContains(t, rows[0]["content"], "first answer",
-		"the hidden candidate text must never reach the manager")
+	assert.Contains(t, rows[0]["content"], "first answer",
+		"the candidate's full answer is what reaches the manager")
+	assert.NotContains(t, rows[0]["content"], "why I am stopping",
+		"the nudge ack is discarded, never published")
+
+	messages := transcriptRoles(t, store, sessionID)
+	confirmedID := messages[len(messages)-1].ID
+	assert.Contains(t, rows[0]["source_key"], fmt.Sprintf("message:%d:final", confirmedID),
+		"the final's idempotency key stays keyed to the confirming row")
 
 	state, err := store.LoadCompletionCheckState(ctx, sessionID)
 	require.NoError(t, err)
 	assert.Nil(t, state.CandidateID, "confirmation clears the pending check")
-	assert.Equal(t, "confirmed answer", runner.result.FinalResponse)
+	assert.Equal(t, "first answer", runner.result.FinalResponse)
 }
 
 // A durable wake source owns the next turn: the stop publishes ordinary
@@ -200,7 +212,44 @@ func TestCompletionDisposition_EmptyStreakThenConfirm(t *testing.T) {
 	require.NoError(t, err)
 	assert.Nil(t, state.CandidateID)
 	assert.Zero(t, state.EmptyStopStreak, "confirmation resets the empty streak")
-	assert.Equal(t, "confirmed after empties", runner.result.FinalResponse)
+	assert.Equal(t, "first answer", runner.result.FinalResponse,
+		"the surviving candidate, not the confirming stop's ack, is the final")
+}
+
+// A budget-fired confirming stop suppresses the outbox row inside the same
+// transaction that already cleared the candidate: the answer is dropped, not
+// deferred. Accepted ack-loss-on-budget semantics, locked explicitly so no one
+// "fixes" it into a partial publish.
+func TestCompletionDisposition_BudgetFiredConfirmDropsTheAnswer(t *testing.T) {
+	_, db, store, sessionID, runner := newDispositionLoop(t)
+	ctx := context.Background()
+
+	runner.lastResp = textResponse("first answer")
+	require.NoError(t, runner.recordIteration(ctx))
+
+	// The limit sits below the confirming attempt's cost, so the disposition
+	// transaction itself observes the crossing and suppresses the final.
+	_, err := db.ExecContext(ctx, `INSERT INTO session_budgets
+		(root_session_id, state, generation, armed_at, baseline_cost_usd, cost_limit_usd)
+		VALUES (?, 'armed', 1, datetime('now'), 0, 0.000001)`, sessionID)
+	require.NoError(t, err)
+
+	runner.lastResp = &llmwire.Response{
+		Text: "why I am stopping", FinishType: llmwire.FinishStop, CostUSD: 0.01,
+	}
+	require.NoError(t, runner.recordIteration(ctx))
+
+	rows := outboxRows(t, db, sessionID)
+	require.Len(t, rows, 1, "only the host budget checkpoint commits")
+	assert.Contains(t, rows[0]["content"], "Budget checkpoint reached")
+	assert.NotContains(t, rows[0]["content"], "first answer",
+		"the candidate was cleared before the suppressed commit: dropped, not deferred")
+	assert.NotContains(t, rows[0]["content"], "why I am stopping")
+
+	state, err := store.LoadCompletionCheckState(ctx, sessionID)
+	require.NoError(t, err)
+	assert.Nil(t, state.CandidateID,
+		"the candidate was cleared before the suppressed commit and must not resurface")
 }
 
 // A child follows the same two-phase script through the disposition path: the
@@ -268,7 +317,8 @@ func TestCompletionDisposition_ChildParity(t *testing.T) {
 	state, err = store.LoadCompletionCheckState(ctx, childID)
 	require.NoError(t, err)
 	assert.Nil(t, state.CandidateID, "confirmation clears the pending check")
-	assert.Equal(t, "child confirmed answer", runner.result.FinalResponse)
+	assert.Equal(t, "child first answer", runner.result.FinalResponse,
+		"the child's recovery value is the candidate text, not the ack")
 }
 
 // An empty stop with a durable wake source yields at once: the streak never

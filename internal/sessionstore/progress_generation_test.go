@@ -365,3 +365,101 @@ func TestCaptureProgressCountsActiveSubagentsAcrossRootTree(t *testing.T) {
 	assert.Equal(t, 1, facts.BackgroundSubagents)
 	assert.Len(t, facts.Waiting, 1, "only a foreground child directly blocking the root is a root wait")
 }
+
+// A pending completion-check candidate is the model's newest statement: while
+// it waits for the confirm turn, its text is the honest Working-card note.
+func TestCaptureProgressNotePrefersPendingCandidate(t *testing.T) {
+	store, db, projectID := newTestStore(t)
+	ctx := context.Background()
+
+	session, err := store.CreateSession(ctx, projectID, "m", "", map[string]any{"manager_id": "mgr"})
+	require.NoError(t, err)
+
+	input, err := store.EnqueueInput(ctx, session.ID, InputSourceUser, "go")
+	require.NoError(t, err)
+	_, err = store.PromoteInput(ctx, input.ID, "go")
+	require.NoError(t, err)
+
+	// The current turn's narration (tool-bearing) and then the candidate stop.
+	_, err = store.InsertMessage(ctx, session.ID, &transcript.Message{
+		Role: "assistant", Content: "current narration",
+		ToolCalls: jsonRaw(`[{"id":"1","name":"bash","input":{}}]`),
+	})
+	require.NoError(t, err)
+	candidate, err := store.InsertMessage(ctx, session.ID, &transcript.Message{
+		Role: "assistant", Content: "full candidate answer", ToolCalls: jsonRaw(`[]`),
+	})
+	require.NoError(t, err)
+
+	setCandidate := func(id int64) {
+		// The column is FK-bound to messages; "cleared" is NULL, never 0.
+		var value any
+		if id != 0 {
+			value = id
+		}
+
+		_, execErr := db.ExecContext(ctx,
+			`UPDATE sessions SET completion_check_candidate_id = ? WHERE id = ?`, value, session.ID)
+		require.NoError(t, execErr)
+	}
+
+	setCandidate(candidate)
+	facts, err := store.CaptureProgress(ctx, session.ID)
+	require.NoError(t, err)
+	assert.Equal(t, "full candidate answer", facts.LatestModelProgress,
+		"a pending candidate outranks the turn's tool narration")
+
+	// Cleared candidate: note returns to the tool-bearing narration.
+	setCandidate(0)
+	facts, err = store.CaptureProgress(ctx, session.ID)
+	require.NoError(t, err)
+	assert.Equal(t, "current narration", facts.LatestModelProgress, "no stale candidate note")
+
+	// A candidate behind the generation boundary is never the note. Moving the
+	// boundary to the candidate id (as a promoted input would) puts the whole
+	// prior turn behind it: neither the old candidate nor the old narration may
+	// serve the new turn.
+	_, err = db.ExecContext(ctx, `UPDATE sessions SET model_input_boundary = ? WHERE id = ?`,
+		candidate, session.ID)
+	require.NoError(t, err)
+	facts, err = store.CaptureProgress(ctx, session.ID)
+	require.NoError(t, err)
+	assert.Empty(t, facts.LatestModelProgress,
+		"a candidate behind the generation boundary is not the note")
+}
+
+// LoadCompletionCheckState resolves the pending candidate's text alongside its
+// id, so the confirming disposition can publish the candidate instead of the
+// nudge ack without a second query.
+func TestLoadCompletionCheckStateCarriesCandidateText(t *testing.T) {
+	store, db, projectID := newTestStore(t)
+	ctx := context.Background()
+
+	session, err := store.CreateSession(ctx, projectID, "m", "", map[string]any{"manager_id": "mgr"})
+	require.NoError(t, err)
+
+	candidateID, err := store.InsertMessage(ctx, session.ID, &transcript.Message{
+		Role: "assistant", Content: "full candidate answer", ToolCalls: jsonRaw(`[]`),
+	})
+	require.NoError(t, err)
+
+	_, err = db.ExecContext(ctx,
+		`UPDATE sessions SET completion_check_candidate_id = ? WHERE id = ?`, candidateID, session.ID)
+	require.NoError(t, err)
+
+	state, err := store.LoadCompletionCheckState(ctx, session.ID)
+	require.NoError(t, err)
+	require.NotNil(t, state.CandidateID)
+	assert.Equal(t, candidateID, *state.CandidateID)
+	assert.Equal(t, "full candidate answer", state.CandidateText)
+
+	// No pending candidate: text is empty.
+	_, err = db.ExecContext(ctx,
+		`UPDATE sessions SET completion_check_candidate_id = NULL WHERE id = ?`, session.ID)
+	require.NoError(t, err)
+
+	state, err = store.LoadCompletionCheckState(ctx, session.ID)
+	require.NoError(t, err)
+	assert.Nil(t, state.CandidateID)
+	assert.Empty(t, state.CandidateText)
+}

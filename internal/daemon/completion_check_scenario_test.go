@@ -20,8 +20,9 @@ import (
 )
 
 // A manager-owned root whose model stops twice with no wake source: the first
-// stop stays hidden as the durable candidate, only the confirmed second stop
-// reaches the manager. The candidate text must never appear in any outbox row.
+// stop stays hidden as the durable candidate, and the confirmed second stop
+// publishes the *candidate's* text — the considered answer — while the nudge
+// ack is discarded and appears in no outbox row.
 func TestHarnessScenario_CompletionCheckConfirmsBeforePublishing(t *testing.T) {
 	var calls int
 	respond := func(_ string, messages []llmwire.Message) *llmwire.Response {
@@ -30,7 +31,7 @@ func TestHarnessScenario_CompletionCheckConfirmsBeforePublishing(t *testing.T) {
 			return &llmwire.Response{Text: "premature candidate answer"}
 		}
 
-		return &llmwire.Response{Text: "confirmed final answer"}
+		return &llmwire.Response{Text: "why I am stopping"}
 	}
 
 	h := newSubagentHarnessWith(t, respond)
@@ -44,23 +45,24 @@ func TestHarnessScenario_CompletionCheckConfirmsBeforePublishing(t *testing.T) {
 		"manager_id": scenarioManagerID,
 	})
 	require.NoError(t, err)
-	waitForVisibleMessage(t, collector, root, "confirmed final answer")
+	waitForVisibleMessage(t, collector, root, "premature candidate answer")
 
 	drainScenarioClaims(t, "completion_check_confirmed_final.json", newChainController(t, h))
-	waitForIdleAfterMessage(t, collector, root, "confirmed final answer")
+	waitForIdleAfterMessage(t, collector, root, "premature candidate answer")
 
 	assert.Equal(t, 2, calls, "the no-wake stop costs exactly one confirmation call")
 
-	var candidateLeaks int
+	var ackLeaks int
 	require.NoError(t, h.db.QueryRowContext(h.ctx, `SELECT COUNT(*) FROM session_outbox
-		WHERE session_id = ? AND content LIKE '%premature candidate answer%'`, root).
-		Scan(&candidateLeaks))
-	assert.Zero(t, candidateLeaks, "the hidden candidate must never reach any outbox row")
+		WHERE session_id = ? AND content LIKE '%why I am stopping%'`, root).
+		Scan(&ackLeaks))
+	assert.Zero(t, ackLeaks, "the discarded nudge ack must never reach any outbox row")
 
 	var persistent int
 	require.NoError(t, h.db.QueryRowContext(h.ctx, `SELECT COUNT(*) FROM session_outbox
-		WHERE session_id = ? AND type = 'message_persistent'`, root).Scan(&persistent))
-	assert.Equal(t, 1, persistent, "exactly one persistent manager answer commits")
+		WHERE session_id = ? AND type = 'message_persistent'
+		AND content LIKE 'premature candidate answer%'`, root).Scan(&persistent))
+	assert.Equal(t, 1, persistent, "exactly one persistent manager answer commits: the candidate text")
 
 	var releases int
 	require.NoError(t, h.db.QueryRowContext(h.ctx, `SELECT COUNT(*) FROM session_outbox
@@ -124,9 +126,11 @@ func TestHarnessScenario_CompletionCheckBackgroundProcessYieldPublishesOnce(t *t
 
 	var yieldOutputs int
 	require.NoError(t, h.db.QueryRowContext(h.ctx, `SELECT COUNT(*) FROM session_outbox
-		WHERE session_id = ? AND type = 'message_persistent' AND content LIKE 'yielding to the running process%'`,
+		WHERE session_id = ? AND type = 'message_persistent'
+		AND content LIKE '🟣 Background%yielding to the running process%'`,
 		root).Scan(&yieldOutputs))
-	assert.Equal(t, 1, yieldOutputs, "the wake yield publishes ordinary output once")
+	assert.Equal(t, 1, yieldOutputs,
+		"the wake yield publishes ordinary output once, opening with the background badge")
 
 	for _, message := range h.parentMessages(root) {
 		if message.Role == llmwire.RoleUser {
@@ -233,7 +237,7 @@ func TestHarnessScenario_CompletionCheckStoppedLinkIsNotAWakeSource(t *testing.T
 			require.NoError(t, err)
 			close(linkSeeded)
 
-			waitForVisibleMessage(t, collector, root, "confirmed answer over dead child")
+			waitForVisibleMessage(t, collector, root, "premature answer over dead child")
 
 			assert.Equal(t, int64(2), calls.Load(),
 				"a %s link promises no wake: the two-phase check runs", state)

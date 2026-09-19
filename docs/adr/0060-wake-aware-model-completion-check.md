@@ -3,6 +3,7 @@
 - **Status:** Accepted
 - **Date:** 2026-09-15
 - **Supersedes:** [ADR-0053](0053-background-handoff-uses-ordinary-completion.md)
+- **Amended by:** [ADR-0061](0061-completion-check-publishes-the-candidate-answer.md) — the published/human-visible answer is now the candidate, not the confirming response (reverses the visibility grain in this ADR's Decision and Consequences; the two-phase mechanism stands)
 
 ## Context
 

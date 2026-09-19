@@ -93,6 +93,9 @@ func TestMigrate_SessionsAgentTypeRebuildPreservesExistingDB(t *testing.T) {
 		delete(rowsAfter[i], "manager_reply_pending")
 		assert.Equal(t, "0", rowsAfter[i]["empty_stop_streak"].String)
 		delete(rowsAfter[i], "empty_stop_streak")
+		// 00043 adds the confirmed-answer pointer; legacy rows point nowhere.
+		assert.False(t, rowsAfter[i]["completion_check_confirmed_answer_id"].Valid)
+		delete(rowsAfter[i], "completion_check_confirmed_answer_id")
 	}
 
 	// Legacy NULLs get 00021's rule; every other row is byte-for-byte identical.

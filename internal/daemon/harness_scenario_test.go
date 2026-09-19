@@ -467,9 +467,11 @@ func TestHarnessScenario_BackgroundFinalResponseResumesOnCompletion(t *testing.T
 
 	var outputType, output string
 	require.NoError(t, h.db.QueryRowContext(h.ctx, `SELECT type, content FROM session_outbox
-		WHERE session_id = ? AND content LIKE 'child still running%' ORDER BY id DESC LIMIT 1`, parentID).
+		WHERE session_id = ? AND content LIKE '%child still running%' ORDER BY id DESC LIMIT 1`, parentID).
 		Scan(&outputType, &output))
 	assert.Equal(t, string(sessionstore.OutputMessagePersistent), outputType)
+	// The yield final carries the background badge title ahead of the model text.
+	assert.True(t, strings.HasPrefix(output, "🟣 Background\n\n"), "yield card: %q", output)
 	assert.Contains(t, output, "child still running")
 
 	// Settle the root's runner before releasing the child: the golden trace pins

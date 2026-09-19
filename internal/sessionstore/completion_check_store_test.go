@@ -69,6 +69,63 @@ func TestCompletionCheck_CandidateThenConfirmCommitsOneNudgeAndOneOutput(t *test
 	assert.Equal(t, 1, outbox)
 }
 
+// A budget-fired candidate commit suppresses the attempt's own answer: the
+// check is dropped with it, so neither the resumed check state nor the live
+// progress-card note may resurface the text.
+func TestCompletionCheck_BudgetFiredCandidateDropsTheAnswer(t *testing.T) {
+	ctx := context.Background()
+	store, db, projectID := newTestStore(t)
+	sessionID := seedCompletionSession(t, store, db, projectID)
+
+	input, err := store.EnqueueInput(ctx, sessionID, InputSourceUser, "go")
+	require.NoError(t, err)
+	_, err = store.PromoteInput(ctx, input.ID, "go")
+	require.NoError(t, err)
+
+	// The limit sits below the candidate attempt's cost, so the disposition
+	// transaction itself observes the crossing and suppresses the answer.
+	_, err = db.ExecContext(ctx, `INSERT INTO session_budgets
+		(root_session_id, state, generation, armed_at, baseline_cost_usd, cost_limit_usd)
+		VALUES (?, 'armed', 1, datetime('now'), 0, 0.000001)`, sessionID)
+	require.NoError(t, err)
+
+	result, err := store.CommitAcceptedResponseDisposition(ctx, AcceptedResponseDisposition{
+		SessionID: sessionID, RootID: sessionID, Iteration: 1,
+		Message: &transcript.Message{
+			Role: "assistant", Content: "the full answer", FinishType: "stop", CostUSD: 0.01,
+		},
+		Kind:  ResponseDispositionCandidate,
+		Nudge: &transcript.Message{Role: "user", Content: "second look"},
+	})
+	require.NoError(t, err)
+	assert.True(t, result.BudgetFired, "the crossing fires on the candidate attempt")
+
+	state, err := store.LoadCompletionCheckState(ctx, sessionID)
+	require.NoError(t, err)
+	assert.Nil(t, state.CandidateID,
+		"the suppressed candidate is dropped, not deferred as a pending check")
+
+	var outbox []string
+	rows, err := db.QueryContext(ctx,
+		`SELECT content FROM session_outbox WHERE session_id = ? ORDER BY id`, sessionID)
+	require.NoError(t, err)
+	defer rows.Close()
+	for rows.Next() {
+		var content string
+		require.NoError(t, rows.Scan(&content))
+		outbox = append(outbox, content)
+	}
+	require.NoError(t, rows.Err())
+	require.Len(t, outbox, 1, "only the host budget checkpoint commits")
+	assert.Contains(t, outbox[0], "Budget checkpoint reached")
+	assert.NotContains(t, outbox[0], "the full answer")
+
+	facts, err := store.CaptureProgress(ctx, sessionID)
+	require.NoError(t, err)
+	assert.NotContains(t, facts.LatestModelProgress, "the full answer",
+		"the fired-budget card note must not carry the suppressed answer")
+}
+
 func TestCompletionCheck_StaleCandidateIsAConflict(t *testing.T) {
 	ctx := context.Background()
 	store, db, projectID := newTestStore(t)

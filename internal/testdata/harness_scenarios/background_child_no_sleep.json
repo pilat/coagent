@@ -23,11 +23,11 @@
     },
     {
       "type": "message",
-      "message": "**🟣 Background work**\n\n🤖 `fake-model` · iteration 4\n⌚ <elapsed> · 💰 $0.0 total\n🧩 Subagents · 0 foreground · 1 background"
+      "message": "**🟣 Background**\n\n🤖 `fake-model` · iteration 4\n⌚ <elapsed> · 💰 $0.0 total\n🧩 Subagents · 0 foreground · 1 background"
     },
     {
       "type": "message",
-      "message": "**🟣 Background work**\n\n🤖 `fake-model` · iteration 5\n⌚ <elapsed> · 💰 $0.0 total\n🧩 Subagents · 0 foreground · 1 background"
+      "message": "**🟣 Background**\n\n🤖 `fake-model` · iteration 5\n⌚ <elapsed> · 💰 $0.0 total\n🧩 Subagents · 0 foreground · 1 background"
     },
     {
       "type": "message",
@@ -95,7 +95,7 @@
     },
     {
       "type": "message_replaceable",
-      "content": "**🟣 Background work**\n\n🤖 `fake-model` · iteration 4\n⌚ <elapsed> · 💰 $0.0 total\n🧩 Subagents · 0 foreground · 1 background",
+      "content": "**🟣 Background**\n\n🤖 `fake-model` · iteration 4\n⌚ <elapsed> · 💰 $0.0 total\n🧩 Subagents · 0 foreground · 1 background",
       "attributes": {
         "manager_id": "telegram:main",
         "model_input_generation": 1
@@ -111,7 +111,7 @@
     },
     {
       "type": "message_replaceable",
-      "content": "**🟣 Background work**\n\n🤖 `fake-model` · iteration 5\n⌚ <elapsed> · 💰 $0.0 total\n🧩 Subagents · 0 foreground · 1 background",
+      "content": "**🟣 Background**\n\n🤖 `fake-model` · iteration 5\n⌚ <elapsed> · 💰 $0.0 total\n🧩 Subagents · 0 foreground · 1 background",
       "attributes": {
         "manager_id": "telegram:main",
         "model_input_generation": 1

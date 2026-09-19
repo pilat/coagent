@@ -81,6 +81,7 @@ type loopRunner struct {
 	emptyCount           int
 	emptyStopTerminal    bool
 	dispositionTerminal  bool
+	confirmedFinal       bool
 	lastResp             *llmwire.Response
 	handledControl       bool
 	replyToInput         bool
@@ -130,6 +131,8 @@ func runLoop(ctx context.Context, agent *svc, opts loopOptions, callback iterati
 		select {
 		case <-ctx.Done():
 			r.result.Error = ctx.Err()
+			r.setWorking(false)
+
 			return r.result, ctx.Err()
 		default:
 		}
@@ -197,6 +200,7 @@ func runLoop(ctx context.Context, agent *svc, opts loopOptions, callback iterati
 		}
 		if r.agent.budgetFired {
 			r.result.Suspended = true
+			r.setWorking(false)
 
 			return r.result, nil
 		}
@@ -220,6 +224,7 @@ func runLoop(ctx context.Context, agent *svc, opts loopOptions, callback iterati
 		}
 		if r.agent.budgetFired {
 			r.result.Suspended = true
+			r.setWorking(false)
 
 			return r.result, nil
 		}
@@ -236,6 +241,7 @@ func (r *loopRunner) handlePreviousResult(ctx context.Context) (bool, error) {
 	if r.agent.HasPendingExternalCall() {
 		r.log.Info("session_suspended", zap.String("reason", "external call still pending"))
 		r.result.Suspended = true
+		r.setWorking(false)
 
 		return true, nil
 	}
@@ -288,6 +294,7 @@ func (r *loopRunner) handlePreviousResult(ctx context.Context) (bool, error) {
 		if r.agent.suspended {
 			r.log.Info("session_suspended", zap.String("reason", "tool requested suspend"))
 			r.result.Suspended = true
+			r.setWorking(false)
 
 			return true, nil
 		}
@@ -309,8 +316,16 @@ func (r *loopRunner) handlePreviousResult(ctx context.Context) (bool, error) {
 			// The final response ends the loop's engagement: clear Working before
 			// the message goes out so later cards read background work, not working.
 			r.setWorking(false)
-			r.result.FinalResponse = state.Text
-			r.notify(ctx, state.Text)
+			// A confirmed completion check settles FinalResponse on the
+			// candidate; this stop's own ack text is not echoed. The flag is
+			// consumed here so any later stop owns its own echo.
+			if !r.confirmedFinal {
+				r.result.FinalResponse = state.Text
+			}
+
+			r.confirmedFinal = false
+
+			r.notify(ctx, r.result.FinalResponse)
 		}
 
 		return true, nil

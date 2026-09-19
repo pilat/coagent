@@ -73,6 +73,39 @@ func TestRenderCompact_ShowsActiveSubagentsByMode(t *testing.T) {
 	assert.NotContains(t, RenderCompact(Snapshot{}, nil), "Subagents")
 }
 
+func TestCardTitle_Table(t *testing.T) {
+	t.Parallel()
+
+	waiting := Snapshot{Waiting: []WaitingItem{{Kind: "sleep"}}}
+	processes := Snapshot{BackgroundProcesses: []ProcessStatus{{ProcessID: "p1"}}}
+
+	cases := []struct {
+		name     string
+		snapshot Snapshot
+		want     string
+	}{
+		{"waiting, model idle", waiting, "🟣 Background"},
+		{"background processes, model idle", processes, "🟣 Background"},
+		{"active subagents", Snapshot{ActiveSubagents: 1}, "🟣 Background"},
+		{"working outranks background processes", Snapshot{
+			MainModelWorking:    true,
+			BackgroundProcesses: []ProcessStatus{{ProcessID: "p1"}},
+		}, "🟢 Working"},
+		{"budget fired outranks all", func() Snapshot {
+			s := processes
+			s.Budget = &Budget{State: "fired", Generation: 1}
+			return s
+		}(), "🛑 Budget reached"},
+		{"nothing in flight", Snapshot{}, "⚪ Idle"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, cardTitle(tc.snapshot))
+		})
+	}
+}
+
 func TestRenderCompact_TitlePrecedence(t *testing.T) {
 	t.Parallel()
 
@@ -80,11 +113,11 @@ func TestRenderCompact_TitlePrecedence(t *testing.T) {
 	armed := &Budget{State: "armed", Generation: 1}
 
 	waiting := Snapshot{Waiting: []WaitingItem{{Kind: "sleep"}}}
-	assert.Contains(t, RenderCompact(waiting, nil), "**⏳ Waiting**")
+	assert.Equal(t, "**🟣 Background**", RenderCompact(waiting, nil))
 	assert.Equal(t, "**⚪ Idle**", RenderCompact(Snapshot{}, nil))
 	assert.Equal(t, "**🟢 Working**", RenderCompact(Snapshot{MainModelWorking: true}, nil))
 	assert.Equal(t, strings.Join([]string{
-		"**🟣 Background work**",
+		"**🟣 Background**",
 		"🧩 Subagents · 0 foreground · 1 background",
 	}, "\n"), RenderCompact(Snapshot{ActiveSubagents: 1, BackgroundSubagents: 1}, nil))
 
@@ -94,9 +127,20 @@ func TestRenderCompact_TitlePrecedence(t *testing.T) {
 
 	armedWaiting := waiting
 	armedWaiting.Budget = armed
-	assert.Contains(t, RenderCompact(armedWaiting, nil), "**⏳ Waiting**")
+	assert.Contains(t, RenderCompact(armedWaiting, nil), "**🟣 Background**")
 
 	assert.Contains(t, RenderCompact(Snapshot{Budget: armed}, nil), "**⚪ Idle**")
+}
+
+// The compact card communicates waiting through the 🟣 title only; item counts
+// belong to /status.
+func TestRenderCompact_NoWaitingDetailLine(t *testing.T) {
+	t.Parallel()
+
+	one := Snapshot{Waiting: []WaitingItem{{Kind: "sleep"}}}
+	rendered := RenderCompact(one, nil)
+	assert.NotContains(t, rendered, "⏳")
+	assert.NotContains(t, rendered, "Waiting on")
 }
 
 func TestRenderCompact_MissingFragmentsOmitted(t *testing.T) {
@@ -145,14 +189,13 @@ func TestRenderCompact_USDTrimming(t *testing.T) {
 	assert.Contains(t, RenderCompact(sixDecimals, nil), "💰 $0.123457 total")
 }
 
-func TestRenderCompact_WaitingSingularAndPlural(t *testing.T) {
+// /status keeps its diagnostic waiting count even though the compact card no
+// longer renders it.
+func TestRenderFull_KeepsWaitingCountLine(t *testing.T) {
 	t.Parallel()
 
-	one := Snapshot{Waiting: []WaitingItem{{Kind: "sleep"}}}
-	assert.Contains(t, RenderCompact(one, nil), "⏳ Waiting on 1 item")
-
-	many := Snapshot{Waiting: []WaitingItem{{Kind: "sleep"}, {Kind: "subagent"}}}
-	assert.Contains(t, RenderCompact(many, nil), "⏳ Waiting on 2 items")
+	snapshot := Snapshot{Waiting: []WaitingItem{{Kind: "sleep"}}}
+	assert.Contains(t, RenderFull(snapshot, nil), "- Waiting: 1 item(s)")
 }
 
 func TestRenderCompact_UnboundedNoteBeyond512Runes(t *testing.T) {

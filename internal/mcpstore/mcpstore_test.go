@@ -134,7 +134,9 @@ func TestMigrationsApplyToAnExistingDatabase(t *testing.T) {
 		`ALTER TABLE sessions DROP COLUMN completion_check_candidate_id`,
 		`ALTER TABLE sessions DROP COLUMN manager_reply_pending`,
 		`ALTER TABLE sessions DROP COLUMN empty_stop_streak`,
-		`DELETE FROM goose_db_version WHERE version_id BETWEEN 16 AND 42`,
+		// 00043 added the confirmed-answer pointer to the candidate row.
+		`ALTER TABLE sessions DROP COLUMN completion_check_confirmed_answer_id`,
+		`DELETE FROM goose_db_version WHERE version_id BETWEEN 16 AND 43`,
 	} {
 		_, err = db.ExecContext(ctx, stmt)
 		require.NoError(t, err, stmt)
