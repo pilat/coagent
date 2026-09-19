@@ -239,8 +239,8 @@ func TestWorktreeClient_RemoveWorktree_RollbackThroughSymlinkedPath(t *testing.T
 	client := NewWorktreeClient()
 	ctx := context.Background()
 
-	// git registers worktrees under canonical paths (/var → /private/var on
-	// macOS); the guard must match the physical path, not the caller's spelling.
+	// git registers worktrees under canonical paths; the guard must match the
+	// physical path, not the caller's spelling.
 	base := t.TempDir()
 	alias := filepath.Join(t.TempDir(), "alias")
 	require.NoError(t, os.Symlink(base, alias))

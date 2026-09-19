@@ -24,22 +24,31 @@ const (
 	// binaryMode is what the installed binary gets: readable and executable by
 	// everyone, writable only by the owner that put it there.
 	binaryMode = 0o755
-	// unitMode is what the unit and the plist get. launchd refuses a
-	// group-writable plist outright.
+	// unitMode is what the unit gets.
 	unitMode = 0o644
 )
 
 // Platform names, used where the answer travels to a UI rather than to a switch.
-const (
-	platformLinux  = "linux"
-	platformDarwin = "darwin"
-)
+const platformLinux = "linux"
 
-// scopeSystem is the only scope there is: both platforms register a system
-// service that drops to the target user.
+// scopeSystem is the only scope there is: a system service that drops to the
+// target user.
 const scopeSystem = "system"
 
-var errUnsupported = errors.New("service installation is supported on linux (systemd) and macOS (launchd) only")
+var errUnsupported = errors.New("service installation is supported on linux (systemd) only")
+
+// platformSupported reports whether this host runs the supported runtime. It is
+// the first check in every exported entry so direct package callers cannot
+// write a binary or resolve a unit on an unsupported host merely because the
+// CLI guard was bypassed.
+func platformSupported(goos string) bool { return goos == platformLinux }
+
+// unsupportedPlatformError names the offending platform so a refusal from a
+// manually cross-built binary stays diagnosable. It wraps the sentinel so
+// errors.Is keeps working for callers.
+func unsupportedPlatformError(goos string) error {
+	return fmt.Errorf("%w (GOOS=%q)", errUnsupported, goos)
+}
 
 // Info is what a UI can learn about the service without talking to the daemon:
 // unit presence, paths, and whether the service manager considers it active.
@@ -94,22 +103,28 @@ type target struct {
 	gid  int
 }
 
-// New returns the service manager for this platform. There is one install mode
-// per platform: a system unit that drops to the target user.
+// New returns the service manager for this platform. There is one install mode:
+// a systemd system unit that drops to the target user.
 func New() (Manager, error) {
-	switch runtime.GOOS {
-	case platformLinux:
-		return newSystemd()
-	case platformDarwin:
-		return newLaunchd()
-	default:
-		return nil, errUnsupported
+	if !platformSupported(runtime.GOOS) {
+		return nil, unsupportedPlatformError(runtime.GOOS)
 	}
+
+	return newSystemd()
 }
 
 // UpdateBinary replaces the installed binary with the running one. It needs no
 // privileges — that is the whole point of keeping the binary in the user's home.
-func UpdateBinary() error {
+func UpdateBinary() error { return updateBinaryOn(runtime.GOOS) }
+
+// updateBinaryOn is the testable half of UpdateBinary: the platform refusal is
+// the first operation, so direct package callers cannot write a binary on an
+// unsupported host merely because the CLI guard was bypassed.
+func updateBinaryOn(goos string) error {
+	if !platformSupported(goos) {
+		return unsupportedPlatformError(goos)
+	}
+
 	t, err := resolveTarget()
 	if err != nil {
 		return err
@@ -118,28 +133,24 @@ func UpdateBinary() error {
 	return installBinary(binaryPathFor(t), t)
 }
 
-// UnitStale reports whether the installed unit/plist differs from what this
-// version would write. A missing file counts as stale.
-func UnitStale() (bool, error) {
+// UnitStale reports whether the installed unit differs from what this version
+// would write. A missing file counts as stale.
+func UnitStale() (bool, error) { return unitStaleOn(runtime.GOOS) }
+
+// unitStaleOn is the testable half of UnitStale: the platform refusal is the
+// first operation, so direct package callers cannot resolve a unit on an
+// unsupported host merely because the CLI guard was bypassed.
+func unitStaleOn(goos string) (bool, error) {
+	if !platformSupported(goos) {
+		return false, unsupportedPlatformError(goos)
+	}
+
 	t, err := resolveTarget()
 	if err != nil {
 		return false, err
 	}
 
-	var (
-		path string
-		want string
-	)
-
-	switch runtime.GOOS {
-	case platformLinux:
-		path, want, err = expectedUnit(t)
-	case platformDarwin:
-		path, want, err = expectedPlist(t)
-	default:
-		return false, errUnsupported
-	}
-
+	path, want, err := expectedUnit(t)
 	if err != nil {
 		return false, err
 	}
@@ -149,7 +160,7 @@ func UnitStale() (bool, error) {
 
 // unitFileStale is the filesystem-only half of UnitStale. Keeping target and
 // platform discovery outside makes the contract testable without consulting a
-// developer machine's real /etc/systemd or /Library/LaunchDaemons state.
+// developer machine's real /etc/systemd state.
 func unitFileStale(path, want string) (bool, error) {
 	got, err := os.ReadFile(path)
 	if os.IsNotExist(err) {

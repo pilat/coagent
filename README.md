@@ -16,7 +16,7 @@ TCP listener, web UI, IDE extension, or public controller API.
 
 > Interactive agents are built for steering. coagent is built for handoff.
 
-coagent is pre-1.0, single-operator software for Linux and macOS.
+coagent is pre-1.0, single-operator software for Linux.
 
 ## Quick start
 
@@ -42,8 +42,8 @@ credential values in `~/.coagent/secrets`, referenced from the config as
 ./coagent status    # exit code 0 means running
 ```
 
-The binary stays user-owned under `~/.local/bin`, while the systemd unit or
-launchd plist runs it as your login user. Updating is a manual binary replace
+The binary stays user-owned under `~/.local/bin`, while the systemd unit
+runs it as your login user. Updating is a manual binary replace
 plus `coagent restart`.
 
 For Telegram, create a private bot with BotFather, enable Threaded Mode, and
@@ -153,10 +153,10 @@ What is enforced:
   secrets file is parsed into memory rather than loaded into the environment.
   Ordinary environment variables inherited by the daemon remain visible to its
   children, so do not start it with unrelated credentials exported.
-- **Write confinement by default.** On supported Linux and macOS systems, Bash
-  descendants, LSP and stdio MCP processes, and dedicated file-mutation tools
-  are restricted to the project and explicit writable paths using Bubblewrap
-  or Seatbelt. Startup fails if the enabled backend cannot enforce the policy.
+- **Write confinement by default.** On Linux, Bash descendants, LSP and stdio
+  MCP processes, and dedicated file-mutation tools are restricted to the
+  project and explicit writable paths using Bubblewrap. Startup fails if the
+  backend cannot enforce the policy.
 - **Operator-controlled session shields.** `/shieldsup` durably confines the
   complete session tree's built-in file tools and session-owned processes to
   its project, apart from a fixed read-only system runtime needed to start
@@ -179,9 +179,6 @@ What is not enforced:
   loader, and certificate data needed by system tools. Bash can still make
   arbitrary remote requests, and built-in web tools retain their existing
   network behavior.
-- On macOS, Seatbelt requires reading the exact filesystem root directory while
-  launching a confined process. Its top-level names remain enumerable, while
-  data and metadata below non-runtime roots remain denied.
 - Global and marketplace instruction sources remain trusted daemon inputs and
   are read outside the project boundary. Project-local instructions, skills,
   and subagent definitions use the same rooted project access as file tools.
@@ -313,8 +310,8 @@ native injection — while configured MCP search tools coexist alongside it.
 
 ## Know before you run
 
-- Linux requires Bubblewrap; macOS uses its built-in Seatbelt runtime. Enabling
-  the sandbox without its platform runtime, or on another OS, fails loudly.
+- Linux requires Bubblewrap. Enabling the sandbox without it fails loudly.
+  A binary built for any other OS refuses to run before it starts.
 - The first model-catalog lookup needs network access. Later starts try the
   network again but can fall back to the last valid disk snapshot. Arbitrary
   local model IDs need a matching catalog entry.
@@ -356,7 +353,7 @@ make verify-offline # prove a warmed checkout needs no dependency resolution
 make ci             # CI-only: static gates + full ordinary/integration tests
 ```
 
-Pull requests, main pushes, and releases run `make ci`; Linux pull requests add
+Pull requests, main pushes, and releases run `make ci` on Linux, plus
 a compiled-harness smoke. Scheduled/manual CI adds full E2E, fuzz, race, and
 stress amplifiers. CI-only slow targets require the workflow-provided `CI=true`
 environment and reject local execution. Start with
@@ -366,7 +363,7 @@ for dependency boundaries.
 
 ## Releases
 
-Release artifacts are designed for Linux and macOS on amd64 and arm64. Each
+Release artifacts target Linux on amd64 and arm64. Each
 release carries checksums, a keyless Sigstore bundle, and GitHub build
 provenance. The build rejects a dirty tree and requires the release tag at
 `HEAD`; archives are normalized for deterministic output.
@@ -377,8 +374,7 @@ provenance. The build rejects a dirty tree and requires the release tag at
 ```bash
 gh release download vX.Y.Z --repo pilat/coagent --dir coagent-release
 cd coagent-release
-sha256sum --check checksums.txt             # Linux
-# shasum -a 256 -c checksums.txt            # macOS
+sha256sum --check checksums.txt
 cosign verify-blob \
   --bundle checksums.txt.sigstore.json \
   --certificate-identity-regexp 'https://github.com/pilat/coagent/.github/workflows/release.yml@refs/tags/v.*' \

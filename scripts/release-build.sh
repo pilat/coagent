@@ -44,7 +44,7 @@ trap 'rm -rf "$release_tmp"' EXIT HUP INT TERM
 version_pkg=github.com/pilat/coagent/internal/version
 ldflags="-buildid= -s -w -X $version_pkg.Version=$VERSION"
 
-for platform in linux-amd64 linux-arm64 darwin-amd64 darwin-arm64
+for platform in linux-amd64 linux-arm64
 do
 	goos=${platform%-*}
 	goarch=${platform#*-}
@@ -57,6 +57,4 @@ done
 GOPROXY=off GOSUMDB=off GOTOOLCHAIN=local go run -trimpath ./cmd/releasebuilder \
 	-version "$VERSION" -epoch "$epoch" -out "$output_dir" -license LICENSE \
 	"linux-amd64=$release_tmp/linux-amd64" \
-	"linux-arm64=$release_tmp/linux-arm64" \
-	"darwin-amd64=$release_tmp/darwin-amd64" \
-	"darwin-arm64=$release_tmp/darwin-arm64"
+	"linux-arm64=$release_tmp/linux-arm64"

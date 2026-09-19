@@ -1,4 +1,4 @@
-//go:build linux || darwin
+//go:build linux
 
 package builtin
 
@@ -8,7 +8,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -51,7 +50,7 @@ func TestBashTool_ShellEnvActivation(t *testing.T) {
 		}
 
 		t.Run(name, func(t *testing.T) {
-			if enabled && runtime.GOOS == "linux" {
+			if enabled {
 				if _, err := exec.LookPath("bwrap"); err != nil {
 					t.Skip("bwrap is not installed")
 				}

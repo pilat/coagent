@@ -56,9 +56,9 @@ or extend a small contract at the owning boundary instead.
 The map is an ownership index, not a list of exported symbols. Directory nesting
 does not imply a tier except where it expresses an implementation variant.
 
-- `cmd/coagent` — composition root, CLI product policy and daemon lifecycle commands.
+- `cmd/coagent` — composition root, CLI product policy and daemon lifecycle commands. Refuses any non-Linux platform at process entry, before the guardian or command dispatch ([ADR-0062](docs/adr/0062-linux-only-supported-runtime.md)).
 - `internal/admission` — in-memory runner capacity and per-parent subagent quotas.
-- `internal/bashsandbox` — native filesystem confinement and process-launch implementation for session-owned processes.
+- `internal/bashsandbox` — Linux Bubblewrap filesystem confinement and process-launch implementation for session-owned processes. Non-Linux builds carry only a compile-time fallback that returns an unsupported-backend error.
 - `internal/budget` — one-shot root-tree budget policy and its user-authorized tool.
 - `internal/catalog` — external model metadata acquisition, caching and identifier matching.
 - `internal/coagenthome` — sole resolver and name owner for the coagent home directory.
@@ -73,7 +73,7 @@ does not imply a tier except where it expresses an implementation variant.
 - `internal/humanize` — presentation-only formatting helpers (human-readable sizes); stdlib only.
 - `internal/id` — local identity generation utilities.
 - `internal/inputruntime` — durable session-input promotion, activation and command boundary.
-- `internal/install` — platform service installation and lifecycle integration.
+- `internal/install` — Linux systemd service installation and lifecycle integration. Refuses non-Linux hosts before target resolution.
 - `internal/llm` — provider protocol drivers, client creation, retries and cost handling.
 - `internal/llmwire` — provider-neutral message, response and tool wire vocabulary.
 - `internal/loader` — project context, skills, subagent definitions and marketplace loading.
@@ -100,7 +100,7 @@ does not imply a tier except where it expresses an implementation variant.
   templates. The build-agent template owns the runtime identity contract: the
   agent presents as Coagent with the repo URL and does not volunteer the
   underlying model vendor.
-- `cmd/releasebuilder` — build-time deterministic archive and checksum composition root.
+- `cmd/releasebuilder` — build-time deterministic archive and checksum composition root. Accepts exactly the two Linux tuples (`linux-amd64`, `linux-arm64`), one binary each.
 - `internal/schedule` — durable schedules, sleep ownership and scheduled delivery execution.
 - `internal/session` — isolated agent loop, tool gating and transcript projection.
 - `internal/sessionbus` — in-process session-event subscriptions and non-blocking fan-out.
@@ -655,13 +655,13 @@ invent inconsistent or test-leaking state locations.
 
 ### Filesystem and egress boundary
 
-The native filesystem-write sandbox, enabled by default unless top-level
+The native Bubblewrap-backed filesystem-write sandbox, enabled by default unless top-level
 `sandbox.enabled: false` is configured, confines direct writes by Bash
 descendants, dedicated mutation tools, LSP servers and stdio MCP servers to
-configured writable roots. On macOS it uses the platform sandbox. On Linux it
+configured writable roots. It
 requires Bubblewrap that is UID 0 in a valid initial namespace, or appears as
 the kernel overflow UID only from a valid non-initial namespace when its
-filesystem is read-only and outside writable roots. Shields-down Linux profiles
+filesystem is read-only and outside writable roots. Shields-down profiles
 mount a fresh `/proc` after other binds for nested user-namespace setup.
 Writable roots under `/proc`, `/dev`, and `/sys` are rejected, and shields-up
 filters procfs mount aliases instead of mirroring them into the project. It is
@@ -713,7 +713,7 @@ JSON-RPC with a greeting/readiness distinction and carries the read-only
 `status` method only: no chat, pushes, configuration mutations, secrets, or
 restart operation ([ADR-0060](docs/adr/0060-telegram-service-topics-own-daemon-management.md)).
 
-Service installation uses the supported platform service mechanism while running
+Service installation registers the Linux systemd unit while running
 the daemon as the login user from a user-owned binary. Lifecycle verbs are
 explicit `coagent ...` commands; the config-apply restart is an
 in-process lifecycle signal that never crosses the socket.
@@ -950,7 +950,7 @@ and single-instance coordination. The socket carries responses only, so a slow
 or unread client is disconnected rather than allowed to stall the daemon.
 Release builder owns reproducible archive layout and checksum generation; the
 release workflow supplies clean tagged source and platform binaries. Official
-artifacts target Linux and macOS on amd64 and arm64, include a license and sorted
+artifacts target Linux on amd64 and arm64, include a license and sorted
 checksums, and are accompanied by provenance and Sigstore material as described
 in ADR-0019. Windows and container artifacts are not an implied support surface.
 

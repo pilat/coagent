@@ -48,8 +48,42 @@ func TestParseOptionsRejectsUnsafeVersion(t *testing.T) {
 func TestBuildArtifactRejectsUnsupportedPlatform(t *testing.T) {
 	t.Parallel()
 
-	_, err := buildArtifact(options{version: "v1.2.3", outDir: t.TempDir()}, "windows-amd64=coagent")
-	require.Error(t, err)
+	for _, input := range []string{
+		"windows-amd64=coagent",
+		"darwin-amd64=coagent",
+		"darwin-arm64=coagent",
+	} {
+		_, err := buildArtifact(options{version: "v1.2.3", outDir: t.TempDir()}, input)
+		require.Error(t, err, input)
+	}
+}
+
+func TestValidateReleaseInputsRequiresExactlyBothLinuxTuples(t *testing.T) {
+	t.Parallel()
+
+	require.NoError(t, validateReleaseInputs([]string{
+		"linux-amd64=a", "linux-arm64=b",
+	}))
+
+	for name, inputs := range map[string][]string{
+		"darwin rejected":  {"linux-amd64=a", "darwin-amd64=b"},
+		"missing arm64":    {"linux-amd64=a"},
+		"missing amd64":    {"linux-arm64=b"},
+		"empty":            {},
+		"duplicate amd64":  {"linux-amd64=a", "linux-amd64=b", "linux-arm64=c"},
+		"duplicate arm64":  {"linux-amd64=a", "linux-arm64=b", "linux-arm64=c"},
+		"extra platform":   {"linux-amd64=a", "linux-arm64=b", "linux-386=c"},
+		"malformed input":  {"linux-amd64=a", "linux-arm64"},
+		"empty binary":     {"linux-amd64=a", "linux-arm64="},
+		"windows rejected": {"linux-amd64=a", "windows-amd64=b"},
+		"single darwin":    {"darwin-arm64=a"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			require.Error(t, validateReleaseInputs(inputs))
+		})
+	}
 }
 
 func archiveNames(t *testing.T, path string) []string {

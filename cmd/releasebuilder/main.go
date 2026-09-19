@@ -17,6 +17,12 @@ import (
 	"time"
 )
 
+// releasePlatforms is the complete release input set: exactly one binary per
+// Linux tuple. The builder enforces the two-archive contract itself, so direct
+// calls with missing, duplicate, or partial input sets fail outside the shell
+// wrapper too.
+var releasePlatforms = []string{"linux-amd64", "linux-arm64"}
+
 const checksumFile = "checksums.txt"
 
 var versionPattern = regexp.MustCompile(`^v\d+\.\d+\.\d+([-+][0-9A-Za-z][0-9A-Za-z.-]*)?$`)
@@ -44,6 +50,10 @@ func main() {
 func run(args []string) error {
 	opts, err := parseOptions(args)
 	if err != nil {
+		return err
+	}
+
+	if err := validateReleaseInputs(opts.inputs); err != nil {
 		return err
 	}
 
@@ -106,11 +116,47 @@ func buildArtifact(opts options, input string) (artifact, error) {
 
 func supportedPlatform(platform string) bool {
 	switch platform {
-	case "linux-amd64", "linux-arm64", "darwin-amd64", "darwin-arm64":
+	case "linux-amd64", "linux-arm64":
 		return true
 	default:
 		return false
 	}
+}
+
+// validateReleaseInputs requires the complete release input set exactly once:
+// both Linux tuples with a binary each, no duplicates, no extras, no partial
+// sets. Binary presence is checked here too, so the validator is a complete
+// gate rather than deferring malformed inputs to the per-artifact build.
+func validateReleaseInputs(inputs []string) error {
+	seen := make(map[string]int, len(inputs))
+
+	for _, input := range inputs {
+		platform, binary, ok := strings.Cut(input, "=")
+		if !ok || !supportedPlatform(platform) || binary == "" {
+			return fmt.Errorf("invalid platform=binary input %q", input)
+		}
+
+		seen[platform]++
+	}
+
+	for _, want := range releasePlatforms {
+		switch seen[want] {
+		case 1:
+		case 0:
+			return fmt.Errorf("release is missing required platform %q", want)
+		default:
+			return fmt.Errorf("release has duplicate inputs for platform %q", want)
+		}
+	}
+
+	if len(seen) != len(releasePlatforms) {
+		return fmt.Errorf(
+			"release requires exactly %v, got %d distinct platforms",
+			releasePlatforms, len(seen),
+		)
+	}
+
+	return nil
 }
 
 func writeArchive(path, binaryPath, licensePath string, epoch time.Time) error {

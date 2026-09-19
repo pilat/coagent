@@ -21,8 +21,9 @@ func TestSudoCommand(t *testing.T) {
 	assert.Equal(t, os.Stderr, cmd.Stderr)
 }
 
-// TestShouldEscalate is the gate itself: every lifecycle verb writes to /etc or
-// the system launchd domain, and only a non-root caller has to go get that.
+// TestShouldEscalate is the gate itself: every lifecycle verb writes to
+// /etc/systemd or the user's binary path, and only a non-root caller has to go
+// get that.
 func TestShouldEscalate(t *testing.T) {
 	tests := []struct {
 		name   string

@@ -218,7 +218,7 @@ func (c *worktreeClient) worktreeAtBranch(ctx context.Context, repoRoot, worktre
 	}
 
 	// git reports canonical paths; a symlinked spelling of the same directory
-	// (/var vs /private/var on macOS) must still match the guard.
+	// must still match the guard.
 	want := canonicalizePath(worktreePath)
 
 	var atPath bool
@@ -239,7 +239,7 @@ func (c *worktreeClient) worktreeAtBranch(ctx context.Context, repoRoot, worktre
 }
 
 // canonicalizePath resolves the deepest existing prefix of p so a symlinked
-// ancestor (e.g. macOS /var) compares equal to git's canonical spelling.
+// ancestor compares equal to git's canonical spelling.
 func canonicalizePath(p string) string {
 	p = filepath.Clean(p)
 	suffix := ""

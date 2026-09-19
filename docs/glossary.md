@@ -468,9 +468,9 @@ The in-memory credential map parsed from `~/.coagent/secrets`, deliberately kept
 A per-cwd snapshot of a login+interactive shell (mise / asdf / nvm / direnv toolchain activation), captured, cached (validated by a fingerprint of the on-disk toolchain state, with a 30-min backstop — see [ADR-0001](adr/0001-shellenv-fingerprint-invalidation.md)), and replayed for Bash / LSP / MCP subprocess spawns while session shields are down. Raised sessions bypass capture and replay. Captures `os.Environ()` only — never a secrets map.
 
 **filesystem-write sandbox**:
-Default-on native write confinement for Bash descendants, LSP and stdio MCP
-processes, and the `write` / `edit` / `apply_patch` tools (Seatbelt on macOS,
-Bubblewrap on Linux). Operators may disable it explicitly. By itself it is an
+Default-on native Bubblewrap-backed write confinement for Bash descendants,
+LSP and stdio MCP processes, and the `write` / `edit` / `apply_patch` tools.
+Operators may disable it explicitly. By itself it is an
 *integrity* boundary — not confidentiality: it does not confine reads or network
 egress. Session shields add the separate operator-controlled read boundary.
 _Avoid_: sandbox (unqualified — implies more isolation than it gives).
@@ -479,7 +479,10 @@ _Avoid_: sandbox (unqualified — implies more isolation than it gives).
 `cmd/coagent/main.go` — hand-wires every component in dependency order (no DI framework) and records a named stop closure per component, replayed in reverse on shutdown.
 
 **service install**:
-The one install layout per platform ([ADR-0009](adr/0009-system-daemon-user-binary.md)): a *system* unit/plist (systemd `/etc/systemd/system`, launchd `/Library/LaunchDaemons`) that drops the daemon to the login user, pointing at a binary in `~/.local/bin/coagent`. Root writes the unit once; the binary stays user-owned so updates need none.
+The one install layout ([ADR-0009](adr/0009-system-daemon-user-binary.md)): a
+*system* systemd unit (`/etc/systemd/system`) that drops the daemon to the
+login user, pointing at a binary in `~/.local/bin/coagent`. Root writes the
+unit once; the binary stays user-owned so updates need none.
 _Avoid_: install scope, user install, `--user` (there is no second mode — "scope" belongs to the MCP registry).
 
 **escalation gate**:
@@ -487,7 +490,7 @@ _Avoid_: install scope, user install, `--user` (there is no second mode — "sco
 _Avoid_: sudo wrapper, privilege helper (nothing here is a persistent helper process).
 
 **unit drift**:
-The installed unit/plist no longer matching what the running version would render. Binary updates never rewrite it, so the update path renders-and-compares and *warns*; it never escalates to fix drift on its own.
+The installed systemd unit no longer matching what the running version would render. Binary updates never rewrite it, so the update path renders-and-compares and *warns*; it never escalates to fix drift on its own.
 
 ---
 

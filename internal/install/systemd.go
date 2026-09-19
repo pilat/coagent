@@ -140,18 +140,18 @@ func (m *systemdManager) Install(ctx context.Context) error {
 
 	// enable --now covers both first install and reinstall-over-stopped; a
 	// running unit still needs the restart to pick up the new binary.
-	if err := run(ctx, "systemctl", "enable", "--now", unitName); err != nil {
+	if err := runSystemctl(ctx, "enable", "--now", unitName); err != nil {
 		return err
 	}
 
-	return run(ctx, "systemctl", "restart", unitName)
+	return runSystemctl(ctx, "restart", unitName)
 }
 
 func (m *systemdManager) Uninstall(ctx context.Context) error {
 	// Errors are ignored deliberately: uninstall must finish on a half-installed
 	// or already-stopped service, and "not loaded" is exactly that state.
-	_ = run(ctx, "systemctl", "disable", "--now", unitName)
-	_ = run(ctx, "systemctl", "reset-failed", unitName)
+	_ = runSystemctl(ctx, "disable", "--now", unitName)
+	_ = runSystemctl(ctx, "reset-failed", unitName)
 
 	if err := os.Remove(m.unitPath); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("remove %s: %w", m.unitPath, err)
@@ -169,17 +169,17 @@ func (m *systemdManager) Uninstall(ctx context.Context) error {
 }
 
 func (m *systemdManager) Start(ctx context.Context) error {
-	return run(ctx, "systemctl", "start", unitName)
+	return runSystemctl(ctx, "start", unitName)
 }
 
 func (m *systemdManager) Stop(ctx context.Context) error {
-	return run(ctx, "systemctl", "stop", unitName)
+	return runSystemctl(ctx, "stop", unitName)
 }
 
 func (m *systemdManager) Restart(ctx context.Context) error {
-	return run(ctx, "systemctl", "restart", unitName)
+	return runSystemctl(ctx, "restart", unitName)
 }
 
 func (m *systemdManager) reload(ctx context.Context) error {
-	return run(ctx, "systemctl", "daemon-reload")
+	return runSystemctl(ctx, "daemon-reload")
 }

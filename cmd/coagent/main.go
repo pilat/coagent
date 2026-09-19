@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"runtime"
 	"slices"
 	"syscall"
 	"time"
@@ -49,6 +50,23 @@ const catalogEnrichTimeout = 30 * time.Second
 // It is not a failure: bootDaemon execs once the deferred drain has released the
 // database and the socket.
 var errRestartRequested = errors.New("restart requested")
+
+// errUnsupportedPlatform is the stable refusal for a binary cross-compiled to
+// any OS other than Linux. It fires before the guardian, configuration, sandbox
+// probing, service handling, or dispatch, and is independent of sandbox
+// configuration.
+var errUnsupportedPlatform = errors.New("coagent supports Linux only")
+
+// ensureLinuxPlatform rejects a non-Linux build before it can reach any
+// process-lifecycle behavior. The platform is injected at the entry seam so the
+// refusal ordering is directly testable rather than implied by source order.
+func ensureLinuxPlatform(goos string) error {
+	if goos == "linux" {
+		return nil
+	}
+
+	return fmt.Errorf("%w: refusing a binary built for %q; rebuild for linux", errUnsupportedPlatform, goos)
+}
 
 // selfExecPath is where this binary lives, resolved at process start. It must be
 // captured before anything can swap the file: after an update /proc/self/exe
@@ -96,20 +114,38 @@ func main() {
 // run keeps os.Exit out of any deferred-cleanup scope: main calls it exactly
 // once, after every defer in this function has already unwound.
 func run() int {
-	if handled, err := backgroundprocess.RunGuardian(os.Args[1:]); handled {
+	return runWith(runtime.GOOS, os.Args[1:], backgroundprocess.RunGuardian, dispatch)
+}
+
+// runWith is the entry seam with the platform injected. The platform guard is
+// the first operation: a non-Linux binary must gain no process-lifecycle
+// behavior — not even guardian execution — before it refuses.
+func runWith(
+	goos string,
+	args []string,
+	guardian func(args []string) (bool, error),
+	disp func(ctx context.Context, args []string) int,
+) int {
+	if err := ensureLinuxPlatform(goos); err != nil {
+		fmt.Fprintf(os.Stderr, "%v\n", err)
+
+		return exitError
+	}
+
+	if handled, err := guardian(args); handled {
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "%v\n", err)
 
-			return 1
+			return exitError
 		}
 
-		return 0
+		return exitOK
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	return dispatch(ctx, os.Args[1:])
+	return disp(ctx, args)
 }
 
 // startupState is everything the daemon needs and everything that can refuse to
@@ -337,11 +373,11 @@ func runDaemon(
 
 	a.onStop("schedule.executor", func(context.Context) error { executor.Stop(); return nil })
 
-	runtime := managers.NewRuntime(cfg, core.controller)
+	mgrRuntime := managers.NewRuntime(cfg, core.controller)
 
 	deliveryStatus, _ := core.controller.(controllerapi.OutputStatusFactory)
 
-	ctlSrv, err := prepareControlSocket(ctx, cfg, runtime, deliveryStatus)
+	ctlSrv, err := prepareControlSocket(ctx, cfg, mgrRuntime, deliveryStatus)
 	if err != nil {
 		return err
 	}
@@ -352,11 +388,11 @@ func runDaemon(
 	// liveness test, so a bound socket nobody answers reads as a broken daemon.
 	serveControlSocket(ctx, ctlSrv)
 
-	if err := runtime.Start(ctx); err != nil {
+	if err := mgrRuntime.Start(ctx); err != nil {
 		return fmt.Errorf("start managers: %w", err)
 	}
 
-	a.onStop("managers", runtime.Stop)
+	a.onStop("managers", mgrRuntime.Stop)
 	ctlSrv.MarkReady()
 
 	deliverApplyVerdict(ctx, core.verdictSender, ops, outcome)

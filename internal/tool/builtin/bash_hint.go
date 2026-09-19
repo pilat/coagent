@@ -7,8 +7,8 @@ import (
 	"github.com/pilat/coagent/internal/safefile"
 )
 
-// sandboxDenialMarkers are the write-denial errno texts the backends surface:
-// EROFS from bubblewrap ro-binds, EPERM from Seatbelt file-write deny.
+// sandboxDenialMarkers are the write-denial errno texts the native sandbox
+// surfaces: EROFS from read-only binds, EPERM from write-deny rules.
 var sandboxDenialMarkers = []string{
 	"read-only file system",
 	"operation not permitted",
