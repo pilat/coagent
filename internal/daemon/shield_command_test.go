@@ -3,7 +3,6 @@ package daemon
 import (
 	"context"
 	"errors"
-	"fmt"
 	"strconv"
 	"strings"
 	"testing"
@@ -22,6 +21,8 @@ import (
 func TestShieldCommand_IdleToggleStaysOutOfTranscript(t *testing.T) {
 	mgr, factory, projects := newTestManager(t)
 	mgr.sandboxEnabled = true
+	network := &networkRetireSpy{}
+	mgr.networkOwner = network
 	ctx := context.Background()
 	projectID := testProject(t, projects, t.TempDir())
 	root, _, err := mgr.managerRoots.CreateManagerRoot(ctx, sessionstore.ManagerRootCreate{
@@ -52,6 +53,7 @@ func TestShieldCommand_IdleToggleStaysOutOfTranscript(t *testing.T) {
 	require.NoError(t, err)
 	assert.False(t, lowered.ShieldsUp)
 	assert.Equal(t, []string{sessionstore.ShieldLoweredContent}, shieldCommandOutputs(t, mgr, root.ID))
+	assert.Equal(t, []int64{root.ID, root.ID}, network.roots)
 }
 
 func TestShieldCommand_NextActivationReceivesRaisedPolicy(t *testing.T) {
@@ -160,11 +162,11 @@ func TestShieldCommand_FreshCronActivationKeepsRaisedPolicy(t *testing.T) {
 	created.mu.Unlock()
 }
 
-func TestShieldCommand_RetiresOldSessionPolicyBeforeCompletion(t *testing.T) {
-	mgr, factory, projects := newTestManager(t)
+func TestShieldCommand_RetiresOldNetworkBeforeCompletion(t *testing.T) {
+	mgr, _, projects := newTestManager(t)
 	mgr.sandboxEnabled = true
-	pool := &recordingPool{}
-	mgr.mcpPool = pool
+	network := &networkRetireSpy{}
+	mgr.networkOwner = network
 	ctx := context.Background()
 	workDir := t.TempDir()
 	projectID := testProject(t, projects, workDir)
@@ -174,16 +176,41 @@ func TestShieldCommand_RetiresOldSessionPolicyBeforeCompletion(t *testing.T) {
 		}, Name: "project", WorkDir: workDir,
 	})
 	require.NoError(t, err)
-	key := fmt.Sprintf("session:%d:false", root.ID)
-	factory.processPolicyKey = key
-	opened, err := mgr.openSession(ctx, root.ID, workDir, root, false, false)
+	opened, err := mgr.openSession(ctx, root.ID, workDir, root, false, false, false)
 	require.NoError(t, err)
 	opened.Close()
-	mgr.recordProcessPolicy(root.ID, "session:settlement:true")
 
 	require.NoError(t, mgr.SendToSession(ctx, root.ID, "/shieldsup"))
-	assert.Equal(t, []string{key, "session:settlement:true"}, pool.retired)
+	require.NotEmpty(t, network.roots)
+	for _, retired := range network.roots {
+		assert.Equal(t, root.ID, retired)
+	}
 	assert.Empty(t, mustInterruptedShieldRaises(t, mgr))
+}
+
+type networkRetireSpy struct{ roots []int64 }
+
+func (s *networkRetireSpy) Cutoff(context.Context, int64) error { return nil }
+
+func (s *networkRetireSpy) Retire(_ context.Context, rootID int64) error {
+	s.roots = append(s.roots, rootID)
+	return nil
+}
+
+func TestRetireShieldPolicy_ClosesNetworkWithoutAnActiveStack(t *testing.T) {
+	mgr, _, projects := newTestManager(t)
+	network := &networkRetireSpy{}
+	mgr.networkOwner = network
+	ctx := context.Background()
+	workDir := t.TempDir()
+	projectID := testProject(t, projects, workDir)
+	root, _, err := mgr.managerRoots.CreateManagerRoot(ctx, sessionstore.ManagerRootCreate{
+		ProjectID: projectID, Model: "model", Name: "project", WorkDir: workDir,
+		Attributes: map[string]any{controllerapi.SessionAttributeManagerID: "cli"},
+	})
+	require.NoError(t, err)
+	require.NoError(t, mgr.retireShieldPolicy(ctx, root.ID))
+	assert.Equal(t, []int64{root.ID}, network.roots)
 }
 
 func TestShieldCommand_ActiveRaiseParksRunnerWithoutStopOutput(t *testing.T) {

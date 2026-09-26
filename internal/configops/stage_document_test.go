@@ -101,6 +101,38 @@ models:
       provider: work
 `,
 		},
+		{
+			name: "unknown escalated profile",
+			candidate: `sandbox:
+    enabled: true
+    escalated: [missing]
+`,
+		},
+		{
+			name: "broad profile mount",
+			candidate: `sandbox:
+    enabled: true
+    profiles:
+        wide:
+            mounts:
+                - path: /
+                  mode: ro
+                  type: basic
+`,
+		},
+		{
+			name: "malformed network entry",
+			candidate: `sandbox:
+    enabled: true
+    profiles:
+        db:
+            network:
+                - address: postgres.internal
+                  protocol: tcp
+                  ports: [5432]
+                  type: escalated
+`,
+		},
 	}
 
 	for _, tt := range tests {

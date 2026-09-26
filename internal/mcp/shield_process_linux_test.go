@@ -12,12 +12,15 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/pilat/coagent/internal/bashsandbox"
+	"github.com/pilat/coagent/internal/coagenthome"
 )
 
 func TestShieldedMCPProcessCannotReadOrWriteOutsideProject(t *testing.T) {
 	if _, err := exec.LookPath("bwrap"); err != nil {
 		t.Skip("bwrap is not installed")
 	}
+	restore := coagenthome.Override(t.TempDir())
+	t.Cleanup(restore)
 	base := t.TempDir()
 	project := filepath.Join(base, "project")
 	outside := filepath.Join(base, "outside")
@@ -44,8 +47,11 @@ while IFS= read -r line; do
 done
 `), 0o700))
 
+	policy, err := bashsandbox.FixturePolicy(project, true)
+	require.NoError(t, err)
 	runner, err := bashsandbox.New(bashsandbox.Config{
-		Enabled: true, WorkDir: project, SessionKey: "mcp-test", ReadScope: bashsandbox.ProjectConfined,
+		Enabled: true, Shields: true, Policy: policy,
+		WorkDir: project, SessionKey: "mcp-test",
 	}, nil)
 	require.NoError(t, err)
 	client, err := NewClient(t.Context(), "fake", ServerConfig{

@@ -29,6 +29,17 @@ func (f *factory) Create(ctx context.Context, opts CreateOptions) (Service, erro
 		return nil, errors.New("output store is required when output is enabled")
 	}
 
+	ms := newMessageStore(f.store, opts.ID, f.outputStore)
+	if f.store != nil {
+		if err := ms.reloadMessages(ctx); err != nil {
+			return nil, fmt.Errorf("load messages: %w", err)
+		}
+	}
+
+	if opts.TranscriptOnly {
+		return &svc{ms: ms, stagedCalls: opts.StagedExternalCalls}, nil
+	}
+
 	cfg := f.sessionConfig(opts.WorkDir, opts.Model, opts.RepoRoot)
 
 	llmClient, err := f.newLLMClient(cfg)
@@ -44,13 +55,6 @@ func (f *factory) Create(ctx context.Context, opts CreateOptions) (Service, erro
 			_ = llmClient.Close()
 		}
 	}()
-
-	ms := newMessageStore(f.store, opts.ID, f.outputStore)
-	if f.store != nil {
-		if err := ms.reloadMessages(ctx); err != nil {
-			return nil, fmt.Errorf("load messages: %w", err)
-		}
-	}
 
 	sess, err := f.build(ctx, cfg, llmClient, opts, ms.getMessages(), ms.getRowIDs())
 	if err != nil {
@@ -78,7 +82,7 @@ func (f *factory) sessionConfig(workDir, model, repoRoot string) *config.Config 
 	return &cfg
 }
 
-//nolint:funlen,wsl_v5 // Session construction preserves cleanup adjacency across stack ownership transfer.
+//nolint:funlen // Session construction preserves cleanup adjacency across stack ownership transfer.
 func (f *factory) build(
 	ctx context.Context,
 	cfg *config.Config,
@@ -98,11 +102,12 @@ func (f *factory) build(
 	todoSvc := todo.New()
 	ldr := loader.New(f.marketplaceCache)
 
-	reg, stack, err := f.buildRegistry(ctx, cfg, ldr, todoSvc, opts.ProjectID, opts.ID, opts.RootID, opts.ShieldsUp)
+	reg, stack, err := f.buildRegistry(
+		ctx, cfg, ldr, todoSvc, opts.ProjectID, opts.ID, opts.RootID, opts.ShieldsUp, opts.CreatedWorktree,
+	)
 	if err != nil {
 		return nil, err
 	}
-	observeProcessPolicy(opts.ObserveProcessPolicy, stack.ProcessPolicyKey())
 
 	var resumeMessages []llmwire.Message
 	var resumeRowIDs []int64
@@ -165,12 +170,6 @@ func (f *factory) build(
 	}
 
 	return sess, nil
-}
-
-func observeProcessPolicy(observe func(string), key string) {
-	if observe != nil {
-		observe(key)
-	}
 }
 
 // dispositionsStore projects the response-disposition capability off the

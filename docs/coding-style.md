@@ -434,6 +434,39 @@ Before committing, verify:
 - Trust your invariants — don't add defensive checks for impossible states
 - If something is wrong, panic early rather than corrupt data silently
 
+#### Own the Environment or Check It — Never Read and Trust
+
+An attribute the host owns can change after you read it, or never have the value
+you assumed. For every such attribute the design depends on, do one of three
+things, and never a fourth:
+
+- **Own it.** Set it yourself, so no host policy decides it for you.
+- **Check it.** Read it and refuse to start when it is wrong.
+- **Verify the outcome.** Prove the effect you needed actually happened.
+
+Reading a value and trusting it stays is the mistake. Real examples, each of
+which reached production:
+
+```go
+// BAD: the kernel's address is read, then a host udev policy rewrites it.
+link, _ := handle.LinkByName(name)
+pin(link.Attrs().HardwareAddr)
+
+// GOOD: we choose the address at creation, then confirm it survived.
+handle.LinkAdd(&netlink.Veth{PeerName: name, PeerHardwareAddr: chosen})
+```
+
+The same rule covers sysctls a host disables by default, capabilities that
+change what a process may inspect, and anything a service manager applies to
+resources you create. Prefer verifying the outcome over asserting the input:
+"the rules were applied" is not "traffic flows", and "the generation was marked
+idle" is not "the generation is gone".
+
+Tests inherit the hazard. A unit test that fakes this seam proves nothing about
+it — a faked namespace probe stayed green while the real one retained every
+generation forever. Exercise the real thing against a real namespace, process
+tree or interface, and put that test where a real host runs it.
+
 #### No Arrow Problem (Avoid Deep Nesting)
 ```go
 // BAD: Arrow/ladder anti-pattern

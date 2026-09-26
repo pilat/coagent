@@ -16,15 +16,17 @@ import (
 	"golang.org/x/sys/unix"
 
 	"github.com/pilat/coagent/internal/procexec"
+	"github.com/pilat/coagent/internal/sandboxnet"
+	"github.com/pilat/coagent/internal/sandboxpolicy"
 	"github.com/pilat/coagent/internal/shellenv"
 )
 
 const (
-	bubblewrapExecutable   = "bwrap"
-	bubblewrapReadOnlyBind = "--ro-bind"
-	mountInfoPath          = "/proc/self/mountinfo"
-	maxUIDMapExtents       = 5
-	maxUIDValue            = uint64(^uint32(0))
+	bubblewrapExecutable = "bwrap"
+	bubblewrapReadOnlyFD = "--ro-bind-fd"
+	mountInfoPath        = "/proc/self/mountinfo"
+	maxUIDMapExtents     = 5
+	maxUIDValue          = uint64(^uint32(0))
 )
 
 var (
@@ -33,13 +35,12 @@ var (
 )
 
 type bubblewrapRunner struct {
-	executable   string
-	mounts       []mountOperation
-	shieldMounts []shieldMountOperation
-	roots        []string
-	policyKey    string
-	provider     shellenv.Provider
-	policy       processPolicy
+	executable string
+	roots      []string
+	policyKey  string
+	provider   shellenv.Provider
+	policy     processPolicy
+	network    *NetworkLink
 }
 
 type uidMapExtent struct {
@@ -49,46 +50,18 @@ type uidMapExtent struct {
 }
 
 // Command constructs a process confined by Bubblewrap.
-//
-//nolint:wsl_v5 // Request validation must precede command construction without shared state.
-func (r *bubblewrapRunner) Command(
-	ctx context.Context,
-	request procexec.Request,
+func (r *bubblewrapRunner) Command(ctx context.Context, request procexec.Request) (*exec.Cmd, error) {
+	return r.command(ctx, request, nil)
+}
+
+// GuestDialCommand exposes one handoff socket only to its own helper process.
+func (r *bubblewrapRunner) GuestDialCommand(
+	ctx context.Context, request procexec.Request, socket string,
 ) (*exec.Cmd, error) {
-	environment, err := innerEnvironment(request.Env, request.WorkDir)
-	if err != nil {
-		return nil, err
-	}
-
-	path := request.Path
-	if r.policy.readScope == ProjectConfined {
-		if err := r.policy.validateWorkDir(request.WorkDir); err != nil {
-			return nil, err
-		}
-		var err error
-		path, err = r.policy.resolveExecutable(path, request.WorkDir)
-		if err != nil {
-			return nil, err
-		}
-	}
-
-	prefix := r.wrapPrefix(request.WorkDir)
-	args := append([]string(nil), prefix[:len(prefix)-1]...)
-	args = append(args, "--clearenv")
-	for _, entry := range environment {
-		args = append(args, "--setenv", entry.name, entry.value)
-	}
-	args = append(args, "--", path)
-	args = append(args, request.Args...)
-	cmd := exec.CommandContext(ctx, r.executable, args...)
-	if r.policy.readScope == ProjectConfined {
-		cmd.Dir = "/"
-	} else {
-		cmd.Dir = request.WorkDir
-	}
-	cmd.Env = sandboxLauncherEnvironment()
-
-	return cmd, nil
+	return r.command(ctx, request, []sandboxpolicy.Grant{{
+		Source: socket, Target: guestDialSocket, Mode: sandboxpolicy.ModeReadOnly,
+		Kind: sandboxpolicy.KindFile, Present: true,
+	}})
 }
 
 func (r *bubblewrapRunner) BashCommand(
@@ -103,61 +76,339 @@ func (r *bubblewrapRunner) BashCommand(
 	})
 }
 
-// ShellCommand runs a user command confined by Bubblewrap, sourcing workDir's
-// snapshot inside the sandbox when one is available. The snapshot file and
-// $SHELL are visible via the existing `--ro-bind / /`, so no new bind mount.
+// ShellCommand runs a user command under the compiled policy, sourcing workDir's
+// snapshot.
 func (r *bubblewrapRunner) ShellCommand(ctx context.Context, command, workDir string) (*exec.Cmd, error) {
-	shell, snap := snapshotFor(ctx, r.provider, workDir)
+	shell, snap := snapshotFor(ctx, r.provider, r, workDir)
 	if snap == "" {
 		return r.BashCommand(ctx, command, workDir)
 	}
 
-	return r.Command(ctx, procexec.Request{
+	return r.SnapshotShell(ctx, shell, snap, command, workDir, nil)
+}
+
+// PolicyDigest identifies the effective policy a snapshot belongs to.
+func (r *bubblewrapRunner) PolicyDigest() string { return r.policy.digest }
+
+// AllowsRead reports the compiled policy's read authority, so a caller that
+// hashes on-disk state reads only what the session may read.
+func (r *bubblewrapRunner) AllowsRead(path string) bool { return r.policy.allowsRead(path) }
+
+// SnapshotShell builds a command that sources the snapshot at its private
+// runtime path, mounted read-only for that command only. Only the owning
+// snapshot is exposed; the user cache directory never is.
+func (r *bubblewrapRunner) SnapshotShell(
+	ctx context.Context,
+	shell, snapshot, command, workDir string,
+	env []string,
+) (*exec.Cmd, error) {
+	line := command
+	var extra []sandboxpolicy.Grant
+
+	if snapshot != "" {
+		line = sourceLine(snapshotRuntimePath(snapshot), command)
+		extra = snapshotGrant(snapshot)
+	}
+
+	return r.command(ctx, procexec.Request{
 		Path:    shell,
-		Args:    []string{"-c", sourceLine(snap, command)},
+		Args:    []string{"-c", line},
 		WorkDir: workDir,
-	})
+		Env:     env,
+	}, extra)
 }
 
 func (r *bubblewrapRunner) WritableRoots() []string {
 	return append([]string(nil), r.roots...)
 }
 
+func (r *bubblewrapRunner) ProjectRoot() string { return r.policy.projectRoot }
+
 func (r *bubblewrapRunner) PolicyKey() string    { return r.policyKey }
 func (r *bubblewrapRunner) ReadScope() ReadScope { return r.policy.readScope }
 
 func (r *bubblewrapRunner) setProvider(p shellenv.Provider) { r.provider = p }
 
-//nolint:wsl_v5 // Platform discovery and preflight are one runner construction boundary.
+func (r *bubblewrapRunner) command(
+	ctx context.Context,
+	request procexec.Request,
+	extra []sandboxpolicy.Grant,
+) (*exec.Cmd, error) {
+	environment, err := innerEnvironment(request.Env, request.WorkDir)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := r.policy.validateWorkDir(request.WorkDir); err != nil {
+		return nil, err
+	}
+
+	path := request.Path
+	if r.network == nil || request.Path != EntryBinaryPath {
+		path, err = r.policy.resolveExecutable(request.Path, request.WorkDir)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	plan, err := r.currentMountPlan()
+	if err != nil {
+		return nil, err
+	}
+
+	baseFiles, err := networkExtraFiles(r.network)
+	if err != nil {
+		return nil, err
+	}
+
+	plan, mountFiles, err := pinMountPlan(plan, 3+len(baseFiles))
+	if err != nil {
+		for _, file := range baseFiles {
+			_ = file.Close()
+		}
+
+		return nil, err
+	}
+
+	extraPlan, extraFiles, err := pinMountPlan(buildExtraPlan(extra), 3+len(baseFiles)+len(mountFiles))
+	if err != nil {
+		for _, file := range baseFiles {
+			_ = file.Close()
+		}
+
+		for _, file := range mountFiles {
+			_ = file.Close()
+		}
+
+		return nil, err
+	}
+
+	cmd := exec.CommandContext(ctx, r.executable, r.argv(request, path, environment, plan, extraPlan)...)
+	cmd.Dir = "/"
+	cmd.Env = sandboxLauncherEnvironment()
+
+	cmd.ExtraFiles = append(cmd.ExtraFiles, baseFiles...)
+	cmd.ExtraFiles = append(cmd.ExtraFiles, mountFiles...)
+
+	cmd.ExtraFiles = append(cmd.ExtraFiles, extraFiles...)
+	if err := restrictLauncherCapabilities(cmd, r.policy.writableRoots); err != nil {
+		procexec.CloseExtraFiles(cmd)
+		return nil, err
+	}
+
+	return cmd, nil
+}
+
+// argv assembles the launcher invocation: Bubblewrap's flags, the cleared and
+// rebuilt environment, then the join stage and the program itself.
+func (r *bubblewrapRunner) argv(
+	request procexec.Request,
+	path string,
+	environment []environmentEntry,
+	plan, extraPlan mountPlan,
+) []string {
+	args := r.prefix(request.WorkDir, plan, extraPlan)
+	args = append(args, "--clearenv")
+
+	for _, entry := range environment {
+		args = append(args, "--setenv", entry.name, entry.value)
+	}
+
+	args = append(args, "--")
+	args = append(args, joinStage(r.network)...)
+	args = append(args, path)
+
+	return append(args, request.Args...)
+}
+
+// prefix builds the Bubblewrap flags before the command: a private root with a
+// fresh proc, minimal dev and private shm, the policy's ordered binds, then the
+// working directory. Raised shields are not a second builder — they are a
+// policy that contains no profile entries. The caller appends `--clearenv`,
+// the environment, the `--` separator and the program.
+func (r *bubblewrapRunner) prefix(workDir string, plan, extraPlan mountPlan) []string {
+	args := []string{
+		"--die-with-parent",
+	}
+
+	if r.network == nil {
+		args = append(args, "--unshare-user")
+	}
+
+	args = append(args,
+		"--unshare-pid",
+		"--unshare-ipc",
+	)
+	if r.network == nil {
+		args = append(args, "--cap-drop", "ALL")
+	} else {
+		args = append(args, "--cap-add", "CAP_SYS_ADMIN", "--cap-add", "CAP_SETPCAP")
+	}
+
+	args = append(args, "--tmpfs", "/")
+
+	dirs := plan.dirs
+	if r.network != nil {
+		dirs = parentDirectories(append([]bindMount{{target: EntryBinaryPath}}, plan.binds...))
+	}
+
+	for _, dir := range dirs {
+		args = append(args, "--dir", dir)
+	}
+
+	for _, dir := range extraPlan.dirs {
+		args = append(args, "--dir", dir)
+	}
+
+	args = append(args, "--proc", "/proc", "--dev", devPath, "--tmpfs", "/dev/shm")
+
+	for _, mount := range plan.binds {
+		args = append(args, bindOperation(mount), strconv.Itoa(mount.fd), mount.target)
+	}
+
+	for _, mount := range extraPlan.binds {
+		args = append(args, bindOperation(mount), strconv.Itoa(mount.fd), mount.target)
+	}
+
+	args = append(args, networkPrefix(r.network)...)
+	args = append(args, "--remount-ro", "/")
+
+	return append(args, "--chdir", workDir)
+}
+
+// networkPrefix enters the owning user namespace and mounts the trusted entry
+// binary plus per-generation resolver files. The network namespace FD remains
+// inherited until the entry stage consumes and closes it.
+func networkPrefix(link *NetworkLink) []string {
+	if link == nil {
+		return nil
+	}
+
+	return []string{
+		"--userns", strconv.Itoa(userNSDescriptor),
+		bubblewrapReadOnlyFD, "5", EntryBinaryPath,
+		bubblewrapReadOnlyFD, "6", "/etc/resolv.conf",
+		bubblewrapReadOnlyFD, "7", "/etc/hosts",
+	}
+}
+
+// joinStage is the entry stage invocation that precedes the command: it joins
+// the tree's network namespace before exec, then gives up the capability that
+// made the join possible.
+func joinStage(link *NetworkLink) []string {
+	if link == nil {
+		return nil
+	}
+
+	return []string{EntryBinaryPath, sandboxnet.JoinCommand, "--netns-fd", "4", "--"}
+}
+
+// networkExtraFiles are the descriptors a sandbox invocation inherits when it
+// runs inside the tree's generation.
+func networkExtraFiles(link *NetworkLink) ([]*os.File, error) {
+	if link == nil || link.UserNS == nil {
+		return nil, nil
+	}
+
+	owned := []*os.File{link.UserNS, link.NetNS, link.BinaryFile, link.Resolver, link.Hosts}
+
+	files := make([]*os.File, 0, len(owned))
+	for _, original := range owned {
+		if original == nil {
+			for _, file := range files {
+				_ = file.Close()
+			}
+
+			return nil, errors.New("network generation is missing a required descriptor")
+		}
+
+		fd, err := unix.FcntlInt(original.Fd(), unix.F_DUPFD_CLOEXEC, 0)
+		if err != nil {
+			for _, file := range files {
+				_ = file.Close()
+			}
+
+			return nil, fmt.Errorf("duplicate network descriptor: %w", err)
+		}
+
+		files = append(files, os.NewFile(uintptr(fd), original.Name()))
+	}
+
+	return files, nil
+}
+
+func bindOperation(mount bindMount) string {
+	if mount.readOnly {
+		return bubblewrapReadOnlyFD
+	}
+
+	return "--bind-fd"
+}
+
+func (r *bubblewrapRunner) currentMountPlan() (mountPlan, error) {
+	procMountPoints, err := readProcMountPoints(mountInfoPath)
+	if err != nil {
+		return mountPlan{}, fmt.Errorf("read Linux proc mounts: %w", err)
+	}
+
+	if policyOverlapsProc(r.policy, procMountPoints) {
+		return mountPlan{}, errors.New("sandbox policy overlaps a procfs mount")
+	}
+
+	grants, err := materializeGrants(r.policy)
+	if err != nil {
+		return mountPlan{}, err
+	}
+
+	sockets, err := materializeSockets(r.policy.sockets)
+	if err != nil {
+		return mountPlan{}, err
+	}
+
+	mountPoints, err := readMountPoints(mountInfoPath)
+	if err != nil {
+		return mountPlan{}, fmt.Errorf("read Linux mount table: %w", err)
+	}
+
+	return buildMountPlan(grants, sockets, mountPoints), nil
+}
+
+// newEnabledRunner builds a runner that keeps the daemon's network namespace;
+// probes use it through the runnerFactory contract.
 func newEnabledRunner(policy processPolicy) (Runner, error) {
+	return newEnabledRunnerWithNetwork(policy, nil)
+}
+
+// newEnabledRunnerWithNetwork builds a runner that runs its commands inside the
+// tree's network generation.
+func newEnabledRunnerWithNetwork(policy processPolicy, network *NetworkLink) (Runner, error) {
+	if network != nil &&
+		(network.UserNS == nil || network.NetNS == nil || network.BinaryFile == nil || network.Resolver == nil || network.Hosts == nil) {
+		return nil, errors.New("network generation is missing a required descriptor")
+	}
+
 	executable, err := resolveBubblewrapExecutable(policy.writableRoots)
 	if err != nil {
 		return nil, err
 	}
 
-	mountPoints, err := readMountPoints(mountInfoPath)
-	if err != nil {
-		return nil, fmt.Errorf("read Linux mount table: %w", err)
-	}
 	procMountPoints, err := readProcMountPoints(mountInfoPath)
 	if err != nil {
 		return nil, fmt.Errorf("read Linux proc mounts: %w", err)
 	}
 
+	if policyOverlapsProc(policy, procMountPoints) {
+		return nil, errors.New("sandbox policy overlaps a procfs mount")
+	}
+
 	runner := &bubblewrapRunner{
 		executable: executable,
-		mounts:     buildMountOperations(policy.writableRoots, mountPoints),
 		roots:      policy.writableRoots,
 		policyKey:  policy.key(),
 		policy:     policy,
+		network:    network,
 	}
-	if policy.readScope == ProjectConfined {
-		if shieldedPolicyOverlapsProc(policy, procMountPoints) {
-			return nil, errors.New("shielded policy overlaps a procfs mount")
-		}
 
-		runner.shieldMounts = buildShieldMountOperations(policy, mountPoints, procMountPoints)
-	}
 	if err := preflight(runner, policy.workDir); err != nil {
 		return nil, fmt.Errorf("bubblewrap backend unusable: %w", err)
 	}
@@ -165,82 +416,18 @@ func newEnabledRunner(policy processPolicy) (Runner, error) {
 	return runner, nil
 }
 
-func shieldedPolicyOverlapsProc(policy processPolicy, procMountPoints []string) bool {
-	projectOverlap := pathOverlapsMount(policy.projectRoot, procMountPoints)
-
-	workDirOverlap := pathOverlapsMount(policy.workDir, procMountPoints)
-	if projectOverlap || workDirOverlap {
+func policyOverlapsProc(policy processPolicy, procMountPoints []string) bool {
+	if pathOverlapsMount(policy.projectRoot, procMountPoints) || pathOverlapsMount(policy.workDir, procMountPoints) {
 		return true
 	}
 
-	for _, mount := range policy.readMounts {
-		sourceOverlap := pathOverlapsMount(mount.source, procMountPoints)
-
-		targetOverlap := pathOverlapsMount(mount.target, procMountPoints)
-		if sourceOverlap || targetOverlap {
+	for _, grant := range policy.grants {
+		if pathOverlapsMount(grant.Source, procMountPoints) || pathOverlapsMount(grant.Target, procMountPoints) {
 			return true
 		}
 	}
 
 	return false
-}
-
-// wrapPrefix builds the bwrap flags up to and including the `--` separator; the
-// caller appends the program and its arguments.
-func (r *bubblewrapRunner) wrapPrefix(workDir string) []string {
-	if r.policy.readScope == ProjectConfined {
-		return r.shieldPrefix(workDir)
-	}
-
-	args := []string{
-		"--die-with-parent",
-		bubblewrapReadOnlyBind, "/", "/",
-		"--dev", devPath,
-	}
-
-	for _, mount := range r.mounts {
-		operation := "--bind"
-		if mount.readOnly {
-			operation = bubblewrapReadOnlyBind
-		}
-
-		args = append(args, operation, mount.path, mount.path)
-	}
-
-	args = append(args, "--proc", "/proc")
-
-	return append(args,
-		"--unshare-user",
-		"--cap-drop", "ALL",
-		"--",
-	)
-}
-
-//nolint:wsl_v5 // Namespace assembly follows the required mount order.
-func (r *bubblewrapRunner) shieldPrefix(workDir string) []string {
-	args := []string{
-		"--die-with-parent",
-		"--unshare-user",
-		"--unshare-pid",
-		"--cap-drop", "ALL",
-		"--tmpfs", "/",
-		"--dev", devPath,
-	}
-
-	for _, dir := range shieldMountDirectories(r.shieldMounts) {
-		args = append(args, "--dir", dir)
-	}
-	for _, mount := range r.shieldMounts {
-		operation := "--bind"
-		if mount.readOnly {
-			operation = bubblewrapReadOnlyBind
-		}
-		args = append(args, operation, mount.source, mount.target)
-	}
-
-	args = append(args, "--proc", "/proc")
-
-	return append(args, "--remount-ro", "/", "--chdir", workDir, "--")
 }
 
 func resolveBubblewrapExecutable(writableRoots []string) (string, error) {

@@ -17,6 +17,7 @@ import (
 
 	"github.com/pilat/coagent/internal/bashsandbox"
 	"github.com/pilat/coagent/internal/coagenthome"
+	"github.com/pilat/coagent/internal/sandboxpolicy"
 	"github.com/pilat/coagent/internal/tool"
 )
 
@@ -41,12 +42,15 @@ func TestBashTool_TimeoutKillsDescendants(t *testing.T) {
 			}
 
 			workDir := t.TempDir()
-			runner, err := bashsandbox.New(bashsandbox.Config{Enabled: tt.enabled, WorkDir: workDir}, nil)
+			runner, err := bashsandbox.New(sandboxRunnerConfig(t, workDir, tt.enabled), nil)
 			require.NoError(t, err)
 
 			marker := filepath.Join(workDir, "descendant-writes")
 			command := "while true; do printf x >>" + quoteShell(marker) + "; sleep 0.02; done & wait"
-			params, err := json.Marshal(bashParams{Command: command, Timeout: 150})
+			// The sandbox builds a private root, proc and device set before bash
+			// starts, so the budget must cover that setup and still leave time for
+			// the descendant to write.
+			params, err := json.Marshal(bashParams{Command: command, Timeout: 1500})
 			require.NoError(t, err)
 
 			result, err := newTestBashToolRunner(
@@ -77,17 +81,21 @@ func TestBashTool_SandboxHintOnDeniedWrite(t *testing.T) {
 		t.Skip("bwrap is not installed")
 	}
 
-	deniedRoot, err := os.MkdirTemp(".", ".coagent-sandbox-hint-test-")
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, os.RemoveAll(deniedRoot)) })
-	deniedRoot, err = filepath.Abs(deniedRoot)
-	require.NoError(t, err)
+	readOnlyRoot := t.TempDir()
 
 	workDir := t.TempDir()
-	runner, err := bashsandbox.New(bashsandbox.Config{Enabled: true, WorkDir: workDir}, nil)
+	policy, err := bashsandbox.FixturePolicy(workDir, false)
+	require.NoError(t, err)
+	policy.Grants = append(policy.Grants, sandboxpolicy.Grant{
+		Source: readOnlyRoot, Target: readOnlyRoot, Mode: sandboxpolicy.ModeReadOnly,
+		Kind: sandboxpolicy.KindDir, Present: true,
+	})
+	runner, err := bashsandbox.New(
+		bashsandbox.Config{Enabled: true, Policy: policy, WorkDir: workDir}, nil,
+	)
 	require.NoError(t, err)
 
-	target := filepath.Join(deniedRoot, "probe")
+	target := filepath.Join(readOnlyRoot, "probe")
 
 	params, err := json.Marshal(bashParams{Command: "touch " + quoteShell(target)})
 	require.NoError(t, err)
@@ -97,10 +105,27 @@ func TestBashTool_SandboxHintOnDeniedWrite(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.NotEqual(t, 0, result.Metadata[metaKeyExitCode])
-	assert.Contains(t, result.Output, "sandbox.writable_paths")
+	assert.Contains(t, result.Output, "sandbox.profiles")
 	assert.NoFileExists(t, target)
 }
 
 func quoteShell(value string) string {
 	return "'" + strings.ReplaceAll(value, "'", "'\\''") + "'"
+}
+
+// sandboxRunnerConfig builds the runner configuration these fixtures need: an
+// enabled runner requires the compiled policy a session would have.
+func sandboxRunnerConfig(t *testing.T, workDir string, enabled bool) bashsandbox.Config {
+	t.Helper()
+
+	cfg := bashsandbox.Config{Enabled: enabled, WorkDir: workDir}
+	if !enabled {
+		return cfg
+	}
+
+	policy, err := bashsandbox.FixturePolicy(workDir, false)
+	require.NoError(t, err)
+	cfg.Policy = policy
+
+	return cfg
 }

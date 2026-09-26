@@ -273,6 +273,11 @@ linters:
             # and onboarding re-invokes this binary under sudo to use it.
             - "!**/internal/install/**"
             - "!**/internal/backgroundprocess/**"
+            # procexec only handles inherited descriptors on exec.Cmd; it does not spawn.
+            - "!**/internal/procexec/**"
+            # The router applies its ruleset with nft inside its own namespace;
+            # there is no netlink API for an nftables ruleset in this module.
+            - "!**/internal/sandboxnet/**"
             - "!**/cmd/coagent/**"
             - "!**/*_test.go"
           deny:

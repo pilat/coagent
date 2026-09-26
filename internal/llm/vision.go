@@ -18,15 +18,27 @@ func supportsVision(inputModalities []string) bool {
 	return slices.Contains(inputModalities, visionModality)
 }
 
+// ImageAuthorizer re-checks a deferred attachment reference against the
+// session's current filesystem authority, so a grant revoked after the read was
+// recorded cannot be re-read through that historical reference.
+type ImageAuthorizer interface {
+	AuthorizeRead(canonical, rootIdentity string) error
+}
+
 // classifyImage explains why an image slot must degrade to text; empty means
-// the model accepts it, the MIME is canonical and the file exists.
-func classifyImage(inputModalities []string, ref llmwire.ImageRef) string {
+// the model accepts it, the MIME is canonical, the reference is still
+// authorized and the file exists.
+func classifyImage(inputModalities []string, ref llmwire.ImageRef, authorizer ImageAuthorizer) string {
 	if !supportsVision(inputModalities) {
 		return llmwire.ImageOmitReasonNoVision
 	}
 
 	if !llmwire.IsSupportedImageMime(ref.Mime) {
 		return llmwire.ImageOmitReasonUnsupported
+	}
+
+	if authorizer != nil && authorizer.AuthorizeRead(ref.Path, ref.ReadRootID) != nil {
+		return llmwire.ImageOmitReasonUnreadable
 	}
 
 	if _, err := safefile.ReadFileAtRoot(ref.ReadRoot, ref.ReadRootID, ref.Path); err != nil {
@@ -39,8 +51,13 @@ func classifyImage(inputModalities []string, ref llmwire.ImageRef) string {
 // resolveImage reads an eligible image's bytes off disk. A non-empty reason
 // names why pixels cannot be sent — including failures striking between the
 // eligibility check and the read itself, so slot wording never goes blank.
-func resolveImage(inputModalities []string, ref llmwire.ImageRef, log *zap.Logger) ([]byte, string) {
-	reason := classifyImage(inputModalities, ref)
+func resolveImage(
+	inputModalities []string,
+	ref llmwire.ImageRef,
+	authorizer ImageAuthorizer,
+	log *zap.Logger,
+) ([]byte, string) {
+	reason := classifyImage(inputModalities, ref, authorizer)
 	if reason != "" {
 		log.Debug("image_degraded", zap.String("path", ref.Path), zap.String("reason", reason))
 

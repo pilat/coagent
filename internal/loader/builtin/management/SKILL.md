@@ -19,6 +19,16 @@ replaces the complete application configuration; an invalid one is refused
 with nothing written. An accepted change restarts the daemon; the verdict
 arrives after the restart.
 
+When the operator asks about sandbox escalation, explain the two configuration
+scopes and their effective union. For example, `sandbox.escalated: [mise]`
+enables the escalated `mise` entries globally; under
+`sandbox.projects["/home/example/projects/app"].escalated: [gh]`, `gh` applies
+to that project. A `/gwt` worktree created from it inherits `gh` and may add
+its own project entry. Project settings cannot remove global escalation.
+These grants can expose credentials and sockets, so identify the resources
+before proposing a change. `/config` still requires a complete replacement
+document, preserving unrelated settings.
+
 Secrets are `${VAR}` references into `~/.coagent/secrets`, which the operator
 maintains by hand outside this conversation. Never ask for a credential here:
 a pasted secret lands in history. If one appears, tell the operator to rotate

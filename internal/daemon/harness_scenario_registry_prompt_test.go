@@ -15,7 +15,6 @@ import (
 	"github.com/pilat/coagent/internal/configapply"
 	"github.com/pilat/coagent/internal/llm"
 	"github.com/pilat/coagent/internal/llmwire"
-	"github.com/pilat/coagent/internal/mcp"
 	"github.com/pilat/coagent/internal/mcpstore"
 	"github.com/pilat/coagent/internal/migrate"
 	"github.com/pilat/coagent/internal/schedule"
@@ -78,7 +77,6 @@ type registryPromptDeps struct {
 	subagents    subagent.Transactions
 	schedules    schedule.Store
 	mcpRegistry  mcpstore.Store
-	mcpPool      mcp.Pool
 }
 
 func (c *registryPromptLLM) SetSessionID(id string) {
@@ -128,12 +126,10 @@ func newRegistryPromptDeps(t *testing.T) registryPromptDeps {
 	t.Cleanup(func() { _ = db.Close() })
 	require.NoError(t, migrate.Run(ctx, db, dbPath))
 
-	mcpPool := mcp.NewPool(nil)
-	t.Cleanup(mcpPool.Stop)
 	return registryPromptDeps{
 		ctx: ctx, store: NewStore(db), sessionStore: sessionstore.NewStore(db),
 		links: subagent.NewStore(db), subagents: subagent.NewTransactions(db), schedules: schedule.NewStore(db),
-		mcpRegistry: mcpstore.NewStore(db), mcpPool: mcpPool,
+		mcpRegistry: mcpstore.NewStore(db),
 	}
 }
 
@@ -172,7 +168,7 @@ func newRegistryPromptFactory(
 ) session.Factory {
 	return session.NewFactoryWithOptions(
 		cfg, nil, nil, deps.sessionStore, deps.sessionStore,
-		nil, deps.mcpPool, deps.mcpRegistry, nil, nil,
+		nil, deps.mcpRegistry, nil,
 		session.WithLLMClientFactory(func(_ *config.Config) (llm.Client, error) {
 			return &registryPromptLLM{
 				respond: respond, recorder: recorder, prompts: prompts,
@@ -195,7 +191,6 @@ func newRegistryPromptManager(
 		func() string { return "fake-model" },
 	)
 	mgr.mcpStore = deps.mcpRegistry
-	mgr.mcpPool = deps.mcpPool
 	mgr.applier = configapply.New(newTestConfigOps(t, t.TempDir()), func() {})
 
 	return mgr

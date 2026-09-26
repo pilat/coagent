@@ -25,6 +25,7 @@ Usage:
 - Only http and https URLs are supported
 - A URL without a scheme is fetched over HTTPS; write http:// explicitly for plain HTTP
 - Link-local and cloud metadata addresses are refused and cannot be reached with this tool
+- In sandboxed sessions, localhost refers to the session tree; host.coagent.internal requires a network grant
 - HTML is converted to plain text
 - Content is limited to ~50K characters
 
@@ -43,15 +44,23 @@ type webFetchParams struct {
 }
 
 type webFetchTool struct {
-	client *http.Client
+	client    *http.Client
+	transport *http.Transport
 }
 
 func newWebFetchTool() *webFetchTool {
+	return newWebFetchToolWithNetwork(nil)
+}
+
+func newWebFetchToolWithNetwork(network NetworkLease) *webFetchTool {
+	transport := webTransport(network)
+
 	return &webFetchTool{
 		client: &http.Client{
 			Timeout:   webFetchTimeout,
-			Transport: newRestrictedTransport(),
+			Transport: transport,
 		},
+		transport: transport,
 	}
 }
 

@@ -10,7 +10,7 @@ The shared vocabulary of coagent — the words that name its concepts, so code, 
 
 **daemon**:
 The single long-lived coagent process. It coordinates session lifecycle, durable
-producer ledgers and admission and owns the MCP pool. `managercontrol`
+producer ledgers and admission. `managercontrol`
 implements the in-process `controllerapi.Controller` over the daemon's backend
 contract. Durable ledgers, runner lifecycle and capacity counters remain owned
 by their domain packages. It binds no *network* socket — the only thing it
@@ -23,22 +23,75 @@ _Avoid_: conversation (that's the history), job.
 
 **session shields**:
 The durable, operator-controlled `shields_up` state of a session. Shields are
-down by default. Raising them confines built-in file tools and session-owned
-Bash, LSP, and MCP processes to the project and their minimal runtime files;
-configured writable paths, the user cache, and host temporary storage grant no
-exception. A raised session bypasses shell activation and provides no temporary
-storage outside the project; Git metadata outside a linked work tree is not part
-of the project boundary. Lowering shields restores host-readable process and
-file-tool behavior while retaining the write sandbox. Only a manager-originated
-command may change the state, and subagents inherit it. Project-local
-instruction sources use rooted project access, and marketplace sources a root
-confined to their own repository clone; global instruction sources remain
-trusted daemon inputs outside those boundaries. The
-built-in web fetch and search tools remain available in both states. Network
-egress and inherited environment values are unchanged; resolver, host-name,
-account, loader, and certificate files may remain readable runtime substrate.
-_Avoid_: sandbox mode (the write sandbox is a separate permanent boundary), safe
+down by default. Raising them removes every **sandbox profile** entry — basic and
+escalated, mounts, sockets and network exceptions — from built-in file tools and
+session-owned Bash, LSP, and MCP processes, leaving the base grants: the project,
+private temporary storage and a linked work tree's Git metadata. A raised session
+bypasses shell activation. Lowering shields restores the ordinary profile set.
+Only a manager-originated command may change the state, and subagents inherit it.
+Project-local instruction sources use rooted project access, and marketplace
+sources a root confined to their own repository clone; global instruction sources
+remain trusted daemon inputs outside those boundaries. The built-in web fetch and
+search tools remain available in both states. Network egress and inherited
+environment values are unchanged; resolver, host-name, account, loader, and
+certificate files may remain readable runtime substrate.
+_Avoid_: sandbox mode (project confinement is a separate permanent boundary), safe
 session (shields do not make untrusted project data confidential).
+
+**project confinement**:
+The default, sandbox-enabled authority every session's processes and file tools
+share: an allowlisted filesystem built from the **effective policy** — the base
+grants plus the **sandbox profile** entries the operator's escalation selects.
+Applies to shell preparation, Bash, LSP, stdio MCP processes and the
+`read`/`glob`/`grep`/`write`/`edit`/`apply_patch` tools alike; `sandbox.enabled:
+false` is the explicit operator opt-out. It is an *integrity* boundary over an
+enumerated resource grant, not confidentiality: shared basic caches, a linked
+work tree's writable Git metadata and an escalated daemon socket can each affect
+state beyond the project. Sandboxed processes and built-in web tools also share
+one private network boundary per session tree.
+_Avoid_: sandbox (unqualified — implies more isolation than it gives), write
+sandbox (it governs reads as well).
+
+**sandbox profile**:
+A named set of filesystem mounts, pathname sockets and network destinations one
+developer tool needs, shipped as reviewed built-in data or defined by the
+operator in `config.yaml`'s `sandbox.profiles`. Each entry is **basic** (active
+whenever the sandbox is enabled) or **escalated** (active only when the operator
+names the profile in `sandbox.escalated` or the matching `sandbox.projects`
+entry). Profiles expose real paths: no overlay, cache remapping or automatic
+tool installation. See [sandbox-profiles.md](sandbox-profiles.md).
+_Avoid_: permission set, capability (both suggest a grant the model can request).
+
+**effective policy**:
+The compiled authority for one project and shield state: base grants, profile
+entries filtered by the escalation union, sockets, network rules and the private
+temporary backing. Its **digest** identifies one policy generation — authorized
+anchors (including declarations whose object is absent), permissions, shield
+state, catalog version and project identity — and never object presence or inode.
+Compiled by `internal/sandboxpolicy`, which owns no process or namespace lifetime.
+_Avoid_: "sandbox config" (that is the operator's input, not the compiled result).
+
+**network generation**:
+The private network namespace, its kernel-routed uplink and ruleset, and the
+resolver for one root session tree and effective-policy digest. Tool stacks hold
+it while active; background processes keep it alive, and it retires after ten
+minutes without a holder. Stopping a tree or changing its policy retires it
+immediately.
+_Avoid_: gateway (the term now names only the sandbox's default-gateway address).
+
+**router namespace**:
+The network namespace a **network generation** owns between the sandbox and the
+host. It carries one veth to each side, the generation's nftables ruleset and
+the kernel routing that joins them. Only the daemon holds a reference, so its
+death removes the namespace and both veth pairs with it. Distinct from the
+sandbox namespace, which holds the workloads.
+_Avoid_: gateway namespace, proxy namespace (nothing terminates a connection).
+
+**host alias**:
+`host.coagent.internal`, the only name a sandboxed workload can use to reach a
+service on the daemon host's loopback, and only for a protocol and port a
+profile grants. `localhost` inside a sandbox always means that session tree.
+_Avoid_: host loopback (that is the destination, not the name for it).
 
 **task**:
 A unit of work a manager submits to the daemon. It has no Go type of its own — a task is realized as a **session** created from a prompt. Beware: the bare word `task` in code means only the **`task` tool** (which spawns subagents), never the work-unit — qualify accordingly.
@@ -174,19 +227,12 @@ _Avoid_: plugin (a plugin is a marketplace bundle), command.
 **marketplace**:
 A git repo supplying loadable skills and subagent definitions, cloned and cached with a TTL. Configured under `marketplaces:` in `config.yaml`.
 
-**MCP pool**:
-The daemon-owned lifecycle container for external MCP-server connections. A
-connection and its catalog are keyed by server config, workdir, and the owning
-session's process-policy identity, so they may be reused across activations of
-that session but never shared with another session. Idle connections are reaped
-after 30 minutes. The **MCP catalog** is the pool-owned in-memory copy of one
-session-bound server's discovered tool metadata (name, description, schema): it
-survives process reaping for 15 days idle and clears on daemon restart, so an
-activation whose process was reaped still offers the same direct tools and
-starts the subprocess only on the model's first call. A lazy reconnect never
-rewrites the activation's catalog or schemas. Distinct from the **MCP registry**,
-which says which servers exist at all.
-_Avoid_: tool cache (the catalog is metadata, not a result cache); prompt cache (that is provider-side).
+**MCP client**:
+One external MCP-server process and its discovered tools, owned by a session's
+tool stack. The stack starts it before the model request, keeps its tool schemas
+fixed for that activation, and closes it with the stack. The next stack discovers
+the server again. Distinct from the **MCP registry**, which stores server definitions.
+_Avoid_: MCP pool, MCP catalog (neither has a separate lifetime).
 
 **MCP registry**:
 The DB-backed set of MCP server *definitions* (`mcp_servers` table, `internal/mcpstore`), managed conversationally with `mcp_add` / `mcp_remove` / `mcp_enable` / `mcp_disable` / `mcp_list`. Rows carry an `enabled` flag; env values hold `${VAR}` references literally and are resolved at acquire time. Changes reach a session at its next run, never mid-run.
@@ -465,15 +511,14 @@ _Avoid_: capability, model role.
 The in-memory credential map parsed from `~/.coagent/secrets`, deliberately kept out of the process environment (tool subprocesses inherit no credentials) and scrubbed from all log output.
 
 **shellenv**:
-A per-cwd snapshot of a login+interactive shell (mise / asdf / nvm / direnv toolchain activation), captured, cached (validated by a fingerprint of the on-disk toolchain state, with a 30-min backstop — see [ADR-0001](adr/0001-shellenv-fingerprint-invalidation.md)), and replayed for Bash / LSP / MCP subprocess spawns while session shields are down. Raised sessions bypass capture and replay. Captures `os.Environ()` only — never a secrets map.
+A tool-stack-owned per-cwd snapshot of a login+interactive shell (mise / asdf / nvm / direnv toolchain activation), captured lazily and replayed for Bash / LSP / MCP subprocess spawns. Fingerprint validation and a 30-minute backstop keep it fresh within the stack ([ADR-0001](adr/0001-shellenv-fingerprint-invalidation.md)); closing the stack removes its snapshots. Capture and `type -P` lookup execute through the session's confinement runner. The snapshot is exposed to the sandbox read-only at a private runtime path — never the user cache directory. A raised session bypasses capture and replay. Captures `os.Environ()` only — never a secrets map.
 
 **filesystem-write sandbox**:
-Default-on native Bubblewrap-backed write confinement for Bash descendants,
-LSP and stdio MCP processes, and the `write` / `edit` / `apply_patch` tools.
-Operators may disable it explicitly. By itself it is an
-*integrity* boundary — not confidentiality: it does not confine reads or network
-egress. Session shields add the separate operator-controlled read boundary.
-_Avoid_: sandbox (unqualified — implies more isolation than it gives).
+Retired as a term: the default is **project confinement**, an allowlisted
+filesystem for reads and writes alike. `sandbox.enabled: false` remains the
+operator's explicit opt-out and restores unrestricted host reads with no write
+confinement.
+_Avoid_: using it for the default boundary.
 
 **composition root**:
 `cmd/coagent/main.go` — hand-wires every component in dependency order (no DI framework) and records a named stop closure per component, replayed in reverse on shutdown.

@@ -87,9 +87,10 @@ func newDelayedTelegramHarness(t *testing.T) *delayedTelegramHarness {
 	projects := daemon.NewStore(db)
 	sessions := sessionstore.NewStore(db)
 	workDir := filepath.Join(home, "project")
+	require.NoError(t, os.Mkdir(workDir, 0o700))
 	cfg := &config.Config{Model: "fake-model", WorkDir: workDir}
 	factory := session.NewFactoryWithOptions(
-		cfg, nil, nil, sessions, sessions, nil, nil, nil, nil, nil,
+		cfg, nil, nil, sessions, sessions, nil, nil, nil,
 		session.WithLLMClientFactory(func(*config.Config) (llm.Client, error) {
 			return delayedTelegramClient{}, nil
 		}),
@@ -97,7 +98,7 @@ func newDelayedTelegramHarness(t *testing.T) *delayedTelegramHarness {
 	service := daemon.New(
 		context.Background(), factory, projects, sessions, sessions, sessions, sessions, sessions, sessions, sessions,
 		subagent.NewStore(db), subagent.NewTransactions(db),
-		budget.New(sessions), sessions, schedule.NewService(schedule.NewStore(db)), cfg, nil, nil, nil,
+		budget.New(sessions), sessions, schedule.NewService(schedule.NewStore(db)), cfg, nil, nil,
 	)
 	t.Cleanup(func() { service.Shutdown(3 * time.Second) })
 	controllers := managercontrol.New(service, service, sessions, cfg, nil)
@@ -138,14 +139,15 @@ func (delayedTelegramClient) Chat(
 	return &llmwire.Response{Text: "delayed telegram answer", FinishType: llmwire.FinishStop}, nil
 }
 
-func (delayedTelegramClient) Model() string             { return "fake-model" }
-func (delayedTelegramClient) APIKey() string            { return "" }
-func (delayedTelegramClient) Close() error              { return nil }
-func (delayedTelegramClient) Provider() string          { return "fake" }
-func (delayedTelegramClient) ContextWindow() int        { return 200000 }
-func (delayedTelegramClient) SetReasoningLevel(string)  {}
-func (delayedTelegramClient) GetReasoningLevel() string { return "medium" }
-func (delayedTelegramClient) SetSessionID(string)       {}
+func (delayedTelegramClient) Model() string                          { return "fake-model" }
+func (delayedTelegramClient) APIKey() string                         { return "" }
+func (delayedTelegramClient) Close() error                           { return nil }
+func (delayedTelegramClient) Provider() string                       { return "fake" }
+func (delayedTelegramClient) ContextWindow() int                     { return 200000 }
+func (delayedTelegramClient) SetReasoningLevel(string)               {}
+func (delayedTelegramClient) SetImageAuthorizer(llm.ImageAuthorizer) {}
+func (delayedTelegramClient) GetReasoningLevel() string              { return "medium" }
+func (delayedTelegramClient) SetSessionID(string)                    {}
 
 type delayedTelegramCall struct {
 	Method string

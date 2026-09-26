@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/pilat/coagent/internal/backgroundprocess"
+	"github.com/pilat/coagent/internal/procexec"
 	"github.com/pilat/coagent/internal/tool"
 )
 
@@ -36,6 +37,7 @@ func (t *bashTool) runDirect(
 	if err != nil {
 		return nil, fmt.Errorf("create bash command: %w", err)
 	}
+	defer procexec.CloseExtraFiles(cmd)
 
 	output := &inlineWriter{}
 	cmd.Stdout = output
@@ -66,7 +68,7 @@ func (t *bashTool) runDirect(
 	}
 
 	if state == backgroundprocess.StateFailed {
-		if hint := sandboxHint(text, t.runner.WritableRoots(), t.runner.ReadScope(), t.workDir); hint != "" {
+		if hint := sandboxHint(text, t.runner.WritableRoots(), t.workDir); hint != "" {
 			text += "\n\n" + hint
 		}
 	}

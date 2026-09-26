@@ -65,6 +65,8 @@ components:
   tool:       { in: internal/tool }
   toolexec:   { in: internal/toolexec }
   bashsandbox: { in: internal/bashsandbox }
+  sandboxpolicy: { in: internal/sandboxpolicy }
+  sandboxnet: { in: internal/sandboxnet }
   procexec:   { in: internal/procexec }
   backgroundprocess: { in: internal/backgroundprocess }
   builtin:    { in: internal/tool/builtin }
@@ -94,7 +96,7 @@ deps:
   # global "common" exceptions: even logging/config/protocol imports are part of
   # a component's contract and a new one must be reviewed.
   config:
-    mayDependOn: [coagenthome]
+    mayDependOn: [coagenthome, sandboxpolicy]
   controllerapi:
     mayDependOn: [sessionevent]
   install:
@@ -120,7 +122,7 @@ deps:
   projectpath:
     mayDependOn: [coagenthome, config, controllerapi]
   safefile:
-    mayDependOn: [coagenthome]
+    mayDependOn: [coagenthome, sandboxpolicy]
   managercontrol:
     mayDependOn: [config, controllerapi, daemon, git, loader, managerdiscovery, projectpath, sessionbus, sessionevent, sessionstore]
   managerdiscovery:
@@ -128,7 +130,16 @@ deps:
 
   # Per-cwd shell activation, consumed by the three per-cwd spawners.
   bashsandbox:
-    mayDependOn: [coagenthome, procexec, shellenv]
+    mayDependOn: [coagenthome, procexec, sandboxnet, sandboxpolicy, shellenv]
+  # Pure permission compilation: catalog, grants, digest. No process or
+  # namespace lifetime, no runner.
+  sandboxpolicy:
+    mayDependOn: [coagenthome]
+  # Egress trust boundary: one userspace TCP/IP stack per sandbox tree, the
+  # destination classifier and the resolver relay. No filesystem or session
+  # knowledge beyond the compiled network grants.
+  sandboxnet:
+    mayDependOn: [sandboxpolicy]
   git:
     mayDependOn: [procexec]
   lsp:
@@ -141,9 +152,9 @@ deps:
     anyProjectDeps: false
     anyVendorDeps: true
   backgroundprocess:
-    mayDependOn: [logger]
+    mayDependOn: [logger, procexec]
   shellenv:
-    mayDependOn: [coagenthome, logger]
+    mayDependOn: [coagenthome, logger, procexec]
 
   # Shared protocols are small, but not globally importable by fiat.
   tool:
@@ -167,7 +178,7 @@ deps:
 
   # Capability hub: tool implementations reach into a few leaf services.
   builtin:
-    mayDependOn: [backgroundprocess, bashsandbox, coagenthome, config, humanize, llmwire, loader, logger, lsp, mcp, memory, procexec, safefile, shellenv, todo, toolexec, tool]
+    mayDependOn: [backgroundprocess, bashsandbox, coagenthome, config, git, humanize, llmwire, loader, logger, lsp, mcp, memory, procexec, projectpath, safefile, sandboxpolicy, shellenv, todo, toolexec, tool]
 
   # ReAct loop — the heaviest service.
   session:

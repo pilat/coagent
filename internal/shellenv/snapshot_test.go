@@ -16,12 +16,12 @@ func TestSnapshot_ReusesWithinTTLThenRecapturesAfterExpiry(t *testing.T) {
 	p := fakeProvider(t)
 	wd := t.TempDir()
 
-	path1 := p.Snapshot(context.Background(), wd)
+	path1 := p.Snapshot(context.Background(), nil, wd)
 	require.NotEmpty(t, path1)
 	assert.Equal(t, int64(1), p.captureN.Load())
 
 	// Within TTL: reuse, no re-capture.
-	path2 := p.Snapshot(context.Background(), wd)
+	path2 := p.Snapshot(context.Background(), nil, wd)
 	assert.Equal(t, path1, path2)
 	assert.Equal(t, int64(1), p.captureN.Load(), "fresh snapshot must not re-capture")
 
@@ -29,7 +29,7 @@ func TestSnapshot_ReusesWithinTTLThenRecapturesAfterExpiry(t *testing.T) {
 	old := time.Now().Add(-10 * time.Minute)
 	require.NoError(t, os.Chtimes(path1, old, old))
 
-	path3 := p.Snapshot(context.Background(), wd)
+	path3 := p.Snapshot(context.Background(), nil, wd)
 	assert.Equal(t, path1, path3)
 	assert.Equal(t, int64(2), p.captureN.Load(), "expired snapshot must re-capture once")
 }
@@ -37,24 +37,24 @@ func TestSnapshot_ReusesWithinTTLThenRecapturesAfterExpiry(t *testing.T) {
 func TestSnapshot_MissingWorkDirReturnsEmpty(t *testing.T) {
 	p := fakeProvider(t)
 
-	assert.Empty(t, p.Snapshot(context.Background(), "/no/such/dir/xyz"))
+	assert.Empty(t, p.Snapshot(context.Background(), nil, "/no/such/dir/xyz"))
 	assert.Equal(t, int64(0), p.captureN.Load())
 }
 
 func TestSnapshot_CaptureFailureReturnsEmpty(t *testing.T) {
 	p := fakeProvider(t)
-	p.captureFn = func(context.Context, string) ([]byte, error) {
+	p.captureFn = func(context.Context, ConfinedRunner, string) ([]byte, error) {
 		return nil, errors.New("boom")
 	}
 
-	assert.Empty(t, p.Snapshot(context.Background(), t.TempDir()))
+	assert.Empty(t, p.Snapshot(context.Background(), nil, t.TempDir()))
 	assert.Equal(t, int64(1), p.captureN.Load())
 }
 
 func TestSnapshot_FileMode0600(t *testing.T) {
 	p := fakeProvider(t)
 
-	path := p.Snapshot(context.Background(), t.TempDir())
+	path := p.Snapshot(context.Background(), nil, t.TempDir())
 	require.NotEmpty(t, path)
 
 	info, err := os.Stat(path)
@@ -64,7 +64,7 @@ func TestSnapshot_FileMode0600(t *testing.T) {
 
 func TestSnapshot_ConcurrentFirstSpawnsCaptureOnce(t *testing.T) {
 	p := fakeProvider(t)
-	p.captureFn = func(context.Context, string) ([]byte, error) {
+	p.captureFn = func(context.Context, ConfinedRunner, string) ([]byte, error) {
 		time.Sleep(20 * time.Millisecond) // widen the race window
 		return []byte("declare -x PATH=\"/bin\"\n"), nil
 	}
@@ -74,7 +74,7 @@ func TestSnapshot_ConcurrentFirstSpawnsCaptureOnce(t *testing.T) {
 	var wg sync.WaitGroup
 	for range 8 {
 		wg.Go(func() {
-			p.Snapshot(context.Background(), wd)
+			p.Snapshot(context.Background(), nil, wd)
 		})
 	}
 
@@ -86,8 +86,8 @@ func TestSnapshot_ConcurrentFirstSpawnsCaptureOnce(t *testing.T) {
 func TestSnapshot_DistinctWorkDirsGetDistinctFiles(t *testing.T) {
 	p := fakeProvider(t)
 
-	a := p.Snapshot(context.Background(), t.TempDir())
-	b := p.Snapshot(context.Background(), t.TempDir())
+	a := p.Snapshot(context.Background(), nil, t.TempDir())
+	b := p.Snapshot(context.Background(), nil, t.TempDir())
 
 	require.NotEmpty(t, a)
 	require.NotEmpty(t, b)
@@ -99,7 +99,7 @@ func TestClose_RemovesCacheDir(t *testing.T) {
 	p := fakeProvider(t)
 	dir := p.cacheDir
 
-	_ = p.Snapshot(context.Background(), t.TempDir())
+	_ = p.Snapshot(context.Background(), nil, t.TempDir())
 
 	require.NoError(t, p.Close())
 

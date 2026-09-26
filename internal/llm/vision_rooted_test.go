@@ -26,7 +26,7 @@ func TestResolveImage_RootedReferenceRejectsLaterCanonicalPathEscape(t *testing.
 	link := filepath.Join(project, "image.png")
 	require.NoError(t, os.Symlink(inside, link))
 
-	access, err := safefile.New(project, safefile.ProjectConfined)
+	access, err := safefile.New(safefile.ProjectPolicy(project), project)
 	require.NoError(t, err)
 	path, err := access.Resolve(link)
 	require.NoError(t, err)
@@ -37,7 +37,7 @@ func TestResolveImage_RootedReferenceRejectsLaterCanonicalPathEscape(t *testing.
 	data, reason := resolveImage([]string{"image"}, llmwire.ImageRef{
 		Path: path.Canonical, ReadRoot: path.ReadRoot, ReadRootID: path.ReadRootID,
 		Mime: llmwire.MimeImagePng,
-	}, zap.NewNop())
+	}, nil, zap.NewNop())
 	assert.Nil(t, data)
 	assert.Equal(t, llmwire.ImageOmitReasonUnreadable, reason)
 }
@@ -49,7 +49,7 @@ func TestResolveImage_RootedReferenceRejectsReplacedRoot(t *testing.T) {
 	inside := filepath.Join(project, "image.png")
 	require.NoError(t, os.WriteFile(inside, []byte("inside pixels"), 0o600))
 
-	access, err := safefile.New(project, safefile.ProjectConfined)
+	access, err := safefile.New(safefile.ProjectPolicy(project), project)
 	require.NoError(t, err)
 	path, err := access.Resolve(inside)
 	require.NoError(t, err)
@@ -65,7 +65,7 @@ func TestResolveImage_RootedReferenceRejectsReplacedRoot(t *testing.T) {
 	data, reason := resolveImage([]string{"image"}, llmwire.ImageRef{
 		Path: path.Canonical, ReadRoot: path.ReadRoot, ReadRootID: path.ReadRootID,
 		Mime: llmwire.MimeImagePng,
-	}, zap.NewNop())
+	}, nil, zap.NewNop())
 	assert.Nil(t, data)
 	assert.Equal(t, llmwire.ImageOmitReasonUnreadable, reason)
 }
@@ -76,7 +76,7 @@ func TestResolveImage_UnconfinedHistoricalReferenceRemainsReadable(t *testing.T)
 
 	data, reason := resolveImage([]string{"image"}, llmwire.ImageRef{
 		Path: path, Mime: llmwire.MimeImagePng,
-	}, zap.NewNop())
+	}, nil, zap.NewNop())
 	assert.Empty(t, reason)
 	assert.Equal(t, "accepted pixels", string(data))
 }

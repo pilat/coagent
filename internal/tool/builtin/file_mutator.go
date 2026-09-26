@@ -11,6 +11,8 @@ import (
 	"sync"
 
 	"github.com/pilat/coagent/internal/bashsandbox"
+	"github.com/pilat/coagent/internal/procexec"
+	"github.com/pilat/coagent/internal/safefile"
 )
 
 const (
@@ -37,6 +39,11 @@ type fileMutator interface {
 }
 
 type directFileMutator struct{}
+
+type exactGrantFileMutator struct {
+	access   safefile.Access
+	fallback fileMutator
+}
 
 type sandboxFileMutator struct {
 	runner bashsandbox.Runner
@@ -83,6 +90,30 @@ func (directFileMutator) WriteFile(
 	return nil
 }
 
+func (m exactGrantFileMutator) WriteFile(ctx context.Context, path string, content []byte, createParents bool) error {
+	resolved, err := m.access.ResolveTarget(path)
+	if err != nil {
+		return fmt.Errorf("resolve mutation target: %w", err)
+	}
+
+	if resolved.ReadRoot != resolved.Canonical || resolved.ReadRootID == "" {
+		if err := m.fallback.WriteFile(ctx, path, content, createParents); err != nil {
+			return fmt.Errorf("write fallback file: %w", err)
+		}
+
+		return nil
+	}
+
+	opened, err := m.access.OpenFile(path, os.O_WRONLY|os.O_TRUNC, 0o644)
+	if err != nil {
+		return fmt.Errorf("open exact granted file: %w", err)
+	}
+
+	_, writeErr := opened.File.Write(content)
+
+	return errors.Join(writeErr, opened.File.Close())
+}
+
 //nolint:wsl_v5 // The process request and bounded result handling are one mutation boundary.
 func (m *sandboxFileMutator) WriteFile(
 	ctx context.Context,
@@ -96,11 +127,10 @@ func (m *sandboxFileMutator) WriteFile(
 	}
 	workDir := string(os.PathSeparator)
 	if m.runner.ReadScope() == bashsandbox.ProjectConfined {
-		roots := m.runner.WritableRoots()
-		if len(roots) == 0 {
-			return errors.New("shielded file mutator has no project root")
+		workDir = m.runner.ProjectRoot()
+		if workDir == "" {
+			return errors.New("sandboxed file mutator has no project root")
 		}
-		workDir = roots[0]
 	}
 
 	cmd, err := m.runner.BashCommand(
@@ -115,6 +145,7 @@ func (m *sandboxFileMutator) WriteFile(
 	if err != nil {
 		return fmt.Errorf("construct sandboxed file mutation: %w", err)
 	}
+	defer procexec.CloseExtraFiles(cmd)
 
 	configureCommandCancellation(cmd)
 	cmd.Stdin = bytes.NewReader(content)

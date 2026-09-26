@@ -7,7 +7,52 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/pilat/coagent/internal/safefile"
+	"github.com/pilat/coagent/internal/sandboxpolicy"
 )
+
+func TestReadTool_UsesVirtualPrivateTempPath(t *testing.T) {
+	project := t.TempDir()
+	privateTemp := t.TempDir()
+	if err := os.WriteFile(filepath.Join(privateTemp, "note"), []byte("private-temp"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	access, err := safefile.New(sandboxpolicy.Policy{
+		ProjectRoot: project,
+		Grants: []sandboxpolicy.Grant{
+			{
+				Source:  project,
+				Target:  project,
+				Mode:    sandboxpolicy.ModeReadWrite,
+				Kind:    sandboxpolicy.KindDir,
+				Present: true,
+			},
+			{
+				Source:  privateTemp,
+				Target:  "/tmp",
+				Mode:    sandboxpolicy.ModeReadWrite,
+				Kind:    sandboxpolicy.KindDir,
+				Present: true,
+			},
+		},
+	}, project)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = access.Close() }()
+	params, err := json.Marshal(readParams{FilePath: "/tmp/note"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := newReadToolWithAccess(project, access, nil).Execute(t.Context(), params)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(result.Output, "private-temp") {
+		t.Fatalf("unexpected read result: %s", result.Output)
+	}
+}
 
 func TestReadTool_Execute(t *testing.T) {
 	tmpDir, err := os.MkdirTemp("", "read_test")

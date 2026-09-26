@@ -1,0 +1,684 @@
+version: "2"
+profiles:
+  shell:
+    mounts:
+      - path: ~/.bashrc
+        mode: ro
+        type: basic
+        kind: file
+      - path: ~/.bash_profile
+        mode: ro
+        type: basic
+        kind: file
+      - path: ~/.profile
+        mode: ro
+        type: basic
+        kind: file
+      - path: ~/.bash_aliases
+        mode: ro
+        type: basic
+        kind: file
+  mise:
+    mounts:
+      - path: ~/.local/bin/mise
+        mode: ro
+        type: basic
+        kind: file
+      - path: ${MISE_INSTALLS_DIR}
+        mode: ro
+        type: basic
+      - path: ${MISE_CONFIG_DIR}
+        mode: ro
+        type: basic
+      - path: ${MISE_CACHE_DIR}
+        mode: rw
+        type: basic
+      - path: ${MISE_STATE_DIR}
+        mode: rw
+        type: basic
+      - path: ${MISE_DATA_DIR}
+        mode: rw
+        type: escalated
+      - path: ${MISE_INSTALLS_DIR}
+        mode: rw
+        type: escalated
+  git:
+    mounts:
+      - path: ~/.gitconfig
+        mode: ro
+        type: basic
+        kind: file
+      - path: ${XDG_CONFIG_HOME}/git/config
+        mode: ro
+        type: basic
+        kind: file
+      - path: ${XDG_CONFIG_HOME}/git/ignore
+        mode: ro
+        type: basic
+        kind: file
+      - path: ${XDG_CONFIG_HOME}/git/attributes
+        mode: ro
+        type: basic
+        kind: file
+      - path: ${XDG_CACHE_HOME}/git-lfs
+        mode: rw
+        type: basic
+      - path: ~/.git-credentials
+        mode: ro
+        type: escalated
+        kind: file
+      - path: ${XDG_CONFIG_HOME}/git/credentials
+        mode: ro
+        type: escalated
+        kind: file
+  ssh:
+    mounts:
+      - path: ~/.ssh/config
+        mode: ro
+        type: basic
+        kind: file
+      - path: ~/.ssh/known_hosts
+        mode: rw
+        type: basic
+        kind: file
+    sockets:
+      - path: ${SSH_AUTH_SOCK}
+        type: escalated
+  gh:
+    mounts:
+      - path: ~/.local/bin/gh
+        mode: ro
+        type: basic
+        kind: file
+      - path: ${GH_CONFIG_DIR}/config.yml
+        mode: ro
+        type: basic
+        kind: file
+      - path: ${GH_CONFIG_DIR}/hosts.yml
+        mode: ro
+        type: escalated
+        kind: file
+      - path: ${XDG_CACHE_HOME}/gh
+        mode: rw
+        type: basic
+  npm:
+    mounts:
+      - path: ~/.npm
+        mode: rw
+        type: escalated
+      - path: ~/.npmrc
+        mode: ro
+        type: escalated
+        kind: file
+  pnpm:
+    mounts:
+      - path: ~/.local/share/pnpm/pnpm
+        mode: ro
+        type: escalated
+        kind: file
+      - path: ~/.local/share/pnpm/store
+        mode: rw
+        type: escalated
+  yarn-berry:
+    mounts:
+      - path: ~/.yarn/berry
+        mode: rw
+        type: escalated
+  uv:
+    mounts:
+      - path: ~/.local/bin/uv
+        mode: ro
+        type: escalated
+        kind: file
+      - path: ~/.local/bin/uvx
+        mode: ro
+        type: escalated
+        kind: file
+      - path: ~/.cache/uv
+        mode: rw
+        type: escalated
+      - path: ~/.local/share/uv/python
+        mode: rw
+        type: escalated
+      - path: ~/.local/share/uv/tools
+        mode: rw
+        type: escalated
+      - path: ~/.config/uv/uv.toml
+        mode: ro
+        type: escalated
+        kind: file
+      - path: ~/.local/share/uv/credentials/credentials.toml
+        mode: ro
+        type: escalated
+        kind: file
+  pip:
+    mounts:
+      - path: ~/.cache/pip
+        mode: rw
+        type: escalated
+      - path: ~/.config/pip/pip.conf
+        mode: ro
+        type: escalated
+        kind: file
+      - path: ~/.pip/pip.conf
+        mode: ro
+        type: escalated
+        kind: file
+  docker:
+    mounts:
+      - path: ~/.docker/config.json
+        mode: ro
+        type: escalated
+        kind: file
+      - path: ~/.docker/buildx
+        mode: rw
+        type: escalated
+    sockets:
+      - path: /var/run/docker.sock
+        type: escalated
+  kubectl:
+    mounts:
+      - path: ~/.kube/config
+        mode: ro
+        type: escalated
+        kind: file
+      - path: ~/.kube/cache
+        mode: rw
+        type: escalated
+  gradle:
+    mounts:
+      - path: ~/.gradle/caches
+        mode: rw
+        type: escalated
+      - path: ~/.gradle/daemon
+        mode: rw
+        type: escalated
+      - path: ~/.gradle/wrapper/dists
+        mode: rw
+        type: escalated
+      - path: ~/.gradle/jdks
+        mode: rw
+        type: escalated
+      - path: ~/.gradle/init.d
+        mode: ro
+        type: escalated
+      - path: ~/.gradle/gradle.properties
+        mode: ro
+        type: escalated
+        kind: file
+  maven:
+    mounts:
+      - path: ~/.m2/repository
+        mode: rw
+        type: escalated
+      - path: ~/.m2/wrapper/dists
+        mode: rw
+        type: escalated
+      - path: ~/.m2/settings.xml
+        mode: ro
+        type: escalated
+        kind: file
+  cargo:
+    mounts:
+      - path: ~/.cargo/bin
+        mode: rw
+        type: escalated
+      - path: ~/.cargo/git
+        mode: rw
+        type: escalated
+      - path: ~/.cargo/registry
+        mode: rw
+        type: escalated
+      - path: ~/.cargo/config.toml
+        mode: ro
+        type: escalated
+        kind: file
+      - path: ~/.cargo/credentials.toml
+        mode: ro
+        type: escalated
+        kind: file
+      - path: ~/.cargo/credentials
+        mode: ro
+        type: escalated
+        kind: file
+  rustup:
+    mounts:
+      - path: ~/.cargo/bin
+        mode: rw
+        type: escalated
+      - path: ~/.rustup
+        mode: rw
+        type: escalated
+  go:
+    mounts:
+      - path: ~/.cache/go-build
+        mode: rw
+        type: escalated
+      - path: ~/go/pkg/mod
+        mode: rw
+        type: escalated
+      - path: ~/go/bin
+        mode: rw
+        type: escalated
+      - path: ~/.config/go
+        mode: rw
+        type: escalated
+  dotnet:
+    mounts:
+      - path: ~/.dotnet
+        mode: rw
+        type: escalated
+      - path: ~/.nuget/packages
+        mode: rw
+        type: escalated
+      - path: ~/.local/share/NuGet/v3-cache
+        mode: rw
+        type: escalated
+      - path: ~/.local/share/NuGet/plugins-cache
+        mode: rw
+        type: escalated
+      - path: ~/.nuget/NuGet/NuGet.Config
+        mode: ro
+        type: escalated
+        kind: file
+      - path: ~/.config/NuGet/NuGet.Config
+        mode: ro
+        type: escalated
+        kind: file
+  terraform:
+    mounts:
+      - path: ~/.terraformrc
+        mode: ro
+        type: escalated
+        kind: file
+      - path: ~/.terraform.d/plugin-cache
+        mode: rw
+        type: escalated
+      - path: ~/.terraform.d/credentials.tfrc.json
+        mode: ro
+        type: escalated
+        kind: file
+  helm:
+    mounts:
+      - path: ~/.cache/helm
+        mode: rw
+        type: escalated
+      - path: ~/.local/share/helm
+        mode: rw
+        type: escalated
+      - path: ~/.config/helm
+        mode: rw
+        type: escalated
+  playwright:
+    mounts:
+      - path: ~/.cache/ms-playwright
+        mode: rw
+        type: escalated
+  ccache:
+    mounts:
+      - path: ~/.cache/ccache
+        mode: rw
+        type: escalated
+      - path: ~/.ccache
+        mode: rw
+        type: escalated
+  sccache:
+    mounts:
+      - path: ~/.cache/sccache
+        mode: rw
+        type: escalated
+  conan-2:
+    mounts:
+      - path: ~/.conan2/p
+        mode: rw
+        type: escalated
+      - path: ~/.conan2/extensions
+        mode: rw
+        type: escalated
+      - path: ~/.conan2/download_cache
+        mode: rw
+        type: escalated
+      - path: ~/.conan2/profiles
+        mode: ro
+        type: escalated
+      - path: ~/.conan2/global.conf
+        mode: ro
+        type: escalated
+        kind: file
+      - path: ~/.conan2/remotes.json
+        mode: ro
+        type: escalated
+        kind: file
+  composer:
+    mounts:
+      - path: ~/.cache/composer
+        mode: rw
+        type: escalated
+      - path: ~/.config/composer/config.json
+        mode: ro
+        type: escalated
+        kind: file
+      - path: ~/.config/composer/auth.json
+        mode: ro
+        type: escalated
+        kind: file
+      - path: ~/.local/share/composer
+        mode: rw
+        type: escalated
+  bundler-rubygems:
+    mounts:
+      - path: ~/.bundle/cache
+        mode: rw
+        type: escalated
+      - path: ~/.bundle/config
+        mode: ro
+        type: escalated
+        kind: file
+      - path: ~/.gem/specs
+        mode: rw
+        type: escalated
+      - path: ~/.gem/cache
+        mode: rw
+        type: escalated
+      - path: ~/.gem/credentials
+        mode: ro
+        type: escalated
+        kind: file
+  dart-pub:
+    mounts:
+      - path: ~/.pub-cache
+        mode: rw
+        type: escalated
+  flutter:
+    mounts:
+      - path: ~/.pub-cache
+        mode: rw
+        type: escalated
+  android-sdk-adb:
+    mounts:
+      - path: ~/Android/Sdk
+        mode: rw
+        type: escalated
+      - path: ~/.android/adbkey
+        mode: ro
+        type: escalated
+        kind: file
+      - path: ~/.android/adbkey.pub
+        mode: ro
+        type: escalated
+        kind: file
+      - path: ~/.android/adb_usb.ini
+        mode: ro
+        type: escalated
+        kind: file
+      - path: ~/.android/repositories.cfg
+        mode: ro
+        type: escalated
+        kind: file
+  deno:
+    mounts:
+      - path: ~/.deno/bin/deno
+        mode: ro
+        type: escalated
+        kind: file
+      - path: ~/.cache/deno
+        mode: rw
+        type: escalated
+  bun:
+    mounts:
+      - path: ~/.bun/bin/bun
+        mode: ro
+        type: escalated
+        kind: file
+      - path: ~/.bun/install/cache
+        mode: rw
+        type: escalated
+  poetry:
+    mounts:
+      - path: ~/.cache/pypoetry
+        mode: rw
+        type: escalated
+      - path: ~/.config/pypoetry/config.toml
+        mode: ro
+        type: escalated
+        kind: file
+      - path: ~/.config/pypoetry/auth.toml
+        mode: ro
+        type: escalated
+        kind: file
+  conda-mamba:
+    mounts:
+      - path: ~/.conda/pkgs
+        mode: rw
+        type: escalated
+      - path: ~/.conda/envs
+        mode: rw
+        type: escalated
+      - path: ~/.condarc
+        mode: ro
+        type: escalated
+        kind: file
+  jupyter:
+    mounts:
+      - path: ~/.local/share/jupyter
+        mode: rw
+        type: escalated
+      - path: ~/.jupyter
+        mode: ro
+        type: escalated
+  sbt-coursier:
+    mounts:
+      - path: ~/.sbt/boot
+        mode: rw
+        type: escalated
+      - path: ~/.ivy2/cache
+        mode: rw
+        type: escalated
+      - path: ~/.cache/coursier/v1
+        mode: rw
+        type: escalated
+      - path: ~/.config/coursier/credentials.properties
+        mode: ro
+        type: escalated
+        kind: file
+  mix-hex:
+    mounts:
+      - path: ~/.mix
+        mode: rw
+        type: escalated
+      - path: ~/.hex/packages
+        mode: rw
+        type: escalated
+      - path: ~/.hex/tarballs
+        mode: rw
+        type: escalated
+      - path: ~/.hex/hex.config
+        mode: ro
+        type: escalated
+        kind: file
+  cabal:
+    mounts:
+      - path: ~/.cache/cabal
+        mode: rw
+        type: escalated
+      - path: ~/.local/state/cabal
+        mode: rw
+        type: escalated
+      - path: ~/.config/cabal/config
+        mode: ro
+        type: escalated
+        kind: file
+  stack:
+    mounts:
+      - path: ~/.stack/programs
+        mode: rw
+        type: escalated
+      - path: ~/.stack/snapshots
+        mode: rw
+        type: escalated
+      - path: ~/.stack/pantry
+        mode: rw
+        type: escalated
+      - path: ~/.stack/config.yaml
+        mode: ro
+        type: escalated
+        kind: file
+  swiftpm:
+    mounts:
+      - path: ~/.cache/org.swift.swiftpm
+        mode: rw
+        type: escalated
+  nix:
+    mounts:
+      - path: /nix/store
+        mode: ro
+        type: escalated
+      - path: ~/.config/nix/nix.conf
+        mode: ro
+        type: escalated
+        kind: file
+      - path: ~/.local/state/nix
+        mode: rw
+        type: escalated
+      - path: ~/.cache/nix
+        mode: rw
+        type: escalated
+    sockets:
+      - path: /nix/var/nix/daemon-socket/socket
+        type: escalated
+  podman:
+    mounts:
+      - path: ~/.local/share/containers/storage
+        mode: rw
+        type: escalated
+      - path: ~/.config/containers/containers.conf
+        mode: ro
+        type: escalated
+        kind: file
+      - path: ~/.config/containers/registries.conf
+        mode: ro
+        type: escalated
+        kind: file
+    sockets:
+      - path: /run/podman/podman.sock
+        type: escalated
+  ansible:
+    mounts:
+      - path: ~/.ansible/collections
+        mode: rw
+        type: escalated
+      - path: ~/.ansible/roles
+        mode: rw
+        type: escalated
+      - path: ~/.ansible.cfg
+        mode: ro
+        type: escalated
+        kind: file
+      - path: ~/.ansible/galaxy_token
+        mode: ro
+        type: escalated
+        kind: file
+  pulumi:
+    mounts:
+      - path: ~/.pulumi/plugins
+        mode: rw
+        type: escalated
+      - path: ~/.pulumi/workspaces
+        mode: rw
+        type: escalated
+      - path: ~/.pulumi/credentials.json
+        mode: ro
+        type: escalated
+        kind: file
+  aws-cli:
+    mounts:
+      - path: ~/.aws/config
+        mode: ro
+        type: escalated
+        kind: file
+      - path: ~/.aws/credentials
+        mode: ro
+        type: escalated
+        kind: file
+      - path: ~/.aws/cli/cache
+        mode: rw
+        type: escalated
+      - path: ~/.aws/sso/cache
+        mode: rw
+        type: escalated
+  gcloud:
+    mounts:
+      - path: ~/.config/gcloud
+        mode: rw
+        type: escalated
+  azure-cli:
+    mounts:
+      - path: ~/.azure
+        mode: rw
+        type: escalated
+  vault:
+    mounts:
+      - path: ~/.vault
+        mode: ro
+        type: escalated
+        kind: file
+      - path: ~/.vault-token
+        mode: ro
+        type: escalated
+        kind: file
+  postgresql-psql:
+    mounts:
+      - path: ~/.psqlrc
+        mode: ro
+        type: escalated
+        kind: file
+      - path: ~/.pgpass
+        mode: ro
+        type: escalated
+        kind: file
+      - path: ~/.pg_service.conf
+        mode: ro
+        type: escalated
+        kind: file
+      - path: ~/.postgresql/postgresql.crt
+        mode: ro
+        type: escalated
+        kind: file
+      - path: ~/.postgresql/postgresql.key
+        mode: ro
+        type: escalated
+        kind: file
+      - path: ~/.postgresql/root.crt
+        mode: ro
+        type: escalated
+        kind: file
+  mysql-mariadb:
+    mounts:
+      - path: ~/.my.cnf
+        mode: ro
+        type: escalated
+        kind: file
+      - path: ~/.mylogin.cnf
+        mode: ro
+        type: escalated
+        kind: file
+  mongosh:
+    mounts:
+      - path: ~/.mongodb/mongosh
+        mode: rw
+        type: escalated
+  httpie:
+    mounts:
+      - path: ~/.config/httpie
+        mode: rw
+        type: escalated
+  cypress:
+    mounts:
+      - path: ~/.cache/Cypress
+        mode: rw
+        type: escalated
+  selenium-manager:
+    mounts:
+      - path: ~/.cache/selenium
+        mode: rw
+        type: escalated

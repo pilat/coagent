@@ -8,7 +8,6 @@ import (
 	"strings"
 
 	"github.com/pilat/coagent/internal/coagenthome"
-	"github.com/pilat/coagent/internal/mcp"
 	"github.com/pilat/coagent/internal/mcpstore"
 	"github.com/pilat/coagent/internal/tool"
 )
@@ -40,12 +39,10 @@ var (
 )
 
 type (
-	// mcpDeps is what every registry tool needs: the store to write, the project
-	// it speaks for, and the pool to invalidate cached MCP metadata from on
-	// every successful mutation.
+	// mcpDeps is what every registry tool needs: the store to write and the
+	// project it speaks for.
 	mcpDeps struct {
 		store     mcpstore.Store
-		pool      mcp.Pool
 		projectID int64
 	}
 
@@ -76,8 +73,8 @@ type (
 	}
 )
 
-func newMCPTools(store mcpstore.Store, pool mcp.Pool, projectID int64) []tool.Tool {
-	deps := mcpDeps{store: store, pool: pool, projectID: projectID}
+func newMCPTools(store mcpstore.Store, projectID int64) []tool.Tool {
+	deps := mcpDeps{store: store, projectID: projectID}
 
 	return []tool.Tool{
 		&mcpAddTool{deps},
@@ -139,8 +136,6 @@ func (t *mcpAddTool) Execute(ctx context.Context, params json.RawMessage) (*tool
 		return nil, fmt.Errorf("add mcp server: %w", err)
 	}
 
-	t.invalidate(p.Name)
-
 	return textResult(fmt.Sprintf("Added MCP server %q in %s scope. %s", p.Name, scope.label, nextRunNotice)), nil
 }
 
@@ -163,8 +158,6 @@ func (t *mcpRemoveTool) Execute(ctx context.Context, params json.RawMessage) (*t
 	if err := t.store.Remove(ctx, scope.projectID, p.Name); err != nil {
 		return nil, fmt.Errorf("remove mcp server: %w", err)
 	}
-
-	t.invalidate(p.Name)
 
 	return textResult(fmt.Sprintf("Removed MCP server %q from %s scope. %s", p.Name, scope.label, nextRunNotice)), nil
 }
@@ -189,8 +182,6 @@ func (t *mcpEnableTool) Execute(ctx context.Context, params json.RawMessage) (*t
 		return nil, fmt.Errorf("enable mcp server: %w", err)
 	}
 
-	t.invalidate(p.Name)
-
 	return textResult(fmt.Sprintf("Enabled MCP server %q in %s scope. %s", p.Name, scope.label, nextRunNotice)), nil
 }
 
@@ -213,8 +204,6 @@ func (t *mcpDisableTool) Execute(ctx context.Context, params json.RawMessage) (*
 	if err := t.store.SetEnabled(ctx, scope.projectID, p.Name, false); err != nil {
 		return nil, fmt.Errorf("disable mcp server: %w", err)
 	}
-
-	t.invalidate(p.Name)
 
 	return textResult(fmt.Sprintf("Disabled MCP server %q in %s scope. %s", p.Name, scope.label, nextRunNotice)), nil
 }

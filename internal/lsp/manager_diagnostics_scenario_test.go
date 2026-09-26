@@ -16,6 +16,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/pilat/coagent/internal/bashsandbox"
+	"github.com/pilat/coagent/internal/coagenthome"
 	"github.com/pilat/coagent/internal/safefile"
 )
 
@@ -65,6 +66,8 @@ func TestManager_ShieldedFakeServerCannotReadOrWriteOutsideProject(t *testing.T)
 	if _, err := exec.LookPath("bwrap"); err != nil {
 		t.Skip("bwrap is not installed")
 	}
+	restore := coagenthome.Override(t.TempDir())
+	t.Cleanup(restore)
 	base := t.TempDir()
 	project := filepath.Join(base, "project")
 	outside := filepath.Join(base, "outside")
@@ -81,12 +84,14 @@ func TestManager_ShieldedFakeServerCannotReadOrWriteOutsideProject(t *testing.T)
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(testExecutable, binary, 0o700))
 
-	access, err := safefile.New(project, safefile.ProjectConfined)
+	policy, err := bashsandbox.FixturePolicy(project, true)
+	require.NoError(t, err)
+	access, err := safefile.New(safefile.ProjectPolicy(project), project)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, access.Close()) })
 	runner, err := bashsandbox.New(bashsandbox.Config{
-		Enabled: true, WorkDir: project, CanonicalWorkDir: access.CanonicalRoot(),
-		SessionKey: "lsp-test", ReadScope: bashsandbox.ProjectConfined,
+		Enabled: true, Shields: true, Policy: policy,
+		WorkDir: project, SessionKey: "lsp-test",
 	}, nil)
 	require.NoError(t, err)
 	m := &manager{

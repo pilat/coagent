@@ -74,6 +74,32 @@ func (s *service) authorizeAttributeUpdate(
 		data.Attributes = make(map[string]any)
 	}
 
+	if requested, supplied := data.Attributes["repo_root"]; supplied {
+		requestedRoot, ok := requested.(string)
+
+		existingRoot, exists := record.Attributes["repo_root"].(string)
+		if !ok || !exists || requestedRoot != existingRoot {
+			return errors.New("repo_root attribute is reserved for created worktrees")
+		}
+	}
+
+	if existing, exists := record.Attributes["repo_root"]; exists {
+		data.Attributes["repo_root"] = existing
+	}
+
+	if requested, supplied := data.Attributes[controllerapi.SessionAttributeWorktreeOrigin]; supplied {
+		requestedOrigin, ok := requested.(string)
+
+		existingOrigin, exists := record.Attributes[controllerapi.SessionAttributeWorktreeOrigin].(string)
+		if !ok || !exists || requestedOrigin != existingOrigin {
+			return errors.New("worktree origin is reserved for created worktrees")
+		}
+	}
+
+	if existing, exists := record.Attributes[controllerapi.SessionAttributeWorktreeOrigin]; exists {
+		data.Attributes[controllerapi.SessionAttributeWorktreeOrigin] = existing
+	}
+
 	data.Attributes[controllerapi.SessionAttributeManagerID] = managerID
 
 	return nil

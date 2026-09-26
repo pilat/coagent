@@ -99,6 +99,10 @@ const (
 	// service-topic management conversation. It selects routing and the
 	// management instruction only; it grants no authority.
 	SessionAttributeManagementSurface = "management_surface"
+	// SessionAttributeWorktreeOrigin attests that the controller created a /gwt
+	// worktree; it is not accepted from a manager or ordinary session attributes.
+	SessionAttributeWorktreeOrigin = "coagent_worktree_origin"
+	WorktreeOriginController       = "controller-created-v1"
 	// SessionAttributeTelegramTopicID binds a root to the manager's current
 	// service topic, so restart reconciliation patches output there instead of
 	// creating another topic.
@@ -120,10 +124,8 @@ type SessionCreateData struct {
 	// of that name (branched off the repository's default branch pulled fresh
 	// from its remote) and runs the session there instead of in WorkDir.
 	WorktreeName string `json:"worktree_name,omitempty"`
-	// RepoRoot is the path to the main git repository (for worktree sessions).
-	// Empty for non-worktree sessions. Its .git directory becomes a sandbox
-	// writable root: linked work trees share the object store and refs with
-	// the main repository.
+	// RepoRoot is reserved for controller-created worktrees. The controller
+	// resolves it itself; callers must leave this field empty.
 	RepoRoot string `json:"repo_root,omitempty"`
 }
 

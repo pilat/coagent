@@ -14,6 +14,8 @@ import (
 
 	"github.com/pilat/coagent/internal/bashsandbox"
 	"github.com/pilat/coagent/internal/procexec"
+	"github.com/pilat/coagent/internal/safefile"
+	"github.com/pilat/coagent/internal/sandboxpolicy"
 )
 
 type fileMutationCall struct {
@@ -34,6 +36,47 @@ type fixedCommandRunner struct {
 }
 
 type mutationContextKey struct{}
+
+func TestExactGrantFileMutator_RejectsReplacedFile(t *testing.T) {
+	project := t.TempDir()
+	grantDir := t.TempDir()
+	granted := filepath.Join(grantDir, "settings")
+	secret := filepath.Join(grantDir, "secret")
+	require.NoError(t, os.WriteFile(granted, []byte("allowed"), 0o600))
+	require.NoError(t, os.WriteFile(secret, []byte("secret"), 0o600))
+	policy := sandboxpolicy.Policy{ProjectRoot: project, WorkDir: project, Grants: []sandboxpolicy.Grant{
+		{
+			Source:  project,
+			Target:  project,
+			Mode:    sandboxpolicy.ModeReadWrite,
+			Kind:    sandboxpolicy.KindDir,
+			Present: true,
+		},
+		{
+			Source:  granted,
+			Target:  granted,
+			Mode:    sandboxpolicy.ModeReadWrite,
+			Kind:    sandboxpolicy.KindFile,
+			Present: true,
+		},
+	}}
+	access, err := safefile.New(policy, project)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, access.Close()) }()
+	fallback := &recordingFileMutator{}
+	mutator := exactGrantFileMutator{access: access, fallback: fallback}
+	require.NoError(t, mutator.WriteFile(t.Context(), granted, []byte("updated"), false))
+	updated, err := os.ReadFile(granted)
+	require.NoError(t, err)
+	assert.Equal(t, "updated", string(updated))
+	require.NoError(t, os.Remove(granted))
+	require.NoError(t, os.Symlink(secret, granted))
+	require.Error(t, mutator.WriteFile(t.Context(), granted, []byte("changed"), false))
+	assert.Empty(t, fallback.calls)
+	content, err := os.ReadFile(secret)
+	require.NoError(t, err)
+	assert.Equal(t, "secret", string(content))
+}
 
 func (m *recordingFileMutator) WriteFile(
 	ctx context.Context,
@@ -72,8 +115,10 @@ func (r fixedCommandRunner) BashCommand(ctx context.Context, _, workDir string, 
 }
 
 func (fixedCommandRunner) WritableRoots() []string          { return nil }
+func (fixedCommandRunner) ProjectRoot() string              { return "" }
 func (fixedCommandRunner) PolicyKey() string                { return "fixed" }
 func (fixedCommandRunner) ReadScope() bashsandbox.ReadScope { return bashsandbox.HostReadable }
+func (fixedCommandRunner) AllowsRead(string) bool           { return true }
 
 // methodSpyRunner records whether the snapshot-sourcing ShellCommand path is ever
 // taken. Command runs a real bash so the mutation actually writes.
@@ -93,8 +138,10 @@ func (r *methodSpyRunner) ShellCommand(ctx context.Context, command, _ string) (
 }
 
 func (*methodSpyRunner) WritableRoots() []string          { return nil }
+func (*methodSpyRunner) ProjectRoot() string              { return "" }
 func (*methodSpyRunner) PolicyKey() string                { return "spy" }
 func (*methodSpyRunner) ReadScope() bashsandbox.ReadScope { return bashsandbox.HostReadable }
+func (*methodSpyRunner) AllowsRead(string) bool           { return true }
 func (r *methodSpyRunner) BashCommand(ctx context.Context, command, workDir string, args ...string) (*exec.Cmd, error) {
 	return r.Command(
 		ctx,

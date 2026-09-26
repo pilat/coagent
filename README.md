@@ -43,8 +43,15 @@ credential values in `~/.coagent/secrets`, referenced from the config as
 ```
 
 The binary stays user-owned under `~/.local/bin`, while the systemd unit
-runs it as your login user. Updating is a manual binary replace
-plus `coagent restart`.
+runs it as your login user with `CAP_NET_ADMIN` and `CAP_SYS_ADMIN` so it can
+build each session's routed network namespace. The host also needs IP
+forwarding; sandbox startup fails explicitly without it:
+
+```bash
+sudo sysctl -w net.ipv4.ip_forward=1 net.ipv6.conf.all.forwarding=1
+```
+
+Updating is a manual binary replace plus `coagent restart`.
 
 For Telegram, create a private bot with BotFather, enable Threaded Mode, and
 disallow users from creating topics; send the bot `/start`, and give the manager
@@ -153,39 +160,50 @@ What is enforced:
   secrets file is parsed into memory rather than loaded into the environment.
   Ordinary environment variables inherited by the daemon remain visible to its
   children, so do not start it with unrelated credentials exported.
-- **Write confinement by default.** On Linux, Bash descendants, LSP and stdio
-  MCP processes, and dedicated file-mutation tools are restricted to the
-  project and explicit writable paths using Bubblewrap. Startup fails if the
-  backend cannot enforce the policy.
-- **Operator-controlled session shields.** `/shieldsup` durably confines the
-  complete session tree's built-in file tools and session-owned processes to
-  its project, apart from a fixed read-only system runtime needed to start
-  ordinary commands.
-  Subagents inherit the state, `/clear` preserves it, and every progress card
-  plus `/status` shows the shield while it is raised. `/shieldsdown` restores
-  ordinary host-readable behavior when the complete tree is idle.
+- **Project confinement by default.** On Linux, shell preparation, Bash
+  descendants, LSP and stdio MCP processes, and the file tools all run under one
+  compiled policy: the project, a private per-project temporary directory, a
+  fixed read-only system runtime, and the resources named by sandbox profiles.
+  Startup fails if the backend cannot enforce the policy.
+- **Session network boundary.** Sandboxed processes and built-in web tools use
+  the tree's private network namespace, routed by the kernel under a ruleset
+  compiled from the policy. Public destinations are allowed by default; private,
+  host and special-use destinations require a profile network grant.
+  `localhost` is private to the tree, and admitted host services use
+  `host.coagent.internal`. A generation retires ten minutes after its last
+  workload and tool stack finish.
+- **Confined shell preparation.** Shell activation capture and executable lookup
+  run inside the session sandbox; snapshots are mounted read-only at a private
+  runtime path.
+- **Operator-controlled session shields.** `/shieldsup` durably removes every
+  profile entry — basic and escalated — from the complete session tree, leaving
+  the project, its private temporary storage and a linked work tree's Git
+  metadata. Subagents inherit the state, `/clear` preserves it, and every
+  progress card plus `/status` shows the shield while it is raised.
+  `/shieldsdown` restores the ordinary profile set when the complete tree is idle.
 - **Configuration fails closed.** Unknown YAML keys, missing secret references,
-  and catalog-unknown models are errors rather than silent fallbacks.
+  catalog-unknown models, unknown profiles, malformed profile entries and
+  broad-root grants are errors rather than silent fallbacks.
 
 What is not enforced:
 
-- With shields down, the write sandbox is **not** a confidentiality boundary.
-  Read tools and session processes can read anything available to the daemon
-  user. Set `sandbox.enabled: false` to disable write confinement explicitly;
-  shields cannot be raised while it is disabled.
-- Raised shields restrict host filesystem access, not network egress, inherited
-  environment variables, or use of data already inside the project or model
-  history. The read-only command runtime includes resolver, host-name, account,
-  loader, and certificate data needed by system tools. Bash can still make
-  arbitrary remote requests, and built-in web tools retain their existing
-  network behavior.
+- Project confinement is an *integrity* boundary over an enumerated resource
+  grant, not confidentiality. Basic profile entries deliberately include shared
+  caches and state, a linked work tree's Git metadata is writable, and an
+  escalated daemon socket (Docker, for example) can affect state well beyond the
+  project. Set `sandbox.enabled: false` to opt out explicitly; shields cannot be
+  raised while it is disabled.
+- Public egress remains available to sandboxed workloads, so the network
+  boundary does not prevent transmission to an external service. Disabling the
+  sandbox also disables that boundary. Routing it requires the daemon to hold
+  network-administration capabilities, so a compromised daemon reaches the
+  host's network configuration.
+- Inherited environment variables and data already inside the project or model
+  history are unchanged. The read-only command runtime includes resolver,
+  host-name, account, loader, and certificate data needed by system tools.
 - Global and marketplace instruction sources remain trusted daemon inputs and
   are read outside the project boundary. Project-local instructions, skills,
   and subagent definitions use the same rooted project access as file tools.
-- Network and Unix-socket effects are outside the filesystem write sandbox.
-- Web fetch blocks link-local and cloud metadata destinations, but deliberately
-  permits loopback and private networks. It is a targeted mitigation, not a
-  complete SSRF boundary.
 - This is a single-operator system. It provides no multi-tenant isolation and
   should not accept tasks from people you would not trust with the daemon user's
   files.
@@ -244,29 +262,46 @@ from `.agents/`, `.coagent/`, and `.claude/`, and subagent definitions from
 `.coagent/agents` and `.claude/agents`. Later, more local sources win when names
 collide.
 
-Write confinement:
+Project confinement and profiles:
 
 ```yaml
 sandbox:
-  enabled: true
-  writable_paths:
-    - ~/.npm
+  enabled: true          # omitted means enabled; false is the explicit opt-out
+  escalated: [ssh]       # global escalation, applied to every project
+  projects:
+    /home/example/projects/service:
+      escalated: [docker]  # this project only; cannot remove a global grant
+  profiles:
+    docker:                # a configured profile replaces the built-in one in full
+      mounts:
+        - path: ~/.docker/buildx
+          mode: rw
+          type: escalated
+      sockets:
+        - path: /var/run/docker.sock
+          type: escalated
+      network: []
 ```
 
-The sandbox is enabled when `sandbox.enabled` is omitted; set it to `false` to
-disable write confinement explicitly.
+Basic entries of every known profile apply whenever the sandbox is enabled;
+escalated entries need an explicit operator grant, globally or per project.
+Mounts choose `ro` or `rw`; sockets expose one exact pathname socket; network
+entries name an IP, CIDR prefix or `host-loopback` with protocol and ports.
+Every project gets a private `/tmp` and `/var/tmp`; a linked `/gwt` work tree
+also receives the main repository's `.git` in both shield states. The shipped
+catalog covers `shell`, `mise`, `git`, `ssh` and `gh` — see
+[sandbox-profiles.md](docs/sandbox-profiles.md) for each profile's paths, its
+official documentation and a smoke scenario.
 
-The project, system temporary directory, and an existing user cache directory
-are writable by default. Add language- or package-manager caches explicitly.
+`sandbox.writable_paths` still works as a deprecated explicit grant, translated
+to read-write `legacy` entries and suppressed by raised shields; migrate those
+paths to profile mounts.
 
 Session shields are runtime state, not configuration. Send `/shieldsup` inside
-an existing session to confine its root and current or future subagents to the
-canonical project. The first version supplies no writable or private `/tmp`,
-ignores configured writable paths while raised, bypasses shell activation, and
-does not expose linked-worktree Git metadata stored outside the project.
-Commands whose complete runtime is in the fixed system substrate continue to
-work; other user toolchains fail normally instead of widening the boundary.
-Send `/shieldsdown` while the tree is idle to restore the ordinary read policy.
+an existing session to remove every profile entry from its root and current or
+future subagents. The base grants stay: the canonical project, private temporary
+storage, and linked-worktree Git metadata. Shell activation is bypassed.
+Send `/shieldsdown` while the tree is idle to restore the ordinary profile set.
 
 ### Web search
 

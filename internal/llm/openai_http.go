@@ -46,6 +46,11 @@ func (c *openaiClient) GetReasoningLevel() string {
 	return string(c.reasoningLevel)
 }
 
+// SetImageAuthorizer attaches the session's current filesystem authority.
+func (c *openaiClient) SetImageAuthorizer(authorizer ImageAuthorizer) {
+	c.imageAuthorizer = authorizer
+}
+
 func (c *openaiClient) SetSessionID(id string) {
 	// No-op for base openaiClient; openAICompatibleClient overrides when isOpenRouter
 }
@@ -315,7 +320,7 @@ func oaiTextPart(text string) map[string]any {
 func (c *openaiClient) imagePart(ref llmwire.ImageRef) []map[string]any {
 	log := logger.Named("llm.client")
 
-	data, reason := resolveImage(c.inputModalities, ref, log)
+	data, reason := resolveImage(c.inputModalities, ref, c.imageAuthorizer, log)
 	if data == nil {
 		return []map[string]any{oaiTextPart(llmwire.ImagePlaceholder(reason))}
 	}

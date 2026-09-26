@@ -22,7 +22,6 @@ import (
 	"github.com/pilat/coagent/internal/controllerapi"
 	"github.com/pilat/coagent/internal/inputruntime"
 	"github.com/pilat/coagent/internal/logger"
-	"github.com/pilat/coagent/internal/mcp"
 	"github.com/pilat/coagent/internal/mcpstore"
 	"github.com/pilat/coagent/internal/progressruntime"
 	"github.com/pilat/coagent/internal/schedule"
@@ -115,7 +114,6 @@ type svc struct {
 	// tools.search section and no native-capable model.
 	searchUnconfigured bool
 	mcpStore           mcpstore.Store
-	mcpPool            mcp.Pool
 	applier            configapply.Service
 	staged             *stagedCalls
 	deferNotices       *deferAnnouncements
@@ -129,12 +127,11 @@ type svc struct {
 	budgetCancel       context.CancelFunc
 	budgetWG           sync.WaitGroup
 	sandboxEnabled     bool
+	networkOwner       NetworkRetirer
 	treeStore          sessionstore.OrchestrationStore
 	treeLocks          sync.Map
-	// Tree locks precede routeMu, processPolicyMu, and childMu; never acquire a
+	// Tree locks precede routeMu and childMu; never acquire a
 	// tree lock while holding one of those narrower locks.
-	processPolicyMu sync.Mutex
-	processPolicies map[int64]map[string]struct{}
 	// routeMu linearizes owner claims with replacement-session creation. The
 	// daemon is single-instance, so this is the ownership CAS boundary.
 	routeMu sync.Mutex
@@ -153,6 +150,21 @@ type svc struct {
 	workerWG          sync.WaitGroup
 	queueRetryMu      sync.Mutex
 	queueRetryPending bool
+}
+
+// NetworkRetirer closes a root tree's old network policy before a transition commits.
+type NetworkRetirer interface {
+	Cutoff(context.Context, int64) error
+	Retire(context.Context, int64) error
+}
+
+// WithNetworkOwner attaches the daemon's network lifetime to tree transitions.
+func WithNetworkOwner(base Service, owner NetworkRetirer) Service {
+	if service, ok := base.(*svc); ok {
+		service.networkOwner = owner
+	}
+
+	return base
 }
 
 // OutputStore exposes the narrow manager-delivery ledger without widening the
@@ -197,7 +209,6 @@ func New(
 	scheduleSvc schedule.Service,
 	cfg *config.Config,
 	mcpStore mcpstore.Store,
-	mcpPool mcp.Pool,
 	applier configapply.Service,
 ) Service {
 	s, processSvc := newSvc(
@@ -208,7 +219,6 @@ func New(
 		scheduleSvc, cfg.DefaultModel,
 	)
 	s.mcpStore = mcpStore
-	s.mcpPool = mcpPool
 	s.applier = applier
 	s.searchUnconfigured = searchUnconfigured(cfg.UnifiedConfig)
 	s.sandboxEnabled = cfg.UnifiedConfig != nil && cfg.UnifiedConfig.Sandbox.Enabled
@@ -270,16 +280,15 @@ func newSvc(
 		stopper: sessionlifecycle.NewStopper(
 			sessionStore, lifecycleStore, managerOutputs, links,
 		),
-		pubsub:          sessionbus.New(),
-		defaultModelFn:  defaultModelFn,
-		childCache:      make(map[int64]bool),
-		ownerCache:      make(map[int64]string),
-		deferNotices:    newDeferAnnouncements(),
-		processPolicies: make(map[int64]map[string]struct{}),
-		workerCtx:       workerCtx,
-		workerCancel:    workerCancel,
-		budgetCtx:       budgetCtx,
-		budgetCancel:    budgetCancel,
+		pubsub:         sessionbus.New(),
+		defaultModelFn: defaultModelFn,
+		childCache:     make(map[int64]bool),
+		ownerCache:     make(map[int64]string),
+		deferNotices:   newDeferAnnouncements(),
+		workerCtx:      workerCtx,
+		workerCancel:   workerCancel,
+		budgetCtx:      budgetCtx,
+		budgetCancel:   budgetCancel,
 	}
 	s.progress = newProgressRuntime(progressStore, budgetSvc, s)
 	s.completions = s.newCompletionCoordinator()
@@ -536,6 +545,16 @@ drain:
 			}
 			s.wakeShieldOutput(ctx, completed)
 		case shieldsDownCommand:
+			record, err := s.sessionStore.GetSession(ctx, sessionID)
+			if err != nil {
+				return fmt.Errorf("load shield lowering state: %w", err)
+			}
+			if record.ShieldsUp && !active {
+				if err := s.retireShieldPolicy(ctx, sessionID); err != nil {
+					return err
+				}
+			}
+
 			commit, err := s.lifecycleStore.ResolveShieldDown(ctx, input.ID, active)
 			if err != nil {
 				return fmt.Errorf("resolve shield lowering: %w", err)
@@ -979,22 +998,16 @@ func (s *svc) stopTreeCleanup(ctx context.Context, sessionID int64, options stop
 	for _, rs := range runners {
 		rs.Cancel()
 	}
+	if err := s.cutOffTreeNetwork(cleanupCtx, sessionID, options); err != nil {
+		return err
+	}
 
 	// Cancel every background Bash process owned by the tree, including
 	// processes started by already-terminal subagents. The shared lifecycle
 	// service signals the in-memory handles, joins terminalization, and
 	// suppresses the individual wake events before the stop fence completes.
-	if s.processSvc != nil && !options.preserveBackgroundProcesses {
-		cancelled, err := s.cancelSessionSubtreeProcesses(
-			cleanupCtx, sessionID, backgroundprocess.IntentSessionStopped,
-		)
-		if err != nil {
-			return fmt.Errorf("cancel background processes: %w", err)
-		}
-
-		if options.cancelledProcesses != nil {
-			*options.cancelledProcesses = cancelled
-		}
+	if err := s.stopTreeBackgroundProcesses(cleanupCtx, sessionID, options); err != nil {
+		return err
 	}
 
 	for _, rs := range runners {
@@ -1011,30 +1024,94 @@ func (s *svc) stopTreeCleanup(ctx context.Context, sessionID int64, options stop
 		return fmt.Errorf("cancel stopped inputs: %w", err)
 	}
 
-	// With all writers joined, it is safe to close every outstanding tool_use in
-	// the transcript. This is what makes a stopped session resumable without
-	// replaying a sleep/config/task call that no longer exists.
+	if err := s.settleStoppedTree(cleanupCtx, ids); err != nil {
+		return err
+	}
+
+	if err := s.retireTreeNetwork(cleanupCtx, sessionID, options); err != nil {
+		return err
+	}
+	if err := s.stopper.Finish(cleanupCtx, plan, options.keepRootStopping); err != nil {
+		return fmt.Errorf("finish stop tree: %w", err)
+	}
+
+	return nil
+}
+
+//nolint:funcorder // Background cancellation is a phase of the adjacent stop transition.
+func (s *svc) stopTreeBackgroundProcesses(ctx context.Context, sessionID int64, options stopTreeOptions) error {
+	if s.processSvc == nil || options.preserveBackgroundProcesses {
+		return nil
+	}
+
+	cancelled, err := s.cancelSessionSubtreeProcesses(ctx, sessionID, backgroundprocess.IntentSessionStopped)
+	if err != nil {
+		return fmt.Errorf("cancel background processes: %w", err)
+	}
+
+	if options.cancelledProcesses != nil {
+		*options.cancelledProcesses = cancelled
+	}
+
+	return nil
+}
+
+// settleStoppedTree closes every outstanding tool_use once all writers have
+// joined. That is what makes a stopped session resumable without replaying a
+// sleep/config/task call that no longer exists.
+//
+//nolint:funcorder // Stop-tree helpers stay beside the stop they serve.
+func (s *svc) settleStoppedTree(ctx context.Context, ids []int64) error {
 	for _, id := range ids {
-		if err := s.settleStoppedCalls(cleanupCtx, id); err != nil {
+		if err := s.settleStoppedCalls(ctx, id); err != nil {
 			return err
 		}
 
 		// The settlement just answered every pending call, so a pending grant
 		// can never be spent anymore; expire it store-only or its row sits
 		// pending until the next wake burns a model turn on the receipt.
-		if err := s.expirePendingActivation(cleanupCtx, id); err != nil {
+		if err := s.expirePendingActivation(ctx, id); err != nil {
 			return err
 		}
 
-		if s.scheduleSvc != nil {
-			if _, err := s.scheduleSvc.CancelPendingSleeps(cleanupCtx, id); err != nil {
-				return fmt.Errorf("cancel one-shot waits for session %d: %w", id, err)
-			}
+		if s.scheduleSvc == nil {
+			continue
+		}
+
+		if _, err := s.scheduleSvc.CancelPendingSleeps(ctx, id); err != nil {
+			return fmt.Errorf("cancel one-shot waits for session %d: %w", id, err)
 		}
 	}
 
-	if err := s.stopper.Finish(cleanupCtx, plan, options.keepRootStopping); err != nil {
-		return fmt.Errorf("finish stop tree: %w", err)
+	return nil
+}
+
+// retireTreeNetwork releases the generation after its workloads have joined.
+//
+//nolint:funcorder // Stop-tree helpers stay beside the stop they serve.
+func (s *svc) retireTreeNetwork(ctx context.Context, sessionID int64, options stopTreeOptions) error {
+	if s.networkOwner == nil || options.preserveBackgroundProcesses {
+		return nil
+	}
+
+	if err := s.networkOwner.Retire(ctx, sessionID); err != nil {
+		return fmt.Errorf("retire stopped tree network: %w", err)
+	}
+
+	return nil
+}
+
+// cutOffTreeNetwork revokes the tree's traffic before stop waits on runners, so
+// a hung process cannot keep using the authority the stop is removing.
+//
+//nolint:funcorder // Stop-tree helpers stay beside the stop they serve.
+func (s *svc) cutOffTreeNetwork(ctx context.Context, sessionID int64, options stopTreeOptions) error {
+	if s.networkOwner == nil || options.preserveBackgroundProcesses {
+		return nil
+	}
+
+	if err := s.networkOwner.Cutoff(ctx, sessionID); err != nil {
+		return fmt.Errorf("cut off stopped tree network: %w", err)
 	}
 
 	return nil

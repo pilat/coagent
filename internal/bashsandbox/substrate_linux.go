@@ -13,7 +13,7 @@ func runtimeDirectoryCandidates() []string {
 func runtimeFileCandidates() []string {
 	return []string{
 		"/etc/ld.so.cache", "/etc/ld.so.conf", "/etc/resolv.conf", "/etc/hosts",
-		"/etc/nsswitch.conf", "/etc/gai.conf", "/etc/services", "/etc/protocols",
+		"/etc/nsswitch.conf", "/etc/host.conf", "/etc/gai.conf", "/etc/services", "/etc/protocols",
 		"/etc/passwd", "/etc/group", "/etc/localtime",
 	}
 }

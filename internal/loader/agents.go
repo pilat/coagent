@@ -39,7 +39,7 @@ func (s *svc) LoadAgentsMD(workDir string) (string, error) {
 
 	// Project-confined root even without session shields: an escaping symlink
 	// in a project candidate must be denied, not followed.
-	access, err := safefile.New(workDir, safefile.ProjectConfined)
+	access, err := safefile.New(safefile.ProjectPolicy(workDir), workDir)
 	if err != nil {
 		errs = append(errs, fmt.Errorf("contain project context candidates: %w", err))
 

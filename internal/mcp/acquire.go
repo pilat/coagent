@@ -2,7 +2,6 @@ package mcp
 
 import (
 	"context"
-	"fmt"
 
 	"go.uber.org/zap"
 
@@ -11,44 +10,27 @@ import (
 	"github.com/pilat/coagent/internal/shellenv"
 )
 
-// AcquireForWorkDir builds per-workdir MCP access from already-resolved definitions,
-// pooled when a pool is given. provider prepares the activated environment and
-// runner applies the session process policy on both paths.
+// AcquireForWorkDir starts the enabled MCP servers for one tool stack.
+// provider prepares the activated environment and runner confines each process.
 //
 //nolint:nilnil // nil,nil means "no MCP configured", not failure; the only caller (tool/builtin) already checks Service != nil
 func AcquireForWorkDir(
 	ctx context.Context,
-	pool Pool,
 	servers map[string]ServerConfig,
 	workDir string,
 	provider shellenv.Provider,
 	runner procexec.Runner,
 ) (Service, error) {
-	configs := stampWorkDir(servers, workDir, provider, runner)
+	configs := stampWorkDir(servers, workDir)
 	if len(configs) == 0 {
 		return nil, nil
-	}
-
-	if pool != nil {
-		snap, err := pool.Acquire(ctx, configs)
-		if err != nil {
-			return nil, fmt.Errorf("pool acquire: %w", err)
-		}
-
-		return newPoolView(pool, snap, configs), nil
 	}
 
 	return startDirect(ctx, workDir, configs, provider, runner)
 }
 
-// stampWorkDir binds caller-supplied definitions to this session's workdir, which
-// is part of the pool's identity hash. Callers leave WorkDir empty.
-func stampWorkDir(
-	servers map[string]ServerConfig,
-	workDir string,
-	provider shellenv.Provider,
-	runner procexec.Runner,
-) map[string]ServerConfig {
+// stampWorkDir binds caller-supplied definitions to this stack's workdir.
+func stampWorkDir(servers map[string]ServerConfig, workDir string) map[string]ServerConfig {
 	configs := make(map[string]ServerConfig, len(servers))
 
 	for name, server := range servers {
@@ -57,16 +39,13 @@ func stampWorkDir(
 		}
 
 		server.WorkDir = workDir
-		server.runner = runner
-		server.provider = provider
-		server.providerSet = true
 		configs[name] = server
 	}
 
 	return configs
 }
 
-// startDirect creates a per-workdir MCP manager (no pool) and starts its servers.
+// startDirect creates a per-workdir MCP manager and starts its servers.
 // Server start failures are logged, not fatal — the manager is still returned.
 func startDirect(
 	ctx context.Context,

@@ -18,7 +18,7 @@ import (
 	"github.com/pilat/coagent/internal/mcpstore"
 )
 
-func TestShieldRaiseRetiresIdleMCPAndRaisedActivationRediscovers(t *testing.T) {
+func TestShieldRaiseDoesNotSpawnMCPDuringSettlementAndRaisedActivationRediscovers(t *testing.T) {
 	if _, err := exec.LookPath("bwrap"); err != nil {
 		t.Skip("bwrap is not installed")
 	}
@@ -36,7 +36,7 @@ func TestShieldRaiseRetiresIdleMCPAndRaisedActivationRediscovers(t *testing.T) {
 
 		return mcpPingCall("down-ping")
 	}
-	h, registry, _ := newMCPHarnessConfigured(t, respond, 0, func(cfg *config.Config) {
+	h, registry := newMCPHarnessConfigured(t, respond, func(cfg *config.Config) {
 		cfg.UnifiedConfig = &config.UnifiedConfig{}
 		cfg.UnifiedConfig.Sandbox.Enabled = true
 	})
@@ -64,7 +64,8 @@ func TestShieldRaiseRetiresIdleMCPAndRaisedActivationRediscovers(t *testing.T) {
 		return lastAssistantTextDTO(h.parentMessages(root.ID)) == "down complete"
 	})
 	h.mgr.waitIdle(root.ID)
-	assert.Equal(t, 1, fake.count(t, "spawn"))
+	downSpawns := fake.count(t, "spawn")
+	require.GreaterOrEqual(t, downSpawns, 1)
 	ackUntilOutputContent(t, controller, "down complete")
 
 	require.NoError(t, h.mgr.SendToSession(h.ctx, root.ID, shieldsUpCommand))
@@ -76,11 +77,13 @@ func TestShieldRaiseRetiresIdleMCPAndRaisedActivationRediscovers(t *testing.T) {
 			MessageIDs: []string{strings.Repeat("s", index+1)},
 		}))
 	}
+	assert.Equal(t, downSpawns, fake.count(t, "spawn"),
+		"shield settlement must not launch a new MCP process")
 	require.NoError(t, h.mgr.SendToSession(h.ctx, root.ID, "use the raised activation"))
 	h.waitUntil("raised MCP call completes", func() bool {
 		return lastAssistantTextDTO(h.parentMessages(root.ID)) == "raised complete"
 	})
-	assert.Equal(t, 2, fake.count(t, "spawn"))
+	assert.Greater(t, fake.count(t, "spawn"), downSpawns)
 	assert.Contains(t, toolResultForCallID(h.parentMessages(root.ID), "raised-ping"), "pong")
 }
 

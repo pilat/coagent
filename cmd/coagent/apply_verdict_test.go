@@ -66,6 +66,7 @@ func (s *stubVerdictSender) GetSession(_ context.Context, _ int64) (*sessionstor
 // commitMarker performs a real apply, leaving the marker a boot would find.
 func commitMarker(t *testing.T, sessionID int64) (configops.Service, string) {
 	t.Helper()
+	t.Setenv("HOME", t.TempDir())
 
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, "config.yaml")

@@ -3,28 +3,112 @@ package builtin
 import (
 	"context"
 	"errors"
+	"io"
+	"net"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zaptest/observer"
 
+	"github.com/pilat/coagent/internal/bashsandbox"
+	"github.com/pilat/coagent/internal/coagenthome"
 	"github.com/pilat/coagent/internal/config"
 	"github.com/pilat/coagent/internal/loader"
 	"github.com/pilat/coagent/internal/logger"
 	"github.com/pilat/coagent/internal/mcp"
+	"github.com/pilat/coagent/internal/procexec"
+	"github.com/pilat/coagent/internal/projectpath"
+	"github.com/pilat/coagent/internal/sandboxpolicy"
 	"github.com/pilat/coagent/internal/todo"
 	"github.com/pilat/coagent/internal/tool"
 )
+
+type testNetworkOwner struct{}
+
+type testNetworkLease struct{}
+
+func (testNetworkOwner) Acquire(context.Context, int64, sandboxpolicy.Policy) (NetworkLease, error) {
+	return testNetworkLease{}, nil
+}
+
+func (testNetworkLease) Link() *bashsandbox.NetworkLink     { return nil }
+func (testNetworkLease) BindRunner(procexec.Runner, string) {}
+func (testNetworkLease) Release()                           {}
+func (testNetworkLease) DialContext(context.Context, string, string) (net.Conn, error) {
+	return nil, errors.New("network unavailable in filesystem fixture")
+}
+
+func TestBuildStack_EnabledSandboxRequiresNetworkOwner(t *testing.T) {
+	restore := coagenthome.Override(t.TempDir())
+	t.Cleanup(restore)
+	unified := &config.UnifiedConfig{}
+	unified.Sandbox.Enabled = true
+	stack, err := BuildStack(t.Context(), StackConfig{
+		WorkDir: t.TempDir(), SessionID: 1, Unified: unified,
+		Loader: loader.New(), Todo: todo.New(),
+	})
+	require.Nil(t, stack)
+	require.ErrorContains(t, err, "network owner is unavailable")
+}
+
+func TestStackClose_ClosesIdleWebConnections(t *testing.T) {
+	idle := make(chan struct{}, 1)
+	closed := make(chan struct{}, 1)
+	server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, "ready")
+	}))
+	server.Config.ConnState = func(_ net.Conn, state http.ConnState) {
+		switch state {
+		case http.StateNew, http.StateActive, http.StateHijacked:
+		case http.StateIdle:
+			select {
+			case idle <- struct{}{}:
+			default:
+			}
+		case http.StateClosed:
+			select {
+			case closed <- struct{}{}:
+			default:
+			}
+		}
+	}
+	server.Start()
+	defer server.Close()
+	transport := newRestrictedTransport()
+	client := &http.Client{Transport: transport}
+	response, err := client.Get(server.URL)
+	require.NoError(t, err)
+	_, err = io.Copy(io.Discard, response.Body)
+	require.NoError(t, err)
+	require.NoError(t, response.Body.Close())
+	select {
+	case <-idle:
+	case <-time.After(2 * time.Second):
+		t.Fatal("web connection did not become idle")
+	}
+	stack := &Stack{web: []*http.Transport{transport}}
+	require.NoError(t, stack.Close())
+	select {
+	case <-closed:
+	case <-time.After(2 * time.Second):
+		t.Fatal("stack close kept the web connection open")
+	}
+}
 
 func TestBuildStack_Independence(t *testing.T) {
 	todoA := todo.New()
 	todoB := todo.New()
 
 	stackA, err := BuildStack(context.Background(), StackConfig{
-		WorkDir: "/tmp/project-a",
+		WorkDir: t.TempDir(),
 		Loader:  loader.New(),
 		Todo:    todoA,
 	})
@@ -33,7 +117,7 @@ func TestBuildStack_Independence(t *testing.T) {
 	t.Cleanup(func() { _ = stackA.Close() })
 
 	stackB, err := BuildStack(context.Background(), StackConfig{
-		WorkDir: "/tmp/project-b",
+		WorkDir: t.TempDir(),
 		Loader:  loader.New(),
 		Todo:    todoB,
 	})
@@ -56,7 +140,7 @@ func TestBuildStack_Independence(t *testing.T) {
 
 func TestBuildStack_ToolCount(t *testing.T) {
 	stack, err := BuildStack(context.Background(), StackConfig{
-		WorkDir: "/tmp/test",
+		WorkDir: t.TempDir(),
 		Loader:  loader.New(),
 		Todo:    todo.New(),
 	})
@@ -76,10 +160,15 @@ func TestBuildStack_ToolCount(t *testing.T) {
 }
 
 func TestBuildStack_BashSandboxConfigurationError(t *testing.T) {
+	restore := coagenthome.Override(t.TempDir())
+	t.Cleanup(restore)
+
 	workDir := t.TempDir()
 	unified := &config.UnifiedConfig{}
 	unified.Sandbox.Enabled = true
-	unified.Sandbox.WritablePaths = []string{filepath.Join(workDir, "missing")}
+	// A declared writable path must be absolute; the policy compiler refuses the
+	// section before any sandbox process is constructed.
+	unified.Sandbox.WritablePaths = []string{"relative/cache"}
 
 	stack, err := BuildStack(context.Background(), StackConfig{
 		WorkDir: workDir,
@@ -89,45 +178,212 @@ func TestBuildStack_BashSandboxConfigurationError(t *testing.T) {
 	})
 	require.Error(t, err)
 	assert.Nil(t, stack)
-	assert.Contains(t, err.Error(), "create bash sandbox")
+	assert.Contains(t, err.Error(), "compile sandbox policy")
 }
 
 func TestBashSandboxConfig_NilUnified(t *testing.T) {
-	cfg := bashSandboxConfig(StackConfig{WorkDir: "/tmp/project"})
+	cfg, err := bashSandboxConfig(t.Context(), StackConfig{WorkDir: "/tmp/project"}, "/tmp/project")
 
+	require.NoError(t, err)
 	assert.False(t, cfg.Enabled)
 	assert.Equal(t, "/tmp/project", cfg.WorkDir)
-	assert.Empty(t, cfg.WritablePaths)
+	assert.Empty(t, cfg.Policy.Digest)
 }
 
 func TestBashSandboxConfig_Configured(t *testing.T) {
+	restore := coagenthome.Override(t.TempDir())
+	t.Cleanup(restore)
+
+	workDir := t.TempDir()
+	canonicalRoot, err := filepath.EvalSymlinks(workDir)
+	require.NoError(t, err)
+
 	unified := &config.UnifiedConfig{}
 	unified.Sandbox.Enabled = true
 	unified.Sandbox.WritablePaths = []string{"~/.cache", "/tmp/build-cache"}
 
-	cfg := bashSandboxConfig(StackConfig{WorkDir: "/tmp/project", Unified: unified})
+	cfg, err := bashSandboxConfig(t.Context(), StackConfig{WorkDir: workDir, Unified: unified}, canonicalRoot)
 
+	require.NoError(t, err)
 	assert.True(t, cfg.Enabled)
-	assert.Equal(t, "/tmp/project", cfg.WorkDir)
-	assert.Equal(t, []string{"~/.cache", "/tmp/build-cache"}, cfg.WritablePaths)
+	assert.Equal(t, workDir, cfg.WorkDir)
+	assert.NotEmpty(t, cfg.Policy.Digest)
+
+	home, err := coagenthome.UserHome()
+	require.NoError(t, err)
+
+	legacy := map[string]sandboxpolicy.Mode{}
+	for _, grant := range cfg.Policy.Grants {
+		if grant.Profile == "legacy" {
+			legacy[grant.Target] = grant.Mode
+		}
+	}
+
+	assert.Equal(t, sandboxpolicy.ModeReadWrite, legacy[filepath.Join(home, ".cache")])
+	assert.Equal(t, sandboxpolicy.ModeReadWrite, legacy["/tmp/build-cache"])
+	assert.Len(t, legacy, 2)
 }
 
 func TestBashSandboxConfig_WorktreeTrustsMainGitDir(t *testing.T) {
-	unified := &config.UnifiedConfig{}
-	unified.Sandbox.Enabled = true
+	restore := coagenthome.Override(t.TempDir())
+	t.Cleanup(restore)
+
+	repoRoot := t.TempDir()
+	gitDir := filepath.Join(repoRoot, ".git")
+	require.NoError(t, os.Mkdir(gitDir, 0o755))
 
 	// The work tree name contains a dot: the trusted path must not be
 	// derived from the work tree basename.
-	cfg := bashSandboxConfig(StackConfig{
-		WorkDir:  "/home/user/.coagent/worktrees/repo-a1b2/fix-release.v2",
-		RepoRoot: "/home/user/projects/repo",
-		Unified:  unified,
-	})
+	workDir := filepath.Join(t.TempDir(), "worktrees", "repo-a1b2", "fix-release.v2")
+	require.NoError(t, os.MkdirAll(workDir, 0o755))
+	canonicalRoot, err := filepath.EvalSymlinks(workDir)
+	require.NoError(t, err)
 
-	assert.Equal(t, []string{"/home/user/projects/repo/.git"}, cfg.WritablePaths)
+	unified := &config.UnifiedConfig{}
+	unified.Sandbox.Enabled = true
 
-	plain := bashSandboxConfig(StackConfig{WorkDir: "/home/user/projects/repo", Unified: unified})
-	assert.Empty(t, plain.WritablePaths)
+	for _, shieldsUp := range []bool{false, true} {
+		cfg, err := bashSandboxConfig(t.Context(), StackConfig{
+			WorkDir: workDir, RepoRoot: repoRoot, Unified: unified, ShieldsUp: shieldsUp,
+		}, canonicalRoot)
+
+		require.NoError(t, err)
+		assert.True(t, cfg.Enabled)
+
+		var trusted bool
+		for _, grant := range cfg.Policy.Grants {
+			if grant.Target != gitDir {
+				continue
+			}
+
+			trusted = true
+			assert.Equal(t, sandboxpolicy.ModeReadWrite, grant.Mode)
+		}
+
+		assert.True(t, trusted,
+			"shieldsUp=%t: a worktree session must receive a read-write grant for the main git dir", shieldsUp)
+	}
+
+	plain, err := bashSandboxConfig(t.Context(), StackConfig{WorkDir: workDir, Unified: unified}, canonicalRoot)
+
+	require.NoError(t, err)
+	for _, grant := range plain.Policy.Grants {
+		assert.NotEqual(t, gitDir, grant.Target,
+			"a plain session must not receive a grant for an unrelated repository's git dir")
+	}
+}
+
+func TestProjectEscalation_WorktreeInheritsOnlyItsSourceProject(t *testing.T) {
+	repoRoot := t.TempDir()
+	otherRoot := t.TempDir()
+	worktreesRoot := t.TempDir()
+	worktree := filepath.Join(worktreesRoot, "repo", "feature")
+	otherWorktree := filepath.Join(worktreesRoot, "other", "feature")
+	projects := map[string]sandboxpolicy.ProjectOverride{
+		repoRoot:      {Escalated: []string{"gh", "ssh"}},
+		worktree:      {Escalated: []string{"docker", "gh"}},
+		otherRoot:     {Escalated: []string{"mise"}},
+		otherWorktree: {Escalated: []string{"node"}},
+	}
+
+	got, err := projectEscalation(projects, worktree, repoRoot)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"docker", "gh", "ssh"}, got)
+
+	got, err = projectEscalation(projects, otherWorktree, otherRoot)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"mise", "node"}, got)
+
+	got, err = projectEscalation(projects, filepath.Join(repoRoot, "nested"), "")
+	require.NoError(t, err)
+	assert.Empty(t, got)
+
+	got, err = projectEscalation(projects, worktree, "")
+	require.NoError(t, err)
+	assert.Equal(t, []string{"docker", "gh"}, got)
+}
+
+func TestBashSandboxConfig_WorktreeEscalationUnionAndShields(t *testing.T) {
+	restore := coagenthome.Override(t.TempDir())
+	t.Cleanup(restore)
+
+	repoRoot := t.TempDir()
+	worktreesRoot := t.TempDir()
+	worktree := projectpath.WorktreePath(worktreesRoot, repoRoot, "feature")
+	createLinkedWorktreeFixture(t, repoRoot, worktree)
+
+	unified := &config.UnifiedConfig{WorktreesRoot: worktreesRoot}
+	unified.Sandbox.Enabled = true
+	unified.Sandbox.Escalated = []string{"global_test"}
+	unified.Sandbox.Projects = map[string]sandboxpolicy.ProjectOverride{
+		repoRoot: {Escalated: []string{"source_test"}},
+		worktree: {Escalated: []string{"worktree_test"}},
+	}
+	unified.Sandbox.Profiles = make(map[string]sandboxpolicy.Profile)
+	for _, name := range []string{"global_test", "source_test", "worktree_test"} {
+		path := filepath.Join(t.TempDir(), name)
+		require.NoError(t, os.WriteFile(path, []byte(name), 0o600))
+		unified.Sandbox.Profiles[name] = sandboxpolicy.Profile{Mounts: []sandboxpolicy.Mount{{
+			Path: path, Mode: sandboxpolicy.ModeReadOnly, Type: sandboxpolicy.LevelEscalated,
+		}}}
+	}
+
+	for _, scenario := range []struct {
+		shieldsUp bool
+		created   bool
+		want      map[string]bool
+	}{
+		{created: true, want: map[string]bool{
+			"global_test": true, "source_test": true, "worktree_test": true,
+		}},
+		{created: false, want: map[string]bool{
+			"global_test": true, "worktree_test": true,
+		}},
+		{shieldsUp: true, created: true, want: map[string]bool{}},
+	} {
+		cfg, err := bashSandboxConfig(t.Context(), StackConfig{
+			WorkDir: worktree, RepoRoot: repoRoot, CreatedWorktree: scenario.created,
+			Unified: unified, ShieldsUp: scenario.shieldsUp,
+		}, worktree)
+		require.NoError(t, err)
+		profiles := make(map[string]bool)
+		for _, grant := range cfg.Policy.Grants {
+			if grant.Level == sandboxpolicy.LevelEscalated {
+				profiles[grant.Profile] = true
+			}
+		}
+		assert.Equal(t, scenario.want, profiles)
+	}
+}
+
+func TestVerifiedWorktreeSource_RejectsHistoricalSpoof(t *testing.T) {
+	repoRoot := t.TempDir()
+	otherRoot := t.TempDir()
+	worktreesRoot := t.TempDir()
+	worktree := projectpath.WorktreePath(worktreesRoot, repoRoot, "feature")
+	createLinkedWorktreeFixture(t, otherRoot, worktree)
+
+	assert.Empty(t, verifiedWorktreeSource(t.Context(), worktree, repoRoot, worktreesRoot, true),
+		"matching the /gwt namespace without matching Git ancestry must not inherit grants")
+	assert.Empty(t, verifiedWorktreeSource(t.Context(), worktree, otherRoot, worktreesRoot, true),
+		"matching Git ancestry outside its namespace must not inherit grants")
+	assert.Empty(t, verifiedWorktreeSource(t.Context(), worktree, otherRoot, worktreesRoot, false),
+		"historical attributes without controller provenance cannot inherit")
+}
+
+func createLinkedWorktreeFixture(t *testing.T, repoRoot, worktree string) {
+	t.Helper()
+	for _, args := range [][]string{
+		{"init", "-q", repoRoot},
+		{
+			"-C", repoRoot, "-c", "user.name=Test", "-c", "user.email=test@example.invalid",
+			"-c", "commit.gpgsign=false", "commit", "-q", "--allow-empty", "-m", "initial",
+		},
+		{"-C", repoRoot, "worktree", "add", "--detach", worktree},
+	} {
+		output, err := exec.CommandContext(t.Context(), "git", args...).CombinedOutput()
+		require.NoError(t, err, "%s", output)
+	}
 }
 
 func TestRegisterCoreTools_SharesFileMutator(t *testing.T) {
@@ -161,40 +417,17 @@ func TestStackCloseToleratesUnsetOwners(t *testing.T) {
 	assert.NoError(t, (&Stack{}).Close())
 }
 
-type stubMCPPool struct {
-	err error
-}
-
-var _ mcp.Pool = (*stubMCPPool)(nil)
-
-func (p *stubMCPPool) Acquire(
-	_ context.Context,
-	_ map[string]mcp.ServerConfig,
-) (*mcp.Snapshot, error) {
-	if p.err != nil {
-		return nil, p.err
-	}
-
-	return &mcp.Snapshot{}, nil
-}
-
-func (p *stubMCPPool) Release([]string) {}
-func (p *stubMCPPool) Stop()            {}
-func (p *stubMCPPool) ClientFor(context.Context, string, mcp.ServerConfig) (*mcp.Client, error) {
-	return nil, nil
-}
-func (p *stubMCPPool) Invalidate(string)         {}
-func (p *stubMCPPool) RetirePolicy(string) error { return nil }
-
-// A broken MCP server degrades the stack to builtins, but it must not do so silently.
-func TestBuildStackLogsMCPAcquireFailure(t *testing.T) {
+// A broken MCP server leaves the builtins available and reports its failure.
+func TestBuildStackKeepsBuiltinsWhenMCPStartFails(t *testing.T) {
 	tests := []struct {
 		name     string
-		poolErr  error
+		servers  map[string]mcp.ServerConfig
 		wantWarn bool
 	}{
-		{name: "pool fails", poolErr: errors.New("server unreachable"), wantWarn: true},
-		{name: "pool succeeds", poolErr: nil, wantWarn: false},
+		{name: "server fails", servers: map[string]mcp.ServerConfig{
+			"demo": {Command: "coagent-absent-mcp-binary"},
+		}, wantWarn: true},
+		{name: "no servers", wantWarn: false},
 	}
 
 	for _, tt := range tests {
@@ -204,8 +437,7 @@ func TestBuildStackLogsMCPAcquireFailure(t *testing.T) {
 
 			stack, err := BuildStack(ctx, StackConfig{
 				WorkDir: t.TempDir(),
-				Pool:    &stubMCPPool{err: tt.poolErr},
-				Servers: map[string]mcp.ServerConfig{"demo": {Command: "true"}},
+				Servers: tt.servers,
 				Loader:  loader.New(),
 				Todo:    todo.New(),
 			})
@@ -214,7 +446,7 @@ func TestBuildStackLogsMCPAcquireFailure(t *testing.T) {
 			t.Cleanup(func() { _ = stack.Close() })
 
 			assert.Contains(t, stack.Registry.IDs(), "read", "builtins survive an MCP failure")
-			assert.Equal(t, tt.wantWarn, logs.FilterMessage("mcp_acquire_failed").Len() == 1)
+			assert.Equal(t, tt.wantWarn, logs.FilterMessage("server_failed").Len() == 1)
 		})
 	}
 }

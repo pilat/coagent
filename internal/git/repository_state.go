@@ -10,6 +10,8 @@ import (
 	"strings"
 	"time"
 	"unicode/utf8"
+
+	"github.com/pilat/coagent/internal/procexec"
 )
 
 // RepositoryStateStatus classifies the outcome of a repository-state probe.
@@ -115,7 +117,7 @@ func runGitProbe(ctx context.Context, dir string, args ...string) (string, strin
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 
-	err := cmd.Run()
+	err := procexec.Unprivileged(cmd).Run()
 
 	return stdout.String(), stderr.String(), err
 }

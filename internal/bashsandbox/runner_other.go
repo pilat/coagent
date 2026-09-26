@@ -15,3 +15,7 @@ import (
 func newEnabledRunner(processPolicy) (Runner, error) {
 	return nil, fmt.Errorf("Bash sandbox is unsupported on %s", runtime.GOOS)
 }
+
+func newEnabledRunnerWithNetwork(processPolicy, *NetworkLink) (Runner, error) {
+	return nil, fmt.Errorf("Bash sandbox is unsupported on %s", runtime.GOOS)
+}

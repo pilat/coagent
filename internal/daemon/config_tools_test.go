@@ -53,6 +53,7 @@ type configHarness struct {
 
 func newConfigHarness(t *testing.T) *configHarness {
 	t.Helper()
+	t.Setenv("HOME", t.TempDir())
 
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, "config.yaml")

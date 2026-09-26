@@ -31,6 +31,13 @@ func (s *svc) launch(
 
 		return nil, fmt.Errorf("spawn background process: %w", err)
 	}
+	defer func() {
+		for _, file := range cmd.ExtraFiles {
+			_ = file.Close()
+		}
+
+		cmd.ExtraFiles = nil
+	}()
 
 	collector, record, quotaReady, err := s.prepareOutput(processCtx, spec, cmd)
 	if err != nil {

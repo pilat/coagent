@@ -10,6 +10,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/pilat/coagent/internal/logger"
+	"github.com/pilat/coagent/internal/procexec"
 )
 
 func (c *client) startWithCommand(ctx context.Context, cmd *exec.Cmd, root string) error {
@@ -18,15 +19,20 @@ func (c *client) startWithCommand(ctx context.Context, cmd *exec.Cmd, root strin
 
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
+		procexec.CloseExtraFiles(cmd)
 		return fmt.Errorf("stdin pipe: %w", err)
 	}
 
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
+		procexec.CloseExtraFiles(cmd)
 		return fmt.Errorf("stdout pipe: %w", err)
 	}
 
-	if err := cmd.Start(); err != nil {
+	err = cmd.Start()
+	procexec.CloseExtraFiles(cmd)
+
+	if err != nil {
 		return fmt.Errorf("start server: %w", err)
 	}
 

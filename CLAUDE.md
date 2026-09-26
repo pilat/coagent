@@ -8,8 +8,8 @@ Key differentiators:
 - **Built-in manager**: the Telegram manager and future built-in managers share the daemon's private in-process controller contract
 - **Pluggable LLM backends**: Anthropic, Google Gemini, OpenAI-compatible (including local models)
 - **Unattended execution**: sessions persist to SQLite, survive crashes, and resume automatically
-- **MCP-first**: the daemon pools session-bound MCP clients and catalogs without cross-session reuse
-- **Session shields**: an operator can durably confine a complete session tree to its project while retaining tools and network access
+- **MCP-first**: each session stack owns its MCP clients and discovers their tools at startup
+- **Project confinement with tool profiles**: every sandbox-enabled session runs one compiled policy — the project, private temporary storage, a read-only system runtime and the resources named by operator-configurable developer-tool profiles. An operator can escalate a tool globally or per project, and durably remove every profile entry for a complete session tree with session shields
 
 ## Build & Development Commands
 

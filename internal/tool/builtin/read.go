@@ -162,7 +162,7 @@ func (t *readTool) executeOpened(
 	unlock := lockFileRead(resolved.Canonical)
 	defer unlock()
 
-	opened, err := t.access.Open(resolved.Canonical)
+	opened, err := t.access.Open(resolved.Display)
 	if err != nil {
 		return nil, fmt.Errorf("open authorized read path: %w", err)
 	}

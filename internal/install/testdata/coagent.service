@@ -10,6 +10,7 @@ StartLimitBurst=5
 Type=simple
 User=testuser
 ExecStart=/home/testuser/.local/bin/coagent daemon
+AmbientCapabilities=CAP_NET_ADMIN CAP_SYS_ADMIN
 Restart=on-failure
 RestartSec=5
 MemoryMax=4G

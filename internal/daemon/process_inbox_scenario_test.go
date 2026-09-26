@@ -508,6 +508,39 @@ func TestHarnessScenario_ForegroundBashCrashRestartResolvesInterruptedCall(t *te
 	assert.Equal(t, 1, readResults)
 }
 
+func TestScenario_InterruptedCallSettlementNeedsNoProjectOrModel(t *testing.T) {
+	h := newSubagentHarnessWith(t, func(string, []llmwire.Message) *llmwire.Response {
+		return &llmwire.Response{Text: "unused"}
+	})
+	defer h.shutdown()
+
+	root, err := h.sessStore.CreateSession(h.ctx, h.projectID, "removed-model", "", nil)
+	require.NoError(t, err)
+	toolCalls, err := json.Marshal([]llmwire.ToolCall{{
+		ID: "interrupted-bash", Name: "bash", Arguments: []byte(`{"command":"true"}`),
+	}})
+	require.NoError(t, err)
+	_, err = h.sessStore.InsertMessage(h.ctx, root.ID, &transcript.Message{
+		Role: llmwire.RoleAssistant, ToolCalls: toolCalls,
+	})
+	require.NoError(t, err)
+
+	workDir, err := h.mgr.store.GetProjectWorkDir(h.ctx, h.projectID)
+	require.NoError(t, err)
+	require.NoError(t, os.Rename(workDir, workDir+".gone"))
+
+	closed, err := h.mgr.closeInterruptedCalls(h.ctx, root)
+	require.NoError(t, err)
+	assert.Equal(t, 1, closed)
+
+	messages, err := h.sessStore.LoadActiveMessages(h.ctx, root.ID)
+	require.NoError(t, err)
+	require.Len(t, messages, 2)
+	assert.Equal(t, llmwire.RoleTool, messages[1].Role)
+	assert.Equal(t, "interrupted-bash", messages[1].ToolCallID)
+	assert.True(t, messages[1].ToolError)
+}
+
 func TestProcessCompletionRetainsInputWithoutWakingStoppedOrErroredSession(t *testing.T) {
 	for _, status := range []sessionstore.SessionStatus{
 		sessionstore.SessionStatusStopped,

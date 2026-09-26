@@ -56,8 +56,6 @@ func buildEnv(envMap map[string]string) []string {
 // NewClient creates a new MCP client for a server. WorkDir is set per-subprocess
 // via WithCommandFunc (no global os.Chdir). provider may be nil: the server then
 // spawns with the daemon's inherited env instead of workDir's activated toolchain.
-//
-//nolint:wsl_v5 // Command activation and runner wrapping form one spawn boundary.
 func NewClient(
 	ctx context.Context,
 	name string,
@@ -67,41 +65,25 @@ func NewClient(
 ) (*Client, error) {
 	env := buildEnv(cfg.Env)
 
-	var opts []transport.StdioOption
-	if cfg.WorkDir != "" || cfg.runner != nil || runner != nil {
-		opts = append(opts, transport.WithCommandFunc(
-			func(ctx context.Context, command string, envList []string, args []string) (*exec.Cmd, error) {
-				cmd, err := activatedServerCommand(ctx, cfg.WorkDir, provider, command, envList, args)
-				if err != nil {
-					return nil, err
-				}
-
-				processRunner := cfg.runner
-				if processRunner == nil {
-					processRunner = runner
-				}
-				if processRunner == nil {
-					return cmd, nil
-				}
-
-				request, err := procexec.FromCommand(cmd)
-				if err != nil {
-					return nil, fmt.Errorf("prepare MCP sandbox command: %w", err)
-				}
-
-				return processRunner.Command(ctx, request)
-			},
-		))
-	}
+	var prepared []*exec.Cmd
+	opts := activationOptions(cfg, provider, runner, func(cmd *exec.Cmd) {
+		prepared = append(prepared, cmd)
+	})
 
 	// runCtx owns the subprocess so Close can force-kill a mute child; detached
-	// from request cancellation (a pooled server outlives one request), keeps values.
+	// from request cancellation because the stack outlives one request.
 	runCtx, cancelRun := context.WithCancel(context.WithoutCancel(ctx))
 
 	stdioTransport := transport.NewStdioWithOptions(cfg.Command, env, cfg.Args, opts...)
-	if err := stdioTransport.Start(runCtx); err != nil {
+	startErr := stdioTransport.Start(runCtx)
+
+	for _, cmd := range prepared {
+		procexec.CloseExtraFiles(cmd)
+	}
+
+	if startErr != nil {
 		cancelRun()
-		return nil, fmt.Errorf("create MCP client: %w", err)
+		return nil, fmt.Errorf("create MCP client: %w", startErr)
 	}
 
 	c := client.NewClient(stdioTransport)
@@ -143,28 +125,86 @@ func NewClient(
 	}, nil
 }
 
+// confinedRunnerOf exposes a session runner as shell activation's process seam
+// when it confines; a non-confining runner leaves activation on the host.
+func confinedRunnerOf(runner procexec.Runner) shellenv.ConfinedRunner {
+	confined, ok := runner.(shellenv.ConfinedRunner)
+	if !ok {
+		return nil
+	}
+
+	return confined
+}
+
+// activationOptions wires the MCP server's command construction. A confinement
+// runner builds the command itself — snapshot mount included — so the caller
+// must not re-wrap it; without one, the activated command is re-created through
+// the runner by hand.
+func activationOptions(
+	cfg ServerConfig,
+	provider shellenv.Provider,
+	runner procexec.Runner,
+	prepared func(*exec.Cmd),
+) []transport.StdioOption {
+	return []transport.StdioOption{transport.WithCommandFunc(
+		func(ctx context.Context, command string, envList []string, args []string) (*exec.Cmd, error) {
+			cmd, confinedCmd, err := activatedServerCommand(
+				ctx, cfg.WorkDir, provider, confinedRunnerOf(runner), command, envList, args,
+			)
+			if err != nil {
+				return nil, err
+			}
+
+			if runner == nil || confinedCmd {
+				if runner == nil {
+					cmd = procexec.Unprivileged(cmd)
+				}
+
+				prepared(cmd)
+
+				return cmd, nil
+			}
+
+			request, err := procexec.FromCommand(cmd)
+			if err != nil {
+				return nil, fmt.Errorf("prepare MCP sandbox command: %w", err)
+			}
+
+			cmd, err = runner.Command(ctx, request)
+			if err != nil {
+				return nil, fmt.Errorf("prepare MCP confined command: %w", err)
+			}
+
+			prepared(cmd)
+
+			return cmd, nil
+		},
+	)}
+}
+
 //nolint:wsl_v5 // Activation and inherited-environment construction are exclusive branches.
 func activatedServerCommand(
 	ctx context.Context,
 	workDir string,
 	provider shellenv.Provider,
+	confined shellenv.ConfinedRunner,
 	command string,
 	envList, args []string,
-) (*exec.Cmd, error) {
+) (*exec.Cmd, bool, error) {
 	if provider != nil {
-		cmd, err := provider.WrapExec(ctx, workDir, append([]string{command}, args...), envList)
+		cmd, err := provider.WrapExec(ctx, confined, workDir, append([]string{command}, args...), envList)
 		if err != nil {
-			return nil, fmt.Errorf("activate MCP server command: %w", err)
+			return nil, false, fmt.Errorf("activate MCP server command: %w", err)
 		}
 
-		return cmd, nil
+		return cmd, confined != nil, nil
 	}
 
 	cmd := exec.CommandContext(ctx, command, args...)
 	cmd.Env = append(os.Environ(), envList...)
 	cmd.Dir = workDir
 
-	return cmd, nil
+	return cmd, false, nil
 }
 
 // handshake runs Initialize then ListTools, each under its own initTimeout so a

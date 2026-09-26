@@ -29,9 +29,8 @@ func lastUserText(msgs []llmwire.Message) string {
 	return text
 }
 
-// mcp_disable retires the pooled subprocess, but a session already holding the
-// client keeps it: the entry dies on the last release, never under an active call.
-func TestScenario_MCPDisableEvictsThePoolWithoutBreakingAnInFlightSession(t *testing.T) {
+// Disabling a server changes the next stack without interrupting an active call.
+func TestScenario_MCPDisableDoesNotBreakAnInFlightStack(t *testing.T) {
 	fake := newFakeMCPServer(t, "pong from held run", true)
 
 	respond := func(_ string, msgs []llmwire.Message) *llmwire.Response {
@@ -69,7 +68,7 @@ func TestScenario_MCPDisableEvictsThePoolWithoutBreakingAnInFlightSession(t *tes
 		}
 	}
 
-	h, _, _ := newMCPHarness(t, respond)
+	h, _ := newMCPHarness(t, respond)
 	defer h.shutdown()
 
 	holder, err := h.mgr.Send(h.ctx, h.projectID, "register the fake mcp server", "fake-model", nil)
@@ -79,19 +78,19 @@ func TestScenario_MCPDisableEvictsThePoolWithoutBreakingAnInFlightSession(t *tes
 	})
 	h.mgr.waitIdle(holder)
 
-	// The holder's next run acquires the pooled client and parks inside tools/call.
+	// The holder's next run parks inside tools/call.
 	require.NoError(t, h.mgr.SendToSession(h.ctx, holder, "HOLD_IT while I reconfigure"))
 	h.waitUntil("the held call reaches the server", func() bool { return fake.count(t, "call") == 1 })
-	require.Equal(t, 1, fake.count(t, "spawn"))
+	require.GreaterOrEqual(t, fake.count(t, "spawn"), 1)
 
-	// A second session disables the server — Evict fires while the holder is mid-call.
+	// A second session disables the server while the holder is mid-call.
 	disabler, err := h.mgr.Send(h.ctx, h.projectID, "DISABLE_IT now", "fake-model", nil)
 	require.NoError(t, err)
 	h.waitUntil("the disabling run finishes", func() bool {
 		return lastAssistantTextDTO(h.parentMessages(disabler)) == "disabled"
 	})
 
-	assert.True(t, h.mgr.HasActiveLoop(holder), "eviction must not tear down the session holding the client")
+	assert.True(t, h.mgr.HasActiveLoop(holder), "the registry change must not tear down the active call")
 
 	fake.unblock(t)
 	h.waitUntil("the held run completes", func() bool {
@@ -101,12 +100,11 @@ func TestScenario_MCPDisableEvictsThePoolWithoutBreakingAnInFlightSession(t *tes
 	held := h.parentMessages(holder)
 	require.NoError(t, llm.ValidateToolPairing(held))
 	assert.Contains(t, toolResultForCallID(held, "ping-held"), "pong from held run",
-		"the in-flight call answers normally despite the eviction")
+		"the in-flight call answers normally despite the registry change")
 
 	require.NoError(t, llm.ValidateToolPairing(h.parentMessages(disabler)))
 
-	// The retired subprocess is gone rather than idling in the pool. The disabler
-	// has its own session policy, and re-enabling the holder starts a third process.
+	spawnsBeforeResume := fake.count(t, "spawn")
 	require.NoError(t, h.mgr.SendToSession(h.ctx, holder, "ENABLE_IT again"))
 	h.waitUntil("re-enable lands", func() bool {
 		return lastAssistantTextDTO(h.parentMessages(holder)) == "enabled"
@@ -122,7 +120,8 @@ func TestScenario_MCPDisableEvictsThePoolWithoutBreakingAnInFlightSession(t *tes
 	msgs := h.parentMessages(holder)
 	require.NoError(t, llm.ValidateToolPairing(msgs))
 	assert.Contains(t, toolResultForCallID(msgs, "ping-again"), "pong from held run")
-	assert.Equal(t, 3, fake.count(t, "spawn"), "the evicted session-bound subprocesses were retired, not reused")
+	assert.Greater(t, fake.count(t, "spawn"), spawnsBeforeResume,
+		"the next stack starts a newly enabled server")
 }
 
 // A disabled server is absent from the next run's tool inventory — the mutation
@@ -153,7 +152,7 @@ func TestScenario_MCPDisableRemovesTheToolFromTheNextRun(t *testing.T) {
 		}
 	}
 
-	h, _, _ := newMCPHarness(t, respond)
+	h, _ := newMCPHarness(t, respond)
 	defer h.shutdown()
 
 	sessionID, err := h.mgr.Send(h.ctx, h.projectID, "register the fake mcp server", "fake-model", nil)

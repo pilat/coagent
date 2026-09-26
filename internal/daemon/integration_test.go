@@ -17,10 +17,10 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/pilat/coagent/internal/budget"
+	"github.com/pilat/coagent/internal/coagenthome"
 	"github.com/pilat/coagent/internal/config"
 	"github.com/pilat/coagent/internal/llm"
 	"github.com/pilat/coagent/internal/llmwire"
-	"github.com/pilat/coagent/internal/mcp"
 	"github.com/pilat/coagent/internal/mcpstore"
 	"github.com/pilat/coagent/internal/migrate"
 	"github.com/pilat/coagent/internal/schedule"
@@ -114,13 +114,14 @@ func (c *scriptedLLM) Chat(
 	}
 }
 
-func (c *scriptedLLM) Model() string              { return "fake-model" }
-func (c *scriptedLLM) APIKey() string             { return "" }
-func (c *scriptedLLM) Close() error               { return nil }
-func (c *scriptedLLM) Provider() string           { return "fake" }
-func (c *scriptedLLM) ContextWindow() int         { return 200000 }
-func (c *scriptedLLM) SetReasoningLevel(_ string) {}
-func (c *scriptedLLM) GetReasoningLevel() string  { return "medium" }
+func (c *scriptedLLM) Model() string                          { return "fake-model" }
+func (c *scriptedLLM) APIKey() string                         { return "" }
+func (c *scriptedLLM) Close() error                           { return nil }
+func (c *scriptedLLM) Provider() string                       { return "fake" }
+func (c *scriptedLLM) ContextWindow() int                     { return 200000 }
+func (c *scriptedLLM) SetReasoningLevel(_ string)             {}
+func (c *scriptedLLM) SetImageAuthorizer(llm.ImageAuthorizer) {}
+func (c *scriptedLLM) GetReasoningLevel() string              { return "medium" }
 func (c *scriptedLLM) SetSessionID(id string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -269,6 +270,9 @@ func newSubagentHarnessOnDBWithProjectConfig(
 	configure func(*config.Config),
 ) *subagentHarness {
 	t.Helper()
+	if _, err := coagenthome.UserHome(); err != nil {
+		t.Setenv("HOME", t.TempDir())
+	}
 
 	db, err := migrate.OpenDB(context.Background(), dbPath)
 	require.NoError(t, err)
@@ -301,7 +305,7 @@ func newSubagentHarnessOnDBWithProjectConfig(
 	require.NoError(t, err)
 
 	factory := session.NewFactoryWithOptions(
-		cfg, nil, nil, sessStore, sessStore, nil, nil, nil, nil, nil,
+		cfg, nil, nil, sessStore, sessStore, nil, nil, nil,
 		session.WithLLMClientFactory(func(_ *config.Config) (llm.Client, error) {
 			client := &scriptedLLM{respond: respond}
 
@@ -311,6 +315,7 @@ func newSubagentHarnessOnDBWithProjectConfig(
 
 			return client, nil
 		}),
+		session.WithNetworkOwner(fixtureNetworkOwner{}),
 	)
 
 	mgr, _ := newSvc(
@@ -1024,33 +1029,19 @@ func TestIntegration_SweepRedeliversIdempotently(t *testing.T) {
 	require.Contains(t, lastSubagentCompletion(msgs, childID), "outcome: completed")
 }
 
-// newMCPHarness is newSubagentHarnessWith plus the MCP wiring cmd/coagent does:
-// one registry store and one real pool, shared by the daemon's registry tools and
-// every session's tool stack.
+// newMCPHarness wires one registry store into session tool stacks.
 func newMCPHarness(
 	t *testing.T,
 	respond func(system string, msgs []llmwire.Message) *llmwire.Response,
-) (*subagentHarness, mcpstore.Store, mcp.Pool) {
-	return newMCPHarnessWithIdleTTL(t, respond, 0)
-}
-
-// newMCPHarnessWithIdleTTL is newMCPHarness with a pool whose live-client idle
-// TTL is injected, so scenario tests can exercise idle reaping without waiting
-// the production 30 minutes. Zero keeps the default.
-func newMCPHarnessWithIdleTTL(
-	t *testing.T,
-	respond func(system string, msgs []llmwire.Message) *llmwire.Response,
-	idleTTL time.Duration,
-) (*subagentHarness, mcpstore.Store, mcp.Pool) {
-	return newMCPHarnessConfigured(t, respond, idleTTL, nil)
+) (*subagentHarness, mcpstore.Store) {
+	return newMCPHarnessConfigured(t, respond, nil)
 }
 
 func newMCPHarnessConfigured(
 	t *testing.T,
 	respond func(system string, msgs []llmwire.Message) *llmwire.Response,
-	idleTTL time.Duration,
 	configure func(*config.Config),
-) (*subagentHarness, mcpstore.Store, mcp.Pool) {
+) (*subagentHarness, mcpstore.Store) {
 	t.Helper()
 	t.Setenv("HOME", t.TempDir())
 
@@ -1068,15 +1059,6 @@ func newMCPHarnessConfigured(
 	schedStore := schedule.NewStore(db)
 	registry := mcpstore.NewStore(db)
 
-	var pool mcp.Pool
-	if idleTTL > 0 {
-		pool = mcp.NewPoolWithIdleTTL(nil, idleTTL)
-	} else {
-		pool = mcp.NewPool(nil)
-	}
-
-	t.Cleanup(pool.Stop)
-
 	workDir := t.TempDir()
 	cfg := &config.Config{WorkDir: workDir, Model: "fake-model"}
 	if configure != nil {
@@ -1084,10 +1066,11 @@ func newMCPHarnessConfigured(
 	}
 
 	factory := session.NewFactoryWithOptions(
-		cfg, nil, nil, sessStore, sessStore, nil, pool, registry, nil, nil,
+		cfg, nil, nil, sessStore, sessStore, nil, registry, nil,
 		session.WithLLMClientFactory(func(_ *config.Config) (llm.Client, error) {
 			return &scriptedLLM{respond: respond}, nil
 		}),
+		session.WithNetworkOwner(fixtureNetworkOwner{}),
 	)
 
 	mgr, _ := newSvc(
@@ -1109,7 +1092,6 @@ func newMCPHarnessConfigured(
 		func() string { return "fake-model" },
 	)
 	mgr.mcpStore = registry
-	mgr.mcpPool = pool
 
 	pid, err := store.GetOrCreateProject(ctx, workDir)
 	require.NoError(t, err)
@@ -1117,7 +1099,7 @@ func newMCPHarnessConfigured(
 	return &subagentHarness{
 		t: t, db: db, mgr: mgr, sessStore: sessStore, links: links, schedStore: schedStore,
 		projectID: pid, ctx: ctx,
-	}, registry, pool
+	}, registry
 }
 
 // waitIdle blocks until the session has no live runner (best-effort settle).

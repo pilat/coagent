@@ -172,22 +172,39 @@ func (s *svc) startServer(ctx context.Context, name string, cfg ServerConfig) er
 		cfg.WorkDir = s.workDir
 	}
 
-	startCtx, cancel := context.WithTimeout(ctx, defaultMCPStartTimeout)
+	client, err := startClientBounded(ctx, defaultMCPStartTimeout, func(startCtx context.Context) (*Client, error) {
+		return NewClient(startCtx, name, cfg, s.provider, s.runner)
+	})
+	if err != nil {
+		return err
+	}
+
+	s.mu.Lock()
+	s.clients[name] = client
+	s.mu.Unlock()
+
+	return nil
+}
+
+func startClientBounded(
+	ctx context.Context,
+	timeout time.Duration,
+	start func(context.Context) (*Client, error),
+) (*Client, error) {
+	startCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
 	type result struct {
 		client *Client
 		err    error
 	}
-	resultCh := make(chan result, 1)
+	resultCh := make(chan result)
 
 	go func() {
-		client, err := NewClient(startCtx, name, cfg, s.provider, s.runner)
-		// Use non-blocking send with select to avoid goroutine leak
+		client, err := start(startCtx)
 		select {
 		case resultCh <- result{client, err}:
 		case <-startCtx.Done():
-			// Context cancelled, cleanup client if created
 			if client != nil {
 				_ = client.Close()
 			}
@@ -196,17 +213,17 @@ func (s *svc) startServer(ctx context.Context, name string, cfg ServerConfig) er
 
 	select {
 	case res := <-resultCh:
-		if res.err != nil {
-			return res.err
+		if err := startCtx.Err(); err != nil {
+			if res.client != nil {
+				_ = res.client.Close()
+			}
+
+			return nil, fmt.Errorf("timeout after %v: %w", timeout, err)
 		}
 
-		s.mu.Lock()
-		s.clients[name] = res.client
-		s.mu.Unlock()
-
-		return nil
+		return res.client, res.err
 
 	case <-startCtx.Done():
-		return fmt.Errorf("timeout after %v: %w", defaultMCPStartTimeout, startCtx.Err())
+		return nil, fmt.Errorf("timeout after %v: %w", timeout, startCtx.Err())
 	}
 }

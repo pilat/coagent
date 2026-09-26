@@ -9,7 +9,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/pilat/coagent/internal/mcp"
 	"github.com/pilat/coagent/internal/mcpstore"
 	"github.com/pilat/coagent/internal/migrate"
 	"github.com/pilat/coagent/internal/session"
@@ -17,7 +16,7 @@ import (
 	"github.com/pilat/coagent/internal/tool"
 )
 
-func newMCPToolSet(t *testing.T) (map[string]tool.Tool, mcpstore.Store, *recordingPool, int64) {
+func newMCPToolSet(t *testing.T) (map[string]tool.Tool, mcpstore.Store, int64) {
 	t.Helper()
 
 	ctx := context.Background()
@@ -35,14 +34,12 @@ func newMCPToolSet(t *testing.T) (map[string]tool.Tool, mcpstore.Store, *recordi
 	require.NoError(t, err)
 
 	store := mcpstore.NewStore(db)
-	pool := &recordingPool{}
-
 	tools := make(map[string]tool.Tool)
-	for _, tl := range newMCPTools(store, pool, projectID) {
+	for _, tl := range newMCPTools(store, projectID) {
 		tools[tl.ID()] = tl
 	}
 
-	return tools, store, pool, projectID
+	return tools, store, projectID
 }
 
 func run(t *testing.T, tl tool.Tool, params string) (*tool.Result, error) {
@@ -52,7 +49,7 @@ func run(t *testing.T, tl tool.Tool, params string) (*tool.Result, error) {
 }
 
 func TestMCPAddWritesToTheRequestedScope(t *testing.T) {
-	tools, store, _, projectID := newMCPToolSet(t)
+	tools, store, projectID := newMCPToolSet(t)
 	ctx := context.Background()
 
 	res, err := run(t, tools[tool.IDMCPAdd],
@@ -75,7 +72,7 @@ func TestMCPAddWritesToTheRequestedScope(t *testing.T) {
 }
 
 func TestMCPAddRejectsBadInput(t *testing.T) {
-	tools, _, _, _ := newMCPToolSet(t)
+	tools, _, _ := newMCPToolSet(t)
 
 	tests := []struct {
 		name    string
@@ -98,7 +95,7 @@ func TestMCPAddRejectsBadInput(t *testing.T) {
 }
 
 func TestMCPAddRejectsDuplicateInSameScope(t *testing.T) {
-	tools, _, _, _ := newMCPToolSet(t)
+	tools, _, _ := newMCPToolSet(t)
 
 	_, err := run(t, tools[tool.IDMCPAdd], `{"name":"dup","scope":"global","command":"run"}`)
 	require.NoError(t, err)
@@ -111,31 +108,51 @@ func TestMCPAddRejectsDuplicateInSameScope(t *testing.T) {
 	require.NoError(t, err)
 }
 
-func TestMCPRegistryMutationsInvalidatePoolMetadata(t *testing.T) {
-	tools, _, pool, _ := newMCPToolSet(t)
+func TestMCPRegistryMutationsApplyOnNextRun(t *testing.T) {
+	tools, store, projectID := newMCPToolSet(t)
+	ctx := context.Background()
 
 	_, err := run(t, tools[tool.IDMCPAdd], `{"name":"tavily","scope":"global","command":"run"}`)
 	require.NoError(t, err)
-	assert.Equal(t, []string{"tavily"}, pool.invalidated, "adding a server invalidates by name")
+	global, _, err := store.ListAll(ctx, projectID)
+	require.NoError(t, err)
+	require.Len(t, global, 1)
+	assert.True(t, global[0].Enabled)
 
-	for _, id := range []string{tool.IDMCPEnable, tool.IDMCPDisable, tool.IDMCPRemove} {
-		_, err = run(t, tools[id], `{"name":"tavily","scope":"global"}`)
-		require.NoError(t, err)
-		assert.Equal(t, []string{"tavily"}, pool.invalidated[len(pool.invalidated)-1:],
-			"every successful mutation invalidates by name")
-	}
+	_, err = run(t, tools[tool.IDMCPDisable], `{"name":"tavily","scope":"global"}`)
+	require.NoError(t, err)
+	global, _, err = store.ListAll(ctx, projectID)
+	require.NoError(t, err)
+	require.Len(t, global, 1)
+	assert.False(t, global[0].Enabled)
+
+	_, err = run(t, tools[tool.IDMCPEnable], `{"name":"tavily","scope":"global"}`)
+	require.NoError(t, err)
+	global, _, err = store.ListAll(ctx, projectID)
+	require.NoError(t, err)
+	require.Len(t, global, 1)
+	assert.True(t, global[0].Enabled)
+
+	_, err = run(t, tools[tool.IDMCPRemove], `{"name":"tavily","scope":"global"}`)
+	require.NoError(t, err)
+	global, _, err = store.ListAll(ctx, projectID)
+	require.NoError(t, err)
+	assert.Empty(t, global)
 }
 
-func TestMCPFailedMutationInvalidatesNothing(t *testing.T) {
-	tools, _, pool, _ := newMCPToolSet(t)
+func TestMCPFailedMutationLeavesRegistryUnchanged(t *testing.T) {
+	tools, store, projectID := newMCPToolSet(t)
 
 	_, err := run(t, tools[tool.IDMCPDisable], `{"name":"ghost","scope":"global"}`)
 	require.ErrorIs(t, err, mcpstore.ErrNotFound)
-	assert.Empty(t, pool.invalidated, "a failed mutation must not touch pool metadata")
+	global, project, err := store.ListAll(context.Background(), projectID)
+	require.NoError(t, err)
+	assert.Empty(t, global)
+	assert.Empty(t, project)
 }
 
 func TestMCPMutationsOnTheWrongScopeSayWhereItLives(t *testing.T) {
-	tools, _, _, _ := newMCPToolSet(t)
+	tools, _, _ := newMCPToolSet(t)
 
 	_, err := run(t, tools[tool.IDMCPAdd], `{"name":"only-global","scope":"global","command":"run"}`)
 	require.NoError(t, err)
@@ -150,7 +167,7 @@ func TestMCPMutationsOnTheWrongScopeSayWhereItLives(t *testing.T) {
 }
 
 func TestMCPListShowsBothScopesAndStatusWithoutEnvValues(t *testing.T) {
-	tools, _, _, _ := newMCPToolSet(t)
+	tools, _, _ := newMCPToolSet(t)
 
 	_, err := run(t, tools[tool.IDMCPAdd],
 		`{"name":"tavily","scope":"project","command":"npx","args":["-y","tavily-mcp"],
@@ -172,7 +189,7 @@ func TestMCPListShowsBothScopesAndStatusWithoutEnvValues(t *testing.T) {
 }
 
 func TestMCPListOnAnEmptyRegistry(t *testing.T) {
-	tools, _, _, _ := newMCPToolSet(t)
+	tools, _, _ := newMCPToolSet(t)
 
 	res, err := run(t, tools[tool.IDMCPList], `{}`)
 	require.NoError(t, err)
@@ -182,7 +199,7 @@ func TestMCPListOnAnEmptyRegistry(t *testing.T) {
 
 func TestMCPProjectScopeNeedsAProject(t *testing.T) {
 	tools := make(map[string]tool.Tool)
-	for _, tl := range newMCPTools(&fakeRegistryStore{}, nil, 0) {
+	for _, tl := range newMCPTools(&fakeRegistryStore{}, 0) {
 		tools[tl.ID()] = tl
 	}
 
@@ -194,7 +211,7 @@ func TestMCPProjectScopeNeedsAProject(t *testing.T) {
 // Every tool schema is a hand-written JSON literal with interpolated descriptions,
 // so a malformed one would only surface as a provider 400 at runtime.
 func TestMCPToolSchemasAreValidJSON(t *testing.T) {
-	for _, tl := range newMCPTools(&fakeRegistryStore{}, nil, 1) {
+	for _, tl := range newMCPTools(&fakeRegistryStore{}, 1) {
 		t.Run(tl.ID(), func(t *testing.T) {
 			var schema map[string]any
 			require.NoError(t, json.Unmarshal(tl.Parameters(), &schema))
@@ -204,36 +221,7 @@ func TestMCPToolSchemasAreValidJSON(t *testing.T) {
 	}
 }
 
-// recordingPool is a Pool that only tracks invalidation; the tools use nothing else.
-type recordingPool struct {
-	stubPool
-
-	invalidated []string
-	retired     []string
-}
-
-func (p *recordingPool) Invalidate(name string) { p.invalidated = append(p.invalidated, name) }
-func (p *recordingPool) RetirePolicy(key string) error {
-	p.retired = append(p.retired, key)
-	return nil
-}
-
 type fakeRegistryStore struct{ mcpstore.Store }
-
-// stubPool satisfies the pool contract for tests that only care about invalidation.
-type stubPool struct{}
-
-func (stubPool) Acquire(context.Context, map[string]mcp.ServerConfig) (*mcp.Snapshot, error) {
-	return nil, nil
-}
-
-func (stubPool) Release([]string) {}
-func (stubPool) Stop()            {}
-func (stubPool) ClientFor(context.Context, string, mcp.ServerConfig) (*mcp.Client, error) {
-	return nil, nil
-}
-func (stubPool) Invalidate(string)         {}
-func (stubPool) RetirePolicy(string) error { return nil }
 
 // A subagent must not reshape the toolset its parent will run with, so the
 // registry tools are root-only.

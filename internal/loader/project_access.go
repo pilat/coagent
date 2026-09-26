@@ -85,7 +85,7 @@ func sourceAccesses(sources []sourceInfo) (map[string]safefile.Access, []error) 
 	accesses := make(map[string]safefile.Access, len(roots))
 
 	for root := range roots {
-		access, err := safefile.New(root, safefile.ProjectConfined)
+		access, err := safefile.New(safefile.ProjectPolicy(root), root)
 		if err != nil {
 			errs = append(errs, fmt.Errorf("contain sources rooted at %s: %w", root, err))
 			continue

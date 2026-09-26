@@ -13,15 +13,6 @@ import (
 
 const mcpStatusEnabled = "enabled"
 
-// invalidate drops the server's cached tool catalog and retires its pooled
-// subprocess now (or on its last release) instead of letting either idle out,
-// so the next activation rediscovers the mutated configuration from scratch.
-func (d mcpDeps) invalidate(name string) {
-	if d.pool != nil {
-		d.pool.Invalidate(name)
-	}
-}
-
 func (d mcpDeps) scopeOf(scope string) (mcpScope, error) {
 	switch scope {
 	case "global":

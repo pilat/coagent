@@ -78,3 +78,20 @@ func newRestrictedTransport() *http.Transport {
 
 	return transport
 }
+
+func webTransport(network NetworkLease) *http.Transport {
+	if network == nil {
+		return newRestrictedTransport()
+	}
+
+	base, ok := http.DefaultTransport.(*http.Transport)
+	if !ok {
+		base = &http.Transport{}
+	}
+
+	transport := base.Clone()
+	transport.Proxy = nil
+	transport.DialContext = network.DialContext
+
+	return transport
+}

@@ -643,7 +643,7 @@ func (s *svc) settleStoppedCalls(ctx context.Context, sessionID int64) error {
 		s.staged.stage(sessionID, call.ID, call.Name)
 	}
 
-	sess, err := s.openSession(ctx, sessionID, workDir, rec, true, false)
+	sess, err := s.openSession(ctx, sessionID, workDir, rec, true, false, true)
 	if err != nil {
 		return fmt.Errorf("open stopping session %d: %w", sessionID, err)
 	}
@@ -686,7 +686,7 @@ func (s *svc) closeOrphanedCalls(ctx context.Context, rec *sessionstore.SessionR
 		}
 	}()
 
-	sess, err := s.createOrResumeSession(ctx, rec.ID, workDir, rec, false)
+	sess, err := s.openSession(ctx, rec.ID, workDir, rec, false, false, true)
 	if err != nil {
 		return 0, fmt.Errorf("open session %d to close orphaned calls: %w", rec.ID, err)
 	}
@@ -1063,7 +1063,7 @@ func (s *svc) createOrResumeSession(
 	rec *sessionstore.SessionRecord,
 	preserveStopped bool,
 ) (session.Service, error) {
-	return s.openSession(ctx, sessionID, workDir, rec, false, preserveStopped)
+	return s.openSession(ctx, sessionID, workDir, rec, false, preserveStopped, false)
 }
 
 func (s *svc) sessionInputBoundary(
@@ -1123,15 +1123,17 @@ func (s *svc) openSession(
 	sessionID int64,
 	workDir string,
 	rec *sessionstore.SessionRecord,
-	settlement, preserveStopped bool,
+	settlement, preserveStopped, transcriptOnly bool,
 ) (session.Service, error) {
 	externalCalls, err := s.pendingExternalCallsForSession(ctx, sessionID)
 	if err != nil {
 		return nil, err
 	}
 
-	// Extract repo root from session attributes (set for worktree sessions)
-	repoRoot, _ := rec.Attributes["repo_root"].(string)
+	repoRoot, createdWorktree, err := s.sessionRepoRoot(ctx, rec)
+	if err != nil {
+		return nil, err
+	}
 
 	opts := session.CreateOptions{
 		ID:              sessionID,
@@ -1150,17 +1152,16 @@ func (s *svc) openSession(
 			ManagerReplyPending: rec.ManagerReplyPending,
 			EmptyStopStreak:     rec.EmptyStopStreak,
 		},
-		RepoRoot:  repoRoot,
-		ShieldsUp: rec.ShieldsUp,
-		ObserveProcessPolicy: func(key string) {
-			s.recordProcessPolicy(sessionID, key)
-		},
+		RepoRoot:        repoRoot,
+		CreatedWorktree: createdWorktree,
+		ShieldsUp:       rec.ShieldsUp,
 
 		StagedExternalCalls: externalCalls,
 
 		CompactionDeferAnnounced: s.deferNotices.announced(sessionID),
 		InputBoundary:            s.sessionInputBoundary(sessionID, rec),
 		SettlementOpen:           settlement,
+		TranscriptOnly:           transcriptOnly,
 		PreserveStoppedStatus:    preserveStopped,
 	}
 	if rec.ParentID != 0 {
@@ -1216,6 +1217,31 @@ func (s *svc) openSession(
 	}
 
 	return sess, nil
+}
+
+// sessionRepoRoot follows the durable tree root because child session rows do
+// not copy manager-owned attributes from their parent.
+func (s *svc) sessionRepoRoot(ctx context.Context, rec *sessionstore.SessionRecord) (string, bool, error) {
+	if rec.RootID == 0 {
+		repoRoot, _ := rec.Attributes["repo_root"].(string)
+		origin, _ := rec.Attributes[controllerapi.SessionAttributeWorktreeOrigin].(string)
+
+		return repoRoot, origin == controllerapi.WorktreeOriginController, nil
+	}
+
+	root, err := s.sessionStore.GetSession(ctx, rec.RootID)
+	if err != nil {
+		return "", false, fmt.Errorf("load root session %d for worktree policy: %w", rec.RootID, err)
+	}
+
+	if root == nil || root.ProjectID != rec.ProjectID {
+		return "", false, fmt.Errorf("root session %d does not match project %d", rec.RootID, rec.ProjectID)
+	}
+
+	repoRoot, _ := root.Attributes["repo_root"].(string)
+	origin, _ := root.Attributes[controllerapi.SessionAttributeWorktreeOrigin].(string)
+
+	return repoRoot, origin == controllerapi.WorktreeOriginController, nil
 }
 
 // pendingExternalCallsForSession merges the authoritative producer ledgers:
@@ -1392,7 +1418,7 @@ func (s *svc) registerMCPTools(ctx context.Context, rec *sessionstore.SessionRec
 		return
 	}
 
-	for _, t := range newMCPTools(s.mcpStore, s.mcpPool, rec.ProjectID) {
+	for _, t := range newMCPTools(s.mcpStore, rec.ProjectID) {
 		registerLogged(ctx, sess, t)
 	}
 }

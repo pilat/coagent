@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+
+	"github.com/pilat/coagent/internal/procexec"
 )
 
 var environmentName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
@@ -25,6 +27,7 @@ type environmentValue struct {
 // isolation settings win while the remaining activated environment survives.
 func (p *provider) WrapExec(
 	ctx context.Context,
+	runner ConfinedRunner,
 	workDir string,
 	argv, extraEnv []string,
 ) (*exec.Cmd, error) {
@@ -39,13 +42,26 @@ func (p *provider) WrapExec(
 
 	env := overriddenEnv(os.Environ(), values)
 
-	snap := p.Snapshot(ctx, workDir)
+	snap := p.Snapshot(ctx, runner, workDir)
 	if snap == "" {
+		// A confinement runner still owns the process: build the un-activated
+		// command through it so the caller never re-wraps by hand.
+		if runner != nil {
+			cmd, err := runner.Command(ctx, procexec.Request{
+				Path: argv[0], Args: argv[1:], WorkDir: workDir, Env: env,
+			})
+			if err != nil {
+				return nil, fmt.Errorf("confined server command: %w", err)
+			}
+
+			return cmd, nil
+		}
+
 		cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
 		cmd.Dir = workDir
 		cmd.Env = env
 
-		return cmd, nil
+		return procexec.Unprivileged(cmd), nil
 	}
 
 	quoted := make([]string, len(argv))
@@ -53,16 +69,30 @@ func (p *provider) WrapExec(
 		quoted[i] = shellQuote(arg)
 	}
 
-	line := "source " + shellQuote(snap) + "; " + shellExports(values) + "exec " + strings.Join(quoted, " ")
+	line := shellExports(values) + "exec " + strings.Join(quoted, " ")
 
-	cmd := exec.CommandContext(ctx, p.shell, "-c", line)
+	if runner != nil {
+		cmd, err := runner.SnapshotShell(ctx, p.shell, snap, line, workDir, env)
+		if err != nil {
+			return nil, fmt.Errorf("confined snapshot shell: %w", err)
+		}
+
+		return cmd, nil
+	}
+
+	cmd := exec.CommandContext(ctx, p.shell, "-c", "source "+shellQuote(snap)+"; "+line)
 	cmd.Dir = workDir
 	cmd.Env = env
 
-	return cmd, nil
+	return procexec.Unprivileged(cmd), nil
 }
 
-func (p *provider) LookPath(ctx context.Context, workDir string, names []string) (string, error) {
+func (p *provider) LookPath(
+	ctx context.Context,
+	runner ConfinedRunner,
+	workDir string,
+	names []string,
+) (string, error) {
 	if len(names) == 0 {
 		return "", errors.New("shellenv: empty executable list")
 	}
@@ -73,12 +103,34 @@ func (p *provider) LookPath(ctx context.Context, workDir string, names []string)
 		}
 	}
 
-	snap := p.Snapshot(ctx, workDir)
+	snap := p.Snapshot(ctx, runner, workDir)
 	if snap == "" {
 		return lookPathWithoutSnapshot(workDir, names)
 	}
 
-	return p.lookPathFromSnapshot(ctx, workDir, snap, names)
+	return p.lookPathFromSnapshot(ctx, runner, workDir, snap, names)
+}
+
+// snapshotLookupCommand builds the activated lookup through the confinement
+// runner, so an rc file cannot reach outside the policy during resolution.
+func (p *provider) snapshotLookupCommand(
+	ctx context.Context,
+	runner ConfinedRunner,
+	workDir, snap, lookup string,
+) (*exec.Cmd, error) {
+	if runner != nil {
+		cmd, err := runner.SnapshotShell(ctx, p.shell, snap, lookup, workDir, nil)
+		if err != nil {
+			return nil, fmt.Errorf("confined snapshot lookup: %w", err)
+		}
+
+		return cmd, nil
+	}
+
+	cmd := exec.CommandContext(ctx, p.shell, "-c", "source "+shellQuote(snap)+"; "+lookup)
+	cmd.Dir = workDir
+
+	return procexec.Unprivileged(cmd), nil
 }
 
 func lookPathWithoutSnapshot(workDir string, names []string) (string, error) {
@@ -94,14 +146,22 @@ func lookPathWithoutSnapshot(workDir string, names []string) (string, error) {
 	return "", fmt.Errorf("executable not found: %s", strings.Join(names, ", "))
 }
 
-func (p *provider) lookPathFromSnapshot(ctx context.Context, workDir, snap string, names []string) (string, error) {
+func (p *provider) lookPathFromSnapshot(
+	ctx context.Context,
+	runner ConfinedRunner,
+	workDir, snap string,
+	names []string,
+) (string, error) {
 	parts := make([]string, len(names))
 	for i, name := range names {
 		parts[i] = "type -P -- " + shellQuote(name)
 	}
 
-	cmd := exec.CommandContext(ctx, p.shell, "-c", "source "+shellQuote(snap)+"; "+strings.Join(parts, " || "))
-	cmd.Dir = workDir
+	cmd, err := p.snapshotLookupCommand(ctx, runner, workDir, snap, strings.Join(parts, " || "))
+	if err != nil {
+		return "", err
+	}
+	defer procexec.CloseExtraFiles(cmd)
 
 	output, err := cmd.Output()
 	if err != nil {

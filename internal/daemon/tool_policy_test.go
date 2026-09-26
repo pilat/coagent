@@ -31,7 +31,7 @@ func TestProductionTools_ParallelSafePolicies(t *testing.T) {
 		tools[tl.ID()] = tl
 	}
 
-	for _, tl := range newMCPTools(nil, nil, 0) {
+	for _, tl := range newMCPTools(nil, 0) {
 		tools[tl.ID()] = tl
 	}
 

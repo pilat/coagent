@@ -21,7 +21,7 @@ func TestManager_ShieldedAccessRejectsOutsideDocument(t *testing.T) {
 	outside := filepath.Join(base, "outside.go")
 	require.NoError(t, os.WriteFile(outside, []byte("package outside\n"), 0o600))
 
-	access, err := safefile.New(project, safefile.ProjectConfined)
+	access, err := safefile.New(safefile.ProjectPolicy(project), project)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, access.Close()) })
 	manager := NewManagerWithAccess(nil, nil, access)

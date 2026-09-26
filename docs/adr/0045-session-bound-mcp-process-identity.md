@@ -1,6 +1,6 @@
 # ADR-0045: MCP process identity is session-bound
 
-- **Status:** Accepted
+- **Status:** Superseded by [ADR-0065](0065-session-stacks-own-mcp-and-shell-activation.md)
 - **Date:** 2026-09-06
 
 ## Context

@@ -25,8 +25,6 @@ func TestFactoryCreateClosesLLMClientOnBuildFailure(t *testing.T) {
 		nil,
 		nil,
 		nil,
-		nil,
-		nil,
 		WithLLMClientFactory(func(*config.Config) (llm.Client, error) { return client, nil }),
 	)
 
@@ -44,11 +42,30 @@ func TestFactoryCreateRequiresOutputStoreForManagedRoot(t *testing.T) {
 
 	factory := NewFactoryWithOptions(
 		&config.Config{Model: "fake-model"},
-		nil, nil, nil, nil, nil, nil, nil, nil, nil,
+		nil, nil, nil, nil, nil, nil, nil,
 	)
 
 	_, err := factory.Create(context.Background(), CreateOptions{
 		ID: 1, WorkDir: t.TempDir(), OutputEnabled: true,
 	})
 	require.ErrorContains(t, err, "output store is required")
+}
+
+func TestFactoryCreateTranscriptOnlySkipsRemovedModelAndTools(t *testing.T) {
+	createdLLM := false
+	factory := NewFactoryWithOptions(
+		&config.Config{Model: "current-model"},
+		nil, nil, nil, nil, nil, nil, nil,
+		WithLLMClientFactory(func(*config.Config) (llm.Client, error) {
+			createdLLM = true
+			return nil, nil
+		}),
+	)
+
+	sess, err := factory.Create(context.Background(), CreateOptions{
+		ID: 1, WorkDir: t.TempDir(), Model: "removed-model", TranscriptOnly: true,
+	})
+	require.NoError(t, err)
+	assert.False(t, createdLLM, "transcript settlement must not depend on model configuration")
+	sess.Close()
 }

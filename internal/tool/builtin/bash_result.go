@@ -246,7 +246,7 @@ func bashTitle(command string) string {
 }
 
 func (t *bashTool) failureHint(output string) string {
-	if hint := sandboxHint(output, t.runner.WritableRoots(), t.runner.ReadScope(), t.workDir); hint != "" {
+	if hint := sandboxHint(output, t.runner.WritableRoots(), t.workDir); hint != "" {
 		return hint
 	}
 

@@ -29,6 +29,7 @@ type anthropicClient struct {
 	pricing         *config.ModelPricing  // catalog-resolved; nil bills the call at zero
 	reasoning       *config.ReasoningSpec // catalog-resolved reasoning capability
 	inputModalities []string              // catalog-resolved; nil/absent "image" means no pixels are ever sent
+	imageAuthorizer ImageAuthorizer       // session authority re-checked per deferred attachment read
 }
 
 // anthropicParams holds parameters for creating an Anthropic client.
@@ -136,6 +137,11 @@ func (c *anthropicClient) GetReasoningLevel() string {
 	}
 
 	return string(c.reasoningLevel)
+}
+
+// SetImageAuthorizer attaches the session's current filesystem authority.
+func (c *anthropicClient) SetImageAuthorizer(authorizer ImageAuthorizer) {
+	c.imageAuthorizer = authorizer
 }
 
 func (c *anthropicClient) SetSessionID(id string) {
@@ -298,7 +304,7 @@ func (c *anthropicClient) userMessageBlocks(msg llmwire.Message) []anthropic.Con
 func (c *anthropicClient) imageSlot(ref llmwire.ImageRef) anthropic.ContentBlockParamUnion {
 	log := logger.Named("llm.client")
 
-	data, reason := resolveImage(c.inputModalities, ref, log)
+	data, reason := resolveImage(c.inputModalities, ref, c.imageAuthorizer, log)
 	if data == nil {
 		return anthropic.NewTextBlock(llmwire.ImagePlaceholder(reason))
 	}
@@ -375,7 +381,7 @@ func (c *anthropicClient) toolResultBlock(msg llmwire.Message) anthropic.Content
 	log := logger.Named("llm.client")
 
 	for _, ref := range msg.Images {
-		data, reason := resolveImage(c.inputModalities, ref, log)
+		data, reason := resolveImage(c.inputModalities, ref, c.imageAuthorizer, log)
 		if data != nil {
 			content = append(content, anthropic.ToolResultBlockParamContentUnion{
 				OfImage: &anthropic.ImageBlockParam{

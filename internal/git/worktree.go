@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+
+	"github.com/pilat/coagent/internal/procexec"
 )
 
 // WorktreeClient runs the git plumbing behind /gwt. Every method shells out to
@@ -142,7 +144,7 @@ func (c *worktreeClient) FetchBranch(ctx context.Context, repoRoot, remote, bran
 
 func (c *worktreeClient) BranchExists(ctx context.Context, repoRoot, branch string) (bool, error) {
 	cmd := exec.CommandContext(ctx, "git", "-C", repoRoot, "rev-parse", "--verify", "--quiet", "refs/heads/"+branch)
-	if err := cmd.Run(); err != nil {
+	if err := procexec.Unprivileged(cmd).Run(); err != nil {
 		var exit *exec.ExitError
 		if errors.As(err, &exit) && exit.ExitCode() == 1 {
 			return false, nil // --quiet verify reports a missing ref with exit 1
@@ -184,7 +186,7 @@ func (c *worktreeClient) AddWorktree(
 	cmd.Env = nonInteractiveGitEnv()
 	cmd.WaitDelay = gitWaitDelay
 
-	output, err := cmd.CombinedOutput()
+	output, err := procexec.Unprivileged(cmd).CombinedOutput()
 	if err != nil {
 		return string(output), fmt.Errorf("git worktree add failed: %w", err)
 	}
@@ -296,7 +298,7 @@ func runGit(ctx context.Context, dir string, args ...string) (string, error) {
 	cmd.Env = nonInteractiveGitEnv()
 	cmd.WaitDelay = gitWaitDelay
 
-	output, err := cmd.Output()
+	output, err := procexec.Unprivileged(cmd).Output()
 	if err != nil {
 		var exit *exec.ExitError
 		if errors.As(err, &exit) && len(exit.Stderr) > 0 {

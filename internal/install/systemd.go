@@ -29,6 +29,7 @@ StartLimitBurst=5
 Type=simple
 User={{.User}}
 ExecStart={{.BinaryPath}} daemon
+AmbientCapabilities=CAP_NET_ADMIN CAP_SYS_ADMIN
 Restart=on-failure
 RestartSec=5
 MemoryMax=4G

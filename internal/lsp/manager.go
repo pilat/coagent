@@ -265,3 +265,14 @@ func (m *manager) evictClient(ctx context.Context, key clientKey, candidate *cli
 		go func() { _ = candidate.stop(ctx) }()
 	}
 }
+
+// confinedRunner exposes the session runner as shell activation's process seam
+// when it confines; a non-confining runner leaves activation on the host.
+func (m *manager) confinedRunner() shellenv.ConfinedRunner {
+	confined, ok := m.runner.(shellenv.ConfinedRunner)
+	if !ok {
+		return nil
+	}
+
+	return confined
+}

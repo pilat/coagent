@@ -52,7 +52,7 @@ func TestSnapshot_Integration_PerCwdActivation(t *testing.T) {
 		wd := t.TempDir()
 		require.NoError(t, os.WriteFile(filepath.Join(wd, "marker"), []byte(marker), 0o600))
 
-		snap := p.Snapshot(context.Background(), wd)
+		snap := p.Snapshot(context.Background(), nil, wd)
 		require.NotEmpty(t, snap)
 
 		// Replay from a CLEAN env: source the snapshot, echo the captured marker.
@@ -71,7 +71,7 @@ func TestSnapshot_Integration_PerCwdActivation(t *testing.T) {
 	wd := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(wd, "marker"), []byte("X"), 0o600))
 
-	snap := p.Snapshot(context.Background(), wd)
+	snap := p.Snapshot(context.Background(), nil, wd)
 	require.NotEmpty(t, snap)
 
 	replay := exec.Command("env", "-i", bash, "--norc", "-c", "source "+shellQuote(snap))
@@ -112,7 +112,7 @@ func TestWrapExec_Integration_ActivatesChildEnviron(t *testing.T) {
 	wd := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(wd, "marker"), []byte("PINNED"), 0o600))
 
-	cmd, err := provider.WrapExec(context.Background(), wd, []string{"sleep", "30"}, []string{"EXTRA=set"})
+	cmd, err := provider.WrapExec(context.Background(), nil, wd, []string{"sleep", "30"}, []string{"EXTRA=set"})
 	require.NoError(t, err)
 	require.NoError(t, cmd.Start())
 

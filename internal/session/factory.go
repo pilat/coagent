@@ -10,11 +10,9 @@ import (
 	"github.com/pilat/coagent/internal/git"
 	"github.com/pilat/coagent/internal/llm"
 	"github.com/pilat/coagent/internal/loader"
-	"github.com/pilat/coagent/internal/mcp"
 	"github.com/pilat/coagent/internal/mcpstore"
 	"github.com/pilat/coagent/internal/memory"
 	"github.com/pilat/coagent/internal/sessionstore"
-	"github.com/pilat/coagent/internal/shellenv"
 	"github.com/pilat/coagent/internal/todo"
 	"github.com/pilat/coagent/internal/tool"
 	"github.com/pilat/coagent/internal/tool/builtin"
@@ -45,10 +43,16 @@ type CreateOptions struct {
 	// RepoRoot is the path to the main git repository (for worktree sessions).
 	// Empty for non-worktree sessions.
 	RepoRoot string
+	// CreatedWorktree permits project-grant inheritance only for roots created
+	// by the controller after the origin marker was introduced.
+	CreatedWorktree bool
 
 	// SettlementOpen marks a lifecycle settlement open: the initial state is not
 	// persisted, so a stopping root is never reactivated by /stop settlement.
 	SettlementOpen bool
+	// TranscriptOnly opens durable call state without constructing a model or
+	// tools; callers use only call resolution and Close.
+	TranscriptOnly bool
 
 	// PreserveStoppedStatus marks a command-only activation of a stopped root:
 	// read-only boundary commands run, but the run must not reactivate the root
@@ -88,10 +92,6 @@ type CreateOptions struct {
 	// OnIterationPersisted observes a durable checkpoint after each model response.
 	// It is nil outside daemon-managed child sessions.
 	OnIterationPersisted func(context.Context, int)
-
-	// ObserveProcessPolicy records the exact stack policy before later build
-	// failures can release a pooled MCP client without returning a Service.
-	ObserveProcessPolicy func(string)
 }
 
 type factory struct {
@@ -101,12 +101,11 @@ type factory struct {
 	store            sessionstore.AgentRuntimeStore
 	outputStore      sessionstore.RuntimeOutputStore
 	gitClient        git.Client
-	mcpPool          mcp.Pool
 	mcpStore         mcpstore.Store
 	marketplaceCache loader.MarketplaceCache
-	provider         shellenv.Provider
 	newLLMClient     func(cfg *config.Config) (llm.Client, error)
 	processSvc       backgroundprocess.Service
+	networkOwner     builtin.NetworkOwner
 }
 
 // FactoryOption customizes a factory (test seams).
@@ -122,6 +121,11 @@ func WithLLMClientFactory(fn func(cfg *config.Config) (llm.Client, error)) Facto
 // service. When nil, the Bash tool starts no background processes.
 func WithProcessService(service backgroundprocess.Service) FactoryOption {
 	return func(f *factory) { f.processSvc = service }
+}
+
+// WithNetworkOwner binds session stacks to the daemon-owned network generations.
+func WithNetworkOwner(owner builtin.NetworkOwner) FactoryOption {
+	return func(f *factory) { f.networkOwner = owner }
 }
 
 // WithFactoryProcessService re-wraps an already-built Factory with the
@@ -146,13 +150,11 @@ func NewFactory(
 	store sessionstore.AgentRuntimeStore,
 	outputStore sessionstore.RuntimeOutputStore,
 	gitClient git.Client,
-	mcpPool mcp.Pool,
 	mcpStore mcpstore.Store,
 	marketplaceCache loader.MarketplaceCache,
-	provider shellenv.Provider,
 ) Factory {
 	return NewFactoryWithOptions(
-		cfg, secrets, memoryStore, store, outputStore, gitClient, mcpPool, mcpStore, marketplaceCache, provider,
+		cfg, secrets, memoryStore, store, outputStore, gitClient, mcpStore, marketplaceCache,
 	)
 }
 
@@ -164,10 +166,8 @@ func NewFactoryWithOptions(
 	store sessionstore.AgentRuntimeStore,
 	outputStore sessionstore.RuntimeOutputStore,
 	gitClient git.Client,
-	mcpPool mcp.Pool,
 	mcpStore mcpstore.Store,
 	marketplaceCache loader.MarketplaceCache,
-	provider shellenv.Provider,
 	opts ...FactoryOption,
 ) Factory {
 	f := &factory{
@@ -177,10 +177,8 @@ func NewFactoryWithOptions(
 		store:            store,
 		outputStore:      outputStore,
 		gitClient:        gitClient,
-		mcpPool:          mcpPool,
 		mcpStore:         mcpStore,
 		marketplaceCache: marketplaceCache,
-		provider:         provider,
 		newLLMClient:     llm.NewClient,
 	}
 
@@ -199,7 +197,7 @@ func (f *factory) buildRegistry(
 	ldr loader.Service,
 	todoSvc todo.Service,
 	projectID, sessionID, rootID int64,
-	shieldsUp bool,
+	shieldsUp, createdWorktree bool,
 ) (tool.Registry, *builtin.Stack, error) {
 	stack, err := builtin.BuildStack(ctx, builtin.StackConfig{
 		ProjectID:       projectID,
@@ -207,16 +205,16 @@ func (f *factory) buildRegistry(
 		RootSessionID:   rootID,
 		WorkDir:         cfg.WorkDir,
 		RepoRoot:        cfg.RepoRoot,
-		Pool:            f.mcpPool,
+		CreatedWorktree: createdWorktree,
 		Servers:         resolveMCPServers(ctx, f.mcpStore, f.secrets, projectID),
 		Unified:         cfg.UnifiedConfig,
 		Loader:          ldr,
 		Todo:            todoSvc,
 		TodoReplacement: &todoReplacement{store: f.store, sessionID: sessionID, memory: todoSvc},
 		FileReadTracker: &fileReadTracker{store: f.store, sessionID: sessionID},
-		Provider:        f.provider,
 		ShieldsUp:       shieldsUp,
 		ProcessService:  f.processSvc,
+		NetworkOwner:    f.networkOwner,
 	})
 	if err != nil {
 		return nil, nil, fmt.Errorf("build tool stack: %w", err)

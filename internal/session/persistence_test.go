@@ -295,13 +295,14 @@ func (m *mockLLMClient) Chat(
 ) (*llmwire.Response, error) {
 	return textResponse("done"), nil
 }
-func (m *mockLLMClient) Model() string                  { return "mock-model" }
-func (m *mockLLMClient) APIKey() string                 { return "mock-key" }
-func (m *mockLLMClient) Close() error                   { return nil }
-func (m *mockLLMClient) Provider() string               { return testMockModel }
-func (m *mockLLMClient) ContextWindow() int             { return 0 }
-func (m *mockLLMClient) SetReasoningLevel(level string) {}
-func (m *mockLLMClient) GetReasoningLevel() string      { return testReasoningLvl }
+func (m *mockLLMClient) Model() string                          { return "mock-model" }
+func (m *mockLLMClient) APIKey() string                         { return "mock-key" }
+func (m *mockLLMClient) Close() error                           { return nil }
+func (m *mockLLMClient) Provider() string                       { return testMockModel }
+func (m *mockLLMClient) ContextWindow() int                     { return 0 }
+func (m *mockLLMClient) SetReasoningLevel(level string)         {}
+func (m *mockLLMClient) SetImageAuthorizer(llm.ImageAuthorizer) {}
+func (m *mockLLMClient) GetReasoningLevel() string              { return testReasoningLvl }
 
 func (m *mockLLMClient) SetSessionID(id string) {}
 
@@ -322,13 +323,14 @@ func (m *mockLLMRunOnce) Chat(
 	m.called = true
 	return normalizeScriptedResponse(m.response), nil
 }
-func (m *mockLLMRunOnce) Model() string                  { return testMockModel }
-func (m *mockLLMRunOnce) APIKey() string                 { return "" }
-func (m *mockLLMRunOnce) Close() error                   { return nil }
-func (m *mockLLMRunOnce) Provider() string               { return testMockModel }
-func (m *mockLLMRunOnce) ContextWindow() int             { return 0 }
-func (m *mockLLMRunOnce) SetReasoningLevel(level string) {}
-func (m *mockLLMRunOnce) GetReasoningLevel() string      { return testReasoningLvl }
+func (m *mockLLMRunOnce) Model() string                          { return testMockModel }
+func (m *mockLLMRunOnce) APIKey() string                         { return "" }
+func (m *mockLLMRunOnce) Close() error                           { return nil }
+func (m *mockLLMRunOnce) Provider() string                       { return testMockModel }
+func (m *mockLLMRunOnce) ContextWindow() int                     { return 0 }
+func (m *mockLLMRunOnce) SetReasoningLevel(level string)         {}
+func (m *mockLLMRunOnce) SetImageAuthorizer(llm.ImageAuthorizer) {}
+func (m *mockLLMRunOnce) GetReasoningLevel() string              { return testReasoningLvl }
 
 func (m *mockLLMRunOnce) SetSessionID(id string) {}
 
@@ -352,12 +354,13 @@ func (m *mockLLMSequence) Chat(
 	}
 	return normalizeScriptedResponse(m.responses[len(m.responses)-1]), nil
 }
-func (m *mockLLMSequence) Model() string                  { return testMockModel }
-func (m *mockLLMSequence) APIKey() string                 { return "" }
-func (m *mockLLMSequence) Close() error                   { return nil }
-func (m *mockLLMSequence) Provider() string               { return testMockModel }
-func (m *mockLLMSequence) ContextWindow() int             { return 0 }
-func (m *mockLLMSequence) SetReasoningLevel(level string) {}
-func (m *mockLLMSequence) GetReasoningLevel() string      { return testReasoningLvl }
+func (m *mockLLMSequence) Model() string                          { return testMockModel }
+func (m *mockLLMSequence) APIKey() string                         { return "" }
+func (m *mockLLMSequence) Close() error                           { return nil }
+func (m *mockLLMSequence) Provider() string                       { return testMockModel }
+func (m *mockLLMSequence) ContextWindow() int                     { return 0 }
+func (m *mockLLMSequence) SetReasoningLevel(level string)         {}
+func (m *mockLLMSequence) SetImageAuthorizer(llm.ImageAuthorizer) {}
+func (m *mockLLMSequence) GetReasoningLevel() string              { return testReasoningLvl }
 
 func (m *mockLLMSequence) SetSessionID(id string) {}

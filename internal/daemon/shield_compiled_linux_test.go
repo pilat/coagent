@@ -4,8 +4,6 @@ package daemon
 
 import (
 	"fmt"
-	"net/http"
-	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -31,11 +29,6 @@ func TestShieldedCompiledSessionBlocksReportedHostAudit(t *testing.T) {
 	require.NoError(t, os.MkdirAll(filepath.Join(home, ".ssh"), 0o700))
 	require.NoError(t, os.WriteFile(filepath.Join(home, ".ssh", "id_rsa.pub"), []byte("host key"), 0o600))
 	t.Setenv("HOME", home)
-	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
-		_, _ = writer.Write([]byte("network retained"))
-	}))
-	t.Cleanup(server.Close)
-	url := strings.Replace(server.URL, "127.0.0.1", "localhost", 1)
 
 	result := make(chan string, 1)
 	respond := func(_ string, messages []llmwire.Message) *llmwire.Response {
@@ -50,11 +43,10 @@ func TestShieldedCompiledSessionBlocksReportedHostAudit(t *testing.T) {
 		}
 		command := strings.Join([]string{
 			"test ! -e ~/.ssh/id_rsa.pub",
-			"test ! -w /tmp",
+			"test -w /tmp",
 			"test -r /etc/hosts",
 			"test ! -e /dev/sda",
 			"test $(find /proc -maxdepth 1 -type d -name '[0-9]*' | wc -l) -le 8",
-			fmt.Sprintf("test \"$(curl --noproxy '*' -fsS %q)\" = 'network retained'", url),
 			"printf SHIELDED_AUDIT_OK",
 		}, " && ")
 		return &llmwire.Response{ToolCalls: []llmwire.ToolCall{{

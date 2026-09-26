@@ -33,12 +33,56 @@ type blockingMCPClient struct {
 
 type exitErrorMCPClient struct{ mcpclient.MCPClient }
 
-func (exitErrorMCPClient) Close() error { return &exec.ExitError{} }
+type nopMCPClient struct{ mcpclient.MCPClient }
+
+type errorCloseMCPClient struct {
+	mcpclient.MCPClient
+	err error
+}
+
+func (exitErrorMCPClient) Close() error    { return &exec.ExitError{} }
+func (nopMCPClient) Close() error          { return nil }
+func (c errorCloseMCPClient) Close() error { return c.err }
 
 func (b *blockingMCPClient) Close() error {
 	<-b.killed
 
 	return nil
+}
+
+func TestStartClientBoundedClosesClientReturnedAfterCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	started := make(chan struct{})
+	release := make(chan struct{})
+	closed := make(chan struct{})
+	result := make(chan error, 1)
+
+	go func() {
+		_, err := startClientBounded(ctx, time.Minute, func(context.Context) (*Client, error) {
+			close(started)
+			<-release
+
+			return &Client{client: nopMCPClient{}, cancelRun: func() { close(closed) }}, nil
+		})
+		result <- err
+	}()
+
+	<-started
+	cancel()
+
+	select {
+	case err := <-result:
+		require.ErrorIs(t, err, context.Canceled)
+	case <-time.After(5 * time.Second):
+		t.Fatal("start did not return after cancellation")
+	}
+
+	close(release)
+	select {
+	case <-closed:
+	case <-time.After(5 * time.Second):
+		t.Fatal("late client remained open")
+	}
 }
 
 // A server that spawns but never speaks MCP must fail on the init deadline, not
@@ -105,9 +149,7 @@ func TestClient_CallToolTimesOut(t *testing.T) {
 }
 
 // Close must kill the child before the graceful client.Close(); otherwise
-// client.Close()'s cmd.Wait() blocks forever on a live-but-mute server (and
-// callers hold pool.mu across it, deadlocking the daemon). Reversing the order
-// in Close() would hang this test.
+// client.Close()'s cmd.Wait() blocks forever on a live-but-mute server.
 func TestClient_CloseKillsBeforeBlockingClose(t *testing.T) {
 	killed := make(chan struct{})
 	c := &Client{

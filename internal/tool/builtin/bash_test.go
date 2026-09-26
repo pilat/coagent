@@ -21,6 +21,7 @@ import (
 	"github.com/pilat/coagent/internal/migrate"
 	"github.com/pilat/coagent/internal/procexec"
 	"github.com/pilat/coagent/internal/safefile"
+	"github.com/pilat/coagent/internal/sandboxpolicy"
 	"github.com/pilat/coagent/internal/tool"
 )
 
@@ -28,7 +29,7 @@ func TestBashPolicy_DirectProjectCat(t *testing.T) {
 	root := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(root, "a.go"), []byte("package a\n"), 0o600))
 	require.NoError(t, os.WriteFile(filepath.Join(root, "a b.go"), []byte("package a\n"), 0o600))
-	access, err := safefile.New(root, safefile.HostReadable)
+	access, err := safefile.New(sandboxpolicy.Policy{}, root)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, access.Close()) })
 
@@ -53,7 +54,7 @@ func TestBashPolicy_DirectProjectCat(t *testing.T) {
 func TestBashTool_DirectCatPolicyRunsBeforeProcessAdmission(t *testing.T) {
 	root := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(root, "a.go"), []byte("package a\n"), 0o600))
-	access, err := safefile.New(root, safefile.HostReadable)
+	access, err := safefile.New(sandboxpolicy.Policy{}, root)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, access.Close()) })
 	runner := &bashRunnerStub{}
@@ -119,8 +120,10 @@ func (r *bashRunnerStub) ShellCommand(ctx context.Context, command, workDir stri
 }
 
 func (r *bashRunnerStub) WritableRoots() []string          { return r.roots }
+func (r *bashRunnerStub) ProjectRoot() string              { return "" }
 func (r *bashRunnerStub) PolicyKey() string                { return "stub" }
 func (r *bashRunnerStub) ReadScope() bashsandbox.ReadScope { return bashsandbox.HostReadable }
+func (r *bashRunnerStub) AllowsRead(string) bool           { return true }
 
 // newTestProcessService builds a real background-process service over a
 // migrated temp SQLite database. It returns the service and a cleanup.

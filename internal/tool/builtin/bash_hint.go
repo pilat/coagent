@@ -3,7 +3,6 @@ package builtin
 import (
 	"strings"
 
-	"github.com/pilat/coagent/internal/bashsandbox"
 	"github.com/pilat/coagent/internal/safefile"
 )
 
@@ -14,17 +13,10 @@ var sandboxDenialMarkers = []string{
 	"operation not permitted",
 }
 
-// sandboxHint returns a note explaining write confinement when a failed
-// command's output looks like a sandbox write denial, so the model can
-// self-diagnose instead of guessing; "" when unconfined or no marker matches.
-//
-//nolint:wsl_v5 // Read and write boundary descriptions are derived together.
-func sandboxHint(
-	output string,
-	writableRoots []string,
-	readScope bashsandbox.ReadScope,
-	project string,
-) string {
+// sandboxHint returns a note explaining confinement when a failed command's
+// output looks like a sandbox write denial, so the model can self-diagnose
+// instead of guessing; "" when the sandbox is disabled or no marker matches.
+func sandboxHint(output string, writableRoots []string, project string) string {
 	if len(writableRoots) == 0 {
 		return ""
 	}
@@ -36,6 +28,7 @@ func sandboxHint(
 	for _, marker := range sandboxDenialMarkers {
 		if strings.Contains(lower, marker) {
 			found = true
+
 			break
 		}
 	}
@@ -43,13 +36,10 @@ func sandboxHint(
 	if !found {
 		return ""
 	}
-	if readScope == bashsandbox.ProjectConfined {
-		return "Note: " + safefile.ShieldDeniedMessage + " Readable and writable project boundary: " + project + "."
-	}
 
-	return "Note: bash commands run under a filesystem-write sandbox; writable roots: " +
-		strings.Join(writableRoots, ", ") +
+	return "Note: " + safefile.ShieldDeniedMessage + " Project boundary: " + project +
+		"; writable roots: " + strings.Join(writableRoots, ", ") +
 		". If the failed write is legitimate (e.g. a toolchain or package cache), " +
-		"the operator can add the path to sandbox.writable_paths in the " +
-		"coagent config (daemon restart required)."
+		"the operator can grant that path with a sandbox profile in the coagent config " +
+		"(sandbox.profiles; daemon restart required)."
 }

@@ -3,8 +3,8 @@
 package bashsandbox
 
 import (
-	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -12,90 +12,189 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/pilat/coagent/internal/coagenthome"
+	"github.com/pilat/coagent/internal/procexec"
+	"github.com/pilat/coagent/internal/sandboxpolicy"
 )
 
-func TestBubblewrapRunnerCommand(t *testing.T) {
-	runner := &bubblewrapRunner{
-		executable: "/usr/bin/bwrap",
-		mounts: []mountOperation{
-			{path: "/tmp/root"},
-			{path: "/tmp/root with spaces"},
-			{path: "/tmp/-leading=equals"},
-			{path: "/tmp/root/child", readOnly: true},
-		},
+// requireBubblewrap skips a test on a host without the platform backend.
+func requireBubblewrap(t *testing.T) {
+	t.Helper()
+
+	if _, err := exec.LookPath(bubblewrapExecutable); err != nil {
+		t.Skip("bwrap is not installed")
 	}
+}
+
+// testRunnerFromPolicy builds a live runner for one compiled policy. It creates
+// the private temporary backing first: the compiled policy declares that
+// directory, but materializing base grants is the session owner's job, so a
+// fixture must supply it exactly as production callers do.
+func testRunnerFromPolicy(t *testing.T, compiled sandboxpolicy.Policy, workDir, sessionKey string) Runner {
+	t.Helper()
+
+	requireBubblewrap(t)
+	t.Setenv("PATH", "/usr/bin:/bin:/usr/sbin:/sbin")
+
+	tempRoot, err := coagenthome.SandboxTempDir(coagenthome.SandboxPathIdentity(compiled.ProjectRoot))
+	require.NoError(t, err)
+	require.NoError(t, os.MkdirAll(tempRoot, 0o700))
+	require.NoError(t, os.MkdirAll(filepath.Join(tempRoot, "var-tmp"), 0o700))
+
+	policy, err := buildProcessPolicy(Config{
+		Enabled: true, Shields: compiled.Shields, Policy: compiled,
+		WorkDir: workDir, SessionKey: sessionKey,
+	})
+	require.NoError(t, err)
+
+	runner, err := newEnabledRunner(policy)
+	require.NoError(t, err)
+
+	return runner
+}
+
+// unitRunner builds a bubblewrapRunner for flag-construction tests: no process
+// is spawned, so the policy only has to satisfy request validation.
+func unitRunner(t *testing.T, project string) *bubblewrapRunner {
+	t.Helper()
+
+	policy, err := buildProcessPolicy(Config{
+		Enabled: true,
+		Policy: sandboxpolicy.Policy{
+			ProjectRoot: project,
+			Grants: []sandboxpolicy.Grant{{
+				Source: "/usr/bin", Target: "/usr/bin",
+				Mode: sandboxpolicy.ModeReadOnly, Kind: sandboxpolicy.KindDir, Present: true,
+			}},
+		},
+		WorkDir: project, SessionKey: "unit",
+	})
+	require.NoError(t, err)
+
+	return &bubblewrapRunner{executable: "/usr/bin/bwrap", policy: policy}
+}
+
+func TestBubblewrapRunnerCommandBuildsPrivateNamespace(t *testing.T) {
+	t.Setenv("PATH", "/usr/bin:/bin")
+
+	project := t.TempDir()
+	workDir := filepath.Join(project, "work dir")
+	require.NoError(t, os.Mkdir(workDir, 0o755))
+
+	runner := unitRunner(t, project)
+	bash, err := filepath.EvalSymlinks("/usr/bin/bash")
+	require.NoError(t, err)
+
 	command := "printf '%s\\n' \"$HOME\"; exit 7"
 	commandArgs := []string{"hostile ;$()", "line\nbreak", "-leading=equals"}
 
-	cmd, err := runner.BashCommand(context.Background(), command, "/tmp/work dir", commandArgs...)
+	cmd, err := runner.Command(t.Context(), procexec.Request{
+		Path:    "bash",
+		Args:    append([]string{"-c", command}, commandArgs...),
+		WorkDir: workDir,
+		Env:     []string{"PATH=/usr/bin:/bin", "PWD=/somewhere/else"},
+	})
 	require.NoError(t, err)
+
 	assert.Equal(t, "/usr/bin/bwrap", cmd.Path)
-	assert.Equal(t, "/tmp/work dir", cmd.Dir)
+	assert.Equal(t, "/", cmd.Dir)
+	assert.Equal(t, sandboxLauncherEnvironment(), cmd.Env)
 	assert.Equal(t, []string{
-		"--", "bash", "-c", command, "hostile ;$()", "line\nbreak", "-leading=equals",
-	}, cmd.Args[len(cmd.Args)-7:])
+		"/usr/bin/bwrap",
+		"--die-with-parent",
+		"--unshare-user",
+		"--unshare-pid",
+		"--unshare-ipc",
+		"--cap-drop", "ALL",
+		"--tmpfs", "/",
+		"--dir", "/usr",
+		"--proc", "/proc",
+		"--dev", "/dev",
+		"--tmpfs", "/dev/shm",
+		"--ro-bind-fd", "3", "/usr/bin",
+		"--remount-ro", "/",
+		"--chdir", workDir,
+		"--clearenv",
+		"--setenv", "PATH", "/usr/bin:/bin",
+		"--setenv", "PWD", workDir,
+		"--", bash, "-c", command,
+		"hostile ;$()", "line\nbreak", "-leading=equals",
+	}, cmd.Args)
+	require.Len(t, cmd.ExtraFiles, 1)
 
 	args := cmd.Args[1:]
-	assert.Equal(t, "--die-with-parent", args[0])
-	assert.Equal(t, []string{"--ro-bind", "/", "/"}, args[1:4])
-	assert.Equal(t, []string{"--dev", "/dev"}, args[4:6])
+	assert.NotContains(t, strings.Join(args, " "), "--ro-bind / /", "ordinary mode must not bind the host root")
 	assert.NotContains(t, args, "--new-session")
-	assert.NotContains(t, args, "--unshare-pid")
-	assert.NotContains(t, args, "--chdir")
 	assert.NotContains(t, args, "--unshare-net")
-	assert.NotContains(t, args, "--unshare-all")
 	assert.NotContains(t, args, "--share-net")
 	assert.NotContains(t, args, "--dev-bind")
-	assert.Contains(t, args, "--unshare-user")
-	assert.Contains(t, args, "--cap-drop")
-	assert.Contains(t, args, "--clearenv")
-	assertBubblewrapEnvironment(t, args, "PWD", "/tmp/work dir")
-
-	assertMountPair(t, args, "--ro-bind", "/tmp/root/child")
-	assertBindPair(t, args, "/tmp/root with spaces")
-	assertBindPair(t, args, "/tmp/-leading=equals")
-	assertBindPair(t, args, "/tmp/root")
-	procIndex := slices.Index(args, "/proc")
-	require.Positive(t, procIndex)
-	assert.Equal(t, "--proc", args[procIndex-1])
-	assert.Equal(t, "--unshare-user", args[procIndex+1])
+	assertBubblewrapEnvironment(t, args, "PWD", workDir)
 }
 
-func TestBubblewrapRunnerShellCommand(t *testing.T) {
-	runner := &bubblewrapRunner{
-		executable: "/usr/bin/bwrap",
-		mounts:     []mountOperation{{path: "/tmp/root"}},
-		provider:   fakeProvider{shell: "/bin/bash", snap: "/tmp/snap dir/s"},
-	}
+func TestBubblewrapRunnerCommandRejectsRequestsOutsideProject(t *testing.T) {
+	t.Setenv("PATH", "/usr/bin:/bin")
 
-	cmd, err := runner.ShellCommand(context.Background(), "go version", "/tmp/work")
+	project := t.TempDir()
+	outside := t.TempDir()
+	ungranted := filepath.Join(outside, "ungranted-tool")
+	require.NoError(t, os.WriteFile(ungranted, []byte("#!/bin/sh\nexit 0\n"), 0o755))
+
+	runner := unitRunner(t, project)
+
+	_, err := runner.Command(t.Context(), procexec.Request{
+		Path: "bash", Args: []string{"-c", ":"}, WorkDir: outside,
+	})
+	require.Error(t, err)
+	require.ErrorContains(t, err, "outside the sandboxed project")
+
+	_, err = runner.Command(t.Context(), procexec.Request{
+		Path: ungranted, Args: []string{}, WorkDir: project,
+	})
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "outside the sandbox's granted paths")
+}
+
+func TestBubblewrapRunnerShellCommandMountsSnapshotAtRuntimePath(t *testing.T) {
+	project := t.TempDir()
+	runner := unitRunner(t, project)
+	snapshot := filepath.Join(t.TempDir(), "snap dir", "s")
+	require.NoError(t, os.MkdirAll(filepath.Dir(snapshot), 0o700))
+	require.NoError(t, os.WriteFile(snapshot, []byte("snapshot"), 0o600))
+	runner.provider = fakeProvider{shell: "/bin/bash", snap: snapshot}
+
+	cmd, err := runner.ShellCommand(t.Context(), "go version", project)
 	require.NoError(t, err)
 
-	assert.Equal(t, "/tmp/work", cmd.Dir)
+	bash, err := filepath.EvalSymlinks("/bin/bash")
+	require.NoError(t, err)
+
+	runtimePath := snapshotRuntimePath(snapshot)
 	assert.Equal(t, []string{
-		"--", "/bin/bash", "-c", "source '/tmp/snap dir/s'; go version",
+		"--", bash, "-c", "source '" + runtimePath + "'; go version",
 	}, cmd.Args[len(cmd.Args)-4:])
-	assertBubblewrapEnvironment(t, cmd.Args, "PWD", "/tmp/work")
+
+	args := cmd.Args[1:]
+	bindIndex := slices.Index(args, runtimePath)
+	require.GreaterOrEqual(t, bindIndex, 2)
+	assert.Equal(t, "--ro-bind-fd", args[bindIndex-2])
+	assert.NotEmpty(t, args[bindIndex-1])
+	for _, file := range cmd.ExtraFiles {
+		require.NoError(t, file.Close())
+	}
 }
 
 func TestBubblewrapRunnerShellCommandNoSnapshotUsesBash(t *testing.T) {
-	runner := &bubblewrapRunner{executable: "/usr/bin/bwrap"} // nil provider
+	project := t.TempDir()
+	runner := unitRunner(t, project) // nil provider
 
-	cmd, err := runner.ShellCommand(context.Background(), "go version", "/tmp/work")
+	cmd, err := runner.ShellCommand(t.Context(), "go version", project)
 	require.NoError(t, err)
 
-	assert.Equal(t, []string{"--", "bash", "-c", "go version"}, cmd.Args[len(cmd.Args)-4:])
-	assertBubblewrapEnvironment(t, cmd.Args, "PWD", "/tmp/work")
-}
-
-func assertBubblewrapEnvironment(t *testing.T, args []string, name, value string) {
-	t.Helper()
-	for i := 0; i+2 < len(args); i++ {
-		if args[i] == "--setenv" && args[i+1] == name && args[i+2] == value {
-			return
-		}
-	}
-	t.Fatalf("missing --setenv %s %s in %q", name, value, args)
+	bash, err := filepath.EvalSymlinks("/usr/bin/bash")
+	require.NoError(t, err)
+	assert.Equal(t, []string{"--", bash, "-c", "go version"}, cmd.Args[len(cmd.Args)-4:])
+	assertBubblewrapEnvironment(t, cmd.Args, "PWD", project)
 }
 
 func TestNewEnabledRunnerRequiresBubblewrap(t *testing.T) {
@@ -108,12 +207,30 @@ func TestNewEnabledRunnerRequiresBubblewrap(t *testing.T) {
 	})
 	require.Error(t, err)
 	assert.Nil(t, runner)
-	assert.Contains(t, err.Error(), "find Bubblewrap executable")
+	assert.ErrorContains(t, err, "find Bubblewrap executable")
 }
 
-func TestBuildMountOperationsProtectsNestedMounts(t *testing.T) {
-	operations := buildMountOperations(
-		[]string{"/workspace", "/workspace/mounted/cache", "/var/tmp"},
+func TestBuildMountPlanOrdersBindsAndMakesNestedHostMountsReadOnly(t *testing.T) {
+	plan := buildMountPlan(
+		[]sandboxpolicy.Grant{
+			{
+				Source: "/workspace", Target: "/workspace",
+				Mode: sandboxpolicy.ModeReadWrite, Kind: sandboxpolicy.KindDir, Present: true,
+			},
+			{
+				Source: "/workspace/mounted/cache", Target: "/workspace/mounted/cache",
+				Mode: sandboxpolicy.ModeReadWrite, Kind: sandboxpolicy.KindDir, Present: true,
+			},
+			{
+				Source: "/var/tmp", Target: "/var/tmp",
+				Mode: sandboxpolicy.ModeReadWrite, Kind: sandboxpolicy.KindDir, Present: true,
+			},
+			{
+				Source: "/workspace/absent", Target: "/workspace/absent",
+				Mode: sandboxpolicy.ModeReadWrite, Kind: sandboxpolicy.KindDir, Present: false,
+			},
+		},
+		nil,
 		[]string{
 			"/",
 			"/workspace/mounted",
@@ -123,103 +240,255 @@ func TestBuildMountOperationsProtectsNestedMounts(t *testing.T) {
 		},
 	)
 
-	assert.Equal(t, []mountOperation{
-		{path: "/workspace"},
-		{path: "/var/tmp"},
-		{path: "/workspace/mounted", readOnly: true},
-		{path: "/workspace/separate", readOnly: true},
-		{path: "/workspace/mounted/cache"},
-		{path: "/workspace/mounted/cache/nested", readOnly: true},
-	}, operations)
+	assert.Equal(t, []bindMount{
+		{source: "/workspace", target: "/workspace"},
+		{source: "/var/tmp", target: "/var/tmp"},
+		{source: "/workspace/mounted", target: "/workspace/mounted", readOnly: true},
+		{source: "/workspace/separate", target: "/workspace/separate", readOnly: true},
+		{source: "/workspace/mounted/cache", target: "/workspace/mounted/cache"},
+		{
+			source: "/workspace/mounted/cache/nested", target: "/workspace/mounted/cache/nested",
+			readOnly: true,
+		},
+	}, plan.binds)
+	assert.Equal(t, []string{"/var", "/workspace", "/workspace/mounted", "/workspace/mounted/cache"}, plan.dirs)
 }
 
-func TestBuildMountOperationsKeepsExactMountExplicitlyWritable(t *testing.T) {
-	operations := buildMountOperations(
-		[]string{"/workspace", "/workspace/mounted"},
+func TestBuildMountPlanKeepsExactGrantExplicitlyWritable(t *testing.T) {
+	plan := buildMountPlan(
+		[]sandboxpolicy.Grant{
+			{
+				Source: "/workspace", Target: "/workspace",
+				Mode: sandboxpolicy.ModeReadWrite, Kind: sandboxpolicy.KindDir, Present: true,
+			},
+			{
+				Source: "/workspace/mounted", Target: "/workspace/mounted",
+				Mode: sandboxpolicy.ModeReadWrite, Kind: sandboxpolicy.KindDir, Present: true,
+			},
+		},
+		nil,
 		[]string{"/workspace/mounted", "/workspace/mounted/nested"},
 	)
 
-	assert.Equal(t, []mountOperation{
-		{path: "/workspace"},
-		{path: "/workspace/mounted"},
-		{path: "/workspace/mounted/nested", readOnly: true},
-	}, operations)
+	assert.Equal(t, []bindMount{
+		{source: "/workspace", target: "/workspace"},
+		{source: "/workspace/mounted", target: "/workspace/mounted"},
+		{source: "/workspace/mounted/nested", target: "/workspace/mounted/nested", readOnly: true},
+	}, plan.binds)
 }
 
-func TestBuildShieldMountOperationsProtectsNestedProjectMounts(t *testing.T) {
-	policy := processPolicy{
-		readScope: ProjectConfined, projectRoot: "/canonical/project", workDir: "/visible/project",
-		readMounts: []policyMount{{source: "/usr/bin", target: "/usr/bin", directory: true}},
-	}
-
-	operations := buildShieldMountOperations(policy, []string{
-		"/canonical/project/nested", "/usr/bin/separate-mount",
-	}, nil)
-
-	assert.Equal(t, []shieldMountOperation{
-		{source: "/canonical/project", target: "/canonical/project"},
-		{source: "/usr/bin", target: "/usr/bin", readOnly: true},
-		{source: "/canonical/project", target: "/visible/project"},
-		{
-			source: "/canonical/project/nested", target: "/canonical/project/nested", readOnly: true,
+func TestBuildMountPlanBindsSocketsAtTheirExactPath(t *testing.T) {
+	plan := buildMountPlan(
+		nil,
+		[]sandboxpolicy.SocketGrant{
+			{Path: "/run/user/1000/agent.sock", Present: true},
+			{Path: "/run/absent.sock", Present: false},
 		},
-		{
-			source: "/usr/bin/separate-mount", target: "/usr/bin/separate-mount", readOnly: true,
-		},
-		{
-			source: "/canonical/project/nested", target: "/visible/project/nested", readOnly: true,
-		},
-	}, operations)
-}
-
-func TestBuildShieldMountOperationsSkipsProcMounts(t *testing.T) {
-	policy := processPolicy{
-		readScope: ProjectConfined, projectRoot: "/canonical/project", workDir: "/visible/project",
-		readMounts: []policyMount{{source: "/usr/bin", target: "/usr/bin", directory: true}},
-	}
-
-	operations := buildShieldMountOperations(policy,
-		[]string{"/canonical/project/proc", "/usr/bin/proc"},
-		[]string{"/canonical/project/proc", "/usr/bin/proc"},
+		nil,
 	)
 
-	assert.Empty(t, operations)
+	assert.Equal(t, []bindMount{
+		{source: "/run/user/1000/agent.sock", target: "/run/user/1000/agent.sock"},
+	}, plan.binds)
 }
 
-func TestBubblewrapShieldPrefixBuildsEmptyNamespace(t *testing.T) {
-	runner := &bubblewrapRunner{
-		policy: processPolicy{readScope: ProjectConfined},
-		shieldMounts: []shieldMountOperation{
-			{source: "/project", target: "/project"},
-			{source: "/usr/bin", target: "/usr/bin", readOnly: true},
+func TestBuildExtraPlanMountsSnapshotReadOnly(t *testing.T) {
+	empty := buildExtraPlan(nil)
+	assert.Empty(t, empty.binds)
+	assert.Empty(t, empty.dirs)
+
+	absent := buildExtraPlan([]sandboxpolicy.Grant{{Source: "/cache", Target: "/run/x", Present: false}})
+	assert.Empty(t, absent.binds)
+	assert.Empty(t, absent.dirs)
+
+	plan := buildExtraPlan(snapshotGrant("/cache/snapshot"))
+	require.Len(t, plan.binds, 1)
+	assert.True(t, plan.binds[0].readOnly)
+	assert.Equal(t, snapshotRuntimePath("/cache/snapshot"), plan.binds[0].target)
+	assert.Contains(t, plan.dirs, snapshotRuntimeDir)
+}
+
+func TestParentDirectoriesListsOrderedAncestors(t *testing.T) {
+	assert.Empty(t, parentDirectories(nil))
+	assert.Empty(t, parentDirectories([]bindMount{{source: "/a", target: "/"}}))
+
+	dirs := parentDirectories([]bindMount{
+		{source: "/x", target: "/a/b/c"},
+		{source: "/y", target: "/a/d"},
+	})
+
+	assert.Equal(t, []string{"/a", "/a/b"}, dirs)
+}
+
+func TestCreateGrantedDirCreatesMissingDirectories(t *testing.T) {
+	target := filepath.Join(t.TempDir(), "granted", "nested", "leaf")
+
+	require.NoError(t, createGrantedDir(target))
+	assert.DirExists(t, target)
+
+	require.NoError(t, createGrantedDir(target), "an existing directory is accepted unchanged")
+}
+
+func TestCreateGrantedDirRefusesSymlinkedComponent(t *testing.T) {
+	base := t.TempDir()
+	realDir := filepath.Join(base, "real")
+	require.NoError(t, os.Mkdir(realDir, 0o700))
+	link := filepath.Join(base, "link")
+	require.NoError(t, os.Symlink(realDir, link))
+
+	err := createGrantedDir(filepath.Join(link, "nested"))
+	require.Error(t, err)
+	require.ErrorContains(t, err, "traverses symlink")
+	assert.NoDirExists(t, filepath.Join(realDir, "nested"))
+}
+
+func TestPinMountPlanHoldsOriginalObjectAcrossReplacement(t *testing.T) {
+	parent := t.TempDir()
+	source := filepath.Join(parent, "source")
+	require.NoError(t, os.Mkdir(source, 0o700))
+	plan := mountPlan{binds: []bindMount{{source: source, target: "/granted"}}}
+	pinned, files, err := pinMountPlan(plan, 3)
+	require.NoError(t, err)
+	defer func() {
+		for _, file := range files {
+			_ = file.Close()
+		}
+	}()
+	require.Len(t, pinned.binds, 1)
+	assert.Equal(t, 3, pinned.binds[0].fd)
+	require.NoError(t, os.Rename(source, filepath.Join(parent, "moved")))
+	require.NoError(t, os.Symlink(t.TempDir(), source))
+	_, _, err = pinMountPlan(plan, 3)
+	require.Error(t, err, "a replacement symlink cannot become the next bind source")
+	info, err := files[0].Stat()
+	require.NoError(t, err)
+	assert.True(t, info.IsDir(), "the inherited descriptor still names the original directory")
+}
+
+func TestCreateGrantedDirRefusesNonDirectoryComponent(t *testing.T) {
+	base := t.TempDir()
+	file := filepath.Join(base, "file")
+	require.NoError(t, os.WriteFile(file, []byte("data"), 0o600))
+
+	err := createGrantedDir(filepath.Join(file, "nested"))
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "non-directory component")
+}
+
+func TestMaterializeGrantsCreatesDeclaredWritableDirectoriesOnly(t *testing.T) {
+	base := t.TempDir()
+	writable := filepath.Join(base, "declared-rw")
+	readOnly := filepath.Join(base, "declared-ro")
+	present := filepath.Join(base, "present-rw")
+
+	policy := processPolicy{grants: []sandboxpolicy.Grant{
+		{Source: writable, Target: writable, Mode: sandboxpolicy.ModeReadWrite, Kind: sandboxpolicy.KindDir},
+		{Source: readOnly, Target: readOnly, Mode: sandboxpolicy.ModeReadOnly, Kind: sandboxpolicy.KindDir},
+		{
+			Source: present, Target: present,
+			Mode: sandboxpolicy.ModeReadWrite, Kind: sandboxpolicy.KindDir, Present: true,
+		},
+	}}
+
+	grants, err := materializeGrants(policy)
+	require.NoError(t, err)
+	assert.DirExists(t, writable, "an absent read-write declaration is materialized")
+	assert.NoDirExists(t, readOnly, "read-only declarations are never created")
+	assert.DirExists(t, present, "availability is refreshed before each spawn")
+
+	materialized := grants[0]
+	assert.True(t, materialized.Present, "a materialized grant is mountable")
+	assert.False(t, grants[1].Present, "a read-only declaration stays unmountable while absent")
+}
+
+func TestPolicyOverlapsProcRejectsOverlappingGrants(t *testing.T) {
+	procMounts := []string{"/proc", "/proc/sys/fs/binfmt_misc"}
+
+	tests := map[string]struct {
+		policy processPolicy
+		want   bool
+	}{
+		"clean policy": {
+			policy: processPolicy{projectRoot: "/workspace", workDir: "/workspace"},
+		},
+		"project under proc": {
+			policy: processPolicy{projectRoot: "/proc/self", workDir: "/proc/self"},
+			want:   true,
+		},
+		"work directory under proc": {
+			policy: processPolicy{projectRoot: "/workspace", workDir: "/proc/self/cwd"},
+			want:   true,
+		},
+		"grant target under proc": {
+			policy: processPolicy{
+				projectRoot: "/workspace", workDir: "/workspace",
+				grants: []sandboxpolicy.Grant{{Source: "/proc", Target: "/workspace/proc"}},
+			},
+			want: true,
+		},
+		"grant source under proc": {
+			policy: processPolicy{
+				projectRoot: "/workspace", workDir: "/workspace",
+				grants: []sandboxpolicy.Grant{{Source: "/proc/sys/fs/binfmt_misc", Target: "/workspace/misc"}},
+			},
+			want: true,
+		},
+		"unrelated proc-like prefix": {
+			policy: processPolicy{
+				projectRoot: "/workspace", workDir: "/workspace",
+				grants: []sandboxpolicy.Grant{{Source: "/process", Target: "/workspace/process"}},
+			},
 		},
 	}
 
-	args := runner.shieldPrefix("/project")
-	assert.Contains(t, args, "--tmpfs")
-	assert.Contains(t, args, "--unshare-pid")
-	assert.Contains(t, args, "--proc")
-	assert.Contains(t, args, "--remount-ro")
-	procIndex := slices.Index(args, "/proc")
-	bindIndex := slices.Index(args, "--bind")
-	require.Positive(t, procIndex)
-	require.Positive(t, bindIndex)
-	assert.Greater(t, procIndex, bindIndex)
-	assert.NotContains(t, args, "/tmp")
-	assert.NotContains(t, strings.Join(args, " "), "--ro-bind / /")
-}
-
-func TestNormalizeWritableRootRejectsLinuxSpecialRoots(t *testing.T) {
-	for _, path := range []string{"/proc", "/dev", "/sys"} {
-		t.Run(path, func(t *testing.T) {
-			_, err := normalizeWritableRoot(path)
-			require.Error(t, err)
-			assert.Contains(t, err.Error(), "cannot be under protected Linux root")
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			assert.Equal(t, tt.want, policyOverlapsProc(tt.policy, procMounts))
 		})
 	}
 }
 
-func TestParseMountInfo(t *testing.T) {
+func TestBubblewrapPrefixBuildsOnePrivateNamespaceForBothShieldStates(t *testing.T) {
+	project := t.TempDir()
+	plan := buildMountPlan([]sandboxpolicy.Grant{
+		{
+			Source: project, Target: project,
+			Mode: sandboxpolicy.ModeReadWrite, Kind: sandboxpolicy.KindDir, Present: true,
+		},
+	}, nil, nil)
+
+	ordinary := unitRunner(t, project)
+	shielded := unitRunner(t, project)
+	shielded.policy.readScope = ProjectConfined
+
+	ordinaryArgs := ordinary.prefix(project, plan, mountPlan{})
+	shieldedArgs := shielded.prefix(project, plan, mountPlan{})
+
+	assert.Equal(t, ProjectConfined, ordinary.ReadScope(), "grants, not shields, select the allowlist")
+	assert.Equal(t, ProjectConfined, shielded.ReadScope())
+	assert.Equal(t, ordinaryArgs, shieldedArgs, "shields are a policy, not a second flag builder")
+
+	for _, args := range [][]string{ordinaryArgs, shieldedArgs} {
+		assert.Contains(t, args, "--tmpfs")
+		assert.Contains(t, args, "--unshare-pid")
+		assert.Contains(t, args, "--proc")
+		assert.Contains(t, args, "--remount-ro")
+		assert.Contains(t, args, "--dev")
+		assert.NotContains(t, strings.Join(args, " "), "--ro-bind / /")
+		assert.Equal(t, project, args[len(args)-1], "the flag list ends at the working directory")
+
+		procIndex := slices.Index(args, "/proc")
+		require.Positive(t, procIndex)
+		assert.Equal(t, "--proc", args[procIndex-1])
+		assert.Equal(t, "--dev", args[procIndex+1])
+
+		bindIndex := slices.Index(args, "--bind-fd")
+		require.Positive(t, bindIndex)
+		assert.Less(t, procIndex, bindIndex, "the fresh proc mount is created before the policy binds")
+	}
+}
+
+func TestParseMountInfoEntriesParsesAndDeduplicates(t *testing.T) {
 	mountInfo := strings.Join([]string{
 		"36 29 0:32 / / rw,relatime - overlay overlay rw",
 		`37 36 0:33 / /workspace/mounted\040path rw,nosuid - tmpfs tmpfs rw`,
@@ -227,13 +496,13 @@ func TestParseMountInfo(t *testing.T) {
 		`39 36 0:35 / /workspace/mounted\040path rw - tmpfs tmpfs rw`,
 	}, "\n")
 
-	mountPoints, err := parseMountInfo(strings.NewReader(mountInfo))
+	entries, err := parseMountInfoEntries(strings.NewReader(mountInfo))
 	require.NoError(t, err)
-	assert.Equal(t, []string{
-		"/",
-		"/workspace/mounted path",
-		"/workspace/tab\tnewline\nslash\\",
-	}, mountPoints)
+	assert.Equal(t, []mountInfoEntry{
+		{mountPoint: "/", fsType: "overlay"},
+		{mountPoint: "/workspace/mounted path", fsType: "tmpfs"},
+		{mountPoint: "/workspace/tab\tnewline\nslash\\", fsType: "tmpfs"},
+	}, entries)
 }
 
 func TestParseMountInfoEntriesRetainsProcOnDuplicateMountPoint(t *testing.T) {
@@ -249,10 +518,40 @@ func TestParseMountInfoEntriesRetainsProcOnDuplicateMountPoint(t *testing.T) {
 	assert.Equal(t, "proc", entries[0].fsType)
 }
 
-func TestParseMountInfoRejectsMalformedEscape(t *testing.T) {
-	_, err := parseMountInfo(strings.NewReader(`37 36 0:33 / /workspace/bad\04 rw - tmpfs tmpfs rw`))
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "truncated escape")
+func TestParseMountInfoEntriesRejectsMalformedInput(t *testing.T) {
+	tests := map[string]struct {
+		mountInfo string
+		message   string
+	}{
+		"truncated escape": {
+			mountInfo: `37 36 0:33 / /workspace/bad\04 rw - tmpfs tmpfs rw`,
+			message:   "truncated escape",
+		},
+		"too few fields": {
+			mountInfo: "36 29 0:32 /",
+			message:   "malformed mountinfo line",
+		},
+		"missing filesystem type": {
+			mountInfo: "36 29 0:32 / /workspace rw,nosuid -",
+			message:   "no filesystem type",
+		},
+		"relative mount point": {
+			mountInfo: "36 29 0:32 / workspace rw - tmpfs tmpfs rw",
+			message:   "is not absolute",
+		},
+		"invalid escape digit": {
+			mountInfo: `37 36 0:33 / /workspace/bad\999x rw - tmpfs tmpfs rw`,
+			message:   "invalid escape",
+		},
+	}
+
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			_, err := parseMountInfoEntries(strings.NewReader(tt.mountInfo))
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tt.message)
+		})
+	}
 }
 
 func TestValidateBubblewrapExecutable(t *testing.T) {
@@ -280,6 +579,7 @@ func TestValidateBubblewrapExecutable(t *testing.T) {
 			err := validateBubblewrapExecutable("/nix/store/package/bin/bwrap", tt.mode, tt.uid, tt.nested, tt.roots)
 			if tt.message == "" {
 				require.NoError(t, err)
+
 				return
 			}
 
@@ -413,6 +713,7 @@ func TestParseUserNamespaceMap(t *testing.T) {
 			nested, err := parseUserNamespaceMap(tt.uidMap)
 			if tt.wantError {
 				require.Error(t, err)
+
 				return
 			}
 
@@ -443,21 +744,22 @@ func TestResolveBubblewrapExecutableRejectsUntrustedTarget(t *testing.T) {
 
 	_, err := resolveBubblewrapExecutable(nil)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "not owned by root")
+	assert.ErrorContains(t, err, "not owned by root")
 }
 
-func assertBindPair(t *testing.T, args []string, root string) {
-	t.Helper()
-
-	assertMountPair(t, args, "--bind", root)
+// shellQuote single-quotes a value for safe folding into a `-c` string.
+func shellQuote(value string) string {
+	return "'" + strings.ReplaceAll(value, "'", "'\\''") + "'"
 }
 
-func assertMountPair(t *testing.T, args []string, operation, root string) {
+func assertBubblewrapEnvironment(t *testing.T, args []string, name, value string) {
 	t.Helper()
 
-	index := slices.Index(args, root)
-	require.Positive(t, index)
-	assert.Equal(t, operation, args[index-1])
-	require.Less(t, index+1, len(args))
-	assert.Equal(t, root, args[index+1])
+	for i := 0; i+2 < len(args); i++ {
+		if args[i] == "--setenv" && args[i+1] == name && args[i+2] == value {
+			return
+		}
+	}
+
+	t.Fatalf("missing --setenv %s %s in %q", name, value, args)
 }

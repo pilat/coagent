@@ -16,6 +16,7 @@ import (
 	"go.uber.org/zap/zapcore"
 	"go.uber.org/zap/zaptest/observer"
 
+	"github.com/pilat/coagent/internal/llm"
 	"github.com/pilat/coagent/internal/llmwire"
 	"github.com/pilat/coagent/internal/logger"
 	"github.com/pilat/coagent/internal/sessionstore"
@@ -151,14 +152,15 @@ func normalizeScriptedResponse(response *llmwire.Response) *llmwire.Response {
 	return response
 }
 
-func (m *loopScriptLLM) Model() string             { return testMockModel }
-func (m *loopScriptLLM) APIKey() string            { return "" }
-func (m *loopScriptLLM) Close() error              { return nil }
-func (m *loopScriptLLM) Provider() string          { return testMockModel }
-func (m *loopScriptLLM) ContextWindow() int        { return 0 }
-func (m *loopScriptLLM) SetReasoningLevel(string)  {}
-func (m *loopScriptLLM) GetReasoningLevel() string { return testReasoningLvl }
-func (m *loopScriptLLM) SetSessionID(string)       {}
+func (m *loopScriptLLM) Model() string                          { return testMockModel }
+func (m *loopScriptLLM) APIKey() string                         { return "" }
+func (m *loopScriptLLM) Close() error                           { return nil }
+func (m *loopScriptLLM) Provider() string                       { return testMockModel }
+func (m *loopScriptLLM) ContextWindow() int                     { return 0 }
+func (m *loopScriptLLM) SetReasoningLevel(string)               {}
+func (m *loopScriptLLM) SetImageAuthorizer(llm.ImageAuthorizer) {}
+func (m *loopScriptLLM) GetReasoningLevel() string              { return testReasoningLvl }
+func (m *loopScriptLLM) SetSessionID(string)                    {}
 
 func (n *loopNotifier) fn(_ context.Context, msg string) error {
 	n.mu.Lock()

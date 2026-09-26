@@ -68,6 +68,10 @@ type Client interface {
 	GetReasoningLevel() string
 	// SetSessionID sets the session ID for OpenRouter UI grouping.
 	SetSessionID(id string)
+	// SetImageAuthorizer attaches the session's current filesystem authority, so
+	// a deferred attachment read is re-authorized at materialization time. A nil
+	// authorizer keeps the recorded root-identity check only.
+	SetImageAuthorizer(authorizer ImageAuthorizer)
 }
 
 // NewClient creates a new LLM client based on config.

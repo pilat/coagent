@@ -29,7 +29,9 @@ const secretsDisplayPath = "~/" + coagenthome.DirName + "/" + coagenthome.Secret
 const editAuthorityDoc = "Replaces the complete application configuration with the supplied YAML document. " +
 	"Credentials may be literal values or ${VAR} references to entries in " + secretsDisplayPath + ", " +
 	"which the operator maintains by hand outside this protocol. " +
-	"An invalid candidate is refused immediately with nothing written."
+	"An invalid candidate is refused immediately with nothing written. " +
+	"Sandbox escalation uses sandbox.escalated globally and sandbox.projects[absolute-or-~/project-path].escalated per project; " +
+	"/gwt worktrees inherit their source project's escalation. Project grants add to global grants."
 
 var (
 	_ tool.Tool               = (*configEditTool)(nil)
