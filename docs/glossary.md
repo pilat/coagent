@@ -10,7 +10,7 @@ The shared vocabulary of coagent — the words that name its concepts, so code, 
 
 **daemon**:
 The single long-lived coagent process. It coordinates session lifecycle, durable
-producer ledgers and admission and owns the MCP pool. `managercontrol`
+producer ledgers and admission. `managercontrol`
 implements the in-process `controllerapi.Controller` over the daemon's backend
 contract. Durable ledgers, runner lifecycle and capacity counters remain owned
 by their domain packages. It binds no *network* socket — the only thing it
@@ -21,24 +21,53 @@ _Avoid_: server, gateway.
 One task's isolated runtime — its own LLM client, tool registry, and conversation history — that runs the agent loop. "Session" names both the live object and the persisted `SessionRecord` row; the append-only design keeps those two deliberately distinct.
 _Avoid_: conversation (that's the history), job.
 
-**session shields**:
-The durable, operator-controlled `shields_up` state of a session. Shields are
-down by default. Raising them confines built-in file tools and session-owned
-Bash, LSP, and MCP processes to the project and their minimal runtime files;
-configured writable paths, the user cache, and host temporary storage grant no
-exception. A raised session bypasses shell activation and provides no temporary
-storage outside the project; Git metadata outside a linked work tree is not part
-of the project boundary. Lowering shields restores host-readable process and
-file-tool behavior while retaining the write sandbox. Only a manager-originated
-command may change the state, and subagents inherit it. Project-local
-instruction sources use rooted project access, and marketplace sources a root
-confined to their own repository clone; global instruction sources remain
-trusted daemon inputs outside those boundaries. The
-built-in web fetch and search tools remain available in both states. Network
-egress and inherited environment values are unchanged; resolver, host-name,
-account, loader, and certificate files may remain readable runtime substrate.
-_Avoid_: sandbox mode (the write sandbox is a separate permanent boundary), safe
-session (shields do not make untrusted project data confidential).
+**project confinement**:
+The default, sandbox-enabled authority every session's processes and file tools
+share, built from the **effective policy**: one ordered list of **sandbox
+rule**s, evaluated last-match-wins, with **implicit default**s heading its
+global and project sections. The project section ends with mandatory read-only
+access to that project's process output, after its configured rules.
+Applies to shell preparation, Bash, LSP, stdio MCP
+processes and the `read`/`glob`/`grep`/`write`/`edit`/`apply_patch` tools alike;
+`sandbox.enabled: false` is the explicit operator opt-out. It is an *integrity*
+boundary, not confidentiality: with no rules, another checkout and the
+operator's own credentials are readable, and only the project is writable. It
+governs no network: sessions share the daemon's network namespace.
+_Avoid_: sandbox (unqualified — implies more isolation than it gives), write
+sandbox (it governs reads as well), allowlist/denylist (the policy is one
+ordered list, not two sets), protected list, execution substrate, session
+shields (all retired terms — see below).
+
+**sandbox rule**:
+One operator-authored entry in `sandbox.rules` or a project's `sandbox.projects.<path>.rules`:
+exactly one of `allow` or `deny` naming an absolute or `~/`-prefixed path, with
+`mode` (`ro` default, or `rw`) meaningful only on `allow`. Coagent ships no
+credential or toolchain path lists; these rules name operator-owned paths. The
+`projects:` map attaches rules to a project, it does not grant the project —
+that comes from the **implicit default**.
+_Avoid_: sandbox.denied, sandbox.writable_paths, writable_paths (retired
+schema keys).
+
+**implicit default**:
+An unwritten rule at the head of the global section (`allow / ro`) or a
+project's section (`allow <project root> rw`, plus the work directory and a
+`/gwt` worktree's `.git` when applicable) that the operator's own rules are
+written under. Because the project default sits after the global rules, a
+broad global `deny` cannot make the project unwritable; only a rule inside that
+project's own section can, and a `deny` naming the project root exactly is
+honoured while a broader one that buries it incidentally is a configuration
+error.
+_Avoid_: built-in grant, base grant (both imply something coagent enumerates
+rather than an unwritten rule position).
+
+**effective policy**:
+The compiled authority for one project: the ordered rule list with its
+**implicit default**s resolved and mandatory read-only process output as the
+last entry of the project section. Its **digest** identifies one policy
+generation — authorized anchors (including declarations whose object is
+absent), permissions and project identity — and never object presence or
+inode. Compiled by `internal/sandboxpolicy`, which owns no process lifetime.
+_Avoid_: "sandbox config" (that is the operator's input, not the compiled result).
 
 **task**:
 A unit of work a manager submits to the daemon. It has no Go type of its own — a task is realized as a **session** created from a prompt. Beware: the bare word `task` in code means only the **`task` tool** (which spawns subagents), never the work-unit — qualify accordingly.
@@ -174,19 +203,13 @@ _Avoid_: plugin (a plugin is a marketplace bundle), command.
 **marketplace**:
 A git repo supplying loadable skills and subagent definitions, cloned and cached with a TTL. Configured under `marketplaces:` in `config.yaml`.
 
-**MCP pool**:
-The daemon-owned lifecycle container for external MCP-server connections. A
-connection and its catalog are keyed by server config, workdir, and the owning
-session's process-policy identity, so they may be reused across activations of
-that session but never shared with another session. Idle connections are reaped
-after 30 minutes. The **MCP catalog** is the pool-owned in-memory copy of one
-session-bound server's discovered tool metadata (name, description, schema): it
-survives process reaping for 15 days idle and clears on daemon restart, so an
-activation whose process was reaped still offers the same direct tools and
-starts the subprocess only on the model's first call. A lazy reconnect never
-rewrites the activation's catalog or schemas. Distinct from the **MCP registry**,
-which says which servers exist at all.
-_Avoid_: tool cache (the catalog is metadata, not a result cache); prompt cache (that is provider-side).
+**MCP client**:
+One external MCP-server process and its discovered tools, retained for one
+session ID across loop activations. Each stack refreshes the live client's
+catalog before use and keeps its schemas fixed during that activation. Policy,
+configuration or shell-snapshot changes replace the client; stop/kill and daemon
+shutdown close it. Distinct from the **MCP registry**, which stores server definitions.
+_Avoid_: MCP pool, MCP catalog (neither has a separate lifetime).
 
 **MCP registry**:
 The DB-backed set of MCP server *definitions* (`mcp_servers` table, `internal/mcpstore`), managed conversationally with `mcp_add` / `mcp_remove` / `mcp_enable` / `mcp_disable` / `mcp_list`. Rows carry an `enabled` flag; env values hold `${VAR}` references literally and are resolved at acquire time. Changes reach a session at its next run, never mid-run.
@@ -420,9 +443,9 @@ _Avoid_: stop marker, magic acknowledgement, final-answer tool.
 
 **attachment** (referenced image attachment):
 A disk reference stored on a tool-result row in `messages.attachments` — never
-the pixels themselves. Alongside path, MIME, and size, a shielded read persists
-its canonical read root so later materialization cannot follow a replacement
-path outside the original authority. Produced by `read` on a supported image;
+the pixels themselves. Alongside path, MIME, and size, a `read` persists its
+canonical read root so later materialization cannot follow a replacement path
+outside the original authority. Produced by `read` on a supported image;
 drivers re-materialize it into content blocks on every request, gated
 fail-closed on the catalog's input modalities, degrading to an inline
 placeholder when unmaterializable. Telegram uploads produce metadata text only;
@@ -438,9 +461,8 @@ _Avoid_: "config dir" for the whole directory; conflating it with the project-le
 
 **LSP server**:
 A user- or project-owned language-server executable discovered through the
-project's activated shell PATH while shields are down, or through inherited
-PATH with project/runtime-substrate containment while raised. Coagent neither
-downloads, installs, nor pins it.
+project's activated shell PATH. Coagent neither downloads, installs, nor pins
+it.
 _Avoid_: managed LSP installation, PATH fallback.
 
 **provider**:
@@ -465,15 +487,14 @@ _Avoid_: capability, model role.
 The in-memory credential map parsed from `~/.coagent/secrets`, deliberately kept out of the process environment (tool subprocesses inherit no credentials) and scrubbed from all log output.
 
 **shellenv**:
-A per-cwd snapshot of a login+interactive shell (mise / asdf / nvm / direnv toolchain activation), captured, cached (validated by a fingerprint of the on-disk toolchain state, with a 30-min backstop — see [ADR-0001](adr/0001-shellenv-fingerprint-invalidation.md)), and replayed for Bash / LSP / MCP subprocess spawns while session shields are down. Raised sessions bypass capture and replay. Captures `os.Environ()` only — never a secrets map.
+A per-session, per-cwd snapshot of a login+interactive shell (mise / asdf / nvm / direnv toolchain activation), captured lazily and replayed for Bash / LSP / MCP subprocess spawns. It survives loop activations under the same policy; fingerprint validation and a 30-minute backstop keep it fresh ([ADR-0001](adr/0001-shellenv-fingerprint-invalidation.md)). Resource retirement removes its snapshots. Capture and `type -P` lookup execute through the session's confinement runner. The snapshot is exposed to the sandbox read-only through an inherited descriptor — never the user cache directory. Captures `os.Environ()` only — never a secrets map.
 
 **filesystem-write sandbox**:
-Default-on native Bubblewrap-backed write confinement for Bash descendants,
-LSP and stdio MCP processes, and the `write` / `edit` / `apply_patch` tools.
-Operators may disable it explicitly. By itself it is an
-*integrity* boundary — not confidentiality: it does not confine reads or network
-egress. Session shields add the separate operator-controlled read boundary.
-_Avoid_: sandbox (unqualified — implies more isolation than it gives).
+Retired as a term: the default is **project confinement**, one ordered
+allow/deny rule list for reads and writes alike. `sandbox.enabled: false`
+remains the operator's explicit opt-out and restores unrestricted host reads
+with no write confinement.
+_Avoid_: using it for the default boundary.
 
 **composition root**:
 `cmd/coagent/main.go` — hand-wires every component in dependency order (no DI framework) and records a named stop closure per component, replayed in reverse on shutdown.

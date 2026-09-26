@@ -12,23 +12,46 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	"golang.org/x/sys/unix"
+
+	"github.com/pilat/coagent/internal/sandboxpolicy"
 )
 
-type mountOperation struct {
-	path     string
-	readOnly bool
+// Later filesystem operations mount over earlier ones, so order determines access.
+type opKind uint8
+
+const (
+	opBindRO opKind = iota
+	opBindRW
+	opTmpfs
+	opEmptyFile
+	opProc
+	opDev
+)
+
+// mountOp is one ordered operation. source is a host path pinned to fd before
+// launch; tmpfs operations carry a target only.
+type mountOp struct {
+	kind   opKind
+	source string
+	target string
+	fd     int
 }
 
-type shieldMountOperation struct {
-	source   string
-	target   string
-	readOnly bool
+// mountPlan is the ordered operation list one sandbox invocation applies.
+type mountPlan struct {
+	ops []mountOp
 }
 
 type mountInfoEntry struct {
 	mountPoint string
 	fsType     string
 }
+
+// kernelOwnedRoots are the pseudo-filesystems Bubblewrap installs itself. A
+// host copy must never be bound over them.
+var kernelOwnedRoots = []string{"/proc", "/dev"}
 
 func readMountInfo(path string) ([]mountInfoEntry, error) {
 	file, err := os.Open(path)
@@ -47,7 +70,6 @@ func readMountPoints(path string) ([]string, error) {
 	}
 
 	mountPoints := make([]string, 0, len(entries))
-
 	for _, entry := range entries {
 		mountPoints = append(mountPoints, entry.mountPoint)
 	}
@@ -82,23 +104,9 @@ func pathOverlapsMount(path string, mountPoints []string) bool {
 	return false
 }
 
-func parseMountInfo(reader io.Reader) ([]string, error) {
-	entries, err := parseMountInfoEntries(reader)
-	if err != nil {
-		return nil, err
-	}
-
-	mountPoints := make([]string, 0, len(entries))
-
-	for _, entry := range entries {
-		mountPoints = append(mountPoints, entry.mountPoint)
-	}
-
-	return mountPoints, nil
-}
-
 func parseMountInfoEntries(reader io.Reader) ([]mountInfoEntry, error) {
 	var entries []mountInfoEntry
+
 	seen := make(map[string]int)
 
 	scanner := bufio.NewScanner(reader)
@@ -115,6 +123,7 @@ func parseMountInfoEntries(reader io.Reader) ([]mountInfoEntry, error) {
 		for index := 5; index < len(fields); index++ {
 			if fields[index] == "-" {
 				separator = index
+
 				break
 			}
 		}
@@ -143,10 +152,7 @@ func parseMountInfoEntries(reader io.Reader) ([]mountInfoEntry, error) {
 		}
 
 		seen[mountPoint] = len(entries)
-		entries = append(entries, mountInfoEntry{
-			mountPoint: mountPoint,
-			fsType:     fsType,
-		})
+		entries = append(entries, mountInfoEntry{mountPoint: mountPoint, fsType: fsType})
 	}
 
 	if err := scanner.Err(); err != nil {
@@ -162,6 +168,7 @@ func decodeMountInfoPath(value string) (string, error) {
 	for i := 0; i < len(value); i++ {
 		if value[i] != '\\' {
 			decoded.WriteByte(value[i])
+
 			continue
 		}
 
@@ -184,125 +191,230 @@ func decodeMountInfoPath(value string) (string, error) {
 	return decoded.String(), nil
 }
 
-func buildMountOperations(writableRoots, mountPoints []string) []mountOperation {
-	operations := make(map[string]mountOperation, len(writableRoots)+len(mountPoints))
-	for _, root := range writableRoots {
-		operations[root] = mountOperation{path: root}
+// Nested host mounts need their own read-only binds before ordered policy entries.
+// Fresh proc and dev mounts come last to prevent policy entries from shadowing them.
+func buildMountPlan(entries []sandboxpolicy.Entry, hostMountPoints []string) (mountPlan, error) {
+	entries = (sandboxpolicy.Policy{Entries: entries}).EffectiveEntries()
+	if err := (sandboxpolicy.Policy{Entries: entries}).ValidateMounts(); err != nil {
+		return mountPlan{}, fmt.Errorf("validate mount policy: %w", err)
 	}
 
-	for _, mountPoint := range mountPoints {
-		if _, explicitlyWritable := operations[mountPoint]; explicitlyWritable {
+	plan := mountPlan{ops: []mountOp{{kind: opBindRO, source: "/", target: "/"}}}
+	plan.ops = append(plan.ops, hostMountOps(hostMountPoints)...)
+
+	for i, entry := range entries {
+		if i == 0 && isHostRootEntry(entry) {
 			continue
 		}
 
-		for _, root := range writableRoots {
-			if mountPoint != root && pathWithinRoot(mountPoint, root) {
-				// A mount point inside an explicit root must stay read-only:
-				// special mounts (tmpfs, procfs) inside a writable root would
-				// otherwise become a writable escape hatch.
-				operations[mountPoint] = mountOperation{path: mountPoint, readOnly: true}
+		ops, err := entryOps(entry)
+		if err != nil {
+			return mountPlan{}, err
+		}
 
-				break
-			}
+		plan.ops = append(plan.ops, ops...)
+		if isHostRootEntry(entry) {
+			plan.ops = append(plan.ops, hostMountOps(hostMountPoints)...)
 		}
 	}
 
-	ordered := make([]mountOperation, 0, len(operations))
-	for _, operation := range operations {
-		ordered = append(ordered, operation)
-	}
+	// A fresh proc and dev come last so no host copy bound above can shadow them.
+	plan.ops = append(plan.ops,
+		mountOp{kind: opProc, target: "/proc"},
+		mountOp{kind: opDev, target: devPath},
+		mountOp{kind: opTmpfs, target: "/dev/shm"},
+	)
 
-	sort.Slice(ordered, func(i, j int) bool {
-		left := pathDepth(ordered[i].path)
-
-		right := pathDepth(ordered[j].path)
-		if left != right {
-			return left < right
-		}
-
-		return ordered[i].path < ordered[j].path
-	})
-
-	return ordered
+	return plan, nil
 }
 
-//nolint:wsl_v5 // Mount construction keeps each ordering constraint adjacent to its mutation.
-func buildShieldMountOperations(
-	policy processPolicy,
-	mountPoints, procMountPoints []string,
-) []shieldMountOperation {
-	mounts := make(map[string]shieldMountOperation)
-	add := func(source, target string, readOnly bool) {
-		if pathOverlapsMount(source, procMountPoints) || pathOverlapsMount(target, procMountPoints) {
-			return
-		}
-
-		if existing, ok := mounts[target]; ok && !existing.readOnly {
-			return
-		}
-		mounts[target] = shieldMountOperation{source: source, target: target, readOnly: readOnly}
-	}
-
-	add(policy.projectRoot, policy.projectRoot, false)
-	add(policy.projectRoot, policy.workDir, false)
-	for _, mount := range policy.readMounts {
-		add(mount.source, mount.target, true)
-	}
-
-	bases := make([]shieldMountOperation, 0, len(mounts))
-	for _, mount := range mounts {
-		bases = append(bases, mount)
-	}
-	for _, base := range bases {
-		for _, mountPoint := range mountPoints {
-			if mountPoint == base.source || !pathWithinRoot(mountPoint, base.source) {
-				continue
-			}
-			rel, err := filepath.Rel(base.source, mountPoint)
-			if err != nil {
-				continue
-			}
-			add(mountPoint, filepath.Join(base.target, rel), true)
-		}
-	}
-
-	ordered := make([]shieldMountOperation, 0, len(mounts))
-	for _, mount := range mounts {
-		ordered = append(ordered, mount)
-	}
-	sort.Slice(ordered, func(i, j int) bool {
-		left, right := pathDepth(ordered[i].target), pathDepth(ordered[j].target)
-		if left != right {
-			return left < right
-		}
-		return ordered[i].target < ordered[j].target
-	})
-
-	return ordered
+func isHostRootEntry(entry sandboxpolicy.Entry) bool {
+	return entry.Path == "/" && entry.Action == sandboxpolicy.ActionAllow && entry.Mode == sandboxpolicy.ModeReadOnly
 }
 
-//nolint:wsl_v5 // Parent collection and depth ordering form one mount preparation pass.
-func shieldMountDirectories(mounts []shieldMountOperation) []string {
-	seen := map[string]struct{}{"/": {}}
-	for _, mount := range mounts {
-		for dir := filepath.Dir(mount.target); dir != "/" && dir != "."; dir = filepath.Dir(dir) {
-			seen[dir] = struct{}{}
-		}
+// entryOps translates one policy entry into the operations it needs. An
+// absent object is skipped, except an absent allow+rw directory, which is
+// created on the host first so it can be bound.
+func entryOps(entry sandboxpolicy.Entry) ([]mountOp, error) {
+	if entry.Action == sandboxpolicy.ActionAllow && entry.Mode == sandboxpolicy.ModeReadWrite {
+		return rwEntryOps(entry)
 	}
 
-	dirs := make([]string, 0, len(seen)-1)
-	for dir := range seen {
-		if dir != "/" {
-			dirs = append(dirs, dir)
+	if entry.Action == sandboxpolicy.ActionAllow {
+		if !entry.Present {
+			return nil, nil
 		}
+
+		return []mountOp{{kind: opBindRO, source: entry.Path, target: entry.Path}}, nil
 	}
-	sort.Slice(dirs, func(i, j int) bool {
-		left, right := pathDepth(dirs[i]), pathDepth(dirs[j])
+
+	if !entry.Present {
+		return nil, nil
+	}
+
+	if entry.Kind == sandboxpolicy.KindDir {
+		return []mountOp{{kind: opTmpfs, target: entry.Path}}, nil
+	}
+
+	return []mountOp{{kind: opEmptyFile, target: entry.Path}}, nil
+}
+
+func rwEntryOps(entry sandboxpolicy.Entry) ([]mountOp, error) {
+	if !entry.Present && entry.Kind == sandboxpolicy.KindDir {
+		if err := createGrantedDir(entry.Path); err != nil {
+			return nil, err
+		}
+	} else if !entry.Present {
+		return nil, nil
+	}
+
+	return []mountOp{{kind: opBindRW, source: entry.Path, target: entry.Path}}, nil
+}
+
+// hostMountOps re-binds every host mount point read-only. Bubblewrap's
+// read-only bind of the root applies MS_RDONLY to the top mount alone, so a
+// nested mount would otherwise stay writable.
+func hostMountOps(mountPoints []string) []mountOp {
+	ordered := append([]string(nil), mountPoints...)
+	sort.Slice(ordered, func(i, j int) bool {
+		left, right := pathDepth(ordered[i]), pathDepth(ordered[j])
 		if left != right {
 			return left < right
 		}
-		return dirs[i] < dirs[j]
+
+		return ordered[i] < ordered[j]
 	})
 
-	return dirs
+	ops := make([]mountOp, 0, len(ordered))
+
+	for _, mountPoint := range ordered {
+		if mountPoint == "/" || kernelOwned(mountPoint) {
+			continue
+		}
+
+		ops = append(ops, mountOp{kind: opBindRO, source: mountPoint, target: mountPoint})
+	}
+
+	return ops
+}
+
+func kernelOwned(path string) bool {
+	for _, root := range kernelOwnedRoots {
+		if pathWithinRoot(path, root) {
+			return true
+		}
+	}
+
+	return false
+}
+
+// pinMountPlan opens every bind source before launching Bubblewrap. The
+// descriptors are inherited by the launcher, so a rename after validation
+// cannot redirect a bind to another object. An empty-file mask shares one
+// /dev/null descriptor.
+func pinMountPlan(plan mountPlan) (mountPlan, []*os.File, error) {
+	const firstFD = 3
+
+	pinned := mountPlan{ops: make([]mountOp, 0, len(plan.ops))}
+	files := make([]*os.File, 0, len(plan.ops))
+
+	fail := func(err error) (mountPlan, []*os.File, error) {
+		for _, file := range files {
+			_ = file.Close()
+		}
+
+		return mountPlan{}, nil, err
+	}
+
+	emptyFD := -1
+
+	for _, op := range plan.ops {
+		switch op.kind {
+		case opTmpfs, opProc, opDev:
+			pinned.ops = append(pinned.ops, op)
+
+			continue
+		case opEmptyFile:
+			if emptyFD < 0 {
+				file, err := os.Open(os.DevNull)
+				if err != nil {
+					return fail(fmt.Errorf("open %s for mask: %w", os.DevNull, err))
+				}
+
+				emptyFD = firstFD + len(files)
+				files = append(files, file)
+			}
+
+			op.fd = emptyFD
+			pinned.ops = append(pinned.ops, op)
+
+			continue
+		case opBindRO, opBindRW:
+		}
+
+		fd, err := unix.Openat2(unix.AT_FDCWD, op.source, &unix.OpenHow{
+			Flags: unix.O_PATH | unix.O_CLOEXEC, Resolve: unix.RESOLVE_NO_SYMLINKS,
+		})
+		if err != nil {
+			return fail(fmt.Errorf("pin mount source %q: %w", op.source, err))
+		}
+
+		op.fd = firstFD + len(files)
+		files = append(files, os.NewFile(uintptr(fd), op.source))
+		pinned.ops = append(pinned.ops, op)
+	}
+
+	return pinned, files, nil
+}
+
+// createGrantedDir creates one declared directory through a rooted traversal
+// that refuses to follow a symlink, so an approved grant cannot be redirected
+// onto another object.
+func createGrantedDir(path string) error {
+	clean := filepath.Clean(path)
+
+	parent, err := unix.Open("/", unix.O_PATH|unix.O_DIRECTORY|unix.O_CLOEXEC, 0)
+	if err != nil {
+		return fmt.Errorf("open filesystem root: %w", err)
+	}
+
+	defer func() { _ = unix.Close(parent) }()
+
+	for part := range strings.SplitSeq(strings.TrimPrefix(clean, "/"), "/") {
+		if part == "" {
+			continue
+		}
+
+		next, openErr := unix.Openat2(parent, part, &unix.OpenHow{
+			Flags:   unix.O_PATH | unix.O_DIRECTORY | unix.O_CLOEXEC,
+			Resolve: unix.RESOLVE_BENEATH | unix.RESOLVE_NO_SYMLINKS,
+		})
+		if errors.Is(openErr, unix.ENOENT) {
+			if mkdirErr := unix.Mkdirat(parent, part, 0o700); mkdirErr != nil && !errors.Is(mkdirErr, unix.EEXIST) {
+				return fmt.Errorf("create granted directory %q: %w", path, mkdirErr)
+			}
+
+			next, openErr = unix.Openat2(parent, part, &unix.OpenHow{
+				Flags:   unix.O_PATH | unix.O_DIRECTORY | unix.O_CLOEXEC,
+				Resolve: unix.RESOLVE_BENEATH | unix.RESOLVE_NO_SYMLINKS,
+			})
+		}
+
+		if openErr != nil {
+			if errors.Is(openErr, unix.ELOOP) {
+				return fmt.Errorf("granted path %q traverses symlink: %w", path, openErr)
+			}
+
+			if errors.Is(openErr, unix.ENOTDIR) {
+				return fmt.Errorf("granted path %q has non-directory component: %w", path, openErr)
+			}
+
+			return fmt.Errorf("traverse granted directory %q: %w", path, openErr)
+		}
+
+		_ = unix.Close(parent)
+		parent = next
+	}
+
+	return nil
 }

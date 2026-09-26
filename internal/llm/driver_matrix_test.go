@@ -143,7 +143,7 @@ func TestDriverMatrix_RootedAuthorityNeverReachesProviderWire(t *testing.T) {
 	pngPath := filepath.Join(project, "coagent-x.png")
 	png := []byte{0x89, 'P', 'N', 'G', 0x0d, 0x0a, 0x1a, 0x0a}
 	require.NoError(t, os.WriteFile(pngPath, png, 0o600))
-	access, err := safefile.New(project, safefile.ProjectConfined)
+	access, err := safefile.New(safefile.ProjectPolicy(project), project)
 	require.NoError(t, err)
 	path, err := access.Resolve(pngPath)
 	require.NoError(t, err)

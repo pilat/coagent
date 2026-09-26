@@ -380,6 +380,8 @@ func newSession(p params, opts options, workDir string, agentConfig registry.Age
 	}
 
 	s.ms = newMessageStore(msStore, opts.ID, p.OutputStore)
+	s.attachImageAuthorizer(s.llmClient)
+	s.confineGitClient()
 
 	return s
 }
@@ -502,8 +504,10 @@ func (s *svc) ReloadDeliveredCompletion(ctx context.Context) error {
 
 func (s *svc) Close() {
 	s.closeOnce.Do(func() {
-		if err := s.closeLLM(); err != nil {
-			logger.Named("session.close").Warn("llm_close_failed", zap.Error(err))
+		if s.llmClient != nil {
+			if err := s.closeLLM(); err != nil {
+				logger.Named("session.close").Warn("llm_close_failed", zap.Error(err))
+			}
 		}
 
 		if s.stack != nil {
@@ -761,4 +765,28 @@ func (s *svc) applyResumeOrInit(ctx context.Context, opts options, log *zap.Logg
 	}
 
 	return nil
+}
+
+// attachImageAuthorizer gives a client the session's current filesystem
+// authority, so a deferred attachment read is re-authorized at materialization
+// and a revoked grant is not re-read through a historical reference.
+func (s *svc) attachImageAuthorizer(client llm.Client) {
+	if client == nil || s.stack == nil {
+		return
+	}
+
+	client.SetImageAuthorizer(s.stack.Access())
+}
+
+// confineGitClient routes session-owned Git through the session's confinement
+// runner, so project-dependent hooks, helpers and fsmonitor cannot execute
+// outside the policy. A session without a runner keeps the daemon client.
+func (s *svc) confineGitClient() {
+	if s.gitClient == nil || s.stack == nil {
+		return
+	}
+
+	if sandboxed := s.stack.SandboxedGit(); sandboxed != nil {
+		s.gitClient = sandboxed
+	}
 }

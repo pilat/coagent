@@ -71,8 +71,18 @@ func (s *svc) StageDocument(candidate []byte) (*Staged, Verdict) {
 		return nil, Reject("", errors.New("empty configuration document"))
 	}
 
-	if _, err := config.ParseUnifiedConfig(candidate); err != nil {
+	parsed, err := config.ParseUnifiedConfig(candidate)
+	if err != nil {
 		return nil, Reject("", err)
+	}
+
+	if len(parsed.Models) == 0 {
+		return nil, Reject(
+			"",
+			errors.New(
+				"complete replacement configuration must include at least one model; configuration fragments cannot replace the live document",
+			),
+		)
 	}
 
 	secrets, err := config.LoadSecretsFrom(s.secretsPath)

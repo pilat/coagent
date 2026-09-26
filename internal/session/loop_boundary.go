@@ -13,9 +13,7 @@ import (
 )
 
 const (
-	compactCommand     = "/compact"
-	shieldsUpCommand   = "/shieldsup"
-	shieldsDownCommand = "/shieldsdown"
+	compactCommand = "/compact"
 
 	sleepInterruptedMessage = "Sleep interrupted — user sent a message."
 
@@ -314,8 +312,6 @@ func (r *loopRunner) handleBoundaryCommand(ctx context.Context, input PendingInp
 	trimmed := strings.TrimSpace(input.Content)
 
 	switch {
-	case input.ManagerOwned && (trimmed == shieldsUpCommand || trimmed == shieldsDownCommand):
-		return commandDeferred, nil
 	case trimmed == "/status":
 		if r.nothingToAnswer() || r.completionNudgePending(ctx) {
 			r.handledControl = true

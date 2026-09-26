@@ -74,7 +74,6 @@ type Snapshot struct {
 	ActiveSubagents      int
 	BackgroundSubagents  int
 	BackgroundProcesses  []ProcessStatus
-	ShieldsUp            bool
 	Budget               *Budget
 	LastSemanticOutputAt *time.Time
 	// IsBackgroundYield marks final output released to a wake source; the

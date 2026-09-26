@@ -22,7 +22,6 @@ CI_ONLY_TEST_PACKAGES := $(addprefix $(MODULE_PATH)/,\
 	internal/daemon \
 	internal/git \
 	internal/lsp \
-	internal/managers/cli \
 	internal/managers/telegram \
 	internal/mcpstore \
 	internal/migrate \
@@ -153,7 +152,7 @@ race:
 
 CI_STRESS_COUNT ?= 25
 CI_STRESS_TIMEOUT ?= 15m
-CI_STRESS_PACKAGES := ./internal/session ./internal/sessionstore ./internal/daemon ./internal/schedule ./internal/managerdelivery ./internal/managers/cli ./internal/managers/telegram ./internal/migrate
+CI_STRESS_PACKAGES := ./internal/session ./internal/sessionstore ./internal/daemon ./internal/schedule ./internal/managerdelivery ./internal/managers/telegram ./internal/migrate
 CI_STRESS_RUN := Test(Harness|Worker|OutputTransport|ExecuteToolCalls_(RejectsSleepAlongside|RejectedSleepDoesNotSkip)|Integration_(StressBlockingNoDeadlock|BackgroundTaskRejectsCompetingSleepProtocol|ScatterGatherBlockingTasks|OneShotAckFailureRedeliversWithoutDuplicateTranscriptOrPublication|FreshScheduleDuplicateDoesNotResetOrRunTwice)|Executor_CronAckRetryKeepsCanonicalIdentityAndPayload|ScheduledDeliveryStore_ContextResetRollsBackClaimAndTranscriptOnInsertFailure|SendMessage_DoesNotDuplicateOnRateLimitOrAmbiguousTransportFailure|FollowUpAcceptedBeforeTerminalBoundaryStaysInSameActivation|Stop(ParksWholeTreeAndExplicitFollowUpResumesOnlyChild|DirectChildParksItsOwnLinkWithoutStoppingParent)|StartFinishesInterruptedStopBeforeRecoverySweep|SubagentWaitGuardRejectsSleepUntilCompletionDelivered|OpenDB_ExplicitTransactionsReserveWriterAtBegin|BudgetStore_ArmFireAndReplayAreAtomic)
 
 stress:
@@ -295,7 +294,7 @@ NIGHTLY_MUTATION_PATHS_commands := ./cmd/coagent ./cmd/releasebuilder
 NIGHTLY_MUTATION_PATHS_runtime := ./internal/session
 NIGHTLY_MUTATION_PATHS_persistence := ./internal/sessionstore
 NIGHTLY_MUTATION_PATHS_async := ./internal/admission ./internal/budget ./internal/inputruntime ./internal/migrate ./internal/progress ./internal/progressruntime ./internal/schedule ./internal/sessionbus ./internal/sessionevent ./internal/sessionlifecycle ./internal/subagent
-NIGHTLY_MUTATION_PATHS_managers := ./internal/controllerapi ./internal/ctl ./internal/managercontrol ./internal/managerdelivery ./internal/managerdiscovery ./internal/managers ./internal/managers/cli ./internal/managers/telegram
+NIGHTLY_MUTATION_PATHS_managers := ./internal/controllerapi ./internal/ctl ./internal/managercontrol ./internal/managerdelivery ./internal/managerdiscovery ./internal/managers ./internal/managers/telegram
 NIGHTLY_MUTATION_PATHS_models := ./internal/catalog ./internal/llm ./internal/llmwire ./internal/registry
 NIGHTLY_MUTATION_PATHS_tooling := ./internal/bashsandbox ./internal/lsp ./internal/mcp ./internal/mcpstore ./internal/shellenv ./internal/tool ./internal/tool/builtin
 NIGHTLY_MUTATION_PATHS_config := ./internal/config ./internal/configapply ./internal/configops ./internal/configtools ./internal/loader ./internal/memory

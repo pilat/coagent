@@ -89,6 +89,7 @@ func (s *svc) handleSetModel(modelID, reasoning string) error {
 	}
 
 	newClient.SetSessionID(sessionID)
+	s.attachImageAuthorizer(newClient)
 
 	// promptBuilder is self-synchronized, so this needs no modelMu.
 	s.prompt.setModelsSection(buildModelsSection(modelID))

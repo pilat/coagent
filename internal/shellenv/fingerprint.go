@@ -31,11 +31,13 @@ var configNames = []string{
 
 // fingerprint hashes the on-disk state that determines workDir's activated env,
 // so any change (a file appearing, vanishing, or edited) invalidates the cache.
-func (p *provider) fingerprint(workDir string) string {
+// admit reports whether the session may read a path; a path outside admission
+// still folds its metadata, so a config edit invalidates without being read.
+func (p *provider) fingerprint(workDir string, admit func(string) bool) string {
 	h := sha256.New()
 
 	for _, path := range controlledPaths(workDir) {
-		hashPath(h, path)
+		hashPath(h, path, admit)
 	}
 
 	for _, dir := range installDirs() {
@@ -47,7 +49,7 @@ func (p *provider) fingerprint(workDir string) string {
 
 // hashPath folds a path's stat metadata (and small regular-file content) into h;
 // an unreadable path folds its absence, itself a fingerprinted fact.
-func hashPath(h io.Writer, path string) {
+func hashPath(h io.Writer, path string, admit func(string) bool) {
 	_, _ = io.WriteString(h, path+"\x00")
 
 	info, err := os.Lstat(path)
@@ -59,11 +61,21 @@ func hashPath(h io.Writer, path string) {
 
 	writeMeta(h, info)
 
+	if !readable(admit, path) {
+		return
+	}
+
 	if info.Mode().IsRegular() && info.Size() > 0 && info.Size() < contentHashLimit {
 		if b, err := os.ReadFile(path); err == nil {
 			_, _ = h.Write(b)
 		}
 	}
+}
+
+// readable reports whether content may be read: an unconfined fingerprint reads
+// everything, a confined one only what the policy admits.
+func readable(admit func(string) bool, path string) bool {
+	return admit == nil || admit(path)
 }
 
 // hashChildren folds each direct child's name+stat — catches a new version

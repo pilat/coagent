@@ -101,6 +101,38 @@ models:
       provider: work
 `,
 		},
+		{
+			name: "unknown escalated profile",
+			candidate: `sandbox:
+    enabled: true
+    escalated: [missing]
+`,
+		},
+		{
+			name: "broad profile mount",
+			candidate: `sandbox:
+    enabled: true
+    profiles:
+        wide:
+            mounts:
+                - path: /
+                  mode: ro
+                  type: basic
+`,
+		},
+		{
+			name: "malformed network entry",
+			candidate: `sandbox:
+    enabled: true
+    profiles:
+        db:
+            network:
+                - address: postgres.internal
+                  protocol: tcp
+                  ports: [5432]
+                  type: escalated
+`,
+		},
 	}
 
 	for _, tt := range tests {
@@ -132,4 +164,17 @@ models:
 	assert.False(t, v.Applied)
 	assert.Nil(t, staged)
 	assert.Equal(t, baseConfig, f.configBytes(t))
+}
+
+func TestStageDocument_RejectsSandboxFragmentWithoutChangingLiveConfig(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t, baseConfig, baseSecrets)
+	staged, verdict := f.svc.StageDocument(
+		[]byte("sandbox:\n  enabled: true\n  projects:\n    /tmp/project:\n      rules: []\n"),
+	)
+	require.True(t, verdict.Failed())
+	assert.Nil(t, staged)
+	assert.Contains(t, verdict.Reason(), "configuration fragments")
+	assert.Equal(t, baseConfig, f.configBytes(t))
+	assert.Empty(t, backupNames(t, f.configPath))
 }

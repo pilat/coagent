@@ -17,8 +17,7 @@ import (
 )
 
 // fakeMCPScript is a stdio MCP server: answers the handshake, advertises one tool
-// and answers it. Every spawn and call is logged so a pooled subprocess retiring
-// and respawning is observable from outside the pool.
+// and answers it. Every spawn and call is logged so stack ownership is observable.
 const fakeMCPScript = `#!/bin/sh
 LOG="$1"
 PONG="$2"
@@ -151,7 +150,7 @@ func toolResultForCallID(msgs []llmwire.Message, callID string) string {
 
 // The propagation contract at the real boundary: a server registered by the
 // mcp_add tool is absent from the run that registered it and present in the next
-// one, spawned by the pool and answering for real.
+// one, spawned by the next stack and answering for real.
 func TestScenario_MCPAddReachesTheNextRunOnly(t *testing.T) {
 	fake := newFakeMCPServer(t, "pong from fake", false)
 
@@ -175,7 +174,7 @@ func TestScenario_MCPAddReachesTheNextRunOnly(t *testing.T) {
 		return mcpToolCall("add-1", tool.IDMCPAdd, fake.addParams("fake", "project"))
 	}
 
-	h, _, _ := newMCPHarness(t, respond)
+	h, _ := newMCPHarness(t, respond)
 	defer h.shutdown()
 
 	sessionID, err := h.mgr.Send(h.ctx, h.projectID, "register the fake mcp server", "fake-model", nil)
@@ -202,7 +201,7 @@ func TestScenario_MCPAddReachesTheNextRunOnly(t *testing.T) {
 	require.NoError(t, llm.ValidateToolPairing(msgs))
 	assert.Contains(t, toolResultForCallID(msgs, "ping-next-run"), "pong from fake",
 		"the next run offers mcp__fake__ping and it answers from the real server")
-	assert.Equal(t, 1, fake.count(t, "spawn"), "exactly one pooled subprocess served the next run")
+	assert.GreaterOrEqual(t, fake.count(t, "spawn"), 1, "the next stack started the server")
 }
 
 // The scope override is an mcpstore contract, but what a session may call is the
@@ -231,7 +230,7 @@ func TestScenario_ProjectMCPServerOverridesTheGlobalOfTheSameName(t *testing.T) 
 		return mcpToolCall("add-global", tool.IDMCPAdd, global.addParams("fake", "global"))
 	}
 
-	h, _, _ := newMCPHarness(t, respond)
+	h, _ := newMCPHarness(t, respond)
 	defer h.shutdown()
 
 	sessionID, err := h.mgr.Send(h.ctx, h.projectID, "register both scopes", "fake-model", nil)
@@ -250,6 +249,6 @@ func TestScenario_ProjectMCPServerOverridesTheGlobalOfTheSameName(t *testing.T) 
 	msgs := h.parentMessages(sessionID)
 	require.NoError(t, llm.ValidateToolPairing(msgs))
 	assert.Contains(t, toolResultForCallID(msgs, "ping-override"), "pong from project")
-	assert.Equal(t, 1, project.count(t, "spawn"), "the project row is the one that runs")
+	assert.GreaterOrEqual(t, project.count(t, "spawn"), 1, "the project row is the one that runs")
 	assert.Equal(t, 0, global.count(t, "spawn"), "the shadowed global is never spawned")
 }

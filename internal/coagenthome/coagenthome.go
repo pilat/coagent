@@ -1,6 +1,8 @@
 package coagenthome
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
@@ -27,6 +29,7 @@ const (
 	CatalogDirName      = "catalog"
 	MarketplacesDirName = "marketplaces"
 	ProcessesDirName    = "processes"
+	SandboxDirName      = "sandbox"
 
 	// TelegramServiceFilePattern is the legacy target-chat-keyed service record.
 	TelegramServiceFilePattern = "tg-service-%d.json"
@@ -109,6 +112,34 @@ func ProcessProjectDirName(projectID int64) (string, error) {
 	}
 
 	return "project-" + strconv.FormatInt(projectID, 10), nil
+}
+
+// SandboxTempDir returns the private temporary backing directory for one
+// project identity. It is visible to workloads as /tmp, never as this path.
+func SandboxTempDir(identity string) (string, error) {
+	if identity == "" {
+		return "", errors.New("sandbox project identity must not be empty")
+	}
+
+	return Join(SandboxDirName, identity, "tmp")
+}
+
+// SandboxProjectIdentity names a durable project.
+func SandboxProjectIdentity(projectID int64) (string, error) {
+	if projectID <= 0 {
+		return "", fmt.Errorf("invalid sandbox project id %d", projectID)
+	}
+
+	return "project-" + strconv.FormatInt(projectID, 10), nil
+}
+
+// SandboxPathIdentity names a project that has no durable id — a test or probe
+// fixture — from its canonical root. The digest keeps the mapping stable
+// across runs without exposing the path as a directory name.
+func SandboxPathIdentity(canonicalRoot string) string {
+	hash := sha256.Sum256([]byte(canonicalRoot))
+
+	return "path-" + hex.EncodeToString(hash[:16])
 }
 
 // Override forces UserHome to return dir — or to fail when dir is empty —

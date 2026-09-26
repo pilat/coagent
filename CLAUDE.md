@@ -8,8 +8,8 @@ Key differentiators:
 - **Built-in manager**: the Telegram manager and future built-in managers share the daemon's private in-process controller contract
 - **Pluggable LLM backends**: Anthropic, Google Gemini, OpenAI-compatible (including local models)
 - **Unattended execution**: sessions persist to SQLite, survive crashes, and resume automatically
-- **MCP-first**: the daemon pools session-bound MCP clients and catalogs without cross-session reuse
-- **Session shields**: an operator can durably confine a complete session tree to its project while retaining tools and network access
+- **MCP-first**: each session stack owns its MCP clients and discovers their tools at startup
+- **Project confinement via ordered allow/deny rules**: every sandbox-enabled session runs one compiled policy — an ordered list of `allow`/`deny` path rules, last match wins, with the host readable and the project writable by implicit default. The project section ends with mandatory read-only access to its captured process output. Coagent ships no credential or toolchain path lists and enforces no network boundary: a network boundary is a deployment decision
 
 ## Build & Development Commands
 

@@ -1,5 +1,7 @@
 package config
 
+import "github.com/pilat/coagent/internal/sandboxpolicy"
+
 // Search provider names accepted by tools.search.provider.
 const (
 	SearchProviderTavily  = "tavily"
@@ -8,6 +10,7 @@ const (
 
 // The yaml tags carry omitempty throughout, except sandbox.enabled: its explicit
 // false must survive the default-on behavior when config.yaml is rewritten.
+// The sandbox section's schema and yaml tags live in internal/sandboxpolicy.
 type (
 	MarketplaceEntry struct {
 		URL     string   `yaml:"url"`
@@ -128,10 +131,7 @@ type (
 		Whisper *ManagerWhisperEntry `yaml:"whisper,omitempty"`
 	}
 
-	SandboxConfig struct {
-		Enabled       bool     `yaml:"enabled"`
-		WritablePaths []string `yaml:"writable_paths,omitempty"`
-	}
+	SandboxConfig = sandboxpolicy.Section
 
 	// SearchToolConfig configures the builtin websearch tool. An empty section
 	// means unconfigured: no builtin tool, native passthrough if the driver

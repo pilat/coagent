@@ -210,7 +210,7 @@ func newSpawnEffortHarness(t *testing.T, baseURL string) *subagentHarness {
 		},
 	}}
 
-	factory := session.NewFactoryWithOptions(cfg, nil, nil, sessStore, sessStore, nil, nil, nil, nil, nil)
+	factory := session.NewFactoryWithOptions(cfg, nil, nil, sessStore, sessStore, nil, nil, nil)
 
 	mgr, _ := newSvc(
 		context.Background(),

@@ -15,7 +15,6 @@ import (
 	"github.com/pilat/coagent/internal/config"
 	"github.com/pilat/coagent/internal/llm"
 	"github.com/pilat/coagent/internal/llmwire"
-	"github.com/pilat/coagent/internal/mcp"
 	"github.com/pilat/coagent/internal/mcpstore"
 	"github.com/pilat/coagent/internal/migrate"
 	"github.com/pilat/coagent/internal/schedule"
@@ -29,7 +28,6 @@ type mcpRestartHarness struct {
 	*subagentHarness
 	db       *sql.DB
 	registry mcpstore.Store
-	pool     mcp.Pool
 }
 
 func TestScenario_MCPDisablePersistsAcrossDaemonRestart(t *testing.T) {
@@ -49,11 +47,11 @@ func TestScenario_MCPDisablePersistsAcrossDaemonRestart(t *testing.T) {
 	first.mgr.waitIdle(sessionID)
 
 	require.NoError(t, first.mgr.SendToSession(first.ctx, sessionID, "USE_IT now"))
-	first.waitUntil("pooled call finishes", func() bool {
+	first.waitUntil("MCP call finishes", func() bool {
 		return lastAssistantTextDTO(first.parentMessages(sessionID)) == "used before restart"
 	})
 	first.mgr.waitIdle(sessionID)
-	assert.Equal(t, 1, fake.count(t, "spawn"))
+	assert.GreaterOrEqual(t, fake.count(t, "spawn"), 1)
 
 	require.NoError(t, first.mgr.SendToSession(first.ctx, sessionID, "DISABLE_IT now"))
 	first.waitUntil("disable finishes", func() bool {
@@ -63,6 +61,7 @@ func TestScenario_MCPDisablePersistsAcrossDaemonRestart(t *testing.T) {
 	defs, err := first.registry.ListForProject(first.ctx, first.projectID)
 	require.NoError(t, err)
 	assert.Empty(t, defs, "the disabled row is absent from the session's enabled projection")
+	spawnsBeforeRestart := fake.count(t, "spawn")
 	first.close()
 
 	second := newMCPRestartHarness(t, dbPath, workDir, respond)
@@ -77,7 +76,7 @@ func TestScenario_MCPDisablePersistsAcrossDaemonRestart(t *testing.T) {
 	require.NoError(t, llm.ValidateToolPairing(messages))
 	assert.Contains(t, toolResultForCallID(messages, "ping-after-restart"), "unknown tool",
 		"a disabled registry row must not return in a fresh daemon activation")
-	assert.Equal(t, 1, fake.count(t, "spawn"), "restart must not spawn stale MCP availability")
+	assert.Equal(t, spawnsBeforeRestart, fake.count(t, "spawn"), "restart must not spawn stale MCP availability")
 }
 
 func disableScenarioResponder(fake *fakeMCPServer) func(string, []llmwire.Message) *llmwire.Response {
@@ -108,7 +107,7 @@ func disableScenarioResponder(fake *fakeMCPServer) func(string, []llmwire.Messag
 	}
 }
 
-func TestScenario_MCPRemoveEvictsPooledProcessBeforeTheNextRun(t *testing.T) {
+func TestScenario_MCPRemoveClosesStackProcessBeforeTheNextRun(t *testing.T) {
 	fake := newExitTrackingMCPServer(t, "pong before removal")
 	dbPath := filepath.Join(t.TempDir(), "mcp-remove.db")
 	workDir := t.TempDir()
@@ -122,11 +121,11 @@ func TestScenario_MCPRemoveEvictsPooledProcessBeforeTheNextRun(t *testing.T) {
 	})
 	h.mgr.waitIdle(sessionID)
 	require.NoError(t, h.mgr.SendToSession(h.ctx, sessionID, "USE_IT now"))
-	h.waitUntil("pooled call finishes", func() bool {
+	h.waitUntil("MCP call finishes", func() bool {
 		return lastAssistantTextDTO(h.parentMessages(sessionID)) == "used before remove"
 	})
 	h.mgr.waitIdle(sessionID)
-	assert.Equal(t, 1, fake.count(t, "spawn"))
+	assert.GreaterOrEqual(t, fake.count(t, "spawn"), 1)
 
 	require.NoError(t, h.mgr.SendToSession(h.ctx, sessionID, "REMOVE_IT now"))
 	h.waitUntil("removal finishes", func() bool {
@@ -134,6 +133,7 @@ func TestScenario_MCPRemoveEvictsPooledProcessBeforeTheNextRun(t *testing.T) {
 	})
 	h.mgr.waitIdle(sessionID)
 	fake.waitForExit(t)
+	spawnsAfterRemove := fake.count(t, "spawn")
 	require.NoError(t, h.mgr.SendToSession(h.ctx, sessionID, "USE_AFTER_REMOVE now"))
 	h.waitUntil("post-removal run finishes", func() bool {
 		return lastAssistantTextDTO(h.parentMessages(sessionID)) == "used after remove"
@@ -144,7 +144,7 @@ func TestScenario_MCPRemoveEvictsPooledProcessBeforeTheNextRun(t *testing.T) {
 	require.NoError(t, llm.ValidateToolPairing(messages))
 	assert.Contains(t, toolResultForCallID(messages, "ping-after-remove"), "unknown tool",
 		"a removed row must be absent from the next stack")
-	assert.Equal(t, 1, fake.count(t, "spawn"), "removal must evict instead of leaving a stale pool entry")
+	assert.Equal(t, spawnsAfterRemove, fake.count(t, "spawn"), "removal must not restart the deleted server")
 }
 
 func removeScenarioResponder(
@@ -201,10 +201,9 @@ func newMCPRestartHarness(
 	links := subagent.NewStore(db)
 	schedStore := schedule.NewStore(db)
 	registry := mcpstore.NewStore(db)
-	pool := mcp.NewPool(nil)
 	cfg := &config.Config{WorkDir: workDir, Model: "fake-model"}
 	factory := session.NewFactoryWithOptions(
-		cfg, nil, nil, sessStore, sessStore, nil, pool, registry, nil, nil,
+		cfg, nil, nil, sessStore, sessStore, nil, registry, nil,
 		session.WithLLMClientFactory(func(_ *config.Config) (llm.Client, error) {
 			return &scriptedLLM{respond: respond}, nil
 		}),
@@ -228,7 +227,6 @@ func newMCPRestartHarness(
 		func() string { return "fake-model" },
 	)
 	mgr.mcpStore = registry
-	mgr.mcpPool = pool
 	projectID, err := store.GetOrCreateProject(ctx, workDir)
 	require.NoError(t, err)
 
@@ -239,7 +237,6 @@ func newMCPRestartHarness(
 		},
 		db:       db,
 		registry: registry,
-		pool:     pool,
 	}
 	t.Cleanup(h.close)
 
@@ -248,6 +245,5 @@ func newMCPRestartHarness(
 
 func (h *mcpRestartHarness) close() {
 	h.mgr.Shutdown(5 * time.Second)
-	h.pool.Stop()
 	_ = h.db.Close()
 }

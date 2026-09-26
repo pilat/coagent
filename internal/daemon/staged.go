@@ -11,7 +11,8 @@ type stagedCall struct {
 	toolName string
 	// apply is handed over exactly once, then nil; nil too for calls whose
 	// outside work is not a config write.
-	apply *configops.Staged
+	apply  *configops.Staged
+	result string
 }
 
 // stagedCalls is the in-flight ledger of calls the daemon owes a result for.
@@ -62,6 +63,25 @@ func (c *stagedCalls) takePendingApply(sessionID int64) (string, stagedCall, boo
 	}
 
 	return "", stagedCall{}, false
+}
+
+func (c *stagedCalls) stageResult(sessionID int64, callID, toolName, content string) {
+	c.put(sessionID, callID, stagedCall{toolName: toolName, result: content})
+}
+
+func (c *stagedCalls) pendingResults(sessionID int64) map[string]stagedCall {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	results := make(map[string]stagedCall)
+
+	for callID, sc := range c.bySession[sessionID] {
+		if sc.result != "" {
+			results[callID] = sc
+		}
+	}
+
+	return results
 }
 
 // resolve forgets a call once its result has been injected.

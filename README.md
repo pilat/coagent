@@ -42,9 +42,11 @@ credential values in `~/.coagent/secrets`, referenced from the config as
 ./coagent status    # exit code 0 means running
 ```
 
-The binary stays user-owned under `~/.local/bin`, while the systemd unit
-runs it as your login user. Updating is a manual binary replace
-plus `coagent restart`.
+The binary stays user-owned under `~/.local/bin` and the systemd unit runs it as
+your login user with no added capabilities. Beyond Git and a model provider, the
+sandbox needs only `bwrap` (Bubblewrap) on the host.
+
+Updating is a manual binary replace plus `coagent restart`.
 
 For Telegram, create a private bot with BotFather, enable Threaded Mode, and
 disallow users from creating topics; send the bot `/start`, and give the manager
@@ -111,8 +113,8 @@ per-task ReAct loop: model → tools → observation
 built-in tools · MCP servers · skills · subagents
 ```
 
-The daemon is the only process-wide owner. It creates isolated sessions, pools
-MCP connections, persists lifecycle state, and routes results to the built-in
+The daemon is the only process-wide owner. It creates isolated sessions, retains
+their tool resources, persists lifecycle state, and routes results to the built-in
 managers. The managers share a private in-process contract; coagent is an
 opinionated product, not an agent framework with a public plugin API.
 
@@ -125,11 +127,10 @@ opinionated product, not an agent framework with a public plugin API.
 - **Coding tools:** Bash, file operations, unified patches, search, LSP code
   intelligence, web fetch, parallel batches, todos, and persistent per-project
   memory. Language servers are supplied by the project or user toolchain and
-  must be available on the activated project `PATH` while shields are down or
-  on the inherited `PATH` within the fixed execution substrate while raised.
-- **MCP:** global and project-scoped servers stored in SQLite. Connections are
-  pooled per session process policy and reaped after 30 minutes idle; sessions
-  never share a live client or cached tool catalog.
+  must be available on the activated project `PATH`.
+- **MCP:** global and project-scoped servers stored in SQLite. Each session keeps
+  its own connections across replies and sleep/resume; policy, configuration or
+  shell activation changes replace them. Stop and shutdown close them.
 - **Skills and subagents:** project and user `SKILL.md` files, project-defined
   agent types, and opt-in git marketplaces. Tool restrictions are enforced by
   the registered tool set, but Bash remains a powerful escape hatch wherever a
@@ -153,39 +154,52 @@ What is enforced:
   secrets file is parsed into memory rather than loaded into the environment.
   Ordinary environment variables inherited by the daemon remain visible to its
   children, so do not start it with unrelated credentials exported.
-- **Write confinement by default.** On Linux, Bash descendants, LSP and stdio
-  MCP processes, and dedicated file-mutation tools are restricted to the
-  project and explicit writable paths using Bubblewrap. Startup fails if the
-  backend cannot enforce the policy.
-- **Operator-controlled session shields.** `/shieldsup` durably confines the
-  complete session tree's built-in file tools and session-owned processes to
-  its project, apart from a fixed read-only system runtime needed to start
-  ordinary commands.
-  Subagents inherit the state, `/clear` preserves it, and every progress card
-  plus `/status` shows the shield while it is raised. `/shieldsdown` restores
-  ordinary host-readable behavior when the complete tree is idle.
+- **One ordered rule list, last match wins.** On Linux, shell preparation, Bash
+  descendants, LSP and stdio MCP processes, and the file tools all run under one
+  compiled policy: an ordered list of `allow`/`deny` path rules, evaluated with
+  the last matching rule deciding. Coagent ships no rules of its own about the
+  operator's machine — every rule names a path only the operator knows. Startup
+  fails if the backend cannot enforce the policy.
+- **Process output stays readable.** The project section ends with mandatory
+  read-only access to its captured output, including for subagents. Denying `~/.coagent`
+  still hides other daemon state and does not block inspection of that output.
+- **The host is readable, the project is writable, by implicit default.**
+  With no configuration at all, the whole host is readable and nothing is
+  writable except the session's project — the `projects:` map attaches rules to
+  a project, it does not grant it. A read-only `allow` only matters as a
+  carve-out from an earlier `deny`.
+- **The use without the secret.** The recommended config denies `~/.ssh`, so no
+  private key is readable — yet Git over SSH still works: a key is used to
+  sign, not to be read, and the sandbox reaches the ssh-agent socket rather
+  than the key. Only `known_hosts` and `~/.ssh/config` need re-allowing,
+  because host verification and host aliases are not credentials. A bearer
+  token has no such split, so denying it disables the tool that needs it.
+- **Confined shell preparation.** Shell activation capture and executable lookup
+  run inside the session sandbox; each command sources its snapshot through an
+  inherited file descriptor.
 - **Configuration fails closed.** Unknown YAML keys, missing secret references,
-  and catalog-unknown models are errors rather than silent fallbacks.
+  catalog-unknown models, malformed paths and rules that bury a project's own
+  writability are errors rather than silent fallbacks.
 
 What is not enforced:
 
-- With shields down, the write sandbox is **not** a confidentiality boundary.
-  Read tools and session processes can read anything available to the daemon
-  user. Set `sandbox.enabled: false` to disable write confinement explicitly;
-  shields cannot be raised while it is disabled.
-- Raised shields restrict host filesystem access, not network egress, inherited
-  environment variables, or use of data already inside the project or model
-  history. The read-only command runtime includes resolver, host-name, account,
-  loader, and certificate data needed by system tools. Bash can still make
-  arbitrary remote requests, and built-in web tools retain their existing
-  network behavior.
+- Project confinement is an *integrity* boundary, not confidentiality. With no
+  rules, an ordinary session reads everything the host filesystem exposes —
+  another checkout, the operator's keys, coagent's own secrets file — and
+  writes only the project unless the operator's rules say otherwise. Set
+  `sandbox.enabled: false` to opt out explicitly.
+- **There is no network boundary.** Sessions share the daemon's network: your
+  LAN, your host services and your shared database are reachable, and so is the
+  whole public internet. The built-in web tools still refuse link-local and
+  cloud-metadata addresses, but Bash does not. If you need a network boundary,
+  run the whole daemon inside a container or VM you built — that is a deployment
+  decision, and coagent does not pretend to make it for you.
+- Inherited environment variables and data already inside the project or model
+  history are unchanged. The read-only command runtime includes resolver,
+  host-name, account, loader, and certificate data needed by system tools.
 - Global and marketplace instruction sources remain trusted daemon inputs and
   are read outside the project boundary. Project-local instructions, skills,
   and subagent definitions use the same rooted project access as file tools.
-- Network and Unix-socket effects are outside the filesystem write sandbox.
-- Web fetch blocks link-local and cloud metadata destinations, but deliberately
-  permits loopback and private networks. It is a targeted mitigation, not a
-  complete SSRF boundary.
 - This is a single-operator system. It provides no multi-tenant isolation and
   should not accept tasks from people you would not trust with the daemon user's
   files.
@@ -244,29 +258,36 @@ from `.agents/`, `.coagent/`, and `.claude/`, and subagent definitions from
 `.coagent/agents` and `.claude/agents`. Later, more local sources win when names
 collide.
 
-Write confinement:
+Project confinement:
 
 ```yaml
 sandbox:
-  enabled: true
-  writable_paths:
-    - ~/.npm
+  enabled: true              # omitted means enabled; false is the explicit opt-out
+  rules:
+    - deny: ~/.ssh
+    - allow: ~/.ssh/known_hosts
+    - allow: ~/.ssh/config
+    - deny: ~/.coagent
+    - allow: ~/.cache
+      mode: rw
+  projects:
+    /home/example/projects/service:
+      rules:
+        - allow: ~/go/pkg/mod
+          mode: rw
 ```
 
-The sandbox is enabled when `sandbox.enabled` is omitted; set it to `false` to
-disable write confinement explicitly.
+The policy is one ordered list; the last matching rule decides. Coagent ships
+no rules about the operator's machine — every path above is something the
+operator chose to name. The host is readable and the session's project is
+writable by implicit default even with an empty `rules:` list; `projects:`
+attaches rules to a project, it does not grant it. A read-only `allow` can reopen
+reads after a `deny` or revoke writes from an earlier writable grant. Active
+deny targets and read-only exceptions beneath writable grants must exist;
+otherwise session startup or process preparation fails explicitly.
 
-The project, system temporary directory, and an existing user cache directory
-are writable by default. Add language- or package-manager caches explicitly.
-
-Session shields are runtime state, not configuration. Send `/shieldsup` inside
-an existing session to confine its root and current or future subagents to the
-canonical project. The first version supplies no writable or private `/tmp`,
-ignores configured writable paths while raised, bypasses shell activation, and
-does not expose linked-worktree Git metadata stored outside the project.
-Commands whose complete runtime is in the fixed system substrate continue to
-work; other user toolchains fail normally instead of widening the boundary.
-Send `/shieldsdown` while the tree is idle to restore the ordinary read policy.
+See [sandbox-boundary.md](docs/sandbox-boundary.md) for the full model, a
+worked example, and a recommended starting block to copy in.
 
 ### Web search
 
@@ -318,13 +339,10 @@ native injection — while configured MCP search tools coexist alongside it.
 - Repository selection lives in Telegram, where `/gwt <name>` inside a session
   topic forks that repository into a fresh worktree branched off its remote
   default branch.
-- Shell environment activation is Bash-based and applies only while shields are
-  down. zsh and fish users can still run coagent, but do not get automatic
-  per-directory mise/asdf/nvm/direnv capture.
+- Shell environment activation is Bash-based. zsh and fish users can still run
+  coagent, but do not get automatic per-directory mise/asdf/nvm/direnv capture.
 - Language servers are user- or project-owned. Coagent discovers them through
-  the project's activated shell PATH while shields are down. Raised sessions
-  bypass activation and admit only inherited-PATH executables inside the project
-  or fixed execution substrate. Coagent never downloads or installs them.
+  the project's activated shell PATH. Coagent never downloads or installs them.
 - Config, storage schema, and internal manager contracts may still change before
   1.0. Database migrations are automatic and forward-only.
 
@@ -339,9 +357,8 @@ coagent uninstall|start|stop|restart   manage the service
 coagent daemon          run in the foreground
 ```
 
-Inside a Telegram session, `/status`, `/stop`, `/shieldsup`, `/shieldsdown`,
-`/clear`, `/compact`, `/model`, and `/schedules` are control commands and do not
-become model instructions.
+Inside a Telegram session, `/status`, `/stop`, `/clear`, `/compact`, `/model`,
+and `/schedules` are control commands and do not become model instructions.
 
 ## Development
 

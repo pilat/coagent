@@ -20,13 +20,24 @@ func (m *manager) wrappedServerCommand(
 		return nil, fmt.Errorf("spawn %s: %w", server.ID, err)
 	}
 
+	confined := m.confinedRunner()
+
 	if m.provider != nil {
-		cmd, err = m.provider.WrapExec(ctx, root, cmd.Args, nil)
+		cmd, err = m.provider.WrapExec(ctx, confined, root, cmd.Args, nil)
 		if err != nil {
 			return nil, fmt.Errorf("wrap %s spawn: %w", server.ID, err)
 		}
 	} else if cmd.Dir == "" {
 		cmd.Dir = root
+	}
+
+	// A confinement runner already built the command, snapshot mount included;
+	// re-wrapping it would drop that mount.
+	if confined != nil && m.provider != nil {
+		cmd.Cancel = nil
+		cmd.WaitDelay = 0
+
+		return cmd, nil
 	}
 
 	if m.runner != nil {
@@ -42,6 +53,10 @@ func (m *manager) wrappedServerCommand(
 	}
 
 	// Resolution remains cancellable; after that, the manager owns process life.
+	if m.runner == nil {
+		cmd = procexec.Unprivileged(cmd)
+	}
+
 	cmd.Cancel = nil
 	cmd.WaitDelay = 0
 
@@ -57,7 +72,7 @@ func (m *manager) spawnServer(ctx context.Context, server *serverConfig, root st
 		return nil, fmt.Errorf("server %s has no launch method", server.ID)
 	}
 
-	path, err := lookupExecutable(ctx, m.provider, root, server.PathNames)
+	path, err := lookupExecutable(ctx, m.provider, m.confinedRunner(), root, server.PathNames)
 	if err != nil {
 		pathKind := "inherited"
 		if m.provider != nil {
@@ -79,11 +94,12 @@ func (m *manager) spawnServer(ctx context.Context, server *serverConfig, root st
 func lookupExecutable(
 	ctx context.Context,
 	environment shellenv.Provider,
+	confined shellenv.ConfinedRunner,
 	workDir string,
 	names []string,
 ) (string, error) {
 	if environment != nil {
-		path, err := environment.LookPath(ctx, workDir, names)
+		path, err := environment.LookPath(ctx, confined, workDir, names)
 		if err != nil {
 			return "", fmt.Errorf("look up activated executable: %w", err)
 		}

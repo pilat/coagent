@@ -52,7 +52,7 @@ func TestStartCore_RegistersDatabaseAndDaemonLifecycle(t *testing.T) {
 	require.NotNil(t, core.scheduleSender)
 	require.NotNil(t, core.verdictSender)
 
-	assert.Equal(t, []string{"shellenv", "mcp.pool", "db", "daemon"}, stopNames(a))
+	assert.Equal(t, []string{"db", "daemon"}, stopNames(a))
 	assert.FileExists(t, filepath.Join(home, coagenthome.DirName, coagenthome.DBFileName))
 
 	projectDir := filepath.Join(home, coagenthome.DirName, coagenthome.ProjectsDirName, "lifecycle")
@@ -86,7 +86,7 @@ func TestStartCore_PartialStartLeavesOnlyCreatedComponentsForCleanup(t *testing.
 	require.Nil(t, core)
 	require.Error(t, err)
 	require.ErrorContains(t, err, "open database")
-	assert.Equal(t, []string{"shellenv", "mcp.pool"}, stopNames(a))
+	assert.Empty(t, stopNames(a))
 
 	// The caller's deferred shutdown must be safe after any prefix of startCore.
 	a.shutdown(context.Background())

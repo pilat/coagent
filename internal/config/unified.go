@@ -189,6 +189,10 @@ func (c *UnifiedConfig) validate() error {
 		return err
 	}
 
+	if err := c.validateSandbox(); err != nil {
+		return err
+	}
+
 	return c.validateModels()
 }
 

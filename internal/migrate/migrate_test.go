@@ -88,7 +88,6 @@ func TestMigrate_FreshDB(t *testing.T) {
 	assert.True(t, columnExists(t, db, "subagent_links", "outcome"), "subagent_links.outcome must exist")
 	assert.False(t, columnExists(t, db, "subagent_links", "timeout_sec"), "subagent_links.timeout_sec must be dropped")
 	assert.True(t, columnExists(t, db, "messages", "position"), "messages.position must exist")
-	assert.True(t, columnExists(t, db, "sessions", "shields_up"), "sessions.shields_up must exist")
 	assert.True(t, columnExists(t, db, "messages", "finish_type"), "messages.finish_type must exist")
 	assert.True(t, columnExists(t, db, "messages", "provider_finish_reason"),
 		"messages.provider_finish_reason must exist")
@@ -170,30 +169,6 @@ func assertMessageFinishIntegrityConstraints(ctx context.Context, t *testing.T, 
 	_, err = db.ExecContext(ctx, `INSERT INTO messages
 		(session_id, role, content, retry_of_message_id) VALUES (1, 'user', 'recovery', ?)`, attemptID)
 	require.NoError(t, err)
-}
-
-func TestMigrate_SessionShieldsDefaultDown(t *testing.T) {
-	dbPath := filepath.Join(t.TempDir(), "v32-shields.db")
-	db, err := OpenDB(context.Background(), dbPath)
-	require.NoError(t, err)
-	defer db.Close()
-
-	ctx := context.Background()
-	provider := newProvider(t, db)
-	_, err = provider.UpTo(ctx, 32)
-	require.NoError(t, err)
-
-	_, err = db.ExecContext(ctx, `INSERT INTO projects (id, work_dir, name) VALUES (1, '/tmp/p', 'p')`)
-	require.NoError(t, err)
-	_, err = db.ExecContext(ctx, `INSERT INTO sessions (id, project_id, agent_type) VALUES (1, 1, 'build')`)
-	require.NoError(t, err)
-
-	_, err = provider.Up(ctx)
-	require.NoError(t, err)
-
-	var shieldsUp bool
-	require.NoError(t, db.QueryRowContext(ctx, `SELECT shields_up FROM sessions WHERE id = 1`).Scan(&shieldsUp))
-	assert.False(t, shieldsUp)
 }
 
 // TestMigrate_SubagentLinksDropTimeout brings a DB to version 30 with a live

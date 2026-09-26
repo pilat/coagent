@@ -35,7 +35,7 @@ for heading in \
 	"### Recovery and root-only publication" \
 	"## Security and Trust Boundaries" \
 	"### Credential boundary" \
-	"### Filesystem and egress boundary" \
+	"### Filesystem boundary" \
 	"### Local control boundary"
 do
 	if ! grep -Fqx "$heading" "$document"; then

@@ -1,6 +1,6 @@
 # ADR-0045: MCP process identity is session-bound
 
-- **Status:** Accepted
+- **Status:** Superseded by [ADR-0063](0063-explicit-filesystem-boundary.md)
 - **Date:** 2026-09-06
 
 ## Context

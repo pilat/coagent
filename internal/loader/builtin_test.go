@@ -24,6 +24,10 @@ func TestBuiltinSkill_Management(t *testing.T) {
 		"single-operator daemon",
 		"Do not call the `management` skill",
 		"/config",
+		"sandbox.rules",
+		"sandbox.projects",
+		"last matching rule",
+		"/gwt",
 		"replaces the complete application configuration",
 		"restarts the daemon",
 		"maintains by hand",
@@ -42,8 +46,6 @@ func TestBuiltinSkill_Management(t *testing.T) {
 		"/schedules",
 		"/budget",
 		"/compact",
-		"/shieldsup",
-		"/shieldsdown",
 		"grants nothing",
 	} {
 		assert.Contains(t, skill.Content, want, want)

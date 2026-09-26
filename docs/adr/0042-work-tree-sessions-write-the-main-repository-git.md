@@ -1,6 +1,6 @@
 # ADR-0042: Work tree sessions write the main repository's .git
 
-- **Status:** Accepted
+- **Status:** Superseded by [ADR-0063](0063-explicit-filesystem-boundary.md)
 - **Date:** 2026-09-05
 
 ## Context

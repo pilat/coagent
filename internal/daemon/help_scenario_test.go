@@ -14,8 +14,6 @@ import (
 const helpWithGWT = "## Session commands\n" +
 	"`/status` — show session status\n" +
 	"`/stop` — stop the current run\n" +
-	"`/shieldsup` — raise project filesystem shields\n" +
-	"`/shieldsdown` — lower project filesystem shields\n" +
 	"`/clear` — start a fresh session\n" +
 	"`/kill` — close this session\n" +
 	"`/compact [focus]` — compact the context\n" +

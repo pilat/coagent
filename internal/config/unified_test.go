@@ -264,29 +264,34 @@ func TestUnifiedConfig_EmptyIsValid(t *testing.T) {
 	assert.Empty(t, cfg.Providers)
 	assert.Empty(t, cfg.Models)
 	assert.True(t, cfg.Sandbox.Enabled)
-	assert.Empty(t, cfg.Sandbox.WritablePaths)
+	assert.Empty(t, cfg.Sandbox.Rules)
 }
 
 func TestUnifiedConfig_Sandbox(t *testing.T) {
 	path := writeConfig(t, `
 sandbox:
   enabled: true
-  writable_paths:
-    - ~/.cache
-    - /tmp/build-cache
+  rules:
+    - allow: ~/.cache
+      mode: rw
+    - allow: /tmp/build-cache
+      mode: rw
 `)
 
 	cfg, err := LoadUnifiedConfig(path, nil)
 	require.NoError(t, err)
 	assert.True(t, cfg.Sandbox.Enabled)
-	assert.Equal(t, []string{"~/.cache", "/tmp/build-cache"}, cfg.Sandbox.WritablePaths)
+	require.Len(t, cfg.Sandbox.Rules, 2)
+	assert.Equal(t, "~/.cache", cfg.Sandbox.Rules[0].Allow)
+	assert.Equal(t, "/tmp/build-cache", cfg.Sandbox.Rules[1].Allow)
 }
 
 func TestUnifiedConfig_SandboxDefaultsEnabledWhenOmitted(t *testing.T) {
 	path := writeConfig(t, `
 sandbox:
-  writable_paths:
-    - ~/.cache
+  rules:
+    - allow: ~/.cache
+      mode: rw
 `)
 
 	cfg, err := LoadUnifiedConfig(path, nil)

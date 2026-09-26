@@ -15,6 +15,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/pilat/coagent/internal/llm"
 	"github.com/pilat/coagent/internal/llmwire"
 	"github.com/pilat/coagent/internal/loader"
 	"github.com/pilat/coagent/internal/sessionstore"
@@ -82,13 +83,14 @@ func (m *compactionMockLLM) Chat(
 	}
 	return m.response, nil
 }
-func (m *compactionMockLLM) Model() string             { return testMockModel }
-func (m *compactionMockLLM) APIKey() string            { return "" }
-func (m *compactionMockLLM) Close() error              { return nil }
-func (m *compactionMockLLM) Provider() string          { return testMockModel }
-func (m *compactionMockLLM) ContextWindow() int        { return m.contextWindow }
-func (m *compactionMockLLM) SetReasoningLevel(string)  {}
-func (m *compactionMockLLM) GetReasoningLevel() string { return testReasoningLvl }
+func (m *compactionMockLLM) Model() string                          { return testMockModel }
+func (m *compactionMockLLM) APIKey() string                         { return "" }
+func (m *compactionMockLLM) Close() error                           { return nil }
+func (m *compactionMockLLM) Provider() string                       { return testMockModel }
+func (m *compactionMockLLM) ContextWindow() int                     { return m.contextWindow }
+func (m *compactionMockLLM) SetReasoningLevel(string)               {}
+func (m *compactionMockLLM) SetImageAuthorizer(llm.ImageAuthorizer) {}
+func (m *compactionMockLLM) GetReasoningLevel() string              { return testReasoningLvl }
 
 func (m *compactionMockLLM) SetSessionID(id string) {}
 

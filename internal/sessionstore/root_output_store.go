@@ -135,7 +135,6 @@ func (s *store) replaceManagerRoot(
 
 	newRecord, err := insertManagerRoot(ctx, tx, ManagerRootCreate{
 		ProjectID: old.ProjectID, Model: old.Model, ReasoningLevel: old.ReasoningLevel, Attributes: old.Attributes,
-		ShieldsUp: old.ShieldsUp,
 	}, now)
 	if err != nil {
 		return nil, nil, err
@@ -229,10 +228,10 @@ func insertManagerRoot(
 
 	result, err := tx.ExecContext(ctx, `
 		INSERT INTO sessions (project_id, model, reasoning_level, attributes, agent_type,
-			created_at, updated_at, episode_started_at, shields_up)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			created_at, updated_at, episode_started_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
 		create.ProjectID, create.Model, create.ReasoningLevel, string(attrs), rootAgentType,
-		now, now, episodeStartedAt, create.ShieldsUp)
+		now, now, episodeStartedAt)
 	if err != nil {
 		return nil, fmt.Errorf("insert manager root: %w", err)
 	}
@@ -245,7 +244,7 @@ func insertManagerRoot(
 	return &SessionRecord{
 		ID: id, ProjectID: create.ProjectID, Model: create.Model, ReasoningLevel: create.ReasoningLevel,
 		AgentType: rootAgentType, Status: SessionStatusActive, Attributes: cloneAttributes(create.Attributes),
-		CreatedAt: now, UpdatedAt: now, ShieldsUp: create.ShieldsUp,
+		CreatedAt: now, UpdatedAt: now,
 	}, nil
 }
 

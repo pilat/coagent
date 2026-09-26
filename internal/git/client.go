@@ -88,6 +88,7 @@ func (c *client) Clone(ctx context.Context, repoURL, destPath string) error {
 	if err != nil {
 		return fmt.Errorf("construct git clone: %w", err)
 	}
+	defer procexec.CloseExtraFiles(cmd)
 
 	cmd.WaitDelay = gitWaitDelay
 
@@ -112,6 +113,7 @@ func (c *client) Pull(ctx context.Context, repoPath string) error {
 	if err != nil {
 		return fmt.Errorf("construct git pull: %w", err)
 	}
+	defer procexec.CloseExtraFiles(cmd)
 
 	cmd.WaitDelay = gitWaitDelay
 
@@ -135,6 +137,7 @@ func (c *client) IsCloned(ctx context.Context, repoPath string) bool {
 	if err != nil {
 		return false
 	}
+	defer procexec.CloseExtraFiles(cmd)
 
 	if err := cmd.Run(); err != nil {
 		return false
@@ -155,6 +158,7 @@ func (c *client) HealthCheck(ctx context.Context, repoPath string) error {
 	if err != nil {
 		return fmt.Errorf("construct git fsck: %w", err)
 	}
+	defer procexec.CloseExtraFiles(cmd)
 
 	cmd.WaitDelay = gitWaitDelay
 
@@ -175,6 +179,7 @@ func (c *client) GetRemoteURL(ctx context.Context, repoPath string) (string, err
 	if err != nil {
 		return "", fmt.Errorf("construct git remote lookup: %w", err)
 	}
+	defer procexec.CloseExtraFiles(cmd)
 
 	output, err := cmd.Output()
 	if err != nil {
@@ -190,7 +195,7 @@ func (c *client) command(ctx context.Context, workDir string, env []string, args
 		cmd.Dir = workDir
 		cmd.Env = env
 
-		return cmd, nil
+		return procexec.Unprivileged(cmd), nil
 	}
 
 	cmd, err := c.runner.Command(ctx, procexec.Request{

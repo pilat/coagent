@@ -322,10 +322,6 @@ func (s *svc) Start(ctx context.Context) error {
 		return fmt.Errorf("finish interrupted kills: %w", err)
 	}
 
-	if err := s.finishInterruptedShieldRaises(ctx); err != nil {
-		return err
-	}
-
 	// /stop is a durable two-phase park. If the process died after writing
 	// stopping, finish the same idempotent operation before any recovery sweep can
 	// restart work from that tree. An explicit stop whose terminal output is still
@@ -376,72 +372,6 @@ func (s *svc) Start(ctx context.Context) error {
 func (s *svc) recoverProcessInterruptions(ctx context.Context) error {
 	if _, err := s.processSvc.InterruptNonterminal(ctx); err != nil {
 		return fmt.Errorf("interrupt nonterminal processes: %w", err)
-	}
-
-	return nil
-}
-
-//nolint:wsl_v5 // Recovery keeps each durable phase transition adjacent to its side effect.
-func (s *svc) finishInterruptedShieldRaises(ctx context.Context) error {
-	raises, err := s.lifecycleStore.SelectInterruptedShieldRaises(ctx)
-	if err != nil {
-		return fmt.Errorf("select interrupted shield raises: %w", err)
-	}
-
-	for _, raise := range raises {
-		unlock, err := s.lockSessionTree(ctx, raise.SessionID)
-		if err != nil {
-			return fmt.Errorf("lock interrupted shield raise %d: %w", raise.InputID, err)
-		}
-
-		record, err := s.sessionStore.GetSession(ctx, raise.SessionID)
-		if err != nil {
-			unlock()
-
-			return fmt.Errorf("load interrupted shield raise %d: %w", raise.InputID, err)
-		}
-		if record.Status == sessionstore.SessionStatusStopping {
-			if err := s.stopTreeCleanup(ctx, raise.SessionID, stopTreeOptions{
-				keepRootStopping: true, preserveShieldCommands: true,
-			}); err != nil {
-				unlock()
-
-				return fmt.Errorf("recover shield raise tree %d: %w", raise.SessionID, err)
-			}
-		}
-		if err := s.retireShieldPolicy(ctx, raise.SessionID); err != nil {
-			unlock()
-
-			return err
-		}
-		commit, err := s.lifecycleStore.CompleteShieldRaise(ctx, raise.SessionID, raise.InputID)
-		if err != nil {
-			unlock()
-
-			return fmt.Errorf("complete interrupted shield raise %d: %w", raise.InputID, err)
-		}
-		s.wakeShieldOutput(ctx, commit)
-		if err := s.handlePendingShieldCommandsLocked(ctx, raise.SessionID, false); err != nil {
-			unlock()
-
-			return fmt.Errorf("resolve shield commands after raise %d: %w", raise.InputID, err)
-		}
-		unlock()
-	}
-
-	return nil
-}
-
-func (s *svc) finishPendingShieldCommands(ctx context.Context) error {
-	sessionIDs, err := s.inboxStore.ListRootsWithPendingShieldCommands(ctx)
-	if err != nil {
-		return fmt.Errorf("select pending shield commands: %w", err)
-	}
-
-	for _, sessionID := range sessionIDs {
-		if err := s.handlePendingShieldCommands(ctx, sessionID); err != nil {
-			return fmt.Errorf("recover pending shield commands for session %d: %w", sessionID, err)
-		}
 	}
 
 	return nil
@@ -537,10 +467,6 @@ func (s *svc) convergeStoppedSessions(
 }
 
 func (s *svc) finishRecoveredServices(ctx context.Context) error {
-	if err := s.finishPendingShieldCommands(ctx); err != nil {
-		return err
-	}
-
 	if s.budgetSvc != nil {
 		if s.progress != nil {
 			if err := s.progress.ReconcileArmedBudgets(ctx); err != nil {
@@ -704,10 +630,6 @@ func (s *svc) resumeRecoverableRoot(ctx context.Context, sessionID int64) (bool,
 
 	ctx = context.WithoutCancel(ctx)
 
-	if err := s.handlePendingShieldCommandsLocked(ctx, sessionID, false); err != nil {
-		return false, fmt.Errorf("recover shield command: %w", err)
-	}
-
 	record, err := s.sessionStore.GetSession(ctx, sessionID)
 	if err != nil {
 		return false, fmt.Errorf("load recoverable root: %w", err)
@@ -844,6 +766,9 @@ func (s *svc) warnKilledDescendant(ctx context.Context, link subagent.Link) {
 // a terminal link and no-ops, rather than racing to deliver a stray completion.
 // deadline bounds the terminal-mark retry across the whole cascade (zero = unbounded).
 func (s *svc) killSubagent(ctx context.Context, childID int64, deadline time.Time) {
+	if err := s.retireTreeToolResources(ctx, childID); err != nil {
+		logger.Ctx(ctx).Named("daemon.completion").Warn("retire_child_tools", zap.Error(err))
+	}
 	// Link-terminal must commit before the status write: it is the authoritative
 	// sweep signal, and MarkSessionKilled below hides a non-terminal link for good.
 	err := s.markLinkTerminalRetrying(ctx, deadline, childID, subagent.StateKilled, "", subagent.OutcomeKilled)

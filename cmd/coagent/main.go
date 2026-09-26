@@ -29,15 +29,14 @@ import (
 	"github.com/pilat/coagent/internal/logger"
 	"github.com/pilat/coagent/internal/managercontrol"
 	"github.com/pilat/coagent/internal/managers"
-	"github.com/pilat/coagent/internal/mcp"
 	"github.com/pilat/coagent/internal/mcpstore"
 	"github.com/pilat/coagent/internal/memory"
 	"github.com/pilat/coagent/internal/migrate"
 	"github.com/pilat/coagent/internal/procexec"
+	"github.com/pilat/coagent/internal/sandboxpolicy"
 	"github.com/pilat/coagent/internal/schedule"
 	"github.com/pilat/coagent/internal/session"
 	"github.com/pilat/coagent/internal/sessionstore"
-	"github.com/pilat/coagent/internal/shellenv"
 	"github.com/pilat/coagent/internal/subagent"
 	"github.com/pilat/coagent/internal/version"
 )
@@ -114,7 +113,28 @@ func main() {
 // run keeps os.Exit out of any deferred-cleanup scope: main calls it exactly
 // once, after every defer in this function has already unwound.
 func run() int {
-	return runWith(runtime.GOOS, os.Args[1:], backgroundprocess.RunGuardian, dispatch)
+	return runWith(
+		runtime.GOOS,
+		os.Args[1:],
+		runModes(
+			backgroundprocess.RunGuardian,
+		),
+		dispatch,
+	)
+}
+
+// runModes chains the hidden mode entry points: the first one that recognizes
+// the invocation handles it.
+func runModes(modes ...func(args []string) (bool, error)) func(args []string) (bool, error) {
+	return func(args []string) (bool, error) {
+		for _, mode := range modes {
+			if handled, err := mode(args); handled {
+				return true, err
+			}
+		}
+
+		return false, nil
+	}
 }
 
 // runWith is the entry seam with the platform injected. The platform guard is
@@ -315,8 +335,35 @@ func logConfigStatus(cfg *config.Config) {
 
 	log.Info("config loaded",
 		zap.Int("marketplaces", len(cfg.UnifiedConfig.Marketplaces)),
-		zap.Bool("write_sandbox_enabled", cfg.UnifiedConfig.Sandbox.Enabled),
+		zap.Bool("sandbox_enabled", cfg.UnifiedConfig.Sandbox.Enabled),
+		zap.Int("sandbox_global_rules", len(cfg.UnifiedConfig.Sandbox.Rules)),
+		zap.Int("sandbox_projects", len(cfg.UnifiedConfig.Sandbox.Projects)),
 	)
+
+	// coagent ships no built-in deny rule: an allow-only configuration is a
+	// legitimate operator choice, not a default. This warns so nobody assumes
+	// the boundary withholds credentials when it does not.
+	if cfg.UnifiedConfig.Sandbox.Enabled && !sandboxHasDenyRule(cfg.UnifiedConfig.Sandbox) {
+		log.Warn("sandbox enabled with no deny rules: every file the daemon user can read is readable by sessions")
+	}
+}
+
+func sandboxHasDenyRule(section sandboxpolicy.Section) bool {
+	for _, rule := range section.Rules {
+		if rule.Deny != "" {
+			return true
+		}
+	}
+
+	for _, project := range section.Projects {
+		for _, rule := range project.Rules {
+			if rule.Deny != "" {
+				return true
+			}
+		}
+	}
+
+	return false
 }
 
 // probeBashSandbox fails startup when Bash confinement is configured but the
@@ -504,8 +551,8 @@ type applyVerdictSender interface {
 	ConsumeConfigEditActivation(ctx context.Context, sessionID int64, callID string)
 }
 
-// startCore brings up everything below the control plane — shell activation, the
-// MCP pool, the database, the session factory and the daemon — registering each
+// startCore brings up everything below the control plane —
+// the database, the session factory and the daemon — registering each
 // component's stop closure the moment it exists.
 func startCore(
 	ctx context.Context,
@@ -520,14 +567,6 @@ func startCore(
 	if err != nil {
 		return nil, err
 	}
-
-	provider := shellenv.New()
-
-	a.onStop("shellenv", func(context.Context) error { return provider.Close() })
-
-	pool := mcp.NewPool(provider)
-
-	a.onStop("mcp.pool", func(context.Context) error { pool.Stop(); return nil })
 
 	cache := loader.NewMarketplaceCache(marketplaceGitClient)
 
@@ -557,16 +596,16 @@ func startCore(
 
 	scheduleSvc := schedule.NewService(scheduleStore)
 
-	factory := session.NewFactory(
+	factory := session.NewFactoryWithOptions(
 		cfg, secrets, curatedStore, sessionStore, sessionStore,
-		gitClient, pool, mcpRegistry, cache, provider,
+		gitClient, mcpRegistry, cache,
 	)
 
 	daemonSvc := daemon.New(
 		ctx, factory, daemonStore, sessionStore, sessionStore, sessionStore,
 		sessionStore, sessionStore, sessionStore, sessionStore,
 		linkStore, subagentTx, budgetSvc, sessionStore,
-		scheduleSvc, cfg, mcpRegistry, pool, applier,
+		scheduleSvc, cfg, mcpRegistry, applier,
 	)
 
 	controller := managercontrol.New(daemonSvc, daemonSvc, sessionStore, cfg, cache)
@@ -599,18 +638,32 @@ func newMarketplaceGitClient(_ context.Context, cfg *config.Config) (git.Client,
 		return nil, fmt.Errorf("create marketplace cache directory: %w", err)
 	}
 
+	policy, err := marketplacePolicy(cfg.UnifiedConfig, marketplaceDir)
+	if err != nil {
+		return nil, fmt.Errorf("compile marketplace sandbox policy: %w", err)
+	}
+
 	//nolint:contextcheck // Sandbox preflight owns a bounded process-wide context.
 	runner, err := bashsandbox.New(bashsandbox.Config{
-		Enabled:                     true,
-		WorkDir:                     marketplaceDir,
-		SessionKey:                  "marketplace",
-		ExcludeSessionWritableRoots: true,
+		Enabled:    true,
+		Policy:     policy,
+		WorkDir:    marketplaceDir,
+		SessionKey: "marketplace",
 	}, nil)
 	if err != nil {
 		return nil, fmt.Errorf("create marketplace sandbox: %w", err)
 	}
 
 	return git.NewSandboxed(procexec.Runner(runner)), nil
+}
+
+// marketplacePolicy confines the daemon's own marketplace Git operations. It is
+// an operator-owned action rather than a session, so it takes the operator's
+// global rules and no project rules of its own.
+func marketplacePolicy(unified *config.UnifiedConfig, dir string) (sandboxpolicy.Policy, error) {
+	return sandboxpolicy.Compile(sandboxpolicy.Request{
+		ProjectRoot: dir, WorkDir: dir, GlobalRules: unified.Sandbox.Rules,
+	})
 }
 
 func acquireInstanceLock() (*ctl.Lock, error) {

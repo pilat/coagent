@@ -23,14 +23,19 @@ type stubWorktreeBackend struct {
 	sendErr       error
 	namedProject  string
 	sentProjectID int64
+	sentAttrs     map[string]any
+	session       *sessionstore.SessionRecord
 }
 
-func (f *stubWorktreeBackend) Send(_ context.Context, projectID int64, _, _ string, _ map[string]any) (int64, error) {
+func (f *stubWorktreeBackend) Send(
+	_ context.Context, projectID int64, _, _ string, attrs map[string]any,
+) (int64, error) {
 	if f.sendErr != nil {
 		return 0, f.sendErr
 	}
 
 	f.sentProjectID = projectID
+	f.sentAttrs = attrs
 
 	return 77, nil
 }
@@ -46,7 +51,7 @@ func (f *stubWorktreeBackend) SendToSessionResolved(context.Context, int64, stri
 }
 
 func (f *stubWorktreeBackend) GetSession(context.Context, int64) (*sessionstore.SessionRecord, error) {
-	return nil, nil
+	return f.session, nil
 }
 
 func (f *stubWorktreeBackend) List(context.Context) ([]*sessionstore.SessionRecord, error) {
@@ -153,4 +158,45 @@ func TestCreateSession_WorktreeHappyPath(t *testing.T) {
 	assert.DirExists(t, projectpath.WorktreePath(
 		projectpath.ResolveWorktreesRoot(s.unifiedConfig()), repoRoot, "api",
 	))
+	assert.Equal(t, repoRoot, backend.sentAttrs["repo_root"])
+	assert.Equal(t, controllerapi.WorktreeOriginController,
+		backend.sentAttrs[controllerapi.SessionAttributeWorktreeOrigin])
+}
+
+func TestCreateSession_RejectsCallerSuppliedRepoRoot(t *testing.T) {
+	backend := &stubWorktreeBackend{}
+	s := worktreeSessionService(t, backend)
+	for _, data := range []controllerapi.SessionCreateData{
+		{WorkDir: t.TempDir(), RepoRoot: "/elsewhere"},
+		{WorkDir: t.TempDir(), Attributes: map[string]any{"repo_root": "/elsewhere"}},
+		{WorkDir: t.TempDir(), Attributes: map[string]any{
+			controllerapi.SessionAttributeWorktreeOrigin: controllerapi.WorktreeOriginController,
+		}},
+	} {
+		_, err := s.createSession(t.Context(), "telegram", data)
+		require.ErrorContains(t, err, "reserved for created worktrees")
+	}
+	assert.Nil(t, backend.sentAttrs)
+}
+
+func TestSetSessionAttributes_PreservesWorktreeRepoRoot(t *testing.T) {
+	backend := &stubWorktreeBackend{session: &sessionstore.SessionRecord{
+		Attributes: map[string]any{
+			controllerapi.SessionAttributeManagerID:      "telegram",
+			controllerapi.SessionAttributeWorktreeOrigin: controllerapi.WorktreeOriginController,
+			"repo_root": "/source",
+		},
+	}}
+	s := worktreeSessionService(t, backend)
+	data := controllerapi.SessionSetAttributesData{SessionID: 7, Attributes: map[string]any{"topic": 1}}
+	require.NoError(t, s.authorizeAttributeUpdate(t.Context(), "telegram", &data))
+	assert.Equal(t, "/source", data.Attributes["repo_root"])
+	assert.Equal(t, controllerapi.WorktreeOriginController,
+		data.Attributes[controllerapi.SessionAttributeWorktreeOrigin])
+
+	data.Attributes["repo_root"] = "/other"
+	require.ErrorContains(t, s.authorizeAttributeUpdate(t.Context(), "telegram", &data), "reserved")
+	delete(data.Attributes, "repo_root")
+	data.Attributes[controllerapi.SessionAttributeWorktreeOrigin] = "spoofed"
+	require.ErrorContains(t, s.authorizeAttributeUpdate(t.Context(), "telegram", &data), "reserved")
 }

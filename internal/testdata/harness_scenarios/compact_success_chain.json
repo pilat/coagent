@@ -48,7 +48,7 @@
       "content": "",
       "attributes": {
         "manager_id": "telegram:main",
-        "name": "002",
+        "name": "003",
         "work_dir": "<workdir>"
       },
       "source_key": "session:1:opened",
@@ -56,12 +56,12 @@
     },
     {
       "type": "message_persistent",
-      "content": "First answer.\n\n🤖 `fake-model` · iteration 2\n⌚ <elapsed> · 💰 $0.0 total",
+      "content": "First answer.\n\n🤖 `fake-model` · iteration 3",
       "attributes": {
         "manager_id": "telegram:main",
         "model_input_generation": 1
       },
-      "source_key": "message:4:final",
+      "source_key": "message:6:final",
       "model_input_generation": 1,
       "releases_input": true
     },
@@ -99,12 +99,12 @@
     },
     {
       "type": "message_replaceable",
-      "content": "**🟢 Working**\n\n🤖 `fake-model` · iteration 2\n⌚ <elapsed> · 💰 $0.0 total",
+      "content": "**🟢 Working**\n\n🤖 `fake-model` · iteration 3\n⌚ <elapsed> · 💰 $0.0 total",
       "attributes": {
         "manager_id": "telegram:main",
         "model_input_generation": 1
       },
-      "source_key": "progress:change:message:5:g1:shields:false:i0",
+      "source_key": "progress:change:message:7:g1",
       "model_input_generation": 1,
       "previous_message_type": "message_persistent",
       "previous_model_input_generation": 1,

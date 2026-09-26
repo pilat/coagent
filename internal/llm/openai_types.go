@@ -189,6 +189,7 @@ type openaiClient struct {
 	maxTokens        int
 	contextWindow    int
 	inputModalities  []string                 // catalog-resolved; nil/absent "image" means no pixels are ever sent
+	imageAuthorizer  ImageAuthorizer          // session authority re-checked per deferred attachment read
 	replayReasoning  bool                     // echo reasoning_details back (OpenRouter's tool-calling contract)
 	pricing          *config.ModelPricing     // catalog-resolved; nil bills the call at zero
 	reasoning        *config.ReasoningSpec    // catalog-resolved reasoning capability
