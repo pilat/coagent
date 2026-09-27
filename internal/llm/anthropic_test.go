@@ -106,6 +106,39 @@ func TestAnthropicConvertMessages_ToolResultNonJSON(t *testing.T) {
 	assert.Contains(t, result[0].Content[0].OfToolResult.Content[0].OfText.Text, "plain text output")
 }
 
+// The provider conversion has no provenance channel of its own: trusted
+// tool-result JSON passes through byte-identical, and the untrusted-content
+// envelope for external sources is the plain text the session formatter
+// already baked into the payload before persistence.
+func TestAnthropicConvertMessages_ToolResultWrappingIsTextualOnly(t *testing.T) {
+	trusted := []llmwire.Message{
+		{Role: "tool", Content: `{"output":"file contents"}`, ToolCallID: "tc_1"},
+	}
+	trustedResult := convertAnthropicMessages(trusted)
+	require.Len(t, trustedResult, 1)
+	assert.Contains(t, trustedResult[0].Content[0].OfToolResult.Content[0].OfText.Text, "file contents")
+
+	wrapped := []llmwire.Message{{
+		Role: "tool",
+		Content: "<<<BEGIN_UNTRUSTED_EXTERNAL_DATA id=\"0123456789abcdef\">>>\npage\n" +
+			"<<<END_UNTRUSTED_EXTERNAL_DATA id=\"0123456789abcdef\">>>",
+		ToolCallID: "tc_2",
+	}}
+	wrappedResult := convertAnthropicMessages(wrapped)
+	require.Len(t, wrappedResult, 1)
+
+	// Non-JSON wrapper text rides inside {"output": "..."} unchanged. Go's JSON
+	// encoder escapes < and > in the wire form, so assert on the decoded text
+	// the provider would render.
+	var payload struct {
+		Output string `json:"output"`
+	}
+	require.NoError(t, json.Unmarshal(
+		[]byte(wrappedResult[0].Content[0].OfToolResult.Content[0].OfText.Text), &payload,
+	))
+	assert.Equal(t, wrapped[0].Content, payload.Output)
+}
+
 // --- Cache marker tests ---
 
 func TestCacheMarkers_SystemPrompt(t *testing.T) {

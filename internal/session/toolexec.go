@@ -9,6 +9,7 @@ import (
 
 	"go.uber.org/zap"
 
+	"github.com/pilat/coagent/internal/id"
 	"github.com/pilat/coagent/internal/llmwire"
 	"github.com/pilat/coagent/internal/logger"
 	"github.com/pilat/coagent/internal/sessionstore"
@@ -23,6 +24,7 @@ type toolCallResultItem struct {
 	index          int
 	toolCall       llmwire.ToolCall
 	content        string
+	untrusted      bool
 	images         []llmwire.ImageRef
 	directMessages []string
 	outcome        toolexec.Outcome
@@ -70,17 +72,28 @@ func batchConflict(batch []llmwire.ToolCall, call llmwire.ToolCall) error {
 	return nil
 }
 
-// failedItem builds an item for a call that ran to a typed failure.
-func failedItem(index int, tc llmwire.ToolCall, err error) toolexec.Invocation[toolCallResultItem] {
+// failedItem builds an item for a call that ran to a typed failure. The raw
+// error stays model-visible as "Error: ..."; external-source calls route
+// through the same dynamic budget as typed results before the wrapper. All
+// failure classes of an external-source call render inside the frame — even
+// host-authored ones like unknown-tool — over-marking on purpose.
+func failedItem(index int, tc llmwire.ToolCall, err error, contextWindow int) toolexec.Invocation[toolCallResultItem] {
+	content := fmt.Sprintf("Error: %v", err)
+
+	if tool.IsUntrustedOutputSource(tc.Name) {
+		content = wrapUntrustedContent(content, contextWindow)
+	}
+
 	return toolexec.Invocation[toolCallResultItem]{
 		Outcome: toolexec.OutcomeFailed,
 		Err:     err,
 		Result: toolCallResultItem{
-			index:    index,
-			toolCall: tc,
-			content:  fmt.Sprintf("Error: %v", err),
-			outcome:  toolexec.OutcomeFailed,
-			err:      err,
+			index:     index,
+			toolCall:  tc,
+			content:   content,
+			untrusted: tool.IsUntrustedOutputSource(tc.Name),
+			outcome:   toolexec.OutcomeFailed,
+			err:       err,
 		},
 	}
 }
@@ -90,6 +103,7 @@ func failedItem(index int, tc llmwire.ToolCall, err error) toolexec.Invocation[t
 // them to the transcript.
 func executeToolCallsInternal(ctx context.Context, agent *svc, toolCalls []llmwire.ToolCall) []toolCallResultItem {
 	log := logger.Ctx(ctx).Named("session.toolexec")
+	contextWindow := agent.contextWindow()
 
 	results := make([]toolCallResultItem, len(toolCalls))
 
@@ -105,7 +119,7 @@ func executeToolCallsInternal(ctx context.Context, agent *svc, toolCalls []llmwi
 			for i, call := range toolCalls {
 				inv := failedItem(i, call, fmt.Errorf(
 					"%s must be invoked alone in its activated command turn", agent.currentActivation.ToolID,
-				))
+				), contextWindow)
 				results[i] = inv.Result
 			}
 
@@ -135,11 +149,11 @@ func executeToolCallsInternal(ctx context.Context, agent *svc, toolCalls []llmwi
 		if err := batchConflict(toolCalls, pc.call); err != nil {
 			log.Warn("tool_conflict", zap.String("name", pc.call.Name), zap.Error(err))
 
-			return failedItem(idx, pc.call, err)
+			return failedItem(idx, pc.call, err, contextWindow)
 		}
 
 		if pc.tool == nil {
-			return failedItem(idx, pc.call, fmt.Errorf("unknown tool: %s", pc.call.Name))
+			return failedItem(idx, pc.call, fmt.Errorf("unknown tool: %s", pc.call.Name), contextWindow)
 		}
 
 		// Bind this call's id to the callback context so tools (e.g. task) can
@@ -242,7 +256,7 @@ func executeOneTool(
 	}()
 
 	if outcome.panic != nil {
-		return failedItem(index, tc, fmt.Errorf("panic in tool %s: %v", tc.Name, outcome.panic))
+		return failedItem(index, tc, fmt.Errorf("panic in tool %s: %v", tc.Name, outcome.panic), contextWindow)
 	}
 
 	return outcome.inv
@@ -267,17 +281,18 @@ func runResolvedTool(
 			}
 		}
 
-		return failedItem(index, tc, fmt.Errorf("execute tool %s: %w", tc.Name, err))
+		return failedItem(index, tc, fmt.Errorf("execute tool %s: %w", tc.Name, err), contextWindow)
 	}
 
 	if result == nil {
-		return failedItem(index, tc, fmt.Errorf("execute tool %s: tool returned nil result", tc.Name))
+		return failedItem(index, tc, fmt.Errorf("execute tool %s: tool returned nil result", tc.Name), contextWindow)
 	}
 
 	item := toolCallResultItem{
 		index:          index,
 		toolCall:       tc,
 		content:        formatToolResult(result, contextWindow),
+		untrusted:      result.Untrusted,
 		images:         result.Images,
 		directMessages: result.DirectMessages,
 		outcome:        toolexec.OutcomeExecuted,
@@ -377,6 +392,10 @@ func recordToolResults(
 		direct = capDirectOutput(direct)
 
 		content := r.content
+		if r.untrusted {
+			content = identifyUntrustedContent(content)
+		}
+
 		if i == warnIdx {
 			content = prependLoopWarning(ctx, agent, postAction, r.toolCall.Name, content)
 		}
@@ -543,22 +562,66 @@ func countUniqueOutcomes(window []toolRecord) int {
 	return len(seen)
 }
 
+// External titles and notices share the payload budget; local results retain
+// their historical output-only truncation.
 func formatToolResult(result *tool.Result, contextWindow int) string {
+	if result.Untrusted {
+		var sb strings.Builder
+
+		appendResultTitle(&sb, result.Title)
+		sb.WriteString(result.Output)
+		appendTruncationNotice(&sb, result)
+
+		return wrapUntrustedContent(sb.String(), contextWindow)
+	}
+
 	var sb strings.Builder
 
-	if result.Title != "" {
-		fmt.Fprintf(&sb, "[%s]\n", result.Title)
-	}
-
-	output := truncateHeadTail(result.Output, tool.DynamicToolResultBudgetForWindow(contextWindow))
-	sb.WriteString(output)
-
-	// Add truncation notice from tools that self-report truncation
-	if result.Metadata != nil {
-		if t, ok := result.Metadata["truncated"].(bool); ok && t {
-			fmt.Fprintf(&sb, "\n(output truncated: %d bytes total)", len(result.Output))
-		}
-	}
+	appendResultTitle(&sb, result.Title)
+	sb.WriteString(truncateHeadTail(result.Output, tool.DynamicToolResultBudgetForWindow(contextWindow)))
+	appendTruncationNotice(&sb, result)
 
 	return sb.String()
+}
+
+func appendResultTitle(sb *strings.Builder, title string) {
+	if title != "" {
+		fmt.Fprintf(sb, "[%s]\n", title)
+	}
+}
+
+func appendTruncationNotice(sb *strings.Builder, result *tool.Result) {
+	// Tools self-report truncation in metadata; the notice counts the raw bytes.
+	if result.Metadata != nil {
+		if t, ok := result.Metadata["truncated"].(bool); ok && t {
+			fmt.Fprintf(sb, "\n(output truncated: %d bytes total)", len(result.Output))
+		}
+	}
+}
+
+// Truncate before escaping so a cut cannot recreate a boundary token.
+func wrapUntrustedContent(payload string, contextWindow int) string {
+	begin := tool.UntrustedContentBegin
+	end := tool.UntrustedContentEnd
+
+	payload = truncateHeadTail(payload, tool.DynamicToolResultBudgetForWindow(contextWindow))
+
+	for _, marker := range []string{begin, end} {
+		prefix := strings.TrimSuffix(marker, ">>>")
+		payload = strings.ReplaceAll(payload, prefix, prefix+"_ESCAPED")
+	}
+
+	return begin + "\n" + payload + "\n" + end
+}
+
+// Add randomness after loop fingerprinting and before persistence, so repeated
+// results still compare equal and replay never regenerates a boundary ID.
+func identifyUntrustedContent(content string) string {
+	markerID := id.Generate()
+	payload := strings.TrimSuffix(strings.TrimPrefix(content, tool.UntrustedContentBegin+"\n"),
+		"\n"+tool.UntrustedContentEnd)
+
+	return fmt.Sprintf("%s id=%q>>>\n%s\n%s id=%q>>>",
+		strings.TrimSuffix(tool.UntrustedContentBegin, ">>>"), markerID, payload,
+		strings.TrimSuffix(tool.UntrustedContentEnd, ">>>"), markerID)
 }

@@ -183,6 +183,15 @@ A diversity-based detector that catches repetitive tool-call patterns and forces
 **tool**:
 A capability the agent invokes — id, description, parameters, execute. Three origins: **built-in** (bash, read, edit, …), **MCP** (discovered from external servers), and **control-plane** (`task`, `schedule` — registered onto the live registry from outside and owned by the package that holds their state).
 
+**untrusted tool output**:
+Text returned by a web page, search provider, MCP server, or network-derived
+command output that coagent treats as evidence rather than authority. Instructions
+inside it cannot override system, user/project or task instructions. Host-added
+markers are model-facing provenance hints, not a sandbox or formal security
+boundary.
+_Avoid_: treating external content as tool authority; **prompt injection** names
+the attack, not the content category.
+
 **parallel-safe tool**:
 A tool whose Execute may run concurrently with its siblings in one assistant response, declared in code by `ParallelSafe() bool` (a compile-time contract, not an annotation — [ADR-0040](adr/0040-tool-calls-use-declared-ordered-scheduling.md)). The initial allowlist is `read`, `ls`, `glob`, `grep`, `webfetch`, `websearch`, `todoread`, `task`; MCP and every unlisted tool are serialized.
 _Avoid_: thread-safe (an implementation property, not the declared scheduling policy), batch-able.

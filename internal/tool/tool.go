@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"sync"
 
 	"github.com/pilat/coagent/internal/llmwire"
@@ -41,6 +42,27 @@ var externalCallTools = map[string]bool{
 // IsExternalCall reports whether a tool's pending call waits on the outside
 // world rather than on the loop.
 func IsExternalCall(name string) bool { return externalCallTools[name] }
+
+// Untrusted marker tokens frame model-visible external tool output. They are a
+// provenance hint for the model, not a sandbox or security boundary.
+const (
+	UntrustedContentBegin = "<<<BEGIN_UNTRUSTED_EXTERNAL_DATA>>>"
+	UntrustedContentEnd   = "<<<END_UNTRUSTED_EXTERNAL_DATA>>>"
+)
+
+// untrustedOutputTools are the built-in tool IDs whose direct output the host
+// classifies as external content; MCP tools carry the mcp__ prefix instead.
+var untrustedOutputTools = map[string]bool{
+	"webfetch":  true,
+	"websearch": true,
+}
+
+// IsUntrustedOutputSource reports whether a tool ID is a source the runtime
+// identifies as external: the built-in web tools, or any MCP tool. Direct
+// errors from these never produced a typed result and need the same treatment.
+func IsUntrustedOutputSource(name string) bool {
+	return untrustedOutputTools[name] || strings.HasPrefix(name, "mcp__")
+}
 
 // ErrSuspend is returned by tools (e.g., sleep) to signal that the agent loop
 // should exit without recording the tool result. The session is checkpointed
@@ -108,6 +130,10 @@ type Result struct {
 	// output text or metadata to classify results.
 	IsError        bool     `json:"is_error,omitempty"`
 	DirectMessages []string `json:"direct_messages,omitempty"`
+	// Untrusted marks externally sourced content (web, search, MCP) as evidence
+	// rather than authority. Execution-time only: never serialized, never
+	// persisted, so the durable transcript schema stays untouched.
+	Untrusted bool `json:"-"`
 }
 
 // ActivationIndex returns the exact command owner map for a registry. Duplicate

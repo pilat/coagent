@@ -191,6 +191,106 @@ func TestBuildToolsSection_EmptyRegistry(t *testing.T) {
 	assert.NotContains(t, result, "# PARALLEL EXECUTION")
 	assert.NotContains(t, result, "# SCHEDULING")
 	assert.NotContains(t, result, "Sub-agents:")
+	assert.NotContains(t, result, "# UNTRUSTED CONTENT")
+}
+
+func TestBuildToolsSection_UntrustedContentGuidance(t *testing.T) {
+	tests := []struct {
+		name         string
+		tools        []string
+		nativeSearch bool
+		want         bool
+	}{
+		{
+			name:  "bash only session still gets the guidance",
+			tools: []string{"bash"},
+			want:  true,
+		},
+		{
+			name:  "webfetch only",
+			tools: []string{"webfetch"},
+			want:  true,
+		},
+		{
+			name:  "websearch only",
+			tools: []string{"websearch"},
+			want:  true,
+		},
+		{
+			name:  "non-search mcp session",
+			tools: []string{"mcp__context7__query-docs"},
+			want:  true,
+		},
+		{
+			name:         "usable native search",
+			tools:        []string{"read"},
+			nativeSearch: true,
+			want:         true,
+		},
+		{
+			name:         "native search without any client-side tool stays silent",
+			tools:        nil,
+			nativeSearch: true,
+			want:         false,
+		},
+		{
+			name:  "no relevant source",
+			tools: []string{"read", "write"},
+			want:  false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			reg := tool.NewRegistry()
+			for _, id := range tt.tools {
+				reg.Register(&stubTool{id: id})
+			}
+
+			result := buildToolsSection(reg, tt.nativeSearch)
+
+			if tt.want {
+				assert.Contains(t, result, "# UNTRUSTED CONTENT")
+				assert.Contains(t, result, "curl")
+				assert.Contains(t, result, "wget")
+				assert.Contains(t, result, "<<<BEGIN_UNTRUSTED_EXTERNAL_DATA id=\"...\">>>")
+				assert.Contains(t, result, "<<<END_UNTRUSTED_EXTERNAL_DATA id=\"...\">>>")
+				assert.Contains(t, result, "independently validated")
+				assert.Contains(t, result, "may also contain ordinary local",
+					"mixed batches wrap trusted fragments too; the guidance must say so")
+				assert.NotContains(t, result, "must be ignored")
+			} else {
+				assert.NotContains(t, result, "# UNTRUSTED CONTENT")
+			}
+		})
+	}
+}
+
+// The native-search advertisement must never claim search for a request the
+// driver would not inject it into: a toolless registry stays silent even when
+// the model triplet supports native search.
+func TestBuildToolsSection_NativeSearchRequiresAClientSideTool(t *testing.T) {
+	empty := buildToolsSection(tool.NewRegistry(), true)
+	assert.NotContains(t, empty, "# WEB SEARCH")
+	assert.NotContains(t, empty, "# UNTRUSTED CONTENT")
+
+	populated := tool.NewRegistry()
+	populated.Register(&stubTool{id: "read"})
+	withTool := buildToolsSection(populated, true)
+	assert.Contains(t, withTool, "# WEB SEARCH")
+	assert.Contains(t, withTool, "provided natively by your model provider")
+	assert.Contains(t, withTool, "# UNTRUSTED CONTENT")
+}
+
+func TestBuildToolsSection_UntrustedGuidanceIsDeterministic(t *testing.T) {
+	reg := tool.NewRegistry()
+	reg.Register(&stubTool{id: "bash"})
+	reg.Register(&stubTool{id: "webfetch"})
+
+	first := buildToolsSection(reg, false)
+	second := buildToolsSection(reg, false)
+
+	require.Equal(t, first, second)
 }
 
 // stubMemoryStore serves the prompt builder's only read.
