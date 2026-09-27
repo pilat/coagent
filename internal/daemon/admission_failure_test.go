@@ -46,11 +46,11 @@ func TestDrainPendingRunners_DerivesPromotedRecoveryAfterCapacityWait(t *testing
 
 	reserved := admission.MaxTotal
 	for range reserved {
-		require.True(t, mgr.admit.TryAdmit(admission.Parent, 0))
+		require.True(t, mgr.reserveRunnerForTest(admission.Parent, 0))
 	}
 	t.Cleanup(func() {
 		for range reserved {
-			mgr.admit.Release(admission.Parent, 0)
+			mgr.releaseRunnerForTest(admission.Parent, 0)
 		}
 		mgr.Shutdown(3 * time.Second)
 	})
@@ -69,9 +69,9 @@ func TestDrainPendingRunners_DerivesPromotedRecoveryAfterCapacityWait(t *testing
 
 	require.NoError(t, mgr.ensureSessionRunner(ctx, rec.ID))
 	assert.False(t, mgr.HasActiveLoop(rec.ID))
-	require.Equal(t, 1, mgr.pendingQueue.Len())
+	require.Equal(t, 1, mgr.supervisor.QueuedRoots())
 
-	mgr.admit.Release(admission.Parent, 0)
+	mgr.releaseRunnerForTest(admission.Parent, 0)
 	reserved--
 	mgr.drainPendingRunners(ctx)
 	waitForState(t, events, rec.ID, controllerapi.StateIdle, 3*time.Second)
@@ -105,7 +105,7 @@ func TestDrainQueue_UnknownChildStateDefers(t *testing.T) {
 		require.NoError(t, h.links.InsertSubagentLink(h.ctx, subagent.Link{
 			ParentID: parent.ID, ChildID: childID, TaskCallID: callID,
 		}))
-		h.mgr.enqueueChild(h.ctx, childID, parent.ID, "/tmp", h.projectID)
+		h.mgr.supervisor.QueueChild(h.ctx, childID, parent.ID, "/tmp", h.projectID)
 	}
 
 	require.Equal(t, 3, h.queueLen())
@@ -118,14 +118,14 @@ func TestDrainQueue_UnknownChildStateDefers(t *testing.T) {
 	h.mgr.drainQueue(ctx)
 
 	assert.Equal(t, 3, h.queueLen(), "nothing is dropped and nothing recursed")
-	assert.Zero(t, h.mgr.runners.Len(), "no runner was created")
+	assert.Zero(t, h.mgr.supervisor.Count(), "no runner was created")
 	assert.NotEmpty(t, logs.FilterMessage("queued_child_state_unknown").All())
 
 	flaky.mu.Lock()
 	flaky.getLinkFailFrom = 0
 	flaky.mu.Unlock()
 	require.Eventually(t, func() bool {
-		return h.queueLen() < 3 || h.mgr.runners.Len() > 0
+		return h.queueLen() < 3 || h.mgr.supervisor.Count() > 0
 	}, time.Second, 10*time.Millisecond, "the delayed retry must not wait for another slot release")
 }
 

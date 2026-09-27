@@ -31,6 +31,7 @@ import (
 	"github.com/pilat/coagent/internal/sessionlifecycle"
 	"github.com/pilat/coagent/internal/sessionstore"
 	"github.com/pilat/coagent/internal/subagent"
+	"github.com/pilat/coagent/internal/tool"
 )
 
 //nolint:interfacebloat // the daemon's whole operation surface; the Controller contract it backs is equally wide by design
@@ -86,28 +87,27 @@ var (
 )
 
 type svc struct {
-	runners         sessionlifecycle.Registry[runner]
-	factory         session.Factory
-	store           Store
-	sessionStore    sessionstore.OrchestrationStore
-	inboxStore      sessionstore.InboxStore
-	activationStore sessionstore.ActivationStore
-	runtimeStore    sessionstore.AgentRuntimeStore
-	managerOutputs  sessionstore.ManagerOutputStore
-	managerRoots    sessionstore.ManagerRootTransactions
-	lifecycleStore  sessionstore.SessionLifecycleStore
-	modelInputs     sessionstore.ModelInputStore
-	inputFactory    inputruntime.Factory
-	links           subagent.Store
-	subagents       subagent.Transactions
-	scheduleSvc     schedule.Service
-	admit           admission.Governor
-	childQueue      sessionlifecycle.Queue[queuedChild]
-	pendingQueue    sessionlifecycle.Queue[queuedRunner]
-	pubsub          sessionbus.Bus
-	defaultModelFn  func() string
-	modelCatalog    []modelInfo
-	modelEntries    []config.ModelEntry
+	supervisor       sessionlifecycle.Supervisor[queuedSessionInput]
+	toolResources    tool.ResourceLifecycle
+	budgetReconciler sessionlifecycle.BudgetReconciler
+	factory          session.Factory
+	store            Store
+	sessionStore     sessionstore.OrchestrationStore
+	inboxStore       sessionstore.InboxStore
+	activationStore  sessionstore.ActivationStore
+	runtimeStore     sessionstore.AgentRuntimeStore
+	managerOutputs   sessionstore.ManagerOutputStore
+	managerRoots     sessionstore.ManagerRootTransactions
+	lifecycleStore   sessionstore.SessionLifecycleStore
+	modelInputs      sessionstore.ModelInputStore
+	inputFactory     inputruntime.Factory
+	links            subagent.Store
+	subagents        subagent.Transactions
+	scheduleSvc      schedule.Service
+	pubsub           sessionbus.Bus
+	defaultModelFn   func() string
+	modelCatalog     []modelInfo
+	modelEntries     []config.ModelEntry
 	// searchUnconfigured is the boot-time discoverability verdict: no
 	// tools.search section and no native-capable model.
 	searchUnconfigured bool
@@ -119,13 +119,10 @@ type svc struct {
 	recovery           sessionlifecycle.Recovery
 	stopper            sessionlifecycle.Stopper
 	completions        sessionlifecycle.Completions
-	launcher           sessionlifecycle.Launcher[queuedSessionInput]
 	progress           progressruntime.Service
 	budgetCtx          context.Context //nolint:containedctx // Daemon lifetime context for joined park workers.
 	budgetCancel       context.CancelFunc
 	budgetWG           sync.WaitGroup
-	treeStore          sessionstore.OrchestrationStore
-	treeLocks          sync.Map
 	// Tree locks precede routeMu and childMu; never acquire a
 	// tree lock while holding one of those narrower locks.
 	// routeMu linearizes owner claims with replacement-session creation. The
@@ -141,11 +138,6 @@ type svc struct {
 	processSvc        backgroundprocess.Service
 	processRecoveryMu sync.Mutex
 	processRecovery   chan struct{}
-	workerCtx         context.Context //nolint:containedctx // Daemon lifetime context for joined workers.
-	workerCancel      context.CancelFunc
-	workerWG          sync.WaitGroup
-	queueRetryMu      sync.Mutex
-	queueRetryPending bool
 }
 
 // OutputStore exposes the narrow manager-delivery ledger without widening the
@@ -154,27 +146,11 @@ func (s *svc) OutputStore() sessionstore.ManagerOutputStore {
 	return s.managerOutputs
 }
 
-// queuedChild is a background child that could not be admitted immediately and
-// waits (in arrival order) for a slot to free. Durability comes from its
-// already-persisted subagent_links row (state 'spawned', inserted by Spawn before
-// admission) — the restart sweep re-runs it on crash; this slice is only the
-// in-memory ordering cache.
-type queuedChild struct {
-	sessionID int64
-	parentID  int64
-	workDir   string
-	projectID int64
-}
-
-type queuedRunner struct {
-	sessionID int64
-	workDir   string
-	projectID int64
-}
-
 func New(
 	ctx context.Context,
 	factory session.Factory,
+	processStore backgroundprocess.Store,
+	toolResources tool.ResourceLifecycle,
 	store Store,
 	sessionStore sessionstore.OrchestrationStore,
 	inboxStore inputruntime.Store,
@@ -191,14 +167,18 @@ func New(
 	cfg *config.Config,
 	mcpStore mcpstore.Store,
 	applier configapply.Service,
-) Service {
-	s, processSvc := newSvc(
+) (Service, error) {
+	s, err := newSvc(
 		ctx,
-		factory, store, sessionStore, inboxStore, runtimeStore,
+		factory, processStore, toolResources, store, sessionStore, inboxStore, runtimeStore,
 		managerOutputs, managerRoots, lifecycleStore, modelInputs,
 		links, subagents, budgetSvc, progressStore,
 		scheduleSvc, cfg.DefaultModel,
 	)
+	if err != nil {
+		return nil, fmt.Errorf("create daemon: %w", err)
+	}
+
 	s.mcpStore = mcpStore
 	s.applier = applier
 	s.searchUnconfigured = searchUnconfigured(cfg.UnifiedConfig)
@@ -207,16 +187,14 @@ func New(
 		s.loadModelCatalog(cfg.UnifiedConfig.Models)
 	}
 
-	if processSvc != nil {
-		s.factory = session.WithFactoryProcessService(factory, processSvc)
-	}
-
-	return s
+	return s, nil
 }
 
 func newSvc(
 	ctx context.Context,
 	factory session.Factory,
+	processStore backgroundprocess.Store,
+	toolResources tool.ResourceLifecycle,
 	store Store,
 	sessionStore sessionstore.OrchestrationStore,
 	inboxStore inputruntime.Store,
@@ -231,15 +209,18 @@ func newSvc(
 	progressStore progressruntime.Store,
 	scheduleSvc schedule.Service,
 	defaultModelFn func() string,
-) (*svc, backgroundprocess.Service) {
+) (*svc, error) {
+	if toolResources == nil {
+		return nil, errors.New("daemon requires tool resources")
+	}
+
 	budgetCtx, budgetCancel := context.WithCancel(context.Background())
-	workerCtx, workerCancel := context.WithCancel(context.Background())
 	s := &svc{
-		runners:         sessionlifecycle.NewRegistry[runner](),
 		factory:         factory,
+		processStore:    processStore,
+		toolResources:   toolResources,
 		store:           store,
 		sessionStore:    sessionStore,
-		treeStore:       sessionStore,
 		inboxStore:      inboxStore,
 		activationStore: inboxStore,
 		runtimeStore:    runtimeStore,
@@ -253,9 +234,6 @@ func newSvc(
 		budgetSvc:       budgetSvc,
 		scheduleSvc:     scheduleSvc,
 		staged:          newStagedCalls(),
-		admit:           admission.New(),
-		childQueue:      sessionlifecycle.NewQueue[queuedChild](),
-		pendingQueue:    sessionlifecycle.NewQueue[queuedRunner](),
 		recovery:        sessionlifecycle.NewRecovery(),
 		stopper: sessionlifecycle.NewStopper(
 			sessionStore, lifecycleStore, managerOutputs, links,
@@ -265,33 +243,25 @@ func newSvc(
 		childCache:     make(map[int64]bool),
 		ownerCache:     make(map[int64]string),
 		deferNotices:   newDeferAnnouncements(),
-		workerCtx:      workerCtx,
-		workerCancel:   workerCancel,
 		budgetCtx:      budgetCtx,
 		budgetCancel:   budgetCancel,
 	}
-	s.progress = newProgressRuntime(progressStore, budgetSvc, s)
-	s.completions = s.newCompletionCoordinator()
-	s.launcher = sessionlifecycle.NewLauncher(
-		sessionStore, links, s.admit, s.runners,
-		s.ensureRunnerStartable, s.enqueueCapacityBlockedChild, s.runSession,
-	)
 
-	// Background Bash processes: the ledger lives in the daemon database; the
-	// coordinator routes terminal facts to owner or root sessions. The factory
-	// shares one lifecycle service so all session stacks admit through it.
-
-	var processSvc backgroundprocess.Service
-
-	if rawStore, ok := store.(interface{ DB() *sql.DB }); ok {
-		if db := rawStore.DB(); db != nil {
-			s.processStore = backgroundprocess.NewStore(db)
-			processSvc = s.newProcessService(ctx)
-			s.processSvc = processSvc
-		}
+	s.progress = newProgressRuntime(progressStore, s)
+	if budgetSvc != nil {
+		s.budgetReconciler = sessionlifecycle.NewBudgetReconciler(budgetSvc, s.startBudgetPark)
 	}
 
-	return s, processSvc
+	s.completions = s.newCompletionCoordinator()
+
+	s.supervisor = sessionlifecycle.NewSupervisor(
+		sessionStore, links, s.ensureRunnerStartable, s.childTerminated, s.runSession,
+	)
+	if processStore != nil {
+		s.processSvc = s.newProcessService(ctx)
+	}
+
+	return s, nil
 }
 
 func (s *svc) PubSub() sessionbus.Source {
@@ -331,7 +301,7 @@ func (s *svc) SendToSession(ctx context.Context, sessionID int64, prompt string)
 		return err
 	}
 
-	_, ok := s.runners.Load(sessionID)
+	_, ok := s.supervisor.Lookup(sessionID)
 	if ok {
 		return nil
 	}
@@ -363,7 +333,7 @@ func (s *svc) SendToSession(ctx context.Context, sessionID int64, prompt string)
 		return fmt.Errorf("resolve project %d: %w", rec.ProjectID, err)
 	}
 
-	if _, ok = s.runners.Load(sessionID); ok {
+	if _, ok = s.supervisor.Lookup(sessionID); ok {
 		return nil
 	}
 
@@ -633,7 +603,7 @@ func (s *svc) List(ctx context.Context) ([]*sessionstore.SessionRecord, error) {
 }
 
 func (s *svc) HasActiveLoop(sessionID int64) bool {
-	_, ok := s.runners.Load(sessionID)
+	_, ok := s.supervisor.Lookup(sessionID)
 
 	return ok
 }
@@ -650,7 +620,7 @@ func (s *svc) Kill(ctx context.Context, sessionID int64) error {
 
 //nolint:funcorder // Public lifecycle methods delegate into the shared tree lock.
 func (s *svc) killLocked(ctx context.Context, sessionID int64) error {
-	rs, ok := s.runners.Load(sessionID)
+	rs, ok := s.supervisor.Lookup(sessionID)
 
 	if ok {
 		s.publish(
@@ -842,62 +812,17 @@ type stopTreeOptions struct {
 	cancelledProcesses          *int
 }
 
-//nolint:funcorder,wsl_v5 // The second stop phase belongs beside the public Stop transition.
+//nolint:funcorder // The second stop phase belongs beside the public Stop transition.
 func (s *svc) stopTreeCleanup(ctx context.Context, sessionID int64, options stopTreeOptions) error {
-	cleanupCtx := context.WithoutCancel(ctx)
-
-	liveSessionIDs, err := s.liveTreeRunnerIDs(cleanupCtx, sessionID)
+	err := s.supervisor.StopTree(ctx, sessionID, s.stopper, options.keepRootStopping, sessionlifecycle.StopEffects{
+		CancelProcesses:  func(ctx context.Context, id int64) error { return s.stopTreeBackgroundProcesses(ctx, id, options) },
+		RetireResources:  s.retireTreeToolResources,
+		SettleCalls:      s.settleStoppedCalls,
+		ExpireActivation: s.expirePendingActivation,
+		CancelSleeps:     s.cancelStoppedSleeps,
+	})
 	if err != nil {
-		return err
-	}
-	plan, err := s.stopper.Begin(cleanupCtx, sessionID, liveSessionIDs)
-	if err != nil {
-		return fmt.Errorf("begin stop tree: %w", err)
-	}
-
-	ids := plan.SessionIDs()
-
-	s.removeQueuedSessions(ids)
-
-	runners := make([]runner, 0, len(ids))
-	for _, id := range ids {
-		rs, _ := s.runners.Load(id)
-
-		if rs != nil {
-			runners = append(runners, rs)
-		}
-	}
-
-	// Signal the entire tree before waiting for any one runner: a foreground
-	// parent can otherwise keep a child alive while stop is waiting on it.
-	for _, rs := range runners {
-		rs.Cancel()
-	}
-	// Cancel every background Bash process owned by the tree, including
-	// processes started by already-terminal subagents. The shared lifecycle
-	// service signals the in-memory handles, joins terminalization, and
-	// suppresses the individual wake events before the stop fence completes.
-	if err := s.stopTreeBackgroundProcesses(cleanupCtx, sessionID, options); err != nil {
-		return err
-	}
-
-	for _, rs := range runners {
-		<-rs.Done()
-	}
-	if err := s.retireTreeToolResources(cleanupCtx, sessionID); err != nil {
-		return err
-	}
-
-	if err := s.stopper.CancelInputs(cleanupCtx, plan); err != nil {
-		return fmt.Errorf("cancel stopped inputs: %w", err)
-	}
-
-	if err := s.settleStoppedTree(cleanupCtx, ids); err != nil {
-		return err
-	}
-
-	if err := s.stopper.Finish(cleanupCtx, plan, options.keepRootStopping); err != nil {
-		return fmt.Errorf("finish stop tree: %w", err)
+		return fmt.Errorf("stop session tree: %w", err)
 	}
 
 	return nil
@@ -919,56 +844,6 @@ func (s *svc) stopTreeBackgroundProcesses(ctx context.Context, sessionID int64, 
 	}
 
 	return nil
-}
-
-// settleStoppedTree closes every outstanding tool_use once all writers have
-// joined. That is what makes a stopped session resumable without replaying a
-// sleep/config/task call that no longer exists.
-//
-//nolint:funcorder // Stop-tree helpers stay beside the stop they serve.
-func (s *svc) settleStoppedTree(ctx context.Context, ids []int64) error {
-	for _, id := range ids {
-		if err := s.settleStoppedCalls(ctx, id); err != nil {
-			return err
-		}
-
-		// The settlement just answered every pending call, so a pending grant
-		// can never be spent anymore; expire it store-only or its row sits
-		// pending until the next wake burns a model turn on the receipt.
-		if err := s.expirePendingActivation(ctx, id); err != nil {
-			return err
-		}
-
-		if s.scheduleSvc == nil {
-			continue
-		}
-
-		if _, err := s.scheduleSvc.CancelPendingSleeps(ctx, id); err != nil {
-			return fmt.Errorf("cancel one-shot waits for session %d: %w", id, err)
-		}
-	}
-
-	return nil
-}
-
-//nolint:funcorder,wsl_v5 // Runner discovery must immediately precede stop planning.
-func (s *svc) liveTreeRunnerIDs(ctx context.Context, rootID int64) ([]int64, error) {
-	records, err := s.sessionStore.ListAllSessions(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("list live tree runners: %w", err)
-	}
-
-	var ids []int64
-	for _, record := range records {
-		if record.ID != rootID && record.RootID != rootID {
-			continue
-		}
-		if _, ok := s.runners.Load(record.ID); ok {
-			ids = append(ids, record.ID)
-		}
-	}
-
-	return ids, nil
 }
 
 func (s *svc) Clear(ctx context.Context, sessionID int64) (int64, error) {
@@ -1080,7 +955,7 @@ func (s *svc) SetModel(ctx context.Context, sessionID int64, model, reasoningLev
 		level = resolved
 	}
 
-	rs, ok := s.runners.Load(sessionID)
+	rs, ok := s.supervisor.Lookup(sessionID)
 
 	var sessSvc session.Service
 
@@ -1153,11 +1028,6 @@ func (s *svc) Shutdown(timeout time.Duration) {
 	defer cancel()
 
 	s.shuttingDown.Store(true)
-	s.queueRetryMu.Lock()
-	if s.workerCancel != nil {
-		s.workerCancel()
-	}
-	s.queueRetryMu.Unlock()
 
 	if s.budgetCancel != nil {
 		s.budgetCancel()
@@ -1166,54 +1036,48 @@ func (s *svc) Shutdown(timeout time.Duration) {
 	recoveryDone := s.stopRecovery()
 	processRecoveryDone := s.currentProcessRecovery()
 
-	runners := s.runners.CloseAndSnapshot()
-
 	done := make(chan struct{})
 
 	go func() {
-		for _, rs := range runners {
-			rs.Cancel()
-		}
-
-		// Controlled shutdown cancels and joins every owned process group
-		// through the shared lifecycle service; their completions stay owed
-		// as interrupted for the next startup.
-		if s.processSvc != nil {
-			if _, err := s.processSvc.CancelAll(shutdownCtx, backgroundprocess.IntentDaemonShutdown); err != nil {
-				logger.Ctx(shutdownCtx).Named("daemon.process").Warn("shutdown_cancel_failed", zap.Error(err))
+		s.supervisor.Shutdown(func() {
+			// Controlled shutdown cancels and joins every owned process group
+			// through the shared lifecycle service; their completions stay owed
+			// as interrupted for the next startup.
+			if s.processSvc != nil {
+				if _, err := s.processSvc.CancelAll(shutdownCtx, backgroundprocess.IntentDaemonShutdown); err != nil {
+					logger.Ctx(shutdownCtx).Named("daemon.process").Warn("shutdown_cancel_failed", zap.Error(err))
+				}
 			}
-		}
 
-		if s.progress != nil {
-			_ = s.progress.Stop(shutdownCtx)
-		}
+			if s.progress != nil {
+				_ = s.progress.Stop(shutdownCtx)
+			}
 
-		for _, rs := range runners {
-			<-rs.Done()
-		}
+			if s.budgetReconciler != nil {
+				_ = s.budgetReconciler.Stop(shutdownCtx)
+			}
+		}, func() {
+			if recoveryDone != nil {
+				<-recoveryDone
+			}
 
-		if recoveryDone != nil {
-			<-recoveryDone
-		}
+			if processRecoveryDone != nil {
+				<-processRecoveryDone
+			}
 
-		if processRecoveryDone != nil {
-			<-processRecoveryDone
-		}
+			s.budgetWG.Wait()
 
-		s.budgetWG.Wait()
-		s.workerWG.Wait()
-
-		if err := session.CloseToolResources(s.factory); err != nil {
-			logger.Named("manager.shutdown").Warn("close_tool_resources", zap.Error(err))
-		}
-
+			if err := s.toolResources.Close(); err != nil {
+				logger.Named("manager.shutdown").Warn("close_tool_resources", zap.Error(err))
+			}
+		})
 		close(done)
 	}()
 
 	select {
 	case <-done:
 	case <-shutdownCtx.Done():
-		logger.Named("manager.shutdown").Warn("shutdown_timeout", zap.Int("remaining_sessions", len(runners)))
+		logger.Named("manager.shutdown").Warn("shutdown_timeout", zap.Int("remaining_sessions", s.supervisor.Count()))
 	}
 }
 
@@ -1487,9 +1351,7 @@ func (s *svc) checkModelConfigured(model string) error {
 // registry lock, returning true if a live runner existed. Holding the lock across
 // the append serializes it with runner teardown (delete + leftover drain).
 func (s *svc) appendIfLive(sessionID int64, input queuedSessionInput) bool {
-	return s.runners.Use(sessionID, func(rs runner) {
-		rs.AppendInput(input)
-	})
+	return s.supervisor.Append(sessionID, input)
 }
 
 func (s *svc) deliverSessionInput(ctx context.Context, sessionID int64, input sessionInput) (bool, error) {
@@ -1672,4 +1534,16 @@ func (s *svc) send(
 	}
 
 	return rec.ID, nil
+}
+
+func (s *svc) cancelStoppedSleeps(ctx context.Context, id int64) error {
+	if s.scheduleSvc == nil {
+		return nil
+	}
+
+	if _, err := s.scheduleSvc.CancelPendingSleeps(ctx, id); err != nil {
+		return fmt.Errorf("cancel one-shot waits for session %d: %w", id, err)
+	}
+
+	return nil
 }

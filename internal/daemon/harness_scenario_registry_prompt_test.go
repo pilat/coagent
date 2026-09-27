@@ -10,6 +10,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/pilat/coagent/internal/backgroundprocess"
 	"github.com/pilat/coagent/internal/budget"
 	"github.com/pilat/coagent/internal/config"
 	"github.com/pilat/coagent/internal/configapply"
@@ -21,6 +22,7 @@ import (
 	"github.com/pilat/coagent/internal/session"
 	"github.com/pilat/coagent/internal/sessionstore"
 	"github.com/pilat/coagent/internal/subagent"
+	"github.com/pilat/coagent/internal/tool/builtin"
 )
 
 // activationSchemas stores each request's inventory separately. A union would
@@ -70,6 +72,8 @@ type registryPromptLLM struct {
 }
 
 type registryPromptDeps struct {
+	processStore backgroundprocess.Store
+	resources    builtin.Resources
 	ctx          context.Context
 	store        Store
 	sessionStore sessionstore.Store
@@ -127,8 +131,16 @@ func newRegistryPromptDeps(t *testing.T) registryPromptDeps {
 	require.NoError(t, migrate.Run(ctx, db, dbPath))
 
 	return registryPromptDeps{
-		ctx: ctx, store: NewStore(db), sessionStore: sessionstore.NewStore(db),
-		links: subagent.NewStore(db), subagents: subagent.NewTransactions(db), schedules: schedule.NewStore(db),
+		processStore: backgroundprocess.NewStore(db),
+		resources:    builtin.NewResources(),
+		ctx:          ctx,
+		store:        NewStore(db),
+		sessionStore: sessionstore.NewStore(db),
+		links: subagent.NewStore(
+			db,
+		),
+		subagents:   mustNewTransactions(t, db, sessionstore.InvalidateCompletionCheckTx),
+		schedules:   schedule.NewStore(db),
 		mcpRegistry: mcpstore.NewStore(db),
 	}
 }
@@ -168,7 +180,7 @@ func newRegistryPromptFactory(
 ) session.Factory {
 	return session.NewFactoryWithOptions(
 		cfg, nil, nil, deps.sessionStore, deps.sessionStore,
-		nil, deps.mcpRegistry, nil,
+		nil, deps.mcpRegistry, nil, deps.resources,
 		session.WithLLMClientFactory(func(_ *config.Config) (llm.Client, error) {
 			return &registryPromptLLM{
 				respond: respond, recorder: recorder, prompts: prompts,
@@ -182,9 +194,8 @@ func newRegistryPromptManager(
 	factory session.Factory,
 	t *testing.T,
 ) *svc {
-	mgr, _ := newSvc(
-		context.Background(),
-		factory, deps.store, deps.sessionStore, deps.sessionStore, deps.sessionStore,
+	mgr := mustNewSvc(context.Background(), t,
+		factory, deps.processStore, deps.resources, deps.store, deps.sessionStore, deps.sessionStore, deps.sessionStore,
 		deps.sessionStore, deps.sessionStore, deps.sessionStore, deps.sessionStore,
 		deps.links, deps.subagents,
 		budget.New(deps.sessionStore), deps.sessionStore, schedule.NewService(deps.schedules),

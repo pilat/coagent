@@ -468,8 +468,8 @@ func (s *svc) convergeStoppedSessions(
 
 func (s *svc) finishRecoveredServices(ctx context.Context) error {
 	if s.budgetSvc != nil {
-		if s.progress != nil {
-			if err := s.progress.ReconcileArmedBudgets(ctx); err != nil {
+		if s.budgetReconciler != nil {
+			if err := s.budgetReconciler.ReconcileArmed(ctx); err != nil {
 				return fmt.Errorf("reconcile armed budgets: %w", err)
 			}
 		}
@@ -488,6 +488,11 @@ func (s *svc) finishRecoveredServices(ctx context.Context) error {
 	// the moment Start returns, and a runner they open makes it skip that session.
 	s.resolveOrphanedCalls(ctx)
 	s.resolveInterruptedCalls(ctx)
+
+	if s.budgetReconciler != nil {
+		s.budgetReconciler.Start(ctx)
+	}
+
 	s.startProgressReconciler(ctx)
 
 	s.startRecovery(ctx)
@@ -786,7 +791,7 @@ func (s *svc) killSubagent(ctx context.Context, childID int64, deadline time.Tim
 
 	s.removeSchedules(ctx, childID)
 
-	rs, ok := s.runners.Load(childID)
+	rs, ok := s.supervisor.Lookup(childID)
 
 	if ok {
 		rs.Stop()

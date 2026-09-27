@@ -141,8 +141,7 @@ func (s *svc) finishRunner(
 	}
 
 	if !shuttingDown && ctx.Err() == nil {
-		s.drainPendingRunners(cleanupCtx)
-		s.drainQueue(cleanupCtx)
+		s.supervisor.DrainReady(cleanupCtx)
 		if !continued && !*errored {
 			s.restartPendingAfterExit(cleanupCtx, sessionID)
 		}
@@ -190,10 +189,7 @@ func (s *svc) finishRunnerLocked(
 		}
 	}
 
-	s.runners.Delete(sessionID)
-
 	info := rs.Info()
-	s.admit.Release(info.Kind, info.ParentID)
 
 	if info.PreserveStopped && !shuttingDown {
 		record, err := s.sessionStore.GetSession(ctx, sessionID)
@@ -212,8 +208,7 @@ func (s *svc) finishRunnerLocked(
 		}
 	}
 
-	leftover := rs.DrainInputs()
-	rs.Complete()
+	leftover := s.supervisor.Finish(sessionID)
 
 	if fenced && !shuttingDown && runErr == nil && !errored && s.rerouteRunnerInputsLocked(ctx, sessionID, leftover) {
 		s.reconcileLatestReadiness(ctx, sessionID)
@@ -650,16 +645,6 @@ func canonicalWaitingIdentities(value any) ([]byte, error) {
 // settleStoppedCalls is runner-owned transcript mutation used by the /stop
 // lifecycle after every live writer has joined.
 func (s *svc) settleStoppedCalls(ctx context.Context, sessionID int64) error {
-	rec, err := s.sessionStore.GetSession(ctx, sessionID)
-	if err != nil {
-		return fmt.Errorf("load stopping session %d: %w", sessionID, err)
-	}
-
-	workDir, err := s.store.GetProjectWorkDir(ctx, rec.ProjectID)
-	if err != nil {
-		return fmt.Errorf("resolve project for stopping session %d: %w", sessionID, err)
-	}
-
 	// The producer ledger is in-memory, so a stop whose second phase runs in a
 	// later image owns nothing; the transcript is the only complete list.
 	pending, err := s.storedExternalCalls(ctx, sessionID)
@@ -671,11 +656,10 @@ func (s *svc) settleStoppedCalls(ctx context.Context, sessionID int64) error {
 		s.staged.stage(sessionID, call.ID, call.Name)
 	}
 
-	sess, err := s.openSession(ctx, sessionID, workDir, rec, true, false, true)
+	sess, err := s.openTranscript(ctx, sessionID)
 	if err != nil {
 		return fmt.Errorf("open stopping session %d: %w", sessionID, err)
 	}
-	defer sess.Close()
 
 	if err := sess.SettleStoppedCalls(ctx, "Stopped by user."); err != nil {
 		return fmt.Errorf("settle stopped calls for session %d: %w", sessionID, err)
@@ -696,11 +680,6 @@ func (s *svc) closeOrphanedCalls(ctx context.Context, rec *sessionstore.SessionR
 		return 0, err
 	}
 
-	workDir, err := s.store.GetProjectWorkDir(ctx, rec.ProjectID)
-	if err != nil {
-		return 0, fmt.Errorf("resolve project for session %d: %w", rec.ID, err)
-	}
-
 	// Adoption precedes construction: the session refuses to resolve a call no
 	// producer ledger owns, and it snapshots that ledger when it is built.
 	for _, call := range orphans {
@@ -714,11 +693,10 @@ func (s *svc) closeOrphanedCalls(ctx context.Context, rec *sessionstore.SessionR
 		}
 	}()
 
-	sess, err := s.openSession(ctx, rec.ID, workDir, rec, false, false, true)
+	sess, err := s.openTranscript(ctx, rec.ID)
 	if err != nil {
 		return 0, fmt.Errorf("open session %d to close orphaned calls: %w", rec.ID, err)
 	}
-	defer sess.Close()
 
 	for _, call := range orphans {
 		if _, err := sess.ResolvePendingCall(ctx, call, orphanedCallNotice(call.Name)); err != nil {
@@ -740,7 +718,7 @@ func (s *svc) ensureSessionRunner(ctx context.Context, sessionID int64) error {
 }
 
 func (s *svc) ensureSessionRunnerLocked(ctx context.Context, sessionID int64) error {
-	if _, ok := s.runners.Load(sessionID); ok {
+	if _, ok := s.supervisor.Lookup(sessionID); ok {
 		return nil
 	}
 
@@ -1096,7 +1074,7 @@ func (s *svc) createOrResumeSession(
 	rec *sessionstore.SessionRecord,
 	preserveStopped bool,
 ) (session.Service, error) {
-	return s.openSession(ctx, sessionID, workDir, rec, false, preserveStopped, false)
+	return s.openSession(ctx, sessionID, workDir, rec, preserveStopped)
 }
 
 func (s *svc) sessionInputBoundary(
@@ -1146,17 +1124,13 @@ func isManagementSurface(attrs map[string]any) bool {
 	}
 }
 
-// openSession builds the session service. A settlement open never persists the
-// initial state: /stop settles a tree already marked stopping, and reactivating
-// it would lose the lifecycle fence.
-//
 //nolint:funlen // The construction boundary keeps one coherent session policy snapshot.
 func (s *svc) openSession(
 	ctx context.Context,
 	sessionID int64,
 	workDir string,
 	rec *sessionstore.SessionRecord,
-	settlement, preserveStopped, transcriptOnly bool,
+	preserveStopped bool,
 ) (session.Service, error) {
 	externalCalls, err := s.pendingExternalCallsForSession(ctx, sessionID)
 	if err != nil {
@@ -1191,8 +1165,7 @@ func (s *svc) openSession(
 
 		CompactionDeferAnnounced: s.deferNotices.announced(sessionID),
 		InputBoundary:            s.sessionInputBoundary(sessionID, rec),
-		SettlementOpen:           settlement,
-		TranscriptOnly:           transcriptOnly,
+		ProcessService:           s.processSvc,
 		PreserveStoppedStatus:    preserveStopped,
 	}
 	if rec.ParentID != 0 {
@@ -1453,7 +1426,7 @@ func (s *svc) registerMCPTools(ctx context.Context, rec *sessionstore.SessionRec
 			projectID = *project
 		}
 
-		if err := session.InvalidateToolResources(s.factory, projectID); err != nil {
+		if err := s.toolResources.Invalidate(projectID); err != nil {
 			logger.Ctx(ctx).Warn("invalidate_mcp_resources", zap.Error(err))
 		}
 	}
@@ -1667,21 +1640,10 @@ func (s *svc) settleStagedResults(ctx context.Context, sessionID int64) error {
 }
 
 func (s *svc) settleAbandonedApply(ctx context.Context, sessionID int64, input pendingCallResultInput) error {
-	rec, err := s.sessionStore.GetSession(ctx, sessionID)
-	if err != nil {
-		return fmt.Errorf("load session for abandoned apply: %w", err)
-	}
-
-	workDir, err := s.store.GetProjectWorkDir(ctx, rec.ProjectID)
-	if err != nil {
-		return fmt.Errorf("resolve project for abandoned apply: %w", err)
-	}
-
-	sess, err := s.openSession(ctx, sessionID, workDir, rec, false, false, true)
+	sess, err := s.openTranscript(ctx, sessionID)
 	if err != nil {
 		return fmt.Errorf("open transcript for abandoned apply: %w", err)
 	}
-	defer sess.Close()
 
 	_, err = sess.ResolvePendingCall(ctx, input.Call, input.Content)
 	if err != nil {
@@ -1751,13 +1713,11 @@ func (s *svc) ensureRunner(
 		return errDaemonShuttingDown
 	}
 
-	unlock, err := s.lockSessionTree(ctx, sessionID)
-	if err != nil {
-		return err
+	if err := s.supervisor.Ensure(ctx, sessionID, workDir, projectID, inputs); err != nil {
+		return fmt.Errorf("ensure session runner: %w", err)
 	}
-	defer unlock()
 
-	return s.ensureRunnerLocked(ctx, sessionID, workDir, projectID, inputs)
+	return nil
 }
 
 func (s *svc) ensureRunnerLocked(
@@ -1771,7 +1731,7 @@ func (s *svc) ensureRunnerLocked(
 		return errDaemonShuttingDown
 	}
 
-	if err := s.launcher.Ensure(ctx, sessionID, workDir, projectID, inputs); err != nil {
+	if err := s.supervisor.EnsureLocked(ctx, sessionID, workDir, projectID, inputs); err != nil {
 		return fmt.Errorf("ensure session runner: %w", err)
 	}
 
@@ -1838,4 +1798,18 @@ func queuedInputsStartScheduledTurn(inputs []queuedSessionInput) bool {
 	return len(inputs) > 0 && !slices.ContainsFunc(inputs, func(input queuedSessionInput) bool {
 		return !inputIsScheduledTurn(input.input())
 	})
+}
+
+func (s *svc) openTranscript(ctx context.Context, sessionID int64) (session.TranscriptSession, error) {
+	calls, err := s.pendingExternalCallsForSession(ctx, sessionID)
+	if err != nil {
+		return nil, err
+	}
+
+	transcript, err := session.OpenTranscript(ctx, s.runtimeStore, nil, sessionID, calls)
+	if err != nil {
+		return nil, fmt.Errorf("open session transcript: %w", err)
+	}
+
+	return transcript, nil
 }

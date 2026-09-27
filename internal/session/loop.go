@@ -78,7 +78,6 @@ type loopRunner struct {
 	cb                   iterationCallback
 	result               *loopResult
 	log                  *zap.Logger
-	emptyCount           int
 	emptyStopTerminal    bool
 	dispositionTerminal  bool
 	confirmedFinal       bool
@@ -233,7 +232,7 @@ func runLoop(ctx context.Context, agent *svc, opts loopOptions, callback iterati
 	return r.finalize(ctx)
 }
 
-//nolint:funlen,gocyclo,nestif // One discriminated prior-response protocol is clearer kept together.
+//nolint:nestif // One discriminated prior-response protocol is clearer kept together.
 func (r *loopRunner) handlePreviousResult(ctx context.Context) (bool, error) {
 	// A call that is out with the world outranks everything: re-executing it
 	// would apply the same change twice, and advancing past it would send the
@@ -252,8 +251,6 @@ func (r *loopRunner) handlePreviousResult(ctx context.Context) (bool, error) {
 	}
 
 	if state.HasPendingTools {
-		r.emptyCount = 0 // a productive turn breaks the empty-response streak
-
 		if state.HasText {
 			if r.publishedReply {
 				r.notify(ctx, state.Text)
@@ -329,42 +326,6 @@ func (r *loopRunner) handlePreviousResult(ctx context.Context) (bool, error) {
 		}
 
 		return true, nil
-	}
-
-	// Empty assistant (no text, no tools) — nudge. With the durable disposition
-	// path the recordIteration commit already counted this attempt, advanced
-	// the streak, and appended its nudge; the legacy branch must not re-count.
-	if r.agent.dispositions == nil {
-		r.emptyCount++
-		r.log.Warn("empty_stop_response", zap.Int("iter", r.result.Iterations), zap.Int("consecutive", r.emptyCount))
-
-		if r.emptyCount >= emptyResponseBreakThreshold {
-			r.log.Warn("empty_response_notify_user", zap.Int("count", r.emptyCount))
-
-			r.notifyPersistent(
-				ctx,
-				fmt.Sprintf(
-					"⚠️ Model returned %d consecutive empty responses. Session paused — waiting for input.",
-					r.emptyCount,
-				),
-			)
-
-			return true, nil
-		}
-
-		nudge := "You returned an empty response with no tool calls. Please continue working on the task, or explain what you need."
-		if r.emptyCount == emptyResponseWarnThreshold {
-			nudge = fmt.Sprintf(
-				"[AUTOMATED WARNING: You have returned %d consecutive empty responses (no text, no tool calls). You MUST either use a tool or respond with text. If you cannot proceed, explain why.]",
-				r.emptyCount,
-			)
-		}
-
-		if err := r.agent.ms.addUserMessage(ctx, nudge); err != nil {
-			r.result.Error = err
-
-			return false, fmt.Errorf("record empty-response nudge: %w", err)
-		}
 	}
 
 	return false, nil
@@ -546,7 +507,6 @@ func normalizedFinishType(finishType string) string {
 	}
 }
 
-//nolint:funlen,gocyclo,nestif,wsl_v5,gocognit // Budget persistence, direct replies, and final selection share one boundary.
 func (r *loopRunner) recordIteration(ctx context.Context) error {
 	r.result.Iterations++
 	if r.lastResp.FinishType == llmwire.FinishLength || r.lastResp.FinishType == llmwire.FinishUnknown {
@@ -559,109 +519,7 @@ func (r *loopRunner) recordIteration(ctx context.Context) error {
 		return nil
 	}
 
-	// The durable disposition path owns accepted-response persistence when the
-	// store offers it: one transaction for message, completion check, empty
-	// streak, budget verdict, nudge, and optional manager output.
-	if r.agent.dispositions != nil {
-		return r.recordDispositionIteration(ctx)
-	}
-
-	replyToInput := r.replyToInput
-	if r.cb != nil {
-		if callbackErr := r.cb(r.result.Iterations, r.lastResp, r.lastResp.ToolCalls, false); callbackErr != nil {
-			r.result.Error = callbackErr
-			return fmt.Errorf("iteration callback failed: %w", callbackErr)
-		}
-	}
-
-	outputType, output := assistantOutput(
-		r.lastResp,
-		r.agent.outputEnabled,
-		replyToInput,
-		r.directReplyEligible,
-	)
-	if outputType == sessionstore.OutputMessagePersistent && len(r.lastResp.ToolCalls) == 0 {
-		if renderer, ok := r.agent.boundary.(finalOutputBoundary); ok {
-			var renderErr error
-
-			output, renderErr = renderer.FinalOutput(ctx, output)
-			if renderErr != nil {
-				return fmt.Errorf("render final output: %w", renderErr)
-			}
-		}
-	}
-
-	if r.agent.budgetGate != nil {
-		message := llmwire.Message{
-			Role: llmwire.RoleAssistant, Content: r.lastResp.Text, ToolCalls: r.lastResp.ToolCalls,
-			ReasoningContent: r.lastResp.ReasoningContent, ReasoningRaw: r.lastResp.ReasoningRaw,
-			CostUSD: r.lastResp.CostUSD, Usage: r.lastResp.Usage,
-			FinishType: r.lastResp.FinishType, ProviderFinishReason: r.lastResp.ProviderFinishReason,
-		}
-		stored, err := storedMessage(&message)
-		if err != nil {
-			return fmt.Errorf("serialize budgeted response: %w", err)
-		}
-		budgetOutputType, budgetOutput := outputType, output
-		if outputType == sessionstore.OutputMessagePersistent && len(r.lastResp.ToolCalls) == 0 {
-			budgetOutputType, budgetOutput = "", ""
-		}
-		_, fired, replyPublished, err := r.agent.budgetGate.PersistResponse(
-			ctx, stored, budgetOutputType, budgetOutput,
-			len(r.lastResp.ToolCalls) == 0 && r.lastResp.FinishType == llmwire.FinishStop,
-		)
-		if err != nil {
-			return fmt.Errorf("persist budgeted response: %w", err)
-		}
-		if err := r.agent.ms.reloadMessages(ctx); err != nil {
-			return err
-		}
-		r.agent.budgetFired = fired
-		r.publishedReply = replyPublished
-	} else if err := r.agent.ms.addAssistantMessageOutput(
-		ctx, r.lastResp, outputType, output,
-		len(r.lastResp.ToolCalls) == 0 && r.lastResp.FinishType == llmwire.FinishStop,
-	); err != nil {
-		r.result.Error = err
-
-		return fmt.Errorf("record assistant message: %w", err)
-	}
-	if r.agent.budgetGate == nil {
-		r.publishedReply = outputType == sessionstore.OutputMessagePersistent && len(r.lastResp.ToolCalls) > 0
-	}
-	r.replyToInput = replyToInput && len(r.lastResp.ToolCalls) > 0
-	r.directReplyEligible = false
-
-	if r.lastResp.CostUSD > 0 {
-		r.log.Info(
-			"iteration_cost",
-			zap.Int("iter", r.result.Iterations),
-			zap.String("cost_usd", fmt.Sprintf("$%.4f", r.lastResp.CostUSD)),
-		)
-	}
-
-	if r.agent.budgetGate != nil {
-		if replyToInput && !r.agent.budgetFired && len(r.lastResp.ToolCalls) == 0 &&
-			r.lastResp.FinishType == llmwire.FinishStop &&
-			strings.TrimSpace(r.lastResp.Text) != "" {
-			output := r.lastResp.Text
-			var err error
-			if renderer, ok := r.agent.boundary.(finalOutputBoundary); ok {
-				output, err = renderer.FinalOutput(ctx, output)
-				if err != nil {
-					return fmt.Errorf("render budgeted final output: %w", err)
-				}
-			}
-
-			if err := r.agent.ms.enqueueFinalAssistantOutput(ctx, output); err != nil {
-				return err
-			}
-		}
-	}
-
-	r.log.Info("iteration_end", zap.Int("iter", r.result.Iterations))
-
-	return nil
+	return r.recordDispositionIteration(ctx)
 }
 
 func assistantOutput(

@@ -18,6 +18,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/pilat/coagent/internal/backgroundprocess"
 	"github.com/pilat/coagent/internal/budget"
 	"github.com/pilat/coagent/internal/coagenthome"
 	"github.com/pilat/coagent/internal/config"
@@ -31,6 +32,7 @@ import (
 	"github.com/pilat/coagent/internal/session"
 	"github.com/pilat/coagent/internal/sessionstore"
 	"github.com/pilat/coagent/internal/subagent"
+	"github.com/pilat/coagent/internal/tool/builtin"
 )
 
 const delayedTelegramManagerID = "telegram-delayed"
@@ -100,15 +102,20 @@ func newDelayedTelegramHarnessWithClient(
 	workDir := filepath.Join(home, "project")
 	require.NoError(t, os.Mkdir(workDir, 0o700))
 	cfg := &config.Config{Model: "fake-model", WorkDir: workDir}
+	resources := builtin.NewResources()
 	factory := session.NewFactoryWithOptions(
-		cfg, nil, nil, sessions, sessions, nil, nil, nil,
+		cfg, nil, nil, sessions, sessions, nil, nil, nil, resources,
 		session.WithLLMClientFactory(clientFactory),
 	)
-	service := daemon.New(
-		context.Background(), factory, projects, sessions, sessions, sessions, sessions, sessions, sessions, sessions,
-		subagent.NewStore(db), subagent.NewTransactions(db),
+	subagentTx, err := subagent.NewTransactions(db, sessionstore.InvalidateCompletionCheckTx)
+	require.NoError(t, err)
+	service, err := daemon.New(
+		context.Background(), factory, backgroundprocess.NewStore(db), resources,
+		projects, sessions, sessions, sessions, sessions, sessions, sessions, sessions,
+		subagent.NewStore(db), subagentTx,
 		budget.New(sessions), sessions, schedule.NewService(schedule.NewStore(db)), cfg, nil, nil,
 	)
+	require.NoError(t, err)
 	t.Cleanup(func() { service.Shutdown(3 * time.Second) })
 	controllers := managercontrol.New(service, service, sessions, cfg, nil)
 

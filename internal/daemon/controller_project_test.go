@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/pilat/coagent/internal/backgroundprocess"
 	"github.com/pilat/coagent/internal/coagenthome"
 	"github.com/pilat/coagent/internal/config"
 	"github.com/pilat/coagent/internal/controllerapi"
@@ -18,6 +19,7 @@ import (
 	"github.com/pilat/coagent/internal/projectpath"
 	"github.com/pilat/coagent/internal/sessionstore"
 	"github.com/pilat/coagent/internal/subagent"
+	"github.com/pilat/coagent/internal/tool/builtin"
 )
 
 func newProjectTestManager(t *testing.T) (*svc, Store, *sql.DB) {
@@ -31,9 +33,8 @@ func newProjectTestManager(t *testing.T) (*svc, Store, *sql.DB) {
 
 	store := NewStore(db)
 	sessStore := sessionstore.NewStore(db)
-	mgr, _ := newSvc(
-		context.Background(),
-		&mockFactory{},
+	mgr := mustNewSvc(context.Background(), t,
+		&mockFactory{}, backgroundprocess.NewStore(db), builtin.NewResources(),
 		store,
 		sessStore,
 		sessStore,
@@ -43,7 +44,7 @@ func newProjectTestManager(t *testing.T) (*svc, Store, *sql.DB) {
 		sessStore,
 		sessStore,
 		subagent.NewStore(db),
-		subagent.NewTransactions(db),
+		mustNewTransactions(t, db, sessionstore.InvalidateCompletionCheckTx),
 		nil,
 		sessStore,
 		nil,

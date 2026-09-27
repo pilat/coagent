@@ -144,7 +144,7 @@ func TestSubagentLinkSchema_ActivationSequenceStartsAtOne(t *testing.T) {
 	store, db, projectID := newTestStore(t)
 	parent, err := store.CreateSession(ctx, projectID, "model", "", nil)
 	require.NoError(t, err)
-	childID, err := subagent.NewTransactions(db).Create(ctx, subagent.Create{
+	childID, err := newTestSubagentTransactions(t, db).Create(ctx, subagent.Create{
 		ProjectID: projectID, ParentID: parent.ID, RootID: parent.ID,
 		Model: "model", TaskCallID: "task-1", State: "spawned",
 	})

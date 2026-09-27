@@ -37,7 +37,14 @@ func newTestLinkStore(t *testing.T) (sessionstore.Store, subagent.Store, subagen
 	projectID, err := res.LastInsertId()
 	require.NoError(t, err)
 
-	return sessionstore.NewStore(db), subagent.NewStore(db), subagent.NewTransactions(db), projectID
+	return sessionstore.NewStore(
+			db,
+		), subagent.NewStore(
+			db,
+		), mustNewTransactions(t,
+			db,
+			sessionstore.InvalidateCompletionCheckTx,
+		), projectID
 }
 
 // deliverOneLink wins the delivery CAS for childID via the session store (the sole

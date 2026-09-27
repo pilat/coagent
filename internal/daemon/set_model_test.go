@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/pilat/coagent/internal/backgroundprocess"
 	"github.com/pilat/coagent/internal/budget"
 	"github.com/pilat/coagent/internal/config"
 	"github.com/pilat/coagent/internal/controllerapi"
@@ -22,6 +23,7 @@ import (
 	"github.com/pilat/coagent/internal/sessionevent"
 	"github.com/pilat/coagent/internal/sessionstore"
 	"github.com/pilat/coagent/internal/subagent"
+	"github.com/pilat/coagent/internal/tool/builtin"
 )
 
 // TestSetModelUnknownModelNeverReachesTheRecord drives the user-visible path: a
@@ -135,8 +137,9 @@ func newModelAwareHarnessAtDB(
 	workDir := t.TempDir()
 	cfg := &config.Config{WorkDir: workDir, Model: known[0]}
 
+	resources := builtin.NewResources()
 	factory := session.NewFactoryWithOptions(
-		cfg, nil, nil, sessStore, sessStore, nil, nil, nil,
+		cfg, nil, nil, sessStore, sessStore, nil, nil, nil, resources,
 		session.WithLLMClientFactory(func(c *config.Config) (llm.Client, error) {
 			if !slices.Contains(known, c.Model) {
 				return nil, fmt.Errorf("model %q not found in config", c.Model)
@@ -146,9 +149,8 @@ func newModelAwareHarnessAtDB(
 		}),
 	)
 
-	mgr, _ := newSvc(
-		context.Background(),
-		factory,
+	mgr := mustNewSvc(context.Background(), t,
+		factory, backgroundprocess.NewStore(db), resources,
 		store,
 		sessStore,
 		sessStore,
@@ -158,7 +160,7 @@ func newModelAwareHarnessAtDB(
 		sessStore,
 		sessStore,
 		links,
-		subagent.NewTransactions(db),
+		mustNewTransactions(t, db, sessionstore.InvalidateCompletionCheckTx),
 		budget.New(sessStore),
 		sessStore,
 		schedule.NewService(schedStore),
@@ -179,7 +181,7 @@ func newModelAwareHarnessAtDB(
 }
 
 func (h *subagentHarness) liveSession(sessionID int64) session.Service {
-	rs, ok := h.mgr.runners.Load(sessionID)
+	rs, ok := h.mgr.supervisor.Lookup(sessionID)
 
 	if !ok {
 		return nil

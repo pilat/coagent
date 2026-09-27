@@ -45,8 +45,8 @@ func TestFollowUpAcceptedBeforeTerminalBoundaryStaysInSameActivation(t *testing.
 	// Keep the accepted child parked so the test can place finalization exactly
 	// after the durable enqueue and before any runner promotes the input.
 	for i := range admission.MaxChildren {
-		require.True(t, mgr.admit.TryAdmit(admission.Child, int64(10_000+i)))
-		defer mgr.admit.Release(admission.Child, int64(10_000+i))
+		require.True(t, mgr.reserveRunnerForTest(admission.Child, int64(10_000+i)))
+		defer mgr.releaseRunnerForTest(admission.Child, int64(10_000+i))
 	}
 
 	require.NoError(t, mgr.SendToChild(ctx, childID, "one more question"))
@@ -108,8 +108,8 @@ func TestProcessInputRearmsCompletedChildAfterPriorOutcomeHandoff(t *testing.T) 
 	childID := createBackgroundChild(t, mgr, projectID, parent.ID)
 
 	for i := range admission.MaxChildren {
-		require.True(t, mgr.admit.TryAdmit(admission.Child, int64(20_000+i)))
-		defer mgr.admit.Release(admission.Child, int64(20_000+i))
+		require.True(t, mgr.reserveRunnerForTest(admission.Child, int64(20_000+i)))
+		defer mgr.releaseRunnerForTest(admission.Child, int64(20_000+i))
 	}
 
 	require.NoError(t, mgr.links.MarkLinkTerminal(

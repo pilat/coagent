@@ -48,17 +48,18 @@ func TestRunLoop_ReadHeavyFixtureFewerIterations(t *testing.T) {
 	parallelLLM := &loopScriptLLM{responses: []*llmwire.Response{
 		{ToolCalls: readCalls(reads)},
 		{Text: "same final answer"},
+		textResponse("confirmed"),
 	}}
 	parallelAgent.llmClient = parallelLLM
 
 	core, logs := observer.New(zapcore.InfoLevel)
 	ctx := logger.ToContext(t.Context(), zap.New(core))
 
-	result, err := runLoop(ctx, parallelAgent, loopOptions{}, iterationGuard(20))
+	result, err := runTestLoop(ctx, t, parallelAgent, loopOptions{}, iterationGuard(20))
 	require.NoError(t, err)
 
 	assert.Equal(t, "same final answer", result.FinalResponse)
-	assert.Equal(t, 2, parallelLLM.calls, "one scheduling turn plus the answer turn")
+	assert.Equal(t, 3, parallelLLM.calls, "one scheduling turn plus candidate and confirmation")
 
 	schedules := logs.FilterMessage("tool_schedule").All()
 	require.Len(t, schedules, 1, "exactly one native tool_schedule summary")
@@ -76,10 +77,10 @@ func TestRunLoop_ReadHeavyFixtureFewerIterations(t *testing.T) {
 	// Serial twin: the same five reads, one per turn.
 	serialAgent := newReadAgent()
 	serialResponses := make([]*llmwire.Response, 0, reads+1)
-	for range reads {
-		serialResponses = append(serialResponses, &llmwire.Response{ToolCalls: readCalls(1)})
+	for _, call := range readCalls(reads) {
+		serialResponses = append(serialResponses, &llmwire.Response{ToolCalls: []llmwire.ToolCall{call}})
 	}
-	serialResponses = append(serialResponses, &llmwire.Response{Text: "same final answer"})
+	serialResponses = append(serialResponses, textResponse("same final answer"), textResponse("confirmed"))
 
 	serialLLM := &loopScriptLLM{responses: serialResponses}
 	serialAgent.llmClient = serialLLM
@@ -87,11 +88,11 @@ func TestRunLoop_ReadHeavyFixtureFewerIterations(t *testing.T) {
 	serialCore, _ := observer.New(zapcore.InfoLevel)
 	serialCtx := logger.ToContext(t.Context(), zap.New(serialCore))
 
-	serialResult, err := runLoop(serialCtx, serialAgent, loopOptions{}, iterationGuard(20))
+	serialResult, err := runTestLoop(serialCtx, t, serialAgent, loopOptions{}, iterationGuard(20))
 	require.NoError(t, err)
 
 	assert.Equal(t, "same final answer", serialResult.FinalResponse)
-	assert.Equal(t, reads+1, serialLLM.calls, "one call per turn costs one iteration each")
+	assert.Equal(t, reads+2, serialLLM.calls, "one call per turn costs one iteration each")
 	assert.Less(t, parallelLLM.calls, serialLLM.calls, "the parallel fixture beats the serial one")
 }
 
@@ -117,17 +118,18 @@ func TestRunLoop_BatchFallbackFixtureRecordsOneSummary(t *testing.T) {
 			Arguments: []byte(params),
 		}}},
 		{Text: "same final answer"},
+		textResponse("confirmed"),
 	}}
 	agent.llmClient = batchLLM
 
 	core, logs := observer.New(zapcore.InfoLevel)
 	ctx := logger.ToContext(t.Context(), zap.New(core))
 
-	result, err := runLoop(ctx, agent, loopOptions{}, iterationGuard(20))
+	result, err := runTestLoop(ctx, t, agent, loopOptions{}, iterationGuard(20))
 	require.NoError(t, err)
 
 	assert.Equal(t, "same final answer", result.FinalResponse)
-	assert.Equal(t, 2, batchLLM.calls)
+	assert.Equal(t, 3, batchLLM.calls)
 
 	batchSummaries := make([]any, 0)
 	for _, entry := range logs.FilterMessage("tool_schedule").All() {

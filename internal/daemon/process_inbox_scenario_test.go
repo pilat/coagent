@@ -19,7 +19,6 @@ import (
 	"github.com/pilat/coagent/internal/backgroundprocess"
 	"github.com/pilat/coagent/internal/controllerapi"
 	"github.com/pilat/coagent/internal/llmwire"
-	"github.com/pilat/coagent/internal/session"
 	"github.com/pilat/coagent/internal/sessionevent"
 	"github.com/pilat/coagent/internal/sessionstore"
 	"github.com/pilat/coagent/internal/tool"
@@ -127,12 +126,16 @@ func TestHarnessScenario_AgentCancelsOwnedBackgroundProcess(t *testing.T) {
 	}
 
 	h := newSubagentHarnessWith(t, respond)
-	service := installScenarioProcessService(t, h)
-	h.mgr.factory = session.WithFactoryProcessService(h.mgr.factory, service)
+	installScenarioProcessService(t, h)
+	factory := &forwardingFactory{delegate: h.mgr.factory}
+	resources := &observedResources{ResourceLifecycle: h.mgr.toolResources}
+	h.mgr.factory = factory
+	h.mgr.toolResources = resources
 	collector := collectEvents(h.mgr.PubSub().SubscribeAll())
 	defer func() {
 		collector.stop()
 		h.shutdown()
+		assert.True(t, resources.closed.Load(), "resource shutdown survives a factory wrapper")
 	}()
 
 	rootID, err := h.mgr.Send(h.ctx, h.projectID, "start then cancel background work", "fake-model", map[string]any{
@@ -152,6 +155,10 @@ func TestHarnessScenario_AgentCancelsOwnedBackgroundProcess(t *testing.T) {
 	require.NoError(t, h.db.QueryRowContext(h.ctx, `SELECT COUNT(*) FROM session_inbox
 		WHERE source = 'process' AND json_extract(attributes, '$.process_id') = ?`, id).Scan(&completions))
 	assert.Zero(t, completions, "explicit cancellation must not schedule a later completion")
+	assert.True(t, factory.processBound.Load(), "process capability reaches wrapped factories")
+	h.mgr.waitIdle(rootID)
+	require.NoError(t, h.mgr.Stop(h.ctx, rootID, 0))
+	assert.Equal(t, rootID, resources.retired.Load(), "stop retires the explicit resource owner")
 }
 
 func TestHarnessScenario_ProcessCompletionAtIdleTransition(t *testing.T) {
@@ -184,9 +191,8 @@ func TestHarnessScenario_ProcessCompletionAtIdleTransition(t *testing.T) {
 
 	workDir, err := h.mgr.store.GetProjectWorkDir(h.ctx, h.projectID)
 	require.NoError(t, err)
-	require.True(t, h.mgr.admit.TryAdmit(admission.Parent, 0))
 	ending := newRunner(func() {}, workDir, h.projectID, admission.Parent, 0, false, nil)
-	_, registered := h.mgr.runners.Register(root.ID, ending)
+	registered := h.mgr.supervisor.Attach(root.ID, ending)
 	require.True(t, registered)
 
 	unlock, err := h.mgr.lockSessionTree(h.ctx, root.ID)

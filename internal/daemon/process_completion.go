@@ -109,13 +109,3 @@ func (s *svc) rearmChildForAsyncInput(ctx context.Context, child *sessionstore.S
 
 	return s.completions.RearmLocked(guarded, child.ID) //nolint:wrapcheck // Component owns rearm context.
 }
-
-func (s *svc) newDaemonWorkerContext(ctx context.Context) (context.Context, context.CancelFunc) {
-	workerCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
-	stop := context.AfterFunc(s.workerCtx, cancel)
-
-	return workerCtx, func() {
-		stop()
-		cancel()
-	}
-}

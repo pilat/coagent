@@ -10,12 +10,15 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/pilat/coagent/internal/backgroundprocess"
 	"github.com/pilat/coagent/internal/config"
 	"github.com/pilat/coagent/internal/controllerapi"
 	"github.com/pilat/coagent/internal/migrate"
 	"github.com/pilat/coagent/internal/sessionevent"
+	"github.com/pilat/coagent/internal/sessionlifecycle"
 	"github.com/pilat/coagent/internal/sessionstore"
 	"github.com/pilat/coagent/internal/subagent"
+	"github.com/pilat/coagent/internal/tool/builtin"
 )
 
 // failingGetSessionStore makes exactly one GetSession call fail, simulating a
@@ -61,14 +64,15 @@ func TestStopOnStoreFailureDoesNotPublishIdle(t *testing.T) {
 		err:                errors.New("disk hiccup"),
 	}
 	failing.pending.Store(true)
-	mgr, _ := newSvc(
-		context.Background(),
-		&mockFactory{}, store, failing, sessions, sessions,
+	mgr := mustNewSvc(context.Background(), t,
+		&mockFactory{}, backgroundprocess.NewStore(db), builtin.NewResources(), store, failing, sessions, sessions,
 		sessions, sessions, sessions, sessions,
-		subagent.NewStore(db), subagent.NewTransactions(db),
+		subagent.NewStore(db), mustNewTransactions(t, db, sessionstore.InvalidateCompletionCheckTx),
 		nil, sessions, nil, nil,
 	)
-	mgr.treeStore = sessions
+	mgr.supervisor = sessionlifecycle.NewSupervisor(
+		sessions, mgr.links, mgr.ensureRunnerStartable, mgr.childTerminated, mgr.runSession,
+	)
 	controllers := newTestController(mgr, &config.Config{}, nil, nil)
 	notifications := controllers.ForManager("manager-stop").Subscribe()
 
@@ -104,11 +108,10 @@ func TestTeardownOnStoreFailureDoesNotPublishIdle(t *testing.T) {
 		err:                errors.New("disk hiccup"),
 	}
 	failing.pending.Store(true)
-	mgr, _ := newSvc(
-		context.Background(),
-		&mockFactory{}, store, failing, sessions, sessions,
+	mgr := mustNewSvc(context.Background(), t,
+		&mockFactory{}, backgroundprocess.NewStore(db), builtin.NewResources(), store, failing, sessions, sessions,
 		sessions, sessions, sessions, sessions,
-		subagent.NewStore(db), subagent.NewTransactions(db),
+		subagent.NewStore(db), mustNewTransactions(t, db, sessionstore.InvalidateCompletionCheckTx),
 		nil, sessions, nil, nil,
 	)
 	controllers := newTestController(mgr, &config.Config{}, nil, nil)

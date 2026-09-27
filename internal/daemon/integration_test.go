@@ -16,6 +16,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/pilat/coagent/internal/backgroundprocess"
 	"github.com/pilat/coagent/internal/budget"
 	"github.com/pilat/coagent/internal/coagenthome"
 	"github.com/pilat/coagent/internal/config"
@@ -29,6 +30,7 @@ import (
 	"github.com/pilat/coagent/internal/sessionstore"
 	"github.com/pilat/coagent/internal/subagent"
 	"github.com/pilat/coagent/internal/tool"
+	"github.com/pilat/coagent/internal/tool/builtin"
 	"github.com/pilat/coagent/internal/transcript"
 )
 
@@ -304,8 +306,9 @@ func newSubagentHarnessOnDBWithProjectConfig(
 	pid, err = store.GetOrCreateProject(context.Background(), workDir)
 	require.NoError(t, err)
 
+	resources := builtin.NewResources()
 	factory := session.NewFactoryWithOptions(
-		cfg, nil, nil, sessStore, sessStore, nil, nil, nil,
+		cfg, nil, nil, sessStore, sessStore, nil, nil, nil, resources,
 		session.WithLLMClientFactory(func(_ *config.Config) (llm.Client, error) {
 			client := &scriptedLLM{respond: respond}
 
@@ -317,9 +320,8 @@ func newSubagentHarnessOnDBWithProjectConfig(
 		}),
 	)
 
-	mgr, _ := newSvc(
-		context.Background(),
-		factory,
+	mgr := mustNewSvc(context.Background(), t,
+		factory, backgroundprocess.NewStore(db), resources,
 		store,
 		sessStore,
 		sessStore,
@@ -329,7 +331,7 @@ func newSubagentHarnessOnDBWithProjectConfig(
 		sessStore,
 		sessStore,
 		links,
-		subagent.NewTransactions(db),
+		mustNewTransactions(t, db, sessionstore.InvalidateCompletionCheckTx),
 		budget.New(sessStore),
 		sessStore,
 		schedule.NewService(schedStore),
@@ -1064,16 +1066,16 @@ func newMCPHarnessConfigured(
 		configure(cfg)
 	}
 
+	resources := builtin.NewResources()
 	factory := session.NewFactoryWithOptions(
-		cfg, nil, nil, sessStore, sessStore, nil, registry, nil,
+		cfg, nil, nil, sessStore, sessStore, nil, registry, nil, resources,
 		session.WithLLMClientFactory(func(_ *config.Config) (llm.Client, error) {
 			return &scriptedLLM{respond: respond}, nil
 		}),
 	)
 
-	mgr, _ := newSvc(
-		context.Background(),
-		factory,
+	mgr := mustNewSvc(context.Background(), t,
+		factory, backgroundprocess.NewStore(db), resources,
 		store,
 		sessStore,
 		sessStore,
@@ -1083,7 +1085,7 @@ func newMCPHarnessConfigured(
 		sessStore,
 		sessStore,
 		links,
-		subagent.NewTransactions(db),
+		mustNewTransactions(t, db, sessionstore.InvalidateCompletionCheckTx),
 		budget.New(sessStore),
 		sessStore,
 		schedule.NewService(schedStore),

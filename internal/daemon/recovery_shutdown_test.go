@@ -100,7 +100,7 @@ func TestShutdownCancelsRunnersBeforeWaitingForProgress(t *testing.T) {
 	activeRunner := sessionlifecycle.NewRunner[queuedSessionInput](
 		cancel, t.TempDir(), 1, admission.Parent, 0, false, nil,
 	)
-	_, registered := mgr.runners.Register(1, activeRunner)
+	registered := mgr.supervisor.Attach(1, activeRunner)
 	require.True(t, registered)
 
 	go func() {

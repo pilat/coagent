@@ -16,9 +16,10 @@ const ToolID = "set_budget"
 const noActivationMessage = "This change requires a current user message beginning with /budget."
 
 type budgetTool struct {
-	service Service
-	rootID  int64
-	priced  bool
+	service  Service
+	rootID   int64
+	priced   bool
+	onChange func()
 }
 
 type toolParams struct {
@@ -32,8 +33,9 @@ var (
 	_ tool.ActivationDeclarer = (*budgetTool)(nil)
 )
 
-func NewTool(service Service, rootID int64, priced bool) tool.Tool {
-	return &budgetTool{service: service, rootID: rootID, priced: priced}
+// NewTool wakes execution control after a successful budget mutation.
+func NewTool(service Service, rootID int64, priced bool, onChange func()) tool.Tool {
+	return &budgetTool{service: service, rootID: rootID, priced: priced, onChange: onChange}
 }
 
 func (t *budgetTool) ID() string { return ToolID }
@@ -100,6 +102,8 @@ func (t *budgetTool) Execute(ctx context.Context, raw json.RawMessage) (*tool.Re
 			return nil, err
 		}
 
+		t.changed()
+
 		return &tool.Result{Output: renderRecord(record), DirectMessages: []string{receipt}}, nil
 	case "clear":
 		if params.CostUSD != nil || params.Duration != "" {
@@ -116,9 +120,17 @@ func (t *budgetTool) Execute(ctx context.Context, raw json.RawMessage) (*tool.Re
 			return nil, err
 		}
 
+		t.changed()
+
 		return &tool.Result{Output: renderRecord(record), DirectMessages: []string{receipt}}, nil
 	default:
 		return nil, errors.New("action must be get, set, or clear")
+	}
+}
+
+func (t *budgetTool) changed() {
+	if t.onChange != nil {
+		t.onChange()
 	}
 }
 

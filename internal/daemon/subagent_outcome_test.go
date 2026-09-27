@@ -290,7 +290,7 @@ func TestDrainQueue_SkipsKilledChild(t *testing.T) {
 	}))
 
 	// Park the child, then kill it before any runner picks it up.
-	h.mgr.enqueueChild(ctx, childID, parent.ID, "/tmp", h.projectID)
+	h.mgr.supervisor.QueueChild(ctx, childID, parent.ID, "/tmp", h.projectID)
 	h.mgr.killSubagent(ctx, childID, time.Time{})
 
 	h.mgr.drainQueue(ctx)

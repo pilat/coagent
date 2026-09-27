@@ -72,8 +72,8 @@ func TestRunLoopRejectsUnknownSkillAtBoundary(t *testing.T) {
 			// results: those would be stranded with nobody to read them.
 			name:         "tool results still owed an answer",
 			messages:     []llmwire.Message{usr("old task"), asst("", call("read-1", "read"))},
-			wantCalls:    1,
-			wantMessages: 4,
+			wantCalls:    2,
+			wantMessages: 6,
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -86,11 +86,13 @@ func TestRunLoopRejectsUnknownSkillAtBoundary(t *testing.T) {
 			}
 			agent.boundary = boundary
 
-			llmClient := &loopScriptLLM{responses: []*llmwire.Response{textResponse("answered")}}
+			llmClient := &loopScriptLLM{
+				responses: []*llmwire.Response{textResponse("answered"), textResponse("confirmed")},
+			}
 			agent.llmClient = llmClient
 			notifier := &loopNotifier{}
 
-			_, err := runLoop(t.Context(), agent, loopOptions{Notify: notifier.fn}, iterationGuard(5))
+			_, err := runTestLoop(t.Context(), t, agent, loopOptions{Notify: notifier.fn}, iterationGuard(5))
 
 			require.NoError(t, err)
 			assert.Equal(t, tc.wantCalls, llmClient.calls)

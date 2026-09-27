@@ -112,6 +112,7 @@ func TestSystemPrompt_DoesNotAdvertiseConfiguredModelCatalog(t *testing.T) {
 				require.True(t, s.RegisterGatedTool(testTool{id: tool.IDTask}))
 			}
 
+			prepareDurableLoop(t, s)
 			_, err := s.run(context.Background(), "do the thing")
 			require.NoError(t, err)
 
@@ -290,6 +291,7 @@ func TestSystemPrompt_AdvertisesToolsRegisteredAfterConstruction(t *testing.T) {
 		require.True(t, s.RegisterGatedTool(testTool{id: id}), "daemon tool %q must pass the gate", id)
 	}
 
+	prepareDurableLoop(t, s)
 	_, err := s.run(context.Background(), "do the thing")
 	require.NoError(t, err)
 
@@ -323,6 +325,7 @@ func TestSystemPrompt_AnnouncesSubagentsOnlyWhenTaskToolIsAvailable(t *testing.T
 			s, llmClient := newPromptTestSession(t, workDir, loader.New(), tc.agentType)
 			s.RegisterGatedTool(testTool{id: tool.IDTask})
 
+			prepareDurableLoop(t, s)
 			_, err := s.run(context.Background(), "do the thing")
 			require.NoError(t, err)
 

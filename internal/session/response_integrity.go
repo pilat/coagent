@@ -83,12 +83,11 @@ func (r *loopRunner) persistRejectedResponse(
 		return result, nil
 	}
 
-	store, ok := r.agent.store.(sessionstore.ResponseIntegrityStore)
-	if !ok {
+	if r.agent.store == nil {
 		return nil, errors.New("response integrity store unavailable")
 	}
 
-	result, err := store.CommitRejectedResponse(ctx, rejection)
+	result, err := r.agent.store.CommitRejectedResponse(ctx, rejection)
 	if err != nil {
 		return nil, fmt.Errorf("commit rejection: %w", err)
 	}

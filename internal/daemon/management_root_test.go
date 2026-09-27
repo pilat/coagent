@@ -8,11 +8,13 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/pilat/coagent/internal/backgroundprocess"
 	"github.com/pilat/coagent/internal/config"
 	"github.com/pilat/coagent/internal/controllerapi"
 	"github.com/pilat/coagent/internal/migrate"
 	"github.com/pilat/coagent/internal/sessionstore"
 	"github.com/pilat/coagent/internal/subagent"
+	"github.com/pilat/coagent/internal/tool/builtin"
 )
 
 // Three managers share one hidden project but own three independent roots,
@@ -30,11 +32,24 @@ func TestManagementRoot_ThreeManagersShareProjectKeepOwnership(t *testing.T) {
 	projects := NewStore(db)
 	sessions := sessionstore.NewStore(db)
 	cfg := &config.Config{UnifiedConfig: &config.UnifiedConfig{ProjectsRoot: filepath.Join(root, "projects")}}
-	svc, _ := newSvc(
-		ctx, &mockFactory{}, projects, sessions, sessions, sessions,
-		sessions, sessions, sessions, sessions,
-		subagent.NewStore(db), subagent.NewTransactions(db),
-		nil, nil, nil, func() string { return "fake-model" },
+	svc := mustNewSvc(ctx, t,
+		&mockFactory{},
+		backgroundprocess.NewStore(db),
+		builtin.NewResources(),
+		projects,
+		sessions,
+		sessions,
+		sessions,
+		sessions,
+		sessions,
+		sessions,
+		sessions,
+		subagent.NewStore(db),
+		mustNewTransactions(t, db, sessionstore.InvalidateCompletionCheckTx),
+		nil,
+		nil,
+		nil,
+		func() string { return "fake-model" },
 	)
 	factory := newTestController(svc, cfg, nil, nil)
 
@@ -94,11 +109,24 @@ func TestManagementRoot_RestartResumesSameRootAndPatchesTopic(t *testing.T) {
 	projects := NewStore(db)
 	sessions := sessionstore.NewStore(db)
 	cfg := &config.Config{UnifiedConfig: &config.UnifiedConfig{ProjectsRoot: filepath.Join(root, "projects")}}
-	svc, _ := newSvc(
-		ctx, &mockFactory{}, projects, sessions, sessions, sessions,
-		sessions, sessions, sessions, sessions,
-		subagent.NewStore(db), subagent.NewTransactions(db),
-		nil, nil, nil, func() string { return "fake-model" },
+	svc := mustNewSvc(ctx, t,
+		&mockFactory{},
+		backgroundprocess.NewStore(db),
+		builtin.NewResources(),
+		projects,
+		sessions,
+		sessions,
+		sessions,
+		sessions,
+		sessions,
+		sessions,
+		sessions,
+		subagent.NewStore(db),
+		mustNewTransactions(t, db, sessionstore.InvalidateCompletionCheckTx),
+		nil,
+		nil,
+		nil,
+		func() string { return "fake-model" },
 	)
 	factory := newTestController(svc, cfg, nil, nil)
 

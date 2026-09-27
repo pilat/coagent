@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/pilat/coagent/internal/backgroundprocess"
 	"github.com/pilat/coagent/internal/budget"
 	"github.com/pilat/coagent/internal/config"
 	"github.com/pilat/coagent/internal/controllerapi"
@@ -24,6 +25,7 @@ import (
 	"github.com/pilat/coagent/internal/sessionstore"
 	"github.com/pilat/coagent/internal/subagent"
 	"github.com/pilat/coagent/internal/tool"
+	"github.com/pilat/coagent/internal/tool/builtin"
 )
 
 type scheduleRestartHarness struct {
@@ -281,12 +283,12 @@ func buildScheduleRestartHarness(
 	sessionStore := sessionstore.NewStore(db)
 	links := subagent.NewStore(db)
 	schedules := schedule.NewStore(db)
-	factory := scheduleRestartFactory(workDir, sessionStore, respond)
-	mgr, _ := newSvc(
-		context.Background(),
-		factory, store, sessionStore, sessionStore, sessionStore,
+	resources := builtin.NewResources()
+	factory := scheduleRestartFactory(workDir, sessionStore, respond, resources)
+	mgr := mustNewSvc(context.Background(), t,
+		factory, backgroundprocess.NewStore(db), resources, store, sessionStore, sessionStore, sessionStore,
 		sessionStore, sessionStore, sessionStore, sessionStore,
-		links, subagent.NewTransactions(db),
+		links, mustNewTransactions(t, db, sessionstore.InvalidateCompletionCheckTx),
 		budget.New(sessionStore), sessionStore, schedule.NewService(schedules), func() string {
 			return "fake-model"
 		})
@@ -303,10 +305,11 @@ func scheduleRestartFactory(
 	workDir string,
 	store sessionstore.Store,
 	respond func(string, []llmwire.Message) *llmwire.Response,
+	resources builtin.Resources,
 ) session.Factory {
 	cfg := &config.Config{WorkDir: workDir, Model: "fake-model"}
 	return session.NewFactoryWithOptions(
-		cfg, nil, nil, store, store, nil, nil, nil,
+		cfg, nil, nil, store, store, nil, nil, nil, resources,
 		session.WithLLMClientFactory(func(*config.Config) (llm.Client, error) {
 			return &scriptedLLM{respond: respond}, nil
 		}),

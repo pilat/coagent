@@ -40,15 +40,10 @@ type CreateOptions struct {
 	InputBoundary  InputBoundary
 	OutputEnabled  bool
 	BudgetGate     BudgetGate
+	ProcessService backgroundprocess.Service
 	// RepoRoot is the path to the main git repository (for worktree sessions).
 	// Empty for non-worktree sessions.
 	RepoRoot string
-	// SettlementOpen marks a lifecycle settlement open: the initial state is not
-	// persisted, so a stopping root is never reactivated by /stop settlement.
-	SettlementOpen bool
-	// TranscriptOnly opens durable call state without constructing a model or
-	// tools; callers use only call resolution and Close.
-	TranscriptOnly bool
 
 	// PreserveStoppedStatus marks a command-only activation of a stopped root:
 	// read-only boundary commands run, but the run must not reactivate the root
@@ -99,7 +94,6 @@ type factory struct {
 	mcpStore         mcpstore.Store
 	marketplaceCache loader.MarketplaceCache
 	newLLMClient     func(cfg *config.Config) (llm.Client, error)
-	processSvc       backgroundprocess.Service
 	resources        builtin.Resources
 }
 
@@ -112,26 +106,6 @@ func WithLLMClientFactory(fn func(cfg *config.Config) (llm.Client, error)) Facto
 	return func(f *factory) { f.newLLMClient = fn }
 }
 
-// WithProcessService injects the daemon-owned background-process lifecycle
-// service. When nil, the Bash tool starts no background processes.
-func WithProcessService(service backgroundprocess.Service) FactoryOption {
-	return func(f *factory) { f.processSvc = service }
-}
-
-// WithFactoryProcessService re-wraps an already-built Factory with the
-// daemon-owned process service. Used when the daemon constructs the service
-// after the base factory.
-func WithFactoryProcessService(base Factory, service backgroundprocess.Service) Factory {
-	if f, ok := base.(*factory); ok {
-		clone := *f
-		clone.processSvc = service
-
-		return &clone
-	}
-
-	return base
-}
-
 // NewFactory creates a session factory with shared dependencies.
 func NewFactory(
 	cfg *config.Config,
@@ -142,9 +116,10 @@ func NewFactory(
 	gitClient git.Client,
 	mcpStore mcpstore.Store,
 	marketplaceCache loader.MarketplaceCache,
+	resources builtin.Resources,
 ) Factory {
 	return NewFactoryWithOptions(
-		cfg, secrets, memoryStore, store, outputStore, gitClient, mcpStore, marketplaceCache,
+		cfg, secrets, memoryStore, store, outputStore, gitClient, mcpStore, marketplaceCache, resources,
 	)
 }
 
@@ -158,6 +133,7 @@ func NewFactoryWithOptions(
 	gitClient git.Client,
 	mcpStore mcpstore.Store,
 	marketplaceCache loader.MarketplaceCache,
+	resources builtin.Resources,
 	opts ...FactoryOption,
 ) Factory {
 	f := &factory{
@@ -170,7 +146,7 @@ func NewFactoryWithOptions(
 		mcpStore:         mcpStore,
 		marketplaceCache: marketplaceCache,
 		newLLMClient:     llm.NewClient,
-		resources:        builtin.NewResources(),
+		resources:        resources,
 	}
 
 	for _, o := range opts {
@@ -178,39 +154,6 @@ func NewFactoryWithOptions(
 	}
 
 	return f
-}
-
-// RetireToolResources releases a stopped session's cached shell and MCP resources.
-func RetireToolResources(base Factory, sessionID int64) error {
-	if f, ok := base.(*factory); ok {
-		if err := f.resources.Retire(sessionID); err != nil {
-			return fmt.Errorf("retire session tool resources: %w", err)
-		}
-	}
-
-	return nil
-}
-
-// InvalidateToolResources retires a project's resources; zero selects all projects.
-func InvalidateToolResources(base Factory, projectID int64) error {
-	if f, ok := base.(*factory); ok {
-		if err := f.resources.Invalidate(projectID); err != nil {
-			return fmt.Errorf("invalidate project tool resources: %w", err)
-		}
-	}
-
-	return nil
-}
-
-// CloseToolResources closes the factory after daemon runners have joined.
-func CloseToolResources(base Factory) error {
-	if f, ok := base.(*factory); ok {
-		if err := f.resources.Close(); err != nil {
-			return fmt.Errorf("close session tool resources: %w", err)
-		}
-	}
-
-	return nil
 }
 
 // buildRegistry assembles the session's core-tools + MCP stack. The returned
@@ -221,6 +164,7 @@ func (f *factory) buildRegistry(
 	ldr loader.Service,
 	todoSvc todo.Service,
 	projectID, sessionID, rootID int64,
+	processService backgroundprocess.Service,
 ) (tool.Registry, *builtin.Stack, error) {
 	stack, err := builtin.BuildStack(ctx, builtin.StackConfig{
 		ProjectID:       projectID,
@@ -234,7 +178,7 @@ func (f *factory) buildRegistry(
 		Todo:            todoSvc,
 		TodoReplacement: &todoReplacement{store: f.store, sessionID: sessionID, memory: todoSvc},
 		FileReadTracker: &fileReadTracker{store: f.store, sessionID: sessionID},
-		ProcessService:  f.processSvc,
+		ProcessService:  processService,
 		Resources:       f.resources,
 	})
 	if err != nil {

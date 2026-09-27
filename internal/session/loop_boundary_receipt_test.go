@@ -99,7 +99,7 @@ func TestRunLoopAcceptsSkillWithActivationReceipt(t *testing.T) {
 	agent.llmClient = llmClient
 	notifier := &loopNotifier{}
 
-	_, err := runLoop(t.Context(), agent, loopOptions{Notify: notifier.fn}, iterationGuard(5))
+	_, err := runTestLoop(t.Context(), t, agent, loopOptions{Notify: notifier.fn}, iterationGuard(5))
 	require.NoError(t, err)
 
 	require.Equal(t, 1, boundary.accepts)
@@ -127,7 +127,7 @@ func TestRunLoopSkillWithoutManagerOwnerHasNoReceipt(t *testing.T) {
 	agent.llmClient = llmClient
 	notifier := &loopNotifier{}
 
-	_, err := runLoop(t.Context(), agent, loopOptions{Notify: notifier.fn}, iterationGuard(5))
+	_, err := runTestLoop(t.Context(), t, agent, loopOptions{Notify: notifier.fn}, iterationGuard(5))
 	require.NoError(t, err)
 
 	assert.Equal(t, 1, boundary.accepts)
@@ -152,7 +152,7 @@ func TestRunLoopUnknownSkillEmitsNoReceipt(t *testing.T) {
 	agent.llmClient = llmClient
 	notifier := &loopNotifier{}
 
-	_, err := runLoop(t.Context(), agent, loopOptions{Notify: notifier.fn}, iterationGuard(5))
+	_, err := runTestLoop(t.Context(), t, agent, loopOptions{Notify: notifier.fn}, iterationGuard(5))
 	require.NoError(t, err)
 
 	assert.Zero(t, boundary.accepts)
@@ -182,7 +182,7 @@ func TestRunLoopBlockedSkillPromotionEndsTheDrain(t *testing.T) {
 	agent.llmClient = llmClient
 	notifier := &loopNotifier{}
 
-	result, err := runLoop(t.Context(), agent, loopOptions{Notify: notifier.fn}, iterationGuard(5))
+	result, err := runTestLoop(t.Context(), t, agent, loopOptions{Notify: notifier.fn}, iterationGuard(5))
 	require.NoError(t, err)
 
 	require.NotNil(t, result)

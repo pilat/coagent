@@ -366,8 +366,16 @@ _Avoid_: sleep wake, subagent wake.
 
 **admission control**:
 The `admission` package's concurrency governor — caps on total, child, and
-per-parent sessions plus spawn depth. `sessionlifecycle` coordinates its verdict
-with durable-aware FIFO overflow queues and runner registration.
+per-parent sessions plus spawn depth. The `sessionlifecycle` supervisor owns its
+pairing with runner registration/release, durable-aware FIFO overflow queues and
+their retry lifetime.
+
+**lifecycle supervisor**:
+The `sessionlifecycle` owner of reconstructible runners, admission coordination,
+tree fences and capacity queues. Its tree-stop operation joins producer and
+runner effects before durable settlement; daemon supplies integration effects
+without mutating the supervisor's containers.
+_Avoid_: daemon (the broader application coordinator), session (the task identity).
 
 **subagent link ledger** (`subagent.Store`):
 The subagent package's durable record (`subagent_links` table) of parent↔child
@@ -449,6 +457,14 @@ a durable pointer to the candidate row lets a subagent's parent receive the
 same answer. A later external model-bound input or tool-bearing response
 invalidates the check; an empty response remains subject to loop detection.
 _Avoid_: stop marker, magic acknowledgement, final-answer tool.
+
+**activation outcome**:
+The session-store projection of an activation's result from existing durable
+session and transcript evidence. It preserves confirmed-candidate answers,
+terminal rejection and empty-stop precedence for child finalization and recovery;
+it introduces no additional ledger.
+_Avoid_: model finish reason (one attempt's generation result), session status
+(the persistent lifecycle label).
 
 **attachment** (referenced image attachment):
 A disk reference stored on a tool-result row in `messages.attachments` — never

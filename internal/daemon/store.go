@@ -147,11 +147,6 @@ func (s *store) ListProjects(ctx context.Context) ([]ProjectRow, error) {
 	return projects, nil
 }
 
-// DB exposes the underlying database for the background-process ledger.
-func (s *store) DB() *sql.DB {
-	return s.db
-}
-
 func (s *store) getOrCreateProject(ctx context.Context, absPath, name string) (int64, error) {
 	_, err := s.db.ExecContext(
 		ctx,

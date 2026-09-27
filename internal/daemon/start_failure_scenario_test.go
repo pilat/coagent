@@ -24,7 +24,7 @@ type unavailableModelFactory struct {
 }
 
 func (f *unavailableModelFactory) Create(ctx context.Context, opts session.CreateOptions) (session.Service, error) {
-	if !opts.TranscriptOnly && opts.Model == "removed-model" && f.unavailable.Load() {
+	if opts.Model == "removed-model" && f.unavailable.Load() {
 		f.failures.Add(1)
 		return nil, errors.New("model removed-model not found in config")
 	}

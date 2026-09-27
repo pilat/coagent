@@ -31,11 +31,11 @@ func TestLedgerFailure_SpawnRefusesInsteadOfDegrading(t *testing.T) {
 	require.NotZero(t, ok.ChildID)
 	h.waitForDelivery(ok.ChildID)
 	h.mgr.waitIdle(ok.ChildID)
-	h.waitUntil("healthy child runner removed", func() bool { return h.mgr.runners.Len() == 0 })
+	h.waitUntil("healthy child runner removed", func() bool { return h.mgr.supervisor.Count() == 0 })
 
-	loopsBefore := h.mgr.runners.Len()
+	loopsBefore := h.mgr.supervisor.Count()
 
-	childrenBefore := h.mgr.admit.LiveChildren()
+	childrenBefore := h.mgr.supervisor.LiveChildren()
 
 	flaky.failGetLink(1, 0)
 
@@ -45,8 +45,8 @@ func TestLedgerFailure_SpawnRefusesInsteadOfDegrading(t *testing.T) {
 	require.Error(t, err)
 	assert.Equal(t, childResult{}, res)
 
-	loopsAfter := h.mgr.runners.Len()
+	loopsAfter := h.mgr.supervisor.Count()
 
 	assert.Equal(t, loopsBefore, loopsAfter, "no runner was started")
-	assert.Equal(t, childrenBefore, h.mgr.admit.LiveChildren(), "no child slot was taken")
+	assert.Equal(t, childrenBefore, h.mgr.supervisor.LiveChildren(), "no child slot was taken")
 }

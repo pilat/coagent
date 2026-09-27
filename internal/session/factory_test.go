@@ -9,22 +9,18 @@ import (
 
 	"github.com/pilat/coagent/internal/config"
 	"github.com/pilat/coagent/internal/llm"
+	"github.com/pilat/coagent/internal/tool/builtin"
 )
 
 // A client created by Factory.Create belongs to the factory until a complete
 // Service is returned. In particular, malformed persisted resume state must not
 // turn an otherwise ordinary construction error into a connection leak.
 func TestFactoryCreateClosesLLMClientOnBuildFailure(t *testing.T) {
+	_, store, _ := newFinalOutputStore(t)
 	client := &mockLLMClientTracked{model: "fake-model"}
 	factory := NewFactoryWithOptions(
 		&config.Config{Model: "fake-model"},
-		nil,
-		nil,
-		nil,
-		nil,
-		nil,
-		nil,
-		nil,
+		nil, nil, store, nil, nil, nil, nil, builtin.NewResources(),
 		WithLLMClientFactory(func(*config.Config) (llm.Client, error) { return client, nil }),
 	)
 
@@ -42,7 +38,7 @@ func TestFactoryCreateRequiresOutputStoreForManagedRoot(t *testing.T) {
 
 	factory := NewFactoryWithOptions(
 		&config.Config{Model: "fake-model"},
-		nil, nil, nil, nil, nil, nil, nil,
+		nil, nil, nil, nil, nil, nil, nil, builtin.NewResources(),
 	)
 
 	_, err := factory.Create(context.Background(), CreateOptions{
@@ -51,21 +47,10 @@ func TestFactoryCreateRequiresOutputStoreForManagedRoot(t *testing.T) {
 	require.ErrorContains(t, err, "output store is required")
 }
 
-func TestFactoryCreateTranscriptOnlySkipsRemovedModelAndTools(t *testing.T) {
-	createdLLM := false
-	factory := NewFactoryWithOptions(
-		&config.Config{Model: "current-model"},
-		nil, nil, nil, nil, nil, nil, nil,
-		WithLLMClientFactory(func(*config.Config) (llm.Client, error) {
-			createdLLM = true
-			return nil, nil
-		}),
-	)
-
-	sess, err := factory.Create(context.Background(), CreateOptions{
-		ID: 1, WorkDir: t.TempDir(), Model: "removed-model", TranscriptOnly: true,
-	})
+func TestOpenTranscriptNeedsNoModelOrTools(t *testing.T) {
+	_, store, sessionID := newFinalOutputStore(t)
+	sess, err := OpenTranscript(t.Context(), store, store, sessionID, nil)
 	require.NoError(t, err)
-	assert.False(t, createdLLM, "transcript settlement must not depend on model configuration")
-	sess.Close()
+	assert.Empty(t, sess.PendingExternalCalls())
+	require.NoError(t, sess.SettleStoppedCalls(t.Context(), "stopped"))
 }

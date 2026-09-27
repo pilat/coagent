@@ -14,6 +14,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/pilat/coagent/internal/backgroundprocess"
 	"github.com/pilat/coagent/internal/budget"
 	"github.com/pilat/coagent/internal/config"
 	"github.com/pilat/coagent/internal/controllerapi"
@@ -23,6 +24,7 @@ import (
 	"github.com/pilat/coagent/internal/migrate"
 	"github.com/pilat/coagent/internal/sessionstore"
 	"github.com/pilat/coagent/internal/subagent"
+	"github.com/pilat/coagent/internal/tool/builtin"
 )
 
 type telegramOwnershipHarness struct {
@@ -64,11 +66,16 @@ func newTelegramOwnershipHarness(t *testing.T) *telegramOwnershipHarness {
 	projects := daemon.NewStore(db)
 	sessions := sessionstore.NewStore(db)
 	cfg := &config.Config{UnifiedConfig: &config.UnifiedConfig{ProjectsRoot: filepath.Join(root, "projects")}}
-	svc := daemon.New(
-		context.Background(), nil, projects, sessions, sessions, sessions, sessions, sessions, sessions, sessions,
-		subagent.NewStore(db), subagent.NewTransactions(db),
+	subagentTx, err := subagent.NewTransactions(db, sessionstore.InvalidateCompletionCheckTx)
+	require.NoError(t, err)
+	svc, err := daemon.New(
+		context.Background(), nil, backgroundprocess.NewStore(db), builtin.NewResources(),
+		projects, sessions, sessions, sessions, sessions, sessions, sessions, sessions,
+		subagent.NewStore(db), subagentTx,
 		budget.New(sessions), sessions, nil, cfg, nil, nil,
 	)
+	require.NoError(t, err)
+	t.Cleanup(func() { svc.Shutdown(3 * time.Second) })
 	controllers := managercontrol.New(svc, svc, sessions, cfg, nil)
 	telegramController := controllers.ForManager("telegram-main")
 	projectID, err := projects.GetOrCreateProject(ctx, filepath.Join(root, "project"))

@@ -98,7 +98,7 @@ func TestRunLoopResolvesPendingGrantOnEveryTerminalExit(t *testing.T) {
 				agent.llmClient = &loopScriptLLM{err: errors.New("provider down")}
 			},
 			run: func(t *testing.T, ctx context.Context, agent *svc, boundary *recordingActivationBoundary) {
-				_, err := runLoop(ctx, agent, loopOptions{}, iterationGuard(5))
+				_, err := runTestLoop(ctx, t, agent, loopOptions{}, iterationGuard(5))
 				require.Error(t, err)
 			},
 			wantExpire: true,
@@ -113,7 +113,7 @@ func TestRunLoopResolvesPendingGrantOnEveryTerminalExit(t *testing.T) {
 				}
 			},
 			run: func(t *testing.T, ctx context.Context, agent *svc, boundary *recordingActivationBoundary) {
-				_, err := runLoop(ctx, agent, loopOptions{}, iterationGuard(hardIterationCeiling))
+				_, err := runTestLoop(ctx, t, agent, loopOptions{}, iterationGuard(hardIterationCeiling))
 				require.Error(t, err)
 			},
 			wantExpire: true,
@@ -124,7 +124,7 @@ func TestRunLoopResolvesPendingGrantOnEveryTerminalExit(t *testing.T) {
 				agent.llmClient = &loopScriptLLM{responses: []*llmwire.Response{{}}}
 			},
 			run: func(t *testing.T, ctx context.Context, agent *svc, boundary *recordingActivationBoundary) {
-				_, err := runLoop(ctx, agent, loopOptions{}, iterationGuard(20))
+				_, err := runTestLoop(ctx, t, agent, loopOptions{}, iterationGuard(20))
 				require.NoError(t, err)
 			},
 			wantExpire: true,
@@ -136,7 +136,7 @@ func TestRunLoopResolvesPendingGrantOnEveryTerminalExit(t *testing.T) {
 				agent.budgetGate = &terminalBudgetGate{admitErr: ErrBudgetCheckpoint}
 			},
 			run: func(t *testing.T, ctx context.Context, agent *svc, boundary *recordingActivationBoundary) {
-				result, err := runLoop(ctx, agent, loopOptions{}, iterationGuard(5))
+				result, err := runTestLoop(ctx, t, agent, loopOptions{}, iterationGuard(5))
 				require.NoError(t, err)
 				require.True(t, result.Suspended, "a fired budget suspends the run")
 			},
@@ -151,7 +151,7 @@ func TestRunLoopResolvesPendingGrantOnEveryTerminalExit(t *testing.T) {
 				canceled, cancel := context.WithCancel(ctx)
 				cancel()
 
-				_, err := runLoop(canceled, agent, loopOptions{}, iterationGuard(5))
+				_, err := runTestLoop(canceled, t, agent, loopOptions{}, iterationGuard(5))
 				require.ErrorIs(t, err, context.Canceled)
 			},
 			wantCancel: true,
@@ -195,7 +195,7 @@ func TestRunLoopKeepsConsumedGrantAcrossTerminalError(t *testing.T) {
 	}
 	agent.currentActivation = &consumed
 
-	_, err := runLoop(t.Context(), agent, loopOptions{}, iterationGuard(5))
+	_, err := runTestLoop(t.Context(), t, agent, loopOptions{}, iterationGuard(5))
 	require.Error(t, err)
 
 	assert.Empty(t, boundary.expired, "a consumed grant belongs to the replay contract, not expiry")

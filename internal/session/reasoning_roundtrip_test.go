@@ -38,7 +38,7 @@ func TestLoopReplaysReasoningPayloadOnTheNextTurn(t *testing.T) {
 	agent := newTestAgent(&stubTool{id: "read", result: "content"})
 	agent.llmClient = llmClient
 
-	_, err := runLoop(t.Context(), agent, loopOptions{}, iterationGuard(5))
+	_, err := runTestLoop(t.Context(), t, agent, loopOptions{}, iterationGuard(5))
 	require.NoError(t, err)
 
 	var assistant *llmwire.Message

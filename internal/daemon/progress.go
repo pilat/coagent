@@ -7,7 +7,6 @@ import (
 
 	"go.uber.org/zap"
 
-	"github.com/pilat/coagent/internal/budget"
 	"github.com/pilat/coagent/internal/controllerapi"
 	"github.com/pilat/coagent/internal/logger"
 	"github.com/pilat/coagent/internal/progress"
@@ -97,7 +96,7 @@ func (s *svc) startProgressReconciler(ctx context.Context) {
 }
 
 func (s *svc) liveContextProjection(ctx context.Context, rootID int64) (progress.Context, bool) {
-	activeRunner, ok := s.runners.Load(rootID)
+	activeRunner, ok := s.supervisor.Lookup(rootID)
 	if !ok {
 		return progress.Context{}, false
 	}
@@ -127,7 +126,7 @@ func (s *svc) mainModelWorking(rootID int64) bool {
 		return false
 	}
 
-	activeRunner, ok := s.runners.Load(rootID)
+	activeRunner, ok := s.supervisor.Lookup(rootID)
 	if !ok {
 		return false
 	}
@@ -262,7 +261,6 @@ func (s *svc) settleSubagentProgress(
 
 func newProgressRuntime(
 	store progressruntime.Store,
-	budgetSvc budget.Service,
 	daemon *svc,
 ) progressruntime.Service {
 	if store == nil {
@@ -270,7 +268,7 @@ func newProgressRuntime(
 	}
 
 	return progressruntime.New(
-		store, budgetSvc, daemon.HasActiveLoop, daemon.mainModelWorking, daemon.liveContextProjection,
-		daemon.startBudgetPark, daemon.publish,
+		store, daemon.HasActiveLoop, daemon.mainModelWorking, daemon.liveContextProjection,
+		daemon.publish,
 	)
 }

@@ -19,44 +19,20 @@ const defaultReasoningLevel = "medium"
 var _ Transactions = (*transactions)(nil)
 
 type transactions struct {
-	db *sql.DB
-	// invalidateCompletionCheck is injected by the daemon composition root so
-	// this package keeps no compile-time dependency on sessionstore, which its
-	// protocol-model tests already import. Direct SQL through the same tx.
+	db                        *sql.DB
 	invalidateCompletionCheck func(context.Context, *sql.Tx, int64, time.Time) error
 }
 
-// NewTransactions creates the atomic subagent transition boundary.
-func NewTransactions(db *sql.DB) Transactions {
-	return &transactions{db: db, invalidateCompletionCheck: defaultInvalidateCompletionCheck}
-}
-
-// SetCompletionCheckInvalidator overrides the injected invalidator (test seam).
-func SetCompletionCheckInvalidator(t Transactions, fn func(context.Context, *sql.Tx, int64, time.Time) error) bool {
-	tx, ok := t.(*transactions)
-	if !ok {
-		return false
+// NewTransactions binds parent-input invalidation to the same delivery transaction.
+func NewTransactions(
+	db *sql.DB,
+	invalidateCompletionCheck func(context.Context, *sql.Tx, int64, time.Time) error,
+) (Transactions, error) {
+	if invalidateCompletionCheck == nil {
+		return nil, errors.New("subagent completion invalidator is required")
 	}
 
-	tx.invalidateCompletionCheck = fn
-
-	return true
-}
-
-func defaultInvalidateCompletionCheck(ctx context.Context, tx *sql.Tx, sessionID int64, now time.Time) error {
-	// The WHERE skips the write when nothing is pending, so idle sessions keep
-	// their updated_at.
-	if _, err := tx.ExecContext(ctx, `UPDATE sessions
-		SET completion_check_candidate_id = NULL, empty_stop_streak = 0,
-			completion_check_confirmed_answer_id = NULL, updated_at = ?
-		WHERE id = ?
-			AND (completion_check_candidate_id IS NOT NULL OR empty_stop_streak != 0
-				OR completion_check_confirmed_answer_id IS NOT NULL)`,
-		now, sessionID); err != nil {
-		return fmt.Errorf("invalidate completion check: %w", err)
-	}
-
-	return nil
+	return &transactions{db: db, invalidateCompletionCheck: invalidateCompletionCheck}, nil
 }
 
 func (s *transactions) Create(ctx context.Context, create Create) (int64, error) {

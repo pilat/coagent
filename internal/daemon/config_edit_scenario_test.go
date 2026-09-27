@@ -55,7 +55,7 @@ type panickingRunSession struct {
 
 func (f *panickingRunFactory) Create(ctx context.Context, opts session.CreateOptions) (session.Service, error) {
 	sess, err := f.Factory.Create(ctx, opts)
-	if err != nil || opts.TranscriptOnly {
+	if err != nil {
 		return sess, err
 	}
 	return &panickingRunSession{Service: sess, runs: &f.runs, started: f.started, runBeforePanic: f.runBeforePanic}, nil

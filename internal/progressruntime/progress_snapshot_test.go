@@ -40,7 +40,7 @@ func TestProgressSnapshot_ProjectsTodosInCanonicalOrder(t *testing.T) {
 		RootID: 7, TodoItems: json.RawMessage(todos),
 	}}
 	runtime, ok := New(
-		store, nil, func(int64) bool { return false }, func(int64) bool { return false }, nil, nil, nil,
+		store, func(int64) bool { return false }, func(int64) bool { return false }, nil, nil,
 	).(*runtime)
 	require.True(t, ok, "New must return the concrete runtime")
 

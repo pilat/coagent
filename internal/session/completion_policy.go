@@ -39,71 +39,107 @@ type dispositionDecision struct {
 	nudge *transcript.Message
 }
 
-// decideDisposition classifies one accepted response after finish-integrity
-// routing. Tool-bearing responses always clear any pending check. A no-tool
-// stop yields immediately on a wake source; otherwise the two-phase check
-// hides the first candidate and publishes the second. A tool_calls finish
-// with no calls never reaches this dispatch: it follows empty-response
-// recovery in recordDispositionIteration.
+type responseFacts struct {
+	response            *llmwire.Response
+	candidateID         int64
+	candidateText       string
+	wake                bool
+	projectionError     string
+	emptyStreak         int
+	outputEnabled       bool
+	replyPending        bool
+	directReplyEligible bool
+	completionNudge     string
+}
+
+// classifyResponse proposes a transition; the disposition transaction validates its CAS and budget.
+func classifyResponse(f responseFacts) dispositionDecision {
+	decision := dispositionDecision{expectedCandidate: f.candidateID}
+
+	decision.outType, decision.output = assistantOutput(
+		f.response,
+		f.outputEnabled,
+		f.replyPending,
+		f.directReplyEligible,
+	)
+	if len(f.response.ToolCalls) > 0 {
+		decision.kind = sessionstore.ResponseDispositionToolCall
+		return decision
+	}
+
+	if f.projectionError != "" {
+		return dispositionDecision{kind: sessionstore.ResponseDispositionProjectionError, output: f.projectionError}
+	}
+
+	empty := f.response.FinishType == llmwire.FinishToolCalls || strings.TrimSpace(f.response.Text) == ""
+	if f.wake {
+		decision.kind = sessionstore.ResponseDispositionBackgroundYield
+
+		decision.expectedCandidate = 0
+		if empty {
+			decision.output, decision.outType = "", ""
+		}
+
+		return decision
+	}
+
+	if empty {
+		decision.kind = sessionstore.ResponseDispositionEmptyStop
+		decision.outType, decision.output = "", ""
+
+		next := f.emptyStreak + 1
+		if next >= emptyResponseBreakThreshold {
+			decision.output = sessionstore.EmptyStopTerminalNotice(next)
+		} else {
+			decision.nudge = hostUserMessage(emptyStopNudge(next))
+		}
+
+		return decision
+	}
+
+	if f.candidateID == 0 {
+		return dispositionDecision{
+			kind:  sessionstore.ResponseDispositionCandidate,
+			nudge: hostUserMessage(f.completionNudge),
+		}
+	}
+
+	decision.kind = sessionstore.ResponseDispositionConfirmed
+	if strings.TrimSpace(f.candidateText) != "" {
+		decision.output = f.candidateText
+	}
+
+	return decision
+}
+
 func (r *loopRunner) decideDisposition(
 	ctx context.Context,
 	state *sessionstore.CompletionCheckState,
 ) dispositionDecision {
-	if len(r.lastResp.ToolCalls) > 0 {
-		decision := dispositionDecision{
-			kind:              sessionstore.ResponseDispositionToolCall,
-			expectedCandidate: durableCandidateID(state),
+	facts := responseFacts{
+		response: r.lastResp, candidateID: durableCandidateID(state),
+		outputEnabled: r.agent.outputEnabled, replyPending: r.replyToInput,
+		directReplyEligible: r.directReplyEligible,
+	}
+	if state != nil {
+		facts.candidateText, facts.emptyStreak = state.CandidateText, state.EmptyStopStreak
+	}
+
+	if len(r.lastResp.ToolCalls) == 0 {
+		var wakeErr error
+
+		facts.wake, wakeErr = r.wakePresent(ctx)
+		if wakeErr != nil {
+			facts.projectionError = projectionErrorNotice(wakeErr)
 		}
 
-		decision.outType, decision.output = assistantOutput(
-			r.lastResp, r.agent.outputEnabled, r.replyToInput, r.directReplyEligible,
-		)
-
-		return decision
-	}
-
-	wake, wakeErr := r.wakePresent(ctx)
-	if wakeErr != nil {
-		return dispositionDecision{
-			kind:   sessionstore.ResponseDispositionProjectionError,
-			output: projectionErrorNotice(wakeErr),
-		}
-	}
-
-	if wake {
-		decision := dispositionDecision{kind: sessionstore.ResponseDispositionBackgroundYield}
-		decision.outType, decision.output = assistantOutput(
-			r.lastResp, r.agent.outputEnabled, r.replyToInput, r.directReplyEligible,
-		)
-
-		return decision
-	}
-
-	if durableCandidateID(state) == 0 {
-		return dispositionDecision{
-			kind:  sessionstore.ResponseDispositionCandidate,
-			nudge: r.nudgeMessage(),
+		if !facts.wake && facts.projectionError == "" && facts.candidateID == 0 &&
+			r.lastResp.FinishType != llmwire.FinishToolCalls && strings.TrimSpace(r.lastResp.Text) != "" {
+			facts.completionNudge = renderCompletionNudge(r.agent.todoStore.List())
 		}
 	}
 
-	decision := dispositionDecision{
-		kind:              sessionstore.ResponseDispositionConfirmed,
-		expectedCandidate: durableCandidateID(state),
-	}
-	decision.outType, decision.output = assistantOutput(
-		r.lastResp, r.agent.outputEnabled, r.replyToInput, r.directReplyEligible,
-	)
-
-	// The pending candidate is the full considered answer; the confirming
-	// stop's own text is by construction a terse "why I'm stopping" ack and is
-	// discarded. Type and releasing semantics stay as they are; an
-	// output-disabled child still publishes nothing (owner guard), but its
-	// recovery value is the candidate.
-	if state != nil && strings.TrimSpace(state.CandidateText) != "" {
-		decision.output = state.CandidateText
-	}
-
-	return decision
+	return classifyResponse(facts)
 }
 
 // wakePresent projects the exact session's durable background wake source.
@@ -142,12 +178,6 @@ func projectionErrorNotice(err error) string {
 	)
 }
 
-// nudgeMessage builds the typed host completion nudge for a hidden candidate.
-// The role is user; the loop never recognizes it by its English text.
-func (r *loopRunner) nudgeMessage() *transcript.Message {
-	return hostUserMessage(renderCompletionNudge(r.agent.todoStore.List()))
-}
-
 // hostUserMessage wraps host-authored continuation text as a user-role
 // transcript row.
 func hostUserMessage(content string) *transcript.Message {
@@ -180,16 +210,6 @@ func (r *loopRunner) recordDispositionIteration(ctx context.Context) error {
 		r.replyToInput = true
 	}
 
-	// An empty no-tool stop is a no-progress signal, not confirmation: the
-	// empty policy counts it toward the 3/6 escalation. A tool_calls finish
-	// with no calls follows empty-response recovery too — its body, even when
-	// text rides along, is never a final answer.
-	if len(r.lastResp.ToolCalls) == 0 &&
-		(r.lastResp.FinishType == llmwire.FinishToolCalls ||
-			strings.TrimSpace(r.lastResp.Text) == "") {
-		return r.recordEmptyStopDisposition(ctx, state)
-	}
-
 	decision := r.decideDisposition(ctx, state)
 
 	result, err := r.commitDisposition(ctx, decision, state)
@@ -197,83 +217,30 @@ func (r *loopRunner) recordDispositionIteration(ctx context.Context) error {
 		return fmt.Errorf("commit accepted response disposition: %w", err)
 	}
 
-	r.afterCommittedDisposition(decision, result, replyToInput)
+	if decision.kind == sessionstore.ResponseDispositionEmptyStop {
+		next := state.EmptyStopStreak + 1
+
+		r.emptyStopTerminal = next >= emptyResponseBreakThreshold
+		if r.emptyStopTerminal && result.Output != nil {
+			r.notify(ctx, decision.output)
+		}
+
+		r.log.Warn("empty_stop_response", zap.Int("iter", r.result.Iterations), zap.Int("consecutive", next))
+	} else {
+		r.afterCommittedDisposition(decision, result, replyToInput)
+	}
+
+	if decision.kind == sessionstore.ResponseDispositionBackgroundYield &&
+		(r.lastResp.FinishType == llmwire.FinishToolCalls || strings.TrimSpace(r.lastResp.Text) == "") {
+		r.dispositionTerminal = true
+	}
 
 	r.log.Info("iteration_end", zap.Int("iter", r.result.Iterations))
 
-	return nil
-}
-
-// recordEmptyStopDisposition persists one empty no-tool stop through the
-// durable empty-streak policy. A wake source yields immediately at any prior
-// count. Without wake the streak increments: ordinary nudges below three, the
-// strong warning at three, and the terminal host notice at six, which ends
-// the activation through ordinary successful completion.
-func (r *loopRunner) recordEmptyStopDisposition(
-	ctx context.Context,
-	state *sessionstore.CompletionCheckState,
-) error {
-	wake, wakeErr := r.wakePresent(ctx)
-	if wakeErr != nil {
-		decision := dispositionDecision{
-			kind:   sessionstore.ResponseDispositionProjectionError,
-			output: projectionErrorNotice(wakeErr),
-		}
-
-		result, err := r.commitDisposition(ctx, decision, state)
-		if err != nil {
-			return fmt.Errorf("commit projection error disposition: %w", err)
-		}
-
-		r.afterCommittedDisposition(decision, result, r.replyToInput)
-
-		return nil
+	if r.lastResp.CostUSD > 0 {
+		r.log.Info("iteration_cost", zap.Int("iter", r.result.Iterations),
+			zap.String("cost_usd", fmt.Sprintf("$%.4f", r.lastResp.CostUSD)))
 	}
-
-	if wake {
-		decision := dispositionDecision{
-			kind:    sessionstore.ResponseDispositionBackgroundYield,
-			outType: "",
-		}
-
-		result, err := r.commitDisposition(ctx, decision, state)
-		if err != nil {
-			return fmt.Errorf("commit background yield disposition: %w", err)
-		}
-
-		// An empty response carries no text for handlePreviousResult to
-		// settle, so the activation must end here instead of calling the
-		// model again (decision 4: an empty stop on this path yields
-		// immediately).
-		r.afterCommittedDisposition(decision, result, r.replyToInput)
-		r.dispositionTerminal = true
-
-		return nil
-	}
-
-	next := 1
-	if state != nil {
-		next = state.EmptyStopStreak + 1
-	}
-
-	if next >= emptyResponseBreakThreshold {
-		return r.commitTerminalEmptyStop(ctx, state, next)
-	}
-
-	// The empty-stop nudge rides the disposition transaction: a crash cannot
-	// strand a durable streak increment without its model-visible warning.
-	decision := dispositionDecision{
-		kind:              sessionstore.ResponseDispositionEmptyStop,
-		expectedCandidate: durableCandidateID(state),
-		nudge:             hostUserMessage(emptyStopNudge(next)),
-	}
-
-	if _, err := r.commitDisposition(ctx, decision, state); err != nil {
-		return fmt.Errorf("commit empty stop disposition: %w", err)
-	}
-
-	r.log.Warn("empty_stop_response",
-		zap.Int("iter", r.result.Iterations), zap.Int("consecutive", next))
 
 	return nil
 }
@@ -291,45 +258,9 @@ func emptyStopNudge(count int) string {
 	return "You returned an empty response with no tool calls. Please continue working on the task, or explain what you need."
 }
 
-// commitTerminalEmptyStop commits the sixth empty response as the ordinary
-// successful final result: one durable host notice through the disposition's
-// idempotent outbox row. A committed row is announced once; a child or
-// output-disabled session stays silent.
-func (r *loopRunner) commitTerminalEmptyStop(
-	ctx context.Context,
-	state *sessionstore.CompletionCheckState,
-	next int,
-) error {
-	notice := sessionstore.EmptyStopTerminalNotice(next)
-
-	decision := dispositionDecision{
-		kind:              sessionstore.ResponseDispositionEmptyStop,
-		expectedCandidate: durableCandidateID(state),
-		output:            notice,
-	}
-
-	result, err := r.commitDisposition(ctx, decision, state)
-	if err != nil {
-		return fmt.Errorf("commit terminal empty stop: %w", err)
-	}
-
-	r.emptyStopTerminal = true
-	r.log.Warn("empty_response_notify_user", zap.Int("count", next))
-
-	if result.Output != nil {
-		r.notify(ctx, notice)
-	}
-
-	return nil
-}
-
 // completionState loads the durable check, reply obligation, and empty streak
-// the loop turn resumes from. Without a store the loop stays in-memory.
+// the loop turn resumes from.
 func (r *loopRunner) completionState(ctx context.Context) (*sessionstore.CompletionCheckState, error) {
-	if r.agent.dispositions == nil {
-		return nil, nil //nolint:nilnil // nil state is the in-memory loop marker.
-	}
-
 	state, err := r.agent.dispositions.LoadCompletionCheckState(ctx, r.agent.id)
 	if err != nil {
 		return nil, fmt.Errorf("load completion check state: %w", err)
@@ -338,10 +269,7 @@ func (r *loopRunner) completionState(ctx context.Context) (*sessionstore.Complet
 	return state, nil
 }
 
-// afterCommittedDisposition updates loop-local caches from the committed
-// outcome. The human-facing announcement stays on handlePreviousResult: it
-// reads the settled transcript and works for both disposition paths, so the
-// disposition commit never publishes prose twice.
+// The transcript-driven announcement stays in handlePreviousResult to avoid duplicate publication.
 func (r *loopRunner) afterCommittedDisposition(
 	decision dispositionDecision,
 	result *sessionstore.AcceptedResponseResult,
@@ -451,8 +379,7 @@ func (r *loopRunner) adoptCommittedDisposition(
 
 	r.agent.budgetFired = result.BudgetFired
 	if result.BudgetFired && r.agent.budgetGate != nil {
-		// The disposition commit replaced PersistResponse, so its fired
-		// verdict still must reach the host park scheduler synchronously.
+		// The committed verdict must reach the host park scheduler synchronously.
 		r.agent.budgetGate.BudgetFired(result.Budget)
 	}
 

@@ -6,10 +6,10 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/pilat/coagent/internal/sessionstore"
 	"github.com/pilat/coagent/internal/subagent"
-	"github.com/pilat/coagent/internal/transcript"
 )
 
 type failingMessagesSessions struct {
@@ -17,8 +17,16 @@ type failingMessagesSessions struct {
 	err error
 }
 
-func (s failingMessagesSessions) LoadActiveMessages(context.Context, int64) ([]*transcript.Message, error) {
-	return nil, s.err
+func (s failingMessagesSessions) LoadActivationOutcome(
+	context.Context,
+	int64,
+	bool,
+) (*sessionstore.ActivationOutcome, error) {
+	return &sessionstore.ActivationOutcome{
+		Kind:       sessionstore.ActivationFailed,
+		Text:       "could not load final messages after 3 iterations",
+		Diagnostic: s.err,
+	}, nil
 }
 
 func TestDeriveOutcomeLoadFailureReportsError(t *testing.T) {
@@ -26,8 +34,9 @@ func TestDeriveOutcomeLoadFailureReportsError(t *testing.T) {
 
 	c := &completions{sessions: failingMessagesSessions{err: errors.New("db down")}}
 
-	result, outcome := c.deriveOutcome(t.Context(), 7, 3, false, false, 0)
+	result, outcome, err := c.recoveredOutcome(t.Context(), 7, false)
 
-	assert.Equal(t, "could not load final messages after 3 iterations", result)
+	require.NoError(t, err)
+	assert.Equal(t, "could not load final messages after 3 iterations", result.Text)
 	assert.Equal(t, subagent.OutcomeError, outcome)
 }

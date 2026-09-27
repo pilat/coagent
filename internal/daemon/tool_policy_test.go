@@ -24,7 +24,7 @@ func TestProductionTools_ParallelSafePolicies(t *testing.T) {
 		"get_subagent_result": newGetSubagentResultTool(sp),
 		tool.IDSchedule:       schedule.NewScheduleTool(0, nil, nil),
 		tool.IDSleep:          schedule.NewSleepTool(nil, 0),
-		budget.ToolID:         budget.NewTool(nil, 0, false),
+		budget.ToolID:         budget.NewTool(nil, 0, false, nil),
 	}
 
 	for _, tl := range []tool.Tool{configtools.NewConfigEdit(nil, nil)} {

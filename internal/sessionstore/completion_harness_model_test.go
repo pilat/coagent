@@ -254,7 +254,7 @@ func TestHarnessModel_CompletionDeliveryThenPromotionInvalidates(t *testing.T) {
 	link, err := subagent.NewStore(db).GetLink(ctx, childID)
 	require.NoError(t, err)
 
-	won, err := newTestSubagentTransactions(db).DeliverBackgroundCompletion(ctx, *link, 1)
+	won, err := newTestSubagentTransactions(t, db).DeliverBackgroundCompletion(ctx, *link, 1)
 	require.NoError(t, err)
 	require.True(t, won)
 

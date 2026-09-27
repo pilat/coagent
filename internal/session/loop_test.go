@@ -85,10 +85,11 @@ func TestCallLLMRecordsTheProviderBaseline(t *testing.T) {
 	agent := newTestAgent()
 	agent.llmClient = &loopScriptLLM{responses: []*llmwire.Response{
 		{Text: "done", Usage: &llmwire.MessageUsage{PromptTokens: 5000}},
+		textResponse("confirmed"),
 	}}
 	agent.ms.setMessages(buildMessagesWithTokens(1000))
 
-	_, err := runLoop(t.Context(), agent, loopOptions{}, iterationGuard(5))
+	_, err := runTestLoop(t.Context(), t, agent, loopOptions{}, iterationGuard(5))
 	require.NoError(t, err)
 
 	base := agent.loadContextBaseline()
@@ -109,7 +110,7 @@ func TestCallLLMLeavesTheProjectionEstimatedWithoutUsage(t *testing.T) {
 	}}
 	agent.ms.setMessages(buildMessagesWithTokens(1000))
 
-	_, err := runLoop(t.Context(), agent, loopOptions{}, iterationGuard(5))
+	_, err := runTestLoop(t.Context(), t, agent, loopOptions{}, iterationGuard(5))
 	require.NoError(t, err)
 
 	assert.Nil(t, agent.loadContextBaseline(), "a provider that reports zero has measured nothing")

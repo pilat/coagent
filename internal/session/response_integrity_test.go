@@ -26,6 +26,9 @@ func TestRunLoopLengthRecoveryHidesRejectedAttemptAndPublishesSuccessOnce(t *tes
 			}, nil
 		}
 
+		if call == 3 {
+			return textResponse("confirmed"), nil
+		}
 		providerText := transcriptText(messages)
 		assert.NotContains(t, providerText, "partial secret")
 		assert.NotContains(t, providerText, `{"bad":`)
@@ -40,14 +43,14 @@ func TestRunLoopLengthRecoveryHidesRejectedAttemptAndPublishesSuccessOnce(t *tes
 	agent.llmClient = model
 	require.NoError(t, agent.ms.addUserMessage(t.Context(), "do the work"))
 
-	result, err := runLoop(t.Context(), agent, loopOptions{Notify: notifier.fn}, iterationGuard(5))
+	result, err := runTestLoop(t.Context(), t, agent, loopOptions{Notify: notifier.fn}, iterationGuard(5))
 	require.NoError(t, err)
 	assert.Equal(t, "complete answer", result.FinalResponse)
 	assert.Zero(t, probe.runs.Load())
 	assert.Equal(t, []string{"complete answer"}, notifier.all())
 
 	rows := loadIntegrityRows(t, db, sessionID)
-	require.Len(t, rows, 4)
+	require.Len(t, rows, 6)
 	assert.Equal(t, sessionstore.RejectedReasonOutputLength, rows[1].rejectedReason.String)
 	assert.Equal(t, rows[1].id, rows[2].retryOf.Int64)
 	assert.Equal(t, sessionstore.OutputLengthRecoveryPrompt, rows[2].content)
@@ -68,7 +71,7 @@ func TestRunLoopRepeatedLengthCommitsOneTerminalError(t *testing.T) {
 	agent.llmClient = model
 	require.NoError(t, agent.ms.addUserMessage(t.Context(), "do the work"))
 
-	result, err := runLoop(t.Context(), agent, loopOptions{Notify: notifier.fn}, iterationGuard(5))
+	result, err := runTestLoop(t.Context(), t, agent, loopOptions{Notify: notifier.fn}, iterationGuard(5))
 	require.EqualError(t, err, sessionstore.IntegrityErrorNotice(sessionstore.OutputLengthTerminalError))
 	assert.Equal(t, sessionstore.IntegrityErrorNotice(sessionstore.OutputLengthTerminalError), result.ErrorNotice)
 	assert.True(t, result.TerminalStateCommitted)
@@ -100,7 +103,7 @@ func TestRunLoopUnknownFinishRejectsWithoutRetry(t *testing.T) {
 	agent.llmClient = model
 	require.NoError(t, agent.ms.addUserMessage(t.Context(), "do the work"))
 
-	result, err := runLoop(t.Context(), agent, loopOptions{}, iterationGuard(5))
+	result, err := runTestLoop(t.Context(), t, agent, loopOptions{}, iterationGuard(5))
 	require.EqualError(t, err, sessionstore.IntegrityErrorNotice(sessionstore.UnknownFinishTerminalError))
 	assert.Equal(t, 1, model.calls)
 	assert.Equal(t, sessionstore.IntegrityErrorNotice(sessionstore.UnknownFinishTerminalError), result.ErrorNotice)
@@ -123,7 +126,7 @@ func TestRunLoopUnknownFinishNeverExecutesIncludedCalls(t *testing.T) {
 	}}}
 	require.NoError(t, agent.ms.addUserMessage(t.Context(), "do the work"))
 
-	_, err := runLoop(t.Context(), agent, loopOptions{}, iterationGuard(3))
+	_, err := runTestLoop(t.Context(), t, agent, loopOptions{}, iterationGuard(3))
 	require.Error(t, err)
 	assert.Zero(t, probe.runs.Load())
 }
@@ -143,7 +146,7 @@ func TestRunLoopStopWithCallsRetainsStructuralToolRouting(t *testing.T) {
 	agent := newTestAgent(probe)
 	agent.llmClient = model
 
-	result, err := runLoop(t.Context(), agent, loopOptions{}, iterationGuard(5))
+	result, err := runTestLoop(t.Context(), t, agent, loopOptions{}, iterationGuard(5))
 	require.NoError(t, err)
 	assert.Equal(t, "done", result.FinalResponse)
 	assert.Equal(t, int64(1), probe.runs.Load())
@@ -163,7 +166,7 @@ func TestRunLoopToolCallsFinishWithoutCallsUsesEmptyNudge(t *testing.T) {
 	agent := newTestAgent()
 	agent.llmClient = model
 
-	result, err := runLoop(t.Context(), agent, loopOptions{Notify: notifier.fn}, iterationGuard(5))
+	result, err := runTestLoop(t.Context(), t, agent, loopOptions{Notify: notifier.fn}, iterationGuard(5))
 	require.NoError(t, err)
 	assert.Equal(t, "done", result.FinalResponse)
 	assert.Equal(t, []string{"done"}, notifier.all())
@@ -176,7 +179,7 @@ func TestRunLoopToolCallsFinishWithoutCallsUsesBoundedEmptyLimit(t *testing.T) {
 		Text: "hidden on every attempt", FinishType: llmwire.FinishToolCalls,
 	}}}
 
-	result, err := runLoop(t.Context(), agent, loopOptions{Notify: notifier.fn}, iterationGuard(10))
+	result, err := runTestLoop(t.Context(), t, agent, loopOptions{Notify: notifier.fn}, iterationGuard(10))
 	require.NoError(t, err)
 	assert.False(t, result.Suspended)
 	assert.Empty(t, result.FinalResponse)

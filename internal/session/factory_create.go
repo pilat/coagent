@@ -11,7 +11,6 @@ import (
 	"github.com/pilat/coagent/internal/llmwire"
 	"github.com/pilat/coagent/internal/loader"
 	"github.com/pilat/coagent/internal/registry"
-	"github.com/pilat/coagent/internal/sessionstore"
 	"github.com/pilat/coagent/internal/todo"
 )
 
@@ -29,15 +28,17 @@ func (f *factory) Create(ctx context.Context, opts CreateOptions) (Service, erro
 		return nil, errors.New("output store is required when output is enabled")
 	}
 
-	ms := newMessageStore(f.store, opts.ID, f.outputStore)
-	if f.store != nil {
-		if err := ms.reloadMessages(ctx); err != nil {
-			return nil, fmt.Errorf("load messages: %w", err)
-		}
+	if f.store == nil {
+		return nil, errors.New("runtime store is required")
 	}
 
-	if opts.TranscriptOnly {
-		return &svc{ms: ms, stagedCalls: opts.StagedExternalCalls}, nil
+	if f.resources == nil {
+		return nil, errors.New("tool resources are required")
+	}
+
+	ms := newMessageStore(f.store, opts.ID, f.outputStore)
+	if err := ms.reloadMessages(ctx); err != nil {
+		return nil, fmt.Errorf("load messages: %w", err)
 	}
 
 	cfg := f.sessionConfig(opts.WorkDir, opts.Model, opts.RepoRoot)
@@ -103,7 +104,7 @@ func (f *factory) build(
 	ldr := loader.New(f.marketplaceCache)
 
 	reg, stack, err := f.buildRegistry(
-		ctx, cfg, ldr, todoSvc, opts.ProjectID, opts.ID, opts.RootID,
+		ctx, cfg, ldr, todoSvc, opts.ProjectID, opts.ID, opts.RootID, opts.ProcessService,
 	)
 	if err != nil {
 		return nil, err
@@ -126,7 +127,7 @@ func (f *factory) build(
 		Registry:     reg,
 		Store:        f.store,
 		OutputStore:  f.outputStore,
-		Dispositions: dispositionsStore(f.store),
+		Dispositions: f.store,
 		GitClient:    f.gitClient,
 		MemoryStore:  f.memoryStore,
 	}
@@ -145,7 +146,6 @@ func (f *factory) build(
 		InputBoundary:         opts.InputBoundary,
 		OutputEnabled:         opts.OutputEnabled,
 		BudgetGate:            opts.BudgetGate,
-		SettlementOpen:        opts.SettlementOpen,
 		PreserveStopped:       opts.PreserveStoppedStatus,
 		ActiveSubagents:       opts.ActiveSubagents,
 		ActiveProcesses:       opts.ActiveProcesses,
@@ -170,18 +170,4 @@ func (f *factory) build(
 	}
 
 	return sess, nil
-}
-
-// dispositionsStore projects the response-disposition capability off the
-// runtime store; nil store keeps the loop on its in-memory test paths.
-func dispositionsStore(store sessionstore.RuntimeStore) sessionstore.ResponseDispositionStore {
-	if store == nil {
-		return nil
-	}
-
-	if d, ok := store.(sessionstore.ResponseDispositionStore); ok {
-		return d
-	}
-
-	return nil
 }

@@ -14,7 +14,6 @@ import (
 	"github.com/pilat/coagent/internal/sessionlifecycle"
 	"github.com/pilat/coagent/internal/sessionstore"
 	"github.com/pilat/coagent/internal/subagent"
-	"github.com/pilat/coagent/internal/transcript"
 )
 
 var errBudgetParkProbe = errors.New("budget park probe")
@@ -128,15 +127,7 @@ func (s *budgetServiceProbe) BeginDrain(
 
 type budgetGateStoreProbe struct {
 	sessionstore.AgentRuntimeStore
-	response   *sessionstore.BudgetedResponseResult
 	compaction *sessionstore.BudgetedCompactionResult
-}
-
-func (s budgetGateStoreProbe) InsertBudgetedResponse(
-	context.Context,
-	sessionstore.BudgetedResponse,
-) (*sessionstore.BudgetedResponseResult, error) {
-	return s.response, nil
 }
 
 func (s budgetGateStoreProbe) ReplaceCompactedMessagesBudgeted(
@@ -178,6 +169,9 @@ func newSessionBudgetGateProbe(
 		ParkPhase:     budgetParkRequested,
 		ParkOwner:     "owner",
 	}
+	if !fired {
+		record.State = sessionstore.BudgetArmed
+	}
 	service := &budgetServiceProbe{beginCalls: make(chan struct{}, 1)}
 	ctx, cancel := context.WithCancel(t.Context())
 	manager := &svc{budgetCtx: ctx, budgetCancel: cancel, budgetSvc: service}
@@ -189,7 +183,6 @@ func newSessionBudgetGateProbe(
 	return &sessionBudgetGate{
 		daemon: manager,
 		store: budgetGateStoreProbe{
-			response: &sessionstore.BudgetedResponseResult{Fired: fired, Budget: record},
 			compaction: &sessionstore.BudgetedCompactionResult{
 				Fired: fired, Budget: record,
 			},
@@ -209,9 +202,9 @@ func TestSessionBudgetGateStartsRequestedPark(t *testing.T) {
 		{
 			name: "response",
 			run: func(gate *sessionBudgetGate) error {
-				_, _, _, err := gate.PersistResponse(t.Context(), &transcript.Message{Role: "assistant"}, "", "", false)
+				gate.BudgetFired(gate.store.(budgetGateStoreProbe).compaction.Budget)
 
-				return err
+				return nil
 			},
 		},
 		{
@@ -248,9 +241,9 @@ func TestSessionBudgetGateDoesNotStartUnfiredPark(t *testing.T) {
 		{
 			name: "response",
 			run: func(gate *sessionBudgetGate) error {
-				_, _, _, err := gate.PersistResponse(t.Context(), &transcript.Message{Role: "assistant"}, "", "", false)
+				gate.BudgetFired(gate.store.(budgetGateStoreProbe).compaction.Budget)
 
-				return err
+				return nil
 			},
 		},
 		{
@@ -287,9 +280,9 @@ func TestSessionBudgetGateOnlyStartsRequestedPhase(t *testing.T) {
 		{
 			name: "response",
 			run: func(gate *sessionBudgetGate) error {
-				_, _, _, err := gate.PersistResponse(t.Context(), &transcript.Message{Role: "assistant"}, "", "", false)
+				gate.BudgetFired(gate.store.(budgetGateStoreProbe).compaction.Budget)
 
-				return err
+				return nil
 			},
 		},
 		{
@@ -325,7 +318,6 @@ func TestSessionBudgetGateOnlyStartsRequestedPhase(t *testing.T) {
 			gate := &sessionBudgetGate{
 				daemon: manager,
 				store: budgetGateStoreProbe{
-					response: &sessionstore.BudgetedResponseResult{Fired: true, Budget: record},
 					compaction: &sessionstore.BudgetedCompactionResult{
 						Fired: true, Budget: record,
 					},

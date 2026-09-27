@@ -28,7 +28,7 @@ func TestEnsureRunner_ClassifyErrorBlocksStart(t *testing.T) {
 	rec, err := h.sessStore.CreateSession(h.ctx, h.projectID, "fake-model", "", nil)
 	require.NoError(t, err)
 
-	totalBefore, childrenBefore := h.mgr.admit.LiveTotal(), h.mgr.admit.LiveChildren()
+	totalBefore, childrenBefore := h.mgr.supervisor.LiveTotal(), h.mgr.supervisor.LiveChildren()
 
 	flaky.failGetLink(1, 0)
 
@@ -36,8 +36,8 @@ func TestEnsureRunner_ClassifyErrorBlocksStart(t *testing.T) {
 	require.ErrorIs(t, err, errLinkRead)
 
 	assert.False(t, h.mgr.HasActiveLoop(rec.ID), "no runner for an unclassifiable session")
-	assert.Equal(t, totalBefore, h.mgr.admit.LiveTotal(), "no slot was taken")
-	assert.Equal(t, childrenBefore, h.mgr.admit.LiveChildren())
+	assert.Equal(t, totalBefore, h.mgr.supervisor.LiveTotal(), "no slot was taken")
+	assert.Equal(t, childrenBefore, h.mgr.supervisor.LiveChildren())
 }
 
 // TestDrainQueue_StartErrorDoesNotRepark: a persistent ledger failure is not a
@@ -62,7 +62,7 @@ func TestDrainQueue_StartErrorDoesNotRepark(t *testing.T) {
 		ParentID: parent.ID, ChildID: childID, TaskCallID: "bg",
 	}))
 
-	h.mgr.enqueueChild(h.ctx, childID, parent.ID, "/tmp", h.projectID)
+	h.mgr.supervisor.QueueChild(h.ctx, childID, parent.ID, "/tmp", h.projectID)
 	// Call 1 is drainQueue's own liveness check; the failure lands on call 2,
 	// ensureRunner's classification read.
 	flaky.failGetLink(2, childID)
@@ -104,13 +104,13 @@ func TestDrainQueue_CapacityReparks(t *testing.T) {
 	// from the link; parking under an idle id makes the two disagree on demand.
 	const idleParentID = int64(9999)
 
-	h.mgr.enqueueChild(h.ctx, childID, idleParentID, "/tmp", h.projectID)
+	h.mgr.supervisor.QueueChild(h.ctx, childID, idleParentID, "/tmp", h.projectID)
 
 	for range admission.MaxPerParent {
-		require.True(t, h.mgr.admit.TryAdmit(admission.Child, parent.ID))
+		require.True(t, h.mgr.reserveRunnerForTest(admission.Child, parent.ID))
 	}
 
-	require.True(t, h.mgr.admit.CanAdmitChild(idleParentID), "the peek must let this entry through")
+	require.True(t, h.mgr.canAdmitChildForTest(idleParentID), "the peek must let this entry through")
 
 	h.mgr.drainQueue(h.ctx)
 
@@ -118,6 +118,6 @@ func TestDrainQueue_CapacityReparks(t *testing.T) {
 	assert.False(t, h.mgr.HasActiveLoop(childID), "and does not start it")
 
 	for range admission.MaxPerParent {
-		h.mgr.admit.Release(admission.Child, parent.ID)
+		h.mgr.releaseRunnerForTest(admission.Child, parent.ID)
 	}
 }

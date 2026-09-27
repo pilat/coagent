@@ -5,7 +5,6 @@ import (
 	"fmt"
 
 	"github.com/pilat/coagent/internal/backgroundprocess"
-	"github.com/pilat/coagent/internal/session"
 )
 
 func (s *svc) cancelSessionSubtreeProcesses(
@@ -37,7 +36,7 @@ func (s *svc) retireTreeToolResources(ctx context.Context, sessionID int64) erro
 	}
 
 	for _, id := range ids {
-		if err := session.RetireToolResources(s.factory, id); err != nil {
+		if err := s.toolResources.Retire(id); err != nil {
 			return fmt.Errorf("retire session %d tools: %w", id, err)
 		}
 	}

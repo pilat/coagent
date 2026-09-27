@@ -224,7 +224,7 @@ func TestRunLoopRunsADeferredCompactionBeforeReturning(t *testing.T) {
 		input: &PendingInput{ID: 1, Content: compactCommand, ReceivedAt: time.Now()},
 	}
 
-	_, err := runLoop(t.Context(), agent, loopOptions{Notify: notifier.fn}, iterationGuard(5))
+	_, err := runTestLoop(t.Context(), t, agent, loopOptions{Notify: notifier.fn}, iterationGuard(5))
 	require.NoError(t, err)
 
 	assert.Equal(t, 1, notifier.countWith("✅ Context compacted"))
@@ -242,7 +242,7 @@ func TestRunLoopDoesNotCompactOnASuspendPath(t *testing.T) {
 
 	notifier := &loopNotifier{}
 
-	result, err := runLoop(t.Context(), agent, loopOptions{Notify: notifier.fn}, iterationGuard(5))
+	result, err := runTestLoop(t.Context(), t, agent, loopOptions{Notify: notifier.fn}, iterationGuard(5))
 	require.NoError(t, err)
 
 	assert.True(t, result.Suspended)
@@ -279,7 +279,7 @@ func TestRunLoopExecutesOwedToolsBeforeAQueuedCompaction(t *testing.T) {
 		input: &PendingInput{ID: 1, Content: compactCommand, ReceivedAt: time.Now()},
 	}
 
-	_, err := runLoop(t.Context(), agent, loopOptions{Notify: notifier.fn}, iterationGuard(5))
+	_, err := runTestLoop(t.Context(), t, agent, loopOptions{Notify: notifier.fn}, iterationGuard(5))
 	require.NoError(t, err)
 
 	require.Len(t, executed, 1, "the owed tool ran exactly once")

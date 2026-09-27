@@ -26,7 +26,7 @@ const (
 // PendingExternalCalls is deliberately global over the active transcript.
 // External work is causal state: a later user or synthetic event cannot
 // supersede it merely by becoming the latest turn.
-func (s *svc) PendingExternalCalls() []PendingToolCall {
+func (s *transcriptSession) PendingExternalCalls() []PendingToolCall {
 	calls := unresolvedCallsMatching(s.ms.getMessages(), func(tc llmwire.ToolCall) bool {
 		return s.stagedCalls[tc.ID] != ""
 	})
@@ -44,7 +44,7 @@ func (s *svc) HasPendingExternalCall() bool {
 	return len(s.PendingExternalCalls()) > 0
 }
 
-func (s *svc) ResolvePendingCall(
+func (s *transcriptSession) ResolvePendingCall(
 	ctx context.Context,
 	call PendingToolCall,
 	content string,
@@ -101,7 +101,7 @@ func (s *svc) ResolvePendingCall(
 // SettleStoppedCalls closes every externally pending call plus unresolved calls
 // in the current assistant turn. It is lifecycle-only: callers must have fenced
 // all ordinary and external producers before using it.
-func (s *svc) SettleStoppedCalls(ctx context.Context, content string) error {
+func (s *transcriptSession) SettleStoppedCalls(ctx context.Context, content string) error {
 	messages := s.ms.getMessages()
 	current := unresolvedToolCalls(messages)
 	calls := unresolvedCallsMatching(messages, func(tc llmwire.ToolCall) bool {
@@ -127,7 +127,11 @@ func (s *svc) SettleStoppedCalls(ctx context.Context, content string) error {
 // The boot sweep uses it to settle every pending call left by a daemon restart:
 // re-executing an operation the model never saw complete is unsafe, so the
 // model must decide whether to retry.
-func (s *svc) ResolveInterruptedCalls(ctx context.Context, calls []PendingToolCall, content string) error {
+func (s *transcriptSession) ResolveInterruptedCalls(
+	ctx context.Context,
+	calls []PendingToolCall,
+	content string,
+) error {
 	current := unresolvedToolCalls(s.ms.getMessages())
 
 	for _, call := range calls {
@@ -146,7 +150,7 @@ func (s *svc) ResolveInterruptedCalls(ctx context.Context, calls []PendingToolCa
 // HasPendingWork reports whether the current assistant turn has unresolved
 // in-loop tools. External calls are excluded even if an erroneous newer turn
 // exists; handlePreviousResult suspends on their global ledger first.
-func (s *svc) HasPendingWork() bool {
+func (s *transcriptSession) HasPendingWork() bool {
 	external := make(map[string]bool)
 
 	for _, call := range s.PendingExternalCalls() {

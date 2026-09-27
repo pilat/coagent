@@ -14,7 +14,6 @@ import (
 	"github.com/pilat/coagent/internal/session"
 	"github.com/pilat/coagent/internal/sessionevent"
 	"github.com/pilat/coagent/internal/sessionstore"
-	"github.com/pilat/coagent/internal/transcript"
 )
 
 type sessionBudgetGate struct {
@@ -51,30 +50,7 @@ func (g *sessionBudgetGate) Admit(ctx context.Context, now time.Time) error {
 	return nil
 }
 
-//nolint:wsl_v5 // Commit and park scheduling form one response boundary.
-func (g *sessionBudgetGate) PersistResponse(
-	ctx context.Context,
-	message *transcript.Message,
-	outputType sessionstore.OutputType,
-	output string,
-	releasesInput bool,
-) (int64, bool, bool, error) {
-	result, err := g.store.InsertBudgetedResponse(ctx, sessionstore.BudgetedResponse{
-		SessionID: g.sessionID, RootID: g.rootID, Message: message,
-		OutputType: outputType, Output: output, ReleasesInput: releasesInput, ObservedAt: time.Now().UTC(),
-	})
-	if err != nil {
-		return 0, false, false, err
-	}
-	if result.Fired && result.Budget.ParkPhase == budgetParkRequested {
-		g.daemon.startBudgetPark(result.Budget)
-	}
-
-	return result.MessageID, result.Fired, result.ReplyPublished, nil
-}
-
-// BudgetFired routes a disposition-committed budget verdict to the same park
-// scheduler the legacy PersistResponse path uses.
+// BudgetFired parks a tree only after the response disposition commits its verdict.
 func (g *sessionBudgetGate) BudgetFired(record *sessionstore.BudgetRecord) {
 	if record != nil && record.ParkPhase == budgetParkRequested {
 		g.daemon.startBudgetPark(record)
@@ -139,7 +115,11 @@ func (s *svc) registerBudgetTool(
 		return
 	}
 
-	registerLogged(ctx, sess, budget.NewTool(s.budgetSvc, record.ID, s.modelHasPricing(record.Model)))
+	registerLogged(
+		ctx,
+		sess,
+		budget.NewTool(s.budgetSvc, record.ID, s.modelHasPricing(record.Model), s.wakeBudgetReconciler),
+	)
 }
 
 func (s *svc) modelHasPricing(modelID string) bool {
@@ -250,4 +230,10 @@ func (s *svc) hasBackgroundObligation(ctx context.Context, rootID int64) (bool, 
 	}
 
 	return obligations.HasBackgroundObligationByRoot(ctx, rootID)
+}
+
+func (s *svc) wakeBudgetReconciler() {
+	if s.budgetReconciler != nil {
+		s.budgetReconciler.Wake()
+	}
 }

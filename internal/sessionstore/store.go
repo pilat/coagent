@@ -204,6 +204,7 @@ type OrchestrationStore interface { //nolint:interfacebloat // one bounded orche
 	// answer pointer stays resolvable for the session's whole life.
 	LoadMessageContentByID(ctx context.Context, sessionID, messageID int64) (string, error)
 	TerminalRejectionStore
+	LoadActivationOutcome(context.Context, int64, bool) (*ActivationOutcome, error)
 }
 
 // Store is the complete persistence surface returned by NewStore. Consumers

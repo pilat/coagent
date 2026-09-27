@@ -137,25 +137,8 @@ func (r *runtime) reconcileProgress(
 			continue
 		}
 
-		if r.budgetSvc != nil {
-			record, fired, budgetErr := r.budgetSvc.Observe(ctx, rootID, facts.CostUSD, now, "")
-			if budgetErr != nil {
-				logger.Ctx(ctx).Named("progressruntime.reconciler").Warn("budget_observe_failed",
-					zap.Int64("session_id", rootID), zap.Error(budgetErr))
-			} else if fired {
-				r.startBudgetPark(record)
-				continue
-			}
-		}
-
-		if facts.Budget != nil && facts.Budget.State == sessionstore.BudgetArmed &&
-			facts.Budget.DurationSeconds != nil {
-			budgetDeadline := facts.Budget.ArmedAt.Add(
-				time.Duration(*facts.Budget.DurationSeconds) * time.Second,
-			)
-			if now.Before(budgetDeadline) {
-				next = min(next, budgetDeadline.Sub(now))
-			}
+		if facts.Budget != nil && facts.Budget.State == sessionstore.BudgetFired {
+			continue
 		}
 
 		interval := SilenceInterval

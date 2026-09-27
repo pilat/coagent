@@ -41,7 +41,7 @@ func TestSlashCompact_DeferralEpisodeEndsWithThePendingCall(t *testing.T) {
 	})
 	s.compactionDeferAnnounced = true
 
-	_, err := runLoop(t.Context(), s, loopOptions{}, nil)
+	_, err := runTestLoop(t.Context(), t, s, loopOptions{}, nil)
 	require.NoError(t, err)
 
 	assert.False(t, s.compactionDeferAnnounced)

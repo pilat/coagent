@@ -8,10 +8,12 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/pilat/coagent/internal/backgroundprocess"
 	"github.com/pilat/coagent/internal/controllerapi"
 	"github.com/pilat/coagent/internal/migrate"
 	"github.com/pilat/coagent/internal/sessionstore"
 	"github.com/pilat/coagent/internal/subagent"
+	"github.com/pilat/coagent/internal/tool/builtin"
 )
 
 // A user turn racing the park drain must be rejected with an actionable
@@ -49,9 +51,8 @@ func TestSendToSessionDuringBudgetDrainExplainsParking(t *testing.T) {
 	_, err = sessions.BeginBudgetDrain(ctx, root.ID, fired.Generation, fired.ParkOwner)
 	require.NoError(t, err)
 
-	mgr, _ := newSvc(
-		context.Background(),
-		&mockFactory{},
+	mgr := mustNewSvc(context.Background(), t,
+		&mockFactory{}, backgroundprocess.NewStore(db), builtin.NewResources(),
 		store,
 		sessions,
 		sessions,
@@ -61,7 +62,7 @@ func TestSendToSessionDuringBudgetDrainExplainsParking(t *testing.T) {
 		sessions,
 		sessions,
 		subagent.NewStore(db),
-		subagent.NewTransactions(db),
+		mustNewTransactions(t, db, sessionstore.InvalidateCompletionCheckTx),
 		nil,
 		sessions,
 		nil,

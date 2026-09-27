@@ -17,6 +17,7 @@ import (
 	"github.com/pilat/coagent/internal/llm"
 	"github.com/pilat/coagent/internal/session"
 	"github.com/pilat/coagent/internal/tool"
+	"github.com/pilat/coagent/internal/tool/builtin"
 )
 
 type configWireMessage struct {
@@ -97,8 +98,21 @@ func testConfigDocumentThroughHTTP(t *testing.T, damaged bool) {
 		Providers: map[string]config.ProviderEntry{"test": {Driver: "openai", BaseURL: server.URL, APIKey: "test-key"}},
 		Models:    []config.ModelEntry{{ID: "fake-model", Provider: "test", MaxTokens: 8192, ContextWindow: 100000}},
 	}}
+	resources := builtin.NewResources()
+	d.mgr.toolResources = resources
 	d.mgr.factory = session.NewFactoryWithOptions(
-		&config.Config{WorkDir: workDir, Model: "fake-model"}, nil, nil, d.sessStore, d.sessStore, nil, nil, nil,
+		&config.Config{
+			WorkDir: workDir,
+			Model:   "fake-model",
+		},
+		nil,
+		nil,
+		d.sessStore,
+		d.sessStore,
+		nil,
+		nil,
+		nil,
+		resources,
 		session.WithLLMClientFactory(func(*config.Config) (llm.Client, error) { return llm.NewClient(wireConfig) }),
 	)
 	id := startConfigEditSession(t, d, "hello")

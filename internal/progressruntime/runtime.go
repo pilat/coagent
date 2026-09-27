@@ -6,7 +6,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/pilat/coagent/internal/budget"
 	"github.com/pilat/coagent/internal/controllerapi"
 	"github.com/pilat/coagent/internal/progress"
 	"github.com/pilat/coagent/internal/sessionevent"
@@ -34,7 +33,6 @@ type Service interface {
 		recaptureOnSuperseded bool,
 	) (string, bool, error)
 	Reconcile(ctx context.Context, now time.Time) time.Duration
-	ReconcileArmedBudgets(ctx context.Context) error
 	ReconcileOutputReadiness(ctx context.Context, outputID int64) error
 	ReconcileLatestReadiness(ctx context.Context, sessionID int64)
 	Wake()
@@ -44,12 +42,10 @@ var _ Service = (*runtime)(nil)
 
 type runtime struct {
 	sessionStore Store
-	budgetSvc    budget.Service
 
 	hasActiveLoop         func(int64) bool
 	mainModelWorking      func(int64) bool
 	liveContextProjection func(context.Context, int64) (progress.Context, bool)
-	startBudgetPark       func(*sessionstore.BudgetRecord)
 	publish               func(int64, sessionevent.Notification)
 
 	mu             sync.Mutex
@@ -63,18 +59,15 @@ type runtime struct {
 
 func New(
 	store Store,
-	budgetSvc budget.Service,
 	hasActiveLoop func(int64) bool,
 	mainModelWorking func(int64) bool,
 	contextProjection func(context.Context, int64) (progress.Context, bool),
-	startBudgetPark func(*sessionstore.BudgetRecord),
 	publish func(int64, sessionevent.Notification),
 ) Service {
 	return &runtime{
-		sessionStore: store, budgetSvc: budgetSvc,
+		sessionStore:  store,
 		hasActiveLoop: hasActiveLoop, mainModelWorking: mainModelWorking,
 		liveContextProjection: contextProjection,
-		startBudgetPark:       startBudgetPark,
 		publish:               publish,
 		readyOutputs:          make(map[int64]int64),
 		progressWake:          make(chan struct{}, 1), progressNow: time.Now, progressTimer: newRealProgressTimer,
@@ -146,10 +139,6 @@ func (r *runtime) EnqueueChangeFor(
 
 func (r *runtime) Reconcile(ctx context.Context, now time.Time) time.Duration {
 	return r.reconcileProgressSafely(ctx, now)
-}
-
-func (r *runtime) ReconcileArmedBudgets(ctx context.Context) error {
-	return r.reconcileArmedBudgets(ctx)
 }
 
 func (r *runtime) Wake() {

@@ -308,8 +308,8 @@ func TestBudgetToolAuthorizationAndReceipts(t *testing.T) {
 
 	ctx := t.Context()
 	f := newBudgetFixture(ctx, t)
-	pricedTool := NewTool(f.svc, f.rootID, true)
-	toolFor := func(fx *budgetFixture) tool.Tool { return NewTool(fx.svc, fx.rootID, true) }
+	pricedTool := NewTool(f.svc, f.rootID, true, nil)
+	toolFor := func(fx *budgetFixture) tool.Tool { return NewTool(fx.svc, fx.rootID, true, nil) }
 
 	authoredCtx := func(grant Grant) context.Context {
 		return tool.WithActivationGrant(tool.WithCallID(ctx, grant.ToolCallID), tool.ActivationGrant{
@@ -377,7 +377,7 @@ func TestBudgetToolAuthorizationAndReceipts(t *testing.T) {
 
 	t.Run("unpriced model refuses cost but allows duration", func(t *testing.T) {
 		f2 := newBudgetFixture(ctx, t)
-		unpriced := NewTool(f2.svc, f2.rootID, false)
+		unpriced := NewTool(f2.svc, f2.rootID, false, nil)
 
 		_, err := unpriced.Execute(authoredCtx(f2.grant()), mustJSON(t, map[string]any{
 			"action": "set", "cost_usd": 5.0,

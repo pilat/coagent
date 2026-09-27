@@ -184,7 +184,7 @@ func TestDeliverCompletion_ClearsCompletionState(t *testing.T) {
 	seedLink(t, db, sessionID, childID, "task-1")
 	seedPendingCheck(t, db, sessionID)
 
-	_, won, err := newTestSubagentTransactions(db).DeliverCompletion(ctx, sessionID, []*transcript.Message{
+	_, won, err := newTestSubagentTransactions(t, db).DeliverCompletion(ctx, sessionID, []*transcript.Message{
 		{Role: "assistant", ToolCalls: []byte(`[{"ID":"ev-1","Name":"subagent_event"}]`)},
 		{Role: "tool", Content: "child done", ToolCallID: "ev-1", ToolName: "subagent_event"},
 	}, childID, 1)

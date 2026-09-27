@@ -10,11 +10,13 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/pilat/coagent/internal/admission"
+	"github.com/pilat/coagent/internal/backgroundprocess"
 	"github.com/pilat/coagent/internal/config"
 	"github.com/pilat/coagent/internal/controllerapi"
 	"github.com/pilat/coagent/internal/migrate"
 	"github.com/pilat/coagent/internal/sessionstore"
 	"github.com/pilat/coagent/internal/subagent"
+	"github.com/pilat/coagent/internal/tool/builtin"
 )
 
 // TestReadinessSuppressesIdleWhileRootIsActiveLoop pins plan decision 39: a
@@ -47,9 +49,8 @@ func TestReadinessSuppressesIdleWhileRootIsActiveLoop(t *testing.T) {
 		RETURNING id`,
 		sessionID).Scan(&outputID))
 
-	mgr, _ := newSvc(
-		context.Background(),
-		&mockFactory{},
+	mgr := mustNewSvc(context.Background(), t,
+		&mockFactory{}, backgroundprocess.NewStore(db), builtin.NewResources(),
 		store,
 		sessions,
 		sessions,
@@ -59,7 +60,7 @@ func TestReadinessSuppressesIdleWhileRootIsActiveLoop(t *testing.T) {
 		sessions,
 		sessions,
 		subagent.NewStore(db),
-		subagent.NewTransactions(db),
+		mustNewTransactions(t, db, sessionstore.InvalidateCompletionCheckTx),
 		nil,
 		sessions,
 		nil,
@@ -69,13 +70,15 @@ func TestReadinessSuppressesIdleWhileRootIsActiveLoop(t *testing.T) {
 	notifications := controllers.ForManager("manager-readiness").Subscribe()
 
 	active := newRunner(func() {}, "", 0, admission.Parent, 0, false, nil)
-	_, registered := mgr.runners.Register(sessionID, active)
+	registered := mgr.supervisor.Attach(sessionID, active)
 	require.True(t, registered)
 
 	require.NoError(t, mgr.ReconcileOutputReadiness(ctx, outputID))
 	requireNoManagerNotification(t, notifications)
 
-	_, deleted := mgr.runners.Delete(sessionID)
+	_, existed := mgr.supervisor.Lookup(sessionID)
+	mgr.supervisor.Finish(sessionID)
+	deleted := existed
 	require.True(t, deleted)
 
 	require.NoError(t, mgr.ReconcileOutputReadiness(ctx, outputID))
@@ -116,9 +119,8 @@ func TestReconcileLatestReadinessPublishesIdleAfterTeardown(t *testing.T) {
 		RETURNING id`,
 		record.ID).Scan(&outputID))
 
-	mgr, _ := newSvc(
-		context.Background(),
-		&mockFactory{},
+	mgr := mustNewSvc(context.Background(), t,
+		&mockFactory{}, backgroundprocess.NewStore(db), builtin.NewResources(),
 		store,
 		sessions,
 		sessions,
@@ -128,7 +130,7 @@ func TestReconcileLatestReadinessPublishesIdleAfterTeardown(t *testing.T) {
 		sessions,
 		sessions,
 		subagent.NewStore(db),
-		subagent.NewTransactions(db),
+		mustNewTransactions(t, db, sessionstore.InvalidateCompletionCheckTx),
 		nil,
 		sessions,
 		nil,
@@ -138,12 +140,14 @@ func TestReconcileLatestReadinessPublishesIdleAfterTeardown(t *testing.T) {
 	notifications := controllers.ForManager("manager-readiness").Subscribe()
 
 	active := newRunner(func() {}, "", 0, admission.Parent, 0, false, nil)
-	_, registered := mgr.runners.Register(record.ID, active)
+	registered := mgr.supervisor.Attach(record.ID, active)
 	require.True(t, registered)
 	mgr.reconcileLatestReadiness(ctx, record.ID)
 	requireNoManagerNotification(t, notifications)
 
-	_, deleted := mgr.runners.Delete(record.ID)
+	_, existed := mgr.supervisor.Lookup(record.ID)
+	mgr.supervisor.Finish(record.ID)
+	deleted := existed
 	require.True(t, deleted)
 
 	mgr.reconcileLatestReadiness(ctx, record.ID)
@@ -163,13 +167,14 @@ func TestOwnerlessIdleIsSuppressedByReplacementRunner(t *testing.T) {
 	notifications := mgr.PubSub().SubscribeAll()
 
 	replacement := newRunner(func() {}, "", projectID, admission.Parent, 0, false, nil)
-	_, registered := mgr.runners.Register(record.ID, replacement)
+	registered := mgr.supervisor.Attach(record.ID, replacement)
 	require.True(t, registered)
 
 	mgr.publishOwnerlessIdleAfterTeardown(ctx, record.ID, true, false, false, false)
 	requireNoNotification(t, notifications)
 
-	_, deleted := mgr.runners.Delete(record.ID)
+	_, existed := mgr.supervisor.Lookup(record.ID)
+	mgr.supervisor.Finish(record.ID)
+	deleted := existed
 	require.True(t, deleted)
-	replacement.Complete()
 }

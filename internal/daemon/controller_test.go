@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/pilat/coagent/internal/backgroundprocess"
 	"github.com/pilat/coagent/internal/config"
 	"github.com/pilat/coagent/internal/controllerapi"
 	"github.com/pilat/coagent/internal/loader"
@@ -18,6 +19,7 @@ import (
 	"github.com/pilat/coagent/internal/sessionevent"
 	"github.com/pilat/coagent/internal/sessionstore"
 	"github.com/pilat/coagent/internal/subagent"
+	"github.com/pilat/coagent/internal/tool/builtin"
 )
 
 func newTestController(
@@ -55,11 +57,26 @@ func TestControllerManagerSubscriptionIsExactAcrossRestart(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = secondDB.Close() })
 	secondSessions := sessionstore.NewStore(secondDB)
-	mgr, _ := newSvc(
-		context.Background(),
-		&mockFactory{}, NewStore(secondDB), secondSessions, secondSessions, secondSessions,
-		secondSessions, secondSessions, secondSessions, secondSessions,
-		subagent.NewStore(secondDB), subagent.NewTransactions(secondDB), nil, secondSessions, nil, nil,
+	mgr := mustNewSvc(context.Background(), t,
+		&mockFactory{},
+		backgroundprocess.NewStore(secondDB),
+		builtin.NewResources(),
+		NewStore(secondDB),
+		secondSessions,
+		secondSessions,
+		secondSessions,
+		secondSessions,
+		secondSessions,
+		secondSessions,
+		secondSessions,
+		subagent.NewStore(
+			secondDB,
+		),
+		mustNewTransactions(t, secondDB, sessionstore.InvalidateCompletionCheckTx),
+		nil,
+		secondSessions,
+		nil,
+		nil,
 	)
 	controllers := newTestController(mgr, &config.Config{}, nil, nil)
 	subscriptions := make(map[string]<-chan controllerapi.SessionNotification, 10)

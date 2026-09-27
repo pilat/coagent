@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/pilat/coagent/internal/backgroundprocess"
 	"github.com/pilat/coagent/internal/budget"
 	"github.com/pilat/coagent/internal/config"
 	"github.com/pilat/coagent/internal/migrate"
@@ -20,6 +21,7 @@ import (
 	"github.com/pilat/coagent/internal/session"
 	"github.com/pilat/coagent/internal/sessionstore"
 	"github.com/pilat/coagent/internal/subagent"
+	"github.com/pilat/coagent/internal/tool/builtin"
 )
 
 // TestSpawnSettlesTheChildEffortOnTheChildModel drives a spawn onto a model whose
@@ -210,11 +212,11 @@ func newSpawnEffortHarness(t *testing.T, baseURL string) *subagentHarness {
 		},
 	}}
 
-	factory := session.NewFactoryWithOptions(cfg, nil, nil, sessStore, sessStore, nil, nil, nil)
+	resources := builtin.NewResources()
+	factory := session.NewFactoryWithOptions(cfg, nil, nil, sessStore, sessStore, nil, nil, nil, resources)
 
-	mgr, _ := newSvc(
-		context.Background(),
-		factory,
+	mgr := mustNewSvc(context.Background(), t,
+		factory, backgroundprocess.NewStore(db), resources,
 		store,
 		sessStore,
 		sessStore,
@@ -224,7 +226,7 @@ func newSpawnEffortHarness(t *testing.T, baseURL string) *subagentHarness {
 		sessStore,
 		sessStore,
 		links,
-		subagent.NewTransactions(db),
+		mustNewTransactions(t, db, sessionstore.InvalidateCompletionCheckTx),
 		budget.New(sessStore),
 		sessStore,
 		schedule.NewService(schedStore),

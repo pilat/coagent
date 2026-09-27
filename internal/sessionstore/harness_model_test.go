@@ -172,7 +172,7 @@ func newHarnessProduction(t *testing.T, migratedDB []byte) *harnessProduction {
 	seedLink(t, db, parent.ID, child, "model-task")
 
 	return &harnessProduction{
-		t: t, ctx: ctx, db: db, store: store, links: subagent.NewTransactions(db),
+		t: t, ctx: ctx, db: db, store: store, links: newTestSubagentTransactions(t, db),
 		parent: parent.ID, child: child, callID: "model-task",
 	}
 }
@@ -252,7 +252,7 @@ func (p *harnessProduction) apply(command harnessCommand) {
 		// The store carries no protocol state in memory. Reconstructing it over the
 		// same DB represents a daemon restart at this boundary.
 		p.store = NewStore(p.db)
-		p.links = subagent.NewTransactions(p.db)
+		p.links = newTestSubagentTransactions(p.t, p.db)
 	case harnessFinalizeBeforeCrash:
 		finalized, err := p.links.TryFinalizeActivation(
 			p.ctx, p.child, "completed", harnessCompletionText(snapshot.activationSeq), "completed",

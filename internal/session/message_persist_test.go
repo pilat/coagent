@@ -11,11 +11,23 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/pilat/coagent/internal/llmwire"
+	"github.com/pilat/coagent/internal/sessionstore"
 	"github.com/pilat/coagent/internal/todo"
 	"github.com/pilat/coagent/internal/tool"
 )
 
 var errStoreDown = errors.New("store is down")
+
+type failingDispositionStore struct {
+	sessionstore.ResponseDispositionStore
+}
+
+func (*failingDispositionStore) CommitAcceptedResponseDisposition(
+	context.Context,
+	sessionstore.AcceptedResponseDisposition,
+) (*sessionstore.AcceptedResponseResult, error) {
+	return nil, errStoreDown
+}
 
 // TestMessageStore_AppendFailureLeavesNothingInMemory asserts the durable-first
 // order: a rejected insert must not leave a phantom message the agent can read.
@@ -205,11 +217,15 @@ func TestRun_OpeningWriteFailure_SkipsCheckpoint(t *testing.T) {
 // TestRun_LoopWriteFailure_KeepsOriginalError asserts the join in the error path
 // does not swallow the write failure that actually stopped the run.
 func TestRun_LoopWriteFailure_KeepsOriginalError(t *testing.T) {
-	store := &mockSessionStore{insertErr: errStoreDown, insertFailAt: 2, failCall: 2}
+	_, durable, sessionID := newFinalOutputStore(t)
+	store := &mockSessionStore{failCall: 2}
 	s := newMockSvc(t, nil, "")
 	s.llmClient = &mockLLMRunOnce{response: &llmwire.Response{Text: "done"}}
 	s.store = store
-	s.ms = newMessageStore(store, 1, nil)
+	s.id, s.rootID = sessionID, sessionID
+	s.ms = newMessageStore(durable, sessionID, nil)
+	s.dispositions = &failingDispositionStore{ResponseDispositionStore: durable}
+	s.boundary = &loopInputBoundary{agent: s}
 
 	_, err := s.Run(context.Background(), "write tests")
 	require.Error(t, err)

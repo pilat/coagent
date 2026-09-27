@@ -68,16 +68,10 @@ func (s *svc) closeInterruptedCalls(ctx context.Context, rec *sessionstore.Sessi
 		return 0, err
 	}
 
-	workDir, err := s.store.GetProjectWorkDir(ctx, rec.ProjectID)
-	if err != nil {
-		return 0, fmt.Errorf("resolve project for session %d: %w", rec.ID, err)
-	}
-
-	sess, err := s.openSession(ctx, rec.ID, workDir, rec, false, false, true)
+	sess, err := s.openTranscript(ctx, rec.ID)
 	if err != nil {
 		return 0, fmt.Errorf("open session %d to close interrupted calls: %w", rec.ID, err)
 	}
-	defer sess.Close()
 
 	if err := sess.ResolveInterruptedCalls(ctx, pending, interruptedCallNotice); err != nil {
 		return 0, fmt.Errorf("close interrupted calls in session %d: %w", rec.ID, err)

@@ -116,9 +116,9 @@ func TestIntegration_SuspendedParentHoldsNoSlot(t *testing.T) {
 	// The parent suspends (loop exits, slot released); only the in-flight child
 	// holds a slot. The suspended parent holds ZERO.
 	h.waitUntil("parent suspended, only child holds a slot", func() bool {
-		return !h.mgr.HasActiveLoop(parentID) && h.mgr.admit.LiveTotal() == 1
+		return !h.mgr.HasActiveLoop(parentID) && h.mgr.supervisor.LiveTotal() == 1
 	})
-	assert.Equal(t, int64(1), h.mgr.admit.LiveChildren())
+	assert.Equal(t, int64(1), h.mgr.supervisor.LiveChildren())
 
 	closeOnce(release)
 	h.waitForDelivery(link.ChildID)
@@ -217,8 +217,8 @@ func TestIntegration_StressBlockingNoDeadlock(t *testing.T) {
 	}
 
 	// Caps were never exceeded; everything drained back to idle.
-	assert.LessOrEqual(t, h.mgr.admit.LiveChildren(), int64(admission.MaxChildren))
-	assert.LessOrEqual(t, h.mgr.admit.LiveTotal(), int64(admission.MaxTotal))
+	assert.LessOrEqual(t, h.mgr.supervisor.LiveChildren(), int64(admission.MaxChildren))
+	assert.LessOrEqual(t, h.mgr.supervisor.LiveTotal(), int64(admission.MaxTotal))
 }
 
 func TestIntegration_BackgroundQueueDrains(t *testing.T) {
@@ -265,7 +265,7 @@ func TestIntegration_BackgroundQueueDrains(t *testing.T) {
 	// Per-parent cap is 8: 8 children run (blocked on release), the other 2 are
 	// parked in the in-memory FIFO. Every link is persisted regardless.
 	h.waitUntil("8 admitted, 2 queued", func() bool {
-		return h.mgr.admit.LiveChildren() == int64(admission.MaxPerParent) && h.queueLen() == 2
+		return h.mgr.supervisor.LiveChildren() == int64(admission.MaxPerParent) && h.queueLen() == 2
 	})
 
 	// Release: the 8 finish, freeing slots; drainQueue starts the 2 parked ones.
@@ -278,7 +278,7 @@ func TestIntegration_BackgroundQueueDrains(t *testing.T) {
 	}
 
 	h.waitUntil("queue drained", func() bool { return h.queueLen() == 0 })
-	assert.LessOrEqual(t, h.mgr.admit.LiveChildren(), int64(admission.MaxChildren))
+	assert.LessOrEqual(t, h.mgr.supervisor.LiveChildren(), int64(admission.MaxChildren))
 }
 
 // closeOnce closes ch unless it is already closed (cleanup helper for hold channels).
@@ -291,7 +291,7 @@ func closeOnce(ch chan struct{}) {
 }
 
 func (h *subagentHarness) queueLen() int {
-	return h.mgr.childQueue.Len()
+	return h.mgr.supervisor.QueuedChildren()
 }
 
 func (h *subagentHarness) waitForLinkByCall(parentID int64, callID string) subagent.Link {

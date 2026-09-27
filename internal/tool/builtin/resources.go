@@ -13,13 +13,12 @@ import (
 	"github.com/pilat/coagent/internal/mcp"
 	"github.com/pilat/coagent/internal/procexec"
 	"github.com/pilat/coagent/internal/shellenv"
+	"github.com/pilat/coagent/internal/tool"
 )
 
 // Resources retains isolated session resources between tool-stack activations.
 type Resources interface {
-	Retire(sessionID int64) error
-	Invalidate(projectID int64) error
-	Close() error
+	tool.ResourceLifecycle
 	acquire(StackConfig, bashsandbox.Config) (*resourceLease, error)
 }
 

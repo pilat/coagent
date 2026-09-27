@@ -20,17 +20,19 @@ import (
 )
 
 func TestRun_FailFastOnPersistError(t *testing.T) {
+	_, durable, sessionID := newFinalOutputStore(t)
 	mockStore := &mockSessionStore{failCall: 1}
 	mockLLM := &mockLLMRunOnce{response: &llmwire.Response{Text: "done"}}
 
 	s := &svc{
-		rootID:       1,
-		id:           1,
+		rootID:       sessionID,
+		id:           sessionID,
 		agentType:    registry.AgentTypeBuild,
 		llmClient:    mockLLM,
 		todoStore:    todo.New(),
 		store:        mockStore,
-		ms:           newMessageStore(nil, 0, nil),
+		ms:           newMessageStore(durable, sessionID, nil),
+		dispositions: durable,
 		loopDetector: newLoopDetector(),
 		prompt:       newPromptBuilder("test", ""),
 		registry:     tool.NewRegistry(),
@@ -333,34 +335,3 @@ func (m *mockLLMRunOnce) SetImageAuthorizer(llm.ImageAuthorizer) {}
 func (m *mockLLMRunOnce) GetReasoningLevel() string              { return testReasoningLvl }
 
 func (m *mockLLMRunOnce) SetSessionID(id string) {}
-
-// mockLLMSequence returns responses in order.
-type mockLLMSequence struct {
-	responses []*llmwire.Response
-	callCount int
-}
-
-func (m *mockLLMSequence) Chat(
-	_ context.Context,
-	_ string,
-	_ []llmwire.Message,
-	_ []llmwire.ToolSchema,
-	_ ...llmwire.ChatOption,
-) (*llmwire.Response, error) {
-	idx := m.callCount
-	m.callCount++
-	if idx < len(m.responses) {
-		return normalizeScriptedResponse(m.responses[idx]), nil
-	}
-	return normalizeScriptedResponse(m.responses[len(m.responses)-1]), nil
-}
-func (m *mockLLMSequence) Model() string                          { return testMockModel }
-func (m *mockLLMSequence) APIKey() string                         { return "" }
-func (m *mockLLMSequence) Close() error                           { return nil }
-func (m *mockLLMSequence) Provider() string                       { return testMockModel }
-func (m *mockLLMSequence) ContextWindow() int                     { return 0 }
-func (m *mockLLMSequence) SetReasoningLevel(level string)         {}
-func (m *mockLLMSequence) SetImageAuthorizer(llm.ImageAuthorizer) {}
-func (m *mockLLMSequence) GetReasoningLevel() string              { return testReasoningLvl }
-
-func (m *mockLLMSequence) SetSessionID(id string) {}

@@ -198,8 +198,7 @@ type params struct {
 	Registry    tool.Registry
 	Store       sessionstore.RuntimeStore
 	OutputStore sessionstore.RuntimeOutputStore
-	// Dispositions commits every accepted assistant response; nil only in
-	// tests without persistence, where the loop keeps the legacy paths.
+	// Dispositions is required by every activation's accepted-response transaction.
 	Dispositions sessionstore.ResponseDispositionStore
 	GitClient    git.Client
 	MemoryStore  memory.CuratedStore
@@ -226,10 +225,6 @@ type options struct {
 	// run; nil when none was taken. Installed only when it describes this
 	// session's model.
 	ContextBaseline *sessionstore.ContextBaseline
-
-	// SettlementOpen marks a lifecycle settlement open: it may not reactivate
-	// the root past a won stop/clear/kill fence (the store rejects such writes).
-	SettlementOpen bool
 
 	// PreserveStopped marks a command-only activation of a stopped root: the
 	// run must not reactivate the root past its prior stopped status.
@@ -758,10 +753,8 @@ func (s *svc) applyResumeOrInit(ctx context.Context, opts options, log *zap.Logg
 		return nil
 	}
 
-	if !opts.SettlementOpen {
-		if err := s.persistState(ctx, 0, "active"); err != nil {
-			return fmt.Errorf("persist initial state: %w", err)
-		}
+	if err := s.persistState(ctx, 0, "active"); err != nil {
+		return fmt.Errorf("persist initial state: %w", err)
 	}
 
 	return nil

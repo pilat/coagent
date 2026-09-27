@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/pilat/coagent/internal/backgroundprocess"
 	"github.com/pilat/coagent/internal/controllerapi"
 	"github.com/pilat/coagent/internal/migrate"
 	"github.com/pilat/coagent/internal/registry"
@@ -21,6 +22,7 @@ import (
 	"github.com/pilat/coagent/internal/sessionstore"
 	"github.com/pilat/coagent/internal/subagent"
 	"github.com/pilat/coagent/internal/tool"
+	"github.com/pilat/coagent/internal/tool/builtin"
 )
 
 // mockSession implements session.Service for testing.
@@ -292,9 +294,8 @@ func newTestManager(t *testing.T) (*svc, *mockFactory, Store) {
 	sessStore := sessionstore.NewStore(db)
 
 	factory := &mockFactory{}
-	mgr, _ := newSvc(
-		context.Background(),
-		factory,
+	mgr := mustNewSvc(context.Background(), t,
+		factory, backgroundprocess.NewStore(db), builtin.NewResources(),
 		store,
 		sessStore,
 		sessStore,
@@ -304,7 +305,7 @@ func newTestManager(t *testing.T) (*svc, *mockFactory, Store) {
 		sessStore,
 		sessStore,
 		subagent.NewStore(db),
-		subagent.NewTransactions(db),
+		mustNewTransactions(t, db, sessionstore.InvalidateCompletionCheckTx),
 		nil,
 		sessStore,
 		nil,
@@ -328,11 +329,10 @@ func newTestManagerWithSchedule(t *testing.T) (*svc, *mockFactory, Store, schedu
 	schedStore := schedule.NewStore(db)
 
 	factory := &mockFactory{}
-	mgr, _ := newSvc(
-		context.Background(),
-		factory, store, sessStore, sessStore, sessStore,
+	mgr := mustNewSvc(context.Background(), t,
+		factory, backgroundprocess.NewStore(db), builtin.NewResources(), store, sessStore, sessStore, sessStore,
 		sessStore, sessStore, sessStore, sessStore,
-		subagent.NewStore(db), subagent.NewTransactions(db),
+		subagent.NewStore(db), mustNewTransactions(t, db, sessionstore.InvalidateCompletionCheckTx),
 		nil, sessStore, schedule.NewService(schedStore), nil,
 	)
 	return mgr, factory, store, schedStore
@@ -509,7 +509,7 @@ func TestManager_Shutdown(t *testing.T) {
 
 	mgr.Shutdown(5 * time.Second)
 
-	remaining := mgr.runners.Len()
+	remaining := mgr.supervisor.Count()
 	assert.Zero(t, remaining, "all loops should be cleaned up after shutdown")
 }
 

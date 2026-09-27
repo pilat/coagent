@@ -22,8 +22,7 @@ func TestFinishRunnerCancellationEscapesContendedTreeFence(t *testing.T) {
 
 	runnerCtx, cancel := context.WithCancel(ctx)
 	rs := newRunner(cancel, t.TempDir(), projectID, admission.Parent, 0, false, nil)
-	require.True(t, mgr.admit.TryAdmit(admission.Parent, 0))
-	_, registered := mgr.runners.Register(record.ID, rs)
+	registered := mgr.supervisor.Attach(record.ID, rs)
 	require.True(t, registered)
 
 	done := make(chan struct{})

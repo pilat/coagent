@@ -16,8 +16,13 @@ import (
 	"github.com/pilat/coagent/internal/transcript"
 )
 
-func newTestSubagentTransactions(db *sql.DB) subagent.Transactions {
-	return subagent.NewTransactions(db)
+func newTestSubagentTransactions(t testing.TB, db *sql.DB) subagent.Transactions {
+	t.Helper()
+
+	transactions, err := subagent.NewTransactions(db, InvalidateCompletionCheckTx)
+	require.NoError(t, err)
+
+	return transactions
 }
 
 // newTestStore opens a migrated temp SQLite DB and returns a real store, its raw
@@ -99,7 +104,7 @@ func TestSubagentStore_CreateCommitsAggregate(t *testing.T) {
 	parent, err := s.CreateSession(ctx, projectID, "parent-model", "", nil)
 	require.NoError(t, err)
 
-	childID, err := newTestSubagentTransactions(db).Create(ctx, subagent.Create{
+	childID, err := newTestSubagentTransactions(t, db).Create(ctx, subagent.Create{
 		ProjectID:      projectID,
 		ParentID:       parent.ID,
 		RootID:         parent.ID,
@@ -145,7 +150,7 @@ func TestSubagentStore_CreateRejectsStoppingParent(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, s.UpdateSessionStatus(ctx, parent.ID, SessionStatusStopping))
 
-	_, err = newTestSubagentTransactions(db).Create(ctx, subagent.Create{
+	_, err = newTestSubagentTransactions(t, db).Create(ctx, subagent.Create{
 		ProjectID: projectID, ParentID: parent.ID, RootID: parent.ID,
 		Model: "child-model", TaskCallID: "task-1", State: "spawned",
 	})
@@ -172,7 +177,7 @@ func TestSubagentStore_CreateRollsBackAggregateOnInboxFailure(t *testing.T) {
 	`)
 	require.NoError(t, err)
 
-	_, err = newTestSubagentTransactions(db).Create(ctx, subagent.Create{
+	_, err = newTestSubagentTransactions(t, db).Create(ctx, subagent.Create{
 		ProjectID: projectID, ParentID: parent.ID, RootID: parent.ID,
 		Model: "child-model", TaskCallID: "task-1", State: "spawned",
 		InitialInput: "work",
@@ -203,7 +208,7 @@ func TestSubagentStore_CreateRollsBackOrphanOnLinkFailure(t *testing.T) {
 	`)
 	require.NoError(t, err)
 
-	_, err = newTestSubagentTransactions(db).Create(ctx, subagent.Create{
+	_, err = newTestSubagentTransactions(t, db).Create(ctx, subagent.Create{
 		ProjectID:  projectID,
 		ParentID:   parent.ID,
 		RootID:     parent.ID,
@@ -240,12 +245,12 @@ func TestSubagentStore_DeliverCompletion_CAS(t *testing.T) {
 		return []*transcript.Message{{Role: llmwire.RoleTool, Content: c, ToolCallID: "c1", ToolName: "task"}}
 	}
 
-	ids, won, err := newTestSubagentTransactions(db).DeliverCompletion(ctx, parent.ID, msg("first"), childID, 1)
+	ids, won, err := newTestSubagentTransactions(t, db).DeliverCompletion(ctx, parent.ID, msg("first"), childID, 1)
 	require.NoError(t, err)
 	assert.True(t, won, "first delivery wins the CAS")
 	require.Len(t, ids, 1)
 
-	ids2, won2, err := newTestSubagentTransactions(db).DeliverCompletion(ctx, parent.ID, msg("second"), childID, 1)
+	ids2, won2, err := newTestSubagentTransactions(t, db).DeliverCompletion(ctx, parent.ID, msg("second"), childID, 1)
 	require.NoError(t, err)
 	assert.False(t, won2, "second delivery loses the CAS")
 	assert.Empty(t, ids2, "the loser inserts nothing")
@@ -278,7 +283,7 @@ func TestStore_StaleCompletionCannotCrossSubagentRearmBoundary(t *testing.T) {
 		}}
 	}
 
-	_, won, err := newTestSubagentTransactions(db).DeliverCompletion(
+	_, won, err := newTestSubagentTransactions(t, db).DeliverCompletion(
 		ctx, parent.ID, completion("activation one"), childID, 1,
 	)
 	require.NoError(t, err)
@@ -288,17 +293,17 @@ func TestStore_StaleCompletionCannotCrossSubagentRearmBoundary(t *testing.T) {
 	_, err = s.EnqueueInput(ctx, childID, InputSourceAgent, "follow-up")
 	require.NoError(t, err)
 
-	rearmed, err := newTestSubagentTransactions(db).RearmDeliveredWithPendingInput(ctx, childID)
+	rearmed, err := newTestSubagentTransactions(t, db).RearmDeliveredWithPendingInput(ctx, childID)
 	require.NoError(t, err)
 	require.True(t, rearmed)
 
-	_, staleWon, err := newTestSubagentTransactions(db).DeliverCompletion(
+	_, staleWon, err := newTestSubagentTransactions(t, db).DeliverCompletion(
 		ctx, parent.ID, completion("stale duplicate"), childID, 1,
 	)
 	require.NoError(t, err)
 	assert.False(t, staleWon, "activation one cannot deliver after activation two has begun")
 
-	_, currentWon, err := newTestSubagentTransactions(db).DeliverCompletion(
+	_, currentWon, err := newTestSubagentTransactions(t, db).DeliverCompletion(
 		ctx, parent.ID, completion("activation two"), childID, 2,
 	)
 	require.NoError(t, err)
@@ -325,7 +330,7 @@ func TestSubagentStore_DeliverCompletionRejectsWrongParent(t *testing.T) {
 	require.NoError(t, err)
 	seedLink(t, db, parent.ID, childID, "c1")
 
-	_, won, err := newTestSubagentTransactions(db).DeliverCompletion(ctx, otherParent.ID, []*transcript.Message{{
+	_, won, err := newTestSubagentTransactions(t, db).DeliverCompletion(ctx, otherParent.ID, []*transcript.Message{{
 		Role: llmwire.RoleTool, Content: "wrong parent", ToolCallID: "c1", ToolName: "task",
 	}}, childID, 1)
 	require.Error(t, err)
@@ -351,7 +356,7 @@ func TestSubagentStore_DeliverCompletionRejectsEmptyCompletion(t *testing.T) {
 	require.NoError(t, err)
 	seedLink(t, db, parent.ID, childID, "c1")
 
-	_, won, err := newTestSubagentTransactions(db).DeliverCompletion(ctx, parent.ID, nil, childID, 1)
+	_, won, err := newTestSubagentTransactions(t, db).DeliverCompletion(ctx, parent.ID, nil, childID, 1)
 	require.Error(t, err)
 	assert.False(t, won)
 	require.ErrorContains(t, err, "no messages")

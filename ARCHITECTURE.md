@@ -105,12 +105,12 @@ does not imply a tier except where it expresses an implementation variant.
 - `internal/session` — isolated agent loop, tool gating and transcript projection.
 - `internal/sessionbus` — in-process session-event subscriptions and non-blocking fan-out.
 - `internal/sessionevent` — session-to-controller notification vocabulary.
-- `internal/sessionlifecycle` — runner ownership, recovery and durable stop coordination.
+- `internal/sessionlifecycle` — runner/admission supervision, tree fencing, durable stop coordination and budget deadline reconciliation.
 - `internal/sessionstore` — durable sessions, messages, inbox, atomic delivery primitives, and the session-file-read ledger for write-guard checks.
 - `internal/shellenv` — captured per-worktree shell environment for child processes.
 - `internal/subagent` — typed parent-child link vocabulary and durable subagent ledger access.
 - `internal/todo` — session-local task tracking.
-- `internal/tool` — implementation-free tool protocol, registry and suspension sentinel.
+- `internal/tool` — implementation-free tool and resource lifecycle contracts, registry and suspension sentinel.
 - `internal/tool/builtin` — built-in tools and their common stack construction.
 - `internal/toolexec` — ordered stage planner and bounded runner for model-issued tool calls.
 - `internal/transcript` — durable append-only conversation row vocabulary.
@@ -150,7 +150,10 @@ which table a query happens to touch.
 
 A live session receives transcript/checkpoint persistence and atomic output
 persistence as separate contracts; manager output cannot be enabled without the
-latter. Its in-memory model messages contain no database fields: a positional
+latter. Every executable activation uses the same response-disposition contract
+for accepted attempts. Transcript-only call
+settlement has its own capability and constructs no model client or tool stack.
+Its in-memory model messages contain no database fields: a positional
 row-ID vector travels with the projection across factory resume and compaction,
 then keys durable replacement and idempotent final output.
 
@@ -195,9 +198,10 @@ policy, not a goroutine inside its parent. The daemon enforces total, child,
 per-parent and depth limits, retaining overflow in FIFO order. A suspended
 parent does not retain an execution slot; its durable pending work does.
 The `admission` governor owns capacity counters and quota decisions; the daemon
-supplies durable startability callbacks, while `sessionlifecycle` owns FIFO
-overflow queues, classification, registration and runner start around that
-verdict.
+supplies durable startability callbacks, while the `sessionlifecycle` supervisor
+owns the governor, runner registry, tree fences and FIFO overflow queues. Runner
+registration and teardown pair admission acquisition/release under that owner;
+queue retry workers share its shutdown boundary.
 
 The session is the only authority that registers a gated tool. The daemon may
 attach control-plane tools to a live session registry, but it cannot bypass
@@ -490,6 +494,11 @@ closes admission before a generation drains and parks; managed park workers are
 cancelled and joined at shutdown. Startup reconciles armed and half-parked
 generations before normal session recovery. The next ordinary model-bound root
 input atomically releases a fired checkpoint and resumes only the root.
+`sessionlifecycle` owns an independent wakeable budget reconciler, reconstructing
+deadlines from armed rows and observing crossings through the budget transaction.
+Successful tool mutations wake it after commit. Progress reads budget facts but
+cannot fire or park a generation; model inactivity and presentation failure do
+not suspend deadline observation.
 
 An armed generation remains armed across an ordinary final response while the
 tree has an advertised running process, an undelivered background child, or
@@ -515,6 +524,11 @@ text and publishes only the host checkpoint; a projection failure retains the
 paid attempt and commits the existing durable error outcome once. A separate
 durable manager-reply flag survives candidate resets, tools and restarts and
 clears only with a releasing output or a superseding terminal settlement.
+Session response classification is a pure decision over explicit facts; the
+disposition transaction remains authoritative for accounting, budget precedence
+and candidate comparison. Session-store projects recovered activation outcomes
+from the existing candidate pointer, rejection evidence and transcript, so child
+finalization does not independently reinterpret those rules.
 
 ### Tool-call scheduling: declared stages, fail-stop, atomic result sets
 
@@ -819,18 +833,22 @@ session dependencies, routes session events, and owns project identity plus
 external integration callbacks. `managercontrol` implements the manager
 controller over that backend.
 `admission` owns capacity decisions, `sessionbus` owns subscriber fan-out, and
-`sessionlifecycle` owns the synchronized active-runner registry, shutdown fence,
-the two in-memory FIFO admission caches and the cancellable recovery worker; the
-same component serializes child spawn against the durable stop fence and owns
-stop-tree discovery, lifecycle settlement, interrupted-stop recovery and child
-terminalization/delivery ordering. Each runner's cancel/done boundary, live
+`sessionlifecycle` owns the supervisor's synchronized active-runner registry,
+admission pairing, tree and shutdown fences, two FIFO admission caches and joined
+queue workers. Its tree-stop operation orders producer cancellation, runner
+joins, resource retirement and durable settlement; live stop and interrupted-stop
+recovery share it. Daemon supplies producer-specific effects and recovery inputs.
+The same package owns child terminalization/delivery ordering, the cancellable
+recovery worker and independent budget reconciliation. Each runner's cancel/done boundary, live
 session reference, input queue and admission metadata live in that component as
 one mutex-owned state object. Its launcher owns classification, admission,
 registration and goroutine start; daemon supplies session assembly and loop
-callbacks ([ADR-0038](docs/adr/0038-runtime-owners-replace-daemon-capability-discovery.md)).
+callbacks ([ADR-0038](docs/adr/0038-runtime-owners-replace-daemon-capability-discovery.md),
+[ADR-0065](docs/adr/0065-runtime-coordination-owns-complete-transitions.md)).
 The subagent package owns the durable parent-child link ledger. The daemon must
 keep transient maps reconstructible and defer to stores for durable ordering/CAS
-decisions.
+decisions. Child-delivery transactions receive the canonical completion-check
+invalidator at construction and execute it within their existing transaction.
 
 The session package owns prompt construction, model-tool iteration, context
 projection, loop detection and the sole tool-gating API. It receives a prepared
@@ -861,14 +879,22 @@ process launches cannot disagree about declared authority. A suspending tool may
 not be batched with ordinary synchronous tools because its result is delivered
 after the loop exits.
 
-The factory owns a tool-resource cache keyed by session ID, canonical workdir,
-policy and MCP configuration. It retains shell snapshots and MCP clients across
+The composition root constructs one tool-resource cache and transfers its
+lifetime to the daemon while injecting the same cache into the session factory.
+It is keyed by session ID, canonical workdir, policy and MCP configuration and
+retains shell snapshots and MCP clients across
 replies and sleep/resume; distinct IDs never share them. Stacks lease those
 resources exclusively and own their LSP manager, rooted access and registry.
 Policy/configuration changes retire the previous generation; shell recapture
 restarts MCP. Stop/kill retire the whole tree, including idle descendants, and
 shutdown closes the cache after runners join. Registry mutations retire idle
 resources immediately and active resources when their stack releases them.
+Process storage is an explicit daemon dependency; each session creation receives
+the completed process service directly. Factory wrappers require no concrete-type
+discovery to preserve process access or resource retirement.
+The factory receives the stack resource capability, while daemon receives only
+the shared `tool.ResourceLifecycle` contract; built-in stack internals never
+become a runtime dependency.
 
 Registry produces an immutable per-session agent-type set: built-ins plus
 project-local overlays. Agent type controls tool filtering, prompt and model

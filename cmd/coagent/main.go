@@ -38,6 +38,8 @@ import (
 	"github.com/pilat/coagent/internal/session"
 	"github.com/pilat/coagent/internal/sessionstore"
 	"github.com/pilat/coagent/internal/subagent"
+	"github.com/pilat/coagent/internal/tool"
+	"github.com/pilat/coagent/internal/tool/builtin"
 	"github.com/pilat/coagent/internal/version"
 )
 
@@ -582,10 +584,15 @@ func startCore(
 	scheduleStore := schedule.NewStore(db)
 	curatedStore := memory.NewCuratedStore(db)
 	linkStore := subagent.NewStore(db)
-	subagentTx := subagent.NewTransactions(db)
-	subagent.SetCompletionCheckInvalidator(
-		subagentTx, sessionstore.InvalidateCompletionCheckTx,
-	)
+
+	subagentTx, err := subagent.NewTransactions(db, sessionstore.InvalidateCompletionCheckTx)
+	if err != nil {
+		return nil, fmt.Errorf("create subagent transactions: %w", err)
+	}
+
+	processStore := backgroundprocess.NewStore(db)
+	toolResources := builtin.NewResources()
+	var resourceLifecycle tool.ResourceLifecycle = toolResources
 
 	budgetSvc := budget.New(sessionStore)
 	mcpRegistry := mcpstore.NewStore(db)
@@ -598,23 +605,27 @@ func startCore(
 
 	factory := session.NewFactoryWithOptions(
 		cfg, secrets, curatedStore, sessionStore, sessionStore,
-		gitClient, mcpRegistry, cache,
+		gitClient, mcpRegistry, cache, toolResources,
 	)
 
-	daemonSvc := daemon.New(
-		ctx, factory, daemonStore, sessionStore, sessionStore, sessionStore,
+	daemonSvc, err := daemon.New(
+		ctx, factory, processStore, resourceLifecycle, daemonStore, sessionStore, sessionStore, sessionStore,
 		sessionStore, sessionStore, sessionStore, sessionStore,
 		linkStore, subagentTx, budgetSvc, sessionStore,
 		scheduleSvc, cfg, mcpRegistry, applier,
 	)
+	if err != nil {
+		_ = toolResources.Close()
+		return nil, fmt.Errorf("create daemon: %w", err)
+	}
+
+	a.onStop("daemon", func(context.Context) error { daemonSvc.Shutdown(30 * time.Second); return nil })
 
 	controller := managercontrol.New(daemonSvc, daemonSvc, sessionStore, cfg, cache)
 
 	if err := daemonSvc.Start(ctx); err != nil {
 		return nil, fmt.Errorf("start daemon: %w", err)
 	}
-
-	a.onStop("daemon", func(context.Context) error { daemonSvc.Shutdown(30 * time.Second); return nil })
 
 	return &core{
 		controller:     controller,

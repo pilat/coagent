@@ -102,8 +102,8 @@ func (l *launcher[T]) Ensure(
 			return ErrShuttingDown
 		}
 
-		for _, input := range inputs {
-			existing.AppendInput(input)
+		if !l.appendIfRunning(sessionID, inputs) {
+			return l.Ensure(ctx, sessionID, workDir, projectID, inputs)
 		}
 
 		return nil

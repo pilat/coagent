@@ -58,8 +58,8 @@ func TestRunLoopStatusAtBoundaryEndsOnlyASettledActivation(t *testing.T) {
 		{
 			name:         "tool results still owed an answer",
 			messages:     []llmwire.Message{usr("old task"), asst("", call("read-1", "read"))},
-			wantCalls:    1,
-			wantMessages: 4,
+			wantCalls:    2,
+			wantMessages: 6,
 			wantAnswer:   1,
 		},
 	} {
@@ -71,11 +71,13 @@ func TestRunLoopStatusAtBoundaryEndsOnlyASettledActivation(t *testing.T) {
 				input: &PendingInput{ID: 1, Content: "/status", ReceivedAt: time.Now()},
 			}
 
-			llmClient := &loopScriptLLM{responses: []*llmwire.Response{textResponse("answered")}}
+			llmClient := &loopScriptLLM{
+				responses: []*llmwire.Response{textResponse("answered"), textResponse("confirmed")},
+			}
 			agent.llmClient = llmClient
 			notifier := &loopNotifier{}
 
-			_, err := runLoop(t.Context(), agent, loopOptions{Notify: notifier.fn}, iterationGuard(5))
+			_, err := runTestLoop(t.Context(), t, agent, loopOptions{Notify: notifier.fn}, iterationGuard(5))
 
 			require.NoError(t, err)
 			assert.Equal(t, tc.wantCalls, llmClient.calls)
@@ -135,12 +137,12 @@ func TestRunLoopExplicitInputArrivingDuringStoppedReadOnlyCommandResumes(t *test
 	agent.llmClient = &loopScriptLLM{responses: []*llmwire.Response{textResponse("resumed")}}
 	notifier := &loopNotifier{}
 
-	result, err := runLoop(t.Context(), agent, loopOptions{Notify: notifier.fn}, iterationGuard(5))
+	result, err := runTestLoop(t.Context(), t, agent, loopOptions{Notify: notifier.fn}, iterationGuard(5))
 
 	require.NoError(t, err)
 	assert.Equal(t, "resumed", result.FinalResponse)
 	assert.False(t, agent.preserveStopped)
-	assert.Equal(t, 1, agent.llmClient.(*loopScriptLLM).calls)
+	assert.Equal(t, 2, agent.llmClient.(*loopScriptLLM).calls)
 	assert.Equal(t, 1, notifier.countWith("Session commands"))
 }
 
@@ -181,7 +183,7 @@ func TestRunLoopStoppedReadOnlyCommandLeavesFollowingAsyncInputPending(t *testin
 	agent.llmClient = client
 	notifier := &loopNotifier{}
 
-	result, err := runLoop(t.Context(), agent, loopOptions{Notify: notifier.fn}, iterationGuard(5))
+	result, err := runTestLoop(t.Context(), t, agent, loopOptions{Notify: notifier.fn}, iterationGuard(5))
 
 	require.NoError(t, err)
 	assert.Empty(t, result.FinalResponse)

@@ -166,8 +166,8 @@ func TestScenario_RestartResumesExplicitInputQueuedOnErroredChild(t *testing.T) 
 	}, nil)
 	defer second.shutdown()
 	for i := range admission.MaxChildren {
-		require.True(t, second.mgr.admit.TryAdmit(admission.Child, int64(30_000+i)))
-		defer second.mgr.admit.Release(admission.Child, int64(30_000+i))
+		require.True(t, second.mgr.reserveRunnerForTest(admission.Child, int64(30_000+i)))
+		defer second.mgr.releaseRunnerForTest(admission.Child, int64(30_000+i))
 	}
 
 	resumed, err := second.mgr.resumeSessionsWithRecoverableInput(second.ctx)

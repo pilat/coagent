@@ -42,33 +42,41 @@ func TestReasoningEnvelopeAcrossALiveModelSwitch(t *testing.T) {
 	require.NoError(t, sess.ms.addUserMessage(ctx, "task 4"))
 	runModelSwitchTurn(t, sess)
 
-	require.Len(t, provider.requests, 4)
+	require.Len(t, provider.requests, 8)
 
 	assert.Equal(t, "model-a", provider.requests[0].model)
 	assert.Empty(t, provider.requests[0].assistantReasoning, "the first turn has no history to replay")
 
 	// Same model, one round-trip through SQLite: the payload comes back.
-	assert.Equal(t, "model-a", provider.requests[1].model)
-	assert.Equal(t, []string{"reasoning-1"}, provider.requests[1].assistantReasoning)
+	assert.Equal(t, "model-a", provider.requests[2].model)
+	assert.Equal(t, []string{"reasoning-1", "reasoning-2"}, provider.requests[2].assistantReasoning)
 
-	assert.Equal(t, "model-b", provider.requests[2].model)
-	assert.Empty(t, provider.requests[2].assistantReasoning,
+	assert.Equal(t, "model-b", provider.requests[4].model)
+	assert.Empty(t, provider.requests[4].assistantReasoning,
 		"model A's payloads must not reach model B")
 
 	// Back on model A, its own payloads are legal again however stale — the envelope
 	// records provenance, not freshness — while model B's stays behind.
-	assert.Equal(t, "model-a", provider.requests[3].model)
-	assert.Equal(t, []string{"reasoning-1", "reasoning-2"}, provider.requests[3].assistantReasoning)
+	assert.Equal(t, "model-a", provider.requests[6].model)
+	assert.Equal(
+		t,
+		[]string{"reasoning-1", "reasoning-2", "reasoning-3", "reasoning-4"},
+		provider.requests[6].assistantReasoning,
+	)
 
-	assertStoredEnvelopeModels(t, sess, []string{"model-a", "model-a", "model-b", "model-a"})
+	assertStoredEnvelopeModels(
+		t,
+		sess,
+		[]string{"model-a", "model-a", "model-a", "model-a", "model-b", "model-b", "model-a", "model-a"},
+	)
 }
 
 // runModelSwitchTurn runs one activation, which a text-only response settles after
-// a single provider call.
+// candidate and confirmation provider calls.
 func runModelSwitchTurn(t *testing.T, sess *svc) {
 	t.Helper()
 
-	_, err := runLoop(t.Context(), sess, loopOptions{}, iterationGuard(2))
+	_, err := runTestLoop(t.Context(), t, sess, loopOptions{}, iterationGuard(2))
 	require.NoError(t, err)
 }
 

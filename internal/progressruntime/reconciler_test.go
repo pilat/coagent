@@ -38,13 +38,13 @@ func (panickingProgressStore) ListAutonomousProgressRoots(context.Context) ([]in
 }
 
 // A panicking tick must not kill the reconciler goroutine: silence snapshots
-// and duration-fire observation keep serving later deadlines.
+// keep serving later deadlines.
 func TestReconcileProgressSafelySurvivesStorePanic(t *testing.T) {
 	t.Parallel()
 
 	runtime := New(
-		panickingProgressStore{}, nil,
-		func(int64) bool { return false }, func(int64) bool { return false }, nil, nil, nil,
+		panickingProgressStore{},
+		func(int64) bool { return false }, func(int64) bool { return false }, nil, nil,
 	)
 	// The recovered panic is logged; a quiet logger keeps the test output honest.
 	ctx := logger.ToContext(context.Background(), zap.NewNop())
@@ -71,15 +71,31 @@ func TestReconcileProgressSelectsDeadlineByMainModelActivity(t *testing.T) {
 			t.Parallel()
 
 			now := time.Date(2026, time.September, 3, 12, 0, 0, 0, time.UTC)
+			seconds := int64(5)
 			store := staticProgressStore{facts: &sessionstore.ProgressFacts{
 				RootID: 7, EpisodeStartedAt: &now,
+				Budget: &sessionstore.BudgetRecord{
+					State: sessionstore.BudgetArmed, ArmedAt: now, DurationSeconds: &seconds,
+				},
 			}}
 			runtime := New(
-				store, nil,
-				func(int64) bool { return true }, func(int64) bool { return tt.working }, nil, nil, nil,
+				store,
+				func(int64) bool { return true }, func(int64) bool { return tt.working }, nil, nil,
 			)
 
 			assert.Equal(t, tt.want, runtime.Reconcile(t.Context(), now))
 		})
 	}
+}
+
+func TestReconcileProgressSkipsFiredBudgetWhileDraining(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, time.September, 3, 12, 0, 0, 0, time.UTC)
+	started := now.Add(-time.Hour)
+	store := staticProgressStore{facts: &sessionstore.ProgressFacts{
+		RootID: 7, EpisodeStartedAt: &started,
+		Budget: &sessionstore.BudgetRecord{State: sessionstore.BudgetFired, ParkPhase: "draining"},
+	}}
+	progressRuntime := New(store, func(int64) bool { return true }, func(int64) bool { return true }, nil, nil).(*runtime)
+	assert.Equal(t, SilenceInterval, progressRuntime.reconcileProgress(t.Context(), now))
 }
