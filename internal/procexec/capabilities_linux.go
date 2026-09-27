@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"slices"
+	"strconv"
 	"strings"
 	"syscall"
 
@@ -102,12 +103,95 @@ func checkLauncher(launcher string) error {
 		return errors.New("capability launcher ownership is unavailable")
 	}
 
-	if stat.Uid != 0 || !info.Mode().IsRegular() ||
+	if !trustedLauncherOwner(launcher, stat.Uid) || !info.Mode().IsRegular() ||
 		info.Mode().Perm()&0o022 != 0 || info.Mode().Perm()&0o111 == 0 {
 		return fmt.Errorf("capability launcher %s must be a root-owned, non-writable executable", launcher)
 	}
 
 	return nil
+}
+
+// trustedLauncherOwner accepts the kernel overflow UID inside a rootless user
+// namespace: host root ownership is not mapped there. Without this the
+// launcher is never usable from a containerized daemon.
+func trustedLauncherOwner(launcher string, uid uint32) bool {
+	if uid == 0 {
+		return true
+	}
+
+	nested, err := inUserNamespace()
+	if err != nil || !nested {
+		return false
+	}
+
+	overflow, err := overflowUID()
+	if err != nil || overflow == 0 || uid != overflow {
+		return false
+	}
+
+	var fs syscall.Statfs_t
+	if syscall.Statfs(launcher, &fs) != nil {
+		return false
+	}
+
+	return fs.Flags&unix.ST_RDONLY != 0
+}
+
+// inUserNamespace reports whether this process runs inside a nested user
+// namespace rather than the initial one.
+func inUserNamespace() (bool, error) {
+	value, err := os.ReadFile("/proc/self/uid_map")
+	if err != nil {
+		return false, fmt.Errorf("read user namespace UID map: %w", err)
+	}
+
+	return userNamespaceMapIsNested(string(value))
+}
+
+// userNamespaceMapIsNested treats the initial namespace's single full mapping
+// as the only non-nested shape; anything else maps a subset of UIDs.
+func userNamespaceMapIsNested(value string) (bool, error) {
+	lines := strings.Fields(strings.TrimSpace(value))
+	if len(lines) < 3 || len(lines)%3 != 0 {
+		return false, errors.New("malformed user namespace UID map")
+	}
+
+	if len(lines) != 3 {
+		return true, nil
+	}
+
+	inside, err := strconv.ParseUint(lines[0], 10, 64)
+	if err != nil {
+		return false, fmt.Errorf("parse user namespace UID map: %w", err)
+	}
+
+	outside, err := strconv.ParseUint(lines[1], 10, 64)
+	if err != nil {
+		return false, fmt.Errorf("parse user namespace UID map: %w", err)
+	}
+
+	length, err := strconv.ParseUint(lines[2], 10, 64)
+	if err != nil {
+		return false, fmt.Errorf("parse user namespace UID map: %w", err)
+	}
+
+	return inside != 0 || outside != 0 || length != maxUIDValue, nil
+}
+
+const maxUIDValue = uint64(^uint32(0))
+
+func overflowUID() (uint32, error) {
+	value, err := os.ReadFile("/proc/sys/kernel/overflowuid")
+	if err != nil {
+		return 0, fmt.Errorf("read kernel overflow UID: %w", err)
+	}
+
+	uid, err := strconv.ParseUint(strings.TrimSpace(string(value)), 10, 32)
+	if err != nil {
+		return 0, fmt.Errorf("parse kernel overflow UID: %w", err)
+	}
+
+	return uint32(uid), nil
 }
 
 func checkLoaderEnvironment(command *exec.Cmd) error {
