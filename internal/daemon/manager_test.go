@@ -66,12 +66,11 @@ func (s *blockingCreateSessionStore) CreateReplacementSession(
 
 // mockFactory implements session.Factory for testing.
 type mockFactory struct {
-	mu               sync.Mutex
-	sessions         []*mockSession
-	options          []session.CreateOptions
-	nextSess         session.Service // allows injecting any session.Service implementation
-	createErrOnce    error
-	processPolicyKey string
+	mu            sync.Mutex
+	sessions      []*mockSession
+	options       []session.CreateOptions
+	nextSess      session.Service // allows injecting any session.Service implementation
+	createErrOnce error
 }
 
 func (m *mockSession) RunDaemon(
@@ -256,11 +255,6 @@ func (f *mockFactory) Create(ctx context.Context, opts session.CreateOptions) (s
 
 		return nil, err
 	}
-
-	if opts.ObserveProcessPolicy != nil {
-		opts.ObserveProcessPolicy(f.processPolicyKey)
-	}
-
 	// The production session consumes durable input at its loop boundary. These
 	// daemon tests use a minimal mock service, so model that boundary here to keep
 	// the persistence/runner lifecycle realistic without running an LLM loop.

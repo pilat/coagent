@@ -11,21 +11,19 @@ import (
 )
 
 const (
-	callbackNav        = "nav"
-	callbackLaunch     = "launch"
-	callbackMore       = "more"
-	callbackSpawn      = "spawn"
-	callbackKill       = "kill"
-	callbackModel      = "model"
-	callbackEffort     = "effort"
-	callbackNewPick    = "newpick"
-	callbackNewPage    = "newpage"
-	commandKill        = "/kill"
-	commandStop        = "/stop"
-	commandClear       = "/clear"
-	commandShieldsUp   = "/shieldsup"
-	commandShieldsDown = "/shieldsdown"
-	telegramChannel    = "telegram"
+	callbackNav     = "nav"
+	callbackLaunch  = "launch"
+	callbackMore    = "more"
+	callbackSpawn   = "spawn"
+	callbackKill    = "kill"
+	callbackModel   = "model"
+	callbackEffort  = "effort"
+	callbackNewPick = "newpick"
+	callbackNewPage = "newpage"
+	commandKill     = "/kill"
+	commandStop     = "/stop"
+	commandClear    = "/clear"
+	telegramChannel = "telegram"
 )
 
 type callbackAction struct {
@@ -80,7 +78,7 @@ func (m *Manager) handleServiceTopicMessage(ctx context.Context, text string) {
 		m.handleSpawn(ctx, "", 0, 0)
 	case commandKill:
 		m.handleKill(ctx, 0, m.serviceTopicID)
-	case "/config", commandClear, commandStop, commandShieldsUp, commandShieldsDown,
+	case "/config", commandClear, commandStop,
 		"/model", "/schedules", "/budget", "/compact", "/status":
 		if rootID := m.managementRootID; rootID > 0 {
 			m.handleSessionTopicMessage(ctx, rootID, m.serviceTopicID, text)
@@ -121,7 +119,6 @@ func (m *Manager) handleServiceTopicHelp(ctx context.Context) {
 		"  /schedules — list this session's schedules (ask me to add/change them)",
 		"  /budget &lt;request&gt; — arm or clear a one-shot cost/wall-time checkpoint",
 		"  /compact — compact context now; /compact &lt;focus&gt; to steer the summary",
-		"  /shieldsup / /shieldsdown — project filesystem shields",
 		"  /help — this message",
 	}
 
@@ -155,8 +152,6 @@ func (m *Manager) handleSessionTopicMessage(ctx context.Context, sessionID, thre
 		_ = m.controller.SendSessionMessage(ctx, controllerapi.SessionMessageData{
 			SessionID: sessionID, Message: commandClear,
 		})
-	case commandShieldsUp, commandShieldsDown:
-		m.handleSessionMessage(ctx, sessionID, text, threadID)
 	case "/model":
 		m.handleModel(ctx, sessionID, threadID)
 	case "/schedules":
@@ -417,8 +412,6 @@ func (m *Manager) handleHelp(ctx context.Context, sessionID, threadID int64) {
 		"  /gwt &lt;name&gt; — fork this project into a git worktree (session topic only)",
 		"  /kill — end this session (terminal)",
 		"  /stop — stop the current run (session stays, resumable)",
-		"  /shieldsup — raise project filesystem shields",
-		"  /shieldsdown — lower project filesystem shields",
 		"  /clear — clear session (fresh start, same topic)",
 		"  /compact — compact context now; /compact &lt;focus&gt; to steer the summary",
 		"  /model — choose LLM model",
@@ -431,7 +424,7 @@ func (m *Manager) handleHelp(ctx context.Context, sessionID, threadID int64) {
 	if sessionID == 0 {
 		lines = append(
 			lines,
-			"\n<i>/status, /stop, /shieldsup, /shieldsdown, /clear, /compact, /model, /schedules, /budget work inside a session topic only.</i>",
+			"\n<i>/status, /stop, /clear, /compact, /model, /schedules, /budget work inside a session topic only.</i>",
 		)
 	}
 

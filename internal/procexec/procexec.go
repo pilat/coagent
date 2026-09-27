@@ -3,7 +3,7 @@ package procexec
 import (
 	"context"
 	"errors"
-	"os/exec" //nolint:depguard // The neutral runner contract constructs exec.Cmd values.
+	"os/exec"
 )
 
 // Request describes a prepared process without deciding how it is isolated.

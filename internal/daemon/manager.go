@@ -22,7 +22,6 @@ import (
 	"github.com/pilat/coagent/internal/controllerapi"
 	"github.com/pilat/coagent/internal/inputruntime"
 	"github.com/pilat/coagent/internal/logger"
-	"github.com/pilat/coagent/internal/mcp"
 	"github.com/pilat/coagent/internal/mcpstore"
 	"github.com/pilat/coagent/internal/progressruntime"
 	"github.com/pilat/coagent/internal/schedule"
@@ -73,12 +72,10 @@ type Service interface {
 }
 
 const (
-	stopCommand        = "/stop"
-	clearCommand       = "/clear"
-	killCommand        = "/kill"
-	compactCommand     = "/compact"
-	shieldsUpCommand   = "/shieldsup"
-	shieldsDownCommand = "/shieldsdown"
+	stopCommand    = "/stop"
+	clearCommand   = "/clear"
+	killCommand    = "/kill"
+	compactCommand = "/compact"
 )
 
 var (
@@ -115,7 +112,6 @@ type svc struct {
 	// tools.search section and no native-capable model.
 	searchUnconfigured bool
 	mcpStore           mcpstore.Store
-	mcpPool            mcp.Pool
 	applier            configapply.Service
 	staged             *stagedCalls
 	deferNotices       *deferAnnouncements
@@ -128,13 +124,10 @@ type svc struct {
 	budgetCtx          context.Context //nolint:containedctx // Daemon lifetime context for joined park workers.
 	budgetCancel       context.CancelFunc
 	budgetWG           sync.WaitGroup
-	sandboxEnabled     bool
 	treeStore          sessionstore.OrchestrationStore
 	treeLocks          sync.Map
-	// Tree locks precede routeMu, processPolicyMu, and childMu; never acquire a
+	// Tree locks precede routeMu and childMu; never acquire a
 	// tree lock while holding one of those narrower locks.
-	processPolicyMu sync.Mutex
-	processPolicies map[int64]map[string]struct{}
 	// routeMu linearizes owner claims with replacement-session creation. The
 	// daemon is single-instance, so this is the ownership CAS boundary.
 	routeMu sync.Mutex
@@ -197,7 +190,6 @@ func New(
 	scheduleSvc schedule.Service,
 	cfg *config.Config,
 	mcpStore mcpstore.Store,
-	mcpPool mcp.Pool,
 	applier configapply.Service,
 ) Service {
 	s, processSvc := newSvc(
@@ -208,10 +200,8 @@ func New(
 		scheduleSvc, cfg.DefaultModel,
 	)
 	s.mcpStore = mcpStore
-	s.mcpPool = mcpPool
 	s.applier = applier
 	s.searchUnconfigured = searchUnconfigured(cfg.UnifiedConfig)
-	s.sandboxEnabled = cfg.UnifiedConfig != nil && cfg.UnifiedConfig.Sandbox.Enabled
 
 	if cfg.UnifiedConfig != nil {
 		s.loadModelCatalog(cfg.UnifiedConfig.Models)
@@ -270,16 +260,15 @@ func newSvc(
 		stopper: sessionlifecycle.NewStopper(
 			sessionStore, lifecycleStore, managerOutputs, links,
 		),
-		pubsub:          sessionbus.New(),
-		defaultModelFn:  defaultModelFn,
-		childCache:      make(map[int64]bool),
-		ownerCache:      make(map[int64]string),
-		deferNotices:    newDeferAnnouncements(),
-		processPolicies: make(map[int64]map[string]struct{}),
-		workerCtx:       workerCtx,
-		workerCancel:    workerCancel,
-		budgetCtx:       budgetCtx,
-		budgetCancel:    budgetCancel,
+		pubsub:         sessionbus.New(),
+		defaultModelFn: defaultModelFn,
+		childCache:     make(map[int64]bool),
+		ownerCache:     make(map[int64]string),
+		deferNotices:   newDeferAnnouncements(),
+		workerCtx:      workerCtx,
+		workerCancel:   workerCancel,
+		budgetCtx:      budgetCtx,
+		budgetCancel:   budgetCancel,
 	}
 	s.progress = newProgressRuntime(progressStore, budgetSvc, s)
 	s.completions = s.newCompletionCoordinator()
@@ -423,7 +412,7 @@ func isExactControlCommand(content string) bool {
 	content = strings.TrimSpace(content)
 
 	return isReadOnlyBoundaryCommand(content) || content == stopCommand || content == clearCommand ||
-		content == killCommand || content == shieldsUpCommand || content == shieldsDownCommand
+		content == killCommand
 }
 
 //nolint:funcorder // Command dispatch remains beside durable input admission and lifecycle fencing.
@@ -434,15 +423,6 @@ func (s *svc) handleGenericCommand(ctx context.Context, input *sessionstore.Inbo
 
 	if strings.TrimSpace(input.RawContent) == "/status" {
 		return true, s.handleStatusInput(ctx, input)
-	}
-
-	content := strings.TrimSpace(input.RawContent)
-	if content == shieldsUpCommand || content == shieldsDownCommand {
-		if owner, _ := input.Attributes[controllerapi.SessionAttributeManagerID].(string); owner == "" {
-			return false, nil
-		}
-
-		return true, s.handlePendingShieldCommands(context.WithoutCancel(ctx), input.SessionID)
 	}
 
 	if input.RawContent != stopCommand && input.RawContent != clearCommand && input.RawContent != killCommand {
@@ -485,95 +465,6 @@ func (s *svc) handleGenericCommand(ctx context.Context, input *sessionstore.Inbo
 		return true, s.killLocked(ctx, input.SessionID)
 	default:
 		return false, nil
-	}
-}
-
-//nolint:funcorder // Shield dispatch stays beside the generic command boundary.
-func (s *svc) handlePendingShieldCommands(ctx context.Context, sessionID int64) error {
-	unlock, err := s.lockSessionTree(ctx, sessionID)
-	if err != nil {
-		return err
-	}
-	defer unlock()
-
-	return s.handlePendingShieldCommandsLocked(ctx, sessionID, false)
-}
-
-//nolint:funcorder,wsl_v5 // Ordered shield commands share one tree-locked protocol.
-func (s *svc) handlePendingShieldCommandsLocked(ctx context.Context, sessionID int64, forceActive bool) error {
-	inputs, err := s.inboxStore.ListPendingShieldCommands(ctx, sessionID)
-	if err != nil {
-		return fmt.Errorf("list pending shield commands: %w", err)
-	}
-
-	var activeRaise *sessionstore.ShieldRaise
-
-drain:
-	for _, input := range inputs {
-		active := forceActive || s.treeHasActiveLoop(ctx, sessionID)
-		switch strings.TrimSpace(input.RawContent) {
-		case shieldsUpCommand:
-			raise, commit, err := s.lifecycleStore.BeginShieldRaise(
-				ctx, input.ID, active, s.sandboxEnabled,
-			)
-			if err != nil {
-				return fmt.Errorf("begin shield raise: %w", err)
-			}
-			s.wakeShieldOutput(ctx, commit)
-			if !raise.Changed {
-				continue
-			}
-			if raise.NeedsStop {
-				activeRaise = raise
-				break drain
-			}
-			if err := s.retireShieldPolicy(ctx, raise.RootID); err != nil {
-				return err
-			}
-			completed, err := s.lifecycleStore.CompleteShieldRaise(ctx, raise.RootID, raise.InputID)
-			if err != nil {
-				return fmt.Errorf("complete idle shield raise: %w", err)
-			}
-			s.wakeShieldOutput(ctx, completed)
-		case shieldsDownCommand:
-			commit, err := s.lifecycleStore.ResolveShieldDown(ctx, input.ID, active)
-			if err != nil {
-				return fmt.Errorf("resolve shield lowering: %w", err)
-			}
-			s.wakeShieldOutput(ctx, commit)
-		}
-	}
-
-	if activeRaise == nil {
-		return nil
-	}
-	if err := s.stopTreeCleanup(ctx, activeRaise.RootID, stopTreeOptions{
-		keepRootStopping: true, preserveShieldCommands: true,
-	}); err != nil {
-		return fmt.Errorf("park tree for shield raise: %w", err)
-	}
-	if err := s.retireShieldPolicy(ctx, activeRaise.RootID); err != nil {
-		return err
-	}
-	completed, err := s.lifecycleStore.CompleteShieldRaise(ctx, activeRaise.RootID, activeRaise.InputID)
-	if err != nil {
-		return fmt.Errorf("complete active shield raise: %w", err)
-	}
-	s.wakeShieldOutput(ctx, completed)
-
-	return s.handlePendingShieldCommandsLocked(ctx, sessionID, false)
-}
-
-//nolint:funcorder // Shield delivery stays beside the command transaction.
-func (s *svc) wakeShieldOutput(ctx context.Context, commit *sessionstore.OutputCommit) {
-	if commit == nil || commit.OwnerID == "" || s.managerOutputs == nil {
-		return
-	}
-
-	if _, err := s.managerOutputs.WakeOutputHead(ctx, commit.OwnerID); err != nil {
-		logger.Ctx(ctx).Named("daemon.shields").Warn(
-			"wake_output_failed", zap.String("owner_id", commit.OwnerID), zap.Error(err),
-		)
 	}
 }
 
@@ -779,7 +670,7 @@ func (s *svc) killLocked(ctx context.Context, sessionID int64) error {
 	}
 
 	if rec.KilledAt != nil {
-		return nil
+		return s.retireTreeToolResources(ctx, sessionID)
 	}
 
 	if rec.ParentID == 0 {
@@ -806,6 +697,10 @@ func (s *svc) killLocked(ctx context.Context, sessionID int64) error {
 		cleanupCtx, sessionID, cancelledProcesses,
 	); err != nil {
 		return fmt.Errorf("mark session killed with output: %w", err)
+	}
+
+	if err := s.retireTreeToolResources(cleanupCtx, sessionID); err != nil {
+		return err
 	}
 
 	s.removeSchedules(cleanupCtx, sessionID)
@@ -943,7 +838,6 @@ func (s *svc) completeExplicitStop(
 // to `stopped` together with the visible completion output.
 type stopTreeOptions struct {
 	keepRootStopping            bool
-	preserveShieldCommands      bool
 	preserveBackgroundProcesses bool
 	cancelledProcesses          *int
 }
@@ -979,62 +873,79 @@ func (s *svc) stopTreeCleanup(ctx context.Context, sessionID int64, options stop
 	for _, rs := range runners {
 		rs.Cancel()
 	}
-
 	// Cancel every background Bash process owned by the tree, including
 	// processes started by already-terminal subagents. The shared lifecycle
 	// service signals the in-memory handles, joins terminalization, and
 	// suppresses the individual wake events before the stop fence completes.
-	if s.processSvc != nil && !options.preserveBackgroundProcesses {
-		cancelled, err := s.cancelSessionSubtreeProcesses(
-			cleanupCtx, sessionID, backgroundprocess.IntentSessionStopped,
-		)
-		if err != nil {
-			return fmt.Errorf("cancel background processes: %w", err)
-		}
-
-		if options.cancelledProcesses != nil {
-			*options.cancelledProcesses = cancelled
-		}
+	if err := s.stopTreeBackgroundProcesses(cleanupCtx, sessionID, options); err != nil {
+		return err
 	}
 
 	for _, rs := range runners {
 		<-rs.Done()
 	}
+	if err := s.retireTreeToolResources(cleanupCtx, sessionID); err != nil {
+		return err
+	}
 
-	if options.preserveShieldCommands {
-		if _, err := s.lifecycleStore.CancelPendingInputsPreservingShieldCommands(
-			cleanupCtx, ids, "stopped",
-		); err != nil {
-			return fmt.Errorf("cancel stopped inputs while preserving shield commands: %w", err)
-		}
-	} else if err := s.stopper.CancelInputs(cleanupCtx, plan); err != nil {
+	if err := s.stopper.CancelInputs(cleanupCtx, plan); err != nil {
 		return fmt.Errorf("cancel stopped inputs: %w", err)
 	}
 
-	// With all writers joined, it is safe to close every outstanding tool_use in
-	// the transcript. This is what makes a stopped session resumable without
-	// replaying a sleep/config/task call that no longer exists.
+	if err := s.settleStoppedTree(cleanupCtx, ids); err != nil {
+		return err
+	}
+
+	if err := s.stopper.Finish(cleanupCtx, plan, options.keepRootStopping); err != nil {
+		return fmt.Errorf("finish stop tree: %w", err)
+	}
+
+	return nil
+}
+
+//nolint:funcorder // Background cancellation is a phase of the adjacent stop transition.
+func (s *svc) stopTreeBackgroundProcesses(ctx context.Context, sessionID int64, options stopTreeOptions) error {
+	if s.processSvc == nil || options.preserveBackgroundProcesses {
+		return nil
+	}
+
+	cancelled, err := s.cancelSessionSubtreeProcesses(ctx, sessionID, backgroundprocess.IntentSessionStopped)
+	if err != nil {
+		return fmt.Errorf("cancel background processes: %w", err)
+	}
+
+	if options.cancelledProcesses != nil {
+		*options.cancelledProcesses = cancelled
+	}
+
+	return nil
+}
+
+// settleStoppedTree closes every outstanding tool_use once all writers have
+// joined. That is what makes a stopped session resumable without replaying a
+// sleep/config/task call that no longer exists.
+//
+//nolint:funcorder // Stop-tree helpers stay beside the stop they serve.
+func (s *svc) settleStoppedTree(ctx context.Context, ids []int64) error {
 	for _, id := range ids {
-		if err := s.settleStoppedCalls(cleanupCtx, id); err != nil {
+		if err := s.settleStoppedCalls(ctx, id); err != nil {
 			return err
 		}
 
 		// The settlement just answered every pending call, so a pending grant
 		// can never be spent anymore; expire it store-only or its row sits
 		// pending until the next wake burns a model turn on the receipt.
-		if err := s.expirePendingActivation(cleanupCtx, id); err != nil {
+		if err := s.expirePendingActivation(ctx, id); err != nil {
 			return err
 		}
 
-		if s.scheduleSvc != nil {
-			if _, err := s.scheduleSvc.CancelPendingSleeps(cleanupCtx, id); err != nil {
-				return fmt.Errorf("cancel one-shot waits for session %d: %w", id, err)
-			}
+		if s.scheduleSvc == nil {
+			continue
 		}
-	}
 
-	if err := s.stopper.Finish(cleanupCtx, plan, options.keepRootStopping); err != nil {
-		return fmt.Errorf("finish stop tree: %w", err)
+		if _, err := s.scheduleSvc.CancelPendingSleeps(ctx, id); err != nil {
+			return fmt.Errorf("cancel one-shot waits for session %d: %w", id, err)
+		}
 	}
 
 	return nil
@@ -1291,6 +1202,10 @@ func (s *svc) Shutdown(timeout time.Duration) {
 
 		s.budgetWG.Wait()
 		s.workerWG.Wait()
+
+		if err := session.CloseToolResources(s.factory); err != nil {
+			logger.Named("manager.shutdown").Warn("close_tool_resources", zap.Error(err))
+		}
 
 		close(done)
 	}()

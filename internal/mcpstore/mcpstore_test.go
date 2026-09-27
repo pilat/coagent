@@ -116,7 +116,6 @@ func TestMigrationsApplyToAnExistingDatabase(t *testing.T) {
 		`ALTER TABLE sessions DROP COLUMN context_baseline_model`,
 		`ALTER TABLE sessions DROP COLUMN context_baseline_prompt_tokens`,
 		`ALTER TABLE sessions DROP COLUMN context_baseline_message_count`,
-		`ALTER TABLE sessions DROP COLUMN shields_up`,
 		// 00034 added the background-process ledger.
 		`DROP TABLE background_processes`,
 		// 00038 added the read-before-write ledger.
@@ -136,7 +135,8 @@ func TestMigrationsApplyToAnExistingDatabase(t *testing.T) {
 		`ALTER TABLE sessions DROP COLUMN empty_stop_streak`,
 		// 00043 added the confirmed-answer pointer to the candidate row.
 		`ALTER TABLE sessions DROP COLUMN completion_check_confirmed_answer_id`,
-		`DELETE FROM goose_db_version WHERE version_id BETWEEN 16 AND 43`,
+		// 00044 drops the column 00033 added; net effect across both is none.
+		`DELETE FROM goose_db_version WHERE version_id BETWEEN 16 AND 44`,
 	} {
 		_, err = db.ExecContext(ctx, stmt)
 		require.NoError(t, err, stmt)

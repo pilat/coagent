@@ -222,7 +222,7 @@ func (r *runtime) enqueueProgressSilence(
 	// silence card is simply dropped because the newer transition owns the next
 	// card. No recapture retry — the reconciler re-derives the deadline anyway.
 	if _, err := r.sessionStore.EnqueueProgressOutput(
-		ctx, draft, facts.ModelInputGeneration, facts.Status, facts.ShieldsUp,
+		ctx, draft, facts.ModelInputGeneration, facts.Status,
 	); err != nil && !errors.Is(err, sessionstore.ErrProgressSuperseded) {
 		return err
 	} else if err == nil {
@@ -273,9 +273,7 @@ func (r *runtime) tryEnqueueProgressChange(
 	causalID string,
 ) (string, bool, error) {
 	sourceKey := "progress:change:" + causalID +
-		":g" + strconv.FormatInt(facts.ModelInputGeneration, 10) +
-		":shields:" + strconv.FormatBool(facts.ShieldsUp) +
-		":i" + strconv.FormatInt(facts.ShieldInputID, 10)
+		":g" + strconv.FormatInt(facts.ModelInputGeneration, 10)
 	if existing, ok, err := r.existingProgressOutput(ctx, facts.RootID, sourceKey); err != nil {
 		return "", false, err
 	} else if ok {
@@ -298,7 +296,7 @@ func (r *runtime) tryEnqueueProgressChange(
 	draft.Fingerprint = sessionstore.OutputFingerprint(draft.Type, draft.Content, facts.RootID, attributes)
 
 	if _, err := r.sessionStore.EnqueueProgressOutput(
-		ctx, draft, facts.ModelInputGeneration, facts.Status, facts.ShieldsUp,
+		ctx, draft, facts.ModelInputGeneration, facts.Status,
 	); err != nil {
 		return "", false, err
 	}

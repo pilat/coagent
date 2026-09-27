@@ -67,7 +67,7 @@ func newTelegramOwnershipHarness(t *testing.T) *telegramOwnershipHarness {
 	svc := daemon.New(
 		context.Background(), nil, projects, sessions, sessions, sessions, sessions, sessions, sessions, sessions,
 		subagent.NewStore(db), subagent.NewTransactions(db),
-		budget.New(sessions), sessions, nil, cfg, nil, nil, nil,
+		budget.New(sessions), sessions, nil, cfg, nil, nil,
 	)
 	controllers := managercontrol.New(svc, svc, sessions, cfg, nil)
 	telegramController := controllers.ForManager("telegram-main")

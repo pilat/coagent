@@ -8,7 +8,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/pilat/coagent/internal/bashsandbox"
 	toolpkg "github.com/pilat/coagent/internal/tool"
 )
 
@@ -38,7 +37,7 @@ func TestSandboxHint(t *testing.T) {
 
 	for name, tt := range tests {
 		t.Run(name, func(t *testing.T) {
-			hint := sandboxHint(tt.output, tt.roots, bashsandbox.HostReadable, "/work")
+			hint := sandboxHint(tt.output, tt.roots, "/work")
 
 			if !tt.want {
 				assert.Empty(t, hint)
@@ -46,7 +45,7 @@ func TestSandboxHint(t *testing.T) {
 			}
 
 			require.NotEmpty(t, hint)
-			assert.Contains(t, hint, "sandbox.writable_paths")
+			assert.Contains(t, hint, "sandbox.rules")
 			assert.Contains(t, hint, "/work, /tmp")
 		})
 	}
@@ -69,7 +68,7 @@ func TestBashTool_SandboxHint(t *testing.T) {
 		require.NoError(t, err)
 
 		assert.Equal(t, 1, result.Metadata["exitCode"])
-		assert.Contains(t, result.Output, "sandbox.writable_paths")
+		assert.Contains(t, result.Output, "sandbox.rules")
 		assert.Contains(t, result.Output, tmpDir)
 	})
 
@@ -86,7 +85,7 @@ func TestBashTool_SandboxHint(t *testing.T) {
 		result, err := tool.Execute(toolCtx(context.Background()), params)
 		require.NoError(t, err)
 
-		assert.NotContains(t, result.Output, "writable_paths")
+		assert.NotContains(t, result.Output, "sandbox.rules")
 	})
 
 	t.Run("no hint when unconfined", func(t *testing.T) {
@@ -101,7 +100,7 @@ func TestBashTool_SandboxHint(t *testing.T) {
 		result, err := tool.Execute(toolCtx(context.Background()), params)
 		require.NoError(t, err)
 
-		assert.NotContains(t, result.Output, "writable_paths")
+		assert.NotContains(t, result.Output, "sandbox.rules")
 	})
 }
 

@@ -43,14 +43,15 @@ func (m *mockClient) Chat(
 	return &llmwire.Response{Text: "default"}, nil
 }
 
-func (m *mockClient) Model() string                  { return m.model }
-func (m *mockClient) APIKey() string                 { return m.apiKey }
-func (m *mockClient) Close() error                   { return nil }
-func (m *mockClient) Provider() string               { return "mock" }
-func (m *mockClient) ContextWindow() int             { return 0 }
-func (m *mockClient) SetReasoningLevel(level string) {}
-func (m *mockClient) GetReasoningLevel() string      { return "medium" }
-func (m *mockClient) SetSessionID(id string)         {}
+func (m *mockClient) Model() string                      { return m.model }
+func (m *mockClient) APIKey() string                     { return m.apiKey }
+func (m *mockClient) Close() error                       { return nil }
+func (m *mockClient) Provider() string                   { return "mock" }
+func (m *mockClient) ContextWindow() int                 { return 0 }
+func (m *mockClient) SetReasoningLevel(level string)     {}
+func (m *mockClient) SetImageAuthorizer(ImageAuthorizer) {}
+func (m *mockClient) GetReasoningLevel() string          { return "medium" }
+func (m *mockClient) SetSessionID(id string)             {}
 
 var _ Client = (*mockClient)(nil)
 

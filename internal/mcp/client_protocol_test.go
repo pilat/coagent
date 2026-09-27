@@ -64,7 +64,7 @@ func writeMCPServerScript(t *testing.T, script string) string {
 
 // A spec-compliant legacy server must answer the client's server/discover probe
 // with MethodNotFound and fall back instantly; an ignore-style server would pay
-// the probe timeout on every pooled connect.
+// the probe timeout on every connect.
 func TestNewClient_LegacyServerAnswersProbeAndFallsBackFast(t *testing.T) {
 	start := time.Now()
 

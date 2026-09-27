@@ -8,17 +8,21 @@ import (
 	"github.com/pilat/coagent/internal/tool"
 )
 
-// mcpTool is a direct MCP tool: metadata comes from the activation's immutable
-// snapshot and the live client is resolved at execution time, so the tool
-// inventory and the provider schemas always originate from the same snapshot.
+// ToolMeta is the model-facing projection of one discovered MCP tool.
+type ToolMeta struct {
+	Name        string
+	Description string
+	Schema      json.RawMessage
+}
+
+// mcpTool keeps the metadata discovered for one stack and calls its live client.
 type mcpTool struct {
 	serverName string
 	meta       ToolMeta
 	clientFor  func(ctx context.Context) (*Client, error)
 }
 
-// newMCPTool builds a direct MCP tool from immutable metadata; clientFor
-// supplies the live client at execution time.
+// newMCPTool builds a direct MCP tool from discovered metadata.
 func newMCPTool(
 	serverName string,
 	meta ToolMeta,

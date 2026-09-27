@@ -8,6 +8,8 @@ import (
 	"os"
 	"os/exec"
 	"time"
+
+	"github.com/pilat/coagent/internal/procexec"
 )
 
 const captureTimeout = 10 * time.Second
@@ -27,15 +29,19 @@ const dumpCommand = "printf '\\n%s\\n' '" + dumpMarker + "'; shopt -p; declare -
 
 // capture runs the user's login+interactive bash in workDir and returns a
 // re-sourceable snapshot. `-l -i` is required: plain `-l` shadows mise activation.
-func (p *provider) capture(ctx context.Context, workDir string) ([]byte, error) {
+func (p *provider) capture(ctx context.Context, runner ConfinedRunner, workDir string) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(ctx, captureTimeout)
 	defer cancel()
 
 	// SECURITY: this shell gets os.Environ() only — never a secrets map. coagent
 	// secrets live solely in the in-memory Secrets map the config package loads.
-	cmd := exec.CommandContext(ctx, p.shell, "-l", "-i", "-c", dumpCommand)
-	cmd.Dir = workDir
-	cmd.Env = os.Environ()
+	// It executes through the session's confinement runner, so a project hook or
+	// rc file cannot reach outside the policy while it is being captured.
+	cmd, err := captureCommand(ctx, runner, p.shell, workDir)
+	if err != nil {
+		return nil, err
+	}
+	defer procexec.CloseExtraFiles(cmd)
 
 	// An rc-spawned lingering daemon (ssh-agent/direnv) can hold the stdout pipe
 	// open; WaitDelay bounds Run() so it can't hang forever under the per-key lock.
@@ -51,6 +57,37 @@ func (p *provider) capture(ctx context.Context, workDir string) ([]byte, error) 
 	}
 
 	return parseDump(out.Bytes())
+}
+
+// captureCommand builds the login-shell capture command through the confinement
+// runner. A nil runner means the sandbox is disabled: the caller accepts host
+// execution, which is the same authority its other processes already have.
+func captureCommand(
+	ctx context.Context,
+	runner ConfinedRunner,
+	shell, workDir string,
+) (*exec.Cmd, error) {
+	request := procexec.Request{
+		Path:    shell,
+		Args:    []string{"-l", "-i", "-c", dumpCommand},
+		WorkDir: workDir,
+		Env:     os.Environ(),
+	}
+
+	if runner != nil {
+		cmd, err := runner.Command(ctx, request)
+		if err != nil {
+			return nil, fmt.Errorf("confined capture command: %w", err)
+		}
+
+		return cmd, nil
+	}
+
+	cmd := exec.CommandContext(ctx, shell, request.Args...)
+	cmd.Dir = workDir
+	cmd.Env = request.Env
+
+	return procexec.Unprivileged(cmd), nil
 }
 
 // parseDump strips rc startup noise before the dump marker, then filters readonly

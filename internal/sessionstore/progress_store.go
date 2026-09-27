@@ -36,8 +36,6 @@ type ProgressFacts struct {
 	ActiveSubagents      int
 	BackgroundSubagents  int
 	BackgroundProcesses  []ProcessProgress
-	ShieldsUp            bool
-	ShieldInputID        int64
 }
 
 // ProcessProgress projects one live background Bash process into status
@@ -64,13 +62,12 @@ type ProgressStore interface {
 	OutboxWatermark(ctx context.Context, sessionID int64) (int64, error)
 	OutputBySourceKey(ctx context.Context, sessionID int64, sourceKey string) (*OutputRecord, error)
 	// EnqueueProgressOutput commits one causal progress card: it succeeds only
-	// while the captured generation, status, and shields state still own the session.
+	// while the captured generation and status still own the session.
 	EnqueueProgressOutput(
 		ctx context.Context,
 		draft OutputDraft,
 		expectedGeneration int64,
 		expectedStatus SessionStatus,
-		expectedShieldsUp bool,
 	) (*OutputCommit, error)
 }
 
@@ -196,13 +193,10 @@ func captureProgressRoot(ctx context.Context, tx *sql.Tx, facts *ProgressFacts) 
 	var boundary sql.NullInt64
 
 	err := tx.QueryRowContext(ctx, `SELECT model, iteration, status, todo_items,
-		model_input_generation, model_input_boundary, shields_up,
-		COALESCE((SELECT MAX(input.id) FROM session_inbox input
-			WHERE input.session_id = sessions.id AND input.state = 'handled'
-				AND input.resolution_reason IN ('shieldsup', 'shieldsdown')), 0)
+		model_input_generation, model_input_boundary
 		FROM sessions WHERE id = ? AND parent_id = 0`, facts.RootID).
 		Scan(&facts.Model, &facts.Iteration, &facts.Status, &todos,
-			&facts.ModelInputGeneration, &boundary, &facts.ShieldsUp, &facts.ShieldInputID)
+			&facts.ModelInputGeneration, &boundary)
 	if errors.Is(err, sql.ErrNoRows) {
 		return ErrOutputNotRoot
 	}

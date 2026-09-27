@@ -14,8 +14,10 @@ import (
 )
 
 // Snapshot ensures a fresh snapshot for workDir and returns its path, or "" when
-// unavailable. It never returns an error — every failure degrades to "".
-func (p *provider) Snapshot(ctx context.Context, workDir string) string {
+// unavailable. It never returns an error — every failure degrades to "". Capture
+// runs through runner, and the cache key carries the policy digest so a snapshot
+// taken under a wider policy is never replayed for a narrower one.
+func (p *provider) Snapshot(ctx context.Context, runner ConfinedRunner, workDir string) string {
 	if p.shell == "" || workDir == "" {
 		return ""
 	}
@@ -30,8 +32,8 @@ func (p *provider) Snapshot(ctx context.Context, workDir string) string {
 		return ""
 	}
 
-	path := filepath.Join(dir, p.cacheKey(workDir))
-	fp := p.fingerprint(workDir)
+	path := filepath.Join(dir, p.cacheKey(workDir, policyDigestOf(runner)))
+	fp := p.fingerprint(workDir, admissionOf(runner))
 
 	if p.valid(workDir, path, fp) {
 		return path
@@ -47,7 +49,7 @@ func (p *provider) Snapshot(ctx context.Context, workDir string) string {
 
 	p.captureN.Add(1)
 
-	content, err := p.captureFn(ctx, workDir)
+	content, err := p.captureFn(ctx, runner, workDir)
 	if err != nil {
 		p.log().Warn("capture_failed", zap.String("workDir", workDir), zap.Error(err))
 		return ""
@@ -69,7 +71,16 @@ func (p *provider) Fingerprint(workDir string) string {
 		return ""
 	}
 
-	return p.fingerprint(workDir)
+	return p.fingerprint(workDir, nil)
+}
+
+// admissionOf exposes the runner's read authority, or nil when nothing confines.
+func admissionOf(runner ConfinedRunner) func(string) bool {
+	if runner == nil {
+		return nil
+	}
+
+	return runner.AllowsRead
 }
 
 // Invalidate drops workDir's recorded fingerprint so the next Snapshot recaptures.
@@ -103,12 +114,24 @@ func (p *provider) recordFP(workDir, fp string) {
 	p.fpMu.Unlock()
 }
 
-func (p *provider) cacheKey(workDir string) string {
+func (p *provider) cacheKey(workDir, digest string) string {
 	h := sha512.New()
 	h.Write([]byte(workDir))
+	h.Write([]byte{0})
+	h.Write([]byte(digest))
 	h.Write(p.salt)
 
 	return hex.EncodeToString(h.Sum(nil))
+}
+
+// policyDigestOf names the policy a snapshot belongs to; an unconfined caller
+// gets its own key space rather than sharing the confined one.
+func policyDigestOf(runner ConfinedRunner) string {
+	if runner == nil {
+		return "unconfined"
+	}
+
+	return runner.PolicyDigest()
 }
 
 func (p *provider) fresh(path string) bool {
@@ -120,8 +143,9 @@ func (p *provider) fresh(path string) bool {
 	return time.Since(info.ModTime()) < p.ttl
 }
 
-// ensureCacheDir lazily creates a 0700 per-instance dir under UserCacheDir,
-// which is bwrap-visible via `--ro-bind / /` so the replay `source` reaches it.
+// ensureCacheDir lazily creates a 0700 per-instance dir under UserCacheDir. The
+// directory is never mounted: each command mounts only the one snapshot it
+// sources, at a private runtime path.
 func (p *provider) ensureCacheDir() (string, error) {
 	p.cacheMu.Lock()
 	defer p.cacheMu.Unlock()

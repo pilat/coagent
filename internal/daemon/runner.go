@@ -56,7 +56,7 @@ func (s *svc) runSession(ctx context.Context, sessionID int64, rs runner) {
 
 	for {
 		cont, hadInput := s.runSessionIteration(
-			ctx, sessionID, rs, notify, &announced, &publishIdle,
+			ctx, sessionID, rs, notify, &announced, &publishIdle, &errored,
 		)
 		if !cont {
 			return
@@ -143,16 +143,17 @@ func (s *svc) finishRunner(
 	if !shuttingDown && ctx.Err() == nil {
 		s.drainPendingRunners(cleanupCtx)
 		s.drainQueue(cleanupCtx)
-		if !continued {
+		if !continued && !*errored {
 			s.restartPendingAfterExit(cleanupCtx, sessionID)
+		}
+		if *errored {
+			completeUnprocessedInputs(leftover, fmt.Errorf("session %d failed before input delivery", sessionID))
 		}
 	} else if !shuttingDown {
 		// /stop or /kill may win after a typed delivery was appended to the
 		// runner. Complete awaited senders explicitly; durable ledgers retain the
 		// underlying event for the appropriate resume/recovery policy.
-		for _, input := range leftover {
-			input.complete(false, fmt.Errorf("session %d stopped before input delivery", sessionID))
-		}
+		completeUnprocessedInputs(leftover, fmt.Errorf("session %d stopped before input delivery", sessionID))
 	}
 }
 
@@ -182,6 +183,13 @@ func (s *svc) finishRunnerLocked(
 	rs runner,
 	shuttingDown, errored, fenced bool,
 ) ([]queuedSessionInput, func(), bool) {
+	if fenced {
+		if err := s.settleStagedResults(ctx, sessionID); err != nil {
+			logger.Ctx(ctx).Named("daemon.apply").Error(
+				"abandon_delivery_failed", zap.Int64("session_id", sessionID), zap.Error(err))
+		}
+	}
+
 	s.runners.Delete(sessionID)
 
 	info := rs.Info()
@@ -207,7 +215,7 @@ func (s *svc) finishRunnerLocked(
 	leftover := rs.DrainInputs()
 	rs.Complete()
 
-	if fenced && !shuttingDown && runErr == nil && s.rerouteRunnerInputsLocked(ctx, sessionID, leftover) {
+	if fenced && !shuttingDown && runErr == nil && !errored && s.rerouteRunnerInputsLocked(ctx, sessionID, leftover) {
 		s.reconcileLatestReadiness(ctx, sessionID)
 
 		return nil, nil, true
@@ -286,6 +294,7 @@ func (s *svc) runSessionIteration( //nolint:funlen,gocyclo // Linear lifecycle w
 	notify func(sessionevent.Notification),
 	announced *bool,
 	publishIdle *bool,
+	errored *bool,
 ) (bool, bool) {
 	rec, err := s.sessionStore.GetSession(ctx, sessionID)
 	if err != nil {
@@ -302,8 +311,18 @@ func (s *svc) runSessionIteration( //nolint:funlen,gocyclo // Linear lifecycle w
 	info := rs.Info()
 	idleEligible := ownerlessSession(rec)
 
+	if err := s.settleStagedResults(ctx, sessionID); err != nil {
+		*errored = true
+		*publishIdle = idleEligible
+
+		s.reportSessionUnstarted(ctx, sessionID, notify, err)
+
+		return false, false
+	}
+
 	sess, runErr := s.createOrResumeSession(ctx, sessionID, info.WorkDir, rec, info.PreserveStopped)
 	if runErr != nil {
+		*errored = true
 		*publishIdle = idleEligible
 
 		logger.Ctx(ctx).Warn("session_create_failed", zap.Int64("session_id", sessionID), zap.Error(runErr))
@@ -312,8 +331,11 @@ func (s *svc) runSessionIteration( //nolint:funlen,gocyclo // Linear lifecycle w
 		return false, false
 	}
 
+	defer sess.Close()
+
 	inputs, runErr := s.prepareSessionInputs(ctx, sessionID, rs, sess)
 	if runErr != nil {
+		*errored = true
 		*publishIdle = idleEligible
 
 		sess.Close()
@@ -326,6 +348,7 @@ func (s *svc) runSessionIteration( //nolint:funlen,gocyclo // Linear lifecycle w
 
 	hasDurableInput, pendingErr := s.hasPendingDurableInput(ctx, sessionID)
 	if pendingErr != nil {
+		*errored = true
 		*publishIdle = idleEligible
 
 		sess.Close()
@@ -338,6 +361,7 @@ func (s *svc) runSessionIteration( //nolint:funlen,gocyclo // Linear lifecycle w
 	if !hasDurableInput && len(inputs) == 0 && !sess.HasPendingWork() && !rs.HasRun() {
 		recoveringAcceptedTurn, runErr = s.recoverableInputRunnable(ctx, sessionID)
 		if runErr != nil {
+			*errored = true
 			*publishIdle = idleEligible
 
 			sess.Close()
@@ -358,6 +382,7 @@ func (s *svc) runSessionIteration( //nolint:funlen,gocyclo // Linear lifecycle w
 	}
 
 	if err := s.activateStoppedRootForScheduledTurn(ctx, rec, inputs); err != nil {
+		*errored = true
 		*publishIdle = idleEligible
 
 		sess.Close()
@@ -411,6 +436,7 @@ func (s *svc) runSessionIteration( //nolint:funlen,gocyclo // Linear lifecycle w
 	s.runStagedApply(ctx, sessionID)
 
 	if runErr != nil {
+		*errored = true
 		*publishIdle = idleEligible
 
 		s.handleRunError(ctx, sessionID, runResult.ErrorNotice, runErr, notify)
@@ -426,6 +452,8 @@ func (s *svc) runSessionIteration( //nolint:funlen,gocyclo // Linear lifecycle w
 	if info.PreserveStopped {
 		reloaded, reloadErr := s.sessionStore.GetSession(ctx, sessionID)
 		if reloadErr != nil {
+			*errored = true
+
 			s.reportSessionUnstarted(ctx, sessionID, notify, reloadErr)
 
 			return false, hadInput
@@ -643,7 +671,7 @@ func (s *svc) settleStoppedCalls(ctx context.Context, sessionID int64) error {
 		s.staged.stage(sessionID, call.ID, call.Name)
 	}
 
-	sess, err := s.openSession(ctx, sessionID, workDir, rec, true, false)
+	sess, err := s.openSession(ctx, sessionID, workDir, rec, true, false, true)
 	if err != nil {
 		return fmt.Errorf("open stopping session %d: %w", sessionID, err)
 	}
@@ -686,7 +714,7 @@ func (s *svc) closeOrphanedCalls(ctx context.Context, rec *sessionstore.SessionR
 		}
 	}()
 
-	sess, err := s.createOrResumeSession(ctx, rec.ID, workDir, rec, false)
+	sess, err := s.openSession(ctx, rec.ID, workDir, rec, false, false, true)
 	if err != nil {
 		return 0, fmt.Errorf("open session %d to close orphaned calls: %w", rec.ID, err)
 	}
@@ -743,10 +771,8 @@ func (s *svc) ensureSessionRunnerLocked(ctx context.Context, sessionID int64) er
 	return err
 }
 
-// reportSessionUnstarted tells the controller a session could not start and parks
-// it idle. Shared so every pre-run failure reads identically to the user. A
-// canceled context is a shutdown, not a session failure: restart will resume the
-// work, so no error receipt is published.
+// Failed starts preserve input; only the first failure for that work is reported.
+// Shutdown cancellation leaves recovery to the next boot without an error receipt.
 func (s *svc) reportSessionUnstarted(
 	ctx context.Context,
 	sessionID int64,
@@ -761,8 +787,15 @@ func (s *svc) reportSessionUnstarted(
 		"⚠️ Session error: %s\n\nThe session is still alive — send a message to retry.",
 		logger.Redact(err.Error()),
 	)
-	if outputErr := s.enqueuePersistentOutput(ctx, sessionID, message); outputErr != nil {
+
+	reported, outputErr := s.lifecycleStore.RecordSessionStartFailure(ctx, sessionID, message)
+	if outputErr != nil {
 		logger.Ctx(ctx).Named("daemon.runner").Warn("enqueue_unstarted_error_output", zap.Error(outputErr))
+		return
+	}
+
+	if !reported {
+		return
 	}
 
 	notify(sessionevent.Notification{
@@ -1063,7 +1096,7 @@ func (s *svc) createOrResumeSession(
 	rec *sessionstore.SessionRecord,
 	preserveStopped bool,
 ) (session.Service, error) {
-	return s.openSession(ctx, sessionID, workDir, rec, false, preserveStopped)
+	return s.openSession(ctx, sessionID, workDir, rec, false, preserveStopped, false)
 }
 
 func (s *svc) sessionInputBoundary(
@@ -1123,15 +1156,17 @@ func (s *svc) openSession(
 	sessionID int64,
 	workDir string,
 	rec *sessionstore.SessionRecord,
-	settlement, preserveStopped bool,
+	settlement, preserveStopped, transcriptOnly bool,
 ) (session.Service, error) {
 	externalCalls, err := s.pendingExternalCallsForSession(ctx, sessionID)
 	if err != nil {
 		return nil, err
 	}
 
-	// Extract repo root from session attributes (set for worktree sessions)
-	repoRoot, _ := rec.Attributes["repo_root"].(string)
+	repoRoot, err := s.sessionRepoRoot(ctx, rec)
+	if err != nil {
+		return nil, err
+	}
 
 	opts := session.CreateOptions{
 		ID:              sessionID,
@@ -1150,17 +1185,14 @@ func (s *svc) openSession(
 			ManagerReplyPending: rec.ManagerReplyPending,
 			EmptyStopStreak:     rec.EmptyStopStreak,
 		},
-		RepoRoot:  repoRoot,
-		ShieldsUp: rec.ShieldsUp,
-		ObserveProcessPolicy: func(key string) {
-			s.recordProcessPolicy(sessionID, key)
-		},
+		RepoRoot: repoRoot,
 
 		StagedExternalCalls: externalCalls,
 
 		CompactionDeferAnnounced: s.deferNotices.announced(sessionID),
 		InputBoundary:            s.sessionInputBoundary(sessionID, rec),
 		SettlementOpen:           settlement,
+		TranscriptOnly:           transcriptOnly,
 		PreserveStoppedStatus:    preserveStopped,
 	}
 	if rec.ParentID != 0 {
@@ -1216,6 +1248,29 @@ func (s *svc) openSession(
 	}
 
 	return sess, nil
+}
+
+// sessionRepoRoot follows the durable tree root because child session rows do
+// not copy manager-owned attributes from their parent.
+func (s *svc) sessionRepoRoot(ctx context.Context, rec *sessionstore.SessionRecord) (string, error) {
+	if rec.RootID == 0 {
+		repoRoot, _ := rec.Attributes["repo_root"].(string)
+
+		return repoRoot, nil
+	}
+
+	root, err := s.sessionStore.GetSession(ctx, rec.RootID)
+	if err != nil {
+		return "", fmt.Errorf("load root session %d for worktree policy: %w", rec.RootID, err)
+	}
+
+	if root == nil || root.ProjectID != rec.ProjectID {
+		return "", fmt.Errorf("root session %d does not match project %d", rec.RootID, rec.ProjectID)
+	}
+
+	repoRoot, _ := root.Attributes["repo_root"].(string)
+
+	return repoRoot, nil
 }
 
 // pendingExternalCallsForSession merges the authoritative producer ledgers:
@@ -1392,7 +1447,17 @@ func (s *svc) registerMCPTools(ctx context.Context, rec *sessionstore.SessionRec
 		return
 	}
 
-	for _, t := range newMCPTools(s.mcpStore, s.mcpPool, rec.ProjectID) {
+	onChange := func(project *int64) {
+		var projectID int64
+		if project != nil {
+			projectID = *project
+		}
+
+		if err := session.InvalidateToolResources(s.factory, projectID); err != nil {
+			logger.Ctx(ctx).Warn("invalidate_mcp_resources", zap.Error(err))
+		}
+	}
+	for _, t := range newMCPTools(s.mcpStore, rec.ProjectID, onChange) {
 		registerLogged(ctx, sess, t)
 	}
 }
@@ -1554,10 +1619,8 @@ func (s *svc) releaseUnbackedApply(
 	}
 }
 
-// abandonStagedApply is the teardown net for a claim whose loop died before
-// runStagedApply could hand it over — a panic, recovered so the daemon lives on.
-// The slot is process-global: left taken, no session and no bootstrap op could
-// change the config again until the daemon restarts.
+// abandonStagedApply releases the global slot while retaining the verdict.
+// Transcript settlement waits for the runner's lifecycle fence.
 func (s *svc) abandonStagedApply(ctx context.Context, sessionID int64) {
 	if s.applier == nil {
 		return
@@ -1569,19 +1632,85 @@ func (s *svc) abandonStagedApply(ctx context.Context, sessionID int64) {
 	}
 
 	s.applier.ReleaseApply()
+	s.staged.stageResult(sessionID, callID, sc.toolName,
+		"Config change abandoned — the session ended before it was applied. Nothing was written.")
 
 	log := logger.Ctx(ctx).Named("daemon.apply")
 	log.Warn("apply_abandoned", zap.Int64("session_id", sessionID), zap.String("tool", sc.toolName))
+}
 
-	// Nothing was written, so the call is answerable in-process — and the ledger
-	// entry only goes away once that answer is durable.
-	err := s.enqueueSessionInput(ctx, sessionID, pendingCallResultInput{
-		Call:    session.PendingToolCall{ID: callID, Name: sc.toolName},
-		Content: "Config change abandoned — the session ended before it was applied. Nothing was written.",
-	})
-	if err != nil {
-		log.Error("abandon_delivery_failed", zap.Int64("session_id", sessionID), zap.Error(err))
+func (s *svc) settleStagedResults(ctx context.Context, sessionID int64) error {
+	for callID, sc := range s.staged.pendingResults(sessionID) {
+		durable, err := s.suspendIsDurable(ctx, sessionID, callID, sc.toolName)
+		if err != nil {
+			return err
+		}
+
+		// Expire first: a crash after the result must not leave an unbound grant
+		// blocking the FIFO with no unresolved call for recovery to settle.
+		if err := s.expireAbandonedActivation(ctx, sessionID, callID, sc.toolName); err != nil {
+			return err
+		}
+
+		if durable {
+			if err := s.settleAbandonedApply(ctx, sessionID, pendingCallResultInput{
+				Call: session.PendingToolCall{ID: callID, Name: sc.toolName}, Content: sc.result,
+			}); err != nil {
+				return err
+			}
+		}
+
+		s.staged.resolve(sessionID, callID)
 	}
+
+	return nil
+}
+
+func (s *svc) settleAbandonedApply(ctx context.Context, sessionID int64, input pendingCallResultInput) error {
+	rec, err := s.sessionStore.GetSession(ctx, sessionID)
+	if err != nil {
+		return fmt.Errorf("load session for abandoned apply: %w", err)
+	}
+
+	workDir, err := s.store.GetProjectWorkDir(ctx, rec.ProjectID)
+	if err != nil {
+		return fmt.Errorf("resolve project for abandoned apply: %w", err)
+	}
+
+	sess, err := s.openSession(ctx, sessionID, workDir, rec, false, false, true)
+	if err != nil {
+		return fmt.Errorf("open transcript for abandoned apply: %w", err)
+	}
+	defer sess.Close()
+
+	_, err = sess.ResolvePendingCall(ctx, input.Call, input.Content)
+	if err != nil {
+		return fmt.Errorf("settle abandoned apply: %w", err)
+	}
+
+	return nil
+}
+
+func (s *svc) expireAbandonedActivation(ctx context.Context, sessionID int64, callID, toolName string) error {
+	activation, err := s.activationStore.PendingActivation(ctx, sessionID)
+	if errors.Is(err, sessionstore.ErrActivationNotFound) {
+		return nil
+	}
+
+	if err != nil {
+		return fmt.Errorf("read abandoned activation: %w", err)
+	}
+
+	if activation.ToolID != toolName || (activation.ToolCallID != "" && activation.ToolCallID != callID) {
+		return nil
+	}
+
+	_, err = s.activationStore.ExpireActivation(ctx, activation.InputID, sessionID)
+	if err != nil {
+		return fmt.Errorf("expire abandoned activation: %w", err)
+	}
+
+	return nil
 }
 
 // registerSubagentTools registers the daemon-mode task and subagent-monitor

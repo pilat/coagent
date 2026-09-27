@@ -15,11 +15,38 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/pilat/coagent/internal/logger"
+	"github.com/pilat/coagent/internal/procexec"
 )
 
 // defaultTTL is only a backstop: fingerprint validation is the authoritative
 // freshness signal, so this bounds only the un-fingerprintable residue.
 const defaultTTL = 30 * time.Minute
+
+// ConfinedRunner is the process seam shell activation executes through: the
+// session's own confinement runner, so capture, lookup and replay run under the
+// same effective policy as the processes they prepare. A nil runner means the
+// sandbox is disabled and the caller accepts host execution.
+type ConfinedRunner interface {
+	procexec.Runner
+
+	// PolicyDigest identifies the effective policy a snapshot belongs to; it
+	// scopes cache keys so a snapshot from a wider policy is never replayed.
+	PolicyDigest() string
+
+	// AllowsRead reports whether the policy admits reading path, so the
+	// fingerprint hashes metadata for what the session cannot read.
+	AllowsRead(path string) bool
+
+	// SnapshotShell builds a shell command that sources snapshot (host path;
+	// "" = no snapshot) at its private runtime path and runs command in workDir.
+	// The snapshot is mounted read-only for that command only. env replaces the
+	// inherited environment when non-nil.
+	SnapshotShell(
+		ctx context.Context,
+		shell, snapshot, command, workDir string,
+		env []string,
+	) (*exec.Cmd, error)
+}
 
 // Provider captures and replays per-directory shell activation snapshots. All
 // methods degrade gracefully: unavailability is a "" snapshot, never an error a
@@ -28,8 +55,9 @@ type Provider interface {
 	// Snapshot ensures a fresh (<TTL) snapshot for workDir and returns its file
 	// path, or "" when snapshotting is unavailable (non-bash $SHELL, capture
 	// failed/timed out, dir gone). NEVER returns an error — it logs internally
-	// and degrades. Callers treat "" as "spawn as today".
-	Snapshot(ctx context.Context, workDir string) string
+	// and degrades. Callers treat "" as "spawn as today". Capture executes
+	// through runner, never a host shell.
+	Snapshot(ctx context.Context, runner ConfinedRunner, workDir string) string
 
 	// Shell is the resolved bash-family shell, or "" if unsupported.
 	Shell() string
@@ -47,11 +75,12 @@ type Provider interface {
 
 	// WrapExec execs argv in workDir after sourcing a snapshot when available; extraEnv overrides inherited names and is exported after it.
 	// It returns a plain exec without a snapshot and errors only on empty argv.
-	WrapExec(ctx context.Context, workDir string, argv, extraEnv []string) (*exec.Cmd, error)
+	WrapExec(ctx context.Context, runner ConfinedRunner, workDir string, argv, extraEnv []string) (*exec.Cmd, error)
 
 	// LookPath resolves the first executable from names using the same activated
-	// environment that WrapExec replays. It returns an absolute path.
-	LookPath(ctx context.Context, workDir string, names []string) (string, error)
+	// environment that WrapExec replays. It returns an absolute path. The lookup
+	// itself runs through runner, so an rc file cannot act outside the policy.
+	LookPath(ctx context.Context, runner ConfinedRunner, workDir string, names []string) (string, error)
 
 	// Close best-effort removes the per-instance cache dir.
 	Close() error
@@ -66,7 +95,7 @@ type provider struct {
 	ttl        time.Duration
 
 	// captureFn is the snapshot producer; a field so tests inject a fast fake.
-	captureFn func(ctx context.Context, workDir string) ([]byte, error)
+	captureFn func(ctx context.Context, runner ConfinedRunner, workDir string) ([]byte, error)
 	captureN  atomic.Int64
 
 	cacheMu  sync.Mutex

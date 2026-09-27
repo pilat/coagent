@@ -52,7 +52,7 @@ func (s SessionStatus) valid() bool {
 	}
 }
 
-const sessionColumns = `id, project_id, model, reasoning_level, master_enabled, attributes, agent_type, parent_id, iteration, status, todo_items, created_at, updated_at, killed_at, root_id, model_input_generation, model_input_boundary, context_baseline_model, context_baseline_prompt_tokens, context_baseline_message_count, shields_up, completion_check_candidate_id, manager_reply_pending, empty_stop_streak, completion_check_confirmed_answer_id`
+const sessionColumns = `id, project_id, model, reasoning_level, master_enabled, attributes, agent_type, parent_id, iteration, status, todo_items, created_at, updated_at, killed_at, root_id, model_input_generation, model_input_boundary, context_baseline_model, context_baseline_prompt_tokens, context_baseline_message_count, completion_check_candidate_id, manager_reply_pending, empty_stop_streak, completion_check_confirmed_answer_id`
 
 // errSessionNotFound signals a lookup query matched no row.
 var errSessionNotFound = errors.New("session not found")
@@ -70,7 +70,6 @@ type SessionRecord struct {
 	RootID         int64
 	Iteration      int
 	Status         SessionStatus
-	ShieldsUp      bool
 	TodoItems      string
 	CreatedAt      time.Time
 	UpdatedAt      time.Time
@@ -223,7 +222,6 @@ type Store interface { //nolint:interfacebloat // Complete constructor result; c
 	ProgressStore
 	ReadinessStore
 	StopCompletionStore
-	ShieldCommandStore
 	WakeSourceStore
 	FileReadStore
 }
@@ -249,7 +247,6 @@ var (
 	_ ProgressStore         = (*store)(nil)
 	_ ReadinessStore        = (*store)(nil)
 	_ StopCompletionStore   = (*store)(nil)
-	_ ShieldCommandStore    = (*store)(nil)
 )
 
 type store struct {
@@ -330,8 +327,8 @@ func (s *store) CreateSubagentSession(
 	result, err := s.db.ExecContext(
 		ctx,
 		`INSERT INTO sessions
-			(project_id, parent_id, root_id, agent_type, model, reasoning_level, created_at, updated_at, shields_up)
-		 SELECT ?, ?, ?, ?, ?, ?, ?, ?, shields_up FROM sessions WHERE id = ?`,
+			(project_id, parent_id, root_id, agent_type, model, reasoning_level, created_at, updated_at)
+		 SELECT ?, ?, ?, ?, ?, ?, ?, ? FROM sessions WHERE id = ?`,
 		projectID,
 		parentID,
 		rootID,
@@ -396,9 +393,9 @@ func (s *store) CreateReplacementSession(
 		return nil, fmt.Errorf("marshal ownerless replacement attributes: %w", err)
 	}
 	result, err = tx.ExecContext(ctx, `INSERT INTO sessions
-		(project_id, model, reasoning_level, attributes, agent_type, created_at, updated_at, shields_up)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-		old.ProjectID, old.Model, old.ReasoningLevel, string(attrs), rootAgentType, now, now, old.ShieldsUp)
+		(project_id, model, reasoning_level, attributes, agent_type, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		old.ProjectID, old.Model, old.ReasoningLevel, string(attrs), rootAgentType, now, now)
 	if err != nil {
 		return nil, fmt.Errorf("insert ownerless replacement: %w", err)
 	}
@@ -413,7 +410,7 @@ func (s *store) CreateReplacementSession(
 	return &SessionRecord{
 		ID: id, ProjectID: old.ProjectID, Model: old.Model, ReasoningLevel: old.ReasoningLevel,
 		Status: SessionStatusActive, AgentType: rootAgentType, Attributes: old.Attributes,
-		ShieldsUp: old.ShieldsUp, CreatedAt: now, UpdatedAt: now,
+		CreatedAt: now, UpdatedAt: now,
 	}, nil
 }
 
@@ -1168,7 +1165,6 @@ func scanSessionFrom(sc rowScanner) (*SessionRecord, error) {
 	var projectID, parentID, iteration, rootID sql.NullInt64
 	var killedAt sql.NullTime
 	var boundary sql.NullInt64
-	var shieldsUp sql.NullBool
 	var candidateID sql.NullInt64
 	var managerReplyPending sql.NullBool
 	var emptyStopStreak sql.NullInt64
@@ -1179,7 +1175,7 @@ func scanSessionFrom(sc rowScanner) (*SessionRecord, error) {
 		&rec.CreatedAt, &rec.UpdatedAt, &killedAt, &rootID,
 		&rec.ModelInputGeneration, &boundary,
 		&rec.ContextBaselineModel, &rec.ContextBaselinePromptTokens, &rec.ContextBaselineMessageCount,
-		&shieldsUp, &candidateID, &managerReplyPending, &emptyStopStreak, &confirmedAnswerID)
+		&candidateID, &managerReplyPending, &emptyStopStreak, &confirmedAnswerID)
 	if err != nil {
 		return nil, fmt.Errorf("scan session: %w", err)
 	}
@@ -1195,7 +1191,6 @@ func scanSessionFrom(sc rowScanner) (*SessionRecord, error) {
 	rec.RootID = rootID.Int64
 	rec.Iteration = int(iteration.Int64)
 	rec.Status = SessionStatus(status.String)
-	rec.ShieldsUp = shieldsUp.Bool
 	rec.TodoItems = todoItems.String
 
 	if killedAt.Valid {

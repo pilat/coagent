@@ -66,14 +66,15 @@ func (m *mockLLMClientTracked) Chat(
 	return &llmwire.Response{Text: "done", FinishType: llmwire.FinishStop}, nil
 }
 
-func (m *mockLLMClientTracked) Model() string                  { return m.model }
-func (m *mockLLMClientTracked) APIKey() string                 { return "key" }
-func (m *mockLLMClientTracked) Provider() string               { return testMockModel }
-func (m *mockLLMClientTracked) ContextWindow() int             { return 0 }
-func (m *mockLLMClientTracked) Close() error                   { m.closed = true; return nil }
-func (m *mockLLMClientTracked) GetReasoningLevel() string      { return m.reasoningLevel }
-func (m *mockLLMClientTracked) SetReasoningLevel(level string) { m.reasoningLevel = level }
-func (m *mockLLMClientTracked) SetSessionID(id string)         {}
+func (m *mockLLMClientTracked) Model() string                          { return m.model }
+func (m *mockLLMClientTracked) APIKey() string                         { return "key" }
+func (m *mockLLMClientTracked) Provider() string                       { return testMockModel }
+func (m *mockLLMClientTracked) ContextWindow() int                     { return 0 }
+func (m *mockLLMClientTracked) Close() error                           { m.closed = true; return nil }
+func (m *mockLLMClientTracked) GetReasoningLevel() string              { return m.reasoningLevel }
+func (m *mockLLMClientTracked) SetReasoningLevel(level string)         { m.reasoningLevel = level }
+func (m *mockLLMClientTracked) SetImageAuthorizer(llm.ImageAuthorizer) {}
+func (m *mockLLMClientTracked) SetSessionID(id string)                 {}
 
 type blockingLLMClient struct {
 	mockLLMClientTracked

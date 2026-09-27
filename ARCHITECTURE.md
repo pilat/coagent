@@ -21,9 +21,8 @@ identity, and subagent round.
 ## System shape
 
 Coagent is a self-hosted, headless coding agent. One daemon coordinates durable
-state, session lifecycle and admission, owns the MCP connection pool, and
-serves as the backend for the private manager contract implemented by
-`managercontrol`. Domain packages own their ledgers and in-memory governors
+state, session lifecycle and admission. It backs the private manager contract
+implemented by `managercontrol`. Domain packages own their ledgers and in-memory governors
 beneath that coordinator. It accepts no network listener.
 The only listener is a same-user Unix control socket serving the read-only
 status protocol used by `coagent status`.
@@ -33,7 +32,7 @@ Telegram manager ── controller contract / status-only control socket ──>
                                                                   │
                 SQLite <── session lifecycle <── per-task session │
                                                                   │
-          config, loader, tools, MCP pool, schedules, subagents ──┘
+          config, loader, tools, schedules, subagents ──┘
 ```
 
 A manager submits work as a session. A session owns one agent-loop activation:
@@ -58,10 +57,10 @@ does not imply a tier except where it expresses an implementation variant.
 
 - `cmd/coagent` — composition root, CLI product policy and daemon lifecycle commands. Refuses any non-Linux platform at process entry, before the guardian or command dispatch ([ADR-0062](docs/adr/0062-linux-only-supported-runtime.md)).
 - `internal/admission` — in-memory runner capacity and per-parent subagent quotas.
-- `internal/bashsandbox` — Linux Bubblewrap filesystem confinement and process-launch implementation for session-owned processes. Non-Linux builds carry only a compile-time fallback that returns an unsupported-backend error.
+- `internal/bashsandbox` — Linux Bubblewrap confinement and process launch for session-owned workloads. Builds one ordered mount plan from a compiled policy; non-Linux builds carry only a compile-time fallback that returns an unsupported-backend error.
 - `internal/budget` — one-shot root-tree budget policy and its user-authorized tool.
 - `internal/catalog` — external model metadata acquisition, caching and identifier matching.
-- `internal/coagenthome` — sole resolver and name owner for the coagent home directory.
+- `internal/coagenthome` — sole resolver and name owner for the coagent home directory, including each project's process output.
 - `internal/config` — typed configuration and secrets resolution policy.
 - `internal/configapply` — serialized config-commit claim and restart trigger.
 - `internal/configops` — guarded whole-document configuration staging, backups and restart verdict markers.
@@ -83,7 +82,7 @@ does not imply a tier except where it expresses an implementation variant.
 - `internal/managers/telegram` — Telegram manager implementation. Each manager
   owns one bot account, immutable group- or bot-forum target, polling loop, and
   manager-scoped service-topic identity; failures remain isolated at startup.
-- `internal/mcp` — external MCP process lifecycle, daemon-level pooled connections and their in-memory tool catalogs.
+- `internal/mcp` — session-owned external MCP process lifecycle and tool discovery.
 - `internal/mcpstore` — durable MCP server definitions and scope precedence.
 - `internal/memory` — curated per-project long-term memory.
 - `internal/managerdelivery` — manager-neutral single-worker durable output drain and retry policy.
@@ -95,7 +94,8 @@ does not imply a tier except where it expresses an implementation variant.
 - `internal/projectpath` — canonical project-root paths and project-name validation.
 - `internal/backgroundprocess` — session-owned background Bash process ledger: per-session admission, combined bounded output capture, deadline/overflow/stop terminalization, and completion-fact emission.
 - `internal/procexec` — implementation-neutral process request and confinement-runner contract.
-- `internal/safefile` — traversal-safe rooted filesystem access for project-confined in-process consumers.
+- `internal/safefile` — filesystem access under the compiled ordered policy, with pinned writable roots, exact-file identity checks and separate project-confined instruction loading.
+- `internal/sandboxpolicy` — pure compilation of the operator's ordered allow/deny rules into an effective policy and its digest, with the implicit global and project defaults, operator path validation, and last-match-wins evaluation. Owns the single deny decision both the launcher and the file tools consult. Holds no process lifetime.
 - `internal/registry` — immutable per-session agent-type policy and prompt
   templates. The build-agent template owns the runtime identity contract: the
   agent presents as Coagent with the repo URL and does not volunteer the
@@ -126,10 +126,7 @@ projects, sessions, append-only messages, durable inbox entries, delivery
 identity, subagent links, schedules, curated memory, MCP definitions, and
 delivery records, including tool-activation grants, root-tree budgets, durable
 TODO state, per-session file-read ledger (storing `{mtime_unix_nano, size, hash}`
-for write-guard checks) and the background-process lifecycle ledger. Each session
-row also carries its current session-shields
-state; a root command changes the complete tree transactionally and child or
-replacement creation inherits it inside the creating transaction. Configuration files, their recoverable backups and the
+for write-guard checks) and the background-process lifecycle ledger. Configuration files, their recoverable backups and the
 pending-apply marker are atomic filesystem state owned by config operations.
 Other memory is coordination or cache only and must be reconstructible from
 durable state. A runtime state label shown by a controller is an in-memory
@@ -261,10 +258,6 @@ model invocation: the loop resolves its durable inbox row and persistent
 full-progress output at a safe input boundary without sending it to the model.
 A stopped root may consume a read-only command at the FIFO head without
 reactivating; asynchronous rows ahead of that command remain parked.
-Manager-owned `/shieldsup` and `/shieldsdown` inputs use the same durable inbox
-but remain host-handled control commands. A live loop reserves those rows for
-the daemon, while agent-originated identical text remains ordinary input.
-
 Standalone scheduled work is a root-session capability: the daemon attaches
 `schedule` only to roots, while subagents retain `sleep` to resolve an existing
 call rather than create future work. Schedule delivery and stopped-root
@@ -278,6 +271,17 @@ only retained bounds. Retried
 provider requests are local to the client; durable operations must be idempotent
 across a process or producer retry. Loop detection terminates repetitive tool
 patterns rather than treating repeated calls as progress.
+
+A failed activation does not reroute its remaining input or restart itself.
+Construction failures park the session in `error` without consuming its inbox.
+The status and first failure receipt commit together, keyed by the pending input
+or accepted-input generation; retries and daemon restarts cannot enqueue another
+receipt for that work. Stop/kill fences suppress late failure receipts. A fresh
+user action or explicit daemon restart may retry after configuration repair.
+Teardown releases an abandoned configuration apply and settles its durable call
+under the lifecycle fence through a transcript-only session, without restarting
+the failed loop. Its grant expires before the result is written; a failed result
+write retains its producer for the next explicit activation.
 
 The provider's normalized and native finish reasons are independent of response
 shape. They describe one attempt, never task completion ([ADR-0060](docs/adr/0060-wake-aware-model-completion-check.md)).
@@ -341,14 +345,6 @@ the root stopping and publishes no success. Recovery finishes an interrupted
 stop — including its owed terminal output — before ordinary resume; a later
 root input or explicit child follow-up is a new activation, never a replay of
 pre-stop work.
-
-Raising session shields is a shield-specific two-phase stop. Its begin
-transaction raises the complete tree and fences an active root; cleanup cancels
-and joins every live runner, preserves later shield commands in inbox order,
-settles calls and sleeps, and parks the tree before the terminal shield output.
-Old-policy MCP clients retire before completion. Startup finishes interrupted
-raises and pending shield commands before any runner recovery. Lowering never
-widens a live raised tree.
 
 Configuration application is a controlled restart: the tool stages work and
 suspends; the daemon makes the suspension durable, commits guarded files, then
@@ -464,11 +460,9 @@ enqueue replaceable snapshots immediately, including active subagent spawn,
 terminalization and re-arm. An active root loop refreshes after at most thirty
 seconds without newer semantic output; autonomous work without an active root
 loop retains the five-minute silence cadence. Snapshots carry the captured
-generation, root status and shields state, and the inserting transaction discards them as
+generation and root status, and the inserting transaction discards them as
 superseded instead of stamping a stale card with a newer generation — so no
-progress card can appear below a stop fence, terminal stop result or opposite
-shield transition. Every automatic or explicit status card renders the raised
-shield marker while true and renders no shields wording while false.
+progress card can appear below a stop fence or terminal stop result.
 Generation-scoped source keys and the outbox uniqueness boundary make restart
 and concurrent reconciliation idempotent. Automatic cards may lead with the
 latest unpublished current-generation assistant note, mark active main-model
@@ -607,7 +601,8 @@ new turn, while an already-claimed retry leaves it stopped. See ADR-0027.
 ### Configuration restart verdict
 
 Semantic configuration changes belong to config operations rather than direct
-tool file edits. Validation works from raw, unresolved configuration. A guarded
+tool file edits. Validation works from raw, unresolved configuration and refuses
+self-edit candidates with no models, including sandbox-only fragments. A guarded
 commit writes a recoverable backup, records a pending-apply marker, publishes the
 new file atomically, then triggers restart only after the caller's suspension is
 durable. One daemon accepts one apply at a time.
@@ -653,29 +648,70 @@ a backstop, not permission to log secrets: opaque structured values still requir
 call-site discipline. Coagent-home resolution has one owner so packages do not
 invent inconsistent or test-leaking state locations.
 
-### Filesystem and egress boundary
+### Filesystem boundary
 
-The native Bubblewrap-backed filesystem-write sandbox, enabled by default unless top-level
-`sandbox.enabled: false` is configured, confines direct writes by Bash
-descendants, dedicated mutation tools, LSP servers and stdio MCP servers to
-configured writable roots. It
-requires Bubblewrap that is UID 0 in a valid initial namespace, or appears as
-the kernel overflow UID only from a valid non-initial namespace when its
-filesystem is read-only and outside writable roots. Shields-down profiles
-mount a fresh `/proc` after other binds for nested user-namespace setup.
-Writable roots under `/proc`, `/dev`, and `/sys` are rejected, and shields-up
-filters procfs mount aliases instead of mirroring them into the project. It is
-an integrity boundary, not a confidentiality, network or multi-tenant boundary:
-the daemon user can still read files it can ordinarily read. Marketplace Git
-uses a separate runner whose only writable root is the marketplace cache; it
-does not inherit a session project or configured writable paths.
+Every sandbox-enabled session runs one compiled **effective policy**
+(`internal/sandboxpolicy`): an ordered list of allow/deny rules, evaluated with
+the last matching rule deciding. Coagent ships no rules about the operator's
+machine — every rule names a path only the operator knows.
 
-With shields down, the built-in writable roots include the session worktree,
-host temporary storage, the user cache and only the current project's
-`~/.coagent/processes/project-<project-id>/` subtree, so ordinary Bash and
-mutation tools can inspect that project's process artifacts without gaining
-write access to another project's files. This root is not a configurable
-exception and is removed with the other host roots when shields are raised.
+The list carries implicit defaults at the head of two sections. The **global**
+section opens with `allow / ro` — the whole host readable, nothing writable —
+under which the operator's global rules sit. The **project** section then opens
+with the canonical project read-write, the work directory read-write when it
+differs from the project root, and — for a linked `/gwt` worktree — the main
+repository's `.git` read-write; the project's own rules sit under those. Because
+the project defaults sit after the global rules, a broad global `deny` cannot
+make the project unwritable; only a rule inside the project's own section can,
+and an explicit `deny` naming the project root exactly is honoured while a
+broader rule that buries it incidentally is refused as a configuration error
+([ADR-0063](docs/adr/0063-explicit-filesystem-boundary.md)).
+
+The project section ends with mandatory read-only access to its daemon-owned
+process-output directory, after the project's configured rules. Stack construction materializes
+that directory before mounting it, so later output from roots and subagents
+remains readable. The exception opens no other coagent state or project output;
+the daemon remains the writer. Shell snapshots instead use inherited descriptors,
+and subagent results and context summaries remain database-backed.
+
+Operator rules are `config.yaml` data validated before a candidate replaces the
+live file; repository content, MCP registration, model output and shell
+variables grant nothing.
+
+Compilation resolves declared anchors to canonical absolute paths, rejects
+duplicate canonical project keys and traversal
+components, and folds project identity and the ordered rule list into one policy
+digest that identifies a policy generation. Object presence and inode are
+deliberately excluded from that identity; individual mount and open operations
+validate and pin the object at its anchor instead. An absent effective deny or
+read-only exception beneath a writable grant fails compilation or process preparation.
+
+`internal/bashsandbox` turns that policy into one ordered mount-operation list —
+excluding wholly superseded rules and preserving the remaining order. A `deny` becomes an
+empty tmpfs or empty file; an `allow` becomes a read-only or read-write bind. A
+host mount point nested under a read-only root keeps its own write flag, so each
+one is re-bound read-only or the parent bind's read-only flag would not reach
+it. A fresh `/proc` and `/dev` are mounted last so no host bind placed above them
+can shadow them.
+Launcher validation checks effective write authority on the executable and every
+parent directory, so a read-only file cannot be replaced through a writable parent.
+
+File tools hold the same compiled grants (`internal/safefile`). They run in the
+daemon process, not inside the launcher, so this is where the policy's denies
+are enforced for in-process reads and writes: the mount plan protects Bash, this
+protects the file tools, and both resolve a path against the same ordered rule
+list. Symlinks are resolved before a path
+is checked, so a link into a denied directory is not a way around it.
+Writable directory entries hold rooted handles; exact file grants hold their
+parent and file identity. Writes require a
+read-write grant, deferred attachment reads re-check the recorded root identity
+and current authority, and sockets, FIFOs and devices are refused as ordinary
+files. Project-local instructions read through a project-confined root,
+marketplace instructions through a root confined to their own repository clone,
+and global instructions remain trusted daemon inputs.
+
+This is an integrity boundary, not confidentiality: with no rules, another
+checkout is readable, and so are the operator's own credentials.
 
 Before process admission, the Bash tool parses a direct simple `cat` command
 without an explicit working directory and pushes regular project-file operands
@@ -683,27 +719,34 @@ to the native `read` tool. Dynamic or compound shell syntax and paths outside
 the project remain Bash operations. This is model-facing ergonomics only;
 rooted file access and the read-fingerprint ledger remain authoritative.
 
-Session shields add a durable project-confined read variant without removing
-built-in tool classes. MCP tools may be absent when raised-policy discovery
-cannot start their server. Built-in file tools use one rooted project handle, and
-session-owned Bash, LSP and stdio MCP processes receive an empty native
-filesystem profile containing the canonical project plus a fixed read-only
-system execution substrate. Linux also supplies a private PID `/proc` and
-synthetic devices; host temporary storage, home data, user caches, configured
-writable exceptions, external linked-worktree Git metadata and captured `PATH`
-directories are absent. Raised sessions bypass shell activation. Project-local
-instructions read through a project-confined root regardless of shield state,
-marketplace instructions through a root confined to their own repository clone,
-and global instructions remain trusted daemon inputs. Network egress, inherited
-environment values, prior conversation data and deliberately detached
-descendants are outside this boundary
-([ADR-0044](docs/adr/0044-session-shields-confine-project-filesystem.md)).
+Startup proves the boundary before the daemon serves anything: with the sandbox
+enabled it runs one enforcement probe through Bubblewrap, so an unusable
+launcher or a kernel that rejects the policy surfaces once, at boot, instead of
+failing every session separately. The daemon holds no added capabilities and
+needs no sysctl changes. `procexec.Unprivileged` still re-execs every host
+child — Bash, Git, MCP, LSP, shell activation, background guardians — so a
+child never inherits more than the daemon's own authority. Marketplace Git uses
+its own compiled policy whose project root is the marketplace cache; it inherits
+no session project.
 
-Web fetching rejects link-local and known cloud-metadata destinations after
-resolution and immediately before connect, including redirects. It intentionally
-allows loopback and private development services and ignores proxy environment
-variables, so it is targeted metadata protection rather than a general SSRF
-boundary. Bash egress remains unrestricted.
+**Coagent enforces no network boundary.** Sessions share the daemon's network
+namespace: the host's LAN, its loopback services and the public internet are all
+reachable, and a dev server a session starts is reachable from the operator's
+browser. The built-in web fetch and REST search tools still refuse link-local and
+cloud-metadata destinations at dial time, which is a property of those tools, not
+of the sandbox. An operator who needs a network boundary runs the whole daemon
+inside a container or VM; that is a deployment decision
+([ADR-0063](docs/adr/0063-explicit-filesystem-boundary.md)).
+
+Shell environment capture and executable lookup execute through the session's
+confinement runner (`shellenv.ConfinedRunner`), so a project hook or rc file
+cannot reach outside the policy while activation is captured or resolved. The
+snapshot's cache key carries the effective policy digest, so a snapshot taken
+under a wider policy is never replayed for a narrower one. Each command sources
+its snapshot through an inherited file descriptor, even when the snapshot's
+host directory is denied by the policy. With the sandbox disabled
+there is no confinement runner and capture falls back to host execution, which
+is the same authority that session's other processes already have.
 
 ### Local control boundary
 
@@ -757,7 +800,8 @@ A durable management-surface session attribute, not the project's discovery-only
 `hidden` flag, selects the embedded management instruction and service-topic
 delivery routing for that root; the attribute grants no tools or authority.
 The `config_edit` tool remains advertised on root sessions and can commit only
-under the durable activation created by a manager-owned `/config` command;
+under the durable activation created by a manager-owned `/config` command.
+That capability does not turn a configuration question into a change request;
 its apply restarts, boot-validates, and rolls back on failure. Ordinary project
 roots and subagents receive none of these management surfaces.
 
@@ -806,10 +850,21 @@ Neither session nor manager may recreate a delivery by parsing message content.
 
 The tool package is a pure protocol leaf. It defines the tool registry and the
 suspension sentinel without depending on tool implementations, LLM drivers or
-the daemon. Built-in tools build a stack from session-scoped dependencies and
-delegate direct mutations through the native write sandbox. A suspending tool may
+the daemon. Built-in tools build a stack from session-scoped dependencies: the
+stack compiles one effective policy, creates the confinement runner from it and
+holds the same grants as its rooted file access, so direct mutations, reads and
+process launches cannot disagree about declared authority. A suspending tool may
 not be batched with ordinary synchronous tools because its result is delivered
 after the loop exits.
+
+The factory owns a tool-resource cache keyed by session ID, canonical workdir,
+policy and MCP configuration. It retains shell snapshots and MCP clients across
+replies and sleep/resume; distinct IDs never share them. Stacks lease those
+resources exclusively and own their LSP manager, rooted access and registry.
+Policy/configuration changes retire the previous generation; shell recapture
+restarts MCP. Stop/kill retire the whole tree, including idle descendants, and
+shutdown closes the cache after runners join. Registry mutations retire idle
+resources immediately and active resources when their stack releases them.
 
 Registry produces an immutable per-session agent-type set: built-ins plus
 project-local overlays. Agent type controls tool filtering, prompt and model
@@ -833,12 +888,12 @@ selection, synchronization, requests or diagnostic aggregation. Workspace
 symbol requests use an explicit file anchor rather than an arbitrary cached
 client.
 
-Language servers are user- or project-owned executables. With shields down,
-resolution and preparation use the captured project shell environment. Raised
-sessions bypass capture and accept an inherited-`PATH` executable only when its
-canonical path lies in the project or fixed execution substrate. Every spawn
-then goes through the session process runner; coagent neither downloads nor
-installs servers.
+Language servers are user- or project-owned executables. Resolution and
+preparation use the captured project shell environment when the session has one.
+The session policy checks the resolved executable before launch.
+Every spawn then goes through the session process runner, so a
+language server runs under the same compiled policy as Bash and MCP; coagent
+neither downloads nor installs servers.
 
 Each client serializes writes, distinguishes requests, notifications and
 responses by their JSON-RPC shape, and answers server requests through the same
@@ -879,8 +934,7 @@ project-confined root, marketplace sources through a root confined to their own
 repository clone, and global sources remain trusted host reads.
 Loaded content influences a session prompt and policy input; it never gains an
 implicit controller or daemon API. Shell environment capture is per project and
-replayed for Bash, LSP and MCP subprocesses only while shields are down, without
-merging the secrets map. The prepared command is then converted to the shared
+replayed for Bash, LSP and MCP subprocesses, without merging the secrets map. The prepared command is then converted to the shared
 process request contract, so each session's Bash, LSP and stdio MCP processes
 use the same runner and policy identity. Marketplace Git is intentionally
 separate and cache-scoped.
@@ -888,18 +942,11 @@ separate and cache-scoped.
 ### MCP, schedules and memory
 
 MCP-store owns durable definitions; a project row overrides a global row by
-name, including a disabled row. MCP owns process acquisition, pooled lifecycle
-and the in-memory tool catalogs of discovered metadata at daemon scope. Client
-and catalog identity includes the owning session's exact process policy, so
-unchanged activations may reuse them but different sessions or shield states
-cannot. A shield raise retires every observed old-policy client and catalog
-before its terminal output. Every
-registry mutation invalidates the name's cached catalogs and retires its pooled
-connections safely after the last release; new session iterations rebuild their
-stack so no configuration change takes effect mid tool call. An activation's
-tool snapshot is stable: ordinary idle reaping reconnects lazily on the model's
-first call without changing the offered tools or schemas
-([ADR-0045](docs/adr/0045-session-bound-mcp-process-identity.md)).
+name, including a disabled row. Before reusing a session's MCP clients, the next
+stack refreshes tools from those live clients; a failed connection is replaced.
+Catalogs never outlive their clients. Registry mutations change the next stack
+only; an active stack's tools and schemas stay fixed
+([ADR-0063](docs/adr/0063-explicit-filesystem-boundary.md)).
 
 Schedule owns cron validation, durable schedule records and execution of sleep
 and schedule tools. It depends on a narrow sender contract, not the daemon

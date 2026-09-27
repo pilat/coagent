@@ -83,8 +83,6 @@ func TestMigrate_SessionsAgentTypeRebuildPreservesExistingDB(t *testing.T) {
 		delete(rowsAfter[i], "context_baseline_model")
 		delete(rowsAfter[i], "context_baseline_prompt_tokens")
 		delete(rowsAfter[i], "context_baseline_message_count")
-		assert.Equal(t, "0", rowsAfter[i]["shields_up"].String)
-		delete(rowsAfter[i], "shields_up")
 		// 00042 adds durable completion-check state; legacy rows carry no
 		// pending candidate, no reply obligation, and a zero empty streak.
 		assert.False(t, rowsAfter[i]["completion_check_candidate_id"].Valid)

@@ -273,6 +273,8 @@ linters:
             # and onboarding re-invokes this binary under sudo to use it.
             - "!**/internal/install/**"
             - "!**/internal/backgroundprocess/**"
+            # procexec only handles inherited descriptors on exec.Cmd; it does not spawn.
+            - "!**/internal/procexec/**"
             - "!**/cmd/coagent/**"
             - "!**/*_test.go"
           deny:

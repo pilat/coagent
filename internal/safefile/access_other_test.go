@@ -10,11 +10,12 @@ import (
 )
 
 // TestProjectConfinedFailsClosedWithoutPlatformIdentity pins the generic
-// non-Linux fallback: with no platform root identity, a shielded open must
+// non-Linux fallback: with no platform root identity, a confined open must
 // refuse rather than silently run unconfined. The Linux-only runtime guard is
 // the product boundary that refuses such binaries earlier.
 func TestProjectConfinedFailsClosedWithoutPlatformIdentity(t *testing.T) {
-	_, err := New(t.TempDir(), ProjectConfined)
+	project := t.TempDir()
+	_, err := New(ProjectPolicy(project), project)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "project root identity is unavailable on this platform")
 }

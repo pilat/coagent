@@ -73,7 +73,7 @@ func (s *svc) closeInterruptedCalls(ctx context.Context, rec *sessionstore.Sessi
 		return 0, fmt.Errorf("resolve project for session %d: %w", rec.ID, err)
 	}
 
-	sess, err := s.createOrResumeSession(ctx, rec.ID, workDir, rec, false)
+	sess, err := s.openSession(ctx, rec.ID, workDir, rec, false, false, true)
 	if err != nil {
 		return 0, fmt.Errorf("open session %d to close interrupted calls: %w", rec.ID, err)
 	}

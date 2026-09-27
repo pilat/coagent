@@ -52,7 +52,7 @@
       "content": "",
       "attributes": {
         "manager_id": "telegram:main",
-        "name": "002",
+        "name": "003",
         "work_dir": "<workdir>"
       },
       "source_key": "session:1:opened",
@@ -76,7 +76,7 @@
         "manager_id": "telegram:main",
         "model_input_generation": 1
       },
-      "source_key": "progress:change:message:2:g1:shields:false:i0",
+      "source_key": "progress:change:message:2:g1",
       "model_input_generation": 1,
       "previous_message_type": "message_persistent",
       "previous_model_input_generation": 1,

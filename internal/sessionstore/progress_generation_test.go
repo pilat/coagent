@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"encoding/json"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -134,7 +133,7 @@ func TestEnqueueProgressOutputSuperseded(t *testing.T) {
 	}
 
 	// Generation supersession.
-	commit, err := store.EnqueueProgressOutput(ctx, draft(), 0, SessionStatusActive, false)
+	commit, err := store.EnqueueProgressOutput(ctx, draft(), 0, SessionStatusActive)
 	require.NoError(t, err)
 	require.NotZero(t, commit.OutputID)
 
@@ -148,7 +147,7 @@ func TestEnqueueProgressOutputSuperseded(t *testing.T) {
 		SourceKey:   "progress:change:m2:g0",
 		Fingerprint: OutputFingerprint(OutputMessageReplaceable, "stale card", session.ID, nil),
 	}
-	_, err = store.EnqueueProgressOutput(ctx, stale, 0, SessionStatusActive, false)
+	_, err = store.EnqueueProgressOutput(ctx, stale, 0, SessionStatusActive)
 	require.ErrorIs(t, err, ErrProgressSuperseded)
 
 	var count int
@@ -160,7 +159,7 @@ func TestEnqueueProgressOutputSuperseded(t *testing.T) {
 	fresh := stale
 	fresh.SourceKey = "progress:change:m2:g1"
 	fresh.Fingerprint = OutputFingerprint(OutputMessageReplaceable, "stale card", session.ID, nil)
-	commit, err = store.EnqueueProgressOutput(ctx, fresh, 1, SessionStatusActive, false)
+	commit, err = store.EnqueueProgressOutput(ctx, fresh, 1, SessionStatusActive)
 	require.NoError(t, err)
 	require.NotZero(t, commit.OutputID)
 
@@ -172,7 +171,7 @@ func TestEnqueueProgressOutputSuperseded(t *testing.T) {
 		SessionID: session.ID, Type: OutputMessageReplaceable, Content: "late card",
 		SourceKey:   "progress:change:m3:g1",
 		Fingerprint: OutputFingerprint(OutputMessageReplaceable, "late card", session.ID, nil),
-	}, 1, SessionStatusActive, false)
+	}, 1, SessionStatusActive)
 	require.ErrorIs(t, err, ErrProgressSuperseded)
 
 	// Stopping status is never eligible even when expected verbatim.
@@ -180,38 +179,8 @@ func TestEnqueueProgressOutputSuperseded(t *testing.T) {
 		SessionID: session.ID, Type: OutputMessageReplaceable, Content: "late card",
 		SourceKey:   "progress:change:m4:g1",
 		Fingerprint: OutputFingerprint(OutputMessageReplaceable, "late card", session.ID, nil),
-	}, 1, SessionStatusStopping, false)
+	}, 1, SessionStatusStopping)
 	require.ErrorIs(t, err, ErrProgressSuperseded)
-}
-
-func TestEnqueueProgressOutputRejectsCardsCapturedBeforeShieldTransition(t *testing.T) {
-	store, db, projectID := newTestStore(t)
-	ctx := t.Context()
-
-	for _, sourceKey := range []string{"progress:change:shield", "progress:silence:shield"} {
-		t.Run(sourceKey, func(t *testing.T) {
-			session, err := store.CreateSession(ctx, projectID, "m", "", map[string]any{"manager_id": "mgr"})
-			require.NoError(t, err)
-			_, err = db.ExecContext(ctx, `UPDATE sessions SET shields_up = TRUE, updated_at = ? WHERE id = ?`,
-				time.Now().UTC(), session.ID)
-			require.NoError(t, err)
-			draft := OutputDraft{
-				SessionID: session.ID, Type: OutputMessageReplaceable, Content: "stale shields-down card",
-				SourceKey: sourceKey,
-				Fingerprint: OutputFingerprint(
-					OutputMessageReplaceable, "stale shields-down card", session.ID, nil,
-				),
-			}
-
-			_, err = store.EnqueueProgressOutput(ctx, draft, 0, SessionStatusActive, false)
-			require.ErrorIs(t, err, ErrProgressSuperseded)
-			var count int
-			require.NoError(t, db.QueryRowContext(ctx,
-				`SELECT COUNT(*) FROM session_outbox WHERE source_key = ?`, sourceKey,
-			).Scan(&count))
-			assert.Zero(t, count)
-		})
-	}
 }
 
 func TestCaptureProgressNoteScoping(t *testing.T) {

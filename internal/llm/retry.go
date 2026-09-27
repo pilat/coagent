@@ -148,6 +148,11 @@ func (r *retryableClient) SetReasoningLevel(level string) {
 	r.inner.SetReasoningLevel(level)
 }
 
+// SetImageAuthorizer forwards the session authority to the wrapped client.
+func (r *retryableClient) SetImageAuthorizer(authorizer ImageAuthorizer) {
+	r.inner.SetImageAuthorizer(authorizer)
+}
+
 func (r *retryableClient) GetReasoningLevel() string {
 	return r.inner.GetReasoningLevel()
 }

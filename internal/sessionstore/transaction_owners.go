@@ -29,11 +29,11 @@ type ManagerRootTransactions interface {
 // SessionLifecycleStore owns command settlement and terminal output
 // transactions that must commit with session lifecycle state.
 type SessionLifecycleStore interface {
+	RecordSessionStartFailure(context.Context, int64, string) (bool, error)
 	CommandOutputStore
 	LifecycleCommandStore
 	LifecycleOutputStore
 	StopCompletionStore
-	ShieldCommandStore
 	CancelPendingInputs(context.Context, []int64, string) (int64, error)
 	CancelPendingInputsForStop(context.Context, []int64, string) (int64, error)
 }

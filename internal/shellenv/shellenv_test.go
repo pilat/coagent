@@ -43,7 +43,7 @@ func TestNew_NonBashShellDisablesSnapshotting(t *testing.T) {
 
 	p := New()
 	assert.Empty(t, p.Shell())
-	assert.Empty(t, p.Snapshot(context.Background(), t.TempDir()))
+	assert.Empty(t, p.Snapshot(context.Background(), nil, t.TempDir()))
 }
 
 func TestShellQuote(t *testing.T) {
@@ -115,14 +115,14 @@ func TestParseDump(t *testing.T) {
 
 func TestWrapExec_EmptyArgvErrors(t *testing.T) {
 	p := &provider{}
-	_, err := p.WrapExec(context.Background(), t.TempDir(), nil, nil)
+	_, err := p.WrapExec(context.Background(), nil, t.TempDir(), nil, nil)
 	require.Error(t, err)
 }
 
 func TestWrapExec_NoSnapshotPlainExec(t *testing.T) {
 	p := &provider{} // shell == "" → no snapshot
 
-	cmd, err := p.WrapExec(context.Background(), "/tmp", []string{"echo", "hi"}, []string{"FOO=bar"})
+	cmd, err := p.WrapExec(context.Background(), nil, "/tmp", []string{"echo", "hi"}, []string{"FOO=bar"})
 	require.NoError(t, err)
 
 	assert.Equal(t, []string{"echo", "hi"}, cmd.Args)
@@ -134,7 +134,7 @@ func TestWrapExec_WithSnapshotSourcesAndExecs(t *testing.T) {
 	p := fakeProvider(t)
 
 	wd := t.TempDir()
-	cmd, err := p.WrapExec(context.Background(), wd, []string{"/usr/bin/gopls", "-v"}, []string{"K=V"})
+	cmd, err := p.WrapExec(context.Background(), nil, wd, []string{"/usr/bin/gopls", "-v"}, []string{"K=V"})
 	require.NoError(t, err)
 
 	assert.Equal(t, "bash", filepath.Base(cmd.Path))
@@ -154,6 +154,7 @@ func TestWrapExecRejectsInvalidEnvironmentNames(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			_, err := provider.WrapExec(
 				context.Background(),
+				nil,
 				t.TempDir(),
 				[]string{"echo", "ok"},
 				[]string{"BAD; touch /tmp/pwn=value"},
@@ -192,7 +193,9 @@ func TestLookPathResolvesRelativePathAgainstWorkDir(t *testing.T) {
 	t.Run("with snapshot", func(t *testing.T) {
 		snapshot := filepath.Join(t.TempDir(), "snapshot")
 		require.NoError(t, os.WriteFile(snapshot, []byte("export PATH=bin\n"), 0o600))
-		found, err := fakeProvider(t).lookPathFromSnapshot(context.Background(), workDir, snapshot, []string{"tool"})
+		found, err := fakeProvider(
+			t,
+		).lookPathFromSnapshot(context.Background(), nil, workDir, snapshot, []string{"tool"})
 		require.NoError(t, err)
 		assert.Equal(t, executable, found)
 	})
@@ -225,7 +228,7 @@ func fakeProvider(t *testing.T) *provider {
 		ttl:      5 * time.Minute,
 		cacheDir: t.TempDir(),
 	}
-	p.captureFn = func(context.Context, string) ([]byte, error) {
+	p.captureFn = func(context.Context, ConfinedRunner, string) ([]byte, error) {
 		return []byte("declare -x PATH=\"/bin\"\n"), nil
 	}
 

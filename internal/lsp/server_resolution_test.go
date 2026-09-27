@@ -12,6 +12,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/pilat/coagent/internal/shellenv"
 )
 
 type recordingProvider struct {
@@ -20,7 +22,9 @@ type recordingProvider struct {
 	wrappedArg [][]string
 }
 
-func (p *recordingProvider) Snapshot(context.Context, string) string { return "" }
+func (p *recordingProvider) Snapshot(context.Context, shellenv.ConfinedRunner, string) string {
+	return ""
+}
 
 func (p *recordingProvider) Shell() string { return "" }
 
@@ -30,6 +34,7 @@ func (p *recordingProvider) Invalidate(string) {}
 
 func (p *recordingProvider) WrapExec(
 	ctx context.Context,
+	_ shellenv.ConfinedRunner,
 	workDir string,
 	argv, _ []string,
 ) (*exec.Cmd, error) {
@@ -39,7 +44,12 @@ func (p *recordingProvider) WrapExec(
 	return cmd, nil
 }
 
-func (p *recordingProvider) LookPath(_ context.Context, _ string, names []string) (string, error) {
+func (p *recordingProvider) LookPath(
+	_ context.Context,
+	_ shellenv.ConfinedRunner,
+	_ string,
+	names []string,
+) (string, error) {
 	p.lookedUp = append(p.lookedUp, append([]string(nil), names...))
 	if p.path == "" {
 		return "", errors.New("executable not found: " + strings.Join(names, ", "))

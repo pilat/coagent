@@ -16,7 +16,9 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/pilat/coagent/internal/bashsandbox"
+	"github.com/pilat/coagent/internal/coagenthome"
 	"github.com/pilat/coagent/internal/safefile"
+	"github.com/pilat/coagent/internal/sandboxpolicy"
 )
 
 func TestDiagnosticsScenario_ManagerAndFakeServerPublishEmpty(t *testing.T) {
@@ -61,10 +63,12 @@ func TestFakeDiagnosticsServer(t *testing.T) {
 	os.Exit(0)
 }
 
-func TestManager_ShieldedFakeServerCannotReadOrWriteOutsideProject(t *testing.T) {
+func TestManager_DeniedFakeServerCannotReadOrWriteOutsideProject(t *testing.T) {
 	if _, err := exec.LookPath("bwrap"); err != nil {
 		t.Skip("bwrap is not installed")
 	}
+	restore := coagenthome.Override(t.TempDir())
+	t.Cleanup(restore)
 	base := t.TempDir()
 	project := filepath.Join(base, "project")
 	outside := filepath.Join(base, "outside")
@@ -74,19 +78,24 @@ func TestManager_ShieldedFakeServerCannotReadOrWriteOutsideProject(t *testing.T)
 	require.NoError(t, os.WriteFile(file, []byte("package main\n"), 0o600))
 	secret := filepath.Join(outside, "secret")
 	require.NoError(t, os.WriteFile(secret, []byte("secret"), 0o600))
-	outsideWrite := filepath.Join(outside, "written")
+	outsideWrite := filepath.Join(base, "written")
 	projectWrite := filepath.Join(project, "started")
 	testExecutable := filepath.Join(project, "fake-lsp")
 	binary, err := os.ReadFile(os.Args[0])
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(testExecutable, binary, 0o700))
 
-	access, err := safefile.New(project, safefile.ProjectConfined)
+	policy, err := sandboxpolicy.Compile(sandboxpolicy.Request{
+		ProjectRoot: project, WorkDir: project,
+		GlobalRules: []sandboxpolicy.Rule{{Deny: outside}},
+	})
+	require.NoError(t, err)
+	access, err := safefile.New(policy, project)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, access.Close()) })
 	runner, err := bashsandbox.New(bashsandbox.Config{
-		Enabled: true, WorkDir: project, CanonicalWorkDir: access.CanonicalRoot(),
-		SessionKey: "lsp-test", ReadScope: bashsandbox.ProjectConfined,
+		Enabled: true, Policy: policy,
+		WorkDir: project, SessionKey: "lsp-test",
 	}, nil)
 	require.NoError(t, err)
 	m := &manager{

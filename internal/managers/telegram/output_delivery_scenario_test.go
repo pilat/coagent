@@ -3,6 +3,7 @@ package telegram
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -10,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -72,6 +74,15 @@ func TestHarnessScenario_DelayedTelegramManagerDrainsRealSessionOutput(t *testin
 }
 
 func newDelayedTelegramHarness(t *testing.T) *delayedTelegramHarness {
+	return newDelayedTelegramHarnessWithClient(t, func(*config.Config) (llm.Client, error) {
+		return delayedTelegramClient{}, nil
+	})
+}
+
+func newDelayedTelegramHarnessWithClient(
+	t *testing.T,
+	clientFactory func(*config.Config) (llm.Client, error),
+) *delayedTelegramHarness {
 	t.Helper()
 	home := t.TempDir()
 	restoreHome := coagenthome.Override(home)
@@ -87,17 +98,16 @@ func newDelayedTelegramHarness(t *testing.T) *delayedTelegramHarness {
 	projects := daemon.NewStore(db)
 	sessions := sessionstore.NewStore(db)
 	workDir := filepath.Join(home, "project")
+	require.NoError(t, os.Mkdir(workDir, 0o700))
 	cfg := &config.Config{Model: "fake-model", WorkDir: workDir}
 	factory := session.NewFactoryWithOptions(
-		cfg, nil, nil, sessions, sessions, nil, nil, nil, nil, nil,
-		session.WithLLMClientFactory(func(*config.Config) (llm.Client, error) {
-			return delayedTelegramClient{}, nil
-		}),
+		cfg, nil, nil, sessions, sessions, nil, nil, nil,
+		session.WithLLMClientFactory(clientFactory),
 	)
 	service := daemon.New(
 		context.Background(), factory, projects, sessions, sessions, sessions, sessions, sessions, sessions, sessions,
 		subagent.NewStore(db), subagent.NewTransactions(db),
-		budget.New(sessions), sessions, schedule.NewService(schedule.NewStore(db)), cfg, nil, nil, nil,
+		budget.New(sessions), sessions, schedule.NewService(schedule.NewStore(db)), cfg, nil, nil,
 	)
 	t.Cleanup(func() { service.Shutdown(3 * time.Second) })
 	controllers := managercontrol.New(service, service, sessions, cfg, nil)
@@ -106,6 +116,49 @@ func newDelayedTelegramHarness(t *testing.T) *delayedTelegramHarness {
 		controller: controllers.ForManager(delayedTelegramManagerID), sessions: sessions,
 		service: service, workDir: workDir, recorder: &delayedTelegramRecorder{nextTopicID: 7000},
 	}
+}
+
+func TestHarnessScenario_StartFailureCannotFloodTelegram(t *testing.T) {
+	var attempts atomic.Int64
+	h := newDelayedTelegramHarnessWithClient(t, func(*config.Config) (llm.Client, error) {
+		attempts.Add(1)
+		return nil, errors.New("model removed-model not found in config")
+	})
+	id := h.produceBeforeManager(t)
+	require.Eventually(t, func() bool {
+		record, err := h.sessions.GetSession(t.Context(), id)
+		return err == nil && record.Status == sessionstore.SessionStatusError && !h.service.HasActiveLoop(id)
+	}, 5*time.Second, 10*time.Millisecond)
+	assert.Equal(t, int64(1), attempts.Load())
+	for range 1109 {
+		reported, err := h.sessions.RecordSessionStartFailure(t.Context(), id, "same failed work observed again")
+		require.NoError(t, err)
+		assert.False(t, reported)
+	}
+	for round := range 2 {
+		manager, err := New(config.ManagerEntry{
+			ID: delayedTelegramManagerID, BotToken: "test-token", TargetChatID: new(int64(harnessChatID)),
+		}, &config.UnifiedConfig{}, h.controller)
+		require.NoError(t, err)
+		manager.httpClient = &http.Client{Transport: h.recorder}
+		require.NoError(t, manager.Start(t.Context()))
+		require.Eventually(t, func() bool {
+			status, err := h.sessions.OutputQueueStatus(t.Context(), delayedTelegramManagerID)
+			return err == nil && status.Pending == 0
+		}, 10*time.Second, 10*time.Millisecond)
+		require.NoError(t, manager.Stop(context.Background()))
+		count := 0
+		for _, call := range h.recorder.snapshot() {
+			if call.Method == "sendMessage" && strings.Contains(call.Text, "Session error") {
+				count++
+			}
+		}
+		assert.Equal(t, 1, count, "manager activation %d", round)
+	}
+	assert.Equal(t, int64(1), attempts.Load())
+	pending, err := h.sessions.PeekPending(t.Context(), id)
+	require.NoError(t, err)
+	assert.Equal(t, "finish before telegram starts", pending.RawContent)
 }
 
 func (h *delayedTelegramHarness) produceBeforeManager(t *testing.T) int64 {
@@ -138,14 +191,15 @@ func (delayedTelegramClient) Chat(
 	return &llmwire.Response{Text: "delayed telegram answer", FinishType: llmwire.FinishStop}, nil
 }
 
-func (delayedTelegramClient) Model() string             { return "fake-model" }
-func (delayedTelegramClient) APIKey() string            { return "" }
-func (delayedTelegramClient) Close() error              { return nil }
-func (delayedTelegramClient) Provider() string          { return "fake" }
-func (delayedTelegramClient) ContextWindow() int        { return 200000 }
-func (delayedTelegramClient) SetReasoningLevel(string)  {}
-func (delayedTelegramClient) GetReasoningLevel() string { return "medium" }
-func (delayedTelegramClient) SetSessionID(string)       {}
+func (delayedTelegramClient) Model() string                          { return "fake-model" }
+func (delayedTelegramClient) APIKey() string                         { return "" }
+func (delayedTelegramClient) Close() error                           { return nil }
+func (delayedTelegramClient) Provider() string                       { return "fake" }
+func (delayedTelegramClient) ContextWindow() int                     { return 200000 }
+func (delayedTelegramClient) SetReasoningLevel(string)               {}
+func (delayedTelegramClient) SetImageAuthorizer(llm.ImageAuthorizer) {}
+func (delayedTelegramClient) GetReasoningLevel() string              { return "medium" }
+func (delayedTelegramClient) SetSessionID(string)                    {}
 
 type delayedTelegramCall struct {
 	Method string

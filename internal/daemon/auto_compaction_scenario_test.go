@@ -241,7 +241,8 @@ func TestScenario_AutoCompactionWhileABackgroundChildIsInFlight(t *testing.T) {
 	close(compactionRelease)
 
 	h.waitForDelivery(link.ChildID)
-	h.mgr.waitIdle(parentID)
+	// Delivery commits the inbox before the parent resumes; an idle gap is not completion.
+	waitForIdleAfterMessage(t, events, parentID, "child completion handled")
 
 	msgs := h.parentMessages(parentID)
 	require.NoError(t, llm.ValidateToolPairing(msgs),

@@ -20,20 +20,20 @@ Repository owners must enable GitHub private vulnerability reporting before the
 first public release. If the private form is unavailable, do not publish exploit
 details; open a minimal issue asking maintainers to enable the private channel.
 
-The default filesystem-write sandbox is an integrity boundary, not a
-confidentiality or multi-tenant boundary. With session shields down, tools and
-session processes retain the daemon user's ordinary read access.
+Default project confinement is an integrity boundary, not a confidentiality or
+multi-tenant boundary. The host is readable and the project is writable.
+Coagent ships no credential-path rules: the operator configures ordered
+allow/deny rules globally and per project. A linked worktree inherits its source
+project's rules. Session processes and built-in file tools enforce the same
+compiled policy; `sandbox.enabled: false` disables confinement.
+The project section ends with mandatory read-only access to its captured process
+output, including for subagents; this exception exposes no other daemon
+state or project output.
 
-An operator may raise durable session shields to confine a complete session
-tree's built-in file tools and session-owned processes to its project plus a
-fixed read-only system execution substrate. This blocks those surfaces from
-same-user files outside the project, host temporary storage, user caches, and
-configured writable exceptions. Global and marketplace instruction sources
-remain trusted daemon inputs outside this boundary; project-local instruction
-sources use rooted project access. Shields do not restrict network egress,
-inherited environment variables, project-data disclosure, prior model history,
-or deliberately detached processes. System resolver, host-name, account,
-loader, and certificate files remain readable when required by the execution substrate.
-Shields require the native sandbox and cannot be lowered while the tree is
-running. The complete boundary is defined in [ARCHITECTURE.md](ARCHITECTURE.md)
-and [ADR-0044](docs/adr/0044-session-shields-confine-project-filesystem.md).
+Project-local instructions use project-confined access, and marketplace
+instructions stay within their own repository clone. Global instructions are
+trusted daemon inputs. The filesystem policy does not restrict network egress,
+inherited environment variables, prior model history, or access through an
+allowed service socket. Stronger isolation belongs to the daemon's deployment.
+The complete boundary is defined in [ARCHITECTURE.md](ARCHITECTURE.md)
+and [the filesystem policy](docs/sandbox-boundary.md).

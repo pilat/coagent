@@ -8,6 +8,8 @@ import (
 	"os"
 	"os/exec"
 	"syscall"
+
+	"github.com/pilat/coagent/internal/procexec"
 )
 
 const (
@@ -76,5 +78,5 @@ func newGuardianCommand(guardPath string, readyWriter, leaseReader *os.File) *ex
 	)
 	cmd.ExtraFiles = []*os.File{readyWriter, leaseReader}
 
-	return cmd
+	return procexec.Unprivileged(cmd)
 }
