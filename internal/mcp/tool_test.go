@@ -5,10 +5,21 @@ import (
 	"encoding/json"
 	"testing"
 
+	"github.com/mark3labs/mcp-go/client"
 	"github.com/mark3labs/mcp-go/mcp"
-
-	"github.com/pilat/coagent/internal/tool"
 )
+
+// stubMCPClient answers one successful tools/call; embedding the interface
+// keeps the unused protocol methods unimplemented.
+type stubMCPClient struct {
+	client.MCPClient
+}
+
+func (s stubMCPClient) CallTool(context.Context, mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	return &mcp.CallToolResult{
+		Content: []mcp.Content{mcp.TextContent{Type: mcp.ContentTypeText, Text: `{"result": "success"}`}},
+	}, nil
+}
 
 // mockMCPClient is a mock implementation for testing
 type mockMCPClient struct {
@@ -136,13 +147,18 @@ func TestMCPTool_Parameters(t *testing.T) {
 }
 
 func TestMCPTool_ResultStructure(t *testing.T) {
-	result := &tool.Result{
-		Title:  "MCP: test_server/test_tool",
-		Output: `{"result": "success"}`,
-		Metadata: map[string]any{
-			"server": "test_server",
-			"tool":   "test_tool",
-		},
+	client := newMockMCPClient()
+	wrappedClient := &Client{
+		name:   "test_server",
+		client: stubMCPClient{},
+		tools:  client.tools,
+	}
+	mcpTool := newLiveMCPTool("test_server", "test_tool", wrappedClient)
+
+	params := json.RawMessage(`{}`)
+	result, err := mcpTool.Execute(context.Background(), params)
+	if err != nil {
+		t.Fatalf("Execute returned error: %v", err)
 	}
 
 	if result.Title != "MCP: test_server/test_tool" {
@@ -155,5 +171,11 @@ func TestMCPTool_ResultStructure(t *testing.T) {
 
 	if result.Metadata["tool"] != "test_tool" {
 		t.Errorf("Metadata['tool'] = %v, want 'test_tool'", result.Metadata["tool"])
+	}
+
+	// Every MCP result is external data by construction: the server is an
+	// operator-configured remote process, not a trusted host component.
+	if !result.Untrusted {
+		t.Error("MCP result must carry the Untrusted provenance bit")
 	}
 }

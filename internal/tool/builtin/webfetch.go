@@ -135,8 +135,9 @@ func (t *webFetchTool) Execute(ctx context.Context, params json.RawMessage) (*to
 	}
 
 	return &tool.Result{
-		Title:  fetchURL,
-		Output: output,
+		Title:     fetchURL,
+		Output:    output,
+		Untrusted: true,
 		Metadata: map[string]any{
 			"url":            fetchURL,
 			"contentType":    contentType,

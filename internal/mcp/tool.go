@@ -99,6 +99,9 @@ func (t *mcpTool) Execute(ctx context.Context, params json.RawMessage) (*tool.Re
 	return &tool.Result{
 		Title:  fmt.Sprintf("MCP: %s/%s", t.serverName, t.meta.Name),
 		Output: output,
+		// MCP is an operator-configured remote/process boundary; its output is
+		// never trusted as instructions.
+		Untrusted: true,
 		Metadata: map[string]any{
 			"server": t.serverName,
 			"tool":   t.meta.Name,

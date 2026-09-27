@@ -360,6 +360,10 @@ Stored message content never changes after insertion. The model-visible
 conversation is a projection of rows plus context metadata, which keeps an
 unchanged prompt prefix byte-stable between context events. Oversized tool output
 is capped before insertion; the system never retroactively rewrites history.
+Identifiable external tool output (web, search, MCP) is additionally wrapped in
+host-authored provenance markers with a matching random ID before insertion.
+IDs are assigned after loop fingerprinting and remain unchanged during replay
+([ADR-0064](docs/adr/0064-untrusted-tool-output-is-data.md)).
 Every ordinary model attempt retains its response and finish evidence in this
 history. Rejected attempts remain included in lifetime usage, cost and message
 watermarks, but are excluded from provider, compaction, progress, manager,

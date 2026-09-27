@@ -249,6 +249,21 @@ func TestWebSearchTool_HappyPathAndMetadata(t *testing.T) {
 	assert.Contains(t, result.Output, "https://a.example.com")
 	assert.Contains(t, result.Output, "second snippet with newline")
 	assert.Equal(t, 5, provider.gotMax)
+	assert.True(t, result.Untrusted, "search snippets are external data")
+}
+
+// The empty-results response is still a provider answer: it keeps the bit so
+// the model sees the same external framing across result states.
+func TestWebSearchTool_EmptyResultResponseCarriesProvenance(t *testing.T) {
+	t.Parallel()
+
+	tl := newWebSearchTool(&stubSearchProvider{results: []searchResult{}}, 5)
+
+	result, err := tl.Execute(t.Context(), json.RawMessage(`{"query":"q"}`))
+	require.NoError(t, err)
+
+	assert.Equal(t, "No results found.", result.Output)
+	assert.True(t, result.Untrusted)
 }
 
 func TestWebSearchTool_PerCallMaxResultsNeverWidens(t *testing.T) {

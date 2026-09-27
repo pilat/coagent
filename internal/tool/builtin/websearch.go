@@ -123,8 +123,9 @@ func truncateRunes(s string, limit int) string {
 func renderSearchResults(query string, results []searchResult) (*tool.Result, error) {
 	if len(results) == 0 {
 		return &tool.Result{
-			Title:  query,
-			Output: "No results found.",
+			Title:     query,
+			Output:    "No results found.",
+			Untrusted: true,
 			Metadata: map[string]any{
 				"query":          query,
 				metaKeyTruncated: false,
@@ -153,8 +154,9 @@ func renderSearchResults(query string, results []searchResult) (*tool.Result, er
 	}
 
 	return &tool.Result{
-		Title:  query,
-		Output: output,
+		Title:     query,
+		Output:    output,
+		Untrusted: true,
 		Metadata: map[string]any{
 			"query":          query,
 			metaKeyTruncated: truncated,

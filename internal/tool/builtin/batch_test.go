@@ -339,3 +339,102 @@ func TestBatchToolPropagatesDirectMessages(t *testing.T) {
 
 	assert.Equal(t, []string{"dm-1", "dm-2"}, result.DirectMessages)
 }
+
+func TestBatchToolUntrustedProvenance(t *testing.T) {
+	local := &scriptedTool{id: "local", result: &tool.Result{Output: "local"}}
+
+	tests := []struct {
+		name  string
+		setup func(tool.Registry)
+		calls []string
+		want  bool
+	}{
+		{
+			name: "all local stays trusted",
+			setup: func(reg tool.Registry) {
+				reg.Register(local)
+			},
+			calls: []string{"local", "local"},
+		},
+		{
+			name: "one external nested result marks the batch",
+			setup: func(reg tool.Registry) {
+				reg.Register(local)
+				reg.Register(&scriptedTool{id: "webfetch", result: &tool.Result{Output: "page", Untrusted: true}})
+			},
+			calls: []string{"local", "webfetch"},
+			want:  true,
+		},
+		{
+			name: "external typed failure with a result marks the batch",
+			setup: func(reg tool.Registry) {
+				reg.Register(
+					&scriptedTool{id: "webfetch", result: &tool.Result{Output: "err", IsError: true, Untrusted: true}},
+				)
+			},
+			calls: []string{"webfetch"},
+			want:  true,
+		},
+		{
+			// The classifier keys on the call, not on a result that never existed.
+			name: "external nested error without a result marks the batch",
+			setup: func(reg tool.Registry) {
+				reg.Register(&scriptedTool{id: "mcp__fake__ping", err: errors.New("boom")})
+			},
+			calls: []string{"mcp__fake__ping"},
+			want:  true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			registry := tool.NewRegistry()
+			tt.setup(registry)
+
+			result, err := NewBatchTool(registry).Execute(
+				context.Background(),
+				json.RawMessage(batchCalls(tt.calls...)),
+			)
+			require.NoError(t, err)
+
+			assert.Equal(t, tt.want, result.Untrusted)
+		})
+	}
+}
+
+// A mixed batch keeps its rendered bytes stable: provenance only adds the
+// in-memory bit, the outer session formatter owns the wrapper.
+func TestBatchToolMixedProvenanceKeepsOutputByteStable(t *testing.T) {
+	mixed := func() (*tool.Result, error) {
+		registry := tool.NewRegistry()
+		registry.Register(&scriptedTool{id: "read", result: &tool.Result{Output: "code"}})
+		registry.Register(&scriptedTool{id: "webfetch", result: &tool.Result{Output: "page", Untrusted: true}})
+
+		return NewBatchTool(registry).Execute(
+			context.Background(),
+			json.RawMessage(batchCalls("read", "webfetch")),
+		)
+	}
+
+	untrusted, err := mixed()
+	require.NoError(t, err)
+
+	// The same rendering with the bit cleared must equal the trusted rendering:
+	// byte-for-byte stability apart from the new in-memory field.
+	local := &scriptedTool{id: "read", result: &tool.Result{Output: "code"}}
+	page := &scriptedTool{id: "webfetch", result: &tool.Result{Output: "page"}}
+	registry := tool.NewRegistry()
+	registry.Register(local)
+	registry.Register(page)
+
+	trusted, err := NewBatchTool(registry).Execute(
+		context.Background(),
+		json.RawMessage(batchCalls("read", "webfetch")),
+	)
+	require.NoError(t, err)
+
+	assert.Equal(t, trusted.Output, untrusted.Output)
+	assert.Equal(t, trusted.Title, untrusted.Title)
+	assert.False(t, trusted.Untrusted)
+	assert.True(t, untrusted.Untrusted)
+}

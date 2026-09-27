@@ -232,7 +232,9 @@ func (t *BatchTool) validateCalls(calls []BatchCall) error {
 
 // formatResult renders ordered nested outcomes back into one result. A typed
 // failure keeps its payload, images and direct messages; skipped and cancelled
-// calls fabricate neither.
+// calls fabricate neither. Any nested external provenance marks the combined
+// result external: after truncation the outer formatter cannot protect only one
+// segment of the rendered payload.
 func (t *BatchTool) formatResult(calls []BatchCall, report toolexec.Report[nestedResult]) *tool.Result {
 	var output strings.Builder
 
@@ -243,6 +245,8 @@ func (t *BatchTool) formatResult(calls []BatchCall, report toolexec.Report[neste
 	errorCount := 0
 
 	var images []llmwire.ImageRef
+
+	untrusted := false
 
 	for _, r := range report.Results {
 		call := calls[r.Index]
@@ -261,6 +265,8 @@ func (t *BatchTool) formatResult(calls []BatchCall, report toolexec.Report[neste
 				output.WriteString(result.Output)
 				output.WriteString("\n")
 
+				untrusted = untrusted || result.Untrusted
+
 				// Typed failures keep the attachments their real result carried
 				// (same contract as the native path); skipped/cancelled children
 				// fabricate none because they never produce a result at all.
@@ -276,6 +282,8 @@ func (t *BatchTool) formatResult(calls []BatchCall, report toolexec.Report[neste
 
 				break
 			}
+
+			untrusted = untrusted || tool.IsUntrustedOutputSource(call.Tool)
 
 			fmt.Fprintf(&output, "Error: %v\n", r.Err)
 
@@ -302,9 +310,10 @@ func (t *BatchTool) formatResult(calls []BatchCall, report toolexec.Report[neste
 	}
 
 	return &tool.Result{
-		Title:   fmt.Sprintf("Batch: %d/%d succeeded", successCount, len(calls)),
-		Output:  strings.TrimSpace(output.String()),
-		IsError: errorCount > 0,
+		Title:     fmt.Sprintf("Batch: %d/%d succeeded", successCount, len(calls)),
+		Output:    strings.TrimSpace(output.String()),
+		IsError:   errorCount > 0,
+		Untrusted: untrusted,
 		Metadata: map[string]any{
 			metaKeyTotal: len(calls),
 			"success":    successCount,

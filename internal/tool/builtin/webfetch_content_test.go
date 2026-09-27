@@ -77,6 +77,16 @@ func TestWebFetchConvertsHTMLOnlyForHTMLContentType(t *testing.T) {
 	assert.Equal(t, body, fetch(t, "text/plain", http.StatusOK, body).Output)
 }
 
+// A fetched page is external content by definition: its text may carry text
+// written as instructions, so the provenance bit must always ride the result.
+func TestWebFetchMarksResultsUntrusted(t *testing.T) {
+	assert.True(t, fetch(t, "text/plain", http.StatusOK, "plain body").Untrusted)
+	assert.True(t, fetch(t, "text/html", http.StatusOK, "<p>html body</p>").Untrusted)
+
+	truncated := fetch(t, "text/plain", http.StatusOK, strings.Repeat("a", maxWebFetchOutput+1))
+	assert.True(t, truncated.Untrusted, "truncated page text stays external data")
+}
+
 func TestWebFetchRejectsNonOKStatus(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
