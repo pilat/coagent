@@ -4,20 +4,28 @@ Scope: [the core goal](refactoring-goal.md), from baseline `7678d2c` through
 the current worktree on `refactor/runtime-ownership`. This is evidence for
 completion, not a replacement architecture document.
 
-**Status: complete.** Source ownership, focused scenarios, documentation and
-independent reviews are complete. Full local tests, canonical CI and final
-`make all` pass in an unrestricted environment.
+**Status: prior checkpoint verified; session boundary reopened.** The recorded
+tests and reviews passed, but a renewed source audit found a temporary live
+transcript facade, duplicated unresolved-call classification, and checkpoint
+control protected by the transcript lock. The linked
+[correction plan](../plan-2026-09-28-session-boundary-correction.md) must be
+implemented and re-audited before the core goal is again marked complete.
 The presence of a component or a passing narrow test does not close a row below.
+Commit `1dd20e2` gives checkpoint request, input and focus their own control
+lock; a concurrent request survives the active checkpoint and a failed terminal
+write can be retried without summarizing again while activation continues.
+The existing fired-budget `/compact` terminal-write failure still needs a
+durable admission/stop design: parking can end that activation before retry.
 
 ## Requirement audit
 
 | Goal requirement | Evidence required | Current conclusion |
 | --- | --- | --- |
-| No unresolved concentration of unrelated mutable core state | Inspect daemon/session/lifecycle/persistence owners and their consumers; justify retained coordination | Source audit and two independent code reviews found cohesive owners and no unresolved unrelated mutable concentration; retained coordination is justified below |
-| Named owners and explicit ordering for representative flows | Trace production entry, state transition, durable boundary and recovery for every flow below | Source paths, focused durable/temporal scenarios and full local/CI suites support every flow below |
-| Every extraction removes obligations from its former owner | Source search for removed state/mutation paths; compare complete operations before/after | Lifecycle/external-call/route/model/tool/checkpoint state moved with operations; three obsolete persistence algorithms and their executable tests were migrated |
-| Behavioral checks, architecture sync and independent code review | Exact final commands/results plus clean specification and code reviews | Cold specification and code reviews are clean after one P1 fix; focused scenarios, full local tests, canonical CI and final `make all` pass |
-| Remaining debt has explicit reasons | Distinguish necessary coordination, optional organization and unresolved defects | Retained core coordination and deferred organization are justified below; no unresolved core defect was found |
+| No unresolved concentration of unrelated mutable core state | Inspect daemon/session/lifecycle/persistence owners and their consumers; justify retained coordination | Reopened: checkpoint control is isolated, but the temporary live transcript facade and session package concentration need a fresh audit |
+| Named owners and explicit ordering for representative flows | Trace production entry, state transition, durable boundary and recovery for every flow below | Prior flows passed; external-call classification and fired-budget command settlement need renewed scrutiny |
+| Every extraction removes obligations from its former owner | Source search for removed state/mutation paths; compare complete operations before/after | Prior extractions and checkpoint control removed obligations; the external-call facade still forwards without removing live responsibility |
+| Behavioral checks, architecture sync and independent code review | Exact final commands/results plus clean specification and code reviews | Prior branch gates passed; correction-phase full gates and architecture sync remain open |
+| Remaining debt has explicit reasons | Distinguish necessary coordination, optional organization and unresolved defects | Fired-budget `/compact` terminal-write failure needs a durable admission/stop design; the boundary correction is still in progress |
 
 ## Integrated flow evidence
 

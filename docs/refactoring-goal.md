@@ -78,8 +78,13 @@ The core goal is complete only when all of the following have evidence:
 
 ## Current checkpoint
 
-- **Goal status:** complete. The ownership audit, independent reviews, full
-  local tests, canonical CI and final local gate pass.
+- **Goal status:** reopened for the
+  [session-boundary correction](../plan-2026-09-28-session-boundary-correction.md).
+  Prior gates passed, but a renewed source audit found live `svc` forwarding
+  through a temporary transcript facade, two unresolved-call classifiers, and
+  checkpoint control fields guarded by the transcript lock. Checkpoint control
+  now has its own lock in commit `1dd20e2`; the call boundary and final
+  responsibility audit remain open. Completion criteria 1–3 still need evidence.
 - **Completed implementation:** phase 1, runtime ownership, commit `a231abc`
   on `refactor/runtime-ownership`. See the
   [phase plan](../plan-2026-09-27-runtime-ownership.md) and
@@ -121,8 +126,8 @@ The core goal is complete only when all of the following have evidence:
   exact-cutoff test fixture surfaced in the first CI run; its focused regression
   and the subsequent full CI run passed. The branch-review correction passed
   another complete `make test` and canonical CI run. The audit records the evidence.
-- **Next step:** preserve the new ownership boundaries during subsequent work;
-  treat the deferred items in the audit as separate, evidence-driven changes.
+- **Next step:** implement and verify the linked session-boundary plan, then
+  repeat the responsibility audit before restoring the complete status.
 - **Retained coordination:** the source audit supports keeping daemon startup,
   shutdown and typed producer routing, session activation safe points, and the
   shared SQL receiver. These coordinate distinct authorities rather than own
