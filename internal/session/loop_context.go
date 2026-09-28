@@ -8,6 +8,7 @@ import (
 
 	"go.uber.org/zap"
 
+	"github.com/pilat/coagent/internal/logger"
 	"github.com/pilat/coagent/internal/sessionstore"
 )
 
@@ -15,84 +16,98 @@ const compactionNotConvergingNotice = "⚠️ Context window too small for this 
 	"longer freeing enough space. Automatic compaction is paused for this run; switch to a model with a " +
 	"larger context window."
 
-// applyContextEvents is the single sanctioned compaction point: an explicit
-// request forces, otherwise the projected request size decides.
-//
-//nolint:gocyclo,nestif,funlen // Explicit compaction has a durable start, terminal outcome, and auto-path fallback.
 func (r *loopRunner) applyContextEvents(ctx context.Context) {
-	// The one place that decides compaction is safe: a queued request keeps its
-	// place rather than being consumed into a failure.
 	if r.agent.HasPendingExternalCall() || r.agent.HasPendingWork() {
 		return
 	}
 
-	explicit := false
-	commandInput := r.agent.compactionCommandInput()
+	result := r.agent.contexts.apply(ctx, r.opts.Notify)
+	if result.budgetFired {
+		r.agent.budgetFired = true
+	}
+}
 
-	if r.agent.consumePendingCompaction() {
+//nolint:gocyclo,nestif,funlen // Explicit compaction has a durable start, terminal outcome, and auto-path fallback.
+func (s *checkpointOwner) apply(ctx context.Context, notify func(context.Context, string) error) checkpointResult {
+	log := logger.Ctx(ctx).Named("session.compaction")
+	s.notifyFn = notify
+	outcome := checkpointResult{}
+	// The one place that decides compaction is safe: a queued request keeps its
+	// place rather than being consumed into a failure.
+	if len(s.calls.PendingExternalCalls()) > 0 || s.calls.HasPendingWork() {
+		return outcome
+	}
+
+	explicit := false
+	commandInput := s.compactionCommandInput()
+
+	if s.consumePendingCompaction() {
 		explicit = true
 	}
 
-	window := r.agent.contextWindow()
+	window := s.models.snapshot().contextWindow
 
-	if !explicit && (r.autoCompactionOff || !r.agent.shouldCompact(window)) {
-		return
+	if !explicit && (s.autoCompactionOff || !s.shouldCompact(window)) {
+		return outcome
 	}
 
 	// The verbatim tail is never empty (D3): when the raw range cannot yield a
 	// split, an automatic attempt would announce itself and then refuse
 	// silently. The transcript keeps growing, so the next crossing gets a real
 	// attempt; an explicit /compact still reports "Nothing to compact".
-	if !explicit && !r.agent.hasCompactionCandidate(window) {
-		return
+	if !explicit && !s.hasCompactionCandidate(window) {
+		return outcome
 	}
 
 	// A fired budget parks the tree: /compact is read-only and answers with the
 	// parked explanation, never with a failure claim (and spends no model call).
-	if r.agent.budgetGate != nil {
-		if err := r.agent.budgetGate.Admit(ctx, time.Now().UTC()); errors.Is(err, ErrBudgetCheckpoint) {
-			r.finishParkedCompaction(ctx, commandInput)
+	if s.budgetGate != nil {
+		if err := s.budgetGate.Admit(ctx, time.Now().UTC()); errors.Is(err, ErrBudgetCheckpoint) {
+			s.finishParkedCompaction(ctx, commandInput)
 
-			return
+			outcome.budgetFired = true
+
+			return outcome
 		}
 	}
 
 	if commandInput != nil {
-		if err := r.enqueueCompactionNotice(
+		if err := s.enqueueCompactionNotice(
 			ctx,
 			*commandInput,
 			"started",
 			sessionstore.OutputMessageReplaceable,
 			"🔄 Compacting context...",
 		); err != nil {
-			r.log.Warn("start_compaction_output_failed", zap.Error(err))
-			return
+			log.Warn("start_compaction_output_failed", zap.Error(err))
+			return outcome
 		}
 
-		r.notify(ctx, "🔄 Compacting context...")
+		s.notify(ctx, "🔄 Compacting context...")
 	} else {
-		r.notifyPersistent(ctx, "🔄 Compacting context...")
+		s.notifyPersistent(ctx, "🔄 Compacting context...")
 	}
 
 	durableCommand := commandInput
-	if r.agent.outputStore == nil || !r.agent.outputEnabled {
+	if s.outputStore == nil || !s.outputEnabled {
 		durableCommand = nil
 	}
 
-	ok, err := r.agent.compact(ctx, durableCommand)
+	outcome, err := s.checkpoint(ctx, durableCommand)
+	ok := outcome.committed
 
 	// The focus is one-shot: it described this request, not the next one.
-	r.agent.setCompactionFocus("")
+	s.setCompactionFocus("")
 
 	terminal := ""
 
 	switch {
 	case errors.Is(err, errCompactionHeaderTooLarge):
-		r.log.Warn("compaction_header_over_threshold")
+		log.Warn("compaction_header_over_threshold")
 
 		terminal = compactionHeaderTooLargeNotice
 	case err != nil:
-		r.log.Warn("compaction_failed", zap.Error(err))
+		log.Warn("compaction_failed", zap.Error(err))
 
 		terminal = "❌ Compaction failed"
 	case ok:
@@ -104,26 +119,28 @@ func (r *loopRunner) applyContextEvents(ctx context.Context) {
 	if terminal != "" {
 		if commandInput != nil && (!ok || durableCommand == nil) {
 			phase := compactionOutcomePhase(ok, err)
-			if finishErr := r.finishCompactionCommand(ctx, *commandInput, phase, terminal); finishErr != nil {
-				r.log.Warn("finish_compaction_command_failed", zap.Error(finishErr))
-				return
+			if finishErr := s.finishCompactionCommand(ctx, *commandInput, phase, terminal); finishErr != nil {
+				log.Warn("finish_compaction_command_failed", zap.Error(finishErr))
+				return outcome
 			}
 		}
 
 		if commandInput != nil {
-			r.agent.clearCompactionCommandInput()
-			r.notify(ctx, terminal)
+			s.clearCompactionCommandInput()
+			s.notify(ctx, terminal)
 		} else if ok && err == nil {
-			r.notifyAutoCompactionOutcome(ctx, terminal)
+			s.notifyAutoCompactionOutcome(ctx, terminal)
 		} else {
-			r.notifyPersistent(ctx, terminal)
+			s.notifyPersistent(ctx, terminal)
 		}
 	}
 
 	// An explicit request neither counts against the cap nor clears it.
 	if !explicit {
-		r.recordAutoCompaction(ctx, ok && err == nil && !r.agent.shouldCompact(window))
+		s.recordAutoCompaction(ctx, ok && err == nil && !s.shouldCompact(window))
 	}
+
+	return outcome
 }
 
 func compactionOutcomePhase(ok bool, err error) string {
@@ -140,64 +157,66 @@ func compactionOutcomePhase(ok bool, err error) string {
 
 // finishParkedCompaction resolves a compaction request against a fired budget:
 // the command gets its durable outcome, the root stays parked.
-func (r *loopRunner) finishParkedCompaction(ctx context.Context, commandInput *PendingInput) {
+func (s *checkpointOwner) finishParkedCompaction(ctx context.Context, commandInput *PendingInput) {
+	log := logger.Ctx(ctx).Named("session.compaction")
 	const parkedNotice = "⏸ Budget checkpoint reached — the session is parked. Send a message to resume."
 
 	if commandInput != nil {
-		if err := r.finishCompactionCommand(ctx, *commandInput, "parked", parkedNotice); err != nil {
-			r.log.Warn("finish_compaction_command_failed", zap.Error(err))
+		if err := s.finishCompactionCommand(ctx, *commandInput, "parked", parkedNotice); err != nil {
+			log.Warn("finish_compaction_command_failed", zap.Error(err))
 
 			return
 		}
 
-		r.agent.clearCompactionCommandInput()
-		r.notify(ctx, parkedNotice)
+		s.clearCompactionCommandInput()
+		s.notify(ctx, parkedNotice)
 
 		return
 	}
 
-	r.notifyPersistent(ctx, parkedNotice)
+	s.notifyPersistent(ctx, parkedNotice)
 }
 
 // notifyAutoCompactionOutcome keys the success row to its summary message, so a
 // crash between the summary commit and this enqueue replays as an idempotent no-op.
-func (r *loopRunner) notifyAutoCompactionOutcome(ctx context.Context, content string) {
-	if r.agent.outputStore == nil || !r.agent.outputEnabled || r.agent.compactionSummaryDBID == 0 {
-		r.notifyPersistent(ctx, content)
+func (s *checkpointOwner) notifyAutoCompactionOutcome(ctx context.Context, content string) {
+	log := logger.Ctx(ctx).Named("session.compaction")
+	if s.outputStore == nil || !s.outputEnabled || s.compactionSummaryDBID == 0 {
+		s.notifyPersistent(ctx, content)
 		return
 	}
 
-	_, err := r.agent.outputStore.EnqueueOutput(ctx, sessionstore.OutputDraft{
-		SessionID:   r.agent.id,
+	_, err := s.outputStore.EnqueueOutput(ctx, sessionstore.OutputDraft{
+		SessionID:   s.id,
 		Type:        sessionstore.OutputMessagePersistent,
 		Content:     content,
-		SourceKey:   fmt.Sprintf("compaction:%d:succeeded", r.agent.compactionSummaryDBID),
-		Fingerprint: sessionstore.OutputFingerprint(sessionstore.OutputMessagePersistent, content, r.agent.id, nil),
+		SourceKey:   fmt.Sprintf("compaction:%d:succeeded", s.compactionSummaryDBID),
+		Fingerprint: sessionstore.OutputFingerprint(sessionstore.OutputMessagePersistent, content, s.id, nil),
 	})
 	if err != nil {
-		r.log.Warn("enqueue_auto_compaction_output_failed", zap.Error(err))
+		log.Warn("enqueue_auto_compaction_output_failed", zap.Error(err))
 	}
 
-	r.notify(ctx, content)
+	s.notify(ctx, content)
 }
 
-func (r *loopRunner) enqueueCompactionNotice(
+func (s *checkpointOwner) enqueueCompactionNotice(
 	ctx context.Context,
 	input PendingInput,
 	phase string,
 	kind sessionstore.OutputType,
 	content string,
 ) error {
-	if r.agent.outputStore == nil || !r.agent.outputEnabled {
+	if s.outputStore == nil || !s.outputEnabled {
 		return nil
 	}
 
-	_, err := r.agent.outputStore.EnqueueOutput(ctx, sessionstore.OutputDraft{
-		SessionID:   r.agent.id,
+	_, err := s.outputStore.EnqueueOutput(ctx, sessionstore.OutputDraft{
+		SessionID:   s.id,
 		Type:        kind,
 		Content:     content,
 		SourceKey:   fmt.Sprintf("input:%d:compact:%s", input.ID, phase),
-		Fingerprint: sessionstore.OutputFingerprint(kind, content, r.agent.id, nil),
+		Fingerprint: sessionstore.OutputFingerprint(kind, content, s.id, nil),
 	})
 	if err != nil {
 		return fmt.Errorf("enqueue compact %s: %w", phase, err)
@@ -206,18 +225,18 @@ func (r *loopRunner) enqueueCompactionNotice(
 	return nil
 }
 
-func (r *loopRunner) finishCompactionCommand(
+func (s *checkpointOwner) finishCompactionCommand(
 	ctx context.Context,
 	input PendingInput,
 	phase, content string,
 ) error {
-	if r.agent.outputStore != nil && r.agent.outputEnabled {
-		_, err := r.agent.outputStore.HandleInputWithOutput(ctx, input.ID, "compact command", sessionstore.OutputDraft{
-			SessionID:   r.agent.id,
+	if s.outputStore != nil && s.outputEnabled {
+		_, err := s.outputStore.HandleInputWithOutput(ctx, input.ID, "compact command", sessionstore.OutputDraft{
+			SessionID:   s.id,
 			Type:        sessionstore.OutputMessagePersistent,
 			Content:     content,
 			SourceKey:   fmt.Sprintf("input:%d:compact:%s", input.ID, phase),
-			Fingerprint: sessionstore.OutputFingerprint(sessionstore.OutputMessagePersistent, content, r.agent.id, nil),
+			Fingerprint: sessionstore.OutputFingerprint(sessionstore.OutputMessagePersistent, content, s.id, nil),
 		})
 		if err != nil {
 			return fmt.Errorf("complete compact command: %w", err)
@@ -226,22 +245,22 @@ func (r *loopRunner) finishCompactionCommand(
 		return nil
 	}
 
-	return r.handleCommandOutput(ctx, input, "compact command", content)
+	return s.handleCommandOutput(ctx, input, "compact command", content)
 }
 
 // recordAutoCompaction silences the automatic path after compactionAttemptCap
 // consecutive attempts that left the projection above the threshold.
-func (r *loopRunner) recordAutoCompaction(ctx context.Context, relieved bool) {
+func (s *checkpointOwner) recordAutoCompaction(ctx context.Context, relieved bool) {
 	if relieved {
-		r.compactionFailures = 0
+		s.compactionFailures = 0
 		return
 	}
 
-	r.compactionFailures++
-	if r.compactionFailures < compactionAttemptCap {
+	s.compactionFailures++
+	if s.compactionFailures < compactionAttemptCap {
 		return
 	}
 
-	r.autoCompactionOff = true
-	r.notifyPersistent(ctx, compactionNotConvergingNotice)
+	s.autoCompactionOff = true
+	s.notifyPersistent(ctx, compactionNotConvergingNotice)
 }

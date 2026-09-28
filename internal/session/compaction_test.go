@@ -94,6 +94,27 @@ func (m *compactionMockLLM) GetReasoningLevel() string              { return tes
 
 func (m *compactionMockLLM) SetSessionID(id string) {}
 
+func (s *compactionRecordingStore) InsertToolResultSetOnce(
+	ctx context.Context,
+	sessionID int64,
+	entries []sessionstore.ToolResultEntry,
+) ([]int64, [][]*sessionstore.OutputCommit, error) {
+	beforeMessages, beforeID := len(s.messages), s.nextID
+	beforePositions := maps.Clone(s.positions)
+	ids := make([]int64, len(entries))
+	for i, entry := range entries {
+		id, err := s.InsertMessage(ctx, sessionID, entry.Message)
+		if err != nil {
+			s.messages = s.messages[:beforeMessages]
+			s.nextID = beforeID
+			s.positions = beforePositions
+			return nil, nil, err
+		}
+		ids[i] = id
+	}
+	return ids, nil, nil
+}
+
 func (s *compactionRecordingStore) InsertMessage(
 	_ context.Context,
 	sessionID int64,
@@ -252,7 +273,7 @@ func (s *compactionRecordingStore) resetSessionContext(
 
 // compactIfNeeded drives the automatic path the way applyContextEvents does,
 // for tests that want the trigger without a loop runner around it.
-func (s *svc) compactIfNeeded(ctx context.Context, window int) error {
+func (s *checkpointOwner) compactIfNeeded(ctx context.Context, window int) error {
 	if !s.shouldCompact(window) {
 		return nil
 	}
@@ -263,13 +284,21 @@ func (s *svc) compactIfNeeded(ctx context.Context, window int) error {
 }
 
 func newCompactionTestSvc(mockLLM *compactionMockLLM) *svc {
-	return &svc{
-		llmClient:    mockLLM,
-		ms:           newMessageStore(nil, 0, nil),
-		loopDetector: newLoopDetector(),
-		registry:     tool.NewRegistry(),
-		prompt:       newPromptBuilder(testPrompt, ""),
+	s := &svc{
+		models: newTestModelRuntime(mockLLM, nil, 0),
+		ms:     newMessageStore(nil, 0, nil),
+
+		registry: tool.NewRegistry(),
+		prompt:   newPromptBuilder(testPrompt, ""),
 	}
+	s.turns = newToolTurns(s.registry, s.models, s.ms, testProgressBoundary(s.boundary))
+	s.contexts = newCheckpointOwner(
+		s.ms, s.models, s.prompt, s.turns, s.transcript(),
+		s.dispositions, s.budgetGate, s.outputStore, s.boundary,
+		&s.stamper, nil, nil,
+		checkpointOptions{id: s.id, outputEnabled: s.outputEnabled, agentsMD: s.agentsMD},
+	)
+	return s
 }
 
 func TestCompactIfNeeded_BelowThreshold_NoCompaction(t *testing.T) {
@@ -280,7 +309,7 @@ func TestCompactIfNeeded_BelowThreshold_NoCompaction(t *testing.T) {
 	require.NoError(t, s.ms.addAssistantMessage(context.Background(), &llmwire.Response{Text: "Hi"}))
 	require.NoError(t, s.ms.addUserMessage(context.Background(), "How are you?"))
 
-	err := s.compactIfNeeded(context.Background(), 100000)
+	err := s.contexts.(*checkpointOwner).compactIfNeeded(context.Background(), 100000)
 	require.NoError(t, err)
 	assert.Equal(t, 0, mockLLM.callCount)
 	assert.Len(t, s.ms.getMessages(), 3)
@@ -294,7 +323,7 @@ func TestCompactIfNeeded_AboveThreshold_Compacts(t *testing.T) {
 	s := newCompactionTestSvc(mockLLM)
 	s.ms.setMessages(oversizedTranscript(32000))
 
-	err := s.compactIfNeeded(context.Background(), 32000)
+	err := s.contexts.(*checkpointOwner).compactIfNeeded(context.Background(), 32000)
 	require.NoError(t, err)
 	assert.Equal(t, 1, mockLLM.callCount)
 
@@ -321,7 +350,7 @@ func TestCompactIfNeeded_SummaryFailure_KeepsTheConversation(t *testing.T) {
 
 	before := s.ms.getMessages()
 
-	err := s.compactIfNeeded(context.Background(), 32000)
+	err := s.contexts.(*checkpointOwner).compactIfNeeded(context.Background(), 32000)
 	require.Error(t, err)
 
 	after := s.ms.getMessages()
@@ -347,6 +376,13 @@ func TestCompactionAttributesOwnCostToSummaryRow(t *testing.T) {
 	}
 	s := newCompactionTestSvc(mockLLM)
 	s.ms = newMessageStore(store, 1, nil)
+	s.turns = newToolTurns(s.registry, s.models, s.ms, testProgressBoundary(s.boundary))
+	s.contexts = newCheckpointOwner(
+		s.ms, s.models, s.prompt, s.turns, s.transcript(),
+		s.dispositions, s.budgetGate, s.outputStore, s.boundary,
+		&s.stamper, nil, nil,
+		checkpointOptions{id: s.id, outputEnabled: s.outputEnabled, agentsMD: s.agentsMD},
+	)
 
 	// Costed rounds big enough to cross the trigger.
 	msgs := []llmwire.Message{
@@ -371,7 +407,7 @@ func TestCompactionAttributesOwnCostToSummaryRow(t *testing.T) {
 		s.ms.mu.Unlock()
 	}
 
-	require.NoError(t, s.compactIfNeeded(ctx, 32000))
+	require.NoError(t, s.contexts.(*checkpointOwner).compactIfNeeded(ctx, 32000))
 	require.Equal(t, 1, mockLLM.callCount, "one summarization call")
 
 	summary := findStoredSummary(t, store)
@@ -439,4 +475,9 @@ func skillMessage(t *testing.T, name, content string) llmwire.Message {
 		Role:    llmwire.RoleUser,
 		Content: builtin.RenderSkill(&loader.Skill{Name: name, Content: content}, ""),
 	}
+}
+
+func (s *checkpointOwner) compact(ctx context.Context, command *PendingInput) (bool, error) {
+	result, err := s.checkpoint(ctx, command)
+	return result.committed, err
 }

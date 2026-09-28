@@ -32,9 +32,9 @@ func (s *svc) pendingInputRunnable(ctx context.Context, sessionID int64) (bool, 
 		return pending, err
 	}
 
-	calls, err := s.pendingExternalCallsForSession(ctx, sessionID)
+	calls, err := s.externalCalls.Pending(ctx, sessionID)
 	if err != nil {
-		return false, err
+		return false, fmt.Errorf("load pending external calls for session %d: %w", sessionID, err)
 	}
 
 	for _, name := range calls {
@@ -83,9 +83,9 @@ func (s *svc) recoverableInputRunnable(ctx context.Context, sessionID int64) (bo
 		return false, nil
 	}
 
-	calls, err := s.pendingExternalCallsForSession(ctx, sessionID)
+	calls, err := s.externalCalls.Pending(ctx, sessionID)
 	if err != nil {
-		return false, err
+		return false, fmt.Errorf("load pending external calls for session %d: %w", sessionID, err)
 	}
 
 	return len(calls) == 0, nil

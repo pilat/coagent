@@ -12,6 +12,7 @@ import (
 	"github.com/pilat/coagent/internal/backgroundprocess"
 	"github.com/pilat/coagent/internal/budget"
 	"github.com/pilat/coagent/internal/config"
+	"github.com/pilat/coagent/internal/configapply"
 	"github.com/pilat/coagent/internal/inputruntime"
 	"github.com/pilat/coagent/internal/progressruntime"
 	"github.com/pilat/coagent/internal/schedule"
@@ -76,13 +77,14 @@ func mustNewSvc(
 	progressStore progressruntime.Store,
 	scheduleSvc schedule.Service,
 	defaultModelFn func() string,
+	applier configapply.Service,
 ) *svc {
 	t.Helper()
 
 	service, err := newSvc(
 		ctx, factory, processStore, toolResources, store, sessionStore, inboxStore, runtimeStore,
 		managerOutputs, managerRoots, lifecycleStore, modelInputs, links, subagents,
-		budgetSvc, progressStore, scheduleSvc, defaultModelFn,
+		budgetSvc, progressStore, scheduleSvc, defaultModelFn, applier,
 	)
 	require.NoError(t, err)
 

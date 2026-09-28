@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/pilat/coagent/internal/llmwire"
+	"github.com/pilat/coagent/internal/sessionstore"
 	"github.com/pilat/coagent/internal/tool"
 	"github.com/pilat/coagent/internal/toolexec"
 )
@@ -47,17 +48,23 @@ func TestShouldCompact(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			agent := newTestAgent()
 			agent.prompt = newPromptBuilder("", "") // zero overhead: the cutoff cases are exact
+			agent.contexts = newCheckpointOwner(
+				agent.ms, agent.models, agent.prompt, agent.turns, agent.transcript(),
+				agent.dispositions, agent.budgetGate, agent.outputStore, agent.boundary,
+				&agent.stamper, nil, nil,
+				checkpointOptions{id: agent.id, outputEnabled: agent.outputEnabled, agentsMD: agent.agentsMD},
+			)
 			agent.ms.setMessages(buildMessagesWithTokens(tc.tokens))
 			if tc.baseline != nil {
-				agent.recordContextBaseline(
+				agent.models.recordBaseline(
 					context.Background(),
 					tc.baseline.promptTokens,
 					tc.baseline.messageCount,
-					agent.modelGeneration(),
+					agent.models.snapshot().generation,
 				)
 			}
 
-			assert.Equal(t, tc.want, agent.shouldCompact(window))
+			assert.Equal(t, tc.want, agent.contexts.(*checkpointOwner).shouldCompact(window))
 		})
 	}
 }
@@ -82,40 +89,59 @@ func TestProjectContextSizeDiscardsAStaleBaseline(t *testing.T) {
 }
 
 func TestCallLLMRecordsTheProviderBaseline(t *testing.T) {
-	agent := newTestAgent()
-	agent.llmClient = &loopScriptLLM{responses: []*llmwire.Response{
+	agent := newDurableTestAgent(t)
+	agent.models = newTestModelRuntime(&loopScriptLLM{responses: []*llmwire.Response{
 		{Text: "done", Usage: &llmwire.MessageUsage{PromptTokens: 5000}},
 		textResponse("confirmed"),
-	}}
+	}}, agent.store, agent.id)
+	agent.turns = newToolTurns(agent.registry, agent.models, agent.ms, testProgressBoundary(agent.boundary))
+	agent.contexts = newCheckpointOwner(
+		agent.ms, agent.models, agent.prompt, agent.turns, agent.transcript(),
+		agent.dispositions, agent.budgetGate, agent.outputStore, agent.boundary,
+		&agent.stamper, nil, nil,
+		checkpointOptions{id: agent.id, outputEnabled: agent.outputEnabled, agentsMD: agent.agentsMD},
+	)
 	agent.ms.setMessages(buildMessagesWithTokens(1000))
 
 	_, err := runTestLoop(t.Context(), t, agent, loopOptions{}, iterationGuard(5))
 	require.NoError(t, err)
 
-	base := agent.loadContextBaseline()
+	base := agent.models.snapshot().baseline
 	require.NotNil(t, base)
 	assert.Equal(t, 5000, base.promptTokens)
 	assert.Equal(t, 1, base.messageCount, "the position is the transcript as sent, before the reply landed")
+	record, err := agent.store.(sessionstore.Store).GetSession(t.Context(), agent.id)
+	require.NoError(t, err)
+	assert.Equal(t, 5000, record.ContextBaselinePromptTokens)
+	assert.Equal(t, 1, record.ContextBaselineMessageCount)
+	assert.Equal(t, agent.models.snapshot().model, record.ContextBaselineModel)
 
-	size, estimated := agent.projectContextSize()
+	size, estimated := agent.contexts.projectContextSize()
 	assert.False(t, estimated)
 	// The assistant reply ("done") is the tail the measurement did not cover.
 	assert.Equal(t, 5000+estimateTokens(agent.ms.getMessages()[1:]), size)
 }
 
 func TestCallLLMLeavesTheProjectionEstimatedWithoutUsage(t *testing.T) {
-	agent := newTestAgent()
-	agent.llmClient = &loopScriptLLM{responses: []*llmwire.Response{
+	agent := newDurableTestAgent(t)
+	agent.models = newTestModelRuntime(&loopScriptLLM{responses: []*llmwire.Response{
 		{Text: "done", Usage: &llmwire.MessageUsage{PromptTokens: 0}},
-	}}
+	}}, agent.store, agent.id)
+	agent.turns = newToolTurns(agent.registry, agent.models, agent.ms, testProgressBoundary(agent.boundary))
+	agent.contexts = newCheckpointOwner(
+		agent.ms, agent.models, agent.prompt, agent.turns, agent.transcript(),
+		agent.dispositions, agent.budgetGate, agent.outputStore, agent.boundary,
+		&agent.stamper, nil, nil,
+		checkpointOptions{id: agent.id, outputEnabled: agent.outputEnabled, agentsMD: agent.agentsMD},
+	)
 	agent.ms.setMessages(buildMessagesWithTokens(1000))
 
 	_, err := runTestLoop(t.Context(), t, agent, loopOptions{}, iterationGuard(5))
 	require.NoError(t, err)
 
-	assert.Nil(t, agent.loadContextBaseline(), "a provider that reports zero has measured nothing")
+	assert.Nil(t, agent.models.snapshot().baseline, "a provider that reports zero has measured nothing")
 
-	_, estimated := agent.projectContextSize()
+	_, estimated := agent.contexts.projectContextSize()
 	assert.True(t, estimated)
 }
 
@@ -192,7 +218,7 @@ func TestFormatToolResult_PreservesPresentationContract(t *testing.T) {
 
 func TestPrependLoopWarning_ReportsExactWindowDiversity(t *testing.T) {
 	agent := newTestAgent()
-	agent.loopDetector.window = []toolRecord{
+	agent.turns.(*toolTurnExecutor).detector.window = []toolRecord{
 		{name: "read", resultHash: 1},
 		{name: "read", resultHash: 1},
 		{name: "grep", resultHash: 2},
@@ -200,26 +226,38 @@ func TestPrependLoopWarning_ReportsExactWindowDiversity(t *testing.T) {
 	}
 
 	want := fmt.Sprintf(loopWarningTemplate, 50, 4, 2) + "\n\nbody"
-	assert.Equal(t, want, prependLoopWarning(t.Context(), agent, actionWarn, "grep", "body"))
+	assert.Equal(
+		t,
+		want,
+		prependLoopWarning(t.Context(), agent.turns.(*toolTurnExecutor).detector, actionWarn, "grep", "body"),
+	)
 }
 
 func TestPrependLoopWarning_HandlesEmptyWindow(t *testing.T) {
 	agent := newTestAgent()
 
 	want := fmt.Sprintf(loopWarningTemplate, 0, 0, 0) + "\n\nbody"
-	assert.Equal(t, want, prependLoopWarning(t.Context(), agent, actionWarn, "read", "body"))
+	assert.Equal(
+		t,
+		want,
+		prependLoopWarning(t.Context(), agent.turns.(*toolTurnExecutor).detector, actionWarn, "read", "body"),
+	)
 }
 
 func TestPrependLoopWarning_ReportsExactFailureStreak(t *testing.T) {
 	agent := newTestAgent()
-	agent.loopDetector.window = []toolRecord{
+	agent.turns.(*toolTurnExecutor).detector.window = []toolRecord{
 		{name: "edit", failed: true},
 		{name: "edit", failed: true},
 		{name: "edit", failed: true},
 	}
 
 	want := fmt.Sprintf(loopFailureWarningTemplate, "edit", 3) + "\n\nbody"
-	assert.Equal(t, want, prependLoopWarning(t.Context(), agent, actionWarnFailure, "edit", "body"))
+	assert.Equal(
+		t,
+		want,
+		prependLoopWarning(t.Context(), agent.turns.(*toolTurnExecutor).detector, actionWarnFailure, "edit", "body"),
+	)
 }
 
 func TestExecuteToolCall_RejectsNilResult(t *testing.T) {
@@ -228,11 +266,11 @@ func TestExecuteToolCall_RejectsNilResult(t *testing.T) {
 
 	agent := newTestAgent(&nilResultTool{})
 
-	items := executeToolCallsInternal(t.Context(), agent, []llmwire.ToolCall{{
+	items := agent.turns.(*toolTurnExecutor).schedule(t.Context(), []llmwire.ToolCall{{
 		ID:        "call-1",
 		Name:      "nil-result",
 		Arguments: json.RawMessage(`{}`),
-	}})
+	}}, nil)
 
 	require.Len(t, items, 1)
 	require.Equal(t, toolexec.OutcomeFailed, items[0].outcome)
@@ -379,6 +417,13 @@ func TestHandlePreviousResult_SubagentTextWithToolsSkipsProgress(t *testing.T) {
 	agent := newTestAgent(read)
 	boundary := &progressTrapBoundary{loopInputBoundary: &loopInputBoundary{agent: agent}}
 	agent.boundary = boundary
+	agent.turns = newToolTurns(agent.registry, agent.models, agent.ms, testProgressBoundary(agent.boundary))
+	agent.contexts = newCheckpointOwner(
+		agent.ms, agent.models, agent.prompt, agent.turns, agent.transcript(),
+		agent.dispositions, agent.budgetGate, agent.outputStore, agent.boundary,
+		&agent.stamper, nil, nil,
+		checkpointOptions{id: agent.id, outputEnabled: agent.outputEnabled, agentsMD: agent.agentsMD},
+	)
 	agent.ms.setMessages([]llmwire.Message{
 		{Role: llmwire.RoleUser, Content: "inspect"},
 		{Role: llmwire.RoleAssistant, Content: "Inspecting files", ToolCalls: []llmwire.ToolCall{{
@@ -399,17 +444,39 @@ func TestHandlePreviousResult_SubagentTextWithToolsSkipsProgress(t *testing.T) {
 
 // newTestAgent creates a minimal svc with the given tools registered.
 func newTestAgent(tools ...tool.Tool) *svc {
+	return newTestAgentWithStore(nil, 0, tools...)
+}
+
+func newDurableTestAgent(t *testing.T, tools ...tool.Tool) *svc {
+	t.Helper()
+	_, store, sessionID := newFinalOutputStore(t)
+	return newTestAgentWithStore(store, sessionID, tools...)
+}
+
+func newTestAgentWithStore(store sessionstore.RuntimeStore, sessionID int64, tools ...tool.Tool) *svc {
+	outputStore, _ := store.(sessionstore.RuntimeOutputStore)
 	reg := tool.NewRegistry()
 	for _, t := range tools {
 		reg.Register(t)
 	}
-	return &svc{
-		llmClient:    &mockLLMRunOnce{response: &llmwire.Response{Text: "ok"}},
-		ms:           newMessageStore(nil, 0, nil),
-		loopDetector: newLoopDetector(),
-		registry:     reg,
-		prompt:       newPromptBuilder("test", ""),
+	s := &svc{
+		id:     sessionID,
+		rootID: sessionID,
+		store:  store,
+		models: newTestModelRuntime(&mockLLMRunOnce{response: &llmwire.Response{Text: "ok"}}, store, sessionID),
+		ms:     newMessageStore(store, sessionID, outputStore),
+
+		registry: reg,
+		prompt:   newPromptBuilder("test", ""),
 	}
+	s.turns = newToolTurns(s.registry, s.models, s.ms, testProgressBoundary(s.boundary))
+	s.contexts = newCheckpointOwner(
+		s.ms, s.models, s.prompt, s.turns, s.transcript(),
+		s.dispositions, s.budgetGate, s.outputStore, s.boundary,
+		&s.stamper, nil, nil,
+		checkpointOptions{id: s.id, outputEnabled: s.outputEnabled, agentsMD: s.agentsMD},
+	)
+	return s
 }
 
 func TestExecuteToolCalls_WarnOnLowDiversity(t *testing.T) {
@@ -418,7 +485,7 @@ func TestExecuteToolCalls_WarnOnLowDiversity(t *testing.T) {
 	tc := llmwire.ToolCall{Name: "edit", Arguments: []byte(`{"old":"a","new":"b"}`)}
 	for i := range loopDetectorConsecutiveWarn {
 		tc.ID = fmt.Sprintf("tc_%d", i)
-		require.NoError(t, executeToolCalls(context.Background(), agent, []llmwire.ToolCall{tc}))
+		require.NoError(t, executeTestToolCalls(context.Background(), agent.turns, []llmwire.ToolCall{tc}))
 	}
 
 	found := false
@@ -438,12 +505,12 @@ func TestExecuteToolCalls_BlockAfterWarnIgnored(t *testing.T) {
 
 	for i := range loopDetectorConsecutiveWarn {
 		tc.ID = fmt.Sprintf("tc_%d", i)
-		require.NoError(t, executeToolCalls(context.Background(), agent, []llmwire.ToolCall{tc}))
+		require.NoError(t, executeTestToolCalls(context.Background(), agent.turns, []llmwire.ToolCall{tc}))
 	}
-	require.True(t, agent.loopDetector.warnActive)
+	require.True(t, agent.turns.(*toolTurnExecutor).detector.warnActive)
 
 	tc.ID = "tc_block"
-	require.NoError(t, executeToolCalls(context.Background(), agent, []llmwire.ToolCall{tc}))
+	require.NoError(t, executeTestToolCalls(context.Background(), agent.turns, []llmwire.ToolCall{tc}))
 
 	msgs := agent.ms.getMessages()
 	lastToolMsg := msgs[len(msgs)-1]
@@ -466,7 +533,7 @@ func TestExecuteToolCalls_NoWarningOnDiverseCalls(t *testing.T) {
 			Name:      fmt.Sprintf("tool_%d", i),
 			Arguments: fmt.Appendf(nil, `{"key":"%d"}`, i),
 		}
-		require.NoError(t, executeToolCalls(context.Background(), agent, []llmwire.ToolCall{tc}))
+		require.NoError(t, executeTestToolCalls(context.Background(), agent.turns, []llmwire.ToolCall{tc}))
 	}
 
 	for _, msg := range agent.ms.getMessages() {
@@ -484,9 +551,9 @@ func TestExecuteToolCalls_ParallelDedupInRound(t *testing.T) {
 		{ID: "tc_1", Name: "read", Arguments: []byte(`{"path":"a.go"}`)},
 		{ID: "tc_2", Name: "read", Arguments: []byte(`{"path":"a.go"}`)},
 	}
-	require.NoError(t, executeToolCalls(context.Background(), agent, tcs))
+	require.NoError(t, executeTestToolCalls(context.Background(), agent.turns, tcs))
 
-	assert.Len(t, agent.loopDetector.window, 1)
+	assert.Len(t, agent.turns.(*toolTurnExecutor).detector.window, 1)
 }
 
 func TestExecuteToolCalls_RejectsSleepAlongsideTaskBeforeSideEffect(t *testing.T) {
@@ -494,7 +561,7 @@ func TestExecuteToolCalls_RejectsSleepAlongsideTaskBeforeSideEffect(t *testing.T
 	sleepTool := &countingTool{id: tool.IDSleep}
 	agent := newTestAgent(taskTool, sleepTool)
 
-	require.NoError(t, executeToolCalls(t.Context(), agent, []llmwire.ToolCall{
+	require.NoError(t, executeTestToolCalls(t.Context(), agent.turns, []llmwire.ToolCall{
 		{ID: "task-1", Name: tool.IDTask, Arguments: []byte(`{}`)},
 		{ID: "sleep-1", Name: tool.IDSleep, Arguments: []byte(`{"duration":"10s"}`)},
 	}))
@@ -511,7 +578,7 @@ func TestExecuteToolCalls_RejectsSleepAlongsideSubagentFollowUpBeforeSideEffect(
 	sleepTool := &countingTool{id: tool.IDSleep}
 	agent := newTestAgent(followUpTool, sleepTool)
 
-	require.NoError(t, executeToolCalls(t.Context(), agent, []llmwire.ToolCall{
+	require.NoError(t, executeTestToolCalls(t.Context(), agent.turns, []llmwire.ToolCall{
 		{ID: "follow-up-1", Name: tool.IDSendToSubagent, Arguments: []byte(`{"id":42,"message":"more"}`)},
 		{ID: "sleep-1", Name: tool.IDSleep, Arguments: []byte(`{"duration":"10s"}`)},
 	}))
@@ -529,7 +596,7 @@ func TestExecuteToolCalls_RejectedSleepSkipsLaterStages(t *testing.T) {
 	readTool := &countingTool{id: "read"}
 	agent := newTestAgent(followUpTool, sleepTool, readTool)
 
-	require.NoError(t, executeToolCalls(t.Context(), agent, []llmwire.ToolCall{
+	require.NoError(t, executeTestToolCalls(t.Context(), agent.turns, []llmwire.ToolCall{
 		{ID: "follow-up-1", Name: tool.IDSendToSubagent, Arguments: []byte(`{"id":42,"message":"more"}`)},
 		{ID: "sleep-1", Name: tool.IDSleep, Arguments: []byte(`{"duration":"10s"}`)},
 		{ID: "read-1", Name: "read", Arguments: []byte(`{"path":"next.go"}`)},
@@ -558,16 +625,16 @@ func TestExecuteToolCalls_ForceTextOnly(t *testing.T) {
 
 	for i := range loopDetectorMinFill {
 		tc.ID = fmt.Sprintf("tc_%d", i)
-		require.NoError(t, executeToolCalls(context.Background(), agent, []llmwire.ToolCall{tc}))
+		require.NoError(t, executeTestToolCalls(context.Background(), agent.turns, []llmwire.ToolCall{tc}))
 	}
 	for i := range loopDetectorMaxBlocks + 2 {
 		tc.ID = fmt.Sprintf("tc_esc_%d", i)
-		require.NoError(t, executeToolCalls(context.Background(), agent, []llmwire.ToolCall{tc}))
+		require.NoError(t, executeTestToolCalls(context.Background(), agent.turns, []llmwire.ToolCall{tc}))
 	}
 
-	assert.True(t, agent.loopDetector.forceTextOnly)
+	assert.True(t, agent.turns.(*toolTurnExecutor).detector.forceTextOnly)
 
-	agent.loopDetector.clearForceTextOnly()
-	assert.False(t, agent.loopDetector.forceTextOnly)
-	assert.False(t, agent.loopDetector.blocked)
+	agent.turns.(*toolTurnExecutor).detector.clearForceTextOnly()
+	assert.False(t, agent.turns.(*toolTurnExecutor).detector.forceTextOnly)
+	assert.False(t, agent.turns.(*toolTurnExecutor).detector.blocked)
 }

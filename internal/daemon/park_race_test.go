@@ -66,7 +66,7 @@ func TestSendToSessionDuringBudgetDrainExplainsParking(t *testing.T) {
 		nil,
 		sessions,
 		nil,
-		nil,
+		nil, nil,
 	)
 	err = mgr.SendToSession(ctx, root.ID, "resume the work")
 	require.Error(t, err)

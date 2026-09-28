@@ -220,17 +220,17 @@ func (r *loopRunner) recordDispositionIteration(ctx context.Context) error {
 	if decision.kind == sessionstore.ResponseDispositionEmptyStop {
 		next := state.EmptyStopStreak + 1
 
-		r.emptyStopTerminal = next >= emptyResponseBreakThreshold
+		r.emptyStopTerminal = !result.BudgetFired && next >= emptyResponseBreakThreshold
 		if r.emptyStopTerminal && result.Output != nil {
 			r.notify(ctx, decision.output)
 		}
 
 		r.log.Warn("empty_stop_response", zap.Int("iter", r.result.Iterations), zap.Int("consecutive", next))
-	} else {
+	} else if !result.BudgetFired {
 		r.afterCommittedDisposition(decision, result, replyToInput)
 	}
 
-	if decision.kind == sessionstore.ResponseDispositionBackgroundYield &&
+	if !result.BudgetFired && decision.kind == sessionstore.ResponseDispositionBackgroundYield &&
 		(r.lastResp.FinishType == llmwire.FinishToolCalls || strings.TrimSpace(r.lastResp.Text) == "") {
 		r.dispositionTerminal = true
 	}
@@ -373,14 +373,21 @@ func (r *loopRunner) adoptCommittedDisposition(
 	ctx context.Context,
 	result *sessionstore.AcceptedResponseResult,
 ) error {
-	if err := r.agent.ms.reloadMessages(ctx); err != nil {
-		return err
-	}
-
 	r.agent.budgetFired = result.BudgetFired
 	if result.BudgetFired && r.agent.budgetGate != nil {
 		// The committed verdict must reach the host park scheduler synchronously.
 		r.agent.budgetGate.BudgetFired(result.Budget)
+	}
+
+	if err := r.agent.ms.reloadMessages(ctx); err != nil {
+		if result.BudgetFired {
+			// Parking consumes no further transcript input; the next activation reloads it.
+			r.log.Warn("budget_transcript_reload_failed", zap.Error(err))
+
+			return nil
+		}
+
+		return err
 	}
 
 	return nil

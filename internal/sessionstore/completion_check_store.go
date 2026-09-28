@@ -151,6 +151,28 @@ func (s *store) CommitAcceptedResponseDisposition(
 
 	result := &AcceptedResponseResult{MessageID: messageID}
 
+	result.Budget, result.Output, result.BudgetFired, err = commitDispositionBudgetObservation(
+		ctx,
+		tx,
+		disposition,
+		now,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	if result.BudgetFired {
+		if err := insertBudgetNonExecution(
+			ctx,
+			tx,
+			disposition.SessionID,
+			disposition.Message.ToolCalls,
+			now,
+		); err != nil {
+			return nil, err
+		}
+	}
+
 	if err := applyDispositionState(ctx, tx, disposition, messageID, now, result); err != nil {
 		return nil, err
 	}
@@ -239,14 +261,12 @@ func applyDispositionState(
 
 		// A direct reply for a tool-bearing response rides the same commit;
 		// it never releases the input and never carries a final footer.
-		if disposition.Output != "" {
-			return commitDispositionOutput(ctx, tx, disposition, messageID, now, result, false)
+		return commitDispositionOutput(ctx, tx, disposition, messageID, now, result, false)
+	case ResponseDispositionEmptyStop:
+		if result.BudgetFired {
+			return updateDispositionIteration(ctx, tx, disposition, disposition.EmptyStopStreak, false, now, result)
 		}
 
-		return updateDispositionIteration(
-			ctx, tx, disposition, disposition.EmptyStopStreak, false, now, result,
-		)
-	case ResponseDispositionEmptyStop:
 		// A terminal streak commits its durable host notice here: one
 		// idempotent outbox row keyed to the attempt, never a re-notify.
 		if disposition.Output != "" {
@@ -285,17 +305,10 @@ func applyCandidateDisposition(
 	now time.Time,
 	result *AcceptedResponseResult,
 ) error {
-	record, output, suppressed, obsErr := commitDispositionBudgetObservation(ctx, tx, disposition, now)
-	if obsErr != nil {
-		return obsErr
-	}
-
-	result.Budget = record
-
 	// A fired budget suppresses this attempt's own answer: leaving the check
 	// pending would resurface the text on the card note and as a later confirm.
 	next := messageID
-	if suppressed {
+	if result.BudgetFired {
 		next = 0
 	}
 
@@ -303,10 +316,7 @@ func applyCandidateDisposition(
 		return err
 	}
 
-	if suppressed {
-		result.BudgetFired = true
-		result.Output = output
-
+	if result.BudgetFired {
 		return updateDispositionIteration(
 			ctx, tx, disposition, disposition.EmptyStopStreak, false, now, result,
 		)
@@ -417,9 +427,8 @@ func updateDispositionIteration(
 	return nil
 }
 
-// commitDispositionOutput composes budget observation with the optional manager
-// output: a budget crossing suppresses the model text and publishes only the
-// host checkpoint. Releasing outputs clear the reply obligation atomically.
+// commitDispositionOutput publishes only when the common budget verdict permits it.
+// Releasing outputs clear the reply obligation atomically.
 func commitDispositionOutput(
 	ctx context.Context,
 	tx *sql.Tx,
@@ -429,17 +438,7 @@ func commitDispositionOutput(
 	result *AcceptedResponseResult,
 	releasing bool,
 ) error {
-	record, output, suppressed, err := commitDispositionBudgetObservation(ctx, tx, disposition, now)
-	if err != nil {
-		return err
-	}
-
-	result.Budget = record
-	result.Output = output
-
-	if suppressed {
-		result.BudgetFired = true
-
+	if result.BudgetFired {
 		return updateDispositionIteration(
 			ctx, tx, disposition, disposition.EmptyStopStreak, false, now, result,
 		)
@@ -656,15 +655,7 @@ func commitDispositionProjectionError(
 	now time.Time,
 	result *AcceptedResponseResult,
 ) error {
-	_, output, suppressed, err := commitDispositionBudgetObservation(ctx, tx, disposition, now)
-	if err != nil {
-		return err
-	}
-
-	result.BudgetFired = suppressed
-	if suppressed {
-		result.Output = output
-
+	if result.BudgetFired {
 		return updateDispositionIteration(ctx, tx, disposition, disposition.EmptyStopStreak, false, now, result)
 	}
 

@@ -49,7 +49,7 @@ func TestManagementRoot_ThreeManagersShareProjectKeepOwnership(t *testing.T) {
 		nil,
 		nil,
 		nil,
-		func() string { return "fake-model" },
+		func() string { return "fake-model" }, nil,
 	)
 	factory := newTestController(svc, cfg, nil, nil)
 
@@ -126,7 +126,7 @@ func TestManagementRoot_RestartResumesSameRootAndPatchesTopic(t *testing.T) {
 		nil,
 		nil,
 		nil,
-		func() string { return "fake-model" },
+		func() string { return "fake-model" }, nil,
 	)
 	factory := newTestController(svc, cfg, nil, nil)
 

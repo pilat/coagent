@@ -217,12 +217,23 @@ func toolCallResponse(id, name string) *llmwire.Response {
 	}
 }
 
+func setLoopModel(agent *svc, client llm.Client) {
+	agent.models = newTestModelRuntime(client, agent.store, agent.id)
+	agent.turns = newToolTurns(agent.registry, agent.models, agent.ms, testProgressBoundary(agent.boundary))
+	agent.contexts = newCheckpointOwner(
+		agent.ms, agent.models, agent.prompt, agent.turns, agent.transcript(),
+		agent.dispositions, agent.budgetGate, agent.outputStore, agent.boundary,
+		&agent.stamper, nil, nil,
+		checkpointOptions{id: agent.id, outputEnabled: agent.outputEnabled, agentsMD: agent.agentsMD},
+	)
+}
+
 func TestRunLoopFinalTextResponseEndsRun(t *testing.T) {
 	llmClient := &loopScriptLLM{responses: []*llmwire.Response{textResponse("all done"), textResponse("confirmed")}}
 	notifier := &loopNotifier{}
 
-	agent := newTestAgent()
-	agent.llmClient = llmClient
+	agent := newDurableTestAgent(t)
+	setLoopModel(agent, llmClient)
 
 	result, err := runTestLoop(t.Context(), t, agent, loopOptions{Notify: notifier.fn}, iterationGuard(5))
 
@@ -234,10 +245,10 @@ func TestRunLoopFinalTextResponseEndsRun(t *testing.T) {
 
 func TestRunLoopClearsWorkingBeforeFinalResponse(t *testing.T) {
 	events := []string{}
-	agent := newTestAgent()
-	agent.llmClient = &loopScriptLLM{
+	agent := newDurableTestAgent(t)
+	setLoopModel(agent, &loopScriptLLM{
 		responses: []*llmwire.Response{textResponse("all done"), textResponse("confirmed")},
-	}
+	})
 
 	_, err := runTestLoop(t.Context(), t, agent, loopOptions{
 		Notify: func(_ context.Context, msg string) error {
@@ -261,10 +272,10 @@ func TestRunLoopClearsWorkingBeforeFinalResponse(t *testing.T) {
 
 func TestRunLoopReassertsWorkingWhenFinalResponseIsFollowedByInput(t *testing.T) {
 	events := []string{}
-	agent := newTestAgent()
+	agent := newDurableTestAgent(t)
 	boundary := &loopInputBoundary{agent: agent}
 	agent.boundary = boundary
-	agent.llmClient = &loopScriptLLM{onCall: func(call int, _ []llmwire.Message) (*llmwire.Response, error) {
+	setLoopModel(agent, &loopScriptLLM{onCall: func(call int, _ []llmwire.Message) (*llmwire.Response, error) {
 		if call == 1 {
 			return textResponse("first done"), nil
 		}
@@ -275,7 +286,7 @@ func TestRunLoopReassertsWorkingWhenFinalResponseIsFollowedByInput(t *testing.T)
 		}
 
 		return textResponse("second done"), nil
-	}}
+	}})
 
 	_, err := runTestLoop(t.Context(), t, agent, loopOptions{
 		Notify: func(_ context.Context, msg string) error {
@@ -299,7 +310,7 @@ func TestRunLoopReassertsWorkingWhenFinalResponseIsFollowedByInput(t *testing.T)
 }
 
 func TestRunLoopDoesNotRepublishPreviousFinalBeforeAcceptingNextInput(t *testing.T) {
-	agent := newTestAgent()
+	agent := newDurableTestAgent(t)
 	agent.ms.setMessages([]llmwire.Message{
 		usr("old question"),
 		asst("old answer"),
@@ -317,7 +328,7 @@ func TestRunLoopDoesNotRepublishPreviousFinalBeforeAcceptingNextInput(t *testing
 		require.Contains(t, msgs[len(msgs)-1].Content, "new question")
 		return textResponse("new answer"), nil
 	}}
-	agent.llmClient = llmClient
+	setLoopModel(agent, llmClient)
 	notifier := &loopNotifier{}
 
 	result, err := runTestLoop(t.Context(), t, agent, loopOptions{Notify: notifier.fn}, iterationGuard(5))
@@ -330,7 +341,7 @@ func TestRunLoopDoesNotRepublishPreviousFinalBeforeAcceptingNextInput(t *testing
 }
 
 func TestRunLoopExecutesPreviousToolsBeforeAcceptingNextInput(t *testing.T) {
-	agent := newTestAgent(&stubTool{id: "read", result: "tool result"})
+	agent := newDurableTestAgent(t, &stubTool{id: "read", result: "tool result"})
 	agent.ms.setMessages([]llmwire.Message{
 		usr("old task"),
 		asst("", call("read-1", "read")),
@@ -346,7 +357,7 @@ func TestRunLoopExecutesPreviousToolsBeforeAcceptingNextInput(t *testing.T) {
 			})
 		},
 	}
-	agent.llmClient = &loopScriptLLM{responses: []*llmwire.Response{textResponse("done")}}
+	setLoopModel(agent, &loopScriptLLM{responses: []*llmwire.Response{textResponse("done")}})
 
 	_, err := runTestLoop(t.Context(), t, agent, loopOptions{}, iterationGuard(5))
 
@@ -355,13 +366,13 @@ func TestRunLoopExecutesPreviousToolsBeforeAcceptingNextInput(t *testing.T) {
 }
 
 func TestRunLoopHandlesStatusAtBoundaryWithoutCallingModel(t *testing.T) {
-	agent := newTestAgent()
+	agent := newDurableTestAgent(t)
 	agent.boundary = &loopInputBoundary{
 		agent: agent,
 		input: &PendingInput{ID: 1, Content: "/status", ReceivedAt: time.Now()},
 	}
 	llmClient := &loopScriptLLM{responses: []*llmwire.Response{textResponse("must not run")}}
-	agent.llmClient = llmClient
+	setLoopModel(agent, llmClient)
 	agent.activeBackgroundSnapshot = "\n\n# Active background work\nprocess bgp_1"
 	notifier := &loopNotifier{}
 
@@ -377,12 +388,12 @@ func TestCallLLMAppendsActiveBackgroundSnapshotOncePerActivation(t *testing.T) {
 	const snapshot = "\n\n# Active background work\nprocess bgp_1"
 
 	seen := make([][]llmwire.Message, 0, 2)
-	agent := newTestAgent()
+	agent := newDurableTestAgent(t)
 	agent.activeBackgroundSnapshot = snapshot
-	agent.llmClient = &loopScriptLLM{onCall: func(_ int, msgs []llmwire.Message) (*llmwire.Response, error) {
+	setLoopModel(agent, &loopScriptLLM{onCall: func(_ int, msgs []llmwire.Message) (*llmwire.Response, error) {
 		seen = append(seen, append([]llmwire.Message(nil), msgs...))
 		return textResponse("done"), nil
-	}}
+	}})
 	runner := &loopRunner{agent: agent, result: &loopResult{}, log: zap.NewNop()}
 
 	require.NoError(t, runner.callLLM(t.Context()))
@@ -408,9 +419,9 @@ func TestCallLLMAppendsActiveBackgroundSnapshotOncePerActivation(t *testing.T) {
 }
 
 func TestCallLLMAppendsActiveBackgroundSnapshotAgainOnLaterActivation(t *testing.T) {
-	agent := newTestAgent()
+	agent := newDurableTestAgent(t)
 	agent.activeBackgroundSnapshot = "\n\n# Active background work\nprocess bgp_1"
-	agent.llmClient = &loopScriptLLM{responses: []*llmwire.Response{textResponse("done")}}
+	setLoopModel(agent, &loopScriptLLM{responses: []*llmwire.Response{textResponse("done")}})
 
 	for range 2 {
 		runner := &loopRunner{agent: agent, result: &loopResult{}, log: zap.NewNop()}
@@ -428,11 +439,11 @@ func TestCallLLMAppendsActiveBackgroundSnapshotAgainOnLaterActivation(t *testing
 
 func TestCallLLMFailsBeforeProviderWhenBackgroundSnapshotPersistenceFails(t *testing.T) {
 	store := &mockSessionStore{insertErr: errors.New("disk full")}
-	agent := newTestAgent()
+	agent := newDurableTestAgent(t)
 	agent.ms = newMessageStore(store, 1, nil)
 	agent.activeBackgroundSnapshot = "\n\n# Active background work\nprocess bgp_1"
 	client := &loopScriptLLM{responses: []*llmwire.Response{textResponse("must not run")}}
-	agent.llmClient = client
+	setLoopModel(agent, client)
 	runner := &loopRunner{agent: agent, result: &loopResult{}, log: zap.NewNop()}
 
 	err := runner.callLLM(t.Context())
@@ -536,8 +547,8 @@ func TestRunLoopStopsExactlyAtHardCeiling(t *testing.T) {
 		return toolCallResponse(fmt.Sprintf("tc_%d", call), "read"), nil
 	}}
 
-	agent := newTestAgent(&stubTool{id: "read", result: "content"})
-	agent.llmClient = llmClient
+	agent := newDurableTestAgent(t, &stubTool{id: "read", result: "content"})
+	setLoopModel(agent, llmClient)
 
 	result, err := runTestLoop(t.Context(), t, agent, loopOptions{}, iterationGuard(hardIterationCeiling))
 
@@ -549,8 +560,8 @@ func TestRunLoopStopsExactlyAtHardCeiling(t *testing.T) {
 func TestRunLoopCancelledContextStopsBeforeFirstCall(t *testing.T) {
 	llmClient := &loopScriptLLM{responses: []*llmwire.Response{textResponse("never")}}
 
-	agent := newTestAgent()
-	agent.llmClient = llmClient
+	agent := newDurableTestAgent(t)
+	setLoopModel(agent, llmClient)
 
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
@@ -570,8 +581,8 @@ func TestRunLoopAnnouncesAssistantTextBeforeExecutingItsTools(t *testing.T) {
 	}}
 	notifier := &loopNotifier{}
 
-	agent := newTestAgent(&stubTool{id: "read", result: "content"})
-	agent.llmClient = llmClient
+	agent := newDurableTestAgent(t, &stubTool{id: "read", result: "content"})
+	setLoopModel(agent, llmClient)
 
 	result, err := runTestLoop(t.Context(), t, agent, loopOptions{Notify: notifier.fn}, iterationGuard(5))
 
@@ -587,8 +598,8 @@ func TestRunLoopSilentToolTurnNotifiesNothing(t *testing.T) {
 	}}
 	notifier := &loopNotifier{}
 
-	agent := newTestAgent(&stubTool{id: "read", result: "content"})
-	agent.llmClient = llmClient
+	agent := newDurableTestAgent(t, &stubTool{id: "read", result: "content"})
+	setLoopModel(agent, llmClient)
 
 	_, err := runTestLoop(t.Context(), t, agent, loopOptions{Notify: notifier.fn}, iterationGuard(5))
 
@@ -600,8 +611,8 @@ func TestRunLoopEmptyResponseLadder(t *testing.T) {
 	llmClient := &loopScriptLLM{responses: []*llmwire.Response{{}}}
 	notifier := &loopNotifier{}
 
-	agent := newTestAgent()
-	agent.llmClient = llmClient
+	agent := newDurableTestAgent(t)
+	setLoopModel(agent, llmClient)
 
 	result, err := runTestLoop(t.Context(), t, agent, loopOptions{Notify: notifier.fn}, iterationGuard(20))
 
@@ -642,8 +653,8 @@ func TestRunLoopEmptyResponseStreakResetByProductiveTurn(t *testing.T) {
 		}
 	}}
 
-	agent := newTestAgent(&stubTool{id: "read", result: "content"})
-	agent.llmClient = llmClient
+	agent := newDurableTestAgent(t, &stubTool{id: "read", result: "content"})
+	setLoopModel(agent, llmClient)
 
 	result, err := runTestLoop(t.Context(), t, agent, loopOptions{}, iterationGuard(10))
 
@@ -660,7 +671,7 @@ func TestRunLoopEmptyResponseNudgeRecordFailureAborts(t *testing.T) {
 	_, err := db.ExecContext(t.Context(), `CREATE TRIGGER fail_response BEFORE INSERT ON messages
  WHEN NEW.role = 'user' BEGIN SELECT RAISE(ABORT, 'disk full'); END`)
 	require.NoError(t, err)
-	agent.llmClient = &loopScriptLLM{responses: []*llmwire.Response{{}}}
+	setLoopModel(agent, &loopScriptLLM{responses: []*llmwire.Response{{}}})
 	result, err := runTestLoop(t.Context(), t, agent, loopOptions{}, iterationGuard(20))
 	require.ErrorContains(t, err, "disk full")
 	assert.Equal(t, 1, result.Iterations)
@@ -672,8 +683,8 @@ func TestRunLoopEmptyResponseNudgeRecordFailureAborts(t *testing.T) {
 func TestRunLoopSuspendedToolEndsRunWithoutError(t *testing.T) {
 	llmClient := &loopScriptLLM{responses: []*llmwire.Response{toolCallResponse("tc_1", "sleep")}}
 
-	agent := newTestAgent(&stubTool{id: "sleep", err: tool.ErrSuspend})
-	agent.llmClient = llmClient
+	agent := newDurableTestAgent(t, &stubTool{id: "sleep", err: tool.ErrSuspend})
+	setLoopModel(agent, llmClient)
 
 	result, err := runTestLoop(t.Context(), t, agent, loopOptions{}, iterationGuard(5))
 
@@ -689,7 +700,7 @@ func TestRunLoopPendingToolRecordFailureAborts(t *testing.T) {
 	_, err := db.ExecContext(t.Context(), `CREATE TRIGGER fail_tool BEFORE INSERT ON messages
  WHEN NEW.role = 'tool' BEGIN SELECT RAISE(ABORT, 'disk full'); END`)
 	require.NoError(t, err)
-	agent.llmClient = &loopScriptLLM{responses: []*llmwire.Response{toolCallResponse("tc_1", "read")}}
+	setLoopModel(agent, &loopScriptLLM{responses: []*llmwire.Response{toolCallResponse("tc_1", "read")}})
 	result, err := runTestLoop(t.Context(), t, agent, loopOptions{}, iterationGuard(5))
 	require.ErrorContains(t, err, "execute pending tools")
 	require.ErrorContains(t, result.Error, "disk full")
@@ -701,11 +712,11 @@ func TestRunLoopPendingToolRecordFailureAborts(t *testing.T) {
 func TestRunLoopThresholdCompactsWithoutAClearEvent(t *testing.T) {
 	notifier := &loopNotifier{}
 
-	agent := newTestAgent()
-	agent.llmClient = summarizingLLM()
+	agent := newDurableTestAgent(t)
+	setLoopModel(agent, summarizingLLM())
 	agent.ms.setMessages(loopRounds(70, 4000))
 
-	require.True(t, agent.shouldCompact(compactionThreshold))
+	require.True(t, agent.contexts.(*checkpointOwner).shouldCompact(compactionThreshold))
 
 	_, err := runTestLoop(t.Context(), t, agent, loopOptions{Notify: notifier.fn}, iterationGuard(5))
 	require.NoError(t, err)
@@ -718,8 +729,8 @@ func TestRunLoopThresholdCompactsWithoutAClearEvent(t *testing.T) {
 func TestRunLoopExplicitCompactionForcesSummarization(t *testing.T) {
 	notifier := &loopNotifier{}
 
-	agent := newTestAgent()
-	agent.llmClient = summarizingLLM()
+	agent := newDurableTestAgent(t)
+	setLoopModel(agent, summarizingLLM())
 	agent.ms.setMessages(loopRounds(70, 4000))
 	agent.RequestCompaction()
 
@@ -735,8 +746,8 @@ func TestRunLoopExplicitCompactionForcesSummarization(t *testing.T) {
 func TestRunLoopCompactionFailureIsReportedAndSurvived(t *testing.T) {
 	notifier := &loopNotifier{}
 
-	agent := newTestAgent()
-	agent.llmClient = summarizingLLM()
+	agent := newDurableTestAgent(t)
+	setLoopModel(agent, summarizingLLM())
 	agent.ms.setMessages(loopRounds(70, 4000))
 	prepareDurableLoop(t, agent)
 	agent.ms.store = &compactionFailureStore{RuntimeStore: agent.store}
@@ -754,8 +765,8 @@ func TestRunLoopCompactionWithNothingToSummarizeStaysSilent(t *testing.T) {
 	llmClient := &loopScriptLLM{responses: []*llmwire.Response{textResponse("done")}}
 	notifier := &loopNotifier{}
 
-	agent := newTestAgent()
-	agent.llmClient = llmClient
+	agent := newDurableTestAgent(t)
+	setLoopModel(agent, llmClient)
 	agent.ms.setMessages([]llmwire.Message{{Role: llmwire.RoleUser, Content: strings.Repeat("x", 400000)}})
 
 	_, err := runTestLoop(t.Context(), t, agent, loopOptions{Notify: notifier.fn}, iterationGuard(5))
@@ -785,12 +796,12 @@ func TestRunLoopForcedTextOnlyWithholdsToolsFromModel(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			llmClient := &loopScriptLLM{responses: []*llmwire.Response{textResponse("done")}}
 
-			agent := newTestAgent(
+			agent := newDurableTestAgent(t,
 				&stubTool{id: "read", result: "a"},
 				&stubTool{id: "grep", result: "b"},
 			)
-			agent.llmClient = llmClient
-			agent.loopDetector.forceTextOnly = tt.forceTextOnly
+			setLoopModel(agent, llmClient)
+			agent.turns.(*toolTurnExecutor).detector.forceTextOnly = tt.forceTextOnly
 
 			_, err := runTestLoop(t.Context(), t, agent, loopOptions{}, iterationGuard(5))
 			require.NoError(t, err)
@@ -815,9 +826,9 @@ func TestRunLoopForcedTextOnlyClearedOnlyByTextResponse(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			llmClient := &loopScriptLLM{responses: []*llmwire.Response{tt.response}}
 
-			agent := newTestAgent(&stubTool{id: "read", result: "a"})
-			agent.llmClient = llmClient
-			agent.loopDetector.forceTextOnly = true
+			agent := newDurableTestAgent(t, &stubTool{id: "read", result: "a"})
+			setLoopModel(agent, llmClient)
+			agent.turns.(*toolTurnExecutor).detector.forceTextOnly = true
 
 			// The guard bounds the tool-call case; the text case ends by itself
 			// before the guard trips.
@@ -828,7 +839,7 @@ func TestRunLoopForcedTextOnlyClearedOnlyByTextResponse(t *testing.T) {
 				require.NoError(t, err)
 			}
 
-			assert.Equal(t, tt.want, agent.loopDetector.forceTextOnly)
+			assert.Equal(t, tt.want, agent.turns.(*toolTurnExecutor).detector.forceTextOnly)
 		})
 	}
 }
@@ -838,8 +849,8 @@ func TestRunLoopLLMErrorSurfacesToCallerAndUser(t *testing.T) {
 	llmClient := &loopScriptLLM{err: boom}
 	notifier := &loopNotifier{}
 
-	agent := newTestAgent()
-	agent.llmClient = llmClient
+	agent := newDurableTestAgent(t)
+	setLoopModel(agent, llmClient)
 
 	result, err := runTestLoop(t.Context(), t, agent, loopOptions{Notify: notifier.fn}, iterationGuard(5))
 
@@ -861,8 +872,8 @@ func TestRunLoopCallbackSeesNumberedIterationAndToolCalls(t *testing.T) {
 		return textResponse("done"), nil
 	}}
 
-	agent := newTestAgent(&stubTool{id: "read", result: "content"})
-	agent.llmClient = llmClient
+	agent := newDurableTestAgent(t, &stubTool{id: "read", result: "content"})
+	setLoopModel(agent, llmClient)
 
 	var (
 		iterations []int
@@ -889,8 +900,8 @@ func TestRunLoopCallbackSeesNumberedIterationAndToolCalls(t *testing.T) {
 func TestRunLoopCallbackFailureAbortsBeforeRecordingTurn(t *testing.T) {
 	llmClient := &loopScriptLLM{responses: []*llmwire.Response{textResponse("done")}}
 
-	agent := newTestAgent()
-	agent.llmClient = llmClient
+	agent := newDurableTestAgent(t)
+	setLoopModel(agent, llmClient)
 
 	cbErr := errors.New("checkpoint failed")
 	cb := func(int, *llmwire.Response, []llmwire.ToolCall, bool) error { return cbErr }
@@ -909,7 +920,7 @@ func TestRunLoopAssistantRecordFailureAborts(t *testing.T) {
 	_, err := db.ExecContext(t.Context(), `CREATE TRIGGER fail_response BEFORE INSERT ON messages
  WHEN NEW.role = 'assistant' BEGIN SELECT RAISE(ABORT, 'disk full'); END`)
 	require.NoError(t, err)
-	agent.llmClient = &loopScriptLLM{responses: []*llmwire.Response{textResponse("done")}}
+	setLoopModel(agent, &loopScriptLLM{responses: []*llmwire.Response{textResponse("done")}})
 	result, err := runTestLoop(t.Context(), t, agent, loopOptions{}, iterationGuard(20))
 	require.ErrorContains(t, err, "disk full")
 	assert.Equal(t, 1, result.Iterations)
@@ -932,7 +943,7 @@ func finalizingRunner(ctx context.Context, agent *svc, opts loopOptions) *loopRu
 func TestRunLoopFinalizeRecoversLastAssistantText(t *testing.T) {
 	notifier := &loopNotifier{}
 
-	agent := newTestAgent()
+	agent := newDurableTestAgent(t)
 	agent.ms.setMessages([]llmwire.Message{
 		{Role: llmwire.RoleUser, Content: "task"},
 		{Role: llmwire.RoleAssistant, Content: "partial answer"},
@@ -961,7 +972,7 @@ func TestRunLoopFinalizeNotifyFailureIsLogged(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			notifier := &loopNotifier{err: tt.notifyErr}
 
-			agent := newTestAgent()
+			agent := newDurableTestAgent(t)
 			agent.ms.setMessages([]llmwire.Message{
 				{Role: llmwire.RoleUser, Content: "task"},
 				{Role: llmwire.RoleAssistant, Content: "partial answer"},
@@ -984,7 +995,7 @@ func TestRunLoopFinalizeNotifyFailureIsLogged(t *testing.T) {
 func TestRunLoopFinalizeIgnoresBlankAssistantText(t *testing.T) {
 	notifier := &loopNotifier{}
 
-	agent := newTestAgent()
+	agent := newDurableTestAgent(t)
 	agent.ms.setMessages([]llmwire.Message{
 		{Role: llmwire.RoleUser, Content: "task"},
 		{Role: llmwire.RoleAssistant, Content: "   "},
@@ -1007,8 +1018,8 @@ func TestRunLoopIterationStartIsOneBased(t *testing.T) {
 		return textResponse("done"), nil
 	}}
 
-	agent := newTestAgent(&stubTool{id: "read", result: "content"})
-	agent.llmClient = llmClient
+	agent := newDurableTestAgent(t, &stubTool{id: "read", result: "content"})
+	setLoopModel(agent, llmClient)
 
 	core, logs := observer.New(zapcore.InfoLevel)
 	ctx := logger.ToContext(t.Context(), zap.New(core))
@@ -1029,10 +1040,10 @@ func TestRunLoopIterationStartIsOneBased(t *testing.T) {
 
 func TestRunLoop_AsyncInputArrivingDuringModelCallWaitsForNextSafeBoundary(t *testing.T) {
 	read := &countingTool{id: "read"}
-	agent := newTestAgent(read)
+	agent := newDurableTestAgent(t, read)
 	boundary := &loopInputBoundary{agent: agent}
 	agent.boundary = boundary
-	agent.llmClient = &loopScriptLLM{onCall: func(call int, messages []llmwire.Message) (*llmwire.Response, error) {
+	setLoopModel(agent, &loopScriptLLM{onCall: func(call int, messages []llmwire.Message) (*llmwire.Response, error) {
 		switch call {
 		case 1:
 			assert.False(t, hasMessageContent(messages, "<process_completion>"))
@@ -1055,7 +1066,7 @@ func TestRunLoop_AsyncInputArrivingDuringModelCallWaitsForNextSafeBoundary(t *te
 		default:
 			return nil, fmt.Errorf("unexpected model call %d", call)
 		}
-	}}
+	}})
 
 	result, err := runTestLoop(t.Context(), t, agent, loopOptions{}, iterationGuard(5))
 	require.NoError(t, err)
@@ -1083,8 +1094,8 @@ func TestRunLoopReloadFailureIsLoggedAndSurvived(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			llmClient := &loopScriptLLM{responses: []*llmwire.Response{textResponse("done")}}
 
-			agent := newTestAgent()
-			agent.llmClient = llmClient
+			agent := newDurableTestAgent(t)
+			setLoopModel(agent, llmClient)
 			prepareDurableLoop(t, agent)
 			agent.ms.store = &firstReloadFailureStore{RuntimeStore: agent.store, err: tt.loadErr}
 
@@ -1119,8 +1130,8 @@ func TestRunLoopNotifyFailureIsLoggedNotFatal(t *testing.T) {
 			llmClient := &loopScriptLLM{responses: []*llmwire.Response{textResponse("done")}}
 			notifier := &loopNotifier{err: tt.notifyErr}
 
-			agent := newTestAgent()
-			agent.llmClient = llmClient
+			agent := newDurableTestAgent(t)
+			setLoopModel(agent, llmClient)
 
 			core, logs := observer.New(zapcore.WarnLevel)
 			ctx := logger.ToContext(t.Context(), zap.New(core))
@@ -1152,8 +1163,8 @@ func TestRunLoopLogsIterationCostOnlyWhenCharged(t *testing.T) {
 				textResponse("confirmed"),
 			}}
 
-			agent := newTestAgent()
-			agent.llmClient = llmClient
+			agent := newDurableTestAgent(t)
+			setLoopModel(agent, llmClient)
 
 			core, logs := observer.New(zapcore.InfoLevel)
 			ctx := logger.ToContext(t.Context(), zap.New(core))

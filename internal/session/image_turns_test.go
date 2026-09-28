@@ -62,6 +62,13 @@ func TestImageTurns_ReadThroughDriverProjection(t *testing.T) {
 	s, _ := newImagePlumbAgent(t)
 	s.registry = stack.Registry
 	s.ms = newMessageStore(store, sess.ID, nil)
+	s.turns = newToolTurns(s.registry, s.models, s.ms, testProgressBoundary(s.boundary))
+	s.contexts = newCheckpointOwner(
+		s.ms, s.models, s.prompt, s.turns, s.transcript(),
+		s.dispositions, s.budgetGate, s.outputStore, s.boundary,
+		&s.stamper, nil, nil,
+		checkpointOptions{id: s.id, outputEnabled: s.outputEnabled, agentsMD: s.agentsMD},
+	)
 
 	// The synthetic upload turn is plain text everywhere — no refs exist yet.
 	require.NoError(t, s.ms.addUserMessage(ctx,
@@ -73,7 +80,7 @@ func TestImageTurns_ReadThroughDriverProjection(t *testing.T) {
 		ctx,
 		&llmwire.Response{Text: "", ToolCalls: calls},
 	))
-	require.NoError(t, executeToolCalls(ctx, s, calls))
+	require.NoError(t, executeTestToolCalls(ctx, s.turns, calls))
 
 	require.NoError(t, s.ms.reloadMessages(ctx))
 	msgs := s.ms.getMessages()

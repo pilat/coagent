@@ -49,6 +49,8 @@ type configHarness struct {
 	tools     map[string]tool.Tool
 	restarts  int
 	config    string
+	applier   configapply.Service
+	ops       configops.Service
 }
 
 func newConfigHarness(t *testing.T) *configHarness {
@@ -63,7 +65,9 @@ func newConfigHarness(t *testing.T) *configHarness {
 	require.NoError(t, os.WriteFile(secretsPath, []byte(toolSecrets), 0o600))
 
 	h := &configHarness{config: configPath}
-	mgr, factory, store := newTestManager(t)
+	h.ops = configops.New(configPath, secretsPath)
+	h.applier = configapply.New(h.ops, func() { h.restarts++ })
+	mgr, factory, store := newTestManagerWithApplier(t, h.applier)
 	sessions, ok := mgr.sessionStore.(sessionstore.Store)
 	require.True(t, ok)
 	h.sessions = sessions
@@ -72,11 +76,10 @@ func newConfigHarness(t *testing.T) *configHarness {
 	projectID, err := store.GetOrCreateProject(context.Background(), t.TempDir())
 	require.NoError(t, err)
 	h.projectID = projectID
-	mgr.applier = configapply.New(configops.New(configPath, secretsPath), func() { h.restarts++ })
 
 	h.mgr = mgr
 	h.sessionID = h.liveSession(t)
-	h.tools = map[string]tool.Tool{tool.IDConfigEdit: newConfigEditTool(mgr, h.sessionID)}
+	h.tools = map[string]tool.Tool{tool.IDConfigEdit: mgr.externalCalls.ConfigEditTool(h.sessionID)}
 
 	return h
 }
@@ -162,16 +165,20 @@ func (h *configHarness) recordCall(t *testing.T, callID, toolName string) {
 func (h *configHarness) restart(t *testing.T, callID, toolName string) {
 	t.Helper()
 
-	h.mgr.applier.ReleaseApply()
-	h.mgr.staged.resolve(h.sessionID, callID)
-
-	_, err := h.sessions.InsertMessage(context.Background(), h.sessionID, &transcript.Message{
-		Role:       llmwire.RoleTool,
-		ToolCallID: callID,
-		ToolName:   toolName,
-		Content:    "Config applied.",
+	h.applier.ReleaseApply()
+	ctx := context.Background()
+	owners, err := h.mgr.externalCalls.Pending(ctx, h.sessionID)
+	require.NoError(t, err)
+	transcript, err := session.OpenTranscript(ctx, h.sessions, nil, h.sessionID, owners)
+	require.NoError(t, err)
+	_, err = h.mgr.externalCalls.Resolve(ctx, h.sessionID, transcript, pendingCallResultInput{
+		Call: session.PendingToolCall{ID: callID, Name: toolName}, Content: "Config applied.",
 	})
 	require.NoError(t, err)
+	marker, err := h.ops.LoadPending()
+	require.NoError(t, err)
+	require.NotNil(t, marker)
+	require.NoError(t, h.ops.ClearPending(*marker))
 }
 
 func (h *configHarness) configBytes(t *testing.T) string {
@@ -191,15 +198,19 @@ func TestConfigTool_SuccessStagesAndSuspends(t *testing.T) {
 	require.ErrorIs(t, h.grantedCall(t, "c1", configHarnessCandidate), tool.ErrSuspend)
 
 	assert.Equal(t, toolConfig, h.configBytes(t), "nothing is written by the tool itself")
-	assert.True(t, h.mgr.staged.has(h.sessionID))
-	assert.Equal(t, map[string]string{"c1": tool.IDConfigEdit}, h.mgr.staged.forSession(h.sessionID))
+	assert.NotEmpty(t, pendingCallsOf(t, h.mgr.externalCalls, h.sessionID))
+	assert.Equal(t, map[string]string{"c1": tool.IDConfigEdit}, pendingCallsOf(t, h.mgr.externalCalls, h.sessionID))
 	assert.Equal(t, 0, h.restarts)
 
-	h.mgr.runStagedApply(context.Background(), h.sessionID)
+	h.mgr.externalCalls.Apply(context.Background(), h.sessionID, func() bool { return false })
 
 	assert.Equal(t, 1, h.restarts, "the apply asks the daemon to come back")
 	assert.Contains(t, h.configBytes(t), "id: claude-opus-5\n      provider: work\n    - id: claude-sonnet-5")
-	assert.True(t, h.mgr.staged.has(h.sessionID), "the call stays open until its verdict arrives")
+	assert.NotEmpty(
+		t,
+		pendingCallsOf(t, h.mgr.externalCalls, h.sessionID),
+		"the call stays open until its verdict arrives",
+	)
 }
 
 // Guard violations are ordinary tool errors: nothing staged, no suspend, no
@@ -231,7 +242,7 @@ func TestConfigTool_GuardViolationsAreImmediateErrors(t *testing.T) {
 		assert.Contains(t, err.Error(), "document is required")
 	})
 
-	assert.False(t, h.mgr.staged.has(h.sessionID))
+	assert.Empty(t, pendingCallsOf(t, h.mgr.externalCalls, h.sessionID))
 	assert.Equal(t, 0, h.restarts)
 	assert.Equal(t, toolConfig, h.configBytes(t))
 }
@@ -243,8 +254,8 @@ func TestRunStagedApply_HandsOverExactlyOnce(t *testing.T) {
 
 	require.ErrorIs(t, h.grantedCall(t, "c1", configHarnessCandidate), tool.ErrSuspend)
 
-	h.mgr.runStagedApply(context.Background(), h.sessionID)
-	h.mgr.runStagedApply(context.Background(), h.sessionID)
+	h.mgr.externalCalls.Apply(context.Background(), h.sessionID, func() bool { return false })
+	h.mgr.externalCalls.Apply(context.Background(), h.sessionID, func() bool { return false })
 
 	assert.Equal(t, 1, h.restarts, "the second pass finds nothing to apply")
 }
@@ -256,14 +267,14 @@ func TestConfigTool_TwoAppliesInSequence(t *testing.T) {
 	h := newConfigHarness(t)
 
 	require.ErrorIs(t, h.grantedCall(t, "c1", configHarnessCandidate), tool.ErrSuspend)
-	h.mgr.runStagedApply(ctx, h.sessionID)
+	h.mgr.externalCalls.Apply(ctx, h.sessionID, func() bool { return false })
 
 	// The daemon comes back and delivers the verdict.
 	h.restart(t, "c1", tool.IDConfigEdit)
-	assert.False(t, h.mgr.staged.has(h.sessionID))
+	assert.Empty(t, pendingCallsOf(t, h.mgr.externalCalls, h.sessionID))
 
 	require.ErrorIs(t, h.grantedCall(t, "c2", toolConfig), tool.ErrSuspend)
-	h.mgr.runStagedApply(ctx, h.sessionID)
+	h.mgr.externalCalls.Apply(ctx, h.sessionID, func() bool { return false })
 
 	assert.Equal(t, 2, h.restarts)
 	assert.Contains(t, h.configBytes(t), "id: claude-sonnet-5\n      provider: work\n    - id: claude-opus-5")
@@ -347,9 +358,9 @@ func TestConfigTool_RefusesASecondApplyInTheSameTurn(t *testing.T) {
 	require.NotErrorIs(t, err, tool.ErrSuspend, "a refused stage must not suspend a second call")
 	assert.Contains(t, err.Error(), "one change at a time")
 
-	assert.Equal(t, map[string]string{"c1": tool.IDConfigEdit}, h.mgr.staged.forSession(h.sessionID))
+	assert.Equal(t, map[string]string{"c1": tool.IDConfigEdit}, pendingCallsOf(t, h.mgr.externalCalls, h.sessionID))
 
-	h.mgr.runStagedApply(context.Background(), h.sessionID)
+	h.mgr.externalCalls.Apply(context.Background(), h.sessionID, func() bool { return false })
 	assert.Equal(t, 1, h.restarts)
 }
 
@@ -359,19 +370,18 @@ func TestConfigTool_RefusesASecondApplyInTheSameTurn(t *testing.T) {
 func TestStagedCalls_ApplySlotIsDaemonWide(t *testing.T) {
 	h := newConfigHarness(t)
 
-	assert.True(t, h.mgr.stageApply(1, "a", tool.IDConfigEdit, &configops.Staged{}))
-	assert.False(t, h.mgr.stageApply(1, "b", tool.IDConfigEdit, &configops.Staged{}))
-	assert.False(t, h.mgr.stageApply(2, "a", tool.IDConfigEdit, &configops.Staged{}),
+	require.ErrorIs(t, h.grantedCall(t, "a", configHarnessCandidate), tool.ErrSuspend)
+	assert.False(t, h.mgr.externalCalls.StageApply(1, "b", tool.IDConfigEdit, &configops.Staged{}))
+	assert.False(t, h.mgr.externalCalls.StageApply(2, "a", tool.IDConfigEdit, &configops.Staged{}),
 		"another session writes the same config file")
 
-	_, _, ok := h.mgr.staged.takePendingApply(1)
-	require.True(t, ok)
+	h.mgr.externalCalls.Apply(context.Background(), h.sessionID, func() bool { return false })
 
-	assert.False(t, h.mgr.stageApply(1, "b", tool.IDConfigEdit, &configops.Staged{}),
+	assert.False(t, h.mgr.externalCalls.StageApply(1, "b", tool.IDConfigEdit, &configops.Staged{}),
 		"handing the change to the pipeline does not free the slot — only a commit that failed does")
 
-	h.mgr.applier.ReleaseApply()
-	assert.True(t, h.mgr.stageApply(1, "b", tool.IDConfigEdit, &configops.Staged{}))
+	h.applier.ReleaseApply()
+	assert.True(t, h.mgr.externalCalls.StageApply(1, "b", tool.IDConfigEdit, &configops.Staged{}))
 }
 
 // panicSession is a session whose loop dies the way a bug in it would: the
@@ -398,7 +408,7 @@ func TestRunSession_ALoopThatDiesAfterClaimingGivesTheApplySlotBack(t *testing.T
 	defer h.mgr.Shutdown(5 * time.Second)
 
 	sessionID := h.liveSession(t)
-	tools := map[string]tool.Tool{tool.IDConfigEdit: newConfigEditTool(h.mgr, sessionID)}
+	tools := map[string]tool.Tool{tool.IDConfigEdit: h.mgr.externalCalls.ConfigEditTool(sessionID)}
 
 	_, err := tools[tool.IDConfigEdit].Execute(
 		grantedCall(ctx, sessionID, "c1"), configEditArgs(configHarnessCandidate),
@@ -409,10 +419,10 @@ func TestRunSession_ALoopThatDiesAfterClaimingGivesTheApplySlotBack(t *testing.T
 	require.NoError(t, h.mgr.SendToSession(ctx, sessionID, "carry on"))
 
 	require.Eventually(t, func() bool {
-		return !h.mgr.staged.has(sessionID)
+		return len(pendingCallsOf(t, h.mgr.externalCalls, sessionID)) == 0
 	}, 5*time.Second, 10*time.Millisecond, "the call the dead loop owed is never answered")
 
-	assert.True(t, h.mgr.stageApply(sessionID, "c2", tool.IDConfigEdit, &configops.Staged{}),
+	assert.True(t, h.mgr.externalCalls.StageApply(sessionID, "c2", tool.IDConfigEdit, &configops.Staged{}),
 		"the apply slot was never given back")
 	assert.Equal(t, toolConfig, h.configBytes(t), "a change that died before the commit writes nothing")
 }
@@ -424,7 +434,7 @@ func TestConfigTool_WholeDocumentReachesTheConfig(t *testing.T) {
 
 	document := toolConfig + "    - id: claude-haiku-4-5\n      provider: work\n"
 	require.ErrorIs(t, h.grantedCall(t, "c1", document), tool.ErrSuspend)
-	h.mgr.runStagedApply(context.Background(), h.sessionID)
+	h.mgr.externalCalls.Apply(context.Background(), h.sessionID, func() bool { return false })
 
 	assert.Contains(t, h.configBytes(t), "id: claude-haiku-4-5")
 }
@@ -433,10 +443,10 @@ func TestConfigTool_DeliversOneVerdictAfterRestart(t *testing.T) {
 	h := newConfigHarness(t)
 
 	require.ErrorIs(t, h.grantedCall(t, "tags-1", configHarnessCandidate), tool.ErrSuspend)
-	h.mgr.runStagedApply(context.Background(), h.sessionID)
+	h.mgr.externalCalls.Apply(context.Background(), h.sessionID, func() bool { return false })
 	h.restart(t, "tags-1", tool.IDConfigEdit)
 
-	assert.False(t, h.mgr.staged.has(h.sessionID))
+	assert.Empty(t, pendingCallsOf(t, h.mgr.externalCalls, h.sessionID))
 	assert.Equal(t, 1, h.restarts)
 	messages, err := h.sessions.LoadActiveMessages(context.Background(), h.sessionID)
 	require.NoError(t, err)

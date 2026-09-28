@@ -6,7 +6,6 @@ import "context"
 // response transactions used by one live agent loop.
 type AgentRuntimeStore interface {
 	RuntimeStore
-	BudgetResponseStore
 	BudgetCompactionStore
 	ResponseDispositionStore
 	FileReadStore

@@ -172,7 +172,7 @@ func newSkillScenarioHarness(
 	t.Helper()
 
 	h := newSubagentHarnessOnDBWithProjectConfig(
-		t, filepath.Join(t.TempDir(), "test.db"), respond, nil, nil,
+		t, filepath.Join(t.TempDir(), "test.db"), respond, nil, nil, nil,
 	)
 
 	var workDir string

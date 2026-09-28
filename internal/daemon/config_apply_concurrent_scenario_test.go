@@ -82,12 +82,20 @@ func newApplyDaemonWith(
 ) *applyDaemon {
 	t.Helper()
 
-	h := newSubagentHarnessOnDB(t, dbPath, respond, nil)
 	ops := configops.New(filepath.Join(configDir, "config.yaml"), filepath.Join(configDir, "secrets"))
+	return newApplyDaemonWithOps(t, dbPath, ops, respond)
+}
+
+func newApplyDaemonWithOps(
+	t *testing.T,
+	dbPath string,
+	ops configops.Service,
+	respond func(string, []llmwire.Message) *llmwire.Response,
+) *applyDaemon {
+	t.Helper()
 	restarts := make(chan struct{}, 4)
-
-	h.mgr.applier = configapply.New(ops, func() { restarts <- struct{}{} })
-
+	applier := configapply.New(ops, func() { restarts <- struct{}{} })
+	h := newSubagentHarnessOnDBWithProjectConfig(t, dbPath, respond, nil, nil, applier)
 	return &applyDaemon{subagentHarness: h, ops: ops, restarts: restarts}
 }
 

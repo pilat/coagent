@@ -13,6 +13,7 @@ import (
 	"github.com/pilat/coagent/internal/llmwire"
 	"github.com/pilat/coagent/internal/migrate"
 	"github.com/pilat/coagent/internal/sessionstore"
+	"github.com/pilat/coagent/internal/transcript"
 )
 
 func newFinalOutputStore(t *testing.T) (*sql.DB, sessionstore.Store, int64) {
@@ -47,21 +48,35 @@ func TestMessageStore_FinalPromotionTargetsLastAssistantMessage(t *testing.T) {
 	db, store, sessionID := newFinalOutputStore(t)
 	ms := newMessageStore(store, sessionID, store)
 
-	intermediate := &llmwire.Response{
-		Text: "reading the file first",
-		ToolCalls: []llmwire.ToolCall{
-			{ID: "call-1", Name: "read", Arguments: []byte(`{}`)},
-		},
-	}
-	require.NoError(t, ms.addAssistantMessageOutput(
-		ctx, intermediate, sessionstore.OutputMessageReplaceable, intermediate.Text, false,
-	))
+	intermediate, err := storedMessage(&llmwire.Message{
+		Role: llmwire.RoleAssistant, Content: "reading the file first",
+		ToolCalls: []llmwire.ToolCall{{ID: "call-1", Name: "read", Arguments: []byte("{}")}},
+	})
+	require.NoError(t, err)
+	_, err = store.CommitAcceptedResponseDisposition(ctx, sessionstore.AcceptedResponseDisposition{
+		SessionID: sessionID, RootID: sessionID, Kind: sessionstore.ResponseDispositionToolCall,
+		Message:    intermediate,
+		OutputType: sessionstore.OutputMessageReplaceable, Output: "reading the file first",
+	})
+	require.NoError(t, err)
+	require.NoError(t, ms.reloadMessages(ctx))
 	require.NoError(t, ms.addToolResult(ctx, "call-1", "read", "file body"))
 
-	final := &llmwire.Response{Text: "the final answer"}
-	require.NoError(t, ms.addAssistantMessageOutput(
-		ctx, final, sessionstore.OutputMessagePersistent, "✅ the final answer", true,
-	))
+	candidate, err := store.CommitAcceptedResponseDisposition(ctx, sessionstore.AcceptedResponseDisposition{
+		SessionID: sessionID, RootID: sessionID, Kind: sessionstore.ResponseDispositionCandidate,
+		Message:             &transcript.Message{Role: llmwire.RoleAssistant, Content: "the final answer"},
+		Nudge:               &transcript.Message{Role: llmwire.RoleUser, Content: "Check completion"},
+		ManagerReplyPending: true,
+	})
+	require.NoError(t, err)
+	_, err = store.CommitAcceptedResponseDisposition(ctx, sessionstore.AcceptedResponseDisposition{
+		SessionID: sessionID, RootID: sessionID, Kind: sessionstore.ResponseDispositionConfirmed,
+		Message:             &transcript.Message{Role: llmwire.RoleAssistant, Content: "confirmed"},
+		ExpectedCandidateID: candidate.MessageID, ManagerReplyPending: true,
+		OutputType: sessionstore.OutputMessagePersistent, Output: "✅ the final answer",
+	})
+	require.NoError(t, err)
+	require.NoError(t, ms.reloadMessages(ctx))
 
 	lastID := ms.rowIDs[len(ms.rowIDs)-1]
 	require.NotZero(t, lastID)

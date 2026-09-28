@@ -151,8 +151,11 @@ which table a query happens to touch.
 A live session receives transcript/checkpoint persistence and atomic output
 persistence as separate contracts; manager output cannot be enabled without the
 latter. Every executable activation uses the same response-disposition contract
-for accepted attempts. Transcript-only call
-settlement has its own capability and constructs no model client or tool stack.
+for accepted attempts. Live tool execution and transcript-only call settlement
+share the runtime store's atomic result-set transaction even without presentation.
+Fresh results invalidate completion state; identical replay preserves newer
+state, and conflicting content, tool identity, failure or attachments is rejected.
+Transcript-only settlement constructs no model client or tool stack.
 Its in-memory model messages contain no database fields: a positional
 row-ID vector travels with the projection across factory resume and compaction,
 then keys durable replacement and idempotent final output.
@@ -328,7 +331,9 @@ process-output diagnostics available.
 ### Shutdown and restart
 
 Shutdown stops admission, drains or checkpoints work according to its durable
-state, stops managers and pooled resources, then closes stores. Startup recovery
+state, stops managers and pooled resources, then closes stores. Each agent loop
+cancels and joins its heartbeat worker before returning, including an in-flight
+callback; a replacement heartbeat generation cannot overlap that join. Startup recovery
 rebuilds runnable sessions from persisted rows and producer ledgers. Restart
 replays obligations, not decisions: a crash after candidate+nudge commit
 resumes the one owed confirmation without another nudge, a crash after
@@ -488,9 +493,16 @@ snapshots; the first model-bound input or an applied scheduled turn starts one.
 `/budget` grants one exact manager-user input authority to arm, replace or clear
 a one-shot root-tree cost/duration checkpoint, consuming the grant inside the
 same transaction as the mutation it authorizes. Model responses and successful
-compaction summaries commit usage, fire comparison, skipped returned-tool
-results and checkpoint intent in one session-store transaction. The daemon
-closes admission before a generation drains and parks; managed park workers are
+compaction summaries commit usage, fire comparison and checkpoint intent in one
+session-store transaction. Every accepted response observes its budget once,
+including outputless tool calls and empty stops. A crossing or already-fired
+budget commits non-execution results for returned tools and suppresses ordinary
+response effects; later candidate-validation failure rolls the whole transaction
+back ([ADR-0070](docs/adr/0070-accepted-responses-share-budget-observation.md)).
+After commit, the session hands a fired verdict to the park scheduler before
+reloading history; a failed post-commit read cannot replace parking with a
+session error.
+The daemon closes admission before a generation drains and parks; managed park workers are
 cancelled and joined at shutdown. Startup reconciles armed and half-parked
 generations before normal session recovery. The next ordinary model-bound root
 input atomically releases a fired checkpoint and resumes only the root.
@@ -513,8 +525,8 @@ host-authored input to the rejected attempt; later manager input supersedes an
 unfinished chain through durable inbox provenance rather than transcript text.
 
 For an accepted ordinary model attempt the same single-commit principle holds:
-the disposition transaction inserts the assistant row, advances the iteration,
-sets or clears the completion-check candidate, stamps the empty-stop streak,
+the sole disposition transaction inserts the assistant row, observes the budget,
+advances the iteration, sets or clears the completion-check candidate, stamps the empty-stop streak,
 captures post-disposition progress facts and renders the final footer from
 them database-free, then inserts the optional manager output. A confirmed
 check records the candidate's message id in a durable confirmed-answer column
@@ -832,6 +844,12 @@ per-task execution and SQLite transaction ownership. The daemon assembles
 session dependencies, routes session events, and owns project identity plus
 external integration callbacks. `managercontrol` implements the manager
 controller over that backend.
+Daemon's private manager-route owner serializes manager claims and replacement
+with publication cache updates. A replacement retains the ownership fence
+through clear notification and old-root retirement; the caller holds the tree
+fence and supplies retirement as a lifecycle effect. Publication takes only the
+cache lock, so retirement can publish without reacquiring ownership serialization
+([ADR-0069](docs/adr/0069-manager-routes-own-claims-and-replacement.md)).
 `admission` owns capacity decisions, `sessionbus` owns subscriber fan-out, and
 `sessionlifecycle` owns the supervisor's synchronized active-runner registry,
 admission pairing, tree and shutdown fences, two FIFO admission caches and joined
@@ -849,10 +867,34 @@ The subagent package owns the durable parent-child link ledger. The daemon must
 keep transient maps reconstructible and defer to stores for durable ordering/CAS
 decisions. Child-delivery transactions receive the canonical completion-check
 invalidator at construction and execute it within their existing transaction.
+Within daemon, the external-call coordinator owns staged producer claims,
+config handoff and activation settlement, the merged pending-call projection,
+and per-session transcript settlement. Daemon invokes those complete operations
+under its existing startup and tree-fence ordering. Temporary orphan adoption
+is released even when settlement fails; owed-result ownership survives failed
+delivery until the transcript accepts it. Config appliers are supplied once at
+construction ([ADR-0067](docs/adr/0067-external-call-coordinator-owns-settlement.md)).
 
 The session package owns prompt construction, model-tool iteration, context
 projection, loop detection and the sole tool-gating API. It receives a prepared
-tool stack rather than reaching into daemon state. Session-store owns immutable
+tool stack rather than reaching into daemon state. Its private model runtime
+owns the client lease, configuration/identity and generation-tagged context
+measurement. Replacement and close wait for active calls; close is terminal,
+so a replacement constructed after teardown is released without installation.
+Transcript reset and successful compaction invalidate the measurement; model
+operations never acquire the transcript lock
+([ADR-0066](docs/adr/0066-model-runtime-owns-client-and-measurement.md)).
+The private tool-turn owner holds loop detection and orders scheduling, result
+commit and progress. Activation is an input; suspension and committed grant
+consumption are explicit outcomes, including when a later progress effect fails.
+The loop retains acquisition and terminal settlement of that activation.
+The checkpoint owner holds compaction command, deferral and attempt state and
+performs selection, summarization, positioned replacement and output settlement
+over the same transcript primitive. The loop selects its safe execution point.
+A committed checkpoint adopts its identities and invalidates measurements even
+when progress publication fails; its budget verdict still parks execution
+([ADR-0068](docs/adr/0068-session-operations-own-complete-turns-and-checkpoints.md)).
+Session-store owns immutable
 messages, compaction metadata/replacement ordering and durable inbox sequencing.
 It also owns the `session_file_reads` ledger (`(session_id, path)` PK) storing
 `{mtime_unix_nano, size, hash}`; `write` checks it before overwriting existing files,

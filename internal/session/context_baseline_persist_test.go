@@ -27,11 +27,11 @@ func TestNewWithOptions_InstallsPersistedBaselineForTheSameModel(t *testing.T) {
 		Model: "test-model", PromptTokens: 150_000, MessageCount: 2,
 	})
 
-	base := s.loadContextBaseline()
+	base := s.models.snapshot().baseline
 	require.NotNil(t, base)
 	assert.Equal(t, 150_000, base.promptTokens)
 
-	size, estimated := s.projectContextSize()
+	size, estimated := s.contexts.projectContextSize()
 	assert.False(t, estimated, "the projection is measured")
 	assert.Equal(t, 150_000+estimateTokens(s.ms.getMessages()[2:]), size)
 }
@@ -43,9 +43,9 @@ func TestNewWithOptions_DiscardsPersistedBaselineForAnotherModel(t *testing.T) {
 		Model: "other-model", PromptTokens: 150_000, MessageCount: 2,
 	})
 
-	assert.Nil(t, s.loadContextBaseline())
+	assert.Nil(t, s.models.snapshot().baseline)
 
-	_, estimated := s.projectContextSize()
+	_, estimated := s.contexts.projectContextSize()
 	assert.True(t, estimated)
 }
 
@@ -94,17 +94,26 @@ func TestContextBaseline_CompactionClearsThePersistedRow(t *testing.T) {
 	s := newCompactionTestSvc(mockLLM)
 	s.store = store
 	s.id = sessionID
+	s.models = newModelRuntime(mockLLM, &config.Config{Model: "test-model"}, nil,
+		s.prompt, s.registry, nil, store, sessionID, sessionID)
 	s.ms = newMessageStore(store, sessionID, nil)
+	s.turns = newToolTurns(s.registry, s.models, s.ms, testProgressBoundary(s.boundary))
+	s.contexts = newCheckpointOwner(
+		s.ms, s.models, s.prompt, s.turns, s.transcript(),
+		s.dispositions, s.budgetGate, s.outputStore, s.boundary,
+		&s.stamper, nil, nil,
+		checkpointOptions{id: s.id, outputEnabled: s.outputEnabled, agentsMD: s.agentsMD},
+	)
 	s.ms.setMessages(oversizedTranscript(32_000))
 
-	s.recordContextBaseline(ctx, 150_000, 2, s.modelGeneration())
+	s.models.recordBaseline(ctx, 150_000, 2, s.models.snapshot().generation)
 
 	var model string
 	require.NoError(t, db.QueryRowContext(ctx,
 		`SELECT context_baseline_model FROM sessions WHERE id = ?`, sessionID).Scan(&model))
-	assert.Equal(t, s.model, model, "the measurement persists on the session row")
+	assert.Equal(t, s.models.snapshot().model, model, "the measurement persists on the session row")
 
-	ok, err := s.compact(ctx, nil)
+	ok, err := s.contexts.(*checkpointOwner).compact(ctx, nil)
 	require.NoError(t, err)
 	require.True(t, ok)
 

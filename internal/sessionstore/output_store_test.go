@@ -390,11 +390,22 @@ func TestOutputStore_AssistantMessageAndOutputCommitTogether(t *testing.T) {
 	record, err := store.CreateSession(ctx, projectID, "model", "", map[string]any{"manager_id": "alpha"})
 	require.NoError(t, err)
 
-	messageID, output, err := store.InsertAssistantMessageWithOutput(ctx, record.ID, &transcript.Message{
-		Role: "assistant", Content: "answer",
-	}, OutputMessagePersistent, "✅ answer", true)
+	candidate, err := store.CommitAcceptedResponseDisposition(ctx, AcceptedResponseDisposition{
+		SessionID: record.ID, RootID: record.ID, Iteration: 1,
+		Message: assistantStopMessage("answer"), Kind: ResponseDispositionCandidate,
+		Nudge: &transcript.Message{Role: "user", Content: "check completion"}, ManagerReplyPending: true,
+	})
 	require.NoError(t, err)
+	response, err := store.CommitAcceptedResponseDisposition(ctx, AcceptedResponseDisposition{
+		SessionID: record.ID, RootID: record.ID, Iteration: 2,
+		Message: assistantStopMessage("answer"), Kind: ResponseDispositionConfirmed,
+		ExpectedCandidateID: candidate.MessageID, ManagerReplyPending: true,
+		OutputType: OutputMessagePersistent, Output: "✅ answer",
+	})
+	require.NoError(t, err)
+	messageID, output := response.MessageID, response.Output
 	require.NotZero(t, messageID)
+	require.NotNil(t, output)
 	require.NotZero(t, output.OutputID)
 
 	var sessionID int64
@@ -403,6 +414,8 @@ func TestOutputStore_AssistantMessageAndOutputCommitTogether(t *testing.T) {
 		`SELECT session_id, source_key FROM session_outbox WHERE id = ?`, output.OutputID).Scan(&sessionID, &sourceKey))
 	assert.Equal(t, record.ID, sessionID)
 	assert.Equal(t, "message:"+strconv.FormatInt(messageID, 10)+":final", sourceKey)
+	_, replyPending, _ := readCompletionState(t, db, record.ID)
+	assert.False(t, replyPending, "a releasing final clears the manager reply obligation")
 }
 
 func TestOutputStore_HandleInputWithOutputCommitsTheCommandAndAnswerTogether(t *testing.T) {
@@ -677,14 +690,33 @@ func TestOutputStore_BootReconciliationEmitsCloseWithoutReplacement(t *testing.T
 
 func TestOutputStore_RejectsAssistantOutputAfterLifecycleFence(t *testing.T) {
 	ctx := context.Background()
-	store, _, projectID := newTestStore(t)
+	store, db, projectID := newTestStore(t)
 	record, err := store.CreateSession(ctx, projectID, "model", "", map[string]any{"manager_id": "telegram"})
 	require.NoError(t, err)
+	candidate, err := store.CommitAcceptedResponseDisposition(ctx, AcceptedResponseDisposition{
+		SessionID: record.ID, RootID: record.ID, Iteration: 1,
+		Message: assistantStopMessage("late answer"), Kind: ResponseDispositionCandidate,
+		Nudge: &transcript.Message{Role: "user", Content: "check completion"}, ManagerReplyPending: true,
+	})
+	require.NoError(t, err)
 	require.NoError(t, store.UpdateSessionStatus(ctx, record.ID, SessionStatusStopping))
-	_, _, err = store.InsertAssistantMessageWithOutput(ctx, record.ID, &transcript.Message{
-		Role: "assistant", Content: "late answer",
-	}, OutputMessagePersistent, "✅ late answer", true)
+	_, err = store.CommitAcceptedResponseDisposition(ctx, AcceptedResponseDisposition{
+		SessionID: record.ID, RootID: record.ID, Iteration: 2,
+		Message: assistantStopMessage("late answer"), Kind: ResponseDispositionConfirmed,
+		ExpectedCandidateID: candidate.MessageID, ManagerReplyPending: true,
+		OutputType: OutputMessagePersistent, Output: "✅ late answer",
+	})
 	require.ErrorContains(t, err, "cannot commit ordinary output")
+	var messages, outputs int
+	require.NoError(t, db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM messages WHERE session_id = ?`, record.ID).Scan(&messages))
+	require.NoError(t, db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM session_outbox WHERE session_id = ?`, record.ID).Scan(&outputs))
+	assert.Equal(t, 2, messages, "the rejected confirmation rolls its transcript row back")
+	assert.Zero(t, outputs)
+	check, replyPending, _ := readCompletionState(t, db, record.ID)
+	assert.Equal(t, candidate.MessageID, check.Int64, "the rejected confirmation preserves the candidate")
+	assert.True(t, replyPending)
 }
 
 func TestOutputStore_ResolvesManagerOwnedReplacementChain(t *testing.T) {

@@ -2,14 +2,10 @@ package daemon
 
 import (
 	"context"
-	"fmt"
 
 	"go.uber.org/zap"
 
 	"github.com/pilat/coagent/internal/logger"
-	"github.com/pilat/coagent/internal/session"
-	"github.com/pilat/coagent/internal/sessionstore"
-	"github.com/pilat/coagent/internal/tool"
 )
 
 // interruptedCallNotice is the typed failure a pending call is settled with
@@ -46,7 +42,7 @@ func (s *svc) resolveInterruptedCalls(ctx context.Context) {
 			continue
 		}
 
-		count, err := s.closeInterruptedCalls(ctx, rec)
+		count, err := s.externalCalls.CloseInterrupted(ctx, rec)
 		if err != nil {
 			log.Error("close_interrupted_calls", zap.Int64("session_id", rec.ID), zap.Error(err))
 
@@ -59,36 +55,4 @@ func (s *svc) resolveInterruptedCalls(ctx context.Context) {
 	if closed > 0 {
 		log.Warn("closed_interrupted_calls", zap.Int("calls", closed))
 	}
-}
-
-// closeInterruptedCalls resolves a session's pending in-loop calls.
-func (s *svc) closeInterruptedCalls(ctx context.Context, rec *sessionstore.SessionRecord) (int, error) {
-	pending, err := s.storedInterruptedCalls(ctx, rec.ID)
-	if err != nil || len(pending) == 0 {
-		return 0, err
-	}
-
-	sess, err := s.openTranscript(ctx, rec.ID)
-	if err != nil {
-		return 0, fmt.Errorf("open session %d to close interrupted calls: %w", rec.ID, err)
-	}
-
-	if err := sess.ResolveInterruptedCalls(ctx, pending, interruptedCallNotice); err != nil {
-		return 0, fmt.Errorf("close interrupted calls in session %d: %w", rec.ID, err)
-	}
-
-	return len(pending), nil
-}
-
-// storedInterruptedCalls is a session's pending in-loop calls read from the
-// durable transcript — everything the loop would otherwise re-execute.
-func (s *svc) storedInterruptedCalls(ctx context.Context, sessionID int64) ([]session.PendingToolCall, error) {
-	stored, err := s.sessionStore.LoadActiveMessages(ctx, sessionID)
-	if err != nil {
-		return nil, fmt.Errorf("load transcript of session %d: %w", sessionID, err)
-	}
-
-	return unresolvedStoredCalls(stored, func(name string) bool {
-		return !tool.IsExternalCall(name)
-	})
 }

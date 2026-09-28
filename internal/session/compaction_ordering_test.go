@@ -24,6 +24,13 @@ func TestCheckpointRetainsTheTailVerbatim(t *testing.T) {
 	}
 	s := newCompactionTestSvc(llm)
 	s.ms = newMessageStore(store, 1, nil)
+	s.turns = newToolTurns(s.registry, s.models, s.ms, testProgressBoundary(s.boundary))
+	s.contexts = newCheckpointOwner(
+		s.ms, s.models, s.prompt, s.turns, s.transcript(),
+		s.dispositions, s.budgetGate, s.outputStore, s.boundary,
+		&s.stamper, nil, nil,
+		checkpointOptions{id: s.id, outputEnabled: s.outputEnabled, agentsMD: s.agentsMD},
+	)
 
 	original := oversizedTranscript(window)
 	for i := range original {
@@ -35,7 +42,7 @@ func TestCheckpointRetainsTheTailVerbatim(t *testing.T) {
 	before := s.ms.getMessages()
 	beforeRowIDs := s.ms.getRowIDs()
 
-	require.NoError(t, s.compactIfNeeded(ctx, window))
+	require.NoError(t, s.contexts.(*checkpointOwner).compactIfNeeded(ctx, window))
 
 	after := s.ms.getMessages()
 	afterRowIDs := s.ms.getRowIDs()
@@ -78,7 +85,7 @@ func TestRestartDerivesTheAnchorFromTheMarkedSummaryRow(t *testing.T) {
 	s := newCompactionTestSvc(llm)
 	s.ms.setMessages(oversizedTranscript(window))
 
-	require.NoError(t, s.compactIfNeeded(context.Background(), window))
+	require.NoError(t, s.contexts.(*checkpointOwner).compactIfNeeded(context.Background(), window))
 
 	reloaded := newCompactionTestSvc(llm)
 	reloaded.ms.setMessages(s.ms.getMessages())
@@ -113,6 +120,13 @@ func TestOutsideSnapshotCompletionLoadsAfterTheTailInBothReloadOrders(t *testing
 			}
 			s := newCompactionTestSvc(llm)
 			s.ms = newMessageStore(store, 1, nil)
+			s.turns = newToolTurns(s.registry, s.models, s.ms, testProgressBoundary(s.boundary))
+			s.contexts = newCheckpointOwner(
+				s.ms, s.models, s.prompt, s.turns, s.transcript(),
+				s.dispositions, s.budgetGate, s.outputStore, s.boundary,
+				&s.stamper, nil, nil,
+				checkpointOptions{id: s.id, outputEnabled: s.outputEnabled, agentsMD: s.agentsMD},
+			)
 
 			// Persist the transcript so the store owns the rows the loop reads.
 			for i := range oversizedTranscript(window) {
@@ -122,7 +136,7 @@ func TestOutsideSnapshotCompletionLoadsAfterTheTailInBothReloadOrders(t *testing
 				s.ms.mu.Unlock()
 			}
 
-			require.NoError(t, s.compactIfNeeded(ctx, window))
+			require.NoError(t, s.contexts.(*checkpointOwner).compactIfNeeded(ctx, window))
 			require.NoError(t, s.ms.reloadMessages(ctx))
 			afterCompaction := s.ms.getMessages()
 			afterCompactionRowIDs := s.ms.getRowIDs()

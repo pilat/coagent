@@ -20,6 +20,7 @@ import (
 	"github.com/pilat/coagent/internal/budget"
 	"github.com/pilat/coagent/internal/coagenthome"
 	"github.com/pilat/coagent/internal/config"
+	"github.com/pilat/coagent/internal/configapply"
 	"github.com/pilat/coagent/internal/llm"
 	"github.com/pilat/coagent/internal/llmwire"
 	"github.com/pilat/coagent/internal/mcpstore"
@@ -260,7 +261,7 @@ func newSubagentHarnessOnDB(
 	decorate func(subagent.Store) subagent.Store,
 ) *subagentHarness {
 	return newSubagentHarnessOnDBWithProjectConfig(
-		t, dbPath, respond, decorate, nil,
+		t, dbPath, respond, decorate, nil, nil,
 	)
 }
 
@@ -270,6 +271,7 @@ func newSubagentHarnessOnDBWithProjectConfig(
 	respond func(system string, msgs []llmwire.Message) *llmwire.Response,
 	decorate func(subagent.Store) subagent.Store,
 	configure func(*config.Config),
+	applier configapply.Service,
 ) *subagentHarness {
 	t.Helper()
 	if _, err := coagenthome.UserHome(); err != nil {
@@ -335,7 +337,7 @@ func newSubagentHarnessOnDBWithProjectConfig(
 		budget.New(sessStore),
 		sessStore,
 		schedule.NewService(schedStore),
-		func() string { return "fake-model" },
+		func() string { return "fake-model" }, applier,
 	)
 
 	h.mgr = mgr
@@ -1089,7 +1091,7 @@ func newMCPHarnessConfigured(
 		budget.New(sessStore),
 		sessStore,
 		schedule.NewService(schedStore),
-		func() string { return "fake-model" },
+		func() string { return "fake-model" }, nil,
 	)
 	mgr.mcpStore = registry
 

@@ -20,6 +20,12 @@ func TestCompactRefusesWhileAnExternalCallIsPending(t *testing.T) {
 	}
 	s := newCompactionTestSvc(llm)
 	s.stagedCalls = map[string]string{"c9": tool.IDTask}
+	s.contexts = newCheckpointOwner(
+		s.ms, s.models, s.prompt, s.turns, s.transcript(),
+		s.dispositions, s.budgetGate, s.outputStore, s.boundary,
+		&s.stamper, nil, nil,
+		checkpointOptions{id: s.id, outputEnabled: s.outputEnabled, agentsMD: s.agentsMD},
+	)
 
 	before := []llmwire.Message{
 		{Role: llmwire.RoleSystem, Content: "sys"},
@@ -34,7 +40,7 @@ func TestCompactRefusesWhileAnExternalCallIsPending(t *testing.T) {
 	}
 	s.ms.setMessages(before)
 
-	compacted, err := s.compact(t.Context(), nil)
+	compacted, err := s.contexts.(*checkpointOwner).compact(t.Context(), nil)
 
 	require.ErrorIs(t, err, errCompactionPendingCall)
 	assert.False(t, compacted)
@@ -60,7 +66,7 @@ func TestCompactRefusesWhileOrdinaryToolWorkIsPending(t *testing.T) {
 	}
 	s.ms.setMessages(before)
 
-	compacted, err := s.compact(t.Context(), nil)
+	compacted, err := s.contexts.(*checkpointOwner).compact(t.Context(), nil)
 
 	require.ErrorIs(t, err, errCompactionPendingCall)
 	assert.False(t, compacted)
@@ -86,7 +92,7 @@ func TestCompactProceedsWithAnAbandonedToolCall(t *testing.T) {
 		compactionToolResult("c2", "result"),
 	})
 
-	compacted, err := s.compact(t.Context(), nil)
+	compacted, err := s.contexts.(*checkpointOwner).compact(t.Context(), nil)
 
 	require.NoError(t, err)
 	assert.True(t, compacted)
@@ -108,7 +114,7 @@ func TestCompactRefusesWhenTheHeaderAloneExceedsTheThreshold(t *testing.T) {
 		compactionToolResult("c1", "result"),
 	})
 
-	compacted, err := s.compact(t.Context(), nil)
+	compacted, err := s.contexts.(*checkpointOwner).compact(t.Context(), nil)
 
 	require.ErrorIs(t, err, errCompactionHeaderTooLarge)
 	assert.False(t, compacted)
@@ -131,10 +137,16 @@ func TestHeaderCheckCountsTheSystemPrompt(t *testing.T) {
 	s.ms.mu.Lock()
 	defer s.ms.mu.Unlock()
 
-	assert.True(t, s.headerFitsLocked(2))
+	assert.True(t, s.contexts.(*checkpointOwner).headerFitsLocked(2))
 
 	s.prompt = newPromptBuilder(strings.Repeat("s", 40000), "")
-	assert.False(t, s.headerFitsLocked(2))
+	s.contexts = newCheckpointOwner(
+		s.ms, s.models, s.prompt, s.turns, s.transcript(),
+		s.dispositions, s.budgetGate, s.outputStore, s.boundary,
+		&s.stamper, nil, nil,
+		checkpointOptions{id: s.id, outputEnabled: s.outputEnabled, agentsMD: s.agentsMD},
+	)
+	assert.False(t, s.contexts.(*checkpointOwner).headerFitsLocked(2))
 }
 
 // The summarizer call receives the ordinary full output reserve: the complement
@@ -156,7 +168,7 @@ func TestSummarizationRequestCarriesTheFullOutputReserve(t *testing.T) {
 		compactionUserMessage("recent note"),
 	})
 
-	_, err := s.compact(t.Context(), nil)
+	_, err := s.contexts.(*checkpointOwner).compact(t.Context(), nil)
 	require.NoError(t, err)
 
 	assert.Equal(t, int((1-llmwire.ContextInputFraction)*float64(window)), llm.lastOptions.MaxTokens)
@@ -173,7 +185,7 @@ func TestCompactRefusesAHeaderWithToolProtocolFields(t *testing.T) {
 		compactionToolResult("c1", "result"),
 	})
 
-	compacted, err := s.compact(t.Context(), nil)
+	compacted, err := s.contexts.(*checkpointOwner).compact(t.Context(), nil)
 
 	require.Error(t, err)
 	assert.False(t, compacted)

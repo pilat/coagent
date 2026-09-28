@@ -106,6 +106,7 @@ output. These are temporal protocols: unit tests alone are not sufficient.
 
 ## Architecture Documentation
 
+- **[docs/refactoring-goal.md](docs/refactoring-goal.md)** — the durable core-refactoring goal, completion criteria and current checkpoint. Read it and the current phase plan before continuing core refactoring, including after a context reset or handoff. Update its checkpoint when a phase completes or work is handed off; do not equate a completed phase with the overall goal.
 - **[docs/glossary.md](docs/glossary.md)** — the project vocabulary: what each coagent term means and which synonyms to avoid. Read it first; everything else is written in these words.
 - **[ARCHITECTURE.md](ARCHITECTURE.md)** — the single, bounded architecture document. Every production package appears exactly once in its grouped package map; only packages that own lifecycle, durable state, concurrency, trust boundaries or cross-package protocols receive a profile. Obey the anti-bloat contract at the top and never turn it into a file/member inventory, API reference, changelog or test plan.
 - **After implementing changes**, run `/pilat:arch-sync` to catch drift between the code and this document before committing.

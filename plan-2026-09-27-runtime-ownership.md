@@ -1,5 +1,9 @@
 # Runtime ownership refactor
 
+Phase 1 of the [core refactoring goal](docs/refactoring-goal.md).
+Implementation is committed as `a231abc`; independent code review is pending.
+The overall goal remains active beyond this phase.
+
 ## Goal
 
 Reduce the runtime's concentration of state and decisions without changing its

@@ -194,18 +194,24 @@ rules:
       value round-trip and immediate log redaction.
     pattern: writeSecretLine(...)
 
-  # Package-level architecture allows daemon to import session, but only the
-  # runner owns causal transcript mutation. A completion/scheduler callback that
-  # calls these methods directly would bypass ordering, deferral and retry.
+  # Runner owns queued input; external-call coordinator owns exact settlement.
+  # Other callbacks must not bypass ordering, deferral and retry.
   - id: coagent-session-inputs-via-runner
     languages: [go]
     severity: ERROR
     paths:
       include: ["internal/**/*.go"]
-      exclude: ["internal/daemon/runner.go", "internal/session/*.go", "*_test.go"]
+      exclude:
+        - "internal/daemon/runner.go"
+        - "internal/daemon/external_calls.go"
+        - "internal/daemon/external_call_apply.go"
+        - "internal/daemon/external_call_settlement.go"
+        - "internal/session/*.go"
+        - "*_test.go"
     message: >-
       Route transcript inputs through daemon's typed sessionInput queue. Only
-      runner.go may resolve pending calls or inject standalone session events.
+      runner or external-call settlement may resolve pending calls; standalone
+      session events remain runner-owned.
     patterns:
       - pattern-either:
           - pattern: $S.ResolvePendingCall(...)

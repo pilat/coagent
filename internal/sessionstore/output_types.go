@@ -4,8 +4,6 @@ import (
 	"context"
 	"errors"
 	"time"
-
-	"github.com/pilat/coagent/internal/transcript"
 )
 
 type OutputType string
@@ -145,14 +143,6 @@ type ManagerRootCreate struct {
 
 type OutputStore interface {
 	EnqueueOutput(ctx context.Context, draft OutputDraft) (*OutputCommit, error)
-	InsertAssistantMessageWithOutput(
-		ctx context.Context,
-		sessionID int64,
-		message *transcript.Message,
-		outputType OutputType,
-		content string,
-		releasesInput bool,
-	) (messageID int64, output *OutputCommit, err error)
 	BindManager(ctx context.Context, managerID, driver string, attributes map[string]any) error
 	ClaimOutputHead(ctx context.Context, managerID string) (*OutputClaim, error)
 	AckOutput(
@@ -175,10 +165,8 @@ type OutputStore interface {
 // Delivery claims and acknowledgements remain outside the agent loop.
 type RuntimeOutputStore interface {
 	StateOutputStore
-	DirectOutputStore
 	CompactionCommandStore
 	CommandOutputStore
-	AssistantOutputStore
 	EnqueueOutput(ctx context.Context, draft OutputDraft) (*OutputCommit, error)
 }
 
@@ -207,17 +195,4 @@ type LifecycleCommandStore interface {
 
 type ReplacementStore interface {
 	ResolveReplacement(ctx context.Context, sessionID int64, managerID string) (int64, error)
-}
-
-// AssistantOutputStore commits an assistant transcript row and its manager
-// output together as part of RuntimeOutputStore.
-type AssistantOutputStore interface {
-	InsertAssistantMessageWithOutput(
-		ctx context.Context,
-		sessionID int64,
-		message *transcript.Message,
-		outputType OutputType,
-		content string,
-		releasesInput bool,
-	) (messageID int64, output *OutputCommit, err error)
 }

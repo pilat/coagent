@@ -16,8 +16,14 @@ import (
 func TestSlashCompact_RebuiltSessionDoesNotReAnnounceTheDeferral(t *testing.T) {
 	s := newCompactionTestSvc(&compactionMockLLM{contextWindow: 200000})
 	s.stagedCalls = map[string]string{"t1": tool.IDTask}
+	s.contexts = newCheckpointOwner(
+		s.ms, s.models, s.prompt, s.turns, s.transcript(),
+		s.dispositions, s.budgetGate, s.outputStore, s.boundary,
+		&s.stamper, nil, nil,
+		checkpointOptions{id: s.id, outputEnabled: s.outputEnabled, agentsMD: s.agentsMD},
+	)
 	s.ms.setMessages(pendingCallTranscript("t1", tool.IDTask))
-	s.compactionDeferAnnounced = true // what the previous wake handed back
+	s.contexts.(*checkpointOwner).compactionDeferAnnounced = true // what the previous wake handed back
 
 	var notes []string
 	r, b := compactCommandRunner(s, compactCommand, &notes)
@@ -27,22 +33,30 @@ func TestSlashCompact_RebuiltSessionDoesNotReAnnounceTheDeferral(t *testing.T) {
 
 	assert.Equal(t, commandDeferred, outcome)
 	assert.Empty(t, notes, "the human was already told this episode")
-	assert.True(t, s.compactionDeferAnnounced, "the verdict is handed on to the next wake")
+	assert.True(t, s.contexts.(*checkpointOwner).compactionDeferAnnounced, "the verdict is handed on to the next wake")
 }
 
 // The episode is scoped to the call that caused it: once nothing is out with the
 // world, a flag carried in from an earlier one must not silence the next notice.
 func TestSlashCompact_DeferralEpisodeEndsWithThePendingCall(t *testing.T) {
-	s := newCompactionTestSvc(&compactionMockLLM{contextWindow: 200000})
+	s := newDurableTestAgent(t)
+	s.models = newTestModelRuntime(&compactionMockLLM{contextWindow: 200000}, s.store, s.id)
+	s.turns = newToolTurns(s.registry, s.models, s.ms, testProgressBoundary(s.boundary))
+	s.contexts = newCheckpointOwner(
+		s.ms, s.models, s.prompt, s.turns, s.transcript(),
+		s.dispositions, s.budgetGate, s.outputStore, s.boundary,
+		&s.stamper, nil, nil,
+		checkpointOptions{id: s.id, outputEnabled: s.outputEnabled, agentsMD: s.agentsMD},
+	)
 	s.ms.setMessages([]llmwire.Message{
 		{Role: llmwire.RoleSystem, Content: "sys"},
 		compactionUserMessage("task"),
 		{Role: llmwire.RoleAssistant, Content: "settled"},
 	})
-	s.compactionDeferAnnounced = true
+	s.contexts.(*checkpointOwner).compactionDeferAnnounced = true
 
 	_, err := runTestLoop(t.Context(), t, s, loopOptions{}, nil)
 	require.NoError(t, err)
 
-	assert.False(t, s.compactionDeferAnnounced)
+	assert.False(t, s.contexts.(*checkpointOwner).compactionDeferAnnounced)
 }

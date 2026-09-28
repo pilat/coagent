@@ -16,11 +16,19 @@ import (
 
 // compactCommandRunner wires a runner over a durable inbox holding one input.
 func compactCommandRunner(s *svc, content string, notes *[]string) (*loopRunner, *loopInputBoundary) {
+	deferred := s.contexts.deferred()
 	boundary := &loopInputBoundary{
 		agent: s,
 		input: &PendingInput{ID: 1, Content: content, ReceivedAt: time.Now()},
 	}
 	s.boundary = boundary
+	s.turns = newToolTurns(s.registry, s.models, s.ms, testProgressBoundary(s.boundary))
+	s.contexts = newCheckpointOwner(
+		s.ms, s.models, s.prompt, s.turns, s.transcript(),
+		s.dispositions, s.budgetGate, s.outputStore, s.boundary,
+		&s.stamper, nil, nil,
+		checkpointOptions{id: s.id, outputEnabled: s.outputEnabled, agentsMD: s.agentsMD, deferAnnounced: deferred},
+	)
 
 	return contextEventRunner(s, notes), boundary
 }
@@ -73,14 +81,14 @@ func TestSlashCompact_RaisesTheFlagAndCompactsAtTheLoopPoint(t *testing.T) {
 
 	assert.Equal(t, commandDeferred, outcome)
 	assert.NotNil(t, b.input, "the request remains pending until its terminal outcome")
-	assert.True(t, s.compactionRequested())
+	assert.True(t, s.contexts.requested())
 	assert.Zero(t, llm.callCount, "nothing is summarized from the command handler")
 
 	r.applyContextEvents(t.Context())
 
 	assert.Positive(t, llm.callCount)
 	assert.True(t, notesContain(notes, "✅ Context compacted"))
-	assert.Empty(t, s.compactionFocus, "focus is one-shot")
+	assert.Empty(t, s.contexts.(*checkpointOwner).compactionFocus, "focus is one-shot")
 
 	for _, p := range llm.prompts {
 		assert.NotContains(t, p, "Priority for this summary:", "bare /compact carries no focus section")
@@ -119,7 +127,7 @@ func TestSlashCompact_FocusThreadsIntoTheSummarizationPrompt(t *testing.T) {
 
 	_, err := r.handleBoundaryCommand(t.Context(), *b.input)
 	require.NoError(t, err)
-	assert.Equal(t, "focus on the auth bug", s.compactionFocus)
+	assert.Equal(t, "focus on the auth bug", s.contexts.(*checkpointOwner).compactionFocus)
 
 	r.applyContextEvents(t.Context())
 
@@ -128,7 +136,7 @@ func TestSlashCompact_FocusThreadsIntoTheSummarizationPrompt(t *testing.T) {
 	instruction := llm.lastMessages[len(llm.lastMessages)-1]
 	assert.Equal(t, llmwire.RoleUser, instruction.Role)
 	assert.Contains(t, instruction.Content, "Priority for this summary: focus on the auth bug")
-	assert.Empty(t, s.compactionFocus)
+	assert.Empty(t, s.contexts.(*checkpointOwner).compactionFocus)
 }
 
 func TestSlashCompact_CompactionFailureIsReported(t *testing.T) {
@@ -139,6 +147,13 @@ func TestSlashCompact_CompactionFailureIsReported(t *testing.T) {
 	store := &compactionRecordingStore{nextID: 1, markCompactedErr: errors.New("write conflict")}
 	s := newCompactionTestSvc(llm)
 	s.ms = newMessageStore(store, 1, nil)
+	s.turns = newToolTurns(s.registry, s.models, s.ms, testProgressBoundary(s.boundary))
+	s.contexts = newCheckpointOwner(
+		s.ms, s.models, s.prompt, s.turns, s.transcript(),
+		s.dispositions, s.budgetGate, s.outputStore, s.boundary,
+		&s.stamper, nil, nil,
+		checkpointOptions{id: s.id, outputEnabled: s.outputEnabled, agentsMD: s.agentsMD},
+	)
 	s.ms.setMessages(loopRounds(10, 4000))
 
 	var notes []string
@@ -151,7 +166,7 @@ func TestSlashCompact_CompactionFailureIsReported(t *testing.T) {
 
 	assert.True(t, notesContain(notes, "❌ Compaction failed"))
 	assert.False(t, notesContain(notes, "✅ Context compacted"))
-	assert.Empty(t, s.compactionFocus, "focus is cleared even when compaction fails")
+	assert.Empty(t, s.contexts.(*checkpointOwner).compactionFocus, "focus is cleared even when compaction fails")
 }
 
 // Behind a blocking call the request stays durable. An in-memory flag would die
@@ -163,6 +178,12 @@ func TestSlashCompact_DefersBehindANonSleepPendingCall(t *testing.T) {
 	}
 	s := newCompactionTestSvc(llm)
 	s.stagedCalls = map[string]string{"t1": tool.IDTask}
+	s.contexts = newCheckpointOwner(
+		s.ms, s.models, s.prompt, s.turns, s.transcript(),
+		s.dispositions, s.budgetGate, s.outputStore, s.boundary,
+		&s.stamper, nil, nil,
+		checkpointOptions{id: s.id, outputEnabled: s.outputEnabled, agentsMD: s.agentsMD},
+	)
 	s.ms.setMessages(pendingCallTranscript("t1", tool.IDTask))
 
 	var notes []string
@@ -173,7 +194,7 @@ func TestSlashCompact_DefersBehindANonSleepPendingCall(t *testing.T) {
 
 	assert.Equal(t, commandDeferred, outcome)
 	assert.NotNil(t, b.input, "the request stays in the durable inbox")
-	assert.False(t, s.compactionRequested(), "no flag is raised while the call is out")
+	assert.False(t, s.contexts.requested(), "no flag is raised while the call is out")
 	assert.Equal(t, 1, countNotes(notes, compactionDeferredNotice))
 
 	// One notice per deferral episode, however many times the drain comes round.
@@ -192,6 +213,12 @@ func TestSlashCompact_InterruptsSleepInsteadOfDeferring(t *testing.T) {
 	}
 	s := newCompactionTestSvc(llm)
 	s.stagedCalls = map[string]string{"s1": tool.IDSleep}
+	s.contexts = newCheckpointOwner(
+		s.ms, s.models, s.prompt, s.turns, s.transcript(),
+		s.dispositions, s.budgetGate, s.outputStore, s.boundary,
+		&s.stamper, nil, nil,
+		checkpointOptions{id: s.id, outputEnabled: s.outputEnabled, agentsMD: s.agentsMD},
+	)
 	s.ms.setMessages(pendingCallTranscript("s1", tool.IDSleep))
 
 	var notes []string
@@ -201,7 +228,7 @@ func TestSlashCompact_InterruptsSleepInsteadOfDeferring(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Equal(t, commandDeferred, outcome)
-	assert.True(t, s.compactionRequested())
+	assert.True(t, s.contexts.requested())
 	assert.False(t, s.HasPendingExternalCall(), "the sleep was resolved, not left hanging")
 	assert.Zero(t, countNotes(notes, compactionDeferredNotice))
 
@@ -214,8 +241,15 @@ func TestSlashCompact_InterruptsSleepInsteadOfDeferring(t *testing.T) {
 // A compaction requested while nothing is outstanding must still run when the
 // loop is about to unwind on a handled control command.
 func TestRunLoopRunsADeferredCompactionBeforeReturning(t *testing.T) {
-	agent := newTestAgent()
-	agent.llmClient = summarizingLLM()
+	agent := newDurableTestAgent(t)
+	agent.models = newTestModelRuntime(summarizingLLM(), agent.store, agent.id)
+	agent.turns = newToolTurns(agent.registry, agent.models, agent.ms, testProgressBoundary(agent.boundary))
+	agent.contexts = newCheckpointOwner(
+		agent.ms, agent.models, agent.prompt, agent.turns, agent.transcript(),
+		agent.dispositions, agent.budgetGate, agent.outputStore, agent.boundary,
+		&agent.stamper, nil, nil,
+		checkpointOptions{id: agent.id, outputEnabled: agent.outputEnabled, agentsMD: agent.agentsMD},
+	)
 	agent.ms.setMessages(loopRounds(10, 4000))
 
 	notifier := &loopNotifier{}
@@ -223,6 +257,13 @@ func TestRunLoopRunsADeferredCompactionBeforeReturning(t *testing.T) {
 		agent: agent,
 		input: &PendingInput{ID: 1, Content: compactCommand, ReceivedAt: time.Now()},
 	}
+	agent.turns = newToolTurns(agent.registry, agent.models, agent.ms, testProgressBoundary(agent.boundary))
+	agent.contexts = newCheckpointOwner(
+		agent.ms, agent.models, agent.prompt, agent.turns, agent.transcript(),
+		agent.dispositions, agent.budgetGate, agent.outputStore, agent.boundary,
+		&agent.stamper, nil, nil,
+		checkpointOptions{id: agent.id, outputEnabled: agent.outputEnabled, agentsMD: agent.agentsMD},
+	)
 
 	_, err := runTestLoop(t.Context(), t, agent, loopOptions{Notify: notifier.fn}, iterationGuard(5))
 	require.NoError(t, err)
@@ -234,9 +275,22 @@ func TestRunLoopRunsADeferredCompactionBeforeReturning(t *testing.T) {
 // The gate is strict: with an external call outstanding the early return must not
 // run compaction, or compact() would meet its own guard.
 func TestRunLoopDoesNotCompactOnASuspendPath(t *testing.T) {
-	agent := newTestAgent()
-	agent.llmClient = summarizingLLM()
+	agent := newDurableTestAgent(t)
+	agent.models = newTestModelRuntime(summarizingLLM(), agent.store, agent.id)
+	agent.turns = newToolTurns(agent.registry, agent.models, agent.ms, testProgressBoundary(agent.boundary))
+	agent.contexts = newCheckpointOwner(
+		agent.ms, agent.models, agent.prompt, agent.turns, agent.transcript(),
+		agent.dispositions, agent.budgetGate, agent.outputStore, agent.boundary,
+		&agent.stamper, nil, nil,
+		checkpointOptions{id: agent.id, outputEnabled: agent.outputEnabled, agentsMD: agent.agentsMD},
+	)
 	agent.stagedCalls = map[string]string{"t1": tool.IDTask}
+	agent.contexts = newCheckpointOwner(
+		agent.ms, agent.models, agent.prompt, agent.turns, agent.transcript(),
+		agent.dispositions, agent.budgetGate, agent.outputStore, agent.boundary,
+		&agent.stamper, nil, nil,
+		checkpointOptions{id: agent.id, outputEnabled: agent.outputEnabled, agentsMD: agent.agentsMD},
+	)
 	agent.ms.setMessages(pendingCallTranscript("t1", tool.IDTask))
 	agent.RequestCompaction()
 
@@ -265,8 +319,15 @@ func hasSummaryRow(msgs []llmwire.Message) bool {
 // the queued /compact — otherwise compaction would delete a call nobody ran.
 func TestRunLoopExecutesOwedToolsBeforeAQueuedCompaction(t *testing.T) {
 	executed := make(chan string, 4)
-	agent := newTestAgent(&recordingTool{id: "read", result: "file body", seen: executed})
-	agent.llmClient = summarizingLLM()
+	agent := newDurableTestAgent(t, &recordingTool{id: "read", result: "file body", seen: executed})
+	agent.models = newTestModelRuntime(summarizingLLM(), agent.store, agent.id)
+	agent.turns = newToolTurns(agent.registry, agent.models, agent.ms, testProgressBoundary(agent.boundary))
+	agent.contexts = newCheckpointOwner(
+		agent.ms, agent.models, agent.prompt, agent.turns, agent.transcript(),
+		agent.dispositions, agent.budgetGate, agent.outputStore, agent.boundary,
+		&agent.stamper, nil, nil,
+		checkpointOptions{id: agent.id, outputEnabled: agent.outputEnabled, agentsMD: agent.agentsMD},
+	)
 	agent.ms.setMessages(append(loopRounds(4, 4000), llmwire.Message{
 		Role:      llmwire.RoleAssistant,
 		Content:   "reading",
@@ -278,6 +339,13 @@ func TestRunLoopExecutesOwedToolsBeforeAQueuedCompaction(t *testing.T) {
 		agent: agent,
 		input: &PendingInput{ID: 1, Content: compactCommand, ReceivedAt: time.Now()},
 	}
+	agent.turns = newToolTurns(agent.registry, agent.models, agent.ms, testProgressBoundary(agent.boundary))
+	agent.contexts = newCheckpointOwner(
+		agent.ms, agent.models, agent.prompt, agent.turns, agent.transcript(),
+		agent.dispositions, agent.budgetGate, agent.outputStore, agent.boundary,
+		&agent.stamper, nil, nil,
+		checkpointOptions{id: agent.id, outputEnabled: agent.outputEnabled, agentsMD: agent.agentsMD},
+	)
 
 	_, err := runTestLoop(t.Context(), t, agent, loopOptions{Notify: notifier.fn}, iterationGuard(5))
 	require.NoError(t, err)
@@ -346,6 +414,12 @@ func TestCompactionNeverRunsWithPendingCalls(t *testing.T) {
 			}
 			s := newCompactionTestSvc(llm)
 			s.stagedCalls = tc.staged
+			s.contexts = newCheckpointOwner(
+				s.ms, s.models, s.prompt, s.turns, s.transcript(),
+				s.dispositions, s.budgetGate, s.outputStore, s.boundary,
+				&s.stamper, nil, nil,
+				checkpointOptions{id: s.id, outputEnabled: s.outputEnabled, agentsMD: s.agentsMD},
+			)
 			s.ms.setMessages(tc.transcript)
 
 			if tc.explicit {

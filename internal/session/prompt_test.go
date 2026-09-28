@@ -361,6 +361,7 @@ func TestSetupRegistryAnnouncesSkillsOnlyWhenToolIsAvailable(t *testing.T) {
 				prompt:     newPromptBuilder("base", ""),
 			}
 			s.setupRegistry(params{Registry: reg}, config)
+			s.refreshRegistrySections()
 
 			if tc.wantList {
 				assert.Contains(t, s.prompt.systemPrompt(), "## Available Skills")

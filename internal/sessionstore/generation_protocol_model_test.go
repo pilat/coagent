@@ -54,16 +54,17 @@ type generationModelRow struct {
 // transcript-entry transitions; every emitted row freezes its insertion-time
 // generation; stop terminal effects happen at most once.
 type generationProtocolModel struct {
-	generation int64
-	pending    int
-	rows       []generationModelRow
-	claim      int
-	inputSeq   int64
-	emitSeq    int64
-	stopInput  int64
-	stopping   bool
-	stopped    bool
-	hasBudget  bool
+	generation   int64
+	pending      int
+	rows         []generationModelRow
+	claim        int
+	inputSeq     int64
+	emitSeq      int64
+	stopInput    int64
+	stopping     bool
+	stopped      bool
+	hasBudget    bool
+	replyPending bool
 }
 
 func newGenerationModel() *generationProtocolModel {
@@ -97,6 +98,7 @@ func (m *generationProtocolModel) apply(command generationProtocolCommand) {
 
 		m.pending--
 		m.generation++
+		m.replyPending = true
 	case genScheduleTick:
 		// Exactly-once delivery: re-delivery never advances or duplicates.
 		already := false
@@ -171,6 +173,7 @@ func (m *generationProtocolModel) apply(command generationProtocolCommand) {
 
 		m.stopping = false
 		m.hasBudget = false
+		m.replyPending = false
 		m.rows = append(m.rows, generationModelRow{
 			generation: m.generation, releases: true, inputID: m.stopInput,
 			sourceKey: "input:" + strconv.FormatInt(m.stopInput, 10) + ":stop:completed", stopDone: true,
@@ -259,10 +262,19 @@ func (p *generationProduction) apply(command generationProtocolCommand) {
 			return
 		}
 
-		_, _, err := p.store.InsertAssistantMessageWithOutput(p.ctx, p.root, &transcript.Message{
-			Role: "assistant", Content: "reply before tool",
-			ToolCalls: []byte(`[{"id":"reply-tool","name":"bash"}]`),
-		}, OutputMessagePersistent, "reply before tool", false)
+		state, err := p.store.LoadCompletionCheckState(p.ctx, p.root)
+		require.NoError(p.t, err)
+		record, err := p.store.GetSession(p.ctx, p.root)
+		require.NoError(p.t, err)
+		_, err = p.store.CommitAcceptedResponseDisposition(p.ctx, AcceptedResponseDisposition{
+			SessionID: p.root, RootID: p.root, Iteration: record.Iteration + 1,
+			Message: &transcript.Message{
+				Role: "assistant", Content: "reply before tool",
+				ToolCalls: []byte(`[{"id":"reply-tool","name":"bash"}]`),
+			},
+			Kind: ResponseDispositionToolCall, OutputType: OutputMessagePersistent,
+			Output: "reply before tool", ManagerReplyPending: state.ManagerReplyPending,
+		})
 		require.NoError(p.t, err)
 	case genClaim:
 		if p.claim != nil {
@@ -354,6 +366,8 @@ func (p *generationProduction) rootStopping() bool {
 func (p *generationProduction) assertMatches(model *generationProtocolModel, step int) {
 	actual := p.currentGeneration()
 	assert.Equal(p.t, model.generation, actual, "step %d: generation", step)
+	_, replyPending, _ := readCompletionState(p.t, p.db, p.root)
+	assert.Equal(p.t, model.replyPending, replyPending, "step %d: reply obligation", step)
 
 	var count int
 	require.NoError(p.t, p.db.QueryRowContext(p.ctx,

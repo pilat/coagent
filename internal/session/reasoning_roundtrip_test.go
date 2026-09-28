@@ -35,8 +35,15 @@ func TestLoopReplaysReasoningPayloadOnTheNextTurn(t *testing.T) {
 		return &llmwire.Response{Text: "done"}, nil
 	}}
 
-	agent := newTestAgent(&stubTool{id: "read", result: "content"})
-	agent.llmClient = llmClient
+	agent := newDurableTestAgent(t, &stubTool{id: "read", result: "content"})
+	agent.models = newTestModelRuntime(llmClient, agent.store, agent.id)
+	agent.turns = newToolTurns(agent.registry, agent.models, agent.ms, testProgressBoundary(agent.boundary))
+	agent.contexts = newCheckpointOwner(
+		agent.ms, agent.models, agent.prompt, agent.turns, agent.transcript(),
+		agent.dispositions, agent.budgetGate, agent.outputStore, agent.boundary,
+		&agent.stamper, nil, nil,
+		checkpointOptions{id: agent.id, outputEnabled: agent.outputEnabled, agentsMD: agent.agentsMD},
+	)
 
 	_, err := runTestLoop(t.Context(), t, agent, loopOptions{}, iterationGuard(5))
 	require.NoError(t, err)

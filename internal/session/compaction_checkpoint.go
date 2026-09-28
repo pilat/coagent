@@ -36,17 +36,17 @@ func validateCompactionHeader(header []llmwire.Message) error {
 
 // headerFitsLocked reports whether compaction can converge at all: the header is
 // never summarized and the system prompt rides along on every request.
-func (s *svc) headerFitsLocked(headerSize int) bool {
+func (s *checkpointOwner) headerFitsLocked(headerSize int) bool {
 	size := estimateTokens(s.ms.messages[:headerSize]) + estimateText(s.prompt.systemPrompt())
 
-	return size <= compactionCutoff(s.contextWindow())
+	return size <= compactionCutoff(s.models.snapshot().contextWindow)
 }
 
 // assembleCheckpointLocked builds the positioned replacement projection —
 // header, marked summary, optional current skill, exact selected tail — plus
 // the DBIDs of every row the checkpoint marks compacted. A carried reattachment
 // row keeps its DBID and is only repositioned.
-func (s *svc) assembleCheckpointLocked(
+func (s *checkpointOwner) assembleCheckpointLocked(
 	cp checkpointPrefix,
 	headerSize, split, candIdx int,
 	candEnvelope string,

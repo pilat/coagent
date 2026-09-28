@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"runtime"
 	"slices"
-	"strconv"
 	"sync"
 	"time"
 
@@ -27,10 +26,6 @@ import (
 	"github.com/pilat/coagent/internal/tool"
 	"github.com/pilat/coagent/internal/tool/builtin"
 	"github.com/pilat/coagent/internal/transcript"
-)
-
-const (
-	compactionThreshold = 80000
 )
 
 // Service manages the state for a single agent session.
@@ -124,7 +119,6 @@ type svc struct {
 	workDir           string
 	gitClient         git.Client
 	projectID         int64
-	llmClient         llm.Client
 	stack             *builtin.Stack
 	loader            loader.Service
 	todoStore         todo.Service
@@ -138,55 +132,34 @@ type svc struct {
 	dispositions      sessionstore.ResponseDispositionStore
 	rootID            int64
 	id                int64
-	model             string
 	agentType         registry.AgentType
 	agentTypes        *registry.Set
 	iterationOffset   int
-	newLLMWithModel   func(cfg *config.Config, model string) (llm.Client, error)
-	reasoningLevel    string
-	// modelMu guards the mutable model triplet (llmClient/model/reasoningLevel),
-	// swapped by handleSetModel (daemon goroutine) while the loop reads them.
-	modelMu         sync.RWMutex
-	closeOnce       sync.Once
-	cfg             *config.Config
-	loopOpts        loopOptions
-	stamper         timestamper
-	prompt          *promptBuilder
-	boundary        InputBoundary
-	outputEnabled   bool
-	preserveStopped bool
-	budgetGate      BudgetGate
-	budgetFired     bool
+	models            modelRuntime
+	closeOnce         sync.Once
+	loopOpts          loopOptions
+	stamper           timestamper
+	prompt            *promptBuilder
+	boundary          InputBoundary
+	outputEnabled     bool
+	preserveStopped   bool
+	budgetGate        BudgetGate
+	budgetFired       bool
 
 	// Loop execution state
-	ms           *messageStore
-	loopDetector *loopDetector
+	ms    *messageStore
+	turns toolTurns
 	// resumeCompletion seeds the reply cache on resume; the loop re-reads
 	// SQLite per turn, so a crash between resume and the next turn still
 	// observes the durable state.
-	resumeCompletion  *sessionstore.CompletionCheckState
-	compactionFocus   string // optional /compact focus, set for one compact() then cleared
-	pendingCompaction bool
-	compactionInput   *PendingInput
-	// Summary row of the last auto compaction; keys its success output
-	// (`compaction:<id>:succeeded`) so a replay is an idempotent no-op.
-	compactionSummaryDBID int64
-	// compactionDeferAnnounced survives the session object: the daemon rebuilds
-	// this svc on every wake, so per-run state would re-announce per wake.
-	compactionDeferAnnounced bool
-	suspended                bool
+	resumeCompletion *sessionstore.CompletionCheckState
+	contexts         contextRuntime
+	suspended        bool
 	// stagedCalls are tool_call ids the daemon has already started outside work
 	// for (call id → tool name). Loop-read only; set once at construction.
-	stagedCalls map[string]string
-	// Reads the daemon's background ledgers live; nil outside a daemon.
-	activeSubagentsProvider  func(context.Context) []ActiveSubagentInfo
-	activeProcessesProvider  func(context.Context) []ActiveProcessInfo
+	stagedCalls              map[string]string
 	activeBackgroundSnapshot string
 	onIterationPersisted     func(context.Context, int)
-	// Under modelMu with the model triplet: a measurement describes one model's
-	// window and tokenizer. nil baseline = nothing measured.
-	baseline   *contextBaseline
-	modelEpoch uint64
 }
 
 type params struct {
@@ -259,6 +232,7 @@ type options struct {
 	CompactionDeferAnnounced bool
 }
 
+//nolint:funlen // Construction keeps one coherent runtime wiring path.
 func newWithOptions(ctx context.Context, p params, opts options) (Service, error) {
 	log := logger.Ctx(ctx).Named("session.new")
 
@@ -297,10 +271,39 @@ func newWithOptions(ctx context.Context, p params, opts options) (Service, error
 	session := newSession(p, opts, workDir, agentConfig, openingContext)
 	session.agentTypes = set
 	session.prompt = buildPrompt(p, opts, workDir, agentConfig)
-	// The native-search bit must precede setupRegistry: the tools section it
-	// builds reports search guidance for the active client.
-	session.prompt.setNativeSearch(p.Config.UnifiedConfig.SearchNativeActive(p.Config.Model))
 	session.setupRegistry(p, agentConfig)
+
+	var authorizer llm.ImageAuthorizer
+	if p.Stack != nil {
+		authorizer = p.Stack.Access()
+	}
+
+	session.models = newModelRuntime(p.LLMClient, p.Config, llm.NewClientWithModel,
+		session.prompt, session.registry, authorizer, p.Store, session.id, session.rootID)
+	progress, _ := session.boundary.(progressChangeBoundary)
+	session.turns = newToolTurns(session.registry, session.models, session.ms, progress)
+	session.contexts = newCheckpointOwner(
+		session.ms,
+		session.models,
+		session.prompt,
+		session.turns,
+		&transcriptSession{ms: session.ms, stagedCalls: opts.StagedExternalCalls},
+		p.Dispositions,
+		opts.BudgetGate,
+		p.OutputStore,
+		opts.InputBoundary,
+		&session.stamper,
+		opts.ActiveSubagentsProvider,
+		opts.ActiveProcessesProvider,
+		checkpointOptions{
+			id:             opts.ID,
+			outputEnabled:  opts.OutputEnabled,
+			agentsMD:       openingContext,
+			deferAnnounced: opts.CompactionDeferAnnounced,
+		},
+	)
+	// Model guidance must be configured before the registry sections are rendered.
+	session.refreshRegistrySections()
 
 	if err := session.applyResumeOrInit(ctx, opts, log); err != nil {
 		return nil, err
@@ -311,17 +314,7 @@ func newWithOptions(ctx context.Context, p params, opts options) (Service, error
 		opts.ActiveSubagents,
 	)
 
-	if opts.ReasoningLevel != "" {
-		session.reasoningLevel = opts.ReasoningLevel
-	}
-
-	sessionID := strconv.FormatInt(session.id, 10)
-	if session.id != session.rootID {
-		sessionID = fmt.Sprintf("%d:%d", session.rootID, session.id)
-	}
-
-	session.llmClient.SetSessionID(sessionID)
-	session.llmClient.SetReasoningLevel(session.reasoningLevel)
+	session.models.initializeClient(opts.ReasoningLevel)
 
 	log.Info(
 		"agent_config",
@@ -333,12 +326,17 @@ func newWithOptions(ctx context.Context, p params, opts options) (Service, error
 	return session, nil
 }
 
-// newSession constructs a bare svc with all fields populated except prompt and registry.
 func newSession(p params, opts options, workDir string, agentConfig registry.AgentTypeConfig, agentsMD string) *svc {
+	rootID := opts.RootID
+	if rootID == 0 {
+		rootID = opts.ID
+	}
+
 	s := &svc{
+		id:              opts.ID,
+		rootID:          rootID,
 		workDir:         workDir,
 		projectID:       opts.ProjectID,
-		llmClient:       p.LLMClient,
 		stack:           p.Stack,
 		loader:          p.Loader,
 		todoStore:       p.TodoStore,
@@ -348,25 +346,17 @@ func newSession(p params, opts options, workDir string, agentConfig registry.Age
 		store:           p.Store,
 		outputStore:     p.OutputStore,
 		dispositions:    p.Dispositions,
-		model:           p.Config.Model,
 		agentType:       agentConfig.Name,
-		reasoningLevel:  string(llm.ReasoningMedium),
-		newLLMWithModel: llm.NewClientWithModel,
 		gitClient:       projectContextGitClient(p.GitClient, agentConfig),
-		cfg:             p.Config,
 		stamper:         timestamper{lastActivity: opts.LastActivityAt},
-		loopDetector:    newLoopDetector(),
 		stagedCalls:     opts.StagedExternalCalls,
 		boundary:        opts.InputBoundary,
 		outputEnabled:   opts.OutputEnabled,
 		budgetGate:      opts.BudgetGate,
 		preserveStopped: opts.PreserveStopped,
 
-		compactionDeferAnnounced: opts.CompactionDeferAnnounced,
-		resumeCompletion:         opts.ResumeCompletionState,
-		activeSubagentsProvider:  opts.ActiveSubagentsProvider,
-		activeProcessesProvider:  opts.ActiveProcessesProvider,
-		onIterationPersisted:     opts.OnIterationPersisted,
+		resumeCompletion:     opts.ResumeCompletionState,
+		onIterationPersisted: opts.OnIterationPersisted,
 	}
 	var msStore sessionstore.RuntimeStore
 
@@ -375,14 +365,17 @@ func newSession(p params, opts options, workDir string, agentConfig registry.Age
 	}
 
 	s.ms = newMessageStore(msStore, opts.ID, p.OutputStore)
-	s.attachImageAuthorizer(s.llmClient)
 	s.confineGitClient()
 
 	return s
 }
 
 func (s *svc) SetModel(model, reasoningLevel string) error {
-	return s.handleSetModel(model, reasoningLevel)
+	if err := s.models.SetModel(model, reasoningLevel); err != nil {
+		return fmt.Errorf("set session model %s: %w", model, err)
+	}
+
+	return nil
 }
 
 func (s *svc) AgentTypes() *registry.Set {
@@ -435,37 +428,14 @@ func (s *svc) ResetContextAndInjectOnce(
 	ctx context.Context,
 	deliveryID, prompt string,
 ) (bool, error) {
-	if deliveryID == "" {
-		return false, errors.New("idempotent context reset: empty delivery id")
-	}
-
-	if pending := s.PendingExternalCalls(); len(pending) > 0 {
-		return false, fmt.Errorf(
-			"reset context: external call %s (%s) is still pending",
-			pending[0].ID,
-			pending[0].Name,
-		)
-	}
-
-	// The opening turn is the same one a brand-new session starts from: frozen
-	// project context plus the exact task protected from lossy compaction.
-	opening := s.openingTurn(prompt)
-	fingerprint := deliveryFingerprint("context_reset", s.agentsMD, prompt)
-
-	inserted, err := s.ms.resetToOnce(ctx, deliveryID, fingerprint, opening)
-	if err != nil {
-		return false, fmt.Errorf("reset transcript: %w", err)
-	}
-
-	if !inserted {
-		return false, nil
+	inserted, err := s.contexts.resetOnce(ctx, deliveryID, prompt)
+	if err != nil || !inserted {
+		return inserted, err
 	}
 
 	// In-memory derived state drops only once the durable swap succeeded.
 	s.todoStore.Clear()
-	s.loopDetector.resetWindow()
-	s.resetContextBaseline()
-	s.clearPersistedBaseline(ctx)
+	s.turns.reset()
 
 	return true, nil
 }
@@ -499,8 +469,8 @@ func (s *svc) ReloadDeliveredCompletion(ctx context.Context) error {
 
 func (s *svc) Close() {
 	s.closeOnce.Do(func() {
-		if s.llmClient != nil {
-			if err := s.closeLLM(); err != nil {
+		if s.models != nil {
+			if err := s.models.Close(); err != nil {
 				logger.Named("session.close").Warn("llm_close_failed", zap.Error(err))
 			}
 		}
@@ -513,10 +483,7 @@ func (s *svc) Close() {
 
 // RequestCompaction requests a forced compaction at the next loop iteration.
 func (s *svc) RequestCompaction() {
-	s.ms.mu.Lock()
-	defer s.ms.mu.Unlock()
-
-	s.pendingCompaction = true
+	s.contexts.request()
 }
 
 // buildPrompt assembles the promptBuilder for a session before tool registration.
@@ -614,8 +581,6 @@ func unresolvedToolCalls(messages []llmwire.Message) map[string]string {
 	return nil
 }
 
-// setupRegistry filters the tool registry for the agent type, registers session-scoped tools,
-// and finalises the dynamic tools section in the prompt.
 func (s *svc) setupRegistry(p params, agentConfig registry.AgentTypeConfig) {
 	// Bind the skill tool to this session's loader, overriding whatever the
 	// incoming registry carried.
@@ -624,7 +589,6 @@ func (s *svc) setupRegistry(p params, agentConfig registry.AgentTypeConfig) {
 	filtered := filterRegistryForAgent(s.agentTypes, p.Registry, agentConfig)
 	s.registry = filtered
 	registerSessionTools(s)
-	s.refreshRegistrySections()
 }
 
 // refreshRegistrySections recomputes the prompt sections derived from the live tool
@@ -648,69 +612,6 @@ func (s *svc) refreshRegistrySections() {
 	s.prompt.setSubagentsSection(subagents)
 }
 
-// compactionRequested reports whether a forced compaction is queued, without
-// consuming it.
-func (s *svc) compactionRequested() bool {
-	s.ms.mu.Lock()
-	defer s.ms.mu.Unlock()
-
-	return s.pendingCompaction
-}
-
-func (s *svc) compactionCommandInput() *PendingInput {
-	s.ms.mu.Lock()
-	defer s.ms.mu.Unlock()
-
-	if s.compactionInput == nil {
-		return nil
-	}
-
-	input := *s.compactionInput
-
-	return &input
-}
-
-func (s *svc) setCompactionCommandInput(input PendingInput) {
-	s.ms.mu.Lock()
-	defer s.ms.mu.Unlock()
-
-	s.compactionInput = &input
-}
-
-func (s *svc) clearCompactionCommandInput() {
-	s.ms.mu.Lock()
-	defer s.ms.mu.Unlock()
-
-	s.compactionInput = nil
-}
-
-// setCompactionFocus records (or clears) the one-shot /compact focus.
-func (s *svc) setCompactionFocus(focus string) {
-	s.ms.mu.Lock()
-	defer s.ms.mu.Unlock()
-
-	s.compactionFocus = focus
-}
-
-// consumePendingCompaction atomically reads and clears the pending compaction request.
-func (s *svc) consumePendingCompaction() bool {
-	s.ms.mu.Lock()
-	defer s.ms.mu.Unlock()
-
-	pending := s.pendingCompaction
-	s.pendingCompaction = false
-
-	return pending
-}
-
-func (s *svc) contextWindow() int {
-	if cw := s.currentLLM().ContextWindow(); cw > 0 {
-		return cw
-	}
-
-	return compactionThreshold
-}
-
 // seedResumeCompletion installs the durable completion projection into the
 // in-memory reply cache. The loop still re-reads SQLite per turn, so this is
 // a seed, not authority.
@@ -718,17 +619,9 @@ func (s *svc) seedResumeCompletion(state *sessionstore.CompletionCheckState) {
 	s.resumeCompletion = state
 }
 
-// applyResumeOrInit sets session IDs and either restores state from DB or persists the initial state.
 func (s *svc) applyResumeOrInit(ctx context.Context, opts options, log *zap.Logger) error {
 	if opts.ID == 0 {
 		return errors.New("session ID is required")
-	}
-
-	s.id = opts.ID
-	if opts.RootID != 0 {
-		s.rootID = opts.RootID
-	} else {
-		s.rootID = opts.ID
 	}
 
 	if opts.ResumeMessages != nil {
@@ -746,7 +639,7 @@ func (s *svc) applyResumeOrInit(ctx context.Context, opts options, log *zap.Logg
 
 		s.seedResumeCompletion(opts.ResumeCompletionState)
 
-		s.installPersistedBaseline(opts.ContextBaseline)
+		s.models.restoreBaseline(opts.ContextBaseline)
 
 		log.Info("resumed_from_db", zap.Int64("root_id", s.rootID), zap.Int("iteration", opts.ResumeIteration))
 
@@ -758,17 +651,6 @@ func (s *svc) applyResumeOrInit(ctx context.Context, opts options, log *zap.Logg
 	}
 
 	return nil
-}
-
-// attachImageAuthorizer gives a client the session's current filesystem
-// authority, so a deferred attachment read is re-authorized at materialization
-// and a revoked grant is not re-read through a historical reference.
-func (s *svc) attachImageAuthorizer(client llm.Client) {
-	if client == nil || s.stack == nil {
-		return
-	}
-
-	client.SetImageAuthorizer(s.stack.Access())
 }
 
 // confineGitClient routes session-owned Git through the session's confinement

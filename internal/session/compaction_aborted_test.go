@@ -46,7 +46,7 @@ func TestCompactionSucceedsAroundAnAbortedToolCall(t *testing.T) {
 	s := newCompactionTestSvc(mockLLM)
 	s.ms.setMessages(transcriptWithAbortedCall(window))
 
-	err := s.compactIfNeeded(context.Background(), window)
+	err := s.contexts.(*checkpointOwner).compactIfNeeded(context.Background(), window)
 	require.NoError(t, err)
 	assert.Equal(t, 1, mockLLM.callCount)
 

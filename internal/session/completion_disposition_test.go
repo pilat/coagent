@@ -33,19 +33,17 @@ func newDispositionLoop(t *testing.T) (*svc, *sql.DB, sessionstore.Store, int64,
 	t.Helper()
 
 	db, store, sessionID := newFinalOutputStore(t)
-	agent := newTestAgent()
-	agent.store = store
+	agent := newTestAgentWithStore(store, sessionID)
 	agent.dispositions = store
 	agent.outputStore = store
-	agent.id = sessionID
 	agent.rootID = sessionID
 	agent.outputEnabled = true
 	agent.todoStore = todo.New()
-	agent.ms = newMessageStore(store, sessionID, store)
 
 	boundary := &wakeDelegatingBoundary{store: store, sessionID: sessionID}
 	boundary.agent = agent
 	agent.boundary = boundary
+	setLoopModel(agent, &loopScriptLLM{responses: []*llmwire.Response{textResponse("unused")}})
 
 	runner := &loopRunner{
 		agent: agent, result: &loopResult{}, log: zap.NewNop(),
@@ -276,19 +274,17 @@ func TestCompletionDisposition_ChildParity(t *testing.T) {
 		parentID, childID, "task-1", time.Now().UTC().Unix())
 	require.NoError(t, err)
 
-	agent := newTestAgent()
-	agent.store = store
+	agent := newTestAgentWithStore(store, childID)
 	agent.dispositions = store
 	agent.outputStore = store
-	agent.id = childID
 	agent.rootID = parentID
 	agent.outputEnabled = false
 	agent.todoStore = todo.New()
-	agent.ms = newMessageStore(store, childID, store)
 
 	boundary := &wakeDelegatingBoundary{store: store, sessionID: childID}
 	boundary.agent = agent
 	agent.boundary = boundary
+	setLoopModel(agent, &loopScriptLLM{responses: []*llmwire.Response{textResponse("unused")}})
 
 	runner := &loopRunner{
 		agent: agent, result: &loopResult{}, log: zap.NewNop(),

@@ -291,7 +291,7 @@ func buildScheduleRestartHarness(
 		links, mustNewTransactions(t, db, sessionstore.InvalidateCompletionCheckTx),
 		budget.New(sessionStore), sessionStore, schedule.NewService(schedules), func() string {
 			return "fake-model"
-		})
+		}, nil)
 	projectID, err := store.GetOrCreateProject(context.Background(), workDir)
 	require.NoError(t, err)
 

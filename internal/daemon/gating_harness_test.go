@@ -160,9 +160,8 @@ func newGatingHarness(
 		budget.New(sessStore),
 		sessStore,
 		schedule.NewService(schedStore),
-		func() string { return "fake-model" },
+		func() string { return "fake-model" }, configapply.New(newTestConfigOps(t, dir), func() {}),
 	)
-	mgr.applier = configapply.New(newTestConfigOps(t, dir), func() {})
 
 	pid, err := store.GetOrCreateProject(ctx, workDir)
 	require.NoError(t, err)

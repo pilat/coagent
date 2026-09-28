@@ -116,6 +116,7 @@ type CompactionEntry struct {
 // a session may checkpoint itself and mutate its transcript, but cannot create
 // or kill another session.
 type RuntimeStore interface { //nolint:interfacebloat // Response integrity joins the existing live-loop transaction surface.
+	DirectOutputStore
 	InsertMessage(ctx context.Context, sessionID int64, msg *transcript.Message) (int64, error)
 	// InsertMessages commits several transcript rows in one transaction and
 	// returns their ids in input order.

@@ -196,7 +196,7 @@ func (r *loopRunner) drainBoundary(ctx context.Context) (bool, error) {
 				return acceptedAny, nil
 			}
 
-			r.agent.loopDetector.resetWindow()
+			r.agent.turns.reset()
 
 			continue
 		default:
@@ -236,7 +236,7 @@ func (r *loopRunner) drainBoundary(ctx context.Context) (bool, error) {
 			return acceptedAny, nil
 		}
 
-		r.agent.loopDetector.resetWindow()
+		r.agent.turns.reset()
 	}
 }
 
@@ -403,36 +403,12 @@ func (r *loopRunner) handleCompactCommand(
 		pending = nil
 	}
 
-	// Behind anything else the request stays in the durable inbox: an in-memory
-	// flag would die with the svc that the resume rebuilds.
-	if len(pending) > 0 {
-		if !r.agent.compactionDeferAnnounced {
-			r.agent.compactionDeferAnnounced = true
-			if err := r.enqueueCompactionNotice(
-				ctx,
-				input,
-				"deferred",
-				sessionstore.OutputMessagePersistent,
-				compactionDeferredNotice,
-			); err != nil {
-				return commandNotRecognized, err
-			}
-
-			r.notify(ctx, compactionDeferredNotice)
-		}
-
-		return commandDeferred, nil
-	}
-
-	if r.nothingToAnswer() {
+	if len(pending) == 0 && r.nothingToAnswer() {
 		r.handledControl = true
 	}
 
-	r.agent.setCompactionFocus(strings.TrimSpace(strings.TrimPrefix(trimmed, compactCommand)))
-	r.agent.setCompactionCommandInput(input)
-	r.agent.RequestCompaction()
-
-	return commandDeferred, nil
+	return r.agent.contexts.queueCommand(ctx, input,
+		strings.TrimSpace(strings.TrimPrefix(trimmed, compactCommand)), r.opts.Notify)
 }
 
 // nothingToAnswer reports an empty transcript (or a lone AGENTS.md header): the

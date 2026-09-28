@@ -75,24 +75,24 @@ func TestBudgetStore_CrossingResponseCommitsUsageNonExecutionAndCheckpointTogeth
 	})
 	require.NoError(t, err)
 
-	result, err := store.InsertBudgetedResponse(ctx, BudgetedResponse{
-		SessionID: root.ID, RootID: root.ID,
+	result, err := store.CommitAcceptedResponseDisposition(ctx, AcceptedResponseDisposition{
+		SessionID: root.ID, RootID: root.ID, Iteration: 1, Kind: ResponseDispositionToolCall,
 		Message: &transcript.Message{
 			Role: "assistant", Content: "checkpoint summary", CostUSD: 0.75,
 			ToolCalls: json.RawMessage(`[{"id":"danger","name":"bash","arguments":{"command":"false"}}]`),
 		},
 	})
 	require.NoError(t, err)
-	require.True(t, result.Fired)
-	late, err := store.InsertBudgetedResponse(ctx, BudgetedResponse{
-		SessionID: root.ID, RootID: root.ID,
+	require.True(t, result.BudgetFired)
+	late, err := store.CommitAcceptedResponseDisposition(ctx, AcceptedResponseDisposition{
+		SessionID: root.ID, RootID: root.ID, Iteration: 2, Kind: ResponseDispositionToolCall,
 		Message: &transcript.Message{
 			Role: "assistant", Content: "late parallel response", CostUSD: 0.1,
 			ToolCalls: json.RawMessage(`[{"id":"late","name":"bash","arguments":{}}]`),
 		},
 	})
 	require.NoError(t, err)
-	assert.True(t, late.Fired)
+	assert.True(t, late.BudgetFired)
 
 	var assistantCount, resultCount, checkpointCount int
 	require.NoError(t, db.QueryRowContext(ctx, `SELECT COUNT(*) FROM messages

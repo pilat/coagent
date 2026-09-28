@@ -38,7 +38,7 @@ func TestRunLoop_ReadHeavyFixtureFewerIterations(t *testing.T) {
 	const reads = 5
 
 	newReadAgent := func() *svc {
-		agent := newTestAgent(&stubTool{id: "read", result: "file body", parallelSafe: true})
+		agent := newDurableTestAgent(t, &stubTool{id: "read", result: "file body", parallelSafe: true})
 
 		return agent
 	}
@@ -50,7 +50,32 @@ func TestRunLoop_ReadHeavyFixtureFewerIterations(t *testing.T) {
 		{Text: "same final answer"},
 		textResponse("confirmed"),
 	}}
-	parallelAgent.llmClient = parallelLLM
+	parallelAgent.models = newTestModelRuntime(parallelLLM, parallelAgent.store, parallelAgent.id)
+	parallelAgent.turns = newToolTurns(
+		parallelAgent.registry,
+		parallelAgent.models,
+		parallelAgent.ms,
+		testProgressBoundary(parallelAgent.boundary),
+	)
+	parallelAgent.contexts = newCheckpointOwner(
+		parallelAgent.ms,
+		parallelAgent.models,
+		parallelAgent.prompt,
+		parallelAgent.turns,
+		parallelAgent.transcript(),
+		parallelAgent.dispositions,
+		parallelAgent.budgetGate,
+		parallelAgent.outputStore,
+		parallelAgent.boundary,
+		&parallelAgent.stamper,
+		nil,
+		nil,
+		checkpointOptions{
+			id:            parallelAgent.id,
+			outputEnabled: parallelAgent.outputEnabled,
+			agentsMD:      parallelAgent.agentsMD,
+		},
+	)
 
 	core, logs := observer.New(zapcore.InfoLevel)
 	ctx := logger.ToContext(t.Context(), zap.New(core))
@@ -83,7 +108,19 @@ func TestRunLoop_ReadHeavyFixtureFewerIterations(t *testing.T) {
 	serialResponses = append(serialResponses, textResponse("same final answer"), textResponse("confirmed"))
 
 	serialLLM := &loopScriptLLM{responses: serialResponses}
-	serialAgent.llmClient = serialLLM
+	serialAgent.models = newTestModelRuntime(serialLLM, serialAgent.store, serialAgent.id)
+	serialAgent.turns = newToolTurns(
+		serialAgent.registry,
+		serialAgent.models,
+		serialAgent.ms,
+		testProgressBoundary(serialAgent.boundary),
+	)
+	serialAgent.contexts = newCheckpointOwner(
+		serialAgent.ms, serialAgent.models, serialAgent.prompt, serialAgent.turns, serialAgent.transcript(),
+		serialAgent.dispositions, serialAgent.budgetGate, serialAgent.outputStore, serialAgent.boundary,
+		&serialAgent.stamper, nil, nil,
+		checkpointOptions{id: serialAgent.id, outputEnabled: serialAgent.outputEnabled, agentsMD: serialAgent.agentsMD},
+	)
 
 	serialCore, _ := observer.New(zapcore.InfoLevel)
 	serialCtx := logger.ToContext(t.Context(), zap.New(serialCore))
@@ -99,7 +136,7 @@ func TestRunLoop_ReadHeavyFixtureFewerIterations(t *testing.T) {
 // The fallback twin of the read-heavy fixture: one batch call covering the same
 // five reads, recording exactly one tool.batch summary.
 func TestRunLoop_BatchFallbackFixtureRecordsOneSummary(t *testing.T) {
-	agent := newTestAgent(&stubTool{id: "read", result: "file body", parallelSafe: true})
+	agent := newDurableTestAgent(t, &stubTool{id: "read", result: "file body", parallelSafe: true})
 	agent.registry.Register(builtin.NewBatchTool(agent.registry))
 
 	params := `{"calls":[`
@@ -120,7 +157,14 @@ func TestRunLoop_BatchFallbackFixtureRecordsOneSummary(t *testing.T) {
 		{Text: "same final answer"},
 		textResponse("confirmed"),
 	}}
-	agent.llmClient = batchLLM
+	agent.models = newTestModelRuntime(batchLLM, agent.store, agent.id)
+	agent.turns = newToolTurns(agent.registry, agent.models, agent.ms, testProgressBoundary(agent.boundary))
+	agent.contexts = newCheckpointOwner(
+		agent.ms, agent.models, agent.prompt, agent.turns, agent.transcript(),
+		agent.dispositions, agent.budgetGate, agent.outputStore, agent.boundary,
+		&agent.stamper, nil, nil,
+		checkpointOptions{id: agent.id, outputEnabled: agent.outputEnabled, agentsMD: agent.agentsMD},
+	)
 
 	core, logs := observer.New(zapcore.InfoLevel)
 	ctx := logger.ToContext(t.Context(), zap.New(core))

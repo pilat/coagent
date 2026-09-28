@@ -125,7 +125,7 @@ func TestDeliveryDirectToolResult_ClearsCompletionState(t *testing.T) {
 	sessionID := seedCompletionSession(t, store, db, projectID)
 	seedPendingCheck(t, db, sessionID)
 
-	_, _, err := store.InsertToolResultWithDirectOutput(ctx, sessionID, &transcript.Message{
+	_, _, err := insertSingleToolResult(ctx, store, sessionID, &transcript.Message{
 		Role: "tool", Content: "external result", ToolCallID: "sleep-1", ToolName: "sleep",
 	}, nil)
 	require.NoError(t, err)
@@ -143,13 +143,13 @@ func TestDeliveryReplay_KeepsNewerCompletionState(t *testing.T) {
 	result := &transcript.Message{
 		Role: "tool", Content: "external result", ToolCallID: "sleep-1", ToolName: "sleep",
 	}
-	_, _, err := store.InsertToolResultWithDirectOutput(ctx, sessionID, result, nil)
+	_, _, err := insertSingleToolResult(ctx, store, sessionID, result, nil)
 	require.NoError(t, err)
 
 	// Replays insert no new model input and must not clear a newer check.
 	seedPendingCheck(t, db, sessionID)
 
-	_, _, err = store.InsertToolResultWithDirectOutput(ctx, sessionID, result, nil)
+	_, _, err = insertSingleToolResult(ctx, store, sessionID, result, nil)
 	require.NoError(t, err)
 
 	candidate, _, streak := readCompletionState(t, db, sessionID)

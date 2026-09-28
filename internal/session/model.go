@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 
 	"go.uber.org/zap"
 
@@ -14,11 +15,67 @@ import (
 	"github.com/pilat/coagent/internal/llm"
 	"github.com/pilat/coagent/internal/llmwire"
 	"github.com/pilat/coagent/internal/logger"
+	"github.com/pilat/coagent/internal/sessionstore"
+	"github.com/pilat/coagent/internal/tool"
 )
 
-// ResolveReasoningLevel settles a requested effort level the way a live model
-// switch does. Callers outside the loop use it so what they record is what a
-// session will ask for. Resolving an already-resolved level is a no-op.
+const compactionThreshold = 80000
+
+var (
+	_              modelRuntime = (*sessionModel)(nil)
+	errModelClosed              = errors.New("session model is closed")
+)
+
+type modelRuntime interface {
+	initializeClient(string)
+	SetModel(string, string) error
+	Chat(
+		context.Context,
+		string,
+		[]llmwire.Message,
+		[]llmwire.ToolSchema,
+		...llmwire.ChatOption,
+	) (*llmwire.Response, error)
+	Close() error
+	snapshot() modelSnapshot
+	recordBaseline(context.Context, int, int, uint64)
+	restoreBaseline(*sessionstore.ContextBaseline)
+	clearBaseline(context.Context)
+}
+
+type baselineStore interface {
+	SaveContextBaseline(context.Context, int64, sessionstore.ContextBaseline) error
+	ClearContextBaseline(context.Context, int64) error
+}
+
+type modelSnapshot struct {
+	model         string
+	reasoning     string
+	contextWindow int
+	generation    uint64
+	baseline      *contextBaseline
+}
+
+type sessionModel struct {
+	mu              sync.RWMutex
+	client          llm.Client
+	model           string
+	reasoning       string
+	generation      uint64
+	baseline        *contextBaseline
+	closed          bool
+	cfg             *config.Config
+	newClient       func(*config.Config, string) (llm.Client, error)
+	prompt          *promptBuilder
+	registry        tool.Registry
+	authorizer      llm.ImageAuthorizer
+	store           baselineStore
+	sessionID       int64
+	providerSession string
+}
+
+// ResolveReasoningLevel applies the active model's effort vocabulary and defaults.
+// Resolving an already-resolved level is a no-op.
 func ResolveReasoningLevel(models []config.ModelEntry, modelID, requested string) (string, error) {
 	for _, m := range models {
 		if m.ID == modelID {
@@ -29,18 +86,150 @@ func ResolveReasoningLevel(models []config.ModelEntry, modelID, requested string
 	return "", fmt.Errorf("unknown model: %s", modelID)
 }
 
+// SetModel preserves active calls and discards their measurements after switching.
+func (s *sessionModel) SetModel(modelID, reasoning string) error {
+	log := logger.Named("session.model")
+
+	s.mu.RLock()
+	closed := s.closed
+	s.mu.RUnlock()
+
+	if closed {
+		return errModelClosed
+	}
+
+	reasoning, err := validateModelSwitch(s.cfg, modelID, reasoning)
+	if err != nil {
+		return err
+	}
+
+	newClient, err := s.newClient(s.cfg, modelID)
+	if err != nil {
+		return fmt.Errorf("create client for model %s: %w", modelID, err)
+	}
+
+	newClient.SetReasoningLevel(reasoning)
+
+	newClient.SetSessionID(s.providerSession)
+
+	if s.authorizer != nil {
+		newClient.SetImageAuthorizer(s.authorizer)
+	}
+
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+
+		if closeErr := newClient.Close(); closeErr != nil {
+			log.Warn("unused_llm_close_failed", zap.Error(closeErr))
+		}
+
+		return errModelClosed
+	}
+
+	// A closed owner cannot publish replacement guidance or adopt its client.
+	s.prompt.setModelsSection(buildModelsSection(modelID))
+	s.prompt.setModelSearch(s.registry, s.cfg.UnifiedConfig.SearchNativeActive(modelID))
+
+	oldClient := s.client
+	s.client = newClient
+	s.model = modelID
+	s.reasoning = reasoning
+	// Another window and another tokenizer: the old measurement describes neither,
+	// and a request still in flight must not write one back.
+	s.baseline = nil
+	s.generation++
+	s.mu.Unlock()
+
+	if err := oldClient.Close(); err != nil {
+		log.Warn("old_llm_close_failed", zap.Error(err))
+	}
+
+	log.Info("model_switched", zap.String("model", modelID), zap.String("reasoning", reasoning))
+
+	return nil
+}
+
+// Chat retains the client lease until provider I/O finishes, excluding closure.
+func (s *sessionModel) Chat(
+	ctx context.Context,
+	system string,
+	messages []llmwire.Message,
+	tools []llmwire.ToolSchema,
+	opts ...llmwire.ChatOption,
+) (*llmwire.Response, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	if s.closed {
+		return nil, errModelClosed
+	}
+
+	// callLLM/compaction add their own operation context. Returning the provider
+	// error unchanged also preserves the established user notification text.
+	//nolint:wrapcheck // wrapped at the two operation-level callers
+	return s.client.Chat(ctx, system, messages, tools, opts...)
+}
+
+// Close permanently retires the owner after its in-flight calls have returned.
+func (s *sessionModel) Close() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.closed {
+		return nil
+	}
+
+	s.closed = true
+
+	if err := s.client.Close(); err != nil {
+		return fmt.Errorf("close LLM client: %w", err)
+	}
+
+	return nil
+}
+
+func newModelRuntime(
+	client llm.Client,
+	cfg *config.Config,
+	factory func(*config.Config, string) (llm.Client, error),
+	prompt *promptBuilder,
+	registry tool.Registry,
+	authorizer llm.ImageAuthorizer,
+	store baselineStore,
+	sessionID, rootID int64,
+) modelRuntime {
+	group := strconv.FormatInt(sessionID, 10)
+	if sessionID != rootID {
+		group = fmt.Sprintf("%d:%d", rootID, sessionID)
+	}
+
+	m := &sessionModel{
+		client: client, cfg: cfg, newClient: factory, model: cfg.Model,
+		prompt: prompt, registry: registry, authorizer: authorizer,
+		store: store, sessionID: sessionID, providerSession: group,
+	}
+	prompt.setNativeSearch(cfg.UnifiedConfig.SearchNativeActive(cfg.Model))
+
+	if authorizer != nil {
+		client.SetImageAuthorizer(authorizer)
+	}
+
+	return m
+}
+
 // validateModelSwitch checks that the model ID and reasoning level are valid.
-func (s *svc) validateModelSwitch(modelID, reasoning string) (string, error) {
-	if s.cfg.UnifiedConfig == nil || len(s.cfg.UnifiedConfig.Models) == 0 {
+func validateModelSwitch(cfg *config.Config, modelID, reasoning string) (string, error) {
+	if cfg.UnifiedConfig == nil || len(cfg.UnifiedConfig.Models) == 0 {
 		return "", errors.New("no models configured")
 	}
 
-	level, err := ResolveReasoningLevel(s.cfg.UnifiedConfig.Models, modelID, reasoning)
+	level, err := ResolveReasoningLevel(cfg.UnifiedConfig.Models, modelID, reasoning)
 	if err != nil {
 		return "", err
 	}
 
-	if len(s.cfg.UnifiedConfig.Providers) == 0 {
+	if len(cfg.UnifiedConfig.Providers) == 0 {
 		return "", errors.New("no providers configured for model switching")
 	}
 
@@ -68,95 +257,87 @@ func resolveEffort(m config.ModelEntry, requested string) (string, error) {
 	return requested, nil
 }
 
-// handleSetModel switches the LLM model mid-session.
-func (s *svc) handleSetModel(modelID, reasoning string) error {
-	reasoning, err := s.validateModelSwitch(modelID, reasoning)
+func (s *sessionModel) snapshot() modelSnapshot {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	window := s.client.ContextWindow()
+	if window <= 0 {
+		window = compactionThreshold
+	}
+
+	baseline := s.baseline
+	if baseline != nil {
+		baselineCopy := *baseline
+		baseline = &baselineCopy
+	}
+
+	return modelSnapshot{
+		model: s.model, reasoning: s.reasoning, contextWindow: window,
+		generation: s.generation, baseline: baseline,
+	}
+}
+
+// initializeClient follows successful transcript initialization; a failed open never
+// changes the provider's session grouping or requested reasoning level.
+func (s *sessionModel) initializeClient(reasoning string) {
+	if reasoning == "" {
+		reasoning = string(llm.ReasoningMedium)
+	}
+
+	s.reasoning = reasoning
+	s.client.SetSessionID(s.providerSession)
+	s.client.SetReasoningLevel(reasoning)
+}
+
+func (s *sessionModel) recordBaseline(ctx context.Context, promptTokens, sentCount int, generation uint64) {
+	if promptTokens <= 0 {
+		return
+	}
+
+	s.mu.Lock()
+	if s.generation != generation {
+		s.mu.Unlock()
+		return
+	}
+
+	s.baseline = &contextBaseline{promptTokens: promptTokens, messageCount: sentCount}
+	model := s.model
+	s.mu.Unlock()
+
+	if s.store == nil {
+		return
+	}
+
+	err := s.store.SaveContextBaseline(ctx, s.sessionID, sessionstore.ContextBaseline{
+		Model: model, PromptTokens: promptTokens, MessageCount: sentCount,
+	})
 	if err != nil {
-		return err
+		logger.Ctx(ctx).Named("session.context").Warn("persist_context_baseline_failed", zap.Error(err))
+	}
+}
+
+func (s *sessionModel) restoreBaseline(b *sessionstore.ContextBaseline) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if b == nil || b.Model != s.model || b.PromptTokens <= 0 {
+		return
 	}
 
-	newClient, err := s.newLLMWithModel(s.cfg, modelID)
-	if err != nil {
-		return fmt.Errorf("create client for model %s: %w", modelID, err)
-	}
+	s.baseline = &contextBaseline{promptTokens: b.PromptTokens, messageCount: b.MessageCount}
+}
 
-	newClient.SetReasoningLevel(reasoning)
-
-	// Preserve session ID for OpenRouter UI grouping
-	sessionID := strconv.FormatInt(s.id, 10)
-	if s.id != s.rootID {
-		sessionID = fmt.Sprintf("%d:%d", s.rootID, s.id)
-	}
-
-	newClient.SetSessionID(sessionID)
-	s.attachImageAuthorizer(newClient)
-
-	// promptBuilder is self-synchronized, so this needs no modelMu.
-	s.prompt.setModelsSection(buildModelsSection(modelID))
-	// Search guidance follows the active client: a switch can flip the native
-	// passthrough on or off (and the section with it).
-	s.prompt.setModelSearch(s.registry, s.cfg.UnifiedConfig.SearchNativeActive(modelID))
-
-	// Swap the triplet under modelMu (the loop reads it via currentLLM /
-	// buildSessionStatus); close the old client outside the lock — Close is IO.
-	s.modelMu.Lock()
-	oldClient := s.llmClient
-	s.llmClient = newClient
-	s.model = modelID
-	s.reasoningLevel = reasoning
-	// Another window and another tokenizer: the old measurement describes neither,
-	// and a request still in flight must not write one back.
+func (s *sessionModel) clearBaseline(ctx context.Context) {
+	s.mu.Lock()
 	s.baseline = nil
-	s.modelEpoch++
-	s.modelMu.Unlock()
+	s.mu.Unlock()
 
-	log := logger.Named("session.model")
-	if err := oldClient.Close(); err != nil {
-		log.Warn("old_llm_close_failed", zap.Error(err))
+	if s.store == nil {
+		return
 	}
 
-	log.Info("model_switched", zap.String("model", modelID), zap.String("reasoning", reasoning))
-
-	return nil
-}
-
-// chat holds a read lease for the entire provider call. handleSetModel must take
-// the write lock before swapping, so it cannot close the old client until every
-// in-flight Chat using that client has returned.
-func (s *svc) chat(
-	ctx context.Context,
-	system string,
-	messages []llmwire.Message,
-	tools []llmwire.ToolSchema,
-	opts ...llmwire.ChatOption,
-) (*llmwire.Response, error) {
-	s.modelMu.RLock()
-	defer s.modelMu.RUnlock()
-
-	// callLLM/compaction add their own operation context. Returning the provider
-	// error unchanged also preserves the established user notification text.
-	//nolint:wrapcheck // wrapped at the two operation-level callers
-	return s.llmClient.Chat(ctx, system, messages, tools, opts...)
-}
-
-// closeLLM excludes both model swaps and in-flight provider calls while the
-// session releases the current client.
-func (s *svc) closeLLM() error {
-	s.modelMu.Lock()
-	defer s.modelMu.Unlock()
-
-	if err := s.llmClient.Close(); err != nil {
-		return fmt.Errorf("close LLM client: %w", err)
+	if err := s.store.ClearContextBaseline(ctx, s.sessionID); err != nil {
+		logger.Ctx(ctx).Named("session.context").Warn("clear_context_baseline_failed", zap.Error(err))
 	}
-
-	return nil
-}
-
-// currentLLM returns a short-lived snapshot for non-resource operations such as
-// reading ContextWindow. Resource-using calls go through chat/closeLLM instead.
-func (s *svc) currentLLM() llm.Client {
-	s.modelMu.RLock()
-	defer s.modelMu.RUnlock()
-
-	return s.llmClient
 }

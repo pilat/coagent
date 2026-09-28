@@ -202,17 +202,27 @@ func newModelSwitchSession(t *testing.T, baseURL string) *svc {
 	client, err := llm.NewClientWithModel(cfg, "model-a")
 	require.NoError(t, err)
 
-	return &svc{
-		id:              record.ID,
-		rootID:          record.ID,
-		cfg:             cfg,
-		model:           "model-a",
-		llmClient:       client,
-		newLLMWithModel: llm.NewClientWithModel,
-		store:           store,
-		ms:              newMessageStore(store, record.ID, nil),
-		loopDetector:    newLoopDetector(),
-		registry:        tool.NewRegistry(),
-		prompt:          newPromptBuilder(testPrompt, ""),
+	prompt := newPromptBuilder(testPrompt, "")
+	reg := tool.NewRegistry()
+	cfg.Model = "model-a"
+	model := newModelRuntime(client, cfg, llm.NewClientWithModel, prompt, reg, nil, store, record.ID, record.ID)
+
+	s := &svc{
+		id:     record.ID,
+		rootID: record.ID,
+		models: model,
+		store:  store,
+		ms:     newMessageStore(store, record.ID, nil),
+
+		registry: reg,
+		prompt:   prompt,
 	}
+	s.turns = newToolTurns(s.registry, s.models, s.ms, testProgressBoundary(s.boundary))
+	s.contexts = newCheckpointOwner(
+		s.ms, s.models, s.prompt, s.turns, s.transcript(),
+		s.dispositions, s.budgetGate, s.outputStore, s.boundary,
+		&s.stamper, nil, nil,
+		checkpointOptions{id: s.id, outputEnabled: s.outputEnabled, agentsMD: s.agentsMD},
+	)
+	return s
 }

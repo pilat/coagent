@@ -78,7 +78,7 @@ func (b *receiptBoundary) Handle(context.Context, PendingInput, string) error {
 // acceptance transition: exactly one receipt, keyed by the accepted input, and
 // the ephemeral notification only after that commit.
 func TestRunLoopAcceptsSkillWithActivationReceipt(t *testing.T) {
-	agent := newTestAgent()
+	agent := newDurableTestAgent(t)
 	ldr := loader.New()
 	ldr.RegisterSkill(&loader.Skill{
 		Name:        "review",
@@ -94,9 +94,23 @@ func TestRunLoopAcceptsSkillWithActivationReceipt(t *testing.T) {
 		},
 	}
 	agent.boundary = boundary
+	agent.turns = newToolTurns(agent.registry, agent.models, agent.ms, testProgressBoundary(agent.boundary))
+	agent.contexts = newCheckpointOwner(
+		agent.ms, agent.models, agent.prompt, agent.turns, agent.transcript(),
+		agent.dispositions, agent.budgetGate, agent.outputStore, agent.boundary,
+		&agent.stamper, nil, nil,
+		checkpointOptions{id: agent.id, outputEnabled: agent.outputEnabled, agentsMD: agent.agentsMD},
+	)
 
 	llmClient := &loopScriptLLM{responses: []*llmwire.Response{textResponse("answered")}}
-	agent.llmClient = llmClient
+	agent.models = newTestModelRuntime(llmClient, agent.store, agent.id)
+	agent.turns = newToolTurns(agent.registry, agent.models, agent.ms, testProgressBoundary(agent.boundary))
+	agent.contexts = newCheckpointOwner(
+		agent.ms, agent.models, agent.prompt, agent.turns, agent.transcript(),
+		agent.dispositions, agent.budgetGate, agent.outputStore, agent.boundary,
+		&agent.stamper, nil, nil,
+		checkpointOptions{id: agent.id, outputEnabled: agent.outputEnabled, agentsMD: agent.agentsMD},
+	)
 	notifier := &loopNotifier{}
 
 	_, err := runTestLoop(t.Context(), t, agent, loopOptions{Notify: notifier.fn}, iterationGuard(5))
@@ -113,7 +127,7 @@ func TestRunLoopAcceptsSkillWithActivationReceipt(t *testing.T) {
 // The receipt belongs to the manager-owned root path. A non-manager input that
 // expands a skill promotes through the plain Accept path with no receipt.
 func TestRunLoopSkillWithoutManagerOwnerHasNoReceipt(t *testing.T) {
-	agent := newTestAgent()
+	agent := newDurableTestAgent(t)
 	ldr := loader.New()
 	ldr.RegisterSkill(&loader.Skill{Name: "review", Content: "Review changes."})
 	agent.loader = ldr
@@ -122,9 +136,23 @@ func TestRunLoopSkillWithoutManagerOwnerHasNoReceipt(t *testing.T) {
 		input: &PendingInput{ID: 1, Content: "/skill review", ReceivedAt: time.Now()},
 	}
 	agent.boundary = boundary
+	agent.turns = newToolTurns(agent.registry, agent.models, agent.ms, testProgressBoundary(agent.boundary))
+	agent.contexts = newCheckpointOwner(
+		agent.ms, agent.models, agent.prompt, agent.turns, agent.transcript(),
+		agent.dispositions, agent.budgetGate, agent.outputStore, agent.boundary,
+		&agent.stamper, nil, nil,
+		checkpointOptions{id: agent.id, outputEnabled: agent.outputEnabled, agentsMD: agent.agentsMD},
+	)
 
 	llmClient := &loopScriptLLM{responses: []*llmwire.Response{textResponse("answered")}}
-	agent.llmClient = llmClient
+	agent.models = newTestModelRuntime(llmClient, agent.store, agent.id)
+	agent.turns = newToolTurns(agent.registry, agent.models, agent.ms, testProgressBoundary(agent.boundary))
+	agent.contexts = newCheckpointOwner(
+		agent.ms, agent.models, agent.prompt, agent.turns, agent.transcript(),
+		agent.dispositions, agent.budgetGate, agent.outputStore, agent.boundary,
+		&agent.stamper, nil, nil,
+		checkpointOptions{id: agent.id, outputEnabled: agent.outputEnabled, agentsMD: agent.agentsMD},
+	)
 	notifier := &loopNotifier{}
 
 	_, err := runTestLoop(t.Context(), t, agent, loopOptions{Notify: notifier.fn}, iterationGuard(5))
@@ -138,7 +166,7 @@ func TestRunLoopSkillWithoutManagerOwnerHasNoReceipt(t *testing.T) {
 // An unavailable skill is rejected before acceptance: no transcript row, no
 // receipt, and the human is told through the existing rejection notice.
 func TestRunLoopUnknownSkillEmitsNoReceipt(t *testing.T) {
-	agent := newTestAgent()
+	agent := newDurableTestAgent(t)
 	agent.loader = loader.New()
 
 	boundary := &receiptBoundary{
@@ -147,9 +175,23 @@ func TestRunLoopUnknownSkillEmitsNoReceipt(t *testing.T) {
 		},
 	}
 	agent.boundary = boundary
+	agent.turns = newToolTurns(agent.registry, agent.models, agent.ms, testProgressBoundary(agent.boundary))
+	agent.contexts = newCheckpointOwner(
+		agent.ms, agent.models, agent.prompt, agent.turns, agent.transcript(),
+		agent.dispositions, agent.budgetGate, agent.outputStore, agent.boundary,
+		&agent.stamper, nil, nil,
+		checkpointOptions{id: agent.id, outputEnabled: agent.outputEnabled, agentsMD: agent.agentsMD},
+	)
 
 	llmClient := &loopScriptLLM{responses: []*llmwire.Response{textResponse("answered")}}
-	agent.llmClient = llmClient
+	agent.models = newTestModelRuntime(llmClient, agent.store, agent.id)
+	agent.turns = newToolTurns(agent.registry, agent.models, agent.ms, testProgressBoundary(agent.boundary))
+	agent.contexts = newCheckpointOwner(
+		agent.ms, agent.models, agent.prompt, agent.turns, agent.transcript(),
+		agent.dispositions, agent.budgetGate, agent.outputStore, agent.boundary,
+		&agent.stamper, nil, nil,
+		checkpointOptions{id: agent.id, outputEnabled: agent.outputEnabled, agentsMD: agent.agentsMD},
+	)
 	notifier := &loopNotifier{}
 
 	_, err := runTestLoop(t.Context(), t, agent, loopOptions{Notify: notifier.fn}, iterationGuard(5))
@@ -165,7 +207,7 @@ func TestRunLoopUnknownSkillEmitsNoReceipt(t *testing.T) {
 // A blocked promotion (pending external work) must end the drain like the
 // plain Accept path: the durable input stays put and peeking again would spin.
 func TestRunLoopBlockedSkillPromotionEndsTheDrain(t *testing.T) {
-	agent := newTestAgent()
+	agent := newDurableTestAgent(t)
 	ldr := loader.New()
 	ldr.RegisterSkill(&loader.Skill{Name: "review", Content: "Review changes."})
 	agent.loader = ldr
@@ -177,9 +219,23 @@ func TestRunLoopBlockedSkillPromotionEndsTheDrain(t *testing.T) {
 		},
 	}
 	agent.boundary = boundary
+	agent.turns = newToolTurns(agent.registry, agent.models, agent.ms, testProgressBoundary(agent.boundary))
+	agent.contexts = newCheckpointOwner(
+		agent.ms, agent.models, agent.prompt, agent.turns, agent.transcript(),
+		agent.dispositions, agent.budgetGate, agent.outputStore, agent.boundary,
+		&agent.stamper, nil, nil,
+		checkpointOptions{id: agent.id, outputEnabled: agent.outputEnabled, agentsMD: agent.agentsMD},
+	)
 
 	llmClient := &loopScriptLLM{responses: []*llmwire.Response{textResponse("answered")}}
-	agent.llmClient = llmClient
+	agent.models = newTestModelRuntime(llmClient, agent.store, agent.id)
+	agent.turns = newToolTurns(agent.registry, agent.models, agent.ms, testProgressBoundary(agent.boundary))
+	agent.contexts = newCheckpointOwner(
+		agent.ms, agent.models, agent.prompt, agent.turns, agent.transcript(),
+		agent.dispositions, agent.budgetGate, agent.outputStore, agent.boundary,
+		&agent.stamper, nil, nil,
+		checkpointOptions{id: agent.id, outputEnabled: agent.outputEnabled, agentsMD: agent.agentsMD},
+	)
 	notifier := &loopNotifier{}
 
 	result, err := runTestLoop(t.Context(), t, agent, loopOptions{Notify: notifier.fn}, iterationGuard(5))

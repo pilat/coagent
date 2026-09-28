@@ -68,7 +68,7 @@ func TestStopOnStoreFailureDoesNotPublishIdle(t *testing.T) {
 		&mockFactory{}, backgroundprocess.NewStore(db), builtin.NewResources(), store, failing, sessions, sessions,
 		sessions, sessions, sessions, sessions,
 		subagent.NewStore(db), mustNewTransactions(t, db, sessionstore.InvalidateCompletionCheckTx),
-		nil, sessions, nil, nil,
+		nil, sessions, nil, nil, nil,
 	)
 	mgr.supervisor = sessionlifecycle.NewSupervisor(
 		sessions, mgr.links, mgr.ensureRunnerStartable, mgr.childTerminated, mgr.runSession,
@@ -112,7 +112,7 @@ func TestTeardownOnStoreFailureDoesNotPublishIdle(t *testing.T) {
 		&mockFactory{}, backgroundprocess.NewStore(db), builtin.NewResources(), store, failing, sessions, sessions,
 		sessions, sessions, sessions, sessions,
 		subagent.NewStore(db), mustNewTransactions(t, db, sessionstore.InvalidateCompletionCheckTx),
-		nil, sessions, nil, nil,
+		nil, sessions, nil, nil, nil,
 	)
 	controllers := newTestController(mgr, &config.Config{}, nil, nil)
 	notifications := controllers.ForManager("manager-teardown").Subscribe()

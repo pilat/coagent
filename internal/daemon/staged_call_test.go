@@ -7,6 +7,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/pilat/coagent/internal/configops"
 	"github.com/pilat/coagent/internal/session"
 	"github.com/pilat/coagent/internal/tool"
 )
@@ -15,14 +16,15 @@ import (
 // so the next session build no longer blocks on it.
 func TestPrepareSessionInputs_VerdictResolvesTheStagedCall(t *testing.T) {
 	ctx := context.Background()
-	mgr, _, store := newTestManager(t)
+	h := newConfigHarness(t)
+	mgr, store := h.mgr, h.store
 	pid := testProject(t, store, "/tmp/test")
 
 	rec, err := mgr.sessionStore.CreateSession(ctx, pid, "fake-model", "", nil)
 	require.NoError(t, err)
 
-	mgr.staged.stage(rec.ID, "call-7", tool.IDConfigEdit)
-	require.True(t, mgr.staged.has(rec.ID))
+	require.True(t, mgr.externalCalls.StageApply(rec.ID, "call-7", tool.IDConfigEdit, &configops.Staged{}))
+	require.NotEmpty(t, pendingCallsOf(t, mgr.externalCalls, rec.ID))
 
 	rs := newInputsRunner(pid, []queuedSessionInput{asyncSessionInput{value: pendingCallResultInput{
 		Call:    session.PendingToolCall{ID: "call-7", Name: tool.IDConfigEdit},
@@ -35,7 +37,11 @@ func TestPrepareSessionInputs_VerdictResolvesTheStagedCall(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, notifs, 1)
 
-	assert.False(t, mgr.staged.has(rec.ID), "the ledger entry is cleared once the result is injected")
+	assert.Empty(
+		t,
+		pendingCallsOf(t, mgr.externalCalls, rec.ID),
+		"the ledger entry is cleared once the result is injected",
+	)
 }
 
 func TestStagedCalls_Lifecycle(t *testing.T) {
@@ -62,4 +68,11 @@ func TestStagedCalls_Lifecycle(t *testing.T) {
 	assert.Nil(t, c.forSession(1))
 
 	c.resolve(1, "gone") // resolving twice is not an error
+}
+
+func pendingCallsOf(t *testing.T, owner externalCallCoordinator, sessionID int64) map[string]string {
+	t.Helper()
+	calls, err := owner.Pending(context.Background(), sessionID)
+	require.NoError(t, err)
+	return calls
 }

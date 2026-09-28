@@ -17,6 +17,44 @@ import (
 	"github.com/pilat/coagent/internal/toolexec"
 )
 
+var _ toolTurns = (*toolTurnExecutor)(nil)
+
+type toolTurns interface {
+	Execute(
+		context.Context,
+		[]llmwire.ToolCall,
+		*tool.ActivationGrant,
+		func(context.Context, string) error,
+	) (toolTurnResult, error)
+	schemas() []llmwire.ToolSchema
+	inventorySchemas() []llmwire.ToolSchema
+	toolsAllowed() bool
+	observeText() bool
+	reset()
+}
+
+type toolResultWriter interface {
+	addToolResult(context.Context, string, string, string) error
+	commitToolResults(context.Context, []toolResultCommit) error
+}
+
+type modelView interface {
+	snapshot() modelSnapshot
+}
+
+type toolTurnResult struct {
+	suspended     bool
+	consumedGrant bool
+}
+
+type toolTurnExecutor struct {
+	registry tool.Registry
+	model    modelView
+	writer   toolResultWriter
+	progress progressChangeBoundary
+	detector *loopDetector
+}
+
 // toolCallResultItem holds the decided outcome of one scheduled tool call.
 // Only items whose outcome is executed or failed carry persisted content;
 // suspended and cancelled items stay out of the transcript.
@@ -39,6 +77,88 @@ type plannedToolCall struct {
 	call llmwire.ToolCall
 	tool tool.Tool
 }
+
+// Execute adopts grant consumption only after the complete decided result set commits.
+func (e *toolTurnExecutor) Execute(
+	ctx context.Context,
+	toolCalls []llmwire.ToolCall,
+	grant *tool.ActivationGrant,
+	notify func(context.Context, string) error,
+) (toolTurnResult, error) {
+	log := logger.Ctx(ctx).Named("session.toolexec")
+
+	action := e.detector.check()
+	if action == actionBlock || action == actionForceTextOnly {
+		log.Warn("tool_calls_blocked", zap.Int("action", int(action)), zap.Int("count", len(toolCalls)))
+
+		for _, tc := range toolCalls {
+			if err := e.writer.addToolResult(ctx, tc.ID, tc.Name, loopBlockMessage); err != nil {
+				return toolTurnResult{}, err
+			}
+		}
+
+		return toolTurnResult{}, nil
+	}
+
+	results := e.schedule(ctx, toolCalls, grant)
+
+	// The diversity window records only callbacks that ran to a terminal
+	// outcome; suspended, skipped and cancelled calls never enter it.
+	records := make([]toolRecord, 0, len(results))
+	for _, r := range results {
+		if r.outcome != toolexec.OutcomeExecuted && r.outcome != toolexec.OutcomeFailed {
+			continue
+		}
+
+		records = append(records, toolRecord{
+			name:       r.toolCall.Name,
+			argsHash:   fingerprintArgs(r.toolCall.Arguments),
+			resultHash: fingerprintResult(r.content),
+			failed:     r.outcome == toolexec.OutcomeFailed,
+		})
+	}
+
+	e.detector.record(records)
+
+	return e.commitResults(ctx, results, e.detector.check(), grant, notify)
+}
+
+func newToolTurns(
+	registry tool.Registry,
+	model modelView,
+	writer toolResultWriter,
+	progress progressChangeBoundary,
+) toolTurns {
+	return &toolTurnExecutor{
+		registry: registry, model: model, writer: writer, progress: progress,
+		detector: newLoopDetector(),
+	}
+}
+
+func (e *toolTurnExecutor) schemas() []llmwire.ToolSchema {
+	if !e.toolsAllowed() {
+		return nil
+	}
+
+	return e.inventorySchemas()
+}
+
+func (e *toolTurnExecutor) inventorySchemas() []llmwire.ToolSchema {
+	return tool.ToSchemas(e.registry.List())
+}
+
+func (e *toolTurnExecutor) toolsAllowed() bool { return !e.detector.forceTextOnly }
+
+func (e *toolTurnExecutor) observeText() bool {
+	forced := e.detector.forceTextOnly
+	if forced {
+		e.detector.clearForceTextOnly()
+	}
+
+	return forced
+}
+
+func (e *toolTurnExecutor) reset() { e.detector.resetWindow() }
 
 // batchConflict rejects a call that cannot share an assistant turn with its
 // siblings: only sleep is invalid next to task/send_to_subagent — earlier
@@ -98,27 +218,29 @@ func failedItem(index int, tc llmwire.ToolCall, err error, contextWindow int) to
 	}
 }
 
-// executeToolCallsInternal schedules the assistant turn's calls through the
-// shared executor and returns decided items in call order without committing
-// them to the transcript.
-func executeToolCallsInternal(ctx context.Context, agent *svc, toolCalls []llmwire.ToolCall) []toolCallResultItem {
+// schedule retains the planned tool instances and assistant order through execution.
+func (e *toolTurnExecutor) schedule(
+	ctx context.Context,
+	toolCalls []llmwire.ToolCall,
+	grant *tool.ActivationGrant,
+) []toolCallResultItem {
 	log := logger.Ctx(ctx).Named("session.toolexec")
-	contextWindow := agent.contextWindow()
+	contextWindow := e.model.snapshot().contextWindow
 
 	results := make([]toolCallResultItem, len(toolCalls))
 
 	// Activation-only rule: an activated mutation must be the only call in its
 	// command turn, and no sibling side effect may start. Rejected as a whole
 	// before any execution.
-	if agent.currentActivation != nil {
-		ctx = tool.WithActivationGrant(ctx, *agent.currentActivation)
+	if grant != nil {
+		ctx = tool.WithActivationGrant(ctx, *grant)
 
 		if len(toolCalls) > 1 && slices.ContainsFunc(toolCalls, func(call llmwire.ToolCall) bool {
-			return call.Name == agent.currentActivation.ToolID
+			return call.Name == grant.ToolID
 		}) {
 			for i, call := range toolCalls {
 				inv := failedItem(i, call, fmt.Errorf(
-					"%s must be invoked alone in its activated command turn", agent.currentActivation.ToolID,
+					"%s must be invoked alone in its activated command turn", grant.ToolID,
 				), contextWindow)
 				results[i] = inv.Result
 			}
@@ -132,7 +254,7 @@ func executeToolCallsInternal(ctx context.Context, agent *svc, toolCalls []llmwi
 	// execution.
 	calls := make([]toolexec.Call[plannedToolCall], len(toolCalls))
 	for i, tc := range toolCalls {
-		tl := agent.registry.Get(tc.Name)
+		tl := e.registry.Get(tc.Name)
 
 		calls[i] = toolexec.Call[plannedToolCall]{
 			Call: plannedToolCall{
@@ -164,7 +286,7 @@ func executeToolCallsInternal(ctx context.Context, agent *svc, toolCalls []llmwi
 
 		log.Info("tool_call", zap.String("name", pc.call.Name))
 
-		return executeOneTool(callCtx, pc.tool, pc.call, idx, agent.contextWindow(), log)
+		return executeOneTool(callCtx, pc.tool, pc.call, idx, e.model.snapshot().contextWindow, log)
 	}
 
 	report := toolexec.Schedule(ctx, calls, exec)
@@ -181,14 +303,13 @@ func executeToolCallsInternal(ctx context.Context, agent *svc, toolCalls []llmwi
 		zap.Int64("duration_ms", report.Summary.DurationMS),
 	)
 
-	return mapExecutorReport(agent, log, toolCalls, report)
+	return mapExecutorReport(log, toolCalls, report)
 }
 
 // mapExecutorReport folds the executor's ordered report into decided items,
 // preserving assistant call order. Outcome slots are never left zero: a zero
 // outcome reads as executed and would commit an empty result row.
 func mapExecutorReport(
-	agent *svc,
 	log *zap.Logger,
 	toolCalls []llmwire.ToolCall,
 	report toolexec.Report[toolCallResultItem],
@@ -209,7 +330,6 @@ func mapExecutorReport(
 			// Owned pending call: the real result is injected on resume.
 			log.Info("tool_suspended", zap.String("name", tc.Name))
 
-			agent.suspended = true
 			results[i].outcome = toolexec.OutcomeSuspended
 			results[i].toolCall = tc
 		case toolexec.OutcomeSkipped:
@@ -314,56 +434,17 @@ func runResolvedTool(
 	}
 }
 
-// executeToolCalls orchestrates tool execution with loop detection.
-func executeToolCalls(ctx context.Context, agent *svc, toolCalls []llmwire.ToolCall) error {
-	log := logger.Ctx(ctx).Named("session.toolexec")
-
-	action := agent.loopDetector.check()
-	if action == actionBlock || action == actionForceTextOnly {
-		log.Warn("tool_calls_blocked", zap.Int("action", int(action)), zap.Int("count", len(toolCalls)))
-
-		for _, tc := range toolCalls {
-			if err := agent.ms.addToolResult(ctx, tc.ID, tc.Name, loopBlockMessage); err != nil {
-				return err
-			}
-		}
-
-		return nil
-	}
-
-	results := executeToolCallsInternal(ctx, agent, toolCalls)
-
-	// The diversity window records only callbacks that ran to a terminal
-	// outcome; suspended, skipped and cancelled calls never enter it.
-	records := make([]toolRecord, 0, len(results))
-	for _, r := range results {
-		if r.outcome != toolexec.OutcomeExecuted && r.outcome != toolexec.OutcomeFailed {
-			continue
-		}
-
-		records = append(records, toolRecord{
-			name:       r.toolCall.Name,
-			argsHash:   fingerprintArgs(r.toolCall.Arguments),
-			resultHash: fingerprintResult(r.content),
-			failed:     r.outcome == toolexec.OutcomeFailed,
-		})
-	}
-
-	agent.loopDetector.record(records)
-
-	return recordToolResults(ctx, agent, results, agent.loopDetector.check())
-}
-
-// recordToolResults commits the decided non-pending set in one transaction,
-// then runs activation consumption and progress hooks. The loop-detector
-// warning fronts the last persisted executed or failed result, or none is
-// emitted when the turn produced no such result.
-func recordToolResults(
+// commitResults settles the decided set before consumption and progress effects.
+// The detector warning belongs to its last executed or failed result.
+//
+//nolint:gocyclo // Outcome branches preserve the decided order through commit and progress publication.
+func (e *toolTurnExecutor) commitResults(
 	ctx context.Context,
-	agent *svc,
 	results []toolCallResultItem,
 	postAction loopAction,
-) error {
+	grant *tool.ActivationGrant,
+	notify func(context.Context, string) error,
+) (toolTurnResult, error) {
 	// The warning fronts only the turn's last persisted executed/failed result,
 	// so its index must be fixed before the commit loop walks the rows.
 	warnIdx := -1
@@ -397,7 +478,7 @@ func recordToolResults(
 		}
 
 		if i == warnIdx {
-			content = prependLoopWarning(ctx, agent, postAction, r.toolCall.Name, content)
+			content = prependLoopWarning(ctx, e.detector, postAction, r.toolCall.Name, content)
 		}
 
 		commits = append(commits, toolResultCommit{
@@ -413,54 +494,46 @@ func recordToolResults(
 		})
 	}
 
-	if err := agent.ms.commitToolResults(ctx, commits); err != nil {
-		return err
+	out := toolTurnResult{}
+	for _, result := range results {
+		out.suspended = out.suspended || result.outcome == toolexec.OutcomeSuspended
 	}
 
-	// All rows are durable; user-facing semantics fire only now.
-	for _, r := range results {
-		if r.outcome != toolexec.OutcomeExecuted {
+	if err := e.writer.commitToolResults(ctx, commits); err != nil {
+		return out, err
+	}
+
+	for _, result := range results {
+		if result.outcome != toolexec.OutcomeExecuted {
 			continue
 		}
 
-		if activated := consumeActivation(agent, r); activated {
-			if err := publishProgressSnapshot(ctx, agent); err != nil {
-				return err
+		activated := len(result.directMessages) > 0 && grant != nil &&
+			result.toolCall.Name == grant.ToolID && !out.consumedGrant
+
+		out.consumedGrant = out.consumedGrant || activated
+		if result.toolCall.Name == "todowrite" || activated {
+			if err := e.publishProgress(ctx, notify); err != nil {
+				return out, err
 			}
 		}
 	}
 
-	return nil
+	return out, nil
 }
 
-// consumeActivation clears the current activation grant when its owning tool
-// just executed and reports whether the progress snapshot must republish.
-func consumeActivation(agent *svc, r toolCallResultItem) bool {
-	activatedDirect := len(r.directMessages) > 0 && agent.currentActivation != nil &&
-		r.toolCall.Name == agent.currentActivation.ToolID
-
-	if activatedDirect {
-		agent.currentActivation = nil
-	}
-
-	return r.toolCall.Name == "todowrite" || activatedDirect
-}
-
-// publishProgressSnapshot enqueues the TODO progress snapshot through the
-// boundary and notifies through the loop's channel, superseding tolerated.
-func publishProgressSnapshot(ctx context.Context, agent *svc) error {
-	provider, ok := agent.boundary.(progressChangeBoundary)
-	if !ok {
+func (e *toolTurnExecutor) publishProgress(ctx context.Context, notify func(context.Context, string) error) error {
+	if e.progress == nil {
 		return nil
 	}
 
-	message, published, progressErr := provider.ProgressChange(ctx)
+	message, published, progressErr := e.progress.ProgressChange(ctx)
 	if progressErr != nil && !errors.Is(progressErr, sessionstore.ErrProgressSuperseded) {
 		return fmt.Errorf("enqueue TODO progress snapshot: %w", progressErr)
 	}
 
-	if published && agent.loopOpts.Notify != nil {
-		_ = agent.loopOpts.Notify(ctx, message)
+	if published && notify != nil {
+		_ = notify(ctx, message)
 	}
 
 	return nil
@@ -518,13 +591,18 @@ func capDirectOutput(direct []string) []string {
 
 // prependLoopWarning returns content fronted by the detector's warning, or
 // unchanged when postAction asks for none.
-func prependLoopWarning(ctx context.Context, agent *svc, postAction loopAction, toolName, content string) string {
+func prependLoopWarning(
+	ctx context.Context,
+	detector *loopDetector,
+	postAction loopAction,
+	toolName, content string,
+) string {
 	log := logger.Ctx(ctx).Named("session.toolexec")
 
 	switch postAction {
 	case actionWarn:
-		uniqueOutcomes := countUniqueOutcomes(agent.loopDetector.window)
-		windowLen := len(agent.loopDetector.window)
+		uniqueOutcomes := countUniqueOutcomes(detector.window)
+		windowLen := len(detector.window)
 		diversityPct := 0
 
 		if windowLen > 0 {
@@ -535,7 +613,7 @@ func prependLoopWarning(ctx context.Context, agent *svc, postAction loopAction, 
 
 		return fmt.Sprintf(loopWarningTemplate, diversityPct, windowLen, uniqueOutcomes) + "\n\n" + content
 	case actionWarnFailure:
-		streak := agent.loopDetector.consecutiveFailureStreak()
+		streak := detector.consecutiveFailureStreak()
 
 		log.Warn("loop_failure_warning_prepended", zap.String("tool", toolName), zap.Int("streak", streak))
 

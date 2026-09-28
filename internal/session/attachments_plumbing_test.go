@@ -46,12 +46,19 @@ func newImagePlumbAgent(t *testing.T) (*svc, *imageStubTool) {
 	registry := tool.NewRegistry()
 	registry.Register(stub)
 	s := &svc{
-		llmClient:    &compactionMockLLM{},
-		ms:           newMessageStore(store, sessionID, nil),
-		loopDetector: newLoopDetector(),
-		registry:     registry,
-		prompt:       newPromptBuilder(testPrompt, ""),
+		models: newTestModelRuntime(&compactionMockLLM{}, store, sessionID),
+		ms:     newMessageStore(store, sessionID, nil),
+
+		registry: registry,
+		prompt:   newPromptBuilder(testPrompt, ""),
 	}
+	s.turns = newToolTurns(s.registry, s.models, s.ms, testProgressBoundary(s.boundary))
+	s.contexts = newCheckpointOwner(
+		s.ms, s.models, s.prompt, s.turns, s.transcript(),
+		s.dispositions, s.budgetGate, s.outputStore, s.boundary,
+		&s.stamper, nil, nil,
+		checkpointOptions{id: s.id, outputEnabled: s.outputEnabled, agentsMD: s.agentsMD},
+	)
 
 	return s, stub
 }
@@ -67,7 +74,7 @@ func TestToolImages_PlumbAndPersist(t *testing.T) {
 		ctx,
 		&llmwire.Response{Text: "", ToolCalls: calls},
 	))
-	require.NoError(t, executeToolCalls(ctx, s, calls))
+	require.NoError(t, executeTestToolCalls(ctx, s.turns, calls))
 
 	require.NoError(t, s.ms.reloadMessages(ctx))
 
@@ -87,7 +94,7 @@ func TestToolImages_ErrorStubDropsRefs(t *testing.T) {
 		ctx,
 		&llmwire.Response{Text: "", ToolCalls: calls},
 	))
-	require.NoError(t, executeToolCalls(ctx, s, calls))
+	require.NoError(t, executeTestToolCalls(ctx, s.turns, calls))
 
 	msgs := s.ms.getMessages()
 	require.Len(t, msgs, 2)
@@ -103,16 +110,17 @@ func TestToolImages_DistinctReadsDoNotTripLoopDetector(t *testing.T) {
 
 	calls := []llmwire.ToolCall{{ID: "c", Name: "read", Arguments: []byte(`{}`)}}
 	for i := range 5 {
+		calls[0].ID = "image-call-" + string(rune('a'+i))
 		name := "coagent-view-" + string(rune('a'+i)) + ".png"
 		stub.result.Images = []llmwire.ImageRef{{Path: "/tmp/" + name, Mime: llmwire.MimeImagePng, Size: 8}}
 		// real read embeds the resolved path in its success text (D6)
 		stub.result.Output = "[/tmp/" + name + "]\n<image>...</image>"
 
-		require.NoError(t, executeToolCalls(ctx, s, calls))
+		require.NoError(t, executeTestToolCalls(ctx, s.turns, calls))
 	}
 
-	assert.NotEqual(t, actionBlock, s.loopDetector.check())
-	assert.Equal(t, 0, s.loopDetector.consecutiveFailureStreak())
+	assert.NotEqual(t, actionBlock, s.turns.(*toolTurnExecutor).detector.check())
+	assert.Equal(t, 0, s.turns.(*toolTurnExecutor).detector.consecutiveFailureStreak())
 
 	var withRefs int
 	for _, m := range s.ms.getMessages() {

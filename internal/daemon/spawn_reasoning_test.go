@@ -230,7 +230,7 @@ func newSpawnEffortHarness(t *testing.T, baseURL string) *subagentHarness {
 		budget.New(sessStore),
 		sessStore,
 		schedule.NewService(schedStore),
-		func() string { return "parent-model" },
+		func() string { return "parent-model" }, nil,
 	)
 	mgr.loadModelCatalog(cfg.UnifiedConfig.Models)
 

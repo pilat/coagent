@@ -535,7 +535,7 @@ func TestScenario_InterruptedCallSettlementNeedsNoProjectOrModel(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, os.Rename(workDir, workDir+".gone"))
 
-	closed, err := h.mgr.closeInterruptedCalls(h.ctx, root)
+	closed, err := h.mgr.externalCalls.CloseInterrupted(h.ctx, root)
 	require.NoError(t, err)
 	assert.Equal(t, 1, closed)
 

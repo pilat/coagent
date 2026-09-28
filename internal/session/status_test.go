@@ -37,12 +37,11 @@ func TestBuildSessionStatus_LifetimeFromTreeOccupancyFromProjection(t *testing.T
 	s := newCompactionTestSvc(mockLLM)
 	s.store = store
 	s.rootID = 1
-	s.model = "test-model"
 	s.ms.setMessages([]llmwire.Message{
 		{Role: llmwire.RoleUser, Content: "task"},
 		{Role: llmwire.RoleAssistant, Content: "big turn"},
 	})
-	s.recordContextBaseline(context.Background(), 150000, 2, s.modelGeneration())
+	s.models.recordBaseline(context.Background(), 150000, 2, s.models.snapshot().generation)
 
 	st := s.buildSessionStatus(context.Background())
 
@@ -51,7 +50,7 @@ func TestBuildSessionStatus_LifetimeFromTreeOccupancyFromProjection(t *testing.T
 	assert.InDelta(t, 12.34, st.LifetimeCost, 1e-9)
 	assert.Equal(t, 150000, st.ContextUsed, "occupancy is the measured baseline plus its (empty) tail")
 	assert.False(t, st.ContextIsEst, "a provider measurement backs it")
-	assert.Equal(t, 200000, st.ContextMax, "denominator is s.contextWindow(), not a literal")
+	assert.Equal(t, 200000, st.ContextMax, "denominator follows the active model window")
 	assert.Equal(t, 2, st.SubagentCount)
 
 	// A new message after the measurement is counted as a len/4 delta on top.
@@ -73,7 +72,7 @@ func TestBuildSessionStatus_AfterCompactionEstimatesAndIsNotZero(t *testing.T) {
 	s.ms.setMessages([]llmwire.Message{
 		{Role: llmwire.RoleUser, Content: "[CONTEXT SUMMARY - previous work condensed] " + strings.Repeat("b", 4000)},
 	})
-	s.resetContextBaseline()
+	s.models.clearBaseline(context.Background())
 
 	st := s.buildSessionStatus(context.Background())
 

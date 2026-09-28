@@ -8,41 +8,7 @@ import (
 
 	"github.com/pilat/coagent/internal/llmwire"
 	"github.com/pilat/coagent/internal/sessionstore"
-	"github.com/pilat/coagent/internal/transcript"
 )
-
-func (ms *messageStore) addAssistantMessage(ctx context.Context, resp *llmwire.Response) error {
-	return ms.addAssistantMessageOutput(ctx, resp, "", "", false)
-}
-
-func (ms *messageStore) addAssistantMessageOutput(
-	ctx context.Context,
-	resp *llmwire.Response,
-	outputType sessionstore.OutputType,
-	output string,
-	releasesInput bool,
-) error {
-	ms.mu.Lock()
-	defer ms.mu.Unlock()
-
-	msg := llmwire.Message{
-		Role:                 llmwire.RoleAssistant,
-		Content:              resp.Text,
-		ToolCalls:            resp.ToolCalls,
-		ReasoningContent:     resp.ReasoningContent,
-		ReasoningRaw:         resp.ReasoningRaw,
-		CostUSD:              resp.CostUSD,
-		Usage:                resp.Usage,
-		FinishType:           resp.FinishType,
-		ProviderFinishReason: resp.ProviderFinishReason,
-	}
-
-	if outputType == "" {
-		return ms.appendMessageLocked(ctx, &msg)
-	}
-
-	return ms.appendAssistantOutputLocked(ctx, &msg, outputType, output, releasesInput)
-}
 
 func (ms *messageStore) addToolResultOutput(
 	ctx context.Context,
@@ -53,10 +19,7 @@ func (ms *messageStore) addToolResultOutput(
 	return ms.addToolResultOutputTyped(ctx, callID, toolName, content, images, directMessages, false)
 }
 
-// addToolResultOutputTyped is the single-row legacy path kept for injections,
-// settlements and block stubs; turn scheduling commits through commitToolResults.
-// Every model-visible tool result settles through the once-at store boundary so
-// its transaction also invalidates any pending completion check (D8).
+// Tool-result identity and invalidation remain durable even without presentation.
 func (ms *messageStore) addToolResultOutputTyped(
 	ctx context.Context,
 	callID, toolName, content string,
@@ -76,8 +39,9 @@ func (ms *messageStore) addToolResultOutputTyped(
 		Images:     images,
 	}
 
-	if ms.outputs == nil {
-		return ms.appendMessageLocked(ctx, &msg)
+	if ms.store == nil {
+		ms.appendLocked(msg, 0)
+		return nil
 	}
 
 	stored, err := storedMessage(&msg)
@@ -85,14 +49,20 @@ func (ms *messageStore) addToolResultOutputTyped(
 		return fmt.Errorf("serialize tool result: %w", err)
 	}
 
-	ids, _, err := ms.outputs.InsertToolResultSetOnce(ctx, ms.sessID, []sessionstore.ToolResultEntry{
+	if ms.outputs == nil {
+		directMessages = nil
+	}
+
+	ids, _, err := ms.store.InsertToolResultSetOnce(ctx, ms.sessID, []sessionstore.ToolResultEntry{
 		{Message: stored, DirectMessages: directMessages},
 	})
 	if err != nil {
-		return fmt.Errorf("persist tool result with direct output: %w", err)
+		return fmt.Errorf("persist tool result: %w", err)
 	}
 
-	ms.appendLocked(msg, ids[0])
+	if !slices.Contains(ms.rowIDs, ids[0]) {
+		ms.appendLocked(msg, ids[0])
+	}
 
 	return nil
 }
@@ -122,73 +92,29 @@ func (ms *messageStore) commitToolResults(ctx context.Context, commits []toolRes
 		return nil
 	}
 
-	stored := make([]*transcript.Message, len(commits))
+	entries := make([]sessionstore.ToolResultEntry, len(commits))
 	for i := range commits {
 		m, err := storedMessage(&commits[i].message)
 		if err != nil {
 			return fmt.Errorf("serialize tool result %d: %w", i, err)
 		}
 
-		stored[i] = m
-	}
-
-	var (
-		ids []int64
-		err error
-	)
-
-	switch {
-	case ms.outputs != nil:
-		entries := make([]sessionstore.ToolResultEntry, len(commits))
-		for i := range commits {
-			entries[i] = sessionstore.ToolResultEntry{
-				Message:        stored[i],
-				DirectMessages: commits[i].direct,
-			}
+		entries[i].Message = m
+		if ms.outputs != nil {
+			entries[i].DirectMessages = commits[i].direct
 		}
-
-		// Output commits are deliberately dropped: the outbox rows become
-		// deliverable the moment this transaction commits.
-		ids, _, err = ms.outputs.InsertToolResultSetOnce(ctx, ms.sessID, entries)
-	default:
-		ids, err = ms.store.InsertMessages(ctx, ms.sessID, stored)
 	}
 
+	ids, _, err := ms.store.InsertToolResultSetOnce(ctx, ms.sessID, entries)
 	if err != nil {
 		return fmt.Errorf("persist tool result set: %w", err)
 	}
 
 	for i := range commits {
-		ms.appendLocked(commits[i].message, ids[i])
+		if !slices.Contains(ms.rowIDs, ids[i]) {
+			ms.appendLocked(commits[i].message, ids[i])
+		}
 	}
-
-	return nil
-}
-
-func (ms *messageStore) appendAssistantOutputLocked(
-	ctx context.Context,
-	msg *llmwire.Message,
-	outputType sessionstore.OutputType,
-	output string,
-	releasesInput bool,
-) error {
-	if ms.outputs == nil {
-		return ms.appendMessageLocked(ctx, msg)
-	}
-
-	stored, err := storedMessage(msg)
-	if err != nil {
-		return fmt.Errorf("serialize assistant message: %w", err)
-	}
-
-	id, _, err := ms.outputs.InsertAssistantMessageWithOutput(
-		ctx, ms.sessID, stored, outputType, output, releasesInput,
-	)
-	if err != nil {
-		return fmt.Errorf("persist assistant output: %w", err)
-	}
-
-	ms.appendLocked(*msg, id)
 
 	return nil
 }

@@ -47,7 +47,7 @@ func TestCompactLeavesTranscriptsWithNothingToSummarize(t *testing.T) {
 			s := newCompactionTestSvc(llm)
 			s.ms.setMessages(tc.messages)
 
-			compacted, err := s.compact(t.Context(), nil)
+			compacted, err := s.contexts.(*checkpointOwner).compact(t.Context(), nil)
 
 			require.NoError(t, err)
 			assert.False(t, compacted, "nothing to compact")
@@ -71,13 +71,13 @@ func TestSecondCompactionRightAfterOneFindsNothing(t *testing.T) {
 		compactionToolResult("c1", "result"),
 	})
 
-	compacted, err := s.compact(t.Context(), nil)
+	compacted, err := s.contexts.(*checkpointOwner).compact(t.Context(), nil)
 	require.NoError(t, err)
 	require.True(t, compacted)
 	require.Equal(t, 1, llm.callCount)
 	require.Len(t, renderedSkills(s.ms.getMessages()), 1, "the skill was reattached")
 
-	compacted, err = s.compact(t.Context(), nil)
+	compacted, err = s.contexts.(*checkpointOwner).compact(t.Context(), nil)
 
 	require.NoError(t, err)
 	assert.False(t, compacted, "nothing but the previous compaction's own output is present")
@@ -104,7 +104,7 @@ func TestSecondCheckpointReplaysTheNativePrefixFromTheStart(t *testing.T) {
 		compactionToolResult("c2", "recent result"),
 	})
 
-	_, err := s.compact(t.Context(), nil)
+	_, err := s.contexts.(*checkpointOwner).compact(t.Context(), nil)
 	require.NoError(t, err)
 	require.Equal(t, 1, llm.callCount)
 
@@ -113,7 +113,7 @@ func TestSecondCheckpointReplaysTheNativePrefixFromTheStart(t *testing.T) {
 	s.ms.appendLocked(compactionToolResult("c3", "new result"), 0)
 	s.ms.mu.Unlock()
 
-	compacted, err := s.compact(t.Context(), nil)
+	compacted, err := s.contexts.(*checkpointOwner).compact(t.Context(), nil)
 	require.NoError(t, err)
 	require.True(t, compacted)
 	require.Equal(t, 2, llm.callCount)
@@ -240,15 +240,16 @@ func TestMarkedSummaryReadsLegacyActiveSubagentsSection(t *testing.T) {
 }
 
 func TestActiveBackgroundSectionReadsLiveProcessAndSubagentProviders(t *testing.T) {
-	agent := newTestAgent()
-	agent.activeProcessesProvider = func(context.Context) []ActiveProcessInfo {
-		return []ActiveProcessInfo{{ID: "bgp_1", OutputPath: "/tmp/process.out"}}
-	}
-	agent.activeSubagentsProvider = func(context.Context) []ActiveSubagentInfo {
-		return []ActiveSubagentInfo{{ChildID: 42, State: "running"}}
+	owner := &checkpointOwner{
+		activeProcessesProvider: func(context.Context) []ActiveProcessInfo {
+			return []ActiveProcessInfo{{ID: "bgp_1", OutputPath: "/tmp/process.out"}}
+		},
+		activeSubagentsProvider: func(context.Context) []ActiveSubagentInfo {
+			return []ActiveSubagentInfo{{ChildID: 42, State: "running"}}
+		},
 	}
 
-	section := agent.activeBackgroundSection(t.Context())
+	section := owner.activeBackgroundSection(t.Context())
 	assert.Contains(t, section, "process bgp_1 (running): output /tmp/process.out")
 	assert.Contains(t, section, "#42 (background): running")
 	assert.Contains(t, section, "Snapshot from activation start")

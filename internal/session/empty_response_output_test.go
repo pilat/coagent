@@ -33,13 +33,18 @@ func TestRunLoopEmptyResponseEmitsPersistentOutput(t *testing.T) {
 	llm := &loopScriptLLM{responses: []*llmwire.Response{{}}}
 	notifier := &loopNotifier{}
 
-	agent := newTestAgent()
-	agent.llmClient = llm
+	agent := newTestAgentWithStore(store, record.ID)
+	agent.models = newTestModelRuntime(llm, agent.store, agent.id)
 	agent.outputEnabled = true
-	agent.store = store
-	agent.outputStore = store
 	agent.id = record.ID
 	agent.ms = newMessageStore(store, record.ID, store)
+	agent.turns = newToolTurns(agent.registry, agent.models, agent.ms, testProgressBoundary(agent.boundary))
+	agent.contexts = newCheckpointOwner(
+		agent.ms, agent.models, agent.prompt, agent.turns, agent.transcript(),
+		agent.dispositions, agent.budgetGate, agent.outputStore, agent.boundary,
+		&agent.stamper, nil, nil,
+		checkpointOptions{id: agent.id, outputEnabled: agent.outputEnabled, agentsMD: agent.agentsMD},
+	)
 
 	result, err := runTestLoop(ctx, t, agent, loopOptions{Notify: notifier.fn}, iterationGuard(20))
 	require.NoError(t, err)

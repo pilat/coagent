@@ -11,7 +11,6 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/pilat/coagent/internal/coagenthome"
-	"github.com/pilat/coagent/internal/configapply"
 	"github.com/pilat/coagent/internal/configops"
 	"github.com/pilat/coagent/internal/llm"
 	"github.com/pilat/coagent/internal/llmwire"
@@ -50,13 +49,7 @@ func newExternalCallDaemon(
 ) *applyDaemon {
 	t.Helper()
 
-	h := newSubagentHarnessOnDB(t, dbPath, respond, nil)
-	ops := configops.New(filepath.Join(configDir, "config.yaml"), filepath.Join(configDir, "secrets"))
-	restarts := make(chan struct{}, 4)
-
-	h.mgr.applier = configapply.New(ops, func() { restarts <- struct{}{} })
-
-	return &applyDaemon{subagentHarness: h, ops: ops, restarts: restarts}
+	return newApplyDaemonWith(t, dbPath, configDir, respond)
 }
 
 // stageTaskAndStop parks a session on a blocking child, marks the child link
@@ -156,7 +149,7 @@ func TestHarnessModel_PendingExternalCallOwnershipAgreesAfterRestart(t *testing.
 	assertAgrees := func(t *testing.T, d *applyDaemon, sessionID int64) {
 		t.Helper()
 
-		owners, err := d.mgr.pendingExternalCallsForSession(d.ctx, sessionID)
+		owners, err := d.mgr.externalCalls.Pending(d.ctx, sessionID)
 		require.NoError(t, err)
 
 		assert.Equal(t, unresolvedExternalCallsByName(d.parentMessages(sessionID)), owners,
@@ -251,7 +244,7 @@ func TestHarnessModel_PendingExternalCallOwnershipAgreesAfterRestart(t *testing.
 
 		// The apply slot is in-memory, so a claim the previous image never gave
 		// back cannot reach this one: only a strand inside one image is dangerous.
-		assert.True(t, second.mgr.stageApply(sessionID, "later", tool.IDConfigEdit, &configops.Staged{}),
+		assert.True(t, second.mgr.externalCalls.StageApply(sessionID, "later", tool.IDConfigEdit, &configops.Staged{}),
 			"a new image starts with a free apply slot")
 	})
 }

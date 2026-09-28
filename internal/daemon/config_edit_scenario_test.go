@@ -155,7 +155,7 @@ func testAbandonedApply(t *testing.T, failure string) {
 		Role: llmwire.RoleAssistant, ToolCalls: calls,
 	})
 	require.NoError(t, err)
-	_, err = newConfigEditTool(d.mgr, id).Execute(
+	_, err = d.mgr.externalCalls.ConfigEditTool(id).Execute(
 		grantedCall(d.ctx, id, configEditCallID), configEditArgs(configEditCandidate),
 	)
 	require.ErrorIs(t, err, tool.ErrSuspend)
@@ -195,7 +195,7 @@ func testAbandonedApply(t *testing.T, failure string) {
 	require.NoError(t, err)
 	assert.Equal(t, "keep this input", pending.RawContent)
 	if failWrite {
-		assert.True(t, d.mgr.staged.has(id))
+		assert.NotEmpty(t, pendingCallsOf(t, d.mgr.externalCalls, id))
 		assert.False(t, hasToolResultFor(d.parentMessages(id), tool.IDConfigEdit))
 		_, err = d.db.ExecContext(d.ctx, "DROP TRIGGER reject_apply_result")
 		require.NoError(t, err)
@@ -206,7 +206,7 @@ func testAbandonedApply(t *testing.T, failure string) {
 		require.ErrorIs(t, err, sessionstore.ErrNoPendingInput)
 		assert.True(t, hasUserContaining(d.parentMessages(id), "keep this input"))
 	}
-	assert.False(t, d.mgr.staged.has(id))
+	assert.Empty(t, pendingCallsOf(t, d.mgr.externalCalls, id))
 	assert.Contains(t, lastToolResultContent(d.parentMessages(id), tool.IDConfigEdit), "Config change abandoned")
 	assert.Zero(t, d.restartCount())
 	apply, err := d.ops.LoadPending()

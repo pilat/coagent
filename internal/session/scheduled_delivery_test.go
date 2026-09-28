@@ -67,14 +67,22 @@ func TestMessageStore_ScheduledNotificationDeliveryIsExactlyOnce(t *testing.T) {
 func TestSession_FreshScheduledDeliveryResetsExactlyOnce(t *testing.T) {
 	store, sessionID := newScheduledDeliverySessionStore(t)
 	s := &svc{
-		id:           sessionID,
-		agentsMD:     "PROJECT RULES",
-		ms:           newMessageStore(store, sessionID, nil),
-		loopDetector: newLoopDetector(),
-		todoStore:    todo.New(),
-		store:        store,
-		prompt:       newPromptBuilder(testPrompt, ""),
+		models:   newTestModelRuntime(&mockLLMClient{}, store, sessionID),
+		id:       sessionID,
+		agentsMD: "PROJECT RULES",
+		ms:       newMessageStore(store, sessionID, nil),
+
+		todoStore: todo.New(),
+		store:     store,
+		prompt:    newPromptBuilder(testPrompt, ""),
 	}
+	s.turns = newToolTurns(s.registry, s.models, s.ms, testProgressBoundary(s.boundary))
+	s.contexts = newCheckpointOwner(
+		s.ms, s.models, s.prompt, s.turns, s.transcript(),
+		s.dispositions, s.budgetGate, s.outputStore, s.boundary,
+		&s.stamper, nil, nil,
+		checkpointOptions{id: s.id, outputEnabled: s.outputEnabled, agentsMD: s.agentsMD},
+	)
 	require.NoError(t, s.ms.addUserMessage(context.Background(), "old task"))
 
 	applied, err := s.ResetContextAndInjectOnce(

@@ -199,10 +199,9 @@ func newRegistryPromptManager(
 		deps.sessionStore, deps.sessionStore, deps.sessionStore, deps.sessionStore,
 		deps.links, deps.subagents,
 		budget.New(deps.sessionStore), deps.sessionStore, schedule.NewService(deps.schedules),
-		func() string { return "fake-model" },
+		func() string { return "fake-model" }, configapply.New(newTestConfigOps(t, t.TempDir()), func() {}),
 	)
 	mgr.mcpStore = deps.mcpRegistry
-	mgr.applier = configapply.New(newTestConfigOps(t, t.TempDir()), func() {})
 
 	return mgr
 }

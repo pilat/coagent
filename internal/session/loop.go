@@ -13,16 +13,11 @@ import (
 	"github.com/pilat/coagent/internal/llmwire"
 	"github.com/pilat/coagent/internal/logger"
 	"github.com/pilat/coagent/internal/sessionstore"
-	"github.com/pilat/coagent/internal/tool"
 )
 
 const (
 	emptyResponseWarnThreshold  = 3
 	emptyResponseBreakThreshold = 6
-
-	// compactionAttemptCap is how many consecutive automatic compactions may fail
-	// to relieve the pressure before the automatic path stops trying.
-	compactionAttemptCap = 3
 )
 
 // hardIterationCeiling is an internal defect circuit breaker for a loop-detector
@@ -88,8 +83,6 @@ type loopRunner struct {
 	publishedReply       bool
 	acceptedManagerInput bool
 	backgroundInserted   bool
-	compactionFailures   int
-	autoCompactionOff    bool
 }
 
 //nolint:funlen,gocyclo,wsl_v5 // Loop ordering is the session protocol.
@@ -102,11 +95,7 @@ func runLoop(ctx context.Context, agent *svc, opts loopOptions, callback iterati
 		log:    logger.Ctx(ctx).Named("session.loop"),
 	}
 
-	// A deferral episode is scoped to the call that caused it; with nothing out
-	// with the world, an announcement carried in from an earlier one is stale.
-	if !agent.HasPendingExternalCall() {
-		agent.compactionDeferAnnounced = false
-	}
+	agent.contexts.beginRun()
 
 	// Durable completion state resumes obligations, not decisions: the empty
 	// streak escalates from the committed count the disposition transaction
@@ -166,9 +155,10 @@ func runLoop(ctx context.Context, agent *svc, opts loopOptions, callback iterati
 		if !accepted && (done || r.handledControl) {
 			// Gated on the flag alone: an unconditional call would also run the
 			// automatic threshold check on paths that just answered.
-			if r.agent.compactionRequested() {
+			if r.agent.contexts.requested() {
 				r.applyContextEvents(ctx)
 			}
+			r.parkBudget()
 
 			return r.result, nil
 		}
@@ -177,6 +167,9 @@ func runLoop(ctx context.Context, agent *svc, opts loopOptions, callback iterati
 		r.setWorking(true)
 
 		r.applyContextEvents(ctx)
+		if r.parkBudget() {
+			return r.result, nil
+		}
 
 		// Reload messages from DB to ensure in-memory is fresh after compaction.
 		if err := r.agent.ms.reloadMessages(ctx); err != nil {
@@ -197,10 +190,7 @@ func runLoop(ctx context.Context, agent *svc, opts loopOptions, callback iterati
 		} else if recoveryReply {
 			r.replyToInput = true
 		}
-		if r.agent.budgetFired {
-			r.result.Suspended = true
-			r.setWorking(false)
-
+		if r.parkBudget() {
 			return r.result, nil
 		}
 
@@ -221,10 +211,7 @@ func runLoop(ctx context.Context, agent *svc, opts loopOptions, callback iterati
 
 			return r.result, nil
 		}
-		if r.agent.budgetFired {
-			r.result.Suspended = true
-			r.setWorking(false)
-
+		if r.parkBudget() {
 			return r.result, nil
 		}
 	}
@@ -232,7 +219,18 @@ func runLoop(ctx context.Context, agent *svc, opts loopOptions, callback iterati
 	return r.finalize(ctx)
 }
 
-//nolint:nestif // One discriminated prior-response protocol is clearer kept together.
+func (r *loopRunner) parkBudget() bool {
+	if !r.agent.budgetFired {
+		return false
+	}
+
+	r.result.Suspended = true
+	r.setWorking(false)
+
+	return true
+}
+
+//nolint:nestif,funlen // The prior-response protocol keeps suspend, tool, and terminal ordering together.
 func (r *loopRunner) handlePreviousResult(ctx context.Context) (bool, error) {
 	// A call that is out with the world outranks everything: re-executing it
 	// would apply the same change twice, and advancing past it would send the
@@ -282,7 +280,14 @@ func (r *loopRunner) handlePreviousResult(ctx context.Context) (bool, error) {
 
 		// An unrecorded tool result outranks the suspend flag — suspending here
 		// would report a state the transcript does not back.
-		if err := executeToolCalls(ctx, r.agent, state.PendingTools); err != nil {
+		outcome, err := r.agent.turns.Execute(ctx, state.PendingTools, r.agent.currentActivation, r.opts.Notify)
+
+		r.agent.suspended = outcome.suspended
+		if outcome.consumedGrant {
+			r.agent.currentActivation = nil
+		}
+
+		if err != nil {
 			r.result.Error = err
 
 			return false, fmt.Errorf("execute pending tools: %w", err)
@@ -451,11 +456,7 @@ func (r *loopRunner) callLLM(ctx context.Context) error {
 		r.backgroundInserted = true
 	}
 
-	activeTools := r.agent.registry.List()
-
-	if r.agent.loopDetector.forceTextOnly {
-		activeTools = nil
-
+	if !r.agent.turns.toolsAllowed() {
 		r.log.Warn("force_text_only", zap.String("reason", "loop detector escalated to text-only mode"))
 	}
 
@@ -466,13 +467,13 @@ func (r *loopRunner) callLLM(ctx context.Context) error {
 	msgs := repairTranscriptExcluding(r.agent.ms.getMessages(), r.agent.pendingExternalCallIDs())
 
 	system := r.agent.prompt.systemPrompt()
-	schemas := tool.ToSchemas(activeTools)
+	schemas := r.agent.turns.schemas()
 	// The baseline indexes the in-memory transcript, not the repaired copy going
 	// out: the delta is counted over the tail this position grows past.
 	sentCount := len(r.agent.ms.getMessages())
-	generation := r.agent.modelGeneration()
+	generation := r.agent.models.snapshot().generation
 
-	response, err := r.agent.chat(ctx, system, msgs, schemas)
+	response, err := r.agent.models.Chat(ctx, system, msgs, schemas)
 	if err != nil {
 		r.log.Error("llm_call_failed", zap.Error(err))
 		r.result.ErrorNotice = "❌ LLM error: " + logger.Redact(err.Error())
@@ -483,13 +484,12 @@ func (r *loopRunner) callLLM(ctx context.Context) error {
 	}
 
 	if response.Usage != nil {
-		r.agent.recordContextBaseline(ctx, response.Usage.PromptTokens, sentCount, generation)
+		r.agent.models.recordBaseline(ctx, response.Usage.PromptTokens, sentCount, generation)
 	}
 
 	response.FinishType = normalizedFinishType(response.FinishType)
 
-	if r.agent.loopDetector.forceTextOnly && len(response.ToolCalls) == 0 {
-		r.agent.loopDetector.clearForceTextOnly()
+	if len(response.ToolCalls) == 0 && r.agent.turns.observeText() {
 		r.log.Info("force_text_only_cleared", zap.String("reason", "LLM produced text response"))
 	}
 

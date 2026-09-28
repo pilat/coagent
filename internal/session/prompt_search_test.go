@@ -106,7 +106,7 @@ func TestNativeSearchActivePrecedence(t *testing.T) {
 	assert.False(t, disabled.SearchNativeActive("or-model"), "explicit disable removes native")
 }
 
-// handleSetModel must move the search guidance with the client: switching
+// Model switches must move the search guidance with the client: switching
 // between a native-capable (OR) and a non-native model flips the section.
 func TestHandleSetModel_SearchGuidanceFollowsActiveClient(t *testing.T) {
 	t.Parallel()
@@ -115,14 +115,14 @@ func TestHandleSetModel_SearchGuidanceFollowsActiveClient(t *testing.T) {
 		ucOR := searchGuidanceConfig()
 		cfgOR := &config.Config{UnifiedConfig: ucOR}
 
-		s := &svc{
-			cfg:       cfgOR,
-			llmClient: &mockLLMClientTracked{model: "or-model"},
-			model:     "or-model",
-			prompt:    newPromptBuilder("", ""),
-			ms:        newMessageStore(nil, 0, nil),
-			registry:  registryWithTools("read", "webfetch"),
-			newLLMWithModel: func(_ *config.Config, _ string) (llm.Client, error) {
+		s := &sessionModel{
+			cfg:    cfgOR,
+			client: &mockLLMClientTracked{model: "or-model"},
+			model:  "or-model",
+			prompt: newPromptBuilder("", ""),
+
+			registry: registryWithTools("read", "webfetch"),
+			newClient: func(_ *config.Config, _ string) (llm.Client, error) {
 				return &mockLLMClientTracked{model: "ant-model"}, nil
 			},
 		}
@@ -130,7 +130,7 @@ func TestHandleSetModel_SearchGuidanceFollowsActiveClient(t *testing.T) {
 		s.prompt.refreshToolsSection(s.registry)
 		require.Contains(t, s.prompt.systemPrompt(), "provided natively by your model provider")
 
-		require.NoError(t, s.handleSetModel("ant-model", ""))
+		require.NoError(t, s.SetModel("ant-model", ""))
 		assert.NotContains(t, s.prompt.systemPrompt(), "# WEB SEARCH")
 	})
 
@@ -138,14 +138,14 @@ func TestHandleSetModel_SearchGuidanceFollowsActiveClient(t *testing.T) {
 		ucANT := searchGuidanceConfig()
 		cfgANT := &config.Config{UnifiedConfig: ucANT}
 
-		s := &svc{
-			cfg:       cfgANT,
-			llmClient: &mockLLMClientTracked{model: "ant-model"},
-			model:     "ant-model",
-			prompt:    newPromptBuilder("", ""),
-			ms:        newMessageStore(nil, 0, nil),
-			registry:  registryWithTools("read", "webfetch"),
-			newLLMWithModel: func(_ *config.Config, _ string) (llm.Client, error) {
+		s := &sessionModel{
+			cfg:    cfgANT,
+			client: &mockLLMClientTracked{model: "ant-model"},
+			model:  "ant-model",
+			prompt: newPromptBuilder("", ""),
+
+			registry: registryWithTools("read", "webfetch"),
+			newClient: func(_ *config.Config, _ string) (llm.Client, error) {
 				return &mockLLMClientTracked{model: "or-model"}, nil
 			},
 		}
@@ -153,7 +153,7 @@ func TestHandleSetModel_SearchGuidanceFollowsActiveClient(t *testing.T) {
 		s.prompt.refreshToolsSection(s.registry)
 		require.NotContains(t, s.prompt.systemPrompt(), "# WEB SEARCH")
 
-		require.NoError(t, s.handleSetModel("or-model", ""))
+		require.NoError(t, s.SetModel("or-model", ""))
 		assert.Contains(t, s.prompt.systemPrompt(), "# WEB SEARCH")
 		assert.Contains(t, s.prompt.systemPrompt(), "provided natively by your model provider")
 	})

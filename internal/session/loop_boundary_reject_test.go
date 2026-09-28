@@ -77,7 +77,7 @@ func TestRunLoopRejectsUnknownSkillAtBoundary(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			agent := newTestAgent(&stubTool{id: "read", result: "tool result"})
+			agent := newDurableTestAgent(t, &stubTool{id: "read", result: "tool result"})
 			agent.loader = loader.New()
 			agent.ms.setMessages(tc.messages)
 
@@ -85,11 +85,25 @@ func TestRunLoopRejectsUnknownSkillAtBoundary(t *testing.T) {
 				input: &PendingInput{ID: 1, Content: "/skill nope", ReceivedAt: time.Now()},
 			}
 			agent.boundary = boundary
+			agent.turns = newToolTurns(agent.registry, agent.models, agent.ms, testProgressBoundary(agent.boundary))
+			agent.contexts = newCheckpointOwner(
+				agent.ms, agent.models, agent.prompt, agent.turns, agent.transcript(),
+				agent.dispositions, agent.budgetGate, agent.outputStore, agent.boundary,
+				&agent.stamper, nil, nil,
+				checkpointOptions{id: agent.id, outputEnabled: agent.outputEnabled, agentsMD: agent.agentsMD},
+			)
 
 			llmClient := &loopScriptLLM{
 				responses: []*llmwire.Response{textResponse("answered"), textResponse("confirmed")},
 			}
-			agent.llmClient = llmClient
+			agent.models = newTestModelRuntime(llmClient, agent.store, agent.id)
+			agent.turns = newToolTurns(agent.registry, agent.models, agent.ms, testProgressBoundary(agent.boundary))
+			agent.contexts = newCheckpointOwner(
+				agent.ms, agent.models, agent.prompt, agent.turns, agent.transcript(),
+				agent.dispositions, agent.budgetGate, agent.outputStore, agent.boundary,
+				&agent.stamper, nil, nil,
+				checkpointOptions{id: agent.id, outputEnabled: agent.outputEnabled, agentsMD: agent.agentsMD},
+			)
 			notifier := &loopNotifier{}
 
 			_, err := runTestLoop(t.Context(), t, agent, loopOptions{Notify: notifier.fn}, iterationGuard(5))

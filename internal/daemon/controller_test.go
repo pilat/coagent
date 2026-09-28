@@ -76,7 +76,7 @@ func TestControllerManagerSubscriptionIsExactAcrossRestart(t *testing.T) {
 		nil,
 		secondSessions,
 		nil,
-		nil,
+		nil, nil,
 	)
 	controllers := newTestController(mgr, &config.Config{}, nil, nil)
 	subscriptions := make(map[string]<-chan controllerapi.SessionNotification, 10)

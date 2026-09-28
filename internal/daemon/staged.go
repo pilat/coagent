@@ -15,9 +15,8 @@ type stagedCall struct {
 	result string
 }
 
-// stagedCalls is the in-flight ledger of calls the daemon owes a result for.
-// In-memory on purpose: a daemon that died before recording the work never did
-// it, so re-executing the call is then correct.
+// After restart, ownership is reconstructed from durable producer ledgers;
+// this map contains only the current process's outstanding work and adoption.
 type stagedCalls struct {
 	mu        sync.Mutex
 	bySession map[int64]map[string]stagedCall
@@ -27,21 +26,8 @@ func newStagedCalls() *stagedCalls {
 	return &stagedCalls{bySession: make(map[int64]map[string]stagedCall)}
 }
 
-// stage records that sessionID's callID is out with the world.
 func (c *stagedCalls) stage(sessionID int64, callID, toolName string) {
 	c.put(sessionID, callID, stagedCall{toolName: toolName})
-}
-
-// stageApply reserves the daemon-wide apply slot and records the call the verdict
-// is owed to. A refusal reaches the tool before it suspends, never after.
-func (s *svc) stageApply(sessionID int64, callID, toolName string, staged *configops.Staged) bool {
-	if s.applier == nil || !s.applier.ClaimApply() {
-		return false
-	}
-
-	s.staged.put(sessionID, callID, stagedCall{toolName: toolName, apply: staged})
-
-	return true
 }
 
 // takePendingApply hands over a session's staged config change, exactly once.
@@ -84,7 +70,6 @@ func (c *stagedCalls) pendingResults(sessionID int64) map[string]stagedCall {
 	return results
 }
 
-// resolve forgets a call once its result has been injected.
 func (c *stagedCalls) resolve(sessionID int64, callID string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()

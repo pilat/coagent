@@ -20,6 +20,12 @@ func TestSlashCompactOnFiredBudgetReturnsParkedExplanation(t *testing.T) {
 	s := newCompactionTestSvc(llm)
 	s.ms.setMessages(loopRounds(10, 4000))
 	s.budgetGate = &terminalBudgetGate{admitErr: ErrBudgetCheckpoint}
+	s.contexts = newCheckpointOwner(
+		s.ms, s.models, s.prompt, s.turns, s.transcript(),
+		s.dispositions, s.budgetGate, s.outputStore, s.boundary,
+		&s.stamper, nil, nil,
+		checkpointOptions{id: s.id, outputEnabled: s.outputEnabled, agentsMD: s.agentsMD},
+	)
 
 	var notes []string
 	r, b := compactCommandRunner(s, compactCommand, &notes)

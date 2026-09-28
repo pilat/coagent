@@ -69,7 +69,7 @@ func (s *svc) notifyChildFailure(ctx context.Context, parentID, childID int64, w
 		logger.Named("daemon.finalize").Warn("enqueue_child_failure_output", zap.Error(outputErr))
 	}
 
-	s.publish(parentID, sessionevent.Notification{Type: sessionevent.NotifyMessage, Message: message})
+	s.routes.Publish(parentID, sessionevent.Notification{Type: sessionevent.NotifyMessage, Message: message})
 }
 
 func (s *svc) enqueueChildFailureOutput(ctx context.Context, parentID, childID int64, message string) error {

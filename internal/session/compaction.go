@@ -63,7 +63,7 @@ func (a *compactionUsage) add(resp *llmwire.Response) {
 
 // focusSection renders the optional /compact focus as a prompt section, or "" when
 // no focus is set (bare /compact and every auto-compaction).
-func (s *svc) focusSection() string {
+func (s *checkpointOwner) focusSection() string {
 	if s.compactionFocus == "" {
 		return ""
 	}
@@ -71,14 +71,13 @@ func (s *svc) focusSection() string {
 	return "\n\nPriority for this summary: " + s.compactionFocus
 }
 
-// compact builds one checkpoint candidate and, only when every candidate check
-// passes, commits it as one atomic positioned replacement. A failed or
-// non-relieving attempt changes no active transcript metadata.
-func (s *svc) compact(ctx context.Context, commandInput *PendingInput) (bool, error) {
+// checkpoint adopts only a validated, atomically committed replacement.
+// Publication failure cannot undo that commit or its budget verdict.
+func (s *checkpointOwner) checkpoint(ctx context.Context, commandInput *PendingInput) (checkpointResult, error) {
 	// Defence in depth: a caller that forgets the gate must not compact a
 	// transcript that still owes a tool_use its result.
-	if s.HasPendingExternalCall() || s.HasPendingWork() {
-		return false, errCompactionPendingCall
+	if len(s.calls.PendingExternalCalls()) > 0 || s.calls.HasPendingWork() {
+		return checkpointResult{}, errCompactionPendingCall
 	}
 
 	// Read the ledger and snapshot the transcript before taking the transcript
@@ -98,7 +97,7 @@ func (s *svc) compact(ctx context.Context, commandInput *PendingInput) (bool, er
 // tail rows until the check resolves. The second result reports that a durable
 // check is pending at all, so a candidate the live transcript cannot place
 // keeps compaction non-relieving instead of relaxing the tail cap.
-func (s *svc) completionCompactionPin(ctx context.Context) (int, bool) {
+func (s *checkpointOwner) completionCompactionPin(ctx context.Context) (int, bool) {
 	if s.dispositions == nil {
 		return 0, false
 	}
@@ -121,13 +120,13 @@ func (s *svc) completionCompactionPin(ctx context.Context) (int, bool) {
 }
 
 // compactLocked is compact's transcript-mutating half, under s.ms.mu.
-func (s *svc) compactLocked(
+func (s *checkpointOwner) compactLocked(
 	ctx context.Context,
 	background string,
 	commandInput *PendingInput,
 	completionPin int,
 	completionPending bool,
-) (bool, error) {
+) (checkpointResult, error) {
 	log := logger.Ctx(ctx).Named("session.compaction")
 
 	// A pending check whose candidate the live transcript cannot place cannot
@@ -135,34 +134,34 @@ func (s *svc) compactLocked(
 	// summarizing the evidence being confirmed.
 	if completionPending && completionPin == 0 {
 		log.Warn("completion_pin_unresolved", zap.Int64("session_id", s.id))
-		return false, nil
+		return checkpointResult{}, nil
 	}
 
 	// The loop gate already refuses pending calls; the snapshot must match the
 	// ordinary request's repair, which excludes genuinely-pending external calls.
-	pendingExternal := s.pendingExternalCallIDsLocked(s.ms.messages)
+	pendingExternal := s.calls.pendingExternalCallIDsLocked(s.ms.messages)
 
 	headerSize := compactionHeaderSize(s.ms.messages)
 	if err := validateCompactionHeader(s.ms.messages[:headerSize]); err != nil {
-		return false, err
+		return checkpointResult{}, err
 	}
 
 	if !s.headerFitsLocked(headerSize) {
-		return false, errCompactionHeaderTooLarge
+		return checkpointResult{}, errCompactionHeaderTooLarge
 	}
 
 	cp := parseCheckpointPrefix(s.ms.messages, headerSize)
-	window := s.contextWindow()
+	window := s.models.snapshot().contextWindow
 
 	candIdx, candEnvelope := selectCurrentSkill(s.ms.messages, headerSize, cp.summaryRowIdx)
 
 	split, summaryMsg, err := s.buildCheckpointCandidate(ctx, cp, background, pendingExternal, window, completionPin)
 	if err != nil {
 		if errors.Is(err, errNothingToCompact) {
-			return false, nil
+			return checkpointResult{}, nil
 		}
 
-		return false, err
+		return checkpointResult{}, err
 	}
 
 	beforeCount := len(s.ms.messages)
@@ -174,33 +173,39 @@ func (s *svc) compactLocked(
 	// The candidate must actually relieve the pressure, equality included
 	// (shouldCompact fires on strict greater-than); otherwise nothing is written.
 	if size := estimateTokens(newMessages) + s.requestOverhead(); size > compactionCutoff(window) {
-		return false, errCompactionNonRelieving
+		return checkpointResult{}, errCompactionNonRelieving
 	}
 
 	if totalBytes, count := imagePressure(
 		newMessages,
 	); totalBytes > imageBytesHighWater ||
 		count > imageCountHighWater {
-		return false, errCompactionNonRelieving
+		return checkpointResult{}, errCompactionNonRelieving
 	}
 
-	if err := s.commitCheckpointLocked(ctx, newMessages, newRowIDs, compactedIDs, commandInput); err != nil {
-		return false, err
+	fired, err := s.commitCheckpointLocked(ctx, newMessages, newRowIDs, compactedIDs, commandInput)
+	if err != nil {
+		return checkpointResult{}, err
 	}
 
-	s.resetContextBaseline() // the transcript the measurement described is gone
-	s.clearPersistedBaseline(ctx)
+	s.models.clearBaseline(ctx)
 
 	if commandInput == nil {
 		s.compactionSummaryDBID = newRowIDs[headerSize]
+	} else {
+		s.compactionInput = nil
+	}
+
+	if err := s.publishCompactionProgress(ctx); err != nil {
+		log.Warn("compaction_progress_failed", zap.Error(err))
 	}
 
 	s.logCompactionLocked(log, beforeCount, len(newMessages), split-cp.rawStart, cp, summaryMsg)
 
-	return true, nil
+	return checkpointResult{committed: true, budgetFired: fired}, nil
 }
 
-func (s *svc) logCompactionLocked(
+func (s *checkpointOwner) logCompactionLocked(
 	log *zap.Logger,
 	beforeMessages, afterMessages, summarized int,
 	cp checkpointPrefix,
@@ -217,7 +222,7 @@ func (s *svc) logCompactionLocked(
 
 // buildCheckpointCandidate selects the split, runs the summarizer and wraps the
 // marked summary row. Caller holds s.ms.mu.
-func (s *svc) buildCheckpointCandidate(
+func (s *checkpointOwner) buildCheckpointCandidate(
 	ctx context.Context,
 	cp checkpointPrefix,
 	background string,
@@ -248,17 +253,19 @@ func (s *svc) buildCheckpointCandidate(
 // commitCheckpointLocked persists the replacement in the transaction the
 // situation demands — budgeted, command-settling, or plain — then adopts the
 // new projection in memory. Caller holds s.ms.mu.
-func (s *svc) commitCheckpointLocked(
+func (s *checkpointOwner) commitCheckpointLocked(
 	ctx context.Context,
 	newMessages []llmwire.Message,
 	newRowIDs []int64,
 	compactedIDs []int64,
 	commandInput *PendingInput,
-) error {
+) (bool, error) {
 	entries, err := compactionEntries(newMessages, newRowIDs)
 	if err != nil {
-		return err
+		return false, err
 	}
+
+	fired := false
 
 	switch {
 	case s.budgetGate != nil:
@@ -267,35 +274,35 @@ func (s *svc) commitCheckpointLocked(
 			inputID = commandInput.ID
 		}
 
-		ids, fired, persistErr := s.budgetGate.PersistCompaction(ctx, sessionstore.BudgetedCompaction{
+		ids, budgetFired, persistErr := s.budgetGate.PersistCompaction(ctx, sessionstore.BudgetedCompaction{
 			InputID: inputID, CompactedIDs: compactedIDs, Entries: entries,
 			ObservedAt: time.Now().UTC(),
 		})
 		if persistErr != nil {
-			return fmt.Errorf("replace budgeted compacted messages: %w", persistErr)
+			return false, fmt.Errorf("replace budgeted compacted messages: %w", persistErr)
 		}
 
 		if err := stampCompactionIDs(newRowIDs, ids); err != nil {
-			return err
+			return false, err
 		}
 
-		s.budgetFired = fired
+		fired = budgetFired
 	case commandInput != nil:
 		if err := s.ms.completeCompactionCommandLocked(
 			ctx, *commandInput, compactedIDs, newMessages, newRowIDs,
 		); err != nil {
-			return err
+			return false, err
 		}
 	default:
 		if err := s.ms.replaceCompactedMessagesLocked(ctx, compactedIDs, newMessages, newRowIDs); err != nil {
-			return fmt.Errorf("replace compacted messages: %w", err)
+			return false, fmt.Errorf("replace compacted messages: %w", err)
 		}
 	}
 
 	s.ms.messages = newMessages
 	s.ms.rowIDs = newRowIDs
 
-	return s.publishCompactionProgress(ctx)
+	return fired, nil
 }
 
 // stampCompactionIDs adopts the store's returned row IDs into the in-memory
@@ -312,7 +319,7 @@ func stampCompactionIDs(rowIDs, ids []int64) error {
 
 // publishCompactionProgress publishes the post-compaction operator snapshot.
 // A session without an output owner (hermetic tests) tolerates the owner error.
-func (s *svc) publishCompactionProgress(ctx context.Context) error {
+func (s *checkpointOwner) publishCompactionProgress(ctx context.Context) error {
 	provider, ok := s.boundary.(progressChangeBoundary)
 	if !ok {
 		return nil

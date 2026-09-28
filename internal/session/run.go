@@ -285,7 +285,7 @@ func (s *svc) RunDaemon(
 
 	result, err := s.run(ctx, "")
 	if err != nil {
-		out := RunResult{CompactionDeferAnnounced: s.compactionDeferAnnounced}
+		out := RunResult{CompactionDeferAnnounced: s.contexts.deferred()}
 		if result != nil {
 			out.ErrorNotice = result.ErrorNotice
 		}
@@ -296,7 +296,7 @@ func (s *svc) RunDaemon(
 	return RunResult{
 		FinalResponse:            result.FinalResponse,
 		Suspended:                result.Suspended,
-		CompactionDeferAnnounced: s.compactionDeferAnnounced,
+		CompactionDeferAnnounced: s.contexts.deferred(),
 	}, nil
 }
 
@@ -333,11 +333,9 @@ func lastAssistantTextOnly(messages []llmwire.Message) string {
 // buildSessionStatus reports the compaction trigger's own projection and the
 // lifetime tree-sum. A backward usage scan would read 0% right after a compaction.
 func (s *svc) buildSessionStatus(ctx context.Context) sessionStatus {
-	s.modelMu.RLock()
-	model := s.model
-	s.modelMu.RUnlock()
+	model := s.models.snapshot()
 
-	contextUsed, estimated := s.projectContextSize()
+	contextUsed, estimated := s.contexts.projectContextSize()
 
 	var lifetimeIn, lifetimeOut int
 	var lifetimeCost float64
@@ -354,12 +352,12 @@ func (s *svc) buildSessionStatus(ctx context.Context) sessionStatus {
 	}
 
 	return sessionStatus{
-		Model:         model,
+		Model:         model.model,
 		LifetimeIn:    lifetimeIn,
 		LifetimeOut:   lifetimeOut,
 		LifetimeCost:  lifetimeCost,
 		ContextUsed:   contextUsed,
-		ContextMax:    s.contextWindow(),
+		ContextMax:    model.contextWindow,
 		ContextIsEst:  estimated,
 		Iteration:     s.iterationOffset,
 		SubagentCount: subagentCount,
@@ -428,7 +426,7 @@ func formatTokens(n int) string {
 
 // initFreshSession prepopulates the message store for a brand-new session.
 func (s *svc) initFreshSession(ctx context.Context, prompt string) error {
-	for _, msg := range s.openingTurn(prompt) {
+	for _, msg := range openingTurn(s.agentsMD, &s.stamper, prompt) {
 		if err := s.ms.addUserMessage(ctx, msg.Content); err != nil {
 			return err
 		}
@@ -447,13 +445,13 @@ func (s *svc) initFreshBoundarySession(ctx context.Context) error {
 
 // openingTurn assembles the turn that opens a conversation — AGENTS.md header
 // (when present) plus the stamped task. Pure: no IO, no store mutation.
-func (s *svc) openingTurn(prompt string) []llmwire.Message {
+func openingTurn(agentsMD string, stamper *timestamper, prompt string) []llmwire.Message {
 	msgs := make([]llmwire.Message, 0, 2)
 
-	if s.agentsMD != "" {
+	if agentsMD != "" {
 		msgs = append(msgs, llmwire.Message{
 			Role:    llmwire.RoleUser,
-			Content: agentsMDMessagePrefix + s.agentsMD,
+			Content: agentsMDMessagePrefix + agentsMD,
 		})
 	}
 
@@ -461,5 +459,5 @@ func (s *svc) openingTurn(prompt string) []llmwire.Message {
 		prompt = noTaskPrompt
 	}
 
-	return append(msgs, llmwire.Message{Role: llmwire.RoleUser, Content: s.stamper.stamp(prompt)})
+	return append(msgs, llmwire.Message{Role: llmwire.RoleUser, Content: stamper.stamp(prompt)})
 }

@@ -76,7 +76,9 @@ func newPromptTestSession(
 		uc = &config.UnifiedConfig{Models: models}
 	}
 
+	_, store, sessionID := newFinalOutputStore(t)
 	p := params{
+		Store:     store,
 		Config:    &config.Config{WorkDir: workDir, Model: "test-model", UnifiedConfig: uc},
 		LLMClient: llmClient,
 		TodoStore: todo.New(),
@@ -84,7 +86,7 @@ func newPromptTestSession(
 		Registry:  reg,
 	}
 
-	sess, err := newWithOptions(context.Background(), p, options{ID: 1, AgentType: agentType})
+	sess, err := newWithOptions(context.Background(), p, options{ID: sessionID, AgentType: agentType})
 	require.NoError(t, err)
 
 	return sess.(*svc), llmClient
@@ -194,7 +196,7 @@ func TestSystemPromptExcludesVolatileOpeningAndBackgroundContext(t *testing.T) {
 	assert.NotContains(t, system, "PROJECT MEMORY")
 	assert.NotContains(t, system, "Active background work")
 
-	opening := s.openingTurn("task")
+	opening := openingTurn(s.agentsMD, &s.stamper, "task")
 	require.Len(t, opening, 2)
 	assert.True(t, strings.HasPrefix(opening[0].Content, agentsMDMessagePrefix))
 	assert.Contains(t, opening[0].Content, "PROJECT INSTRUCTIONS")
@@ -207,7 +209,7 @@ func TestOpeningTurnRecognizesMemoryOnlyProjectContext(t *testing.T) {
 		ID: 3, Text: "memory only",
 	}}}, 1)}
 
-	opening := s.openingTurn("task")
+	opening := openingTurn(s.agentsMD, &s.stamper, "task")
 	require.Len(t, opening, 2)
 	assert.True(t, strings.HasPrefix(opening[0].Content, agentsMDMessagePrefix))
 	assert.Contains(t, opening[0].Content, "- [3] memory only")
@@ -234,7 +236,7 @@ func TestResumeKeepsPersistedOpeningContextAndStableSystemPrompt(t *testing.T) {
 	firstService, err := newWithOptions(t.Context(), newParams(), options{ID: 1, ProjectID: 1})
 	require.NoError(t, err)
 	first := firstService.(*svc)
-	opening := first.openingTurn("original task")
+	opening := openingTurn(first.agentsMD, &first.stamper, "original task")
 	system := first.prompt.systemPrompt()
 
 	require.NoError(t, os.WriteFile(agentsPath, []byte("CHANGED RULES"), 0o600))

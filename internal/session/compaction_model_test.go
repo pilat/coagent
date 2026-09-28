@@ -134,6 +134,12 @@ func runCompactionSequence(t *testing.T, sequence []compactionCommand) {
 	}
 	s := newCompactionTestSvc(llm)
 	s.stagedCalls = map[string]string{}
+	s.contexts = newCheckpointOwner(
+		s.ms, s.models, s.prompt, s.turns, s.transcript(),
+		s.dispositions, s.budgetGate, s.outputStore, s.boundary,
+		&s.stamper, nil, nil,
+		checkpointOptions{id: s.id, outputEnabled: s.outputEnabled, agentsMD: s.agentsMD},
+	)
 	s.ms.setMessages([]llmwire.Message{
 		{Role: llmwire.RoleSystem, Content: "sys"},
 		compactionUserMessage("task"),
@@ -178,7 +184,7 @@ func runCompactionSequence(t *testing.T, sequence []compactionCommand) {
 
 	assert.Equal(t, model.compactionsHoped, model.compactionsRun,
 		"every compaction the model expects must have happened, and no others")
-	assert.Equal(t, model.queuedCompact, s.compactionRequested(),
+	assert.Equal(t, model.queuedCompact, s.contexts.requested(),
 		"a queued /compact is neither dropped nor invented")
 }
 

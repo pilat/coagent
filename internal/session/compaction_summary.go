@@ -12,7 +12,7 @@ const (
 )
 
 // activeBackgroundSection preserves producer identities and waiting guidance across compaction.
-func (s *svc) activeBackgroundSection(ctx context.Context) string {
+func (s *checkpointOwner) activeBackgroundSection(ctx context.Context) string {
 	var processes []ActiveProcessInfo
 	if s.activeProcessesProvider != nil {
 		processes = s.activeProcessesProvider(ctx)

@@ -28,17 +28,21 @@ func TestRunStagedApply_RefusesToCommitForASuspendTheTranscriptDoesNotCarry(t *t
 	)
 	require.ErrorIs(t, err, tool.ErrSuspend)
 
-	h.mgr.runStagedApply(ctx, h.sessionID)
+	h.mgr.externalCalls.Apply(ctx, h.sessionID, func() bool { return false })
 
 	assert.Equal(t, 0, h.restarts, "an unbacked suspend must not restart the daemon")
 	assert.Equal(t, toolConfig, h.configBytes(t), "and must not write the config")
 
-	pending, err := h.mgr.applier.Ops().LoadPending()
+	pending, err := h.ops.LoadPending()
 	require.NoError(t, err)
 	assert.Nil(t, pending, "no marker is armed for a call no boot could answer")
 
-	assert.False(t, h.mgr.staged.has(h.sessionID), "the call is settled in-process, not across a restart")
-	assert.True(t, h.mgr.stageApply(h.sessionID, "c2", tool.IDConfigEdit, &configops.Staged{}),
+	assert.Empty(
+		t,
+		pendingCallsOf(t, h.mgr.externalCalls, h.sessionID),
+		"the call is settled in-process, not across a restart",
+	)
+	assert.True(t, h.mgr.externalCalls.StageApply(h.sessionID, "c2", tool.IDConfigEdit, &configops.Staged{}),
 		"the slot is free for the next change")
 }
 
@@ -52,15 +56,15 @@ func TestRunStagedApply_ADurableSuspendAfterAnUnbackedOneStillApplies(t *testing
 		grantedCall(ctx, h.sessionID, "c1"), configEditArgs(configHarnessCandidate),
 	)
 	require.ErrorIs(t, err, tool.ErrSuspend)
-	h.mgr.runStagedApply(ctx, h.sessionID)
+	h.mgr.externalCalls.Apply(ctx, h.sessionID, func() bool { return false })
 
 	require.ErrorIs(t, h.grantedCall(t, "c2", configHarnessCandidate), tool.ErrSuspend)
-	h.mgr.runStagedApply(ctx, h.sessionID)
+	h.mgr.externalCalls.Apply(ctx, h.sessionID, func() bool { return false })
 
 	assert.Equal(t, 1, h.restarts)
 	assert.Contains(t, h.configBytes(t), "id: claude-opus-5\n      provider: work\n    - id: claude-sonnet-5")
 
-	pending, err := h.mgr.applier.Ops().LoadPending()
+	pending, err := h.ops.LoadPending()
 	require.NoError(t, err)
 	require.NotNil(t, pending)
 	assert.Equal(t, "c2", pending.ToolCallID, "the marker names the call that really suspended")

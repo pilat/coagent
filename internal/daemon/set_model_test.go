@@ -164,7 +164,7 @@ func newModelAwareHarnessAtDB(
 		budget.New(sessStore),
 		sessStore,
 		schedule.NewService(schedStore),
-		func() string { return known[0] },
+		func() string { return known[0] }, nil,
 	)
 
 	for _, id := range known {

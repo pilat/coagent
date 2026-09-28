@@ -10,11 +10,10 @@ import (
 	"github.com/pilat/coagent/internal/sessionevent"
 )
 
-// publish is the one choke point that drops child-session events. It fails open:
-// silencing a root session on a transient DB error is the worse outcome.
+// Publish suppresses child events; failed route reads reach observers without claiming an owner.
 //
 //nolint:contextcheck,nolintlint // contextcheck reads this comment as config, so nolintlint sees it as unused
-func (s *svc) publish(sessionID int64, n sessionevent.Notification) {
+func (s *managerRouteSet) Publish(sessionID int64, n sessionevent.Notification) {
 	if err := n.Validate(); err != nil {
 		logger.Named("daemon.publish").Error(
 			"invalid_notification",
@@ -54,10 +53,9 @@ func (s *svc) publish(sessionID int64, n sessionevent.Notification) {
 	s.pubsub.PublishOwned(sessionID, managerID, n)
 }
 
-// lookupPublishRoute reports the immutable root/owner route for a session.
-func (s *svc) lookupPublishRoute(sessionID int64) (bool, string, bool) {
-	s.childMu.Lock()
-	defer s.childMu.Unlock()
+func (s *managerRouteSet) lookupPublishRoute(sessionID int64) (bool, string, bool) {
+	s.cacheMu.Lock()
+	defer s.cacheMu.Unlock()
 
 	isChild, known := s.childCache[sessionID]
 	managerID := s.ownerCache[sessionID]
@@ -65,9 +63,9 @@ func (s *svc) lookupPublishRoute(sessionID int64) (bool, string, bool) {
 	return isChild, managerID, known
 }
 
-func (s *svc) cachePublishRoute(sessionID int64, isChild bool, managerID string) string {
-	s.childMu.Lock()
-	defer s.childMu.Unlock()
+func (s *managerRouteSet) cachePublishRoute(sessionID int64, isChild bool, managerID string) string {
+	s.cacheMu.Lock()
+	defer s.cacheMu.Unlock()
 
 	if cachedOwner, known := s.ownerCache[sessionID]; known {
 		managerID = cachedOwner

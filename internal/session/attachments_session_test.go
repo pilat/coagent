@@ -57,31 +57,8 @@ func appendImageToolResult(ctx context.Context, t *testing.T, ms *messageStore, 
 		&llmwire.Response{Text: "step", ToolCalls: []llmwire.ToolCall{{ID: cid, Name: "read"}}},
 	))
 
-	msg := llmwire.Message{
-		Role:       llmwire.RoleTool,
-		Content:    "[/tmp/coagent-a.png]\nimage loaded",
-		ToolCallID: cid,
-		ToolName:   "read",
-		Images:     demoRefs,
-	}
-
-	if ms.store == nil {
-		ms.mu.Lock()
-		ms.appendLocked(msg, 0)
-		ms.mu.Unlock()
-
-		return
-	}
-
-	stored, err := storedMessage(&msg)
-	require.NoError(t, err)
-
-	dbID, err := ms.store.InsertMessage(ctx, ms.sessID, stored)
-	require.NoError(t, err)
-
-	ms.mu.Lock()
-	ms.appendLocked(msg, dbID)
-	ms.mu.Unlock()
+	require.NoError(t, ms.addToolResultOutput(ctx, cid, "read",
+		"[/tmp/coagent-a.png]\nimage loaded", demoRefs, nil))
 }
 
 // TestAttachments_SurviveRestart is the append→restart→reload protocol case:

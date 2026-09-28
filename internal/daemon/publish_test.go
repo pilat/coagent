@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/pilat/coagent/internal/controllerapi"
+	"github.com/pilat/coagent/internal/sessionbus"
 	"github.com/pilat/coagent/internal/sessionevent"
 	"github.com/pilat/coagent/internal/sessionstore"
 )
@@ -111,7 +112,6 @@ func TestPublishGate_ClaimingOwnerUpdatesTheWarmRoute(t *testing.T) {
 
 func TestPublishGate_ConcurrentClaimWinsOverAStaleRouteRead(t *testing.T) {
 	mgr, _, store := newTestManager(t)
-	alpha := mgr.PubSub().SubscribeManager("alpha")
 	pid := testProject(t, store, "/tmp/publish-concurrent-claim")
 	rec, err := mgr.sessionStore.CreateSession(context.Background(), pid, "fake-model", "", nil)
 	require.NoError(t, err)
@@ -121,7 +121,8 @@ func TestPublishGate_ConcurrentClaimWinsOverAStaleRouteRead(t *testing.T) {
 		target:             rec.ID,
 		read:               make(chan struct{}), release: make(chan struct{}),
 	}
-	mgr.sessionStore = stale
+	mgr.routes = newManagerRoutes(stale, mgr.managerRoots, mgr.store, sessionbus.New())
+	alpha := mgr.PubSub().SubscribeManager("alpha")
 	published := make(chan struct{})
 
 	go func() {
@@ -143,10 +144,10 @@ func TestPublishGate_ConcurrentClaimWinsOverAStaleRouteRead(t *testing.T) {
 
 func TestPublishGate_DropsMalformedEventBeforeSessionLookup(t *testing.T) {
 	mgr, _, _ := newTestManager(t)
-	ch := mgr.PubSub().SubscribeAll()
 
 	counting := &countingSessionStore{OrchestrationStore: mgr.sessionStore}
-	mgr.sessionStore = counting
+	mgr.routes = newManagerRoutes(counting, mgr.managerRoots, mgr.store, sessionbus.New())
+	ch := mgr.PubSub().SubscribeAll()
 
 	mgr.NotifySession(999, sessionevent.Notification{Type: sessionevent.NotifyStateChanged})
 
@@ -170,7 +171,7 @@ func TestPublishGate_CachesChildVerdict(t *testing.T) {
 	childID := newTestChild(t, mgr, store, "/tmp/publish-cache")
 
 	counting := &countingSessionStore{OrchestrationStore: mgr.sessionStore}
-	mgr.sessionStore = counting
+	mgr.routes = newManagerRoutes(counting, mgr.managerRoots, mgr.store, sessionbus.New())
 
 	for range 2 {
 		mgr.NotifySession(childID, sessionevent.Notification{Type: sessionevent.NotifyMessage, Message: "hi"})
@@ -183,12 +184,12 @@ func TestPublishGate_CachesChildVerdict(t *testing.T) {
 // caching "root" for an actual child would leak its events until restart.
 func TestPublishGate_FailOpenDoesNotPoisonCache(t *testing.T) {
 	mgr, _, store := newTestManager(t)
-	ch := mgr.PubSub().SubscribeAll()
 
 	childID := newTestChild(t, mgr, store, "/tmp/publish-failopen")
 
 	counting := &countingSessionStore{OrchestrationStore: mgr.sessionStore, failNth: 1}
-	mgr.sessionStore = counting
+	mgr.routes = newManagerRoutes(counting, mgr.managerRoots, mgr.store, sessionbus.New())
+	ch := mgr.PubSub().SubscribeAll()
 
 	mgr.NotifySession(childID, sessionevent.Notification{Type: sessionevent.NotifyMessage, Message: "first"})
 

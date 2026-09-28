@@ -1,7 +1,6 @@
 package session
 
 import (
-	"context"
 	"strings"
 	"testing"
 
@@ -15,40 +14,43 @@ import (
 	"github.com/pilat/coagent/internal/tool"
 )
 
-// newMockSvc creates a minimal *svc with a mock LLM for run tests.
-// The mock LLM returns a single text response and exits.
 func newMockSvc(t *testing.T, messages []llmwire.Message, agentsMD string) *svc {
 	t.Helper()
-	ms := newMessageStore(nil, 0, nil)
+	_, store, sessionID := newFinalOutputStore(t)
+	ms := newMessageStore(store, sessionID, store)
 	if messages != nil {
 		ms.setMessages(messages)
 	}
-	return &svc{
-		rootID:       1,
-		id:           1,
-		agentType:    registry.AgentTypeBuild,
-		todoStore:    todo.New(),
-		agentsMD:     agentsMD,
-		ms:           ms,
-		loopDetector: newLoopDetector(),
-		llmClient:    &mockLLMClient{},
-		prompt:       newPromptBuilder("test", ""),
-		registry:     tool.NewRegistry(),
+	s := &svc{
+		rootID:    sessionID,
+		id:        sessionID,
+		store:     store,
+		agentType: registry.AgentTypeBuild,
+		todoStore: todo.New(),
+		agentsMD:  agentsMD,
+		ms:        ms,
+
+		models:   newTestModelRuntime(&mockLLMClient{}, store, sessionID),
+		prompt:   newPromptBuilder("test", ""),
+		registry: tool.NewRegistry(),
 	}
+	s.turns = newToolTurns(s.registry, s.models, s.ms, testProgressBoundary(s.boundary))
+	return s
+}
+
+func setRunTestModel(s *svc, client *loopScriptLLM) {
+	s.models = newTestModelRuntime(client, s.store, s.id)
+	s.turns = newToolTurns(s.registry, s.models, s.ms, testProgressBoundary(s.boundary))
 }
 
 func TestRun_FreshSessionInjectsAgentsMDAndPrompt(t *testing.T) {
-	mockLLM := &mockLLMRunOnce{response: &llmwire.Response{Text: "hello"}}
 	s := newMockSvc(t, nil, "Be concise.")
-	s.llmClient = mockLLM
-
+	setRunTestModel(s, &loopScriptLLM{responses: []*llmwire.Response{textResponse("hello"), textResponse("confirmed")}})
 	prepareDirectRun(t, s, "write tests")
-	result, err := s.Run(context.Background(), "write tests")
+	result, err := s.Run(t.Context(), "write tests")
 	require.NoError(t, err)
 	assert.Equal(t, "hello", result)
-
 	msgs := s.ms.getMessages()
-	// AGENTS.md + prompt + assistant response = 3 messages minimum
 	require.GreaterOrEqual(t, len(msgs), 2)
 	assert.Equal(t, llmwire.RoleUser, msgs[0].Role)
 	assert.True(t, strings.HasPrefix(msgs[0].Content, "User preferences from AGENTS.md"))
@@ -58,14 +60,11 @@ func TestRun_FreshSessionInjectsAgentsMDAndPrompt(t *testing.T) {
 }
 
 func TestRun_FreshSessionNoAgentsMD(t *testing.T) {
-	mockLLM := &mockLLMRunOnce{response: &llmwire.Response{Text: "ok"}}
 	s := newMockSvc(t, nil, "")
-	s.llmClient = mockLLM
-
+	setRunTestModel(s, &loopScriptLLM{responses: []*llmwire.Response{textResponse("ok"), textResponse("confirmed")}})
 	prepareDirectRun(t, s, "hello")
-	_, err := s.Run(context.Background(), "hello")
+	_, err := s.Run(t.Context(), "hello")
 	require.NoError(t, err)
-
 	msgs := s.ms.getMessages()
 	require.GreaterOrEqual(t, len(msgs), 1)
 	assert.Contains(t, msgs[0].Content, "hello")
@@ -73,32 +72,29 @@ func TestRun_FreshSessionNoAgentsMD(t *testing.T) {
 }
 
 func TestRun_FreshSessionEmptyPromptGetsDefault(t *testing.T) {
-	mockLLM := &mockLLMRunOnce{response: &llmwire.Response{Text: "hi"}}
 	s := newMockSvc(t, nil, "")
-	s.llmClient = mockLLM
-
+	setRunTestModel(s, &loopScriptLLM{responses: []*llmwire.Response{textResponse("hi"), textResponse("confirmed")}})
 	prepareDirectRun(t, s, "")
-	_, err := s.Run(context.Background(), "")
+	_, err := s.Run(t.Context(), "")
 	require.NoError(t, err)
-
 	msgs := s.ms.getMessages()
 	require.GreaterOrEqual(t, len(msgs), 1)
 	assert.Contains(t, msgs[0].Content, "hasn't provided a task yet")
 }
 
 func TestRun_ResumedSessionAddsOnlyNewPrompt(t *testing.T) {
-	mockLLM := &mockLLMRunOnce{response: &llmwire.Response{Text: "continued"}}
 	s := newMockSvc(t, []llmwire.Message{
 		{Role: llmwire.RoleUser, Content: "old prompt"},
 		{Role: llmwire.RoleAssistant, Content: "old reply"},
 	}, "ignored on resume")
-	s.llmClient = mockLLM
-
+	setRunTestModel(
+		s,
+		&loopScriptLLM{responses: []*llmwire.Response{textResponse("continued"), textResponse("confirmed")}},
+	)
 	prepareDirectRun(t, s, "continue please")
-	result, err := s.Run(context.Background(), "continue please")
+	result, err := s.Run(t.Context(), "continue please")
 	require.NoError(t, err)
 	assert.Equal(t, "continued", result)
-
 	msgs := s.ms.getMessages()
 	require.GreaterOrEqual(t, len(msgs), 3)
 	assert.Equal(t, "old prompt", msgs[0].Content)
@@ -107,27 +103,23 @@ func TestRun_ResumedSessionAddsOnlyNewPrompt(t *testing.T) {
 }
 
 func TestRun_ResumedSessionEmptyPromptNoNewMessage(t *testing.T) {
-	mockLLM := &mockLLMRunOnce{response: &llmwire.Response{Text: "done"}}
 	s := newMockSvc(t, []llmwire.Message{
 		{Role: llmwire.RoleUser, Content: "previous task"},
 		{Role: llmwire.RoleAssistant, Content: "working on it"},
 	}, "")
-	s.llmClient = mockLLM
-	s.rootID = 5
-	s.id = 5
-
-	// The loop will see "working on it" as final text and return immediately.
+	setRunTestModel(s, &loopScriptLLM{responses: []*llmwire.Response{textResponse("done"), textResponse("confirmed")}})
 	prepareDirectRun(t, s, "")
-	_, err := s.Run(context.Background(), "")
+	_, err := s.Run(t.Context(), "")
 	require.NoError(t, err)
-
-	msgs := s.ms.getMessages()
-	require.Len(t, msgs, 2) // No new message added
+	assert.Len(t, s.ms.getMessages(), 2)
 }
 
 func TestRun_PersistStateCalledPerIteration(t *testing.T) {
 	s := newMockSvc(t, nil, "")
-	s.llmClient = &loopScriptLLM{responses: []*llmwire.Response{textResponse("answer"), textResponse("confirmed")}}
+	setRunTestModel(
+		s,
+		&loopScriptLLM{responses: []*llmwire.Response{textResponse("answer"), textResponse("confirmed")}},
+	)
 	prepareDurableLoop(t, s)
 	_, err := s.Run(t.Context(), "multi-step")
 	require.NoError(t, err)
@@ -141,23 +133,26 @@ func TestRun_PersistStateCalledPerIteration(t *testing.T) {
 func TestRunDaemon_PreservesNewToolSuspensionAcrossSessionBoundary(t *testing.T) {
 	s := newMockSvc(t, nil, "")
 	s.registry.Register(&stubTool{id: tool.IDSleep, err: tool.ErrSuspend})
-	s.llmClient = &loopScriptLLM{responses: []*llmwire.Response{
-		toolCallResponse("sleep-call", tool.IDSleep),
-	}}
-
+	setRunTestModel(s, &loopScriptLLM{responses: []*llmwire.Response{toolCallResponse("sleep-call", tool.IDSleep)}})
 	prepareDurableLoop(t, s)
 	result, err := s.RunDaemon(t.Context(), nil, nil)
 	require.NoError(t, err)
 	assert.True(t, result.Suspended,
 		"RunDaemon must return the loop result, not reconstruct suspension from pre-run ledgers")
-
-	// A later settled run on the same service must not inherit the previous
-	// in-memory suspend flag.
-	require.NoError(
-		t,
-		s.ResolveInterruptedCalls(t.Context(), []PendingToolCall{{ID: "sleep-call", Name: tool.IDSleep}}, "woke"),
+	require.NoError(t, s.ResolveInterruptedCalls(t.Context(),
+		[]PendingToolCall{{ID: "sleep-call", Name: tool.IDSleep}}, "woke"))
+	s.models = newTestModelRuntime(
+		&loopScriptLLM{responses: []*llmwire.Response{textResponse("done"), textResponse("confirmed")}},
+		s.store,
+		s.id,
 	)
-	s.llmClient = &loopScriptLLM{responses: []*llmwire.Response{textResponse("done"), textResponse("confirmed")}}
+	s.turns = newToolTurns(s.registry, s.models, s.ms, testProgressBoundary(s.boundary))
+	s.contexts = newCheckpointOwner(
+		s.ms, s.models, s.prompt, s.turns, s.transcript(),
+		s.dispositions, s.budgetGate, s.outputStore, s.boundary,
+		&s.stamper, nil, nil,
+		checkpointOptions{id: s.id, outputEnabled: s.outputEnabled, agentsMD: s.agentsMD},
+	)
 
 	result, err = s.RunDaemon(t.Context(), nil, nil)
 	require.NoError(t, err)

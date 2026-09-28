@@ -150,7 +150,7 @@ func TestExecuteToolCalls_Stages(t *testing.T) {
 
 	grep.fail("1", errors.New("boom"))
 
-	require.NoError(t, executeToolCalls(t.Context(), agent, []llmwire.ToolCall{
+	require.NoError(t, executeTestToolCalls(t.Context(), agent.turns, []llmwire.ToolCall{
 		gateCall("read", "1"), gateCall("grep", "1"), gateCall("edit", "1"), gateCall("read", "2"),
 	}))
 
@@ -187,7 +187,7 @@ func TestExecuteToolCalls_StagesHappyPath(t *testing.T) {
 	done := make(chan error, 1)
 
 	go func() {
-		done <- executeToolCalls(t.Context(), agent, []llmwire.ToolCall{
+		done <- executeTestToolCalls(t.Context(), agent.turns, []llmwire.ToolCall{
 			gateCall("read", "1"), gateCall("grep", "1"), gateCall("edit", "1"), gateCall("read", "2"),
 		})
 	}()
@@ -237,7 +237,7 @@ func TestExecuteToolCalls_MoreThanFourTasksAllSpawn(t *testing.T) {
 
 	done := make(chan error, 1)
 
-	go func() { done <- executeToolCalls(t.Context(), agent, calls) }()
+	go func() { done <- executeTestToolCalls(t.Context(), agent.turns, calls) }()
 
 	waitUntil(t, func() bool { return task.entryCount() == 4 })
 
@@ -263,12 +263,13 @@ func TestExecuteToolCalls_SuspendedTaskBlocksFollowingStage(t *testing.T) {
 
 	task.fail("1", tool.ErrSuspend)
 
-	require.NoError(t, executeToolCalls(t.Context(), agent, []llmwire.ToolCall{
+	outcome, err := agent.turns.Execute(t.Context(), []llmwire.ToolCall{
 		gateCall(tool.IDTask, "1"), gateCall("edit", "1"),
-	}))
+	}, nil, nil)
+	require.NoError(t, err)
 
 	assert.Equal(t, 0, edit.entryCount(), "no later stage starts after a suspension")
-	assert.True(t, agent.suspended)
+	assert.True(t, outcome.suspended)
 
 	messages := agent.ms.getMessages()
 	require.Len(t, messages, 1, "the suspended call itself persists no result row")
@@ -289,7 +290,7 @@ func TestExecuteToolCalls_TaskResultAllowsFollowingStage(t *testing.T) {
 	edit := newGateTool("edit", false)
 	agent := newTestAgent(task, edit)
 
-	require.NoError(t, executeToolCalls(t.Context(), agent, []llmwire.ToolCall{
+	require.NoError(t, executeTestToolCalls(t.Context(), agent.turns, []llmwire.ToolCall{
 		gateCall(tool.IDTask, "1"), gateCall("edit", "1"),
 	}))
 
@@ -313,12 +314,19 @@ func TestExecuteToolCalls_PersistenceFailureLeavesNoPartialSet(t *testing.T) {
 
 	mockStore := &mockSessionStore{insertFailAt: 1, insertErr: errors.New("disk full")}
 	agent.ms = newMessageStore(mockStore, 1, nil)
+	agent.turns = newToolTurns(agent.registry, agent.models, agent.ms, testProgressBoundary(agent.boundary))
+	agent.contexts = newCheckpointOwner(
+		agent.ms, agent.models, agent.prompt, agent.turns, agent.transcript(),
+		agent.dispositions, agent.budgetGate, agent.outputStore, agent.boundary,
+		&agent.stamper, nil, nil,
+		checkpointOptions{id: agent.id, outputEnabled: agent.outputEnabled, agentsMD: agent.agentsMD},
+	)
 
 	require.NoError(t, agent.ms.reloadMessages(t.Context()))
 
 	edit.fail("1", errors.New("edit refused"))
 
-	err := executeToolCalls(t.Context(), agent, []llmwire.ToolCall{
+	err := executeTestToolCalls(t.Context(), agent.turns, []llmwire.ToolCall{
 		gateCall("read", "1"), gateCall("edit", "1"), gateCall("write", "1"),
 	})
 	require.Error(t, err, "the failed commit surfaces instead of half-committing")
@@ -329,7 +337,7 @@ func TestExecuteToolCalls_PersistenceFailureLeavesNoPartialSet(t *testing.T) {
 
 	// Retrying after the transient failure commits the identical set: the
 	// failure row plus both skip stubs land together.
-	require.NoError(t, executeToolCalls(t.Context(), agent, []llmwire.ToolCall{
+	require.NoError(t, executeTestToolCalls(t.Context(), agent.turns, []llmwire.ToolCall{
 		gateCall("read", "1"), gateCall("edit", "1"), gateCall("write", "1"),
 	}))
 
@@ -353,11 +361,11 @@ func TestExecuteToolCalls_LoopDetectorIgnoresSkips(t *testing.T) {
 
 	grep.fail("1", errors.New("boom"))
 
-	require.NoError(t, executeToolCalls(t.Context(), agent, []llmwire.ToolCall{
+	require.NoError(t, executeTestToolCalls(t.Context(), agent.turns, []llmwire.ToolCall{
 		gateCall("read", "1"), gateCall("grep", "1"), gateCall("edit", "1"),
 	}))
 
-	assert.Len(t, agent.loopDetector.window, 2, "only executed calls enter the window")
+	assert.Len(t, agent.turns.(*toolTurnExecutor).detector.window, 2, "only executed calls enter the window")
 
 	for _, msg := range agent.ms.getMessages() {
 		if msg.Role == llmwire.RoleTool {
@@ -377,7 +385,7 @@ func TestExecuteToolCalls_WarningOnlyOnLastPersistedResult(t *testing.T) {
 	// the warn threshold, so this commit runs with actionWarnFailure.
 	cause := errors.New("boom")
 	persisted := fmt.Sprintf("Error: %v", fmt.Errorf("execute tool %s: %w", "read", cause))
-	agent.loopDetector.record([]toolRecord{{
+	agent.turns.(*toolTurnExecutor).detector.record([]toolRecord{{
 		name:       "read",
 		resultHash: fingerprintResult(persisted),
 		failed:     true,
@@ -386,7 +394,7 @@ func TestExecuteToolCalls_WarningOnlyOnLastPersistedResult(t *testing.T) {
 	read.fail("1", cause)
 	read.fail("2", cause)
 
-	require.NoError(t, executeToolCalls(t.Context(), agent, []llmwire.ToolCall{
+	require.NoError(t, executeTestToolCalls(t.Context(), agent.turns, []llmwire.ToolCall{
 		gateCall("read", "1"), gateCall("read", "2"),
 	}))
 
@@ -412,7 +420,7 @@ func TestExecuteToolCalls_PlannedInstanceSurvivesRegistrySwap(t *testing.T) {
 	done := make(chan error, 1)
 
 	go func() {
-		done <- executeToolCalls(t.Context(), agent, []llmwire.ToolCall{
+		done <- executeTestToolCalls(t.Context(), agent.turns, []llmwire.ToolCall{
 			gateCall("read", "1"), gateCall("read", "2"),
 		})
 	}()
@@ -443,7 +451,7 @@ func TestExecuteToolCalls_TypedFailureKeepsPartialOutput(t *testing.T) {
 	// batch would report nested partial failure.
 	batch.resultIsError = true
 
-	require.NoError(t, executeToolCalls(t.Context(), agent, []llmwire.ToolCall{
+	require.NoError(t, executeTestToolCalls(t.Context(), agent.turns, []llmwire.ToolCall{
 		{ID: "batch-1", Name: tool.IDBatch, Arguments: []byte(`{}`)},
 		gateCall("edit", "1"),
 	}))
@@ -489,11 +497,18 @@ func TestBatchFallbackParityWithNativeScheduling(t *testing.T) {
 	runNative := func(grep *gateTool, reg tool.Registry) (*svc, chan error) {
 		agent := newTestAgent()
 		agent.registry = reg
+		agent.turns = newToolTurns(agent.registry, agent.models, agent.ms, testProgressBoundary(agent.boundary))
+		agent.contexts = newCheckpointOwner(
+			agent.ms, agent.models, agent.prompt, agent.turns, agent.transcript(),
+			agent.dispositions, agent.budgetGate, agent.outputStore, agent.boundary,
+			&agent.stamper, nil, nil,
+			checkpointOptions{id: agent.id, outputEnabled: agent.outputEnabled, agentsMD: agent.agentsMD},
+		)
 
 		done := make(chan error, 1)
 
 		go func() {
-			done <- executeToolCalls(t.Context(), agent, []llmwire.ToolCall{
+			done <- executeTestToolCalls(t.Context(), agent.turns, []llmwire.ToolCall{
 				gateCall("read", "1"), gateCall("grep", "1"), gateCall("edit", "1"),
 			})
 		}()

@@ -93,12 +93,19 @@ func TestCompactLeavesTheTranscriptIntactOnFailure(t *testing.T) {
 			llm := tc.llm()
 			s := newCompactionTestSvc(llm)
 			s.ms = newMessageStore(store, 1, nil)
+			s.turns = newToolTurns(s.registry, s.models, s.ms, testProgressBoundary(s.boundary))
+			s.contexts = newCheckpointOwner(
+				s.ms, s.models, s.prompt, s.turns, s.transcript(),
+				s.dispositions, s.budgetGate, s.outputStore, s.boundary,
+				&s.stamper, nil, nil,
+				checkpointOptions{id: s.id, outputEnabled: s.outputEnabled, agentsMD: s.agentsMD},
+			)
 
 			seedCompactableTranscript(ctx, t, s)
 			before := s.ms.getMessages()
 			beforeRowIDs := s.ms.getRowIDs()
 
-			ok, err := s.compact(ctx, nil)
+			ok, err := s.contexts.(*checkpointOwner).compact(ctx, nil)
 
 			require.Error(t, err)
 			assert.False(t, ok)
@@ -134,10 +141,17 @@ func TestCompactKeepsTheOldTranscriptWhenTheDurableSwapFails(t *testing.T) {
 	}
 	s := newCompactionTestSvc(llm)
 	s.ms = newMessageStore(store, 1, nil)
+	s.turns = newToolTurns(s.registry, s.models, s.ms, testProgressBoundary(s.boundary))
+	s.contexts = newCheckpointOwner(
+		s.ms, s.models, s.prompt, s.turns, s.transcript(),
+		s.dispositions, s.budgetGate, s.outputStore, s.boundary,
+		&s.stamper, nil, nil,
+		checkpointOptions{id: s.id, outputEnabled: s.outputEnabled, agentsMD: s.agentsMD},
+	)
 
 	seedCompactableTranscript(ctx, t, s)
 
-	ok, err := s.compact(ctx, nil)
+	ok, err := s.contexts.(*checkpointOwner).compact(ctx, nil)
 
 	require.Error(t, err)
 	assert.False(t, ok)
@@ -166,7 +180,7 @@ func TestCompactHeaderAloneOverThreshold(t *testing.T) {
 		compactionToolResult("c1", strings.Repeat("r", 4000)),
 	})
 
-	ok, err := s.compact(t.Context(), nil)
+	ok, err := s.contexts.(*checkpointOwner).compact(t.Context(), nil)
 
 	require.NoError(t, err, "an unfittable head is nothing to compact, not a failure")
 	assert.False(t, ok)
@@ -196,7 +210,7 @@ func TestCompactRefusesANonRelievingCandidate(t *testing.T) {
 	}
 	s.ms.setMessages(payload)
 
-	ok, err := s.compact(t.Context(), nil)
+	ok, err := s.contexts.(*checkpointOwner).compact(t.Context(), nil)
 
 	require.ErrorIs(t, err, errCompactionNonRelieving)
 	assert.False(t, ok)
@@ -218,9 +232,16 @@ func TestCompactionMakesExactlyOneModelCall(t *testing.T) {
 	}
 	s := newCompactionTestSvc(llm)
 	s.ms = newMessageStore(store, 1, nil)
+	s.turns = newToolTurns(s.registry, s.models, s.ms, testProgressBoundary(s.boundary))
+	s.contexts = newCheckpointOwner(
+		s.ms, s.models, s.prompt, s.turns, s.transcript(),
+		s.dispositions, s.budgetGate, s.outputStore, s.boundary,
+		&s.stamper, nil, nil,
+		checkpointOptions{id: s.id, outputEnabled: s.outputEnabled, agentsMD: s.agentsMD},
+	)
 	s.ms.setMessages(oversizedTranscript(32000))
 
-	require.NoError(t, s.compactIfNeeded(ctx, 32000))
+	require.NoError(t, s.contexts.(*checkpointOwner).compactIfNeeded(ctx, 32000))
 
 	assert.Equal(t, 1, llm.callCount)
 }
@@ -307,7 +328,7 @@ func TestSummarizerToolCallGetsOneNudgeAndRetries(t *testing.T) {
 	s := newCompactionTestSvc(llm)
 	s.ms.setMessages(oversizedTranscript(32000))
 
-	ok, err := s.compact(ctx, nil)
+	ok, err := s.contexts.(*checkpointOwner).compact(ctx, nil)
 	require.NoError(t, err)
 	require.True(t, ok)
 	require.Equal(t, 2, llm.callCount, "one nudge, one retry, no more")

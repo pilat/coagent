@@ -167,13 +167,13 @@ func (s *transcriptSession) HasPendingWork() bool {
 }
 
 func (s *svc) pendingExternalCallIDs() map[string]bool {
-	return s.pendingExternalCallIDsLocked(s.ms.getMessages())
+	return s.transcript().pendingExternalCallIDsLocked(s.ms.getMessages())
 }
 
 // pendingExternalCallIDsLocked classifies unresolved calls over an already
 // taken message snapshot; compaction passes its ms.mu-held transcript here
 // because getMessages would re-lock and deadlock.
-func (s *svc) pendingExternalCallIDsLocked(messages []llmwire.Message) map[string]bool {
+func (s *transcriptSession) pendingExternalCallIDsLocked(messages []llmwire.Message) map[string]bool {
 	calls := unresolvedCallsMatching(messages, func(tc llmwire.ToolCall) bool {
 		return tool.IsExternalCall(tc.Name) || s.stagedCalls[tc.ID] != ""
 	})

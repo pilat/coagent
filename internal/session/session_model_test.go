@@ -83,6 +83,11 @@ type blockingLLMClient struct {
 	closed  chan struct{}
 }
 
+func newTestModelRuntime(client llm.Client, store baselineStore, sessionID int64) modelRuntime {
+	return newModelRuntime(client, &config.Config{Model: client.Model()}, llm.NewClientWithModel,
+		newPromptBuilder("", ""), tool.NewRegistry(), nil, store, sessionID, sessionID)
+}
+
 func (m *blockingLLMClient) Chat(
 	_ context.Context,
 	_ string,
@@ -106,66 +111,66 @@ func (m *blockingLLMClient) Close() error {
 // ---------------------------------------------------------------------------
 
 func TestValidateModelSwitch_ValidModel(t *testing.T) {
-	s := &svc{
+	s := &sessionModel{
 		cfg: &config.Config{
 			UnifiedConfig: unifiedCfgWithModels("gpt-4o", "claude-3"),
 		},
 	}
 
-	reasoning, err := s.validateModelSwitch("gpt-4o", "high")
+	reasoning, err := validateModelSwitch(s.cfg, "gpt-4o", "high")
 	require.NoError(t, err)
 	assert.Equal(t, "high", reasoning)
 }
 
 func TestValidateModelSwitch_UnknownModel(t *testing.T) {
-	s := &svc{
+	s := &sessionModel{
 		cfg: &config.Config{
 			UnifiedConfig: unifiedCfgWithModels("gpt-4o"),
 		},
 	}
 
-	_, err := s.validateModelSwitch("does-not-exist", "medium")
+	_, err := validateModelSwitch(s.cfg, "does-not-exist", "medium")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "unknown model")
 }
 
 func TestValidateModelSwitch_DefaultsReasoningToMedium(t *testing.T) {
-	s := &svc{
+	s := &sessionModel{
 		cfg: &config.Config{
 			UnifiedConfig: unifiedCfgWithModels("gpt-4o"),
 		},
 	}
 
-	reasoning, err := s.validateModelSwitch("gpt-4o", "")
+	reasoning, err := validateModelSwitch(s.cfg, "gpt-4o", "")
 	require.NoError(t, err)
 	assert.Equal(t, string(llm.ReasoningMedium), reasoning)
 }
 
 func TestValidateModelSwitch_InvalidReasoningLevel(t *testing.T) {
-	s := &svc{
+	s := &sessionModel{
 		cfg: &config.Config{
 			UnifiedConfig: unifiedCfgWithModels("gpt-4o"),
 		},
 	}
 
-	_, err := s.validateModelSwitch("gpt-4o", "ultra")
+	_, err := validateModelSwitch(s.cfg, "gpt-4o", "ultra")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "does not accept reasoning level")
 }
 
 // The vocabulary is per-model: a level another model accepts is still invalid here.
 func TestValidateModelSwitch_LevelOutsideTheModelsAllowlist(t *testing.T) {
-	s := &svc{
+	s := &sessionModel{
 		cfg: &config.Config{
 			UnifiedConfig: unifiedCfgWithNarrowModel("glm", []string{"high", "xhigh"}, "xhigh"),
 		},
 	}
 
-	_, err := s.validateModelSwitch("glm", "medium")
+	_, err := validateModelSwitch(s.cfg, "glm", "medium")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "accepts: high, xhigh")
 
-	reasoning, err := s.validateModelSwitch("glm", "")
+	reasoning, err := validateModelSwitch(s.cfg, "glm", "")
 	require.NoError(t, err)
 	assert.Equal(t, "xhigh", reasoning, "an unspecified level lands on the model's own default")
 }
@@ -173,19 +178,19 @@ func TestValidateModelSwitch_LevelOutsideTheModelsAllowlist(t *testing.T) {
 // A model with no effort choice carries no level at all, rather than a medium
 // nobody honours.
 func TestValidateModelSwitch_ModelWithoutEffortCarriesNoLevel(t *testing.T) {
-	s := &svc{
+	s := &sessionModel{
 		cfg: &config.Config{
 			UnifiedConfig: unifiedCfgWithNarrowModel("minimax", nil, ""),
 		},
 	}
 
-	reasoning, err := s.validateModelSwitch("minimax", "")
+	reasoning, err := validateModelSwitch(s.cfg, "minimax", "")
 	require.NoError(t, err)
 	assert.Empty(t, reasoning)
 }
 
 func TestValidateModelSwitch_NoProvidersReturnsError(t *testing.T) {
-	s := &svc{
+	s := &sessionModel{
 		cfg: &config.Config{
 			UnifiedConfig: &config.UnifiedConfig{
 				Models: []config.ModelEntry{{ID: "gpt-4o", Name: "GPT-4o"}},
@@ -193,77 +198,77 @@ func TestValidateModelSwitch_NoProvidersReturnsError(t *testing.T) {
 		},
 	}
 
-	_, err := s.validateModelSwitch("gpt-4o", "medium")
+	_, err := validateModelSwitch(s.cfg, "gpt-4o", "medium")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "no providers configured")
 }
 
 // ---------------------------------------------------------------------------
-// handleSetModel
+// Model switching
 // ---------------------------------------------------------------------------
 
 func TestHandleSetModel_SwitchesLLMClientAndClosesOld(t *testing.T) {
 	oldClient := &mockLLMClientTracked{model: "old-model"}
 	newClient := &mockLLMClientTracked{model: "new-model"}
 
-	s := &svc{
+	s := &sessionModel{
 		cfg: &config.Config{
 			UnifiedConfig: unifiedCfgWithModels("new-model"),
 		},
-		llmClient: oldClient,
-		model:     "old-model",
-		prompt:    newPromptBuilder("", ""),
-		ms:        newMessageStore(nil, 0, nil),
-		newLLMWithModel: func(_ *config.Config, _ string) (llm.Client, error) {
+		client: oldClient,
+		model:  "old-model",
+		prompt: newPromptBuilder("", ""),
+
+		newClient: func(_ *config.Config, _ string) (llm.Client, error) {
 			return newClient, nil
 		},
 	}
 
-	err := s.handleSetModel("new-model", "medium")
+	err := s.SetModel("new-model", "medium")
 	require.NoError(t, err)
 
 	assert.True(t, oldClient.closed, "old LLM client should be closed")
-	assert.Equal(t, newClient, s.llmClient, "session should hold the new client")
+	assert.Equal(t, newClient, s.client, "session should hold the new client")
 }
 
 func TestHandleSetModel_UpdatesModelField(t *testing.T) {
 	newClient := &mockLLMClientTracked{model: "claude-3"}
 
-	s := &svc{
+	s := &sessionModel{
 		cfg: &config.Config{
 			UnifiedConfig: unifiedCfgWithModels("claude-3"),
 		},
-		llmClient: &mockLLMClientTracked{model: "old"},
-		model:     "old",
-		prompt:    newPromptBuilder("", ""),
-		ms:        newMessageStore(nil, 0, nil),
-		newLLMWithModel: func(_ *config.Config, _ string) (llm.Client, error) {
+		client: &mockLLMClientTracked{model: "old"},
+		model:  "old",
+		prompt: newPromptBuilder("", ""),
+
+		newClient: func(_ *config.Config, _ string) (llm.Client, error) {
 			return newClient, nil
 		},
 	}
 
-	require.NoError(t, s.handleSetModel("claude-3", "low"))
+	require.NoError(t, s.SetModel("claude-3", "low"))
 
-	assert.Equal(t, "claude-3", s.model)
-	assert.Equal(t, "low", s.reasoningLevel)
+	assert.Equal(t, "claude-3", s.snapshot().model)
+	assert.Equal(t, "low", s.snapshot().reasoning)
 }
 
 func TestHandleSetModel_SetsReasoningLevelOnNewClient(t *testing.T) {
 	newClient := &mockLLMClientTracked{model: "gpt-4o"}
 
-	s := &svc{
+	s := &sessionModel{
 		cfg: &config.Config{
 			UnifiedConfig: unifiedCfgWithModels("gpt-4o"),
 		},
-		llmClient: &mockLLMClientTracked{model: "old"},
-		prompt:    newPromptBuilder("", ""),
-		ms:        newMessageStore(nil, 0, nil),
-		newLLMWithModel: func(_ *config.Config, _ string) (llm.Client, error) {
+		client: &mockLLMClientTracked{model: "old"},
+		prompt: newPromptBuilder("", ""),
+
+		newClient: func(_ *config.Config, _ string) (llm.Client, error) {
 			return newClient, nil
 		},
 	}
 
-	require.NoError(t, s.handleSetModel("gpt-4o", "high"))
+	require.NoError(t, s.SetModel("gpt-4o", "high"))
 
 	assert.Equal(t, "high", newClient.reasoningLevel)
 }
@@ -271,35 +276,33 @@ func TestHandleSetModel_SetsReasoningLevelOnNewClient(t *testing.T) {
 func TestHandleSetModel_FactoryErrorPropagates(t *testing.T) {
 	factoryErr := errors.New("factory boom")
 
-	s := &svc{
+	s := &sessionModel{
 		cfg: &config.Config{
 			UnifiedConfig: unifiedCfgWithModels("gpt-4o"),
 		},
-		llmClient: &mockLLMClientTracked{model: "old"},
-		ms:        newMessageStore(nil, 0, nil),
-		newLLMWithModel: func(_ *config.Config, _ string) (llm.Client, error) {
+		client: &mockLLMClientTracked{model: "old"},
+
+		newClient: func(_ *config.Config, _ string) (llm.Client, error) {
 			return nil, factoryErr
 		},
 	}
 
-	err := s.handleSetModel("gpt-4o", "medium")
+	err := s.SetModel("gpt-4o", "medium")
 	require.Error(t, err)
 	assert.ErrorIs(t, err, factoryErr)
 }
 
-// A /model switch on the daemon goroutine mutates the model triplet while the loop
-// reads it (callLLM / buildSessionStatus). modelMu must make that race-free — run
-// under -race to catch a regression.
+// Concurrent switches and metadata/prompt reads share the same model owner.
 func TestHandleSetModel_RaceWithLoopRead(t *testing.T) {
-	s := &svc{
-		cfg:            &config.Config{UnifiedConfig: unifiedCfgWithModels("m1", "m2")},
-		llmClient:      &mockLLMClientTracked{model: "m1"},
-		model:          "m1",
-		reasoningLevel: "medium",
-		prompt:         newPromptBuilder("", ""),
-		registry:       tool.NewRegistry(),
-		ms:             newMessageStore(nil, 0, nil),
-		newLLMWithModel: func(_ *config.Config, id string) (llm.Client, error) {
+	s := &sessionModel{
+		cfg:       &config.Config{UnifiedConfig: unifiedCfgWithModels("m1", "m2")},
+		client:    &mockLLMClientTracked{model: "m1"},
+		model:     "m1",
+		reasoning: "medium",
+		prompt:    newPromptBuilder("", ""),
+		registry:  tool.NewRegistry(),
+
+		newClient: func(_ *config.Config, id string) (llm.Client, error) {
 			return &mockLLMClientTracked{model: id}, nil
 		},
 	}
@@ -315,9 +318,9 @@ func TestHandleSetModel_RaceWithLoopRead(t *testing.T) {
 			case <-stop:
 				return
 			default:
-				_ = s.currentLLM()
+				_ = s.snapshot()
 				_ = s.prompt.systemPrompt()
-				_ = s.buildSessionStatus(context.Background())
+				_ = s.snapshot().model
 			}
 		}
 	})
@@ -327,7 +330,7 @@ func TestHandleSetModel_RaceWithLoopRead(t *testing.T) {
 
 		models := []string{"m1", "m2"}
 		for i := range 200 {
-			if err := s.handleSetModel(models[i%2], "medium"); err != nil {
+			if err := s.SetModel(models[i%2], "medium"); err != nil {
 				setErr = err
 				return
 			}
@@ -346,13 +349,13 @@ func TestHandleSetModelWaitsForInFlightChatBeforeClosingOldClient(t *testing.T) 
 		closed:  make(chan struct{}),
 	}
 	newClientBuilt := make(chan struct{})
-	s := &svc{
-		cfg:            &config.Config{UnifiedConfig: unifiedCfgWithModels("m1", "m2")},
-		llmClient:      oldClient,
-		model:          "m1",
-		reasoningLevel: "medium",
-		prompt:         newPromptBuilder("", ""),
-		newLLMWithModel: func(_ *config.Config, id string) (llm.Client, error) {
+	s := &sessionModel{
+		cfg:       &config.Config{UnifiedConfig: unifiedCfgWithModels("m1", "m2")},
+		client:    oldClient,
+		model:     "m1",
+		reasoning: "medium",
+		prompt:    newPromptBuilder("", ""),
+		newClient: func(_ *config.Config, id string) (llm.Client, error) {
 			close(newClientBuilt)
 			return &mockLLMClientTracked{model: id}, nil
 		},
@@ -360,13 +363,13 @@ func TestHandleSetModelWaitsForInFlightChatBeforeClosingOldClient(t *testing.T) 
 
 	chatDone := make(chan error, 1)
 	go func() {
-		_, err := s.chat(context.Background(), "system", nil, nil)
+		_, err := s.Chat(context.Background(), "system", nil, nil)
 		chatDone <- err
 	}()
 	<-oldClient.started
 
 	switchDone := make(chan error, 1)
-	go func() { switchDone <- s.handleSetModel("m2", "medium") }()
+	go func() { switchDone <- s.SetModel("m2", "medium") }()
 	<-newClientBuilt
 
 	select {
@@ -401,18 +404,18 @@ func TestHandleSetModel_DoesNotExposeOtherConfiguredModels(t *testing.T) {
 		ID: "hidden-model", Name: "Hidden", Provider: "openrouter", ContextWindow: 200_000,
 	})
 
-	s := &svc{
-		cfg:       &config.Config{UnifiedConfig: uc},
-		llmClient: &mockLLMClientTracked{model: "old-model"},
-		model:     "old-model",
-		prompt:    newPromptBuilder("", buildModelsSection("old-model")),
-		ms:        newMessageStore(nil, 0, nil),
-		newLLMWithModel: func(_ *config.Config, _ string) (llm.Client, error) {
+	s := &sessionModel{
+		cfg:    &config.Config{UnifiedConfig: uc},
+		client: &mockLLMClientTracked{model: "old-model"},
+		model:  "old-model",
+		prompt: newPromptBuilder("", buildModelsSection("old-model")),
+
+		newClient: func(_ *config.Config, _ string) (llm.Client, error) {
 			return &mockLLMClientTracked{model: "new-model"}, nil
 		},
 	}
 
-	require.NoError(t, s.handleSetModel("new-model", ""))
+	require.NoError(t, s.SetModel("new-model", ""))
 
 	prompt := s.prompt.systemPrompt()
 	assert.Contains(t, prompt, "- Model: new-model")
@@ -431,23 +434,15 @@ func (m *mockLLMWithSessionTracking) SetSessionID(id string) { m.sessionID = id 
 func TestHandleSetModel_PreservesSessionID(t *testing.T) {
 	var newClient *mockLLMWithSessionTracking
 
-	s := &svc{
-		cfg: &config.Config{
-			UnifiedConfig: unifiedCfgWithModels("new-model"),
-		},
-		llmClient: &mockLLMClientTracked{model: "old-model"},
-		id:        42,
-		rootID:    42,
-		model:     "old-model",
-		prompt:    newPromptBuilder("", ""),
-		ms:        newMessageStore(nil, 0, nil),
-		newLLMWithModel: func(_ *config.Config, _ string) (llm.Client, error) {
-			newClient = &mockLLMWithSessionTracking{model: "new-model"}
-			return newClient, nil
-		},
+	factory := func(_ *config.Config, _ string) (llm.Client, error) {
+		newClient = &mockLLMWithSessionTracking{model: "new-model"}
+		return newClient, nil
 	}
+	s := newModelRuntime(&mockLLMClientTracked{model: "old-model"}, &config.Config{
+		Model: "old-model", UnifiedConfig: unifiedCfgWithModels("new-model"),
+	}, factory, newPromptBuilder("", ""), tool.NewRegistry(), nil, nil, 42, 42)
 
-	err := s.handleSetModel("new-model", "medium")
+	err := s.SetModel("new-model", "medium")
 	require.NoError(t, err)
 
 	require.NotNil(t, newClient)
@@ -457,23 +452,15 @@ func TestHandleSetModel_PreservesSessionID(t *testing.T) {
 func TestHandleSetModel_PreservesSubagentSessionID(t *testing.T) {
 	var newClient *mockLLMWithSessionTracking
 
-	s := &svc{
-		cfg: &config.Config{
-			UnifiedConfig: unifiedCfgWithModels("new-model"),
-		},
-		llmClient: &mockLLMClientTracked{model: "old-model"},
-		id:        99,
-		rootID:    1, // different from id = subagent
-		model:     "old-model",
-		prompt:    newPromptBuilder("", ""),
-		ms:        newMessageStore(nil, 0, nil),
-		newLLMWithModel: func(_ *config.Config, _ string) (llm.Client, error) {
-			newClient = &mockLLMWithSessionTracking{model: "new-model"}
-			return newClient, nil
-		},
+	factory := func(_ *config.Config, _ string) (llm.Client, error) {
+		newClient = &mockLLMWithSessionTracking{model: "new-model"}
+		return newClient, nil
 	}
+	s := newModelRuntime(&mockLLMClientTracked{model: "old-model"}, &config.Config{
+		Model: "old-model", UnifiedConfig: unifiedCfgWithModels("new-model"),
+	}, factory, newPromptBuilder("", ""), tool.NewRegistry(), nil, nil, 99, 1)
 
-	err := s.handleSetModel("new-model", "medium")
+	err := s.SetModel("new-model", "medium")
 	require.NoError(t, err)
 
 	require.NotNil(t, newClient)

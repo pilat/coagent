@@ -253,7 +253,7 @@ func (s *svc) settleSubagentProgress(
 	}
 
 	if published {
-		s.publish(rootID, sessionevent.Notification{
+		s.routes.Publish(rootID, sessionevent.Notification{
 			Type: sessionevent.NotifyMessage, Message: content,
 		})
 	}
@@ -269,6 +269,6 @@ func newProgressRuntime(
 
 	return progressruntime.New(
 		store, daemon.HasActiveLoop, daemon.mainModelWorking, daemon.liveContextProjection,
-		daemon.publish,
+		daemon.routes.Publish,
 	)
 }

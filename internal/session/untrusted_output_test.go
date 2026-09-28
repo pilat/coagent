@@ -257,7 +257,10 @@ func TestExecuteToolCalls_UntrustedIDsPreserveFailureDetection(t *testing.T) {
 	for i := range loopDetectorFailWarn {
 		arg := fmt.Sprint(i)
 		external.fail(arg, fmt.Errorf("same remote failure"))
-		require.NoError(t, executeToolCalls(t.Context(), agent, []llmwire.ToolCall{gateCall(external.ID(), arg)}))
+		require.NoError(
+			t,
+			executeTestToolCalls(t.Context(), agent.turns, []llmwire.ToolCall{gateCall(external.ID(), arg)}),
+		)
 		msgs := agent.ms.getMessages()
 		content := msgs[len(msgs)-1].Content
 		markerID := requireUntrustedMarkerID(t, content)
@@ -266,7 +269,7 @@ func TestExecuteToolCalls_UntrustedIDsPreserveFailureDetection(t *testing.T) {
 		assert.True(t, strings.HasSuffix(content, `<<<END_UNTRUSTED_EXTERNAL_DATA id="`+markerID+`">>>`))
 	}
 
-	assert.Equal(t, loopDetectorFailWarn, agent.loopDetector.consecutiveFailureStreak())
+	assert.Equal(t, loopDetectorFailWarn, agent.turns.(*toolTurnExecutor).detector.consecutiveFailureStreak())
 	msgs := agent.ms.getMessages()
 	assert.Contains(t, msgs[len(msgs)-1].Content, "LOOP WARNING")
 }

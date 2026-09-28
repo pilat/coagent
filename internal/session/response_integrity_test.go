@@ -37,24 +37,31 @@ func TestRunLoopLengthRecoveryHidesRejectedAttemptAndPublishesSuccessOnce(t *tes
 		return textResponse("complete answer"), nil
 	}}
 
-	agent := newTestAgent(probe)
-	agent.id, agent.rootID, agent.store = sessionID, sessionID, store
-	agent.ms = newMessageStore(store, sessionID, store)
-	agent.llmClient = model
+	agent := newTestAgentWithStore(store, sessionID, probe)
+	setIntegrityModel(agent, model)
 	require.NoError(t, agent.ms.addUserMessage(t.Context(), "do the work"))
-
 	result, err := runTestLoop(t.Context(), t, agent, loopOptions{Notify: notifier.fn}, iterationGuard(5))
 	require.NoError(t, err)
 	assert.Equal(t, "complete answer", result.FinalResponse)
 	assert.Zero(t, probe.runs.Load())
 	assert.Equal(t, []string{"complete answer"}, notifier.all())
-
 	rows := loadIntegrityRows(t, db, sessionID)
 	require.Len(t, rows, 6)
 	assert.Equal(t, sessionstore.RejectedReasonOutputLength, rows[1].rejectedReason.String)
 	assert.Equal(t, rows[1].id, rows[2].retryOf.Int64)
 	assert.Equal(t, sessionstore.OutputLengthRecoveryPrompt, rows[2].content)
 	assert.Equal(t, llmwire.FinishStop, rows[3].finishType.String)
+}
+
+func setIntegrityModel(agent *svc, model *loopScriptLLM) {
+	agent.models = newTestModelRuntime(model, agent.store, agent.id)
+	agent.turns = newToolTurns(agent.registry, agent.models, agent.ms, testProgressBoundary(agent.boundary))
+	agent.contexts = newCheckpointOwner(
+		agent.ms, agent.models, agent.prompt, agent.turns, agent.transcript(),
+		agent.dispositions, agent.budgetGate, agent.outputStore, agent.boundary,
+		&agent.stamper, nil, nil,
+		checkpointOptions{id: agent.id, outputEnabled: agent.outputEnabled, agentsMD: agent.agentsMD},
+	)
 }
 
 func TestRunLoopRepeatedLengthCommitsOneTerminalError(t *testing.T) {
@@ -64,25 +71,19 @@ func TestRunLoopRepeatedLengthCommitsOneTerminalError(t *testing.T) {
 		{Text: "first partial", FinishType: llmwire.FinishLength},
 		{Text: "second partial", FinishType: llmwire.FinishLength},
 	}}
-
-	agent := newTestAgent()
-	agent.id, agent.rootID, agent.store = sessionID, sessionID, store
-	agent.ms = newMessageStore(store, sessionID, store)
-	agent.llmClient = model
+	agent := newTestAgentWithStore(store, sessionID)
+	setIntegrityModel(agent, model)
 	require.NoError(t, agent.ms.addUserMessage(t.Context(), "do the work"))
-
 	result, err := runTestLoop(t.Context(), t, agent, loopOptions{Notify: notifier.fn}, iterationGuard(5))
 	require.EqualError(t, err, sessionstore.IntegrityErrorNotice(sessionstore.OutputLengthTerminalError))
 	assert.Equal(t, sessionstore.IntegrityErrorNotice(sessionstore.OutputLengthTerminalError), result.ErrorNotice)
 	assert.True(t, result.TerminalStateCommitted)
 	assert.Empty(t, notifier.all())
-
 	rows := loadIntegrityRows(t, db, sessionID)
 	require.Len(t, rows, 4)
 	assert.Equal(t, sessionstore.RejectedReasonOutputLength, rows[1].rejectedReason.String)
 	assert.Equal(t, sessionstore.RejectedReasonOutputLength, rows[3].rejectedReason.String)
 	assert.Equal(t, rows[1].id, rows[2].retryOf.Int64)
-
 	var status string
 	var iteration int
 	require.NoError(t, db.QueryRowContext(t.Context(),
@@ -96,18 +97,13 @@ func TestRunLoopUnknownFinishRejectsWithoutRetry(t *testing.T) {
 	model := &loopScriptLLM{responses: []*llmwire.Response{{
 		Text: "filtered partial", FinishType: llmwire.FinishUnknown, ProviderFinishReason: "content_filter",
 	}}}
-
-	agent := newTestAgent()
-	agent.id, agent.rootID, agent.store = sessionID, sessionID, store
-	agent.ms = newMessageStore(store, sessionID, store)
-	agent.llmClient = model
+	agent := newTestAgentWithStore(store, sessionID)
+	setIntegrityModel(agent, model)
 	require.NoError(t, agent.ms.addUserMessage(t.Context(), "do the work"))
-
 	result, err := runTestLoop(t.Context(), t, agent, loopOptions{}, iterationGuard(5))
 	require.EqualError(t, err, sessionstore.IntegrityErrorNotice(sessionstore.UnknownFinishTerminalError))
 	assert.Equal(t, 1, model.calls)
 	assert.Equal(t, sessionstore.IntegrityErrorNotice(sessionstore.UnknownFinishTerminalError), result.ErrorNotice)
-
 	rows := loadIntegrityRows(t, db, sessionID)
 	require.Len(t, rows, 2)
 	assert.Equal(t, sessionstore.RejectedReasonUnknownFinish, rows[1].rejectedReason.String)
@@ -117,15 +113,12 @@ func TestRunLoopUnknownFinishRejectsWithoutRetry(t *testing.T) {
 func TestRunLoopUnknownFinishNeverExecutesIncludedCalls(t *testing.T) {
 	_, store, sessionID := newFinalOutputStore(t)
 	probe := &countingTool{id: "probe"}
-	agent := newTestAgent(probe)
-	agent.id, agent.rootID, agent.store = sessionID, sessionID, store
-	agent.ms = newMessageStore(store, sessionID, store)
-	agent.llmClient = &loopScriptLLM{responses: []*llmwire.Response{{
+	agent := newTestAgentWithStore(store, sessionID, probe)
+	setIntegrityModel(agent, &loopScriptLLM{responses: []*llmwire.Response{{
 		FinishType: llmwire.FinishUnknown,
 		ToolCalls:  []llmwire.ToolCall{{ID: "rejected", Name: "probe", Arguments: []byte(`{}`)}},
-	}}}
+	}}})
 	require.NoError(t, agent.ms.addUserMessage(t.Context(), "do the work"))
-
 	_, err := runTestLoop(t.Context(), t, agent, loopOptions{}, iterationGuard(3))
 	require.Error(t, err)
 	assert.Zero(t, probe.runs.Load())
@@ -143,8 +136,15 @@ func TestRunLoopStopWithCallsRetainsStructuralToolRouting(t *testing.T) {
 
 		return textResponse("done"), nil
 	}}
-	agent := newTestAgent(probe)
-	agent.llmClient = model
+	agent := newDurableTestAgent(t, probe)
+	agent.models = newTestModelRuntime(model, agent.store, agent.id)
+	agent.turns = newToolTurns(agent.registry, agent.models, agent.ms, testProgressBoundary(agent.boundary))
+	agent.contexts = newCheckpointOwner(
+		agent.ms, agent.models, agent.prompt, agent.turns, agent.transcript(),
+		agent.dispositions, agent.budgetGate, agent.outputStore, agent.boundary,
+		&agent.stamper, nil, nil,
+		checkpointOptions{id: agent.id, outputEnabled: agent.outputEnabled, agentsMD: agent.agentsMD},
+	)
 
 	result, err := runTestLoop(t.Context(), t, agent, loopOptions{}, iterationGuard(5))
 	require.NoError(t, err)
@@ -163,8 +163,15 @@ func TestRunLoopToolCallsFinishWithoutCallsUsesEmptyNudge(t *testing.T) {
 		return textResponse("done"), nil
 	}}
 	notifier := &loopNotifier{}
-	agent := newTestAgent()
-	agent.llmClient = model
+	agent := newDurableTestAgent(t)
+	agent.models = newTestModelRuntime(model, agent.store, agent.id)
+	agent.turns = newToolTurns(agent.registry, agent.models, agent.ms, testProgressBoundary(agent.boundary))
+	agent.contexts = newCheckpointOwner(
+		agent.ms, agent.models, agent.prompt, agent.turns, agent.transcript(),
+		agent.dispositions, agent.budgetGate, agent.outputStore, agent.boundary,
+		&agent.stamper, nil, nil,
+		checkpointOptions{id: agent.id, outputEnabled: agent.outputEnabled, agentsMD: agent.agentsMD},
+	)
 
 	result, err := runTestLoop(t.Context(), t, agent, loopOptions{Notify: notifier.fn}, iterationGuard(5))
 	require.NoError(t, err)
@@ -174,10 +181,17 @@ func TestRunLoopToolCallsFinishWithoutCallsUsesEmptyNudge(t *testing.T) {
 
 func TestRunLoopToolCallsFinishWithoutCallsUsesBoundedEmptyLimit(t *testing.T) {
 	notifier := &loopNotifier{}
-	agent := newTestAgent()
-	agent.llmClient = &loopScriptLLM{responses: []*llmwire.Response{{
+	agent := newDurableTestAgent(t)
+	agent.models = newTestModelRuntime(&loopScriptLLM{responses: []*llmwire.Response{{
 		Text: "hidden on every attempt", FinishType: llmwire.FinishToolCalls,
-	}}}
+	}}}, agent.store, agent.id)
+	agent.turns = newToolTurns(agent.registry, agent.models, agent.ms, testProgressBoundary(agent.boundary))
+	agent.contexts = newCheckpointOwner(
+		agent.ms, agent.models, agent.prompt, agent.turns, agent.transcript(),
+		agent.dispositions, agent.budgetGate, agent.outputStore, agent.boundary,
+		&agent.stamper, nil, nil,
+		checkpointOptions{id: agent.id, outputEnabled: agent.outputEnabled, agentsMD: agent.agentsMD},
+	)
 
 	result, err := runTestLoop(t.Context(), t, agent, loopOptions{Notify: notifier.fn}, iterationGuard(10))
 	require.NoError(t, err)

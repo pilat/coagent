@@ -1,14 +1,7 @@
 package session
 
 import (
-	"context"
-
-	"go.uber.org/zap"
-
 	"github.com/pilat/coagent/internal/llmwire"
-	"github.com/pilat/coagent/internal/logger"
-	"github.com/pilat/coagent/internal/sessionstore"
-	"github.com/pilat/coagent/internal/tool"
 )
 
 // compactionFraction is the share of the context window at which auto-compaction
@@ -94,110 +87,18 @@ func projectContextSize(messages []llmwire.Message, base *contextBaseline, overh
 
 // requestOverhead is what a request carries besides the conversation. Only the
 // unmeasured projection needs it — a measured baseline already includes it.
-func (s *svc) requestOverhead() int {
-	return estimateText(s.prompt.systemPrompt()) + estimateSchemas(tool.ToSchemas(s.registry.List()))
+func (s *checkpointOwner) requestOverhead() int {
+	return estimateText(s.prompt.systemPrompt()) + estimateSchemas(s.tools.inventorySchemas())
 }
 
 // projectContextSize reports the projection and whether it is a pure estimate
 // (no provider measurement backing it).
-func (s *svc) projectContextSize() (int, bool) {
+func (s *checkpointOwner) projectContextSize() (int, bool) {
 	messages := s.ms.getMessages()
 	overhead := s.requestOverhead()
-	base := s.loadContextBaseline()
+	base := s.models.snapshot().baseline
 
 	return projectContextSize(messages, base, overhead), base == nil
-}
-
-func (s *svc) loadContextBaseline() *contextBaseline {
-	s.modelMu.RLock()
-	defer s.modelMu.RUnlock()
-
-	return s.baseline
-}
-
-// modelGeneration identifies the model a request is about to go out under.
-func (s *svc) modelGeneration() uint64 {
-	s.modelMu.RLock()
-	defer s.modelMu.RUnlock()
-
-	return s.modelEpoch
-}
-
-// recordContextBaseline stores what the provider reported for a request covering
-// sentCount messages. A model switch mid-flight discards it as another model's.
-// The measurement also persists best-effort: a failed write costs /status its
-// accuracy across a restart, never the turn.
-func (s *svc) recordContextBaseline(ctx context.Context, promptTokens, sentCount int, generation uint64) {
-	if promptTokens <= 0 {
-		return
-	}
-
-	model, ok := s.storeContextBaseline(promptTokens, sentCount, generation)
-	if !ok {
-		return
-	}
-
-	if s.store == nil {
-		return
-	}
-
-	err := s.store.SaveContextBaseline(ctx, s.id, sessionstore.ContextBaseline{
-		Model:        model,
-		PromptTokens: promptTokens,
-		MessageCount: sentCount,
-	})
-	if err != nil {
-		logger.Ctx(ctx).Named("session.context").Warn("persist_context_baseline_failed", zap.Error(err))
-	}
-}
-
-// storeContextBaseline installs the measurement in memory when it describes the
-// current model generation, returning the model to persist it under.
-func (s *svc) storeContextBaseline(promptTokens, sentCount int, generation uint64) (string, bool) {
-	s.modelMu.Lock()
-	defer s.modelMu.Unlock()
-
-	if s.modelEpoch != generation {
-		return "", false
-	}
-
-	s.baseline = &contextBaseline{promptTokens: promptTokens, messageCount: sentCount}
-
-	return s.model, true
-}
-
-// clearPersistedBaseline drops the stored measurement best-effort. It must run
-// wherever the transcript the measurement described is replaced: otherwise a
-// crash before the next successful response resurrects a stale baseline whose
-// message-count guard passes on equality.
-func (s *svc) clearPersistedBaseline(ctx context.Context) {
-	if s.store == nil {
-		return
-	}
-
-	if err := s.store.ClearContextBaseline(ctx, s.id); err != nil {
-		logger.Ctx(ctx).Named("session.context").Warn("clear_context_baseline_failed", zap.Error(err))
-	}
-}
-
-// installPersistedBaseline adopts the last measurement across a restart. It is
-// discarded when the session's current model differs — a measurement describes
-// one model's window and tokenizer, the same rule the in-memory modelEpoch
-// encodes for mid-flight switches.
-func (s *svc) installPersistedBaseline(b *sessionstore.ContextBaseline) {
-	if b == nil || b.Model != s.model || b.PromptTokens <= 0 {
-		return
-	}
-
-	s.baseline = &contextBaseline{promptTokens: b.PromptTokens, messageCount: b.MessageCount}
-}
-
-// resetContextBaseline drops back to pure estimation.
-func (s *svc) resetContextBaseline() {
-	s.modelMu.Lock()
-	defer s.modelMu.Unlock()
-
-	s.baseline = nil
 }
 
 // hasCompactionCandidate reports whether the raw range can yield a checkpoint
@@ -206,7 +107,7 @@ func (s *svc) resetContextBaseline() {
 // path must not announce an attempt it can never make. The same head-fit bound
 // compactLocked applies is included, so the pre-check and the authoritative
 // re-selection inside compact() agree.
-func (s *svc) hasCompactionCandidate(window int) bool {
+func (s *checkpointOwner) hasCompactionCandidate(window int) bool {
 	s.ms.mu.Lock()
 	defer s.ms.mu.Unlock()
 
@@ -238,7 +139,7 @@ func (s *svc) hasCompactionCandidate(window int) bool {
 // shouldCompact reports whether the projected request size exceeds
 // compactionFraction of the window, or image pressure breaches a high-water
 // mark (D1/D5): a byte wall the token projection cannot see.
-func (s *svc) shouldCompact(window int) bool {
+func (s *checkpointOwner) shouldCompact(window int) bool {
 	size, _ := s.projectContextSize()
 	if size > compactionCutoff(window) {
 		return true

@@ -174,12 +174,16 @@ func TestResetContextAndInjectOnce_OpeningInsertFailureKeepsTranscript(t *testin
 func TestResetContextAndInjectOnce_NoStore(t *testing.T) {
 	s := newResetTestSvc(nil)
 	s.ms = newMessageStore(nil, 0, nil)
-	s.store = nil
-
+	s.turns = newToolTurns(s.registry, s.models, s.ms, testProgressBoundary(s.boundary))
+	s.contexts = newCheckpointOwner(
+		s.ms, s.models, s.prompt, s.turns, s.transcript(),
+		s.dispositions, s.budgetGate, s.outputStore, s.boundary,
+		&s.stamper, nil, nil,
+		checkpointOptions{id: s.id, outputEnabled: s.outputEnabled, agentsMD: s.agentsMD},
+	)
 	applied, err := s.ResetContextAndInjectOnce(context.Background(), "reset:fresh:1", "do the fresh job")
 	require.NoError(t, err)
 	require.True(t, applied)
-
 	msgs := s.ms.getMessages()
 	require.Len(t, msgs, 2)
 	assert.Contains(t, msgs[1].Content, "do the fresh job")
@@ -187,7 +191,6 @@ func TestResetContextAndInjectOnce_NoStore(t *testing.T) {
 
 func seedResetTranscript(ctx context.Context, t *testing.T, s *svc) {
 	t.Helper()
-
 	for _, m := range []llmwire.Message{
 		{Role: llmwire.RoleUser, Content: "old task"},
 		{Role: llmwire.RoleAssistant, ToolCalls: []llmwire.ToolCall{{ID: "c1", Name: "read"}}},
@@ -200,32 +203,40 @@ func seedResetTranscript(ctx context.Context, t *testing.T, s *svc) {
 	}
 }
 
-// TestRun_OpeningWriteFailure_SkipsCheckpoint covers the pre-loop abort: no
-// iteration happened, so Run must not try to checkpoint a store it just saw fail.
 func TestRun_OpeningWriteFailure_SkipsCheckpoint(t *testing.T) {
 	store := &mockSessionStore{insertErr: errStoreDown}
 	s := newMockSvc(t, nil, "")
 	s.store = store
-	s.ms = newMessageStore(store, 1, nil)
-
+	s.ms = newMessageStore(store, s.id, nil)
+	s.turns = newToolTurns(s.registry, s.models, s.ms, testProgressBoundary(s.boundary))
+	s.contexts = newCheckpointOwner(
+		s.ms, s.models, s.prompt, s.turns, s.transcript(),
+		s.dispositions, s.budgetGate, s.outputStore, s.boundary,
+		&s.stamper, nil, nil,
+		checkpointOptions{id: s.id, outputEnabled: s.outputEnabled, agentsMD: s.agentsMD},
+	)
 	_, err := s.Run(context.Background(), "write tests")
-	require.Error(t, err)
 	require.ErrorIs(t, err, errStoreDown)
 	assert.Zero(t, store.iterationCalls, "no checkpoint attempted before the loop")
 }
 
-// TestRun_LoopWriteFailure_KeepsOriginalError asserts the join in the error path
-// does not swallow the write failure that actually stopped the run.
 func TestRun_LoopWriteFailure_KeepsOriginalError(t *testing.T) {
 	_, durable, sessionID := newFinalOutputStore(t)
 	store := &mockSessionStore{failCall: 2}
 	s := newMockSvc(t, nil, "")
-	s.llmClient = &mockLLMRunOnce{response: &llmwire.Response{Text: "done"}}
+	s.models = newTestModelRuntime(&mockLLMRunOnce{response: &llmwire.Response{Text: "done"}}, durable, sessionID)
 	s.store = store
 	s.id, s.rootID = sessionID, sessionID
 	s.ms = newMessageStore(durable, sessionID, nil)
 	s.dispositions = &failingDispositionStore{ResponseDispositionStore: durable}
 	s.boundary = &loopInputBoundary{agent: s}
+	s.turns = newToolTurns(s.registry, s.models, s.ms, testProgressBoundary(s.boundary))
+	s.contexts = newCheckpointOwner(
+		s.ms, s.models, s.prompt, s.turns, s.transcript(),
+		s.dispositions, s.budgetGate, s.outputStore, s.boundary,
+		&s.stamper, nil, nil,
+		checkpointOptions{id: s.id, outputEnabled: s.outputEnabled, agentsMD: s.agentsMD},
+	)
 
 	_, err := s.Run(context.Background(), "write tests")
 	require.Error(t, err)
@@ -277,10 +288,17 @@ func TestExecuteToolCalls_WriteFailurePropagates(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			agent := newTestAgent(&stubTool{id: "read", result: "content"})
 			agent.ms = newMessageStore(&mockSessionStore{insertErr: errStoreDown}, 1, nil)
-			agent.loopDetector.blocked = tt.blocked
+			agent.turns = newToolTurns(agent.registry, agent.models, agent.ms, testProgressBoundary(agent.boundary))
+			agent.contexts = newCheckpointOwner(
+				agent.ms, agent.models, agent.prompt, agent.turns, agent.transcript(),
+				agent.dispositions, agent.budgetGate, agent.outputStore, agent.boundary,
+				&agent.stamper, nil, nil,
+				checkpointOptions{id: agent.id, outputEnabled: agent.outputEnabled, agentsMD: agent.agentsMD},
+			)
+			agent.turns.(*toolTurnExecutor).detector.blocked = tt.blocked
 
 			tc := llmwire.ToolCall{ID: "tc_1", Name: "read", Arguments: []byte(`{}`)}
-			err := executeToolCalls(context.Background(), agent, []llmwire.ToolCall{tc})
+			err := executeTestToolCalls(context.Background(), agent.turns, []llmwire.ToolCall{tc})
 
 			require.ErrorIs(t, err, errStoreDown)
 			assert.Empty(t, agent.ms.getMessages())
@@ -297,6 +315,13 @@ func TestHandlePreviousResult_WriteErrorBeatsSuspend(t *testing.T) {
 		&stubTool{id: "read", result: "content"},
 	)
 	agent.ms = newMessageStore(&mockSessionStore{insertErr: errStoreDown}, 1, nil)
+	agent.turns = newToolTurns(agent.registry, agent.models, agent.ms, testProgressBoundary(agent.boundary))
+	agent.contexts = newCheckpointOwner(
+		agent.ms, agent.models, agent.prompt, agent.turns, agent.transcript(),
+		agent.dispositions, agent.budgetGate, agent.outputStore, agent.boundary,
+		&agent.stamper, nil, nil,
+		checkpointOptions{id: agent.id, outputEnabled: agent.outputEnabled, agentsMD: agent.agentsMD},
+	)
 	agent.ms.setMessages([]llmwire.Message{
 		{Role: llmwire.RoleUser, Content: "task"},
 		{Role: llmwire.RoleAssistant, ToolCalls: []llmwire.ToolCall{

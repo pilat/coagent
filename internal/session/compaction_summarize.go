@@ -9,7 +9,6 @@ import (
 
 	"github.com/pilat/coagent/internal/llmwire"
 	"github.com/pilat/coagent/internal/registry"
-	"github.com/pilat/coagent/internal/tool"
 )
 
 // summarizeCheckpoint runs the one no-tools model call that produces the
@@ -19,7 +18,7 @@ import (
 // that answers a tool call instead of text gets one tools-unavailable nudge
 // and must then answer in plain text. A failed attempt persists no boundary
 // and may submit the same head again on a later attempt.
-func (s *svc) summarizeCheckpoint(
+func (s *checkpointOwner) summarizeCheckpoint(
 	ctx context.Context,
 	split int,
 	pendingExternal map[string]bool,
@@ -31,12 +30,7 @@ func (s *svc) summarizeCheckpoint(
 		}
 	}
 
-	activeTools := s.registry.List()
-	if s.loopDetector.forceTextOnly {
-		activeTools = nil
-	}
-
-	schemas := tool.ToSchemas(activeTools)
+	schemas := s.tools.schemas()
 
 	messages := append(
 		repairTranscriptExcluding(s.ms.messages[:split], pendingExternal),
@@ -47,7 +41,7 @@ func (s *svc) summarizeCheckpoint(
 	// fraction, not a summary-length target — any useful completed length passes.
 	reserve := int((1 - llmwire.ContextInputFraction) * float64(window))
 
-	resp, err := s.chat(ctx, s.prompt.systemPrompt(), messages, schemas, llmwire.WithMaxTokens(reserve))
+	resp, err := s.models.Chat(ctx, s.prompt.systemPrompt(), messages, schemas, llmwire.WithMaxTokens(reserve))
 	if err != nil {
 		return "", nil, fmt.Errorf("compaction chat: %w", err)
 	}
@@ -76,7 +70,7 @@ func (s *svc) summarizeCheckpoint(
 // rejectSummarizerToolCall answers a tool-calling summarizer once, in role:
 // the call keeps its recorded tool results, so the transcript stays provider-
 // valid, and the demand to summarize is restated. One nudge only.
-func (s *svc) rejectSummarizerToolCall(
+func (s *checkpointOwner) rejectSummarizerToolCall(
 	ctx context.Context,
 	messages []llmwire.Message,
 	schemas []llmwire.ToolSchema,
@@ -96,7 +90,7 @@ func (s *svc) rejectSummarizerToolCall(
 
 	followUp := append(append([]llmwire.Message{}, messages...), replies...)
 
-	retry, err := s.chat(ctx, s.prompt.systemPrompt(), followUp, schemas, llmwire.WithMaxTokens(reserve))
+	retry, err := s.models.Chat(ctx, s.prompt.systemPrompt(), followUp, schemas, llmwire.WithMaxTokens(reserve))
 	if err != nil {
 		return nil, fmt.Errorf("compaction retry after tool call: %w", err)
 	}

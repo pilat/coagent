@@ -61,6 +61,12 @@ func TestHandlePreviousResult_StagedCallIsNeverReExecuted(t *testing.T) {
 			counter := &countingTool{id: tool.IDConfigEdit}
 			agent := newTestAgent(counter)
 			agent.stagedCalls = map[string]string{"c1": tool.IDConfigEdit}
+			agent.contexts = newCheckpointOwner(
+				agent.ms, agent.models, agent.prompt, agent.turns, agent.transcript(),
+				agent.dispositions, agent.budgetGate, agent.outputStore, agent.boundary,
+				&agent.stamper, nil, nil,
+				checkpointOptions{id: agent.id, outputEnabled: agent.outputEnabled, agentsMD: agent.agentsMD},
+			)
 			agent.ms.setMessages(tt.msgs)
 
 			r := stagedRunner(agent)
@@ -81,6 +87,12 @@ func TestHandlePreviousResult_StagedCallSurvivesNewerSyntheticPair(t *testing.T)
 	counter := &countingTool{id: tool.IDSleep}
 	agent := newTestAgent(counter)
 	agent.stagedCalls = map[string]string{"sleep-call-125": tool.IDSleep}
+	agent.contexts = newCheckpointOwner(
+		agent.ms, agent.models, agent.prompt, agent.turns, agent.transcript(),
+		agent.dispositions, agent.budgetGate, agent.outputStore, agent.boundary,
+		&agent.stamper, nil, nil,
+		checkpointOptions{id: agent.id, outputEnabled: agent.outputEnabled, agentsMD: agent.agentsMD},
+	)
 	agent.ms.setMessages([]llmwire.Message{
 		usr("wait"),
 		asst("", call("sleep-call-125", tool.IDSleep)),
@@ -100,6 +112,12 @@ func TestHandlePreviousResult_StagedCallSurvivesNewerSyntheticPair(t *testing.T)
 func TestResolvePendingCall_ExactAndIdempotent(t *testing.T) {
 	agent := newTestAgent()
 	agent.stagedCalls = map[string]string{"sleep-call-1": tool.IDSleep}
+	agent.contexts = newCheckpointOwner(
+		agent.ms, agent.models, agent.prompt, agent.turns, agent.transcript(),
+		agent.dispositions, agent.budgetGate, agent.outputStore, agent.boundary,
+		&agent.stamper, nil, nil,
+		checkpointOptions{id: agent.id, outputEnabled: agent.outputEnabled, agentsMD: agent.agentsMD},
+	)
 	agent.ms.setMessages([]llmwire.Message{
 		asst("", call("sleep-call-1", tool.IDSleep)),
 		asst("", call("newer-event", subagentEventTool)),
@@ -137,6 +155,12 @@ func TestResolvePendingCall_ExactAndIdempotent(t *testing.T) {
 func TestSettleStoppedCalls_ClosesOnlyCurrentAndExternalCallsInTranscriptOrder(t *testing.T) {
 	agent := newTestAgent()
 	agent.stagedCalls = map[string]string{"external": tool.IDSleep}
+	agent.contexts = newCheckpointOwner(
+		agent.ms, agent.models, agent.prompt, agent.turns, agent.transcript(),
+		agent.dispositions, agent.budgetGate, agent.outputStore, agent.boundary,
+		&agent.stamper, nil, nil,
+		checkpointOptions{id: agent.id, outputEnabled: agent.outputEnabled, agentsMD: agent.agentsMD},
+	)
 	agent.ms.setMessages([]llmwire.Message{
 		asst("", call("historical", "bash")),
 		usr("new request supersedes the old bash"),
@@ -199,6 +223,12 @@ func TestResolveInterruptedCalls_SkipsSupersededTurn(t *testing.T) {
 func TestResolvePendingCall_RejectsDishonestIdentity(t *testing.T) {
 	agent := newTestAgent()
 	agent.stagedCalls = map[string]string{"sleep-call-1": tool.IDSleep}
+	agent.contexts = newCheckpointOwner(
+		agent.ms, agent.models, agent.prompt, agent.turns, agent.transcript(),
+		agent.dispositions, agent.budgetGate, agent.outputStore, agent.boundary,
+		&agent.stamper, nil, nil,
+		checkpointOptions{id: agent.id, outputEnabled: agent.outputEnabled, agentsMD: agent.agentsMD},
+	)
 	agent.ms.setMessages([]llmwire.Message{asst("", call("sleep-call-1", tool.IDSleep))})
 
 	_, err := agent.ResolvePendingCall(
@@ -218,6 +248,12 @@ func TestResolvePendingCall_RejectsDishonestIdentity(t *testing.T) {
 	assert.Contains(t, err.Error(), "not found")
 
 	agent.stagedCalls = map[string]string{"sleep-call-1": tool.IDTask}
+	agent.contexts = newCheckpointOwner(
+		agent.ms, agent.models, agent.prompt, agent.turns, agent.transcript(),
+		agent.dispositions, agent.budgetGate, agent.outputStore, agent.boundary,
+		&agent.stamper, nil, nil,
+		checkpointOptions{id: agent.id, outputEnabled: agent.outputEnabled, agentsMD: agent.agentsMD},
+	)
 	_, err = agent.ResolvePendingCall(
 		context.Background(),
 		PendingToolCall{ID: "sleep-call-1", Name: tool.IDSleep},
@@ -236,6 +272,12 @@ func TestResolvePendingCall_RejectsDishonestIdentity(t *testing.T) {
 func TestSyntheticInputsCannotJumpPendingExternalCall(t *testing.T) {
 	agent := newTestAgent()
 	agent.stagedCalls = map[string]string{"sleep-call-1": tool.IDSleep}
+	agent.contexts = newCheckpointOwner(
+		agent.ms, agent.models, agent.prompt, agent.turns, agent.transcript(),
+		agent.dispositions, agent.budgetGate, agent.outputStore, agent.boundary,
+		&agent.stamper, nil, nil,
+		checkpointOptions{id: agent.id, outputEnabled: agent.outputEnabled, agentsMD: agent.agentsMD},
+	)
 	agent.ms.setMessages([]llmwire.Message{asst("", call("sleep-call-1", tool.IDSleep))})
 
 	_, err := agent.InjectToolNotificationOnce(context.Background(), "d1", subagentEventTool, "child done")
@@ -253,6 +295,12 @@ func TestHandlePreviousResult_ResolvedStagedCallReleasesTheLoop(t *testing.T) {
 	counter := &countingTool{id: tool.IDConfigEdit}
 	agent := newTestAgent(counter)
 	agent.stagedCalls = map[string]string{"c1": tool.IDConfigEdit}
+	agent.contexts = newCheckpointOwner(
+		agent.ms, agent.models, agent.prompt, agent.turns, agent.transcript(),
+		agent.dispositions, agent.budgetGate, agent.outputStore, agent.boundary,
+		&agent.stamper, nil, nil,
+		checkpointOptions{id: agent.id, outputEnabled: agent.outputEnabled, agentsMD: agent.agentsMD},
+	)
 	agent.ms.setMessages([]llmwire.Message{
 		usr("replace the config"),
 		asst("", call("c1", tool.IDConfigEdit)),
@@ -325,6 +373,12 @@ func TestHasPendingExternalCall(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			agent := newTestAgent()
 			agent.stagedCalls = tt.staged
+			agent.contexts = newCheckpointOwner(
+				agent.ms, agent.models, agent.prompt, agent.turns, agent.transcript(),
+				agent.dispositions, agent.budgetGate, agent.outputStore, agent.boundary,
+				&agent.stamper, nil, nil,
+				checkpointOptions{id: agent.id, outputEnabled: agent.outputEnabled, agentsMD: agent.agentsMD},
+			)
 			agent.ms.setMessages(tt.msgs)
 
 			assert.Equal(t, tt.want, agent.HasPendingExternalCall())
@@ -377,6 +431,12 @@ func TestPendingExternalCallIDs(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			agent := newTestAgent()
 			agent.stagedCalls = tt.staged
+			agent.contexts = newCheckpointOwner(
+				agent.ms, agent.models, agent.prompt, agent.turns, agent.transcript(),
+				agent.dispositions, agent.budgetGate, agent.outputStore, agent.boundary,
+				&agent.stamper, nil, nil,
+				checkpointOptions{id: agent.id, outputEnabled: agent.outputEnabled, agentsMD: agent.agentsMD},
+			)
 			agent.ms.setMessages(tt.msgs)
 
 			got := agent.pendingExternalCallIDs()

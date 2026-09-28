@@ -15,7 +15,7 @@ import (
 func TestOperatorProtocolModel_ParallelCrossingReleaseAndReplay(t *testing.T) {
 	t.Parallel()
 
-	for _, order := range [][]float64{{0.4, 0.7, 0.2}, {0.7, 0.4, 0.2}} {
+	for _, order := range [][]float64{{0.4, 0.7, 0.2}, {0.7, 0.4, 0.2}, {1.1, 0.2, 0.4}} {
 		t.Run(fmt.Sprint(order), func(t *testing.T) {
 			t.Parallel()
 			ctx := context.Background()
@@ -40,19 +40,30 @@ func TestOperatorProtocolModel_ParallelCrossingReleaseAndReplay(t *testing.T) {
 			})
 			require.NoError(t, err)
 
-			modelFired := false
+			modelCost := 0.0
+			modelSkipped := 0
 			for i, cost := range order {
 				callID := fmt.Sprintf("call-%d", i)
-				result, responseErr := store.InsertBudgetedResponse(ctx, BudgetedResponse{
-					SessionID: root.ID, RootID: root.ID,
+				modelCost += cost
+				modelFired := modelCost >= limit
+				if modelFired {
+					modelSkipped++
+				}
+				result, responseErr := store.CommitAcceptedResponseDisposition(ctx, AcceptedResponseDisposition{
+					SessionID: root.ID, RootID: root.ID, Iteration: i + 1, Kind: ResponseDispositionToolCall,
 					Message: &transcript.Message{
-						Role: "assistant", CostUSD: cost,
+						Role: "assistant", CostUSD: cost, Content: "suppressed model prose",
 						ToolCalls: json.RawMessage(fmt.Sprintf(`[{"id":%q,"name":"bash"}]`, callID)),
 					},
 				})
 				require.NoError(t, responseErr)
-				modelFired = modelFired || result.Fired
-				assert.Equal(t, modelFired, result.Fired)
+				assert.Equal(t, modelFired, result.BudgetFired)
+				budget, budgetErr := store.GetBudget(ctx, root.ID)
+				require.NoError(t, budgetErr)
+				assert.Equal(t, modelFired, budget.State == BudgetFired)
+				_, _, persistedCost, usageErr := store.GetSessionTreeUsage(ctx, root.ID)
+				require.NoError(t, usageErr)
+				assert.InDelta(t, modelCost, persistedCost, 0.000001)
 			}
 
 			var checkpoints, skipped int
@@ -61,7 +72,11 @@ func TestOperatorProtocolModel_ParallelCrossingReleaseAndReplay(t *testing.T) {
 			require.NoError(t, db.QueryRowContext(ctx, `SELECT COUNT(*) FROM messages
 				WHERE session_id = ? AND role = 'tool'`, root.ID).Scan(&skipped))
 			assert.Equal(t, 1, checkpoints)
-			assert.Positive(t, skipped)
+			assert.Equal(t, modelSkipped, skipped)
+			var checkpoint string
+			require.NoError(t, db.QueryRowContext(ctx, `SELECT content FROM session_outbox
+				WHERE session_id = ? AND source_key = 'budget:1:checkpoint'`, root.ID).Scan(&checkpoint))
+			assert.NotContains(t, checkpoint, "suppressed model prose")
 
 			_, err = store.EnqueueModelInput(ctx, root.ID, "continue")
 			require.NoError(t, err)

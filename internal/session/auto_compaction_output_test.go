@@ -57,8 +57,16 @@ func TestAutoCompaction_SuccessIsKeyedToItsSummaryMessage(t *testing.T) {
 	s.store = h.store
 	s.outputStore = h.store
 	s.id = sessionID
+	s.models = newTestModelRuntime(llm, h.store, sessionID)
 	s.outputEnabled = true
 	s.ms = newMessageStore(h.store, sessionID, h.store)
+	s.turns = newToolTurns(s.registry, s.models, s.ms, testProgressBoundary(s.boundary))
+	s.contexts = newCheckpointOwner(
+		s.ms, s.models, s.prompt, s.turns, s.transcript(),
+		s.dispositions, s.budgetGate, s.outputStore, s.boundary,
+		&s.stamper, nil, nil,
+		checkpointOptions{id: s.id, outputEnabled: s.outputEnabled, agentsMD: s.agentsMD},
+	)
 	s.ms.setMessages(oversizedTranscript(32000))
 
 	var notes []string

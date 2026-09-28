@@ -11,7 +11,6 @@ import (
 
 	"github.com/pilat/coagent/internal/llmwire"
 	"github.com/pilat/coagent/internal/sessionstore"
-	"github.com/pilat/coagent/internal/transcript"
 )
 
 // summarySizedForProjection returns summarizer text whose marked projection
@@ -49,17 +48,23 @@ func TestCompactionCommitsAtExactCutoff(t *testing.T) {
 	s.ms.setMessages(append(header, append(
 		[]llmwire.Message{compactionUserMessage("raw")}, retainedTail...)...))
 
-	target := compactionCutoff(window) - estimateTokens(header) - s.requestOverhead() - estimateTokens(retainedTail)
+	target := compactionCutoff(
+		window,
+	) - estimateTokens(
+		header,
+	) - s.contexts.(*checkpointOwner).requestOverhead() - estimateTokens(
+		retainedTail,
+	)
 	llm.response = &llmwire.Response{
 		Text:       summarySizedForProjection(t, target),
 		FinishType: llmwire.FinishStop,
 	}
 
-	ok, err := s.compact(context.Background(), nil)
+	ok, err := s.contexts.(*checkpointOwner).compact(context.Background(), nil)
 	require.NoError(t, err)
 	require.True(t, ok, "a projection exactly on the cutoff is relieving")
 
-	size := estimateTokens(s.ms.getMessages()) + s.requestOverhead()
+	size := estimateTokens(s.ms.getMessages()) + s.contexts.(*checkpointOwner).requestOverhead()
 	assert.Equal(t, compactionCutoff(window), size)
 }
 
@@ -81,13 +86,19 @@ func TestCompactionRejectsWhenOverheadPushesOverCutoff(t *testing.T) {
 	s.ms.setMessages(append(header, append(
 		[]llmwire.Message{compactionUserMessage("raw")}, retainedTail...)...))
 
-	target := compactionCutoff(window) - estimateTokens(header) - s.requestOverhead() - estimateTokens(retainedTail) + 1
+	target := compactionCutoff(
+		window,
+	) - estimateTokens(
+		header,
+	) - s.contexts.(*checkpointOwner).requestOverhead() - estimateTokens(
+		retainedTail,
+	) + 1
 	llm.response = &llmwire.Response{
 		Text:       summarySizedForProjection(t, target),
 		FinishType: llmwire.FinishStop,
 	}
 
-	ok, err := s.compact(context.Background(), nil)
+	ok, err := s.contexts.(*checkpointOwner).compact(context.Background(), nil)
 	require.ErrorIs(t, err, errCompactionNonRelieving)
 	assert.False(t, ok)
 	assert.Len(t, s.ms.getMessages(), 5, "a non-relieving candidate commits nothing")
@@ -101,15 +112,6 @@ type recordingBudgetGate struct {
 
 func (g *recordingBudgetGate) Admit(context.Context, time.Time) error { return nil }
 func (g *recordingBudgetGate) Observe(context.Context) (bool, error)  { return false, nil }
-func (g *recordingBudgetGate) PersistResponse(
-	context.Context,
-	*transcript.Message,
-	sessionstore.OutputType,
-	string,
-	bool,
-) (int64, bool, bool, error) {
-	return 0, false, false, nil
-}
 
 func (g *recordingBudgetGate) PersistRejectedResponse(
 	context.Context,
@@ -134,6 +136,12 @@ func budgetedSvc(t *testing.T, gate *recordingBudgetGate, llm *compactionMockLLM
 
 	s := newCompactionTestSvc(llm)
 	s.budgetGate = gate
+	s.contexts = newCheckpointOwner(
+		s.ms, s.models, s.prompt, s.turns, s.transcript(),
+		s.dispositions, s.budgetGate, s.outputStore, s.boundary,
+		&s.stamper, nil, nil,
+		checkpointOptions{id: s.id, outputEnabled: s.outputEnabled, agentsMD: s.agentsMD},
+	)
 	s.ms.setMessages([]llmwire.Message{
 		{Role: llmwire.RoleSystem, Content: "sys"},
 		{Role: llmwire.RoleUser, Content: "task"},
@@ -158,13 +166,13 @@ func TestBudgetedCompactionCommitStampsGateRowIDs(t *testing.T) {
 	}
 	s := budgetedSvc(t, gate, llm)
 
-	ok, err := s.compact(context.Background(), nil)
+	outcome, err := s.contexts.(*checkpointOwner).checkpoint(context.Background(), nil)
 	require.NoError(t, err)
-	require.True(t, ok)
+	require.True(t, outcome.committed)
 
 	assert.Equal(t, []int64{10}, gate.got.CompactedIDs, "only head rows are marked compacted")
 	assert.Zero(t, gate.got.InputID, "no command input behind an automatic compaction")
-	assert.True(t, s.budgetFired)
+	assert.True(t, outcome.budgetFired)
 
 	messages := s.ms.getMessages()
 	rowIDs := s.ms.getRowIDs()
@@ -187,7 +195,7 @@ func TestBudgetedCompactionCommitRejectsMismatchedRowIDs(t *testing.T) {
 	}
 	s := budgetedSvc(t, gate, llm)
 
-	ok, err := s.compact(context.Background(), nil)
+	ok, err := s.contexts.(*checkpointOwner).compact(context.Background(), nil)
 	require.Error(t, err)
 	require.ErrorContains(t, err, "budgeted compaction returned 2 ids for 4 messages")
 	assert.False(t, ok)

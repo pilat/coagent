@@ -100,6 +100,7 @@ func TestSetupRegistrySkillToolUsesSessionLoader(t *testing.T) {
 		prompt:     newPromptBuilder("base", ""),
 	}
 	s.setupRegistry(params{Registry: incomingRegistry, Loader: ldr}, agentConfig)
+	s.refreshRegistrySections()
 
 	result, err := s.registry.Execute(
 		context.Background(),

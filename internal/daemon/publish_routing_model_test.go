@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/pilat/coagent/internal/controllerapi"
+	"github.com/pilat/coagent/internal/sessionbus"
 	"github.com/pilat/coagent/internal/sessionevent"
 )
 
@@ -21,6 +22,8 @@ func TestPublishRoutingModel_ManagerOwnershipSurvivesTransitions(t *testing.T) {
 	t.Parallel()
 
 	mgr, _, store := newTestManager(t)
+	bus := sessionbus.New()
+	mgr.routes = newManagerRoutes(mgr.sessionStore, mgr.managerRoots, store, bus)
 	ctx := context.Background()
 	subscribers := map[string]<-chan controllerapi.SessionNotification{
 		"alpha": mgr.PubSub().SubscribeManager("alpha"),
@@ -64,10 +67,7 @@ func TestPublishRoutingModel_ManagerOwnershipSurvivesTransitions(t *testing.T) {
 
 	// A restarted daemon begins with empty route caches and must recover the
 	// exact owner from the durable session record.
-	mgr.childMu.Lock()
-	mgr.childCache = make(map[int64]bool)
-	mgr.ownerCache = make(map[int64]string)
-	mgr.childMu.Unlock()
+	mgr.routes = newManagerRoutes(mgr.sessionStore, mgr.managerRoots, store, bus)
 	publish(alphaID, "alpha survives a cold route cache")
 
 	newAlphaID, err := mgr.Clear(ctx, alphaID)

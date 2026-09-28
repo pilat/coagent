@@ -65,18 +65,27 @@ func prepareDurableLoop(t *testing.T, agent *svc) {
 	if agent.dispositions != nil {
 		return
 	}
-	if store, ok := agent.store.(sessionstore.ResponseDispositionStore); ok {
-		agent.dispositions = store
-	} else {
-		_, store, sessionID := newFinalOutputStore(t)
-		messages := agent.ms.getMessages()
-		agent.store, agent.dispositions = store, store
-		agent.id, agent.rootID = sessionID, sessionID
-		agent.ms = newMessageStore(store, sessionID, store)
-		for _, message := range messages {
-			require.NoError(t, agent.ms.appendMessageLocked(context.Background(), &message))
+	store, ok := agent.store.(sessionstore.ResponseDispositionStore)
+	require.True(t, ok, "executable fixtures must construct their store before the model")
+	agent.dispositions = store
+	agent.contexts = newCheckpointOwner(
+		agent.ms, agent.models, agent.prompt, agent.turns, agent.transcript(),
+		agent.dispositions, agent.budgetGate, agent.outputStore, agent.boundary,
+		&agent.stamper, nil, nil,
+		checkpointOptions{id: agent.id, outputEnabled: agent.outputEnabled, agentsMD: agent.agentsMD},
+	)
+	messages := agent.ms.getMessages()
+	rowIDs := agent.ms.getRowIDs()
+	for i, rowID := range rowIDs {
+		if rowID != 0 {
+			continue
 		}
+		stored, err := storedMessage(&messages[i])
+		require.NoError(t, err)
+		rowIDs[i], err = agent.store.InsertMessage(context.Background(), agent.id, stored)
+		require.NoError(t, err)
 	}
+	require.NoError(t, agent.ms.setMessagesWithRowIDs(messages, rowIDs))
 	if agent.rootID == 0 {
 		agent.rootID = agent.id
 	}

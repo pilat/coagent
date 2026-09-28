@@ -12,15 +12,28 @@ import (
 )
 
 func newResetTestSvc(store *compactionRecordingStore) *svc {
-	return &svc{
-		id:           1,
-		agentsMD:     "PROJECT RULES",
-		ms:           newMessageStore(store, 1, nil),
-		loopDetector: newLoopDetector(),
-		todoStore:    todo.New(),
-		store:        store,
-		prompt:       newPromptBuilder(testPrompt, ""),
+	var measurements baselineStore
+	if store != nil {
+		measurements = store
 	}
+	s := &svc{
+		models:   newTestModelRuntime(&mockLLMClient{}, measurements, 1),
+		id:       1,
+		agentsMD: "PROJECT RULES",
+		ms:       newMessageStore(store, 1, nil),
+
+		todoStore: todo.New(),
+		store:     store,
+		prompt:    newPromptBuilder(testPrompt, ""),
+	}
+	s.turns = newToolTurns(s.registry, s.models, s.ms, testProgressBoundary(s.boundary))
+	s.contexts = newCheckpointOwner(
+		s.ms, s.models, s.prompt, s.turns, s.transcript(),
+		s.dispositions, s.budgetGate, s.outputStore, s.boundary,
+		&s.stamper, nil, nil,
+		checkpointOptions{id: s.id, outputEnabled: s.outputEnabled, agentsMD: s.agentsMD},
+	)
+	return s
 }
 
 func TestResetContextAndInjectOnce_StartsBlankSlate(t *testing.T) {

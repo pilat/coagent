@@ -7,7 +7,6 @@ import (
 
 	"github.com/pilat/coagent/internal/llm"
 	"github.com/pilat/coagent/internal/llmwire"
-	"github.com/pilat/coagent/internal/tool"
 )
 
 // rawCutLegal requires the repaired projection field-equal to the raw suffix
@@ -91,11 +90,8 @@ func validateRawGrouping(messages []llmwire.Message) error {
 // carries besides the replayed transcript prefix: system prompt, final
 // instruction, focus and the active tool schemas. Every byte participates in
 // the request bound.
-func (s *svc) summarizerBaseEstimateLocked() int {
-	schemas := tool.ToSchemas(s.registry.List())
-	if s.loopDetector.forceTextOnly {
-		schemas = nil
-	}
+func (s *checkpointOwner) summarizerBaseEstimateLocked() int {
+	schemas := s.tools.schemas()
 
 	base := s.prompt.systemPrompt() +
 		compactionInstructionMessage(s.focusSection()).Content

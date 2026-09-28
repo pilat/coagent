@@ -226,7 +226,7 @@ func TestDirectOutputFailsClosedBehindStopFence(t *testing.T) {
 	_, err = store.BeginLifecycleInput(ctx, input.ID, "stop", "⏳ Stopping…")
 	require.NoError(t, err)
 
-	_, _, err = store.InsertToolResultWithDirectOutput(ctx, session.ID,
+	_, _, err = insertSingleToolResult(ctx, store, session.ID,
 		&transcript.Message{Role: "tool", Content: "late", ToolCallID: "c9", ToolName: "bash"},
 		[]string{"late direct output"})
 	require.Error(t, err, "direct output must fail closed behind the stop fence")

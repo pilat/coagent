@@ -64,17 +64,31 @@ func TestRunLoopStatusAtBoundaryEndsOnlyASettledActivation(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			agent := newTestAgent(&stubTool{id: "read", result: "tool result"})
+			agent := newDurableTestAgent(t, &stubTool{id: "read", result: "tool result"})
 			agent.ms.setMessages(tc.messages)
 			agent.boundary = &loopInputBoundary{
 				agent: agent,
 				input: &PendingInput{ID: 1, Content: "/status", ReceivedAt: time.Now()},
 			}
+			agent.turns = newToolTurns(agent.registry, agent.models, agent.ms, testProgressBoundary(agent.boundary))
+			agent.contexts = newCheckpointOwner(
+				agent.ms, agent.models, agent.prompt, agent.turns, agent.transcript(),
+				agent.dispositions, agent.budgetGate, agent.outputStore, agent.boundary,
+				&agent.stamper, nil, nil,
+				checkpointOptions{id: agent.id, outputEnabled: agent.outputEnabled, agentsMD: agent.agentsMD},
+			)
 
 			llmClient := &loopScriptLLM{
 				responses: []*llmwire.Response{textResponse("answered"), textResponse("confirmed")},
 			}
-			agent.llmClient = llmClient
+			agent.models = newTestModelRuntime(llmClient, agent.store, agent.id)
+			agent.turns = newToolTurns(agent.registry, agent.models, agent.ms, testProgressBoundary(agent.boundary))
+			agent.contexts = newCheckpointOwner(
+				agent.ms, agent.models, agent.prompt, agent.turns, agent.transcript(),
+				agent.dispositions, agent.budgetGate, agent.outputStore, agent.boundary,
+				&agent.stamper, nil, nil,
+				checkpointOptions{id: agent.id, outputEnabled: agent.outputEnabled, agentsMD: agent.agentsMD},
+			)
 			notifier := &loopNotifier{}
 
 			_, err := runTestLoop(t.Context(), t, agent, loopOptions{Notify: notifier.fn}, iterationGuard(5))
@@ -109,6 +123,13 @@ func TestDrainBoundaryExplicitInputReleasesStoppedPreservation(t *testing.T) {
 					ID: 1, Content: "durable input", Source: tc.source, ReceivedAt: time.Now(),
 				},
 			}
+			agent.turns = newToolTurns(agent.registry, agent.models, agent.ms, testProgressBoundary(agent.boundary))
+			agent.contexts = newCheckpointOwner(
+				agent.ms, agent.models, agent.prompt, agent.turns, agent.transcript(),
+				agent.dispositions, agent.budgetGate, agent.outputStore, agent.boundary,
+				&agent.stamper, nil, nil,
+				checkpointOptions{id: agent.id, outputEnabled: agent.outputEnabled, agentsMD: agent.agentsMD},
+			)
 
 			accepted, err := (&loopRunner{agent: agent}).drainBoundary(t.Context())
 
@@ -120,7 +141,7 @@ func TestDrainBoundaryExplicitInputReleasesStoppedPreservation(t *testing.T) {
 }
 
 func TestRunLoopExplicitInputArrivingDuringStoppedReadOnlyCommandResumes(t *testing.T) {
-	agent := newTestAgent()
+	agent := newDurableTestAgent(t)
 	agent.preserveStopped = true
 	boundary := &commandFollowupBoundary{
 		loopInputBoundary: &loopInputBoundary{
@@ -134,7 +155,22 @@ func TestRunLoopExplicitInputArrivingDuringStoppedReadOnlyCommandResumes(t *test
 		},
 	}
 	agent.boundary = boundary
-	agent.llmClient = &loopScriptLLM{responses: []*llmwire.Response{textResponse("resumed")}}
+	agent.turns = newToolTurns(agent.registry, agent.models, agent.ms, testProgressBoundary(agent.boundary))
+	agent.contexts = newCheckpointOwner(
+		agent.ms, agent.models, agent.prompt, agent.turns, agent.transcript(),
+		agent.dispositions, agent.budgetGate, agent.outputStore, agent.boundary,
+		&agent.stamper, nil, nil,
+		checkpointOptions{id: agent.id, outputEnabled: agent.outputEnabled, agentsMD: agent.agentsMD},
+	)
+	client := &loopScriptLLM{responses: []*llmwire.Response{textResponse("resumed")}}
+	agent.models = newTestModelRuntime(client, agent.store, agent.id)
+	agent.turns = newToolTurns(agent.registry, agent.models, agent.ms, testProgressBoundary(agent.boundary))
+	agent.contexts = newCheckpointOwner(
+		agent.ms, agent.models, agent.prompt, agent.turns, agent.transcript(),
+		agent.dispositions, agent.budgetGate, agent.outputStore, agent.boundary,
+		&agent.stamper, nil, nil,
+		checkpointOptions{id: agent.id, outputEnabled: agent.outputEnabled, agentsMD: agent.agentsMD},
+	)
 	notifier := &loopNotifier{}
 
 	result, err := runTestLoop(t.Context(), t, agent, loopOptions{Notify: notifier.fn}, iterationGuard(5))
@@ -142,7 +178,7 @@ func TestRunLoopExplicitInputArrivingDuringStoppedReadOnlyCommandResumes(t *test
 	require.NoError(t, err)
 	assert.Equal(t, "resumed", result.FinalResponse)
 	assert.False(t, agent.preserveStopped)
-	assert.Equal(t, 2, agent.llmClient.(*loopScriptLLM).calls)
+	assert.Equal(t, 2, client.calls)
 	assert.Equal(t, 1, notifier.countWith("Session commands"))
 }
 
@@ -155,6 +191,13 @@ func TestDrainBoundaryRejectedExplicitInputPreservesStoppedStatus(t *testing.T) 
 			ID: 1, Content: "/skill", Source: sessionstore.InputSourceUser, ReceivedAt: time.Now(),
 		},
 	}}
+	agent.turns = newToolTurns(agent.registry, agent.models, agent.ms, testProgressBoundary(agent.boundary))
+	agent.contexts = newCheckpointOwner(
+		agent.ms, agent.models, agent.prompt, agent.turns, agent.transcript(),
+		agent.dispositions, agent.budgetGate, agent.outputStore, agent.boundary,
+		&agent.stamper, nil, nil,
+		checkpointOptions{id: agent.id, outputEnabled: agent.outputEnabled, agentsMD: agent.agentsMD},
+	)
 
 	accepted, err := (&loopRunner{agent: agent}).drainBoundary(t.Context())
 
@@ -164,7 +207,7 @@ func TestDrainBoundaryRejectedExplicitInputPreservesStoppedStatus(t *testing.T) 
 }
 
 func TestRunLoopStoppedReadOnlyCommandLeavesFollowingAsyncInputPending(t *testing.T) {
-	agent := newTestAgent()
+	agent := newDurableTestAgent(t)
 	agent.preserveStopped = true
 	boundary := &commandFollowupBoundary{
 		loopInputBoundary: &loopInputBoundary{
@@ -179,8 +222,22 @@ func TestRunLoopStoppedReadOnlyCommandLeavesFollowingAsyncInputPending(t *testin
 		},
 	}
 	agent.boundary = boundary
+	agent.turns = newToolTurns(agent.registry, agent.models, agent.ms, testProgressBoundary(agent.boundary))
+	agent.contexts = newCheckpointOwner(
+		agent.ms, agent.models, agent.prompt, agent.turns, agent.transcript(),
+		agent.dispositions, agent.budgetGate, agent.outputStore, agent.boundary,
+		&agent.stamper, nil, nil,
+		checkpointOptions{id: agent.id, outputEnabled: agent.outputEnabled, agentsMD: agent.agentsMD},
+	)
 	client := &loopScriptLLM{responses: []*llmwire.Response{textResponse("must not run")}}
-	agent.llmClient = client
+	agent.models = newTestModelRuntime(client, agent.store, agent.id)
+	agent.turns = newToolTurns(agent.registry, agent.models, agent.ms, testProgressBoundary(agent.boundary))
+	agent.contexts = newCheckpointOwner(
+		agent.ms, agent.models, agent.prompt, agent.turns, agent.transcript(),
+		agent.dispositions, agent.budgetGate, agent.outputStore, agent.boundary,
+		&agent.stamper, nil, nil,
+		checkpointOptions{id: agent.id, outputEnabled: agent.outputEnabled, agentsMD: agent.agentsMD},
+	)
 	notifier := &loopNotifier{}
 
 	result, err := runTestLoop(t.Context(), t, agent, loopOptions{Notify: notifier.fn}, iterationGuard(5))

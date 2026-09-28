@@ -19,10 +19,10 @@ func TestProjectContextSize_UnmeasuredSessionsEstimate(t *testing.T) {
 	agent := newTestAgent()
 	agent.ms.setMessages(buildMessagesWithTokens(1000))
 
-	size, estimated := agent.projectContextSize()
+	size, estimated := agent.contexts.projectContextSize()
 
 	assert.True(t, estimated)
-	assert.Equal(t, 1000+agent.requestOverhead(), size)
+	assert.Equal(t, 1000+agent.contexts.(*checkpointOwner).requestOverhead(), size)
 }
 
 // The compaction call goes through s.chat, not callLLM: its own usage — which
@@ -41,13 +41,13 @@ func TestCompactionLeavesNoBaselineBehind(t *testing.T) {
 	s := newCompactionTestSvc(mockLLM)
 
 	seedCompactableTranscript(ctx, t, s)
-	s.recordContextBaseline(ctx, 150000, 2, s.modelGeneration())
+	s.models.recordBaseline(ctx, 150000, 2, s.models.snapshot().generation)
 
-	ok, err := s.compact(ctx, nil)
+	ok, err := s.contexts.(*checkpointOwner).compact(ctx, nil)
 	require.NoError(t, err)
 	require.True(t, ok)
 
-	assert.Nil(t, s.loadContextBaseline(), "the summarization request is not a measurement of the new transcript")
+	assert.Nil(t, s.models.snapshot().baseline, "the summarization request is not a measurement of the new transcript")
 }
 
 // A failed attempt changes no transcript metadata, so the baseline it described
@@ -58,35 +58,35 @@ func TestFailedCompactionKeepsItsBaseline(t *testing.T) {
 	s := newCompactionTestSvc(mockLLM)
 
 	seedCompactableTranscript(ctx, t, s)
-	s.recordContextBaseline(ctx, 150000, 2, s.modelGeneration())
+	s.models.recordBaseline(ctx, 150000, 2, s.models.snapshot().generation)
 
-	_, err := s.compact(ctx, nil)
+	_, err := s.contexts.(*checkpointOwner).compact(ctx, nil)
 	require.Error(t, err)
 
-	assert.NotNil(t, s.loadContextBaseline(), "the transcript was not rewritten, so its measurement stands")
+	assert.NotNil(t, s.models.snapshot().baseline, "the transcript was not rewritten, so its measurement stands")
 }
 
 // Another window and another tokenizer: the measurement describes neither.
 func TestModelSwitchDropsTheBaseline(t *testing.T) {
 	ctx := context.Background()
 
-	s := &svc{
-		cfg:            &config.Config{UnifiedConfig: unifiedCfgWithModels("m1", "m2")},
-		llmClient:      &mockLLMClientTracked{model: "m1"},
-		model:          "m1",
-		reasoningLevel: "medium",
-		prompt:         newPromptBuilder("", ""),
-		registry:       tool.NewRegistry(),
-		ms:             newMessageStore(nil, 0, nil),
-		newLLMWithModel: func(_ *config.Config, id string) (llm.Client, error) {
+	s := &sessionModel{
+		cfg:       &config.Config{UnifiedConfig: unifiedCfgWithModels("m1", "m2")},
+		client:    &mockLLMClientTracked{model: "m1"},
+		model:     "m1",
+		reasoning: "medium",
+		prompt:    newPromptBuilder("", ""),
+		registry:  tool.NewRegistry(),
+
+		newClient: func(_ *config.Config, id string) (llm.Client, error) {
 			return &mockLLMClientTracked{model: id}, nil
 		},
 	}
-	s.recordContextBaseline(ctx, 50000, 4, s.modelGeneration())
+	s.recordBaseline(ctx, 50000, 4, s.snapshot().generation)
 
-	require.NoError(t, s.handleSetModel("m2", "medium"))
+	require.NoError(t, s.SetModel("m2", "medium"))
 
-	assert.Nil(t, s.loadContextBaseline())
+	assert.Nil(t, s.snapshot().baseline)
 }
 
 func TestContextResetDropsTheBaseline(t *testing.T) {
@@ -95,13 +95,13 @@ func TestContextResetDropsTheBaseline(t *testing.T) {
 	s := newResetTestSvc(store)
 
 	seedResetTranscript(ctx, t, s)
-	s.recordContextBaseline(ctx, 50000, 3, s.modelGeneration())
+	s.models.recordBaseline(ctx, 50000, 3, s.models.snapshot().generation)
 
 	inserted, err := s.ResetContextAndInjectOnce(ctx, "reset:fresh:1", "do the fresh job")
 	require.NoError(t, err)
 	require.True(t, inserted)
 
-	assert.Nil(t, s.loadContextBaseline())
+	assert.Nil(t, s.models.snapshot().baseline)
 }
 
 // A switch that lands while a request is in flight must not be overwritten by
@@ -110,31 +110,31 @@ func TestContextResetDropsTheBaseline(t *testing.T) {
 func TestBaselineFromAnInFlightRequestIsDroppedAfterAModelSwitch(t *testing.T) {
 	ctx := context.Background()
 
-	s := &svc{
-		cfg:            &config.Config{UnifiedConfig: unifiedCfgWithModels("m1", "m2")},
-		llmClient:      &mockLLMClientTracked{model: "m1"},
-		model:          "m1",
-		reasoningLevel: "medium",
-		prompt:         newPromptBuilder("", ""),
-		registry:       tool.NewRegistry(),
-		ms:             newMessageStore(nil, 0, nil),
-		newLLMWithModel: func(_ *config.Config, id string) (llm.Client, error) {
+	s := &sessionModel{
+		cfg:       &config.Config{UnifiedConfig: unifiedCfgWithModels("m1", "m2")},
+		client:    &mockLLMClientTracked{model: "m1"},
+		model:     "m1",
+		reasoning: "medium",
+		prompt:    newPromptBuilder("", ""),
+		registry:  tool.NewRegistry(),
+
+		newClient: func(_ *config.Config, id string) (llm.Client, error) {
 			return &mockLLMClientTracked{model: id}, nil
 		},
 	}
 
 	// Sampled before the request goes out, as callLLM does.
-	generation := s.modelGeneration()
+	generation := s.snapshot().generation
 
-	require.NoError(t, s.handleSetModel("m2", "medium"))
+	require.NoError(t, s.SetModel("m2", "medium"))
 
-	s.recordContextBaseline(ctx, 150000, 4, generation)
+	s.recordBaseline(ctx, 150000, 4, generation)
 
-	assert.Nil(t, s.loadContextBaseline(), "the in-flight measurement belongs to the old model")
+	assert.Nil(t, s.snapshot().baseline, "the in-flight measurement belongs to the old model")
 
 	// A measurement taken after the switch is kept.
-	s.recordContextBaseline(ctx, 1000, 1, s.modelGeneration())
-	assert.NotNil(t, s.loadContextBaseline())
+	s.recordBaseline(ctx, 1000, 1, s.snapshot().generation)
+	assert.NotNil(t, s.snapshot().baseline)
 }
 
 // A compaction that summarizes nothing changes nothing, so it must not throw
@@ -151,13 +151,13 @@ func TestNoOpCompactionKeepsTheBaseline(t *testing.T) {
 		{Role: llmwire.RoleSystem, Content: "sys"},
 		{Role: llmwire.RoleUser, Content: "task"},
 	})
-	s.recordContextBaseline(ctx, 1234, 2, s.modelGeneration())
+	s.models.recordBaseline(ctx, 1234, 2, s.models.snapshot().generation)
 
-	compacted, err := s.compact(ctx, nil)
+	compacted, err := s.contexts.(*checkpointOwner).compact(ctx, nil)
 	require.NoError(t, err)
 	require.False(t, compacted)
 
-	base := s.loadContextBaseline()
+	base := s.models.snapshot().baseline
 	require.NotNil(t, base)
 	assert.Equal(t, 1234, base.promptTokens)
 }

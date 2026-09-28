@@ -48,7 +48,7 @@ func TestShouldCompactImageBytePressure(t *testing.T) {
 
 	_, count := imagePressure(incident)
 	assert.Greater(t, count, imageCountHighWater)
-	assert.True(t, agent.shouldCompact(window), "the byte wall triggers compaction")
+	assert.True(t, agent.contexts.(*checkpointOwner).shouldCompact(window), "the byte wall triggers compaction")
 
 	// The byte axis fires on its own: 15 oversized scans breach 12 MB while
 	// the count axis stays quiet.
@@ -63,9 +63,9 @@ func TestShouldCompactImageBytePressure(t *testing.T) {
 	assert.Greater(t, bytes, int64(imageBytesHighWater))
 	assert.LessOrEqual(t, count, imageCountHighWater)
 
-	size, _ := agent.projectContextSize()
+	size, _ := agent.contexts.projectContextSize()
 	assert.Less(t, size, compactionCutoff(window), "the token axis alone stays quiet")
-	assert.True(t, agent.shouldCompact(window))
+	assert.True(t, agent.contexts.(*checkpointOwner).shouldCompact(window))
 }
 
 func TestShouldCompactImageCountPressure(t *testing.T) {
@@ -81,13 +81,13 @@ func TestShouldCompactImageCountPressure(t *testing.T) {
 	bytes, count := imagePressure(transcript)
 	assert.Less(t, bytes, int64(imageBytesHighWater))
 	assert.Greater(t, count, imageCountHighWater)
-	assert.True(t, agent.shouldCompact(1_048_576))
+	assert.True(t, agent.contexts.(*checkpointOwner).shouldCompact(1_048_576))
 
 	// Equality is not a breach: 20 crops stay quiet, on either axis.
 	agent.ms.setMessages(transcript[:21])
 	_, count = imagePressure(transcript[:21])
 	assert.Equal(t, imageCountHighWater, count)
-	assert.False(t, agent.shouldCompact(1_048_576))
+	assert.False(t, agent.contexts.(*checkpointOwner).shouldCompact(1_048_576))
 }
 
 func TestShouldCompactFourScansStayQuiet(t *testing.T) {
@@ -101,7 +101,7 @@ func TestShouldCompactFourScansStayQuiet(t *testing.T) {
 
 	bytes, _ := imagePressure(transcript)
 	assert.Less(t, bytes, int64(imageBytesHighWater), "the fixture total is what matters, not its count")
-	assert.False(t, agent.shouldCompact(1_048_576))
+	assert.False(t, agent.contexts.(*checkpointOwner).shouldCompact(1_048_576))
 }
 
 func TestSelectCheckpointSplitNeverSummarizesWholeShortHistory(t *testing.T) {
@@ -188,9 +188,9 @@ func TestImagePressureCompactionRelievesTheByteAxis(t *testing.T) {
 	}
 	s.ms.setMessages(messages)
 
-	require.True(t, s.shouldCompact(1_048_576), "byte pressure fires the trigger")
+	require.True(t, s.contexts.(*checkpointOwner).shouldCompact(1_048_576), "byte pressure fires the trigger")
 
-	ok, err := s.compact(ctx, nil)
+	ok, err := s.contexts.(*checkpointOwner).compact(ctx, nil)
 	require.NoError(t, err)
 	require.True(t, ok)
 
@@ -198,7 +198,7 @@ func TestImagePressureCompactionRelievesTheByteAxis(t *testing.T) {
 	afterBytes, afterCount := imagePressure(after)
 	assert.LessOrEqual(t, afterBytes, int64(imageBytesHighWater), "the checkpoint relieves the byte axis")
 	assert.LessOrEqual(t, afterCount, imageCountHighWater)
-	assert.False(t, s.shouldCompact(1_048_576), "the session is out of pressure")
+	assert.False(t, s.contexts.(*checkpointOwner).shouldCompact(1_048_576), "the session is out of pressure")
 
 	summaryIdx := -1
 	for i, m := range after {

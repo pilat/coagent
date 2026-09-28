@@ -13,11 +13,13 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/pilat/coagent/internal/backgroundprocess"
+	"github.com/pilat/coagent/internal/configapply"
 	"github.com/pilat/coagent/internal/controllerapi"
 	"github.com/pilat/coagent/internal/migrate"
 	"github.com/pilat/coagent/internal/registry"
 	"github.com/pilat/coagent/internal/schedule"
 	"github.com/pilat/coagent/internal/session"
+	"github.com/pilat/coagent/internal/sessionbus"
 	"github.com/pilat/coagent/internal/sessionevent"
 	"github.com/pilat/coagent/internal/sessionstore"
 	"github.com/pilat/coagent/internal/subagent"
@@ -284,6 +286,10 @@ func (f *mockFactory) Create(ctx context.Context, opts session.CreateOptions) (s
 }
 
 func newTestManager(t *testing.T) (*svc, *mockFactory, Store) {
+	return newTestManagerWithApplier(t, nil)
+}
+
+func newTestManagerWithApplier(t *testing.T, applier configapply.Service) (*svc, *mockFactory, Store) {
 	t.Helper()
 	dbPath := filepath.Join(t.TempDir(), "test.db")
 	db, err := migrate.OpenDB(context.Background(), dbPath)
@@ -309,7 +315,7 @@ func newTestManager(t *testing.T) (*svc, *mockFactory, Store) {
 		nil,
 		sessStore,
 		nil,
-		nil,
+		nil, applier,
 	)
 	return mgr, factory, store
 }
@@ -333,7 +339,7 @@ func newTestManagerWithSchedule(t *testing.T) (*svc, *mockFactory, Store, schedu
 		factory, backgroundprocess.NewStore(db), builtin.NewResources(), store, sessStore, sessStore, sessStore,
 		sessStore, sessStore, sessStore, sessStore,
 		subagent.NewStore(db), mustNewTransactions(t, db, sessionstore.InvalidateCompletionCheckTx),
-		nil, sessStore, schedule.NewService(schedStore), nil,
+		nil, sessStore, schedule.NewService(schedStore), nil, nil,
 	)
 	return mgr, factory, store, schedStore
 }
@@ -424,7 +430,7 @@ func TestManager_InputReceivedPubSub(t *testing.T) {
 	sub := mgr.PubSub().Subscribe(id)
 	defer mgr.PubSub().Unsubscribe(id, sub)
 
-	mgr.pubsub.Publish(id, sessionevent.Notification{
+	mgr.NotifySession(id, sessionevent.Notification{
 		Type:    sessionevent.NotifyInputReceived,
 		Message: "hello from agent",
 		Source:  "agent",
@@ -1035,7 +1041,7 @@ func TestManager_ClearRejectsAConcurrentLateOwnerClaim(t *testing.T) {
 		OrchestrationStore: mgr.sessionStore,
 		entered:            make(chan struct{}), release: make(chan struct{}),
 	}
-	mgr.sessionStore = blocking
+	mgr.routes = newManagerRoutes(blocking, mgr.managerRoots, store, sessionbus.New())
 	clearResult := make(chan struct {
 		id  int64
 		err error
@@ -1048,10 +1054,6 @@ func TestManager_ClearRejectsAConcurrentLateOwnerClaim(t *testing.T) {
 		}{id: id, err: clearErr}
 	}()
 	requireSignal(t, blocking.entered)
-	if mgr.routeMu.TryLock() {
-		mgr.routeMu.Unlock()
-		t.Fatal("clear did not hold the manager ownership boundary while creating its replacement")
-	}
 
 	claimResult := make(chan error, 1)
 	claimStarted := make(chan struct{})
@@ -1062,6 +1064,13 @@ func TestManager_ClearRejectsAConcurrentLateOwnerClaim(t *testing.T) {
 		})
 	}()
 	requireSignal(t, claimStarted)
+	select {
+	case claimErr := <-claimResult:
+		close(blocking.release)
+		<-clearResult
+		t.Fatalf("claim crossed replacement boundary: %v", claimErr)
+	case <-time.After(100 * time.Millisecond):
+	}
 
 	close(blocking.release)
 	cleared := <-clearResult

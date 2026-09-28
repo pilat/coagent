@@ -43,15 +43,22 @@ func TestMessageOutputsStampGenerationLifecycleOutputsDoNot(t *testing.T) {
 	require.NoError(t, err)
 
 	// Assistant message output.
-	_, commit, err := store.InsertAssistantMessageWithOutput(ctx, session.ID,
-		&transcript.Message{Role: "assistant", Content: "working", ToolCalls: []byte(`[]`)},
-		OutputMessageReplaceable, "working", false)
+	response, err := store.CommitAcceptedResponseDisposition(ctx, AcceptedResponseDisposition{
+		SessionID: session.ID, RootID: session.ID, Iteration: 1,
+		Message: &transcript.Message{
+			Role: "assistant", Content: "working", ToolCalls: jsonRaw(`[{"id":"c1","name":"bash","input":{}}]`),
+		},
+		Kind: ResponseDispositionToolCall, OutputType: OutputMessageReplaceable,
+		Output: "working", ManagerReplyPending: true,
+	})
 	require.NoError(t, err)
+	commit := response.Output
+	require.NotNil(t, commit)
 	require.NotZero(t, commit.OutputID)
 	assert.InDelta(t, float64(1), ownerAttrs(t, db, commit.OutputID)["model_input_generation"].(float64), 0)
 
 	// Direct output rides a tool result insertion.
-	_, outputs, err := store.InsertToolResultWithDirectOutput(ctx, session.ID,
+	_, outputs, err := insertSingleToolResult(ctx, store, session.ID,
 		&transcript.Message{Role: "tool", Content: "done", ToolCallID: "c1", ToolName: "bash"},
 		[]string{"direct!"})
 	require.NoError(t, err)
@@ -252,11 +259,17 @@ func TestCaptureProgressExcludesPublishedDirectReply(t *testing.T) {
 	_, err = store.PromoteInput(ctx, input.ID, input.RawContent)
 	require.NoError(t, err)
 
-	_, output, err := store.InsertAssistantMessageWithOutput(ctx, session.ID, &transcript.Message{
-		Role: "assistant", Content: "Stopping the mutation run",
-		ToolCalls: jsonRaw(`[{"id":"stop","name":"bash","input":{}}]`),
-	}, OutputMessagePersistent, "Stopping the mutation run", false)
+	response, err := store.CommitAcceptedResponseDisposition(ctx, AcceptedResponseDisposition{
+		SessionID: session.ID, RootID: session.ID, Iteration: 1,
+		Message: &transcript.Message{
+			Role: "assistant", Content: "Stopping the mutation run",
+			ToolCalls: jsonRaw(`[{"id":"stop","name":"bash","input":{}}]`),
+		},
+		Kind: ResponseDispositionToolCall, OutputType: OutputMessagePersistent,
+		Output: "Stopping the mutation run", ManagerReplyPending: true,
+	})
 	require.NoError(t, err)
+	output := response.Output
 	require.NotNil(t, output)
 
 	var sourceKey string
@@ -265,6 +278,8 @@ func TestCaptureProgressExcludesPublishedDirectReply(t *testing.T) {
 		FROM session_outbox WHERE id = ?`, output.OutputID).Scan(&sourceKey, &releasesInput))
 	assert.Contains(t, sourceKey, ":reply")
 	assert.False(t, releasesInput)
+	_, replyPending, _ := readCompletionState(t, db, session.ID)
+	assert.True(t, replyPending, "a direct reply preserves the manager reply obligation")
 
 	facts, err := store.CaptureProgress(ctx, session.ID)
 	require.NoError(t, err)

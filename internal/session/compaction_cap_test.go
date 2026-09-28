@@ -23,16 +23,16 @@ func TestAutoCompactionConvergesOnASmallWindow(t *testing.T) {
 	s := newCompactionTestSvc(llm)
 	s.ms.setMessages(oversizedTranscript(window))
 
-	require.True(t, s.shouldCompact(window))
+	require.True(t, s.contexts.(*checkpointOwner).shouldCompact(window))
 
 	var notes []string
 	r := contextEventRunner(s, &notes)
 	r.applyContextEvents(context.Background())
 
-	assert.False(t, s.shouldCompact(window), "the projection is back under the trigger")
+	assert.False(t, s.contexts.(*checkpointOwner).shouldCompact(window), "the projection is back under the trigger")
 	assert.True(t, notesContain(notes, "✅ Context compacted"))
-	assert.Zero(t, r.compactionFailures)
-	assert.False(t, r.autoCompactionOff)
+	assert.Zero(t, r.agent.contexts.(*checkpointOwner).compactionFailures)
+	assert.False(t, r.agent.contexts.(*checkpointOwner).autoCompactionOff)
 }
 
 // A completed summary that still leaves the projection over the threshold is
@@ -58,7 +58,7 @@ func TestAutoCompactionCountsANonRelievingCandidateAsAFailure(t *testing.T) {
 	assert.Equal(t, 1, llm.callCount, "the summarizer ran")
 	assert.True(t, notesContain(notes, "❌ Compaction failed"))
 	assert.Len(t, s.ms.getMessages(), len(before), "a non-relieving candidate commits nothing")
-	assert.Equal(t, 1, r.compactionFailures)
+	assert.Equal(t, 1, r.agent.contexts.(*checkpointOwner).compactionFailures)
 }
 
 // Three attempts that free nothing and the automatic path goes quiet for the
@@ -83,7 +83,7 @@ func TestAutoCompactionStopsAfterThreeFruitlessAttempts(t *testing.T) {
 		r.applyContextEvents(context.Background())
 	}
 
-	require.True(t, r.autoCompactionOff)
+	require.True(t, r.agent.contexts.(*checkpointOwner).autoCompactionOff)
 	assert.Equal(t, 1, countNotes(notes, compactionNotConvergingNotice))
 
 	callsAtCap := llm.callCount
@@ -105,15 +105,20 @@ func TestExplicitCompactionIgnoresTheAttemptCap(t *testing.T) {
 
 	var notes []string
 	r := contextEventRunner(s, &notes)
-	r.compactionFailures = compactionAttemptCap
-	r.autoCompactionOff = true
+	r.agent.contexts.(*checkpointOwner).compactionFailures = compactionAttemptCap
+	r.agent.contexts.(*checkpointOwner).autoCompactionOff = true
 
 	s.RequestCompaction()
 	r.applyContextEvents(context.Background())
 
 	assert.Equal(t, 1, llm.callCount)
 	assert.True(t, notesContain(notes, "✅ Context compacted"))
-	assert.Equal(t, compactionAttemptCap, r.compactionFailures, "an explicit run neither counts nor clears")
+	assert.Equal(
+		t,
+		compactionAttemptCap,
+		r.agent.contexts.(*checkpointOwner).compactionFailures,
+		"an explicit run neither counts nor clears",
+	)
 }
 
 // A successful, relieving compaction wipes the streak.
@@ -129,10 +134,10 @@ func TestAutoCompactionResetsTheCounterOnRelief(t *testing.T) {
 
 	var notes []string
 	r := contextEventRunner(s, &notes)
-	r.compactionFailures = compactionAttemptCap - 1
+	r.agent.contexts.(*checkpointOwner).compactionFailures = compactionAttemptCap - 1
 
 	r.applyContextEvents(context.Background())
 
-	assert.Zero(t, r.compactionFailures)
-	assert.False(t, r.autoCompactionOff)
+	assert.Zero(t, r.agent.contexts.(*checkpointOwner).compactionFailures)
+	assert.False(t, r.agent.contexts.(*checkpointOwner).autoCompactionOff)
 }

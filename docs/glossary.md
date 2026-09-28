@@ -94,6 +94,11 @@ or mutations of any other owner; a driver or channel name is not ownership
 because several managers may share it.
 _Avoid_: channel ownership, transport ownership.
 
+**manager-route owner**:
+The private daemon component that serializes manager claims and root replacement
+and maintains publication routing caches. Durable manager ownership remains the
+authority; a replacement keeps its ownership fence through old-root retirement.
+
 **subagent**:
 An independent session with clean context and a restricted tool set, spawned by a parent session's `task` tool. A subagent *is* a session (its own `SessionRecord` row) whose `ParentID` identifies another session — that is what separates it from a root session. Subagents may suspend with `sleep`, but standalone scheduled work belongs only to roots.
 _Avoid_: worker, child process (it is a session, not an OS process); using child or descendant when the entity rather than its graph direction is meant.
@@ -147,6 +152,19 @@ _Avoid_: session (the durable/live task identity), agent loop (the model/tool cy
 **iteration**:
 One turn of the agent loop — a single LLM call plus the tool executions it triggers. An observed count, not a limit: normal agent work has no iteration budget. The only cap is the internal 1000-iteration defect circuit breaker (`hardIterationCeiling`), which is not a tuning surface. An iteration is a *sub-unit* of the loop, not another word for it.
 _Avoid_: using "iteration" and "agent loop" interchangeably; "iteration cap" or "budget" as if a normal terminal.
+
+**tool turn**:
+Execution and settlement of the tool calls from one assistant response. Its
+private session owner holds loop detection and orders scheduling, result-set
+commit and progress. Activation is supplied by the agent loop; committed grant
+consumption and suspension return as explicit outcomes.
+_Avoid_: iteration (also includes the model call), scheduler (only executes stages).
+
+**checkpoint owner**:
+The private session component that owns compaction requests, deferral/attempt
+state and complete checkpoint replacement and command outcomes. It uses the
+existing transcript primitive and model runtime; the agent loop chooses when
+it is safe to invoke it.
 
 **compaction** (checkpoint):
 The single automatic answer to context pressure: one no-tools model call summarizes a bounded older head — the native repaired conversation prefix replayed as ordinary messages plus one final checkpoint instruction — and the committed checkpoint rebuilds the transcript as header → marked summary → optional current-skill envelope → verbatim raw tail. The trigger is the token projection crossing 0.85 of the window, or image pressure breaching its high-water marks (12 MB base64 across attachments, or more than 20 of them). The complete summarizer request targets half the context window, falling back to the ordinary 85% input ceiling only when no legal candidate fits the target; the checkpoint retains a repair-free verbatim tail — at least a tenth of the window when that much history exists, possibly shorter under the tail's image byte/count ceilings (6 MB, 10), never empty. Repeated compaction replays the then-current prefix from the transcript beginning, prior marked summary included. Runs at exactly one point in the loop, where no tool call is pending ([ADR-0056](adr/0056-compaction-replays-the-native-bounded-prefix.md)).
@@ -251,7 +269,7 @@ The runtime status a controller sees — `running` / `idle` / `error` (`controll
 _Avoid_: treating "running" (runtime) and "active" (persisted) as the same word.
 
 **notification** (session event):
-A session→controller event — a message chunk, a state change, a heartbeat (`sessionevent.Notification`, delivered as `controllerapi.SessionNotification`). Only *root* sessions have them: `svc.publish` drops every event whose session is a subagent. Manager subscriptions additionally receive only events whose durable manager owner matches their ID; daemon-internal observers may inspect all root events. The bare type name "Notification" is overloaded elsewhere (LSP JSON-RPC, tool notifications), so qualify it as a *session event*.
+A session→controller event — a message chunk, a state change, a heartbeat (`sessionevent.Notification`, delivered as `controllerapi.SessionNotification`). Only *root* sessions have them: the manager-route owner drops every event whose session is a subagent. Manager subscriptions additionally receive only events whose durable manager owner matches their ID; daemon-internal observers may inspect all root events. The bare type name "Notification" is overloaded elsewhere (LSP JSON-RPC, tool notifications), so qualify it as a *session event*.
 _Avoid_: bare "Notification".
 
 **model-input generation**:
@@ -387,6 +405,19 @@ follow-up without making startup resume it.
 A tool call whose outcome comes from outside the loop — a sleep timer, a subagent, a config apply across a restart, a person typing at a terminal. The loop never re-executes one and never advances past it; transcript repair never stubs one; only an injection targeting its call id resolves it. The daemon's in-memory **staged-call ledger** records the ones it is itself answering.
 _Avoid_: suspended call, blocked tool.
 
+**external-call coordinator**:
+The private daemon owner of staged producer claims, config handoff and
+per-session call settlement. It combines existing producer ledgers to identify
+pending calls; it creates no independent durable ledger. Lifecycle callers
+supply the startup order and writer fences for its complete operations.
+
+**model runtime**:
+The private session owner of the current model client, call leases, replacement
+and closure, and the context measurement tagged with that model's generation.
+It owns no transcript or tool execution state. Closing it prevents later client
+installation, including a replacement still being constructed.
+_Avoid_: session (the broader task runtime), LLM driver (the provider protocol).
+
 **interrupted in-loop call**:
 A non-external tool call left pending in the transcript by a daemon restart. The boot sweep settles it as a typed failure before the session resumes, so the loop never re-executes an operation the model did not watch complete; the model retries explicitly. See [ADR-0059](adr/0059-pending-tool-calls-are-never-reexecuted-on-resume.md).
 _Avoid_: orphaned call (the orphaned-call pass covers external calls only), re-executed call.
@@ -431,6 +462,13 @@ Acceptance into the provider transcript is a separate session decision; a
 rejected attempt remains durable evidence.
 _Avoid_: iteration (one loop iteration may include other durable transitions),
 assistant message (only an accepted attempt has that transcript role).
+
+**accepted-response disposition**:
+The session's decision about one accepted model attempt and the single durable
+transaction that records its accounting, completion state and optional output.
+Its budget observation applies even without visible output; a fired budget
+suppresses ordinary response effects and records non-execution of returned tools.
+_Avoid_: model finish reason (provider evidence, not the host's decision).
 
 **model finish reason**:
 The provider-reported reason a model attempt stopped generating, preserved in

@@ -48,7 +48,7 @@ func newProjectTestManager(t *testing.T) (*svc, Store, *sql.DB) {
 		nil,
 		sessStore,
 		nil,
-		nil,
+		nil, nil,
 	)
 
 	return mgr, store, db

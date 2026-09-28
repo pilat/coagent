@@ -13,7 +13,6 @@ import (
 	"github.com/pilat/coagent/internal/llmwire"
 	"github.com/pilat/coagent/internal/sessionstore"
 	"github.com/pilat/coagent/internal/tool"
-	"github.com/pilat/coagent/internal/transcript"
 )
 
 type recordingActivationBoundary struct {
@@ -49,15 +48,6 @@ type terminalBudgetGate struct {
 
 func (g *terminalBudgetGate) Admit(context.Context, time.Time) error { return g.admitErr }
 func (g *terminalBudgetGate) Observe(context.Context) (bool, error)  { return false, nil }
-func (g *terminalBudgetGate) PersistResponse(
-	context.Context,
-	*transcript.Message,
-	sessionstore.OutputType,
-	string,
-	bool,
-) (int64, bool, bool, error) {
-	return 0, false, false, nil
-}
 
 func (g *terminalBudgetGate) PersistRejectedResponse(
 	context.Context,
@@ -95,7 +85,18 @@ func TestRunLoopResolvesPendingGrantOnEveryTerminalExit(t *testing.T) {
 		{
 			name: "llm error expires with receipt",
 			setup: func(t *testing.T, agent *svc) {
-				agent.llmClient = &loopScriptLLM{err: errors.New("provider down")}
+				agent.models = newTestModelRuntime(
+					&loopScriptLLM{err: errors.New("provider down")},
+					agent.store,
+					agent.id,
+				)
+				agent.turns = newToolTurns(agent.registry, agent.models, agent.ms, testProgressBoundary(agent.boundary))
+				agent.contexts = newCheckpointOwner(
+					agent.ms, agent.models, agent.prompt, agent.turns, agent.transcript(),
+					agent.dispositions, agent.budgetGate, agent.outputStore, agent.boundary,
+					&agent.stamper, nil, nil,
+					checkpointOptions{id: agent.id, outputEnabled: agent.outputEnabled, agentsMD: agent.agentsMD},
+				)
 			},
 			run: func(t *testing.T, ctx context.Context, agent *svc, boundary *recordingActivationBoundary) {
 				_, err := runTestLoop(ctx, t, agent, loopOptions{}, iterationGuard(5))
@@ -106,11 +107,18 @@ func TestRunLoopResolvesPendingGrantOnEveryTerminalExit(t *testing.T) {
 		{
 			name: "hard iteration breaker expires with receipt",
 			setup: func(t *testing.T, agent *svc) {
-				agent.llmClient = &loopScriptLLM{
+				agent.models = newTestModelRuntime(&loopScriptLLM{
 					onCall: func(call int, _ []llmwire.Message) (*llmwire.Response, error) {
 						return toolCallResponse(fmt.Sprintf("tc_%d", call), "read"), nil
 					},
-				}
+				}, agent.store, agent.id)
+				agent.turns = newToolTurns(agent.registry, agent.models, agent.ms, testProgressBoundary(agent.boundary))
+				agent.contexts = newCheckpointOwner(
+					agent.ms, agent.models, agent.prompt, agent.turns, agent.transcript(),
+					agent.dispositions, agent.budgetGate, agent.outputStore, agent.boundary,
+					&agent.stamper, nil, nil,
+					checkpointOptions{id: agent.id, outputEnabled: agent.outputEnabled, agentsMD: agent.agentsMD},
+				)
 			},
 			run: func(t *testing.T, ctx context.Context, agent *svc, boundary *recordingActivationBoundary) {
 				_, err := runTestLoop(ctx, t, agent, loopOptions{}, iterationGuard(hardIterationCeiling))
@@ -121,7 +129,18 @@ func TestRunLoopResolvesPendingGrantOnEveryTerminalExit(t *testing.T) {
 		{
 			name: "empty response pause expires with receipt",
 			setup: func(t *testing.T, agent *svc) {
-				agent.llmClient = &loopScriptLLM{responses: []*llmwire.Response{{}}}
+				agent.models = newTestModelRuntime(
+					&loopScriptLLM{responses: []*llmwire.Response{{}}},
+					agent.store,
+					agent.id,
+				)
+				agent.turns = newToolTurns(agent.registry, agent.models, agent.ms, testProgressBoundary(agent.boundary))
+				agent.contexts = newCheckpointOwner(
+					agent.ms, agent.models, agent.prompt, agent.turns, agent.transcript(),
+					agent.dispositions, agent.budgetGate, agent.outputStore, agent.boundary,
+					&agent.stamper, nil, nil,
+					checkpointOptions{id: agent.id, outputEnabled: agent.outputEnabled, agentsMD: agent.agentsMD},
+				)
 			},
 			run: func(t *testing.T, ctx context.Context, agent *svc, boundary *recordingActivationBoundary) {
 				_, err := runTestLoop(ctx, t, agent, loopOptions{}, iterationGuard(20))
@@ -132,8 +151,19 @@ func TestRunLoopResolvesPendingGrantOnEveryTerminalExit(t *testing.T) {
 		{
 			name: "budget checkpoint fire expires before park",
 			setup: func(t *testing.T, agent *svc) {
-				agent.llmClient = &loopScriptLLM{responses: []*llmwire.Response{textResponse("working")}}
+				agent.models = newTestModelRuntime(
+					&loopScriptLLM{responses: []*llmwire.Response{textResponse("working")}},
+					agent.store,
+					agent.id,
+				)
+				agent.turns = newToolTurns(agent.registry, agent.models, agent.ms, testProgressBoundary(agent.boundary))
 				agent.budgetGate = &terminalBudgetGate{admitErr: ErrBudgetCheckpoint}
+				agent.contexts = newCheckpointOwner(
+					agent.ms, agent.models, agent.prompt, agent.turns, agent.transcript(),
+					agent.dispositions, agent.budgetGate, agent.outputStore, agent.boundary,
+					&agent.stamper, nil, nil,
+					checkpointOptions{id: agent.id, outputEnabled: agent.outputEnabled, agentsMD: agent.agentsMD},
+				)
 			},
 			run: func(t *testing.T, ctx context.Context, agent *svc, boundary *recordingActivationBoundary) {
 				result, err := runTestLoop(ctx, t, agent, loopOptions{}, iterationGuard(5))
@@ -145,7 +175,18 @@ func TestRunLoopResolvesPendingGrantOnEveryTerminalExit(t *testing.T) {
 		{
 			name: "context cancellation cancels without receipt",
 			setup: func(t *testing.T, agent *svc) {
-				agent.llmClient = &loopScriptLLM{responses: []*llmwire.Response{textResponse("never")}}
+				agent.models = newTestModelRuntime(
+					&loopScriptLLM{responses: []*llmwire.Response{textResponse("never")}},
+					agent.store,
+					agent.id,
+				)
+				agent.turns = newToolTurns(agent.registry, agent.models, agent.ms, testProgressBoundary(agent.boundary))
+				agent.contexts = newCheckpointOwner(
+					agent.ms, agent.models, agent.prompt, agent.turns, agent.transcript(),
+					agent.dispositions, agent.budgetGate, agent.outputStore, agent.boundary,
+					&agent.stamper, nil, nil,
+					checkpointOptions{id: agent.id, outputEnabled: agent.outputEnabled, agentsMD: agent.agentsMD},
+				)
 			},
 			run: func(t *testing.T, ctx context.Context, agent *svc, boundary *recordingActivationBoundary) {
 				canceled, cancel := context.WithCancel(ctx)
@@ -161,8 +202,15 @@ func TestRunLoopResolvesPendingGrantOnEveryTerminalExit(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			boundary := newBoundary()
-			agent := newTestAgent(&stubTool{id: "read", result: "content"})
+			agent := newDurableTestAgent(t, &stubTool{id: "read", result: "content"})
 			agent.boundary = boundary
+			agent.turns = newToolTurns(agent.registry, agent.models, agent.ms, testProgressBoundary(agent.boundary))
+			agent.contexts = newCheckpointOwner(
+				agent.ms, agent.models, agent.prompt, agent.turns, agent.transcript(),
+				agent.dispositions, agent.budgetGate, agent.outputStore, agent.boundary,
+				&agent.stamper, nil, nil,
+				checkpointOptions{id: agent.id, outputEnabled: agent.outputEnabled, agentsMD: agent.agentsMD},
+			)
 			boundary.arm(agent)
 			tt.setup(t, agent)
 
@@ -187,9 +235,16 @@ func TestRunLoopResolvesPendingGrantOnEveryTerminalExit(t *testing.T) {
 // the resume can replay the owed call instead of losing the mutation receipt.
 func TestRunLoopKeepsConsumedGrantAcrossTerminalError(t *testing.T) {
 	boundary := &recordingActivationBoundary{}
-	agent := newTestAgent()
+	agent := newDurableTestAgent(t)
 	agent.boundary = boundary
-	agent.llmClient = &loopScriptLLM{err: errors.New("provider down")}
+	agent.models = newTestModelRuntime(&loopScriptLLM{err: errors.New("provider down")}, agent.store, agent.id)
+	agent.turns = newToolTurns(agent.registry, agent.models, agent.ms, testProgressBoundary(agent.boundary))
+	agent.contexts = newCheckpointOwner(
+		agent.ms, agent.models, agent.prompt, agent.turns, agent.transcript(),
+		agent.dispositions, agent.budgetGate, agent.outputStore, agent.boundary,
+		&agent.stamper, nil, nil,
+		checkpointOptions{id: agent.id, outputEnabled: agent.outputEnabled, agentsMD: agent.agentsMD},
+	)
 	consumed := tool.ActivationGrant{
 		SessionID: 1, InputID: 7, ToolID: "set_budget", Command: "/budget", ToolCallID: "tc_budget",
 	}

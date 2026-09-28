@@ -28,15 +28,22 @@ func TestRun_FailFastOnPersistError(t *testing.T) {
 		rootID:       sessionID,
 		id:           sessionID,
 		agentType:    registry.AgentTypeBuild,
-		llmClient:    mockLLM,
+		models:       newTestModelRuntime(mockLLM, mockStore, sessionID),
 		todoStore:    todo.New(),
 		store:        mockStore,
 		ms:           newMessageStore(durable, sessionID, nil),
 		dispositions: durable,
-		loopDetector: newLoopDetector(),
-		prompt:       newPromptBuilder("test", ""),
-		registry:     tool.NewRegistry(),
+
+		prompt:   newPromptBuilder("test", ""),
+		registry: tool.NewRegistry(),
 	}
+	s.turns = newToolTurns(s.registry, s.models, s.ms, testProgressBoundary(s.boundary))
+	s.contexts = newCheckpointOwner(
+		s.ms, s.models, s.prompt, s.turns, s.transcript(),
+		s.dispositions, s.budgetGate, s.outputStore, s.boundary,
+		&s.stamper, nil, nil,
+		checkpointOptions{id: s.id, outputEnabled: s.outputEnabled, agentsMD: s.agentsMD},
+	)
 
 	_, err := s.Run(context.Background(), "do something")
 	if err == nil {
@@ -78,9 +85,6 @@ func TestNewWithOptions_ResumeFromDB(t *testing.T) {
 	}
 
 	s := sessionSvc.(*svc)
-	s.newLLMWithModel = func(_ *config.Config, _ string) (llm.Client, error) {
-		return &mockLLMClient{}, nil
-	}
 
 	if got, want := len(s.ms.getMessages()), 2; got != want {
 		t.Fatalf("main messages not hydrated: got %d, want %d", got, want)
@@ -116,6 +120,19 @@ type mockSessionStore struct {
 }
 
 var _ sessionstore.RuntimeStore = (*mockSessionStore)(nil)
+
+func (m *mockSessionStore) InsertToolResultSetOnce(
+	ctx context.Context,
+	sessionID int64,
+	entries []sessionstore.ToolResultEntry,
+) ([]int64, [][]*sessionstore.OutputCommit, error) {
+	messages := make([]*transcript.Message, len(entries))
+	for i, entry := range entries {
+		messages[i] = entry.Message
+	}
+	ids, err := m.InsertMessages(ctx, sessionID, messages)
+	return ids, nil, err
+}
 
 func (m *mockSessionStore) CommitRejectedResponse(
 	context.Context,

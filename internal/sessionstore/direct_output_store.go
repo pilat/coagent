@@ -21,13 +21,6 @@ const (
 )
 
 type DirectOutputStore interface {
-	InsertToolResultWithDirectOutput(
-		ctx context.Context,
-		sessionID int64,
-		message *transcript.Message,
-		directMessages []string,
-	) (messageID int64, outputs []*OutputCommit, err error)
-
 	// InsertToolResultSetOnce commits the complete decided result set for one
 	// assistant turn — tool result rows plus their direct outputs — in a single
 	// transaction, so a crash can never expose a failure row without the skips
@@ -63,8 +56,7 @@ func (s *store) InsertToolResultSetOnce(
 
 	owner, err := outputOwner(ctx, tx, sessionID)
 	if errors.Is(err, ErrOutputOwner) || errors.Is(err, ErrOutputNotRoot) {
-		// The same degrade rule as the single-result path: results still
-		// settle, their direct outputs do not.
+		// Internal results still settle without a manager delivery target.
 		owner = ""
 		entries = dropDirectMessages(entries)
 	} else if err != nil {
@@ -151,71 +143,6 @@ func hasDirectMessages(entries []ToolResultEntry) bool {
 	return false
 }
 
-func (s *store) InsertToolResultWithDirectOutput(
-	ctx context.Context,
-	sessionID int64,
-	message *transcript.Message,
-	directMessages []string,
-) (int64, []*OutputCommit, error) {
-	if err := validateDirectOutput(message, directMessages); err != nil {
-		return 0, nil, err
-	}
-
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return 0, nil, fmt.Errorf("begin direct tool output: %w", err)
-	}
-	defer func() { _ = tx.Rollback() }()
-
-	transactionTime := time.Now().UTC()
-
-	owner, err := outputOwner(ctx, tx, sessionID)
-	if errors.Is(err, ErrOutputOwner) || errors.Is(err, ErrOutputNotRoot) {
-		directMessages = nil
-	} else if err != nil {
-		return 0, nil, err
-	}
-
-	// Fail closed behind a stop/kill fence: no late direct output may appear
-	// below the stop result, even when its tool result still settles.
-	if len(directMessages) > 0 {
-		if err := outputSessionWritable(ctx, tx, sessionID); err != nil {
-			return 0, nil, err
-		}
-	}
-
-	messageID, fresh, err := insertToolResultOnceAt(ctx, tx, sessionID, message, transactionTime)
-	if err != nil {
-		return 0, nil, err
-	}
-
-	// A replayed row settles nothing new: it must not disturb a newer check
-	// a later turn already opened.
-	if fresh {
-		// Fresh model-visible input invalidates any stale completion check in
-		// the same commit that settles the result superseding it.
-		if err := invalidateCompletionCheckTx(ctx, tx, sessionID); err != nil {
-			return 0, nil, err
-		}
-	}
-
-	outputs := make([]*OutputCommit, 0, len(directMessages))
-	for i, content := range directMessages {
-		commit, insertErr := insertDirectOutput(ctx, tx, sessionID, owner, message.ToolCallID, i, content)
-		if insertErr != nil {
-			return 0, nil, insertErr
-		}
-
-		outputs = append(outputs, commit)
-	}
-
-	if err := tx.Commit(); err != nil {
-		return 0, nil, fmt.Errorf("commit direct tool output: %w", err)
-	}
-
-	return messageID, outputs, nil
-}
-
 func validateDirectOutput(message *transcript.Message, direct []string) error {
 	if message == nil || message.Role != "tool" || message.ToolCallID == "" || message.ToolName == "" {
 		return errors.New("invalid direct-output tool result")
@@ -264,13 +191,21 @@ func insertToolResultOnceAt(
 	var existingContent string
 	var existingToolError bool
 	var existingToolName string
+	var existingAttachments sql.NullString
 
-	err := tx.QueryRowContext(ctx, `SELECT id, content, tool_error, tool_name FROM messages
+	err := tx.QueryRowContext(ctx, `SELECT id, content, tool_error, tool_name, attachments FROM messages
 		WHERE session_id = ? AND role = 'tool' AND tool_call_id = ? ORDER BY id LIMIT 1`,
-		sessionID, message.ToolCallID).Scan(&existingID, &existingContent, &existingToolError, &existingToolName)
+		sessionID, message.ToolCallID).Scan(
+		&existingID, &existingContent, &existingToolError, &existingToolName, &existingAttachments,
+	)
 	if err == nil {
 		if existingContent != message.Content || existingToolError != message.ToolError ||
-			existingToolName != message.ToolName {
+			existingToolName != message.ToolName ||
+			toolResultAttachmentsIdentity(
+				[]byte(existingAttachments.String),
+			) != toolResultAttachmentsIdentity(
+				message.Attachments,
+			) {
 			return 0, false, ErrOutputConflict
 		}
 
@@ -289,9 +224,10 @@ func insertToolResultOnceAt(
 	}
 
 	result, err := tx.ExecContext(ctx, `INSERT INTO messages
-		(session_id, role, content, tool_call_id, tool_name, tool_error, created_at)
-		VALUES (?, 'tool', ?, ?, ?, ?, ?)`,
-		sessionID, message.Content, message.ToolCallID, message.ToolName, message.ToolError, createdAt)
+		(session_id, role, content, tool_call_id, tool_name, tool_error, attachments, created_at)
+		VALUES (?, 'tool', ?, ?, ?, ?, ?, ?)`,
+		sessionID, message.Content, message.ToolCallID, message.ToolName, message.ToolError,
+		nullRawJSON(message.Attachments), createdAt)
 	if err != nil {
 		return 0, false, fmt.Errorf("insert direct-output tool result: %w", err)
 	}
@@ -302,6 +238,15 @@ func insertToolResultOnceAt(
 	}
 
 	return messageID, true, nil
+}
+
+func toolResultAttachmentsIdentity(raw json.RawMessage) string {
+	var refs []json.RawMessage
+	if len(raw) == 0 || (json.Unmarshal(raw, &refs) == nil && len(refs) == 0) {
+		return ""
+	}
+
+	return string(raw)
 }
 
 func insertDirectOutput(

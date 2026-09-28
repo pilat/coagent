@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"maps"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -94,7 +93,6 @@ type svc struct {
 	store            Store
 	sessionStore     sessionstore.OrchestrationStore
 	inboxStore       sessionstore.InboxStore
-	activationStore  sessionstore.ActivationStore
 	runtimeStore     sessionstore.AgentRuntimeStore
 	managerOutputs   sessionstore.ManagerOutputStore
 	managerRoots     sessionstore.ManagerRootTransactions
@@ -104,7 +102,7 @@ type svc struct {
 	links            subagent.Store
 	subagents        subagent.Transactions
 	scheduleSvc      schedule.Service
-	pubsub           sessionbus.Bus
+	routes           managerRoutes
 	defaultModelFn   func() string
 	modelCatalog     []modelInfo
 	modelEntries     []config.ModelEntry
@@ -112,8 +110,7 @@ type svc struct {
 	// tools.search section and no native-capable model.
 	searchUnconfigured bool
 	mcpStore           mcpstore.Store
-	applier            configapply.Service
-	staged             *stagedCalls
+	externalCalls      externalCallCoordinator
 	deferNotices       *deferAnnouncements
 	shuttingDown       atomic.Bool
 	recovery           sessionlifecycle.Recovery
@@ -123,16 +120,7 @@ type svc struct {
 	budgetCtx          context.Context //nolint:containedctx // Daemon lifetime context for joined park workers.
 	budgetCancel       context.CancelFunc
 	budgetWG           sync.WaitGroup
-	// Tree locks precede routeMu and childMu; never acquire a
-	// tree lock while holding one of those narrower locks.
-	// routeMu linearizes owner claims with replacement-session creation. The
-	// daemon is single-instance, so this is the ownership CAS boundary.
-	routeMu sync.Mutex
-	// childMu guards publication routes only; runner lifecycle has its own registry.
-	childMu    sync.Mutex
-	childCache map[int64]bool
-	ownerCache map[int64]string
-	budgetSvc  budgetservice.Service
+	budgetSvc          budgetservice.Service
 	// processSvc owns live cancellation handles; processStore owns durability.
 	processStore      backgroundprocess.Store
 	processSvc        backgroundprocess.Service
@@ -173,14 +161,13 @@ func New(
 		factory, processStore, toolResources, store, sessionStore, inboxStore, runtimeStore,
 		managerOutputs, managerRoots, lifecycleStore, modelInputs,
 		links, subagents, budgetSvc, progressStore,
-		scheduleSvc, cfg.DefaultModel,
+		scheduleSvc, cfg.DefaultModel, applier,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("create daemon: %w", err)
 	}
 
 	s.mcpStore = mcpStore
-	s.applier = applier
 	s.searchUnconfigured = searchUnconfigured(cfg.UnifiedConfig)
 
 	if cfg.UnifiedConfig != nil {
@@ -209,6 +196,7 @@ func newSvc(
 	progressStore progressruntime.Store,
 	scheduleSvc schedule.Service,
 	defaultModelFn func() string,
+	applier configapply.Service,
 ) (*svc, error) {
 	if toolResources == nil {
 		return nil, errors.New("daemon requires tool resources")
@@ -216,36 +204,39 @@ func newSvc(
 
 	budgetCtx, budgetCancel := context.WithCancel(context.Background())
 	s := &svc{
-		factory:         factory,
-		processStore:    processStore,
-		toolResources:   toolResources,
-		store:           store,
-		sessionStore:    sessionStore,
-		inboxStore:      inboxStore,
-		activationStore: inboxStore,
-		runtimeStore:    runtimeStore,
-		managerOutputs:  managerOutputs,
-		managerRoots:    managerRoots,
-		lifecycleStore:  lifecycleStore,
-		modelInputs:     modelInputs,
-		inputFactory:    inputruntime.New(inboxStore, scheduleSvc),
-		links:           links,
-		subagents:       subagents,
-		budgetSvc:       budgetSvc,
-		scheduleSvc:     scheduleSvc,
-		staged:          newStagedCalls(),
-		recovery:        sessionlifecycle.NewRecovery(),
+		factory:        factory,
+		processStore:   processStore,
+		toolResources:  toolResources,
+		store:          store,
+		sessionStore:   sessionStore,
+		inboxStore:     inboxStore,
+		runtimeStore:   runtimeStore,
+		managerOutputs: managerOutputs,
+		managerRoots:   managerRoots,
+		lifecycleStore: lifecycleStore,
+		modelInputs:    modelInputs,
+		inputFactory:   inputruntime.New(inboxStore, scheduleSvc),
+		links:          links,
+		subagents:      subagents,
+		budgetSvc:      budgetSvc,
+		scheduleSvc:    scheduleSvc,
+		recovery:       sessionlifecycle.NewRecovery(),
 		stopper: sessionlifecycle.NewStopper(
 			sessionStore, lifecycleStore, managerOutputs, links,
 		),
-		pubsub:         sessionbus.New(),
+		routes:         newManagerRoutes(sessionStore, managerRoots, store, sessionbus.New()),
 		defaultModelFn: defaultModelFn,
-		childCache:     make(map[int64]bool),
-		ownerCache:     make(map[int64]string),
 		deferNotices:   newDeferAnnouncements(),
 		budgetCtx:      budgetCtx,
 		budgetCancel:   budgetCancel,
 	}
+
+	s.externalCalls = newExternalCalls(
+		applier, inboxStore, sessionStore, runtimeStore, scheduleSvc, links,
+		func(ctx context.Context, sessionID int64, input pendingCallResultInput) error {
+			return s.enqueueSessionInput(ctx, sessionID, input)
+		},
+	)
 
 	s.progress = newProgressRuntime(progressStore, s)
 	if budgetSvc != nil {
@@ -265,11 +256,11 @@ func newSvc(
 }
 
 func (s *svc) PubSub() sessionbus.Source {
-	return s.pubsub
+	return s.routes.Source()
 }
 
 func (s *svc) NotifySession(sessionID int64, n sessionevent.Notification) {
-	s.publish(sessionID, n)
+	s.routes.Publish(sessionID, n)
 }
 
 func (s *svc) Send(ctx context.Context, projectID int64, prompt, model string, attrs map[string]any) (int64, error) {
@@ -350,16 +341,9 @@ func (s *svc) SendToSession(ctx context.Context, sessionID int64, prompt string)
 }
 
 func (s *svc) SendToSessionResolved(ctx context.Context, sessionID int64, prompt string) (int64, error) {
-	record, err := s.sessionStore.GetSession(ctx, sessionID)
+	resolved, err := s.routes.ResolveReplacement(ctx, sessionID)
 	if err != nil {
-		return 0, fmt.Errorf("load session for replacement resolution: %w", err)
-	}
-
-	owner, _ := record.Attributes[controllerapi.SessionAttributeManagerID].(string)
-
-	resolved, err := s.managerRoots.ResolveReplacement(ctx, sessionID, owner)
-	if err != nil {
-		return 0, fmt.Errorf("resolve replacement session: %w", err)
+		return 0, fmt.Errorf("resolve replacement for session %d: %w", sessionID, err)
 	}
 
 	sessionID = resolved
@@ -422,8 +406,8 @@ func (s *svc) handleGenericCommand(ctx context.Context, input *sessionstore.Inbo
 
 		return true, s.stopLocked(ctx, input.SessionID, input.ID)
 	case clearCommand:
-		if _, err := s.clearLocked(ctx, input.SessionID, input.ID); err != nil {
-			return true, err
+		if _, err := s.routes.Replace(ctx, input.SessionID, input.ID, s.killLocked); err != nil {
+			return true, fmt.Errorf("clear session %d: %w", input.SessionID, err)
 		}
 
 		return true, nil
@@ -459,10 +443,10 @@ func (s *svc) handleStatusInput(ctx context.Context, input *sessionstore.InboxIn
 		return fmt.Errorf("handle status input: %w", err)
 	}
 
-	s.publish(input.SessionID, sessionevent.Notification{
+	s.routes.Publish(input.SessionID, sessionevent.Notification{
 		Type: sessionevent.NotifyMessage, Message: current.Rendered,
 	})
-	s.publish(input.SessionID, sessionevent.Notification{
+	s.routes.Publish(input.SessionID, sessionevent.Notification{
 		Type: sessionevent.NotifyStateChanged, Status: controllerapi.StateIdle,
 	})
 
@@ -578,12 +562,6 @@ func (s *svc) DeliverFreshSchedule(
 	})
 }
 
-// StageExternalCall records that a tool call suspended awaiting work the daemon
-// itself is doing, so the loop neither re-executes it nor advances past it.
-func (s *svc) StageExternalCall(sessionID int64, callID, toolName string) {
-	s.staged.stage(sessionID, callID, toolName)
-}
-
 func (s *svc) GetSession(ctx context.Context, id int64) (*sessionstore.SessionRecord, error) {
 	rec, err := s.sessionStore.GetSession(ctx, id)
 	if err != nil {
@@ -623,7 +601,7 @@ func (s *svc) killLocked(ctx context.Context, sessionID int64) error {
 	rs, ok := s.supervisor.Lookup(sessionID)
 
 	if ok {
-		s.publish(
+		s.routes.Publish(
 			sessionID,
 			sessionevent.Notification{
 				Type:    sessionevent.NotifyMessage,
@@ -684,7 +662,7 @@ func (s *svc) killLocked(ctx context.Context, sessionID int64) error {
 	)
 
 	if ownerlessSession(rec) {
-		s.publish(sessionID, sessionevent.Notification{
+		s.routes.Publish(sessionID, sessionevent.Notification{
 			Type: sessionevent.NotifyStateChanged, Status: controllerapi.StateIdle, Reason: "killed",
 		})
 	}
@@ -727,7 +705,7 @@ func (s *svc) stopLocked(ctx context.Context, sessionID, inputID int64) error {
 	explicit := inputID > 0 && record != nil && !ownerlessSession(record)
 
 	if !explicit {
-		s.publish(sessionID, sessionevent.Notification{
+		s.routes.Publish(sessionID, sessionevent.Notification{
 			Type:    sessionevent.NotifyMessage,
 			Message: "⏹ Stopping...",
 		})
@@ -753,7 +731,7 @@ func (s *svc) stopLocked(ctx context.Context, sessionID, inputID int64) error {
 	}
 
 	if record != nil && ownerlessSession(record) {
-		s.publish(sessionID, sessionevent.Notification{
+		s.routes.Publish(sessionID, sessionevent.Notification{
 			Type: sessionevent.NotifyStateChanged, Status: controllerapi.StateIdle, Reason: "stopped",
 		})
 	}
@@ -817,8 +795,8 @@ func (s *svc) stopTreeCleanup(ctx context.Context, sessionID int64, options stop
 	err := s.supervisor.StopTree(ctx, sessionID, s.stopper, options.keepRootStopping, sessionlifecycle.StopEffects{
 		CancelProcesses:  func(ctx context.Context, id int64) error { return s.stopTreeBackgroundProcesses(ctx, id, options) },
 		RetireResources:  s.retireTreeToolResources,
-		SettleCalls:      s.settleStoppedCalls,
-		ExpireActivation: s.expirePendingActivation,
+		SettleCalls:      s.externalCalls.SettleStopped,
+		ExpireActivation: s.externalCalls.ExpireActivation,
 		CancelSleeps:     s.cancelStoppedSleeps,
 	})
 	if err != nil {
@@ -826,6 +804,11 @@ func (s *svc) stopTreeCleanup(ctx context.Context, sessionID int64, options stop
 	}
 
 	return nil
+}
+
+// ConsumeConfigEditActivation also settles a committed apply recovered at boot.
+func (s *svc) ConsumeConfigEditActivation(ctx context.Context, sessionID int64, callID string) {
+	s.externalCalls.ConsumeActivation(ctx, sessionID, callID)
 }
 
 //nolint:funcorder // Background cancellation is a phase of the adjacent stop transition.
@@ -847,74 +830,18 @@ func (s *svc) stopTreeBackgroundProcesses(ctx context.Context, sessionID int64, 
 }
 
 func (s *svc) Clear(ctx context.Context, sessionID int64) (int64, error) {
-	return s.clear(ctx, sessionID, 0)
-}
-
-//nolint:funcorder // Clear's command variant shares one replacement transaction with Clear.
-func (s *svc) clear(ctx context.Context, sessionID, inputID int64) (int64, error) {
 	unlock, err := s.lockSessionTree(ctx, sessionID)
 	if err != nil {
 		return 0, err
 	}
 	defer unlock()
 
-	return s.clearLocked(ctx, sessionID, inputID)
-}
-
-//nolint:funcorder // Public lifecycle methods delegate into the shared tree lock.
-func (s *svc) clearLocked(ctx context.Context, sessionID, inputID int64) (int64, error) {
-	log := logger.Ctx(ctx).Named("manager.clear")
-
-	s.routeMu.Lock()
-	defer s.routeMu.Unlock()
-
-	rec, err := s.sessionStore.GetSession(ctx, sessionID)
+	replacementID, err := s.routes.Replace(ctx, sessionID, 0, s.killLocked)
 	if err != nil {
-		return 0, fmt.Errorf("session %d not found", sessionID)
+		return 0, fmt.Errorf("clear session %d: %w", sessionID, err)
 	}
 
-	if rec.KilledAt != nil {
-		return 0, fmt.Errorf("session %d is already killed", sessionID)
-	}
-
-	workDir, _ := s.store.GetProjectWorkDir(ctx, rec.ProjectID)
-	projectName, _ := s.store.GetProjectName(ctx, rec.ProjectID)
-	owner, _ := rec.Attributes[controllerapi.SessionAttributeManagerID].(string)
-	var newRec *sessionstore.SessionRecord
-
-	//nolint:nestif // Owner-aware replacement is the one boundary that preserves a manager surface.
-	if owner != "" {
-		if inputID > 0 {
-			newRec, _, err = s.managerRoots.ReplaceManagerRootForInput(ctx, sessionID, inputID, projectName, workDir)
-		} else {
-			newRec, _, err = s.managerRoots.ReplaceManagerRoot(ctx, sessionID, projectName, workDir)
-		}
-
-		if err != nil {
-			return 0, fmt.Errorf("replace manager session: %w", err)
-		}
-	} else {
-		newRec, err = s.sessionStore.CreateReplacementSession(ctx, sessionID)
-		if err != nil {
-			return 0, fmt.Errorf("create replacement session: %w", err)
-		}
-	}
-
-	name := fmt.Sprintf("%s - %d", projectName, newRec.ID)
-	s.publish(sessionID, sessionevent.Notification{
-		Type:         sessionevent.NotifySessionCleared,
-		OldSessionID: sessionID,
-		NewSessionID: newRec.ID,
-		Name:         name,
-		WorkDir:      workDir,
-		Attributes:   rec.Attributes,
-	})
-
-	if err := s.killLocked(ctx, sessionID); err != nil {
-		log.Warn("clear_kill_old_session_failed", zap.Int64("session_id", sessionID), zap.Error(err))
-	}
-
-	return newRec.ID, nil
+	return replacementID, nil
 }
 
 // SetModel applies the switch before recording it: a model the session cannot
@@ -977,48 +904,9 @@ func (s *svc) SetModel(ctx context.Context, sessionID int64, model, reasoningLev
 }
 
 func (s *svc) SetAttributes(ctx context.Context, sessionID int64, attrs map[string]any) error {
-	s.routeMu.Lock()
-	defer s.routeMu.Unlock()
-
-	rec, err := s.sessionStore.GetSession(ctx, sessionID)
-	if err != nil {
-		return fmt.Errorf("get session before setting attributes: %w", err)
+	if err := s.routes.SetAttributes(ctx, sessionID, attrs); err != nil {
+		return fmt.Errorf("set attributes for session %d: %w", sessionID, err)
 	}
-
-	if rec == nil {
-		return fmt.Errorf("session %d not found", sessionID)
-	}
-
-	attrs = maps.Clone(attrs)
-	existingOwner, _ := rec.Attributes[controllerapi.SessionAttributeManagerID].(string)
-
-	requestedOwner, _ := attrs[controllerapi.SessionAttributeManagerID].(string)
-	claimingOwner := existingOwner == "" && requestedOwner != ""
-
-	if claimingOwner && (rec.Status == sessionstore.SessionStatusTerminating || rec.KilledAt != nil) {
-		return fmt.Errorf("session %d is closing and cannot acquire a manager owner", sessionID)
-	}
-
-	if existingOwner != "" && requestedOwner != "" && existingOwner != requestedOwner {
-		return fmt.Errorf("session %d belongs to manager %q", sessionID, existingOwner)
-	}
-
-	if existingOwner != "" {
-		if attrs == nil {
-			attrs = make(map[string]any)
-		}
-
-		attrs[controllerapi.SessionAttributeManagerID] = existingOwner
-		requestedOwner = existingOwner
-	}
-
-	if err := s.sessionStore.SetAttributes(ctx, sessionID, attrs); err != nil {
-		return fmt.Errorf("set session attributes: %w", err)
-	}
-
-	s.childMu.Lock()
-	s.ownerCache[sessionID] = requestedOwner
-	s.childMu.Unlock()
 
 	return nil
 }

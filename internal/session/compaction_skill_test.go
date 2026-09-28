@@ -106,7 +106,7 @@ func TestTwentySuccessiveCompactionsKeepTheCurrentEnvelopeExactlyOnce(t *testing
 	s.ms.setMessages(msgs)
 
 	for range 20 {
-		ok, err := s.compact(t.Context(), nil)
+		ok, err := s.contexts.(*checkpointOwner).compact(t.Context(), nil)
 		require.NoError(t, err)
 
 		skills := renderedSkills(s.ms.getMessages())
@@ -151,7 +151,7 @@ func TestCurrentSkillInHeadIsReattachedByteIdentically(t *testing.T) {
 		compactionToolResult("c2", "recent result"),
 	})
 
-	ok, err := s.compact(t.Context(), nil)
+	ok, err := s.contexts.(*checkpointOwner).compact(t.Context(), nil)
 	require.NoError(t, err)
 	require.True(t, ok)
 
@@ -198,7 +198,7 @@ func TestMixedAssistantResponseKeepsSiblingCallsValid(t *testing.T) {
 
 	s.ms.setMessages(msgs)
 
-	ok, err := s.compact(t.Context(), nil)
+	ok, err := s.contexts.(*checkpointOwner).compact(t.Context(), nil)
 	require.NoError(t, err)
 	require.True(t, ok)
 

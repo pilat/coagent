@@ -226,7 +226,7 @@ func newMCPRestartHarness(
 		budget.New(sessStore),
 		sessStore,
 		schedule.NewService(schedStore),
-		func() string { return "fake-model" },
+		func() string { return "fake-model" }, nil,
 	)
 	mgr.mcpStore = registry
 	projectID, err := store.GetOrCreateProject(ctx, workDir)
