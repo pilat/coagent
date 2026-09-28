@@ -24,8 +24,63 @@ type manualBudgetTimer struct {
 
 type budgetObservationStub struct {
 	budget.Service
-	list    func(context.Context) ([]*sessionstore.BudgetRecord, error)
-	observe func(context.Context, int64) (*sessionstore.BudgetRecord, bool, error)
+	list        func(context.Context) ([]*sessionstore.BudgetRecord, error)
+	listPending func(context.Context) ([]*sessionstore.BudgetRecord, error)
+	observe     func(context.Context, int64) (*sessionstore.BudgetRecord, bool, error)
+}
+
+func TestBudgetReconcilerRetriesPendingParkOnSuccessiveTicks(t *testing.T) {
+	t.Parallel()
+
+	for _, phase := range []string{"requested", "draining"} {
+		t.Run(phase, func(t *testing.T) {
+			t.Parallel()
+			store, db, armed := newReconcilerBudget(t)
+			fired, didFire, err := store.ObserveBudget(t.Context(), armed.RootSessionID,
+				armed.ArmedAt.Add(time.Minute), "")
+			require.NoError(t, err)
+			require.True(t, didFire)
+			require.Equal(t, sessionstore.BudgetFired, fired.State)
+			if phase == "draining" {
+				fired, err = store.BeginBudgetDrain(t.Context(), fired.RootSessionID,
+					fired.Generation, fired.ParkOwner)
+				require.NoError(t, err)
+			}
+			require.Equal(t, phase, fired.ParkPhase)
+
+			parked := make(chan *sessionstore.BudgetRecord, 3)
+			r := NewBudgetReconciler(budget.New(store), func(record *sessionstore.BudgetRecord) {
+				parked <- record
+			}).(*budgetReconciler)
+			r.now = func() time.Time { return armed.ArmedAt.Add(time.Minute) }
+			timer := newManualBudgetTimer()
+			r.timer = func(delay time.Duration) budgetTimer {
+				timer.resets <- delay
+				return timer
+			}
+			t.Cleanup(func() { stopBudgetReconciler(t, r) })
+			r.Start(t.Context())
+			require.Zero(t, receiveBudgetValue(t, timer.resets))
+
+			for range 3 {
+				timer.ticks <- r.now()
+				retry := receiveBudgetValue(t, parked)
+				assert.Equal(t, fired.RootSessionID, retry.RootSessionID)
+				assert.Equal(t, fired.Generation, retry.Generation)
+				assert.Equal(t, phase, retry.ParkPhase)
+				assert.Equal(t, budgetRetryInterval, receiveBudgetValue(t, timer.resets))
+			}
+
+			persisted, err := store.GetBudget(t.Context(), armed.RootSessionID)
+			require.NoError(t, err)
+			assert.Equal(t, phase, persisted.ParkPhase)
+			var checkpoints int
+			require.NoError(t, db.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM session_outbox
+				WHERE session_id = ? AND source_key = 'budget:1:checkpoint'`,
+				armed.RootSessionID).Scan(&checkpoints))
+			assert.Equal(t, 1, checkpoints)
+		})
+	}
 }
 
 func TestBudgetReconcilerRestoresDeadlineWithoutProgressOrModel(t *testing.T) {
@@ -201,6 +256,13 @@ func (t *manualBudgetTimer) Reset(delay time.Duration) bool { t.resets <- delay;
 
 func (s budgetObservationStub) ListArmed(ctx context.Context) ([]*sessionstore.BudgetRecord, error) {
 	return s.list(ctx)
+}
+
+func (s budgetObservationStub) ListPendingParks(ctx context.Context) ([]*sessionstore.BudgetRecord, error) {
+	if s.listPending == nil {
+		return nil, nil
+	}
+	return s.listPending(ctx)
 }
 
 func (s budgetObservationStub) Observe(

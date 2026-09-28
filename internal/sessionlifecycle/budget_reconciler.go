@@ -123,7 +123,7 @@ func (r *budgetReconciler) ReconcileArmed(ctx context.Context) error {
 	defer stop()
 	defer cancel()
 
-	_, err := r.reconcile(scanCtx, r.now().UTC())
+	_, err := r.reconcileArmed(scanCtx, r.now().UTC())
 
 	return err
 }
@@ -191,6 +191,31 @@ func (r *budgetReconciler) reconcileSafely(ctx context.Context) (delay time.Dura
 }
 
 func (r *budgetReconciler) reconcile(ctx context.Context, now time.Time) (time.Duration, error) {
+	pending, pendingErr := r.service.ListPendingParks(ctx)
+	if pendingErr == nil {
+		for _, record := range pending {
+			if err := ctx.Err(); err != nil {
+				return budgetRetryInterval, fmt.Errorf("reconcile budget parks: %w", err)
+			}
+
+			r.park(record)
+		}
+	}
+
+	next, armedErr := r.reconcileArmed(ctx, now)
+	if len(pending) > 0 {
+		next = min(next, budgetRetryInterval)
+	}
+
+	if pendingErr != nil {
+		next = budgetRetryInterval
+		pendingErr = fmt.Errorf("list pending budget parks: %w", pendingErr)
+	}
+
+	return next, errors.Join(pendingErr, armedErr)
+}
+
+func (r *budgetReconciler) reconcileArmed(ctx context.Context, now time.Time) (time.Duration, error) {
 	armed, err := r.service.ListArmed(ctx)
 	if err != nil {
 		return budgetRetryInterval, fmt.Errorf("list armed budgets: %w", err)
@@ -214,6 +239,8 @@ func (r *budgetReconciler) reconcile(ctx context.Context, now time.Time) (time.D
 		if fired && record != nil && record.State == sessionstore.BudgetFired &&
 			record.ParkPhase == "requested" && ctx.Err() == nil {
 			r.park(record)
+
+			next = min(next, budgetRetryInterval)
 		}
 
 		if record != nil && record.State == sessionstore.BudgetArmed && record.DurationSeconds != nil {

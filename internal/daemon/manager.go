@@ -120,6 +120,8 @@ type svc struct {
 	budgetCtx          context.Context //nolint:containedctx // Daemon lifetime context for joined park workers.
 	budgetCancel       context.CancelFunc
 	budgetWG           sync.WaitGroup
+	budgetParkMu       sync.Mutex
+	budgetParks        map[budgetParkKey]struct{}
 	budgetSvc          budgetservice.Service
 	// processSvc owns live cancellation handles; processStore owns durability.
 	processStore      backgroundprocess.Store

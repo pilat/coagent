@@ -108,13 +108,19 @@ The core goal is complete only when all of the following have evidence:
   The checkpoint constructor now lists dependencies explicitly. Independent
   code review found and closed one further committed-budget park handoff bug;
   its real-SQLite regression passed red-to-green.
+- **Branch review follow-up:** a cold review of the complete branch found that
+  failed budget parks no longer retried until daemon restart. The independent
+  reconciler now retries durable requested/draining parks while daemon workers
+  deduplicate an active generation. Focused real-SQLite and worker tests passed;
+  both code and specification re-reviews are clean.
 - **Verification:** cold specification review and both independent code reviews
   are clean after correction. Focused persistence, session, daemon, manager and
   composition scenarios passed. Full `make test` and canonical `CI=true make ci`
   passed in an unrestricted environment with fixture Git configuration isolated
   from the invoking user's credentials. A stale prompt dependency in a migrated
   exact-cutoff test fixture surfaced in the first CI run; its focused regression
-  and the subsequent full CI run passed. The audit records the evidence.
+  and the subsequent full CI run passed. The branch-review correction passed
+  another complete `make test` and canonical CI run. The audit records the evidence.
 - **Next step:** preserve the new ownership boundaries during subsequent work;
   treat the deferred items in the audit as separate, evidence-driven changes.
 - **Retained coordination:** the source audit supports keeping daemon startup,

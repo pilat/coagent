@@ -11,6 +11,11 @@ import (
 	"github.com/pilat/coagent/internal/sessionstore"
 )
 
+type budgetParkKey struct {
+	rootID     int64
+	generation int64
+}
+
 func (s *svc) parkBudgetTree(ctx context.Context, record *sessionstore.BudgetRecord) {
 	if record == nil || record.State != sessionstore.BudgetFired || record.ParkOwner == "" {
 		return
@@ -78,7 +83,28 @@ func (s *svc) startBudgetPark(record *sessionstore.BudgetRecord) {
 		return
 	}
 
+	key := budgetParkKey{rootID: record.RootSessionID, generation: record.Generation}
+
+	s.budgetParkMu.Lock()
+	if _, running := s.budgetParks[key]; running {
+		s.budgetParkMu.Unlock()
+		return
+	}
+
+	if s.budgetParks == nil {
+		s.budgetParks = make(map[budgetParkKey]struct{})
+	}
+
+	s.budgetParks[key] = struct{}{}
+	s.budgetParkMu.Unlock()
+
 	s.budgetWG.Go(func() {
+		defer func() {
+			s.budgetParkMu.Lock()
+			delete(s.budgetParks, key)
+			s.budgetParkMu.Unlock()
+		}()
+
 		defer func() {
 			if recovered := recover(); recovered != nil {
 				logger.Ctx(s.budgetCtx).Named("daemon.budget").Error(

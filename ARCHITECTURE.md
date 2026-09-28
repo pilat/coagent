@@ -502,9 +502,11 @@ back ([ADR-0070](docs/adr/0070-accepted-responses-share-budget-observation.md)).
 After commit, the session hands a fired verdict to the park scheduler before
 reloading history; a failed post-commit read cannot replace parking with a
 session error.
-The daemon closes admission before a generation drains and parks; managed park workers are
-cancelled and joined at shutdown. Startup reconciles armed and half-parked
-generations before normal session recovery. The next ordinary model-bound root
+The daemon closes admission before a generation drains and parks; managed park
+workers deduplicate active generations and are cancelled and joined at shutdown.
+Startup reconciles armed and half-parked generations before normal session
+recovery; the live reconciler retries half-parked generations after failures.
+The next ordinary model-bound root
 input atomically releases a fired checkpoint and resumes only the root.
 `sessionlifecycle` owns an independent wakeable budget reconciler, reconstructing
 deadlines from armed rows and observing crossings through the budget transaction.

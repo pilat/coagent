@@ -159,6 +159,14 @@ ordering and replacement harder to prove.
   it; the session now schedules the park before reading history and leaves the
   committed response suspended on a read failure. Both code and specification
   re-reviews found the correction sound.
+- A cold review of the complete branch found a further P2 budget-recovery
+  regression: after a transient park failure, the new reconciler scanned only
+  armed budgets, so a fired generation stayed requested/draining until restart.
+  It now scans pending parks on each live tick and retries after one second;
+  daemon workers deduplicate concurrent attempts for one root/generation and
+  release that slot after completion or panic. Real-SQLite requested/draining
+  retries and deterministic worker deduplication passed. Code and specification
+  re-reviews found no remaining consequential mismatch.
 - A focused full-CI failure in `TestHeaderCheckCountsTheSystemPrompt` was a
   fixture wiring error: the test replaced the session prompt pointer after the
   checkpoint owner had captured the earlier pointer. It now reconstructs the
@@ -180,7 +188,9 @@ ordering and replacement harder to prove.
   assertions cannot be independently compared.
 - Independent code review of the complete refactor: one P1 committed-budget
   adoption finding corrected and re-reviewed clean; the complementary daemon,
-  lifecycle and routing review was clean.
+  lifecycle and routing review was clean. A later complete-branch review found
+  the P2 live-park retry regression above; it was corrected and re-reviewed
+  clean. The independent durability review found no P0–P2 defect.
 - Full local `make test`: exit 0 in the unrestricted environment. All fast
   packages passed, including the listener-dependent packages previously blocked
   by the managed sandbox. The delegated full `make lint` also passed with zero
@@ -191,8 +201,11 @@ ordering and replacement harder to prove.
   the complete rerun exited 0 with every tagged integration package passing,
   including daemon, session, sessionstore, Telegram and migrations. Fixture Git
   configuration was isolated from the invoking user's credentials.
-- Final `make all`: exit 0 after the documentation update; formatting, build,
-  lint, architecture and bounded local tests passed.
+- After the complete-branch review correction, full local `make test` and
+  canonical `CI=true make ci` passed again, including daemon, session and
+  sessionstore integration suites.
+- Final `make all`: exit 0 after the branch-review correction and documentation
+  update; formatting, build, lint, architecture and bounded local tests passed.
 - Final source/flow audit and architecture reconciliation: complete; the
   source anchors above match the synced ARCHITECTURE.md, glossary and ADRs.
 
