@@ -71,9 +71,7 @@ type checkpointOwner struct {
 	stamper                  *timestamper
 	activeSubagentsProvider  func(context.Context) []ActiveSubagentInfo
 	activeProcessesProvider  func(context.Context) []ActiveProcessInfo
-	pendingCompaction        bool
-	compactionFocus          string
-	compactionInput          *PendingInput
+	control                  checkpointControl
 	compactionSummaryDBID    int64
 	compactionDeferAnnounced bool
 	compactionFailures       int
@@ -118,17 +116,11 @@ func (s *checkpointOwner) beginRun() {
 func (s *checkpointOwner) deferred() bool { return s.compactionDeferAnnounced }
 
 func (s *checkpointOwner) request() {
-	s.ms.mu.Lock()
-	defer s.ms.mu.Unlock()
-
-	s.pendingCompaction = true
+	s.control.request()
 }
 
 func (s *checkpointOwner) requested() bool {
-	s.ms.mu.Lock()
-	defer s.ms.mu.Unlock()
-
-	return s.pendingCompaction
+	return s.control.requested()
 }
 
 func (s *checkpointOwner) queueCommand(
@@ -152,11 +144,7 @@ func (s *checkpointOwner) queueCommand(
 		return commandDeferred, nil
 	}
 
-	s.ms.mu.Lock()
-	s.compactionFocus = strings.TrimSpace(focus)
-	s.compactionInput = &input
-	s.pendingCompaction = true
-	s.ms.mu.Unlock()
+	s.control.queue(input, strings.TrimSpace(focus))
 
 	return commandDeferred, nil
 }
@@ -225,43 +213,4 @@ func (s *checkpointOwner) handleCommandOutput(ctx context.Context, input Pending
 	}
 
 	return nil
-}
-
-func (s *checkpointOwner) compactionCommandInput() *PendingInput {
-	s.ms.mu.Lock()
-	defer s.ms.mu.Unlock()
-
-	if s.compactionInput == nil {
-		return nil
-	}
-
-	input := *s.compactionInput
-
-	return &input
-}
-
-func (s *checkpointOwner) clearCompactionCommandInput() {
-	s.ms.mu.Lock()
-	defer s.ms.mu.Unlock()
-
-	s.compactionInput = nil
-}
-
-// setCompactionFocus records (or clears) the one-shot /compact focus.
-func (s *checkpointOwner) setCompactionFocus(focus string) {
-	s.ms.mu.Lock()
-	defer s.ms.mu.Unlock()
-
-	s.compactionFocus = focus
-}
-
-// consumePendingCompaction atomically reads and clears the pending compaction request.
-func (s *checkpointOwner) consumePendingCompaction() bool {
-	s.ms.mu.Lock()
-	defer s.ms.mu.Unlock()
-
-	pending := s.pendingCompaction
-	s.pendingCompaction = false
-
-	return pending
 }

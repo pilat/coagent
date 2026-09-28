@@ -88,7 +88,7 @@ func TestSlashCompact_RaisesTheFlagAndCompactsAtTheLoopPoint(t *testing.T) {
 
 	assert.Positive(t, llm.callCount)
 	assert.True(t, notesContain(notes, "✅ Context compacted"))
-	assert.Empty(t, s.contexts.(*checkpointOwner).compactionFocus, "focus is one-shot")
+	assert.Empty(t, s.contexts.(*checkpointOwner).control.focus(), "focus is one-shot")
 
 	for _, p := range llm.prompts {
 		assert.NotContains(t, p, "Priority for this summary:", "bare /compact carries no focus section")
@@ -127,7 +127,7 @@ func TestSlashCompact_FocusThreadsIntoTheSummarizationPrompt(t *testing.T) {
 
 	_, err := r.handleBoundaryCommand(t.Context(), *b.input)
 	require.NoError(t, err)
-	assert.Equal(t, "focus on the auth bug", s.contexts.(*checkpointOwner).compactionFocus)
+	assert.Equal(t, "focus on the auth bug", s.contexts.(*checkpointOwner).control.queuedFocus)
 
 	r.applyContextEvents(t.Context())
 
@@ -136,7 +136,7 @@ func TestSlashCompact_FocusThreadsIntoTheSummarizationPrompt(t *testing.T) {
 	instruction := llm.lastMessages[len(llm.lastMessages)-1]
 	assert.Equal(t, llmwire.RoleUser, instruction.Role)
 	assert.Contains(t, instruction.Content, "Priority for this summary: focus on the auth bug")
-	assert.Empty(t, s.contexts.(*checkpointOwner).compactionFocus)
+	assert.Empty(t, s.contexts.(*checkpointOwner).control.focus())
 }
 
 func TestSlashCompact_CompactionFailureIsReported(t *testing.T) {
@@ -166,7 +166,7 @@ func TestSlashCompact_CompactionFailureIsReported(t *testing.T) {
 
 	assert.True(t, notesContain(notes, "❌ Compaction failed"))
 	assert.False(t, notesContain(notes, "✅ Context compacted"))
-	assert.Empty(t, s.contexts.(*checkpointOwner).compactionFocus, "focus is cleared even when compaction fails")
+	assert.Empty(t, s.contexts.(*checkpointOwner).control.focus(), "focus is cleared even when compaction fails")
 }
 
 // Behind a blocking call the request stays durable. An in-memory flag would die

@@ -139,7 +139,8 @@ func TestCheckpointProgressFailurePreservesCommittedOutcome(t *testing.T) {
 			boundary.change = func(context.Context) (string, bool, error) {
 				progressCalls++
 				assert.Nil(t, model.snapshot().baseline, "adopt the committed checkpoint before publication")
-				assert.Nil(t, owner.(*checkpointOwner).compactionInput)
+				control := &owner.(*checkpointOwner).control
+				assert.Nil(t, control.queuedInput, "the command has left the queued state before progress publication")
 				return "", false, errors.New("progress unavailable")
 			}
 			turns := newToolTurns(reg, model, ms, boundary)

@@ -64,11 +64,12 @@ func (a *compactionUsage) add(resp *llmwire.Response) {
 // focusSection renders the optional /compact focus as a prompt section, or "" when
 // no focus is set (bare /compact and every auto-compaction).
 func (s *checkpointOwner) focusSection() string {
-	if s.compactionFocus == "" {
+	focus := s.control.focus()
+	if focus == "" {
 		return ""
 	}
 
-	return "\n\nPriority for this summary: " + s.compactionFocus
+	return "\n\nPriority for this summary: " + focus
 }
 
 // checkpoint adopts only a validated, atomically committed replacement.
@@ -192,8 +193,6 @@ func (s *checkpointOwner) compactLocked(
 
 	if commandInput == nil {
 		s.compactionSummaryDBID = newRowIDs[headerSize]
-	} else {
-		s.compactionInput = nil
 	}
 
 	if err := s.publishCompactionProgress(ctx); err != nil {

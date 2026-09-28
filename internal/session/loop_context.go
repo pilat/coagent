@@ -38,11 +38,22 @@ func (s *checkpointOwner) apply(ctx context.Context, notify func(context.Context
 		return outcome
 	}
 
-	explicit := false
-	commandInput := s.compactionCommandInput()
+	attempt := s.control.claim()
+	explicit := attempt != nil
+	var commandInput *PendingInput
+	if attempt != nil {
+		commandInput = attempt.input
+		if attempt.terminal != nil {
+			if err := s.finishCompactionCommand(ctx, *commandInput,
+				attempt.terminal.phase, attempt.terminal.content); err != nil {
+				log.Warn("finish_compaction_command_failed", zap.Error(err))
+				return attempt.terminal.outcome
+			}
 
-	if s.consumePendingCompaction() {
-		explicit = true
+			s.control.finish(attempt)
+			s.notify(ctx, attempt.terminal.content)
+			return attempt.terminal.outcome
+		}
 	}
 
 	window := s.models.snapshot().contextWindow
@@ -63,7 +74,9 @@ func (s *checkpointOwner) apply(ctx context.Context, notify func(context.Context
 	// parked explanation, never with a failure claim (and spends no model call).
 	if s.budgetGate != nil {
 		if err := s.budgetGate.Admit(ctx, time.Now().UTC()); errors.Is(err, ErrBudgetCheckpoint) {
-			s.finishParkedCompaction(ctx, commandInput)
+			if s.finishParkedCompaction(ctx, commandInput) {
+				s.control.finish(attempt)
+			}
 
 			outcome.budgetFired = true
 
@@ -96,9 +109,6 @@ func (s *checkpointOwner) apply(ctx context.Context, notify func(context.Context
 	outcome, err := s.checkpoint(ctx, durableCommand)
 	ok := outcome.committed
 
-	// The focus is one-shot: it described this request, not the next one.
-	s.setCompactionFocus("")
-
 	terminal := ""
 
 	switch {
@@ -119,6 +129,9 @@ func (s *checkpointOwner) apply(ctx context.Context, notify func(context.Context
 	if terminal != "" {
 		if commandInput != nil && (!ok || durableCommand == nil) {
 			phase := compactionOutcomePhase(ok, err)
+			attempt.terminal = &checkpointTerminal{
+				phase: phase, content: terminal, outcome: outcome,
+			}
 			if finishErr := s.finishCompactionCommand(ctx, *commandInput, phase, terminal); finishErr != nil {
 				log.Warn("finish_compaction_command_failed", zap.Error(finishErr))
 				return outcome
@@ -126,7 +139,7 @@ func (s *checkpointOwner) apply(ctx context.Context, notify func(context.Context
 		}
 
 		if commandInput != nil {
-			s.clearCompactionCommandInput()
+			s.control.finish(attempt)
 			s.notify(ctx, terminal)
 		} else if ok && err == nil {
 			s.notifyAutoCompactionOutcome(ctx, terminal)
@@ -134,6 +147,7 @@ func (s *checkpointOwner) apply(ctx context.Context, notify func(context.Context
 			s.notifyPersistent(ctx, terminal)
 		}
 	}
+	s.control.finish(attempt)
 
 	// An explicit request neither counts against the cap nor clears it.
 	if !explicit {
@@ -157,24 +171,21 @@ func compactionOutcomePhase(ok bool, err error) string {
 
 // finishParkedCompaction resolves a compaction request against a fired budget:
 // the command gets its durable outcome, the root stays parked.
-func (s *checkpointOwner) finishParkedCompaction(ctx context.Context, commandInput *PendingInput) {
+func (s *checkpointOwner) finishParkedCompaction(ctx context.Context, commandInput *PendingInput) bool {
 	log := logger.Ctx(ctx).Named("session.compaction")
 	const parkedNotice = "⏸ Budget checkpoint reached — the session is parked. Send a message to resume."
-
 	if commandInput != nil {
 		if err := s.finishCompactionCommand(ctx, *commandInput, "parked", parkedNotice); err != nil {
 			log.Warn("finish_compaction_command_failed", zap.Error(err))
-
-			return
+			return false
 		}
-
-		s.clearCompactionCommandInput()
 		s.notify(ctx, parkedNotice)
-
-		return
+		return true
 	}
 
 	s.notifyPersistent(ctx, parkedNotice)
+
+	return true
 }
 
 // notifyAutoCompactionOutcome keys the success row to its summary message, so a
