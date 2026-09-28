@@ -37,7 +37,6 @@ type Link struct {
 	Depth            int
 	State            State
 	DeliveredAt      int64
-	DeliveredMsgID   int64
 	DeliveredInputID int64
 	CreatedAt        int64
 	ActivationSeq    int64

@@ -63,10 +63,13 @@ func TestMigrate_SessionsAgentTypeRebuildPreservesExistingDB(t *testing.T) {
 		WHERE type='index' AND tbl_name='sessions' ORDER BY name`
 
 	rowsBefore := dumpRows(t, db, `SELECT * FROM sessions ORDER BY id`)
-	// Migration 28 later drops compaction_brief; the rebuild comparison uses the
-	// columns both sides have after the full run.
+	// Later migrations drop legacy columns; compare the fields that survive.
 	for i := range rowsBefore {
 		delete(rowsBefore[i], "compaction_brief")
+		if rowsBefore[i]["id"].String == "1" {
+			assert.Equal(t, "1", rowsBefore[i]["master_enabled"].String)
+		}
+		delete(rowsBefore[i], "master_enabled")
 	}
 	indexesBefore := dumpRows(t, db, sessionIndexes)
 	require.Len(t, indexesBefore, 1, "idx_sessions_project_id is the only index on sessions")

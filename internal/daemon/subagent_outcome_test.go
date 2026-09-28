@@ -259,7 +259,6 @@ func TestCascadeKill_KilledTreeSuppressesTerminalBackgroundCompletion(t *testing
 	require.NotNil(t, link)
 	assert.Positive(t, link.DeliveredAt)
 	assert.Zero(t, link.DeliveredInputID)
-	assert.Zero(t, link.DeliveredMsgID)
 	_, err = h.sessStore.PeekPending(h.ctx, parent.ID)
 	require.ErrorIs(t, err, sessionstore.ErrNoPendingInput)
 }

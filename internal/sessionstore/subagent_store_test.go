@@ -62,19 +62,19 @@ func seedLink(t *testing.T, db *sql.DB, parentID, childID int64, taskCallID stri
 	require.NoError(t, err)
 }
 
-// readLinkDelivery reads the delivery markers DeliverCompletion stamps.
-func readLinkDelivery(t *testing.T, db *sql.DB, childID int64) (int64, int64) {
+// readLinkDelivery reads the delivery marker DeliverCompletion stamps.
+func readLinkDelivery(t *testing.T, db *sql.DB, childID int64) int64 {
 	t.Helper()
 
-	var deliveredAt, deliveredMsgID sql.NullInt64
+	var deliveredAt sql.NullInt64
 	err := db.QueryRowContext(
 		context.Background(),
-		`SELECT delivered_at, delivered_msg_id FROM subagent_links WHERE child_id = ?`,
+		`SELECT delivered_at FROM subagent_links WHERE child_id = ?`,
 		childID,
-	).Scan(&deliveredAt, &deliveredMsgID)
+	).Scan(&deliveredAt)
 	require.NoError(t, err)
 
-	return deliveredAt.Int64, deliveredMsgID.Int64
+	return deliveredAt.Int64
 }
 
 func TestStore_CreateSubagentSession_PersistsRootAndModel(t *testing.T) {
@@ -255,9 +255,8 @@ func TestSubagentStore_DeliverCompletion_CAS(t *testing.T) {
 	assert.False(t, won2, "second delivery loses the CAS")
 	assert.Empty(t, ids2, "the loser inserts nothing")
 
-	deliveredAt, deliveredMsgID := readLinkDelivery(t, db, childID)
+	deliveredAt := readLinkDelivery(t, db, childID)
 	assert.Positive(t, deliveredAt)
-	assert.Equal(t, ids[0], deliveredMsgID, "delivered_msg_id is the winner's last insert")
 
 	// Only the winning delivery's message lands in the parent transcript — the
 	// CAS-loser's insert never ran (row count unchanged).
@@ -337,9 +336,8 @@ func TestSubagentStore_DeliverCompletionRejectsWrongParent(t *testing.T) {
 	assert.False(t, won)
 	require.ErrorContains(t, err, "belongs to parent")
 
-	deliveredAt, deliveredMsgID := readLinkDelivery(t, db, childID)
+	deliveredAt := readLinkDelivery(t, db, childID)
 	assert.Zero(t, deliveredAt, "a rejected delivery must leave the CAS available for the real parent")
-	assert.Zero(t, deliveredMsgID)
 
 	messages, err := s.LoadActiveMessages(ctx, otherParent.ID)
 	require.NoError(t, err)
@@ -361,9 +359,8 @@ func TestSubagentStore_DeliverCompletionRejectsEmptyCompletion(t *testing.T) {
 	assert.False(t, won)
 	require.ErrorContains(t, err, "no messages")
 
-	deliveredAt, deliveredMsgID := readLinkDelivery(t, db, childID)
+	deliveredAt := readLinkDelivery(t, db, childID)
 	assert.Zero(t, deliveredAt, "an empty completion must remain retryable")
-	assert.Zero(t, deliveredMsgID)
 }
 
 func TestStore_InsertInternalToolNotificationPairOnce(t *testing.T) {

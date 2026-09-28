@@ -52,7 +52,7 @@ func (s SessionStatus) valid() bool {
 	}
 }
 
-const sessionColumns = `id, project_id, model, reasoning_level, master_enabled, attributes, agent_type, parent_id, iteration, status, todo_items, created_at, updated_at, killed_at, root_id, model_input_generation, model_input_boundary, context_baseline_model, context_baseline_prompt_tokens, context_baseline_message_count, completion_check_candidate_id, manager_reply_pending, empty_stop_streak, completion_check_confirmed_answer_id`
+const sessionColumns = `id, project_id, model, reasoning_level, attributes, agent_type, parent_id, iteration, status, todo_items, created_at, updated_at, killed_at, root_id, model_input_generation, model_input_boundary, context_baseline_model, context_baseline_prompt_tokens, context_baseline_message_count, completion_check_candidate_id, manager_reply_pending, empty_stop_streak, completion_check_confirmed_answer_id`
 
 // errSessionNotFound signals a lookup query matched no row.
 var errSessionNotFound = errors.New("session not found")
@@ -63,7 +63,6 @@ type SessionRecord struct {
 	ProjectID      int64
 	Model          string
 	ReasoningLevel string
-	MasterEnabled  bool
 	Attributes     map[string]any
 	AgentType      string
 	ParentID       int64
@@ -1163,7 +1162,6 @@ func scanSessionFrom(sc rowScanner) (*SessionRecord, error) {
 	var rec SessionRecord
 	var model, reasoning, attrsRaw sql.NullString
 	var agentType, status, todoItems sql.NullString
-	var masterEnabled sql.NullBool
 	var projectID, parentID, iteration, rootID sql.NullInt64
 	var killedAt sql.NullTime
 	var boundary sql.NullInt64
@@ -1172,7 +1170,7 @@ func scanSessionFrom(sc rowScanner) (*SessionRecord, error) {
 	var emptyStopStreak sql.NullInt64
 	var confirmedAnswerID sql.NullInt64
 
-	err := sc.Scan(&rec.ID, &projectID, &model, &reasoning, &masterEnabled, &attrsRaw,
+	err := sc.Scan(&rec.ID, &projectID, &model, &reasoning, &attrsRaw,
 		&agentType, &parentID, &iteration, &status, &todoItems,
 		&rec.CreatedAt, &rec.UpdatedAt, &killedAt, &rootID,
 		&rec.ModelInputGeneration, &boundary,
@@ -1186,7 +1184,6 @@ func scanSessionFrom(sc rowScanner) (*SessionRecord, error) {
 	rec.Model = model.String
 	rec.ReasoningLevel = reasoning.String
 
-	rec.MasterEnabled = masterEnabled.Valid && masterEnabled.Bool
 	rec.Attributes = unmarshalAttributes(attrsRaw.String)
 	rec.AgentType = agentType.String
 	rec.ParentID = parentID.Int64

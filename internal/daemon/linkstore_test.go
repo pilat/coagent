@@ -121,7 +121,6 @@ func TestLinkStore_DeliverBackgroundCompletionToInbox(t *testing.T) {
 	updated, err := links.GetLink(ctx, childID)
 	require.NoError(t, err)
 	require.Positive(t, updated.DeliveredInputID)
-	assert.Zero(t, updated.DeliveredMsgID)
 
 	input, err := ss.PeekPending(ctx, parent.ID)
 	require.NoError(t, err)
@@ -284,7 +283,6 @@ func TestLinkStore_ResetRunning(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, subagent.StateRunning, link.State)
 	assert.Zero(t, link.DeliveredAt)
-	assert.Zero(t, link.DeliveredMsgID)
 	// result/outcome are intentionally left stale until the next terminalization.
 	assert.Equal(t, "answer", link.Result)
 }

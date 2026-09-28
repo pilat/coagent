@@ -150,7 +150,7 @@ func (s *transactions) TryFinalizeActivation(
 func (s *transactions) RearmDeliveredWithPendingInput(ctx context.Context, childID int64) (bool, error) {
 	execResult, err := s.db.ExecContext(ctx, `UPDATE subagent_links
 		SET state = 'running', blocking = 0, activation_seq = activation_seq + 1,
-			delivered_at = NULL, delivered_msg_id = NULL, delivered_input_id = NULL
+			delivered_at = NULL, delivered_input_id = NULL
 		WHERE child_id = ? AND delivered_at IS NOT NULL
 			AND ((state = 'completed' AND EXISTS (SELECT 1 FROM session_inbox input
 				WHERE input.session_id = subagent_links.child_id AND input.state = 'pending'))
@@ -357,7 +357,7 @@ func (s *transactions) DeliverCompletion(
 		return nil, false, nil
 	}
 
-	messageIDs, err := insertCompletionMessages(ctx, tx, parentID, childID, messages)
+	messageIDs, err := insertCompletionMessages(ctx, tx, parentID, messages)
 	if err != nil {
 		return nil, false, err
 	}
@@ -397,7 +397,7 @@ func validateCompletionParent(ctx context.Context, tx *sql.Tx, childID, parentID
 func insertCompletionMessages(
 	ctx context.Context,
 	tx *sql.Tx,
-	parentID, childID int64,
+	parentID int64,
 	messages []*transcript.Message,
 ) ([]int64, error) {
 	ids := make([]int64, 0, len(messages))
@@ -408,12 +408,6 @@ func insertCompletionMessages(
 		}
 
 		ids = append(ids, id)
-	}
-
-	_, err := tx.ExecContext(ctx, `UPDATE subagent_links SET delivered_msg_id = ? WHERE child_id = ?`,
-		ids[len(ids)-1], childID)
-	if err != nil {
-		return nil, fmt.Errorf("set delivered_msg_id: %w", err)
 	}
 
 	return ids, nil

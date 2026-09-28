@@ -136,7 +136,10 @@ func TestMigrationsApplyToAnExistingDatabase(t *testing.T) {
 		// 00043 added the confirmed-answer pointer to the candidate row.
 		`ALTER TABLE sessions DROP COLUMN completion_check_confirmed_answer_id`,
 		// 00044 drops the column 00033 added; net effect across both is none.
-		`DELETE FROM goose_db_version WHERE version_id BETWEEN 16 AND 44`,
+		// Restore the columns 00045 drops before replaying that migration.
+		`ALTER TABLE sessions ADD COLUMN master_enabled BOOLEAN DEFAULT FALSE`,
+		`ALTER TABLE subagent_links ADD COLUMN delivered_msg_id INTEGER`,
+		`DELETE FROM goose_db_version WHERE version_id BETWEEN 16 AND 45`,
 	} {
 		_, err = db.ExecContext(ctx, stmt)
 		require.NoError(t, err, stmt)
