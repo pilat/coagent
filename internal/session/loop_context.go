@@ -40,6 +40,7 @@ func (s *checkpointOwner) apply(ctx context.Context, notify func(context.Context
 
 	attempt := s.control.claim()
 	explicit := attempt != nil
+
 	var commandInput *PendingInput
 	if attempt != nil {
 		commandInput = attempt.input
@@ -52,6 +53,7 @@ func (s *checkpointOwner) apply(ctx context.Context, notify func(context.Context
 
 			s.control.finish(attempt)
 			s.notify(ctx, attempt.terminal.content)
+
 			return attempt.terminal.outcome
 		}
 	}
@@ -129,6 +131,7 @@ func (s *checkpointOwner) apply(ctx context.Context, notify func(context.Context
 	if terminal != "" {
 		if commandInput != nil && (!ok || durableCommand == nil) {
 			phase := compactionOutcomePhase(ok, err)
+
 			attempt.terminal = &checkpointTerminal{
 				phase: phase, content: terminal, outcome: outcome,
 			}
@@ -147,6 +150,7 @@ func (s *checkpointOwner) apply(ctx context.Context, notify func(context.Context
 			s.notifyPersistent(ctx, terminal)
 		}
 	}
+
 	s.control.finish(attempt)
 
 	// An explicit request neither counts against the cap nor clears it.
@@ -173,13 +177,16 @@ func compactionOutcomePhase(ok bool, err error) string {
 // the command gets its durable outcome, the root stays parked.
 func (s *checkpointOwner) finishParkedCompaction(ctx context.Context, commandInput *PendingInput) bool {
 	log := logger.Ctx(ctx).Named("session.compaction")
+
 	const parkedNotice = "⏸ Budget checkpoint reached — the session is parked. Send a message to resume."
 	if commandInput != nil {
 		if err := s.finishCompactionCommand(ctx, *commandInput, "parked", parkedNotice); err != nil {
 			log.Warn("finish_compaction_command_failed", zap.Error(err))
 			return false
 		}
+
 		s.notify(ctx, parkedNotice)
+
 		return true
 	}
 

@@ -117,7 +117,7 @@ func TestCheckpointControl_RequestDuringSummarizationRunsLater(t *testing.T) {
 	assert.False(t, agent.contexts.requested())
 	active, err = store.LoadActiveMessages(ctx, sessionID)
 	require.NoError(t, err)
-	assert.Positive(t, len(active))
+	assert.NotEmpty(t, active)
 	assert.True(t, hasSummaryRow(agent.ms.getMessages()))
 }
 
