@@ -52,6 +52,7 @@ func TestToolTurnAdoptsCommittedGrantBeforeProgressFailure(t *testing.T) {
 				model := newTestModelRuntime(&mockLLMClient{}, store, sessionID)
 				grant := &tool.ActivationGrant{SessionID: sessionID, InputID: 7, ToolID: "set_budget"}
 				agent := &svc{ms: ms, turns: newToolTurns(reg, model, ms, progress), currentActivation: grant}
+				agent.Owner = newLiveCallOwner(agent)
 				runner := &loopRunner{agent: agent, result: &loopResult{}, log: zap.NewNop()}
 				_, err := runner.handlePreviousResult(t.Context())
 				require.Error(t, err)

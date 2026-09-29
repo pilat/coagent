@@ -82,8 +82,8 @@ func (s *store) ArmBudget(
 		return nil, nil, err
 	}
 
-	commit, err := insertDirectOutput(ctx, tx, mutation.RootSessionID, owner,
-		mutation.ToolCallID, 0, mutation.Receipt)
+	commit, err := insertDirectOutputKey(ctx, tx, mutation.RootSessionID, owner,
+		fmt.Sprintf("budget:input:%d:receipt", mutation.InputID), mutation.Receipt)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -159,8 +159,8 @@ func (s *store) ClearBudget(
 		return nil, nil, err
 	}
 
-	commit, err := insertDirectOutput(ctx, tx, mutation.RootSessionID, owner,
-		mutation.ToolCallID, 0, mutation.Receipt)
+	commit, err := insertDirectOutputKey(ctx, tx, mutation.RootSessionID, owner,
+		fmt.Sprintf("budget:input:%d:receipt", mutation.InputID), mutation.Receipt)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -243,8 +243,8 @@ func replayBudgetMutation(
 		return nil, nil, fmt.Errorf("load replayed budget: %w", err)
 	}
 
-	commit, err := insertDirectOutput(ctx, tx, mutation.RootSessionID, owner,
-		mutation.ToolCallID, 0, mutation.Receipt)
+	commit, err := insertDirectOutputKey(ctx, tx, mutation.RootSessionID, owner,
+		fmt.Sprintf("budget:input:%d:receipt", mutation.InputID), mutation.Receipt)
 	if err != nil {
 		return nil, nil, err
 	}

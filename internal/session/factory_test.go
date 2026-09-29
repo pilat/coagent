@@ -9,6 +9,7 @@ import (
 
 	"github.com/pilat/coagent/internal/config"
 	"github.com/pilat/coagent/internal/llm"
+	"github.com/pilat/coagent/internal/sessioncalls"
 	"github.com/pilat/coagent/internal/tool/builtin"
 )
 
@@ -47,9 +48,9 @@ func TestFactoryCreateRequiresOutputStoreForManagedRoot(t *testing.T) {
 	require.ErrorContains(t, err, "output store is required")
 }
 
-func TestOpenTranscriptNeedsNoModelOrTools(t *testing.T) {
+func TestOpenStoredCallsNeedsNoModelOrTools(t *testing.T) {
 	_, store, sessionID := newFinalOutputStore(t)
-	sess, err := OpenTranscript(t.Context(), store, store, sessionID, nil)
+	sess, err := sessioncalls.OpenStored(t.Context(), store, sessionID, nil)
 	require.NoError(t, err)
 	assert.Empty(t, sess.PendingExternalCalls())
 	require.NoError(t, sess.SettleStoppedCalls(t.Context(), "stopped"))

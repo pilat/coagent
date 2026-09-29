@@ -26,45 +26,40 @@ func repairTranscriptExcluding(messages []llmwire.Message, pendingCallIDs map[st
 		return messages
 	}
 
-	allToolCallIDs := make(map[string]bool)
+	pending := make(map[string][]int)
+	resultsByTurn := make(map[int]map[string]llmwire.Message)
 
-	for _, msg := range messages {
+	for i, msg := range messages {
 		if msg.Role == llmwire.RoleAssistant {
+			seen := make(map[string]bool)
 			for _, tc := range msg.ToolCalls {
-				if tc.ID != "" {
-					allToolCallIDs[tc.ID] = true
+				if tc.ID != "" && !seen[tc.ID] {
+					pending[tc.ID] = append(pending[tc.ID], i)
+					seen[tc.ID] = true
 				}
 			}
 		}
-	}
-
-	// Index tool results by their ToolCallID for reordering
-	resultsByCallID := make(map[string]llmwire.Message)
-	seenResultIDs := make(map[string]bool)
-
-	for _, msg := range messages {
 		if msg.Role == llmwire.RoleTool && msg.ToolCallID != "" {
-			if seenResultIDs[msg.ToolCallID] {
-				continue // duplicate — keep first only
+			turns := pending[msg.ToolCallID]
+			if len(turns) == 0 {
+				continue
 			}
-
-			if allToolCallIDs[msg.ToolCallID] {
-				resultsByCallID[msg.ToolCallID] = msg
-				seenResultIDs[msg.ToolCallID] = true
+			turn := turns[len(turns)-1]
+			pending[msg.ToolCallID] = turns[:len(turns)-1]
+			if resultsByTurn[turn] == nil {
+				resultsByTurn[turn] = make(map[string]llmwire.Message)
 			}
-			// else: orphaned — will be dropped
+			resultsByTurn[turn][msg.ToolCallID] = msg
 		}
 	}
 
 	// Rebuild: walk messages, emit assistant + ordered results, skip bare tool messages
 	result := make([]llmwire.Message, 0, len(messages))
-	emittedResults := make(map[string]bool)
-
-	for _, msg := range messages {
+	for i, msg := range messages {
 		switch {
 		case msg.Role == llmwire.RoleAssistant && len(msg.ToolCalls) > 0:
 			result = append(result, msg)
-			emitToolResults(&result, msg.ToolCalls, resultsByCallID, emittedResults, pendingCallIDs)
+			emitToolResults(&result, msg.ToolCalls, resultsByTurn[i], pendingCallIDs)
 
 		case msg.Role == llmwire.RoleTool && msg.ToolCallID != "":
 			// Skip — already handled above (reordered or dropped)
@@ -88,10 +83,10 @@ func emitToolResults(
 	result *[]llmwire.Message,
 	toolCalls []llmwire.ToolCall,
 	resultsByCallID map[string]llmwire.Message,
-	emittedResults map[string]bool,
 	pendingCallIDs map[string]bool,
 ) {
 	incomplete := hasIncompleteToolCalls(toolCalls)
+	emittedResults := make(map[string]bool)
 
 	for _, tc := range toolCalls {
 		if tc.ID == "" || emittedResults[tc.ID] {

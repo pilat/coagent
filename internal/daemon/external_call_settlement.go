@@ -2,9 +2,11 @@ package daemon
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/pilat/coagent/internal/session"
+	"github.com/pilat/coagent/internal/sessioncalls"
 	"github.com/pilat/coagent/internal/sessionstore"
 	"github.com/pilat/coagent/internal/tool"
 )
@@ -14,6 +16,11 @@ func (s *externalCalls) SettleStopped(ctx context.Context, sessionID int64) erro
 	// The producer ledger is in-memory, so a stop whose second phase runs in a
 	// later image owns nothing; the transcript is the only complete list.
 	pending, err := s.storedExternalCalls(ctx, sessionID)
+	if errors.Is(err, sessioncalls.ErrAmbiguousCallID) {
+		s.staged.clear(sessionID)
+		return nil
+	}
+
 	if err != nil {
 		return err
 	}
@@ -28,6 +35,11 @@ func (s *externalCalls) SettleStopped(ctx context.Context, sessionID int64) erro
 	}
 
 	if err := sess.SettleStoppedCalls(ctx, "Stopped by user."); err != nil {
+		if errors.Is(err, sessioncalls.ErrAmbiguousCallID) {
+			s.staged.clear(sessionID)
+			return nil
+		}
+
 		return fmt.Errorf("settle stopped calls for session %d: %w", sessionID, err)
 	}
 
@@ -102,18 +114,28 @@ func (s *externalCalls) storedInterruptedCalls(
 		return nil, fmt.Errorf("load transcript of session %d: %w", sessionID, err)
 	}
 
-	return unresolvedStoredCalls(stored, func(name string) bool {
-		return !tool.IsExternalCall(name)
-	})
+	snapshot, err := sessioncalls.ScanStored(stored)
+	if err != nil {
+		return nil, fmt.Errorf("scan transcript of session %d: %w", sessionID, err)
+	}
+
+	pending := make([]session.PendingToolCall, 0, len(snapshot.CurrentUnresolved))
+	for _, call := range snapshot.GlobalUnresolved {
+		if snapshot.CurrentUnresolved[call.ID] == call.Name && !tool.IsExternalCall(call.Name) {
+			pending = append(pending, session.PendingToolCall{ID: call.ID, Name: call.Name})
+		}
+	}
+
+	return pending, nil
 }
 
-func (s *externalCalls) openTranscript(ctx context.Context, sessionID int64) (session.TranscriptSession, error) {
+func (s *externalCalls) openTranscript(ctx context.Context, sessionID int64) (sessioncalls.TranscriptSession, error) {
 	calls, err := s.Pending(ctx, sessionID)
 	if err != nil {
 		return nil, err
 	}
 
-	transcript, err := session.OpenTranscript(ctx, s.runtimeStore, nil, sessionID, calls)
+	transcript, err := sessioncalls.OpenStored(ctx, s.runtimeStore, sessionID, calls)
 	if err != nil {
 		return nil, fmt.Errorf("open session transcript: %w", err)
 	}

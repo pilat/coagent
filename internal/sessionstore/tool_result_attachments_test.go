@@ -5,6 +5,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/pilat/coagent/internal/transcript"
 )
 
 func TestInsertToolResultSetOnce_PreservesAttachmentsAcrossReloadAndReplay(t *testing.T) {
@@ -13,9 +15,13 @@ func TestInsertToolResultSetOnce_PreservesAttachmentsAcrossReloadAndReplay(t *te
 	image.Attachments = []byte(
 		`[{"path":"/images/a.png","read_root":"/images","read_root_id":"root-1","mime":"image/png","size":42,"width":10,"height":20}]`,
 	)
+	imageEntry, err := toolResultEntry(ctx, store, sessionID, image, nil)
+	require.NoError(t, err)
+	failedEntry, err := toolResultEntry(ctx, store, sessionID, toolResultRow("failed", "read", "failed read", true), nil)
+	require.NoError(t, err)
 	entries := []ToolResultEntry{
-		{Message: image},
-		{Message: toolResultRow("failed", "read", "failed read", true)},
+		imageEntry,
+		failedEntry,
 	}
 	ids, _, err := store.InsertToolResultSetOnce(ctx, sessionID, entries)
 	require.NoError(t, err)
@@ -24,10 +30,16 @@ func TestInsertToolResultSetOnce_PreservesAttachmentsAcrossReloadAndReplay(t *te
 	reloaded := NewStore(store.db)
 	rows, err := reloaded.LoadActiveMessages(ctx, sessionID)
 	require.NoError(t, err)
-	require.Len(t, rows, 2)
-	assert.Equal(t, ids[0], rows[0].ID)
-	assert.Equal(t, image.Attachments, rows[0].Attachments)
-	assert.True(t, rows[1].ToolError)
+	toolRows := make([]*transcript.Message, 0, 2)
+	for _, row := range rows {
+		if row.Role == "tool" {
+			toolRows = append(toolRows, row)
+		}
+	}
+	require.Len(t, toolRows, 2)
+	assert.Equal(t, ids[0], toolRows[0].ID)
+	assert.Equal(t, image.Attachments, toolRows[0].Attachments)
+	assert.True(t, toolRows[1].ToolError)
 
 	seedPendingCheck(t, store.db, sessionID)
 	replayed, _, err := reloaded.InsertToolResultSetOnce(ctx, sessionID, entries)
@@ -66,12 +78,16 @@ func TestInsertToolResultSetOnce_AttachmentReplayIdentity(t *testing.T) {
 			ctx, store, sessionID := newToolErrorStore(t)
 			message := toolResultRow("image", "read", "image result", false)
 			message.Attachments = tt.initial
-			ids, _, err := store.InsertToolResultSetOnce(ctx, sessionID, []ToolResultEntry{{Message: message}})
+			entry, err := toolResultEntry(ctx, store, sessionID, message, nil)
+			require.NoError(t, err)
+			ids, _, err := store.InsertToolResultSetOnce(ctx, sessionID, []ToolResultEntry{entry})
 			require.NoError(t, err)
 
 			replay := *message
 			replay.Attachments = tt.replay
-			replayed, _, err := store.InsertToolResultSetOnce(ctx, sessionID, []ToolResultEntry{{Message: &replay}})
+			replayEntry := entry
+			replayEntry.Message = &replay
+			replayed, _, err := store.InsertToolResultSetOnce(ctx, sessionID, []ToolResultEntry{replayEntry})
 			if tt.conflict {
 				require.ErrorIs(t, err, ErrOutputConflict)
 			} else {
@@ -86,15 +102,21 @@ func TestInsertToolResultSetOnce_AttachmentConflictRollsBackFreshSettlement(t *t
 	ctx, store, sessionID := newToolErrorStore(t)
 	image := toolResultRow("image", "read", "image result", false)
 	image.Attachments = []byte(`[{"path":"/images/a.png","mime":"image/png","size":42}]`)
-	_, _, err := store.InsertToolResultSetOnce(ctx, sessionID, []ToolResultEntry{{Message: image}})
+	imageEntry, err := toolResultEntry(ctx, store, sessionID, image, nil)
+	require.NoError(t, err)
+	_, _, err = store.InsertToolResultSetOnce(ctx, sessionID, []ToolResultEntry{imageEntry})
 	require.NoError(t, err)
 	seedPendingCheck(t, store.db, sessionID)
 
 	conflict := *image
 	conflict.Attachments = []byte(`[{"path":"/images/b.png","mime":"image/png","size":42}]`)
+	conflictEntry := imageEntry
+	conflictEntry.Message = &conflict
+	freshEntry, err := toolResultEntry(ctx, store, sessionID, toolResultRow("fresh", "read", "fresh result", false), nil)
+	require.NoError(t, err)
 	_, _, err = store.InsertToolResultSetOnce(ctx, sessionID, []ToolResultEntry{
-		{Message: toolResultRow("fresh", "read", "fresh result", false)},
-		{Message: &conflict},
+		freshEntry,
+		conflictEntry,
 	})
 	require.ErrorIs(t, err, ErrOutputConflict)
 

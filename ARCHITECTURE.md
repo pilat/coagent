@@ -103,6 +103,7 @@ does not imply a tier except where it expresses an implementation variant.
 - `cmd/releasebuilder` — build-time deterministic archive and checksum composition root. Accepts exactly the two Linux tuples (`linux-amd64`, `linux-arm64`), one binary each.
 - `internal/schedule` — durable schedules, sleep ownership and scheduled delivery execution.
 - `internal/session` — isolated agent loop, tool gating and transcript projection.
+- `internal/sessioncalls` — shared active-transcript call identity, unresolved-call classification and durable call settlement.
 - `internal/sessionbus` — in-process session-event subscriptions and non-blocking fan-out.
 - `internal/sessionevent` — session-to-controller notification vocabulary.
 - `internal/sessionlifecycle` — runner/admission supervision, tree fencing, durable stop coordination and budget deadline reconciliation.
@@ -153,9 +154,14 @@ persistence as separate contracts; manager output cannot be enabled without the
 latter. Every executable activation uses the same response-disposition contract
 for accepted attempts. Live tool execution and transcript-only call settlement
 share the runtime store's atomic result-set transaction even without presentation.
-Fresh results invalidate completion state; identical replay preserves newer
-state, and conflicting content, tool identity, failure or attachments is rejected.
-Transcript-only settlement constructs no model client or tool stack.
+Fresh results invalidate completion state; replay of the same saved invocation
+preserves newer state, and conflicting content, tool identity, failure or
+attachments is rejected. The saved assistant row and call index identify the
+durable invocation; provider IDs remain model-visible pairing fields. Legacy
+results retain their rows and replay only when ownership is unambiguous.
+`sessioncalls` applies one pending-call scan in live execution
+and store-backed recovery. Transcript-only settlement constructs no model client
+or tool stack.
 Its in-memory model messages contain no database fields: a positional
 row-ID vector travels with the projection across factory resume and compaction,
 then keys durable replacement and idempotent final output.
@@ -288,7 +294,7 @@ or accepted-input generation; retries and daemon restarts cannot enqueue another
 receipt for that work. Stop/kill fences suppress late failure receipts. A fresh
 user action or explicit daemon restart may retry after configuration repair.
 Teardown releases an abandoned configuration apply and settles its durable call
-under the lifecycle fence through a transcript-only session, without restarting
+under the lifecycle fence through the store-backed call owner, without restarting
 the failed loop. Its grant expires before the result is written; a failed result
 write retains its producer for the next explicit activation.
 
@@ -346,8 +352,13 @@ in-loop tool call as a typed failure ([ADR-0059](docs/adr/0059-pending-tool-call
 the loop never re-executes an operation the model did not watch complete, and
 the model retries explicitly. A stopped link is retained for explicit follow-up
 but is not automatically resumed.
+The same provider call ID may identify a later invocation after the previous
+one has a result, including after compaction. Overlapping pending IDs cannot be
+paired; a fresh malformed attempt is paid but inactive, no tool executes, and
+the model receives a bounded retry unless the budget fired
+([ADR-0072](docs/adr/0072-share-tool-call-identity-between-live-and-recovery.md)).
 `/stop` is stronger than an ordinary interruption: it fences an active tree,
-cancels and joins its runners, settles each active unresolved call in the
+cancels and joins its runners, settles each unambiguous unresolved call in the
 append-only transcript, and only then parks it. An explicit manager-owned stop
 commits a replaceable start row with the fence and, after every descendant
 obligation settles, one terminal transaction releases an armed budget, moves the
@@ -582,6 +593,12 @@ matches the still-pending call and tool identity. The result enters the durable
 inbox, then the append-only transcript at an activation boundary. This exactness
 is what prevents stale timers, child completions or restart verdicts from
 answering a newer call.
+The call owner rejects only overlapping unresolved IDs, including two equal
+IDs in one assistant response. A completed older call cannot answer a newer
+one: result and direct-output replay are scoped to the saved invocation, and
+the subagent pending lookup excludes delivered historical links. External work
+remains pending across newer turns; interrupted in-loop recovery considers only
+the latest assistant turn.
 
 ### Subagent creation and completion
 
@@ -879,7 +896,8 @@ decisions. Child-delivery transactions receive the canonical completion-check
 invalidator at construction and execute it within their existing transaction.
 Within daemon, the external-call coordinator owns staged producer claims,
 config handoff and activation settlement, the merged pending-call projection,
-and per-session transcript settlement. Daemon invokes those complete operations
+and orchestration of per-session call settlement through `sessioncalls`.
+Daemon invokes those complete operations
 under its existing startup and tree-fence ordering. Temporary orphan adoption
 is released even when settlement fails; owed-result ownership survives failed
 delivery until the transcript accepts it. Config appliers are supplied once at
@@ -901,6 +919,8 @@ The loop retains acquisition and terminal settlement of that activation.
 The checkpoint owner holds compaction command, deferral and attempt state and
 performs selection, summarization, positioned replacement and output settlement
 over the same transcript primitive. The loop selects its safe execution point.
+The live session embeds one `sessioncalls` owner over its message store; daemon
+recovery opens the same capability over durable rows without a runnable session.
 A committed checkpoint adopts its identities and invalidates measurements even
 when progress publication fails; its budget verdict still parks execution
 ([ADR-0068](docs/adr/0068-session-operations-own-complete-turns-and-checkpoints.md)).

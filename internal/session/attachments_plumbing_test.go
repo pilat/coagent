@@ -116,6 +116,7 @@ func TestToolImages_DistinctReadsDoNotTripLoopDetector(t *testing.T) {
 		// real read embeds the resolved path in its success text (D6)
 		stub.result.Output = "[/tmp/" + name + "]\n<image>...</image>"
 
+		require.NoError(t, s.ms.addAssistantMessage(ctx, &llmwire.Response{ToolCalls: calls}))
 		require.NoError(t, executeTestToolCalls(ctx, s.turns, calls))
 	}
 

@@ -9,22 +9,23 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/pilat/coagent/internal/llmwire"
+	"github.com/pilat/coagent/internal/sessioncalls"
 	"github.com/pilat/coagent/internal/sessionstore"
 	"github.com/pilat/coagent/internal/transcript"
 )
 
-func TestOpenTranscriptWithoutOutputPreservesSettlementProtocol(t *testing.T) {
+func TestOpenStoredWithoutOutputPreservesSettlementProtocol(t *testing.T) {
 	db, store, sessionID := newFinalOutputStore(t)
 	ms := newMessageStore(store, sessionID, nil)
-	call := PendingToolCall{ID: "external-call", Name: "task"}
+	call := sessioncalls.PendingToolCall{ID: "external-call", Name: "task"}
 	require.NoError(t, ms.addAssistantMessage(t.Context(), &llmwire.Response{
 		ToolCalls: []llmwire.ToolCall{{ID: call.ID, Name: call.Name}},
 	}))
 	candidateID := seedSettlementCandidate(t, store, sessionID)
 	staged := map[string]string{call.ID: call.Name}
-	stale, err := OpenTranscript(t.Context(), store, nil, sessionID, staged)
+	stale, err := sessioncalls.OpenStored(t.Context(), store, sessionID, staged)
 	require.NoError(t, err)
-	current, err := OpenTranscript(t.Context(), store, nil, sessionID, staged)
+	current, err := sessioncalls.OpenStored(t.Context(), store, sessionID, staged)
 	require.NoError(t, err)
 
 	_, err = db.ExecContext(t.Context(), "CREATE TRIGGER reject_settlement BEFORE INSERT ON messages "+

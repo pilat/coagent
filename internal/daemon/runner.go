@@ -20,6 +20,7 @@ import (
 	"github.com/pilat/coagent/internal/logger"
 	"github.com/pilat/coagent/internal/schedule"
 	"github.com/pilat/coagent/internal/session"
+	"github.com/pilat/coagent/internal/sessioncalls"
 	"github.com/pilat/coagent/internal/sessionevent"
 	"github.com/pilat/coagent/internal/sessionlifecycle"
 	"github.com/pilat/coagent/internal/sessionstore"
@@ -1404,6 +1405,15 @@ func (s *svc) ensureRunnerStartable(
 	rec *sessionstore.SessionRecord,
 	inputs []queuedSessionInput,
 ) (bool, error) {
+	stored, err := s.sessionStore.LoadActiveMessages(ctx, rec.ID)
+	if err != nil {
+		return false, fmt.Errorf("load session %d transcript for runner admission: %w", rec.ID, err)
+	}
+
+	if _, err := sessioncalls.ScanStored(stored); err != nil {
+		return false, fmt.Errorf("session %d requires transcript repair: %w", rec.ID, err)
+	}
+
 	preserveStopped, err := s.commandOnlyStoppedRoot(ctx, rec)
 	if err != nil {
 		return false, err

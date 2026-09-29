@@ -10,6 +10,7 @@ import (
 
 	"github.com/pilat/coagent/internal/llmwire"
 	"github.com/pilat/coagent/internal/logger"
+	"github.com/pilat/coagent/internal/sessioncalls"
 	"github.com/pilat/coagent/internal/sessionstore"
 )
 
@@ -130,6 +131,10 @@ func (s *checkpointOwner) compactLocked(
 ) (checkpointResult, error) {
 	log := logger.Ctx(ctx).Named("session.compaction")
 
+	if _, err := sessioncalls.Scan(s.ms.messages); err != nil {
+		return checkpointResult{}, fmt.Errorf("session transcript requires repair: %w", err)
+	}
+
 	// A pending check whose candidate the live transcript cannot place cannot
 	// retain the verbatim pair, so the attempt stays non-relieving instead of
 	// summarizing the evidence being confirmed.
@@ -140,7 +145,7 @@ func (s *checkpointOwner) compactLocked(
 
 	// The loop gate already refuses pending calls; the snapshot must match the
 	// ordinary request's repair, which excludes genuinely-pending external calls.
-	pendingExternal := s.calls.pendingExternalCallIDsLocked(s.ms.messages)
+	pendingExternal := s.calls.PendingExternalCallIDs(s.ms.messages)
 
 	headerSize := compactionHeaderSize(s.ms.messages)
 	if err := validateCompactionHeader(s.ms.messages[:headerSize]); err != nil {

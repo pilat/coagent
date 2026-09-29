@@ -21,33 +21,35 @@ func TestDirectOutputStore_CommitsToolResultAndOrderedOutputs(t *testing.T) {
 		Role: "tool", Content: "model result", ToolCallID: "call-1",
 		ToolName: "example", CreatedAt: time.Now().UTC(),
 	}
+	entry, err := toolResultEntry(ctx, store, root.ID, message, []string{"first", "second"})
+	require.NoError(t, err)
 
-	messageID, outputs, err := insertSingleToolResult(
-		ctx, store, root.ID, message, []string{"first", "second"},
-	)
+	messageID, outputs, err := insertToolResultEntry(ctx, store, root.ID, entry)
 	require.NoError(t, err)
 	assert.Positive(t, messageID)
 	require.Len(t, outputs, 2)
 	assert.Less(t, outputs[0].OutputID, outputs[1].OutputID)
 
-	replayedID, replayed, err := insertSingleToolResult(
-		ctx, store, root.ID, message, []string{"first", "second"},
-	)
+	replayedID, replayed, err := insertToolResultEntry(ctx, store, root.ID, entry)
 	require.NoError(t, err)
 	assert.Equal(t, messageID, replayedID)
 	assert.True(t, replayed[0].Existing)
 	conflict := *message
 	conflict.Content = "changed result"
-	_, _, err = insertSingleToolResult(ctx, store, root.ID, &conflict, []string{"first", "second"})
+	conflictEntry := entry
+	conflictEntry.Message = &conflict
+	_, _, err = insertToolResultEntry(ctx, store, root.ID, conflictEntry)
 	require.ErrorIs(t, err, ErrOutputConflict)
-	_, _, err = insertSingleToolResult(ctx, store, root.ID, message, []string{"changed output", "second"})
+	changedOutputEntry := entry
+	changedOutputEntry.DirectMessages = []string{"changed output", "second"}
+	_, _, err = insertToolResultEntry(ctx, store, root.ID, changedOutputEntry)
 	require.ErrorIs(t, err, ErrOutputConflict)
 
 	var messages, outbox int
 	require.NoError(t, db.QueryRowContext(ctx, `SELECT COUNT(*) FROM messages
 		WHERE session_id = ? AND tool_call_id = 'call-1'`, root.ID).Scan(&messages))
 	require.NoError(t, db.QueryRowContext(ctx, `SELECT COUNT(*) FROM session_outbox
-		WHERE session_id = ? AND source_key LIKE 'tool:call-1:direct:%'`, root.ID).Scan(&outbox))
+		WHERE session_id = ? AND source_key LIKE 'tool:%:direct:%'`, root.ID).Scan(&outbox))
 	assert.Equal(t, 1, messages)
 	assert.Equal(t, 2, outbox)
 }
@@ -155,15 +157,17 @@ func TestDirectOutputStore_ExplicitTimestampSurvivesReplay(t *testing.T) {
 		Role: "tool", Content: "model result", ToolCallID: "direct-call",
 		ToolName: "example", CreatedAt: explicit,
 	}
-	messageID, outputs, err := insertSingleToolResult(ctx, store, root.ID, message, []string{"direct"})
+	entry, err := toolResultEntry(ctx, store, root.ID, message, []string{"direct"})
+	require.NoError(t, err)
+	messageID, outputs, err := insertToolResultEntry(ctx, store, root.ID, entry)
 	require.NoError(t, err)
 	require.Len(t, outputs, 1)
 
 	replay := *message
 	replay.CreatedAt = explicit.Add(time.Hour)
-	replayedID, replayedOutputs, err := insertSingleToolResult(
-		ctx, store, root.ID, &replay, []string{"direct"},
-	)
+	replayEntry := entry
+	replayEntry.Message = &replay
+	replayedID, replayedOutputs, err := insertToolResultEntry(ctx, store, root.ID, replayEntry)
 	require.NoError(t, err)
 	assert.Equal(t, messageID, replayedID)
 	require.Len(t, replayedOutputs, 1)
@@ -185,10 +189,11 @@ func TestDirectOutputStore_ResultSetSharesUTCTransactionTime(t *testing.T) {
 	t.Parallel()
 	ctx, store, sessionID := newToolErrorStore(t)
 
-	entries := []ToolResultEntry{
-		{Message: toolResultRow("staged-1", "first", "one", false)},
-		{Message: toolResultRow("staged-2", "second", "two", false)},
-	}
+	first, err := toolResultEntry(ctx, store, sessionID, toolResultRow("staged-1", "first", "one", false), nil)
+	require.NoError(t, err)
+	second, err := toolResultEntry(ctx, store, sessionID, toolResultRow("staged-2", "second", "two", false), nil)
+	require.NoError(t, err)
+	entries := []ToolResultEntry{first, second}
 	ids, _, err := store.InsertToolResultSetOnce(ctx, sessionID, entries)
 	require.NoError(t, err)
 	require.Len(t, ids, 2)

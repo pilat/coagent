@@ -4,13 +4,15 @@ Scope: [the core goal](refactoring-goal.md), from baseline `7678d2c` through
 the current worktree on `refactor/runtime-ownership`. This is evidence for
 completion, not a replacement architecture document.
 
-**Status: prior checkpoint verified; session boundary reopened.** The recorded
-tests and reviews passed, but a renewed source audit found a temporary live
-transcript facade, duplicated unresolved-call classification, and checkpoint
-control protected by the transcript lock. The linked
-[correction plan](../plan-2026-09-28-session-boundary-correction.md) must be
-implemented and re-audited before the core goal is again marked complete.
-The presence of a component or a passing narrow test does not close a row below.
+**Status: session boundary corrected; full verification remains open.** The
+linked [correction plan](../plan-2026-09-28-session-boundary-correction.md)
+removed the temporary live transcript facade and duplicate daemon call scan.
+`sessioncalls` now owns call identity and settlement for live execution and
+recovery. Independent review found a budget-precedence defect and a nil-response
+admission panic in the first implementation; both were corrected with focused
+regressions. The full local suite cannot pass in this managed environment because
+unrelated listener tests receive `socket: operation not permitted`. The core
+goal is not marked complete until the final gates and PR checks pass.
 Commit `1dd20e2` gives checkpoint request, input and focus their own control
 lock; a concurrent request survives the active checkpoint and a failed terminal
 write can be retried without summarizing again while activation continues.
@@ -24,11 +26,11 @@ full correction-phase gates remain open.
 
 | Goal requirement | Evidence required | Current conclusion |
 | --- | --- | --- |
-| No unresolved concentration of unrelated mutable core state | Inspect daemon/session/lifecycle/persistence owners and their consumers; justify retained coordination | Reopened: checkpoint control is isolated, but the temporary live transcript facade and session package concentration need a fresh audit |
-| Named owners and explicit ordering for representative flows | Trace production entry, state transition, durable boundary and recovery for every flow below | Budget-park command settlement now has a fenced retry path; external-call classification still needs renewed scrutiny |
-| Every extraction removes obligations from its former owner | Source search for removed state/mutation paths; compare complete operations before/after | Prior extractions and checkpoint control removed obligations; the external-call facade still forwards without removing live responsibility |
-| Behavioral checks, architecture sync and independent code review | Exact final commands/results plus clean specification and code reviews | Prior branch gates passed; correction-phase full gates and architecture sync remain open |
-| Remaining debt has explicit reasons | Distinguish necessary coordination, optional organization and unresolved defects | Budget-park command loss is corrected in the worktree; the external-call boundary correction remains in progress |
+| No unresolved concentration of unrelated mutable core state | Inspect daemon/session/lifecycle/persistence owners and their consumers; justify retained coordination | The call facade is gone. Session still coordinates activation, transcript, model, tool turns and checkpoints; direct loop accesses are audited below. Final gate evidence remains open |
+| Named owners and explicit ordering for representative flows | Trace production entry, state transition, durable boundary and recovery for every flow below | `sessioncalls` owns call identity and settlement; admission and startup scans precede any execution or recovery write. Budget precedence is covered by a full-run SQLite regression |
+| Every extraction removes obligations from its former owner | Source search for removed state/mutation paths; compare complete operations before/after | Five forwarding methods, temporary `transcriptSession` and daemon's independent stored-call parser are removed. Live `svc` embeds one call owner; recovery opens it without a runnable session |
+| Behavioral checks, architecture sync and independent code review | Exact final commands/results plus clean specification and code reviews | Focused correction tests and `make arch` pass; independent review findings were fixed. Full local suite is environment-blocked; lint, final gate and PR CI remain to be recorded |
+| Remaining debt has explicit reasons | Distinguish necessary coordination, optional organization and unresolved defects | Session size and direct loop access remain; retained activation coordination is justified below. No schema or status was added for call ambiguity |
 
 ## Integrated flow evidence
 
@@ -36,7 +38,7 @@ full correction-phase gates remain open.
 | --- | --- | --- |
 | Accepted input to response | Daemon admission routes durable input; inputruntime promotes it; session decides an accepted-response disposition; sessionstore atomically records message/accounting/budget/candidate/output | Durable loop/input-order tests; response-disposition tests; input-recovery and response-integrity scenarios |
 | Child completion to parent | Lifecycle derives the canonical recovered outcome; subagent transactions arbitrate activation and delivery; parent reload follows a winning transcript/link commit; typed routing keeps blocking results distinct from background inbox facts | Completion/rearm/restart protocol models; candidate-result and duplicate-delivery scenarios |
-| Stop and interrupted-stop recovery | Tree fence and durable stopping intent precede producer cancellation; signal all runners before joins; cancellation Done precedes fence-dependent child finalization; coordinator settles calls before terminal stop output | Supervisor protocol tests; cancellation/fence regression; interrupted-stop and orphan-settlement scenarios |
+| Stop and interrupted-stop recovery | Tree fence and durable stopping intent precede producer cancellation; signal all runners before joins; cancellation Done precedes fence-dependent child finalization; coordinator settles unambiguous calls before terminal stop output | Supervisor protocol tests; cancellation/fence regression; interrupted-stop, orphan-settlement and ambiguous-call scenarios |
 | Budget crossing | Response accounting and cost crossing stay one transaction; independent lifecycle timer observes duration; generation-fenced park joins work and uses the same tree-stop operation | Budget transaction tests; independent deadline/restart/shutdown tests; park race and budget scenarios |
 | Context checkpoint | Safe point follows completed tool batches; checkpoint owner preserves candidate/nudge and row identities; atomic replacement precedes baseline invalidation and outcomes; publication failure cannot undo a committed result | Compaction protocol model; pin, native-prefix, ordering and command scenarios; new post-commit progress-failure regressions |
 | Model lifetime | Owner leases the current client through Chat; switch replaces identity and measurement generation together; terminal close rejects and releases a late replacement | In-flight switch/close tests; constructor-barrier regression; same-model baseline restore and reset/compaction invalidation |
@@ -51,7 +53,8 @@ full correction-phase gates remain open.
 | Accepted response and recovered outcome | Optional dependencies selected a legacy response algorithm; lifecycle reinterpreted transcript meaning | One executable disposition path; one store projection for recovered outcome |
 | Budget reconciliation | Progress capture also enforced deadlines and triggered park | Progress has no budget-control dependency; independent worker is cancellable and joined |
 | Model runtime | Session held client/configuration/mutex/epoch/baseline | Model owner contains all state and mutations; consumers use leased operations and snapshots |
-| External-call coordinator | Daemon staged calls, claimed/applied config and settled grants/transcripts across unrelated runner methods | Daemon owns no staged/applier/activation-store fields; exact-result and failure cleanup transitions are complete owner operations |
+| External-call coordinator | Daemon staged calls, claimed/applied config and settled grants/transcripts across unrelated runner methods | Daemon owns no staged/applier/activation-store fields; coordinator retains producer claims and lifecycle ordering while delegating transcript identity/settlement to `sessioncalls` |
+| Tool-call identity and settlement | Live `svc` forwarded through a temporary `transcriptSession`; daemon parsed stored calls with a second unresolved-call algorithm | One stable live call owner and one store-backed recovery owner share a scanner. Duplicate IDs block execution and settlement without a new status or schema |
 | Tool-turn owner | Tool pipeline accepted the complete mutable session and updated detector/grant/suspension/progress directly | Pipeline accepts direct capabilities and operation inputs; typed outcomes carry committed effects even on later errors |
 | Checkpoint owner | Session and loop shared command/focus/defer/attempt/summary state and checkpoint transactions | One owner performs complete attempt/command lifecycle; loop only selects safe point and adopts outcome |
 | Manager-route owner | Daemon held publication caches and claim/replacement serialization | Route state and mutations reside together; replacement has one complete ownership-fenced operation |
@@ -66,8 +69,10 @@ flowchart TD
     Root[Composition root] --> Daemon[Daemon coordination]
     Daemon --> Lifecycle[Lifecycle supervisor]
     Daemon --> Calls[External-call coordinator]
+    Calls --> CallIdentity[Tool-call owner]
     Daemon --> Routes[Manager-route owner]
     Daemon --> Session[Session activation loop]
+    Session --> CallIdentity
     Session --> Inputs[Input runtime]
     Session --> Model[Model runtime]
     Session --> Turns[Tool-turn owner]
@@ -75,7 +80,7 @@ flowchart TD
     Turns --> Transcript[Transcript projection]
     Checkpoint --> Transcript
     Checkpoint --> Model
-    Calls --> Transcript
+    CallIdentity --> Transcript
     Inputs --> Transactions[Complete SQLite transactions]
     Transcript --> Transactions
     Session --> Transactions
@@ -97,6 +102,9 @@ Source anchors for the map and ordering:
   adopts orphan identity before opening a transcript and releases temporary
   adoption even on failure. Ordinary result ownership retires after acceptance
   in [Resolve](../internal/daemon/external_calls.go).
+- [Shared call identity](../internal/sessioncalls/scan.go) rejects repeated IDs
+  before execution or recovery settlement; the [store-backed owner](../internal/sessioncalls/stored.go)
+  preserves atomic result replay without creating a runnable session.
 - [Manager routes](../internal/daemon/manager_routes.go) retain ownership
   serialization through replacement and retirement; publication uses only the
   independent cache lock, so retirement can publish within the fence.
@@ -113,7 +121,8 @@ Source anchors for the map and ordering:
 The remaining session transcript lock intentionally protects one projection and
 its row-ID sidecar. Checkpoint operations use that same projection; model
 operations never acquire its lock. A second transcript container would make
-ordering and replacement harder to prove.
+ordering and replacement harder to prove. The live call owner reads that same
+projection through narrow functions and owns no second transcript state.
 
 ## Retained coordination and deferred work
 
@@ -145,6 +154,39 @@ ordering and replacement harder to prove.
 
 ## Audit findings and closure evidence
 
+- The session-boundary correction reduced `internal/session` production code
+  from the 9,237-line plan baseline to 9,088 lines, but added the 451-line
+  `sessioncalls` package and one explicit dependency edge (20 to 21). Those
+  counts do not prove improvement. The before/after change is ownership: live
+  `svc` no longer manufactures a five-method transcript facade, and daemon no
+  longer decodes and deduplicates stored calls separately. One scanner now
+  rejects overlapping unresolved IDs in both paths while permitting a later
+  invocation to reuse an ID once its predecessor has a result.
+- The loop still has about 100 direct `r.agent` references. Its largest groups
+  are transcript (`ms`, 17), input/output boundary (15), and activation grant
+  (`currentActivation`, 11); these participate in the one activation's safe
+  point and terminal ordering. Model, tool-turn and checkpoint state remain in
+  their named owners. The retained `svc` methods compose and expose those
+  capabilities; another extraction would need to move a complete transition,
+  not just these references. Checkpoint control no longer shares the transcript
+  lock. The live call owner has no independent message or row-ID container;
+  recovery caches a read-only snapshot for its context-free projections and
+  reloads durable rows for every exact settlement.
+- Daemon still owns startup/shutdown ordering, producer routing and stop fences;
+  `sessionlifecycle` owns runners and tree joins; `sessionstore` owns the atomic
+  accepted-response and result transactions. The corrected call owner neither
+  recreates these ledgers nor crosses their authority. No additional unrelated
+  mutable protocol was identified in this audit; package size alone remains
+  deferred as described above.
+- A fresh overlapping call or repeated ID in one model response executes no
+  tools. Its exact paid attempt is retained outside active context and the host
+  requests a bounded retry; a fired budget remains the sole terminal output.
+  Result replay and direct output use the saved assistant row and call index,
+  not a session-wide provider ID. Migration 46 preserves legacy rows and
+  refuses to guess an ambiguous old result owner. Focused SQLite, scanner and
+  compaction/reuse regressions cover the corrected protocol. Independent review
+  previously closed a budget-output precedence defect and a nil-response
+  admission panic.
 - The old InsertBudgetedResponse algorithm had no production callers, but its
   tests hid missing budget observation/non-execution in canonical dispositions.
   It was removed and the canonical transaction corrected. The migrated store
@@ -191,7 +233,24 @@ ordering and replacement harder to prove.
   queued-result, fenced-abandonment and startup-orphan paths and found no
   bypass; the full Semgrep scan passed afterward.
 
-## Final verification record
+## Session-boundary verification record
+
+- Focused scanner, live response, budget crossing, grant admission, stored
+  settlement, stop and runner-admission tests passed against real SQLite where
+  durable behavior matters. The full-run budget regression asserts one
+  checkpoint outbox row and `suspended` status, with no tool execution.
+- Independent code review found the budget second-output and nil-response
+  admission defects; both were corrected. A separate lint review and full
+  `make lint` passed with zero issues. `make arch` passed after the package-map
+  update; `make all` again passed format, build, lint and architecture stages.
+- Full local `make test` and final `make all` exited 2 when unrelated packages
+  tried to bind TCP or Unix listeners (`socket: operation not permitted`). The
+  delegated local `CI=true make ci` passed format, build, lint and architecture,
+  then stopped before Semgrep because `uv` could not write its tool directory
+  under this managed sandbox. Semgrep, secrets, integration tests and PR CI
+  remain unverified at this checkpoint.
+
+## Prior checkpoint verification record
 
 - Cold specification review of the integrated five plans: clean, with no
   concrete implementation-to-plan mismatch. All committed session test and

@@ -64,6 +64,7 @@ type Store interface {
 	InsertSubagentLink(ctx context.Context, link Link) error
 	GetLink(ctx context.Context, childID int64) (*Link, error)
 	GetLinkByTaskCallID(ctx context.Context, parentID int64, taskCallID string) (*Link, error)
+	GetPendingLinkByTaskCallID(ctx context.Context, parentID int64, taskCallID string) (*Link, error)
 	ListPendingChildLinks(ctx context.Context, parentID int64) ([]Link, error)
 	ListRunningChildLinks(ctx context.Context) ([]Link, error)
 	ListUndeliveredParentLinks(ctx context.Context) ([]Link, error)

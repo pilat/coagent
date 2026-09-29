@@ -59,6 +59,7 @@ func insertBudgetNonExecution(
 	ctx context.Context,
 	tx *sql.Tx,
 	sessionID int64,
+	assistantMessageID int64,
 	raw json.RawMessage,
 	now time.Time,
 ) error {
@@ -72,11 +73,12 @@ func insertBudgetNonExecution(
 	if err := json.Unmarshal(raw, &calls); err != nil {
 		return fmt.Errorf("decode crossing tool calls: %w", err)
 	}
-	for _, call := range calls {
-		_, err := insertToolResultOnce(ctx, tx, sessionID, &transcript.Message{
-			Role: "tool", Content: budgetToolNotExecuted, ToolCallID: call.ID,
-			ToolName: call.Name, CreatedAt: now,
-		})
+	for index, call := range calls {
+		_, err := insertToolResultOnce(ctx, tx, sessionID,
+			CallRef{AssistantMessageID: assistantMessageID, Index: index}, &transcript.Message{
+				Role: "tool", Content: budgetToolNotExecuted, ToolCallID: call.ID,
+				ToolName: call.Name, CreatedAt: now,
+			})
 		if err != nil {
 			return fmt.Errorf("insert budget non-execution result: %w", err)
 		}

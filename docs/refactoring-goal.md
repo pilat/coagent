@@ -78,13 +78,20 @@ The core goal is complete only when all of the following have evidence:
 
 ## Current checkpoint
 
-- **Goal status:** reopened for the
-  [session-boundary correction](../plan-2026-09-28-session-boundary-correction.md).
-  Prior gates passed, but a renewed source audit found live `svc` forwarding
-  through a temporary transcript facade, two unresolved-call classifiers, and
-  checkpoint control fields guarded by the transcript lock. Checkpoint control
-  now has its own lock in commit `1dd20e2`; the call boundary and final
-  responsibility audit remain open. Completion criteria 1–3 still need evidence.
+- **Goal status:** the
+  [session-boundary correction](../plan-2026-09-28-session-boundary-correction.md)
+  is implemented in the current worktree. One `sessioncalls` owner replaces the
+  temporary live facade and daemon's second stored-call scanner. A follow-up
+  correction scopes durable result replay to the saved assistant invocation,
+  so a completed provider ID may recur after compaction without reusing its
+  old result; malformed overlapping calls are retained as inactive paid
+  attempts and retried without executing tools. The responsibility
+  audit found no further unrelated mutable protocol, but the complete goal
+  remains open pending final gates and PR CI. The current managed environment
+  denies local listener sockets, so its full `make test` fails outside changed
+  packages. [ADR-0072](adr/0072-share-tool-call-identity-between-live-and-recovery.md)
+  records the boundary and invocation identity choice. Migration 46 adds the
+  result owner/index fields without removing historical rows.
 - **Completed implementation:** phase 1, runtime ownership, commit `a231abc`
   on `refactor/runtime-ownership`. See the
   [phase plan](../plan-2026-09-27-runtime-ownership.md) and
@@ -123,7 +130,7 @@ The core goal is complete only when all of the following have evidence:
   before pending-input cancellation. Startup reserves draining budget trees
   for budget recovery. Focused live-failure, retry, restart and explicit-stop
   scenarios pass; full correction-phase gates remain open.
-- **Verification:** cold specification review and both independent code reviews
+- **Prior verification:** cold specification review and both independent code reviews
   are clean after correction. Focused persistence, session, daemon, manager and
   composition scenarios passed. Full `make test` and canonical `CI=true make ci`
   passed in an unrestricted environment with fixture Git configuration isolated
@@ -131,8 +138,13 @@ The core goal is complete only when all of the following have evidence:
   exact-cutoff test fixture surfaced in the first CI run; its focused regression
   and the subsequent full CI run passed. The branch-review correction passed
   another complete `make test` and canonical CI run. The audit records the evidence.
-- **Next step:** implement and verify the linked session-boundary plan, then
-  repeat the responsibility audit before restoring the complete status.
+- **Current correction verification:** focused live, stored, stop, admission,
+  budget and replay regressions pass; `make arch` passes. Independent review
+  found budget precedence and budget-admission defects, both fixed and covered
+  by focused tests. Delegated lint, final local gate and PR checks remain open.
+- **Next step:** finish static and available focused gates, review the exact
+  diff, commit and push the authorized correction, monitor PR CI, then record
+  its result before reconsidering complete status.
 - **Retained coordination:** the source audit supports keeping daemon startup,
   shutdown and typed producer routing, session activation safe points, and the
   shared SQL receiver. These coordinate distinct authorities rather than own

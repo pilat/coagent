@@ -189,7 +189,11 @@ func (s *svc) afterIteration(
 	log.Info("iteration", zap.Int("iter", iteration))
 
 	if alreadyPersisted {
-		log.Info("model_response_rejected", zap.String("finish_type", response.FinishType))
+		if len(toolCalls) > 0 {
+			log.Info("model_response_unusable", zap.String("finish_type", response.FinishType))
+		} else {
+			log.Info("model_response_rejected", zap.String("finish_type", response.FinishType))
+		}
 	} else {
 		logModelResponse(log, response, toolCalls)
 

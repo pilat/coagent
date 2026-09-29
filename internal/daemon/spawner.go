@@ -245,7 +245,7 @@ func (s *svc) resumeChildWithPendingInputLocked(ctx context.Context, childID int
 // terminal-but-not-yet-delivered. (A delivered completion fills the tool_use, so
 // it is resolved and never re-executed — this is only reached for unresolved calls.)
 func (s *svc) LinkPending(ctx context.Context, parentID int64, taskCallID string) (bool, error) {
-	link, err := s.links.GetLinkByTaskCallID(ctx, parentID, taskCallID)
+	link, err := s.links.GetPendingLinkByTaskCallID(ctx, parentID, taskCallID)
 	if err != nil {
 		return false, fmt.Errorf("check pending link: %w", err)
 	}

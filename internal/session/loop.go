@@ -12,6 +12,7 @@ import (
 
 	"github.com/pilat/coagent/internal/llmwire"
 	"github.com/pilat/coagent/internal/logger"
+	"github.com/pilat/coagent/internal/sessioncalls"
 	"github.com/pilat/coagent/internal/sessionstore"
 )
 
@@ -23,6 +24,14 @@ const (
 // hardIterationCeiling is an internal defect circuit breaker for a loop-detector
 // blind spot, not a normal terminal — real runs end far below it.
 const hardIterationCeiling = 1000
+
+const maxInvalidToolCallAttempts = 3
+
+const invalidToolCallRetryPrompt = "[AUTOMATED RECOVERY: The previous response used an ambiguous tool-call ID. " +
+	"No tools from that response were executed. Retry the step with distinct call IDs.]"
+
+const invalidToolCallTerminalPrompt = "[AUTOMATED RECOVERY: Tool-call IDs remained ambiguous after repeated attempts. " +
+	"No tools from those responses were executed. Wait for new user input before trying again.]"
 
 //nolint:gosec // prompt text shown to the model, not a credential
 const loopWarningTemplate = `[LOOP WARNING: Low action diversity (%d%%). Your recent %d tool calls produced only %d unique outcomes.
@@ -83,9 +92,10 @@ type loopRunner struct {
 	publishedReply       bool
 	acceptedManagerInput bool
 	backgroundInserted   bool
+	invalidToolCalls     int
 }
 
-//nolint:funlen,gocyclo,wsl_v5 // Loop ordering is the session protocol.
+//nolint:funlen,gocyclo,gocognit,wsl_v5 // Loop ordering is the session protocol.
 func runLoop(ctx context.Context, agent *svc, opts loopOptions, callback iterationCallback) (*loopResult, error) {
 	r := &loopRunner{
 		agent:  agent,
@@ -104,7 +114,6 @@ func runLoop(ctx context.Context, agent *svc, opts loopOptions, callback iterati
 	if agent.resumeCompletion != nil {
 		r.replyToInput = agent.resumeCompletion.ManagerReplyPending
 	}
-
 	hb := newHeartbeatTicker(opts.Heartbeat)
 	defer hb.stop()
 
@@ -112,6 +121,9 @@ func runLoop(ctx context.Context, agent *svc, opts loopOptions, callback iterati
 	// so no provider error, the hard ceiling, empty pause, budget fire or stop can
 	// wedge later inbox rows behind it.
 	defer r.resolveTerminalGrant(ctx)
+	if _, err := sessioncalls.Scan(agent.ms.getMessages()); err != nil {
+		return r.result, fmt.Errorf("session transcript requires repair: %w", err)
+	}
 
 	hb.start(ctx)
 
@@ -179,6 +191,22 @@ func runLoop(ctx context.Context, agent *svc, opts loopOptions, callback iterati
 		if err := r.callLLM(ctx); err != nil {
 			return r.result, err
 		}
+		if r.lastResp != nil && len(r.lastResp.ToolCalls) > 0 &&
+			r.lastResp.FinishType != llmwire.FinishLength && r.lastResp.FinishType != llmwire.FinishUnknown {
+			probe := append(r.agent.ms.getMessages(), llmwire.Message{
+				Role: llmwire.RoleAssistant, ToolCalls: r.lastResp.ToolCalls,
+			})
+			if _, err := sessioncalls.Scan(probe); err != nil {
+				r.result.Iterations++
+				if _, recordErr := r.recordAmbiguousResponse(ctx); recordErr != nil {
+					return r.result, recordErr
+				}
+				if r.parkBudget() {
+					return r.result, nil
+				}
+				continue
+			}
+		}
 		recoveryReply, err := r.hasOutstandingResponseRecovery(ctx)
 		if err != nil {
 			return r.result, err
@@ -232,6 +260,9 @@ func (r *loopRunner) parkBudget() bool {
 
 //nolint:nestif,funlen // The prior-response protocol keeps suspend, tool, and terminal ordering together.
 func (r *loopRunner) handlePreviousResult(ctx context.Context) (bool, error) {
+	if _, err := sessioncalls.Scan(r.agent.ms.getMessages()); err != nil {
+		return false, fmt.Errorf("session transcript requires repair: %w", err)
+	}
 	// A call that is out with the world outranks everything: re-executing it
 	// would apply the same change twice, and advancing past it would send the
 	// provider a tool_use nothing answers.
@@ -436,6 +467,7 @@ func (r *loopRunner) notifyPersistent(ctx context.Context, msg string) {
 }
 
 func (r *loopRunner) callLLM(ctx context.Context) error {
+	r.lastResp = nil
 	if r.agent.budgetGate != nil {
 		if err := r.agent.budgetGate.Admit(ctx, time.Now().UTC()); err != nil {
 			if errors.Is(err, ErrBudgetCheckpoint) {
@@ -464,7 +496,12 @@ func (r *loopRunner) callLLM(ctx context.Context) error {
 	// Pending external calls (sleep / blocking task) are excluded from stubbing —
 	// the loop never reaches here with one pending, so this only guards stray
 	// dangling calls from the compaction-adjacent edge.
-	msgs := repairTranscriptExcluding(r.agent.ms.getMessages(), r.agent.pendingExternalCallIDs())
+	active := r.agent.ms.getMessages()
+	if _, err := sessioncalls.Scan(active); err != nil {
+		return fmt.Errorf("session transcript requires repair: %w", err)
+	}
+
+	msgs := repairTranscriptExcluding(active, r.agent.pendingExternalCallIDs())
 
 	system := r.agent.prompt.systemPrompt()
 	schemas := r.agent.turns.schemas()
@@ -509,6 +546,7 @@ func normalizedFinishType(finishType string) string {
 
 func (r *loopRunner) recordIteration(ctx context.Context) error {
 	r.result.Iterations++
+
 	if r.lastResp.FinishType == llmwire.FinishLength || r.lastResp.FinishType == llmwire.FinishUnknown {
 		if err := r.recordRejectedIteration(ctx); err != nil {
 			return err
@@ -518,8 +556,68 @@ func (r *loopRunner) recordIteration(ctx context.Context) error {
 
 		return nil
 	}
+	handled, err := r.recordAmbiguousResponse(ctx)
+	if err != nil {
+		return err
+	}
+	if handled {
+		return nil
+	}
 
 	return r.recordDispositionIteration(ctx)
+}
+
+//nolint:nestif,wsl_v5 // This preflight retains one malformed attempt before any tool can execute.
+func (r *loopRunner) recordAmbiguousResponse(ctx context.Context) (bool, error) {
+	if len(r.lastResp.ToolCalls) == 0 {
+		return false, nil
+	}
+
+	probe := append(r.agent.ms.getMessages(), llmwire.Message{
+		Role: llmwire.RoleAssistant, ToolCalls: r.lastResp.ToolCalls,
+	})
+	if _, err := sessioncalls.Scan(probe); err != nil {
+		state, stateErr := r.completionState(ctx)
+		if stateErr != nil {
+			return true, stateErr
+		}
+		nextAttempts := r.invalidToolCalls + 1
+		prompt := invalidToolCallRetryPrompt
+		if nextAttempts >= maxInvalidToolCallAttempts {
+			prompt = invalidToolCallTerminalPrompt
+		}
+		decision := dispositionDecision{
+			kind: sessionstore.ResponseDispositionToolCall, unusableCalls: true,
+			expectedCandidate: durableCandidateID(state),
+			nudge:             hostUserMessage(prompt),
+		}
+		result, commitErr := r.commitDisposition(ctx, decision, state)
+		if commitErr != nil {
+			return true, fmt.Errorf("persist unusable assistant response: %w", commitErr)
+		}
+		if r.cb != nil {
+			if callbackErr := r.cb(r.result.Iterations, r.lastResp, r.lastResp.ToolCalls, true); callbackErr != nil {
+				if result.BudgetFired {
+					r.log.Warn("unusable_response_callback_failed", zap.Error(callbackErr))
+				} else {
+					return true, fmt.Errorf("unusable response callback: %w", callbackErr)
+				}
+			}
+		}
+		if result.BudgetFired {
+			r.result.Suspended = true
+			r.setWorking(false)
+			return true, nil
+		}
+		r.invalidToolCalls = nextAttempts
+		if r.invalidToolCalls < maxInvalidToolCallAttempts {
+			return true, nil
+		}
+		r.result.Error = fmt.Errorf("model returned ambiguous tool-call IDs %d times: %w", nextAttempts, err)
+		r.result.ErrorNotice = "⚠️ Model repeatedly returned ambiguous tool-call IDs. No tools from those responses ran; send a new message to retry."
+		return true, r.result.Error
+	}
+	return false, nil
 }
 
 func assistantOutput(

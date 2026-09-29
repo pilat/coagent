@@ -11,6 +11,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/pilat/coagent/internal/llmwire"
+	"github.com/pilat/coagent/internal/sessioncalls"
 	"github.com/pilat/coagent/internal/tool"
 )
 
@@ -106,7 +107,9 @@ func TestHandlePreviousResult_StagedCallSurvivesNewerSyntheticPair(t *testing.T)
 	assert.True(t, done)
 	assert.True(t, r.result.Suspended)
 	assert.Equal(t, int64(0), counter.runs.Load(), "the shadowed sleep must not execute again")
-	assert.Equal(t, []PendingToolCall{{ID: "sleep-call-125", Name: tool.IDSleep}}, agent.PendingExternalCalls())
+	assert.Equal(t, []sessioncalls.PendingToolCall{
+		{ID: "sleep-call-125", Name: tool.IDSleep},
+	}, agent.PendingExternalCalls())
 }
 
 func TestResolvePendingCall_ExactAndIdempotent(t *testing.T) {
@@ -126,19 +129,19 @@ func TestResolvePendingCall_ExactAndIdempotent(t *testing.T) {
 
 	resolution, err := agent.ResolvePendingCall(
 		context.Background(),
-		PendingToolCall{ID: "sleep-call-1", Name: tool.IDSleep},
+		sessioncalls.PendingToolCall{ID: "sleep-call-1", Name: tool.IDSleep},
 		"interrupted",
 	)
 	require.NoError(t, err)
-	assert.Equal(t, CallResolutionInserted, resolution)
+	assert.Equal(t, sessioncalls.CallResolutionInserted, resolution)
 
 	resolution, err = agent.ResolvePendingCall(
 		context.Background(),
-		PendingToolCall{ID: "sleep-call-1", Name: tool.IDSleep},
+		sessioncalls.PendingToolCall{ID: "sleep-call-1", Name: tool.IDSleep},
 		"duplicate delivery",
 	)
 	require.NoError(t, err)
-	assert.Equal(t, CallResolutionAlreadyPresent, resolution)
+	assert.Equal(t, sessioncalls.CallResolutionAlreadyPresent, resolution)
 
 	msgs := agent.ms.getMessages()
 	var exactResults int
@@ -188,7 +191,7 @@ func TestResolveInterruptedCalls_ClosesCurrentTurnCallsWithTypedFailure(t *testi
 		asst("running", call("b1", "bash"), call("r1", "read")),
 	})
 
-	require.NoError(t, agent.ResolveInterruptedCalls(context.Background(), []PendingToolCall{
+	require.NoError(t, agent.ResolveInterruptedCalls(context.Background(), []sessioncalls.PendingToolCall{
 		{ID: "b1", Name: "bash"},
 		{ID: "missing", Name: "bash"},
 	}, "interrupted notice"))
@@ -211,7 +214,7 @@ func TestResolveInterruptedCalls_SkipsSupersededTurn(t *testing.T) {
 		usr("new request supersedes the old bash"),
 	})
 
-	require.NoError(t, agent.ResolveInterruptedCalls(context.Background(), []PendingToolCall{
+	require.NoError(t, agent.ResolveInterruptedCalls(context.Background(), []sessioncalls.PendingToolCall{
 		{ID: "stale", Name: "bash"},
 	}, "interrupted notice"))
 
@@ -233,7 +236,7 @@ func TestResolvePendingCall_RejectsDishonestIdentity(t *testing.T) {
 
 	_, err := agent.ResolvePendingCall(
 		context.Background(),
-		PendingToolCall{ID: "sleep-call-1", Name: tool.IDTask},
+		sessioncalls.PendingToolCall{ID: "sleep-call-1", Name: tool.IDTask},
 		"wrong tool",
 	)
 	require.Error(t, err)
@@ -241,7 +244,7 @@ func TestResolvePendingCall_RejectsDishonestIdentity(t *testing.T) {
 
 	_, err = agent.ResolvePendingCall(
 		context.Background(),
-		PendingToolCall{ID: "unknown", Name: tool.IDSleep},
+		sessioncalls.PendingToolCall{ID: "unknown", Name: tool.IDSleep},
 		"wrong id",
 	)
 	require.Error(t, err)
@@ -256,14 +259,14 @@ func TestResolvePendingCall_RejectsDishonestIdentity(t *testing.T) {
 	)
 	_, err = agent.ResolvePendingCall(
 		context.Background(),
-		PendingToolCall{ID: "sleep-call-1", Name: tool.IDSleep},
+		sessioncalls.PendingToolCall{ID: "sleep-call-1", Name: tool.IDSleep},
 		"ledger disagrees",
 	)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "producer name mismatch")
 	assert.Equal(
 		t,
-		[]PendingToolCall{{ID: "sleep-call-1", Name: tool.IDTask}},
+		[]sessioncalls.PendingToolCall{{ID: "sleep-call-1", Name: tool.IDTask}},
 		agent.PendingExternalCalls(),
 		"pending state exposes producer ownership so downstream routing also fails closed",
 	)

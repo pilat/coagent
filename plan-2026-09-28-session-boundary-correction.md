@@ -45,18 +45,14 @@ checkpoint remains open until this correction and another ownership audit pass.
    the candidate/row-ID replacement transaction and its existing ordering.
    A fired-budget command uses the park path; [ADR-0071](docs/adr/0071-budget-park-settles-accepted-control-inputs.md)
    now settles its durable terminal output behind the stop admission fence.
-4. **Pending user decision:** repeated tool-call IDs are ambiguous for ordinary
-   live resolution, orphan recovery and interrupted in-loop recovery, even when names match: these
-   paths should reject one result rather than silently assigning it to two calls.
-   Preflight all interrupted calls before inserting any typed result, so a
-   duplicate cannot leave partial settlement. The shared scan reports each
-   unresolved ID once and retains the duplicate flag for resolution. Terminal
-   stop may still write one fenced result per ID because no execution resumes
-   afterward; this existing stop exception is explicit. Rejection during
-   recovery must durably block runner admission for the affected session:
-   logging the error and continuing can reexecute a call after a crash.
-   Reject duplicates before executing fresh model tool calls. Historical
-   malformed transcripts are not rewritten by this refactor.
+4. Provider call IDs identify model-visible call/result pairs, not all results
+   ever stored in a session. The shared scanner rejects an overlapping pending
+   ID or two equal IDs in one response, but permits reuse after the earlier
+   invocation is answered. An unusable fresh response is paid evidence outside
+   active context, with bounded retry and no tool execution. Durable replay is
+   keyed by the saved assistant row and call index; migration 46 adds nullable
+   owner fields while preserving older results. Ambiguous legacy ownership
+   fails closed rather than being guessed or silently rewritten.
 5. Do not replace `loopRunner.agent *svc` with one large interface. Audit its
    direct accesses after tasks 1–2 and extract only a complete transition if
    it removes direct mutation; otherwise document why activation coordination
@@ -73,7 +69,8 @@ checkpoint remains open until this correction and another ownership audit pass.
 - Keep the modular monolith and current dependency tiers. Add only the explicit
   imports needed for `sessioncalls` in `.go-arch-lint.yml`; it must not import
   `session` or `daemon`. Avoid an event bus or generic state machine.
-- Existing migrations and product/provider/sandbox behavior remain unchanged.
+- Existing migrations and product/provider/sandbox behavior remain unchanged;
+  a new migration may add durable call ownership without deleting history.
   Telegram decomposition and unrelated ADR reorganization are separate work.
 - Preserve existing temporal scenario names and assertions when fixtures move.
   Read `docs/testing.md`; run focused checks at checkpoints, then the repository
@@ -117,9 +114,8 @@ deterministic concurrent-request trace with real SQLite state.
 ### T2: One external-call authority
 
 Move the durable call vocabulary, whole-transcript unresolved-call scanner and
-settlement operations to `sessioncalls`. Deduplicate repeated call IDs in the
-same canonical scan for both daemon and live session while retaining ambiguity
-for ordinary resolution; preserve the separate
+settlement operations to `sessioncalls`. Reject repeated call IDs in the
+same canonical scan for both daemon and live session; preserve the separate
 latest-assistant-turn rule for interrupted in-loop calls. Make session's live
 call owner persistent, remove the per-method temporary `transcriptSession`
 facade, `session.OpenTranscript` and daemon's independent stored-call parser.
@@ -130,11 +126,12 @@ reentrant locking.
 Acceptance: one production unresolved-call algorithm is used by live and
 recovery paths; no five-method forwarding layer or second public service-like
 type remains in `internal/session`; daemon recovery never constructs a full
-session; duplicate IDs have identical live/recovered rejection. Run exact
+session; pending overlap fails before execution, while reuse after completion
+gets a new durable result. Run exact
 external-call, orphan/restart, interrupted-stop, replay/attachment and
 compaction-pending-call scenarios, including a new duplicate-ID parity test and
-an interrupted-recovery trace that rejects an ambiguous ID without partially
-inserting results for earlier calls.
+an interrupted-recovery trace that rejects an overlapping ID without partially
+inserting results for earlier calls, plus replay after compaction and ID reuse.
 
 ### T3: Integrated ownership audit and handoff
 

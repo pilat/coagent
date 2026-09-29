@@ -14,7 +14,7 @@ import (
 	"github.com/pilat/coagent/internal/configapply"
 	"github.com/pilat/coagent/internal/configops"
 	"github.com/pilat/coagent/internal/llmwire"
-	"github.com/pilat/coagent/internal/session"
+	"github.com/pilat/coagent/internal/sessioncalls"
 	"github.com/pilat/coagent/internal/sessionstore"
 	"github.com/pilat/coagent/internal/subagent"
 	"github.com/pilat/coagent/internal/tool"
@@ -84,14 +84,14 @@ func TestExternalCallsRejectedResultRetainsOwnershipUntilPersisted(t *testing.T)
 	owner.Apply(t.Context(), record.ID, func() bool { return false })
 	require.Contains(t, result.Content, "rejected")
 
-	projection, err := session.OpenTranscript(t.Context(), runtimeStore, nil, record.ID,
+	projection, err := sessioncalls.OpenStored(t.Context(), runtimeStore, record.ID,
 		pendingCallsOf(t, owner, record.ID))
 	require.NoError(t, err)
 	_, err = owner.Resolve(t.Context(), record.ID, projection, result)
 	require.ErrorIs(t, err, errCallSettlement)
 	assert.Equal(t, tool.IDConfigEdit, pendingCallsOf(t, owner, record.ID)["call"])
 
-	projection, err = session.OpenTranscript(t.Context(), runtimeStore, nil, record.ID,
+	projection, err = sessioncalls.OpenStored(t.Context(), runtimeStore, record.ID,
 		pendingCallsOf(t, owner, record.ID))
 	require.NoError(t, err)
 	applied, err := owner.Resolve(t.Context(), record.ID, projection, result)

@@ -102,6 +102,37 @@ func TestLinkStore_InsertAndRead(t *testing.T) {
 	assert.Nil(t, missing)
 }
 
+func TestLinkPending_ReusedTaskCallIDIgnoresDeliveredLink(t *testing.T) {
+	ss, links, tx, projectID := newTestLinkStore(t)
+	ctx := t.Context()
+	parent, err := ss.CreateSession(ctx, projectID, "m", "", nil)
+	require.NoError(t, err)
+	agent := &svc{links: links}
+	for i := range 2 {
+		childID, createErr := ss.CreateSubagentSession(ctx, projectID, parent.ID, parent.ID, "general", "m", "")
+		require.NoError(t, createErr)
+		require.NoError(t, links.InsertSubagentLink(ctx, subagent.Link{
+			ParentID: parent.ID, ChildID: childID, TaskCallID: "X", Depth: 1,
+		}))
+		pending, pendingErr := agent.LinkPending(ctx, parent.ID, "X")
+		require.NoError(t, pendingErr)
+		assert.True(t, pending, "invocation %d has an outstanding link", i+1)
+		require.NoError(t, links.MarkLinkTerminal(ctx, childID, subagent.StateCompleted, "done", subagent.OutcomeCompleted))
+		pending, pendingErr = agent.LinkPending(ctx, parent.ID, "X")
+		require.NoError(t, pendingErr)
+		assert.True(t, pending, "terminal completion remains pending until delivery")
+		link, linkErr := links.GetLink(ctx, childID)
+		require.NoError(t, linkErr)
+		require.NotNil(t, link)
+		won, deliveryErr := tx.DeliverBackgroundCompletion(ctx, *link, 1)
+		require.NoError(t, deliveryErr)
+		require.True(t, won)
+		pending, pendingErr = agent.LinkPending(ctx, parent.ID, "X")
+		require.NoError(t, pendingErr)
+		assert.False(t, pending, "delivered invocation %d must not suspend a later call", i+1)
+	}
+}
+
 func TestLinkStore_DeliverBackgroundCompletionToInbox(t *testing.T) {
 	ss, links, tx, projectID := newTestLinkStore(t)
 	ctx := context.Background()

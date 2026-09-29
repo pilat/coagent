@@ -28,9 +28,10 @@ type AcceptedResponseResult = sessionstore.AcceptedResponseResult
 // response, resolved from finish integrity, tool shape, wake projection, and
 // the durable completion check state.
 type dispositionDecision struct {
-	kind    sessionstore.ResponseDispositionKind
-	output  string
-	outType sessionstore.OutputType
+	kind          sessionstore.ResponseDispositionKind
+	output        string
+	outType       sessionstore.OutputType
+	unusableCalls bool
 	// expectedCandidate validates confirm/clear transitions; zero means the
 	// caller expects no pending check.
 	expectedCandidate int64
@@ -321,6 +322,7 @@ func (r *loopRunner) commitDisposition(
 		SessionID: r.agent.id, RootID: r.agent.rootID,
 		Iteration: r.agent.iterationOffset + r.result.Iterations,
 		Message:   stored, Kind: decision.kind,
+		UnusableToolCalls:   decision.unusableCalls,
 		Output:              decision.output,
 		OutputType:          decision.outType,
 		ExpectedCandidateID: decision.expectedCandidate,

@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"runtime"
-	"slices"
 	"sync"
 	"time"
 
@@ -20,6 +19,7 @@ import (
 	"github.com/pilat/coagent/internal/logger"
 	"github.com/pilat/coagent/internal/memory"
 	"github.com/pilat/coagent/internal/registry"
+	"github.com/pilat/coagent/internal/sessioncalls"
 	"github.com/pilat/coagent/internal/sessionevent"
 	"github.com/pilat/coagent/internal/sessionstore"
 	"github.com/pilat/coagent/internal/todo"
@@ -116,6 +116,7 @@ type ActiveProcessInfo struct {
 var _ Service = (*svc)(nil)
 
 type svc struct {
+	*sessioncalls.Owner
 	workDir           string
 	gitClient         git.Client
 	projectID         int64
@@ -287,7 +288,7 @@ func newWithOptions(ctx context.Context, p params, opts options) (Service, error
 		session.models,
 		session.prompt,
 		session.turns,
-		&transcriptSession{ms: session.ms, stagedCalls: opts.StagedExternalCalls},
+		session.Owner,
 		p.Dispositions,
 		opts.BudgetGate,
 		p.OutputStore,
@@ -365,6 +366,7 @@ func newSession(p params, opts options, workDir string, agentConfig registry.Age
 	}
 
 	s.ms = newMessageStore(msStore, opts.ID, p.OutputStore)
+	s.Owner = newLiveCallOwner(s)
 	s.confineGitClient()
 
 	return s
@@ -546,39 +548,12 @@ func filterRegistryForAgent(set *registry.Set, reg tool.Registry, agentConfig re
 // dangling before a user interruption is abandoned, not pending (repair still
 // stubs it for API validity, independently of this scan).
 func unresolvedToolCalls(messages []llmwire.Message) map[string]string {
-	for i, v := range slices.Backward(messages) {
-		if v.Role == llmwire.RoleUser {
-			return nil
-		}
-
-		if v.Role != llmwire.RoleAssistant {
-			continue
-		}
-
-		if len(v.ToolCalls) == 0 {
-			return nil
-		}
-
-		resolved := make(map[string]bool)
-
-		for j := i + 1; j < len(messages); j++ {
-			if messages[j].Role == llmwire.RoleTool {
-				resolved[messages[j].ToolCallID] = true
-			}
-		}
-
-		out := make(map[string]string)
-
-		for _, tc := range v.ToolCalls {
-			if !resolved[tc.ID] {
-				out[tc.ID] = tc.Name
-			}
-		}
-
-		return out
+	snapshot, err := sessioncalls.Scan(messages)
+	if err != nil {
+		return nil
 	}
 
-	return nil
+	return snapshot.CurrentUnresolved
 }
 
 func (s *svc) setupRegistry(p params, agentConfig registry.AgentTypeConfig) {

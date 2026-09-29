@@ -35,6 +35,7 @@ func newMockSvc(t *testing.T, messages []llmwire.Message, agentsMD string) *svc 
 		registry: tool.NewRegistry(),
 	}
 	s.turns = newToolTurns(s.registry, s.models, s.ms, testProgressBoundary(s.boundary))
+	s.Owner = newLiveCallOwner(s)
 	return s
 }
 

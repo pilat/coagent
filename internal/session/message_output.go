@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/pilat/coagent/internal/llmwire"
+	"github.com/pilat/coagent/internal/sessioncalls"
 	"github.com/pilat/coagent/internal/sessionstore"
 )
 
@@ -52,9 +53,13 @@ func (ms *messageStore) addToolResultOutputTyped(
 	if ms.outputs == nil {
 		directMessages = nil
 	}
+	ref, err := sessioncalls.LatestCallRef(ms.messages, ms.rowIDs, callID, toolName)
+	if err != nil {
+		return fmt.Errorf("resolve tool result owner: %w", err)
+	}
 
 	ids, _, err := ms.store.InsertToolResultSetOnce(ctx, ms.sessID, []sessionstore.ToolResultEntry{
-		{Message: stored, DirectMessages: directMessages},
+		{Message: stored, DirectMessages: directMessages, CallRef: ref},
 	})
 	if err != nil {
 		return fmt.Errorf("persist tool result: %w", err)
@@ -100,6 +105,12 @@ func (ms *messageStore) commitToolResults(ctx context.Context, commits []toolRes
 		}
 
 		entries[i].Message = m
+		entries[i].CallRef, err = sessioncalls.LatestCallRef(
+			ms.messages, ms.rowIDs, m.ToolCallID, m.ToolName,
+		)
+		if err != nil {
+			return fmt.Errorf("resolve tool result %d owner: %w", i, err)
+		}
 		if ms.outputs != nil {
 			entries[i].DirectMessages = commits[i].direct
 		}

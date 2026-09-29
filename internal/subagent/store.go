@@ -81,6 +81,33 @@ func (s *store) GetLinkByTaskCallID(ctx context.Context, parentID int64, taskCal
 	return scanLinkRow(row)
 }
 
+// GetPendingLinkByTaskCallID resolves only an outstanding completion obligation.
+func (s *store) GetPendingLinkByTaskCallID(
+	ctx context.Context,
+	parentID int64,
+	taskCallID string,
+) (*Link, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT `+subagentLinkColumns+` FROM subagent_links
+		WHERE parent_id = ? AND task_call_id = ? AND delivered_at IS NULL
+		ORDER BY child_id LIMIT 2`, parentID, taskCallID)
+	if err != nil {
+		return nil, fmt.Errorf("query pending task link: %w", err)
+	}
+	defer rows.Close()
+
+	links, err := scanLinkRows(rows)
+	if err != nil {
+		return nil, err
+	}
+	if len(links) > 1 {
+		return nil, fmt.Errorf("multiple pending links for task call %q", taskCallID)
+	}
+	if len(links) == 0 {
+		return nil, nil
+	}
+	return &links[0], nil
+}
+
 func (s *store) ListPendingChildLinks(ctx context.Context, parentID int64) ([]Link, error) {
 	rows, err := s.db.QueryContext(
 		ctx,

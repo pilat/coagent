@@ -75,6 +75,7 @@ components:
   shellenv:   { in: internal/shellenv }
 
   session:    { in: internal/session }
+  sessioncalls: { in: internal/sessioncalls }
   schedule:   { in: internal/schedule }
 
   telegram:   { in: internal/managers/telegram }
@@ -159,6 +160,10 @@ deps:
   toolexec:
     mayDependOn: [tool]
 
+  # Shared tool-call transcript classification and durable settlement.
+  sessioncalls:
+    mayDependOn: [llmwire, sessionstore, transcript]
+
   # External model catalogs — the drivers' source of model metadata.
   catalog:
     mayDependOn: [coagenthome, config, logger]
@@ -176,7 +181,7 @@ deps:
 
   # ReAct loop — the heaviest service.
   session:
-    mayDependOn: [backgroundprocess, builtin, config, git, id, llm, llmwire, loader, logger, mcp, mcpstore, memory, progress, registry, sessionevent, sessionstore, shellenv, todo, toolexec, tool, transcript]
+    mayDependOn: [backgroundprocess, builtin, config, git, id, llm, llmwire, loader, logger, mcp, mcpstore, memory, progress, registry, sessioncalls, sessionevent, sessionstore, shellenv, todo, toolexec, tool, transcript]
 
   # schedule fires wake-ups only through its own SessionSender interface; it has
   # protocol/logging edges but cannot import session or daemon.
@@ -191,7 +196,7 @@ deps:
 
   # Orchestrator.
   daemon:
-    mayDependOn: [admission, backgroundprocess, budget, coagenthome, config, configapply, configops, configtools, controllerapi, git, id, inputruntime, llmwire, loader, logger, mcp, mcpstore, progress, progressruntime, projectpath, registry, schedule, session, sessionbus, sessionevent, sessionlifecycle, sessionstore, subagent, todo, tool, transcript]
+    mayDependOn: [admission, backgroundprocess, budget, coagenthome, config, configapply, configops, configtools, controllerapi, git, id, inputruntime, llmwire, loader, logger, mcp, mcpstore, progress, progressruntime, projectpath, registry, schedule, session, sessionbus, sessioncalls, sessionevent, sessionlifecycle, sessionstore, subagent, todo, tool, transcript]
 
   configops:
     mayDependOn: [coagenthome, config, logger]

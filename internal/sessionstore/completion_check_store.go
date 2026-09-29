@@ -51,6 +51,9 @@ type AcceptedResponseDisposition struct {
 	Nudge      *transcript.Message
 	Output     string
 	OutputType OutputType
+	// UnusableToolCalls retains a malformed attempt without manufacturing
+	// budget results for call IDs that cannot identify one invocation.
+	UnusableToolCalls bool
 	// ExpectedCandidateID validates confirm/clear transitions against the
 	// durable check. Zero means the caller expects no pending check.
 	ExpectedCandidateID int64
@@ -161,11 +164,12 @@ func (s *store) CommitAcceptedResponseDisposition(
 		return nil, err
 	}
 
-	if result.BudgetFired {
+	if result.BudgetFired && !disposition.UnusableToolCalls {
 		if err := insertBudgetNonExecution(
 			ctx,
 			tx,
 			disposition.SessionID,
+			messageID,
 			disposition.Message.ToolCalls,
 			now,
 		); err != nil {
@@ -202,18 +206,34 @@ func validateAcceptedDisposition(disposition AcceptedResponseDisposition) error 
 		if !storedMessageHasToolCalls(disposition.Message) {
 			return errors.New("tool disposition requires tool calls")
 		}
-	case ResponseDispositionEmptyStop:
-		if disposition.Output != "" && disposition.Nudge != nil {
-			return errors.New("terminal empty-stop disposition carries a notice, not a nudge")
+		if disposition.UnusableToolCalls &&
+			(disposition.Nudge == nil || disposition.Nudge.Role != userRole || disposition.Output != "") {
+			return errors.New("unusable tool calls require a host retry and no output")
 		}
-
-		if disposition.Output == "" &&
-			(disposition.Nudge == nil || disposition.Nudge.Role != userRole) {
-			return errors.New("empty-stop disposition requires a host nudge or terminal notice")
+	case ResponseDispositionEmptyStop:
+		if err := validateEmptyStopDisposition(disposition); err != nil {
+			return err
 		}
 	case ResponseDispositionProjectionError:
 	default:
 		return fmt.Errorf("unknown response disposition kind %q", disposition.Kind)
+	}
+
+	if disposition.UnusableToolCalls && disposition.Kind != ResponseDispositionToolCall {
+		return errors.New("unusable tool calls require a tool disposition")
+	}
+
+	return nil
+}
+
+func validateEmptyStopDisposition(disposition AcceptedResponseDisposition) error {
+	if disposition.Output != "" && disposition.Nudge != nil {
+		return errors.New("terminal empty-stop disposition carries a notice, not a nudge")
+	}
+
+	if disposition.Output == "" &&
+		(disposition.Nudge == nil || disposition.Nudge.Role != userRole) {
+		return errors.New("empty-stop disposition requires a host nudge or terminal notice")
 	}
 
 	return nil
@@ -257,6 +277,20 @@ func applyDispositionState(
 			ctx, tx, disposition.SessionID, disposition.ExpectedCandidateID, 0, now,
 		); err != nil {
 			return err
+		}
+		if disposition.UnusableToolCalls {
+			if _, err := tx.ExecContext(ctx, `UPDATE messages SET compacted_at = ? WHERE id = ? AND session_id = ?`,
+				now, messageID, disposition.SessionID); err != nil {
+				return fmt.Errorf("deactivate unusable assistant response: %w", err)
+			}
+			if !result.BudgetFired {
+				nudgeID, err := insertMessageWith(ctx, tx, disposition.SessionID, disposition.Nudge)
+				if err != nil {
+					return fmt.Errorf("insert tool-call retry prompt: %w", err)
+				}
+				result.NudgeMessageID = nudgeID
+			}
+			return updateDispositionIteration(ctx, tx, disposition, disposition.EmptyStopStreak, false, now, result)
 		}
 
 		// A direct reply for a tool-bearing response rides the same commit;

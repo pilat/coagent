@@ -405,6 +405,20 @@ follow-up without making startup resume it.
 A tool call whose outcome comes from outside the loop — a sleep timer, a subagent, a config apply across a restart, a person typing at a terminal. The loop never re-executes one and never advances past it; transcript repair never stubs one; only an injection targeting its call id resolves it. The daemon's in-memory **staged-call ledger** records the ones it is itself answering.
 _Avoid_: suspended call, blocked tool.
 
+**ambiguous tool-call ID**:
+An identifier shared by two still-unanswered calls, including two calls in one
+assistant response. Neither can safely receive a result while both are pending.
+A completed older call may be followed by a new call with the same provider ID.
+Fresh malformed attempts remain paid evidence outside active model context;
+their tools do not execute.
+_Avoid_: duplicate historical ID (a completed call is not ambiguous).
+
+**tool invocation identity**:
+The saved assistant message row and the call's index in that message. Durable
+tool-result and direct-output replay use this identity; the provider's call ID
+is kept separately to pair model-visible calls and answers.
+_Avoid_: treating the provider call ID as a session-wide database key.
+
 **external-call coordinator**:
 The private daemon owner of staged producer claims, config handoff and
 per-session call settlement. It combines existing producer ledgers to identify

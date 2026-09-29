@@ -33,8 +33,9 @@ func (*failingDispositionStore) CommitAcceptedResponseDisposition(
 // order: a rejected insert must not leave a phantom message the agent can read.
 func TestMessageStore_AppendFailureLeavesNothingInMemory(t *testing.T) {
 	tests := []struct {
-		name string
-		add  func(ctx context.Context, ms *messageStore) error
+		name     string
+		toolCall bool
+		add      func(ctx context.Context, ms *messageStore) error
 	}{
 		{
 			name: "user",
@@ -49,7 +50,8 @@ func TestMessageStore_AppendFailureLeavesNothingInMemory(t *testing.T) {
 			},
 		},
 		{
-			name: "tool_result",
+			name:     "tool_result",
+			toolCall: true,
 			add: func(ctx context.Context, ms *messageStore) error {
 				return ms.addToolResult(ctx, "c1", "read", "body")
 			},
@@ -59,12 +61,22 @@ func TestMessageStore_AppendFailureLeavesNothingInMemory(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			ctx := context.Background()
-			ms := newMessageStore(&mockSessionStore{insertErr: errStoreDown}, 1, nil)
+			store := &mockSessionStore{}
+			ms := newMessageStore(store, 1, nil)
+			if tt.toolCall {
+				require.NoError(t, ms.addAssistantMessage(ctx, &llmwire.Response{
+					ToolCalls: []llmwire.ToolCall{{ID: "c1", Name: "read"}},
+				}))
+			}
+			before := ms.getMessages()
+			beforeIDs := ms.getRowIDs()
+			store.insertErr = errStoreDown
 
 			err := tt.add(ctx, ms)
 			require.Error(t, err)
 			require.ErrorIs(t, err, errStoreDown)
-			assert.Empty(t, ms.getMessages(), "failed write must not appear in the transcript")
+			assert.Equal(t, before, ms.getMessages(), "failed write must not appear in the transcript")
+			assert.Equal(t, beforeIDs, ms.getRowIDs())
 		})
 	}
 }
@@ -74,7 +86,9 @@ func TestMessageStore_AppendStoresRowIDs(t *testing.T) {
 	ms := newMessageStore(&mockSessionStore{}, 1, nil)
 
 	require.NoError(t, ms.addUserMessage(ctx, "hello"))
-	require.NoError(t, ms.addAssistantMessage(ctx, &llmwire.Response{Text: "hi"}))
+	require.NoError(t, ms.addAssistantMessage(ctx, &llmwire.Response{
+		Text: "hi", ToolCalls: []llmwire.ToolCall{{ID: "c1", Name: "read"}},
+	}))
 	require.NoError(t, ms.addToolResult(ctx, "c1", "read", "body"))
 
 	msgs := ms.getMessages()
@@ -287,7 +301,14 @@ func TestExecuteToolCalls_WriteFailurePropagates(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			agent := newTestAgent(&stubTool{id: "read", result: "content"})
-			agent.ms = newMessageStore(&mockSessionStore{insertErr: errStoreDown}, 1, nil)
+			store := &mockSessionStore{}
+			agent.ms = newMessageStore(store, 1, nil)
+			tc := llmwire.ToolCall{ID: "tc_1", Name: "read", Arguments: []byte(`{}`)}
+			require.NoError(t, agent.ms.addAssistantMessage(t.Context(), &llmwire.Response{
+				ToolCalls: []llmwire.ToolCall{tc},
+			}))
+			before := agent.ms.getMessages()
+			store.insertErr = errStoreDown
 			agent.turns = newToolTurns(agent.registry, agent.models, agent.ms, testProgressBoundary(agent.boundary))
 			agent.contexts = newCheckpointOwner(
 				agent.ms, agent.models, agent.prompt, agent.turns, agent.transcript(),
@@ -297,11 +318,10 @@ func TestExecuteToolCalls_WriteFailurePropagates(t *testing.T) {
 			)
 			agent.turns.(*toolTurnExecutor).detector.blocked = tt.blocked
 
-			tc := llmwire.ToolCall{ID: "tc_1", Name: "read", Arguments: []byte(`{}`)}
 			err := executeTestToolCalls(context.Background(), agent.turns, []llmwire.ToolCall{tc})
 
 			require.ErrorIs(t, err, errStoreDown)
-			assert.Empty(t, agent.ms.getMessages())
+			assert.Equal(t, before, agent.ms.getMessages())
 		})
 	}
 }
@@ -314,7 +334,8 @@ func TestHandlePreviousResult_WriteErrorBeatsSuspend(t *testing.T) {
 		&stubTool{id: "sleep", err: tool.ErrSuspend},
 		&stubTool{id: "read", result: "content"},
 	)
-	agent.ms = newMessageStore(&mockSessionStore{insertErr: errStoreDown}, 1, nil)
+	store := &mockSessionStore{}
+	agent.ms = newMessageStore(store, 1, nil)
 	agent.turns = newToolTurns(agent.registry, agent.models, agent.ms, testProgressBoundary(agent.boundary))
 	agent.contexts = newCheckpointOwner(
 		agent.ms, agent.models, agent.prompt, agent.turns, agent.transcript(),
@@ -322,13 +343,14 @@ func TestHandlePreviousResult_WriteErrorBeatsSuspend(t *testing.T) {
 		&agent.stamper, nil, nil,
 		checkpointOptions{id: agent.id, outputEnabled: agent.outputEnabled, agentsMD: agent.agentsMD},
 	)
-	agent.ms.setMessages([]llmwire.Message{
-		{Role: llmwire.RoleUser, Content: "task"},
-		{Role: llmwire.RoleAssistant, ToolCalls: []llmwire.ToolCall{
+	require.NoError(t, agent.ms.addUserMessage(t.Context(), "task"))
+	require.NoError(t, agent.ms.addAssistantMessage(t.Context(), &llmwire.Response{
+		ToolCalls: []llmwire.ToolCall{
 			{ID: "tc_sleep", Name: "sleep", Arguments: []byte(`{}`)},
 			{ID: "tc_read", Name: "read", Arguments: []byte(`{}`)},
-		}},
-	})
+		},
+	}))
+	store.insertErr = errStoreDown
 
 	r := &loopRunner{agent: agent, result: &loopResult{}, log: zap.NewNop()}
 

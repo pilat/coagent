@@ -114,3 +114,27 @@ func TestRepairTranscript_Empty(t *testing.T) {
 	result := repairTranscript(nil)
 	assert.Nil(t, result)
 }
+
+func TestRepairTranscript_ReusedCallIDKeepsEachInvocationResult(t *testing.T) {
+	messages := []llmwire.Message{
+		{Role: llmwire.RoleTool, ToolCallID: "same", Content: "orphan"},
+		{Role: llmwire.RoleAssistant, ToolCalls: []llmwire.ToolCall{{ID: "same", Name: "read"}}},
+		{Role: llmwire.RoleTool, ToolCallID: "same", Content: "first"},
+		{Role: llmwire.RoleTool, ToolCallID: "same", Content: "duplicate"},
+		{Role: llmwire.RoleAssistant, ToolCalls: []llmwire.ToolCall{{ID: "same", Name: "write"}}},
+		{Role: llmwire.RoleTool, ToolCallID: "same", Content: "second"},
+	}
+	assert.Equal(t, []llmwire.Message{messages[1], messages[2], messages[4], messages[5]}, repairTranscript(messages))
+}
+
+func TestRepairTranscript_ResultPairsNearestPrecedingUnmatchedInvocation(t *testing.T) {
+	messages := []llmwire.Message{
+		{Role: llmwire.RoleAssistant, ToolCalls: []llmwire.ToolCall{{ID: "same", Name: "read"}}},
+		{Role: llmwire.RoleAssistant, ToolCalls: []llmwire.ToolCall{{ID: "same", Name: "write"}}},
+		{Role: llmwire.RoleTool, ToolCallID: "same", Content: "second"},
+	}
+	result := repairTranscript(messages)
+	assert.Len(t, result, 4)
+	assert.Contains(t, result[1].Content, "missing tool result for read")
+	assert.Equal(t, messages[2], result[3])
+}

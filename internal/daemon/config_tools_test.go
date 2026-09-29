@@ -16,6 +16,7 @@ import (
 	"github.com/pilat/coagent/internal/controllerapi"
 	"github.com/pilat/coagent/internal/llmwire"
 	"github.com/pilat/coagent/internal/session"
+	"github.com/pilat/coagent/internal/sessioncalls"
 	"github.com/pilat/coagent/internal/sessionevent"
 	"github.com/pilat/coagent/internal/sessionstore"
 	"github.com/pilat/coagent/internal/tool"
@@ -169,10 +170,10 @@ func (h *configHarness) restart(t *testing.T, callID, toolName string) {
 	ctx := context.Background()
 	owners, err := h.mgr.externalCalls.Pending(ctx, h.sessionID)
 	require.NoError(t, err)
-	transcript, err := session.OpenTranscript(ctx, h.sessions, nil, h.sessionID, owners)
+	transcript, err := sessioncalls.OpenStored(ctx, h.sessions, h.sessionID, owners)
 	require.NoError(t, err)
 	_, err = h.mgr.externalCalls.Resolve(ctx, h.sessionID, transcript, pendingCallResultInput{
-		Call: session.PendingToolCall{ID: callID, Name: toolName}, Content: "Config applied.",
+		Call: sessioncalls.PendingToolCall{ID: callID, Name: toolName}, Content: "Config applied.",
 	})
 	require.NoError(t, err)
 	marker, err := h.ops.LoadPending()

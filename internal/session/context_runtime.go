@@ -31,7 +31,7 @@ type contextRuntime interface {
 type checkpointCalls interface {
 	PendingExternalCalls() []PendingToolCall
 	HasPendingWork() bool
-	pendingExternalCallIDsLocked([]llmwire.Message) map[string]bool
+	PendingExternalCallIDs([]llmwire.Message) map[string]bool
 }
 
 type completionReader interface {

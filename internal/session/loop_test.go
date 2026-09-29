@@ -470,6 +470,7 @@ func newTestAgentWithStore(store sessionstore.RuntimeStore, sessionID int64, too
 		prompt:   newPromptBuilder("test", ""),
 	}
 	s.turns = newToolTurns(s.registry, s.models, s.ms, testProgressBoundary(s.boundary))
+	s.Owner = newLiveCallOwner(s)
 	s.contexts = newCheckpointOwner(
 		s.ms, s.models, s.prompt, s.turns, s.transcript(),
 		s.dispositions, s.budgetGate, s.outputStore, s.boundary,

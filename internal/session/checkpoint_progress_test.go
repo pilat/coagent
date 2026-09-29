@@ -48,14 +48,15 @@ func TestCheckpointBudgetFireParksBeforeAnotherModelCall(t *testing.T) {
 				reg := tool.NewRegistry()
 				prompt := newPromptBuilder(testPrompt, "")
 				turns := newToolTurns(reg, model, ms, boundary)
+				calls := newLiveCallOwner(&svc{ms: ms})
 				owner := newCheckpointOwner(
-					ms, model, prompt, turns, &transcriptSession{ms: ms},
+					ms, model, prompt, turns, calls,
 					store, gate, store, boundary,
 					nil, nil, nil,
 					checkpointOptions{id: sessionID, outputEnabled: true},
 				)
 				agent := &svc{
-					ms: ms, models: model, turns: turns, contexts: owner, budgetGate: gate,
+					Owner: calls, ms: ms, models: model, turns: turns, contexts: owner, budgetGate: gate,
 					store: store, dispositions: store, registry: reg, prompt: prompt,
 					id: sessionID, rootID: sessionID, boundary: boundary,
 				}
@@ -145,7 +146,7 @@ func TestCheckpointProgressFailurePreservesCommittedOutcome(t *testing.T) {
 			}
 			turns := newToolTurns(reg, model, ms, boundary)
 			owner = newCheckpointOwner(
-				ms, model, prompt, turns, &transcriptSession{ms: ms},
+				ms, model, prompt, turns, newLiveCallOwner(&svc{ms: ms}),
 				store, gate, store, boundary,
 				nil, nil, nil,
 				checkpointOptions{id: sessionID, outputEnabled: true},

@@ -91,10 +91,11 @@ func TestToolErrorBit_RoundTrip(t *testing.T) {
 func TestInsertToolResultSetOnce_CommitsAndReplays(t *testing.T) {
 	ctx, s, sessionID := newToolErrorStore(t)
 
-	entries := []ToolResultEntry{
-		{Message: toolResultRow("c1", "batch", "partial output", true)},
-		{Message: toolResultRow("c2", "read", "file body", false)},
-	}
+	first, err := toolResultEntry(ctx, s, sessionID, toolResultRow("c1", "batch", "partial output", true), nil)
+	require.NoError(t, err)
+	second, err := toolResultEntry(ctx, s, sessionID, toolResultRow("c2", "read", "file body", false), nil)
+	require.NoError(t, err)
+	entries := []ToolResultEntry{first, second}
 
 	ids, outputs, err := s.InsertToolResultSetOnce(ctx, sessionID, entries)
 	require.NoError(t, err)
@@ -127,12 +128,18 @@ func TestInsertToolResultSetOnce_CommitsAndReplays(t *testing.T) {
 func TestInsertToolResultSetOnce_ConflictsOnContentChange(t *testing.T) {
 	ctx, s, sessionID := newToolErrorStore(t)
 
-	entries := []ToolResultEntry{{Message: toolResultRow("c1", "read", "first body", false)}}
+	entry, err := toolResultEntry(ctx, s, sessionID, toolResultRow("c1", "read", "first body", false), nil)
+	require.NoError(t, err)
+	entries := []ToolResultEntry{entry}
 
-	_, _, err := s.InsertToolResultSetOnce(ctx, sessionID, entries)
+	_, _, err = s.InsertToolResultSetOnce(ctx, sessionID, entries)
 	require.NoError(t, err)
 
-	changed := []ToolResultEntry{{Message: toolResultRow("c1", "read", "different body", false)}}
+	changedEntry := entry
+	changedMessage := *entry.Message
+	changedMessage.Content = "different body"
+	changedEntry.Message = &changedMessage
+	changed := []ToolResultEntry{changedEntry}
 	_, _, err = s.InsertToolResultSetOnce(ctx, sessionID, changed)
 	require.ErrorIs(t, err, ErrOutputConflict)
 

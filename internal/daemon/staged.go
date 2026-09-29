@@ -86,6 +86,13 @@ func (c *stagedCalls) resolve(sessionID int64, callID string) {
 	}
 }
 
+func (c *stagedCalls) clear(sessionID int64) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	delete(c.bySession, sessionID)
+}
+
 // forSession lists a session's staged calls (id → tool name) for the session
 // constructor.
 func (c *stagedCalls) forSession(sessionID int64) map[string]string {
