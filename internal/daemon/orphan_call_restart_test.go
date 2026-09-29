@@ -183,7 +183,20 @@ func TestHarnessModel_PendingExternalCallOwnershipAgreesAfterRestart(t *testing.
 
 		var seen modelRequests
 
-		first := newExternalCallDaemon(t, dbPath, configDir, seen.wrap(askForBlockingTaskRespond))
+		releaseChild := make(chan struct{})
+		respond := func(system string, msgs []llmwire.Message) *llmwire.Response {
+			if hasUserContaining(msgs, "do the thing") {
+				<-releaseChild
+				return &llmwire.Response{Text: "child completed"}
+			}
+
+			return askForBlockingTaskRespond(system, msgs)
+		}
+		first := newExternalCallDaemon(t, dbPath, configDir, seen.wrap(respond))
+		defer func() {
+			close(releaseChild)
+			first.shutdown()
+		}()
 
 		sessionID, err := first.mgr.Send(first.ctx, first.projectID, "do work then spawn", "fake-model", nil)
 		require.NoError(t, err)
@@ -200,8 +213,6 @@ func TestHarnessModel_PendingExternalCallOwnershipAgreesAfterRestart(t *testing.
 		assertAgrees(t, first, sessionID)
 		assert.Zero(t, countToolResultsFor(first.parentMessages(sessionID), tool.IDTask),
 			"a call whose child survived must stay pending")
-
-		first.shutdown()
 	})
 
 	t.Run("a config apply keeps its marker", func(t *testing.T) {
