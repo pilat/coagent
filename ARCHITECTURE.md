@@ -265,6 +265,8 @@ model invocation: the loop resolves its durable inbox row and persistent
 full-progress output at a safe input boundary without sending it to the model.
 A stopped root may consume a read-only command at the FIFO head without
 reactivating; asynchronous rows ahead of that command remain parked.
+`/stop`, `/clear` and `/kill` require an existing session; an initial task
+matching one of those commands is rejected before a session is created.
 Standalone scheduled work is a root-session capability: the daemon attaches
 `schedule` only to roots, while subagents retain `sleep` to resolve an existing
 call rather than create future work. Schedule delivery and stopped-root

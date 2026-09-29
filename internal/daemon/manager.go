@@ -371,10 +371,17 @@ func isCompactCommand(content string) bool {
 }
 
 func isExactControlCommand(content string) bool {
-	content = strings.TrimSpace(content)
+	return isReadOnlyBoundaryCommand(content) || lifecycleCommand(content) != ""
+}
 
-	return isReadOnlyBoundaryCommand(content) || content == stopCommand || content == clearCommand ||
-		content == killCommand
+func lifecycleCommand(content string) string {
+	command := strings.TrimSpace(content)
+	switch command {
+	case stopCommand, clearCommand, killCommand:
+		return command
+	default:
+		return ""
+	}
 }
 
 //nolint:funcorder // Command dispatch remains beside durable input admission and lifecycle fencing.
@@ -387,7 +394,8 @@ func (s *svc) handleGenericCommand(ctx context.Context, input *sessionstore.Inbo
 		return true, s.handleStatusInput(ctx, input)
 	}
 
-	if input.RawContent != stopCommand && input.RawContent != clearCommand && input.RawContent != killCommand {
+	command := lifecycleCommand(input.RawContent)
+	if command == "" {
 		return false, nil
 	}
 
@@ -397,7 +405,7 @@ func (s *svc) handleGenericCommand(ctx context.Context, input *sessionstore.Inbo
 	}
 	defer unlock()
 
-	switch input.RawContent {
+	switch command {
 	case stopCommand:
 		record, err := s.sessionStore.GetSession(ctx, input.SessionID)
 		if err != nil {
@@ -494,7 +502,7 @@ func (s *svc) handleStoppedStop(ctx context.Context, input *sessionstore.InboxIn
 
 //nolint:funcorder // Lifecycle input must stay with the generic dispatcher that invokes it.
 func (s *svc) handleLifecycleInput(ctx context.Context, input *sessionstore.InboxInput, content string) error {
-	command := strings.TrimPrefix(input.RawContent, "/")
+	command := strings.TrimPrefix(strings.TrimSpace(input.RawContent), "/")
 
 	if _, owned := input.Attributes[controllerapi.SessionAttributeManagerID].(string); !owned {
 		if err := s.inboxStore.HandleInput(ctx, input.ID, command); err != nil {
@@ -1364,6 +1372,10 @@ func (s *svc) send(
 	prompt, model string,
 	attrs map[string]any,
 ) (int64, error) {
+	if command := lifecycleCommand(prompt); command != "" {
+		return 0, fmt.Errorf("%s requires an existing session", command)
+	}
+
 	workDir, err := s.store.GetProjectWorkDir(ctx, projectID)
 	if err != nil {
 		return 0, fmt.Errorf("resolve project %d: %w", projectID, err)
