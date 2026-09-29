@@ -351,10 +351,23 @@ func (s *svc) Start(ctx context.Context) error {
 		owedStops[stop.SessionID] = stop
 	}
 
+	pendingParkRoots := make(map[int64]bool)
+
+	if s.budgetSvc != nil {
+		parks, parkErr := s.budgetSvc.ListPendingParks(ctx)
+		if parkErr != nil {
+			return fmt.Errorf("list budget parks before stop recovery: %w", parkErr)
+		}
+
+		for _, park := range parks {
+			pendingParkRoots[park.RootSessionID] = true
+		}
+	}
+
 	// Startup interruption sweep for background Bash processes runs after the
 	// stop-fence recovery below: a root mid-stop must finish its operator
 	// fence first, so records it covers stay cancelled with no wake event.
-	return s.finishStoppingRoots(ctx, records, stopping, owedStops, func() error {
+	return s.finishStoppingRoots(ctx, records, stopping, owedStops, pendingParkRoots, func() error {
 		if s.processStore == nil {
 			return nil
 		}
@@ -386,9 +399,10 @@ func (s *svc) finishStoppingRoots(
 	records []*sessionstore.SessionRecord,
 	stopping map[int64]bool,
 	owedStops map[int64]sessionstore.InterruptedExplicitStop,
+	pendingParkRoots map[int64]bool,
 	afterStops func() error,
 ) error {
-	if err := s.recoverStoppingSessions(ctx, records, stopping, owedStops); err != nil {
+	if err := s.recoverStoppingSessions(ctx, records, stopping, owedStops, pendingParkRoots); err != nil {
 		return err
 	}
 
@@ -410,6 +424,7 @@ func (s *svc) recoverStoppingSessions(
 	records []*sessionstore.SessionRecord,
 	stopping map[int64]bool,
 	owedStops map[int64]sessionstore.InterruptedExplicitStop,
+	pendingParkRoots map[int64]bool,
 ) error {
 	for _, rec := range records {
 		if !stopping[rec.ID] || stopping[rec.ParentID] {
@@ -430,6 +445,10 @@ func (s *svc) recoverStoppingSessions(
 				return fmt.Errorf("recover explicit stop for session %d: %w", rec.ID, err)
 			}
 
+			continue
+		}
+
+		if pendingParkRoots[sessionRootID(rec)] {
 			continue
 		}
 

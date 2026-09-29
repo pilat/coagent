@@ -506,6 +506,12 @@ The daemon closes admission before a generation drains and parks; managed park
 workers deduplicate active generations and are cancelled and joined at shutdown.
 Startup reconciles armed and half-parked generations before normal session
 recovery; the live reconciler retries half-parked generations after failures.
+Budget parking settles accepted `/compact` commands behind the persisted
+`stopping` admission fence and before generic input cancellation; a failed
+terminal write leaves the command and draining generation for retry
+([ADR-0071](docs/adr/0071-budget-park-settles-accepted-control-inputs.md)).
+Startup gives a half-parked budget tree to budget recovery before generic
+interrupted-stop cleanup can cancel its accepted control inputs.
 The next ordinary model-bound root
 input atomically releases a fired checkpoint and resumes only the root.
 `sessionlifecycle` owns an independent wakeable budget reconciler, reconstructing

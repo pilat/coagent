@@ -7,11 +7,13 @@ import (
 
 // StopEffects binds producer cleanup to the shared runner stop protocol.
 type StopEffects struct {
-	CancelProcesses  func(context.Context, int64) error
-	RetireResources  func(context.Context, int64) error
-	SettleCalls      func(context.Context, int64) error
-	ExpireActivation func(context.Context, int64) error
-	CancelSleeps     func(context.Context, int64) error
+	CancelProcesses func(context.Context, int64) error
+	RetireResources func(context.Context, int64) error
+	// The stopping fence excludes new inputs before this phase scans pending commands.
+	SettleControlInputs func(context.Context, []int64) error
+	SettleCalls         func(context.Context, int64) error
+	ExpireActivation    func(context.Context, int64) error
+	CancelSleeps        func(context.Context, int64) error
 }
 
 // StopTree requires the caller's tree fence and preserves it through durable settlement.
@@ -69,6 +71,23 @@ func (s *supervisor[T]) StopTree(
 
 	if err := effects.RetireResources(ctx, rootID); err != nil {
 		return err
+	}
+
+	return settleStoppedTree(ctx, stopper, plan, ids, keepRootStopping, effects)
+}
+
+func settleStoppedTree(
+	ctx context.Context,
+	stopper Stopper,
+	plan *StopPlan,
+	ids []int64,
+	keepRootStopping bool,
+	effects StopEffects,
+) error {
+	if effects.SettleControlInputs != nil {
+		if err := effects.SettleControlInputs(ctx, ids); err != nil {
+			return fmt.Errorf("settle stopped control inputs: %w", err)
+		}
 	}
 
 	if err := stopper.CancelInputs(ctx, plan); err != nil {

@@ -361,7 +361,13 @@ func isReadOnlyBoundaryCommand(content string) bool {
 	content = strings.TrimSpace(content)
 
 	return content == "/status" || content == "/help" || content == "/schedules" ||
-		content == compactCommand || strings.HasPrefix(content, compactCommand+" ")
+		isCompactCommand(content)
+}
+
+func isCompactCommand(content string) bool {
+	content = strings.TrimSpace(content)
+
+	return content == compactCommand || strings.HasPrefix(content, compactCommand+" ")
 }
 
 func isExactControlCommand(content string) bool {
@@ -789,18 +795,24 @@ func (s *svc) completeExplicitStop(
 type stopTreeOptions struct {
 	keepRootStopping            bool
 	preserveBackgroundProcesses bool
+	settleParkedCompactions     bool
 	cancelledProcesses          *int
 }
 
 //nolint:funcorder // The second stop phase belongs beside the public Stop transition.
 func (s *svc) stopTreeCleanup(ctx context.Context, sessionID int64, options stopTreeOptions) error {
-	err := s.supervisor.StopTree(ctx, sessionID, s.stopper, options.keepRootStopping, sessionlifecycle.StopEffects{
+	effects := sessionlifecycle.StopEffects{
 		CancelProcesses:  func(ctx context.Context, id int64) error { return s.stopTreeBackgroundProcesses(ctx, id, options) },
 		RetireResources:  s.retireTreeToolResources,
 		SettleCalls:      s.externalCalls.SettleStopped,
 		ExpireActivation: s.externalCalls.ExpireActivation,
 		CancelSleeps:     s.cancelStoppedSleeps,
-	})
+	}
+	if options.settleParkedCompactions {
+		effects.SettleControlInputs = s.settleParkedCompactions
+	}
+
+	err := s.supervisor.StopTree(ctx, sessionID, s.stopper, options.keepRootStopping, effects)
 	if err != nil {
 		return fmt.Errorf("stop session tree: %w", err)
 	}

@@ -14,18 +14,21 @@ The presence of a component or a passing narrow test does not close a row below.
 Commit `1dd20e2` gives checkpoint request, input and focus their own control
 lock; a concurrent request survives the active checkpoint and a failed terminal
 write can be retried without summarizing again while activation continues.
-The existing fired-budget `/compact` terminal-write failure still needs a
-durable admission/stop design: parking can end that activation before retry.
+The fired-budget `/compact` terminal-write failure now has a durable
+admission/stop design in [ADR-0071](adr/0071-budget-park-settles-accepted-control-inputs.md):
+parking settles accepted commands behind the stopping fence, and startup
+reserves interrupted parks for that settlement. Focused temporal checks pass;
+full correction-phase gates remain open.
 
 ## Requirement audit
 
 | Goal requirement | Evidence required | Current conclusion |
 | --- | --- | --- |
 | No unresolved concentration of unrelated mutable core state | Inspect daemon/session/lifecycle/persistence owners and their consumers; justify retained coordination | Reopened: checkpoint control is isolated, but the temporary live transcript facade and session package concentration need a fresh audit |
-| Named owners and explicit ordering for representative flows | Trace production entry, state transition, durable boundary and recovery for every flow below | Prior flows passed; external-call classification and fired-budget command settlement need renewed scrutiny |
+| Named owners and explicit ordering for representative flows | Trace production entry, state transition, durable boundary and recovery for every flow below | Budget-park command settlement now has a fenced retry path; external-call classification still needs renewed scrutiny |
 | Every extraction removes obligations from its former owner | Source search for removed state/mutation paths; compare complete operations before/after | Prior extractions and checkpoint control removed obligations; the external-call facade still forwards without removing live responsibility |
 | Behavioral checks, architecture sync and independent code review | Exact final commands/results plus clean specification and code reviews | Prior branch gates passed; correction-phase full gates and architecture sync remain open |
-| Remaining debt has explicit reasons | Distinguish necessary coordination, optional organization and unresolved defects | Fired-budget `/compact` terminal-write failure needs a durable admission/stop design; the boundary correction is still in progress |
+| Remaining debt has explicit reasons | Distinguish necessary coordination, optional organization and unresolved defects | Budget-park command loss is corrected in the worktree; the external-call boundary correction remains in progress |
 
 ## Integrated flow evidence
 

@@ -68,7 +68,7 @@ type InboxInput struct {
 }
 
 // InboxStore persists controller-accepted input before any runner observes it.
-type InboxStore interface {
+type InboxStore interface { //nolint:interfacebloat // Recovery reads share the same durable inbox boundary.
 	EnqueueInput(ctx context.Context, sessionID int64, source InputSource, rawContent string) (*InboxInput, error)
 	EnqueueAsyncInput(
 		ctx context.Context,
@@ -78,6 +78,7 @@ type InboxStore interface {
 		attributes map[string]any,
 	) (*InboxInput, error)
 	PeekPending(ctx context.Context, sessionID int64) (*InboxInput, error)
+	ListPendingUserInputs(ctx context.Context, sessionID int64) ([]*InboxInput, error)
 	HasPendingAsyncInputByRoot(ctx context.Context, rootID int64) (bool, error)
 	PromoteInput(ctx context.Context, inputID int64, preparedContent string) (*transcript.Message, error)
 	// PromoteInputWithReceipt is PromoteInput plus one persistent output row
@@ -280,6 +281,32 @@ func (s *store) PeekPending(ctx context.Context, sessionID int64) (*InboxInput, 
 	}
 
 	return input, nil
+}
+
+func (s *store) ListPendingUserInputs(ctx context.Context, sessionID int64) ([]*InboxInput, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT `+inboxColumns+` FROM session_inbox
+		WHERE session_id = ? AND state = 'pending' AND source = 'user' ORDER BY id`, sessionID)
+	if err != nil {
+		return nil, fmt.Errorf("list pending user inputs for session %d: %w", sessionID, err)
+	}
+	defer rows.Close()
+
+	var inputs []*InboxInput
+
+	for rows.Next() {
+		input, scanErr := scanInboxInput(rows)
+		if scanErr != nil {
+			return nil, fmt.Errorf("scan pending user input for session %d: %w", sessionID, scanErr)
+		}
+
+		inputs = append(inputs, input)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate pending user inputs for session %d: %w", sessionID, err)
+	}
+
+	return inputs, nil
 }
 
 func (s *store) PromoteInput(ctx context.Context, inputID int64, preparedContent string) (*transcript.Message, error) {

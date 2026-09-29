@@ -43,10 +43,8 @@ checkpoint remains open until this correction and another ownership audit pass.
    terminal path. If publication or durable settlement fails, the active input
    remains retryable; clear it only after its durable terminal outcome. Keep
    the candidate/row-ID replacement transaction and its existing ordering.
-   A fired-budget command still uses the current park path. Correctly retrying
-   a failed terminal write there requires a separate durable admission/stop
-   fence; record that existing defect without adding an incomplete protocol
-   to this ownership correction.
+   A fired-budget command uses the park path; [ADR-0071](docs/adr/0071-budget-park-settles-accepted-control-inputs.md)
+   now settles its durable terminal output behind the stop admission fence.
 4. **Pending user decision:** repeated tool-call IDs are ambiguous for ordinary
    live resolution, orphan recovery and interrupted in-loop recovery, even when names match: these
    paths should reject one result rather than silently assigning it to two calls.
@@ -112,7 +110,7 @@ do not hold the control lock across model I/O or publication.
 Acceptance: no checkpoint-only field is guarded by `messageStore.mu`; a request
 arriving during an attempt runs at a later safe point; explicit `/compact`
 settles once on durable success or error while the activation continues.
-The fired-budget terminal-write failure remains known debt. Run exact
+The fired-budget terminal-write failure is addressed by ADR-0071. Run exact
 command/deferral/commit, candidate-pin, reset and post-commit publication-failure tests, plus a new
 deterministic concurrent-request trace with real SQLite state.
 

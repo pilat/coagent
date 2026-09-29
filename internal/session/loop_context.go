@@ -16,6 +16,14 @@ const compactionNotConvergingNotice = "⚠️ Context window too small for this 
 	"longer freeing enough space. Automatic compaction is paused for this run; switch to a model with a " +
 	"larger context window."
 
+// ParkedCompactionNotice is the terminal answer when a fired budget prevents compaction.
+const ParkedCompactionNotice = "⏸ Budget checkpoint reached — the session is parked. Send a message to resume."
+
+// ParkedCompactionOutputDraft preserves the live command's output identity during park recovery.
+func ParkedCompactionOutputDraft(sessionID, inputID int64) sessionstore.OutputDraft {
+	return compactCommandOutputDraft(sessionID, inputID, "parked", ParkedCompactionNotice)
+}
+
 func (r *loopRunner) applyContextEvents(ctx context.Context) {
 	if r.agent.HasPendingExternalCall() || r.agent.HasPendingWork() {
 		return
@@ -178,7 +186,7 @@ func compactionOutcomePhase(ok bool, err error) string {
 func (s *checkpointOwner) finishParkedCompaction(ctx context.Context, commandInput *PendingInput) bool {
 	log := logger.Ctx(ctx).Named("session.compaction")
 
-	const parkedNotice = "⏸ Budget checkpoint reached — the session is parked. Send a message to resume."
+	const parkedNotice = ParkedCompactionNotice
 	if commandInput != nil {
 		if err := s.finishCompactionCommand(ctx, *commandInput, "parked", parkedNotice); err != nil {
 			log.Warn("finish_compaction_command_failed", zap.Error(err))
@@ -249,13 +257,8 @@ func (s *checkpointOwner) finishCompactionCommand(
 	phase, content string,
 ) error {
 	if s.outputStore != nil && s.outputEnabled {
-		_, err := s.outputStore.HandleInputWithOutput(ctx, input.ID, "compact command", sessionstore.OutputDraft{
-			SessionID:   s.id,
-			Type:        sessionstore.OutputMessagePersistent,
-			Content:     content,
-			SourceKey:   fmt.Sprintf("input:%d:compact:%s", input.ID, phase),
-			Fingerprint: sessionstore.OutputFingerprint(sessionstore.OutputMessagePersistent, content, s.id, nil),
-		})
+		_, err := s.outputStore.HandleInputWithOutput(ctx, input.ID, "compact command",
+			compactCommandOutputDraft(s.id, input.ID, phase, content))
 		if err != nil {
 			return fmt.Errorf("complete compact command: %w", err)
 		}
@@ -264,6 +267,16 @@ func (s *checkpointOwner) finishCompactionCommand(
 	}
 
 	return s.handleCommandOutput(ctx, input, "compact command", content)
+}
+
+func compactCommandOutputDraft(sessionID, inputID int64, phase, content string) sessionstore.OutputDraft {
+	return sessionstore.OutputDraft{
+		SessionID:   sessionID,
+		Type:        sessionstore.OutputMessagePersistent,
+		Content:     content,
+		SourceKey:   fmt.Sprintf("input:%d:compact:%s", inputID, phase),
+		Fingerprint: sessionstore.OutputFingerprint(sessionstore.OutputMessagePersistent, content, sessionID, nil),
+	}
 }
 
 // recordAutoCompaction silences the automatic path after compactionAttemptCap

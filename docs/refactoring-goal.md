@@ -118,6 +118,11 @@ The core goal is complete only when all of the following have evidence:
   reconciler now retries durable requested/draining parks while daemon workers
   deduplicate an active generation. Focused real-SQLite and worker tests passed;
   both code and specification re-reviews are clean.
+- **Budget-park command correction:** [ADR-0071](adr/0071-budget-park-settles-accepted-control-inputs.md)
+  places accepted `/compact` settlement behind the stop admission fence and
+  before pending-input cancellation. Startup reserves draining budget trees
+  for budget recovery. Focused live-failure, retry, restart and explicit-stop
+  scenarios pass; full correction-phase gates remain open.
 - **Verification:** cold specification review and both independent code reviews
   are clean after correction. Focused persistence, session, daemon, manager and
   composition scenarios passed. Full `make test` and canonical `CI=true make ci`
