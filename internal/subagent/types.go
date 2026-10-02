@@ -2,8 +2,6 @@ package subagent
 
 import (
 	"context"
-
-	"github.com/pilat/coagent/internal/transcript"
 )
 
 // State is the durable subagent-link lifecycle vocabulary.
@@ -84,13 +82,7 @@ type Transactions interface {
 		result string,
 		outcome Outcome,
 	) (bool, error)
-	DeliverCompletion(
-		ctx context.Context,
-		parentID int64,
-		messages []*transcript.Message,
-		childID int64,
-		activationSeq int64,
-	) (messageIDs []int64, won bool, err error)
+	DeliverCompletion(ctx context.Context, link Link, content string) (won bool, err error)
 	DeliverBackgroundCompletion(ctx context.Context, link Link, iterations int) (won bool, err error)
 	RearmDeliveredWithPendingInput(ctx context.Context, childID int64) (bool, error)
 }

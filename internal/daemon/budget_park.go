@@ -7,19 +7,19 @@ import (
 
 	"go.uber.org/zap"
 
+	"github.com/pilat/coagent/internal/budget"
 	"github.com/pilat/coagent/internal/logger"
-	"github.com/pilat/coagent/internal/sessionstore"
 )
 
-func (s *svc) parkBudgetTree(ctx context.Context, record *sessionstore.BudgetRecord) {
-	if record == nil || record.State != sessionstore.BudgetFired || record.ParkOwner == "" {
+func (s *svc) parkBudgetTree(ctx context.Context, record *budget.Record) {
+	if record == nil || record.State != budget.Fired || record.ParkOwner == "" {
 		return
 	}
 
 	owner := record.ParkOwner
 	if record.ParkPhase == budgetParkRequested {
 		_, err := s.budgetSvc.BeginDrain(ctx, record.RootSessionID, record.Generation, owner)
-		if errors.Is(err, sessionstore.ErrBudgetConflict) {
+		if errors.Is(err, budget.ErrConflict) {
 			return
 		}
 
@@ -73,7 +73,7 @@ func (s *svc) parkBudgetTree(ctx context.Context, record *sessionstore.BudgetRec
 	s.reconcileLatestReadiness(ctx, record.RootSessionID)
 }
 
-func (s *svc) startBudgetPark(record *sessionstore.BudgetRecord) {
+func (s *svc) startBudgetPark(record *budget.Record) {
 	if record == nil || s.shuttingDown.Load() {
 		return
 	}

@@ -113,7 +113,7 @@ func (s *svc) orphanedCalls(ctx context.Context, sessionID int64) ([]session.Pen
 	orphans := make([]session.PendingToolCall, 0, len(pending))
 
 	for _, call := range pending {
-		if owners[call.ID] == "" {
+		if owners[call.ID] != call.Name {
 			orphans = append(orphans, call)
 		}
 	}

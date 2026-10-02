@@ -8,7 +8,6 @@ import (
 	"github.com/pilat/coagent/internal/backgroundprocess"
 	"github.com/pilat/coagent/internal/config"
 	"github.com/pilat/coagent/internal/git"
-	"github.com/pilat/coagent/internal/llm"
 	"github.com/pilat/coagent/internal/loader"
 	"github.com/pilat/coagent/internal/mcpstore"
 	"github.com/pilat/coagent/internal/memory"
@@ -37,18 +36,12 @@ type CreateOptions struct {
 	Iteration      int
 	TodoItems      string
 	LastActivityAt time.Time
-	InputBoundary  InputBoundary
+	Events         Events
+	Schedules      string
 	OutputEnabled  bool
-	BudgetGate     BudgetGate
 	// RepoRoot is the path to the main git repository (for worktree sessions).
 	// Empty for non-worktree sessions.
 	RepoRoot string
-	// SettlementOpen marks a lifecycle settlement open: the initial state is not
-	// persisted, so a stopping root is never reactivated by /stop settlement.
-	SettlementOpen bool
-	// TranscriptOnly opens durable call state without constructing a model or
-	// tools; callers use only call resolution and Close.
-	TranscriptOnly bool
 
 	// PreserveStoppedStatus marks a command-only activation of a stopped root:
 	// read-only boundary commands run, but the run must not reactivate the root
@@ -59,19 +52,15 @@ type CreateOptions struct {
 	// children, rendered into activation-start context.
 	ActiveSubagents []ActiveSubagentInfo
 
-	// ActiveSubagentsProvider reads the same ledger live, for the section a
-	// compaction summary carries. Nil outside a daemon.
-	ActiveSubagentsProvider func(context.Context) []ActiveSubagentInfo
-	ActiveProcesses         []ActiveProcessInfo
-	ActiveProcessesProvider func(context.Context) []ActiveProcessInfo
+	ActiveProcesses []ActiveProcessInfo
 
 	// ExtraSkills are session-scoped instructions the daemon registers and
 	// activates in the system prompt without waiting for a model tool call.
 	ExtraSkills []*loader.Skill
 
-	// StagedExternalCalls are call ids the daemon owes a result for: neither
+	// ExternalCalls are call ids the daemon owes a result for: neither
 	// re-executed nor advanced past, until the matching injection arrives.
-	StagedExternalCalls map[string]string
+	ExternalCalls map[string]string
 
 	// ContextBaseline carries the persisted provider measurement back in on
 	// resume; nil when the previous run never measured.
@@ -84,9 +73,6 @@ type CreateOptions struct {
 	// CompactionDeferAnnounced carries the previous run's verdict back in: the
 	// human is told once that a queued /compact is waiting, not once per wake.
 	CompactionDeferAnnounced bool
-	// OnIterationPersisted observes a durable checkpoint after each model response.
-	// It is nil outside daemon-managed child sessions.
-	OnIterationPersisted func(context.Context, int)
 }
 
 type factory struct {
@@ -94,23 +80,16 @@ type factory struct {
 	secrets          config.Secrets
 	memoryStore      memory.CuratedStore
 	store            sessionstore.AgentRuntimeStore
-	outputStore      sessionstore.RuntimeOutputStore
+	outputStore      sessionstore.OutputStore
 	gitClient        git.Client
 	mcpStore         mcpstore.Store
 	marketplaceCache loader.MarketplaceCache
-	newLLMClient     func(cfg *config.Config) (llm.Client, error)
 	processSvc       backgroundprocess.Service
 	resources        builtin.Resources
 }
 
 // FactoryOption customizes a factory (test seams).
 type FactoryOption func(*factory)
-
-// WithLLMClientFactory overrides how per-session LLM clients are constructed.
-// Used by tests to inject a scripted fake LLM.
-func WithLLMClientFactory(fn func(cfg *config.Config) (llm.Client, error)) FactoryOption {
-	return func(f *factory) { f.newLLMClient = fn }
-}
 
 // WithProcessService injects the daemon-owned background-process lifecycle
 // service. When nil, the Bash tool starts no background processes.
@@ -138,7 +117,7 @@ func NewFactory(
 	secrets config.Secrets,
 	memoryStore memory.CuratedStore,
 	store sessionstore.AgentRuntimeStore,
-	outputStore sessionstore.RuntimeOutputStore,
+	outputStore sessionstore.OutputStore,
 	gitClient git.Client,
 	mcpStore mcpstore.Store,
 	marketplaceCache loader.MarketplaceCache,
@@ -154,7 +133,7 @@ func NewFactoryWithOptions(
 	secrets config.Secrets,
 	memoryStore memory.CuratedStore,
 	store sessionstore.AgentRuntimeStore,
-	outputStore sessionstore.RuntimeOutputStore,
+	outputStore sessionstore.OutputStore,
 	gitClient git.Client,
 	mcpStore mcpstore.Store,
 	marketplaceCache loader.MarketplaceCache,
@@ -169,7 +148,6 @@ func NewFactoryWithOptions(
 		gitClient:        gitClient,
 		mcpStore:         mcpStore,
 		marketplaceCache: marketplaceCache,
-		newLLMClient:     llm.NewClient,
 		resources:        builtin.NewResources(),
 	}
 
@@ -232,7 +210,7 @@ func (f *factory) buildRegistry(
 		Unified:         cfg.UnifiedConfig,
 		Loader:          ldr,
 		Todo:            todoSvc,
-		TodoReplacement: &todoReplacement{store: f.store, sessionID: sessionID, memory: todoSvc},
+		TodoReplacement: &todoReplacement{memory: todoSvc},
 		FileReadTracker: &fileReadTracker{store: f.store, sessionID: sessionID},
 		ProcessService:  f.processSvc,
 		Resources:       f.resources,

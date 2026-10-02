@@ -66,19 +66,13 @@ type Completion struct {
 	BinaryTail  bool
 }
 
-// OnCompletion receives an advertised process completion.
-type OnCompletion func(ctx context.Context, completion Completion)
-
 // TreeFence holds process admission against a root-tree stop transition.
 type TreeFence func(ctx context.Context, rootSessionID int64) (release func(), err error)
 
 // Options configures process storage, delivery, and admission.
 type Options struct {
-	OutputDir       string
-	OnCompletion    OnCompletion
-	TreeFence       TreeFence
-	Now             func() time.Time
-	GuardianCommand func(guardPath string, readyWriter, leaseReader *os.File) *exec.Cmd
+	OutputDir string
+	TreeFence TreeFence
 }
 
 // Service owns process execution and durable lifecycle transitions.
@@ -125,13 +119,6 @@ type launchResult struct {
 
 // NewService constructs a process lifecycle service.
 func NewService(store Store, opts Options) Service {
-	if opts.Now == nil {
-		opts.Now = time.Now
-	}
-
-	if opts.GuardianCommand == nil {
-		opts.GuardianCommand = newGuardianCommand
-	}
 
 	return &svc{
 		store: store, opts: opts, live: make(map[int64]int),
@@ -235,7 +222,7 @@ func (s *svc) Advertise(ctx context.Context, processID string) (bool, error) {
 
 	record, tracked := s.liveRecords[processID]
 	if !tracked || s.classes[processID] != admissionCandidate {
-		advertised, err := s.store.Advertise(ctx, processID, s.opts.Now())
+		advertised, err := s.store.Advertise(ctx, processID, time.Now())
 		if err != nil {
 			return false, fmt.Errorf("advertise untracked process: %w", err)
 		}
@@ -246,7 +233,7 @@ func (s *svc) Advertise(ctx context.Context, processID string) (bool, error) {
 		return false, ErrSlotLimit
 	}
 
-	advertised, err := s.store.Advertise(ctx, processID, s.opts.Now())
+	advertised, err := s.store.Advertise(ctx, processID, time.Now())
 	if err != nil {
 		return false, fmt.Errorf("advertise process: %w", err)
 	}

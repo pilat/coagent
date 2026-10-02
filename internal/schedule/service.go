@@ -68,6 +68,13 @@ func (s *svc) PendingSleeps(ctx context.Context, sessionID int64) ([]PendingSlee
 
 	for _, sched := range schedules {
 		if sched.oneShotAt != nil && sched.metadata.ToolCallID != "" {
+			valid := s.store.CallPending(ctx, sessionID, sched.metadata.ToolCallID)
+			if !valid {
+				if err := s.store.RemoveSchedule(ctx, sched.id); err != nil {
+					return nil, err
+				}
+				continue
+			}
 			pending = append(pending, PendingSleep{
 				CallID: sched.metadata.ToolCallID,
 				WakeAt: *sched.oneShotAt,

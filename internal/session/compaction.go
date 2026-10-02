@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"time"
 
 	"go.uber.org/zap"
 
@@ -77,7 +76,7 @@ func (s *svc) focusSection() string {
 func (s *svc) compact(ctx context.Context, commandInput *PendingInput) (bool, error) {
 	// Defence in depth: a caller that forgets the gate must not compact a
 	// transcript that still owes a tool_use its result.
-	if s.HasPendingExternalCall() || s.HasPendingWork() {
+	if s.HasPendingExternalCall() || len(s.pendingInLoopCalls()) > 0 {
 		return false, errCompactionPendingCall
 	}
 
@@ -99,11 +98,11 @@ func (s *svc) compact(ctx context.Context, commandInput *PendingInput) (bool, er
 // check is pending at all, so a candidate the live transcript cannot place
 // keeps compaction non-relieving instead of relaxing the tail cap.
 func (s *svc) completionCompactionPin(ctx context.Context) (int, bool) {
-	if s.dispositions == nil {
+	if s.store == nil {
 		return 0, false
 	}
 
-	state, err := s.dispositions.LoadCompletionCheckState(ctx, s.id)
+	state, err := s.store.LoadCompletionCheckState(ctx, s.id)
 	if err != nil || state == nil || state.CandidateID == nil {
 		return 0, false
 	}
@@ -189,7 +188,6 @@ func (s *svc) compactLocked(
 	}
 
 	s.resetContextBaseline() // the transcript the measurement described is gone
-	s.clearPersistedBaseline(ctx)
 
 	if commandInput == nil {
 		s.compactionSummaryDBID = newRowIDs[headerSize]
@@ -260,42 +258,25 @@ func (s *svc) commitCheckpointLocked(
 		return err
 	}
 
-	switch {
-	case s.budgetGate != nil:
-		inputID := int64(0)
-		if commandInput != nil {
-			inputID = commandInput.ID
-		}
-
-		ids, fired, persistErr := s.budgetGate.PersistCompaction(ctx, sessionstore.BudgetedCompaction{
-			InputID: inputID, CompactedIDs: compactedIDs, Entries: entries,
-			ObservedAt: time.Now().UTC(),
-		})
-		if persistErr != nil {
-			return fmt.Errorf("replace budgeted compacted messages: %w", persistErr)
-		}
-
-		if err := stampCompactionIDs(newRowIDs, ids); err != nil {
-			return err
-		}
-
-		s.budgetFired = fired
-	case commandInput != nil:
-		if err := s.ms.completeCompactionCommandLocked(
-			ctx, *commandInput, compactedIDs, newMessages, newRowIDs,
-		); err != nil {
-			return err
-		}
-	default:
-		if err := s.ms.replaceCompactedMessagesLocked(ctx, compactedIDs, newMessages, newRowIDs); err != nil {
-			return fmt.Errorf("replace compacted messages: %w", err)
-		}
+	c := s.newCommit()
+	c.Replace = &sessionstore.Replace{HeadIDs: compactedIDs, Entries: entries}
+	c.ObserveBudget = true
+	c.State.ClearContextBaseline = true
+	if commandInput != nil {
+		c.Accept = []sessionstore.Accept{{InputID: commandInput.ID, State: sessionstore.InputStateHandled, Reason: "compact command", LinkRef: -1}}
+		c.Outputs = []sessionstore.Output{{Type: sessionstore.OutputMessagePersistent, Content: "✅ Context compacted", Key: fmt.Sprintf("input:%d:compact:succeeded", commandInput.ID), MessageRef: -1, ReleasesInput: true}}
 	}
-
-	s.ms.messages = newMessages
-	s.ms.rowIDs = newRowIDs
-
-	return s.publishCompactionProgress(ctx)
+	result, err := s.store.Commit(ctx, c)
+	if err != nil {
+		return err
+	}
+	s.budgetFired = result.BudgetFired
+	s.compactionOutputs = result.Outputs
+	if err := s.ms.reloadMessagesLocked(ctx); err != nil {
+		return err
+	}
+	copy(newRowIDs, s.ms.rowIDs)
+	return nil
 }
 
 // stampCompactionIDs adopts the store's returned row IDs into the in-memory
@@ -306,29 +287,6 @@ func stampCompactionIDs(rowIDs, ids []int64) error {
 	}
 
 	copy(rowIDs, ids)
-
-	return nil
-}
-
-// publishCompactionProgress publishes the post-compaction operator snapshot.
-// A session without an output owner (hermetic tests) tolerates the owner error.
-func (s *svc) publishCompactionProgress(ctx context.Context) error {
-	provider, ok := s.boundary.(progressChangeBoundary)
-	if !ok {
-		return nil
-	}
-
-	_, published, err := provider.ProgressChange(ctx)
-	if err != nil {
-		if errors.Is(err, sessionstore.ErrOutputOwner) ||
-			errors.Is(err, sessionstore.ErrProgressSuperseded) {
-			return nil
-		}
-
-		return fmt.Errorf("enqueue compaction progress snapshot: %w", err)
-	}
-
-	_ = published
 
 	return nil
 }

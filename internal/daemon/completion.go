@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"go.uber.org/zap"
@@ -11,11 +12,8 @@ import (
 	"github.com/pilat/coagent/internal/admission"
 	"github.com/pilat/coagent/internal/backgroundprocess"
 	"github.com/pilat/coagent/internal/logger"
-	"github.com/pilat/coagent/internal/session"
 	"github.com/pilat/coagent/internal/sessionstore"
 	"github.com/pilat/coagent/internal/subagent"
-	"github.com/pilat/coagent/internal/tool"
-	"github.com/pilat/coagent/internal/transcript"
 )
 
 // finalizeChild marks a subagent terminal (once its loop has fully exited and
@@ -57,18 +55,15 @@ func (s *svc) deliverCompletionToParent(ctx context.Context, link subagent.Link)
 		s.deliverBackgroundCompletion(ctx, link)
 		return
 	}
-
-	var input sessionInput = blockingSubagentCompletionInput{
-		ChildID: link.ChildID, CallID: link.TaskCallID, ActivationSeq: link.ActivationSeq,
+	won, err := s.subagents.DeliverCompletion(ctx, link, s.completionContent(ctx, link))
+	if err != nil {
+		logger.Ctx(ctx).Named("daemon.completion").Error("deliver_completion_dropped", zap.Int64("child", link.ChildID), zap.Int64("parent", link.ParentID), zap.Error(err))
+		return
 	}
-
-	if err := s.enqueueSessionInput(ctx, link.ParentID, input); err != nil {
-		logger.Ctx(ctx).Named("daemon.completion").Error(
-			"deliver_completion_dropped",
-			zap.Int64("child", link.ChildID),
-			zap.Int64("parent", link.ParentID),
-			zap.Error(err),
-		)
+	if won {
+		if err := s.rearmChildAfterDelivery(ctx, link.ChildID); err != nil {
+			logger.Ctx(ctx).Named("daemon.completion").Error("rearm_child_after_delivery", zap.Int64("child", link.ChildID), zap.Error(err))
+		}
 	}
 }
 
@@ -102,108 +97,8 @@ func (s *svc) deliverBackgroundCompletion(ctx context.Context, link subagent.Lin
 	}
 }
 
-func (s *svc) injectBlockingCompletion(
-	ctx context.Context,
-	sess session.Service,
-	childID int64,
-	callID string,
-	activationSeq int64,
-) error {
-	link, err := s.links.GetLink(ctx, childID)
-	if err != nil {
-		return fmt.Errorf("load blocking completion link for child %d: %w", childID, err)
-	}
-
-	if link == nil {
-		return fmt.Errorf("blocking completion link for child %d not found", childID)
-	}
-
-	if link.DeliveredAt != 0 {
-		return nil
-	}
-
-	if link.ActivationSeq != activationSeq {
-		return nil // delayed duplicate from an earlier activation
-	}
-
-	if !link.Blocking || link.TaskCallID != callID {
-		return fmt.Errorf(
-			"blocking completion contract mismatch for child %d: link blocking=%t call=%q, input call=%q",
-			childID,
-			link.Blocking,
-			link.TaskCallID,
-			callID,
-		)
-	}
-
-	if !pendingCall(sess.PendingExternalCalls(), callID, tool.IDTask) {
-		return fmt.Errorf("blocking task call %s for child %d is not pending", callID, childID)
-	}
-
-	stored, err := session.BuildBlockingSubagentCompletion(
-		callID,
-		s.completionContent(ctx, *link),
-	)
-	if err != nil {
-		return fmt.Errorf("build blocking completion for child %d: %w", childID, err)
-	}
-
-	return s.persistCompletion(ctx, sess, *link, stored)
-}
-
-// persistCompletion is the exactly-once commit shared by the two semantically
-// distinct completion variants. The link CAS and transcript insert remain one
-// transaction; a winning commit is followed by a reload from the authoritative
-// store, which places the rows after the positioned tail even when a compaction
-// committed in between.
-func (s *svc) persistCompletion(
-	ctx context.Context,
-	sess session.Service,
-	link subagent.Link,
-	stored []*transcript.Message,
-) error {
-	return s.completions.Persist(ctx, sess, link, stored) //nolint:wrapcheck // Component owns delivery context.
-}
-
 func (s *svc) rearmChildAfterDelivery(ctx context.Context, childID int64) error {
 	return s.completions.Rearm(ctx, childID) //nolint:wrapcheck // Component owns rearm context.
-}
-
-// injectOwedCompletions drains terminal link-ledger entries that were previously
-// unable to enter the transcript because another external call was pending. It
-// is called immediately after an exact call result lands, so deferral never
-// relies on an in-memory notification surviving a restart.
-func (s *svc) injectOwedCompletions(
-	ctx context.Context,
-	sess session.Service,
-	parentID int64,
-) error {
-	links, err := s.links.ListPendingChildLinks(ctx, parentID)
-	if err != nil {
-		return fmt.Errorf("list owed completions for parent %d: %w", parentID, err)
-	}
-
-	for _, link := range links {
-		if !link.Terminal() || !link.Blocking {
-			continue
-		}
-
-		if !pendingCall(sess.PendingExternalCalls(), link.TaskCallID, tool.IDTask) {
-			return fmt.Errorf(
-				"terminal blocking child %d is undelivered but task call %s is not pending",
-				link.ChildID,
-				link.TaskCallID,
-			)
-		}
-
-		if err := s.injectBlockingCompletion(
-			ctx, sess, link.ChildID, link.TaskCallID, link.ActivationSeq,
-		); err != nil {
-			return err
-		}
-	}
-
-	return nil
 }
 
 func (s *svc) recoveredStopCancellationCount(
@@ -488,6 +383,7 @@ func (s *svc) finishRecoveredServices(ctx context.Context) error {
 	// the moment Start returns, and a runner they open makes it skip that session.
 	s.resolveOrphanedCalls(ctx)
 	s.resolveInterruptedCalls(ctx)
+	s.startInboxWake(ctx)
 	s.startProgressReconciler(ctx)
 
 	s.startRecovery(ctx)
@@ -622,6 +518,23 @@ func (s *svc) resumeSessionsWithRecoverableInput(ctx context.Context) (int, erro
 }
 
 func (s *svc) resumeRecoverableRoot(ctx context.Context, sessionID int64) (bool, error) {
+	inputs, inputErr := s.inboxStore.ListPending(ctx, sessionID)
+	if inputErr != nil {
+		return false, inputErr
+	}
+	for _, input := range inputs {
+		if input.Source != sessionstore.InputSourceUser {
+			continue
+		}
+		switch strings.TrimSpace(input.RawContent) {
+		case "/status":
+			if _, err := s.handleGenericCommand(ctx, input); err != nil {
+				return false, err
+			}
+		case "/stop", "/clear", "/kill":
+			return s.handleGenericCommand(ctx, input)
+		}
+	}
 	unlock, err := s.lockSessionTree(ctx, sessionID)
 	if err != nil {
 		return false, err
@@ -658,7 +571,7 @@ func (s *svc) resumeRecoverableRoot(ctx context.Context, sessionID int64) (bool,
 		return false, fmt.Errorf("resolve recoverable root project: %w", err)
 	}
 
-	if err := s.ensureRunnerLocked(ctx, sessionID, workDir, record.ProjectID, nil); err != nil {
+	if err := s.ensureRunnerLocked(ctx, sessionID, workDir, record.ProjectID); err != nil {
 		if errors.Is(err, admission.ErrNoCapacity) {
 			s.enqueuePendingRunner(sessionID, workDir, record.ProjectID)
 
@@ -815,7 +728,7 @@ func (s *svc) resumeChild(ctx context.Context, link subagent.Link) {
 		return
 	}
 
-	if err := s.ensureRunner(ctx, link.ChildID, workDir, rec.ProjectID, nil); err != nil {
+	if err := s.ensureRunner(ctx, link.ChildID, workDir, rec.ProjectID); err != nil {
 		logger.Ctx(ctx).
 			Named("daemon.sweep").
 			Error("resume_child_failed", zap.Int64("child", link.ChildID), zap.Error(err))

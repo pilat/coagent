@@ -78,7 +78,7 @@ func (s *svc) drainQueue(ctx context.Context) {
 		return
 	}
 
-	err = s.ensureRunner(ctx, next.sessionID, next.workDir, next.projectID, nil)
+	err = s.ensureRunner(ctx, next.sessionID, next.workDir, next.projectID)
 	if errors.Is(err, admission.ErrNoCapacity) {
 		// Admission lost a race — park it again for the next release.
 		s.enqueueChild(ctx, next.sessionID, next.parentID, next.workDir, next.projectID)

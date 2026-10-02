@@ -3,7 +3,6 @@ package session
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"slices"
 
 	"go.uber.org/zap"
@@ -132,45 +131,14 @@ func registerSessionTools(session *svc) {
 	// registered by the daemon onto the live registry — they need its spawner.
 }
 
-// persistState persists current session metadata to the daemon store.
 func (s *svc) persistState(ctx context.Context, iteration int, status sessionstore.SessionStatus) error {
-	if s.store == nil {
-		return nil
+	raw, err := json.Marshal(s.todoStore.List())
+	if err != nil {
+		return err
 	}
-
-	if err := s.store.UpdateSessionIteration(ctx, s.id, iteration, status); err != nil {
-		return fmt.Errorf("update session iteration: %w", err)
-	}
-
-	todoItems := s.todoStore.List()
-	if len(todoItems) > 0 {
-		data, err := json.Marshal(todoItems)
-		if err != nil {
-			return fmt.Errorf("marshal todo items: %w", err)
-		}
-
-		if err := s.store.UpdateSessionTodoItems(ctx, s.id, data); err != nil {
-			return fmt.Errorf("update todo items: %w", err)
-		}
-	}
-
-	return nil
-}
-
-func (s *svc) persistErrorState(ctx context.Context, iteration int, content string) error {
-	if s.store == nil {
-		return nil
-	}
-
-	if s.outputStore != nil && s.outputEnabled {
-		if _, err := s.outputStore.UpdateSessionIterationWithOutput(
-			ctx, s.id, iteration, sessionstore.SessionStatusError, content,
-		); err != nil {
-			return fmt.Errorf("update session error with output: %w", err)
-		}
-
-		return nil
-	}
-
-	return s.persistState(ctx, iteration, sessionstore.SessionStatusError)
+	data := json.RawMessage(raw)
+	c := s.newCommit()
+	c.State = sessionstore.StatePatch{Iteration: &iteration, Status: &status, TodoItems: &data}
+	_, err = s.commit(ctx, c)
+	return err
 }

@@ -3,13 +3,13 @@ package backgroundprocess
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
-	"errors"
 	"fmt"
 	"html"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/pilat/coagent/internal/sessionstore"
 )
 
 func (s *store) finalizeRunning(
@@ -57,39 +57,15 @@ func (s *store) finalizeRunning(
 	}
 
 	if winner.AdvertisedAt != nil && !winner.WakeSuppressed() {
-		if err := insertCompletionInbox(ctx, tx, winner); err != nil {
+		if _, err := sessionstore.EnqueueTx(ctx, tx, sessionstore.Input{
+			SessionID: winner.SessionID, Source: sessionstore.InputSourceProcess, Content: formatCompletion(winner),
+			Attributes: map[string]any{"process_id": winner.ID}, DeliveryKey: "process:" + winner.ID,
+		}); err != nil {
 			return Process{}, false, err
 		}
 	}
 
 	return winner, true, nil
-}
-
-func insertCompletionInbox(ctx context.Context, tx *sql.Tx, process Process) error {
-	var status string
-
-	err := tx.QueryRowContext(ctx, `SELECT status FROM sessions WHERE id = ? AND killed_at IS NULL`, process.SessionID).
-		Scan(&status)
-	if errors.Is(err, sql.ErrNoRows) || status == "terminating" || status == "killed" {
-		return nil
-	}
-
-	if err != nil {
-		return fmt.Errorf("load process input session: %w", err)
-	}
-
-	attributes, err := json.Marshal(map[string]any{"process_id": process.ID})
-	if err != nil {
-		return fmt.Errorf("encode process input attributes: %w", err)
-	}
-
-	_, err = tx.ExecContext(ctx, `INSERT INTO session_inbox (session_id, source, raw_content, attributes, received_at)
-		VALUES (?, 'process', ?, ?, ?)`, process.SessionID, formatCompletion(process), string(attributes), *process.FinishedAt)
-	if err != nil {
-		return fmt.Errorf("insert process completion input: %w", err)
-	}
-
-	return nil
 }
 
 func formatCompletion(process Process) string {

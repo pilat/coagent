@@ -76,10 +76,10 @@ func recordStartFailureOutputTx(ctx context.Context, tx *sql.Tx, record *Session
 		return false, nil
 	}
 
-	_, err := enqueueOutputTx(ctx, tx, OutputDraft{
+	_, err := insertOutputTx(ctx, tx, OutputDraft{
 		SessionID: record.ID, Type: OutputMessagePersistent, Content: content,
 		SourceKey: key, Fingerprint: OutputFingerprint(OutputMessagePersistent, content, record.ID, nil),
-	})
+	}, CommitLoop)
 	if err != nil {
 		return false, fmt.Errorf("record start failure receipt: %w", err)
 	}

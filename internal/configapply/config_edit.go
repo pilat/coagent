@@ -1,4 +1,4 @@
-package configtools
+package configapply
 
 import (
 	"context"
@@ -7,7 +7,6 @@ import (
 	"fmt"
 
 	"github.com/pilat/coagent/internal/coagenthome"
-	"github.com/pilat/coagent/internal/configops"
 	"github.com/pilat/coagent/internal/tool"
 )
 
@@ -23,9 +22,6 @@ const restartNotice = "Applying this restarts the daemon; you receive the verdic
 
 const secretsDisplayPath = "~/" + coagenthome.DirName + "/" + coagenthome.SecretsFileName
 
-// editAuthorityDoc is the tool's own contract statement: the candidate replaces
-// the whole application configuration, refusing an invalid one with nothing
-// written. The restart contract is restartNotice in Description.
 const editAuthorityDoc = "Replaces the complete application configuration with the supplied YAML document. " +
 	"Use only when the user explicitly requests a configuration change. A /config prefix alone is not a change request. " +
 	"Answer configuration questions without calling this tool. Preserve every unrelated setting; never submit a fragment. " +
@@ -41,31 +37,17 @@ var (
 	_ tool.ActivationDeclarer = (*configEditTool)(nil)
 )
 
-// StageApply hands a validated candidate to the daemon that owns its durable
-// suspend and restart protocol. False means another apply already owns it.
-type StageApply func(callID, toolName string, staged *configops.Staged) bool
-
-// DocumentStager is the raw-document staging surface config_edit consumes —
-// structurally the configops.Service path, narrowed so the tool cannot stage
-// typed ops.
-type DocumentStager interface {
-	StageDocument(candidate []byte) (*configops.Staged, configops.Verdict)
-}
-
 type configEditTool struct {
-	stager DocumentStager
-	stage  StageApply
+	service   *svc
+	sessionID int64
 }
 
 type configEditParams struct {
 	Document string `json:"document"`
 }
 
-// NewConfigEdit constructs the activation-gated full-document editing tool.
-// The daemon registers it on ordinary root sessions and owns every staged call
-// after StageApply accepts.
-func NewConfigEdit(ops DocumentStager, stage StageApply) tool.Tool {
-	return &configEditTool{stager: ops, stage: stage}
+func NewConfigEdit(sessionID int64, service Service) tool.Tool {
+	return &configEditTool{sessionID: sessionID, service: service.(*svc)}
 }
 
 func (t *configEditTool) ID() string { return tool.IDConfigEdit }
@@ -97,13 +79,17 @@ func (t *configEditTool) Execute(ctx context.Context, params json.RawMessage) (*
 	if err := requireActivation(ctx); err != nil {
 		return nil, err
 	}
+	grant, _ := tool.ActivationGrantFromContext(ctx)
+	if grant.SessionID != t.sessionID {
+		return nil, errors.New(noConfigActivationMessage)
+	}
 
 	callID := tool.CallIDFromContext(ctx)
 	if callID == "" {
 		return nil, errors.New("no tool_call id to answer against")
 	}
 
-	if t.stager == nil || t.stage == nil {
+	if t.service == nil {
 		return nil, errors.New("this daemon cannot change its own configuration")
 	}
 
@@ -111,20 +97,18 @@ func (t *configEditTool) Execute(ctx context.Context, params json.RawMessage) (*
 		return nil, errors.New("document is required")
 	}
 
-	staged, v := t.stager.StageDocument([]byte(p.Document))
+	staged, v := t.service.ops.StageDocument([]byte(p.Document))
 	if v.Failed() {
 		return nil, errors.New(v.Reason())
 	}
 
-	if !t.stage(callID, t.ID(), staged) {
+	if !t.service.stageApply(t.sessionID, callID, staged) {
 		return nil, errors.New("another config change is already being applied — make one change at a time")
 	}
 
 	return nil, tool.ErrSuspend
 }
 
-// requireActivation revalidates the durable grant: the exact root session, this
-// tool, the /config command, and the in-flight call.
 func requireActivation(ctx context.Context) error {
 	grant, ok := tool.ActivationGrantFromContext(ctx)
 

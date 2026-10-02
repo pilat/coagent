@@ -134,12 +134,12 @@ One of the three instruction files a session loads at open — **global**, **pro
 _Avoid_: project instructions (the pre-rename name for the merged string), AGENTS.md (one candidate, not the resolved artifact).
 
 **agent loop**:
-The core cycle a session runs: call the LLM, execute the returned tool calls, record the observations, repeat until done or capped. The function is `runLoop`.
+The core cycle a session runs: accept boundary input, call the LLM, execute returned tools, and commit each step until done or capped. The entry point is `Run`.
 _Avoid_: ReAct loop (doc-only alias), main loop.
 
 **runner**:
 The in-memory lifecycle holder for one active session: cancel/done boundary,
-live session service, queued typed inputs and admission metadata. Its registry,
+live session service, working flag and admission metadata. Its registry,
 launch, shutdown and terminal coordination belong to `sessionlifecycle`; it is
 reconstructible and never a durable work record.
 _Avoid_: session (the durable/live task identity), agent loop (the model/tool cycle).
@@ -172,7 +172,7 @@ _Avoid_: max_tokens (as a name for the budget rather than the wire field), outpu
 The invariant that stored message content is immutable after insert. Compaction is a metadata event (`compacted_at`) plus appended rows; "what the model sees" is a projection computed at load, so the prompt prefix stays byte-stable between compactions — nothing edits history in between.
 
 **insertion-time truncation**:
-Capping an oversized tool result *before* it is appended to the conversation history (`toolexec.go`). What enters the transcript is already trimmed and never changes afterward, so the cached prompt prefix stays intact. The opposite — going back and editing messages already in the history (**retroactive pruning**) — invalidates the provider's prompt cache from the edited point onward, and coagent deliberately does not do it.
+Capping an oversized tool result *before* the tool step commits it to conversation history. What enters the transcript is already trimmed and never changes afterward, so the cached prompt prefix stays intact. The opposite — going back and editing messages already in the history (**retroactive pruning**) — invalidates the provider's prompt cache from the edited point onward, and coagent deliberately does not do it.
 _Avoid_: pruning (names the retroactive anti-pattern), clearing (a separate metadata event).
 
 **loop detection**:
@@ -338,7 +338,7 @@ _Avoid_: message ID (singular), cursor.
 A sentinel error `sleep` returns to checkpoint and exit the agent loop *without* recording a result; the timer's exact result is injected on resume. The persisted status is `suspended`. Standalone `schedule` creates future work but does not suspend the calling session.
 
 **session input**:
-A user/agent action or independent process/subagent completion addressed to an
+A user/agent action, scheduled turn, exact call result or process/subagent completion addressed to an
 existing session and accepted into the durable `session_inbox` FIFO before any
 consumer observes it. A normal message or bounded completion envelope is
 promoted into the append-only transcript; a generic session command is
@@ -357,7 +357,7 @@ A one-shot schedule carrying `metadata.tool_call_id`, and therefore owning the e
 _Avoid_: one-shot wait (ambiguous), any one-shot is sleep.
 
 **scheduled delivery identity**:
-A deterministic ID for one standalone one-shot or cron occurrence. Its fingerprint and transcript mutation commit together in `session_deliveries`; an identical producer retry is accepted with `applied=false`, while different semantics under the same ID fail closed. Cron uses one canonical minute for ID and payload; fresh delivery fingerprints stable prompt context, not stamped wall-clock text.
+A deterministic ID for one standalone one-shot or cron occurrence, stored as a unique per-session inbox delivery key. Producer retries return `applied=false`; pre-upgrade claims in `session_deliveries` also suppress replay. Cron uses one canonical minute for ID and payload.
 _Avoid_: schedule message ID, retry token.
 
 **scheduled turn**:
@@ -376,7 +376,7 @@ parent-delivery state. A stopped link preserves the child session for explicit
 follow-up without making startup resume it.
 
 **pending external call**:
-A tool call whose outcome comes from outside the loop — a sleep timer, a subagent, a config apply across a restart, a person typing at a terminal. The loop never re-executes one and never advances past it; transcript repair never stubs one; only an injection targeting its call id resolves it. The daemon's in-memory **staged-call ledger** records the ones it is itself answering.
+A tool call whose outcome comes from outside the loop — a sleep timer, a subagent or a config apply across a restart. The loop never re-executes one and never advances past it; transcript repair never stubs one. Exact call-result inbox rows, producer ledgers and the config-apply marker establish ownership; only that producer, stop or the boot orphan sweep resolves it.
 _Avoid_: suspended call, blocked tool.
 
 **interrupted in-loop call**:
@@ -531,9 +531,9 @@ Naming conflicts this vocabulary resolves. "Resolved" means the winner above is 
 - **controller vs manager** — *Resolved.* `controllerapi.Controller` is the private manager-bound interface implemented by `managercontrol` over the daemon backend; a built-in front end is a **manager**. It does not name a public extension point.
 - **task (work-unit) vs `task` tool** — *Resolved.* "task" is prose for a submitted unit of work, realized as a session with no `Task` type; the only code symbol named `task` is the subagent-spawning tool. Qualify in code contexts.
 - **state / status (three vocabularies)** — *Resolved.* Runtime **state** = `controllerapi.State*` (running/idle/error, in-memory); persisted **status** = active/completed/suspended/error; subagent **link state** = `subagent.State*`. Don't treat "running" and "active" as one word.
-- **agent loop vs ReAct loop vs iteration** — *Resolved.* Canonical is **agent loop** (matches `runLoop`); "ReAct loop" is an acceptable doc alias; **iteration** is one turn, not a synonym for the loop.
+- **agent loop vs ReAct loop vs iteration** — *Resolved.* Canonical is **agent loop** (entered through `Run`); "ReAct loop" is an acceptable doc alias; **iteration** is one turn, not a synonym for the loop.
 - **clearing vs compaction** — *Resolved.* **Compaction** is the whole operation and the only automatic pressure response; clearing (dropping tool-result bodies) was removed with [ADR-0035](adr/0035-compaction-summarizes-a-bounded-head.md) — summarizer evidence is serialized, never erased. The old "context ladder" is retired.
-- **Notification (overloaded type)** — *Resolved.* Use **session event** / `sessionevent.Notification` for session→controller events; it collides with `lsp.Notification` (JSON-RPC). Daemon transcript delivery is now a sealed typed `sessionInput`, not another notification bag.
+- **Notification (overloaded type)** — *Resolved.* Use **session event** / `sessionevent.Notification` for live session→controller events; it collides with `lsp.Notification` (JSON-RPC). Durable session input is a `sessionstore.Input` inbox row.
 - **memory vs conversation history** — *Resolved.* "memory" means the curated `CuratedStore` only; the transcript is **conversation history** / the message store.
 - **loop (agent) vs loop (detection)** — *Resolved.* The **agent loop** is the execution cycle; **loop detection** is about repetitive-call *repetition*. Same word, unrelated meanings — always qualify.
 - **project vs space/workspace/dialog (folders for non-code chats)** — *Resolved.* A folder for notes/blog-style dialogs is an ordinary **project** (daemon-provisioned ones default under `~/.coagent/projects/`); no separate container term. "workspace" stays unused (git connotation); topic/thread name the Telegram dialog *on* a project, never the folder.

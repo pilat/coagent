@@ -29,7 +29,7 @@ func (s *svc) drainPendingRunners(ctx context.Context) {
 		return
 	}
 
-	err := s.ensureRunner(ctx, next.sessionID, next.workDir, next.projectID, nil)
+	err := s.ensureRunner(ctx, next.sessionID, next.workDir, next.projectID)
 	if errors.Is(err, admission.ErrNoCapacity) {
 		s.enqueuePendingRunner(next.sessionID, next.workDir, next.projectID)
 		return

@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/pilat/coagent/internal/budget"
 	"github.com/pilat/coagent/internal/controllerapi"
 	"github.com/pilat/coagent/internal/logger"
 	"github.com/pilat/coagent/internal/progress"
@@ -159,7 +160,7 @@ func (r *runtime) progressSnapshot(
 }
 
 //nolint:wsl_v5 // Derived budget fields are assembled as one projection.
-func progressBudget(record *sessionstore.BudgetRecord, cost float64, now time.Time) *progress.Budget {
+func progressBudget(record *budget.Record, cost float64, now time.Time) *progress.Budget {
 	if record == nil {
 		return nil
 	}

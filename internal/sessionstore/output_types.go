@@ -4,8 +4,6 @@ import (
 	"context"
 	"errors"
 	"time"
-
-	"github.com/pilat/coagent/internal/transcript"
 )
 
 type OutputType string
@@ -99,6 +97,7 @@ type OutputCommit struct {
 	OutputID int64
 	OwnerID  string
 	Existing bool
+	Content  string
 }
 
 type OutputQueueStatus struct {
@@ -145,14 +144,6 @@ type ManagerRootCreate struct {
 
 type OutputStore interface {
 	EnqueueOutput(ctx context.Context, draft OutputDraft) (*OutputCommit, error)
-	InsertAssistantMessageWithOutput(
-		ctx context.Context,
-		sessionID int64,
-		message *transcript.Message,
-		outputType OutputType,
-		content string,
-		releasesInput bool,
-	) (messageID int64, output *OutputCommit, err error)
 	BindManager(ctx context.Context, managerID, driver string, attributes map[string]any) error
 	ClaimOutputHead(ctx context.Context, managerID string) (*OutputClaim, error)
 	AckOutput(
@@ -173,14 +164,6 @@ type OutputStore interface {
 
 // RuntimeOutputStore is the atomic output surface required by a live session.
 // Delivery claims and acknowledgements remain outside the agent loop.
-type RuntimeOutputStore interface {
-	StateOutputStore
-	DirectOutputStore
-	CompactionCommandStore
-	CommandOutputStore
-	AssistantOutputStore
-	EnqueueOutput(ctx context.Context, draft OutputDraft) (*OutputCommit, error)
-}
 
 type OutputIdentityStore interface { //nolint:iface // Optional reconciliation capability.
 	OutputBySourceKey(ctx context.Context, sessionID int64, sourceKey string) (*OutputRecord, error)
@@ -188,9 +171,6 @@ type OutputIdentityStore interface { //nolint:iface // Optional reconciliation c
 
 // CommandOutputStore resolves an inbox command and its visible result together;
 // normal input promotion remains owned by the session boundary.
-type CommandOutputStore interface {
-	HandleInputWithOutput(ctx context.Context, inputID int64, reason string, draft OutputDraft) (*OutputCommit, error)
-}
 
 // LifecycleOutputStore commits terminal state with its manager-visible output.
 type LifecycleOutputStore interface {
@@ -211,13 +191,3 @@ type ReplacementStore interface {
 
 // AssistantOutputStore commits an assistant transcript row and its manager
 // output together as part of RuntimeOutputStore.
-type AssistantOutputStore interface {
-	InsertAssistantMessageWithOutput(
-		ctx context.Context,
-		sessionID int64,
-		message *transcript.Message,
-		outputType OutputType,
-		content string,
-		releasesInput bool,
-	) (messageID int64, output *OutputCommit, err error)
-}

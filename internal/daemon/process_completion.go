@@ -3,27 +3,13 @@ package daemon
 import (
 	"context"
 	"fmt"
+	"slices"
+	"strings"
 
-	"go.uber.org/zap"
-
-	"github.com/pilat/coagent/internal/backgroundprocess"
-	"github.com/pilat/coagent/internal/logger"
 	"github.com/pilat/coagent/internal/sessionstore"
 	"github.com/pilat/coagent/internal/subagent"
 )
 
-// routeProcessCompletion is deliberately only a wake hint. The process store
-// committed the terminal fact and its inbox row together before calling this.
-func (s *svc) routeProcessCompletion(ctx context.Context, completion backgroundprocess.Completion) {
-	if err := s.inputReady(ctx, completion.SessionID); err != nil {
-		logger.Ctx(ctx).Named("daemon.process").Warn(
-			"process_input_ready_failed", zap.String("process", completion.ProcessID), zap.Error(err),
-		)
-	}
-}
-
-// inputReady starts an eligible runner after a durable asynchronous input was
-// committed. Stopped and errored sessions retain facts until explicit resume.
 func (s *svc) inputReady(ctx context.Context, sessionID int64) error {
 	record, err := s.sessionStore.GetSession(ctx, sessionID)
 	if err != nil {
@@ -31,11 +17,41 @@ func (s *svc) inputReady(ctx context.Context, sessionID int64) error {
 	}
 
 	if record.KilledAt != nil || record.Status == sessionstore.SessionStatusStopped ||
-		record.Status == sessionstore.SessionStatusError || record.Status == sessionstore.SessionStatusStopping ||
+		record.Status == sessionstore.SessionStatusStopping ||
 		record.Status == sessionstore.SessionStatusTerminating {
 		return nil
 	}
+	rows, err := s.inboxStore.ListPending(ctx, sessionID)
+	if err != nil {
+		return err
+	}
+	if len(rows) == 0 || !slices.ContainsFunc(rows, func(row *sessionstore.InboxInput) bool {
+		if row.Source != sessionstore.InputSourceUser {
+			return true
+		}
+		switch strings.TrimSpace(row.RawContent) {
+		case "/status", "/stop", "/clear", "/kill":
+			return false
+		default:
+			return true
+		}
+	}) {
+		return nil
+	}
 
+	if record.Status == sessionstore.SessionStatusError {
+		rows, err := s.inboxStore.ListPending(ctx, sessionID)
+		if err != nil {
+			return err
+		}
+		if record.ParentID != 0 || !slices.ContainsFunc(rows, func(row *sessionstore.InboxInput) bool { return row.Source == sessionstore.InputSourceSchedule }) {
+			return nil
+		}
+	}
+	runnable, err := s.pendingInputRunnable(ctx, sessionID)
+	if err != nil || !runnable {
+		return err
+	}
 	handled, err := s.handleTerminalChildInputReady(ctx, record)
 	if err != nil {
 		return err
@@ -45,7 +61,7 @@ func (s *svc) inputReady(ctx context.Context, sessionID int64) error {
 		return nil
 	}
 
-	return s.routeQueuedSessionInput(ctx, sessionID, asyncSessionInput{value: inboxReadyInput{}})
+	return s.ensureSessionRunner(ctx, sessionID)
 }
 
 func (s *svc) handleTerminalChildInputReady(

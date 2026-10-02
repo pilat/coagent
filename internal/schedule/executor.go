@@ -11,6 +11,7 @@ import (
 
 	"github.com/pilat/coagent/internal/logger"
 	"github.com/pilat/coagent/internal/sessionevent"
+	"github.com/pilat/coagent/internal/sessionstore"
 	"github.com/pilat/coagent/internal/tool"
 )
 
@@ -20,11 +21,6 @@ import (
 const maxOneShotAttempts = 10
 
 type SessionSender interface {
-	DeliverPendingCallResult(
-		ctx context.Context, sessionID int64, callID, toolName, content string,
-	) (bool, error)
-	DeliverScheduleTick(ctx context.Context, sessionID int64, deliveryID, content string) (bool, error)
-	DeliverFreshSchedule(ctx context.Context, sessionID int64, deliveryID, content string) (bool, error)
 	NotifySession(sessionID int64, n sessionevent.Notification)
 }
 
@@ -135,39 +131,21 @@ func (e *executor) fireOneShotSchedules(ctx context.Context, now time.Time, l *z
 
 func (e *executor) deliverOneShot(ctx context.Context, sched *Schedule) (bool, error) {
 	if sched.metadata.ToolCallID != "" {
-		applied, err := e.sender.DeliverPendingCallResult(
-			ctx,
-			sched.sessionID,
-			sched.metadata.ToolCallID,
-			tool.IDSleep,
-			sched.inputMessage,
-		)
-		if err != nil {
-			return false, fmt.Errorf("deliver sleep result for schedule %d: %w", sched.id, err)
+		pending := e.store.CallPending(ctx, sched.sessionID, sched.metadata.ToolCallID)
+		if !pending {
+			return false, nil
 		}
-
-		return applied, nil
-	}
-
-	if sched.fresh {
-		applied, err := e.sender.DeliverFreshSchedule(
-			ctx, sched.sessionID, oneShotDeliveryID(sched.id), sched.inputMessage,
-		)
+		result, err := e.store.Enqueue(ctx, sessionstore.Input{
+			SessionID: sched.sessionID, Source: sessionstore.InputSourceCallResult,
+			Content: sched.inputMessage, DeliveryKey: fmt.Sprintf("sleep:%d", sched.id),
+			Attributes: map[string]any{"call_id": sched.metadata.ToolCallID, "tool_id": tool.IDSleep},
+		})
 		if err != nil {
-			return false, fmt.Errorf("deliver fresh schedule %d: %w", sched.id, err)
+			return false, err
 		}
-
-		return applied, nil
+		return result.Applied, nil
 	}
-
-	applied, err := e.sender.DeliverScheduleTick(
-		ctx, sched.sessionID, oneShotDeliveryID(sched.id), sched.inputMessage,
-	)
-	if err != nil {
-		return false, fmt.Errorf("deliver schedule tick %d: %w", sched.id, err)
-	}
-
-	return applied, nil
+	return e.deliverCronSchedule(ctx, sched, oneShotDeliveryID(sched.id), sched.inputMessage)
 }
 
 // handleOneShotFailure records a delivery failure and drops the schedule once
@@ -291,21 +269,15 @@ func (e *executor) deliverCronSchedule(
 	sched *Schedule,
 	deliveryID, content string,
 ) (bool, error) {
-	if sched.fresh {
-		applied, err := e.sender.DeliverFreshSchedule(ctx, sched.sessionID, deliveryID, content)
-		if err != nil {
-			return false, fmt.Errorf("deliver fresh schedule: %w", err)
-		}
-
-		return applied, nil
-	}
-
-	applied, err := e.sender.DeliverScheduleTick(ctx, sched.sessionID, deliveryID, content)
+	result, err := e.store.Enqueue(ctx, sessionstore.Input{
+		SessionID: sched.sessionID, Source: sessionstore.InputSourceSchedule,
+		Content: content, DeliveryKey: deliveryID, Attributes: map[string]any{"fresh": sched.fresh},
+	})
 	if err != nil {
 		return false, fmt.Errorf("deliver schedule tick: %w", err)
 	}
 
-	return applied, nil
+	return result.Applied, nil
 }
 
 func oneShotDeliveryID(scheduleID int64) string {

@@ -8,15 +8,16 @@ import (
 	"github.com/pilat/coagent/internal/session"
 )
 
-type Runner[T any] interface {
+type Runner interface {
 	Cancel()
 	Stop()
 	Done() <-chan struct{}
 	Complete()
-	AppendInput(T)
-	DrainInputs() []T
 	Service() session.Service
 	SetService(session.Service)
+	Working() bool
+	SetWorking(bool)
+	SetPreserveStopped(bool)
 	HasRun() bool
 	MarkRun()
 	Info() RunnerInfo
@@ -30,15 +31,15 @@ type RunnerInfo struct {
 	PreserveStopped bool
 }
 
-var _ Runner[int] = (*runner[int])(nil)
+var _ Runner = (*runner)(nil)
 
-type runner[T any] struct {
+type runner struct {
 	mu sync.Mutex
 
 	cancel          context.CancelFunc
 	done            chan struct{}
 	service         session.Service
-	inputs          []T
+	working         bool
 	hasRun          bool
 	workDir         string
 	projectID       int64
@@ -47,79 +48,81 @@ type runner[T any] struct {
 	preserveStopped bool
 }
 
-func NewRunner[T any](
+func NewRunner(
 	cancel context.CancelFunc,
 	workDir string,
 	projectID int64,
 	kind admission.Kind,
 	parentID int64,
 	preserveStopped bool,
-	inputs []T,
-) Runner[T] {
-	return &runner[T]{
+) Runner {
+	return &runner{
 		cancel: cancel, done: make(chan struct{}), workDir: workDir,
 		projectID: projectID, kind: kind, parentID: parentID,
-		preserveStopped: preserveStopped, inputs: inputs,
+		preserveStopped: preserveStopped,
 	}
 }
 
-func (r *runner[T]) Cancel() { r.cancel() }
+func (r *runner) Cancel() { r.cancel() }
 
-func (r *runner[T]) Stop() {
+func (r *runner) Stop() {
 	r.cancel()
 	<-r.done
 }
 
-func (r *runner[T]) Done() <-chan struct{} { return r.done }
+func (r *runner) Done() <-chan struct{} { return r.done }
 
-func (r *runner[T]) Complete() { close(r.done) }
+func (r *runner) Complete() { close(r.done) }
 
-func (r *runner[T]) AppendInput(input T) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-
-	r.inputs = append(r.inputs, input)
-}
-
-func (r *runner[T]) DrainInputs() []T {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-
-	inputs := r.inputs
-	r.inputs = nil
-
-	return inputs
-}
-
-func (r *runner[T]) Service() session.Service {
+func (r *runner) Service() session.Service {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
 	return r.service
 }
 
-func (r *runner[T]) SetService(service session.Service) {
+func (r *runner) SetService(service session.Service) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
 	r.service = service
 }
 
-func (r *runner[T]) HasRun() bool {
+func (r *runner) Working() bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.working
+}
+
+func (r *runner) SetWorking(working bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.working = working
+}
+
+func (r *runner) SetPreserveStopped(preserve bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.preserveStopped = preserve
+}
+
+func (r *runner) HasRun() bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
 	return r.hasRun
 }
 
-func (r *runner[T]) MarkRun() {
+func (r *runner) MarkRun() {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
 	r.hasRun = true
 }
 
-func (r *runner[T]) Info() RunnerInfo {
+func (r *runner) Info() RunnerInfo {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	return RunnerInfo{
 		WorkDir: r.workDir, ProjectID: r.projectID, Kind: r.kind,
 		ParentID: r.parentID, PreserveStopped: r.preserveStopped,

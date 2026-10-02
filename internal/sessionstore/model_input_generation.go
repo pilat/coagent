@@ -2,7 +2,6 @@ package sessionstore
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 	"time"
 )
@@ -34,19 +33,6 @@ func advanceModelInputGeneration(ctx context.Context, q execer, sessionID, bound
 	return nil
 }
 
-// InvalidateCompletionCheckTx clears a stale completion check and its empty
-// streak inside the caller's transaction, in the same commit as the external
-// model-visible input that supersedes them. The typed host completion nudge is
-// the only ingress that must not call this. Idempotent replays that insert no
-// new model input never reach it. Exported for cross-package transactions
-// (subagent delivery) whose tests may not import this package back.
-func InvalidateCompletionCheckTx(ctx context.Context, tx *sql.Tx, sessionID int64, _ time.Time) error {
-	return invalidateCompletionCheckTx(ctx, tx, sessionID)
-}
-
-// invalidateCompletionCheckTx clears a stale completion check and its empty
-// streak inside the caller's transaction, in the same commit as the external
-// model-visible input that supersedes them.
 func invalidateCompletionCheckTx(ctx context.Context, q execer, sessionID int64) error {
 	result, err := q.ExecContext(ctx, `
 		UPDATE sessions

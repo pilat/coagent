@@ -49,7 +49,7 @@ type runtime struct {
 	hasActiveLoop         func(int64) bool
 	mainModelWorking      func(int64) bool
 	liveContextProjection func(context.Context, int64) (progress.Context, bool)
-	startBudgetPark       func(*sessionstore.BudgetRecord)
+	startBudgetPark       func(*budget.Record)
 	publish               func(int64, sessionevent.Notification)
 
 	mu             sync.Mutex
@@ -67,7 +67,7 @@ func New(
 	hasActiveLoop func(int64) bool,
 	mainModelWorking func(int64) bool,
 	contextProjection func(context.Context, int64) (progress.Context, bool),
-	startBudgetPark func(*sessionstore.BudgetRecord),
+	startBudgetPark func(*budget.Record),
 	publish func(int64, sessionevent.Notification),
 ) Service {
 	return &runtime{

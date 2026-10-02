@@ -15,7 +15,7 @@ fi
 packages=$(mktemp)
 trap 'rm -f "$packages"' EXIT HUP INT TERM
 
-go list -f '{{.ImportPath}}' ./... | sed "s|^$module/||" | sort > "$packages"
+go list -f '{{if or .GoFiles .CgoFiles}}{{.ImportPath}}{{end}}' ./... | sed '/^$/d' | sed "s|^$module/||" | sed '/^ai\//d' | sort > "$packages"
 
 while IFS= read -r package; do
 	marker="- \`$package\`"

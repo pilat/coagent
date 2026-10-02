@@ -7,6 +7,8 @@ import (
 	"errors"
 	"fmt"
 	"time"
+
+	"github.com/pilat/coagent/internal/sessionstore"
 )
 
 const processColumns = `id, session_id, root_session_id, tool_call_id, output_path,
@@ -16,7 +18,8 @@ const processColumns = `id, session_id, root_session_id, tool_call_id, output_pa
 var _ Store = (*store)(nil)
 
 type store struct {
-	db *sql.DB
+	db       *sql.DB
+	sessions sessionstore.Store
 }
 
 // Store owns ordinary durable background-process ledger access.
@@ -46,8 +49,8 @@ type Store interface {
 }
 
 // NewStore returns the SQL-backed process ledger.
-func NewStore(db *sql.DB) Store {
-	return &store{db: db}
+func NewStore(db *sql.DB, sessions sessionstore.Store) Store {
+	return &store{db: db, sessions: sessions}
 }
 
 func (s *store) InsertProcess(ctx context.Context, process Process) error {
@@ -221,73 +224,31 @@ func (s *store) CountTerminalByIntentSince(
 	return count, nil
 }
 
-func (s *store) finalize(
-	ctx context.Context,
-	id string,
-	natural State,
-	exitCode *int,
-	outputSize int64,
-	fallbackIntent HostIntent,
-) (Process, bool, error) {
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return Process{}, false, fmt.Errorf("finalize process: %w", err)
-	}
-
-	defer func() { _ = tx.Rollback() }()
-
-	var intent string
-	var state string
-
-	err = tx.QueryRowContext(ctx,
-		`SELECT host_intent, state FROM background_processes WHERE id = ?`, id,
-	).Scan(&intent, &state)
-	if err != nil {
-		return Process{}, false, fmt.Errorf("finalize process: %w", err)
-	}
-
-	if state != string(StateRunning) {
-		winner, err := scanProcess(tx.QueryRowContext(ctx,
-			`SELECT `+processColumns+` FROM background_processes WHERE id = ?`, id,
-		))
-		if err != nil {
-			return Process{}, false, err
+func (s *store) finalize(ctx context.Context, id string, natural State, exitCode *int, outputSize int64, fallbackIntent HostIntent) (Process, bool, error) {
+	var winner Process
+	var won bool
+	err := s.sessions.WithTx(ctx, func(tx *sql.Tx) error {
+		var intent string
+		var state string
+		if err := tx.QueryRowContext(ctx, "SELECT host_intent, state FROM background_processes WHERE id = ?", id).Scan(&intent, &state); err != nil {
+			return fmt.Errorf("finalize process: %w", err)
 		}
-
-		return winner, false, nil
-	}
-
-	outcome := natural
-	persistedFallback := IntentNone
-
-	if HostIntent(intent) != IntentNone {
-		outcome = IntentToState(HostIntent(intent))
-	} else if fallbackIntent != IntentNone {
-		outcome = IntentToState(fallbackIntent)
-		persistedFallback = fallbackIntent
-	}
-
-	winner, won, err := s.finalizeRunning(
-		ctx, tx, id, outcome, exitCode, outputSize, persistedFallback,
-	)
-	if err != nil {
-		return Process{}, false, err
-	}
-
-	if !won {
-		_ = tx.Rollback()
-
-		latest, err := s.GetProcess(ctx, id)
-		if err != nil {
-			return Process{}, false, err
+		if state != string(StateRunning) {
+			var err error
+			winner, err = scanProcess(tx.QueryRowContext(ctx, "SELECT "+processColumns+" FROM background_processes WHERE id = ?", id))
+			return err
 		}
-
-		return latest, false, nil
-	}
-
-	if err := tx.Commit(); err != nil {
-		return Process{}, false, fmt.Errorf("finalize process: %w", err)
-	}
-
-	return winner, true, nil
+		outcome := natural
+		persistedFallback := IntentNone
+		if HostIntent(intent) != IntentNone {
+			outcome = IntentToState(HostIntent(intent))
+		} else if fallbackIntent != IntentNone {
+			outcome = IntentToState(fallbackIntent)
+			persistedFallback = fallbackIntent
+		}
+		var err error
+		winner, won, err = s.finalizeRunning(ctx, tx, id, outcome, exitCode, outputSize, persistedFallback)
+		return err
+	})
+	return winner, won, err
 }

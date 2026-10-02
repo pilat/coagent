@@ -63,27 +63,15 @@ func (s *svc) resolveInterruptedCalls(ctx context.Context) {
 
 // closeInterruptedCalls resolves a session's pending in-loop calls.
 func (s *svc) closeInterruptedCalls(ctx context.Context, rec *sessionstore.SessionRecord) (int, error) {
-	pending, err := s.storedInterruptedCalls(ctx, rec.ID)
-	if err != nil || len(pending) == 0 {
+	calls, err := s.storedInterruptedCalls(ctx, rec.ID)
+	if err != nil || len(calls) == 0 {
 		return 0, err
 	}
-
-	workDir, err := s.store.GetProjectWorkDir(ctx, rec.ProjectID)
+	_, err = s.runtimeStore.Commit(ctx, sessionstore.Commit{SessionID: rec.ID, Mode: sessionstore.CommitLifecycle, ToolResults: session.SettleResults(calls, interruptedCallNotice)})
 	if err != nil {
-		return 0, fmt.Errorf("resolve project for session %d: %w", rec.ID, err)
+		return 0, err
 	}
-
-	sess, err := s.openSession(ctx, rec.ID, workDir, rec, false, false, true)
-	if err != nil {
-		return 0, fmt.Errorf("open session %d to close interrupted calls: %w", rec.ID, err)
-	}
-	defer sess.Close()
-
-	if err := sess.ResolveInterruptedCalls(ctx, pending, interruptedCallNotice); err != nil {
-		return 0, fmt.Errorf("close interrupted calls in session %d: %w", rec.ID, err)
-	}
-
-	return len(pending), nil
+	return len(calls), nil
 }
 
 // storedInterruptedCalls is a session's pending in-loop calls read from the

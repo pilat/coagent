@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-	"time"
 
 	"github.com/pilat/coagent/internal/llmwire"
 	"github.com/pilat/coagent/internal/registry"
@@ -25,11 +24,6 @@ func (s *svc) summarizeCheckpoint(
 	pendingExternal map[string]bool,
 	window int,
 ) (string, *compactionUsage, error) {
-	if s.budgetGate != nil {
-		if err := s.budgetGate.Admit(ctx, time.Now().UTC()); err != nil {
-			return "", nil, fmt.Errorf("budget admission for compaction: %w", err)
-		}
-	}
 
 	activeTools := s.registry.List()
 	if s.loopDetector.forceTextOnly {

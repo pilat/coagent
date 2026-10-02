@@ -6,102 +6,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"strings"
 	"time"
-
-	"github.com/pilat/coagent/internal/transcript"
 )
-
-// Outbox source-key phases: they join the message id in the idempotency key.
-const (
-	outputPhaseProgress = "progress"
-	outputPhaseReply    = "reply"
-	outputPhaseFinal    = "final"
-)
-
-//nolint:nonamedreturns // message and output identities need named results.
-func (s *store) InsertAssistantMessageWithOutput(
-	ctx context.Context,
-	sessionID int64,
-	message *transcript.Message,
-	outputType OutputType,
-	content string,
-	releasesInput bool,
-) (messageID int64, output *OutputCommit, err error) {
-	if message == nil || message.Role != assistantRole || !isMessageOutput(outputType) || content == "" {
-		return 0, nil, errors.New("invalid assistant output")
-	}
-
-	if releasesInput && storedMessageHasToolCalls(message) {
-		return 0, nil, errors.New("assistant progress with tools cannot release input")
-	}
-
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return 0, nil, fmt.Errorf("begin assistant output: %w", err)
-	}
-	defer func() { _ = tx.Rollback() }()
-
-	owner, err := outputOwner(ctx, tx, sessionID)
-	if err != nil {
-		return 0, nil, err
-	}
-
-	if err := outputSessionWritable(ctx, tx, sessionID); err != nil {
-		return 0, nil, err
-	}
-
-	messageID, err = insertMessageWith(ctx, tx, sessionID, message)
-	if err != nil {
-		return 0, nil, err
-	}
-
-	phase := outputPhaseProgress
-	if releasesInput {
-		phase = outputPhaseFinal
-	} else if outputType == OutputMessagePersistent {
-		phase = outputPhaseReply
-	}
-
-	key := fmt.Sprintf("message:%d:%s", messageID, phase)
-	fingerprint := outputFingerprintWithRelease(outputType, content, sessionID, nil, releasesInput)
-
-	attributes, err := stampMessageOutputAttributes(ctx, tx, sessionID, owner, nil)
-	if err != nil {
-		return 0, nil, err
-	}
-
-	encoded, err := json.Marshal(attributes)
-	if err != nil {
-		return 0, nil, fmt.Errorf("marshal assistant output attributes: %w", err)
-	}
-
-	result, err := tx.ExecContext(ctx, `
-		INSERT INTO session_outbox
-			(session_id, type, content, attributes, source_key, fingerprint, created_at, releases_input)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-		sessionID, outputType, content, string(encoded), key, fingerprint, time.Now().UTC(), releasesInput)
-	if err != nil {
-		return 0, nil, fmt.Errorf("insert assistant output: %w", err)
-	}
-
-	outputID, err := result.LastInsertId()
-	if err != nil {
-		return 0, nil, fmt.Errorf("assistant output id: %w", err)
-	}
-
-	if err := tx.Commit(); err != nil {
-		return 0, nil, fmt.Errorf("commit assistant output: %w", err)
-	}
-
-	return messageID, &OutputCommit{OutputID: outputID, OwnerID: owner}, nil
-}
-
-func storedMessageHasToolCalls(message *transcript.Message) bool {
-	var calls []json.RawMessage
-
-	return json.Unmarshal(message.ToolCalls, &calls) == nil && len(calls) > 0
-}
 
 func (s *store) EnqueueOutput(ctx context.Context, draft OutputDraft) (*OutputCommit, error) {
 	if err := validateOutputDraft(draft); err != nil {
@@ -114,7 +20,7 @@ func (s *store) EnqueueOutput(ctx context.Context, draft OutputDraft) (*OutputCo
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	commit, err := enqueueOutputTx(ctx, tx, draft)
+	commit, err := insertOutputTx(ctx, tx, draft, CommitLoop)
 	if err != nil {
 		return nil, err
 	}
@@ -127,19 +33,25 @@ func (s *store) EnqueueOutput(ctx context.Context, draft OutputDraft) (*OutputCo
 }
 
 //nolint:dupl // EnqueueOutput and EnqueueProgressOutput differ only in their eligibility gate.
-func enqueueOutputTx(ctx context.Context, tx *sql.Tx, draft OutputDraft) (*OutputCommit, error) {
+func insertOutputTx(ctx context.Context, tx *sql.Tx, draft OutputDraft, mode CommitMode) (*OutputCommit, error) {
 	owner, err := outputOwner(ctx, tx, draft.SessionID)
+	if errors.Is(err, ErrOutputOwner) || errors.Is(err, ErrOutputNotRoot) {
+		return nil, nil
+	}
 	if err != nil {
 		return nil, err
 	}
 
-	if err := outputSessionWritable(ctx, tx, draft.SessionID); err != nil {
-		return nil, err
+	if mode == CommitLoop {
+		if err := outputSessionWritable(ctx, tx, draft.SessionID); err != nil {
+			return nil, err
+		}
 	}
 
 	if err := validateLifecycleTarget(ctx, tx, draft, owner); err != nil {
 		return nil, err
 	}
+	draft.Fingerprint = outputFingerprintWithRelease(draft.Type, draft.Content, draft.SessionID, draft.Attributes, draft.ReleasesInput)
 
 	attributes := cloneAttributes(draft.Attributes)
 	attributes[managerIDAttribute] = owner
@@ -173,7 +85,7 @@ func enqueueOutputTx(ctx context.Context, tx *sql.Tx, draft OutputDraft) (*Outpu
 			return nil, fmt.Errorf("output id: %w", idErr)
 		}
 
-		return &OutputCommit{OutputID: id, OwnerID: owner}, nil
+		return &OutputCommit{OutputID: id, OwnerID: owner, Content: draft.Content}, nil
 	}
 
 	if draft.SourceKey == "" || !isUniqueConstraintError(err) {
@@ -193,7 +105,7 @@ func enqueueOutputTx(ctx context.Context, tx *sql.Tx, draft OutputDraft) (*Outpu
 		return nil, fmt.Errorf("%w: session %d key %q", ErrOutputConflict, draft.SessionID, draft.SourceKey)
 	}
 
-	return &OutputCommit{OutputID: existingID, OwnerID: owner, Existing: true}, nil
+	return &OutputCommit{OutputID: existingID, OwnerID: owner, Existing: true, Content: draft.Content}, nil
 }
 
 //nolint:wsl_v5 // Identity lookup keeps sentinel handling adjacent.
@@ -212,101 +124,4 @@ func (s *store) OutputBySourceKey(
 	}
 
 	return record, nil
-}
-
-// HandleInputWithOutput commits a command's terminal state with its response.
-//
-//nolint:funlen // A command's input state and output must remain visibly co-located in one transaction.
-func (s *store) HandleInputWithOutput(
-	ctx context.Context,
-	inputID int64,
-	reason string,
-	draft OutputDraft,
-) (*OutputCommit, error) {
-	if reason == "" {
-		return nil, errors.New("empty input handling reason")
-	}
-
-	if err := validateOutputDraft(draft); err != nil {
-		return nil, err
-	}
-
-	if draft.SourceKey == "" {
-		command := strings.Fields(reason)[0]
-		draft.SourceKey = fmt.Sprintf("input:%d:%s:result", inputID, command)
-		draft.Fingerprint = outputFingerprint(draft.Type, draft.Content, draft.SessionID, draft.Attributes)
-	}
-
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return nil, fmt.Errorf("begin command output: %w", err)
-	}
-	defer func() { _ = tx.Rollback() }()
-
-	input, err := loadInboxInput(ctx, tx, inputID)
-	if err != nil {
-		return nil, err
-	}
-
-	if input.State != InputStatePending {
-		return nil, fmt.Errorf("%w: input %d is %s", ErrInputResolved, inputID, input.State)
-	}
-
-	if input.SessionID != draft.SessionID {
-		return nil, errors.New("command output session does not match input")
-	}
-
-	owner, err := outputOwner(ctx, tx, draft.SessionID)
-	if err != nil {
-		return nil, err
-	}
-
-	attributes := cloneAttributes(draft.Attributes)
-	attributes[managerIDAttribute] = owner
-
-	if isMessageOutput(draft.Type) {
-		attributes, err = stampMessageOutputAttributes(ctx, tx, draft.SessionID, owner, draft.Attributes)
-		if err != nil {
-			return nil, err
-		}
-	}
-
-	encoded, err := json.Marshal(attributes)
-	if err != nil {
-		return nil, fmt.Errorf("marshal command output attributes: %w", err)
-	}
-
-	result, err := tx.ExecContext(ctx, `
-		UPDATE session_inbox
-		SET state = 'handled', resolved_at = ?, resolution_reason = ?
-		WHERE id = ? AND state = 'pending'`, time.Now().UTC(), reason, inputID)
-	if err != nil {
-		return nil, fmt.Errorf("handle command input %d: %w", inputID, err)
-	}
-
-	if err := requireOnePendingResolution(ctx, tx, result, inputID); err != nil {
-		return nil, err
-	}
-
-	now := time.Now().UTC()
-
-	result, err = tx.ExecContext(ctx, `
-		INSERT INTO session_outbox
-			(session_id, type, content, attributes, source_key, fingerprint, created_at)
-		VALUES (?, ?, ?, ?, NULLIF(?, ''), NULLIF(?, ''), ?)`,
-		draft.SessionID, draft.Type, draft.Content, string(encoded), draft.SourceKey, draft.Fingerprint, now)
-	if err != nil {
-		return nil, fmt.Errorf("insert command output: %w", err)
-	}
-
-	outputID, err := result.LastInsertId()
-	if err != nil {
-		return nil, fmt.Errorf("command output id: %w", err)
-	}
-
-	if err := tx.Commit(); err != nil {
-		return nil, fmt.Errorf("commit command output: %w", err)
-	}
-
-	return &OutputCommit{OutputID: outputID, OwnerID: owner}, nil
 }

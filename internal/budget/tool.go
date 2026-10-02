@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/pilat/coagent/internal/sessionstore"
 	"github.com/pilat/coagent/internal/tool"
 )
 
@@ -66,7 +65,7 @@ func (t *budgetTool) Execute(ctx context.Context, raw json.RawMessage) (*tool.Re
 		}
 
 		record, err := t.service.Get(ctx, t.rootID)
-		if errors.Is(err, sessionstore.ErrBudgetNotFound) {
+		if errors.Is(err, ErrNotFound) {
 			return &tool.Result{Output: "No budget is configured."}, nil
 		}
 
@@ -138,7 +137,7 @@ func currentGrant(ctx context.Context, rootID int64) (Grant, error) {
 	}, nil
 }
 
-func renderRecord(record *sessionstore.BudgetRecord) string {
+func renderRecord(record *Record) string {
 	if record == nil {
 		return "No budget is configured."
 	}

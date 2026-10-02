@@ -75,7 +75,7 @@ func (s *svc) handleSetModel(modelID, reasoning string) error {
 		return err
 	}
 
-	newClient, err := s.newLLMWithModel(s.cfg, modelID)
+	newClient, err := llm.NewClientWithModel(s.cfg, modelID)
 	if err != nil {
 		return fmt.Errorf("create client for model %s: %w", modelID, err)
 	}

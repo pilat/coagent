@@ -1,19 +1,8 @@
 package session
 
 import (
-	"context"
 	"strings"
-
-	"github.com/pilat/coagent/internal/sessionstore"
 )
-
-func (s *svc) enqueuePersistentOutput(ctx context.Context, content string) error {
-	if !s.outputEnabled {
-		return nil
-	}
-
-	return s.ms.enqueueOutput(ctx, sessionstore.OutputMessagePersistent, content)
-}
 
 func (s *svc) renderSessionHelp() string {
 	lines := []string{

@@ -62,16 +62,14 @@ does not imply a tier except where it expresses an implementation variant.
 - `internal/catalog` — external model metadata acquisition, caching and identifier matching.
 - `internal/coagenthome` — sole resolver and name owner for the coagent home directory, including each project's process output.
 - `internal/config` — typed configuration and secrets resolution policy.
-- `internal/configapply` — serialized config-commit claim and restart trigger.
+- `internal/configapply` — activation-gated config tool, staged apply ledger, serialized commit claim and restart trigger.
 - `internal/configops` — guarded whole-document configuration staging, backups and restart verdict markers.
-- `internal/configtools` — the agent-facing `config_edit` tool schema and parsing.
 - `internal/controllerapi` — private daemon-to-manager contract and DTO vocabulary.
 - `internal/ctl` — authenticated local control socket, status operation registry and client.
 - `internal/daemon` — global runtime coordinator and persistence/integration backend.
 - `internal/git` — Git operations used by repository-facing features.
 - `internal/humanize` — presentation-only formatting helpers (human-readable sizes); stdlib only.
 - `internal/id` — local identity generation utilities.
-- `internal/inputruntime` — durable session-input promotion, activation and command boundary.
 - `internal/install` — Linux systemd service installation and lifecycle integration. Refuses non-Linux hosts before target resolution.
 - `internal/llm` — provider protocol drivers, client creation, retries and cost handling.
 - `internal/llmwire` — provider-neutral message, response and tool wire vocabulary.
@@ -138,9 +136,8 @@ them from transcript text or infer correctness from a notification. Schedule,
 MCP, config-apply, and subagent packages each own their producer ledger; the
 daemon joins those ledgers into a session's runnable and waiting projections.
 Subagent link vocabulary, child creation, activation terminalization and
-parent-transcript delivery belong to `subagent`, not the daemon. Its store owns
-those cross-table transactions; session-store owns ordinary session runtime and
-transcript mutations.
+completion enqueueing belong to `subagent`. Its transactions use session-store
+operations for session and inbox writes; only session-store writes transcripts.
 
 Session-store consumers receive four named ownership surfaces rather than its
 complete constructor type: agent runtime/checkpoint transactions, manager output
@@ -148,9 +145,9 @@ delivery, manager-root creation/replacement, and lifecycle command settlement.
 These boundaries group operations by the invariant committed atomically, not by
 which table a query happens to touch.
 
-A live session receives transcript/checkpoint persistence and atomic output
-persistence as separate contracts; manager output cannot be enabled without the
-latter. Its in-memory model messages contain no database fields: a positional
+A live session commits boundary, model and tool steps through one session-store
+transaction API. It chooses response outcomes; the store applies their parts
+and observes tree-wide budgets atomically. Its model messages contain no database fields: a positional
 row-ID vector travels with the projection across factory resume and compaction,
 then keys durable replacement and idempotent final output.
 
@@ -250,12 +247,12 @@ inventory share one marked, persisted user-role row before the exact opening
 task. Resume uses those stored rows unchanged; the system prompt contains only
 stable environment and registry context, while new timestamped input carries
 local time, zone abbreviation and numeric offset.
-`inputruntime` owns FIFO promotion, one-turn activation and atomic command output
-at that boundary. It does not append a user message while the session has
-unresolved external work. Completion, scheduling and user input use durable
-paths before a runner observes them. `/status` is the read-only exception to
-model invocation: the loop resolves its durable inbox row and persistent
-full-progress output at a safe input boundary without sending it to the model.
+The session boundary resolves FIFO inbox rows, one-turn activations and command
+outputs in one commit. Exact call results are handled before ordinary rows;
+non-sleep external work defers new model input. Every producer uses the same
+durable enqueue path, which wakes runners only after commit. `/status` is
+answered at enqueue by the daemon; queued read-only commands are resolved by
+the loop without a model call.
 A stopped root may consume a read-only command at the FIFO head without
 reactivating; asynchronous rows ahead of that command remain parked.
 Standalone scheduled work is a root-session capability: the daemon attaches
@@ -279,8 +276,8 @@ or accepted-input generation; retries and daemon restarts cannot enqueue another
 receipt for that work. Stop/kill fences suppress late failure receipts. A fresh
 user action or explicit daemon restart may retry after configuration repair.
 Teardown releases an abandoned configuration apply and settles its durable call
-under the lifecycle fence through a transcript-only session, without restarting
-the failed loop. Its grant expires before the result is written; a failed result
+under the lifecycle fence through a direct store commit, without constructing
+another session. Its grant expires before the result is written; a failed result
 write retains its producer for the next explicit activation.
 
 The provider's normalized and native finish reasons are independent of response
@@ -307,13 +304,13 @@ Empty no-wake stops are a durable anti-loop signal instead: the third receives
 the strong warning, the sixth commits one host notice and ends the activation
 through ordinary successful completion. Every accepted response commits its
 assistant message, iteration, completion state, empty streak, budget verdict,
-nudge and optional manager output in one SQLite disposition transaction.
+nudge and optional manager output in one SQLite step transaction.
 
 A no-tool `stop` with a wake source completes the current activation even
 while a background process or subagent remains. Completion input in
 `session_inbox` reactivates that completed session for one later turn. Session construction
-captures advertised process identities and pending subagent links; after budget
-admission, the first provider call durably appends a non-empty snapshot as
+captures advertised process identities and pending subagent links; the first
+boundary that will invoke the model durably appends a non-empty snapshot as
 user-role activation context. Each later model-running activation appends its
 own snapshot without deduplication. Compaction independently refreshes the live
 ledger projection inside its marked checkpoint. Later transcript observations
@@ -496,15 +493,15 @@ tree has an advertised running process, an undelivered background child, or
 pending asynchronous completion input. Producer ledgers are checked before the
 inbox so their atomic terminal-to-input transition cannot disappear between reads.
 
-For a rejected ordinary model attempt, session-store atomically advances the
-iteration, records usage and finish evidence, observes the root-tree budget and
-selects exactly one recovery, terminal-error or budget-park outcome. Budget
+For a rejected ordinary model attempt, the session chooses recovery or terminal
+error. Its store commit advances the iteration, records usage and finish evidence,
+and observes the root-tree budget before applying conditional outcome parts. Budget
 crossing takes precedence. Recovery identity is the explicit link from its
 host-authored input to the rejected attempt; later manager input supersedes an
 unfinished chain through durable inbox provenance rather than transcript text.
 
 For an accepted ordinary model attempt the same single-commit principle holds:
-the disposition transaction inserts the assistant row, advances the iteration,
+the step transaction inserts the assistant row, advances the iteration,
 sets or clears the completion-check candidate, stamps the empty-stop streak,
 captures post-disposition progress facts and renders the final footer from
 them database-free, then inserts the optional manager output. A confirmed
@@ -541,8 +538,9 @@ owner and eventual result. It is never executed again, synthesized by transcript
 repair, or bypassed by later normal input.
 
 The owning producer records enough durable state to recover after restart. The
-daemon derives pending calls from those ledgers and accepts a result only if it
-matches the still-pending call and tool identity. The result enters the durable
+daemon snapshots ownership from pending call-result rows, config applies, sleeps
+and undelivered blocking links. The session accepts a result only if its call
+and tool identities match an unresolved owned call. The result enters the durable
 inbox, then the append-only transcript at an activation boundary. This exactness
 is what prevents stale timers, child completions or restart verdicts from
 answering a newer call.
@@ -564,13 +562,13 @@ Foreground work suspends the parent and owes one result to the parent call.
 Background work reports independently without blocking the parent. A child can
 have serialized rounds: an activation sequence rejects delayed completions from
 an earlier round. Foreground completion uses a transactional link compare-and-swap
-with exact parent transcript insertion. Background completion instead commits its
+with an exact `source=call_result` parent inbox row. Background completion commits its
 delivery acknowledgement with one `source=subagent` parent inbox row; the shared
 loop later promotes that bounded envelope. If the parent or its root was killed,
 the same transaction closes the link obligation without creating inbox input;
-startup recovery retains that suppression path across a crash window. A winning foreground commit refreshes
-the live transcript from SQLite so rows committed across compaction retain their
-position. Cascade stop, failed delivery and restart recovery preserve the link's
+startup recovery retains that suppression path across a crash window. The parent
+boundary inserts the foreground result and reloads its transcript from SQLite.
+Cascade stop, failed delivery and restart recovery preserve the link's
 obligation until it is resolved or explicitly stopped. The same completion
 rules apply to roots and every subagent type: a child with no todo list
 receives the same generic second look, only its confirmed response becomes the
@@ -584,9 +582,10 @@ Schedules are durable producer records. A one-shot with a tool-call identifier
 is a pending sleep and owes an exact suspended-call result; a metadata-free
 one-shot is future session input and must not be mistaken for a waiting sleep.
 Cron and standalone one-shot deliveries carry a deterministic identity. The
-identity fingerprint and transcript mutation commit together, so an identical
-retry is acknowledged without another message and a semantic collision fails
-closed.
+identity is unique per session in the durable inbox. A duplicate occurrence is
+acknowledged without another row; legacy `session_deliveries` claims also prevent
+replay after upgrading. The boundary commits the tick or fresh opening turn,
+model-input generation and announcement together.
 
 Cron chooses one canonical minute for identity and payload. One-shot delivery
 retries are deliberately bounded: ten consecutive same-process failures remove
@@ -824,7 +823,7 @@ the two in-memory FIFO admission caches and the cancellable recovery worker; the
 same component serializes child spawn against the durable stop fence and owns
 stop-tree discovery, lifecycle settlement, interrupted-stop recovery and child
 terminalization/delivery ordering. Each runner's cancel/done boundary, live
-session reference, input queue and admission metadata live in that component as
+session reference, working flag and admission metadata live in that component as
 one mutex-owned state object. Its launcher owns classification, admission,
 registration and goroutine start; daemon supplies session assembly and loop
 callbacks ([ADR-0038](docs/adr/0038-runtime-owners-replace-daemon-capability-discovery.md)).
@@ -842,8 +841,9 @@ while `apply_patch` and `edit` refresh it post-mutation without rejecting on
 mismatch. `transcript` owns the durable message-row vocabulary shared with producers.
 `progress` owns the neutral context and operator-snapshot vocabulary shared by
 the session projection and progress runtime.
-`inputruntime` implements the session-owned consumption seam without letting the
-agent loop discover daemon or store capabilities at runtime.
+The session reads pending inbox rows directly and reloads the active transcript
+after every step commit. Stop and boot settle unresolved calls directly through
+that same store transaction surface.
 Session keeps row identities in a positional transcript sidecar. Attachment
 read authority is the narrow persistence metadata carried in `llmwire.Message`
 so drivers can materialize pixels safely; it is omitted from provider and
@@ -880,8 +880,9 @@ Todo tracking is root-session-local durable state. The tool replaces the whole
 list atomically, and progress treats it as planning state rather than a separate
 workflow engine.
 
-Budget policy and recovery access go through `budget.Service`; the daemon never
-discovers or calls the underlying budget-store capability at runtime.
+Budget types and crossing policy are pure `budget` code. Session-store imports
+that policy to observe aggregate cost within a step; daemon park and recovery
+operations use `budget.Service`.
 
 ### Language-server boundary
 
@@ -953,8 +954,8 @@ only; an active stack's tools and schemas stay fixed
 ([ADR-0063](docs/adr/0063-explicit-filesystem-boundary.md)).
 
 Schedule owns cron validation, durable schedule records and execution of sleep
-and schedule tools. It depends on a narrow sender contract, not the daemon
-implementation. Curated memory is distinct from conversation history and scoped
+and schedule tools. It enqueues through session-store and uses a narrow sender
+only for event publication. Curated memory is distinct from conversation history and scoped
 to a project. A best-effort inventory is frozen into a fresh opening turn's
 marked project-context row; save/delete results inform the current transcript,
 while later opening turns read the updated store.
@@ -963,12 +964,13 @@ while later opening turns read the updated store.
 
 Config owns parsing and secret-sink resolution; config operations own
 whole-document staging that accepts literal credential values and `${VAR}`
-references alike, backup retention and pending-apply recovery. Config tools own
+references alike, backup retention and pending-apply recovery. Config apply owns
 the agent-facing schema and strict argument parsing; the `/config`
 activation-gated full-document tool registers on every root session and can
-commit only under the durable `/config` activation. Config apply owns the process-wide
-commit claim and restart trigger; the daemon gates tool availability and owns
-the durable suspend-to-restart handoff: one-shot `/config` grant settlement
+commit only under the durable `/config` activation. Config apply owns the staged
+ledger, process-wide commit claim and restart channel; the daemon gates tool
+availability and calls apply under its tree fence after suspension persists.
+One-shot `/config` grant settlement
 rides the commit in the apply process, falls back to the boot's marker
 resolution, and the stop path expires grants their settlement orphaned.
 Migration owns SQLite opening and schema progression.

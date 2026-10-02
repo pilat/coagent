@@ -8,15 +8,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"slices"
 	"sort"
 	"time"
 
 	"go.uber.org/zap"
 
 	"github.com/pilat/coagent/internal/admission"
-	"github.com/pilat/coagent/internal/configops"
-	"github.com/pilat/coagent/internal/configtools"
+	"github.com/pilat/coagent/internal/configapply"
 	"github.com/pilat/coagent/internal/controllerapi"
 	"github.com/pilat/coagent/internal/loader"
 	"github.com/pilat/coagent/internal/logger"
@@ -29,12 +27,9 @@ import (
 	"github.com/pilat/coagent/internal/tool"
 )
 
-type runner = sessionlifecycle.Runner[queuedSessionInput]
+type runner = sessionlifecycle.Runner
 
-// maxEmptyLoopIterations caps consecutive no-input iterations that still ask to
-// continue. A healthy drain re-loops at most once (then exits on no work); more
-// than this means the loop is spinning without progress (e.g. a stale pending-work
-// signal) — break instead of flooding notifications.
+// A stale runnability projection must not spin runners without new input.
 const maxEmptyLoopIterations = 3
 
 // runSession is the main goroutine for a session.
@@ -81,180 +76,74 @@ func (s *svc) runSession(ctx context.Context, sessionID int64, rs runner) {
 }
 
 //nolint:wsl_v5 // Teardown publishes readiness only after removing the live loop.
-func (s *svc) finishRunner(
-	ctx context.Context,
-	sessionID int64,
-	rs runner,
-	errored *bool,
-	publishIdle bool,
-	panicValue any,
-) {
+func (s *svc) finishRunner(ctx context.Context, sessionID int64, rs runner, errored *bool, publishIdle bool, panicValue any) {
 	shuttingDown := s.shuttingDown.Load()
-
 	if panicValue != nil {
 		*errored = true
-
-		logger.Ctx(ctx).Named("daemon.runner").Error(
-			"session_panic", zap.Int64("session_id", sessionID), zap.Any("panic", panicValue))
+		logger.Ctx(ctx).Named("daemon.runner").Error("session_panic", zap.Int64("session_id", sessionID), zap.Any("panic", panicValue))
 	}
-
 	if ctx.Err() != nil && !shuttingDown {
 		*errored = true
 	}
-
-	cleanupCtx := context.WithoutCancel(ctx)
-	if !shuttingDown {
-		s.abandonStagedApply(cleanupCtx, sessionID)
+	cleanup := context.WithoutCancel(ctx)
+	if !shuttingDown && s.applier != nil {
+		s.applier.Abandon(cleanup, sessionID)
 	}
-
-	var unlock func()
-	var lockErr error
-	fenced := !shuttingDown && ctx.Err() == nil
-	if fenced {
-		unlock, lockErr = s.lockSessionTree(ctx, sessionID)
-		if lockErr != nil {
-			logger.Ctx(cleanupCtx).Named("daemon.runner").Error(
-				"finish_runner_fence_failed", zap.Int64("session_id", sessionID), zap.Error(lockErr),
-			)
-		}
+	cancelled := ctx.Err() != nil
+	if cancelled || shuttingDown {
+		s.runners.Delete(sessionID)
+		info := rs.Info()
+		s.admit.Release(info.Kind, info.ParentID)
+		rs.Complete()
 	}
-	normalFence := fenced && lockErr == nil
-
-	leftover, deliver, continued := s.finishRunnerLocked(
-		cleanupCtx, ctx.Err(), sessionID, rs, shuttingDown, *errored, normalFence,
-	)
-	if unlock != nil {
-		s.publishOwnerlessIdleAfterTeardown(
-			cleanupCtx, sessionID, publishIdle, shuttingDown, ctx.Err() != nil, continued,
-		)
-		unlock()
+	if shuttingDown {
+		return
 	}
-
-	if !shuttingDown && !normalFence {
-		leftover, deliver, continued = s.finishCancelledRunner(
-			cleanupCtx, sessionID, leftover, *errored,
-		)
-	}
-
-	if deliver != nil {
-		deliver()
-	}
-
-	if !shuttingDown && ctx.Err() == nil {
-		s.drainPendingRunners(cleanupCtx)
-		s.drainQueue(cleanupCtx)
-		if !continued && !*errored {
-			s.restartPendingAfterExit(cleanupCtx, sessionID)
-		}
-		if *errored {
-			completeUnprocessedInputs(leftover, fmt.Errorf("session %d failed before input delivery", sessionID))
-		}
-	} else if !shuttingDown {
-		// /stop or /kill may win after a typed delivery was appended to the
-		// runner. Complete awaited senders explicitly; durable ledgers retain the
-		// underlying event for the appropriate resume/recovery policy.
-		completeUnprocessedInputs(leftover, fmt.Errorf("session %d stopped before input delivery", sessionID))
-	}
-}
-
-func (s *svc) finishCancelledRunner(
-	ctx context.Context,
-	sessionID int64,
-	leftover []queuedSessionInput,
-	errored bool,
-) ([]queuedSessionInput, func(), bool) {
-	unlock, err := s.lockSessionTree(ctx, sessionID)
+	unlock, err := s.lockSessionTree(cleanup, sessionID)
 	if err != nil {
-		logger.Ctx(ctx).Named("daemon.runner").Error(
-			"finalize_cancelled_runner_failed", zap.Int64("session_id", sessionID), zap.Error(err),
-		)
-
-		return leftover, nil, false
+		logger.Ctx(cleanup).Named("daemon.runner").Error("finish_runner_fence_failed", zap.Error(err))
 	}
-	defer unlock()
-
-	return leftover, s.finalizeChildLocked(ctx, sessionID, false, errored), false
-}
-
-func (s *svc) finishRunnerLocked(
-	ctx context.Context,
-	runErr error,
-	sessionID int64,
-	rs runner,
-	shuttingDown, errored, fenced bool,
-) ([]queuedSessionInput, func(), bool) {
-	if fenced {
-		if err := s.settleStagedResults(ctx, sessionID); err != nil {
-			logger.Ctx(ctx).Named("daemon.apply").Error(
-				"abandon_delivery_failed", zap.Int64("session_id", sessionID), zap.Error(err))
-		}
+	if !cancelled {
+		s.runners.Delete(sessionID)
+		info := rs.Info()
+		s.admit.Release(info.Kind, info.ParentID)
 	}
-
-	s.runners.Delete(sessionID)
-
 	info := rs.Info()
-	s.admit.Release(info.Kind, info.ParentID)
-
 	if info.PreserveStopped && !shuttingDown {
-		record, err := s.sessionStore.GetSession(ctx, sessionID)
-		if err != nil {
-			logger.Ctx(ctx).Named("daemon.runner").Error(
-				"preserve_stopped_status", zap.Int64("session_id", sessionID), zap.Error(err),
-			)
-		} else if record.Status == sessionstore.SessionStatusActive {
-			if err := s.sessionStore.UpdateSessionStatus(
-				ctx, sessionID, sessionstore.SessionStatusStopped,
-			); err != nil {
-				logger.Ctx(ctx).Named("daemon.runner").Error(
-					"preserve_stopped_status", zap.Int64("session_id", sessionID), zap.Error(err),
-				)
+		record, loadErr := s.sessionStore.GetSession(cleanup, sessionID)
+		if loadErr == nil && record.Status == sessionstore.SessionStatusActive {
+			if statusErr := s.sessionStore.UpdateSessionStatus(cleanup, sessionID, sessionstore.SessionStatusStopped); statusErr != nil {
+				logger.Ctx(cleanup).Named("daemon.runner").Error("preserve_stopped_status", zap.Error(statusErr))
 			}
 		}
 	}
-
-	leftover := rs.DrainInputs()
-	rs.Complete()
-
-	if fenced && !shuttingDown && runErr == nil && !errored && s.rerouteRunnerInputsLocked(ctx, sessionID, leftover) {
-		s.reconcileLatestReadiness(ctx, sessionID)
-
-		return nil, nil, true
+	if !cancelled {
+		rs.Complete()
 	}
-
-	var deliver func()
-
-	if fenced {
-		deliver = s.finalizeChildLocked(ctx, sessionID, shuttingDown, errored)
-	}
-
-	// The runner is already deregistered above, so the teardown reconcile
-	// observes no live loop and may publish idle for the latest releasing
-	// output. An ack arriving later re-runs readiness through the controller.
-	if !shuttingDown {
-		s.reconcileLatestReadiness(ctx, sessionID)
-	}
-
-	return leftover, deliver, false
-}
-
-func (s *svc) rerouteRunnerInputsLocked(
-	ctx context.Context,
-	sessionID int64,
-	inputs []queuedSessionInput,
-) bool {
-	routed := false
-
-	for _, input := range inputs {
-		if err := s.routeQueuedSessionInputLocked(ctx, sessionID, input); err != nil {
-			input.complete(false, err)
-
-			continue
+	if s.applier != nil && err == nil {
+		if settleErr := s.applier.SettleStagedResults(cleanup, sessionID); settleErr != nil {
+			logger.Ctx(cleanup).Named("daemon.apply").Error("abandon_delivery_failed", zap.Error(settleErr))
 		}
-
-		routed = true
 	}
-
-	return routed
+	var deliver func()
+	if !shuttingDown && err == nil {
+		deliver = s.finalizeChildLocked(cleanup, sessionID, false, *errored)
+		s.reconcileLatestReadiness(cleanup, sessionID)
+		s.publishOwnerlessIdleAfterTeardown(cleanup, sessionID, publishIdle, false, ctx.Err() != nil, false)
+	}
+	if unlock != nil {
+		unlock()
+	}
+	if deliver != nil {
+		deliver()
+	}
+	if !shuttingDown && ctx.Err() == nil {
+		s.drainPendingRunners(cleanup)
+		s.drainQueue(cleanup)
+		if !*errored {
+			s.restartPendingAfterExit(cleanup, sessionID)
+		}
+	}
 }
 
 func (s *svc) restartPendingAfterExit(ctx context.Context, sessionID int64) {
@@ -283,211 +172,113 @@ func (s *svc) restartPendingAfterExit(ctx context.Context, sessionID int64) {
 	}
 }
 
-// runSessionIteration executes one iteration of the session loop. The first
-// result reports whether the loop should continue; the second whether this
-// iteration consumed real input (messages or notifications) — the spin guard in
-// runSession uses it to bound consecutive no-input continuations.
-func (s *svc) runSessionIteration( //nolint:funlen,gocyclo // Linear lifecycle with explicit cleanup at each boundary.
-	ctx context.Context,
-	sessionID int64,
-	rs runner,
-	notify func(sessionevent.Notification),
-	announced *bool,
-	publishIdle *bool,
-	errored *bool,
-) (bool, bool) {
+func (s *svc) runSessionIteration(ctx context.Context, sessionID int64, rs runner, notify func(sessionevent.Notification), announced, publishIdle, errored *bool) (bool, bool) {
 	rec, err := s.sessionStore.GetSession(ctx, sessionID)
 	if err != nil {
-		logger.Ctx(ctx).Warn("session_record_not_found", zap.Int64("session_id", sessionID), zap.Error(err))
 		return false, false
 	}
-
 	if !*announced {
 		*announced = true
-
 		s.announceSession(ctx, sessionID, rs, rec, notify)
 	}
-
 	info := rs.Info()
 	idleEligible := ownerlessSession(rec)
-
-	if err := s.settleStagedResults(ctx, sessionID); err != nil {
-		*errored = true
-		*publishIdle = idleEligible
-
-		s.reportSessionUnstarted(ctx, sessionID, notify, err)
-
-		return false, false
-	}
-
-	sess, runErr := s.createOrResumeSession(ctx, sessionID, info.WorkDir, rec, info.PreserveStopped)
-	if runErr != nil {
-		*errored = true
-		*publishIdle = idleEligible
-
-		logger.Ctx(ctx).Warn("session_create_failed", zap.Int64("session_id", sessionID), zap.Error(runErr))
-		s.reportSessionUnstarted(ctx, sessionID, notify, runErr)
-
-		return false, false
-	}
-
-	defer sess.Close()
-
-	inputs, runErr := s.prepareSessionInputs(ctx, sessionID, rs, sess)
-	if runErr != nil {
-		*errored = true
-		*publishIdle = idleEligible
-
-		sess.Close()
-		logger.Ctx(ctx).Named("daemon.runner").
-			Error("session_inputs_failed", zap.Int64("session_id", sessionID), zap.Error(runErr))
-		s.reportSessionUnstarted(ctx, sessionID, notify, runErr)
-
-		return false, false
-	}
-
-	hasDurableInput, pendingErr := s.hasPendingDurableInput(ctx, sessionID)
-	if pendingErr != nil {
-		*errored = true
-		*publishIdle = idleEligible
-
-		sess.Close()
-		s.reportSessionUnstarted(ctx, sessionID, notify, pendingErr)
-
-		return false, false
-	}
-
-	recoveringAcceptedTurn := false
-	if !hasDurableInput && len(inputs) == 0 && !sess.HasPendingWork() && !rs.HasRun() {
-		recoveringAcceptedTurn, runErr = s.recoverableInputRunnable(ctx, sessionID)
-		if runErr != nil {
+	if s.applier != nil {
+		if err := s.applier.SettleStagedResults(ctx, sessionID); err != nil {
 			*errored = true
 			*publishIdle = idleEligible
-
-			sess.Close()
-			s.reportSessionUnstarted(ctx, sessionID, notify, runErr)
-
+			s.reportSessionUnstarted(ctx, sessionID, notify, err)
 			return false, false
 		}
 	}
-
-	hadInput := hasDurableInput || len(inputs) > 0 || recoveringAcceptedTurn
-
-	if !hadInput && !sess.HasPendingWork() {
-		*publishIdle = idleEligible
-
-		sess.Close()
-
-		return false, false
-	}
-
-	if err := s.activateStoppedRootForScheduledTurn(ctx, rec, inputs); err != nil {
+	sess, err := s.createOrResumeSession(ctx, sessionID, info.WorkDir, rec, info.PreserveStopped)
+	if err != nil {
 		*errored = true
 		*publishIdle = idleEligible
-
-		sess.Close()
 		s.reportSessionUnstarted(ctx, sessionID, notify, err)
-
 		return false, false
 	}
-
+	defer sess.Close()
+	pending, err := s.pendingInputRunnable(ctx, sessionID)
+	if err != nil {
+		*errored = true
+		s.reportSessionUnstarted(ctx, sessionID, notify, err)
+		return false, false
+	}
+	hadInput := pending
+	if !pending && !sess.HasPendingWork() && rs.HasRun() {
+		*publishIdle = idleEligible
+		return false, false
+	}
+	if !pending && !sess.HasPendingWork() && !rs.HasRun() {
+		messages, loadErr := s.sessionStore.LoadActiveMessages(ctx, sessionID)
+		if loadErr != nil {
+			*errored = true
+			return false, false
+		}
+		if len(messages) > 0 {
+			*publishIdle = idleEligible
+			return false, false
+		}
+	}
 	rs.SetService(sess)
-
 	if rec.ParentID == 0 {
 		s.wakeProgress()
 	}
-
 	s.registerScheduleTools(ctx, rec, sess)
 	s.registerSubagentTools(ctx, sessionID, sess)
 	s.registerMCPTools(ctx, rec, sess)
 	s.registerConfigEditTool(ctx, rec, sess)
 	s.registerBudgetTool(ctx, rec, sess)
-
 	rs.MarkRun()
-
-	// The live "main model working" flag follows the loop's engagement: the
-	// session clears it before publishing a final response, so progress cards
-	// rendered after the message reads background work, not working.
-	runResult, runErr := s.executeSession(ctx, sess, notify, func(active bool) {
-		if active {
-			rs.SetService(sess)
-		} else {
-			rs.SetService(nil)
+	result, runErr := sess.Run(ctx)
+	if result.BudgetFired && s.budgetSvc != nil {
+		record, budgetErr := s.budgetSvc.Get(ctx, sessionRootID(rec))
+		if budgetErr != nil {
+			runErr = errors.Join(runErr, budgetErr)
+		} else if record.ParkPhase == budgetParkRequested {
+			s.startBudgetPark(record)
 		}
-	})
-
-	if rec.ParentID == 0 {
-		runErr = errors.Join(runErr, s.settleRootBudget(ctx, sessionID, runResult.Suspended, runErr, notify))
 	}
-
+	if rec.ParentID == 0 && !result.BudgetFired {
+		runErr = errors.Join(runErr, s.settleRootBudget(ctx, sessionID, result.Suspended, runErr, notify))
+	}
 	s.reconcileLatestReadiness(ctx, sessionID)
-	s.deferNotices.record(sessionID, runResult.CompactionDeferAnnounced)
-
+	s.deferNotices.record(sessionID, result.DeferNoticeAnnounced)
 	rs.SetService(nil)
-
 	if rec.ParentID == 0 {
 		s.wakeProgress()
 	}
-
 	sess.Close()
-
-	// The session's suspended state is on disk by now, so a config change it
-	// staged is safe to write and restart into.
-	s.runStagedApply(ctx, sessionID)
-
+	if s.applier != nil {
+		unlock, lockErr := s.lockSessionTree(ctx, sessionID)
+		if lockErr != nil {
+			runErr = errors.Join(runErr, lockErr)
+		} else {
+			s.applier.RunStagedApply(ctx, sessionID)
+			unlock()
+		}
+	}
 	if runErr != nil {
 		*errored = true
 		*publishIdle = idleEligible
-
-		s.handleRunError(ctx, sessionID, runResult.ErrorNotice, runErr, notify)
-
+		s.handleRunError(ctx, sessionID, result.ErrorNotice, runErr, notify)
 		return false, hadInput
 	}
-
-	if runResult.Suspended {
+	if result.BudgetFired {
+		return false, hadInput
+	}
+	if result.Suspended {
 		s.publishWaiting(ctx, sessionID, notify)
 		return false, hadInput
 	}
-
 	if info.PreserveStopped {
-		reloaded, reloadErr := s.sessionStore.GetSession(ctx, sessionID)
-		if reloadErr != nil {
-			*errored = true
-
-			s.reportSessionUnstarted(ctx, sessionID, notify, reloadErr)
-
-			return false, hadInput
-		}
-
-		if reloaded.Status == sessionstore.SessionStatusStopped {
+		record, loadErr := s.sessionStore.GetSession(ctx, sessionID)
+		if loadErr != nil || record.Status == sessionstore.SessionStatusStopped {
 			return false, hadInput
 		}
 	}
-
-	// Continue to drain any messages that arrived during this run.
 	return true, hadInput
-}
-
-// activateStoppedRootForScheduledTurn reopens a root only after SQLite accepted
-// a new standalone occurrence; duplicate delivery leaves the root parked.
-func (s *svc) activateStoppedRootForScheduledTurn(
-	ctx context.Context,
-	rec *sessionstore.SessionRecord,
-	inputs []sessionInput,
-) error {
-	if rec.ParentID != 0 || rec.Status != sessionstore.SessionStatusStopped || !hasScheduledTurn(inputs) {
-		return nil
-	}
-
-	if err := s.sessionStore.UpdateSessionStatus(ctx, rec.ID, sessionstore.SessionStatusActive); err != nil {
-		return fmt.Errorf("activate stopped root %d for scheduled turn: %w", rec.ID, err)
-	}
-
-	return nil
-}
-
-func hasScheduledTurn(inputs []sessionInput) bool {
-	return slices.ContainsFunc(inputs, inputIsScheduledTurn)
 }
 
 func (s *svc) publishWaiting(
@@ -650,83 +441,39 @@ func canonicalWaitingIdentities(value any) ([]byte, error) {
 // settleStoppedCalls is runner-owned transcript mutation used by the /stop
 // lifecycle after every live writer has joined.
 func (s *svc) settleStoppedCalls(ctx context.Context, sessionID int64) error {
-	rec, err := s.sessionStore.GetSession(ctx, sessionID)
-	if err != nil {
-		return fmt.Errorf("load stopping session %d: %w", sessionID, err)
-	}
-
-	workDir, err := s.store.GetProjectWorkDir(ctx, rec.ProjectID)
-	if err != nil {
-		return fmt.Errorf("resolve project for stopping session %d: %w", sessionID, err)
-	}
-
-	// The producer ledger is in-memory, so a stop whose second phase runs in a
-	// later image owns nothing; the transcript is the only complete list.
-	pending, err := s.storedExternalCalls(ctx, sessionID)
+	messages, err := s.sessionStore.LoadActiveMessages(ctx, sessionID)
 	if err != nil {
 		return err
 	}
-
-	for _, call := range pending {
-		s.staged.stage(sessionID, call.ID, call.Name)
-	}
-
-	sess, err := s.openSession(ctx, sessionID, workDir, rec, true, false, true)
+	wire, err := storedWireMessages(messages)
 	if err != nil {
-		return fmt.Errorf("open stopping session %d: %w", sessionID, err)
+		return err
 	}
-	defer sess.Close()
-
-	if err := sess.SettleStoppedCalls(ctx, "Stopped by user."); err != nil {
-		return fmt.Errorf("settle stopped calls for session %d: %w", sessionID, err)
+	calls := session.UnresolvedCalls(wire)
+	activation, err := s.activationStore.PendingActivation(ctx, sessionID)
+	if err != nil && !errors.Is(err, sessionstore.ErrActivationNotFound) {
+		return err
 	}
-
-	for _, call := range pending {
-		s.staged.resolve(sessionID, call.ID)
+	commit := sessionstore.Commit{SessionID: sessionID, Mode: sessionstore.CommitLifecycle, ToolResults: session.SettleResults(calls, "Stopped by user.")}
+	if activation != nil {
+		commit.Activation = &sessionstore.ActivationChange{InputID: activation.InputID, State: sessionstore.ActivationExpired}
 	}
-
-	return nil
+	_, err = s.runtimeStore.Commit(ctx, commit)
+	return err
 }
 
 // closeOrphanedCalls is runner-owned transcript mutation for the boot sweep's
 // PASS 0: it answers a session's unowned external calls without running its loop.
 func (s *svc) closeOrphanedCalls(ctx context.Context, rec *sessionstore.SessionRecord) (int, error) {
-	orphans, err := s.orphanedCalls(ctx, rec.ID)
-	if err != nil || len(orphans) == 0 {
+	calls, err := s.orphanedCalls(ctx, rec.ID)
+	if err != nil || len(calls) == 0 {
 		return 0, err
 	}
-
-	workDir, err := s.store.GetProjectWorkDir(ctx, rec.ProjectID)
+	_, err = s.runtimeStore.Commit(ctx, sessionstore.Commit{SessionID: rec.ID, Mode: sessionstore.CommitLifecycle, ToolResults: session.SettleResults(calls, orphanedCallNotice(""))})
 	if err != nil {
-		return 0, fmt.Errorf("resolve project for session %d: %w", rec.ID, err)
+		return 0, err
 	}
-
-	// Adoption precedes construction: the session refuses to resolve a call no
-	// producer ledger owns, and it snapshots that ledger when it is built.
-	for _, call := range orphans {
-		s.staged.stage(rec.ID, call.ID, call.Name)
-	}
-
-	// A call left uninserted returns to being an orphan and is retried next boot.
-	defer func() {
-		for _, call := range orphans {
-			s.staged.resolve(rec.ID, call.ID)
-		}
-	}()
-
-	sess, err := s.openSession(ctx, rec.ID, workDir, rec, false, false, true)
-	if err != nil {
-		return 0, fmt.Errorf("open session %d to close orphaned calls: %w", rec.ID, err)
-	}
-	defer sess.Close()
-
-	for _, call := range orphans {
-		if _, err := sess.ResolvePendingCall(ctx, call, orphanedCallNotice(call.Name)); err != nil {
-			return 0, fmt.Errorf("close orphaned call %s in session %d: %w", call.ID, rec.ID, err)
-		}
-	}
-
-	return len(orphans), nil
+	return len(calls), nil
 }
 
 func (s *svc) ensureSessionRunner(ctx context.Context, sessionID int64) error {
@@ -762,7 +509,7 @@ func (s *svc) ensureSessionRunnerLocked(ctx context.Context, sessionID int64) er
 		return fmt.Errorf("resolve project %d: %w", rec.ProjectID, err)
 	}
 
-	err = s.ensureRunnerLocked(ctx, sessionID, workDir, rec.ProjectID, nil)
+	err = s.ensureRunnerLocked(ctx, sessionID, workDir, rec.ProjectID)
 	if errors.Is(err, admission.ErrNoCapacity) && rec.ParentID == 0 {
 		s.enqueuePendingRunner(sessionID, workDir, rec.ProjectID)
 		return nil
@@ -839,196 +586,6 @@ func (s *svc) publishOwnerlessIdleAfterTeardown(
 	s.publishOwnerlessIdle(ctx, sessionID)
 }
 
-// prepareSessionInputs applies causal results before standalone events, regardless
-// of cross-producer arrival order. A new event may interrupt sleep, but it never
-// jumps ahead of an uninterruptible external call. Failed/deferred awaited inputs
-// are acknowledged to their producer so durable schedulers can retry honestly.
-func (s *svc) prepareSessionInputs(
-	ctx context.Context,
-	sessionID int64,
-	rs runner,
-	sess session.Service,
-) ([]sessionInput, error) {
-	deliveries := rs.DrainInputs()
-	ordered := orderSessionInputs(deliveries)
-
-	applied, resolvedExternal, err := s.applyResolvingInputs(ctx, sessionID, sess, ordered)
-	if err != nil {
-		return nil, err
-	}
-
-	standalone, interruptedByEvent, err := s.applyStandaloneInputs(ctx, sessionID, sess, ordered)
-	if err != nil {
-		return nil, err
-	}
-
-	applied = append(applied, standalone...)
-	resolvedExternal = resolvedExternal || interruptedByEvent
-
-	if resolvedExternal {
-		err := s.injectOwedCompletions(ctx, sess, sessionID)
-		if err != nil {
-			return nil, err
-		}
-	}
-
-	return applied, nil
-}
-
-func (s *svc) applyResolvingInputs(
-	ctx context.Context,
-	sessionID int64,
-	sess session.Service,
-	ordered []queuedSessionInput,
-) ([]sessionInput, bool, error) {
-	applied := make([]sessionInput, 0, len(ordered))
-
-	for idx, delivery := range ordered {
-		input := delivery.input()
-		if !inputResolvesExistingCall(input) {
-			continue
-		}
-
-		wasApplied, err := s.injectSessionInput(ctx, sessionID, sess, input)
-		if err != nil {
-			delivery.complete(false, err)
-			completeUnprocessedInputs(ordered[idx+1:], err)
-
-			return nil, false, err
-		}
-
-		delivery.complete(wasApplied, nil)
-
-		if wasApplied {
-			applied = append(applied, input)
-		}
-	}
-
-	return applied, len(applied) > 0, nil
-}
-
-func (s *svc) applyStandaloneInputs(
-	ctx context.Context,
-	sessionID int64,
-	sess session.Service,
-	ordered []queuedSessionInput,
-) ([]sessionInput, bool, error) {
-	applied := make([]sessionInput, 0, len(ordered))
-	interruptedSleep := false
-
-	for _, delivery := range ordered {
-		input := delivery.input()
-		if inputResolvesExistingCall(input) {
-			continue
-		}
-
-		if reason := inputSleepInterruption(input); reason != "" {
-			interrupted, err := s.interruptPendingSleeps(ctx, sessionID, sess, reason)
-			if err != nil {
-				delivery.complete(false, err)
-				completeUnprocessedInputs(ordered, err)
-
-				return nil, interruptedSleep, err
-			}
-
-			interruptedSleep = interruptedSleep || interrupted
-		}
-
-		if pending := sess.PendingExternalCalls(); len(pending) > 0 {
-			err := fmt.Errorf(
-				"%w: %s (%s)",
-				errSessionInputDeferred,
-				pending[0].ID,
-				pending[0].Name,
-			)
-			delivery.complete(false, err)
-
-			continue
-		}
-
-		wasApplied, err := s.injectSessionInput(ctx, sessionID, sess, input)
-		if err != nil {
-			delivery.complete(false, err)
-			completeUnprocessedInputs(ordered, err)
-
-			return nil, interruptedSleep, err
-		}
-
-		delivery.complete(wasApplied, nil)
-
-		if wasApplied {
-			applied = append(applied, input)
-		}
-	}
-
-	return applied, interruptedSleep, nil
-}
-
-func orderSessionInputs(deliveries []queuedSessionInput) []queuedSessionInput {
-	ordered := make([]queuedSessionInput, 0, len(deliveries))
-	for _, delivery := range deliveries {
-		if inputResolvesExistingCall(delivery.input()) {
-			ordered = append(ordered, delivery)
-		}
-	}
-
-	for _, delivery := range deliveries {
-		if !inputResolvesExistingCall(delivery.input()) {
-			ordered = append(ordered, delivery)
-		}
-	}
-
-	return ordered
-}
-
-func completeUnprocessedInputs(deliveries []queuedSessionInput, err error) {
-	for _, delivery := range deliveries {
-		delivery.complete(false, err)
-	}
-}
-
-func (s *svc) injectSessionInput(
-	ctx context.Context,
-	sessionID int64,
-	sess session.Service,
-	input sessionInput,
-) (bool, error) {
-	switch value := input.(type) {
-	case pendingCallResultInput:
-		resolution, err := sess.ResolvePendingCall(ctx, value.Call, value.Content)
-		if err != nil {
-			return false, fmt.Errorf("resolve %s call %s: %w", value.Call.Name, value.Call.ID, err)
-		}
-
-		s.staged.resolve(sessionID, value.Call.ID)
-
-		return resolution == session.CallResolutionInserted, nil
-	case blockingSubagentCompletionInput:
-		return true, s.injectBlockingCompletion(ctx, sess, value.ChildID, value.CallID, value.ActivationSeq)
-	case scheduleTickInput:
-		applied, err := sess.InjectToolNotificationOnce(
-			ctx, value.DeliveryID, tool.IDSchedule, value.Content,
-		)
-		if err != nil {
-			return false, fmt.Errorf("inject schedule tick: %w", err)
-		}
-
-		return applied, nil
-	case freshScheduleInput:
-		applied, err := sess.ResetContextAndInjectOnce(ctx, value.DeliveryID, value.Prompt)
-		if err != nil {
-			return false, fmt.Errorf("reset context for fresh schedule: %w", err)
-		}
-
-		return applied, nil
-	case inboxReadyInput:
-		return false, nil
-	default:
-		return false, fmt.Errorf("unsupported session input %T", input)
-	}
-}
-
-// announceSession publishes a NotifySessionCreated event the first time a session loop runs.
 func (s *svc) announceSession(
 	ctx context.Context,
 	sessionID int64,
@@ -1051,43 +608,6 @@ func (s *svc) announceSession(
 // timer. Durable result first is load-bearing: if cancellation fails or the
 // daemon crashes, a later timer delivery is an idempotent no-op instead of a
 // sleeping session whose only wake-up was deleted.
-func (s *svc) interruptPendingSleeps(
-	ctx context.Context,
-	sessionID int64,
-	sess session.Service,
-	reason string,
-) (bool, error) {
-	pending := sess.PendingExternalCalls()
-	interrupted := false
-
-	for _, call := range pending {
-		if call.Name != tool.IDSleep {
-			continue
-		}
-
-		if _, err := sess.ResolvePendingCall(ctx, call, reason); err != nil {
-			return interrupted, fmt.Errorf("inject sleep interrupt result for %s: %w", call.ID, err)
-		}
-
-		interrupted = true
-	}
-
-	if !interrupted {
-		return false, nil
-	}
-
-	if s.scheduleSvc != nil {
-		n, err := s.scheduleSvc.CancelPendingSleeps(ctx, sessionID)
-		if err != nil {
-			logger.Ctx(ctx).Warn("cancel_sleep_schedules", zap.Int64("session_id", sessionID), zap.Error(err))
-		} else if n > 0 {
-			logger.Ctx(ctx).
-				Info("sleep_interrupted_by_user", zap.Int64("session_id", sessionID), zap.Int64("cancelled", n))
-		}
-	}
-
-	return true, nil
-}
 
 func (s *svc) createOrResumeSession(
 	ctx context.Context,
@@ -1096,35 +616,7 @@ func (s *svc) createOrResumeSession(
 	rec *sessionstore.SessionRecord,
 	preserveStopped bool,
 ) (session.Service, error) {
-	return s.openSession(ctx, sessionID, workDir, rec, false, preserveStopped, false)
-}
-
-func (s *svc) sessionInputBoundary(
-	sessionID int64,
-	rec *sessionstore.SessionRecord,
-) session.InputBoundary {
-	return s.inputFactory.Boundary(
-		sessionID,
-		func(ctx context.Context) (string, error) {
-			current, err := s.CurrentProgress(ctx, sessionID)
-			if err != nil {
-				return "", err
-			}
-
-			return current.Rendered, nil
-		},
-		func(ctx context.Context) (string, bool, error) {
-			return s.enqueueProgressChange(ctx, sessionID)
-		},
-		func() {
-			if rec.ParentID == 0 {
-				s.wakeProgress()
-			}
-		},
-		func(ctx context.Context, text string) (string, error) {
-			return s.renderFinalOutput(ctx, sessionID, text)
-		},
-	)
+	return s.openSession(ctx, sessionID, workDir, rec, preserveStopped)
 }
 
 // isManagementSurface reports the service-topic role. Attributes cross JSON,
@@ -1146,17 +638,13 @@ func isManagementSurface(attrs map[string]any) bool {
 	}
 }
 
-// openSession builds the session service. A settlement open never persists the
-// initial state: /stop settles a tree already marked stopping, and reactivating
-// it would lose the lifecycle fence.
-//
 //nolint:funlen // The construction boundary keeps one coherent session policy snapshot.
 func (s *svc) openSession(
 	ctx context.Context,
 	sessionID int64,
 	workDir string,
 	rec *sessionstore.SessionRecord,
-	settlement, preserveStopped, transcriptOnly bool,
+	preserveStopped bool,
 ) (session.Service, error) {
 	externalCalls, err := s.pendingExternalCallsForSession(ctx, sessionID)
 	if err != nil {
@@ -1187,49 +675,22 @@ func (s *svc) openSession(
 		},
 		RepoRoot: repoRoot,
 
-		StagedExternalCalls: externalCalls,
+		ExternalCalls: externalCalls,
+		Events:        &sessionEvents{daemon: s, sessionID: sessionID},
 
 		CompactionDeferAnnounced: s.deferNotices.announced(sessionID),
-		InputBoundary:            s.sessionInputBoundary(sessionID, rec),
-		SettlementOpen:           settlement,
-		TranscriptOnly:           transcriptOnly,
 		PreserveStoppedStatus:    preserveStopped,
 	}
-	if rec.ParentID != 0 {
-		opts.OnIterationPersisted = func(ctx context.Context, iteration int) {
-			s.publishSubagentIterationProgress(ctx, sessionID, int64(iteration))
-		}
+	schedules, schedulesErr := s.schedulesCommand(ctx, sessionID)
+	if schedulesErr != nil {
+		return nil, schedulesErr
 	}
+	opts.Schedules = schedules
 
 	owner, _ := rec.Attributes[controllerapi.SessionAttributeManagerID].(string)
-
 	opts.OutputEnabled = rec.ParentID == 0 && owner != ""
-	budgetGateNeeded := owner != ""
-
-	if rec.ParentID != 0 && s.budgetSvc != nil {
-		budgetRecord, budgetErr := s.budgetSvc.Get(ctx, sessionRootID(rec))
-		if budgetErr != nil && !errors.Is(budgetErr, sessionstore.ErrBudgetNotFound) {
-			return nil, fmt.Errorf("load child budget gate: %w", budgetErr)
-		}
-
-		budgetGateNeeded = budgetErr == nil && budgetRecord.State != sessionstore.BudgetReleased
-	}
-
-	if s.budgetSvc != nil && budgetGateNeeded {
-		opts.BudgetGate = &sessionBudgetGate{
-			daemon: s, service: s.budgetSvc, store: s.runtimeStore,
-			sessionID: rec.ID, rootID: sessionRootID(rec),
-		}
-	}
-
 	opts.ActiveSubagents = s.activeSubagentInfos(ctx, sessionID)
-	opts.ActiveSubagentsProvider = func(ctx context.Context) []session.ActiveSubagentInfo {
-		return s.activeSubagentInfos(ctx, sessionID)
-	}
 	opts.ActiveProcesses = s.activeProcessInfos(ctx, sessionID)
-	opts.ActiveProcessesProvider = func(ctx context.Context) []session.ActiveProcessInfo {
-		return s.activeProcessInfos(ctx, sessionID)
-	}
 
 	// Subagents never carry the instruction: the attribute marks roots only,
 	// and a resumed root reattaches it through this same open path.
@@ -1273,17 +734,41 @@ func (s *svc) sessionRepoRoot(ctx context.Context, rec *sessionstore.SessionReco
 	return repoRoot, nil
 }
 
-// pendingExternalCallsForSession merges the authoritative producer ledgers:
-// in-memory config/secret work, the pending-apply marker that outlives it,
-// durable sleep schedules, and durable blocking-child links. The transcript
-// never has to infer ownership from the latest assistant turn or from a tool
-// name alone.
+// Ownership comes from producer ledgers and exact queued results, never tool names alone.
 func (s *svc) pendingExternalCallsForSession(ctx context.Context, sessionID int64) (map[string]string, error) {
-	calls := s.staged.forSession(sessionID)
+	stored, err := s.sessionStore.LoadActiveMessages(ctx, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	unresolved, err := unresolvedStoredCalls(stored, func(string) bool { return true })
+	if err != nil {
+		return nil, err
+	}
+	actual := make(map[string]string, len(unresolved))
+	for _, call := range unresolved {
+		actual[call.ID] = call.Name
+	}
+	calls := make(map[string]string)
+	if s.applier != nil {
+		calls = s.applier.Calls(sessionID)
+	}
 	if calls == nil {
 		calls = make(map[string]string)
 	}
 
+	pending, err := s.inboxStore.ListPending(ctx, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	for _, row := range pending {
+		if row.Source == sessionstore.InputSourceCallResult {
+			callID, _ := row.Attributes["call_id"].(string)
+			toolID, _ := row.Attributes["tool_id"].(string)
+			if actual[callID] == toolID && toolID != "" {
+				calls[callID] = toolID
+			}
+		}
+	}
 	if s.applier != nil {
 		owed, err := s.applier.PendingCall(sessionID)
 
@@ -1315,6 +800,11 @@ func (s *svc) pendingExternalCallsForSession(ctx context.Context, sessionID int6
 	for _, link := range links {
 		if link.Blocking && link.TaskCallID != "" {
 			calls[link.TaskCallID] = tool.IDTask
+		}
+	}
+	for callID, name := range calls {
+		if actual[callID] != name {
+			delete(calls, callID)
 		}
 	}
 
@@ -1376,24 +866,6 @@ func (s *svc) activeProcessInfos(ctx context.Context, sessionID int64) []session
 	return infos
 }
 
-func (s *svc) executeSession(
-	ctx context.Context,
-	sess session.Service,
-	notify func(sessionevent.Notification),
-	working func(bool),
-) (session.RunResult, error) {
-	notify(sessionevent.Notification{Type: sessionevent.NotifyStateChanged, Status: controllerapi.StateRunning})
-
-	result, runErr := sess.RunDaemon(ctx, notify, working)
-
-	if runErr != nil {
-		return result, fmt.Errorf("run session: %w", runErr)
-	}
-
-	return result, nil
-}
-
-// handleRunError processes errors from RunDaemon and sends appropriate notifications.
 // The caller is responsible for closing the session before calling this.
 func (s *svc) handleRunError(
 	ctx context.Context,
@@ -1466,257 +938,12 @@ func (s *svc) registerMCPTools(ctx context.Context, rec *sessionstore.SessionRec
 // on every root session with an applier. Subagents are excluded: they cannot
 // acquire a manager-owned activation grant, and the tool must not be reachable
 // from them at all.
-func (s *svc) registerConfigEditTool(
-	ctx context.Context,
-	rec *sessionstore.SessionRecord,
-	sess session.Service,
-) {
-	if s.applier == nil || rec.ParentID != 0 {
-		return
-	}
-
-	registerLogged(ctx, sess, newConfigEditTool(s, rec.ID))
-}
-
-// runStagedApply commits after the suspend is persisted, so a daemon that dies
-// mid-apply leaves a session matching what was done. A rejected commit never
-// restarts, so its verdict is delivered here.
-func (s *svc) runStagedApply(ctx context.Context, sessionID int64) {
-	callID, sc, ok := s.staged.takePendingApply(sessionID)
-	if !ok {
-		return
-	}
-
-	// A marker is armed only for a call the transcript durably carries: a verdict
-	// owed to a call no session can be holding is undeliverable on every boot, and
-	// the marker that outlives it turns the next boot failure into a rollback.
-	backed, err := s.suspendIsDurable(ctx, sessionID, callID, sc.toolName)
-	if err != nil || !backed {
-		s.releaseUnbackedApply(ctx, sessionID, callID, sc, err)
-
-		return
-	}
-
-	log := logger.Ctx(ctx).Named("daemon.apply")
-
-	v := s.applier.Apply(sc.apply, configops.Pending{
-		SessionID:  sessionID,
-		ToolCallID: callID,
-		ToolName:   sc.toolName,
-	})
-
-	if !v.Failed() {
-		log.Info("apply_committed", zap.Int64("session_id", sessionID), zap.String("tool", sc.toolName))
-
-		// The owed verdict answers the call, so the grant is spent here: left
-		// pending it would wedge the durable FIFO behind a mutation that
-		// already happened. A death before this line is settled by the next
-		// boot's ConsumeConfigEditActivation, which runs off the marker.
-		s.ConsumeConfigEditActivation(ctx, sessionID, callID)
-
-		return
-	}
-
-	log.Warn("apply_rejected", zap.Int64("session_id", sessionID), zap.String("reason", v.Reason()))
-
-	// The ledger entry stays until the rejection is durably injected — releasing
-	// it here leaves the session's own result with no producer that owns it.
-	if err := s.enqueueSessionInput(ctx, sessionID, pendingCallResultInput{
-		Call:    session.PendingToolCall{ID: callID, Name: sc.toolName},
-		Content: "Config change rejected — " + v.Reason(),
-	}); err != nil {
-		log.Error("rejection_delivery_failed", zap.Int64("session_id", sessionID), zap.Error(err))
+func (s *svc) registerConfigEditTool(ctx context.Context, rec *sessionstore.SessionRecord, sess session.Service) {
+	if s.applier != nil && rec.ParentID == 0 {
+		registerLogged(ctx, sess, configapply.NewConfigEdit(rec.ID, s.applier))
 	}
 }
 
-// expirePendingActivation expires a session's pending tool grant when its call
-// was just answered by the stop settlement. Store-only: any output was already
-// produced, and a consumed grant cannot expire — that is a conflict, not a no-op.
-func (s *svc) expirePendingActivation(ctx context.Context, sessionID int64) error {
-	activation, err := s.activationStore.PendingActivation(ctx, sessionID)
-	if errors.Is(err, sessionstore.ErrActivationNotFound) {
-		return nil
-	}
-
-	if err != nil {
-		return fmt.Errorf("load pending activation for session %d: %w", sessionID, err)
-	}
-
-	if _, err := s.activationStore.ExpireActivation(ctx, activation.InputID, sessionID); err != nil {
-		return fmt.Errorf("expire activation for session %d: %w", sessionID, err)
-	}
-
-	return nil
-}
-
-// ConsumeConfigEditActivation spends the /config grant whose config_edit call
-// just committed, on the boot path or in the apply's own process. Idempotent by
-// contract: a replayed consume is a no-op.
-func (s *svc) ConsumeConfigEditActivation(ctx context.Context, sessionID int64, callID string) {
-	activation, err := s.activationStore.CurrentActivation(ctx, sessionID)
-	if err != nil {
-		if !errors.Is(err, sessionstore.ErrActivationNotFound) {
-			logger.Ctx(ctx).Named("daemon.apply").Warn(
-				"read_config_edit_activation", zap.Int64("session_id", sessionID), zap.Error(err))
-		}
-
-		return
-	}
-
-	if activation.ToolID != tool.IDConfigEdit || activation.Command != configtools.ConfigEditCommand {
-		return
-	}
-
-	binding := sessionstore.ActivationBinding{
-		InputID: activation.InputID, SessionID: sessionID,
-		ToolID: activation.ToolID, Command: activation.Command, ToolCallID: callID,
-	}
-	if err := s.activationStore.ConsumeActivationBinding(ctx, binding); err != nil {
-		logger.Ctx(ctx).Named("daemon.apply").Warn(
-			"consume_config_edit_activation", zap.Int64("session_id", sessionID), zap.Error(err))
-	}
-}
-
-// suspendIsDurable reports whether the durable transcript carries callID as an
-// unresolved external call of toolName — the precondition for committing.
-func (s *svc) suspendIsDurable(ctx context.Context, sessionID int64, callID, toolName string) (bool, error) {
-	calls, err := s.storedExternalCalls(ctx, sessionID)
-	if err != nil {
-		return false, fmt.Errorf("read suspended call %s of session %d: %w", callID, sessionID, err)
-	}
-
-	return pendingCall(calls, callID, toolName), nil
-}
-
-// releaseUnbackedApply gives the slot back for a staged change whose suspend the
-// transcript does not back. Nothing is written, so the change is simply dropped.
-func (s *svc) releaseUnbackedApply(
-	ctx context.Context,
-	sessionID int64,
-	callID string,
-	sc stagedCall,
-	scanErr error,
-) {
-	s.applier.ReleaseApply()
-
-	log := logger.Ctx(ctx).Named("daemon.apply")
-	log.Warn("apply_suspend_not_durable",
-		zap.Int64("session_id", sessionID), zap.String("tool", sc.toolName), zap.Error(scanErr))
-
-	// A call the transcript demonstrably lacks has nobody waiting; only an
-	// unverifiable read is worth answering, since an owner-less call bricks a session.
-	if scanErr == nil || s.shuttingDown.Load() {
-		s.staged.resolve(sessionID, callID)
-
-		return
-	}
-
-	if err := s.enqueueSessionInput(ctx, sessionID, pendingCallResultInput{
-		Call:    session.PendingToolCall{ID: callID, Name: sc.toolName},
-		Content: "Config change abandoned — the suspend could not be verified, so nothing was written.",
-	}); err != nil {
-		log.Error("unbacked_delivery_failed", zap.Int64("session_id", sessionID), zap.Error(err))
-	}
-}
-
-// abandonStagedApply releases the global slot while retaining the verdict.
-// Transcript settlement waits for the runner's lifecycle fence.
-func (s *svc) abandonStagedApply(ctx context.Context, sessionID int64) {
-	if s.applier == nil {
-		return
-	}
-
-	callID, sc, ok := s.staged.takePendingApply(sessionID)
-	if !ok {
-		return
-	}
-
-	s.applier.ReleaseApply()
-	s.staged.stageResult(sessionID, callID, sc.toolName,
-		"Config change abandoned — the session ended before it was applied. Nothing was written.")
-
-	log := logger.Ctx(ctx).Named("daemon.apply")
-	log.Warn("apply_abandoned", zap.Int64("session_id", sessionID), zap.String("tool", sc.toolName))
-}
-
-func (s *svc) settleStagedResults(ctx context.Context, sessionID int64) error {
-	for callID, sc := range s.staged.pendingResults(sessionID) {
-		durable, err := s.suspendIsDurable(ctx, sessionID, callID, sc.toolName)
-		if err != nil {
-			return err
-		}
-
-		// Expire first: a crash after the result must not leave an unbound grant
-		// blocking the FIFO with no unresolved call for recovery to settle.
-		if err := s.expireAbandonedActivation(ctx, sessionID, callID, sc.toolName); err != nil {
-			return err
-		}
-
-		if durable {
-			if err := s.settleAbandonedApply(ctx, sessionID, pendingCallResultInput{
-				Call: session.PendingToolCall{ID: callID, Name: sc.toolName}, Content: sc.result,
-			}); err != nil {
-				return err
-			}
-		}
-
-		s.staged.resolve(sessionID, callID)
-	}
-
-	return nil
-}
-
-func (s *svc) settleAbandonedApply(ctx context.Context, sessionID int64, input pendingCallResultInput) error {
-	rec, err := s.sessionStore.GetSession(ctx, sessionID)
-	if err != nil {
-		return fmt.Errorf("load session for abandoned apply: %w", err)
-	}
-
-	workDir, err := s.store.GetProjectWorkDir(ctx, rec.ProjectID)
-	if err != nil {
-		return fmt.Errorf("resolve project for abandoned apply: %w", err)
-	}
-
-	sess, err := s.openSession(ctx, sessionID, workDir, rec, false, false, true)
-	if err != nil {
-		return fmt.Errorf("open transcript for abandoned apply: %w", err)
-	}
-	defer sess.Close()
-
-	_, err = sess.ResolvePendingCall(ctx, input.Call, input.Content)
-	if err != nil {
-		return fmt.Errorf("settle abandoned apply: %w", err)
-	}
-
-	return nil
-}
-
-func (s *svc) expireAbandonedActivation(ctx context.Context, sessionID int64, callID, toolName string) error {
-	activation, err := s.activationStore.PendingActivation(ctx, sessionID)
-	if errors.Is(err, sessionstore.ErrActivationNotFound) {
-		return nil
-	}
-
-	if err != nil {
-		return fmt.Errorf("read abandoned activation: %w", err)
-	}
-
-	if activation.ToolID != toolName || (activation.ToolCallID != "" && activation.ToolCallID != callID) {
-		return nil
-	}
-
-	_, err = s.activationStore.ExpireActivation(ctx, activation.InputID, sessionID)
-	if err != nil {
-		return fmt.Errorf("expire abandoned activation: %w", err)
-	}
-
-	return nil
-}
-
-// registerSubagentTools registers the daemon-mode task and subagent-monitor
-// tools on the session's live registry. The daemon itself is the spawner, so
-// these are gated the same as schedule tools — availability still follows the
-// session's agent-type allowlist.
 func (s *svc) registerSubagentTools(ctx context.Context, sessionID int64, sess session.Service) {
 	var skills loader.SkillCatalog
 	if catalog, ok := sess.(interface{ SkillCatalog() loader.SkillCatalog }); ok {
@@ -1745,7 +972,6 @@ func (s *svc) ensureRunner(
 	sessionID int64,
 	workDir string,
 	projectID int64,
-	inputs []queuedSessionInput,
 ) error {
 	if s.shuttingDown.Load() {
 		return errDaemonShuttingDown
@@ -1757,7 +983,7 @@ func (s *svc) ensureRunner(
 	}
 	defer unlock()
 
-	return s.ensureRunnerLocked(ctx, sessionID, workDir, projectID, inputs)
+	return s.ensureRunnerLocked(ctx, sessionID, workDir, projectID)
 }
 
 func (s *svc) ensureRunnerLocked(
@@ -1765,13 +991,12 @@ func (s *svc) ensureRunnerLocked(
 	sessionID int64,
 	workDir string,
 	projectID int64,
-	inputs []queuedSessionInput,
 ) error {
 	if s.shuttingDown.Load() {
 		return errDaemonShuttingDown
 	}
 
-	if err := s.launcher.Ensure(ctx, sessionID, workDir, projectID, inputs); err != nil {
+	if err := s.launcher.Ensure(ctx, sessionID, workDir, projectID); err != nil {
 		return fmt.Errorf("ensure session runner: %w", err)
 	}
 
@@ -1781,31 +1006,26 @@ func (s *svc) ensureRunnerLocked(
 func (s *svc) ensureRunnerStartable(
 	ctx context.Context,
 	rec *sessionstore.SessionRecord,
-	inputs []queuedSessionInput,
 ) (bool, error) {
 	preserveStopped, err := s.commandOnlyStoppedRoot(ctx, rec)
 	if err != nil {
 		return false, err
 	}
 
-	if err := validateRunnerStart(rec, inputs, preserveStopped); err != nil {
+	if err := validateRunnerStart(rec, preserveStopped); err != nil {
 		return false, err
 	}
 
 	return preserveStopped, nil
 }
 
-func validateRunnerStart(rec *sessionstore.SessionRecord, inputs []queuedSessionInput, preserveStopped bool) error {
+func validateRunnerStart(rec *sessionstore.SessionRecord, preserveStopped bool) error {
 	if rec.KilledAt != nil || rec.Status == sessionstore.SessionStatusKilled {
 		return fmt.Errorf("session %d is killed", rec.ID)
 	}
-
-	if rec.Status == sessionstore.SessionStatusStopping ||
-		(rec.Status == sessionstore.SessionStatusStopped && !preserveStopped &&
-			(rec.ParentID != 0 || !queuedInputsStartScheduledTurn(inputs))) {
+	if rec.Status == sessionstore.SessionStatusStopping || rec.Status == sessionstore.SessionStatusTerminating || (rec.Status == sessionstore.SessionStatusStopped && !preserveStopped) {
 		return fmt.Errorf("session %d is %s", rec.ID, rec.Status)
 	}
-
 	return nil
 }
 
@@ -1832,10 +1052,4 @@ func (s *svc) commandOnlyStoppedRoot(ctx context.Context, rec *sessionstore.Sess
 	}
 
 	return isReadOnlyBoundaryCommand(head.RawContent), nil
-}
-
-func queuedInputsStartScheduledTurn(inputs []queuedSessionInput) bool {
-	return len(inputs) > 0 && !slices.ContainsFunc(inputs, func(input queuedSessionInput) bool {
-		return !inputIsScheduledTurn(input.input())
-	})
 }

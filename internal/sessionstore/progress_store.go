@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/pilat/coagent/internal/budget"
 	"time"
 )
 
@@ -31,7 +32,7 @@ type ProgressFacts struct {
 	LastSemanticOutputAt *time.Time
 	MessageWatermark     int64
 	OutboxWatermark      int64
-	Budget               *BudgetRecord
+	Budget               *budget.Record
 	Waiting              []ProgressWait
 	ActiveSubagents      int
 	BackgroundSubagents  int

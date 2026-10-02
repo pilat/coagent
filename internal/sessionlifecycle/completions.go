@@ -8,10 +8,8 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/pilat/coagent/internal/logger"
-	"github.com/pilat/coagent/internal/session"
 	"github.com/pilat/coagent/internal/sessionstore"
 	"github.com/pilat/coagent/internal/subagent"
-	"github.com/pilat/coagent/internal/transcript"
 )
 
 const (
@@ -21,7 +19,6 @@ const (
 
 type Completions interface {
 	Finalize(ctx context.Context, childID int64, shuttingDown, errored bool) func()
-	Persist(ctx context.Context, parent session.Service, link subagent.Link, messages []*transcript.Message) error
 	Rearm(ctx context.Context, childID int64) error
 	RearmLocked(ctx context.Context, childID int64) error
 }
@@ -134,31 +131,6 @@ func (c *completions) Finalize(ctx context.Context, childID int64, shuttingDown,
 	c.subagentChanged(ctx, childID)
 
 	return func() { c.deliver(ctx, *link) }
-}
-
-func (c *completions) Persist(
-	ctx context.Context,
-	parent session.Service,
-	link subagent.Link,
-	messages []*transcript.Message,
-) error {
-	_, won, err := c.tx.DeliverCompletion(
-		ctx, link.ParentID, messages, link.ChildID, link.ActivationSeq,
-	)
-	if err != nil {
-		return fmt.Errorf("deliver completion for child %d: %w", link.ChildID, err)
-	}
-
-	if won {
-		if reloadErr := parent.ReloadDeliveredCompletion(ctx); reloadErr != nil {
-			logger.Ctx(ctx).Named("sessionlifecycle.completion").Warn(
-				"completion_reload_failed", zap.Int64("child", link.ChildID),
-				zap.Int64("parent", link.ParentID), zap.Error(reloadErr),
-			)
-		}
-	}
-
-	return c.Rearm(ctx, link.ChildID)
 }
 
 func (c *completions) Rearm(ctx context.Context, childID int64) error {

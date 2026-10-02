@@ -1,12 +1,12 @@
-package session
+package sessionstore
 
 import (
 	"encoding/json"
 	"fmt"
 	"time"
 
+	"github.com/pilat/coagent/internal/budget"
 	"github.com/pilat/coagent/internal/progress"
-	"github.com/pilat/coagent/internal/sessionstore"
 	"github.com/pilat/coagent/internal/todo"
 )
 
@@ -14,7 +14,7 @@ import (
 // response transaction into the pure renderer input. Iteration and usage
 // already include the just-committed assistant row.
 func finalFactsFromProgress(
-	facts *sessionstore.ProgressFacts,
+	facts *ProgressFacts,
 	observedAt time.Time,
 ) (progress.FinalFacts, error) {
 	items, err := finalTodoItems(facts)
@@ -38,7 +38,7 @@ func finalFactsFromProgress(
 	return out, nil
 }
 
-func finalTodoItems(facts *sessionstore.ProgressFacts) ([]progress.TodoItem, error) {
+func finalTodoItems(facts *ProgressFacts) ([]progress.TodoItem, error) {
 	var items []*todo.Item
 	if err := json.Unmarshal(facts.TodoItems, &items); err != nil {
 		return nil, fmt.Errorf("decode final todo: %w", err)
@@ -58,7 +58,7 @@ func finalTodoItems(facts *sessionstore.ProgressFacts) ([]progress.TodoItem, err
 }
 
 func finalBudget(
-	record *sessionstore.BudgetRecord,
+	record *budget.Record,
 	cost float64,
 	now time.Time,
 ) *progress.Budget {

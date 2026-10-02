@@ -1,12 +1,7 @@
 package session
 
 import (
-	"context"
-
-	"go.uber.org/zap"
-
 	"github.com/pilat/coagent/internal/llmwire"
-	"github.com/pilat/coagent/internal/logger"
 	"github.com/pilat/coagent/internal/sessionstore"
 	"github.com/pilat/coagent/internal/tool"
 )
@@ -123,34 +118,6 @@ func (s *svc) modelGeneration() uint64 {
 	return s.modelEpoch
 }
 
-// recordContextBaseline stores what the provider reported for a request covering
-// sentCount messages. A model switch mid-flight discards it as another model's.
-// The measurement also persists best-effort: a failed write costs /status its
-// accuracy across a restart, never the turn.
-func (s *svc) recordContextBaseline(ctx context.Context, promptTokens, sentCount int, generation uint64) {
-	if promptTokens <= 0 {
-		return
-	}
-
-	model, ok := s.storeContextBaseline(promptTokens, sentCount, generation)
-	if !ok {
-		return
-	}
-
-	if s.store == nil {
-		return
-	}
-
-	err := s.store.SaveContextBaseline(ctx, s.id, sessionstore.ContextBaseline{
-		Model:        model,
-		PromptTokens: promptTokens,
-		MessageCount: sentCount,
-	})
-	if err != nil {
-		logger.Ctx(ctx).Named("session.context").Warn("persist_context_baseline_failed", zap.Error(err))
-	}
-}
-
 // storeContextBaseline installs the measurement in memory when it describes the
 // current model generation, returning the model to persist it under.
 func (s *svc) storeContextBaseline(promptTokens, sentCount int, generation uint64) (string, bool) {
@@ -164,20 +131,6 @@ func (s *svc) storeContextBaseline(promptTokens, sentCount int, generation uint6
 	s.baseline = &contextBaseline{promptTokens: promptTokens, messageCount: sentCount}
 
 	return s.model, true
-}
-
-// clearPersistedBaseline drops the stored measurement best-effort. It must run
-// wherever the transcript the measurement described is replaced: otherwise a
-// crash before the next successful response resurrects a stale baseline whose
-// message-count guard passes on equality.
-func (s *svc) clearPersistedBaseline(ctx context.Context) {
-	if s.store == nil {
-		return
-	}
-
-	if err := s.store.ClearContextBaseline(ctx, s.id); err != nil {
-		logger.Ctx(ctx).Named("session.context").Warn("clear_context_baseline_failed", zap.Error(err))
-	}
 }
 
 // installPersistedBaseline adopts the last measurement across a restart. It is

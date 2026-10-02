@@ -9,28 +9,18 @@ import (
 // Zero value is ready to use (first message will have no elapsed prefix).
 type timestamper struct {
 	lastActivity time.Time
-	nowFunc      func() time.Time // defaults to time.Now if nil
-}
-
-// now returns the current time, using nowFunc if set.
-func (t *timestamper) now() time.Time {
-	if t.nowFunc != nil {
-		return t.nowFunc()
-	}
-
-	return time.Now()
 }
 
 // touch records activity (model response, tool result) without stamping a message.
 // This keeps elapsed accurate: it measures the gap since any activity, not just user messages.
 func (t *timestamper) touch() {
-	t.lastActivity = t.now()
+	t.lastActivity = time.Now()
 }
 
 // stamp prefixes msg with "[+elapsed DOW YYYY-MM-DD HH:MM ZONE ±HH:MM]".
 // Empty messages pass through unchanged without advancing the clock.
 func (t *timestamper) stamp(msg string) string {
-	return t.stampAt(msg, t.now())
+	return t.stampAt(msg, time.Now())
 }
 
 // stampAt stamps a durable message at receipt time. It never moves activity

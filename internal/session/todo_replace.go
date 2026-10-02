@@ -2,27 +2,23 @@ package session
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
 	"time"
 
-	"github.com/pilat/coagent/internal/sessionstore"
 	"github.com/pilat/coagent/internal/todo"
 	"github.com/pilat/coagent/internal/tool/builtin"
 )
 
 type todoReplacement struct {
-	store     sessionstore.RuntimeStore
-	sessionID int64
-	memory    todo.Service
+	memory todo.Service
 }
 
 var _ builtin.TodoReplacement = (*todoReplacement)(nil)
 
 func (r *todoReplacement) ReplaceTodo(
-	ctx context.Context,
+	_ context.Context,
 	callID string,
 	input []builtin.TodoReplacementItem,
 ) ([]*todo.Item, error) {
@@ -42,17 +38,6 @@ func (r *todoReplacement) ReplaceTodo(
 
 		if item.UpdatedAt.IsZero() {
 			item.UpdatedAt = now
-		}
-	}
-
-	encoded, err := json.Marshal(items)
-	if err != nil {
-		return nil, fmt.Errorf("marshal todo replacement: %w", err)
-	}
-
-	if r.store != nil {
-		if err := r.store.UpdateSessionTodoItems(ctx, r.sessionID, encoded); err != nil {
-			return nil, fmt.Errorf("persist todo replacement: %w", err)
 		}
 	}
 

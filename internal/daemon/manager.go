@@ -15,12 +15,11 @@ import (
 
 	"github.com/pilat/coagent/internal/admission"
 	"github.com/pilat/coagent/internal/backgroundprocess"
-	budgetservice "github.com/pilat/coagent/internal/budget"
+	"github.com/pilat/coagent/internal/budget"
 	"github.com/pilat/coagent/internal/coagenthome"
 	"github.com/pilat/coagent/internal/config"
 	"github.com/pilat/coagent/internal/configapply"
 	"github.com/pilat/coagent/internal/controllerapi"
-	"github.com/pilat/coagent/internal/inputruntime"
 	"github.com/pilat/coagent/internal/logger"
 	"github.com/pilat/coagent/internal/mcpstore"
 	"github.com/pilat/coagent/internal/progressruntime"
@@ -39,12 +38,6 @@ type Service interface {
 	Send(ctx context.Context, projectID int64, prompt, model string, attrs map[string]any) (int64, error)
 	SendToSession(ctx context.Context, sessionID int64, prompt string) error
 	SendToSessionResolved(ctx context.Context, sessionID int64, prompt string) (int64, error)
-	DeliverPendingCallResult(
-		ctx context.Context, sessionID int64, callID, toolName, content string,
-	) (bool, error)
-	ConsumeConfigEditActivation(ctx context.Context, sessionID int64, callID string)
-	DeliverScheduleTick(ctx context.Context, sessionID int64, deliveryID, content string) (bool, error)
-	DeliverFreshSchedule(ctx context.Context, sessionID int64, deliveryID, content string) (bool, error)
 	Kill(ctx context.Context, sessionID int64) error
 	Stop(ctx context.Context, sessionID, inputID int64) error
 	Clear(ctx context.Context, sessionID int64) (int64, error)
@@ -96,8 +89,7 @@ type svc struct {
 	managerOutputs  sessionstore.ManagerOutputStore
 	managerRoots    sessionstore.ManagerRootTransactions
 	lifecycleStore  sessionstore.SessionLifecycleStore
-	modelInputs     sessionstore.ModelInputStore
-	inputFactory    inputruntime.Factory
+	modelInputs     sessionstore.Store
 	links           subagent.Store
 	subagents       subagent.Transactions
 	scheduleSvc     schedule.Service
@@ -105,7 +97,7 @@ type svc struct {
 	childQueue      sessionlifecycle.Queue[queuedChild]
 	pendingQueue    sessionlifecycle.Queue[queuedRunner]
 	pubsub          sessionbus.Bus
-	defaultModelFn  func() string
+	defaultModel    string
 	modelCatalog    []modelInfo
 	modelEntries    []config.ModelEntry
 	// searchUnconfigured is the boot-time discoverability verdict: no
@@ -113,13 +105,12 @@ type svc struct {
 	searchUnconfigured bool
 	mcpStore           mcpstore.Store
 	applier            configapply.Service
-	staged             *stagedCalls
 	deferNotices       *deferAnnouncements
 	shuttingDown       atomic.Bool
 	recovery           sessionlifecycle.Recovery
 	stopper            sessionlifecycle.Stopper
 	completions        sessionlifecycle.Completions
-	launcher           sessionlifecycle.Launcher[queuedSessionInput]
+	launcher           sessionlifecycle.Launcher
 	progress           progressruntime.Service
 	budgetCtx          context.Context //nolint:containedctx // Daemon lifetime context for joined park workers.
 	budgetCancel       context.CancelFunc
@@ -135,7 +126,7 @@ type svc struct {
 	childMu    sync.Mutex
 	childCache map[int64]bool
 	ownerCache map[int64]string
-	budgetSvc  budgetservice.Service
+	budgetSvc  budget.Service
 	// processSvc owns live cancellation handles; processStore owns durability.
 	processStore      backgroundprocess.Store
 	processSvc        backgroundprocess.Service
@@ -177,15 +168,15 @@ func New(
 	factory session.Factory,
 	store Store,
 	sessionStore sessionstore.OrchestrationStore,
-	inboxStore inputruntime.Store,
+	inboxStore sessionstore.Store,
 	runtimeStore sessionstore.AgentRuntimeStore,
 	managerOutputs sessionstore.ManagerOutputStore,
 	managerRoots sessionstore.ManagerRootTransactions,
 	lifecycleStore sessionstore.SessionLifecycleStore,
-	modelInputs sessionstore.ModelInputStore,
+	modelInputs sessionstore.Store,
 	links subagent.Store,
 	subagents subagent.Transactions,
-	budgetSvc budgetservice.Service,
+	budgetSvc budget.Service,
 	progressStore progressruntime.Store,
 	scheduleSvc schedule.Service,
 	cfg *config.Config,
@@ -197,7 +188,7 @@ func New(
 		factory, store, sessionStore, inboxStore, runtimeStore,
 		managerOutputs, managerRoots, lifecycleStore, modelInputs,
 		links, subagents, budgetSvc, progressStore,
-		scheduleSvc, cfg.DefaultModel,
+		scheduleSvc, cfg.DefaultModel(),
 	)
 	s.mcpStore = mcpStore
 	s.applier = applier
@@ -219,18 +210,18 @@ func newSvc(
 	factory session.Factory,
 	store Store,
 	sessionStore sessionstore.OrchestrationStore,
-	inboxStore inputruntime.Store,
+	inboxStore sessionstore.Store,
 	runtimeStore sessionstore.AgentRuntimeStore,
 	managerOutputs sessionstore.ManagerOutputStore,
 	managerRoots sessionstore.ManagerRootTransactions,
 	lifecycleStore sessionstore.SessionLifecycleStore,
-	modelInputs sessionstore.ModelInputStore,
+	modelInputs sessionstore.Store,
 	links subagent.Store,
 	subagents subagent.Transactions,
-	budgetSvc budgetservice.Service,
+	budgetSvc budget.Service,
 	progressStore progressruntime.Store,
 	scheduleSvc schedule.Service,
-	defaultModelFn func() string,
+	defaultModel string,
 ) (*svc, backgroundprocess.Service) {
 	budgetCtx, budgetCancel := context.WithCancel(context.Background())
 	workerCtx, workerCancel := context.WithCancel(context.Background())
@@ -247,12 +238,10 @@ func newSvc(
 		managerRoots:    managerRoots,
 		lifecycleStore:  lifecycleStore,
 		modelInputs:     modelInputs,
-		inputFactory:    inputruntime.New(inboxStore, scheduleSvc),
 		links:           links,
 		subagents:       subagents,
 		budgetSvc:       budgetSvc,
 		scheduleSvc:     scheduleSvc,
-		staged:          newStagedCalls(),
 		admit:           admission.New(),
 		childQueue:      sessionlifecycle.NewQueue[queuedChild](),
 		pendingQueue:    sessionlifecycle.NewQueue[queuedRunner](),
@@ -260,15 +249,15 @@ func newSvc(
 		stopper: sessionlifecycle.NewStopper(
 			sessionStore, lifecycleStore, managerOutputs, links,
 		),
-		pubsub:         sessionbus.New(),
-		defaultModelFn: defaultModelFn,
-		childCache:     make(map[int64]bool),
-		ownerCache:     make(map[int64]string),
-		deferNotices:   newDeferAnnouncements(),
-		workerCtx:      workerCtx,
-		workerCancel:   workerCancel,
-		budgetCtx:      budgetCtx,
-		budgetCancel:   budgetCancel,
+		pubsub:       sessionbus.New(),
+		defaultModel: defaultModel,
+		childCache:   make(map[int64]bool),
+		ownerCache:   make(map[int64]string),
+		deferNotices: newDeferAnnouncements(),
+		workerCtx:    workerCtx,
+		workerCancel: workerCancel,
+		budgetCtx:    budgetCtx,
+		budgetCancel: budgetCancel,
 	}
 	s.progress = newProgressRuntime(progressStore, budgetSvc, s)
 	s.completions = s.newCompletionCoordinator()
@@ -285,7 +274,7 @@ func newSvc(
 
 	if rawStore, ok := store.(interface{ DB() *sql.DB }); ok {
 		if db := rawStore.DB(); db != nil {
-			s.processStore = backgroundprocess.NewStore(db)
+			s.processStore = backgroundprocess.NewStore(db, inboxStore)
 			processSvc = s.newProcessService(ctx)
 			s.processSvc = processSvc
 		}
@@ -317,7 +306,7 @@ func (s *svc) SendToSession(ctx context.Context, sessionID int64, prompt string)
 
 		// The park drain won the arbitration CAS; the retry is the user's next
 		// message once the parked root accepts input again.
-		if errors.Is(err, sessionstore.ErrBudgetConflict) {
+		if errors.Is(err, budget.ErrConflict) {
 			return fmt.Errorf(
 				"session %d is parking after a budget checkpoint — send the message again once it stops",
 				sessionID,
@@ -367,7 +356,7 @@ func (s *svc) SendToSession(ctx context.Context, sessionID int64, prompt string)
 		return nil
 	}
 
-	if err := s.ensureRunner(ctx, sessionID, workDir, rec.ProjectID, nil); err != nil {
+	if err := s.ensureRunner(ctx, sessionID, workDir, rec.ProjectID); err != nil {
 		if errors.Is(err, admission.ErrNoCapacity) {
 			s.enqueuePendingRunner(sessionID, workDir, rec.ProjectID)
 			return nil
@@ -425,7 +414,8 @@ func (s *svc) handleGenericCommand(ctx context.Context, input *sessionstore.Inbo
 		return true, s.handleStatusInput(ctx, input)
 	}
 
-	if input.RawContent != stopCommand && input.RawContent != clearCommand && input.RawContent != killCommand {
+	command := strings.TrimSpace(input.RawContent)
+	if command != stopCommand && command != clearCommand && command != killCommand {
 		return false, nil
 	}
 
@@ -435,7 +425,7 @@ func (s *svc) handleGenericCommand(ctx context.Context, input *sessionstore.Inbo
 	}
 	defer unlock()
 
-	switch input.RawContent {
+	switch command {
 	case stopCommand:
 		record, err := s.sessionStore.GetSession(ctx, input.SessionID)
 		if err != nil {
@@ -472,70 +462,40 @@ func (s *svc) handleGenericCommand(ctx context.Context, input *sessionstore.Inbo
 func (s *svc) handleStatusInput(ctx context.Context, input *sessionstore.InboxInput) error {
 	current, err := s.CurrentProgress(ctx, input.SessionID)
 	if err != nil {
-		return fmt.Errorf("capture status progress: %w", err)
+		return err
 	}
-
-	if _, owned := input.Attributes[controllerapi.SessionAttributeManagerID].(string); owned {
-		_, err = s.lifecycleStore.HandleInputWithOutput(ctx, input.ID, "status command", sessionstore.OutputDraft{
-			SessionID: input.SessionID,
-			Type:      sessionstore.OutputMessagePersistent,
-			Content:   current.Rendered,
-		})
-	} else {
-		err = s.inboxStore.HandleInput(ctx, input.ID, "status command")
+	_, err = s.runtimeStore.Commit(ctx, sessionstore.Commit{
+		SessionID: input.SessionID, Accept: []sessionstore.Accept{{InputID: input.ID, State: sessionstore.InputStateHandled, Reason: "status command", LinkRef: -1}},
+		Outputs: []sessionstore.Output{{Type: sessionstore.OutputMessagePersistent, Content: current.Rendered, MessageRef: -1}},
+	})
+	if errors.Is(err, sessionstore.ErrInputResolved) {
+		return nil
 	}
-
 	if err != nil {
-		return fmt.Errorf("handle status input: %w", err)
+		return err
 	}
-
-	s.publish(input.SessionID, sessionevent.Notification{
-		Type: sessionevent.NotifyMessage, Message: current.Rendered,
-	})
-	s.publish(input.SessionID, sessionevent.Notification{
-		Type: sessionevent.NotifyStateChanged, Status: controllerapi.StateIdle,
-	})
-
+	s.publish(input.SessionID, sessionevent.Notification{Type: sessionevent.NotifyMessage, Message: current.Rendered})
+	if !s.HasActiveLoop(input.SessionID) {
+		s.publish(input.SessionID, sessionevent.Notification{Type: sessionevent.NotifyStateChanged, Status: controllerapi.StateIdle})
+	}
 	return nil
 }
 
 //nolint:funcorder // The idempotent stop result is part of the same command dispatcher.
 func (s *svc) handleStoppedStop(ctx context.Context, input *sessionstore.InboxInput) error {
-	content := "Session already stopped."
-
-	if _, owned := input.Attributes[controllerapi.SessionAttributeManagerID].(string); owned {
-		_, err := s.lifecycleStore.HandleInputWithOutput(ctx, input.ID, "stop command", sessionstore.OutputDraft{
-			SessionID: input.SessionID,
-			Type:      sessionstore.OutputMessagePersistent,
-			Content:   content,
-			SourceKey: fmt.Sprintf("input:%d:stop:already_stopped", input.ID),
-			Fingerprint: sessionstore.OutputFingerprint(
-				sessionstore.OutputMessagePersistent,
-				content,
-				input.SessionID,
-				nil,
-			),
-		})
-		if err != nil {
-			return fmt.Errorf("handle stopped stop with output: %w", err)
-		}
-
-		return nil
-	}
-
-	if err := s.inboxStore.HandleInput(ctx, input.ID, "stop command"); err != nil {
-		return fmt.Errorf("handle stopped stop: %w", err)
-	}
-
-	return s.enqueuePersistentOutput(ctx, input.SessionID, content)
+	_, err := s.runtimeStore.Commit(ctx, sessionstore.Commit{
+		SessionID: input.SessionID, Accept: []sessionstore.Accept{{InputID: input.ID, State: sessionstore.InputStateHandled, Reason: "stop command", LinkRef: -1}},
+		Outputs: []sessionstore.Output{{Type: sessionstore.OutputMessagePersistent, Content: "Session already stopped.", Key: fmt.Sprintf("input:%d:stop:already_stopped", input.ID), MessageRef: -1}},
+	})
+	return err
 }
 
 //nolint:funcorder // Lifecycle input must stay with the generic dispatcher that invokes it.
 func (s *svc) handleLifecycleInput(ctx context.Context, input *sessionstore.InboxInput, content string) error {
-	command := strings.TrimPrefix(input.RawContent, "/")
+	command := strings.TrimPrefix(strings.TrimSpace(input.RawContent), "/")
 
 	if _, owned := input.Attributes[controllerapi.SessionAttributeManagerID].(string); !owned {
-		if err := s.inboxStore.HandleInput(ctx, input.ID, command); err != nil {
+		if _, err := s.runtimeStore.Commit(ctx, sessionstore.Commit{SessionID: input.SessionID, Accept: []sessionstore.Accept{{InputID: input.ID, State: sessionstore.InputStateHandled, Reason: command, LinkRef: -1}}}); err != nil {
 			return fmt.Errorf("handle lifecycle input: %w", err)
 		}
 
@@ -563,55 +523,6 @@ func (s *svc) enqueuePersistentOutput(ctx context.Context, sessionID int64, cont
 	}
 
 	return nil
-}
-
-// DeliverPendingCallResult answers one specific pending tool call. It is how an
-// outcome produced outside the loop — a config verdict that survived a restart,
-// a secret typed at a terminal — gets back into the session that asked for it,
-// whatever channel that session belongs to.
-func (s *svc) DeliverPendingCallResult(
-	ctx context.Context, sessionID int64, callID, toolName, content string,
-) (bool, error) {
-	return s.deliverSessionInput(ctx, sessionID, pendingCallResultInput{
-		Call:    session.PendingToolCall{ID: callID, Name: toolName},
-		Content: content,
-	})
-}
-
-func (s *svc) DeliverScheduleTick(
-	ctx context.Context,
-	sessionID int64,
-	deliveryID, content string,
-) (bool, error) {
-	if root, err := s.isRootScheduleTarget(ctx, sessionID); err != nil || !root {
-		return false, err
-	}
-
-	return s.deliverSessionInput(ctx, sessionID, scheduleTickInput{
-		DeliveryID: deliveryID,
-		Content:    content,
-	})
-}
-
-func (s *svc) DeliverFreshSchedule(
-	ctx context.Context,
-	sessionID int64,
-	deliveryID, content string,
-) (bool, error) {
-	if root, err := s.isRootScheduleTarget(ctx, sessionID); err != nil || !root {
-		return false, err
-	}
-
-	return s.deliverSessionInput(ctx, sessionID, freshScheduleInput{
-		DeliveryID: deliveryID,
-		Prompt:     content,
-	})
-}
-
-// StageExternalCall records that a tool call suspended awaiting work the daemon
-// itself is doing, so the loop neither re-executes it nor advances past it.
-func (s *svc) StageExternalCall(sessionID int64, callID, toolName string) {
-	s.staged.stage(sessionID, callID, toolName)
 }
 
 func (s *svc) GetSession(ctx context.Context, id int64) (*sessionstore.SessionRecord, error) {
@@ -935,10 +846,6 @@ func (s *svc) settleStoppedTree(ctx context.Context, ids []int64) error {
 		// The settlement just answered every pending call, so a pending grant
 		// can never be spent anymore; expire it store-only or its row sits
 		// pending until the next wake burns a model turn on the receipt.
-		if err := s.expirePendingActivation(ctx, id); err != nil {
-			return err
-		}
-
 		if s.scheduleSvc == nil {
 			continue
 		}
@@ -1056,12 +963,12 @@ func (s *svc) SetModel(ctx context.Context, sessionID int64, model, reasoningLev
 		}
 
 		budgetRecord, budgetErr := s.budgetSvc.Get(ctx, sessionRootID(record))
-		if budgetErr == nil && budgetRecord.State == sessionstore.BudgetArmed &&
+		if budgetErr == nil && budgetRecord.State == budget.Armed &&
 			budgetRecord.CostLimitUSD != nil && !s.modelHasPricing(model) {
 			return errors.New("cannot switch an armed budget tree to a model without catalog pricing")
 		}
 
-		if budgetErr != nil && !errors.Is(budgetErr, sessionstore.ErrBudgetNotFound) {
+		if budgetErr != nil && !errors.Is(budgetErr, budget.ErrNotFound) {
 			return fmt.Errorf("load budget for model switch: %w", budgetErr)
 		}
 	}
@@ -1372,60 +1279,31 @@ func (s *svc) newProcessService(ctx context.Context) backgroundprocess.Service {
 
 	return backgroundprocess.NewService(s.processStore, backgroundprocess.Options{
 		OutputDir: outputRoot,
-		OnCompletion: func(ctx context.Context, completion backgroundprocess.Completion) {
-			s.routeProcessCompletion(ctx, completion)
-		},
 		TreeFence: fence,
 	})
 }
 
-func (s *svc) enqueueUserSessionInput(
-	ctx context.Context,
-	sessionID int64,
-	prompt string,
-) (*sessionstore.InboxInput, error) {
-	if isExactControlCommand(prompt) {
-		return s.enqueueGenericUserInput(ctx, sessionID, prompt)
+func (s *svc) enqueueUserSessionInput(ctx context.Context, sessionID int64, prompt string) (*sessionstore.InboxInput, error) {
+	attributes := make(map[string]any)
+	switch strings.TrimSpace(prompt) {
+	case "/schedules":
+		content, err := s.schedulesCommand(ctx, sessionID)
+		if err != nil {
+			return nil, err
+		}
+		attributes["schedules"] = content
+	case "/status":
+		current, err := s.CurrentProgress(ctx, sessionID)
+		if err != nil {
+			return nil, err
+		}
+		attributes["status"] = current.Rendered
 	}
-
-	record, err := s.sessionStore.GetSession(ctx, sessionID)
+	result, err := s.modelInputs.Enqueue(ctx, sessionstore.Input{SessionID: sessionID, Source: sessionstore.InputSourceUser, Content: prompt, Attributes: attributes})
 	if err != nil {
-		return nil, fmt.Errorf("load session for model input: %w", err)
+		return nil, err
 	}
-
-	owner, _ := record.Attributes[controllerapi.SessionAttributeManagerID].(string)
-	if record.ParentID != 0 || owner == "" {
-		return s.enqueueGenericUserInput(ctx, sessionID, prompt)
-	}
-
-	input, err := s.modelInputs.EnqueueModelInput(ctx, sessionID, prompt)
-	if err != nil {
-		return nil, fmt.Errorf("enqueue model input: %w", err)
-	}
-
-	return input, nil
-}
-
-func (s *svc) enqueueGenericUserInput(
-	ctx context.Context,
-	sessionID int64,
-	prompt string,
-) (*sessionstore.InboxInput, error) {
-	input, err := s.inboxStore.EnqueueInput(ctx, sessionID, sessionstore.InputSourceUser, prompt)
-	if err != nil {
-		return nil, fmt.Errorf("enqueue generic user input: %w", err)
-	}
-
-	return input, nil
-}
-
-func (s *svc) isRootScheduleTarget(ctx context.Context, sessionID int64) (bool, error) {
-	rec, err := s.sessionStore.GetSession(ctx, sessionID)
-	if err != nil {
-		return false, fmt.Errorf("session %d not found", sessionID)
-	}
-
-	return rec.ParentID == 0, nil
+	return result.Input, nil
 }
 
 func (s *svc) stopRecovery() <-chan struct{} {
@@ -1483,106 +1361,6 @@ func (s *svc) checkModelConfigured(model string) error {
 	return fmt.Errorf("unknown model: %s", model)
 }
 
-// appendIfLive appends the input to the session's live runner under the
-// registry lock, returning true if a live runner existed. Holding the lock across
-// the append serializes it with runner teardown (delete + leftover drain).
-func (s *svc) appendIfLive(sessionID int64, input queuedSessionInput) bool {
-	return s.runners.Use(sessionID, func(rs runner) {
-		rs.AppendInput(input)
-	})
-}
-
-func (s *svc) deliverSessionInput(ctx context.Context, sessionID int64, input sessionInput) (bool, error) {
-	if err := input.validate(); err != nil {
-		return false, err
-	}
-
-	delivery := newAwaitedSessionInput(input)
-	if err := s.routeQueuedSessionInput(ctx, sessionID, delivery); err != nil {
-		delivery.complete(false, err)
-		return false, err
-	}
-
-	select {
-	case outcome := <-delivery.done:
-		return outcome.Applied, outcome.Err
-	case <-ctx.Done():
-		return false, ctx.Err()
-	}
-}
-
-func (s *svc) enqueueSessionInput(ctx context.Context, sessionID int64, input sessionInput) error {
-	if err := input.validate(); err != nil {
-		return err
-	}
-
-	return s.routeQueuedSessionInput(ctx, sessionID, asyncSessionInput{value: input})
-}
-
-// routeQueuedSessionInput appends a validated delivery to a live runner or
-// lazily revives an idle session. It rejects killed sessions; awaited callers
-// receive the actual injection outcome through their delivery object.
-func (s *svc) routeQueuedSessionInput(ctx context.Context, sessionID int64, input queuedSessionInput) error {
-	return s.routeQueuedSessionInputWithEnsure(ctx, sessionID, input, s.ensureRunner)
-}
-
-func (s *svc) routeQueuedSessionInputLocked(
-	ctx context.Context,
-	sessionID int64,
-	input queuedSessionInput,
-) error {
-	return s.routeQueuedSessionInputWithEnsure(ctx, sessionID, input, s.ensureRunnerLocked)
-}
-
-func (s *svc) routeQueuedSessionInputWithEnsure(
-	ctx context.Context,
-	sessionID int64,
-	input queuedSessionInput,
-	ensure func(context.Context, int64, string, int64, []queuedSessionInput) error,
-) error {
-	if err := input.input().validate(); err != nil {
-		input.complete(false, err)
-		return err
-	}
-
-	rec, err := s.sessionStore.GetSession(ctx, sessionID)
-	if err != nil {
-		return fmt.Errorf("session %d not found", sessionID)
-	}
-
-	if rec.KilledAt != nil {
-		return fmt.Errorf("session %d is killed", sessionID)
-	}
-
-	if rec.Status == sessionstore.SessionStatusStopping {
-		return fmt.Errorf("session %d is %s", sessionID, rec.Status)
-	}
-
-	if rec.Status == sessionstore.SessionStatusStopped &&
-		(rec.ParentID != 0 || !inputIsScheduledTurn(input.input())) {
-		return fmt.Errorf("session %d is %s", sessionID, rec.Status)
-	}
-
-	// Registry serialization prevents teardown from losing an input appended
-	// before entry deletion and the final leftover drain.
-	if s.appendIfLive(sessionID, input) {
-		return nil
-	}
-
-	workDir, err := s.store.GetProjectWorkDir(ctx, rec.ProjectID)
-	if err != nil {
-		return fmt.Errorf("resolve project %d: %w", rec.ProjectID, err)
-	}
-
-	if s.appendIfLive(sessionID, input) {
-		return nil
-	}
-
-	return ensure(ctx, sessionID, workDir, rec.ProjectID, []queuedSessionInput{input})
-}
-
-// removeSchedules deletes all schedules (one-shot and cron) for a killed session.
-// Cleanup failure must not fail the kill — the session is already terminal.
 func (s *svc) removeSchedules(ctx context.Context, sessionID int64) {
 	if s.scheduleSvc == nil {
 		return
@@ -1605,8 +1383,8 @@ func (s *svc) send(
 		return 0, fmt.Errorf("resolve project %d: %w", projectID, err)
 	}
 
-	if model == "" && s.defaultModelFn != nil {
-		model = s.defaultModelFn()
+	if model == "" {
+		model = s.defaultModel
 	}
 
 	level, err := s.resolveChildEffort(model, "", "")
@@ -1642,12 +1420,12 @@ func (s *svc) send(
 	}
 
 	if prompt != "" && !createdWithInput {
-		if _, err := s.inboxStore.EnqueueInput(ctx, rec.ID, sessionstore.InputSourceUser, prompt); err != nil {
+		if _, err := s.modelInputs.Enqueue(ctx, sessionstore.Input{SessionID: rec.ID, Source: sessionstore.InputSourceUser, Content: prompt}); err != nil {
 			return 0, fmt.Errorf("persist initial session input: %w", err)
 		}
 	}
 
-	if err := s.ensureRunner(ctx, rec.ID, workDir, projectID, nil); err != nil {
+	if err := s.ensureRunner(ctx, rec.ID, workDir, projectID); err != nil {
 		if errors.Is(err, admission.ErrNoCapacity) {
 			s.enqueuePendingRunner(rec.ID, workDir, projectID)
 			return rec.ID, nil

@@ -7,6 +7,8 @@ import (
 	"errors"
 	"fmt"
 	"time"
+
+	"github.com/pilat/coagent/internal/sessionstore"
 )
 
 const (
@@ -32,6 +34,8 @@ type (
 	}
 
 	Store interface {
+		Enqueue(ctx context.Context, input sessionstore.Input) (*sessionstore.Enqueued, error)
+		CallPending(ctx context.Context, sessionID int64, callID string) bool
 		AddSchedule(
 			ctx context.Context,
 			sessionID int64,
@@ -61,7 +65,8 @@ type (
 	}
 
 	store struct {
-		db *sql.DB
+		db       *sql.DB
+		sessions sessionstore.Store
 	}
 )
 
@@ -75,8 +80,16 @@ func (s *Schedule) InputMessage() string    { return s.inputMessage }
 func (s *Schedule) LastFiredAt() *time.Time { return s.lastFiredAt }
 func (s *Schedule) Fresh() bool             { return s.fresh }
 
-func NewStore(db *sql.DB) Store {
-	return &store{db: db}
+func NewStore(db *sql.DB, sessions sessionstore.Store) Store {
+	return &store{db: db, sessions: sessions}
+}
+
+func (s *store) Enqueue(ctx context.Context, input sessionstore.Input) (*sessionstore.Enqueued, error) {
+	return s.sessions.Enqueue(ctx, input)
+}
+
+func (s *store) CallPending(ctx context.Context, sessionID int64, callID string) bool {
+	return s.sessions.CallPending(ctx, sessionID, callID)
 }
 
 func (s *store) AddSchedule(

@@ -15,6 +15,7 @@ const (
 	NotifySessionCreated NotificationType = "session_created"
 	NotifySessionCleared NotificationType = "session_cleared"
 	NotifyWaiting        NotificationType = "waiting"
+	NotifyModelWorking   NotificationType = "model_working"
 )
 
 type WaitKind string
@@ -64,7 +65,7 @@ type Notification struct {
 	Reason        string         // only for NotifyStateChanged
 	Source        string         // "user", "agent", "scheduler" — only for NotifyInputReceived
 	WorkDir       string         // only for NotifySessionCreated / NotifySessionCleared
-	Attributes    map[string]any // only for NotifySessionCreated / NotifySessionCleared
+	Attributes    map[string]any // creation, clearing, or model-working payload
 	OldSessionID  int64          // only for NotifySessionCleared
 	NewSessionID  int64          // only for NotifySessionCleared
 	AfterOutputID int64          // only for NotifyStateChanged; 0 has no output barrier
@@ -91,6 +92,9 @@ func (n Notification) variantContract() (map[string]bool, error) {
 		return fields("message"), n.require(n.Message != "", "message")
 	case NotifyHeartbeat:
 		return fields(), nil
+	case NotifyModelWorking:
+		_, valid := n.Attributes["working"].(bool)
+		return fields("attributes"), n.require(valid && len(n.Attributes) == 1, "one boolean working attribute")
 	case NotifyStateChanged:
 		if err := n.require(n.Status.valid(), "status running, idle, or error"); err != nil {
 			return nil, err

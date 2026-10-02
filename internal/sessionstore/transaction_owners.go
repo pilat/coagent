@@ -6,9 +6,6 @@ import "context"
 // response transactions used by one live agent loop.
 type AgentRuntimeStore interface {
 	RuntimeStore
-	BudgetResponseStore
-	BudgetCompactionStore
-	ResponseDispositionStore
 	FileReadStore
 }
 
@@ -30,7 +27,6 @@ type ManagerRootTransactions interface {
 // transactions that must commit with session lifecycle state.
 type SessionLifecycleStore interface {
 	RecordSessionStartFailure(context.Context, int64, string) (bool, error)
-	CommandOutputStore
 	LifecycleCommandStore
 	LifecycleOutputStore
 	StopCompletionStore

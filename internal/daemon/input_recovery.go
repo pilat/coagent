@@ -27,22 +27,27 @@ func (s *svc) hasPendingDurableInput(ctx context.Context, sessionID int64) (bool
 // durably queued behind an external call. A normal message may interrupt sleep;
 // it cannot jump a foreground subagent/config/secret result.
 func (s *svc) pendingInputRunnable(ctx context.Context, sessionID int64) (bool, error) {
-	pending, err := s.hasPendingDurableInput(ctx, sessionID)
-	if err != nil || !pending {
-		return pending, err
+	rows, err := s.inboxStore.ListPending(ctx, sessionID)
+	if err != nil || len(rows) == 0 {
+		return false, err
 	}
-
+	for _, row := range rows {
+		if row.Source == sessionstore.InputSourceCallResult {
+			return true, nil
+		}
+		if row.Source == sessionstore.InputSourceUser && isReadOnlyBoundaryCommand(row.RawContent) {
+			return true, nil
+		}
+	}
 	calls, err := s.pendingExternalCallsForSession(ctx, sessionID)
 	if err != nil {
 		return false, err
 	}
-
 	for _, name := range calls {
 		if name != tool.IDSleep {
 			return false, nil
 		}
 	}
-
 	return true, nil
 }
 

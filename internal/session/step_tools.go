@@ -2,6 +2,7 @@ package session
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
@@ -12,9 +13,11 @@ import (
 	"github.com/pilat/coagent/internal/id"
 	"github.com/pilat/coagent/internal/llmwire"
 	"github.com/pilat/coagent/internal/logger"
+	"github.com/pilat/coagent/internal/sessionevent"
 	"github.com/pilat/coagent/internal/sessionstore"
 	"github.com/pilat/coagent/internal/tool"
 	"github.com/pilat/coagent/internal/toolexec"
+	"github.com/pilat/coagent/internal/transcript"
 )
 
 // toolCallResultItem holds the decided outcome of one scheduled tool call.
@@ -322,13 +325,15 @@ func executeToolCalls(ctx context.Context, agent *svc, toolCalls []llmwire.ToolC
 	if action == actionBlock || action == actionForceTextOnly {
 		log.Warn("tool_calls_blocked", zap.Int("action", int(action)), zap.Int("count", len(toolCalls)))
 
+		var results []*transcript.Message
 		for _, tc := range toolCalls {
-			if err := agent.ms.addToolResult(ctx, tc.ID, tc.Name, loopBlockMessage); err != nil {
-				return err
-			}
+			results = append(results, &transcript.Message{Role: llmwire.RoleTool, Content: loopBlockMessage, ToolCallID: tc.ID, ToolName: tc.Name, ToolError: true})
 		}
 
-		return nil
+		c := agent.newCommit()
+		c.ToolResults = results
+		_, err := agent.commit(ctx, c)
+		return err
 	}
 
 	results := executeToolCallsInternal(ctx, agent, toolCalls)
@@ -374,7 +379,7 @@ func recordToolResults(
 		}
 	}
 
-	commits := make([]toolResultCommit, 0, len(results))
+	c := agent.newCommit()
 
 	for i, r := range results {
 		if r.outcome == toolexec.OutcomeSuspended || r.outcome == toolexec.OutcomeCancelled {
@@ -400,23 +405,26 @@ func recordToolResults(
 			content = prependLoopWarning(ctx, agent, postAction, r.toolCall.Name, content)
 		}
 
-		commits = append(commits, toolResultCommit{
-			message: llmwire.Message{
-				Role:       llmwire.RoleTool,
-				Content:    content,
-				ToolCallID: r.toolCall.ID,
-				ToolName:   r.toolCall.Name,
-				ToolError:  r.outcome == toolexec.OutcomeFailed || r.outcome == toolexec.OutcomeSkipped,
-				Images:     r.images,
-			},
-			direct: direct,
-		})
+		message, err := storedMessage(&llmwire.Message{Role: llmwire.RoleTool, Content: content, ToolCallID: r.toolCall.ID, ToolName: r.toolCall.Name, ToolError: r.outcome == toolexec.OutcomeFailed || r.outcome == toolexec.OutcomeSkipped, Images: r.images})
+		if err != nil {
+			return err
+		}
+		c.ToolResults = append(c.ToolResults, message)
+		for j, text := range direct {
+			c.Outputs = append(c.Outputs, sessionstore.Output{Type: sessionstore.OutputMessagePersistent, Content: text, Key: fmt.Sprintf("tool:%s:direct:%d", r.toolCall.ID, j), MessageRef: -1})
+		}
 	}
-
-	if err := agent.ms.commitToolResults(ctx, commits); err != nil {
+	data, err := json.Marshal(agent.todoStore.List())
+	if err != nil {
+		return err
+	}
+	raw := json.RawMessage(data)
+	c.State.TodoItems = &raw
+	if _, err := agent.commit(ctx, c); err != nil {
 		return err
 	}
 
+	agent.stamper.touch()
 	// All rows are durable; user-facing semantics fire only now.
 	for _, r := range results {
 		if r.outcome != toolexec.OutcomeExecuted {
@@ -448,22 +456,25 @@ func consumeActivation(agent *svc, r toolCallResultItem) bool {
 
 // publishProgressSnapshot enqueues the TODO progress snapshot through the
 // boundary and notifies through the loop's channel, superseding tolerated.
-func publishProgressSnapshot(ctx context.Context, agent *svc) error {
-	provider, ok := agent.boundary.(progressChangeBoundary)
-	if !ok {
-		return nil
-	}
-
-	message, published, progressErr := provider.ProgressChange(ctx)
-	if progressErr != nil && !errors.Is(progressErr, sessionstore.ErrProgressSuperseded) {
-		return fmt.Errorf("enqueue TODO progress snapshot: %w", progressErr)
-	}
-
-	if published && agent.loopOpts.Notify != nil {
-		_ = agent.loopOpts.Notify(ctx, message)
-	}
-
+func publishProgressSnapshot(_ context.Context, agent *svc) error {
+	agent.emit(sessionevent.Notification{Type: "progress_change"})
 	return nil
+}
+
+func (s *svc) toolStep(ctx context.Context, calls []llmwire.ToolCall) error {
+	s.emit(sessionevent.Notification{Type: "progress_change"})
+	err := executeToolCalls(ctx, s, calls)
+	if s.suspended {
+		if s.stagedCalls == nil {
+			s.stagedCalls = map[string]string{}
+		}
+		for _, call := range calls {
+			if tool.IsExternalCall(call.Name) && unresolvedToolCalls(s.ms.getMessages())[call.ID] == call.Name {
+				s.stagedCalls[call.ID] = call.Name
+			}
+		}
+	}
+	return err
 }
 
 // capDirectOutput trims one result row's direct output to the store's per-row

@@ -9,6 +9,7 @@ import (
 
 	"go.uber.org/zap"
 
+	"github.com/pilat/coagent/internal/budget"
 	"github.com/pilat/coagent/internal/logger"
 	"github.com/pilat/coagent/internal/progress"
 	"github.com/pilat/coagent/internal/sessionevent"
@@ -148,7 +149,7 @@ func (r *runtime) reconcileProgress(
 			}
 		}
 
-		if facts.Budget != nil && facts.Budget.State == sessionstore.BudgetArmed &&
+		if facts.Budget != nil && facts.Budget.State == budget.Armed &&
 			facts.Budget.DurationSeconds != nil {
 			budgetDeadline := facts.Budget.ArmedAt.Add(
 				time.Duration(*facts.Budget.DurationSeconds) * time.Second,

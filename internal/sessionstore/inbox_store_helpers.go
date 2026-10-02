@@ -35,7 +35,7 @@ const recoverableInputQuery = `
 				OR EXISTS (
 					SELECT 1 FROM candidate_input resumable
 					WHERE resumable.session_id = sessions.id AND resumable.state = 'pending'
-						AND (resumable.source = 'agent' OR (
+						AND (resumable.source IN ('agent', 'schedule') OR (
 							resumable.source = 'user'
 							AND resumable.content NOT IN ('/status', '/help', '/schedules', '/compact')
 							AND resumable.content NOT GLOB '/compact *'
@@ -122,6 +122,7 @@ func scanInboxInput(sc rowScanner) (*InboxInput, error) {
 		&resolvedAt,
 		&reason,
 		&acceptedMessageID,
+		&input.DeliveryKey,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("scan inbox input: %w", err)
@@ -242,7 +243,7 @@ func activatePromotedInputSession(
 			AND (status <> 'stopped' OR EXISTS (
 				SELECT 1 FROM session_inbox resume
 				WHERE resume.id = ? AND resume.session_id = sessions.id
-					AND resume.source IN ('user', 'agent')
+						AND resume.source IN ('user', 'agent', 'schedule')
 			))`,
 		now, sessionID, inputID,
 	)

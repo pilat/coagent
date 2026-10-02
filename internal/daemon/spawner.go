@@ -7,6 +7,7 @@ import (
 	"fmt"
 
 	"github.com/pilat/coagent/internal/admission"
+	"github.com/pilat/coagent/internal/budget"
 	"github.com/pilat/coagent/internal/session"
 	"github.com/pilat/coagent/internal/sessionstore"
 	"github.com/pilat/coagent/internal/subagent"
@@ -30,7 +31,7 @@ func (s *svc) Spawn(ctx context.Context, req spawnRequest) (childResult, error) 
 		}
 
 		if startErr := s.ensureRunnerLocked(
-			context.WithoutCancel(ctx), childID, workDir, projectID, nil,
+			context.WithoutCancel(ctx), childID, workDir, projectID,
 		); startErr != nil {
 			return fmt.Errorf("start child runner: %w", startErr)
 		}
@@ -84,14 +85,14 @@ func (s *svc) createChildSession(ctx context.Context, req spawnRequest) (int64, 
 	model := s.resolveChildModel(req, parentRec)
 	if s.budgetSvc != nil {
 		budgetRecord, budgetErr := s.budgetSvc.Get(ctx, rootID)
-		if budgetErr == nil && budgetRecord.State == sessionstore.BudgetArmed &&
+		if budgetErr == nil && budgetRecord.State == budget.Armed &&
 			budgetRecord.CostLimitUSD != nil && !s.modelHasPricing(model) {
 			return 0, "", 0, errors.New(
 				"cannot spawn an armed budget tree onto a model without catalog pricing",
 			)
 		}
 
-		if budgetErr != nil && !errors.Is(budgetErr, sessionstore.ErrBudgetNotFound) {
+		if budgetErr != nil && !errors.Is(budgetErr, budget.ErrNotFound) {
 			return 0, "", 0, fmt.Errorf("load root budget for child model: %w", budgetErr)
 		}
 	}
@@ -163,7 +164,7 @@ func (s *svc) SendToChild(ctx context.Context, childID int64, msg string) error 
 		return fmt.Errorf("subagent %d is killed", childID)
 	}
 
-	if _, err := s.inboxStore.EnqueueInput(ctx, childID, sessionstore.InputSourceAgent, msg); err != nil {
+	if _, err := s.modelInputs.Enqueue(ctx, sessionstore.Input{SessionID: childID, Source: sessionstore.InputSourceAgent, Content: msg}); err != nil {
 		return fmt.Errorf("persist subagent follow-up: %w", err)
 	}
 

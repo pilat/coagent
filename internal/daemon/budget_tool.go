@@ -5,7 +5,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"time"
 
 	"go.uber.org/zap"
 
@@ -14,121 +13,9 @@ import (
 	"github.com/pilat/coagent/internal/session"
 	"github.com/pilat/coagent/internal/sessionevent"
 	"github.com/pilat/coagent/internal/sessionstore"
-	"github.com/pilat/coagent/internal/transcript"
 )
 
-type sessionBudgetGate struct {
-	daemon    *svc
-	service   budget.Service
-	store     sessionstore.AgentRuntimeStore
-	sessionID int64
-	rootID    int64
-}
-
 const budgetParkRequested = "requested"
-
-//nolint:wsl_v5 // Admission observes durable usage before another call.
-func (g *sessionBudgetGate) Admit(ctx context.Context, now time.Time) error {
-	_, _, cost, err := g.store.GetSessionTreeUsage(ctx, g.rootID)
-	if err != nil {
-		return fmt.Errorf("load budget admission usage: %w", err)
-	}
-	record, fired, err := g.service.Observe(ctx, g.rootID, cost, now, "")
-	if err != nil {
-		return fmt.Errorf("observe budget admission: %w", err)
-	}
-	if fired {
-		if record.ParkPhase == budgetParkRequested {
-			g.daemon.startBudgetPark(record)
-		}
-
-		return session.ErrBudgetCheckpoint
-	}
-	if err := g.service.Admit(ctx, g.rootID, now); err != nil {
-		return fmt.Errorf("admit budgeted request: %w", err)
-	}
-
-	return nil
-}
-
-//nolint:wsl_v5 // Commit and park scheduling form one response boundary.
-func (g *sessionBudgetGate) PersistResponse(
-	ctx context.Context,
-	message *transcript.Message,
-	outputType sessionstore.OutputType,
-	output string,
-	releasesInput bool,
-) (int64, bool, bool, error) {
-	result, err := g.store.InsertBudgetedResponse(ctx, sessionstore.BudgetedResponse{
-		SessionID: g.sessionID, RootID: g.rootID, Message: message,
-		OutputType: outputType, Output: output, ReleasesInput: releasesInput, ObservedAt: time.Now().UTC(),
-	})
-	if err != nil {
-		return 0, false, false, err
-	}
-	if result.Fired && result.Budget.ParkPhase == budgetParkRequested {
-		g.daemon.startBudgetPark(result.Budget)
-	}
-
-	return result.MessageID, result.Fired, result.ReplyPublished, nil
-}
-
-// BudgetFired routes a disposition-committed budget verdict to the same park
-// scheduler the legacy PersistResponse path uses.
-func (g *sessionBudgetGate) BudgetFired(record *sessionstore.BudgetRecord) {
-	if record != nil && record.ParkPhase == budgetParkRequested {
-		g.daemon.startBudgetPark(record)
-	}
-}
-
-func (g *sessionBudgetGate) PersistRejectedResponse(
-	ctx context.Context,
-	rejection sessionstore.RejectedResponse,
-) (*sessionstore.RejectedResponseResult, error) {
-	result, err := g.store.CommitRejectedResponse(ctx, rejection)
-	if err != nil {
-		return nil, err
-	}
-
-	if result.Outcome == sessionstore.RejectedResponseBudgetSuppressed &&
-		result.Budget != nil && result.Budget.ParkPhase == budgetParkRequested {
-		g.daemon.startBudgetPark(result.Budget)
-	}
-
-	return result, nil
-}
-
-func (g *sessionBudgetGate) Observe(ctx context.Context) (bool, error) {
-	_, _, cost, err := g.store.GetSessionTreeUsage(ctx, g.rootID)
-	if err != nil {
-		return false, err
-	}
-
-	record, fired, err := g.service.Observe(ctx, g.rootID, cost, time.Now().UTC(), "")
-	if fired && err == nil && record.ParkPhase == budgetParkRequested {
-		g.daemon.startBudgetPark(record)
-	}
-
-	return fired, err
-}
-
-//nolint:wsl_v5 // Store selection, commit, and park scheduling are one boundary.
-func (g *sessionBudgetGate) PersistCompaction(
-	ctx context.Context,
-	compaction sessionstore.BudgetedCompaction,
-) ([]int64, bool, error) {
-	compaction.SessionID = g.sessionID
-	compaction.RootID = g.rootID
-	result, err := g.store.ReplaceCompactedMessagesBudgeted(ctx, compaction)
-	if err != nil {
-		return nil, false, err
-	}
-	if result.Fired && result.Budget.ParkPhase == budgetParkRequested {
-		g.daemon.startBudgetPark(result.Budget)
-	}
-
-	return result.MessageIDs, result.Fired, nil
-}
 
 func (s *svc) registerBudgetTool(
 	ctx context.Context,
@@ -166,8 +53,8 @@ func (s *svc) releaseArmedBudget(ctx context.Context, rootID int64, reason strin
 	}
 
 	record, err := s.budgetSvc.Get(ctx, rootID)
-	if errors.Is(err, sessionstore.ErrBudgetNotFound) ||
-		(err == nil && record.State != sessionstore.BudgetArmed) {
+	if errors.Is(err, budget.ErrNotFound) ||
+		(err == nil && record.State != budget.Armed) {
 		return nil
 	}
 
@@ -224,8 +111,8 @@ func (s *svc) retainBudgetForBackground(ctx context.Context, rootID int64) (bool
 	}
 
 	record, err := s.budgetSvc.Get(ctx, rootID)
-	if errors.Is(err, sessionstore.ErrBudgetNotFound) ||
-		(err == nil && record.State != sessionstore.BudgetArmed) {
+	if errors.Is(err, budget.ErrNotFound) ||
+		(err == nil && record.State != budget.Armed) {
 		return false, nil
 	}
 	if err != nil {

@@ -49,7 +49,7 @@ func (s *store) EnqueueProgressOutput(
 		return nil, ErrProgressSuperseded
 	}
 
-	commit, err := enqueueOutputTx(ctx, tx, draft)
+	commit, err := insertOutputTx(ctx, tx, draft, CommitLoop)
 	if err != nil {
 		return nil, err
 	}

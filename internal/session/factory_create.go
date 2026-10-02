@@ -11,7 +11,6 @@ import (
 	"github.com/pilat/coagent/internal/llmwire"
 	"github.com/pilat/coagent/internal/loader"
 	"github.com/pilat/coagent/internal/registry"
-	"github.com/pilat/coagent/internal/sessionstore"
 	"github.com/pilat/coagent/internal/todo"
 )
 
@@ -25,24 +24,20 @@ func (f *factory) Create(ctx context.Context, opts CreateOptions) (Service, erro
 		return nil, errors.New("workdir is required")
 	}
 
-	if opts.OutputEnabled && f.outputStore == nil {
-		return nil, errors.New("output store is required when output is enabled")
+	if f.store == nil {
+		return nil, errors.New("session store is required")
 	}
 
-	ms := newMessageStore(f.store, opts.ID, f.outputStore)
+	ms := newMessageStore(f.store, opts.ID)
 	if f.store != nil {
 		if err := ms.reloadMessages(ctx); err != nil {
 			return nil, fmt.Errorf("load messages: %w", err)
 		}
 	}
 
-	if opts.TranscriptOnly {
-		return &svc{ms: ms, stagedCalls: opts.StagedExternalCalls}, nil
-	}
-
 	cfg := f.sessionConfig(opts.WorkDir, opts.Model, opts.RepoRoot)
 
-	llmClient, err := f.newLLMClient(cfg)
+	llmClient, err := llm.NewClient(cfg)
 	if err != nil {
 		return nil, fmt.Errorf("create LLM client: %w", err)
 	}
@@ -118,45 +113,38 @@ func (f *factory) build(
 	}
 
 	p := params{
-		Config:       cfg,
-		LLMClient:    llmClient,
-		TodoStore:    todoSvc,
-		Loader:       ldr,
-		Stack:        stack,
-		Registry:     reg,
-		Store:        f.store,
-		OutputStore:  f.outputStore,
-		Dispositions: dispositionsStore(f.store),
-		GitClient:    f.gitClient,
-		MemoryStore:  f.memoryStore,
+		Config:      cfg,
+		LLMClient:   llmClient,
+		TodoStore:   todoSvc,
+		Loader:      ldr,
+		Stack:       stack,
+		Registry:    reg,
+		Store:       f.store,
+		GitClient:   f.gitClient,
+		MemoryStore: f.memoryStore,
 	}
 
 	sessOpts := options{
-		ID:                    opts.ID,
-		AgentType:             registry.AgentType(opts.AgentType),
-		ProjectID:             opts.ProjectID,
-		RootID:                opts.RootID,
-		ReasoningLevel:        opts.ReasoningLevel,
-		ResumeMessages:        resumeMessages,
-		ResumeRowIDs:          resumeRowIDs,
-		ResumeIteration:       opts.Iteration,
-		ResumeTodoItems:       todoItems,
-		LastActivityAt:        opts.LastActivityAt,
-		InputBoundary:         opts.InputBoundary,
-		OutputEnabled:         opts.OutputEnabled,
-		BudgetGate:            opts.BudgetGate,
-		SettlementOpen:        opts.SettlementOpen,
-		PreserveStopped:       opts.PreserveStoppedStatus,
-		ActiveSubagents:       opts.ActiveSubagents,
-		ActiveProcesses:       opts.ActiveProcesses,
-		ContextBaseline:       opts.ContextBaseline,
-		ResumeCompletionState: opts.ResumeCompletionState,
-
-		ActiveSubagentsProvider:  opts.ActiveSubagentsProvider,
-		ActiveProcessesProvider:  opts.ActiveProcessesProvider,
-		OnIterationPersisted:     opts.OnIterationPersisted,
+		ID:                       opts.ID,
+		AgentType:                registry.AgentType(opts.AgentType),
+		ProjectID:                opts.ProjectID,
+		RootID:                   opts.RootID,
+		ReasoningLevel:           opts.ReasoningLevel,
+		ResumeMessages:           resumeMessages,
+		ResumeRowIDs:             resumeRowIDs,
+		ResumeIteration:          opts.Iteration,
+		ResumeTodoItems:          todoItems,
+		LastActivityAt:           opts.LastActivityAt,
+		Schedules:                opts.Schedules,
+		Events:                   opts.Events,
+		OutputEnabled:            opts.OutputEnabled,
+		PreserveStopped:          opts.PreserveStoppedStatus,
+		ActiveSubagents:          opts.ActiveSubagents,
+		ActiveProcesses:          opts.ActiveProcesses,
+		ContextBaseline:          opts.ContextBaseline,
+		ResumeCompletionState:    opts.ResumeCompletionState,
 		ExtraSkills:              opts.ExtraSkills,
-		StagedExternalCalls:      opts.StagedExternalCalls,
+		ExternalCalls:            opts.ExternalCalls,
 		CompactionDeferAnnounced: opts.CompactionDeferAnnounced,
 	}
 
@@ -170,18 +158,4 @@ func (f *factory) build(
 	}
 
 	return sess, nil
-}
-
-// dispositionsStore projects the response-disposition capability off the
-// runtime store; nil store keeps the loop on its in-memory test paths.
-func dispositionsStore(store sessionstore.RuntimeStore) sessionstore.ResponseDispositionStore {
-	if store == nil {
-		return nil
-	}
-
-	if d, ok := store.(sessionstore.ResponseDispositionStore); ok {
-		return d
-	}
-
-	return nil
 }

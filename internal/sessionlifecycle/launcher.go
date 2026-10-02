@@ -12,50 +12,48 @@ import (
 
 var ErrShuttingDown = errors.New("session lifecycle is shutting down")
 
-type Launcher[T any] interface {
+type Launcher interface {
 	Ensure(
 		ctx context.Context,
 		sessionID int64,
 		workDir string,
 		projectID int64,
-		inputs []T,
 	) error
 }
 
-var _ Launcher[int] = (*launcher[int])(nil)
+var _ Launcher = (*launcher)(nil)
 
-type launcher[T any] struct {
+type launcher struct {
 	sessions sessionstore.OrchestrationStore
 	links    subagent.Store
 	admit    admission.Governor
-	runners  Registry[Runner[T]]
+	runners  Registry[Runner]
 
-	startable  func(context.Context, *sessionstore.SessionRecord, []T) (bool, error)
+	startable  func(context.Context, *sessionstore.SessionRecord) (bool, error)
 	queueChild func(context.Context, int64, int64, string, int64)
-	run        func(context.Context, int64, Runner[T])
+	run        func(context.Context, int64, Runner)
 }
 
-func NewLauncher[T any](
+func NewLauncher(
 	sessions sessionstore.OrchestrationStore,
 	links subagent.Store,
 	admit admission.Governor,
-	runners Registry[Runner[T]],
-	startable func(context.Context, *sessionstore.SessionRecord, []T) (bool, error),
+	runners Registry[Runner],
+	startable func(context.Context, *sessionstore.SessionRecord) (bool, error),
 	queueChild func(context.Context, int64, int64, string, int64),
-	run func(context.Context, int64, Runner[T]),
-) Launcher[T] {
-	return &launcher[T]{
+	run func(context.Context, int64, Runner),
+) Launcher {
+	return &launcher{
 		sessions: sessions, links: links, admit: admit, runners: runners,
 		startable: startable, queueChild: queueChild, run: run,
 	}
 }
 
-func (l *launcher[T]) Ensure(
+func (l *launcher) Ensure(
 	ctx context.Context,
 	sessionID int64,
 	workDir string,
 	projectID int64,
-	inputs []T,
 ) error {
 	if l.runners.Closed() {
 		return ErrShuttingDown
@@ -66,12 +64,12 @@ func (l *launcher[T]) Ensure(
 		return fmt.Errorf("load session %d before start: %w", sessionID, err)
 	}
 
-	preserveStopped, err := l.startable(ctx, record, inputs)
+	preserveStopped, err := l.startable(ctx, record)
 	if err != nil {
 		return err
 	}
 
-	if l.appendIfRunning(sessionID, inputs) {
+	if l.appendIfRunning(sessionID) {
 		return nil
 	}
 
@@ -91,7 +89,7 @@ func (l *launcher[T]) Ensure(
 	}
 
 	loopCtx, cancel := context.WithCancel(context.Background())
-	runner := NewRunner(cancel, workDir, projectID, kind, parentID, preserveStopped, inputs)
+	runner := NewRunner(cancel, workDir, projectID, kind, parentID, preserveStopped)
 
 	existing, registered := l.runners.Register(sessionID, runner)
 	if !registered {
@@ -102,10 +100,6 @@ func (l *launcher[T]) Ensure(
 			return ErrShuttingDown
 		}
 
-		for _, input := range inputs {
-			existing.AppendInput(input)
-		}
-
 		return nil
 	}
 
@@ -114,15 +108,12 @@ func (l *launcher[T]) Ensure(
 	return nil
 }
 
-func (l *launcher[T]) appendIfRunning(sessionID int64, inputs []T) bool {
-	return l.runners.Use(sessionID, func(existing Runner[T]) {
-		for _, input := range inputs {
-			existing.AppendInput(input)
-		}
-	})
+func (l *launcher) appendIfRunning(sessionID int64) bool {
+	_, running := l.runners.Load(sessionID)
+	return running
 }
 
-func (l *launcher[T]) slotInfo(
+func (l *launcher) slotInfo(
 	ctx context.Context,
 	sessionID int64,
 ) (admission.Kind, int64, bool, error) {

@@ -132,7 +132,7 @@ func (s *svc) mainModelWorking(rootID int64) bool {
 		return false
 	}
 
-	return activeRunner.Service() != nil
+	return activeRunner.Working()
 }
 
 func (s *svc) wakeProgress() {

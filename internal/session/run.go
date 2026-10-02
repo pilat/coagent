@@ -2,38 +2,20 @@ package session
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"math"
 	"slices"
 	"strconv"
 	"strings"
 
-	"go.uber.org/zap"
-
 	"github.com/pilat/coagent/internal/llmwire"
-	"github.com/pilat/coagent/internal/logger"
 	"github.com/pilat/coagent/internal/progress"
-	"github.com/pilat/coagent/internal/sessionevent"
-	"github.com/pilat/coagent/internal/sessionstore"
-	"github.com/pilat/coagent/internal/tool"
 )
 
 const agentsMDMessagePrefix = "User preferences from AGENTS.md files (lower priority than system instructions):\n\n"
 
 const noTaskPrompt = "You were just started but the user hasn't provided a task yet. " +
 	"Greet them briefly and wait for their instructions."
-
-// RunResult is returned by RunDaemon when the session's ReAct loop exits.
-type RunResult struct {
-	FinalResponse string
-	Suspended     bool
-	ErrorNotice   string
-
-	// CompactionDeferAnnounced hands the deferral notice's dedup state back to
-	// the daemon, which owns the session's identity across wakes.
-	CompactionDeferAnnounced bool
-}
 
 // sessionStatus holds session statistics for /status command. Two honest numbers:
 // current window occupancy (this turn) and lifetime session total (all-in, from DB).
@@ -56,248 +38,6 @@ func (s *svc) ContextProjection(ctx context.Context) progress.Context {
 		Used: status.ContextUsed, Max: status.ContextMax, Approximate: status.ContextIsEst,
 		Available: status.ContextMax > 0 && status.ContextUsed > 0,
 	}
-}
-
-// Run executes the main agent loop.
-func (s *svc) Run(ctx context.Context, prompt string) (string, error) {
-	result, err := s.run(ctx, prompt)
-	if err != nil {
-		return "", err
-	}
-
-	return result.FinalResponse, nil
-}
-
-// run preserves the loop's discriminated result for daemon callers. Run keeps
-// the historical text-only API for direct callers, while RunDaemon must carry
-// suspension across the session boundary without reconstructing it from
-// producer ledgers that may have been created during this run.
-func (s *svc) run(ctx context.Context, prompt string) (*loopResult, error) {
-	ctx = logger.With(ctx, zap.Int64("session_id", s.rootID), zap.Int64("agent_id", s.id))
-	log := logger.Ctx(ctx).Named("session.run")
-
-	// Last point before the first request where the registry can still grow: the
-	// daemon registers its tools between construction and this call.
-	s.refreshRegistrySections()
-
-	activationIndex, err := tool.ActivationIndex(s.registry)
-	if err != nil {
-		return nil, fmt.Errorf("index activation commands: %w", err)
-	}
-
-	s.activationIndex = activationIndex
-	if err := s.loadPendingActivation(ctx); err != nil {
-		return nil, err
-	}
-
-	if err := s.prepareRunMessages(ctx, prompt); err != nil {
-		return nil, err
-	}
-
-	s.suspended = false
-
-	result, err := runLoop(
-		ctx,
-		s,
-		s.loopOpts,
-		func(iteration int, response *llmwire.Response, toolCalls []llmwire.ToolCall, alreadyPersisted bool) error {
-			return s.afterIteration(ctx, log, iteration, response, toolCalls, alreadyPersisted)
-		},
-	)
-
-	totalIterations := s.iterationOffset + result.Iterations
-
-	if err != nil {
-		notice := result.ErrorNotice
-		if notice == "" {
-			notice = fmt.Sprintf(
-				"⚠️ Session error: %s\n\nThe session is still alive — send a message to continue.",
-				logger.Redact(err.Error()),
-			)
-			result.ErrorNotice = notice
-		}
-
-		if !result.TerminalStateCommitted {
-			if saveErr := s.persistErrorState(ctx, totalIterations, notice); saveErr != nil {
-				return nil, errors.Join(err, fmt.Errorf("persist checkpoint error state: %w", saveErr))
-			}
-		}
-
-		return result, err
-	}
-
-	// A terminal-committed disposition (integrity error or wake-projection
-	// failure) already persisted the durable terminal status and iteration;
-	// writing completed/suspended here would override the committed outcome.
-	if result.TerminalStateCommitted {
-		return result, nil
-	}
-
-	finalStatus := sessionstore.SessionStatusCompleted
-	if result.Suspended {
-		finalStatus = sessionstore.SessionStatusSuspended
-	}
-
-	// A command-only activation of a stopped root (e.g. /status) must not
-	// reactivate it: persisting completed would soft-resume a root the user parked.
-	if s.preserveStopped {
-		finalStatus = sessionstore.SessionStatusStopped
-	}
-
-	if saveErr := s.persistState(ctx, totalIterations, finalStatus); saveErr != nil {
-		return nil, fmt.Errorf("persist checkpoint %s state: %w", finalStatus, saveErr)
-	}
-
-	return result, nil
-}
-
-// loadPendingActivation adopts a persisted activation grant whose tool call is
-// still unresolved in the transcript; a mismatched grant is discarded.
-func (s *svc) loadPendingActivation(ctx context.Context) error {
-	boundary, ok := s.boundary.(activationStateBoundary)
-	if !ok {
-		return nil
-	}
-
-	grant, err := boundary.PendingActivation(ctx)
-	if err != nil {
-		return fmt.Errorf("load pending activation: %w", err)
-	}
-
-	if grant != nil && grant.ToolCallID != "" {
-		pending := unresolvedToolCalls(s.ms.getMessages())
-		if pending[grant.ToolCallID] != grant.ToolID {
-			grant = nil
-		}
-	}
-
-	s.currentActivation = grant
-
-	return nil
-}
-
-func (s *svc) afterIteration(
-	ctx context.Context,
-	log *zap.Logger,
-	iteration int,
-	response *llmwire.Response,
-	toolCalls []llmwire.ToolCall,
-	alreadyPersisted bool,
-) error {
-	totalIteration := s.iterationOffset + iteration
-	s.stamper.touch()
-	log.Info("iteration", zap.Int("iter", iteration))
-
-	if alreadyPersisted {
-		log.Info("model_response_rejected", zap.String("finish_type", response.FinishType))
-	} else {
-		logModelResponse(log, response, toolCalls)
-
-		if saveErr := s.persistState(ctx, totalIteration, s.activationStatus()); saveErr != nil {
-			return fmt.Errorf("persist checkpoint (iteration %d): %w", totalIteration, saveErr)
-		}
-	}
-
-	if s.onIterationPersisted != nil {
-		s.onIterationPersisted(ctx, totalIteration)
-	}
-
-	return nil
-}
-
-func logModelResponse(log *zap.Logger, response *llmwire.Response, toolCalls []llmwire.ToolCall) {
-	if response.Thoughts != "" {
-		log.Debug("thoughts", zap.String("text", response.Thoughts))
-	}
-
-	if response.Text != "" {
-		log.Info("response", zap.String("text", response.Text))
-	}
-
-	for _, call := range toolCalls {
-		log.Info(
-			"tool_call",
-			zap.String("name", call.Name),
-			zap.String("args", logger.FormatArgs(call.Arguments, 200)),
-		)
-	}
-}
-
-// activationStatus is the status a per-iteration checkpoint writes while the
-// session runs: active, or stopped when the activation is command-only.
-func (s *svc) activationStatus() sessionstore.SessionStatus {
-	if s.preserveStopped {
-		return sessionstore.SessionStatusStopped
-	}
-
-	return sessionstore.SessionStatusActive
-}
-
-func (s *svc) prepareRunMessages(ctx context.Context, prompt string) error {
-	if len(s.ms.getMessages()) != 0 {
-		if prompt == "" {
-			return nil
-		}
-
-		stamped := s.stamper.stamp(prompt)
-		if err := s.ms.addUserMessage(ctx, s.appendGitStateDelta(ctx, stamped)); err != nil {
-			return fmt.Errorf("inject user message: %w", err)
-		}
-
-		return nil
-	}
-
-	if s.boundary != nil {
-		if err := s.initFreshBoundarySession(ctx); err != nil {
-			return fmt.Errorf("init fresh boundary session: %w", err)
-		}
-
-		return nil
-	}
-
-	if err := s.initFreshSession(ctx, prompt); err != nil {
-		return fmt.Errorf("init fresh session: %w", err)
-	}
-
-	return nil
-}
-
-// RunDaemon runs the session with durable boundary input and notifications.
-// working reports main-model engagement so the host can clear its live
-// "main model working" flag before a final response is published.
-func (s *svc) RunDaemon(
-	ctx context.Context,
-	notify func(sessionevent.Notification),
-	working func(bool),
-) (RunResult, error) {
-	if notify != nil {
-		s.loopOpts = loopOptions{
-			Notify: func(_ context.Context, message string) error {
-				notify(sessionevent.Notification{Type: sessionevent.NotifyMessage, Message: message})
-				return nil
-			},
-			Heartbeat: func(_ context.Context) {
-				notify(sessionevent.Notification{Type: sessionevent.NotifyHeartbeat})
-			},
-			Working: working,
-		}
-	}
-
-	result, err := s.run(ctx, "")
-	if err != nil {
-		out := RunResult{CompactionDeferAnnounced: s.compactionDeferAnnounced}
-		if result != nil {
-			out.ErrorNotice = result.ErrorNotice
-		}
-
-		return out, err
-	}
-
-	return RunResult{
-		FinalResponse:            result.FinalResponse,
-		Suspended:                result.Suspended,
-		CompactionDeferAnnounced: s.compactionDeferAnnounced,
-	}, nil
 }
 
 // lastUserMessage returns the content of the last user message in the history.
@@ -424,25 +164,6 @@ func formatTokens(n int) string {
 	default:
 		return strconv.Itoa(n)
 	}
-}
-
-// initFreshSession prepopulates the message store for a brand-new session.
-func (s *svc) initFreshSession(ctx context.Context, prompt string) error {
-	for _, msg := range s.openingTurn(prompt) {
-		if err := s.ms.addUserMessage(ctx, msg.Content); err != nil {
-			return err
-		}
-	}
-
-	return nil
-}
-
-func (s *svc) initFreshBoundarySession(ctx context.Context) error {
-	if s.agentsMD == "" {
-		return nil
-	}
-
-	return s.ms.addUserMessage(ctx, agentsMDMessagePrefix+s.agentsMD)
 }
 
 // openingTurn assembles the turn that opens a conversation — AGENTS.md header
