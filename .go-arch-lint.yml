@@ -63,7 +63,6 @@ components:
   budget:        { in: internal/budget }
 
   tool:       { in: internal/tool }
-  toolexec:   { in: internal/toolexec }
   bashsandbox: { in: internal/bashsandbox }
   sandboxpolicy: { in: internal/sandboxpolicy }
   procexec:   { in: internal/procexec }
@@ -75,6 +74,8 @@ components:
   shellenv:   { in: internal/shellenv }
 
   session:    { in: internal/session }
+  sessionbuild: { in: internal/sessionbuild }
+  sessionprompt: { in: internal/sessionprompt }
   schedule:   { in: internal/schedule }
 
   telegram:   { in: internal/managers/telegram }
@@ -108,7 +109,9 @@ deps:
   sessionstore:
     mayDependOn: [budget, progress, todo, transcript]
   subagent:
-    mayDependOn: [sessionstore, tool, transcript]
+    mayDependOn: [loader, registry, sessionstore, tool, transcript]
+  mcpstore:
+    mayDependOn: [coagenthome, tool]
   sessionbus:
     mayDependOn: [controllerapi, logger, sessionevent]
   sessionlifecycle:
@@ -151,11 +154,6 @@ deps:
   tool:
     mayDependOn: [llmwire]
 
-  # Stage planner and bounded runner for model-issued tool calls: a leaf that
-  # knows no tool IDs, sessions or providers.
-  toolexec:
-    mayDependOn: [tool]
-
   # External model catalogs — the drivers' source of model metadata.
   catalog:
     mayDependOn: [coagenthome, config, logger]
@@ -169,11 +167,17 @@ deps:
 
   # Capability hub: tool implementations reach into a few leaf services.
   builtin:
-    mayDependOn: [backgroundprocess, bashsandbox, coagenthome, config, git, humanize, llmwire, loader, logger, lsp, mcp, memory, procexec, projectpath, safefile, sandboxpolicy, shellenv, todo, toolexec, tool]
+    mayDependOn: [backgroundprocess, bashsandbox, coagenthome, config, git, humanize, llmwire, loader, logger, lsp, mcp, memory, procexec, projectpath, safefile, sandboxpolicy, shellenv, todo, tool]
 
-  # ReAct loop — the heaviest service.
+  # The loop receives assembled dependencies and only emits live events.
   session:
-    mayDependOn: [backgroundprocess, builtin, config, git, id, llm, llmwire, loader, logger, mcp, mcpstore, memory, progress, registry, sessionevent, sessionstore, shellenv, todo, toolexec, tool, transcript]
+    mayDependOn: [llm, llmwire, loader, logger, sessionevent, sessionprompt, sessionstore, tool, transcript]
+  sessionbuild:
+    mayDependOn: [backgroundprocess, builtin, config, git, llm, loader, logger, mcp, mcpstore, memory, registry, session, sessionprompt, sessionstore, todo, tool]
+  sessionprompt:
+    mayDependOn: [git, llmwire, loader, logger, memory, todo, tool]
+  registry:
+    mayDependOn: [sessionprompt]
 
   # Schedule writes inbox rows through sessionstore; its sender publishes only events.
   schedule:
@@ -187,7 +191,7 @@ deps:
 
   # Orchestrator.
   daemon:
-    mayDependOn: [admission, backgroundprocess, budget, coagenthome, config, configapply, controllerapi, git, id, llmwire, loader, logger, mcp, mcpstore, progress, progressruntime, projectpath, registry, schedule, session, sessionbus, sessionevent, sessionlifecycle, sessionstore, subagent, todo, tool, transcript]
+    mayDependOn: [admission, backgroundprocess, budget, coagenthome, config, configapply, controllerapi, git, id, llmwire, loader, logger, mcp, mcpstore, progress, progressruntime, projectpath, registry, schedule, session, sessionbuild, sessionprompt, sessionbus, sessionevent, sessionlifecycle, sessionstore, subagent, todo, tool, transcript]
 
   configops:
     mayDependOn: [coagenthome, config, logger]

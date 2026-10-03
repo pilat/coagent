@@ -62,7 +62,7 @@ func (a *compactionUsage) add(resp *llmwire.Response) {
 
 // focusSection renders the optional /compact focus as a prompt section, or "" when
 // no focus is set (bare /compact and every auto-compaction).
-func (s *svc) focusSection() string {
+func (s *Session) focusSection() string {
 	if s.compactionFocus == "" {
 		return ""
 	}
@@ -73,7 +73,7 @@ func (s *svc) focusSection() string {
 // compact builds one checkpoint candidate and, only when every candidate check
 // passes, commits it as one atomic positioned replacement. A failed or
 // non-relieving attempt changes no active transcript metadata.
-func (s *svc) compact(ctx context.Context, commandInput *PendingInput) (bool, error) {
+func (s *Session) compact(ctx context.Context, commandInput *PendingInput) (bool, error) {
 	// Defence in depth: a caller that forgets the gate must not compact a
 	// transcript that still owes a tool_use its result.
 	if s.HasPendingExternalCall() || len(s.pendingInLoopCalls()) > 0 {
@@ -97,7 +97,7 @@ func (s *svc) compact(ctx context.Context, commandInput *PendingInput) (bool, er
 // tail rows until the check resolves. The second result reports that a durable
 // check is pending at all, so a candidate the live transcript cannot place
 // keeps compaction non-relieving instead of relaxing the tail cap.
-func (s *svc) completionCompactionPin(ctx context.Context) (int, bool) {
+func (s *Session) completionCompactionPin(ctx context.Context) (int, bool) {
 	if s.store == nil {
 		return 0, false
 	}
@@ -120,7 +120,7 @@ func (s *svc) completionCompactionPin(ctx context.Context) (int, bool) {
 }
 
 // compactLocked is compact's transcript-mutating half, under s.ms.mu.
-func (s *svc) compactLocked(
+func (s *Session) compactLocked(
 	ctx context.Context,
 	background string,
 	commandInput *PendingInput,
@@ -198,7 +198,7 @@ func (s *svc) compactLocked(
 	return true, nil
 }
 
-func (s *svc) logCompactionLocked(
+func (s *Session) logCompactionLocked(
 	log *zap.Logger,
 	beforeMessages, afterMessages, summarized int,
 	cp checkpointPrefix,
@@ -215,7 +215,7 @@ func (s *svc) logCompactionLocked(
 
 // buildCheckpointCandidate selects the split, runs the summarizer and wraps the
 // marked summary row. Caller holds s.ms.mu.
-func (s *svc) buildCheckpointCandidate(
+func (s *Session) buildCheckpointCandidate(
 	ctx context.Context,
 	cp checkpointPrefix,
 	background string,
@@ -246,7 +246,7 @@ func (s *svc) buildCheckpointCandidate(
 // commitCheckpointLocked persists the replacement in the transaction the
 // situation demands — budgeted, command-settling, or plain — then adopts the
 // new projection in memory. Caller holds s.ms.mu.
-func (s *svc) commitCheckpointLocked(
+func (s *Session) commitCheckpointLocked(
 	ctx context.Context,
 	newMessages []llmwire.Message,
 	newRowIDs []int64,
@@ -263,8 +263,18 @@ func (s *svc) commitCheckpointLocked(
 	c.ObserveBudget = true
 	c.State.ClearContextBaseline = true
 	if commandInput != nil {
-		c.Accept = []sessionstore.Accept{{InputID: commandInput.ID, State: sessionstore.InputStateHandled, Reason: "compact command", LinkRef: -1}}
-		c.Outputs = []sessionstore.Output{{Type: sessionstore.OutputMessagePersistent, Content: "✅ Context compacted", Key: fmt.Sprintf("input:%d:compact:succeeded", commandInput.ID), MessageRef: -1, ReleasesInput: true}}
+		c.Accept = []sessionstore.Accept{
+			{InputID: commandInput.ID, State: sessionstore.InputStateHandled, Reason: "compact command", LinkRef: -1},
+		}
+		c.Outputs = []sessionstore.Output{
+			{
+				Type:          sessionstore.OutputMessagePersistent,
+				Content:       "✅ Context compacted",
+				Key:           fmt.Sprintf("input:%d:compact:succeeded", commandInput.ID),
+				MessageRef:    -1,
+				ReleasesInput: true,
+			},
+		}
 	}
 	result, err := s.store.Commit(ctx, c)
 	if err != nil {

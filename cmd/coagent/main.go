@@ -35,9 +35,10 @@ import (
 	"github.com/pilat/coagent/internal/procexec"
 	"github.com/pilat/coagent/internal/sandboxpolicy"
 	"github.com/pilat/coagent/internal/schedule"
-	"github.com/pilat/coagent/internal/session"
+	"github.com/pilat/coagent/internal/sessionbuild"
 	"github.com/pilat/coagent/internal/sessionstore"
 	"github.com/pilat/coagent/internal/subagent"
+	"github.com/pilat/coagent/internal/tool/builtin"
 	"github.com/pilat/coagent/internal/version"
 )
 
@@ -563,7 +564,7 @@ func startCore(
 	subagentTx := subagent.NewTransactions(db, sessionStore)
 	applier := configapply.New(ops, sessionStore)
 
-	budgetSvc := budget.New(budget.Store(sessionStore))
+	budgetSvc := budget.New(budget.PolicyStore(sessionStore))
 	mcpRegistry := mcpstore.NewStore(db)
 
 	if _, err := sessionStore.RecoverInterruptedOutputs(ctx); err != nil {
@@ -572,13 +573,13 @@ func startCore(
 
 	scheduleSvc := schedule.NewService(scheduleStore)
 
-	factory := session.NewFactoryWithOptions(
-		cfg, secrets, curatedStore, sessionStore, sessionStore,
-		gitClient, mcpRegistry, cache,
-	)
+	buildInput := sessionbuild.BuildInput{
+		Config: cfg, Secrets: secrets, MemoryStore: curatedStore, Store: sessionStore,
+		GitClient: gitClient, MCPStore: mcpRegistry, MarketplaceCache: cache, Resources: builtin.NewResources(),
+	}
 
 	daemonSvc := daemon.New(
-		ctx, factory, daemonStore, sessionStore, sessionStore, sessionStore,
+		ctx, buildInput, daemonStore, sessionStore, sessionStore, sessionStore,
 		sessionStore, sessionStore, sessionStore, sessionStore,
 		linkStore, subagentTx, budgetSvc, sessionStore,
 		scheduleSvc, cfg, mcpRegistry, applier,

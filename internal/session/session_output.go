@@ -4,7 +4,7 @@ import (
 	"strings"
 )
 
-func (s *svc) renderSessionHelp() string {
+func (s *Session) renderSessionHelp() string {
 	lines := []string{
 		"## Session commands",
 		"`/status` — show session status",

@@ -1,4 +1,4 @@
-package session
+package sessionprompt
 
 import (
 	"fmt"
@@ -7,11 +7,8 @@ import (
 	"github.com/pilat/coagent/internal/todo"
 )
 
-// renderCompletionNudge builds the single host-authored second-look prompt.
-// Open items name only pending and in_progress entries in canonical order;
-// with none open the todo clause is omitted entirely. The prompt permits a
-// deliberate second stop with explanation and never requires exact text.
-func renderCompletionNudge(items []*todo.Item) string {
+// RenderCompletionNudge asks for a second look while permitting an explained stop.
+func RenderCompletionNudge(items []*todo.Item) string {
 	var open []string
 
 	sorted := append([]*todo.Item(nil), items...)

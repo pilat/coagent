@@ -81,7 +81,7 @@ does not imply a tier except where it expresses an implementation variant.
   owns one bot account, immutable group- or bot-forum target, polling loop, and
   manager-scoped service-topic identity; failures remain isolated at startup.
 - `internal/mcp` — session-owned external MCP process lifecycle and tool discovery.
-- `internal/mcpstore` — durable MCP server definitions and scope precedence.
+- `internal/mcpstore` — durable MCP server definitions, scope precedence and registry tools.
 - `internal/memory` — curated per-project long-term memory.
 - `internal/managerdelivery` — manager-neutral single-worker durable output drain and retry policy.
 - `internal/managercontrol` — manager-bound application use cases and controller adaptation.
@@ -100,17 +100,18 @@ does not imply a tier except where it expresses an implementation variant.
   underlying model vendor.
 - `cmd/releasebuilder` — build-time deterministic archive and checksum composition root. Accepts exactly the two Linux tuples (`linux-amd64`, `linux-arm64`), one binary each.
 - `internal/schedule` — durable schedules, sleep ownership and scheduled delivery execution.
-- `internal/session` — isolated agent loop, tool gating and transcript projection.
+- `internal/session` — isolated agent loop and transcript projection.
+- `internal/sessionbuild` — session construction, agent tool gating and cached tool resources.
+- `internal/sessionprompt` — system and transcript prompt rendering, timestamps, skill parsing and todo normalization.
 - `internal/sessionbus` — in-process session-event subscriptions and non-blocking fan-out.
 - `internal/sessionevent` — session-to-controller notification vocabulary.
 - `internal/sessionlifecycle` — runner ownership, recovery and durable stop coordination.
 - `internal/sessionstore` — durable sessions, messages, inbox, atomic delivery primitives, and the session-file-read ledger for write-guard checks.
 - `internal/shellenv` — captured per-worktree shell environment for child processes.
-- `internal/subagent` — typed parent-child link vocabulary and durable subagent ledger access.
+- `internal/subagent` — parent-child link ledger, completion transactions and agent-facing tools.
 - `internal/todo` — session-local task tracking.
-- `internal/tool` — implementation-free tool protocol, registry and suspension sentinel.
+- `internal/tool` — tool protocol, registry, suspension sentinel and ordered stage execution.
 - `internal/tool/builtin` — built-in tools and their common stack construction.
-- `internal/toolexec` — ordered stage planner and bounded runner for model-issued tool calls.
 - `internal/transcript` — durable append-only conversation row vocabulary.
 - `internal/version` — build-stamped version vocabulary.
 - `migrations` — immutable SQLite schema migration assets.
@@ -148,7 +149,7 @@ which table a query happens to touch.
 A live session commits boundary, model and tool steps through one session-store
 transaction API. It chooses response outcomes; the store applies their parts
 and observes tree-wide budgets atomically. Its model messages contain no database fields: a positional
-row-ID vector travels with the projection across factory resume and compaction,
+row-ID vector travels with the projection across session assembly and compaction,
 then keys durable replacement and idempotent final output.
 
 Manager-owned roots also carry a durable outbox obligation. `session_outbox`
@@ -813,8 +814,7 @@ roots and subagents receive none of these management surfaces.
 ### Daemon, sessions and persistence
 
 The daemon, session and session-store boundary divides global coordination,
-per-task execution and SQLite transaction ownership. The daemon assembles
-session dependencies, routes session events, and owns project identity plus
+per-task execution and SQLite transaction ownership. The daemon supplies owner tools to session assembly, routes session events, and owns project identity plus
 external integration callbacks. `managercontrol` implements the manager
 controller over that backend.
 `admission` owns capacity decisions, `sessionbus` owns subscriber fan-out, and
@@ -831,16 +831,20 @@ The subagent package owns the durable parent-child link ledger. The daemon must
 keep transient maps reconstructible and defer to stores for durable ordering/CAS
 decisions.
 
-The session package owns prompt construction, model-tool iteration, context
-projection, loop detection and the sole tool-gating API. It receives a prepared
-tool stack rather than reaching into daemon state. Session-store owns immutable
+The session package owns model-tool iteration, context projection and loop
+detection. `sessionbuild` assembles the client, loader, builtin/MCP stack and
+owner tools under the agent-type allowlist. `sessionprompt` renders system and
+transcript context. The loop receives those prepared values and emits live
+notifications through its sole outward events port. Model changes are prepared
+by session assembly before their durable record is written, then transferred to
+the live session for its next model step. Session-store owns immutable
 messages, compaction metadata/replacement ordering and durable inbox sequencing.
 It also owns the `session_file_reads` ledger (`(session_id, path)` PK) storing
 `{mtime_unix_nano, size, hash}`; `write` checks it before overwriting existing files,
 while `apply_patch` and `edit` refresh it post-mutation without rejecting on
 mismatch. `transcript` owns the durable message-row vocabulary shared with producers.
-`progress` owns the neutral context and operator-snapshot vocabulary shared by
-the session projection and progress runtime.
+The daemon converts the session's context projection into `progress`'s neutral
+operator-snapshot vocabulary.
 The session reads pending inbox rows directly and reloads the active transcript
 after every step commit. Stop and boot settle unresolved calls directly through
 that same store transaction surface.
@@ -853,7 +857,7 @@ Neither session nor manager may recreate a delivery by parsing message content.
 ### Tools and agent policy
 
 The tool package is a pure protocol leaf. It defines the tool registry and the
-suspension sentinel without depending on tool implementations, LLM drivers or
+suspension sentinel and ordered stage executor without depending on tool implementations, LLM drivers or
 the daemon. Built-in tools build a stack from session-scoped dependencies: the
 stack compiles one effective policy, creates the confinement runner from it and
 holds the same grants as its rooted file access, so direct mutations, reads and
@@ -861,14 +865,14 @@ process launches cannot disagree about declared authority. A suspending tool may
 not be batched with ordinary synchronous tools because its result is delivered
 after the loop exits.
 
-The factory owns a tool-resource cache keyed by session ID, canonical workdir,
+Session assembly uses a shared tool-resource cache keyed by session ID, canonical workdir,
 policy and MCP configuration. It retains shell snapshots and MCP clients across
 replies and sleep/resume; distinct IDs never share them. Stacks lease those
 resources exclusively and own their LSP manager, rooted access and registry.
 Policy/configuration changes retire the previous generation; shell recapture
 restarts MCP. Stop/kill retire the whole tree, including idle descendants, and
-shutdown closes the cache after runners join. Registry mutations retire idle
-resources immediately and active resources when their stack releases them.
+shutdown closes the cache after runners join. MCP registry changes replace clients lazily when the next stack acquires the
+resolved server set; an active stack retains its current tools and schemas.
 
 Registry produces an immutable per-session agent-type set: built-ins plus
 project-local overlays. Agent type controls tool filtering, prompt and model
@@ -882,7 +886,8 @@ workflow engine.
 
 Budget types and crossing policy are pure `budget` code. Session-store imports
 that policy to observe aggregate cost within a step; daemon park and recovery
-operations use `budget.Service`.
+operations use `budget.Service`. The budget tool mutates through its narrow
+store contract, implemented by session-store.
 
 ### Language-server boundary
 
@@ -954,7 +959,7 @@ only; an active stack's tools and schemas stay fixed
 ([ADR-0063](docs/adr/0063-explicit-filesystem-boundary.md)).
 
 Schedule owns cron validation, durable schedule records and execution of sleep
-and schedule tools. It enqueues through session-store and uses a narrow sender
+and schedule tools, including the sleep guard over pending producer obligations. It enqueues through session-store and uses a narrow sender
 only for event publication. Curated memory is distinct from conversation history and scoped
 to a project. A best-effort inventory is frozen into a fresh opening turn's
 marked project-context row; save/delete results inform the current transcript,

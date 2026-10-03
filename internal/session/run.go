@@ -9,8 +9,13 @@ import (
 	"strings"
 
 	"github.com/pilat/coagent/internal/llmwire"
-	"github.com/pilat/coagent/internal/progress"
 )
+
+// Context reports the live projection without exposing progress-runtime policy.
+type Context struct {
+	Used, Max              int
+	Approximate, Available bool
+}
 
 const agentsMDMessagePrefix = "User preferences from AGENTS.md files (lower priority than system instructions):\n\n"
 
@@ -31,10 +36,10 @@ type sessionStatus struct {
 	SubagentCount int
 }
 
-func (s *svc) ContextProjection(ctx context.Context) progress.Context {
+func (s *Session) ContextProjection(ctx context.Context) Context {
 	status := s.buildSessionStatus(ctx)
 
-	return progress.Context{
+	return Context{
 		Used: status.ContextUsed, Max: status.ContextMax, Approximate: status.ContextIsEst,
 		Available: status.ContextMax > 0 && status.ContextUsed > 0,
 	}
@@ -72,7 +77,7 @@ func lastAssistantTextOnly(messages []llmwire.Message) string {
 
 // buildSessionStatus reports the compaction trigger's own projection and the
 // lifetime tree-sum. A backward usage scan would read 0% right after a compaction.
-func (s *svc) buildSessionStatus(ctx context.Context) sessionStatus {
+func (s *Session) buildSessionStatus(ctx context.Context) sessionStatus {
 	s.modelMu.RLock()
 	model := s.model
 	s.modelMu.RUnlock()
@@ -168,7 +173,7 @@ func formatTokens(n int) string {
 
 // openingTurn assembles the turn that opens a conversation — AGENTS.md header
 // (when present) plus the stamped task. Pure: no IO, no store mutation.
-func (s *svc) openingTurn(prompt string) []llmwire.Message {
+func (s *Session) openingTurn(prompt string) []llmwire.Message {
 	msgs := make([]llmwire.Message, 0, 2)
 
 	if s.agentsMD != "" {
@@ -182,5 +187,5 @@ func (s *svc) openingTurn(prompt string) []llmwire.Message {
 		prompt = noTaskPrompt
 	}
 
-	return append(msgs, llmwire.Message{Role: llmwire.RoleUser, Content: s.stamper.stamp(prompt)})
+	return append(msgs, llmwire.Message{Role: llmwire.RoleUser, Content: s.stamper.Stamp(prompt)})
 }

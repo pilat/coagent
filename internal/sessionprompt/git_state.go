@@ -1,4 +1,4 @@
-package session
+package sessionprompt
 
 import (
 	"context"
@@ -15,23 +15,19 @@ const (
 	gitStateOpenMarker  = "<git-state>"
 	gitStateCloseMarker = "</git-state>"
 
-	// noGitStateReport prefixes the report when the probe itself failed.
 	noGitStateReport = "Git state: unavailable"
 
-	// maxProbeErrorRunes bounds the failure reason shown to the model; the
-	// collector's errors are short, the cap only guards against surprises.
+	// Bound unexpected probe output before it reaches the model.
 	maxProbeErrorRunes = 255
 )
 
-// currentGitState probes the session workDir. A probe failure degrades to the
-// unavailable report with the (redacted, bounded) cause; it must never fail
-// the ingestion path.
-func (s *svc) currentGitState(ctx context.Context) string {
-	if s.gitClient == nil {
+// CurrentGitState degrades probe failures to a redacted report so ingestion can continue.
+func (s *Builder) CurrentGitState(ctx context.Context) string {
+	if s.GitClient == nil {
 		return noGitStateReport
 	}
 
-	state, err := s.gitClient.RepositoryState(ctx, s.workDir)
+	state, err := s.GitClient.RepositoryState(ctx, s.WorkDir)
 	if err != nil {
 		// The contract ties a non-nil error to Unavailable; never trust a
 		// partially-populated state alongside it.
@@ -41,7 +37,23 @@ func (s *svc) currentGitState(ctx context.Context) string {
 	return renderGitState(state)
 }
 
-// boundProbeError truncates the failure reason to maxProbeErrorRunes runes.
+// AppendGitStateDelta injects changed state; malformed or missing prior reports force a refresh.
+// Without a Git client, content passes through unchanged.
+func (s *Builder) AppendGitStateDelta(ctx context.Context, content string, messages []llmwire.Message) string {
+	if s.GitClient == nil {
+		return content
+	}
+
+	state := s.CurrentGitState(ctx)
+
+	last := lastGitState(messages)
+	if last != "" && last == state {
+		return content
+	}
+
+	return content + "\n\n" + gitStateOpenMarker + "\n" + state + "\n" + gitStateCloseMarker
+}
+
 func boundProbeError(s string) string {
 	runes := []rune(s)
 	if len(runes) <= maxProbeErrorRunes {
@@ -51,12 +63,10 @@ func boundProbeError(s string) string {
 	return string(runes[:maxProbeErrorRunes]) + "…"
 }
 
-// renderGitState formats the model-facing report. Branch text is data, not
-// instructions: Go-quoted here, bounded to 128 runes by the collector.
+// Quote branch text because repository metadata is data rather than instructions.
 func renderGitState(state git.RepositoryState) string {
 	switch state.Status {
 	case git.RepositoryAvailable:
-		// Rendered below.
 	case git.RepositoryNotRepository:
 		return "Git repository: no"
 	case git.RepositoryUnavailable:
@@ -85,29 +95,7 @@ func renderGitState(state git.RepositoryState) string {
 		"\nWorking tree: " + workingTree
 }
 
-// appendGitStateDelta returns content with the current Git state appended when
-// it differs from the last injected delta. A missing previous delta (fresh
-// session, or anything the scan cannot resolve) always sends: a redundant
-// ~30-token block costs less than the model acting on stale Git facts.
-// Without a git client nothing is appended at all.
-func (s *svc) appendGitStateDelta(ctx context.Context, content string) string {
-	if s.gitClient == nil {
-		return content
-	}
-
-	state := s.currentGitState(ctx)
-
-	last := lastGitState(s.ms.getMessages())
-	if last != "" && last == state {
-		return content
-	}
-
-	return content + "\n\n" + gitStateOpenMarker + "\n" + state + "\n" + gitStateCloseMarker
-}
-
-// lastGitState returns the report inside the most recent Git-state envelope,
-// or "" when none is present. Any malformed match returns "": the caller then
-// sends a fresh delta, which is always the safe direction.
+// A malformed envelope forces a fresh report rather than preserving stale Git facts.
 func lastGitState(messages []llmwire.Message) string {
 	for _, m := range slices.Backward(messages) {
 		if m.Role != llmwire.RoleUser {

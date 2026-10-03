@@ -10,13 +10,6 @@ import (
 
 type Service interface {
 	Get(ctx context.Context, rootID int64) (*Record, error)
-	Set(
-		ctx context.Context,
-		grant Grant,
-		cost *float64,
-		duration *time.Duration,
-	) (*Record, string, error)
-	Clear(ctx context.Context, grant Grant) (*Record, string, error)
 	Observe(
 		ctx context.Context,
 		rootID int64,
@@ -41,12 +34,12 @@ type Grant struct {
 }
 
 type svc struct {
-	store Store
+	store PolicyStore
 }
 
 var _ Service = (*svc)(nil)
 
-func New(store Store) Service {
+func New(store PolicyStore) Service {
 	return &svc{store: store}
 }
 
@@ -93,46 +86,7 @@ func (s *svc) ListArmed(ctx context.Context) ([]*Record, error) {
 }
 
 func (s *svc) Get(ctx context.Context, rootID int64) (*Record, error) {
-	return s.store.GetBudget(ctx, rootID)
-}
-
-func (s *svc) Set(
-	ctx context.Context,
-	grant Grant,
-	cost *float64,
-	duration *time.Duration,
-) (*Record, string, error) {
-	if cost == nil && duration == nil {
-		return nil, "", errors.New("set requires cost_usd, duration, or both")
-	}
-	var seconds *int64
-
-	if duration != nil {
-		value := int64(duration.Seconds())
-		seconds = &value
-	}
-
-	receipt := "Budget armed: " + renderLimits(cost, duration)
-	record, err := s.store.ArmBudget(ctx, Mutation{
-		RootSessionID: grant.RootID, InputID: grant.InputID, ToolID: grant.ToolID,
-		Command: grant.Command, ToolCallID: grant.ToolCallID, CostLimitUSD: cost,
-		DurationSeconds: seconds, Receipt: receipt,
-	})
-
-	return record, receipt, err
-}
-
-func (s *svc) Clear(
-	ctx context.Context,
-	grant Grant,
-) (*Record, string, error) {
-	const receipt = "Budget cleared"
-	record, err := s.store.ClearBudget(ctx, Mutation{
-		RootSessionID: grant.RootID, InputID: grant.InputID, ToolID: grant.ToolID,
-		Command: grant.Command, ToolCallID: grant.ToolCallID, Receipt: receipt,
-	})
-
-	return record, receipt, err
+	return s.store.Get(ctx, rootID)
 }
 
 // Observe delegates to the store's single-transaction observation: the
@@ -149,7 +103,7 @@ func (s *svc) Observe(
 }
 
 func (s *svc) Admit(ctx context.Context, rootID int64, now time.Time) error {
-	record, err := s.store.GetBudget(ctx, rootID)
+	record, err := s.store.Get(ctx, rootID)
 	if errors.Is(err, ErrNotFound) || (err == nil && record.State == Released) {
 		return nil
 	}

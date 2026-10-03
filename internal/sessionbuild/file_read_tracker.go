@@ -1,4 +1,4 @@
-package session
+package sessionbuild
 
 import (
 	"context"

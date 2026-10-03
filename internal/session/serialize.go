@@ -89,13 +89,13 @@ func projectContextSize(messages []llmwire.Message, base *contextBaseline, overh
 
 // requestOverhead is what a request carries besides the conversation. Only the
 // unmeasured projection needs it — a measured baseline already includes it.
-func (s *svc) requestOverhead() int {
-	return estimateText(s.prompt.systemPrompt()) + estimateSchemas(tool.ToSchemas(s.registry.List()))
+func (s *Session) requestOverhead() int {
+	return estimateText(s.prompt.SystemPrompt()) + estimateSchemas(tool.ToSchemas(s.registry.List()))
 }
 
 // projectContextSize reports the projection and whether it is a pure estimate
 // (no provider measurement backing it).
-func (s *svc) projectContextSize() (int, bool) {
+func (s *Session) projectContextSize() (int, bool) {
 	messages := s.ms.getMessages()
 	overhead := s.requestOverhead()
 	base := s.loadContextBaseline()
@@ -103,7 +103,7 @@ func (s *svc) projectContextSize() (int, bool) {
 	return projectContextSize(messages, base, overhead), base == nil
 }
 
-func (s *svc) loadContextBaseline() *contextBaseline {
+func (s *Session) loadContextBaseline() *contextBaseline {
 	s.modelMu.RLock()
 	defer s.modelMu.RUnlock()
 
@@ -111,7 +111,7 @@ func (s *svc) loadContextBaseline() *contextBaseline {
 }
 
 // modelGeneration identifies the model a request is about to go out under.
-func (s *svc) modelGeneration() uint64 {
+func (s *Session) modelGeneration() uint64 {
 	s.modelMu.RLock()
 	defer s.modelMu.RUnlock()
 
@@ -120,7 +120,7 @@ func (s *svc) modelGeneration() uint64 {
 
 // storeContextBaseline installs the measurement in memory when it describes the
 // current model generation, returning the model to persist it under.
-func (s *svc) storeContextBaseline(promptTokens, sentCount int, generation uint64) (string, bool) {
+func (s *Session) storeContextBaseline(promptTokens, sentCount int, generation uint64) (string, bool) {
 	s.modelMu.Lock()
 	defer s.modelMu.Unlock()
 
@@ -137,7 +137,7 @@ func (s *svc) storeContextBaseline(promptTokens, sentCount int, generation uint6
 // discarded when the session's current model differs — a measurement describes
 // one model's window and tokenizer, the same rule the in-memory modelEpoch
 // encodes for mid-flight switches.
-func (s *svc) installPersistedBaseline(b *sessionstore.ContextBaseline) {
+func (s *Session) installPersistedBaseline(b *sessionstore.ContextBaseline) {
 	if b == nil || b.Model != s.model || b.PromptTokens <= 0 {
 		return
 	}
@@ -146,7 +146,7 @@ func (s *svc) installPersistedBaseline(b *sessionstore.ContextBaseline) {
 }
 
 // resetContextBaseline drops back to pure estimation.
-func (s *svc) resetContextBaseline() {
+func (s *Session) resetContextBaseline() {
 	s.modelMu.Lock()
 	defer s.modelMu.Unlock()
 
@@ -159,7 +159,7 @@ func (s *svc) resetContextBaseline() {
 // path must not announce an attempt it can never make. The same head-fit bound
 // compactLocked applies is included, so the pre-check and the authoritative
 // re-selection inside compact() agree.
-func (s *svc) hasCompactionCandidate(window int) bool {
+func (s *Session) hasCompactionCandidate(window int) bool {
 	s.ms.mu.Lock()
 	defer s.ms.mu.Unlock()
 
@@ -191,7 +191,7 @@ func (s *svc) hasCompactionCandidate(window int) bool {
 // shouldCompact reports whether the projected request size exceeds
 // compactionFraction of the window, or image pressure breaches a high-water
 // mark (D1/D5): a byte wall the token projection cannot see.
-func (s *svc) shouldCompact(window int) bool {
+func (s *Session) shouldCompact(window int) bool {
 	size, _ := s.projectContextSize()
 	if size > compactionCutoff(window) {
 		return true

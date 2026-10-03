@@ -225,7 +225,7 @@ type PendingToolCall struct {
 // PendingExternalCalls is deliberately global over the active transcript.
 // External work is causal state: a later user or synthetic event cannot
 // supersede it merely by becoming the latest turn.
-func (s *svc) PendingExternalCalls() []PendingToolCall {
+func (s *Session) PendingExternalCalls() []PendingToolCall {
 	calls := unresolvedCallsMatching(s.ms.getMessages(), func(tc llmwire.ToolCall) bool {
 		return s.stagedCalls[tc.ID] == tc.Name
 	})
@@ -239,26 +239,26 @@ func (s *svc) PendingExternalCalls() []PendingToolCall {
 	return result
 }
 
-func (s *svc) HasPendingExternalCall() bool {
+func (s *Session) HasPendingExternalCall() bool {
 	return len(s.PendingExternalCalls()) > 0
 }
 
 // HasPendingWork includes host continuation rows so restarts retain unfinished turns.
-func (s *svc) HasPendingWork() bool {
+func (s *Session) HasPendingWork() bool {
 	if s.HasPendingExternalCall() {
 		return false
 	}
 	return s.unansweredWork()
 }
 
-func (s *svc) pendingExternalCallIDs() map[string]bool {
+func (s *Session) pendingExternalCallIDs() map[string]bool {
 	return s.pendingExternalCallIDsLocked(s.ms.getMessages())
 }
 
 // pendingExternalCallIDsLocked classifies unresolved calls over an already
 // taken message snapshot; compaction passes its ms.mu-held transcript here
 // because getMessages would re-lock and deadlock.
-func (s *svc) pendingExternalCallIDsLocked(messages []llmwire.Message) map[string]bool {
+func (s *Session) pendingExternalCallIDsLocked(messages []llmwire.Message) map[string]bool {
 	calls := unresolvedCallsMatching(messages, func(tc llmwire.ToolCall) bool {
 		return s.stagedCalls[tc.ID] == tc.Name
 	})
@@ -343,14 +343,25 @@ func UnresolvedCalls(messages []llmwire.Message) []PendingToolCall {
 	}
 	return result
 }
+
 func SettleResults(calls []PendingToolCall, text string) []*transcript.Message {
 	results := make([]*transcript.Message, 0, len(calls))
 	for _, call := range calls {
-		results = append(results, &transcript.Message{Role: llmwire.RoleTool, Content: text, ToolCallID: call.ID, ToolName: call.Name, ToolError: true})
+		results = append(
+			results,
+			&transcript.Message{
+				Role:       llmwire.RoleTool,
+				Content:    text,
+				ToolCallID: call.ID,
+				ToolName:   call.Name,
+				ToolError:  true,
+			},
+		)
 	}
 	return results
 }
-func (s *svc) pendingInLoopCalls() []llmwire.ToolCall {
+
+func (s *Session) pendingInLoopCalls() []llmwire.ToolCall {
 	pending := unresolvedToolCalls(s.ms.getMessages())
 	var calls []llmwire.ToolCall
 	for _, message := range s.ms.getMessages() {
@@ -362,7 +373,8 @@ func (s *svc) pendingInLoopCalls() []llmwire.ToolCall {
 	}
 	return calls
 }
-func (s *svc) unansweredWork() bool {
+
+func (s *Session) unansweredWork() bool {
 	messages := s.ms.getMessages()
 	if len(messages) == 0 {
 		return false

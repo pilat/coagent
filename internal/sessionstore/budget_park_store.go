@@ -12,9 +12,9 @@ import (
 const budgetParkRequestedState = "requested"
 
 type BudgetStore interface {
-	GetBudget(ctx context.Context, rootID int64) (*budget.Record, error)
-	ArmBudget(ctx context.Context, mutation budget.Mutation) (*budget.Record, error)
-	ClearBudget(ctx context.Context, mutation budget.Mutation) (*budget.Record, error)
+	Get(ctx context.Context, rootID int64) (*budget.Record, error)
+	Arm(ctx context.Context, mutation budget.Mutation) (*budget.Record, error)
+	Clear(ctx context.Context, mutation budget.Mutation) (*budget.Record, error)
 	FireBudget(ctx context.Context, rootID, generation int64, reason string, observedCost float64,
 		content string) (*budget.Record, *OutputCommit, error)
 	ObserveBudget(
@@ -77,7 +77,7 @@ func (s *store) BeginBudgetDrain(
 		return nil, budget.ErrConflict
 	}
 
-	return s.GetBudget(ctx, rootID)
+	return s.Get(ctx, rootID)
 }
 
 //nolint:wsl_v5 // CAS mutation and validation are one store operation.
@@ -97,5 +97,5 @@ func (s *store) MarkBudgetParked(
 		return nil, budget.ErrConflict
 	}
 
-	return s.GetBudget(ctx, rootID)
+	return s.Get(ctx, rootID)
 }

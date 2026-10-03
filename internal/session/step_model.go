@@ -12,7 +12,7 @@ import (
 	"github.com/pilat/coagent/internal/transcript"
 )
 
-func (s *svc) modelStep(ctx context.Context, r *runState) error {
+func (s *Session) modelStep(ctx context.Context, r *runState) error {
 	response, sentCount, generation, err := s.callModel(ctx, r)
 	if err != nil {
 		return err
@@ -33,19 +33,24 @@ func (s *svc) modelStep(ctx context.Context, r *runState) error {
 	return s.commitModelAttempt(ctx, r, c)
 }
 
-func (s *svc) callModel(ctx context.Context, r *runState) (*llmwire.Response, int, uint64, error) {
+func (s *Session) callModel(ctx context.Context, r *runState) (*llmwire.Response, int, uint64, error) {
 	activeTools := s.registry.List()
 	if s.loopDetector.forceTextOnly {
 		activeTools = nil
 	}
 	messages := s.ms.getMessages()
 	generation := s.modelGeneration()
-	response, err := s.chat(ctx, s.prompt.systemPrompt(), repairTranscriptExcluding(messages, s.pendingExternalCallIDs()), tool.ToSchemas(activeTools))
+	response, err := s.chat(
+		ctx,
+		s.prompt.SystemPrompt(),
+		repairTranscriptExcluding(messages, s.pendingExternalCallIDs()),
+		tool.ToSchemas(activeTools),
+	)
 	if err != nil {
 		r.result.ErrorNotice = "❌ LLM error: " + logger.Redact(err.Error())
 		return nil, 0, 0, err
 	}
-	s.stamper.touch()
+	s.stamper.Touch()
 	response.FinishType = normalizedFinishType(response.FinishType)
 	if s.loopDetector.forceTextOnly && len(response.ToolCalls) == 0 {
 		s.loopDetector.clearForceTextOnly()
@@ -53,7 +58,12 @@ func (s *svc) callModel(ctx context.Context, r *runState) (*llmwire.Response, in
 	return response, len(messages), generation, nil
 }
 
-func (s *svc) modelResponseCommit(r *runState, response *llmwire.Response, sentCount int, generation uint64) (sessionstore.Commit, error) {
+func (s *Session) modelResponseCommit(
+	r *runState,
+	response *llmwire.Response,
+	sentCount int,
+	generation uint64,
+) (sessionstore.Commit, error) {
 	wire := llmwire.Message{
 		Role: llmwire.RoleAssistant, Content: response.Text, ToolCalls: response.ToolCalls,
 		ReasoningContent: response.ReasoningContent, ReasoningRaw: response.ReasoningRaw,
@@ -71,13 +81,22 @@ func (s *svc) modelResponseCommit(r *runState, response *llmwire.Response, sentC
 	c.State.Iteration = &iteration
 	if response.Usage != nil && response.Usage.PromptTokens > 0 {
 		if model, ok := s.storeContextBaseline(response.Usage.PromptTokens, sentCount, generation); ok {
-			c.State.ContextBaseline = &sessionstore.ContextBaseline{Model: model, PromptTokens: response.Usage.PromptTokens, MessageCount: sentCount}
+			c.State.ContextBaseline = &sessionstore.ContextBaseline{
+				Model:        model,
+				PromptTokens: response.Usage.PromptTokens,
+				MessageCount: sentCount,
+			}
 		}
 	}
 	return c, nil
 }
 
-func (s *svc) prepareRejectedAttempt(ctx context.Context, r *runState, c *sessionstore.Commit, response *llmwire.Response) error {
+func (s *Session) prepareRejectedAttempt(
+	ctx context.Context,
+	r *runState,
+	c *sessionstore.Commit,
+	response *llmwire.Response,
+) error {
 	c.Messages[0].RejectedReason = sessionstore.RejectedReasonUnknownFinish
 	notice := sessionstore.UnknownFinishTerminalError
 	if response.FinishType == llmwire.FinishLength {
@@ -89,7 +108,9 @@ func (s *svc) prepareRejectedAttempt(ctx context.Context, r *runState, c *sessio
 		}
 		if !outstanding {
 			ref := 0
-			c.Unfired.Messages = []*transcript.Message{{Role: llmwire.RoleUser, Content: sessionstore.OutputLengthRecoveryPrompt, RetryOfRef: &ref}}
+			c.Unfired.Messages = []*transcript.Message{
+				{Role: llmwire.RoleUser, Content: sessionstore.OutputLengthRecoveryPrompt, RetryOfRef: &ref},
+			}
 		}
 	}
 	if len(c.Unfired.Messages) == 0 {
@@ -106,7 +127,12 @@ func (s *svc) prepareRejectedAttempt(ctx context.Context, r *runState, c *sessio
 	return nil
 }
 
-func (s *svc) prepareAcceptedAttempt(ctx context.Context, r *runState, c *sessionstore.Commit, response *llmwire.Response) error {
+func (s *Session) prepareAcceptedAttempt(
+	ctx context.Context,
+	r *runState,
+	c *sessionstore.Commit,
+	response *llmwire.Response,
+) error {
 	state, err := s.store.LoadCompletionCheckState(ctx, s.id)
 	if err != nil {
 		return err
@@ -126,7 +152,7 @@ func (s *svc) prepareAcceptedAttempt(ctx context.Context, r *runState, c *sessio
 	return nil
 }
 
-func (s *svc) commitModelAttempt(ctx context.Context, r *runState, c sessionstore.Commit) error {
+func (s *Session) commitModelAttempt(ctx context.Context, r *runState, c sessionstore.Commit) error {
 	result, err := s.commit(ctx, c)
 	if err != nil {
 		return err
@@ -158,14 +184,25 @@ func hostUserMessage(content string) *transcript.Message {
 }
 
 func projectionErrorNotice(err error) string {
-	return fmt.Sprintf("⚠️ Session error: %s\n\nThe session is still alive — send a message to continue.", logger.Redact(err.Error()))
+	return fmt.Sprintf(
+		"⚠️ Session error: %s\n\nThe session is still alive — send a message to continue.",
+		logger.Redact(err.Error()),
+	)
 }
 
-func (s *svc) commitProjectionFailure(ctx context.Context, r *runState, c sessionstore.Commit, cause error) error {
+func (s *Session) commitProjectionFailure(ctx context.Context, r *runState, c sessionstore.Commit, cause error) error {
 	status := sessionstore.SessionStatusError
 	notice := projectionErrorNotice(cause)
 	c.Unfired.State.Status = &status
-	c.Unfired.Outputs = []sessionstore.Output{{Type: sessionstore.OutputMessagePersistent, Content: notice, Key: fmt.Sprintf("projection-error:%d:terminal", s.iterationOffset+r.iterations), MessageRef: -1, ReleasesInput: true}}
+	c.Unfired.Outputs = []sessionstore.Output{
+		{
+			Type:          sessionstore.OutputMessagePersistent,
+			Content:       notice,
+			Key:           fmt.Sprintf("projection-error:%d:terminal", s.iterationOffset+r.iterations),
+			MessageRef:    -1,
+			ReleasesInput: true,
+		},
+	}
 	result, err := s.commit(ctx, c)
 	if err != nil {
 		return err

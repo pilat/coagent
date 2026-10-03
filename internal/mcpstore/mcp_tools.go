@@ -1,4 +1,4 @@
-package daemon
+package mcpstore
 
 import (
 	"context"
@@ -8,7 +8,6 @@ import (
 	"strings"
 
 	"github.com/pilat/coagent/internal/coagenthome"
-	"github.com/pilat/coagent/internal/mcpstore"
 	"github.com/pilat/coagent/internal/tool"
 )
 
@@ -42,9 +41,8 @@ type (
 	// mcpDeps is what every registry tool needs: the store to write and the
 	// project it speaks for.
 	mcpDeps struct {
-		store     mcpstore.Store
+		store     Store
 		projectID int64
-		onChange  func(*int64)
 	}
 
 	mcpAddTool     struct{ mcpDeps }
@@ -74,8 +72,8 @@ type (
 	}
 )
 
-func newMCPTools(store mcpstore.Store, projectID int64, onChange func(*int64)) []tool.Tool {
-	deps := mcpDeps{store: store, projectID: projectID, onChange: onChange}
+func NewTools(store Store, projectID int64) []tool.Tool {
+	deps := mcpDeps{store: store, projectID: projectID}
 
 	return []tool.Tool{
 		&mcpAddTool{deps},
@@ -126,7 +124,7 @@ func (t *mcpAddTool) Execute(ctx context.Context, params json.RawMessage) (*tool
 		return nil, errors.New("name and command are required")
 	}
 
-	err = t.store.Add(ctx, scope.projectID, mcpstore.ServerDef{
+	err = t.store.Add(ctx, scope.projectID, ServerDef{
 		Name:    p.Name,
 		Command: p.Command,
 		Args:    p.Args,
@@ -136,8 +134,6 @@ func (t *mcpAddTool) Execute(ctx context.Context, params json.RawMessage) (*tool
 	if err != nil {
 		return nil, fmt.Errorf("add mcp server: %w", err)
 	}
-
-	t.changed(scope)
 
 	return textResult(fmt.Sprintf("Added MCP server %q in %s scope. %s", p.Name, scope.label, nextRunNotice)), nil
 }
@@ -162,8 +158,6 @@ func (t *mcpRemoveTool) Execute(ctx context.Context, params json.RawMessage) (*t
 		return nil, fmt.Errorf("remove mcp server: %w", err)
 	}
 
-	t.changed(scope)
-
 	return textResult(fmt.Sprintf("Removed MCP server %q from %s scope. %s", p.Name, scope.label, nextRunNotice)), nil
 }
 
@@ -186,8 +180,6 @@ func (t *mcpEnableTool) Execute(ctx context.Context, params json.RawMessage) (*t
 	if err := t.store.SetEnabled(ctx, scope.projectID, p.Name, true); err != nil {
 		return nil, fmt.Errorf("enable mcp server: %w", err)
 	}
-
-	t.changed(scope)
 
 	return textResult(fmt.Sprintf("Enabled MCP server %q in %s scope. %s", p.Name, scope.label, nextRunNotice)), nil
 }
@@ -212,15 +204,7 @@ func (t *mcpDisableTool) Execute(ctx context.Context, params json.RawMessage) (*
 		return nil, fmt.Errorf("disable mcp server: %w", err)
 	}
 
-	t.changed(scope)
-
 	return textResult(fmt.Sprintf("Disabled MCP server %q in %s scope. %s", p.Name, scope.label, nextRunNotice)), nil
-}
-
-func (d mcpDeps) changed(scope mcpScope) {
-	if d.onChange != nil {
-		d.onChange(scope.projectID)
-	}
 }
 
 func (t *mcpListTool) ID() string { return tool.IDMCPList }

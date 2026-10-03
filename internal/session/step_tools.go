@@ -2,21 +2,20 @@ package session
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"slices"
 	"strings"
 
 	"go.uber.org/zap"
 
-	"github.com/pilat/coagent/internal/id"
 	"github.com/pilat/coagent/internal/llmwire"
 	"github.com/pilat/coagent/internal/logger"
 	"github.com/pilat/coagent/internal/sessionevent"
 	"github.com/pilat/coagent/internal/sessionstore"
 	"github.com/pilat/coagent/internal/tool"
-	"github.com/pilat/coagent/internal/toolexec"
 	"github.com/pilat/coagent/internal/transcript"
 )
 
@@ -30,17 +29,9 @@ type toolCallResultItem struct {
 	untrusted      bool
 	images         []llmwire.ImageRef
 	directMessages []string
-	outcome        toolexec.Outcome
+	outcome        tool.Outcome
 	// err keeps the raw execution error for logging only.
 	err error
-}
-
-// plannedToolCall pairs one assistant-turn call with the registry instance
-// resolved for it, so classification and execution observe the same registry
-// state even if the registry changes mid-turn.
-type plannedToolCall struct {
-	call llmwire.ToolCall
-	tool tool.Tool
 }
 
 // batchConflict rejects a call that cannot share an assistant turn with its
@@ -75,36 +66,21 @@ func batchConflict(batch []llmwire.ToolCall, call llmwire.ToolCall) error {
 	return nil
 }
 
-// failedItem builds an item for a call that ran to a typed failure. The raw
-// error stays model-visible as "Error: ..."; external-source calls route
-// through the same dynamic budget as typed results before the wrapper. All
-// failure classes of an external-source call render inside the frame — even
-// host-authored ones like unknown-tool — over-marking on purpose.
-func failedItem(index int, tc llmwire.ToolCall, err error, contextWindow int) toolexec.Invocation[toolCallResultItem] {
+func failedItem(index int, tc llmwire.ToolCall, err error, contextWindow int) toolCallResultItem {
 	content := fmt.Sprintf("Error: %v", err)
-
 	if tool.IsUntrustedOutputSource(tc.Name) {
 		content = wrapUntrustedContent(content, contextWindow)
 	}
-
-	return toolexec.Invocation[toolCallResultItem]{
-		Outcome: toolexec.OutcomeFailed,
-		Err:     err,
-		Result: toolCallResultItem{
-			index:     index,
-			toolCall:  tc,
-			content:   content,
-			untrusted: tool.IsUntrustedOutputSource(tc.Name),
-			outcome:   toolexec.OutcomeFailed,
-			err:       err,
-		},
+	return toolCallResultItem{
+		index: index, toolCall: tc, content: content,
+		untrusted: tool.IsUntrustedOutputSource(tc.Name), outcome: tool.OutcomeFailed, err: err,
 	}
 }
 
 // executeToolCallsInternal schedules the assistant turn's calls through the
 // shared executor and returns decided items in call order without committing
 // them to the transcript.
-func executeToolCallsInternal(ctx context.Context, agent *svc, toolCalls []llmwire.ToolCall) []toolCallResultItem {
+func executeToolCallsInternal(ctx context.Context, agent *Session, toolCalls []llmwire.ToolCall) []toolCallResultItem {
 	log := logger.Ctx(ctx).Named("session.toolexec")
 	contextWindow := agent.contextWindow()
 
@@ -123,7 +99,7 @@ func executeToolCallsInternal(ctx context.Context, agent *svc, toolCalls []llmwi
 				inv := failedItem(i, call, fmt.Errorf(
 					"%s must be invoked alone in its activated command turn", agent.currentActivation.ToolID,
 				), contextWindow)
-				results[i] = inv.Result
+				results[i] = inv
 			}
 
 			return results
@@ -133,44 +109,21 @@ func executeToolCallsInternal(ctx context.Context, agent *svc, toolCalls []llmwi
 	// Resolve once while planning: the same tool instance is classified and
 	// executed, so a mid-turn registry swap cannot split the policy from the
 	// execution.
-	calls := make([]toolexec.Call[plannedToolCall], len(toolCalls))
+	calls := make([]tool.Call, len(toolCalls))
 	for i, tc := range toolCalls {
-		tl := agent.registry.Get(tc.Name)
-
-		calls[i] = toolexec.Call[plannedToolCall]{
-			Call: plannedToolCall{
-				call: tc,
-				tool: tl,
-			},
-			ParallelSafe: tl != nil && tl.ParallelSafe(),
+		err := batchConflict(toolCalls, tc)
+		if err != nil {
+			log.Warn("tool_conflict", zap.String("name", tc.Name), zap.Error(err))
+		}
+		calls[i] = tool.Call{
+			Tool:      agent.registry.Get(tc.Name),
+			Name:      tc.Name,
+			ID:        tc.ID,
+			Arguments: tc.Arguments,
+			Err:       err,
 		}
 	}
-
-	exec := func(callCtx context.Context, idx int, pc plannedToolCall) toolexec.Invocation[toolCallResultItem] {
-		// Only sleep may be invalid next to task/send_to_subagent; it fails as
-		// its own singleton barrier without its earlier siblings paying for it.
-		if err := batchConflict(toolCalls, pc.call); err != nil {
-			log.Warn("tool_conflict", zap.String("name", pc.call.Name), zap.Error(err))
-
-			return failedItem(idx, pc.call, err, contextWindow)
-		}
-
-		if pc.tool == nil {
-			return failedItem(idx, pc.call, fmt.Errorf("unknown tool: %s", pc.call.Name), contextWindow)
-		}
-
-		// Bind this call's id to the callback context so tools (e.g. task) can
-		// resolve the spawning tool_call id. The session loop is the single
-		// chokepoint both the initial turn and resume re-execution funnel
-		// through (Appendix G2).
-		callCtx = tool.WithCallID(callCtx, pc.call.ID)
-
-		log.Info("tool_call", zap.String("name", pc.call.Name))
-
-		return executeOneTool(callCtx, pc.tool, pc.call, idx, agent.contextWindow(), log)
-	}
-
-	report := toolexec.Schedule(ctx, calls, exec)
+	report := tool.Schedule(ctx, calls)
 
 	// One summary per scheduling invocation on the native path.
 	log.Info("tool_schedule",
@@ -191,10 +144,10 @@ func executeToolCallsInternal(ctx context.Context, agent *svc, toolCalls []llmwi
 // preserving assistant call order. Outcome slots are never left zero: a zero
 // outcome reads as executed and would commit an empty result row.
 func mapExecutorReport(
-	agent *svc,
+	agent *Session,
 	log *zap.Logger,
 	toolCalls []llmwire.ToolCall,
-	report toolexec.Report[toolCallResultItem],
+	report tool.Report,
 ) []toolCallResultItem {
 	results := make([]toolCallResultItem, len(toolCalls))
 
@@ -202,123 +155,49 @@ func mapExecutorReport(
 		tc := toolCalls[i]
 
 		switch r.Outcome {
-		case toolexec.OutcomeCancelled:
+		case tool.OutcomeCancelled:
 			// Cancellation propagates: stop/kill settles unresolved calls and
 			// the cancelled context answers the turn. No fabricated errors.
 			// The slot still carries its outcome: a zero value reads as executed.
-			results[i].outcome = toolexec.OutcomeCancelled
+			results[i].outcome = tool.OutcomeCancelled
 			results[i].toolCall = tc
-		case toolexec.OutcomeSuspended:
+		case tool.OutcomeSuspended:
 			// Owned pending call: the real result is injected on resume.
 			log.Info("tool_suspended", zap.String("name", tc.Name))
 
 			agent.suspended = true
-			results[i].outcome = toolexec.OutcomeSuspended
+			results[i].outcome = tool.OutcomeSuspended
 			results[i].toolCall = tc
-		case toolexec.OutcomeSkipped:
+		case tool.OutcomeSkipped:
 			results[i] = toolCallResultItem{
 				index:    i,
 				toolCall: tc,
-				content:  toolexec.ErrSkipped.Error(),
-				outcome:  toolexec.OutcomeSkipped,
+				content:  tool.ErrSkipped.Error(),
+				outcome:  tool.OutcomeSkipped,
 			}
-		case toolexec.OutcomeExecuted, toolexec.OutcomeFailed:
-			results[i] = r.Result
-			results[i].index = i
-			results[i].toolCall = tc
+		case tool.OutcomeExecuted, tool.OutcomeFailed:
+			if r.Result == nil {
+				results[i] = failedItem(i, tc, r.Err, agent.contextWindow())
+				continue
+			}
+			results[i] = toolCallResultItem{
+				index: i, toolCall: tc, content: formatToolResult(r.Result, agent.contextWindow()),
+				untrusted: r.Result.Untrusted, images: r.Result.Images,
+				directMessages: r.Result.DirectMessages, outcome: r.Outcome,
+			}
+			if r.Outcome == tool.OutcomeFailed {
+				log.Warn("tool_typed_failure", zap.String("name", tc.Name))
+			} else {
+				log.Info("result", zap.String("name", tc.Name), zap.Int("size", len(r.Result.Output)))
+			}
 		}
 	}
 
 	return results
 }
 
-// executeOneTool runs one resolved tool and decides the invocation's outcome.
-// A Go error, recovered panic, nil result or Result.IsError marks a failure;
-// ErrSuspend is an owned pending call rather than a failure.
-func executeOneTool(
-	ctx context.Context,
-	tl tool.Tool,
-	tc llmwire.ToolCall,
-	index int,
-	contextWindow int,
-	log *zap.Logger,
-) toolexec.Invocation[toolCallResultItem] {
-	// A panicking frame cannot return a value; recover into an outer slot and
-	// classify after the closure unwinds.
-	var outcome struct {
-		inv   toolexec.Invocation[toolCallResultItem]
-		panic any
-	}
-
-	func() {
-		defer func() {
-			outcome.panic = recover()
-		}()
-
-		outcome.inv = runResolvedTool(ctx, tl, tc, index, contextWindow, log)
-	}()
-
-	if outcome.panic != nil {
-		return failedItem(index, tc, fmt.Errorf("panic in tool %s: %v", tc.Name, outcome.panic), contextWindow)
-	}
-
-	return outcome.inv
-}
-
-// runResolvedTool is executeOneTool's panic-free body: classify the tool's
-// execution result into a typed invocation.
-func runResolvedTool(
-	ctx context.Context,
-	tl tool.Tool,
-	tc llmwire.ToolCall,
-	index int,
-	contextWindow int,
-	log *zap.Logger,
-) toolexec.Invocation[toolCallResultItem] {
-	result, err := tl.Execute(ctx, tc.Arguments)
-	if err != nil {
-		if errors.Is(err, tool.ErrSuspend) {
-			return toolexec.Invocation[toolCallResultItem]{
-				Outcome: toolexec.OutcomeSuspended,
-				Err:     fmt.Errorf("execute tool %s: %w", tc.Name, err),
-			}
-		}
-
-		return failedItem(index, tc, fmt.Errorf("execute tool %s: %w", tc.Name, err), contextWindow)
-	}
-
-	if result == nil {
-		return failedItem(index, tc, fmt.Errorf("execute tool %s: tool returned nil result", tc.Name), contextWindow)
-	}
-
-	item := toolCallResultItem{
-		index:          index,
-		toolCall:       tc,
-		content:        formatToolResult(result, contextWindow),
-		untrusted:      result.Untrusted,
-		images:         result.Images,
-		directMessages: result.DirectMessages,
-		outcome:        toolexec.OutcomeExecuted,
-	}
-
-	if result.IsError {
-		item.outcome = toolexec.OutcomeFailed
-	}
-
-	if item.outcome == toolexec.OutcomeFailed {
-		log.Warn("tool_typed_failure", zap.String("name", tc.Name))
-	} else {
-		log.Info("result", zap.String("name", tc.Name), zap.Int("size", len(result.Output)))
-	}
-
-	return toolexec.Invocation[toolCallResultItem]{
-		Outcome: item.outcome,
-		Result:  item,
-	}
-}
-
 // executeToolCalls orchestrates tool execution with loop detection.
-func executeToolCalls(ctx context.Context, agent *svc, toolCalls []llmwire.ToolCall) error {
+func executeToolCalls(ctx context.Context, agent *Session, toolCalls []llmwire.ToolCall) error {
 	log := logger.Ctx(ctx).Named("session.toolexec")
 
 	action := agent.loopDetector.check()
@@ -327,7 +206,16 @@ func executeToolCalls(ctx context.Context, agent *svc, toolCalls []llmwire.ToolC
 
 		var results []*transcript.Message
 		for _, tc := range toolCalls {
-			results = append(results, &transcript.Message{Role: llmwire.RoleTool, Content: loopBlockMessage, ToolCallID: tc.ID, ToolName: tc.Name, ToolError: true})
+			results = append(
+				results,
+				&transcript.Message{
+					Role:       llmwire.RoleTool,
+					Content:    loopBlockMessage,
+					ToolCallID: tc.ID,
+					ToolName:   tc.Name,
+					ToolError:  true,
+				},
+			)
 		}
 
 		c := agent.newCommit()
@@ -342,7 +230,7 @@ func executeToolCalls(ctx context.Context, agent *svc, toolCalls []llmwire.ToolC
 	// outcome; suspended, skipped and cancelled calls never enter it.
 	records := make([]toolRecord, 0, len(results))
 	for _, r := range results {
-		if r.outcome != toolexec.OutcomeExecuted && r.outcome != toolexec.OutcomeFailed {
+		if r.outcome != tool.OutcomeExecuted && r.outcome != tool.OutcomeFailed {
 			continue
 		}
 
@@ -350,7 +238,7 @@ func executeToolCalls(ctx context.Context, agent *svc, toolCalls []llmwire.ToolC
 			name:       r.toolCall.Name,
 			argsHash:   fingerprintArgs(r.toolCall.Arguments),
 			resultHash: fingerprintResult(r.content),
-			failed:     r.outcome == toolexec.OutcomeFailed,
+			failed:     r.outcome == tool.OutcomeFailed,
 		})
 	}
 
@@ -365,7 +253,7 @@ func executeToolCalls(ctx context.Context, agent *svc, toolCalls []llmwire.ToolC
 // emitted when the turn produced no such result.
 func recordToolResults(
 	ctx context.Context,
-	agent *svc,
+	agent *Session,
 	results []toolCallResultItem,
 	postAction loopAction,
 ) error {
@@ -374,7 +262,7 @@ func recordToolResults(
 	warnIdx := -1
 
 	for i, r := range results {
-		if r.outcome == toolexec.OutcomeExecuted || r.outcome == toolexec.OutcomeFailed {
+		if r.outcome == tool.OutcomeExecuted || r.outcome == tool.OutcomeFailed {
 			warnIdx = i
 		}
 	}
@@ -382,7 +270,7 @@ func recordToolResults(
 	c := agent.newCommit()
 
 	for i, r := range results {
-		if r.outcome == toolexec.OutcomeSuspended || r.outcome == toolexec.OutcomeCancelled {
+		if r.outcome == tool.OutcomeSuspended || r.outcome == tool.OutcomeCancelled {
 			continue
 		}
 
@@ -405,16 +293,33 @@ func recordToolResults(
 			content = prependLoopWarning(ctx, agent, postAction, r.toolCall.Name, content)
 		}
 
-		message, err := storedMessage(&llmwire.Message{Role: llmwire.RoleTool, Content: content, ToolCallID: r.toolCall.ID, ToolName: r.toolCall.Name, ToolError: r.outcome == toolexec.OutcomeFailed || r.outcome == toolexec.OutcomeSkipped, Images: r.images})
+		message, err := storedMessage(
+			&llmwire.Message{
+				Role:       llmwire.RoleTool,
+				Content:    content,
+				ToolCallID: r.toolCall.ID,
+				ToolName:   r.toolCall.Name,
+				ToolError:  r.outcome == tool.OutcomeFailed || r.outcome == tool.OutcomeSkipped,
+				Images:     r.images,
+			},
+		)
 		if err != nil {
 			return err
 		}
 		c.ToolResults = append(c.ToolResults, message)
 		for j, text := range direct {
-			c.Outputs = append(c.Outputs, sessionstore.Output{Type: sessionstore.OutputMessagePersistent, Content: text, Key: fmt.Sprintf("tool:%s:direct:%d", r.toolCall.ID, j), MessageRef: -1})
+			c.Outputs = append(
+				c.Outputs,
+				sessionstore.Output{
+					Type:       sessionstore.OutputMessagePersistent,
+					Content:    text,
+					Key:        fmt.Sprintf("tool:%s:direct:%d", r.toolCall.ID, j),
+					MessageRef: -1,
+				},
+			)
 		}
 	}
-	data, err := json.Marshal(agent.todoStore.List())
+	data, err := json.Marshal(agent.prompt.Todos.List())
 	if err != nil {
 		return err
 	}
@@ -424,10 +329,10 @@ func recordToolResults(
 		return err
 	}
 
-	agent.stamper.touch()
+	agent.stamper.Touch()
 	// All rows are durable; user-facing semantics fire only now.
 	for _, r := range results {
-		if r.outcome != toolexec.OutcomeExecuted {
+		if r.outcome != tool.OutcomeExecuted {
 			continue
 		}
 
@@ -443,7 +348,7 @@ func recordToolResults(
 
 // consumeActivation clears the current activation grant when its owning tool
 // just executed and reports whether the progress snapshot must republish.
-func consumeActivation(agent *svc, r toolCallResultItem) bool {
+func consumeActivation(agent *Session, r toolCallResultItem) bool {
 	activatedDirect := len(r.directMessages) > 0 && agent.currentActivation != nil &&
 		r.toolCall.Name == agent.currentActivation.ToolID
 
@@ -456,12 +361,12 @@ func consumeActivation(agent *svc, r toolCallResultItem) bool {
 
 // publishProgressSnapshot enqueues the TODO progress snapshot through the
 // boundary and notifies through the loop's channel, superseding tolerated.
-func publishProgressSnapshot(_ context.Context, agent *svc) error {
+func publishProgressSnapshot(_ context.Context, agent *Session) error {
 	agent.emit(sessionevent.Notification{Type: "progress_change"})
 	return nil
 }
 
-func (s *svc) toolStep(ctx context.Context, calls []llmwire.ToolCall) error {
+func (s *Session) toolStep(ctx context.Context, calls []llmwire.ToolCall) error {
 	s.emit(sessionevent.Notification{Type: "progress_change"})
 	err := executeToolCalls(ctx, s, calls)
 	if s.suspended {
@@ -529,7 +434,7 @@ func capDirectOutput(direct []string) []string {
 
 // prependLoopWarning returns content fronted by the detector's warning, or
 // unchanged when postAction asks for none.
-func prependLoopWarning(ctx context.Context, agent *svc, postAction loopAction, toolName, content string) string {
+func prependLoopWarning(ctx context.Context, agent *Session, postAction loopAction, toolName, content string) string {
 	log := logger.Ctx(ctx).Named("session.toolexec")
 
 	switch postAction {
@@ -628,7 +533,11 @@ func wrapUntrustedContent(payload string, contextWindow int) string {
 // Add randomness after loop fingerprinting and before persistence, so repeated
 // results still compare equal and replay never regenerates a boundary ID.
 func identifyUntrustedContent(content string) string {
-	markerID := id.Generate()
+	var entropy [8]byte
+	if _, err := rand.Read(entropy[:]); err != nil {
+		panic(fmt.Errorf("generate untrusted marker: %w", err))
+	}
+	markerID := hex.EncodeToString(entropy[:])
 	payload := strings.TrimSuffix(strings.TrimPrefix(content, tool.UntrustedContentBegin+"\n"),
 		"\n"+tool.UntrustedContentEnd)
 

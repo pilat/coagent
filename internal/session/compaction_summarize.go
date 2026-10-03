@@ -7,7 +7,7 @@ import (
 	"strings"
 
 	"github.com/pilat/coagent/internal/llmwire"
-	"github.com/pilat/coagent/internal/registry"
+	"github.com/pilat/coagent/internal/sessionprompt"
 	"github.com/pilat/coagent/internal/tool"
 )
 
@@ -18,13 +18,12 @@ import (
 // that answers a tool call instead of text gets one tools-unavailable nudge
 // and must then answer in plain text. A failed attempt persists no boundary
 // and may submit the same head again on a later attempt.
-func (s *svc) summarizeCheckpoint(
+func (s *Session) summarizeCheckpoint(
 	ctx context.Context,
 	split int,
 	pendingExternal map[string]bool,
 	window int,
 ) (string, *compactionUsage, error) {
-
 	activeTools := s.registry.List()
 	if s.loopDetector.forceTextOnly {
 		activeTools = nil
@@ -41,7 +40,7 @@ func (s *svc) summarizeCheckpoint(
 	// fraction, not a summary-length target — any useful completed length passes.
 	reserve := int((1 - llmwire.ContextInputFraction) * float64(window))
 
-	resp, err := s.chat(ctx, s.prompt.systemPrompt(), messages, schemas, llmwire.WithMaxTokens(reserve))
+	resp, err := s.chat(ctx, s.prompt.SystemPrompt(), messages, schemas, llmwire.WithMaxTokens(reserve))
 	if err != nil {
 		return "", nil, fmt.Errorf("compaction chat: %w", err)
 	}
@@ -70,7 +69,7 @@ func (s *svc) summarizeCheckpoint(
 // rejectSummarizerToolCall answers a tool-calling summarizer once, in role:
 // the call keeps its recorded tool results, so the transcript stays provider-
 // valid, and the demand to summarize is restated. One nudge only.
-func (s *svc) rejectSummarizerToolCall(
+func (s *Session) rejectSummarizerToolCall(
 	ctx context.Context,
 	messages []llmwire.Message,
 	schemas []llmwire.ToolSchema,
@@ -90,7 +89,7 @@ func (s *svc) rejectSummarizerToolCall(
 
 	followUp := append(append([]llmwire.Message{}, messages...), replies...)
 
-	retry, err := s.chat(ctx, s.prompt.systemPrompt(), followUp, schemas, llmwire.WithMaxTokens(reserve))
+	retry, err := s.chat(ctx, s.prompt.SystemPrompt(), followUp, schemas, llmwire.WithMaxTokens(reserve))
 	if err != nil {
 		return nil, fmt.Errorf("compaction retry after tool call: %w", err)
 	}
@@ -128,7 +127,7 @@ func acceptedCheckpointText(resp *llmwire.Response) (string, error) {
 // compactionInstructionMessage renders the final role-user instruction:
 // the revised checkpoint prompt plus the optional /compact focus.
 func compactionInstructionMessage(focus string) llmwire.Message {
-	content := registry.CompactionSummaryPrompt + focus
+	content := sessionprompt.CompactionSummaryPrompt + focus
 
 	return llmwire.Message{Role: llmwire.RoleUser, Content: content}
 }

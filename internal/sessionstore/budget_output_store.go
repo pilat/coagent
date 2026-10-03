@@ -6,9 +6,10 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"github.com/pilat/coagent/internal/budget"
 	"math"
 	"time"
+
+	"github.com/pilat/coagent/internal/budget"
 )
 
 const budgetSelect = `SELECT root_session_id, state, generation, armed_at, baseline_cost_usd,
@@ -51,7 +52,7 @@ func (s *store) FireBudget(
 		return record, commit, nil
 	}
 
-	fired, err := s.GetBudget(ctx, rootID)
+	fired, err := s.Get(ctx, rootID)
 
 	return fired, commit, err
 }
@@ -115,7 +116,7 @@ func (s *store) ObserveBudget(
 	}
 
 	if fired == nil {
-		fired, err = s.GetBudget(ctx, rootID)
+		fired, err = s.Get(ctx, rootID)
 		if err != nil {
 			return nil, false, err
 		}
@@ -164,8 +165,10 @@ func fireBudgetTx(
 
 	key := fmt.Sprintf("budget:%d:checkpoint", generation)
 
-	commit, err := insertOutputTx(ctx, tx, OutputDraft{SessionID: rootID, Type: OutputMessagePersistent,
-		Content: content, SourceKey: key, CreatedAt: now, ReleasesInput: true}, CommitLifecycle)
+	commit, err := insertOutputTx(ctx, tx, OutputDraft{
+		SessionID: rootID, Type: OutputMessagePersistent,
+		Content: content, SourceKey: key, CreatedAt: now, ReleasesInput: true,
+	}, CommitLifecycle)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -192,7 +195,7 @@ func (s *store) ReleaseBudget(
 
 	affected, _ := result.RowsAffected()
 	if affected == 0 {
-		existing, loadErr := s.GetBudget(ctx, rootID)
+		existing, loadErr := s.Get(ctx, rootID)
 		if loadErr == nil && existing.Generation == generation && existing.State == budget.Released &&
 			existing.ReleasedReason == reason {
 			return existing, nil
@@ -201,7 +204,7 @@ func (s *store) ReleaseBudget(
 		return nil, budget.ErrConflict
 	}
 
-	return s.GetBudget(ctx, rootID)
+	return s.Get(ctx, rootID)
 }
 
 func scanBudget(row interface{ Scan(...any) error }) (*budget.Record, error) {

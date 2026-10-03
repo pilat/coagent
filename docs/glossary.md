@@ -157,7 +157,7 @@ The host-authored wrapper around model-authored summary text inside a compaction
 _Avoid_: treating the wrapper as a security boundary — delimiter collisions in user content are accepted user-controlled content.
 
 **deferral episode**:
-The lifetime of the pending external call that made a `/compact` wait in the durable inbox. The "⏳ Compaction deferred" notice is deduplicated per episode — not per run or per wake — via a verdict the daemon carries across session rebuilds (`RunResult` → `deferAnnouncements` → `CreateOptions`).
+The lifetime of the pending external call that made a `/compact` wait in the durable inbox. The "⏳ Compaction deferred" notice is deduplicated per episode — not per run or per wake — via a verdict the daemon carries across session rebuilds (`RunResult` → `deferAnnouncements` → the session assembly input).
 _Avoid_: per-activation notice (the retired behavior).
 
 **compaction projection**:
@@ -201,7 +201,7 @@ The builtin search tool (`internal/tool/builtin`), registered only when `tools.s
 _Avoid_: web search tool vs MCP search servers (those keep their `mcp__…` tool IDs and coexist).
 
 **tool stage**:
-The unit of ordered scheduling (`internal/toolexec`): a maximal contiguous run of parallel-safe calls that executes concurrently through a four-slot rolling window; every other call is a singleton **barrier** stage that blocks later stages until it finishes. A failed, suspended, or cancelled call leaves later stages explicitly skipped (**fail-stop**), while its same-stage siblings still run. Result rows keep assistant call order regardless of completion order.
+The unit of ordered scheduling (`internal/tool`): a maximal contiguous run of parallel-safe calls that executes concurrently through a four-slot rolling window; every other call is a singleton **barrier** stage that blocks later stages until it finishes. A failed, suspended, or cancelled call leaves later stages explicitly skipped (**fail-stop**), while its same-stage siblings still run. Result rows keep assistant call order regardless of completion order.
 _Avoid_: worker pool (there is no shared queue), fan-out (the removed unconditional concurrency).
 
 **skill**:

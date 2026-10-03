@@ -1,4 +1,4 @@
-package daemon
+package schedule
 
 import (
 	"context"
@@ -6,13 +6,21 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/pilat/coagent/internal/sessionstore"
 	"github.com/pilat/coagent/internal/tool"
 )
 
-// backgroundWaitGuard rejects timer polling while a durable producer already owns the wake-up.
+var _ tool.Tool = (*backgroundWaitGuard)(nil)
+
 type backgroundWaitGuard struct {
-	inner      tool.Tool
-	hasPending func(context.Context) (bool, error)
+	inner     tool.Tool
+	sessions  sessionstore.Store
+	sessionID int64
+}
+
+// NewGuardedSleepTool prevents polling while a durable producer owns the wake-up.
+func NewGuardedSleepTool(svc Service, sessionID int64, sessions sessionstore.Store) tool.Tool {
+	return &backgroundWaitGuard{inner: NewSleepTool(svc, sessionID), sessions: sessions, sessionID: sessionID}
 }
 
 func (g *backgroundWaitGuard) ID() string                  { return g.inner.ID() }
@@ -21,11 +29,10 @@ func (g *backgroundWaitGuard) Parameters() json.RawMessage { return g.inner.Para
 func (g *backgroundWaitGuard) ParallelSafe() bool          { return g.inner.ParallelSafe() }
 
 func (g *backgroundWaitGuard) Execute(ctx context.Context, params json.RawMessage) (*tool.Result, error) {
-	pending, err := g.hasPending(ctx)
+	pending, err := g.sessions.HasPendingBackgroundWait(ctx, g.sessionID)
 	if err != nil {
 		return nil, fmt.Errorf("check pending background work before %s: %w", g.inner.ID(), err)
 	}
-
 	if pending {
 		return nil, errors.New(
 			"sleep is unavailable while background completion is pending; do not poll. " +
@@ -33,39 +40,5 @@ func (g *backgroundWaitGuard) Execute(ctx context.Context, params json.RawMessag
 				"When none remains, briefly report what is still running and end the response; the result arrives automatically in a later turn",
 		)
 	}
-
 	return g.inner.Execute(ctx, params)
-}
-
-func (s *svc) guardSleepWhileBackgroundPending(sessionID int64, inner tool.Tool) tool.Tool {
-	return &backgroundWaitGuard{
-		inner: inner,
-		hasPending: func(ctx context.Context) (bool, error) {
-			links, err := s.links.ListPendingChildLinks(ctx, sessionID)
-			if err != nil {
-				return false, fmt.Errorf("list pending child links: %w", err)
-			}
-
-			if len(links) > 0 {
-				return true, nil
-			}
-
-			if s.processStore == nil {
-				return false, nil
-			}
-
-			processes, err := s.processStore.ListRunningBySessions(ctx, []int64{sessionID})
-			if err != nil {
-				return false, fmt.Errorf("list running processes: %w", err)
-			}
-
-			for _, process := range processes {
-				if process.AdvertisedAt != nil {
-					return true, nil
-				}
-			}
-
-			return false, nil
-		},
-	}
 }

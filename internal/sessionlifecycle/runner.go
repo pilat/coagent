@@ -13,8 +13,8 @@ type Runner interface {
 	Stop()
 	Done() <-chan struct{}
 	Complete()
-	Service() session.Service
-	SetService(session.Service)
+	Service() *session.Session
+	SetService(*session.Session)
 	Working() bool
 	SetWorking(bool)
 	SetPreserveStopped(bool)
@@ -38,7 +38,7 @@ type runner struct {
 
 	cancel          context.CancelFunc
 	done            chan struct{}
-	service         session.Service
+	service         *session.Session
 	working         bool
 	hasRun          bool
 	workDir         string
@@ -74,14 +74,14 @@ func (r *runner) Done() <-chan struct{} { return r.done }
 
 func (r *runner) Complete() { close(r.done) }
 
-func (r *runner) Service() session.Service {
+func (r *runner) Service() *session.Session {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
 	return r.service
 }
 
-func (r *runner) SetService(service session.Service) {
+func (r *runner) SetService(service *session.Session) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 

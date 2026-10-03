@@ -14,14 +14,18 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/pilat/coagent/internal/admission"
+	"github.com/pilat/coagent/internal/budget"
 	"github.com/pilat/coagent/internal/configapply"
 	"github.com/pilat/coagent/internal/controllerapi"
 	"github.com/pilat/coagent/internal/loader"
 	"github.com/pilat/coagent/internal/logger"
+	"github.com/pilat/coagent/internal/mcpstore"
 	"github.com/pilat/coagent/internal/schedule"
 	"github.com/pilat/coagent/internal/session"
+	"github.com/pilat/coagent/internal/sessionbuild"
 	"github.com/pilat/coagent/internal/sessionevent"
 	"github.com/pilat/coagent/internal/sessionlifecycle"
+	"github.com/pilat/coagent/internal/sessionprompt"
 	"github.com/pilat/coagent/internal/sessionstore"
 	"github.com/pilat/coagent/internal/subagent"
 	"github.com/pilat/coagent/internal/tool"
@@ -76,11 +80,20 @@ func (s *svc) runSession(ctx context.Context, sessionID int64, rs runner) {
 }
 
 //nolint:wsl_v5 // Teardown publishes readiness only after removing the live loop.
-func (s *svc) finishRunner(ctx context.Context, sessionID int64, rs runner, errored *bool, publishIdle bool, panicValue any) {
+func (s *svc) finishRunner(
+	ctx context.Context,
+	sessionID int64,
+	rs runner,
+	errored *bool,
+	publishIdle bool,
+	panicValue any,
+) {
 	shuttingDown := s.shuttingDown.Load()
 	if panicValue != nil {
 		*errored = true
-		logger.Ctx(ctx).Named("daemon.runner").Error("session_panic", zap.Int64("session_id", sessionID), zap.Any("panic", panicValue))
+		logger.Ctx(ctx).
+			Named("daemon.runner").
+			Error("session_panic", zap.Int64("session_id", sessionID), zap.Any("panic", panicValue))
 	}
 	if ctx.Err() != nil && !shuttingDown {
 		*errored = true
@@ -112,7 +125,11 @@ func (s *svc) finishRunner(ctx context.Context, sessionID int64, rs runner, erro
 	if info.PreserveStopped && !shuttingDown {
 		record, loadErr := s.sessionStore.GetSession(cleanup, sessionID)
 		if loadErr == nil && record.Status == sessionstore.SessionStatusActive {
-			if statusErr := s.sessionStore.UpdateSessionStatus(cleanup, sessionID, sessionstore.SessionStatusStopped); statusErr != nil {
+			if statusErr := s.sessionStore.UpdateSessionStatus(
+				cleanup,
+				sessionID,
+				sessionstore.SessionStatusStopped,
+			); statusErr != nil {
 				logger.Ctx(cleanup).Named("daemon.runner").Error("preserve_stopped_status", zap.Error(statusErr))
 			}
 		}
@@ -172,7 +189,13 @@ func (s *svc) restartPendingAfterExit(ctx context.Context, sessionID int64) {
 	}
 }
 
-func (s *svc) runSessionIteration(ctx context.Context, sessionID int64, rs runner, notify func(sessionevent.Notification), announced, publishIdle, errored *bool) (bool, bool) {
+func (s *svc) runSessionIteration(
+	ctx context.Context,
+	sessionID int64,
+	rs runner,
+	notify func(sessionevent.Notification),
+	announced, publishIdle, errored *bool,
+) (bool, bool) {
 	rec, err := s.sessionStore.GetSession(ctx, sessionID)
 	if err != nil {
 		return false, false
@@ -191,14 +214,16 @@ func (s *svc) runSessionIteration(ctx context.Context, sessionID int64, rs runne
 			return false, false
 		}
 	}
-	sess, err := s.createOrResumeSession(ctx, sessionID, info.WorkDir, rec, info.PreserveStopped)
+	sess, cleanup, err := s.createOrResumeSession(ctx, sessionID, info.WorkDir, rs, info.PreserveStopped)
 	if err != nil {
 		*errored = true
 		*publishIdle = idleEligible
 		s.reportSessionUnstarted(ctx, sessionID, notify, err)
 		return false, false
 	}
+	defer cleanup()
 	defer sess.Close()
+	defer rs.SetService(nil)
 	pending, err := s.pendingInputRunnable(ctx, sessionID)
 	if err != nil {
 		*errored = true
@@ -221,15 +246,9 @@ func (s *svc) runSessionIteration(ctx context.Context, sessionID int64, rs runne
 			return false, false
 		}
 	}
-	rs.SetService(sess)
 	if rec.ParentID == 0 {
 		s.wakeProgress()
 	}
-	s.registerScheduleTools(ctx, rec, sess)
-	s.registerSubagentTools(ctx, sessionID, sess)
-	s.registerMCPTools(ctx, rec, sess)
-	s.registerConfigEditTool(ctx, rec, sess)
-	s.registerBudgetTool(ctx, rec, sess)
 	rs.MarkRun()
 	result, runErr := sess.Run(ctx)
 	if result.BudgetFired && s.budgetSvc != nil {
@@ -250,6 +269,7 @@ func (s *svc) runSessionIteration(ctx context.Context, sessionID int64, rs runne
 		s.wakeProgress()
 	}
 	sess.Close()
+	cleanup()
 	if s.applier != nil {
 		unlock, lockErr := s.lockSessionTree(ctx, sessionID)
 		if lockErr != nil {
@@ -454,9 +474,16 @@ func (s *svc) settleStoppedCalls(ctx context.Context, sessionID int64) error {
 	if err != nil && !errors.Is(err, sessionstore.ErrActivationNotFound) {
 		return err
 	}
-	commit := sessionstore.Commit{SessionID: sessionID, Mode: sessionstore.CommitLifecycle, ToolResults: session.SettleResults(calls, "Stopped by user.")}
+	commit := sessionstore.Commit{
+		SessionID:   sessionID,
+		Mode:        sessionstore.CommitLifecycle,
+		ToolResults: session.SettleResults(calls, "Stopped by user."),
+	}
 	if activation != nil {
-		commit.Activation = &sessionstore.ActivationChange{InputID: activation.InputID, State: sessionstore.ActivationExpired}
+		commit.Activation = &sessionstore.ActivationChange{
+			InputID: activation.InputID,
+			State:   sessionstore.ActivationExpired,
+		}
 	}
 	_, err = s.runtimeStore.Commit(ctx, commit)
 	return err
@@ -469,7 +496,14 @@ func (s *svc) closeOrphanedCalls(ctx context.Context, rec *sessionstore.SessionR
 	if err != nil || len(calls) == 0 {
 		return 0, err
 	}
-	_, err = s.runtimeStore.Commit(ctx, sessionstore.Commit{SessionID: rec.ID, Mode: sessionstore.CommitLifecycle, ToolResults: session.SettleResults(calls, orphanedCallNotice(""))})
+	_, err = s.runtimeStore.Commit(
+		ctx,
+		sessionstore.Commit{
+			SessionID:   rec.ID,
+			Mode:        sessionstore.CommitLifecycle,
+			ToolResults: session.SettleResults(calls, orphanedCallNotice("")),
+		},
+	)
 	if err != nil {
 		return 0, err
 	}
@@ -604,19 +638,28 @@ func (s *svc) announceSession(
 	})
 }
 
-// interruptPendingSleeps resolves every exact sleep call before cancelling its
-// timer. Durable result first is load-bearing: if cancellation fails or the
-// daemon crashes, a later timer delivery is an idempotent no-op instead of a
-// sleeping session whose only wake-up was deleted.
-
 func (s *svc) createOrResumeSession(
 	ctx context.Context,
 	sessionID int64,
 	workDir string,
-	rec *sessionstore.SessionRecord,
+	rs runner,
 	preserveStopped bool,
-) (session.Service, error) {
-	return s.openSession(ctx, sessionID, workDir, rec, preserveStopped)
+) (*session.Session, func(), error) {
+	unlock, err := s.lockSessionTree(ctx, sessionID)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer unlock()
+	rec, err := s.sessionStore.GetSession(ctx, sessionID)
+	if err != nil {
+		return nil, nil, fmt.Errorf("load session before construction: %w", err)
+	}
+	sess, cleanup, err := s.openSession(ctx, sessionID, workDir, rec, preserveStopped)
+	if err != nil {
+		return nil, nil, err
+	}
+	rs.SetService(sess)
+	return sess, cleanup, nil
 }
 
 // isManagementSurface reports the service-topic role. Attributes cross JSON,
@@ -645,70 +688,48 @@ func (s *svc) openSession(
 	workDir string,
 	rec *sessionstore.SessionRecord,
 	preserveStopped bool,
-) (session.Service, error) {
+) (*session.Session, func(), error) {
 	externalCalls, err := s.pendingExternalCallsForSession(ctx, sessionID)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	repoRoot, err := s.sessionRepoRoot(ctx, rec)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
-	opts := session.CreateOptions{
-		ID:              sessionID,
-		WorkDir:         workDir,
-		Model:           rec.Model,
-		ProjectID:       rec.ProjectID,
-		AgentType:       rec.AgentType,
-		RootID:          rec.RootID,
-		ReasoningLevel:  rec.ReasoningLevel,
-		Iteration:       rec.Iteration,
-		TodoItems:       rec.TodoItems,
-		LastActivityAt:  rec.UpdatedAt,
-		ContextBaseline: rec.ContextBaseline(),
-		ResumeCompletionState: &sessionstore.CompletionCheckState{
-			CandidateID:         rec.CompletionCheckCandidateID,
-			ManagerReplyPending: rec.ManagerReplyPending,
-			EmptyStopStreak:     rec.EmptyStopStreak,
-		},
-		RepoRoot: repoRoot,
-
-		ExternalCalls: externalCalls,
-		Events:        &sessionEvents{daemon: s, sessionID: sessionID},
-
-		CompactionDeferAnnounced: s.deferNotices.announced(sessionID),
-		PreserveStoppedStatus:    preserveStopped,
-	}
+	in := s.buildInput
+	in.Record, in.WorkDir, in.RepoRoot = rec, workDir, repoRoot
+	in.ExternalCalls = externalCalls
+	in.Events = &sessionEvents{daemon: s, sessionID: sessionID}
+	in.CompactionDeferAnnounced = s.deferNotices.announced(sessionID)
+	in.PreserveStoppedStatus = preserveStopped
+	in.Loader = loader.New(in.MarketplaceCache)
 	schedules, schedulesErr := s.schedulesCommand(ctx, sessionID)
 	if schedulesErr != nil {
-		return nil, schedulesErr
+		return nil, nil, schedulesErr
 	}
-	opts.Schedules = schedules
+	in.Schedules = schedules
 
 	owner, _ := rec.Attributes[controllerapi.SessionAttributeManagerID].(string)
-	opts.OutputEnabled = rec.ParentID == 0 && owner != ""
-	opts.ActiveSubagents = s.activeSubagentInfos(ctx, sessionID)
-	opts.ActiveProcesses = s.activeProcessInfos(ctx, sessionID)
+	in.OutputEnabled = rec.ParentID == 0 && owner != ""
+	in.ActiveSubagents = s.activeSubagentInfos(ctx, sessionID)
+	in.ActiveProcesses = s.activeProcessInfos(ctx, sessionID)
 
 	// Subagents never carry the instruction: the attribute marks roots only,
 	// and a resumed root reattaches it through this same open path.
 	if rec.ParentID == 0 && isManagementSurface(rec.Attributes) {
 		skill, err := loader.BuiltinSkill(loader.ManagementSkillName)
 		if err != nil {
-			return nil, fmt.Errorf("load management skill: %w", err)
+			return nil, nil, fmt.Errorf("load management skill: %w", err)
 		}
 
-		opts.ExtraSkills = append(opts.ExtraSkills, skill)
+		in.ExtraSkills = append(in.ExtraSkills, skill)
 	}
 
-	sess, err := s.factory.Create(ctx, opts)
-	if err != nil {
-		return nil, fmt.Errorf("create session: %w", err)
-	}
-
-	return sess, nil
+	in.OwnerTools = s.ownerTools(rec, in.Loader)
+	return sessionbuild.Build(ctx, in)
 }
 
 // sessionRepoRoot follows the durable tree root because child session rows do
@@ -814,7 +835,7 @@ func (s *svc) pendingExternalCallsForSession(ctx context.Context, sessionID int6
 // activeSubagentInfos maps a session's pending (undelivered) child links to the
 // summary the session pins in its active-background prompt section. Empty for
 // a leaf session with no children.
-func (s *svc) activeSubagentInfos(ctx context.Context, sessionID int64) []session.ActiveSubagentInfo {
+func (s *svc) activeSubagentInfos(ctx context.Context, sessionID int64) []sessionprompt.ActiveSubagentInfo {
 	links, err := s.links.ListPendingChildLinks(ctx, sessionID)
 	if err != nil {
 		logger.Ctx(ctx).Named("daemon.runner").
@@ -827,9 +848,9 @@ func (s *svc) activeSubagentInfos(ctx context.Context, sessionID int64) []sessio
 		return nil
 	}
 
-	infos := make([]session.ActiveSubagentInfo, 0, len(links))
+	infos := make([]sessionprompt.ActiveSubagentInfo, 0, len(links))
 	for _, l := range links {
-		infos = append(infos, session.ActiveSubagentInfo{
+		infos = append(infos, sessionprompt.ActiveSubagentInfo{
 			ChildID:  l.ChildID,
 			Blocking: l.Blocking,
 			State:    string(l.State),
@@ -839,7 +860,7 @@ func (s *svc) activeSubagentInfos(ctx context.Context, sessionID int64) []sessio
 	return infos
 }
 
-func (s *svc) activeProcessInfos(ctx context.Context, sessionID int64) []session.ActiveProcessInfo {
+func (s *svc) activeProcessInfos(ctx context.Context, sessionID int64) []sessionprompt.ActiveProcessInfo {
 	if s.processStore == nil {
 		return nil
 	}
@@ -852,13 +873,13 @@ func (s *svc) activeProcessInfos(ctx context.Context, sessionID int64) []session
 		return nil
 	}
 
-	infos := make([]session.ActiveProcessInfo, 0, len(processes))
+	infos := make([]sessionprompt.ActiveProcessInfo, 0, len(processes))
 	for _, process := range processes {
 		if process.AdvertisedAt == nil {
 			continue
 		}
 
-		infos = append(infos, session.ActiveProcessInfo{ID: process.ID, OutputPath: process.OutputPath})
+		infos = append(infos, sessionprompt.ActiveProcessInfo{ID: process.ID, OutputPath: process.OutputPath})
 	}
 
 	sort.Slice(infos, func(i, j int) bool { return infos[i].ID < infos[j].ID })
@@ -891,80 +912,29 @@ func (s *svc) handleRunError(
 	notify(sessionevent.Notification{Type: sessionevent.NotifyMessage, Message: message})
 }
 
-// registerScheduleTools registers daemon-mode schedule and sleep tools on the session's live registry.
-func (s *svc) registerScheduleTools(
-	ctx context.Context,
-	rec *sessionstore.SessionRecord,
-	sess session.Service,
-) {
-	if s.scheduleSvc == nil {
-		return
+func (s *svc) ownerTools(rec *sessionstore.SessionRecord, ldr loader.Service) []tool.Tool {
+	tools := []tool.Tool{
+		subagent.NewTaskTool(subagent.Spawner(s), rec.ID, ldr, s.modelCatalog),
+		subagent.NewGetSubagentResultTool(subagent.Spawner(s)), subagent.NewSendToSubagentTool(subagent.Spawner(s)),
 	}
-
+	if s.scheduleSvc != nil {
+		if rec.ParentID == 0 {
+			tools = append(tools, schedule.NewScheduleTool(rec.ID, s.scheduleSvc, time.Local))
+		}
+		tools = append(tools, schedule.NewGuardedSleepTool(s.scheduleSvc, rec.ID, s.modelInputs))
+	}
 	if rec.ParentID == 0 {
-		registerLogged(ctx, sess, schedule.NewScheduleTool(rec.ID, s.scheduleSvc, time.Local))
-	}
-
-	registerLogged(
-		ctx,
-		sess,
-		s.guardSleepWhileBackgroundPending(rec.ID, schedule.NewSleepTool(s.scheduleSvc, rec.ID)),
-	)
-}
-
-// registerMCPTools registers the MCP registry tools. Root sessions only: a
-// subagent must not reshape the toolset its parent will run with.
-func (s *svc) registerMCPTools(ctx context.Context, rec *sessionstore.SessionRecord, sess session.Service) {
-	if s.mcpStore == nil || rec.ParentID != 0 {
-		return
-	}
-
-	onChange := func(project *int64) {
-		var projectID int64
-		if project != nil {
-			projectID = *project
+		if s.mcpStore != nil {
+			tools = append(tools, mcpstore.NewTools(s.mcpStore, rec.ProjectID)...)
 		}
-
-		if err := session.InvalidateToolResources(s.factory, projectID); err != nil {
-			logger.Ctx(ctx).Warn("invalidate_mcp_resources", zap.Error(err))
+		if s.applier != nil {
+			tools = append(tools, configapply.NewConfigEdit(rec.ID, s.applier))
+		}
+		if s.budgetSvc != nil {
+			tools = append(tools, budget.NewTool(budget.Store(s.modelInputs), rec.ID, s.modelHasPricing(rec.Model)))
 		}
 	}
-	for _, t := range newMCPTools(s.mcpStore, rec.ProjectID, onChange) {
-		registerLogged(ctx, sess, t)
-	}
-}
-
-// registerConfigEditTool registers the /config-gated full-document editing tool
-// on every root session with an applier. Subagents are excluded: they cannot
-// acquire a manager-owned activation grant, and the tool must not be reachable
-// from them at all.
-func (s *svc) registerConfigEditTool(ctx context.Context, rec *sessionstore.SessionRecord, sess session.Service) {
-	if s.applier != nil && rec.ParentID == 0 {
-		registerLogged(ctx, sess, configapply.NewConfigEdit(rec.ID, s.applier))
-	}
-}
-
-func (s *svc) registerSubagentTools(ctx context.Context, sessionID int64, sess session.Service) {
-	var skills loader.SkillCatalog
-	if catalog, ok := sess.(interface{ SkillCatalog() loader.SkillCatalog }); ok {
-		skills = catalog.SkillCatalog()
-	}
-
-	for _, t := range []tool.Tool{
-		newTaskTool(s, sessionID, sess.AgentTypes(), s.modelCatalog, skills),
-		newGetSubagentResultTool(s),
-		newSendToSubagentTool(s),
-	} {
-		registerLogged(ctx, sess, t)
-	}
-}
-
-// registerLogged registers t on sess, logging at Debug when the session's
-// agent-type allowlist rejected it.
-func registerLogged(ctx context.Context, sess session.Service, t tool.Tool) {
-	if !sess.RegisterGatedTool(t) {
-		logger.Ctx(ctx).Debug("tool_gated_out", zap.String("tool_id", t.ID()))
-	}
+	return tools
 }
 
 func (s *svc) ensureRunner(
@@ -1023,7 +993,8 @@ func validateRunnerStart(rec *sessionstore.SessionRecord, preserveStopped bool) 
 	if rec.KilledAt != nil || rec.Status == sessionstore.SessionStatusKilled {
 		return fmt.Errorf("session %d is killed", rec.ID)
 	}
-	if rec.Status == sessionstore.SessionStatusStopping || rec.Status == sessionstore.SessionStatusTerminating || (rec.Status == sessionstore.SessionStatusStopped && !preserveStopped) {
+	if rec.Status == sessionstore.SessionStatusStopping || rec.Status == sessionstore.SessionStatusTerminating ||
+		(rec.Status == sessionstore.SessionStatusStopped && !preserveStopped) {
 		return fmt.Errorf("session %d is %s", rec.ID, rec.Status)
 	}
 	return nil

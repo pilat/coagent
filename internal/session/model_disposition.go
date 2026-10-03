@@ -5,18 +5,32 @@ import (
 	"strings"
 
 	"github.com/pilat/coagent/internal/llmwire"
+	"github.com/pilat/coagent/internal/sessionprompt"
 	"github.com/pilat/coagent/internal/sessionstore"
 	"github.com/pilat/coagent/internal/transcript"
 )
 
-func prepareToolResponse(r *runState, c *sessionstore.Commit, response *llmwire.Response, state *sessionstore.CompletionCheckState) {
+func prepareToolResponse(
+	r *runState,
+	c *sessionstore.Commit,
+	response *llmwire.Response,
+	state *sessionstore.CompletionCheckState,
+) {
 	c.State.Candidate = &sessionstore.CandidateChange{Expected: durableCandidateID(state), NextRef: -1}
 	if r.directReply && strings.TrimSpace(response.Text) != "" {
-		c.Unfired.Outputs = []sessionstore.Output{{Type: sessionstore.OutputMessagePersistent, Content: response.Text, MessageRef: 0, Phase: "reply"}}
+		c.Unfired.Outputs = []sessionstore.Output{
+			{Type: sessionstore.OutputMessagePersistent, Content: response.Text, MessageRef: 0, Phase: "reply"},
+		}
 	}
 }
 
-func (s *svc) prepareStopResponse(r *runState, c *sessionstore.Commit, response *llmwire.Response, state *sessionstore.CompletionCheckState, wake bool) {
+func (s *Session) prepareStopResponse(
+	r *runState,
+	c *sessionstore.Commit,
+	response *llmwire.Response,
+	state *sessionstore.CompletionCheckState,
+	wake bool,
+) {
 	reply := state != nil && state.ManagerReplyPending
 	if wake {
 		s.finalParts(c, response.Text, reply, true)
@@ -31,7 +45,9 @@ func (s *svc) prepareStopResponse(r *runState, c *sessionstore.Commit, response 
 	candidate := durableCandidateID(state)
 	if candidate == 0 {
 		c.Unfired.State.Candidate = &sessionstore.CandidateChange{Expected: 0, NextRef: 0}
-		c.Unfired.Messages = []*transcript.Message{hostUserMessage(renderCompletionNudge(s.todoStore.List()))}
+		c.Unfired.Messages = []*transcript.Message{
+			hostUserMessage(sessionprompt.RenderCompletionNudge(s.prompt.Todos.List())),
+		}
 		return
 	}
 	c.State.Candidate = &sessionstore.CandidateChange{Expected: candidate, NextRef: -1}
@@ -64,12 +80,15 @@ func prepareEmptyStop(r *runState, c *sessionstore.Commit, state *sessionstore.C
 	}
 	nudge := "You returned an empty response with no tool calls. Please continue working on the task, or explain what you need."
 	if next == emptyResponseWarnThreshold {
-		nudge = fmt.Sprintf("[AUTOMATED WARNING: You have returned %d consecutive empty responses (no text, no tool calls). You MUST either use a tool or respond with text. If you cannot proceed, explain why.]", next)
+		nudge = fmt.Sprintf(
+			"[AUTOMATED WARNING: You have returned %d consecutive empty responses (no text, no tool calls). You MUST either use a tool or respond with text. If you cannot proceed, explain why.]",
+			next,
+		)
 	}
 	c.Unfired.Messages = []*transcript.Message{hostUserMessage(nudge)}
 }
 
-func (s *svc) prepareProjectionError(r *runState, c *sessionstore.Commit, cause error) {
+func (s *Session) prepareProjectionError(r *runState, c *sessionstore.Commit, cause error) {
 	status := sessionstore.SessionStatusError
 	c.Unfired.State.Status = &status
 	c.Unfired.Outputs = []sessionstore.Output{{
@@ -81,7 +100,7 @@ func (s *svc) prepareProjectionError(r *runState, c *sessionstore.Commit, cause 
 	r.terminalState = true
 }
 
-func (s *svc) finalParts(c *sessionstore.Commit, text string, reply, yield bool) {
+func (s *Session) finalParts(c *sessionstore.Commit, text string, reply, yield bool) {
 	if strings.TrimSpace(text) == "" {
 		return
 	}
@@ -89,7 +108,16 @@ func (s *svc) finalParts(c *sessionstore.Commit, text string, reply, yield bool)
 	if reply {
 		kind = sessionstore.OutputMessagePersistent
 	}
-	c.Unfired.Outputs = []sessionstore.Output{{Type: kind, Content: text, MessageRef: 0, Phase: "final", ReleasesInput: true, FinalFooter: &sessionstore.Footer{BackgroundYield: yield}}}
+	c.Unfired.Outputs = []sessionstore.Output{
+		{
+			Type:          kind,
+			Content:       text,
+			MessageRef:    0,
+			Phase:         "final",
+			ReleasesInput: true,
+			FinalFooter:   &sessionstore.Footer{BackgroundYield: yield},
+		},
+	}
 	no := false
 	c.Unfired.State.ManagerReplyPending = &no
 }

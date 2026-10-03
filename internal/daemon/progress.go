@@ -107,14 +107,13 @@ func (s *svc) liveContextProjection(ctx context.Context, rootID int64) (progress
 		return progress.Context{}, false
 	}
 
-	provider, ok := service.(interface {
-		ContextProjection(context.Context) progress.Context
-	})
-	if !ok {
-		return progress.Context{}, false
-	}
-
-	return provider.ContextProjection(ctx), true
+	projection := service.ContextProjection(ctx)
+	return progress.Context{
+		Used:        projection.Used,
+		Max:         projection.Max,
+		Approximate: projection.Approximate,
+		Available:   projection.Available,
+	}, true
 }
 
 func (s *svc) mainModelWorking(rootID int64) bool {

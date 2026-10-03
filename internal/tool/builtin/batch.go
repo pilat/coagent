@@ -12,7 +12,6 @@ import (
 	"github.com/pilat/coagent/internal/llmwire"
 	"github.com/pilat/coagent/internal/logger"
 	"github.com/pilat/coagent/internal/tool"
-	"github.com/pilat/coagent/internal/toolexec"
 )
 
 // The description states the actual scheduling contract: parallel-safe tools
@@ -46,20 +45,6 @@ type (
 
 	BatchTool struct {
 		registry tool.Registry
-	}
-
-	// nestedToolCall pairs one batch entry with the registry instance resolved
-	// for it, so classification and execution cannot observe different registry
-	// states.
-	nestedToolCall struct {
-		call BatchCall
-		tool tool.Tool
-	}
-
-	// nestedResult carries one nested call's raw result; it is nil for calls
-	// that failed without producing a typed payload.
-	nestedResult struct {
-		result *tool.Result
 	}
 )
 
@@ -121,50 +106,19 @@ func (t *BatchTool) Execute(ctx context.Context, params json.RawMessage) (*tool.
 
 	// Resolve each nested tool once: classification and execution see the
 	// same registry view the batch was served from.
-	calls := make([]toolexec.Call[nestedToolCall], len(p.Calls))
+	calls := make([]tool.Call, len(p.Calls))
 	for i, call := range p.Calls {
-		tl := t.registry.Get(call.Tool)
-
-		calls[i] = toolexec.Call[nestedToolCall]{
-			Call: nestedToolCall{
-				call: call,
-				tool: tl,
-			},
-			ParallelSafe: tl != nil && tl.ParallelSafe(),
+		calls[i] = tool.Call{Tool: t.registry.Get(call.Tool), Name: call.Tool, Arguments: call.Params}
+	}
+	report := tool.Schedule(ctx, calls)
+	// A batch cannot transfer a nested call's ownership to its outer call ID.
+	for i := range report.Results {
+		if report.Results[i].Outcome == tool.OutcomeSuspended {
+			report.Results[i].Outcome = tool.OutcomeFailed
+			report.Summary.Suspended--
+			report.Summary.Failed++
 		}
 	}
-
-	exec := func(callCtx context.Context, _ int, nc nestedToolCall) toolexec.Invocation[nestedResult] {
-		// Validation rejects unknown tools before planning; the nil guard
-		// keeps the executor contract honest if a registry view changes anyway.
-		if nc.tool == nil {
-			return nestedFailure(fmt.Errorf("unknown tool %q", nc.call.Tool))
-		}
-
-		result, err := nc.tool.Execute(callCtx, nc.call.Params)
-		if err != nil {
-			// Nested calls never carry pending-external semantics through the
-			// outer ID: a suspend attempt is an ordinary nested failure.
-			return nestedFailure(fmt.Errorf("execute %s: %w", nc.call.Tool, err))
-		}
-
-		if result == nil {
-			return nestedFailure(fmt.Errorf("execute %s: tool returned nil result", nc.call.Tool))
-		}
-
-		inv := toolexec.Invocation[nestedResult]{
-			Outcome: toolexec.OutcomeExecuted,
-			Result:  nestedResult{result: result},
-		}
-
-		if result.IsError {
-			inv.Outcome = toolexec.OutcomeFailed
-		}
-
-		return inv
-	}
-
-	report := toolexec.Schedule(ctx, calls, exec)
 
 	log := logger.Ctx(ctx).Named("tool.batch")
 	log.Info("tool_schedule",
@@ -179,13 +133,6 @@ func (t *BatchTool) Execute(ctx context.Context, params json.RawMessage) (*tool.
 	)
 
 	return t.formatResult(p.Calls, report), nil
-}
-
-func nestedFailure(err error) toolexec.Invocation[nestedResult] {
-	return toolexec.Invocation[nestedResult]{
-		Outcome: toolexec.OutcomeFailed,
-		Err:     err,
-	}
 }
 
 func (t *BatchTool) validateCalls(calls []BatchCall) error {
@@ -235,7 +182,7 @@ func (t *BatchTool) validateCalls(calls []BatchCall) error {
 // calls fabricate neither. Any nested external provenance marks the combined
 // result external: after truncation the outer formatter cannot protect only one
 // segment of the rendered payload.
-func (t *BatchTool) formatResult(calls []BatchCall, report toolexec.Report[nestedResult]) *tool.Result {
+func (t *BatchTool) formatResult(calls []BatchCall, report tool.Report) *tool.Result {
 	var output strings.Builder
 
 	direct := make([]string, 0)
@@ -254,9 +201,9 @@ func (t *BatchTool) formatResult(calls []BatchCall, report toolexec.Report[neste
 		fmt.Fprintf(&output, "=== %s (call %d) ===\n", call.Tool, r.Index+1)
 
 		switch r.Outcome {
-		case toolexec.OutcomeExecuted, toolexec.OutcomeFailed:
-			if r.Result.result != nil {
-				result := r.Result.result
+		case tool.OutcomeExecuted, tool.OutcomeFailed:
+			if r.Result != nil {
+				result := r.Result
 
 				if result.Title != "" {
 					fmt.Fprintf(&output, "[%s]\n", result.Title)
@@ -274,7 +221,7 @@ func (t *BatchTool) formatResult(calls []BatchCall, report toolexec.Report[neste
 
 				direct = append(direct, result.DirectMessages...)
 
-				if r.Outcome == toolexec.OutcomeExecuted {
+				if r.Outcome == tool.OutcomeExecuted {
 					successCount++
 				} else {
 					errorCount++
@@ -288,11 +235,11 @@ func (t *BatchTool) formatResult(calls []BatchCall, report toolexec.Report[neste
 			fmt.Fprintf(&output, "Error: %v\n", r.Err)
 
 			errorCount++
-		case toolexec.OutcomeSkipped, toolexec.OutcomeCancelled:
+		case tool.OutcomeSkipped, tool.OutcomeCancelled:
 			fmt.Fprintf(&output, "Error: %v\n", r.Err)
 
 			errorCount++
-		case toolexec.OutcomeSuspended:
+		case tool.OutcomeSuspended:
 			// Validation rejects suspending tools, so this is unreachable
 			// today; if it ever happens the call must not vanish silently.
 			fmt.Fprintf(&output, "Error: %v\n", r.Err)

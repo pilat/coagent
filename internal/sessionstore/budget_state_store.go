@@ -11,7 +11,9 @@ import (
 	"github.com/pilat/coagent/internal/budget"
 )
 
-func (s *store) GetBudget(ctx context.Context, rootID int64) (*budget.Record, error) {
+var _ budget.Store = (*store)(nil)
+
+func (s *store) Get(ctx context.Context, rootID int64) (*budget.Record, error) {
 	record, err := scanBudget(s.db.QueryRowContext(ctx, budgetSelect+` WHERE root_session_id = ?`, rootID))
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, budget.ErrNotFound
@@ -24,7 +26,7 @@ func (s *store) GetBudget(ctx context.Context, rootID int64) (*budget.Record, er
 	return record, nil
 }
 
-func (s *store) ArmBudget(
+func (s *store) Arm(
 	ctx context.Context,
 	mutation budget.Mutation,
 ) (*budget.Record, error) {
@@ -84,8 +86,10 @@ func (s *store) ArmBudget(
 		return nil, err
 	}
 
-	_, err = insertOutputTx(ctx, tx, OutputDraft{SessionID: mutation.RootSessionID, Type: OutputMessagePersistent, Content: mutation.Receipt,
-		SourceKey: fmt.Sprintf("tool:%s:direct:0", mutation.ToolCallID)}, CommitLoop)
+	_, err = insertOutputTx(ctx, tx, OutputDraft{
+		SessionID: mutation.RootSessionID, Type: OutputMessagePersistent, Content: mutation.Receipt,
+		SourceKey: fmt.Sprintf("tool:%s:direct:0", mutation.ToolCallID),
+	}, CommitLoop)
 	if err != nil {
 		return nil, err
 	}
@@ -94,12 +98,12 @@ func (s *store) ArmBudget(
 		return nil, fmt.Errorf("commit arm budget: %w", err)
 	}
 
-	record, err := s.GetBudget(ctx, mutation.RootSessionID)
+	record, err := s.Get(ctx, mutation.RootSessionID)
 
 	return record, err
 }
 
-func (s *store) ClearBudget(
+func (s *store) Clear(
 	ctx context.Context,
 	mutation budget.Mutation,
 ) (*budget.Record, error) {
@@ -161,8 +165,10 @@ func (s *store) ClearBudget(
 		return nil, err
 	}
 
-	_, err = insertOutputTx(ctx, tx, OutputDraft{SessionID: mutation.RootSessionID, Type: OutputMessagePersistent, Content: mutation.Receipt,
-		SourceKey: fmt.Sprintf("tool:%s:direct:0", mutation.ToolCallID)}, CommitLoop)
+	_, err = insertOutputTx(ctx, tx, OutputDraft{
+		SessionID: mutation.RootSessionID, Type: OutputMessagePersistent, Content: mutation.Receipt,
+		SourceKey: fmt.Sprintf("tool:%s:direct:0", mutation.ToolCallID),
+	}, CommitLoop)
 	if err != nil {
 		return nil, err
 	}
@@ -171,7 +177,7 @@ func (s *store) ClearBudget(
 		return nil, fmt.Errorf("commit clear budget: %w", err)
 	}
 
-	record, err := s.GetBudget(ctx, mutation.RootSessionID)
+	record, err := s.Get(ctx, mutation.RootSessionID)
 
 	return record, err
 }
@@ -245,8 +251,10 @@ func replayBudgetMutation(
 		return nil, nil, fmt.Errorf("load replayed budget: %w", err)
 	}
 
-	commit, err := insertOutputTx(ctx, tx, OutputDraft{SessionID: mutation.RootSessionID, Type: OutputMessagePersistent, Content: mutation.Receipt,
-		SourceKey: fmt.Sprintf("tool:%s:direct:0", mutation.ToolCallID)}, CommitLoop)
+	commit, err := insertOutputTx(ctx, tx, OutputDraft{
+		SessionID: mutation.RootSessionID, Type: OutputMessagePersistent, Content: mutation.Receipt,
+		SourceKey: fmt.Sprintf("tool:%s:direct:0", mutation.ToolCallID),
+	}, CommitLoop)
 	if err != nil {
 		return nil, nil, err
 	}

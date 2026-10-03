@@ -42,14 +42,7 @@ type todoWriteTool struct {
 }
 
 type TodoReplacement interface {
-	ReplaceTodo(ctx context.Context, callID string, items []TodoReplacementItem) ([]*todo.Item, error)
-}
-
-type TodoReplacementItem struct {
-	ID       *string
-	Content  string
-	Status   todo.Status
-	Priority todo.Priority
+	ReplaceTodo(ctx context.Context, callID string, items []todo.ReplacementItem) ([]*todo.Item, error)
 }
 
 func newTodoWriteTool(store todo.Service, replace TodoReplacement) *todoWriteTool {
@@ -103,9 +96,9 @@ func (t *todoWriteTool) Execute(ctx context.Context, params json.RawMessage) (*t
 		return nil, fmt.Errorf("invalid parameters: %w", err)
 	}
 
-	replacements := make([]TodoReplacementItem, len(p.Items))
+	replacements := make([]todo.ReplacementItem, len(p.Items))
 	for i, item := range p.Items {
-		replacements[i] = TodoReplacementItem{
+		replacements[i] = todo.ReplacementItem{
 			ID:       item.ID,
 			Content:  item.Content,
 			Status:   todo.Status(item.Status),

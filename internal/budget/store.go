@@ -6,9 +6,13 @@ import (
 )
 
 type Store interface {
-	GetBudget(context.Context, int64) (*Record, error)
-	ArmBudget(context.Context, Mutation) (*Record, error)
-	ClearBudget(context.Context, Mutation) (*Record, error)
+	Get(context.Context, int64) (*Record, error)
+	Arm(context.Context, Mutation) (*Record, error)
+	Clear(context.Context, Mutation) (*Record, error)
+}
+
+type PolicyStore interface {
+	Store
 	ObserveBudget(context.Context, int64, time.Time, string) (*Record, bool, error)
 	ReleaseBudget(context.Context, int64, int64, string) (*Record, error)
 	BeginBudgetDrain(context.Context, int64, int64, string) (*Record, error)

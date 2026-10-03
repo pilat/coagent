@@ -1,4 +1,4 @@
-package daemon
+package mcpstore
 
 import (
 	"encoding/json"
@@ -7,7 +7,6 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/pilat/coagent/internal/mcpstore"
 	"github.com/pilat/coagent/internal/tool"
 )
 
@@ -47,7 +46,7 @@ func (d mcpDeps) parseNameScope(params json.RawMessage) (mcpNameParams, mcpScope
 
 // writeServerSection renders one scope. Env keys only — a value could be a token
 // a user pasted despite the ${VAR} guidance.
-func writeServerSection(b *strings.Builder, title string, defs []mcpstore.ServerDef) {
+func writeServerSection(b *strings.Builder, title string, defs []ServerDef) {
 	fmt.Fprintf(b, "%s:\n", title)
 
 	if len(defs) == 0 {

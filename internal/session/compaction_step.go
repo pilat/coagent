@@ -18,7 +18,7 @@ const compactionNotConvergingNotice = "⚠️ Context window too small for this 
 //
 //nolint:gocyclo,nestif,funlen // Explicit compaction has a durable start, terminal outcome, and auto-path fallback.
 
-func (s *svc) compactionStep(ctx context.Context, r *runState) error {
+func (s *Session) compactionStep(ctx context.Context, r *runState) error {
 	if s.HasPendingExternalCall() || len(s.pendingInLoopCalls()) > 0 {
 		return nil
 	}
@@ -35,12 +35,19 @@ func (s *svc) compactionStep(ctx context.Context, r *runState) error {
 	if fired {
 		s.budgetFired = true
 		if command != nil {
-			return s.finishCompactionCommand(ctx, *command, "parked", "⏸ Budget checkpoint reached — the session is parked. Send a message to resume.")
+			return s.finishCompactionCommand(
+				ctx,
+				*command,
+				"parked",
+				"⏸ Budget checkpoint reached — the session is parked. Send a message to resume.",
+			)
 		}
 		return nil
 	}
 	c := s.newCommit()
-	c.Outputs = []sessionstore.Output{{Type: sessionstore.OutputMessageReplaceable, Content: "🔄 Compacting context...", MessageRef: -1}}
+	c.Outputs = []sessionstore.Output{
+		{Type: sessionstore.OutputMessageReplaceable, Content: "🔄 Compacting context...", MessageRef: -1},
+	}
 	if command != nil {
 		c.Outputs[0].Key = fmt.Sprintf("input:%d:compact:started", command.ID)
 	}
@@ -67,14 +74,21 @@ func (s *svc) compactionStep(ctx context.Context, r *runState) error {
 	}
 	if command != nil {
 		if !ok {
-			if err := s.finishCompactionCommand(ctx, *command, compactionOutcomePhase(ok, compactErr), terminal); err != nil {
+			if err := s.finishCompactionCommand(
+				ctx,
+				*command,
+				compactionOutcomePhase(ok, compactErr),
+				terminal,
+			); err != nil {
 				return err
 			}
 		}
 		s.clearCompactionCommandInput()
 	} else if terminal != "" {
 		c := s.newCommit()
-		c.Outputs = []sessionstore.Output{{Type: sessionstore.OutputMessagePersistent, Content: terminal, MessageRef: -1}}
+		c.Outputs = []sessionstore.Output{
+			{Type: sessionstore.OutputMessagePersistent, Content: terminal, MessageRef: -1},
+		}
 		if ok {
 			c.Outputs[0].Key = fmt.Sprintf("compaction:%d:succeeded", s.compactionSummaryDBID)
 		}
@@ -91,7 +105,9 @@ func (s *svc) compactionStep(ctx context.Context, r *runState) error {
 		if r.compactionFailures >= compactionAttemptCap {
 			r.autoCompactionOff = true
 			c := s.newCommit()
-			c.Outputs = []sessionstore.Output{{Type: sessionstore.OutputMessagePersistent, Content: compactionNotConvergingNotice, MessageRef: -1}}
+			c.Outputs = []sessionstore.Output{
+				{Type: sessionstore.OutputMessagePersistent, Content: compactionNotConvergingNotice, MessageRef: -1},
+			}
 			if _, err := s.commit(ctx, c); err != nil {
 				return err
 			}
@@ -99,6 +115,7 @@ func (s *svc) compactionStep(ctx context.Context, r *runState) error {
 	}
 	return nil
 }
+
 func compactionOutcomePhase(ok bool, err error) string {
 	if ok {
 		return "succeeded"
@@ -111,10 +128,20 @@ func compactionOutcomePhase(ok bool, err error) string {
 	return "failed"
 }
 
-func (s *svc) finishCompactionCommand(ctx context.Context, input PendingInput, phase, content string) error {
+func (s *Session) finishCompactionCommand(ctx context.Context, input PendingInput, phase, content string) error {
 	c := s.newCommit()
-	c.Accept = []sessionstore.Accept{{InputID: input.ID, State: sessionstore.InputStateHandled, Reason: "compact command", LinkRef: -1}}
-	c.Outputs = []sessionstore.Output{{Type: sessionstore.OutputMessagePersistent, Content: content, Key: fmt.Sprintf("input:%d:compact:%s", input.ID, phase), MessageRef: -1, ReleasesInput: true}}
+	c.Accept = []sessionstore.Accept{
+		{InputID: input.ID, State: sessionstore.InputStateHandled, Reason: "compact command", LinkRef: -1},
+	}
+	c.Outputs = []sessionstore.Output{
+		{
+			Type:          sessionstore.OutputMessagePersistent,
+			Content:       content,
+			Key:           fmt.Sprintf("input:%d:compact:%s", input.ID, phase),
+			MessageRef:    -1,
+			ReleasesInput: true,
+		},
+	}
 	_, err := s.commit(ctx, c)
 	return err
 }

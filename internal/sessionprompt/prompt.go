@@ -1,4 +1,4 @@
-package session
+package sessionprompt
 
 import (
 	"context"
@@ -6,13 +6,13 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/pilat/coagent/internal/git"
 	"github.com/pilat/coagent/internal/loader"
 	"github.com/pilat/coagent/internal/memory"
+	"github.com/pilat/coagent/internal/todo"
 	"github.com/pilat/coagent/internal/tool"
-	"github.com/pilat/coagent/internal/tool/builtin"
 )
 
-// Tool-name constants for the dynamic tool inventory rendered in the system prompt.
 const (
 	batchToolName     = "batch"
 	readToolName      = "read"
@@ -23,7 +23,6 @@ const (
 	websearchToolName = "websearch"
 )
 
-// toolCategories defines the order and grouping for the dynamic tool inventory.
 var toolCategories = []struct {
 	Name  string
 	Tools []string
@@ -64,9 +63,7 @@ var toolDescriptions = map[string]string{
 	tool.IDCancelProcess:  "stop an owned background process",
 }
 
-// knownSearchMCPs lists MCP server config keys known to provide web search.
-// When a registered tool ID starts with "mcp__{key}__" and contains "search",
-// web search guidance is emitted in the dynamic prompt.
+// Known search-server keys let tool discovery enable search guidance.
 var knownSearchMCPs = []string{
 	"tavily",
 	"brave-search",
@@ -78,9 +75,11 @@ var knownSearchMCPs = []string{
 	"firecrawl",
 }
 
-// promptBuilder encapsulates the system prompt assembly: static base + dynamic sections.
-// Thread-safe — the agent loop reads systemPrompt() while model switches update it.
-type promptBuilder struct {
+// Builder synchronizes prompt reads with model and tool-inventory updates.
+type Builder struct {
+	GitClient           git.Client
+	WorkDir             string
+	Todos               todo.Service
 	mu                  sync.RWMutex
 	basePrompt          string
 	activeSkillsSection string
@@ -88,25 +87,23 @@ type promptBuilder struct {
 	skillsSection       string
 	subagentsSection    string
 	modelsSection       string
-	// nativeSearch reports whether the active model's driver supplies search
-	// natively. It follows the model triplet and only feeds prompt wording.
-	nativeSearch bool
+	nativeSearch        bool
 }
 
-func newPromptBuilder(
+// NewBuilder assembles the base prompt and instructions active before tool discovery.
+func NewBuilder(
 	basePrompt, modelsSection string,
 	activeSkills ...*loader.Skill,
-) *promptBuilder {
-	return &promptBuilder{
+) *Builder {
+	return &Builder{
 		basePrompt:          basePrompt,
 		activeSkillsSection: buildActiveSkillsSection(activeSkills),
 		modelsSection:       modelsSection,
 	}
 }
 
-// systemPrompt returns the full system prompt, combining static base with dynamic sections.
-// Safe to call from any goroutine — used as a callback by the agent loop.
-func (p *promptBuilder) systemPrompt() string {
+// SystemPrompt returns a consistent snapshot of every prompt section.
+func (p *Builder) SystemPrompt() string {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 
@@ -114,8 +111,157 @@ func (p *promptBuilder) systemPrompt() string {
 		p.modelsSection
 }
 
-// buildActiveSkillsSection embeds daemon-selected instructions directly in the
-// system prompt. Unlike the skills inventory, these require no model tool call.
+// SetSkillsSection replaces the model-invocable skills inventory.
+func (p *Builder) SetSkillsSection(section string) {
+	p.mu.Lock()
+	p.skillsSection = section
+	p.mu.Unlock()
+}
+
+// SetSubagentsSection replaces the spawnable-subagents inventory.
+func (p *Builder) SetSubagentsSection(section string) {
+	p.mu.Lock()
+	p.subagentsSection = section
+	p.mu.Unlock()
+}
+
+// SetNativeSearch records search availability before the initial tool-inventory build.
+func (p *Builder) SetNativeSearch(active bool) {
+	p.mu.Lock()
+	p.nativeSearch = active
+	p.mu.Unlock()
+}
+
+// SetModelSearch atomically replaces search availability and tool guidance.
+// A nil registry leaves both unchanged.
+func (p *Builder) SetModelSearch(reg tool.Registry, native bool) {
+	p.mu.Lock()
+
+	if reg != nil {
+		p.nativeSearch = native
+		p.toolsSection = buildToolsSection(reg, native)
+	}
+
+	p.mu.Unlock()
+}
+
+// RefreshToolsSection rebuilds the inventory against a consistent search policy.
+func (p *Builder) RefreshToolsSection(reg tool.Registry) {
+	p.mu.Lock()
+	p.toolsSection = buildToolsSection(reg, p.nativeSearch)
+	p.mu.Unlock()
+}
+
+// SetModelsSection replaces the model identity shown in the system prompt.
+func (p *Builder) SetModelsSection(section string) {
+	p.mu.Lock()
+	p.modelsSection = section
+	p.mu.Unlock()
+}
+
+// BuildMemoriesSection formats curated memories for persisted opening context.
+func BuildMemoriesSection(ctx context.Context, store memory.CuratedStore, projectID int64) string {
+	memories, err := store.ListMemoryTexts(ctx, projectID)
+	if err != nil || len(memories) == 0 {
+		return ""
+	}
+	var sb strings.Builder
+	sb.WriteString("\n\n# YOUR MEMORIES\nPer-project memories. Manage with memory_save / memory_delete.\n\n")
+
+	// The id is the only handle memory_delete accepts; without it the model guesses.
+	for _, m := range memories {
+		fmt.Fprintf(&sb, "- [%d] %s\n", m.ID, m.Text)
+	}
+
+	return sb.String()
+}
+
+// BuildModelsSection records the inherited model without duplicating task's
+// tagged-candidate policy into the general system prompt.
+func BuildModelsSection(currentModel string) string {
+	return "\n- Model: " + currentModel
+}
+
+// BuildSkillsSection lists skills the model can invoke.
+func BuildSkillsSection(ldr loader.Registry) string {
+	skills := ldr.ListModelInvocableSkills()
+
+	if len(skills) == 0 {
+		return ""
+	}
+
+	var b strings.Builder
+
+	b.WriteString("\n\n## Available Skills\nYou can invoke these skills using the 'skill' tool:\n")
+
+	for _, sk := range skills {
+		fmt.Fprintf(&b, "- **%s**", sk.Name)
+
+		if description := sk.AnnouncementDescription(); description != "" {
+			fmt.Fprintf(&b, ": %s", description)
+		}
+
+		b.WriteString("\n")
+	}
+
+	return b.String()
+}
+
+// BuildActiveBackgroundSection keeps live process and subagent context across compaction.
+func BuildActiveBackgroundSection(processes []ActiveProcessInfo, links []ActiveSubagentInfo) string {
+	if len(processes) == 0 && len(links) == 0 {
+		return ""
+	}
+
+	var b strings.Builder
+	b.WriteString(BackgroundSectionMarker)
+	b.WriteString(
+		"Snapshot from activation start: these processes and subagents were running or awaiting result delivery. " +
+			"Later Bash, task, cancellation, and completion observations take precedence. " +
+			"Their result arrives automatically in a later turn; do not use timers to poll. " +
+			"Continue useful independent work; when none remains, briefly report what is still running and end the response.\n",
+	)
+
+	for _, process := range processes {
+		fmt.Fprintf(&b, "- process %s (running): output %s\n", process.ID, process.OutputPath)
+	}
+
+	for _, l := range links {
+		kind := "background"
+		if l.Blocking {
+			kind = "blocking"
+		}
+
+		fmt.Fprintf(&b, "- #%d (%s): %s\n", l.ChildID, kind, l.State)
+	}
+
+	return b.String()
+}
+
+// BuildSubagentsSection lists spawnable subagent definitions.
+func BuildSubagentsSection(ldr loader.Registry) string {
+	subagents := ldr.ListSubagents()
+	if len(subagents) == 0 {
+		return ""
+	}
+
+	var b strings.Builder
+	b.WriteString("\n## Available Subagents\nYou can spawn these subagents using the 'task' tool:\n")
+
+	for _, sa := range subagents {
+		fmt.Fprintf(&b, "- **%s**", sa.Name)
+
+		if sa.Description != "" {
+			fmt.Fprintf(&b, ": %s", sa.Description)
+		}
+
+		b.WriteString("\n")
+	}
+
+	return b.String()
+}
+
+// Injected skills are active instructions and need no model tool call.
 func buildActiveSkillsSection(skills []*loader.Skill) string {
 	if len(skills) == 0 {
 		return ""
@@ -131,59 +277,12 @@ func buildActiveSkillsSection(skills []*loader.Skill) string {
 			section.WriteString("\n\n")
 		}
 
-		section.WriteString(builtin.RenderSkill(skill, ""))
+		section.WriteString(loader.RenderSkillInvocation(skill, ""))
 	}
 
 	return section.String()
 }
 
-// setSkillsSection replaces the model-invocable skills inventory.
-func (p *promptBuilder) setSkillsSection(section string) {
-	p.mu.Lock()
-	p.skillsSection = section
-	p.mu.Unlock()
-}
-
-// setSubagentsSection replaces the spawnable-subagents inventory.
-func (p *promptBuilder) setSubagentsSection(section string) {
-	p.mu.Lock()
-	p.subagentsSection = section
-	p.mu.Unlock()
-}
-
-// setNativeSearch records whether the active model's driver supplies search
-// natively. Call before the first tools-section build; a model switch uses
-// setModelSearch, which swaps the section atomically with the flag.
-func (p *promptBuilder) setNativeSearch(active bool) {
-	p.mu.Lock()
-	p.nativeSearch = active
-	p.mu.Unlock()
-}
-
-// setModelSearch swaps native-search availability together with the tools
-// section rebuild so a reader never sees a section built from the previous
-// model's guidance. A nil registry (narrow tests) skips the rebuild.
-func (p *promptBuilder) setModelSearch(reg tool.Registry, native bool) {
-	p.mu.Lock()
-
-	if reg != nil {
-		p.nativeSearch = native
-		p.toolsSection = buildToolsSection(reg, native)
-	}
-
-	p.mu.Unlock()
-}
-
-// refreshToolsSection rebuilds the tools section from the session's current
-// registry and the native-search availability of the active client. Building
-// under the write lock keeps the flag+section pair atomic against model switches.
-func (p *promptBuilder) refreshToolsSection(reg tool.Registry) {
-	p.mu.Lock()
-	p.toolsSection = buildToolsSection(reg, p.nativeSearch)
-	p.mu.Unlock()
-}
-
-// buildToolsSection generates the dynamic TOOLS section from actual registered tool IDs.
 func buildToolsSection(reg tool.Registry, nativeSearch bool) string {
 	ids := reg.IDs()
 	registered := make(map[string]bool, len(ids))
@@ -306,10 +405,7 @@ func appendWebSearchSection(sb *strings.Builder, ids []string, registered map[st
 		sb.WriteString("You have web search capability via: ")
 		sb.WriteString(strings.Join(searchTools, ", ") + "\n\n")
 	case nativeSearch && hasClientSideTool(ids):
-		// Native search names no tool: the provider runs searches server-side
-		// inside the model turn, so there is no tool call to announce. The
-		// extra tool presence check mirrors the driver, which injects its
-		// server-side search only when the request already carries tools.
+		// The driver enables native search only when the request includes client-side tools.
 		sb.WriteString("\n# WEB SEARCH\n\n")
 		sb.WriteString(
 			"Web search is provided natively by your model provider. Request current information " +
@@ -323,19 +419,11 @@ func appendWebSearchSection(sb *strings.Builder, ids []string, registered map[st
 	appendWebSearchUsage(sb, registered)
 }
 
-// hasClientSideTool reports whether the registry offers at least one tool that
-// can be sent in the provider request — the same condition under which the
-// OpenAI-compatible driver injects server-side native search.
 func hasClientSideTool(ids []string) bool {
 	return len(ids) > 0
 }
 
-// appendUntrustedContentSection emits the model-facing guidance for externally
-// sourced content. It covers every session that can observe external text:
-// Bash (network-derived output), the built-in web tools, any MCP tool, or
-// usable provider-native search. It stays separate from appendWebSearchSection
-// because that helper returns early for Bash-only, webfetch-only and
-// non-search MCP sessions.
+// External-content guidance also applies without search, including Bash and non-search MCP tools.
 func appendUntrustedContentSection(sb *strings.Builder, ids []string, registered map[string]bool, nativeSearch bool) {
 	hasWebTools := registered["webfetch"] || registered[websearchToolName]
 	hasMCP := false
@@ -373,8 +461,6 @@ func appendUntrustedContentSection(sb *strings.Builder, ids []string, registered
 	)
 }
 
-// appendWebSearchUsage writes the guidance body shared by the tool-based and
-// native search modes.
 func appendWebSearchUsage(sb *strings.Builder, registered map[string]bool) {
 	sb.WriteString("Use web search for:\n")
 	sb.WriteString("- Information beyond your knowledge cutoff\n")
@@ -390,116 +476,4 @@ func appendWebSearchUsage(sb *strings.Builder, registered map[string]bool) {
 	sb.WriteString(
 		"After using search results in your response, include a Sources: section with the URLs you used.\n",
 	)
-}
-
-// setModelsSection replaces the models section of the system prompt.
-// Called after model switch.
-func (p *promptBuilder) setModelsSection(section string) {
-	p.mu.Lock()
-	p.modelsSection = section
-	p.mu.Unlock()
-}
-
-// buildMemoriesSection formats curated memories for persisted opening context.
-func buildMemoriesSection(ctx context.Context, store memory.CuratedStore, projectID int64) string {
-	memories, err := store.ListMemoryTexts(ctx, projectID)
-	if err != nil || len(memories) == 0 {
-		return ""
-	}
-	var sb strings.Builder
-	sb.WriteString("\n\n# YOUR MEMORIES\nPer-project memories. Manage with memory_save / memory_delete.\n\n")
-
-	// The id is the only handle memory_delete accepts; without it the model guesses.
-	for _, m := range memories {
-		fmt.Fprintf(&sb, "- [%d] %s\n", m.ID, m.Text)
-	}
-
-	return sb.String()
-}
-
-// buildModelsSection records the inherited model without duplicating task's
-// tagged-candidate policy into the general system prompt.
-func buildModelsSection(currentModel string) string {
-	return "\n- Model: " + currentModel
-}
-
-// buildSkillsSection returns the skills block for the system prompt.
-// Lists model-invocable skills loaded by the loader.
-func buildSkillsSection(ldr loader.Registry) string {
-	skills := ldr.ListModelInvocableSkills()
-
-	if len(skills) == 0 {
-		return ""
-	}
-
-	var b strings.Builder
-
-	b.WriteString("\n\n## Available Skills\nYou can invoke these skills using the 'skill' tool:\n")
-
-	for _, sk := range skills {
-		fmt.Fprintf(&b, "- **%s**", sk.Name)
-
-		if description := sk.AnnouncementDescription(); description != "" {
-			fmt.Fprintf(&b, ": %s", description)
-		}
-
-		b.WriteString("\n")
-	}
-
-	return b.String()
-}
-
-// buildActiveBackgroundSection keeps live process and subagent context across compaction.
-func buildActiveBackgroundSection(processes []ActiveProcessInfo, links []ActiveSubagentInfo) string {
-	if len(processes) == 0 && len(links) == 0 {
-		return ""
-	}
-
-	var b strings.Builder
-	b.WriteString(backgroundSectionMarker)
-	b.WriteString(
-		"Snapshot from activation start: these processes and subagents were running or awaiting result delivery. " +
-			"Later Bash, task, cancellation, and completion observations take precedence. " +
-			"Their result arrives automatically in a later turn; do not use timers to poll. " +
-			"Continue useful independent work; when none remains, briefly report what is still running and end the response.\n",
-	)
-
-	for _, process := range processes {
-		fmt.Fprintf(&b, "- process %s (running): output %s\n", process.ID, process.OutputPath)
-	}
-
-	for _, l := range links {
-		kind := "background"
-		if l.Blocking {
-			kind = "blocking"
-		}
-
-		fmt.Fprintf(&b, "- #%d (%s): %s\n", l.ChildID, kind, l.State)
-	}
-
-	return b.String()
-}
-
-// buildSubagentsSection returns the subagents block for the system prompt.
-// Lists subagent definitions loaded by the loader.
-func buildSubagentsSection(ldr loader.Registry) string {
-	subagents := ldr.ListSubagents()
-	if len(subagents) == 0 {
-		return ""
-	}
-
-	var b strings.Builder
-	b.WriteString("\n## Available Subagents\nYou can spawn these subagents using the 'task' tool:\n")
-
-	for _, sa := range subagents {
-		fmt.Fprintf(&b, "- **%s**", sa.Name)
-
-		if sa.Description != "" {
-			fmt.Fprintf(&b, ": %s", sa.Description)
-		}
-
-		b.WriteString("\n")
-	}
-
-	return b.String()
 }

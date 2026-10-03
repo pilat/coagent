@@ -1,4 +1,4 @@
-package session
+package sessionbuild
 
 import (
 	"context"
@@ -12,8 +12,7 @@ import (
 	"github.com/pilat/coagent/internal/mcpstore"
 )
 
-// resolveMCPServers expands the project's registry rows against the in-memory
-// secrets. One unresolvable server is skipped, not fatal — the session still starts.
+// One unresolvable server must not prevent the remaining session tools from starting.
 func resolveMCPServers(
 	ctx context.Context,
 	store mcpstore.Store,
@@ -38,7 +37,7 @@ func resolveMCPServers(
 	for _, def := range defs {
 		env, err := expandEnv(secrets, def.Env)
 		if err != nil {
-			// expand's error names the variable, never a value.
+			// Expansion errors identify variables without exposing their values.
 			log.Warn("mcp_server_skipped", zap.String("server", def.Name), zap.Error(err))
 
 			continue

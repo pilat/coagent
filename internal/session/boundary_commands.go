@@ -11,7 +11,13 @@ import (
 	"github.com/pilat/coagent/internal/transcript"
 )
 
-func (s *svc) acceptBoundaryCommand(ctx context.Context, r *runState, batch *boundaryBatch, input *sessionstore.InboxInput, command string) error {
+func (s *Session) acceptBoundaryCommand(
+	ctx context.Context,
+	r *runState,
+	batch *boundaryBatch,
+	input *sessionstore.InboxInput,
+	command string,
+) error {
 	state, err := s.store.LoadCompletionCheckState(ctx, s.id)
 	if err != nil {
 		return err
@@ -21,12 +27,29 @@ func (s *svc) acceptBoundaryCommand(ctx context.Context, r *runState, batch *bou
 	}
 	output := s.boundaryCommandContent(ctx, input, command)
 	c := &batch.commit
-	c.Accept = append(c.Accept, sessionstore.Accept{InputID: input.ID, State: sessionstore.InputStateHandled, Reason: strings.TrimPrefix(command, "/") + " command", LinkRef: -1})
-	c.Outputs = append(c.Outputs, sessionstore.Output{Type: sessionstore.OutputMessagePersistent, Content: output, Key: fmt.Sprintf("input:%d:command", input.ID), MessageRef: -1, ReleasesInput: true})
+	c.Accept = append(
+		c.Accept,
+		sessionstore.Accept{
+			InputID: input.ID,
+			State:   sessionstore.InputStateHandled,
+			Reason:  strings.TrimPrefix(command, "/") + " command",
+			LinkRef: -1,
+		},
+	)
+	c.Outputs = append(
+		c.Outputs,
+		sessionstore.Output{
+			Type:          sessionstore.OutputMessagePersistent,
+			Content:       output,
+			Key:           fmt.Sprintf("input:%d:command", input.ID),
+			MessageRef:    -1,
+			ReleasesInput: true,
+		},
+	)
 	return nil
 }
 
-func (s *svc) boundaryCommandContent(ctx context.Context, input *sessionstore.InboxInput, command string) string {
+func (s *Session) boundaryCommandContent(ctx context.Context, input *sessionstore.InboxInput, command string) string {
 	output := s.renderSessionHelp()
 	switch command {
 	case "/schedules":
@@ -43,7 +66,7 @@ func (s *svc) boundaryCommandContent(ctx context.Context, input *sessionstore.In
 	return output
 }
 
-func (s *svc) deferBoundaryCompaction(batch *boundaryBatch, input *sessionstore.InboxInput) {
+func (s *Session) deferBoundaryCompaction(batch *boundaryBatch, input *sessionstore.InboxInput) {
 	if s.compactionDeferAnnounced {
 		return
 	}
@@ -54,7 +77,7 @@ func (s *svc) deferBoundaryCompaction(batch *boundaryBatch, input *sessionstore.
 	s.compactionDeferAnnounced = true
 }
 
-func (s *svc) interruptBoundarySleeps(batch *boundaryBatch, source sessionstore.InputSource) {
+func (s *Session) interruptBoundarySleeps(batch *boundaryBatch, source sessionstore.InputSource) {
 	notice := sleepInterruptedMessage
 	if source == sessionstore.InputSourceSchedule {
 		notice = "Sleep interrupted — a scheduled task became due."
@@ -69,7 +92,7 @@ func (s *svc) interruptBoundarySleeps(batch *boundaryBatch, source sessionstore.
 	}
 }
 
-func (s *svc) requestBoundaryCompaction(input *sessionstore.InboxInput, content string) {
+func (s *Session) requestBoundaryCompaction(input *sessionstore.InboxInput, content string) {
 	s.setCompactionFocus(strings.TrimSpace(strings.TrimPrefix(content, compactCommand)))
 	s.setCompactionCommandInput(PendingInput{ID: input.ID, Content: input.RawContent})
 	s.RequestCompaction()
@@ -89,5 +112,9 @@ func leadingSlashCommand(content string) string {
 }
 
 func activationInstruction(toolID, command string) string {
-	return fmt.Sprintf("\n\n[Host activation: call %s as the only tool in this assistant response to handle %s. No change has occurred until the host emits its receipt.]", toolID, command)
+	return fmt.Sprintf(
+		"\n\n[Host activation: call %s as the only tool in this assistant response to handle %s. No change has occurred until the host emits its receipt.]",
+		toolID,
+		command,
+	)
 }

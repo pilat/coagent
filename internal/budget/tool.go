@@ -15,9 +15,9 @@ const ToolID = "set_budget"
 const noActivationMessage = "This change requires a current user message beginning with /budget."
 
 type budgetTool struct {
-	service Service
-	rootID  int64
-	priced  bool
+	store  Store
+	rootID int64
+	priced bool
 }
 
 type toolParams struct {
@@ -31,8 +31,8 @@ var (
 	_ tool.ActivationDeclarer = (*budgetTool)(nil)
 )
 
-func NewTool(service Service, rootID int64, priced bool) tool.Tool {
-	return &budgetTool{service: service, rootID: rootID, priced: priced}
+func NewTool(store Store, rootID int64, priced bool) tool.Tool {
+	return &budgetTool{store: store, rootID: rootID, priced: priced}
 }
 
 func (t *budgetTool) ID() string { return ToolID }
@@ -64,7 +64,7 @@ func (t *budgetTool) Execute(ctx context.Context, raw json.RawMessage) (*tool.Re
 			return nil, errors.New("get does not accept limit fields")
 		}
 
-		record, err := t.service.Get(ctx, t.rootID)
+		record, err := t.store.Get(ctx, t.rootID)
 		if errors.Is(err, ErrNotFound) {
 			return &tool.Result{Output: "No budget is configured."}, nil
 		}
@@ -94,7 +94,20 @@ func (t *budgetTool) Execute(ctx context.Context, raw json.RawMessage) (*tool.Re
 			return nil, err
 		}
 
-		record, receipt, err := t.service.Set(ctx, grant, cost, duration)
+		if cost == nil && duration == nil {
+			return nil, errors.New("set requires cost_usd, duration, or both")
+		}
+		var seconds *int64
+		if duration != nil {
+			value := int64(duration.Seconds())
+			seconds = &value
+		}
+		receipt := "Budget armed: " + renderLimits(cost, duration)
+		record, err := t.store.Arm(ctx, Mutation{
+			RootSessionID: grant.RootID, InputID: grant.InputID, ToolID: grant.ToolID,
+			Command: grant.Command, ToolCallID: grant.ToolCallID,
+			CostLimitUSD: cost, DurationSeconds: seconds, Receipt: receipt,
+		})
 		if err != nil {
 			return nil, err
 		}
@@ -110,7 +123,11 @@ func (t *budgetTool) Execute(ctx context.Context, raw json.RawMessage) (*tool.Re
 			return nil, err
 		}
 
-		record, receipt, err := t.service.Clear(ctx, grant)
+		const receipt = "Budget cleared"
+		record, err := t.store.Clear(ctx, Mutation{
+			RootSessionID: grant.RootID, InputID: grant.InputID, ToolID: grant.ToolID,
+			Command: grant.Command, ToolCallID: grant.ToolCallID, Receipt: receipt,
+		})
 		if err != nil {
 			return nil, err
 		}

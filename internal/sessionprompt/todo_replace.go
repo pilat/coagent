@@ -1,52 +1,15 @@
-package session
+package sessionprompt
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"strings"
-	"time"
 
 	"github.com/pilat/coagent/internal/todo"
-	"github.com/pilat/coagent/internal/tool/builtin"
 )
 
-type todoReplacement struct {
-	memory todo.Service
-}
-
-var _ builtin.TodoReplacement = (*todoReplacement)(nil)
-
-func (r *todoReplacement) ReplaceTodo(
-	_ context.Context,
-	callID string,
-	input []builtin.TodoReplacementItem,
-) ([]*todo.Item, error) {
-	items, err := normalizeTodoReplacement(callID, input)
-	if err != nil {
-		return nil, err
-	}
-
-	// The replacement schema has no timestamp field: generated timestamps must
-	// land in the durable JSON too, or restart projections lose their ordering inputs.
-	now := time.Now().UTC()
-
-	for _, item := range items {
-		if item.CreatedAt.IsZero() {
-			item.CreatedAt = now
-		}
-
-		if item.UpdatedAt.IsZero() {
-			item.UpdatedAt = now
-		}
-	}
-
-	r.memory.Replace(items)
-
-	return items, nil
-}
-
-func normalizeTodoReplacement(callID string, input []builtin.TodoReplacementItem) ([]*todo.Item, error) {
+// NormalizeTodoReplacement assigns stable call-scoped identities and validates replacements.
+func NormalizeTodoReplacement(callID string, input []todo.ReplacementItem) ([]*todo.Item, error) {
 	if callID == "" {
 		return nil, errors.New("todo replacement requires tool call identity")
 	}

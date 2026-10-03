@@ -1,4 +1,4 @@
-package daemon
+package subagent
 
 import (
 	"context"
@@ -18,13 +18,13 @@ type SendToSubagentParams struct {
 // sendToSubagentTool durably queues follow-up work for an existing
 // subagent session, re-engaging it when necessary.
 type sendToSubagentTool struct {
-	spawner spawner
+	spawner Spawner
 }
 
 var _ tool.Tool = (*sendToSubagentTool)(nil)
 
-// newSendToSubagentTool creates the send_to_subagent tool.
-func newSendToSubagentTool(sp spawner) tool.Tool {
+// NewSendToSubagentTool creates the send_to_subagent tool.
+func NewSendToSubagentTool(sp Spawner) tool.Tool {
 	return &sendToSubagentTool{spawner: sp}
 }
 

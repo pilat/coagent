@@ -1,4 +1,4 @@
-package daemon
+package subagent
 
 import (
 	"context"
@@ -25,53 +25,27 @@ type TaskParams struct {
 
 // taskTool spawns subagents to handle complex tasks.
 type taskTool struct {
-	spawner       spawner
-	parentID      int64
-	set           *registry.Set
-	subagentTypes []subagentInfo
-	modelCatalog  []modelInfo
-	skillCatalog  loader.SkillCatalog
+	spawner      Spawner
+	parentID     int64
+	loader       loader.Service
+	models       []ModelInfo
+	modelCatalog []ModelInfo
+	skillCatalog loader.SkillCatalog
 }
 
 var _ tool.Tool = (*taskTool)(nil)
 
-// newTaskTool creates the task tool bound to a spawning session. spawner drives
-// subagents via the daemon (blocking suspends the parent, background returns
-// immediately); parentID is the spawning session's id. Available subagent types
-// come from the session's agent-type set (built-ins plus project-local ones).
-func newTaskTool(
-	sp spawner,
-	parentID int64,
-	set *registry.Set,
-	modelCatalog []modelInfo,
-	skillCatalog ...loader.SkillCatalog,
-) tool.Tool {
-	subagents := set.ListSubagents()
-
-	subagentTypes := make([]subagentInfo, 0, len(subagents))
-	for _, cfg := range subagents {
-		subagentTypes = append(subagentTypes, subagentInfo{Name: string(cfg.Name), Description: cfg.Description})
-	}
-
-	candidates := make([]modelInfo, 0, len(modelCatalog))
-	for _, model := range modelCatalog {
+// NewTaskTool observes the loader after session assembly has loaded project artifacts.
+func NewTaskTool(sp Spawner, parentID int64, ldr loader.Service, models []ModelInfo) tool.Tool {
+	candidates := make([]ModelInfo, 0, len(models))
+	for _, model := range models {
 		if len(model.Tags) != 0 {
 			candidates = append(candidates, model)
 		}
 	}
-
-	var catalog loader.SkillCatalog
-	if len(skillCatalog) > 0 {
-		catalog = skillCatalog[0]
-	}
-
 	return &taskTool{
-		spawner:       sp,
-		parentID:      parentID,
-		set:           set,
-		subagentTypes: subagentTypes,
-		modelCatalog:  candidates,
-		skillCatalog:  catalog,
+		spawner: sp, parentID: parentID, loader: ldr, models: models,
+		modelCatalog: candidates, skillCatalog: ldr,
 	}
 }
 
@@ -81,7 +55,7 @@ func (t *taskTool) ID() string { return tool.IDTask }
 func (t *taskTool) ParallelSafe() bool { return true }
 
 func (t *taskTool) Description() string {
-	types := t.subagentTypes
+	types := t.agentTypes()
 	models := t.modelCatalog
 
 	var typeList strings.Builder
@@ -136,8 +110,8 @@ For related follow-up work on a general or custom subagent's assignment, use sen
 }
 
 func (t *taskTool) Parameters() json.RawMessage {
-	typeNames := make([]string, len(t.subagentTypes))
-	for i, info := range t.subagentTypes {
+	typeNames := make([]string, len(t.agentTypes()))
+	for i, info := range t.agentTypes() {
 		typeNames[i] = fmt.Sprintf("%q", info.Name)
 	}
 
@@ -207,7 +181,7 @@ func (t *taskTool) executeBackground(ctx context.Context, p TaskParams) (*tool.R
 		return nil, errors.New("background task requires a tool call id")
 	}
 
-	res, err := t.spawner.Spawn(ctx, spawnRequest{
+	res, err := t.spawner.Spawn(ctx, SpawnRequest{
 		ParentID:   t.parentID,
 		AgentType:  p.SubagentType,
 		AgentModel: t.agentModel(p.SubagentType),
@@ -239,9 +213,7 @@ func (t *taskTool) executeBackground(ctx context.Context, p TaskParams) (*tool.R
 	}, nil
 }
 
-// executeBlocking spawns a child and suspends the parent: the loop yields its
-// run-slot (no priority-inversion deadlock) and the child's completion fills
-// this exact task tool_use on resume via the durable child-link contract.
+// Suspending the parent releases its run slot so the child can make progress.
 func (t *taskTool) executeBlocking(ctx context.Context, p TaskParams) (*tool.Result, error) {
 	if t.spawner == nil {
 		return nil, errors.New("subagents are not available in this context")
@@ -252,8 +224,7 @@ func (t *taskTool) executeBlocking(ctx context.Context, p TaskParams) (*tool.Res
 		return nil, errors.New("blocking task requires a tool call id")
 	}
 
-	// Resume idempotency: if this exact task call already spawned a child that is
-	// still in flight, re-suspend without re-forking (Decision 14).
+	// A persisted link owns this exact call, so resumption must not fork again.
 	if callID != "" {
 		pending, err := t.spawner.LinkPending(ctx, t.parentID, callID)
 		if err != nil {
@@ -269,7 +240,7 @@ func (t *taskTool) executeBlocking(ctx context.Context, p TaskParams) (*tool.Res
 		return nil, err
 	}
 
-	if _, err := t.spawner.Spawn(ctx, spawnRequest{
+	if _, err := t.spawner.Spawn(ctx, SpawnRequest{
 		ParentID:   t.parentID,
 		AgentType:  p.SubagentType,
 		AgentModel: t.agentModel(p.SubagentType),
@@ -306,14 +277,14 @@ func (t *taskTool) validateParams(p TaskParams) error {
 		return fmt.Errorf("model %q is not an advertised tagged subagent candidate", p.Model)
 	}
 
-	for _, info := range t.subagentTypes {
+	for _, info := range t.agentTypes() {
 		if info.Name == p.SubagentType {
 			return nil
 		}
 	}
 
-	typeNames := make([]string, 0, len(t.subagentTypes))
-	for _, info := range t.subagentTypes {
+	typeNames := make([]string, 0, len(t.agentTypes()))
+	for _, info := range t.agentTypes() {
 		typeNames = append(typeNames, info.Name)
 	}
 
@@ -348,7 +319,7 @@ func (t *taskTool) isCandidateModel(id string) bool {
 // agentModel returns the agent type's configured model override, or "" when the
 // type has none (the daemon then falls back to task param / parent model).
 func (t *taskTool) agentModel(subagentType string) string {
-	cfg, ok := t.set.Get(registry.AgentType(subagentType))
+	cfg, ok := t.agentSet().Get(registry.AgentType(subagentType))
 	if !ok {
 		return ""
 	}
@@ -358,4 +329,36 @@ func (t *taskTool) agentModel(subagentType string) string {
 
 func taskMetadata(id int64) string {
 	return fmt.Sprintf("\n\n<task_metadata>\nsubagent_id: %d\n</task_metadata>", id)
+}
+
+func (t *taskTool) agentTypes() []agentInfo {
+	configs := t.agentSet().ListSubagents()
+	types := make([]agentInfo, 0, len(configs))
+	for _, cfg := range configs {
+		types = append(types, agentInfo{Name: string(cfg.Name), Description: cfg.Description})
+	}
+	return types
+}
+
+func (t *taskTool) agentSet() *registry.Set {
+	var configs []registry.AgentTypeConfig
+	if t.loader != nil {
+		for _, agent := range t.loader.ListSubagents() {
+			model := agent.Model
+			if model != "" && len(t.models) != 0 {
+				found := false
+				for _, candidate := range t.models {
+					found = found || candidate.ID == model
+				}
+				if !found {
+					model = ""
+				}
+			}
+			configs = append(configs, registry.AgentTypeConfig{
+				Name: registry.AgentType(agent.Name), Description: agent.Description,
+				Mode: registry.ModeSubagent, Model: model,
+			})
+		}
+	}
+	return registry.NewSet(configs)
 }

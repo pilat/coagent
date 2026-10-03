@@ -1,4 +1,4 @@
-package daemon
+package subagent
 
 import (
 	"context"
@@ -16,13 +16,13 @@ type getSubagentResultParams struct {
 
 // getSubagentResultTool reads a diagnostic snapshot of a subagent.
 type getSubagentResultTool struct {
-	spawner spawner
+	spawner Spawner
 }
 
 var _ tool.Tool = (*getSubagentResultTool)(nil)
 
-// newGetSubagentResultTool creates the get_subagent_result tool.
-func newGetSubagentResultTool(sp spawner) tool.Tool {
+// NewGetSubagentResultTool creates the get_subagent_result tool.
+func NewGetSubagentResultTool(sp Spawner) tool.Tool {
 	return &getSubagentResultTool{spawner: sp}
 }
 
@@ -70,7 +70,7 @@ func (t *getSubagentResultTool) Execute(ctx context.Context, params json.RawMess
 
 	var output string
 	if res.Terminal {
-		output = formatChildResult(res)
+		output = FormatChildResult(res)
 	} else {
 		output = fmt.Sprintf(
 			"Subagent #%d is %s (%d iterations). No result yet. This is a diagnostic snapshot. "+

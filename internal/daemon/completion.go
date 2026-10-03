@@ -57,12 +57,16 @@ func (s *svc) deliverCompletionToParent(ctx context.Context, link subagent.Link)
 	}
 	won, err := s.subagents.DeliverCompletion(ctx, link, s.completionContent(ctx, link))
 	if err != nil {
-		logger.Ctx(ctx).Named("daemon.completion").Error("deliver_completion_dropped", zap.Int64("child", link.ChildID), zap.Int64("parent", link.ParentID), zap.Error(err))
+		logger.Ctx(ctx).
+			Named("daemon.completion").
+			Error("deliver_completion_dropped", zap.Int64("child", link.ChildID), zap.Int64("parent", link.ParentID), zap.Error(err))
 		return
 	}
 	if won {
 		if err := s.rearmChildAfterDelivery(ctx, link.ChildID); err != nil {
-			logger.Ctx(ctx).Named("daemon.completion").Error("rearm_child_after_delivery", zap.Int64("child", link.ChildID), zap.Error(err))
+			logger.Ctx(ctx).
+				Named("daemon.completion").
+				Error("rearm_child_after_delivery", zap.Int64("child", link.ChildID), zap.Error(err))
 		}
 	}
 }
@@ -184,7 +188,7 @@ func (s *svc) finishInterruptedKills(ctx context.Context) error {
 // completionContent formats a terminal child's stored result + outcome for the
 // parent, via the shared formatter so it matches get_subagent_result verbatim.
 func (s *svc) completionContent(ctx context.Context, link subagent.Link) string {
-	res := childResult{
+	res := subagent.ChildResult{
 		ChildID:  link.ChildID,
 		State:    link.State,
 		Outcome:  link.Outcome,
@@ -196,7 +200,7 @@ func (s *svc) completionContent(ctx context.Context, link subagent.Link) string 
 		res.Iteration = rec.Iteration
 	}
 
-	return formatChildResult(res)
+	return subagent.FormatChildResult(res)
 }
 
 // Start re-establishes in-flight children and re-delivers undelivered completions

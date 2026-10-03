@@ -3,6 +3,8 @@ package registry
 import (
 	"cmp"
 	"slices"
+
+	"github.com/pilat/coagent/internal/sessionprompt"
 )
 
 const (
@@ -47,7 +49,7 @@ var builtinAgentTypes = map[AgentType]AgentTypeConfig{
 		Description: "Context compression agent",
 		Mode:        ModeHidden,
 		Tools:       []string{},
-		Prompt:      CompactionSummaryPrompt,
+		Prompt:      sessionprompt.CompactionSummaryPrompt,
 	},
 }
 

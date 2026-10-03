@@ -91,13 +91,13 @@ func validateRawGrouping(messages []llmwire.Message) error {
 // carries besides the replayed transcript prefix: system prompt, final
 // instruction, focus and the active tool schemas. Every byte participates in
 // the request bound.
-func (s *svc) summarizerBaseEstimateLocked() int {
+func (s *Session) summarizerBaseEstimateLocked() int {
 	schemas := tool.ToSchemas(s.registry.List())
 	if s.loopDetector.forceTextOnly {
 		schemas = nil
 	}
 
-	base := s.prompt.systemPrompt() +
+	base := s.prompt.SystemPrompt() +
 		compactionInstructionMessage(s.focusSection()).Content
 
 	return estimateText(base) + estimateSchemas(schemas)

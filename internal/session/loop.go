@@ -42,13 +42,15 @@ type runState struct {
 	autoCompactionOff  bool
 }
 
-func (s *svc) Run(ctx context.Context) (RunResult, error) {
+func (s *Session) Run(ctx context.Context) (RunResult, error) {
 	ctx = logger.With(ctx)
 	if err := s.prepareRun(ctx); err != nil {
 		return RunResult{}, err
 	}
 	r := &runState{}
-	defer s.emit(sessionevent.Notification{Type: sessionevent.NotifyModelWorking, Attributes: map[string]any{"working": false}})
+	defer s.emit(
+		sessionevent.Notification{Type: sessionevent.NotifyModelWorking, Attributes: map[string]any{"working": false}},
+	)
 	defer s.startHeartbeat(ctx)()
 	if !s.HasPendingExternalCall() {
 		s.compactionDeferAnnounced = false
@@ -56,8 +58,7 @@ func (s *svc) Run(ctx context.Context) (RunResult, error) {
 	return s.finishRun(ctx, r, s.runIterations(ctx, r))
 }
 
-func (s *svc) prepareRun(ctx context.Context) error {
-	s.refreshRegistrySections()
+func (s *Session) prepareRun(ctx context.Context) error {
 	index, err := tool.ActivationIndex(s.registry)
 	if err != nil {
 		return err
@@ -66,7 +67,7 @@ func (s *svc) prepareRun(ctx context.Context) error {
 	return s.loadPendingActivation(ctx)
 }
 
-func (s *svc) runIterations(ctx context.Context, r *runState) error {
+func (s *Session) runIterations(ctx context.Context, r *runState) error {
 	for r.iterations < hardIterationCeiling {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -79,7 +80,7 @@ func (s *svc) runIterations(ctx context.Context, r *runState) error {
 	return nil
 }
 
-func (s *svc) runIteration(ctx context.Context, r *runState) (bool, error) {
+func (s *Session) runIteration(ctx context.Context, r *runState) (bool, error) {
 	accepted, err := s.boundaryStep(ctx, r)
 	if err != nil {
 		return false, err
@@ -98,7 +99,9 @@ func (s *svc) runIteration(ctx context.Context, r *runState) (bool, error) {
 	if err != nil || !admitted {
 		return false, err
 	}
-	s.emit(sessionevent.Notification{Type: sessionevent.NotifyModelWorking, Attributes: map[string]any{"working": true}})
+	s.emit(
+		sessionevent.Notification{Type: sessionevent.NotifyModelWorking, Attributes: map[string]any{"working": true}},
+	)
 	if err := s.modelStep(ctx, r); err != nil {
 		return false, err
 	}
@@ -108,7 +111,7 @@ func (s *svc) runIteration(ctx context.Context, r *runState) (bool, error) {
 	return s.runPendingTools(ctx, r)
 }
 
-func (s *svc) runPendingTools(ctx context.Context, r *runState) (bool, error) {
+func (s *Session) runPendingTools(ctx context.Context, r *runState) (bool, error) {
 	if calls := s.pendingInLoopCalls(); len(calls) > 0 {
 		if err := s.toolStep(ctx, calls); err != nil {
 			return false, err
@@ -121,7 +124,8 @@ func (s *svc) runPendingTools(ctx context.Context, r *runState) (bool, error) {
 	return true, nil
 }
 
-func (s *svc) admitModelStep(ctx context.Context, r *runState) (bool, error) {
+func (s *Session) admitModelStep(ctx context.Context, r *runState) (bool, error) {
+	s.applyModelSwitch()
 	if err := s.compactionStep(ctx, r); err != nil {
 		return false, err
 	}
@@ -137,20 +141,25 @@ func (s *svc) admitModelStep(ctx context.Context, r *runState) (bool, error) {
 	return !fired, nil
 }
 
-func (s *svc) emit(n sessionevent.Notification) {
+func (s *Session) emit(n sessionevent.Notification) {
 	if s.events != nil {
 		s.events.Emit(n)
 	}
 }
 
-func (s *svc) newCommit() sessionstore.Commit {
+func (s *Session) newCommit() sessionstore.Commit {
 	return sessionstore.Commit{SessionID: s.id, RootID: s.rootID, At: time.Now().UTC()}
 }
 
-func (s *svc) commit(ctx context.Context, c sessionstore.Commit) (*sessionstore.CommitResult, error) {
+func (s *Session) commit(ctx context.Context, c sessionstore.Commit) (*sessionstore.CommitResult, error) {
 	for _, output := range append(append([]sessionstore.Output{}, c.Outputs...), c.Unfired.Outputs...) {
 		if output.ReleasesInput {
-			s.emit(sessionevent.Notification{Type: sessionevent.NotifyModelWorking, Attributes: map[string]any{"working": false}})
+			s.emit(
+				sessionevent.Notification{
+					Type:       sessionevent.NotifyModelWorking,
+					Attributes: map[string]any{"working": false},
+				},
+			)
 			break
 		}
 	}
@@ -166,7 +175,7 @@ func (s *svc) commit(ctx context.Context, c sessionstore.Commit) (*sessionstore.
 	return result, nil
 }
 
-func (s *svc) observeBudget(ctx context.Context) (bool, error) {
+func (s *Session) observeBudget(ctx context.Context) (bool, error) {
 	_, fired, err := s.store.ObserveBudget(ctx, s.rootID, time.Now().UTC(), "")
 	if err != nil {
 		return false, err
@@ -174,7 +183,7 @@ func (s *svc) observeBudget(ctx context.Context) (bool, error) {
 	return fired, nil
 }
 
-func (s *svc) loadPendingActivation(ctx context.Context) error {
+func (s *Session) loadPendingActivation(ctx context.Context) error {
 	activation, err := s.store.PendingActivation(ctx, s.id)
 	if errors.Is(err, sessionstore.ErrActivationNotFound) {
 		return nil
@@ -185,11 +194,17 @@ func (s *svc) loadPendingActivation(ctx context.Context) error {
 	if activation == nil {
 		return nil
 	}
-	s.currentActivation = &tool.ActivationGrant{SessionID: activation.SessionID, InputID: activation.InputID, ToolID: activation.ToolID, Command: activation.Command, ToolCallID: activation.ToolCallID}
+	s.currentActivation = &tool.ActivationGrant{
+		SessionID:  activation.SessionID,
+		InputID:    activation.InputID,
+		ToolID:     activation.ToolID,
+		Command:    activation.Command,
+		ToolCallID: activation.ToolCallID,
+	}
 	return nil
 }
 
-func (s *svc) expireActivation(ctx context.Context, suspended bool) error {
+func (s *Session) expireActivation(ctx context.Context, suspended bool) error {
 	grant := s.currentActivation
 	if grant == nil || grant.ToolCallID != "" {
 		return nil
@@ -202,8 +217,21 @@ func (s *svc) expireActivation(ctx context.Context, suspended bool) error {
 		}
 	}
 	c := s.newCommit()
-	c.Activation = &sessionstore.ActivationChange{InputID: grant.InputID, State: sessionstore.ActivationExpired, ToolID: grant.ToolID, Command: grant.Command}
-	c.Outputs = []sessionstore.Output{{Type: sessionstore.OutputMessagePersistent, Content: grant.Command + " was not changed", Key: fmt.Sprintf("input:%d:activation:expired", grant.InputID), MessageRef: -1, ReleasesInput: true}}
+	c.Activation = &sessionstore.ActivationChange{
+		InputID: grant.InputID,
+		State:   sessionstore.ActivationExpired,
+		ToolID:  grant.ToolID,
+		Command: grant.Command,
+	}
+	c.Outputs = []sessionstore.Output{
+		{
+			Type:          sessionstore.OutputMessagePersistent,
+			Content:       grant.Command + " was not changed",
+			Key:           fmt.Sprintf("input:%d:activation:expired", grant.InputID),
+			MessageRef:    -1,
+			ReleasesInput: true,
+		},
+	}
 	if _, err := s.commit(ctx, c); err != nil {
 		return err
 	}
@@ -211,9 +239,14 @@ func (s *svc) expireActivation(ctx context.Context, suspended bool) error {
 	return nil
 }
 
-func (s *svc) emitCommitted(outputs []*sessionstore.OutputCommit, fired bool) {
+func (s *Session) emitCommitted(outputs []*sessionstore.OutputCommit, fired bool) {
 	if fired {
-		s.emit(sessionevent.Notification{Type: sessionevent.NotifyModelWorking, Attributes: map[string]any{"working": false}})
+		s.emit(
+			sessionevent.Notification{
+				Type:       sessionevent.NotifyModelWorking,
+				Attributes: map[string]any{"working": false},
+			},
+		)
 	}
 	for _, output := range outputs {
 		if output != nil && !output.Existing && output.Content != "" {

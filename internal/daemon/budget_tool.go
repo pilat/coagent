@@ -10,24 +10,11 @@ import (
 
 	"github.com/pilat/coagent/internal/budget"
 	"github.com/pilat/coagent/internal/logger"
-	"github.com/pilat/coagent/internal/session"
 	"github.com/pilat/coagent/internal/sessionevent"
 	"github.com/pilat/coagent/internal/sessionstore"
 )
 
 const budgetParkRequested = "requested"
-
-func (s *svc) registerBudgetTool(
-	ctx context.Context,
-	record *sessionstore.SessionRecord,
-	sess session.Service,
-) {
-	if s.budgetSvc == nil || record.ParentID != 0 {
-		return
-	}
-
-	registerLogged(ctx, sess, budget.NewTool(s.budgetSvc, record.ID, s.modelHasPricing(record.Model)))
-}
 
 func (s *svc) modelHasPricing(modelID string) bool {
 	for _, model := range s.modelEntries {

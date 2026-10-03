@@ -1,8 +1,7 @@
-package session
+package sessionbuild
 
 import (
 	"context"
-	"encoding/json"
 	"slices"
 
 	"go.uber.org/zap"
@@ -11,12 +10,9 @@ import (
 	"github.com/pilat/coagent/internal/loader"
 	"github.com/pilat/coagent/internal/logger"
 	"github.com/pilat/coagent/internal/registry"
-	"github.com/pilat/coagent/internal/sessionstore"
-	"github.com/pilat/coagent/internal/tool/builtin"
 )
 
-// loadMarketplaces loads marketplace plugins from the unified config.
-func loadMarketplaces(ctx context.Context, p params, log *zap.Logger) {
+func loadMarketplaces(ctx context.Context, p BuildInput, log *zap.Logger) {
 	if p.Config.UnifiedConfig == nil {
 		log.Info("marketplaces_skipped", zap.String("reason", "unified_config_not_loaded"))
 		return
@@ -37,9 +33,8 @@ func loadMarketplaces(ctx context.Context, p params, log *zap.Logger) {
 	p.Loader.ProcessMarketplaces(ctx, p.Config.UnifiedConfig.Marketplaces, resolver)
 }
 
-// loadProjectSubagents loads the definitions needed to resolve the session's
-// agent type. Instructions and skills load only after that type is known.
-func loadProjectSubagents(ctx context.Context, p params, workDir string) []registry.AgentTypeConfig {
+// Resolve the agent type before loading instructions that lean specialists omit.
+func loadProjectSubagents(ctx context.Context, p BuildInput, workDir string) []registry.AgentTypeConfig {
 	log := logger.Ctx(ctx).Named("session.setup")
 
 	loadMarketplaces(ctx, p, log)
@@ -56,9 +51,7 @@ func loadProjectSubagents(ctx context.Context, p params, workDir string) []regis
 	return subagentConfigs(ctx, p.Loader, models)
 }
 
-// loadProjectInstructions loads context intended for a normal session. Lean
-// built-in specialists skip this path entirely.
-func loadProjectInstructions(ctx context.Context, p params, workDir string) string {
+func loadProjectInstructions(ctx context.Context, p BuildInput, workDir string) string {
 	log := logger.Ctx(ctx).Named("session.setup")
 
 	agentsMD, err := p.Loader.LoadAgentsMD(workDir)
@@ -73,8 +66,7 @@ func loadProjectInstructions(ctx context.Context, p params, workDir string) stri
 	return agentsMD
 }
 
-// subagentConfigs converts project-local subagent definitions into agent-type
-// configs. An unknown `model:` is dropped with a warning, not failed at spawn.
+// Unknown model overrides fall back to inheritance rather than failing later at spawn.
 func subagentConfigs(
 	ctx context.Context,
 	ldr loader.Service,
@@ -109,36 +101,11 @@ func subagentConfigs(
 	return configs
 }
 
-// modelConfigured reports whether an override is resolvable. No override and no
-// catalog both pass — there is nothing to reject in either case.
+// An absent catalog provides no evidence to reject an override.
 func modelConfigured(models []config.ModelEntry, model string) bool {
 	if model == "" || len(models) == 0 {
 		return true
 	}
 
 	return slices.ContainsFunc(models, func(m config.ModelEntry) bool { return m.ID == model })
-}
-
-// registerSessionTools creates and registers tools that depend on the session.
-func registerSessionTools(session *svc) {
-	// Curated memory tools (memory_save / memory_delete).
-	if session.projectID != 0 && session.memoryStore != nil {
-		session.RegisterGatedTool(builtin.NewMemorySaveTool(session.memoryStore, session.projectID))
-		session.RegisterGatedTool(builtin.NewMemoryDeleteTool(session.memoryStore, session.projectID))
-	}
-
-	// Subagent tools (task / get_subagent_result / send_to_subagent) are
-	// registered by the daemon onto the live registry — they need its spawner.
-}
-
-func (s *svc) persistState(ctx context.Context, iteration int, status sessionstore.SessionStatus) error {
-	raw, err := json.Marshal(s.todoStore.List())
-	if err != nil {
-		return err
-	}
-	data := json.RawMessage(raw)
-	c := s.newCommit()
-	c.State = sessionstore.StatePatch{Iteration: &iteration, Status: &status, TodoItems: &data}
-	_, err = s.commit(ctx, c)
-	return err
 }

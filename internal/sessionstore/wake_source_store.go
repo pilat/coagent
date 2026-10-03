@@ -14,6 +14,7 @@ type WakeSourceStore interface {
 	// Producer ledgers read before the inbox so their atomic
 	// terminal-to-inbox transition cannot disappear between observations.
 	HasBackgroundWakeSource(ctx context.Context, sessionID int64) (bool, error)
+	HasPendingBackgroundWait(ctx context.Context, sessionID int64) (bool, error)
 }
 
 var _ WakeSourceStore = (*store)(nil)
@@ -87,5 +88,19 @@ func (s *store) HasBackgroundWakeSource(ctx context.Context, sessionID int64) (b
 		return false, fmt.Errorf("query pending async input: %w", err)
 	}
 
+	return pending, nil
+}
+
+// HasPendingBackgroundWait preserves timer admission across all undelivered child links.
+func (s *store) HasPendingBackgroundWait(ctx context.Context, sessionID int64) (bool, error) {
+	var pending bool
+	err := s.db.QueryRowContext(ctx, `SELECT
+		EXISTS(SELECT 1 FROM subagent_links WHERE parent_id = ? AND delivered_at IS NULL)
+		OR EXISTS(SELECT 1 FROM background_processes
+			WHERE session_id = ? AND state = 'running' AND advertised_at IS NOT NULL)`,
+		sessionID, sessionID).Scan(&pending)
+	if err != nil {
+		return false, fmt.Errorf("query pending background wait: %w", err)
+	}
 	return pending, nil
 }

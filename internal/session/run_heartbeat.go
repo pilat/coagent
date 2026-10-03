@@ -7,7 +7,7 @@ import (
 	"github.com/pilat/coagent/internal/sessionevent"
 )
 
-func (s *svc) startHeartbeat(ctx context.Context) func() {
+func (s *Session) startHeartbeat(ctx context.Context) func() {
 	ticker := time.NewTicker(time.Second)
 	done := make(chan struct{})
 	go func() {

@@ -4,8 +4,9 @@ import (
 	"strings"
 
 	"github.com/pilat/coagent/internal/llmwire"
+	"github.com/pilat/coagent/internal/loader"
+	"github.com/pilat/coagent/internal/sessionprompt"
 	"github.com/pilat/coagent/internal/tool"
-	"github.com/pilat/coagent/internal/tool/builtin"
 )
 
 // Host-owned checkpoint wrapper. The complete wrapper is what makes a row a
@@ -41,7 +42,7 @@ func parseMarkedSummary(content string) (string, string, bool) {
 	inner = strings.TrimPrefix(inner, "\n\n")
 	inner = strings.TrimSuffix(inner, "\n")
 
-	backgroundIdx := strings.LastIndex(inner, backgroundSectionMarker)
+	backgroundIdx := strings.LastIndex(inner, sessionprompt.BackgroundSectionMarker)
 
 	legacyIdx := strings.LastIndex(inner, legacyBackgroundSectionMarker)
 	if legacyIdx > backgroundIdx {
@@ -69,7 +70,7 @@ func renderMarkedSummary(modelText, background string) string {
 // lastEnvelope returns the last canonical skill envelope in content, if any.
 // Transport stamping may prefix the content, so extraction is not exactness.
 func lastEnvelope(content string) (string, bool) {
-	envs := builtin.ExtractRenderedSkills(content)
+	envs := loader.ExtractRenderedSkills(content)
 	if len(envs) == 0 {
 		return "", false
 	}

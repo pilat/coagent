@@ -9,7 +9,7 @@ import (
 	"github.com/pilat/coagent/internal/sessionstore"
 )
 
-func (s *svc) finishRun(ctx context.Context, r *runState, runErr error) (RunResult, error) {
+func (s *Session) finishRun(ctx context.Context, r *runState, runErr error) (RunResult, error) {
 	if r.iterations >= hardIterationCeiling && runErr == nil {
 		runErr = fmt.Errorf("maximum iterations (%d) reached", hardIterationCeiling)
 	}
@@ -27,7 +27,7 @@ func (s *svc) finishRun(ctx context.Context, r *runState, runErr error) (RunResu
 	return r.result, runErr
 }
 
-func (s *svc) cancelRunActivation(ctx context.Context, runErr error) error {
+func (s *Session) cancelRunActivation(ctx context.Context, runErr error) error {
 	grant := s.currentActivation
 	if grant == nil || grant.ToolCallID != "" {
 		return runErr
@@ -44,10 +44,10 @@ func (s *svc) cancelRunActivation(ctx context.Context, runErr error) error {
 	return runErr
 }
 
-func (s *svc) commitRunState(ctx context.Context, r *runState, runErr error) error {
+func (s *Session) commitRunState(ctx context.Context, r *runState, runErr error) error {
 	status := s.runStatus(r, runErr)
 	iteration := s.iterationOffset + r.iterations
-	todoData, err := json.Marshal(s.todoStore.List())
+	todoData, err := json.Marshal(s.prompt.Todos.List())
 	if err != nil {
 		return errors.Join(runErr, err)
 	}
@@ -70,7 +70,7 @@ func (s *svc) commitRunState(ctx context.Context, r *runState, runErr error) err
 	return runErr
 }
 
-func (s *svc) runStatus(r *runState, runErr error) sessionstore.SessionStatus {
+func (s *Session) runStatus(r *runState, runErr error) sessionstore.SessionStatus {
 	if runErr != nil {
 		return sessionstore.SessionStatusError
 	}

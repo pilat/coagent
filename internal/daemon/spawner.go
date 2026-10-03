@@ -8,19 +8,20 @@ import (
 
 	"github.com/pilat/coagent/internal/admission"
 	"github.com/pilat/coagent/internal/budget"
-	"github.com/pilat/coagent/internal/session"
+	"github.com/pilat/coagent/internal/sessionbuild"
 	"github.com/pilat/coagent/internal/sessionstore"
 	"github.com/pilat/coagent/internal/subagent"
 )
 
-// Spawn creates a child session + durable link and starts it running in the
-// background. It never waits: the child id is returned immediately.
-func (s *svc) Spawn(ctx context.Context, req spawnRequest) (childResult, error) {
-	var result childResult
+var _ subagent.Spawner = (*svc)(nil)
+
+// Spawn starts a durably linked child and returns its ID without waiting.
+func (s *svc) Spawn(ctx context.Context, req subagent.SpawnRequest) (subagent.ChildResult, error) {
+	var result subagent.ChildResult
 
 	unlock, err := s.lockSessionTree(ctx, req.ParentID)
 	if err != nil {
-		return childResult{}, err
+		return subagent.ChildResult{}, err
 	}
 	defer unlock()
 
@@ -36,12 +37,12 @@ func (s *svc) Spawn(ctx context.Context, req spawnRequest) (childResult, error) 
 			return fmt.Errorf("start child runner: %w", startErr)
 		}
 
-		result = childResult{ChildID: childID, State: subagent.StateSpawned}
+		result = subagent.ChildResult{ChildID: childID, State: subagent.StateSpawned}
 
 		return nil
 	})
 	if err != nil {
-		return childResult{}, fmt.Errorf("guard child spawn: %w", err)
+		return subagent.ChildResult{}, fmt.Errorf("guard child spawn: %w", err)
 	}
 
 	return result, nil
@@ -51,7 +52,7 @@ func (s *svc) Spawn(ctx context.Context, req spawnRequest) (childResult, error) 
 // creates the child session row + its subagent_links row.
 // Returns the child id plus the parent's workdir/project for runner start. The
 // agent type was already validated by the task tool against the session's set.
-func (s *svc) createChildSession(ctx context.Context, req spawnRequest) (int64, string, int64, error) {
+func (s *svc) createChildSession(ctx context.Context, req subagent.SpawnRequest) (int64, string, int64, error) {
 	parentRec, err := s.sessionStore.GetSession(ctx, req.ParentID)
 	if err != nil {
 		return 0, "", 0, fmt.Errorf("parent session %d: %w", req.ParentID, err)
@@ -125,7 +126,7 @@ func (s *svc) createChildSession(ctx context.Context, req spawnRequest) (int64, 
 }
 
 // Result returns a snapshot of a child's state and (once terminal) its output.
-func (s *svc) Result(ctx context.Context, childID int64) (childResult, error) {
+func (s *svc) Result(ctx context.Context, childID int64) (subagent.ChildResult, error) {
 	return s.childSnapshot(ctx, childID)
 }
 
@@ -164,7 +165,10 @@ func (s *svc) SendToChild(ctx context.Context, childID int64, msg string) error 
 		return fmt.Errorf("subagent %d is killed", childID)
 	}
 
-	if _, err := s.modelInputs.Enqueue(ctx, sessionstore.Input{SessionID: childID, Source: sessionstore.InputSourceAgent, Content: msg}); err != nil {
+	if _, err := s.modelInputs.Enqueue(
+		ctx,
+		sessionstore.Input{SessionID: childID, Source: sessionstore.InputSourceAgent, Content: msg},
+	); err != nil {
 		return fmt.Errorf("persist subagent follow-up: %w", err)
 	}
 
@@ -254,19 +258,19 @@ func (s *svc) LinkPending(ctx context.Context, parentID int64, taskCallID string
 	return link != nil, nil
 }
 
-// childSnapshot builds a childResult from the durable link state (authoritative
+// childSnapshot builds a subagent.ChildResult from the durable link state (authoritative
 // terminal signal) plus the child's iteration count and final output.
-func (s *svc) childSnapshot(ctx context.Context, childID int64) (childResult, error) {
+func (s *svc) childSnapshot(ctx context.Context, childID int64) (subagent.ChildResult, error) {
 	link, err := s.links.GetLink(ctx, childID)
 	if err != nil {
-		return childResult{}, fmt.Errorf("get link: %w", err)
+		return subagent.ChildResult{}, fmt.Errorf("get link: %w", err)
 	}
 
 	if link == nil {
-		return childResult{}, fmt.Errorf("subagent %d not found", childID)
+		return subagent.ChildResult{}, fmt.Errorf("subagent %d not found", childID)
 	}
 
-	res := childResult{
+	res := subagent.ChildResult{
 		ChildID:  childID,
 		State:    link.State,
 		Terminal: link.Terminal(),
@@ -312,7 +316,7 @@ func (s *svc) resolveChildEffort(model, requested, inherited string) (string, er
 	}
 
 	if requested != "" {
-		level, err := session.ResolveReasoningLevel(s.modelEntries, model, requested)
+		level, err := sessionbuild.ResolveReasoningLevel(s.modelEntries, model, requested)
 		if err != nil {
 			return "", fmt.Errorf("spawn subagent on model %s: %w", model, err)
 		}
@@ -320,11 +324,11 @@ func (s *svc) resolveChildEffort(model, requested, inherited string) (string, er
 		return level, nil
 	}
 
-	if level, err := session.ResolveReasoningLevel(s.modelEntries, model, inherited); err == nil {
+	if level, err := sessionbuild.ResolveReasoningLevel(s.modelEntries, model, inherited); err == nil {
 		return level, nil
 	}
 
-	level, err := session.ResolveReasoningLevel(s.modelEntries, model, "")
+	level, err := sessionbuild.ResolveReasoningLevel(s.modelEntries, model, "")
 	if err != nil {
 		return "", fmt.Errorf("spawn subagent on model %s: %w", model, err)
 	}
@@ -333,7 +337,7 @@ func (s *svc) resolveChildEffort(model, requested, inherited string) (string, er
 }
 
 // resolveChildModel picks the child model: explicit request → agent type override → parent model.
-func (s *svc) resolveChildModel(req spawnRequest, parentRec *sessionstore.SessionRecord) string {
+func (s *svc) resolveChildModel(req subagent.SpawnRequest, parentRec *sessionstore.SessionRecord) string {
 	switch {
 	case req.Model != "":
 		return req.Model
