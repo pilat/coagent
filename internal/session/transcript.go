@@ -88,15 +88,28 @@ func (s *Session) HasPendingWork() bool {
 	return s.unansweredWork()
 }
 
-func UnresolvedCalls(messages []llmwire.Message) []PendingToolCall {
-	calls := unresolvedCallsMatching(messages, func(llmwire.ToolCall) bool { return true })
+// UnresolvedStoredCalls uses the same call resolution rules as the live loop.
+func UnresolvedStoredCalls(messages []*transcript.Message) ([]PendingToolCall, error) {
+	wire := make([]llmwire.Message, 0, len(messages))
+	for _, message := range messages {
+		row := llmwire.Message{Role: message.Role, ToolCallID: message.ToolCallID}
+		if len(message.ToolCalls) > 0 {
+			if err := json.Unmarshal(message.ToolCalls, &row.ToolCalls); err != nil {
+				return nil, fmt.Errorf("decode tool calls of message %d: %w", message.ID, err)
+			}
+		}
+
+		wire = append(wire, row)
+	}
+
+	calls := unresolvedCallsMatching(wire, func(llmwire.ToolCall) bool { return true })
 
 	result := make([]PendingToolCall, 0, len(calls))
 	for _, call := range calls {
 		result = append(result, PendingToolCall{ID: call.ID, Name: call.Name})
 	}
 
-	return result
+	return result, nil
 }
 
 func SettleResults(calls []PendingToolCall, text string) []*transcript.Message {

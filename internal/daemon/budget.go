@@ -9,21 +9,12 @@ import (
 
 	"github.com/pilat/coagent/internal/budget"
 	"github.com/pilat/coagent/internal/logger"
+	"github.com/pilat/coagent/internal/session"
 	"github.com/pilat/coagent/internal/sessionevent"
 	"github.com/pilat/coagent/internal/sessionstore"
 )
 
 const budgetParkRequested = "requested"
-
-func (s *svc) modelHasPricing(modelID string) bool {
-	for _, model := range s.modelEntries {
-		if model.ID == modelID {
-			return model.Pricing != nil
-		}
-	}
-
-	return false
-}
 
 func sessionRootID(record *sessionstore.SessionRecord) int64 {
 	if record.RootID != 0 {
@@ -51,17 +42,16 @@ func (s *svc) releaseArmedBudget(ctx context.Context, rootID int64, reason strin
 	return nil
 }
 
-//nolint:wsl_v5 // Terminal budget policy remains a flat sequence of exclusive outcomes.
 func (s *svc) settleRootBudget(
 	ctx context.Context,
 	rootID int64,
 	suspended bool,
 	runErr error,
-	notify func(sessionevent.Notification),
 ) error {
 	if suspended && runErr == nil {
 		return nil
 	}
+
 	if runErr != nil {
 		return s.releaseArmedBudget(ctx, rootID, "error")
 	}
@@ -72,13 +62,14 @@ func (s *svc) settleRootBudget(
 			"background_obligation_projection_failed",
 			zap.Int64("session_id", rootID), zap.Error(projectionErr),
 		)
-		notify(sessionevent.Notification{
+		s.publish(rootID, sessionevent.Notification{
 			Type:    sessionevent.NotifyMessage,
 			Message: "⚠️ Could not verify background work before releasing the active budget; the budget remains armed.",
 		})
 
 		return nil
 	}
+
 	if retain {
 		return nil
 	}
@@ -86,13 +77,13 @@ func (s *svc) settleRootBudget(
 	return s.releaseArmedBudget(ctx, rootID, "completed")
 }
 
-//nolint:wsl_v5 // Budget state gates the more expensive tree projection.
 func (s *svc) retainBudgetForBackground(ctx context.Context, rootID int64) (bool, error) {
 	record, err := s.budgetSvc.Get(ctx, rootID)
 	if errors.Is(err, budget.ErrNotFound) ||
 		(err == nil && record.State != budget.Armed) {
 		return false, nil
 	}
+
 	if err != nil {
 		return false, fmt.Errorf("load budget for background projection: %w", err)
 	}
@@ -103,4 +94,26 @@ func (s *svc) retainBudgetForBackground(ctx context.Context, rootID int64) (bool
 	}
 
 	return retained, nil
+}
+
+func (s *svc) settleRunBudget(
+	ctx context.Context,
+	rec *sessionstore.SessionRecord,
+	result session.RunResult,
+	runErr error,
+) error {
+	if result.BudgetFired {
+		record, budgetErr := s.budgetSvc.Get(ctx, sessionRootID(rec))
+		if budgetErr != nil {
+			runErr = errors.Join(runErr, budgetErr)
+		} else if record.ParkPhase == budgetParkRequested {
+			s.startBudgetPark(record)
+		}
+	}
+
+	if rec.ParentID == 0 && !result.BudgetFired {
+		runErr = errors.Join(runErr, s.settleRootBudget(ctx, rec.ID, result.Suspended, runErr))
+	}
+
+	return runErr
 }

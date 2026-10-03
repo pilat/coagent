@@ -13,6 +13,7 @@ import (
 	"github.com/pilat/coagent/internal/coagenthome"
 	"github.com/pilat/coagent/internal/controllerapi"
 	"github.com/pilat/coagent/internal/logger"
+	"github.com/pilat/coagent/internal/session"
 	"github.com/pilat/coagent/internal/sessionevent"
 	"github.com/pilat/coagent/internal/sessionstore"
 )
@@ -76,7 +77,7 @@ func (s *svc) Fence(fenceCtx context.Context, rootSessionID int64) (func(), erro
 		return nil, fmt.Errorf("lock process tree %d: %w", rootSessionID, err)
 	}
 
-	if s.shuttingDown.Load() {
+	if s.life.closed() {
 		unlock()
 
 		return nil, backgroundprocess.ErrFenced
@@ -105,7 +106,7 @@ func (s *svc) Fence(fenceCtx context.Context, rootSessionID int64) (func(), erro
 }
 
 func (s *svc) killLocked(ctx context.Context, sessionID int64) error {
-	rs, ok := s.runners.Load(sessionID)
+	rs, ok := s.runners.load(sessionID)
 
 	if ok {
 		s.publish(
@@ -262,11 +263,11 @@ func (s *svc) stopTreeCleanup(ctx context.Context, sessionID int64, options stop
 
 	ids := plan.SessionIDs()
 
-	s.removeQueuedSessions(ids)
+	s.runners.forget(ids)
 
 	runners := make([]*runner, 0, len(ids))
 	for _, id := range ids {
-		rs, _ := s.runners.Load(id)
+		rs, _ := s.runners.load(id)
 
 		if rs != nil {
 			runners = append(runners, rs)
@@ -303,7 +304,7 @@ func (s *svc) stopTreeCleanup(ctx context.Context, sessionID int64, options stop
 		return err
 	}
 	for _, id := range ids {
-		if _, err := s.scheduleSvc.CancelPendingSleeps(cleanupCtx, id); err != nil {
+		if _, err := s.schedules.CancelPendingSleeps(cleanupCtx, id); err != nil {
 			return fmt.Errorf("cancel one-shot waits for session %d: %w", id, err)
 		}
 	}
@@ -354,7 +355,7 @@ func (s *svc) liveTreeRunnerIDs(ctx context.Context, rootID int64) ([]int64, err
 		if record.ID != rootID && record.RootID != rootID {
 			continue
 		}
-		if _, ok := s.runners.Load(record.ID); ok {
+		if _, ok := s.runners.load(record.ID); ok {
 			ids = append(ids, record.ID)
 		}
 	}
@@ -445,7 +446,7 @@ func (s *svc) newProcessService(ctx context.Context) backgroundprocess.Service {
 }
 
 func (s *svc) removeSchedules(ctx context.Context, sessionID int64) {
-	if err := s.scheduleSvc.RemoveAllForSession(ctx, sessionID); err != nil {
+	if err := s.schedules.RemoveAllForSession(ctx, sessionID); err != nil {
 		logger.Ctx(ctx).Named("daemon.manager").
 			Warn("remove_schedules_failed", zap.Int64("session_id", sessionID), zap.Error(err))
 	}
@@ -482,4 +483,42 @@ func (s *svc) lockSessionTree(ctx context.Context, sessionID int64) (func(), err
 	}
 
 	return lock.acquire(ctx)
+}
+
+// commitStoppedSession is runner-owned transcript mutation used by the /stop
+// lifecycle after every live writer has joined.
+func (s *svc) commitStoppedSession(ctx context.Context, sessionID int64) error {
+	messages, err := s.store.LoadActiveMessages(ctx, sessionID)
+	if err != nil {
+		return fmt.Errorf("settle stopped transcript: %w", err)
+	}
+
+	calls, err := session.UnresolvedStoredCalls(messages)
+	if err != nil {
+		return fmt.Errorf("settle stopped transcript: %w", err)
+	}
+
+	activation, err := s.store.PendingActivation(ctx, sessionID)
+	if err != nil && !errors.Is(err, sessionstore.ErrActivationNotFound) {
+		return fmt.Errorf("settle stopped transcript: %w", err)
+	}
+
+	commit := sessionstore.Commit{
+		SessionID:   sessionID,
+		Mode:        sessionstore.CommitLifecycle,
+		ToolResults: session.SettleResults(calls, "Stopped by user."),
+	}
+	if activation != nil {
+		commit.Activation = &sessionstore.ActivationChange{
+			InputID: activation.InputID,
+			State:   sessionstore.ActivationExpired,
+		}
+	}
+
+	_, err = s.store.Commit(ctx, commit)
+	if err != nil {
+		return fmt.Errorf("settle stopped transcript: %w", err)
+	}
+
+	return nil
 }

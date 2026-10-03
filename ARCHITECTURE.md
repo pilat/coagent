@@ -189,7 +189,7 @@ policy, not a goroutine inside its parent. The daemon enforces total, child,
 per-parent and depth limits, retaining overflow in FIFO order. A suspended
 parent does not retain an execution slot; its durable pending work does.
 The daemon owns capacity counters and quota decisions alongside durable
-startability checks, FIFO overflow queues, classification, runner registration
+startability checks, one FIFO waiting queue, classification, runner registration
 and launch.
 
 Session assembly is the authority that registers gated tools. The daemon supplies
@@ -316,8 +316,9 @@ process-output diagnostics available.
 
 ### Shutdown and restart
 
-Shutdown stops admission, drains or checkpoints work according to its durable
-state, stops managers and pooled resources, then closes stores. Startup recovery
+Shutdown stops admission, cancels daemon workers and live runners, and joins
+startup and complete runner teardown before closing session tool resources.
+The composition root stops managers and pooled resources before closing stores. Startup recovery
 rebuilds runnable sessions from persisted rows and producer ledgers. Restart
 replays obligations, not decisions: a crash after candidate+nudge commit
 resumes the one owed confirmation without another nudge, a crash after
@@ -817,8 +818,9 @@ tools to session assembly and routes session events. `managercontrol` implements
 the manager controller over the daemon's command backend and reads persistence,
 progress and subscriptions directly from their owners. The daemon owns capacity
 decisions and `sessionbus` owns fan-out.
-The daemon owns concrete runner state, the synchronized runner registry,
-shutdown fence, FIFO admission caches and cancellable recovery worker. Its tree
+The daemon owns concrete runner state, one synchronized runner set with capacity
+counters and a FIFO waiting queue, and one joined lifetime for daemon workers.
+Its tree
 fence serializes spawn and process admission against stop, kill and clear;
 terminalization and completion delivery use the durable subagent ledger.
 The lifecycle composition boundary is recorded in
@@ -1005,8 +1007,9 @@ session rows. `managercontrol` owns authorization, DTO conversion, project
 resolution and durable output-delivery use cases; `managerdiscovery` owns
 manager-facing project listing, model, skill and filesystem discovery over
 session-store. Controller methods are thin adapters, and the composition root
-binds them to the daemon command backend, session-store, progress-runtime and
-session bus. The durable management-surface session attribute, rather than a
+injects discovery alongside the daemon command backend, session-store,
+progress-runtime and session bus. The durable management-surface session
+attribute, rather than a
 transport attribute or numeric session ID, marks each manager's management root;
 its delivery always resolves the manager's current service topic, and management
 roots are excluded from manager-level kill flows. Session-event defines

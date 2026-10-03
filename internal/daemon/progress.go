@@ -1,9 +1,15 @@
 package daemon
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
+	"time"
 
 	"go.uber.org/zap"
 
@@ -15,10 +21,16 @@ import (
 	"github.com/pilat/coagent/internal/subagent"
 )
 
+type waitingProjection struct {
+	wait     sessionevent.WaitItem
+	display  map[string]any
+	identity map[string]any
+}
+
 var errWaitingSlotNotSuspended = errors.New("waiting slot requires a suspended root")
 
 func (s *svc) liveContextProjection(ctx context.Context, rootID int64) (progress.Context, bool) {
-	activeRunner, ok := s.runners.Load(rootID)
+	activeRunner, ok := s.runners.load(rootID)
 	if !ok {
 		return progress.Context{}, false
 	}
@@ -48,7 +60,7 @@ func (s *svc) mainModelWorking(ctx context.Context, rootID int64) bool {
 		return false
 	}
 
-	activeRunner, ok := s.runners.Load(rootID)
+	activeRunner, ok := s.runners.load(rootID)
 	if !ok {
 		return false
 	}
@@ -186,4 +198,152 @@ func (s *svc) updateLiveLocked(ctx context.Context, sessionID int64) {
 	live := progressruntime.Live{Active: s.HasActiveLoop(sessionID), Working: s.mainModelWorking(ctx, sessionID)}
 	live.Context, _ = s.liveContextProjection(ctx, sessionID)
 	s.progress.SetLive(sessionID, live)
+}
+
+func (s *svc) publishWaiting(
+	ctx context.Context,
+	sessionID int64,
+) {
+	projections := s.collectWaitingProjections(ctx, sessionID)
+	if len(projections) == 0 {
+		return
+	}
+
+	waits := make([]sessionevent.WaitItem, len(projections))
+	for i, projection := range projections {
+		waits[i] = projection.wait
+	}
+
+	if err := s.recordWaitingProgress(ctx, sessionID, projections); err != nil {
+		logger.Ctx(ctx).Named("daemon.waiting").Warn("record_waiting_progress", zap.Error(err))
+	}
+
+	s.publish(sessionID, sessionevent.Notification{
+		Type: sessionevent.NotifyWaiting, Message: sessionevent.FormatWaiting(waits), Waiting: waits,
+	})
+}
+
+func (s *svc) collectWaitingProjections(ctx context.Context, sessionID int64) []waitingProjection {
+	projections := make([]waitingProjection, 0)
+
+	sleeps, err := s.schedules.PendingSleeps(ctx, sessionID)
+	if err != nil {
+		logger.Ctx(ctx).Named("daemon.waiting").Warn("list_pending_sleeps", zap.Error(err))
+	} else {
+		for _, sleep := range sleeps {
+			wakeAt := sleep.WakeAt
+			projections = append(projections, waitingProjection{
+				wait:     sessionevent.WaitItem{Kind: sessionevent.WaitSleep, WakeAt: &wakeAt},
+				display:  map[string]any{"wake_at": wakeAt.Format(time.RFC3339)},
+				identity: map[string]any{"tool_call_id": sleep.CallID},
+			})
+		}
+	}
+
+	links, err := s.links.ListPendingChildLinks(ctx, sessionID)
+	if err != nil {
+		logger.Ctx(ctx).Named("daemon.waiting").Warn("list_subagents", zap.Error(err))
+	} else {
+		for _, link := range links {
+			if link.Blocking && !link.Terminal() && link.State != subagent.StateStopped {
+				projections = append(projections, waitingProjection{
+					wait:     sessionevent.WaitItem{Kind: sessionevent.WaitSubagent, ChildID: link.ChildID},
+					display:  map[string]any{"child_id": link.ChildID},
+					identity: map[string]any{"child_id": link.ChildID, "activation_seq": link.ActivationSeq},
+				})
+			}
+		}
+	}
+
+	sort.Slice(projections, func(i, j int) bool {
+		return waitingIdentityKey(projections[i].identity) < waitingIdentityKey(projections[j].identity)
+	})
+
+	return projections
+}
+
+// recordWaitingProgress enqueues the durable waiting card for the projected
+// set; the canonical replaceable row is its own dedupe, so nothing is returned.
+func (s *svc) recordWaitingProgress(
+	ctx context.Context,
+	sessionID int64,
+	projections []waitingProjection,
+) error {
+	causalID, err := waitingProgressCausalID(projections)
+	if err != nil {
+		return err
+	}
+
+	// A stale waiting card is dropped without a recapture retry: the newer
+	// transition that moved the generation owns the next card.
+	if _, _, err := s.progress.EnqueueChangeFor(ctx, sessionID, causalID, false); err != nil &&
+		!errors.Is(err, sessionstore.ErrProgressSuperseded) && !errors.Is(err, sessionstore.ErrOutputOwner) {
+		return fmt.Errorf("enqueue progress: %w", err)
+	}
+
+	return nil
+}
+
+func waitingProgressCausalID(projections []waitingProjection) (string, error) {
+	identities := make([]map[string]any, len(projections))
+
+	for i, projection := range projections {
+		identities[i] = projection.identity
+	}
+
+	identity, err := canonicalWaitingIdentities(identities)
+	if err != nil {
+		return "", fmt.Errorf("encode waiting identities: %w", err)
+	}
+
+	digest := sha256.Sum256(identity)
+	hash := hex.EncodeToString(digest[:])
+
+	return "waiting:" + hash, nil
+}
+
+func waitingIdentityKey(identity map[string]any) string {
+	if childID, child := positiveWaitingInt(identity["child_id"]); child {
+		activation, _ := positiveWaitingInt(identity["activation_seq"])
+
+		return fmt.Sprintf("0:%020d:%020d", childID, activation)
+	}
+
+	if callID, ok := identity["tool_call_id"].(string); ok {
+		return "1:" + callID
+	}
+
+	return "2:invalid"
+}
+
+func positiveWaitingInt(value any) (int64, bool) {
+	switch number := value.(type) {
+	case int64:
+		return number, number > 0
+	case int:
+		return int64(number), number > 0
+	default:
+		return 0, false
+	}
+}
+
+func canonicalWaitingIdentities(value any) ([]byte, error) {
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return nil, fmt.Errorf("encode waiting identities: %w", err)
+	}
+
+	var items []json.RawMessage
+	if err := json.Unmarshal(encoded, &items); err != nil {
+		return nil, fmt.Errorf("decode waiting identities: %w", err)
+	}
+
+	sort.Slice(items, func(i, j int) bool { return bytes.Compare(items[i], items[j]) < 0 })
+
+	canonical, err := json.Marshal(items)
+	if err != nil {
+		return nil, fmt.Errorf("encode canonical waiting identities: %w", err)
+	}
+
+	return canonical, nil
 }

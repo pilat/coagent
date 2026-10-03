@@ -11,6 +11,11 @@ import (
 	"github.com/pilat/coagent/internal/sessionstore"
 )
 
+type sessionEvents struct {
+	daemon    *svc
+	sessionID int64
+}
+
 func (s *svc) NotifySession(sessionID int64, n sessionevent.Notification) {
 	s.publish(sessionID, n)
 }
@@ -88,4 +93,52 @@ func ownerlessSession(record *sessionstore.SessionRecord) bool {
 	owner, _ := record.Attributes[controllerapi.SessionAttributeManagerID].(string)
 
 	return owner == ""
+}
+
+func (e *sessionEvents) Emit(n sessionevent.Notification) {
+	s := e.daemon
+	ctx := context.Background()
+
+	switch n.Type {
+	case sessionevent.NotifyModelWorking:
+		working, _ := n.Attributes["working"].(bool)
+		if rs, exists := s.runners.load(e.sessionID); exists {
+			rs.SetWorking(working)
+
+			if working {
+				rs.SetPreserveStopped(false)
+			}
+		}
+
+		s.updateLive(ctx, e.sessionID)
+		s.progress.Wake()
+	case sessionevent.NotifyContextChanged:
+		s.updateLive(ctx, e.sessionID)
+	case sessionevent.NotifyIterationPersisted:
+		if iteration, ok := n.Attributes["iteration"].(int); ok {
+			s.publishSubagentIterationProgress(ctx, e.sessionID, int64(iteration))
+		}
+	case sessionevent.NotifyProgressChanged:
+		s.updateLive(ctx, e.sessionID)
+
+		content, published, err := s.progress.EnqueueChange(ctx, e.sessionID)
+		if err != nil {
+			logger.Ctx(ctx).Named("daemon.progress").Warn("enqueue_progress_change", zap.Error(err))
+			return
+		}
+
+		if published {
+			s.publish(e.sessionID, sessionevent.Notification{Type: sessionevent.NotifyMessage, Message: content})
+		}
+	case sessionevent.NotifyMessage,
+		sessionevent.NotifyHeartbeat,
+		sessionevent.NotifyStateChanged,
+		sessionevent.NotifyInputReceived,
+		sessionevent.NotifySessionCreated,
+		sessionevent.NotifySessionCleared,
+		sessionevent.NotifyWaiting:
+		s.publish(e.sessionID, n)
+	default:
+		s.publish(e.sessionID, n)
+	}
 }

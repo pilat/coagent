@@ -33,7 +33,7 @@ func (s *svc) retireTreeToolResources(ctx context.Context, sessionID int64) erro
 	}
 
 	for _, id := range ids {
-		if err := sessionbuild.RetireToolResources(s.buildInput.Resources, id); err != nil {
+		if err := sessionbuild.RetireToolResources(s.build.Resources, id); err != nil {
 			return fmt.Errorf("retire session %d tools: %w", id, err)
 		}
 	}

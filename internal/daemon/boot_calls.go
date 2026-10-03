@@ -60,9 +60,16 @@ func (s *svc) recoverInterruptedTools(ctx context.Context) error {
 			return fmt.Errorf("load interrupted transcript %d: %w", record.ID, err)
 		}
 
-		calls, err := unresolvedStoredCalls(messages, func(name string) bool { return !tool.IsExternalCall(name) })
+		unresolved, err := session.UnresolvedStoredCalls(messages)
 		if err != nil {
 			return err
+		}
+
+		calls := make([]session.PendingToolCall, 0, len(unresolved))
+		for _, call := range unresolved {
+			if !tool.IsExternalCall(call.Name) {
+				calls = append(calls, call)
+			}
 		}
 
 		if len(calls) == 0 {

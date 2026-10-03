@@ -17,11 +17,7 @@ const (
 	completionBackoff  = 150 * time.Millisecond
 )
 
-func (s *svc) finalizeChildLocked(ctx context.Context, childID int64, shuttingDown, errored bool) func() {
-	if shuttingDown {
-		return nil
-	}
-
+func (s *svc) finalizeChildLocked(ctx context.Context, childID int64, errored bool) func() {
 	link, err := s.links.GetLink(ctx, childID)
 	if err != nil {
 		logger.Ctx(ctx).Named("daemon.completion").Error(
@@ -122,7 +118,7 @@ func (s *svc) rearm(ctx context.Context, childID int64) error {
 
 	s.publishSubagentProgress(ctx, childID)
 
-	if err := s.ensureSessionRunnerLocked(ctx, childID); err != nil {
+	if err := s.startLocked(ctx, childID); err != nil {
 		return fmt.Errorf("start rearmed child %d: %w", childID, err)
 	}
 

@@ -64,7 +64,7 @@ func (s *svc) setBudgetTimer(record *budget.Record) {
 	s.budgetTimerMu.Lock()
 	defer s.budgetTimerMu.Unlock()
 
-	if s.shuttingDown.Load() {
+	if s.life.closed() {
 		return
 	}
 
@@ -102,15 +102,15 @@ func (s *svc) setBudgetTimer(record *budget.Record) {
 	}
 
 	s.budgetTimers[record.RootSessionID] = pending
-	s.budgetWG.Go(func() { s.waitBudgetDeadline(record.RootSessionID, pending) })
+	s.life.Go("daemon.budget", func(ctx context.Context) { s.waitBudgetDeadline(ctx, record.RootSessionID, pending) })
 }
 
-func (s *svc) waitBudgetDeadline(rootID int64, pending *budgetDeadline) {
+func (s *svc) waitBudgetDeadline(ctx context.Context, rootID int64, pending *budgetDeadline) {
 	defer pending.timer.Stop()
-	defer s.finishBudgetTimer(rootID, pending)
+	defer s.finishBudgetTimer(ctx, rootID, pending)
 
 	select {
-	case <-s.budgetCtx.Done():
+	case <-ctx.Done():
 		return
 	case <-pending.cancel:
 		return
@@ -122,12 +122,12 @@ func (s *svc) waitBudgetDeadline(rootID int64, pending *budgetDeadline) {
 	}
 
 	if pending.park != nil {
-		s.parkBudgetTree(s.budgetCtx, pending.park)
+		s.parkBudgetTree(ctx, pending.park)
 		return
 	}
 
 	for attempt := range 3 {
-		record, fired, err := s.store.ObserveBudget(s.budgetCtx, rootID, time.Now().UTC(), "")
+		record, fired, err := s.store.ObserveBudget(ctx, rootID, time.Now().UTC(), "")
 		if err == nil {
 			if fired && record.ParkPhase == budgetParkRequested {
 				s.startBudgetPark(record)
@@ -136,7 +136,7 @@ func (s *svc) waitBudgetDeadline(rootID int64, pending *budgetDeadline) {
 			return
 		}
 
-		logger.Ctx(s.budgetCtx).
+		logger.Ctx(ctx).
 			Named("daemon.budget").
 			Warn("deadline_observation_failed", zap.Int("attempt", attempt+1), zap.Error(err))
 
@@ -147,7 +147,7 @@ func (s *svc) waitBudgetDeadline(rootID int64, pending *budgetDeadline) {
 		pending.timer.Reset(time.Second)
 
 		select {
-		case <-s.budgetCtx.Done():
+		case <-ctx.Done():
 			return
 		case <-pending.cancel:
 			return
@@ -156,7 +156,7 @@ func (s *svc) waitBudgetDeadline(rootID int64, pending *budgetDeadline) {
 	}
 }
 
-func (s *svc) finishBudgetTimer(rootID int64, pending *budgetDeadline) {
+func (s *svc) finishBudgetTimer(ctx context.Context, rootID int64, pending *budgetDeadline) {
 	s.budgetTimerMu.Lock()
 
 	current := s.budgetTimers[rootID] == pending
@@ -165,8 +165,8 @@ func (s *svc) finishBudgetTimer(rootID int64, pending *budgetDeadline) {
 	}
 	s.budgetTimerMu.Unlock()
 
-	if current && s.budgetCtx.Err() == nil {
-		s.refreshBudgetTimer(s.budgetCtx, rootID)
+	if current && ctx.Err() == nil {
+		s.refreshBudgetTimer(ctx, rootID)
 	}
 }
 
@@ -174,7 +174,7 @@ func (s *svc) scheduleBudgetRefresh(rootID int64) {
 	s.budgetTimerMu.Lock()
 	defer s.budgetTimerMu.Unlock()
 
-	if s.shuttingDown.Load() {
+	if s.life.closed() {
 		return
 	}
 
@@ -190,5 +190,5 @@ func (s *svc) scheduleBudgetRefresh(rootID int64) {
 
 	pending := &budgetDeadline{timer: time.NewTimer(time.Second), cancel: make(chan struct{}), refresh: true}
 	s.budgetTimers[rootID] = pending
-	s.budgetWG.Go(func() { s.waitBudgetDeadline(rootID, pending) })
+	s.life.Go("daemon.budget", func(ctx context.Context) { s.waitBudgetDeadline(ctx, rootID, pending) })
 }

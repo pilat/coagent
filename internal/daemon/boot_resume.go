@@ -2,7 +2,6 @@ package daemon
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"strings"
 
@@ -24,7 +23,11 @@ func (s *svc) resumeAfterRestart(ctx context.Context) {
 	}
 
 	for _, link := range running {
-		s.resumeChild(ctx, link)
+		if err := s.start(ctx, link.ChildID); err != nil {
+			logger.Ctx(ctx).
+				Named("daemon.sweep").
+				Error("resume_child_failed", zap.Int64("child", link.ChildID), zap.Error(err))
+		}
 	}
 
 	// PASS 2 — re-deliver terminal-but-undelivered completions to live/idle parents.
@@ -134,12 +137,15 @@ func (s *svc) resumeRecoverableRoot(ctx context.Context, sessionID int64) (bool,
 			continue
 		}
 
+		if !isEnqueueCommand(input.RawContent) {
+			continue
+		}
 		switch strings.TrimSpace(input.RawContent) {
 		case statusCommand:
 			if _, err := s.handleGenericCommand(ctx, input); err != nil {
 				return false, err
 			}
-		case "/stop", "/clear", "/kill":
+		case stopCommand, clearCommand, killCommand:
 			return s.handleGenericCommand(ctx, input)
 		}
 	}
@@ -157,7 +163,7 @@ func (s *svc) resumeRecoverableRoot(ctx context.Context, sessionID int64) (bool,
 		return false, fmt.Errorf("load recoverable root: %w", err)
 	}
 
-	runnable, err := s.recoverableInputRunnable(ctx, sessionID)
+	runnable, err := s.recoverableRunnable(ctx, sessionID)
 	if err != nil || !runnable {
 		return false, err
 	}
@@ -175,18 +181,7 @@ func (s *svc) resumeRecoverableRoot(ctx context.Context, sessionID int64) (bool,
 		}
 	}
 
-	workDir, err := s.store.GetProjectWorkDir(ctx, record.ProjectID)
-	if err != nil {
-		return false, fmt.Errorf("resolve recoverable root project: %w", err)
-	}
-
-	if err := s.ensureRunnerLocked(ctx, sessionID, workDir, record.ProjectID); err != nil {
-		if errors.Is(err, errNoCapacity) {
-			s.enqueuePendingRunner(sessionID, workDir, record.ProjectID)
-
-			return true, nil
-		}
-
+	if err := s.startLocked(ctx, sessionID); err != nil {
 		return false, err
 	}
 
@@ -207,23 +202,4 @@ func (s *svc) resumeRecoverableChild(ctx context.Context, childID int64) error {
 
 		return s.resumeChildWithPendingInputLocked(guarded, childID)
 	})
-}
-
-// resumeChild restarts a child's runner so its loop can finish.
-func (s *svc) resumeChild(ctx context.Context, link subagent.Link) {
-	rec, err := s.store.GetSession(ctx, link.ChildID)
-	if err != nil {
-		return
-	}
-
-	workDir, err := s.store.GetProjectWorkDir(ctx, rec.ProjectID)
-	if err != nil {
-		return
-	}
-
-	if err := s.ensureRunner(ctx, link.ChildID, workDir, rec.ProjectID); err != nil {
-		logger.Ctx(ctx).
-			Named("daemon.sweep").
-			Error("resume_child_failed", zap.Int64("child", link.ChildID), zap.Error(err))
-	}
 }

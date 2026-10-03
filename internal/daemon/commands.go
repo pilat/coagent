@@ -10,21 +10,11 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/pilat/coagent/internal/budget"
-	"github.com/pilat/coagent/internal/config"
 	"github.com/pilat/coagent/internal/controllerapi"
 	"github.com/pilat/coagent/internal/logger"
 	"github.com/pilat/coagent/internal/sessionbuild"
 	"github.com/pilat/coagent/internal/sessionevent"
 	"github.com/pilat/coagent/internal/sessionstore"
-	"github.com/pilat/coagent/internal/subagent"
-)
-
-const (
-	stopCommand    = "/stop"
-	clearCommand   = "/clear"
-	killCommand    = "/kill"
-	compactCommand = "/compact"
-	statusCommand  = "/status"
 )
 
 func (s *svc) Send(ctx context.Context, projectID int64, prompt, model string, attrs map[string]any) (int64, error) {
@@ -66,7 +56,7 @@ func (s *svc) sendToSession(ctx context.Context, sessionID int64, prompt string)
 }
 
 func (s *svc) sendToSessionLocked(ctx context.Context, sessionID int64, prompt string) error {
-	_, ok := s.runners.Load(sessionID)
+	_, ok := s.runners.load(sessionID)
 	if ok {
 		return nil
 	}
@@ -93,25 +83,7 @@ func (s *svc) sendToSessionLocked(ctx context.Context, sessionID int64, prompt s
 		return nil
 	}
 
-	workDir, err := s.store.GetProjectWorkDir(ctx, rec.ProjectID)
-	if err != nil {
-		return fmt.Errorf("resolve project %d: %w", rec.ProjectID, err)
-	}
-
-	if _, ok = s.runners.Load(sessionID); ok {
-		return nil
-	}
-
-	if err := s.ensureRunnerLocked(ctx, sessionID, workDir, rec.ProjectID); err != nil {
-		if errors.Is(err, errNoCapacity) {
-			s.enqueuePendingRunner(sessionID, workDir, rec.ProjectID)
-			return nil
-		}
-
-		return err
-	}
-
-	return nil
+	return s.startLocked(ctx, sessionID)
 }
 
 func (s *svc) SendToSessionResolved(ctx context.Context, sessionID int64, prompt string) (int64, error) {
@@ -139,7 +111,7 @@ func (s *svc) SendToSessionResolved(ctx context.Context, sessionID int64, prompt
 // Model publication and construction share the tree fence so the record and
 // the next activation cannot disagree about which client to adopt.
 func (s *svc) SetModel(ctx context.Context, sessionID int64, model, reasoningLevel string) error {
-	if err := s.checkModelConfigured(model); err != nil {
+	if err := s.models.configured(model); err != nil {
 		return err
 	}
 
@@ -156,7 +128,7 @@ func (s *svc) SetModel(ctx context.Context, sessionID int64, model, reasoningLev
 
 	budgetRecord, budgetErr := s.budgetSvc.Get(ctx, sessionRootID(record))
 	if budgetErr == nil && budgetRecord.State == budget.Armed &&
-		budgetRecord.CostLimitUSD != nil && !s.modelHasPricing(model) {
+		budgetRecord.CostLimitUSD != nil && !s.models.priced(model) {
 		return errors.New("cannot switch an armed budget tree to a model without catalog pricing")
 	}
 
@@ -164,7 +136,7 @@ func (s *svc) SetModel(ctx context.Context, sessionID int64, model, reasoningLev
 		return fmt.Errorf("load budget for model switch: %w", budgetErr)
 	}
 
-	client, section, err := sessionbuild.BuildClient(s.buildInput.Config, model, reasoningLevel)
+	client, section, err := sessionbuild.BuildClient(s.build.Config, model, reasoningLevel)
 	if err != nil {
 		return fmt.Errorf("construct model %s: %w", model, err)
 	}
@@ -175,7 +147,7 @@ func (s *svc) SetModel(ctx context.Context, sessionID int64, model, reasoningLev
 		return fmt.Errorf("update session model: %w", err)
 	}
 
-	rs, ok := s.runners.Load(sessionID)
+	rs, ok := s.runners.load(sessionID)
 	if ok {
 		if sess := rs.Service(); sess != nil {
 			sess.SwitchModel(client, section)
@@ -235,22 +207,8 @@ func (s *svc) SetAttributes(ctx context.Context, sessionID int64, attrs map[stri
 	return nil
 }
 
-func isReadOnlyBoundaryCommand(content string) bool {
-	content = strings.TrimSpace(content)
-
-	return content == statusCommand || content == "/help" || content == "/schedules" ||
-		content == compactCommand || strings.HasPrefix(content, compactCommand+" ")
-}
-
-func isExactControlCommand(content string) bool {
-	content = strings.TrimSpace(content)
-
-	return isReadOnlyBoundaryCommand(content) || content == stopCommand || content == clearCommand ||
-		content == killCommand
-}
-
 func (s *svc) handleGenericCommand(ctx context.Context, input *sessionstore.InboxInput) (bool, error) {
-	if input.Source != sessionstore.InputSourceUser {
+	if input.Source != sessionstore.InputSourceUser || !isEnqueueCommand(input.RawContent) {
 		return false, nil
 	}
 
@@ -377,7 +335,7 @@ func (s *svc) prepareStoppedSessionInput(
 		return false, nil
 	}
 
-	if !isReadOnlyBoundaryCommand(prompt) {
+	if !isReadOnlyCommand(prompt) {
 		if err := s.store.UpdateSessionStatus(
 			ctx, record.ID, sessionstore.SessionStatusActive,
 		); err != nil {
@@ -404,7 +362,7 @@ func (s *svc) enqueueUserSessionInput(
 
 	switch strings.TrimSpace(prompt) {
 	case "/schedules":
-		content, err := s.scheduleSvc.Render(ctx, sessionID)
+		content, err := s.schedules.Render(ctx, sessionID)
 		if err != nil {
 			return nil, fmt.Errorf("render schedules: %w", err)
 		}
@@ -435,32 +393,6 @@ func (s *svc) enqueueUserSessionInput(
 	return result.Input, nil
 }
 
-// loadModelCatalog records the configured models once: the subagent picker reads
-// the names, SetModel reads the effort levels.
-func (s *svc) loadModelCatalog(models []config.ModelEntry) {
-	s.modelEntries = models
-
-	for _, m := range models {
-		s.modelCatalog = append(s.modelCatalog, subagent.ModelInfo{ID: m.ID, Name: m.Name, Tags: m.Tags})
-	}
-}
-
-// checkModelConfigured guards the idle path, where no live session validates.
-// An empty catalog means no config was loaded, so it vouches for nothing.
-func (s *svc) checkModelConfigured(model string) error {
-	if len(s.modelCatalog) == 0 {
-		return nil
-	}
-
-	for _, m := range s.modelCatalog {
-		if m.ID == model {
-			return nil
-		}
-	}
-
-	return fmt.Errorf("unknown model: %s", model)
-}
-
 func (s *svc) send(
 	ctx context.Context,
 	projectID int64,
@@ -473,10 +405,10 @@ func (s *svc) send(
 	}
 
 	if model == "" {
-		model = s.defaultModel
+		model = s.models.defaultModel
 	}
 
-	level, err := s.resolveChildEffort(model, "", "")
+	level, err := s.models.effort(model, "", "")
 	if err != nil {
 		return 0, fmt.Errorf("resolve reasoning level for model %s: %w", model, err)
 	}
@@ -493,7 +425,7 @@ func (s *svc) send(
 
 		rec, _, err = s.store.CreateManagerRoot(ctx, sessionstore.ManagerRootCreate{
 			ProjectID: projectID, Model: model, ReasoningLevel: level, Attributes: attrs,
-			Prompt: prompt, StartEpisode: prompt != "" && !isExactControlCommand(prompt),
+			Prompt: prompt, StartEpisode: prompt != "" && !isReadOnlyCommand(prompt) && !isEnqueueCommand(prompt),
 			Name: projectName, WorkDir: workDir,
 		})
 		if err != nil {
@@ -517,18 +449,9 @@ func (s *svc) send(
 		}
 	}
 
-	if err := s.ensureRunner(ctx, rec.ID, workDir, projectID); err != nil {
-		if errors.Is(err, errNoCapacity) {
-			s.enqueuePendingRunner(rec.ID, workDir, projectID)
-			return rec.ID, nil
-		}
-
-		// Cleanup: ensureRunner failed after the session/root was already committed.
-		// Mark the session killed so it doesn't appear alive to managers, even though
-		// the worktree (for /gwt failures) may already be gone. This prevents
-		// orphaned sessions in the store that reference deleted directories.
-		// WithoutCancel: the kill marker must land even if the request context
-		// died mid-launch.
+	if err := s.start(ctx, rec.ID); err != nil {
+		// A failed launch must not leave a live record pointing at a removed worktree.
+		// The kill marker must persist even if the request was cancelled.
 		if _, killErr := s.store.MarkSessionKilledWithOutput(
 			context.WithoutCancel(ctx),
 			rec.ID,

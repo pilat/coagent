@@ -33,7 +33,10 @@ func New(
 	cfg *config.Config,
 	cache loader.MarketplaceCache,
 ) controllerapi.ManagerControllerFactory {
-	return &factory{app: newService(backend, store, discovery, progress, bus, cfg, cache)}
+	return &factory{app: &service{
+		backend: backend, store: store, discovery: discovery, progress: progress,
+		bus: bus, cfg: cfg, cache: cache,
+	}}
 }
 
 func (f *factory) ForManager(managerID string) controllerapi.Controller {

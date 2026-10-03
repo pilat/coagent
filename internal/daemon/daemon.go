@@ -3,13 +3,15 @@ package daemon
 import (
 	"context"
 	"sync"
-	"sync/atomic"
 	"time"
+
+	"go.uber.org/zap"
 
 	"github.com/pilat/coagent/internal/backgroundprocess"
 	"github.com/pilat/coagent/internal/budget"
 	"github.com/pilat/coagent/internal/config"
 	"github.com/pilat/coagent/internal/configapply"
+	"github.com/pilat/coagent/internal/logger"
 	"github.com/pilat/coagent/internal/mcpstore"
 	"github.com/pilat/coagent/internal/progressruntime"
 	"github.com/pilat/coagent/internal/schedule"
@@ -35,35 +37,33 @@ type Service interface {
 	NotifySession(sessionID int64, n sessionevent.Notification)
 }
 
-type svc struct {
-	runners    *registry[*runner]
-	buildInput sessionbuild.BuildInput
-	store      Store
-	liveMu     sync.Mutex
+type lifetime struct {
+	mu      sync.Mutex
+	ctx     context.Context //nolint:containedctx // Daemon lifetime for joined workers.
+	cancel  context.CancelFunc
+	wg      sync.WaitGroup
+	closing bool
+}
 
-	links        subagent.Store
-	subagents    subagent.Transactions
-	scheduleSvc  schedule.Service
-	admit        *slots
-	childQueue   *queue[queuedChild]
-	pendingQueue *queue[queuedRunner]
-	pubsub       sessionbus.Bus
-	defaultModel string
-	modelCatalog []subagent.ModelInfo
-	modelEntries []config.ModelEntry
-	mcpStore     mcpstore.Store
-	applier      configapply.Service
-	deferNotices *deferAnnouncements
-	shuttingDown atomic.Bool
-	recovery     *recovery
+type svc struct {
+	runners *runnerSet
+	build   sessionbuild.BuildInput
+	store   Store
+	liveMu  sync.Mutex
+
+	links     subagent.Store
+	subagents subagent.Transactions
+	schedules schedule.Service
+	pubsub    sessionbus.Bus
+	mcpStore  mcpstore.Store
+	applier   configapply.Service
 
 	progress      progressruntime.Service
-	budgetCtx     context.Context //nolint:containedctx // Daemon lifetime context for joined park workers.
-	budgetCancel  context.CancelFunc
-	budgetWG      sync.WaitGroup
 	budgetTimerMu sync.Mutex
 	budgetTimers  map[int64]*budgetDeadline
 
+	life      *lifetime
+	models    models
 	treeLocks sync.Map
 	// Tree locks precede routeMu and childMu; never acquire a
 	// tree lock while holding one of those narrower locks.
@@ -76,20 +76,13 @@ type svc struct {
 	ownerCache map[int64]string
 	budgetSvc  budget.Service
 	// processSvc owns live cancellation handles; processStore owns durability.
-	processStore      backgroundprocess.Store
-	processSvc        backgroundprocess.Service
-	processRecoveryMu sync.Mutex
-	processRecovery   chan struct{}
-	workerCtx         context.Context //nolint:containedctx // Daemon lifetime context for joined workers.
-	workerCancel      context.CancelFunc
-	workerWG          sync.WaitGroup
-	queueRetryMu      sync.Mutex
-	queueRetryPending bool
+	processStore backgroundprocess.Store
+	processSvc   backgroundprocess.Service
 }
 
 func New(
 	ctx context.Context,
-	buildInput sessionbuild.BuildInput,
+	build sessionbuild.BuildInput,
 	store Store,
 
 	links subagent.Store,
@@ -103,11 +96,9 @@ func New(
 	mcpStore mcpstore.Store,
 	applier configapply.Service,
 ) Service {
-	budgetCtx, budgetCancel := context.WithCancel(context.Background())
-	workerCtx, workerCancel := context.WithCancel(context.Background())
 	s := &svc{
-		runners:      newRegistry[*runner](),
-		buildInput:   buildInput,
+		runners:      newRunnerSet(),
+		build:        build,
 		store:        store,
 		processStore: processStore,
 		mcpStore:     mcpStore,
@@ -116,30 +107,119 @@ func New(
 		links:        links,
 		subagents:    subagents,
 		budgetSvc:    budgetSvc,
-		scheduleSvc:  scheduleSvc,
-		admit:        &slots{perParent: make(map[int64]int)},
-		childQueue:   newQueue[queuedChild](),
-		pendingQueue: newQueue[queuedRunner](),
-		recovery:     newRecovery(),
+		schedules:    scheduleSvc,
 		pubsub:       pubsub,
 		progress:     progressSvc,
-		defaultModel: cfg.DefaultModel(),
 		childCache:   make(map[int64]bool),
 		ownerCache:   make(map[int64]string),
-		deferNotices: newDeferAnnouncements(),
-		workerCtx:    workerCtx,
-		workerCancel: workerCancel,
-		budgetCtx:    budgetCtx,
-		budgetCancel: budgetCancel,
+		life:         newLifetime(),
+		models:       newModels(cfg),
 		budgetTimers: make(map[int64]*budgetDeadline),
 	}
 
-	if cfg.UnifiedConfig != nil {
-		s.loadModelCatalog(cfg.UnifiedConfig.Models)
-	}
-
 	s.processSvc = s.newProcessService(ctx)
-	s.buildInput.ProcessService = s.processSvc
+	s.build.ProcessService = s.processSvc
 
 	return s
 }
+
+func (s *svc) Shutdown(timeout time.Duration) {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	s.life.close()
+	s.budgetTimerMu.Lock()
+	for _, pending := range s.budgetTimers {
+		pending.timer.Stop()
+	}
+	s.budgetTimerMu.Unlock()
+	runners := s.runners.closeAndSnapshot()
+	done := make(chan struct{})
+
+	go func() {
+		for _, rs := range runners {
+			rs.Cancel()
+		}
+
+		if _, err := s.processSvc.CancelAll(ctx, backgroundprocess.IntentDaemonShutdown); err != nil {
+			logger.Ctx(ctx).Named("daemon.process").Warn("shutdown_cancel_failed", zap.Error(err))
+		}
+
+		_ = s.progress.Stop(ctx)
+
+		for _, rs := range runners {
+			<-rs.Done()
+		}
+
+		s.life.wait()
+
+		if err := sessionbuild.CloseToolResources(s.build.Resources); err != nil {
+			logger.Ctx(ctx).Named("manager.shutdown").Warn("close_tool_resources", zap.Error(err))
+		}
+
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-ctx.Done():
+		logger.Ctx(ctx).Named("manager.shutdown").Warn("shutdown_timeout", zap.Int("remaining_sessions", len(runners)))
+	}
+}
+
+func newLifetime() *lifetime {
+	ctx, cancel := context.WithCancel(context.Background())
+	return &lifetime{ctx: ctx, cancel: cancel}
+}
+
+// Go runs fn on the lifetime context; a panic is logged under component.
+func (l *lifetime) Go(component string, fn func(context.Context)) bool {
+	if !l.enter() {
+		return false
+	}
+	go func() {
+		defer l.leave()
+		defer func() {
+			if v := recover(); v != nil {
+				logger.Ctx(l.ctx).Named(component).Error("worker_panic", zap.Any("panic", v), zap.Stack("stack"))
+			}
+		}()
+
+		fn(l.ctx)
+	}()
+
+	return true
+}
+
+// enter registers work Shutdown must wait for; false once Shutdown began.
+func (l *lifetime) enter() bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	if l.closing {
+		return false
+	}
+
+	l.wg.Add(1)
+
+	return true
+}
+
+func (l *lifetime) leave() { l.wg.Done() }
+
+func (l *lifetime) closed() bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	return l.closing
+}
+
+func (l *lifetime) close() {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	l.closing = true
+	l.cancel()
+}
+
+func (l *lifetime) wait() { l.wg.Wait() }

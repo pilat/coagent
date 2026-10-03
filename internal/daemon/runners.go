@@ -4,15 +4,17 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"sync"
 	"time"
 
 	"go.uber.org/zap"
 
-	"github.com/pilat/coagent/internal/backgroundprocess"
 	"github.com/pilat/coagent/internal/logger"
 	"github.com/pilat/coagent/internal/progressruntime"
-	"github.com/pilat/coagent/internal/sessionbuild"
+	"github.com/pilat/coagent/internal/session"
+	"github.com/pilat/coagent/internal/sessionstore"
+	"github.com/pilat/coagent/internal/subagent"
 )
 
 const (
@@ -27,30 +29,103 @@ var (
 	errNoCapacity         = errors.New("session capacity reached")
 )
 
-type slots struct {
+type refusal string
+
+type waitingRunner struct {
+	sessionID int64
+	parentID  int64
+	child     bool
+}
+
+type runnerSet struct {
 	mu        sync.Mutex
+	byID      map[int64]*runner
+	closed    bool
 	running   int
 	children  int
 	perParent map[int64]int
+	waiting   []waitingRunner
+	retrying  bool
+	deferred  map[int64]bool
 }
 
-type registry[T any] struct {
-	mu     sync.Mutex
-	values map[int64]T
-	closed bool
+type runner struct {
+	mu              sync.Mutex
+	sessionID       int64
+	projectID       int64
+	parentID        int64
+	workDir         string
+	child           bool
+	cancel          context.CancelFunc
+	done            chan struct{}
+	service         *session.Session
+	working         bool
+	hasRun          bool
+	preserveStopped bool
 }
 
-func (s *svc) HasActiveLoop(sessionID int64) bool {
-	_, ok := s.runners.Load(sessionID)
+func (s *svc) HasActiveLoop(id int64) bool { _, ok := s.runners.load(id); return ok }
+func (r refusal) Error() string            { return string(r) }
 
-	return ok
+func newRunnerSet() *runnerSet {
+	return &runnerSet{byID: make(map[int64]*runner), perParent: make(map[int64]int), deferred: make(map[int64]bool)}
 }
 
-func (s *slots) tryAdmit(child bool, parentID int64) bool {
+func (s *runnerSet) load(id int64) (*runner, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if s.running >= maxTotal || child && (s.children >= maxChildren || s.perParent[parentID] >= maxPerParent) {
+	r, ok := s.byID[id]
+
+	return r, ok
+}
+
+func (s *runnerSet) register(r *runner) (*runner, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if existing, ok := s.byID[r.sessionID]; ok {
+		return existing, false
+	}
+
+	if s.closed {
+		return nil, false
+	}
+
+	s.byID[r.sessionID] = r
+
+	return nil, true
+}
+
+func (s *runnerSet) remove(id int64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if r, ok := s.byID[id]; ok {
+		delete(s.byID, id)
+		s.releaseLocked(r.child, r.parentID)
+	}
+}
+
+func (s *runnerSet) closeAndSnapshot() []*runner {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.closed = true
+
+	runners := make([]*runner, 0, len(s.byID))
+	for _, r := range s.byID {
+		runners = append(runners, r)
+	}
+
+	return runners
+}
+
+func (s *runnerSet) tryAdmit(child bool, parentID int64) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if !s.canAdmit(child, parentID) {
 		return false
 	}
 
@@ -63,23 +138,18 @@ func (s *slots) tryAdmit(child bool, parentID int64) bool {
 	return true
 }
 
-func (s *slots) release(child bool, parentID int64) {
+func (s *runnerSet) release(child bool, parentID int64) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if s.running > 0 {
-		s.running--
-	}
+	s.releaseLocked(child, parentID)
+}
 
-	if !child {
-		return
-	}
-
-	if s.children > 0 {
+func (s *runnerSet) releaseLocked(child bool, parentID int64) {
+	s.running--
+	if child {
 		s.children--
-	}
 
-	if s.perParent[parentID] > 0 {
 		s.perParent[parentID]--
 		if s.perParent[parentID] == 0 {
 			delete(s.perParent, parentID)
@@ -87,273 +157,288 @@ func (s *slots) release(child bool, parentID int64) {
 	}
 }
 
-func (s *slots) canAdmit(child bool, parentID int64) bool {
+func (s *runnerSet) canAdmit(child bool, parentID int64) bool {
+	return !s.closed && s.running < maxTotal &&
+		(!child || s.children < maxChildren && s.perParent[parentID] < maxPerParent)
+}
+
+func (s *runnerSet) wait(w waitingRunner) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	return s.running < maxTotal && (!child || s.children < maxChildren && s.perParent[parentID] < maxPerParent)
-}
-
-func (s *svc) Shutdown(timeout time.Duration) {
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), timeout)
-	defer cancel()
-
-	s.shuttingDown.Store(true)
-	s.queueRetryMu.Lock()
-	if s.workerCancel != nil {
-		s.workerCancel()
-	}
-	s.queueRetryMu.Unlock()
-
-	s.budgetTimerMu.Lock()
-	if s.budgetCancel != nil {
-		s.budgetCancel()
-	}
-	s.budgetTimerMu.Unlock()
-
-	recoveryDone := s.stopRecovery()
-	processRecoveryDone := s.currentProcessRecovery()
-
-	runners := s.runners.CloseAndSnapshot()
-
-	done := make(chan struct{})
-
-	go func() {
-		for _, rs := range runners {
-			rs.Cancel()
-		}
-
-		// Controlled shutdown cancels and joins every owned process group
-		// through the shared lifecycle service; their completions stay owed
-		// as interrupted for the next startup.
-
-		if _, err := s.processSvc.CancelAll(shutdownCtx, backgroundprocess.IntentDaemonShutdown); err != nil {
-			logger.Ctx(shutdownCtx).Named("daemon.process").Warn("shutdown_cancel_failed", zap.Error(err))
-		}
-
-		_ = s.progress.Stop(shutdownCtx)
-
-		for _, rs := range runners {
-			<-rs.Done()
-		}
-
-		if recoveryDone != nil {
-			<-recoveryDone
-		}
-
-		if processRecoveryDone != nil {
-			<-processRecoveryDone
-		}
-
-		s.budgetWG.Wait()
-		s.workerWG.Wait()
-
-		if err := sessionbuild.CloseToolResources(s.buildInput.Resources); err != nil {
-			logger.Named("manager.shutdown").Warn("close_tool_resources", zap.Error(err))
-		}
-
-		close(done)
-	}()
-
-	select {
-	case <-done:
-	case <-shutdownCtx.Done():
-		logger.Named("manager.shutdown").Warn("shutdown_timeout", zap.Int("remaining_sessions", len(runners)))
+	if !s.closed && !slices.ContainsFunc(s.waiting, func(r waitingRunner) bool { return r.sessionID == w.sessionID }) {
+		s.waiting = append(s.waiting, w)
 	}
 }
 
-func (r *registry[T]) Load(sessionID int64) (T, bool) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
+func (s *runnerSet) nextAdmissible() (waitingRunner, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 
-	value, ok := r.values[sessionID]
+	for i, w := range s.waiting {
+		if s.canAdmit(w.child, w.parentID) {
+			s.waiting = slices.Delete(s.waiting, i, i+1)
+			return w, true
+		}
+	}
 
-	return value, ok
+	return waitingRunner{}, false
 }
 
-func (r *registry[T]) Use(sessionID int64, fn func(T)) bool {
-	r.mu.Lock()
-	defer r.mu.Unlock()
+func (s *runnerSet) hasAdmissible() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 
-	value, ok := r.values[sessionID]
-	if !ok {
+	return slices.ContainsFunc(s.waiting, func(w waitingRunner) bool { return s.canAdmit(w.child, w.parentID) })
+}
+
+func (s *runnerSet) forget(ids []int64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.waiting = slices.DeleteFunc(s.waiting, func(w waitingRunner) bool { return slices.Contains(ids, w.sessionID) })
+}
+
+func (s *runnerSet) scheduleRetry() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.closed || s.retrying {
 		return false
 	}
 
-	fn(value)
+	s.retrying = true
 
 	return true
 }
 
-func (r *registry[T]) Register(sessionID int64, value T) (T, bool) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
+func (s *runnerSet) retryDone() { s.mu.Lock(); defer s.mu.Unlock(); s.retrying = false }
+func (s *runnerSet) deferAnnounced(id int64) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 
-	if existing, ok := r.values[sessionID]; ok {
-		return existing, false
+	return s.deferred[id]
+}
+
+func (s *runnerSet) recordDefer(id int64, announced bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if announced {
+		s.deferred[id] = true
+	} else {
+		delete(s.deferred, id)
 	}
+}
 
-	if r.closed {
-		var zero T
-
-		return zero, false
+func (s *svc) start(ctx context.Context, id int64) error {
+	unlock, err := s.lockSessionTree(ctx, id)
+	if err != nil {
+		return err
 	}
+	defer unlock()
 
-	r.values[sessionID] = value
-
-	var zero T
-
-	return zero, true
+	return s.startLocked(ctx, id)
 }
 
-func (r *registry[T]) Delete(sessionID int64) (T, bool) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-
-	existing, ok := r.values[sessionID]
-	if !ok {
-		var zero T
-
-		return zero, false
-	}
-
-	delete(r.values, sessionID)
-
-	return existing, true
-}
-
-func (r *registry[T]) CloseAndSnapshot() []T {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-
-	r.closed = true
-
-	values := make([]T, 0, len(r.values))
-	for _, value := range r.values {
-		values = append(values, value)
-	}
-
-	return values
-}
-
-func (r *registry[T]) Closed() bool {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-
-	return r.closed
-}
-
-func (r *registry[T]) Len() int {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-
-	return len(r.values)
-}
-
-func (s *svc) stopRecovery() <-chan struct{} {
-	return s.recovery.Close()
-}
-
-func newRegistry[T any]() *registry[T] { return &registry[T]{values: make(map[int64]T)} }
-
-func (s *svc) launchRunner(
-	ctx context.Context,
-	sessionID int64,
-	workDir string,
-	projectID int64,
-) error {
-	if s.runners.Closed() {
+func (s *svc) startLocked(ctx context.Context, id int64) error {
+	if s.life.closed() {
 		return errDaemonShuttingDown
 	}
 
-	record, err := s.store.GetSession(ctx, sessionID)
-	if err != nil {
-		return fmt.Errorf("load session %d before start: %w", sessionID, err)
-	}
-
-	preserveStopped, err := s.ensureRunnerStartable(ctx, record)
-	if err != nil {
-		return err
-	}
-
-	if s.appendIfRunning(sessionID) {
+	if _, ok := s.runners.load(id); ok {
 		return nil
 	}
 
-	child, parentID, blocking, err := s.slotInfo(ctx, sessionID)
+	rec, err := s.store.GetSession(ctx, id)
+	if err != nil {
+		return fmt.Errorf("load session %d before start: %w", id, err)
+	}
+
+	if rec.KilledAt != nil || rec.Status == sessionstore.SessionStatusKilled {
+		return refusal(fmt.Sprintf("session %d is killed", id))
+	}
+
+	if rec.Status == sessionstore.SessionStatusStopping || rec.Status == sessionstore.SessionStatusTerminating {
+		return refusal(fmt.Sprintf("session %d is %s", id, rec.Status))
+	}
+
+	preserve, err := s.commandOnlyStoppedRoot(ctx, rec)
 	if err != nil {
 		return err
 	}
 
-	if !s.admit.tryAdmit(child, parentID) {
-		if child && !blocking {
-			s.enqueueCapacityBlockedChild(ctx, sessionID, parentID, workDir, projectID)
-
-			return nil
-		}
-
-		return errNoCapacity
+	if rec.Status == sessionstore.SessionStatusStopped && !preserve {
+		return refusal(fmt.Sprintf("session %d is stopped", id))
 	}
 
-	loopCtx, cancel := context.WithCancel(context.Background())
-	runner := newRunner(cancel, workDir, projectID, child, parentID, preserveStopped)
+	link, err := s.links.GetLink(ctx, id)
+	if err != nil {
+		return fmt.Errorf("classify session %d: %w", id, err)
+	}
 
-	existing, registered := s.registerRunner(ctx, sessionID, runner)
+	if link != nil && (link.Terminal() || link.State == subagent.StateStopped) {
+		return nil
+	}
+
+	w := waitingRunner{sessionID: id, child: link != nil}
+	if link != nil {
+		w.parentID = link.ParentID
+	}
+
+	if !s.runners.tryAdmit(w.child, w.parentID) {
+		if link != nil && link.Blocking {
+			return errNoCapacity
+		}
+
+		s.runners.wait(w)
+
+		if s.runners.hasAdmissible() {
+			s.life.Go("daemon.admission", s.drain)
+		}
+
+		return nil
+	}
+
+	return s.startAdmitted(ctx, rec, w, preserve)
+}
+
+func (s *svc) startAdmitted(
+	ctx context.Context,
+	rec *sessionstore.SessionRecord,
+	w waitingRunner,
+	preserve bool,
+) error {
+	workDir, err := s.store.GetProjectWorkDir(ctx, rec.ProjectID)
+	if err != nil {
+		s.runners.release(w.child, w.parentID)
+		return fmt.Errorf("resolve project %d: %w", rec.ProjectID, err)
+	}
+
+	if !s.life.enter() {
+		s.runners.release(w.child, w.parentID)
+		return errDaemonShuttingDown
+	}
+
+	loopCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
+	rs := newRunner(cancel, workDir, rec, w, preserve)
+
+	s.liveMu.Lock()
+	s.progress.SetLive(rec.ID, progressruntime.Live{Active: true})
+
+	_, registered := s.runners.register(rs)
 	if !registered {
-		s.admit.release(child, parentID)
-		cancel()
+		s.updateLiveLocked(ctx, rec.ID)
+	}
+	s.liveMu.Unlock()
 
-		if existing == nil {
+	if !registered {
+		s.runners.release(w.child, w.parentID)
+		cancel()
+		s.life.leave()
+
+		if s.life.closed() {
 			return errDaemonShuttingDown
 		}
-
 		return nil
 	}
 
-	go s.runSession(loopCtx, sessionID, runner) //nolint:contextcheck // Runner lifetime must outlive the request.
-
+	go s.runSession(loopCtx, rs)
 	return nil
 }
 
-func (s *svc) appendIfRunning(sessionID int64) bool {
-	_, running := s.runners.Load(sessionID)
-	return running
+func (s *svc) drain(ctx context.Context) {
+	for {
+		w, ok := s.runners.nextAdmissible()
+		if !ok {
+			return
+		}
+
+		err := s.start(ctx, w.sessionID)
+		if err == nil {
+			continue
+		}
+
+		if errors.Is(err, errNoCapacity) {
+			s.runners.wait(w)
+			return
+		}
+
+		if _, ok := errors.AsType[refusal](err); ok {
+			logger.Ctx(ctx).
+				Named("daemon.admission").
+				Info("skip_unstartable_waiting_runner", zap.Int64("session_id", w.sessionID), zap.Error(err))
+
+			continue
+		}
+
+		s.runners.wait(w)
+		logger.Ctx(ctx).
+			Named("daemon.admission").
+			Error("waiting_runner_start_failed", zap.Int64("session_id", w.sessionID), zap.Error(err))
+
+		if s.runners.scheduleRetry() {
+			s.life.Go("daemon.admission", func(retryCtx context.Context) {
+				timer := time.NewTimer(100 * time.Millisecond)
+				defer timer.Stop()
+
+				select {
+				case <-retryCtx.Done():
+					s.runners.retryDone()
+				case <-timer.C:
+					s.runners.retryDone()
+					s.drain(retryCtx)
+				}
+			})
+		}
+
+		return
+	}
 }
 
-func (s *svc) slotInfo(
-	ctx context.Context,
-	sessionID int64,
-) (bool, int64, bool, error) {
-	link, err := s.links.GetLink(ctx, sessionID)
-	if err != nil {
-		return false, 0, false, fmt.Errorf("classify session %d: %w", sessionID, err)
-	}
-
-	if link == nil {
-		return false, 0, false, nil
-	}
-
-	return true, link.ParentID, link.Blocking, nil
-}
-
-func (s *svc) registerRunner(ctx context.Context, sessionID int64, runner *runner) (*runner, bool) {
+func (s *svc) removeRunner(ctx context.Context, rs *runner) {
 	s.liveMu.Lock()
 	defer s.liveMu.Unlock()
 
-	s.progress.SetLive(sessionID, progressruntime.Live{Active: true})
+	s.runners.remove(rs.sessionID)
+	s.updateLiveLocked(ctx, rs.sessionID)
+}
 
-	existing, registered := s.runners.Register(sessionID, runner)
-	if !registered {
-		s.updateLiveLocked(ctx, sessionID)
+func (s *svc) releaseRunner(ctx context.Context, rs *runner) { s.removeRunner(ctx, rs); rs.Complete() }
+
+func newRunner(
+	cancel context.CancelFunc,
+	workDir string,
+	rec *sessionstore.SessionRecord,
+	w waitingRunner,
+	preserve bool,
+) *runner {
+	return &runner{
+		sessionID: rec.ID, projectID: rec.ProjectID, parentID: w.parentID, child: w.child,
+		workDir: workDir, cancel: cancel, done: make(chan struct{}), preserveStopped: preserve,
 	}
-
-	return existing, registered
 }
 
-func (s *svc) removeRunner(ctx context.Context, sessionID int64) {
-	s.liveMu.Lock()
-	defer s.liveMu.Unlock()
+func (r *runner) Cancel()                   { r.cancel() }
+func (r *runner) Stop()                     { r.cancel(); <-r.done }
+func (r *runner) Done() <-chan struct{}     { return r.done }
+func (r *runner) Complete()                 { close(r.done) }
+func (r *runner) Service() *session.Session { r.mu.Lock(); defer r.mu.Unlock(); return r.service }
+func (r *runner) SetService(service *session.Session) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 
-	s.runners.Delete(sessionID)
-	s.updateLiveLocked(ctx, sessionID)
+	r.service = service
 }
+func (r *runner) Working() bool           { r.mu.Lock(); defer r.mu.Unlock(); return r.working }
+func (r *runner) SetWorking(working bool) { r.mu.Lock(); defer r.mu.Unlock(); r.working = working }
+func (r *runner) SetPreserveStopped(preserve bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	r.preserveStopped = preserve
+}
+
+func (r *runner) PreserveStopped() bool { r.mu.Lock(); defer r.mu.Unlock(); return r.preserveStopped }
+func (r *runner) HasRun() bool          { r.mu.Lock(); defer r.mu.Unlock(); return r.hasRun }
+func (r *runner) MarkRun()              { r.mu.Lock(); defer r.mu.Unlock(); r.hasRun = true }

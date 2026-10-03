@@ -71,24 +71,7 @@ func (s *svc) parkBudgetTree(ctx context.Context, record *budget.Record) {
 }
 
 func (s *svc) startBudgetPark(record *budget.Record) {
-	s.budgetTimerMu.Lock()
-	defer s.budgetTimerMu.Unlock()
-
-	if record == nil || s.shuttingDown.Load() {
-		return
-	}
-
-	s.budgetWG.Go(func() {
-		defer func() {
-			if recovered := recover(); recovered != nil {
-				logger.Ctx(s.budgetCtx).Named("daemon.budget").Error(
-					"park_panic", zap.Any("panic", recovered), zap.Stack("stack"),
-				)
-			}
-		}()
-
-		s.parkBudgetTree(s.budgetCtx, record)
-	})
+	s.life.Go("daemon.budget", func(ctx context.Context) { s.parkBudgetTree(ctx, record) })
 }
 
 func (s *svc) treeHasActiveLoop(ctx context.Context, rootID int64) bool {

@@ -1,13 +1,11 @@
 package daemon
 
 import (
-	"cmp"
 	"context"
 	"errors"
 	"fmt"
 
 	"github.com/pilat/coagent/internal/budget"
-	"github.com/pilat/coagent/internal/sessionbuild"
 	"github.com/pilat/coagent/internal/sessionstore"
 	"github.com/pilat/coagent/internal/subagent"
 )
@@ -25,14 +23,12 @@ func (s *svc) Spawn(ctx context.Context, req subagent.SpawnRequest) (subagent.Ch
 	defer unlock()
 
 	err = func() error {
-		childID, workDir, projectID, createErr := s.createChildSession(ctx, req)
+		childID, _, _, createErr := s.createChildSession(ctx, req)
 		if createErr != nil {
 			return createErr
 		}
 
-		if startErr := s.ensureRunnerLocked(
-			context.WithoutCancel(ctx), childID, workDir, projectID,
-		); startErr != nil {
+		if startErr := s.startLocked(context.WithoutCancel(ctx), childID); startErr != nil {
 			return fmt.Errorf("start child runner: %w", startErr)
 		}
 
@@ -149,7 +145,7 @@ func (s *svc) SendToChild(ctx context.Context, childID int64, msg string) error 
 	unlock()
 	locked = false
 
-	return s.ensureSessionRunner(requestCtx, childID)
+	return s.start(requestCtx, childID)
 }
 
 // LinkPending reports whether a link already exists for this task call — the
@@ -205,7 +201,7 @@ func (s *svc) createChildSession(ctx context.Context, req subagent.SpawnRequest)
 
 	budgetRecord, budgetErr := s.budgetSvc.Get(ctx, rootID)
 	if budgetErr == nil && budgetRecord.State == budget.Armed &&
-		budgetRecord.CostLimitUSD != nil && !s.modelHasPricing(model) {
+		budgetRecord.CostLimitUSD != nil && !s.models.priced(model) {
 		return 0, "", 0, errors.New(
 			"cannot spawn an armed budget tree onto a model without catalog pricing",
 		)
@@ -215,7 +211,7 @@ func (s *svc) createChildSession(ctx context.Context, req subagent.SpawnRequest)
 		return 0, "", 0, fmt.Errorf("load root budget for child model: %w", budgetErr)
 	}
 
-	reasoning, err := s.resolveChildEffort(model, req.ReasoningLevel, parentRec.ReasoningLevel)
+	reasoning, err := s.models.effort(model, req.ReasoningLevel, parentRec.ReasoningLevel)
 	if err != nil {
 		return 0, "", 0, err
 	}
@@ -253,7 +249,7 @@ func (s *svc) resumeChildWithPendingInputLocked(ctx context.Context, childID int
 
 	s.publishSubagentProgress(ctx, childID)
 
-	return s.ensureSessionRunnerLocked(ctx, childID)
+	return s.startLocked(ctx, childID)
 }
 
 // childSnapshot builds a subagent.ChildResult from the durable link state (authoritative
@@ -303,35 +299,6 @@ func (s *svc) childDepth(ctx context.Context, parentID int64) (int, error) {
 	}
 
 	return link.Depth + 1, nil
-}
-
-// resolveChildEffort settles the child's level against the CHILD's model, since
-// that is the only vocabulary its run is measured against. An asked-for level the
-// model rejects fails the spawn; a merely inherited one falls back to its default.
-func (s *svc) resolveChildEffort(model, requested, inherited string) (string, error) {
-	if len(s.modelEntries) == 0 {
-		return cmp.Or(requested, inherited), nil
-	}
-
-	if requested != "" {
-		level, err := sessionbuild.ResolveReasoningLevel(s.modelEntries, model, requested)
-		if err != nil {
-			return "", fmt.Errorf("spawn subagent on model %s: %w", model, err)
-		}
-
-		return level, nil
-	}
-
-	if level, err := sessionbuild.ResolveReasoningLevel(s.modelEntries, model, inherited); err == nil {
-		return level, nil
-	}
-
-	level, err := sessionbuild.ResolveReasoningLevel(s.modelEntries, model, "")
-	if err != nil {
-		return "", fmt.Errorf("spawn subagent on model %s: %w", model, err)
-	}
-
-	return level, nil
 }
 
 // resolveChildModel picks the child model: explicit request → agent type override → parent model.

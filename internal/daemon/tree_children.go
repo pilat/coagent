@@ -98,7 +98,7 @@ func (s *svc) killSubagent(ctx context.Context, childID int64, deadline time.Tim
 
 	s.removeSchedules(ctx, childID)
 
-	rs, ok := s.runners.Load(childID)
+	rs, ok := s.runners.load(childID)
 
 	if ok {
 		rs.Stop()
