@@ -33,7 +33,7 @@ type Input struct {
 	Loader                   loader.Service
 	Registry                 tool.Registry
 	Prompt                   *sessionprompt.Builder
-	Store                    sessionstore.RuntimeStore
+	Store                    Store
 	Events                   Events
 	ExternalCalls            map[string]string
 	OpeningContext           string
@@ -55,7 +55,7 @@ type Session struct {
 	activationIndex   map[string]string
 	currentActivation *tool.ActivationGrant
 	agentsMD          string
-	store             sessionstore.RuntimeStore
+	store             Store
 	rootID            int64
 	id                int64
 	model             string
@@ -90,7 +90,7 @@ type Session struct {
 	suspended                bool
 	// stagedCalls are tool_call ids the daemon has already started outside work
 	// for (call id → tool name). Loop-read only; set once at construction.
-	stagedCalls map[string]string
+	stagedCalls              map[string]string
 	activeBackgroundSnapshot string
 	// Under modelMu with the model triplet: a measurement describes one model's
 	// window and tokenizer. nil baseline = nothing measured.
@@ -160,6 +160,13 @@ func (s *Session) Close() {
 	})
 }
 
+// RequestCompaction queues a forced checkpoint for the next boundary.
+func (s *Session) RequestCompaction() {
+	s.ms.mu.Lock()
+	defer s.ms.mu.Unlock()
+	s.pendingCompaction = true
+}
+
 func unresolvedToolCalls(messages []llmwire.Message) map[string]string {
 	for i, v := range slices.Backward(messages) {
 		if v.Role == llmwire.RoleUser {
@@ -194,13 +201,6 @@ func unresolvedToolCalls(messages []llmwire.Message) map[string]string {
 	}
 
 	return nil
-}
-
-// RequestCompaction queues a forced checkpoint for the next boundary.
-func (s *Session) RequestCompaction() {
-	s.ms.mu.Lock()
-	defer s.ms.mu.Unlock()
-	s.pendingCompaction = true
 }
 
 func (s *Session) compactionRequested() bool {

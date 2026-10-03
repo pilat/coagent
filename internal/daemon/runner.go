@@ -24,21 +24,24 @@ import (
 	"github.com/pilat/coagent/internal/session"
 	"github.com/pilat/coagent/internal/sessionbuild"
 	"github.com/pilat/coagent/internal/sessionevent"
-	"github.com/pilat/coagent/internal/sessionlifecycle"
 	"github.com/pilat/coagent/internal/sessionprompt"
 	"github.com/pilat/coagent/internal/sessionstore"
 	"github.com/pilat/coagent/internal/subagent"
 	"github.com/pilat/coagent/internal/tool"
 )
 
-type runner = sessionlifecycle.Runner
-
 // A stale runnability projection must not spin runners without new input.
 const maxEmptyLoopIterations = 3
 
+type waitingProjection struct {
+	wait     sessionevent.WaitItem
+	display  map[string]any
+	identity map[string]any
+}
+
 // runSession is the main goroutine for a session.
 // ctx is already cancelable through rs (set in ensureRunner).
-func (s *svc) runSession(ctx context.Context, sessionID int64, rs runner) {
+func (s *svc) runSession(ctx context.Context, sessionID int64, rs *runner) {
 	errored := false
 	publishIdle := false
 
@@ -83,7 +86,7 @@ func (s *svc) runSession(ctx context.Context, sessionID int64, rs runner) {
 func (s *svc) finishRunner(
 	ctx context.Context,
 	sessionID int64,
-	rs runner,
+	rs *runner,
 	errored *bool,
 	publishIdle bool,
 	panicValue any,
@@ -104,7 +107,7 @@ func (s *svc) finishRunner(
 	}
 	cancelled := ctx.Err() != nil
 	if cancelled || shuttingDown {
-		s.runners.Delete(sessionID)
+		s.removeRunner(cleanup, sessionID)
 		info := rs.Info()
 		s.admit.Release(info.Kind, info.ParentID)
 		rs.Complete()
@@ -117,15 +120,15 @@ func (s *svc) finishRunner(
 		logger.Ctx(cleanup).Named("daemon.runner").Error("finish_runner_fence_failed", zap.Error(err))
 	}
 	if !cancelled {
-		s.runners.Delete(sessionID)
+		s.removeRunner(cleanup, sessionID)
 		info := rs.Info()
 		s.admit.Release(info.Kind, info.ParentID)
 	}
 	info := rs.Info()
 	if info.PreserveStopped && !shuttingDown {
-		record, loadErr := s.sessionStore.GetSession(cleanup, sessionID)
+		record, loadErr := s.store.GetSession(cleanup, sessionID)
 		if loadErr == nil && record.Status == sessionstore.SessionStatusActive {
-			if statusErr := s.sessionStore.UpdateSessionStatus(
+			if statusErr := s.store.UpdateSessionStatus(
 				cleanup,
 				sessionID,
 				sessionstore.SessionStatusStopped,
@@ -192,11 +195,11 @@ func (s *svc) restartPendingAfterExit(ctx context.Context, sessionID int64) {
 func (s *svc) runSessionIteration(
 	ctx context.Context,
 	sessionID int64,
-	rs runner,
+	rs *runner,
 	notify func(sessionevent.Notification),
 	announced, publishIdle, errored *bool,
 ) (bool, bool) {
-	rec, err := s.sessionStore.GetSession(ctx, sessionID)
+	rec, err := s.store.GetSession(ctx, sessionID)
 	if err != nil {
 		return false, false
 	}
@@ -223,7 +226,7 @@ func (s *svc) runSessionIteration(
 	}
 	defer cleanup()
 	defer sess.Close()
-	defer rs.SetService(nil)
+	defer func() { rs.SetService(nil); s.updateLive(context.WithoutCancel(ctx), sessionID) }()
 	pending, err := s.pendingInputRunnable(ctx, sessionID)
 	if err != nil {
 		*errored = true
@@ -236,7 +239,7 @@ func (s *svc) runSessionIteration(
 		return false, false
 	}
 	if !pending && !sess.HasPendingWork() && !rs.HasRun() {
-		messages, loadErr := s.sessionStore.LoadActiveMessages(ctx, sessionID)
+		messages, loadErr := s.store.LoadActiveMessages(ctx, sessionID)
 		if loadErr != nil {
 			*errored = true
 			return false, false
@@ -265,6 +268,7 @@ func (s *svc) runSessionIteration(
 	s.reconcileLatestReadiness(ctx, sessionID)
 	s.deferNotices.record(sessionID, result.DeferNoticeAnnounced)
 	rs.SetService(nil)
+	s.updateLive(ctx, sessionID)
 	if rec.ParentID == 0 {
 		s.wakeProgress()
 	}
@@ -293,7 +297,7 @@ func (s *svc) runSessionIteration(
 		return false, hadInput
 	}
 	if info.PreserveStopped {
-		record, loadErr := s.sessionStore.GetSession(ctx, sessionID)
+		record, loadErr := s.store.GetSession(ctx, sessionID)
 		if loadErr != nil || record.Status == sessionstore.SessionStatusStopped {
 			return false, hadInput
 		}
@@ -406,12 +410,6 @@ func waitingProgressCausalID(projections []waitingProjection) (string, error) {
 	return "waiting:" + hash, nil
 }
 
-type waitingProjection struct {
-	wait     sessionevent.WaitItem
-	display  map[string]any
-	identity map[string]any
-}
-
 func waitingIdentityKey(identity map[string]any) string {
 	if childID, child := positiveWaitingInt(identity["child_id"]); child {
 		activation, _ := positiveWaitingInt(identity["activation_seq"])
@@ -458,10 +456,10 @@ func canonicalWaitingIdentities(value any) ([]byte, error) {
 	return canonical, nil
 }
 
-// settleStoppedCalls is runner-owned transcript mutation used by the /stop
+// commitStoppedSession is runner-owned transcript mutation used by the /stop
 // lifecycle after every live writer has joined.
-func (s *svc) settleStoppedCalls(ctx context.Context, sessionID int64) error {
-	messages, err := s.sessionStore.LoadActiveMessages(ctx, sessionID)
+func (s *svc) commitStoppedSession(ctx context.Context, sessionID int64) error {
+	messages, err := s.store.LoadActiveMessages(ctx, sessionID)
 	if err != nil {
 		return err
 	}
@@ -470,7 +468,7 @@ func (s *svc) settleStoppedCalls(ctx context.Context, sessionID int64) error {
 		return err
 	}
 	calls := session.UnresolvedCalls(wire)
-	activation, err := s.activationStore.PendingActivation(ctx, sessionID)
+	activation, err := s.store.PendingActivation(ctx, sessionID)
 	if err != nil && !errors.Is(err, sessionstore.ErrActivationNotFound) {
 		return err
 	}
@@ -485,29 +483,8 @@ func (s *svc) settleStoppedCalls(ctx context.Context, sessionID int64) error {
 			State:   sessionstore.ActivationExpired,
 		}
 	}
-	_, err = s.runtimeStore.Commit(ctx, commit)
+	_, err = s.store.Commit(ctx, commit)
 	return err
-}
-
-// closeOrphanedCalls is runner-owned transcript mutation for the boot sweep's
-// PASS 0: it answers a session's unowned external calls without running its loop.
-func (s *svc) closeOrphanedCalls(ctx context.Context, rec *sessionstore.SessionRecord) (int, error) {
-	calls, err := s.orphanedCalls(ctx, rec.ID)
-	if err != nil || len(calls) == 0 {
-		return 0, err
-	}
-	_, err = s.runtimeStore.Commit(
-		ctx,
-		sessionstore.Commit{
-			SessionID:   rec.ID,
-			Mode:        sessionstore.CommitLifecycle,
-			ToolResults: session.SettleResults(calls, orphanedCallNotice("")),
-		},
-	)
-	if err != nil {
-		return 0, err
-	}
-	return len(calls), nil
 }
 
 func (s *svc) ensureSessionRunner(ctx context.Context, sessionID int64) error {
@@ -525,7 +502,7 @@ func (s *svc) ensureSessionRunnerLocked(ctx context.Context, sessionID int64) er
 		return nil
 	}
 
-	rec, err := s.sessionStore.GetSession(ctx, sessionID)
+	rec, err := s.store.GetSession(ctx, sessionID)
 	if err != nil {
 		return fmt.Errorf("load session %d: %w", sessionID, err)
 	}
@@ -569,7 +546,7 @@ func (s *svc) reportSessionUnstarted(
 		logger.Redact(err.Error()),
 	)
 
-	reported, outputErr := s.lifecycleStore.RecordSessionStartFailure(ctx, sessionID, message)
+	reported, outputErr := s.store.RecordSessionStartFailure(ctx, sessionID, message)
 	if outputErr != nil {
 		logger.Ctx(ctx).Named("daemon.runner").Warn("enqueue_unstarted_error_output", zap.Error(outputErr))
 		return
@@ -590,7 +567,7 @@ func (s *svc) publishOwnerlessIdle(ctx context.Context, sessionID int64) {
 		return
 	}
 
-	record, err := s.sessionStore.GetSession(ctx, sessionID)
+	record, err := s.store.GetSession(ctx, sessionID)
 	if err != nil {
 		logger.Ctx(ctx).Named("daemon.runner").Warn(
 			"idle_owner_lookup_failed", zap.Int64("session_id", sessionID), zap.Error(err),
@@ -623,7 +600,7 @@ func (s *svc) publishOwnerlessIdleAfterTeardown(
 func (s *svc) announceSession(
 	ctx context.Context,
 	sessionID int64,
-	rs runner,
+	rs *runner,
 	rec *sessionstore.SessionRecord,
 	notify func(sessionevent.Notification),
 ) {
@@ -642,7 +619,7 @@ func (s *svc) createOrResumeSession(
 	ctx context.Context,
 	sessionID int64,
 	workDir string,
-	rs runner,
+	rs *runner,
 	preserveStopped bool,
 ) (*session.Session, func(), error) {
 	unlock, err := s.lockSessionTree(ctx, sessionID)
@@ -650,7 +627,7 @@ func (s *svc) createOrResumeSession(
 		return nil, nil, err
 	}
 	defer unlock()
-	rec, err := s.sessionStore.GetSession(ctx, sessionID)
+	rec, err := s.store.GetSession(ctx, sessionID)
 	if err != nil {
 		return nil, nil, fmt.Errorf("load session before construction: %w", err)
 	}
@@ -659,6 +636,7 @@ func (s *svc) createOrResumeSession(
 		return nil, nil, err
 	}
 	rs.SetService(sess)
+	s.updateLive(ctx, sessionID)
 	return sess, cleanup, nil
 }
 
@@ -741,7 +719,7 @@ func (s *svc) sessionRepoRoot(ctx context.Context, rec *sessionstore.SessionReco
 		return repoRoot, nil
 	}
 
-	root, err := s.sessionStore.GetSession(ctx, rec.RootID)
+	root, err := s.store.GetSession(ctx, rec.RootID)
 	if err != nil {
 		return "", fmt.Errorf("load root session %d for worktree policy: %w", rec.RootID, err)
 	}
@@ -757,7 +735,7 @@ func (s *svc) sessionRepoRoot(ctx context.Context, rec *sessionstore.SessionReco
 
 // Ownership comes from producer ledgers and exact queued results, never tool names alone.
 func (s *svc) pendingExternalCallsForSession(ctx context.Context, sessionID int64) (map[string]string, error) {
-	stored, err := s.sessionStore.LoadActiveMessages(ctx, sessionID)
+	stored, err := s.store.LoadActiveMessages(ctx, sessionID)
 	if err != nil {
 		return nil, err
 	}
@@ -777,7 +755,7 @@ func (s *svc) pendingExternalCallsForSession(ctx context.Context, sessionID int6
 		calls = make(map[string]string)
 	}
 
-	pending, err := s.inboxStore.ListPending(ctx, sessionID)
+	pending, err := s.store.ListPending(ctx, sessionID)
 	if err != nil {
 		return nil, err
 	}
@@ -921,7 +899,7 @@ func (s *svc) ownerTools(rec *sessionstore.SessionRecord, ldr loader.Service) []
 		if rec.ParentID == 0 {
 			tools = append(tools, schedule.NewScheduleTool(rec.ID, s.scheduleSvc, time.Local))
 		}
-		tools = append(tools, schedule.NewGuardedSleepTool(s.scheduleSvc, rec.ID, s.modelInputs))
+		tools = append(tools, s.scheduleSvc.SleepTool(rec.ID))
 	}
 	if rec.ParentID == 0 {
 		if s.mcpStore != nil {
@@ -931,7 +909,7 @@ func (s *svc) ownerTools(rec *sessionstore.SessionRecord, ldr loader.Service) []
 			tools = append(tools, configapply.NewConfigEdit(rec.ID, s.applier))
 		}
 		if s.budgetSvc != nil {
-			tools = append(tools, budget.NewTool(budget.Store(s.modelInputs), rec.ID, s.modelHasPricing(rec.Model)))
+			tools = append(tools, budget.NewTool(budget.Store(s.store), rec.ID, s.modelHasPricing(rec.Model)))
 		}
 	}
 	return tools
@@ -966,7 +944,7 @@ func (s *svc) ensureRunnerLocked(
 		return errDaemonShuttingDown
 	}
 
-	if err := s.launcher.Ensure(ctx, sessionID, workDir, projectID); err != nil {
+	if err := s.launchRunner(ctx, sessionID, workDir, projectID); err != nil {
 		return fmt.Errorf("ensure session runner: %w", err)
 	}
 
@@ -1017,7 +995,7 @@ func (s *svc) commandOnlyStoppedRoot(ctx context.Context, rec *sessionstore.Sess
 		return false, nil
 	}
 
-	head, err := s.inboxStore.PeekPending(ctx, rec.ID)
+	head, err := s.store.PeekPending(ctx, rec.ID)
 	if err != nil {
 		return false, fmt.Errorf("peek stopped root input: %w", err)
 	}

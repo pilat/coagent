@@ -14,19 +14,22 @@ var _ tool.Tool = (*backgroundWaitGuard)(nil)
 
 type backgroundWaitGuard struct {
 	inner     tool.Tool
-	sessions  sessionstore.Store
+	sessions  *sessionstore.Store
 	sessionID int64
 }
 
 // NewGuardedSleepTool prevents polling while a durable producer owns the wake-up.
-func NewGuardedSleepTool(svc Service, sessionID int64, sessions sessionstore.Store) tool.Tool {
+func NewGuardedSleepTool(svc Service, sessionID int64, sessions *sessionstore.Store) tool.Tool {
 	return &backgroundWaitGuard{inner: NewSleepTool(svc, sessionID), sessions: sessions, sessionID: sessionID}
 }
 
-func (g *backgroundWaitGuard) ID() string                  { return g.inner.ID() }
-func (g *backgroundWaitGuard) Description() string         { return g.inner.Description() }
+func (g *backgroundWaitGuard) ID() string { return g.inner.ID() }
+
+func (g *backgroundWaitGuard) Description() string { return g.inner.Description() }
+
 func (g *backgroundWaitGuard) Parameters() json.RawMessage { return g.inner.Parameters() }
-func (g *backgroundWaitGuard) ParallelSafe() bool          { return g.inner.ParallelSafe() }
+
+func (g *backgroundWaitGuard) ParallelSafe() bool { return g.inner.ParallelSafe() }
 
 func (g *backgroundWaitGuard) Execute(ctx context.Context, params json.RawMessage) (*tool.Result, error) {
 	pending, err := g.sessions.HasPendingBackgroundWait(ctx, g.sessionID)

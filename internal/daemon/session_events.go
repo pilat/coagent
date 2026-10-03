@@ -30,8 +30,12 @@ func (e *sessionEvents) Emit(n sessionevent.Notification) {
 				rs.SetPreserveStopped(false)
 			}
 		}
+		s.updateLive(ctx, e.sessionID)
 		s.wakeProgress()
+	case "context_changed":
+		s.updateLive(ctx, e.sessionID)
 	case "progress_change":
+		s.updateLive(ctx, e.sessionID)
 		content, published, err := s.enqueueProgressChange(ctx, e.sessionID)
 		if err != nil {
 			logger.Ctx(ctx).Named("daemon.progress").Warn("enqueue_progress_change", zap.Error(err))
@@ -60,8 +64,9 @@ func (s *svc) startInboxWake(ctx context.Context) {
 			select {
 			case <-workerCtx.Done():
 				return
-			case <-s.modelInputs.Woken():
-				for _, id := range s.modelInputs.TakeWoken() {
+			case <-s.store.Woken():
+				for _, id := range s.store.TakeWoken() {
+					s.refreshBudgetTimer(workerCtx, id)
 					if err := s.inputReady(workerCtx, id); err != nil {
 						logger.Ctx(workerCtx).Named("daemon.input").Warn("input_ready_failed", zap.Int64("session_id", id), zap.Error(err))
 					}

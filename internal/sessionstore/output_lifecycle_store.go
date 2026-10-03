@@ -17,7 +17,7 @@ const lifecycleStop = "stop"
 // BeginLifecycleInput records the durable fence before the runner is cancelled.
 // The command comes from the daemon's central classification, not from re-parsing
 // stored content here.
-func (s *store) BeginLifecycleInput(
+func (s *Store) BeginLifecycleInput(
 	ctx context.Context,
 	inputID int64,
 	command, content string,
@@ -90,72 +90,7 @@ func (s *store) BeginLifecycleInput(
 	return &OutputCommit{OutputID: outputID, OwnerID: owner}, nil
 }
 
-// insertLifecycleAcknowledgement writes the command's visible start. /stop gets
-// a replaceable, non-releasing start row that a later terminal completion
-// transaction edits into the final result; other lifecycle commands keep the
-// persistent releasing acknowledgement.
-func insertLifecycleAcknowledgement(ctx context.Context, tx *sql.Tx, sessionID, inputID int64, command, content, owner string, now time.Time) (int64, error) {
-	kind := OutputMessagePersistent
-	releases := true
-	key := fmt.Sprintf("input:%d:%s:result", inputID, command)
-	if command == lifecycleStop {
-		kind = OutputMessageReplaceable
-		releases = false
-		key = fmt.Sprintf("input:%d:stop:started", inputID)
-	}
-	out, err := insertOutputTx(ctx, tx, OutputDraft{SessionID: sessionID, Type: kind, Content: content, SourceKey: key,
-		CreatedAt: now, ReleasesInput: releases}, CommitLifecycle)
-	if err != nil {
-		return 0, err
-	}
-	if out == nil {
-		return 0, nil
-	}
-	return out.OutputID, nil
-}
-
-func hasReplacementRow(
-	ctx context.Context,
-	q interface {
-		QueryRowContext(context.Context, string, ...any) *sql.Row
-	},
-	sessionID int64,
-	owner string,
-) (bool, error) {
-	var replaced int64
-
-	err := q.QueryRowContext(ctx, `
-		SELECT 1 FROM session_outbox
-		WHERE type = 'session_replaced'
-			AND json_extract(attributes, '$.old_session_id') = ?
-			AND json_extract(attributes, '$.manager_id') = ?
-		LIMIT 1`, sessionID, owner).Scan(&replaced)
-	if errors.Is(err, sql.ErrNoRows) {
-		return false, nil
-	}
-
-	if err != nil {
-		return false, fmt.Errorf("load replacement row: %w", err)
-	}
-
-	return true, nil
-}
-
-func insertClosedOutput(ctx context.Context, tx *sql.Tx, sessionID int64, owner string, now time.Time, cancelledProcesses int) (int64, error) {
-	out, err := insertOutputTx(ctx, tx, OutputDraft{SessionID: sessionID, Type: OutputSessionClosed,
-		Content:    fmt.Sprintf("Session killed. Cancelled background processes: %d", cancelledProcesses),
-		Attributes: map[string]any{"reason": killedReason, "cancelled_processes": cancelledProcesses},
-		SourceKey:  fmt.Sprintf("session:%d:closed", sessionID), CreatedAt: now, ReleasesInput: true}, CommitLifecycle)
-	if err != nil {
-		return 0, err
-	}
-	if out == nil {
-		return 0, nil
-	}
-	return out.OutputID, nil
-}
-
-func (s *store) ResolveReplacement(ctx context.Context, sessionID int64, managerID string) (int64, error) {
+func (s *Store) ResolveReplacement(ctx context.Context, sessionID int64, managerID string) (int64, error) {
 	seen := make(map[int64]struct{})
 	for range 16 {
 		if _, duplicate := seen[sessionID]; duplicate {
@@ -212,7 +147,7 @@ func (s *store) ResolveReplacement(ctx context.Context, sessionID int64, manager
 
 // MarkSessionKilledWithOutput omits a close row for a terminating old root;
 // clear transfers that manager surface to its replacement.
-func (s *store) MarkSessionKilledWithOutput(
+func (s *Store) MarkSessionKilledWithOutput(
 	ctx context.Context,
 	sessionID int64,
 	cancelledProcesses int,
@@ -295,4 +230,69 @@ func (s *store) MarkSessionKilledWithOutput(
 	}
 
 	return &OutputCommit{OutputID: outputID, OwnerID: owner}, nil
+}
+
+// insertLifecycleAcknowledgement writes the command's visible start. /stop gets
+// a replaceable, non-releasing start row that a later terminal completion
+// transaction edits into the final result; other lifecycle commands keep the
+// persistent releasing acknowledgement.
+func insertLifecycleAcknowledgement(ctx context.Context, tx *sql.Tx, sessionID, inputID int64, command, content, owner string, now time.Time) (int64, error) {
+	kind := OutputMessagePersistent
+	releases := true
+	key := fmt.Sprintf("input:%d:%s:result", inputID, command)
+	if command == lifecycleStop {
+		kind = OutputMessageReplaceable
+		releases = false
+		key = fmt.Sprintf("input:%d:stop:started", inputID)
+	}
+	out, err := insertOutputTx(ctx, tx, OutputDraft{SessionID: sessionID, Type: kind, Content: content, SourceKey: key,
+		CreatedAt: now, ReleasesInput: releases}, CommitLifecycle)
+	if err != nil {
+		return 0, err
+	}
+	if out == nil {
+		return 0, nil
+	}
+	return out.OutputID, nil
+}
+
+func hasReplacementRow(
+	ctx context.Context,
+	q interface {
+		QueryRowContext(context.Context, string, ...any) *sql.Row
+	},
+	sessionID int64,
+	owner string,
+) (bool, error) {
+	var replaced int64
+
+	err := q.QueryRowContext(ctx, `
+		SELECT 1 FROM session_outbox
+		WHERE type = 'session_replaced'
+			AND json_extract(attributes, '$.old_session_id') = ?
+			AND json_extract(attributes, '$.manager_id') = ?
+		LIMIT 1`, sessionID, owner).Scan(&replaced)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+
+	if err != nil {
+		return false, fmt.Errorf("load replacement row: %w", err)
+	}
+
+	return true, nil
+}
+
+func insertClosedOutput(ctx context.Context, tx *sql.Tx, sessionID int64, owner string, now time.Time, cancelledProcesses int) (int64, error) {
+	out, err := insertOutputTx(ctx, tx, OutputDraft{SessionID: sessionID, Type: OutputSessionClosed,
+		Content:    fmt.Sprintf("Session killed. Cancelled background processes: %d", cancelledProcesses),
+		Attributes: map[string]any{"reason": killedReason, "cancelled_processes": cancelledProcesses},
+		SourceKey:  fmt.Sprintf("session:%d:closed", sessionID), CreatedAt: now, ReleasesInput: true}, CommitLifecycle)
+	if err != nil {
+		return 0, err
+	}
+	if out == nil {
+		return 0, nil
+	}
+	return out.OutputID, nil
 }

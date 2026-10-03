@@ -6,18 +6,14 @@ import (
 	"sync"
 	"time"
 
-	"github.com/pilat/coagent/internal/budget"
 	"github.com/pilat/coagent/internal/controllerapi"
 	"github.com/pilat/coagent/internal/progress"
+	"github.com/pilat/coagent/internal/sessionbus"
 	"github.com/pilat/coagent/internal/sessionevent"
 	"github.com/pilat/coagent/internal/sessionstore"
 )
 
-// Store is the durable progress projection and output identity boundary.
-type Store interface {
-	sessionstore.ProgressStore
-	sessionstore.ReadinessStore
-}
+var _ Service = (*runtime)(nil)
 
 // Service owns progress projection, durable cards, and silence reconciliation.
 type Service interface {
@@ -34,51 +30,43 @@ type Service interface {
 		recaptureOnSuperseded bool,
 	) (string, bool, error)
 	Reconcile(ctx context.Context, now time.Time) time.Duration
-	ReconcileArmedBudgets(ctx context.Context) error
+	SetLive(sessionID int64, live Live)
 	ReconcileOutputReadiness(ctx context.Context, outputID int64) error
 	ReconcileLatestReadiness(ctx context.Context, sessionID int64)
 	Wake()
 }
 
-var _ Service = (*runtime)(nil)
-
 type runtime struct {
-	sessionStore Store
-	budgetSvc    budget.Service
+	sessionStore *sessionstore.Store
 
-	hasActiveLoop         func(int64) bool
-	mainModelWorking      func(int64) bool
-	liveContextProjection func(context.Context, int64) (progress.Context, bool)
-	startBudgetPark       func(*budget.Record)
-	publish               func(int64, sessionevent.Notification)
+	bus    sessionbus.Bus
+	liveMu sync.RWMutex
+	live   map[int64]Live
 
 	mu             sync.Mutex
 	readyOutputs   map[int64]int64
 	progressCancel context.CancelFunc
 	progressDone   chan struct{}
 	progressWake   chan struct{}
-	progressNow    func() time.Time
-	progressTimer  func(time.Duration) progressTimer
 }
 
-func New(
-	store Store,
-	budgetSvc budget.Service,
-	hasActiveLoop func(int64) bool,
-	mainModelWorking func(int64) bool,
-	contextProjection func(context.Context, int64) (progress.Context, bool),
-	startBudgetPark func(*budget.Record),
-	publish func(int64, sessionevent.Notification),
-) Service {
-	return &runtime{
-		sessionStore: store, budgetSvc: budgetSvc,
-		hasActiveLoop: hasActiveLoop, mainModelWorking: mainModelWorking,
-		liveContextProjection: contextProjection,
-		startBudgetPark:       startBudgetPark,
-		publish:               publish,
-		readyOutputs:          make(map[int64]int64),
-		progressWake:          make(chan struct{}, 1), progressNow: time.Now, progressTimer: newRealProgressTimer,
-	}
+// Live is the daemon's current runner and context projection.
+type Live struct {
+	Active  bool
+	Working bool
+	Context progress.Context
+}
+
+func New(store *sessionstore.Store, bus sessionbus.Bus) Service {
+	return &runtime{sessionStore: store, bus: bus, live: make(map[int64]Live),
+		readyOutputs: make(map[int64]int64), progressWake: make(chan struct{}, 1)}
+}
+
+func (r *runtime) SetLive(sessionID int64, live Live) {
+	r.liveMu.Lock()
+	r.live[sessionID] = live
+	r.liveMu.Unlock()
+	r.Wake()
 }
 
 func (r *runtime) Start(ctx context.Context) {
@@ -148,10 +136,21 @@ func (r *runtime) Reconcile(ctx context.Context, now time.Time) time.Duration {
 	return r.reconcileProgressSafely(ctx, now)
 }
 
-func (r *runtime) ReconcileArmedBudgets(ctx context.Context) error {
-	return r.reconcileArmedBudgets(ctx)
-}
-
 func (r *runtime) Wake() {
 	r.wakeProgress()
+}
+
+func (r *runtime) liveState(sessionID int64) Live {
+	r.liveMu.RLock()
+	defer r.liveMu.RUnlock()
+	return r.live[sessionID]
+}
+
+func (r *runtime) publish(ctx context.Context, sessionID int64, n sessionevent.Notification) {
+	record, err := r.sessionStore.GetSession(ctx, sessionID)
+	if err != nil || record.ParentID != 0 {
+		return
+	}
+	owner, _ := record.Attributes["manager_id"].(string)
+	r.bus.PublishOwned(sessionID, owner, n)
 }

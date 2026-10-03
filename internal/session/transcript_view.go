@@ -16,12 +16,80 @@ type messageStore struct {
 	mu       sync.Mutex
 	messages []llmwire.Message
 	rowIDs   []int64
-	store    sessionstore.RuntimeStore // nil = in-memory only (tests without persistence)
-	sessID   int64                     // session ID for persistence
+	store    Store // nil = in-memory only (tests without persistence)
+	sessID   int64 // session ID for persistence
+}
+
+// PendingToolCall identifies one exact suspended tool invocation.
+type PendingToolCall struct {
+	ID   string
+	Name string
+}
+
+type toolCallStatus struct {
+	name      string
+	found     bool
+	resolved  bool
+	duplicate bool
+}
+
+// PendingExternalCalls is deliberately global over the active transcript.
+// External work is causal state: a later user or synthetic event cannot
+// supersede it merely by becoming the latest turn.
+func (s *Session) PendingExternalCalls() []PendingToolCall {
+	calls := unresolvedCallsMatching(s.ms.getMessages(), func(tc llmwire.ToolCall) bool {
+		return s.stagedCalls[tc.ID] == tc.Name
+	})
+
+	result := make([]PendingToolCall, 0, len(calls))
+
+	for _, call := range calls {
+		result = append(result, PendingToolCall{ID: call.ID, Name: call.Name})
+	}
+
+	return result
+}
+
+func (s *Session) HasPendingExternalCall() bool {
+	return len(s.PendingExternalCalls()) > 0
+}
+
+// HasPendingWork includes host continuation rows so restarts retain unfinished turns.
+func (s *Session) HasPendingWork() bool {
+	if s.HasPendingExternalCall() {
+		return false
+	}
+	return s.unansweredWork()
+}
+
+func UnresolvedCalls(messages []llmwire.Message) []PendingToolCall {
+	calls := unresolvedCallsMatching(messages, func(llmwire.ToolCall) bool { return true })
+	result := make([]PendingToolCall, 0, len(calls))
+	for _, call := range calls {
+		result = append(result, PendingToolCall{ID: call.ID, Name: call.Name})
+	}
+	return result
+}
+
+func SettleResults(calls []PendingToolCall, text string) []*transcript.Message {
+	results := make([]*transcript.Message, 0, len(calls))
+	for _, call := range calls {
+		results = append(
+			results,
+			&transcript.Message{
+				Role:       llmwire.RoleTool,
+				Content:    text,
+				ToolCallID: call.ID,
+				ToolName:   call.Name,
+				ToolError:  true,
+			},
+		)
+	}
+	return results
 }
 
 func newMessageStore(
-	store sessionstore.RuntimeStore,
+	store Store,
 	sessID int64,
 ) *messageStore {
 	return &messageStore{
@@ -216,41 +284,6 @@ func storedMessage(msg *llmwire.Message) (*transcript.Message, error) {
 	}, nil
 }
 
-// PendingToolCall identifies one exact suspended tool invocation.
-type PendingToolCall struct {
-	ID   string
-	Name string
-}
-
-// PendingExternalCalls is deliberately global over the active transcript.
-// External work is causal state: a later user or synthetic event cannot
-// supersede it merely by becoming the latest turn.
-func (s *Session) PendingExternalCalls() []PendingToolCall {
-	calls := unresolvedCallsMatching(s.ms.getMessages(), func(tc llmwire.ToolCall) bool {
-		return s.stagedCalls[tc.ID] == tc.Name
-	})
-
-	result := make([]PendingToolCall, 0, len(calls))
-
-	for _, call := range calls {
-		result = append(result, PendingToolCall{ID: call.ID, Name: call.Name})
-	}
-
-	return result
-}
-
-func (s *Session) HasPendingExternalCall() bool {
-	return len(s.PendingExternalCalls()) > 0
-}
-
-// HasPendingWork includes host continuation rows so restarts retain unfinished turns.
-func (s *Session) HasPendingWork() bool {
-	if s.HasPendingExternalCall() {
-		return false
-	}
-	return s.unansweredWork()
-}
-
 func (s *Session) pendingExternalCallIDs() map[string]bool {
 	return s.pendingExternalCallIDsLocked(s.ms.getMessages())
 }
@@ -301,13 +334,6 @@ func unresolvedCallsMatching(
 	return result
 }
 
-type toolCallStatus struct {
-	name      string
-	found     bool
-	resolved  bool
-	duplicate bool
-}
-
 func findToolCall(messages []llmwire.Message, callID string) toolCallStatus {
 	var status toolCallStatus
 
@@ -333,32 +359,6 @@ func findToolCall(messages []llmwire.Message, callID string) toolCallStatus {
 	}
 
 	return status
-}
-
-func UnresolvedCalls(messages []llmwire.Message) []PendingToolCall {
-	calls := unresolvedCallsMatching(messages, func(llmwire.ToolCall) bool { return true })
-	result := make([]PendingToolCall, 0, len(calls))
-	for _, call := range calls {
-		result = append(result, PendingToolCall{ID: call.ID, Name: call.Name})
-	}
-	return result
-}
-
-func SettleResults(calls []PendingToolCall, text string) []*transcript.Message {
-	results := make([]*transcript.Message, 0, len(calls))
-	for _, call := range calls {
-		results = append(
-			results,
-			&transcript.Message{
-				Role:       llmwire.RoleTool,
-				Content:    text,
-				ToolCallID: call.ID,
-				ToolName:   call.Name,
-				ToolError:  true,
-			},
-		)
-	}
-	return results
 }
 
 func (s *Session) pendingInLoopCalls() []llmwire.ToolCall {

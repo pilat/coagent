@@ -25,7 +25,7 @@ func (s *svc) Spawn(ctx context.Context, req subagent.SpawnRequest) (subagent.Ch
 	}
 	defer unlock()
 
-	err = s.stopper.GuardSpawn(func() error {
+	err = func() error {
 		childID, workDir, projectID, createErr := s.createChildSession(ctx, req)
 		if createErr != nil {
 			return createErr
@@ -40,7 +40,7 @@ func (s *svc) Spawn(ctx context.Context, req subagent.SpawnRequest) (subagent.Ch
 		result = subagent.ChildResult{ChildID: childID, State: subagent.StateSpawned}
 
 		return nil
-	})
+	}()
 	if err != nil {
 		return subagent.ChildResult{}, fmt.Errorf("guard child spawn: %w", err)
 	}
@@ -48,12 +48,131 @@ func (s *svc) Spawn(ctx context.Context, req subagent.SpawnRequest) (subagent.Ch
 	return result, nil
 }
 
+// Result returns a snapshot of a child's state and (once terminal) its output.
+func (s *svc) Result(ctx context.Context, childID int64) (subagent.ChildResult, error) {
+	return s.childSnapshot(ctx, childID)
+}
+
+// SendToChild durably appends a follow-up to a child's inbox. If the
+// current activation is still running, the same runner consumes it at the next
+// loop boundary. If it already ended, the previous completion is delivered
+// first; persistCompletion then re-arms and starts the next activation. A
+// completed foreground child becomes a background continuation because its
+// original task call has already been resolved.
+//
+//nolint:funlen,wsl_v5 // Durable enqueue and guarded rearm form one serialized transition.
+func (s *svc) SendToChild(ctx context.Context, childID int64, msg string) error {
+	requestCtx := ctx
+	unlock, err := s.lockSessionTree(ctx, childID)
+	if err != nil {
+		return err
+	}
+	locked := true
+	defer func() {
+		if locked {
+			unlock()
+		}
+	}()
+	ctx = context.WithoutCancel(ctx)
+
+	link, err := s.links.GetLink(ctx, childID)
+	if err != nil {
+		return fmt.Errorf("load subagent link: %w", err)
+	}
+
+	if link == nil {
+		return fmt.Errorf("subagent %d not found", childID)
+	}
+
+	if link.State == subagent.StateKilled {
+		return fmt.Errorf("subagent %d is killed", childID)
+	}
+
+	if _, err := s.store.Enqueue(
+		ctx,
+		sessionstore.Input{SessionID: childID, Source: sessionstore.InputSourceAgent, Content: msg},
+	); err != nil {
+		return fmt.Errorf("persist subagent follow-up: %w", err)
+	}
+
+	// Re-read after enqueue. The child may have crossed its terminal boundary
+	// while the durable write committed.
+	link, err = s.links.GetLink(ctx, childID)
+	if err != nil {
+		return fmt.Errorf("reload subagent link: %w", err)
+	}
+
+	if link == nil {
+		return fmt.Errorf("subagent %d disappeared after accepting follow-up", childID)
+	}
+
+	if link.State == subagent.StateStopped {
+		rec, recErr := s.store.GetSession(ctx, childID)
+		if recErr != nil {
+			return fmt.Errorf("load stopped subagent session: %w", recErr)
+		}
+
+		if rec.Status == sessionstore.SessionStatusStopping {
+			return nil // /stop won; it will cancel this accepted input
+		}
+
+		return s.resumeChildWithPendingInputLocked(ctx, childID)
+	}
+	if link.State == subagent.StateError && link.DeliveredAt != 0 {
+		return s.resumeChildWithPendingInputLocked(ctx, childID)
+	}
+
+	if link.Terminal() {
+		unlock()
+		locked = false
+
+		if link.DeliveredAt != 0 {
+			return s.rearmChildAfterDelivery(requestCtx, childID)
+		}
+
+		s.deliverCompletionToParent(requestCtx, *link)
+		updated, err := s.links.GetLink(requestCtx, childID)
+		if err != nil {
+			return fmt.Errorf("reload delivered subagent link: %w", err)
+		}
+		if updated == nil || updated.DeliveredAt == 0 {
+			return nil
+		}
+		if updated.State != subagent.StateError {
+			return s.rearmChildAfterDelivery(requestCtx, childID)
+		}
+
+		return s.guardChildTransition(requestCtx, childID, func(guarded context.Context) error {
+			return s.resumeChildWithPendingInputLocked(guarded, childID)
+		})
+	}
+
+	unlock()
+	locked = false
+
+	return s.ensureSessionRunner(requestCtx, childID)
+}
+
+// LinkPending reports whether a link already exists for this task call — the
+// resume idempotency check. An unresolved task tool_use that already has a link
+// must re-suspend (never re-fork): its completion is either in flight or
+// terminal-but-not-yet-delivered. (A delivered completion fills the tool_use, so
+// it is resolved and never re-executed — this is only reached for unresolved calls.)
+func (s *svc) LinkPending(ctx context.Context, parentID int64, taskCallID string) (bool, error) {
+	link, err := s.links.GetLinkByTaskCallID(ctx, parentID, taskCallID)
+	if err != nil {
+		return false, fmt.Errorf("check pending link: %w", err)
+	}
+
+	return link != nil, nil
+}
+
 // createChildSession validates the spawn request (nesting depth), then durably
 // creates the child session row + its subagent_links row.
 // Returns the child id plus the parent's workdir/project for runner start. The
 // agent type was already validated by the task tool against the session's set.
 func (s *svc) createChildSession(ctx context.Context, req subagent.SpawnRequest) (int64, string, int64, error) {
-	parentRec, err := s.sessionStore.GetSession(ctx, req.ParentID)
+	parentRec, err := s.store.GetSession(ctx, req.ParentID)
 	if err != nil {
 		return 0, "", 0, fmt.Errorf("parent session %d: %w", req.ParentID, err)
 	}
@@ -125,137 +244,18 @@ func (s *svc) createChildSession(ctx context.Context, req subagent.SpawnRequest)
 	return childID, workDir, parentRec.ProjectID, nil
 }
 
-// Result returns a snapshot of a child's state and (once terminal) its output.
-func (s *svc) Result(ctx context.Context, childID int64) (subagent.ChildResult, error) {
-	return s.childSnapshot(ctx, childID)
-}
-
-// SendToChild durably appends a follow-up to a child's inbox. If the
-// current activation is still running, the same runner consumes it at the next
-// loop boundary. If it already ended, the previous completion is delivered
-// first; persistCompletion then re-arms and starts the next activation. A
-// completed foreground child becomes a background continuation because its
-// original task call has already been resolved.
-//
-//nolint:funlen,wsl_v5 // Durable enqueue and guarded rearm form one serialized transition.
-func (s *svc) SendToChild(ctx context.Context, childID int64, msg string) error {
-	requestCtx := ctx
-	unlock, err := s.lockSessionTree(ctx, childID)
-	if err != nil {
-		return err
-	}
-	locked := true
-	defer func() {
-		if locked {
-			unlock()
-		}
-	}()
-	ctx = context.WithoutCancel(ctx)
-
-	link, err := s.links.GetLink(ctx, childID)
-	if err != nil {
-		return fmt.Errorf("load subagent link: %w", err)
-	}
-
-	if link == nil {
-		return fmt.Errorf("subagent %d not found", childID)
-	}
-
-	if link.State == subagent.StateKilled {
-		return fmt.Errorf("subagent %d is killed", childID)
-	}
-
-	if _, err := s.modelInputs.Enqueue(
-		ctx,
-		sessionstore.Input{SessionID: childID, Source: sessionstore.InputSourceAgent, Content: msg},
-	); err != nil {
-		return fmt.Errorf("persist subagent follow-up: %w", err)
-	}
-
-	// Re-read after enqueue. The child may have crossed its terminal boundary
-	// while the durable write committed.
-	link, err = s.links.GetLink(ctx, childID)
-	if err != nil {
-		return fmt.Errorf("reload subagent link: %w", err)
-	}
-
-	if link == nil {
-		return fmt.Errorf("subagent %d disappeared after accepting follow-up", childID)
-	}
-
-	if link.State == subagent.StateStopped {
-		rec, recErr := s.sessionStore.GetSession(ctx, childID)
-		if recErr != nil {
-			return fmt.Errorf("load stopped subagent session: %w", recErr)
-		}
-
-		if rec.Status == sessionstore.SessionStatusStopping {
-			return nil // /stop won; it will cancel this accepted input
-		}
-
-		return s.resumeChildWithPendingInputLocked(ctx, childID)
-	}
-	if link.State == subagent.StateError && link.DeliveredAt != 0 {
-		return s.resumeChildWithPendingInputLocked(ctx, childID)
-	}
-
-	if link.Terminal() {
-		unlock()
-		locked = false
-
-		if link.DeliveredAt != 0 {
-			return s.rearmChildAfterDelivery(requestCtx, childID)
-		}
-
-		s.deliverCompletionToParent(requestCtx, *link)
-		updated, err := s.links.GetLink(requestCtx, childID)
-		if err != nil {
-			return fmt.Errorf("reload delivered subagent link: %w", err)
-		}
-		if updated == nil || updated.DeliveredAt == 0 {
-			return nil
-		}
-		if updated.State != subagent.StateError {
-			return s.rearmChildAfterDelivery(requestCtx, childID)
-		}
-
-		return s.guardChildTransition(requestCtx, childID, func(guarded context.Context) error {
-			return s.resumeChildWithPendingInputLocked(guarded, childID)
-		})
-	}
-
-	unlock()
-	locked = false
-
-	return s.ensureSessionRunner(requestCtx, childID)
-}
-
 func (s *svc) resumeChildWithPendingInputLocked(ctx context.Context, childID int64) error {
 	if err := s.links.ResetLinkRunning(ctx, childID); err != nil {
 		return fmt.Errorf("resume subagent link: %w", err)
 	}
 
-	if err := s.sessionStore.UpdateSessionStatus(ctx, childID, sessionstore.SessionStatusActive); err != nil {
+	if err := s.store.UpdateSessionStatus(ctx, childID, sessionstore.SessionStatusActive); err != nil {
 		return fmt.Errorf("resume subagent session: %w", err)
 	}
 
 	s.publishSubagentProgress(ctx, childID)
 
 	return s.ensureSessionRunnerLocked(ctx, childID)
-}
-
-// LinkPending reports whether a link already exists for this task call — the
-// resume idempotency check. An unresolved task tool_use that already has a link
-// must re-suspend (never re-fork): its completion is either in flight or
-// terminal-but-not-yet-delivered. (A delivered completion fills the tool_use, so
-// it is resolved and never re-executed — this is only reached for unresolved calls.)
-func (s *svc) LinkPending(ctx context.Context, parentID int64, taskCallID string) (bool, error) {
-	link, err := s.links.GetLinkByTaskCallID(ctx, parentID, taskCallID)
-	if err != nil {
-		return false, fmt.Errorf("check pending link: %w", err)
-	}
-
-	return link != nil, nil
 }
 
 // childSnapshot builds a subagent.ChildResult from the durable link state (authoritative
@@ -276,7 +276,7 @@ func (s *svc) childSnapshot(ctx context.Context, childID int64) (subagent.ChildR
 		Terminal: link.Terminal(),
 	}
 
-	if rec, rerr := s.sessionStore.GetSession(ctx, childID); rerr == nil {
+	if rec, rerr := s.store.GetSession(ctx, childID); rerr == nil {
 		res.Iteration = rec.Iteration
 	}
 

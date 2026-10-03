@@ -19,7 +19,7 @@ var _ Store = (*store)(nil)
 
 type store struct {
 	db       *sql.DB
-	sessions sessionstore.Store
+	sessions *sessionstore.Store
 }
 
 // Store owns ordinary durable background-process ledger access.
@@ -49,7 +49,7 @@ type Store interface {
 }
 
 // NewStore returns the SQL-backed process ledger.
-func NewStore(db *sql.DB, sessions sessionstore.Store) Store {
+func NewStore(db *sql.DB, sessions *sessionstore.Store) Store {
 	return &store{db: db, sessions: sessions}
 }
 

@@ -7,8 +7,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/pilat/coagent/internal/budget"
 	"time"
+
+	"github.com/pilat/coagent/internal/budget"
 )
 
 type ProgressFacts struct {
@@ -57,24 +58,7 @@ type ProgressWait struct {
 	WakeAt      *time.Time
 }
 
-type ProgressStore interface {
-	CaptureProgress(ctx context.Context, rootID int64) (*ProgressFacts, error)
-	ListAutonomousProgressRoots(ctx context.Context) ([]int64, error)
-	OutboxWatermark(ctx context.Context, sessionID int64) (int64, error)
-	OutputBySourceKey(ctx context.Context, sessionID int64, sourceKey string) (*OutputRecord, error)
-	// EnqueueProgressOutput commits one causal progress card: it succeeds only
-	// while the captured generation and status still own the session.
-	EnqueueProgressOutput(
-		ctx context.Context,
-		draft OutputDraft,
-		expectedGeneration int64,
-		expectedStatus SessionStatus,
-	) (*OutputCommit, error)
-}
-
-var _ ProgressStore = (*store)(nil)
-
-func (s *store) CaptureProgress(ctx context.Context, rootID int64) (*ProgressFacts, error) {
+func (s *Store) CaptureProgress(ctx context.Context, rootID int64) (*ProgressFacts, error) {
 	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
 		return nil, fmt.Errorf("begin progress capture: %w", err)
@@ -165,6 +149,50 @@ func CaptureProgressTx(ctx context.Context, tx *sql.Tx, rootID int64) (*Progress
 	}
 
 	return facts, nil
+}
+
+// OutboxWatermark is the light single-fact re-read producers use to detect a
+// semantic output committed after their snapshot capture.
+func (s *Store) OutboxWatermark(ctx context.Context, sessionID int64) (int64, error) {
+	var watermark int64
+	if err := s.db.QueryRowContext(ctx, `SELECT COALESCE(MAX(id), 0) FROM session_outbox
+		WHERE session_id = ?`, sessionID).Scan(&watermark); err != nil {
+		return 0, fmt.Errorf("load outbox watermark: %w", err)
+	}
+
+	return watermark, nil
+}
+
+func (s *Store) ListAutonomousProgressRoots(ctx context.Context) ([]int64, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT DISTINCT root.id FROM sessions root
+		LEFT JOIN sessions child ON child.root_id = root.id
+		WHERE root.parent_id = 0 AND root.killed_at IS NULL
+			AND json_type(root.attributes, '$.manager_id') = 'text'
+			AND json_extract(root.attributes, '$.manager_id') <> ''
+			AND root.episode_started_at IS NOT NULL
+			AND root.status NOT IN ('stopping', 'stopped', 'terminating', 'killed')
+			AND (root.status IN ('active', 'suspended') OR child.status IN ('active', 'suspended'))
+		ORDER BY root.id`)
+	if err != nil {
+		return nil, fmt.Errorf("list progress roots: %w", err)
+	}
+	defer rows.Close()
+	var ids []int64
+
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("scan autonomous progress root: %w", err)
+		}
+
+		ids = append(ids, id)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate autonomous progress roots: %w", err)
+	}
+
+	return ids, nil
 }
 
 // captureProgressNarrationNote is the legacy note path: the newest unpublished
@@ -314,50 +342,6 @@ func captureProgressTimes(ctx context.Context, tx *sql.Tx, facts *ProgressFacts)
 	}
 
 	return nil
-}
-
-// OutboxWatermark is the light single-fact re-read producers use to detect a
-// semantic output committed after their snapshot capture.
-func (s *store) OutboxWatermark(ctx context.Context, sessionID int64) (int64, error) {
-	var watermark int64
-	if err := s.db.QueryRowContext(ctx, `SELECT COALESCE(MAX(id), 0) FROM session_outbox
-		WHERE session_id = ?`, sessionID).Scan(&watermark); err != nil {
-		return 0, fmt.Errorf("load outbox watermark: %w", err)
-	}
-
-	return watermark, nil
-}
-
-func (s *store) ListAutonomousProgressRoots(ctx context.Context) ([]int64, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT DISTINCT root.id FROM sessions root
-		LEFT JOIN sessions child ON child.root_id = root.id
-		WHERE root.parent_id = 0 AND root.killed_at IS NULL
-			AND json_type(root.attributes, '$.manager_id') = 'text'
-			AND json_extract(root.attributes, '$.manager_id') <> ''
-			AND root.episode_started_at IS NOT NULL
-			AND root.status NOT IN ('stopping', 'stopped', 'terminating', 'killed')
-			AND (root.status IN ('active', 'suspended') OR child.status IN ('active', 'suspended'))
-		ORDER BY root.id`)
-	if err != nil {
-		return nil, fmt.Errorf("list progress roots: %w", err)
-	}
-	defer rows.Close()
-	var ids []int64
-
-	for rows.Next() {
-		var id int64
-		if err := rows.Scan(&id); err != nil {
-			return nil, fmt.Errorf("scan autonomous progress root: %w", err)
-		}
-
-		ids = append(ids, id)
-	}
-
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate autonomous progress roots: %w", err)
-	}
-
-	return ids, nil
 }
 
 // captureProgressProcesses projects advertised running processes owned by the

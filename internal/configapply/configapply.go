@@ -15,6 +15,8 @@ import (
 	"github.com/pilat/coagent/internal/transcript"
 )
 
+var _ Service = (*svc)(nil)
+
 type Service interface {
 	Ops() configops.Service
 	PendingCall(sessionID int64) (configops.Pending, error)
@@ -31,26 +33,26 @@ type Service interface {
 	ConsumeConfigEditActivation(ctx context.Context, sessionID int64, callID string)
 }
 
-var _ Service = (*svc)(nil)
-
 type stagedCall struct {
 	apply  *configops.Staged
 	result string
 }
+
 type svc struct {
 	ops      configops.Service
-	sessions sessionstore.Store
+	sessions *sessionstore.Store
 	restart  chan struct{}
 	mu       sync.Mutex
 	claimed  bool
 	calls    map[int64]map[string]stagedCall
 }
 
-func New(ops configops.Service, sessions sessionstore.Store) Service {
+func New(ops configops.Service, sessions *sessionstore.Store) Service {
 	return &svc{ops: ops, sessions: sessions, restart: make(chan struct{}, 1), calls: make(map[int64]map[string]stagedCall)}
 }
 
 func (a *svc) Ops() configops.Service { return a.ops }
+
 func (a *svc) PendingCall(sessionID int64) (configops.Pending, error) {
 	p, err := a.ops.LoadPending()
 	if err != nil {
@@ -61,6 +63,7 @@ func (a *svc) PendingCall(sessionID int64) (configops.Pending, error) {
 	}
 	return *p, nil
 }
+
 func (a *svc) ClaimApply() bool {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -70,7 +73,9 @@ func (a *svc) ClaimApply() bool {
 	a.claimed = true
 	return true
 }
+
 func (a *svc) ReleaseApply() { a.mu.Lock(); defer a.mu.Unlock(); a.claimed = false }
+
 func (a *svc) Apply(staged *configops.Staged, p configops.Pending) configops.Verdict {
 	if v := a.ops.Commit(staged, p); v.Failed() {
 		a.ReleaseApply()
@@ -79,13 +84,16 @@ func (a *svc) Apply(staged *configops.Staged, p configops.Pending) configops.Ver
 	a.RequestRestart()
 	return configops.OK()
 }
+
 func (a *svc) Restart() <-chan struct{} { return a.restart }
+
 func (a *svc) RequestRestart() {
 	select {
 	case a.restart <- struct{}{}:
 	default:
 	}
 }
+
 func (a *svc) Calls(sessionID int64) map[string]string {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -95,46 +103,9 @@ func (a *svc) Calls(sessionID int64) map[string]string {
 	}
 	return calls
 }
+
 func (a *svc) Has(sessionID int64) bool { return len(a.Calls(sessionID)) != 0 }
-func (a *svc) stageApply(sessionID int64, callID string, staged *configops.Staged) bool {
-	if !a.ClaimApply() {
-		return false
-	}
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	if a.calls[sessionID] == nil {
-		a.calls[sessionID] = make(map[string]stagedCall)
-	}
-	a.calls[sessionID][callID] = stagedCall{apply: staged}
-	return true
-}
-func (a *svc) takePendingApply(sessionID int64) (string, stagedCall, bool) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	for id, sc := range a.calls[sessionID] {
-		if sc.apply == nil {
-			continue
-		}
-		taken := sc
-		sc.apply = nil
-		a.calls[sessionID][id] = sc
-		return id, taken, true
-	}
-	return "", stagedCall{}, false
-}
-func (a *svc) resolve(sessionID int64, callID string) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	delete(a.calls[sessionID], callID)
-	if len(a.calls[sessionID]) == 0 {
-		delete(a.calls, sessionID)
-	}
-}
-func (a *svc) stageResult(sessionID int64, callID, content string) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	a.calls[sessionID][callID] = stagedCall{result: content}
-}
+
 func (a *svc) RunStagedApply(ctx context.Context, sessionID int64) {
 	callID, sc, ok := a.takePendingApply(sessionID)
 	if !ok {
@@ -169,12 +140,6 @@ func (a *svc) RunStagedApply(ctx context.Context, sessionID int64) {
 	a.deliverResult(ctx, sessionID, callID, "Config change rejected — "+v.Reason())
 }
 
-func (a *svc) deliverResult(ctx context.Context, sessionID int64, callID, content string) {
-	a.stageResult(sessionID, callID, content)
-	if err := a.SettleStagedResults(ctx, sessionID); err != nil {
-		logger.Ctx(ctx).Named("configapply").Error("result_delivery_failed", zap.Int64("session_id", sessionID), zap.Error(err))
-	}
-}
 func (a *svc) Abandon(ctx context.Context, sessionID int64) {
 	callID, _, ok := a.takePendingApply(sessionID)
 	if !ok {
@@ -183,6 +148,7 @@ func (a *svc) Abandon(ctx context.Context, sessionID int64) {
 	a.ReleaseApply()
 	a.stageResult(sessionID, callID, "Config change abandoned — the session ended before it was applied. Nothing was written.")
 }
+
 func (a *svc) SettleStagedResults(ctx context.Context, sessionID int64) error {
 	a.mu.Lock()
 	results := make(map[string]string)
@@ -234,6 +200,7 @@ func (a *svc) SettleStagedResults(ctx context.Context, sessionID int64) error {
 	}
 	return nil
 }
+
 func (a *svc) ConsumeConfigEditActivation(ctx context.Context, sessionID int64, callID string) {
 	activation, err := a.sessions.CurrentActivation(ctx, sessionID)
 	if err != nil {
@@ -250,5 +217,55 @@ func (a *svc) ConsumeConfigEditActivation(ctx context.Context, sessionID int64, 
 	})
 	if err != nil {
 		logger.Ctx(ctx).Warn("consume_config_edit_activation", zap.Error(err))
+	}
+}
+
+func (a *svc) stageApply(sessionID int64, callID string, staged *configops.Staged) bool {
+	if !a.ClaimApply() {
+		return false
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.calls[sessionID] == nil {
+		a.calls[sessionID] = make(map[string]stagedCall)
+	}
+	a.calls[sessionID][callID] = stagedCall{apply: staged}
+	return true
+}
+
+func (a *svc) takePendingApply(sessionID int64) (string, stagedCall, bool) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	for id, sc := range a.calls[sessionID] {
+		if sc.apply == nil {
+			continue
+		}
+		taken := sc
+		sc.apply = nil
+		a.calls[sessionID][id] = sc
+		return id, taken, true
+	}
+	return "", stagedCall{}, false
+}
+
+func (a *svc) resolve(sessionID int64, callID string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	delete(a.calls[sessionID], callID)
+	if len(a.calls[sessionID]) == 0 {
+		delete(a.calls, sessionID)
+	}
+}
+
+func (a *svc) stageResult(sessionID int64, callID, content string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.calls[sessionID][callID] = stagedCall{result: content}
+}
+
+func (a *svc) deliverResult(ctx context.Context, sessionID int64, callID, content string) {
+	a.stageResult(sessionID, callID, content)
+	if err := a.SettleStagedResults(ctx, sessionID); err != nil {
+		logger.Ctx(ctx).Named("configapply").Error("result_delivery_failed", zap.Int64("session_id", sessionID), zap.Error(err))
 	}
 }

@@ -7,7 +7,7 @@ import (
 	sqlite3 "modernc.org/sqlite/lib"
 )
 
-// The store owns SQLite, so replay detection keys on the driver's typed
+// The Store owns SQLite, so replay detection keys on the driver's typed
 // constraint error rather than a driver-formatted message string.
 func isUniqueConstraintError(err error) bool {
 	var sqliteErr *sqlite.Error

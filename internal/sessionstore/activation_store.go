@@ -9,8 +9,6 @@ import (
 	"time"
 )
 
-type ActivationState string
-
 const (
 	ActivationPending  ActivationState = "pending"
 	ActivationConsumed ActivationState = "consumed"
@@ -21,6 +19,8 @@ var (
 	ErrActivationNotFound = errors.New("tool activation not found")
 	ErrActivationConflict = errors.New("tool activation conflict")
 )
+
+type ActivationState string
 
 type ActivationDraft struct {
 	ToolID  string
@@ -36,12 +36,6 @@ type ToolActivation struct {
 	ToolCallID string
 	CreatedAt  time.Time
 	ResolvedAt *time.Time
-}
-
-type ActivationStore interface {
-	PendingActivation(context.Context, int64) (*ToolActivation, error)
-	CurrentActivation(context.Context, int64) (*ToolActivation, error)
-	ConsumeActivationBinding(context.Context, ActivationBinding) error
 }
 
 // ActivationBinding names the exact grant a mutating service claims: the
@@ -94,7 +88,7 @@ func ConsumeActivationTx(ctx context.Context, tx *sql.Tx, binding ActivationBind
 	return nil
 }
 
-func (s *store) ConsumeActivationBinding(ctx context.Context, binding ActivationBinding) error {
+func (s *Store) ConsumeActivationBinding(ctx context.Context, binding ActivationBinding) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin activation consume: %w", err)
@@ -113,9 +107,7 @@ func (s *store) ConsumeActivationBinding(ctx context.Context, binding Activation
 	return nil
 }
 
-var _ ActivationStore = (*store)(nil)
-
-func (s *store) CurrentActivation(ctx context.Context, sessionID int64) (*ToolActivation, error) {
+func (s *Store) CurrentActivation(ctx context.Context, sessionID int64) (*ToolActivation, error) {
 	activation, err := scanActivation(s.db.QueryRowContext(ctx, `SELECT input_id, session_id, tool_id,
 		command, state, COALESCE(tool_call_id, ''), created_at, resolved_at
 		FROM session_tool_activations WHERE session_id = ? AND state IN ('pending', 'consumed')
@@ -131,7 +123,7 @@ func (s *store) CurrentActivation(ctx context.Context, sessionID int64) (*ToolAc
 	return activation, nil
 }
 
-func (s *store) PendingActivation(ctx context.Context, sessionID int64) (*ToolActivation, error) {
+func (s *Store) PendingActivation(ctx context.Context, sessionID int64) (*ToolActivation, error) {
 	activation, err := scanActivation(s.db.QueryRowContext(ctx, `SELECT input_id, session_id, tool_id,
 		command, state, COALESCE(tool_call_id, ''), created_at, resolved_at
 		FROM session_tool_activations WHERE session_id = ? AND state = 'pending'`, sessionID))
@@ -146,7 +138,7 @@ func (s *store) PendingActivation(ctx context.Context, sessionID int64) (*ToolAc
 	return activation, nil
 }
 
-func (s *store) activationByInput(ctx context.Context, inputID int64) (*ToolActivation, error) {
+func (s *Store) activationByInput(ctx context.Context, inputID int64) (*ToolActivation, error) {
 	activation, err := scanActivation(s.db.QueryRowContext(ctx, `SELECT input_id, session_id, tool_id,
 		command, state, COALESCE(tool_call_id, ''), created_at, resolved_at
 		FROM session_tool_activations WHERE input_id = ?`, inputID))

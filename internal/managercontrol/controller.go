@@ -8,7 +8,6 @@ import (
 	"github.com/pilat/coagent/internal/controllerapi"
 	"github.com/pilat/coagent/internal/loader"
 	"github.com/pilat/coagent/internal/managerdiscovery"
-	"github.com/pilat/coagent/internal/sessionstore"
 )
 
 var (
@@ -26,7 +25,7 @@ type controller struct {
 func New(
 	backend Backend,
 	discoveryBackend managerdiscovery.Backend,
-	outputs sessionstore.ManagerOutputStore,
+	outputs OutputStore,
 	cfg *config.Config,
 	cache loader.MarketplaceCache,
 ) controllerapi.ManagerControllerFactory {

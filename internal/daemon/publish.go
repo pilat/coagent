@@ -7,8 +7,17 @@ import (
 
 	"github.com/pilat/coagent/internal/controllerapi"
 	"github.com/pilat/coagent/internal/logger"
+	"github.com/pilat/coagent/internal/sessionbus"
 	"github.com/pilat/coagent/internal/sessionevent"
 )
+
+func (s *svc) PubSub() sessionbus.Source {
+	return s.pubsub
+}
+
+func (s *svc) NotifySession(sessionID int64, n sessionevent.Notification) {
+	s.publish(sessionID, n)
+}
 
 // publish is the one choke point that drops child-session events. It fails open:
 // silencing a root session on a transient DB error is the worse outcome.
@@ -30,7 +39,7 @@ func (s *svc) publish(sessionID int64, n sessionevent.Notification) {
 	if !known {
 		// Background: NotifySession carries no ctx, and inheriting a caller's dead
 		// one would fail the check and mis-drop.
-		rec, err := s.sessionStore.GetSession(context.Background(), sessionID)
+		rec, err := s.store.GetSession(context.Background(), sessionID)
 		if err != nil || rec == nil {
 			logger.Named("daemon.publish").Warn(
 				"child_check_failed",

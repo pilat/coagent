@@ -11,7 +11,7 @@ import (
 )
 
 func (s *svc) hasPendingDurableInput(ctx context.Context, sessionID int64) (bool, error) {
-	_, err := s.inboxStore.PeekPending(ctx, sessionID)
+	_, err := s.store.PeekPending(ctx, sessionID)
 	if errors.Is(err, sessionstore.ErrNoPendingInput) {
 		return false, nil
 	}
@@ -27,7 +27,7 @@ func (s *svc) hasPendingDurableInput(ctx context.Context, sessionID int64) (bool
 // durably queued behind an external call. A normal message may interrupt sleep;
 // it cannot jump a foreground subagent/config/secret result.
 func (s *svc) pendingInputRunnable(ctx context.Context, sessionID int64) (bool, error) {
-	rows, err := s.inboxStore.ListPending(ctx, sessionID)
+	rows, err := s.store.ListPending(ctx, sessionID)
 	if err != nil || len(rows) == 0 {
 		return false, err
 	}
@@ -54,13 +54,13 @@ func (s *svc) pendingInputRunnable(ctx context.Context, sessionID int64) (bool, 
 // recoverableInputRunnable accepts both forms PASS 3 owns: an inbox row still
 // pending, or an active turn backed by a durable accepted-message identity.
 func (s *svc) recoverableInputRunnable(ctx context.Context, sessionID int64) (bool, error) {
-	record, err := s.sessionStore.GetSession(ctx, sessionID)
+	record, err := s.store.GetSession(ctx, sessionID)
 	if err != nil {
 		return false, fmt.Errorf("load recoverable session %d: %w", sessionID, err)
 	}
 
 	if record.Status == sessionstore.SessionStatusStopped || record.Status == sessionstore.SessionStatusError {
-		sessionIDs, listErr := s.inboxStore.ListSessionsWithRecoverableInput(ctx)
+		sessionIDs, listErr := s.store.ListSessionsWithRecoverableInput(ctx)
 		if listErr != nil {
 			return false, fmt.Errorf("classify recoverable session %d: %w", sessionID, listErr)
 		}
@@ -104,7 +104,7 @@ func (s *svc) hasAcceptedInput(
 		return false, nil
 	}
 
-	accepted, err := s.inboxStore.HasAcceptedInput(ctx, rec.ID)
+	accepted, err := s.store.HasAcceptedInput(ctx, rec.ID)
 	if err != nil {
 		return false, fmt.Errorf("load accepted input identity for session %d: %w", rec.ID, err)
 	}

@@ -22,7 +22,7 @@ const (
 // stale service-topic binding is patched to the current topic. Concurrent
 // ensures collide on the partial unique index; the loser re-selects the winner
 // inside the same transaction, so exactly one lifecycle row ever exists.
-func (s *store) EnsureManagementRoot(
+func (s *Store) EnsureManagementRoot(
 	ctx context.Context,
 	projectID int64,
 	owner string,

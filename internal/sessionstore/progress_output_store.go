@@ -14,7 +14,7 @@ var ErrProgressSuperseded = errors.New("progress snapshot superseded")
 // EnqueueProgressOutput inserts one replaceable progress card only while the
 // session still sits at the snapshot's generation and status, so a stale card
 // is discarded instead of publishing below a newer transition.
-func (s *store) EnqueueProgressOutput(
+func (s *Store) EnqueueProgressOutput(
 	ctx context.Context,
 	draft OutputDraft,
 	expectedGeneration int64,

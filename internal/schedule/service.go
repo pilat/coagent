@@ -7,9 +7,15 @@ import (
 	"time"
 
 	"github.com/robfig/cron/v3"
+
+	"github.com/pilat/coagent/internal/sessionstore"
+	"github.com/pilat/coagent/internal/tool"
 )
 
+var _ Service = (*svc)(nil)
+
 type Service interface {
+	SleepTool(sessionID int64) tool.Tool
 	ListSchedules(ctx context.Context, sessionID int64) ([]Entry, error)
 	PendingSleeps(ctx context.Context, sessionID int64) ([]PendingSleep, error)
 	RemoveSchedule(ctx context.Context, sessionID int64, scheduleID int64) error
@@ -33,14 +39,18 @@ type Service interface {
 	RemoveAllForSession(ctx context.Context, sessionID int64) error
 }
 
-var _ Service = (*svc)(nil)
-
 type svc struct {
-	store Store
+	store    Store
+	sessions *sessionstore.Store
 }
 
-func NewService(store Store) Service {
-	return &svc{store: store}
+func NewService(store Store, sessions *sessionstore.Store) Service {
+	return &svc{store: store, sessions: sessions}
+}
+
+// SleepTool rejects competing timers while a background producer owns the wake.
+func (s *svc) SleepTool(sessionID int64) tool.Tool {
+	return NewGuardedSleepTool(s, sessionID, s.sessions)
 }
 
 func (s *svc) ListSchedules(ctx context.Context, sessionID int64) ([]Entry, error) {

@@ -11,9 +11,9 @@ import (
 	"github.com/pilat/coagent/internal/budget"
 )
 
-var _ budget.Store = (*store)(nil)
+var _ budget.Store = (*Store)(nil)
 
-func (s *store) Get(ctx context.Context, rootID int64) (*budget.Record, error) {
+func (s *Store) Get(ctx context.Context, rootID int64) (*budget.Record, error) {
 	record, err := scanBudget(s.db.QueryRowContext(ctx, budgetSelect+` WHERE root_session_id = ?`, rootID))
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, budget.ErrNotFound
@@ -26,7 +26,7 @@ func (s *store) Get(ctx context.Context, rootID int64) (*budget.Record, error) {
 	return record, nil
 }
 
-func (s *store) Arm(
+func (s *Store) Arm(
 	ctx context.Context,
 	mutation budget.Mutation,
 ) (*budget.Record, error) {
@@ -98,12 +98,13 @@ func (s *store) Arm(
 		return nil, fmt.Errorf("commit arm budget: %w", err)
 	}
 
+	s.recordWoken(mutation.RootSessionID)
 	record, err := s.Get(ctx, mutation.RootSessionID)
 
 	return record, err
 }
 
-func (s *store) Clear(
+func (s *Store) Clear(
 	ctx context.Context,
 	mutation budget.Mutation,
 ) (*budget.Record, error) {
@@ -177,6 +178,7 @@ func (s *store) Clear(
 		return nil, fmt.Errorf("commit clear budget: %w", err)
 	}
 
+	s.recordWoken(mutation.RootSessionID)
 	record, err := s.Get(ctx, mutation.RootSessionID)
 
 	return record, err

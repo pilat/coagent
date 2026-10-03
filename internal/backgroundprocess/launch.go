@@ -12,10 +12,6 @@ import (
 	"strings"
 	"syscall"
 	"time"
-
-	"go.uber.org/zap"
-
-	"github.com/pilat/coagent/internal/logger"
 )
 
 func (s *svc) launch(
@@ -191,17 +187,7 @@ func (s *svc) prepareOutput(
 	}
 
 	quotaReady := make(chan bool, 1)
-	collector := newCollector(file, MaxOutputBytes, func() {
-		if persisted := <-quotaReady; persisted {
-			if _, err := s.store.RecordIntent(ctx, processID, IntentOutputLimit); err != nil {
-				logger.Ctx(ctx).Named("backgroundprocess.output").Warn(
-					"output_limit_intent_failed", zap.String("process", processID), zap.Error(err),
-				)
-			}
-		}
-
-		_ = killGroup(cmd)
-	})
+	collector := newCollector(ctx, file, MaxOutputBytes, s.store, processID, quotaReady, cmd)
 
 	return collector, record, quotaReady, nil
 }

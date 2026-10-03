@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-func (s *store) EnqueueOutput(ctx context.Context, draft OutputDraft) (*OutputCommit, error) {
+func (s *Store) EnqueueOutput(ctx context.Context, draft OutputDraft) (*OutputCommit, error) {
 	if err := validateOutputDraft(draft); err != nil {
 		return nil, err
 	}
@@ -30,6 +30,24 @@ func (s *store) EnqueueOutput(ctx context.Context, draft OutputDraft) (*OutputCo
 	}
 
 	return commit, nil
+}
+
+//nolint:wsl_v5 // Identity lookup keeps sentinel handling adjacent.
+func (s *Store) OutputBySourceKey(
+	ctx context.Context,
+	sessionID int64,
+	sourceKey string,
+) (*OutputRecord, error) {
+	record, err := scanOutputRecord(s.db.QueryRowContext(ctx, `SELECT `+outputColumns+
+		` FROM session_outbox WHERE session_id = ? AND source_key = ?`, sessionID, sourceKey))
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrNoOutput
+	}
+	if err != nil {
+		return nil, fmt.Errorf("load output by source key: %w", err)
+	}
+
+	return record, nil
 }
 
 //nolint:dupl // EnqueueOutput and EnqueueProgressOutput differ only in their eligibility gate.
@@ -106,22 +124,4 @@ func insertOutputTx(ctx context.Context, tx *sql.Tx, draft OutputDraft, mode Com
 	}
 
 	return &OutputCommit{OutputID: existingID, OwnerID: owner, Existing: true, Content: draft.Content}, nil
-}
-
-//nolint:wsl_v5 // Identity lookup keeps sentinel handling adjacent.
-func (s *store) OutputBySourceKey(
-	ctx context.Context,
-	sessionID int64,
-	sourceKey string,
-) (*OutputRecord, error) {
-	record, err := scanOutputRecord(s.db.QueryRowContext(ctx, `SELECT `+outputColumns+
-		` FROM session_outbox WHERE session_id = ? AND source_key = ?`, sessionID, sourceKey))
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, ErrNoOutput
-	}
-	if err != nil {
-		return nil, fmt.Errorf("load output by source key: %w", err)
-	}
-
-	return record, nil
 }

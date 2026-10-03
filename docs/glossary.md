@@ -139,8 +139,8 @@ _Avoid_: ReAct loop (doc-only alias), main loop.
 
 **runner**:
 The in-memory lifecycle holder for one active session: cancel/done boundary,
-live session service, working flag and admission metadata. Its registry,
-launch, shutdown and terminal coordination belong to `sessionlifecycle`; it is
+live session, working flag and admission metadata. Its registry,
+launch, shutdown and terminal coordination belong to the daemon; it is
 reconstructible and never a durable work record.
 _Avoid_: session (the durable/live task identity), agent loop (the model/tool cycle).
 
@@ -366,7 +366,7 @@ _Avoid_: sleep wake, subagent wake.
 
 **admission control**:
 The `admission` package's concurrency governor — caps on total, child, and
-per-parent sessions plus spawn depth. `sessionlifecycle` coordinates its verdict
+per-parent sessions plus spawn depth. The daemon coordinates its verdict
 with durable-aware FIFO overflow queues and runner registration.
 
 **subagent link ledger** (`subagent.Store`):
@@ -386,8 +386,8 @@ _Avoid_: orphaned call (the orphaned-call pass covers external calls only), re-e
 **stop boundary**:
 The durable `/stop` transition for an active root tree. It fences producers,
 cancels and joins runners, settles active unresolved calls, then marks the tree
-stopped. `sessionlifecycle` owns the tree fence and terminal settlement; daemon
-callbacks settle tool and schedule effects between those phases. Later root
+stopped. The daemon owns the tree fence, transcript and activation settlement,
+then producer cancellation and the terminal manager output. Later root
 input and explicit child follow-up are new work; neither replays pre-stop calls.
 _Avoid_: cancellation alone, pause.
 

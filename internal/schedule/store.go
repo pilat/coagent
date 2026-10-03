@@ -15,6 +15,8 @@ const (
 	scheduleColumns = `id, session_id, cron_expr, one_shot_at, input_message, last_fired_at, metadata, fire_count, fresh, created_at`
 )
 
+var _ Store = (*store)(nil)
+
 type (
 	ScheduleMetadata struct {
 		ToolCallID string `json:"tool_call_id,omitempty"`
@@ -66,21 +68,25 @@ type (
 
 	store struct {
 		db       *sql.DB
-		sessions sessionstore.Store
+		sessions *sessionstore.Store
 	}
 )
 
-var _ Store = (*store)(nil)
+func (s *Schedule) ID() int64 { return s.id }
 
-func (s *Schedule) ID() int64               { return s.id }
-func (s *Schedule) SessionID() int64        { return s.sessionID }
-func (s *Schedule) CronExpr() string        { return s.cronExpr }
-func (s *Schedule) OneShotAt() *time.Time   { return s.oneShotAt }
-func (s *Schedule) InputMessage() string    { return s.inputMessage }
+func (s *Schedule) SessionID() int64 { return s.sessionID }
+
+func (s *Schedule) CronExpr() string { return s.cronExpr }
+
+func (s *Schedule) OneShotAt() *time.Time { return s.oneShotAt }
+
+func (s *Schedule) InputMessage() string { return s.inputMessage }
+
 func (s *Schedule) LastFiredAt() *time.Time { return s.lastFiredAt }
-func (s *Schedule) Fresh() bool             { return s.fresh }
 
-func NewStore(db *sql.DB, sessions sessionstore.Store) Store {
+func (s *Schedule) Fresh() bool { return s.fresh }
+
+func NewStore(db *sql.DB, sessions *sessionstore.Store) Store {
 	return &store{db: db, sessions: sessions}
 }
 

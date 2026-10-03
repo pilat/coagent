@@ -34,9 +34,9 @@ type (
 		URL string
 		// CacheName is the disk cache filename. Empty derives one from the URL.
 		CacheName string
-		// Validate parses the body; a body it rejects is never cached and never
-		// returned, so a 200 carrying garbage cannot clobber a good snapshot.
-		Validate func([]byte) error
+		// Rejected bodies are never cached or returned, so a garbage response
+		// cannot clobber a good snapshot.
+		Validator Validator
 	}
 
 	// Fetcher retrieves catalog bodies over HTTP with a disk-cache fallback. Each
@@ -62,6 +62,9 @@ type (
 		err  error
 	}
 )
+
+// Validator rejects catalog bodies before they reach callers or caches.
+type Validator interface{ Validate([]byte) error }
 
 // New builds a Fetcher caching under ~/.coagent/cache/catalog. An unresolvable
 // home directory disables the cache rather than failing — the network path still works.
@@ -161,11 +164,11 @@ func (s Source) cacheName() string {
 }
 
 func (s Source) validate(body []byte) error {
-	if s.Validate == nil {
+	if s.Validator == nil {
 		return nil
 	}
 
-	return s.Validate(body)
+	return s.Validator.Validate(body)
 }
 
 func (f *fetcher) get(ctx context.Context, url string) ([]byte, error) {

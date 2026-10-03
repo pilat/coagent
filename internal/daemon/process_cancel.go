@@ -46,7 +46,7 @@ func (s *svc) retireTreeToolResources(ctx context.Context, sessionID int64) erro
 }
 
 func (s *svc) sessionSubtreeIDs(ctx context.Context, sessionID int64) ([]int64, error) {
-	records, err := s.sessionStore.ListAllSessions(ctx)
+	records, err := s.store.ListAllSessions(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("list process owner sessions: %w", err)
 	}

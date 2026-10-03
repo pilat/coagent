@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-func (s *store) BindManager(ctx context.Context, managerID, driver string, attributes map[string]any) error {
+func (s *Store) BindManager(ctx context.Context, managerID, driver string, attributes map[string]any) error {
 	if managerID == "" || driver == "" || len(attributes) == 0 {
 		return errors.New("manager binding requires manager, driver, and identity")
 	}
@@ -47,35 +47,7 @@ func (s *store) BindManager(ctx context.Context, managerID, driver string, attri
 	return nil
 }
 
-func validateManagerBinding(driver string, attributes map[string]any) error {
-	if driver == "telegram" {
-		_, botOK := positiveInt64(attributes["bot_user_id"])
-		chatOK := validBindingInt64(attributes["chat_id"])
-
-		topology, topologyOK := attributes["topology"].(string)
-		if len(attributes) != 3 || !botOK || !chatOK ||
-			!topologyOK || (topology != "group" && topology != "bot") {
-			return fmt.Errorf("%w: invalid telegram identity", ErrManagerBinding)
-		}
-	}
-
-	return nil
-}
-
-func validBindingInt64(value any) bool {
-	switch number := value.(type) {
-	case int64:
-		return number != 0
-	case int:
-		return number != 0
-	case float64:
-		return number != 0 && number == float64(int64(number))
-	default:
-		return false
-	}
-}
-
-func (s *store) ClaimOutputHead(ctx context.Context, managerID string) (*OutputClaim, error) {
+func (s *Store) ClaimOutputHead(ctx context.Context, managerID string) (*OutputClaim, error) {
 	if managerID == "" {
 		return nil, errors.New("empty manager id")
 	}
@@ -156,7 +128,7 @@ func (s *store) ClaimOutputHead(ctx context.Context, managerID string) (*OutputC
 	return &OutputClaim{Output: record, SessionAttributes: attributes, PreviousDeliveredOutput: previous}, nil
 }
 
-func (s *store) AckOutput(
+func (s *Store) AckOutput(
 	ctx context.Context,
 	managerID string,
 	outputID int64,
@@ -217,7 +189,7 @@ func (s *store) AckOutput(
 	return nil
 }
 
-func (s *store) RetryOutput(
+func (s *Store) RetryOutput(
 	ctx context.Context,
 	managerID string,
 	outputID int64,
@@ -231,7 +203,7 @@ func (s *store) RetryOutput(
 	return s.resolveOutputAttempt(ctx, managerID, outputID, attemptID, failure, OutputStateRetryWait, next)
 }
 
-func (s *store) BlockOutput(ctx context.Context, managerID string, outputID int64, attemptID, failure string) error {
+func (s *Store) BlockOutput(ctx context.Context, managerID string, outputID int64, attemptID, failure string) error {
 	if failure == "" || len(failure) > 512 {
 		return errors.New("invalid output block")
 	}
@@ -239,7 +211,7 @@ func (s *store) BlockOutput(ctx context.Context, managerID string, outputID int6
 	return s.resolveOutputAttempt(ctx, managerID, outputID, attemptID, failure, OutputStateBlocked, time.Time{})
 }
 
-func (s *store) RecoverInterruptedOutputs(ctx context.Context) (int64, error) {
+func (s *Store) RecoverInterruptedOutputs(ctx context.Context) (int64, error) {
 	result, err := s.db.ExecContext(ctx, `
 		UPDATE session_outbox SET state = 'retry_wait', attempt_id = NULL,
 			next_attempt_at = ?, last_error = 'delivery interrupted by restart'
@@ -256,7 +228,7 @@ func (s *store) RecoverInterruptedOutputs(ctx context.Context) (int64, error) {
 	return count, nil
 }
 
-func (s *store) RetryBlockedHead(ctx context.Context, managerID string) (bool, error) {
+func (s *Store) RetryBlockedHead(ctx context.Context, managerID string) (bool, error) {
 	result, err := s.db.ExecContext(ctx, `
 		UPDATE session_outbox SET state = 'retry_wait', blocked_at = NULL, next_attempt_at = ?, last_error = 'retry requested after manager start'
 		WHERE id = (
@@ -278,7 +250,7 @@ func (s *store) RetryBlockedHead(ctx context.Context, managerID string) (bool, e
 
 // WakeOutputHead makes a retrying manager head immediately eligible. It does
 // not alter attempt state, so reconnect never erases the delivery history.
-func (s *store) WakeOutputHead(ctx context.Context, managerID string) (bool, error) {
+func (s *Store) WakeOutputHead(ctx context.Context, managerID string) (bool, error) {
 	result, err := s.db.ExecContext(ctx, `
 		UPDATE session_outbox SET next_attempt_at = ?
 		WHERE id = (
@@ -298,7 +270,7 @@ func (s *store) WakeOutputHead(ctx context.Context, managerID string) (bool, err
 	return count == 1, nil
 }
 
-func (s *store) OutputQueueStatus(ctx context.Context, managerID string) (*OutputQueueStatus, error) {
+func (s *Store) OutputQueueStatus(ctx context.Context, managerID string) (*OutputQueueStatus, error) {
 	status := &OutputQueueStatus{}
 	if err := s.db.QueryRowContext(ctx, `
 		SELECT COUNT(*) FROM session_outbox
@@ -323,4 +295,32 @@ func (s *store) OutputQueueStatus(ctx context.Context, managerID string) (*Outpu
 	status.BlockedAt = &blockedAt.Time
 
 	return status, nil
+}
+
+func validateManagerBinding(driver string, attributes map[string]any) error {
+	if driver == "telegram" {
+		_, botOK := positiveInt64(attributes["bot_user_id"])
+		chatOK := validBindingInt64(attributes["chat_id"])
+
+		topology, topologyOK := attributes["topology"].(string)
+		if len(attributes) != 3 || !botOK || !chatOK ||
+			!topologyOK || (topology != "group" && topology != "bot") {
+			return fmt.Errorf("%w: invalid telegram identity", ErrManagerBinding)
+		}
+	}
+
+	return nil
+}
+
+func validBindingInt64(value any) bool {
+	switch number := value.(type) {
+	case int64:
+		return number != 0
+	case int:
+		return number != 0
+	case float64:
+		return number != 0 && number == float64(int64(number))
+	default:
+		return false
+	}
 }

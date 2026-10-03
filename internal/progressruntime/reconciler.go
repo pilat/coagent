@@ -9,7 +9,6 @@ import (
 
 	"go.uber.org/zap"
 
-	"github.com/pilat/coagent/internal/budget"
 	"github.com/pilat/coagent/internal/logger"
 	"github.com/pilat/coagent/internal/progress"
 	"github.com/pilat/coagent/internal/sessionevent"
@@ -22,20 +21,6 @@ const (
 	// SilenceInterval is the maximum quiet period for autonomous work without an active root loop.
 	SilenceInterval = 5 * time.Minute
 )
-
-type progressTimer interface {
-	C() <-chan time.Time
-	Reset(time.Duration) bool
-	Stop() bool
-}
-
-type realProgressTimer struct{ *time.Timer }
-
-func newRealProgressTimer(delay time.Duration) progressTimer {
-	return &realProgressTimer{Timer: time.NewTimer(delay)}
-}
-
-func (t *realProgressTimer) C() <-chan time.Time { return t.Timer.C }
 
 //nolint:wsl_v5 // Timer reset branches are one scheduling protocol.
 func (r *runtime) startProgressReconciler(ctx context.Context) {
@@ -61,7 +46,7 @@ func (r *runtime) startProgressReconciler(ctx context.Context) {
 			}
 		}()
 
-		timer := r.progressTimer(0)
+		timer := time.NewTimer(0)
 		defer timer.Stop()
 
 		for {
@@ -71,12 +56,12 @@ func (r *runtime) startProgressReconciler(ctx context.Context) {
 			case <-r.progressWake:
 				if !timer.Stop() {
 					select {
-					case <-timer.C():
+					case <-timer.C:
 					default:
 					}
 				}
 				timer.Reset(0)
-			case now := <-timer.C():
+			case now := <-timer.C:
 				delay := max(r.reconcileProgressSafely(reconcileCtx, now.UTC()), time.Second)
 
 				timer.Reset(delay)
@@ -138,29 +123,8 @@ func (r *runtime) reconcileProgress(
 			continue
 		}
 
-		if r.budgetSvc != nil {
-			record, fired, budgetErr := r.budgetSvc.Observe(ctx, rootID, facts.CostUSD, now, "")
-			if budgetErr != nil {
-				logger.Ctx(ctx).Named("progressruntime.reconciler").Warn("budget_observe_failed",
-					zap.Int64("session_id", rootID), zap.Error(budgetErr))
-			} else if fired {
-				r.startBudgetPark(record)
-				continue
-			}
-		}
-
-		if facts.Budget != nil && facts.Budget.State == budget.Armed &&
-			facts.Budget.DurationSeconds != nil {
-			budgetDeadline := facts.Budget.ArmedAt.Add(
-				time.Duration(*facts.Budget.DurationSeconds) * time.Second,
-			)
-			if now.Before(budgetDeadline) {
-				next = min(next, budgetDeadline.Sub(now))
-			}
-		}
-
 		interval := SilenceInterval
-		if r.mainModelWorking(rootID) {
+		if r.liveState(rootID).Working {
 			interval = MainModelProgressInterval
 		}
 
@@ -214,7 +178,7 @@ func (r *runtime) enqueueProgressSilence(
 	attributes := map[string]any{"progress_revision": snapshot.Revision}
 	draft := sessionstore.OutputDraft{
 		SessionID: facts.RootID, Type: sessionstore.OutputMessageReplaceable,
-		Content: progress.RenderCompact(snapshot, logger.Redact), Attributes: attributes, SourceKey: sourceKey,
+		Content: progress.RenderCompact(snapshot), Attributes: attributes, SourceKey: sourceKey,
 		CreatedAt: observedAt,
 	}
 	draft.Fingerprint = sessionstore.OutputFingerprint(draft.Type, draft.Content, draft.SessionID, attributes)
@@ -227,7 +191,7 @@ func (r *runtime) enqueueProgressSilence(
 	); err != nil && !errors.Is(err, sessionstore.ErrProgressSuperseded) {
 		return err
 	} else if err == nil {
-		r.publish(facts.RootID, sessionevent.Notification{
+		r.publish(ctx, facts.RootID, sessionevent.Notification{
 			Type: sessionevent.NotifyMessage, Message: draft.Content,
 		})
 	}
@@ -281,12 +245,12 @@ func (r *runtime) tryEnqueueProgressChange(
 		return existing.Content, true, nil
 	}
 
-	snapshot, err := r.progressSnapshot(facts, r.progressNow().UTC())
+	snapshot, err := r.progressSnapshot(facts, time.Now().UTC())
 	if err != nil {
 		return "", false, err
 	}
 
-	content := progress.RenderCompact(snapshot, logger.Redact)
+	content := progress.RenderCompact(snapshot)
 	attributes := map[string]any{"progress_revision": snapshot.Revision}
 	draft := sessionstore.OutputDraft{
 		SessionID: facts.RootID, Type: sessionstore.OutputMessageReplaceable, Content: content,

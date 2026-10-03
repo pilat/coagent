@@ -31,7 +31,7 @@ type BuildInput struct {
 	Config                   *config.Config
 	Secrets                  config.Secrets
 	MemoryStore              memory.CuratedStore
-	Store                    sessionstore.AgentRuntimeStore
+	Store                    session.Store
 	GitClient                git.Client
 	MCPStore                 mcpstore.Store
 	MarketplaceCache         loader.MarketplaceCache

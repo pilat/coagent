@@ -10,7 +10,7 @@ import (
 	"time"
 )
 
-func (s *store) CreateManagerRoot(ctx context.Context, create ManagerRootCreate) (*SessionRecord, *OutputCommit, error) {
+func (s *Store) CreateManagerRoot(ctx context.Context, create ManagerRootCreate) (*SessionRecord, *OutputCommit, error) {
 	owner, err := managerOwner(create.Attributes)
 	if err != nil {
 		return nil, nil, err
@@ -43,7 +43,7 @@ func (s *store) CreateManagerRoot(ctx context.Context, create ManagerRootCreate)
 	return record, output, err
 }
 
-func (s *store) ReplaceManagerRoot(
+func (s *Store) ReplaceManagerRoot(
 	ctx context.Context,
 	oldSessionID int64,
 	name, workDir string,
@@ -51,7 +51,7 @@ func (s *store) ReplaceManagerRoot(
 	return s.replaceManagerRoot(ctx, oldSessionID, 0, name, workDir)
 }
 
-func (s *store) ReplaceManagerRootForInput(
+func (s *Store) ReplaceManagerRootForInput(
 	ctx context.Context,
 	oldSessionID, inputID int64,
 	name, workDir string,
@@ -64,7 +64,7 @@ func (s *store) ReplaceManagerRootForInput(
 }
 
 //nolint:funlen // Replacement preserves a single transaction across old root, new root, and lifecycle output.
-func (s *store) replaceManagerRoot(
+func (s *Store) replaceManagerRoot(
 	ctx context.Context,
 	oldSessionID, inputID int64,
 	name, workDir string,

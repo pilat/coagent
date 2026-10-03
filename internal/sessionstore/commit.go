@@ -11,7 +11,7 @@ import (
 )
 
 // Commit preserves step ordering and fences live-loop writes against lifecycle settlement.
-func (s *store) Commit(ctx context.Context, c Commit) (*CommitResult, error) {
+func (s *Store) Commit(ctx context.Context, c Commit) (*CommitResult, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, fmt.Errorf("begin session commit: %w", err)

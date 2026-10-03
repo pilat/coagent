@@ -34,7 +34,7 @@ type enqueueTransaction struct {
 }
 
 // Enqueue commits input before waking its session; delivery keys are unique per session.
-func (s *store) Enqueue(ctx context.Context, in Input) (*Enqueued, error) {
+func (s *Store) Enqueue(ctx context.Context, in Input) (*Enqueued, error) {
 	var result *Enqueued
 	err := s.WithTx(ctx, func(tx *sql.Tx) error {
 		var err error
@@ -140,7 +140,7 @@ func EnqueueTx(ctx context.Context, tx *sql.Tx, in Input) (*Enqueued, error) {
 }
 
 // WithTx publishes EnqueueTx wake hints only after its transaction commits.
-func (s *store) WithTx(ctx context.Context, fn func(*sql.Tx) error) error {
+func (s *Store) WithTx(ctx context.Context, fn func(*sql.Tx) error) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin store transaction: %w", err)
@@ -164,10 +164,10 @@ func (s *store) WithTx(ctx context.Context, fn func(*sql.Tx) error) error {
 }
 
 // Woken coalesces commit hints; TakeWoken supplies the corresponding session IDs.
-func (s *store) Woken() <-chan struct{} { return s.woken }
+func (s *Store) Woken() <-chan struct{} { return s.woken }
 
 // TakeWoken atomically drains the committed session IDs represented by wake hints.
-func (s *store) TakeWoken() []int64 {
+func (s *Store) TakeWoken() []int64 {
 	s.wokenMu.Lock()
 	defer s.wokenMu.Unlock()
 	ids := make([]int64, 0, len(s.wokenSessions))
@@ -178,7 +178,32 @@ func (s *store) TakeWoken() []int64 {
 	return ids
 }
 
-func (s *store) recordWoken(id int64) {
+func (s *Store) ListPending(ctx context.Context, sessionID int64) ([]*InboxInput, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT `+inboxColumns+` FROM session_inbox WHERE session_id = ? AND state = 'pending' ORDER BY id`, sessionID)
+	if err != nil {
+		return nil, fmt.Errorf("list pending inputs: %w", err)
+	}
+	defer rows.Close()
+	var inputs []*InboxInput
+	for rows.Next() {
+		in, err := scanInboxInput(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scan pending input: %w", err)
+		}
+		inputs = append(inputs, in)
+	}
+	return inputs, rows.Err()
+}
+
+func (s *Store) CallPending(ctx context.Context, sessionID int64, callID string) bool {
+	var pending bool
+	err := s.db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM messages call,json_each(call.tool_calls) item
+  WHERE call.session_id = ? AND json_extract(item.value,'$.id') = ?
+  AND NOT EXISTS(SELECT 1 FROM messages result WHERE result.session_id = call.session_id AND result.role = 'tool' AND result.tool_call_id = ?))`, sessionID, callID, callID).Scan(&pending)
+	return err == nil && pending
+}
+
+func (s *Store) recordWoken(id int64) {
 	s.wokenMu.Lock()
 	s.wokenSessions[id] = struct{}{}
 	s.wokenMu.Unlock()
@@ -225,29 +250,4 @@ func prepareManagerModelInputTx(ctx context.Context, tx *sql.Tx, id int64, now t
 		return budget.ErrConflict
 	}
 	return nil
-}
-
-func (s *store) ListPending(ctx context.Context, sessionID int64) ([]*InboxInput, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT `+inboxColumns+` FROM session_inbox WHERE session_id = ? AND state = 'pending' ORDER BY id`, sessionID)
-	if err != nil {
-		return nil, fmt.Errorf("list pending inputs: %w", err)
-	}
-	defer rows.Close()
-	var inputs []*InboxInput
-	for rows.Next() {
-		in, err := scanInboxInput(rows)
-		if err != nil {
-			return nil, fmt.Errorf("scan pending input: %w", err)
-		}
-		inputs = append(inputs, in)
-	}
-	return inputs, rows.Err()
-}
-
-func (s *store) CallPending(ctx context.Context, sessionID int64, callID string) bool {
-	var pending bool
-	err := s.db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM messages call,json_each(call.tool_calls) item
-  WHERE call.session_id = ? AND json_extract(item.value,'$.id') = ?
-  AND NOT EXISTS(SELECT 1 FROM messages result WHERE result.session_id = call.session_id AND result.role = 'tool' AND result.tool_call_id = ?))`, sessionID, callID, callID).Scan(&pending)
-	return err == nil && pending
 }

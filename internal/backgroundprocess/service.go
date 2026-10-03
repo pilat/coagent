@@ -39,6 +39,8 @@ var (
 	ErrFenced = errors.New("session tree is being stopped")
 )
 
+var _ Service = (*svc)(nil)
+
 // Spec describes process ownership and execution limits.
 type Spec struct {
 	ProjectDir    string
@@ -66,13 +68,15 @@ type Completion struct {
 	BinaryTail  bool
 }
 
-// TreeFence holds process admission against a root-tree stop transition.
-type TreeFence func(ctx context.Context, rootSessionID int64) (release func(), err error)
+// Fence keeps process admission inside the root-tree stop boundary.
+type Fence interface {
+	Fence(ctx context.Context, rootSessionID int64) (release func(), err error)
+}
 
 // Options configures process storage, delivery, and admission.
 type Options struct {
 	OutputDir string
-	TreeFence TreeFence
+	Fence     Fence
 }
 
 // Service owns process execution and durable lifecycle transitions.
@@ -87,8 +91,6 @@ type Service interface {
 	CancelAll(ctx context.Context, intent HostIntent) (int, error)
 	InterruptNonterminal(ctx context.Context) (int, error)
 }
-
-var _ Service = (*svc)(nil)
 
 type svc struct {
 	store           Store
@@ -163,8 +165,8 @@ func (s *svc) Start(
 		return Process{}, errors.New("process output directory is unavailable")
 	}
 
-	if s.opts.TreeFence != nil {
-		releaseFence, err := s.opts.TreeFence(ctx, spec.RootSessionID)
+	if s.opts.Fence != nil {
+		releaseFence, err := s.opts.Fence.Fence(ctx, spec.RootSessionID)
 		if err != nil {
 			return Process{}, err
 		}

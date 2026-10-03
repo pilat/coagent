@@ -171,16 +171,17 @@ func (s *Session) commit(ctx context.Context, c sessionstore.Commit) (*sessionst
 	if err := s.ms.reloadMessages(ctx); err != nil {
 		return nil, err
 	}
+	s.emit(sessionevent.Notification{Type: "context_changed"})
 	s.emitCommitted(result.Outputs, result.BudgetFired)
 	return result, nil
 }
 
 func (s *Session) observeBudget(ctx context.Context) (bool, error) {
-	_, fired, err := s.store.ObserveBudget(ctx, s.rootID, time.Now().UTC(), "")
+	result, err := s.store.Commit(ctx, sessionstore.Commit{SessionID: s.id, RootID: s.rootID, ObserveBudget: true})
 	if err != nil {
 		return false, err
 	}
-	return fired, nil
+	return result.BudgetFired, nil
 }
 
 func (s *Session) loadPendingActivation(ctx context.Context) error {

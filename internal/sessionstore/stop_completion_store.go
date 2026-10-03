@@ -23,28 +23,13 @@ type InterruptedExplicitStop struct {
 	ReceivedAt time.Time
 }
 
-// StopCompletionStore commits the explicit stop's terminal fact atomically with
-// the root's final status and the armed-budget release.
-type StopCompletionStore interface {
-	CompleteExplicitStop(
-		ctx context.Context,
-		rootID, inputID int64,
-		cancelledProcesses int,
-	) (*OutputCommit, error)
-	// SelectInterruptedExplicitStops lists roots whose newest qualifying /stop
-	// input still owes its terminal output. Startup may finish only these.
-	SelectInterruptedExplicitStops(ctx context.Context) ([]InterruptedExplicitStop, error)
-}
-
-var _ StopCompletionStore = (*store)(nil)
-
 // CompleteExplicitStop is the one sanctioned terminal transaction of an
 // explicit /stop: it releases an armed budget with reason `stopped`, moves the
 // root from `stopping` to `stopped`, and inserts the persistent releasing
 // completion output — all or nothing. Failure leaves the root stopping and
 // publishes no success. Re-running it after success is a no-op returning the
 // originally stored completion row.
-func (s *store) CompleteExplicitStop(
+func (s *Store) CompleteExplicitStop(
 	ctx context.Context,
 	rootID, inputID int64,
 	cancelledProcesses int,
@@ -104,20 +89,7 @@ func (s *store) CompleteExplicitStop(
 	return &OutputCommit{OutputID: outputID, OwnerID: owner}, nil
 }
 
-func insertExplicitStopOutput(ctx context.Context, tx *sql.Tx, rootID, inputID int64, cancelledProcesses int, owner string, now time.Time) (int64, error) {
-	out, err := insertOutputTx(ctx, tx, OutputDraft{SessionID: rootID, Type: OutputMessagePersistent,
-		Content:   fmt.Sprintf("%s\nCancelled background processes: %d", StopTerminalContent, cancelledProcesses),
-		SourceKey: fmt.Sprintf("input:%d:stop:completed", inputID), CreatedAt: now, ReleasesInput: true}, CommitLifecycle)
-	if err != nil {
-		return 0, err
-	}
-	if out == nil {
-		return 0, nil
-	}
-	return out.OutputID, nil
-}
-
-func (s *store) SelectInterruptedExplicitStops(
+func (s *Store) SelectInterruptedExplicitStops(
 	ctx context.Context,
 ) ([]InterruptedExplicitStop, error) {
 	rows, err := s.db.QueryContext(ctx, `
@@ -162,4 +134,17 @@ func (s *store) SelectInterruptedExplicitStops(
 	}
 
 	return stops, nil
+}
+
+func insertExplicitStopOutput(ctx context.Context, tx *sql.Tx, rootID, inputID int64, cancelledProcesses int, owner string, now time.Time) (int64, error) {
+	out, err := insertOutputTx(ctx, tx, OutputDraft{SessionID: rootID, Type: OutputMessagePersistent,
+		Content:   fmt.Sprintf("%s\nCancelled background processes: %d", StopTerminalContent, cancelledProcesses),
+		SourceKey: fmt.Sprintf("input:%d:stop:completed", inputID), CreatedAt: now, ReleasesInput: true}, CommitLifecycle)
+	if err != nil {
+		return 0, err
+	}
+	if out == nil {
+		return 0, nil
+	}
+	return out.OutputID, nil
 }

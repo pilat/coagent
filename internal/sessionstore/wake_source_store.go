@@ -5,30 +5,7 @@ import (
 	"fmt"
 )
 
-// WakeSourceStore projects whether the exact session owns a durable
-// background wake source: an advertised running process, an undelivered
-// non-blocking child link in a state promising automatic delivery, or pending
-// process/subagent inbox input. Stopped and killed links are not wake sources.
-type WakeSourceStore interface {
-	// HasBackgroundWakeSource reports a wake source for one exact session.
-	// Producer ledgers read before the inbox so their atomic
-	// terminal-to-inbox transition cannot disappear between observations.
-	HasBackgroundWakeSource(ctx context.Context, sessionID int64) (bool, error)
-	HasPendingBackgroundWait(ctx context.Context, sessionID int64) (bool, error)
-}
-
-var _ WakeSourceStore = (*store)(nil)
-
-// BackgroundObligationStore projects the root tree's durable background
-// obligations for budget retention, sharing the wake-source predicate at
-// subtree scope.
-type BackgroundObligationStore interface {
-	HasBackgroundObligationByRoot(ctx context.Context, rootID int64) (bool, error)
-}
-
-var _ BackgroundObligationStore = (*store)(nil)
-
-func (s *store) HasBackgroundObligationByRoot(ctx context.Context, rootID int64) (bool, error) {
+func (s *Store) HasBackgroundObligationByRoot(ctx context.Context, rootID int64) (bool, error) {
 	var advertised int
 	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM background_processes
 		WHERE root_session_id = ? AND state = 'running' AND advertised_at IS NOT NULL`,
@@ -56,7 +33,7 @@ func (s *store) HasBackgroundObligationByRoot(ctx context.Context, rootID int64)
 	return s.HasPendingAsyncInputByRoot(ctx, rootID)
 }
 
-func (s *store) HasBackgroundWakeSource(ctx context.Context, sessionID int64) (bool, error) {
+func (s *Store) HasBackgroundWakeSource(ctx context.Context, sessionID int64) (bool, error) {
 	var advertised int
 	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM background_processes
 		WHERE session_id = ? AND state = 'running' AND advertised_at IS NOT NULL`,
@@ -92,7 +69,7 @@ func (s *store) HasBackgroundWakeSource(ctx context.Context, sessionID int64) (b
 }
 
 // HasPendingBackgroundWait preserves timer admission across all undelivered child links.
-func (s *store) HasPendingBackgroundWait(ctx context.Context, sessionID int64) (bool, error) {
+func (s *Store) HasPendingBackgroundWait(ctx context.Context, sessionID int64) (bool, error) {
 	var pending bool
 	err := s.db.QueryRowContext(ctx, `SELECT
 		EXISTS(SELECT 1 FROM subagent_links WHERE parent_id = ? AND delivered_at IS NULL)

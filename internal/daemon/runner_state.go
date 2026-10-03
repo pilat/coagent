@@ -1,4 +1,4 @@
-package sessionlifecycle
+package daemon
 
 import (
 	"context"
@@ -8,30 +8,13 @@ import (
 	"github.com/pilat/coagent/internal/session"
 )
 
-type Runner interface {
-	Cancel()
-	Stop()
-	Done() <-chan struct{}
-	Complete()
-	Service() *session.Session
-	SetService(*session.Session)
-	Working() bool
-	SetWorking(bool)
-	SetPreserveStopped(bool)
-	HasRun() bool
-	MarkRun()
-	Info() RunnerInfo
-}
-
-type RunnerInfo struct {
+type runnerInfo struct {
 	WorkDir         string
 	ProjectID       int64
 	Kind            admission.Kind
 	ParentID        int64
 	PreserveStopped bool
 }
-
-var _ Runner = (*runner)(nil)
 
 type runner struct {
 	mu sync.Mutex
@@ -46,21 +29,6 @@ type runner struct {
 	kind            admission.Kind
 	parentID        int64
 	preserveStopped bool
-}
-
-func NewRunner(
-	cancel context.CancelFunc,
-	workDir string,
-	projectID int64,
-	kind admission.Kind,
-	parentID int64,
-	preserveStopped bool,
-) Runner {
-	return &runner{
-		cancel: cancel, done: make(chan struct{}), workDir: workDir,
-		projectID: projectID, kind: kind, parentID: parentID,
-		preserveStopped: preserveStopped,
-	}
 }
 
 func (r *runner) Cancel() { r.cancel() }
@@ -120,11 +88,26 @@ func (r *runner) MarkRun() {
 	r.hasRun = true
 }
 
-func (r *runner) Info() RunnerInfo {
+func (r *runner) Info() runnerInfo {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	return RunnerInfo{
+	return runnerInfo{
 		WorkDir: r.workDir, ProjectID: r.projectID, Kind: r.kind,
 		ParentID: r.parentID, PreserveStopped: r.preserveStopped,
+	}
+}
+
+func newRunner(
+	cancel context.CancelFunc,
+	workDir string,
+	projectID int64,
+	kind admission.Kind,
+	parentID int64,
+	preserveStopped bool,
+) *runner {
+	return &runner{
+		cancel: cancel, done: make(chan struct{}), workDir: workDir,
+		projectID: projectID, kind: kind, parentID: parentID,
+		preserveStopped: preserveStopped,
 	}
 }

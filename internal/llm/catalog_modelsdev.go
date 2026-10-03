@@ -27,12 +27,10 @@ const (
 var modelsDevSource = catalog.Source{
 	URL:       modelsDevURL,
 	CacheName: modelsDevCacheName,
-	Validate: func(body []byte) error {
-		_, err := parseModelsDev(body)
-
-		return err
-	},
+	Validator: modelsDevValidator{},
 }
+
+var _ catalog.Validator = modelsDevValidator{}
 
 type (
 	modelsDevSection struct {
@@ -71,6 +69,13 @@ type (
 		CacheWrite float64 `json:"cache_write"`
 	}
 )
+
+type modelsDevValidator struct{}
+
+func (modelsDevValidator) Validate(body []byte) error {
+	_, err := parseModelsDev(body)
+	return err
+}
 
 // parseModelsDev converts the api.json payload into section → id → spec.
 func parseModelsDev(body []byte) (map[string]map[string]catalog.ModelSpec, error) {

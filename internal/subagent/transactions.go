@@ -20,10 +20,10 @@ var _ Transactions = (*transactions)(nil)
 
 type transactions struct {
 	db       *sql.DB
-	sessions sessionstore.Store
+	sessions *sessionstore.Store
 }
 
-func NewTransactions(db *sql.DB, sessions sessionstore.Store) Transactions {
+func NewTransactions(db *sql.DB, sessions *sessionstore.Store) Transactions {
 	return &transactions{db: db, sessions: sessions}
 }
 

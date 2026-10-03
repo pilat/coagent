@@ -4,12 +4,11 @@ import (
 	"github.com/pilat/coagent/internal/config"
 	"github.com/pilat/coagent/internal/loader"
 	"github.com/pilat/coagent/internal/managerdiscovery"
-	"github.com/pilat/coagent/internal/sessionstore"
 )
 
 type service struct {
 	backend   Backend
-	outputs   sessionstore.ManagerOutputStore
+	outputs   OutputStore
 	cfg       *config.Config
 	cache     loader.MarketplaceCache
 	discovery managerdiscovery.Service
@@ -18,7 +17,7 @@ type service struct {
 func newService(
 	backend Backend,
 	discoveryBackend managerdiscovery.Backend,
-	outputs sessionstore.ManagerOutputStore,
+	outputs OutputStore,
 	cfg *config.Config,
 	cache loader.MarketplaceCache,
 ) *service {

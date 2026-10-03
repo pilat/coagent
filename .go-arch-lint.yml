@@ -35,7 +35,6 @@ components:
   humanize:       { in: internal/humanize }
   safefile:       { in: internal/safefile }
   sessionevent:   { in: internal/sessionevent }
-  sessionlifecycle: { in: internal/sessionlifecycle }
   sessionbus:     { in: internal/sessionbus }
   controllerapi:  { in: internal/controllerapi }
   id:             { in: internal/id }
@@ -107,17 +106,15 @@ deps:
   budget:
     mayDependOn: [tool]
   sessionstore:
-    mayDependOn: [budget, progress, todo, transcript]
+    mayDependOn: [budget, controllerapi, progress, todo, transcript]
   subagent:
     mayDependOn: [loader, registry, sessionstore, tool, transcript]
   mcpstore:
     mayDependOn: [coagenthome, tool]
   sessionbus:
     mayDependOn: [controllerapi, logger, sessionevent]
-  sessionlifecycle:
-    mayDependOn: [admission, controllerapi, logger, session, sessionstore, subagent, transcript]
   progressruntime:
-    mayDependOn: [budget, controllerapi, logger, progress, sessionevent, sessionstore, todo]
+    mayDependOn: [budget, controllerapi, logger, progress, sessionbus, sessionevent, sessionstore, todo]
   projectpath:
     mayDependOn: [coagenthome, config, controllerapi]
   safefile:
@@ -160,6 +157,9 @@ deps:
   llm:
     mayDependOn: [catalog, config, llmwire, logger, safefile]
 
+  progress:
+    mayDependOn: [logger]
+
   # Presentation-only formatting helpers shared across packages; stdlib only.
   humanize:
     anyProjectDeps: false
@@ -191,7 +191,7 @@ deps:
 
   # Orchestrator.
   daemon:
-    mayDependOn: [admission, backgroundprocess, budget, coagenthome, config, configapply, controllerapi, git, id, llmwire, loader, logger, mcp, mcpstore, progress, progressruntime, projectpath, registry, schedule, session, sessionbuild, sessionprompt, sessionbus, sessionevent, sessionlifecycle, sessionstore, subagent, todo, tool, transcript]
+    mayDependOn: [admission, backgroundprocess, budget, coagenthome, config, configapply, controllerapi, git, id, llmwire, loader, logger, mcp, mcpstore, progress, progressruntime, projectpath, registry, schedule, session, sessionbuild, sessionprompt, sessionbus, sessionevent, sessionstore, subagent, todo, tool, transcript]
 
   configops:
     mayDependOn: [coagenthome, config, logger]

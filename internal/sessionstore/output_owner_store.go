@@ -5,13 +5,7 @@ import (
 	"fmt"
 )
 
-// OutputOwnerStore enumerates only manager identities with unresolved work so
-// status can expose a removed manager's blocked backlog without its payload.
-type OutputOwnerStore interface {
-	ListUnresolvedOutputOwners(ctx context.Context) ([]string, error)
-}
-
-func (s *store) ListUnresolvedOutputOwners(ctx context.Context) ([]string, error) {
+func (s *Store) ListUnresolvedOutputOwners(ctx context.Context) ([]string, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT DISTINCT json_extract(attributes, '$.manager_id')
 		FROM session_outbox
 		WHERE state <> 'delivered' AND json_type(attributes, '$.manager_id') = 'text'

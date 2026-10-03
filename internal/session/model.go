@@ -10,6 +10,7 @@ import (
 	"github.com/pilat/coagent/internal/llm"
 	"github.com/pilat/coagent/internal/llmwire"
 	"github.com/pilat/coagent/internal/logger"
+	"github.com/pilat/coagent/internal/sessionevent"
 	"github.com/pilat/coagent/internal/sessionprompt"
 )
 
@@ -60,6 +61,7 @@ func (s *Session) applyModelSwitch() {
 	if err := old.Close(); err != nil {
 		logger.Named("session.model").Warn("old_llm_close_failed", zap.Error(err))
 	}
+	s.emit(sessionevent.Notification{Type: "context_changed"})
 }
 
 // Only the loop adopts queued clients, and Close runs after the loop joins.

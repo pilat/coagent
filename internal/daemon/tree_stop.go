@@ -1,75 +1,25 @@
-package sessionlifecycle
+package daemon
 
 import (
 	"context"
 	"fmt"
-	"sync"
 
 	"github.com/pilat/coagent/internal/controllerapi"
 	"github.com/pilat/coagent/internal/sessionstore"
 	"github.com/pilat/coagent/internal/subagent"
 )
 
-type StopPlan struct {
+type stopPlan struct {
 	rootID     int64
 	sessionIDs []int64
 	links      []subagent.Link
 }
 
-func (p *StopPlan) SessionIDs() []int64 {
+func (p *stopPlan) SessionIDs() []int64 {
 	return append([]int64(nil), p.sessionIDs...)
 }
 
-type Stopper interface {
-	GuardSpawn(run func() error) error
-	Begin(ctx context.Context, rootID int64, liveSessionIDs []int64) (*StopPlan, error)
-	CancelInputs(ctx context.Context, plan *StopPlan) error
-	Finish(ctx context.Context, plan *StopPlan, keepRootStopping bool) error
-	CompleteExplicit(ctx context.Context, rootID, inputID int64, cancelledProcesses int) error
-	InterruptedExplicitStops(ctx context.Context) ([]sessionstore.InterruptedExplicitStop, error)
-}
-
-var _ Stopper = (*stopper)(nil)
-
-type stopper struct {
-	mu        sync.Locker
-	sessions  sessionstore.OrchestrationStore
-	lifecycle sessionstore.SessionLifecycleStore
-	outputs   sessionstore.ManagerOutputStore
-	links     subagent.Store
-}
-
-func NewStopper(
-	sessions sessionstore.OrchestrationStore,
-	lifecycle sessionstore.SessionLifecycleStore,
-	outputs sessionstore.ManagerOutputStore,
-	links subagent.Store,
-) Stopper {
-	return NewStopperWithLock(sessions, lifecycle, outputs, links, &sync.Mutex{})
-}
-
-func NewStopperWithLock(
-	sessions sessionstore.OrchestrationStore,
-	lifecycle sessionstore.SessionLifecycleStore,
-	outputs sessionstore.ManagerOutputStore,
-	links subagent.Store,
-	lock sync.Locker,
-) Stopper {
-	return &stopper{
-		mu: lock, sessions: sessions, lifecycle: lifecycle, outputs: outputs, links: links,
-	}
-}
-
-func (s *stopper) GuardSpawn(run func() error) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	return run()
-}
-
-func (s *stopper) Begin(ctx context.Context, rootID int64, liveSessionIDs []int64) (*StopPlan, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+func (s *svc) beginStop(ctx context.Context, rootID int64, liveSessionIDs []int64) (*stopPlan, error) {
 
 	plan, err := s.stopPlan(ctx, rootID, liveSessionIDs)
 	if err != nil {
@@ -77,7 +27,7 @@ func (s *stopper) Begin(ctx context.Context, rootID int64, liveSessionIDs []int6
 	}
 
 	for _, id := range plan.sessionIDs {
-		if err := s.sessions.UpdateSessionStatus(ctx, id, sessionstore.SessionStatusStopping); err != nil {
+		if err := s.store.UpdateSessionStatus(ctx, id, sessionstore.SessionStatusStopping); err != nil {
 			return nil, fmt.Errorf("mark session %d stopping: %w", id, err)
 		}
 	}
@@ -91,15 +41,15 @@ func (s *stopper) Begin(ctx context.Context, rootID int64, liveSessionIDs []int6
 	return plan, nil
 }
 
-func (s *stopper) CancelInputs(ctx context.Context, plan *StopPlan) error {
-	if _, err := s.lifecycle.CancelPendingInputsForStop(ctx, plan.sessionIDs, "stopped"); err != nil {
+func (s *svc) cancelStopInputs(ctx context.Context, plan *stopPlan) error {
+	if _, err := s.store.CancelPendingInputsForStop(ctx, plan.sessionIDs, "stopped"); err != nil {
 		return fmt.Errorf("cancel stopped session input: %w", err)
 	}
 
 	return nil
 }
 
-func (s *stopper) Finish(ctx context.Context, plan *StopPlan, keepRootStopping bool) error {
+func (s *svc) finishStop(ctx context.Context, plan *stopPlan, keepRootStopping bool) error {
 	for _, link := range plan.links {
 		if err := s.links.MakeStoppedLinkResumable(ctx, link.ChildID); err != nil {
 			return fmt.Errorf("detach stopped subagent %d: %w", link.ChildID, err)
@@ -111,7 +61,7 @@ func (s *stopper) Finish(ctx context.Context, plan *StopPlan, keepRootStopping b
 			continue
 		}
 
-		if err := s.sessions.UpdateSessionStatus(ctx, id, sessionstore.SessionStatusStopped); err != nil {
+		if err := s.store.UpdateSessionStatus(ctx, id, sessionstore.SessionStatusStopped); err != nil {
 			return fmt.Errorf("mark session %d stopped: %w", id, err)
 		}
 	}
@@ -119,42 +69,34 @@ func (s *stopper) Finish(ctx context.Context, plan *StopPlan, keepRootStopping b
 	return nil
 }
 
-func (s *stopper) CompleteExplicit(
+func (s *svc) completeExplicitStop(
 	ctx context.Context,
 	rootID, inputID int64,
 	cancelledProcesses int,
 ) error {
-	if _, err := s.lifecycle.CompleteExplicitStop(ctx, rootID, inputID, cancelledProcesses); err != nil {
+	if _, err := s.store.CompleteExplicitStop(ctx, rootID, inputID, cancelledProcesses); err != nil {
 		return fmt.Errorf("commit explicit stop completion: %w", err)
 	}
+	if _, err := s.store.ReactivateForSchedule(ctx, rootID); err != nil {
+		return err
+	}
 
-	record, err := s.sessions.GetSession(ctx, rootID)
+	record, err := s.store.GetSession(ctx, rootID)
 	if err != nil {
 		return nil //nolint:nilerr // The committed terminal fact is authoritative; wake is best-effort.
 	}
 
 	owner, _ := record.Attributes[controllerapi.SessionAttributeManagerID].(string)
-	if s.outputs != nil && owner != "" {
-		_, _ = s.outputs.WakeOutputHead(ctx, owner)
+	if s.store != nil && owner != "" {
+		_, _ = s.store.WakeOutputHead(ctx, owner)
 	}
 
 	return nil
 }
 
-func (s *stopper) InterruptedExplicitStops(
-	ctx context.Context,
-) ([]sessionstore.InterruptedExplicitStop, error) {
-	stops, err := s.lifecycle.SelectInterruptedExplicitStops(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("select interrupted explicit stops: %w", err)
-	}
-
-	return stops, nil
-}
-
 //nolint:wsl_v5 // Persisted tree membership and live-runner repair form one plan.
-func (s *stopper) stopPlan(ctx context.Context, rootID int64, liveSessionIDs []int64) (*StopPlan, error) {
-	records, err := s.sessions.ListAllSessions(ctx)
+func (s *svc) stopPlan(ctx context.Context, rootID int64, liveSessionIDs []int64) (*stopPlan, error) {
+	records, err := s.store.ListAllSessions(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("list sessions for stop tree: %w", err)
 	}
@@ -200,12 +142,12 @@ func (s *stopper) stopPlan(ctx context.Context, rootID int64, liveSessionIDs []i
 			return nil, fmt.Errorf("load subagent link for session %d: %w", id, linkErr)
 		}
 
-		if link != nil && !link.Terminal() && link.State != subagent.StateStopped {
+		if link != nil && !link.Terminal() {
 			links = append(links, *link)
 		}
 	}
 
-	return &StopPlan{rootID: rootID, sessionIDs: ids, links: links}, nil
+	return &stopPlan{rootID: rootID, sessionIDs: ids, links: links}, nil
 }
 
 func activeTreeIDs(rootID int64, byParent map[int64][]*sessionstore.SessionRecord) []int64 {
@@ -234,5 +176,6 @@ func activeTreeIDs(rootID int64, byParent map[int64][]*sessionstore.SessionRecor
 func stopActive(status sessionstore.SessionStatus) bool {
 	return status == sessionstore.SessionStatusActive ||
 		status == sessionstore.SessionStatusSuspended ||
-		status == sessionstore.SessionStatusStopping
+		status == sessionstore.SessionStatusStopping ||
+		status == sessionstore.SessionStatusStopped
 }

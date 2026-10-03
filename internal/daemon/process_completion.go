@@ -11,7 +11,7 @@ import (
 )
 
 func (s *svc) inputReady(ctx context.Context, sessionID int64) error {
-	record, err := s.sessionStore.GetSession(ctx, sessionID)
+	record, err := s.store.GetSession(ctx, sessionID)
 	if err != nil {
 		return fmt.Errorf("load input-ready session %d: %w", sessionID, err)
 	}
@@ -21,7 +21,7 @@ func (s *svc) inputReady(ctx context.Context, sessionID int64) error {
 		record.Status == sessionstore.SessionStatusTerminating {
 		return nil
 	}
-	rows, err := s.inboxStore.ListPending(ctx, sessionID)
+	rows, err := s.store.ListPending(ctx, sessionID)
 	if err != nil {
 		return err
 	}
@@ -40,7 +40,7 @@ func (s *svc) inputReady(ctx context.Context, sessionID int64) error {
 	}
 
 	if record.Status == sessionstore.SessionStatusError {
-		rows, err := s.inboxStore.ListPending(ctx, sessionID)
+		rows, err := s.store.ListPending(ctx, sessionID)
 		if err != nil {
 			return err
 		}
@@ -101,7 +101,7 @@ func (s *svc) rearmChildForAsyncInput(ctx context.Context, child *sessionstore.S
 
 	guarded := context.WithoutCancel(ctx)
 
-	target, err := s.sessionStore.GetSession(guarded, child.ID)
+	target, err := s.store.GetSession(guarded, child.ID)
 	if err != nil {
 		return fmt.Errorf("reload input-ready child %d: %w", child.ID, err)
 	}
@@ -112,7 +112,7 @@ func (s *svc) rearmChildForAsyncInput(ctx context.Context, child *sessionstore.S
 		return nil
 	}
 
-	root, err := s.sessionStore.GetSession(guarded, sessionRootID(child))
+	root, err := s.store.GetSession(guarded, sessionRootID(child))
 	if err != nil {
 		return fmt.Errorf("load input-ready root for child %d: %w", child.ID, err)
 	}
@@ -123,7 +123,7 @@ func (s *svc) rearmChildForAsyncInput(ctx context.Context, child *sessionstore.S
 		return nil
 	}
 
-	return s.completions.RearmLocked(guarded, child.ID) //nolint:wrapcheck // Component owns rearm context.
+	return s.rearm(guarded, child.ID) //nolint:wrapcheck // Component owns rearm context.
 }
 
 func (s *svc) newDaemonWorkerContext(ctx context.Context) (context.Context, context.CancelFunc) {

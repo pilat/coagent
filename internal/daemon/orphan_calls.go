@@ -5,58 +5,12 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"go.uber.org/zap"
-
 	"github.com/pilat/coagent/internal/llmwire"
-	"github.com/pilat/coagent/internal/logger"
 	"github.com/pilat/coagent/internal/session"
 	"github.com/pilat/coagent/internal/sessionstore"
 	"github.com/pilat/coagent/internal/tool"
 	"github.com/pilat/coagent/internal/transcript"
 )
-
-// resolveOrphanedCalls closes every external call whose producer did not survive
-// the restart. Repair may never stub such a call, so without an owner to answer
-// it the transcript can never be sent to a provider again.
-func (s *svc) resolveOrphanedCalls(ctx context.Context) {
-	log := logger.Ctx(ctx).Named("daemon.sweep")
-
-	records, err := s.sessionStore.ListAllSessions(ctx)
-	if err != nil {
-		log.Error("list_sessions_for_orphaned_calls", zap.Error(err))
-
-		return
-	}
-
-	closed := 0
-
-	for _, rec := range records {
-		if !orphanSweepCandidate(rec) {
-			continue
-		}
-
-		// Nothing may open a runner before this pass returns, so a live loop is a
-		// broken ordering contract, not a benign race — and it leaves an owner-less call.
-		if s.HasActiveLoop(rec.ID) {
-			log.Warn("orphan_sweep_skipped_running_session", zap.Int64("session_id", rec.ID))
-
-			continue
-		}
-
-		count, err := s.closeOrphanedCalls(ctx, rec)
-		if err != nil {
-			log.Error("close_orphaned_calls", zap.Int64("session_id", rec.ID), zap.Error(err))
-
-			continue
-		}
-
-		closed += count
-	}
-
-	if closed > 0 {
-		log.Warn("closed_orphaned_external_calls", zap.Int("calls", closed))
-	}
-}
 
 // orphanSweepCandidate skips lifecycles this pass does not own: /stop settles a
 // parked tree from the same durable set, and killed or finished is not resumed.
@@ -80,7 +34,7 @@ func orphanedCallNotice(_ string) string {
 // storedExternalCalls is a session's name-keyed pending set, read from the
 // durable transcript alone — what a provider would see dangling.
 func (s *svc) storedExternalCalls(ctx context.Context, sessionID int64) ([]session.PendingToolCall, error) {
-	stored, err := s.sessionStore.LoadActiveMessages(ctx, sessionID)
+	stored, err := s.store.LoadActiveMessages(ctx, sessionID)
 	if err != nil {
 		return nil, fmt.Errorf("load transcript of session %d: %w", sessionID, err)
 	}

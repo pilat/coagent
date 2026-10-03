@@ -17,19 +17,13 @@ const (
 
 const integrityErrorPrefix = "❌ LLM error: "
 
-var (
-	_ TerminalRejectionStore = (*store)(nil)
-)
-
-type TerminalRejectionStore interface {
-	LoadCurrentTerminalRejection(ctx context.Context, sessionID int64) (*transcript.Message, error)
-}
+var ()
 
 func IntegrityErrorNotice(errorText string) string {
 	return integrityErrorPrefix + errorText
 }
 
-func (s *store) LoadCurrentTerminalRejection(
+func (s *Store) LoadCurrentTerminalRejection(
 	ctx context.Context,
 	sessionID int64,
 ) (*transcript.Message, error) {
@@ -60,7 +54,7 @@ func (s *store) LoadCurrentTerminalRejection(
 	return message, nil
 }
 
-func (s *store) HasOutstandingResponseRecovery(ctx context.Context, sessionID int64) (bool, error) {
+func (s *Store) HasOutstandingResponseRecovery(ctx context.Context, sessionID int64) (bool, error) {
 	return hasOutstandingRecovery(ctx, s.db, sessionID)
 }
 

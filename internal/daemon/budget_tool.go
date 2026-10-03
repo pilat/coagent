@@ -118,10 +118,5 @@ func (s *svc) retainBudgetForBackground(ctx context.Context, rootID int64) (bool
 // root-tree scope: budget retention must not release while any tree session
 // could still deliver model-bound input.
 func (s *svc) hasBackgroundObligation(ctx context.Context, rootID int64) (bool, error) {
-	obligations, ok := s.sessionStore.(sessionstore.BackgroundObligationStore)
-	if !ok {
-		return false, errors.New("background obligation projection unavailable")
-	}
-
-	return obligations.HasBackgroundObligationByRoot(ctx, rootID)
+	return s.store.HasBackgroundObligationByRoot(ctx, rootID)
 }

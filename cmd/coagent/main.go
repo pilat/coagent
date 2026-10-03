@@ -33,9 +33,11 @@ import (
 	"github.com/pilat/coagent/internal/memory"
 	"github.com/pilat/coagent/internal/migrate"
 	"github.com/pilat/coagent/internal/procexec"
+	"github.com/pilat/coagent/internal/progressruntime"
 	"github.com/pilat/coagent/internal/sandboxpolicy"
 	"github.com/pilat/coagent/internal/schedule"
 	"github.com/pilat/coagent/internal/sessionbuild"
+	"github.com/pilat/coagent/internal/sessionbus"
 	"github.com/pilat/coagent/internal/sessionstore"
 	"github.com/pilat/coagent/internal/subagent"
 	"github.com/pilat/coagent/internal/tool/builtin"
@@ -57,6 +59,41 @@ var errRestartRequested = errors.New("restart requested")
 // configuration.
 var errUnsupportedPlatform = errors.New("coagent supports Linux only")
 
+// selfExecPath is where this binary lives, resolved at process start. It must be
+// captured before anything can swap the file: after an update /proc/self/exe
+// reads as "… (deleted)", while this path holds the new binary — which is
+// exactly what the restart should exec.
+var selfExecPath = resolveSelfExecPath()
+
+type namedStop struct {
+	name string
+	fn   func(context.Context) error
+}
+
+type app struct {
+	stops []namedStop
+}
+
+// startupState is everything the daemon needs and everything that can refuse to
+// let it start. A pending-apply marker wraps the *whole* of it, not just the
+// config parse: the failures a pre-write check cannot see — a cold catalog cache
+// with models.dev unreachable, a model id that drifted out of the catalog — are
+// exactly what the rollback exists for.
+type startupState struct {
+	cfg     *config.Config
+	secrets config.Secrets
+}
+
+// core is what the control plane is wired onto. Every field names the exact
+// capability runDaemon hands to a consumer; it is a return value, not a layer.
+type core struct {
+	controller     controllerapi.ManagerControllerFactory
+	scheduleStore  schedule.Store
+	scheduleSender schedule.SessionSender
+	sessionStore   *sessionstore.Store
+	applier        configapply.Service
+}
+
 // ensureLinuxPlatform rejects a non-Linux build before it can reach any
 // process-lifecycle behavior. The platform is injected at the entry seam so the
 // refusal ordering is directly testable rather than implied by source order.
@@ -68,12 +105,6 @@ func ensureLinuxPlatform(goos string) error {
 	return fmt.Errorf("%w: refusing a binary built for %q; rebuild for linux", errUnsupportedPlatform, goos)
 }
 
-// selfExecPath is where this binary lives, resolved at process start. It must be
-// captured before anything can swap the file: after an update /proc/self/exe
-// reads as "… (deleted)", while this path holds the new binary — which is
-// exactly what the restart should exec.
-var selfExecPath = resolveSelfExecPath()
-
 func resolveSelfExecPath() string {
 	path, err := os.Executable()
 	if err != nil {
@@ -81,15 +112,6 @@ func resolveSelfExecPath() string {
 	}
 
 	return path
-}
-
-type namedStop struct {
-	name string
-	fn   func(context.Context) error
-}
-
-type app struct {
-	stops []namedStop
 }
 
 func (a *app) onStop(name string, fn func(context.Context) error) {
@@ -167,16 +189,6 @@ func runWith(
 	defer stop()
 
 	return disp(ctx, args)
-}
-
-// startupState is everything the daemon needs and everything that can refuse to
-// let it start. A pending-apply marker wraps the *whole* of it, not just the
-// config parse: the failures a pre-write check cannot see — a cold catalog cache
-// with models.dev unreachable, a model id that drifted out of the catalog — are
-// exactly what the rollback exists for.
-type startupState struct {
-	cfg     *config.Config
-	secrets config.Secrets
 }
 
 // bootDaemon loads configuration and runs the daemon in the foreground. This is
@@ -455,7 +467,7 @@ func runDaemon(
 // session came from an unattended apply, which already had its answer.
 func deliverApplyVerdict(
 	ctx context.Context,
-	sender sessionstore.Store,
+	sender *sessionstore.Store,
 	applier configapply.Service,
 	ops configops.Service,
 	outcome *configops.Outcome,
@@ -511,7 +523,7 @@ func deliverApplyVerdict(
 
 // verdictUndeliverable reports whether the owed session can never take the
 // verdict — a marker no boot can consume arms every later one to roll back.
-func verdictUndeliverable(ctx context.Context, sender sessionstore.Store, sessionID int64) bool {
+func verdictUndeliverable(ctx context.Context, sender *sessionstore.Store, sessionID int64) bool {
 	rec, err := sender.GetSession(ctx, sessionID)
 	if err != nil || rec == nil {
 		return true
@@ -521,16 +533,6 @@ func verdictUndeliverable(ctx context.Context, sender sessionstore.Store, sessio
 		rec.Status == sessionstore.SessionStatusKilled ||
 		rec.Status == sessionstore.SessionStatusStopping ||
 		rec.Status == sessionstore.SessionStatusStopped
-}
-
-// core is what the control plane is wired onto. Every field names the exact
-// capability runDaemon hands to a consumer; it is a return value, not a layer.
-type core struct {
-	controller     controllerapi.ManagerControllerFactory
-	scheduleStore  schedule.Store
-	scheduleSender schedule.SessionSender
-	sessionStore   sessionstore.Store
-	applier        configapply.Service
 }
 
 func startCore(
@@ -556,7 +558,6 @@ func startCore(
 
 	a.onStop("db", func(context.Context) error { return db.Close() })
 
-	daemonStore := daemon.NewStore(db)
 	sessionStore := sessionstore.NewStore(db)
 	scheduleStore := schedule.NewStore(db, sessionStore)
 	curatedStore := memory.NewCuratedStore(db)
@@ -571,17 +572,17 @@ func startCore(
 		return nil, fmt.Errorf("recover interrupted manager output: %w", err)
 	}
 
-	scheduleSvc := schedule.NewService(scheduleStore)
+	scheduleSvc := schedule.NewService(scheduleStore, sessionStore)
 
 	buildInput := sessionbuild.BuildInput{
 		Config: cfg, Secrets: secrets, MemoryStore: curatedStore, Store: sessionStore,
 		GitClient: gitClient, MCPStore: mcpRegistry, MarketplaceCache: cache, Resources: builtin.NewResources(),
 	}
 
+	bus := sessionbus.New()
+	progressSvc := progressruntime.New(sessionStore, bus)
 	daemonSvc := daemon.New(
-		ctx, buildInput, daemonStore, sessionStore, sessionStore, sessionStore,
-		sessionStore, sessionStore, sessionStore, sessionStore,
-		linkStore, subagentTx, budgetSvc, sessionStore,
+		ctx, buildInput, sessionStore, linkStore, subagentTx, budgetSvc, backgroundprocess.NewStore(db, sessionStore), progressSvc, bus,
 		scheduleSvc, cfg, mcpRegistry, applier,
 	)
 

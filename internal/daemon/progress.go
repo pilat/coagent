@@ -7,7 +7,6 @@ import (
 
 	"go.uber.org/zap"
 
-	"github.com/pilat/coagent/internal/budget"
 	"github.com/pilat/coagent/internal/controllerapi"
 	"github.com/pilat/coagent/internal/logger"
 	"github.com/pilat/coagent/internal/progress"
@@ -121,7 +120,7 @@ func (s *svc) mainModelWorking(rootID int64) bool {
 	// external call owns no runner service by the time its waiting card is
 	// captured, but a concurrent capture can still observe the live loop
 	// before finishRunner clears it — a suspended root is never "working".
-	record, err := s.sessionStore.GetSession(context.Background(), rootID)
+	record, err := s.store.GetSession(context.Background(), rootID)
 	if err != nil || record.Status == sessionstore.SessionStatusSuspended {
 		return false
 	}
@@ -155,7 +154,7 @@ func (s *svc) publishSubagentProgressWithIteration(
 ) {
 	log := logger.Ctx(ctx).Named("daemon.progress")
 
-	record, err := s.sessionStore.GetSession(ctx, childID)
+	record, err := s.store.GetSession(ctx, childID)
 	if err != nil {
 		log.Warn("load_subagent_progress_session", zap.Int64("child", childID), zap.Error(err))
 
@@ -219,7 +218,7 @@ func (s *svc) subagentStateCausalID(
 		return fmt.Sprintf("subagent:%d:%d:%s", childID, link.ActivationSeq, link.State), nil
 	}
 
-	root, err := s.sessionStore.GetSession(ctx, record.RootID)
+	root, err := s.store.GetSession(ctx, record.RootID)
 	if err != nil {
 		log.Warn("load_subagent_progress_root", zap.Int64("root", record.RootID), zap.Error(err))
 
@@ -259,17 +258,17 @@ func (s *svc) settleSubagentProgress(
 	}
 }
 
-func newProgressRuntime(
-	store progressruntime.Store,
-	budgetSvc budget.Service,
-	daemon *svc,
-) progressruntime.Service {
-	if store == nil {
-		return nil
-	}
+func (s *svc) updateLive(ctx context.Context, sessionID int64) {
+	s.liveMu.Lock()
+	defer s.liveMu.Unlock()
+	s.updateLiveLocked(ctx, sessionID)
+}
 
-	return progressruntime.New(
-		store, budgetSvc, daemon.HasActiveLoop, daemon.mainModelWorking, daemon.liveContextProjection,
-		daemon.startBudgetPark, daemon.publish,
-	)
+func (s *svc) updateLiveLocked(ctx context.Context, sessionID int64) {
+	if s.progress == nil {
+		return
+	}
+	live := progressruntime.Live{Active: s.HasActiveLoop(sessionID), Working: s.mainModelWorking(sessionID)}
+	live.Context, _ = s.liveContextProjection(ctx, sessionID)
+	s.progress.SetLive(sessionID, live)
 }

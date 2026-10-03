@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 
 	"go.uber.org/zap"
@@ -14,6 +15,93 @@ import (
 )
 
 const childQueueRetryDelay = 100 * time.Millisecond
+
+// queuedChild is a background child that could not be admitted immediately and
+// waits (in arrival order) for a slot to free. Durability comes from its
+// already-persisted subagent_links row (state 'spawned', inserted by Spawn before
+// admission) — the restart sweep re-runs it on crash; this slice is only the
+// in-memory ordering cache.
+type queuedChild struct {
+	sessionID int64
+	parentID  int64
+	workDir   string
+	projectID int64
+}
+
+type queuedRunner struct {
+	sessionID int64
+	workDir   string
+	projectID int64
+}
+
+type queue[T any] struct {
+	mu     sync.Mutex
+	values []T
+}
+
+func (q *queue[T]) Push(value T) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+
+	q.values = append(q.values, value)
+}
+
+func (q *queue[T]) PushUnique(value T, same func(T, T) bool) bool {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+
+	for _, existing := range q.values {
+		if same(existing, value) {
+			return false
+		}
+	}
+
+	q.values = append(q.values, value)
+
+	return true
+}
+
+func (q *queue[T]) PopFirst(predicate func(T) bool) (T, bool) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+
+	for i, value := range q.values {
+		if !predicate(value) {
+			continue
+		}
+
+		q.values = append(q.values[:i], q.values[i+1:]...)
+
+		return value, true
+	}
+
+	var zero T
+
+	return zero, false
+}
+
+func (q *queue[T]) Remove(predicate func(T) bool) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+
+	kept := q.values[:0]
+	for _, value := range q.values {
+		if !predicate(value) {
+			kept = append(kept, value)
+		}
+	}
+
+	q.values = kept
+}
+
+func (q *queue[T]) Len() int {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+
+	return len(q.values)
+}
+
+func newQueue[T any]() *queue[T] { return &queue[T]{} }
 
 // enqueueChild parks a background child that could not be admitted, preserving
 // its initial messages so the prompt survives until a slot frees.
@@ -143,7 +231,7 @@ func (s *svc) childTerminated(ctx context.Context, childID int64) (bool, error) 
 		return true, nil
 	}
 
-	rec, err := s.sessionStore.GetSession(ctx, childID)
+	rec, err := s.store.GetSession(ctx, childID)
 	if err != nil {
 		return false, fmt.Errorf("queued child session %d: %w", childID, err)
 	}

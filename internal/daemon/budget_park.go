@@ -15,6 +15,9 @@ func (s *svc) parkBudgetTree(ctx context.Context, record *budget.Record) {
 	if record == nil || record.State != budget.Fired || record.ParkOwner == "" {
 		return
 	}
+	defer s.refreshBudgetTimer(s.budgetCtx, record.RootSessionID)
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
 
 	owner := record.ParkOwner
 	if record.ParkPhase == budgetParkRequested {
@@ -57,6 +60,15 @@ func (s *svc) parkBudgetTree(ctx context.Context, record *budget.Record) {
 	}
 
 	defer unlock()
+	current, err := s.budgetSvc.Get(ctx, record.RootSessionID)
+	if err != nil {
+		logger.Ctx(ctx).Named("daemon.budget").Warn("load_park_generation", zap.Error(err))
+		return
+	}
+	if current.Generation != record.Generation || current.State != budget.Fired || current.ParkOwner != owner ||
+		(current.ParkPhase != "requested" && current.ParkPhase != "draining") {
+		return
+	}
 
 	if err := s.stopTreeCleanup(ctx, record.RootSessionID, stopTreeOptions{
 		preserveBackgroundProcesses: true,
@@ -74,6 +86,8 @@ func (s *svc) parkBudgetTree(ctx context.Context, record *budget.Record) {
 }
 
 func (s *svc) startBudgetPark(record *budget.Record) {
+	s.budgetTimerMu.Lock()
+	defer s.budgetTimerMu.Unlock()
 	if record == nil || s.shuttingDown.Load() {
 		return
 	}
@@ -92,7 +106,7 @@ func (s *svc) startBudgetPark(record *budget.Record) {
 }
 
 func (s *svc) treeHasActiveLoop(ctx context.Context, rootID int64) bool {
-	records, err := s.sessionStore.ListAllSessions(ctx)
+	records, err := s.store.ListAllSessions(ctx)
 	if err != nil {
 		return ctx.Err() == nil
 	}

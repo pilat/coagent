@@ -4,16 +4,17 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/pilat/coagent/internal/session"
 	"github.com/pilat/coagent/internal/sessionstore"
 	"github.com/pilat/coagent/internal/tool/builtin"
 )
 
+var _ builtin.FileReadTracker = (*fileReadTracker)(nil)
+
 type fileReadTracker struct {
-	store     sessionstore.FileReadStore
+	store     session.Store
 	sessionID int64
 }
-
-var _ builtin.FileReadTracker = (*fileReadTracker)(nil)
 
 func (t *fileReadTracker) LookupRead(ctx context.Context, path string) (builtin.ReadRecord, bool, error) {
 	if t == nil || t.store == nil {
