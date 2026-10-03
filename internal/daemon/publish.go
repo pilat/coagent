@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"sync"
 
 	"go.uber.org/zap"
 
@@ -10,6 +11,13 @@ import (
 	"github.com/pilat/coagent/internal/sessionevent"
 	"github.com/pilat/coagent/internal/sessionstore"
 )
+
+type routes struct {
+	claim sync.Mutex
+	mu    sync.Mutex
+	child map[int64]bool
+	owner map[int64]string
+}
 
 type sessionEvents struct {
 	daemon    *svc
@@ -36,7 +44,7 @@ func (s *svc) publish(sessionID int64, n sessionevent.Notification) {
 		return
 	}
 
-	isChild, managerID, known := s.lookupPublishRoute(sessionID)
+	isChild, managerID, known := s.routes.lookup(sessionID)
 	if !known {
 		// Background: NotifySession carries no ctx, and inheriting a caller's dead
 		// one would fail the check and mis-drop.
@@ -47,44 +55,44 @@ func (s *svc) publish(sessionID int64, n sessionevent.Notification) {
 				zap.Int64("session_id", sessionID),
 				zap.Error(err),
 			)
-			s.pubsub.PublishOwned(sessionID, "", n)
+			s.bus.PublishOwned(sessionID, "", n)
 
 			return
 		}
 
 		isChild = rec.ParentID != 0
 		managerID, _ = rec.Attributes[controllerapi.SessionAttributeManagerID].(string)
-		managerID = s.cachePublishRoute(sessionID, isChild, managerID)
+		managerID = s.routes.cache(sessionID, isChild, managerID)
 	}
 
 	if isChild {
 		return
 	}
 
-	s.pubsub.PublishOwned(sessionID, managerID, n)
+	s.bus.PublishOwned(sessionID, managerID, n)
 }
 
 // lookupPublishRoute reports the immutable root/owner route for a session.
-func (s *svc) lookupPublishRoute(sessionID int64) (bool, string, bool) {
-	s.childMu.Lock()
-	defer s.childMu.Unlock()
+func (r *routes) lookup(sessionID int64) (bool, string, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 
-	isChild, known := s.childCache[sessionID]
-	managerID := s.ownerCache[sessionID]
+	isChild, known := r.child[sessionID]
+	managerID := r.owner[sessionID]
 
 	return isChild, managerID, known
 }
 
-func (s *svc) cachePublishRoute(sessionID int64, isChild bool, managerID string) string {
-	s.childMu.Lock()
-	defer s.childMu.Unlock()
+func (r *routes) cache(sessionID int64, isChild bool, managerID string) string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 
-	if cachedOwner, known := s.ownerCache[sessionID]; known {
+	if cachedOwner, known := r.owner[sessionID]; known {
 		managerID = cachedOwner
 	}
 
-	s.childCache[sessionID] = isChild
-	s.ownerCache[sessionID] = managerID
+	r.child[sessionID] = isChild
+	r.owner[sessionID] = managerID
 
 	return managerID
 }
@@ -141,4 +149,11 @@ func (e *sessionEvents) Emit(n sessionevent.Notification) {
 	default:
 		s.publish(e.sessionID, n)
 	}
+}
+
+func (r *routes) setOwner(sessionID int64, owner string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	r.owner[sessionID] = owner
 }

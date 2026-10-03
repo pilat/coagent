@@ -46,38 +46,24 @@ type lifetime struct {
 }
 
 type svc struct {
-	runners *runnerSet
-	build   sessionbuild.BuildInput
-	store   Store
-	liveMu  sync.Mutex
-
-	links     subagent.Store
-	subagents subagent.Transactions
-	schedules schedule.Service
-	pubsub    sessionbus.Bus
-	mcpStore  mcpstore.Store
-	applier   configapply.Service
-
-	progress      progressruntime.Service
-	budgetTimerMu sync.Mutex
-	budgetTimers  map[int64]*budgetDeadline
-
-	life      *lifetime
-	models    models
-	treeLocks sync.Map
-	// Tree locks precede routeMu and childMu; never acquire a
-	// tree lock while holding one of those narrower locks.
-	// routeMu linearizes owner claims with replacement-session creation. The
-	// daemon is single-instance, so this is the ownership CAS boundary.
-	routeMu sync.Mutex
-	// childMu guards publication routes only; runner lifecycle has its own registry.
-	childMu    sync.Mutex
-	childCache map[int64]bool
-	ownerCache map[int64]string
-	budgetSvc  budget.Service
-	// processSvc owns live cancellation handles; processStore owns durability.
+	store        Store
+	links        subagent.Store
+	schedules    schedule.Service
+	budgets      budget.Service
 	processStore backgroundprocess.Store
-	processSvc   backgroundprocess.Service
+	processes    backgroundprocess.Service
+	progress     progressruntime.Service
+	applier      configapply.Service
+	mcpStore     mcpstore.Store
+	bus          sessionbus.Bus
+	build        sessionbuild.BuildInput
+	models       models
+	life         *lifetime
+	runners      *runnerSet
+	trees        *treeLocks
+	routes       *routes
+	clock        *budgetClock
+	liveMu       sync.Mutex
 }
 
 func New(
@@ -86,7 +72,6 @@ func New(
 	store Store,
 
 	links subagent.Store,
-	subagents subagent.Transactions,
 	budgetSvc budget.Service,
 	processStore backgroundprocess.Store,
 	progressSvc progressruntime.Service,
@@ -104,21 +89,20 @@ func New(
 		mcpStore:     mcpStore,
 		applier:      applier,
 
-		links:        links,
-		subagents:    subagents,
-		budgetSvc:    budgetSvc,
-		schedules:    scheduleSvc,
-		pubsub:       pubsub,
-		progress:     progressSvc,
-		childCache:   make(map[int64]bool),
-		ownerCache:   make(map[int64]string),
-		life:         newLifetime(),
-		models:       newModels(cfg),
-		budgetTimers: make(map[int64]*budgetDeadline),
+		links:     links,
+		budgets:   budgetSvc,
+		schedules: scheduleSvc,
+		bus:       pubsub,
+		progress:  progressSvc,
+		trees:     &treeLocks{},
+		routes:    &routes{child: make(map[int64]bool), owner: make(map[int64]string)},
+		life:      newLifetime(),
+		models:    newModels(cfg),
+		clock:     newBudgetClock(),
 	}
 
-	s.processSvc = s.newProcessService(ctx)
-	s.build.ProcessService = s.processSvc
+	s.processes = s.newProcessService(ctx)
+	s.build.ProcessService = s.processes
 
 	return s
 }
@@ -128,11 +112,7 @@ func (s *svc) Shutdown(timeout time.Duration) {
 	defer cancel()
 
 	s.life.close()
-	s.budgetTimerMu.Lock()
-	for _, pending := range s.budgetTimers {
-		pending.timer.Stop()
-	}
-	s.budgetTimerMu.Unlock()
+	s.clock.close()
 	runners := s.runners.closeAndSnapshot()
 	done := make(chan struct{})
 
@@ -141,7 +121,7 @@ func (s *svc) Shutdown(timeout time.Duration) {
 			rs.Cancel()
 		}
 
-		if _, err := s.processSvc.CancelAll(ctx, backgroundprocess.IntentDaemonShutdown); err != nil {
+		if _, err := s.processes.CancelAll(ctx, backgroundprocess.IntentDaemonShutdown); err != nil {
 			logger.Ctx(ctx).Named("daemon.process").Warn("shutdown_cancel_failed", zap.Error(err))
 		}
 
@@ -223,3 +203,17 @@ func (l *lifetime) close() {
 }
 
 func (l *lifetime) wait() { l.wg.Wait() }
+
+// whileOpen runs fn under the lifetime lock unless Shutdown began; close waits for it.
+func (l *lifetime) whileOpen(fn func()) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	if l.closing {
+		return false
+	}
+
+	fn()
+
+	return true
+}

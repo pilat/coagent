@@ -51,10 +51,7 @@ func (s *svc) liveContextProjection(ctx context.Context, rootID int64) (progress
 }
 
 func (s *svc) mainModelWorking(ctx context.Context, rootID int64) bool {
-	// The durable status outranks the runner flag: a root parked on an
-	// external call owns no runner service by the time its waiting card is
-	// captured, but a concurrent capture can still observe the live loop
-	// before finishRunner clears it — a suspended root is never "working".
+	// Suspension may commit before runner teardown clears its working flag.
 	record, err := s.store.GetSession(ctx, rootID)
 	if err != nil || record.Status == sessionstore.SessionStatusSuspended {
 		return false
@@ -76,11 +73,7 @@ func (s *svc) publishSubagentIterationProgress(ctx context.Context, childID, ite
 	s.publishSubagentProgressWithIteration(ctx, childID, &iteration)
 }
 
-func (s *svc) publishSubagentProgressWithIteration(
-	ctx context.Context,
-	childID int64,
-	checkpointIteration *int64,
-) {
+func (s *svc) publishSubagentProgressWithIteration(ctx context.Context, childID int64, checkpointIteration *int64) {
 	log := logger.Ctx(ctx).Named("daemon.progress")
 
 	record, err := s.store.GetSession(ctx, childID)
@@ -133,8 +126,7 @@ func (s *svc) publishSubagentProgressWithIteration(
 	s.settleSubagentProgress(log, record.RootID, childID, content, published, err)
 }
 
-// subagentStateCausalID builds the state-transition causal identity. A
-// blocking undelivered link publishes the root's whole waiting set instead.
+// Blocking undelivered links share the root's waiting-set identity.
 func (s *svc) subagentStateCausalID(
 	ctx context.Context,
 	log *zap.Logger,
@@ -200,10 +192,7 @@ func (s *svc) updateLiveLocked(ctx context.Context, sessionID int64) {
 	s.progress.SetLive(sessionID, live)
 }
 
-func (s *svc) publishWaiting(
-	ctx context.Context,
-	sessionID int64,
-) {
+func (s *svc) publishWaiting(ctx context.Context, sessionID int64) {
 	projections := s.collectWaitingProjections(ctx, sessionID)
 	if len(projections) == 0 {
 		return
@@ -262,13 +251,7 @@ func (s *svc) collectWaitingProjections(ctx context.Context, sessionID int64) []
 	return projections
 }
 
-// recordWaitingProgress enqueues the durable waiting card for the projected
-// set; the canonical replaceable row is its own dedupe, so nothing is returned.
-func (s *svc) recordWaitingProgress(
-	ctx context.Context,
-	sessionID int64,
-	projections []waitingProjection,
-) error {
+func (s *svc) recordWaitingProgress(ctx context.Context, sessionID int64, projections []waitingProjection) error {
 	causalID, err := waitingProgressCausalID(projections)
 	if err != nil {
 		return err

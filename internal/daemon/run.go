@@ -48,8 +48,7 @@ func (s *svc) runSession(ctx context.Context, rs *runner) {
 
 		emptyRuns++
 		if emptyRuns >= maxEmptyLoopIterations {
-			logger.Ctx(ctx).
-				Named("daemon.runner").
+			logger.Ctx(ctx).Named("daemon.runner").
 				Error("session_loop_spin_guard", zap.Int64("session_id", rs.sessionID), zap.Int("empty_runs", emptyRuns))
 
 			return
@@ -191,8 +190,7 @@ func (s *svc) finishRunner(ctx context.Context, rs *runner, out runOutcome, pani
 
 	errored := out.errored || panicValue != nil || (ctx.Err() != nil && !closing)
 	if panicValue != nil {
-		logger.Ctx(ctx).
-			Named("daemon.runner").
+		logger.Ctx(ctx).Named("daemon.runner").
 			Error("session_panic", zap.Int64("session_id", id), zap.Any("panic", panicValue))
 	}
 
@@ -337,11 +335,7 @@ func (s *svc) restartPendingAfterExit(ctx context.Context, sessionID int64) {
 
 // Failed starts preserve input; only the first failure for that work is reported.
 // Shutdown cancellation leaves recovery to the next boot without an error receipt.
-func (s *svc) reportSessionUnstarted(
-	ctx context.Context,
-	sessionID int64,
-	err error,
-) {
+func (s *svc) reportSessionUnstarted(ctx context.Context, sessionID int64, err error) {
 	if ctx.Err() != nil {
 		return
 	}
@@ -391,14 +385,9 @@ func (s *svc) publishOwnerlessIdle(ctx context.Context, sessionID int64) {
 }
 
 // The caller is responsible for closing the session before calling this.
-func (s *svc) handleRunError(
-	ctx context.Context,
-	sessionID int64,
-	message string,
-	runErr error,
-) {
+func (s *svc) handleRunError(ctx context.Context, sessionID int64, message string, runErr error) {
 	if ctx.Err() != nil {
-		// Shutdown — don't flush or notify (sessions will be resumed on restart).
+		// Shutdown leaves the session resumable without an error receipt.
 		return
 	}
 
@@ -408,12 +397,10 @@ func (s *svc) handleRunError(
 		return
 	}
 
-	if message == "" {
-		message = fmt.Sprintf(
-			"⚠️ Session error: %s\n\nThe session is still alive — send a message to continue.",
-			logger.Redact(runErr.Error()),
-		)
-	}
+	message = fmt.Sprintf(
+		"⚠️ Session error: %s\n\nThe session is still alive — send a message to continue.",
+		logger.Redact(runErr.Error()),
+	)
 
 	s.publish(sessionID, sessionevent.Notification{Type: sessionevent.NotifyMessage, Message: message})
 }

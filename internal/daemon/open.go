@@ -105,8 +105,6 @@ func (s *svc) openSession(
 	in.ActiveSubagents = s.activeSubagentInfos(ctx, sessionID)
 	in.ActiveProcesses = s.activeProcessInfos(ctx, sessionID)
 
-	// Subagents never carry the instruction: the attribute marks roots only,
-	// and a resumed root reattaches it through this same open path.
 	if rec.ParentID == 0 && isManagementSurface(rec.Attributes) {
 		skill, err := loader.BuiltinSkill(loader.ManagementSkillName)
 		if err != nil {

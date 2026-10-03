@@ -27,10 +27,8 @@ type Store interface { //nolint:interfacebloat // Lifecycle commands share atomi
 	UpdateSessionModel(ctx context.Context, id int64, model, reasoningLevel string) error
 	GetSession(ctx context.Context, id int64) (*sessionstore.SessionRecord, error)
 	ListAllSessions(ctx context.Context) ([]*sessionstore.SessionRecord, error)
-	MarkSessionKilled(ctx context.Context, id int64) error
+	ListTree(ctx context.Context, rootID int64) ([]*sessionstore.SessionRecord, error)
 	UpdateSessionStatus(ctx context.Context, id int64, status sessionstore.SessionStatus) error
-	LoadMessageContentByID(ctx context.Context, sessionID, messageID int64) (string, error)
-	LoadCurrentTerminalRejection(ctx context.Context, sessionID int64) (*transcript.Message, error)
 	Enqueue(context.Context, sessionstore.Input) (*sessionstore.Enqueued, error)
 	Woken() <-chan struct{}
 	TakeWoken() []int64

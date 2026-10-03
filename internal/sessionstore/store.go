@@ -404,6 +404,37 @@ func (s *Store) ListAllSessions(ctx context.Context) ([]*SessionRecord, error) {
 	return records, nil
 }
 
+// ListTree returns the root and all its descendants in session order.
+func (s *Store) ListTree(ctx context.Context, rootID int64) ([]*SessionRecord, error) {
+	rows, err := s.db.QueryContext(
+		ctx,
+		`SELECT `+sessionColumns+` FROM sessions WHERE id = ? OR root_id = ? ORDER BY id`,
+		rootID,
+		rootID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("query session tree: %w", err)
+	}
+	defer rows.Close()
+
+	var records []*SessionRecord
+
+	for rows.Next() {
+		rec, scanErr := scanSessionRows(rows)
+		if scanErr != nil {
+			return nil, scanErr
+		}
+
+		records = append(records, rec)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate session tree: %w", err)
+	}
+
+	return records, nil
+}
+
 func (s *Store) FindSessionByProjectID(ctx context.Context, projectID int64) (*SessionRecord, error) {
 	row := s.db.QueryRowContext(
 		ctx,
@@ -443,14 +474,8 @@ func (s *Store) LatestActivityByProject(ctx context.Context, projectIDs []int64)
 	return result, nil
 }
 
-func (s *Store) MarkSessionKilled(ctx context.Context, id int64) error {
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("begin tx: %w", err)
-	}
-
-	defer func() { _ = tx.Rollback() }()
-
+// MarkSessionKilledTx kills the session and cancels its pending input within the caller's transaction.
+func MarkSessionKilledTx(ctx context.Context, tx *sql.Tx, id int64) error {
 	now := time.Now().UTC()
 
 	var parentID int64
@@ -482,21 +507,22 @@ func (s *Store) MarkSessionKilled(ctx context.Context, id int64) error {
 		return err
 	}
 
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("commit tx: %w", err)
-	}
-
 	return nil
 }
 
 func (s *Store) UpdateSessionStatus(ctx context.Context, id int64, status SessionStatus) error {
+	return s.WithTx(ctx, func(tx *sql.Tx) error { return UpdateSessionStatusTx(ctx, tx, id, status) })
+}
+
+// UpdateSessionStatusTx changes status within the caller's lifecycle transaction.
+func UpdateSessionStatusTx(ctx context.Context, tx *sql.Tx, id int64, status SessionStatus) error {
 	if !status.valid() {
 		return fmt.Errorf("invalid session status %q", status)
 	}
 
 	now := time.Now().UTC()
 
-	result, err := s.db.ExecContext(ctx, `UPDATE sessions SET status = ?, updated_at = ? WHERE id = ?`, status, now, id)
+	result, err := tx.ExecContext(ctx, `UPDATE sessions SET status = ?, updated_at = ? WHERE id = ?`, status, now, id)
 	if err != nil {
 		return fmt.Errorf("update session status: %w", err)
 	}

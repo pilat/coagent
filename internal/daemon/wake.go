@@ -45,13 +45,17 @@ func (s *svc) startWake() {
 				return
 			case <-s.store.Woken():
 				for _, id := range s.store.TakeWoken() {
-					s.refreshBudgetTimer(ctx, id)
+					s.refreshBudget(ctx, id)
 
 					if err := s.inputReady(ctx, id); err != nil {
 						logger.Ctx(ctx).
 							Named("daemon.input").
 							Warn("input_ready_failed", zap.Int64("session_id", id), zap.Error(err))
 					}
+				}
+			case <-s.clock.dueSignal():
+				for _, id := range s.clock.takeDue() {
+					s.budgetDue(ctx, id)
 				}
 			}
 		}

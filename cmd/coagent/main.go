@@ -562,8 +562,7 @@ func startCore(
 	sessionStore := sessionstore.NewStore(db)
 	scheduleStore := schedule.NewStore(db, sessionStore)
 	curatedStore := memory.NewCuratedStore(db)
-	linkStore := subagent.NewStore(db)
-	subagentTx := subagent.NewTransactions(db, sessionStore)
+	linkStore := subagent.NewStore(db, sessionStore)
 	applier := configapply.New(ops, sessionStore)
 
 	budgetSvc := budget.New(budget.PolicyStore(sessionStore))
@@ -587,7 +586,6 @@ func startCore(
 		buildInput,
 		sessionStore,
 		linkStore,
-		subagentTx,
 		budgetSvc,
 		backgroundprocess.NewStore(db, sessionStore),
 		progressSvc,

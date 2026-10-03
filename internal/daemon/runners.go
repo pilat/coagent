@@ -365,16 +365,14 @@ func (s *svc) drain(ctx context.Context) {
 		}
 
 		if _, ok := errors.AsType[refusal](err); ok {
-			logger.Ctx(ctx).
-				Named("daemon.admission").
+			logger.Ctx(ctx).Named("daemon.admission").
 				Info("skip_unstartable_waiting_runner", zap.Int64("session_id", w.sessionID), zap.Error(err))
 
 			continue
 		}
 
 		s.runners.wait(w)
-		logger.Ctx(ctx).
-			Named("daemon.admission").
+		logger.Ctx(ctx).Named("daemon.admission").
 			Error("waiting_runner_start_failed", zap.Int64("session_id", w.sessionID), zap.Error(err))
 
 		if s.runners.scheduleRetry() {

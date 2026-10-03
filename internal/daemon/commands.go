@@ -30,8 +30,7 @@ func (s *svc) sendToSession(ctx context.Context, sessionID int64, prompt string)
 			}
 		}
 
-		// The park drain won the arbitration CAS; the retry is the user's next
-		// message once the parked root accepts input again.
+		// A park-drain winner requires a new user input after parking completes.
 		if errors.Is(err, budget.ErrConflict) {
 			return fmt.Errorf(
 				"session %d is parking after a budget checkpoint — send the message again once it stops",
@@ -108,8 +107,7 @@ func (s *svc) SendToSessionResolved(ctx context.Context, sessionID int64, prompt
 	return sessionID, nil
 }
 
-// Model publication and construction share the tree fence so the record and
-// the next activation cannot disagree about which client to adopt.
+// The tree fence keeps construction and the persisted model choice consistent.
 func (s *svc) SetModel(ctx context.Context, sessionID int64, model, reasoningLevel string) error {
 	if err := s.models.configured(model); err != nil {
 		return err
@@ -126,14 +124,10 @@ func (s *svc) SetModel(ctx context.Context, sessionID int64, model, reasoningLev
 		return fmt.Errorf("load session for model switch: %w", err)
 	}
 
-	budgetRecord, budgetErr := s.budgetSvc.Get(ctx, sessionRootID(record))
-	if budgetErr == nil && budgetRecord.State == budget.Armed &&
-		budgetRecord.CostLimitUSD != nil && !s.models.priced(model) {
+	if err := s.checkBudgetModel(ctx, sessionRootID(record), model); errors.Is(err, errUnpricedModel) {
 		return errors.New("cannot switch an armed budget tree to a model without catalog pricing")
-	}
-
-	if budgetErr != nil && !errors.Is(budgetErr, budget.ErrNotFound) {
-		return fmt.Errorf("load budget for model switch: %w", budgetErr)
+	} else if err != nil {
+		return fmt.Errorf("load budget for model switch: %w", err)
 	}
 
 	client, section, err := sessionbuild.BuildClient(s.build.Config, model, reasoningLevel)
@@ -161,8 +155,8 @@ func (s *svc) SetModel(ctx context.Context, sessionID int64, model, reasoningLev
 }
 
 func (s *svc) SetAttributes(ctx context.Context, sessionID int64, attrs map[string]any) error {
-	s.routeMu.Lock()
-	defer s.routeMu.Unlock()
+	s.routes.claim.Lock()
+	defer s.routes.claim.Unlock()
 
 	rec, err := s.store.GetSession(ctx, sessionID)
 	if err != nil {
@@ -200,9 +194,7 @@ func (s *svc) SetAttributes(ctx context.Context, sessionID int64, attrs map[stri
 		return fmt.Errorf("set session attributes: %w", err)
 	}
 
-	s.childMu.Lock()
-	s.ownerCache[sessionID] = requestedOwner
-	s.childMu.Unlock()
+	s.routes.setOwner(sessionID, requestedOwner)
 
 	return nil
 }
@@ -393,12 +385,7 @@ func (s *svc) enqueueUserSessionInput(
 	return result.Input, nil
 }
 
-func (s *svc) send(
-	ctx context.Context,
-	projectID int64,
-	prompt, model string,
-	attrs map[string]any,
-) (int64, error) {
+func (s *svc) send(ctx context.Context, projectID int64, prompt, model string, attrs map[string]any) (int64, error) {
 	workDir, err := s.store.GetProjectWorkDir(ctx, projectID)
 	if err != nil {
 		return 0, fmt.Errorf("resolve project %d: %w", projectID, err)

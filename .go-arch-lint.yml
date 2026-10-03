@@ -107,7 +107,7 @@ deps:
   sessionstore:
     mayDependOn: [budget, controllerapi, progress, todo, transcript]
   subagent:
-    mayDependOn: [loader, registry, sessionstore, tool, transcript]
+    mayDependOn: [loader, logger, registry, sessionstore, tool, transcript]
   mcpstore:
     mayDependOn: [coagenthome, tool]
   sessionbus:

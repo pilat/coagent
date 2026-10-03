@@ -484,9 +484,11 @@ compaction summaries commit usage, fire comparison, skipped returned-tool
 results and checkpoint intent in one session-store transaction. The daemon
 closes admission before a generation drains and parks; managed park workers are
 cancelled and joined at shutdown. Startup reconciles armed and half-parked
-generations before normal session recovery. The daemon installs wall-time timers
-at boot and after committed budget mutations, and retries failed deadline
-observations and unfinished parks without reviving a newer generation.
+generations before normal session recovery. A synchronized budget clock sends
+due roots to the inbox wake worker; timer callbacks never perform ledger writes.
+Failed deadline observations and unfinished parks remain retryable without
+reviving a newer generation. Parking joins runners before taking the tree fence,
+then rechecks liveness under that fence.
 The next ordinary model-bound root
 input atomically releases a fired checkpoint and resumes only the root.
 
@@ -549,9 +551,10 @@ answering a newer call.
 
 ### Subagent creation and completion
 
-The `subagent` package owns link vocabulary and persistence. Ordinary queries
-use `subagent.Store`; child creation, terminalization, completion delivery and
-re-arming use its explicit cross-table `Transactions` boundary ([ADR-0037](docs/adr/0037-subagent-ledger-owns-cross-table-transitions.md)).
+The `subagent` package owns link vocabulary and persistence through one
+`subagent.Store`. Creation, finalization, kill, resume, re-arming and delivery
+each commit their link mutation with the required session or inbox changes in
+one transaction ([ADR-0066](docs/adr/0066-daemon-bounded-orchestration-core.md)).
 
 The daemon owns runner admission and completion ordering, while the child session owns its own
 loop and transcript. Link creation records the parent, child, activation
@@ -820,9 +823,10 @@ progress and subscriptions directly from their owners. The daemon owns capacity
 decisions and `sessionbus` owns fan-out.
 The daemon owns concrete runner state, one synchronized runner set with capacity
 counters and a FIFO waiting queue, and one joined lifetime for daemon workers.
-Its tree
-fence serializes spawn and process admission against stop, kill and clear;
-terminalization and completion delivery use the durable subagent ledger.
+Tree operations read only the root and its descendants into one snapshot. The
+tree fence serializes spawn and process admission against stop, kill and clear,
+and precedes owner-claim and publication-cache locks. Terminalization and
+completion delivery use the durable subagent ledger.
 The lifecycle composition boundary is recorded in
 [ADR-0065](docs/adr/0065-daemon-owns-lifecycle-composition.md); the bounded
 orchestration direction is recorded in
