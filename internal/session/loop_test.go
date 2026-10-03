@@ -22,6 +22,68 @@ import (
 	"github.com/pilat/coagent/internal/tool/builtin"
 )
 
+func TestLiveOutputs(t *testing.T) {
+	drafts := []sessionstore.Output{
+		{Content: "scheduled", Attributes: map[string]any{"source": "scheduler"}, PersistOnly: true},
+		{Content: "direct", Key: "tool:call:direct:0", PersistOnly: true},
+		{Content: "final"},
+	}
+	committed := []*sessionstore.OutputCommit{
+		{LiveContent: "scheduled", PersistOnly: true},
+		{LiveContent: "direct", PersistOnly: true},
+		{LiveContent: "final", Content: "final with progress footer"},
+	}
+	tests := []struct {
+		name          string
+		outputEnabled bool
+		commit        sessionstore.Commit
+		result        sessionstore.CommitResult
+		want          []*sessionstore.OutputCommit
+	}{
+		{
+			name:          "outbox filters persist-only outputs",
+			outputEnabled: true,
+			commit:        sessionstore.Commit{Outputs: drafts},
+			result:        sessionstore.CommitResult{Outputs: committed},
+			want:          []*sessionstore.OutputCommit{committed[2]},
+		},
+		{
+			name: "outbox keeps a final reply matching direct output text",
+			commit: sessionstore.Commit{Outputs: []sessionstore.Output{
+				{Content: "same", Key: "tool:call:direct:0", PersistOnly: true},
+				{Content: "same"},
+			}},
+			result: sessionstore.CommitResult{Outputs: []*sessionstore.OutputCommit{
+				{LiveContent: "same", PersistOnly: true},
+				{LiveContent: "same", Content: "same with progress footer"},
+			}},
+			want: []*sessionstore.OutputCommit{{LiveContent: "same", Content: "same with progress footer"}},
+		},
+		{
+			name:   "drafts filter persist-only outputs",
+			commit: sessionstore.Commit{Outputs: drafts[:2], Unfired: sessionstore.Parts{Outputs: drafts[2:]}},
+			want:   []*sessionstore.OutputCommit{{LiveContent: "final"}},
+		},
+		{
+			name: "fired budget excludes unfired drafts",
+			commit: sessionstore.Commit{
+				Outputs: []sessionstore.Output{{Content: "checkpoint"}},
+				Unfired: sessionstore.Parts{Outputs: drafts},
+			},
+			result: sessionstore.CommitResult{BudgetFired: true},
+			want:   []*sessionstore.OutputCommit{{LiveContent: "checkpoint"}},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			s := &Session{outputEnabled: tt.outputEnabled}
+			assert.Equal(t, tt.want, s.liveOutputs(tt.commit, &tt.result))
+		})
+	}
+}
+
 // A read-heavy parallel fixture reaches the same final answer in fewer model
 // iterations than its serial twin and records exactly one native tool_schedule
 // summary with the decided field meanings. The fallback twin records one

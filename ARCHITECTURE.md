@@ -833,6 +833,8 @@ owner tools under the agent-type allowlist. `sessionprompt` renders system and
 transcript context. The loop receives those prepared values and emits live
 notifications through its sole outward events port. Live answer notifications
 retain the raw answer; durable manager output includes its captured final footer.
+Scheduled announcements and tool direct outputs reach managers only through
+the outbox; their commit metadata excludes them from live message events.
 Ownerless sessions publish live answers without creating manager outbox rows.
 Model changes are prepared
 by session assembly before their durable record is written, then transferred to

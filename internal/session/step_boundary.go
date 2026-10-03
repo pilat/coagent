@@ -477,11 +477,12 @@ func (s *Session) acceptBoundarySchedule(batch *boundaryBatch, input *sessionsto
 	c.Outputs = append(
 		c.Outputs,
 		sessionstore.Output{
-			Type:       sessionstore.OutputMessagePersistent,
-			Content:    "⏰ scheduled\n\n" + input.RawContent,
-			Key:        "schedule:" + deliveryKey + ":announcement",
-			Attributes: map[string]any{"source": "scheduler"},
-			MessageRef: -1,
+			Type:        sessionstore.OutputMessagePersistent,
+			Content:     "⏰ scheduled\n\n" + input.RawContent,
+			PersistOnly: true,
+			Key:         "schedule:" + deliveryKey + ":announcement",
+			Attributes:  map[string]any{"source": "scheduler"},
+			MessageRef:  -1,
 		},
 	)
 	batch.accepted = true

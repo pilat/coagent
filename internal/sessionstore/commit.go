@@ -135,6 +135,7 @@ func commitOutputsTx(ctx context.Context, tx *sql.Tx, c Commit, outputs []Output
 
 		if out != nil {
 			out.LiveContent = output.Content
+			out.PersistOnly = output.PersistOnly
 			result.Outputs = append(result.Outputs, out)
 		}
 	}

@@ -316,10 +316,11 @@ func recordToolResults(
 			c.Outputs = append(
 				c.Outputs,
 				sessionstore.Output{
-					Type:       sessionstore.OutputMessagePersistent,
-					Content:    text,
-					Key:        fmt.Sprintf("tool:%s:direct:%d", r.toolCall.ID, j),
-					MessageRef: -1,
+					Type:        sessionstore.OutputMessagePersistent,
+					Content:     text,
+					Key:         fmt.Sprintf("tool:%s:direct:%d", r.toolCall.ID, j),
+					PersistOnly: true,
+					MessageRef:  -1,
 				},
 			)
 		}

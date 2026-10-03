@@ -77,6 +77,8 @@ type StatePatch struct {
 }
 
 type Output struct {
+	// PersistOnly outputs reach the manager through the outbox only, never as live events.
+	PersistOnly   bool
 	Type          OutputType
 	Content       string
 	Attributes    map[string]any

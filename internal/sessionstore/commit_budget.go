@@ -55,11 +55,6 @@ func observeArmedCommitBudgetTx(ctx context.Context, tx *sql.Tx, c Commit, resul
 		content = text + "\n\n" + content
 	}
 
-	_, err = outputOwner(ctx, tx, c.RootID)
-	if err != nil && !errors.Is(err, ErrOutputOwner) && !errors.Is(err, ErrOutputNotRoot) {
-		return err
-	}
-
 	_, output, err := fireBudgetTx(ctx, tx, c.RootID, result.Budget.Generation, reason, delta, content)
 	if err != nil {
 		return err

@@ -275,18 +275,10 @@ func (s *Session) liveOutputs(c sessionstore.Commit, result *sessionstore.Commit
 		outputs = append(outputs, c.Unfired.Outputs...)
 	}
 
-	muted := make(map[string]bool)
-
-	for _, output := range outputs {
-		if output.Attributes["source"] == "scheduler" || strings.HasPrefix(output.Key, "tool:") {
-			muted[output.Content] = true
-		}
-	}
-
 	if s.outputEnabled || len(result.Outputs) > 0 {
 		live := make([]*sessionstore.OutputCommit, 0, len(result.Outputs))
 		for _, output := range result.Outputs {
-			if !muted[output.LiveContent] {
+			if !output.PersistOnly {
 				live = append(live, output)
 			}
 		}
@@ -296,7 +288,7 @@ func (s *Session) liveOutputs(c sessionstore.Commit, result *sessionstore.Commit
 
 	live := make([]*sessionstore.OutputCommit, 0, len(outputs))
 	for _, output := range outputs {
-		if !muted[output.Content] {
+		if !output.PersistOnly {
 			live = append(live, &sessionstore.OutputCommit{LiveContent: output.Content})
 		}
 	}
