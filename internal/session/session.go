@@ -40,6 +40,7 @@ type Input struct {
 	OutputEnabled            bool
 	PreserveStopped          bool
 	Schedules                string
+	Status                   string
 	BackgroundSnapshot       string
 	CompactionDeferAnnounced bool
 }
@@ -68,6 +69,7 @@ type Session struct {
 	prompt          *sessionprompt.Builder
 	events          Events
 	schedules       string
+	status          string
 	outputEnabled   bool
 	preserveStopped bool
 	budgetFired     bool
@@ -103,6 +105,7 @@ type Session struct {
 // New installs a prepared session and restores its durable transcript.
 func New(ctx context.Context, in Input) (*Session, error) {
 	r := in.Record
+
 	s := &Session{
 		imageAuthorizer:          in.ImageAuthorizer,
 		workDir:                  in.Prompt.WorkDir,
@@ -121,6 +124,7 @@ func New(ctx context.Context, in Input) (*Session, error) {
 		loopDetector:             newLoopDetector(),
 		stagedCalls:              in.ExternalCalls,
 		schedules:                in.Schedules,
+		status:                   in.Status,
 		events:                   in.Events,
 		outputEnabled:            in.OutputEnabled,
 		preserveStopped:          in.PreserveStopped,
@@ -131,10 +135,12 @@ func New(ctx context.Context, in Input) (*Session, error) {
 	if s.rootID == 0 {
 		s.rootID = s.id
 	}
+
 	s.ms = newMessageStore(in.Store, r.ID)
 	if err := s.ms.reloadMessages(ctx); err != nil {
 		return nil, fmt.Errorf("restore transcript: %w", err)
 	}
+
 	s.installPersistedBaseline(r.ContextBaseline())
 	s.seedResumeCompletion(
 		&sessionstore.CompletionCheckState{
@@ -143,11 +149,13 @@ func New(ctx context.Context, in Input) (*Session, error) {
 			EmptyStopStreak:     r.EmptyStopStreak,
 		},
 	)
+
 	if len(s.ms.getMessages()) == 0 {
 		if err := s.persistState(ctx, 0, sessionstore.SessionStatusActive); err != nil {
 			return nil, err
 		}
 	}
+
 	return s, nil
 }
 
@@ -164,6 +172,7 @@ func (s *Session) Close() {
 func (s *Session) RequestCompaction() {
 	s.ms.mu.Lock()
 	defer s.ms.mu.Unlock()
+
 	s.pendingCompaction = true
 }
 

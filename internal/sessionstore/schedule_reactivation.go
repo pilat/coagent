@@ -15,12 +15,15 @@ func (s *Store) ReactivateForSchedule(ctx context.Context, sessionID int64) (boo
 	if err != nil {
 		return false, fmt.Errorf("reactivate scheduled root %d: %w", sessionID, err)
 	}
+
 	changed, err := result.RowsAffected()
 	if err != nil {
 		return false, fmt.Errorf("reactivation rows affected: %w", err)
 	}
+
 	if changed > 0 {
 		s.recordWoken(sessionID)
 	}
+
 	return changed > 0, nil
 }

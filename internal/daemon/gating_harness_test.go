@@ -21,7 +21,6 @@ import (
 	"github.com/pilat/coagent/internal/llmwire"
 	"github.com/pilat/coagent/internal/migrate"
 	"github.com/pilat/coagent/internal/schedule"
-	"github.com/pilat/coagent/internal/session"
 	"github.com/pilat/coagent/internal/sessionstore"
 	"github.com/pilat/coagent/internal/subagent"
 	"github.com/pilat/coagent/internal/tool"
@@ -124,10 +123,10 @@ func newGatingHarness(
 	t.Cleanup(func() { _ = db.Close() })
 	require.NoError(t, migrate.Run(ctx, db, dbPath))
 
-	store := NewStore(db)
+	store := sessionstore.NewStore(db)
 	sessStore := sessionstore.NewStore(db)
 	links := subagent.NewStore(db)
-	schedStore := schedule.NewStore(db)
+	schedStore := schedule.NewStore(db, sessStore)
 
 	workDir := t.TempDir()
 	writeProjectAgents(t, workDir, agents)
@@ -135,32 +134,22 @@ func newGatingHarness(
 	rec := &schemaRecorder{names: make(map[int64]map[string]bool)}
 	cfg := &config.Config{WorkDir: workDir, Model: "fake-model"}
 
-	factory := session.NewFactoryWithOptions(
-		cfg, nil, nil, sessStore, sessStore, nil, nil, nil,
-		session.WithLLMClientFactory(func(_ *config.Config) (llm.Client, error) {
-			return &recordingLLM{respond: respond, rec: rec}, nil
-		}),
-	)
+	factory := scriptedBuildInput(t, cfg, sessStore, nil, func(_ *config.Config) (llm.Client, error) {
+		return &recordingLLM{respond: respond, rec: rec}, nil
+	})
 
-	mgr, _ := newSvc(
+	mgr, _ := newScenarioDaemon(
 		context.Background(),
 		factory,
-		store,
-		sessStore,
-		sessStore,
-		sessStore,
-		sessStore,
-		sessStore,
-		sessStore,
 		sessStore,
 		links,
-		subagent.NewTransactions(db),
+		subagent.NewTransactions(db, sessStore),
 		budget.New(sessStore),
-		sessStore,
-		schedule.NewService(schedStore),
+		schedule.NewService(schedStore, sessStore),
 		func() string { return "fake-model" },
+		db,
 	)
-	mgr.applier = configapply.New(newTestConfigOps(t, dir), func() {})
+	mgr.applier = configapply.New(newTestConfigOps(t, dir), sessStore)
 
 	pid, err := store.GetOrCreateProject(ctx, workDir)
 	require.NoError(t, err)

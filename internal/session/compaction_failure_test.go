@@ -13,7 +13,7 @@ import (
 	"github.com/pilat/coagent/internal/llmwire"
 )
 
-func seedCompactableTranscript(ctx context.Context, t *testing.T, s *svc) {
+func seedCompactableTranscript(ctx context.Context, t *testing.T, s *Session) {
 	t.Helper()
 
 	messages := []llmwire.Message{
@@ -26,9 +26,7 @@ func seedCompactableTranscript(ctx context.Context, t *testing.T, s *svc) {
 
 	for i := range messages {
 		message := messages[i]
-		s.ms.mu.Lock()
-		require.NoError(t, s.ms.appendMessageLocked(ctx, &message))
-		s.ms.mu.Unlock()
+		require.NoError(t, appendTestMessage(ctx, s.ms, &message))
 	}
 }
 
@@ -92,7 +90,8 @@ func TestCompactLeavesTheTranscriptIntactOnFailure(t *testing.T) {
 			store := &compactionRecordingStore{nextID: 1}
 			llm := tc.llm()
 			s := newCompactionTestSvc(llm)
-			s.ms = newMessageStore(store, 1, nil)
+			s.store = store
+			s.ms = newMessageStore(store, 1)
 
 			seedCompactableTranscript(ctx, t, s)
 			before := s.ms.getMessages()
@@ -133,7 +132,8 @@ func TestCompactKeepsTheOldTranscriptWhenTheDurableSwapFails(t *testing.T) {
 		contextWindow: 32000,
 	}
 	s := newCompactionTestSvc(llm)
-	s.ms = newMessageStore(store, 1, nil)
+	s.store = store
+	s.ms = newMessageStore(store, 1)
 
 	seedCompactableTranscript(ctx, t, s)
 
@@ -159,7 +159,7 @@ func TestCompactHeaderAloneOverThreshold(t *testing.T) {
 
 	// The header is under the trigger but over half the window, so no legal
 	// summarizer request exists at all.
-	s.ms.setMessages([]llmwire.Message{
+	setTestMessages(s, []llmwire.Message{
 		{Role: llmwire.RoleUser, Content: agentsMDMessagePrefix + strings.Repeat("p", 100000)},
 		compactionUserMessage("task"),
 		compactionAssistantCall("c1", "work"),
@@ -194,7 +194,7 @@ func TestCompactRefusesANonRelievingCandidate(t *testing.T) {
 	for i := range 5 {
 		payload = append(payload, roundTokens(fmt.Sprintf("c%d", i), 100, 8000)...)
 	}
-	s.ms.setMessages(payload)
+	setTestMessages(s, payload)
 
 	ok, err := s.compact(t.Context(), nil)
 
@@ -217,8 +217,9 @@ func TestCompactionMakesExactlyOneModelCall(t *testing.T) {
 		response:      &llmwire.Response{Text: validSummary, FinishType: llmwire.FinishStop},
 	}
 	s := newCompactionTestSvc(llm)
-	s.ms = newMessageStore(store, 1, nil)
-	s.ms.setMessages(oversizedTranscript(32000))
+	s.store = store
+	s.ms = newMessageStore(store, 1)
+	setTestMessages(s, oversizedTranscript(32000))
 
 	require.NoError(t, s.compactIfNeeded(ctx, 32000))
 
@@ -305,7 +306,7 @@ func TestSummarizerToolCallGetsOneNudgeAndRetries(t *testing.T) {
 		},
 	}
 	s := newCompactionTestSvc(llm)
-	s.ms.setMessages(oversizedTranscript(32000))
+	setTestMessages(s, oversizedTranscript(32000))
 
 	ok, err := s.compact(ctx, nil)
 	require.NoError(t, err)

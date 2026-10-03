@@ -18,7 +18,6 @@ import (
 	"github.com/pilat/coagent/internal/mcpstore"
 	"github.com/pilat/coagent/internal/migrate"
 	"github.com/pilat/coagent/internal/schedule"
-	"github.com/pilat/coagent/internal/session"
 	"github.com/pilat/coagent/internal/sessionstore"
 	"github.com/pilat/coagent/internal/subagent"
 	"github.com/pilat/coagent/internal/tool"
@@ -37,6 +36,7 @@ func TestScenario_MCPDisablePersistsAcrossDaemonRestart(t *testing.T) {
 	respond := disableScenarioResponder(fake)
 
 	first := newMCPRestartHarness(t, dbPath, workDir, respond)
+	first.startInboxWake()
 	sessionID, err := first.mgr.Send(first.ctx, first.projectID, "register the fake server", "fake-model", nil)
 	require.NoError(t, err)
 	// waitIdle, not just the text: the candidate stop carries the same text as
@@ -46,6 +46,7 @@ func TestScenario_MCPDisablePersistsAcrossDaemonRestart(t *testing.T) {
 	})
 	first.mgr.waitIdle(sessionID)
 
+	first.startInboxWake()
 	require.NoError(t, first.mgr.SendToSession(first.ctx, sessionID, "USE_IT now"))
 	first.waitUntil("MCP call finishes", func() bool {
 		return lastAssistantTextDTO(first.parentMessages(sessionID)) == "used before restart"
@@ -53,6 +54,7 @@ func TestScenario_MCPDisablePersistsAcrossDaemonRestart(t *testing.T) {
 	first.mgr.waitIdle(sessionID)
 	assert.GreaterOrEqual(t, fake.count(t, "spawn"), 1)
 
+	first.startInboxWake()
 	require.NoError(t, first.mgr.SendToSession(first.ctx, sessionID, "DISABLE_IT now"))
 	first.waitUntil("disable finishes", func() bool {
 		return lastAssistantTextDTO(first.parentMessages(sessionID)) == "disabled"
@@ -66,6 +68,7 @@ func TestScenario_MCPDisablePersistsAcrossDaemonRestart(t *testing.T) {
 
 	second := newMCPRestartHarness(t, dbPath, workDir, respond)
 	require.NoError(t, second.mgr.Start(second.ctx))
+	second.startInboxWake()
 	require.NoError(t, second.mgr.SendToSession(second.ctx, sessionID, "USE_AFTER_RESTART now"))
 	second.waitUntil("post-restart run finishes", func() bool {
 		return lastAssistantTextDTO(second.parentMessages(sessionID)) == "used after restart"
@@ -114,12 +117,14 @@ func TestScenario_MCPRemoveClosesStackProcessBeforeTheNextRun(t *testing.T) {
 	respond := removeScenarioResponder(t, fake)
 	h := newMCPRestartHarness(t, dbPath, workDir, respond)
 
+	h.startInboxWake()
 	sessionID, err := h.mgr.Send(h.ctx, h.projectID, "register the fake server", "fake-model", nil)
 	require.NoError(t, err)
 	h.waitUntil("registration finishes", func() bool {
 		return lastAssistantTextDTO(h.parentMessages(sessionID)) == "registered"
 	})
 	h.mgr.waitIdle(sessionID)
+	h.startInboxWake()
 	require.NoError(t, h.mgr.SendToSession(h.ctx, sessionID, "USE_IT now"))
 	h.waitUntil("MCP call finishes", func() bool {
 		return lastAssistantTextDTO(h.parentMessages(sessionID)) == "used before remove"
@@ -127,6 +132,7 @@ func TestScenario_MCPRemoveClosesStackProcessBeforeTheNextRun(t *testing.T) {
 	h.mgr.waitIdle(sessionID)
 	assert.GreaterOrEqual(t, fake.count(t, "spawn"), 1)
 
+	h.startInboxWake()
 	require.NoError(t, h.mgr.SendToSession(h.ctx, sessionID, "REMOVE_IT now"))
 	h.waitUntil("removal finishes", func() bool {
 		return lastAssistantTextDTO(h.parentMessages(sessionID)) == "removed"
@@ -134,6 +140,7 @@ func TestScenario_MCPRemoveClosesStackProcessBeforeTheNextRun(t *testing.T) {
 	h.mgr.waitIdle(sessionID)
 	fake.waitForExit(t)
 	spawnsAfterRemove := fake.count(t, "spawn")
+	h.startInboxWake()
 	require.NoError(t, h.mgr.SendToSession(h.ctx, sessionID, "USE_AFTER_REMOVE now"))
 	h.waitUntil("post-removal run finishes", func() bool {
 		return lastAssistantTextDTO(h.parentMessages(sessionID)) == "used after remove"
@@ -196,35 +203,25 @@ func newMCPRestartHarness(
 	require.NoError(t, err)
 	require.NoError(t, migrate.Run(ctx, db, dbPath))
 
-	store := NewStore(db)
+	store := sessionstore.NewStore(db)
 	sessStore := sessionstore.NewStore(db)
 	links := subagent.NewStore(db)
-	schedStore := schedule.NewStore(db)
+	schedStore := schedule.NewStore(db, sessStore)
 	registry := mcpstore.NewStore(db)
 	cfg := &config.Config{WorkDir: workDir, Model: "fake-model"}
-	factory := session.NewFactoryWithOptions(
-		cfg, nil, nil, sessStore, sessStore, nil, registry, nil,
-		session.WithLLMClientFactory(func(_ *config.Config) (llm.Client, error) {
-			return &scriptedLLM{respond: respond}, nil
-		}),
-	)
-	mgr, _ := newSvc(
+	factory := scriptedBuildInput(t, cfg, sessStore, registry, func(_ *config.Config) (llm.Client, error) {
+		return &scriptedLLM{respond: respond}, nil
+	})
+	mgr, _ := newScenarioDaemon(
 		context.Background(),
 		factory,
-		store,
-		sessStore,
-		sessStore,
-		sessStore,
-		sessStore,
-		sessStore,
-		sessStore,
 		sessStore,
 		links,
-		subagent.NewTransactions(db),
+		subagent.NewTransactions(db, sessStore),
 		budget.New(sessStore),
-		sessStore,
-		schedule.NewService(schedStore),
+		schedule.NewService(schedStore, sessStore),
 		func() string { return "fake-model" },
+		db,
 	)
 	mgr.mcpStore = registry
 	projectID, err := store.GetOrCreateProject(ctx, workDir)

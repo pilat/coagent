@@ -25,12 +25,7 @@ import (
 	"github.com/pilat/coagent/internal/tool/builtin"
 )
 
-// The end-to-end pipeline per ADR-0034, driven through production components:
-// a synthetic metadata turn carries no refs anywhere (it never crossed
-// Telegram's string boundary), the model calls read on the path, the read tool
-// returns an ImageRef, the ref persists on the role-tool row, and the wire a
-// real driver sends carries pixels for a vision catalog but placeholders for a
-// text-only one.
+// Metadata is plain text until the real read result supplies a durable image reference.
 func TestImageTurns_ReadThroughDriverProjection(t *testing.T) {
 	ctx := context.Background()
 
@@ -59,18 +54,19 @@ func TestImageTurns_ReadThroughDriverProjection(t *testing.T) {
 	sess, err := store.CreateSession(ctx, projectID, "model", "", nil)
 	require.NoError(t, err)
 
-	s, _ := newImagePlumbAgent(t)
+	s := newTestAgent()
+	s.id, s.rootID, s.store = sess.ID, sess.ID, store
 	s.registry = stack.Registry
-	s.ms = newMessageStore(store, sess.ID, nil)
+	s.ms = newMessageStore(store, sess.ID)
 
 	// The synthetic upload turn is plain text everywhere — no refs exist yet.
-	require.NoError(t, s.ms.addUserMessage(ctx,
+	require.NoError(t, appendTestUser(ctx, s.ms,
 		"The user attached a file:\n- name: photo.jpg\n- size: 12B\n- path: "+imagePath+
 			"\n\nUse the read tool on this path to view the image."))
 
 	calls := []llmwire.ToolCall{{ID: "c1", Name: "read", Arguments: json.RawMessage(`{"file_path":"image.png"}`)}}
-	require.NoError(t, s.ms.addAssistantMessage(
-		ctx,
+	require.NoError(t, appendTestAssistant(
+		ctx, s.ms,
 		&llmwire.Response{Text: "", ToolCalls: calls},
 	))
 	require.NoError(t, executeToolCalls(ctx, s, calls))
@@ -129,6 +125,8 @@ func TestImageTurns_ReadThroughDriverProjection(t *testing.T) {
 			clientV, err := llm.NewClientWithModel(cfg, "m")
 			require.NoError(t, err)
 
+			t.Cleanup(func() { require.NoError(t, clientV.Close()) })
+			clientV.SetImageAuthorizer(stack.Access())
 			resp, chatErr := clientV.Chat(ctx, "", msgs, nil)
 			require.NoError(t, chatErr)
 			assert.Equal(t, "ok", resp.Text)

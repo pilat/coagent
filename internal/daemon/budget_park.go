@@ -15,7 +15,8 @@ func (s *svc) parkBudgetTree(ctx context.Context, record *budget.Record) {
 	if record == nil || record.State != budget.Fired || record.ParkOwner == "" {
 		return
 	}
-	defer s.refreshBudgetTimer(s.budgetCtx, record.RootSessionID)
+	defer s.refreshBudgetTimer(context.WithoutCancel(ctx), record.RootSessionID)
+
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 
@@ -32,39 +33,23 @@ func (s *svc) parkBudgetTree(ctx context.Context, record *budget.Record) {
 		}
 	}
 
-	var unlock func()
-
-	for {
-		for s.treeHasActiveLoop(ctx, record.RootSessionID) {
-			select {
-			case <-ctx.Done():
-				return
-			case <-time.After(50 * time.Millisecond):
-			}
-		}
-
-		var err error
-
-		unlock, err = s.lockSessionTree(ctx, record.RootSessionID)
-		if err != nil {
+	unlock, err := s.lockIdleBudgetTree(ctx, record.RootSessionID)
+	if err != nil {
+		if ctx.Err() == nil {
 			logger.Ctx(ctx).Named("daemon.budget").Warn("lock_park_tree_failed", zap.Error(err))
-			return
 		}
 
-		if s.treeHasActiveLoop(ctx, record.RootSessionID) {
-			unlock()
-			continue
-		}
-
-		break
+		return
 	}
 
 	defer unlock()
+
 	current, err := s.budgetSvc.Get(ctx, record.RootSessionID)
 	if err != nil {
 		logger.Ctx(ctx).Named("daemon.budget").Warn("load_park_generation", zap.Error(err))
 		return
 	}
+
 	if current.Generation != record.Generation || current.State != budget.Fired || current.ParkOwner != owner ||
 		(current.ParkPhase != "requested" && current.ParkPhase != "draining") {
 		return
@@ -88,6 +73,7 @@ func (s *svc) parkBudgetTree(ctx context.Context, record *budget.Record) {
 func (s *svc) startBudgetPark(record *budget.Record) {
 	s.budgetTimerMu.Lock()
 	defer s.budgetTimerMu.Unlock()
+
 	if record == nil || s.shuttingDown.Load() {
 		return
 	}
@@ -118,4 +104,27 @@ func (s *svc) treeHasActiveLoop(ctx context.Context, rootID int64) bool {
 	}
 
 	return false
+}
+
+func (s *svc) lockIdleBudgetTree(ctx context.Context, rootID int64) (func(), error) {
+	for {
+		for s.treeHasActiveLoop(ctx, rootID) {
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-time.After(50 * time.Millisecond):
+			}
+		}
+
+		unlock, err := s.lockSessionTree(ctx, rootID)
+		if err != nil {
+			return nil, err
+		}
+
+		if !s.treeHasActiveLoop(ctx, rootID) {
+			return unlock, nil
+		}
+
+		unlock()
+	}
 }

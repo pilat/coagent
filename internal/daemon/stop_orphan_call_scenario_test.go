@@ -33,6 +33,7 @@ func TestScenario_StopOrdinaryBashDoesNotReplayAfterNewInputOrRestart(t *testing
 		t.Run(map[bool]string{false: "same daemon", true: "after restart"}[restart], func(t *testing.T) {
 			dbPath := filepath.Join(t.TempDir(), "ordinary-bash.db")
 			first := newSubagentHarnessOnDB(t, dbPath, respond, nil)
+			first.startInboxWake()
 			firstID, err := first.mgr.Send(first.ctx, first.projectID, "watch checks", "fake-model", nil)
 			require.NoError(t, err)
 			first.waitUntil("ordinary bash started", func() bool {
@@ -58,6 +59,7 @@ func TestScenario_StopOrdinaryBashDoesNotReplayAfterNewInputOrRestart(t *testing
 				defer d.shutdown()
 			}
 
+			d.startInboxWake()
 			require.NoError(t, d.mgr.SendToSession(d.ctx, firstID, "what happened?"))
 			d.mgr.waitIdle(firstID)
 			final := d.parentMessages(firstID)
@@ -90,6 +92,7 @@ func TestScenario_StopThatDidNotSurviveItsRestartStillSettlesTheOrphan(t *testin
 
 	first := newExternalCallDaemon(t, dbPath, configDir, seen.wrap(askForBlockingTaskRespond))
 
+	first.startInboxWake()
 	sessionID, err := first.mgr.Send(
 		first.ctx, first.projectID, "do work then spawn", "fake-model", nil,
 	)
@@ -110,7 +113,8 @@ func TestScenario_StopThatDidNotSurviveItsRestartStillSettlesTheOrphan(t *testin
 	defer second.shutdown()
 
 	require.NoError(t, second.mgr.Start(second.ctx))
-	second.mgr.sweep(second.ctx)
+	second.startInboxWake()
+	second.mgr.resumeAfterRestart(second.ctx)
 
 	rec, err := second.sessStore.GetSession(second.ctx, sessionID)
 	require.NoError(t, err)
@@ -122,6 +126,7 @@ func TestScenario_StopThatDidNotSurviveItsRestartStillSettlesTheOrphan(t *testin
 	require.Equal(t, 1, countToolResultsFor(recovered, tool.IDTask),
 		"the abandoned task is settled exactly once")
 
+	second.startInboxWake()
 	require.NoError(t, second.mgr.SendToSession(second.ctx, sessionID, "any progress?"))
 	second.mgr.waitIdle(sessionID)
 

@@ -61,7 +61,7 @@ func (s *store) finalizeRunning(
 			SessionID: winner.SessionID, Source: sessionstore.InputSourceProcess, Content: formatCompletion(winner),
 			Attributes: map[string]any{"process_id": winner.ID}, DeliveryKey: "process:" + winner.ID,
 		}); err != nil {
-			return Process{}, false, err
+			return Process{}, false, fmt.Errorf("finalize running: %w", err)
 		}
 	}
 

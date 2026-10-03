@@ -177,6 +177,7 @@ func TestScenario_MCPAddReachesTheNextRunOnly(t *testing.T) {
 	h, _ := newMCPHarness(t, respond)
 	defer h.shutdown()
 
+	h.startInboxWake()
 	sessionID, err := h.mgr.Send(h.ctx, h.projectID, "register the fake mcp server", "fake-model", nil)
 	require.NoError(t, err)
 	h.waitUntil("registering run finishes", func() bool {
@@ -191,6 +192,7 @@ func TestScenario_MCPAddReachesTheNextRunOnly(t *testing.T) {
 		"the run that registered the server must not gain its tools")
 	assert.Equal(t, 0, fake.count(t, "call"), "a mid-run registration executes nothing")
 
+	h.startInboxWake()
 	require.NoError(t, h.mgr.SendToSession(h.ctx, sessionID, "USE_IT now"))
 	h.waitUntil("next run uses the server", func() bool {
 		return lastAssistantTextDTO(h.parentMessages(sessionID)) == "used it"
@@ -233,6 +235,7 @@ func TestScenario_ProjectMCPServerOverridesTheGlobalOfTheSameName(t *testing.T) 
 	h, _ := newMCPHarness(t, respond)
 	defer h.shutdown()
 
+	h.startInboxWake()
 	sessionID, err := h.mgr.Send(h.ctx, h.projectID, "register both scopes", "fake-model", nil)
 	require.NoError(t, err)
 	h.waitUntil("both registrations land", func() bool {
@@ -240,6 +243,7 @@ func TestScenario_ProjectMCPServerOverridesTheGlobalOfTheSameName(t *testing.T) 
 	})
 	h.mgr.waitIdle(sessionID)
 
+	h.startInboxWake()
 	require.NoError(t, h.mgr.SendToSession(h.ctx, sessionID, "USE_IT now"))
 	h.waitUntil("next run uses the server", func() bool {
 		return lastAssistantTextDTO(h.parentMessages(sessionID)) == "used it"

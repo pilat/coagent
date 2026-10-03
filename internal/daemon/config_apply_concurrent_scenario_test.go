@@ -14,7 +14,6 @@ import (
 
 	"github.com/pilat/coagent/internal/configapply"
 	"github.com/pilat/coagent/internal/configops"
-	"github.com/pilat/coagent/internal/configtools"
 	"github.com/pilat/coagent/internal/llm"
 	"github.com/pilat/coagent/internal/llmwire"
 	"github.com/pilat/coagent/internal/tool"
@@ -34,7 +33,7 @@ func twoSessionApplyRespond(_ string, msgs []llmwire.Message) *llmwire.Response 
 		return &llmwire.Response{Text: "configuration replaced"}
 	}
 
-	if !hasUserContaining(msgs, configtools.ConfigEditCommand) {
+	if !hasUserContaining(msgs, configapply.ConfigEditCommand) {
 		return &llmwire.Response{Text: "ready to reconfigure"}
 	}
 
@@ -84,11 +83,10 @@ func newApplyDaemonWith(
 
 	h := newSubagentHarnessOnDB(t, dbPath, respond, nil)
 	ops := configops.New(filepath.Join(configDir, "config.yaml"), filepath.Join(configDir, "secrets"))
-	restarts := make(chan struct{}, 4)
 
-	h.mgr.applier = configapply.New(ops, func() { restarts <- struct{}{} })
+	h.mgr.applier = configapply.New(ops, h.sessStore)
 
-	return &applyDaemon{subagentHarness: h, ops: ops, restarts: restarts}
+	return &applyDaemon{subagentHarness: h, ops: ops, restarts: h.mgr.applier.Restart()}
 }
 
 func defaultModelInFile(t *testing.T, configDir string) string {
@@ -119,6 +117,7 @@ func TestScenario_ASecondSessionCannotOverwriteAStagedApply(t *testing.T) {
 
 	first := newApplyDaemonWith(t, dbPath, configDir, twoSessionApplyRespond)
 
+	first.startInboxWake()
 	sessionA, err := first.mgr.Send(
 		first.ctx, first.projectID, "APPLY_A switch the default model", "fake-model",
 		map[string]any{"manager_id": "telegram:main"},
@@ -126,12 +125,14 @@ func TestScenario_ASecondSessionCannotOverwriteAStagedApply(t *testing.T) {
 	require.NoError(t, err)
 	first.waitUntil("A's opener settled", func() bool { return !first.mgr.HasActiveLoop(sessionA) })
 	first.mgr.waitIdle(sessionA)
-	require.NoError(t, first.mgr.SendToSession(first.ctx, sessionA, configtools.ConfigEditCommand))
+	first.startInboxWake()
+	require.NoError(t, first.mgr.SendToSession(first.ctx, sessionA, configapply.ConfigEditCommand))
 
 	first.waitForRestart(t)
 	first.waitUntil("A suspended on its config call", func() bool { return !first.mgr.HasActiveLoop(sessionA) })
 
 	// B stages against the config A is already restarting into.
+	first.startInboxWake()
 	sessionB, err := first.mgr.Send(
 		first.ctx, first.projectID, "APPLY_B switch the default model", "fake-model",
 		map[string]any{"manager_id": "telegram:main"},
@@ -139,7 +140,8 @@ func TestScenario_ASecondSessionCannotOverwriteAStagedApply(t *testing.T) {
 	require.NoError(t, err)
 	first.waitUntil("B's opener settled", func() bool { return !first.mgr.HasActiveLoop(sessionB) })
 	first.mgr.waitIdle(sessionB)
-	require.NoError(t, first.mgr.SendToSession(first.ctx, sessionB, configtools.ConfigEditCommand))
+	first.startInboxWake()
+	require.NoError(t, first.mgr.SendToSession(first.ctx, sessionB, configapply.ConfigEditCommand))
 
 	first.mgr.waitIdle(sessionB)
 
@@ -167,6 +169,7 @@ func TestScenario_ASecondSessionCannotOverwriteAStagedApply(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, outcome.Verdict.Applied, outcome.Verdict.Reason())
 
+	second.waitForConfigResult(sessionA)
 	second.mgr.waitIdle(sessionA)
 
 	msgsA := second.parentMessages(sessionA)
@@ -195,8 +198,14 @@ func TestScenario_AVerdictOwedToAKilledSessionIsRefused(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, pending)
 
-	_, err = second.mgr.DeliverPendingCallResult(
-		second.ctx, pending.SessionID, pending.ToolCallID, pending.ToolName, "Config applied",
+	_, err = enqueueCallResult(
+
+		second.ctx, second.mgr.store,
+
+		pending.SessionID,
+		pending.ToolCallID,
+		pending.ToolName,
+		"Config applied",
 	)
 	require.Error(t, err, "a killed session can never take the verdict")
 
@@ -223,6 +232,7 @@ func TestScenario_ConcurrentAppliesResolveExactlyOnce(t *testing.T) {
 
 	for _, prompt := range []string{"APPLY_A switch the default model", "APPLY_B switch the default model"} {
 		wg.Go(func() {
+			first.startInboxWake()
 			id, err := first.mgr.Send(
 				first.ctx, first.projectID, prompt, "fake-model",
 				map[string]any{"manager_id": "telegram:main"},
@@ -247,7 +257,8 @@ func TestScenario_ConcurrentAppliesResolveExactlyOnce(t *testing.T) {
 	first.mgr.waitIdle(sessionB)
 
 	for _, session := range []int64{sessionA, sessionB} {
-		require.NoError(t, first.mgr.SendToSession(first.ctx, session, configtools.ConfigEditCommand))
+		first.startInboxWake()
+		require.NoError(t, first.mgr.SendToSession(first.ctx, session, configapply.ConfigEditCommand))
 	}
 
 	first.waitForRestart(t)
@@ -284,6 +295,7 @@ func TestScenario_ConcurrentAppliesResolveExactlyOnce(t *testing.T) {
 	_, err = second.bootVerdict(t)
 	require.NoError(t, err)
 
+	second.waitForConfigResult(winner)
 	second.mgr.waitIdle(winner)
 
 	msgsWinner := second.parentMessages(winner)

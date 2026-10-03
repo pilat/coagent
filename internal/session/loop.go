@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/pilat/coagent/internal/logger"
@@ -12,6 +13,9 @@ import (
 	"github.com/pilat/coagent/internal/tool"
 )
 
+const workingAttribute = "working"
+
+//nolint:gosec // Loop-detection instructions contain no credentials.
 const (
 	hardIterationCeiling        = 1000
 	emptyResponseWarnThreshold  = 3
@@ -36,6 +40,7 @@ type runState struct {
 	terminal           bool
 	terminalState      bool
 	handledControl     bool
+	boundaryAgain      bool
 	directReply        bool
 	backgroundInserted bool
 	compactionFailures int
@@ -47,36 +52,47 @@ func (s *Session) Run(ctx context.Context) (RunResult, error) {
 	if err := s.prepareRun(ctx); err != nil {
 		return RunResult{}, err
 	}
+
 	r := &runState{}
+
 	defer s.emit(
-		sessionevent.Notification{Type: sessionevent.NotifyModelWorking, Attributes: map[string]any{"working": false}},
+		sessionevent.Notification{
+			Type:       sessionevent.NotifyModelWorking,
+			Attributes: map[string]any{workingAttribute: false},
+		},
 	)
 	defer s.startHeartbeat(ctx)()
+
 	if !s.HasPendingExternalCall() {
 		s.compactionDeferAnnounced = false
 	}
+
 	return s.finishRun(ctx, r, s.runIterations(ctx, r))
 }
 
 func (s *Session) prepareRun(ctx context.Context) error {
 	index, err := tool.ActivationIndex(s.registry)
 	if err != nil {
-		return err
+		return fmt.Errorf("prepare run: %w", err)
 	}
+
 	s.activationIndex = index
+
 	return s.loadPendingActivation(ctx)
 }
 
 func (s *Session) runIterations(ctx context.Context, r *runState) error {
 	for r.iterations < hardIterationCeiling {
 		if err := ctx.Err(); err != nil {
-			return err
+			return ctx.Err()
 		}
+
 		again, err := s.runIteration(ctx, r)
 		if err != nil || !again {
 			return err
 		}
 	}
+
 	return nil
 }
 
@@ -85,29 +101,44 @@ func (s *Session) runIteration(ctx context.Context, r *runState) (bool, error) {
 	if err != nil {
 		return false, err
 	}
+
+	if r.boundaryAgain {
+		return true, nil
+	}
+
 	if s.HasPendingExternalCall() {
 		r.result.Suspended = true
 		return false, nil
 	}
+
 	if len(s.pendingInLoopCalls()) > 0 {
 		return s.runPendingTools(ctx, r)
 	}
+
 	if !accepted && (r.handledControl || !s.unansweredWork()) {
 		return false, s.compactionStep(ctx, r)
 	}
+
 	admitted, err := s.admitModelStep(ctx, r)
 	if err != nil || !admitted {
 		return false, err
 	}
+
 	s.emit(
-		sessionevent.Notification{Type: sessionevent.NotifyModelWorking, Attributes: map[string]any{"working": true}},
+		sessionevent.Notification{
+			Type:       sessionevent.NotifyModelWorking,
+			Attributes: map[string]any{workingAttribute: true},
+		},
 	)
+
 	if err := s.modelStep(ctx, r); err != nil {
 		return false, err
 	}
+
 	if r.terminal || r.result.BudgetFired {
 		return false, nil
 	}
+
 	return s.runPendingTools(ctx, r)
 }
 
@@ -117,27 +148,34 @@ func (s *Session) runPendingTools(ctx context.Context, r *runState) (bool, error
 			return false, err
 		}
 	}
+
 	if s.suspended {
 		r.result.Suspended = true
 		return false, nil
 	}
+
 	return true, nil
 }
 
 func (s *Session) admitModelStep(ctx context.Context, r *runState) (bool, error) {
 	s.applyModelSwitch()
+
 	if err := s.compactionStep(ctx, r); err != nil {
 		return false, err
 	}
+
 	if s.budgetFired {
 		r.result.BudgetFired = true
 		return false, nil
 	}
+
 	fired, err := s.observeBudget(ctx)
 	if err != nil {
 		return false, err
 	}
+
 	r.result.BudgetFired = fired
+
 	return !fired, nil
 }
 
@@ -157,30 +195,80 @@ func (s *Session) commit(ctx context.Context, c sessionstore.Commit) (*sessionst
 			s.emit(
 				sessionevent.Notification{
 					Type:       sessionevent.NotifyModelWorking,
-					Attributes: map[string]any{"working": false},
+					Attributes: map[string]any{workingAttribute: false},
 				},
 			)
+
 			break
 		}
 	}
+
 	result, err := s.store.Commit(ctx, c)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("commit: %w", err)
 	}
+
 	s.budgetFired = s.budgetFired || result.BudgetFired
 	if err := s.ms.reloadMessages(ctx); err != nil {
 		return nil, err
 	}
+
+	if c.ObserveBudget && c.State.Iteration != nil {
+		s.emit(
+			sessionevent.Notification{
+				Type:       "iteration_persisted",
+				Attributes: map[string]any{"iteration": *c.State.Iteration},
+			},
+		)
+	}
+
 	s.emit(sessionevent.Notification{Type: "context_changed"})
-	s.emitCommitted(result.Outputs, result.BudgetFired)
+	s.emitCommitted(s.liveOutputs(c, result), result.BudgetFired)
+
 	return result, nil
+}
+
+func (s *Session) liveOutputs(c sessionstore.Commit, result *sessionstore.CommitResult) []*sessionstore.OutputCommit {
+	outputs := append([]sessionstore.Output{}, c.Outputs...)
+	if !result.BudgetFired {
+		outputs = append(outputs, c.Unfired.Outputs...)
+	}
+
+	muted := make(map[string]bool)
+
+	for _, output := range outputs {
+		if output.Attributes["source"] == "scheduler" || strings.HasPrefix(output.Key, "tool:") {
+			muted[output.Content] = true
+		}
+	}
+
+	if s.outputEnabled || len(result.Outputs) > 0 {
+		live := make([]*sessionstore.OutputCommit, 0, len(result.Outputs))
+		for _, output := range result.Outputs {
+			if !muted[output.LiveContent] {
+				live = append(live, output)
+			}
+		}
+
+		return live
+	}
+
+	live := make([]*sessionstore.OutputCommit, 0, len(outputs))
+	for _, output := range outputs {
+		if !muted[output.Content] {
+			live = append(live, &sessionstore.OutputCommit{LiveContent: output.Content})
+		}
+	}
+
+	return live
 }
 
 func (s *Session) observeBudget(ctx context.Context) (bool, error) {
 	result, err := s.store.Commit(ctx, sessionstore.Commit{SessionID: s.id, RootID: s.rootID, ObserveBudget: true})
 	if err != nil {
-		return false, err
+		return false, fmt.Errorf("observe budget: %w", err)
 	}
+
 	return result.BudgetFired, nil
 }
 
@@ -189,12 +277,15 @@ func (s *Session) loadPendingActivation(ctx context.Context) error {
 	if errors.Is(err, sessionstore.ErrActivationNotFound) {
 		return nil
 	}
+
 	if err != nil {
-		return err
+		return fmt.Errorf("load pending activation: %w", err)
 	}
+
 	if activation == nil {
 		return nil
 	}
+
 	s.currentActivation = &tool.ActivationGrant{
 		SessionID:  activation.SessionID,
 		InputID:    activation.InputID,
@@ -202,6 +293,7 @@ func (s *Session) loadPendingActivation(ctx context.Context) error {
 		Command:    activation.Command,
 		ToolCallID: activation.ToolCallID,
 	}
+
 	return nil
 }
 
@@ -210,6 +302,7 @@ func (s *Session) expireActivation(ctx context.Context, suspended bool) error {
 	if grant == nil || grant.ToolCallID != "" {
 		return nil
 	}
+
 	if suspended {
 		for _, call := range s.PendingExternalCalls() {
 			if call.Name == grant.ToolID {
@@ -217,6 +310,7 @@ func (s *Session) expireActivation(ctx context.Context, suspended bool) error {
 			}
 		}
 	}
+
 	c := s.newCommit()
 	c.Activation = &sessionstore.ActivationChange{
 		InputID: grant.InputID,
@@ -224,6 +318,7 @@ func (s *Session) expireActivation(ctx context.Context, suspended bool) error {
 		ToolID:  grant.ToolID,
 		Command: grant.Command,
 	}
+
 	c.Outputs = []sessionstore.Output{
 		{
 			Type:          sessionstore.OutputMessagePersistent,
@@ -236,7 +331,9 @@ func (s *Session) expireActivation(ctx context.Context, suspended bool) error {
 	if _, err := s.commit(ctx, c); err != nil {
 		return err
 	}
+
 	s.currentActivation = nil
+
 	return nil
 }
 
@@ -245,13 +342,21 @@ func (s *Session) emitCommitted(outputs []*sessionstore.OutputCommit, fired bool
 		s.emit(
 			sessionevent.Notification{
 				Type:       sessionevent.NotifyModelWorking,
-				Attributes: map[string]any{"working": false},
+				Attributes: map[string]any{workingAttribute: false},
 			},
 		)
 	}
+
 	for _, output := range outputs {
-		if output != nil && !output.Existing && output.Content != "" {
-			s.emit(sessionevent.Notification{Type: sessionevent.NotifyMessage, Message: output.Content})
+		if output != nil && !output.Existing {
+			content := output.LiveContent
+			if content == "" {
+				content = output.Content
+			}
+
+			if content != "" {
+				s.emit(sessionevent.Notification{Type: sessionevent.NotifyMessage, Message: content})
+			}
 		}
 	}
 }

@@ -49,12 +49,15 @@ type Mutation struct {
 
 // CrossingReason compares costs at the same precision as checkpoint receipts.
 func CrossingReason(record *Record, delta float64, observedAt time.Time) string {
-	if record.DurationSeconds != nil && !observedAt.Before(record.ArmedAt.Add(time.Duration(*record.DurationSeconds)*time.Second)) {
+	if record.DurationSeconds != nil &&
+		!observedAt.Before(record.ArmedAt.Add(time.Duration(*record.DurationSeconds)*time.Second)) {
 		return "duration"
 	}
+
 	if record.CostLimitUSD != nil && RoundCostUSD(delta) >= RoundCostUSD(*record.CostLimitUSD) {
 		return "cost"
 	}
+
 	return ""
 }
 

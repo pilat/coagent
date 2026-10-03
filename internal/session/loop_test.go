@@ -11,8 +11,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/pilat/coagent/internal/llmwire"
+	"github.com/pilat/coagent/internal/sessionprompt"
 	"github.com/pilat/coagent/internal/tool"
-	"github.com/pilat/coagent/internal/toolexec"
 )
 
 func TestShouldCompact(t *testing.T) {
@@ -46,11 +46,10 @@ func TestShouldCompact(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			agent := newTestAgent()
-			agent.prompt = newPromptBuilder("", "") // zero overhead: the cutoff cases are exact
-			agent.ms.setMessages(buildMessagesWithTokens(tc.tokens))
+			agent.prompt = sessionprompt.NewBuilder("", "") // zero overhead: the cutoff cases are exact
+			setTestMessages(agent, buildMessagesWithTokens(tc.tokens))
 			if tc.baseline != nil {
-				agent.recordContextBaseline(
-					context.Background(),
+				agent.storeContextBaseline(
 					tc.baseline.promptTokens,
 					tc.baseline.messageCount,
 					agent.modelGeneration(),
@@ -86,9 +85,9 @@ func TestCallLLMRecordsTheProviderBaseline(t *testing.T) {
 	agent.llmClient = &loopScriptLLM{responses: []*llmwire.Response{
 		{Text: "done", Usage: &llmwire.MessageUsage{PromptTokens: 5000}},
 	}}
-	agent.ms.setMessages(buildMessagesWithTokens(1000))
+	setTestMessages(agent, buildMessagesWithTokens(1000))
 
-	_, err := runLoop(t.Context(), agent, loopOptions{}, iterationGuard(5))
+	err := agent.modelStep(t.Context(), &runState{})
 	require.NoError(t, err)
 
 	base := agent.loadContextBaseline()
@@ -107,9 +106,9 @@ func TestCallLLMLeavesTheProjectionEstimatedWithoutUsage(t *testing.T) {
 	agent.llmClient = &loopScriptLLM{responses: []*llmwire.Response{
 		{Text: "done", Usage: &llmwire.MessageUsage{PromptTokens: 0}},
 	}}
-	agent.ms.setMessages(buildMessagesWithTokens(1000))
+	setTestMessages(agent, buildMessagesWithTokens(1000))
 
-	_, err := runLoop(t.Context(), agent, loopOptions{}, iterationGuard(5))
+	err := agent.modelStep(t.Context(), &runState{})
 	require.NoError(t, err)
 
 	assert.Nil(t, agent.loadContextBaseline(), "a provider that reports zero has measured nothing")
@@ -234,7 +233,7 @@ func TestExecuteToolCall_RejectsNilResult(t *testing.T) {
 	}})
 
 	require.Len(t, items, 1)
-	require.Equal(t, toolexec.OutcomeFailed, items[0].outcome)
+	require.Equal(t, tool.OutcomeFailed, items[0].outcome)
 	require.Equal(t, "Error: execute tool nil-result: tool returned nil result", items[0].content)
 }
 
@@ -252,80 +251,6 @@ func buildMessagesWithTokens(tokens int) []llmwire.Message {
 	totalChars := tokens * 4
 	content := strings.Repeat("a", totalChars)
 	return []llmwire.Message{{Role: llmwire.RoleUser, Content: content}}
-}
-
-func TestLastAssistantState(t *testing.T) {
-	tests := []struct {
-		name     string
-		messages []llmwire.Message
-		want     *assistantState
-	}{
-		{
-			name:     "empty messages",
-			messages: nil,
-			want:     nil,
-		},
-		{
-			name: "last message is user",
-			messages: []llmwire.Message{
-				{Role: llmwire.RoleUser, Content: "hello"},
-			},
-			want: nil,
-		},
-		{
-			name: "last message is tool (all resolved)",
-			messages: []llmwire.Message{
-				{Role: llmwire.RoleUser, Content: "do stuff"},
-				{Role: llmwire.RoleAssistant, Content: "", ToolCalls: []llmwire.ToolCall{
-					{ID: "tc1", Name: "read", Arguments: []byte(`{}`)},
-				}},
-				{Role: llmwire.RoleTool, ToolCallID: "tc1", Content: "file content"},
-			},
-			want: nil,
-		},
-		{
-			name: "assistant with text only",
-			messages: []llmwire.Message{
-				{Role: llmwire.RoleUser, Content: "hello"},
-				{Role: llmwire.RoleAssistant, Content: "Here is my response"},
-			},
-			want: &assistantState{HasText: true, Text: "Here is my response"},
-		},
-		{
-			name: "assistant empty (no text no tools)",
-			messages: []llmwire.Message{
-				{Role: llmwire.RoleUser, Content: "hello"},
-				{Role: llmwire.RoleAssistant, Content: ""},
-			},
-			want: &assistantState{},
-		},
-		{
-			name: "assistant with all pending tools (crash before execution)",
-			messages: []llmwire.Message{
-				{Role: llmwire.RoleUser, Content: "do stuff"},
-				{Role: llmwire.RoleAssistant, Content: "Let me help", ToolCalls: []llmwire.ToolCall{
-					{ID: "tc1", Name: "read", Arguments: []byte(`{"path":"a.go"}`)},
-					{ID: "tc2", Name: "grep", Arguments: []byte(`{"pattern":"foo"}`)},
-				}},
-			},
-			want: &assistantState{
-				HasPendingTools: true,
-				PendingTools: []llmwire.ToolCall{
-					{ID: "tc1", Name: "read", Arguments: []byte(`{"path":"a.go"}`)},
-					{ID: "tc2", Name: "grep", Arguments: []byte(`{"pattern":"foo"}`)},
-				},
-				HasText: true,
-				Text:    "Let me help",
-			},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := lastAssistantState(tt.messages)
-			assert.Equal(t, tt.want, got)
-		})
-	}
 }
 
 func TestCountUniqueOutcomes(t *testing.T) {
@@ -351,17 +276,6 @@ type stubTool struct {
 
 func (s *stubTool) ParallelSafe() bool { return s.parallelSafe }
 
-type progressTrapBoundary struct {
-	*loopInputBoundary
-	calls int
-}
-
-func (b *progressTrapBoundary) ProgressChange(context.Context) (string, bool, error) {
-	b.calls++
-
-	return "", false, fmt.Errorf("progress must stay root-only")
-}
-
 func (s *stubTool) ID() string                  { return s.id }
 func (s *stubTool) Description() string         { return "stub" }
 func (s *stubTool) Parameters() json.RawMessage { return json.RawMessage(`{}`) }
@@ -371,44 +285,6 @@ func (s *stubTool) Execute(_ context.Context, _ json.RawMessage) (*tool.Result, 
 	}
 
 	return &tool.Result{Output: s.result, IsError: s.resultIsError}, nil
-}
-
-func TestHandlePreviousResult_SubagentTextWithToolsSkipsProgress(t *testing.T) {
-	read := &countingTool{id: "read"}
-	agent := newTestAgent(read)
-	boundary := &progressTrapBoundary{loopInputBoundary: &loopInputBoundary{agent: agent}}
-	agent.boundary = boundary
-	agent.ms.setMessages([]llmwire.Message{
-		{Role: llmwire.RoleUser, Content: "inspect"},
-		{Role: llmwire.RoleAssistant, Content: "Inspecting files", ToolCalls: []llmwire.ToolCall{{
-			ID: "read-1", Name: "read", Arguments: []byte(`{}`),
-		}}},
-	})
-
-	done, err := stagedRunner(agent).handlePreviousResult(t.Context())
-	require.NoError(t, err)
-	assert.False(t, done)
-	assert.Zero(t, boundary.calls)
-	assert.Equal(t, int64(1), read.runs.Load())
-	messages := agent.ms.getMessages()
-	require.Len(t, messages, 3)
-	assert.Equal(t, llmwire.RoleTool, messages[2].Role)
-	assert.Equal(t, "read", messages[2].ToolName)
-}
-
-// newTestAgent creates a minimal svc with the given tools registered.
-func newTestAgent(tools ...tool.Tool) *svc {
-	reg := tool.NewRegistry()
-	for _, t := range tools {
-		reg.Register(t)
-	}
-	return &svc{
-		llmClient:    &mockLLMRunOnce{response: &llmwire.Response{Text: "ok"}},
-		ms:           newMessageStore(nil, 0, nil),
-		loopDetector: newLoopDetector(),
-		registry:     reg,
-		prompt:       newPromptBuilder("test", ""),
-	}
 }
 
 func TestExecuteToolCalls_WarnOnLowDiversity(t *testing.T) {
@@ -546,7 +422,7 @@ func TestExecuteToolCalls_RejectedSleepSkipsLaterStages(t *testing.T) {
 	assert.Equal(t, "ran", messages[0].Content)
 	assert.Contains(t, messages[1].Content, "subagent completion wakes the session automatically")
 	assert.True(t, messages[1].ToolError, "the rejected sleep persists as a typed failure")
-	assert.Contains(t, messages[2].Content, toolexec.ErrSkipped.Error())
+	assert.Contains(t, messages[2].Content, tool.ErrSkipped.Error())
 	assert.True(t, messages[2].ToolError, "the skipped call persists as an explicit error result")
 }
 

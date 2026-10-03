@@ -78,7 +78,7 @@ func (s *Store) BeginLifecycleInput(
 		return nil, err
 	}
 
-	outputID, err := insertLifecycleAcknowledgement(ctx, tx, input.SessionID, inputID, command, content, owner, now)
+	outputID, err := insertLifecycleAcknowledgement(ctx, tx, input.SessionID, inputID, command, content, now)
 	if err != nil {
 		return nil, err
 	}
@@ -220,7 +220,7 @@ func (s *Store) MarkSessionKilledWithOutput(
 		return nil, nil
 	}
 
-	outputID, err := insertClosedOutput(ctx, tx, sessionID, owner, now, cancelledProcesses)
+	outputID, err := insertClosedOutput(ctx, tx, sessionID, now, cancelledProcesses)
 	if err != nil {
 		return nil, err
 	}
@@ -236,23 +236,35 @@ func (s *Store) MarkSessionKilledWithOutput(
 // a replaceable, non-releasing start row that a later terminal completion
 // transaction edits into the final result; other lifecycle commands keep the
 // persistent releasing acknowledgement.
-func insertLifecycleAcknowledgement(ctx context.Context, tx *sql.Tx, sessionID, inputID int64, command, content, owner string, now time.Time) (int64, error) {
+func insertLifecycleAcknowledgement(
+	ctx context.Context,
+	tx *sql.Tx,
+	sessionID, inputID int64,
+	command, content string,
+	now time.Time,
+) (int64, error) {
 	kind := OutputMessagePersistent
 	releases := true
+
 	key := fmt.Sprintf("input:%d:%s:result", inputID, command)
 	if command == lifecycleStop {
 		kind = OutputMessageReplaceable
 		releases = false
 		key = fmt.Sprintf("input:%d:stop:started", inputID)
 	}
-	out, err := insertOutputTx(ctx, tx, OutputDraft{SessionID: sessionID, Type: kind, Content: content, SourceKey: key,
-		CreatedAt: now, ReleasesInput: releases}, CommitLifecycle)
+
+	out, err := insertOutputTx(ctx, tx, OutputDraft{
+		SessionID: sessionID, Type: kind, Content: content, SourceKey: key,
+		CreatedAt: now, ReleasesInput: releases,
+	}, CommitLifecycle)
 	if err != nil {
 		return 0, err
 	}
+
 	if out == nil {
 		return 0, nil
 	}
+
 	return out.OutputID, nil
 }
 
@@ -283,16 +295,27 @@ func hasReplacementRow(
 	return true, nil
 }
 
-func insertClosedOutput(ctx context.Context, tx *sql.Tx, sessionID int64, owner string, now time.Time, cancelledProcesses int) (int64, error) {
-	out, err := insertOutputTx(ctx, tx, OutputDraft{SessionID: sessionID, Type: OutputSessionClosed,
+func insertClosedOutput(
+	ctx context.Context,
+	tx *sql.Tx,
+	sessionID int64,
+
+	now time.Time,
+	cancelledProcesses int,
+) (int64, error) {
+	out, err := insertOutputTx(ctx, tx, OutputDraft{
+		SessionID: sessionID, Type: OutputSessionClosed,
 		Content:    fmt.Sprintf("Session killed. Cancelled background processes: %d", cancelledProcesses),
 		Attributes: map[string]any{"reason": killedReason, "cancelled_processes": cancelledProcesses},
-		SourceKey:  fmt.Sprintf("session:%d:closed", sessionID), CreatedAt: now, ReleasesInput: true}, CommitLifecycle)
+		SourceKey:  fmt.Sprintf("session:%d:closed", sessionID), CreatedAt: now, ReleasesInput: true,
+	}, CommitLifecycle)
 	if err != nil {
 		return 0, err
 	}
+
 	if out == nil {
 		return 0, nil
 	}
+
 	return out.OutputID, nil
 }

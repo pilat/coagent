@@ -27,15 +27,19 @@ func BuildClient(cfg *config.Config, model, requested string) (llm.Client, sessi
 	if cfg == nil || cfg.UnifiedConfig == nil {
 		return nil, sessionprompt.ModelSection{}, errors.New("no models configured")
 	}
+
 	level, err := ResolveReasoningLevel(cfg.UnifiedConfig.Models, model, requested)
 	if err != nil {
 		return nil, sessionprompt.ModelSection{}, err
 	}
+
 	client, err := llm.NewClientWithModel(cfg, model)
 	if err != nil {
-		return nil, sessionprompt.ModelSection{}, err
+		return nil, sessionprompt.ModelSection{}, fmt.Errorf("build client: %w", err)
 	}
+
 	client.SetReasoningLevel(level)
+
 	return client, sessionprompt.ModelSection{
 		ID:           model,
 		Text:         sessionprompt.BuildModelsSection(model),

@@ -15,6 +15,7 @@ func TestNewSessionSettlesTheEffortOnItsModel(t *testing.T) {
 
 	defer h.shutdown()
 
+	h.startInboxWake()
 	id, err := h.mgr.Send(h.ctx, h.projectID, "work", "parent-model", nil)
 	require.NoError(t, err)
 	// The two-phase check spends a hidden candidate and a confirmation, both

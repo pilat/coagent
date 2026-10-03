@@ -31,7 +31,7 @@ func (s *Store) GetOrCreateProject(ctx context.Context, workDir string) (int64, 
 	return s.getOrCreateProject(ctx, absPath, name)
 }
 
-// Display names may differ from directory identity; ':' stays reserved to
+// GetOrCreateNamedProject separates display names from directory identity; ':' stays reserved to
 // prevent collisions with directory-derived names.
 func (s *Store) GetOrCreateNamedProject(ctx context.Context, workDir, name string) (int64, error) {
 	absPath, err := filepath.Abs(workDir)

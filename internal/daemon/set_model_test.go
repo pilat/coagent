@@ -38,6 +38,7 @@ func TestSetModelUnknownModelNeverReachesTheRecord(t *testing.T) {
 	events := collectEvents(h.mgr.PubSub().SubscribeAll())
 	defer events.stop()
 
+	h.startInboxWake()
 	id, err := h.mgr.Send(h.ctx, h.projectID, "first", "fake-model", nil)
 	require.NoError(t, err)
 	// The no-wake two-phase check finishes one turn as two assistant rows: the
@@ -55,6 +56,7 @@ func TestSetModelUnknownModelNeverReachesTheRecord(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "fake-model", rec.Model, "the record keeps the model the session can actually run")
 
+	h.startInboxWake()
 	require.NoError(t, h.mgr.SendToSession(h.ctx, id, "second"))
 	h.waitUntil("second turn settled", func() bool {
 		return countAssistantReplies(h.parentMessages(id)) == 4 || hasSessionErrorNotice(events.snapshot())
@@ -82,6 +84,7 @@ func TestSetModelLiveRefusalDoesNotPersist(t *testing.T) {
 	defer h.shutdown()
 	defer close(release)
 
+	h.startInboxWake()
 	id, err := h.mgr.Send(h.ctx, h.projectID, "HOLD please", "fake-model", nil)
 	require.NoError(t, err)
 	h.waitUntil("live session attached", func() bool { return h.liveSession(id) != nil })
@@ -89,8 +92,7 @@ func TestSetModelLiveRefusalDoesNotPersist(t *testing.T) {
 	before, err := h.sessStore.GetSession(h.ctx, id)
 	require.NoError(t, err)
 
-	// The harness session has no unified config, so it refuses every switch —
-	// which is exactly the "live session says no" case.
+	h.mgr.buildInput.Config.UnifiedConfig.Models[1].Provider = "missing"
 	err = h.mgr.SetModel(h.ctx, id, "other-model", "high")
 	require.Error(t, err, "a refused switch must surface to the caller")
 
@@ -127,46 +129,40 @@ func newModelAwareHarnessAtDB(
 	t.Cleanup(func() { _ = db.Close() })
 	require.NoError(t, migrate.Run(ctx, db, dbPath))
 
-	store := NewStore(db)
+	store := sessionstore.NewStore(db)
 	sessStore := sessionstore.NewStore(db)
 	links := subagent.NewStore(db)
-	schedStore := schedule.NewStore(db)
+	schedStore := schedule.NewStore(db, sessStore)
 
 	workDir := t.TempDir()
 	cfg := &config.Config{WorkDir: workDir, Model: known[0]}
+	cfg.UnifiedConfig = &config.UnifiedConfig{}
+	for _, model := range known {
+		cfg.UnifiedConfig.Models = append(cfg.UnifiedConfig.Models, config.ModelEntry{ID: model, ContextWindow: 200000})
+	}
 
-	factory := session.NewFactoryWithOptions(
-		cfg, nil, nil, sessStore, sessStore, nil, nil, nil,
-		session.WithLLMClientFactory(func(c *config.Config) (llm.Client, error) {
-			if !slices.Contains(known, c.Model) {
-				return nil, fmt.Errorf("model %q not found in config", c.Model)
-			}
+	factory := scriptedBuildInput(t, cfg, sessStore, nil, func(c *config.Config) (llm.Client, error) {
+		if !slices.Contains(known, c.Model) {
+			return nil, fmt.Errorf("model %q not found in config", c.Model)
+		}
 
-			return &scriptedLLM{respond: respond}, nil
-		}),
-	)
+		return &scriptedLLM{respond: respond}, nil
+	})
 
-	mgr, _ := newSvc(
+	mgr, _ := newScenarioDaemon(
 		context.Background(),
 		factory,
-		store,
-		sessStore,
-		sessStore,
-		sessStore,
-		sessStore,
-		sessStore,
-		sessStore,
 		sessStore,
 		links,
-		subagent.NewTransactions(db),
+		subagent.NewTransactions(db, sessStore),
 		budget.New(sessStore),
-		sessStore,
-		schedule.NewService(schedStore),
+		schedule.NewService(schedStore, sessStore),
 		func() string { return known[0] },
+		db,
 	)
 
 	for _, id := range known {
-		mgr.modelCatalog = append(mgr.modelCatalog, modelInfo{ID: id})
+		mgr.modelCatalog = append(mgr.modelCatalog, subagent.ModelInfo{ID: id})
 	}
 
 	pid, err := store.GetOrCreateProject(ctx, workDir)
@@ -178,7 +174,7 @@ func newModelAwareHarnessAtDB(
 	}
 }
 
-func (h *subagentHarness) liveSession(sessionID int64) session.Service {
+func (h *subagentHarness) liveSession(sessionID int64) *session.Session {
 	rs, ok := h.mgr.runners.Load(sessionID)
 
 	if !ok {

@@ -22,12 +22,12 @@ const (
 )
 
 // CurrentGitState degrades probe failures to a redacted report so ingestion can continue.
-func (s *Builder) CurrentGitState(ctx context.Context) string {
-	if s.GitClient == nil {
+func (p *Builder) CurrentGitState(ctx context.Context) string {
+	if p.GitClient == nil {
 		return noGitStateReport
 	}
 
-	state, err := s.GitClient.RepositoryState(ctx, s.WorkDir)
+	state, err := p.GitClient.RepositoryState(ctx, p.WorkDir)
 	if err != nil {
 		// The contract ties a non-nil error to Unavailable; never trust a
 		// partially-populated state alongside it.
@@ -39,12 +39,12 @@ func (s *Builder) CurrentGitState(ctx context.Context) string {
 
 // AppendGitStateDelta injects changed state; malformed or missing prior reports force a refresh.
 // Without a Git client, content passes through unchanged.
-func (s *Builder) AppendGitStateDelta(ctx context.Context, content string, messages []llmwire.Message) string {
-	if s.GitClient == nil {
+func (p *Builder) AppendGitStateDelta(ctx context.Context, content string, messages []llmwire.Message) string {
+	if p.GitClient == nil {
 		return content
 	}
 
-	state := s.CurrentGitState(ctx)
+	state := p.CurrentGitState(ctx)
 
 	last := lastGitState(messages)
 	if last != "" && last == state {

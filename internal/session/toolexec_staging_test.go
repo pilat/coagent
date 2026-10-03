@@ -18,7 +18,6 @@ import (
 	"github.com/pilat/coagent/internal/sessionstore"
 	"github.com/pilat/coagent/internal/tool"
 	"github.com/pilat/coagent/internal/tool/builtin"
-	"github.com/pilat/coagent/internal/toolexec"
 )
 
 // gateTool blocks the entry-numbered call until its release channel closes and
@@ -168,10 +167,10 @@ func TestExecuteToolCalls_Stages(t *testing.T) {
 	assert.Contains(t, messages[1].Content, "boom")
 	assert.True(t, messages[1].ToolError, "the Go error persists as a typed failure row")
 
-	assert.Equal(t, toolexec.ErrSkipped.Error(), messages[2].Content)
+	assert.Equal(t, tool.ErrSkipped.Error(), messages[2].Content)
 	assert.True(t, messages[2].ToolError)
 
-	assert.Equal(t, toolexec.ErrSkipped.Error(), messages[3].Content)
+	assert.Equal(t, tool.ErrSkipped.Error(), messages[3].Content)
 	assert.True(t, messages[3].ToolError)
 }
 
@@ -275,7 +274,7 @@ func TestExecuteToolCalls_SuspendedTaskBlocksFollowingStage(t *testing.T) {
 	assert.Equal(t, llmwire.RoleTool, messages[0].Role)
 	assert.Equal(
 		t,
-		toolexec.ErrSkipped.Error(),
+		tool.ErrSkipped.Error(),
 		messages[0].Content,
 		"the following barrier is skipped with an explicit result",
 	)
@@ -312,7 +311,8 @@ func TestExecuteToolCalls_PersistenceFailureLeavesNoPartialSet(t *testing.T) {
 	agent := newTestAgent(read, edit, write)
 
 	mockStore := &mockSessionStore{insertFailAt: 1, insertErr: errors.New("disk full")}
-	agent.ms = newMessageStore(mockStore, 1, nil)
+	agent.store = mockStore
+	agent.ms = newMessageStore(mockStore, 1)
 
 	require.NoError(t, agent.ms.reloadMessages(t.Context()))
 
@@ -339,7 +339,7 @@ func TestExecuteToolCalls_PersistenceFailureLeavesNoPartialSet(t *testing.T) {
 	assert.Contains(t, messages[1].Content, "edit refused")
 	assert.True(t, messages[1].ToolError)
 
-	assert.Equal(t, toolexec.ErrSkipped.Error(), messages[2].Content)
+	assert.Equal(t, tool.ErrSkipped.Error(), messages[2].Content)
 	assert.True(t, messages[2].ToolError, "the skipped write persists as an explicit error result")
 }
 
@@ -457,7 +457,7 @@ func TestExecuteToolCalls_TypedFailureKeepsPartialOutput(t *testing.T) {
 	assert.True(t, messages[0].ToolError, "the durable error bit is set")
 	assert.NotContains(t, messages[0].Content, "Error:", "typed failures keep their payload unwrapped")
 
-	assert.Equal(t, toolexec.ErrSkipped.Error(), messages[1].Content)
+	assert.Equal(t, tool.ErrSkipped.Error(), messages[1].Content)
 	assert.True(t, messages[1].ToolError)
 }
 
@@ -486,7 +486,7 @@ func TestBatchFallbackParityWithNativeScheduling(t *testing.T) {
 		return reg
 	}
 
-	runNative := func(grep *gateTool, reg tool.Registry) (*svc, chan error) {
+	runNative := func(grep *gateTool, reg tool.Registry) (*Session, chan error) {
 		agent := newTestAgent()
 		agent.registry = reg
 
@@ -524,7 +524,7 @@ func TestBatchFallbackParityWithNativeScheduling(t *testing.T) {
 	assert.Equal(t, "ran:1", nativeMessages[0].Content)
 	assert.Equal(t, grepErr, nativeMessages[1].Content)
 	assert.True(t, nativeMessages[1].ToolError)
-	assert.Equal(t, toolexec.ErrSkipped.Error(), nativeMessages[2].Content)
+	assert.Equal(t, tool.ErrSkipped.Error(), nativeMessages[2].Content)
 	assert.True(t, nativeMessages[2].ToolError)
 	assert.False(t, nativeMessages[0].ToolError)
 
@@ -567,7 +567,7 @@ func TestBatchFallbackParityWithNativeScheduling(t *testing.T) {
 	assert.True(t, fallback.IsError, "the typed nested failure marks the combined result")
 	assert.Contains(t, fallback.Output, "=== read (call 1) ===\nran:1")
 	assert.Contains(t, fallback.Output, "=== grep (call 2) ===\n"+grepErr)
-	assert.Contains(t, fallback.Output, "=== edit (call 3) ===\nError: "+toolexec.ErrSkipped.Error())
+	assert.Contains(t, fallback.Output, "=== edit (call 3) ===\nError: "+tool.ErrSkipped.Error())
 	assert.Equal(t, 1, fallback.Metadata["success"])
 	assert.Equal(t, 2, fallback.Metadata["errors"])
 }

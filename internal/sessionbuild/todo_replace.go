@@ -2,6 +2,7 @@ package sessionbuild
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/pilat/coagent/internal/sessionprompt"
@@ -22,7 +23,7 @@ func (r *todoReplacement) ReplaceTodo(
 ) ([]*todo.Item, error) {
 	items, err := sessionprompt.NormalizeTodoReplacement(callID, input)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("replace todo: %w", err)
 	}
 
 	// The replacement schema has no timestamp field: generated timestamps must

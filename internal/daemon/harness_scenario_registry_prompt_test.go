@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"database/sql"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -18,7 +19,7 @@ import (
 	"github.com/pilat/coagent/internal/mcpstore"
 	"github.com/pilat/coagent/internal/migrate"
 	"github.com/pilat/coagent/internal/schedule"
-	"github.com/pilat/coagent/internal/session"
+	"github.com/pilat/coagent/internal/sessionbuild"
 	"github.com/pilat/coagent/internal/sessionstore"
 	"github.com/pilat/coagent/internal/subagent"
 )
@@ -71,8 +72,9 @@ type registryPromptLLM struct {
 
 type registryPromptDeps struct {
 	ctx          context.Context
-	store        Store
-	sessionStore sessionstore.Store
+	db           *sql.DB
+	store        *sessionstore.Store
+	sessionStore *sessionstore.Store
 	links        subagent.Store
 	subagents    subagent.Transactions
 	schedules    schedule.Store
@@ -126,9 +128,17 @@ func newRegistryPromptDeps(t *testing.T) registryPromptDeps {
 	t.Cleanup(func() { _ = db.Close() })
 	require.NoError(t, migrate.Run(ctx, db, dbPath))
 
+	sessions := sessionstore.NewStore(db)
 	return registryPromptDeps{
-		ctx: ctx, store: NewStore(db), sessionStore: sessionstore.NewStore(db),
-		links: subagent.NewStore(db), subagents: subagent.NewTransactions(db), schedules: schedule.NewStore(db),
+		ctx:          ctx,
+		db:           db,
+		store:        sessions,
+		sessionStore: sessions,
+		links: subagent.NewStore(
+			db,
+		),
+		subagents:   subagent.NewTransactions(db, sessions),
+		schedules:   schedule.NewStore(db, sessions),
 		mcpRegistry: mcpstore.NewStore(db),
 	}
 }
@@ -148,7 +158,7 @@ func newRegistryPromptHarness(
 	recorder := &activationSchemas{byID: make(map[int64][][]string)}
 	prompts := newPromptRecorder()
 
-	factory := newRegistryPromptFactory(cfg, deps, respond, recorder, prompts)
+	factory := newRegistryPromptFactory(t, cfg, deps, respond, recorder, prompts)
 	mgr := newRegistryPromptManager(deps, factory, t)
 	projectID, err := deps.store.GetOrCreateProject(deps.ctx, workDir)
 	require.NoError(t, err)
@@ -160,38 +170,38 @@ func newRegistryPromptHarness(
 }
 
 func newRegistryPromptFactory(
+	t *testing.T,
 	cfg *config.Config,
 	deps registryPromptDeps,
 	respond func(string, []llmwire.Message) *llmwire.Response,
 	recorder *activationSchemas,
 	prompts *promptRecorder,
-) session.Factory {
-	return session.NewFactoryWithOptions(
-		cfg, nil, nil, deps.sessionStore, deps.sessionStore,
-		nil, deps.mcpRegistry, nil,
-		session.WithLLMClientFactory(func(_ *config.Config) (llm.Client, error) {
-			return &registryPromptLLM{
-				respond: respond, recorder: recorder, prompts: prompts,
-			}, nil
-		}),
-	)
+) sessionbuild.BuildInput {
+	return scriptedBuildInput(t, cfg, deps.sessionStore, deps.mcpRegistry, func(_ *config.Config) (llm.Client, error) {
+		return &registryPromptLLM{
+			respond: respond, recorder: recorder, prompts: prompts,
+		}, nil
+	})
 }
 
 func newRegistryPromptManager(
 	deps registryPromptDeps,
-	factory session.Factory,
+	factory sessionbuild.BuildInput,
 	t *testing.T,
 ) *svc {
-	mgr, _ := newSvc(
+	mgr, _ := newScenarioDaemon(
 		context.Background(),
-		factory, deps.store, deps.sessionStore, deps.sessionStore, deps.sessionStore,
-		deps.sessionStore, deps.sessionStore, deps.sessionStore, deps.sessionStore,
-		deps.links, deps.subagents,
-		budget.New(deps.sessionStore), deps.sessionStore, schedule.NewService(deps.schedules),
+		factory,
+		deps.sessionStore,
+		deps.links,
+		deps.subagents,
+		budget.New(deps.sessionStore),
+		schedule.NewService(deps.schedules, deps.sessionStore),
 		func() string { return "fake-model" },
+		deps.db,
 	)
 	mgr.mcpStore = deps.mcpRegistry
-	mgr.applier = configapply.New(newTestConfigOps(t, t.TempDir()), func() {})
+	mgr.applier = configapply.New(newTestConfigOps(t, t.TempDir()), deps.sessionStore)
 
 	return mgr
 }

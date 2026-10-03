@@ -1,9 +1,9 @@
 package daemon
 
 import (
+	"database/sql"
 	"encoding/json"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -24,13 +24,21 @@ func seedChildCandidateConfirm(t *testing.T, h *subagentHarness, childID int64) 
 		return &transcript.Message{Role: role, Content: content}
 	}
 
-	_, err := h.sessStore.CommitAcceptedResponseDisposition(ctx, sessionstore.AcceptedResponseDisposition{
-		SessionID: childID, RootID: childID, Iteration: 1,
-		Message:    stored("assistant", "the full child answer"),
-		Kind:       sessionstore.ResponseDispositionCandidate,
-		Nudge:      stored("user", "[AUTOMATED CHECK] second look"),
-		ObservedAt: time.Now().UTC(),
-	})
+	iteration := 1
+	_, err := h.sessStore.Commit(
+		ctx,
+		sessionstore.Commit{
+			SessionID: childID,
+			Messages: []*transcript.Message{
+				stored("assistant", "the full child answer"),
+				stored("user", "[AUTOMATED CHECK] second look"),
+			},
+			State: sessionstore.StatePatch{
+				Iteration: &iteration,
+				Candidate: &sessionstore.CandidateChange{NextRef: 0},
+			},
+		},
+	)
 	require.NoError(t, err)
 
 	state, err := h.sessStore.LoadCompletionCheckState(ctx, childID)
@@ -38,13 +46,19 @@ func seedChildCandidateConfirm(t *testing.T, h *subagentHarness, childID int64) 
 	require.NotNil(t, state.CandidateID)
 	candidateID := *state.CandidateID
 
-	_, err = h.sessStore.CommitAcceptedResponseDisposition(ctx, sessionstore.AcceptedResponseDisposition{
-		SessionID: childID, RootID: childID, Iteration: 2,
-		Message:             stored("assistant", "why I am stopping"),
-		Kind:                sessionstore.ResponseDispositionConfirmed,
-		ExpectedCandidateID: candidateID,
-		ObservedAt:          time.Now().UTC(),
-	})
+	iteration = 2
+	_, err = h.sessStore.Commit(
+		ctx,
+		sessionstore.Commit{
+			SessionID: childID,
+			Messages:  []*transcript.Message{stored("assistant", "why I am stopping")},
+			State: sessionstore.StatePatch{
+				Iteration:         &iteration,
+				ConfirmedAnswerID: &candidateID,
+				Candidate:         &sessionstore.CandidateChange{Expected: candidateID, NextRef: -1},
+			},
+		},
+	)
 	require.NoError(t, err)
 
 	require.NoError(t, h.sessStore.UpdateSessionStatus(ctx, childID, sessionstore.SessionStatusCompleted))
@@ -68,15 +82,34 @@ func TestSubagentResult_CarriesCandidateAnswerNotAck(t *testing.T) {
 	ctx := h.ctx
 	parent, err := h.sessStore.CreateSession(ctx, h.projectID, "fake-model", "", nil)
 	require.NoError(t, err)
-	childID, err := h.sessStore.CreateSubagentSession(
-		ctx, h.projectID, parent.ID, parent.ID, "general", "fake-model", "",
-	)
+	childID, err := func() (int64, error) {
+		var id int64
+		err := h.sessStore.WithTx(ctx, func(tx *sql.Tx) error {
+			var err error
+			id, err = sessionstore.CreateSubagentSessionTx(
+				ctx,
+				tx,
+				sessionstore.CreateSubagentSession{
+					ProjectID:      h.projectID,
+					ParentID:       parent.ID,
+					RootID:         parent.ID,
+					AgentType:      "general",
+					Model:          "fake-model",
+					ReasoningLevel: "",
+				},
+			)
+			return err
+		})
+		return id, err
+	}()
 	require.NoError(t, err)
 	require.NoError(t, h.links.InsertSubagentLink(ctx, subagent.Link{
 		ParentID: parent.ID, ChildID: childID, TaskCallID: "cand",
 	}))
 
 	seedChildCandidateConfirm(t, h, childID)
+
+	h.startInboxWake()
 
 	h.mgr.finalizeChild(ctx, childID)
 
@@ -99,9 +132,26 @@ func TestSubagentResult_ErrorBeatsStalePointer(t *testing.T) {
 	ctx := h.ctx
 	parent, err := h.sessStore.CreateSession(ctx, h.projectID, "fake-model", "", nil)
 	require.NoError(t, err)
-	childID, err := h.sessStore.CreateSubagentSession(
-		ctx, h.projectID, parent.ID, parent.ID, "general", "fake-model", "",
-	)
+	childID, err := func() (int64, error) {
+		var id int64
+		err := h.sessStore.WithTx(ctx, func(tx *sql.Tx) error {
+			var err error
+			id, err = sessionstore.CreateSubagentSessionTx(
+				ctx,
+				tx,
+				sessionstore.CreateSubagentSession{
+					ProjectID:      h.projectID,
+					ParentID:       parent.ID,
+					RootID:         parent.ID,
+					AgentType:      "general",
+					Model:          "fake-model",
+					ReasoningLevel: "",
+				},
+			)
+			return err
+		})
+		return id, err
+	}()
 	require.NoError(t, err)
 	require.NoError(t, h.links.InsertSubagentLink(ctx, subagent.Link{
 		ParentID: parent.ID, ChildID: childID, TaskCallID: "stale",
@@ -111,10 +161,12 @@ func TestSubagentResult_ErrorBeatsStalePointer(t *testing.T) {
 
 	// The child then errors (max iterations persists error status).
 	require.NoError(t, h.sessStore.UpdateSessionStatus(ctx, childID, sessionstore.SessionStatusError))
-	_, err = h.sessStore.InsertMessage(ctx, childID, &transcript.Message{
+	_, err = h.sessStore.Commit(ctx, sessionstore.Commit{SessionID: childID, Messages: []*transcript.Message{{
 		Role: "assistant", ToolCalls: json.RawMessage(`[{"id":"x","name":"bash","arguments":{}}]`),
-	})
+	}}})
 	require.NoError(t, err)
+
+	h.startInboxWake()
 
 	h.mgr.finalizeChild(ctx, childID)
 

@@ -60,82 +60,98 @@ func (t *budgetTool) Execute(ctx context.Context, raw json.RawMessage) (*tool.Re
 
 	switch params.Action {
 	case "get":
-		if params.CostUSD != nil || params.Duration != "" {
-			return nil, errors.New("get does not accept limit fields")
-		}
-
-		record, err := t.store.Get(ctx, t.rootID)
-		if errors.Is(err, ErrNotFound) {
-			return &tool.Result{Output: "No budget is configured."}, nil
-		}
-
-		if err != nil {
-			return nil, err
-		}
-
-		return &tool.Result{Output: renderRecord(record)}, nil
+		return t.get(ctx, params)
 	case "set":
-		if !t.priced && params.CostUSD != nil {
-			return nil, errors.New("cost budget unavailable: the current model has no catalog pricing")
-		}
-
-		cost, err := normalizeCost(params.CostUSD)
-		if err != nil {
-			return nil, err
-		}
-
-		duration, err := parseRelativeDuration(params.Duration)
-		if err != nil {
-			return nil, err
-		}
-
-		grant, err := currentGrant(ctx, t.rootID)
-		if err != nil {
-			return nil, err
-		}
-
-		if cost == nil && duration == nil {
-			return nil, errors.New("set requires cost_usd, duration, or both")
-		}
-		var seconds *int64
-		if duration != nil {
-			value := int64(duration.Seconds())
-			seconds = &value
-		}
-		receipt := "Budget armed: " + renderLimits(cost, duration)
-		record, err := t.store.Arm(ctx, Mutation{
-			RootSessionID: grant.RootID, InputID: grant.InputID, ToolID: grant.ToolID,
-			Command: grant.Command, ToolCallID: grant.ToolCallID,
-			CostLimitUSD: cost, DurationSeconds: seconds, Receipt: receipt,
-		})
-		if err != nil {
-			return nil, err
-		}
-
-		return &tool.Result{Output: renderRecord(record), DirectMessages: []string{receipt}}, nil
+		return t.set(ctx, params)
 	case "clear":
-		if params.CostUSD != nil || params.Duration != "" {
-			return nil, errors.New("clear does not accept limit fields")
-		}
-
-		grant, err := currentGrant(ctx, t.rootID)
-		if err != nil {
-			return nil, err
-		}
-
-		const receipt = "Budget cleared"
-		record, err := t.store.Clear(ctx, Mutation{
-			RootSessionID: grant.RootID, InputID: grant.InputID, ToolID: grant.ToolID,
-			Command: grant.Command, ToolCallID: grant.ToolCallID, Receipt: receipt,
-		})
-		if err != nil {
-			return nil, err
-		}
-
-		return &tool.Result{Output: renderRecord(record), DirectMessages: []string{receipt}}, nil
+		return t.clear(ctx, params)
 	default:
 		return nil, errors.New("action must be get, set, or clear")
 	}
+}
+
+func (t *budgetTool) get(ctx context.Context, params toolParams) (*tool.Result, error) {
+	if params.CostUSD != nil || params.Duration != "" {
+		return nil, errors.New("get does not accept limit fields")
+	}
+
+	record, err := t.store.Get(ctx, t.rootID)
+	if errors.Is(err, ErrNotFound) {
+		return &tool.Result{Output: "No budget is configured."}, nil
+	}
+
+	if err != nil {
+		return nil, err
+	}
+
+	return &tool.Result{Output: renderRecord(record)}, nil
+}
+
+func (t *budgetTool) set(ctx context.Context, params toolParams) (*tool.Result, error) {
+	if !t.priced && params.CostUSD != nil {
+		return nil, errors.New("cost budget unavailable: the current model has no catalog pricing")
+	}
+
+	cost, err := normalizeCost(params.CostUSD)
+	if err != nil {
+		return nil, err
+	}
+
+	duration, err := parseRelativeDuration(params.Duration)
+	if err != nil {
+		return nil, err
+	}
+
+	grant, err := currentGrant(ctx, t.rootID)
+	if err != nil {
+		return nil, err
+	}
+
+	if cost == nil && duration == nil {
+		return nil, errors.New("set requires cost_usd, duration, or both")
+	}
+	var seconds *int64
+
+	if duration != nil {
+		value := int64(duration.Seconds())
+		seconds = &value
+	}
+
+	receipt := "Budget armed: " + renderLimits(cost, duration)
+
+	record, err := t.store.Arm(ctx, Mutation{
+		RootSessionID: grant.RootID, InputID: grant.InputID, ToolID: grant.ToolID,
+		Command: grant.Command, ToolCallID: grant.ToolCallID,
+		CostLimitUSD: cost, DurationSeconds: seconds, Receipt: receipt,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	return &tool.Result{Output: renderRecord(record), DirectMessages: []string{receipt}}, nil
+}
+
+func (t *budgetTool) clear(ctx context.Context, params toolParams) (*tool.Result, error) {
+	if params.CostUSD != nil || params.Duration != "" {
+		return nil, errors.New("clear does not accept limit fields")
+	}
+
+	grant, err := currentGrant(ctx, t.rootID)
+	if err != nil {
+		return nil, err
+	}
+
+	const receipt = "Budget cleared"
+
+	record, err := t.store.Clear(ctx, Mutation{
+		RootSessionID: grant.RootID, InputID: grant.InputID, ToolID: grant.ToolID,
+		Command: grant.Command, ToolCallID: grant.ToolCallID, Receipt: receipt,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	return &tool.Result{Output: renderRecord(record), DirectMessages: []string{receipt}}, nil
 }
 
 func currentGrant(ctx context.Context, rootID int64) (Grant, error) {

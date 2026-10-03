@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 
 	"github.com/pilat/coagent/internal/sessionstore"
 	"github.com/pilat/coagent/internal/tool"
@@ -28,26 +29,41 @@ func (s *svc) hasPendingDurableInput(ctx context.Context, sessionID int64) (bool
 // it cannot jump a foreground subagent/config/secret result.
 func (s *svc) pendingInputRunnable(ctx context.Context, sessionID int64) (bool, error) {
 	rows, err := s.store.ListPending(ctx, sessionID)
-	if err != nil || len(rows) == 0 {
-		return false, err
+	if err != nil {
+		return false, fmt.Errorf("pending input runnable: %w", err)
 	}
+
+	if len(rows) == 0 {
+		return false, nil
+	}
+
 	for _, row := range rows {
 		if row.Source == sessionstore.InputSourceCallResult {
 			return true, nil
 		}
+
 		if row.Source == sessionstore.InputSourceUser && isReadOnlyBoundaryCommand(row.RawContent) {
-			return true, nil
+			command := strings.TrimSpace(row.RawContent)
+
+			deferred := s.deferNotices.announced(sessionID) &&
+				(command == compactCommand || strings.HasPrefix(command, compactCommand+" "))
+			if !deferred {
+				return true, nil
+			}
 		}
 	}
+
 	calls, err := s.pendingExternalCallsForSession(ctx, sessionID)
 	if err != nil {
 		return false, err
 	}
+
 	for _, name := range calls {
 		if name != tool.IDSleep {
 			return false, nil
 		}
 	}
+
 	return true, nil
 }
 

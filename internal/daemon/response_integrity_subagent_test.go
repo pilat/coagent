@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"database/sql"
 	"sync"
 	"testing"
 	"time"
@@ -8,6 +9,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/pilat/coagent/internal/budget"
 	"github.com/pilat/coagent/internal/llmwire"
 	"github.com/pilat/coagent/internal/sessionstore"
 	"github.com/pilat/coagent/internal/subagent"
@@ -37,6 +39,7 @@ func TestResponseIntegrity_BudgetCrossingSuppressesRecoveryAndCallStubs(t *testi
 		h.shutdown()
 	}()
 
+	h.startInboxWake()
 	sessionID, err := h.mgr.Send(h.ctx, h.projectID, "cross the budget", "fake-model", map[string]any{
 		"manager_id": scenarioManagerID,
 	})
@@ -49,8 +52,8 @@ func TestResponseIntegrity_BudgetCrossingSuppressesRecoveryAndCallStubs(t *testi
 	close(release)
 
 	h.waitUntil("budget park completes", func() bool {
-		record, loadErr := h.sessStore.GetBudget(h.ctx, sessionID)
-		return loadErr == nil && record.State == sessionstore.BudgetFired && record.ParkPhase == "parked"
+		record, loadErr := h.sessStore.Get(h.ctx, sessionID)
+		return loadErr == nil && record.State == budget.Fired && record.ParkPhase == "parked"
 	})
 
 	var recoveryRows, toolRows, rejectedRows int
@@ -81,6 +84,7 @@ func TestResponseIntegrity_ReusedChildReportsCurrentErrorInsteadOfPriorAnswer(t 
 
 	h := newSubagentHarnessWith(t, respond)
 	defer h.shutdown()
+	h.startInboxWake()
 	parentID, err := h.mgr.Send(h.ctx, h.projectID, "start integrity child", "fake-model", nil)
 	require.NoError(t, err)
 	link := h.waitForChildLink(parentID)
@@ -144,6 +148,7 @@ func runIncompleteChildResponse(
 
 	h := newSubagentHarnessWith(t, respond)
 	t.Cleanup(h.shutdown)
+	h.startInboxWake()
 	parentID, err := h.mgr.Send(h.ctx, h.projectID, "start empty-finish child", "fake-model", nil)
 	require.NoError(t, err)
 	link := h.waitForChildLink(parentID)
@@ -160,18 +165,46 @@ func TestResponseIntegrity_MissingTerminalRejectionNeverReusesOlderAnswer(t *tes
 	defer h.shutdown()
 	parent, err := h.sessStore.CreateSession(h.ctx, h.projectID, "fake-model", "", nil)
 	require.NoError(t, err)
-	childID, err := h.sessStore.CreateSubagentSession(
-		h.ctx, h.projectID, parent.ID, parent.ID, "general", "fake-model", "",
-	)
+	childID, err := func() (int64, error) {
+		var id int64
+		err := h.sessStore.WithTx(h.ctx, func(tx *sql.Tx) error {
+			var err error
+			id, err = sessionstore.CreateSubagentSessionTx(
+				h.ctx,
+				tx,
+				sessionstore.CreateSubagentSession{
+					ProjectID:      h.projectID,
+					ParentID:       parent.ID,
+					RootID:         parent.ID,
+					AgentType:      "general",
+					Model:          "fake-model",
+					ReasoningLevel: "",
+				},
+			)
+			return err
+		})
+		return id, err
+	}()
 	require.NoError(t, err)
 	require.NoError(t, h.links.InsertSubagentLink(h.ctx, subagent.Link{
 		ParentID: parent.ID, ChildID: childID, TaskCallID: "missing-rejection",
 	}))
-	_, err = h.sessStore.InsertMessage(h.ctx, childID, &transcript.Message{
+	_, err = h.sessStore.Commit(h.ctx, sessionstore.Commit{SessionID: childID, Messages: []*transcript.Message{{
 		Role: llmwire.RoleAssistant, Content: "older accepted answer", FinishType: llmwire.FinishStop,
-	})
+	}}})
 	require.NoError(t, err)
-	require.NoError(t, h.sessStore.UpdateSessionIteration(h.ctx, childID, 2, sessionstore.SessionStatusError))
+	require.NoError(t, func() error {
+		iteration := 2
+		status := sessionstore.SessionStatusError
+		_, err := h.sessStore.Commit(
+			h.ctx,
+			sessionstore.Commit{
+				SessionID: childID,
+				State:     sessionstore.StatePatch{Iteration: &iteration, Status: &status},
+			},
+		)
+		return err
+	}())
 
 	h.mgr.finalizeChild(h.ctx, childID)
 	link, err := h.links.GetLink(h.ctx, childID)

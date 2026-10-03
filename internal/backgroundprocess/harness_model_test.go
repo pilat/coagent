@@ -14,7 +14,7 @@ import (
 func TestHarnessModel_ConcurrentPromotionAndCancellationReleaseOneClass(t *testing.T) {
 	ctx := context.Background()
 	store := newTestStore(t)
-	service := newTestService(t, store, nil, nil)
+	service := newTestService(t, store, nil)
 	spawn := func(ctx context.Context) (*exec.Cmd, error) {
 		return exec.CommandContext(ctx, "sleep", "30"), nil
 	}

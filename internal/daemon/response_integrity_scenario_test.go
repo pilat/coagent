@@ -20,6 +20,7 @@ func TestHarnessScenario_LengthAttemptIsDiscardedBeforeToolExecution(t *testing.
 		h.shutdown()
 	}()
 
+	h.startInboxWake()
 	sessionID, err := h.mgr.Send(h.ctx, h.projectID, "exercise response recovery", "fake-model", map[string]any{
 		"manager_id": scenarioManagerID,
 	})
@@ -86,6 +87,7 @@ func TestHarnessScenario_RepeatedLengthPublishesCanonicalError(t *testing.T) {
 		h.shutdown()
 	}()
 
+	h.startInboxWake()
 	sessionID, err := h.mgr.Send(h.ctx, h.projectID, "repeat the limit", "fake-model", map[string]any{
 		"manager_id": scenarioManagerID,
 	})
@@ -114,6 +116,7 @@ func TestHarnessScenario_UnknownFinishPublishesCanonicalError(t *testing.T) {
 		h.shutdown()
 	}()
 
+	h.startInboxWake()
 	sessionID, err := h.mgr.Send(h.ctx, h.projectID, "unknown finish", "fake-model", map[string]any{
 		"manager_id": scenarioManagerID,
 	})

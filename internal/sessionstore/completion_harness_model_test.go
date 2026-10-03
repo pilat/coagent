@@ -1,4 +1,4 @@
-package sessionstore
+package sessionstore_test
 
 import (
 	"context"
@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/pilat/coagent/internal/sessionstore"
 	"github.com/pilat/coagent/internal/subagent"
 	"github.com/pilat/coagent/internal/transcript"
 )
@@ -23,44 +24,70 @@ func TestHarnessModel_CompletionCheckRestartAndDelivery(t *testing.T) {
 	store, db, projectID := newTestStore(t)
 	sessionID := seedCompletionSession(t, store, db, projectID)
 
-	candidate, err := store.CommitAcceptedResponseDisposition(ctx, AcceptedResponseDisposition{
-		SessionID: sessionID, RootID: sessionID, Iteration: 1,
-		Message: assistantStopMessage("first answer"),
-		Kind:    ResponseDispositionCandidate,
-		Nudge:   &transcript.Message{Role: "user", Content: "second look"},
-		// A manager-owned turn opens the reply obligation alongside the check.
-		ManagerReplyPending: true,
-		// A prior empty attempt persists through the candidate commit.
-		EmptyStopStreak: 2,
-	})
+	candidate, err := store.Commit(
+		ctx,
+		sessionstore.Commit{
+			SessionID:     sessionID,
+			RootID:        sessionID,
+			Messages:      []*transcript.Message{assistantStopMessage("first answer")},
+			ObserveBudget: true,
+			Unfired: sessionstore.Parts{
+				Messages: []*transcript.Message{{Role: "user", Content: "second look"}},
+				State: sessionstore.StatePatch{
+					Iteration:           new(1),
+					EmptyStopStreak:     new(2),
+					ManagerReplyPending: new(true),
+					Candidate:           &sessionstore.CandidateChange{Expected: 0, NextRef: 0},
+				},
+			},
+		},
+	)
 	require.NoError(t, err)
-	require.Positive(t, candidate.MessageID)
-	require.Positive(t, candidate.NudgeMessageID)
+	require.Positive(t, candidate.MessageIDs[0])
+	require.Positive(t, candidate.MessageIDs[1])
 
 	// Restart: a fresh store over the same database carries no memory.
-	restarted := NewStore(db)
+	restarted := testStore(db)
 
 	state, err := restarted.LoadCompletionCheckState(ctx, sessionID)
 	require.NoError(t, err)
 	require.NotNil(t, state.CandidateID)
-	assert.Equal(t, candidate.MessageID, *state.CandidateID,
+	assert.Equal(t, candidate.MessageIDs[0], *state.CandidateID,
 		"restart must preserve the pending candidate identity")
 	assert.True(t, state.ManagerReplyPending,
 		"restart must preserve the manager reply obligation")
 	assert.Equal(t, 2, state.EmptyStopStreak,
 		"restart must preserve the durable empty streak")
 
-	confirmed, err := restarted.CommitAcceptedResponseDisposition(ctx, AcceptedResponseDisposition{
-		SessionID: sessionID, RootID: sessionID, Iteration: 2,
-		Message:             assistantStopMessage("confirmed answer"),
-		Kind:                ResponseDispositionConfirmed,
-		Output:              "confirmed answer",
-		ExpectedCandidateID: candidate.MessageID,
-		ManagerReplyPending: true,
-		EmptyStopStreak:     0,
-	})
+	confirmed, err := restarted.Commit(
+		ctx,
+		sessionstore.Commit{
+			SessionID:     sessionID,
+			RootID:        sessionID,
+			Messages:      []*transcript.Message{assistantStopMessage("confirmed answer")},
+			ObserveBudget: true,
+			Unfired: sessionstore.Parts{
+				Outputs: []sessionstore.Output{
+					{
+						Type:          sessionstore.OutputMessagePersistent,
+						Content:       "confirmed answer",
+						MessageRef:    0,
+						Phase:         "final",
+						ReleasesInput: true,
+					},
+				},
+				State: sessionstore.StatePatch{
+					Iteration:           new(2),
+					EmptyStopStreak:     new(0),
+					ManagerReplyPending: new(false),
+					Candidate:           &sessionstore.CandidateChange{Expected: candidate.MessageIDs[0], NextRef: -1},
+					ConfirmedAnswerID:   new(candidate.MessageIDs[0]),
+				},
+			},
+		},
+	)
 	require.NoError(t, err)
-	require.NotNil(t, confirmed.Output)
+	require.NotNil(t, confirmed.Outputs)
 
 	var outbox int
 	require.NoError(t, db.QueryRowContext(ctx,
@@ -83,14 +110,34 @@ func TestHarnessModel_CompletionCheckRestartAndDelivery(t *testing.T) {
 
 	// Replaying the confirmed commit with the same candidate id is a stale
 	// transition, not a second publication.
-	_, err = restarted.CommitAcceptedResponseDisposition(ctx, AcceptedResponseDisposition{
-		SessionID: sessionID, RootID: sessionID, Iteration: 3,
-		Message:             assistantStopMessage("replayed confirmation"),
-		Kind:                ResponseDispositionConfirmed,
-		Output:              "replayed confirmation",
-		ExpectedCandidateID: candidate.MessageID,
-	})
-	require.ErrorIs(t, err, ErrCompletionCheckConflict)
+	_, err = restarted.Commit(
+		ctx,
+		sessionstore.Commit{
+			SessionID:     sessionID,
+			RootID:        sessionID,
+			Messages:      []*transcript.Message{assistantStopMessage("replayed confirmation")},
+			ObserveBudget: true,
+			Unfired: sessionstore.Parts{
+				Outputs: []sessionstore.Output{
+					{
+						Type:          sessionstore.OutputMessagePersistent,
+						Content:       "replayed confirmation",
+						MessageRef:    0,
+						Phase:         "final",
+						ReleasesInput: true,
+					},
+				},
+				State: sessionstore.StatePatch{
+					Iteration:           new(3),
+					EmptyStopStreak:     new(0),
+					ManagerReplyPending: new(false),
+					Candidate:           &sessionstore.CandidateChange{Expected: candidate.MessageIDs[0], NextRef: -1},
+					ConfirmedAnswerID:   new(candidate.MessageIDs[0]),
+				},
+			},
+		},
+	)
+	require.ErrorIs(t, err, sessionstore.ErrCompletionCheckConflict)
 
 	require.NoError(t, db.QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM session_outbox WHERE session_id = ?`, sessionID).Scan(&outbox))
@@ -107,19 +154,31 @@ func TestHarnessModel_CompletionEmptyStopEscalation(t *testing.T) {
 	sessionID := seedCompletionSession(t, store, db, projectID)
 
 	for attempt := 1; attempt <= 5; attempt++ {
-		result, err := store.CommitAcceptedResponseDisposition(ctx, AcceptedResponseDisposition{
-			SessionID: sessionID, RootID: sessionID, Iteration: attempt,
-			Message:         &transcript.Message{Role: "assistant", Content: "  ", FinishType: "stop"},
-			Kind:            ResponseDispositionEmptyStop,
-			Nudge:           &transcript.Message{Role: "user", Content: "continue"},
-			EmptyStopStreak: attempt,
-		})
+		result, err := store.Commit(
+			ctx,
+			sessionstore.Commit{
+				SessionID:     sessionID,
+				RootID:        sessionID,
+				Messages:      []*transcript.Message{{Role: "assistant", Content: "  ", FinishType: "stop"}},
+				ObserveBudget: true,
+				Unfired: sessionstore.Parts{
+					Messages: []*transcript.Message{{Role: "user", Content: "continue"}},
+					State: sessionstore.StatePatch{
+						Iteration:           new(attempt),
+						EmptyStopStreak:     new(attempt),
+						ManagerReplyPending: new(false),
+					},
+				},
+			},
+		)
 		require.NoError(t, err)
-		assert.Equal(t, attempt, result.EmptyStopStreak)
-		assert.Nil(t, result.Output, "attempt %d stays hidden", attempt)
+		state, stateErr := store.LoadCompletionCheckState(ctx, sessionID)
+		require.NoError(t, stateErr)
+		assert.Equal(t, attempt, state.EmptyStopStreak)
+		assert.Empty(t, result.Outputs, "attempt %d stays hidden", attempt)
 
 		// Restart at each boundary: the streak must continue, never reset.
-		store = NewStore(db)
+		store = testStore(db)
 	}
 
 	var outbox int
@@ -131,15 +190,33 @@ func TestHarnessModel_CompletionEmptyStopEscalation(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 5, state.EmptyStopStreak)
 
-	terminal, err := store.CommitAcceptedResponseDisposition(ctx, AcceptedResponseDisposition{
-		SessionID: sessionID, RootID: sessionID, Iteration: 6,
-		Message:         &transcript.Message{Role: "assistant", Content: "", FinishType: "stop"},
-		Kind:            ResponseDispositionEmptyStop,
-		Output:          EmptyStopTerminalNotice(EmptyStopTerminalStreak),
-		EmptyStopStreak: EmptyStopTerminalStreak,
-	})
+	terminal, err := store.Commit(
+		ctx,
+		sessionstore.Commit{
+			SessionID:     sessionID,
+			RootID:        sessionID,
+			Messages:      []*transcript.Message{{Role: "assistant", Content: "", FinishType: "stop"}},
+			ObserveBudget: true,
+			Unfired: sessionstore.Parts{
+				Outputs: []sessionstore.Output{
+					{
+						Type:          sessionstore.OutputMessagePersistent,
+						Content:       sessionstore.EmptyStopTerminalNotice(sessionstore.EmptyStopTerminalStreak),
+						MessageRef:    0,
+						Phase:         "final",
+						ReleasesInput: true,
+					},
+				},
+				State: sessionstore.StatePatch{
+					Iteration:           new(6),
+					EmptyStopStreak:     new(sessionstore.EmptyStopTerminalStreak),
+					ManagerReplyPending: new(false),
+				},
+			},
+		},
+	)
 	require.NoError(t, err)
-	require.NotNil(t, terminal.Output)
+	require.NotNil(t, terminal.Outputs)
 
 	require.NoError(t, db.QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM session_outbox WHERE session_id = ?`, sessionID).Scan(&outbox))
@@ -150,15 +227,15 @@ func TestHarnessModel_CompletionEmptyStopEscalation(t *testing.T) {
 	require.NoError(t, db.QueryRowContext(ctx,
 		`SELECT COALESCE(source_key, ''), COALESCE(fingerprint, '') FROM session_outbox WHERE session_id = ?`,
 		sessionID).Scan(&sourceKey, &fingerprint))
-	assert.Equal(t, fmt.Sprintf("message:%d:final", terminal.MessageID), sourceKey,
+	assert.Equal(t, fmt.Sprintf("message:%d:final", terminal.MessageIDs[0]), sourceKey,
 		"the terminal notice is keyed to its attempt for idempotent replay")
 
 	// The no-duplicate guarantee lives in the outbox identity: redelivering
 	// the same source key with the same fingerprint is a no-op returning the
 	// existing row, never a second notice.
-	replay, err := store.EnqueueOutput(ctx, OutputDraft{
-		SessionID: sessionID, Type: OutputMessagePersistent,
-		Content:   EmptyStopTerminalNotice(EmptyStopTerminalStreak),
+	replay, err := store.EnqueueOutput(ctx, sessionstore.OutputDraft{
+		SessionID: sessionID, Type: sessionstore.OutputMessagePersistent,
+		Content:   sessionstore.EmptyStopTerminalNotice(sessionstore.EmptyStopTerminalStreak),
 		SourceKey: sourceKey, Fingerprint: fingerprint, ReleasesInput: true,
 	})
 	require.NoError(t, err)
@@ -170,12 +247,12 @@ func TestHarnessModel_CompletionEmptyStopEscalation(t *testing.T) {
 
 	// Reusing the key with different content fails closed instead of
 	// replacing the committed notice.
-	_, err = store.EnqueueOutput(ctx, OutputDraft{
-		SessionID: sessionID, Type: OutputMessagePersistent,
+	_, err = store.EnqueueOutput(ctx, sessionstore.OutputDraft{
+		SessionID: sessionID, Type: sessionstore.OutputMessagePersistent,
 		Content:   "different notice",
 		SourceKey: sourceKey, Fingerprint: "different-fingerprint", ReleasesInput: true,
 	})
-	require.ErrorIs(t, err, ErrOutputConflict)
+	require.ErrorIs(t, err, sessionstore.ErrOutputConflict)
 }
 
 // The wake-source projection reads the producer ledger first: a completed but
@@ -189,12 +266,12 @@ func TestHarnessModel_CompletionWakeRaceClosed(t *testing.T) {
 
 	parent, err := store.CreateSession(ctx, projectID, "m", "", nil)
 	require.NoError(t, err)
-	childID, err := store.CreateSubagentSession(ctx, projectID, parent.ID, parent.ID, "general", "m", "")
+	childID, err := createChild(ctx, store, projectID, parent.ID, parent.ID, "general", "m", "")
 	require.NoError(t, err)
 
 	_, err = db.ExecContext(ctx, `INSERT INTO subagent_links
-		(parent_id, child_id, task_call_id, blocking, depth, state, created_at)
-		VALUES (?, ?, ?, 0, 0, 'completed', ?)`,
+		(parent_id, child_id, task_call_id, blocking, depth, state, outcome, created_at)
+		VALUES (?, ?, ?, 0, 0, 'completed', 'completed', ?)`,
 		parent.ID, childID, "task-1", time.Now().UTC().Unix())
 	require.NoError(t, err)
 
@@ -214,7 +291,7 @@ func TestHarnessModel_CompletionWakeRaceClosed(t *testing.T) {
 	for _, state := range []string{"stopped", "killed"} {
 		other, err := store.CreateSession(ctx, projectID, "m", "", nil)
 		require.NoError(t, err)
-		otherChild, err := store.CreateSubagentSession(ctx, projectID, other.ID, other.ID, "general", "m", "")
+		otherChild, err := createChild(ctx, store, projectID, other.ID, other.ID, "general", "m", "")
 		require.NoError(t, err)
 
 		_, err = db.ExecContext(ctx, `INSERT INTO subagent_links
@@ -240,12 +317,12 @@ func TestHarnessModel_CompletionDeliveryThenPromotionInvalidates(t *testing.T) {
 
 	parent, err := store.CreateSession(ctx, projectID, "m", "", nil)
 	require.NoError(t, err)
-	childID, err := store.CreateSubagentSession(ctx, projectID, parent.ID, parent.ID, "general", "m", "")
+	childID, err := createChild(ctx, store, projectID, parent.ID, parent.ID, "general", "m", "")
 	require.NoError(t, err)
 
 	_, err = db.ExecContext(ctx, `INSERT INTO subagent_links
-		(parent_id, child_id, task_call_id, blocking, depth, state, created_at)
-		VALUES (?, ?, ?, 0, 0, 'completed', ?)`,
+		(parent_id, child_id, task_call_id, blocking, depth, state, outcome, created_at)
+		VALUES (?, ?, ?, 0, 0, 'completed', 'completed', ?)`,
 		parent.ID, childID, "task-1", time.Now().UTC().Unix())
 	require.NoError(t, err)
 
@@ -265,7 +342,7 @@ func TestHarnessModel_CompletionDeliveryThenPromotionInvalidates(t *testing.T) {
 	input, err := store.PeekPending(ctx, parent.ID)
 	require.NoError(t, err)
 
-	_, err = store.PromoteInput(ctx, input.ID, input.RawContent)
+	_, err = acceptInput(ctx, store, input.ID, input.RawContent)
 	require.NoError(t, err)
 
 	candidate, _, streak := readCompletionState(t, db, parent.ID)

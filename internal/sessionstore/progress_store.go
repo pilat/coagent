@@ -141,9 +141,9 @@ func CaptureProgressTx(ctx context.Context, tx *sql.Tx, rootID int64) (*Progress
 		return nil, err
 	}
 
-	budget, err := scanBudget(tx.QueryRowContext(ctx, budgetSelect+` WHERE root_session_id = ?`, rootID))
+	record, err := scanBudget(tx.QueryRowContext(ctx, budgetSelect+` WHERE root_session_id = ?`, rootID))
 	if err == nil {
-		facts.Budget = budget
+		facts.Budget = record
 	} else if !errors.Is(err, sql.ErrNoRows) {
 		return nil, fmt.Errorf("load progress budget: %w", err)
 	}

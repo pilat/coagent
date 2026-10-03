@@ -1,7 +1,6 @@
 package daemon
 
 import (
-	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -17,9 +16,7 @@ import (
 
 	"github.com/pilat/coagent/internal/admission"
 	"github.com/pilat/coagent/internal/backgroundprocess"
-	"github.com/pilat/coagent/internal/controllerapi"
 	"github.com/pilat/coagent/internal/llmwire"
-	"github.com/pilat/coagent/internal/session"
 	"github.com/pilat/coagent/internal/sessionevent"
 	"github.com/pilat/coagent/internal/sessionstore"
 	"github.com/pilat/coagent/internal/tool"
@@ -64,6 +61,7 @@ func TestHarnessScenario_ProcessCompletionAtBusyToolBoundary(t *testing.T) {
 		h.shutdown()
 	}()
 
+	h.startInboxWake()
 	rootID, err := h.mgr.Send(h.ctx, h.projectID, "start busy process scenario", "fake-model", nil)
 	require.NoError(t, err)
 	<-entered
@@ -128,13 +126,14 @@ func TestHarnessScenario_AgentCancelsOwnedBackgroundProcess(t *testing.T) {
 
 	h := newSubagentHarnessWith(t, respond)
 	service := installScenarioProcessService(t, h)
-	h.mgr.factory = session.WithFactoryProcessService(h.mgr.factory, service)
+	h.mgr.buildInput.ProcessService = service
 	collector := collectEvents(h.mgr.PubSub().SubscribeAll())
 	defer func() {
 		collector.stop()
 		h.shutdown()
 	}()
 
+	h.startInboxWake()
 	rootID, err := h.mgr.Send(h.ctx, h.projectID, "start then cancel background work", "fake-model", map[string]any{
 		"manager_id": scenarioManagerID,
 	})
@@ -175,30 +174,27 @@ func TestHarnessScenario_ProcessCompletionAtIdleTransition(t *testing.T) {
 	require.NoError(t, h.sessStore.UpdateSessionStatus(
 		h.ctx, root.ID, sessionstore.SessionStatusCompleted,
 	))
-	_, err = h.mgr.inboxStore.EnqueueAsyncInput(
-		h.ctx, root.ID, sessionstore.InputSourceProcess,
-		"<process_completion>idle transition</process_completion>",
-		map[string]any{"process_id": "idle-transition"},
+	_, err = h.mgr.store.Enqueue(
+		h.ctx,
+		sessionstore.Input{
+			SessionID:  root.ID,
+			Source:     sessionstore.InputSourceProcess,
+			Content:    "<process_completion>idle transition</process_completion>",
+			Attributes: map[string]any{"process_id": "idle-transition"},
+		},
 	)
 	require.NoError(t, err)
 
 	workDir, err := h.mgr.store.GetProjectWorkDir(h.ctx, h.projectID)
 	require.NoError(t, err)
 	require.True(t, h.mgr.admit.TryAdmit(admission.Parent, 0))
-	ending := newRunner(func() {}, workDir, h.projectID, admission.Parent, 0, false, nil)
+	ending := newRunner(func() {}, workDir, h.projectID, admission.Parent, 0, false)
 	_, registered := h.mgr.runners.Register(root.ID, ending)
 	require.True(t, registered)
 
-	unlock, err := h.mgr.lockSessionTree(h.ctx, root.ID)
-	require.NoError(t, err)
 	require.NoError(t, h.mgr.inputReady(h.ctx, root.ID))
-	leftover, deliver, continued := h.mgr.finishRunnerLocked(
-		h.ctx, nil, root.ID, ending, false, false, true,
-	)
-	unlock()
-	assert.Empty(t, leftover)
-	assert.Nil(t, deliver)
-	assert.True(t, continued, "teardown must reroute the wake into a replacement runner")
+	errored := false
+	h.mgr.finishRunner(h.ctx, root.ID, ending, &errored, true, nil)
 
 	waitForVisibleMessage(t, collector, root.ID, "idle-transition completion observed")
 	drainScenarioClaims(t, "process_idle_transition.json", newChainController(t, h))
@@ -280,6 +276,7 @@ func TestHarnessScenario_ProcessCompletionInterruptsSleep(t *testing.T) {
 		h.shutdown()
 	}()
 
+	h.startInboxWake()
 	rootID, err := h.mgr.Send(h.ctx, h.projectID, "start process sleep", "fake-model", map[string]any{
 		"manager_id": scenarioManagerID,
 	})
@@ -339,26 +336,20 @@ func TestHarnessScenario_ProcessCompletionWaitsForForegroundChild(t *testing.T) 
 		h.shutdown()
 	}()
 
+	h.startInboxWake()
 	rootID, err := h.mgr.Send(h.ctx, h.projectID, "start foreground process ordering", "fake-model", nil)
 	require.NoError(t, err)
 	waitForWaitKind(t, collector, rootID, sessionevent.WaitSubagent)
 	h.waitUntil("foreground parent parked", func() bool { return !h.mgr.HasActiveLoop(rootID) })
 	process := startScenarioProcess(t, service, rootID, rootID, "printf 'queued\\n'")
 	waitScenarioProcessState(t, h, process.ID, backgroundprocess.StateCompleted)
-	collector.waitFor(t, "process wake remains behind foreground child",
-		func(events []controllerapi.SessionNotification) bool {
-			waiting := 0
-			for _, event := range events {
-				if event.SessionID == rootID && event.Notification.Type == sessionevent.NotifyWaiting {
-					waiting++
-				}
-			}
-
-			return waiting == 2
-		})
+	h.waitUntil("process wake remains behind foreground child", func() bool {
+		pending, err := h.sessStore.PeekPending(h.ctx, rootID)
+		return err == nil && pending.Source == sessionstore.InputSourceProcess
+	})
 	h.waitUntil("process wake runner parked", func() bool { return !h.mgr.HasActiveLoop(rootID) })
 
-	pending, err := h.mgr.inboxStore.PeekPending(h.ctx, rootID)
+	pending, err := h.mgr.store.PeekPending(h.ctx, rootID)
 	require.NoError(t, err)
 	assert.Equal(t, sessionstore.InputSourceProcess, pending.Source)
 	assert.Equal(t, int64(1), parentCalls.Load(), "process input cannot cross the foreground task call")
@@ -447,9 +438,26 @@ func TestHarnessScenario_ForegroundBashCrashRestartResolvesInterruptedCall(t *te
 	first := newSubagentHarnessOnDB(t, dbPath, respond, nil)
 	root, err := first.sessStore.CreateSession(first.ctx, first.projectID, "fake-model", "", nil)
 	require.NoError(t, err)
-	input, err := first.sessStore.EnqueueInput(first.ctx, root.ID, sessionstore.InputSourceUser, "run the command")
+	input, err := first.sessStore.Enqueue(
+		first.ctx,
+		sessionstore.Input{SessionID: root.ID, Source: sessionstore.InputSourceUser, Content: "run the command"},
+	)
 	require.NoError(t, err)
-	_, err = first.sessStore.PromoteInput(first.ctx, input.ID, "run the command")
+	_, err = first.sessStore.Commit(
+		first.ctx,
+		sessionstore.Commit{
+			SessionID: input.Input.SessionID,
+			Accept: []sessionstore.Accept{
+				{
+					InputID:    input.Input.ID,
+					State:      sessionstore.InputStateAccepted,
+					Content:    "run the command",
+					LinkRef:    -1,
+					ModelBound: true,
+				},
+			},
+		},
+	)
 	require.NoError(t, err)
 
 	toolCalls, err := json.Marshal([]llmwire.ToolCall{
@@ -457,9 +465,9 @@ func TestHarnessScenario_ForegroundBashCrashRestartResolvesInterruptedCall(t *te
 		{ID: "fg-read", Name: "read", Arguments: []byte(`{"path":"a.go"}`)},
 	})
 	require.NoError(t, err)
-	_, err = first.sessStore.InsertMessage(first.ctx, root.ID, &transcript.Message{
+	_, err = first.sessStore.Commit(first.ctx, sessionstore.Commit{SessionID: root.ID, Messages: []*transcript.Message{{
 		Role: "assistant", Content: "running the command", ToolCalls: toolCalls,
-	})
+	}}})
 	require.NoError(t, err)
 
 	now := time.Now().UTC()
@@ -520,18 +528,17 @@ func TestScenario_InterruptedCallSettlementNeedsNoProjectOrModel(t *testing.T) {
 		ID: "interrupted-bash", Name: "bash", Arguments: []byte(`{"command":"true"}`),
 	}})
 	require.NoError(t, err)
-	_, err = h.sessStore.InsertMessage(h.ctx, root.ID, &transcript.Message{
+	_, err = h.sessStore.Commit(h.ctx, sessionstore.Commit{SessionID: root.ID, Messages: []*transcript.Message{{
 		Role: llmwire.RoleAssistant, ToolCalls: toolCalls,
-	})
+	}}})
 	require.NoError(t, err)
 
 	workDir, err := h.mgr.store.GetProjectWorkDir(h.ctx, h.projectID)
 	require.NoError(t, err)
 	require.NoError(t, os.Rename(workDir, workDir+".gone"))
 
-	closed, err := h.mgr.closeInterruptedCalls(h.ctx, root)
+	err = h.mgr.recoverInterruptedTools(h.ctx)
 	require.NoError(t, err)
-	assert.Equal(t, 1, closed)
 
 	messages, err := h.sessStore.LoadActiveMessages(h.ctx, root.ID)
 	require.NoError(t, err)
@@ -554,13 +561,8 @@ func TestProcessCompletionRetainsInputWithoutWakingStoppedOrErroredSession(t *te
 				return &llmwire.Response{Text: "must not run"}
 			})
 			collector := collectEvents(h.mgr.PubSub().SubscribeAll())
-			completionRouted := make(chan struct{})
 			service := backgroundprocess.NewService(h.mgr.processStore, backgroundprocess.Options{
 				OutputDir: t.TempDir(),
-				OnCompletion: func(ctx context.Context, completion backgroundprocess.Completion) {
-					h.mgr.routeProcessCompletion(ctx, completion)
-					close(completionRouted)
-				},
 			})
 			h.mgr.processSvc = service
 			defer func() {
@@ -571,20 +573,35 @@ func TestProcessCompletionRetainsInputWithoutWakingStoppedOrErroredSession(t *te
 			root, err := h.sessStore.CreateSession(h.ctx, h.projectID, "fake-model", "", nil)
 			require.NoError(t, err)
 			require.NoError(t, h.sessStore.UpdateSessionStatus(h.ctx, root.ID, status))
+			observer := &wakeObserver{Store: h.mgr.store, sessionID: root.ID, observed: make(chan struct{})}
+			h.mgr.store = observer
+			h.startInboxWake()
 
 			process := startScenarioProcess(t, service, root.ID, root.ID, "printf 'parked\\n'")
-			<-completionRouted
+			require.Eventually(t, func() bool {
+				row, err := h.sessStore.PeekPending(h.ctx, root.ID)
+				return err == nil && row.Attributes["process_id"] == process.ID
+			}, 5*time.Second, 10*time.Millisecond)
+			select {
+			case <-observer.observed:
+			case <-time.After(5 * time.Second):
+				t.Fatal("inbox wake did not inspect the parked session")
+			}
+			assert.Never(t, func() bool {
+				return h.mgr.HasActiveLoop(root.ID) || calls.Load() != 0 || len(collector.snapshot()) != 0
+			}, 100*time.Millisecond, 5*time.Millisecond, "a consumed process wake must leave the session parked")
 
 			assert.False(t, h.mgr.HasActiveLoop(root.ID))
 			assert.Zero(t, calls.Load())
-			pending, err := h.mgr.inboxStore.PeekPending(h.ctx, root.ID)
+			pending, err := h.mgr.store.PeekPending(h.ctx, root.ID)
 			require.NoError(t, err)
 			assert.Equal(t, sessionstore.InputSourceProcess, pending.Source)
 			assert.Equal(t, process.ID, pending.Attributes["process_id"])
 			if status == sessionstore.SessionStatusStopped {
+				h.startInboxWake()
 				require.NoError(t, h.mgr.SendToSession(h.ctx, root.ID, "/help"))
 				assert.False(t, h.mgr.HasActiveLoop(root.ID))
-				head, peekErr := h.mgr.inboxStore.PeekPending(h.ctx, root.ID)
+				head, peekErr := h.mgr.store.PeekPending(h.ctx, root.ID)
 				require.NoError(t, peekErr)
 				assert.Equal(t, pending.ID, head.ID)
 			}

@@ -12,6 +12,7 @@ import (
 
 	"github.com/pilat/coagent/internal/config"
 	"github.com/pilat/coagent/internal/controllerapi"
+	"github.com/pilat/coagent/internal/llm"
 	"github.com/pilat/coagent/internal/migrate"
 	"github.com/pilat/coagent/internal/sessionevent"
 	"github.com/pilat/coagent/internal/sessionstore"
@@ -21,20 +22,25 @@ import (
 // failingGetSessionStore makes exactly one GetSession call fail, simulating a
 // transient store hiccup while everything else delegates to the real store.
 type failingGetSessionStore struct {
-	sessionstore.OrchestrationStore
-	err     error
-	pending atomic.Bool
+	Store
+	err       error
+	pending   atomic.Bool
+	skipFirst atomic.Bool
 }
 
 func (s *failingGetSessionStore) GetSession(
 	ctx context.Context,
 	id int64,
 ) (*sessionstore.SessionRecord, error) {
+	if s.skipFirst.CompareAndSwap(true, false) {
+		return s.Store.GetSession(ctx, id)
+	}
+
 	if s.pending.CompareAndSwap(true, false) {
 		return nil, s.err
 	}
 
-	return s.OrchestrationStore.GetSession(ctx, id)
+	return s.Store.GetSession(ctx, id)
 }
 
 // A transient store failure while loading the session must not classify an
@@ -49,7 +55,7 @@ func TestStopOnStoreFailureDoesNotPublishIdle(t *testing.T) {
 	t.Cleanup(func() { _ = db.Close() })
 
 	sessions := sessionstore.NewStore(db)
-	store := NewStore(db)
+	store := sessionstore.NewStore(db)
 	projectID := testProject(t, store, "/tmp/stop-failure")
 	record, err := sessions.CreateSession(ctx, projectID, "model", "", map[string]any{
 		controllerapi.SessionAttributeManagerID: "manager-stop",
@@ -57,18 +63,30 @@ func TestStopOnStoreFailureDoesNotPublishIdle(t *testing.T) {
 	require.NoError(t, err)
 
 	failing := &failingGetSessionStore{
-		OrchestrationStore: sessions,
-		err:                errors.New("disk hiccup"),
+		Store: sessions,
+		err:   errors.New("disk hiccup"),
 	}
 	failing.pending.Store(true)
-	mgr, _ := newSvc(
+	// The tree fence loads the root before the ownership projection we fault.
+	failing.skipFirst.Store(true)
+	mgr, _ := newScenarioDaemon(
 		context.Background(),
-		&mockFactory{}, store, failing, sessions, sessions,
-		sessions, sessions, sessions, sessions,
-		subagent.NewStore(db), subagent.NewTransactions(db),
-		nil, sessions, nil, nil,
+		scriptedBuildInput(
+			t,
+			&config.Config{Model: "fake-model"},
+			sessions,
+			nil,
+			func(*config.Config) (llm.Client, error) { return &scriptedLLM{respond: trivialRespond}, nil },
+		),
+		sessions,
+		subagent.NewStore(db),
+		subagent.NewTransactions(db, store),
+		nil,
+		nil,
+		nil,
+		db,
 	)
-	mgr.treeStore = sessions
+	mgr.store = failing
 	controllers := newTestController(mgr, &config.Config{}, nil, nil)
 	notifications := controllers.ForManager("manager-stop").Subscribe()
 
@@ -92,7 +110,7 @@ func TestTeardownOnStoreFailureDoesNotPublishIdle(t *testing.T) {
 	t.Cleanup(func() { _ = db.Close() })
 
 	sessions := sessionstore.NewStore(db)
-	store := NewStore(db)
+	store := sessionstore.NewStore(db)
 	projectID := testProject(t, store, "/tmp/teardown-failure")
 	record, err := sessions.CreateSession(ctx, projectID, "model", "", map[string]any{
 		controllerapi.SessionAttributeManagerID: "manager-teardown",
@@ -100,17 +118,28 @@ func TestTeardownOnStoreFailureDoesNotPublishIdle(t *testing.T) {
 	require.NoError(t, err)
 
 	failing := &failingGetSessionStore{
-		OrchestrationStore: sessions,
-		err:                errors.New("disk hiccup"),
+		Store: sessions,
+		err:   errors.New("disk hiccup"),
 	}
 	failing.pending.Store(true)
-	mgr, _ := newSvc(
+	mgr, _ := newScenarioDaemon(
 		context.Background(),
-		&mockFactory{}, store, failing, sessions, sessions,
-		sessions, sessions, sessions, sessions,
-		subagent.NewStore(db), subagent.NewTransactions(db),
-		nil, sessions, nil, nil,
+		scriptedBuildInput(
+			t,
+			&config.Config{Model: "fake-model"},
+			sessions,
+			nil,
+			func(*config.Config) (llm.Client, error) { return &scriptedLLM{respond: trivialRespond}, nil },
+		),
+		sessions,
+		subagent.NewStore(db),
+		subagent.NewTransactions(db, store),
+		nil,
+		nil,
+		nil,
+		db,
 	)
+	mgr.store = failing
 	controllers := newTestController(mgr, &config.Config{}, nil, nil)
 	notifications := controllers.ForManager("manager-teardown").Subscribe()
 

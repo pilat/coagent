@@ -54,8 +54,10 @@ func (s *Store) OutputBySourceKey(
 func insertOutputTx(ctx context.Context, tx *sql.Tx, draft OutputDraft, mode CommitMode) (*OutputCommit, error) {
 	owner, err := outputOwner(ctx, tx, draft.SessionID)
 	if errors.Is(err, ErrOutputOwner) || errors.Is(err, ErrOutputNotRoot) {
+		//nolint:nilnil // Ownerless sessions and subagents have no manager delivery obligations.
 		return nil, nil
 	}
+
 	if err != nil {
 		return nil, err
 	}
@@ -69,7 +71,17 @@ func insertOutputTx(ctx context.Context, tx *sql.Tx, draft OutputDraft, mode Com
 	if err := validateLifecycleTarget(ctx, tx, draft, owner); err != nil {
 		return nil, err
 	}
-	draft.Fingerprint = outputFingerprintWithRelease(draft.Type, draft.Content, draft.SessionID, draft.Attributes, draft.ReleasesInput)
+
+	draft.Fingerprint = outputFingerprintWithRelease(
+		draft.Type,
+		draft.Content,
+		draft.SessionID,
+		draft.Attributes,
+		draft.ReleasesInput,
+	)
+	if draft.SourceKey == "" {
+		draft.Fingerprint = ""
+	}
 
 	attributes := cloneAttributes(draft.Attributes)
 	attributes[managerIDAttribute] = owner
@@ -110,10 +122,14 @@ func insertOutputTx(ctx context.Context, tx *sql.Tx, draft OutputDraft, mode Com
 		return nil, fmt.Errorf("insert output: %w", err)
 	}
 
+	return existingOutputTx(ctx, tx, draft, owner)
+}
+
+func existingOutputTx(ctx context.Context, tx *sql.Tx, draft OutputDraft, owner string) (*OutputCommit, error) {
 	var existingID int64
 	var existingFingerprint string
 
-	err = tx.QueryRowContext(ctx, `SELECT id, fingerprint FROM session_outbox WHERE session_id = ? AND source_key = ?`, draft.SessionID, draft.SourceKey).
+	err := tx.QueryRowContext(ctx, `SELECT id, fingerprint FROM session_outbox WHERE session_id = ? AND source_key = ?`, draft.SessionID, draft.SourceKey).
 		Scan(&existingID, &existingFingerprint)
 	if err != nil {
 		return nil, fmt.Errorf("load existing output: %w", err)

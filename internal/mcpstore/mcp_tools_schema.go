@@ -10,20 +10,24 @@ import (
 	"github.com/pilat/coagent/internal/tool"
 )
 
-const mcpStatusEnabled = "enabled"
+const (
+	mcpStatusEnabled = "enabled"
+	mcpScopeGlobal   = "global"
+	mcpScopeProject  = "project"
+)
 
 func (d mcpDeps) scopeOf(scope string) (mcpScope, error) {
 	switch scope {
-	case "global":
-		return mcpScope{label: "global"}, nil
-	case "project":
+	case mcpScopeGlobal:
+		return mcpScope{label: mcpScopeGlobal}, nil
+	case mcpScopeProject:
 		if d.projectID == 0 {
 			return mcpScope{}, errors.New("this session has no project, so it cannot use project scope")
 		}
 
 		projectID := d.projectID
 
-		return mcpScope{projectID: &projectID, label: "project"}, nil
+		return mcpScope{projectID: &projectID, label: mcpScopeProject}, nil
 	default:
 		return mcpScope{}, fmt.Errorf("scope must be \"global\" or \"project\", got %q", scope)
 	}

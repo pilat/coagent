@@ -1,6 +1,10 @@
 package session
 
-import "github.com/pilat/coagent/internal/sessionprompt"
+import (
+	"fmt"
+
+	"github.com/pilat/coagent/internal/sessionprompt"
+)
 
 func (s *Session) PrepareUserMessage(message string) (string, error) {
 	prepared, err := s.PrepareUserMessageDetailed(message)
@@ -8,5 +12,10 @@ func (s *Session) PrepareUserMessage(message string) (string, error) {
 }
 
 func (s *Session) PrepareUserMessageDetailed(message string) (sessionprompt.PreparedMessage, error) {
-	return sessionprompt.PrepareUserMessageDetailed(s.loader, message)
+	prepared, err := sessionprompt.PrepareUserMessageDetailed(s.loader, message)
+	if err != nil {
+		return prepared, fmt.Errorf("prepare user message: %w", err)
+	}
+
+	return prepared, nil
 }

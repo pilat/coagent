@@ -59,18 +59,21 @@ func (r *runner) SetService(service *session.Session) {
 func (r *runner) Working() bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+
 	return r.working
 }
 
 func (r *runner) SetWorking(working bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+
 	r.working = working
 }
 
 func (r *runner) SetPreserveStopped(preserve bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+
 	r.preserveStopped = preserve
 }
 
@@ -91,6 +94,7 @@ func (r *runner) MarkRun() {
 func (r *runner) Info() runnerInfo {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+
 	return runnerInfo{
 		WorkDir: r.workDir, ProjectID: r.projectID, Kind: r.kind,
 		ParentID: r.parentID, PreserveStopped: r.preserveStopped,

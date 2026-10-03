@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strconv"
 
 	"github.com/pilat/coagent/internal/llmwire"
 	"github.com/pilat/coagent/internal/loader"
@@ -16,8 +17,10 @@ func acceptBoundaryCallResults(batch *boundaryBatch, inputs []*sessionstore.Inbo
 		if input.Source != sessionstore.InputSourceCallResult {
 			continue
 		}
+
 		callID, _ := input.Attributes["call_id"].(string)
 		toolID, _ := input.Attributes["tool_id"].(string)
+
 		accept := sessionstore.Accept{
 			InputID: input.ID,
 			State:   sessionstore.InputStateRejected,
@@ -37,13 +40,15 @@ func acceptBoundaryCallResults(batch *boundaryBatch, inputs []*sessionstore.Inbo
 			accept.State = sessionstore.InputStateHandled
 			accept.Reason = "call_result"
 			accept.InvalidateCompletion = true
+
 			delete(batch.pending, callID)
 		}
+
 		batch.commit.Accept = append(batch.commit.Accept, accept)
 	}
 }
 
-func (s *Session) acceptBoundarySchedule(batch *boundaryBatch, input *sessionstore.InboxInput) boundaryFlow {
+func (s *Session) acceptBoundarySchedule(batch *boundaryBatch, input *sessionstore.InboxInput) (boundaryFlow, error) {
 	c := &batch.commit
 	accept := sessionstore.Accept{
 		InputID:    input.ID,
@@ -51,19 +56,27 @@ func (s *Session) acceptBoundarySchedule(batch *boundaryBatch, input *sessionsto
 		ModelBound: true,
 		LinkRef:    -1,
 	}
+
 	fresh, _ := input.Attributes["fresh"].(bool)
 	if fresh && batch.accepted {
-		return boundaryStop
+		return boundaryStop, nil
 	}
+
 	if fresh {
 		c.State.ResetContext = true
+
 		c.Messages = nil
 		for _, message := range s.openingTurn(input.RawContent) {
 			c.Messages = append(c.Messages, hostUserMessage(message.Content))
 		}
 	} else {
 		callID := fmt.Sprintf("schedule_%d", input.ID)
-		calls, _ := json.Marshal([]llmwire.ToolCall{{ID: callID, Name: "schedule", Arguments: json.RawMessage("{}")}})
+
+		calls, err := json.Marshal([]llmwire.ToolCall{{ID: callID, Name: "schedule", Arguments: json.RawMessage("{}")}})
+		if err != nil {
+			return boundaryStop, fmt.Errorf("encode scheduled call: %w", err)
+		}
+
 		c.Messages = append(
 			c.Messages,
 			&transcript.Message{Role: llmwire.RoleAssistant, ToolCalls: calls},
@@ -75,12 +88,15 @@ func (s *Session) acceptBoundarySchedule(batch *boundaryBatch, input *sessionsto
 			},
 		)
 	}
+
 	accept.LinkRef = len(c.Messages) - 1
 	c.Accept = append(c.Accept, accept)
+
 	deliveryKey := input.DeliveryKey
 	if deliveryKey == "" {
-		deliveryKey = fmt.Sprintf("%d", input.ID)
+		deliveryKey = strconv.FormatInt(input.ID, 10)
 	}
+
 	c.Outputs = append(
 		c.Outputs,
 		sessionstore.Output{
@@ -93,7 +109,8 @@ func (s *Session) acceptBoundarySchedule(batch *boundaryBatch, input *sessionsto
 	)
 	batch.accepted = true
 	s.preserveStopped = false
-	return boundaryContinue
+
+	return boundaryContinue, nil
 }
 
 func (s *Session) acceptBoundaryText(
@@ -106,8 +123,14 @@ func (s *Session) acceptBoundaryText(
 	prepared, err := s.PrepareUserMessageDetailed(input.RawContent)
 	if err != nil {
 		rejectBoundaryInput(batch, input, err)
+
+		if batch.fresh {
+			r.handledControl = true
+		}
+
 		return boundaryContinue, nil
 	}
+
 	c := &batch.commit
 	content := s.prompt.AppendGitStateDelta(
 		ctx,
@@ -121,10 +144,12 @@ func (s *Session) acceptBoundaryText(
 		LinkRef:    -1,
 		ModelBound: true,
 	}
+
 	owner, _ := input.Attributes["manager_id"].(string)
 	if prepared.SkillName != "" && input.Source == sessionstore.InputSourceUser && owner != "" {
 		accept.Receipt = loader.SkillReceipt(prepared.SkillName)
 	}
+
 	if toolID := s.activationIndex[command]; toolID != "" {
 		accept.Content += activationInstruction(toolID, command)
 		c.Activation = &sessionstore.ActivationChange{
@@ -134,21 +159,27 @@ func (s *Session) acceptBoundaryText(
 			Command: command,
 		}
 	}
+
 	c.Messages = append(c.Messages, hostUserMessage(accept.Content))
 	accept.Content = ""
 	accept.LinkRef = len(c.Messages) - 1
 	c.Accept = append(c.Accept, accept)
 	batch.accepted = true
+
 	if input.Source == sessionstore.InputSourceUser || input.Source == sessionstore.InputSourceAgent {
 		s.preserveStopped = false
 	}
+
 	if owner != "" && input.Source == sessionstore.InputSourceUser {
 		r.directReply = true
 	}
+
 	s.loopDetector.resetWindow()
+
 	if command != "" || c.Activation != nil {
 		return boundaryStop, nil
 	}
+
 	return boundaryContinue, nil
 }
 

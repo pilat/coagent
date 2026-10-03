@@ -21,13 +21,13 @@ func TestAutoCompactionConvergesOnASmallWindow(t *testing.T) {
 		contextWindow: window,
 	}
 	s := newCompactionTestSvc(llm)
-	s.ms.setMessages(oversizedTranscript(window))
+	setTestMessages(s, oversizedTranscript(window))
 
 	require.True(t, s.shouldCompact(window))
 
 	var notes []string
 	r := contextEventRunner(s, &notes)
-	r.applyContextEvents(context.Background())
+	require.NoError(t, s.compactionStep(context.Background(), r))
 
 	assert.False(t, s.shouldCompact(window), "the projection is back under the trigger")
 	assert.True(t, notesContain(notes, "✅ Context compacted"))
@@ -48,12 +48,12 @@ func TestAutoCompactionCountsANonRelievingCandidateAsAFailure(t *testing.T) {
 		contextWindow: window,
 	}
 	s := newCompactionTestSvc(llm)
-	s.ms.setMessages(oversizedTranscript(window))
+	setTestMessages(s, oversizedTranscript(window))
 	before := s.ms.getMessages()
 
 	var notes []string
 	r := contextEventRunner(s, &notes)
-	r.applyContextEvents(context.Background())
+	require.NoError(t, s.compactionStep(context.Background(), r))
 
 	assert.Equal(t, 1, llm.callCount, "the summarizer ran")
 	assert.True(t, notesContain(notes, "❌ Compaction failed"))
@@ -74,20 +74,20 @@ func TestAutoCompactionStopsAfterThreeFruitlessAttempts(t *testing.T) {
 		contextWindow: window,
 	}
 	s := newCompactionTestSvc(llm)
-	s.ms.setMessages(oversizedTranscript(window))
+	setTestMessages(s, oversizedTranscript(window))
 
 	var notes []string
 	r := contextEventRunner(s, &notes)
 
 	for range compactionAttemptCap {
-		r.applyContextEvents(context.Background())
+		require.NoError(t, s.compactionStep(context.Background(), r))
 	}
 
 	require.True(t, r.autoCompactionOff)
 	assert.Equal(t, 1, countNotes(notes, compactionNotConvergingNotice))
 
 	callsAtCap := llm.callCount
-	r.applyContextEvents(context.Background())
+	require.NoError(t, s.compactionStep(context.Background(), r))
 	assert.Equal(t, callsAtCap, llm.callCount, "the automatic path is silent for the rest of the activation")
 }
 
@@ -101,7 +101,7 @@ func TestExplicitCompactionIgnoresTheAttemptCap(t *testing.T) {
 		contextWindow: window,
 	}
 	s := newCompactionTestSvc(llm)
-	s.ms.setMessages(oversizedTranscript(window))
+	setTestMessages(s, oversizedTranscript(window))
 
 	var notes []string
 	r := contextEventRunner(s, &notes)
@@ -109,7 +109,7 @@ func TestExplicitCompactionIgnoresTheAttemptCap(t *testing.T) {
 	r.autoCompactionOff = true
 
 	s.RequestCompaction()
-	r.applyContextEvents(context.Background())
+	require.NoError(t, s.compactionStep(context.Background(), r))
 
 	assert.Equal(t, 1, llm.callCount)
 	assert.True(t, notesContain(notes, "✅ Context compacted"))
@@ -125,13 +125,13 @@ func TestAutoCompactionResetsTheCounterOnRelief(t *testing.T) {
 		contextWindow: window,
 	}
 	s := newCompactionTestSvc(llm)
-	s.ms.setMessages(oversizedTranscript(window))
+	setTestMessages(s, oversizedTranscript(window))
 
 	var notes []string
 	r := contextEventRunner(s, &notes)
 	r.compactionFailures = compactionAttemptCap - 1
 
-	r.applyContextEvents(context.Background())
+	require.NoError(t, s.compactionStep(context.Background(), r))
 
 	assert.Zero(t, r.compactionFailures)
 	assert.False(t, r.autoCompactionOff)

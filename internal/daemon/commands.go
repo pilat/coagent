@@ -25,6 +25,7 @@ const (
 	clearCommand   = "/clear"
 	killCommand    = "/kill"
 	compactCommand = "/compact"
+	statusCommand  = "/status"
 )
 
 func (s *svc) Send(ctx context.Context, projectID int64, prompt, model string, attrs map[string]any) (int64, error) {
@@ -138,10 +139,12 @@ func (s *svc) SetModel(ctx context.Context, sessionID int64, model, reasoningLev
 		return err
 	}
 	defer unlock()
+
 	record, err := s.store.GetSession(ctx, sessionID)
 	if err != nil {
 		return fmt.Errorf("load session for model switch: %w", err)
 	}
+
 	if s.budgetSvc != nil {
 		budgetRecord, budgetErr := s.budgetSvc.Get(ctx, sessionRootID(record))
 		if budgetErr == nil && budgetRecord.State == budget.Armed &&
@@ -158,11 +161,13 @@ func (s *svc) SetModel(ctx context.Context, sessionID int64, model, reasoningLev
 	if err != nil {
 		return fmt.Errorf("construct model %s: %w", model, err)
 	}
+
 	level := client.GetReasoningLevel()
 	if err := s.store.UpdateSessionModel(ctx, sessionID, model, level); err != nil {
 		_ = client.Close()
 		return fmt.Errorf("update session model: %w", err)
 	}
+
 	rs, ok := s.runners.Load(sessionID)
 	if ok {
 		if sess := rs.Service(); sess != nil {
@@ -170,6 +175,7 @@ func (s *svc) SetModel(ctx context.Context, sessionID int64, model, reasoningLev
 			return nil
 		}
 	}
+
 	_ = client.Close()
 
 	return nil
@@ -225,7 +231,7 @@ func (s *svc) SetAttributes(ctx context.Context, sessionID int64, attrs map[stri
 func isReadOnlyBoundaryCommand(content string) bool {
 	content = strings.TrimSpace(content)
 
-	return content == "/status" || content == "/help" || content == "/schedules" ||
+	return content == statusCommand || content == "/help" || content == "/schedules" ||
 		content == compactCommand || strings.HasPrefix(content, compactCommand+" ")
 }
 
@@ -236,13 +242,12 @@ func isExactControlCommand(content string) bool {
 		content == killCommand
 }
 
-//nolint:funcorder // Command dispatch remains beside durable input admission and lifecycle fencing.
 func (s *svc) handleGenericCommand(ctx context.Context, input *sessionstore.InboxInput) (bool, error) {
 	if input.Source != sessionstore.InputSourceUser {
 		return false, nil
 	}
 
-	if strings.TrimSpace(input.RawContent) == "/status" {
+	if strings.TrimSpace(input.RawContent) == statusCommand {
 		return true, s.handleStatusInput(ctx, input)
 	}
 
@@ -290,12 +295,12 @@ func (s *svc) handleGenericCommand(ctx context.Context, input *sessionstore.Inbo
 	}
 }
 
-//nolint:funcorder // Immediate status dispatch belongs beside the generic command boundary.
 func (s *svc) handleStatusInput(ctx context.Context, input *sessionstore.InboxInput) error {
 	current, err := s.CurrentProgress(ctx, input.SessionID)
 	if err != nil {
 		return err
 	}
+
 	_, err = s.store.Commit(ctx, sessionstore.Commit{
 		SessionID: input.SessionID,
 		Accept: []sessionstore.Accept{
@@ -308,20 +313,23 @@ func (s *svc) handleStatusInput(ctx context.Context, input *sessionstore.InboxIn
 	if errors.Is(err, sessionstore.ErrInputResolved) {
 		return nil
 	}
+
 	if err != nil {
-		return err
+		return fmt.Errorf("handle status input: %w", err)
 	}
+
 	s.publish(input.SessionID, sessionevent.Notification{Type: sessionevent.NotifyMessage, Message: current.Rendered})
+
 	if !s.HasActiveLoop(input.SessionID) {
 		s.publish(
 			input.SessionID,
 			sessionevent.Notification{Type: sessionevent.NotifyStateChanged, Status: controllerapi.StateIdle},
 		)
 	}
+
 	return nil
 }
 
-//nolint:funcorder // The idempotent stop result is part of the same command dispatcher.
 func (s *svc) handleStoppedStop(ctx context.Context, input *sessionstore.InboxInput) error {
 	_, err := s.store.Commit(ctx, sessionstore.Commit{
 		SessionID: input.SessionID,
@@ -337,10 +345,13 @@ func (s *svc) handleStoppedStop(ctx context.Context, input *sessionstore.InboxIn
 			},
 		},
 	})
-	return err
+	if err != nil {
+		return fmt.Errorf("handle stopped stop: %w", err)
+	}
+
+	return nil
 }
 
-//nolint:funcorder // Lifecycle input must stay with the generic dispatcher that invokes it.
 func (s *svc) handleLifecycleInput(ctx context.Context, input *sessionstore.InboxInput, content string) error {
 	command := strings.TrimPrefix(strings.TrimSpace(input.RawContent), "/")
 
@@ -367,7 +378,6 @@ func (s *svc) handleLifecycleInput(ctx context.Context, input *sessionstore.Inbo
 	return nil
 }
 
-//nolint:funcorder // Daemon producers share this helper with the adjacent command boundary.
 func (s *svc) enqueuePersistentOutput(ctx context.Context, sessionID int64, content string) error {
 	outputs := s.store
 	if outputs == nil {
@@ -416,20 +426,24 @@ func (s *svc) enqueueUserSessionInput(
 	prompt string,
 ) (*sessionstore.InboxInput, error) {
 	attributes := make(map[string]any)
+
 	switch strings.TrimSpace(prompt) {
 	case "/schedules":
 		content, err := s.schedulesCommand(ctx, sessionID)
 		if err != nil {
 			return nil, err
 		}
+
 		attributes["schedules"] = content
-	case "/status":
+	case statusCommand:
 		current, err := s.CurrentProgress(ctx, sessionID)
 		if err != nil {
 			return nil, err
 		}
+
 		attributes["status"] = current.Rendered
 	}
+
 	result, err := s.store.Enqueue(
 		ctx,
 		sessionstore.Input{
@@ -440,8 +454,9 @@ func (s *svc) enqueueUserSessionInput(
 		},
 	)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("enqueue user session input: %w", err)
 	}
+
 	return result.Input, nil
 }
 

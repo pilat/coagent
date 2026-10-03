@@ -14,5 +14,6 @@ func startScheduledEpisode(ctx context.Context, tx *sql.Tx, id int64) error {
 	if err != nil {
 		return fmt.Errorf("start scheduled episode: %w", err)
 	}
+
 	return nil
 }

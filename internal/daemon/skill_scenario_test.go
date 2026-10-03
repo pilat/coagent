@@ -145,12 +145,14 @@ func TestHarnessScenario_UnknownSkillCommandIsRejectedOnceAndDrains(t *testing.T
 		h.shutdown()
 	}()
 
+	h.startInboxWake()
 	sessionID, err := h.mgr.Send(h.ctx, h.projectID, "warm up", "fake-model", nil)
 	require.NoError(t, err)
 	h.mgr.waitIdle(sessionID)
 
 	callsBefore := len(rec.snapshot())
 
+	h.startInboxWake()
 	require.NoError(t, h.mgr.SendToSession(h.ctx, sessionID, "/skill nonexistent"))
 	collector.waitFor(t, "rejection notice reaches the controller", func(e []controllerapi.SessionNotification) bool {
 		return len(warningNotices(e, sessionID)) > 0
@@ -197,6 +199,7 @@ func TestHarnessScenario_UnknownSkillOnAFreshSessionCostsNoModelTurn(t *testing.
 				))
 			}
 
+			h.startInboxWake()
 			sessionID, err := h.mgr.Send(h.ctx, h.projectID, "/skill nonexistent", "fake-model", nil)
 			require.NoError(t, err)
 

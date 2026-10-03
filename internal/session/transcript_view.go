@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"sync"
 
 	"github.com/pilat/coagent/internal/llmwire"
@@ -24,13 +25,6 @@ type messageStore struct {
 type PendingToolCall struct {
 	ID   string
 	Name string
-}
-
-type toolCallStatus struct {
-	name      string
-	found     bool
-	resolved  bool
-	duplicate bool
 }
 
 // PendingExternalCalls is deliberately global over the active transcript.
@@ -59,15 +53,18 @@ func (s *Session) HasPendingWork() bool {
 	if s.HasPendingExternalCall() {
 		return false
 	}
+
 	return s.unansweredWork()
 }
 
 func UnresolvedCalls(messages []llmwire.Message) []PendingToolCall {
 	calls := unresolvedCallsMatching(messages, func(llmwire.ToolCall) bool { return true })
+
 	result := make([]PendingToolCall, 0, len(calls))
 	for _, call := range calls {
 		result = append(result, PendingToolCall{ID: call.ID, Name: call.Name})
 	}
+
 	return result
 }
 
@@ -85,6 +82,7 @@ func SettleResults(calls []PendingToolCall, text string) []*transcript.Message {
 			},
 		)
 	}
+
 	return results
 }
 
@@ -122,29 +120,6 @@ func compactionEntries(messages []llmwire.Message, rowIDs []int64) ([]sessionsto
 	}
 
 	return entries, nil
-}
-
-func (ms *messageStore) setMessages(msgs []llmwire.Message) {
-	ms.mu.Lock()
-	defer ms.mu.Unlock()
-
-	ms.messages = msgs
-	ms.rowIDs = make([]int64, len(msgs))
-}
-
-func (ms *messageStore) setMessagesWithRowIDs(msgs []llmwire.Message, rowIDs []int64) error {
-	if len(msgs) != len(rowIDs) {
-		return fmt.Errorf("restore %d messages with %d row ids", len(msgs), len(rowIDs))
-	}
-
-	ms.mu.Lock()
-	defer ms.mu.Unlock()
-
-	ms.messages = msgs
-
-	ms.rowIDs = append([]int64(nil), rowIDs...)
-
-	return nil
 }
 
 func (ms *messageStore) getMessages() []llmwire.Message {
@@ -334,36 +309,10 @@ func unresolvedCallsMatching(
 	return result
 }
 
-func findToolCall(messages []llmwire.Message, callID string) toolCallStatus {
-	var status toolCallStatus
-
-	for _, message := range messages {
-		if message.Role == llmwire.RoleAssistant {
-			for _, tc := range message.ToolCalls {
-				if tc.ID != callID {
-					continue
-				}
-
-				if status.found {
-					status.duplicate = true
-				}
-
-				status.name = tc.Name
-				status.found = true
-			}
-		}
-
-		if message.Role == llmwire.RoleTool && message.ToolCallID == callID {
-			status.resolved = true
-		}
-	}
-
-	return status
-}
-
 func (s *Session) pendingInLoopCalls() []llmwire.ToolCall {
 	pending := unresolvedToolCalls(s.ms.getMessages())
 	var calls []llmwire.ToolCall
+
 	for _, message := range s.ms.getMessages() {
 		for _, call := range message.ToolCalls {
 			if pending[call.ID] == call.Name && s.stagedCalls[call.ID] != call.Name {
@@ -371,6 +320,7 @@ func (s *Session) pendingInLoopCalls() []llmwire.ToolCall {
 			}
 		}
 	}
+
 	return calls
 }
 
@@ -379,6 +329,12 @@ func (s *Session) unansweredWork() bool {
 	if len(messages) == 0 {
 		return false
 	}
+
+	if len(messages) == 1 && strings.HasPrefix(messages[0].Content, agentsMDMessagePrefix) {
+		return false
+	}
+
 	last := messages[len(messages)-1]
+
 	return last.Role != llmwire.RoleAssistant || len(s.pendingInLoopCalls()) > 0
 }

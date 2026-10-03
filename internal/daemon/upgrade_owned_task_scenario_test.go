@@ -92,7 +92,8 @@ func TestScenario_OwnedTaskCallSurvivesSchemaUpgradeAndRestarts(t *testing.T) {
 	defer h.shutdown()
 
 	require.NoError(t, h.mgr.Start(h.ctx))
-	h.mgr.sweep(h.ctx)
+	h.startInboxWake()
+	h.mgr.resumeAfterRestart(h.ctx)
 
 	var timeoutCol int
 	require.NoError(t, h.db.QueryRowContext(ctx,
@@ -107,6 +108,10 @@ func TestScenario_OwnedTaskCallSurvivesSchemaUpgradeAndRestarts(t *testing.T) {
 
 	// The child completes and delivers exactly once to the suspended parent.
 	h.waitForDelivery(childID)
+	h.waitUntil("the parent consumed the staged child's completion", func() bool {
+		return countToolResultsFor(h.parentMessages(parent.ID), tool.IDTask) == 1 &&
+			!h.mgr.HasActiveLoop(parent.ID)
+	})
 	h.mgr.waitIdle(parent.ID)
 
 	final := h.parentMessages(parent.ID)

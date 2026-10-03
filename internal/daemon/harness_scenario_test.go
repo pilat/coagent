@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -36,11 +37,13 @@ func TestHarnessScenario_SecondInputDoesNotReplayPreviousFinal(t *testing.T) {
 		h.shutdown()
 	}()
 
+	h.startInboxWake()
 	sessionID, err := h.mgr.Send(h.ctx, h.projectID, "first question", "fake-model", nil)
 	require.NoError(t, err)
 	waitForVisibleMessage(t, collector, sessionID, "first answer")
 	waitForIdleAfterMessage(t, collector, sessionID, "first answer")
 
+	h.startInboxWake()
 	require.NoError(t, h.mgr.SendToSession(h.ctx, sessionID, "second question"))
 	waitForVisibleMessage(t, collector, sessionID, "second answer")
 	waitForIdleAfterMessage(t, collector, sessionID, "second answer")
@@ -58,6 +61,7 @@ func TestHarnessScenario_CLIConversationIsManagerOwned(t *testing.T) {
 		h.shutdown()
 	}()
 
+	h.startInboxWake()
 	sessionID, err := h.mgr.Send(h.ctx, h.projectID, "configure coagent", "fake-model", map[string]any{
 		controllerapi.SessionAttributeManagerID: "cli",
 		"channel":                               "cli",
@@ -111,6 +115,7 @@ func TestHarnessScenario_SubagentTextWithToolsCompletes(t *testing.T) {
 		h.shutdown()
 	}()
 
+	h.startInboxWake()
 	parentID, err := h.mgr.Send(h.ctx, h.projectID, "run child with narrated tool call", "fake-model", nil)
 	require.NoError(t, err)
 	collector.waitFor(t, "parent projects the blocking child", func(events []controllerapi.SessionNotification) bool {
@@ -206,6 +211,7 @@ func TestHarnessScenario_ForegroundChildContinuesWithoutSleep(t *testing.T) {
 		h.shutdown()
 	}()
 
+	h.startInboxWake()
 	parentID, err := h.mgr.Send(h.ctx, h.projectID, "start foreground child", "fake-model", nil)
 	require.NoError(t, err)
 	waitForWaitKind(t, collector, parentID, sessionevent.WaitSubagent)
@@ -219,6 +225,7 @@ func TestHarnessScenario_ForegroundChildContinuesWithoutSleep(t *testing.T) {
 	require.True(t, link.Blocking, "the initial task must exercise foreground mode")
 	childID.Store(link.ChildID)
 
+	h.startInboxWake()
 	require.NoError(t, h.mgr.SendToSession(h.ctx, parentID, "continue the same child"))
 	waitForVisibleMessage(t, collector, parentID, "follow-up accepted")
 	waitForIdleAfterMessage(t, collector, parentID, "follow-up accepted")
@@ -285,6 +292,7 @@ func TestHarnessScenario_BackgroundChildIsTheWakeSource(t *testing.T) {
 		h.shutdown()
 	}()
 
+	h.startInboxWake()
 	parentID, err := h.mgr.Send(h.ctx, h.projectID, "start background child", "fake-model", map[string]any{
 		"manager_id": scenarioManagerID,
 	})
@@ -330,12 +338,13 @@ func TestHarnessScenario_BackgroundChildIsTheWakeSource(t *testing.T) {
 func TestHarnessScenario_BackgroundChildCheckpointUpdatesRootCard(t *testing.T) {
 	childSecondEntered := make(chan struct{})
 	childSecondRelease := make(chan struct{})
+	var childSecondOnce sync.Once
 	released := false
 
 	respond := func(_ string, messages []llmwire.Message) *llmwire.Response {
 		if hasUserContaining(messages, "CHILD_PROGRESS") {
 			if hasToolResultFor(messages, "ls") {
-				close(childSecondEntered)
+				childSecondOnce.Do(func() { close(childSecondEntered) })
 				<-childSecondRelease
 
 				return &llmwire.Response{Text: "background child answer"}
@@ -381,6 +390,7 @@ func TestHarnessScenario_BackgroundChildCheckpointUpdatesRootCard(t *testing.T) 
 		h.shutdown()
 	}()
 
+	h.startInboxWake()
 	parentID, err := h.mgr.Send(h.ctx, h.projectID, "start background child", "fake-model", map[string]any{
 		"manager_id": scenarioManagerID,
 	})
@@ -453,6 +463,7 @@ func TestHarnessScenario_BackgroundFinalResponseResumesOnCompletion(t *testing.T
 		h.shutdown()
 	}()
 
+	h.startInboxWake()
 	parentID, err := h.mgr.Send(h.ctx, h.projectID, "start canary child", "fake-model", map[string]any{
 		"manager_id": scenarioManagerID,
 	})
@@ -528,6 +539,7 @@ description: Review changes
 Review $ARGUMENTS.
 `), 0o600))
 
+	h.startInboxWake()
 	parentID, err := h.mgr.Send(h.ctx, h.projectID, "run review skill", "fake-model", nil)
 	require.NoError(t, err)
 	h.mgr.waitIdle(parentID)
@@ -584,6 +596,7 @@ func TestHarnessScenario_ForegroundScatterGatherProjectsShrinkingAllWaitSet(t *t
 		h.shutdown()
 	}()
 
+	h.startInboxWake()
 	parentID, err := h.mgr.Send(h.ctx, h.projectID, "scatter gather", "fake-model", nil)
 	require.NoError(t, err)
 
@@ -654,6 +667,7 @@ func TestHarnessScenario_SleepProjectsWakeAtAndUserInputInterruptsIt(t *testing.
 		h.shutdown()
 	}()
 
+	h.startInboxWake()
 	parentID, err := h.mgr.Send(h.ctx, h.projectID, "sleep", "fake-model", nil)
 	require.NoError(t, err)
 	collector.waitFor(t, "structured sleep wait", func(events []controllerapi.SessionNotification) bool {
@@ -673,6 +687,7 @@ func TestHarnessScenario_SleepProjectsWakeAtAndUserInputInterruptsIt(t *testing.
 		return false
 	})
 
+	h.startInboxWake()
 	require.NoError(t, h.mgr.SendToSession(h.ctx, parentID, "interrupt now"))
 	waitForVisibleMessage(t, collector, parentID, "sleep interruption handled")
 	waitForIdleAfterMessage(t, collector, parentID, "sleep interruption handled")

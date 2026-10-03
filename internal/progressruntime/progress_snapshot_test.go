@@ -1,7 +1,6 @@
 package progressruntime
 
 import (
-	"context"
 	"encoding/json"
 	"testing"
 	"time"
@@ -36,16 +35,11 @@ func TestProgressSnapshot_ProjectsTodosInCanonicalOrder(t *testing.T) {
 		buildTodo("tie-b", "high", base) + `,` + buildTodo("high-early", "high", base) + `,` +
 		buildTodo("tie-a", "high", base) + `,` + buildTodo("legacy", "medium", time.Time{}) + `]`
 
-	store := staticProgressStore{facts: &sessionstore.ProgressFacts{
+	facts := &sessionstore.ProgressFacts{
 		RootID: 7, TodoItems: json.RawMessage(todos),
-	}}
-	runtime, ok := New(
-		store, nil, func(int64) bool { return false }, func(int64) bool { return false }, nil, nil, nil,
-	).(*runtime)
+	}
+	runtime, ok := New(nil, nil).(*runtime)
 	require.True(t, ok, "New must return the concrete runtime")
-
-	facts, err := store.CaptureProgress(context.Background(), 7)
-	require.NoError(t, err)
 
 	snapshot, err := runtime.progressSnapshot(facts, base.Add(time.Hour))
 	require.NoError(t, err)

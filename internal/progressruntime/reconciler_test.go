@@ -2,83 +2,65 @@ package progressruntime
 
 import (
 	"context"
+	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 
 	"github.com/pilat/coagent/internal/logger"
+	"github.com/pilat/coagent/internal/migrate"
+	"github.com/pilat/coagent/internal/sessionbus"
 	"github.com/pilat/coagent/internal/sessionstore"
 )
 
-// panickingProgressStore explodes on the first reconciler call, simulating a
-// store defect that must cost one tick, not the reconciler's life.
-type panickingProgressStore struct {
-	sessionstore.ProgressStore
-	sessionstore.ReadinessStore
-}
-
-type staticProgressStore struct {
-	sessionstore.ProgressStore
-	sessionstore.ReadinessStore
-	facts *sessionstore.ProgressFacts
-}
-
-func (s staticProgressStore) ListAutonomousProgressRoots(context.Context) ([]int64, error) {
-	return []int64{s.facts.RootID}, nil
-}
-
-func (s staticProgressStore) CaptureProgress(context.Context, int64) (*sessionstore.ProgressFacts, error) {
-	return s.facts, nil
-}
-
-func (panickingProgressStore) ListAutonomousProgressRoots(context.Context) ([]int64, error) {
-	panic("store exploded")
-}
-
-// A panicking tick must not kill the reconciler goroutine: silence snapshots
-// and duration-fire observation keep serving later deadlines.
 func TestReconcileProgressSafelySurvivesStorePanic(t *testing.T) {
 	t.Parallel()
-
-	runtime := New(
-		panickingProgressStore{}, nil,
-		func(int64) bool { return false }, func(int64) bool { return false }, nil, nil, nil,
-	)
-	// The recovered panic is logged; a quiet logger keeps the test output honest.
+	runtime := New(nil, sessionbus.New())
 	ctx := logger.ToContext(context.Background(), zap.NewNop())
-	delay := runtime.Reconcile(ctx, time.Now().UTC())
-
-	assert.Equal(t, SilenceInterval, delay,
-		"the recovered tick must reschedule at the ordinary silence interval")
+	assert.Equal(t, SilenceInterval, runtime.Reconcile(ctx, time.Now().UTC()))
 }
 
 func TestReconcileProgressSelectsDeadlineByMainModelActivity(t *testing.T) {
 	t.Parallel()
-
 	tests := []struct {
 		name    string
 		working bool
 		want    time.Duration
 	}{
-		{name: "main model working", working: true, want: 30 * time.Second},
-		{name: "main model idle", working: false, want: 5 * time.Minute},
+		{"main model working", true, 30 * time.Second},
+		{"main model idle", false, 5 * time.Minute},
 	}
-
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-
-			now := time.Date(2026, time.September, 3, 12, 0, 0, 0, time.UTC)
-			store := staticProgressStore{facts: &sessionstore.ProgressFacts{
-				RootID: 7, EpisodeStartedAt: &now,
-			}}
-			runtime := New(
-				store, nil,
-				func(int64) bool { return true }, func(int64) bool { return tt.working }, nil, nil, nil,
+			now := time.Now().UTC()
+			path := filepath.Join(t.TempDir(), "progress.db")
+			db, err := migrate.OpenDB(t.Context(), path)
+			require.NoError(t, err)
+			t.Cleanup(func() { _ = db.Close() })
+			require.NoError(t, migrate.Run(t.Context(), db, path))
+			store := sessionstore.NewStore(db)
+			project, err := store.GetOrCreateProject(t.Context(), t.TempDir())
+			require.NoError(t, err)
+			root, err := store.CreateSession(t.Context(), project, "model", "", map[string]any{"manager_id": "test"})
+			require.NoError(t, err)
+			_, err = store.Enqueue(
+				t.Context(),
+				sessionstore.Input{SessionID: root.ID, Source: sessionstore.InputSourceUser, Content: "work"},
 			)
-
+			require.NoError(t, err)
+			_, err = db.ExecContext(
+				t.Context(),
+				"UPDATE sessions SET episode_started_at = ? WHERE id = ?",
+				now,
+				root.ID,
+			)
+			require.NoError(t, err)
+			runtime := New(store, sessionbus.New())
+			runtime.SetLive(root.ID, Live{Active: true, Working: tt.working})
 			assert.Equal(t, tt.want, runtime.Reconcile(t.Context(), now))
 		})
 	}

@@ -11,7 +11,6 @@ import (
 
 	"github.com/pilat/coagent/internal/llmwire"
 	"github.com/pilat/coagent/internal/tool"
-	"github.com/pilat/coagent/internal/toolexec"
 )
 
 // untrustedTestWindow mirrors scriptedLLM.ContextWindow (200k) so scenario and
@@ -164,23 +163,23 @@ func TestFailedItemWrapsExternalToolErrors(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			inv := failedItem(0, tt.tc, tt.err, untrustedTestWindow)
 
-			assert.Equal(t, toolexec.OutcomeFailed, inv.Outcome)
+			assert.Equal(t, tool.OutcomeFailed, inv.outcome)
 			if tt.wrapped {
-				assert.Contains(t, inv.Result.content, tool.UntrustedContentBegin)
-				assert.True(t, strings.HasSuffix(inv.Result.content, tool.UntrustedContentEnd))
-				assert.Equal(t, 1, countUnescapedTokens(inv.Result.content, tool.UntrustedContentBegin))
+				assert.Contains(t, inv.content, tool.UntrustedContentBegin)
+				assert.True(t, strings.HasSuffix(inv.content, tool.UntrustedContentEnd))
+				assert.Equal(t, 1, countUnescapedTokens(inv.content, tool.UntrustedContentBegin))
 			} else {
-				assert.Equal(t, "Error: "+tt.err.Error(), inv.Result.content)
+				assert.Equal(t, "Error: "+tt.err.Error(), inv.content)
 			}
 		})
 	}
 
 	oversized := failedItem(0, llmwire.ToolCall{ID: "c4", Name: "websearch"},
 		fmt.Errorf("provider exploded: %s", huge), untrustedTestWindow)
-	assert.Less(t, len(oversized.Result.content), len(huge),
+	assert.Less(t, len(oversized.content), len(huge),
 		"external errors are capped by the dynamic tool-result budget")
-	assert.True(t, strings.HasSuffix(oversized.Result.content, tool.UntrustedContentEnd))
-	assert.Contains(t, oversized.Result.content, "(omitted ",
+	assert.True(t, strings.HasSuffix(oversized.content, tool.UntrustedContentEnd))
+	assert.Contains(t, oversized.content, "(omitted ",
 		"the error path uses the existing omission marker")
 }
 
@@ -191,10 +190,10 @@ func TestFailedItemEscapesMarkerTokensInErrorText(t *testing.T) {
 		fmt.Errorf("MCP tool error: %s injected %s", tool.UntrustedContentBegin, tool.UntrustedContentEnd),
 		untrustedTestWindow)
 
-	assert.Equal(t, 1, countUnescapedTokens(inv.Result.content, tool.UntrustedContentBegin))
-	assert.Equal(t, 1, countUnescapedTokens(inv.Result.content, tool.UntrustedContentEnd))
-	assert.Contains(t, inv.Result.content, "<<<BEGIN_UNTRUSTED_EXTERNAL_DATA_ESCAPED>>>")
-	assert.Contains(t, inv.Result.content, "<<<END_UNTRUSTED_EXTERNAL_DATA_ESCAPED>>>")
+	assert.Equal(t, 1, countUnescapedTokens(inv.content, tool.UntrustedContentBegin))
+	assert.Equal(t, 1, countUnescapedTokens(inv.content, tool.UntrustedContentEnd))
+	assert.Contains(t, inv.content, "<<<BEGIN_UNTRUSTED_EXTERNAL_DATA_ESCAPED>>>")
+	assert.Contains(t, inv.content, "<<<END_UNTRUSTED_EXTERNAL_DATA_ESCAPED>>>")
 }
 
 // A large untrusted payload from a small-window session keeps the closing

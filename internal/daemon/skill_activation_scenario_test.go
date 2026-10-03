@@ -73,6 +73,7 @@ func TestHarnessScenario_SkillActivationReceiptOrdersTheOutputChain(t *testing.T
 	collector := collectEvents(h.mgr.PubSub().SubscribeAll())
 	defer collector.stop()
 
+	h.startInboxWake()
 	root, err := h.mgr.Send(h.ctx, h.projectID, "start the skill scenario", "fake-model", map[string]any{
 		"manager_id": scenarioManagerID,
 	})
@@ -83,6 +84,7 @@ func TestHarnessScenario_SkillActivationReceiptOrdersTheOutputChain(t *testing.T
 	h.waitUntil("first turn settled", func() bool { return !h.mgr.HasActiveLoop(root) })
 
 	// Explicit /skill activation through the durable input boundary.
+	h.startInboxWake()
 	require.NoError(t, h.mgr.SendToSession(h.ctx, root, "/skill review"))
 	waitForVisibleMessage(t, collector, root, "🔧 Activated skill: review")
 
@@ -90,6 +92,7 @@ func TestHarnessScenario_SkillActivationReceiptOrdersTheOutputChain(t *testing.T
 	// commits its result in-activation, so the model's next stop answers the
 	// activation directly; the envelope follow-up branch of the responder
 	// never runs under the two-phase check.
+	h.startInboxWake()
 	require.NoError(t, h.mgr.SendToSession(h.ctx, root, "invoke the skill yourself"))
 	closeOnce(modelFollowUpQueued)
 	waitForVisibleMessage(t, collector, root, "model activation complete")

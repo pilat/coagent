@@ -14,6 +14,7 @@ import (
 	"github.com/pilat/coagent/internal/coagenthome"
 	"github.com/pilat/coagent/internal/config"
 	"github.com/pilat/coagent/internal/controllerapi"
+	"github.com/pilat/coagent/internal/llm"
 	"github.com/pilat/coagent/internal/migrate"
 	"github.com/pilat/coagent/internal/projectpath"
 	"github.com/pilat/coagent/internal/sessionstore"
@@ -29,25 +30,24 @@ func newProjectTestManager(t *testing.T) (*svc, Store, *sql.DB) {
 	t.Cleanup(func() { db.Close() })
 	require.NoError(t, migrate.Run(context.Background(), db, dbPath))
 
-	store := NewStore(db)
+	store := sessionstore.NewStore(db)
 	sessStore := sessionstore.NewStore(db)
-	mgr, _ := newSvc(
+	mgr, _ := newScenarioDaemon(
 		context.Background(),
-		&mockFactory{},
-		store,
-		sessStore,
-		sessStore,
-		sessStore,
-		sessStore,
-		sessStore,
-		sessStore,
+		scriptedBuildInput(
+			t,
+			&config.Config{Model: "fake-model"},
+			sessStore,
+			nil,
+			func(*config.Config) (llm.Client, error) { return &scriptedLLM{respond: trivialRespond}, nil },
+		),
 		sessStore,
 		subagent.NewStore(db),
-		subagent.NewTransactions(db),
-		nil,
-		sessStore,
+		subagent.NewTransactions(db, sessStore),
 		nil,
 		nil,
+		nil,
+		db,
 	)
 
 	return mgr, store, db
@@ -153,7 +153,7 @@ func TestCreateSession_PersistsOnlyTheBoundManagerOwner(t *testing.T) {
 		},
 	})
 	require.NoError(t, err)
-	owned, err := mgr.sessionStore.GetSession(ctx, ownedID)
+	owned, err := mgr.store.GetSession(ctx, ownedID)
 	require.NoError(t, err)
 	assert.Equal(t, "alpha", owned.Attributes[controllerapi.SessionAttributeManagerID])
 	assert.Equal(t, "test", owned.Attributes["channel"])
@@ -165,7 +165,7 @@ func TestCreateSession_PersistsOnlyTheBoundManagerOwner(t *testing.T) {
 		},
 	})
 	require.NoError(t, err)
-	second, err := mgr.sessionStore.GetSession(ctx, secondID)
+	second, err := mgr.store.GetSession(ctx, secondID)
 	require.NoError(t, err)
 	assert.Equal(t, "alpha", second.Attributes[controllerapi.SessionAttributeManagerID])
 }
@@ -251,7 +251,7 @@ func TestListRecentProjects_Ordering(t *testing.T) {
 	}
 
 	addSession := func(pid int64, updatedAt time.Time, killed bool) {
-		rec, err := mgr.sessionStore.CreateSession(ctx, pid, "m", "", nil)
+		rec, err := mgr.store.CreateSession(ctx, pid, "m", "", nil)
 		require.NoError(t, err)
 
 		if killed {

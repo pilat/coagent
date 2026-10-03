@@ -3,6 +3,7 @@ package session
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 
@@ -40,11 +41,12 @@ type boundaryBatch struct {
 }
 
 func (s *Session) boundaryStep(ctx context.Context, r *runState) (bool, error) {
-	for attempt := 0; attempt < 2; attempt++ {
+	for attempt := range 2 {
 		previousRun, previousStamp := *r, s.stamper
 		previousStopped, previousDetector := s.preserveStopped, *s.loopDetector
 		previousFocus, previousInput := s.compactionFocus, s.compactionInput
 		previousRequested, previousAnnounced := s.pendingCompaction, s.compactionDeferAnnounced
+
 		accepted, err := s.boundaryAttempt(ctx, r)
 		if !errors.Is(err, sessionstore.ErrInputResolved) {
 			return accepted, err
@@ -53,28 +55,41 @@ func (s *Session) boundaryStep(ctx context.Context, r *runState) (bool, error) {
 		*r, s.stamper = previousRun, previousStamp
 		s.preserveStopped, *s.loopDetector = previousStopped, previousDetector
 		s.compactionFocus, s.compactionInput = previousFocus, previousInput
+
 		s.pendingCompaction, s.compactionDeferAnnounced = previousRequested, previousAnnounced
 		if reloadErr := s.ms.reloadMessages(ctx); reloadErr != nil {
 			return false, reloadErr
 		}
+
 		if attempt == 1 {
 			return false, err
 		}
 	}
+
 	return false, sessionstore.ErrInputResolved
 }
 
 func (s *Session) boundaryAttempt(ctx context.Context, r *runState) (bool, error) {
 	r.handledControl = false
+	r.boundaryAgain = false
+
 	inputs, err := s.store.ListPending(ctx, s.id)
 	if err != nil {
-		return false, err
+		return false, fmt.Errorf("boundary attempt: %w", err)
 	}
+
 	batch := s.newBoundaryBatch()
 	acceptBoundaryCallResults(batch, inputs)
-	if err := s.drainBoundaryInputs(ctx, r, batch, inputs); err != nil {
-		return false, err
+
+	if len(batch.commit.ToolResults) == 0 {
+		if err := s.drainBoundaryInputs(ctx, r, batch, inputs); err != nil {
+			return false, err
+		}
 	}
+
+	// Commit writes accepted text before ToolResults, so settle calls in their own boundary step.
+	r.boundaryAgain = len(batch.commit.ToolResults) > 0
+
 	return s.commitBoundaryBatch(ctx, r, batch, len(inputs))
 }
 
@@ -86,9 +101,11 @@ func (s *Session) newBoundaryBatch() *boundaryBatch {
 	for _, call := range s.PendingExternalCalls() {
 		batch.pending[call.ID] = call.Name
 	}
+
 	if batch.fresh && s.agentsMD != "" {
 		batch.commit.Messages = append(batch.commit.Messages, hostUserMessage(agentsMDMessagePrefix+s.agentsMD))
 	}
+
 	return batch
 }
 
@@ -102,14 +119,17 @@ func (s *Session) drainBoundaryInputs(
 		if input.Source == sessionstore.InputSourceCallResult {
 			continue
 		}
+
 		flow, err := s.handleBoundaryInput(ctx, r, batch, input)
 		if err != nil {
 			return err
 		}
+
 		if flow == boundaryStop {
 			break
 		}
 	}
+
 	return nil
 }
 
@@ -121,35 +141,45 @@ func (s *Session) handleBoundaryInput(
 ) (boundaryFlow, error) {
 	trimmed := strings.TrimSpace(input.RawContent)
 	command := leadingSlashCommand(input.RawContent)
+
 	sleepsOnly := pendingSleepsOnly(batch.pending)
 	if s.boundaryInputBlocked(batch, input, trimmed, command, sleepsOnly) {
 		return boundaryStop, nil
 	}
+
 	if s.preserveStopped &&
 		(input.Source == sessionstore.InputSourceProcess || input.Source == sessionstore.InputSourceSubagent) {
 		return boundaryContinue, nil
 	}
+
 	if trimmed == "/help" || trimmed == "/status" || trimmed == "/schedules" {
 		return boundaryContinue, s.acceptBoundaryCommand(ctx, r, batch, input, trimmed)
 	}
+
 	isCompact := trimmed == compactCommand || strings.HasPrefix(trimmed, compactCommand+" ")
 	if !isCompact && len(s.pendingInLoopCalls()) > 0 {
 		return boundaryStop, nil
 	}
+
 	if isCompact && len(batch.pending) > 0 && !sleepsOnly {
 		s.deferBoundaryCompaction(batch, input)
 		return boundaryStop, nil
 	}
+
 	if len(batch.pending) > 0 && sleepsOnly {
 		s.interruptBoundarySleeps(batch, input.Source)
+		return boundaryStop, nil
 	}
+
 	if isCompact {
 		s.requestBoundaryCompaction(input, trimmed)
 		return boundaryStop, nil
 	}
+
 	if input.Source == sessionstore.InputSourceSchedule {
-		return s.acceptBoundarySchedule(batch, input), nil
+		return s.acceptBoundarySchedule(batch, input)
 	}
+
 	return s.acceptBoundaryText(ctx, r, batch, input, command)
 }
 
@@ -163,12 +193,15 @@ func (s *Session) boundaryInputBlocked(
 		(trimmed == "/stop" || trimmed == "/clear" || trimmed == "/kill") {
 		return true
 	}
+
 	if s.currentActivation != nil && input.ID != s.currentActivation.InputID {
 		return true
 	}
+
 	if batch.accepted && command != "" {
 		return true
 	}
+
 	return command == "" && (len(s.pendingInLoopCalls()) > 0 || (len(batch.pending) > 0 && !sleepsOnly))
 }
 
@@ -178,6 +211,7 @@ func pendingSleepsOnly(pending map[string]string) bool {
 			return false
 		}
 	}
+
 	return true
 }
 
@@ -192,26 +226,29 @@ func (s *Session) commitBoundaryBatch(
 		c.Messages = append(c.Messages, hostUserMessage(s.stamper.Stamp(noTaskPrompt)))
 		batch.accepted = true
 	}
-	if batch.fresh && !batch.accepted {
-		c.Messages = nil
-	}
+
 	willModel := batch.accepted || s.unansweredWork() || len(c.ToolResults) > 0
-	if willModel && len(batch.pending) == 0 && !r.backgroundInserted && s.activeBackgroundSnapshot != "" {
+	if willModel && !r.boundaryAgain && len(batch.pending) == 0 && !r.backgroundInserted &&
+		s.activeBackgroundSnapshot != "" {
 		c.Messages = append(c.Messages, hostUserMessage(s.activeBackgroundSnapshot))
 		r.backgroundInserted = true
 	}
+
 	if len(c.Accept) == 0 && len(c.Messages) == 0 && len(c.ToolResults) == 0 && len(c.Outputs) == 0 {
 		return batch.accepted, nil
 	}
+
 	result, err := s.commit(ctx, *c)
 	if err != nil {
 		return false, err
 	}
+
 	if c.State.ResetContext {
 		s.prompt.Todos.Clear()
 		s.resetContextBaseline()
 		s.loopDetector.resetWindow()
 	}
+
 	if result.Activation != nil {
 		grant := result.Activation
 		s.currentActivation = &tool.ActivationGrant{
@@ -221,5 +258,6 @@ func (s *Session) commitBoundaryBatch(
 			Command:   grant.Command,
 		}
 	}
+
 	return batch.accepted, nil
 }

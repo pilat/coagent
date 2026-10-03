@@ -11,7 +11,6 @@ import (
 
 	"github.com/pilat/coagent/internal/admission"
 	"github.com/pilat/coagent/internal/progressruntime"
-	"github.com/pilat/coagent/internal/sessionlifecycle"
 	"github.com/pilat/coagent/internal/subagent"
 )
 
@@ -29,10 +28,11 @@ type blockingProgressStop struct {
 
 	entered chan struct{}
 	release chan struct{}
+	once    sync.Once
 }
 
 func (s *blockingProgressStop) Stop(context.Context) error {
-	close(s.entered)
+	s.once.Do(func() { close(s.entered) })
 	<-s.release
 
 	return nil
@@ -97,8 +97,8 @@ func TestShutdownCancelsRunnersBeforeWaitingForProgress(t *testing.T) {
 	mgr, _, _ := newTestManager(t)
 
 	runnerCtx, cancel := context.WithCancel(context.Background())
-	activeRunner := sessionlifecycle.NewRunner[queuedSessionInput](
-		cancel, t.TempDir(), 1, admission.Parent, 0, false, nil,
+	activeRunner := newRunner(
+		cancel, t.TempDir(), 1, admission.Parent, 0, false,
 	)
 	_, registered := mgr.runners.Register(1, activeRunner)
 	require.True(t, registered)
@@ -171,6 +171,6 @@ func TestEnsureRunnerRejectsShutdown(t *testing.T) {
 	h := newSubagentHarness(t)
 	h.mgr.shuttingDown.Store(true)
 
-	err := h.mgr.ensureRunner(h.ctx, 1, t.TempDir(), h.projectID, nil)
+	err := h.mgr.ensureRunner(h.ctx, 1, t.TempDir(), h.projectID)
 	require.ErrorIs(t, err, errDaemonShuttingDown)
 }

@@ -76,7 +76,7 @@ func (s *Store) CompleteExplicitStop(
 	}
 
 	outputID, err := insertExplicitStopOutput(
-		ctx, tx, rootID, inputID, cancelledProcesses, owner, now,
+		ctx, tx, rootID, inputID, cancelledProcesses, now,
 	)
 	if err != nil {
 		return nil, err
@@ -136,15 +136,41 @@ func (s *Store) SelectInterruptedExplicitStops(
 	return stops, nil
 }
 
-func insertExplicitStopOutput(ctx context.Context, tx *sql.Tx, rootID, inputID int64, cancelledProcesses int, owner string, now time.Time) (int64, error) {
-	out, err := insertOutputTx(ctx, tx, OutputDraft{SessionID: rootID, Type: OutputMessagePersistent,
+func insertExplicitStopOutput(
+	ctx context.Context,
+	tx *sql.Tx,
+	rootID, inputID int64,
+	cancelledProcesses int,
+
+	now time.Time,
+) (int64, error) {
+	key := fmt.Sprintf("input:%d:stop:completed", inputID)
+	var existingID int64
+
+	// Retries retain the committed count even after process cleanup has progressed.
+	err := tx.QueryRowContext(ctx,
+		`SELECT id FROM session_outbox WHERE session_id = ? AND source_key = ?`, rootID, key).
+		Scan(&existingID)
+	if err == nil {
+		return existingID, nil
+	}
+
+	if !errors.Is(err, sql.ErrNoRows) {
+		return 0, fmt.Errorf("load completed stop output: %w", err)
+	}
+
+	out, err := insertOutputTx(ctx, tx, OutputDraft{
+		SessionID: rootID, Type: OutputMessagePersistent,
 		Content:   fmt.Sprintf("%s\nCancelled background processes: %d", StopTerminalContent, cancelledProcesses),
-		SourceKey: fmt.Sprintf("input:%d:stop:completed", inputID), CreatedAt: now, ReleasesInput: true}, CommitLifecycle)
+		SourceKey: key, CreatedAt: now, ReleasesInput: true,
+	}, CommitLifecycle)
 	if err != nil {
 		return 0, err
 	}
+
 	if out == nil {
 		return 0, nil
 	}
+
 	return out.OutputID, nil
 }

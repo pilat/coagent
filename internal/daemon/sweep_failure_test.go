@@ -24,7 +24,8 @@ func TestSweep_PartialFailureIsNotSuccess(t *testing.T) {
 	core, logs := observer.New(zap.InfoLevel)
 	ctx := logger.ToContext(h.ctx, zap.New(core))
 
-	h.mgr.sweep(ctx)
+	h.startInboxWake()
+	h.mgr.resumeAfterRestart(ctx)
 
 	entries := logs.FilterMessage("sweep_incomplete").All()
 	require.Len(t, entries, 1)
@@ -44,7 +45,8 @@ func TestSweep_CleanRunReportsDone(t *testing.T) {
 	core, logs := observer.New(zap.InfoLevel)
 	ctx := logger.ToContext(h.ctx, zap.New(core))
 
-	h.mgr.sweep(ctx)
+	h.startInboxWake()
+	h.mgr.resumeAfterRestart(ctx)
 
 	assert.Len(t, logs.FilterMessage("sweep_done").All(), 1)
 	assert.Empty(t, logs.FilterMessage("sweep_incomplete").All())

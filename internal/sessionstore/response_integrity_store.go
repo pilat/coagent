@@ -17,8 +17,6 @@ const (
 
 const integrityErrorPrefix = "❌ LLM error: "
 
-var ()
-
 func IntegrityErrorNotice(errorText string) string {
 	return integrityErrorPrefix + errorText
 }
@@ -60,6 +58,7 @@ func (s *Store) HasOutstandingResponseRecovery(ctx context.Context, sessionID in
 
 func hasOutstandingRecovery(ctx context.Context, q queryer, sessionID int64) (bool, error) {
 	var outstanding bool
+
 	err := q.QueryRowContext(ctx, `SELECT EXISTS (
 		SELECT 1 FROM messages recovery
 		WHERE recovery.session_id = ? AND recovery.retry_of_message_id IS NOT NULL

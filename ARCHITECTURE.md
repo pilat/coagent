@@ -193,9 +193,9 @@ The `admission` governor owns capacity counters and quota decisions. The daemon
 owns durable startability checks, FIFO overflow queues, classification, runner
 registration and launch around that verdict.
 
-The session is the only authority that registers a gated tool. The daemon may
-attach control-plane tools to a live session registry, but it cannot bypass
-agent-type filtering. Prompt inventories are computed after this registration,
+Session assembly is the authority that registers gated tools. The daemon supplies
+owner tools before assembly, which applies agent-type filtering.
+Prompt inventories are computed after this registration,
 once per activation, so the prompt describes the registry that actually runs.
 
 ### Interfaces and extension boundaries
@@ -831,7 +831,10 @@ The session package owns model-tool iteration, context projection and loop
 detection. `sessionbuild` assembles the client, loader, builtin/MCP stack and
 owner tools under the agent-type allowlist. `sessionprompt` renders system and
 transcript context. The loop receives those prepared values and emits live
-notifications through its sole outward events port. Model changes are prepared
+notifications through its sole outward events port. Live answer notifications
+retain the raw answer; durable manager output includes its captured final footer.
+Ownerless sessions publish live answers without creating manager outbox rows.
+Model changes are prepared
 by session assembly before their durable record is written, then transferred to
 the live session for its next model step. Session-store owns immutable
 messages, compaction metadata/replacement ordering and durable inbox sequencing.

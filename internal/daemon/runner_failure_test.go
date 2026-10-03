@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"database/sql"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/pilat/coagent/internal/admission"
 	"github.com/pilat/coagent/internal/logger"
+	"github.com/pilat/coagent/internal/sessionstore"
 	"github.com/pilat/coagent/internal/subagent"
 )
 
@@ -32,7 +34,7 @@ func TestEnsureRunner_ClassifyErrorBlocksStart(t *testing.T) {
 
 	flaky.failGetLink(1, 0)
 
-	err = h.mgr.ensureRunner(h.ctx, rec.ID, "/tmp", h.projectID, nil)
+	err = h.mgr.ensureRunner(h.ctx, rec.ID, "/tmp", h.projectID)
 	require.ErrorIs(t, err, errLinkRead)
 
 	assert.False(t, h.mgr.HasActiveLoop(rec.ID), "no runner for an unclassifiable session")
@@ -54,9 +56,26 @@ func TestDrainQueue_StartErrorDoesNotRepark(t *testing.T) {
 	parent, err := h.sessStore.CreateSession(h.ctx, h.projectID, "fake-model", "", nil)
 	require.NoError(t, err)
 
-	childID, err := h.sessStore.CreateSubagentSession(
-		h.ctx, h.projectID, parent.ID, parent.ID, "general", "fake-model", "",
-	)
+	childID, err := func() (int64, error) {
+		var id int64
+		err := h.sessStore.WithTx(h.ctx, func(tx *sql.Tx) error {
+			var err error
+			id, err = sessionstore.CreateSubagentSessionTx(
+				h.ctx,
+				tx,
+				sessionstore.CreateSubagentSession{
+					ProjectID:      h.projectID,
+					ParentID:       parent.ID,
+					RootID:         parent.ID,
+					AgentType:      "general",
+					Model:          "fake-model",
+					ReasoningLevel: "",
+				},
+			)
+			return err
+		})
+		return id, err
+	}()
 	require.NoError(t, err)
 	require.NoError(t, h.links.InsertSubagentLink(h.ctx, subagent.Link{
 		ParentID: parent.ID, ChildID: childID, TaskCallID: "bg",
@@ -90,9 +109,26 @@ func TestDrainQueue_CapacityReparks(t *testing.T) {
 	parent, err := h.sessStore.CreateSession(h.ctx, h.projectID, "fake-model", "", nil)
 	require.NoError(t, err)
 
-	childID, err := h.sessStore.CreateSubagentSession(
-		h.ctx, h.projectID, parent.ID, parent.ID, "general", "fake-model", "",
-	)
+	childID, err := func() (int64, error) {
+		var id int64
+		err := h.sessStore.WithTx(h.ctx, func(tx *sql.Tx) error {
+			var err error
+			id, err = sessionstore.CreateSubagentSessionTx(
+				h.ctx,
+				tx,
+				sessionstore.CreateSubagentSession{
+					ProjectID:      h.projectID,
+					ParentID:       parent.ID,
+					RootID:         parent.ID,
+					AgentType:      "general",
+					Model:          "fake-model",
+					ReasoningLevel: "",
+				},
+			)
+			return err
+		})
+		return id, err
+	}()
 	require.NoError(t, err)
 	// Blocking: a blocking child errors on admit-fail instead of self-queueing,
 	// which is the only way to reach the re-park branch.

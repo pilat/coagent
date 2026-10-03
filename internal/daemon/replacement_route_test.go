@@ -16,7 +16,7 @@ func TestSendSessionMessageResolvedFollowsOwnedReplacement(t *testing.T) {
 	mgr, store, _ := newProjectTestManager(t)
 	projectID, err := store.GetOrCreateProject(ctx, t.TempDir())
 	require.NoError(t, err)
-	old, err := mgr.sessionStore.CreateSession(ctx, projectID, "model", "", map[string]any{
+	old, err := mgr.store.CreateSession(ctx, projectID, "model", "", map[string]any{
 		controllerapi.SessionAttributeManagerID: "cli",
 	})
 	require.NoError(t, err)

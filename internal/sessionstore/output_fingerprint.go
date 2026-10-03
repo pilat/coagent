@@ -116,10 +116,6 @@ func stringValue(value any) string {
 	return text
 }
 
-func outputFingerprint(kind OutputType, content string, sessionID int64, attributes map[string]any) string {
-	return OutputFingerprint(kind, content, sessionID, attributes)
-}
-
 func validOutputType(kind OutputType) bool {
 	switch kind {
 	case OutputMessageReplaceable,

@@ -11,7 +11,7 @@ import (
 	"github.com/pilat/coagent/internal/transcript"
 )
 
-func seededOwnedSession(ctx context.Context, t *testing.T, store Store, projectID int64) *SessionRecord {
+func seededOwnedSession(ctx context.Context, t *testing.T, store *Store, projectID int64) *SessionRecord {
 	t.Helper()
 
 	session, err := store.CreateSession(ctx, projectID, "m", "", map[string]any{"manager_id": "mgr"})
@@ -25,7 +25,7 @@ func TestBeginLifecycleStopStartsReplaceableNonReleasingRow(t *testing.T) {
 	ctx := context.Background()
 
 	session := seededOwnedSession(ctx, t, store, projectID)
-	input, err := store.EnqueueInput(ctx, session.ID, InputSourceUser, "/stop")
+	input, err := enqueueInput(ctx, store, session.ID, InputSourceUser, "/stop")
 	require.NoError(t, err)
 
 	commit, err := store.BeginLifecycleInput(ctx, input.ID, "stop", "⏳ Stopping…")
@@ -51,7 +51,7 @@ func TestBeginLifecycleKillKeepsPersistentReleasingRow(t *testing.T) {
 	ctx := context.Background()
 
 	session := seededOwnedSession(ctx, t, store, projectID)
-	input, err := store.EnqueueInput(ctx, session.ID, InputSourceUser, "/kill")
+	input, err := enqueueInput(ctx, store, session.ID, InputSourceUser, "/kill")
 	require.NoError(t, err)
 
 	commit, err := store.BeginLifecycleInput(ctx, input.ID, "kill", "Stopping session...")
@@ -70,7 +70,7 @@ func TestCompleteExplicitStopAtomic(t *testing.T) {
 	ctx := context.Background()
 
 	session := seededOwnedSession(ctx, t, store, projectID)
-	input, err := store.EnqueueInput(ctx, session.ID, InputSourceUser, "/stop")
+	input, err := enqueueInput(ctx, store, session.ID, InputSourceUser, "/stop")
 	require.NoError(t, err)
 	_, err = store.BeginLifecycleInput(ctx, input.ID, "stop", "⏳ Stopping…")
 	require.NoError(t, err)
@@ -107,6 +107,8 @@ func TestCompleteExplicitStopAtomic(t *testing.T) {
 	replay, err := store.CompleteExplicitStop(ctx, session.ID, input.ID, 9)
 	require.NoError(t, err)
 	assert.Equal(t, commit.OutputID, replay.OutputID)
+	require.NoError(t, db.QueryRow(`SELECT content FROM session_outbox WHERE id = ?`, replay.OutputID).Scan(&content))
+	assert.Equal(t, "⏸️ Session stopped\nCancelled background processes: 2", content)
 
 	var count int
 	require.NoError(t, db.QueryRow(`SELECT COUNT(*) FROM session_outbox
@@ -140,7 +142,7 @@ func TestSelectInterruptedExplicitStops(t *testing.T) {
 	session := seededOwnedSession(ctx, t, store, projectID)
 
 	// A historical completed stop: started and completed rows both exist.
-	old, err := store.EnqueueInput(ctx, session.ID, InputSourceUser, "/stop")
+	old, err := enqueueInput(ctx, store, session.ID, InputSourceUser, "/stop")
 	require.NoError(t, err)
 	_, err = store.BeginLifecycleInput(ctx, old.ID, "stop", "⏳ Stopping…")
 	require.NoError(t, err)
@@ -150,9 +152,9 @@ func TestSelectInterruptedExplicitStops(t *testing.T) {
 	require.NoError(t, err)
 
 	// A legacy interrupted stop: only the old :result row exists.
-	legacy, err := store.EnqueueInput(ctx, session.ID, InputSourceUser, "/stop")
+	legacy, err := enqueueInput(ctx, store, session.ID, InputSourceUser, "/stop")
 	require.NoError(t, err)
-	require.NoError(t, store.HandleInput(ctx, legacy.ID, "stop"))
+	require.NoError(t, resolveHandled(ctx, store, legacy.ID, "stop"))
 	_, err = db.Exec(`UPDATE sessions SET status = 'stopping' WHERE id = ?`, session.ID)
 	require.NoError(t, err)
 	_, err = db.Exec(`INSERT INTO session_outbox
@@ -182,7 +184,7 @@ func TestOutputReadinessOnlyNewestReleasingRow(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	input, err := store.EnqueueInput(ctx, session.ID, InputSourceUser, "/stop")
+	input, err := enqueueInput(ctx, store, session.ID, InputSourceUser, "/stop")
 	require.NoError(t, err)
 	startCommit, err := store.BeginLifecycleInput(ctx, input.ID, "stop", "⏳ Stopping…")
 	require.NoError(t, err)
@@ -221,12 +223,12 @@ func TestDirectOutputFailsClosedBehindStopFence(t *testing.T) {
 	ctx := context.Background()
 
 	session := seededOwnedSession(ctx, t, store, projectID)
-	input, err := store.EnqueueInput(ctx, session.ID, InputSourceUser, "/stop")
+	input, err := enqueueInput(ctx, store, session.ID, InputSourceUser, "/stop")
 	require.NoError(t, err)
 	_, err = store.BeginLifecycleInput(ctx, input.ID, "stop", "⏳ Stopping…")
 	require.NoError(t, err)
 
-	_, _, err = store.InsertToolResultWithDirectOutput(ctx, session.ID,
+	_, _, err = answerTool(ctx, store, session.ID,
 		&transcript.Message{Role: "tool", Content: "late", ToolCallID: "c9", ToolName: "bash"},
 		[]string{"late direct output"})
 	require.Error(t, err, "direct output must fail closed behind the stop fence")

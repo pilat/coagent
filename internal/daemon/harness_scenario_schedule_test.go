@@ -18,7 +18,7 @@ import (
 	"github.com/pilat/coagent/internal/llmwire"
 	"github.com/pilat/coagent/internal/migrate"
 	"github.com/pilat/coagent/internal/schedule"
-	"github.com/pilat/coagent/internal/session"
+	"github.com/pilat/coagent/internal/sessionbuild"
 	"github.com/pilat/coagent/internal/sessionbus"
 	"github.com/pilat/coagent/internal/sessionevent"
 	"github.com/pilat/coagent/internal/sessionstore"
@@ -127,6 +127,7 @@ func deliverOneShotBeforeRestart(
 
 func createScheduleSession(t *testing.T, h *scheduleRestartHarness, events *eventCollector) int64 {
 	t.Helper()
+	h.startInboxWake()
 	parentID, err := h.mgr.Send(h.ctx, h.projectID, "initialize", "fake-model", map[string]any{
 		controllerapi.SessionAttributeManagerID: "telegram-main",
 	})
@@ -277,19 +278,24 @@ func buildScheduleRestartHarness(
 	respond func(string, []llmwire.Message) *llmwire.Response,
 ) *subagentHarness {
 	t.Helper()
-	store := NewStore(db)
+	store := sessionstore.NewStore(db)
 	sessionStore := sessionstore.NewStore(db)
 	links := subagent.NewStore(db)
-	schedules := schedule.NewStore(db)
-	factory := scheduleRestartFactory(workDir, sessionStore, respond)
-	mgr, _ := newSvc(
+	schedules := schedule.NewStore(db, sessionStore)
+	factory := scheduleRestartFactory(t, workDir, sessionStore, respond)
+	mgr, _ := newScenarioDaemon(
 		context.Background(),
-		factory, store, sessionStore, sessionStore, sessionStore,
-		sessionStore, sessionStore, sessionStore, sessionStore,
-		links, subagent.NewTransactions(db),
-		budget.New(sessionStore), sessionStore, schedule.NewService(schedules), func() string {
+		factory,
+		sessionStore,
+		links,
+		subagent.NewTransactions(db, sessionStore),
+		budget.New(sessionStore),
+		schedule.NewService(schedules, sessionStore),
+		func() string {
 			return "fake-model"
-		})
+		},
+		db,
+	)
 	projectID, err := store.GetOrCreateProject(context.Background(), workDir)
 	require.NoError(t, err)
 
@@ -300,17 +306,15 @@ func buildScheduleRestartHarness(
 }
 
 func scheduleRestartFactory(
+	t *testing.T,
 	workDir string,
-	store sessionstore.Store,
+	store *sessionstore.Store,
 	respond func(string, []llmwire.Message) *llmwire.Response,
-) session.Factory {
+) sessionbuild.BuildInput {
 	cfg := &config.Config{WorkDir: workDir, Model: "fake-model"}
-	return session.NewFactoryWithOptions(
-		cfg, nil, nil, store, store, nil, nil, nil,
-		session.WithLLMClientFactory(func(*config.Config) (llm.Client, error) {
-			return &scriptedLLM{respond: respond}, nil
-		}),
-	)
+	return scriptedBuildInput(t, cfg, store, nil, func(*config.Config) (llm.Client, error) {
+		return &scriptedLLM{respond: respond}, nil
+	})
 }
 
 func (h *scheduleRestartHarness) close() error {

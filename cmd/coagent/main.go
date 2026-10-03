@@ -582,8 +582,19 @@ func startCore(
 	bus := sessionbus.New()
 	progressSvc := progressruntime.New(sessionStore, bus)
 	daemonSvc := daemon.New(
-		ctx, buildInput, sessionStore, linkStore, subagentTx, budgetSvc, backgroundprocess.NewStore(db, sessionStore), progressSvc, bus,
-		scheduleSvc, cfg, mcpRegistry, applier,
+		ctx,
+		buildInput,
+		sessionStore,
+		linkStore,
+		subagentTx,
+		budgetSvc,
+		backgroundprocess.NewStore(db, sessionStore),
+		progressSvc,
+		bus,
+		scheduleSvc,
+		cfg,
+		mcpRegistry,
+		applier,
 	)
 
 	controller := managercontrol.New(daemonSvc, daemonSvc, sessionStore, cfg, cache)

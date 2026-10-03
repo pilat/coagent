@@ -30,6 +30,7 @@ func TestHarnessScenario_ScheduledTurnChain(t *testing.T) {
 	collector := collectEvents(h.mgr.PubSub().SubscribeAll())
 	defer collector.stop()
 
+	h.startInboxWake()
 	root, err := h.mgr.Send(h.ctx, h.projectID, "hello", "fake-model", map[string]any{
 		"manager_id": scenarioManagerID,
 	})
@@ -43,7 +44,15 @@ func TestHarnessScenario_ScheduledTurnChain(t *testing.T) {
 	// re-announces the session instead of racing the runner cleanup.
 	h.waitUntil("first runner gone", func() bool { return !h.mgr.HasActiveLoop(root) })
 
-	delivered, err := h.mgr.DeliverScheduleTick(h.ctx, root, "delivery-chain-1", "produce the weekly report")
+	delivered, err := enqueueScheduledInput(
+
+		h.ctx, h.mgr.store,
+
+		root,
+		"delivery-chain-1",
+		"produce the weekly report",
+		false,
+	)
 	require.NoError(t, err)
 	require.True(t, delivered)
 
@@ -82,6 +91,7 @@ func TestHarnessScenario_LiveStopChain(t *testing.T) {
 	collector := collectEvents(h.mgr.PubSub().SubscribeAll())
 	defer collector.stop()
 
+	h.startInboxWake()
 	root, err := h.mgr.Send(h.ctx, h.projectID, "long work", "fake-model", map[string]any{
 		"manager_id": scenarioManagerID,
 	})
@@ -90,6 +100,7 @@ func TestHarnessScenario_LiveStopChain(t *testing.T) {
 	service := installScenarioProcessService(t, h)
 	process := startScenarioProcess(t, service, root, root, "sleep 30")
 
+	h.startInboxWake()
 	require.NoError(t, h.mgr.SendToSession(h.ctx, root, "/stop"))
 	h.waitUntil("root stopped", func() bool {
 		record, loadErr := h.sessStore.GetSession(h.ctx, root)
@@ -125,9 +136,12 @@ func TestHarnessScenario_InterruptedStopChain(t *testing.T) {
 	require.NoError(t, h1.sessStore.BindManager(h1.ctx, scenarioManagerID, "telegram", map[string]any{
 		"bot_user_id": int64(1), "chat_id": int64(2), "topology": "group",
 	}))
-	input, err := h1.sessStore.EnqueueInput(h1.ctx, root.ID, sessionstore.InputSourceUser, "/stop")
+	input, err := h1.sessStore.Enqueue(
+		h1.ctx,
+		sessionstore.Input{SessionID: root.ID, Source: sessionstore.InputSourceUser, Content: "/stop"},
+	)
 	require.NoError(t, err)
-	_, err = h1.sessStore.BeginLifecycleInput(h1.ctx, input.ID, "stop", "⏳ Stopping…")
+	_, err = h1.sessStore.BeginLifecycleInput(h1.ctx, input.Input.ID, "stop", "⏳ Stopping…")
 	require.NoError(t, err)
 	h1.shutdown()
 
@@ -184,6 +198,7 @@ func TestHarnessScenario_LaterFreshTurnAfterStop(t *testing.T) {
 	collector := collectEvents(h.mgr.PubSub().SubscribeAll())
 	defer collector.stop()
 
+	h.startInboxWake()
 	root, err := h.mgr.Send(h.ctx, h.projectID, "long work", "fake-model", map[string]any{
 		"manager_id": scenarioManagerID,
 	})
@@ -191,6 +206,7 @@ func TestHarnessScenario_LaterFreshTurnAfterStop(t *testing.T) {
 	waitForVisibleMessage(t, collector, root, "Working on it, done for now.")
 	h.waitUntil("first runner gone", func() bool { return !h.mgr.HasActiveLoop(root) })
 
+	h.startInboxWake()
 	require.NoError(t, h.mgr.SendToSession(h.ctx, root, "/stop"))
 	h.waitUntil("root stopped", func() bool {
 		record, loadErr := h.sessStore.GetSession(h.ctx, root)
@@ -198,6 +214,7 @@ func TestHarnessScenario_LaterFreshTurnAfterStop(t *testing.T) {
 		return loadErr == nil && record.Status == sessionstore.SessionStatusStopped
 	})
 
+	h.startInboxWake()
 	require.NoError(t, h.mgr.SendToSession(h.ctx, root, "continue please"))
 	waitForVisibleMessage(t, collector, root, "Resumed and done.")
 
@@ -240,6 +257,7 @@ func TestHarnessScenario_CompactSuccessChain(t *testing.T) {
 	collector := collectEvents(h.mgr.PubSub().SubscribeAll())
 	defer collector.stop()
 
+	h.startInboxWake()
 	root, err := h.mgr.Send(h.ctx, h.projectID, "first prompt", "fake-model", map[string]any{
 		"manager_id": scenarioManagerID,
 	})
@@ -250,6 +268,7 @@ func TestHarnessScenario_CompactSuccessChain(t *testing.T) {
 	// the session instead of racing the runner cleanup.
 	h.waitUntil("first runner gone", func() bool { return !h.mgr.HasActiveLoop(root) })
 
+	h.startInboxWake()
 	require.NoError(t, h.mgr.SendToSession(h.ctx, root, "/compact keep the TODO state"))
 	collector.waitFor(t, "compaction finished", func(events []controllerapi.SessionNotification) bool {
 		return containsMessage(events, root, "✅ Context compacted")

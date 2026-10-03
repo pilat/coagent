@@ -127,14 +127,16 @@ func (s *svc) resumeSessionsWithRecoverableInput(ctx context.Context) (int, erro
 func (s *svc) resumeRecoverableRoot(ctx context.Context, sessionID int64) (bool, error) {
 	inputs, inputErr := s.store.ListPending(ctx, sessionID)
 	if inputErr != nil {
-		return false, inputErr
+		return false, fmt.Errorf("resume recoverable root: %w", inputErr)
 	}
+
 	for _, input := range inputs {
 		if input.Source != sessionstore.InputSourceUser {
 			continue
 		}
+
 		switch strings.TrimSpace(input.RawContent) {
-		case "/status":
+		case statusCommand:
 			if _, err := s.handleGenericCommand(ctx, input); err != nil {
 				return false, err
 			}
@@ -142,6 +144,7 @@ func (s *svc) resumeRecoverableRoot(ctx context.Context, sessionID int64) (bool,
 			return s.handleGenericCommand(ctx, input)
 		}
 	}
+
 	unlock, err := s.lockSessionTree(ctx, sessionID)
 	if err != nil {
 		return false, err

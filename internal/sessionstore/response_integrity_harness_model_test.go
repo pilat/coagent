@@ -33,7 +33,7 @@ type integrityProtocolProduction struct {
 	t      *testing.T
 	ctx    context.Context
 	db     *sql.DB
-	store  Store
+	store  *Store
 	rootID int64
 }
 
@@ -76,27 +76,54 @@ func newIntegrityProtocolProduction(t *testing.T) *integrityProtocolProduction {
 func (p *integrityProtocolProduction) apply(command integrityProtocolCommand) {
 	switch command {
 	case integrityLength:
-		rejection := rejectedLength(p.rootID, p.currentIteration()+1, 0)
-		rejection.Message.Usage = []byte(`{"promptTokens":5,"completionTokens":10}`)
-		result, err := p.store.CommitRejectedResponse(p.ctx, rejection)
+		iteration := p.currentIteration() + 1
+		outstanding, err := p.store.HasOutstandingResponseRecovery(p.ctx, p.rootID)
 		require.NoError(p.t, err)
-		require.Contains(p.t, []RejectedResponseOutcome{
-			RejectedResponseRecoveryQueued, RejectedResponseRetryExhausted,
-		}, result.Outcome)
+		step := Commit{
+			SessionID: p.rootID,
+			Messages: []*transcript.Message{
+				{
+					Role:                 "assistant",
+					Content:              "partial",
+					FinishType:           "length",
+					ProviderFinishReason: "length",
+					RejectedReason:       RejectedReasonOutputLength,
+					Usage:                []byte(`{"promptTokens":5,"completionTokens":10}`),
+				},
+			},
+			State: StatePatch{Iteration: &iteration},
+		}
+		if outstanding {
+			status := SessionStatusError
+			step.State.Status = &status
+			step.Outputs = []Output{
+				{
+					Type:          OutputMessagePersistent,
+					Content:       IntegrityErrorNotice(OutputLengthTerminalError),
+					MessageRef:    0,
+					Phase:         "final",
+					ReleasesInput: true,
+				},
+			}
+		} else {
+			step.Unfired.Messages = []*transcript.Message{
+				{Role: "user", Content: OutputLengthRecoveryPrompt, RetryOfRef: new(0)},
+			}
+		}
+		_, err = p.store.Commit(p.ctx, step)
+		require.NoError(p.t, err)
 	case integrityStop:
 		if p.currentStatus() == SessionStatusError {
 			return
 		}
 		usage := []byte(`{"promptTokens":2,"completionTokens":3}`)
-		_, err := p.store.InsertMessage(p.ctx, p.rootID, &transcript.Message{
+		_, err := appendMessage(p.ctx, p.store, p.rootID, &transcript.Message{
 			Role: llmwire.RoleAssistant, Content: "done", FinishType: llmwire.FinishStop, Usage: usage,
 		})
 		require.NoError(p.t, err)
-		require.NoError(p.t, p.store.UpdateSessionIteration(
-			p.ctx, p.rootID, p.currentIteration()+1, SessionStatusCompleted,
-		))
+		require.NoError(p.t, stepState(p.ctx, p.store, p.rootID, p.currentIteration()+1, SessionStatusCompleted))
 	case integrityRestart:
-		p.store = NewStore(p.db)
+		p.store = testStore(p.db)
 	}
 }
 

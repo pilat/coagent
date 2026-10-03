@@ -121,6 +121,7 @@ func TestScenario_AutomaticCompactionRunsInsideTheDaemon(t *testing.T) {
 	events := collectEvents(h.mgr.PubSub().SubscribeAll())
 	defer events.stop()
 
+	h.startInboxWake()
 	parentID, err := h.mgr.Send(h.ctx, h.projectID, "start the scripted work", "fake-model", nil)
 	require.NoError(t, err)
 
@@ -217,6 +218,7 @@ func TestScenario_AutoCompactionWhileABackgroundChildIsInFlight(t *testing.T) {
 	events := collectEvents(h.mgr.PubSub().SubscribeAll())
 	defer events.stop()
 
+	h.startInboxWake()
 	parentID, err := h.mgr.Send(h.ctx, h.projectID, "spawn then keep working", "fake-model", nil)
 	require.NoError(t, err)
 

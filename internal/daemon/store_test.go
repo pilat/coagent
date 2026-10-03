@@ -10,6 +10,7 @@ import (
 
 	"github.com/pilat/coagent/internal/migrate"
 	"github.com/pilat/coagent/internal/schedule"
+	"github.com/pilat/coagent/internal/sessionstore"
 )
 
 func newTestStore(t *testing.T) Store {
@@ -25,7 +26,7 @@ func newTestStoreWithSchedule(t *testing.T) (Store, schedule.Store) {
 	require.NoError(t, err)
 	t.Cleanup(func() { db.Close() })
 	require.NoError(t, migrate.Run(context.Background(), db, dbPath))
-	return NewStore(db), schedule.NewStore(db)
+	return sessionstore.NewStore(db), schedule.NewStore(db, sessionstore.NewStore(db))
 }
 
 func testProject(t *testing.T, s Store, workDir string) int64 {

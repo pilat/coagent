@@ -20,28 +20,28 @@ import (
 // mark and the commit of its completion into the parent transcript.
 var errDeliveryCrash = errors.New("daemon died before the completion was committed")
 
-// crashGateLinkStore rejects every link read taken while a completion is owed but
-// not yet committed, so a daemon can be torn down inside that exact window.
-type crashGateLinkStore struct {
-	subagent.Store
+// The delivery transaction must fail before either the input or its acknowledgment commits.
+type crashGateTransactions struct {
+	subagent.Transactions
 
 	once     sync.Once
 	rejected chan struct{}
 }
 
-func newCrashGate(inner subagent.Store) *crashGateLinkStore {
-	return &crashGateLinkStore{Store: inner, rejected: make(chan struct{})}
+func newCrashGate(inner subagent.Transactions) *crashGateTransactions {
+	return &crashGateTransactions{Transactions: inner, rejected: make(chan struct{})}
 }
 
-func (g *crashGateLinkStore) GetLink(ctx context.Context, childID int64) (*subagent.Link, error) {
-	link, err := g.Store.GetLink(ctx, childID)
-	if err != nil || link == nil || !link.Terminal() || link.DeliveredAt != 0 {
-		return link, err
-	}
-
+func (g *crashGateTransactions) DeliverCompletion(context.Context, subagent.Link, string) (bool, error) {
 	g.once.Do(func() { close(g.rejected) })
 
-	return nil, errDeliveryCrash
+	return false, errDeliveryCrash
+}
+
+func (g *crashGateTransactions) DeliverBackgroundCompletion(context.Context, subagent.Link, int) (bool, error) {
+	g.once.Do(func() { close(g.rejected) })
+
+	return false, errDeliveryCrash
 }
 
 // crashWindowRespond drives a parent that spawns exactly one child and answers
@@ -96,16 +96,13 @@ func TestScenario_CrashBetweenFinalizationAndDeliveryRedeliversExactlyOnce(t *te
 		t.Run(tc.name, func(t *testing.T) {
 			dbPath := filepath.Join(t.TempDir(), "crash.db")
 
-			var gate *crashGateLinkStore
-
 			first := newSubagentHarnessOnDB(
-				t, dbPath, crashWindowRespond(tc.background),
-				func(inner subagent.Store) subagent.Store {
-					gate = newCrashGate(inner)
-					return gate
-				},
+				t, dbPath, crashWindowRespond(tc.background), nil,
 			)
+			gate := newCrashGate(first.mgr.subagents)
+			first.mgr.subagents = gate
 
+			first.startInboxWake()
 			parentID, err := first.mgr.Send(first.ctx, first.projectID, "spawn a child", "fake-model", nil)
 			require.NoError(t, err)
 
@@ -126,14 +123,9 @@ func TestScenario_CrashBetweenFinalizationAndDeliveryRedeliversExactlyOnce(t *te
 			require.NoError(t, err)
 			require.NotNil(t, owed)
 			require.True(t, owed.Terminal(), "the child was finalized before the crash")
-			// The background inbox handoff runs detached and races the crash: it
-			// either committed (input recovery promotes it) or lost (the sweep
-			// redelivers); both must converge to exactly one consumption below.
-			if !tc.background {
-				require.Zero(t, owed.DeliveredAt, "the blocking task result never reached the parent")
-				require.Zero(t, tc.completions(second.parentMessages(parentID), link.ChildID),
-					"the blocking completion must not reach the transcript before the restart")
-			}
+			require.Zero(t, owed.DeliveredAt, "the completion handoff never committed before the crash")
+			require.Zero(t, tc.completions(second.parentMessages(parentID), link.ChildID),
+				"the completion must not reach the transcript before the restart")
 
 			require.NoError(t, second.mgr.Start(second.ctx))
 
@@ -185,6 +177,7 @@ func TestScenario_StoppedChildSurvivesARestartWithoutResurrection(t *testing.T) 
 
 	first := newSubagentHarnessOnDB(t, dbPath, held, nil)
 
+	first.startInboxWake()
 	parentID, err := first.mgr.Send(first.ctx, first.projectID, "spawn a child", "fake-model", nil)
 	require.NoError(t, err)
 
@@ -203,7 +196,8 @@ func TestScenario_StoppedChildSurvivesARestartWithoutResurrection(t *testing.T) 
 	defer second.shutdown()
 
 	require.NoError(t, second.mgr.Start(second.ctx))
-	second.mgr.sweep(second.ctx)
+	second.startInboxWake()
+	second.mgr.resumeAfterRestart(second.ctx)
 
 	require.Never(t, func() bool {
 		current, linkErr := second.links.GetLink(second.ctx, link.ChildID)

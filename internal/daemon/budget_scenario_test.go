@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/pilat/coagent/internal/budget"
 	"github.com/pilat/coagent/internal/llmwire"
 	"github.com/pilat/coagent/internal/sessionstore"
 )
@@ -33,19 +34,20 @@ func TestHarnessScenario_BudgetMutationRequiresAndConsumesUserGrant(t *testing.T
 		h.shutdown()
 	}()
 
+	h.startInboxWake()
 	sessionID, err := h.mgr.Send(h.ctx, h.projectID, "/budget stop after one minute", "fake-model", map[string]any{
 		"manager_id": "telegram:main",
 	})
 	require.NoError(t, err)
 	h.waitUntil("budget is armed", func() bool {
-		record, loadErr := h.sessStore.GetBudget(h.ctx, sessionID)
+		record, loadErr := h.sessStore.Get(h.ctx, sessionID)
 
-		return loadErr == nil && record.State == sessionstore.BudgetArmed
+		return loadErr == nil && record.State == budget.Armed
 	})
 
-	budgetRecord, err := h.sessStore.GetBudget(h.ctx, sessionID)
+	budgetRecord, err := h.sessStore.Get(h.ctx, sessionID)
 	require.NoError(t, err)
-	assert.Equal(t, sessionstore.BudgetArmed, budgetRecord.State)
+	assert.Equal(t, budget.Armed, budgetRecord.State)
 	require.NotNil(t, budgetRecord.DurationSeconds)
 	assert.Equal(t, int64(60), *budgetRecord.DurationSeconds)
 
@@ -97,23 +99,24 @@ func TestHarnessScenario_BackgroundChildRetainsBudgetUntilCompletion(t *testing.
 		h.shutdown()
 	}()
 
+	h.startInboxWake()
 	sessionID, err := h.mgr.Send(h.ctx, h.projectID, "/budget run a background child", "fake-model", map[string]any{
 		"manager_id": scenarioManagerID,
 	})
 	require.NoError(t, err)
 	waitForVisibleMessage(t, collector, sessionID, "budget child still running")
-	record, err := h.sessStore.GetBudget(h.ctx, sessionID)
+	record, err := h.sessStore.Get(h.ctx, sessionID)
 	require.NoError(t, err)
-	assert.Equal(t, sessionstore.BudgetArmed, record.State)
+	assert.Equal(t, budget.Armed, record.State)
 	generation := record.Generation
 
 	close(childRelease)
 	waitForVisibleMessage(t, collector, sessionID, "budget completion handled")
 	h.waitUntil("budget released after completion", func() bool {
-		current, loadErr := h.sessStore.GetBudget(h.ctx, sessionID)
-		return loadErr == nil && current.State == sessionstore.BudgetReleased
+		current, loadErr := h.sessStore.Get(h.ctx, sessionID)
+		return loadErr == nil && current.State == budget.Released
 	})
-	record, err = h.sessStore.GetBudget(h.ctx, sessionID)
+	record, err = h.sessStore.Get(h.ctx, sessionID)
 	require.NoError(t, err)
 	assert.Equal(t, generation, record.Generation)
 }
@@ -125,11 +128,19 @@ func TestHarnessScenario_AgentInputCannotActivateBudget(t *testing.T) {
 		"manager_id": "telegram:main",
 	})
 	require.NoError(t, err)
-	input, err := h.sessStore.EnqueueInput(h.ctx, record.ID, sessionstore.InputSourceAgent, "/budget 1m")
+	input, err := h.sessStore.Enqueue(
+		h.ctx,
+		sessionstore.Input{SessionID: record.ID, Source: sessionstore.InputSourceAgent, Content: "/budget 1m"},
+	)
 	require.NoError(t, err)
 
-	_, _, err = h.sessStore.PromoteInputWithActivation(h.ctx, input.ID, "/budget 1m",
-		sessionstore.ActivationDraft{ToolID: "set_budget", Command: "/budget"})
+	_, err = h.sessStore.Commit(h.ctx, sessionstore.Commit{
+		SessionID: record.ID,
+		Accept: []sessionstore.Accept{
+			{InputID: input.Input.ID, State: sessionstore.InputStateAccepted, Content: "/budget 1m", LinkRef: -1},
+		},
+		Activation: &sessionstore.ActivationChange{InputID: input.Input.ID, ToolID: "set_budget", Command: "/budget"},
+	})
 	require.ErrorIs(t, err, sessionstore.ErrActivationConflict)
 }
 
@@ -149,6 +160,7 @@ func TestHarnessScenario_FinalIncludesNonEmptyTodoAndBudget(t *testing.T) {
 		h.shutdown()
 	}()
 
+	h.startInboxWake()
 	sessionID, err := h.mgr.Send(h.ctx, h.projectID, "do work", "fake-model", map[string]any{
 		"manager_id": "telegram:main",
 	})
@@ -156,7 +168,14 @@ func TestHarnessScenario_FinalIncludesNonEmptyTodoAndBudget(t *testing.T) {
 	waitForScenarioSignal(t, entered, "model call")
 
 	todos := json.RawMessage(`[{"id":"todo-1","content":"ship change","status":"in_progress","priority":"high"}]`)
-	require.NoError(t, h.sessStore.UpdateSessionTodoItems(h.ctx, sessionID, todos))
+	require.NoError(t, func() error {
+		raw := todos
+		_, err := h.sessStore.Commit(
+			h.ctx,
+			sessionstore.Commit{SessionID: sessionID, State: sessionstore.StatePatch{TodoItems: &raw}},
+		)
+		return err
+	}())
 	_, err = h.db.ExecContext(h.ctx, `INSERT INTO session_budgets
 		(root_session_id, state, generation, armed_at, baseline_cost_usd, cost_limit_usd)
 		VALUES (?, 'armed', 1, ?, 0, 1)`, sessionID, time.Now().UTC())

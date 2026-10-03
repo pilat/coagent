@@ -1,4 +1,4 @@
-package sessionstore
+package sessionstore_test
 
 import (
 	"context"
@@ -8,12 +8,12 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/pilat/coagent/internal/llmwire"
-	"github.com/pilat/coagent/internal/subagent"
+	"github.com/pilat/coagent/internal/sessionstore"
 	"github.com/pilat/coagent/internal/transcript"
 )
 
 // A background child's completion commits in its own transaction. If it lands
-// after compaction read its snapshot but before ReplaceCompactedMessages
+// after compaction read its snapshot but before the replacement step
 // committed, the two rows are absent from compactedIDs and carry a NULL
 // position. They must survive as an intact, ordered tool_call/tool_result pair
 // behind the summary — never be split, reordered, or hidden.
@@ -23,20 +23,20 @@ func TestStore_CompactionKeepsACompletionPairCommittedOutsideItsSnapshot(t *test
 
 	parent, err := s.CreateSession(ctx, projectID, "m", "", nil)
 	require.NoError(t, err)
-	childID, err := s.CreateSubagentSession(ctx, projectID, parent.ID, parent.ID, "general", "m", "")
+	childID, err := createChild(ctx, s, projectID, parent.ID, parent.ID, "general", "m", "")
 	require.NoError(t, err)
 	seedLink(t, db, parent.ID, childID, "task-1")
 
-	headerID, err := s.InsertMessage(ctx, parent.ID, &transcript.Message{
+	headerID, err := appendMessage(ctx, s, parent.ID, &transcript.Message{
 		Role: llmwire.RoleUser, Content: "the original task",
 	})
 	require.NoError(t, err)
-	spawnID, err := s.InsertMessage(ctx, parent.ID, &transcript.Message{
+	spawnID, err := appendMessage(ctx, s, parent.ID, &transcript.Message{
 		Role:      llmwire.RoleAssistant,
 		ToolCalls: []byte(`[{"ID":"task-1","Name":"task","Arguments":"e30="}]`),
 	})
 	require.NoError(t, err)
-	ackID, err := s.InsertMessage(ctx, parent.ID, &transcript.Message{
+	ackID, err := appendMessage(ctx, s, parent.ID, &transcript.Message{
 		Role: llmwire.RoleTool, Content: "launched", ToolCallID: "task-1", ToolName: "task",
 	})
 	require.NoError(t, err)
@@ -45,7 +45,7 @@ func TestStore_CompactionKeepsACompletionPairCommittedOutsideItsSnapshot(t *test
 	snapshot := []int64{spawnID, ackID}
 
 	// The child completes in the window before the replacement commits.
-	msgIDs, won, err := subagent.NewTransactions(db).DeliverCompletion(ctx, parent.ID, []*transcript.Message{
+	msgIDs, won, err := deliverChild(ctx, s, parent.ID, []*transcript.Message{
 		{Role: llmwire.RoleAssistant, ToolCalls: []byte(`[{"ID":"ev-1","Name":"subagent_event"}]`)},
 		{Role: llmwire.RoleTool, Content: "child done", ToolCallID: "ev-1", ToolName: "subagent_event"},
 	}, childID, 1)
@@ -53,7 +53,7 @@ func TestStore_CompactionKeepsACompletionPairCommittedOutsideItsSnapshot(t *test
 	require.True(t, won)
 	require.Len(t, msgIDs, 2)
 
-	_, err = s.ReplaceCompactedMessages(ctx, parent.ID, snapshot, []CompactionEntry{
+	_, err = replaceTranscript(ctx, s, parent.ID, snapshot, []sessionstore.CompactionEntry{
 		{ExistingID: headerID},
 		{Message: &transcript.Message{Role: llmwire.RoleUser, Content: "[CONTEXT SUMMARY - previous work condensed]"}},
 		{Message: &transcript.Message{Role: llmwire.RoleAssistant, Content: "ack"}},

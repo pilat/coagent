@@ -71,6 +71,7 @@ func (s *Store) HasBackgroundWakeSource(ctx context.Context, sessionID int64) (b
 // HasPendingBackgroundWait preserves timer admission across all undelivered child links.
 func (s *Store) HasPendingBackgroundWait(ctx context.Context, sessionID int64) (bool, error) {
 	var pending bool
+
 	err := s.db.QueryRowContext(ctx, `SELECT
 		EXISTS(SELECT 1 FROM subagent_links WHERE parent_id = ? AND delivered_at IS NULL)
 		OR EXISTS(SELECT 1 FROM background_processes
@@ -79,5 +80,6 @@ func (s *Store) HasPendingBackgroundWait(ctx context.Context, sessionID int64) (
 	if err != nil {
 		return false, fmt.Errorf("query pending background wait: %w", err)
 	}
+
 	return pending, nil
 }

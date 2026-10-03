@@ -37,6 +37,7 @@ func TestScenario_StoppedRootAnswersStatusWithoutReactivating(t *testing.T) {
 		h.shutdown()
 	}()
 
+	h.startInboxWake()
 	sessionID, err := h.mgr.Send(h.ctx, h.projectID, "watch checks", "fake-model", nil)
 	require.NoError(t, err)
 	h.waitUntil("ordinary bash started", func() bool {
@@ -50,6 +51,7 @@ func TestScenario_StoppedRootAnswersStatusWithoutReactivating(t *testing.T) {
 		return getErr == nil && rec.Status == sessionstore.SessionStatusStopped
 	})
 
+	h.startInboxWake()
 	require.NoError(t, h.mgr.SendToSession(h.ctx, sessionID, "/status"))
 
 	collector.waitFor(t, "status report reaches the controller", func(e []controllerapi.SessionNotification) bool {

@@ -43,6 +43,7 @@ func NewTaskTool(sp Spawner, parentID int64, ldr loader.Service, models []ModelI
 			candidates = append(candidates, model)
 		}
 	}
+
 	return &taskTool{
 		spawner: sp, parentID: parentID, loader: ldr, models: models,
 		modelCatalog: candidates, skillCatalog: ldr,
@@ -333,15 +334,18 @@ func taskMetadata(id int64) string {
 
 func (t *taskTool) agentTypes() []agentInfo {
 	configs := t.agentSet().ListSubagents()
+
 	types := make([]agentInfo, 0, len(configs))
 	for _, cfg := range configs {
 		types = append(types, agentInfo{Name: string(cfg.Name), Description: cfg.Description})
 	}
+
 	return types
 }
 
 func (t *taskTool) agentSet() *registry.Set {
 	var configs []registry.AgentTypeConfig
+
 	if t.loader != nil {
 		for _, agent := range t.loader.ListSubagents() {
 			model := agent.Model
@@ -350,15 +354,18 @@ func (t *taskTool) agentSet() *registry.Set {
 				for _, candidate := range t.models {
 					found = found || candidate.ID == model
 				}
+
 				if !found {
 					model = ""
 				}
 			}
+
 			configs = append(configs, registry.AgentTypeConfig{
 				Name: registry.AgentType(agent.Name), Description: agent.Description,
 				Mode: registry.ModeSubagent, Model: model,
 			})
 		}
 	}
+
 	return registry.NewSet(configs)
 }

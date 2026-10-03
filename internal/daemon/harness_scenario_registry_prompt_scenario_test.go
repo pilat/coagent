@@ -53,6 +53,7 @@ func TestHarnessScenario_DynamicRegistryPromptMatchesEachActivation(t *testing.T
 	h, schemas, prompts, _ := newRegistryPromptHarness(t, registryPromptRespond(fake))
 	defer h.shutdown()
 
+	h.startInboxWake()
 	parentID, err := h.mgr.Send(h.ctx, h.projectID, "exercise dynamic registry", "fake-model", map[string]any{
 		"channel": "cli",
 	})
@@ -64,6 +65,7 @@ func TestHarnessScenario_DynamicRegistryPromptMatchesEachActivation(t *testing.T
 
 	assertInitialRegistryProjection(t, h, schemas, prompts, parentID, link.ChildID)
 	assert.Contains(t, lastToolResultContent(h.parentMessages(parentID), "mcp__fake__ping"), "unknown tool")
+	h.startInboxWake()
 	require.NoError(t, h.mgr.SendToSession(h.ctx, parentID, registryUseMarker))
 	h.mgr.waitIdle(parentID)
 

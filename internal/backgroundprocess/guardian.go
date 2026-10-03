@@ -67,14 +67,18 @@ func RunGuardian(args []string) (bool, error) {
 	return true, errors.New("process guardian survived group kill")
 }
 
-func newGuardianCommand(guardPath string, readyWriter, leaseReader *os.File) *exec.Cmd {
+func newGuardianCommand(ctx context.Context, guardPath string, readyWriter, leaseReader *os.File) *exec.Cmd {
 	executable, err := os.Executable()
 	if err != nil {
 		executable = os.Args[0]
 	}
 
-	cmd := exec.CommandContext( //nolint:gosec // The executable is this process image.
-		context.Background(), executable, guardianMode, guardPath,
+	//nolint:gosec // The executable is this process image.
+	cmd := exec.CommandContext(
+		context.WithoutCancel(ctx),
+		executable,
+		guardianMode,
+		guardPath,
 	)
 	cmd.ExtraFiles = []*os.File{readyWriter, leaseReader}
 

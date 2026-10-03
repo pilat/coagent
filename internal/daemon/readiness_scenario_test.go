@@ -12,6 +12,7 @@ import (
 	"github.com/pilat/coagent/internal/admission"
 	"github.com/pilat/coagent/internal/config"
 	"github.com/pilat/coagent/internal/controllerapi"
+	"github.com/pilat/coagent/internal/llm"
 	"github.com/pilat/coagent/internal/migrate"
 	"github.com/pilat/coagent/internal/sessionstore"
 	"github.com/pilat/coagent/internal/subagent"
@@ -30,7 +31,7 @@ func TestReadinessSuppressesIdleWhileRootIsActiveLoop(t *testing.T) {
 	t.Cleanup(func() { _ = db.Close() })
 
 	sessions := sessionstore.NewStore(db)
-	store := NewStore(db)
+	store := sessionstore.NewStore(db)
 	projectID := testProject(t, store, "/tmp/readiness-fixture")
 	record, err := sessions.CreateSession(ctx, projectID, "model", "", map[string]any{
 		controllerapi.SessionAttributeManagerID: "manager-readiness",
@@ -47,36 +48,35 @@ func TestReadinessSuppressesIdleWhileRootIsActiveLoop(t *testing.T) {
 		RETURNING id`,
 		sessionID).Scan(&outputID))
 
-	mgr, _ := newSvc(
+	mgr, _ := newScenarioDaemon(
 		context.Background(),
-		&mockFactory{},
-		store,
-		sessions,
-		sessions,
-		sessions,
-		sessions,
-		sessions,
-		sessions,
+		scriptedBuildInput(
+			t,
+			&config.Config{Model: "fake-model"},
+			sessions,
+			nil,
+			func(*config.Config) (llm.Client, error) { return &scriptedLLM{respond: trivialRespond}, nil },
+		),
 		sessions,
 		subagent.NewStore(db),
-		subagent.NewTransactions(db),
-		nil,
-		sessions,
+		subagent.NewTransactions(db, store),
 		nil,
 		nil,
+		nil,
+		db,
 	)
 	controllers := newTestController(mgr, &config.Config{}, nil, nil)
 	notifications := controllers.ForManager("manager-readiness").Subscribe()
 
-	active := newRunner(func() {}, "", 0, admission.Parent, 0, false, nil)
-	_, registered := mgr.runners.Register(sessionID, active)
+	active := newRunner(func() {}, "", 0, admission.Parent, 0, false)
+	_, registered := mgr.registerRunner(ctx, sessionID, active)
 	require.True(t, registered)
 
 	require.NoError(t, mgr.ReconcileOutputReadiness(ctx, outputID))
 	requireNoManagerNotification(t, notifications)
 
-	_, deleted := mgr.runners.Delete(sessionID)
-	require.True(t, deleted)
+	mgr.removeRunner(ctx, sessionID)
+	require.False(t, mgr.HasActiveLoop(sessionID))
 
 	require.NoError(t, mgr.ReconcileOutputReadiness(ctx, outputID))
 
@@ -100,7 +100,7 @@ func TestReconcileLatestReadinessPublishesIdleAfterTeardown(t *testing.T) {
 	t.Cleanup(func() { _ = db.Close() })
 
 	sessions := sessionstore.NewStore(db)
-	store := NewStore(db)
+	store := sessionstore.NewStore(db)
 	projectID := testProject(t, store, "/tmp/readiness-fixture")
 	record, err := sessions.CreateSession(ctx, projectID, "model", "", map[string]any{
 		controllerapi.SessionAttributeManagerID: "manager-readiness",
@@ -116,35 +116,34 @@ func TestReconcileLatestReadinessPublishesIdleAfterTeardown(t *testing.T) {
 		RETURNING id`,
 		record.ID).Scan(&outputID))
 
-	mgr, _ := newSvc(
+	mgr, _ := newScenarioDaemon(
 		context.Background(),
-		&mockFactory{},
-		store,
-		sessions,
-		sessions,
-		sessions,
-		sessions,
-		sessions,
-		sessions,
+		scriptedBuildInput(
+			t,
+			&config.Config{Model: "fake-model"},
+			sessions,
+			nil,
+			func(*config.Config) (llm.Client, error) { return &scriptedLLM{respond: trivialRespond}, nil },
+		),
 		sessions,
 		subagent.NewStore(db),
-		subagent.NewTransactions(db),
-		nil,
-		sessions,
+		subagent.NewTransactions(db, store),
 		nil,
 		nil,
+		nil,
+		db,
 	)
 	controllers := newTestController(mgr, &config.Config{}, nil, nil)
 	notifications := controllers.ForManager("manager-readiness").Subscribe()
 
-	active := newRunner(func() {}, "", 0, admission.Parent, 0, false, nil)
-	_, registered := mgr.runners.Register(record.ID, active)
+	active := newRunner(func() {}, "", 0, admission.Parent, 0, false)
+	_, registered := mgr.registerRunner(ctx, record.ID, active)
 	require.True(t, registered)
 	mgr.reconcileLatestReadiness(ctx, record.ID)
 	requireNoManagerNotification(t, notifications)
 
-	_, deleted := mgr.runners.Delete(record.ID)
-	require.True(t, deleted)
+	mgr.removeRunner(ctx, record.ID)
+	require.False(t, mgr.HasActiveLoop(record.ID))
 
 	mgr.reconcileLatestReadiness(ctx, record.ID)
 
@@ -158,11 +157,11 @@ func TestOwnerlessIdleIsSuppressedByReplacementRunner(t *testing.T) {
 
 	ctx := context.Background()
 	projectID := testProject(t, projects, "/tmp/replacement-idle")
-	record, err := mgr.sessionStore.CreateSession(ctx, projectID, "fake-model", "", nil)
+	record, err := mgr.store.CreateSession(ctx, projectID, "fake-model", "", nil)
 	require.NoError(t, err)
 	notifications := mgr.PubSub().SubscribeAll()
 
-	replacement := newRunner(func() {}, "", projectID, admission.Parent, 0, false, nil)
+	replacement := newRunner(func() {}, "", projectID, admission.Parent, 0, false)
 	_, registered := mgr.runners.Register(record.ID, replacement)
 	require.True(t, registered)
 

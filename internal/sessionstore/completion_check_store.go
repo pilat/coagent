@@ -10,11 +10,9 @@ import (
 
 const EmptyStopTerminalStreak = 6
 
-var (
-	// ErrCompletionCheckConflict reports a stale or mismatched candidate
-	// identity: the caller's check no longer owns the durable transition.
-	ErrCompletionCheckConflict = errors.New("completion check candidate conflict")
-)
+// ErrCompletionCheckConflict reports a stale or mismatched candidate
+// identity: the caller's check no longer owns the durable transition.
+var ErrCompletionCheckConflict = errors.New("completion check candidate conflict")
 
 type CompletionCheckState struct {
 	CandidateID *int64
@@ -36,8 +34,7 @@ func EmptyStopTerminalNotice(count int) string {
 	)
 }
 
-// updateDispositionIteration advances the iteration, stamps the empty streak,
-// and preserves the manager reply obligation carried by the caller.
+// LoadCompletionCheckState restores the durable candidate, reply obligation and empty-stop streak.
 func (s *Store) LoadCompletionCheckState(ctx context.Context, sessionID int64) (*CompletionCheckState, error) {
 	var candidate sql.NullInt64
 	var candidateText sql.NullString

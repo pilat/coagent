@@ -24,13 +24,17 @@ func (s *Session) SwitchModel(client llm.Client, modelsSection sessionprompt.Mod
 	s.modelMu.Lock()
 	if s.modelClosed {
 		s.modelMu.Unlock()
+
 		_ = client.Close()
+
 		return
 	}
+
 	previous := s.pendingModel
 	client.SetImageAuthorizer(s.imageAuthorizer)
 	s.pendingModel = &modelSwitch{client: client, section: modelsSection}
 	s.modelMu.Unlock()
+
 	if previous != nil {
 		_ = previous.client.Close()
 	}
@@ -38,11 +42,13 @@ func (s *Session) SwitchModel(client llm.Client, modelsSection sessionprompt.Mod
 
 func (s *Session) applyModelSwitch() {
 	s.modelMu.Lock()
+
 	pending := s.pendingModel
 	if pending == nil {
 		s.modelMu.Unlock()
 		return
 	}
+
 	s.pendingModel = nil
 	old := s.llmClient
 	s.llmClient = pending.client
@@ -50,17 +56,21 @@ func (s *Session) applyModelSwitch() {
 	s.reasoningLevel = pending.client.GetReasoningLevel()
 	s.baseline = nil
 	s.modelEpoch++
+
 	sessionID := strconv.FormatInt(s.id, 10)
 	if s.id != s.rootID {
 		sessionID = fmt.Sprintf("%d:%d", s.rootID, s.id)
 	}
+
 	s.llmClient.SetSessionID(sessionID)
 	s.prompt.SetModelsSection(pending.section.Text)
 	s.prompt.SetModelSearch(s.registry, pending.section.NativeSearch)
 	s.modelMu.Unlock()
+
 	if err := old.Close(); err != nil {
 		logger.Named("session.model").Warn("old_llm_close_failed", zap.Error(err))
 	}
+
 	s.emit(sessionevent.Notification{Type: "context_changed"})
 }
 
@@ -87,6 +97,7 @@ func (s *Session) closeLLM() error {
 		_ = s.pendingModel.client.Close()
 		s.pendingModel = nil
 	}
+
 	if err := s.llmClient.Close(); err != nil {
 		return fmt.Errorf("close LLM client: %w", err)
 	}

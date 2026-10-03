@@ -59,6 +59,7 @@ func TestIntegration_ExploreChildIsDeniedControlPlaneTools(t *testing.T) {
 	h := newGatingHarness(t, nil, respond)
 	defer h.shutdown()
 
+	h.startInboxWake()
 	parentID, err := h.mgr.Send(
 		h.ctx, h.projectID, "spawn an explore child", "fake-model", map[string]any{"channel": "cli"},
 	)
@@ -108,6 +109,7 @@ func TestIntegration_ConfigEditReachesEveryRootNoChild(t *testing.T) {
 			})
 			defer h.shutdown()
 
+			h.startInboxWake()
 			sessionID, err := h.mgr.Send(h.ctx, h.projectID, "configure", "fake-model", tt.attrs)
 			require.NoError(t, err)
 			h.mgr.waitIdle(sessionID)
@@ -136,6 +138,7 @@ func TestIntegration_ConfigEditReachesEveryRootNoChild(t *testing.T) {
 		h := newGatingHarness(t, nil, respond)
 		defer h.shutdown()
 
+		h.startInboxWake()
 		parentID, err := h.mgr.Send(h.ctx, h.projectID, "spawn an explore child", "fake-model", nil)
 		require.NoError(t, err)
 
@@ -182,6 +185,7 @@ func TestIntegration_ProjectSubagentToolGating(t *testing.T) {
 	h := newGatingHarness(t, agents, respond)
 	defer h.shutdown()
 
+	h.startInboxWake()
 	parentID, err := h.mgr.Send(h.ctx, h.projectID, "spawn project children", "fake-model", nil)
 	require.NoError(t, err)
 
@@ -225,6 +229,7 @@ func TestIntegration_GeneralSubagentCannotScheduleButCanSleep(t *testing.T) {
 	h := newGatingHarness(t, nil, respond)
 	defer h.shutdown()
 
+	h.startInboxWake()
 	parentID, err := h.mgr.Send(h.ctx, h.projectID, "spawn general subagent", "fake-model", nil)
 	require.NoError(t, err)
 

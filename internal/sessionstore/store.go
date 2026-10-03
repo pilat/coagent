@@ -729,14 +729,22 @@ func replaceCompactedMessagesTx(
 	now time.Time,
 ) ([]int64, error) {
 	for _, id := range compactedIDs {
-		result, err := tx.ExecContext(ctx, `UPDATE messages SET compacted_at = ? WHERE id = ? AND session_id = ?`, now, id, sessionID)
+		result, err := tx.ExecContext(
+			ctx,
+			`UPDATE messages SET compacted_at = ? WHERE id = ? AND session_id = ?`,
+			now,
+			id,
+			sessionID,
+		)
 		if err != nil {
 			return nil, fmt.Errorf("mark compacted %d: %w", id, err)
 		}
+
 		rows, err := result.RowsAffected()
 		if err != nil {
 			return nil, fmt.Errorf("count compacted message %d: %w", id, err)
 		}
+
 		if rows != 1 {
 			return nil, fmt.Errorf("compacted message %d does not belong to session %d", id, sessionID)
 		}
@@ -827,7 +835,7 @@ func (s *Store) killTerminatingTarget(ctx context.Context, id int64, owner strin
 	}
 
 	if !replaced {
-		if _, err := insertClosedOutput(ctx, tx, id, owner, now, 0); err != nil {
+		if _, err := insertClosedOutput(ctx, tx, id, now, 0); err != nil {
 			return err
 		}
 	}

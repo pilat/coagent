@@ -16,11 +16,10 @@ func installScenarioProcessService(t *testing.T, h *subagentHarness) backgroundp
 
 	service := backgroundprocess.NewService(h.mgr.processStore, backgroundprocess.Options{
 		OutputDir: t.TempDir(),
-		OnCompletion: func(ctx context.Context, completion backgroundprocess.Completion) {
-			h.mgr.routeProcessCompletion(ctx, completion)
-		},
 	})
 	h.mgr.processSvc = service
+	h.mgr.buildInput.ProcessService = service
+	h.startInboxWake()
 
 	return service
 }

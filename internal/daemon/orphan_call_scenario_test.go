@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"path/filepath"
+	"slices"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -36,6 +37,7 @@ func TestScenario_BlockingTaskOrphanedByARestartIsClosedOnce(t *testing.T) {
 
 	first := newExternalCallDaemon(t, dbPath, configDir, seen.wrap(askForBlockingTaskRespond))
 
+	first.startInboxWake()
 	sessionID, err := first.mgr.Send(
 		first.ctx, first.projectID, "do work then spawn", "fake-model", nil,
 	)
@@ -59,16 +61,24 @@ func TestScenario_BlockingTaskOrphanedByARestartIsClosedOnce(t *testing.T) {
 	second := newExternalCallDaemon(t, dbPath, configDir, seen.wrap(askForBlockingTaskRespond))
 	defer second.shutdown()
 
-	second.mgr.sweep(second.ctx)
+	require.NoError(t, second.mgr.Start(second.ctx))
+	second.waitUntil("orphan cancellation consumed", func() bool {
+		return countToolResultsFor(second.parentMessages(sessionID), tool.IDTask) == 1 &&
+			!second.mgr.HasActiveLoop(sessionID)
+	})
 
 	recovered := second.parentMessages(sessionID)
 	require.NoError(t, llm.ValidateToolPairing(recovered), "boot must leave a transcript a provider accepts")
 	require.Equal(t, 1, countToolResultsFor(recovered, tool.IDTask),
 		"the abandoned task is closed exactly once")
 	assert.Contains(t, lastToolResultContent(recovered, tool.IDTask), "restarted")
-	assert.False(t, second.mgr.HasActiveLoop(sessionID), "closing the call must not wake the session by itself")
 
+	second.startInboxWake()
 	require.NoError(t, second.mgr.SendToSession(second.ctx, sessionID, "any progress?"))
+	second.waitUntil("follow-up consumed", func() bool {
+		return hasUserContaining(second.parentMessages(sessionID), "any progress?") &&
+			!second.mgr.HasActiveLoop(sessionID)
+	})
 	second.mgr.waitIdle(sessionID)
 
 	final := second.parentMessages(sessionID)
@@ -97,6 +107,20 @@ func TestScenario_OrphanedCallsAreClosedBeforeStartReturns(t *testing.T) {
 	defer second.shutdown()
 
 	require.NoError(t, second.mgr.Start(second.ctx))
+
+	if countToolResultsFor(second.parentMessages(sessionID), tool.IDTask) == 0 {
+		pending, err := second.sessStore.ListPending(second.ctx, sessionID)
+		require.NoError(t, err)
+		queued := slices.ContainsFunc(pending, func(input *sessionstore.InboxInput) bool {
+			return input.Source == sessionstore.InputSourceCallResult &&
+				input.Attributes["call_id"] == orphanTaskCallID && input.Attributes["tool_id"] == tool.IDTask
+		})
+		require.True(t, queued || countToolResultsFor(second.parentMessages(sessionID), tool.IDTask) == 1,
+			"boot commits the exact cancellation before controllers can open a runner")
+	}
+	second.waitUntil("boot orphan result consumed", func() bool {
+		return countToolResultsFor(second.parentMessages(sessionID), tool.IDTask) == 1
+	})
 
 	msgs := second.parentMessages(sessionID)
 	require.NoError(t, llm.ValidateToolPairing(msgs),
@@ -132,6 +156,7 @@ func TestScenario_MessageQueuedBehindAnOrphanedTaskRunsAfterRecovery(t *testing.
 		}
 	}()
 
+	first.startInboxWake()
 	sessionID, err := first.mgr.Send(
 		first.ctx, first.projectID, "do work then spawn", "fake-model", nil,
 	)
@@ -141,6 +166,7 @@ func TestScenario_MessageQueuedBehindAnOrphanedTaskRunsAfterRecovery(t *testing.
 		return first.parkedOnChild(sessionID)
 	})
 
+	first.startInboxWake()
 	require.NoError(t, first.mgr.SendToSession(first.ctx, sessionID, "any progress?"))
 	first.waitUntil("the message waits behind the task", func() bool {
 		_, pendErr := first.sessStore.PeekPending(first.ctx, sessionID)
@@ -163,7 +189,7 @@ func TestScenario_MessageQueuedBehindAnOrphanedTaskRunsAfterRecovery(t *testing.
 	second := newExternalCallDaemon(t, dbPath, configDir, seen.wrap(askForBlockingTaskRespond))
 	defer second.shutdown()
 
-	second.mgr.sweep(second.ctx)
+	require.NoError(t, second.mgr.Start(second.ctx))
 	second.waitUntil("the queued message finally ran", func() bool {
 		return hasUserContaining(second.parentMessages(sessionID), "any progress?")
 	})

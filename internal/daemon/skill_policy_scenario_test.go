@@ -25,10 +25,12 @@ func TestHarnessScenario_SkillCommandExpandsBeforeTheModelCall(t *testing.T) {
 		h.shutdown()
 	}()
 
+	h.startInboxWake()
 	sessionID, err := h.mgr.Send(h.ctx, h.projectID, "warm up", "fake-model", nil)
 	require.NoError(t, err)
 	h.mgr.waitIdle(sessionID)
 
+	h.startInboxWake()
 	require.NoError(t, h.mgr.SendToSession(h.ctx, sessionID, "/skill "+skillName+" v1.2.3"))
 	h.waitUntil("expanded skill reaches the transcript", func() bool {
 		return countMessagesWithSkill(h.parentMessages(sessionID), skillName) == 1
@@ -82,6 +84,7 @@ func TestHarnessScenario_SkillInvocationPolicySeparatesUserAndModelPaths(t *test
 				h.shutdown()
 			}()
 
+			h.startInboxWake()
 			sessionID, err := h.mgr.Send(h.ctx, h.projectID, "warm up", "fake-model", nil)
 			require.NoError(t, err)
 			h.mgr.waitIdle(sessionID)
@@ -91,6 +94,7 @@ func TestHarnessScenario_SkillInvocationPolicySeparatesUserAndModelPaths(t *test
 			assert.Equal(t, tc.wantInPrompt, strings.Contains(calls[0].system, "**"+tc.skill+"**"),
 				"model-invocable skills — and only those — are announced in the system prompt")
 
+			h.startInboxWake()
 			require.NoError(t, h.mgr.SendToSession(h.ctx, sessionID, "/skill "+tc.skill))
 
 			if tc.wantExpanded {

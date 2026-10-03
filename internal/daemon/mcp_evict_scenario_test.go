@@ -71,6 +71,7 @@ func TestScenario_MCPDisableDoesNotBreakAnInFlightStack(t *testing.T) {
 	h, _ := newMCPHarness(t, respond)
 	defer h.shutdown()
 
+	h.startInboxWake()
 	holder, err := h.mgr.Send(h.ctx, h.projectID, "register the fake mcp server", "fake-model", nil)
 	require.NoError(t, err)
 	h.waitUntil("registration lands", func() bool {
@@ -79,11 +80,13 @@ func TestScenario_MCPDisableDoesNotBreakAnInFlightStack(t *testing.T) {
 	h.mgr.waitIdle(holder)
 
 	// The holder's next run parks inside tools/call.
+	h.startInboxWake()
 	require.NoError(t, h.mgr.SendToSession(h.ctx, holder, "HOLD_IT while I reconfigure"))
 	h.waitUntil("the held call reaches the server", func() bool { return fake.count(t, "call") == 1 })
 	require.GreaterOrEqual(t, fake.count(t, "spawn"), 1)
 
 	// A second session disables the server while the holder is mid-call.
+	h.startInboxWake()
 	disabler, err := h.mgr.Send(h.ctx, h.projectID, "DISABLE_IT now", "fake-model", nil)
 	require.NoError(t, err)
 	h.waitUntil("the disabling run finishes", func() bool {
@@ -105,12 +108,14 @@ func TestScenario_MCPDisableDoesNotBreakAnInFlightStack(t *testing.T) {
 	require.NoError(t, llm.ValidateToolPairing(h.parentMessages(disabler)))
 
 	spawnsBeforeResume := fake.count(t, "spawn")
+	h.startInboxWake()
 	require.NoError(t, h.mgr.SendToSession(h.ctx, holder, "ENABLE_IT again"))
 	h.waitUntil("re-enable lands", func() bool {
 		return lastAssistantTextDTO(h.parentMessages(holder)) == "enabled"
 	})
 	h.mgr.waitIdle(holder)
 
+	h.startInboxWake()
 	require.NoError(t, h.mgr.SendToSession(h.ctx, holder, "USE_AGAIN please"))
 	h.waitUntil("the server answers again", func() bool {
 		return lastAssistantTextDTO(h.parentMessages(holder)) == "used again"
@@ -155,12 +160,14 @@ func TestScenario_MCPDisableRemovesTheToolFromTheNextRun(t *testing.T) {
 	h, _ := newMCPHarness(t, respond)
 	defer h.shutdown()
 
+	h.startInboxWake()
 	sessionID, err := h.mgr.Send(h.ctx, h.projectID, "register the fake mcp server", "fake-model", nil)
 	require.NoError(t, err)
 	h.waitUntil("registration lands", func() bool {
 		return lastAssistantTextDTO(h.parentMessages(sessionID)) == "registered"
 	})
 
+	h.startInboxWake()
 	require.NoError(t, h.mgr.SendToSession(h.ctx, sessionID, "DISABLE_IT now"))
 	h.waitUntil("the disable lands", func() bool {
 		return lastAssistantTextDTO(h.parentMessages(sessionID)) == "disabled"
@@ -170,6 +177,7 @@ func TestScenario_MCPDisableRemovesTheToolFromTheNextRun(t *testing.T) {
 	// The disabling run still had the server, so it spawned one; the next one must not.
 	spawnsBefore := fake.count(t, "spawn")
 
+	h.startInboxWake()
 	require.NoError(t, h.mgr.SendToSession(h.ctx, sessionID, "USE_IT anyway"))
 	h.waitUntil("the run finishes", func() bool {
 		return lastAssistantTextDTO(h.parentMessages(sessionID)) == "tried it"

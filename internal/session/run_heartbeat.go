@@ -10,6 +10,7 @@ import (
 func (s *Session) startHeartbeat(ctx context.Context) func() {
 	ticker := time.NewTicker(time.Second)
 	done := make(chan struct{})
+
 	go func() {
 		for {
 			select {
@@ -22,6 +23,7 @@ func (s *Session) startHeartbeat(ctx context.Context) func() {
 			}
 		}
 	}()
+
 	return func() {
 		close(done)
 		ticker.Stop()

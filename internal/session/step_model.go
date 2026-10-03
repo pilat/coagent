@@ -17,11 +17,14 @@ func (s *Session) modelStep(ctx context.Context, r *runState) error {
 	if err != nil {
 		return err
 	}
+
 	r.iterations++
+
 	c, err := s.modelResponseCommit(r, response, sentCount, generation)
 	if err != nil {
 		return err
 	}
+
 	if response.FinishType == llmwire.FinishLength || response.FinishType == llmwire.FinishUnknown {
 		r.directReply = false
 		if err := s.prepareRejectedAttempt(ctx, r, &c, response); err != nil {
@@ -30,6 +33,7 @@ func (s *Session) modelStep(ctx context.Context, r *runState) error {
 	} else if err := s.prepareAcceptedAttempt(ctx, r, &c, response); err != nil {
 		return s.commitProjectionFailure(ctx, r, c, err)
 	}
+
 	return s.commitModelAttempt(ctx, r, c)
 }
 
@@ -38,8 +42,10 @@ func (s *Session) callModel(ctx context.Context, r *runState) (*llmwire.Response
 	if s.loopDetector.forceTextOnly {
 		activeTools = nil
 	}
+
 	messages := s.ms.getMessages()
 	generation := s.modelGeneration()
+
 	response, err := s.chat(
 		ctx,
 		s.prompt.SystemPrompt(),
@@ -50,11 +56,14 @@ func (s *Session) callModel(ctx context.Context, r *runState) (*llmwire.Response
 		r.result.ErrorNotice = "❌ LLM error: " + logger.Redact(err.Error())
 		return nil, 0, 0, err
 	}
+
 	s.stamper.Touch()
+
 	response.FinishType = normalizedFinishType(response.FinishType)
 	if s.loopDetector.forceTextOnly && len(response.ToolCalls) == 0 {
 		s.loopDetector.clearForceTextOnly()
 	}
+
 	return response, len(messages), generation, nil
 }
 
@@ -70,15 +79,18 @@ func (s *Session) modelResponseCommit(
 		CostUSD: response.CostUSD, Usage: response.Usage, FinishType: response.FinishType,
 		ProviderFinishReason: response.ProviderFinishReason,
 	}
+
 	message, err := storedMessage(&wire)
 	if err != nil {
 		return sessionstore.Commit{}, err
 	}
+
 	c := s.newCommit()
 	iteration := s.iterationOffset + r.iterations
 	c.Messages = []*transcript.Message{message}
 	c.ObserveBudget = true
 	c.State.Iteration = &iteration
+
 	if response.Usage != nil && response.Usage.PromptTokens > 0 {
 		if model, ok := s.storeContextBaseline(response.Usage.PromptTokens, sentCount, generation); ok {
 			c.State.ContextBaseline = &sessionstore.ContextBaseline{
@@ -88,6 +100,7 @@ func (s *Session) modelResponseCommit(
 			}
 		}
 	}
+
 	return c, nil
 }
 
@@ -99,13 +112,16 @@ func (s *Session) prepareRejectedAttempt(
 ) error {
 	c.Messages[0].RejectedReason = sessionstore.RejectedReasonUnknownFinish
 	notice := sessionstore.UnknownFinishTerminalError
+
 	if response.FinishType == llmwire.FinishLength {
 		c.Messages[0].RejectedReason = sessionstore.RejectedReasonOutputLength
 		notice = sessionstore.OutputLengthTerminalError
+
 		outstanding, err := s.store.HasOutstandingResponseRecovery(ctx, s.id)
 		if err != nil {
-			return err
+			return fmt.Errorf("prepare rejected attempt: %w", err)
 		}
+
 		if !outstanding {
 			ref := 0
 			c.Unfired.Messages = []*transcript.Message{
@@ -113,6 +129,7 @@ func (s *Session) prepareRejectedAttempt(
 			}
 		}
 	}
+
 	if len(c.Unfired.Messages) == 0 {
 		status := sessionstore.SessionStatusError
 		c.Unfired.State.Status = &status
@@ -124,6 +141,7 @@ func (s *Session) prepareRejectedAttempt(
 		r.terminalState = true
 		r.result.ErrorNotice = sessionstore.IntegrityErrorNotice(notice)
 	}
+
 	return nil
 }
 
@@ -135,20 +153,25 @@ func (s *Session) prepareAcceptedAttempt(
 ) error {
 	state, err := s.store.LoadCompletionCheckState(ctx, s.id)
 	if err != nil {
-		return err
+		return fmt.Errorf("prepare accepted attempt: %w", err)
 	}
+
 	zero := 0
+
 	c.State.EmptyStopStreak = &zero
 	if len(response.ToolCalls) > 0 {
 		prepareToolResponse(r, c, response, state)
 		return nil
 	}
+
 	wake, err := s.store.HasBackgroundWakeSource(ctx, s.id)
 	if err != nil {
 		s.prepareProjectionError(r, c, err)
 		return nil
 	}
+
 	s.prepareStopResponse(r, c, response, state, wake)
+
 	return nil
 }
 
@@ -157,16 +180,21 @@ func (s *Session) commitModelAttempt(ctx context.Context, r *runState, c session
 	if err != nil {
 		return err
 	}
+
 	r.directReply = false
+
 	r.result.BudgetFired = result.BudgetFired
 	if result.BudgetFired {
 		r.terminal = false
 		r.terminalState = false
+
 		return nil
 	}
+
 	if r.terminalState && r.result.ErrorNotice != "" {
 		return errors.New(r.result.ErrorNotice)
 	}
+
 	return nil
 }
 
@@ -203,16 +231,20 @@ func (s *Session) commitProjectionFailure(ctx context.Context, r *runState, c se
 			ReleasesInput: true,
 		},
 	}
+
 	result, err := s.commit(ctx, c)
 	if err != nil {
 		return err
 	}
+
 	r.result.BudgetFired = result.BudgetFired
 	if result.BudgetFired {
 		return nil
 	}
+
 	r.terminal = true
 	r.terminalState = true
 	r.result.ErrorNotice = notice
+
 	return cause
 }

@@ -18,5 +18,16 @@ func TestMain(m *testing.M) {
 		os.Exit(0)
 	}
 
-	os.Exit(m.Run())
+	home, err := os.MkdirTemp("", "daemon-test-home-")
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	if err := os.Setenv("HOME", home); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	code := m.Run()
+	_ = os.RemoveAll(home)
+	os.Exit(code)
 }

@@ -26,7 +26,8 @@ func TestLedgerFailure_SpawnRefusesInsteadOfDegrading(t *testing.T) {
 
 	// Healthy store: the same request succeeds — this gate must not simply refuse
 	// everything.
-	ok, err := h.mgr.Spawn(h.ctx, spawnRequest{ParentID: root.ID, AgentType: "general", Prompt: "x"})
+	h.startInboxWake()
+	ok, err := h.mgr.Spawn(h.ctx, subagent.SpawnRequest{ParentID: root.ID, AgentType: "general", Prompt: "x"})
 	require.NoError(t, err)
 	require.NotZero(t, ok.ChildID)
 	h.waitForDelivery(ok.ChildID)
@@ -41,9 +42,10 @@ func TestLedgerFailure_SpawnRefusesInsteadOfDegrading(t *testing.T) {
 
 	// Assert on the returned error, not on HasActiveLoop: the spawn dies in
 	// childDepth before the child session exists, so there is no id to look up.
-	res, err := h.mgr.Spawn(h.ctx, spawnRequest{ParentID: root.ID, AgentType: "general", Prompt: "x"})
+	h.startInboxWake()
+	res, err := h.mgr.Spawn(h.ctx, subagent.SpawnRequest{ParentID: root.ID, AgentType: "general", Prompt: "x"})
 	require.Error(t, err)
-	assert.Equal(t, childResult{}, res)
+	assert.Equal(t, subagent.ChildResult{}, res)
 
 	loopsAfter := h.mgr.runners.Len()
 

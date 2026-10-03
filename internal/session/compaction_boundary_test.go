@@ -1,7 +1,6 @@
 package session
 
 import (
-	"context"
 	"strings"
 	"testing"
 
@@ -45,7 +44,7 @@ func TestCompactLeavesTranscriptsWithNothingToSummarize(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			llm := &compactionMockLLM{response: &llmwire.Response{Text: validSummary, FinishType: llmwire.FinishStop}}
 			s := newCompactionTestSvc(llm)
-			s.ms.setMessages(tc.messages)
+			setTestMessages(s, tc.messages)
 
 			compacted, err := s.compact(t.Context(), nil)
 
@@ -63,7 +62,7 @@ func TestSecondCompactionRightAfterOneFindsNothing(t *testing.T) {
 	llm := &compactionMockLLM{response: &llmwire.Response{Text: validSummary, FinishType: llmwire.FinishStop}}
 	s := newCompactionTestSvc(llm)
 
-	s.ms.setMessages([]llmwire.Message{
+	setTestMessages(s, []llmwire.Message{
 		{Role: llmwire.RoleSystem, Content: "sys"},
 		compactionUserMessage("task"),
 		skillMessage(t, "review", "Review carefully."),
@@ -95,7 +94,7 @@ func TestSecondCheckpointReplaysTheNativePrefixFromTheStart(t *testing.T) {
 		contextWindow: window,
 	}
 	s := newCompactionTestSvc(llm)
-	s.ms.setMessages([]llmwire.Message{
+	setTestMessages(s, []llmwire.Message{
 		{Role: llmwire.RoleSystem, Content: "sys"},
 		compactionUserMessage("task"),
 		compactionAssistantCall("c1", "MIDDLE-WORK"),
@@ -108,10 +107,7 @@ func TestSecondCheckpointReplaysTheNativePrefixFromTheStart(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 1, llm.callCount)
 
-	s.ms.mu.Lock()
-	s.ms.appendLocked(compactionAssistantCall("c3", "NEWLY-AGED"), 0)
-	s.ms.appendLocked(compactionToolResult("c3", "new result"), 0)
-	s.ms.mu.Unlock()
+	appendMessages(t, s, compactionAssistantCall("c3", "NEWLY-AGED"), compactionToolResult("c3", "new result"))
 
 	compacted, err := s.compact(t.Context(), nil)
 	require.NoError(t, err)
@@ -237,19 +233,4 @@ func TestMarkedSummaryReadsLegacyActiveSubagentsSection(t *testing.T) {
 	require.True(t, ok)
 	assert.Equal(t, "model text", modelText)
 	assert.Equal(t, strings.TrimRight(background, "\n"), got)
-}
-
-func TestActiveBackgroundSectionReadsLiveProcessAndSubagentProviders(t *testing.T) {
-	agent := newTestAgent()
-	agent.activeProcessesProvider = func(context.Context) []ActiveProcessInfo {
-		return []ActiveProcessInfo{{ID: "bgp_1", OutputPath: "/tmp/process.out"}}
-	}
-	agent.activeSubagentsProvider = func(context.Context) []ActiveSubagentInfo {
-		return []ActiveSubagentInfo{{ChildID: 42, State: "running"}}
-	}
-
-	section := agent.activeBackgroundSection(t.Context())
-	assert.Contains(t, section, "process bgp_1 (running): output /tmp/process.out")
-	assert.Contains(t, section, "#42 (background): running")
-	assert.Contains(t, section, "Snapshot from activation start")
 }

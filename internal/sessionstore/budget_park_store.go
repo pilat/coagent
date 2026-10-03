@@ -8,8 +8,6 @@ import (
 	"github.com/pilat/coagent/internal/budget"
 )
 
-const budgetParkRequestedState = "requested"
-
 func (s *Store) ListArmedBudgets(ctx context.Context) ([]*budget.Record, error) {
 	return s.listBudgets(ctx, ` WHERE state = 'armed' ORDER BY root_session_id`)
 }

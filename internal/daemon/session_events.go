@@ -21,29 +21,46 @@ type sessionEvents struct {
 func (e *sessionEvents) Emit(n sessionevent.Notification) {
 	s := e.daemon
 	ctx := context.Background()
+
 	switch n.Type {
 	case sessionevent.NotifyModelWorking:
 		working, _ := n.Attributes["working"].(bool)
 		if rs, exists := s.runners.Load(e.sessionID); exists {
 			rs.SetWorking(working)
+
 			if working {
 				rs.SetPreserveStopped(false)
 			}
 		}
+
 		s.updateLive(ctx, e.sessionID)
 		s.wakeProgress()
 	case "context_changed":
 		s.updateLive(ctx, e.sessionID)
+	case "iteration_persisted":
+		if iteration, ok := n.Attributes["iteration"].(int); ok {
+			s.publishSubagentIterationProgress(ctx, e.sessionID, int64(iteration))
+		}
 	case "progress_change":
 		s.updateLive(ctx, e.sessionID)
+
 		content, published, err := s.enqueueProgressChange(ctx, e.sessionID)
 		if err != nil {
 			logger.Ctx(ctx).Named("daemon.progress").Warn("enqueue_progress_change", zap.Error(err))
 			return
 		}
+
 		if published {
 			s.publish(e.sessionID, sessionevent.Notification{Type: sessionevent.NotifyMessage, Message: content})
 		}
+	case sessionevent.NotifyMessage,
+		sessionevent.NotifyHeartbeat,
+		sessionevent.NotifyStateChanged,
+		sessionevent.NotifyInputReceived,
+		sessionevent.NotifySessionCreated,
+		sessionevent.NotifySessionCleared,
+		sessionevent.NotifyWaiting:
+		s.publish(e.sessionID, n)
 	default:
 		s.publish(e.sessionID, n)
 	}
@@ -51,15 +68,17 @@ func (e *sessionEvents) Emit(n sessionevent.Notification) {
 
 func (s *svc) startInboxWake(ctx context.Context) {
 	workerCtx, cancel := s.newDaemonWorkerContext(ctx)
-	s.workerWG.Add(1)
-	go func() {
-		defer s.workerWG.Done()
+
+	s.workerWG.Go(func() {
 		defer cancel()
 		defer func() {
 			if value := recover(); value != nil {
-				logger.Ctx(workerCtx).Named("daemon.input").Error("wake_panic", zap.Any("panic", value), zap.Stack("stack"))
+				logger.Ctx(workerCtx).
+					Named("daemon.input").
+					Error("wake_panic", zap.Any("panic", value), zap.Stack("stack"))
 			}
 		}()
+
 		for {
 			select {
 			case <-workerCtx.Done():
@@ -67,13 +86,16 @@ func (s *svc) startInboxWake(ctx context.Context) {
 			case <-s.store.Woken():
 				for _, id := range s.store.TakeWoken() {
 					s.refreshBudgetTimer(workerCtx, id)
+
 					if err := s.inputReady(workerCtx, id); err != nil {
-						logger.Ctx(workerCtx).Named("daemon.input").Warn("input_ready_failed", zap.Int64("session_id", id), zap.Error(err))
+						logger.Ctx(workerCtx).
+							Named("daemon.input").
+							Warn("input_ready_failed", zap.Int64("session_id", id), zap.Error(err))
 					}
 				}
 			}
 		}
-	}()
+	})
 }
 
 func storedWireMessages(messages []*transcript.Message) ([]llmwire.Message, error) {
@@ -85,7 +107,9 @@ func storedWireMessages(messages []*transcript.Message) ([]llmwire.Message, erro
 				return nil, fmt.Errorf("decode tool calls of message %d: %w", message.ID, err)
 			}
 		}
+
 		rows = append(rows, row)
 	}
+
 	return rows, nil
 }

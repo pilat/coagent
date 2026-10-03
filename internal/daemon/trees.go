@@ -100,7 +100,6 @@ func (s *svc) Fence(fenceCtx context.Context, rootSessionID int64) (func(), erro
 	return unlock, nil
 }
 
-//nolint:funcorder // Public lifecycle methods delegate into the shared tree lock.
 func (s *svc) killLocked(ctx context.Context, sessionID int64) error {
 	rs, ok := s.runners.Load(sessionID)
 
@@ -174,7 +173,6 @@ func (s *svc) killLocked(ctx context.Context, sessionID int64) error {
 	return nil
 }
 
-//nolint:funcorder // Public lifecycle methods delegate into the shared tree lock.
 func (s *svc) stopLocked(ctx context.Context, sessionID, inputID int64) error {
 	record, getErr := s.store.GetSession(ctx, sessionID)
 	if getErr != nil {
@@ -228,7 +226,7 @@ func (s *svc) stopLocked(ctx context.Context, sessionID, inputID int64) error {
 // Without it a replaceable "Stopping…" receipt would stay dangling with no
 // recovery path, because startup only converges roots still in `stopping`.
 //
-//nolint:funcorder // completes the stop transition documented above.
+
 func (s *svc) convergeOrphanedStopStart(
 	ctx context.Context,
 	sessionID, inputID int64,
@@ -248,7 +246,7 @@ func (s *svc) convergeOrphanedStopStart(
 	return nil
 }
 
-//nolint:funcorder,wsl_v5 // The second stop phase belongs beside the public Stop transition.
+//nolint:wsl_v5 // The second stop phase belongs beside the public Stop transition.
 func (s *svc) stopTreeCleanup(ctx context.Context, sessionID int64, options stopTreeOptions) error {
 	cleanupCtx := context.WithoutCancel(ctx)
 
@@ -310,14 +308,9 @@ func (s *svc) stopTreeCleanup(ctx context.Context, sessionID int64, options stop
 			}
 		}
 	}
-	if err := s.cancelStopInputs(cleanupCtx, plan); err != nil {
-		return err
-	}
-
-	return nil
+	return s.cancelStopInputs(cleanupCtx, plan)
 }
 
-//nolint:funcorder // Background cancellation is a phase of the adjacent stop transition.
 func (s *svc) stopTreeBackgroundProcesses(ctx context.Context, sessionID int64, options stopTreeOptions) error {
 	if s.processSvc == nil || options.preserveBackgroundProcesses {
 		return nil
@@ -339,17 +332,18 @@ func (s *svc) stopTreeBackgroundProcesses(ctx context.Context, sessionID int64, 
 // joined. That is what makes a stopped session resumable without replaying a
 // sleep/config/task call that no longer exists.
 //
-//nolint:funcorder // Stop-tree helpers stay beside the stop they serve.
+
 func (s *svc) settleStoppedTree(ctx context.Context, ids []int64) error {
 	for _, id := range ids {
 		if err := s.commitStoppedSession(ctx, id); err != nil {
 			return err
 		}
 	}
+
 	return nil
 }
 
-//nolint:funcorder,wsl_v5 // Runner discovery must immediately precede stop planning.
+//nolint:wsl_v5 // Runner discovery must immediately precede stop planning.
 func (s *svc) liveTreeRunnerIDs(ctx context.Context, rootID int64) ([]int64, error) {
 	records, err := s.store.ListAllSessions(ctx)
 	if err != nil {
@@ -369,7 +363,6 @@ func (s *svc) liveTreeRunnerIDs(ctx context.Context, rootID int64) ([]int64, err
 	return ids, nil
 }
 
-//nolint:funcorder // Clear's command variant shares one replacement transaction with Clear.
 func (s *svc) clear(ctx context.Context, sessionID, inputID int64) (int64, error) {
 	unlock, err := s.lockSessionTree(ctx, sessionID)
 	if err != nil {
@@ -380,7 +373,6 @@ func (s *svc) clear(ctx context.Context, sessionID, inputID int64) (int64, error
 	return s.clearLocked(ctx, sessionID, inputID)
 }
 
-//nolint:funcorder // Public lifecycle methods delegate into the shared tree lock.
 func (s *svc) clearLocked(ctx context.Context, sessionID, inputID int64) (int64, error) {
 	log := logger.Ctx(ctx).Named("manager.clear")
 
@@ -438,7 +430,6 @@ func (s *svc) clearLocked(ctx context.Context, sessionID, inputID int64) (int64,
 
 // newProcessService shares the tree lock between process admission and stop.
 func (s *svc) newProcessService(ctx context.Context) backgroundprocess.Service {
-
 	outputRoot, err := coagenthome.Join(coagenthome.ProcessesDirName)
 	if err != nil {
 		logger.Ctx(ctx).Named("daemon.process").Warn("process_output_dir", zap.Error(err))

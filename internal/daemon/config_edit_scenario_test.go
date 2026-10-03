@@ -6,19 +6,15 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
-	"sync/atomic"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/pilat/coagent/internal/coagenthome"
-	"github.com/pilat/coagent/internal/configtools"
+	"github.com/pilat/coagent/internal/configapply"
 	"github.com/pilat/coagent/internal/llm"
 	"github.com/pilat/coagent/internal/llmwire"
-	"github.com/pilat/coagent/internal/session"
-	"github.com/pilat/coagent/internal/sessionevent"
 	"github.com/pilat/coagent/internal/sessionstore"
 	"github.com/pilat/coagent/internal/tool"
 	"github.com/pilat/coagent/internal/transcript"
@@ -38,45 +34,6 @@ models:
     - id: claude-sonnet-5
       provider: work
 `
-
-type panickingRunFactory struct {
-	session.Factory
-	runs           atomic.Int64
-	started        chan struct{}
-	runBeforePanic bool
-}
-
-type panickingRunSession struct {
-	session.Service
-	runs           *atomic.Int64
-	started        chan struct{}
-	runBeforePanic bool
-}
-
-func (f *panickingRunFactory) Create(ctx context.Context, opts session.CreateOptions) (session.Service, error) {
-	sess, err := f.Factory.Create(ctx, opts)
-	if err != nil || opts.TranscriptOnly {
-		return sess, err
-	}
-	return &panickingRunSession{Service: sess, runs: &f.runs, started: f.started, runBeforePanic: f.runBeforePanic}, nil
-}
-
-func (s *panickingRunSession) RunDaemon(
-	ctx context.Context, notify func(sessionevent.Notification), working func(bool),
-) (session.RunResult, error) {
-	s.runs.Add(1)
-	if s.runBeforePanic {
-		result, err := s.Service.RunDaemon(ctx, notify, working)
-		if err != nil || !result.Suspended {
-			return result, err
-		}
-	}
-	if s.started != nil {
-		close(s.started)
-		<-ctx.Done()
-	}
-	panic("interrupted apply")
-}
 
 func TestScenario_AbandonedApplySettlesWithoutRestartingFailedLoop(t *testing.T) {
 	testAbandonedApply(t, "")
@@ -106,11 +63,15 @@ func testAbandonedConfigCommand(t *testing.T, restart bool) {
 	configDir := newApplyConfigDir(t)
 	d := newApplyDaemonWith(t, dbPath, configDir, configEditRespond)
 	defer func() { d.shutdown() }()
+	d.startInboxWake()
 	id, err := d.mgr.Send(d.ctx, d.projectID, "hello", "fake-model", map[string]any{"manager_id": "telegram:main"})
 	require.NoError(t, err)
 	d.mgr.waitIdle(id)
-	factory := &panickingRunFactory{Factory: d.mgr.factory, runBeforePanic: true}
-	d.mgr.factory = factory
+	_, err = d.db.ExecContext(
+		d.ctx,
+		`CREATE TRIGGER reject_config_suspend BEFORE UPDATE OF status ON sessions WHEN NEW.status = 'suspended' BEGIN SELECT RAISE(ABORT, 'injected suspend failure'); END`,
+	)
+	require.NoError(t, err)
 	if restart {
 		_, err = d.db.ExecContext(d.ctx, `CREATE TRIGGER reject_apply_result BEFORE INSERT ON messages
 			WHEN NEW.role = 'tool' AND NEW.tool_name = 'config_edit'
@@ -119,20 +80,33 @@ func testAbandonedConfigCommand(t *testing.T, restart bool) {
 	}
 	require.NoError(t, d.mgr.SendToSession(d.ctx, id, "/config change the default model"))
 	d.mgr.waitIdle(id)
-	assert.Equal(t, int64(1), factory.runs.Load())
+	d.waitUntil(
+		"abandoned config activation expired",
+		func() bool { return currentActivationOf(t, d.subagentHarness, id) == nil },
+	)
+	if !restart {
+		d.waitUntil(
+			"abandoned config result settled",
+			func() bool { return hasToolResultFor(d.parentMessages(id), tool.IDConfigEdit) },
+		)
+	}
+
 	activation := currentActivationOf(t, d.subagentHarness, id)
 	assert.Nil(t, activation)
 	if restart {
 		assert.False(t, hasToolResultFor(d.parentMessages(id), tool.IDConfigEdit))
 		_, err = d.db.ExecContext(d.ctx, "DROP TRIGGER reject_apply_result")
 		require.NoError(t, err)
+		_, err = d.db.ExecContext(d.ctx, "DROP TRIGGER reject_config_suspend")
+		require.NoError(t, err)
 		d.shutdown()
 		d = newApplyDaemonWith(t, dbPath, configDir, configEditRespond)
 		require.NoError(t, d.mgr.Start(d.ctx))
 		d.mgr.waitIdle(id)
 	} else {
+		_, err = d.db.ExecContext(d.ctx, "DROP TRIGGER reject_config_suspend")
+		require.NoError(t, err)
 		assert.Contains(t, lastToolResultContent(d.parentMessages(id), tool.IDConfigEdit), "Config change abandoned")
-		d.mgr.factory = factory.Factory
 	}
 	require.NoError(t, d.mgr.SendToSession(d.ctx, id, "continue after cancellation"))
 	d.mgr.waitIdle(id)
@@ -146,24 +120,22 @@ func testAbandonedApply(t *testing.T, failure string) {
 	d := newApplyDaemonWith(t, filepath.Join(t.TempDir(), "abandoned.db"), newApplyConfigDir(t),
 		func(string, []llmwire.Message) *llmwire.Response { return &llmwire.Response{Text: "ready"} })
 	defer d.shutdown()
+	d.startInboxWake()
 	id, err := d.mgr.Send(d.ctx, d.projectID, "hello", "fake-model", nil)
 	require.NoError(t, err)
 	d.mgr.waitIdle(id)
 	calls, err := json.Marshal([]llmwire.ToolCall{{ID: configEditCallID, Name: tool.IDConfigEdit}})
 	require.NoError(t, err)
-	_, err = d.sessStore.InsertMessage(d.ctx, id, &transcript.Message{
+	_, err = d.sessStore.Commit(d.ctx, sessionstore.Commit{SessionID: id, Messages: []*transcript.Message{{
 		Role: llmwire.RoleAssistant, ToolCalls: calls,
-	})
+	}}})
 	require.NoError(t, err)
-	_, err = newConfigEditTool(d.mgr, id).Execute(
+	_, err = configapply.NewConfigEdit(id, d.mgr.applier).Execute(
 		grantedCall(d.ctx, id, configEditCallID), configEditArgs(configEditCandidate),
 	)
 	require.ErrorIs(t, err, tool.ErrSuspend)
-	factory := &panickingRunFactory{Factory: d.mgr.factory}
-	d.mgr.factory = factory
-	if failure == "stop" || failure == "kill" {
-		factory.started = make(chan struct{})
-	}
+	configuredModels := d.mgr.buildInput.Config.UnifiedConfig.Models
+	d.mgr.buildInput.Config.UnifiedConfig.Models = nil
 	failWrite := failure == "write failure"
 	if failWrite {
 		_, err = d.db.ExecContext(d.ctx, `CREATE TRIGGER reject_apply_result BEFORE INSERT ON messages
@@ -172,12 +144,7 @@ func testAbandonedApply(t *testing.T, failure string) {
 		require.NoError(t, err)
 	}
 	require.NoError(t, d.mgr.SendToSession(d.ctx, id, "keep this input"))
-	if factory.started != nil {
-		select {
-		case <-factory.started:
-		case <-time.After(5 * time.Second):
-			t.Fatal("runner did not start")
-		}
+	if failure == "stop" || failure == "kill" {
 		if failure == "stop" {
 			require.NoError(t, d.mgr.Stop(d.ctx, id, 0))
 			assert.Contains(t, lastToolResultContent(d.parentMessages(id), tool.IDConfigEdit), "Stopped by user")
@@ -185,28 +152,34 @@ func testAbandonedApply(t *testing.T, failure string) {
 			require.NoError(t, d.mgr.Kill(d.ctx, id))
 			assert.False(t, hasToolResultFor(d.parentMessages(id), tool.IDConfigEdit))
 		}
-		assert.Equal(t, int64(1), factory.runs.Load())
 		assert.Zero(t, d.restartCount())
 		return
 	}
 	d.mgr.waitIdle(id)
-	assert.Equal(t, int64(1), factory.runs.Load())
+	d.waitUntil("failed construction settled its staged apply", func() bool {
+		record, err := d.sessStore.GetSession(d.ctx, id)
+
+		return err == nil && record.Status == sessionstore.SessionStatusError &&
+			!d.mgr.HasActiveLoop(id) && (failWrite || !d.mgr.applier.Has(id))
+	})
+
 	pending, err := d.sessStore.PeekPending(d.ctx, id)
 	require.NoError(t, err)
 	assert.Equal(t, "keep this input", pending.RawContent)
 	if failWrite {
-		assert.True(t, d.mgr.staged.has(id))
+		assert.True(t, d.mgr.applier.Has(id))
 		assert.False(t, hasToolResultFor(d.parentMessages(id), tool.IDConfigEdit))
 		_, err = d.db.ExecContext(d.ctx, "DROP TRIGGER reject_apply_result")
 		require.NoError(t, err)
-		d.mgr.factory = factory.Factory
+
+		d.mgr.buildInput.Config.UnifiedConfig.Models = configuredModels
 		require.NoError(t, d.mgr.SendToSession(d.ctx, id, "retry now"))
 		d.mgr.waitIdle(id)
 		_, err = d.sessStore.PeekPending(d.ctx, id)
 		require.ErrorIs(t, err, sessionstore.ErrNoPendingInput)
 		assert.True(t, hasUserContaining(d.parentMessages(id), "keep this input"))
 	}
-	assert.False(t, d.mgr.staged.has(id))
+	assert.False(t, d.mgr.applier.Has(id))
 	assert.Contains(t, lastToolResultContent(d.parentMessages(id), tool.IDConfigEdit), "Config change abandoned")
 	assert.Zero(t, d.restartCount())
 	apply, err := d.ops.LoadPending()
@@ -224,7 +197,7 @@ func configEditRespond(_ string, msgs []llmwire.Message) *llmwire.Response {
 		return &llmwire.Response{Text: "configuration replaced"}
 	}
 
-	if hasUserContaining(msgs, configtools.ConfigEditCommand) {
+	if hasUserContaining(msgs, configapply.ConfigEditCommand) {
 		return &llmwire.Response{ToolCalls: []llmwire.ToolCall{{
 			ID:        configEditCallID,
 			Name:      tool.IDConfigEdit,
@@ -282,6 +255,7 @@ func TestScenario_ConfigQuestionCannotReplaceDocumentWithSandboxFragment(t *test
 			return &llmwire.Response{Text: "ready"}
 		})
 	defer d.shutdown()
+	d.startInboxWake()
 	id, err := d.mgr.Send(d.ctx, d.projectID, "hello", "fake-model", map[string]any{"manager_id": "telegram:main"})
 	require.NoError(t, err)
 	d.waitUntil("opening turn settled", func() bool { return !d.mgr.HasActiveLoop(id) })
@@ -306,6 +280,7 @@ func TestScenario_ConfigQuestionCannotReplaceDocumentWithSandboxFragment(t *test
 func startConfigEditSession(t *testing.T, d *applyDaemon, prompt string) int64 {
 	t.Helper()
 
+	d.startInboxWake()
 	sessionID, err := d.mgr.Send(
 		d.ctx,
 		d.projectID,
@@ -320,7 +295,7 @@ func startConfigEditSession(t *testing.T, d *applyDaemon, prompt string) int64 {
 	})
 	d.mgr.waitIdle(sessionID)
 
-	require.NoError(t, d.mgr.SendToSession(d.ctx, sessionID, configtools.ConfigEditCommand))
+	require.NoError(t, d.mgr.SendToSession(d.ctx, sessionID, configapply.ConfigEditCommand))
 
 	return sessionID
 }
@@ -330,7 +305,7 @@ func startConfigEditSession(t *testing.T, d *applyDaemon, prompt string) int64 {
 func currentActivationOf(t *testing.T, h *subagentHarness, sessionID int64) *sessionstore.ToolActivation {
 	t.Helper()
 
-	activation, err := h.sessStore.(sessionstore.ActivationStore).
+	activation, err := h.sessStore.
 		CurrentActivation(context.Background(), sessionID)
 	if errors.Is(err, sessionstore.ErrActivationNotFound) {
 		return nil
@@ -385,6 +360,10 @@ func TestScenario_ConfigEditVerdictReachesTheSessionAfterRestart(t *testing.T) {
 	require.True(t, outcome.Verdict.Applied, outcome.Verdict.Reason())
 	assert.False(t, outcome.RolledBack)
 
+	second.waitUntil("config verdict answered", func() bool {
+		return countToolResultsFor(second.parentMessages(sessionID), tool.IDConfigEdit) == 1 &&
+			!second.mgr.HasActiveLoop(sessionID)
+	})
 	second.mgr.waitIdle(sessionID)
 
 	msgs = second.parentMessages(sessionID)
@@ -416,6 +395,7 @@ func TestScenario_ConfigEditWithoutActivationNeverStages(t *testing.T) {
 
 	// The responder calls config_edit; no activation exists, so the session must
 	// be answered with the authorization refusal, in-process.
+	d.startInboxWake()
 	sessionID, err := d.mgr.Send(
 		d.ctx,
 		d.projectID,
@@ -470,14 +450,24 @@ func TestScenario_ConfigEditBootInvalidCandidateRollsBack(t *testing.T) {
 	require.True(t, outcome.Verdict.Failed())
 	assert.True(t, outcome.RolledBack)
 
+	second.startInboxWake()
 	message := "Config change rejected — " + outcome.Verdict.Reason()
-	_, err = second.mgr.DeliverPendingCallResult(
-		second.ctx, outcome.Pending.SessionID,
-		outcome.Pending.ToolCallID, outcome.Pending.ToolName, message,
+	_, err = enqueueCallResult(
+
+		second.ctx, second.mgr.store,
+
+		outcome.Pending.SessionID,
+		outcome.Pending.ToolCallID,
+		outcome.Pending.ToolName,
+		message,
 	)
 	require.NoError(t, err)
 	require.NoError(t, second.ops.ClearPending(outcome.Pending))
 
+	second.waitUntil("config verdict answered", func() bool {
+		return countToolResultsFor(second.parentMessages(sessionID), tool.IDConfigEdit) == 1 &&
+			!second.mgr.HasActiveLoop(sessionID)
+	})
 	second.mgr.waitIdle(sessionID)
 
 	msgs := second.parentMessages(sessionID)
@@ -514,8 +504,14 @@ func TestScenario_ConfigEditVerdictRedeliveryIsIdempotent(t *testing.T) {
 	_, err = second.ops.ResolvePending(*pending, nil)
 	require.NoError(t, err)
 
-	applied, err := second.mgr.DeliverPendingCallResult(
-		second.ctx, sessionID, configEditCallID, tool.IDConfigEdit, "Config applied: replace configuration document",
+	applied, err := enqueueCallResult(
+
+		second.ctx, second.mgr.store,
+
+		sessionID,
+		configEditCallID,
+		tool.IDConfigEdit,
+		"Config applied: replace configuration document",
 	)
 	require.NoError(t, err)
 	require.True(t, applied)
@@ -535,14 +531,24 @@ func TestScenario_ConfigEditVerdictRedeliveryIsIdempotent(t *testing.T) {
 	_, err = third.ops.ResolvePending(*replay, nil)
 	require.NoError(t, err)
 
-	applied, err = third.mgr.DeliverPendingCallResult(
-		third.ctx, sessionID, configEditCallID, tool.IDConfigEdit, "Config applied: replace configuration document",
+	applied, err = enqueueCallResult(
+
+		third.ctx, third.mgr.store,
+
+		sessionID,
+		configEditCallID,
+		tool.IDConfigEdit,
+		"Config applied: replace configuration document",
 	)
 	require.NoError(t, err)
 	assert.False(t, applied, "a replayed verdict for the same call inserts nothing")
 
 	require.NoError(t, third.ops.ClearPending(*replay))
 
+	third.waitUntil("config verdict answered", func() bool {
+		return countToolResultsFor(third.parentMessages(sessionID), tool.IDConfigEdit) == 1 &&
+			!third.mgr.HasActiveLoop(sessionID)
+	})
 	third.mgr.waitIdle(sessionID)
 
 	msgs := third.parentMessages(sessionID)

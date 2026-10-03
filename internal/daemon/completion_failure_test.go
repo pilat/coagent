@@ -2,7 +2,7 @@ package daemon
 
 import (
 	"context"
-	"errors"
+	"database/sql"
 	"slices"
 	"testing"
 	"time"
@@ -13,59 +13,10 @@ import (
 	"go.uber.org/zap/zaptest/observer"
 
 	"github.com/pilat/coagent/internal/logger"
-	"github.com/pilat/coagent/internal/session"
 	"github.com/pilat/coagent/internal/sessionevent"
-	"github.com/pilat/coagent/internal/sessionlifecycle"
 	"github.com/pilat/coagent/internal/sessionstore"
 	"github.com/pilat/coagent/internal/subagent"
-	"github.com/pilat/coagent/internal/tool"
-	"github.com/pilat/coagent/internal/transcript"
 )
-
-type pendingCompletionLinkStore struct {
-	subagent.Store
-	link  subagent.Link
-	links []subagent.Link
-}
-
-func (s pendingCompletionLinkStore) GetLink(_ context.Context, childID int64) (*subagent.Link, error) {
-	for _, candidate := range s.links {
-		if candidate.ChildID == childID {
-			link := candidate
-
-			return &link, nil
-		}
-	}
-
-	link := s.link
-
-	return &link, nil
-}
-
-func (s pendingCompletionLinkStore) ListPendingChildLinks(context.Context, int64) ([]subagent.Link, error) {
-	if len(s.links) > 0 {
-		return append([]subagent.Link(nil), s.links...), nil
-	}
-
-	return []subagent.Link{s.link}, nil
-}
-
-type completionPersistProbe struct {
-	sessionlifecycle.Completions
-	err   error
-	calls int
-}
-
-func (p *completionPersistProbe) Persist(
-	context.Context,
-	session.Service,
-	subagent.Link,
-	[]*transcript.Message,
-) error {
-	p.calls++
-
-	return p.err
-}
 
 // ledgerHarness is a live daemon whose link store fails on demand, plus the ids
 // of a parent and one non-terminal child of it.
@@ -76,6 +27,18 @@ type ledgerHarness struct {
 	activation *flakyActivationStore
 	parentID   int64
 	childID    int64
+}
+
+type rejectingCompletionTransactions struct {
+	subagent.Transactions
+}
+
+func (rejectingCompletionTransactions) DeliverCompletion(
+	context.Context,
+	subagent.Link,
+	string,
+) (bool, error) {
+	return false, sessionstore.ErrSessionNotAcceptingInput
 }
 
 func newLedgerHarness(t *testing.T) *ledgerHarness {
@@ -89,14 +52,30 @@ func newLedgerHarness(t *testing.T) *ledgerHarness {
 	})
 	activation := &flakyActivationStore{Transactions: h.mgr.subagents}
 	h.mgr.subagents = activation
-	h.mgr.completions = h.mgr.newCompletionCoordinator()
 
 	parent, err := h.sessStore.CreateSession(h.ctx, h.projectID, "fake-model", "", nil)
 	require.NoError(t, err)
 
-	childID, err := h.sessStore.CreateSubagentSession(
-		h.ctx, h.projectID, parent.ID, parent.ID, "general", "fake-model", "",
-	)
+	childID, err := func() (int64, error) {
+		var id int64
+		err := h.sessStore.WithTx(h.ctx, func(tx *sql.Tx) error {
+			var err error
+			id, err = sessionstore.CreateSubagentSessionTx(
+				h.ctx,
+				tx,
+				sessionstore.CreateSubagentSession{
+					ProjectID:      h.projectID,
+					ParentID:       parent.ID,
+					RootID:         parent.ID,
+					AgentType:      "general",
+					Model:          "fake-model",
+					ReasoningLevel: "",
+				},
+			)
+			return err
+		})
+		return id, err
+	}()
 	require.NoError(t, err)
 	require.NoError(t, h.links.InsertSubagentLink(h.ctx, subagent.Link{
 		ParentID: parent.ID, ChildID: childID, TaskCallID: "bg",
@@ -135,6 +114,7 @@ func TestFinalizeChild_LinkReadErrorStopsShort(t *testing.T) {
 	ctx := logger.ToContext(h.ctx, zap.New(core))
 
 	h.flaky.failGetLink(1, h.childID)
+	h.startInboxWake()
 	h.mgr.finalizeChild(ctx, h.childID)
 
 	assert.Zero(t, h.activation.attempts(), "nothing is written on an unreadable link")
@@ -161,6 +141,8 @@ func TestFinalizeChild_NoLinkIsSilent(t *testing.T) {
 	core, logs := observer.New(zap.DebugLevel)
 	ctx := logger.ToContext(h.ctx, zap.New(core))
 
+	h.startInboxWake()
+
 	h.mgr.finalizeChild(ctx, rec.ID)
 
 	assert.Zero(t, logs.Len(), "a root session's exit logs nothing")
@@ -176,6 +158,7 @@ func TestFinalizeChild_TerminalMarkRetries(t *testing.T) {
 	h.activation.failN = 2
 
 	start := time.Now()
+	h.startInboxWake()
 	h.mgr.finalizeChild(h.ctx, h.childID)
 	elapsed := time.Since(start)
 
@@ -207,6 +190,8 @@ func TestFinalizeChild_TerminalMarkExhausted(t *testing.T) {
 	core, logs := observer.New(zap.ErrorLevel)
 	ctx := logger.ToContext(h.ctx, zap.New(core))
 
+	h.startInboxWake()
+
 	h.mgr.finalizeChild(ctx, h.childID)
 
 	assert.Equal(t, linkTerminalAttempts, h.activation.attempts())
@@ -230,7 +215,7 @@ func TestDeliverCompletionLogsRejectedParent(t *testing.T) {
 
 	killedAt := time.Now()
 	sessions := &childStateSessionStore{record: &sessionstore.SessionRecord{KilledAt: &killedAt}}
-	manager := &svc{sessionStore: sessions}
+	manager := &svc{store: sessions, subagents: rejectingCompletionTransactions{}}
 	core, logs := observer.New(zap.ErrorLevel)
 	ctx := logger.ToContext(t.Context(), zap.New(core))
 
@@ -244,127 +229,10 @@ func TestDeliverCompletionLogsRejectedParent(t *testing.T) {
 	assert.Equal(t, int64(7), entries[0].ContextMap()["parent"])
 }
 
-func TestInjectBlockingCompletionRejectsEitherContractMismatch(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name   string
-		link   subagent.Link
-		callID string
-	}{
-		{
-			name:   "nonblocking link",
-			link:   subagent.Link{ChildID: 8, TaskCallID: "call", ActivationSeq: 1},
-			callID: "call",
-		},
-		{
-			name:   "wrong call",
-			link:   subagent.Link{ChildID: 8, TaskCallID: "other", Blocking: true, ActivationSeq: 1},
-			callID: "call",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			manager := &svc{links: childStateLinkStore{link: &tt.link}}
-
-			err := manager.injectBlockingCompletion(t.Context(), &mockSession{}, 8, tt.callID, 1)
-			require.ErrorContains(t, err, "blocking completion contract mismatch")
-		})
-	}
-}
-
-func TestInjectOwedCompletionsPropagatesBlockingPersistenceFailure(t *testing.T) {
-	t.Parallel()
-
-	persistErr := errors.New("persist completion failed")
-	link := subagent.Link{
-		ParentID: 7, ChildID: 8, TaskCallID: "call", Blocking: true,
-		State: subagent.StateCompleted, ActivationSeq: 1,
-	}
-	persist := &completionPersistProbe{err: persistErr}
-	manager := &svc{
-		links:       pendingCompletionLinkStore{link: link},
-		completions: persist,
-		sessionStore: &childStateSessionStore{
-			record: &sessionstore.SessionRecord{ID: link.ChildID},
-		},
-	}
-	sess := &mockSession{pendingCalls: []session.PendingToolCall{{ID: "call", Name: tool.IDTask}}}
-
-	err := manager.injectOwedCompletions(t.Context(), sess, 7)
-	require.ErrorIs(t, err, persistErr)
-	assert.Equal(t, 1, persist.calls)
-}
-
-func TestInjectOwedCompletionsSkipsRunningChild(t *testing.T) {
-	t.Parallel()
-
-	for _, blocking := range []bool{true, false} {
-		name := "background"
-		if blocking {
-			name = "blocking"
-		}
-
-		t.Run(name, func(t *testing.T) {
-			link := subagent.Link{
-				ParentID: 7, ChildID: 8, TaskCallID: "call", Blocking: blocking,
-				State: subagent.StateRunning, ActivationSeq: 1,
-			}
-			persist := &completionPersistProbe{err: errors.New("unexpected persistence")}
-			manager := &svc{
-				links:       pendingCompletionLinkStore{link: link},
-				completions: persist,
-				sessionStore: &childStateSessionStore{
-					record: &sessionstore.SessionRecord{ID: link.ChildID},
-				},
-			}
-			sess := &mockSession{}
-			if blocking {
-				sess.pendingCalls = []session.PendingToolCall{{ID: "call", Name: tool.IDTask}}
-			}
-
-			require.NoError(t, manager.injectOwedCompletions(t.Context(), sess, 7))
-			assert.Zero(t, persist.calls)
-		})
-	}
-}
-
-func TestInjectOwedCompletionsContinuesPastRunningChild(t *testing.T) {
-	t.Parallel()
-
-	links := []subagent.Link{
-		{
-			ParentID: 7, ChildID: 8, TaskCallID: "running", Blocking: true,
-			State: subagent.StateRunning, ActivationSeq: 1,
-		},
-		{
-			ParentID: 7, ChildID: 9, TaskCallID: "terminal", Blocking: true,
-			State: subagent.StateCompleted, ActivationSeq: 1,
-		},
-	}
-	persistErr := errors.New("terminal persistence reached")
-	persist := &completionPersistProbe{err: persistErr}
-	manager := &svc{
-		links:       pendingCompletionLinkStore{links: links},
-		completions: persist,
-		sessionStore: &childStateSessionStore{
-			record: &sessionstore.SessionRecord{ID: links[1].ChildID},
-		},
-	}
-	sess := &mockSession{
-		pendingCalls: []session.PendingToolCall{{ID: "terminal", Name: tool.IDTask}},
-	}
-
-	err := manager.injectOwedCompletions(t.Context(), sess, 7)
-	require.ErrorIs(t, err, persistErr)
-	assert.Equal(t, 1, persist.calls)
-}
-
 func TestCompletionContentIncludesPersistedIteration(t *testing.T) {
 	t.Parallel()
 
-	manager := &svc{sessionStore: &childStateSessionStore{
+	manager := &svc{store: &childStateSessionStore{
 		record: &sessionstore.SessionRecord{ID: 8, Iteration: 4},
 	}}
 

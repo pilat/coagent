@@ -14,6 +14,7 @@ import (
 
 	"github.com/pilat/coagent/internal/migrate"
 	"github.com/pilat/coagent/internal/sessionevent"
+	"github.com/pilat/coagent/internal/sessionstore"
 )
 
 type oneShotAction uint8
@@ -79,6 +80,17 @@ func (*modelSender) DeliverFreshSchedule(context.Context, int64, string, string)
 
 func (*modelSender) NotifySession(int64, sessionevent.Notification) {}
 
+type oneShotDeliveryStore struct {
+	Store
+	sender *modelSender
+}
+
+func (s oneShotDeliveryStore) CallPending(context.Context, int64, string) bool { return true }
+func (s oneShotDeliveryStore) Enqueue(ctx context.Context, in sessionstore.Input) (*sessionstore.Enqueued, error) {
+	_, err := s.sender.DeliverPendingCallResult(ctx, in.SessionID, "", "", in.Content)
+	return &sessionstore.Enqueued{}, err
+}
+
 type oneShotHarness struct {
 	t        *testing.T
 	ctx      context.Context
@@ -101,7 +113,7 @@ func newOneShotHarness(t *testing.T) *oneShotHarness {
 	require.NoError(t, migrate.Run(ctx, db, dbPath))
 
 	sessionID := seedOneShotSession(ctx, t, db)
-	store := NewStore(db)
+	store := NewStore(db, sessionstore.NewStore(db))
 	now := time.Date(2026, time.August, 18, 12, 0, 0, 0, time.UTC)
 	due := now.Add(-time.Second)
 	schedule, err := store.AddScheduleWithMeta(
@@ -137,7 +149,7 @@ func seedOneShotSession(ctx context.Context, t *testing.T, db *sql.DB) int64 {
 }
 
 func (h *oneShotHarness) restart() {
-	h.exec = NewExecutor(h.store, h.sender).(*executor)
+	h.exec = NewExecutor(oneShotDeliveryStore{Store: h.store, sender: h.sender}, h.sender).(*executor)
 }
 
 func (h *oneShotHarness) step(action oneShotAction) {

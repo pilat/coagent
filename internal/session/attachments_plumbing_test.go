@@ -34,7 +34,7 @@ func (t *imageStubTool) Execute(context.Context, json.RawMessage) (*tool.Result,
 	return t.result, nil
 }
 
-func newImagePlumbAgent(t *testing.T) (*svc, *imageStubTool) {
+func newImagePlumbAgent(t *testing.T) (*Session, *imageStubTool) {
 	t.Helper()
 
 	_, store, sessionID := newAttachmentsStore(t)
@@ -45,13 +45,10 @@ func newImagePlumbAgent(t *testing.T) (*svc, *imageStubTool) {
 	}}
 	registry := tool.NewRegistry()
 	registry.Register(stub)
-	s := &svc{
-		llmClient:    &compactionMockLLM{},
-		ms:           newMessageStore(store, sessionID, nil),
-		loopDetector: newLoopDetector(),
-		registry:     registry,
-		prompt:       newPromptBuilder(testPrompt, ""),
-	}
+	s := newTestAgent()
+	s.id, s.rootID = sessionID, sessionID
+	s.store, s.ms = store, newMessageStore(store, sessionID)
+	s.registry = registry
 
 	return s, stub
 }
@@ -63,10 +60,7 @@ func TestToolImages_PlumbAndPersist(t *testing.T) {
 	s, _ := newImagePlumbAgent(t)
 
 	calls := []llmwire.ToolCall{{ID: "c1", Name: "read", Arguments: []byte(`{}`)}}
-	require.NoError(t, s.ms.addAssistantMessage(
-		ctx,
-		&llmwire.Response{Text: "", ToolCalls: calls},
-	))
+	require.NoError(t, appendTestAssistant(ctx, s.ms, &llmwire.Response{Text: "", ToolCalls: calls}))
 	require.NoError(t, executeToolCalls(ctx, s, calls))
 
 	require.NoError(t, s.ms.reloadMessages(ctx))
@@ -83,10 +77,7 @@ func TestToolImages_ErrorStubDropsRefs(t *testing.T) {
 	stub.err = errors.New("boom")
 
 	calls := []llmwire.ToolCall{{ID: "c1", Name: "read", Arguments: []byte(`{}`)}}
-	require.NoError(t, s.ms.addAssistantMessage(
-		ctx,
-		&llmwire.Response{Text: "", ToolCalls: calls},
-	))
+	require.NoError(t, appendTestAssistant(ctx, s.ms, &llmwire.Response{Text: "", ToolCalls: calls}))
 	require.NoError(t, executeToolCalls(ctx, s, calls))
 
 	msgs := s.ms.getMessages()
@@ -104,6 +95,8 @@ func TestToolImages_DistinctReadsDoNotTripLoopDetector(t *testing.T) {
 	calls := []llmwire.ToolCall{{ID: "c", Name: "read", Arguments: []byte(`{}`)}}
 	for i := range 5 {
 		name := "coagent-view-" + string(rune('a'+i)) + ".png"
+		calls[0].ID = "call-" + name
+		require.NoError(t, appendTestAssistant(ctx, s.ms, &llmwire.Response{ToolCalls: calls}))
 		stub.result.Images = []llmwire.ImageRef{{Path: "/tmp/" + name, Mime: llmwire.MimeImagePng, Size: 8}}
 		// real read embeds the resolved path in its success text (D6)
 		stub.result.Output = "[/tmp/" + name + "]\n<image>...</image>"

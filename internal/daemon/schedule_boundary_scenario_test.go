@@ -74,6 +74,7 @@ func newStoppedRootScheduleHarness(
 	h := newSubagentHarnessWith(t, stoppedRootScheduleResponder(tc, started, release))
 	t.Cleanup(h.shutdown)
 
+	h.startInboxWake()
 	rootID, err := h.mgr.Send(t.Context(), h.projectID, "initialize", "fake-model", map[string]any{
 		controllerapi.SessionAttributeManagerID: "telegram-main",
 	})
@@ -191,8 +192,12 @@ func assertStoppedRootScheduleDuplicate(
 	assert.Equal(t, sessionstore.SessionStatusStopped, rec.Status)
 	assert.Equal(t, episodeStartedAt, sessionEpisodeStart(t, h, rootID))
 	assertStoppedRootScheduleResult(t, h, rootID, tc)
-	_, err = h.mgr.DeliverPendingCallResult(t.Context(), rootID, "missing-call", tool.IDSleep, "must stay stopped")
-	require.ErrorContains(t, err, "stopped")
+	_, err = enqueueCallResult(t.Context(), h.mgr.store, rootID, "missing-call", tool.IDSleep, "must stay stopped")
+	require.NoError(t, err)
+	assert.False(t, h.mgr.HasActiveLoop(rootID), "a late call result must not revive a stopped root")
+	record, err := h.sessStore.GetSession(t.Context(), rootID)
+	require.NoError(t, err)
+	assert.Equal(t, sessionstore.SessionStatusStopped, record.Status)
 }
 
 func sessionEpisodeStart(t *testing.T, h *subagentHarness, rootID int64) time.Time {
@@ -214,8 +219,8 @@ func deliverStoppedRootSchedule(
 ) (bool, error) {
 	t.Helper()
 	if tc.fresh {
-		return mgr.DeliverFreshSchedule(t.Context(), rootID, deliveryID, tc.prompt)
+		return enqueueScheduledInput(t.Context(), mgr.store, rootID, deliveryID, tc.prompt, true)
 	}
 
-	return mgr.DeliverScheduleTick(t.Context(), rootID, deliveryID, tc.prompt)
+	return enqueueScheduledInput(t.Context(), mgr.store, rootID, deliveryID, tc.prompt, false)
 }

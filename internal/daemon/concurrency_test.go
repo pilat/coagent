@@ -1,8 +1,10 @@
 package daemon
 
 import (
+	"context"
 	"fmt"
 	"slices"
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -11,8 +13,37 @@ import (
 	"github.com/pilat/coagent/internal/admission"
 	"github.com/pilat/coagent/internal/llm"
 	"github.com/pilat/coagent/internal/llmwire"
+	"github.com/pilat/coagent/internal/sessionstore"
 	"github.com/pilat/coagent/internal/subagent"
 )
+
+type panickingChildCommitStore struct {
+	*sessionstore.Store
+	once sync.Once
+}
+
+func (s *panickingChildCommitStore) Commit(
+	ctx context.Context,
+	commit sessionstore.Commit,
+) (*sessionstore.CommitResult, error) {
+	if commit.ObserveBudget && commit.State.Iteration != nil && *commit.State.Iteration > 0 {
+		record, err := s.GetSession(ctx, commit.SessionID)
+		if err != nil {
+			return nil, fmt.Errorf("load panic fixture session: %w", err)
+		}
+
+		if record.ParentID != 0 {
+			s.once.Do(func() { panic("boom in child") })
+		}
+	}
+
+	result, err := s.Store.Commit(ctx, commit)
+	if err != nil {
+		return nil, fmt.Errorf("commit panic fixture session: %w", err)
+	}
+
+	return result, nil
+}
 
 // trivialRespond: every session finishes immediately. Used when the test drives
 // Spawn directly and does not want children to spawn further.
@@ -73,23 +104,26 @@ func TestIntegration_DepthCapRejected(t *testing.T) {
 	require.NoError(t, err)
 
 	// depth 1: root → child A
+	h.startInboxWake()
 	a, err := h.mgr.Spawn(
 		h.ctx,
-		spawnRequest{ParentID: root.ID, AgentType: "general", Prompt: "x"},
+		subagent.SpawnRequest{ParentID: root.ID, AgentType: "general", Prompt: "x"},
 	)
 	require.NoError(t, err)
 
 	// depth 2: A → grandchild B (allowed — root → child → grandchild)
+	h.startInboxWake()
 	b, err := h.mgr.Spawn(
 		h.ctx,
-		spawnRequest{ParentID: a.ChildID, AgentType: "general", Prompt: "x"},
+		subagent.SpawnRequest{ParentID: a.ChildID, AgentType: "general", Prompt: "x"},
 	)
 	require.NoError(t, err)
 
 	// depth 3: B → great-grandchild — rejected as a tool error.
+	h.startInboxWake()
 	_, err = h.mgr.Spawn(
 		h.ctx,
-		spawnRequest{ParentID: b.ChildID, AgentType: "general", Prompt: "x"},
+		subagent.SpawnRequest{ParentID: b.ChildID, AgentType: "general", Prompt: "x"},
 	)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "nesting limit")
@@ -108,6 +142,7 @@ func TestIntegration_SuspendedParentHoldsNoSlot(t *testing.T) {
 		h.shutdown()
 	}()
 
+	h.startInboxWake()
 	parentID, err := h.mgr.Send(h.ctx, h.projectID, "spawn blocking", "fake-model", nil)
 	require.NoError(t, err)
 
@@ -137,6 +172,7 @@ func TestIntegration_CascadeKillsBlockingChild(t *testing.T) {
 		h.shutdown()
 	}()
 
+	h.startInboxWake()
 	parentID, err := h.mgr.Send(h.ctx, h.projectID, "spawn blocking", "fake-model", nil)
 	require.NoError(t, err)
 
@@ -163,10 +199,13 @@ func TestIntegration_CascadeKillsBlockingChild(t *testing.T) {
 
 func TestIntegration_ChildPanicMarksError(t *testing.T) {
 	h := newSubagentHarnessWith(t, blockingParentRespond(func() *llmwire.Response {
-		panic("boom in child")
+		return &llmwire.Response{Text: "child model result"}
 	}))
+	// HTTP handler panics cannot reach the runner; the child's model commit can.
+	h.mgr.buildInput.Store = &panickingChildCommitStore{Store: h.sessStore}
 	defer h.shutdown()
 
+	h.startInboxWake()
 	parentID, err := h.mgr.Send(h.ctx, h.projectID, "spawn blocking", "fake-model", nil)
 	require.NoError(t, err)
 
@@ -174,6 +213,9 @@ func TestIntegration_ChildPanicMarksError(t *testing.T) {
 
 	// The panicked child is marked error and its parent is unblocked.
 	h.waitForDelivery(link.ChildID)
+	h.waitUntil("parent consumed panicked child result", func() bool {
+		return countToolResultsFor(h.parentMessages(parentID), "task") == 1
+	})
 	h.mgr.waitIdle(parentID)
 
 	res, err := h.mgr.Result(h.ctx, link.ChildID)
@@ -197,6 +239,7 @@ func TestIntegration_StressBlockingNoDeadlock(t *testing.T) {
 	ids := make([]int64, 0, parents)
 
 	for range parents {
+		h.startInboxWake()
 		id, err := h.mgr.Send(h.ctx, h.projectID, "spawn blocking", "fake-model", nil)
 		require.NoError(t, err)
 		ids = append(ids, id)
@@ -210,6 +253,11 @@ func TestIntegration_StressBlockingNoDeadlock(t *testing.T) {
 	}
 
 	for _, pid := range ids {
+		h.waitUntil("saturated parent consumed child result", func() bool {
+			messages := h.parentMessages(pid)
+
+			return countToolResultsFor(messages, "task") == 1 && lastAssistantTextDTO(messages) == "parent done"
+		})
 		h.mgr.waitIdle(pid)
 		msgs := h.parentMessages(pid)
 		require.NoError(t, llm.ValidateToolPairing(msgs))
@@ -259,6 +307,7 @@ func TestIntegration_BackgroundQueueDrains(t *testing.T) {
 		h.shutdown()
 	}()
 
+	h.startInboxWake()
 	parentID, err := h.mgr.Send(h.ctx, h.projectID, "spawn many", "fake-model", nil)
 	require.NoError(t, err)
 

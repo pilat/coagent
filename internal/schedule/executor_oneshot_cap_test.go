@@ -11,6 +11,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/pilat/coagent/internal/sessionevent"
+	"github.com/pilat/coagent/internal/sessionstore"
 )
 
 // capFakeStore embeds Store (nil) and overrides only the two methods
@@ -19,6 +20,13 @@ type capFakeStore struct {
 	Store
 	due     []*Schedule
 	removed map[int64]bool
+	calls   int
+}
+
+func (*capFakeStore) CallPending(context.Context, int64, string) bool { return true }
+func (f *capFakeStore) Enqueue(context.Context, sessionstore.Input) (*sessionstore.Enqueued, error) {
+	f.calls++
+	return nil, errors.New("session gone")
 }
 
 func (f *capFakeStore) ListDueSchedules(_ context.Context, _ time.Time) ([]*Schedule, error) {
@@ -79,5 +87,5 @@ func TestExecutor_OneShotDroppedAfterMaxAttempts(t *testing.T) {
 
 	require.NoError(t, e.fireOneShotSchedules(ctx, time.Now(), log))
 	assert.Truef(t, store.removed[sched.id], "should be dropped after %d attempts", maxOneShotAttempts)
-	assert.Equal(t, maxOneShotAttempts, sender.calls)
+	assert.Equal(t, maxOneShotAttempts, store.calls)
 }

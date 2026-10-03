@@ -58,8 +58,10 @@ type Live struct {
 }
 
 func New(store *sessionstore.Store, bus sessionbus.Bus) Service {
-	return &runtime{sessionStore: store, bus: bus, live: make(map[int64]Live),
-		readyOutputs: make(map[int64]int64), progressWake: make(chan struct{}, 1)}
+	return &runtime{
+		sessionStore: store, bus: bus, live: make(map[int64]Live),
+		readyOutputs: make(map[int64]int64), progressWake: make(chan struct{}, 1),
+	}
 }
 
 func (r *runtime) SetLive(sessionID int64, live Live) {
@@ -143,6 +145,7 @@ func (r *runtime) Wake() {
 func (r *runtime) liveState(sessionID int64) Live {
 	r.liveMu.RLock()
 	defer r.liveMu.RUnlock()
+
 	return r.live[sessionID]
 }
 
@@ -151,6 +154,7 @@ func (r *runtime) publish(ctx context.Context, sessionID int64, n sessionevent.N
 	if err != nil || record.ParentID != 0 {
 		return
 	}
+
 	owner, _ := record.Attributes["manager_id"].(string)
 	r.bus.PublishOwned(sessionID, owner, n)
 }

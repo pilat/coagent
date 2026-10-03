@@ -224,21 +224,37 @@ func (s *store) CountTerminalByIntentSince(
 	return count, nil
 }
 
-func (s *store) finalize(ctx context.Context, id string, natural State, exitCode *int, outputSize int64, fallbackIntent HostIntent) (Process, bool, error) {
+func (s *store) finalize(
+	ctx context.Context,
+	id string,
+	natural State,
+	exitCode *int,
+	outputSize int64,
+	fallbackIntent HostIntent,
+) (Process, bool, error) {
 	var winner Process
 	var won bool
+
 	err := s.sessions.WithTx(ctx, func(tx *sql.Tx) error {
 		var intent string
+
 		var state string
-		if err := tx.QueryRowContext(ctx, "SELECT host_intent, state FROM background_processes WHERE id = ?", id).Scan(&intent, &state); err != nil {
+		if err := tx.QueryRowContext(ctx, "SELECT host_intent, state FROM background_processes WHERE id = ?", id).
+			Scan(&intent, &state); err != nil {
 			return fmt.Errorf("finalize process: %w", err)
 		}
+
 		if state != string(StateRunning) {
 			var err error
-			winner, err = scanProcess(tx.QueryRowContext(ctx, "SELECT "+processColumns+" FROM background_processes WHERE id = ?", id))
+			winner, err = scanProcess(
+				tx.QueryRowContext(ctx, "SELECT "+processColumns+" FROM background_processes WHERE id = ?", id),
+			)
+
 			return err
 		}
+
 		outcome := natural
+
 		persistedFallback := IntentNone
 		if HostIntent(intent) != IntentNone {
 			outcome = IntentToState(HostIntent(intent))
@@ -248,7 +264,12 @@ func (s *store) finalize(ctx context.Context, id string, natural State, exitCode
 		}
 		var err error
 		winner, won, err = s.finalizeRunning(ctx, tx, id, outcome, exitCode, outputSize, persistedFallback)
+
 		return err
 	})
-	return winner, won, err
+	if err != nil {
+		return winner, won, fmt.Errorf("finalize: %w", err)
+	}
+
+	return winner, won, nil
 }

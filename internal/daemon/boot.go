@@ -360,9 +360,11 @@ func (s *svc) finishRecoveredServices(ctx context.Context) error {
 	if err := s.recoverOrphanedCalls(ctx); err != nil {
 		return err
 	}
+
 	if err := s.recoverInterruptedTools(ctx); err != nil {
 		return err
 	}
+
 	s.startInboxWake(ctx)
 	s.startProgressReconciler(ctx)
 

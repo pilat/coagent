@@ -1,4 +1,4 @@
-package sessionstore
+package sessionstore_test
 
 import (
 	"context"
@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/pilat/coagent/internal/sessionstore"
 	"github.com/pilat/coagent/internal/transcript"
 )
 
@@ -47,10 +48,10 @@ func TestInputPromotion_ClearsCompletionState(t *testing.T) {
 	sessionID := seedCompletionSession(t, store, db, projectID)
 	seedPendingCheck(t, db, sessionID)
 
-	input, err := store.EnqueueInput(ctx, sessionID, InputSourceUser, "fresh user input")
+	input, err := enqueueInput(ctx, store, sessionID, sessionstore.InputSourceUser, "fresh user input")
 	require.NoError(t, err)
 
-	_, err = store.PromoteInput(ctx, input.ID, "fresh user input")
+	_, err = acceptInput(ctx, store, input.ID, "fresh user input")
 	require.NoError(t, err)
 
 	candidate, replyPending, streak := readCompletionState(t, db, sessionID)
@@ -66,10 +67,10 @@ func TestInputPromotion_ReadOnlyReceiptOpensNoReplyObligation(t *testing.T) {
 	seedPendingCheck(t, db, sessionID)
 
 	for _, content := range []string{"/status", "/help", "/schedules", "/compact", "/compact focus"} {
-		input, err := store.EnqueueInput(ctx, sessionID, InputSourceUser, content)
+		input, err := enqueueInput(ctx, store, sessionID, sessionstore.InputSourceUser, content)
 		require.NoError(t, err)
 
-		_, err = store.PromoteInput(ctx, input.ID, content)
+		_, err = acceptInput(ctx, store, input.ID, content)
 		require.NoError(t, err)
 
 		_, replyPending, streak := readCompletionState(t, db, sessionID)
@@ -88,10 +89,10 @@ func TestInputAgentPromotion_ClearsCompletionWithoutReply(t *testing.T) {
 	sessionID := seedCompletionSession(t, store, db, projectID)
 	seedPendingCheck(t, db, sessionID)
 
-	input, err := store.EnqueueInput(ctx, sessionID, InputSourceAgent, "agent follow-up")
+	input, err := enqueueInput(ctx, store, sessionID, sessionstore.InputSourceAgent, "agent follow-up")
 	require.NoError(t, err)
 
-	_, err = store.PromoteInput(ctx, input.ID, "agent follow-up")
+	_, err = acceptInput(ctx, store, input.ID, "agent follow-up")
 	require.NoError(t, err)
 
 	candidate, replyPending, streak := readCompletionState(t, db, sessionID)
@@ -106,9 +107,8 @@ func TestDeliveryScheduledTurn_ClearsCompletionState(t *testing.T) {
 	sessionID := seedCompletionSession(t, store, db, projectID)
 	seedPendingCheck(t, db, sessionID)
 
-	_, _, inserted, err := store.InsertScheduledToolNotificationPairOnce(
-		ctx, sessionID, "delivery-1", "fp-1",
-		&transcript.Message{Role: "assistant", ToolCalls: []byte(`[{"id":"c1","name":"read","arguments":{}}]`)},
+	_, _, inserted, err := scheduledTurn(ctx, store, sessionID, "delivery-1", "fp-1",
+		&transcript.Message{Role: "assistant", ToolCalls: []byte(`[{"ID":"c1","Name":"read","Arguments":{}}]`)},
 		&transcript.Message{Role: "tool", Content: "scheduled result", ToolCallID: "c1", ToolName: "read"},
 	)
 	require.NoError(t, err)
@@ -125,7 +125,7 @@ func TestDeliveryDirectToolResult_ClearsCompletionState(t *testing.T) {
 	sessionID := seedCompletionSession(t, store, db, projectID)
 	seedPendingCheck(t, db, sessionID)
 
-	_, _, err := store.InsertToolResultWithDirectOutput(ctx, sessionID, &transcript.Message{
+	_, _, err := answerTool(ctx, store, sessionID, &transcript.Message{
 		Role: "tool", Content: "external result", ToolCallID: "sleep-1", ToolName: "sleep",
 	}, nil)
 	require.NoError(t, err)
@@ -143,13 +143,13 @@ func TestDeliveryReplay_KeepsNewerCompletionState(t *testing.T) {
 	result := &transcript.Message{
 		Role: "tool", Content: "external result", ToolCallID: "sleep-1", ToolName: "sleep",
 	}
-	_, _, err := store.InsertToolResultWithDirectOutput(ctx, sessionID, result, nil)
+	_, _, err := answerTool(ctx, store, sessionID, result, nil)
 	require.NoError(t, err)
 
 	// Replays insert no new model input and must not clear a newer check.
 	seedPendingCheck(t, db, sessionID)
 
-	_, _, err = store.InsertToolResultWithDirectOutput(ctx, sessionID, result, nil)
+	_, _, err = answerTool(ctx, store, sessionID, result, nil)
 	require.NoError(t, err)
 
 	candidate, _, streak := readCompletionState(t, db, sessionID)
@@ -163,7 +163,7 @@ func TestResetContext_ClearsCompletionState(t *testing.T) {
 	sessionID := seedCompletionSession(t, store, db, projectID)
 	seedPendingCheck(t, db, sessionID)
 
-	_, inserted, err := store.ResetSessionContextOnce(ctx, sessionID, "reset-1", "fp-1",
+	_, inserted, err := freshTurn(ctx, store, sessionID, "reset-1", "fp-1",
 		[]*transcript.Message{{Role: "user", Content: "fresh start"}})
 	require.NoError(t, err)
 	require.True(t, inserted)
@@ -179,12 +179,12 @@ func TestDeliverCompletion_ClearsCompletionState(t *testing.T) {
 	ctx := context.Background()
 	store, db, projectID := newTestStore(t)
 	sessionID := seedCompletionSession(t, store, db, projectID)
-	childID, err := store.CreateSubagentSession(ctx, projectID, sessionID, sessionID, "general", "m", "")
+	childID, err := createChild(ctx, store, projectID, sessionID, sessionID, "general", "m", "")
 	require.NoError(t, err)
 	seedLink(t, db, sessionID, childID, "task-1")
 	seedPendingCheck(t, db, sessionID)
 
-	_, won, err := newTestSubagentTransactions(db).DeliverCompletion(ctx, sessionID, []*transcript.Message{
+	_, won, err := deliverChild(ctx, store, sessionID, []*transcript.Message{
 		{Role: "assistant", ToolCalls: []byte(`[{"ID":"ev-1","Name":"subagent_event"}]`)},
 		{Role: "tool", Content: "child done", ToolCallID: "ev-1", ToolName: "subagent_event"},
 	}, childID, 1)

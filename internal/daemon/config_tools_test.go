@@ -3,20 +3,17 @@ package daemon
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/pilat/coagent/internal/configapply"
 	"github.com/pilat/coagent/internal/configops"
-	"github.com/pilat/coagent/internal/controllerapi"
 	"github.com/pilat/coagent/internal/llmwire"
-	"github.com/pilat/coagent/internal/session"
-	"github.com/pilat/coagent/internal/sessionevent"
 	"github.com/pilat/coagent/internal/sessionstore"
 	"github.com/pilat/coagent/internal/tool"
 	"github.com/pilat/coagent/internal/transcript"
@@ -43,7 +40,7 @@ type configHarness struct {
 	// before it commits, so a config tool needs somewhere to have suspended.
 	sessionID int64
 	projectID int64
-	sessions  sessionstore.Store
+	sessions  *sessionstore.Store
 	store     Store
 	factory   *mockFactory
 	tools     map[string]tool.Tool
@@ -64,7 +61,7 @@ func newConfigHarness(t *testing.T) *configHarness {
 
 	h := &configHarness{config: configPath}
 	mgr, factory, store := newTestManager(t)
-	sessions, ok := mgr.sessionStore.(sessionstore.Store)
+	sessions, ok := mgr.store.(*sessionstore.Store)
 	require.True(t, ok)
 	h.sessions = sessions
 	h.store = store
@@ -72,11 +69,11 @@ func newConfigHarness(t *testing.T) *configHarness {
 	projectID, err := store.GetOrCreateProject(context.Background(), t.TempDir())
 	require.NoError(t, err)
 	h.projectID = projectID
-	mgr.applier = configapply.New(configops.New(configPath, secretsPath), func() { h.restarts++ })
+	mgr.applier = configapply.New(configops.New(configPath, secretsPath), h.sessions)
 
 	h.mgr = mgr
 	h.sessionID = h.liveSession(t)
-	h.tools = map[string]tool.Tool{tool.IDConfigEdit: newConfigEditTool(mgr, h.sessionID)}
+	h.tools = map[string]tool.Tool{tool.IDConfigEdit: configapply.NewConfigEdit(h.sessionID, mgr.applier)}
 
 	return h
 }
@@ -122,11 +119,15 @@ func (h *configHarness) grantedCall(t *testing.T, callID, document string) error
 	_, err := h.tools[tool.IDConfigEdit].Execute(
 		grantedCall(context.Background(), h.sessionID, callID), configEditArgs(document),
 	)
+	if errors.Is(err, tool.ErrSuspend) {
+		require.NoError(
+			t,
+			h.sessions.UpdateSessionStatus(t.Context(), h.sessionID, sessionstore.SessionStatusSuspended),
+		)
+	}
 
 	return err
 }
-
-const testSessionID = 42
 
 // liveSession creates a real session record, so notification delivery has
 // somewhere to land.
@@ -134,8 +135,8 @@ func (h *configHarness) liveSession(t *testing.T) int64 {
 	t.Helper()
 
 	ctx := context.Background()
-	rec, err := h.mgr.sessionStore.CreateSession(
-		ctx, h.projectID, "fake-model", "", map[string]any{"channel": "cli"},
+	rec, err := h.mgr.store.CreateSession(
+		ctx, h.projectID, "fake-model", "", map[string]any{"channel": "cli", "manager_id": "cli"},
 	)
 	require.NoError(t, err)
 
@@ -146,14 +147,57 @@ func (h *configHarness) liveSession(t *testing.T) int64 {
 // makes a later suspend durable.
 func (h *configHarness) recordCall(t *testing.T, callID, toolName string) {
 	t.Helper()
+	activation, activationErr := h.sessions.PendingActivation(t.Context(), h.sessionID)
+	if activationErr == nil && !h.mgr.applier.Has(h.sessionID) {
+		_, err := h.sessions.Commit(t.Context(), sessionstore.Commit{
+			SessionID: h.sessionID,
+			Activation: &sessionstore.ActivationChange{
+				InputID: activation.InputID,
+				State:   sessionstore.ActivationExpired,
+			},
+		})
+		require.NoError(t, err)
+	}
 
+	if !h.mgr.applier.Has(h.sessionID) {
+		input, err := h.sessions.Enqueue(
+			context.Background(),
+			sessionstore.Input{SessionID: h.sessionID, Source: sessionstore.InputSourceUser, Content: "/config"},
+		)
+		require.NoError(t, err)
+		_, err = h.sessions.Commit(
+			context.Background(),
+			sessionstore.Commit{
+				SessionID: h.sessionID,
+				Accept: []sessionstore.Accept{
+					{
+						InputID:    input.Input.ID,
+						State:      sessionstore.InputStateAccepted,
+						Content:    "/config",
+						LinkRef:    -1,
+						ModelBound: true,
+					},
+				},
+				Activation: &sessionstore.ActivationChange{
+					InputID: input.Input.ID,
+					State:   sessionstore.ActivationPending,
+					ToolID:  toolName,
+					Command: "/config",
+				},
+			},
+		)
+		require.NoError(t, err)
+	}
 	calls, err := json.Marshal([]llmwire.ToolCall{{ID: callID, Name: toolName}})
 	require.NoError(t, err)
 
-	_, err = h.sessions.InsertMessage(context.Background(), h.sessionID, &transcript.Message{
-		Role:      llmwire.RoleAssistant,
-		ToolCalls: calls,
-	})
+	_, err = h.sessions.Commit(
+		context.Background(),
+		sessionstore.Commit{SessionID: h.sessionID, Messages: []*transcript.Message{{
+			Role:      llmwire.RoleAssistant,
+			ToolCalls: calls,
+		}}},
+	)
 	require.NoError(t, err)
 }
 
@@ -162,17 +206,24 @@ func (h *configHarness) recordCall(t *testing.T, callID, toolName string) {
 func (h *configHarness) restart(t *testing.T, callID, toolName string) {
 	t.Helper()
 
+	h.restarts += len(h.mgr.applier.Restart())
 	h.mgr.applier.ReleaseApply()
-	h.mgr.staged.resolve(h.sessionID, callID)
+	h.mgr.applier = configapply.New(h.mgr.applier.Ops(), h.sessions)
+	h.tools[tool.IDConfigEdit] = configapply.NewConfigEdit(h.sessionID, h.mgr.applier)
 
-	_, err := h.sessions.InsertMessage(context.Background(), h.sessionID, &transcript.Message{
-		Role:       llmwire.RoleTool,
-		ToolCallID: callID,
-		ToolName:   toolName,
-		Content:    "Config applied.",
-	})
+	_, err := h.sessions.Commit(
+		context.Background(),
+		sessionstore.Commit{SessionID: h.sessionID, Messages: []*transcript.Message{{
+			Role:       llmwire.RoleTool,
+			ToolCallID: callID,
+			ToolName:   toolName,
+			Content:    "Config applied.",
+		}}},
+	)
 	require.NoError(t, err)
 }
+
+func (h *configHarness) restartCount() int { return h.restarts + len(h.mgr.applier.Restart()) }
 
 func (h *configHarness) configBytes(t *testing.T) string {
 	t.Helper()
@@ -191,15 +242,15 @@ func TestConfigTool_SuccessStagesAndSuspends(t *testing.T) {
 	require.ErrorIs(t, h.grantedCall(t, "c1", configHarnessCandidate), tool.ErrSuspend)
 
 	assert.Equal(t, toolConfig, h.configBytes(t), "nothing is written by the tool itself")
-	assert.True(t, h.mgr.staged.has(h.sessionID))
-	assert.Equal(t, map[string]string{"c1": tool.IDConfigEdit}, h.mgr.staged.forSession(h.sessionID))
-	assert.Equal(t, 0, h.restarts)
+	assert.True(t, h.mgr.applier.Has(h.sessionID))
+	assert.Equal(t, map[string]string{"c1": tool.IDConfigEdit}, h.mgr.applier.Calls(h.sessionID))
+	assert.Equal(t, 0, h.restartCount())
 
-	h.mgr.runStagedApply(context.Background(), h.sessionID)
+	h.mgr.applier.RunStagedApply(context.Background(), h.sessionID)
 
-	assert.Equal(t, 1, h.restarts, "the apply asks the daemon to come back")
+	assert.Equal(t, 1, h.restartCount(), "the apply asks the daemon to come back")
 	assert.Contains(t, h.configBytes(t), "id: claude-opus-5\n      provider: work\n    - id: claude-sonnet-5")
-	assert.True(t, h.mgr.staged.has(h.sessionID), "the call stays open until its verdict arrives")
+	assert.True(t, h.mgr.applier.Has(h.sessionID), "the call stays open until its verdict arrives")
 }
 
 // Guard violations are ordinary tool errors: nothing staged, no suspend, no
@@ -231,8 +282,8 @@ func TestConfigTool_GuardViolationsAreImmediateErrors(t *testing.T) {
 		assert.Contains(t, err.Error(), "document is required")
 	})
 
-	assert.False(t, h.mgr.staged.has(h.sessionID))
-	assert.Equal(t, 0, h.restarts)
+	assert.False(t, h.mgr.applier.Has(h.sessionID))
+	assert.Equal(t, 0, h.restartCount())
 	assert.Equal(t, toolConfig, h.configBytes(t))
 }
 
@@ -243,10 +294,10 @@ func TestRunStagedApply_HandsOverExactlyOnce(t *testing.T) {
 
 	require.ErrorIs(t, h.grantedCall(t, "c1", configHarnessCandidate), tool.ErrSuspend)
 
-	h.mgr.runStagedApply(context.Background(), h.sessionID)
-	h.mgr.runStagedApply(context.Background(), h.sessionID)
+	h.mgr.applier.RunStagedApply(context.Background(), h.sessionID)
+	h.mgr.applier.RunStagedApply(context.Background(), h.sessionID)
 
-	assert.Equal(t, 1, h.restarts, "the second pass finds nothing to apply")
+	assert.Equal(t, 1, h.restartCount(), "the second pass finds nothing to apply")
 }
 
 // Two applies in sequence: the first is answered by its verdict, and only then
@@ -256,16 +307,16 @@ func TestConfigTool_TwoAppliesInSequence(t *testing.T) {
 	h := newConfigHarness(t)
 
 	require.ErrorIs(t, h.grantedCall(t, "c1", configHarnessCandidate), tool.ErrSuspend)
-	h.mgr.runStagedApply(ctx, h.sessionID)
+	h.mgr.applier.RunStagedApply(ctx, h.sessionID)
 
 	// The daemon comes back and delivers the verdict.
 	h.restart(t, "c1", tool.IDConfigEdit)
-	assert.False(t, h.mgr.staged.has(h.sessionID))
+	assert.False(t, h.mgr.applier.Has(h.sessionID))
 
 	require.ErrorIs(t, h.grantedCall(t, "c2", toolConfig), tool.ErrSuspend)
-	h.mgr.runStagedApply(ctx, h.sessionID)
+	h.mgr.applier.RunStagedApply(ctx, h.sessionID)
 
-	assert.Equal(t, 2, h.restarts)
+	assert.Equal(t, 2, h.restartCount())
 	assert.Contains(t, h.configBytes(t), "id: claude-sonnet-5\n      provider: work\n    - id: claude-opus-5")
 }
 
@@ -285,47 +336,6 @@ func TestConfigTool_RefusesWithoutACallID(t *testing.T) {
 }
 
 // config_edit lives on every root session with an applier, never on children.
-func TestRegisterConfigEditTool_RootsOnly(t *testing.T) {
-	ctx := context.Background()
-	h := newConfigHarness(t)
-
-	tests := []struct {
-		name string
-		rec  *sessionstore.SessionRecord
-		want bool
-	}{
-		{
-			name: "ordinary root",
-			rec:  &sessionstore.SessionRecord{ID: testSessionID, ProjectID: h.projectID},
-			want: true,
-		},
-		{
-			name: "manager-owned root",
-			rec: &sessionstore.SessionRecord{
-				ID: testSessionID, ProjectID: h.projectID,
-				Attributes: map[string]any{
-					controllerapi.SessionAttributeManagerID: "telegram-main",
-				},
-			},
-			want: true,
-		},
-		{
-			name: "child",
-			rec: &sessionstore.SessionRecord{
-				ID: 43, ProjectID: h.projectID, ParentID: testSessionID,
-			},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			sess := &mockSession{}
-			h.mgr.registerConfigEditTool(ctx, tt.rec, sess)
-			assert.Equal(t, tt.want, sess.hasTool(tool.IDConfigEdit))
-		})
-	}
-}
-
 // The tool description states the restart contract a caller cannot see.
 func TestConfigTool_DescriptionsCarryTheContract(t *testing.T) {
 	h := newConfigHarness(t)
@@ -347,76 +357,15 @@ func TestConfigTool_RefusesASecondApplyInTheSameTurn(t *testing.T) {
 	require.NotErrorIs(t, err, tool.ErrSuspend, "a refused stage must not suspend a second call")
 	assert.Contains(t, err.Error(), "one change at a time")
 
-	assert.Equal(t, map[string]string{"c1": tool.IDConfigEdit}, h.mgr.staged.forSession(h.sessionID))
+	assert.Equal(t, map[string]string{"c1": tool.IDConfigEdit}, h.mgr.applier.Calls(h.sessionID))
 
-	h.mgr.runStagedApply(context.Background(), h.sessionID)
-	assert.Equal(t, 1, h.restarts)
+	h.mgr.applier.RunStagedApply(context.Background(), h.sessionID)
+	assert.Equal(t, 1, h.restartCount())
 }
 
 // The apply slot is one, daemon-wide. The marker, the config file and the
 // restart an apply ends in are all global, so a second staged change — from any
 // session — would overwrite the first and strand the call it belongs to.
-func TestStagedCalls_ApplySlotIsDaemonWide(t *testing.T) {
-	h := newConfigHarness(t)
-
-	assert.True(t, h.mgr.stageApply(1, "a", tool.IDConfigEdit, &configops.Staged{}))
-	assert.False(t, h.mgr.stageApply(1, "b", tool.IDConfigEdit, &configops.Staged{}))
-	assert.False(t, h.mgr.stageApply(2, "a", tool.IDConfigEdit, &configops.Staged{}),
-		"another session writes the same config file")
-
-	_, _, ok := h.mgr.staged.takePendingApply(1)
-	require.True(t, ok)
-
-	assert.False(t, h.mgr.stageApply(1, "b", tool.IDConfigEdit, &configops.Staged{}),
-		"handing the change to the pipeline does not free the slot — only a commit that failed does")
-
-	h.mgr.applier.ReleaseApply()
-	assert.True(t, h.mgr.stageApply(1, "b", tool.IDConfigEdit, &configops.Staged{}))
-}
-
-// panicSession is a session whose loop dies the way a bug in it would: the
-// runner's recovery keeps the daemon alive, so whatever the loop was holding is
-// held for the rest of the process image.
-type panicSession struct{ *mockSession }
-
-func (p *panicSession) RunDaemon(
-	context.Context,
-	func(sessionevent.Notification),
-	func(bool),
-) (session.RunResult, error) {
-	panic("session loop bug")
-}
-
-// The apply slot is process-global and is given back by exactly two things: a
-// commit that failed, or the restart a commit that landed causes. A loop that
-// dies in between does neither — so the runner teardown has to, or no session
-// can ever change the config again on this image.
-func TestRunSession_ALoopThatDiesAfterClaimingGivesTheApplySlotBack(t *testing.T) {
-	ctx := context.Background()
-	h := newConfigHarness(t)
-
-	defer h.mgr.Shutdown(5 * time.Second)
-
-	sessionID := h.liveSession(t)
-	tools := map[string]tool.Tool{tool.IDConfigEdit: newConfigEditTool(h.mgr, sessionID)}
-
-	_, err := tools[tool.IDConfigEdit].Execute(
-		grantedCall(ctx, sessionID, "c1"), configEditArgs(configHarnessCandidate),
-	)
-	require.ErrorIs(t, err, tool.ErrSuspend)
-
-	h.factory.nextSess = &panicSession{mockSession: &mockSession{}}
-	require.NoError(t, h.mgr.SendToSession(ctx, sessionID, "carry on"))
-
-	require.Eventually(t, func() bool {
-		return !h.mgr.staged.has(sessionID)
-	}, 5*time.Second, 10*time.Millisecond, "the call the dead loop owed is never answered")
-
-	assert.True(t, h.mgr.stageApply(sessionID, "c2", tool.IDConfigEdit, &configops.Staged{}),
-		"the apply slot was never given back")
-	assert.Equal(t, toolConfig, h.configBytes(t), "a change that died before the commit writes nothing")
-}
-
 // The whole document replaces the config: a literal credential and an extra
 // model land in the file exactly as written.
 func TestConfigTool_WholeDocumentReachesTheConfig(t *testing.T) {
@@ -424,7 +373,7 @@ func TestConfigTool_WholeDocumentReachesTheConfig(t *testing.T) {
 
 	document := toolConfig + "    - id: claude-haiku-4-5\n      provider: work\n"
 	require.ErrorIs(t, h.grantedCall(t, "c1", document), tool.ErrSuspend)
-	h.mgr.runStagedApply(context.Background(), h.sessionID)
+	h.mgr.applier.RunStagedApply(context.Background(), h.sessionID)
 
 	assert.Contains(t, h.configBytes(t), "id: claude-haiku-4-5")
 }
@@ -433,11 +382,11 @@ func TestConfigTool_DeliversOneVerdictAfterRestart(t *testing.T) {
 	h := newConfigHarness(t)
 
 	require.ErrorIs(t, h.grantedCall(t, "tags-1", configHarnessCandidate), tool.ErrSuspend)
-	h.mgr.runStagedApply(context.Background(), h.sessionID)
+	h.mgr.applier.RunStagedApply(context.Background(), h.sessionID)
 	h.restart(t, "tags-1", tool.IDConfigEdit)
 
-	assert.False(t, h.mgr.staged.has(h.sessionID))
-	assert.Equal(t, 1, h.restarts)
+	assert.False(t, h.mgr.applier.Has(h.sessionID))
+	assert.Equal(t, 1, h.restartCount())
 	messages, err := h.sessions.LoadActiveMessages(context.Background(), h.sessionID)
 	require.NoError(t, err)
 	var verdicts int

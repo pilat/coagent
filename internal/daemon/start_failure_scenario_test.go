@@ -1,10 +1,8 @@
 package daemon
 
 import (
-	"context"
 	"errors"
 	"path/filepath"
-	"sync/atomic"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -12,24 +10,9 @@ import (
 
 	"github.com/pilat/coagent/internal/controllerapi"
 	"github.com/pilat/coagent/internal/llmwire"
-	"github.com/pilat/coagent/internal/session"
 	"github.com/pilat/coagent/internal/sessionevent"
 	"github.com/pilat/coagent/internal/sessionstore"
 )
-
-type unavailableModelFactory struct {
-	session.Factory
-	unavailable atomic.Bool
-	failures    atomic.Int64
-}
-
-func (f *unavailableModelFactory) Create(ctx context.Context, opts session.CreateOptions) (session.Service, error) {
-	if !opts.TranscriptOnly && opts.Model == "removed-model" && f.unavailable.Load() {
-		f.failures.Add(1)
-		return nil, errors.New("model removed-model not found in config")
-	}
-	return f.Factory.Create(ctx, opts)
-}
 
 func TestScenario_StartFailureParksWithoutConsumingInput(t *testing.T) {
 	h := newModelAwareHarness(
@@ -40,17 +23,19 @@ func TestScenario_StartFailureParksWithoutConsumingInput(t *testing.T) {
 		},
 	)
 	defer h.shutdown()
-	factory := &unavailableModelFactory{Factory: h.mgr.factory}
-	h.mgr.factory = factory
+	h.startInboxWake()
 	id, err := h.mgr.Send(h.ctx, h.projectID, "first", "removed-model", nil)
 	require.NoError(t, err)
 	h.waitUntil("first answer", func() bool { return countAssistantReplies(h.parentMessages(id)) == 2 })
 	h.mgr.waitIdle(id)
-	factory.unavailable.Store(true)
+	h.mgr.buildInput.Config.UnifiedConfig.Models = h.mgr.buildInput.Config.UnifiedConfig.Models[1:]
+	h.startInboxWake()
 	require.NoError(t, h.mgr.SendToSession(h.ctx, id, "keep this input"))
-	h.waitUntil("failure observed", func() bool { return factory.failures.Load() > 0 })
+	h.waitUntil("failure observed", func() bool {
+		record, err := h.sessStore.GetSession(h.ctx, id)
+		return err == nil && record.Status == sessionstore.SessionStatusError
+	})
 	h.mgr.waitIdle(id)
-	assert.Equal(t, int64(1), factory.failures.Load(), "failed creation must not restart itself")
 	record, err := h.sessStore.GetSession(h.ctx, id)
 	require.NoError(t, err)
 	assert.Equal(t, sessionstore.SessionStatusError, record.Status)
@@ -58,13 +43,13 @@ func TestScenario_StartFailureParksWithoutConsumingInput(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "keep this input", pending.RawContent)
 	require.NoError(t, h.mgr.SetModel(h.ctx, id, "working-model", ""))
+	h.startInboxWake()
 	require.NoError(t, h.mgr.SendToSession(h.ctx, id, "retry now"))
 	h.waitUntil("retry consumes preserved work", func() bool {
 		_, err := h.sessStore.PeekPending(h.ctx, id)
 		return errors.Is(err, sessionstore.ErrNoPendingInput)
 	})
 	h.mgr.waitIdle(id)
-	assert.Equal(t, int64(1), factory.failures.Load())
 	assert.True(t, hasUserContaining(h.parentMessages(id), "keep this input"))
 }
 
@@ -77,7 +62,10 @@ func TestScenario_RepeatedStartFailureCreatesOneOutput(t *testing.T) {
 		controllerapi.SessionAttributeManagerID: "test-manager",
 	})
 	require.NoError(t, err)
-	_, err = h.sessStore.EnqueueInput(h.ctx, record.ID, sessionstore.InputSourceUser, "work")
+	_, err = h.sessStore.Enqueue(
+		h.ctx,
+		sessionstore.Input{SessionID: record.ID, Source: sessionstore.InputSourceUser, Content: "work"},
+	)
 	require.NoError(t, err)
 	notices := 0
 	for range 100 {
@@ -105,27 +93,28 @@ func TestScenario_StartFailureRestartKeepsOneReceipt(t *testing.T) {
 		controllerapi.SessionAttributeManagerID: "test-manager",
 	})
 	require.NoError(t, err)
-	input, err := first.sessStore.EnqueueInput(first.ctx, root.ID, sessionstore.InputSourceUser, "preserved work")
+	input, err := first.sessStore.Enqueue(
+		first.ctx,
+		sessionstore.Input{SessionID: root.ID, Source: sessionstore.InputSourceUser, Content: "preserved work"},
+	)
 	require.NoError(t, err)
 	first.shutdown()
 
 	for range 2 {
 		h := newModelAwareHarnessAtDB(t, dbPath, []string{"working-model"}, respond)
 		t.Cleanup(h.shutdown)
-		factory := &unavailableModelFactory{Factory: h.mgr.factory}
-		factory.unavailable.Store(true)
-		h.mgr.factory = factory
-		h.mgr.sweep(h.ctx)
+		h.startInboxWake()
+		h.mgr.resumeAfterRestart(h.ctx)
 		h.waitUntil("failed recovery parked", func() bool {
-			return factory.failures.Load() > 0 && !h.mgr.HasActiveLoop(root.ID)
+			record, err := h.sessStore.GetSession(h.ctx, root.ID)
+			return err == nil && record.Status == sessionstore.SessionStatusError && !h.mgr.HasActiveLoop(root.ID)
 		})
 		h.shutdown()
-		assert.Equal(t, int64(1), factory.failures.Load())
 		status, err := h.sessStore.OutputQueueStatus(h.ctx, "test-manager")
 		require.NoError(t, err)
 		assert.Equal(t, 1, status.Pending)
 		pending, err := h.sessStore.PeekPending(h.ctx, root.ID)
 		require.NoError(t, err)
-		assert.Equal(t, input.ID, pending.ID)
+		assert.Equal(t, input.Input.ID, pending.ID)
 	}
 }

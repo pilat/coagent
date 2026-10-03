@@ -11,7 +11,6 @@ import (
 	"github.com/pilat/coagent/internal/coagenthome"
 	"github.com/pilat/coagent/internal/configapply"
 	"github.com/pilat/coagent/internal/configops"
-	"github.com/pilat/coagent/internal/controllerapi"
 	"github.com/pilat/coagent/internal/llm"
 	"github.com/pilat/coagent/internal/tool"
 )
@@ -34,6 +33,7 @@ func TestScenario_ConfigApplyVerdictReachesTheSessionAfterRestart(t *testing.T) 
 	require.True(t, outcome.Verdict.Applied, outcome.Verdict.Reason())
 	assert.False(t, outcome.RolledBack)
 
+	second.waitForConfigResult(sessionID)
 	second.mgr.waitIdle(sessionID)
 
 	msgs := second.parentMessages(sessionID)
@@ -76,6 +76,7 @@ func TestScenario_ConfigApplyVerdictSurvivesADaemonThatDiesBeforeDelivering(t *t
 	_, err = third.bootVerdict(t)
 	require.NoError(t, err)
 
+	third.waitForConfigResult(sessionID)
 	third.mgr.waitIdle(sessionID)
 
 	msgs := third.parentMessages(sessionID)
@@ -97,21 +98,14 @@ func TestScenario_ConfigApplyCallIsNotReExecutedBeforeItsVerdict(t *testing.T) {
 
 	require.NoError(t, second.mgr.Start(second.ctx))
 
-	events := collectEvents(second.mgr.PubSub().SubscribeAll())
-	defer events.stop()
-
+	second.startInboxWake()
 	require.NoError(t, second.mgr.SendToSession(second.ctx, sessionID, "are you done yet?"))
 
-	events.waitFor(t, "the woken session ran", func(ns []controllerapi.SessionNotification) bool {
-		for _, n := range ns {
-			if n.SessionID == sessionID && n.Notification.Status == controllerapi.StateRunning {
-				return true
-			}
-		}
-
-		return false
-	})
 	second.mgr.waitIdle(sessionID)
+
+	queued, err := second.sessStore.PeekPending(second.ctx, sessionID)
+	require.NoError(t, err)
+	assert.Equal(t, "are you done yet?", queued.RawContent)
 
 	msgs := second.parentMessages(sessionID)
 	assert.Equal(t, 1, countAssistantToolCallsFor(msgs, tool.IDConfigEdit), "the apply was not repeated")
@@ -119,9 +113,10 @@ func TestScenario_ConfigApplyCallIsNotReExecutedBeforeItsVerdict(t *testing.T) {
 	assert.Zero(t, second.restartCount(), "a wake-up must not stage a second apply")
 
 	// The queued message waited behind the call; the verdict still lands first.
-	_, err := second.bootVerdict(t)
+	_, err = second.bootVerdict(t)
 	require.NoError(t, err)
 
+	second.waitForConfigResult(sessionID)
 	second.mgr.waitIdle(sessionID)
 
 	final := second.parentMessages(sessionID)
@@ -149,7 +144,7 @@ func TestScenario_ConfigApplyRejectionReachesTheSessionInProcess(t *testing.T) {
 	d := newApplyDaemon(t, dbPath, configDir)
 	defer d.shutdown()
 
-	d.mgr.applier = configapply.New(failingCommitOps{d.ops}, func() { d.restarts <- struct{}{} })
+	d.mgr.applier = configapply.New(failingCommitOps{d.ops}, d.sessStore)
 
 	sessionID := startConfigEditSession(t, d, "switch the default model")
 
@@ -185,8 +180,14 @@ func TestScenario_ConfigApplyVerdictRedeliveryIsIdempotent(t *testing.T) {
 	_, err = second.ops.ResolvePending(*pending, nil)
 	require.NoError(t, err)
 
-	applied, err := second.mgr.DeliverPendingCallResult(
-		second.ctx, sessionID, applyCallID, tool.IDConfigEdit, "Config applied: default model",
+	applied, err := enqueueCallResult(
+
+		second.ctx, second.mgr.store,
+
+		sessionID,
+		applyCallID,
+		tool.IDConfigEdit,
+		"Config applied: default model",
 	)
 	require.NoError(t, err)
 	require.True(t, applied)
@@ -206,14 +207,21 @@ func TestScenario_ConfigApplyVerdictRedeliveryIsIdempotent(t *testing.T) {
 	_, err = third.ops.ResolvePending(*replay, nil)
 	require.NoError(t, err)
 
-	applied, err = third.mgr.DeliverPendingCallResult(
-		third.ctx, sessionID, applyCallID, tool.IDConfigEdit, "Config applied: default model",
+	applied, err = enqueueCallResult(
+
+		third.ctx, third.mgr.store,
+
+		sessionID,
+		applyCallID,
+		tool.IDConfigEdit,
+		"Config applied: default model",
 	)
 	require.NoError(t, err)
 	assert.False(t, applied, "a replayed verdict for the same call inserts nothing")
 
 	require.NoError(t, third.ops.ClearPending(*replay))
 
+	third.waitForConfigResult(sessionID)
 	third.mgr.waitIdle(sessionID)
 
 	msgs := third.parentMessages(sessionID)

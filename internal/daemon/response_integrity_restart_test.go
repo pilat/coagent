@@ -34,6 +34,7 @@ func interruptFirstRecovery(t *testing.T, dbPath string) int64 {
 		return &llmwire.Response{Text: "must be canceled", FinishType: llmwire.FinishStop}
 	}, nil)
 
+	first.startInboxWake()
 	rootID, err := first.mgr.Send(first.ctx, first.projectID, "restart the recovery", "fake-model", map[string]any{
 		"manager_id": scenarioManagerID,
 	})
@@ -60,7 +61,8 @@ func completeRecoveryAfterRestart(t *testing.T, dbPath string, rootID int64) {
 		return &llmwire.Response{Text: "recovered after restart", FinishType: llmwire.FinishStop}
 	}, nil)
 	collector := collectEvents(second.mgr.PubSub().SubscribeAll())
-	second.mgr.sweep(second.ctx)
+	second.startInboxWake()
+	second.mgr.resumeAfterRestart(second.ctx)
 	waitForVisibleMessage(t, collector, rootID, "recovered after restart")
 	drainScenarioClaims(t, "unused-response-restart.json", newChainController(t, second))
 	waitForIdleAfterMessage(t, collector, rootID, "recovered after restart")
@@ -76,7 +78,8 @@ func completeRecoveryAfterRestart(t *testing.T, dbPath string, rootID int64) {
 		return &llmwire.Response{Text: "unexpected rerun", FinishType: llmwire.FinishStop}
 	}, nil)
 	defer third.shutdown()
-	third.mgr.sweep(third.ctx)
+	third.startInboxWake()
+	third.mgr.resumeAfterRestart(third.ctx)
 	assert.Never(t, func() bool { return unexpectedCalls.Load() != 0 }, 300*time.Millisecond, 10*time.Millisecond)
 
 	var rejectedRows, acceptedRows int
@@ -94,6 +97,7 @@ func TestResponseIntegrity_RestartAfterTerminalFailureDoesNotRetry(t *testing.T)
 	first := newSubagentHarnessOnDB(t, dbPath, func(_ string, _ []llmwire.Message) *llmwire.Response {
 		return &llmwire.Response{Text: "discarded terminal", FinishType: llmwire.FinishUnknown}
 	}, nil)
+	first.startInboxWake()
 	rootID, err := first.mgr.Send(first.ctx, first.projectID, "fail terminally", "fake-model", nil)
 	require.NoError(t, err)
 	first.mgr.waitIdle(rootID)
@@ -108,6 +112,7 @@ func TestResponseIntegrity_RestartAfterTerminalFailureDoesNotRetry(t *testing.T)
 		return &llmwire.Response{Text: "unexpected rerun", FinishType: llmwire.FinishStop}
 	}, nil)
 	defer second.shutdown()
-	second.mgr.sweep(second.ctx)
+	second.startInboxWake()
+	second.mgr.resumeAfterRestart(second.ctx)
 	assert.Never(t, func() bool { return unexpectedCalls.Load() != 0 }, 300*time.Millisecond, 10*time.Millisecond)
 }

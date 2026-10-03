@@ -134,7 +134,7 @@ func runCompactionSequence(t *testing.T, sequence []compactionCommand) {
 	}
 	s := newCompactionTestSvc(llm)
 	s.stagedCalls = map[string]string{}
-	s.ms.setMessages([]llmwire.Message{
+	setTestMessages(s, []llmwire.Message{
 		{Role: llmwire.RoleSystem, Content: "sys"},
 		compactionUserMessage("task"),
 		compactionAssistantCall("seed", "work"),
@@ -172,7 +172,7 @@ func runCompactionSequence(t *testing.T, sequence []compactionCommand) {
 
 		assert.Equal(t, model.externalPending, s.HasPendingExternalCall(),
 			"step %d (%v): external-pending diverged from the model", step, command)
-		assert.Equal(t, model.workPending, s.HasPendingWork(),
+		assert.Equal(t, model.workPending, len(s.pendingInLoopCalls()) > 0,
 			"step %d (%v): pending work diverged from the model", step, command)
 	}
 
@@ -182,14 +182,14 @@ func runCompactionSequence(t *testing.T, sequence []compactionCommand) {
 		"a queued /compact is neither dropped nor invented")
 }
 
-func applyToSession(t *testing.T, s *svc, runner *loopRunner, command compactionCommand, seq int) {
+func applyToSession(t *testing.T, s *Session, runner *runState, command compactionCommand, seq int) {
 	t.Helper()
 
 	switch command {
 	case cmdQueueCompact:
 		s.RequestCompaction()
 	case cmdStartExternalCall:
-		if s.HasPendingExternalCall() || s.HasPendingWork() {
+		if s.HasPendingExternalCall() || len(s.pendingInLoopCalls()) > 0 {
 			return
 		}
 
@@ -207,7 +207,7 @@ func applyToSession(t *testing.T, s *svc, runner *loopRunner, command compaction
 			})
 		}
 	case cmdEmitToolCall:
-		if s.HasPendingExternalCall() || s.HasPendingWork() {
+		if s.HasPendingExternalCall() || len(s.pendingInLoopCalls()) > 0 {
 			return
 		}
 
@@ -227,18 +227,15 @@ func applyToSession(t *testing.T, s *svc, runner *loopRunner, command compaction
 	case cmdRunLoopPoint:
 		// Reaching the loop's single compaction point says nothing about safety —
 		// deciding that is the production code's job, which is what this exercises.
-		runner.applyContextEvents(t.Context())
+		require.NoError(t, s.compactionStep(t.Context(), runner))
 	}
 }
 
-func appendMessages(t *testing.T, s *svc, msgs ...llmwire.Message) {
+func appendMessages(t *testing.T, s *Session, msgs ...llmwire.Message) {
 	t.Helper()
 
-	s.ms.mu.Lock()
-	defer s.ms.mu.Unlock()
-
 	for _, message := range msgs {
-		s.ms.appendLocked(message, 0)
+		require.NoError(t, appendTestMessage(t.Context(), s.ms, &message))
 	}
 }
 

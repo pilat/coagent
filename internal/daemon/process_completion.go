@@ -21,16 +21,19 @@ func (s *svc) inputReady(ctx context.Context, sessionID int64) error {
 		record.Status == sessionstore.SessionStatusTerminating {
 		return nil
 	}
+
 	rows, err := s.store.ListPending(ctx, sessionID)
 	if err != nil {
-		return err
+		return fmt.Errorf("input ready: %w", err)
 	}
+
 	if len(rows) == 0 || !slices.ContainsFunc(rows, func(row *sessionstore.InboxInput) bool {
 		if row.Source != sessionstore.InputSourceUser {
 			return true
 		}
+
 		switch strings.TrimSpace(row.RawContent) {
-		case "/status", "/stop", "/clear", "/kill":
+		case statusCommand, "/stop", "/clear", "/kill":
 			return false
 		default:
 			return true
@@ -42,16 +45,23 @@ func (s *svc) inputReady(ctx context.Context, sessionID int64) error {
 	if record.Status == sessionstore.SessionStatusError {
 		rows, err := s.store.ListPending(ctx, sessionID)
 		if err != nil {
-			return err
+			return fmt.Errorf("input ready: %w", err)
 		}
-		if record.ParentID != 0 || !slices.ContainsFunc(rows, func(row *sessionstore.InboxInput) bool { return row.Source == sessionstore.InputSourceSchedule }) {
+
+		if record.ParentID != 0 ||
+			!slices.ContainsFunc(
+				rows,
+				func(row *sessionstore.InboxInput) bool { return row.Source == sessionstore.InputSourceSchedule },
+			) {
 			return nil
 		}
 	}
+
 	runnable, err := s.pendingInputRunnable(ctx, sessionID)
 	if err != nil || !runnable {
 		return err
 	}
+
 	handled, err := s.handleTerminalChildInputReady(ctx, record)
 	if err != nil {
 		return err
@@ -123,7 +133,7 @@ func (s *svc) rearmChildForAsyncInput(ctx context.Context, child *sessionstore.S
 		return nil
 	}
 
-	return s.rearm(guarded, child.ID) //nolint:wrapcheck // Component owns rearm context.
+	return s.rearm(guarded, child.ID)
 }
 
 func (s *svc) newDaemonWorkerContext(ctx context.Context) (context.Context, context.CancelFunc) {

@@ -7,7 +7,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/pilat/coagent/internal/configtools"
+	"github.com/pilat/coagent/internal/configapply"
 	"github.com/pilat/coagent/internal/llm"
 	"github.com/pilat/coagent/internal/sessionstore"
 	"github.com/pilat/coagent/internal/tool"
@@ -35,10 +35,10 @@ func TestScenario_ConfigEditGrantIsOneShot(t *testing.T) {
 
 	// A second successful mutation cannot use the same grant: consuming again
 	// with a different call id conflicts, and the session was never re-suspended.
-	err := first.sessStore.(sessionstore.ActivationStore).ConsumeActivationBinding(
+	err := first.sessStore.ConsumeActivationBinding(
 		first.ctx, sessionstore.ActivationBinding{
 			InputID: consumed.InputID, SessionID: sessionID,
-			ToolID: tool.IDConfigEdit, Command: configtools.ConfigEditCommand, ToolCallID: "cfg-edit-call-2",
+			ToolID: tool.IDConfigEdit, Command: configapply.ConfigEditCommand, ToolCallID: "cfg-edit-call-2",
 		})
 	require.ErrorIs(t, err, sessionstore.ErrActivationConflict)
 }
@@ -77,7 +77,7 @@ func TestScenario_ConfigEditCrashBeforeGrantConsumeSettlesOnBoot(t *testing.T) {
 	second := newApplyDaemonWith(t, dbPath, configDir, configEditRespond)
 	defer second.shutdown()
 
-	activation, err := second.sessStore.(sessionstore.ActivationStore).
+	activation, err := second.sessStore.
 		CurrentActivation(second.ctx, sessionID)
 	require.NoError(t, err)
 	require.Equal(t, sessionstore.ActivationPending, activation.State,
@@ -89,21 +89,21 @@ func TestScenario_ConfigEditCrashBeforeGrantConsumeSettlesOnBoot(t *testing.T) {
 	require.True(t, outcome.Verdict.Applied, outcome.Verdict.Reason())
 	require.False(t, outcome.RolledBack)
 
-	second.mgr.ConsumeConfigEditActivation(
+	second.mgr.applier.ConsumeConfigEditActivation(
 		second.ctx, outcome.Pending.SessionID, outcome.Pending.ToolCallID,
 	)
 
-	consumed, err := second.sessStore.(sessionstore.ActivationStore).
+	consumed, err := second.sessStore.
 		CurrentActivation(second.ctx, sessionID)
 	require.NoError(t, err)
 	require.Equal(t, sessionstore.ActivationConsumed, consumed.State,
 		"the boot spends the grant the crashed process left pending")
 
 	// One-shot is not re-armed: a second settlement attempt must conflict.
-	err = second.sessStore.(sessionstore.ActivationStore).ConsumeActivationBinding(
+	err = second.sessStore.ConsumeActivationBinding(
 		second.ctx, sessionstore.ActivationBinding{
 			InputID: consumed.InputID, SessionID: sessionID,
-			ToolID: tool.IDConfigEdit, Command: configtools.ConfigEditCommand, ToolCallID: "cfg-edit-call-2",
+			ToolID: tool.IDConfigEdit, Command: configapply.ConfigEditCommand, ToolCallID: "cfg-edit-call-2",
 		})
 	require.ErrorIs(t, err, sessionstore.ErrActivationConflict)
 
@@ -112,13 +112,19 @@ func TestScenario_ConfigEditCrashBeforeGrantConsumeSettlesOnBoot(t *testing.T) {
 	require.NoError(t, second.mgr.Start(second.ctx))
 
 	message := "Config applied: " + outcome.Pending.Summary
-	_, err = second.mgr.DeliverPendingCallResult(
-		second.ctx, outcome.Pending.SessionID,
-		outcome.Pending.ToolCallID, outcome.Pending.ToolName, message,
+	_, err = enqueueCallResult(
+
+		second.ctx, second.mgr.store,
+
+		outcome.Pending.SessionID,
+		outcome.Pending.ToolCallID,
+		outcome.Pending.ToolName,
+		message,
 	)
 	require.NoError(t, err)
 	require.NoError(t, second.ops.ClearPending(outcome.Pending))
 
+	second.waitForConfigResult(sessionID)
 	second.mgr.waitIdle(sessionID)
 
 	msgs := second.parentMessages(sessionID)

@@ -52,11 +52,10 @@ func newExternalCallDaemon(
 
 	h := newSubagentHarnessOnDB(t, dbPath, respond, nil)
 	ops := configops.New(filepath.Join(configDir, "config.yaml"), filepath.Join(configDir, "secrets"))
-	restarts := make(chan struct{}, 4)
 
-	h.mgr.applier = configapply.New(ops, func() { restarts <- struct{}{} })
+	h.mgr.applier = configapply.New(ops, h.sessStore)
 
-	return &applyDaemon{subagentHarness: h, ops: ops, restarts: restarts}
+	return &applyDaemon{subagentHarness: h, ops: ops, restarts: h.mgr.applier.Restart()}
 }
 
 // stageTaskAndStop parks a session on a blocking child, marks the child link
@@ -67,6 +66,7 @@ func stageTaskAndStop(t *testing.T, dbPath, configDir string, seen *modelRequest
 
 	first := newExternalCallDaemon(t, dbPath, configDir, seen.wrap(askForBlockingTaskRespond))
 
+	first.startInboxWake()
 	sessionID, err := first.mgr.Send(
 		first.ctx, first.projectID, "do work then spawn", "fake-model", nil,
 	)
@@ -175,6 +175,9 @@ func TestHarnessModel_PendingExternalCallOwnershipAgreesAfterRestart(t *testing.
 		defer second.shutdown()
 
 		require.NoError(t, second.mgr.Start(second.ctx))
+		second.waitUntil("orphaned task result consumed", func() bool {
+			return countToolResultsFor(second.parentMessages(sessionID), tool.IDTask) == 1
+		})
 
 		assertAgrees(t, second, sessionID)
 
@@ -192,6 +195,7 @@ func TestHarnessModel_PendingExternalCallOwnershipAgreesAfterRestart(t *testing.
 
 		first := newExternalCallDaemon(t, dbPath, configDir, seen.wrap(askForBlockingTaskRespond))
 
+		first.startInboxWake()
 		sessionID, err := first.mgr.Send(first.ctx, first.projectID, "do work then spawn", "fake-model", nil)
 		require.NoError(t, err)
 
@@ -202,7 +206,7 @@ func TestHarnessModel_PendingExternalCallOwnershipAgreesAfterRestart(t *testing.
 
 		// No shutdown: the child link is still live, so the sweep must leave
 		// the call pending instead of closing it as orphaned.
-		first.mgr.sweep(first.ctx)
+		first.mgr.resumeAfterRestart(first.ctx)
 
 		assertAgrees(t, first, sessionID)
 		assert.Zero(t, countToolResultsFor(first.parentMessages(sessionID), tool.IDTask),
@@ -220,7 +224,7 @@ func TestHarnessModel_PendingExternalCallOwnershipAgreesAfterRestart(t *testing.
 		second := newApplyDaemon(t, dbPath, configDir)
 		defer second.shutdown()
 
-		second.mgr.sweep(second.ctx)
+		require.NoError(t, second.mgr.Start(second.ctx))
 
 		assertAgrees(t, second, sessionID)
 		assert.Zero(t, countToolResultsFor(second.parentMessages(sessionID), tool.IDConfigEdit),
@@ -240,7 +244,10 @@ func TestHarnessModel_PendingExternalCallOwnershipAgreesAfterRestart(t *testing.
 		second := newApplyDaemon(t, dbPath, configDir)
 		defer second.shutdown()
 
-		second.mgr.sweep(second.ctx)
+		require.NoError(t, second.mgr.Start(second.ctx))
+		second.waitUntil("orphaned config result consumed", func() bool {
+			return countToolResultsFor(second.parentMessages(sessionID), tool.IDConfigEdit) == 1
+		})
 
 		assertAgrees(t, second, sessionID)
 
@@ -251,7 +258,7 @@ func TestHarnessModel_PendingExternalCallOwnershipAgreesAfterRestart(t *testing.
 
 		// The apply slot is in-memory, so a claim the previous image never gave
 		// back cannot reach this one: only a strand inside one image is dangerous.
-		assert.True(t, second.mgr.stageApply(sessionID, "later", tool.IDConfigEdit, &configops.Staged{}),
+		assert.True(t, second.mgr.applier.ClaimApply(),
 			"a new image starts with a free apply slot")
 	})
 }

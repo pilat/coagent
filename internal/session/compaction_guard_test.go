@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/pilat/coagent/internal/llmwire"
+	"github.com/pilat/coagent/internal/sessionprompt"
 	"github.com/pilat/coagent/internal/tool"
 )
 
@@ -32,7 +33,7 @@ func TestCompactRefusesWhileAnExternalCallIsPending(t *testing.T) {
 			ToolCalls: []llmwire.ToolCall{{ID: "c9", Name: tool.IDTask}},
 		},
 	}
-	s.ms.setMessages(before)
+	setTestMessages(s, before)
 
 	compacted, err := s.compact(t.Context(), nil)
 
@@ -58,7 +59,7 @@ func TestCompactRefusesWhileOrdinaryToolWorkIsPending(t *testing.T) {
 		compactionToolResult("c1", "result"),
 		compactionAssistantCall("c2", "unexecuted"),
 	}
-	s.ms.setMessages(before)
+	setTestMessages(s, before)
 
 	compacted, err := s.compact(t.Context(), nil)
 
@@ -77,7 +78,7 @@ func TestCompactProceedsWithAnAbandonedToolCall(t *testing.T) {
 	}
 	s := newCompactionTestSvc(llm)
 
-	s.ms.setMessages([]llmwire.Message{
+	setTestMessages(s, []llmwire.Message{
 		{Role: llmwire.RoleSystem, Content: "sys"},
 		compactionUserMessage("task"),
 		compactionAssistantCall("c1", "interrupted"),
@@ -101,7 +102,7 @@ func TestCompactRefusesWhenTheHeaderAloneExceedsTheThreshold(t *testing.T) {
 	}
 	s := newCompactionTestSvc(llm)
 
-	s.ms.setMessages([]llmwire.Message{
+	setTestMessages(s, []llmwire.Message{
 		{Role: llmwire.RoleUser, Content: agentsMDMessagePrefix + strings.Repeat("p", 120000)},
 		compactionUserMessage("the task"),
 		compactionAssistantCall("c1", "work"),
@@ -123,7 +124,7 @@ func TestHeaderCheckCountsTheSystemPrompt(t *testing.T) {
 
 	// 20000 tokens of header: under the 27200 cutoff alone, over it with a
 	// 10000-token system prompt.
-	s.ms.setMessages([]llmwire.Message{
+	setTestMessages(s, []llmwire.Message{
 		{Role: llmwire.RoleUser, Content: agentsMDMessagePrefix + strings.Repeat("p", 80000)},
 		compactionUserMessage("the task"),
 	})
@@ -133,7 +134,7 @@ func TestHeaderCheckCountsTheSystemPrompt(t *testing.T) {
 
 	assert.True(t, s.headerFitsLocked(2))
 
-	s.prompt = newPromptBuilder(strings.Repeat("s", 40000), "")
+	s.prompt = sessionprompt.NewBuilder(strings.Repeat("s", 40000), "")
 	assert.False(t, s.headerFitsLocked(2))
 }
 
@@ -148,7 +149,7 @@ func TestSummarizationRequestCarriesTheFullOutputReserve(t *testing.T) {
 	}
 	s := newCompactionTestSvc(llm)
 
-	s.ms.setMessages([]llmwire.Message{
+	setTestMessages(s, []llmwire.Message{
 		{Role: llmwire.RoleSystem, Content: "sys"},
 		compactionUserMessage("task"),
 		compactionAssistantCall("c1", "work"),
@@ -167,7 +168,7 @@ func TestCompactRefusesAHeaderWithToolProtocolFields(t *testing.T) {
 	llm := &compactionMockLLM{contextWindow: 200000}
 	s := newCompactionTestSvc(llm)
 
-	s.ms.setMessages([]llmwire.Message{
+	setTestMessages(s, []llmwire.Message{
 		{Role: llmwire.RoleSystem, Content: "sys"},
 		{Role: llmwire.RoleAssistant, ToolCalls: []llmwire.ToolCall{{ID: "c1", Name: "read"}}},
 		compactionToolResult("c1", "result"),

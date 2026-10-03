@@ -95,7 +95,7 @@ func (s *svc) startGuardian(ctx context.Context, outputPath string) (*exec.Cmd, 
 		return nil, nil, fmt.Errorf("create guardian lease pipe: %w", err)
 	}
 
-	guardian := newGuardianCommand(outputPath+".guard", readyWriter, leaseReader)
+	guardian := newGuardianCommand(ctx, outputPath+".guard", readyWriter, leaseReader)
 
 	guardian.SysProcAttr = guardianProcessSysProcAttr()
 	if err := guardian.Start(); err != nil {

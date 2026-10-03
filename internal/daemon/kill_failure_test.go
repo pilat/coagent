@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"database/sql"
 	"slices"
 	"testing"
 	"time"
@@ -11,6 +12,7 @@ import (
 	"go.uber.org/zap/zaptest/observer"
 
 	"github.com/pilat/coagent/internal/logger"
+	"github.com/pilat/coagent/internal/sessionstore"
 	"github.com/pilat/coagent/internal/subagent"
 )
 
@@ -93,9 +95,26 @@ func TestCascadeKill_RetryBudgetIsSharedAcrossTree(t *testing.T) {
 	defer h.shutdown()
 
 	for _, callID := range []string{"c2", "c3"} {
-		childID, err := h.sessStore.CreateSubagentSession(
-			h.ctx, h.projectID, h.parentID, h.parentID, "general", "fake-model", "",
-		)
+		childID, err := func() (int64, error) {
+			var id int64
+			err := h.sessStore.WithTx(h.ctx, func(tx *sql.Tx) error {
+				var err error
+				id, err = sessionstore.CreateSubagentSessionTx(
+					h.ctx,
+					tx,
+					sessionstore.CreateSubagentSession{
+						ProjectID:      h.projectID,
+						ParentID:       h.parentID,
+						RootID:         h.parentID,
+						AgentType:      "general",
+						Model:          "fake-model",
+						ReasoningLevel: "",
+					},
+				)
+				return err
+			})
+			return id, err
+		}()
 		require.NoError(t, err)
 		require.NoError(t, h.links.InsertSubagentLink(h.ctx, subagent.Link{
 			ParentID: h.parentID, ChildID: childID, TaskCallID: callID,

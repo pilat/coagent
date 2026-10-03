@@ -28,17 +28,17 @@ func TestRunStagedApply_RefusesToCommitForASuspendTheTranscriptDoesNotCarry(t *t
 	)
 	require.ErrorIs(t, err, tool.ErrSuspend)
 
-	h.mgr.runStagedApply(ctx, h.sessionID)
+	h.mgr.applier.RunStagedApply(ctx, h.sessionID)
 
-	assert.Equal(t, 0, h.restarts, "an unbacked suspend must not restart the daemon")
+	assert.Empty(t, h.mgr.applier.Restart(), "an unbacked suspend must not restart the daemon")
 	assert.Equal(t, toolConfig, h.configBytes(t), "and must not write the config")
 
 	pending, err := h.mgr.applier.Ops().LoadPending()
 	require.NoError(t, err)
 	assert.Nil(t, pending, "no marker is armed for a call no boot could answer")
 
-	assert.False(t, h.mgr.staged.has(h.sessionID), "the call is settled in-process, not across a restart")
-	assert.True(t, h.mgr.stageApply(h.sessionID, "c2", tool.IDConfigEdit, &configops.Staged{}),
+	assert.False(t, h.mgr.applier.Has(h.sessionID), "the call is settled in-process, not across a restart")
+	assert.True(t, h.mgr.applier.ClaimApply(),
 		"the slot is free for the next change")
 }
 
@@ -52,12 +52,12 @@ func TestRunStagedApply_ADurableSuspendAfterAnUnbackedOneStillApplies(t *testing
 		grantedCall(ctx, h.sessionID, "c1"), configEditArgs(configHarnessCandidate),
 	)
 	require.ErrorIs(t, err, tool.ErrSuspend)
-	h.mgr.runStagedApply(ctx, h.sessionID)
+	h.mgr.applier.RunStagedApply(ctx, h.sessionID)
 
 	require.ErrorIs(t, h.grantedCall(t, "c2", configHarnessCandidate), tool.ErrSuspend)
-	h.mgr.runStagedApply(ctx, h.sessionID)
+	h.mgr.applier.RunStagedApply(ctx, h.sessionID)
 
-	assert.Equal(t, 1, h.restarts)
+	assert.Len(t, h.mgr.applier.Restart(), 1)
 	assert.Contains(t, h.configBytes(t), "id: claude-opus-5\n      provider: work\n    - id: claude-sonnet-5")
 
 	pending, err := h.mgr.applier.Ops().LoadPending()
@@ -66,10 +66,7 @@ func TestRunStagedApply_ADurableSuspendAfterAnUnbackedOneStillApplies(t *testing
 	assert.Equal(t, "c2", pending.ToolCallID, "the marker names the call that really suspended")
 }
 
-// Why the pipeline checks before it commits: a marker naming a call the
-// transcript does not carry can never be consumed. Delivery fails, the session is
-// alive so the failure reads as transient, and the marker is kept — arming every
-// later boot to roll a config that has been live for days back to its backup.
+// A stale producer verdict is acknowledged at ingress and rejected without inventing a tool result.
 func TestScenario_AMarkerForACallTheTranscriptDoesNotCarryIsNeverConsumed(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "apply.db")
 	configDir := newApplyConfigDir(t)
@@ -89,23 +86,24 @@ func TestScenario_AMarkerForACallTheTranscriptDoesNotCarryIsNeverConsumed(t *tes
 		SessionID: sessionID, ToolCallID: "ghost-call", ToolName: tool.IDConfigEdit,
 	}).Failed())
 
-	_, err = d.mgr.DeliverPendingCallResult(
-		d.ctx, sessionID, "ghost-call", tool.IDConfigEdit, "Config applied: default model",
-	)
-	require.Error(t, err, "there is no such call in the transcript to answer")
-
-	// The boot keeps a marker whose delivery failed for a session that is still
-	// able to take it, so this exact failure repeats on every later boot.
-	rec, err := d.mgr.sessionStore.GetSession(d.ctx, sessionID)
+	before := len(d.parentMessages(sessionID))
+	_, err = d.bootVerdict(t)
 	require.NoError(t, err)
-	require.Nil(t, rec.KilledAt)
-	require.NotEqual(t, sessionstore.SessionStatusStopped, rec.Status)
-	require.NotEqual(t, sessionstore.SessionStatusStopping, rec.Status)
-
+	d.waitUntil("stale verdict resolved", func() bool {
+		pending, err := d.sessStore.ListPending(d.ctx, sessionID)
+		return err == nil && len(pending) == 0 && !d.mgr.HasActiveLoop(sessionID)
+	})
+	var state string
+	require.NoError(
+		t,
+		d.db.QueryRowContext(d.ctx, `SELECT state FROM session_inbox WHERE session_id=? AND delivery_key='config_apply:ghost-call'`, sessionID).
+			Scan(&state),
+	)
+	assert.Equal(t, string(sessionstore.InputStateRejected), state)
+	assert.Len(t, d.parentMessages(sessionID), before)
+	assert.Zero(t, countToolResultsFor(d.parentMessages(sessionID), tool.IDConfigEdit))
 	still, err := d.ops.LoadPending()
 	require.NoError(t, err)
-	assert.NotNil(t, still, "the marker outlives the boot that could not consume it")
-
-	assert.NoError(t, llm.ValidateToolPairing(d.parentMessages(sessionID)),
-		"the failed delivery must not damage the transcript")
+	assert.Nil(t, still, "a committed stale verdict must not arm later unrelated rollback")
+	assert.NoError(t, llm.ValidateToolPairing(d.parentMessages(sessionID)))
 }

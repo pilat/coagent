@@ -80,6 +80,7 @@ func TestHarnessScenario_SystemPromptMatchesTheDaemonRegisteredToolset(t *testin
 	h := newGatingHarness(t, map[string]string{"reviewer.md": promptReviewerAgentFile}, respond)
 	defer h.shutdown()
 
+	h.startInboxWake()
 	parentID, err := h.mgr.Send(h.ctx, h.projectID, "spawn an explore child", "fake-model", nil)
 	require.NoError(t, err)
 
@@ -144,6 +145,7 @@ func TestHarnessScenario_ActiveProcessPromptAndSleepGuard(t *testing.T) {
 		)
 	})
 
+	h.startInboxWake()
 	require.NoError(t, h.mgr.SendToSession(h.ctx, root.ID, "wait for the process"))
 	waitForVisibleMessage(t, collector, root.ID, "background process polling rejected")
 	_, _, err = h.mgr.processStore.FinalizeWithIntent(
@@ -186,6 +188,7 @@ func TestHarnessScenario_EmptyActiveBackgroundAddsNoProviderRow(t *testing.T) {
 	h := newSubagentHarnessWith(t, respond)
 	defer h.shutdown()
 
+	h.startInboxWake()
 	root, err := h.mgr.Send(h.ctx, h.projectID, "ordinary task", "fake-model", nil)
 	require.NoError(t, err)
 	h.mgr.waitIdle(root)

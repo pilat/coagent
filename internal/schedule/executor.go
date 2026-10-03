@@ -135,16 +135,19 @@ func (e *executor) deliverOneShot(ctx context.Context, sched *Schedule) (bool, e
 		if !pending {
 			return false, nil
 		}
+
 		result, err := e.store.Enqueue(ctx, sessionstore.Input{
 			SessionID: sched.sessionID, Source: sessionstore.InputSourceCallResult,
 			Content: sched.inputMessage, DeliveryKey: fmt.Sprintf("sleep:%d", sched.id),
 			Attributes: map[string]any{"call_id": sched.metadata.ToolCallID, "tool_id": tool.IDSleep},
 		})
 		if err != nil {
-			return false, err
+			return false, fmt.Errorf("deliver one shot: %w", err)
 		}
+
 		return result.Applied, nil
 	}
+
 	return e.deliverCronSchedule(ctx, sched, oneShotDeliveryID(sched.id), sched.inputMessage)
 }
 

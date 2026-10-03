@@ -1,11 +1,8 @@
 package session
 
 import (
-	"context"
 	"fmt"
 	"strings"
-
-	"go.uber.org/zap"
 
 	"github.com/pilat/coagent/internal/llmwire"
 )
@@ -42,19 +39,9 @@ func compactionToolResult(id, content string) llmwire.Message {
 	return llmwire.Message{Role: llmwire.RoleTool, Content: content, ToolCallID: id, ToolName: "read"}
 }
 
-// contextEventRunner wires a loopRunner around a bare svc so tests can drive
-// applyContextEvents without a full runLoop.
-func contextEventRunner(s *svc, notes *[]string) *loopRunner {
-	return &loopRunner{
-		agent:  s,
-		log:    zap.NewNop(),
-		result: &loopResult{},
-		opts: loopOptions{Notify: func(_ context.Context, message string) error {
-			*notes = append(*notes, message)
-
-			return nil
-		}},
-	}
+func contextEventRunner(s *Session, notes *[]string) *runState {
+	s.events = noteEvents{notes: notes}
+	return &runState{}
 }
 
 // oversizedTranscript builds header + enough large rounds to cross the trigger.

@@ -45,19 +45,6 @@ func (s *svc) RefreshProgress(ctx context.Context, rootID int64) error {
 	return nil
 }
 
-func (s *svc) renderFinalOutput(ctx context.Context, rootID int64, text string) (string, error) {
-	if s.progress == nil {
-		return text, nil
-	}
-
-	rendered, err := s.progress.RenderFinal(ctx, rootID, text)
-	if err != nil {
-		return "", fmt.Errorf("render final progress: %w", err)
-	}
-
-	return rendered, nil
-}
-
 func (s *svc) enqueueProgressChange(ctx context.Context, rootID int64) (string, bool, error) {
 	if s.progress == nil {
 		return "", false, errProgressUnavailable
@@ -107,6 +94,7 @@ func (s *svc) liveContextProjection(ctx context.Context, rootID int64) (progress
 	}
 
 	projection := service.ContextProjection(ctx)
+
 	return progress.Context{
 		Used:        projection.Used,
 		Max:         projection.Max,
@@ -115,12 +103,12 @@ func (s *svc) liveContextProjection(ctx context.Context, rootID int64) (progress
 	}, true
 }
 
-func (s *svc) mainModelWorking(rootID int64) bool {
+func (s *svc) mainModelWorking(ctx context.Context, rootID int64) bool {
 	// The durable status outranks the runner flag: a root parked on an
 	// external call owns no runner service by the time its waiting card is
 	// captured, but a concurrent capture can still observe the live loop
 	// before finishRunner clears it — a suspended root is never "working".
-	record, err := s.store.GetSession(context.Background(), rootID)
+	record, err := s.store.GetSession(ctx, rootID)
 	if err != nil || record.Status == sessionstore.SessionStatusSuspended {
 		return false
 	}
@@ -261,6 +249,7 @@ func (s *svc) settleSubagentProgress(
 func (s *svc) updateLive(ctx context.Context, sessionID int64) {
 	s.liveMu.Lock()
 	defer s.liveMu.Unlock()
+
 	s.updateLiveLocked(ctx, sessionID)
 }
 
@@ -268,7 +257,8 @@ func (s *svc) updateLiveLocked(ctx context.Context, sessionID int64) {
 	if s.progress == nil {
 		return
 	}
-	live := progressruntime.Live{Active: s.HasActiveLoop(sessionID), Working: s.mainModelWorking(sessionID)}
+
+	live := progressruntime.Live{Active: s.HasActiveLoop(sessionID), Working: s.mainModelWorking(ctx, sessionID)}
 	live.Context, _ = s.liveContextProjection(ctx, sessionID)
 	s.progress.SetLive(sessionID, live)
 }

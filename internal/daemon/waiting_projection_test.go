@@ -10,13 +10,15 @@ import (
 
 	"github.com/pilat/coagent/internal/schedule"
 	"github.com/pilat/coagent/internal/sessionevent"
+	"github.com/pilat/coagent/internal/sessionstore"
+	"github.com/pilat/coagent/internal/transcript"
 )
 
 func TestPublishWaiting_ProjectsOnlyOneShotsOwnedByPendingSleepCalls(t *testing.T) {
 	ctx := context.Background()
 	mgr, _, projects, schedules := newTestManagerWithSchedule(t)
 	projectID := testProject(t, projects, "/tmp/test")
-	rec, err := mgr.sessionStore.CreateSession(ctx, projectID, "fake-model", "", nil)
+	rec, err := mgr.store.CreateSession(ctx, projectID, "fake-model", "", nil)
 	require.NoError(t, err)
 
 	now := time.Now().UTC().Truncate(time.Second)
@@ -25,7 +27,16 @@ func TestPublishWaiting_ProjectsOnlyOneShotsOwnedByPendingSleepCalls(t *testing.
 	require.NoError(t, err)
 
 	sleepAt := now.Add(20 * time.Minute)
-	_, err = schedule.NewService(schedules).AddSleep(ctx, rec.ID, "sleep-call", sleepAt, "wake")
+	_, err = mgr.store.Commit(ctx, sessionstore.Commit{
+		SessionID: rec.ID,
+		Messages: []*transcript.Message{
+			{Role: "assistant", ToolCalls: []byte(`[{"ID":"sleep-call","Name":"sleep","Arguments":"e30="}]`)},
+		},
+	})
+	require.NoError(t, err)
+
+	_, err = schedule.NewService(schedules, mgr.store.(*sessionstore.Store)).
+		AddSleep(ctx, rec.ID, "sleep-call", sleepAt, "wake")
 	require.NoError(t, err)
 
 	var notifications []sessionevent.Notification

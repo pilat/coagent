@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"database/sql"
 	"encoding/json"
 	"testing"
 	"time"
@@ -29,15 +30,26 @@ func TestFinalizeChild_IncompleteWhenNoFinalAnswer(t *testing.T) {
 	parent, err := h.sessStore.CreateSession(ctx, h.projectID, "fake-model", "", nil)
 	require.NoError(t, err)
 
-	childID, err := h.sessStore.CreateSubagentSession(
-		ctx,
-		h.projectID,
-		parent.ID,
-		parent.ID,
-		"general",
-		"fake-model",
-		"",
-	)
+	childID, err := func() (int64, error) {
+		var id int64
+		err := h.sessStore.WithTx(ctx, func(tx *sql.Tx) error {
+			var err error
+			id, err = sessionstore.CreateSubagentSessionTx(
+				ctx,
+				tx,
+				sessionstore.CreateSubagentSession{
+					ProjectID:      h.projectID,
+					ParentID:       parent.ID,
+					RootID:         parent.ID,
+					AgentType:      "general",
+					Model:          "fake-model",
+					ReasoningLevel: "",
+				},
+			)
+			return err
+		})
+		return id, err
+	}()
 	require.NoError(t, err)
 	require.NoError(t, h.links.InsertSubagentLink(ctx, subagent.Link{
 		ParentID: parent.ID, ChildID: childID, TaskCallID: "bg",
@@ -46,14 +58,25 @@ func TestFinalizeChild_IncompleteWhenNoFinalAnswer(t *testing.T) {
 	// The child's last message is a tool call — it stopped mid-tool / hit its cap.
 	toolCalls, err := json.Marshal([]llmwire.ToolCall{{ID: "x", Name: "bash", Arguments: []byte(`{}`)}})
 	require.NoError(t, err)
-	_, err = h.sessStore.InsertMessage(ctx, childID, &transcript.Message{
+	_, err = h.sessStore.Commit(ctx, sessionstore.Commit{SessionID: childID, Messages: []*transcript.Message{{
 		Role: llmwire.RoleAssistant, ToolCalls: toolCalls,
-	})
+	}}})
 	require.NoError(t, err)
 	// Max-iterations persists status "error" with errored == false.
-	require.NoError(t, h.sessStore.UpdateSessionIteration(
-		ctx, childID, 12, sessionstore.SessionStatusError,
-	))
+	require.NoError(t, func() error {
+		iteration := 12
+		status := sessionstore.SessionStatusError
+		_, err := h.sessStore.Commit(
+			ctx,
+			sessionstore.Commit{
+				SessionID: childID,
+				State:     sessionstore.StatePatch{Iteration: &iteration, Status: &status},
+			},
+		)
+		return err
+	}())
+
+	h.startInboxWake()
 
 	h.mgr.finalizeChild(ctx, childID)
 
@@ -99,25 +122,39 @@ func TestCascadeKill_BackgroundDescendant(t *testing.T) {
 	root, err := h.sessStore.CreateSession(ctx, h.projectID, "fake-model", "", nil)
 	require.NoError(t, err)
 
-	child, err := h.mgr.Spawn(ctx, spawnRequest{
+	h.startInboxWake()
+	child, err := h.mgr.Spawn(ctx, subagent.SpawnRequest{
 		ParentID: root.ID, AgentType: "general", Prompt: "HANG", Blocking: false,
 	})
 	require.NoError(t, err)
 	h.waitUntil("background child running", func() bool { return h.mgr.HasActiveLoop(child.ChildID) })
 	h.waitUntil("background child entered model call", func() bool { return len(entered) >= 1 })
 
-	grandchild, err := h.mgr.Spawn(ctx, spawnRequest{
+	h.startInboxWake()
+	grandchild, err := h.mgr.Spawn(ctx, subagent.SpawnRequest{
 		ParentID: child.ChildID, AgentType: "general", Prompt: "HANG", Blocking: false,
 	})
 	require.NoError(t, err)
 	h.waitUntil("background grandchild running", func() bool { return h.mgr.HasActiveLoop(grandchild.ChildID) })
 	h.waitUntil("background grandchild entered model call", func() bool { return len(entered) >= 2 })
-	childInput, err := h.sessStore.EnqueueAsyncInput(
-		ctx, child.ChildID, sessionstore.InputSourceProcess, "pending", nil,
+	childInput, err := h.sessStore.Enqueue(
+		ctx,
+		sessionstore.Input{
+			SessionID:  child.ChildID,
+			Source:     sessionstore.InputSourceProcess,
+			Content:    "pending",
+			Attributes: nil,
+		},
 	)
 	require.NoError(t, err)
-	grandchildInput, err := h.sessStore.EnqueueAsyncInput(
-		ctx, grandchild.ChildID, sessionstore.InputSourceSubagent, "complete", nil,
+	grandchildInput, err := h.sessStore.Enqueue(
+		ctx,
+		sessionstore.Input{
+			SessionID:  grandchild.ChildID,
+			Source:     sessionstore.InputSourceSubagent,
+			Content:    "complete",
+			Attributes: nil,
+		},
 	)
 	require.NoError(t, err)
 
@@ -136,7 +173,7 @@ func TestCascadeKill_BackgroundDescendant(t *testing.T) {
 		require.NoError(t, gerr)
 		assert.NotNil(t, rec.KilledAt, "descendant %d is killed with its tree", id)
 	}
-	for _, inputID := range []int64{childInput.ID, grandchildInput.ID} {
+	for _, inputID := range []int64{childInput.Input.ID, grandchildInput.Input.ID} {
 		var state string
 		require.NoError(t, h.db.QueryRowContext(ctx,
 			`SELECT state FROM session_inbox WHERE id = ?`, inputID,
@@ -175,7 +212,8 @@ func TestCascadeKill_RemovesChildSchedules(t *testing.T) {
 	root, err := h.sessStore.CreateSession(ctx, h.projectID, "fake-model", "", nil)
 	require.NoError(t, err)
 
-	child, err := h.mgr.Spawn(ctx, spawnRequest{
+	h.startInboxWake()
+	child, err := h.mgr.Spawn(ctx, subagent.SpawnRequest{
 		ParentID: root.ID, AgentType: "general", Prompt: "HANG", Blocking: false,
 	})
 	require.NoError(t, err)
@@ -207,15 +245,26 @@ func TestCascadeKill_CompletedUndeliveredSurvives(t *testing.T) {
 	parent, err := h.sessStore.CreateSession(ctx, h.projectID, "fake-model", "", nil)
 	require.NoError(t, err)
 
-	childID, err := h.sessStore.CreateSubagentSession(
-		ctx,
-		h.projectID,
-		parent.ID,
-		parent.ID,
-		"general",
-		"fake-model",
-		"",
-	)
+	childID, err := func() (int64, error) {
+		var id int64
+		err := h.sessStore.WithTx(ctx, func(tx *sql.Tx) error {
+			var err error
+			id, err = sessionstore.CreateSubagentSessionTx(
+				ctx,
+				tx,
+				sessionstore.CreateSubagentSession{
+					ProjectID:      h.projectID,
+					ParentID:       parent.ID,
+					RootID:         parent.ID,
+					AgentType:      "general",
+					Model:          "fake-model",
+					ReasoningLevel: "",
+				},
+			)
+			return err
+		})
+		return id, err
+	}()
 	require.NoError(t, err)
 	require.NoError(t, h.links.InsertSubagentLink(ctx, subagent.Link{
 		ParentID: parent.ID, ChildID: childID, TaskCallID: "bg",
@@ -240,9 +289,26 @@ func TestCascadeKill_KilledTreeSuppressesTerminalBackgroundCompletion(t *testing
 
 	parent, err := h.sessStore.CreateSession(h.ctx, h.projectID, "fake-model", "", nil)
 	require.NoError(t, err)
-	childID, err := h.sessStore.CreateSubagentSession(
-		h.ctx, h.projectID, parent.ID, parent.ID, "general", "fake-model", "",
-	)
+	childID, err := func() (int64, error) {
+		var id int64
+		err := h.sessStore.WithTx(h.ctx, func(tx *sql.Tx) error {
+			var err error
+			id, err = sessionstore.CreateSubagentSessionTx(
+				h.ctx,
+				tx,
+				sessionstore.CreateSubagentSession{
+					ProjectID:      h.projectID,
+					ParentID:       parent.ID,
+					RootID:         parent.ID,
+					AgentType:      "general",
+					Model:          "fake-model",
+					ReasoningLevel: "",
+				},
+			)
+			return err
+		})
+		return id, err
+	}()
 	require.NoError(t, err)
 	require.NoError(t, h.links.InsertSubagentLink(h.ctx, subagent.Link{
 		ParentID: parent.ID, ChildID: childID, TaskCallID: "background",
@@ -275,15 +341,26 @@ func TestDrainQueue_SkipsKilledChild(t *testing.T) {
 	parent, err := h.sessStore.CreateSession(ctx, h.projectID, "fake-model", "", nil)
 	require.NoError(t, err)
 
-	childID, err := h.sessStore.CreateSubagentSession(
-		ctx,
-		h.projectID,
-		parent.ID,
-		parent.ID,
-		"general",
-		"fake-model",
-		"",
-	)
+	childID, err := func() (int64, error) {
+		var id int64
+		err := h.sessStore.WithTx(ctx, func(tx *sql.Tx) error {
+			var err error
+			id, err = sessionstore.CreateSubagentSessionTx(
+				ctx,
+				tx,
+				sessionstore.CreateSubagentSession{
+					ProjectID:      h.projectID,
+					ParentID:       parent.ID,
+					RootID:         parent.ID,
+					AgentType:      "general",
+					Model:          "fake-model",
+					ReasoningLevel: "",
+				},
+			)
+			return err
+		})
+		return id, err
+	}()
 	require.NoError(t, err)
 	require.NoError(t, h.links.InsertSubagentLink(ctx, subagent.Link{
 		ParentID: parent.ID, ChildID: childID, TaskCallID: "bg",

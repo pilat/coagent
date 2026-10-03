@@ -2,169 +2,195 @@ package session
 
 import (
 	"context"
-	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/pilat/coagent/internal/llmwire"
-	"github.com/pilat/coagent/internal/registry"
+	"github.com/pilat/coagent/internal/loader"
+	"github.com/pilat/coagent/internal/sessionprompt"
+	"github.com/pilat/coagent/internal/sessionstore"
 	"github.com/pilat/coagent/internal/todo"
 	"github.com/pilat/coagent/internal/tool"
 )
 
-// newMockSvc creates a minimal *svc with a mock LLM for run tests.
-// The mock LLM returns a single text response and exits.
-func newMockSvc(t *testing.T, messages []llmwire.Message, agentsMD string) *svc {
-	t.Helper()
-	ms := newMessageStore(nil, 0, nil)
-	if messages != nil {
-		ms.setMessages(messages)
-	}
-	return &svc{
-		rootID:       1,
-		id:           1,
-		agentType:    registry.AgentTypeBuild,
-		todoStore:    todo.New(),
-		agentsMD:     agentsMD,
-		ms:           ms,
-		loopDetector: newLoopDetector(),
-		llmClient:    &mockLLMClient{},
-		prompt:       newPromptBuilder("test", ""),
-		registry:     tool.NewRegistry(),
-	}
-}
-
-func TestRun_FreshSessionInjectsAgentsMDAndPrompt(t *testing.T) {
-	mockLLM := &mockLLMRunOnce{response: &llmwire.Response{Text: "hello"}}
-	s := newMockSvc(t, nil, "Be concise.")
-	s.llmClient = mockLLM
-
-	result, err := s.Run(context.Background(), "write tests")
-	require.NoError(t, err)
-	assert.Equal(t, "hello", result)
-
-	msgs := s.ms.getMessages()
-	// AGENTS.md + prompt + assistant response = 3 messages minimum
-	require.GreaterOrEqual(t, len(msgs), 2)
-	assert.Equal(t, llmwire.RoleUser, msgs[0].Role)
-	assert.True(t, strings.HasPrefix(msgs[0].Content, "User preferences from AGENTS.md"))
-	assert.Equal(t, llmwire.RoleUser, msgs[1].Role)
-	assert.Contains(t, msgs[1].Content, "write tests")
-	assert.Regexp(t, `^\[\w+ \d{4}-\d{2}-\d{2} \d{2}:\d{2} \w+ [+-]\d{2}:\d{2}\]`, msgs[1].Content)
-}
-
-func TestRun_FreshSessionNoAgentsMD(t *testing.T) {
-	mockLLM := &mockLLMRunOnce{response: &llmwire.Response{Text: "ok"}}
-	s := newMockSvc(t, nil, "")
-	s.llmClient = mockLLM
-
-	_, err := s.Run(context.Background(), "hello")
-	require.NoError(t, err)
-
-	msgs := s.ms.getMessages()
-	require.GreaterOrEqual(t, len(msgs), 1)
-	assert.Contains(t, msgs[0].Content, "hello")
-	assert.Regexp(t, `^\[\w+ \d{4}-\d{2}-\d{2} \d{2}:\d{2} \w+ [+-]\d{2}:\d{2}\]`, msgs[0].Content)
-}
-
-func TestRun_FreshSessionEmptyPromptGetsDefault(t *testing.T) {
-	mockLLM := &mockLLMRunOnce{response: &llmwire.Response{Text: "hi"}}
-	s := newMockSvc(t, nil, "")
-	s.llmClient = mockLLM
-
-	_, err := s.Run(context.Background(), "")
-	require.NoError(t, err)
-
-	msgs := s.ms.getMessages()
-	require.GreaterOrEqual(t, len(msgs), 1)
-	assert.Contains(t, msgs[0].Content, "hasn't provided a task yet")
-}
-
-func TestRun_ResumedSessionAddsOnlyNewPrompt(t *testing.T) {
-	mockLLM := &mockLLMRunOnce{response: &llmwire.Response{Text: "continued"}}
-	s := newMockSvc(t, []llmwire.Message{
-		{Role: llmwire.RoleUser, Content: "old prompt"},
-		{Role: llmwire.RoleAssistant, Content: "old reply"},
-	}, "ignored on resume")
-	s.llmClient = mockLLM
-
-	result, err := s.Run(context.Background(), "continue please")
-	require.NoError(t, err)
-	assert.Equal(t, "continued", result)
-
-	msgs := s.ms.getMessages()
-	require.GreaterOrEqual(t, len(msgs), 3)
-	assert.Equal(t, "old prompt", msgs[0].Content)
-	assert.Equal(t, "old reply", msgs[1].Content)
-	assert.Contains(t, msgs[2].Content, "continue please")
-}
-
-func TestRun_ResumedSessionEmptyPromptNoNewMessage(t *testing.T) {
-	mockLLM := &mockLLMRunOnce{response: &llmwire.Response{Text: "done"}}
-	s := newMockSvc(t, []llmwire.Message{
-		{Role: llmwire.RoleUser, Content: "previous task"},
-		{Role: llmwire.RoleAssistant, Content: "working on it"},
-	}, "")
-	s.llmClient = mockLLM
-	s.rootID = 5
-	s.id = 5
-
-	// The loop will see "working on it" as final text and return immediately.
-	_, err := s.Run(context.Background(), "")
-	require.NoError(t, err)
-
-	msgs := s.ms.getMessages()
-	require.Len(t, msgs, 2) // No new message added
-}
-
-func TestRun_PersistStateCalledPerIteration(t *testing.T) {
-	updater := &mockSessionStore{}
-	mockLLM := &mockLLMSequence{
-		responses: []*llmwire.Response{
-			{Text: "step1"},
-			{Text: "step2"},
-			{Text: "done"},
+func TestRun_DurableTurns(t *testing.T) {
+	tests := []struct {
+		name, input string
+		responses   []*llmwire.Response
+		tools       []tool.Tool
+		calls       int
+		final       string
+		status      sessionstore.SessionStatus
+		wantError   bool
+		ownerless   bool
+	}{
+		{
+			name:      "confirmed answer",
+			input:     "answer the request",
+			responses: []*llmwire.Response{textResponse("candidate"), textResponse("confirmed")},
+			calls:     2,
+			final:     "candidate",
+			status:    sessionstore.SessionStatusCompleted,
+		},
+		{
+			name:      "ownerless observer answer",
+			input:     "answer the request",
+			responses: []*llmwire.Response{textResponse("candidate"), textResponse("confirmed")},
+			calls:     2,
+			final:     "candidate",
+			status:    sessionstore.SessionStatusCompleted,
+			ownerless: true,
+		},
+		{
+			name:  "ordinary tool then confirmation",
+			input: "read a file",
+			responses: []*llmwire.Response{
+				toolCallResponse("read-1", "read"),
+				textResponse("candidate"),
+				textResponse("confirmed"),
+			},
+			tools:  []tool.Tool{&stubTool{id: "read", result: "body"}},
+			calls:  3,
+			final:  "candidate",
+			status: sessionstore.SessionStatusCompleted,
+		},
+		{
+			name:      "owned sleep suspends",
+			input:     "wait",
+			responses: []*llmwire.Response{toolCallResponse("sleep-1", tool.IDSleep)},
+			tools:     []tool.Tool{&stubTool{id: tool.IDSleep, err: tool.ErrSuspend}},
+			calls:     1,
+			status:    sessionstore.SessionStatusSuspended,
+		},
+		{
+			name:  "empty stop breaks after six",
+			input: "answer",
+			responses: []*llmwire.Response{
+				textResponse(""),
+				textResponse(""),
+				textResponse(""),
+				textResponse(""),
+				textResponse(""),
+				textResponse(""),
+			},
+			calls:  6,
+			status: sessionstore.SessionStatusError,
+		},
+		{
+			name:      "unknown finish retains cost",
+			input:     "answer",
+			responses: []*llmwire.Response{{Text: "partial", FinishType: llmwire.FinishUnknown, CostUSD: 0.25}},
+			calls:     1,
+			status:    sessionstore.SessionStatusError,
+			wantError: true,
+		},
+		{
+			name:  "length retry retains rejected cost",
+			input: "answer",
+			responses: []*llmwire.Response{
+				{Text: "partial", FinishType: llmwire.FinishLength, CostUSD: 0.25},
+				textResponse("candidate"),
+				textResponse("confirmed"),
+			},
+			calls:  3,
+			final:  "candidate",
+			status: sessionstore.SessionStatusCompleted,
+		},
+		{name: "status does not call model", input: "/status", calls: 0, status: sessionstore.SessionStatusCompleted},
+		{
+			name:   "unknown skill rejection does not call model",
+			input:  "/skill missing",
+			calls:  0,
+			status: sessionstore.SessionStatusCompleted,
 		},
 	}
-
-	s := newMockSvc(t, nil, "")
-	s.llmClient = mockLLM
-	s.rootID = 6
-	s.id = 6
-	s.store = updater
-
-	_, err := s.Run(context.Background(), "multi-step")
-	require.NoError(t, err)
-
-	// At least some iteration + final persist calls
-	assert.Positive(t, updater.iterationCalls)
-}
-
-func TestRunDaemon_PreservesNewToolSuspensionAcrossSessionBoundary(t *testing.T) {
-	s := newMockSvc(t, nil, "")
-	s.registry.Register(&stubTool{id: tool.IDSleep, err: tool.ErrSuspend})
-	s.llmClient = &loopScriptLLM{responses: []*llmwire.Response{
-		toolCallResponse("sleep-call", tool.IDSleep),
-	}}
-
-	result, err := s.RunDaemon(t.Context(), nil, nil)
-	require.NoError(t, err)
-	assert.True(t, result.Suspended,
-		"RunDaemon must return the loop result, not reconstruct suspension from pre-run ledgers")
-
-	// A later settled run on the same service must not inherit the previous
-	// in-memory suspend flag.
-	s.ms.setMessages([]llmwire.Message{
-		{Role: llmwire.RoleUser, Content: "settled"},
-		{Role: llmwire.RoleAssistant, Content: "done"},
-	})
-	s.llmClient = &mockLLMRunOnce{response: &llmwire.Response{Text: "unused"}}
-
-	result, err = s.RunDaemon(t.Context(), nil, nil)
-	require.NoError(t, err)
-	assert.False(t, result.Suspended)
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			_, store, id := newAttachmentsStore(t)
+			if tc.ownerless {
+				require.NoError(t, store.SetAttributes(t.Context(), id, nil))
+			}
+			_, err := store.Enqueue(
+				t.Context(),
+				sessionstore.Input{SessionID: id, Source: sessionstore.InputSourceUser, Content: tc.input},
+			)
+			require.NoError(t, err)
+			record, err := store.GetSession(t.Context(), id)
+			require.NoError(t, err)
+			client := &loopScriptLLM{responses: tc.responses}
+			reg := tool.NewRegistry()
+			for _, tt := range tc.tools {
+				reg.Register(tt)
+			}
+			prompt := sessionprompt.NewBuilder("stable system prompt", "")
+			prompt.WorkDir = t.TempDir()
+			prompt.Todos = todo.New()
+			var notes []string
+			s, err := New(
+				t.Context(),
+				Input{
+					Record:         record,
+					Client:         client,
+					Loader:         loader.New(),
+					Registry:       reg,
+					Prompt:         prompt,
+					Store:          store,
+					Events:         noteEvents{notes: &notes},
+					OpeningContext: "project instructions",
+					OutputEnabled:  !tc.ownerless,
+				},
+			)
+			require.NoError(t, err)
+			t.Cleanup(s.Close)
+			result, err := s.Run(t.Context())
+			if tc.wantError {
+				require.Error(t, err)
+			} else {
+				require.NoError(t, err)
+			}
+			assert.Equal(t, tc.calls, client.calls)
+			assert.Equal(t, tc.final, result.Final)
+			record, err = store.GetSession(t.Context(), id)
+			require.NoError(t, err)
+			assert.Equal(t, tc.status, record.Status)
+			pending, err := store.ListPending(t.Context(), id)
+			require.NoError(t, err)
+			assert.Empty(t, pending)
+			if tc.status == sessionstore.SessionStatusSuspended {
+				assert.True(t, result.Suspended)
+				assert.Equal(t, []PendingToolCall{{ID: "sleep-1", Name: tool.IDSleep}}, s.PendingExternalCalls())
+			}
+			if tc.final != "" {
+				assert.Equal(t, 1, countNotes(notes, tc.final), "candidate appears only after confirmation")
+				assert.Contains(t, notes, tc.final, "live observers receive the raw answer")
+				reloaded, err := New(
+					t.Context(),
+					Input{
+						Record:        record,
+						Client:        &loopScriptLLM{},
+						Loader:        loader.New(),
+						Registry:      reg,
+						Prompt:        prompt,
+						Store:         store,
+						Events:        noteEvents{notes: &notes},
+						OutputEnabled: !tc.ownerless,
+					},
+				)
+				require.NoError(t, err)
+				t.Cleanup(reloaded.Close)
+				_, err = reloaded.Run(t.Context())
+				require.NoError(t, err)
+				assert.Equal(t, 1, countNotes(notes, tc.final), "reconstruction does not publish historical output")
+			}
+			if tc.name == "unknown finish retains cost" || tc.name == "length retry retains rejected cost" {
+				_, _, cost, err := store.GetSessionTreeUsage(context.Background(), id)
+				require.NoError(t, err)
+				assert.InDelta(t, 0.25, cost, 0.000001)
+			}
+		})
+	}
 }
 
 func TestLastAssistantTextOnly(t *testing.T) {

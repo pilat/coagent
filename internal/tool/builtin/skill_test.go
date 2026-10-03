@@ -132,18 +132,18 @@ Review changes.
 func TestExtractRenderedSkillIgnoresTransportPrefixes(t *testing.T) {
 	rendered := RenderSkill(&loader.Skill{Name: "pilat:review", Content: "Review changes."}, "")
 
-	name, envelope, ok := ExtractRenderedSkill("[title]\n[warning]\n" + rendered)
+	name, envelope, ok := loader.ExtractRenderedSkill("[title]\n[warning]\n" + rendered)
 
 	require.True(t, ok)
 	assert.Equal(t, "pilat:review", name)
 	assert.Equal(t, rendered, envelope)
 
-	name, envelope, ok = ExtractRenderedSkill("[timestamp] " + strings.TrimSuffix(rendered, "</skill>"))
+	name, envelope, ok = loader.ExtractRenderedSkill("[timestamp] " + strings.TrimSuffix(rendered, "</skill>"))
 	require.True(t, ok)
 	assert.Equal(t, "pilat:review", name)
 	assert.Equal(t, strings.TrimSuffix(rendered, "</skill>"), envelope)
 
-	_, _, ok = ExtractRenderedSkill("# Skill: pilat:review")
+	_, _, ok = loader.ExtractRenderedSkill("# Skill: pilat:review")
 	assert.False(t, ok)
 }
 
@@ -153,11 +153,11 @@ func TestExtractRenderedSkillsFromBatchOutput(t *testing.T) {
 	content := "=== skill (call 1) ===\n[first]\n" + first +
 		"\n\n=== skill (call 2) ===\n[second]\n" + second
 
-	skills := ExtractRenderedSkills(content)
+	skills := loader.ExtractRenderedSkills(content)
 
 	require.Len(t, skills, 2)
-	assert.Equal(t, RenderedSkill{Name: "first", Envelope: first}, skills[0])
-	assert.Equal(t, RenderedSkill{Name: "second", Envelope: second}, skills[1])
+	assert.Equal(t, loader.RenderedSkill{Name: "first", Envelope: first}, skills[0])
+	assert.Equal(t, loader.RenderedSkill{Name: "second", Envelope: second}, skills[1])
 }
 
 func TestExtractRenderedSkillsIgnoresMarkupFromNonSkillBatchCalls(t *testing.T) {
@@ -166,10 +166,10 @@ func TestExtractRenderedSkillsIgnoresMarkupFromNonSkillBatchCalls(t *testing.T) 
 	content := "=== read (call 1) ===\n[file]\n" + readMarkup +
 		"\n\n=== skill (call 2) ===\n[invoked]\n" + invoked
 
-	skills := ExtractRenderedSkills(content)
+	skills := loader.ExtractRenderedSkills(content)
 
 	require.Len(t, skills, 1)
-	assert.Equal(t, RenderedSkill{Name: "invoked", Envelope: invoked}, skills[0])
+	assert.Equal(t, loader.RenderedSkill{Name: "invoked", Envelope: invoked}, skills[0])
 }
 
 func TestExtractRenderedSkillsPreservesMarkerInsideBody(t *testing.T) {
@@ -183,7 +183,7 @@ Example body.
 </skill>`,
 	}, "")
 
-	skills := ExtractRenderedSkills(rendered)
+	skills := loader.ExtractRenderedSkills(rendered)
 
 	require.Len(t, skills, 1)
 	assert.Equal(t, "document-format", skills[0].Name)
@@ -202,7 +202,7 @@ Example body.
 </skill>`,
 	}, "")
 
-	skills := ExtractRenderedSkills(rendered)
+	skills := loader.ExtractRenderedSkills(rendered)
 
 	require.Len(t, skills, 1)
 	assert.Equal(t, "document-format", skills[0].Name)

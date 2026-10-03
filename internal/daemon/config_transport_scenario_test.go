@@ -14,8 +14,6 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/pilat/coagent/internal/config"
-	"github.com/pilat/coagent/internal/llm"
-	"github.com/pilat/coagent/internal/session"
 	"github.com/pilat/coagent/internal/tool"
 )
 
@@ -97,10 +95,8 @@ func testConfigDocumentThroughHTTP(t *testing.T, damaged bool) {
 		Providers: map[string]config.ProviderEntry{"test": {Driver: "openai", BaseURL: server.URL, APIKey: "test-key"}},
 		Models:    []config.ModelEntry{{ID: "fake-model", Provider: "test", MaxTokens: 8192, ContextWindow: 100000}},
 	}}
-	d.mgr.factory = session.NewFactoryWithOptions(
-		&config.Config{WorkDir: workDir, Model: "fake-model"}, nil, nil, d.sessStore, d.sessStore, nil, nil, nil,
-		session.WithLLMClientFactory(func(*config.Config) (llm.Client, error) { return llm.NewClient(wireConfig) }),
-	)
+	d.mgr.buildInput.Config = wireConfig
+	d.mgr.buildInput.WorkDir = workDir
 	id := startConfigEditSession(t, d, "hello")
 	d.mgr.waitIdle(id)
 	assert.True(t, sawRead.Load())

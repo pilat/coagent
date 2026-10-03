@@ -35,7 +35,7 @@ func TestPublishRoutingModel_ManagerOwnershipSurvivesTransitions(t *testing.T) {
 		if owner != "" {
 			attributes = map[string]any{controllerapi.SessionAttributeManagerID: owner}
 		}
-		record, err := mgr.sessionStore.CreateSession(ctx, pid, "fake-model", "", attributes)
+		record, err := mgr.store.CreateSession(ctx, pid, "fake-model", "", attributes)
 		require.NoError(t, err)
 		model[record.ID] = owner
 

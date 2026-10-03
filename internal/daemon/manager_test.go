@@ -12,330 +12,153 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/pilat/coagent/internal/backgroundprocess"
+	"github.com/pilat/coagent/internal/budget"
+	"github.com/pilat/coagent/internal/coagenthome"
+	"github.com/pilat/coagent/internal/config"
 	"github.com/pilat/coagent/internal/controllerapi"
+	"github.com/pilat/coagent/internal/llm"
+	"github.com/pilat/coagent/internal/llmwire"
 	"github.com/pilat/coagent/internal/migrate"
-	"github.com/pilat/coagent/internal/registry"
+	"github.com/pilat/coagent/internal/progressruntime"
 	"github.com/pilat/coagent/internal/schedule"
-	"github.com/pilat/coagent/internal/session"
+	"github.com/pilat/coagent/internal/sessionbus"
 	"github.com/pilat/coagent/internal/sessionevent"
 	"github.com/pilat/coagent/internal/sessionstore"
 	"github.com/pilat/coagent/internal/subagent"
-	"github.com/pilat/coagent/internal/tool"
 )
 
-// mockSession implements session.Service for testing.
 type mockSession struct {
-	runErr        error
-	injectErr     error // returned by every Inject*/Reset* call
-	result        session.RunResult
+	*scriptedLLM
 	mu            sync.Mutex
 	ran           bool
-	registry      tool.Registry
-	completeAfter time.Duration // if > 0, RunDaemon returns after this delay instead of blocking
-	closeCalled   bool
-	agentType     registry.AgentType // defaults to registry.AgentTypeBuild when unset
-	prepare       func(string) (string, error)
-
-	pendingCalls []session.PendingToolCall
-	inputEvents  []string
-	pendingWork  bool
-	boundary     session.InputBoundary
+	runErr        error
+	completeAfter time.Duration
 }
 
-func (m *mockSession) SettleStoppedCalls(context.Context, string) error { return nil }
+type mockFactory struct {
+	mu            sync.Mutex
+	sessions      []*mockSession
+	nextSess      *mockSession
+	createErrOnce error
+}
 
-func (m *mockSession) ResolveInterruptedCalls(context.Context, []session.PendingToolCall, string) error {
-	return nil
+func (m *mockSession) Chat(
+	ctx context.Context,
+	_ string,
+	_ []llmwire.Message,
+	_ []llmwire.ToolSchema,
+	_ ...llmwire.ChatOption,
+) (*llmwire.Response, error) {
+	m.mu.Lock()
+	m.ran = true
+	delay, err := m.completeAfter, m.runErr
+	m.mu.Unlock()
+	if delay <= 0 {
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-time.After(delay):
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &llmwire.Response{Text: "done", FinishType: llmwire.FinishStop}, nil
+}
+
+func (f *mockFactory) client(*config.Config) (llm.Client, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.createErrOnce != nil {
+		err := f.createErrOnce
+		f.createErrOnce = nil
+		return nil, err
+	}
+	client := f.nextSess
+	f.nextSess = nil
+	if client == nil {
+		client = &mockSession{}
+	}
+	client.scriptedLLM = &scriptedLLM{}
+	f.sessions = append(f.sessions, client)
+	return client, nil
 }
 
 type blockingCreateSessionStore struct {
-	sessionstore.OrchestrationStore
-	entered chan struct{}
-	release chan struct{}
+	Store
+	entered, release chan struct{}
 }
 
 func (s *blockingCreateSessionStore) CreateReplacementSession(
 	ctx context.Context,
-	oldSessionID int64,
+	oldID int64,
 ) (*sessionstore.SessionRecord, error) {
 	close(s.entered)
 	<-s.release
-
-	return s.OrchestrationStore.CreateReplacementSession(ctx, oldSessionID)
+	return s.Store.CreateReplacementSession(ctx, oldID)
 }
 
-// mockFactory implements session.Factory for testing.
-type mockFactory struct {
-	mu            sync.Mutex
-	sessions      []*mockSession
-	options       []session.CreateOptions
-	nextSess      session.Service // allows injecting any session.Service implementation
-	createErrOnce error
-}
-
-func (m *mockSession) RunDaemon(
-	ctx context.Context,
-	notify func(sessionevent.Notification),
-	_ func(bool),
-) (session.RunResult, error) {
-	m.mu.Lock()
-	m.ran = true
-	m.pendingWork = false
-	completeAfter := m.completeAfter
-	boundary := m.boundary
-	pendingCalls := append([]session.PendingToolCall(nil), m.pendingCalls...)
-	m.mu.Unlock()
-
-	if err := m.acceptBoundaryInput(ctx, boundary, pendingCalls); err != nil {
-		return session.RunResult{}, err
-	}
-
-	// If completeAfter is set, return naturally after the delay.
-	if completeAfter > 0 {
-		select {
-		case <-time.After(completeAfter):
-			return m.result, m.runErr
-		case <-ctx.Done():
-			return m.result, ctx.Err()
-		}
-	}
-
-	<-ctx.Done()
-
-	return m.result, ctx.Err()
-}
-
-func (m *mockSession) acceptBoundaryInput(
-	ctx context.Context,
-	boundary session.InputBoundary,
-	pendingCalls []session.PendingToolCall,
-) error {
-	if boundary == nil {
-		return nil
-	}
-
-	input, err := boundary.Peek(ctx)
-	if err != nil || input == nil {
-		return err
-	}
-
-	prepared, err := m.PrepareUserMessage(input.Content)
-	if err != nil {
-		return err
-	}
-
-	_, _, err = boundary.Accept(ctx, *input, prepared, pendingCalls)
-
-	return err
-}
-
-func (m *mockSession) PrepareUserMessage(message string) (string, error) {
-	if m.prepare != nil {
-		return m.prepare(message)
-	}
-
-	return message, nil
-}
-
-func (m *mockSession) SetModel(_, _ string) error { return nil }
-
-func (m *mockSession) AgentTypes() *registry.Set { return registry.NewSet(nil) }
-
-// RegisterGatedTool mirrors *svc's gating: register onto the mock's internal
-// registry only if the mock's agent type allows it.
-func (m *mockSession) RegisterGatedTool(t tool.Tool) bool {
-	agentType := m.agentType
-	if agentType == "" {
-		agentType = registry.AgentTypeBuild
-	}
-
-	if len(m.AgentTypes().FilterTools([]string{t.ID()}, agentType)) == 0 {
-		return false
-	}
-
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if m.registry == nil {
-		m.registry = tool.NewRegistry()
-	}
-	m.registry.Register(t)
-
-	return true
-}
-
-// hasTool reports whether id was registered via RegisterGatedTool.
-func (m *mockSession) hasTool(id string) bool {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return m.registry != nil && m.registry.Get(id) != nil
-}
-
-func (m *mockSession) PendingExternalCalls() []session.PendingToolCall {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	return append([]session.PendingToolCall(nil), m.pendingCalls...)
-}
-
-func (m *mockSession) ResolvePendingCall(
-	_ context.Context,
-	call session.PendingToolCall,
-	_ string,
-) (session.CallResolution, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	if m.injectErr != nil {
-		return 0, m.injectErr
-	}
-
-	for i, pending := range m.pendingCalls {
-		if pending == call {
-			m.pendingCalls = append(m.pendingCalls[:i], m.pendingCalls[i+1:]...)
-			m.inputEvents = append(m.inputEvents, "resolve:"+call.ID)
-			return session.CallResolutionInserted, nil
-		}
-	}
-
-	return session.CallResolutionAlreadyPresent, nil
-}
-
-func (m *mockSession) InjectToolNotification(_ context.Context, toolName, _ string) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if m.injectErr == nil {
-		m.inputEvents = append(m.inputEvents, "event:"+toolName)
-	}
-
-	return m.injectErr
-}
-
-func (m *mockSession) InjectToolNotificationOnce(
-	ctx context.Context,
-	_, toolName, content string,
-) (bool, error) {
-	err := m.InjectToolNotification(ctx, toolName, content)
-	return err == nil, err
-}
-
-func (m *mockSession) ResetContextAndInject(_ context.Context, _ string) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if m.injectErr == nil {
-		m.inputEvents = append(m.inputEvents, "fresh")
-	}
-
-	return m.injectErr
-}
-
-func (m *mockSession) ResetContextAndInjectOnce(ctx context.Context, _, prompt string) (bool, error) {
-	err := m.ResetContextAndInject(ctx, prompt)
-	return err == nil, err
-}
-func (m *mockSession) ReloadDeliveredCompletion(context.Context) error { return nil }
-func (m *mockSession) HasPendingWork() bool {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return m.pendingWork
-}
-
-func (m *mockSession) Close() {
-	m.mu.Lock()
-	m.closeCalled = true
-	m.mu.Unlock()
-}
-
-func (f *mockFactory) Create(ctx context.Context, opts session.CreateOptions) (session.Service, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.options = append(f.options, opts)
-	if f.createErrOnce != nil {
-		err := f.createErrOnce
-		f.createErrOnce = nil
-
-		return nil, err
-	}
-	// The production session consumes durable input at its loop boundary. These
-	// daemon tests use a minimal mock service, so model that boundary here to keep
-	// the persistence/runner lifecycle realistic without running an LLM loop.
-	pending := false
-	if opts.InputBoundary != nil {
-		if input, err := opts.InputBoundary.Peek(ctx); err == nil && input != nil {
-			pending = true
-		}
-	}
-
-	if f.nextSess != nil {
-		s := f.nextSess
-		f.nextSess = nil
-		if ms, ok := s.(*mockSession); ok {
-			ms.pendingWork = pending
-			ms.boundary = opts.InputBoundary
-			f.sessions = append(f.sessions, ms)
-		}
-		return s, nil
-	}
-
-	s := &mockSession{pendingWork: pending, boundary: opts.InputBoundary}
-	f.sessions = append(f.sessions, s)
-	return s, nil
-}
-
-func newTestManager(t *testing.T) (*svc, *mockFactory, Store) {
+func newTestManager(t *testing.T) (*svc, *mockFactory, *sessionstore.Store) {
 	t.Helper()
-	dbPath := filepath.Join(t.TempDir(), "test.db")
-	db, err := migrate.OpenDB(context.Background(), dbPath)
-	require.NoError(t, err)
-	t.Cleanup(func() { db.Close() })
-	require.NoError(t, migrate.Run(context.Background(), db, dbPath))
-	store := NewStore(db)
-	sessStore := sessionstore.NewStore(db)
-
-	factory := &mockFactory{}
-	mgr, _ := newSvc(
-		context.Background(),
-		factory,
-		store,
-		sessStore,
-		sessStore,
-		sessStore,
-		sessStore,
-		sessStore,
-		sessStore,
-		sessStore,
-		subagent.NewStore(db),
-		subagent.NewTransactions(db),
-		nil,
-		sessStore,
-		nil,
-		nil,
-	)
+	mgr, factory, store, _ := newTestManagerWithSchedule(t)
 	return mgr, factory, store
 }
 
-// newTestManagerWithSchedule wires a real schedule.Service (sharing the manager's
-// DB) instead of the nil used by newTestManager, so kill-path schedule cleanup can
-// be exercised and asserted against directly-inserted schedule rows.
-func newTestManagerWithSchedule(t *testing.T) (*svc, *mockFactory, Store, schedule.Store) {
+func newTestManagerWithSchedule(t *testing.T) (*svc, *mockFactory, *sessionstore.Store, schedule.Store) {
 	t.Helper()
+	restore := coagenthome.Override(t.TempDir())
+	t.Cleanup(restore)
 	dbPath := filepath.Join(t.TempDir(), "test.db")
-	db, err := migrate.OpenDB(context.Background(), dbPath)
+	db, err := migrate.OpenDB(t.Context(), dbPath)
 	require.NoError(t, err)
-	t.Cleanup(func() { db.Close() })
-	require.NoError(t, migrate.Run(context.Background(), db, dbPath))
-	store := NewStore(db)
-	sessStore := sessionstore.NewStore(db)
-	schedStore := schedule.NewStore(db)
-
+	t.Cleanup(func() { _ = db.Close() })
+	require.NoError(t, migrate.Run(t.Context(), db, dbPath))
+	store := sessionstore.NewStore(db)
+	schedules := schedule.NewStore(db, store)
 	factory := &mockFactory{}
-	mgr, _ := newSvc(
-		context.Background(),
-		factory, store, sessStore, sessStore, sessStore,
-		sessStore, sessStore, sessStore, sessStore,
-		subagent.NewStore(db), subagent.NewTransactions(db),
-		nil, sessStore, schedule.NewService(schedStore), nil,
+	cfg := &config.Config{
+		Model:   "fake-model",
+		WorkDir: t.TempDir(),
+		UnifiedConfig: &config.UnifiedConfig{
+			Models: []config.ModelEntry{
+				{ID: "fake-model"},
+				{ID: "test-model"},
+				{ID: "my-model"},
+				{ID: "old-model"},
+				{ID: "new-model"},
+			},
+		},
+	}
+	for index := range cfg.UnifiedConfig.Models {
+		cfg.UnifiedConfig.Models[index].Reasoning = &config.ReasoningSpec{
+			Supported:    true,
+			NativeEffort: true,
+			Efforts:      []string{"low", "medium", "high"},
+		}
+		cfg.UnifiedConfig.Models[index].EffortLevels = []string{"low", "medium", "high"}
+	}
+	in := scriptedBuildInput(t, cfg, store, nil, factory.client)
+	bus := sessionbus.New()
+	mgr, processes := newSvc(
+		t.Context(),
+		in,
+		store,
+		subagent.NewStore(db),
+		subagent.NewTransactions(db, store),
+		budget.New(store),
+		backgroundprocess.NewStore(db, store),
+		progressruntime.New(store, bus),
+		bus,
+		schedule.NewService(schedules, store),
+		"fake-model",
 	)
-	return mgr, factory, store, schedStore
+	mgr.loadModelCatalog(cfg.UnifiedConfig.Models)
+	mgr.buildInput.ProcessService = processes
+	t.Cleanup(func() { mgr.Shutdown(3 * time.Second) })
+	return mgr, factory, store, schedules
 }
 
 func TestManager_Send(t *testing.T) {
@@ -346,7 +169,7 @@ func TestManager_Send(t *testing.T) {
 	factory.nextSess = &mockSession{completeAfter: 200 * time.Millisecond}
 
 	ctx := context.Background()
-	pid := testProject(t, s, "/tmp/test")
+	pid := testProject(t, s, t.TempDir())
 	id, err := mgr.Send(ctx, pid, "hello", "", nil)
 	require.NoError(t, err)
 	assert.NotEmpty(t, id)
@@ -370,15 +193,20 @@ func TestManager_SendToSession_PersistsWhileRunning(t *testing.T) {
 	ch := mgr.PubSub().SubscribeAll()
 
 	ctx := context.Background()
-	pid := testProject(t, s, "/tmp/test")
+	pid := testProject(t, s, t.TempDir())
 	id, err := mgr.Send(ctx, pid, "init", "", nil)
 	require.NoError(t, err)
 
 	// Wait for RunDaemon to start
 	waitForLoopStart(t, ch, id, 3*time.Second)
-	waitForPendingInput(t, mgr.inboxStore, id, false, 3*time.Second)
+	waitForPendingInput(t, mgr.store.(*sessionstore.Store), id, false, 3*time.Second)
 
-	// Verify mock factory created a session and RunDaemon was called
+	require.Eventually(
+		t,
+		func() bool { factory.mu.Lock(); defer factory.mu.Unlock(); return len(factory.sessions) == 1 },
+		time.Second,
+		10*time.Millisecond,
+	)
 	factory.mu.Lock()
 	require.Len(t, factory.sessions, 1, "factory should have created one session")
 	mockSess := factory.sessions[0]
@@ -390,7 +218,7 @@ func TestManager_SendToSession_PersistsWhileRunning(t *testing.T) {
 	require.True(t, ran, "RunDaemon should have been called")
 
 	require.NoError(t, mgr.SendToSession(ctx, id, "do something"))
-	pending, err := mgr.inboxStore.PeekPending(ctx, id)
+	pending, err := mgr.store.PeekPending(ctx, id)
 	require.NoError(t, err)
 	assert.Equal(t, "do something", pending.RawContent)
 
@@ -401,7 +229,7 @@ func TestManager_SendDuplicateWorkdir(t *testing.T) {
 	mgr, _, s := newTestManager(t)
 
 	ctx := context.Background()
-	pid := testProject(t, s, "/tmp/test")
+	pid := testProject(t, s, t.TempDir())
 	id1, err := mgr.Send(ctx, pid, "init", "", nil)
 	require.NoError(t, err)
 
@@ -417,7 +245,7 @@ func TestManager_InputReceivedPubSub(t *testing.T) {
 	mgr, _, s := newTestManager(t)
 
 	ctx := context.Background()
-	pid := testProject(t, s, "/tmp/test-input")
+	pid := testProject(t, s, t.TempDir())
 	id, err := mgr.Send(ctx, pid, "init", "", nil)
 	require.NoError(t, err)
 
@@ -455,7 +283,7 @@ func waitForLoopStart(
 
 func waitForPendingInput(
 	t *testing.T,
-	store sessionstore.InboxStore,
+	store *sessionstore.Store,
 	sessionID int64,
 	want bool,
 	timeout time.Duration,
@@ -500,10 +328,10 @@ func TestManager_Shutdown(t *testing.T) {
 	mgr, _, s := newTestManager(t)
 
 	ctx := context.Background()
-	pidA := testProject(t, s, "/tmp/a")
+	pidA := testProject(t, s, t.TempDir())
 	_, err := mgr.Send(ctx, pidA, "init", "", nil)
 	require.NoError(t, err)
-	pidB := testProject(t, s, "/tmp/b")
+	pidB := testProject(t, s, t.TempDir())
 	_, err = mgr.Send(ctx, pidB, "init", "", nil)
 	require.NoError(t, err)
 
@@ -525,7 +353,7 @@ func TestManager_NormalCompletion(t *testing.T) {
 	factory.nextSess = sess
 
 	ctx := context.Background()
-	pid := testProject(t, s, "/tmp/normal")
+	pid := testProject(t, s, t.TempDir())
 	id, err := mgr.Send(ctx, pid, "hi", "", nil)
 	require.NoError(t, err)
 
@@ -546,7 +374,7 @@ func TestManager_ErrorPath(t *testing.T) {
 	factory.nextSess = sess
 
 	ctx := context.Background()
-	pid := testProject(t, s, "/tmp/error")
+	pid := testProject(t, s, t.TempDir())
 	id, err := mgr.Send(ctx, pid, "init", "", nil)
 	require.NoError(t, err)
 
@@ -586,7 +414,7 @@ func TestManager_GracefulKill(t *testing.T) {
 	factory.nextSess = sess
 
 	ctx := context.Background()
-	pid := testProject(t, s, "/tmp/cancel")
+	pid := testProject(t, s, t.TempDir())
 	id, err := mgr.Send(ctx, pid, "init", "", nil)
 	require.NoError(t, err)
 
@@ -612,7 +440,7 @@ func TestManager_SendCreatesNewSessionAfterCompletion(t *testing.T) {
 	factory.nextSess = &mockSession{completeAfter: 50 * time.Millisecond}
 
 	ctx := context.Background()
-	pid := testProject(t, s, "/tmp/resume")
+	pid := testProject(t, s, t.TempDir())
 	id1, err := mgr.Send(ctx, pid, "init", "", nil)
 	require.NoError(t, err)
 
@@ -634,18 +462,18 @@ func TestManager_SendToSession_AlreadyRunningUsesDurableInbox(t *testing.T) {
 	ch := mgr.PubSub().SubscribeAll()
 
 	ctx := context.Background()
-	pid := testProject(t, s, "/tmp/already-running")
+	pid := testProject(t, s, t.TempDir())
 	id, err := mgr.Send(ctx, pid, "init", "", nil)
 	require.NoError(t, err)
 
 	waitForLoopStart(t, ch, id, 3*time.Second)
-	waitForPendingInput(t, mgr.inboxStore, id, false, 3*time.Second)
+	waitForPendingInput(t, mgr.store.(*sessionstore.Store), id, false, 3*time.Second)
 
 	// SendToSession on an already-running session — should route to inbox
 	err = mgr.SendToSession(ctx, id, "steer message")
 	require.NoError(t, err)
 
-	pending, err := mgr.inboxStore.PeekPending(ctx, id)
+	pending, err := mgr.store.PeekPending(ctx, id)
 	require.NoError(t, err)
 	assert.Equal(t, "steer message", pending.RawContent)
 
@@ -666,7 +494,7 @@ func TestManager_SecondSendCreatesNewLoop(t *testing.T) {
 	factory.nextSess = &mockSession{completeAfter: 50 * time.Millisecond}
 
 	ctx := context.Background()
-	pid := testProject(t, s, "/tmp/loop-restart")
+	pid := testProject(t, s, t.TempDir())
 	id1, err := mgr.Send(ctx, pid, "first", "", nil)
 	require.NoError(t, err)
 
@@ -679,6 +507,12 @@ func TestManager_SecondSendCreatesNewLoop(t *testing.T) {
 	assert.NotEqual(t, id1, id2, "should create new session")
 
 	waitForLoopStart(t, ch, id2, 3*time.Second)
+	require.Eventually(t, func() bool {
+		factory.mu.Lock()
+		defer factory.mu.Unlock()
+
+		return len(factory.sessions) >= 2
+	}, time.Second, 10*time.Millisecond)
 
 	factory.mu.Lock()
 	sessCount := len(factory.sessions)
@@ -700,7 +534,7 @@ func TestManager_SendAlwaysCreatesNew(t *testing.T) {
 	factory.nextSess = &mockSession{completeAfter: 100 * time.Millisecond}
 
 	ctx := context.Background()
-	pid := testProject(t, s, "/tmp/force")
+	pid := testProject(t, s, t.TempDir())
 	id1, err := mgr.Send(ctx, pid, "init", "", nil)
 	require.NoError(t, err)
 
@@ -730,7 +564,7 @@ func TestManager_Kill_GracefulRunningSession(t *testing.T) {
 	factory.nextSess = &mockSession{}
 
 	ctx := context.Background()
-	pid := testProject(t, s, "/tmp/kill-graceful")
+	pid := testProject(t, s, t.TempDir())
 	id, err := mgr.Send(ctx, pid, "init", "", nil)
 	require.NoError(t, err)
 
@@ -743,7 +577,7 @@ func TestManager_Kill_GracefulRunningSession(t *testing.T) {
 	waitForState(t, ch, id, controllerapi.StateIdle, 3*time.Second)
 
 	// Session must be soft-deleted (killed_at set, but still in DB)
-	rec, err := mgr.sessionStore.GetSession(context.Background(), id)
+	rec, err := mgr.store.GetSession(context.Background(), id)
 	require.NoError(t, err)
 	assert.NotNil(t, rec.KilledAt, "killed session should have killed_at set")
 
@@ -758,7 +592,7 @@ func TestManager_Kill_NonRunningSession(t *testing.T) {
 	factory.nextSess = &mockSession{completeAfter: 50 * time.Millisecond}
 
 	ctx := context.Background()
-	pid := testProject(t, s, "/tmp/kill-stopped")
+	pid := testProject(t, s, t.TempDir())
 	id, err := mgr.Send(ctx, pid, "init", "", nil)
 	require.NoError(t, err)
 
@@ -768,7 +602,7 @@ func TestManager_Kill_NonRunningSession(t *testing.T) {
 	err = mgr.Kill(context.Background(), id)
 	require.NoError(t, err)
 
-	rec, err := mgr.sessionStore.GetSession(context.Background(), id)
+	rec, err := mgr.store.GetSession(context.Background(), id)
 	require.NoError(t, err)
 	assert.NotNil(t, rec.KilledAt, "killed non-running session should have killed_at set")
 }
@@ -783,7 +617,7 @@ func TestManager_Kill_RemovesSchedules(t *testing.T) {
 	factory.nextSess = &mockSession{completeAfter: 50 * time.Millisecond}
 
 	ctx := context.Background()
-	pid := testProject(t, s, "/tmp/kill-schedules")
+	pid := testProject(t, s, t.TempDir())
 	id, err := mgr.Send(ctx, pid, "init", "", nil)
 	require.NoError(t, err)
 
@@ -821,7 +655,7 @@ func TestManager_StopCancelsPendingSleepButPreservesScheduledWork(t *testing.T) 
 
 	factory.nextSess = &mockSession{completeAfter: 50 * time.Millisecond}
 	ctx := context.Background()
-	projectID := testProject(t, projects, "/tmp/stop-schedules")
+	projectID := testProject(t, projects, t.TempDir())
 	sessionID, err := mgr.Send(ctx, projectID, "init", "", nil)
 	require.NoError(t, err)
 	waitForState(t, events, sessionID, controllerapi.StateIdle, 3*time.Second)
@@ -831,14 +665,15 @@ func TestManager_StopCancelsPendingSleepButPreservesScheduledWork(t *testing.T) 
 	require.NoError(t, err)
 	_, err = schedStore.AddSchedule(ctx, sessionID, "0 9 * * *", nil, "recurring work", false)
 	require.NoError(t, err)
-	_, err = schedule.NewService(schedStore).AddSleep(
+	_, err = schedule.NewService(schedStore, mgr.buildInput.Store.(*sessionstore.Store)).AddSleep(
 		ctx, sessionID, "sleep-call", time.Now().Add(2*time.Hour).UTC(), "wake",
 	)
 	require.NoError(t, err)
 
 	require.NoError(t, mgr.Stop(ctx, sessionID, 0))
 
-	pendingSleeps, err := schedule.NewService(schedStore).PendingSleeps(ctx, sessionID)
+	pendingSleeps, err := schedule.NewService(schedStore, mgr.buildInput.Store.(*sessionstore.Store)).
+		PendingSleeps(ctx, sessionID)
 	require.NoError(t, err)
 	assert.Empty(t, pendingSleeps)
 
@@ -861,7 +696,7 @@ func TestManager_SetModel_IdleSession(t *testing.T) {
 	factory.nextSess = &mockSession{completeAfter: 50 * time.Millisecond}
 
 	ctx := context.Background()
-	pid := testProject(t, s, "/tmp/setmodel-idle")
+	pid := testProject(t, s, t.TempDir())
 	id, err := mgr.Send(ctx, pid, "init", "old-model", nil)
 	require.NoError(t, err)
 
@@ -873,7 +708,7 @@ func TestManager_SetModel_IdleSession(t *testing.T) {
 	require.NoError(t, err)
 
 	// Verify the model was persisted in SQLite
-	rec, err := mgr.sessionStore.GetSession(context.Background(), id)
+	rec, err := mgr.store.GetSession(context.Background(), id)
 	require.NoError(t, err)
 	assert.Equal(t, "new-model", rec.Model)
 	assert.Equal(t, "high", rec.ReasoningLevel)
@@ -886,7 +721,7 @@ func TestManager_SendToSession_RejectsKilledSession(t *testing.T) {
 	factory.nextSess = &mockSession{completeAfter: 50 * time.Millisecond}
 
 	ctx := context.Background()
-	pid := testProject(t, s, "/tmp/reject-killed")
+	pid := testProject(t, s, t.TempDir())
 	id, err := mgr.Send(ctx, pid, "init", "", nil)
 	require.NoError(t, err)
 
@@ -914,7 +749,7 @@ func TestManager_Clear(t *testing.T) {
 	factory.nextSess = &mockSession{completeAfter: 50 * time.Millisecond}
 
 	ctx := context.Background()
-	pid := testProject(t, s, "/tmp/clear")
+	pid := testProject(t, s, t.TempDir())
 	id, err := mgr.Send(ctx, pid, "init", "test-model", map[string]any{
 		"channel":                               "cli",
 		"chat_id":                               float64(42),
@@ -936,7 +771,7 @@ func TestManager_Clear(t *testing.T) {
 	assert.NotEqual(t, id, newID, "new session should have a different ID")
 
 	// New session should exist with same attributes, model, and reasoning level
-	newRec, err := mgr.sessionStore.GetSession(context.Background(), newID)
+	newRec, err := mgr.store.GetSession(context.Background(), newID)
 	require.NoError(t, err)
 	assert.Nil(t, newRec.KilledAt, "new session should not be killed")
 	assert.Equal(t, "test-model", newRec.Model)
@@ -946,7 +781,7 @@ func TestManager_Clear(t *testing.T) {
 	assert.Equal(t, "cli", newRec.Attributes[controllerapi.SessionAttributeManagerID])
 
 	// Old session should be killed (Kill ran synchronously inside Clear)
-	oldRec, err := mgr.sessionStore.GetSession(context.Background(), id)
+	oldRec, err := mgr.store.GetSession(context.Background(), id)
 	require.NoError(t, err)
 	assert.NotNil(t, oldRec.KilledAt, "old session should be killed")
 
@@ -970,14 +805,14 @@ func TestManager_Clear(t *testing.T) {
 func TestManager_SetAttributesCannotRemoveOrRebindManagerOwner(t *testing.T) {
 	mgr, _, store := newTestManager(t)
 	ctx := context.Background()
-	pid := testProject(t, store, "/tmp/manager-owner-immutable")
-	rec, err := mgr.sessionStore.CreateSession(ctx, pid, "test-model", "", map[string]any{
+	pid := testProject(t, store, t.TempDir())
+	rec, err := mgr.store.CreateSession(ctx, pid, "test-model", "", map[string]any{
 		controllerapi.SessionAttributeManagerID: "alpha",
 	})
 	require.NoError(t, err)
 
 	require.NoError(t, mgr.SetAttributes(ctx, rec.ID, map[string]any{"topic": float64(42)}))
-	stored, err := mgr.sessionStore.GetSession(ctx, rec.ID)
+	stored, err := mgr.store.GetSession(ctx, rec.ID)
 	require.NoError(t, err)
 	assert.Equal(t, "alpha", stored.Attributes[controllerapi.SessionAttributeManagerID])
 	assert.InDelta(t, float64(42), stored.Attributes["topic"], 0)
@@ -986,7 +821,7 @@ func TestManager_SetAttributesCannotRemoveOrRebindManagerOwner(t *testing.T) {
 		controllerapi.SessionAttributeManagerID: "beta",
 	})
 	require.ErrorContains(t, err, `belongs to manager "alpha"`)
-	stored, err = mgr.sessionStore.GetSession(ctx, rec.ID)
+	stored, err = mgr.store.GetSession(ctx, rec.ID)
 	require.NoError(t, err)
 	assert.Equal(t, "alpha", stored.Attributes[controllerapi.SessionAttributeManagerID])
 }
@@ -994,8 +829,8 @@ func TestManager_SetAttributesCannotRemoveOrRebindManagerOwner(t *testing.T) {
 func TestManager_ConcurrentManagerClaimsHaveExactlyOneWinner(t *testing.T) {
 	mgr, _, store := newTestManager(t)
 	ctx := context.Background()
-	pid := testProject(t, store, "/tmp/concurrent-manager-claim")
-	rec, err := mgr.sessionStore.CreateSession(ctx, pid, "test-model", "", nil)
+	pid := testProject(t, store, t.TempDir())
+	rec, err := mgr.store.CreateSession(ctx, pid, "test-model", "", nil)
 	require.NoError(t, err)
 
 	start := make(chan struct{})
@@ -1019,7 +854,7 @@ func TestManager_ConcurrentManagerClaimsHaveExactlyOneWinner(t *testing.T) {
 	}
 	assert.Equal(t, 1, successes)
 
-	stored, err := mgr.sessionStore.GetSession(ctx, rec.ID)
+	stored, err := mgr.store.GetSession(ctx, rec.ID)
 	require.NoError(t, err)
 	assert.Contains(t, []string{"alpha", "beta"}, stored.Attributes[controllerapi.SessionAttributeManagerID])
 }
@@ -1027,15 +862,15 @@ func TestManager_ConcurrentManagerClaimsHaveExactlyOneWinner(t *testing.T) {
 func TestManager_ClearRejectsAConcurrentLateOwnerClaim(t *testing.T) {
 	mgr, _, store := newTestManager(t)
 	ctx := context.Background()
-	pid := testProject(t, store, "/tmp/clear-concurrent-manager-claim")
-	rec, err := mgr.sessionStore.CreateSession(ctx, pid, "test-model", "", nil)
+	pid := testProject(t, store, t.TempDir())
+	rec, err := mgr.store.CreateSession(ctx, pid, "test-model", "", nil)
 	require.NoError(t, err)
 
 	blocking := &blockingCreateSessionStore{
-		OrchestrationStore: mgr.sessionStore,
-		entered:            make(chan struct{}), release: make(chan struct{}),
+		Store:   mgr.store,
+		entered: make(chan struct{}), release: make(chan struct{}),
 	}
-	mgr.sessionStore = blocking
+	mgr.store = blocking
 	clearResult := make(chan struct {
 		id  int64
 		err error
@@ -1068,7 +903,7 @@ func TestManager_ClearRejectsAConcurrentLateOwnerClaim(t *testing.T) {
 	require.NoError(t, cleared.err)
 	require.ErrorContains(t, <-claimResult, "cannot acquire a manager owner")
 
-	replacement, err := mgr.sessionStore.GetSession(ctx, cleared.id)
+	replacement, err := mgr.store.GetSession(ctx, cleared.id)
 	require.NoError(t, err)
 	assert.NotContains(t, replacement.Attributes, controllerapi.SessionAttributeManagerID)
 }
@@ -1081,7 +916,7 @@ func TestManager_ClearWhileRunning(t *testing.T) {
 	factory.nextSess = &mockSession{}
 
 	ctx := context.Background()
-	pid := testProject(t, s, "/tmp/clear-running")
+	pid := testProject(t, s, t.TempDir())
 	id, err := mgr.Send(ctx, pid, "init", "my-model", map[string]any{"lang": "en"})
 	require.NoError(t, err)
 
@@ -1093,7 +928,7 @@ func TestManager_ClearWhileRunning(t *testing.T) {
 	assert.NotEqual(t, id, newID)
 
 	// New session available
-	newRec, err := mgr.sessionStore.GetSession(context.Background(), newID)
+	newRec, err := mgr.store.GetSession(context.Background(), newID)
 	require.NoError(t, err)
 	assert.Nil(t, newRec.KilledAt)
 	assert.Equal(t, "my-model", newRec.Model)
@@ -1101,7 +936,7 @@ func TestManager_ClearWhileRunning(t *testing.T) {
 
 	// Runner stopped, old session killed
 	assert.False(t, mgr.HasActiveLoop(id))
-	oldRec, err := mgr.sessionStore.GetSession(context.Background(), id)
+	oldRec, err := mgr.store.GetSession(context.Background(), id)
 	require.NoError(t, err)
 	assert.NotNil(t, oldRec.KilledAt)
 
@@ -1129,21 +964,21 @@ func TestManager_KillTerminatingOnStartup(t *testing.T) {
 	factory.nextSess = &mockSession{completeAfter: 50 * time.Millisecond}
 
 	ctx := context.Background()
-	pid := testProject(t, s, "/tmp/clear-restart")
+	pid := testProject(t, s, t.TempDir())
 	id, err := mgr.Send(ctx, pid, "init", "", nil)
 	require.NoError(t, err)
 
 	waitForState(t, ch, id, controllerapi.StateIdle, 3*time.Second)
 
 	// Simulate: Clear set terminating but daemon died before Kill completed
-	require.NoError(t, mgr.sessionStore.UpdateSessionStatus(
+	require.NoError(t, mgr.store.UpdateSessionStatus(
 		context.Background(), id, sessionstore.SessionStatusTerminating,
 	))
 
 	// Simulate daemon restart — New() calls KillTerminatingSessions
-	require.NoError(t, mgr.sessionStore.KillTerminatingSessions(context.Background()))
+	require.NoError(t, mgr.store.(*sessionstore.Store).KillTerminatingSessions(context.Background()))
 
-	rec, err := mgr.sessionStore.GetSession(context.Background(), id)
+	rec, err := mgr.store.GetSession(context.Background(), id)
 	require.NoError(t, err)
 	assert.NotNil(t, rec.KilledAt, "terminating session should be killed on startup")
 }
@@ -1152,92 +987,17 @@ func TestManager_KillTerminatingOnStartup(t *testing.T) {
 // Control-plane tool gating
 // ---------------------------------------------------------------------------
 
-// TestRegisterControlPlaneTools_RespectsAgentTypeAllowlist: dynamic tools are
-// re-checked against the session allowlist, and schedule has the additional
-// root-session boundary.
-func TestRegisterControlPlaneTools_RespectsAgentTypeAllowlist(t *testing.T) {
-	mgr, _, _, _ := newTestManagerWithSchedule(t)
-	ctx := context.Background()
-
-	gatedIDs := []string{"schedule", "sleep", "task", "get_subagent_result", "send_to_subagent"}
-
-	explore := &mockSession{agentType: registry.AgentTypeExplore}
-	mgr.registerScheduleTools(ctx, &sessionstore.SessionRecord{ID: 1, ParentID: 10}, explore)
-	mgr.registerSubagentTools(ctx, 1, explore)
-
-	for _, id := range gatedIDs {
-		assert.False(t, explore.hasTool(id), "explore session must not gain %q", id)
-	}
-
-	build := &mockSession{agentType: registry.AgentTypeBuild}
-	mgr.registerScheduleTools(ctx, &sessionstore.SessionRecord{ID: 2}, build)
-	mgr.registerSubagentTools(ctx, 2, build)
-
-	for _, id := range gatedIDs {
-		assert.True(t, build.hasTool(id), "build session must keep %q", id)
-	}
-
-	general := &mockSession{agentType: registry.AgentTypeGeneral}
-	mgr.registerScheduleTools(ctx, &sessionstore.SessionRecord{ID: 3, ParentID: 2}, general)
-	assert.False(t, general.hasTool(tool.IDSchedule))
-	assert.True(t, general.hasTool(tool.IDSleep))
-}
-
-func TestDeliverScheduleToSubagentDoesNotConstructSession(t *testing.T) {
-	tests := []struct {
-		name    string
-		deliver func(*svc, context.Context, int64) (bool, error)
-	}{
-		{
-			name: "normal",
-			deliver: func(mgr *svc, ctx context.Context, sessionID int64) (bool, error) {
-				return mgr.DeliverScheduleTick(ctx, sessionID, "schedule:legacy:normal", "legacy task")
-			},
-		},
-		{
-			name: "fresh",
-			deliver: func(mgr *svc, ctx context.Context, sessionID int64) (bool, error) {
-				return mgr.DeliverFreshSchedule(ctx, sessionID, "schedule:legacy:fresh", "legacy task")
-			},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			mgr, factory, projects, _ := newTestManagerWithSchedule(t)
-			ctx := context.Background()
-			projectID := testProject(t, projects, t.TempDir())
-
-			parent, err := mgr.sessionStore.CreateSession(ctx, projectID, "fake-model", "", nil)
-			require.NoError(t, err)
-			childID, err := mgr.sessionStore.CreateSubagentSession(
-				ctx, projectID, parent.ID, parent.ID, "general", "fake-model", "",
-			)
-			require.NoError(t, err)
-			require.NoError(t, mgr.sessionStore.UpdateSessionStatus(ctx, childID, sessionstore.SessionStatusCompleted))
-
-			applied, err := tt.deliver(mgr, ctx, childID)
-			require.NoError(t, err)
-			assert.False(t, applied)
-
-			factory.mu.Lock()
-			defer factory.mu.Unlock()
-			assert.Empty(t, factory.sessions, "legacy subagent delivery must not construct a session")
-		})
-	}
-}
-
 func TestEnsureRunner_EmptyRootPublishesCreatedAndIdle(t *testing.T) {
 	mgr, _, projects := newTestManager(t)
 	ctx := context.Background()
 	workDir := t.TempDir()
 	projectID := testProject(t, projects, workDir)
-	rec, err := mgr.sessionStore.CreateSession(ctx, projectID, "fake-model", "", nil)
+	rec, err := mgr.store.CreateSession(ctx, projectID, "fake-model", "", nil)
 	require.NoError(t, err)
 	notifications := mgr.PubSub().SubscribeAll()
 	defer mgr.PubSub().UnsubscribeAll(notifications)
 
-	require.NoError(t, mgr.ensureRunner(ctx, rec.ID, workDir, projectID, nil))
+	require.NoError(t, mgr.ensureRunner(ctx, rec.ID, workDir, projectID))
 
 	created := requireNotification(t, notifications)
 	assert.Equal(t, sessionevent.NotifySessionCreated, created.Notification.Type)

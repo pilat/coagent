@@ -10,6 +10,7 @@ import (
 
 	"github.com/pilat/coagent/internal/config"
 	"github.com/pilat/coagent/internal/controllerapi"
+	"github.com/pilat/coagent/internal/llm"
 	"github.com/pilat/coagent/internal/migrate"
 	"github.com/pilat/coagent/internal/sessionstore"
 	"github.com/pilat/coagent/internal/subagent"
@@ -27,14 +28,24 @@ func TestManagementRoot_ThreeManagersShareProjectKeepOwnership(t *testing.T) {
 	t.Cleanup(func() { _ = db.Close() })
 	require.NoError(t, migrate.Run(ctx, db, dbPath))
 
-	projects := NewStore(db)
 	sessions := sessionstore.NewStore(db)
 	cfg := &config.Config{UnifiedConfig: &config.UnifiedConfig{ProjectsRoot: filepath.Join(root, "projects")}}
-	svc, _ := newSvc(
-		ctx, &mockFactory{}, projects, sessions, sessions, sessions,
-		sessions, sessions, sessions, sessions,
-		subagent.NewStore(db), subagent.NewTransactions(db),
-		nil, nil, nil, func() string { return "fake-model" },
+	svc, _ := newScenarioDaemon(
+		ctx,
+		scriptedBuildInput(
+			t,
+			&config.Config{Model: "fake-model"},
+			sessions,
+			nil,
+			func(*config.Config) (llm.Client, error) { return &scriptedLLM{respond: trivialRespond}, nil },
+		),
+		sessions,
+		subagent.NewStore(db),
+		subagent.NewTransactions(db, sessions),
+		nil,
+		nil,
+		func() string { return "fake-model" },
+		db,
 	)
 	factory := newTestController(svc, cfg, nil, nil)
 
@@ -91,14 +102,24 @@ func TestManagementRoot_RestartResumesSameRootAndPatchesTopic(t *testing.T) {
 	t.Cleanup(func() { _ = db.Close() })
 	require.NoError(t, migrate.Run(ctx, db, dbPath))
 
-	projects := NewStore(db)
 	sessions := sessionstore.NewStore(db)
 	cfg := &config.Config{UnifiedConfig: &config.UnifiedConfig{ProjectsRoot: filepath.Join(root, "projects")}}
-	svc, _ := newSvc(
-		ctx, &mockFactory{}, projects, sessions, sessions, sessions,
-		sessions, sessions, sessions, sessions,
-		subagent.NewStore(db), subagent.NewTransactions(db),
-		nil, nil, nil, func() string { return "fake-model" },
+	svc, _ := newScenarioDaemon(
+		ctx,
+		scriptedBuildInput(
+			t,
+			&config.Config{Model: "fake-model"},
+			sessions,
+			nil,
+			func(*config.Config) (llm.Client, error) { return &scriptedLLM{respond: trivialRespond}, nil },
+		),
+		sessions,
+		subagent.NewStore(db),
+		subagent.NewTransactions(db, sessions),
+		nil,
+		nil,
+		func() string { return "fake-model" },
+		db,
 	)
 	factory := newTestController(svc, cfg, nil, nil)
 

@@ -1,18 +1,18 @@
 package main
 
 import (
-	"context"
 	"errors"
 	"os"
 	"path/filepath"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/pilat/coagent/internal/coagenthome"
+	"github.com/pilat/coagent/internal/configapply"
 	"github.com/pilat/coagent/internal/configops"
+	"github.com/pilat/coagent/internal/migrate"
 	"github.com/pilat/coagent/internal/sessionstore"
 	"github.com/pilat/coagent/internal/tool"
 )
@@ -28,40 +28,6 @@ models:
     - id: claude-opus-5
       provider: work
 `
-
-type stubVerdictSender struct {
-	calls   int
-	consume int
-	err     error
-	// rec is what GetSession reports; a nil rec with no lookup error is a
-	// session the store no longer has.
-	rec       *sessionstore.SessionRecord
-	lookupErr error
-}
-
-func (s *stubVerdictSender) DeliverPendingCallResult(
-	_ context.Context, _ int64, _, _, _ string,
-) (bool, error) {
-	s.calls++
-
-	return s.err == nil, s.err
-}
-
-func (s *stubVerdictSender) ConsumeConfigEditActivation(_ context.Context, _ int64, _ string) {
-	s.consume++
-}
-
-func (s *stubVerdictSender) GetSession(_ context.Context, _ int64) (*sessionstore.SessionRecord, error) {
-	if s.lookupErr != nil {
-		return nil, s.lookupErr
-	}
-
-	if s.rec != nil {
-		return s.rec, nil
-	}
-
-	return &sessionstore.SessionRecord{ID: 7, Status: sessionstore.SessionStatusActive}, nil
-}
 
 // commitMarker performs a real apply, leaving the marker a boot would find.
 func commitMarker(t *testing.T, sessionID int64) (configops.Service, string) {
@@ -87,163 +53,129 @@ func commitMarker(t *testing.T, sessionID int64) (configops.Service, string) {
 	return ops, filepath.Join(dir, coagenthome.PendingApplyFileName)
 }
 
-// The marker is the only record that a session is suspended on a config call,
-// so it outlives the boot that resolved it and dies only with the delivery.
+func verdictStore(t *testing.T) *sessionstore.Store {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "verdict.db")
+	db, err := migrate.OpenDB(t.Context(), path)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+	require.NoError(t, migrate.Run(t.Context(), db, path))
+	_, err = db.ExecContext(t.Context(), "INSERT INTO projects (id, work_dir, name) VALUES (1, ?, 'p')", t.TempDir())
+	require.NoError(t, err)
+	_, err = db.ExecContext(
+		t.Context(),
+		"INSERT INTO sessions (id, project_id, model, agent_type) VALUES (7, 1, 'model', 'build')",
+	)
+	require.NoError(t, err)
+	return sessionstore.NewStore(db)
+}
+
 func TestDeliverApplyVerdict_MarkerClearedOnlyAfterDelivery(t *testing.T) {
 	tests := []struct {
-		name        string
-		sessionID   int64
-		deliverErr  error
-		wantCalls   int
-		wantCleared bool
+		name string
+		id   int64
+		fail bool
 	}{
-		{
-			name:        "sessionless marker has nobody to tell",
-			sessionID:   0,
-			wantCalls:   0,
-			wantCleared: true,
-		},
-		{
-			name:        "delivered verdict acknowledges the marker",
-			sessionID:   7,
-			wantCalls:   1,
-			wantCleared: true,
-		},
-		{
-			name:        "failed delivery keeps the verdict replayable",
-			sessionID:   7,
-			deliverErr:  errors.New("session busy"),
-			wantCalls:   1,
-			wantCleared: false,
-		},
+		{"sessionless marker has nobody to tell", 0, false},
+		{"delivered verdict acknowledges the marker", 7, false},
+		{"failed delivery keeps the verdict replayable", 7, true},
 	}
-
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			ops, markerPath := commitMarker(t, tt.sessionID)
-
+			ops, marker := commitMarker(t, tt.id)
+			store := verdictStore(t)
 			pending, err := ops.LoadPending()
 			require.NoError(t, err)
-			require.NotNil(t, pending)
-
 			outcome, err := ops.ResolvePending(*pending, nil)
 			require.NoError(t, err)
-			require.FileExists(t, markerPath, "resolving must not consume the marker")
-
-			sender := &stubVerdictSender{err: tt.deliverErr}
-			deliverApplyVerdict(context.Background(), sender, ops, &outcome)
-
-			assert.Equal(t, tt.wantCalls, sender.calls)
-
-			if tt.wantCleared {
-				assert.NoFileExists(t, markerPath)
-				return
+			require.FileExists(t, marker)
+			if tt.fail {
+				require.NoError(t, store.UpdateSessionStatus(t.Context(), 7, sessionstore.SessionStatusTerminating))
 			}
-
-			assert.FileExists(t, markerPath, "the next boot must still find it")
+			deliverApplyVerdict(t.Context(), store, configapply.New(ops, store), ops, &outcome)
+			if tt.fail {
+				require.FileExists(t, marker)
+			} else {
+				assert.NoFileExists(t, marker)
+				if tt.id != 0 {
+					rows, err := store.ListPending(t.Context(), tt.id)
+					require.NoError(t, err)
+					require.Len(t, rows, 1)
+					assert.Equal(t, sessionstore.InputSourceCallResult, rows[0].Source)
+					assert.Equal(t, "c1", rows[0].Attributes["call_id"])
+					assert.Equal(t, tool.IDConfigEdit, rows[0].Attributes["tool_id"])
+					assert.Contains(t, rows[0].RawContent, "Config applied:")
+				}
+			}
 		})
 	}
 }
 
-// A verdict nobody can ever take must not keep the marker: a later boot re-arms
-// it, and the first unrelated boot failure rolls back a config live for days.
 func TestDeliverApplyVerdict_UndeliverableVerdictConsumesTheMarker(t *testing.T) {
-	killedAt := time.Now()
-
-	tests := []struct {
-		name string
-		rec  *sessionstore.SessionRecord
-		err  error
-	}{
-		{name: "killed", rec: &sessionstore.SessionRecord{ID: 7, KilledAt: &killedAt}},
-		{name: "stopped", rec: &sessionstore.SessionRecord{ID: 7, Status: sessionstore.SessionStatusStopped}},
-		{name: "stopping", rec: &sessionstore.SessionRecord{ID: 7, Status: sessionstore.SessionStatusStopping}},
-		{name: "gone from the store", err: errors.New("session 7 not found")},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			ops, markerPath := commitMarker(t, 7)
-
+	for _, status := range []sessionstore.SessionStatus{sessionstore.SessionStatusKilled, sessionstore.SessionStatusStopped, sessionstore.SessionStatusStopping} {
+		t.Run(string(status), func(t *testing.T) {
+			ops, marker := commitMarker(t, 7)
+			store := verdictStore(t)
+			require.NoError(t, store.UpdateSessionStatus(t.Context(), 7, status))
 			pending, err := ops.LoadPending()
 			require.NoError(t, err)
-
 			outcome, err := ops.ResolvePending(*pending, nil)
 			require.NoError(t, err)
-
 			before, err := os.ReadFile(ops.ConfigPath())
 			require.NoError(t, err)
-
-			sender := &stubVerdictSender{
-				err: errors.New("session 7 is killed"), rec: tt.rec, lookupErr: tt.err,
-			}
-			deliverApplyVerdict(context.Background(), sender, ops, &outcome)
-
-			assert.Equal(t, 1, sender.calls, "delivery is attempted before it is written off")
-			assert.NoFileExists(t, markerPath, "an unanswerable verdict must not arm the next boot")
-
-			// The boot a week later: no marker, so an unrelated failure has nothing
-			// to roll the config back to.
+			deliverApplyVerdict(t.Context(), store, configapply.New(ops, store), ops, &outcome)
+			assert.NoFileExists(t, marker)
 			replay, err := ops.LoadPending()
 			require.NoError(t, err)
 			assert.Nil(t, replay)
-
 			after, err := os.ReadFile(ops.ConfigPath())
 			require.NoError(t, err)
-			assert.Equal(t, string(before), string(after))
+			assert.Equal(t, before, after)
 		})
 	}
+	t.Run("gone from the store", func(t *testing.T) {
+		ops, marker := commitMarker(t, 99)
+		store := verdictStore(t)
+		pending, err := ops.LoadPending()
+		require.NoError(t, err)
+		outcome, err := ops.ResolvePending(*pending, nil)
+		require.NoError(t, err)
+		deliverApplyVerdict(t.Context(), store, configapply.New(ops, store), ops, &outcome)
+		assert.NoFileExists(t, marker)
+	})
 }
 
-// A rolled-back unattended apply has no session to receive the verdict.
 func TestDeliverApplyVerdict_RolledBackUnattendedApplyHasNobodyToTell(t *testing.T) {
-	ops, markerPath := commitMarker(t, 0)
-
+	ops, marker := commitMarker(t, 0)
+	store := verdictStore(t)
 	pending, err := ops.LoadPending()
 	require.NoError(t, err)
-	require.NotNil(t, pending)
-
 	outcome, err := ops.ResolvePending(*pending, errors.New("model catalog: unknown model"))
 	require.NoError(t, err)
 	require.True(t, outcome.RolledBack)
-	require.True(t, outcome.Verdict.Failed())
-
-	sender := &stubVerdictSender{}
-	deliverApplyVerdict(context.Background(), sender, ops, &outcome)
-
-	assert.Zero(t, sender.calls, "no session is owed this verdict")
-	assert.NoFileExists(t, markerPath, "a marker nobody can consume must not arm the next boot")
-
+	deliverApplyVerdict(t.Context(), store, configapply.New(ops, store), ops, &outcome)
+	assert.NoFileExists(t, marker)
 	body, err := os.ReadFile(ops.ConfigPath())
 	require.NoError(t, err)
-	assert.Equal(t, verdictConfig, string(body), "the change is gone, and nothing on this path says so")
+	assert.Equal(t, verdictConfig, string(body))
 }
 
-// A retry after a failed delivery clears the marker, so a transient failure
-// costs a boot rather than the session.
 func TestDeliverApplyVerdict_RetryAfterFailureClearsTheMarker(t *testing.T) {
-	ops, markerPath := commitMarker(t, 7)
-
+	ops, marker := commitMarker(t, 7)
+	store := verdictStore(t)
+	applier := configapply.New(ops, store)
 	pending, err := ops.LoadPending()
 	require.NoError(t, err)
-
 	outcome, err := ops.ResolvePending(*pending, nil)
 	require.NoError(t, err)
-
-	deliverApplyVerdict(context.Background(), &stubVerdictSender{err: errors.New("boom")}, ops, &outcome)
-	require.FileExists(t, markerPath)
-
-	replay, err := ops.LoadPending()
+	require.NoError(t, store.UpdateSessionStatus(t.Context(), 7, sessionstore.SessionStatusTerminating))
+	deliverApplyVerdict(t.Context(), store, applier, ops, &outcome)
+	require.FileExists(t, marker)
+	require.NoError(t, store.UpdateSessionStatus(t.Context(), 7, sessionstore.SessionStatusActive))
+	deliverApplyVerdict(t.Context(), store, applier, ops, &outcome)
+	require.NoFileExists(t, marker)
+	deliverApplyVerdict(t.Context(), store, applier, ops, &outcome)
+	rows, err := store.ListPending(t.Context(), 7)
 	require.NoError(t, err)
-	require.NotNil(t, replay)
-
-	retryOutcome, err := ops.ResolvePending(*replay, nil)
-	require.NoError(t, err)
-	assert.True(t, retryOutcome.Verdict.Applied, "the config on disk is the new one; the retry says so too")
-
-	sender := &stubVerdictSender{}
-	deliverApplyVerdict(context.Background(), sender, ops, &retryOutcome)
-
-	assert.Equal(t, 1, sender.calls)
-	assert.NoFileExists(t, markerPath)
+	assert.Len(t, rows, 1)
 }

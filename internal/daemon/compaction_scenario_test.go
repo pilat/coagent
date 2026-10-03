@@ -98,6 +98,7 @@ func TestScenario_CompactWaitsForABlockingChildThenRuns(t *testing.T) {
 		h.shutdown()
 	}()
 
+	h.startInboxWake()
 	parentID, err := h.mgr.Send(h.ctx, h.projectID, "do work then spawn", "fake-model", nil)
 	require.NoError(t, err)
 
@@ -106,6 +107,7 @@ func TestScenario_CompactWaitsForABlockingChildThenRuns(t *testing.T) {
 
 	h.waitUntil("parent suspended", func() bool { return !h.mgr.HasActiveLoop(parentID) })
 
+	h.startInboxWake()
 	require.NoError(t, h.mgr.SendToSession(h.ctx, parentID, "/compact"))
 
 	// A non-sleep pending call keeps the session unrunnable, so nothing compacts:
@@ -119,6 +121,11 @@ func TestScenario_CompactWaitsForABlockingChildThenRuns(t *testing.T) {
 	closed = true
 
 	h.waitForDelivery(link.ChildID)
+	h.waitUntil("deferred compaction consumed child result", func() bool {
+		messages := h.parentMessages(parentID)
+
+		return hasSummaryRow(messages) && countToolResultsFor(messages, "task") == 1
+	})
 	h.mgr.waitIdle(parentID)
 
 	// The result landed in its own tool_use first; only then did the queued
@@ -144,6 +151,7 @@ func TestScenario_DeferredCompactSurvivesADaemonRestart(t *testing.T) {
 
 	first := newSubagentHarnessOnDB(t, dbPath, blockingCompactRespond(release), nil)
 
+	first.startInboxWake()
 	parentID, err := first.mgr.Send(first.ctx, first.projectID, "do work then spawn", "fake-model", nil)
 	require.NoError(t, err)
 
@@ -151,6 +159,7 @@ func TestScenario_DeferredCompactSurvivesADaemonRestart(t *testing.T) {
 	require.True(t, link.Blocking)
 
 	first.waitUntil("parent suspended", func() bool { return !first.mgr.HasActiveLoop(parentID) })
+	first.startInboxWake()
 	require.NoError(t, first.mgr.SendToSession(first.ctx, parentID, "/compact"))
 
 	require.False(t, hasSummaryRow(first.parentMessages(parentID)))

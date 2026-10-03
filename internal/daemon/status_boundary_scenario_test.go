@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"encoding/json"
 	"strings"
 	"sync"
 	"testing"
@@ -13,6 +14,7 @@ import (
 	"github.com/pilat/coagent/internal/llm"
 	"github.com/pilat/coagent/internal/llmwire"
 	"github.com/pilat/coagent/internal/sessionevent"
+	"github.com/pilat/coagent/internal/sessionstore"
 )
 
 // The status header a controller receives, duplicated from internal/session on
@@ -75,6 +77,7 @@ func TestHarnessScenario_StatusMidActivationDoesNotStrandJustExecutedToolResults
 		h.shutdown()
 	}()
 
+	h.startInboxWake()
 	sessionID, err := h.mgr.Send(h.ctx, h.projectID, "list the workdir", "fake-model", nil)
 	require.NoError(t, err)
 
@@ -84,6 +87,7 @@ func TestHarnessScenario_StatusMidActivationDoesNotStrandJustExecutedToolResults
 		t.Fatal("the model was never asked for the first turn")
 	}
 
+	h.startInboxWake()
 	require.NoError(t, h.mgr.SendToSession(h.ctx, sessionID, "/status"))
 
 	collector.waitFor(
@@ -170,6 +174,7 @@ func TestHarnessScenario_CompactMidActivationStillAnswersTheInterruptedWork(t *t
 		h.shutdown()
 	}()
 
+	h.startInboxWake()
 	sessionID, err := h.mgr.Send(h.ctx, h.projectID, "list the workdir", "fake-model", nil)
 	require.NoError(t, err)
 
@@ -179,6 +184,7 @@ func TestHarnessScenario_CompactMidActivationStillAnswersTheInterruptedWork(t *t
 		t.Fatal("the model was never asked for the first turn")
 	}
 
+	h.startInboxWake()
 	require.NoError(t, h.mgr.SendToSession(h.ctx, sessionID, "/compact"))
 
 	close(release)
@@ -212,6 +218,7 @@ func TestHarnessScenario_StatusOnAFreshSessionCostsNoModelTurn(t *testing.T) {
 		h.shutdown()
 	}()
 
+	h.startInboxWake()
 	sessionID, err := h.mgr.Send(h.ctx, h.projectID, "/status", "fake-model", nil)
 	require.NoError(t, err)
 
@@ -244,6 +251,7 @@ func TestHarnessScenario_StatusIsAnsweredWhileABlockingChildIsOut(t *testing.T) 
 		h.shutdown()
 	}()
 
+	h.startInboxWake()
 	parentID, err := h.mgr.Send(h.ctx, h.projectID, "do work then spawn", "fake-model", nil)
 	require.NoError(t, err)
 
@@ -251,6 +259,7 @@ func TestHarnessScenario_StatusIsAnsweredWhileABlockingChildIsOut(t *testing.T) 
 	require.True(t, link.Blocking)
 	h.waitUntil("parent suspended", func() bool { return !h.mgr.HasActiveLoop(parentID) })
 
+	h.startInboxWake()
 	require.NoError(t, h.mgr.SendToSession(h.ctx, parentID, "/status"))
 	collector.waitFor(t, "status answered while the child is out", func(e []controllerapi.SessionNotification) bool {
 		return len(statusReports(e, parentID)) == 1
@@ -290,6 +299,7 @@ func TestHarnessScenario_StatusFullTodoListOrderingAndIcons(t *testing.T) {
 		h.shutdown()
 	}()
 
+	h.startInboxWake()
 	root, err := h.mgr.Send(h.ctx, h.projectID, "plan the work", "fake-model", map[string]any{
 		"manager_id": scenarioManagerID,
 	})
@@ -306,8 +316,14 @@ func TestHarnessScenario_StatusFullTodoListOrderingAndIcons(t *testing.T) {
 		`{"id":"tie-a","content":"tie a","status":"cancelled","priority":"high","created_at":"` + stamp(0) + `"},` +
 		`{"id":"legacy","content":"legacy item","status":"pending","priority":"medium"}` +
 		`]`
-	require.NoError(t, h.sessStore.UpdateSessionTodoItems(h.ctx, root, []byte(todos)))
+	raw := json.RawMessage(todos)
+	_, err = h.sessStore.Commit(
+		h.ctx,
+		sessionstore.Commit{SessionID: root, State: sessionstore.StatePatch{TodoItems: &raw}},
+	)
+	require.NoError(t, err)
 
+	h.startInboxWake()
 	require.NoError(t, h.mgr.SendToSession(h.ctx, root, "/status"))
 	collector.waitFor(t, "full /status TODO list", func(e []controllerapi.SessionNotification) bool {
 		return len(statusReports(e, root)) > 0

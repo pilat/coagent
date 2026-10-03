@@ -22,8 +22,10 @@ func (r *runtime) ReconcileOutputReadiness(ctx context.Context, outputID int64) 
 
 	r.mu.Lock()
 	defer r.mu.Unlock()
+
 	r.liveMu.RLock()
 	defer r.liveMu.RUnlock()
+
 	if !readiness.Ready || r.live[readiness.SessionID].Active {
 		return nil
 	}
@@ -31,6 +33,7 @@ func (r *runtime) ReconcileOutputReadiness(ctx context.Context, outputID int64) 
 	if r.readyOutputs[readiness.SessionID] >= readiness.OutputID {
 		return nil
 	}
+
 	r.readyOutputs[readiness.SessionID] = readiness.OutputID
 
 	r.publish(ctx, readiness.SessionID, sessionevent.Notification{

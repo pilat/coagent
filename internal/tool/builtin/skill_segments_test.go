@@ -16,10 +16,10 @@ func TestExtractRenderedSkillsSkipsEnvelopeLessBatchCalls(t *testing.T) {
 	content := "=== skill (call 1) ===\nError: skill unavailable: missing\n\n" +
 		"=== skill (call 2) ===\n" + rendered
 
-	skills := ExtractRenderedSkills(content)
+	skills := loader.ExtractRenderedSkills(content)
 
 	require.Len(t, skills, 1)
-	assert.Equal(t, RenderedSkill{Name: "invoked", Envelope: rendered}, skills[0])
+	assert.Equal(t, loader.RenderedSkill{Name: "invoked", Envelope: rendered}, skills[0])
 }
 
 func TestExtractRenderedSkillsIgnoresNamelessEnvelope(t *testing.T) {
@@ -33,7 +33,7 @@ func TestExtractRenderedSkillsIgnoresNamelessEnvelope(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assert.Empty(t, ExtractRenderedSkills(tt.content))
+			assert.Empty(t, loader.ExtractRenderedSkills(tt.content))
 		})
 	}
 }
@@ -41,7 +41,7 @@ func TestExtractRenderedSkillsIgnoresNamelessEnvelope(t *testing.T) {
 func TestExtractRenderedSkillsKeepsPlainContentWhenNoBatchHeaders(t *testing.T) {
 	rendered := RenderSkill(&loader.Skill{Name: "solo", Content: "Body."}, "")
 
-	skills := ExtractRenderedSkills("[title]\n" + rendered)
+	skills := loader.ExtractRenderedSkills("[title]\n" + rendered)
 
 	require.Len(t, skills, 1)
 	assert.Equal(t, rendered, skills[0].Envelope)
@@ -53,7 +53,7 @@ func TestExtractRenderedSkillsIgnoresHeadersAfterTheEnvelope(t *testing.T) {
 	rendered := RenderSkill(&loader.Skill{Name: "solo", Content: "Body."}, "")
 	content := rendered + "\n\n=== read (call 1) ===\nfile contents"
 
-	skills := ExtractRenderedSkills(content)
+	skills := loader.ExtractRenderedSkills(content)
 
 	require.Len(t, skills, 1)
 	assert.Equal(t, "solo", skills[0].Name)
@@ -96,7 +96,7 @@ func TestExtractRenderedSkillsSkipsMalformedEnvelopes(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			content := "=== skill (call 1) ===\n" + tt.broken + "\n\n=== skill (call 2) ===\n" + rendered
 
-			skills := ExtractRenderedSkills(content)
+			skills := loader.ExtractRenderedSkills(content)
 
 			require.Len(t, skills, 1)
 			assert.Equal(t, "invoked", skills[0].Name)

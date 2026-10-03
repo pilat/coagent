@@ -15,7 +15,7 @@ import (
 	"github.com/pilat/coagent/internal/sessionstore"
 )
 
-func newAttachmentsStore(t *testing.T) (*sql.DB, sessionstore.RuntimeStore, int64) {
+func newAttachmentsStore(t *testing.T) (*sql.DB, *sessionstore.Store, int64) {
 	t.Helper()
 
 	ctx := context.Background()
@@ -51,37 +51,28 @@ var demoRefs = []llmwire.ImageRef{
 // result through the ordinary persistence path.
 func appendImageToolResult(ctx context.Context, t *testing.T, ms *messageStore, cid string) {
 	t.Helper()
-
-	require.NoError(t, ms.addAssistantMessage(
-		ctx,
-		&llmwire.Response{Text: "step", ToolCalls: []llmwire.ToolCall{{ID: cid, Name: "read"}}},
-	))
-
-	msg := llmwire.Message{
-		Role:       llmwire.RoleTool,
-		Content:    "[/tmp/coagent-a.png]\nimage loaded",
-		ToolCallID: cid,
-		ToolName:   "read",
-		Images:     demoRefs,
-	}
-
-	if ms.store == nil {
-		ms.mu.Lock()
-		ms.appendLocked(msg, 0)
-		ms.mu.Unlock()
-
-		return
-	}
-
-	stored, err := storedMessage(&msg)
-	require.NoError(t, err)
-
-	dbID, err := ms.store.InsertMessage(ctx, ms.sessID, stored)
-	require.NoError(t, err)
-
-	ms.mu.Lock()
-	ms.appendLocked(msg, dbID)
-	ms.mu.Unlock()
+	require.NoError(
+		t,
+		appendTestAssistant(
+			ctx,
+			ms,
+			&llmwire.Response{Text: "step", ToolCalls: []llmwire.ToolCall{{ID: cid, Name: "read"}}},
+		),
+	)
+	require.NoError(
+		t,
+		appendTestMessage(
+			ctx,
+			ms,
+			&llmwire.Message{
+				Role:       llmwire.RoleTool,
+				Content:    "image loaded",
+				ToolCallID: cid,
+				ToolName:   "read",
+				Images:     demoRefs,
+			},
+		),
+	)
 }
 
 // TestAttachments_SurviveRestart is the append→restart→reload protocol case:
@@ -89,11 +80,11 @@ func appendImageToolResult(ctx context.Context, t *testing.T, ms *messageStore, 
 func TestAttachments_SurviveRestart(t *testing.T) {
 	ctx := context.Background()
 	_, store, sessionID := newAttachmentsStore(t)
-	ms := newMessageStore(store, sessionID, nil)
+	ms := newMessageStore(store, sessionID)
 
 	appendImageToolResult(ctx, t, ms, "call-1")
 
-	reloaded := newMessageStore(store, sessionID, nil)
+	reloaded := newMessageStore(store, sessionID)
 	require.NoError(t, reloaded.reloadMessages(ctx))
 
 	got := reloaded.getMessages()

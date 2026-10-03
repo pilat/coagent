@@ -9,6 +9,7 @@ import (
 	"github.com/pilat/coagent/internal/config"
 	"github.com/pilat/coagent/internal/controllerapi"
 	"github.com/pilat/coagent/internal/llmwire"
+	"github.com/pilat/coagent/internal/sessionstore"
 )
 
 // scenarioManagerID is the manager owner every output-chain scenario uses; the
@@ -79,6 +80,7 @@ func TestHarnessScenario_OutputChainReportedOrder(t *testing.T) {
 	collector := collectEvents(h.mgr.PubSub().SubscribeAll())
 	defer collector.stop()
 
+	h.startInboxWake()
 	root, err := h.mgr.Send(h.ctx, h.projectID, "do the work", "fake-model", map[string]any{
 		"manager_id": scenarioManagerID,
 	})
@@ -87,7 +89,14 @@ func TestHarnessScenario_OutputChainReportedOrder(t *testing.T) {
 
 	// The follow-up is enqueued while the first tool is unresolved, so it may
 	// only enter history after settlement — advancing the generation exactly once.
-	_, err = h.sessStore.EnqueueModelInput(h.ctx, root, "follow-up: also check the docs")
+	_, err = h.sessStore.Enqueue(
+		h.ctx,
+		sessionstore.Input{
+			SessionID: root,
+			Source:    sessionstore.InputSourceUser,
+			Content:   "follow-up: also check the docs",
+		},
+	)
 	require.NoError(t, err)
 	closeOnce.Do(func() { close(followUpQueued) })
 
@@ -136,6 +145,7 @@ func TestHarnessScenario_OutputChainNarratedToolIterations(t *testing.T) {
 	collector := collectEvents(h.mgr.PubSub().SubscribeAll())
 	defer collector.stop()
 
+	h.startInboxWake()
 	root, err := h.mgr.Send(h.ctx, h.projectID, "do the work", "fake-model", map[string]any{
 		"manager_id": scenarioManagerID,
 	})

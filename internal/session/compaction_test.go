@@ -19,7 +19,6 @@ import (
 	"github.com/pilat/coagent/internal/llmwire"
 	"github.com/pilat/coagent/internal/loader"
 	"github.com/pilat/coagent/internal/sessionstore"
-	"github.com/pilat/coagent/internal/tool"
 	"github.com/pilat/coagent/internal/tool/builtin"
 	"github.com/pilat/coagent/internal/transcript"
 )
@@ -50,10 +49,46 @@ type compactionRecordingStore struct {
 	positions        map[int64]int
 	markCompactedErr error
 	markCompacted    int
-	insertFailAt     int // 1-based InsertMessage call index that returns insertErr
+	insertFailAt     int // 1-based appendRow call index that returns insertErr
 	insertCalls      int
 	insertErr        error
 	replaceErr       error
+}
+
+func (s *compactionRecordingStore) Commit(
+	ctx context.Context,
+	c sessionstore.Commit,
+) (*sessionstore.CommitResult, error) {
+	beforeMessages := make([]*transcript.Message, len(s.messages))
+	for i, row := range s.messages {
+		copyRow := *row
+		beforeMessages[i] = &copyRow
+	}
+	beforePositions := maps.Clone(s.positions)
+	beforeID := s.nextID
+	result := &sessionstore.CommitResult{}
+	if c.Replace != nil {
+		if _, err := s.replaceRows(ctx, c.SessionID, c.Replace.HeadIDs, c.Replace.Entries); err != nil {
+			s.messages = beforeMessages
+			s.positions = beforePositions
+			s.nextID = beforeID
+			return nil, err
+		}
+	}
+	for _, row := range append(append(append([]*transcript.Message{}, c.Messages...), c.Unfired.Messages...), c.ToolResults...) {
+		id, err := s.appendRow(ctx, c.SessionID, row)
+		if err != nil {
+			s.messages = beforeMessages
+			s.positions = beforePositions
+			s.nextID = beforeID
+			return nil, err
+		}
+		result.MessageIDs = append(result.MessageIDs, id)
+	}
+	for _, output := range c.Outputs {
+		result.Outputs = append(result.Outputs, &sessionstore.OutputCommit{Content: output.Content})
+	}
+	return result, nil
 }
 
 func (m *compactionMockLLM) Chat(
@@ -94,7 +129,7 @@ func (m *compactionMockLLM) GetReasoningLevel() string              { return tes
 
 func (m *compactionMockLLM) SetSessionID(id string) {}
 
-func (s *compactionRecordingStore) InsertMessage(
+func (s *compactionRecordingStore) appendRow(
 	_ context.Context,
 	sessionID int64,
 	message *transcript.Message,
@@ -118,7 +153,7 @@ func (s *compactionRecordingStore) InsertMessage(
 	return stored.ID, nil
 }
 
-func (s *compactionRecordingStore) MarkCompacted(_ context.Context, ids []int64) error {
+func (s *compactionRecordingStore) markRowsCompacted(_ context.Context, ids []int64) error {
 	s.markCompacted++
 	if s.markCompactedErr != nil {
 		return s.markCompactedErr
@@ -139,7 +174,7 @@ func (s *compactionRecordingStore) MarkCompacted(_ context.Context, ids []int64)
 	return nil
 }
 
-func (s *compactionRecordingStore) ReplaceCompactedMessages(
+func (s *compactionRecordingStore) replaceRows(
 	ctx context.Context,
 	sessionID int64,
 	compactedIDs []int64,
@@ -149,7 +184,7 @@ func (s *compactionRecordingStore) ReplaceCompactedMessages(
 		return nil, s.replaceErr
 	}
 
-	if err := s.MarkCompacted(ctx, compactedIDs); err != nil {
+	if err := s.markRowsCompacted(ctx, compactedIDs); err != nil {
 		return nil, err
 	}
 
@@ -159,7 +194,7 @@ func (s *compactionRecordingStore) ReplaceCompactedMessages(
 		if id == 0 {
 			var err error
 
-			id, err = s.InsertMessage(ctx, sessionID, entry.Message)
+			id, err = s.appendRow(ctx, sessionID, entry.Message)
 			if err != nil {
 				return nil, err
 			}
@@ -193,66 +228,7 @@ func (s *compactionRecordingStore) LoadActiveMessages(
 	return active, nil
 }
 
-func (s *compactionRecordingStore) ResetSessionContextOnce(
-	ctx context.Context,
-	sessionID int64,
-	_, _ string,
-	opening []*transcript.Message,
-) ([]int64, bool, error) {
-	ids, err := s.resetSessionContext(ctx, sessionID, opening)
-	return ids, err == nil, err
-}
-
-func (s *compactionRecordingStore) resetSessionContext(
-	ctx context.Context,
-	sessionID int64,
-	opening []*transcript.Message,
-) ([]int64, error) {
-	// Model the production transaction: failure restores every mutation.
-	beforeMessages := make([]*transcript.Message, len(s.messages))
-	for i, message := range s.messages {
-		copyMessage := *message
-		beforeMessages[i] = &copyMessage
-	}
-	beforeNextID := s.nextID
-	beforePositions := maps.Clone(s.positions)
-	beforeInsertCalls := s.insertCalls
-	beforeMarkCompacted := s.markCompacted
-	rollback := func() {
-		s.messages = beforeMessages
-		s.nextID = beforeNextID
-		s.positions = beforePositions
-		s.insertCalls = beforeInsertCalls
-		s.markCompacted = beforeMarkCompacted
-	}
-
-	oldIDs := make([]int64, 0, len(s.messages))
-	for _, message := range s.messages {
-		if message.SessionID == sessionID && message.CompactedAt == nil {
-			oldIDs = append(oldIDs, message.ID)
-		}
-	}
-	if err := s.MarkCompacted(ctx, oldIDs); err != nil {
-		rollback()
-		return nil, err
-	}
-
-	ids := make([]int64, len(opening))
-	for i, message := range opening {
-		id, err := s.InsertMessage(ctx, sessionID, message)
-		if err != nil {
-			rollback()
-			return nil, err
-		}
-		ids[i] = id
-	}
-
-	return ids, nil
-}
-
-// compactIfNeeded drives the automatic path the way applyContextEvents does,
-// for tests that want the trigger without a loop runner around it.
-func (s *svc) compactIfNeeded(ctx context.Context, window int) error {
+func (s *Session) compactIfNeeded(ctx context.Context, window int) error {
 	if !s.shouldCompact(window) {
 		return nil
 	}
@@ -262,23 +238,19 @@ func (s *svc) compactIfNeeded(ctx context.Context, window int) error {
 	return err
 }
 
-func newCompactionTestSvc(mockLLM *compactionMockLLM) *svc {
-	return &svc{
-		llmClient:    mockLLM,
-		ms:           newMessageStore(nil, 0, nil),
-		loopDetector: newLoopDetector(),
-		registry:     tool.NewRegistry(),
-		prompt:       newPromptBuilder(testPrompt, ""),
-	}
+func newCompactionTestSvc(mockLLM *compactionMockLLM) *Session {
+	s := newTestAgent()
+	s.llmClient = mockLLM
+	return s
 }
 
 func TestCompactIfNeeded_BelowThreshold_NoCompaction(t *testing.T) {
 	mockLLM := &compactionMockLLM{response: &llmwire.Response{Text: validSummary, FinishType: llmwire.FinishStop}}
 	s := newCompactionTestSvc(mockLLM)
 
-	require.NoError(t, s.ms.addUserMessage(context.Background(), "Hello"))
-	require.NoError(t, s.ms.addAssistantMessage(context.Background(), &llmwire.Response{Text: "Hi"}))
-	require.NoError(t, s.ms.addUserMessage(context.Background(), "How are you?"))
+	require.NoError(t, appendTestUser(context.Background(), s.ms, "Hello"))
+	require.NoError(t, appendTestAssistant(context.Background(), s.ms, &llmwire.Response{Text: "Hi"}))
+	require.NoError(t, appendTestUser(context.Background(), s.ms, "How are you?"))
 
 	err := s.compactIfNeeded(context.Background(), 100000)
 	require.NoError(t, err)
@@ -292,7 +264,7 @@ func TestCompactIfNeeded_AboveThreshold_Compacts(t *testing.T) {
 		contextWindow: 32000,
 	}
 	s := newCompactionTestSvc(mockLLM)
-	s.ms.setMessages(oversizedTranscript(32000))
+	setTestMessages(s, oversizedTranscript(32000))
 
 	err := s.compactIfNeeded(context.Background(), 32000)
 	require.NoError(t, err)
@@ -317,7 +289,7 @@ func TestCompactIfNeeded_SummaryFailure_KeepsTheConversation(t *testing.T) {
 	mockLLM := &compactionMockLLM{err: errors.New("summary generation failed")}
 	s := newCompactionTestSvc(mockLLM)
 
-	s.ms.setMessages(oversizedTranscript(32000))
+	setTestMessages(s, oversizedTranscript(32000))
 
 	before := s.ms.getMessages()
 
@@ -346,7 +318,8 @@ func TestCompactionAttributesOwnCostToSummaryRow(t *testing.T) {
 		},
 	}
 	s := newCompactionTestSvc(mockLLM)
-	s.ms = newMessageStore(store, 1, nil)
+	s.store = store
+	s.ms = newMessageStore(store, 1)
 
 	// Costed rounds big enough to cross the trigger.
 	msgs := []llmwire.Message{
@@ -366,9 +339,7 @@ func TestCompactionAttributesOwnCostToSummaryRow(t *testing.T) {
 
 	for i := range msgs {
 		message := msgs[i]
-		s.ms.mu.Lock()
-		require.NoError(t, s.ms.appendMessageLocked(ctx, &message))
-		s.ms.mu.Unlock()
+		require.NoError(t, appendTestMessage(ctx, s.ms, &message))
 	}
 
 	require.NoError(t, s.compactIfNeeded(ctx, 32000))
@@ -422,7 +393,7 @@ func findStoredSummary(t *testing.T, store *compactionRecordingStore) *transcrip
 func renderedSkills(messages []llmwire.Message) []llmwire.Message {
 	var skills []llmwire.Message
 	for _, message := range messages {
-		for _, invocation := range builtin.ExtractRenderedSkills(message.Content) {
+		for _, invocation := range loader.ExtractRenderedSkills(message.Content) {
 			skillMessage := message
 			skillMessage.Content = invocation.Envelope
 			skills = append(skills, skillMessage)

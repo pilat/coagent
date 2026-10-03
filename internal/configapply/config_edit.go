@@ -47,7 +47,8 @@ type configEditParams struct {
 }
 
 func NewConfigEdit(sessionID int64, service Service) tool.Tool {
-	return &configEditTool{sessionID: sessionID, service: service.(*svc)}
+	concrete, _ := service.(*svc)
+	return &configEditTool{sessionID: sessionID, service: concrete}
 }
 
 func (t *configEditTool) ID() string { return tool.IDConfigEdit }
@@ -79,8 +80,10 @@ func (t *configEditTool) Execute(ctx context.Context, params json.RawMessage) (*
 	if err := requireActivation(ctx); err != nil {
 		return nil, err
 	}
+
 	grant, _ := tool.ActivationGrantFromContext(ctx)
 	if grant.SessionID != t.sessionID {
+		//nolint:staticcheck // Exact activation refusal is the model-facing authority contract.
 		return nil, errors.New(noConfigActivationMessage)
 	}
 
@@ -115,7 +118,7 @@ func requireActivation(ctx context.Context) error {
 	callID := tool.CallIDFromContext(ctx)
 	if !ok || grant.ToolID != tool.IDConfigEdit || grant.Command != ConfigEditCommand ||
 		grant.SessionID <= 0 || (grant.ToolCallID != "" && grant.ToolCallID != callID) {
-		//nolint:staticcheck // Exact user-facing contract includes punctuation.
+		//nolint:staticcheck // Exact activation refusal is the model-facing authority contract.
 		return errors.New(noConfigActivationMessage)
 	}
 

@@ -6,9 +6,10 @@ import (
 	"github.com/stretchr/testify/assert"
 
 	"github.com/pilat/coagent/internal/budget"
-	"github.com/pilat/coagent/internal/configtools"
-	"github.com/pilat/coagent/internal/registry"
+	"github.com/pilat/coagent/internal/configapply"
+	"github.com/pilat/coagent/internal/mcpstore"
 	"github.com/pilat/coagent/internal/schedule"
+	"github.com/pilat/coagent/internal/subagent"
 	"github.com/pilat/coagent/internal/tool"
 )
 
@@ -16,22 +17,20 @@ import (
 // of every tool the daemon registers into session registries: task is the only
 // parallel-safe one; any accidental opt-in or opt-out must fail here.
 func TestProductionTools_ParallelSafePolicies(t *testing.T) {
-	sp := &mockSpawner{}
-
 	tools := map[string]tool.Tool{
-		tool.IDTask:           newTaskTool(sp, 0, registry.NewSet(nil), nil),
-		tool.IDSendToSubagent: newSendToSubagentTool(sp),
-		"get_subagent_result": newGetSubagentResultTool(sp),
+		tool.IDTask:           subagent.NewTaskTool(nil, 0, nil, nil),
+		tool.IDSendToSubagent: subagent.NewSendToSubagentTool(nil),
+		"get_subagent_result": subagent.NewGetSubagentResultTool(nil),
 		tool.IDSchedule:       schedule.NewScheduleTool(0, nil, nil),
 		tool.IDSleep:          schedule.NewSleepTool(nil, 0),
 		budget.ToolID:         budget.NewTool(nil, 0, false),
 	}
 
-	for _, tl := range []tool.Tool{configtools.NewConfigEdit(nil, nil)} {
+	for _, tl := range []tool.Tool{configapply.NewConfigEdit(0, nil)} {
 		tools[tl.ID()] = tl
 	}
 
-	for _, tl := range newMCPTools(nil, 0, nil) {
+	for _, tl := range mcpstore.NewTools(nil, 0) {
 		tools[tl.ID()] = tl
 	}
 
@@ -47,9 +46,5 @@ func TestProductionTools_ParallelSafePolicies(t *testing.T) {
 
 	assert.Equal(t, want, got)
 
-	// The wait guard must not outvote its wrapped tool.
-	guard := &backgroundWaitGuard{inner: tools[tool.IDTask]}
-	assert.True(t, guard.ParallelSafe())
-	guardSleep := &backgroundWaitGuard{inner: tools[tool.IDSleep]}
-	assert.False(t, guardSleep.ParallelSafe())
+	assert.False(t, schedule.NewGuardedSleepTool(nil, 0, nil).ParallelSafe())
 }

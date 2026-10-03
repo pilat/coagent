@@ -17,11 +17,11 @@ func TestManagerBoundControllerRejectsEveryForeignSessionOperation(t *testing.T)
 	mgr, _, store := newTestManager(t)
 	ctx := context.Background()
 	projectID := testProject(t, store, "/tmp/controller-owner-operations")
-	alphaRecord, err := mgr.sessionStore.CreateSession(ctx, projectID, "model", "", map[string]any{
+	alphaRecord, err := mgr.store.CreateSession(ctx, projectID, "model", "", map[string]any{
 		controllerapi.SessionAttributeManagerID: "alpha",
 	})
 	require.NoError(t, err)
-	betaRecord, err := mgr.sessionStore.CreateSession(ctx, projectID, "model", "", map[string]any{
+	betaRecord, err := mgr.store.CreateSession(ctx, projectID, "model", "", map[string]any{
 		controllerapi.SessionAttributeManagerID: "beta",
 	})
 	require.NoError(t, err)
@@ -63,7 +63,7 @@ func TestManagerBoundControllerRejectsEveryForeignSessionOperation(t *testing.T)
 		})
 	}
 
-	stored, err := mgr.sessionStore.GetSession(ctx, betaRecord.ID)
+	stored, err := mgr.store.GetSession(ctx, betaRecord.ID)
 	require.NoError(t, err)
 	assert.Nil(t, stored.KilledAt)
 	assert.Equal(t, "model", stored.Model)

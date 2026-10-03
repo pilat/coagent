@@ -103,7 +103,7 @@ func TestTwentySuccessiveCompactionsKeepTheCurrentEnvelopeExactlyOnce(t *testing
 	for i := range 40 {
 		msgs = append(msgs, roundTokens(fmt.Sprintf("r%d", i), 5, 200)...)
 	}
-	s.ms.setMessages(msgs)
+	setTestMessages(s, msgs)
 
 	for range 20 {
 		ok, err := s.compact(t.Context(), nil)
@@ -140,7 +140,7 @@ func TestCurrentSkillInHeadIsReattachedByteIdentically(t *testing.T) {
 
 	rendered := skillMessage(t, "review", "Review carefully.")
 
-	s.ms.setMessages([]llmwire.Message{
+	setTestMessages(s, []llmwire.Message{
 		{Role: llmwire.RoleSystem, Content: "sys"},
 		compactionUserMessage("task"),
 		{Role: llmwire.RoleAssistant, ToolCalls: []llmwire.ToolCall{{ID: "s1", Name: "skill"}}},
@@ -196,7 +196,7 @@ func TestMixedAssistantResponseKeepsSiblingCallsValid(t *testing.T) {
 		compactionToolResult("c1", "later result"),
 	}
 
-	s.ms.setMessages(msgs)
+	setTestMessages(s, msgs)
 
 	ok, err := s.compact(t.Context(), nil)
 	require.NoError(t, err)

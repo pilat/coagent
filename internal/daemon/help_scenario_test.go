@@ -34,6 +34,7 @@ func TestHarnessScenario_HelpIncludesGWT(t *testing.T) {
 		h.shutdown()
 	}()
 
+	h.startInboxWake()
 	sessionID, err := h.mgr.Send(h.ctx, h.projectID, "open session", "fake-model", map[string]any{
 		controllerapi.SessionAttributeManagerID: scenarioManagerID,
 		"channel":                               "telegram",
@@ -42,6 +43,7 @@ func TestHarnessScenario_HelpIncludesGWT(t *testing.T) {
 	waitForVisibleMessage(t, collector, sessionID, "session ready")
 	h.mgr.waitIdle(sessionID)
 
+	h.startInboxWake()
 	require.NoError(t, h.mgr.SendToSession(h.ctx, sessionID, "/help"))
 	waitForVisibleMessage(t, collector, sessionID, helpWithGWT)
 

@@ -13,7 +13,6 @@ import (
 
 	"github.com/pilat/coagent/internal/coagenthome"
 	"github.com/pilat/coagent/internal/config"
-	"github.com/pilat/coagent/internal/configapply"
 	"github.com/pilat/coagent/internal/configops"
 	"github.com/pilat/coagent/internal/controllerapi"
 	"github.com/pilat/coagent/internal/ctl"
@@ -43,14 +42,14 @@ func TestStartCore_RegistersDatabaseAndDaemonLifecycle(t *testing.T) {
 		a,
 		lifecycleTestConfig(),
 		nil,
-		configapply.New(nil, nil),
+		configops.New(filepath.Join(t.TempDir(), "config.yaml"), filepath.Join(t.TempDir(), "secrets")),
 	)
 	require.NoError(t, err)
 	require.NotNil(t, core)
 	require.NotNil(t, core.controller)
 	require.NotNil(t, core.scheduleStore)
 	require.NotNil(t, core.scheduleSender)
-	require.NotNil(t, core.verdictSender)
+	require.NotNil(t, core.sessionStore)
 
 	assert.Equal(t, []string{"db", "daemon"}, stopNames(a))
 	assert.FileExists(t, filepath.Join(home, coagenthome.DirName, coagenthome.DBFileName))
@@ -62,11 +61,11 @@ func TestStartCore_RegistersDatabaseAndDaemonLifecycle(t *testing.T) {
 		WorkDir: projectDir,
 	})
 	require.NoError(t, err)
-	_, err = core.verdictSender.GetSession(context.Background(), sessionID)
+	_, err = core.sessionStore.GetSession(context.Background(), sessionID)
 	require.NoError(t, err, "the open database must serve a known session")
 
 	a.shutdown(context.Background())
-	_, err = core.verdictSender.GetSession(context.Background(), sessionID)
+	_, err = core.sessionStore.GetSession(context.Background(), sessionID)
 	require.ErrorContains(t, err, "database is closed")
 }
 
@@ -80,7 +79,7 @@ func TestStartCore_PartialStartLeavesOnlyCreatedComponentsForCleanup(t *testing.
 		a,
 		&config.Config{},
 		nil,
-		configapply.New(nil, nil),
+		configops.New(filepath.Join(t.TempDir(), "config.yaml"), filepath.Join(t.TempDir(), "secrets")),
 	)
 
 	require.Nil(t, core)

@@ -24,7 +24,6 @@ import (
 	"github.com/pilat/coagent/internal/mcpstore"
 	"github.com/pilat/coagent/internal/migrate"
 	"github.com/pilat/coagent/internal/schedule"
-	"github.com/pilat/coagent/internal/session"
 	"github.com/pilat/coagent/internal/sessionevent"
 	"github.com/pilat/coagent/internal/sessionstore"
 	"github.com/pilat/coagent/internal/subagent"
@@ -153,20 +152,25 @@ func (c *scriptedLLM) sawCancellation() bool {
 	return c.cancelSeen
 }
 
-// subagentHarness wires a real session.Factory (fake LLM) + daemon svc over a
+// subagentHarness wires a real sessionbuild.BuildInput (fake LLM) + daemon svc over a
 // temp SQLite DB.
 type subagentHarness struct {
 	t          *testing.T
 	db         *sql.DB
 	mgr        *svc
-	sessStore  sessionstore.Store
+	sessStore  *sessionstore.Store
 	links      subagent.Store
 	schedStore schedule.Store
 	projectID  int64
 	ctx        context.Context
 
-	llmMu   sync.Mutex
-	llmRefs []*scriptedLLM // every client the session factory created
+	llmMu    sync.Mutex
+	llmRefs  []*scriptedLLM // every client the session factory created
+	wakeOnce sync.Once
+}
+
+func (h *subagentHarness) startInboxWake() {
+	h.wakeOnce.Do(func() { h.mgr.startInboxWake(h.ctx) })
 }
 
 // sessionClient returns the scripted client bound to the session whose
@@ -279,10 +283,10 @@ func newSubagentHarnessOnDBWithProjectConfig(
 	t.Cleanup(func() { _ = db.Close() })
 	require.NoError(t, migrate.Run(context.Background(), db, dbPath))
 
-	store := NewStore(db)
+	store := sessionstore.NewStore(db)
 	sessStore := sessionstore.NewStore(db)
 	links := subagent.NewStore(db)
-	schedStore := schedule.NewStore(db)
+	schedStore := schedule.NewStore(db, sessStore)
 
 	if decorate != nil {
 		links = decorate(links)
@@ -304,36 +308,26 @@ func newSubagentHarnessOnDBWithProjectConfig(
 	pid, err = store.GetOrCreateProject(context.Background(), workDir)
 	require.NoError(t, err)
 
-	factory := session.NewFactoryWithOptions(
-		cfg, nil, nil, sessStore, sessStore, nil, nil, nil,
-		session.WithLLMClientFactory(func(_ *config.Config) (llm.Client, error) {
-			client := &scriptedLLM{respond: respond}
+	factory := scriptedBuildInput(t, cfg, sessStore, nil, func(_ *config.Config) (llm.Client, error) {
+		client := &scriptedLLM{respond: respond}
 
-			h.llmMu.Lock()
-			h.llmRefs = append(h.llmRefs, client)
-			h.llmMu.Unlock()
+		h.llmMu.Lock()
+		h.llmRefs = append(h.llmRefs, client)
+		h.llmMu.Unlock()
 
-			return client, nil
-		}),
-	)
+		return client, nil
+	})
 
-	mgr, _ := newSvc(
+	mgr, _ := newScenarioDaemon(
 		context.Background(),
 		factory,
-		store,
-		sessStore,
-		sessStore,
-		sessStore,
-		sessStore,
-		sessStore,
-		sessStore,
 		sessStore,
 		links,
-		subagent.NewTransactions(db),
+		subagent.NewTransactions(db, sessStore),
 		budget.New(sessStore),
-		sessStore,
-		schedule.NewService(schedStore),
+		schedule.NewService(schedStore, sessStore),
 		func() string { return "fake-model" },
+		db,
 	)
 
 	h.mgr = mgr
@@ -527,6 +521,7 @@ func TestIntegration_BackgroundSubagentCompletes(t *testing.T) {
 	h := newSubagentHarness(t)
 	defer h.shutdown()
 
+	h.startInboxWake()
 	parentID, err := h.mgr.Send(h.ctx, h.projectID, "SPAWN_CHILD please", "fake-model", nil)
 	require.NoError(t, err)
 
@@ -602,6 +597,7 @@ func TestIntegration_BackgroundTaskRejectsCompetingSleepProtocol(t *testing.T) {
 	h := newSubagentHarnessWith(t, respond)
 	defer h.shutdown()
 
+	h.startInboxWake()
 	parentID, err := h.mgr.Send(h.ctx, h.projectID, "spawn and wait", "fake-model", nil)
 	require.NoError(t, err)
 	link := h.waitForChildLink(parentID)
@@ -660,6 +656,7 @@ func TestIntegration_SchedulerWakesExactSleepThroughDaemonQueue(t *testing.T) {
 	h := newSubagentHarnessWith(t, respond)
 	defer h.shutdown()
 
+	h.startInboxWake()
 	parentID, err := h.mgr.Send(h.ctx, h.projectID, "sleep briefly", "fake-model", nil)
 	require.NoError(t, err)
 
@@ -728,6 +725,7 @@ func TestIntegration_UserInterruptCancelsSleepWithoutDeletingStandaloneOneShot(t
 	h := newSubagentHarnessWith(t, respond)
 	defer h.shutdown()
 
+	h.startInboxWake()
 	parentID, err := h.mgr.Send(h.ctx, h.projectID, "sleep until interrupted", "fake-model", nil)
 	require.NoError(t, err)
 	require.Eventually(t, func() bool {
@@ -742,6 +740,7 @@ func TestIntegration_UserInterruptCancelsSleepWithoutDeletingStandaloneOneShot(t
 	)
 	require.NoError(t, err)
 
+	h.startInboxWake()
 	require.NoError(t, h.mgr.SendToSession(h.ctx, parentID, "interrupt now"))
 	h.mgr.waitIdle(parentID)
 
@@ -769,6 +768,7 @@ func TestIntegration_StandaloneOneShotFlowsThroughExecutorAndDaemonQueue(t *test
 	h := newSubagentHarnessWith(t, respond)
 	defer h.shutdown()
 
+	h.startInboxWake()
 	parentID, err := h.mgr.Send(h.ctx, h.projectID, "initialize", "fake-model", nil)
 	require.NoError(t, err)
 	h.mgr.waitIdle(parentID)
@@ -829,6 +829,7 @@ func TestIntegration_OneShotAckFailureRedeliversWithoutDuplicateTranscriptOrPubl
 	h := newSubagentHarnessWith(t, respond)
 	defer h.shutdown()
 
+	h.startInboxWake()
 	parentID, err := h.mgr.Send(h.ctx, h.projectID, "initialize", "fake-model", nil)
 	require.NoError(t, err)
 	h.mgr.waitIdle(parentID)
@@ -898,21 +899,21 @@ func TestIntegration_FreshScheduleDuplicateDoesNotResetOrRunTwice(t *testing.T) 
 	h := newSubagentHarnessWith(t, respond)
 	defer h.shutdown()
 
+	h.startInboxWake()
 	parentID, err := h.mgr.Send(h.ctx, h.projectID, "initialize", "fake-model", nil)
 	require.NoError(t, err)
 	h.mgr.waitIdle(parentID)
 
 	const deliveryID = "schedule:cron:23:20260814T1200Z"
-	applied, err := h.mgr.DeliverFreshSchedule(
-		h.ctx, parentID, deliveryID, "fresh scheduled work",
-	)
+	applied, err := enqueueScheduledInput(h.ctx, h.mgr.store, parentID, deliveryID, "fresh scheduled work", true)
 	require.NoError(t, err)
 	assert.True(t, applied)
+	h.waitUntil("fresh schedule completed", func() bool {
+		return countMessageContentContaining(h.parentMessages(parentID), "fresh handled once") == 2
+	})
 	h.mgr.waitIdle(parentID)
 
-	applied, err = h.mgr.DeliverFreshSchedule(
-		h.ctx, parentID, deliveryID, "fresh scheduled work",
-	)
+	applied, err = enqueueScheduledInput(h.ctx, h.mgr.store, parentID, deliveryID, "fresh scheduled work", true)
 	require.NoError(t, err)
 	assert.False(t, applied)
 	h.mgr.waitIdle(parentID)
@@ -940,6 +941,7 @@ func TestIntegration_SendToSubagentReNotifies(t *testing.T) {
 	h := newSubagentHarness(t)
 	defer h.shutdown()
 
+	h.startInboxWake()
 	parentID, err := h.mgr.Send(h.ctx, h.projectID, "SPAWN_CHILD please", "fake-model", nil)
 	require.NoError(t, err)
 
@@ -975,15 +977,26 @@ func TestIntegration_SweepRedeliversIdempotently(t *testing.T) {
 	parent, err := h.sessStore.CreateSession(ctx, h.projectID, "fake-model", "", nil)
 	require.NoError(t, err)
 
-	childID, err := h.sessStore.CreateSubagentSession(
-		ctx,
-		h.projectID,
-		parent.ID,
-		parent.ID,
-		"general",
-		"fake-model",
-		"",
-	)
+	childID, err := func() (int64, error) {
+		var id int64
+		err := h.sessStore.WithTx(ctx, func(tx *sql.Tx) error {
+			var err error
+			id, err = sessionstore.CreateSubagentSessionTx(
+				ctx,
+				tx,
+				sessionstore.CreateSubagentSession{
+					ProjectID:      h.projectID,
+					ParentID:       parent.ID,
+					RootID:         parent.ID,
+					AgentType:      "general",
+					Model:          "fake-model",
+					ReasoningLevel: "",
+				},
+			)
+			return err
+		})
+		return id, err
+	}()
 	require.NoError(t, err)
 
 	require.NoError(t, h.links.InsertSubagentLink(ctx, subagent.Link{
@@ -991,9 +1004,9 @@ func TestIntegration_SweepRedeliversIdempotently(t *testing.T) {
 	}))
 	// Child wrote its final message before dying; its result was stored on the link
 	// at terminalization (as a real run would), so delivery reads the column.
-	_, err = h.sessStore.InsertMessage(ctx, childID, &transcript.Message{
+	_, err = h.sessStore.Commit(ctx, sessionstore.Commit{SessionID: childID, Messages: []*transcript.Message{{
 		Role: llmwire.RoleAssistant, Content: "child finished: 99",
-	})
+	}}})
 	require.NoError(t, err)
 	require.NoError(t, h.links.MarkLinkTerminal(
 		ctx, childID, subagent.StateCompleted, "child finished: 99", subagent.OutcomeCompleted,
@@ -1001,7 +1014,8 @@ func TestIntegration_SweepRedeliversIdempotently(t *testing.T) {
 	require.NoError(t, h.sessStore.UpdateSessionStatus(ctx, childID, sessionstore.SessionStatusCompleted))
 
 	// First sweep delivers exactly one completion.
-	h.mgr.sweep(ctx)
+	h.startInboxWake()
+	h.mgr.resumeAfterRestart(ctx)
 	h.waitForDelivery(childID)
 	h.waitForParentCompletions(parent.ID, childID, 1)
 	h.mgr.waitIdle(parent.ID)
@@ -1013,7 +1027,8 @@ func TestIntegration_SweepRedeliversIdempotently(t *testing.T) {
 	// Second sweep is idempotent: the link is now delivered (delivered_at set by the
 	// atomic CAS), so it is excluded from the undelivered set and re-injects nothing
 	// — still exactly one record, never zero.
-	h.mgr.sweep(ctx)
+	h.startInboxWake()
+	h.mgr.resumeAfterRestart(ctx)
 	h.mgr.waitIdle(parent.ID)
 
 	msgs = h.parentMessages(parent.ID)
@@ -1052,10 +1067,10 @@ func newMCPHarnessConfigured(
 	t.Cleanup(func() { _ = db.Close() })
 	require.NoError(t, migrate.Run(ctx, db, dbPath))
 
-	store := NewStore(db)
+	store := sessionstore.NewStore(db)
 	sessStore := sessionstore.NewStore(db)
 	links := subagent.NewStore(db)
-	schedStore := schedule.NewStore(db)
+	schedStore := schedule.NewStore(db, sessStore)
 	registry := mcpstore.NewStore(db)
 
 	workDir := t.TempDir()
@@ -1064,30 +1079,20 @@ func newMCPHarnessConfigured(
 		configure(cfg)
 	}
 
-	factory := session.NewFactoryWithOptions(
-		cfg, nil, nil, sessStore, sessStore, nil, registry, nil,
-		session.WithLLMClientFactory(func(_ *config.Config) (llm.Client, error) {
-			return &scriptedLLM{respond: respond}, nil
-		}),
-	)
+	factory := scriptedBuildInput(t, cfg, sessStore, registry, func(_ *config.Config) (llm.Client, error) {
+		return &scriptedLLM{respond: respond}, nil
+	})
 
-	mgr, _ := newSvc(
+	mgr, _ := newScenarioDaemon(
 		context.Background(),
 		factory,
-		store,
-		sessStore,
-		sessStore,
-		sessStore,
-		sessStore,
-		sessStore,
-		sessStore,
 		sessStore,
 		links,
-		subagent.NewTransactions(db),
+		subagent.NewTransactions(db, sessStore),
 		budget.New(sessStore),
-		sessStore,
-		schedule.NewService(schedStore),
+		schedule.NewService(schedStore, sessStore),
 		func() string { return "fake-model" },
+		db,
 	)
 	mgr.mcpStore = registry
 

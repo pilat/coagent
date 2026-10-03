@@ -23,14 +23,13 @@ func TestCheckpointRetainsTheTailVerbatim(t *testing.T) {
 		contextWindow: window,
 	}
 	s := newCompactionTestSvc(llm)
-	s.ms = newMessageStore(store, 1, nil)
+	s.store = store
+	s.ms = newMessageStore(store, 1)
 
 	original := oversizedTranscript(window)
 	for i := range original {
 		message := original[i]
-		s.ms.mu.Lock()
-		require.NoError(t, s.ms.appendMessageLocked(ctx, &message))
-		s.ms.mu.Unlock()
+		require.NoError(t, appendTestMessage(ctx, s.ms, &message))
 	}
 	before := s.ms.getMessages()
 	beforeRowIDs := s.ms.getRowIDs()
@@ -76,12 +75,12 @@ func TestRestartDerivesTheAnchorFromTheMarkedSummaryRow(t *testing.T) {
 		contextWindow: window,
 	}
 	s := newCompactionTestSvc(llm)
-	s.ms.setMessages(oversizedTranscript(window))
+	setTestMessages(s, oversizedTranscript(window))
 
 	require.NoError(t, s.compactIfNeeded(context.Background(), window))
 
 	reloaded := newCompactionTestSvc(llm)
-	reloaded.ms.setMessages(s.ms.getMessages())
+	setTestMessages(reloaded, s.ms.getMessages())
 
 	cp := parseCheckpointPrefix(reloaded.ms.getMessages(), compactionHeaderSize(reloaded.ms.getMessages()))
 	require.NotEqual(t, -1, cp.summaryRowIdx, "the marked summary row follows the header after a reload")
@@ -112,14 +111,13 @@ func TestOutsideSnapshotCompletionLoadsAfterTheTailInBothReloadOrders(t *testing
 				contextWindow: window,
 			}
 			s := newCompactionTestSvc(llm)
-			s.ms = newMessageStore(store, 1, nil)
+			s.store = store
+			s.ms = newMessageStore(store, 1)
 
 			// Persist the transcript so the store owns the rows the loop reads.
 			for i := range oversizedTranscript(window) {
 				message := oversizedTranscript(window)[i]
-				s.ms.mu.Lock()
-				require.NoError(t, s.ms.appendMessageLocked(ctx, &message))
-				s.ms.mu.Unlock()
+				require.NoError(t, appendTestMessage(ctx, s.ms, &message))
 			}
 
 			require.NoError(t, s.compactIfNeeded(ctx, window))
@@ -138,9 +136,9 @@ func TestOutsideSnapshotCompletionLoadsAfterTheTailInBothReloadOrders(t *testing
 			require.NoError(t, err)
 			resultStored, err := storedMessage(&resultMem)
 			require.NoError(t, err)
-			asstID, err := store.InsertMessage(ctx, 1, asstStored)
+			asstID, err := store.appendRow(ctx, 1, asstStored)
 			require.NoError(t, err)
-			resultID, err := store.InsertMessage(ctx, 1, resultStored)
+			resultID, err := store.appendRow(ctx, 1, resultStored)
 			require.NoError(t, err)
 
 			if order == "completion-reload-then-loop-reload" {

@@ -260,10 +260,15 @@ func (r *runtime) tryEnqueueProgressChange(
 	}
 	draft.Fingerprint = sessionstore.OutputFingerprint(draft.Type, draft.Content, facts.RootID, attributes)
 
-	if _, err := r.sessionStore.EnqueueProgressOutput(
+	output, err := r.sessionStore.EnqueueProgressOutput(
 		ctx, draft, facts.ModelInputGeneration, facts.Status,
-	); err != nil {
+	)
+	if err != nil {
 		return "", false, err
+	}
+
+	if output == nil {
+		return "", false, nil
 	}
 
 	return content, true, nil

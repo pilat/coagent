@@ -44,7 +44,7 @@ func TestShouldCompactImageBytePressure(t *testing.T) {
 	}
 
 	agent := newTestAgent()
-	agent.ms.setMessages(incident)
+	setTestMessages(agent, incident)
 
 	_, count := imagePressure(incident)
 	assert.Greater(t, count, imageCountHighWater)
@@ -57,7 +57,7 @@ func TestShouldCompactImageBytePressure(t *testing.T) {
 		byteOnly = append(byteOnly, pageScan(fmt.Sprintf("b%d", i), 5_000_000))
 	}
 
-	agent.ms.setMessages(byteOnly)
+	setTestMessages(agent, byteOnly)
 
 	bytes, count := imagePressure(byteOnly)
 	assert.Greater(t, bytes, int64(imageBytesHighWater))
@@ -76,7 +76,7 @@ func TestShouldCompactImageCountPressure(t *testing.T) {
 	}
 
 	agent := newTestAgent()
-	agent.ms.setMessages(transcript)
+	setTestMessages(agent, transcript)
 
 	bytes, count := imagePressure(transcript)
 	assert.Less(t, bytes, int64(imageBytesHighWater))
@@ -84,7 +84,7 @@ func TestShouldCompactImageCountPressure(t *testing.T) {
 	assert.True(t, agent.shouldCompact(1_048_576))
 
 	// Equality is not a breach: 20 crops stay quiet, on either axis.
-	agent.ms.setMessages(transcript[:21])
+	setTestMessages(agent, transcript[:21])
 	_, count = imagePressure(transcript[:21])
 	assert.Equal(t, imageCountHighWater, count)
 	assert.False(t, agent.shouldCompact(1_048_576))
@@ -97,7 +97,7 @@ func TestShouldCompactFourScansStayQuiet(t *testing.T) {
 	}
 
 	agent := newTestAgent()
-	agent.ms.setMessages(transcript)
+	setTestMessages(agent, transcript)
 
 	bytes, _ := imagePressure(transcript)
 	assert.Less(t, bytes, int64(imageBytesHighWater), "the fixture total is what matters, not its count")
@@ -186,7 +186,7 @@ func TestImagePressureCompactionRelievesTheByteAxis(t *testing.T) {
 			},
 		)
 	}
-	s.ms.setMessages(messages)
+	setTestMessages(s, messages)
 
 	require.True(t, s.shouldCompact(1_048_576), "byte pressure fires the trigger")
 

@@ -110,6 +110,7 @@ func (t *BatchTool) Execute(ctx context.Context, params json.RawMessage) (*tool.
 	for i, call := range p.Calls {
 		calls[i] = tool.Call{Tool: t.registry.Get(call.Tool), Name: call.Tool, Arguments: call.Params}
 	}
+
 	report := tool.Schedule(ctx, calls)
 	// A batch cannot transfer a nested call's ownership to its outer call ID.
 	for i := range report.Results {

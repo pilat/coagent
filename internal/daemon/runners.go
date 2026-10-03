@@ -297,17 +297,21 @@ func (s *svc) slotInfo(
 func (s *svc) registerRunner(ctx context.Context, sessionID int64, runner *runner) (*runner, bool) {
 	s.liveMu.Lock()
 	defer s.liveMu.Unlock()
+
 	s.progress.SetLive(sessionID, progressruntime.Live{Active: true})
+
 	existing, registered := s.runners.Register(sessionID, runner)
 	if !registered {
 		s.updateLiveLocked(ctx, sessionID)
 	}
+
 	return existing, registered
 }
 
 func (s *svc) removeRunner(ctx context.Context, sessionID int64) {
 	s.liveMu.Lock()
 	defer s.liveMu.Unlock()
+
 	s.runners.Delete(sessionID)
 	s.updateLiveLocked(ctx, sessionID)
 }

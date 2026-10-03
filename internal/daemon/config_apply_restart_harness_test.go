@@ -9,8 +9,8 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/pilat/coagent/internal/configapply"
 	"github.com/pilat/coagent/internal/configops"
-	"github.com/pilat/coagent/internal/configtools"
 	"github.com/pilat/coagent/internal/llmwire"
 	"github.com/pilat/coagent/internal/tool"
 )
@@ -23,7 +23,7 @@ const applyCallID = "cfg-call-1"
 type applyDaemon struct {
 	*subagentHarness
 	ops      configops.Service
-	restarts chan struct{}
+	restarts <-chan struct{}
 }
 
 // configApplyRespond calls config_edit once the /config grant exists, then
@@ -34,7 +34,7 @@ func configApplyRespond(_ string, msgs []llmwire.Message) *llmwire.Response {
 		return &llmwire.Response{Text: "configuration replaced"}
 	}
 
-	if hasUserContaining(msgs, configtools.ConfigEditCommand) {
+	if hasUserContaining(msgs, configapply.ConfigEditCommand) {
 		return &llmwire.Response{ToolCalls: []llmwire.ToolCall{{
 			ID:        applyCallID,
 			Name:      tool.IDConfigEdit,
@@ -69,6 +69,12 @@ func newApplyDaemon(t *testing.T, dbPath, configDir string) *applyDaemon {
 
 func (d *applyDaemon) restartCount() int { return len(d.restarts) }
 
+func (d *applyDaemon) waitForConfigResult(sessionID int64) {
+	d.waitUntil("config verdict consumed", func() bool {
+		return hasToolResultFor(d.parentMessages(sessionID), tool.IDConfigEdit) && !d.mgr.HasActiveLoop(sessionID)
+	})
+}
+
 func (d *applyDaemon) waitForRestart(t *testing.T) {
 	t.Helper()
 
@@ -93,7 +99,7 @@ func (d *applyDaemon) bootVerdict(t *testing.T) (configops.Outcome, error) {
 	require.NoError(t, err)
 
 	if !outcome.Verdict.Failed() {
-		d.mgr.ConsumeConfigEditActivation(
+		d.mgr.applier.ConsumeConfigEditActivation(
 			d.ctx, outcome.Pending.SessionID, outcome.Pending.ToolCallID,
 		)
 	}
@@ -103,8 +109,14 @@ func (d *applyDaemon) bootVerdict(t *testing.T) (configops.Outcome, error) {
 		message = "Config change rejected — " + outcome.Verdict.Reason()
 	}
 
-	if _, err := d.mgr.DeliverPendingCallResult(
-		d.ctx, outcome.Pending.SessionID, outcome.Pending.ToolCallID, outcome.Pending.ToolName, message,
+	if _, err := enqueueCallResult(
+
+		d.ctx, d.mgr.store,
+
+		outcome.Pending.SessionID,
+		outcome.Pending.ToolCallID,
+		outcome.Pending.ToolName,
+		message,
 	); err != nil {
 		return outcome, err
 	}
@@ -119,6 +131,7 @@ func stageApplyAndStop(t *testing.T, dbPath, configDir string) int64 {
 
 	first := newApplyDaemon(t, dbPath, configDir)
 
+	first.startInboxWake()
 	sessionID, err := first.mgr.Send(
 		first.ctx, first.projectID, "reconfigure the daemon", "fake-model",
 		map[string]any{"manager_id": "telegram:main"},
@@ -129,7 +142,8 @@ func stageApplyAndStop(t *testing.T, dbPath, configDir string) int64 {
 	})
 	first.mgr.waitIdle(sessionID)
 
-	require.NoError(t, first.mgr.SendToSession(first.ctx, sessionID, configtools.ConfigEditCommand))
+	first.startInboxWake()
+	require.NoError(t, first.mgr.SendToSession(first.ctx, sessionID, configapply.ConfigEditCommand))
 
 	first.waitForRestart(t)
 	first.waitUntil("session suspended on the config call", func() bool {

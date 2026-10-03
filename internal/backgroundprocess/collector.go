@@ -31,8 +31,24 @@ type collector struct {
 	done       bool
 }
 
-func newCollector(ctx context.Context, file *os.File, quota int64, store Store, processID string, quotaReady <-chan bool, cmd *exec.Cmd) *collector {
-	return &collector{ctx: ctx, file: file, quota: quota, store: store, processID: processID, quotaReady: quotaReady, cmd: cmd}
+func newCollector(
+	ctx context.Context,
+	file *os.File,
+	quota int64,
+	store Store,
+	processID string,
+	quotaReady <-chan bool,
+	cmd *exec.Cmd,
+) *collector {
+	return &collector{
+		ctx:        ctx,
+		file:       file,
+		quota:      quota,
+		store:      store,
+		processID:  processID,
+		quotaReady: quotaReady,
+		cmd:        cmd,
+	}
 }
 
 func (c *collector) Write(p []byte) (int, error) {
@@ -118,5 +134,6 @@ func (c *collector) quotaReached() {
 			)
 		}
 	}
+
 	_ = killGroup(c.cmd)
 }

@@ -71,6 +71,7 @@ func TestHarnessScenario_ForegroundChildHasNoLifetimeLimit(t *testing.T) {
 		h.shutdown()
 	}()
 
+	h.startInboxWake()
 	parentID, err := h.mgr.Send(h.ctx, h.projectID, "run the long child", "fake-model", map[string]any{
 		"manager_id": scenarioManagerID,
 	})
@@ -187,6 +188,7 @@ func TestScenario_RunnerAddsNoChildLifetimeDeadline(t *testing.T) {
 		h.shutdown()
 	}()
 
+	h.startInboxWake()
 	parentID, err := h.mgr.Send(h.ctx, h.projectID, "spawn for seam check", "fake-model", nil)
 	require.NoError(t, err)
 

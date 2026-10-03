@@ -34,12 +34,12 @@ func (s *Store) FireBudget(
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	owner, err := outputOwner(ctx, tx, rootID)
+	_, err = outputOwner(ctx, tx, rootID)
 	if err != nil {
 		return nil, nil, err
 	}
 
-	record, commit, err := fireBudgetTx(ctx, tx, rootID, generation, reason, observedCost, content, owner)
+	record, commit, err := fireBudgetTx(ctx, tx, rootID, generation, reason, observedCost, content)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -101,12 +101,12 @@ func (s *Store) ObserveBudget(
 		content = assistantText + "\n\n" + content
 	}
 
-	owner, err := outputOwner(ctx, tx, rootID)
+	_, err = outputOwner(ctx, tx, rootID)
 	if err != nil {
 		return nil, false, err
 	}
 
-	fired, _, err := fireBudgetTx(ctx, tx, rootID, record.Generation, reason, delta, content, owner)
+	fired, _, err := fireBudgetTx(ctx, tx, rootID, record.Generation, reason, delta, content)
 	if err != nil {
 		return nil, false, err
 	}
@@ -165,7 +165,7 @@ func fireBudgetTx(
 	rootID, generation int64,
 	reason string,
 	observedCost float64,
-	content, owner string,
+	content string,
 ) (*budget.Record, *OutputCommit, error) {
 	now := time.Now().UTC()
 	parkOwner := fmt.Sprintf("budget:%d:%d", rootID, generation)

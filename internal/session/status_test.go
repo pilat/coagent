@@ -36,13 +36,14 @@ func TestBuildSessionStatus_LifetimeFromTreeOccupancyFromProjection(t *testing.T
 
 	s := newCompactionTestSvc(mockLLM)
 	s.store = store
+	s.ms = newMessageStore(store, 1)
 	s.rootID = 1
 	s.model = "test-model"
-	s.ms.setMessages([]llmwire.Message{
+	setTestMessages(s, []llmwire.Message{
 		{Role: llmwire.RoleUser, Content: "task"},
 		{Role: llmwire.RoleAssistant, Content: "big turn"},
 	})
-	s.recordContextBaseline(context.Background(), 150000, 2, s.modelGeneration())
+	s.storeContextBaseline(150000, 2, s.modelGeneration())
 
 	st := s.buildSessionStatus(context.Background())
 
@@ -55,7 +56,7 @@ func TestBuildSessionStatus_LifetimeFromTreeOccupancyFromProjection(t *testing.T
 	assert.Equal(t, 2, st.SubagentCount)
 
 	// A new message after the measurement is counted as a len/4 delta on top.
-	require.NoError(t, s.ms.addUserMessage(context.Background(), strings.Repeat("x", 4000)))
+	require.NoError(t, appendTestUser(context.Background(), s.ms, strings.Repeat("x", 4000)))
 
 	grown := s.buildSessionStatus(context.Background())
 	assert.Equal(t, 151000, grown.ContextUsed, "baseline plus the tail estimate")
@@ -68,9 +69,11 @@ func TestBuildSessionStatus_AfterCompactionEstimatesAndIsNotZero(t *testing.T) {
 	mockLLM := &compactionMockLLM{contextWindow: 200000}
 
 	s := newCompactionTestSvc(mockLLM)
-	s.store = &statusStubStore{in: 600000, out: 50000, cost: 15.0}
+	store := &statusStubStore{in: 600000, out: 50000, cost: 15.0}
+	s.store = store
+	s.ms = newMessageStore(store, 1)
 	s.rootID = 1
-	s.ms.setMessages([]llmwire.Message{
+	setTestMessages(s, []llmwire.Message{
 		{Role: llmwire.RoleUser, Content: "[CONTEXT SUMMARY - previous work condensed] " + strings.Repeat("b", 4000)},
 	})
 	s.resetContextBaseline()

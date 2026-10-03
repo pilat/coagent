@@ -9,13 +9,12 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/pilat/coagent/internal/sessionlifecycle"
 	"github.com/pilat/coagent/internal/sessionstore"
 	"github.com/pilat/coagent/internal/subagent"
 )
 
 type stoppingGateStore struct {
-	sessionstore.OrchestrationStore
+	Store
 	sessionID   int64
 	written     chan struct{}
 	release     chan struct{}
@@ -28,7 +27,7 @@ func (s *stoppingGateStore) UpdateSessionStatus(
 	id int64,
 	status sessionstore.SessionStatus,
 ) error {
-	if err := s.OrchestrationStore.UpdateSessionStatus(ctx, id, status); err != nil {
+	if err := s.Store.UpdateSessionStatus(ctx, id, status); err != nil {
 		return err
 	}
 
@@ -39,20 +38,6 @@ func (s *stoppingGateStore) UpdateSessionStatus(
 
 	return nil
 }
-
-type observedLock struct {
-	permit    chan struct{}
-	attempted chan struct{}
-	acquired  chan struct{}
-}
-
-func (l *observedLock) Lock() {
-	l.attempted <- struct{}{}
-	<-l.permit
-	l.acquired <- struct{}{}
-}
-
-func (l *observedLock) Unlock() { l.permit <- struct{}{} }
 
 func requireBarrierSignal(t *testing.T, signal <-chan struct{}, message string) {
 	t.Helper()
@@ -72,33 +57,20 @@ func TestStopRejectsSpawnQueuedBehindDurableBoundary(t *testing.T) {
 	require.NoError(t, err)
 
 	store := &stoppingGateStore{
-		OrchestrationStore: h.mgr.sessionStore,
-		sessionID:          root.ID,
-		written:            make(chan struct{}),
-		release:            make(chan struct{}),
+		Store:     h.mgr.store,
+		sessionID: root.ID,
+		written:   make(chan struct{}),
+		release:   make(chan struct{}),
 	}
-	lock := &observedLock{
-		permit:    make(chan struct{}, 1),
-		attempted: make(chan struct{}, 2),
-		acquired:  make(chan struct{}, 2),
-	}
-	lock.permit <- struct{}{}
-	<-lock.permit
-	h.mgr.sessionStore = store
-	h.mgr.stopper = sessionlifecycle.NewStopperWithLock(
-		store, h.mgr.lifecycleStore, h.mgr.managerOutputs, h.mgr.links, lock,
-	)
+	h.mgr.store = store
 	t.Cleanup(func() {
 		store.releaseOnce.Do(func() { close(store.release) })
-		h.mgr.sessionStore = store.OrchestrationStore
+		h.mgr.store = store.Store
 	})
 
 	stopDone := make(chan error, 1)
 	go func() { stopDone <- h.mgr.Stop(context.Background(), root.ID, 0) }()
 
-	requireBarrierSignal(t, lock.attempted, "stop did not attempt the admission boundary")
-	lock.permit <- struct{}{}
-	requireBarrierSignal(t, lock.acquired, "stop did not acquire the admission boundary")
 	requireBarrierSignal(t, store.written, "stop did not durably mark the root stopping")
 	record, err := store.GetSession(h.ctx, root.ID)
 	require.NoError(t, err)
@@ -106,7 +78,8 @@ func TestStopRejectsSpawnQueuedBehindDurableBoundary(t *testing.T) {
 
 	spawnDone := make(chan error, 1)
 	go func() {
-		_, spawnErr := h.mgr.Spawn(h.ctx, spawnRequest{ParentID: root.ID, AgentType: "general", Prompt: "x"})
+		h.startInboxWake()
+		_, spawnErr := h.mgr.Spawn(h.ctx, subagent.SpawnRequest{ParentID: root.ID, AgentType: "general", Prompt: "x"})
 		spawnDone <- spawnErr
 	}()
 
@@ -118,7 +91,7 @@ func TestStopRejectsSpawnQueuedBehindDurableBoundary(t *testing.T) {
 
 	store.releaseOnce.Do(func() { close(store.release) })
 	require.NoError(t, <-stopDone)
-	require.ErrorContains(t, <-spawnDone, "not accepting subagents")
+	require.ErrorContains(t, <-spawnDone, "not found or already terminal")
 
 	records, err := store.ListAllSessions(h.ctx)
 	require.NoError(t, err)
@@ -133,8 +106,9 @@ func TestSpawnRejectsStoppedParent(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, h.mgr.Stop(context.Background(), root.ID, 0))
 
-	_, err = h.mgr.Spawn(h.ctx, spawnRequest{ParentID: root.ID, AgentType: "general", Prompt: "x"})
-	require.ErrorContains(t, err, "not accepting subagents")
+	h.startInboxWake()
+	_, err = h.mgr.Spawn(h.ctx, subagent.SpawnRequest{ParentID: root.ID, AgentType: "general", Prompt: "x"})
+	require.ErrorContains(t, err, "not found or already terminal")
 }
 
 // TestChildDepth_ReadErrorCancelsSpawn: a ledger read failure must not read as
@@ -154,7 +128,8 @@ func TestChildDepth_ReadErrorCancelsSpawn(t *testing.T) {
 
 	flaky.failGetLink(1, 0)
 
-	_, err = h.mgr.Spawn(h.ctx, spawnRequest{ParentID: root.ID, AgentType: "general", Prompt: "x"})
+	h.startInboxWake()
+	_, err = h.mgr.Spawn(h.ctx, subagent.SpawnRequest{ParentID: root.ID, AgentType: "general", Prompt: "x"})
 	require.ErrorIs(t, err, errLinkRead)
 }
 
@@ -171,7 +146,8 @@ func TestChildDepth_NoLinkKeepsDepthOne(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 1, depth)
 
-	child, err := h.mgr.Spawn(h.ctx, spawnRequest{ParentID: root.ID, AgentType: "general", Prompt: "x"})
+	h.startInboxWake()
+	child, err := h.mgr.Spawn(h.ctx, subagent.SpawnRequest{ParentID: root.ID, AgentType: "general", Prompt: "x"})
 	require.NoError(t, err)
 
 	link, err := h.links.GetLink(h.ctx, child.ChildID)

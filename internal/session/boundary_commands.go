@@ -20,11 +20,13 @@ func (s *Session) acceptBoundaryCommand(
 ) error {
 	state, err := s.store.LoadCompletionCheckState(ctx, s.id)
 	if err != nil {
-		return err
+		return fmt.Errorf("accept boundary command: %w", err)
 	}
+
 	if batch.fresh || durableCandidateID(state) != 0 {
 		r.handledControl = true
 	}
+
 	output := s.boundaryCommandContent(ctx, input, command)
 	c := &batch.commit
 	c.Accept = append(
@@ -41,16 +43,18 @@ func (s *Session) acceptBoundaryCommand(
 		sessionstore.Output{
 			Type:          sessionstore.OutputMessagePersistent,
 			Content:       output,
-			Key:           fmt.Sprintf("input:%d:command", input.ID),
+			Key:           fmt.Sprintf("input:%d:%s:result", input.ID, strings.TrimPrefix(command, "/")),
 			MessageRef:    -1,
-			ReleasesInput: true,
+			ReleasesInput: false,
 		},
 	)
+
 	return nil
 }
 
 func (s *Session) boundaryCommandContent(ctx context.Context, input *sessionstore.InboxInput, command string) string {
 	output := s.renderSessionHelp()
+
 	switch command {
 	case "/schedules":
 		output = s.schedules
@@ -59,10 +63,15 @@ func (s *Session) boundaryCommandContent(ctx context.Context, input *sessionstor
 		}
 	case "/status":
 		output = renderStatus(s.buildSessionStatus(ctx))
+		if s.status != "" {
+			output = s.status
+		}
+
 		if snapshot, ok := input.Attributes["status"].(string); ok {
 			output = snapshot
 		}
 	}
+
 	return output
 }
 
@@ -70,6 +79,7 @@ func (s *Session) deferBoundaryCompaction(batch *boundaryBatch, input *sessionst
 	if s.compactionDeferAnnounced {
 		return
 	}
+
 	batch.commit.Outputs = append(batch.commit.Outputs, sessionstore.Output{
 		Type: sessionstore.OutputMessagePersistent, Content: compactionDeferredNotice,
 		Key: fmt.Sprintf("input:%d:compact:deferred", input.ID), MessageRef: -1,
@@ -82,6 +92,7 @@ func (s *Session) interruptBoundarySleeps(batch *boundaryBatch, source sessionst
 	if source == sessionstore.InputSourceSchedule {
 		notice = "Sleep interrupted — a scheduled task became due."
 	}
+
 	for _, call := range s.PendingExternalCalls() {
 		if batch.pending[call.ID] != "" {
 			batch.commit.ToolResults = append(batch.commit.ToolResults, &transcript.Message{
@@ -103,11 +114,13 @@ func leadingSlashCommand(content string) string {
 	if trimmed == "" || trimmed[0] != '/' {
 		return ""
 	}
+
 	for i, r := range trimmed {
 		if unicode.IsSpace(r) {
 			return trimmed[:i]
 		}
 	}
+
 	return trimmed
 }
 

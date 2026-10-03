@@ -12,6 +12,7 @@ import (
 	"github.com/pilat/coagent/internal/mcp"
 	"github.com/pilat/coagent/internal/mcpstore"
 	"github.com/pilat/coagent/internal/migrate"
+	"github.com/pilat/coagent/internal/sessionstore"
 )
 
 type registryModelCommand string
@@ -85,7 +86,7 @@ func newRegistryModelHarness(t *testing.T) *registryModelHarness {
 	require.NoError(t, migrate.Run(ctx, db, dbPath))
 
 	workDir := t.TempDir()
-	projectStore := NewStore(db)
+	projectStore := sessionstore.NewStore(db)
 	projectID, err := projectStore.GetOrCreateProject(ctx, workDir)
 	require.NoError(t, err)
 

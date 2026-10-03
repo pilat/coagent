@@ -91,6 +91,7 @@ func TestScenario_DeferredCompactAnnouncesItselfOncePerEpisode(t *testing.T) {
 		h.shutdown()
 	}()
 
+	h.startInboxWake()
 	parentID, err := h.mgr.Send(h.ctx, h.projectID, "do work then spawn", "fake-model", nil)
 	require.NoError(t, err)
 
@@ -99,6 +100,7 @@ func TestScenario_DeferredCompactAnnouncesItselfOncePerEpisode(t *testing.T) {
 
 	h.waitUntil("parent suspended", func() bool { return !h.mgr.HasActiveLoop(parentID) })
 
+	h.startInboxWake()
 	require.NoError(t, h.mgr.SendToSession(h.ctx, parentID, "/compact"))
 
 	collector.waitFor(
@@ -113,6 +115,7 @@ func TestScenario_DeferredCompactAnnouncesItselfOncePerEpisode(t *testing.T) {
 	// Two more wakes while the same blocking child is still out. Each rebuilds
 	// the session from durable state — the episode has not changed.
 	for _, msg := range []string{"any progress?", "still there?"} {
+		h.startInboxWake()
 		require.NoError(t, h.mgr.SendToSession(h.ctx, parentID, msg))
 		h.waitUntil("wake finished", func() bool { return !h.mgr.HasActiveLoop(parentID) })
 	}
@@ -144,10 +147,12 @@ func TestScenario_CompactPublishesItsOrderedNoticeTrace(t *testing.T) {
 		h.shutdown()
 	}()
 
+	h.startInboxWake()
 	sessionID, err := h.mgr.Send(h.ctx, h.projectID, "do some work", "fake-model", nil)
 	require.NoError(t, err)
 	h.mgr.waitIdle(sessionID)
 
+	h.startInboxWake()
 	require.NoError(t, h.mgr.SendToSession(h.ctx, sessionID, "/compact"))
 	collector.waitFor(t, "first compaction reported", func(events []controllerapi.SessionNotification) bool {
 		return countPublishedMessage(events, sessionID, noticeCompacted) == 1
@@ -160,6 +165,7 @@ func TestScenario_CompactPublishesItsOrderedNoticeTrace(t *testing.T) {
 	// compact is a fresh raw group, so a second /compact summarizes it and
 	// reports success again; the "Nothing to compact" branch is covered by
 	// the loop-level compact command tests.
+	h.startInboxWake()
 	require.NoError(t, h.mgr.SendToSession(h.ctx, sessionID, "/compact"))
 	collector.waitFor(t, "second compaction reported", func(events []controllerapi.SessionNotification) bool {
 		return countPublishedMessage(events, sessionID, noticeCompacted) == 2
@@ -183,6 +189,7 @@ func TestScenario_SubagentCompactionNoticesStayInsideTheTree(t *testing.T) {
 		h.shutdown()
 	}()
 
+	h.startInboxWake()
 	parentID, err := h.mgr.Send(h.ctx, h.projectID, "SPAWN_CHILD please", "fake-model", nil)
 	require.NoError(t, err)
 

@@ -125,7 +125,7 @@ func (m *outputProtocolModel) apply(command outputProtocolCommand, manager int) 
 type outputProtocolProduction struct {
 	t       *testing.T
 	ctx     context.Context
-	store   Store
+	store   *Store
 	db      *sql.DB
 	session [2]int64
 	claim   [2]*OutputClaim
@@ -327,7 +327,7 @@ func modelAttempts(model *outputProtocolModel) []int64 {
 // newTemplateTestStore is newTestStore over an optional pre-migrated template
 // file, with fsync latency removed: fuzzing explores the protocol state
 // machine, not disk durability.
-func newTemplateTestStore(t *testing.T, migratedDB []byte) (Store, *sql.DB, int64) {
+func newTemplateTestStore(t *testing.T, migratedDB []byte) (*Store, *sql.DB, int64) {
 	t.Helper()
 
 	ctx := context.Background()
@@ -358,7 +358,7 @@ func newTemplateTestStore(t *testing.T, migratedDB []byte) (Store, *sql.DB, int6
 	projectID, err := res.LastInsertId()
 	require.NoError(t, err)
 
-	return NewStore(db), db, projectID
+	return testStore(db), db, projectID
 }
 
 func TestHarnessModel_ManagerOutputFIFOAndAttemptCAS(t *testing.T) {

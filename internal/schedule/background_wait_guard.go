@@ -36,6 +36,7 @@ func (g *backgroundWaitGuard) Execute(ctx context.Context, params json.RawMessag
 	if err != nil {
 		return nil, fmt.Errorf("check pending background work before %s: %w", g.inner.ID(), err)
 	}
+
 	if pending {
 		return nil, errors.New(
 			"sleep is unavailable while background completion is pending; do not poll. " +
@@ -43,5 +44,6 @@ func (g *backgroundWaitGuard) Execute(ctx context.Context, params json.RawMessag
 				"When none remains, briefly report what is still running and end the response; the result arrives automatically in a later turn",
 		)
 	}
+
 	return g.inner.Execute(ctx, params)
 }

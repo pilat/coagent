@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"database/sql"
 	"testing"
 	"time"
 
@@ -19,16 +20,28 @@ func TestScheduledDeliveryToSubagentIsAcknowledgedWithoutMutation(t *testing.T) 
 		{
 			name: "normal",
 			deliver: func(mgr *svc, sessionID int64) (bool, error) {
-				return mgr.DeliverScheduleTick(
-					t.Context(), sessionID, "schedule:test:normal", "legacy task",
+				return enqueueScheduledInput(
+
+					t.Context(), mgr.store,
+
+					sessionID,
+					"schedule:test:normal",
+					"legacy task",
+					false,
 				)
 			},
 		},
 		{
 			name: "fresh",
 			deliver: func(mgr *svc, sessionID int64) (bool, error) {
-				return mgr.DeliverFreshSchedule(
-					t.Context(), sessionID, "schedule:test:fresh", "legacy fresh task",
+				return enqueueScheduledInput(
+
+					t.Context(), mgr.store,
+
+					sessionID,
+					"schedule:test:fresh",
+					"legacy fresh task",
+					true,
 				)
 			},
 		},
@@ -132,9 +145,26 @@ func createScheduleBoundarySubagent(t *testing.T, h *subagentHarness) int64 {
 
 	parent, err := h.sessStore.CreateSession(t.Context(), h.projectID, "fake-model", "", nil)
 	require.NoError(t, err)
-	childID, err := h.sessStore.CreateSubagentSession(
-		t.Context(), h.projectID, parent.ID, parent.ID, "general", "fake-model", "",
-	)
+	childID, err := func() (int64, error) {
+		var id int64
+		err := h.sessStore.WithTx(t.Context(), func(tx *sql.Tx) error {
+			var err error
+			id, err = sessionstore.CreateSubagentSessionTx(
+				t.Context(),
+				tx,
+				sessionstore.CreateSubagentSession{
+					ProjectID:      h.projectID,
+					ParentID:       parent.ID,
+					RootID:         parent.ID,
+					AgentType:      "general",
+					Model:          "fake-model",
+					ReasoningLevel: "",
+				},
+			)
+			return err
+		})
+		return id, err
+	}()
 	require.NoError(t, err)
 	require.NoError(t, h.sessStore.UpdateSessionStatus(
 		t.Context(), childID, sessionstore.SessionStatusCompleted,

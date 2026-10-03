@@ -8,7 +8,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/pilat/coagent/internal/llmwire"
-	"github.com/pilat/coagent/internal/registry"
+	agentregistry "github.com/pilat/coagent/internal/registry"
 )
 
 // A root session is the primary build agent. When the store lets the schema
@@ -26,13 +26,14 @@ func TestHarnessScenario_RootSessionRunsAsTheBuildAgent(t *testing.T) {
 	h := newGatingHarness(t, nil, respond)
 	defer h.shutdown()
 
+	h.startInboxWake()
 	rootID, err := h.mgr.Send(h.ctx, h.projectID, "do the thing", "fake-model", nil)
 	require.NoError(t, err)
 
 	h.mgr.waitIdle(rootID)
 
 	system := prompts.first(t, "root")
-	assert.True(t, strings.HasPrefix(system, registry.BuildAgentPrompt),
+	assert.True(t, strings.HasPrefix(system, agentregistry.BuildAgentPrompt),
 		"root must open with the primary build prompt, got: %s", firstLine(system))
 	assert.NotContains(t, system, "You are a subagent", "root is nobody's subagent")
 
@@ -42,7 +43,7 @@ func TestHarnessScenario_RootSessionRunsAsTheBuildAgent(t *testing.T) {
 
 	rec, err := h.sessStore.GetSession(h.ctx, rootID)
 	require.NoError(t, err)
-	assert.Equal(t, string(registry.AgentTypeBuild), rec.AgentType,
+	assert.Equal(t, string(agentregistry.AgentTypeBuild), rec.AgentType,
 		"the root row names the agent it runs")
 }
 

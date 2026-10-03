@@ -40,12 +40,23 @@ func TestHarnessScenario_RestartResumesExplicitInputQueuedOnStoppedRoot(t *testi
 	require.NoError(t, first.sessStore.UpdateSessionStatus(
 		first.ctx, root.ID, sessionstore.SessionStatusStopped,
 	))
-	_, err = first.sessStore.EnqueueAsyncInput(
-		first.ctx, root.ID, sessionstore.InputSourceProcess, "retained process fact", nil,
+	_, err = first.sessStore.Enqueue(
+		first.ctx,
+		sessionstore.Input{
+			SessionID:  root.ID,
+			Source:     sessionstore.InputSourceProcess,
+			Content:    "retained process fact",
+			Attributes: nil,
+		},
 	)
 	require.NoError(t, err)
-	_, err = first.sessStore.EnqueueInput(
-		first.ctx, root.ID, sessionstore.InputSourceUser, "explicit resume after stop",
+	_, err = first.sessStore.Enqueue(
+		first.ctx,
+		sessionstore.Input{
+			SessionID: root.ID,
+			Source:    sessionstore.InputSourceUser,
+			Content:   "explicit resume after stop",
+		},
 	)
 	require.NoError(t, err)
 	first.shutdown()
@@ -56,7 +67,8 @@ func TestHarnessScenario_RestartResumesExplicitInputQueuedOnStoppedRoot(t *testi
 		collector.stop()
 		second.shutdown()
 	}()
-	second.mgr.sweep(second.ctx)
+	second.startInboxWake()
+	second.mgr.resumeAfterRestart(second.ctx)
 	waitForVisibleMessage(t, collector, root.ID, "stopped root resumed after restart")
 	drainScenarioClaims(t, "explicit_stopped_resume_restart.json", newChainController(t, second))
 	waitForIdleAfterMessage(t, collector, root.ID, "stopped root resumed after restart")
@@ -83,10 +95,19 @@ func TestHarnessScenario_RestartConsumesReadOnlyInputQueuedOnStoppedRoot(t *test
 	require.NoError(t, first.sessStore.UpdateSessionStatus(
 		first.ctx, root.ID, sessionstore.SessionStatusStopped,
 	))
-	_, err = first.sessStore.EnqueueInput(first.ctx, root.ID, sessionstore.InputSourceUser, "/help")
+	_, err = first.sessStore.Enqueue(
+		first.ctx,
+		sessionstore.Input{SessionID: root.ID, Source: sessionstore.InputSourceUser, Content: "/help"},
+	)
 	require.NoError(t, err)
-	asyncInput, err := first.sessStore.EnqueueAsyncInput(
-		first.ctx, root.ID, sessionstore.InputSourceProcess, "retained process fact", nil,
+	asyncInput, err := first.sessStore.Enqueue(
+		first.ctx,
+		sessionstore.Input{
+			SessionID:  root.ID,
+			Source:     sessionstore.InputSourceProcess,
+			Content:    "retained process fact",
+			Attributes: nil,
+		},
 	)
 	require.NoError(t, err)
 	first.shutdown()
@@ -102,7 +123,8 @@ func TestHarnessScenario_RestartConsumesReadOnlyInputQueuedOnStoppedRoot(t *test
 		collector.stop()
 		second.shutdown()
 	}()
-	second.mgr.sweep(second.ctx)
+	second.startInboxWake()
+	second.mgr.resumeAfterRestart(second.ctx)
 	collector.waitFor(t, "session help", func(events []controllerapi.SessionNotification) bool {
 		return slices.ContainsFunc(events, func(event controllerapi.SessionNotification) bool {
 			return event.SessionID == root.ID && event.Notification.Type == sessionevent.NotifyMessage &&
@@ -123,7 +145,7 @@ func TestHarnessScenario_RestartConsumesReadOnlyInputQueuedOnStoppedRoot(t *test
 	assert.Zero(t, modelCalls.Load())
 	pending, err := second.sessStore.PeekPending(second.ctx, root.ID)
 	require.NoError(t, err)
-	assert.Equal(t, asyncInput.ID, pending.ID)
+	assert.Equal(t, asyncInput.Input.ID, pending.ID)
 	assert.Equal(t, sessionstore.InputSourceProcess, pending.Source)
 	assertHarnessTrace(t, "stopped_read_only_restart.json", collector.snapshot(), root.ID)
 }
@@ -152,8 +174,13 @@ func TestScenario_RestartResumesExplicitInputQueuedOnErroredChild(t *testing.T) 
 	won, err := first.mgr.subagents.DeliverBackgroundCompletion(first.ctx, *link, 1)
 	require.NoError(t, err)
 	require.True(t, won)
-	_, err = first.sessStore.EnqueueInput(
-		first.ctx, childID, sessionstore.InputSourceAgent, "explicit retry after error",
+	_, err = first.sessStore.Enqueue(
+		first.ctx,
+		sessionstore.Input{
+			SessionID: childID,
+			Source:    sessionstore.InputSourceAgent,
+			Content:   "explicit retry after error",
+		},
 	)
 	require.NoError(t, err)
 	require.NoError(t, first.sessStore.UpdateSessionStatus(
@@ -204,16 +231,44 @@ func TestHarnessScenario_RestartSettlesPersistedFinalWithoutRepublishing(t *test
 	first := newSubagentHarnessOnDB(t, dbPath, respond, nil)
 	root, err := first.sessStore.CreateSession(first.ctx, first.projectID, "fake-model", "", nil)
 	require.NoError(t, err)
-	input, err := first.sessStore.EnqueueInput(
-		first.ctx, root.ID, sessionstore.InputSourceUser, "answered before crash",
+	input, err := first.sessStore.Enqueue(
+		first.ctx,
+		sessionstore.Input{SessionID: root.ID, Source: sessionstore.InputSourceUser, Content: "answered before crash"},
 	)
 	require.NoError(t, err)
-	_, err = first.sessStore.PromoteInput(first.ctx, input.ID, "[user] answered before crash")
+	_, err = first.sessStore.Commit(
+		first.ctx,
+		sessionstore.Commit{
+			SessionID: input.Input.SessionID,
+			Accept: []sessionstore.Accept{
+				{
+					InputID:    input.Input.ID,
+					State:      sessionstore.InputStateAccepted,
+					Content:    "[user] answered before crash",
+					LinkRef:    -1,
+					ModelBound: true,
+				},
+			},
+		},
+	)
 	require.NoError(t, err)
-	_, err = first.sessStore.InsertMessage(first.ctx, root.ID, &transcript.Message{
-		Role: llmwire.RoleAssistant, Content: "persisted final",
-	})
+	final, err := first.sessStore.Commit(
+		first.ctx,
+		sessionstore.Commit{
+			SessionID: root.ID,
+			Messages:  []*transcript.Message{{Role: llmwire.RoleAssistant, Content: "persisted final"}},
+		},
+	)
 	require.NoError(t, err)
+	_, err = first.sessStore.Commit(
+		first.ctx,
+		sessionstore.Commit{
+			SessionID: root.ID,
+			State:     sessionstore.StatePatch{ConfirmedAnswerID: &final.MessageIDs[0]},
+		},
+	)
+	require.NoError(t, err)
+
 	first.shutdown()
 
 	second := newSubagentHarnessOnDB(t, dbPath, respond, nil)
@@ -223,7 +278,8 @@ func TestHarnessScenario_RestartSettlesPersistedFinalWithoutRepublishing(t *test
 		second.shutdown()
 	}()
 
-	second.mgr.sweep(second.ctx)
+	second.startInboxWake()
+	second.mgr.resumeAfterRestart(second.ctx)
 	collector.waitFor(t, "persisted final settled", func(events []controllerapi.SessionNotification) bool {
 		return slices.ContainsFunc(events, func(event controllerapi.SessionNotification) bool {
 			return event.SessionID == root.ID &&
@@ -252,13 +308,32 @@ func TestHarnessScenario_RestartDoesNotRunHandledHeaderOnlySession(t *testing.T)
 	first := newSubagentHarnessOnDB(t, dbPath, respond, nil)
 	root, err := first.sessStore.CreateSession(first.ctx, first.projectID, "fake-model", "", nil)
 	require.NoError(t, err)
-	_, err = first.sessStore.InsertMessage(first.ctx, root.ID, &transcript.Message{
+	_, err = first.sessStore.Commit(first.ctx, sessionstore.Commit{SessionID: root.ID, Messages: []*transcript.Message{{
 		Role: llmwire.RoleUser, Content: "User preferences from AGENTS.md files:\n\nheader only",
-	})
+	}}})
 	require.NoError(t, err)
-	input, err := first.sessStore.EnqueueInput(first.ctx, root.ID, sessionstore.InputSourceUser, "/status")
+	input, err := first.sessStore.Enqueue(
+		first.ctx,
+		sessionstore.Input{SessionID: root.ID, Source: sessionstore.InputSourceUser, Content: "/status"},
+	)
 	require.NoError(t, err)
-	require.NoError(t, first.sessStore.HandleInput(first.ctx, input.ID, "status command"))
+	require.NoError(t, func() error {
+		_, err := first.sessStore.Commit(
+			first.ctx,
+			sessionstore.Commit{
+				SessionID: input.Input.SessionID,
+				Accept: []sessionstore.Accept{
+					{
+						InputID: input.Input.ID,
+						State:   sessionstore.InputStateHandled,
+						Reason:  "status command",
+						LinkRef: -1,
+					},
+				},
+			},
+		)
+		return err
+	}())
 	first.shutdown()
 
 	second := newSubagentHarnessOnDB(t, dbPath, respond, nil)
@@ -268,7 +343,8 @@ func TestHarnessScenario_RestartDoesNotRunHandledHeaderOnlySession(t *testing.T)
 		second.shutdown()
 	}()
 
-	second.mgr.sweep(second.ctx)
+	second.startInboxWake()
+	second.mgr.resumeAfterRestart(second.ctx)
 	assert.False(t, second.mgr.HasActiveLoop(root.ID))
 	assert.Zero(t, modelCalls.Load())
 	assert.Empty(t, collector.snapshot(), "handled control input must not create recovery events")
@@ -293,11 +369,26 @@ func runAcceptedInputRestartScenario(
 	first := newSubagentHarnessOnDB(t, dbPath, respond, nil)
 	root, err := first.sessStore.CreateSession(first.ctx, first.projectID, "fake-model", "", nil)
 	require.NoError(t, err)
-	input, err := first.sessStore.EnqueueInput(
-		first.ctx, root.ID, sessionstore.InputSourceUser, "accepted before crash",
+	input, err := first.sessStore.Enqueue(
+		first.ctx,
+		sessionstore.Input{SessionID: root.ID, Source: sessionstore.InputSourceUser, Content: "accepted before crash"},
 	)
 	require.NoError(t, err)
-	_, err = first.sessStore.PromoteInput(first.ctx, input.ID, "[user] accepted before crash")
+	_, err = first.sessStore.Commit(
+		first.ctx,
+		sessionstore.Commit{
+			SessionID: input.Input.SessionID,
+			Accept: []sessionstore.Accept{
+				{
+					InputID:    input.Input.ID,
+					State:      sessionstore.InputStateAccepted,
+					Content:    "[user] accepted before crash",
+					LinkRef:    -1,
+					ModelBound: true,
+				},
+			},
+		},
+	)
 	require.NoError(t, err)
 	if afterInput != nil {
 		afterInput(t, first, root.ID)
@@ -311,7 +402,8 @@ func runAcceptedInputRestartScenario(
 		second.shutdown()
 	}()
 
-	second.mgr.sweep(second.ctx)
+	second.startInboxWake()
+	second.mgr.resumeAfterRestart(second.ctx)
 	waitForVisibleMessage(t, collector, root.ID, "accepted input recovered")
 	waitForIdleAfterMessage(t, collector, root.ID, "accepted input recovered")
 
@@ -327,12 +419,12 @@ func appendCrashToolProgress(t *testing.T, h *subagentHarness, sessionID int64) 
 		ID: "crash-tool", Name: "read", Arguments: []byte(`{"path":"README.md"}`),
 	}})
 	require.NoError(t, err)
-	_, err = h.sessStore.InsertMessage(h.ctx, sessionID, &transcript.Message{
+	_, err = h.sessStore.Commit(h.ctx, sessionstore.Commit{SessionID: sessionID, Messages: []*transcript.Message{{
 		Role: llmwire.RoleAssistant, ToolCalls: calls,
-	})
+	}}})
 	require.NoError(t, err)
-	_, err = h.sessStore.InsertMessage(h.ctx, sessionID, &transcript.Message{
+	_, err = h.sessStore.Commit(h.ctx, sessionstore.Commit{SessionID: sessionID, Messages: []*transcript.Message{{
 		Role: llmwire.RoleTool, ToolCallID: "crash-tool", ToolName: "read", Content: "durable tool result",
-	})
+	}}})
 	require.NoError(t, err)
 }

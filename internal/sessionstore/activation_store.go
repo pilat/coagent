@@ -138,21 +138,6 @@ func (s *Store) PendingActivation(ctx context.Context, sessionID int64) (*ToolAc
 	return activation, nil
 }
 
-func (s *Store) activationByInput(ctx context.Context, inputID int64) (*ToolActivation, error) {
-	activation, err := scanActivation(s.db.QueryRowContext(ctx, `SELECT input_id, session_id, tool_id,
-		command, state, COALESCE(tool_call_id, ''), created_at, resolved_at
-		FROM session_tool_activations WHERE input_id = ?`, inputID))
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, ErrActivationNotFound
-	}
-
-	if err != nil {
-		return nil, fmt.Errorf("load tool activation: %w", err)
-	}
-
-	return activation, nil
-}
-
 func scanActivation(row interface{ Scan(...any) error }) (*ToolActivation, error) {
 	var activation ToolActivation
 
@@ -180,11 +165,4 @@ func requireActivationChanged(result sql.Result) error {
 	}
 
 	return nil
-}
-
-// consumedForSession reports whether the grant is already paid by its own
-// mutation, making terminal settlement a no-op instead of a conflict.
-func consumedForSession(activation *ToolActivation, sessionID int64) bool {
-	return activation != nil && activation.SessionID == sessionID &&
-		activation.State == ActivationConsumed
 }

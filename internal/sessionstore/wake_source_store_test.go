@@ -38,7 +38,7 @@ func TestWakeSource_UndeliveredBackgroundLinkStates(t *testing.T) {
 	for _, state := range []string{"spawned", "running", "completed", "error"} {
 		parent, err := store.CreateSession(ctx, projectID, "m", "", nil)
 		require.NoError(t, err)
-		childID, err := store.CreateSubagentSession(ctx, projectID, parent.ID, parent.ID, "general", "m", "")
+		childID, err := createChild(ctx, store, projectID, parent.ID, parent.ID, "general", "m", "")
 		require.NoError(t, err)
 
 		_, err = db.ExecContext(ctx, `INSERT INTO subagent_links
@@ -54,7 +54,7 @@ func TestWakeSource_UndeliveredBackgroundLinkStates(t *testing.T) {
 	for _, state := range []string{"stopped", "killed"} {
 		parent, err := store.CreateSession(ctx, projectID, "m", "", nil)
 		require.NoError(t, err)
-		childID, err := store.CreateSubagentSession(ctx, projectID, parent.ID, parent.ID, "general", "m", "")
+		childID, err := createChild(ctx, store, projectID, parent.ID, parent.ID, "general", "m", "")
 		require.NoError(t, err)
 
 		_, err = db.ExecContext(ctx, `INSERT INTO subagent_links
@@ -73,7 +73,7 @@ func TestWakeSource_PendingAsyncInboxIsAWakeSource(t *testing.T) {
 	store, _, projectID := newTestStore(t)
 	sessionID := seedCompletionSession(t, store, nil, projectID)
 
-	_, err := store.EnqueueAsyncInput(ctx, sessionID, InputSourceProcess, "process done", nil)
+	_, err := enqueueFact(ctx, store, sessionID, InputSourceProcess, "process done", nil)
 	require.NoError(t, err)
 
 	has, err := store.HasBackgroundWakeSource(ctx, sessionID)

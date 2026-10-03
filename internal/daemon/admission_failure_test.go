@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"database/sql"
 	"testing"
 	"time"
 
@@ -27,7 +28,7 @@ func (s childStateLinkStore) GetLink(context.Context, int64) (*subagent.Link, er
 }
 
 type childStateSessionStore struct {
-	sessionstore.OrchestrationStore
+	Store
 	record *sessionstore.SessionRecord
 	reads  int
 }
@@ -55,12 +56,29 @@ func TestDrainPendingRunners_DerivesPromotedRecoveryAfterCapacityWait(t *testing
 		mgr.Shutdown(3 * time.Second)
 	})
 
-	projectID := testProject(t, projects, "/tmp/recovery-capacity")
-	rec, err := mgr.sessionStore.CreateSession(ctx, projectID, "model", "", nil)
+	projectID := testProject(t, projects, t.TempDir())
+	rec, err := mgr.store.CreateSession(ctx, projectID, "fake-model", "", nil)
 	require.NoError(t, err)
-	input, err := mgr.inboxStore.EnqueueInput(ctx, rec.ID, sessionstore.InputSourceUser, "promoted before crash")
+	input, err := mgr.store.Enqueue(
+		ctx,
+		sessionstore.Input{SessionID: rec.ID, Source: sessionstore.InputSourceUser, Content: "promoted before crash"},
+	)
 	require.NoError(t, err)
-	_, err = mgr.inboxStore.PromoteInput(ctx, input.ID, "promoted before crash")
+	_, err = mgr.store.Commit(
+		ctx,
+		sessionstore.Commit{
+			SessionID: input.Input.SessionID,
+			Accept: []sessionstore.Accept{
+				{
+					InputID:    input.Input.ID,
+					State:      sessionstore.InputStateAccepted,
+					Content:    "promoted before crash",
+					LinkRef:    -1,
+					ModelBound: true,
+				},
+			},
+		},
+	)
 	require.NoError(t, err)
 
 	sess := &mockSession{completeAfter: 10 * time.Millisecond}
@@ -98,9 +116,26 @@ func TestDrainQueue_UnknownChildStateDefers(t *testing.T) {
 	require.NoError(t, err)
 
 	for _, callID := range []string{"bg-1", "bg-2", "bg-3"} {
-		childID, cerr := h.sessStore.CreateSubagentSession(
-			h.ctx, h.projectID, parent.ID, parent.ID, "general", "fake-model", "",
-		)
+		childID, cerr := func() (int64, error) {
+			var id int64
+			err := h.sessStore.WithTx(h.ctx, func(tx *sql.Tx) error {
+				var err error
+				id, err = sessionstore.CreateSubagentSessionTx(
+					h.ctx,
+					tx,
+					sessionstore.CreateSubagentSession{
+						ProjectID:      h.projectID,
+						ParentID:       parent.ID,
+						RootID:         parent.ID,
+						AgentType:      "general",
+						Model:          "fake-model",
+						ReasoningLevel: "",
+					},
+				)
+				return err
+			})
+			return id, err
+		}()
 		require.NoError(t, cerr)
 		require.NoError(t, h.links.InsertSubagentLink(h.ctx, subagent.Link{
 			ParentID: parent.ID, ChildID: childID, TaskCallID: callID,
@@ -177,7 +212,7 @@ func TestChildTerminated_ClassifiesLedgerBeforeSessionFallback(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			sessions := &childStateSessionStore{record: tt.record}
-			mgr := &svc{links: childStateLinkStore{link: tt.link}, sessionStore: sessions}
+			mgr := &svc{links: childStateLinkStore{link: tt.link}, store: sessions}
 
 			got, err := mgr.childTerminated(t.Context(), 42)
 			require.NoError(t, err)

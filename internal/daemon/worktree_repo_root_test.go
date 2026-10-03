@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"database/sql"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -15,13 +16,47 @@ func TestSessionRepoRoot_InheritedAcrossDurableSubagentTree(t *testing.T) {
 		"repo_root": "/source",
 	})
 	require.NoError(t, err)
-	childID, err := h.sessStore.CreateSubagentSession(
-		h.ctx, h.projectID, root.ID, root.ID, "general", "fake-model", "",
-	)
+	childID, err := func() (int64, error) {
+		var id int64
+		err := h.sessStore.WithTx(h.ctx, func(tx *sql.Tx) error {
+			var err error
+			id, err = sessionstore.CreateSubagentSessionTx(
+				h.ctx,
+				tx,
+				sessionstore.CreateSubagentSession{
+					ProjectID:      h.projectID,
+					ParentID:       root.ID,
+					RootID:         root.ID,
+					AgentType:      "general",
+					Model:          "fake-model",
+					ReasoningLevel: "",
+				},
+			)
+			return err
+		})
+		return id, err
+	}()
 	require.NoError(t, err)
-	grandchildID, err := h.sessStore.CreateSubagentSession(
-		h.ctx, h.projectID, childID, root.ID, "general", "fake-model", "",
-	)
+	grandchildID, err := func() (int64, error) {
+		var id int64
+		err := h.sessStore.WithTx(h.ctx, func(tx *sql.Tx) error {
+			var err error
+			id, err = sessionstore.CreateSubagentSessionTx(
+				h.ctx,
+				tx,
+				sessionstore.CreateSubagentSession{
+					ProjectID:      h.projectID,
+					ParentID:       childID,
+					RootID:         root.ID,
+					AgentType:      "general",
+					Model:          "fake-model",
+					ReasoningLevel: "",
+				},
+			)
+			return err
+		})
+		return id, err
+	}()
 	require.NoError(t, err)
 
 	for _, sessionID := range []int64{root.ID, childID, grandchildID} {

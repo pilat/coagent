@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"database/sql"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -13,6 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/pilat/coagent/internal/backgroundprocess"
+	"github.com/pilat/coagent/internal/budget"
 	"github.com/pilat/coagent/internal/llmwire"
 	"github.com/pilat/coagent/internal/sessionevent"
 	"github.com/pilat/coagent/internal/sessionstore"
@@ -41,6 +43,7 @@ func TestHarnessScenario_CompletionCheckConfirmsBeforePublishing(t *testing.T) {
 		h.shutdown()
 	}()
 
+	h.startInboxWake()
 	root, err := h.mgr.Send(h.ctx, h.projectID, "do the work", "fake-model", map[string]any{
 		"manager_id": scenarioManagerID,
 	})
@@ -106,6 +109,7 @@ func TestHarnessScenario_CompletionCheckBackgroundProcessYieldPublishesOnce(t *t
 
 	service := installScenarioProcessService(t, h)
 
+	h.startInboxWake()
 	root, err := h.mgr.Send(h.ctx, h.projectID, "start a process", "fake-model", map[string]any{
 		"manager_id": scenarioManagerID,
 	})
@@ -170,6 +174,7 @@ func TestHarnessScenario_CompletionCheckEmptyBackgroundYieldYieldsSilently(t *te
 
 	service := installScenarioProcessService(t, h)
 
+	h.startInboxWake()
 	root, err := h.mgr.Send(h.ctx, h.projectID, "start a process and wait", "fake-model", map[string]any{
 		"manager_id": scenarioManagerID,
 	})
@@ -223,12 +228,32 @@ func TestHarnessScenario_CompletionCheckStoppedLinkIsNotAWakeSource(t *testing.T
 				h.shutdown()
 			}()
 
+			h.startInboxWake()
 			root, err := h.mgr.Send(h.ctx, h.projectID, "work while child is dead", "fake-model", map[string]any{
 				"manager_id": scenarioManagerID,
 			})
 			require.NoError(t, err)
 
-			child, err := h.sessStore.CreateSubagentSession(h.ctx, h.projectID, root, root, "general", "fake-model", "")
+			child, err := func() (int64, error) {
+				var id int64
+				err := h.sessStore.WithTx(h.ctx, func(tx *sql.Tx) error {
+					var err error
+					id, err = sessionstore.CreateSubagentSessionTx(
+						h.ctx,
+						tx,
+						sessionstore.CreateSubagentSession{
+							ProjectID:      h.projectID,
+							ParentID:       root,
+							RootID:         root,
+							AgentType:      "general",
+							Model:          "fake-model",
+							ReasoningLevel: "",
+						},
+					)
+					return err
+				})
+				return id, err
+			}()
 			require.NoError(t, err)
 			_, err = h.db.ExecContext(h.ctx, `INSERT INTO subagent_links
 				(parent_id, child_id, task_call_id, blocking, depth, state, created_at)
@@ -262,6 +287,7 @@ func TestHarnessScenario_CompletionCheckCrashAfterToolPersistenceRestartsClean(t
 		}}}
 	}, nil)
 
+	first.startInboxWake()
 	root, err := first.mgr.Send(first.ctx, first.projectID, "sleep then answer", "fake-model", map[string]any{
 		"manager_id": scenarioManagerID,
 	})
@@ -285,7 +311,8 @@ func TestHarnessScenario_CompletionCheckCrashAfterToolPersistenceRestartsClean(t
 		return &llmwire.Response{Text: "fresh confirmation after crash"}
 	}, nil)
 	defer second.shutdown()
-	second.mgr.sweep(second.ctx)
+	second.startInboxWake()
+	second.mgr.resumeAfterRestart(second.ctx)
 
 	restarted, err := second.sessStore.LoadCompletionCheckState(second.ctx, root)
 	require.NoError(t, err)
@@ -318,6 +345,7 @@ func TestHarnessScenario_CompletionCheckBudgetCrossingOnCandidateHidesText(t *te
 		h.shutdown()
 	}()
 
+	h.startInboxWake()
 	root, err := h.mgr.Send(h.ctx, h.projectID, "do work under a tight budget", "fake-model", map[string]any{
 		"manager_id": scenarioManagerID,
 	})
@@ -353,7 +381,7 @@ func TestHarnessScenario_CompletionCheckBudgetCrossingOnCandidateHidesText(t *te
 		Scan(&leaks))
 	assert.Zero(t, leaks, "the unconfirmed candidate text never publishes")
 
-	record, err := h.sessStore.GetBudget(h.ctx, root)
+	record, err := h.sessStore.Get(h.ctx, root)
 	require.NoError(t, err)
-	assert.Equal(t, sessionstore.BudgetFired, record.State)
+	assert.Equal(t, budget.Fired, record.State)
 }

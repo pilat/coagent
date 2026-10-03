@@ -17,7 +17,6 @@ import (
 	"github.com/pilat/coagent/internal/llmwire"
 	"github.com/pilat/coagent/internal/progressruntime"
 	"github.com/pilat/coagent/internal/sessionevent"
-	"github.com/pilat/coagent/internal/sessionstore"
 )
 
 func TestHarnessScenario_LongSessionFixturePreservesReportedOrdering(t *testing.T) {
@@ -61,11 +60,13 @@ func TestHarnessScenario_LongSessionAcceptsInputWithoutChatReceipt(t *testing.T)
 		h.shutdown()
 	}()
 
+	h.startInboxWake()
 	sessionID, err := h.mgr.Send(h.ctx, h.projectID, "sanitized session-165 root input", "fake-model", map[string]any{
 		"manager_id": "telegram:main",
 	})
 	require.NoError(t, err)
 	waitForScenarioSignal(t, entered, "model call")
+	h.startInboxWake()
 	require.NoError(t, h.mgr.SendToSession(h.ctx, sessionID, "queued follow-up"))
 
 	var inputs, acknowledgements int
@@ -99,12 +100,13 @@ func TestHarnessScenario_WorkingMainModelRefreshesProgressEveryThirtySeconds(t *
 		h.shutdown()
 	}()
 
+	h.startInboxWake()
 	sessionID, err := h.mgr.Send(h.ctx, h.projectID, "sanitized long work", "fake-model", map[string]any{
 		"manager_id": "telegram:main",
 	})
 	require.NoError(t, err)
 	waitForScenarioSignal(t, entered, "working main model call")
-	progressStore := h.sessStore.(sessionstore.ProgressStore)
+	progressStore := h.sessStore
 	facts, err := progressStore.CaptureProgress(h.ctx, sessionID)
 	require.NoError(t, err)
 	require.Nil(t, facts.LastSemanticOutputAt)
@@ -155,6 +157,7 @@ func TestHarnessScenario_ReactivatedEpisodeGetsFullMainModelInterval(t *testing.
 		h.shutdown()
 	}()
 
+	h.startInboxWake()
 	sessionID, err := h.mgr.Send(h.ctx, h.projectID, "first episode", "fake-model", map[string]any{
 		"manager_id": "telegram:main",
 	})
@@ -166,10 +169,11 @@ func TestHarnessScenario_ReactivatedEpisodeGetsFullMainModelInterval(t *testing.
 	_, err = h.db.ExecContext(h.ctx, `UPDATE session_outbox SET created_at = ?
 		WHERE session_id = ? AND type IN ('message_persistent', 'message_replaceable')`, old, sessionID)
 	require.NoError(t, err)
+	h.startInboxWake()
 	require.NoError(t, h.mgr.SendToSession(h.ctx, sessionID, "second episode"))
 	waitForScenarioSignal(t, enteredSecond, "reactivated model call")
 
-	progressStore := h.sessStore.(sessionstore.ProgressStore)
+	progressStore := h.sessStore
 	facts, err := progressStore.CaptureProgress(h.ctx, sessionID)
 	require.NoError(t, err)
 	require.NotNil(t, facts.EpisodeStartedAt)
@@ -201,12 +205,13 @@ func TestHarnessScenario_EmptyRootStartsEpisodeWithFirstInput(t *testing.T) {
 		h.shutdown()
 	}()
 
+	h.startInboxWake()
 	sessionID, err := h.mgr.Send(h.ctx, h.projectID, "", "fake-model", map[string]any{
 		"manager_id": "telegram:main",
 	})
 	require.NoError(t, err)
 
-	progressStore := h.sessStore.(sessionstore.ProgressStore)
+	progressStore := h.sessStore
 	roots, err := progressStore.ListAutonomousProgressRoots(h.ctx)
 	require.NoError(t, err)
 	assert.NotContains(t, roots, sessionID)
@@ -214,6 +219,7 @@ func TestHarnessScenario_EmptyRootStartsEpisodeWithFirstInput(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, current.Rendered, "Wall time: unavailable")
 
+	h.startInboxWake()
 	require.NoError(t, h.mgr.SendToSession(h.ctx, sessionID, "first task"))
 	waitForScenarioSignal(t, entered, "first model call")
 

@@ -38,7 +38,7 @@ func TestLoopReplaysReasoningPayloadOnTheNextTurn(t *testing.T) {
 	agent := newTestAgent(&stubTool{id: "read", result: "content"})
 	agent.llmClient = llmClient
 
-	_, err := runLoop(t.Context(), agent, loopOptions{}, iterationGuard(5))
+	_, err := runTestLoop(t, agent)
 	require.NoError(t, err)
 
 	var assistant *llmwire.Message
@@ -70,7 +70,7 @@ func TestReloadMessagesRestoresReasoningRaw(t *testing.T) {
 			{ID: 1, Role: llmwire.RoleUser, Content: "go"},
 			{ID: 2, Role: llmwire.RoleAssistant, Content: "sure", ReasoningRaw: reasoningBlob},
 		},
-	}, 1, nil)
+	}, 1)
 
 	require.NoError(t, ms.reloadMessages(context.Background()))
 

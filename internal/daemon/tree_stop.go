@@ -20,7 +20,6 @@ func (p *stopPlan) SessionIDs() []int64 {
 }
 
 func (s *svc) beginStop(ctx context.Context, rootID int64, liveSessionIDs []int64) (*stopPlan, error) {
-
 	plan, err := s.stopPlan(ctx, rootID, liveSessionIDs)
 	if err != nil {
 		return nil, err
@@ -77,8 +76,9 @@ func (s *svc) completeExplicitStop(
 	if _, err := s.store.CompleteExplicitStop(ctx, rootID, inputID, cancelledProcesses); err != nil {
 		return fmt.Errorf("commit explicit stop completion: %w", err)
 	}
+
 	if _, err := s.store.ReactivateForSchedule(ctx, rootID); err != nil {
-		return err
+		return fmt.Errorf("complete explicit stop: %w", err)
 	}
 
 	record, err := s.store.GetSession(ctx, rootID)

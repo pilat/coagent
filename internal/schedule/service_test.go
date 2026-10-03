@@ -9,6 +9,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/pilat/coagent/internal/schedule"
+	"github.com/pilat/coagent/internal/sessionstore"
+	"github.com/pilat/coagent/internal/transcript"
 )
 
 func TestService_CreationVariantsKeepExactIdentity(t *testing.T) {
@@ -18,7 +20,7 @@ func TestService_CreationVariantsKeepExactIdentity(t *testing.T) {
 	rec, err := sessStore.CreateSession(ctx, projectID, "", "", nil)
 	require.NoError(t, err)
 
-	svc := schedule.NewService(schedStore)
+	svc := schedule.NewService(schedStore, sessStore)
 
 	_, err = svc.AddRecurring(ctx, rec.ID, "", "invalid", false)
 	require.Error(t, err)
@@ -31,6 +33,17 @@ func TestService_CreationVariantsKeepExactIdentity(t *testing.T) {
 
 	_, err = svc.AddRecurring(ctx, rec.ID, "0 9 * * *", "daily", false)
 	require.NoError(t, err)
+	_, err = sessStore.Commit(
+		ctx,
+		sessionstore.Commit{
+			SessionID: rec.ID,
+			Messages: []*transcript.Message{
+				{Role: "assistant", ToolCalls: []byte(`[{"ID":"sleep-call-7","Name":"sleep","Arguments":"e30="}]`)},
+			},
+		},
+	)
+	require.NoError(t, err)
+
 	_, err = svc.AddSleep(ctx, rec.ID, "sleep-call-7", time.Now().Add(time.Hour), "wake")
 	require.NoError(t, err)
 
@@ -52,7 +65,7 @@ func TestService_CancelPendingSleepsPreservesStandaloneInput(t *testing.T) {
 	_, err = schedStore.AddSchedule(ctx, rec.ID, "", &standaloneAt, "standalone input", false)
 	require.NoError(t, err)
 
-	svc := schedule.NewService(schedStore)
+	svc := schedule.NewService(schedStore, sessStore)
 	_, err = svc.AddSleep(ctx, rec.ID, "sleep-call", now.Add(2*time.Hour), "wake")
 	require.NoError(t, err)
 

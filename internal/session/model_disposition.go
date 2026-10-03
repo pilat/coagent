@@ -36,26 +36,33 @@ func (s *Session) prepareStopResponse(
 		s.finalParts(c, response.Text, reply, true)
 		r.result.Final = response.Text
 		r.terminal = true
+
 		return
 	}
+
 	if strings.TrimSpace(response.Text) == "" || response.FinishType == llmwire.FinishToolCalls {
 		prepareEmptyStop(r, c, state)
 		return
 	}
+
 	candidate := durableCandidateID(state)
 	if candidate == 0 {
 		c.Unfired.State.Candidate = &sessionstore.CandidateChange{Expected: 0, NextRef: 0}
 		c.Unfired.Messages = []*transcript.Message{
 			hostUserMessage(sessionprompt.RenderCompletionNudge(s.prompt.Todos.List())),
 		}
+
 		return
 	}
+
 	c.State.Candidate = &sessionstore.CandidateChange{Expected: candidate, NextRef: -1}
 	c.State.ConfirmedAnswerID = &candidate
+
 	text := response.Text
 	if state.CandidateText != "" {
 		text = state.CandidateText
 	}
+
 	s.finalParts(c, text, reply, false)
 	r.result.Final = text
 	r.terminal = true
@@ -66,6 +73,7 @@ func prepareEmptyStop(r *runState, c *sessionstore.Commit, state *sessionstore.C
 	if state != nil {
 		next = state.EmptyStopStreak + 1
 	}
+
 	c.State.EmptyStopStreak = &next
 	if next >= emptyResponseBreakThreshold {
 		status := sessionstore.SessionStatusError
@@ -76,8 +84,10 @@ func prepareEmptyStop(r *runState, c *sessionstore.Commit, state *sessionstore.C
 		}}
 		r.terminal = true
 		r.terminalState = true
+
 		return
 	}
+
 	nudge := "You returned an empty response with no tool calls. Please continue working on the task, or explain what you need."
 	if next == emptyResponseWarnThreshold {
 		nudge = fmt.Sprintf(
@@ -85,6 +95,7 @@ func prepareEmptyStop(r *runState, c *sessionstore.Commit, state *sessionstore.C
 			next,
 		)
 	}
+
 	c.Unfired.Messages = []*transcript.Message{hostUserMessage(nudge)}
 }
 
@@ -104,10 +115,12 @@ func (s *Session) finalParts(c *sessionstore.Commit, text string, reply, yield b
 	if strings.TrimSpace(text) == "" {
 		return
 	}
+
 	kind := sessionstore.OutputMessageReplaceable
 	if reply {
 		kind = sessionstore.OutputMessagePersistent
 	}
+
 	c.Unfired.Outputs = []sessionstore.Output{
 		{
 			Type:          kind,
@@ -126,5 +139,6 @@ func durableCandidateID(state *sessionstore.CompletionCheckState) int64 {
 	if state == nil || state.CandidateID == nil {
 		return 0
 	}
+
 	return *state.CandidateID
 }

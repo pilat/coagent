@@ -31,31 +31,62 @@ func (s *transactions) Create(ctx context.Context, create Create) (int64, error)
 	if create.ReasoningLevel == "" {
 		create.ReasoningLevel = defaultReasoningLevel
 	}
+
 	if create.State == "" {
 		return 0, errors.New("create subagent: empty initial link state")
 	}
 	var childID int64
+
 	err := s.sessions.WithTx(ctx, func(tx *sql.Tx) error {
 		var err error
+
 		childID, err = sessionstore.CreateSubagentSessionTx(ctx, tx, sessionstore.CreateSubagentSession{
 			ProjectID: create.ProjectID, ParentID: create.ParentID, RootID: create.RootID,
 			AgentType: create.AgentType, Model: create.Model, ReasoningLevel: create.ReasoningLevel,
 		})
 		if err != nil {
-			return err
+			return fmt.Errorf("create: %w", err)
 		}
-		_, err = tx.ExecContext(ctx, `INSERT INTO subagent_links
+
+		_, err = tx.ExecContext(
+			ctx,
+			`INSERT INTO subagent_links
    (parent_id,child_id,task_call_id,blocking,depth,state,created_at) VALUES (?,?,?,?,?,?,?)`,
-			create.ParentID, childID, create.TaskCallID, create.Blocking, create.Depth, create.State, time.Now().UTC().Unix())
+			create.ParentID,
+			childID,
+			create.TaskCallID,
+			create.Blocking,
+			create.Depth,
+			create.State,
+			time.Now().UTC().Unix(),
+		)
 		if err != nil {
 			return fmt.Errorf("insert subagent link: %w", err)
 		}
+
 		if create.InitialInput != "" {
-			_, err = sessionstore.EnqueueTx(ctx, tx, sessionstore.Input{SessionID: childID, Source: sessionstore.InputSourceAgent, Content: create.InitialInput})
+			_, err = sessionstore.EnqueueTx(
+				ctx,
+				tx,
+				sessionstore.Input{
+					SessionID: childID,
+					Source:    sessionstore.InputSourceAgent,
+					Content:   create.InitialInput,
+				},
+			)
 		}
-		return err
+
+		if err != nil {
+			return fmt.Errorf("create: %w", err)
+		}
+
+		return nil
 	})
-	return childID, err
+	if err != nil {
+		return childID, fmt.Errorf("create: %w", err)
+	}
+
+	return childID, nil
 }
 
 func (s *transactions) TryFinalizeActivation(
@@ -121,7 +152,9 @@ func (s *transactions) DeliverBackgroundCompletion(ctx context.Context, link Lin
 	if link.Blocking {
 		return false, fmt.Errorf("background delivery for blocking child %d", link.ChildID)
 	}
+
 	content := formatBackgroundCompletion(link, iterations)
+
 	return s.deliver(ctx, link, sessionstore.Input{
 		SessionID: link.ParentID, Source: sessionstore.InputSourceSubagent, Content: content,
 		Attributes:  map[string]any{"child_id": link.ChildID, "activation_seq": link.ActivationSeq},
@@ -133,6 +166,7 @@ func (s *transactions) DeliverCompletion(ctx context.Context, link Link, content
 	if !link.Blocking {
 		return false, fmt.Errorf("blocking delivery for background child %d", link.ChildID)
 	}
+
 	return s.deliver(ctx, link, sessionstore.Input{
 		SessionID: link.ParentID, Source: sessionstore.InputSourceCallResult, Content: content,
 		Attributes:  map[string]any{"call_id": link.TaskCallID, "tool_id": tool.IDTask},
@@ -142,26 +176,32 @@ func (s *transactions) DeliverCompletion(ctx context.Context, link Link, content
 
 func (s *transactions) deliver(ctx context.Context, link Link, input sessionstore.Input) (bool, error) {
 	var won bool
+
 	err := s.sessions.WithTx(ctx, func(tx *sql.Tx) error {
 		var parentID, seq int64
 		var delivered sql.NullInt64
 		var blocking bool
 		var state string
+
 		err := tx.QueryRowContext(ctx, `SELECT parent_id,activation_seq,delivered_at,blocking,state
    FROM subagent_links WHERE child_id = ?`, link.ChildID).Scan(&parentID, &seq, &delivered, &blocking, &state)
 		if err != nil {
 			return fmt.Errorf("load completion link: %w", err)
 		}
+
 		if parentID != link.ParentID {
 			return fmt.Errorf("child %d belongs to parent %d, not session %d", link.ChildID, parentID, link.ParentID)
 		}
+
 		if delivered.Valid || seq != link.ActivationSeq {
 			return nil
 		}
+
 		if blocking != link.Blocking || !validTerminalLink(State(state), link.Outcome) {
 			return fmt.Errorf("completion link %d changed before delivery", link.ChildID)
 		}
 		var killed bool
+
 		err = tx.QueryRowContext(ctx, `SELECT
 			parent.killed_at IS NOT NULL OR parent.status IN ('terminating', 'killed')
 			OR root.killed_at IS NOT NULL OR root.status IN ('terminating', 'killed')
@@ -172,28 +212,41 @@ func (s *transactions) deliver(ctx context.Context, link Link, input sessionstor
 		if err != nil {
 			return fmt.Errorf("load completion parent lifecycle: %w", err)
 		}
+
 		queued := &sessionstore.Enqueued{}
 		if !killed {
 			queued, err = sessionstore.EnqueueTx(ctx, tx, input)
 			if err != nil {
-				return err
+				return fmt.Errorf("deliver: %w", err)
 			}
 		}
+
 		var inputID any
 		if queued.Input != nil {
 			inputID = queued.Input.ID
 		}
+
 		result, err := tx.ExecContext(ctx, `UPDATE subagent_links SET delivered_at = ?, delivered_input_id = ?
    WHERE child_id = ? AND parent_id = ? AND activation_seq = ? AND delivered_at IS NULL`,
 			time.Now().UTC().Unix(), inputID, link.ChildID, link.ParentID, link.ActivationSeq)
 		if err != nil {
 			return fmt.Errorf("ack completion input: %w", err)
 		}
+
 		n, err := result.RowsAffected()
 		won = n == 1 && queued.Applied
-		return err
+
+		if err != nil {
+			return fmt.Errorf("deliver: %w", err)
+		}
+
+		return nil
 	})
-	return won, err
+	if err != nil {
+		return won, fmt.Errorf("deliver: %w", err)
+	}
+
+	return won, nil
 }
 
 func formatBackgroundCompletion(link Link, iterations int) string {
@@ -201,6 +254,7 @@ func formatBackgroundCompletion(link Link, iterations int) string {
 	if result == "" {
 		result = "(no output)"
 	}
+
 	return strings.Join([]string{
 		"<subagent_completion>", "child_id: " + strconv.FormatInt(link.ChildID, 10),
 		"activation_seq: " + strconv.FormatInt(link.ActivationSeq, 10),

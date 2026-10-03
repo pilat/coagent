@@ -83,14 +83,14 @@ func TestReasoningRawSurvivesReload(t *testing.T) {
 
 	envelope := json.RawMessage(`{"model":"claude-opus-5","payload":[{"type":"thinking","signature":"sig"}]}`)
 
-	_, err = store.InsertMessage(ctx, rec.ID, &transcript.Message{
+	_, err = appendMessage(ctx, store, rec.ID, &transcript.Message{
 		Role:         "assistant",
 		Content:      "thinking out loud",
 		ReasoningRaw: envelope,
 	})
 	require.NoError(t, err)
 
-	_, err = store.InsertMessage(ctx, rec.ID, &transcript.Message{Role: "user", Content: "next"})
+	_, err = appendMessage(ctx, store, rec.ID, &transcript.Message{Role: "user", Content: "next"})
 	require.NoError(t, err)
 
 	loaded, err := store.LoadActiveMessages(ctx, rec.ID)
@@ -110,7 +110,7 @@ func TestAttachmentsSurviveReload(t *testing.T) {
 
 	refs := json.RawMessage(`[{"path":"/tmp/coagent-a1b2.png","mime":"image/png","size":1234}]`)
 
-	_, err = store.InsertMessage(ctx, rec.ID, &transcript.Message{
+	_, err = appendMessage(ctx, store, rec.ID, &transcript.Message{
 		Role:        llmwire.RoleTool,
 		Content:     "[/tmp/coagent-a1b2.png]",
 		ToolCallID:  "call-1",
@@ -118,7 +118,7 @@ func TestAttachmentsSurviveReload(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	_, err = store.InsertMessage(ctx, rec.ID, &transcript.Message{Role: llmwire.RoleUser, Content: "next"})
+	_, err = appendMessage(ctx, store, rec.ID, &transcript.Message{Role: llmwire.RoleUser, Content: "next"})
 	require.NoError(t, err)
 
 	loaded, err := store.LoadActiveMessages(ctx, rec.ID)

@@ -89,10 +89,11 @@ type OutputClaim struct {
 }
 
 type OutputCommit struct {
-	OutputID int64
-	OwnerID  string
-	Existing bool
-	Content  string
+	OutputID    int64
+	OwnerID     string
+	Existing    bool
+	Content     string
+	LiveContent string
 }
 
 type OutputQueueStatus struct {

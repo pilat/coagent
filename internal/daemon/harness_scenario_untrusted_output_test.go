@@ -76,6 +76,7 @@ func TestHarnessScenario_UntrustedToolOutputCarriesWrapperAndGuidance(t *testing
 	h := newGatingHarness(t, nil, respond)
 	defer h.shutdown()
 
+	h.startInboxWake()
 	parentID, err := h.mgr.Send(h.ctx, h.projectID, "probe untrusted output", "fake-model", nil)
 	require.NoError(t, err)
 
@@ -100,6 +101,7 @@ func TestHarnessScenario_UntrustedToolOutputCarriesWrapperAndGuidance(t *testing
 	requestContent := lastToolResultContent(requestMsgs, "webfetch")
 	assert.Equal(t, content, requestContent)
 
+	h.startInboxWake()
 	require.NoError(t, h.mgr.SendToSession(h.ctx, parentID, "continue the probe"))
 	require.Eventually(t, func() bool {
 		return hasUserContaining(requests.lastMessages(t), "continue the probe")

@@ -261,6 +261,7 @@ func (s *Session) commitCheckpointLocked(
 	c := s.newCommit()
 	c.Replace = &sessionstore.Replace{HeadIDs: compactedIDs, Entries: entries}
 	c.ObserveBudget = true
+
 	c.State.ClearContextBaseline = true
 	if commandInput != nil {
 		c.Accept = []sessionstore.Accept{
@@ -276,27 +277,20 @@ func (s *Session) commitCheckpointLocked(
 			},
 		}
 	}
+
 	result, err := s.store.Commit(ctx, c)
 	if err != nil {
-		return err
+		return fmt.Errorf("commit checkpoint locked: %w", err)
 	}
+
 	s.budgetFired = result.BudgetFired
-	s.compactionOutputs = result.Outputs
+
+	s.compactionOutputs = s.liveOutputs(c, result)
 	if err := s.ms.reloadMessagesLocked(ctx); err != nil {
 		return err
 	}
+
 	copy(newRowIDs, s.ms.rowIDs)
-	return nil
-}
-
-// stampCompactionIDs adopts the store's returned row IDs into the in-memory
-// projection, in entry order.
-func stampCompactionIDs(rowIDs, ids []int64) error {
-	if len(ids) != len(rowIDs) {
-		return fmt.Errorf("budgeted compaction returned %d ids for %d messages", len(ids), len(rowIDs))
-	}
-
-	copy(rowIDs, ids)
 
 	return nil
 }

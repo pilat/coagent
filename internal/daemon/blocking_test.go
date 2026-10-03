@@ -58,6 +58,7 @@ func TestIntegration_BlockingTaskSuspendsAndResumes(t *testing.T) {
 		h.shutdown()
 	}()
 
+	h.startInboxWake()
 	parentID, err := h.mgr.Send(h.ctx, h.projectID, "do work then spawn", "fake-model", nil)
 	require.NoError(t, err)
 
@@ -74,6 +75,12 @@ func TestIntegration_BlockingTaskSuspendsAndResumes(t *testing.T) {
 	close(release)
 
 	h.waitForDelivery(link.ChildID)
+	h.waitUntil("parent consumed blocking child result", func() bool {
+		messages := h.parentMessages(parentID)
+
+		return countToolResultsFor(messages, "task") == 1 &&
+			lastAssistantTextDTO(messages) == "parent got the child result"
+	})
 	h.mgr.waitIdle(parentID)
 
 	msgs := h.parentMessages(parentID)
@@ -122,6 +129,7 @@ func TestIntegration_CompletedForegroundChildAcceptsFollowUpInSameSession(t *tes
 	h := newSubagentHarnessWith(t, respond)
 	defer h.shutdown()
 
+	h.startInboxWake()
 	parentID, err := h.mgr.Send(h.ctx, h.projectID, "start foreground child", "fake-model", nil)
 	require.NoError(t, err)
 	link := h.waitForChildLink(parentID)
@@ -184,6 +192,7 @@ func TestIntegration_ScatterGatherBlockingTasks(t *testing.T) {
 	h := newSubagentHarnessWith(t, respond)
 	defer h.shutdown()
 
+	h.startInboxWake()
 	parentID, err := h.mgr.Send(h.ctx, h.projectID, "scatter gather", "fake-model", nil)
 	require.NoError(t, err)
 

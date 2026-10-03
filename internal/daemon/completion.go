@@ -102,6 +102,7 @@ func (s *svc) rearmChildAfterDelivery(ctx context.Context, childID int64) error 
 		return err
 	}
 	defer unlock()
+
 	return s.rearm(context.WithoutCancel(ctx), childID)
 }
 
@@ -198,13 +199,16 @@ func (s *svc) deliverCompletionToParent(ctx context.Context, link subagent.Link)
 		s.deliverBackgroundCompletion(ctx, link)
 		return
 	}
+
 	won, err := s.subagents.DeliverCompletion(ctx, link, s.completionContent(ctx, link))
 	if err != nil {
 		logger.Ctx(ctx).
 			Named("daemon.completion").
 			Error("deliver_completion_dropped", zap.Int64("child", link.ChildID), zap.Int64("parent", link.ParentID), zap.Error(err))
+
 		return
 	}
+
 	if won {
 		if err := s.rearmChildAfterDelivery(ctx, link.ChildID); err != nil {
 			logger.Ctx(ctx).

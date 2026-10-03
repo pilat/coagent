@@ -263,54 +263,6 @@ func activatePromotedInputSession(
 	return nil
 }
 
-func loadMessage(ctx context.Context, q queryer, messageID int64) (*transcript.Message, error) {
-	var msg transcript.Message
-	var toolCallID, toolName, toolCallsRaw, reasoningContent, reasoningRaw, attachmentsRaw, usageRaw sql.NullString
-	var compactedAt sql.NullTime
-	var costUSD sql.NullFloat64
-
-	err := q.QueryRowContext(ctx, `
-		SELECT id, session_id, role, content, tool_call_id, tool_name, tool_error, tool_calls,
-			reasoning_content, reasoning_raw, attachments, cost_usd, usage, compacted_at, created_at
-		FROM messages WHERE id = ?`, messageID,
-	).Scan(
-		&msg.ID, &msg.SessionID, &msg.Role, &msg.Content,
-		&toolCallID, &toolName, &msg.ToolError, &toolCallsRaw, &reasoningContent, &reasoningRaw,
-		&attachmentsRaw,
-		&costUSD, &usageRaw, &compactedAt, &msg.CreatedAt,
-	)
-	if err != nil {
-		return nil, fmt.Errorf("load accepted message %d: %w", messageID, err)
-	}
-
-	msg.ToolCallID = toolCallID.String
-	msg.ToolName = toolName.String
-	msg.ReasoningContent = reasoningContent.String
-	msg.CostUSD = costUSD.Float64
-
-	if compactedAt.Valid {
-		msg.CompactedAt = &compactedAt.Time
-	}
-
-	if toolCallsRaw.Valid {
-		msg.ToolCalls = []byte(toolCallsRaw.String)
-	}
-
-	if reasoningRaw.Valid {
-		msg.ReasoningRaw = []byte(reasoningRaw.String)
-	}
-
-	if attachmentsRaw.Valid && attachmentsRaw.String != "" {
-		msg.Attachments = []byte(attachmentsRaw.String)
-	}
-
-	if usageRaw.Valid {
-		msg.Usage = []byte(usageRaw.String)
-	}
-
-	return &msg, nil
-}
-
 func scanSessionIDs(rows *sql.Rows, label string) ([]int64, error) {
 	var sessionIDs []int64
 

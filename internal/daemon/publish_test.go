@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"sync"
 	"testing"
@@ -21,7 +22,7 @@ var errSessionRead = errors.New("session store unavailable")
 // countingSessionStore decorates a real session store so the publish gate's
 // lookups can be counted and made to fail on demand.
 type countingSessionStore struct {
-	sessionstore.OrchestrationStore
+	Store
 
 	mu       sync.Mutex
 	getCalls int
@@ -29,7 +30,7 @@ type countingSessionStore struct {
 }
 
 type staleReadSessionStore struct {
-	sessionstore.OrchestrationStore
+	Store
 	target      int64
 	read        chan struct{}
 	release     chan struct{}
@@ -51,7 +52,7 @@ func TestPublishGate_RootPasses(t *testing.T) {
 	ch := mgr.PubSub().SubscribeAll()
 
 	pid := testProject(t, store, "/tmp/publish-root")
-	rec, err := mgr.sessionStore.CreateSession(context.Background(), pid, "fake-model", "", nil)
+	rec, err := mgr.store.CreateSession(context.Background(), pid, "fake-model", "", nil)
 	require.NoError(t, err)
 
 	mgr.NotifySession(rec.ID, sessionevent.Notification{Type: sessionevent.NotifyMessage, Message: "hi"})
@@ -67,7 +68,7 @@ func TestPublishGate_RoutesRootOnlyToOwningManager(t *testing.T) {
 	beta := mgr.PubSub().SubscribeManager("beta")
 
 	pid := testProject(t, store, "/tmp/publish-owned-root")
-	rec, err := mgr.sessionStore.CreateSession(context.Background(), pid, "fake-model", "", map[string]any{
+	rec, err := mgr.store.CreateSession(context.Background(), pid, "fake-model", "", map[string]any{
 		controllerapi.SessionAttributeManagerID: "alpha",
 	})
 	require.NoError(t, err)
@@ -83,7 +84,7 @@ func TestPublishGate_OwnerlessRootReachesNoManager(t *testing.T) {
 	alpha := mgr.PubSub().SubscribeManager("alpha")
 
 	pid := testProject(t, store, "/tmp/publish-ownerless-root")
-	rec, err := mgr.sessionStore.CreateSession(context.Background(), pid, "fake-model", "", nil)
+	rec, err := mgr.store.CreateSession(context.Background(), pid, "fake-model", "", nil)
 	require.NoError(t, err)
 
 	mgr.NotifySession(rec.ID, sessionevent.Notification{Type: sessionevent.NotifyMessage, Message: "unowned"})
@@ -96,7 +97,7 @@ func TestPublishGate_ClaimingOwnerUpdatesTheWarmRoute(t *testing.T) {
 	alpha := mgr.PubSub().SubscribeManager("alpha")
 
 	pid := testProject(t, store, "/tmp/publish-claimed-root")
-	rec, err := mgr.sessionStore.CreateSession(context.Background(), pid, "fake-model", "", nil)
+	rec, err := mgr.store.CreateSession(context.Background(), pid, "fake-model", "", nil)
 	require.NoError(t, err)
 	mgr.NotifySession(rec.ID, sessionevent.Notification{Type: sessionevent.NotifyMessage, Message: "before"})
 	requireNoManagerNotification(t, alpha)
@@ -113,15 +114,15 @@ func TestPublishGate_ConcurrentClaimWinsOverAStaleRouteRead(t *testing.T) {
 	mgr, _, store := newTestManager(t)
 	alpha := mgr.PubSub().SubscribeManager("alpha")
 	pid := testProject(t, store, "/tmp/publish-concurrent-claim")
-	rec, err := mgr.sessionStore.CreateSession(context.Background(), pid, "fake-model", "", nil)
+	rec, err := mgr.store.CreateSession(context.Background(), pid, "fake-model", "", nil)
 	require.NoError(t, err)
 
 	stale := &staleReadSessionStore{
-		OrchestrationStore: mgr.sessionStore,
-		target:             rec.ID,
-		read:               make(chan struct{}), release: make(chan struct{}),
+		Store:  mgr.store,
+		target: rec.ID,
+		read:   make(chan struct{}), release: make(chan struct{}),
 	}
-	mgr.sessionStore = stale
+	mgr.store = stale
 	published := make(chan struct{})
 
 	go func() {
@@ -145,8 +146,8 @@ func TestPublishGate_DropsMalformedEventBeforeSessionLookup(t *testing.T) {
 	mgr, _, _ := newTestManager(t)
 	ch := mgr.PubSub().SubscribeAll()
 
-	counting := &countingSessionStore{OrchestrationStore: mgr.sessionStore}
-	mgr.sessionStore = counting
+	counting := &countingSessionStore{Store: mgr.store}
+	mgr.store = counting
 
 	mgr.NotifySession(999, sessionevent.Notification{Type: sessionevent.NotifyStateChanged})
 
@@ -169,8 +170,8 @@ func TestPublishGate_CachesChildVerdict(t *testing.T) {
 	mgr, _, store := newTestManager(t)
 	childID := newTestChild(t, mgr, store, "/tmp/publish-cache")
 
-	counting := &countingSessionStore{OrchestrationStore: mgr.sessionStore}
-	mgr.sessionStore = counting
+	counting := &countingSessionStore{Store: mgr.store}
+	mgr.store = counting
 
 	for range 2 {
 		mgr.NotifySession(childID, sessionevent.Notification{Type: sessionevent.NotifyMessage, Message: "hi"})
@@ -187,8 +188,8 @@ func TestPublishGate_FailOpenDoesNotPoisonCache(t *testing.T) {
 
 	childID := newTestChild(t, mgr, store, "/tmp/publish-failopen")
 
-	counting := &countingSessionStore{OrchestrationStore: mgr.sessionStore, failNth: 1}
-	mgr.sessionStore = counting
+	counting := &countingSessionStore{Store: mgr.store, failNth: 1}
+	mgr.store = counting
 
 	mgr.NotifySession(childID, sessionevent.Notification{Type: sessionevent.NotifyMessage, Message: "first"})
 
@@ -210,6 +211,7 @@ func TestSpawnedChildProducesNoPubSubEvents(t *testing.T) {
 		h.shutdown()
 	}()
 
+	h.startInboxWake()
 	parentID, err := h.mgr.Send(h.ctx, h.projectID, "spawn a child", "fake-model", nil)
 	require.NoError(t, err)
 
@@ -255,7 +257,7 @@ func (c *countingSessionStore) GetSession(ctx context.Context, id int64) (*sessi
 		return nil, errSessionRead
 	}
 
-	return c.OrchestrationStore.GetSession(ctx, id)
+	return c.Store.GetSession(ctx, id)
 }
 
 func (c *countingSessionStore) calls() int {
@@ -269,7 +271,7 @@ func (s *staleReadSessionStore) GetSession(
 	ctx context.Context,
 	id int64,
 ) (*sessionstore.SessionRecord, error) {
-	record, err := s.OrchestrationStore.GetSession(ctx, id)
+	record, err := s.Store.GetSession(ctx, id)
 	if err != nil || id != s.target {
 		return record, err
 	}
@@ -366,10 +368,29 @@ func newTestChild(t *testing.T, mgr *svc, store Store, workDir string) int64 {
 	ctx := context.Background()
 	pid := testProject(t, store, workDir)
 
-	parent, err := mgr.sessionStore.CreateSession(ctx, pid, "fake-model", "", nil)
+	parent, err := mgr.store.CreateSession(ctx, pid, "fake-model", "", nil)
 	require.NoError(t, err)
 
-	childID, err := mgr.sessionStore.CreateSubagentSession(ctx, pid, parent.ID, parent.ID, "general", "fake-model", "")
+	childID, err := func() (int64, error) {
+		var id int64
+		err := mgr.store.(*sessionstore.Store).WithTx(ctx, func(tx *sql.Tx) error {
+			var err error
+			id, err = sessionstore.CreateSubagentSessionTx(
+				ctx,
+				tx,
+				sessionstore.CreateSubagentSession{
+					ProjectID:      pid,
+					ParentID:       parent.ID,
+					RootID:         parent.ID,
+					AgentType:      "general",
+					Model:          "fake-model",
+					ReasoningLevel: "",
+				},
+			)
+			return err
+		})
+		return id, err
+	}()
 	require.NoError(t, err)
 
 	return childID

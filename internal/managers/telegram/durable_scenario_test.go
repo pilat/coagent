@@ -255,7 +255,7 @@ func replayWaitingItems(items []harnessTraceWait) ([]map[string]any, []map[strin
 	return display, identity
 }
 
-func newDurableReplayStore(t *testing.T) (sessionstore.Store, int64) {
+func newDurableReplayStore(t *testing.T) (*sessionstore.Store, int64) {
 	t.Helper()
 
 	ctx := context.Background()

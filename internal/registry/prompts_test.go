@@ -4,6 +4,8 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+
+	"github.com/pilat/coagent/internal/sessionprompt"
 )
 
 func TestBuildAgentPrompt_SubagentResultsAvoidDuplicateResearch(t *testing.T) {
@@ -57,14 +59,14 @@ func TestBuildAgentPrompt_TeachesOrdinaryBackgroundHandoff(t *testing.T) {
 	assert.Contains(t, BuildAgentPrompt, "briefly report what is still running and end the response")
 	assert.Contains(t, BuildAgentPrompt, "result arrives automatically in a later turn")
 	assert.Contains(t, GeneralAgentPrompt, "briefly report what is still running and end the response")
-	assert.Contains(t, CompactionSummaryPrompt, "advertised processes and pending subagents")
+	assert.Contains(t, sessionprompt.CompactionSummaryPrompt, "advertised processes and pending subagents")
 }
 
 func TestCompactionPrompt_ForbidsInventedState(t *testing.T) {
 	t.Parallel()
 
-	assert.Contains(t, CompactionSummaryPrompt, "Do not invent completed work")
-	assert.Contains(t, CompactionSummaryPrompt, "preserve that uncertainty")
+	assert.Contains(t, sessionprompt.CompactionSummaryPrompt, "Do not invent completed work")
+	assert.Contains(t, sessionprompt.CompactionSummaryPrompt, "preserve that uncertainty")
 }
 
 // The instruction is appended after the replayed prefix, so it must describe
@@ -72,7 +74,7 @@ func TestCompactionPrompt_ForbidsInventedState(t *testing.T) {
 func TestCompactionPrompt_IsOrderCorrectForTheFinalInstruction(t *testing.T) {
 	t.Parallel()
 
-	assert.Contains(t, CompactionSummaryPrompt, "conversation above this instruction")
-	assert.Contains(t, CompactionSummaryPrompt, "will follow your checkpoint")
-	assert.Contains(t, CompactionSummaryPrompt, "Do not use any tools")
+	assert.Contains(t, sessionprompt.CompactionSummaryPrompt, "conversation above this instruction")
+	assert.Contains(t, sessionprompt.CompactionSummaryPrompt, "will follow your checkpoint")
+	assert.Contains(t, sessionprompt.CompactionSummaryPrompt, "Do not use any tools")
 }

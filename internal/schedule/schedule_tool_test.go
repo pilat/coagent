@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/pilat/coagent/internal/schedule"
+	"github.com/pilat/coagent/internal/tool"
 )
 
 // mockScheduleStore implements schedule.Service for testing.
@@ -23,6 +24,8 @@ type mockScheduleStore struct {
 	lastInputMsg string
 	lastCallID   string
 }
+
+func (s *mockScheduleStore) SleepTool(id int64) tool.Tool { return schedule.NewSleepTool(s, id) }
 
 type mockScheduleEntry struct {
 	id          int64

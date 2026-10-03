@@ -39,10 +39,12 @@ func TestHarnessScenario_SkillSurvivesTwoCompactionsExactlyOnce(t *testing.T) {
 		h.shutdown()
 	}()
 
+	h.startInboxWake()
 	sessionID, err := h.mgr.Send(h.ctx, h.projectID, "start the work", "fake-model", nil)
 	require.NoError(t, err)
 	h.mgr.waitIdle(sessionID)
 
+	h.startInboxWake()
 	require.NoError(t, h.mgr.SendToSession(h.ctx, sessionID, "/skill "+skillName+" the release"))
 	h.waitUntil("skill attached", func() bool {
 		return countMessagesWithSkill(h.parentMessages(sessionID), skillName) == 1
@@ -50,6 +52,7 @@ func TestHarnessScenario_SkillSurvivesTwoCompactionsExactlyOnce(t *testing.T) {
 	h.mgr.waitIdle(sessionID)
 
 	compactOnce := func(round int) {
+		h.startInboxWake()
 		require.NoError(t, h.mgr.SendToSession(h.ctx, sessionID, "/compact"))
 		collector.waitFor(t, "compaction reported", func(e []controllerapi.SessionNotification) bool {
 			return countPublishedMessage(e, sessionID, noticeCompacted) == round
@@ -65,6 +68,7 @@ func TestHarnessScenario_SkillSurvivesTwoCompactionsExactlyOnce(t *testing.T) {
 
 	// New work after the reattachment, so the second compaction has something to
 	// summarize and must decide what to do with the envelope it wrote itself.
+	h.startInboxWake()
 	require.NoError(t, h.mgr.SendToSession(h.ctx, sessionID, "keep going"))
 	h.mgr.waitIdle(sessionID)
 
@@ -86,6 +90,7 @@ func TestHarnessScenario_SkillSurvivesTwoCompactionsExactlyOnce(t *testing.T) {
 	assert.Equal(t, 1, envelopes, "the survivor is a standalone envelope, not text quoted into the summary")
 
 	// The reattachment is not decoration: the model gets it on the next turn.
+	h.startInboxWake()
 	require.NoError(t, h.mgr.SendToSession(h.ctx, sessionID, "what next?"))
 	h.mgr.waitIdle(sessionID)
 

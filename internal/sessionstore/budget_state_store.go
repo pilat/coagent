@@ -40,16 +40,15 @@ func (s *Store) Arm(
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	owner, baseline, err := budgetRootFacts(ctx, tx, mutation.RootSessionID)
+	baseline, err := budgetRootFacts(ctx, tx, mutation.RootSessionID)
 	if err != nil {
 		return nil, err
 	}
 
-	if replayed, _, replayErr := replayBudgetMutation(
+	if replayed, replayErr := replayBudgetMutation(
 		ctx,
 		tx,
 		mutation,
-		owner,
 	); replayed != nil ||
 		replayErr != nil {
 		return replayed, replayErr
@@ -119,16 +118,15 @@ func (s *Store) Clear(
 
 	defer func() { _ = tx.Rollback() }()
 
-	owner, baseline, err := budgetRootFacts(ctx, tx, mutation.RootSessionID)
+	baseline, err := budgetRootFacts(ctx, tx, mutation.RootSessionID)
 	if err != nil {
 		return nil, err
 	}
 
-	if replayed, _, replayErr := replayBudgetMutation(
+	if replayed, replayErr := replayBudgetMutation(
 		ctx,
 		tx,
 		mutation,
-		owner,
 	); replayed != nil ||
 		replayErr != nil {
 		return replayed, replayErr
@@ -226,52 +224,52 @@ func replayBudgetMutation(
 	ctx context.Context,
 	tx *sql.Tx,
 	mutation budget.Mutation,
-	owner string,
-) (*budget.Record, *OutputCommit, error) {
+) (*budget.Record, error) {
 	var state, callID, toolID, command string
 
 	err := tx.QueryRowContext(ctx, `SELECT state, COALESCE(tool_call_id, ''), tool_id, command
 		FROM session_tool_activations WHERE input_id = ? AND session_id = ?`,
 		mutation.InputID, mutation.RootSessionID).Scan(&state, &callID, &toolID, &command)
 	if errors.Is(err, sql.ErrNoRows) || state == "pending" {
-		return nil, nil, nil
+		//nolint:nilnil // An unresolved activation falls through to the new mutation.
+		return nil, nil
 	}
 
 	if err != nil {
-		return nil, nil, fmt.Errorf("load budget activation replay: %w", err)
+		return nil, fmt.Errorf("load budget activation replay: %w", err)
 	}
 
 	if state != "consumed" || callID != mutation.ToolCallID || toolID != mutation.ToolID ||
 		command != mutation.Command {
-		return nil, nil, budget.ErrConflict
+		return nil, budget.ErrConflict
 	}
 
 	record, err := scanBudget(
 		tx.QueryRowContext(ctx, budgetSelect+` WHERE root_session_id = ?`, mutation.RootSessionID),
 	)
 	if err != nil {
-		return nil, nil, fmt.Errorf("load replayed budget: %w", err)
+		return nil, fmt.Errorf("load replayed budget: %w", err)
 	}
 
-	commit, err := insertOutputTx(ctx, tx, OutputDraft{
+	_, err = insertOutputTx(ctx, tx, OutputDraft{
 		SessionID: mutation.RootSessionID, Type: OutputMessagePersistent, Content: mutation.Receipt,
 		SourceKey: fmt.Sprintf("tool:%s:direct:0", mutation.ToolCallID),
 	}, CommitLoop)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 
 	if err := tx.Commit(); err != nil {
-		return nil, nil, fmt.Errorf("commit budget replay: %w", err)
+		return nil, fmt.Errorf("commit budget replay: %w", err)
 	}
 
-	return record, commit, nil
+	return record, nil
 }
 
-func budgetRootFacts(ctx context.Context, tx *sql.Tx, rootID int64) (string, float64, error) {
-	owner, err := outputOwner(ctx, tx, rootID)
+func budgetRootFacts(ctx context.Context, tx *sql.Tx, rootID int64) (float64, error) {
+	_, err := outputOwner(ctx, tx, rootID)
 	if err != nil {
-		return "", 0, err
+		return 0, err
 	}
 	var parent int64
 	var cost float64
@@ -281,10 +279,10 @@ func budgetRootFacts(ctx context.Context, tx *sql.Tx, rootID int64) (string, flo
 		LEFT JOIN messages ON messages.session_id = tree.id WHERE sessions.id = ? GROUP BY sessions.id`, rootID).
 		Scan(&parent, &cost)
 	if err != nil || parent != 0 || math.IsNaN(cost) || math.IsInf(cost, 0) || cost < 0 {
-		return "", 0, budget.ErrConflict
+		return 0, budget.ErrConflict
 	}
 
-	return owner, cost, nil
+	return cost, nil
 }
 
 func nullFloat(value *float64) any {

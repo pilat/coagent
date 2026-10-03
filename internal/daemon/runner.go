@@ -107,15 +107,12 @@ func (s *svc) finishRunner(
 	}
 	cancelled := ctx.Err() != nil
 	if cancelled || shuttingDown {
-		s.removeRunner(cleanup, sessionID)
-		info := rs.Info()
-		s.admit.Release(info.Kind, info.ParentID)
-		rs.Complete()
+		s.completeCancelledRunner(cleanup, sessionID, rs)
 	}
 	if shuttingDown {
 		return
 	}
-	unlock, err := s.lockSessionTree(cleanup, sessionID)
+	unlock, err := s.acquireFinishFence(ctx, cleanup, sessionID, rs, &cancelled, errored)
 	if err != nil {
 		logger.Ctx(cleanup).Named("daemon.runner").Error("finish_runner_fence_failed", zap.Error(err))
 	}
@@ -125,26 +122,15 @@ func (s *svc) finishRunner(
 		s.admit.Release(info.Kind, info.ParentID)
 	}
 	info := rs.Info()
-	if info.PreserveStopped && !shuttingDown {
-		record, loadErr := s.store.GetSession(cleanup, sessionID)
-		if loadErr == nil && record.Status == sessionstore.SessionStatusActive {
-			if statusErr := s.store.UpdateSessionStatus(
-				cleanup,
-				sessionID,
-				sessionstore.SessionStatusStopped,
-			); statusErr != nil {
-				logger.Ctx(cleanup).Named("daemon.runner").Error("preserve_stopped_status", zap.Error(statusErr))
-			}
-		}
-	}
+	s.preserveRunnerStopped(cleanup, sessionID, info.PreserveStopped, shuttingDown)
+
 	if !cancelled {
 		rs.Complete()
 	}
-	if s.applier != nil && err == nil {
-		if settleErr := s.applier.SettleStagedResults(cleanup, sessionID); settleErr != nil {
-			logger.Ctx(cleanup).Named("daemon.apply").Error("abandon_delivery_failed", zap.Error(settleErr))
-		}
+	if err == nil {
+		s.settleRunnerApply(cleanup, sessionID)
 	}
+
 	var deliver func()
 	if !shuttingDown && err == nil {
 		deliver = s.finalizeChildLocked(cleanup, sessionID, false, *errored)
@@ -164,6 +150,41 @@ func (s *svc) finishRunner(
 			s.restartPendingAfterExit(cleanup, sessionID)
 		}
 	}
+}
+
+func (s *svc) completeCancelledRunner(ctx context.Context, sessionID int64, rs *runner) {
+	s.removeRunner(ctx, sessionID)
+
+	info := rs.Info()
+	s.admit.Release(info.Kind, info.ParentID)
+	rs.Complete()
+}
+
+func (s *svc) acquireFinishFence(
+	ctx, cleanup context.Context,
+	sessionID int64,
+	rs *runner,
+	cancelled, errored *bool,
+) (func(), error) {
+	if *cancelled {
+		return s.lockSessionTree(cleanup, sessionID)
+	}
+
+	unlock, err := s.lockSessionTree(ctx, sessionID)
+	if err == nil || ctx.Err() == nil {
+		return unlock, err
+	}
+
+	// Stop holds this fence while joining the runner, so cancellation must release the join first.
+	*cancelled = true
+
+	if !s.shuttingDown.Load() {
+		*errored = true
+	}
+
+	s.completeCancelledRunner(cleanup, sessionID, rs)
+
+	return s.lockSessionTree(cleanup, sessionID)
 }
 
 func (s *svc) restartPendingAfterExit(ctx context.Context, sessionID int64) {
@@ -203,106 +224,104 @@ func (s *svc) runSessionIteration(
 	if err != nil {
 		return false, false
 	}
-	if !*announced {
-		*announced = true
-		s.announceSession(ctx, sessionID, rs, rec, notify)
-	}
+
+	s.announceRunnerOnce(ctx, sessionID, rs, rec, notify, announced)
+
 	info := rs.Info()
 	idleEligible := ownerlessSession(rec)
-	if s.applier != nil {
-		if err := s.applier.SettleStagedResults(ctx, sessionID); err != nil {
-			*errored = true
-			*publishIdle = idleEligible
-			s.reportSessionUnstarted(ctx, sessionID, notify, err)
-			return false, false
-		}
-	}
-	sess, cleanup, err := s.createOrResumeSession(ctx, sessionID, info.WorkDir, rs, info.PreserveStopped)
+
+	sess, cleanup, err := s.prepareRunnerActivation(ctx, sessionID, info.WorkDir, rs, info.PreserveStopped)
 	if err != nil {
 		*errored = true
 		*publishIdle = idleEligible
+
 		s.reportSessionUnstarted(ctx, sessionID, notify, err)
+
 		return false, false
 	}
 	defer cleanup()
 	defer sess.Close()
-	defer func() { rs.SetService(nil); s.updateLive(context.WithoutCancel(ctx), sessionID) }()
+	defer s.releaseRunnerService(ctx, sessionID, rs)
+
 	pending, err := s.pendingInputRunnable(ctx, sessionID)
 	if err != nil {
 		*errored = true
+
 		s.reportSessionUnstarted(ctx, sessionID, notify, err)
+
 		return false, false
 	}
+
 	hadInput := pending
-	if !pending && !sess.HasPendingWork() && rs.HasRun() {
-		*publishIdle = idleEligible
-		return false, false
-	}
-	if !pending && !sess.HasPendingWork() && !rs.HasRun() {
-		messages, loadErr := s.store.LoadActiveMessages(ctx, sessionID)
-		if loadErr != nil {
-			*errored = true
-			return false, false
-		}
-		if len(messages) > 0 {
+	if !pending && !sess.HasPendingWork() {
+		if settledActivation(rec, rs.HasRun()) {
 			*publishIdle = idleEligible
 			return false, false
 		}
 	}
-	if rec.ParentID == 0 {
-		s.wakeProgress()
-	}
+
+	s.wakeRootProgress(rec.ParentID)
+
 	rs.MarkRun()
+	notify(sessionevent.Notification{Type: sessionevent.NotifyStateChanged, Status: sessionevent.StateRunning})
+
 	result, runErr := sess.Run(ctx)
-	if result.BudgetFired && s.budgetSvc != nil {
-		record, budgetErr := s.budgetSvc.Get(ctx, sessionRootID(rec))
-		if budgetErr != nil {
-			runErr = errors.Join(runErr, budgetErr)
-		} else if record.ParkPhase == budgetParkRequested {
-			s.startBudgetPark(record)
-		}
+	runErr = s.settleRunBudget(ctx, rec, result, runErr, notify)
+
+	s.releaseActivationResources(ctx, sessionID, rs, result, sess, cleanup, rec.ParentID)
+
+	if runErr == nil && result.Suspended {
+		runErr = s.applySuspendedConfig(ctx, sessionID)
 	}
-	if rec.ParentID == 0 && !result.BudgetFired {
-		runErr = errors.Join(runErr, s.settleRootBudget(ctx, sessionID, result.Suspended, runErr, notify))
-	}
-	s.reconcileLatestReadiness(ctx, sessionID)
-	s.deferNotices.record(sessionID, result.DeferNoticeAnnounced)
-	rs.SetService(nil)
-	s.updateLive(ctx, sessionID)
-	if rec.ParentID == 0 {
-		s.wakeProgress()
-	}
-	sess.Close()
-	cleanup()
-	if s.applier != nil {
-		unlock, lockErr := s.lockSessionTree(ctx, sessionID)
-		if lockErr != nil {
-			runErr = errors.Join(runErr, lockErr)
-		} else {
-			s.applier.RunStagedApply(ctx, sessionID)
-			unlock()
-		}
-	}
+
+	return s.continueActivation(
+		ctx,
+		sessionID,
+		result,
+		runErr,
+		notify,
+		errored,
+		publishIdle,
+		idleEligible,
+		info.PreserveStopped,
+	), hadInput
+}
+
+func (s *svc) continueActivation(
+	ctx context.Context,
+	sessionID int64,
+	result session.RunResult,
+	runErr error,
+	notify func(sessionevent.Notification),
+	errored, publishIdle *bool,
+	idleEligible, preserveStopped bool,
+) bool {
 	if runErr != nil {
 		*errored = true
 		*publishIdle = idleEligible
+
 		s.handleRunError(ctx, sessionID, result.ErrorNotice, runErr, notify)
-		return false, hadInput
+
+		return false
 	}
+
 	if result.BudgetFired {
-		return false, hadInput
+		return false
 	}
+
 	if result.Suspended {
 		s.publishWaiting(ctx, sessionID, notify)
-		return false, hadInput
+		return false
 	}
-	if info.PreserveStopped {
+
+	if preserveStopped {
 		record, loadErr := s.store.GetSession(ctx, sessionID)
 		if loadErr != nil || record.Status == sessionstore.SessionStatusStopped {
-			return false, hadInput
+			return false
 		}
 	}
-	return true, hadInput
+
+	return true
 }
 
 func (s *svc) publishWaiting(
@@ -461,17 +480,21 @@ func canonicalWaitingIdentities(value any) ([]byte, error) {
 func (s *svc) commitStoppedSession(ctx context.Context, sessionID int64) error {
 	messages, err := s.store.LoadActiveMessages(ctx, sessionID)
 	if err != nil {
-		return err
+		return fmt.Errorf("settle stopped transcript: %w", err)
 	}
+
 	wire, err := storedWireMessages(messages)
 	if err != nil {
-		return err
+		return fmt.Errorf("settle stopped transcript: %w", err)
 	}
+
 	calls := session.UnresolvedCalls(wire)
+
 	activation, err := s.store.PendingActivation(ctx, sessionID)
 	if err != nil && !errors.Is(err, sessionstore.ErrActivationNotFound) {
-		return err
+		return fmt.Errorf("settle stopped transcript: %w", err)
 	}
+
 	commit := sessionstore.Commit{
 		SessionID:   sessionID,
 		Mode:        sessionstore.CommitLifecycle,
@@ -483,8 +506,13 @@ func (s *svc) commitStoppedSession(ctx context.Context, sessionID int64) error {
 			State:   sessionstore.ActivationExpired,
 		}
 	}
+
 	_, err = s.store.Commit(ctx, commit)
-	return err
+	if err != nil {
+		return fmt.Errorf("settle stopped transcript: %w", err)
+	}
+
+	return nil
 }
 
 func (s *svc) ensureSessionRunner(ctx context.Context, sessionID int64) error {
@@ -627,16 +655,20 @@ func (s *svc) createOrResumeSession(
 		return nil, nil, err
 	}
 	defer unlock()
+
 	rec, err := s.store.GetSession(ctx, sessionID)
 	if err != nil {
 		return nil, nil, fmt.Errorf("load session before construction: %w", err)
 	}
+
 	sess, cleanup, err := s.openSession(ctx, sessionID, workDir, rec, preserveStopped)
 	if err != nil {
 		return nil, nil, err
 	}
+
 	rs.SetService(sess)
 	s.updateLive(ctx, sessionID)
+
 	return sess, cleanup, nil
 }
 
@@ -659,7 +691,6 @@ func isManagementSurface(attrs map[string]any) bool {
 	}
 }
 
-//nolint:funlen // The construction boundary keeps one coherent session policy snapshot.
 func (s *svc) openSession(
 	ctx context.Context,
 	sessionID int64,
@@ -684,11 +715,20 @@ func (s *svc) openSession(
 	in.CompactionDeferAnnounced = s.deferNotices.announced(sessionID)
 	in.PreserveStoppedStatus = preserveStopped
 	in.Loader = loader.New(in.MarketplaceCache)
+
 	schedules, schedulesErr := s.schedulesCommand(ctx, sessionID)
 	if schedulesErr != nil {
 		return nil, nil, schedulesErr
 	}
+
 	in.Schedules = schedules
+
+	status, statusErr := s.CurrentProgress(ctx, sessionRootID(rec))
+	if statusErr != nil {
+		return nil, nil, fmt.Errorf("capture construction status: %w", statusErr)
+	}
+
+	in.Status = status.Rendered
 
 	owner, _ := rec.Attributes[controllerapi.SessionAttributeManagerID].(string)
 	in.OutputEnabled = rec.ParentID == 0 && owner != ""
@@ -707,7 +747,13 @@ func (s *svc) openSession(
 	}
 
 	in.OwnerTools = s.ownerTools(rec, in.Loader)
-	return sessionbuild.Build(ctx, in)
+
+	sess, cleanup, err := sessionbuild.Build(ctx, in)
+	if err != nil {
+		return nil, nil, fmt.Errorf("assemble session: %w", err)
+	}
+
+	return sess, cleanup, nil
 }
 
 // sessionRepoRoot follows the durable tree root because child session rows do
@@ -737,37 +783,28 @@ func (s *svc) sessionRepoRoot(ctx context.Context, rec *sessionstore.SessionReco
 func (s *svc) pendingExternalCallsForSession(ctx context.Context, sessionID int64) (map[string]string, error) {
 	stored, err := s.store.LoadActiveMessages(ctx, sessionID)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("load pending external calls: %w", err)
 	}
+
 	unresolved, err := unresolvedStoredCalls(stored, func(string) bool { return true })
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("load pending external calls: %w", err)
 	}
+
 	actual := make(map[string]string, len(unresolved))
 	for _, call := range unresolved {
 		actual[call.ID] = call.Name
 	}
+
 	calls := make(map[string]string)
 	if s.applier != nil {
 		calls = s.applier.Calls(sessionID)
 	}
+
 	if calls == nil {
 		calls = make(map[string]string)
 	}
 
-	pending, err := s.store.ListPending(ctx, sessionID)
-	if err != nil {
-		return nil, err
-	}
-	for _, row := range pending {
-		if row.Source == sessionstore.InputSourceCallResult {
-			callID, _ := row.Attributes["call_id"].(string)
-			toolID, _ := row.Attributes["tool_id"].(string)
-			if actual[callID] == toolID && toolID != "" {
-				calls[callID] = toolID
-			}
-		}
-	}
 	if s.applier != nil {
 		owed, err := s.applier.PendingCall(sessionID)
 
@@ -801,6 +838,12 @@ func (s *svc) pendingExternalCallsForSession(ctx context.Context, sessionID int6
 			calls[link.TaskCallID] = tool.IDTask
 		}
 	}
+
+	// Producer delivery atomically trades its ledger claim for a queued result.
+	if err := s.pendingResultOwners(ctx, sessionID, actual, calls); err != nil {
+		return nil, fmt.Errorf("load pending external calls: %w", err)
+	}
+
 	for callID, name := range calls {
 		if actual[callID] != name {
 			delete(calls, callID)
@@ -880,6 +923,10 @@ func (s *svc) handleRunError(
 
 	logger.Ctx(ctx).Warn("session_error", zap.Int64("session_id", sessionID), zap.Error(runErr))
 
+	if message != "" {
+		return
+	}
+
 	if message == "" {
 		message = fmt.Sprintf(
 			"⚠️ Session error: %s\n\nThe session is still alive — send a message to continue.",
@@ -899,19 +946,24 @@ func (s *svc) ownerTools(rec *sessionstore.SessionRecord, ldr loader.Service) []
 		if rec.ParentID == 0 {
 			tools = append(tools, schedule.NewScheduleTool(rec.ID, s.scheduleSvc, time.Local))
 		}
+
 		tools = append(tools, s.scheduleSvc.SleepTool(rec.ID))
 	}
+
 	if rec.ParentID == 0 {
 		if s.mcpStore != nil {
 			tools = append(tools, mcpstore.NewTools(s.mcpStore, rec.ProjectID)...)
 		}
+
 		if s.applier != nil {
 			tools = append(tools, configapply.NewConfigEdit(rec.ID, s.applier))
 		}
+
 		if s.budgetSvc != nil {
 			tools = append(tools, budget.NewTool(budget.Store(s.store), rec.ID, s.modelHasPricing(rec.Model)))
 		}
 	}
+
 	return tools
 }
 
@@ -971,10 +1023,12 @@ func validateRunnerStart(rec *sessionstore.SessionRecord, preserveStopped bool) 
 	if rec.KilledAt != nil || rec.Status == sessionstore.SessionStatusKilled {
 		return fmt.Errorf("session %d is killed", rec.ID)
 	}
+
 	if rec.Status == sessionstore.SessionStatusStopping || rec.Status == sessionstore.SessionStatusTerminating ||
 		(rec.Status == sessionstore.SessionStatusStopped && !preserveStopped) {
 		return fmt.Errorf("session %d is %s", rec.ID, rec.Status)
 	}
+
 	return nil
 }
 
@@ -1001,4 +1055,158 @@ func (s *svc) commandOnlyStoppedRoot(ctx context.Context, rec *sessionstore.Sess
 	}
 
 	return isReadOnlyBoundaryCommand(head.RawContent), nil
+}
+
+func (s *svc) preserveRunnerStopped(cleanup context.Context, sessionID int64, preserve, shuttingDown bool) {
+	if !preserve || shuttingDown {
+		return
+	}
+
+	record, loadErr := s.store.GetSession(cleanup, sessionID)
+	if loadErr == nil && record.Status == sessionstore.SessionStatusActive {
+		if statusErr := s.store.UpdateSessionStatus(
+			cleanup,
+			sessionID,
+			sessionstore.SessionStatusStopped,
+		); statusErr != nil {
+			logger.Ctx(cleanup).Named("daemon.runner").Error("preserve_stopped_status", zap.Error(statusErr))
+		}
+	}
+}
+
+func (s *svc) settleRunnerApply(cleanup context.Context, sessionID int64) {
+	if s.applier == nil {
+		return
+	}
+
+	if settleErr := s.applier.SettleStagedResults(cleanup, sessionID); settleErr != nil {
+		logger.Ctx(cleanup).Named("daemon.apply").Error("abandon_delivery_failed", zap.Error(settleErr))
+	}
+}
+
+func settledActivation(rec *sessionstore.SessionRecord, hasRun bool) bool {
+	return hasRun || rec.CompletionCheckConfirmedAnswerID == nil
+}
+
+func (s *svc) settleRunBudget(
+	ctx context.Context,
+	rec *sessionstore.SessionRecord,
+	result session.RunResult,
+	runErr error,
+	notify func(sessionevent.Notification),
+) error {
+	if result.BudgetFired && s.budgetSvc != nil {
+		record, budgetErr := s.budgetSvc.Get(ctx, sessionRootID(rec))
+		if budgetErr != nil {
+			runErr = errors.Join(runErr, budgetErr)
+		} else if record.ParkPhase == budgetParkRequested {
+			s.startBudgetPark(record)
+		}
+	}
+
+	if rec.ParentID == 0 && !result.BudgetFired {
+		runErr = errors.Join(runErr, s.settleRootBudget(ctx, rec.ID, result.Suspended, runErr, notify))
+	}
+
+	return runErr
+}
+
+func (s *svc) applySuspendedConfig(ctx context.Context, id int64) error {
+	if s.applier == nil {
+		return nil
+	}
+
+	unlock, err := s.lockSessionTree(ctx, id)
+	if err != nil {
+		return err
+	}
+
+	s.applier.RunStagedApply(ctx, id)
+	unlock()
+
+	return nil
+}
+
+func (s *svc) pendingResultOwners(ctx context.Context, sessionID int64, actual, calls map[string]string) error {
+	pending, err := s.store.ListPending(ctx, sessionID)
+	if err != nil {
+		return fmt.Errorf("load pending result owners: %w", err)
+	}
+
+	for _, row := range pending {
+		if row.Source == sessionstore.InputSourceCallResult {
+			callID, _ := row.Attributes["call_id"].(string)
+
+			toolID, _ := row.Attributes["tool_id"].(string)
+			if actual[callID] == toolID && toolID != "" {
+				calls[callID] = toolID
+			}
+		}
+	}
+
+	return nil
+}
+
+func (s *svc) wakeRootProgress(parentID int64) {
+	if parentID == 0 {
+		s.wakeProgress()
+	}
+}
+
+func (s *svc) announceRunnerOnce(
+	ctx context.Context,
+	id int64,
+	rs *runner,
+	rec *sessionstore.SessionRecord,
+	notify func(sessionevent.Notification),
+	announced *bool,
+) {
+	if *announced {
+		return
+	}
+
+	*announced = true
+
+	s.announceSession(ctx, id, rs, rec, notify)
+}
+
+func (s *svc) releaseRunnerService(ctx context.Context, id int64, rs *runner) {
+	rs.SetService(nil)
+	s.updateLive(context.WithoutCancel(ctx), id)
+}
+
+func (s *svc) prepareRunnerActivation(
+	ctx context.Context,
+	id int64,
+	workDir string,
+	rs *runner,
+	preserveStopped bool,
+) (*session.Session, func(), error) {
+	if s.applier != nil {
+		if err := s.applier.SettleStagedResults(ctx, id); err != nil {
+			return nil, nil, fmt.Errorf("settle runner configuration results: %w", err)
+		}
+	}
+
+	return s.createOrResumeSession(ctx, id, workDir, rs, preserveStopped)
+}
+
+func (s *svc) releaseActivationResources(
+	ctx context.Context,
+	sessionID int64,
+	rs *runner,
+	result session.RunResult,
+	sess *session.Session,
+	cleanup func(),
+	parentID int64,
+) {
+	s.reconcileLatestReadiness(ctx, sessionID)
+	s.deferNotices.record(sessionID, result.DeferNoticeAnnounced)
+	rs.SetService(nil)
+	s.updateLive(ctx, sessionID)
+
+	s.wakeRootProgress(parentID)
+
+	sess.Close()
+	cleanup()
 }

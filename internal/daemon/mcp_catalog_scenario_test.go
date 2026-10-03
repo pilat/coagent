@@ -104,6 +104,7 @@ func TestScenario_NextMCPStackReusesProcessAndRefreshesTools(t *testing.T) {
 	h, _ := newMCPHarness(t, respond)
 	defer h.shutdown()
 
+	h.startInboxWake()
 	sessionID, err := h.mgr.Send(h.ctx, h.projectID, "register the fake mcp server", "fake-model", nil)
 	require.NoError(t, err)
 	h.waitUntil("registration lands", func() bool {
@@ -111,6 +112,7 @@ func TestScenario_NextMCPStackReusesProcessAndRefreshesTools(t *testing.T) {
 	})
 	h.mgr.waitIdle(sessionID)
 
+	h.startInboxWake()
 	require.NoError(t, h.mgr.SendToSession(h.ctx, sessionID, "USE_FIRST now"))
 	h.waitUntil("first call finishes", func() bool {
 		return lastAssistantTextDTO(h.parentMessages(sessionID)) == "used first"
@@ -121,6 +123,7 @@ func TestScenario_NextMCPStackReusesProcessAndRefreshesTools(t *testing.T) {
 	assert.Equal(t, 1, fake.count(t, "call"))
 	require.NoError(t, os.WriteFile(fake.log+".extra", nil, 0o600))
 
+	h.startInboxWake()
 	require.NoError(t, h.mgr.SendToSession(h.ctx, sessionID, "USE_SECOND now"))
 	h.waitUntil("second call finishes", func() bool {
 		return lastAssistantTextDTO(h.parentMessages(sessionID)) == "used second"
@@ -138,6 +141,7 @@ func TestScenario_NextMCPStackReusesProcessAndRefreshesTools(t *testing.T) {
 	process, err := os.FindProcess(pid)
 	require.NoError(t, err)
 	require.NoError(t, process.Kill())
+	h.startInboxWake()
 	require.NoError(t, h.mgr.SendToSession(h.ctx, sessionID, "AFTER_CRASH now"))
 	h.waitUntil("replacement client answers", func() bool {
 		return lastAssistantTextDTO(h.parentMessages(sessionID)) == "recovered"

@@ -1,4 +1,3 @@
-//nolint:wrapcheck // SQL identity errors are wrapped by the transaction boundary.; nosemgrep: semgrep.coagent-no-preamble-before-package
 package sessionstore
 
 import (
@@ -65,10 +64,19 @@ func insertToolResultOnceAt(
 		createdAt = transactionTime
 	}
 
-	result, err := tx.ExecContext(ctx, `INSERT INTO messages
+	result, err := tx.ExecContext(
+		ctx,
+		`INSERT INTO messages
 		(session_id, role, content, tool_call_id, tool_name, tool_error, attachments, created_at)
 		VALUES (?, 'tool', ?, ?, ?, ?, ?, ?)`,
-		sessionID, message.Content, message.ToolCallID, message.ToolName, message.ToolError, nullRawJSON(message.Attachments), createdAt)
+		sessionID,
+		message.Content,
+		message.ToolCallID,
+		message.ToolName,
+		message.ToolError,
+		nullRawJSON(message.Attachments),
+		createdAt,
+	)
 	if err != nil {
 		return 0, false, fmt.Errorf("insert direct-output tool result: %w", err)
 	}

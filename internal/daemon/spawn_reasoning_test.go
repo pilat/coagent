@@ -17,7 +17,7 @@ import (
 	"github.com/pilat/coagent/internal/config"
 	"github.com/pilat/coagent/internal/migrate"
 	"github.com/pilat/coagent/internal/schedule"
-	"github.com/pilat/coagent/internal/session"
+	"github.com/pilat/coagent/internal/sessionbuild"
 	"github.com/pilat/coagent/internal/sessionstore"
 	"github.com/pilat/coagent/internal/subagent"
 )
@@ -32,6 +32,7 @@ func TestSpawnSettlesTheChildEffortOnTheChildModel(t *testing.T) {
 
 	defer h.shutdown()
 
+	h.startInboxWake()
 	parentID, err := h.mgr.Send(h.ctx, h.projectID, "parent work", "parent-model", nil)
 	require.NoError(t, err)
 	// The two-phase check spends a hidden candidate and a confirmation, both
@@ -43,7 +44,8 @@ func TestSpawnSettlesTheChildEffortOnTheChildModel(t *testing.T) {
 
 	require.NoError(t, h.mgr.SetModel(h.ctx, parentID, "parent-model", "high"))
 
-	child, err := h.mgr.Spawn(h.ctx, spawnRequest{
+	h.startInboxWake()
+	child, err := h.mgr.Spawn(h.ctx, subagent.SpawnRequest{
 		ParentID:  parentID,
 		AgentType: "general",
 		Model:     "child-model",
@@ -194,10 +196,10 @@ func newSpawnEffortHarness(t *testing.T, baseURL string) *subagentHarness {
 	t.Cleanup(func() { _ = db.Close() })
 	require.NoError(t, migrate.Run(ctx, db, dbPath))
 
-	store := NewStore(db)
+	store := sessionstore.NewStore(db)
 	sessStore := sessionstore.NewStore(db)
 	links := subagent.NewStore(db)
-	schedStore := schedule.NewStore(db)
+	schedStore := schedule.NewStore(db, sessStore)
 
 	workDir := t.TempDir()
 	cfg := &config.Config{WorkDir: workDir, Model: "parent-model", UnifiedConfig: &config.UnifiedConfig{
@@ -210,25 +212,18 @@ func newSpawnEffortHarness(t *testing.T, baseURL string) *subagentHarness {
 		},
 	}}
 
-	factory := session.NewFactoryWithOptions(cfg, nil, nil, sessStore, sessStore, nil, nil, nil)
+	factory := sessionbuild.BuildInput{Config: cfg, Store: sessStore}
 
-	mgr, _ := newSvc(
+	mgr, _ := newScenarioDaemon(
 		context.Background(),
 		factory,
-		store,
-		sessStore,
-		sessStore,
-		sessStore,
-		sessStore,
-		sessStore,
-		sessStore,
 		sessStore,
 		links,
-		subagent.NewTransactions(db),
+		subagent.NewTransactions(db, sessStore),
 		budget.New(sessStore),
-		sessStore,
-		schedule.NewService(schedStore),
+		schedule.NewService(schedStore, sessStore),
 		func() string { return "parent-model" },
+		db,
 	)
 	mgr.loadModelCatalog(cfg.UnifiedConfig.Models)
 

@@ -150,7 +150,7 @@ func insertManagementRoot(
 		return nil, nil, fmt.Errorf("management root id: %w", err)
 	}
 
-	commit, err := insertLifecycleOutput(ctx, tx, id, OutputSessionOpened, "", owner,
+	commit, err := insertLifecycleOutput(ctx, tx, id, OutputSessionOpened, "",
 		map[string]any{outputAttributeName: name, outputAttributeWorkDir: workDir},
 		fmt.Sprintf("session:%d:opened", id), now)
 	if err != nil {

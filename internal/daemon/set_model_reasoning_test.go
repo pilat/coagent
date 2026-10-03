@@ -17,9 +17,10 @@ import (
 	"github.com/pilat/coagent/internal/config"
 	"github.com/pilat/coagent/internal/migrate"
 	"github.com/pilat/coagent/internal/schedule"
-	"github.com/pilat/coagent/internal/session"
+	"github.com/pilat/coagent/internal/sessionbuild"
 	"github.com/pilat/coagent/internal/sessionstore"
 	"github.com/pilat/coagent/internal/subagent"
+	"github.com/pilat/coagent/internal/tool/builtin"
 )
 
 // TestSetModelRecordsTheEffortTheNextRunSends drives a switch to a reasoning model
@@ -31,6 +32,7 @@ func TestSetModelRecordsTheEffortTheNextRunSends(t *testing.T) {
 
 	defer h.shutdown()
 
+	h.startInboxWake()
 	id, err := h.mgr.Send(h.ctx, h.projectID, "first", "plain-model", nil)
 	require.NoError(t, err)
 	// The two-phase check spends a hidden candidate and a confirmation, both
@@ -47,6 +49,7 @@ func TestSetModelRecordsTheEffortTheNextRunSends(t *testing.T) {
 	assert.Equal(t, "high", rec.ReasoningLevel,
 		"an unnamed level settles on the model's default, and the record keeps that")
 
+	h.startInboxWake()
 	require.NoError(t, h.mgr.SendToSession(h.ctx, id, "second"))
 	h.waitUntil("second turn answered", func() bool {
 		return countAssistantReplies(h.parentMessages(id)) == 4
@@ -129,10 +132,10 @@ func newEffortHarness(t *testing.T, baseURL string) *subagentHarness {
 	t.Cleanup(func() { _ = db.Close() })
 	require.NoError(t, migrate.Run(ctx, db, dbPath))
 
-	store := NewStore(db)
+	store := sessionstore.NewStore(db)
 	sessStore := sessionstore.NewStore(db)
 	links := subagent.NewStore(db)
-	schedStore := schedule.NewStore(db)
+	schedStore := schedule.NewStore(db, sessStore)
 
 	workDir := t.TempDir()
 	cfg := &config.Config{WorkDir: workDir, Model: "plain-model", UnifiedConfig: &config.UnifiedConfig{
@@ -150,25 +153,18 @@ func newEffortHarness(t *testing.T, baseURL string) *subagentHarness {
 		},
 	}}
 
-	factory := session.NewFactoryWithOptions(cfg, nil, nil, sessStore, sessStore, nil, nil, nil)
+	factory := sessionbuild.BuildInput{Config: cfg, Store: sessStore, Resources: builtin.NewResources()}
 
-	mgr, _ := newSvc(
+	mgr, _ := newScenarioDaemon(
 		context.Background(),
 		factory,
-		store,
-		sessStore,
-		sessStore,
-		sessStore,
-		sessStore,
-		sessStore,
-		sessStore,
 		sessStore,
 		links,
-		subagent.NewTransactions(db),
+		subagent.NewTransactions(db, sessStore),
 		budget.New(sessStore),
-		sessStore,
-		schedule.NewService(schedStore),
+		schedule.NewService(schedStore, sessStore),
 		func() string { return "plain-model" },
+		db,
 	)
 	mgr.loadModelCatalog(cfg.UnifiedConfig.Models)
 

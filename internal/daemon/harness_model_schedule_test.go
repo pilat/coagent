@@ -27,6 +27,7 @@ type scheduleBoundaryModel struct {
 	rootStatus       sessionstore.SessionStatus
 	rootRuns         int
 	rootClaimed      bool
+	rootPending      int
 	subagentStatus   sessionstore.SessionStatus
 	subagentMessages int
 }
@@ -36,6 +37,7 @@ type scheduleBoundaryObservation struct {
 	errored          bool
 	rootStatus       sessionstore.SessionStatus
 	rootRuns         int
+	rootPending      int
 	subagentStatus   sessionstore.SessionStatus
 	subagentMessages int
 }
@@ -52,6 +54,7 @@ func TestHarnessModel_ScheduleCapabilityBoundary(t *testing.T) {
 
 	h := newSubagentHarnessWith(t, respond)
 	defer h.shutdown()
+	h.startInboxWake()
 	rootID, err := h.mgr.Send(t.Context(), h.projectID, "initialize", "fake-model", nil)
 	require.NoError(t, err)
 	h.mgr.waitIdle(rootID)
@@ -77,6 +80,7 @@ func TestHarnessModel_ScheduleCapabilityBoundary(t *testing.T) {
 		assert.Equal(t, expectedError, actual.errored, "command %d error", command)
 		assert.Equal(t, model.rootStatus, actual.rootStatus, "command %d root status", command)
 		assert.Equal(t, model.rootRuns, actual.rootRuns, "command %d root runs", command)
+		assert.Equal(t, model.rootPending, actual.rootPending, "command %d root pending", command)
 		assert.Equal(t, model.subagentStatus, actual.subagentStatus, "command %d subagent status", command)
 		assert.Equal(t, model.subagentMessages, actual.subagentMessages, "command %d subagent messages", command)
 	}
@@ -101,7 +105,8 @@ func (m *scheduleBoundaryModel) step(command scheduleBoundaryCommand) (bool, boo
 	case deliverDuplicateRoot:
 		return false, false
 	case deliverPendingResult:
-		return false, true
+		m.rootPending++
+		return true, false
 	default:
 		panic("unknown schedule boundary command")
 	}
@@ -116,20 +121,31 @@ func applyScheduleBoundaryCommand(
 	t.Helper()
 
 	applied, err := executeScheduleBoundaryCommand(t, h, rootID, subagentID, command)
+	wantPending := 0
+
+	if command == deliverPendingResult {
+		wantPending = 1
+	}
 
 	require.Eventually(t, func() bool {
-		return !h.mgr.HasActiveLoop(rootID) && !h.mgr.HasActiveLoop(subagentID)
+		pending, pendingErr := h.sessStore.ListPending(t.Context(), rootID)
+
+		return pendingErr == nil && len(pending) == wantPending &&
+			!h.mgr.HasActiveLoop(rootID) && !h.mgr.HasActiveLoop(subagentID)
 	}, time.Second, 10*time.Millisecond)
 	root, loadRootErr := h.sessStore.GetSession(t.Context(), rootID)
 	require.NoError(t, loadRootErr)
 	subagent, loadSubagentErr := h.sessStore.GetSession(t.Context(), subagentID)
 	require.NoError(t, loadSubagentErr)
+	pending, pendingErr := h.sessStore.ListPending(t.Context(), rootID)
+	require.NoError(t, pendingErr)
 
 	return scheduleBoundaryObservation{
 		applied:          applied,
 		errored:          err != nil,
 		rootStatus:       root.Status,
 		rootRuns:         countToolResultsFor(h.parentMessages(rootID), tool.IDSchedule),
+		rootPending:      len(pending),
 		subagentStatus:   subagent.Status,
 		subagentMessages: len(h.parentMessages(subagentID)),
 	}
@@ -145,19 +161,41 @@ func executeScheduleBoundaryCommand(
 
 	switch command {
 	case deliverSubagentTick:
-		return h.mgr.DeliverScheduleTick(t.Context(), subagentID, "schedule:model:subagent-tick", "legacy task")
+		return enqueueScheduledInput(
+
+			t.Context(), h.mgr.store,
+
+			subagentID,
+			"schedule:model:subagent-tick",
+			"legacy task",
+			false,
+		)
 	case deliverSubagentFresh:
-		return h.mgr.DeliverFreshSchedule(t.Context(), subagentID, "schedule:model:subagent-fresh", "legacy fresh task")
+		return enqueueScheduledInput(
+
+			t.Context(), h.mgr.store,
+
+			subagentID,
+			"schedule:model:subagent-fresh",
+			"legacy fresh task",
+			true,
+		)
 	case deliverStoppedRoot, deliverDuplicateRoot:
-		return h.mgr.DeliverScheduleTick(t.Context(), rootID, "schedule:model:root", "scheduled task")
+		return enqueueScheduledInput(t.Context(), h.mgr.store, rootID, "schedule:model:root", "scheduled task", false)
 	case stopRootAgain:
 		return false, h.mgr.Stop(t.Context(), rootID, 0)
 	case deliverPendingResult:
-		_, err := h.mgr.DeliverPendingCallResult(
-			t.Context(), rootID, "missing-call", tool.IDSleep, "must stay stopped",
+		applied, err := enqueueCallResult(
+
+			t.Context(), h.mgr.store,
+
+			rootID,
+			"missing-call",
+			tool.IDSleep,
+			"must stay stopped",
 		)
 
-		return false, err
+		return applied, err
 	default:
 		t.Fatalf("unknown command %d", command)
 

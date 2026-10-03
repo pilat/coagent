@@ -121,7 +121,6 @@ type launchResult struct {
 
 // NewService constructs a process lifecycle service.
 func NewService(store Store, opts Options) Service {
-
 	return &svc{
 		store: store, opts: opts, live: make(map[int64]int),
 		background: make(map[int64]int), candidates: make(map[int64]int),
@@ -168,7 +167,7 @@ func (s *svc) Start(
 	if s.opts.Fence != nil {
 		releaseFence, err := s.opts.Fence.Fence(ctx, spec.RootSessionID)
 		if err != nil {
-			return Process{}, err
+			return Process{}, fmt.Errorf("start: %w", err)
 		}
 		defer releaseFence()
 	}

@@ -1,4 +1,4 @@
-package sessionstore
+package sessionstore_test
 
 import (
 	"context"
@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/pilat/coagent/internal/sessionstore"
 	"github.com/pilat/coagent/internal/subagent"
 	"github.com/pilat/coagent/internal/transcript"
 )
@@ -37,21 +38,21 @@ func TestMessageOutputsStampGenerationLifecycleOutputsDoNot(t *testing.T) {
 	session, err := store.CreateSession(ctx, projectID, "m", "", map[string]any{"manager_id": "mgr"})
 	require.NoError(t, err)
 
-	input, err := store.EnqueueInput(ctx, session.ID, InputSourceUser, "hello")
+	input, err := enqueueInput(ctx, store, session.ID, sessionstore.InputSourceUser, "hello")
 	require.NoError(t, err)
-	_, err = store.PromoteInput(ctx, input.ID, "hello")
+	_, err = acceptInput(ctx, store, input.ID, "hello")
 	require.NoError(t, err)
 
 	// Assistant message output.
-	_, commit, err := store.InsertAssistantMessageWithOutput(ctx, session.ID,
+	_, commit, err := appendPublished(ctx, store, session.ID,
 		&transcript.Message{Role: "assistant", Content: "working", ToolCalls: []byte(`[]`)},
-		OutputMessageReplaceable, "working", false)
+		sessionstore.OutputMessageReplaceable, "working", false)
 	require.NoError(t, err)
 	require.NotZero(t, commit.OutputID)
 	assert.InDelta(t, float64(1), ownerAttrs(t, db, commit.OutputID)["model_input_generation"].(float64), 0)
 
 	// Direct output rides a tool result insertion.
-	_, outputs, err := store.InsertToolResultWithDirectOutput(ctx, session.ID,
+	_, outputs, err := answerTool(ctx, store, session.ID,
 		&transcript.Message{Role: "tool", Content: "done", ToolCallID: "c1", ToolName: "bash"},
 		[]string{"direct!"})
 	require.NoError(t, err)
@@ -59,16 +60,24 @@ func TestMessageOutputsStampGenerationLifecycleOutputsDoNot(t *testing.T) {
 	assert.InDelta(t, float64(1), ownerAttrs(t, db, outputs[0].OutputID)["model_input_generation"].(float64), 0)
 
 	// Assistant replaceable output via EnqueueOutput.
-	draft := OutputDraft{
-		SessionID: session.ID, Type: OutputMessageReplaceable, Content: "still working",
-		SourceKey: "k1", Fingerprint: OutputFingerprint(OutputMessageReplaceable, "still working", session.ID, nil),
+	draft := sessionstore.OutputDraft{
+		SessionID: session.ID,
+		Type:      sessionstore.OutputMessageReplaceable,
+		Content:   "still working",
+		SourceKey: "k1",
+		Fingerprint: sessionstore.OutputFingerprint(
+			sessionstore.OutputMessageReplaceable,
+			"still working",
+			session.ID,
+			nil,
+		),
 	}
 	commit, err = store.EnqueueOutput(ctx, draft)
 	require.NoError(t, err)
 	assert.InDelta(t, float64(1), ownerAttrs(t, db, commit.OutputID)["model_input_generation"].(float64), 0)
 
 	// Lifecycle outputs carry no generation.
-	opened, _, err := store.CreateManagerRoot(ctx, ManagerRootCreate{
+	opened, _, err := store.CreateManagerRoot(ctx, sessionstore.ManagerRootCreate{
 		ProjectID: projectID, Attributes: map[string]any{"manager_id": "mgr"},
 		Name: "n", WorkDir: "/tmp/wd", Prompt: "go",
 	})
@@ -86,19 +95,19 @@ func TestSourceKeyReplayReturnsOriginalGeneration(t *testing.T) {
 	session, err := store.CreateSession(ctx, projectID, "m", "", map[string]any{"manager_id": "mgr"})
 	require.NoError(t, err)
 
-	draft := OutputDraft{
-		SessionID: session.ID, Type: OutputMessageReplaceable, Content: "card",
+	draft := sessionstore.OutputDraft{
+		SessionID: session.ID, Type: sessionstore.OutputMessageReplaceable, Content: "card",
 		SourceKey:   "progress:change:x:g0",
-		Fingerprint: OutputFingerprint(OutputMessageReplaceable, "card", session.ID, nil),
+		Fingerprint: sessionstore.OutputFingerprint(sessionstore.OutputMessageReplaceable, "card", session.ID, nil),
 	}
 	commit, err := store.EnqueueOutput(ctx, draft)
 	require.NoError(t, err)
 	assert.InDelta(t, float64(0), ownerAttrs(t, db, commit.OutputID)["model_input_generation"].(float64), 0)
 
 	// Advance the generation, then replay the same source key.
-	input, err := store.EnqueueInput(ctx, session.ID, InputSourceUser, "next")
+	input, err := enqueueInput(ctx, store, session.ID, sessionstore.InputSourceUser, "next")
 	require.NoError(t, err)
-	_, err = store.PromoteInput(ctx, input.ID, "next")
+	_, err = acceptInput(ctx, store, input.ID, "next")
 	require.NoError(t, err)
 
 	replay, err := store.EnqueueOutput(ctx, draft)
@@ -109,11 +118,12 @@ func TestSourceKeyReplayReturnsOriginalGeneration(t *testing.T) {
 }
 
 func TestProducerCannotSetGenerationAttribute(t *testing.T) {
-	draft := OutputDraft{
-		SessionID: 1, Type: OutputMessagePersistent, Content: "x",
-		Attributes: map[string]any{ModelInputGenerationAttribute: int64(7)},
+	draft := sessionstore.OutputDraft{
+		SessionID: 1, Type: sessionstore.OutputMessagePersistent, Content: "x",
+		Attributes: map[string]any{sessionstore.ModelInputGenerationAttribute: int64(7)},
 	}
-	err := validateOutputDraft(draft)
+	store, _, _ := newTestStore(t)
+	_, err := store.EnqueueOutput(t.Context(), draft)
 	require.ErrorContains(t, err, "model_input_generation")
 }
 
@@ -124,31 +134,38 @@ func TestEnqueueProgressOutputSuperseded(t *testing.T) {
 	session, err := store.CreateSession(ctx, projectID, "m", "", map[string]any{"manager_id": "mgr"})
 	require.NoError(t, err)
 
-	draft := func() OutputDraft {
-		return OutputDraft{
-			SessionID: session.ID, Type: OutputMessageReplaceable, Content: "card",
+	draft := func() sessionstore.OutputDraft {
+		return sessionstore.OutputDraft{
+			SessionID: session.ID, Type: sessionstore.OutputMessageReplaceable, Content: "card",
 			SourceKey:   "progress:change:m:g0",
-			Fingerprint: OutputFingerprint(OutputMessageReplaceable, "card", session.ID, nil),
+			Fingerprint: sessionstore.OutputFingerprint(sessionstore.OutputMessageReplaceable, "card", session.ID, nil),
 		}
 	}
 
 	// Generation supersession.
-	commit, err := store.EnqueueProgressOutput(ctx, draft(), 0, SessionStatusActive)
+	commit, err := store.EnqueueProgressOutput(ctx, draft(), 0, sessionstore.SessionStatusActive)
 	require.NoError(t, err)
 	require.NotZero(t, commit.OutputID)
 
-	input, err := store.EnqueueInput(ctx, session.ID, InputSourceUser, "next")
+	input, err := enqueueInput(ctx, store, session.ID, sessionstore.InputSourceUser, "next")
 	require.NoError(t, err)
-	_, err = store.PromoteInput(ctx, input.ID, "next")
+	_, err = acceptInput(ctx, store, input.ID, "next")
 	require.NoError(t, err)
 
-	stale := OutputDraft{
-		SessionID: session.ID, Type: OutputMessageReplaceable, Content: "stale card",
-		SourceKey:   "progress:change:m2:g0",
-		Fingerprint: OutputFingerprint(OutputMessageReplaceable, "stale card", session.ID, nil),
+	stale := sessionstore.OutputDraft{
+		SessionID: session.ID,
+		Type:      sessionstore.OutputMessageReplaceable,
+		Content:   "stale card",
+		SourceKey: "progress:change:m2:g0",
+		Fingerprint: sessionstore.OutputFingerprint(
+			sessionstore.OutputMessageReplaceable,
+			"stale card",
+			session.ID,
+			nil,
+		),
 	}
-	_, err = store.EnqueueProgressOutput(ctx, stale, 0, SessionStatusActive)
-	require.ErrorIs(t, err, ErrProgressSuperseded)
+	_, err = store.EnqueueProgressOutput(ctx, stale, 0, sessionstore.SessionStatusActive)
+	require.ErrorIs(t, err, sessionstore.ErrProgressSuperseded)
 
 	var count int
 	require.NoError(t, db.QueryRow(`SELECT COUNT(*) FROM session_outbox WHERE source_key = ?`,
@@ -158,8 +175,13 @@ func TestEnqueueProgressOutputSuperseded(t *testing.T) {
 	// Current generation succeeds.
 	fresh := stale
 	fresh.SourceKey = "progress:change:m2:g1"
-	fresh.Fingerprint = OutputFingerprint(OutputMessageReplaceable, "stale card", session.ID, nil)
-	commit, err = store.EnqueueProgressOutput(ctx, fresh, 1, SessionStatusActive)
+	fresh.Fingerprint = sessionstore.OutputFingerprint(
+		sessionstore.OutputMessageReplaceable,
+		"stale card",
+		session.ID,
+		nil,
+	)
+	commit, err = store.EnqueueProgressOutput(ctx, fresh, 1, sessionstore.SessionStatusActive)
 	require.NoError(t, err)
 	require.NotZero(t, commit.OutputID)
 
@@ -167,20 +189,34 @@ func TestEnqueueProgressOutputSuperseded(t *testing.T) {
 	_, err = db.Exec(`UPDATE sessions SET status = 'stopping' WHERE id = ?`, session.ID)
 	require.NoError(t, err)
 
-	_, err = store.EnqueueProgressOutput(ctx, OutputDraft{
-		SessionID: session.ID, Type: OutputMessageReplaceable, Content: "late card",
-		SourceKey:   "progress:change:m3:g1",
-		Fingerprint: OutputFingerprint(OutputMessageReplaceable, "late card", session.ID, nil),
-	}, 1, SessionStatusActive)
-	require.ErrorIs(t, err, ErrProgressSuperseded)
+	_, err = store.EnqueueProgressOutput(ctx, sessionstore.OutputDraft{
+		SessionID: session.ID,
+		Type:      sessionstore.OutputMessageReplaceable,
+		Content:   "late card",
+		SourceKey: "progress:change:m3:g1",
+		Fingerprint: sessionstore.OutputFingerprint(
+			sessionstore.OutputMessageReplaceable,
+			"late card",
+			session.ID,
+			nil,
+		),
+	}, 1, sessionstore.SessionStatusActive)
+	require.ErrorIs(t, err, sessionstore.ErrProgressSuperseded)
 
 	// Stopping status is never eligible even when expected verbatim.
-	_, err = store.EnqueueProgressOutput(ctx, OutputDraft{
-		SessionID: session.ID, Type: OutputMessageReplaceable, Content: "late card",
-		SourceKey:   "progress:change:m4:g1",
-		Fingerprint: OutputFingerprint(OutputMessageReplaceable, "late card", session.ID, nil),
-	}, 1, SessionStatusStopping)
-	require.ErrorIs(t, err, ErrProgressSuperseded)
+	_, err = store.EnqueueProgressOutput(ctx, sessionstore.OutputDraft{
+		SessionID: session.ID,
+		Type:      sessionstore.OutputMessageReplaceable,
+		Content:   "late card",
+		SourceKey: "progress:change:m4:g1",
+		Fingerprint: sessionstore.OutputFingerprint(
+			sessionstore.OutputMessageReplaceable,
+			"late card",
+			session.ID,
+			nil,
+		),
+	}, 1, sessionstore.SessionStatusStopping)
+	require.ErrorIs(t, err, sessionstore.ErrProgressSuperseded)
 }
 
 func TestCaptureProgressNoteScoping(t *testing.T) {
@@ -195,22 +231,22 @@ func TestCaptureProgressNoteScoping(t *testing.T) {
 	}
 
 	// Pre-boundary narration from an old turn.
-	_, err = store.InsertMessage(ctx, session.ID, assistant("old narration", `[{"id":"1","name":"bash","input":{}}]`))
+	_, err = appendMessage(ctx, store, session.ID, assistant("old narration", `[{"ID":"1","Name":"bash","input":{}}]`))
 	require.NoError(t, err)
 
-	input, err := store.EnqueueInput(ctx, session.ID, InputSourceUser, "go")
+	input, err := enqueueInput(ctx, store, session.ID, sessionstore.InputSourceUser, "go")
 	require.NoError(t, err)
-	_, err = store.PromoteInput(ctx, input.ID, "go")
+	_, err = acceptInput(ctx, store, input.ID, "go")
 	require.NoError(t, err)
 
 	// Tool-only row: no text.
-	_, err = store.InsertMessage(ctx, session.ID, assistant("", `[{"id":"2","name":"bash","input":{}}]`))
+	_, err = appendMessage(ctx, store, session.ID, assistant("", `[{"ID":"2","Name":"bash","input":{}}]`))
 	require.NoError(t, err)
 
 	// Reasoning-only row: text empty, reasoning set.
-	_, err = store.InsertMessage(ctx, session.ID, &transcript.Message{
+	_, err = appendMessage(ctx, store, session.ID, &transcript.Message{
 		Role: "assistant", Content: "", ReasoningContent: "thinking",
-		ToolCalls: jsonRaw(`[{"id":"3","name":"bash","input":{}}]`),
+		ToolCalls: jsonRaw(`[{"ID":"3","Name":"bash","input":{}}]`),
 	})
 	require.NoError(t, err)
 
@@ -219,10 +255,9 @@ func TestCaptureProgressNoteScoping(t *testing.T) {
 	assert.Empty(t, facts.LatestModelProgress, "tool-only and reasoning-only rows are not notes")
 
 	// Narrated tool row becomes the note.
-	_, err = store.InsertMessage(
-		ctx,
+	_, err = appendMessage(ctx, store,
 		session.ID,
-		assistant("current narration", `[{"id":"4","name":"bash","input":{}}]`),
+		assistant("current narration", `[{"ID":"4","Name":"bash","input":{}}]`),
 	)
 	require.NoError(t, err)
 	facts, err = store.CaptureProgress(ctx, session.ID)
@@ -234,7 +269,7 @@ func TestCaptureProgressNoteScoping(t *testing.T) {
 	// Compacted rows never supply the note.
 	var noteID int64
 	require.NoError(t, db.QueryRow(`SELECT id FROM messages WHERE content = 'current narration'`).Scan(&noteID))
-	_, err = store.ReplaceCompactedMessages(ctx, session.ID, []int64{noteID}, []CompactionEntry{})
+	_, err = replaceTranscript(ctx, store, session.ID, []int64{noteID}, []sessionstore.CompactionEntry{})
 	require.NoError(t, err)
 	facts, err = store.CaptureProgress(ctx, session.ID)
 	require.NoError(t, err)
@@ -247,15 +282,15 @@ func TestCaptureProgressExcludesPublishedDirectReply(t *testing.T) {
 
 	session, err := store.CreateSession(ctx, projectID, "m", "", map[string]any{"manager_id": "mgr"})
 	require.NoError(t, err)
-	input, err := store.EnqueueInput(ctx, session.ID, InputSourceUser, "stop mutations")
+	input, err := enqueueInput(ctx, store, session.ID, sessionstore.InputSourceUser, "stop mutations")
 	require.NoError(t, err)
-	_, err = store.PromoteInput(ctx, input.ID, input.RawContent)
+	_, err = acceptInput(ctx, store, input.ID, input.RawContent)
 	require.NoError(t, err)
 
-	_, output, err := store.InsertAssistantMessageWithOutput(ctx, session.ID, &transcript.Message{
+	_, output, err := appendPublished(ctx, store, session.ID, &transcript.Message{
 		Role: "assistant", Content: "Stopping the mutation run",
-		ToolCalls: jsonRaw(`[{"id":"stop","name":"bash","input":{}}]`),
-	}, OutputMessagePersistent, "Stopping the mutation run", false)
+		ToolCalls: jsonRaw(`[{"ID":"stop","Name":"bash","input":{}}]`),
+	}, sessionstore.OutputMessagePersistent, "Stopping the mutation run", false)
 	require.NoError(t, err)
 	require.NotNil(t, output)
 
@@ -278,19 +313,19 @@ func TestScheduledTurnWithoutNarrationDoesNotReuseNote(t *testing.T) {
 	session, err := store.CreateSession(ctx, projectID, "m", "", map[string]any{"manager_id": "mgr"})
 	require.NoError(t, err)
 
-	input, err := store.EnqueueInput(ctx, session.ID, InputSourceUser, "go")
+	input, err := enqueueInput(ctx, store, session.ID, sessionstore.InputSourceUser, "go")
 	require.NoError(t, err)
-	_, err = store.PromoteInput(ctx, input.ID, "go")
+	_, err = acceptInput(ctx, store, input.ID, "go")
 	require.NoError(t, err)
 
-	_, err = store.InsertMessage(ctx, session.ID, &transcript.Message{
+	_, err = appendMessage(ctx, store, session.ID, &transcript.Message{
 		Role: "assistant", Content: "old narration",
-		ToolCalls: jsonRaw(`[{"id":"1","name":"bash","input":{}}]`),
+		ToolCalls: jsonRaw(`[{"ID":"1","Name":"bash","input":{}}]`),
 	})
 	require.NoError(t, err)
 
 	// A scheduled injection advances the boundary; its turn has no narration.
-	_, inserted, err := store.ResetSessionContextOnce(ctx, session.ID, "sched-1", "fp-s1",
+	_, inserted, err := freshTurn(ctx, store, session.ID, "sched-1", "fp-s1",
 		[]*transcript.Message{{Role: "user", Content: "scheduled turn"}})
 	require.NoError(t, err)
 	require.True(t, inserted)
@@ -308,13 +343,11 @@ func TestCaptureProgressCountsActiveSubagentsAcrossRootTree(t *testing.T) {
 
 	root, err := store.CreateSession(ctx, projectID, "m", "", nil)
 	require.NoError(t, err)
-	foreground, err := store.CreateSubagentSession(ctx, projectID, root.ID, root.ID, "general", "m", "")
+	foreground, err := createChild(ctx, store, projectID, root.ID, root.ID, "general", "m", "")
 	require.NoError(t, err)
-	nestedForeground, err := store.CreateSubagentSession(
-		ctx, projectID, foreground, root.ID, "general", "m", "",
-	)
+	nestedForeground, err := createChild(ctx, store, projectID, foreground, root.ID, "general", "m", "")
 	require.NoError(t, err)
-	background, err := store.CreateSubagentSession(ctx, projectID, root.ID, root.ID, "general", "m", "")
+	background, err := createChild(ctx, store, projectID, root.ID, root.ID, "general", "m", "")
 	require.NoError(t, err)
 
 	links := subagent.NewStore(db)
@@ -344,18 +377,18 @@ func TestCaptureProgressNotePrefersPendingCandidate(t *testing.T) {
 	session, err := store.CreateSession(ctx, projectID, "m", "", map[string]any{"manager_id": "mgr"})
 	require.NoError(t, err)
 
-	input, err := store.EnqueueInput(ctx, session.ID, InputSourceUser, "go")
+	input, err := enqueueInput(ctx, store, session.ID, sessionstore.InputSourceUser, "go")
 	require.NoError(t, err)
-	_, err = store.PromoteInput(ctx, input.ID, "go")
+	_, err = acceptInput(ctx, store, input.ID, "go")
 	require.NoError(t, err)
 
 	// The current turn's narration (tool-bearing) and then the candidate stop.
-	_, err = store.InsertMessage(ctx, session.ID, &transcript.Message{
+	_, err = appendMessage(ctx, store, session.ID, &transcript.Message{
 		Role: "assistant", Content: "current narration",
-		ToolCalls: jsonRaw(`[{"id":"1","name":"bash","input":{}}]`),
+		ToolCalls: jsonRaw(`[{"ID":"1","Name":"bash","input":{}}]`),
 	})
 	require.NoError(t, err)
-	candidate, err := store.InsertMessage(ctx, session.ID, &transcript.Message{
+	candidate, err := appendMessage(ctx, store, session.ID, &transcript.Message{
 		Role: "assistant", Content: "full candidate answer", ToolCalls: jsonRaw(`[]`),
 	})
 	require.NoError(t, err)
@@ -407,7 +440,7 @@ func TestLoadCompletionCheckStateCarriesCandidateText(t *testing.T) {
 	session, err := store.CreateSession(ctx, projectID, "m", "", map[string]any{"manager_id": "mgr"})
 	require.NoError(t, err)
 
-	candidateID, err := store.InsertMessage(ctx, session.ID, &transcript.Message{
+	candidateID, err := appendMessage(ctx, store, session.ID, &transcript.Message{
 		Role: "assistant", Content: "full candidate answer", ToolCalls: jsonRaw(`[]`),
 	})
 	require.NoError(t, err)

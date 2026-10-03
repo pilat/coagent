@@ -38,7 +38,7 @@ func TestFollowUpAcceptedBeforeTerminalBoundaryStaysInSameActivation(t *testing.
 	ctx := context.Background()
 	mgr, _, projects := newTestManager(t)
 	projectID := testProject(t, projects, "/tmp/follow-up-boundary")
-	parent, err := mgr.sessionStore.CreateSession(ctx, projectID, "fake-model", "", nil)
+	parent, err := mgr.store.CreateSession(ctx, projectID, "fake-model", "", nil)
 	require.NoError(t, err)
 	childID := createBackgroundChild(t, mgr, projectID, parent.ID)
 
@@ -57,7 +57,7 @@ func TestFollowUpAcceptedBeforeTerminalBoundaryStaysInSameActivation(t *testing.
 	require.NotNil(t, link)
 	assert.False(t, link.Terminal(), "accepted input wins the activation boundary")
 
-	pending, err := mgr.inboxStore.PeekPending(ctx, childID)
+	pending, err := mgr.store.PeekPending(ctx, childID)
 	require.NoError(t, err)
 	assert.Equal(t, "one more question", pending.RawContent)
 }
@@ -65,15 +65,16 @@ func TestFollowUpAcceptedBeforeTerminalBoundaryStaysInSameActivation(t *testing.
 func TestTerminalChildDeliversPreviousOutcomeBeforeRearm(t *testing.T) {
 	ctx := context.Background()
 	mgr, _, projects := newTestManager(t)
-	projectID := testProject(t, projects, "/tmp/follow-up-rearm")
-	parent, err := mgr.sessionStore.CreateSession(ctx, projectID, "fake-model", "", nil)
+	projectID := testProject(t, projects, t.TempDir())
+	parent, err := mgr.store.CreateSession(ctx, projectID, "fake-model", "", nil)
 	require.NoError(t, err)
 	childID := createBackgroundChild(t, mgr, projectID, parent.ID)
 
 	require.NoError(t, mgr.links.MarkLinkTerminal(
 		ctx, childID, subagent.StateCompleted, "first outcome", subagent.OutcomeCompleted,
 	))
-	require.NoError(t, mgr.sessionStore.UpdateSessionStatus(ctx, childID, sessionstore.SessionStatusCompleted))
+	require.NoError(t, mgr.store.UpdateSessionStatus(ctx, childID, sessionstore.SessionStatusCompleted))
+	mgr.startInboxWake(t.Context())
 
 	require.NoError(t, mgr.SendToChild(ctx, childID, "follow-up after completion"))
 
@@ -83,7 +84,7 @@ func TestTerminalChildDeliversPreviousOutcomeBeforeRearm(t *testing.T) {
 			return false
 		}
 
-		messages, msgErr := mgr.sessionStore.LoadActiveMessages(ctx, parent.ID)
+		messages, msgErr := mgr.store.LoadActiveMessages(ctx, parent.ID)
 		if msgErr != nil {
 			return false
 		}
@@ -102,8 +103,8 @@ func TestTerminalChildDeliversPreviousOutcomeBeforeRearm(t *testing.T) {
 func TestProcessInputRearmsCompletedChildAfterPriorOutcomeHandoff(t *testing.T) {
 	ctx := context.Background()
 	mgr, _, projects := newTestManager(t)
-	projectID := testProject(t, projects, "/tmp/process-rearm")
-	parent, err := mgr.sessionStore.CreateSession(ctx, projectID, "fake-model", "", nil)
+	projectID := testProject(t, projects, t.TempDir())
+	parent, err := mgr.store.CreateSession(ctx, projectID, "fake-model", "", nil)
 	require.NoError(t, err)
 	childID := createBackgroundChild(t, mgr, projectID, parent.ID)
 
@@ -115,13 +116,16 @@ func TestProcessInputRearmsCompletedChildAfterPriorOutcomeHandoff(t *testing.T) 
 	require.NoError(t, mgr.links.MarkLinkTerminal(
 		ctx, childID, subagent.StateCompleted, "first outcome", subagent.OutcomeCompleted,
 	))
-	require.NoError(t, mgr.sessionStore.UpdateSessionStatus(ctx, childID, sessionstore.SessionStatusCompleted))
-	processInput, err := mgr.inboxStore.EnqueueAsyncInput(
+	require.NoError(t, mgr.store.UpdateSessionStatus(ctx, childID, sessionstore.SessionStatusCompleted))
+	mgr.startInboxWake(t.Context())
+	processInput, err := mgr.store.Enqueue(
 		ctx,
-		childID,
-		sessionstore.InputSourceProcess,
-		"<process_completion>late process</process_completion>",
-		map[string]any{"process_id": "late-process"},
+		sessionstore.Input{
+			SessionID:  childID,
+			Source:     sessionstore.InputSourceProcess,
+			Content:    "<process_completion>late process</process_completion>",
+			Attributes: map[string]any{"process_id": "late-process"},
+		},
 	)
 	require.NoError(t, err)
 
@@ -135,13 +139,13 @@ func TestProcessInputRearmsCompletedChildAfterPriorOutcomeHandoff(t *testing.T) 
 	assert.False(t, link.Blocking)
 	assert.Zero(t, link.DeliveredAt)
 
-	pending, err := mgr.inboxStore.PeekPending(ctx, childID)
+	pending, err := mgr.store.PeekPending(ctx, childID)
 	require.NoError(t, err)
-	assert.Equal(t, processInput.ID, pending.ID)
+	assert.Equal(t, processInput.Input.ID, pending.ID)
 	assert.Equal(t, sessionstore.InputSourceProcess, pending.Source)
 
 	require.Eventually(t, func() bool {
-		messages, msgErr := mgr.sessionStore.LoadActiveMessages(ctx, parent.ID)
+		messages, msgErr := mgr.store.LoadActiveMessages(ctx, parent.ID)
 		if msgErr != nil {
 			return false
 		}
@@ -173,24 +177,28 @@ func assertProcessInputDoesNotRearmAfterStop(t *testing.T, stopChild bool) {
 	ctx := context.Background()
 	mgr, _, projects := newTestManager(t)
 	projectID := testProject(t, projects, "/tmp/process-stop-rearm")
-	root, err := mgr.sessionStore.CreateSession(ctx, projectID, "fake-model", "", nil)
+	root, err := mgr.store.CreateSession(ctx, projectID, "fake-model", "", nil)
 	require.NoError(t, err)
 	childID := createBackgroundChild(t, mgr, projectID, root.ID)
 
 	require.NoError(t, mgr.links.MarkLinkTerminal(
 		ctx, childID, subagent.StateCompleted, "first outcome", subagent.OutcomeCompleted,
 	))
-	require.NoError(t, mgr.sessionStore.UpdateSessionStatus(ctx, childID, sessionstore.SessionStatusCompleted))
+	require.NoError(t, mgr.store.UpdateSessionStatus(ctx, childID, sessionstore.SessionStatusCompleted))
 	link, err := mgr.links.GetLink(ctx, childID)
 	require.NoError(t, err)
 	require.NotNil(t, link)
 	won, err := mgr.subagents.DeliverBackgroundCompletion(ctx, *link, 1)
 	require.NoError(t, err)
 	require.True(t, won)
-	_, err = mgr.inboxStore.EnqueueAsyncInput(
-		ctx, childID, sessionstore.InputSourceProcess,
-		"<process_completion>late process</process_completion>",
-		map[string]any{"process_id": "late-process"},
+	_, err = mgr.store.Enqueue(
+		ctx,
+		sessionstore.Input{
+			SessionID:  childID,
+			Source:     sessionstore.InputSourceProcess,
+			Content:    "<process_completion>late process</process_completion>",
+			Attributes: map[string]any{"process_id": "late-process"},
+		},
 	)
 	require.NoError(t, err)
 
@@ -202,7 +210,7 @@ func assertProcessInputDoesNotRearmAfterStop(t *testing.T, stopChild bool) {
 	if stopChild {
 		stopID = childID
 	}
-	require.NoError(t, mgr.sessionStore.UpdateSessionStatus(ctx, stopID, sessionstore.SessionStatusStopped))
+	require.NoError(t, mgr.store.UpdateSessionStatus(ctx, stopID, sessionstore.SessionStatusStopped))
 	unlock()
 	require.NoError(t, <-ready)
 
@@ -211,7 +219,7 @@ func assertProcessInputDoesNotRearmAfterStop(t *testing.T, stopChild bool) {
 	require.NotNil(t, link)
 	assert.Equal(t, subagent.StateCompleted, link.State)
 	assert.Equal(t, int64(1), link.ActivationSeq)
-	pending, err := mgr.inboxStore.PeekPending(ctx, childID)
+	pending, err := mgr.store.PeekPending(ctx, childID)
 	require.NoError(t, err)
 	assert.Equal(t, sessionstore.InputSourceProcess, pending.Source)
 }
@@ -220,7 +228,7 @@ func TestStopParksWholeTreeAndExplicitFollowUpResumesOnlyChild(t *testing.T) {
 	ctx := context.Background()
 	mgr, _, projects := newTestManager(t)
 	projectID := testProject(t, projects, "/tmp/stop-tree")
-	parent, err := mgr.sessionStore.CreateSession(ctx, projectID, "fake-model", "", nil)
+	parent, err := mgr.store.CreateSession(ctx, projectID, "fake-model", "", nil)
 	require.NoError(t, err)
 
 	childID, err := mgr.subagents.Create(ctx, subagent.Create{
@@ -233,16 +241,19 @@ func TestStopParksWholeTreeAndExplicitFollowUpResumesOnlyChild(t *testing.T) {
 		State:      subagent.StateRunning,
 	})
 	require.NoError(t, err)
-	_, err = mgr.inboxStore.EnqueueInput(ctx, childID, sessionstore.InputSourceAgent, "not consumed")
+	_, err = mgr.store.Enqueue(
+		ctx,
+		sessionstore.Input{SessionID: childID, Source: sessionstore.InputSourceAgent, Content: "not consumed"},
+	)
 	require.NoError(t, err)
 
 	require.NoError(t, mgr.Stop(ctx, parent.ID, 0))
 
 	for _, id := range []int64{parent.ID, childID} {
-		rec, getErr := mgr.sessionStore.GetSession(ctx, id)
+		rec, getErr := mgr.store.GetSession(ctx, id)
 		require.NoError(t, getErr)
 		assert.Equal(t, sessionstore.SessionStatusStopped, rec.Status)
-		_, pendingErr := mgr.inboxStore.PeekPending(ctx, id)
+		_, pendingErr := mgr.store.PeekPending(ctx, id)
 		require.ErrorIs(t, pendingErr, sessionstore.ErrNoPendingInput)
 	}
 
@@ -262,7 +273,7 @@ func TestStopParksWholeTreeAndExplicitFollowUpResumesOnlyChild(t *testing.T) {
 		return getErr == nil && resumed != nil && resumed.State == subagent.StateRunning
 	}, 3*time.Second, 10*time.Millisecond)
 
-	parentRec, err := mgr.sessionStore.GetSession(ctx, parent.ID)
+	parentRec, err := mgr.store.GetSession(ctx, parent.ID)
 	require.NoError(t, err)
 	assert.Equal(t, sessionstore.SessionStatusStopped, parentRec.Status)
 
@@ -273,19 +284,19 @@ func TestStopParksActiveDescendantBelowCompletedChild(t *testing.T) {
 	ctx := context.Background()
 	mgr, _, projects := newTestManager(t)
 	projectID := testProject(t, projects, "/tmp/stop-terminal-ancestor")
-	root, err := mgr.sessionStore.CreateSession(ctx, projectID, "fake-model", "", nil)
+	root, err := mgr.store.CreateSession(ctx, projectID, "fake-model", "", nil)
 	require.NoError(t, err)
 
 	completedID := createBackgroundChild(t, mgr, projectID, root.ID)
-	require.NoError(t, mgr.sessionStore.UpdateSessionStatus(ctx, completedID, sessionstore.SessionStatusCompleted))
+	require.NoError(t, mgr.store.UpdateSessionStatus(ctx, completedID, sessionstore.SessionStatusCompleted))
 	activeID := createBackgroundChild(t, mgr, projectID, completedID)
 
 	require.NoError(t, mgr.Stop(ctx, root.ID, 0))
 
-	completed, err := mgr.sessionStore.GetSession(ctx, completedID)
+	completed, err := mgr.store.GetSession(ctx, completedID)
 	require.NoError(t, err)
 	assert.Equal(t, sessionstore.SessionStatusCompleted, completed.Status)
-	active, err := mgr.sessionStore.GetSession(ctx, activeID)
+	active, err := mgr.store.GetSession(ctx, activeID)
 	require.NoError(t, err)
 	assert.Equal(t, sessionstore.SessionStatusStopped, active.Status)
 }
@@ -294,7 +305,7 @@ func TestStopDirectChildParksItsOwnLinkWithoutStoppingParent(t *testing.T) {
 	ctx := context.Background()
 	mgr, _, projects := newTestManager(t)
 	projectID := testProject(t, projects, "/tmp/stop-direct-child")
-	parent, err := mgr.sessionStore.CreateSession(ctx, projectID, "fake-model", "", nil)
+	parent, err := mgr.store.CreateSession(ctx, projectID, "fake-model", "", nil)
 	require.NoError(t, err)
 	childID, err := mgr.subagents.Create(ctx, subagent.Create{
 		ProjectID: projectID, ParentID: parent.ID, RootID: parent.ID,
@@ -304,10 +315,10 @@ func TestStopDirectChildParksItsOwnLinkWithoutStoppingParent(t *testing.T) {
 
 	require.NoError(t, mgr.Stop(ctx, childID, 0))
 
-	parentRec, err := mgr.sessionStore.GetSession(ctx, parent.ID)
+	parentRec, err := mgr.store.GetSession(ctx, parent.ID)
 	require.NoError(t, err)
 	assert.Equal(t, sessionstore.SessionStatusActive, parentRec.Status)
-	childRec, err := mgr.sessionStore.GetSession(ctx, childID)
+	childRec, err := mgr.store.GetSession(ctx, childID)
 	require.NoError(t, err)
 	assert.Equal(t, sessionstore.SessionStatusStopped, childRec.Status)
 	link, err := mgr.links.GetLink(ctx, childID)
@@ -320,15 +331,15 @@ func TestStartFinishesInterruptedStopBeforeRecoverySweep(t *testing.T) {
 	ctx := context.Background()
 	mgr, _, projects := newTestManager(t)
 	projectID := testProject(t, projects, "/tmp/recover-stop")
-	parent, err := mgr.sessionStore.CreateSession(ctx, projectID, "fake-model", "", nil)
+	parent, err := mgr.store.CreateSession(ctx, projectID, "fake-model", "", nil)
 	require.NoError(t, err)
 	childID, err := mgr.subagents.Create(ctx, subagent.Create{
 		ProjectID: projectID, ParentID: parent.ID, RootID: parent.ID,
 		Model: "fake-model", TaskCallID: "background", State: subagent.StateRunning,
 	})
 	require.NoError(t, err)
-	require.NoError(t, mgr.sessionStore.UpdateSessionStatus(ctx, parent.ID, sessionstore.SessionStatusStopping))
-	require.NoError(t, mgr.sessionStore.UpdateSessionStatus(ctx, childID, sessionstore.SessionStatusStopping))
+	require.NoError(t, mgr.store.UpdateSessionStatus(ctx, parent.ID, sessionstore.SessionStatusStopping))
+	require.NoError(t, mgr.store.UpdateSessionStatus(ctx, childID, sessionstore.SessionStatusStopping))
 
 	outputPath := filepath.Join(t.TempDir(), "stopping.output")
 	require.NoError(t, os.WriteFile(outputPath, []byte("partial"), 0o600))
@@ -342,7 +353,7 @@ func TestStartFinishesInterruptedStopBeforeRecoverySweep(t *testing.T) {
 	require.NoError(t, mgr.Start(ctx))
 
 	for _, id := range []int64{parent.ID, childID} {
-		rec, getErr := mgr.sessionStore.GetSession(ctx, id)
+		rec, getErr := mgr.store.GetSession(ctx, id)
 		require.NoError(t, getErr)
 		assert.Equal(t, sessionstore.SessionStatusStopped, rec.Status)
 	}
@@ -353,7 +364,7 @@ func TestStartFinishesInterruptedStopBeforeRecoverySweep(t *testing.T) {
 	process, err := mgr.processStore.GetProcess(ctx, "stopping-process")
 	require.NoError(t, err)
 	assert.Equal(t, backgroundprocess.StateCancelled, process.State)
-	messages, err := mgr.sessionStore.LoadActiveMessages(ctx, parent.ID)
+	messages, err := mgr.store.LoadActiveMessages(ctx, parent.ID)
 	require.NoError(t, err)
 	assert.Equal(t, 0, countToolResultsFor(toDTO(messages), "process_event"))
 
@@ -364,7 +375,7 @@ func TestStopTreeCleanupPreservesBackgroundProcessesForBudgetPark(t *testing.T) 
 	ctx := context.Background()
 	mgr, _, projects := newTestManager(t)
 	projectID := testProject(t, projects, "/tmp/budget-process")
-	root, err := mgr.sessionStore.CreateSession(ctx, projectID, "fake-model", "", nil)
+	root, err := mgr.store.CreateSession(ctx, projectID, "fake-model", "", nil)
 	require.NoError(t, err)
 
 	service := backgroundprocess.NewService(mgr.processStore, backgroundprocess.Options{OutputDir: t.TempDir()})

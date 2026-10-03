@@ -14,14 +14,14 @@ func TestFinishRunnerCancellationEscapesContendedTreeFence(t *testing.T) {
 	ctx := context.Background()
 	mgr, _, projects := newTestManager(t)
 	projectID := testProject(t, projects, "/tmp/runner-fence-cancel")
-	record, err := mgr.sessionStore.CreateSession(ctx, projectID, "fake-model", "", nil)
+	record, err := mgr.store.CreateSession(ctx, projectID, "fake-model", "", nil)
 	require.NoError(t, err)
 
 	unlock, err := mgr.lockSessionTree(ctx, record.ID)
 	require.NoError(t, err)
 
 	runnerCtx, cancel := context.WithCancel(ctx)
-	rs := newRunner(cancel, t.TempDir(), projectID, admission.Parent, 0, false, nil)
+	rs := newRunner(cancel, t.TempDir(), projectID, admission.Parent, 0, false)
 	require.True(t, mgr.admit.TryAdmit(admission.Parent, 0))
 	_, registered := mgr.runners.Register(record.ID, rs)
 	require.True(t, registered)

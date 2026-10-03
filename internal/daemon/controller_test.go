@@ -11,6 +11,7 @@ import (
 
 	"github.com/pilat/coagent/internal/config"
 	"github.com/pilat/coagent/internal/controllerapi"
+	"github.com/pilat/coagent/internal/llm"
 	"github.com/pilat/coagent/internal/loader"
 	"github.com/pilat/coagent/internal/managercontrol"
 	"github.com/pilat/coagent/internal/migrate"
@@ -26,9 +27,9 @@ func newTestController(
 	cache loader.MarketplaceCache,
 	_ schedule.Service,
 ) controllerapi.ManagerControllerFactory {
-	var outputs sessionstore.ManagerOutputStore
+	var outputs *sessionstore.Store
 	if svc != nil {
-		outputs = svc.OutputStore()
+		outputs, _ = svc.store.(*sessionstore.Store)
 	}
 
 	return managercontrol.New(svc, svc, outputs, cfg, cache)
@@ -42,7 +43,7 @@ func TestControllerManagerSubscriptionIsExactAcrossRestart(t *testing.T) {
 	firstDB, err := migrate.OpenDB(ctx, dbPath)
 	require.NoError(t, err)
 	require.NoError(t, migrate.Run(ctx, firstDB, dbPath))
-	firstStore := NewStore(firstDB)
+	firstStore := sessionstore.NewStore(firstDB)
 	firstSessions := sessionstore.NewStore(firstDB)
 	projectID := testProject(t, firstStore, "/tmp/controller-manager-restart")
 	record, err := firstSessions.CreateSession(ctx, projectID, "model", "", map[string]any{
@@ -55,11 +56,22 @@ func TestControllerManagerSubscriptionIsExactAcrossRestart(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = secondDB.Close() })
 	secondSessions := sessionstore.NewStore(secondDB)
-	mgr, _ := newSvc(
+	mgr, _ := newScenarioDaemon(
 		context.Background(),
-		&mockFactory{}, NewStore(secondDB), secondSessions, secondSessions, secondSessions,
-		secondSessions, secondSessions, secondSessions, secondSessions,
-		subagent.NewStore(secondDB), subagent.NewTransactions(secondDB), nil, secondSessions, nil, nil,
+		scriptedBuildInput(
+			t,
+			&config.Config{Model: "fake-model"},
+			secondSessions,
+			nil,
+			func(*config.Config) (llm.Client, error) { return &scriptedLLM{respond: trivialRespond}, nil },
+		),
+		secondSessions,
+		subagent.NewStore(secondDB),
+		subagent.NewTransactions(secondDB, secondSessions),
+		nil,
+		nil,
+		nil,
+		secondDB,
 	)
 	controllers := newTestController(mgr, &config.Config{}, nil, nil)
 	subscriptions := make(map[string]<-chan controllerapi.SessionNotification, 10)

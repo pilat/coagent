@@ -1,5 +1,10 @@
 -- +goose Up
 
+-- Deleted inbox IDs remain reserved across the table rebuild.
+CREATE TEMP TABLE session_inbox_sequence_00045 (seq INTEGER NOT NULL);
+INSERT INTO session_inbox_sequence_00045
+SELECT seq FROM sqlite_sequence WHERE name = 'session_inbox';
+
 DROP INDEX idx_session_tool_activations_pending;
 ALTER TABLE session_tool_activations RENAME TO session_tool_activations_legacy_00045;
 DROP INDEX idx_subagent_links_undelivered;
@@ -77,9 +82,13 @@ CREATE TABLE subagent_links (
 INSERT INTO subagent_links
 SELECT * FROM subagent_links_legacy_00045;
 
+INSERT INTO sqlite_sequence (name, seq)
+SELECT 'session_inbox', seq FROM session_inbox_sequence_00045
+WHERE NOT EXISTS (SELECT 1 FROM sqlite_sequence WHERE name = 'session_inbox');
 UPDATE sqlite_sequence
-SET seq = COALESCE((SELECT MAX(id) FROM session_inbox), 0)
+SET seq = MAX(seq, COALESCE((SELECT seq FROM session_inbox_sequence_00045), seq))
 WHERE name = 'session_inbox';
+DROP TABLE session_inbox_sequence_00045;
 
 DROP TABLE session_tool_activations_legacy_00045;
 DROP TABLE subagent_links_legacy_00045;

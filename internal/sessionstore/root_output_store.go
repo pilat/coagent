@@ -10,14 +10,19 @@ import (
 	"time"
 )
 
-func (s *Store) CreateManagerRoot(ctx context.Context, create ManagerRootCreate) (*SessionRecord, *OutputCommit, error) {
-	owner, err := managerOwner(create.Attributes)
+func (s *Store) CreateManagerRoot(
+	ctx context.Context,
+	create ManagerRootCreate,
+) (*SessionRecord, *OutputCommit, error) {
+	err := requireManagerOwner(create.Attributes)
 	if err != nil {
 		return nil, nil, err
 	}
+
 	if create.ProjectID <= 0 || create.Name == "" || create.WorkDir == "" {
 		return nil, nil, errors.New("manager root requires project, name, and work dir")
 	}
+
 	if create.ReasoningLevel == "" {
 		create.ReasoningLevel = defaultReasoningLevel
 	}
@@ -26,20 +31,37 @@ func (s *Store) CreateManagerRoot(ctx context.Context, create ManagerRootCreate)
 	err = s.WithTx(ctx, func(tx *sql.Tx) error {
 		now := time.Now().UTC()
 		var err error
+
 		record, err = insertManagerRoot(ctx, tx, create, now)
 		if err != nil {
 			return err
 		}
-		output, err = insertLifecycleOutput(ctx, tx, record.ID, OutputSessionOpened, "", owner,
-			map[string]any{outputAttributeName: create.Name, outputAttributeWorkDir: create.WorkDir}, fmt.Sprintf("session:%d:opened", record.ID), now)
+
+		output, err = insertLifecycleOutput(
+			ctx,
+			tx,
+			record.ID,
+			OutputSessionOpened,
+			"",
+
+			map[string]any{
+				outputAttributeName:    create.Name,
+				outputAttributeWorkDir: create.WorkDir,
+			},
+			fmt.Sprintf("session:%d:opened", record.ID),
+			now,
+		)
 		if err != nil {
 			return err
 		}
+
 		if create.Prompt != "" {
 			_, err = EnqueueTx(ctx, tx, Input{SessionID: record.ID, Source: InputSourceUser, Content: create.Prompt})
 		}
+
 		return err
 	})
+
 	return record, output, err
 }
 
@@ -87,7 +109,7 @@ func (s *Store) replaceManagerRoot(
 		return nil, nil, fmt.Errorf("load replacement root: %w", err)
 	}
 
-	owner, err := managerOwner(old.Attributes)
+	err = requireManagerOwner(old.Attributes)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -130,14 +152,14 @@ func (s *Store) replaceManagerRoot(
 		outputAttributeWorkDir: workDir,
 	}
 
-	commit, err := insertLifecycleOutput(ctx, tx, newRecord.ID, OutputSessionReplaced, "", owner, attrs,
+	commit, err := insertLifecycleOutput(ctx, tx, newRecord.ID, OutputSessionReplaced, "", attrs,
 		fmt.Sprintf("session:%d:replaced:%d", oldSessionID, newRecord.ID), now)
 	if err != nil {
 		return nil, nil, err
 	}
 
 	if inputID > 0 {
-		if err := insertClearNotice(ctx, tx, newRecord.ID, inputID, owner, now); err != nil {
+		if err := insertClearNotice(ctx, tx, newRecord.ID, inputID, now); err != nil {
 			return nil, nil, err
 		}
 	}
@@ -160,19 +182,22 @@ func handleReplacementInput(ctx context.Context, tx *sql.Tx, inputID, sessionID 
 	return requireOnePendingResolution(ctx, tx, result, inputID)
 }
 
-func insertClearNotice(ctx context.Context, tx *sql.Tx, sessionID, inputID int64, owner string, now time.Time) error {
-	_, err := insertOutputTx(ctx, tx, OutputDraft{SessionID: sessionID, Type: OutputMessagePersistent, Content: "Session cleared.",
-		SourceKey: fmt.Sprintf("input:%d:clear:result", inputID), ReleasesInput: true, CreatedAt: now}, CommitLifecycle)
+func insertClearNotice(ctx context.Context, tx *sql.Tx, sessionID, inputID int64, now time.Time) error {
+	_, err := insertOutputTx(ctx, tx, OutputDraft{
+		SessionID: sessionID, Type: OutputMessagePersistent, Content: "Session cleared.",
+		SourceKey: fmt.Sprintf("input:%d:clear:result", inputID), ReleasesInput: true, CreatedAt: now,
+	}, CommitLifecycle)
+
 	return err
 }
 
-func managerOwner(attrs map[string]any) (string, error) {
+func requireManagerOwner(attrs map[string]any) error {
 	owner, _ := attrs[managerIDAttribute].(string)
 	if owner == "" {
-		return "", ErrOutputOwner
+		return ErrOutputOwner
 	}
 
-	return owner, nil
+	return nil
 }
 
 func insertManagerRoot(
@@ -213,7 +238,18 @@ func insertManagerRoot(
 	}, nil
 }
 
-func insertLifecycleOutput(ctx context.Context, tx *sql.Tx, sessionID int64, kind OutputType, content, owner string, attrs map[string]any, key string, now time.Time) (*OutputCommit, error) {
-	return insertOutputTx(ctx, tx, OutputDraft{SessionID: sessionID, Type: kind, Content: content, Attributes: attrs,
-		SourceKey: key, CreatedAt: now}, CommitLifecycle)
+func insertLifecycleOutput(
+	ctx context.Context,
+	tx *sql.Tx,
+	sessionID int64,
+	kind OutputType,
+	content string,
+	attrs map[string]any,
+	key string,
+	now time.Time,
+) (*OutputCommit, error) {
+	return insertOutputTx(ctx, tx, OutputDraft{
+		SessionID: sessionID, Type: kind, Content: content, Attributes: attrs,
+		SourceKey: key, CreatedAt: now,
+	}, CommitLifecycle)
 }

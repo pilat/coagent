@@ -168,7 +168,11 @@ func (s Source) validate(body []byte) error {
 		return nil
 	}
 
-	return s.Validator.Validate(body)
+	if err := s.Validator.Validate(body); err != nil {
+		return fmt.Errorf("validate catalog response: %w", err)
+	}
+
+	return nil
 }
 
 func (f *fetcher) get(ctx context.Context, url string) ([]byte, error) {

@@ -71,6 +71,7 @@ func failedItem(index int, tc llmwire.ToolCall, err error, contextWindow int) to
 	if tool.IsUntrustedOutputSource(tc.Name) {
 		content = wrapUntrustedContent(content, contextWindow)
 	}
+
 	return toolCallResultItem{
 		index: index, toolCall: tc, content: content,
 		untrusted: tool.IsUntrustedOutputSource(tc.Name), outcome: tool.OutcomeFailed, err: err,
@@ -115,6 +116,7 @@ func executeToolCallsInternal(ctx context.Context, agent *Session, toolCalls []l
 		if err != nil {
 			log.Warn("tool_conflict", zap.String("name", tc.Name), zap.Error(err))
 		}
+
 		calls[i] = tool.Call{
 			Tool:      agent.registry.Get(tc.Name),
 			Name:      tc.Name,
@@ -123,6 +125,7 @@ func executeToolCallsInternal(ctx context.Context, agent *Session, toolCalls []l
 			Err:       err,
 		}
 	}
+
 	report := tool.Schedule(ctx, calls)
 
 	// One summary per scheduling invocation on the native path.
@@ -180,6 +183,7 @@ func mapExecutorReport(
 				results[i] = failedItem(i, tc, r.Err, agent.contextWindow())
 				continue
 			}
+
 			results[i] = toolCallResultItem{
 				index: i, toolCall: tc, content: formatToolResult(r.Result, agent.contextWindow()),
 				untrusted: r.Result.Untrusted, images: r.Result.Images,
@@ -204,7 +208,7 @@ func executeToolCalls(ctx context.Context, agent *Session, toolCalls []llmwire.T
 	if action == actionBlock || action == actionForceTextOnly {
 		log.Warn("tool_calls_blocked", zap.Int("action", int(action)), zap.Int("count", len(toolCalls)))
 
-		var results []*transcript.Message
+		results := make([]*transcript.Message, 0, len(toolCalls))
 		for _, tc := range toolCalls {
 			results = append(
 				results,
@@ -221,6 +225,7 @@ func executeToolCalls(ctx context.Context, agent *Session, toolCalls []llmwire.T
 		c := agent.newCommit()
 		c.ToolResults = results
 		_, err := agent.commit(ctx, c)
+
 		return err
 	}
 
@@ -247,10 +252,8 @@ func executeToolCalls(ctx context.Context, agent *Session, toolCalls []llmwire.T
 	return recordToolResults(ctx, agent, results, agent.loopDetector.check())
 }
 
-// recordToolResults commits the decided non-pending set in one transaction,
-// then runs activation consumption and progress hooks. The loop-detector
-// warning fronts the last persisted executed or failed result, or none is
-// emitted when the turn produced no such result.
+// recordToolResults commits the decided set before activation/progress events.
+// Only the final persisted result receives a loop warning.
 func recordToolResults(
 	ctx context.Context,
 	agent *Session,
@@ -306,6 +309,7 @@ func recordToolResults(
 		if err != nil {
 			return err
 		}
+
 		c.ToolResults = append(c.ToolResults, message)
 		for j, text := range direct {
 			c.Outputs = append(
@@ -319,11 +323,18 @@ func recordToolResults(
 			)
 		}
 	}
+
+	return commitToolState(ctx, agent, c, results)
+}
+
+func commitToolState(ctx context.Context, agent *Session, c sessionstore.Commit, results []toolCallResultItem) error {
 	data, err := json.Marshal(agent.prompt.Todos.List())
 	if err != nil {
-		return err
+		return fmt.Errorf("record tool results: %w", err)
 	}
+
 	raw := json.RawMessage(data)
+
 	c.State.TodoItems = &raw
 	if _, err := agent.commit(ctx, c); err != nil {
 		return err
@@ -367,19 +378,40 @@ func publishProgressSnapshot(_ context.Context, agent *Session) error {
 }
 
 func (s *Session) toolStep(ctx context.Context, calls []llmwire.ToolCall) error {
-	s.emit(sessionevent.Notification{Type: "progress_change"})
+	if narratedToolCalls(s.ms.getMessages(), calls) {
+		s.emit(sessionevent.Notification{Type: "progress_change"})
+	}
+
 	err := executeToolCalls(ctx, s, calls)
 	if s.suspended {
 		if s.stagedCalls == nil {
 			s.stagedCalls = map[string]string{}
 		}
+
 		for _, call := range calls {
 			if tool.IsExternalCall(call.Name) && unresolvedToolCalls(s.ms.getMessages())[call.ID] == call.Name {
 				s.stagedCalls[call.ID] = call.Name
 			}
 		}
 	}
+
 	return err
+}
+
+func narratedToolCalls(messages []llmwire.Message, calls []llmwire.ToolCall) bool {
+	if len(calls) == 0 {
+		return false
+	}
+
+	for _, message := range slices.Backward(messages) {
+		for _, call := range message.ToolCalls {
+			if call.ID == calls[0].ID {
+				return strings.TrimSpace(message.Content) != ""
+			}
+		}
+	}
+
+	return false
 }
 
 // capDirectOutput trims one result row's direct output to the store's per-row
@@ -534,9 +566,8 @@ func wrapUntrustedContent(payload string, contextWindow int) string {
 // results still compare equal and replay never regenerates a boundary ID.
 func identifyUntrustedContent(content string) string {
 	var entropy [8]byte
-	if _, err := rand.Read(entropy[:]); err != nil {
-		panic(fmt.Errorf("generate untrusted marker: %w", err))
-	}
+	_, _ = rand.Read(entropy[:])
+
 	markerID := hex.EncodeToString(entropy[:])
 	payload := strings.TrimSuffix(strings.TrimPrefix(content, tool.UntrustedContentBegin+"\n"),
 		"\n"+tool.UntrustedContentEnd)

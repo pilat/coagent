@@ -44,7 +44,7 @@ func TestCompactionSucceedsAroundAnAbortedToolCall(t *testing.T) {
 		contextWindow: window,
 	}
 	s := newCompactionTestSvc(mockLLM)
-	s.ms.setMessages(transcriptWithAbortedCall(window))
+	setTestMessages(s, transcriptWithAbortedCall(window))
 
 	err := s.compactIfNeeded(context.Background(), window)
 	require.NoError(t, err)
