@@ -122,8 +122,7 @@ deps:
     # Deep scan also checks the injected command backend; source imports use Backend.
     mayDependOn: [config, controllerapi, daemon, git, loader, managerdiscovery, progressruntime, projectpath, sessionbus, sessionevent, sessionstore]
   managerdiscovery:
-    # Deep scan sees the controller's Store when it is narrowed to discovery's Backend.
-    mayDependOn: [coagenthome, config, controllerapi, loader, managercontrol, projectpath, sessionstore]
+    mayDependOn: [coagenthome, config, controllerapi, loader, projectpath, sessionstore]
 
   # Per-cwd shell activation, consumed by the three per-cwd spawners.
   bashsandbox:

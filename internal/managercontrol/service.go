@@ -18,12 +18,13 @@ type service struct {
 	discovery managerdiscovery.Service
 }
 
-func newService(backend Backend, store Store, progress progressruntime.Service, bus sessionbus.Source,
+func newService(backend Backend, store Store, discovery managerdiscovery.Service,
+	progress progressruntime.Service, bus sessionbus.Source,
 	cfg *config.Config, cache loader.MarketplaceCache,
 ) *service {
 	return &service{
 		backend: backend, store: store, progress: progress, bus: bus, cfg: cfg, cache: cache,
-		discovery: managerdiscovery.New(store, cfg, cache),
+		discovery: discovery,
 	}
 }
 

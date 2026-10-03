@@ -8,6 +8,7 @@ import (
 )
 
 // Store is the persistence view required by managercontrol.
+//nolint:interfacebloat // The controller reads sessions, projects and outputs from one owner.
 type Store interface {
 	GetSession(context.Context, int64) (*sessionstore.SessionRecord, error)
 	ListSessions(context.Context) ([]*sessionstore.SessionRecord, error)
@@ -16,8 +17,6 @@ type Store interface {
 	GetOrCreateHiddenProject(context.Context, string) (int64, error)
 	GetProjectWorkDir(context.Context, int64) (string, error)
 	GetProjectName(context.Context, int64) (string, error)
-	ListProjects(context.Context) ([]sessionstore.ProjectRow, error)
-	LatestActivityByProject(context.Context, []int64) (map[int64]time.Time, error)
 	EnsureManagementRoot(
 		context.Context,
 		int64,

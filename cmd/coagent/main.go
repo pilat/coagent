@@ -28,6 +28,7 @@ import (
 	"github.com/pilat/coagent/internal/loader"
 	"github.com/pilat/coagent/internal/logger"
 	"github.com/pilat/coagent/internal/managercontrol"
+	"github.com/pilat/coagent/internal/managerdiscovery"
 	"github.com/pilat/coagent/internal/managers"
 	"github.com/pilat/coagent/internal/mcpstore"
 	"github.com/pilat/coagent/internal/memory"
@@ -597,7 +598,8 @@ func startCore(
 		applier,
 	)
 
-	controller := managercontrol.New(daemonSvc, sessionStore, progressSvc, bus, cfg, cache)
+	discovery := managerdiscovery.New(sessionStore, cfg, cache)
+	controller := managercontrol.New(daemonSvc, sessionStore, discovery, progressSvc, bus, cfg, cache)
 
 	noticeSearchUnconfigured(ctx, cfg)
 
