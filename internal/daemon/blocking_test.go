@@ -216,6 +216,9 @@ func TestIntegration_ScatterGatherBlockingTasks(t *testing.T) {
 		h.waitForDelivery(childID)
 	}
 
+	h.waitUntil("parent final answer", func() bool {
+		return lastAssistantTextDTO(h.parentMessages(parentID)) == "all three children done"
+	})
 	h.mgr.waitIdle(parentID)
 
 	// Each task tool_use is filled by its own child — exactly three results, and
