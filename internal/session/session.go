@@ -272,13 +272,6 @@ func unresolvedToolCalls(messages []llmwire.Message) map[string]string {
 	return nil
 }
 
-func (s *Session) compactionRequested() bool {
-	s.ms.mu.Lock()
-	defer s.ms.mu.Unlock()
-
-	return s.pendingCompaction
-}
-
 func (s *Session) compactionCommandInput() *PendingInput {
 	s.ms.mu.Lock()
 	defer s.ms.mu.Unlock()
@@ -382,7 +375,7 @@ func (s *Session) applyModelSwitch() {
 		logger.Named("session.model").Warn("old_llm_close_failed", zap.Error(err))
 	}
 
-	s.emit(sessionevent.Notification{Type: "context_changed"})
+	s.emit(sessionevent.Notification{Type: sessionevent.NotifyContextChanged})
 }
 
 // Only the loop adopts queued clients, and Close runs after the loop joins.

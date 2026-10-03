@@ -7,7 +7,8 @@ import (
 	"github.com/pilat/coagent/internal/config"
 	"github.com/pilat/coagent/internal/controllerapi"
 	"github.com/pilat/coagent/internal/loader"
-	"github.com/pilat/coagent/internal/managerdiscovery"
+	"github.com/pilat/coagent/internal/progressruntime"
+	"github.com/pilat/coagent/internal/sessionbus"
 )
 
 var (
@@ -24,12 +25,13 @@ type controller struct {
 
 func New(
 	backend Backend,
-	discoveryBackend managerdiscovery.Backend,
-	outputs OutputStore,
+	store Store,
+	progress progressruntime.Service,
+	bus sessionbus.Source,
 	cfg *config.Config,
 	cache loader.MarketplaceCache,
 ) controllerapi.ManagerControllerFactory {
-	return &factory{app: newService(backend, discoveryBackend, outputs, cfg, cache)}
+	return &factory{app: newService(backend, store, progress, bus, cfg, cache)}
 }
 
 func (f *factory) ForManager(managerID string) controllerapi.Controller {

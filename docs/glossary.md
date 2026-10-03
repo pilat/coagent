@@ -11,9 +11,10 @@ The shared vocabulary of coagent — the words that name its concepts, so code, 
 **daemon**:
 The single long-lived coagent process. It coordinates session lifecycle, durable
 producer ledgers and admission. `managercontrol`
-implements the in-process `controllerapi.Controller` over the daemon's backend
-contract. Durable ledgers, runner lifecycle and capacity counters remain owned
-by their domain packages. It binds no *network* socket — the only thing it
+implements the in-process `controllerapi.Controller` over the daemon's command
+backend and reads persistence, progress and subscriptions from their owners.
+Domain packages own durable ledgers; the daemon owns runner lifecycle and
+capacity counters. It binds no *network* socket — the only thing it
 listens on is the **control socket**, a same-user unix socket.
 _Avoid_: server, gateway.
 

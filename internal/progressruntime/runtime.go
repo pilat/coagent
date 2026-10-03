@@ -21,7 +21,6 @@ type Service interface {
 	Stop(ctx context.Context) error
 	Current(ctx context.Context, rootID int64) (*controllerapi.ProgressData, error)
 	Refresh(ctx context.Context, rootID int64) error
-	RenderFinal(ctx context.Context, rootID int64, text string) (string, error)
 	EnqueueChange(ctx context.Context, rootID int64) (string, bool, error)
 	EnqueueChangeFor(
 		ctx context.Context,
@@ -100,10 +99,6 @@ func (r *runtime) Current(ctx context.Context, rootID int64) (*controllerapi.Pro
 
 func (r *runtime) Refresh(ctx context.Context, rootID int64) error {
 	return r.refresh(ctx, rootID)
-}
-
-func (r *runtime) RenderFinal(ctx context.Context, rootID int64, text string) (string, error) {
-	return r.renderFinalOutput(ctx, rootID, text)
 }
 
 func (r *runtime) EnqueueChange(ctx context.Context, rootID int64) (string, bool, error) {

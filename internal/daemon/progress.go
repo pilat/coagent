@@ -7,7 +7,6 @@ import (
 
 	"go.uber.org/zap"
 
-	"github.com/pilat/coagent/internal/controllerapi"
 	"github.com/pilat/coagent/internal/logger"
 	"github.com/pilat/coagent/internal/progress"
 	"github.com/pilat/coagent/internal/progressruntime"
@@ -16,71 +15,7 @@ import (
 	"github.com/pilat/coagent/internal/subagent"
 )
 
-var errProgressUnavailable = errors.New("progress runtime unavailable")
-
 var errWaitingSlotNotSuspended = errors.New("waiting slot requires a suspended root")
-
-func (s *svc) CurrentProgress(ctx context.Context, rootID int64) (*controllerapi.ProgressData, error) {
-	if s.progress == nil {
-		return nil, errProgressUnavailable
-	}
-
-	current, err := s.progress.Current(ctx, rootID)
-	if err != nil {
-		return nil, fmt.Errorf("current progress: %w", err)
-	}
-
-	return current, nil
-}
-
-func (s *svc) RefreshProgress(ctx context.Context, rootID int64) error {
-	if s.progress == nil {
-		return errProgressUnavailable
-	}
-
-	if err := s.progress.Refresh(ctx, rootID); err != nil {
-		return fmt.Errorf("refresh progress: %w", err)
-	}
-
-	return nil
-}
-
-func (s *svc) enqueueProgressChange(ctx context.Context, rootID int64) (string, bool, error) {
-	if s.progress == nil {
-		return "", false, errProgressUnavailable
-	}
-
-	content, published, err := s.progress.EnqueueChange(ctx, rootID)
-	if err != nil {
-		return "", false, fmt.Errorf("enqueue progress change: %w", err)
-	}
-
-	return content, published, nil
-}
-
-func (s *svc) enqueueProgressChangeFor(
-	ctx context.Context,
-	rootID int64,
-	causalID string,
-	recaptureOnSuperseded bool,
-) (string, bool, error) {
-	if s.progress == nil {
-		return "", false, errProgressUnavailable
-	}
-
-	content, published, err := s.progress.EnqueueChangeFor(ctx, rootID, causalID, recaptureOnSuperseded)
-	if err != nil {
-		return "", false, fmt.Errorf("enqueue causal progress change: %w", err)
-	}
-
-	return content, published, nil
-}
-
-func (s *svc) startProgressReconciler(ctx context.Context) {
-	if s.progress != nil {
-		s.progress.Start(ctx)
-	}
-}
 
 func (s *svc) liveContextProjection(ctx context.Context, rootID int64) (progress.Context, bool) {
 	activeRunner, ok := s.runners.Load(rootID)
@@ -119,12 +54,6 @@ func (s *svc) mainModelWorking(ctx context.Context, rootID int64) bool {
 	}
 
 	return activeRunner.Working()
-}
-
-func (s *svc) wakeProgress() {
-	if s.progress != nil {
-		s.progress.Wake()
-	}
 }
 
 func (s *svc) publishSubagentProgress(ctx context.Context, childID int64) {
@@ -177,7 +106,7 @@ func (s *svc) publishSubagentProgressWithIteration(
 			*checkpointIteration,
 		)
 
-		content, published, err := s.enqueueProgressChangeFor(ctx, record.RootID, causalID, true)
+		content, published, err := s.progress.EnqueueChangeFor(ctx, record.RootID, causalID, true)
 		s.settleSubagentProgress(log, record.RootID, childID, content, published, err)
 
 		return
@@ -188,7 +117,7 @@ func (s *svc) publishSubagentProgressWithIteration(
 		return
 	}
 
-	content, published, err := s.enqueueProgressChangeFor(ctx, record.RootID, causalID, true)
+	content, published, err := s.progress.EnqueueChangeFor(ctx, record.RootID, causalID, true)
 	s.settleSubagentProgress(log, record.RootID, childID, content, published, err)
 }
 
@@ -254,10 +183,6 @@ func (s *svc) updateLive(ctx context.Context, sessionID int64) {
 }
 
 func (s *svc) updateLiveLocked(ctx context.Context, sessionID int64) {
-	if s.progress == nil {
-		return
-	}
-
 	live := progressruntime.Live{Active: s.HasActiveLoop(sessionID), Working: s.mainModelWorking(ctx, sessionID)}
 	live.Context, _ = s.liveContextProjection(ctx, sessionID)
 	s.progress.SetLive(sessionID, live)

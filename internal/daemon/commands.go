@@ -9,7 +9,6 @@ import (
 
 	"go.uber.org/zap"
 
-	"github.com/pilat/coagent/internal/admission"
 	"github.com/pilat/coagent/internal/budget"
 	"github.com/pilat/coagent/internal/config"
 	"github.com/pilat/coagent/internal/controllerapi"
@@ -32,7 +31,7 @@ func (s *svc) Send(ctx context.Context, projectID int64, prompt, model string, a
 	return s.send(ctx, projectID, prompt, model, attrs)
 }
 
-func (s *svc) SendToSession(ctx context.Context, sessionID int64, prompt string) error {
+func (s *svc) sendToSession(ctx context.Context, sessionID int64, prompt string) error {
 	input, err := s.enqueueUserSessionInput(ctx, sessionID, prompt)
 	if err != nil {
 		if errors.Is(err, sessionstore.ErrSessionNotAcceptingInput) {
@@ -57,6 +56,16 @@ func (s *svc) SendToSession(ctx context.Context, sessionID int64, prompt string)
 		return err
 	}
 
+	unlock, err := s.lockSessionTree(ctx, sessionID)
+	if err != nil {
+		return err
+	}
+	defer unlock()
+
+	return s.sendToSessionLocked(ctx, sessionID, prompt)
+}
+
+func (s *svc) sendToSessionLocked(ctx context.Context, sessionID int64, prompt string) error {
 	_, ok := s.runners.Load(sessionID)
 	if ok {
 		return nil
@@ -93,8 +102,8 @@ func (s *svc) SendToSession(ctx context.Context, sessionID int64, prompt string)
 		return nil
 	}
 
-	if err := s.ensureRunner(ctx, sessionID, workDir, rec.ProjectID); err != nil {
-		if errors.Is(err, admission.ErrNoCapacity) {
+	if err := s.ensureRunnerLocked(ctx, sessionID, workDir, rec.ProjectID); err != nil {
+		if errors.Is(err, errNoCapacity) {
 			s.enqueuePendingRunner(sessionID, workDir, rec.ProjectID)
 			return nil
 		}
@@ -120,7 +129,7 @@ func (s *svc) SendToSessionResolved(ctx context.Context, sessionID int64, prompt
 
 	sessionID = resolved
 
-	if err := s.SendToSession(ctx, sessionID, prompt); err != nil {
+	if err := s.sendToSession(ctx, sessionID, prompt); err != nil {
 		return 0, err
 	}
 
@@ -145,16 +154,14 @@ func (s *svc) SetModel(ctx context.Context, sessionID int64, model, reasoningLev
 		return fmt.Errorf("load session for model switch: %w", err)
 	}
 
-	if s.budgetSvc != nil {
-		budgetRecord, budgetErr := s.budgetSvc.Get(ctx, sessionRootID(record))
-		if budgetErr == nil && budgetRecord.State == budget.Armed &&
-			budgetRecord.CostLimitUSD != nil && !s.modelHasPricing(model) {
-			return errors.New("cannot switch an armed budget tree to a model without catalog pricing")
-		}
+	budgetRecord, budgetErr := s.budgetSvc.Get(ctx, sessionRootID(record))
+	if budgetErr == nil && budgetRecord.State == budget.Armed &&
+		budgetRecord.CostLimitUSD != nil && !s.modelHasPricing(model) {
+		return errors.New("cannot switch an armed budget tree to a model without catalog pricing")
+	}
 
-		if budgetErr != nil && !errors.Is(budgetErr, budget.ErrNotFound) {
-			return fmt.Errorf("load budget for model switch: %w", budgetErr)
-		}
+	if budgetErr != nil && !errors.Is(budgetErr, budget.ErrNotFound) {
+		return fmt.Errorf("load budget for model switch: %w", budgetErr)
 	}
 
 	client, section, err := sessionbuild.BuildClient(s.buildInput.Config, model, reasoningLevel)
@@ -247,58 +254,31 @@ func (s *svc) handleGenericCommand(ctx context.Context, input *sessionstore.Inbo
 		return false, nil
 	}
 
-	if strings.TrimSpace(input.RawContent) == statusCommand {
-		return true, s.handleStatusInput(ctx, input)
-	}
-
-	command := strings.TrimSpace(input.RawContent)
-	if command != stopCommand && command != clearCommand && command != killCommand {
-		return false, nil
-	}
-
-	unlock, err := s.lockSessionTree(ctx, input.SessionID)
-	if err != nil {
-		return true, err
-	}
-	defer unlock()
-
-	switch command {
-	case stopCommand:
-		record, err := s.store.GetSession(ctx, input.SessionID)
+	switch strings.TrimSpace(input.RawContent) {
+	case statusCommand:
+		unlock, err := s.lockSessionTree(ctx, input.SessionID)
 		if err != nil {
-			return true, fmt.Errorf("load stop session: %w", err)
-		}
-
-		if record.Status == sessionstore.SessionStatusStopped {
-			return true, s.handleStoppedStop(ctx, input)
-		}
-
-		if err := s.handleLifecycleInput(ctx, input, "⏳ Stopping…"); err != nil {
 			return true, err
 		}
+		defer unlock()
 
-		return true, s.stopLocked(ctx, input.SessionID, input.ID)
+		return true, s.handleStatusInput(ctx, input)
+	case stopCommand:
+		return true, s.stop(ctx, input)
 	case clearCommand:
-		if _, err := s.clearLocked(ctx, input.SessionID, input.ID); err != nil {
-			return true, err
-		}
-
-		return true, nil
+		_, err := s.clear(ctx, input)
+		return true, err
 	case killCommand:
-		if err := s.handleLifecycleInput(ctx, input, "Stopping session..."); err != nil {
-			return true, err
-		}
-
-		return true, s.killLocked(ctx, input.SessionID)
+		return true, s.kill(ctx, input)
 	default:
 		return false, nil
 	}
 }
 
 func (s *svc) handleStatusInput(ctx context.Context, input *sessionstore.InboxInput) error {
-	current, err := s.CurrentProgress(ctx, input.SessionID)
+	current, err := s.progress.Current(ctx, input.SessionID)
 	if err != nil {
-		return err
+		return fmt.Errorf("current progress: %w", err)
 	}
 
 	_, err = s.store.Commit(ctx, sessionstore.Commit{
@@ -379,12 +359,7 @@ func (s *svc) handleLifecycleInput(ctx context.Context, input *sessionstore.Inbo
 }
 
 func (s *svc) enqueuePersistentOutput(ctx context.Context, sessionID int64, content string) error {
-	outputs := s.store
-	if outputs == nil {
-		return nil
-	}
-
-	if _, err := outputs.EnqueueOutput(ctx, sessionstore.OutputDraft{
+	if _, err := s.store.EnqueueOutput(ctx, sessionstore.OutputDraft{
 		SessionID: sessionID, Type: sessionstore.OutputMessagePersistent, Content: content,
 	}); err != nil {
 		return fmt.Errorf("enqueue persistent output: %w", err)
@@ -429,16 +404,16 @@ func (s *svc) enqueueUserSessionInput(
 
 	switch strings.TrimSpace(prompt) {
 	case "/schedules":
-		content, err := s.schedulesCommand(ctx, sessionID)
+		content, err := s.scheduleSvc.Render(ctx, sessionID)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("render schedules: %w", err)
 		}
 
 		attributes["schedules"] = content
 	case statusCommand:
-		current, err := s.CurrentProgress(ctx, sessionID)
+		current, err := s.progress.Current(ctx, sessionID)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("current progress: %w", err)
 		}
 
 		attributes["status"] = current.Rendered
@@ -543,7 +518,7 @@ func (s *svc) send(
 	}
 
 	if err := s.ensureRunner(ctx, rec.ID, workDir, projectID); err != nil {
-		if errors.Is(err, admission.ErrNoCapacity) {
+		if errors.Is(err, errNoCapacity) {
 			s.enqueuePendingRunner(rec.ID, workDir, projectID)
 			return rec.ID, nil
 		}

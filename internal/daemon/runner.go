@@ -13,7 +13,6 @@ import (
 
 	"go.uber.org/zap"
 
-	"github.com/pilat/coagent/internal/admission"
 	"github.com/pilat/coagent/internal/budget"
 	"github.com/pilat/coagent/internal/configapply"
 	"github.com/pilat/coagent/internal/controllerapi"
@@ -102,7 +101,7 @@ func (s *svc) finishRunner(
 		*errored = true
 	}
 	cleanup := context.WithoutCancel(ctx)
-	if !shuttingDown && s.applier != nil {
+	if !shuttingDown {
 		s.applier.Abandon(cleanup, sessionID)
 	}
 	cancelled := ctx.Err() != nil
@@ -119,7 +118,7 @@ func (s *svc) finishRunner(
 	if !cancelled {
 		s.removeRunner(cleanup, sessionID)
 		info := rs.Info()
-		s.admit.Release(info.Kind, info.ParentID)
+		s.admit.release(info.Child, info.ParentID)
 	}
 	info := rs.Info()
 	s.preserveRunnerStopped(cleanup, sessionID, info.PreserveStopped, shuttingDown)
@@ -134,7 +133,7 @@ func (s *svc) finishRunner(
 	var deliver func()
 	if !shuttingDown && err == nil {
 		deliver = s.finalizeChildLocked(cleanup, sessionID, false, *errored)
-		s.reconcileLatestReadiness(cleanup, sessionID)
+		s.progress.ReconcileLatestReadiness(cleanup, sessionID)
 		s.publishOwnerlessIdleAfterTeardown(cleanup, sessionID, publishIdle, false, ctx.Err() != nil, false)
 	}
 	if unlock != nil {
@@ -156,7 +155,7 @@ func (s *svc) completeCancelledRunner(ctx context.Context, sessionID int64, rs *
 	s.removeRunner(ctx, sessionID)
 
 	info := rs.Info()
-	s.admit.Release(info.Kind, info.ParentID)
+	s.admit.release(info.Child, info.ParentID)
 	rs.Complete()
 }
 
@@ -351,19 +350,17 @@ func (s *svc) publishWaiting(
 func (s *svc) collectWaitingProjections(ctx context.Context, sessionID int64) []waitingProjection {
 	projections := make([]waitingProjection, 0)
 
-	if s.scheduleSvc != nil {
-		sleeps, err := s.scheduleSvc.PendingSleeps(ctx, sessionID)
-		if err != nil {
-			logger.Ctx(ctx).Named("daemon.waiting").Warn("list_pending_sleeps", zap.Error(err))
-		} else {
-			for _, sleep := range sleeps {
-				wakeAt := sleep.WakeAt
-				projections = append(projections, waitingProjection{
-					wait:     sessionevent.WaitItem{Kind: sessionevent.WaitSleep, WakeAt: &wakeAt},
-					display:  map[string]any{"wake_at": wakeAt.Format(time.RFC3339)},
-					identity: map[string]any{"tool_call_id": sleep.CallID},
-				})
-			}
+	sleeps, err := s.scheduleSvc.PendingSleeps(ctx, sessionID)
+	if err != nil {
+		logger.Ctx(ctx).Named("daemon.waiting").Warn("list_pending_sleeps", zap.Error(err))
+	} else {
+		for _, sleep := range sleeps {
+			wakeAt := sleep.WakeAt
+			projections = append(projections, waitingProjection{
+				wait:     sessionevent.WaitItem{Kind: sessionevent.WaitSleep, WakeAt: &wakeAt},
+				display:  map[string]any{"wake_at": wakeAt.Format(time.RFC3339)},
+				identity: map[string]any{"tool_call_id": sleep.CallID},
+			})
 		}
 	}
 
@@ -403,7 +400,7 @@ func (s *svc) recordWaitingProgress(
 
 	// A stale waiting card is dropped without a recapture retry: the newer
 	// transition that moved the generation owns the next card.
-	if _, _, err := s.enqueueProgressChangeFor(ctx, sessionID, causalID, false); err != nil &&
+	if _, _, err := s.progress.EnqueueChangeFor(ctx, sessionID, causalID, false); err != nil &&
 		!errors.Is(err, sessionstore.ErrProgressSuperseded) && !errors.Is(err, sessionstore.ErrOutputOwner) {
 		return fmt.Errorf("enqueue progress: %w", err)
 	}
@@ -549,7 +546,7 @@ func (s *svc) ensureSessionRunnerLocked(ctx context.Context, sessionID int64) er
 	}
 
 	err = s.ensureRunnerLocked(ctx, sessionID, workDir, rec.ProjectID)
-	if errors.Is(err, admission.ErrNoCapacity) && rec.ParentID == 0 {
+	if errors.Is(err, errNoCapacity) && rec.ParentID == 0 {
 		s.enqueuePendingRunner(sessionID, workDir, rec.ProjectID)
 		return nil
 	}
@@ -716,14 +713,14 @@ func (s *svc) openSession(
 	in.PreserveStoppedStatus = preserveStopped
 	in.Loader = loader.New(in.MarketplaceCache)
 
-	schedules, schedulesErr := s.schedulesCommand(ctx, sessionID)
+	schedules, schedulesErr := s.scheduleSvc.Render(ctx, sessionID)
 	if schedulesErr != nil {
-		return nil, nil, schedulesErr
+		return nil, nil, fmt.Errorf("capture construction schedules: %w", schedulesErr)
 	}
 
 	in.Schedules = schedules
 
-	status, statusErr := s.CurrentProgress(ctx, sessionRootID(rec))
+	status, statusErr := s.progress.Current(ctx, sessionRootID(rec))
 	if statusErr != nil {
 		return nil, nil, fmt.Errorf("capture construction status: %w", statusErr)
 	}
@@ -796,36 +793,29 @@ func (s *svc) pendingExternalCallsForSession(ctx context.Context, sessionID int6
 		actual[call.ID] = call.Name
 	}
 
-	calls := make(map[string]string)
-	if s.applier != nil {
-		calls = s.applier.Calls(sessionID)
-	}
+	calls := s.applier.Calls(sessionID)
 
 	if calls == nil {
 		calls = make(map[string]string)
 	}
 
-	if s.applier != nil {
-		owed, err := s.applier.PendingCall(sessionID)
+	owed, err := s.applier.PendingCall(sessionID)
 
-		switch {
-		case err != nil:
-			logger.Ctx(ctx).Named("daemon.runner").
-				Warn("read_pending_apply_marker", zap.Int64("session_id", sessionID), zap.Error(err))
-		case owed.ToolCallID != "":
-			calls[owed.ToolCallID] = owed.ToolName
-		}
+	switch {
+	case err != nil:
+		logger.Ctx(ctx).Named("daemon.runner").
+			Warn("read_pending_apply_marker", zap.Int64("session_id", sessionID), zap.Error(err))
+	case owed.ToolCallID != "":
+		calls[owed.ToolCallID] = owed.ToolName
 	}
 
-	if s.scheduleSvc != nil {
-		sleeps, err := s.scheduleSvc.PendingSleeps(ctx, sessionID)
-		if err != nil {
-			return nil, fmt.Errorf("load pending sleeps for session %d: %w", sessionID, err)
-		}
+	sleeps, err := s.scheduleSvc.PendingSleeps(ctx, sessionID)
+	if err != nil {
+		return nil, fmt.Errorf("load pending sleeps for session %d: %w", sessionID, err)
+	}
 
-		for _, sleep := range sleeps {
-			calls[sleep.CallID] = tool.IDSleep
-		}
+	for _, sleep := range sleeps {
+		calls[sleep.CallID] = tool.IDSleep
 	}
 
 	links, err := s.links.ListPendingChildLinks(ctx, sessionID)
@@ -882,10 +872,6 @@ func (s *svc) activeSubagentInfos(ctx context.Context, sessionID int64) []sessio
 }
 
 func (s *svc) activeProcessInfos(ctx context.Context, sessionID int64) []sessionprompt.ActiveProcessInfo {
-	if s.processStore == nil {
-		return nil
-	}
-
 	processes, err := s.processStore.ListRunningBySessions(ctx, []int64{sessionID})
 	if err != nil {
 		logger.Ctx(ctx).Named("daemon.runner").
@@ -942,26 +928,20 @@ func (s *svc) ownerTools(rec *sessionstore.SessionRecord, ldr loader.Service) []
 		subagent.NewTaskTool(subagent.Spawner(s), rec.ID, ldr, s.modelCatalog),
 		subagent.NewGetSubagentResultTool(subagent.Spawner(s)), subagent.NewSendToSubagentTool(subagent.Spawner(s)),
 	}
-	if s.scheduleSvc != nil {
-		if rec.ParentID == 0 {
-			tools = append(tools, schedule.NewScheduleTool(rec.ID, s.scheduleSvc, time.Local))
-		}
-
-		tools = append(tools, s.scheduleSvc.SleepTool(rec.ID))
-	}
 
 	if rec.ParentID == 0 {
-		if s.mcpStore != nil {
-			tools = append(tools, mcpstore.NewTools(s.mcpStore, rec.ProjectID)...)
-		}
+		tools = append(tools, schedule.NewScheduleTool(rec.ID, s.scheduleSvc, time.Local))
+	}
 
-		if s.applier != nil {
-			tools = append(tools, configapply.NewConfigEdit(rec.ID, s.applier))
-		}
+	tools = append(tools, s.scheduleSvc.SleepTool(rec.ID))
 
-		if s.budgetSvc != nil {
-			tools = append(tools, budget.NewTool(budget.Store(s.store), rec.ID, s.modelHasPricing(rec.Model)))
-		}
+	if rec.ParentID == 0 {
+		tools = append(tools, mcpstore.NewTools(s.mcpStore, rec.ProjectID)...)
+
+		tools = append(tools,
+			configapply.NewConfigEdit(rec.ID, s.applier),
+			budget.NewTool(budget.Store(s.store), rec.ID, s.modelHasPricing(rec.Model)),
+		)
 	}
 
 	return tools
@@ -1075,10 +1055,6 @@ func (s *svc) preserveRunnerStopped(cleanup context.Context, sessionID int64, pr
 }
 
 func (s *svc) settleRunnerApply(cleanup context.Context, sessionID int64) {
-	if s.applier == nil {
-		return
-	}
-
 	if settleErr := s.applier.SettleStagedResults(cleanup, sessionID); settleErr != nil {
 		logger.Ctx(cleanup).Named("daemon.apply").Error("abandon_delivery_failed", zap.Error(settleErr))
 	}
@@ -1095,7 +1071,7 @@ func (s *svc) settleRunBudget(
 	runErr error,
 	notify func(sessionevent.Notification),
 ) error {
-	if result.BudgetFired && s.budgetSvc != nil {
+	if result.BudgetFired {
 		record, budgetErr := s.budgetSvc.Get(ctx, sessionRootID(rec))
 		if budgetErr != nil {
 			runErr = errors.Join(runErr, budgetErr)
@@ -1112,10 +1088,6 @@ func (s *svc) settleRunBudget(
 }
 
 func (s *svc) applySuspendedConfig(ctx context.Context, id int64) error {
-	if s.applier == nil {
-		return nil
-	}
-
 	unlock, err := s.lockSessionTree(ctx, id)
 	if err != nil {
 		return err
@@ -1149,7 +1121,7 @@ func (s *svc) pendingResultOwners(ctx context.Context, sessionID int64, actual, 
 
 func (s *svc) wakeRootProgress(parentID int64) {
 	if parentID == 0 {
-		s.wakeProgress()
+		s.progress.Wake()
 	}
 }
 
@@ -1182,10 +1154,8 @@ func (s *svc) prepareRunnerActivation(
 	rs *runner,
 	preserveStopped bool,
 ) (*session.Session, func(), error) {
-	if s.applier != nil {
-		if err := s.applier.SettleStagedResults(ctx, id); err != nil {
-			return nil, nil, fmt.Errorf("settle runner configuration results: %w", err)
-		}
+	if err := s.applier.SettleStagedResults(ctx, id); err != nil {
+		return nil, nil, fmt.Errorf("settle runner configuration results: %w", err)
 	}
 
 	return s.createOrResumeSession(ctx, id, workDir, rs, preserveStopped)
@@ -1200,7 +1170,7 @@ func (s *svc) releaseActivationResources(
 	cleanup func(),
 	parentID int64,
 ) {
-	s.reconcileLatestReadiness(ctx, sessionID)
+	s.progress.ReconcileLatestReadiness(ctx, sessionID)
 	s.deferNotices.record(sessionID, result.DeferNoticeAnnounced)
 	rs.SetService(nil)
 	s.updateLive(ctx, sessionID)

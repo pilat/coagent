@@ -1,4 +1,3 @@
-//nolint:wrapcheck // Adapter preserves budget/store sentinel errors for the session loop.; nosemgrep: semgrep.coagent-no-preamble-before-package
 package daemon
 
 import (
@@ -35,10 +34,6 @@ func sessionRootID(record *sessionstore.SessionRecord) int64 {
 }
 
 func (s *svc) releaseArmedBudget(ctx context.Context, rootID int64, reason string) error {
-	if s.budgetSvc == nil {
-		return nil
-	}
-
 	record, err := s.budgetSvc.Get(ctx, rootID)
 	if errors.Is(err, budget.ErrNotFound) ||
 		(err == nil && record.State != budget.Armed) {
@@ -93,10 +88,6 @@ func (s *svc) settleRootBudget(
 
 //nolint:wsl_v5 // Budget state gates the more expensive tree projection.
 func (s *svc) retainBudgetForBackground(ctx context.Context, rootID int64) (bool, error) {
-	if s.budgetSvc == nil {
-		return false, nil
-	}
-
 	record, err := s.budgetSvc.Get(ctx, rootID)
 	if errors.Is(err, budget.ErrNotFound) ||
 		(err == nil && record.State != budget.Armed) {
@@ -106,17 +97,10 @@ func (s *svc) retainBudgetForBackground(ctx context.Context, rootID int64) (bool
 		return false, fmt.Errorf("load budget for background projection: %w", err)
 	}
 
-	retained, err := s.hasBackgroundObligation(ctx, rootID)
+	retained, err := s.store.HasBackgroundObligationByRoot(ctx, rootID)
 	if err != nil {
 		return true, fmt.Errorf("project background obligation: %w", err)
 	}
 
 	return retained, nil
-}
-
-// hasBackgroundObligation shares the ledger-first wake-source predicate at
-// root-tree scope: budget retention must not release while any tree session
-// could still deliver model-bound input.
-func (s *svc) hasBackgroundObligation(ctx context.Context, rootID int64) (bool, error) {
-	return s.store.HasBackgroundObligationByRoot(ctx, rootID)
 }

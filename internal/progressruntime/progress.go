@@ -58,29 +58,6 @@ func (r *runtime) refresh(ctx context.Context, rootID int64) error {
 	return err
 }
 
-func (r *runtime) renderFinalOutput(ctx context.Context, rootID int64, text string) (string, error) {
-	facts, err := r.sessionStore.CaptureProgress(ctx, rootID)
-	if err != nil {
-		return "", fmt.Errorf("capture final progress: %w", err)
-	}
-
-	snapshot, err := r.progressSnapshot(facts, time.Now().UTC())
-	if err != nil {
-		return "", err
-	}
-
-	footer := progress.RenderFinalCompact(snapshot)
-	if footer == "" {
-		return text, nil
-	}
-
-	if text == "" {
-		return footer, nil
-	}
-
-	return text + "\n\n" + footer, nil
-}
-
 func (r *runtime) progressSnapshot(
 	facts *sessionstore.ProgressFacts,
 	observedAt time.Time,

@@ -168,30 +168,6 @@ func (s *svc) guardChildTransition(
 	return transition(context.WithoutCancel(ctx))
 }
 
-// finalizeChild marks a subagent terminal (once its loop has fully exited and
-// its final message is durably written) and delivers its completion to the
-// parent. No-op for non-subagent sessions. errored forces the error state.
-func (s *svc) finalizeChild(ctx context.Context, childID int64) {
-	var deliver func()
-
-	err := s.guardChildTransition(ctx, childID, func(guarded context.Context) error {
-		deliver = s.finalizeChildLocked(guarded, childID, false, false)
-
-		return nil
-	})
-	if err != nil {
-		logger.Ctx(ctx).Named("daemon.completion").Error(
-			"finalize_child_fence_failed", zap.Int64("child", childID), zap.Error(err),
-		)
-
-		return
-	}
-
-	if deliver != nil {
-		deliver()
-	}
-}
-
 // deliverCompletionToParent routes a completion notification to the parent,
 // reviving it if idle. A killed parent rejects it (orphan policy).
 func (s *svc) deliverCompletionToParent(ctx context.Context, link subagent.Link) {

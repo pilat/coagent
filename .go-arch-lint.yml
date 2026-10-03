@@ -26,7 +26,6 @@ excludeFiles:
 components:
   main:           { in: cmd/coagent }
 
-  admission:      { in: internal/admission }
   coagenthome:    { in: internal/coagenthome }
   config:         { in: internal/config }
   configapply:    { in: internal/configapply }
@@ -120,9 +119,11 @@ deps:
   safefile:
     mayDependOn: [coagenthome, sandboxpolicy]
   managercontrol:
-    mayDependOn: [config, controllerapi, daemon, git, loader, managerdiscovery, projectpath, sessionbus, sessionevent, sessionstore]
+    # Deep scan also checks the injected command backend; source imports use Backend.
+    mayDependOn: [config, controllerapi, daemon, git, loader, managerdiscovery, progressruntime, projectpath, sessionbus, sessionevent, sessionstore]
   managerdiscovery:
-    mayDependOn: [coagenthome, config, controllerapi, loader, projectpath, sessionstore]
+    # Deep scan sees the controller's Store when it is narrowed to discovery's Backend.
+    mayDependOn: [coagenthome, config, controllerapi, loader, managercontrol, projectpath, sessionstore]
 
   # Per-cwd shell activation, consumed by the three per-cwd spawners.
   bashsandbox:
@@ -191,7 +192,7 @@ deps:
 
   # Orchestrator.
   daemon:
-    mayDependOn: [admission, backgroundprocess, budget, coagenthome, config, configapply, controllerapi, git, id, llmwire, loader, logger, mcp, mcpstore, progress, progressruntime, projectpath, registry, schedule, session, sessionbuild, sessionprompt, sessionbus, sessionevent, sessionstore, subagent, todo, tool, transcript]
+    mayDependOn: [backgroundprocess, budget, coagenthome, config, configapply, controllerapi, git, id, llmwire, loader, logger, mcp, mcpstore, progress, progressruntime, projectpath, registry, schedule, session, sessionbuild, sessionprompt, sessionbus, sessionevent, sessionstore, subagent, todo, tool, transcript]
 
   configops:
     mayDependOn: [coagenthome, config, logger]

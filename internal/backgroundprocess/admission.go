@@ -98,13 +98,6 @@ func (s *svc) releaseLocked(sessionID int64, class admissionClass) {
 	}
 }
 
-func (s *svc) liveCount(sessionID int64) int {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	return s.live[sessionID]
-}
-
 func (s *svc) track(process Process, cancel context.CancelFunc, class admissionClass) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

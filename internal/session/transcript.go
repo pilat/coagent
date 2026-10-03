@@ -163,13 +163,6 @@ func (ms *messageStore) getMessages() []llmwire.Message {
 	return result
 }
 
-func (ms *messageStore) getRowIDs() []int64 {
-	ms.mu.Lock()
-	defer ms.mu.Unlock()
-
-	return append([]int64(nil), ms.rowIDs...)
-}
-
 // reloadMessages replaces in-memory messages with active messages from the store.
 // No-op when store is nil.
 func (ms *messageStore) reloadMessages(ctx context.Context) error {

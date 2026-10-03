@@ -273,7 +273,10 @@ func (m *Manager) handleNotification(ctx context.Context, sn controllerapi.Sessi
 		if topicID, ok := m.getTopicBySessionID(sn.SessionID); ok {
 			_ = m.sendTyping(ctx, topicID)
 		}
-	case sessionevent.NotifyModelWorking:
+	case sessionevent.NotifyModelWorking,
+		sessionevent.NotifyContextChanged,
+		sessionevent.NotifyProgressChanged,
+		sessionevent.NotifyIterationPersisted:
 	}
 }
 

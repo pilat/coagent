@@ -13,10 +13,6 @@ func (s *svc) cancelSessionSubtreeProcesses(
 	sessionID int64,
 	intent backgroundprocess.HostIntent,
 ) (int, error) {
-	if s.processSvc == nil {
-		return 0, nil
-	}
-
 	sessionIDs, err := s.sessionSubtreeIDs(ctx, sessionID)
 	if err != nil {
 		return 0, err

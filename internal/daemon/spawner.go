@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/pilat/coagent/internal/admission"
 	"github.com/pilat/coagent/internal/budget"
 	"github.com/pilat/coagent/internal/sessionbuild"
 	"github.com/pilat/coagent/internal/sessionstore"
@@ -183,7 +182,7 @@ func (s *svc) createChildSession(ctx context.Context, req subagent.SpawnRequest)
 		return 0, "", 0, err
 	}
 
-	if depth >= admission.MaxDepth {
+	if depth >= maxDepth {
 		return 0, "", 0, fmt.Errorf(
 			"subagent nesting limit reached (depth %d): do this work inline instead of delegating further",
 			depth,
@@ -203,18 +202,17 @@ func (s *svc) createChildSession(ctx context.Context, req subagent.SpawnRequest)
 	}
 
 	model := s.resolveChildModel(req, parentRec)
-	if s.budgetSvc != nil {
-		budgetRecord, budgetErr := s.budgetSvc.Get(ctx, rootID)
-		if budgetErr == nil && budgetRecord.State == budget.Armed &&
-			budgetRecord.CostLimitUSD != nil && !s.modelHasPricing(model) {
-			return 0, "", 0, errors.New(
-				"cannot spawn an armed budget tree onto a model without catalog pricing",
-			)
-		}
 
-		if budgetErr != nil && !errors.Is(budgetErr, budget.ErrNotFound) {
-			return 0, "", 0, fmt.Errorf("load root budget for child model: %w", budgetErr)
-		}
+	budgetRecord, budgetErr := s.budgetSvc.Get(ctx, rootID)
+	if budgetErr == nil && budgetRecord.State == budget.Armed &&
+		budgetRecord.CostLimitUSD != nil && !s.modelHasPricing(model) {
+		return 0, "", 0, errors.New(
+			"cannot spawn an armed budget tree onto a model without catalog pricing",
+		)
+	}
+
+	if budgetErr != nil && !errors.Is(budgetErr, budget.ErrNotFound) {
+		return 0, "", 0, fmt.Errorf("load root budget for child model: %w", budgetErr)
 	}
 
 	reasoning, err := s.resolveChildEffort(model, req.ReasoningLevel, parentRec.ReasoningLevel)

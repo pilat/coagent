@@ -1,4 +1,4 @@
-package daemon
+package main
 
 import (
 	"context"
@@ -9,10 +9,7 @@ import (
 	"github.com/pilat/coagent/internal/logger"
 )
 
-// searchUnconfigured reports whether this daemon offers no integrated search
-// at all: the tools.search section carries no user choice and no configured
-// model sits on a native-capable driver. An explicitly disabled search is a
-// choice, not an omission, and stays silent — as does any configured provider.
+// An explicit search choice and native-capable models suppress the omission notice.
 func searchUnconfigured(unified *config.UnifiedConfig) bool {
 	if unified == nil {
 		return false // no config yet; nothing configured search
@@ -34,8 +31,8 @@ func searchUnconfigured(unified *config.UnifiedConfig) bool {
 
 // noticeSearchUnconfigured logs the one-time discoverability hint. Info, not
 // Warn: the absence of search is not a malfunction.
-func (s *svc) noticeSearchUnconfigured(ctx context.Context) {
-	if !s.searchUnconfigured {
+func noticeSearchUnconfigured(ctx context.Context, cfg *config.Config) {
+	if !searchUnconfigured(cfg.UnifiedConfig) {
 		return
 	}
 

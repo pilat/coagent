@@ -6,7 +6,6 @@ import (
 
 	"go.uber.org/zap"
 
-	"github.com/pilat/coagent/internal/admission"
 	"github.com/pilat/coagent/internal/logger"
 )
 
@@ -30,7 +29,7 @@ func (s *svc) drainPendingRunners(ctx context.Context) {
 	}
 
 	err := s.ensureRunner(ctx, next.sessionID, next.workDir, next.projectID)
-	if errors.Is(err, admission.ErrNoCapacity) {
+	if errors.Is(err, errNoCapacity) {
 		s.enqueuePendingRunner(next.sessionID, next.workDir, next.projectID)
 		return
 	}

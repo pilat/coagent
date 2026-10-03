@@ -87,7 +87,7 @@ func (s *svc) completeExplicitStop(
 	}
 
 	owner, _ := record.Attributes[controllerapi.SessionAttributeManagerID].(string)
-	if s.store != nil && owner != "" {
+	if owner != "" {
 		_, _ = s.store.WakeOutputHead(ctx, owner)
 	}
 

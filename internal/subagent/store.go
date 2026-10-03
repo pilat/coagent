@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"time"
 )
 
 const subagentLinkColumns = `parent_id, child_id, task_call_id, blocking, depth, state, delivered_at, delivered_msg_id, delivered_input_id, created_at, result, outcome, activation_seq`
@@ -27,38 +26,6 @@ type rowScanner interface {
 
 func NewStore(db *sql.DB) Store {
 	return &store{db: db}
-}
-
-func (s *store) InsertSubagentLink(ctx context.Context, link Link) error {
-	if link.CreatedAt == 0 {
-		link.CreatedAt = time.Now().UTC().Unix()
-	}
-
-	if link.State == "" {
-		link.State = StateSpawned
-	}
-
-	if !link.State.valid() {
-		return fmt.Errorf("insert subagent link: invalid state %q", link.State)
-	}
-
-	_, err := s.db.ExecContext(
-		ctx,
-		`INSERT INTO subagent_links (parent_id, child_id, task_call_id, blocking, depth, state, created_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		link.ParentID,
-		link.ChildID,
-		link.TaskCallID,
-		link.Blocking,
-		link.Depth,
-		link.State,
-		link.CreatedAt,
-	)
-	if err != nil {
-		return fmt.Errorf("insert subagent link: %w", err)
-	}
-
-	return nil
 }
 
 func (s *store) GetLink(ctx context.Context, childID int64) (*Link, error) {

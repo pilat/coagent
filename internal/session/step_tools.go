@@ -375,13 +375,13 @@ func consumeActivation(agent *Session, r toolCallResultItem) bool {
 // publishProgressSnapshot enqueues the TODO progress snapshot through the
 // boundary and notifies through the loop's channel, superseding tolerated.
 func publishProgressSnapshot(_ context.Context, agent *Session) error {
-	agent.emit(sessionevent.Notification{Type: "progress_change"})
+	agent.emit(sessionevent.Notification{Type: sessionevent.NotifyProgressChanged})
 	return nil
 }
 
 func (s *Session) toolStep(ctx context.Context, calls []llmwire.ToolCall) error {
 	if narratedToolCalls(s.ms.getMessages(), calls) {
-		s.emit(sessionevent.Notification{Type: "progress_change"})
+		s.emit(sessionevent.Notification{Type: sessionevent.NotifyProgressChanged})
 	}
 
 	err := executeToolCalls(ctx, s, calls)

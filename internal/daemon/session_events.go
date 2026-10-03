@@ -34,17 +34,17 @@ func (e *sessionEvents) Emit(n sessionevent.Notification) {
 		}
 
 		s.updateLive(ctx, e.sessionID)
-		s.wakeProgress()
-	case "context_changed":
+		s.progress.Wake()
+	case sessionevent.NotifyContextChanged:
 		s.updateLive(ctx, e.sessionID)
-	case "iteration_persisted":
+	case sessionevent.NotifyIterationPersisted:
 		if iteration, ok := n.Attributes["iteration"].(int); ok {
 			s.publishSubagentIterationProgress(ctx, e.sessionID, int64(iteration))
 		}
-	case "progress_change":
+	case sessionevent.NotifyProgressChanged:
 		s.updateLive(ctx, e.sessionID)
 
-		content, published, err := s.enqueueProgressChange(ctx, e.sessionID)
+		content, published, err := s.progress.EnqueueChange(ctx, e.sessionID)
 		if err != nil {
 			logger.Ctx(ctx).Named("daemon.progress").Warn("enqueue_progress_change", zap.Error(err))
 			return

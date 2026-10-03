@@ -8,7 +8,6 @@ import (
 
 	"go.uber.org/zap"
 
-	"github.com/pilat/coagent/internal/admission"
 	"github.com/pilat/coagent/internal/logger"
 	"github.com/pilat/coagent/internal/sessionstore"
 	"github.com/pilat/coagent/internal/subagent"
@@ -182,7 +181,7 @@ func (s *svc) resumeRecoverableRoot(ctx context.Context, sessionID int64) (bool,
 	}
 
 	if err := s.ensureRunnerLocked(ctx, sessionID, workDir, record.ProjectID); err != nil {
-		if errors.Is(err, admission.ErrNoCapacity) {
+		if errors.Is(err, errNoCapacity) {
 			s.enqueuePendingRunner(sessionID, workDir, record.ProjectID)
 
 			return true, nil

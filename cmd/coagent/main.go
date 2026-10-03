@@ -597,7 +597,9 @@ func startCore(
 		applier,
 	)
 
-	controller := managercontrol.New(daemonSvc, daemonSvc, sessionStore, cfg, cache)
+	controller := managercontrol.New(daemonSvc, sessionStore, progressSvc, bus, cfg, cache)
+
+	noticeSearchUnconfigured(ctx, cfg)
 
 	if err := daemonSvc.Start(ctx); err != nil {
 		return nil, fmt.Errorf("start daemon: %w", err)

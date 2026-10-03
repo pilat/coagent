@@ -9,7 +9,6 @@ import (
 
 	"go.uber.org/zap"
 
-	"github.com/pilat/coagent/internal/admission"
 	"github.com/pilat/coagent/internal/logger"
 	"github.com/pilat/coagent/internal/subagent"
 )
@@ -129,7 +128,7 @@ func (s *svc) enqueueCapacityBlockedChild(
 ) {
 	s.enqueueChild(ctx, sessionID, parentID, workDir, projectID)
 
-	if s.admit.CanAdmitChild(parentID) {
+	if s.admit.canAdmit(true, parentID) {
 		go s.drainQueue(context.WithoutCancel(ctx))
 	}
 }
@@ -138,7 +137,7 @@ func (s *svc) enqueueCapacityBlockedChild(
 // every slot release; ensureRunner re-checks admission (re-queueing on a race).
 func (s *svc) drainQueue(ctx context.Context) {
 	next, ok := s.childQueue.PopFirst(func(queued queuedChild) bool {
-		return s.admit.CanAdmitChild(queued.parentID)
+		return s.admit.canAdmit(true, queued.parentID)
 	})
 	if !ok {
 		return
@@ -167,7 +166,7 @@ func (s *svc) drainQueue(ctx context.Context) {
 	}
 
 	err = s.ensureRunner(ctx, next.sessionID, next.workDir, next.projectID)
-	if errors.Is(err, admission.ErrNoCapacity) {
+	if errors.Is(err, errNoCapacity) {
 		// Admission lost a race — park it again for the next release.
 		s.enqueueChild(ctx, next.sessionID, next.parentID, next.workDir, next.projectID)
 

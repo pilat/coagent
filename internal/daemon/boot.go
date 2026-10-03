@@ -67,8 +67,6 @@ func (s *svc) Start(ctx context.Context) error {
 		return errDaemonShuttingDown
 	}
 
-	s.noticeSearchUnconfigured(ctx)
-
 	// Must precede the sweep: a session left mid-clear or mid-kill by the previous
 	// run would otherwise be resumed in that half-torn state.
 	if err := s.finishInterruptedKills(ctx); err != nil {
@@ -108,10 +106,6 @@ func (s *svc) Start(ctx context.Context) error {
 	// stop-fence recovery below: a root mid-stop must finish its operator
 	// fence first, so records it covers stay cancelled with no wake event.
 	return s.finishStoppingRoots(ctx, records, stopping, owedStops, func() error {
-		if s.processStore == nil {
-			return nil
-		}
-
 		if err := s.recoverProcessInterruptions(ctx); err != nil {
 			return fmt.Errorf("recover background process interruptions: %w", err)
 		}
@@ -165,10 +159,6 @@ func (s *svc) recoveredStopCancellationCount(
 	rootID int64,
 	since time.Time,
 ) (int, error) {
-	if s.processStore == nil {
-		return 0, nil
-	}
-
 	count, err := s.processStore.CountTerminalByIntentSince(
 		ctx, rootID, backgroundprocess.IntentSessionStopped, since,
 	)
@@ -212,17 +202,11 @@ func (s *svc) finishInterruptedKills(ctx context.Context) error {
 	}
 
 	for _, record := range interrupted {
-		cancelled := 0
-
-		if s.processStore != nil {
-			var err error
-
-			cancelled, err = s.processStore.CountTerminalByIntentSince(
-				cleanupCtx, record.ID, backgroundprocess.IntentSessionKilled, record.UpdatedAt,
-			)
-			if err != nil {
-				return fmt.Errorf("count processes for interrupted kill %d: %w", record.ID, err)
-			}
+		cancelled, err := s.processStore.CountTerminalByIntentSince(
+			cleanupCtx, record.ID, backgroundprocess.IntentSessionKilled, record.UpdatedAt,
+		)
+		if err != nil {
+			return fmt.Errorf("count processes for interrupted kill %d: %w", record.ID, err)
 		}
 
 		if _, err := s.store.MarkSessionKilledWithOutput(
@@ -340,19 +324,17 @@ func (s *svc) convergeStoppedSessions(
 }
 
 func (s *svc) finishRecoveredServices(ctx context.Context) error {
-	if s.budgetSvc != nil {
-		if err := s.reconcileArmedBudgets(ctx); err != nil {
-			return err
-		}
+	if err := s.reconcileArmedBudgets(ctx); err != nil {
+		return err
+	}
 
-		pending, parkErr := s.budgetSvc.ListPendingParks(ctx)
-		if parkErr != nil {
-			return fmt.Errorf("list pending budget parks: %w", parkErr)
-		}
+	pending, parkErr := s.budgetSvc.ListPendingParks(ctx)
+	if parkErr != nil {
+		return fmt.Errorf("list pending budget parks: %w", parkErr)
+	}
 
-		for _, record := range pending {
-			s.parkBudgetTree(ctx, record)
-		}
+	for _, record := range pending {
+		s.parkBudgetTree(ctx, record)
 	}
 
 	// PASS 0 is the one blocking phase. Controllers and the schedule executor start
@@ -366,7 +348,7 @@ func (s *svc) finishRecoveredServices(ctx context.Context) error {
 	}
 
 	s.startInboxWake(ctx)
-	s.startProgressReconciler(ctx)
+	s.progress.Start(ctx)
 
 	s.startRecovery(ctx)
 

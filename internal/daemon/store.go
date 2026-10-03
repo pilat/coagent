@@ -26,9 +26,7 @@ type Store interface { //nolint:interfacebloat // Lifecycle commands share atomi
 	SetAttributes(ctx context.Context, id int64, attrs map[string]any) error
 	UpdateSessionModel(ctx context.Context, id int64, model, reasoningLevel string) error
 	GetSession(ctx context.Context, id int64) (*sessionstore.SessionRecord, error)
-	ListSessions(ctx context.Context) ([]*sessionstore.SessionRecord, error)
 	ListAllSessions(ctx context.Context) ([]*sessionstore.SessionRecord, error)
-	LatestActivityByProject(ctx context.Context, projectIDs []int64) (map[int64]time.Time, error)
 	MarkSessionKilled(ctx context.Context, id int64) error
 	UpdateSessionStatus(ctx context.Context, id int64, status sessionstore.SessionStatus) error
 	LoadMessageContentByID(ctx context.Context, sessionID, messageID int64) (string, error)
@@ -45,13 +43,6 @@ type Store interface { //nolint:interfacebloat // Lifecycle commands share atomi
 	CreateManagerRoot(
 		ctx context.Context,
 		create sessionstore.ManagerRootCreate,
-	) (*sessionstore.SessionRecord, *sessionstore.OutputCommit, error)
-	EnsureManagementRoot(
-		ctx context.Context,
-		projectID int64,
-		owner string,
-		topicID int64,
-		name, workDir string,
 	) (*sessionstore.SessionRecord, *sessionstore.OutputCommit, error)
 	ReplaceManagerRoot(
 		ctx context.Context,
@@ -81,11 +72,7 @@ type Store interface { //nolint:interfacebloat // Lifecycle commands share atomi
 	Arm(ctx context.Context, mutation budget.Mutation) (*budget.Record, error)
 	Clear(ctx context.Context, mutation budget.Mutation) (*budget.Record, error)
 	HasBackgroundObligationByRoot(ctx context.Context, rootID int64) (bool, error)
-	GetOrCreateProject(ctx context.Context, workDir string) (int64, error)
-	GetOrCreateNamedProject(ctx context.Context, workDir, name string) (int64, error)
-	GetOrCreateHiddenProject(ctx context.Context, workDir string) (int64, error)
 	GetProjectWorkDir(ctx context.Context, projectID int64) (string, error)
 	GetProjectName(ctx context.Context, projectID int64) (string, error)
-	ListProjects(ctx context.Context) ([]sessionstore.ProjectRow, error)
 	ReactivateForSchedule(context.Context, int64) (bool, error)
 }

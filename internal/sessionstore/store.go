@@ -513,57 +513,6 @@ func (s *Store) UpdateSessionStatus(ctx context.Context, id int64, status Sessio
 	return nil
 }
 
-// KillTerminatingSessions finishes the boot reconciliation of roots left mid
-// clear or kill: a matching replacement row means clear transferred the
-// surface, its absence selects kill cleanup with a close output.
-func (s *Store) KillTerminatingSessions(ctx context.Context) error {
-	now := time.Now().UTC()
-
-	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, attributes FROM sessions
-		WHERE status = 'terminating' AND killed_at IS NULL`)
-	if err != nil {
-		return fmt.Errorf("list terminating sessions: %w", err)
-	}
-	defer rows.Close()
-
-	type terminating struct {
-		id    int64
-		owner string
-	}
-
-	targets := make([]terminating, 0)
-
-	for rows.Next() {
-		var target terminating
-
-		var encoded string
-		if err := rows.Scan(&target.id, &encoded); err != nil {
-			return fmt.Errorf("scan terminating session: %w", err)
-		}
-
-		var attributes map[string]any
-		if err := json.Unmarshal([]byte(encoded), &attributes); err != nil {
-			return fmt.Errorf("decode session %d attributes: %w", target.id, err)
-		}
-
-		target.owner, _ = attributes[managerIDAttribute].(string)
-		targets = append(targets, target)
-	}
-
-	if err := rows.Err(); err != nil {
-		return fmt.Errorf("iterate terminating sessions: %w", err)
-	}
-
-	for _, target := range targets {
-		if err := s.killTerminatingTarget(ctx, target.id, target.owner, now); err != nil {
-			return err
-		}
-	}
-
-	return nil
-}
-
 //nolint:nonamedreturns // two same-typed int results are ambiguous at call sites without names
 func (s *Store) GetChildSessionStats(ctx context.Context, rootID int64) (count, totalIterations int, err error) {
 	err = s.db.QueryRowContext(
@@ -797,54 +746,6 @@ func replaceCompactedMessagesTx(
 	}
 
 	return ids, nil
-}
-
-func (s *Store) killTerminatingTarget(ctx context.Context, id int64, owner string, now time.Time) error {
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("begin terminating kill: %w", err)
-	}
-	defer func() { _ = tx.Rollback() }()
-
-	result, err := tx.ExecContext(
-		ctx,
-		`UPDATE sessions SET status = 'killed', killed_at = ?, updated_at = ?
-		WHERE id = ? AND status = 'terminating' AND killed_at IS NULL`,
-		now, now, id,
-	)
-	if err != nil {
-		return fmt.Errorf("kill terminating sessions: %w", err)
-	}
-
-	affected, err := result.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("kill terminating rows affected: %w", err)
-	}
-
-	if affected == 0 || owner == "" {
-		if err := tx.Commit(); err != nil {
-			return fmt.Errorf("commit terminating kill: %w", err)
-		}
-
-		return nil
-	}
-
-	replaced, err := hasReplacementRow(ctx, tx, id, owner)
-	if err != nil {
-		return err
-	}
-
-	if !replaced {
-		if _, err := insertClosedOutput(ctx, tx, id, now, 0); err != nil {
-			return err
-		}
-	}
-
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("commit terminating kill: %w", err)
-	}
-
-	return nil
 }
 
 func (s *Store) latestActivity(ctx context.Context, projectID int64) (time.Time, bool, error) {

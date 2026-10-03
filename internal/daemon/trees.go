@@ -32,38 +32,42 @@ type sessionTreeLock struct {
 	token chan struct{}
 }
 
-func (s *svc) Kill(ctx context.Context, sessionID int64) error {
-	unlock, err := s.lockSessionTree(ctx, sessionID)
+func (s *svc) kill(ctx context.Context, input *sessionstore.InboxInput) error {
+	unlock, err := s.lockSessionTree(ctx, input.SessionID)
 	if err != nil {
 		return err
 	}
 	defer unlock()
 
-	return s.killLocked(ctx, sessionID)
+	if err := s.handleLifecycleInput(ctx, input, "Stopping session..."); err != nil {
+		return err
+	}
+
+	return s.killLocked(ctx, input.SessionID)
 }
 
-// Stop parks a session tree without destroying it. Every active descendant is
-// stopped, one-shot waits and pending external calls receive an explicit stopped
-// result, and accepted-but-unconsumed input is cancelled. Recurring schedules
-// remain installed. A later root message resumes only the root; a stopped child
-// requires an explicit send_to_subagent follow-up.
-//
-// An explicit manager-owned /stop (inputID > 0) leaves its root in `stopping`
-// after cleanup and commits the durable terminal output in one transaction with
-// the budget release and the final stopped status. A failure before that
-// commit leaves the root stopping and publishes no success.
-func (s *svc) Stop(ctx context.Context, sessionID, inputID int64) error {
-	unlock, err := s.lockSessionTree(ctx, sessionID)
+// The already-stopped check and receipt share the fence with tree cleanup.
+func (s *svc) stop(ctx context.Context, input *sessionstore.InboxInput) error {
+	unlock, err := s.lockSessionTree(ctx, input.SessionID)
 	if err != nil {
 		return err
 	}
 	defer unlock()
 
-	return s.stopLocked(ctx, sessionID, inputID)
-}
+	record, err := s.store.GetSession(ctx, input.SessionID)
+	if err != nil {
+		return fmt.Errorf("load stop session: %w", err)
+	}
 
-func (s *svc) Clear(ctx context.Context, sessionID int64) (int64, error) {
-	return s.clear(ctx, sessionID, 0)
+	if record.Status == sessionstore.SessionStatusStopped {
+		return s.handleStoppedStop(ctx, input)
+	}
+
+	if err := s.handleLifecycleInput(ctx, input, "⏳ Stopping…"); err != nil {
+		return err
+	}
+
+	return s.stopLocked(ctx, input.SessionID, input.ID)
 }
 
 func (s *svc) Fence(fenceCtx context.Context, rootSessionID int64) (func(), error) {
@@ -134,14 +138,11 @@ func (s *svc) killLocked(ctx context.Context, sessionID int64) error {
 	// from request-scoped cancellation while keeping logger values.
 	cleanupCtx := context.WithoutCancel(ctx)
 
-	cancelledProcesses := 0
-	if s.processSvc != nil {
-		cancelledProcesses, err = s.cancelSessionSubtreeProcesses(
-			cleanupCtx, sessionID, backgroundprocess.IntentSessionKilled,
-		)
-		if err != nil {
-			return fmt.Errorf("cancel background processes: %w", err)
-		}
+	cancelledProcesses, err := s.cancelSessionSubtreeProcesses(
+		cleanupCtx, sessionID, backgroundprocess.IntentSessionKilled,
+	)
+	if err != nil {
+		return fmt.Errorf("cancel background processes: %w", err)
 	}
 
 	if _, err := s.store.MarkSessionKilledWithOutput(
@@ -302,17 +303,15 @@ func (s *svc) stopTreeCleanup(ctx context.Context, sessionID int64, options stop
 		return err
 	}
 	for _, id := range ids {
-		if s.scheduleSvc != nil {
-			if _, err := s.scheduleSvc.CancelPendingSleeps(cleanupCtx, id); err != nil {
-				return fmt.Errorf("cancel one-shot waits for session %d: %w", id, err)
-			}
+		if _, err := s.scheduleSvc.CancelPendingSleeps(cleanupCtx, id); err != nil {
+			return fmt.Errorf("cancel one-shot waits for session %d: %w", id, err)
 		}
 	}
 	return s.cancelStopInputs(cleanupCtx, plan)
 }
 
 func (s *svc) stopTreeBackgroundProcesses(ctx context.Context, sessionID int64, options stopTreeOptions) error {
-	if s.processSvc == nil || options.preserveBackgroundProcesses {
+	if options.preserveBackgroundProcesses {
 		return nil
 	}
 
@@ -363,14 +362,14 @@ func (s *svc) liveTreeRunnerIDs(ctx context.Context, rootID int64) ([]int64, err
 	return ids, nil
 }
 
-func (s *svc) clear(ctx context.Context, sessionID, inputID int64) (int64, error) {
-	unlock, err := s.lockSessionTree(ctx, sessionID)
+func (s *svc) clear(ctx context.Context, input *sessionstore.InboxInput) (int64, error) {
+	unlock, err := s.lockSessionTree(ctx, input.SessionID)
 	if err != nil {
 		return 0, err
 	}
 	defer unlock()
 
-	return s.clearLocked(ctx, sessionID, inputID)
+	return s.clearLocked(ctx, input.SessionID, input.ID)
 }
 
 func (s *svc) clearLocked(ctx context.Context, sessionID, inputID int64) (int64, error) {
@@ -446,10 +445,6 @@ func (s *svc) newProcessService(ctx context.Context) backgroundprocess.Service {
 }
 
 func (s *svc) removeSchedules(ctx context.Context, sessionID int64) {
-	if s.scheduleSvc == nil {
-		return
-	}
-
 	if err := s.scheduleSvc.RemoveAllForSession(ctx, sessionID); err != nil {
 		logger.Ctx(ctx).Named("daemon.manager").
 			Warn("remove_schedules_failed", zap.Int64("session_id", sessionID), zap.Error(err))

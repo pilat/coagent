@@ -7,13 +7,9 @@ import (
 
 	"github.com/pilat/coagent/internal/controllerapi"
 	"github.com/pilat/coagent/internal/logger"
-	"github.com/pilat/coagent/internal/sessionbus"
 	"github.com/pilat/coagent/internal/sessionevent"
+	"github.com/pilat/coagent/internal/sessionstore"
 )
-
-func (s *svc) PubSub() sessionbus.Source {
-	return s.pubsub
-}
 
 func (s *svc) NotifySession(sessionID int64, n sessionevent.Notification) {
 	s.publish(sessionID, n)
@@ -86,4 +82,10 @@ func (s *svc) cachePublishRoute(sessionID int64, isChild bool, managerID string)
 	s.ownerCache[sessionID] = managerID
 
 	return managerID
+}
+
+func ownerlessSession(record *sessionstore.SessionRecord) bool {
+	owner, _ := record.Attributes[controllerapi.SessionAttributeManagerID].(string)
+
+	return owner == ""
 }

@@ -4,26 +4,26 @@ import (
 	"github.com/pilat/coagent/internal/config"
 	"github.com/pilat/coagent/internal/loader"
 	"github.com/pilat/coagent/internal/managerdiscovery"
+	"github.com/pilat/coagent/internal/progressruntime"
+	"github.com/pilat/coagent/internal/sessionbus"
 )
 
 type service struct {
 	backend   Backend
-	outputs   OutputStore
+	store     Store
+	progress  progressruntime.Service
+	bus       sessionbus.Source
 	cfg       *config.Config
 	cache     loader.MarketplaceCache
 	discovery managerdiscovery.Service
 }
 
-func newService(
-	backend Backend,
-	discoveryBackend managerdiscovery.Backend,
-	outputs OutputStore,
-	cfg *config.Config,
-	cache loader.MarketplaceCache,
+func newService(backend Backend, store Store, progress progressruntime.Service, bus sessionbus.Source,
+	cfg *config.Config, cache loader.MarketplaceCache,
 ) *service {
 	return &service{
-		backend: backend, outputs: outputs, cfg: cfg, cache: cache,
-		discovery: managerdiscovery.New(discoveryBackend, cfg, cache),
+		backend: backend, store: store, progress: progress, bus: bus, cfg: cfg, cache: cache,
+		discovery: managerdiscovery.New(store, cfg, cache),
 	}
 }
 

@@ -33,16 +33,16 @@ func (s *service) ensureManagementRoot(
 		return 0, fmt.Errorf("create management project dir: %w", err)
 	}
 
-	projectID, err := s.backend.GetOrCreateHiddenProject(ctx, path)
+	projectID, err := s.store.GetOrCreateHiddenProject(ctx, path)
 	if err != nil {
-		return 0, fmt.Errorf("resolve management project: %w", err)
+		return 0, fmt.Errorf("resolve management project: resolve hidden project: %w", err)
 	}
 
-	record, _, err := s.backend.EnsureManagementRoot(
+	record, _, err := s.store.EnsureManagementRoot(
 		ctx, projectID, managerID, topicID, managementRootName(path), path,
 	)
 	if err != nil {
-		return 0, fmt.Errorf("ensure management root: %w", err)
+		return 0, fmt.Errorf("ensure management root: ensure management root: %w", err)
 	}
 
 	return record.ID, nil

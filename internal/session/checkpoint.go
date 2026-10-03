@@ -6,7 +6,6 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/pilat/coagent/internal/llm"
 	"github.com/pilat/coagent/internal/llmwire"
 	"github.com/pilat/coagent/internal/loader"
 	"github.com/pilat/coagent/internal/sessionprompt"
@@ -296,17 +295,6 @@ func rawCutLegal(rawTail []llmwire.Message) bool {
 	}
 
 	return validateRawGrouping(rawTail) == nil
-}
-
-// validateRawHead validates the repaired head with the same pairing rules the
-// tail must already satisfy, after repair has applied the ordinary
-// supersession/stub/reorder/duplicate policy.
-func validateRawHead(repaired []llmwire.Message) error {
-	if err := llm.ValidateToolPairing(repaired); err != nil {
-		return fmt.Errorf("repaired head fails tool pairing: %w", err)
-	}
-
-	return validateRawGrouping(repaired)
 }
 
 // validateRawGrouping adds the session-scope checks beyond llm.ValidateToolPairing:

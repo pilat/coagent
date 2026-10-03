@@ -15,6 +15,7 @@ import (
 var _ Service = (*svc)(nil)
 
 type Service interface {
+	Render(ctx context.Context, sessionID int64) (string, error)
 	SleepTool(sessionID int64) tool.Tool
 	ListSchedules(ctx context.Context, sessionID int64) ([]Entry, error)
 	PendingSleeps(ctx context.Context, sessionID int64) ([]PendingSleep, error)

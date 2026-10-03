@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"math"
-	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -257,13 +256,13 @@ func (s *Session) commit(ctx context.Context, c sessionstore.Commit) (*sessionst
 	if c.ObserveBudget && c.State.Iteration != nil {
 		s.emit(
 			sessionevent.Notification{
-				Type:       "iteration_persisted",
+				Type:       sessionevent.NotifyIterationPersisted,
 				Attributes: map[string]any{"iteration": *c.State.Iteration},
 			},
 		)
 	}
 
-	s.emit(sessionevent.Notification{Type: "context_changed"})
+	s.emit(sessionevent.Notification{Type: sessionevent.NotifyContextChanged})
 	s.emitCommitted(s.liveOutputs(c, result), result.BudgetFired)
 
 	return result, nil
@@ -392,36 +391,6 @@ func (s *Session) emitCommitted(outputs []*sessionstore.OutputCommit, fired bool
 			}
 		}
 	}
-}
-
-// lastUserMessage returns the content of the last user message in the history.
-func lastUserMessage(messages []llmwire.Message) string {
-	for _, v := range slices.Backward(messages) {
-		if v.Role == llmwire.RoleUser {
-			return v.Content
-		}
-	}
-
-	return ""
-}
-
-// lastAssistantTextOnly returns the text of the last assistant message if it has
-// no tool calls. Returns "" otherwise.
-func lastAssistantTextOnly(messages []llmwire.Message) string {
-	for _, v := range slices.Backward(messages) {
-		switch v.Role {
-		case llmwire.RoleAssistant:
-			if len(v.ToolCalls) == 0 && v.Content != "" {
-				return v.Content
-			}
-
-			return ""
-		case llmwire.RoleUser:
-			return ""
-		}
-	}
-
-	return ""
 }
 
 // buildSessionStatus reports the compaction trigger's own projection and the

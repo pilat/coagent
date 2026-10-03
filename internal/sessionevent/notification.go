@@ -8,14 +8,17 @@ import (
 )
 
 const (
-	NotifyMessage        NotificationType = "message"
-	NotifyHeartbeat      NotificationType = "heartbeat"
-	NotifyStateChanged   NotificationType = "state_changed"
-	NotifyInputReceived  NotificationType = "input_received"
-	NotifySessionCreated NotificationType = "session_created"
-	NotifySessionCleared NotificationType = "session_cleared"
-	NotifyWaiting        NotificationType = "waiting"
-	NotifyModelWorking   NotificationType = "model_working"
+	NotifyMessage            NotificationType = "message"
+	NotifyHeartbeat          NotificationType = "heartbeat"
+	NotifyStateChanged       NotificationType = "state_changed"
+	NotifyInputReceived      NotificationType = "input_received"
+	NotifySessionCreated     NotificationType = "session_created"
+	NotifySessionCleared     NotificationType = "session_cleared"
+	NotifyWaiting            NotificationType = "waiting"
+	NotifyModelWorking       NotificationType = "model_working"
+	NotifyContextChanged     NotificationType = "context_changed"
+	NotifyProgressChanged    NotificationType = "progress_change"
+	NotifyIterationPersisted NotificationType = "iteration_persisted"
 )
 
 type WaitKind string
@@ -90,8 +93,11 @@ func (n Notification) variantContract() (map[string]bool, error) {
 	switch n.Type {
 	case NotifyMessage:
 		return fields("message"), n.require(n.Message != "", "message")
-	case NotifyHeartbeat:
+	case NotifyHeartbeat, NotifyContextChanged, NotifyProgressChanged:
 		return fields(), nil
+	case NotifyIterationPersisted:
+		_, valid := n.Attributes["iteration"].(int)
+		return fields("attributes"), n.require(valid && len(n.Attributes) == 1, "one integer iteration attribute")
 	case NotifyModelWorking:
 		_, valid := n.Attributes["working"].(bool)
 		return fields("attributes"), n.require(valid && len(n.Attributes) == 1, "one boolean working attribute")
@@ -247,15 +253,16 @@ func validInputSource(source string) bool {
 
 func (n Notification) presentFields() map[string]bool {
 	return map[string]bool{
-		"message":        n.Message != "",
-		"name":           n.Name != "",
-		"status":         n.Status != "",
-		"reason":         n.Reason != "",
-		"source":         n.Source != "",
-		"work_dir":       n.WorkDir != "",
-		"attributes":     n.Attributes != nil,
-		"old_session_id": n.OldSessionID != 0,
-		"new_session_id": n.NewSessionID != 0,
-		"waiting":        len(n.Waiting) > 0,
+		"message":         n.Message != "",
+		"name":            n.Name != "",
+		"status":          n.Status != "",
+		"reason":          n.Reason != "",
+		"source":          n.Source != "",
+		"work_dir":        n.WorkDir != "",
+		"attributes":      n.Attributes != nil,
+		"old_session_id":  n.OldSessionID != 0,
+		"new_session_id":  n.NewSessionID != 0,
+		"after_output_id": n.AfterOutputID != 0,
+		"waiting":         len(n.Waiting) > 0,
 	}
 }

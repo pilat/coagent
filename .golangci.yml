@@ -286,6 +286,25 @@ linters:
       - old
       - tmp
     rules:
+      # This existing directive is used when tests call the synthetic constructor.
+      - linters: [nolintlint]
+        path: ^internal/tool/builtin/bash\.go$
+        source: '^//nolint:unparam // Tests use the stable synthetic project directory; production injects access below\.$'
+        text: 'directive .* is unused for linter "unparam"'
+      # The controller reads one persistence owner for session, project and output use cases.
+      - linters: [interfacebloat]
+        path: ^internal/managercontrol/store\.go$
+        text: "the interface has more than 12 methods: 22"
+      # These existing helpers are exercised only by tests, which production-only lint excludes.
+      - linters: [unused]
+        path: ^internal/llm/anthropic\.go$
+        text: 'func \(\*anthropicClient\)\.buildToolResultMessage is unused'
+      - linters: [unused]
+        path: ^internal/managers/telegram/(commands|startup_retry|target)\.go$
+        text: 'func (\(\*Manager\)\.(handleHelp|preflight)|retryStartupCall) is unused'
+      - linters: [unused]
+        path: ^internal/tool/builtin/(apply_patch|bash|edit|glob|grep|read|write)\.go$
+        text: 'func (new(ApplyPatch|Bash|Edit|Glob|Grep|Read|Write)Tool|applyFilePatches|applyHunk) is unused'
       # Allow unused params in interface implementations
       - linters: [unparam]
         source: "^func \\(.+\\) .+\\(.*\\) .+ \\{$"

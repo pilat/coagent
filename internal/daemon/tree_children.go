@@ -6,21 +6,9 @@ import (
 
 	"go.uber.org/zap"
 
-	"github.com/pilat/coagent/internal/admission"
 	"github.com/pilat/coagent/internal/logger"
 	"github.com/pilat/coagent/internal/subagent"
 )
-
-// cascadeKillChildren recursively kills a session's in-flight descendants —
-// blocking AND background (depth-bounded). A deliberate tree teardown (Kill/Clear)
-// leaves no live receiver, so a surviving background descendant would keep
-// consuming a slot and writing files while reporting to nobody. Terminal links
-// (a completed-but-undelivered child included) are skipped so their stored
-// result/outcome survive and they are not mislabelled killed. deadline is one
-// retry budget shared by the whole walk, since Kill waits on it synchronously.
-func (s *svc) cascadeKillChildren(ctx context.Context, parentID int64, depth int, deadline time.Time) {
-	s.cascadeKillChildrenMode(ctx, parentID, depth, deadline, false)
-}
 
 func (s *svc) cascadeKillChildrenForKilledTree(
 	ctx context.Context,
@@ -38,7 +26,7 @@ func (s *svc) cascadeKillChildrenMode(
 	deadline time.Time,
 	suppressTerminal bool,
 ) {
-	if depth >= admission.MaxDepth {
+	if depth >= maxDepth {
 		return
 	}
 

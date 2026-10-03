@@ -22,8 +22,8 @@ identity, and subagent round.
 
 Coagent is a self-hosted, headless coding agent. One daemon coordinates durable
 state, session lifecycle and admission. It backs the private manager contract
-implemented by `managercontrol`. Domain packages own their ledgers and in-memory governors
-beneath that coordinator. It accepts no network listener.
+implemented by `managercontrol`. Domain packages own their ledgers; the daemon
+owns runner capacity counters and quotas. It accepts no network listener.
 The only listener is a same-user Unix control socket serving the read-only
 status protocol used by `coagent status`.
 
@@ -39,7 +39,7 @@ A manager submits work as a session. A session owns one agent-loop activation:
 its model client, tool registry, prompt projection, and conversation handling.
 The daemon coordinates work that crosses sessions, survives a process restart,
 or needs global admission decisions; the owning domain package retains each
-ledger or governor. Built-in managers program against the private controller
+ledger. Built-in managers program against the private controller
 contract, never the daemon implementation. Managers and the local control
 protocol are product surfaces, not a public plugin API.
 
@@ -56,7 +56,6 @@ The map is an ownership index, not a list of exported symbols. Directory nesting
 does not imply a tier except where it expresses an implementation variant.
 
 - `cmd/coagent` — composition root, CLI product policy and daemon lifecycle commands. Refuses any non-Linux platform at process entry, before the guardian or command dispatch ([ADR-0062](docs/adr/0062-linux-only-supported-runtime.md)).
-- `internal/admission` — in-memory runner capacity and per-parent subagent quotas.
 - `internal/bashsandbox` — Linux Bubblewrap confinement and process launch for session-owned workloads. Builds one ordered mount plan from a compiled policy; non-Linux builds carry only a compile-time fallback that returns an unsupported-backend error.
 - `internal/budget` — one-shot root-tree budget policy and its user-authorized tool.
 - `internal/catalog` — external model metadata acquisition, caching and identifier matching.
@@ -189,9 +188,9 @@ another session with an independent context and restricted
 policy, not a goroutine inside its parent. The daemon enforces total, child,
 per-parent and depth limits, retaining overflow in FIFO order. A suspended
 parent does not retain an execution slot; its durable pending work does.
-The `admission` governor owns capacity counters and quota decisions. The daemon
-owns durable startability checks, FIFO overflow queues, classification, runner
-registration and launch around that verdict.
+The daemon owns capacity counters and quota decisions alongside durable
+startability checks, FIFO overflow queues, classification, runner registration
+and launch.
 
 Session assembly is the authority that registers gated tools. The daemon supplies
 owner tools before assembly, which applies agent-type filtering.
@@ -814,15 +813,18 @@ roots and subagents receive none of these management surfaces.
 
 The daemon, session and session-store boundary divides global coordination,
 per-task execution and SQLite transaction ownership. The daemon supplies owner
-tools to session assembly, routes session events and resolves project identity
-through session-store. `managercontrol` implements the manager controller over
-that backend. `admission` owns capacity decisions and `sessionbus` owns fan-out.
+tools to session assembly and routes session events. `managercontrol` implements
+the manager controller over the daemon's command backend and reads persistence,
+progress and subscriptions directly from their owners. The daemon owns capacity
+decisions and `sessionbus` owns fan-out.
 The daemon owns concrete runner state, the synchronized runner registry,
 shutdown fence, FIFO admission caches and cancellable recovery worker. Its tree
 fence serializes spawn and process admission against stop, kill and clear;
 terminalization and completion delivery use the durable subagent ledger.
 The lifecycle composition boundary is recorded in
-[ADR-0065](docs/adr/0065-daemon-owns-lifecycle-composition.md).
+[ADR-0065](docs/adr/0065-daemon-owns-lifecycle-composition.md); the bounded
+orchestration direction is recorded in
+[ADR-0066](docs/adr/0066-daemon-bounded-orchestration-core.md).
 The subagent package owns the durable parent-child link ledger. The daemon must
 keep transient maps reconstructible and defer to stores for durable ordering/CAS
 decisions.
@@ -964,7 +966,7 @@ Catalogs never outlive their clients. Registry mutations change the next stack
 only; an active stack's tools and schemas stay fixed
 ([ADR-0063](docs/adr/0063-explicit-filesystem-boundary.md)).
 
-Schedule owns cron validation, durable schedule records and execution of sleep
+Schedule owns cron validation, schedule-list rendering, durable schedule records and execution of sleep
 and schedule tools, including the sleep guard over pending producer obligations. It enqueues through session-store and uses a narrow sender
 only for event publication. Curated memory is distinct from conversation history and scoped
 to a project. A best-effort inventory is frozen into a fresh opening turn's
@@ -1001,9 +1003,10 @@ The manager coordinator isolates manager failures. Telegram renders
 controller state and submits controller requests; it does not directly manipulate
 session rows. `managercontrol` owns authorization, DTO conversion, project
 resolution and durable output-delivery use cases; `managerdiscovery` owns
-manager-facing project, model, skill and filesystem discovery. Its controller
-methods are thin adapters, and the composition root binds them to the daemon
-backend. The durable management-surface session attribute, rather than a
+manager-facing project listing, model, skill and filesystem discovery over
+session-store. Controller methods are thin adapters, and the composition root
+binds them to the daemon command backend, session-store, progress-runtime and
+session bus. The durable management-surface session attribute, rather than a
 transport attribute or numeric session ID, marks each manager's management root;
 its delivery always resolves the manager's current service topic, and management
 roots are excluded from manager-level kill flows. Session-event defines

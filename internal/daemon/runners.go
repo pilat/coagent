@@ -9,15 +9,30 @@ import (
 
 	"go.uber.org/zap"
 
-	"github.com/pilat/coagent/internal/admission"
 	"github.com/pilat/coagent/internal/backgroundprocess"
 	"github.com/pilat/coagent/internal/logger"
 	"github.com/pilat/coagent/internal/progressruntime"
 	"github.com/pilat/coagent/internal/sessionbuild"
-	"github.com/pilat/coagent/internal/sessionstore"
 )
 
-var errDaemonShuttingDown = errors.New("daemon is shutting down")
+const (
+	maxTotal     = 16
+	maxChildren  = 12
+	maxPerParent = 8
+	maxDepth     = 3
+)
+
+var (
+	errDaemonShuttingDown = errors.New("daemon is shutting down")
+	errNoCapacity         = errors.New("session capacity reached")
+)
+
+type slots struct {
+	mu        sync.Mutex
+	running   int
+	children  int
+	perParent map[int64]int
+}
 
 type registry[T any] struct {
 	mu     sync.Mutex
@@ -25,28 +40,58 @@ type registry[T any] struct {
 	closed bool
 }
 
-func (s *svc) GetSession(ctx context.Context, id int64) (*sessionstore.SessionRecord, error) {
-	rec, err := s.store.GetSession(ctx, id)
-	if err != nil {
-		return nil, fmt.Errorf("load session record: %w", err)
-	}
-
-	return rec, nil
-}
-
-func (s *svc) List(ctx context.Context) ([]*sessionstore.SessionRecord, error) {
-	recs, err := s.store.ListSessions(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("list sessions: %w", err)
-	}
-
-	return recs, nil
-}
-
 func (s *svc) HasActiveLoop(sessionID int64) bool {
 	_, ok := s.runners.Load(sessionID)
 
 	return ok
+}
+
+func (s *slots) tryAdmit(child bool, parentID int64) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.running >= maxTotal || child && (s.children >= maxChildren || s.perParent[parentID] >= maxPerParent) {
+		return false
+	}
+
+	s.running++
+	if child {
+		s.children++
+		s.perParent[parentID]++
+	}
+
+	return true
+}
+
+func (s *slots) release(child bool, parentID int64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.running > 0 {
+		s.running--
+	}
+
+	if !child {
+		return
+	}
+
+	if s.children > 0 {
+		s.children--
+	}
+
+	if s.perParent[parentID] > 0 {
+		s.perParent[parentID]--
+		if s.perParent[parentID] == 0 {
+			delete(s.perParent, parentID)
+		}
+	}
+}
+
+func (s *slots) canAdmit(child bool, parentID int64) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	return s.running < maxTotal && (!child || s.children < maxChildren && s.perParent[parentID] < maxPerParent)
 }
 
 func (s *svc) Shutdown(timeout time.Duration) {
@@ -81,15 +126,12 @@ func (s *svc) Shutdown(timeout time.Duration) {
 		// Controlled shutdown cancels and joins every owned process group
 		// through the shared lifecycle service; their completions stay owed
 		// as interrupted for the next startup.
-		if s.processSvc != nil {
-			if _, err := s.processSvc.CancelAll(shutdownCtx, backgroundprocess.IntentDaemonShutdown); err != nil {
-				logger.Ctx(shutdownCtx).Named("daemon.process").Warn("shutdown_cancel_failed", zap.Error(err))
-			}
+
+		if _, err := s.processSvc.CancelAll(shutdownCtx, backgroundprocess.IntentDaemonShutdown); err != nil {
+			logger.Ctx(shutdownCtx).Named("daemon.process").Warn("shutdown_cancel_failed", zap.Error(err))
 		}
 
-		if s.progress != nil {
-			_ = s.progress.Stop(shutdownCtx)
-		}
+		_ = s.progress.Stop(shutdownCtx)
 
 		for _, rs := range runners {
 			<-rs.Done()
@@ -238,27 +280,27 @@ func (s *svc) launchRunner(
 		return nil
 	}
 
-	kind, parentID, blocking, err := s.slotInfo(ctx, sessionID)
+	child, parentID, blocking, err := s.slotInfo(ctx, sessionID)
 	if err != nil {
 		return err
 	}
 
-	if !s.admit.TryAdmit(kind, parentID) {
-		if kind == admission.Child && !blocking {
+	if !s.admit.tryAdmit(child, parentID) {
+		if child && !blocking {
 			s.enqueueCapacityBlockedChild(ctx, sessionID, parentID, workDir, projectID)
 
 			return nil
 		}
 
-		return admission.ErrNoCapacity
+		return errNoCapacity
 	}
 
 	loopCtx, cancel := context.WithCancel(context.Background())
-	runner := newRunner(cancel, workDir, projectID, kind, parentID, preserveStopped)
+	runner := newRunner(cancel, workDir, projectID, child, parentID, preserveStopped)
 
 	existing, registered := s.registerRunner(ctx, sessionID, runner)
 	if !registered {
-		s.admit.Release(kind, parentID)
+		s.admit.release(child, parentID)
 		cancel()
 
 		if existing == nil {
@@ -281,17 +323,17 @@ func (s *svc) appendIfRunning(sessionID int64) bool {
 func (s *svc) slotInfo(
 	ctx context.Context,
 	sessionID int64,
-) (admission.Kind, int64, bool, error) {
+) (bool, int64, bool, error) {
 	link, err := s.links.GetLink(ctx, sessionID)
 	if err != nil {
-		return admission.Parent, 0, false, fmt.Errorf("classify session %d: %w", sessionID, err)
+		return false, 0, false, fmt.Errorf("classify session %d: %w", sessionID, err)
 	}
 
 	if link == nil {
-		return admission.Parent, 0, false, nil
+		return false, 0, false, nil
 	}
 
-	return admission.Child, link.ParentID, link.Blocking, nil
+	return true, link.ParentID, link.Blocking, nil
 }
 
 func (s *svc) registerRunner(ctx context.Context, sessionID int64, runner *runner) (*runner, bool) {

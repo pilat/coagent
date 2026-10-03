@@ -4,14 +4,13 @@ import (
 	"context"
 	"sync"
 
-	"github.com/pilat/coagent/internal/admission"
 	"github.com/pilat/coagent/internal/session"
 )
 
 type runnerInfo struct {
 	WorkDir         string
 	ProjectID       int64
-	Kind            admission.Kind
+	Child           bool
 	ParentID        int64
 	PreserveStopped bool
 }
@@ -26,7 +25,7 @@ type runner struct {
 	hasRun          bool
 	workDir         string
 	projectID       int64
-	kind            admission.Kind
+	child           bool
 	parentID        int64
 	preserveStopped bool
 }
@@ -96,7 +95,7 @@ func (r *runner) Info() runnerInfo {
 	defer r.mu.Unlock()
 
 	return runnerInfo{
-		WorkDir: r.workDir, ProjectID: r.projectID, Kind: r.kind,
+		WorkDir: r.workDir, ProjectID: r.projectID, Child: r.child,
 		ParentID: r.parentID, PreserveStopped: r.preserveStopped,
 	}
 }
@@ -105,13 +104,13 @@ func newRunner(
 	cancel context.CancelFunc,
 	workDir string,
 	projectID int64,
-	kind admission.Kind,
+	child bool,
 	parentID int64,
 	preserveStopped bool,
 ) *runner {
 	return &runner{
 		cancel: cancel, done: make(chan struct{}), workDir: workDir,
-		projectID: projectID, kind: kind, parentID: parentID,
+		projectID: projectID, child: child, parentID: parentID,
 		preserveStopped: preserveStopped,
 	}
 }
