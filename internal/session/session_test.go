@@ -1,7 +1,6 @@
 package session
 
 import (
-	"context"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -14,15 +13,6 @@ import (
 	"github.com/pilat/coagent/internal/todo"
 	"github.com/pilat/coagent/internal/tool"
 )
-
-type trackedClient struct {
-	mockLLMRunOnce
-	closed    int
-	sessionID string
-}
-
-func (c *trackedClient) Close() error           { c.closed++; return nil }
-func (c *trackedClient) SetSessionID(id string) { c.sessionID = id }
 
 func TestSwitchModel_AdoptionAndRetirement(t *testing.T) {
 	for _, tc := range []struct {
@@ -148,22 +138,6 @@ func TestContextBaseline_CompactionClearsPersistedState(t *testing.T) {
 	assert.Equal(t, llmwire.RoleUser, rows[2].Role)
 }
 
-type reasoningSwitchClient struct {
-	mockLLMRunOnce
-	requests [][]llmwire.Message
-}
-
-func (c *reasoningSwitchClient) Chat(
-	ctx context.Context,
-	system string,
-	messages []llmwire.Message,
-	tools []llmwire.ToolSchema,
-	options ...llmwire.ChatOption,
-) (*llmwire.Response, error) {
-	c.requests = append(c.requests, messages)
-	return c.mockLLMRunOnce.Chat(ctx, system, messages, tools, options...)
-}
-
 func TestSwitchModel_PreservesReasoningEnvelope(t *testing.T) {
 	s := newTestAgent(&stubTool{id: "read", result: "body"})
 	next := &reasoningSwitchClient{response: textResponse("done")}
@@ -190,4 +164,33 @@ func TestSwitchModel_PreservesReasoningEnvelope(t *testing.T) {
 	}
 	require.NotNil(t, assistant)
 	assert.JSONEq(t, string(reasoningBlob), string(assistant.ReasoningRaw))
+}
+
+func TestPrepareUserMessageExpandsDirectSkillInvocation(t *testing.T) {
+	ldr := loader.New()
+	ldr.RegisterSkill(&loader.Skill{
+		Name:                   "review",
+		Description:            "Review changes",
+		DisableModelInvocation: true,
+		Content:                "Review $ARGUMENTS carefully.",
+	})
+
+	s := newTestAgent()
+	s.loader = ldr
+
+	result, err := s.PrepareUserMessage("/skill review current diff")
+	require.NoError(t, err)
+	assert.Contains(t, result, "<skill>\n<name>review</name>")
+	assert.Contains(t, result, "Review current diff carefully.")
+}
+
+func TestPrepareUserMessageRejectsNonUserInvocableSkill(t *testing.T) {
+	userDisabled := false
+	ldr := loader.New()
+	ldr.RegisterSkill(&loader.Skill{Name: "hidden", UserInvocable: &userDisabled, Content: "hidden"})
+
+	s := newTestAgent()
+	s.loader = ldr
+	_, err := s.PrepareUserMessage("/skill hidden")
+	require.ErrorContains(t, err, "skill unavailable: hidden")
 }

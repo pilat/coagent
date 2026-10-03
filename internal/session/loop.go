@@ -2,11 +2,16 @@ package session
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
+	"slices"
+	"strconv"
 	"strings"
 	"time"
 
+	"github.com/pilat/coagent/internal/llmwire"
 	"github.com/pilat/coagent/internal/logger"
 	"github.com/pilat/coagent/internal/sessionevent"
 	"github.com/pilat/coagent/internal/sessionstore"
@@ -25,6 +30,13 @@ const (
 	loopBlockMessage            = "[BLOCKED: Tool execution blocked — you were warned about repetitive behavior but continued the same pattern. You MUST respond with text explaining your situation. No tool calls will be executed until you demonstrate a new approach.]"
 	loopFailureWarningTemplate  = "[LOOP WARNING: The %s tool has returned the same error %d times in a row. Repeating the identical call will not help — fix the arguments or change your approach, or stop and explain the problem in text.]"
 )
+
+const agentsMDMessagePrefix = "User preferences from AGENTS.md files (lower priority than system instructions):\n\n"
+
+const noTaskPrompt = "You were just started but the user hasn't provided a task yet. " +
+	"Greet them briefly and wait for their instructions."
+
+const statusBarCells = 10
 
 type RunResult struct {
 	Suspended            bool
@@ -45,6 +57,26 @@ type runState struct {
 	backgroundInserted bool
 	compactionFailures int
 	autoCompactionOff  bool
+}
+
+// Context reports the live projection without exposing progress-runtime policy.
+type Context struct {
+	Used, Max              int
+	Approximate, Available bool
+}
+
+// sessionStatus holds session statistics for /status command. Two honest numbers:
+// current window occupancy (this turn) and lifetime session total (all-in, from DB).
+type sessionStatus struct {
+	Model         string
+	LifetimeIn    int     // lifetime prompt tokens, whole tree, incl compaction (billed throughput)
+	LifetimeOut   int     // lifetime completion tokens
+	LifetimeCost  float64 // lifetime cost USD, all-in
+	ContextUsed   int     // projected next-request input (same number the trigger uses)
+	ContextMax    int     // context window (same source as the compaction trigger)
+	ContextIsEst  bool    // no provider measurement backs ContextUsed
+	Iteration     int
+	SubagentCount int
 }
 
 func (s *Session) Run(ctx context.Context) (RunResult, error) {
@@ -68,6 +100,15 @@ func (s *Session) Run(ctx context.Context) (RunResult, error) {
 	}
 
 	return s.finishRun(ctx, r, s.runIterations(ctx, r))
+}
+
+func (s *Session) ContextProjection(ctx context.Context) Context {
+	status := s.buildSessionStatus(ctx)
+
+	return Context{
+		Used: status.ContextUsed, Max: status.ContextMax, Approximate: status.ContextIsEst,
+		Available: status.ContextMax > 0 && status.ContextUsed > 0,
+	}
 }
 
 func (s *Session) prepareRun(ctx context.Context) error {
@@ -358,5 +399,262 @@ func (s *Session) emitCommitted(outputs []*sessionstore.OutputCommit, fired bool
 				s.emit(sessionevent.Notification{Type: sessionevent.NotifyMessage, Message: content})
 			}
 		}
+	}
+}
+
+// lastUserMessage returns the content of the last user message in the history.
+func lastUserMessage(messages []llmwire.Message) string {
+	for _, v := range slices.Backward(messages) {
+		if v.Role == llmwire.RoleUser {
+			return v.Content
+		}
+	}
+
+	return ""
+}
+
+// lastAssistantTextOnly returns the text of the last assistant message if it has
+// no tool calls. Returns "" otherwise.
+func lastAssistantTextOnly(messages []llmwire.Message) string {
+	for _, v := range slices.Backward(messages) {
+		switch v.Role {
+		case llmwire.RoleAssistant:
+			if len(v.ToolCalls) == 0 && v.Content != "" {
+				return v.Content
+			}
+
+			return ""
+		case llmwire.RoleUser:
+			return ""
+		}
+	}
+
+	return ""
+}
+
+// buildSessionStatus reports the compaction trigger's own projection and the
+// lifetime tree-sum. A backward usage scan would read 0% right after a compaction.
+func (s *Session) buildSessionStatus(ctx context.Context) sessionStatus {
+	s.modelMu.RLock()
+	model := s.model
+	s.modelMu.RUnlock()
+
+	contextUsed, estimated := s.projectContextSize()
+
+	var lifetimeIn, lifetimeOut int
+	var lifetimeCost float64
+	subagentCount := 0
+
+	if s.store != nil {
+		if in, out, cost, err := s.store.GetSessionTreeUsage(ctx, s.rootID); err == nil {
+			lifetimeIn, lifetimeOut, lifetimeCost = in, out, cost
+		}
+
+		if childCount, _, err := s.store.GetChildSessionStats(ctx, s.rootID); err == nil {
+			subagentCount = childCount
+		}
+	}
+
+	return sessionStatus{
+		Model:         model,
+		LifetimeIn:    lifetimeIn,
+		LifetimeOut:   lifetimeOut,
+		LifetimeCost:  lifetimeCost,
+		ContextUsed:   contextUsed,
+		ContextMax:    s.contextWindow(),
+		ContextIsEst:  estimated,
+		Iteration:     s.iterationOffset,
+		SubagentCount: subagentCount,
+	}
+}
+
+// renderStatus builds the controller-agnostic Markdown /status view: a backtick
+// occupancy bar (HTML-escape-safe) headlined by lifetime cost. Pure and testable.
+func renderStatus(st sessionStatus) string {
+	pct := 0
+	if st.ContextMax > 0 && st.ContextUsed > 0 {
+		pct = min(100, st.ContextUsed*100/st.ContextMax)
+	}
+
+	filled := min(statusBarCells, int(math.Round(float64(pct)/10.0)))
+	bar := strings.Repeat("█", filled) + strings.Repeat("░", statusBarCells-filled)
+
+	band := "🟢"
+	tail := ""
+
+	switch {
+	case pct >= int(compactionFraction*100):
+		band = "🔴"
+		tail = " · compacting soon"
+	case pct >= 70:
+		band = "🟡"
+	}
+
+	var sb strings.Builder
+
+	sb.WriteString("📊 **Session Status**\n\n")
+	fmt.Fprintf(&sb, "- **Model**: %s\n", st.Model)
+	fmt.Fprintf(&sb, "- **Iterations**: %d\n", st.Iteration)
+
+	if st.SubagentCount > 0 {
+		fmt.Fprintf(&sb, "- **Subagents**: %d\n", st.SubagentCount)
+	}
+
+	// A tilde marks a pure estimate, never mistakable for a reported number.
+	approx := ""
+	if st.ContextIsEst {
+		approx = "~"
+	}
+
+	fmt.Fprintf(&sb, "\n%s Context `%s` %s%d%% (%s%s / %s)%s\n",
+		band, bar, approx, pct, approx, formatTokens(st.ContextUsed), formatTokens(st.ContextMax), tail)
+	fmt.Fprintf(&sb, "\nLifetime (all-in): **$%.2f** · %s in · %s out\n",
+		st.LifetimeCost, formatTokens(st.LifetimeIn), formatTokens(st.LifetimeOut))
+
+	return sb.String()
+}
+
+// formatTokens renders a token count with a k/M suffix; counts under 1000 stay plain.
+func formatTokens(n int) string {
+	switch {
+	case n >= 1_000_000:
+		return fmt.Sprintf("%.1fM", float64(n)/1_000_000)
+	case n >= 1_000:
+		return fmt.Sprintf("%.1fk", float64(n)/1_000)
+	default:
+		return strconv.Itoa(n)
+	}
+}
+
+// openingTurn assembles the turn that opens a conversation — AGENTS.md header
+// (when present) plus the stamped task. Pure: no IO, no store mutation.
+func (s *Session) openingTurn(prompt string) []llmwire.Message {
+	msgs := make([]llmwire.Message, 0, 2)
+
+	if s.agentsMD != "" {
+		msgs = append(msgs, llmwire.Message{
+			Role:    llmwire.RoleUser,
+			Content: agentsMDMessagePrefix + s.agentsMD,
+		})
+	}
+
+	if prompt == "" {
+		prompt = noTaskPrompt
+	}
+
+	return append(msgs, llmwire.Message{Role: llmwire.RoleUser, Content: s.stamper.Stamp(prompt)})
+}
+
+func (s *Session) finishRun(ctx context.Context, r *runState, runErr error) (RunResult, error) {
+	if r.iterations >= hardIterationCeiling && runErr == nil {
+		runErr = fmt.Errorf("maximum iterations (%d) reached", hardIterationCeiling)
+	}
+
+	r.result.DeferNoticeAnnounced = s.compactionDeferAnnounced
+
+	r.result.BudgetFired = r.result.BudgetFired || s.budgetFired
+	if ctx.Err() != nil {
+		return r.result, s.cancelRunActivation(ctx, runErr)
+	}
+
+	if err := s.expireActivation(ctx, r.result.Suspended); err != nil {
+		runErr = errors.Join(runErr, err)
+	}
+
+	if !r.terminalState {
+		runErr = s.commitRunState(ctx, r, runErr)
+	}
+
+	return r.result, runErr
+}
+
+func (s *Session) cancelRunActivation(ctx context.Context, runErr error) error {
+	grant := s.currentActivation
+	if grant == nil || grant.ToolCallID != "" {
+		return runErr
+	}
+
+	c := s.newCommit()
+	c.Activation = &sessionstore.ActivationChange{
+		InputID: grant.InputID, State: sessionstore.ActivationExpired,
+		ToolID: grant.ToolID, Command: grant.Command,
+	}
+
+	_, err := s.store.Commit(context.WithoutCancel(ctx), c)
+	if err != nil && !errors.Is(err, sessionstore.ErrSessionStopping) {
+		return errors.Join(runErr, err)
+	}
+
+	return runErr
+}
+
+func (s *Session) commitRunState(ctx context.Context, r *runState, runErr error) error {
+	status := s.runStatus(r, runErr)
+	iteration := s.iterationOffset + r.iterations
+
+	todoData, err := json.Marshal(s.prompt.Todos.List())
+	if err != nil {
+		return errors.Join(runErr, err)
+	}
+
+	raw := json.RawMessage(todoData)
+	c := s.newCommit()
+	c.State = sessionstore.StatePatch{Status: &status, Iteration: &iteration, TodoItems: &raw}
+
+	if runErr != nil {
+		if r.result.ErrorNotice == "" {
+			r.result.ErrorNotice = projectionErrorNotice(runErr)
+		}
+
+		c.Outputs = []sessionstore.Output{{
+			Type: sessionstore.OutputMessagePersistent, Content: r.result.ErrorNotice,
+			Key: fmt.Sprintf("run:%d:error", iteration), MessageRef: -1, ReleasesInput: true,
+		}}
+	}
+
+	_, err = s.commit(ctx, c)
+	if err != nil {
+		return errors.Join(runErr, err)
+	}
+
+	return runErr
+}
+
+func (s *Session) runStatus(r *runState, runErr error) sessionstore.SessionStatus {
+	if runErr != nil {
+		return sessionstore.SessionStatusError
+	}
+
+	if s.preserveStopped {
+		return sessionstore.SessionStatusStopped
+	}
+
+	if r.result.Suspended || r.result.BudgetFired {
+		return sessionstore.SessionStatusSuspended
+	}
+
+	return sessionstore.SessionStatusCompleted
+}
+
+func (s *Session) startHeartbeat(ctx context.Context) func() {
+	ticker := time.NewTicker(time.Second)
+	done := make(chan struct{})
+
+	go func() {
+		for {
+			select {
+			case <-ticker.C:
+				s.emit(sessionevent.Notification{Type: sessionevent.NotifyHeartbeat})
+			case <-done:
+				return
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+
+	return func() {
+		close(done)
+		ticker.Stop()
 	}
 }

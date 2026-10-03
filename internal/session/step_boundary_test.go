@@ -102,18 +102,94 @@ func TestRun_BoundarySettlesCallsBeforeContinuation(t *testing.T) {
 	}
 }
 
-func assertBoundaryContinuationOrder(t *testing.T, messages []llmwire.Message, result string) {
-	t.Helper()
-
-	require.Len(t, messages, 5)
-	assert.Equal(t, llmwire.RoleUser, messages[0].Role)
-	assert.Equal(t, "original request", messages[0].Content)
-	assert.Equal(t, llmwire.RoleAssistant, messages[1].Role)
-	assert.Equal(t, llmwire.RoleTool, messages[2].Role)
-	assert.Equal(t, "owned-call", messages[2].ToolCallID)
-	assert.Equal(t, result, messages[2].Content)
-	assert.Equal(t, llmwire.RoleUser, messages[3].Role)
-	assert.Contains(t, messages[3].Content, "continue with the followup")
-	assert.Equal(t, llmwire.RoleUser, messages[4].Role)
-	assert.Equal(t, "active background producer snapshot", messages[4].Content)
+func TestRun_ExternalCallOwnership(t *testing.T) {
+	for _, tc := range []struct {
+		name, resultTool string
+		resolved         bool
+	}{
+		{name: "producer has not replied"},
+		{name: "wrong producer result", resultTool: tool.IDSleep},
+		{name: "exact producer result", resultTool: tool.IDConfigEdit, resolved: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, store, id := newAttachmentsStore(t)
+			transcriptRows := []llmwire.Message{
+				usr("change configuration"),
+				asst("", call("apply-1", tool.IDConfigEdit)),
+				asst("", call("newer-event", "process_event")),
+				{
+					Role:       llmwire.RoleTool,
+					ToolCallID: "newer-event",
+					ToolName:   "process_event",
+					Content:    "process finished",
+				},
+			}
+			var rows []*transcript.Message
+			for i := range transcriptRows {
+				row, err := storedMessage(&transcriptRows[i])
+				require.NoError(t, err)
+				rows = append(rows, row)
+			}
+			_, err := store.Commit(t.Context(), sessionstore.Commit{SessionID: id, Messages: rows})
+			require.NoError(t, err)
+			if tc.resultTool != "" {
+				_, err = store.Enqueue(
+					t.Context(),
+					sessionstore.Input{
+						SessionID:  id,
+						Source:     sessionstore.InputSourceCallResult,
+						Content:    "applied",
+						Attributes: map[string]any{"call_id": "apply-1", "tool_id": tc.resultTool},
+					},
+				)
+				require.NoError(t, err)
+			}
+			record, err := store.GetSession(t.Context(), id)
+			require.NoError(t, err)
+			counter := &countingTool{id: tool.IDConfigEdit}
+			reg := tool.NewRegistry()
+			reg.Register(counter)
+			prompt := sessionprompt.NewBuilder("stable", "")
+			prompt.Todos = todo.New()
+			client := &loopScriptLLM{responses: []*llmwire.Response{textResponse("done"), textResponse("confirmed")}}
+			s, err := New(
+				t.Context(),
+				Input{
+					Record:        record,
+					Client:        client,
+					Loader:        loader.New(),
+					Registry:      reg,
+					Prompt:        prompt,
+					Store:         store,
+					ExternalCalls: map[string]string{"apply-1": tool.IDConfigEdit},
+					OutputEnabled: true,
+				},
+			)
+			require.NoError(t, err)
+			t.Cleanup(s.Close)
+			result, err := s.Run(t.Context())
+			require.NoError(t, err)
+			assert.Zero(t, counter.runs.Load(), "an owned call never executes again")
+			if tc.resolved {
+				assert.False(t, result.Suspended)
+				assert.Equal(t, "done", result.Final)
+				assert.Equal(t, 2, client.calls)
+			} else {
+				assert.True(t, result.Suspended)
+				assert.Zero(t, client.calls)
+			}
+			pending, err := store.ListPending(t.Context(), id)
+			require.NoError(t, err)
+			assert.Empty(t, pending)
+			messages := s.ms.getMessages()
+			var exactResults int
+			for _, row := range messages {
+				if row.Role == llmwire.RoleTool && row.ToolCallID == "apply-1" {
+					exactResults++
+					assert.Equal(t, "applied", row.Content)
+				}
+			}
+			assert.Equal(t, map[bool]int{false: 0, true: 1}[tc.resolved], exactResults)
+		})
+	}
 }

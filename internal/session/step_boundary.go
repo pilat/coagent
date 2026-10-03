@@ -2,13 +2,19 @@ package session
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
+	"github.com/pilat/coagent/internal/llmwire"
+	"github.com/pilat/coagent/internal/loader"
 	"github.com/pilat/coagent/internal/sessionstore"
 	"github.com/pilat/coagent/internal/tool"
+	"github.com/pilat/coagent/internal/transcript"
 )
 
 const (
@@ -260,4 +266,319 @@ func (s *Session) commitBoundaryBatch(
 	}
 
 	return batch.accepted, nil
+}
+
+func (s *Session) acceptBoundaryCommand(
+	ctx context.Context,
+	r *runState,
+	batch *boundaryBatch,
+	input *sessionstore.InboxInput,
+	command string,
+) error {
+	state, err := s.store.LoadCompletionCheckState(ctx, s.id)
+	if err != nil {
+		return fmt.Errorf("accept boundary command: %w", err)
+	}
+
+	if batch.fresh || durableCandidateID(state) != 0 {
+		r.handledControl = true
+	}
+
+	output := s.boundaryCommandContent(ctx, input, command)
+	c := &batch.commit
+	c.Accept = append(
+		c.Accept,
+		sessionstore.Accept{
+			InputID: input.ID,
+			State:   sessionstore.InputStateHandled,
+			Reason:  strings.TrimPrefix(command, "/") + " command",
+			LinkRef: -1,
+		},
+	)
+	c.Outputs = append(
+		c.Outputs,
+		sessionstore.Output{
+			Type:          sessionstore.OutputMessagePersistent,
+			Content:       output,
+			Key:           fmt.Sprintf("input:%d:%s:result", input.ID, strings.TrimPrefix(command, "/")),
+			MessageRef:    -1,
+			ReleasesInput: false,
+		},
+	)
+
+	return nil
+}
+
+func (s *Session) boundaryCommandContent(ctx context.Context, input *sessionstore.InboxInput, command string) string {
+	output := s.renderSessionHelp()
+
+	switch command {
+	case "/schedules":
+		output = s.schedules
+		if snapshot, ok := input.Attributes["schedules"].(string); ok {
+			output = snapshot
+		}
+	case "/status":
+		output = renderStatus(s.buildSessionStatus(ctx))
+		if s.status != "" {
+			output = s.status
+		}
+
+		if snapshot, ok := input.Attributes["status"].(string); ok {
+			output = snapshot
+		}
+	}
+
+	return output
+}
+
+func (s *Session) deferBoundaryCompaction(batch *boundaryBatch, input *sessionstore.InboxInput) {
+	if s.compactionDeferAnnounced {
+		return
+	}
+
+	batch.commit.Outputs = append(batch.commit.Outputs, sessionstore.Output{
+		Type: sessionstore.OutputMessagePersistent, Content: compactionDeferredNotice,
+		Key: fmt.Sprintf("input:%d:compact:deferred", input.ID), MessageRef: -1,
+	})
+	s.compactionDeferAnnounced = true
+}
+
+func (s *Session) interruptBoundarySleeps(batch *boundaryBatch, source sessionstore.InputSource) {
+	notice := sleepInterruptedMessage
+	if source == sessionstore.InputSourceSchedule {
+		notice = "Sleep interrupted — a scheduled task became due."
+	}
+
+	for _, call := range s.PendingExternalCalls() {
+		if batch.pending[call.ID] != "" {
+			batch.commit.ToolResults = append(batch.commit.ToolResults, &transcript.Message{
+				Role: llmwire.RoleTool, ToolCallID: call.ID, ToolName: call.Name, Content: notice,
+			})
+			delete(batch.pending, call.ID)
+		}
+	}
+}
+
+func (s *Session) requestBoundaryCompaction(input *sessionstore.InboxInput, content string) {
+	s.setCompactionFocus(strings.TrimSpace(strings.TrimPrefix(content, compactCommand)))
+	s.setCompactionCommandInput(PendingInput{ID: input.ID, Content: input.RawContent})
+	s.RequestCompaction()
+}
+
+func leadingSlashCommand(content string) string {
+	trimmed := strings.TrimLeftFunc(content, unicode.IsSpace)
+	if trimmed == "" || trimmed[0] != '/' {
+		return ""
+	}
+
+	for i, r := range trimmed {
+		if unicode.IsSpace(r) {
+			return trimmed[:i]
+		}
+	}
+
+	return trimmed
+}
+
+func activationInstruction(toolID, command string) string {
+	return fmt.Sprintf(
+		"\n\n[Host activation: call %s as the only tool in this assistant response to handle %s. No change has occurred until the host emits its receipt.]",
+		toolID,
+		command,
+	)
+}
+
+func acceptBoundaryCallResults(batch *boundaryBatch, inputs []*sessionstore.InboxInput) {
+	for _, input := range inputs {
+		if input.Source != sessionstore.InputSourceCallResult {
+			continue
+		}
+
+		callID, _ := input.Attributes["call_id"].(string)
+		toolID, _ := input.Attributes["tool_id"].(string)
+
+		accept := sessionstore.Accept{
+			InputID: input.ID,
+			State:   sessionstore.InputStateRejected,
+			Reason:  "stale call result",
+			LinkRef: -1,
+		}
+		if batch.pending[callID] == toolID && toolID != "" {
+			batch.commit.ToolResults = append(
+				batch.commit.ToolResults,
+				&transcript.Message{
+					Role:       llmwire.RoleTool,
+					ToolCallID: callID,
+					ToolName:   toolID,
+					Content:    input.RawContent,
+				},
+			)
+			accept.State = sessionstore.InputStateHandled
+			accept.Reason = "call_result"
+			accept.InvalidateCompletion = true
+
+			delete(batch.pending, callID)
+		}
+
+		batch.commit.Accept = append(batch.commit.Accept, accept)
+	}
+}
+
+func (s *Session) acceptBoundarySchedule(batch *boundaryBatch, input *sessionstore.InboxInput) (boundaryFlow, error) {
+	c := &batch.commit
+	accept := sessionstore.Accept{
+		InputID:    input.ID,
+		State:      sessionstore.InputStateAccepted,
+		ModelBound: true,
+		LinkRef:    -1,
+	}
+
+	fresh, _ := input.Attributes["fresh"].(bool)
+	if fresh && batch.accepted {
+		return boundaryStop, nil
+	}
+
+	if fresh {
+		c.State.ResetContext = true
+
+		c.Messages = nil
+		for _, message := range s.openingTurn(input.RawContent) {
+			c.Messages = append(c.Messages, hostUserMessage(message.Content))
+		}
+	} else {
+		callID := fmt.Sprintf("schedule_%d", input.ID)
+
+		calls, err := json.Marshal([]llmwire.ToolCall{{ID: callID, Name: "schedule", Arguments: json.RawMessage("{}")}})
+		if err != nil {
+			return boundaryStop, fmt.Errorf("encode scheduled call: %w", err)
+		}
+
+		c.Messages = append(
+			c.Messages,
+			&transcript.Message{Role: llmwire.RoleAssistant, ToolCalls: calls},
+			&transcript.Message{
+				Role:       llmwire.RoleTool,
+				ToolCallID: callID,
+				ToolName:   "schedule",
+				Content:    input.RawContent,
+			},
+		)
+	}
+
+	accept.LinkRef = len(c.Messages) - 1
+	c.Accept = append(c.Accept, accept)
+
+	deliveryKey := input.DeliveryKey
+	if deliveryKey == "" {
+		deliveryKey = strconv.FormatInt(input.ID, 10)
+	}
+
+	c.Outputs = append(
+		c.Outputs,
+		sessionstore.Output{
+			Type:       sessionstore.OutputMessagePersistent,
+			Content:    "⏰ scheduled\n\n" + input.RawContent,
+			Key:        "schedule:" + deliveryKey + ":announcement",
+			Attributes: map[string]any{"source": "scheduler"},
+			MessageRef: -1,
+		},
+	)
+	batch.accepted = true
+	s.preserveStopped = false
+
+	return boundaryContinue, nil
+}
+
+func (s *Session) acceptBoundaryText(
+	ctx context.Context,
+	r *runState,
+	batch *boundaryBatch,
+	input *sessionstore.InboxInput,
+	command string,
+) (boundaryFlow, error) {
+	prepared, err := s.PrepareUserMessageDetailed(input.RawContent)
+	if err != nil {
+		rejectBoundaryInput(batch, input, err)
+
+		if batch.fresh {
+			r.handledControl = true
+		}
+
+		return boundaryContinue, nil
+	}
+
+	c := &batch.commit
+	content := s.prompt.AppendGitStateDelta(
+		ctx,
+		s.stamper.StampAt(prepared.Content, input.ReceivedAt),
+		s.ms.getMessages(),
+	)
+	accept := sessionstore.Accept{
+		InputID:    input.ID,
+		State:      sessionstore.InputStateAccepted,
+		Content:    content,
+		LinkRef:    -1,
+		ModelBound: true,
+	}
+
+	owner, _ := input.Attributes["manager_id"].(string)
+	if prepared.SkillName != "" && input.Source == sessionstore.InputSourceUser && owner != "" {
+		accept.Receipt = loader.SkillReceipt(prepared.SkillName)
+	}
+
+	if toolID := s.activationIndex[command]; toolID != "" {
+		accept.Content += activationInstruction(toolID, command)
+		c.Activation = &sessionstore.ActivationChange{
+			InputID: input.ID,
+			State:   sessionstore.ActivationPending,
+			ToolID:  toolID,
+			Command: command,
+		}
+	}
+
+	c.Messages = append(c.Messages, hostUserMessage(accept.Content))
+	accept.Content = ""
+	accept.LinkRef = len(c.Messages) - 1
+	c.Accept = append(c.Accept, accept)
+	batch.accepted = true
+
+	if input.Source == sessionstore.InputSourceUser || input.Source == sessionstore.InputSourceAgent {
+		s.preserveStopped = false
+	}
+
+	if owner != "" && input.Source == sessionstore.InputSourceUser {
+		r.directReply = true
+	}
+
+	s.loopDetector.resetWindow()
+
+	if command != "" || c.Activation != nil {
+		return boundaryStop, nil
+	}
+
+	return boundaryContinue, nil
+}
+
+func rejectBoundaryInput(batch *boundaryBatch, input *sessionstore.InboxInput, cause error) {
+	c := &batch.commit
+	c.Accept = append(
+		c.Accept,
+		sessionstore.Accept{
+			InputID: input.ID,
+			State:   sessionstore.InputStateRejected,
+			Reason:  cause.Error(),
+			LinkRef: -1,
+		},
+	)
+	c.Outputs = append(
+		c.Outputs,
+		sessionstore.Output{
+			Type:          sessionstore.OutputMessagePersistent,
+			Content:       "⚠️ " + cause.Error(),
+			Key:           fmt.Sprintf("input:%d:rejected", input.ID),
+			MessageRef:    -1,
+			ReleasesInput: true,
+		},
+	)
 }

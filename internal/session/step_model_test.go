@@ -145,3 +145,78 @@ func TestImageTurns_ReadThroughDriverProjection(t *testing.T) {
 		})
 	}
 }
+
+func TestCallLLMRecordsTheProviderBaseline(t *testing.T) {
+	agent := newTestAgent()
+	agent.llmClient = &loopScriptLLM{responses: []*llmwire.Response{
+		{Text: "done", Usage: &llmwire.MessageUsage{PromptTokens: 5000}},
+	}}
+	setTestMessages(agent, buildMessagesWithTokens(1000))
+
+	err := agent.modelStep(t.Context(), &runState{})
+	require.NoError(t, err)
+
+	base := agent.loadContextBaseline()
+	require.NotNil(t, base)
+	assert.Equal(t, 5000, base.promptTokens)
+	assert.Equal(t, 1, base.messageCount, "the position is the transcript as sent, before the reply landed")
+
+	size, estimated := agent.projectContextSize()
+	assert.False(t, estimated)
+	// The assistant reply ("done") is the tail the measurement did not cover.
+	assert.Equal(t, 5000+estimateTokens(agent.ms.getMessages()[1:]), size)
+}
+
+func TestCallLLMLeavesTheProjectionEstimatedWithoutUsage(t *testing.T) {
+	agent := newTestAgent()
+	agent.llmClient = &loopScriptLLM{responses: []*llmwire.Response{
+		{Text: "done", Usage: &llmwire.MessageUsage{PromptTokens: 0}},
+	}}
+	setTestMessages(agent, buildMessagesWithTokens(1000))
+
+	err := agent.modelStep(t.Context(), &runState{})
+	require.NoError(t, err)
+
+	assert.Nil(t, agent.loadContextBaseline(), "a provider that reports zero has measured nothing")
+
+	_, estimated := agent.projectContextSize()
+	assert.True(t, estimated)
+}
+
+// The second turn of a tool-calling conversation is the one that 400s when the
+// first turn's reasoning payload is dropped, so assert it reaches the client.
+func TestLoopReplaysReasoningPayloadOnTheNextTurn(t *testing.T) {
+	var secondTurn []llmwire.Message
+
+	llmClient := &loopScriptLLM{onCall: func(call int, msgs []llmwire.Message) (*llmwire.Response, error) {
+		if call == 1 {
+			return &llmwire.Response{
+				FinishType:   "tool_calls",
+				ToolCalls:    []llmwire.ToolCall{{ID: "tc_1", Name: "read", Arguments: []byte(`{}`)}},
+				ReasoningRaw: reasoningBlob,
+			}, nil
+		}
+
+		secondTurn = msgs
+
+		return &llmwire.Response{Text: "done"}, nil
+	}}
+
+	agent := newTestAgent(&stubTool{id: "read", result: "content"})
+	agent.llmClient = llmClient
+
+	_, err := runTestLoop(t, agent)
+	require.NoError(t, err)
+
+	var assistant *llmwire.Message
+
+	for i := range secondTurn {
+		if secondTurn[i].Role == llmwire.RoleAssistant {
+			assistant = &secondTurn[i]
+			break
+		}
+	}
+
+	require.NotNil(t, assistant, "the first turn's assistant message must be in the second request")
+	assert.JSONEq(t, string(reasoningBlob), string(assistant.ReasoningRaw))
+}

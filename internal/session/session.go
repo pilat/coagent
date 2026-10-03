@@ -2,8 +2,11 @@ package session
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"slices"
+	"strconv"
+	"strings"
 	"sync"
 
 	"go.uber.org/zap"
@@ -16,6 +19,7 @@ import (
 	"github.com/pilat/coagent/internal/sessionprompt"
 	"github.com/pilat/coagent/internal/sessionstore"
 	"github.com/pilat/coagent/internal/tool"
+	"github.com/pilat/coagent/internal/transcript"
 )
 
 const compactionThreshold = 80000
@@ -102,6 +106,27 @@ type Session struct {
 	modelEpoch   uint64
 }
 
+type modelSwitch struct {
+	client  llm.Client
+	section sessionprompt.ModelSection
+}
+
+// Store is the persistence view required by session.
+type Store interface {
+	Commit(context.Context, sessionstore.Commit) (*sessionstore.CommitResult, error)
+	ListPending(context.Context, int64) ([]*sessionstore.InboxInput, error)
+	PendingActivation(context.Context, int64) (*sessionstore.ToolActivation, error)
+
+	HasBackgroundWakeSource(context.Context, int64) (bool, error)
+	LoadActiveMessages(context.Context, int64) ([]*transcript.Message, error)
+	LoadCompletionCheckState(context.Context, int64) (*sessionstore.CompletionCheckState, error)
+	HasOutstandingResponseRecovery(context.Context, int64) (bool, error)
+	GetChildSessionStats(context.Context, int64) (int, int, error)
+	GetSessionTreeUsage(context.Context, int64) (int, int, float64, error)
+	LookupRead(ctx context.Context, sessionID int64, path string) (sessionstore.FileReadRecord, bool, error)
+	RecordRead(ctx context.Context, sessionID int64, path string, record sessionstore.FileReadRecord) error
+}
+
 // New installs a prepared session and restores its durable transcript.
 func New(ctx context.Context, in Input) (*Session, error) {
 	r := in.Record
@@ -174,6 +199,41 @@ func (s *Session) RequestCompaction() {
 	defer s.ms.mu.Unlock()
 
 	s.pendingCompaction = true
+}
+
+// SwitchModel transfers a prepared client for the next model step.
+func (s *Session) SwitchModel(client llm.Client, modelsSection sessionprompt.ModelSection) {
+	s.modelMu.Lock()
+	if s.modelClosed {
+		s.modelMu.Unlock()
+
+		_ = client.Close()
+
+		return
+	}
+
+	previous := s.pendingModel
+	client.SetImageAuthorizer(s.imageAuthorizer)
+	s.pendingModel = &modelSwitch{client: client, section: modelsSection}
+	s.modelMu.Unlock()
+
+	if previous != nil {
+		_ = previous.client.Close()
+	}
+}
+
+func (s *Session) PrepareUserMessage(message string) (string, error) {
+	prepared, err := s.PrepareUserMessageDetailed(message)
+	return prepared.Content, err
+}
+
+func (s *Session) PrepareUserMessageDetailed(message string) (sessionprompt.PreparedMessage, error) {
+	prepared, err := sessionprompt.PrepareUserMessageDetailed(s.loader, message)
+	if err != nil {
+		return prepared, fmt.Errorf("prepare user message: %w", err)
+	}
+
+	return prepared, nil
 }
 
 func unresolvedToolCalls(messages []llmwire.Message) map[string]string {
@@ -275,4 +335,120 @@ func (s *Session) contextWindow() int {
 
 func (s *Session) seedResumeCompletion(state *sessionstore.CompletionCheckState) {
 	s.resumeCompletion = state
+}
+
+func (s *Session) persistState(ctx context.Context, iteration int, status sessionstore.SessionStatus) error {
+	raw, err := json.Marshal(s.prompt.Todos.List())
+	if err != nil {
+		return fmt.Errorf("persist state: %w", err)
+	}
+
+	data := json.RawMessage(raw)
+	c := s.newCommit()
+	c.State = sessionstore.StatePatch{Iteration: &iteration, Status: &status, TodoItems: &data}
+	_, err = s.commit(ctx, c)
+
+	return err
+}
+
+func (s *Session) applyModelSwitch() {
+	s.modelMu.Lock()
+
+	pending := s.pendingModel
+	if pending == nil {
+		s.modelMu.Unlock()
+		return
+	}
+
+	s.pendingModel = nil
+	old := s.llmClient
+	s.llmClient = pending.client
+	s.model = pending.section.ID
+	s.reasoningLevel = pending.client.GetReasoningLevel()
+	s.baseline = nil
+	s.modelEpoch++
+
+	sessionID := strconv.FormatInt(s.id, 10)
+	if s.id != s.rootID {
+		sessionID = fmt.Sprintf("%d:%d", s.rootID, s.id)
+	}
+
+	s.llmClient.SetSessionID(sessionID)
+	s.prompt.SetModelsSection(pending.section.Text)
+	s.prompt.SetModelSearch(s.registry, pending.section.NativeSearch)
+	s.modelMu.Unlock()
+
+	if err := old.Close(); err != nil {
+		logger.Named("session.model").Warn("old_llm_close_failed", zap.Error(err))
+	}
+
+	s.emit(sessionevent.Notification{Type: "context_changed"})
+}
+
+// Only the loop adopts queued clients, and Close runs after the loop joins.
+// Holding a model lease over IO would delay command handling until Chat returns.
+func (s *Session) chat(
+	ctx context.Context,
+	system string,
+	messages []llmwire.Message,
+	tools []llmwire.ToolSchema,
+	opts ...llmwire.ChatOption,
+) (*llmwire.Response, error) {
+	//nolint:wrapcheck // wrapped at the two operation-level callers
+	return s.currentLLM().Chat(ctx, system, messages, tools, opts...)
+}
+
+// The joined loop cannot use a client after this closes adoption.
+func (s *Session) closeLLM() error {
+	s.modelMu.Lock()
+	defer s.modelMu.Unlock()
+
+	s.modelClosed = true
+	if s.pendingModel != nil {
+		_ = s.pendingModel.client.Close()
+		s.pendingModel = nil
+	}
+
+	if err := s.llmClient.Close(); err != nil {
+		return fmt.Errorf("close LLM client: %w", err)
+	}
+
+	return nil
+}
+
+// currentLLM returns a short-lived snapshot for non-resource operations such as
+// reading ContextWindow. Resource-using calls go through chat/closeLLM instead.
+func (s *Session) currentLLM() llm.Client {
+	s.modelMu.RLock()
+	defer s.modelMu.RUnlock()
+
+	return s.llmClient
+}
+
+func (s *Session) renderSessionHelp() string {
+	lines := []string{
+		"## Session commands",
+		"`/status` — show session status",
+		"`/stop` — stop the current run",
+		"`/clear` — start a fresh session",
+		"`/kill` — close this session",
+		"`/compact [focus]` — compact the context",
+		"`/schedules` — list schedules",
+		"`/budget <request>` — arm, replace, inspect, or clear a one-shot cost/wall-time checkpoint",
+		"`/gwt <name>` — fork into a worktree (Telegram session topics only)",
+	}
+	if s.loader == nil {
+		return strings.Join(lines, "\n")
+	}
+
+	for _, skill := range s.loader.ListUserInvocableSkills() {
+		line := "`/skill " + skill.Name + "`"
+		if skill.Description != "" {
+			line += " — " + skill.Description
+		}
+
+		lines = append(lines, line)
+	}
+
+	return strings.Join(lines, "\n")
 }
