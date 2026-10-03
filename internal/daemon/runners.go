@@ -340,10 +340,12 @@ func (s *svc) startAdmitted(
 		if s.life.closed() {
 			return errDaemonShuttingDown
 		}
+
 		return nil
 	}
 
 	go s.runSession(loopCtx, rs)
+
 	return nil
 }
 

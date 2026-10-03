@@ -444,7 +444,6 @@ func (l *sessionTreeLock) acquire(ctx context.Context) (func(), error) {
 	}
 }
 
-//nolint:wsl_v5 // Resolution and acquisition must remain one keyed-lock operation.
 func (s *svc) lockSessionTree(ctx context.Context, sessionID int64) (func(), error) {
 	record, err := s.store.GetSession(ctx, sessionID)
 	if err != nil {

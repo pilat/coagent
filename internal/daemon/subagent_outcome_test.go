@@ -51,7 +51,7 @@ func TestFinalizeChild_IncompleteWhenNoFinalAnswer(t *testing.T) {
 		return id, err
 	}()
 	require.NoError(t, err)
-	require.NoError(t, h.links.InsertSubagentLink(ctx, subagent.Link{
+	require.NoError(t, seedChildLink(ctx, h.sessStore, subagent.Link{
 		ParentID: parent.ID, ChildID: childID, TaskCallID: "bg",
 	}))
 
@@ -78,7 +78,7 @@ func TestFinalizeChild_IncompleteWhenNoFinalAnswer(t *testing.T) {
 
 	h.startInboxWake()
 
-	h.mgr.finalizeChild(ctx, childID)
+	finalizeTestChild(ctx, t, h.mgr, childID)
 
 	link, err := h.links.GetLink(ctx, childID)
 	require.NoError(t, err)
@@ -162,7 +162,7 @@ func TestCascadeKill_BackgroundDescendant(t *testing.T) {
 	core, logs := observer.New(zap.WarnLevel)
 	killCtx := logger.ToContext(ctx, zap.New(core))
 
-	require.NoError(t, h.mgr.Kill(killCtx, root.ID))
+	require.NoError(t, h.mgr.sendToSession(killCtx, root.ID, "/kill"))
 
 	h.waitUntil("both descendants gone", func() bool {
 		return !h.mgr.HasActiveLoop(child.ChildID) && !h.mgr.HasActiveLoop(grandchild.ChildID)
@@ -225,62 +225,12 @@ func TestCascadeKill_RemovesChildSchedules(t *testing.T) {
 	_, err = h.schedStore.AddSchedule(ctx, child.ChildID, "0 9 * * *", nil, "child cron", false)
 	require.NoError(t, err)
 
-	require.NoError(t, h.mgr.Kill(ctx, root.ID))
+	require.NoError(t, h.mgr.sendToSession(ctx, root.ID, "/kill"))
 	h.waitUntil("child gone", func() bool { return !h.mgr.HasActiveLoop(child.ChildID) })
 
 	remaining, err := h.schedStore.ListSchedules(ctx, child.ChildID)
 	require.NoError(t, err)
 	assert.Empty(t, remaining, "cascade-killed child's schedules are removed")
-}
-
-// TestCascadeKill_CompletedUndeliveredSurvives: a background descendant that
-// already completed (terminal, undelivered) is NOT re-marked killed by the
-// cascade — its stored result/outcome survive.
-func TestCascadeKill_CompletedUndeliveredSurvives(t *testing.T) {
-	h := newSubagentHarnessWith(t, trivialRespond)
-	defer h.shutdown()
-
-	ctx := h.ctx
-
-	parent, err := h.sessStore.CreateSession(ctx, h.projectID, "fake-model", "", nil)
-	require.NoError(t, err)
-
-	childID, err := func() (int64, error) {
-		var id int64
-		err := h.sessStore.WithTx(ctx, func(tx *sql.Tx) error {
-			var err error
-			id, err = sessionstore.CreateSubagentSessionTx(
-				ctx,
-				tx,
-				sessionstore.CreateSubagentSession{
-					ProjectID:      h.projectID,
-					ParentID:       parent.ID,
-					RootID:         parent.ID,
-					AgentType:      "general",
-					Model:          "fake-model",
-					ReasoningLevel: "",
-				},
-			)
-			return err
-		})
-		return id, err
-	}()
-	require.NoError(t, err)
-	require.NoError(t, h.links.InsertSubagentLink(ctx, subagent.Link{
-		ParentID: parent.ID, ChildID: childID, TaskCallID: "bg",
-	}))
-	require.NoError(t, h.links.MarkLinkTerminal(
-		ctx, childID, subagent.StateCompleted, "the result", subagent.OutcomeCompleted,
-	))
-	require.NoError(t, h.sessStore.UpdateSessionStatus(ctx, childID, sessionstore.SessionStatusCompleted))
-
-	h.mgr.cascadeKillChildren(ctx, parent.ID, 0, time.Time{})
-
-	link, err := h.links.GetLink(ctx, childID)
-	require.NoError(t, err)
-	assert.Equal(t, subagent.StateCompleted, link.State, "completed-but-undelivered child not re-marked killed")
-	assert.Equal(t, subagent.OutcomeCompleted, link.Outcome)
-	assert.Equal(t, "the result", link.Result, "its stored result survives the cascade")
 }
 
 func TestCascadeKill_KilledTreeSuppressesTerminalBackgroundCompletion(t *testing.T) {
@@ -310,19 +260,29 @@ func TestCascadeKill_KilledTreeSuppressesTerminalBackgroundCompletion(t *testing
 		return id, err
 	}()
 	require.NoError(t, err)
-	require.NoError(t, h.links.InsertSubagentLink(h.ctx, subagent.Link{
+	require.NoError(t, seedChildLink(h.ctx, h.sessStore, subagent.Link{
 		ParentID: parent.ID, ChildID: childID, TaskCallID: "background",
 	}))
-	require.NoError(t, h.links.MarkLinkTerminal(
-		h.ctx, childID, subagent.StateCompleted, "done", subagent.OutcomeCompleted,
-	))
-	require.NoError(t, h.sessStore.MarkSessionKilled(h.ctx, parent.ID))
+	require.NoError(
+		t,
+		seedTerminalChild(h.ctx, h.sessStore, childID, subagent.StateCompleted, "done", subagent.OutcomeCompleted),
+	)
+	require.NoError(
+		t,
+		h.sessStore.WithTx(
+			h.ctx,
+			func(tx *sql.Tx) error { return sessionstore.MarkSessionKilledTx(h.ctx, tx, parent.ID) },
+		),
+	)
 
-	h.mgr.cascadeKillChildrenForKilledTree(h.ctx, parent.ID, 0, time.Time{})
+	h.mgr.killDescendants(h.ctx, parent.ID, 0)
 
 	link, err := h.links.GetLink(h.ctx, childID)
 	require.NoError(t, err)
 	require.NotNil(t, link)
+	assert.Equal(t, subagent.StateCompleted, link.State)
+	assert.Equal(t, "done", link.Result)
+	assert.Equal(t, subagent.OutcomeCompleted, link.Outcome)
 	assert.Positive(t, link.DeliveredAt)
 	assert.Zero(t, link.DeliveredInputID)
 	assert.Zero(t, link.DeliveredMsgID)
@@ -362,15 +322,15 @@ func TestDrainQueue_SkipsKilledChild(t *testing.T) {
 		return id, err
 	}()
 	require.NoError(t, err)
-	require.NoError(t, h.links.InsertSubagentLink(ctx, subagent.Link{
+	require.NoError(t, seedChildLink(ctx, h.sessStore, subagent.Link{
 		ParentID: parent.ID, ChildID: childID, TaskCallID: "bg",
 	}))
 
 	// Park the child, then kill it before any runner picks it up.
-	h.mgr.enqueueChild(ctx, childID, parent.ID, "/tmp", h.projectID)
-	h.mgr.killSubagent(ctx, childID, time.Time{})
+	h.mgr.runners.wait(waitingRunner{sessionID: childID, parentID: parent.ID, child: true})
+	h.mgr.killSubagent(ctx, childID)
 
-	h.mgr.drainQueue(ctx)
+	h.mgr.drain(ctx)
 
 	assert.False(t, h.mgr.HasActiveLoop(childID), "a killed queued child is never launched")
 	assert.Equal(t, 0, h.queueLen(), "the killed entry is purged from the queue")

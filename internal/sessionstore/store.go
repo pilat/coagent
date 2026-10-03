@@ -503,11 +503,7 @@ func MarkSessionKilledTx(ctx context.Context, tx *sql.Tx, id int64) error {
 		return fmt.Errorf("session %d not found", id)
 	}
 
-	if err := cancelPendingInputTree(ctx, tx, id, parentID == 0, now); err != nil {
-		return err
-	}
-
-	return nil
+	return cancelPendingInputTree(ctx, tx, id, parentID == 0, now)
 }
 
 func (s *Store) UpdateSessionStatus(ctx context.Context, id int64, status SessionStatus) error {

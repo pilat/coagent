@@ -14,7 +14,7 @@ import (
 
 func TestHarnessScenario_LengthAttemptIsDiscardedBeforeToolExecution(t *testing.T) {
 	h := newSubagentHarnessWith(t, lengthRecoveryResponder(t))
-	collector := collectEvents(h.mgr.PubSub().SubscribeAll())
+	collector := collectEvents(h.mgr.bus.SubscribeAll())
 	defer func() {
 		collector.stop()
 		h.shutdown()
@@ -81,7 +81,7 @@ func TestHarnessScenario_RepeatedLengthPublishesCanonicalError(t *testing.T) {
 	h := newSubagentHarnessWith(t, func(_ string, _ []llmwire.Message) *llmwire.Response {
 		return &llmwire.Response{Text: "discarded", FinishType: llmwire.FinishLength}
 	})
-	collector := collectEvents(h.mgr.PubSub().SubscribeAll())
+	collector := collectEvents(h.mgr.bus.SubscribeAll())
 	defer func() {
 		collector.stop()
 		h.shutdown()
@@ -110,7 +110,7 @@ func TestHarnessScenario_UnknownFinishPublishesCanonicalError(t *testing.T) {
 			ProviderFinishReason: "content_filter",
 		}
 	})
-	collector := collectEvents(h.mgr.PubSub().SubscribeAll())
+	collector := collectEvents(h.mgr.bus.SubscribeAll())
 	defer func() {
 		collector.stop()
 		h.shutdown()

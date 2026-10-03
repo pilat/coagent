@@ -50,7 +50,7 @@ func TestSetModelRecordsTheEffortTheNextRunSends(t *testing.T) {
 		"an unnamed level settles on the model's default, and the record keeps that")
 
 	h.startInboxWake()
-	require.NoError(t, h.mgr.SendToSession(h.ctx, id, "second"))
+	require.NoError(t, h.mgr.sendToSession(h.ctx, id, "second"))
 	h.waitUntil("second turn answered", func() bool {
 		return countAssistantReplies(h.parentMessages(id)) == 4
 	})
@@ -134,7 +134,7 @@ func newEffortHarness(t *testing.T, baseURL string) *subagentHarness {
 
 	store := sessionstore.NewStore(db)
 	sessStore := sessionstore.NewStore(db)
-	links := subagent.NewStore(db)
+	links := subagent.NewStore(db, sessStore)
 	schedStore := schedule.NewStore(db, sessStore)
 
 	workDir := t.TempDir()
@@ -160,13 +160,12 @@ func newEffortHarness(t *testing.T, baseURL string) *subagentHarness {
 		factory,
 		sessStore,
 		links,
-		subagent.NewTransactions(db, sessStore),
 		budget.New(sessStore),
 		schedule.NewService(schedStore, sessStore),
 		func() string { return "plain-model" },
 		db,
 	)
-	mgr.loadModelCatalog(cfg.UnifiedConfig.Models)
+	mgr.models = newModels(cfg)
 
 	pid, err := store.GetOrCreateProject(ctx, workDir)
 	require.NoError(t, err)

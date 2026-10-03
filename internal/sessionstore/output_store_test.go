@@ -594,7 +594,10 @@ func TestOutputStore_BootReconciliationEmitsCloseWithoutReplacement(t *testing.T
 	_, _, err = store.ReplaceManagerRoot(ctx, cleared.ID, "project", "/work/project")
 	require.NoError(t, err)
 
-	require.NoError(t, store.KillTerminatingSessions(ctx))
+	for _, id := range []int64{killed.ID, cleared.ID} {
+		_, err = store.MarkSessionKilledWithOutput(ctx, id, 0)
+		require.NoError(t, err)
+	}
 
 	for _, id := range []int64{killed.ID, cleared.ID} {
 		var status string

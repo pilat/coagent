@@ -12,7 +12,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/pilat/coagent/internal/admission"
 	"github.com/pilat/coagent/internal/backgroundprocess"
 	"github.com/pilat/coagent/internal/sessionstore"
 	"github.com/pilat/coagent/internal/subagent"
@@ -21,10 +20,16 @@ import (
 func createBackgroundChild(t *testing.T, mgr *svc, projectID, parentID int64) int64 {
 	t.Helper()
 
-	childID, err := mgr.subagents.Create(context.Background(), subagent.Create{
+	parent, err := mgr.store.GetSession(context.Background(), parentID)
+	require.NoError(t, err)
+	rootID := parent.RootID
+	if rootID == 0 {
+		rootID = parentID
+	}
+	childID, err := mgr.links.Create(context.Background(), subagent.Create{
 		ProjectID:  projectID,
 		ParentID:   parentID,
-		RootID:     parentID,
+		RootID:     rootID,
 		Model:      "fake-model",
 		TaskCallID: "task-follow-up",
 		State:      subagent.StateSpawned,
@@ -44,13 +49,13 @@ func TestFollowUpAcceptedBeforeTerminalBoundaryStaysInSameActivation(t *testing.
 
 	// Keep the accepted child parked so the test can place finalization exactly
 	// after the durable enqueue and before any runner promotes the input.
-	for i := range admission.MaxChildren {
-		require.True(t, mgr.admit.TryAdmit(admission.Child, int64(10_000+i)))
-		defer mgr.admit.Release(admission.Child, int64(10_000+i))
+	for i := range maxChildren {
+		require.True(t, mgr.runners.tryAdmit(true, int64(10_000+i)))
+		defer mgr.runners.release(true, int64(10_000+i))
 	}
 
 	require.NoError(t, mgr.SendToChild(ctx, childID, "one more question"))
-	mgr.finalizeChild(ctx, childID)
+	finalizeTestChild(ctx, t, mgr, childID)
 
 	link, err := mgr.links.GetLink(ctx, childID)
 	require.NoError(t, err)
@@ -70,11 +75,12 @@ func TestTerminalChildDeliversPreviousOutcomeBeforeRearm(t *testing.T) {
 	require.NoError(t, err)
 	childID := createBackgroundChild(t, mgr, projectID, parent.ID)
 
-	require.NoError(t, mgr.links.MarkLinkTerminal(
-		ctx, childID, subagent.StateCompleted, "first outcome", subagent.OutcomeCompleted,
-	))
+	require.NoError(
+		t,
+		seedTerminalChild(ctx, projects, childID, subagent.StateCompleted, "first outcome", subagent.OutcomeCompleted),
+	)
 	require.NoError(t, mgr.store.UpdateSessionStatus(ctx, childID, sessionstore.SessionStatusCompleted))
-	mgr.startInboxWake(t.Context())
+	mgr.startWake()
 
 	require.NoError(t, mgr.SendToChild(ctx, childID, "follow-up after completion"))
 
@@ -108,16 +114,17 @@ func TestProcessInputRearmsCompletedChildAfterPriorOutcomeHandoff(t *testing.T) 
 	require.NoError(t, err)
 	childID := createBackgroundChild(t, mgr, projectID, parent.ID)
 
-	for i := range admission.MaxChildren {
-		require.True(t, mgr.admit.TryAdmit(admission.Child, int64(20_000+i)))
-		defer mgr.admit.Release(admission.Child, int64(20_000+i))
+	for i := range maxChildren {
+		require.True(t, mgr.runners.tryAdmit(true, int64(20_000+i)))
+		defer mgr.runners.release(true, int64(20_000+i))
 	}
 
-	require.NoError(t, mgr.links.MarkLinkTerminal(
-		ctx, childID, subagent.StateCompleted, "first outcome", subagent.OutcomeCompleted,
-	))
+	require.NoError(
+		t,
+		seedTerminalChild(ctx, projects, childID, subagent.StateCompleted, "first outcome", subagent.OutcomeCompleted),
+	)
 	require.NoError(t, mgr.store.UpdateSessionStatus(ctx, childID, sessionstore.SessionStatusCompleted))
-	mgr.startInboxWake(t.Context())
+	mgr.startWake()
 	processInput, err := mgr.store.Enqueue(
 		ctx,
 		sessionstore.Input{
@@ -181,14 +188,15 @@ func assertProcessInputDoesNotRearmAfterStop(t *testing.T, stopChild bool) {
 	require.NoError(t, err)
 	childID := createBackgroundChild(t, mgr, projectID, root.ID)
 
-	require.NoError(t, mgr.links.MarkLinkTerminal(
-		ctx, childID, subagent.StateCompleted, "first outcome", subagent.OutcomeCompleted,
-	))
+	require.NoError(
+		t,
+		seedTerminalChild(ctx, projects, childID, subagent.StateCompleted, "first outcome", subagent.OutcomeCompleted),
+	)
 	require.NoError(t, mgr.store.UpdateSessionStatus(ctx, childID, sessionstore.SessionStatusCompleted))
 	link, err := mgr.links.GetLink(ctx, childID)
 	require.NoError(t, err)
 	require.NotNil(t, link)
-	won, err := mgr.subagents.DeliverBackgroundCompletion(ctx, *link, 1)
+	won, err := mgr.links.DeliverBackgroundCompletion(ctx, *link, 1)
 	require.NoError(t, err)
 	require.True(t, won)
 	_, err = mgr.store.Enqueue(
@@ -231,7 +239,7 @@ func TestStopParksWholeTreeAndExplicitFollowUpResumesOnlyChild(t *testing.T) {
 	parent, err := mgr.store.CreateSession(ctx, projectID, "fake-model", "", nil)
 	require.NoError(t, err)
 
-	childID, err := mgr.subagents.Create(ctx, subagent.Create{
+	childID, err := mgr.links.Create(ctx, subagent.Create{
 		ProjectID:  projectID,
 		ParentID:   parent.ID,
 		RootID:     parent.ID,
@@ -247,7 +255,7 @@ func TestStopParksWholeTreeAndExplicitFollowUpResumesOnlyChild(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	require.NoError(t, mgr.Stop(ctx, parent.ID, 0))
+	require.NoError(t, mgr.sendToSession(ctx, parent.ID, "/stop"))
 
 	for _, id := range []int64{parent.ID, childID} {
 		rec, getErr := mgr.store.GetSession(ctx, id)
@@ -291,7 +299,7 @@ func TestStopParksActiveDescendantBelowCompletedChild(t *testing.T) {
 	require.NoError(t, mgr.store.UpdateSessionStatus(ctx, completedID, sessionstore.SessionStatusCompleted))
 	activeID := createBackgroundChild(t, mgr, projectID, completedID)
 
-	require.NoError(t, mgr.Stop(ctx, root.ID, 0))
+	require.NoError(t, mgr.sendToSession(ctx, root.ID, "/stop"))
 
 	completed, err := mgr.store.GetSession(ctx, completedID)
 	require.NoError(t, err)
@@ -307,13 +315,13 @@ func TestStopDirectChildParksItsOwnLinkWithoutStoppingParent(t *testing.T) {
 	projectID := testProject(t, projects, "/tmp/stop-direct-child")
 	parent, err := mgr.store.CreateSession(ctx, projectID, "fake-model", "", nil)
 	require.NoError(t, err)
-	childID, err := mgr.subagents.Create(ctx, subagent.Create{
+	childID, err := mgr.links.Create(ctx, subagent.Create{
 		ProjectID: projectID, ParentID: parent.ID, RootID: parent.ID,
 		Model: "fake-model", TaskCallID: "background", State: subagent.StateRunning,
 	})
 	require.NoError(t, err)
 
-	require.NoError(t, mgr.Stop(ctx, childID, 0))
+	require.NoError(t, mgr.sendToSession(ctx, childID, "/stop"))
 
 	parentRec, err := mgr.store.GetSession(ctx, parent.ID)
 	require.NoError(t, err)
@@ -333,7 +341,7 @@ func TestStartFinishesInterruptedStopBeforeRecoverySweep(t *testing.T) {
 	projectID := testProject(t, projects, "/tmp/recover-stop")
 	parent, err := mgr.store.CreateSession(ctx, projectID, "fake-model", "", nil)
 	require.NoError(t, err)
-	childID, err := mgr.subagents.Create(ctx, subagent.Create{
+	childID, err := mgr.links.Create(ctx, subagent.Create{
 		ProjectID: projectID, ParentID: parent.ID, RootID: parent.ID,
 		Model: "fake-model", TaskCallID: "background", State: subagent.StateRunning,
 	})
@@ -379,7 +387,7 @@ func TestStopTreeCleanupPreservesBackgroundProcessesForBudgetPark(t *testing.T) 
 	require.NoError(t, err)
 
 	service := backgroundprocess.NewService(mgr.processStore, backgroundprocess.Options{OutputDir: t.TempDir()})
-	mgr.processSvc = service
+	mgr.processes = service
 	process, err := service.Start(ctx, backgroundprocess.Spec{
 		ProjectDir: "project-test", SessionID: root.ID, RootSessionID: root.ID, ToolCallID: "budget-process",
 		Deadline: time.Minute, Advertise: true,

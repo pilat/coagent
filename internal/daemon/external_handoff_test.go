@@ -9,8 +9,10 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/pilat/coagent/internal/config"
 	"github.com/pilat/coagent/internal/llmwire"
 	"github.com/pilat/coagent/internal/migrate"
+	"github.com/pilat/coagent/internal/sessionbuild"
 	"github.com/pilat/coagent/internal/sessionstore"
 	"github.com/pilat/coagent/internal/subagent"
 	"github.com/pilat/coagent/internal/tool"
@@ -19,14 +21,13 @@ import (
 
 type deliveringChildLinks struct {
 	subagent.Store
-	transactions subagent.Transactions
-	link         subagent.Link
-	delivered    bool
+	link      subagent.Link
+	delivered bool
 }
 
 func (s *deliveringChildLinks) ListPendingChildLinks(ctx context.Context, parentID int64) ([]subagent.Link, error) {
 	if parentID == s.link.ParentID && !s.delivered {
-		won, err := s.transactions.DeliverCompletion(ctx, s.link, "child finished during ownership capture")
+		won, err := s.DeliverCompletion(ctx, s.link, "child finished during ownership capture")
 		if err != nil {
 			return nil, fmt.Errorf("deliver ownership handoff: %w", err)
 		}
@@ -54,8 +55,7 @@ func TestPendingExternalCallsRetainsAtomicChildHandoff(t *testing.T) {
 	t.Cleanup(func() { _ = db.Close() })
 	require.NoError(t, migrate.Run(ctx, db, dbPath))
 	sessions := sessionstore.NewStore(db)
-	links := subagent.NewStore(db)
-	transactions := subagent.NewTransactions(db, sessions)
+	links := subagent.NewStore(db, sessions)
 	projectID := testProject(t, sessions, t.TempDir())
 	parent, err := sessions.CreateSession(ctx, projectID, "fake-model", "", nil)
 	require.NoError(t, err)
@@ -66,24 +66,24 @@ func TestPendingExternalCallsRetainsAtomicChildHandoff(t *testing.T) {
 		Messages:  []*transcript.Message{{Role: llmwire.RoleAssistant, ToolCalls: encoded}},
 	})
 	require.NoError(t, err)
-	childID, err := transactions.Create(ctx, subagent.Create{
+	childID, err := links.Create(ctx, subagent.Create{
 		ProjectID: projectID, ParentID: parent.ID, RootID: parent.ID,
 		AgentType: "general", Model: "fake-model", TaskCallID: taskCallID,
 		Blocking: true, Depth: 1, State: subagent.StateSpawned,
 	})
 	require.NoError(t, err)
-	finalized, err := transactions.TryFinalizeActivation(
-		ctx, childID, subagent.StateCompleted, "child finished", subagent.OutcomeCompleted,
-	)
+	finalized, err := links.Finalize(ctx, childID, false)
 	require.NoError(t, err)
-	require.True(t, finalized)
+	require.NotNil(t, finalized)
 	link, err := links.GetLink(ctx, childID)
 	require.NoError(t, err)
 	require.NotNil(t, link)
-	handoff := &deliveringChildLinks{Store: links, transactions: transactions, link: *link}
-	manager := &svc{store: sessions, links: handoff}
+	handoff := &deliveringChildLinks{Store: links, link: *link}
+	manager, _ := newScenarioDaemon(ctx, sessionbuild.BuildInput{
+		Config: &config.Config{WorkDir: t.TempDir()}, Store: sessions,
+	}, sessions, handoff, nil, nil, nil, db)
 
-	owners, err := manager.pendingExternalCallsForSession(ctx, parent.ID)
+	owners, err := manager.callOwners(ctx, parent.ID)
 	require.NoError(t, err)
 	require.True(t, handoff.delivered)
 	require.Equal(t, map[string]string{taskCallID: tool.IDTask}, owners)

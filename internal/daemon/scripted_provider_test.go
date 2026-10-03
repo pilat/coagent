@@ -7,12 +7,17 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"sync"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 
 	"github.com/pilat/coagent/internal/backgroundprocess"
 	"github.com/pilat/coagent/internal/budget"
 	"github.com/pilat/coagent/internal/config"
+	"github.com/pilat/coagent/internal/configapply"
+	"github.com/pilat/coagent/internal/configops"
 	"github.com/pilat/coagent/internal/llm"
 	"github.com/pilat/coagent/internal/llmwire"
 	"github.com/pilat/coagent/internal/mcpstore"
@@ -56,6 +61,9 @@ func scriptedBuildInput(
 	clientFor func(*config.Config) (llm.Client, error),
 ) sessionbuild.BuildInput {
 	t.Helper()
+	if cfg.WorkDir == "" {
+		cfg.WorkDir = t.TempDir()
+	}
 	var mu sync.Mutex
 	clients := make(map[string]llm.Client)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -194,7 +202,6 @@ func newScenarioDaemon(
 	in sessionbuild.BuildInput,
 	store *sessionstore.Store,
 	links subagent.Store,
-	transactions subagent.Transactions,
 	budgets budget.Service,
 	schedules schedule.Service,
 	model func() string,
@@ -205,22 +212,44 @@ func newScenarioDaemon(
 	if model != nil {
 		defaultModel = model()
 	}
-	service, processes := newSvc(
+	if budgets == nil {
+		budgets = budget.New(store)
+	}
+	if schedules == nil {
+		schedules = schedule.NewService(schedule.NewStore(db, store), store)
+	}
+	in.Config.Model = defaultModel
+	mcp := in.MCPStore
+	if mcp == nil {
+		mcp = mcpstore.NewStore(db)
+	}
+	in.MCPStore = mcp
+	applier := configapply.New(
+		configops.New(filepath.Join(in.Config.WorkDir, "config.yaml"), filepath.Join(in.Config.WorkDir, "secrets")),
+		store,
+	)
+	service := New(
 		ctx,
 		in,
 		store,
 		links,
-		transactions,
 		budgets,
 		backgroundprocess.NewStore(db, store),
 		progressruntime.New(store, bus),
 		bus,
 		schedules,
-		defaultModel,
-	)
-	service.loadModelCatalog(in.Config.UnifiedConfig.Models)
-	service.buildInput.ProcessService = processes
-	return service, processes
+		in.Config,
+		mcp,
+		applier,
+	).(*svc)
+	return service, service.processes
+}
+
+func lifecycleInput(ctx context.Context, t *testing.T, s *svc, id int64, command string) *sessionstore.InboxInput {
+	t.Helper()
+	input, err := s.enqueueUserSessionInput(ctx, id, command)
+	require.NoError(t, err)
+	return input
 }
 
 func enqueueScheduledInput(ctx context.Context, store Store, id int64, key, content string, fresh bool) (bool, error) {

@@ -14,6 +14,7 @@ import (
 	"github.com/pilat/coagent/internal/llm"
 	"github.com/pilat/coagent/internal/loader"
 	"github.com/pilat/coagent/internal/managercontrol"
+	"github.com/pilat/coagent/internal/managerdiscovery"
 	"github.com/pilat/coagent/internal/migrate"
 	"github.com/pilat/coagent/internal/schedule"
 	"github.com/pilat/coagent/internal/sessionevent"
@@ -32,7 +33,15 @@ func newTestController(
 		outputs, _ = svc.store.(*sessionstore.Store)
 	}
 
-	return managercontrol.New(svc, svc, outputs, cfg, cache)
+	return managercontrol.New(
+		svc,
+		outputs,
+		managerdiscovery.New(outputs, cfg, cache),
+		svc.progress,
+		svc.bus,
+		cfg,
+		cache,
+	)
 }
 
 func TestControllerManagerSubscriptionIsExactAcrossRestart(t *testing.T) {
@@ -66,8 +75,7 @@ func TestControllerManagerSubscriptionIsExactAcrossRestart(t *testing.T) {
 			func(*config.Config) (llm.Client, error) { return &scriptedLLM{respond: trivialRespond}, nil },
 		),
 		secondSessions,
-		subagent.NewStore(secondDB),
-		subagent.NewTransactions(secondDB, secondSessions),
+		subagent.NewStore(secondDB, secondSessions),
 		nil,
 		nil,
 		nil,
@@ -93,50 +101,4 @@ func TestControllerManagerSubscriptionIsExactAcrossRestart(t *testing.T) {
 
 		requireNoManagerNotification(t, subscription)
 	}
-}
-
-func TestListModelsMapsEnrichedEntries(t *testing.T) {
-	cfg := &config.Config{UnifiedConfig: &config.UnifiedConfig{
-		Models: []config.ModelEntry{
-			{
-				ID:            "claude-opus-5",
-				Name:          "Claude Opus 5",
-				DisplayName:   "anthropic/Claude Opus 5",
-				Pricing:       &config.ModelPricing{InputPrice: 5, OutputPrice: 25},
-				Reasoning:     &config.ReasoningSpec{Supported: true, NativeEffort: true},
-				EffortLevels:  []string{"low", "medium", "high", "max"},
-				DefaultEffort: "medium",
-			},
-			{ID: "local/plain", Name: "Plain", DisplayName: "local/Plain"},
-		},
-	}}
-
-	controller := newTestController(nil, cfg, nil, nil).ForManager("test")
-
-	result, err := controller.ListModels(context.Background())
-	require.NoError(t, err)
-	require.Len(t, result.Models, 2)
-	assert.Equal(t, "claude-opus-5", result.DefaultID)
-
-	opus := result.Models[0]
-	assert.Equal(t, "Claude Opus 5", opus.Name)
-	assert.Equal(t, "anthropic/Claude Opus 5", opus.DisplayName)
-	assert.InDelta(t, 5.0, opus.InputPrice, 1e-9)
-	assert.InDelta(t, 25.0, opus.OutputPrice, 1e-9)
-	assert.Equal(t, []string{"low", "medium", "high", "max"}, opus.EffortLevels)
-	assert.Equal(t, "medium", opus.DefaultEffort)
-
-	plain := result.Models[1]
-	assert.Zero(t, plain.InputPrice)
-	assert.Zero(t, plain.OutputPrice)
-	assert.Empty(t, plain.EffortLevels, "a model with no catalog effort levels must not offer the step")
-	assert.Empty(t, plain.DefaultEffort)
-
-	// The reasoning fact alone is not the control: enrichment decides which levels
-	// a driver can actually deliver, and it left this one with none.
-	cfg.UnifiedConfig.Models[1].Reasoning = &config.ReasoningSpec{Supported: true}
-
-	result, err = controller.ListModels(context.Background())
-	require.NoError(t, err)
-	assert.Empty(t, result.Models[1].EffortLevels)
 }

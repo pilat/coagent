@@ -32,7 +32,7 @@ func TestHarnessScenario_SkillSurvivesTwoCompactionsExactlyOnce(t *testing.T) {
 	h, rec := newSkillHarness(t, map[string]string{
 		skillName: skillDoc(skillName, "The playbook", "Follow these steps for $ARGUMENTS."),
 	}, skillCompactRespond)
-	collector := collectEvents(h.mgr.PubSub().SubscribeAll())
+	collector := collectEvents(h.mgr.bus.SubscribeAll())
 
 	defer func() {
 		collector.stop()
@@ -45,7 +45,7 @@ func TestHarnessScenario_SkillSurvivesTwoCompactionsExactlyOnce(t *testing.T) {
 	h.mgr.waitIdle(sessionID)
 
 	h.startInboxWake()
-	require.NoError(t, h.mgr.SendToSession(h.ctx, sessionID, "/skill "+skillName+" the release"))
+	require.NoError(t, h.mgr.sendToSession(h.ctx, sessionID, "/skill "+skillName+" the release"))
 	h.waitUntil("skill attached", func() bool {
 		return countMessagesWithSkill(h.parentMessages(sessionID), skillName) == 1
 	})
@@ -53,7 +53,7 @@ func TestHarnessScenario_SkillSurvivesTwoCompactionsExactlyOnce(t *testing.T) {
 
 	compactOnce := func(round int) {
 		h.startInboxWake()
-		require.NoError(t, h.mgr.SendToSession(h.ctx, sessionID, "/compact"))
+		require.NoError(t, h.mgr.sendToSession(h.ctx, sessionID, "/compact"))
 		collector.waitFor(t, "compaction reported", func(e []controllerapi.SessionNotification) bool {
 			return countPublishedMessage(e, sessionID, noticeCompacted) == round
 		})
@@ -69,7 +69,7 @@ func TestHarnessScenario_SkillSurvivesTwoCompactionsExactlyOnce(t *testing.T) {
 	// New work after the reattachment, so the second compaction has something to
 	// summarize and must decide what to do with the envelope it wrote itself.
 	h.startInboxWake()
-	require.NoError(t, h.mgr.SendToSession(h.ctx, sessionID, "keep going"))
+	require.NoError(t, h.mgr.sendToSession(h.ctx, sessionID, "keep going"))
 	h.mgr.waitIdle(sessionID)
 
 	compactOnce(2)
@@ -91,7 +91,7 @@ func TestHarnessScenario_SkillSurvivesTwoCompactionsExactlyOnce(t *testing.T) {
 
 	// The reattachment is not decoration: the model gets it on the next turn.
 	h.startInboxWake()
-	require.NoError(t, h.mgr.SendToSession(h.ctx, sessionID, "what next?"))
+	require.NoError(t, h.mgr.sendToSession(h.ctx, sessionID, "what next?"))
 	h.mgr.waitIdle(sessionID)
 
 	calls := rec.snapshot()

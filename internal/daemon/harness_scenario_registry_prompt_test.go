@@ -76,7 +76,6 @@ type registryPromptDeps struct {
 	store        *sessionstore.Store
 	sessionStore *sessionstore.Store
 	links        subagent.Store
-	subagents    subagent.Transactions
 	schedules    schedule.Store
 	mcpRegistry  mcpstore.Store
 }
@@ -136,8 +135,8 @@ func newRegistryPromptDeps(t *testing.T) registryPromptDeps {
 		sessionStore: sessions,
 		links: subagent.NewStore(
 			db,
+			sessions,
 		),
-		subagents:   subagent.NewTransactions(db, sessions),
 		schedules:   schedule.NewStore(db, sessions),
 		mcpRegistry: mcpstore.NewStore(db),
 	}
@@ -194,7 +193,6 @@ func newRegistryPromptManager(
 		factory,
 		deps.sessionStore,
 		deps.links,
-		deps.subagents,
 		budget.New(deps.sessionStore),
 		schedule.NewService(deps.schedules, deps.sessionStore),
 		func() string { return "fake-model" },

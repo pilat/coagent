@@ -74,7 +74,7 @@ func TestScenario_BlockingTaskOrphanedByARestartIsClosedOnce(t *testing.T) {
 	assert.Contains(t, lastToolResultContent(recovered, tool.IDTask), "restarted")
 
 	second.startInboxWake()
-	require.NoError(t, second.mgr.SendToSession(second.ctx, sessionID, "any progress?"))
+	require.NoError(t, second.mgr.sendToSession(second.ctx, sessionID, "any progress?"))
 	second.waitUntil("follow-up consumed", func() bool {
 		return hasUserContaining(second.parentMessages(sessionID), "any progress?") &&
 			!second.mgr.HasActiveLoop(sessionID)
@@ -167,7 +167,7 @@ func TestScenario_MessageQueuedBehindAnOrphanedTaskRunsAfterRecovery(t *testing.
 	})
 
 	first.startInboxWake()
-	require.NoError(t, first.mgr.SendToSession(first.ctx, sessionID, "any progress?"))
+	require.NoError(t, first.mgr.sendToSession(first.ctx, sessionID, "any progress?"))
 	first.waitUntil("the message waits behind the task", func() bool {
 		_, pendErr := first.sessStore.PeekPending(first.ctx, sessionID)
 

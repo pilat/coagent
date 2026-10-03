@@ -42,16 +42,9 @@ func TestUnresolvedStoredExternalCalls(t *testing.T) {
 			},
 		},
 		{
-			name: "an in-loop tool is not external, however unresolved",
+			name: "an unresolved in-loop tool is pending",
 			msgs: []*transcript.Message{storedAssistant(`[{"id":"c1","name":"bash"}]`)},
-		},
-		{
-			name: "a repeated call id is reported once",
-			msgs: []*transcript.Message{
-				storedAssistant(`[{"id":"c1","name":"sleep"}]`),
-				storedAssistant(`[{"id":"c1","name":"sleep"}]`),
-			},
-			want: []session.PendingToolCall{{ID: "c1", Name: tool.IDSleep}},
+			want: []session.PendingToolCall{{ID: "c1", Name: "bash"}},
 		},
 		{
 			name: "a call with no id cannot be answered and is skipped",
@@ -61,17 +54,41 @@ func TestUnresolvedStoredExternalCalls(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := unresolvedStoredExternalCalls(tt.msgs)
+			got, err := session.UnresolvedStoredCalls(tt.msgs)
 			require.NoError(t, err)
-			assert.Equal(t, tt.want, got)
+			if len(tt.want) == 0 {
+				assert.Empty(t, got)
+			} else {
+				assert.Equal(t, tt.want, got)
+			}
 		})
 	}
+}
+
+func TestSettleUnresolvedCallsDeduplicatesRepeatedCallID(t *testing.T) {
+	mgr, _, sessions := newTestManager(t)
+	ctx := t.Context()
+	projectID := testProject(t, sessions, t.TempDir())
+	record, err := sessions.CreateSession(ctx, projectID, "fake-model", "", nil)
+	require.NoError(t, err)
+	_, err = sessions.Commit(ctx, sessionstore.Commit{SessionID: record.ID, Messages: []*transcript.Message{
+		storedAssistant(`[{"id":"c1","name":"sleep"}]`),
+		storedAssistant(`[{"id":"c1","name":"sleep"}]`),
+	}})
+	require.NoError(t, err)
+	require.NoError(t, mgr.settleUnresolvedCalls(ctx))
+	pending, err := sessions.ListPending(ctx, record.ID)
+	require.NoError(t, err)
+	require.Len(t, pending, 1)
+	assert.Equal(t, sessionstore.InputSourceCallResult, pending[0].Source)
+	assert.Equal(t, "c1", pending[0].Attributes["call_id"])
+	assert.Equal(t, tool.IDSleep, pending[0].Attributes["tool_id"])
 }
 
 // A transcript row nobody can decode must fail the session's sweep, not be read
 // as "nothing is pending here".
 func TestUnresolvedStoredExternalCalls_UndecodableRow(t *testing.T) {
-	_, err := unresolvedStoredExternalCalls([]*transcript.Message{storedAssistant(`{`)})
+	_, err := session.UnresolvedStoredCalls([]*transcript.Message{storedAssistant(`{`)})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "decode tool calls")
 }

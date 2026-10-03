@@ -193,7 +193,7 @@ func TestScenario_MCPAddReachesTheNextRunOnly(t *testing.T) {
 	assert.Equal(t, 0, fake.count(t, "call"), "a mid-run registration executes nothing")
 
 	h.startInboxWake()
-	require.NoError(t, h.mgr.SendToSession(h.ctx, sessionID, "USE_IT now"))
+	require.NoError(t, h.mgr.sendToSession(h.ctx, sessionID, "USE_IT now"))
 	h.waitUntil("next run uses the server", func() bool {
 		return lastAssistantTextDTO(h.parentMessages(sessionID)) == "used it"
 	})
@@ -244,7 +244,7 @@ func TestScenario_ProjectMCPServerOverridesTheGlobalOfTheSameName(t *testing.T) 
 	h.mgr.waitIdle(sessionID)
 
 	h.startInboxWake()
-	require.NoError(t, h.mgr.SendToSession(h.ctx, sessionID, "USE_IT now"))
+	require.NoError(t, h.mgr.sendToSession(h.ctx, sessionID, "USE_IT now"))
 	h.waitUntil("next run uses the server", func() bool {
 		return lastAssistantTextDTO(h.parentMessages(sessionID)) == "used it"
 	})

@@ -119,9 +119,9 @@ func TestResolveChildEffort(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			s := &svc{modelEntries: tt.entries}
+			s := &svc{models: models{entries: tt.entries}}
 
-			got, err := s.resolveChildEffort(tt.model, tt.requested, tt.inherited)
+			got, err := s.models.effort(tt.model, tt.requested, tt.inherited)
 			if tt.wantErr != "" {
 				require.ErrorContains(t, err, tt.wantErr)
 				return
@@ -198,7 +198,7 @@ func newSpawnEffortHarness(t *testing.T, baseURL string) *subagentHarness {
 
 	store := sessionstore.NewStore(db)
 	sessStore := sessionstore.NewStore(db)
-	links := subagent.NewStore(db)
+	links := subagent.NewStore(db, sessStore)
 	schedStore := schedule.NewStore(db, sessStore)
 
 	workDir := t.TempDir()
@@ -219,13 +219,12 @@ func newSpawnEffortHarness(t *testing.T, baseURL string) *subagentHarness {
 		factory,
 		sessStore,
 		links,
-		subagent.NewTransactions(db, sessStore),
 		budget.New(sessStore),
 		schedule.NewService(schedStore, sessStore),
 		func() string { return "parent-model" },
 		db,
 	)
-	mgr.loadModelCatalog(cfg.UnifiedConfig.Models)
+	mgr.models = newModels(cfg)
 
 	pid, err := store.GetOrCreateProject(ctx, workDir)
 	require.NoError(t, err)

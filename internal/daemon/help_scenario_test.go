@@ -28,7 +28,7 @@ func TestHarnessScenario_HelpIncludesGWT(t *testing.T) {
 
 		return &llmwire.Response{Text: "session ready"}
 	})
-	collector := collectEvents(h.mgr.PubSub().SubscribeAll())
+	collector := collectEvents(h.mgr.bus.SubscribeAll())
 	defer func() {
 		collector.stop()
 		h.shutdown()
@@ -44,7 +44,7 @@ func TestHarnessScenario_HelpIncludesGWT(t *testing.T) {
 	h.mgr.waitIdle(sessionID)
 
 	h.startInboxWake()
-	require.NoError(t, h.mgr.SendToSession(h.ctx, sessionID, "/help"))
+	require.NoError(t, h.mgr.sendToSession(h.ctx, sessionID, "/help"))
 	waitForVisibleMessage(t, collector, sessionID, helpWithGWT)
 
 	controller := newChainController(t, h)

@@ -171,8 +171,12 @@ func TestService_CancelAllJoinsEveryHandleAfterIntentFailure(t *testing.T) {
 	cancelled, err := service.CancelAll(ctx, IntentDaemonShutdown)
 	require.ErrorContains(t, err, "injected intent failure")
 	assert.Equal(t, 1, cancelled)
-	assert.Zero(t, service.liveCount(2))
-	assert.Zero(t, service.liveCount(3))
+	assert.Nil(t, service.trackedCancel(first.ID))
+	assert.Nil(t, service.trackedCancel(second.ID))
+	service.mu.Lock()
+	assert.Zero(t, service.live[2])
+	assert.Zero(t, service.live[3])
+	service.mu.Unlock()
 	_ = waitState(t, base, first.ID, StateInterrupted, 5*time.Second)
 	assert.Equal(t, StateInterrupted, waitState(
 		t, base, second.ID, StateInterrupted, 5*time.Second,
@@ -241,7 +245,10 @@ func TestService_FinalizationExcludesLateFallbackIntent(t *testing.T) {
 	require.ErrorContains(t, <-done, "injected intent failure")
 	final := waitState(t, base, process.ID, StateCompleted, 5*time.Second)
 	assert.Equal(t, IntentNone, final.HostIntent)
-	assert.Zero(t, service.liveCount(2))
+	assert.Nil(t, service.trackedCancel(process.ID))
+	service.mu.Lock()
+	assert.Zero(t, service.live[2])
+	service.mu.Unlock()
 }
 
 func TestService_CancelAllListFailureStillInterruptsEveryHandle(t *testing.T) {
@@ -260,8 +267,12 @@ func TestService_CancelAllListFailureStillInterruptsEveryHandle(t *testing.T) {
 		final := waitState(t, base, process.ID, StateInterrupted, 5*time.Second)
 		assert.Equal(t, IntentDaemonShutdown, final.HostIntent)
 	}
-	assert.Zero(t, service.liveCount(2))
-	assert.Zero(t, service.liveCount(3))
+	assert.Nil(t, service.trackedCancel(first.ID))
+	assert.Nil(t, service.trackedCancel(second.ID))
+	service.mu.Lock()
+	assert.Zero(t, service.live[2])
+	assert.Zero(t, service.live[3])
+	service.mu.Unlock()
 }
 
 func TestService_CancelProcessReadFailurePreservesIntent(t *testing.T) {

@@ -123,7 +123,7 @@ func TestHarnessScenario_ActiveProcessPromptAndSleepGuard(t *testing.T) {
 	}
 
 	h := newSubagentHarnessWith(t, respond)
-	collector := collectEvents(h.mgr.PubSub().SubscribeAll())
+	collector := collectEvents(h.mgr.bus.SubscribeAll())
 	defer func() {
 		collector.stop()
 		h.shutdown()
@@ -146,7 +146,7 @@ func TestHarnessScenario_ActiveProcessPromptAndSleepGuard(t *testing.T) {
 	})
 
 	h.startInboxWake()
-	require.NoError(t, h.mgr.SendToSession(h.ctx, root.ID, "wait for the process"))
+	require.NoError(t, h.mgr.sendToSession(h.ctx, root.ID, "wait for the process"))
 	waitForVisibleMessage(t, collector, root.ID, "background process polling rejected")
 	_, _, err = h.mgr.processStore.FinalizeWithIntent(
 		context.Background(), "bgp_prompt_guard", backgroundprocess.IntentSessionKilled, 0,

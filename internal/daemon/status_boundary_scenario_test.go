@@ -64,7 +64,7 @@ func TestHarnessScenario_StatusMidActivationDoesNotStrandJustExecutedToolResults
 	}
 
 	h := newSubagentHarnessWith(t, respond)
-	collector := collectEvents(h.mgr.PubSub().SubscribeAll())
+	collector := collectEvents(h.mgr.bus.SubscribeAll())
 
 	released := false
 
@@ -88,7 +88,7 @@ func TestHarnessScenario_StatusMidActivationDoesNotStrandJustExecutedToolResults
 	}
 
 	h.startInboxWake()
-	require.NoError(t, h.mgr.SendToSession(h.ctx, sessionID, "/status"))
+	require.NoError(t, h.mgr.sendToSession(h.ctx, sessionID, "/status"))
 
 	collector.waitFor(
 		t,
@@ -161,7 +161,7 @@ func TestHarnessScenario_CompactMidActivationStillAnswersTheInterruptedWork(t *t
 	}
 
 	h := newSubagentHarnessWith(t, respond)
-	collector := collectEvents(h.mgr.PubSub().SubscribeAll())
+	collector := collectEvents(h.mgr.bus.SubscribeAll())
 
 	released := false
 
@@ -185,7 +185,7 @@ func TestHarnessScenario_CompactMidActivationStillAnswersTheInterruptedWork(t *t
 	}
 
 	h.startInboxWake()
-	require.NoError(t, h.mgr.SendToSession(h.ctx, sessionID, "/compact"))
+	require.NoError(t, h.mgr.sendToSession(h.ctx, sessionID, "/compact"))
 
 	close(release)
 
@@ -211,7 +211,7 @@ func TestHarnessScenario_CompactMidActivationStillAnswersTheInterruptedWork(t *t
 func TestHarnessScenario_StatusOnAFreshSessionCostsNoModelTurn(t *testing.T) {
 	rec := &skillRecorder{}
 	h := newSubagentHarnessWith(t, rec.wrap(plainRespond))
-	collector := collectEvents(h.mgr.PubSub().SubscribeAll())
+	collector := collectEvents(h.mgr.bus.SubscribeAll())
 
 	defer func() {
 		collector.stop()
@@ -238,7 +238,7 @@ func TestHarnessScenario_StatusOnAFreshSessionCostsNoModelTurn(t *testing.T) {
 func TestHarnessScenario_StatusIsAnsweredWhileABlockingChildIsOut(t *testing.T) {
 	release := make(chan struct{})
 	h := newSubagentHarnessWith(t, blockingCompactRespond(release))
-	collector := collectEvents(h.mgr.PubSub().SubscribeAll())
+	collector := collectEvents(h.mgr.bus.SubscribeAll())
 
 	released := false
 
@@ -260,7 +260,7 @@ func TestHarnessScenario_StatusIsAnsweredWhileABlockingChildIsOut(t *testing.T) 
 	h.waitUntil("parent suspended", func() bool { return !h.mgr.HasActiveLoop(parentID) })
 
 	h.startInboxWake()
-	require.NoError(t, h.mgr.SendToSession(h.ctx, parentID, "/status"))
+	require.NoError(t, h.mgr.sendToSession(h.ctx, parentID, "/status"))
 	collector.waitFor(t, "status answered while the child is out", func(e []controllerapi.SessionNotification) bool {
 		return len(statusReports(e, parentID)) == 1
 	})
@@ -293,7 +293,7 @@ func TestHarnessScenario_StatusIsAnsweredWhileABlockingChildIsOut(t *testing.T) 
 // priority text, and the legend after one blank line.
 func TestHarnessScenario_StatusFullTodoListOrderingAndIcons(t *testing.T) {
 	h := newSubagentHarnessWith(t, trivialRespond)
-	collector := collectEvents(h.mgr.PubSub().SubscribeAll())
+	collector := collectEvents(h.mgr.bus.SubscribeAll())
 	defer func() {
 		collector.stop()
 		h.shutdown()
@@ -324,7 +324,7 @@ func TestHarnessScenario_StatusFullTodoListOrderingAndIcons(t *testing.T) {
 	require.NoError(t, err)
 
 	h.startInboxWake()
-	require.NoError(t, h.mgr.SendToSession(h.ctx, root, "/status"))
+	require.NoError(t, h.mgr.sendToSession(h.ctx, root, "/status"))
 	collector.waitFor(t, "full /status TODO list", func(e []controllerapi.SessionNotification) bool {
 		return len(statusReports(e, root)) > 0
 	})

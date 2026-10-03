@@ -143,7 +143,7 @@ func stageApplyAndStop(t *testing.T, dbPath, configDir string) int64 {
 	first.mgr.waitIdle(sessionID)
 
 	first.startInboxWake()
-	require.NoError(t, first.mgr.SendToSession(first.ctx, sessionID, configapply.ConfigEditCommand))
+	require.NoError(t, first.mgr.sendToSession(first.ctx, sessionID, configapply.ConfigEditCommand))
 
 	first.waitForRestart(t)
 	first.waitUntil("session suspended on the config call", func() bool {

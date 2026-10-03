@@ -80,8 +80,8 @@ func newStoppedRootScheduleHarness(
 	})
 	require.NoError(t, err)
 	h.mgr.waitIdle(rootID)
-	require.NoError(t, h.mgr.Stop(t.Context(), rootID, 0))
-	collector := collectEvents(h.mgr.PubSub().SubscribeManager("telegram-main"))
+	require.NoError(t, h.mgr.sendToSession(t.Context(), rootID, "/stop"))
+	collector := collectEvents(h.mgr.bus.SubscribeManager("telegram-main"))
 	t.Cleanup(collector.stop)
 
 	return h, rootID, collector
@@ -130,7 +130,7 @@ func runDueStoppedRootSchedule(
 	entry, err := h.schedStore.AddSchedule(t.Context(), rootID, "", &due, tc.prompt, tc.fresh)
 	require.NoError(t, err)
 
-	observer := newScheduleRunningObserver(t, h.mgr.PubSub())
+	observer := newScheduleRunningObserver(t, h.mgr.bus)
 	sender := &orderedScheduleSender{SessionSender: h.mgr, running: observer.running, done: observer.done}
 	executor := schedule.NewExecutor(h.schedStore, sender)
 	executor.Start(t.Context())
@@ -181,7 +181,7 @@ func assertStoppedRootScheduleDuplicate(
 	episodeStartedAt time.Time,
 ) {
 	t.Helper()
-	require.NoError(t, h.mgr.Stop(t.Context(), rootID, 0))
+	require.NoError(t, h.mgr.sendToSession(t.Context(), rootID, "/stop"))
 	applied, err := deliverStoppedRootSchedule(t, h.mgr, rootID, deliveryID, tc)
 	require.NoError(t, err)
 	assert.False(t, applied, "an acknowledged retry must not create another turn")

@@ -60,7 +60,7 @@ func TestHarnessScenario_ForegroundChildHasNoLifetimeLimit(t *testing.T) {
 	}
 
 	h := newSubagentHarnessWith(t, respond)
-	collector := collectEvents(h.mgr.PubSub().SubscribeAll())
+	collector := collectEvents(h.mgr.bus.SubscribeAll())
 	released := false
 	defer func() {
 		if !released {
@@ -209,7 +209,7 @@ func TestScenario_RunnerAddsNoChildLifetimeDeadline(t *testing.T) {
 
 	// The only interrupt path is explicit stop: it must cancel the very context
 	// the child's client holds.
-	require.NoError(t, h.mgr.Stop(h.ctx, link.ChildID, 0))
+	require.NoError(t, h.mgr.sendToSession(h.ctx, link.ChildID, "/stop"))
 	h.waitUntil("stop cancels the child context", childClient.sawCancellation)
 	assert.Equal(t, subagent.StateStopped, func() subagent.State {
 		l, err := h.links.GetLink(h.ctx, link.ChildID)

@@ -10,36 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/pilat/coagent/internal/controllerapi"
-	"github.com/pilat/coagent/internal/sessionstore"
 )
-
-type hiddenDirBackend struct {
-	hidden []string
-}
-
-func (b *hiddenDirBackend) GetSession(context.Context, int64) (*sessionstore.SessionRecord, error) {
-	return nil, nil
-}
-
-func (b *hiddenDirBackend) GetOrCreateProject(context.Context, string) (int64, error) {
-	return 0, nil
-}
-
-func (b *hiddenDirBackend) GetOrCreateHiddenProject(context.Context, string) (int64, error) {
-	return 0, nil
-}
-
-func (b *hiddenDirBackend) GetProjectWorkDir(context.Context, int64) (string, error) {
-	return "", nil
-}
-
-func (b *hiddenDirBackend) ListHiddenProjectDirs(context.Context) ([]string, error) {
-	return b.hidden, nil
-}
-
-func (b *hiddenDirBackend) ListRecentProjects(context.Context, string) ([]controllerapi.RecentProjectInfo, error) {
-	return nil, nil
-}
 
 // Only the directory backed by a hidden project row is omitted; an unrelated
 // same-named directory elsewhere stays navigable.
@@ -53,7 +24,10 @@ func TestListDir_OmitsHiddenProjectDirByPath(t *testing.T) {
 		require.NoError(t, os.MkdirAll(dir, 0o755))
 	}
 
-	svc := &service{backend: &hiddenDirBackend{hidden: []string{hidden}}}
+	store, _ := newProjectTestManager(t)
+	_, err := store.GetOrCreateHiddenProject(t.Context(), hidden)
+	require.NoError(t, err)
+	svc := &service{backend: store}
 
 	result, err := svc.ListDir(context.Background(), controllerapi.FsListDirData{
 		Path: filepath.Join(root, "projects"),

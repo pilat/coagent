@@ -102,7 +102,7 @@ func TestHarnessScenario_UntrustedToolOutputCarriesWrapperAndGuidance(t *testing
 	assert.Equal(t, content, requestContent)
 
 	h.startInboxWake()
-	require.NoError(t, h.mgr.SendToSession(h.ctx, parentID, "continue the probe"))
+	require.NoError(t, h.mgr.sendToSession(h.ctx, parentID, "continue the probe"))
 	require.Eventually(t, func() bool {
 		return hasUserContaining(requests.lastMessages(t), "continue the probe")
 	}, 10*time.Second, 20*time.Millisecond, "the next activation must reach the model")

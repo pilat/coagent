@@ -66,7 +66,7 @@ func TestHarnessScenario_DynamicRegistryPromptMatchesEachActivation(t *testing.T
 	assertInitialRegistryProjection(t, h, schemas, prompts, parentID, link.ChildID)
 	assert.Contains(t, lastToolResultContent(h.parentMessages(parentID), "mcp__fake__ping"), "unknown tool")
 	h.startInboxWake()
-	require.NoError(t, h.mgr.SendToSession(h.ctx, parentID, registryUseMarker))
+	require.NoError(t, h.mgr.sendToSession(h.ctx, parentID, registryUseMarker))
 	h.mgr.waitIdle(parentID)
 
 	assertNextRegistryProjection(t, h, schemas, prompts, parentID)

@@ -78,7 +78,7 @@ func TestScenario_DeferredCompactAnnouncesItselfOncePerEpisode(t *testing.T) {
 	release := make(chan struct{})
 
 	h := newSubagentHarnessWith(t, blockingCompactRespond(release))
-	collector := collectEvents(h.mgr.PubSub().SubscribeAll())
+	collector := collectEvents(h.mgr.bus.SubscribeAll())
 
 	closed := false
 
@@ -101,7 +101,7 @@ func TestScenario_DeferredCompactAnnouncesItselfOncePerEpisode(t *testing.T) {
 	h.waitUntil("parent suspended", func() bool { return !h.mgr.HasActiveLoop(parentID) })
 
 	h.startInboxWake()
-	require.NoError(t, h.mgr.SendToSession(h.ctx, parentID, "/compact"))
+	require.NoError(t, h.mgr.sendToSession(h.ctx, parentID, "/compact"))
 
 	collector.waitFor(
 		t,
@@ -116,7 +116,7 @@ func TestScenario_DeferredCompactAnnouncesItselfOncePerEpisode(t *testing.T) {
 	// the session from durable state — the episode has not changed.
 	for _, msg := range []string{"any progress?", "still there?"} {
 		h.startInboxWake()
-		require.NoError(t, h.mgr.SendToSession(h.ctx, parentID, msg))
+		require.NoError(t, h.mgr.sendToSession(h.ctx, parentID, msg))
 		h.waitUntil("wake finished", func() bool { return !h.mgr.HasActiveLoop(parentID) })
 	}
 
@@ -140,7 +140,7 @@ func TestScenario_DeferredCompactAnnouncesItselfOncePerEpisode(t *testing.T) {
 // pin the ordered trace a controller actually receives.
 func TestScenario_CompactPublishesItsOrderedNoticeTrace(t *testing.T) {
 	h := newSubagentHarnessWith(t, compactOnlyRespond)
-	collector := collectEvents(h.mgr.PubSub().SubscribeAll())
+	collector := collectEvents(h.mgr.bus.SubscribeAll())
 
 	defer func() {
 		collector.stop()
@@ -153,7 +153,7 @@ func TestScenario_CompactPublishesItsOrderedNoticeTrace(t *testing.T) {
 	h.mgr.waitIdle(sessionID)
 
 	h.startInboxWake()
-	require.NoError(t, h.mgr.SendToSession(h.ctx, sessionID, "/compact"))
+	require.NoError(t, h.mgr.sendToSession(h.ctx, sessionID, "/compact"))
 	collector.waitFor(t, "first compaction reported", func(events []controllerapi.SessionNotification) bool {
 		return countPublishedMessage(events, sessionID, noticeCompacted) == 1
 	})
@@ -166,7 +166,7 @@ func TestScenario_CompactPublishesItsOrderedNoticeTrace(t *testing.T) {
 	// reports success again; the "Nothing to compact" branch is covered by
 	// the loop-level compact command tests.
 	h.startInboxWake()
-	require.NoError(t, h.mgr.SendToSession(h.ctx, sessionID, "/compact"))
+	require.NoError(t, h.mgr.sendToSession(h.ctx, sessionID, "/compact"))
 	collector.waitFor(t, "second compaction reported", func(events []controllerapi.SessionNotification) bool {
 		return countPublishedMessage(events, sessionID, noticeCompacted) == 2
 	})
@@ -182,7 +182,7 @@ func TestScenario_CompactPublishesItsOrderedNoticeTrace(t *testing.T) {
 // for: the publish gate must keep those notices inside the tree.
 func TestScenario_SubagentCompactionNoticesStayInsideTheTree(t *testing.T) {
 	h := newSubagentHarness(t)
-	collector := collectEvents(h.mgr.PubSub().SubscribeAll())
+	collector := collectEvents(h.mgr.bus.SubscribeAll())
 
 	defer func() {
 		collector.stop()

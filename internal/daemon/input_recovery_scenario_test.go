@@ -11,7 +11,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/pilat/coagent/internal/admission"
 	"github.com/pilat/coagent/internal/controllerapi"
 	"github.com/pilat/coagent/internal/llm"
 	"github.com/pilat/coagent/internal/llmwire"
@@ -62,7 +61,7 @@ func TestHarnessScenario_RestartResumesExplicitInputQueuedOnStoppedRoot(t *testi
 	first.shutdown()
 
 	second := newSubagentHarnessOnDB(t, dbPath, respond, nil)
-	collector := collectEvents(second.mgr.PubSub().SubscribeAll())
+	collector := collectEvents(second.mgr.bus.SubscribeAll())
 	defer func() {
 		collector.stop()
 		second.shutdown()
@@ -118,7 +117,7 @@ func TestHarnessScenario_RestartConsumesReadOnlyInputQueuedOnStoppedRoot(t *test
 	preserveStopped, err := second.mgr.commandOnlyStoppedRoot(second.ctx, beforeRecovery)
 	require.NoError(t, err)
 	require.True(t, preserveStopped)
-	collector := collectEvents(second.mgr.PubSub().SubscribeAll())
+	collector := collectEvents(second.mgr.bus.SubscribeAll())
 	defer func() {
 		collector.stop()
 		second.shutdown()
@@ -157,21 +156,29 @@ func TestScenario_RestartResumesExplicitInputQueuedOnErroredChild(t *testing.T) 
 	}, nil)
 	root, err := first.sessStore.CreateSession(first.ctx, first.projectID, "fake-model", "", nil)
 	require.NoError(t, err)
-	childID, err := first.mgr.subagents.Create(first.ctx, subagent.Create{
+	childID, err := first.mgr.links.Create(first.ctx, subagent.Create{
 		ProjectID: first.projectID, ParentID: root.ID, RootID: root.ID,
 		Model: "fake-model", TaskCallID: "errored-child", State: subagent.StateRunning,
 	})
 	require.NoError(t, err)
-	require.NoError(t, first.links.MarkLinkTerminal(
-		first.ctx, childID, subagent.StateError, "old failure", subagent.OutcomeError,
-	))
+	require.NoError(
+		t,
+		seedTerminalChild(
+			first.ctx,
+			first.sessStore,
+			childID,
+			subagent.StateError,
+			"old failure",
+			subagent.OutcomeError,
+		),
+	)
 	require.NoError(t, first.sessStore.UpdateSessionStatus(
 		first.ctx, childID, sessionstore.SessionStatusError,
 	))
 	link, err := first.links.GetLink(first.ctx, childID)
 	require.NoError(t, err)
 	require.NotNil(t, link)
-	won, err := first.mgr.subagents.DeliverBackgroundCompletion(first.ctx, *link, 1)
+	won, err := first.mgr.links.DeliverBackgroundCompletion(first.ctx, *link, 1)
 	require.NoError(t, err)
 	require.True(t, won)
 	_, err = first.sessStore.Enqueue(
@@ -192,9 +199,9 @@ func TestScenario_RestartResumesExplicitInputQueuedOnErroredChild(t *testing.T) 
 		return &llmwire.Response{Text: "must remain queued"}
 	}, nil)
 	defer second.shutdown()
-	for i := range admission.MaxChildren {
-		require.True(t, second.mgr.admit.TryAdmit(admission.Child, int64(30_000+i)))
-		defer second.mgr.admit.Release(admission.Child, int64(30_000+i))
+	for i := range maxChildren {
+		require.True(t, second.mgr.runners.tryAdmit(true, int64(30_000+i)))
+		defer second.mgr.runners.release(true, int64(30_000+i))
 	}
 
 	resumed, err := second.mgr.resumeSessionsWithRecoverableInput(second.ctx)
@@ -272,7 +279,7 @@ func TestHarnessScenario_RestartSettlesPersistedFinalWithoutRepublishing(t *test
 	first.shutdown()
 
 	second := newSubagentHarnessOnDB(t, dbPath, respond, nil)
-	collector := collectEvents(second.mgr.PubSub().SubscribeAll())
+	collector := collectEvents(second.mgr.bus.SubscribeAll())
 	defer func() {
 		collector.stop()
 		second.shutdown()
@@ -337,7 +344,7 @@ func TestHarnessScenario_RestartDoesNotRunHandledHeaderOnlySession(t *testing.T)
 	first.shutdown()
 
 	second := newSubagentHarnessOnDB(t, dbPath, respond, nil)
-	collector := collectEvents(second.mgr.PubSub().SubscribeAll())
+	collector := collectEvents(second.mgr.bus.SubscribeAll())
 	defer func() {
 		collector.stop()
 		second.shutdown()
@@ -396,7 +403,7 @@ func runAcceptedInputRestartScenario(
 	first.shutdown()
 
 	second := newSubagentHarnessOnDB(t, dbPath, respond, nil)
-	collector := collectEvents(second.mgr.PubSub().SubscribeAll())
+	collector := collectEvents(second.mgr.bus.SubscribeAll())
 	defer func() {
 		collector.stop()
 		second.shutdown()

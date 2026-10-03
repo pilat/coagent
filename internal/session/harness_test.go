@@ -923,7 +923,10 @@ func runCompactionSequence(t *testing.T, sequence []compactionCommand) {
 
 	assert.Equal(t, model.compactionsHoped, model.compactionsRun,
 		"every compaction the model expects must have happened, and no others")
-	assert.Equal(t, model.queuedCompact, s.compactionRequested(),
+	s.ms.mu.Lock()
+	queuedCompact := s.pendingCompaction
+	s.ms.mu.Unlock()
+	assert.Equal(t, model.queuedCompact, queuedCompact,
 		"a queued /compact is neither dropped nor invented")
 }
 

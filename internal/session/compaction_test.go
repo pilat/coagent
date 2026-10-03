@@ -5,12 +5,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	llmclient "github.com/pilat/coagent/internal/llm"
 	"github.com/pilat/coagent/internal/llmwire"
 	"github.com/pilat/coagent/internal/sessionprompt"
 	"github.com/pilat/coagent/internal/tool"
@@ -422,7 +424,7 @@ func TestCompactLeavesTheTranscriptIntactOnFailure(t *testing.T) {
 
 			seedCompactableTranscript(ctx, t, s)
 			before := s.ms.getMessages()
-			beforeRowIDs := s.ms.getRowIDs()
+			beforeRowIDs := slices.Clone(s.ms.rowIDs)
 
 			ok, err := s.compact(ctx, nil)
 
@@ -430,7 +432,7 @@ func TestCompactLeavesTheTranscriptIntactOnFailure(t *testing.T) {
 			assert.False(t, ok)
 
 			after := s.ms.getMessages()
-			afterRowIDs := s.ms.getRowIDs()
+			afterRowIDs := slices.Clone(s.ms.rowIDs)
 			require.Len(t, after, len(before))
 			for i := range before {
 				assert.Equal(t, before[i].Role, after[i].Role)
@@ -858,12 +860,12 @@ func TestCheckpointRetainsTheTailVerbatim(t *testing.T) {
 		require.NoError(t, appendTestMessage(ctx, s.ms, &message))
 	}
 	before := s.ms.getMessages()
-	beforeRowIDs := s.ms.getRowIDs()
+	beforeRowIDs := slices.Clone(s.ms.rowIDs)
 
 	require.NoError(t, s.compactIfNeeded(ctx, window))
 
 	after := s.ms.getMessages()
-	afterRowIDs := s.ms.getRowIDs()
+	afterRowIDs := slices.Clone(s.ms.rowIDs)
 
 	// The tail is a suffix of the original: find the marked summary row and
 	// compare everything after it byte-for-byte, row IDs included.
@@ -949,7 +951,7 @@ func TestOutsideSnapshotCompletionLoadsAfterTheTailInBothReloadOrders(t *testing
 			require.NoError(t, s.compactIfNeeded(ctx, window))
 			require.NoError(t, s.ms.reloadMessages(ctx))
 			afterCompaction := s.ms.getMessages()
-			afterCompactionRowIDs := s.ms.getRowIDs()
+			afterCompactionRowIDs := slices.Clone(s.ms.rowIDs)
 			require.True(t, hasSummaryRow(afterCompaction))
 
 			// The completion is committed by the store while the parent may hold
@@ -975,7 +977,7 @@ func TestOutsideSnapshotCompletionLoadsAfterTheTailInBothReloadOrders(t *testing
 			}
 
 			final := s.ms.getMessages()
-			finalRowIDs := s.ms.getRowIDs()
+			finalRowIDs := slices.Clone(s.ms.rowIDs)
 
 			assert.Equal(t, 1, countRowID(finalRowIDs, asstID), "one in-memory copy of the completion call")
 			assert.Equal(t, 1, countRowID(finalRowIDs, resultID), "one in-memory copy of the completion result")
@@ -1001,7 +1003,7 @@ func TestOutsideSnapshotCompletionLoadsAfterTheTailInBothReloadOrders(t *testing
 			if order == "loop-reload-then-completion-reload" {
 				require.NoError(t, s.ms.reloadMessages(ctx))
 				assert.Equal(t, final, s.ms.getMessages())
-				assert.Equal(t, finalRowIDs, s.ms.getRowIDs())
+				assert.Equal(t, finalRowIDs, slices.Clone(s.ms.rowIDs))
 			}
 		})
 	}
@@ -1153,7 +1155,7 @@ func TestMixedAssistantResponseKeepsSiblingCallsValid(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, ok)
 
-	require.NoError(t, validateRawHead(s.ms.getMessages()), "remaining calls stay valid pairs")
+	require.NoError(t, llmclient.ValidateToolPairing(s.ms.getMessages()), "remaining calls stay valid pairs")
 	skills := renderedSkills(s.ms.getMessages())
 	require.Len(t, skills, 1, "exactly one envelope survives")
 }

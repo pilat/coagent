@@ -6,8 +6,6 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
-
-	"github.com/pilat/coagent/internal/admission"
 )
 
 func TestFinishRunnerCancellationEscapesContendedTreeFence(t *testing.T) {
@@ -21,15 +19,14 @@ func TestFinishRunnerCancellationEscapesContendedTreeFence(t *testing.T) {
 	require.NoError(t, err)
 
 	runnerCtx, cancel := context.WithCancel(ctx)
-	rs := newRunner(cancel, t.TempDir(), projectID, admission.Parent, 0, false)
-	require.True(t, mgr.admit.TryAdmit(admission.Parent, 0))
-	_, registered := mgr.runners.Register(record.ID, rs)
+	rs := newRunner(cancel, t.TempDir(), record, waitingRunner{sessionID: record.ID}, false)
+	require.True(t, mgr.runners.tryAdmit(false, 0))
+	_, registered := mgr.runners.register(rs)
 	require.True(t, registered)
 
 	done := make(chan struct{})
-	errored := false
 	go func() {
-		mgr.finishRunner(runnerCtx, record.ID, rs, &errored, false, nil)
+		mgr.finishRunner(runnerCtx, rs, runOutcome{}, nil)
 		close(done)
 	}()
 

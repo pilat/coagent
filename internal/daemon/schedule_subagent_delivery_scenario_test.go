@@ -112,7 +112,7 @@ func TestIntegration_LegacySubagentCronOccurrencesAreAcknowledgedWithoutRun(t *t
 
 			childID := createScheduleBoundarySubagent(t, h)
 			before := h.parentMessages(childID)
-			collector := collectEvents(h.mgr.PubSub().SubscribeAll())
+			collector := collectEvents(h.mgr.bus.SubscribeAll())
 			defer collector.stop()
 
 			entry, err := h.schedStore.AddSchedule(t.Context(), childID, "* * * * *", nil, "legacy task", tt.fresh)

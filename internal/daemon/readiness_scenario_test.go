@@ -9,7 +9,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/pilat/coagent/internal/admission"
 	"github.com/pilat/coagent/internal/config"
 	"github.com/pilat/coagent/internal/controllerapi"
 	"github.com/pilat/coagent/internal/llm"
@@ -58,8 +57,7 @@ func TestReadinessSuppressesIdleWhileRootIsActiveLoop(t *testing.T) {
 			func(*config.Config) (llm.Client, error) { return &scriptedLLM{respond: trivialRespond}, nil },
 		),
 		sessions,
-		subagent.NewStore(db),
-		subagent.NewTransactions(db, store),
+		subagent.NewStore(db, store),
 		nil,
 		nil,
 		nil,
@@ -68,23 +66,23 @@ func TestReadinessSuppressesIdleWhileRootIsActiveLoop(t *testing.T) {
 	controllers := newTestController(mgr, &config.Config{}, nil, nil)
 	notifications := controllers.ForManager("manager-readiness").Subscribe()
 
-	active := newRunner(func() {}, "", 0, admission.Parent, 0, false)
-	_, registered := mgr.registerRunner(ctx, sessionID, active)
+	active := newRunner(func() {}, "", record, waitingRunner{sessionID: record.ID}, false)
+	_, registered := registerTestRunner(ctx, mgr, active)
 	require.True(t, registered)
 
-	require.NoError(t, mgr.ReconcileOutputReadiness(ctx, outputID))
+	require.NoError(t, mgr.progress.ReconcileOutputReadiness(ctx, outputID))
 	requireNoManagerNotification(t, notifications)
 
-	mgr.removeRunner(ctx, sessionID)
+	mgr.removeRunner(ctx, active)
 	require.False(t, mgr.HasActiveLoop(sessionID))
 
-	require.NoError(t, mgr.ReconcileOutputReadiness(ctx, outputID))
+	require.NoError(t, mgr.progress.ReconcileOutputReadiness(ctx, outputID))
 
 	notification := requireManagerNotification(t, notifications)
 	assert.Equal(t, controllerapi.StateIdle, notification.Notification.Status)
 
-	require.NoError(t, mgr.ReconcileOutputReadiness(ctx, outputID))
-	mgr.reconcileLatestReadiness(ctx, record.ID)
+	require.NoError(t, mgr.progress.ReconcileOutputReadiness(ctx, outputID))
+	mgr.progress.ReconcileLatestReadiness(ctx, record.ID)
 	requireNoManagerNotification(t, notifications)
 }
 
@@ -126,8 +124,7 @@ func TestReconcileLatestReadinessPublishesIdleAfterTeardown(t *testing.T) {
 			func(*config.Config) (llm.Client, error) { return &scriptedLLM{respond: trivialRespond}, nil },
 		),
 		sessions,
-		subagent.NewStore(db),
-		subagent.NewTransactions(db, store),
+		subagent.NewStore(db, store),
 		nil,
 		nil,
 		nil,
@@ -136,16 +133,16 @@ func TestReconcileLatestReadinessPublishesIdleAfterTeardown(t *testing.T) {
 	controllers := newTestController(mgr, &config.Config{}, nil, nil)
 	notifications := controllers.ForManager("manager-readiness").Subscribe()
 
-	active := newRunner(func() {}, "", 0, admission.Parent, 0, false)
-	_, registered := mgr.registerRunner(ctx, record.ID, active)
+	active := newRunner(func() {}, "", record, waitingRunner{sessionID: record.ID}, false)
+	_, registered := registerTestRunner(ctx, mgr, active)
 	require.True(t, registered)
-	mgr.reconcileLatestReadiness(ctx, record.ID)
+	mgr.progress.ReconcileLatestReadiness(ctx, record.ID)
 	requireNoManagerNotification(t, notifications)
 
-	mgr.removeRunner(ctx, record.ID)
+	mgr.removeRunner(ctx, active)
 	require.False(t, mgr.HasActiveLoop(record.ID))
 
-	mgr.reconcileLatestReadiness(ctx, record.ID)
+	mgr.progress.ReconcileLatestReadiness(ctx, record.ID)
 
 	notification := requireManagerNotification(t, notifications)
 	assert.Equal(t, controllerapi.StateIdle, notification.Notification.Status)
@@ -159,16 +156,15 @@ func TestOwnerlessIdleIsSuppressedByReplacementRunner(t *testing.T) {
 	projectID := testProject(t, projects, "/tmp/replacement-idle")
 	record, err := mgr.store.CreateSession(ctx, projectID, "fake-model", "", nil)
 	require.NoError(t, err)
-	notifications := mgr.PubSub().SubscribeAll()
+	notifications := mgr.bus.SubscribeAll()
 
-	replacement := newRunner(func() {}, "", projectID, admission.Parent, 0, false)
-	_, registered := mgr.runners.Register(record.ID, replacement)
+	replacement := newRunner(func() {}, "", record, waitingRunner{sessionID: record.ID}, false)
+	_, registered := registerTestRunner(ctx, mgr, replacement)
 	require.True(t, registered)
 
-	mgr.publishOwnerlessIdleAfterTeardown(ctx, record.ID, true, false, false, false)
+	mgr.publishOwnerlessIdle(ctx, record.ID)
 	requireNoNotification(t, notifications)
 
-	_, deleted := mgr.runners.Delete(record.ID)
-	require.True(t, deleted)
+	mgr.removeRunner(ctx, replacement)
 	replacement.Complete()
 }

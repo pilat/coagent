@@ -31,7 +31,7 @@ func TestHarnessScenario_SecondInputDoesNotReplayPreviousFinal(t *testing.T) {
 
 		return &llmwire.Response{Text: "first answer"}
 	})
-	collector := collectEvents(h.mgr.PubSub().SubscribeAll())
+	collector := collectEvents(h.mgr.bus.SubscribeAll())
 	defer func() {
 		collector.stop()
 		h.shutdown()
@@ -44,7 +44,7 @@ func TestHarnessScenario_SecondInputDoesNotReplayPreviousFinal(t *testing.T) {
 	waitForIdleAfterMessage(t, collector, sessionID, "first answer")
 
 	h.startInboxWake()
-	require.NoError(t, h.mgr.SendToSession(h.ctx, sessionID, "second question"))
+	require.NoError(t, h.mgr.sendToSession(h.ctx, sessionID, "second question"))
 	waitForVisibleMessage(t, collector, sessionID, "second answer")
 	waitForIdleAfterMessage(t, collector, sessionID, "second answer")
 
@@ -55,7 +55,7 @@ func TestHarnessScenario_CLIConversationIsManagerOwned(t *testing.T) {
 	h := newSubagentHarnessWith(t, func(string, []llmwire.Message) *llmwire.Response {
 		return &llmwire.Response{Text: "configuration answer"}
 	})
-	collector := collectEvents(h.mgr.PubSub().SubscribeAll())
+	collector := collectEvents(h.mgr.bus.SubscribeAll())
 	defer func() {
 		collector.stop()
 		h.shutdown()
@@ -104,7 +104,7 @@ func TestHarnessScenario_SubagentTextWithToolsCompletes(t *testing.T) {
 	}
 
 	h := newSubagentHarnessWith(t, respond)
-	collector := collectEvents(h.mgr.PubSub().SubscribeAll())
+	collector := collectEvents(h.mgr.bus.SubscribeAll())
 	released := false
 	defer func() {
 		if !released {
@@ -203,7 +203,7 @@ func TestHarnessScenario_ForegroundChildContinuesWithoutSleep(t *testing.T) {
 	}
 
 	h := newSubagentHarnessWith(t, respond)
-	collector := collectEvents(h.mgr.PubSub().SubscribeAll())
+	collector := collectEvents(h.mgr.bus.SubscribeAll())
 	defer func() {
 		closeOnce(initialRelease)
 		closeOnce(followUpRelease)
@@ -226,7 +226,7 @@ func TestHarnessScenario_ForegroundChildContinuesWithoutSleep(t *testing.T) {
 	childID.Store(link.ChildID)
 
 	h.startInboxWake()
-	require.NoError(t, h.mgr.SendToSession(h.ctx, parentID, "continue the same child"))
+	require.NoError(t, h.mgr.sendToSession(h.ctx, parentID, "continue the same child"))
 	waitForVisibleMessage(t, collector, parentID, "follow-up accepted")
 	waitForIdleAfterMessage(t, collector, parentID, "follow-up accepted")
 
@@ -285,7 +285,7 @@ func TestHarnessScenario_BackgroundChildIsTheWakeSource(t *testing.T) {
 	}
 
 	h := newSubagentHarnessWith(t, respond)
-	collector := collectEvents(h.mgr.PubSub().SubscribeAll())
+	collector := collectEvents(h.mgr.bus.SubscribeAll())
 	defer func() {
 		closeOnce(childRelease)
 		collector.stop()
@@ -381,7 +381,7 @@ func TestHarnessScenario_BackgroundChildCheckpointUpdatesRootCard(t *testing.T) 
 	}
 
 	h := newSubagentHarnessWith(t, respond)
-	collector := collectEvents(h.mgr.PubSub().SubscribeAll())
+	collector := collectEvents(h.mgr.bus.SubscribeAll())
 	defer func() {
 		if !released {
 			close(childSecondRelease)
@@ -456,7 +456,7 @@ func TestHarnessScenario_BackgroundFinalResponseResumesOnCompletion(t *testing.T
 	}
 
 	h := newSubagentHarnessWith(t, respond)
-	collector := collectEvents(h.mgr.PubSub().SubscribeAll())
+	collector := collectEvents(h.mgr.bus.SubscribeAll())
 	defer func() {
 		closeOnce(childRelease)
 		collector.stop()
@@ -587,7 +587,7 @@ func TestHarnessScenario_ForegroundScatterGatherProjectsShrinkingAllWaitSet(t *t
 	}
 
 	h := newSubagentHarnessWith(t, respond)
-	collector := collectEvents(h.mgr.PubSub().SubscribeAll())
+	collector := collectEvents(h.mgr.bus.SubscribeAll())
 	defer func() {
 		for _, release := range releases {
 			closeOnce(release)
@@ -661,7 +661,7 @@ func TestHarnessScenario_SleepProjectsWakeAtAndUserInputInterruptsIt(t *testing.
 	}
 
 	h := newSubagentHarnessWith(t, respond)
-	collector := collectEvents(h.mgr.PubSub().SubscribeAll())
+	collector := collectEvents(h.mgr.bus.SubscribeAll())
 	defer func() {
 		collector.stop()
 		h.shutdown()
@@ -688,7 +688,7 @@ func TestHarnessScenario_SleepProjectsWakeAtAndUserInputInterruptsIt(t *testing.
 	})
 
 	h.startInboxWake()
-	require.NoError(t, h.mgr.SendToSession(h.ctx, parentID, "interrupt now"))
+	require.NoError(t, h.mgr.sendToSession(h.ctx, parentID, "interrupt now"))
 	waitForVisibleMessage(t, collector, parentID, "sleep interruption handled")
 	waitForIdleAfterMessage(t, collector, parentID, "sleep interruption handled")
 

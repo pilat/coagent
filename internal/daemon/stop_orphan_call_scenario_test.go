@@ -41,7 +41,7 @@ func TestScenario_StopOrdinaryBashDoesNotReplayAfterNewInputOrRestart(t *testing
 					first.mgr.HasActiveLoop(firstID)
 			})
 
-			require.NoError(t, first.mgr.Stop(first.ctx, firstID, 0))
+			require.NoError(t, first.mgr.sendToSession(first.ctx, firstID, "/stop"))
 			first.waitUntil("stop completed", func() bool {
 				rec, getErr := first.sessStore.GetSession(first.ctx, firstID)
 				return getErr == nil && rec.Status == sessionstore.SessionStatusStopped
@@ -60,7 +60,7 @@ func TestScenario_StopOrdinaryBashDoesNotReplayAfterNewInputOrRestart(t *testing
 			}
 
 			d.startInboxWake()
-			require.NoError(t, d.mgr.SendToSession(d.ctx, firstID, "what happened?"))
+			require.NoError(t, d.mgr.sendToSession(d.ctx, firstID, "what happened?"))
 			d.mgr.waitIdle(firstID)
 			final := d.parentMessages(firstID)
 			assert.Equal(t, 1, countAssistantToolCallsFor(final, "bash"))
@@ -127,7 +127,7 @@ func TestScenario_StopThatDidNotSurviveItsRestartStillSettlesTheOrphan(t *testin
 		"the abandoned task is settled exactly once")
 
 	second.startInboxWake()
-	require.NoError(t, second.mgr.SendToSession(second.ctx, sessionID, "any progress?"))
+	require.NoError(t, second.mgr.sendToSession(second.ctx, sessionID, "any progress?"))
 	second.mgr.waitIdle(sessionID)
 
 	final := second.parentMessages(sessionID)

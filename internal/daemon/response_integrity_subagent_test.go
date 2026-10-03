@@ -186,7 +186,7 @@ func TestResponseIntegrity_MissingTerminalRejectionNeverReusesOlderAnswer(t *tes
 		return id, err
 	}()
 	require.NoError(t, err)
-	require.NoError(t, h.links.InsertSubagentLink(h.ctx, subagent.Link{
+	require.NoError(t, seedChildLink(h.ctx, h.sessStore, subagent.Link{
 		ParentID: parent.ID, ChildID: childID, TaskCallID: "missing-rejection",
 	}))
 	_, err = h.sessStore.Commit(h.ctx, sessionstore.Commit{SessionID: childID, Messages: []*transcript.Message{{
@@ -206,7 +206,7 @@ func TestResponseIntegrity_MissingTerminalRejectionNeverReusesOlderAnswer(t *tes
 		return err
 	}())
 
-	h.mgr.finalizeChild(h.ctx, childID)
+	finalizeTestChild(h.ctx, t, h.mgr, childID)
 	link, err := h.links.GetLink(h.ctx, childID)
 	require.NoError(t, err)
 	assert.Equal(t, subagent.OutcomeError, link.Outcome)

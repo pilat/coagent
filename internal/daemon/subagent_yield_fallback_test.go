@@ -44,7 +44,7 @@ func TestSubagentResult_BackgroundYieldFallsBackToYieldText(t *testing.T) {
 		return id, err
 	}()
 	require.NoError(t, err)
-	require.NoError(t, h.links.InsertSubagentLink(ctx, subagent.Link{
+	require.NoError(t, seedChildLink(ctx, h.sessStore, subagent.Link{
 		ParentID: parent.ID, ChildID: childID, TaskCallID: "yield",
 	}))
 
@@ -96,7 +96,7 @@ func TestSubagentResult_BackgroundYieldFallsBackToYieldText(t *testing.T) {
 
 	h.startInboxWake()
 
-	h.mgr.finalizeChild(ctx, childID)
+	finalizeTestChild(ctx, t, h.mgr, childID)
 
 	link, err := h.links.GetLink(ctx, childID)
 	require.NoError(t, err)

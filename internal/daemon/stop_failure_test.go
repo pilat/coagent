@@ -23,16 +23,17 @@ import (
 // transient store hiccup while everything else delegates to the real store.
 type failingGetSessionStore struct {
 	Store
-	err       error
-	pending   atomic.Bool
-	skipFirst atomic.Bool
+	err     error
+	pending atomic.Bool
+	calls   atomic.Int32
+	skip    int32
 }
 
 func (s *failingGetSessionStore) GetSession(
 	ctx context.Context,
 	id int64,
 ) (*sessionstore.SessionRecord, error) {
-	if s.skipFirst.CompareAndSwap(true, false) {
+	if s.calls.Add(1) <= s.skip {
 		return s.Store.GetSession(ctx, id)
 	}
 
@@ -67,8 +68,8 @@ func TestStopOnStoreFailureDoesNotPublishIdle(t *testing.T) {
 		err:   errors.New("disk hiccup"),
 	}
 	failing.pending.Store(true)
-	// The tree fence loads the root before the ownership projection we fault.
-	failing.skipFirst.Store(true)
+	// Tree acquisition and the stopped check precede the ownership projection.
+	failing.skip = 2
 	mgr, _ := newScenarioDaemon(
 		context.Background(),
 		scriptedBuildInput(
@@ -79,8 +80,7 @@ func TestStopOnStoreFailureDoesNotPublishIdle(t *testing.T) {
 			func(*config.Config) (llm.Client, error) { return &scriptedLLM{respond: trivialRespond}, nil },
 		),
 		sessions,
-		subagent.NewStore(db),
-		subagent.NewTransactions(db, store),
+		subagent.NewStore(db, sessions),
 		nil,
 		nil,
 		nil,
@@ -90,7 +90,7 @@ func TestStopOnStoreFailureDoesNotPublishIdle(t *testing.T) {
 	controllers := newTestController(mgr, &config.Config{}, nil, nil)
 	notifications := controllers.ForManager("manager-stop").Subscribe()
 
-	require.NoError(t, mgr.Stop(ctx, record.ID, 0),
+	require.NoError(t, mgr.sendToSession(ctx, record.ID, "/stop"),
 		"the stop itself must succeed: the cleanup ran on the real store")
 
 	// The unconditional stop announcement is legitimate; the idle publication
@@ -132,8 +132,7 @@ func TestTeardownOnStoreFailureDoesNotPublishIdle(t *testing.T) {
 			func(*config.Config) (llm.Client, error) { return &scriptedLLM{respond: trivialRespond}, nil },
 		),
 		sessions,
-		subagent.NewStore(db),
-		subagent.NewTransactions(db, store),
+		subagent.NewStore(db, sessions),
 		nil,
 		nil,
 		nil,
@@ -143,7 +142,7 @@ func TestTeardownOnStoreFailureDoesNotPublishIdle(t *testing.T) {
 	controllers := newTestController(mgr, &config.Config{}, nil, nil)
 	notifications := controllers.ForManager("manager-teardown").Subscribe()
 
-	mgr.publishOwnerlessIdleAfterTeardown(ctx, record.ID, true, false, false, false)
+	mgr.publishOwnerlessIdle(ctx, record.ID)
 	requireNoManagerNotification(t, notifications)
 	mgr.Shutdown(time.Second)
 }

@@ -80,7 +80,7 @@ func TestHarnessModel_AsyncInboxMixedFIFOStopErrorKillAndRestart(t *testing.T) {
 	assert.Contains(t, recoverable, record.ID)
 	assertAsyncInboxMatchesModel(t, db, record.ID, model)
 
-	require.NoError(t, store.MarkSessionKilled(ctx, record.ID))
+	require.NoError(t, store.WithTx(ctx, func(tx *sql.Tx) error { return MarkSessionKilledTx(ctx, tx, record.ID) }))
 	model[3].state = InputStateCancelled
 	model[5].state = InputStateCancelled
 	store = testStore(db)

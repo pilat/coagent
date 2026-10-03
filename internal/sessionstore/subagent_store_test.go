@@ -15,8 +15,8 @@ import (
 	"github.com/pilat/coagent/internal/subagent"
 )
 
-func newTestSubagentTransactions(db *sql.DB) subagent.Transactions {
-	return subagent.NewTransactions(db, testStore(db))
+func newTestSubagentStore(db *sql.DB) subagent.Store {
+	return subagent.NewStore(db, testStore(db))
 }
 
 func newTestStore(t *testing.T) (*sessionstore.Store, *sql.DB, int64) {
@@ -80,7 +80,7 @@ func TestSubagentStore_CreateCommitsAggregate(t *testing.T) {
 	parent, err := s.CreateSession(ctx, projectID, "parent-model", "", nil)
 	require.NoError(t, err)
 
-	childID, err := newTestSubagentTransactions(db).Create(ctx, subagent.Create{
+	childID, err := newTestSubagentStore(db).Create(ctx, subagent.Create{
 		ProjectID:      projectID,
 		ParentID:       parent.ID,
 		RootID:         parent.ID,
@@ -126,7 +126,7 @@ func TestSubagentStore_CreateRejectsStoppingParent(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, s.UpdateSessionStatus(ctx, parent.ID, sessionstore.SessionStatusStopping))
 
-	_, err = newTestSubagentTransactions(db).Create(ctx, subagent.Create{
+	_, err = newTestSubagentStore(db).Create(ctx, subagent.Create{
 		ProjectID: projectID, ParentID: parent.ID, RootID: parent.ID,
 		Model: "child-model", TaskCallID: "task-1", State: "spawned",
 	})
@@ -153,7 +153,7 @@ func TestSubagentStore_CreateRollsBackAggregateOnInboxFailure(t *testing.T) {
 	`)
 	require.NoError(t, err)
 
-	_, err = newTestSubagentTransactions(db).Create(ctx, subagent.Create{
+	_, err = newTestSubagentStore(db).Create(ctx, subagent.Create{
 		ProjectID: projectID, ParentID: parent.ID, RootID: parent.ID,
 		Model: "child-model", TaskCallID: "task-1", State: "spawned",
 		InitialInput: "work",
@@ -184,7 +184,7 @@ func TestSubagentStore_CreateRollsBackOrphanOnLinkFailure(t *testing.T) {
 	`)
 	require.NoError(t, err)
 
-	_, err = newTestSubagentTransactions(db).Create(ctx, subagent.Create{
+	_, err = newTestSubagentStore(db).Create(ctx, subagent.Create{
 		ProjectID:  projectID,
 		ParentID:   parent.ID,
 		RootID:     parent.ID,

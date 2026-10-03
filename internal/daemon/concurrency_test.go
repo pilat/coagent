@@ -10,7 +10,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/pilat/coagent/internal/admission"
 	"github.com/pilat/coagent/internal/llm"
 	"github.com/pilat/coagent/internal/llmwire"
 	"github.com/pilat/coagent/internal/sessionstore"
@@ -90,10 +89,10 @@ func lastAssistantTextDTO(msgs []llmwire.Message) string {
 // fan-in can deadlock — fail loudly at compile/test time instead.
 func TestAdmissionCaps_ChildrenCappedBelowTotal(t *testing.T) {
 	assert.Less(
-		t, admission.MaxChildren, admission.MaxTotal,
-		"admission.MaxChildren must stay strictly below admission.MaxTotal",
+		t, maxChildren, maxTotal,
+		"maxChildren must stay strictly below maxTotal",
 	)
-	assert.LessOrEqual(t, admission.MaxPerParent, admission.MaxChildren, "per-parent cap cannot exceed the child cap")
+	assert.LessOrEqual(t, maxPerParent, maxChildren, "per-parent cap cannot exceed the child cap")
 }
 
 func TestIntegration_DepthCapRejected(t *testing.T) {
@@ -151,9 +150,9 @@ func TestIntegration_SuspendedParentHoldsNoSlot(t *testing.T) {
 	// The parent suspends (loop exits, slot released); only the in-flight child
 	// holds a slot. The suspended parent holds ZERO.
 	h.waitUntil("parent suspended, only child holds a slot", func() bool {
-		return !h.mgr.HasActiveLoop(parentID) && h.mgr.admit.LiveTotal() == 1
+		return !h.mgr.HasActiveLoop(parentID) && runnerRunningCount(h.mgr.runners) == 1
 	})
-	assert.Equal(t, int64(1), h.mgr.admit.LiveChildren())
+	assert.Equal(t, 1, runnerChildCount(h.mgr.runners))
 
 	closeOnce(release)
 	h.waitForDelivery(link.ChildID)
@@ -180,7 +179,7 @@ func TestIntegration_CascadeKillsBlockingChild(t *testing.T) {
 	h.waitUntil("parent suspended", func() bool { return !h.mgr.HasActiveLoop(parentID) })
 
 	// Killing the parent must cascade-kill its in-flight blocking child.
-	require.NoError(t, h.mgr.Kill(h.ctx, parentID))
+	require.NoError(t, h.mgr.sendToSession(h.ctx, parentID, "/kill"))
 
 	h.waitUntil("blocking child killed", func() bool {
 		rec, gerr := h.sessStore.GetSession(h.ctx, link.ChildID)
@@ -202,7 +201,7 @@ func TestIntegration_ChildPanicMarksError(t *testing.T) {
 		return &llmwire.Response{Text: "child model result"}
 	}))
 	// HTTP handler panics cannot reach the runner; the child's model commit can.
-	h.mgr.buildInput.Store = &panickingChildCommitStore{Store: h.sessStore}
+	h.mgr.build.Store = &panickingChildCommitStore{Store: h.sessStore}
 	defer h.shutdown()
 
 	h.startInboxWake()
@@ -265,8 +264,8 @@ func TestIntegration_StressBlockingNoDeadlock(t *testing.T) {
 	}
 
 	// Caps were never exceeded; everything drained back to idle.
-	assert.LessOrEqual(t, h.mgr.admit.LiveChildren(), int64(admission.MaxChildren))
-	assert.LessOrEqual(t, h.mgr.admit.LiveTotal(), int64(admission.MaxTotal))
+	assert.LessOrEqual(t, runnerChildCount(h.mgr.runners), maxChildren)
+	assert.LessOrEqual(t, runnerRunningCount(h.mgr.runners), maxTotal)
 }
 
 func TestIntegration_BackgroundQueueDrains(t *testing.T) {
@@ -314,7 +313,7 @@ func TestIntegration_BackgroundQueueDrains(t *testing.T) {
 	// Per-parent cap is 8: 8 children run (blocked on release), the other 2 are
 	// parked in the in-memory FIFO. Every link is persisted regardless.
 	h.waitUntil("8 admitted, 2 queued", func() bool {
-		return h.mgr.admit.LiveChildren() == int64(admission.MaxPerParent) && h.queueLen() == 2
+		return runnerChildCount(h.mgr.runners) == maxPerParent && h.queueLen() == 2
 	})
 
 	// Release: the 8 finish, freeing slots; drainQueue starts the 2 parked ones.
@@ -327,7 +326,7 @@ func TestIntegration_BackgroundQueueDrains(t *testing.T) {
 	}
 
 	h.waitUntil("queue drained", func() bool { return h.queueLen() == 0 })
-	assert.LessOrEqual(t, h.mgr.admit.LiveChildren(), int64(admission.MaxChildren))
+	assert.LessOrEqual(t, runnerChildCount(h.mgr.runners), maxChildren)
 }
 
 // closeOnce closes ch unless it is already closed (cleanup helper for hold channels).
@@ -340,7 +339,7 @@ func closeOnce(ch chan struct{}) {
 }
 
 func (h *subagentHarness) queueLen() int {
-	return h.mgr.childQueue.Len()
+	return runnerWaitingCount(h.mgr.runners)
 }
 
 func (h *subagentHarness) waitForLinkByCall(parentID int64, callID string) subagent.Link {

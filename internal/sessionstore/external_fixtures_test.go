@@ -308,23 +308,21 @@ func deliverChild(ctx context.Context, s *sessionstore.Store,
 	messages []*transcript.Message,
 	child, seq int64,
 ) ([]int64, bool, error) {
-	link, err := subagent.NewStore(sDB(s)).GetLink(ctx, child)
+	link, err := subagent.NewStore(sDB(s), s).GetLink(ctx, child)
 	if err != nil {
 		return nil, false, err
 	}
-	producer := subagent.NewTransactions(sDB(s), s)
+	producer := subagent.NewStore(sDB(s), s)
 	if !link.Terminal() && seq == link.ActivationSeq {
-		_, err = producer.TryFinalizeActivation(
-			ctx,
-			child,
-			subagent.StateCompleted,
-			messages[len(messages)-1].Content,
-			subagent.OutcomeCompleted,
-		)
+		_, err = appendMessage(ctx, s, child, assistantStopMessage(messages[len(messages)-1].Content))
 		if err != nil {
 			return nil, false, err
 		}
-		link, err = subagent.NewStore(sDB(s)).GetLink(ctx, child)
+		_, err = producer.Finalize(ctx, child, false)
+		if err != nil {
+			return nil, false, err
+		}
+		link, err = subagent.NewStore(sDB(s), s).GetLink(ctx, child)
 		if err != nil {
 			return nil, false, err
 		}

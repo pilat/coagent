@@ -343,23 +343,22 @@ func TestCaptureProgressCountsActiveSubagentsAcrossRootTree(t *testing.T) {
 
 	root, err := store.CreateSession(ctx, projectID, "m", "", nil)
 	require.NoError(t, err)
-	foreground, err := createChild(ctx, store, projectID, root.ID, root.ID, "general", "m", "")
+	links := subagent.NewStore(db, store)
+	foreground, err := links.Create(ctx, subagent.Create{
+		ProjectID: projectID, ParentID: root.ID, RootID: root.ID, AgentType: "general", Model: "m",
+		TaskCallID: "fg", Blocking: true, State: subagent.StateSpawned,
+	})
 	require.NoError(t, err)
-	nestedForeground, err := createChild(ctx, store, projectID, foreground, root.ID, "general", "m", "")
+	_, err = links.Create(ctx, subagent.Create{
+		ProjectID: projectID, ParentID: foreground, RootID: root.ID, AgentType: "general", Model: "m",
+		TaskCallID: "nested-fg", Blocking: true, State: subagent.StateSpawned,
+	})
 	require.NoError(t, err)
-	background, err := createChild(ctx, store, projectID, root.ID, root.ID, "general", "m", "")
+	_, err = links.Create(ctx, subagent.Create{
+		ProjectID: projectID, ParentID: root.ID, RootID: root.ID, AgentType: "general", Model: "m",
+		TaskCallID: "bg", State: subagent.StateSpawned,
+	})
 	require.NoError(t, err)
-
-	links := subagent.NewStore(db)
-	require.NoError(t, links.InsertSubagentLink(ctx, subagent.Link{
-		ParentID: root.ID, ChildID: foreground, TaskCallID: "fg", Blocking: true,
-	}))
-	require.NoError(t, links.InsertSubagentLink(ctx, subagent.Link{
-		ParentID: foreground, ChildID: nestedForeground, TaskCallID: "nested-fg", Blocking: true,
-	}))
-	require.NoError(t, links.InsertSubagentLink(ctx, subagent.Link{
-		ParentID: root.ID, ChildID: background, TaskCallID: "bg", Blocking: false,
-	}))
 
 	facts, err := store.CaptureProgress(ctx, root.ID)
 	require.NoError(t, err)

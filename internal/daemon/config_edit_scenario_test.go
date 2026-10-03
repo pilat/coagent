@@ -78,7 +78,7 @@ func testAbandonedConfigCommand(t *testing.T, restart bool) {
 			BEGIN SELECT RAISE(ABORT, 'injected result write failure'); END`)
 		require.NoError(t, err)
 	}
-	require.NoError(t, d.mgr.SendToSession(d.ctx, id, "/config change the default model"))
+	require.NoError(t, d.mgr.sendToSession(d.ctx, id, "/config change the default model"))
 	d.mgr.waitIdle(id)
 	d.waitUntil(
 		"abandoned config activation expired",
@@ -108,7 +108,7 @@ func testAbandonedConfigCommand(t *testing.T, restart bool) {
 		require.NoError(t, err)
 		assert.Contains(t, lastToolResultContent(d.parentMessages(id), tool.IDConfigEdit), "Config change abandoned")
 	}
-	require.NoError(t, d.mgr.SendToSession(d.ctx, id, "continue after cancellation"))
+	require.NoError(t, d.mgr.sendToSession(d.ctx, id, "continue after cancellation"))
 	d.mgr.waitIdle(id)
 	assert.True(t, hasUserContaining(d.parentMessages(id), "continue after cancellation"))
 	assert.Equal(t, 1, countToolResultsFor(d.parentMessages(id), tool.IDConfigEdit))
@@ -134,8 +134,8 @@ func testAbandonedApply(t *testing.T, failure string) {
 		grantedCall(d.ctx, id, configEditCallID), configEditArgs(configEditCandidate),
 	)
 	require.ErrorIs(t, err, tool.ErrSuspend)
-	configuredModels := d.mgr.buildInput.Config.UnifiedConfig.Models
-	d.mgr.buildInput.Config.UnifiedConfig.Models = nil
+	configuredModels := d.mgr.build.Config.UnifiedConfig.Models
+	d.mgr.build.Config.UnifiedConfig.Models = nil
 	failWrite := failure == "write failure"
 	if failWrite {
 		_, err = d.db.ExecContext(d.ctx, `CREATE TRIGGER reject_apply_result BEFORE INSERT ON messages
@@ -143,13 +143,13 @@ func testAbandonedApply(t *testing.T, failure string) {
 			BEGIN SELECT RAISE(ABORT, 'injected result write failure'); END`)
 		require.NoError(t, err)
 	}
-	require.NoError(t, d.mgr.SendToSession(d.ctx, id, "keep this input"))
+	require.NoError(t, d.mgr.sendToSession(d.ctx, id, "keep this input"))
 	if failure == "stop" || failure == "kill" {
 		if failure == "stop" {
-			require.NoError(t, d.mgr.Stop(d.ctx, id, 0))
+			require.NoError(t, d.mgr.sendToSession(d.ctx, id, "/stop"))
 			assert.Contains(t, lastToolResultContent(d.parentMessages(id), tool.IDConfigEdit), "Stopped by user")
 		} else {
-			require.NoError(t, d.mgr.Kill(d.ctx, id))
+			require.NoError(t, d.mgr.sendToSession(d.ctx, id, "/kill"))
 			assert.False(t, hasToolResultFor(d.parentMessages(id), tool.IDConfigEdit))
 		}
 		assert.Zero(t, d.restartCount())
@@ -172,8 +172,8 @@ func testAbandonedApply(t *testing.T, failure string) {
 		_, err = d.db.ExecContext(d.ctx, "DROP TRIGGER reject_apply_result")
 		require.NoError(t, err)
 
-		d.mgr.buildInput.Config.UnifiedConfig.Models = configuredModels
-		require.NoError(t, d.mgr.SendToSession(d.ctx, id, "retry now"))
+		d.mgr.build.Config.UnifiedConfig.Models = configuredModels
+		require.NoError(t, d.mgr.sendToSession(d.ctx, id, "retry now"))
 		d.mgr.waitIdle(id)
 		_, err = d.sessStore.PeekPending(d.ctx, id)
 		require.ErrorIs(t, err, sessionstore.ErrNoPendingInput)
@@ -259,7 +259,7 @@ func TestScenario_ConfigQuestionCannotReplaceDocumentWithSandboxFragment(t *test
 	id, err := d.mgr.Send(d.ctx, d.projectID, "hello", "fake-model", map[string]any{"manager_id": "telegram:main"})
 	require.NoError(t, err)
 	d.waitUntil("opening turn settled", func() bool { return !d.mgr.HasActiveLoop(id) })
-	require.NoError(t, d.mgr.SendToSession(d.ctx, id, "/config - is the sandbox unconfigured?"))
+	require.NoError(t, d.mgr.sendToSession(d.ctx, id, "/config - is the sandbox unconfigured?"))
 	d.waitUntil("invalid replacement answered", func() bool {
 		return hasToolResultFor(d.parentMessages(id), tool.IDConfigEdit) && !d.mgr.HasActiveLoop(id)
 	})
@@ -295,7 +295,7 @@ func startConfigEditSession(t *testing.T, d *applyDaemon, prompt string) int64 {
 	})
 	d.mgr.waitIdle(sessionID)
 
-	require.NoError(t, d.mgr.SendToSession(d.ctx, sessionID, configapply.ConfigEditCommand))
+	require.NoError(t, d.mgr.sendToSession(d.ctx, sessionID, configapply.ConfigEditCommand))
 
 	return sessionID
 }

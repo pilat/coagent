@@ -73,7 +73,7 @@ func newSkillHarness(
 func (h *subagentHarness) workDir() string {
 	h.t.Helper()
 
-	workDir, err := h.mgr.GetProjectWorkDir(h.ctx, h.projectID)
+	workDir, err := h.mgr.store.GetProjectWorkDir(h.ctx, h.projectID)
 	require.NoError(h.t, err)
 
 	return workDir
@@ -138,7 +138,7 @@ func (h *subagentHarness) requireInboxDrained(sessionID int64) {
 // to answer a command that never became a message.
 func TestHarnessScenario_UnknownSkillCommandIsRejectedOnceAndDrains(t *testing.T) {
 	h, rec := newSkillHarness(t, nil, plainRespond)
-	collector := collectEvents(h.mgr.PubSub().SubscribeAll())
+	collector := collectEvents(h.mgr.bus.SubscribeAll())
 
 	defer func() {
 		collector.stop()
@@ -153,7 +153,7 @@ func TestHarnessScenario_UnknownSkillCommandIsRejectedOnceAndDrains(t *testing.T
 	callsBefore := len(rec.snapshot())
 
 	h.startInboxWake()
-	require.NoError(t, h.mgr.SendToSession(h.ctx, sessionID, "/skill nonexistent"))
+	require.NoError(t, h.mgr.sendToSession(h.ctx, sessionID, "/skill nonexistent"))
 	collector.waitFor(t, "rejection notice reaches the controller", func(e []controllerapi.SessionNotification) bool {
 		return len(warningNotices(e, sessionID)) > 0
 	})
@@ -186,7 +186,7 @@ func TestHarnessScenario_UnknownSkillOnAFreshSessionCostsNoModelTurn(t *testing.
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			h, rec := newSkillHarness(t, nil, plainRespond)
-			collector := collectEvents(h.mgr.PubSub().SubscribeAll())
+			collector := collectEvents(h.mgr.bus.SubscribeAll())
 
 			defer func() {
 				collector.stop()

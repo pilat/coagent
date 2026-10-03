@@ -28,10 +28,6 @@ type flakyLinkStore struct {
 	// getLinkFailOnly fails exactly the Nth call, modelling an intermittent read.
 	getLinkFailOnly int
 
-	// markTerminalFailN fails the first N MarkLinkTerminal calls; -1 = always.
-	markTerminalFailN int
-	markTerminalCalls int
-
 	listPendingFail bool
 	listRunningFail bool
 }
@@ -60,25 +56,6 @@ func (f *flakyLinkStore) GetLink(ctx context.Context, childID int64) (*subagent.
 	return f.Store.GetLink(ctx, childID)
 }
 
-func (f *flakyLinkStore) MarkLinkTerminal(
-	ctx context.Context,
-	childID int64,
-	state subagent.State,
-	result string,
-	outcome subagent.Outcome,
-) error {
-	f.mu.Lock()
-	f.markTerminalCalls++
-	n, limit := f.markTerminalCalls, f.markTerminalFailN
-	f.mu.Unlock()
-
-	if limit < 0 || n <= limit {
-		return errLinkRead
-	}
-
-	return f.Store.MarkLinkTerminal(ctx, childID, state, result, outcome)
-}
-
 func (f *flakyLinkStore) ListPendingChildLinks(ctx context.Context, parentID int64) ([]subagent.Link, error) {
 	if f.listPendingFail {
 		return nil, errLinkRead
@@ -95,13 +72,6 @@ func (f *flakyLinkStore) ListRunningChildLinks(ctx context.Context) ([]subagent.
 	return f.Store.ListRunningChildLinks(ctx)
 }
 
-func (f *flakyLinkStore) markTerminalAttempts() int {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-
-	return f.markTerminalCalls
-}
-
 // failGetLink arms GetLink to fail from call number `from` onwards, optionally
 // only for childID.
 func (f *flakyLinkStore) failGetLink(from int, childID int64) {
@@ -113,30 +83,27 @@ func (f *flakyLinkStore) failGetLink(from int, childID int64) {
 }
 
 type flakyActivationStore struct {
-	subagent.Transactions
+	subagent.Store
 
-	mu    sync.Mutex
-	failN int
-	calls int
+	mu       sync.Mutex
+	failN    int
+	calls    int
+	failRead bool
 }
 
-func (f *flakyActivationStore) TryFinalizeActivation(
-	ctx context.Context,
-	childID int64,
-	state subagent.State,
-	result string,
-	outcome subagent.Outcome,
-) (bool, error) {
+func (f *flakyActivationStore) Finalize(ctx context.Context, childID int64, errored bool) (*subagent.Link, error) {
 	f.mu.Lock()
 	f.calls++
-	n, limit := f.calls, f.failN
+	n, limit, read := f.calls, f.failN, f.failRead
 	f.mu.Unlock()
-
-	if limit < 0 || n <= limit {
-		return false, errLinkRead
+	if read {
+		return nil, errLinkRead
 	}
-
-	return f.Transactions.TryFinalizeActivation(ctx, childID, state, result, outcome)
+	if limit < 0 || n <= limit {
+		link, _ := f.GetLink(ctx, childID)
+		return link, errLinkRead
+	}
+	return f.Store.Finalize(ctx, childID, errored)
 }
 
 func (f *flakyActivationStore) attempts() int {

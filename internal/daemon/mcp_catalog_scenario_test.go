@@ -113,7 +113,7 @@ func TestScenario_NextMCPStackReusesProcessAndRefreshesTools(t *testing.T) {
 	h.mgr.waitIdle(sessionID)
 
 	h.startInboxWake()
-	require.NoError(t, h.mgr.SendToSession(h.ctx, sessionID, "USE_FIRST now"))
+	require.NoError(t, h.mgr.sendToSession(h.ctx, sessionID, "USE_FIRST now"))
 	h.waitUntil("first call finishes", func() bool {
 		return lastAssistantTextDTO(h.parentMessages(sessionID)) == "used first"
 	})
@@ -124,7 +124,7 @@ func TestScenario_NextMCPStackReusesProcessAndRefreshesTools(t *testing.T) {
 	require.NoError(t, os.WriteFile(fake.log+".extra", nil, 0o600))
 
 	h.startInboxWake()
-	require.NoError(t, h.mgr.SendToSession(h.ctx, sessionID, "USE_SECOND now"))
+	require.NoError(t, h.mgr.sendToSession(h.ctx, sessionID, "USE_SECOND now"))
 	h.waitUntil("second call finishes", func() bool {
 		return lastAssistantTextDTO(h.parentMessages(sessionID)) == "used second"
 	})
@@ -142,7 +142,7 @@ func TestScenario_NextMCPStackReusesProcessAndRefreshesTools(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, process.Kill())
 	h.startInboxWake()
-	require.NoError(t, h.mgr.SendToSession(h.ctx, sessionID, "AFTER_CRASH now"))
+	require.NoError(t, h.mgr.sendToSession(h.ctx, sessionID, "AFTER_CRASH now"))
 	h.waitUntil("replacement client answers", func() bool {
 		return lastAssistantTextDTO(h.parentMessages(sessionID)) == "recovered"
 	})
@@ -151,7 +151,7 @@ func TestScenario_NextMCPStackReusesProcessAndRefreshesTools(t *testing.T) {
 	assert.Contains(t, toolResultForCallID(h.parentMessages(sessionID), "after-crash"), "pong from fake")
 
 	spawnsBeforeStop := fake.count(t, "spawn")
-	require.NoError(t, h.mgr.Stop(h.ctx, sessionID, 0))
+	require.NoError(t, h.mgr.sendToSession(h.ctx, sessionID, "/stop"))
 	assert.Equal(t, spawnsBeforeStop, fake.count(t, "spawn"),
 		"transcript settlement must not launch project MCP code")
 	require.Eventually(t, func() bool {

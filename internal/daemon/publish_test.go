@@ -49,7 +49,7 @@ type eventCollector struct {
 
 func TestPublishGate_RootPasses(t *testing.T) {
 	mgr, _, store := newTestManager(t)
-	ch := mgr.PubSub().SubscribeAll()
+	ch := mgr.bus.SubscribeAll()
 
 	pid := testProject(t, store, "/tmp/publish-root")
 	rec, err := mgr.store.CreateSession(context.Background(), pid, "fake-model", "", nil)
@@ -64,8 +64,8 @@ func TestPublishGate_RootPasses(t *testing.T) {
 
 func TestPublishGate_RoutesRootOnlyToOwningManager(t *testing.T) {
 	mgr, _, store := newTestManager(t)
-	alpha := mgr.PubSub().SubscribeManager("alpha")
-	beta := mgr.PubSub().SubscribeManager("beta")
+	alpha := mgr.bus.SubscribeManager("alpha")
+	beta := mgr.bus.SubscribeManager("beta")
 
 	pid := testProject(t, store, "/tmp/publish-owned-root")
 	rec, err := mgr.store.CreateSession(context.Background(), pid, "fake-model", "", map[string]any{
@@ -81,7 +81,7 @@ func TestPublishGate_RoutesRootOnlyToOwningManager(t *testing.T) {
 
 func TestPublishGate_OwnerlessRootReachesNoManager(t *testing.T) {
 	mgr, _, store := newTestManager(t)
-	alpha := mgr.PubSub().SubscribeManager("alpha")
+	alpha := mgr.bus.SubscribeManager("alpha")
 
 	pid := testProject(t, store, "/tmp/publish-ownerless-root")
 	rec, err := mgr.store.CreateSession(context.Background(), pid, "fake-model", "", nil)
@@ -94,7 +94,7 @@ func TestPublishGate_OwnerlessRootReachesNoManager(t *testing.T) {
 
 func TestPublishGate_ClaimingOwnerUpdatesTheWarmRoute(t *testing.T) {
 	mgr, _, store := newTestManager(t)
-	alpha := mgr.PubSub().SubscribeManager("alpha")
+	alpha := mgr.bus.SubscribeManager("alpha")
 
 	pid := testProject(t, store, "/tmp/publish-claimed-root")
 	rec, err := mgr.store.CreateSession(context.Background(), pid, "fake-model", "", nil)
@@ -112,7 +112,7 @@ func TestPublishGate_ClaimingOwnerUpdatesTheWarmRoute(t *testing.T) {
 
 func TestPublishGate_ConcurrentClaimWinsOverAStaleRouteRead(t *testing.T) {
 	mgr, _, store := newTestManager(t)
-	alpha := mgr.PubSub().SubscribeManager("alpha")
+	alpha := mgr.bus.SubscribeManager("alpha")
 	pid := testProject(t, store, "/tmp/publish-concurrent-claim")
 	rec, err := mgr.store.CreateSession(context.Background(), pid, "fake-model", "", nil)
 	require.NoError(t, err)
@@ -144,7 +144,7 @@ func TestPublishGate_ConcurrentClaimWinsOverAStaleRouteRead(t *testing.T) {
 
 func TestPublishGate_DropsMalformedEventBeforeSessionLookup(t *testing.T) {
 	mgr, _, _ := newTestManager(t)
-	ch := mgr.PubSub().SubscribeAll()
+	ch := mgr.bus.SubscribeAll()
 
 	counting := &countingSessionStore{Store: mgr.store}
 	mgr.store = counting
@@ -157,7 +157,7 @@ func TestPublishGate_DropsMalformedEventBeforeSessionLookup(t *testing.T) {
 
 func TestPublishGate_ChildDropped(t *testing.T) {
 	mgr, _, store := newTestManager(t)
-	ch := mgr.PubSub().SubscribeAll()
+	ch := mgr.bus.SubscribeAll()
 
 	childID := newTestChild(t, mgr, store, "/tmp/publish-child")
 
@@ -184,7 +184,7 @@ func TestPublishGate_CachesChildVerdict(t *testing.T) {
 // caching "root" for an actual child would leak its events until restart.
 func TestPublishGate_FailOpenDoesNotPoisonCache(t *testing.T) {
 	mgr, _, store := newTestManager(t)
-	ch := mgr.PubSub().SubscribeAll()
+	ch := mgr.bus.SubscribeAll()
 
 	childID := newTestChild(t, mgr, store, "/tmp/publish-failopen")
 
@@ -204,7 +204,7 @@ func TestPublishGate_FailOpenDoesNotPoisonCache(t *testing.T) {
 
 func TestSpawnedChildProducesNoPubSubEvents(t *testing.T) {
 	h := newSubagentHarness(t)
-	collector := collectEvents(h.mgr.PubSub().SubscribeAll())
+	collector := collectEvents(h.mgr.bus.SubscribeAll())
 
 	defer func() {
 		collector.stop()
@@ -362,7 +362,7 @@ func (c *eventCollector) waitFor(
 func (c *eventCollector) stop() { close(c.done) }
 
 // newTestChild creates a root session and returns the ID of a subagent child of it.
-func newTestChild(t *testing.T, mgr *svc, store Store, workDir string) int64 {
+func newTestChild(t *testing.T, mgr *svc, store *sessionstore.Store, workDir string) int64 {
 	t.Helper()
 
 	ctx := context.Background()

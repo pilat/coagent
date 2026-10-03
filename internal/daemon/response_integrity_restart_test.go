@@ -60,7 +60,7 @@ func completeRecoveryAfterRestart(t *testing.T, dbPath string, rootID int64) {
 		require.NotContains(t, visible, "discarded before restart")
 		return &llmwire.Response{Text: "recovered after restart", FinishType: llmwire.FinishStop}
 	}, nil)
-	collector := collectEvents(second.mgr.PubSub().SubscribeAll())
+	collector := collectEvents(second.mgr.bus.SubscribeAll())
 	second.startInboxWake()
 	second.mgr.resumeAfterRestart(second.ctx)
 	waitForVisibleMessage(t, collector, rootID, "recovered after restart")

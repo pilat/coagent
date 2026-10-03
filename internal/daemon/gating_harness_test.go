@@ -125,7 +125,7 @@ func newGatingHarness(
 
 	store := sessionstore.NewStore(db)
 	sessStore := sessionstore.NewStore(db)
-	links := subagent.NewStore(db)
+	links := subagent.NewStore(db, sessStore)
 	schedStore := schedule.NewStore(db, sessStore)
 
 	workDir := t.TempDir()
@@ -143,7 +143,6 @@ func newGatingHarness(
 		factory,
 		sessStore,
 		links,
-		subagent.NewTransactions(db, sessStore),
 		budget.New(sessStore),
 		schedule.NewService(schedStore, sessStore),
 		func() string { return "fake-model" },

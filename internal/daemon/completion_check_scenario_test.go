@@ -37,7 +37,7 @@ func TestHarnessScenario_CompletionCheckConfirmsBeforePublishing(t *testing.T) {
 	}
 
 	h := newSubagentHarnessWith(t, respond)
-	collector := collectEvents(h.mgr.PubSub().SubscribeAll())
+	collector := collectEvents(h.mgr.bus.SubscribeAll())
 	defer func() {
 		collector.stop()
 		h.shutdown()
@@ -101,7 +101,7 @@ func TestHarnessScenario_CompletionCheckBackgroundProcessYieldPublishesOnce(t *t
 	}
 
 	h := newSubagentHarnessWith(t, respond)
-	collector := collectEvents(h.mgr.PubSub().SubscribeAll())
+	collector := collectEvents(h.mgr.bus.SubscribeAll())
 	defer func() {
 		collector.stop()
 		h.shutdown()
@@ -166,7 +166,7 @@ func TestHarnessScenario_CompletionCheckEmptyBackgroundYieldYieldsSilently(t *te
 	}
 
 	h := newSubagentHarnessWith(t, respond)
-	collector := collectEvents(h.mgr.PubSub().SubscribeAll())
+	collector := collectEvents(h.mgr.bus.SubscribeAll())
 	defer func() {
 		collector.stop()
 		h.shutdown()
@@ -222,7 +222,7 @@ func TestHarnessScenario_CompletionCheckStoppedLinkIsNotAWakeSource(t *testing.T
 			}
 
 			h := newSubagentHarnessWith(t, respond)
-			collector := collectEvents(h.mgr.PubSub().SubscribeAll())
+			collector := collectEvents(h.mgr.bus.SubscribeAll())
 			defer func() {
 				collector.stop()
 				h.shutdown()
@@ -292,7 +292,7 @@ func TestHarnessScenario_CompletionCheckCrashAfterToolPersistenceRestartsClean(t
 		"manager_id": scenarioManagerID,
 	})
 	require.NoError(t, err)
-	firstCollector := collectEvents(first.mgr.PubSub().SubscribeAll())
+	firstCollector := collectEvents(first.mgr.bus.SubscribeAll())
 	defer firstCollector.stop()
 	waitForWaitKind(t, firstCollector, root, sessionevent.WaitSleep)
 
@@ -339,7 +339,7 @@ func TestHarnessScenario_CompletionCheckBudgetCrossingOnCandidateHidesText(t *te
 	}
 
 	h := newSubagentHarnessWith(t, respond)
-	collector := collectEvents(h.mgr.PubSub().SubscribeAll())
+	collector := collectEvents(h.mgr.bus.SubscribeAll())
 	defer func() {
 		collector.stop()
 		h.shutdown()

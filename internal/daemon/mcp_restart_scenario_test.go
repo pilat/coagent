@@ -47,7 +47,7 @@ func TestScenario_MCPDisablePersistsAcrossDaemonRestart(t *testing.T) {
 	first.mgr.waitIdle(sessionID)
 
 	first.startInboxWake()
-	require.NoError(t, first.mgr.SendToSession(first.ctx, sessionID, "USE_IT now"))
+	require.NoError(t, first.mgr.sendToSession(first.ctx, sessionID, "USE_IT now"))
 	first.waitUntil("MCP call finishes", func() bool {
 		return lastAssistantTextDTO(first.parentMessages(sessionID)) == "used before restart"
 	})
@@ -55,7 +55,7 @@ func TestScenario_MCPDisablePersistsAcrossDaemonRestart(t *testing.T) {
 	assert.GreaterOrEqual(t, fake.count(t, "spawn"), 1)
 
 	first.startInboxWake()
-	require.NoError(t, first.mgr.SendToSession(first.ctx, sessionID, "DISABLE_IT now"))
+	require.NoError(t, first.mgr.sendToSession(first.ctx, sessionID, "DISABLE_IT now"))
 	first.waitUntil("disable finishes", func() bool {
 		return lastAssistantTextDTO(first.parentMessages(sessionID)) == "disabled"
 	})
@@ -69,7 +69,7 @@ func TestScenario_MCPDisablePersistsAcrossDaemonRestart(t *testing.T) {
 	second := newMCPRestartHarness(t, dbPath, workDir, respond)
 	require.NoError(t, second.mgr.Start(second.ctx))
 	second.startInboxWake()
-	require.NoError(t, second.mgr.SendToSession(second.ctx, sessionID, "USE_AFTER_RESTART now"))
+	require.NoError(t, second.mgr.sendToSession(second.ctx, sessionID, "USE_AFTER_RESTART now"))
 	second.waitUntil("post-restart run finishes", func() bool {
 		return lastAssistantTextDTO(second.parentMessages(sessionID)) == "used after restart"
 	})
@@ -125,7 +125,7 @@ func TestScenario_MCPRemoveClosesStackProcessBeforeTheNextRun(t *testing.T) {
 	})
 	h.mgr.waitIdle(sessionID)
 	h.startInboxWake()
-	require.NoError(t, h.mgr.SendToSession(h.ctx, sessionID, "USE_IT now"))
+	require.NoError(t, h.mgr.sendToSession(h.ctx, sessionID, "USE_IT now"))
 	h.waitUntil("MCP call finishes", func() bool {
 		return lastAssistantTextDTO(h.parentMessages(sessionID)) == "used before remove"
 	})
@@ -133,7 +133,7 @@ func TestScenario_MCPRemoveClosesStackProcessBeforeTheNextRun(t *testing.T) {
 	assert.GreaterOrEqual(t, fake.count(t, "spawn"), 1)
 
 	h.startInboxWake()
-	require.NoError(t, h.mgr.SendToSession(h.ctx, sessionID, "REMOVE_IT now"))
+	require.NoError(t, h.mgr.sendToSession(h.ctx, sessionID, "REMOVE_IT now"))
 	h.waitUntil("removal finishes", func() bool {
 		return lastAssistantTextDTO(h.parentMessages(sessionID)) == "removed"
 	})
@@ -141,7 +141,7 @@ func TestScenario_MCPRemoveClosesStackProcessBeforeTheNextRun(t *testing.T) {
 	fake.waitForExit(t)
 	spawnsAfterRemove := fake.count(t, "spawn")
 	h.startInboxWake()
-	require.NoError(t, h.mgr.SendToSession(h.ctx, sessionID, "USE_AFTER_REMOVE now"))
+	require.NoError(t, h.mgr.sendToSession(h.ctx, sessionID, "USE_AFTER_REMOVE now"))
 	h.waitUntil("post-removal run finishes", func() bool {
 		return lastAssistantTextDTO(h.parentMessages(sessionID)) == "used after remove"
 	})
@@ -205,7 +205,7 @@ func newMCPRestartHarness(
 
 	store := sessionstore.NewStore(db)
 	sessStore := sessionstore.NewStore(db)
-	links := subagent.NewStore(db)
+	links := subagent.NewStore(db, sessStore)
 	schedStore := schedule.NewStore(db, sessStore)
 	registry := mcpstore.NewStore(db)
 	cfg := &config.Config{WorkDir: workDir, Model: "fake-model"}
@@ -217,7 +217,6 @@ func newMCPRestartHarness(
 		factory,
 		sessStore,
 		links,
-		subagent.NewTransactions(db, sessStore),
 		budget.New(sessStore),
 		schedule.NewService(schedStore, sessStore),
 		func() string { return "fake-model" },

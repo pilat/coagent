@@ -77,7 +77,7 @@ func TestHarnessScenario_OutputChainReportedOrder(t *testing.T) {
 		h.shutdown()
 	}()
 
-	collector := collectEvents(h.mgr.PubSub().SubscribeAll())
+	collector := collectEvents(h.mgr.bus.SubscribeAll())
 	defer collector.stop()
 
 	h.startInboxWake()
@@ -142,7 +142,7 @@ func TestHarnessScenario_OutputChainNarratedToolIterations(t *testing.T) {
 	h := newSubagentHarnessWith(t, respond)
 	defer h.shutdown()
 
-	collector := collectEvents(h.mgr.PubSub().SubscribeAll())
+	collector := collectEvents(h.mgr.bus.SubscribeAll())
 	defer collector.stop()
 
 	h.startInboxWake()

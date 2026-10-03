@@ -35,7 +35,7 @@ func TestSetModelUnknownModelNeverReachesTheRecord(t *testing.T) {
 	h := newModelAwareHarness(t, []string{"fake-model"}, respond)
 	defer h.shutdown()
 
-	events := collectEvents(h.mgr.PubSub().SubscribeAll())
+	events := collectEvents(h.mgr.bus.SubscribeAll())
 	defer events.stop()
 
 	h.startInboxWake()
@@ -57,7 +57,7 @@ func TestSetModelUnknownModelNeverReachesTheRecord(t *testing.T) {
 	assert.Equal(t, "fake-model", rec.Model, "the record keeps the model the session can actually run")
 
 	h.startInboxWake()
-	require.NoError(t, h.mgr.SendToSession(h.ctx, id, "second"))
+	require.NoError(t, h.mgr.sendToSession(h.ctx, id, "second"))
 	h.waitUntil("second turn settled", func() bool {
 		return countAssistantReplies(h.parentMessages(id)) == 4 || hasSessionErrorNotice(events.snapshot())
 	})
@@ -92,7 +92,7 @@ func TestSetModelLiveRefusalDoesNotPersist(t *testing.T) {
 	before, err := h.sessStore.GetSession(h.ctx, id)
 	require.NoError(t, err)
 
-	h.mgr.buildInput.Config.UnifiedConfig.Models[1].Provider = "missing"
+	h.mgr.build.Config.UnifiedConfig.Models[1].Provider = "missing"
 	err = h.mgr.SetModel(h.ctx, id, "other-model", "high")
 	require.Error(t, err, "a refused switch must surface to the caller")
 
@@ -131,7 +131,7 @@ func newModelAwareHarnessAtDB(
 
 	store := sessionstore.NewStore(db)
 	sessStore := sessionstore.NewStore(db)
-	links := subagent.NewStore(db)
+	links := subagent.NewStore(db, sessStore)
 	schedStore := schedule.NewStore(db, sessStore)
 
 	workDir := t.TempDir()
@@ -154,16 +154,11 @@ func newModelAwareHarnessAtDB(
 		factory,
 		sessStore,
 		links,
-		subagent.NewTransactions(db, sessStore),
 		budget.New(sessStore),
 		schedule.NewService(schedStore, sessStore),
 		func() string { return known[0] },
 		db,
 	)
-
-	for _, id := range known {
-		mgr.modelCatalog = append(mgr.modelCatalog, subagent.ModelInfo{ID: id})
-	}
 
 	pid, err := store.GetOrCreateProject(ctx, workDir)
 	require.NoError(t, err)
@@ -175,7 +170,7 @@ func newModelAwareHarnessAtDB(
 }
 
 func (h *subagentHarness) liveSession(sessionID int64) *session.Session {
-	rs, ok := h.mgr.runners.Load(sessionID)
+	rs, ok := h.mgr.runners.load(sessionID)
 
 	if !ok {
 		return nil

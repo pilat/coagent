@@ -99,7 +99,7 @@ func TestScenario_ConfigApplyCallIsNotReExecutedBeforeItsVerdict(t *testing.T) {
 	require.NoError(t, second.mgr.Start(second.ctx))
 
 	second.startInboxWake()
-	require.NoError(t, second.mgr.SendToSession(second.ctx, sessionID, "are you done yet?"))
+	require.NoError(t, second.mgr.sendToSession(second.ctx, sessionID, "are you done yet?"))
 
 	second.mgr.waitIdle(sessionID)
 

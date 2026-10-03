@@ -105,11 +105,11 @@ func deliverOneShotBeforeRestart(
 	release chan<- struct{},
 ) (int64, *eventCollector) {
 	t.Helper()
-	events := collectEvents(h.mgr.PubSub().SubscribeManager("telegram-main"))
+	events := collectEvents(h.mgr.bus.SubscribeManager("telegram-main"))
 	t.Cleanup(events.stop)
 	parentID := createScheduleSession(t, h, events)
 	flaky := addFlakyDueOneShot(t, h, parentID)
-	observer := newScheduleRunningObserver(t, h.mgr.PubSub())
+	observer := newScheduleRunningObserver(t, h.mgr.bus)
 	sender := &orderedScheduleSender{SessionSender: h.mgr, running: observer.running, done: observer.done}
 	executor := schedule.NewExecutor(flaky, sender)
 	executor.Start(h.ctx)
@@ -176,7 +176,7 @@ func retryOneShotAfterRestart(
 	t.Helper()
 	// Subscribe before Start: recovery announces the resumed runner, and a
 	// subscription that loses that race drops the session_created trace event.
-	events := collectEvents(h.mgr.PubSub().SubscribeManager("telegram-main"))
+	events := collectEvents(h.mgr.bus.SubscribeManager("telegram-main"))
 	t.Cleanup(events.stop)
 	require.NoError(t, h.mgr.Start(h.ctx))
 	executor := schedule.NewExecutor(h.schedStore, h.mgr)
@@ -280,7 +280,7 @@ func buildScheduleRestartHarness(
 	t.Helper()
 	store := sessionstore.NewStore(db)
 	sessionStore := sessionstore.NewStore(db)
-	links := subagent.NewStore(db)
+	links := subagent.NewStore(db, sessionStore)
 	schedules := schedule.NewStore(db, sessionStore)
 	factory := scheduleRestartFactory(t, workDir, sessionStore, respond)
 	mgr, _ := newScenarioDaemon(
@@ -288,7 +288,6 @@ func buildScheduleRestartHarness(
 		factory,
 		sessionStore,
 		links,
-		subagent.NewTransactions(db, sessionStore),
 		budget.New(sessionStore),
 		schedule.NewService(schedules, sessionStore),
 		func() string {

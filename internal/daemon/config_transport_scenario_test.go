@@ -95,8 +95,8 @@ func testConfigDocumentThroughHTTP(t *testing.T, damaged bool) {
 		Providers: map[string]config.ProviderEntry{"test": {Driver: "openai", BaseURL: server.URL, APIKey: "test-key"}},
 		Models:    []config.ModelEntry{{ID: "fake-model", Provider: "test", MaxTokens: 8192, ContextWindow: 100000}},
 	}}
-	d.mgr.buildInput.Config = wireConfig
-	d.mgr.buildInput.WorkDir = workDir
+	d.mgr.build.Config = wireConfig
+	d.mgr.build.WorkDir = workDir
 	id := startConfigEditSession(t, d, "hello")
 	d.mgr.waitIdle(id)
 	assert.True(t, sawRead.Load())

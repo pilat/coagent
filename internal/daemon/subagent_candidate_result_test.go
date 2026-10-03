@@ -103,7 +103,7 @@ func TestSubagentResult_CarriesCandidateAnswerNotAck(t *testing.T) {
 		return id, err
 	}()
 	require.NoError(t, err)
-	require.NoError(t, h.links.InsertSubagentLink(ctx, subagent.Link{
+	require.NoError(t, seedChildLink(ctx, h.sessStore, subagent.Link{
 		ParentID: parent.ID, ChildID: childID, TaskCallID: "cand",
 	}))
 
@@ -111,7 +111,7 @@ func TestSubagentResult_CarriesCandidateAnswerNotAck(t *testing.T) {
 
 	h.startInboxWake()
 
-	h.mgr.finalizeChild(ctx, childID)
+	finalizeTestChild(ctx, t, h.mgr, childID)
 
 	link, err := h.links.GetLink(ctx, childID)
 	require.NoError(t, err)
@@ -153,7 +153,7 @@ func TestSubagentResult_ErrorBeatsStalePointer(t *testing.T) {
 		return id, err
 	}()
 	require.NoError(t, err)
-	require.NoError(t, h.links.InsertSubagentLink(ctx, subagent.Link{
+	require.NoError(t, seedChildLink(ctx, h.sessStore, subagent.Link{
 		ParentID: parent.ID, ChildID: childID, TaskCallID: "stale",
 	}))
 
@@ -168,7 +168,7 @@ func TestSubagentResult_ErrorBeatsStalePointer(t *testing.T) {
 
 	h.startInboxWake()
 
-	h.mgr.finalizeChild(ctx, childID)
+	finalizeTestChild(ctx, t, h.mgr, childID)
 
 	link, err := h.links.GetLink(ctx, childID)
 	require.NoError(t, err)

@@ -27,7 +27,7 @@ func TestHarnessScenario_ScheduledTurnChain(t *testing.T) {
 	h := newSubagentHarnessWith(t, respond)
 	defer h.shutdown()
 
-	collector := collectEvents(h.mgr.PubSub().SubscribeAll())
+	collector := collectEvents(h.mgr.bus.SubscribeAll())
 	defer collector.stop()
 
 	h.startInboxWake()
@@ -88,7 +88,7 @@ func TestHarnessScenario_LiveStopChain(t *testing.T) {
 		h.shutdown()
 	}()
 
-	collector := collectEvents(h.mgr.PubSub().SubscribeAll())
+	collector := collectEvents(h.mgr.bus.SubscribeAll())
 	defer collector.stop()
 
 	h.startInboxWake()
@@ -101,7 +101,7 @@ func TestHarnessScenario_LiveStopChain(t *testing.T) {
 	process := startScenarioProcess(t, service, root, root, "sleep 30")
 
 	h.startInboxWake()
-	require.NoError(t, h.mgr.SendToSession(h.ctx, root, "/stop"))
+	require.NoError(t, h.mgr.sendToSession(h.ctx, root, "/stop"))
 	h.waitUntil("root stopped", func() bool {
 		record, loadErr := h.sessStore.GetSession(h.ctx, root)
 
@@ -160,7 +160,7 @@ func TestHarnessScenario_InterruptedStopChain(t *testing.T) {
 	require.Equal(t, sessionstore.SessionStatusStopped, record.Status)
 	require.Zero(t, modelCalls, "stop recovery must never run the model")
 
-	collector := collectEvents(h2.mgr.PubSub().SubscribeAll())
+	collector := collectEvents(h2.mgr.bus.SubscribeAll())
 	defer collector.stop()
 
 	controller := newChainController(t, h2)
@@ -195,7 +195,7 @@ func TestHarnessScenario_LaterFreshTurnAfterStop(t *testing.T) {
 	h := newSubagentHarnessWith(t, respond)
 	defer h.shutdown()
 
-	collector := collectEvents(h.mgr.PubSub().SubscribeAll())
+	collector := collectEvents(h.mgr.bus.SubscribeAll())
 	defer collector.stop()
 
 	h.startInboxWake()
@@ -207,7 +207,7 @@ func TestHarnessScenario_LaterFreshTurnAfterStop(t *testing.T) {
 	h.waitUntil("first runner gone", func() bool { return !h.mgr.HasActiveLoop(root) })
 
 	h.startInboxWake()
-	require.NoError(t, h.mgr.SendToSession(h.ctx, root, "/stop"))
+	require.NoError(t, h.mgr.sendToSession(h.ctx, root, "/stop"))
 	h.waitUntil("root stopped", func() bool {
 		record, loadErr := h.sessStore.GetSession(h.ctx, root)
 
@@ -215,7 +215,7 @@ func TestHarnessScenario_LaterFreshTurnAfterStop(t *testing.T) {
 	})
 
 	h.startInboxWake()
-	require.NoError(t, h.mgr.SendToSession(h.ctx, root, "continue please"))
+	require.NoError(t, h.mgr.sendToSession(h.ctx, root, "continue please"))
 	waitForVisibleMessage(t, collector, root, "Resumed and done.")
 
 	controller := newChainController(t, h)
@@ -254,7 +254,7 @@ func TestHarnessScenario_CompactSuccessChain(t *testing.T) {
 	h := newSubagentHarnessWith(t, respond)
 	defer h.shutdown()
 
-	collector := collectEvents(h.mgr.PubSub().SubscribeAll())
+	collector := collectEvents(h.mgr.bus.SubscribeAll())
 	defer collector.stop()
 
 	h.startInboxWake()
@@ -269,7 +269,7 @@ func TestHarnessScenario_CompactSuccessChain(t *testing.T) {
 	h.waitUntil("first runner gone", func() bool { return !h.mgr.HasActiveLoop(root) })
 
 	h.startInboxWake()
-	require.NoError(t, h.mgr.SendToSession(h.ctx, root, "/compact keep the TODO state"))
+	require.NoError(t, h.mgr.sendToSession(h.ctx, root, "/compact keep the TODO state"))
 	collector.waitFor(t, "compaction finished", func(events []controllerapi.SessionNotification) bool {
 		return containsMessage(events, root, "✅ Context compacted")
 	})

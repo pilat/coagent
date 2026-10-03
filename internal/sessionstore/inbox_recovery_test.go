@@ -275,7 +275,7 @@ func createPendingRecoveryFixtures(ctx context.Context, t *testing.T, store *Sto
 	require.NoError(t, err)
 	_, err = enqueueInput(ctx, store, killed.ID, InputSourceUser, "killed pending")
 	require.NoError(t, err)
-	require.NoError(t, store.MarkSessionKilled(ctx, killed.ID))
+	require.NoError(t, store.WithTx(ctx, func(tx *sql.Tx) error { return MarkSessionKilledTx(ctx, tx, killed.ID) }))
 
 	return ids
 }
@@ -341,7 +341,10 @@ func createExcludedRecoveryFixtures(ctx context.Context, t *testing.T, store *St
 		_, err = acceptInput(ctx, store, input.ID, "excluded")
 		require.NoError(t, err)
 		if fixture.kill {
-			require.NoError(t, store.MarkSessionKilled(ctx, rec.ID))
+			require.NoError(
+				t,
+				store.WithTx(ctx, func(tx *sql.Tx) error { return MarkSessionKilledTx(ctx, tx, rec.ID) }),
+			)
 		} else {
 			require.NoError(t, store.UpdateSessionStatus(ctx, rec.ID, fixture.status))
 		}

@@ -22,14 +22,14 @@ var errDeliveryCrash = errors.New("daemon died before the completion was committ
 
 // The delivery transaction must fail before either the input or its acknowledgment commits.
 type crashGateTransactions struct {
-	subagent.Transactions
+	subagent.Store
 
 	once     sync.Once
 	rejected chan struct{}
 }
 
-func newCrashGate(inner subagent.Transactions) *crashGateTransactions {
-	return &crashGateTransactions{Transactions: inner, rejected: make(chan struct{})}
+func newCrashGate(inner subagent.Store) *crashGateTransactions {
+	return &crashGateTransactions{Store: inner, rejected: make(chan struct{})}
 }
 
 func (g *crashGateTransactions) DeliverCompletion(context.Context, subagent.Link, string) (bool, error) {
@@ -99,8 +99,8 @@ func TestScenario_CrashBetweenFinalizationAndDeliveryRedeliversExactlyOnce(t *te
 			first := newSubagentHarnessOnDB(
 				t, dbPath, crashWindowRespond(tc.background), nil,
 			)
-			gate := newCrashGate(first.mgr.subagents)
-			first.mgr.subagents = gate
+			gate := newCrashGate(first.mgr.links)
+			first.mgr.links = gate
 
 			first.startInboxWake()
 			parentID, err := first.mgr.Send(first.ctx, first.projectID, "spawn a child", "fake-model", nil)
@@ -184,7 +184,7 @@ func TestScenario_StoppedChildSurvivesARestartWithoutResurrection(t *testing.T) 
 	link := first.waitForChildLink(parentID)
 	first.waitUntil("child loop is live", func() bool { return first.mgr.HasActiveLoop(link.ChildID) })
 
-	require.NoError(t, first.mgr.Stop(first.ctx, link.ChildID, 0))
+	require.NoError(t, first.mgr.sendToSession(first.ctx, link.ChildID, "/stop"))
 
 	parked, err := first.links.GetLink(first.ctx, link.ChildID)
 	require.NoError(t, err)

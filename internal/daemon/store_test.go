@@ -13,13 +13,13 @@ import (
 	"github.com/pilat/coagent/internal/sessionstore"
 )
 
-func newTestStore(t *testing.T) Store {
+func newTestStore(t *testing.T) *sessionstore.Store {
 	t.Helper()
 	s, _ := newTestStoreWithSchedule(t)
 	return s
 }
 
-func newTestStoreWithSchedule(t *testing.T) (Store, schedule.Store) {
+func newTestStoreWithSchedule(t *testing.T) (*sessionstore.Store, schedule.Store) {
 	t.Helper()
 	dbPath := filepath.Join(t.TempDir(), "test.db")
 	db, err := migrate.OpenDB(context.Background(), dbPath)
@@ -29,7 +29,10 @@ func newTestStoreWithSchedule(t *testing.T) (Store, schedule.Store) {
 	return sessionstore.NewStore(db), schedule.NewStore(db, sessionstore.NewStore(db))
 }
 
-func testProject(t *testing.T, s Store, workDir string) int64 {
+func testProject(t *testing.T, s interface {
+	GetOrCreateProject(context.Context, string) (int64, error)
+}, workDir string,
+) int64 {
 	t.Helper()
 	pid, err := s.GetOrCreateProject(context.Background(), workDir)
 	require.NoError(t, err)

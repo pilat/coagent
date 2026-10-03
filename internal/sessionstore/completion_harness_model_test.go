@@ -328,10 +328,10 @@ func TestHarnessModel_CompletionDeliveryThenPromotionInvalidates(t *testing.T) {
 
 	seedPendingCheck(t, db, parent.ID)
 
-	link, err := subagent.NewStore(db).GetLink(ctx, childID)
+	link, err := subagent.NewStore(db, testStore(db)).GetLink(ctx, childID)
 	require.NoError(t, err)
 
-	won, err := newTestSubagentTransactions(db).DeliverBackgroundCompletion(ctx, *link, 1)
+	won, err := newTestSubagentStore(db).DeliverBackgroundCompletion(ctx, *link, 1)
 	require.NoError(t, err)
 	require.True(t, won)
 

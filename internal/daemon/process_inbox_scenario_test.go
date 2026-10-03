@@ -14,7 +14,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/pilat/coagent/internal/admission"
 	"github.com/pilat/coagent/internal/backgroundprocess"
 	"github.com/pilat/coagent/internal/llmwire"
 	"github.com/pilat/coagent/internal/sessionevent"
@@ -54,7 +53,7 @@ func TestHarnessScenario_ProcessCompletionAtBusyToolBoundary(t *testing.T) {
 
 	h := newSubagentHarnessWith(t, respond)
 	service := installScenarioProcessService(t, h)
-	collector := collectEvents(h.mgr.PubSub().SubscribeAll())
+	collector := collectEvents(h.mgr.bus.SubscribeAll())
 	defer func() {
 		closeOnce(release)
 		collector.stop()
@@ -126,8 +125,8 @@ func TestHarnessScenario_AgentCancelsOwnedBackgroundProcess(t *testing.T) {
 
 	h := newSubagentHarnessWith(t, respond)
 	service := installScenarioProcessService(t, h)
-	h.mgr.buildInput.ProcessService = service
-	collector := collectEvents(h.mgr.PubSub().SubscribeAll())
+	h.mgr.build.ProcessService = service
+	collector := collectEvents(h.mgr.bus.SubscribeAll())
 	defer func() {
 		collector.stop()
 		h.shutdown()
@@ -161,7 +160,7 @@ func TestHarnessScenario_ProcessCompletionAtIdleTransition(t *testing.T) {
 
 		return &llmwire.Response{Text: "idle-transition completion observed"}
 	})
-	collector := collectEvents(h.mgr.PubSub().SubscribeAll())
+	collector := collectEvents(h.mgr.bus.SubscribeAll())
 	defer func() {
 		collector.stop()
 		h.shutdown()
@@ -187,14 +186,13 @@ func TestHarnessScenario_ProcessCompletionAtIdleTransition(t *testing.T) {
 
 	workDir, err := h.mgr.store.GetProjectWorkDir(h.ctx, h.projectID)
 	require.NoError(t, err)
-	require.True(t, h.mgr.admit.TryAdmit(admission.Parent, 0))
-	ending := newRunner(func() {}, workDir, h.projectID, admission.Parent, 0, false)
-	_, registered := h.mgr.runners.Register(root.ID, ending)
+	require.True(t, h.mgr.runners.tryAdmit(false, 0))
+	ending := newRunner(func() {}, workDir, root, waitingRunner{sessionID: root.ID}, false)
+	_, registered := h.mgr.runners.register(ending)
 	require.True(t, registered)
 
 	require.NoError(t, h.mgr.inputReady(h.ctx, root.ID))
-	errored := false
-	h.mgr.finishRunner(h.ctx, root.ID, ending, &errored, true, nil)
+	h.mgr.finishRunner(h.ctx, ending, runOutcome{publishIdle: true}, nil)
 
 	waitForVisibleMessage(t, collector, root.ID, "idle-transition completion observed")
 	drainScenarioClaims(t, "process_idle_transition.json", newChainController(t, h))
@@ -214,7 +212,7 @@ func TestHarnessScenario_ProcessCompletionRevivesCompletedRoot(t *testing.T) {
 		return &llmwire.Response{Text: "idle process completion observed"}
 	})
 	service := installScenarioProcessService(t, h)
-	collector := collectEvents(h.mgr.PubSub().SubscribeAll())
+	collector := collectEvents(h.mgr.bus.SubscribeAll())
 	defer func() {
 		collector.stop()
 		h.shutdown()
@@ -270,7 +268,7 @@ func TestHarnessScenario_ProcessCompletionInterruptsSleep(t *testing.T) {
 
 	h := newSubagentHarnessWith(t, respond)
 	service := installScenarioProcessService(t, h)
-	collector := collectEvents(h.mgr.PubSub().SubscribeAll())
+	collector := collectEvents(h.mgr.bus.SubscribeAll())
 	defer func() {
 		collector.stop()
 		h.shutdown()
@@ -329,7 +327,7 @@ func TestHarnessScenario_ProcessCompletionWaitsForForegroundChild(t *testing.T) 
 
 	h := newSubagentHarnessWith(t, respond)
 	service := installScenarioProcessService(t, h)
-	collector := collectEvents(h.mgr.PubSub().SubscribeAll())
+	collector := collectEvents(h.mgr.bus.SubscribeAll())
 	defer func() {
 		closeOnce(childRelease)
 		collector.stop()
@@ -399,7 +397,7 @@ func TestHarnessScenario_ProcessCrashRestartDeliversInterruptedOnce(t *testing.T
 	require.NoError(t, first.mgr.processStore.InsertProcess(first.ctx, process))
 
 	second := newSubagentHarnessOnDB(t, dbPath, respond, nil)
-	collector := collectEvents(second.mgr.PubSub().SubscribeAll())
+	collector := collectEvents(second.mgr.bus.SubscribeAll())
 	defer func() {
 		collector.stop()
 		second.shutdown()
@@ -480,7 +478,7 @@ func TestHarnessScenario_ForegroundBashCrashRestartResolvesInterruptedCall(t *te
 	require.NoError(t, first.mgr.processStore.InsertProcess(first.ctx, process))
 
 	second := newSubagentHarnessOnDB(t, dbPath, respond, nil)
-	collector := collectEvents(second.mgr.PubSub().SubscribeAll())
+	collector := collectEvents(second.mgr.bus.SubscribeAll())
 	defer func() {
 		collector.stop()
 		second.shutdown()
@@ -537,7 +535,7 @@ func TestScenario_InterruptedCallSettlementNeedsNoProjectOrModel(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, os.Rename(workDir, workDir+".gone"))
 
-	err = h.mgr.recoverInterruptedTools(h.ctx)
+	err = h.mgr.settleUnresolvedCalls(h.ctx)
 	require.NoError(t, err)
 
 	messages, err := h.sessStore.LoadActiveMessages(h.ctx, root.ID)
@@ -560,11 +558,11 @@ func TestProcessCompletionRetainsInputWithoutWakingStoppedOrErroredSession(t *te
 
 				return &llmwire.Response{Text: "must not run"}
 			})
-			collector := collectEvents(h.mgr.PubSub().SubscribeAll())
+			collector := collectEvents(h.mgr.bus.SubscribeAll())
 			service := backgroundprocess.NewService(h.mgr.processStore, backgroundprocess.Options{
 				OutputDir: t.TempDir(),
 			})
-			h.mgr.processSvc = service
+			h.mgr.processes = service
 			defer func() {
 				collector.stop()
 				h.shutdown()
@@ -599,7 +597,7 @@ func TestProcessCompletionRetainsInputWithoutWakingStoppedOrErroredSession(t *te
 			assert.Equal(t, process.ID, pending.Attributes["process_id"])
 			if status == sessionstore.SessionStatusStopped {
 				h.startInboxWake()
-				require.NoError(t, h.mgr.SendToSession(h.ctx, root.ID, "/help"))
+				require.NoError(t, h.mgr.sendToSession(h.ctx, root.ID, "/help"))
 				assert.False(t, h.mgr.HasActiveLoop(root.ID))
 				head, peekErr := h.mgr.store.PeekPending(h.ctx, root.ID)
 				require.NoError(t, peekErr)

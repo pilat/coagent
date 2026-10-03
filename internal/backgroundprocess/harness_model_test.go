@@ -36,7 +36,9 @@ func TestHarnessModel_ConcurrentPromotionAndCancellationReleaseOneClass(t *testi
 			_, _ = service.CancelProcess(ctx, process.ID, IntentAgentCancelled)
 		}()
 		wg.Wait()
-		assert.Eventually(t, func() bool { return service.liveCount(2) == 0 }, 10*time.Second, 20*time.Millisecond)
+		assert.Eventually(t, func() bool {
+			return func() int { service.mu.Lock(); defer service.mu.Unlock(); return service.live[2] }() == 0
+		}, 10*time.Second, 20*time.Millisecond)
 
 		service.mu.Lock()
 		assert.Zero(t, service.background[2])

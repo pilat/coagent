@@ -54,21 +54,21 @@ func TestBackgroundObligationProjectsTreeLedgersAndInbox(t *testing.T) {
 	}()
 	require.NoError(t, err)
 
-	obligation, err := h.mgr.hasBackgroundObligation(h.ctx, root.ID)
+	obligation, err := h.mgr.store.HasBackgroundObligationByRoot(h.ctx, root.ID)
 	require.NoError(t, err)
 	assert.False(t, obligation)
 
-	require.NoError(t, h.links.InsertSubagentLink(h.ctx, subagent.Link{
+	require.NoError(t, seedChildLink(h.ctx, h.sessStore, subagent.Link{
 		ParentID: root.ID, ChildID: child, TaskCallID: "background", Blocking: false,
 		State: subagent.StateRunning,
 	}))
-	obligation, err = h.mgr.hasBackgroundObligation(h.ctx, root.ID)
+	obligation, err = h.mgr.store.HasBackgroundObligationByRoot(h.ctx, root.ID)
 	require.NoError(t, err)
 	assert.True(t, obligation)
 	budgetProbe := &budgetServiceProbe{record: &budget.Record{
 		State: budget.Armed, Generation: 1,
 	}}
-	h.mgr.budgetSvc = budgetProbe
+	h.mgr.budgets = budgetProbe
 	retained, err := h.mgr.retainBudgetForBackground(h.ctx, root.ID)
 	require.NoError(t, err)
 	assert.True(t, retained)
@@ -86,7 +86,7 @@ func TestBackgroundObligationProjectsTreeLedgersAndInbox(t *testing.T) {
 		},
 	)
 	require.NoError(t, err)
-	obligation, err = h.mgr.hasBackgroundObligation(h.ctx, other.ID)
+	obligation, err = h.mgr.store.HasBackgroundObligationByRoot(h.ctx, other.ID)
 	require.NoError(t, err)
 	assert.True(t, obligation)
 
@@ -114,7 +114,7 @@ func TestBackgroundObligationProjectsTreeLedgersAndInbox(t *testing.T) {
 			return id, err
 		}()
 		require.NoError(t, err)
-		require.NoError(t, h.links.InsertSubagentLink(h.ctx, subagent.Link{
+		require.NoError(t, seedChildLink(h.ctx, h.sessStore, subagent.Link{
 			ParentID: root.ID, ChildID: stoppedChild,
 			TaskCallID: "background-" + string(state), Blocking: false, State: state,
 		}))
@@ -144,12 +144,12 @@ func TestBackgroundObligationProjectsTreeLedgersAndInbox(t *testing.T) {
 			return id, err
 		}()
 		require.NoError(t, err)
-		require.NoError(t, h.links.InsertSubagentLink(h.ctx, subagent.Link{
+		require.NoError(t, seedChildLink(h.ctx, h.sessStore, subagent.Link{
 			ParentID: otherRoot.ID, ChildID: otherChild,
 			TaskCallID: "background-" + string(state), Blocking: false, State: state,
 		}))
 	}
-	obligation, err = h.mgr.hasBackgroundObligation(h.ctx, otherRoot.ID)
+	obligation, err = h.mgr.store.HasBackgroundObligationByRoot(h.ctx, otherRoot.ID)
 	require.NoError(t, err)
 	assert.False(t, obligation)
 	retained, err = h.mgr.retainBudgetForBackground(h.ctx, otherRoot.ID)
@@ -186,14 +186,14 @@ func (s *budgetServiceProbe) BeginDrain(
 func TestModelHasPricingRequiresMatchingPricedEntry(t *testing.T) {
 	t.Parallel()
 
-	manager := &svc{modelEntries: []config.ModelEntry{
+	manager := &svc{models: models{entries: []config.ModelEntry{
 		{ID: "unpriced"},
 		{ID: "priced", Pricing: &config.ModelPricing{}},
-	}}
+	}}}
 
-	assert.False(t, manager.modelHasPricing("missing"))
-	assert.False(t, manager.modelHasPricing("unpriced"))
-	assert.True(t, manager.modelHasPricing("priced"))
+	assert.False(t, manager.models.priced("missing"))
+	assert.False(t, manager.models.priced("unpriced"))
+	assert.True(t, manager.models.priced("priced"))
 }
 
 func TestReleaseArmedBudgetHonorsStateAndErrors(t *testing.T) {
@@ -201,7 +201,7 @@ func TestReleaseArmedBudgetHonorsStateAndErrors(t *testing.T) {
 
 	t.Run("released budget is unchanged", func(t *testing.T) {
 		service := &budgetServiceProbe{record: &budget.Record{State: budget.Released}}
-		manager := &svc{budgetSvc: service}
+		manager := &svc{budgets: service}
 
 		require.NoError(t, manager.releaseArmedBudget(t.Context(), 1, "stopped"))
 		assert.Zero(t, service.releaseCalls)
@@ -211,7 +211,7 @@ func TestReleaseArmedBudgetHonorsStateAndErrors(t *testing.T) {
 		service := &budgetServiceProbe{record: &budget.Record{
 			State: budget.Armed, Generation: 3,
 		}}
-		manager := &svc{budgetSvc: service}
+		manager := &svc{budgets: service}
 
 		require.NoError(t, manager.releaseArmedBudget(t.Context(), 1, "stopped"))
 		assert.Equal(t, 1, service.releaseCalls)
@@ -223,7 +223,7 @@ func TestReleaseArmedBudgetHonorsStateAndErrors(t *testing.T) {
 			record:     &budget.Record{State: budget.Armed},
 			releaseErr: releaseErr,
 		}
-		manager := &svc{budgetSvc: service}
+		manager := &svc{budgets: service}
 
 		err := manager.releaseArmedBudget(t.Context(), 1, "stopped")
 		require.ErrorIs(t, err, releaseErr)

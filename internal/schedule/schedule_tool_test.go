@@ -27,6 +27,10 @@ type mockScheduleStore struct {
 
 func (s *mockScheduleStore) SleepTool(id int64) tool.Tool { return schedule.NewSleepTool(s, id) }
 
+func (*mockScheduleStore) Render(context.Context, int64) (string, error) {
+	panic("unexpected schedule render")
+}
+
 type mockScheduleEntry struct {
 	id          int64
 	cronExpr    string

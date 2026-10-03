@@ -9,8 +9,9 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/pilat/coagent/internal/admission"
+	"github.com/pilat/coagent/internal/backgroundprocess"
 	"github.com/pilat/coagent/internal/progressruntime"
+	"github.com/pilat/coagent/internal/sessionstore"
 	"github.com/pilat/coagent/internal/subagent"
 )
 
@@ -98,9 +99,9 @@ func TestShutdownCancelsRunnersBeforeWaitingForProgress(t *testing.T) {
 
 	runnerCtx, cancel := context.WithCancel(context.Background())
 	activeRunner := newRunner(
-		cancel, t.TempDir(), 1, admission.Parent, 0, false,
+		cancel, t.TempDir(), &sessionstore.SessionRecord{ID: 1}, waitingRunner{sessionID: 1}, false,
 	)
-	_, registered := mgr.runners.Register(1, activeRunner)
+	_, registered := mgr.runners.register(activeRunner)
 	require.True(t, registered)
 
 	go func() {
@@ -137,40 +138,64 @@ func TestShutdownCancelsRunnersBeforeWaitingForProgress(t *testing.T) {
 
 func TestStartDoesNotLaunchRecoveryAfterShutdown(t *testing.T) {
 	h := newSubagentHarness(t)
+	links := &blockingRecoveryLinks{
+		Store: h.mgr.links, entered: make(chan struct{}),
+		cancelled: make(chan struct{}), allowReturn: make(chan struct{}),
+	}
+	close(links.allowReturn)
+	h.mgr.links = links
 	h.mgr.Shutdown(time.Second)
 
 	require.ErrorIs(t, h.mgr.Start(h.ctx), errDaemonShuttingDown)
-	assert.False(t, h.mgr.recovery.Active())
+	assert.Never(t, func() bool {
+		select {
+		case <-links.entered:
+			return true
+		default:
+			return false
+		}
+	}, 50*time.Millisecond, 5*time.Millisecond)
+}
+
+type blockingStartupProcesses struct {
+	backgroundprocess.Service
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (s *blockingStartupProcesses) InterruptNonterminal(ctx context.Context) (int, error) {
+	close(s.entered)
+	<-s.release
+	return s.Service.InterruptNonterminal(ctx)
 }
 
 func TestShutdownWaitsForStartupProcessRecovery(t *testing.T) {
 	mgr, _, _ := newTestManager(t)
-	finishRecovery := mgr.beginProcessRecovery()
-
+	processes := &blockingStartupProcesses{
+		Service: mgr.processes,
+		entered: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+	mgr.processes = processes
+	startupDone := make(chan error, 1)
+	go func() { startupDone <- mgr.Start(t.Context()) }()
+	requireBarrierSignal(t, processes.entered, "startup did not reach process recovery")
 	shutdownDone := make(chan struct{})
-	go func() {
-		mgr.Shutdown(time.Second)
-		close(shutdownDone)
-	}()
-
+	go func() { mgr.Shutdown(time.Second); close(shutdownDone) }()
 	select {
 	case <-shutdownDone:
 		t.Fatal("shutdown returned before startup process recovery")
 	case <-time.After(50 * time.Millisecond):
 	}
-
-	finishRecovery()
-	select {
-	case <-shutdownDone:
-	case <-time.After(time.Second):
-		t.Fatal("shutdown did not join startup process recovery")
-	}
+	close(processes.release)
+	require.ErrorIs(t, <-startupDone, errDaemonShuttingDown)
+	requireBarrierSignal(t, shutdownDone, "shutdown did not join startup process recovery")
 }
 
-func TestEnsureRunnerRejectsShutdown(t *testing.T) {
+func TestStartLockedRejectsShutdown(t *testing.T) {
 	h := newSubagentHarness(t)
-	h.mgr.shuttingDown.Store(true)
+	h.mgr.life.close()
 
-	err := h.mgr.ensureRunner(h.ctx, 1, t.TempDir(), h.projectID)
+	err := h.mgr.startLocked(h.ctx, 1)
 	require.ErrorIs(t, err, errDaemonShuttingDown)
 }

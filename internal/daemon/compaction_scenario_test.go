@@ -108,7 +108,7 @@ func TestScenario_CompactWaitsForABlockingChildThenRuns(t *testing.T) {
 	h.waitUntil("parent suspended", func() bool { return !h.mgr.HasActiveLoop(parentID) })
 
 	h.startInboxWake()
-	require.NoError(t, h.mgr.SendToSession(h.ctx, parentID, "/compact"))
+	require.NoError(t, h.mgr.sendToSession(h.ctx, parentID, "/compact"))
 
 	// A non-sleep pending call keeps the session unrunnable, so nothing compacts:
 	// the transcript still owes the task call its result.
@@ -160,7 +160,7 @@ func TestScenario_DeferredCompactSurvivesADaemonRestart(t *testing.T) {
 
 	first.waitUntil("parent suspended", func() bool { return !first.mgr.HasActiveLoop(parentID) })
 	first.startInboxWake()
-	require.NoError(t, first.mgr.SendToSession(first.ctx, parentID, "/compact"))
+	require.NoError(t, first.mgr.sendToSession(first.ctx, parentID, "/compact"))
 
 	require.False(t, hasSummaryRow(first.parentMessages(parentID)))
 

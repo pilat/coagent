@@ -39,15 +39,19 @@ func TestPublishWaiting_ProjectsOnlyOneShotsOwnedByPendingSleepCalls(t *testing.
 		AddSleep(ctx, rec.ID, "sleep-call", sleepAt, "wake")
 	require.NoError(t, err)
 
-	var notifications []sessionevent.Notification
-	mgr.publishWaiting(ctx, rec.ID, func(notification sessionevent.Notification) {
-		notifications = append(notifications, notification)
-	})
-
-	require.Len(t, notifications, 1)
-	require.Len(t, notifications[0].Waiting, 1,
+	notifications := mgr.bus.Subscribe(rec.ID)
+	defer mgr.bus.Unsubscribe(rec.ID, notifications)
+	mgr.publishWaiting(ctx, rec.ID)
+	var notification sessionevent.Notification
+	select {
+	case notification = <-notifications:
+	case <-time.After(time.Second):
+		t.Fatal("waiting projection was not published")
+	}
+	assert.Empty(t, notifications, "waiting projection must publish exactly once")
+	require.Len(t, notification.Waiting, 1,
 		"a standalone one-shot schedule is future input, not a pending wait")
-	wait := notifications[0].Waiting[0]
+	wait := notification.Waiting[0]
 	assert.Equal(t, sessionevent.WaitSleep, wait.Kind)
 	require.NotNil(t, wait.WakeAt)
 	assert.True(t, wait.WakeAt.Equal(sleepAt))

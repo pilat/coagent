@@ -67,7 +67,7 @@ func TestHarnessScenario_LongSessionAcceptsInputWithoutChatReceipt(t *testing.T)
 	require.NoError(t, err)
 	waitForScenarioSignal(t, entered, "model call")
 	h.startInboxWake()
-	require.NoError(t, h.mgr.SendToSession(h.ctx, sessionID, "queued follow-up"))
+	require.NoError(t, h.mgr.sendToSession(h.ctx, sessionID, "queued follow-up"))
 
 	var inputs, acknowledgements int
 	require.NoError(t, h.db.QueryRowContext(h.ctx, `
@@ -93,7 +93,7 @@ func TestHarnessScenario_WorkingMainModelRefreshesProgressEveryThirtySeconds(t *
 
 		return &llmwire.Response{Text: "late response"}
 	})
-	collector := collectEvents(h.mgr.PubSub().SubscribeAll())
+	collector := collectEvents(h.mgr.bus.SubscribeAll())
 	defer func() {
 		close(release)
 		collector.stop()
@@ -150,7 +150,7 @@ func TestHarnessScenario_ReactivatedEpisodeGetsFullMainModelInterval(t *testing.
 
 		return &llmwire.Response{Text: "new final"}
 	})
-	collector := collectEvents(h.mgr.PubSub().SubscribeAll())
+	collector := collectEvents(h.mgr.bus.SubscribeAll())
 	defer func() {
 		close(release)
 		collector.stop()
@@ -170,7 +170,7 @@ func TestHarnessScenario_ReactivatedEpisodeGetsFullMainModelInterval(t *testing.
 		WHERE session_id = ? AND type IN ('message_persistent', 'message_replaceable')`, old, sessionID)
 	require.NoError(t, err)
 	h.startInboxWake()
-	require.NoError(t, h.mgr.SendToSession(h.ctx, sessionID, "second episode"))
+	require.NoError(t, h.mgr.sendToSession(h.ctx, sessionID, "second episode"))
 	waitForScenarioSignal(t, enteredSecond, "reactivated model call")
 
 	progressStore := h.sessStore
@@ -215,12 +215,12 @@ func TestHarnessScenario_EmptyRootStartsEpisodeWithFirstInput(t *testing.T) {
 	roots, err := progressStore.ListAutonomousProgressRoots(h.ctx)
 	require.NoError(t, err)
 	assert.NotContains(t, roots, sessionID)
-	current, err := h.mgr.CurrentProgress(h.ctx, sessionID)
+	current, err := h.mgr.progress.Current(h.ctx, sessionID)
 	require.NoError(t, err)
 	assert.Contains(t, current.Rendered, "Wall time: unavailable")
 
 	h.startInboxWake()
-	require.NoError(t, h.mgr.SendToSession(h.ctx, sessionID, "first task"))
+	require.NoError(t, h.mgr.sendToSession(h.ctx, sessionID, "first task"))
 	waitForScenarioSignal(t, entered, "first model call")
 
 	var episodeStartedAt time.Time

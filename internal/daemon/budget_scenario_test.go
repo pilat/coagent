@@ -92,7 +92,7 @@ func TestHarnessScenario_BackgroundChildRetainsBudgetUntilCompletion(t *testing.
 	}
 
 	h := newSubagentHarnessWith(t, respond)
-	collector := collectEvents(h.mgr.PubSub().SubscribeAll())
+	collector := collectEvents(h.mgr.bus.SubscribeAll())
 	defer func() {
 		closeOnce(childRelease)
 		collector.stop()

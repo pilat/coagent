@@ -2,6 +2,7 @@ package sessionstore
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"testing"
 
@@ -51,7 +52,7 @@ func TestMarkSessionKilledMarksTheTerminalStatus(t *testing.T) {
 	record, err := store.CreateSession(ctx, projectID, "model", "", nil)
 	require.NoError(t, err)
 
-	require.NoError(t, store.MarkSessionKilled(ctx, record.ID))
+	require.NoError(t, store.WithTx(ctx, func(tx *sql.Tx) error { return MarkSessionKilledTx(ctx, tx, record.ID) }))
 	killed, err := store.GetSession(ctx, record.ID)
 	require.NoError(t, err)
 	assert.Equal(t, SessionStatusKilled, killed.Status)

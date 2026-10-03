@@ -12,7 +12,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/pilat/coagent/internal/backgroundprocess"
 	"github.com/pilat/coagent/internal/budget"
 	"github.com/pilat/coagent/internal/coagenthome"
 	"github.com/pilat/coagent/internal/config"
@@ -20,9 +19,7 @@ import (
 	"github.com/pilat/coagent/internal/llm"
 	"github.com/pilat/coagent/internal/llmwire"
 	"github.com/pilat/coagent/internal/migrate"
-	"github.com/pilat/coagent/internal/progressruntime"
 	"github.com/pilat/coagent/internal/schedule"
-	"github.com/pilat/coagent/internal/sessionbus"
 	"github.com/pilat/coagent/internal/sessionevent"
 	"github.com/pilat/coagent/internal/sessionstore"
 	"github.com/pilat/coagent/internal/subagent"
@@ -141,29 +138,23 @@ func newTestManagerWithSchedule(t *testing.T) (*svc, *mockFactory, *sessionstore
 		cfg.UnifiedConfig.Models[index].EffortLevels = []string{"low", "medium", "high"}
 	}
 	in := scriptedBuildInput(t, cfg, store, nil, factory.client)
-	bus := sessionbus.New()
-	mgr, processes := newSvc(
+	mgr, _ := newScenarioDaemon(
 		t.Context(),
 		in,
 		store,
-		subagent.NewStore(db),
-		subagent.NewTransactions(db, store),
+		subagent.NewStore(db, store),
 		budget.New(store),
-		backgroundprocess.NewStore(db, store),
-		progressruntime.New(store, bus),
-		bus,
 		schedule.NewService(schedules, store),
-		"fake-model",
+		func() string { return "fake-model" },
+		db,
 	)
-	mgr.loadModelCatalog(cfg.UnifiedConfig.Models)
-	mgr.buildInput.ProcessService = processes
 	t.Cleanup(func() { mgr.Shutdown(3 * time.Second) })
 	return mgr, factory, store, schedules
 }
 
 func TestManager_Send(t *testing.T) {
 	mgr, factory, s := newTestManager(t)
-	ch := mgr.PubSub().SubscribeAll()
+	ch := mgr.bus.SubscribeAll()
 
 	// Use completeAfter so Kill (which no longer cancels context) lets session finish naturally
 	factory.nextSess = &mockSession{completeAfter: 200 * time.Millisecond}
@@ -178,7 +169,7 @@ func TestManager_Send(t *testing.T) {
 	assert.True(t, mgr.HasActiveLoop(id))
 
 	// Kill it
-	err = mgr.Kill(context.Background(), id)
+	err = mgr.sendToSession(context.Background(), id, "/kill")
 	require.NoError(t, err)
 
 	waitForState(t, ch, id, controllerapi.StateIdle, 3*time.Second)
@@ -190,7 +181,7 @@ func TestManager_SendToSession_PersistsWhileRunning(t *testing.T) {
 	mgr, factory, s := newTestManager(t)
 
 	// Subscribe to all notifications via pubsub
-	ch := mgr.PubSub().SubscribeAll()
+	ch := mgr.bus.SubscribeAll()
 
 	ctx := context.Background()
 	pid := testProject(t, s, t.TempDir())
@@ -217,7 +208,7 @@ func TestManager_SendToSession_PersistsWhileRunning(t *testing.T) {
 	mockSess.mu.Unlock()
 	require.True(t, ran, "RunDaemon should have been called")
 
-	require.NoError(t, mgr.SendToSession(ctx, id, "do something"))
+	require.NoError(t, mgr.sendToSession(ctx, id, "do something"))
 	pending, err := mgr.store.PeekPending(ctx, id)
 	require.NoError(t, err)
 	assert.Equal(t, "do something", pending.RawContent)
@@ -249,10 +240,10 @@ func TestManager_InputReceivedPubSub(t *testing.T) {
 	id, err := mgr.Send(ctx, pid, "init", "", nil)
 	require.NoError(t, err)
 
-	sub := mgr.PubSub().Subscribe(id)
-	defer mgr.PubSub().Unsubscribe(id, sub)
+	sub := mgr.bus.Subscribe(id)
+	defer mgr.bus.Unsubscribe(id, sub)
 
-	mgr.pubsub.Publish(id, sessionevent.Notification{
+	mgr.bus.Publish(id, sessionevent.Notification{
 		Type:    sessionevent.NotifyInputReceived,
 		Message: "hello from agent",
 		Source:  "agent",
@@ -337,7 +328,7 @@ func TestManager_Shutdown(t *testing.T) {
 
 	mgr.Shutdown(5 * time.Second)
 
-	remaining := mgr.runners.Len()
+	remaining, _ := runnerCounts(mgr.runners)
 	assert.Zero(t, remaining, "all loops should be cleaned up after shutdown")
 }
 
@@ -347,7 +338,7 @@ func TestManager_Shutdown(t *testing.T) {
 
 func TestManager_NormalCompletion(t *testing.T) {
 	mgr, factory, s := newTestManager(t)
-	ch := mgr.PubSub().SubscribeAll()
+	ch := mgr.bus.SubscribeAll()
 
 	sess := &mockSession{completeAfter: 50 * time.Millisecond}
 	factory.nextSess = sess
@@ -365,7 +356,7 @@ func TestManager_NormalCompletion(t *testing.T) {
 
 func TestManager_ErrorPath(t *testing.T) {
 	mgr, factory, s := newTestManager(t)
-	ch := mgr.PubSub().SubscribeAll()
+	ch := mgr.bus.SubscribeAll()
 
 	sess := &mockSession{
 		completeAfter: 50 * time.Millisecond,
@@ -407,7 +398,7 @@ func TestManager_ErrorPath(t *testing.T) {
 
 func TestManager_GracefulKill(t *testing.T) {
 	mgr, factory, s := newTestManager(t)
-	ch := mgr.PubSub().SubscribeAll()
+	ch := mgr.bus.SubscribeAll()
 
 	// Session completes after 200ms — Kill sets killed flag, session finishes naturally
 	sess := &mockSession{completeAfter: 200 * time.Millisecond}
@@ -421,7 +412,7 @@ func TestManager_GracefulKill(t *testing.T) {
 	waitForLoopStart(t, ch, id, 3*time.Second)
 
 	// Kill sets killed flag — does NOT cancel context
-	err = mgr.Kill(context.Background(), id)
+	err = mgr.sendToSession(context.Background(), id, "/kill")
 	require.NoError(t, err)
 
 	waitForState(t, ch, id, controllerapi.StateIdle, 3*time.Second)
@@ -434,7 +425,7 @@ func TestManager_GracefulKill(t *testing.T) {
 
 func TestManager_SendCreatesNewSessionAfterCompletion(t *testing.T) {
 	mgr, factory, s := newTestManager(t)
-	ch := mgr.PubSub().SubscribeAll()
+	ch := mgr.bus.SubscribeAll()
 
 	// First session completes quickly
 	factory.nextSess = &mockSession{completeAfter: 50 * time.Millisecond}
@@ -459,7 +450,7 @@ func TestManager_SendCreatesNewSessionAfterCompletion(t *testing.T) {
 
 func TestManager_SendToSession_AlreadyRunningUsesDurableInbox(t *testing.T) {
 	mgr, _, s := newTestManager(t)
-	ch := mgr.PubSub().SubscribeAll()
+	ch := mgr.bus.SubscribeAll()
 
 	ctx := context.Background()
 	pid := testProject(t, s, t.TempDir())
@@ -470,7 +461,7 @@ func TestManager_SendToSession_AlreadyRunningUsesDurableInbox(t *testing.T) {
 	waitForPendingInput(t, mgr.store.(*sessionstore.Store), id, false, 3*time.Second)
 
 	// SendToSession on an already-running session — should route to inbox
-	err = mgr.SendToSession(ctx, id, "steer message")
+	err = mgr.sendToSession(ctx, id, "steer message")
 	require.NoError(t, err)
 
 	pending, err := mgr.store.PeekPending(ctx, id)
@@ -489,7 +480,7 @@ func TestManager_SendToSession_AlreadyRunningUsesDurableInbox(t *testing.T) {
 
 func TestManager_SecondSendCreatesNewLoop(t *testing.T) {
 	mgr, factory, s := newTestManager(t)
-	ch := mgr.PubSub().SubscribeAll()
+	ch := mgr.bus.SubscribeAll()
 
 	factory.nextSess = &mockSession{completeAfter: 50 * time.Millisecond}
 
@@ -528,7 +519,7 @@ func TestManager_SecondSendCreatesNewLoop(t *testing.T) {
 
 func TestManager_SendAlwaysCreatesNew(t *testing.T) {
 	mgr, factory, s := newTestManager(t)
-	ch := mgr.PubSub().SubscribeAll()
+	ch := mgr.bus.SubscribeAll()
 
 	// First session completes quickly so Kill can work
 	factory.nextSess = &mockSession{completeAfter: 100 * time.Millisecond}
@@ -538,7 +529,7 @@ func TestManager_SendAlwaysCreatesNew(t *testing.T) {
 	id1, err := mgr.Send(ctx, pid, "init", "", nil)
 	require.NoError(t, err)
 
-	_ = mgr.Kill(context.Background(), id1)
+	_ = mgr.sendToSession(context.Background(), id1, "/kill")
 	waitForState(t, ch, id1, controllerapi.StateIdle, 3*time.Second)
 
 	// Second Send to same project must create a new session, not resume
@@ -558,7 +549,7 @@ func TestManager_SendAlwaysCreatesNew(t *testing.T) {
 
 func TestManager_Kill_GracefulRunningSession(t *testing.T) {
 	mgr, factory, s := newTestManager(t)
-	ch := mgr.PubSub().SubscribeAll()
+	ch := mgr.bus.SubscribeAll()
 
 	// Session that blocks until context cancelled (Kill calls stop → cancel)
 	factory.nextSess = &mockSession{}
@@ -571,7 +562,7 @@ func TestManager_Kill_GracefulRunningSession(t *testing.T) {
 	waitForLoopStart(t, ch, id, 3*time.Second)
 
 	// Kill is blocking: stop() + mark killed.
-	err = mgr.Kill(context.Background(), id)
+	err = mgr.sendToSession(context.Background(), id, "/kill")
 	require.NoError(t, err)
 
 	waitForState(t, ch, id, controllerapi.StateIdle, 3*time.Second)
@@ -587,7 +578,7 @@ func TestManager_Kill_GracefulRunningSession(t *testing.T) {
 
 func TestManager_Kill_NonRunningSession(t *testing.T) {
 	mgr, factory, s := newTestManager(t)
-	ch := mgr.PubSub().SubscribeAll()
+	ch := mgr.bus.SubscribeAll()
 
 	factory.nextSess = &mockSession{completeAfter: 50 * time.Millisecond}
 
@@ -599,7 +590,7 @@ func TestManager_Kill_NonRunningSession(t *testing.T) {
 	waitForState(t, ch, id, controllerapi.StateIdle, 3*time.Second)
 
 	// Session is now idle (not in-memory). Kill should mark it killed.
-	err = mgr.Kill(context.Background(), id)
+	err = mgr.sendToSession(context.Background(), id, "/kill")
 	require.NoError(t, err)
 
 	rec, err := mgr.store.GetSession(context.Background(), id)
@@ -612,7 +603,7 @@ func TestManager_Kill_NonRunningSession(t *testing.T) {
 // survive.
 func TestManager_Kill_RemovesSchedules(t *testing.T) {
 	mgr, factory, s, schedStore := newTestManagerWithSchedule(t)
-	ch := mgr.PubSub().SubscribeAll()
+	ch := mgr.bus.SubscribeAll()
 
 	factory.nextSess = &mockSession{completeAfter: 50 * time.Millisecond}
 
@@ -638,7 +629,7 @@ func TestManager_Kill_RemovesSchedules(t *testing.T) {
 	require.NoError(t, err)
 
 	factory.nextSess = &mockSession{completeAfter: 50 * time.Millisecond}
-	require.NoError(t, mgr.Kill(context.Background(), id))
+	require.NoError(t, mgr.sendToSession(context.Background(), id, "/kill"))
 
 	remaining, err := schedStore.ListSchedules(ctx, id)
 	require.NoError(t, err)
@@ -651,7 +642,7 @@ func TestManager_Kill_RemovesSchedules(t *testing.T) {
 
 func TestManager_StopCancelsPendingSleepButPreservesScheduledWork(t *testing.T) {
 	mgr, factory, projects, schedStore := newTestManagerWithSchedule(t)
-	events := mgr.PubSub().SubscribeAll()
+	events := mgr.bus.SubscribeAll()
 
 	factory.nextSess = &mockSession{completeAfter: 50 * time.Millisecond}
 	ctx := context.Background()
@@ -665,14 +656,14 @@ func TestManager_StopCancelsPendingSleepButPreservesScheduledWork(t *testing.T) 
 	require.NoError(t, err)
 	_, err = schedStore.AddSchedule(ctx, sessionID, "0 9 * * *", nil, "recurring work", false)
 	require.NoError(t, err)
-	_, err = schedule.NewService(schedStore, mgr.buildInput.Store.(*sessionstore.Store)).AddSleep(
+	_, err = schedule.NewService(schedStore, mgr.build.Store.(*sessionstore.Store)).AddSleep(
 		ctx, sessionID, "sleep-call", time.Now().Add(2*time.Hour).UTC(), "wake",
 	)
 	require.NoError(t, err)
 
-	require.NoError(t, mgr.Stop(ctx, sessionID, 0))
+	require.NoError(t, mgr.sendToSession(ctx, sessionID, "/stop"))
 
-	pendingSleeps, err := schedule.NewService(schedStore, mgr.buildInput.Store.(*sessionstore.Store)).
+	pendingSleeps, err := schedule.NewService(schedStore, mgr.build.Store.(*sessionstore.Store)).
 		PendingSleeps(ctx, sessionID)
 	require.NoError(t, err)
 	assert.Empty(t, pendingSleeps)
@@ -690,7 +681,7 @@ func TestManager_StopCancelsPendingSleepButPreservesScheduledWork(t *testing.T) 
 
 func TestManager_SetModel_IdleSession(t *testing.T) {
 	mgr, factory, s := newTestManager(t)
-	ch := mgr.PubSub().SubscribeAll()
+	ch := mgr.bus.SubscribeAll()
 
 	// Session completes quickly → loop exits → session is idle
 	factory.nextSess = &mockSession{completeAfter: 50 * time.Millisecond}
@@ -716,7 +707,7 @@ func TestManager_SetModel_IdleSession(t *testing.T) {
 
 func TestManager_SendToSession_RejectsKilledSession(t *testing.T) {
 	mgr, factory, s := newTestManager(t)
-	ch := mgr.PubSub().SubscribeAll()
+	ch := mgr.bus.SubscribeAll()
 
 	factory.nextSess = &mockSession{completeAfter: 50 * time.Millisecond}
 
@@ -732,18 +723,18 @@ func TestManager_SendToSession_RejectsKilledSession(t *testing.T) {
 	factory.nextSess = &mockSession{completeAfter: 50 * time.Millisecond}
 	factory.mu.Unlock()
 
-	err = mgr.Kill(context.Background(), id)
+	err = mgr.sendToSession(context.Background(), id, "/kill")
 	require.NoError(t, err)
 
 	// SendToSession on a killed session must return an error
-	err = mgr.SendToSession(ctx, id, "should fail")
+	err = mgr.sendToSession(ctx, id, "should fail")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "killed")
 }
 
 func TestManager_Clear(t *testing.T) {
 	mgr, factory, s := newTestManager(t)
-	ch := mgr.PubSub().SubscribeAll()
+	ch := mgr.bus.SubscribeAll()
 
 	// Session completes quickly → loop exits → session is idle
 	factory.nextSess = &mockSession{completeAfter: 50 * time.Millisecond}
@@ -766,7 +757,7 @@ func TestManager_Clear(t *testing.T) {
 	require.NoError(t, err)
 
 	// Clear: creates new session, notifies, then kills old session synchronously
-	newID, err := mgr.Clear(context.Background(), id)
+	newID, err := mgr.clear(context.Background(), lifecycleInput(context.Background(), t, mgr, id, "/clear"))
 	require.NoError(t, err)
 	assert.NotEqual(t, id, newID, "new session should have a different ID")
 
@@ -876,15 +867,15 @@ func TestManager_ClearRejectsAConcurrentLateOwnerClaim(t *testing.T) {
 		err error
 	}, 1)
 	go func() {
-		id, clearErr := mgr.Clear(ctx, rec.ID)
+		id, clearErr := mgr.clear(ctx, lifecycleInput(ctx, t, mgr, rec.ID, "/clear"))
 		clearResult <- struct {
 			id  int64
 			err error
 		}{id: id, err: clearErr}
 	}()
 	requireSignal(t, blocking.entered)
-	if mgr.routeMu.TryLock() {
-		mgr.routeMu.Unlock()
+	if mgr.routes.claim.TryLock() {
+		mgr.routes.claim.Unlock()
 		t.Fatal("clear did not hold the manager ownership boundary while creating its replacement")
 	}
 
@@ -910,7 +901,7 @@ func TestManager_ClearRejectsAConcurrentLateOwnerClaim(t *testing.T) {
 
 func TestManager_ClearWhileRunning(t *testing.T) {
 	mgr, factory, s := newTestManager(t)
-	ch := mgr.PubSub().SubscribeAll()
+	ch := mgr.bus.SubscribeAll()
 
 	// Session that blocks until context cancelled
 	factory.nextSess = &mockSession{}
@@ -923,7 +914,7 @@ func TestManager_ClearWhileRunning(t *testing.T) {
 	waitForLoopStart(t, ch, id, 3*time.Second)
 
 	// Clear: notifies immediately (via pubsub buffer), then kills old session synchronously
-	newID, err := mgr.Clear(context.Background(), id)
+	newID, err := mgr.clear(context.Background(), lifecycleInput(context.Background(), t, mgr, id, "/clear"))
 	require.NoError(t, err)
 	assert.NotEqual(t, id, newID)
 
@@ -959,7 +950,7 @@ func TestManager_ClearWhileRunning(t *testing.T) {
 
 func TestManager_KillTerminatingOnStartup(t *testing.T) {
 	mgr, factory, s := newTestManager(t)
-	ch := mgr.PubSub().SubscribeAll()
+	ch := mgr.bus.SubscribeAll()
 
 	factory.nextSess = &mockSession{completeAfter: 50 * time.Millisecond}
 
@@ -975,8 +966,7 @@ func TestManager_KillTerminatingOnStartup(t *testing.T) {
 		context.Background(), id, sessionstore.SessionStatusTerminating,
 	))
 
-	// Simulate daemon restart — New() calls KillTerminatingSessions
-	require.NoError(t, mgr.store.(*sessionstore.Store).KillTerminatingSessions(context.Background()))
+	require.NoError(t, mgr.Start(ctx))
 
 	rec, err := mgr.store.GetSession(context.Background(), id)
 	require.NoError(t, err)
@@ -994,10 +984,10 @@ func TestEnsureRunner_EmptyRootPublishesCreatedAndIdle(t *testing.T) {
 	projectID := testProject(t, projects, workDir)
 	rec, err := mgr.store.CreateSession(ctx, projectID, "fake-model", "", nil)
 	require.NoError(t, err)
-	notifications := mgr.PubSub().SubscribeAll()
-	defer mgr.PubSub().UnsubscribeAll(notifications)
+	notifications := mgr.bus.SubscribeAll()
+	defer mgr.bus.UnsubscribeAll(notifications)
 
-	require.NoError(t, mgr.ensureRunner(ctx, rec.ID, workDir, projectID))
+	require.NoError(t, mgr.start(ctx, rec.ID))
 
 	created := requireNotification(t, notifications)
 	assert.Equal(t, sessionevent.NotifySessionCreated, created.Notification.Type)

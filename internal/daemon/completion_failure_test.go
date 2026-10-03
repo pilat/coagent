@@ -30,7 +30,7 @@ type ledgerHarness struct {
 }
 
 type rejectingCompletionTransactions struct {
-	subagent.Transactions
+	subagent.Store
 }
 
 func (rejectingCompletionTransactions) DeliverCompletion(
@@ -50,8 +50,8 @@ func newLedgerHarness(t *testing.T) *ledgerHarness {
 		flaky = newFlakyLinkStore(inner)
 		return flaky
 	})
-	activation := &flakyActivationStore{Transactions: h.mgr.subagents}
-	h.mgr.subagents = activation
+	activation := &flakyActivationStore{Store: h.mgr.links}
+	h.mgr.links = activation
 
 	parent, err := h.sessStore.CreateSession(h.ctx, h.projectID, "fake-model", "", nil)
 	require.NoError(t, err)
@@ -77,7 +77,7 @@ func newLedgerHarness(t *testing.T) *ledgerHarness {
 		return id, err
 	}()
 	require.NoError(t, err)
-	require.NoError(t, h.links.InsertSubagentLink(h.ctx, subagent.Link{
+	require.NoError(t, seedChildLink(h.ctx, h.sessStore, subagent.Link{
 		ParentID: parent.ID, ChildID: childID, TaskCallID: "bg",
 	}))
 
@@ -107,19 +107,19 @@ func TestFinalizeChild_LinkReadErrorStopsShort(t *testing.T) {
 	h := newLedgerHarness(t)
 	defer h.shutdown()
 
-	sub := h.mgr.PubSub().Subscribe(h.parentID)
-	defer h.mgr.PubSub().Unsubscribe(h.parentID, sub)
+	sub := h.mgr.bus.Subscribe(h.parentID)
+	defer h.mgr.bus.Unsubscribe(h.parentID, sub)
 
 	core, logs := observer.New(zap.ErrorLevel)
 	ctx := logger.ToContext(h.ctx, zap.New(core))
 
-	h.flaky.failGetLink(1, h.childID)
+	h.activation.failRead = true
 	h.startInboxWake()
-	h.mgr.finalizeChild(ctx, h.childID)
+	finalizeTestChild(ctx, t, h.mgr, h.childID)
 
-	assert.Zero(t, h.activation.attempts(), "nothing is written on an unreadable link")
+	assert.Equal(t, 1, h.activation.attempts(), "the failed read performs no transition")
 
-	entries := logs.FilterMessage("finalize_get_link").All()
+	entries := logs.FilterMessage("finalize_child").All()
 	require.Len(t, entries, 1)
 	assert.Equal(t, h.childID, entries[0].ContextMap()["child"])
 
@@ -135,79 +135,38 @@ func TestFinalizeChild_NoLinkIsSilent(t *testing.T) {
 	rec, err := h.sessStore.CreateSession(h.ctx, h.projectID, "fake-model", "", nil)
 	require.NoError(t, err)
 
-	sub := h.mgr.PubSub().Subscribe(rec.ID)
-	defer h.mgr.PubSub().Unsubscribe(rec.ID, sub)
+	sub := h.mgr.bus.Subscribe(rec.ID)
+	defer h.mgr.bus.Unsubscribe(rec.ID, sub)
 
 	core, logs := observer.New(zap.DebugLevel)
 	ctx := logger.ToContext(h.ctx, zap.New(core))
 
 	h.startInboxWake()
 
-	h.mgr.finalizeChild(ctx, rec.ID)
+	finalizeTestChild(ctx, t, h.mgr, rec.ID)
 
 	assert.Zero(t, logs.Len(), "a root session's exit logs nothing")
 	assert.Empty(t, drainNotifications(sub))
 }
 
-// TestFinalizeChild_TerminalMarkRetries: a transient write failure must not
-// leave the parent waiting until the daemon restarts.
-func TestFinalizeChild_TerminalMarkRetries(t *testing.T) {
+func TestFinalizeChild_WriteFailureRemainsRecoverable(t *testing.T) {
 	h := newLedgerHarness(t)
 	defer h.shutdown()
-
-	h.activation.failN = 2
-
-	start := time.Now()
-	h.startInboxWake()
-	h.mgr.finalizeChild(h.ctx, h.childID)
-	elapsed := time.Since(start)
-
-	assert.Equal(t, 3, h.activation.attempts(), "two failures then a success")
-	// 300ms is deliberate backoff (2×linkTerminalBackoff); the rest is headroom
-	// for parallel-suite load. Bounded means "not until daemon restart".
-	assert.Less(t, elapsed, 1500*time.Millisecond, "the retry budget stays bounded")
-
-	link, err := h.links.GetLink(h.ctx, h.childID)
-	require.NoError(t, err)
-	require.NotNil(t, link)
-	assert.True(t, link.Terminal(), "the link reached a terminal state")
-
-	// deliverCompletionToParent ran: the idle parent was revived and consumed it.
-	h.waitForDelivery(h.childID)
-}
-
-// TestFinalizeChild_TerminalMarkExhausted: the link stays non-terminal on purpose
-// so the startup sweep can pick the child back up, and the parent is told.
-func TestFinalizeChild_TerminalMarkExhausted(t *testing.T) {
-	h := newLedgerHarness(t)
-	defer h.shutdown()
-
 	h.activation.failN = -1
-
-	sub := h.mgr.PubSub().Subscribe(h.parentID)
-	defer h.mgr.PubSub().Unsubscribe(h.parentID, sub)
-
+	sub := h.mgr.bus.Subscribe(h.parentID)
+	defer h.mgr.bus.Unsubscribe(h.parentID, sub)
 	core, logs := observer.New(zap.ErrorLevel)
 	ctx := logger.ToContext(h.ctx, zap.New(core))
-
 	h.startInboxWake()
-
-	h.mgr.finalizeChild(ctx, h.childID)
-
-	assert.Equal(t, linkTerminalAttempts, h.activation.attempts())
-	assert.NotEmpty(t, logs.FilterMessage("mark_link_terminal").All())
-
-	notifs := drainNotifications(sub)
-	require.NotEmpty(t, notifs, "the parent is told")
-	assert.Equal(t, sessionevent.NotifyMessage, notifs[0].Type)
-	assert.Contains(t, notifs[0].Message, "Subagent")
-
+	finalizeTestChild(ctx, t, h.mgr, h.childID)
+	assert.Equal(t, 1, h.activation.attempts())
+	assert.Len(t, logs.FilterMessage("finalize_child").All(), 1)
+	notifications := drainNotifications(sub)
+	require.NotEmpty(t, notifications)
+	assert.Contains(t, notifications[0].Message, "completion could not be recorded")
 	running, err := h.links.ListRunningChildLinks(h.ctx)
 	require.NoError(t, err)
-	assert.True(t,
-		slices.ContainsFunc(running, func(l subagent.Link) bool { return l.ChildID == h.childID }),
-		"a non-terminal link is still recoverable by the sweep",
-	)
+	assert.True(t, slices.ContainsFunc(running, func(link subagent.Link) bool { return link.ChildID == h.childID }))
 }
 
 func TestDeliverCompletionLogsRejectedParent(t *testing.T) {
@@ -215,7 +174,7 @@ func TestDeliverCompletionLogsRejectedParent(t *testing.T) {
 
 	killedAt := time.Now()
 	sessions := &childStateSessionStore{record: &sessionstore.SessionRecord{KilledAt: &killedAt}}
-	manager := &svc{store: sessions, subagents: rejectingCompletionTransactions{}}
+	manager := &svc{store: sessions, links: rejectingCompletionTransactions{}}
 	core, logs := observer.New(zap.ErrorLevel)
 	ctx := logger.ToContext(t.Context(), zap.New(core))
 

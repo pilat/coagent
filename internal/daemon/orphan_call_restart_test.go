@@ -156,7 +156,7 @@ func TestHarnessModel_PendingExternalCallOwnershipAgreesAfterRestart(t *testing.
 	assertAgrees := func(t *testing.T, d *applyDaemon, sessionID int64) {
 		t.Helper()
 
-		owners, err := d.mgr.pendingExternalCallsForSession(d.ctx, sessionID)
+		owners, err := d.mgr.callOwners(d.ctx, sessionID)
 		require.NoError(t, err)
 
 		assert.Equal(t, unresolvedExternalCallsByName(d.parentMessages(sessionID)), owners,

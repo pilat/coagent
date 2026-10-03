@@ -70,7 +70,7 @@ func TestHarnessScenario_SkillActivationReceiptOrdersTheOutputChain(t *testing.T
 	defer h.shutdown()
 	defer closeOnce(modelFollowUpQueued)
 
-	collector := collectEvents(h.mgr.PubSub().SubscribeAll())
+	collector := collectEvents(h.mgr.bus.SubscribeAll())
 	defer collector.stop()
 
 	h.startInboxWake()
@@ -85,7 +85,7 @@ func TestHarnessScenario_SkillActivationReceiptOrdersTheOutputChain(t *testing.T
 
 	// Explicit /skill activation through the durable input boundary.
 	h.startInboxWake()
-	require.NoError(t, h.mgr.SendToSession(h.ctx, root, "/skill review"))
+	require.NoError(t, h.mgr.sendToSession(h.ctx, root, "/skill review"))
 	waitForVisibleMessage(t, collector, root, "🔧 Activated skill: review")
 
 	// Model-initiated activation through the skill tool. The skill tool
@@ -93,7 +93,7 @@ func TestHarnessScenario_SkillActivationReceiptOrdersTheOutputChain(t *testing.T
 	// activation directly; the envelope follow-up branch of the responder
 	// never runs under the two-phase check.
 	h.startInboxWake()
-	require.NoError(t, h.mgr.SendToSession(h.ctx, root, "invoke the skill yourself"))
+	require.NoError(t, h.mgr.sendToSession(h.ctx, root, "invoke the skill yourself"))
 	closeOnce(modelFollowUpQueued)
 	waitForVisibleMessage(t, collector, root, "model activation complete")
 

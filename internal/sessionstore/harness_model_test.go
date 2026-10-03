@@ -129,7 +129,7 @@ type harnessProduction struct {
 	ctx    context.Context
 	db     *sql.DB
 	store  *sessionstore.Store
-	links  subagent.Transactions
+	links  subagent.Store
 	parent int64
 	child  int64
 	callID string
@@ -173,7 +173,7 @@ func newHarnessProduction(t *testing.T, migratedDB []byte) *harnessProduction {
 	seedLink(t, db, parent.ID, child, "model-task")
 
 	return &harnessProduction{
-		t: t, ctx: ctx, db: db, store: store, links: subagent.NewTransactions(db, store),
+		t: t, ctx: ctx, db: db, store: store, links: subagent.NewStore(db, store),
 		parent: parent.ID, child: child, callID: "model-task",
 	}
 }
@@ -185,11 +185,16 @@ func (p *harnessProduction) apply(command harnessCommand) {
 
 	switch command {
 	case harnessFinish:
-		finalized, err := p.links.TryFinalizeActivation(
-			p.ctx, p.child, "completed", harnessCompletionText(snapshot.activationSeq), "completed",
+		_, err := appendMessage(
+			p.ctx,
+			p.store,
+			p.child,
+			assistantStopMessage(harnessCompletionText(snapshot.activationSeq)),
 		)
 		require.NoError(p.t, err)
-		if !finalized && (snapshot.state != "completed" && snapshot.state != "error") {
+		finalized, err := p.links.Finalize(p.ctx, p.child, false)
+		require.NoError(p.t, err)
+		if finalized == nil && (snapshot.state != "completed" && snapshot.state != "error") {
 			return
 		}
 
@@ -203,7 +208,7 @@ func (p *harnessProduction) apply(command harnessCommand) {
 			snapshot.activationSeq,
 		)
 		require.NoError(p.t, err)
-		rearmed, err := p.links.RearmDeliveredWithPendingInput(p.ctx, p.child)
+		rearmed, err := p.links.Rearm(p.ctx, p.child)
 		require.NoError(p.t, err)
 		wantRearmed := snapshot.pendingInputs > 0 &&
 			(snapshot.state == "completed" || snapshot.state == "error")
@@ -213,7 +218,7 @@ func (p *harnessProduction) apply(command harnessCommand) {
 			fmt.Sprintf("follow-up %d.%d", snapshot.activationSeq, snapshot.pendingInputs+1),
 		)
 		require.NoError(p.t, err)
-		rearmed, err := p.links.RearmDeliveredWithPendingInput(p.ctx, p.child)
+		rearmed, err := p.links.Rearm(p.ctx, p.child)
 		require.NoError(p.t, err)
 		if snapshot.delivered && (snapshot.state == "completed" || snapshot.state == "error") {
 			require.True(p.t, rearmed)
@@ -250,15 +255,20 @@ func (p *harnessProduction) apply(command harnessCommand) {
 		// The store carries no protocol state in memory. Reconstructing it over the
 		// same DB represents a daemon restart at this boundary.
 		p.store = testStore(p.db)
-		p.links = subagent.NewTransactions(p.db, p.store)
+		p.links = subagent.NewStore(p.db, p.store)
 	case harnessFinalizeBeforeCrash:
-		finalized, err := p.links.TryFinalizeActivation(
-			p.ctx, p.child, "completed", harnessCompletionText(snapshot.activationSeq), "completed",
+		_, err := appendMessage(
+			p.ctx,
+			p.store,
+			p.child,
+			assistantStopMessage(harnessCompletionText(snapshot.activationSeq)),
 		)
+		require.NoError(p.t, err)
+		finalized, err := p.links.Finalize(p.ctx, p.child, false)
 		require.NoError(p.t, err)
 		wantFinalized := snapshot.pendingInputs == 0 &&
 			(snapshot.state == "spawned" || snapshot.state == "running")
-		assert.Equal(p.t, wantFinalized, finalized)
+		assert.Equal(p.t, wantFinalized, finalized != nil)
 	case harnessScheduleTick:
 		_, _, _, err := scheduledTurn(p.ctx, p.store,
 			p.parent,

@@ -28,9 +28,9 @@ func TestScenario_StartFailureParksWithoutConsumingInput(t *testing.T) {
 	require.NoError(t, err)
 	h.waitUntil("first answer", func() bool { return countAssistantReplies(h.parentMessages(id)) == 2 })
 	h.mgr.waitIdle(id)
-	h.mgr.buildInput.Config.UnifiedConfig.Models = h.mgr.buildInput.Config.UnifiedConfig.Models[1:]
+	h.mgr.build.Config.UnifiedConfig.Models = h.mgr.build.Config.UnifiedConfig.Models[1:]
 	h.startInboxWake()
-	require.NoError(t, h.mgr.SendToSession(h.ctx, id, "keep this input"))
+	require.NoError(t, h.mgr.sendToSession(h.ctx, id, "keep this input"))
 	h.waitUntil("failure observed", func() bool {
 		record, err := h.sessStore.GetSession(h.ctx, id)
 		return err == nil && record.Status == sessionstore.SessionStatusError
@@ -44,7 +44,7 @@ func TestScenario_StartFailureParksWithoutConsumingInput(t *testing.T) {
 	assert.Equal(t, "keep this input", pending.RawContent)
 	require.NoError(t, h.mgr.SetModel(h.ctx, id, "working-model", ""))
 	h.startInboxWake()
-	require.NoError(t, h.mgr.SendToSession(h.ctx, id, "retry now"))
+	require.NoError(t, h.mgr.sendToSession(h.ctx, id, "retry now"))
 	h.waitUntil("retry consumes preserved work", func() bool {
 		_, err := h.sessStore.PeekPending(h.ctx, id)
 		return errors.Is(err, sessionstore.ErrNoPendingInput)
@@ -67,18 +67,24 @@ func TestScenario_RepeatedStartFailureCreatesOneOutput(t *testing.T) {
 		sessionstore.Input{SessionID: record.ID, Source: sessionstore.InputSourceUser, Content: "work"},
 	)
 	require.NoError(t, err)
-	notices := 0
+	notifications := h.mgr.bus.Subscribe(record.ID)
+	defer h.mgr.bus.Unsubscribe(record.ID, notifications)
 	for range 100 {
 		h.mgr.reportSessionUnstarted(
 			h.ctx,
 			record.ID,
-			func(sessionevent.Notification) { notices++ },
 			errors.New("model removed-model not found in config"),
 		)
 	}
 	status, err := h.sessStore.OutputQueueStatus(h.ctx, "test-manager")
 	require.NoError(t, err)
 	assert.Equal(t, 1, status.Pending)
+	var notices int
+	for len(notifications) > 0 {
+		if (<-notifications).Type == sessionevent.NotifyMessage {
+			notices++
+		}
+	}
 	assert.Equal(t, 1, notices)
 }
 

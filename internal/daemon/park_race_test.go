@@ -75,14 +75,13 @@ func TestSendToSessionDuringBudgetDrainExplainsParking(t *testing.T) {
 			func(*config.Config) (llm.Client, error) { return &scriptedLLM{respond: trivialRespond}, nil },
 		),
 		sessions,
-		subagent.NewStore(db),
-		subagent.NewTransactions(db, store),
+		subagent.NewStore(db, store),
 		nil,
 		nil,
 		nil,
 		db,
 	)
-	err = mgr.SendToSession(ctx, root.ID, "resume the work")
+	err = mgr.sendToSession(ctx, root.ID, "resume the work")
 	require.Error(t, err)
 
 	assert.NotContains(t, err.Error(), "budget conflict", "the raw store conflict must not reach the user")

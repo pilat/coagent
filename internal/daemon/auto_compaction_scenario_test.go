@@ -118,7 +118,7 @@ func TestScenario_AutomaticCompactionRunsInsideTheDaemon(t *testing.T) {
 	h := newSubagentHarnessWith(t, respond)
 	defer h.shutdown()
 
-	events := collectEvents(h.mgr.PubSub().SubscribeAll())
+	events := collectEvents(h.mgr.bus.SubscribeAll())
 	defer events.stop()
 
 	h.startInboxWake()
@@ -215,7 +215,7 @@ func TestScenario_AutoCompactionWhileABackgroundChildIsInFlight(t *testing.T) {
 	h := newSubagentHarnessWith(t, respond)
 	defer h.shutdown()
 
-	events := collectEvents(h.mgr.PubSub().SubscribeAll())
+	events := collectEvents(h.mgr.bus.SubscribeAll())
 	defer events.stop()
 
 	h.startInboxWake()

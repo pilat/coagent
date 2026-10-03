@@ -126,7 +126,7 @@ func TestScenario_ASecondSessionCannotOverwriteAStagedApply(t *testing.T) {
 	first.waitUntil("A's opener settled", func() bool { return !first.mgr.HasActiveLoop(sessionA) })
 	first.mgr.waitIdle(sessionA)
 	first.startInboxWake()
-	require.NoError(t, first.mgr.SendToSession(first.ctx, sessionA, configapply.ConfigEditCommand))
+	require.NoError(t, first.mgr.sendToSession(first.ctx, sessionA, configapply.ConfigEditCommand))
 
 	first.waitForRestart(t)
 	first.waitUntil("A suspended on its config call", func() bool { return !first.mgr.HasActiveLoop(sessionA) })
@@ -141,7 +141,7 @@ func TestScenario_ASecondSessionCannotOverwriteAStagedApply(t *testing.T) {
 	first.waitUntil("B's opener settled", func() bool { return !first.mgr.HasActiveLoop(sessionB) })
 	first.mgr.waitIdle(sessionB)
 	first.startInboxWake()
-	require.NoError(t, first.mgr.SendToSession(first.ctx, sessionB, configapply.ConfigEditCommand))
+	require.NoError(t, first.mgr.sendToSession(first.ctx, sessionB, configapply.ConfigEditCommand))
 
 	first.mgr.waitIdle(sessionB)
 
@@ -192,7 +192,7 @@ func TestScenario_AVerdictOwedToAKilledSessionIsRefused(t *testing.T) {
 	defer second.shutdown()
 
 	require.NoError(t, second.mgr.Start(second.ctx))
-	require.NoError(t, second.mgr.Kill(second.ctx, sessionID))
+	require.NoError(t, second.mgr.sendToSession(second.ctx, sessionID, "/kill"))
 
 	pending, err := second.ops.LoadPending()
 	require.NoError(t, err)
@@ -209,7 +209,7 @@ func TestScenario_AVerdictOwedToAKilledSessionIsRefused(t *testing.T) {
 	)
 	require.Error(t, err, "a killed session can never take the verdict")
 
-	rec, err := second.mgr.GetSession(second.ctx, sessionID)
+	rec, err := second.mgr.store.GetSession(second.ctx, sessionID)
 	require.NoError(t, err)
 	assert.NotNil(t, rec.KilledAt, "the record is what the boot reads to tell 'never' from 'not now'")
 }
@@ -258,7 +258,7 @@ func TestScenario_ConcurrentAppliesResolveExactlyOnce(t *testing.T) {
 
 	for _, session := range []int64{sessionA, sessionB} {
 		first.startInboxWake()
-		require.NoError(t, first.mgr.SendToSession(first.ctx, session, configapply.ConfigEditCommand))
+		require.NoError(t, first.mgr.sendToSession(first.ctx, session, configapply.ConfigEditCommand))
 	}
 
 	first.waitForRestart(t)

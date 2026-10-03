@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -13,12 +14,13 @@ import (
 	"github.com/pilat/coagent/internal/migrate"
 	"github.com/pilat/coagent/internal/sessionstore"
 	"github.com/pilat/coagent/internal/subagent"
+	"github.com/pilat/coagent/internal/transcript"
 )
 
 // newTestLinkStore opens a migrated temp SQLite DB and returns a *sessionstore.Store
 // (for the session/message rows link tests reference), a subagent.Store, and a project
 // id the sessions can reference (FKs are enforced).
-func newTestLinkStore(t *testing.T) (*sessionstore.Store, subagent.Store, subagent.Transactions, int64) {
+func newTestLinkStore(t *testing.T) (*sessionstore.Store, subagent.Store, int64) {
 	t.Helper()
 
 	dbPath := filepath.Join(t.TempDir(), "test.db")
@@ -36,77 +38,73 @@ func newTestLinkStore(t *testing.T) (*sessionstore.Store, subagent.Store, subage
 	projectID, err := res.LastInsertId()
 	require.NoError(t, err)
 
-	return sessionstore.NewStore(
-			db,
-		), subagent.NewStore(
-			db,
-		), subagent.NewTransactions(
-			db,
-			sessionstore.NewStore(db),
-		), projectID
+	sessions := sessionstore.NewStore(db)
+	links := subagent.NewStore(db, sessions)
+	return sessions, links, projectID
 }
 
-func deliverOneLink(t *testing.T, tx subagent.Transactions, links subagent.Store, parentID, childID int64) {
+func seedChildLink(ctx context.Context, sessions *sessionstore.Store, link subagent.Link) error {
+	if link.State == "" {
+		link.State = subagent.StateSpawned
+	}
+	return sessions.WithTx(ctx, func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, `INSERT INTO subagent_links
+		(parent_id,child_id,task_call_id,blocking,depth,state,created_at,result,outcome) VALUES (?,?,?,?,?,?,?,?,?)`,
+			link.ParentID, link.ChildID, link.TaskCallID, link.Blocking, link.Depth, link.State,
+			time.Now().UTC().Unix(), link.Result, link.Outcome)
+		return err
+	})
+}
+
+func seedTerminalChild(ctx context.Context, sessions *sessionstore.Store, childID int64,
+	state subagent.State, result string, outcome subagent.Outcome,
+) error {
+	return sessions.WithTx(ctx, func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, `UPDATE subagent_links SET state=?,result=?,outcome=? WHERE child_id=?`,
+			state, result, outcome, childID)
+		return err
+	})
+}
+
+func finalizeTestChild(ctx context.Context, t *testing.T, manager *svc, childID int64) {
+	t.Helper()
+	unlock, err := manager.lockSessionTree(ctx, childID)
+	require.NoError(t, err)
+	deliver := manager.finalizeChildLocked(ctx, childID, false)
+	unlock()
+	if deliver != nil {
+		deliver()
+	}
+}
+
+func deliverOneLink(t *testing.T, links subagent.Store, parentID, childID int64) {
 	t.Helper()
 	link, err := links.GetLink(context.Background(), childID)
 	require.NoError(t, err)
 	require.NotNil(t, link)
 	require.Equal(t, parentID, link.ParentID)
 	if !link.Terminal() {
-		require.NoError(
-			t,
-			links.MarkLinkTerminal(
-				context.Background(),
-				childID,
-				subagent.StateCompleted,
-				"done",
-				subagent.OutcomeCompleted,
-			),
-		)
-		link, err = links.GetLink(context.Background(), childID)
+		link, err = links.Finalize(context.Background(), childID, false)
 		require.NoError(t, err)
+		require.NotNil(t, link)
 	}
-	won, err := tx.DeliverBackgroundCompletion(context.Background(), *link, 1)
+	won, err := links.DeliverBackgroundCompletion(context.Background(), *link, 1)
 	require.NoError(t, err)
 	require.True(t, won)
 }
 
-func TestLinkStore_InsertAndRead(t *testing.T) {
-	ss, ls, _, projectID := newTestLinkStore(t)
+func TestLinkStore_CreateAndRead(t *testing.T) {
+	ss, ls, projectID := newTestLinkStore(t)
 	ctx := context.Background()
 
 	parent, err := ss.CreateSession(ctx, projectID, "m", "", nil)
 	require.NoError(t, err)
-	childID, err := func() (int64, error) {
-		var id int64
-		err := ss.WithTx(ctx, func(tx *sql.Tx) error {
-			var err error
-			id, err = sessionstore.CreateSubagentSessionTx(
-				ctx,
-				tx,
-				sessionstore.CreateSubagentSession{
-					ProjectID:      projectID,
-					ParentID:       parent.ID,
-					RootID:         parent.ID,
-					AgentType:      "general",
-					Model:          "m",
-					ReasoningLevel: "",
-				},
-			)
-			return err
-		})
-		return id, err
-	}()
+	childID, err := ls.Create(ctx, subagent.Create{
+		ProjectID: projectID, ParentID: parent.ID, RootID: parent.ID, Model: "m",
+		AgentType: "general", TaskCallID: "call-abc", Blocking: true, Depth: 1,
+		State: subagent.StateSpawned,
+	})
 	require.NoError(t, err)
-
-	link := subagent.Link{
-		ParentID:   parent.ID,
-		ChildID:    childID,
-		TaskCallID: "call-abc",
-		Blocking:   true,
-		Depth:      1,
-	}
-	require.NoError(t, ls.InsertSubagentLink(ctx, link))
 
 	got, err := ls.GetLink(ctx, childID)
 	require.NoError(t, err)
@@ -131,7 +129,7 @@ func TestLinkStore_InsertAndRead(t *testing.T) {
 }
 
 func TestLinkStore_DeliverBackgroundCompletionToInbox(t *testing.T) {
-	ss, links, tx, projectID := newTestLinkStore(t)
+	ss, links, projectID := newTestLinkStore(t)
 	ctx := context.Background()
 	parent, err := ss.CreateSession(ctx, projectID, "m", "", nil)
 	require.NoError(t, err)
@@ -157,12 +155,12 @@ func TestLinkStore_DeliverBackgroundCompletionToInbox(t *testing.T) {
 	}()
 	require.NoError(t, err)
 	link := subagent.Link{ParentID: parent.ID, ChildID: childID, TaskCallID: "call", Depth: 1}
-	require.NoError(t, links.InsertSubagentLink(ctx, link))
-	require.NoError(t, links.MarkLinkTerminal(ctx, childID, subagent.StateCompleted, "done", subagent.OutcomeCompleted))
+	require.NoError(t, seedChildLink(ctx, ss, link))
+	require.NoError(t, seedTerminalChild(ctx, ss, childID, subagent.StateCompleted, "done", subagent.OutcomeCompleted))
 	storedLink, err := links.GetLink(ctx, childID)
 	require.NoError(t, err)
 	require.NotNil(t, storedLink)
-	won, err := tx.DeliverBackgroundCompletion(ctx, *storedLink, 3)
+	won, err := links.DeliverBackgroundCompletion(ctx, *storedLink, 3)
 	require.NoError(t, err)
 	require.True(t, won)
 	updated, err := links.GetLink(ctx, childID)
@@ -184,7 +182,7 @@ result:
 done
 </subagent_completion>`, input.RawContent)
 
-	won, err = tx.DeliverBackgroundCompletion(ctx, *storedLink, 3)
+	won, err = links.DeliverBackgroundCompletion(ctx, *storedLink, 3)
 	require.NoError(t, err)
 	assert.False(t, won)
 	second, err := ss.PeekPending(ctx, parent.ID)
@@ -193,7 +191,7 @@ done
 }
 
 func TestLinkStore_KilledParentRecoversBackgroundCompletionForSuppression(t *testing.T) {
-	ss, links, tx, projectID := newTestLinkStore(t)
+	ss, links, projectID := newTestLinkStore(t)
 	ctx := context.Background()
 	parent, err := ss.CreateSession(ctx, projectID, "m", "", nil)
 	require.NoError(t, err)
@@ -222,26 +220,30 @@ func TestLinkStore_KilledParentRecoversBackgroundCompletionForSuppression(t *tes
 			return id, err
 		}()
 		require.NoError(t, createErr)
-		require.NoError(t, links.InsertSubagentLink(ctx, subagent.Link{
+		require.NoError(t, seedChildLink(ctx, ss, subagent.Link{
 			ParentID: parent.ID, ChildID: childID, TaskCallID: callID, Blocking: blocking,
 		}))
-		require.NoError(t, links.MarkLinkTerminal(
-			ctx, childID, subagent.StateCompleted, "done", subagent.OutcomeCompleted,
-		))
+		require.NoError(
+			t,
+			seedTerminalChild(ctx, ss, childID, subagent.StateCompleted, "done", subagent.OutcomeCompleted),
+		)
 
 		return childID
 	}
 
 	backgroundID := createTerminal("background", false)
 	_ = createTerminal("blocking", true)
-	require.NoError(t, ss.MarkSessionKilled(ctx, parent.ID))
+	require.NoError(
+		t,
+		ss.WithTx(ctx, func(tx *sql.Tx) error { return sessionstore.MarkSessionKilledTx(ctx, tx, parent.ID) }),
+	)
 
 	undelivered, err := links.ListUndeliveredParentLinks(ctx)
 	require.NoError(t, err)
 	require.Len(t, undelivered, 1)
 	assert.Equal(t, backgroundID, undelivered[0].ChildID)
 
-	won, err := tx.DeliverBackgroundCompletion(ctx, undelivered[0], 1)
+	won, err := links.DeliverBackgroundCompletion(ctx, undelivered[0], 1)
 	require.NoError(t, err)
 	require.False(t, won)
 	updated, err := links.GetLink(ctx, backgroundID)
@@ -254,7 +256,7 @@ func TestLinkStore_KilledParentRecoversBackgroundCompletionForSuppression(t *tes
 }
 
 func TestLinkStore_BackgroundCompletionRejectsStaleIdentity(t *testing.T) {
-	ss, links, tx, projectID := newTestLinkStore(t)
+	ss, links, projectID := newTestLinkStore(t)
 	ctx := context.Background()
 	parent, err := ss.CreateSession(ctx, projectID, "m", "", nil)
 	require.NoError(t, err)
@@ -281,23 +283,21 @@ func TestLinkStore_BackgroundCompletionRejectsStaleIdentity(t *testing.T) {
 		return id, err
 	}()
 	require.NoError(t, err)
-	require.NoError(t, links.InsertSubagentLink(ctx, subagent.Link{
+	require.NoError(t, seedChildLink(ctx, ss, subagent.Link{
 		ParentID: parent.ID, ChildID: childID, TaskCallID: "call", Depth: 1,
 	}))
-	require.NoError(t, links.MarkLinkTerminal(
-		ctx, childID, subagent.StateCompleted, "done", subagent.OutcomeCompleted,
-	))
+	require.NoError(t, seedTerminalChild(ctx, ss, childID, subagent.StateCompleted, "done", subagent.OutcomeCompleted))
 	link, err := links.GetLink(ctx, childID)
 	require.NoError(t, err)
 	require.NotNil(t, link)
 
 	wrongParent := *link
 	wrongParent.ParentID = otherParent.ID
-	_, err = tx.DeliverBackgroundCompletion(ctx, wrongParent, 1)
+	_, err = links.DeliverBackgroundCompletion(ctx, wrongParent, 1)
 	require.Error(t, err)
 	stale := *link
 	stale.ActivationSeq++
-	applied, err := tx.DeliverBackgroundCompletion(ctx, stale, 1)
+	applied, err := links.DeliverBackgroundCompletion(ctx, stale, 1)
 	require.NoError(t, err)
 	require.False(t, applied)
 
@@ -307,66 +307,44 @@ func TestLinkStore_BackgroundCompletionRejectsStaleIdentity(t *testing.T) {
 	require.ErrorIs(t, err, sessionstore.ErrNoPendingInput)
 }
 
-func TestLinkStore_MarkTerminal(t *testing.T) {
-	ss, ls, _, projectID := newTestLinkStore(t)
-	ctx := context.Background()
-
+func TestLinkStore_Finalize(t *testing.T) {
+	ss, links, projectID := newTestLinkStore(t)
+	ctx := t.Context()
 	parent, err := ss.CreateSession(ctx, projectID, "m", "", nil)
 	require.NoError(t, err)
-	childID, err := func() (int64, error) {
-		var id int64
-		err := ss.WithTx(ctx, func(tx *sql.Tx) error {
-			var err error
-			id, err = sessionstore.CreateSubagentSessionTx(
-				ctx,
-				tx,
-				sessionstore.CreateSubagentSession{
-					ProjectID:      projectID,
-					ParentID:       parent.ID,
-					RootID:         parent.ID,
-					AgentType:      "general",
-					Model:          "m",
-					ReasoningLevel: "",
-				},
-			)
-			return err
-		})
-		return id, err
-	}()
+	childID, err := links.Create(ctx, subagent.Create{
+		ProjectID: projectID, ParentID: parent.ID,
+		RootID: parent.ID, Model: "m", TaskCallID: "c1", State: subagent.StateRunning,
+	})
 	require.NoError(t, err)
-	require.NoError(t, ls.InsertSubagentLink(ctx, subagent.Link{
-		ParentID: parent.ID, ChildID: childID, TaskCallID: "c1",
-	}))
-
-	// Terminalization is now two calls: the link row (subagent.Store) then the session
-	// status (*sessionstore.Store). Both effects are asserted below.
-	require.NoError(t, ls.MarkLinkTerminal(
-		ctx, childID, subagent.StateCompleted, "the answer is 42", subagent.OutcomeCompleted,
-	))
-	require.NoError(t, ss.UpdateSessionStatus(ctx, childID, sessionstore.SessionStatusCompleted))
-
-	link, err := ls.GetLink(ctx, childID)
+	_, err = ss.Commit(
+		ctx,
+		sessionstore.Commit{
+			SessionID: childID,
+			Messages:  []*transcript.Message{{Role: "assistant", Content: "the answer is 42"}},
+		},
+	)
 	require.NoError(t, err)
+	link, err := links.Finalize(ctx, childID, false)
+	require.NoError(t, err)
+	require.NotNil(t, link)
 	assert.Equal(t, subagent.StateCompleted, link.State)
 	assert.True(t, link.Terminal())
 	assert.Equal(t, "the answer is 42", link.Result)
 	assert.Equal(t, subagent.OutcomeCompleted, link.Outcome)
-
 	rec, err := ss.GetSession(ctx, childID)
 	require.NoError(t, err)
 	assert.Equal(t, sessionstore.SessionStatusCompleted, rec.Status)
-
-	// A second terminalization (re-engagement) overwrites result/outcome
-	// unconditionally — even to a different outcome.
-	require.NoError(t, ls.MarkLinkTerminal(ctx, childID, subagent.StateError, "", subagent.OutcomeIncomplete))
-	link, err = ls.GetLink(ctx, childID)
+	duplicate, err := links.Finalize(ctx, childID, true)
 	require.NoError(t, err)
-	assert.Empty(t, link.Result)
-	assert.Equal(t, subagent.OutcomeIncomplete, link.Outcome)
+	assert.Nil(t, duplicate)
+	preserved, err := links.GetLink(ctx, childID)
+	require.NoError(t, err)
+	assert.Equal(t, link.Result, preserved.Result)
 }
 
 func TestLinkStore_ResetRunning(t *testing.T) {
-	ss, ls, tx, projectID := newTestLinkStore(t)
+	ss, ls, projectID := newTestLinkStore(t)
 	ctx := context.Background()
 
 	parent, err := ss.CreateSession(ctx, projectID, "m", "", nil)
@@ -394,13 +372,16 @@ func TestLinkStore_ResetRunning(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(
 		t,
-		ls.InsertSubagentLink(ctx, subagent.Link{ParentID: parent.ID, ChildID: childID, TaskCallID: "c1"}),
+		seedChildLink(ctx, ss, subagent.Link{ParentID: parent.ID, ChildID: childID, TaskCallID: "c1"}),
 	)
 
-	require.NoError(t, ls.MarkLinkTerminal(ctx, childID, subagent.StateCompleted, "answer", subagent.OutcomeCompleted))
-	deliverOneLink(t, tx, ls, parent.ID, childID)
+	require.NoError(
+		t,
+		seedTerminalChild(ctx, ss, childID, subagent.StateCompleted, "answer", subagent.OutcomeCompleted),
+	)
+	deliverOneLink(t, ls, parent.ID, childID)
 
-	require.NoError(t, ls.ResetLinkRunning(ctx, childID))
+	require.NoError(t, ls.Resume(ctx, childID))
 
 	link, err := ls.GetLink(ctx, childID)
 	require.NoError(t, err)
@@ -411,23 +392,14 @@ func TestLinkStore_ResetRunning(t *testing.T) {
 	assert.Equal(t, "answer", link.Result)
 }
 
-func TestLinkStoreRejectsMixedOrMissingTerminalUpdates(t *testing.T) {
-	_, ls, _, _ := newTestLinkStore(t)
-	ctx := context.Background()
-
-	err := ls.MarkLinkTerminal(ctx, 999, subagent.StateCompleted, "answer", subagent.OutcomeError)
-	require.ErrorContains(t, err, "invalid terminal link state/outcome")
-
-	err = ls.MarkLinkTerminal(ctx, 999, subagent.StateCompleted, "answer", subagent.OutcomeCompleted)
-	require.ErrorContains(t, err, "not found")
-
-	err = ls.ResetLinkRunning(ctx, 999)
-	require.Error(t, err)
-	assert.ErrorContains(t, err, "not found")
+func TestLinkStoreRejectsMissingResumeAndKill(t *testing.T) {
+	_, links, _ := newTestLinkStore(t)
+	require.ErrorContains(t, links.Resume(t.Context(), 999), "not found")
+	require.ErrorContains(t, links.Kill(t.Context(), 999), "not found")
 }
 
 func TestLinkStore_ListPending(t *testing.T) {
-	ss, ls, tx, projectID := newTestLinkStore(t)
+	ss, ls, projectID := newTestLinkStore(t)
 	ctx := context.Background()
 
 	parent, err := ss.CreateSession(ctx, projectID, "m", "", nil)
@@ -473,14 +445,14 @@ func TestLinkStore_ListPending(t *testing.T) {
 		})
 		return id, err
 	}()
-	require.NoError(t, ls.InsertSubagentLink(ctx, subagent.Link{ParentID: parent.ID, ChildID: c1, TaskCallID: "c1"}))
-	require.NoError(t, ls.InsertSubagentLink(ctx, subagent.Link{ParentID: parent.ID, ChildID: c2, TaskCallID: "c2"}))
+	require.NoError(t, seedChildLink(ctx, ss, subagent.Link{ParentID: parent.ID, ChildID: c1, TaskCallID: "c1"}))
+	require.NoError(t, seedChildLink(ctx, ss, subagent.Link{ParentID: parent.ID, ChildID: c2, TaskCallID: "c2"}))
 
 	pending, err := ls.ListPendingChildLinks(ctx, parent.ID)
 	require.NoError(t, err)
 	assert.Len(t, pending, 2)
 
-	deliverOneLink(t, tx, ls, parent.ID, c1)
+	deliverOneLink(t, ls, parent.ID, c1)
 
 	pending, err = ls.ListPendingChildLinks(ctx, parent.ID)
 	require.NoError(t, err)
@@ -489,7 +461,7 @@ func TestLinkStore_ListPending(t *testing.T) {
 }
 
 func TestLinkStore_ListRunningAndUndelivered(t *testing.T) {
-	ss, ls, tx, projectID := newTestLinkStore(t)
+	ss, ls, projectID := newTestLinkStore(t)
 	ctx := context.Background()
 
 	parent, err := ss.CreateSession(ctx, projectID, "m", "", nil)
@@ -535,12 +507,15 @@ func TestLinkStore_ListRunningAndUndelivered(t *testing.T) {
 		})
 		return id, err
 	}()
-	require.NoError(t, ls.InsertSubagentLink(ctx, subagent.Link{
+	require.NoError(t, seedChildLink(ctx, ss, subagent.Link{
 		ParentID: parent.ID, ChildID: running, TaskCallID: "r",
 	}))
-	require.NoError(t, ls.InsertSubagentLink(ctx, subagent.Link{ParentID: parent.ID, ChildID: done, TaskCallID: "d"}))
+	require.NoError(t, seedChildLink(ctx, ss, subagent.Link{ParentID: parent.ID, ChildID: done, TaskCallID: "d"}))
 
-	require.NoError(t, ls.MarkLinkTerminal(ctx, done, subagent.StateCompleted, "the result", subagent.OutcomeCompleted))
+	require.NoError(
+		t,
+		seedTerminalChild(ctx, ss, done, subagent.StateCompleted, "the result", subagent.OutcomeCompleted),
+	)
 
 	runningLinks, err := ls.ListRunningChildLinks(ctx)
 	require.NoError(t, err)
@@ -556,7 +531,7 @@ func TestLinkStore_ListRunningAndUndelivered(t *testing.T) {
 	assert.Equal(t, subagent.OutcomeCompleted, undelivered[0].Outcome)
 
 	// Once delivered, it drops out of the undelivered set.
-	deliverOneLink(t, tx, ls, parent.ID, done)
+	deliverOneLink(t, ls, parent.ID, done)
 	undelivered, err = ls.ListUndeliveredParentLinks(ctx)
 	require.NoError(t, err)
 	assert.Empty(t, undelivered)

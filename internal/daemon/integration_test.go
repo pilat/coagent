@@ -170,7 +170,7 @@ type subagentHarness struct {
 }
 
 func (h *subagentHarness) startInboxWake() {
-	h.wakeOnce.Do(func() { h.mgr.startInboxWake(h.ctx) })
+	h.wakeOnce.Do(func() { h.mgr.startWake() })
 }
 
 // sessionClient returns the scripted client bound to the session whose
@@ -285,7 +285,7 @@ func newSubagentHarnessOnDBWithProjectConfig(
 
 	store := sessionstore.NewStore(db)
 	sessStore := sessionstore.NewStore(db)
-	links := subagent.NewStore(db)
+	links := subagent.NewStore(db, sessStore)
 	schedStore := schedule.NewStore(db, sessStore)
 
 	if decorate != nil {
@@ -323,7 +323,6 @@ func newSubagentHarnessOnDBWithProjectConfig(
 		factory,
 		sessStore,
 		links,
-		subagent.NewTransactions(db, sessStore),
 		budget.New(sessStore),
 		schedule.NewService(schedStore, sessStore),
 		func() string { return "fake-model" },
@@ -741,7 +740,7 @@ func TestIntegration_UserInterruptCancelsSleepWithoutDeletingStandaloneOneShot(t
 	require.NoError(t, err)
 
 	h.startInboxWake()
-	require.NoError(t, h.mgr.SendToSession(h.ctx, parentID, "interrupt now"))
+	require.NoError(t, h.mgr.sendToSession(h.ctx, parentID, "interrupt now"))
 	h.mgr.waitIdle(parentID)
 
 	messages := h.parentMessages(parentID)
@@ -840,8 +839,8 @@ func TestIntegration_OneShotAckFailureRedeliversWithoutDuplicateTranscriptOrPubl
 	)
 	require.NoError(t, err)
 
-	sub := h.mgr.PubSub().Subscribe(parentID)
-	defer h.mgr.PubSub().Unsubscribe(parentID, sub)
+	sub := h.mgr.bus.Subscribe(parentID)
+	defer h.mgr.bus.Unsubscribe(parentID, sub)
 
 	flaky := &failFirstRemoveScheduleStore{
 		Store: h.schedStore, attempted: make(chan struct{}),
@@ -999,7 +998,7 @@ func TestIntegration_SweepRedeliversIdempotently(t *testing.T) {
 	}()
 	require.NoError(t, err)
 
-	require.NoError(t, h.links.InsertSubagentLink(ctx, subagent.Link{
+	require.NoError(t, seedChildLink(ctx, h.sessStore, subagent.Link{
 		ParentID: parent.ID, ChildID: childID, TaskCallID: "orphan-call",
 	}))
 	// Child wrote its final message before dying; its result was stored on the link
@@ -1008,9 +1007,17 @@ func TestIntegration_SweepRedeliversIdempotently(t *testing.T) {
 		Role: llmwire.RoleAssistant, Content: "child finished: 99",
 	}}})
 	require.NoError(t, err)
-	require.NoError(t, h.links.MarkLinkTerminal(
-		ctx, childID, subagent.StateCompleted, "child finished: 99", subagent.OutcomeCompleted,
-	))
+	require.NoError(
+		t,
+		seedTerminalChild(
+			ctx,
+			h.sessStore,
+			childID,
+			subagent.StateCompleted,
+			"child finished: 99",
+			subagent.OutcomeCompleted,
+		),
+	)
 	require.NoError(t, h.sessStore.UpdateSessionStatus(ctx, childID, sessionstore.SessionStatusCompleted))
 
 	// First sweep delivers exactly one completion.
@@ -1069,7 +1076,7 @@ func newMCPHarnessConfigured(
 
 	store := sessionstore.NewStore(db)
 	sessStore := sessionstore.NewStore(db)
-	links := subagent.NewStore(db)
+	links := subagent.NewStore(db, sessStore)
 	schedStore := schedule.NewStore(db, sessStore)
 	registry := mcpstore.NewStore(db)
 
@@ -1088,7 +1095,6 @@ func newMCPHarnessConfigured(
 		factory,
 		sessStore,
 		links,
-		subagent.NewTransactions(db, sessStore),
 		budget.New(sessStore),
 		schedule.NewService(schedStore, sessStore),
 		func() string { return "fake-model" },

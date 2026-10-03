@@ -69,7 +69,7 @@ func TestStopRejectsSpawnQueuedBehindDurableBoundary(t *testing.T) {
 	})
 
 	stopDone := make(chan error, 1)
-	go func() { stopDone <- h.mgr.Stop(context.Background(), root.ID, 0) }()
+	go func() { stopDone <- h.mgr.sendToSession(context.Background(), root.ID, "/stop") }()
 
 	requireBarrierSignal(t, store.written, "stop did not durably mark the root stopping")
 	record, err := store.GetSession(h.ctx, root.ID)
@@ -104,7 +104,7 @@ func TestSpawnRejectsStoppedParent(t *testing.T) {
 
 	root, err := h.sessStore.CreateSession(h.ctx, h.projectID, "fake-model", "", nil)
 	require.NoError(t, err)
-	require.NoError(t, h.mgr.Stop(context.Background(), root.ID, 0))
+	require.NoError(t, h.mgr.sendToSession(context.Background(), root.ID, "/stop"))
 
 	h.startInboxWake()
 	_, err = h.mgr.Spawn(h.ctx, subagent.SpawnRequest{ParentID: root.ID, AgentType: "general", Prompt: "x"})

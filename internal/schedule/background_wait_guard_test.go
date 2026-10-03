@@ -13,6 +13,7 @@ import (
 	"github.com/pilat/coagent/internal/sessionstore"
 	"github.com/pilat/coagent/internal/subagent"
 	"github.com/pilat/coagent/internal/tool"
+	"github.com/pilat/coagent/internal/transcript"
 )
 
 type waitGuardTool struct{ calls int }
@@ -38,16 +39,12 @@ func TestBackgroundWaitGuardRejectsSleepUntilCompletionDelivered(t *testing.T) {
 	require.NoError(t, err)
 	parent, err := sessions.CreateSession(t.Context(), projectID, "model", "", nil)
 	require.NoError(t, err)
-	child, err := sessions.CreateSession(t.Context(), projectID, "model", "", nil)
+	children := subagent.NewStore(db, sessions)
+	childID, err := children.Create(t.Context(), subagent.Create{
+		ProjectID: projectID, ParentID: parent.ID, RootID: parent.ID, Model: "model",
+		TaskCallID: "task-1", State: subagent.StateRunning,
+	})
 	require.NoError(t, err)
-	children := subagent.NewStore(db)
-	require.NoError(
-		t,
-		children.InsertSubagentLink(
-			t.Context(),
-			subagent.Link{ParentID: parent.ID, ChildID: child.ID, TaskCallID: "task-1", State: subagent.StateRunning},
-		),
-	)
 	guard := &backgroundWaitGuard{inner: inner, sessions: sessions, sessionID: parent.ID}
 
 	_, err = guard.Execute(t.Context(), nil)
@@ -56,13 +53,14 @@ func TestBackgroundWaitGuardRejectsSleepUntilCompletionDelivered(t *testing.T) {
 	require.ErrorContains(t, err, "end the response")
 	assert.Zero(t, inner.calls, "the sleep side effect must not be staged")
 
-	require.NoError(
-		t,
-		children.MarkLinkTerminal(t.Context(), child.ID, subagent.StateCompleted, "done", subagent.OutcomeCompleted),
-	)
-	link, err := children.GetLink(t.Context(), child.ID)
+	_, err = sessions.Commit(t.Context(), sessionstore.Commit{
+		SessionID: childID,
+		Messages:  []*transcript.Message{{Role: "assistant", Content: "done", FinishType: "stop"}},
+	})
 	require.NoError(t, err)
-	delivered, err := subagent.NewTransactions(db, sessions).DeliverBackgroundCompletion(t.Context(), *link, 1)
+	link, err := children.Finalize(t.Context(), childID, false)
+	require.NoError(t, err)
+	delivered, err := subagent.NewStore(db, sessions).DeliverBackgroundCompletion(t.Context(), *link, 1)
 	require.NoError(t, err)
 	require.True(t, delivered)
 	result, err := guard.Execute(t.Context(), nil)

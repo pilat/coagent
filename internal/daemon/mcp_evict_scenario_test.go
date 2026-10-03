@@ -81,7 +81,7 @@ func TestScenario_MCPDisableDoesNotBreakAnInFlightStack(t *testing.T) {
 
 	// The holder's next run parks inside tools/call.
 	h.startInboxWake()
-	require.NoError(t, h.mgr.SendToSession(h.ctx, holder, "HOLD_IT while I reconfigure"))
+	require.NoError(t, h.mgr.sendToSession(h.ctx, holder, "HOLD_IT while I reconfigure"))
 	h.waitUntil("the held call reaches the server", func() bool { return fake.count(t, "call") == 1 })
 	require.GreaterOrEqual(t, fake.count(t, "spawn"), 1)
 
@@ -109,14 +109,14 @@ func TestScenario_MCPDisableDoesNotBreakAnInFlightStack(t *testing.T) {
 
 	spawnsBeforeResume := fake.count(t, "spawn")
 	h.startInboxWake()
-	require.NoError(t, h.mgr.SendToSession(h.ctx, holder, "ENABLE_IT again"))
+	require.NoError(t, h.mgr.sendToSession(h.ctx, holder, "ENABLE_IT again"))
 	h.waitUntil("re-enable lands", func() bool {
 		return lastAssistantTextDTO(h.parentMessages(holder)) == "enabled"
 	})
 	h.mgr.waitIdle(holder)
 
 	h.startInboxWake()
-	require.NoError(t, h.mgr.SendToSession(h.ctx, holder, "USE_AGAIN please"))
+	require.NoError(t, h.mgr.sendToSession(h.ctx, holder, "USE_AGAIN please"))
 	h.waitUntil("the server answers again", func() bool {
 		return lastAssistantTextDTO(h.parentMessages(holder)) == "used again"
 	})
@@ -168,7 +168,7 @@ func TestScenario_MCPDisableRemovesTheToolFromTheNextRun(t *testing.T) {
 	})
 
 	h.startInboxWake()
-	require.NoError(t, h.mgr.SendToSession(h.ctx, sessionID, "DISABLE_IT now"))
+	require.NoError(t, h.mgr.sendToSession(h.ctx, sessionID, "DISABLE_IT now"))
 	h.waitUntil("the disable lands", func() bool {
 		return lastAssistantTextDTO(h.parentMessages(sessionID)) == "disabled"
 	})
@@ -178,7 +178,7 @@ func TestScenario_MCPDisableRemovesTheToolFromTheNextRun(t *testing.T) {
 	spawnsBefore := fake.count(t, "spawn")
 
 	h.startInboxWake()
-	require.NoError(t, h.mgr.SendToSession(h.ctx, sessionID, "USE_IT anyway"))
+	require.NoError(t, h.mgr.sendToSession(h.ctx, sessionID, "USE_IT anyway"))
 	h.waitUntil("the run finishes", func() bool {
 		return lastAssistantTextDTO(h.parentMessages(sessionID)) == "tried it"
 	})

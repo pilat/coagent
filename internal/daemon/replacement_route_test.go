@@ -13,14 +13,14 @@ import (
 
 func TestSendSessionMessageResolvedFollowsOwnedReplacement(t *testing.T) {
 	ctx := context.Background()
-	mgr, store, _ := newProjectTestManager(t)
+	mgr, _, store := newTestManager(t)
 	projectID, err := store.GetOrCreateProject(ctx, t.TempDir())
 	require.NoError(t, err)
-	old, err := mgr.store.CreateSession(ctx, projectID, "model", "", map[string]any{
+	old, err := mgr.store.CreateSession(ctx, projectID, "fake-model", "", map[string]any{
 		controllerapi.SessionAttributeManagerID: "cli",
 	})
 	require.NoError(t, err)
-	newID, err := mgr.Clear(ctx, old.ID)
+	newID, err := mgr.clear(ctx, lifecycleInput(ctx, t, mgr, old.ID, "/clear"))
 	require.NoError(t, err)
 
 	controller := newTestController(mgr, &config.Config{}, nil, nil).ForManager("cli")

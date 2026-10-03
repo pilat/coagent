@@ -436,7 +436,8 @@ func TestService_SlotLimitPerSession(t *testing.T) {
 	assert.Equal(t, 8, cancelled)
 
 	assert.Eventually(t, func() bool {
-		return service.liveCount(2) == 0 && service.liveCount(3) == 0
+		return func() int { service.mu.Lock(); defer service.mu.Unlock(); return service.live[2] }() == 0 &&
+			func() int { service.mu.Lock(); defer service.mu.Unlock(); return service.live[3] }() == 0
 	}, 10*time.Second, 20*time.Millisecond)
 }
 
@@ -499,7 +500,9 @@ func TestService_AdvertisePromotesCandidateAdmissionClass(t *testing.T) {
 
 	_, err = service.CancelTree(ctx, 1, IntentSessionKilled)
 	require.NoError(t, err)
-	assert.Eventually(t, func() bool { return service.liveCount(2) == 0 }, 10*time.Second, 20*time.Millisecond)
+	assert.Eventually(t, func() bool {
+		return func() int { service.mu.Lock(); defer service.mu.Unlock(); return service.live[2] }() == 0
+	}, 10*time.Second, 20*time.Millisecond)
 }
 
 func TestService_ForegroundCompletion(t *testing.T) {
@@ -535,7 +538,7 @@ func TestService_ForegroundCompletion(t *testing.T) {
 	assert.Contains(t, string(data), "hello")
 
 	assert.Eventually(t, func() bool {
-		return service.liveCount(2) == 0
+		return func() int { service.mu.Lock(); defer service.mu.Unlock(); return service.live[2] }() == 0
 	}, 10*time.Second, 20*time.Millisecond)
 }
 
@@ -559,7 +562,7 @@ func TestService_OutputLimitKillsGroupAndKeepsDraining(t *testing.T) {
 	assert.LessOrEqual(t, len(data), int(MaxOutputBytes)+len(overflowMarker))
 
 	assert.Eventually(t, func() bool {
-		return service.liveCount(2) == 0
+		return func() int { service.mu.Lock(); defer service.mu.Unlock(); return service.live[2] }() == 0
 	}, 10*time.Second, 20*time.Millisecond)
 }
 
@@ -581,7 +584,7 @@ func TestService_DeadlineKillsGroup(t *testing.T) {
 	assert.Nil(t, final.ExitCode, "a group-killed deadline has no meaningful exit code")
 
 	assert.Eventually(t, func() bool {
-		return service.liveCount(2) == 0
+		return func() int { service.mu.Lock(); defer service.mu.Unlock(); return service.live[2] }() == 0
 	}, 10*time.Second, 20*time.Millisecond)
 }
 
@@ -611,7 +614,7 @@ func TestService_CancelTreeSuppressesAndCounts(t *testing.T) {
 	assert.Equal(t, 1, cancelled)
 
 	assert.Eventually(t, func() bool {
-		return service.liveCount(2) == 0
+		return func() int { service.mu.Lock(); defer service.mu.Unlock(); return service.live[2] }() == 0
 	}, 10*time.Second, 20*time.Millisecond)
 
 	inputs, err := processInputs(ctx, store, 2)
@@ -636,7 +639,7 @@ func TestService_TreeFenceRejectsStart(t *testing.T) {
 			return exec.CommandContext(ctx, "sleep", "30"), nil
 		})
 	require.ErrorIs(t, err, ErrFenced)
-	assert.Equal(t, 0, service.liveCount(2))
+	assert.Equal(t, 0, func() int { service.mu.Lock(); defer service.mu.Unlock(); return service.live[2] }())
 }
 
 func TestService_GuardianExecFailureStartsNoCommand(t *testing.T) {
@@ -678,7 +681,7 @@ func TestService_InterruptNonterminalSweepsAdvertised(t *testing.T) {
 	assert.Nil(t, final.ExitCode, "an interrupted sweep never signals a stored PID")
 
 	assert.Eventually(t, func() bool {
-		return service.liveCount(2) == 0
+		return func() int { service.mu.Lock(); defer service.mu.Unlock(); return service.live[2] }() == 0
 	}, 10*time.Second, 20*time.Millisecond)
 }
 
@@ -815,7 +818,7 @@ func TestService_StopRacingStartCannotMissProcess(t *testing.T) {
 	require.NoError(t, <-stopErr)
 
 	assert.Eventually(t, func() bool {
-		return service.liveCount(2) == 0
+		return func() int { service.mu.Lock(); defer service.mu.Unlock(); return service.live[2] }() == 0
 	}, 5*time.Second, 20*time.Millisecond)
 }
 
@@ -858,7 +861,7 @@ func TestService_ShutdownRacingInsertCannotMissProcess(t *testing.T) {
 	assert.Equal(t, IntentDaemonShutdown, final.HostIntent)
 
 	assert.Eventually(t, func() bool {
-		return service.liveCount(2) == 0
+		return func() int { service.mu.Lock(); defer service.mu.Unlock(); return service.live[2] }() == 0
 	}, 5*time.Second, 20*time.Millisecond)
 }
 

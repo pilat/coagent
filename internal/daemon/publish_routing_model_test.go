@@ -23,8 +23,8 @@ func TestPublishRoutingModel_ManagerOwnershipSurvivesTransitions(t *testing.T) {
 	mgr, _, store := newTestManager(t)
 	ctx := context.Background()
 	subscribers := map[string]<-chan controllerapi.SessionNotification{
-		"alpha": mgr.PubSub().SubscribeManager("alpha"),
-		"beta":  mgr.PubSub().SubscribeManager("beta"),
+		"alpha": mgr.bus.SubscribeManager("alpha"),
+		"beta":  mgr.bus.SubscribeManager("beta"),
 	}
 	model := make(map[int64]string)
 	pid := testProject(t, store, "/tmp/publish-routing-model")
@@ -64,13 +64,13 @@ func TestPublishRoutingModel_ManagerOwnershipSurvivesTransitions(t *testing.T) {
 
 	// A restarted daemon begins with empty route caches and must recover the
 	// exact owner from the durable session record.
-	mgr.childMu.Lock()
-	mgr.childCache = make(map[int64]bool)
-	mgr.ownerCache = make(map[int64]string)
-	mgr.childMu.Unlock()
+	mgr.routes.mu.Lock()
+	mgr.routes.child = make(map[int64]bool)
+	mgr.routes.owner = make(map[int64]string)
+	mgr.routes.mu.Unlock()
 	publish(alphaID, "alpha survives a cold route cache")
 
-	newAlphaID, err := mgr.Clear(ctx, alphaID)
+	newAlphaID, err := mgr.clear(ctx, lifecycleInput(ctx, t, mgr, alphaID, "/clear"))
 	require.NoError(t, err)
 	model[newAlphaID] = model[alphaID]
 	assertModelDeliveries(t, subscribers, "alpha", alphaID, "")

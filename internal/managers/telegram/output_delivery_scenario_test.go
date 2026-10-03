@@ -22,11 +22,15 @@ import (
 	"github.com/pilat/coagent/internal/budget"
 	"github.com/pilat/coagent/internal/coagenthome"
 	"github.com/pilat/coagent/internal/config"
+	"github.com/pilat/coagent/internal/configapply"
+	"github.com/pilat/coagent/internal/configops"
 	"github.com/pilat/coagent/internal/controllerapi"
 	"github.com/pilat/coagent/internal/daemon"
 	"github.com/pilat/coagent/internal/llm"
 	"github.com/pilat/coagent/internal/llmwire"
 	"github.com/pilat/coagent/internal/managercontrol"
+	"github.com/pilat/coagent/internal/managerdiscovery"
+	"github.com/pilat/coagent/internal/mcpstore"
 	"github.com/pilat/coagent/internal/migrate"
 	"github.com/pilat/coagent/internal/progressruntime"
 	"github.com/pilat/coagent/internal/schedule"
@@ -118,24 +122,35 @@ func newDelayedTelegramHarnessWithClient(
 		)
 	}
 	bus := sessionbus.New()
+	progress := progressruntime.New(sessions, bus)
 	service := daemon.New(
 		context.Background(),
 		build,
 		sessions,
-		subagent.NewStore(db),
-		subagent.NewTransactions(db, sessions),
+		subagent.NewStore(db, sessions),
 		budget.New(sessions),
 		backgroundprocess.NewStore(db, sessions),
-		progressruntime.New(sessions, bus),
+		progress,
 		bus,
 		schedule.NewService(schedule.NewStore(db, sessions), sessions),
 		cfg,
-		nil,
-		nil,
+		mcpstore.NewStore(db),
+		configapply.New(
+			configops.New(filepath.Join(home, "config.yaml"), filepath.Join(home, "secrets.yaml")),
+			sessions,
+		),
 	)
 
 	t.Cleanup(func() { service.Shutdown(3 * time.Second) })
-	controllers := managercontrol.New(service, service, sessions, cfg, nil)
+	controllers := managercontrol.New(
+		service,
+		sessions,
+		managerdiscovery.New(sessions, cfg, nil),
+		progress,
+		bus,
+		cfg,
+		nil,
+	)
 
 	return &delayedTelegramHarness{
 		controller: controllers.ForManager(delayedTelegramManagerID), sessions: sessions,

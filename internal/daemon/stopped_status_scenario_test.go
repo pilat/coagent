@@ -30,7 +30,7 @@ func TestScenario_StoppedRootAnswersStatusWithoutReactivating(t *testing.T) {
 	}
 
 	h := newSubagentHarnessWith(t, respond)
-	collector := collectEvents(h.mgr.PubSub().SubscribeAll())
+	collector := collectEvents(h.mgr.bus.SubscribeAll())
 
 	defer func() {
 		collector.stop()
@@ -45,14 +45,14 @@ func TestScenario_StoppedRootAnswersStatusWithoutReactivating(t *testing.T) {
 			h.mgr.HasActiveLoop(sessionID)
 	})
 
-	require.NoError(t, h.mgr.Stop(h.ctx, sessionID, 0))
+	require.NoError(t, h.mgr.sendToSession(h.ctx, sessionID, "/stop"))
 	h.waitUntil("stop completed", func() bool {
 		rec, getErr := h.sessStore.GetSession(h.ctx, sessionID)
 		return getErr == nil && rec.Status == sessionstore.SessionStatusStopped
 	})
 
 	h.startInboxWake()
-	require.NoError(t, h.mgr.SendToSession(h.ctx, sessionID, "/status"))
+	require.NoError(t, h.mgr.sendToSession(h.ctx, sessionID, "/status"))
 
 	collector.waitFor(t, "status report reaches the controller", func(e []controllerapi.SessionNotification) bool {
 		return len(statusReports(e, sessionID)) == 1

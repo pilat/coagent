@@ -18,7 +18,7 @@ func TestHarnessScenario_SkillCommandExpandsBeforeTheModelCall(t *testing.T) {
 	h, rec := newSkillHarness(t, map[string]string{
 		skillName: skillDoc(skillName, "Draft release notes", "Draft notes for $ARGUMENTS."),
 	}, plainRespond)
-	collector := collectEvents(h.mgr.PubSub().SubscribeAll())
+	collector := collectEvents(h.mgr.bus.SubscribeAll())
 
 	defer func() {
 		collector.stop()
@@ -31,7 +31,7 @@ func TestHarnessScenario_SkillCommandExpandsBeforeTheModelCall(t *testing.T) {
 	h.mgr.waitIdle(sessionID)
 
 	h.startInboxWake()
-	require.NoError(t, h.mgr.SendToSession(h.ctx, sessionID, "/skill "+skillName+" v1.2.3"))
+	require.NoError(t, h.mgr.sendToSession(h.ctx, sessionID, "/skill "+skillName+" v1.2.3"))
 	h.waitUntil("expanded skill reaches the transcript", func() bool {
 		return countMessagesWithSkill(h.parentMessages(sessionID), skillName) == 1
 	})
@@ -77,7 +77,7 @@ func TestHarnessScenario_SkillInvocationPolicySeparatesUserAndModelPaths(t *test
 			h, rec := newSkillHarness(t, map[string]string{
 				tc.skill: skillDoc(tc.skill, "policy probe", "Body of "+tc.skill+".", tc.frontmatter),
 			}, plainRespond)
-			collector := collectEvents(h.mgr.PubSub().SubscribeAll())
+			collector := collectEvents(h.mgr.bus.SubscribeAll())
 
 			defer func() {
 				collector.stop()
@@ -95,7 +95,7 @@ func TestHarnessScenario_SkillInvocationPolicySeparatesUserAndModelPaths(t *test
 				"model-invocable skills — and only those — are announced in the system prompt")
 
 			h.startInboxWake()
-			require.NoError(t, h.mgr.SendToSession(h.ctx, sessionID, "/skill "+tc.skill))
+			require.NoError(t, h.mgr.sendToSession(h.ctx, sessionID, "/skill "+tc.skill))
 
 			if tc.wantExpanded {
 				h.waitUntil("expanded skill reaches the transcript", func() bool {
