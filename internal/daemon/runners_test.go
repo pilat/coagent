@@ -21,6 +21,34 @@ import (
 	"github.com/pilat/coagent/internal/tool"
 )
 
+func TestRunnerSetRetryBackoff(t *testing.T) {
+	t.Parallel()
+	set := newRunnerSet()
+	for _, want := range []time.Duration{
+		100 * time.Millisecond, 200 * time.Millisecond, 400 * time.Millisecond, 800 * time.Millisecond,
+		1600 * time.Millisecond, 3200 * time.Millisecond, 6400 * time.Millisecond, 12800 * time.Millisecond,
+		25600 * time.Millisecond, 30 * time.Second, 30 * time.Second,
+	} {
+		delay, ok := set.scheduleRetry()
+		require.True(t, ok)
+		assert.Equal(t, want, delay)
+		delay, ok = set.scheduleRetry()
+		assert.False(t, ok)
+		assert.Zero(t, delay)
+		set.retryDone()
+	}
+
+	set.resetRetry()
+	delay, ok := set.scheduleRetry()
+	require.True(t, ok)
+	assert.Equal(t, 100*time.Millisecond, delay)
+	set.retryDone()
+	set.closeAndSnapshot()
+	delay, ok = set.scheduleRetry()
+	assert.False(t, ok)
+	assert.Zero(t, delay)
+}
+
 // Admission delays must preserve the durable recovery obligation without queue metadata.
 func TestDrainPendingRunners_DerivesPromotedRecoveryAfterCapacityWait(t *testing.T) {
 	factory := &mockFactory{}
