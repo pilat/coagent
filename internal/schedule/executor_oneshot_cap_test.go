@@ -23,7 +23,7 @@ type capFakeStore struct {
 	calls   int
 }
 
-func (*capFakeStore) CallPending(context.Context, int64, string) bool { return true }
+func (*capFakeStore) CallPending(context.Context, int64, string) (bool, error) { return true, nil }
 func (f *capFakeStore) Enqueue(context.Context, sessionstore.Input) (*sessionstore.Enqueued, error) {
 	f.calls++
 	return nil, errors.New("session gone")

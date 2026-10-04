@@ -191,13 +191,17 @@ func (s *Store) ListPending(ctx context.Context, sessionID int64) ([]*InboxInput
 	return inputs, nil
 }
 
-func (s *Store) CallPending(ctx context.Context, sessionID int64, callID string) bool {
+func (s *Store) CallPending(ctx context.Context, sessionID int64, callID string) (bool, error) {
 	var pending bool
+
 	err := s.db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM messages call,json_each(call.tool_calls) item
   WHERE call.session_id = ? AND call.rejected_reason IS NULL AND json_extract(item.value,'$.ID') = ?
   AND NOT EXISTS(SELECT 1 FROM messages result WHERE result.session_id = call.session_id AND result.role = 'tool' AND result.tool_call_id = ?))`, sessionID, callID, callID).Scan(&pending)
+	if err != nil {
+		return false, fmt.Errorf("check pending call: %w", err)
+	}
 
-	return err == nil && pending
+	return pending, nil
 }
 
 func (s *Store) recordWoken(id int64) {

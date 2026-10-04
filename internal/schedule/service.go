@@ -79,7 +79,11 @@ func (s *svc) PendingSleeps(ctx context.Context, sessionID int64) ([]PendingSlee
 
 	for _, sched := range schedules {
 		if sched.oneShotAt != nil && sched.metadata.ToolCallID != "" {
-			valid := s.store.CallPending(ctx, sessionID, sched.metadata.ToolCallID)
+			valid, err := s.store.CallPending(ctx, sessionID, sched.metadata.ToolCallID)
+			if err != nil {
+				return nil, fmt.Errorf("check pending sleep: %w", err)
+			}
+
 			if !valid {
 				if err := s.store.RemoveSchedule(ctx, sched.id); err != nil {
 					return nil, fmt.Errorf("pending sleeps: %w", err)

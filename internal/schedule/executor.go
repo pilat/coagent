@@ -131,7 +131,11 @@ func (e *executor) fireOneShotSchedules(ctx context.Context, now time.Time, l *z
 
 func (e *executor) deliverOneShot(ctx context.Context, sched *Schedule) (bool, error) {
 	if sched.metadata.ToolCallID != "" {
-		pending := e.store.CallPending(ctx, sched.sessionID, sched.metadata.ToolCallID)
+		pending, err := e.store.CallPending(ctx, sched.sessionID, sched.metadata.ToolCallID)
+		if err != nil {
+			return false, fmt.Errorf("check one-shot call: %w", err)
+		}
+
 		if !pending {
 			return false, nil
 		}

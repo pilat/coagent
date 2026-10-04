@@ -107,8 +107,12 @@ func TestCommit_Parts(t *testing.T) {
 				)
 				require.NoError(t, writeErr)
 				store = testStore(db)
-				assert.True(t, store.CallPending(ctx, root.ID, "sleep-call"))
-				assert.False(t, store.CallPending(ctx, root.ID, "wrong-call"))
+				pending, pendingErr := store.CallPending(ctx, root.ID, "sleep-call")
+				require.NoError(t, pendingErr)
+				assert.True(t, pending)
+				pending, pendingErr = store.CallPending(ctx, root.ID, "wrong-call")
+				require.NoError(t, pendingErr)
+				assert.False(t, pending)
 				_, writeErr = store.Commit(
 					ctx,
 					Commit{
@@ -120,7 +124,9 @@ func TestCommit_Parts(t *testing.T) {
 				)
 				require.NoError(t, writeErr)
 				store = testStore(db)
-				assert.False(t, store.CallPending(ctx, root.ID, "sleep-call"))
+				pending, pendingErr = store.CallPending(ctx, root.ID, "sleep-call")
+				require.NoError(t, pendingErr)
+				assert.False(t, pending)
 				return
 			case "tool result replay":
 				step.ToolResults = []*transcript.Message{
@@ -488,14 +494,18 @@ func TestCommit_Parts(t *testing.T) {
 					assert.Zero(t, retryRows)
 					assert.InDelta(t, .75, cost, .000001)
 					assert.Nil(t, check.CandidateID)
-					assert.False(t, store.CallPending(ctx, root.ID, "danger"))
+					pending, pendingErr := store.CallPending(ctx, root.ID, "danger")
+					require.NoError(t, pendingErr)
+					assert.False(t, pending)
 					return
 				}
 				if result.BudgetFired {
 					assert.Zero(t, record.Iteration)
 					require.Len(t, messages, 2)
 					assert.Equal(t, budgetToolNotExecuted, messages[1].Content)
-					assert.False(t, store.CallPending(ctx, root.ID, "danger"))
+					pending, pendingErr := store.CallPending(ctx, root.ID, "danger")
+					require.NoError(t, pendingErr)
+					assert.False(t, pending)
 					require.Len(t, result.Outputs, 1)
 					var content string
 					require.NoError(
@@ -506,7 +516,9 @@ func TestCommit_Parts(t *testing.T) {
 					assert.Contains(t, content, "checkpoint summary\n\nBudget checkpoint reached")
 				} else {
 					assert.Equal(t, 8, record.Iteration)
-					assert.True(t, store.CallPending(ctx, root.ID, "danger"))
+					pending, pendingErr := store.CallPending(ctx, root.ID, "danger")
+					require.NoError(t, pendingErr)
+					assert.True(t, pending)
 				}
 			case "ownerless output":
 				assert.Empty(t, result.Outputs)

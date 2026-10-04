@@ -38,7 +38,7 @@ type (
 	//nolint:interfacebloat // Occurrence persistence and exact-call admission form one schedule protocol.
 	Store interface {
 		Enqueue(ctx context.Context, input sessionstore.Input) (*sessionstore.Enqueued, error)
-		CallPending(ctx context.Context, sessionID int64, callID string) bool
+		CallPending(ctx context.Context, sessionID int64, callID string) (bool, error)
 		AddSchedule(
 			ctx context.Context,
 			sessionID int64,
@@ -100,8 +100,13 @@ func (s *store) Enqueue(ctx context.Context, input sessionstore.Input) (*session
 	return result, nil
 }
 
-func (s *store) CallPending(ctx context.Context, sessionID int64, callID string) bool {
-	return s.sessions.CallPending(ctx, sessionID, callID)
+func (s *store) CallPending(ctx context.Context, sessionID int64, callID string) (bool, error) {
+	pending, err := s.sessions.CallPending(ctx, sessionID, callID)
+	if err != nil {
+		return false, fmt.Errorf("check scheduled call: %w", err)
+	}
+
+	return pending, nil
 }
 
 func (s *store) AddSchedule(

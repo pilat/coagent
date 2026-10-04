@@ -13,6 +13,34 @@ import (
 	"github.com/pilat/coagent/internal/transcript"
 )
 
+type failingCallCheckStore struct{ schedule.Store }
+
+func (s failingCallCheckStore) CallPending(ctx context.Context, sessionID int64, callID string) (bool, error) {
+	checkCtx, cancel := context.WithCancel(ctx)
+	cancel()
+
+	return s.Store.CallPending(checkCtx, sessionID, callID)
+}
+
+func TestPendingSleepsKeepsScheduleWhenCallCheckFails(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	schedStore, projects, sessions := newTestDB(t)
+	projectID := testProject(t, projects, "/tmp/project")
+	root, err := sessions.CreateSession(ctx, projectID, "", "", nil)
+	require.NoError(t, err)
+	svc := schedule.NewService(failingCallCheckStore{Store: schedStore}, sessions)
+	sleep, err := svc.AddSleep(ctx, root.ID, "sleep-call", time.Now().Add(time.Hour), "wake")
+	require.NoError(t, err)
+
+	_, err = svc.PendingSleeps(ctx, root.ID)
+	require.ErrorIs(t, err, context.Canceled)
+	remaining, err := schedStore.ListSchedules(ctx, root.ID)
+	require.NoError(t, err)
+	require.Len(t, remaining, 1)
+	assert.Equal(t, sleep.ID, remaining[0].ID())
+}
+
 func TestService_CreationVariantsKeepExactIdentity(t *testing.T) {
 	ctx := context.Background()
 	schedStore, daemonStore, sessStore := newTestDB(t)

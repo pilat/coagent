@@ -124,7 +124,20 @@ func (a *svc) RunStagedApply(ctx context.Context, sessionID int64) {
 		return
 	}
 
-	if !a.sessions.CallPending(ctx, sessionID, callID) {
+	pending, err := a.sessions.CallPending(ctx, sessionID, callID)
+	if err != nil {
+		a.ReleaseApply()
+		a.deliverResult(
+			ctx,
+			sessionID,
+			callID,
+			"Config change abandoned — the suspend could not be verified, so nothing was written.",
+		)
+
+		return
+	}
+
+	if !pending {
 		a.ReleaseApply()
 		a.resolve(sessionID, callID)
 
@@ -209,7 +222,12 @@ func (a *svc) SettleStagedResults(ctx context.Context, sessionID int64) error {
 			return err
 		}
 
-		if !a.sessions.CallPending(ctx, sessionID, id) {
+		pending, err := a.sessions.CallPending(ctx, sessionID, id)
+		if err != nil {
+			return fmt.Errorf("settle staged results: %w", err)
+		}
+
+		if !pending {
 			a.resolve(sessionID, id)
 			continue
 		}
