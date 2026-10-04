@@ -95,14 +95,14 @@ func TestHarnessScenario_ActiveProcessPromptAndSleepGuard(t *testing.T) {
 		}}}
 	}
 
-	h := newSubagentHarnessWith(t, respond)
+	h := newHarness(t, harnessOptions{respond: respond})
 	collector := collectEvents(h.mgr.bus.SubscribeAll())
 	defer func() {
 		collector.stop()
 		h.shutdown()
 	}()
 
-	root, err := h.sessStore.CreateSession(h.ctx, h.projectID, "fake-model", "", map[string]any{
+	root, err := h.store.CreateSession(h.ctx, h.projectID, "fake-model", "", map[string]any{
 		controllerapi.SessionAttributeManagerID: scenarioManagerID,
 	})
 	require.NoError(t, err)
@@ -141,7 +141,7 @@ func TestHarnessScenario_ActiveProcessPromptAndSleepGuard(t *testing.T) {
 	assert.Contains(t, lastToolResultContent(messages, tool.IDSleep), "end the response")
 	assert.Equal(t, llmwire.RoleAssistant, messages[len(messages)-1].Role)
 
-	schedules, err := h.schedStore.ListSchedules(h.ctx, root.ID)
+	schedules, err := h.schedules.ListSchedules(h.ctx, root.ID)
 	require.NoError(t, err)
 	assert.Empty(t, schedules)
 }
@@ -158,7 +158,7 @@ func TestHarnessScenario_EmptyActiveBackgroundAddsNoProviderRow(t *testing.T) {
 		return &llmwire.Response{Text: "done"}
 	}
 
-	h := newSubagentHarnessWith(t, respond)
+	h := newHarness(t, harnessOptions{respond: respond})
 	defer h.shutdown()
 
 	h.startInboxWake()
@@ -175,7 +175,8 @@ func TestHarnessScenario_EmptyActiveBackgroundAddsNoProviderRow(t *testing.T) {
 
 func TestHarnessScenario_DynamicRegistryPromptMatchesEachActivation(t *testing.T) {
 	fake := newFakeMCPServer(t, "pong from registry", false)
-	h, schemas, prompts, _ := newRegistryPromptHarness(t, registryPromptRespond(fake))
+	wrapped := newRegistryPromptHarness(t, registryPromptRespond(fake))
+	h, schemas, prompts := wrapped.harness, wrapped.schemas, wrapped.prompts
 	defer h.shutdown()
 
 	h.startInboxWake()
@@ -227,7 +228,7 @@ func TestHarnessScenario_RootSessionRunsAsTheBuildAgent(t *testing.T) {
 	assert.Contains(t, offered, "todoread", "todo tools belong to the primary agent")
 	assert.Contains(t, offered, "todowrite")
 
-	rec, err := h.sessStore.GetSession(h.ctx, rootID)
+	rec, err := h.store.GetSession(h.ctx, rootID)
 	require.NoError(t, err)
 	assert.Equal(t, string(agentregistry.AgentTypeBuild), rec.AgentType,
 		"the root row names the agent it runs")
@@ -312,11 +313,11 @@ func TestHarnessScenario_UntrustedToolOutputCarriesWrapperAndGuidance(t *testing
 
 func TestHarnessScenario_HelpIncludesGWT(t *testing.T) {
 	var modelCalls atomic.Int64
-	h := newSubagentHarnessWith(t, func(string, []llmwire.Message) *llmwire.Response {
+	h := newHarness(t, harnessOptions{respond: func(string, []llmwire.Message) *llmwire.Response {
 		modelCalls.Add(1)
 
 		return &llmwire.Response{Text: "session ready"}
-	})
+	}})
 	collector := collectEvents(h.mgr.bus.SubscribeAll())
 	defer func() {
 		collector.stop()

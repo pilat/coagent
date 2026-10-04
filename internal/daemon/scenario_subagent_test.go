@@ -47,7 +47,7 @@ func TestIntegration_BlockingTaskSuspendsAndResumes(t *testing.T) {
 		}}}
 	}
 
-	h := newSubagentHarnessWith(t, respond)
+	h := newHarness(t, harnessOptions{respond: respond})
 	defer func() {
 		select {
 		case <-release:
@@ -126,7 +126,7 @@ func TestIntegration_CompletedForegroundChildAcceptsFollowUpInSameSession(t *tes
 		}}}
 	}
 
-	h := newSubagentHarnessWith(t, respond)
+	h := newHarness(t, harnessOptions{respond: respond})
 	defer h.shutdown()
 
 	h.startInboxWake()
@@ -189,7 +189,7 @@ func TestIntegration_ScatterGatherBlockingTasks(t *testing.T) {
 		return &llmwire.Response{ToolCalls: calls}
 	}
 
-	h := newSubagentHarnessWith(t, respond)
+	h := newHarness(t, harnessOptions{respond: respond})
 	defer h.shutdown()
 
 	h.startInboxWake()
@@ -256,10 +256,10 @@ func TestFinalizeChild_LinkReadErrorStopsShort(t *testing.T) {
 // TestFinalizeChild_NoLinkIsSilent: the "no row" branch is every root session's
 // normal exit — it must stay completely quiet.
 func TestFinalizeChild_NoLinkIsSilent(t *testing.T) {
-	h := newSubagentHarnessWith(t, trivialRespond)
+	h := newHarness(t, harnessOptions{respond: trivialRespond})
 	defer h.shutdown()
 
-	rec, err := h.sessStore.CreateSession(h.ctx, h.projectID, "fake-model", "", nil)
+	rec, err := h.store.CreateSession(h.ctx, h.projectID, "fake-model", "", nil)
 	require.NoError(t, err)
 
 	sub := h.mgr.bus.Subscribe(rec.ID)
@@ -297,10 +297,10 @@ func TestFinalizeChild_WriteFailureRemainsRecoverable(t *testing.T) {
 }
 
 func TestIntegration_DepthCapRejected(t *testing.T) {
-	h := newSubagentHarnessWith(t, trivialRespond)
+	h := newHarness(t, harnessOptions{respond: trivialRespond})
 	defer h.shutdown()
 
-	root, err := h.sessStore.CreateSession(h.ctx, h.projectID, "fake-model", "", nil)
+	root, err := h.store.CreateSession(h.ctx, h.projectID, "fake-model", "", nil)
 	require.NoError(t, err)
 
 	// depth 1: root → child A
@@ -332,11 +332,11 @@ func TestIntegration_DepthCapRejected(t *testing.T) {
 func TestIntegration_SuspendedParentHoldsNoSlot(t *testing.T) {
 	release := make(chan struct{})
 
-	h := newSubagentHarnessWith(t, blockingParentRespond(func() *llmwire.Response {
+	h := newHarness(t, harnessOptions{respond: blockingParentRespond(func() *llmwire.Response {
 		<-release
 
 		return &llmwire.Response{Text: "child done"}
-	}))
+	})})
 	defer func() {
 		closeOnce(release)
 		h.shutdown()
@@ -362,11 +362,11 @@ func TestIntegration_SuspendedParentHoldsNoSlot(t *testing.T) {
 func TestIntegration_CascadeKillsBlockingChild(t *testing.T) {
 	release := make(chan struct{})
 
-	h := newSubagentHarnessWith(t, blockingParentRespond(func() *llmwire.Response {
+	h := newHarness(t, harnessOptions{respond: blockingParentRespond(func() *llmwire.Response {
 		<-release
 
 		return &llmwire.Response{Text: "child done"}
-	}))
+	})})
 	defer func() {
 		closeOnce(release)
 		h.shutdown()
@@ -383,11 +383,11 @@ func TestIntegration_CascadeKillsBlockingChild(t *testing.T) {
 	require.NoError(t, h.mgr.sendToSession(h.ctx, parentID, "/kill"))
 
 	h.waitUntil("blocking child killed", func() bool {
-		rec, gerr := h.sessStore.GetSession(h.ctx, link.ChildID)
+		rec, gerr := h.store.GetSession(h.ctx, link.ChildID)
 		return gerr == nil && rec.KilledAt != nil
 	})
 
-	childRec, err := h.sessStore.GetSession(h.ctx, link.ChildID)
+	childRec, err := h.store.GetSession(h.ctx, link.ChildID)
 	require.NoError(t, err)
 	assert.NotNil(t, childRec.KilledAt, "blocking descendant is killed with its parent")
 
@@ -398,11 +398,11 @@ func TestIntegration_CascadeKillsBlockingChild(t *testing.T) {
 }
 
 func TestIntegration_ChildPanicMarksError(t *testing.T) {
-	h := newSubagentHarnessWith(t, blockingParentRespond(func() *llmwire.Response {
+	h := newHarness(t, harnessOptions{respond: blockingParentRespond(func() *llmwire.Response {
 		return &llmwire.Response{Text: "child model result"}
-	}))
+	})})
 	// HTTP handler panics cannot reach the runner; the child's model commit can.
-	h.mgr.build.Store = &panickingChildCommitStore{Store: h.sessStore}
+	h.mgr.build.Store = &panickingChildCommitStore{Store: h.store}
 	defer h.shutdown()
 
 	h.startInboxWake()
@@ -429,9 +429,9 @@ func TestIntegration_ChildPanicMarksError(t *testing.T) {
 }
 
 func TestIntegration_StressBlockingNoDeadlock(t *testing.T) {
-	h := newSubagentHarnessWith(t, blockingParentRespond(func() *llmwire.Response {
+	h := newHarness(t, harnessOptions{respond: blockingParentRespond(func() *llmwire.Response {
 		return &llmwire.Response{Text: "child done"}
-	}))
+	})})
 	defer h.shutdown()
 
 	const parents = 6
@@ -501,7 +501,7 @@ func TestIntegration_BackgroundQueueDrains(t *testing.T) {
 		return &llmwire.Response{ToolCalls: calls}
 	}
 
-	h := newSubagentHarnessWith(t, respond)
+	h := newHarness(t, harnessOptions{respond: respond})
 	defer func() {
 		closeOnce(release)
 		h.shutdown()
@@ -835,7 +835,7 @@ func TestHarnessScenario_ForegroundChildHasNoLifetimeLimit(t *testing.T) {
 		}}}
 	}
 
-	h := newSubagentHarnessWith(t, respond)
+	h := newHarness(t, harnessOptions{respond: respond})
 	collector := collectEvents(h.mgr.bus.SubscribeAll())
 	released := false
 	defer func() {
@@ -860,18 +860,18 @@ func TestHarnessScenario_ForegroundChildHasNoLifetimeLimit(t *testing.T) {
 		return linkErr == nil && link != nil
 	})
 	h.waitUntil("parent suspended on the child", func() bool {
-		rec, recErr := h.sessStore.GetSession(h.ctx, parentID)
+		rec, recErr := h.store.GetSession(h.ctx, parentID)
 
 		return recErr == nil && rec.Status == sessionstore.SessionStatusSuspended
 	})
 	link, err := h.links.GetLinkByTaskCallID(h.ctx, parentID, taskCallID)
 	require.NoError(t, err)
 
-	parentRec, err := h.sessStore.GetSession(h.ctx, parentID)
+	parentRec, err := h.store.GetSession(h.ctx, parentID)
 	require.NoError(t, err)
 	assert.Equal(t, sessionstore.SessionStatusSuspended, parentRec.Status,
 		"the parent is durably suspended on the blocking child")
-	childRec, err := h.sessStore.GetSession(h.ctx, link.ChildID)
+	childRec, err := h.store.GetSession(h.ctx, link.ChildID)
 	require.NoError(t, err)
 	assert.Equal(t, sessionstore.SessionStatusActive, childRec.Status,
 		"the child runs with no deadline over its head")
@@ -961,7 +961,7 @@ func TestHarnessScenario_SubagentTextWithToolsCompletes(t *testing.T) {
 		}}}
 	}
 
-	h := newSubagentHarnessWith(t, respond)
+	h := newHarness(t, harnessOptions{respond: respond})
 	collector := collectEvents(h.mgr.bus.SubscribeAll())
 	released := false
 	defer func() {
@@ -1060,7 +1060,7 @@ func TestHarnessScenario_ForegroundChildContinuesWithoutSleep(t *testing.T) {
 		}}}
 	}
 
-	h := newSubagentHarnessWith(t, respond)
+	h := newHarness(t, harnessOptions{respond: respond})
 	collector := collectEvents(h.mgr.bus.SubscribeAll())
 	defer func() {
 		closeOnce(initialRelease)
@@ -1101,7 +1101,7 @@ func TestHarnessScenario_ForegroundChildContinuesWithoutSleep(t *testing.T) {
 	assert.Equal(t, 1, countToolResultsFor(parentMessages, tool.IDSleep))
 	assert.Contains(t, lastToolResultContent(parentMessages, tool.IDSleep),
 		"sleep cannot be combined with send_to_subagent")
-	schedules, err := h.schedStore.ListSchedules(h.ctx, parentID)
+	schedules, err := h.schedules.ListSchedules(h.ctx, parentID)
 	require.NoError(t, err)
 	assert.Empty(t, schedules, "rejected sleep must not leave a competing wake-up")
 	assertHarnessTrace(t, "foreground_followup_no_sleep.json", collector.snapshot(), parentID)
@@ -1142,7 +1142,7 @@ func TestHarnessScenario_BackgroundChildIsTheWakeSource(t *testing.T) {
 		}}}
 	}
 
-	h := newSubagentHarnessWith(t, respond)
+	h := newHarness(t, harnessOptions{respond: respond})
 	collector := collectEvents(h.mgr.bus.SubscribeAll())
 	defer func() {
 		closeOnce(childRelease)
@@ -1173,7 +1173,7 @@ func TestHarnessScenario_BackgroundChildIsTheWakeSource(t *testing.T) {
 	assert.Equal(t, 1, countToolResultsFor(parentMessages, tool.IDSleep))
 	assert.Contains(t, lastToolResultContent(parentMessages, tool.IDSleep),
 		"result arrives automatically in a later turn")
-	schedules, err := h.schedStore.ListSchedules(h.ctx, parentID)
+	schedules, err := h.schedules.ListSchedules(h.ctx, parentID)
 	require.NoError(t, err)
 	assert.Empty(t, schedules, "pending child must remain the sole wake source")
 	h.mgr.waitIdle(parentID)
@@ -1221,7 +1221,7 @@ func TestHarnessScenario_BackgroundFinalResponseResumesOnCompletion(t *testing.T
 		}}}
 	}
 
-	h := newSubagentHarnessWith(t, respond)
+	h := newHarness(t, harnessOptions{respond: respond})
 	collector := collectEvents(h.mgr.bus.SubscribeAll())
 	defer func() {
 		closeOnce(childRelease)
@@ -1296,7 +1296,7 @@ func TestHarnessScenario_ForegroundScatterGatherProjectsShrinkingAllWaitSet(t *t
 		return &llmwire.Response{ToolCalls: calls}
 	}
 
-	h := newSubagentHarnessWith(t, respond)
+	h := newHarness(t, harnessOptions{respond: respond})
 	collector := collectEvents(h.mgr.bus.SubscribeAll())
 	defer func() {
 		for _, release := range releases {
@@ -1358,7 +1358,7 @@ func TestHarnessScenario_ForegroundScatterGatherProjectsShrinkingAllWaitSet(t *t
 }
 
 func TestIntegration_BackgroundSubagentCompletes(t *testing.T) {
-	h := newSubagentHarness(t)
+	h := newHarness(t, harnessOptions{})
 	defer h.shutdown()
 
 	h.startInboxWake()
@@ -1434,7 +1434,7 @@ func TestIntegration_BackgroundTaskRejectsCompetingSleepProtocol(t *testing.T) {
 		}}
 	}
 
-	h := newSubagentHarnessWith(t, respond)
+	h := newHarness(t, harnessOptions{respond: respond})
 	defer h.shutdown()
 
 	h.startInboxWake()
@@ -1444,7 +1444,7 @@ func TestIntegration_BackgroundTaskRejectsCompetingSleepProtocol(t *testing.T) {
 
 	h.waitUntil("parent yields without sleeping", func() bool { return !h.mgr.HasActiveLoop(parentID) })
 
-	schedules, err := h.schedStore.ListSchedules(h.ctx, parentID)
+	schedules, err := h.schedules.ListSchedules(h.ctx, parentID)
 	require.NoError(t, err)
 	require.Empty(t, schedules, "rejected sleep must stage no timer")
 
@@ -1470,13 +1470,13 @@ func TestIntegration_BackgroundTaskRejectsCompetingSleepProtocol(t *testing.T) {
 	assert.Equal(t, sleepCallID, sleepResult.ToolCallID, "the result must target the model's original call id")
 	assert.Contains(t, sleepResult.Content, "sleep cannot be combined with task")
 
-	schedules, err = h.schedStore.ListSchedules(h.ctx, parentID)
+	schedules, err = h.schedules.ListSchedules(h.ctx, parentID)
 	require.NoError(t, err)
 	assert.Empty(t, schedules)
 }
 
 func TestIntegration_SendToSubagentReNotifies(t *testing.T) {
-	h := newSubagentHarness(t)
+	h := newHarness(t, harnessOptions{})
 	defer h.shutdown()
 
 	h.startInboxWake()
@@ -1510,13 +1510,13 @@ func TestIntegration_SendToSubagentReNotifies(t *testing.T) {
 func TestLedgerFailure_SpawnRefusesInsteadOfDegrading(t *testing.T) {
 	var flaky *flakyLinkStore
 
-	h := newSubagentHarnessDecorated(t, trivialRespond, func(inner subagent.Store) subagent.Store {
+	h := newHarness(t, harnessOptions{respond: trivialRespond, links: func(inner subagent.Store) subagent.Store {
 		flaky = newFlakyLinkStore(inner)
 		return flaky
-	})
+	}})
 	defer h.shutdown()
 
-	root, err := h.sessStore.CreateSession(h.ctx, h.projectID, "fake-model", "", nil)
+	root, err := h.store.CreateSession(h.ctx, h.projectID, "fake-model", "", nil)
 	require.NoError(t, err)
 
 	// Healthy store: the same request succeeds — this gate must not simply refuse
@@ -1563,7 +1563,7 @@ func TestResponseIntegrity_ReusedChildReportsCurrentErrorInsteadOfPriorAnswer(t 
 		return taskResponse("CHILD_INTEGRITY", "integrity")
 	}
 
-	h := newSubagentHarnessWith(t, respond)
+	h := newHarness(t, harnessOptions{respond: respond})
 	defer h.shutdown()
 	h.startInboxWake()
 	parentID, err := h.mgr.Send(h.ctx, h.projectID, "start integrity child", "fake-model", nil)
@@ -1618,13 +1618,13 @@ func TestResponseIntegrity_IncompleteChildResponseCannotBecomeCompletion(t *test
 }
 
 func TestResponseIntegrity_MissingTerminalRejectionNeverReusesOlderAnswer(t *testing.T) {
-	h := newSubagentHarnessWith(t, trivialRespond)
+	h := newHarness(t, harnessOptions{respond: trivialRespond})
 	defer h.shutdown()
-	parent, err := h.sessStore.CreateSession(h.ctx, h.projectID, "fake-model", "", nil)
+	parent, err := h.store.CreateSession(h.ctx, h.projectID, "fake-model", "", nil)
 	require.NoError(t, err)
 	childID, err := func() (int64, error) {
 		var id int64
-		err := h.sessStore.WithTx(h.ctx, func(tx *sql.Tx) error {
+		err := h.store.WithTx(h.ctx, func(tx *sql.Tx) error {
 			var err error
 			id, err = sessionstore.CreateSubagentSessionTx(
 				h.ctx,
@@ -1643,17 +1643,17 @@ func TestResponseIntegrity_MissingTerminalRejectionNeverReusesOlderAnswer(t *tes
 		return id, err
 	}()
 	require.NoError(t, err)
-	require.NoError(t, seedChildLink(h.ctx, h.sessStore, subagent.Link{
+	require.NoError(t, seedChildLink(h.ctx, h.store, subagent.Link{
 		ParentID: parent.ID, ChildID: childID, TaskCallID: "missing-rejection",
 	}))
-	_, err = h.sessStore.Commit(h.ctx, sessionstore.Commit{SessionID: childID, Messages: []*transcript.Message{{
+	_, err = h.store.Commit(h.ctx, sessionstore.Commit{SessionID: childID, Messages: []*transcript.Message{{
 		Role: llmwire.RoleAssistant, Content: "older accepted answer", FinishType: llmwire.FinishStop,
 	}}})
 	require.NoError(t, err)
 	require.NoError(t, func() error {
 		iteration := 2
 		status := sessionstore.SessionStatusError
-		_, err := h.sessStore.Commit(
+		_, err := h.store.Commit(
 			h.ctx,
 			sessionstore.Commit{
 				SessionID: childID,
@@ -1677,7 +1677,13 @@ func TestResponseIntegrity_MissingTerminalRejectionNeverReusesOlderAnswer(t *tes
 // record has to carry, because the record is all the child's run reads.
 func TestSpawnSettlesTheChildEffortOnTheChildModel(t *testing.T) {
 	provider := newSpawnEffortProvider(t)
-	h := newSpawnEffortHarness(t, provider.url)
+	h := newHarness(
+		t,
+		harnessOptions{
+			configure: withSpawnEffortModels(provider.url),
+			clientFor: configuredClient(withSpawnEffortModels(provider.url)),
+		},
+	)
 
 	defer h.shutdown()
 
@@ -1703,7 +1709,7 @@ func TestSpawnSettlesTheChildEffortOnTheChildModel(t *testing.T) {
 	require.NoError(t, err)
 	h.waitForDelivery(child.ChildID)
 
-	rec, err := h.sessStore.GetSession(h.ctx, child.ChildID)
+	rec, err := h.store.GetSession(h.ctx, child.ChildID)
 	require.NoError(t, err)
 	assert.Equal(t, "low", rec.ReasoningLevel,
 		"the parent's level is not a level the child model offers, so the child model's default wins")
@@ -1713,10 +1719,10 @@ func TestSpawnSettlesTheChildEffortOnTheChildModel(t *testing.T) {
 }
 
 func TestStopRejectsSpawnQueuedBehindDurableBoundary(t *testing.T) {
-	h := newSubagentHarnessWith(t, trivialRespond)
+	h := newHarness(t, harnessOptions{respond: trivialRespond})
 	defer h.shutdown()
 
-	root, err := h.sessStore.CreateSession(h.ctx, h.projectID, "fake-model", "", nil)
+	root, err := h.store.CreateSession(h.ctx, h.projectID, "fake-model", "", nil)
 	require.NoError(t, err)
 
 	store := &stoppingGateStore{
@@ -1762,10 +1768,10 @@ func TestStopRejectsSpawnQueuedBehindDurableBoundary(t *testing.T) {
 }
 
 func TestSpawnRejectsStoppedParent(t *testing.T) {
-	h := newSubagentHarnessWith(t, trivialRespond)
+	h := newHarness(t, harnessOptions{respond: trivialRespond})
 	defer h.shutdown()
 
-	root, err := h.sessStore.CreateSession(h.ctx, h.projectID, "fake-model", "", nil)
+	root, err := h.store.CreateSession(h.ctx, h.projectID, "fake-model", "", nil)
 	require.NoError(t, err)
 	require.NoError(t, h.mgr.sendToSession(context.Background(), root.ID, "/stop"))
 
@@ -1780,13 +1786,13 @@ func TestSpawnRejectsStoppedParent(t *testing.T) {
 func TestChildDepth_ReadErrorCancelsSpawn(t *testing.T) {
 	var flaky *flakyLinkStore
 
-	h := newSubagentHarnessDecorated(t, trivialRespond, func(inner subagent.Store) subagent.Store {
+	h := newHarness(t, harnessOptions{respond: trivialRespond, links: func(inner subagent.Store) subagent.Store {
 		flaky = newFlakyLinkStore(inner)
 		return flaky
-	})
+	}})
 	defer h.shutdown()
 
-	root, err := h.sessStore.CreateSession(h.ctx, h.projectID, "fake-model", "", nil)
+	root, err := h.store.CreateSession(h.ctx, h.projectID, "fake-model", "", nil)
 	require.NoError(t, err)
 
 	flaky.failGetLink(1, 0)
@@ -1799,10 +1805,10 @@ func TestChildDepth_ReadErrorCancelsSpawn(t *testing.T) {
 // TestChildDepth_NoLinkKeepsDepthOne: the "no row" branch is the normal path for
 // every root session and must stay untouched.
 func TestChildDepth_NoLinkKeepsDepthOne(t *testing.T) {
-	h := newSubagentHarnessWith(t, trivialRespond)
+	h := newHarness(t, harnessOptions{respond: trivialRespond})
 	defer h.shutdown()
 
-	root, err := h.sessStore.CreateSession(h.ctx, h.projectID, "fake-model", "", nil)
+	root, err := h.store.CreateSession(h.ctx, h.projectID, "fake-model", "", nil)
 	require.NoError(t, err)
 
 	depth, err := h.mgr.childDepth(h.ctx, root.ID)
@@ -1823,15 +1829,15 @@ func TestChildDepth_NoLinkKeepsDepthOne(t *testing.T) {
 // hands its parent the candidate text as the result — not the ack. This is the
 // real deriveOutcome consumer of the confirmed-answer pointer.
 func TestSubagentResult_CarriesCandidateAnswerNotAck(t *testing.T) {
-	h := newSubagentHarnessWith(t, trivialRespond)
+	h := newHarness(t, harnessOptions{respond: trivialRespond})
 	defer h.shutdown()
 
 	ctx := h.ctx
-	parent, err := h.sessStore.CreateSession(ctx, h.projectID, "fake-model", "", nil)
+	parent, err := h.store.CreateSession(ctx, h.projectID, "fake-model", "", nil)
 	require.NoError(t, err)
 	childID, err := func() (int64, error) {
 		var id int64
-		err := h.sessStore.WithTx(ctx, func(tx *sql.Tx) error {
+		err := h.store.WithTx(ctx, func(tx *sql.Tx) error {
 			var err error
 			id, err = sessionstore.CreateSubagentSessionTx(
 				ctx,
@@ -1850,7 +1856,7 @@ func TestSubagentResult_CarriesCandidateAnswerNotAck(t *testing.T) {
 		return id, err
 	}()
 	require.NoError(t, err)
-	require.NoError(t, seedChildLink(ctx, h.sessStore, subagent.Link{
+	require.NoError(t, seedChildLink(ctx, h.store, subagent.Link{
 		ParentID: parent.ID, ChildID: childID, TaskCallID: "cand",
 	}))
 
@@ -1873,15 +1879,15 @@ func TestSubagentResult_CarriesCandidateAnswerNotAck(t *testing.T) {
 // A stale pointer never turns an errored child into a completed answer: the
 // error outcome keeps precedence over the confirmed-answer pointer.
 func TestSubagentResult_ErrorBeatsStalePointer(t *testing.T) {
-	h := newSubagentHarnessWith(t, trivialRespond)
+	h := newHarness(t, harnessOptions{respond: trivialRespond})
 	defer h.shutdown()
 
 	ctx := h.ctx
-	parent, err := h.sessStore.CreateSession(ctx, h.projectID, "fake-model", "", nil)
+	parent, err := h.store.CreateSession(ctx, h.projectID, "fake-model", "", nil)
 	require.NoError(t, err)
 	childID, err := func() (int64, error) {
 		var id int64
-		err := h.sessStore.WithTx(ctx, func(tx *sql.Tx) error {
+		err := h.store.WithTx(ctx, func(tx *sql.Tx) error {
 			var err error
 			id, err = sessionstore.CreateSubagentSessionTx(
 				ctx,
@@ -1900,15 +1906,15 @@ func TestSubagentResult_ErrorBeatsStalePointer(t *testing.T) {
 		return id, err
 	}()
 	require.NoError(t, err)
-	require.NoError(t, seedChildLink(ctx, h.sessStore, subagent.Link{
+	require.NoError(t, seedChildLink(ctx, h.store, subagent.Link{
 		ParentID: parent.ID, ChildID: childID, TaskCallID: "stale",
 	}))
 
 	seedChildCandidateConfirm(t, h, childID)
 
 	// The child then errors (max iterations persists error status).
-	require.NoError(t, h.sessStore.UpdateSessionStatus(ctx, childID, sessionstore.SessionStatusError))
-	_, err = h.sessStore.Commit(ctx, sessionstore.Commit{SessionID: childID, Messages: []*transcript.Message{{
+	require.NoError(t, h.store.UpdateSessionStatus(ctx, childID, sessionstore.SessionStatusError))
+	_, err = h.store.Commit(ctx, sessionstore.Commit{SessionID: childID, Messages: []*transcript.Message{{
 		Role: "assistant", ToolCalls: json.RawMessage(`[{"id":"x","name":"bash","arguments":{}}]`),
 	}}})
 	require.NoError(t, err)
@@ -1930,17 +1936,17 @@ func TestSubagentResult_ErrorBeatsStalePointer(t *testing.T) {
 // iterations with its last message a tool call (no final answer) terminalizes as
 // `incomplete`, not a silent `completed`, and the parent sees that explicitly.
 func TestFinalizeChild_IncompleteWhenNoFinalAnswer(t *testing.T) {
-	h := newSubagentHarnessWith(t, trivialRespond)
+	h := newHarness(t, harnessOptions{respond: trivialRespond})
 	defer h.shutdown()
 
 	ctx := h.ctx
 
-	parent, err := h.sessStore.CreateSession(ctx, h.projectID, "fake-model", "", nil)
+	parent, err := h.store.CreateSession(ctx, h.projectID, "fake-model", "", nil)
 	require.NoError(t, err)
 
 	childID, err := func() (int64, error) {
 		var id int64
-		err := h.sessStore.WithTx(ctx, func(tx *sql.Tx) error {
+		err := h.store.WithTx(ctx, func(tx *sql.Tx) error {
 			var err error
 			id, err = sessionstore.CreateSubagentSessionTx(
 				ctx,
@@ -1959,14 +1965,14 @@ func TestFinalizeChild_IncompleteWhenNoFinalAnswer(t *testing.T) {
 		return id, err
 	}()
 	require.NoError(t, err)
-	require.NoError(t, seedChildLink(ctx, h.sessStore, subagent.Link{
+	require.NoError(t, seedChildLink(ctx, h.store, subagent.Link{
 		ParentID: parent.ID, ChildID: childID, TaskCallID: "bg",
 	}))
 
 	// The child's last message is a tool call — it stopped mid-tool / hit its cap.
 	toolCalls, err := json.Marshal([]llmwire.ToolCall{{ID: "x", Name: "bash", Arguments: []byte(`{}`)}})
 	require.NoError(t, err)
-	_, err = h.sessStore.Commit(ctx, sessionstore.Commit{SessionID: childID, Messages: []*transcript.Message{{
+	_, err = h.store.Commit(ctx, sessionstore.Commit{SessionID: childID, Messages: []*transcript.Message{{
 		Role: llmwire.RoleAssistant, ToolCalls: toolCalls,
 	}}})
 	require.NoError(t, err)
@@ -1974,7 +1980,7 @@ func TestFinalizeChild_IncompleteWhenNoFinalAnswer(t *testing.T) {
 	require.NoError(t, func() error {
 		iteration := 12
 		status := sessionstore.SessionStatusError
-		_, err := h.sessStore.Commit(
+		_, err := h.store.Commit(
 			ctx,
 			sessionstore.Commit{
 				SessionID: childID,
@@ -2006,15 +2012,15 @@ func TestFinalizeChild_IncompleteWhenNoFinalAnswer(t *testing.T) {
 // stale confirmed answer — the pointer is cleared by external input, and
 // without it the last-assistant-text fallback stands.
 func TestSubagentResult_BackgroundYieldFallsBackToYieldText(t *testing.T) {
-	h := newSubagentHarnessWith(t, trivialRespond)
+	h := newHarness(t, harnessOptions{respond: trivialRespond})
 	defer h.shutdown()
 
 	ctx := h.ctx
-	parent, err := h.sessStore.CreateSession(ctx, h.projectID, "fake-model", "", nil)
+	parent, err := h.store.CreateSession(ctx, h.projectID, "fake-model", "", nil)
 	require.NoError(t, err)
 	childID, err := func() (int64, error) {
 		var id int64
-		err := h.sessStore.WithTx(ctx, func(tx *sql.Tx) error {
+		err := h.store.WithTx(ctx, func(tx *sql.Tx) error {
 			var err error
 			id, err = sessionstore.CreateSubagentSessionTx(
 				ctx,
@@ -2033,7 +2039,7 @@ func TestSubagentResult_BackgroundYieldFallsBackToYieldText(t *testing.T) {
 		return id, err
 	}()
 	require.NoError(t, err)
-	require.NoError(t, seedChildLink(ctx, h.sessStore, subagent.Link{
+	require.NoError(t, seedChildLink(ctx, h.store, subagent.Link{
 		ParentID: parent.ID, ChildID: childID, TaskCallID: "yield",
 	}))
 
@@ -2043,7 +2049,7 @@ func TestSubagentResult_BackgroundYieldFallsBackToYieldText(t *testing.T) {
 	// The re-activation's external model-visible input clears the stale
 	// pointer alongside the check — clearing happens at promotion, not at
 	// enqueue.
-	input, err := h.sessStore.Enqueue(
+	input, err := h.store.Enqueue(
 		ctx,
 		sessionstore.Input{
 			SessionID:  childID,
@@ -2053,7 +2059,7 @@ func TestSubagentResult_BackgroundYieldFallsBackToYieldText(t *testing.T) {
 		},
 	)
 	require.NoError(t, err)
-	_, err = h.sessStore.Commit(
+	_, err = h.store.Commit(
 		ctx,
 		sessionstore.Commit{
 			SessionID: input.Input.SessionID,
@@ -2071,11 +2077,11 @@ func TestSubagentResult_BackgroundYieldFallsBackToYieldText(t *testing.T) {
 	require.NoError(t, err)
 
 	// Activation 2 ends in a plain yield final (no pending check).
-	_, err = h.sessStore.Commit(ctx, sessionstore.Commit{SessionID: childID, Messages: []*transcript.Message{{
+	_, err = h.store.Commit(ctx, sessionstore.Commit{SessionID: childID, Messages: []*transcript.Message{{
 		Role: "assistant", Content: "fresh yield text",
 	}}})
 	require.NoError(t, err)
-	require.NoError(t, h.sessStore.UpdateSessionStatus(ctx, childID, sessionstore.SessionStatusCompleted))
+	require.NoError(t, h.store.UpdateSessionStatus(ctx, childID, sessionstore.SessionStatusCompleted))
 
 	var pointer int64
 	require.NoError(t, h.db.QueryRowContext(ctx,

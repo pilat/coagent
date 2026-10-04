@@ -16,7 +16,11 @@ import (
 
 func TestPublishWaiting_ProjectsOnlyOneShotsOwnedByPendingSleepCalls(t *testing.T) {
 	ctx := context.Background()
-	mgr, _, projects, schedules := newTestManagerWithSchedule(t)
+	testFactory := &mockFactory{}
+	testHarness := newHarness(t, harnessOptions{configure: withTestModels, clientFor: testFactory.client})
+	mgr := testHarness.mgr
+	projects := testHarness.store
+	schedules := testHarness.schedules
 	projectID := testProject(t, projects, "/tmp/test")
 	rec, err := mgr.store.CreateSession(ctx, projectID, "fake-model", "", nil)
 	require.NoError(t, err)

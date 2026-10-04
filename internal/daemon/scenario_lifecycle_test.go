@@ -38,7 +38,7 @@ func TestCascadeKill_BackgroundDescendant(t *testing.T) {
 		return &llmwire.Response{Text: "idle"}
 	}
 
-	h := newSubagentHarnessWith(t, respond)
+	h := newHarness(t, harnessOptions{respond: respond})
 	defer func() {
 		closeOnce(release)
 		h.shutdown()
@@ -46,7 +46,7 @@ func TestCascadeKill_BackgroundDescendant(t *testing.T) {
 
 	ctx := h.ctx
 
-	root, err := h.sessStore.CreateSession(ctx, h.projectID, "fake-model", "", nil)
+	root, err := h.store.CreateSession(ctx, h.projectID, "fake-model", "", nil)
 	require.NoError(t, err)
 
 	h.startInboxWake()
@@ -64,7 +64,7 @@ func TestCascadeKill_BackgroundDescendant(t *testing.T) {
 	require.NoError(t, err)
 	h.waitUntil("background grandchild running", func() bool { return h.mgr.HasActiveLoop(grandchild.ChildID) })
 	h.waitUntil("background grandchild entered model call", func() bool { return len(entered) >= 2 })
-	childInput, err := h.sessStore.Enqueue(
+	childInput, err := h.store.Enqueue(
 		ctx,
 		sessionstore.Input{
 			SessionID:  child.ChildID,
@@ -74,7 +74,7 @@ func TestCascadeKill_BackgroundDescendant(t *testing.T) {
 		},
 	)
 	require.NoError(t, err)
-	grandchildInput, err := h.sessStore.Enqueue(
+	grandchildInput, err := h.store.Enqueue(
 		ctx,
 		sessionstore.Input{
 			SessionID:  grandchild.ChildID,
@@ -96,7 +96,7 @@ func TestCascadeKill_BackgroundDescendant(t *testing.T) {
 	})
 
 	for _, id := range []int64{child.ChildID, grandchild.ChildID} {
-		rec, gerr := h.sessStore.GetSession(ctx, id)
+		rec, gerr := h.store.GetSession(ctx, id)
 		require.NoError(t, gerr)
 		assert.NotNil(t, rec.KilledAt, "descendant %d is killed with its tree", id)
 	}
@@ -128,7 +128,7 @@ func TestCascadeKill_RemovesChildSchedules(t *testing.T) {
 		return &llmwire.Response{Text: "idle"}
 	}
 
-	h := newSubagentHarnessWith(t, respond)
+	h := newHarness(t, harnessOptions{respond: respond})
 	defer func() {
 		closeOnce(release)
 		h.shutdown()
@@ -136,7 +136,7 @@ func TestCascadeKill_RemovesChildSchedules(t *testing.T) {
 
 	ctx := h.ctx
 
-	root, err := h.sessStore.CreateSession(ctx, h.projectID, "fake-model", "", nil)
+	root, err := h.store.CreateSession(ctx, h.projectID, "fake-model", "", nil)
 	require.NoError(t, err)
 
 	h.startInboxWake()
@@ -147,28 +147,28 @@ func TestCascadeKill_RemovesChildSchedules(t *testing.T) {
 	h.waitUntil("background child running", func() bool { return h.mgr.HasActiveLoop(child.ChildID) })
 
 	oneShot := time.Now().Add(time.Hour).UTC()
-	_, err = h.schedStore.AddSchedule(ctx, child.ChildID, "", &oneShot, "child one-shot", false)
+	_, err = h.schedules.AddSchedule(ctx, child.ChildID, "", &oneShot, "child one-shot", false)
 	require.NoError(t, err)
-	_, err = h.schedStore.AddSchedule(ctx, child.ChildID, "0 9 * * *", nil, "child cron", false)
+	_, err = h.schedules.AddSchedule(ctx, child.ChildID, "0 9 * * *", nil, "child cron", false)
 	require.NoError(t, err)
 
 	require.NoError(t, h.mgr.sendToSession(ctx, root.ID, "/kill"))
 	h.waitUntil("child gone", func() bool { return !h.mgr.HasActiveLoop(child.ChildID) })
 
-	remaining, err := h.schedStore.ListSchedules(ctx, child.ChildID)
+	remaining, err := h.schedules.ListSchedules(ctx, child.ChildID)
 	require.NoError(t, err)
 	assert.Empty(t, remaining, "cascade-killed child's schedules are removed")
 }
 
 func TestCascadeKill_KilledTreeSuppressesTerminalBackgroundCompletion(t *testing.T) {
-	h := newSubagentHarnessWith(t, trivialRespond)
+	h := newHarness(t, harnessOptions{respond: trivialRespond})
 	defer h.shutdown()
 
-	parent, err := h.sessStore.CreateSession(h.ctx, h.projectID, "fake-model", "", nil)
+	parent, err := h.store.CreateSession(h.ctx, h.projectID, "fake-model", "", nil)
 	require.NoError(t, err)
 	childID, err := func() (int64, error) {
 		var id int64
-		err := h.sessStore.WithTx(h.ctx, func(tx *sql.Tx) error {
+		err := h.store.WithTx(h.ctx, func(tx *sql.Tx) error {
 			var err error
 			id, err = sessionstore.CreateSubagentSessionTx(
 				h.ctx,
@@ -187,16 +187,16 @@ func TestCascadeKill_KilledTreeSuppressesTerminalBackgroundCompletion(t *testing
 		return id, err
 	}()
 	require.NoError(t, err)
-	require.NoError(t, seedChildLink(h.ctx, h.sessStore, subagent.Link{
+	require.NoError(t, seedChildLink(h.ctx, h.store, subagent.Link{
 		ParentID: parent.ID, ChildID: childID, TaskCallID: "background",
 	}))
 	require.NoError(
 		t,
-		seedTerminalChild(h.ctx, h.sessStore, childID, subagent.StateCompleted, "done", subagent.OutcomeCompleted),
+		seedTerminalChild(h.ctx, h.store, childID, subagent.StateCompleted, "done", subagent.OutcomeCompleted),
 	)
 	require.NoError(
 		t,
-		h.sessStore.WithTx(
+		h.store.WithTx(
 			h.ctx,
 			func(tx *sql.Tx) error { return sessionstore.MarkSessionKilledTx(h.ctx, tx, parent.ID) },
 		),
@@ -213,7 +213,7 @@ func TestCascadeKill_KilledTreeSuppressesTerminalBackgroundCompletion(t *testing
 	assert.Positive(t, link.DeliveredAt)
 	assert.Zero(t, link.DeliveredInputID)
 	assert.Zero(t, link.DeliveredMsgID)
-	_, err = h.sessStore.PeekPending(h.ctx, parent.ID)
+	_, err = h.store.PeekPending(h.ctx, parent.ID)
 	require.ErrorIs(t, err, sessionstore.ErrNoPendingInput)
 }
 
@@ -234,7 +234,7 @@ func TestHarnessScenario_LiveStopChain(t *testing.T) {
 		return &llmwire.Response{Text: "never reached"}
 	}
 
-	h := newSubagentHarnessWith(t, respond)
+	h := newHarness(t, harnessOptions{respond: respond})
 	defer func() {
 		close(release)
 		h.shutdown()
@@ -255,7 +255,7 @@ func TestHarnessScenario_LiveStopChain(t *testing.T) {
 	h.startInboxWake()
 	require.NoError(t, h.mgr.sendToSession(h.ctx, root, "/stop"))
 	h.waitUntil("root stopped", func() bool {
-		record, loadErr := h.sessStore.GetSession(h.ctx, root)
+		record, loadErr := h.store.GetSession(h.ctx, root)
 
 		return loadErr == nil && record.Status == sessionstore.SessionStatusStopped
 	})
@@ -280,20 +280,20 @@ func TestHarnessScenario_InterruptedStopChain(t *testing.T) {
 	}
 
 	dbPath := filepath.Join(t.TempDir(), "interrupted-stop.db")
-	h1 := newSubagentHarnessOnDB(t, dbPath, respond, nil)
-	root, err := h1.sessStore.CreateSession(h1.ctx, h1.projectID, "fake-model", "", map[string]any{
+	h1 := newHarness(t, harnessOptions{dbPath: dbPath, respond: respond})
+	root, err := h1.store.CreateSession(h1.ctx, h1.projectID, "fake-model", "", map[string]any{
 		"manager_id": scenarioManagerID,
 	})
 	require.NoError(t, err)
-	require.NoError(t, h1.sessStore.BindManager(h1.ctx, scenarioManagerID, "telegram", map[string]any{
+	require.NoError(t, h1.store.BindManager(h1.ctx, scenarioManagerID, "telegram", map[string]any{
 		"bot_user_id": int64(1), "chat_id": int64(2), "topology": "group",
 	}))
-	input, err := h1.sessStore.Enqueue(
+	input, err := h1.store.Enqueue(
 		h1.ctx,
 		sessionstore.Input{SessionID: root.ID, Source: sessionstore.InputSourceUser, Content: "/stop"},
 	)
 	require.NoError(t, err)
-	_, err = h1.sessStore.BeginLifecycleInput(h1.ctx, input.Input.ID, "stop", "⏳ Stopping…")
+	_, err = h1.store.BeginLifecycleInput(h1.ctx, input.Input.ID, "stop", "⏳ Stopping…")
 	require.NoError(t, err)
 	h1.shutdown()
 
@@ -303,11 +303,11 @@ func TestHarnessScenario_InterruptedStopChain(t *testing.T) {
 
 		return &llmwire.Response{Text: "must not run"}
 	}
-	h2 := newSubagentHarnessOnDB(t, dbPath, respond2, nil)
+	h2 := newHarness(t, harnessOptions{dbPath: dbPath, respond: respond2})
 	defer h2.shutdown()
 	require.NoError(t, h2.mgr.Start(h2.ctx))
 
-	record, err := h2.sessStore.GetSession(h2.ctx, root.ID)
+	record, err := h2.store.GetSession(h2.ctx, root.ID)
 	require.NoError(t, err)
 	require.Equal(t, sessionstore.SessionStatusStopped, record.Status)
 	require.Zero(t, modelCalls, "stop recovery must never run the model")
@@ -344,7 +344,7 @@ func TestHarnessScenario_LaterFreshTurnAfterStop(t *testing.T) {
 		}
 	}
 
-	h := newSubagentHarnessWith(t, respond)
+	h := newHarness(t, harnessOptions{respond: respond})
 	defer h.shutdown()
 
 	collector := collectEvents(h.mgr.bus.SubscribeAll())
@@ -361,7 +361,7 @@ func TestHarnessScenario_LaterFreshTurnAfterStop(t *testing.T) {
 	h.startInboxWake()
 	require.NoError(t, h.mgr.sendToSession(h.ctx, root, "/stop"))
 	h.waitUntil("root stopped", func() bool {
-		record, loadErr := h.sessStore.GetSession(h.ctx, root)
+		record, loadErr := h.store.GetSession(h.ctx, root)
 
 		return loadErr == nil && record.Status == sessionstore.SessionStatusStopped
 	})

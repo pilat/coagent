@@ -12,7 +12,10 @@ import (
 )
 
 func TestPublishGate_RootPasses(t *testing.T) {
-	mgr, _, store := newTestManager(t)
+	testFactory := &mockFactory{}
+	testHarness := newHarness(t, harnessOptions{configure: withTestModels, clientFor: testFactory.client})
+	mgr := testHarness.mgr
+	store := testHarness.store
 	ch := mgr.bus.SubscribeAll()
 
 	pid := testProject(t, store, "/tmp/publish-root")
@@ -27,7 +30,10 @@ func TestPublishGate_RootPasses(t *testing.T) {
 }
 
 func TestPublishGate_RoutesRootOnlyToOwningManager(t *testing.T) {
-	mgr, _, store := newTestManager(t)
+	testFactory := &mockFactory{}
+	testHarness := newHarness(t, harnessOptions{configure: withTestModels, clientFor: testFactory.client})
+	mgr := testHarness.mgr
+	store := testHarness.store
 	alpha := mgr.bus.SubscribeManager("alpha")
 	beta := mgr.bus.SubscribeManager("beta")
 
@@ -44,7 +50,10 @@ func TestPublishGate_RoutesRootOnlyToOwningManager(t *testing.T) {
 }
 
 func TestPublishGate_OwnerlessRootReachesNoManager(t *testing.T) {
-	mgr, _, store := newTestManager(t)
+	testFactory := &mockFactory{}
+	testHarness := newHarness(t, harnessOptions{configure: withTestModels, clientFor: testFactory.client})
+	mgr := testHarness.mgr
+	store := testHarness.store
 	alpha := mgr.bus.SubscribeManager("alpha")
 
 	pid := testProject(t, store, "/tmp/publish-ownerless-root")
@@ -57,7 +66,10 @@ func TestPublishGate_OwnerlessRootReachesNoManager(t *testing.T) {
 }
 
 func TestPublishGate_ClaimingOwnerUpdatesTheWarmRoute(t *testing.T) {
-	mgr, _, store := newTestManager(t)
+	testFactory := &mockFactory{}
+	testHarness := newHarness(t, harnessOptions{configure: withTestModels, clientFor: testFactory.client})
+	mgr := testHarness.mgr
+	store := testHarness.store
 	alpha := mgr.bus.SubscribeManager("alpha")
 
 	pid := testProject(t, store, "/tmp/publish-claimed-root")
@@ -75,7 +87,10 @@ func TestPublishGate_ClaimingOwnerUpdatesTheWarmRoute(t *testing.T) {
 }
 
 func TestPublishGate_ConcurrentClaimWinsOverAStaleRouteRead(t *testing.T) {
-	mgr, _, store := newTestManager(t)
+	testFactory := &mockFactory{}
+	testHarness := newHarness(t, harnessOptions{configure: withTestModels, clientFor: testFactory.client})
+	mgr := testHarness.mgr
+	store := testHarness.store
 	alpha := mgr.bus.SubscribeManager("alpha")
 	pid := testProject(t, store, "/tmp/publish-concurrent-claim")
 	rec, err := mgr.store.CreateSession(context.Background(), pid, "fake-model", "", nil)
@@ -107,7 +122,9 @@ func TestPublishGate_ConcurrentClaimWinsOverAStaleRouteRead(t *testing.T) {
 }
 
 func TestPublishGate_DropsMalformedEventBeforeSessionLookup(t *testing.T) {
-	mgr, _, _ := newTestManager(t)
+	testFactory := &mockFactory{}
+	testHarness := newHarness(t, harnessOptions{configure: withTestModels, clientFor: testFactory.client})
+	mgr := testHarness.mgr
 	ch := mgr.bus.SubscribeAll()
 
 	counting := &countingSessionStore{Store: mgr.store}
@@ -120,7 +137,10 @@ func TestPublishGate_DropsMalformedEventBeforeSessionLookup(t *testing.T) {
 }
 
 func TestPublishGate_ChildDropped(t *testing.T) {
-	mgr, _, store := newTestManager(t)
+	testFactory := &mockFactory{}
+	testHarness := newHarness(t, harnessOptions{configure: withTestModels, clientFor: testFactory.client})
+	mgr := testHarness.mgr
+	store := testHarness.store
 	ch := mgr.bus.SubscribeAll()
 
 	childID := newTestChild(t, mgr, store, "/tmp/publish-child")
@@ -131,7 +151,10 @@ func TestPublishGate_ChildDropped(t *testing.T) {
 }
 
 func TestPublishGate_CachesChildVerdict(t *testing.T) {
-	mgr, _, store := newTestManager(t)
+	testFactory := &mockFactory{}
+	testHarness := newHarness(t, harnessOptions{configure: withTestModels, clientFor: testFactory.client})
+	mgr := testHarness.mgr
+	store := testHarness.store
 	childID := newTestChild(t, mgr, store, "/tmp/publish-cache")
 
 	counting := &countingSessionStore{Store: mgr.store}
@@ -147,7 +170,10 @@ func TestPublishGate_CachesChildVerdict(t *testing.T) {
 // A lookup failure publishes anyway, and must NOT cache that fail-open answer:
 // caching "root" for an actual child would leak its events until restart.
 func TestPublishGate_FailOpenDoesNotPoisonCache(t *testing.T) {
-	mgr, _, store := newTestManager(t)
+	testFactory := &mockFactory{}
+	testHarness := newHarness(t, harnessOptions{configure: withTestModels, clientFor: testFactory.client})
+	mgr := testHarness.mgr
+	store := testHarness.store
 	ch := mgr.bus.SubscribeAll()
 
 	childID := newTestChild(t, mgr, store, "/tmp/publish-failopen")

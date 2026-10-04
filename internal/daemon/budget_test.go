@@ -14,14 +14,14 @@ import (
 )
 
 func TestBackgroundObligationProjectsTreeLedgersAndInbox(t *testing.T) {
-	h := newSubagentHarnessWith(t, trivialRespond)
+	h := newHarness(t, harnessOptions{respond: trivialRespond})
 	defer h.shutdown()
 
-	root, err := h.sessStore.CreateSession(h.ctx, h.projectID, "fake-model", "", nil)
+	root, err := h.store.CreateSession(h.ctx, h.projectID, "fake-model", "", nil)
 	require.NoError(t, err)
 	child, err := func() (int64, error) {
 		var id int64
-		err := h.sessStore.WithTx(h.ctx, func(tx *sql.Tx) error {
+		err := h.store.WithTx(h.ctx, func(tx *sql.Tx) error {
 			var err error
 			id, err = sessionstore.CreateSubagentSessionTx(
 				h.ctx,
@@ -45,7 +45,7 @@ func TestBackgroundObligationProjectsTreeLedgersAndInbox(t *testing.T) {
 	require.NoError(t, err)
 	assert.False(t, obligation)
 
-	require.NoError(t, seedChildLink(h.ctx, h.sessStore, subagent.Link{
+	require.NoError(t, seedChildLink(h.ctx, h.store, subagent.Link{
 		ParentID: root.ID, ChildID: child, TaskCallID: "background", Blocking: false,
 		State: subagent.StateRunning,
 	}))
@@ -61,9 +61,9 @@ func TestBackgroundObligationProjectsTreeLedgersAndInbox(t *testing.T) {
 	assert.True(t, retained)
 	assert.Zero(t, budgetProbe.releaseCalls)
 
-	other, err := h.sessStore.CreateSession(h.ctx, h.projectID, "fake-model", "", nil)
+	other, err := h.store.CreateSession(h.ctx, h.projectID, "fake-model", "", nil)
 	require.NoError(t, err)
-	_, err = h.sessStore.Enqueue(
+	_, err = h.store.Enqueue(
 		h.ctx,
 		sessionstore.Input{
 			SessionID:  other.ID,
@@ -82,7 +82,7 @@ func TestBackgroundObligationProjectsTreeLedgersAndInbox(t *testing.T) {
 	for _, state := range []subagent.State{subagent.StateStopped, subagent.StateKilled} {
 		stoppedChild, err := func() (int64, error) {
 			var id int64
-			err := h.sessStore.WithTx(h.ctx, func(tx *sql.Tx) error {
+			err := h.store.WithTx(h.ctx, func(tx *sql.Tx) error {
 				var err error
 				id, err = sessionstore.CreateSubagentSessionTx(
 					h.ctx,
@@ -101,18 +101,18 @@ func TestBackgroundObligationProjectsTreeLedgersAndInbox(t *testing.T) {
 			return id, err
 		}()
 		require.NoError(t, err)
-		require.NoError(t, seedChildLink(h.ctx, h.sessStore, subagent.Link{
+		require.NoError(t, seedChildLink(h.ctx, h.store, subagent.Link{
 			ParentID: root.ID, ChildID: stoppedChild,
 			TaskCallID: "background-" + string(state), Blocking: false, State: state,
 		}))
 	}
 
-	otherRoot, err := h.sessStore.CreateSession(h.ctx, h.projectID, "fake-model", "", nil)
+	otherRoot, err := h.store.CreateSession(h.ctx, h.projectID, "fake-model", "", nil)
 	require.NoError(t, err)
 	for _, state := range []subagent.State{subagent.StateStopped, subagent.StateKilled} {
 		otherChild, err := func() (int64, error) {
 			var id int64
-			err := h.sessStore.WithTx(h.ctx, func(tx *sql.Tx) error {
+			err := h.store.WithTx(h.ctx, func(tx *sql.Tx) error {
 				var err error
 				id, err = sessionstore.CreateSubagentSessionTx(
 					h.ctx,
@@ -131,7 +131,7 @@ func TestBackgroundObligationProjectsTreeLedgersAndInbox(t *testing.T) {
 			return id, err
 		}()
 		require.NoError(t, err)
-		require.NoError(t, seedChildLink(h.ctx, h.sessStore, subagent.Link{
+		require.NoError(t, seedChildLink(h.ctx, h.store, subagent.Link{
 			ParentID: otherRoot.ID, ChildID: otherChild,
 			TaskCallID: "background-" + string(state), Blocking: false, State: state,
 		}))

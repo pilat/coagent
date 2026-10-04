@@ -137,14 +137,14 @@ func TestProductionTools_ParallelSafePolicies(t *testing.T) {
 }
 
 func TestSessionRepoRoot_InheritedAcrossDurableSubagentTree(t *testing.T) {
-	h := newSubagentHarness(t)
-	root, err := h.sessStore.CreateSession(h.ctx, h.projectID, "fake-model", "", map[string]any{
+	h := newHarness(t, harnessOptions{})
+	root, err := h.store.CreateSession(h.ctx, h.projectID, "fake-model", "", map[string]any{
 		"repo_root": "/source",
 	})
 	require.NoError(t, err)
 	childID, err := func() (int64, error) {
 		var id int64
-		err := h.sessStore.WithTx(h.ctx, func(tx *sql.Tx) error {
+		err := h.store.WithTx(h.ctx, func(tx *sql.Tx) error {
 			var err error
 			id, err = sessionstore.CreateSubagentSessionTx(
 				h.ctx,
@@ -165,7 +165,7 @@ func TestSessionRepoRoot_InheritedAcrossDurableSubagentTree(t *testing.T) {
 	require.NoError(t, err)
 	grandchildID, err := func() (int64, error) {
 		var id int64
-		err := h.sessStore.WithTx(h.ctx, func(tx *sql.Tx) error {
+		err := h.store.WithTx(h.ctx, func(tx *sql.Tx) error {
 			var err error
 			id, err = sessionstore.CreateSubagentSessionTx(
 				h.ctx,
@@ -186,18 +186,18 @@ func TestSessionRepoRoot_InheritedAcrossDurableSubagentTree(t *testing.T) {
 	require.NoError(t, err)
 
 	for _, sessionID := range []int64{root.ID, childID, grandchildID} {
-		rec, loadErr := h.sessStore.GetSession(h.ctx, sessionID)
+		rec, loadErr := h.store.GetSession(h.ctx, sessionID)
 		require.NoError(t, loadErr)
 		got, rootErr := h.mgr.sessionRepoRoot(h.ctx, rec)
 		require.NoError(t, rootErr)
 		assert.Equal(t, "/source", got)
 	}
 
-	child, err := h.sessStore.GetSession(h.ctx, childID)
+	child, err := h.store.GetSession(h.ctx, childID)
 	require.NoError(t, err)
 	assert.Empty(t, child.Attributes["repo_root"])
 
-	plain, err := h.sessStore.CreateSession(h.ctx, h.projectID, "fake-model", "", nil)
+	plain, err := h.store.CreateSession(h.ctx, h.projectID, "fake-model", "", nil)
 	require.NoError(t, err)
 	got, err := h.mgr.sessionRepoRoot(h.ctx, plain)
 	require.NoError(t, err)
@@ -205,8 +205,8 @@ func TestSessionRepoRoot_InheritedAcrossDurableSubagentTree(t *testing.T) {
 }
 
 func TestSessionRepoRoot_RejectsCrossProjectRoot(t *testing.T) {
-	h := newSubagentHarness(t)
-	root, err := h.sessStore.CreateSession(h.ctx, h.projectID, "fake-model", "", map[string]any{
+	h := newHarness(t, harnessOptions{})
+	root, err := h.store.CreateSession(h.ctx, h.projectID, "fake-model", "", map[string]any{
 		"repo_root": "/source",
 	})
 	require.NoError(t, err)

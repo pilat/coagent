@@ -2,7 +2,6 @@ package daemon
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"path/filepath"
 	"testing"
@@ -13,11 +12,8 @@ import (
 	"go.uber.org/zap"
 	"go.uber.org/zap/zaptest/observer"
 
-	"github.com/pilat/coagent/internal/config"
 	"github.com/pilat/coagent/internal/llmwire"
 	"github.com/pilat/coagent/internal/logger"
-	"github.com/pilat/coagent/internal/migrate"
-	"github.com/pilat/coagent/internal/sessionbuild"
 	"github.com/pilat/coagent/internal/sessionstore"
 	"github.com/pilat/coagent/internal/subagent"
 	"github.com/pilat/coagent/internal/tool"
@@ -60,12 +56,9 @@ func TestCompletionContentIncludesPersistedIteration(t *testing.T) {
 func TestPendingExternalCallsRetainsAtomicChildHandoff(t *testing.T) {
 	ctx := t.Context()
 	dbPath := filepath.Join(t.TempDir(), "handoff.db")
-	db, err := migrate.OpenDB(ctx, dbPath)
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = db.Close() })
-	require.NoError(t, migrate.Run(ctx, db, dbPath))
-	sessions := sessionstore.NewStore(db)
-	links := subagent.NewStore(db, sessions)
+	h := newHarness(t, harnessOptions{dbPath: dbPath, respond: trivialRespond})
+	sessions := h.store
+	links := h.links
 	projectID := testProject(t, sessions, t.TempDir())
 	parent, err := sessions.CreateSession(ctx, projectID, "fake-model", "", nil)
 	require.NoError(t, err)
@@ -89,9 +82,8 @@ func TestPendingExternalCallsRetainsAtomicChildHandoff(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, link)
 	handoff := &deliveringChildLinks{Store: links, link: *link}
-	manager, _ := newScenarioDaemon(ctx, sessionbuild.BuildInput{
-		Config: &config.Config{WorkDir: t.TempDir()}, Store: sessions,
-	}, sessions, handoff, nil, nil, nil, db)
+	h.mgr.links = handoff
+	manager := h.mgr
 
 	owners, err := manager.callOwners(ctx, parent.ID)
 	require.NoError(t, err)
@@ -110,7 +102,10 @@ func TestPendingExternalCallsRetainsAtomicChildHandoff(t *testing.T) {
 
 func TestFollowUpAcceptedBeforeTerminalBoundaryStaysInSameActivation(t *testing.T) {
 	ctx := context.Background()
-	mgr, _, projects := newTestManager(t)
+	testFactory := &mockFactory{}
+	testHarness := newHarness(t, harnessOptions{configure: withTestModels, clientFor: testFactory.client})
+	mgr := testHarness.mgr
+	projects := testHarness.store
 	projectID := testProject(t, projects, "/tmp/follow-up-boundary")
 	parent, err := mgr.store.CreateSession(ctx, projectID, "fake-model", "", nil)
 	require.NoError(t, err)
@@ -138,7 +133,10 @@ func TestFollowUpAcceptedBeforeTerminalBoundaryStaysInSameActivation(t *testing.
 
 func TestTerminalChildDeliversPreviousOutcomeBeforeRearm(t *testing.T) {
 	ctx := context.Background()
-	mgr, _, projects := newTestManager(t)
+	testFactory := &mockFactory{}
+	testHarness := newHarness(t, harnessOptions{configure: withTestModels, clientFor: testFactory.client})
+	mgr := testHarness.mgr
+	projects := testHarness.store
 	projectID := testProject(t, projects, t.TempDir())
 	parent, err := mgr.store.CreateSession(ctx, projectID, "fake-model", "", nil)
 	require.NoError(t, err)

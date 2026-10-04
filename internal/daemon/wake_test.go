@@ -14,7 +14,10 @@ import (
 
 func TestProcessInputRearmsCompletedChildAfterPriorOutcomeHandoff(t *testing.T) {
 	ctx := context.Background()
-	mgr, _, projects := newTestManager(t)
+	testFactory := &mockFactory{}
+	testHarness := newHarness(t, harnessOptions{configure: withTestModels, clientFor: testFactory.client})
+	mgr := testHarness.mgr
+	projects := testHarness.store
 	projectID := testProject(t, projects, t.TempDir())
 	parent, err := mgr.store.CreateSession(ctx, projectID, "fake-model", "", nil)
 	require.NoError(t, err)

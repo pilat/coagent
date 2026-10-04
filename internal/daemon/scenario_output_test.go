@@ -23,11 +23,9 @@ import (
 	"github.com/pilat/coagent/internal/controllerapi"
 	"github.com/pilat/coagent/internal/llm"
 	"github.com/pilat/coagent/internal/llmwire"
-	"github.com/pilat/coagent/internal/migrate"
 	"github.com/pilat/coagent/internal/progressruntime"
 	"github.com/pilat/coagent/internal/sessionevent"
 	"github.com/pilat/coagent/internal/sessionstore"
-	"github.com/pilat/coagent/internal/subagent"
 	"github.com/pilat/coagent/internal/tool"
 )
 
@@ -46,7 +44,7 @@ func TestHarnessScenario_CompletionCheckConfirmsBeforePublishing(t *testing.T) {
 		return &llmwire.Response{Text: "why I am stopping"}
 	}
 
-	h := newSubagentHarnessWith(t, respond)
+	h := newHarness(t, harnessOptions{respond: respond})
 	collector := collectEvents(h.mgr.bus.SubscribeAll())
 	defer func() {
 		collector.stop()
@@ -110,7 +108,7 @@ func TestHarnessScenario_CompletionCheckBackgroundProcessYieldPublishesOnce(t *t
 		return &llmwire.Response{Text: "follow-up answer"}
 	}
 
-	h := newSubagentHarnessWith(t, respond)
+	h := newHarness(t, harnessOptions{respond: respond})
 	collector := collectEvents(h.mgr.bus.SubscribeAll())
 	defer func() {
 		collector.stop()
@@ -175,7 +173,7 @@ func TestHarnessScenario_CompletionCheckEmptyBackgroundYieldYieldsSilently(t *te
 		return &llmwire.Response{Text: "resumed after silent yield"}
 	}
 
-	h := newSubagentHarnessWith(t, respond)
+	h := newHarness(t, harnessOptions{respond: respond})
 	collector := collectEvents(h.mgr.bus.SubscribeAll())
 	defer func() {
 		collector.stop()
@@ -231,7 +229,7 @@ func TestHarnessScenario_CompletionCheckStoppedLinkIsNotAWakeSource(t *testing.T
 				return &llmwire.Response{Text: "confirmed answer over dead child"}
 			}
 
-			h := newSubagentHarnessWith(t, respond)
+			h := newHarness(t, harnessOptions{respond: respond})
 			collector := collectEvents(h.mgr.bus.SubscribeAll())
 			defer func() {
 				collector.stop()
@@ -246,7 +244,7 @@ func TestHarnessScenario_CompletionCheckStoppedLinkIsNotAWakeSource(t *testing.T
 
 			child, err := func() (int64, error) {
 				var id int64
-				err := h.sessStore.WithTx(h.ctx, func(tx *sql.Tx) error {
+				err := h.store.WithTx(h.ctx, func(tx *sql.Tx) error {
 					var err error
 					id, err = sessionstore.CreateSubagentSessionTx(
 						h.ctx,
@@ -285,38 +283,17 @@ func TestControllerManagerSubscriptionIsExactAcrossRestart(t *testing.T) {
 
 	ctx := context.Background()
 	dbPath := filepath.Join(t.TempDir(), "routing.db")
-	firstDB, err := migrate.OpenDB(ctx, dbPath)
-	require.NoError(t, err)
-	require.NoError(t, migrate.Run(ctx, firstDB, dbPath))
-	firstStore := sessionstore.NewStore(firstDB)
-	firstSessions := sessionstore.NewStore(firstDB)
-	projectID := testProject(t, firstStore, "/tmp/controller-manager-restart")
+	first := newHarness(t, harnessOptions{dbPath: dbPath, respond: trivialRespond})
+	firstDB, firstSessions := first.db, first.store
+	projectID := testProject(t, first.store, "/tmp/controller-manager-restart")
 	record, err := firstSessions.CreateSession(ctx, projectID, "model", "", map[string]any{
 		controllerapi.SessionAttributeManagerID: "manager-7",
 	})
 	require.NoError(t, err)
 	require.NoError(t, firstDB.Close())
 
-	secondDB, err := migrate.OpenDB(ctx, dbPath)
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = secondDB.Close() })
-	secondSessions := sessionstore.NewStore(secondDB)
-	mgr, _ := newScenarioDaemon(
-		context.Background(),
-		scriptedBuildInput(
-			t,
-			&config.Config{Model: "fake-model"},
-			secondSessions,
-			nil,
-			func(*config.Config) (llm.Client, error) { return &scriptedLLM{respond: trivialRespond}, nil },
-		),
-		secondSessions,
-		subagent.NewStore(secondDB, secondSessions),
-		nil,
-		nil,
-		nil,
-		secondDB,
-	)
+	second := newHarness(t, harnessOptions{dbPath: dbPath, respond: trivialRespond})
+	mgr := second.mgr
 	controllers := newTestController(mgr, &config.Config{}, nil, nil)
 	subscriptions := make(map[string]<-chan controllerapi.SessionNotification, 10)
 	for i := range 10 {
@@ -340,13 +317,13 @@ func TestControllerManagerSubscriptionIsExactAcrossRestart(t *testing.T) {
 }
 
 func TestHarnessScenario_SecondInputDoesNotReplayPreviousFinal(t *testing.T) {
-	h := newSubagentHarnessWith(t, func(_ string, messages []llmwire.Message) *llmwire.Response {
+	h := newHarness(t, harnessOptions{respond: func(_ string, messages []llmwire.Message) *llmwire.Response {
 		if hasUserContaining(messages, "second question") {
 			return &llmwire.Response{Text: "second answer"}
 		}
 
 		return &llmwire.Response{Text: "first answer"}
-	})
+	}})
 	collector := collectEvents(h.mgr.bus.SubscribeAll())
 	defer func() {
 		collector.stop()
@@ -368,9 +345,9 @@ func TestHarnessScenario_SecondInputDoesNotReplayPreviousFinal(t *testing.T) {
 }
 
 func TestHarnessScenario_CLIConversationIsManagerOwned(t *testing.T) {
-	h := newSubagentHarnessWith(t, func(string, []llmwire.Message) *llmwire.Response {
+	h := newHarness(t, harnessOptions{respond: func(string, []llmwire.Message) *llmwire.Response {
 		return &llmwire.Response{Text: "configuration answer"}
-	})
+	}})
 	collector := collectEvents(h.mgr.bus.SubscribeAll())
 	defer func() {
 		collector.stop()
@@ -433,7 +410,7 @@ func TestHarnessScenario_BackgroundChildCheckpointUpdatesRootCard(t *testing.T) 
 		}}}
 	}
 
-	h := newSubagentHarnessWith(t, respond)
+	h := newHarness(t, harnessOptions{respond: respond})
 	collector := collectEvents(h.mgr.bus.SubscribeAll())
 	defer func() {
 		if !released {
@@ -507,7 +484,7 @@ func TestHarnessScenario_LongSessionAcceptsInputWithoutChatReceipt(t *testing.T)
 	release := make(chan struct{})
 	entered := make(chan struct{})
 	var calls atomic.Int64
-	h := newSubagentHarnessWith(t, func(_ string, _ []llmwire.Message) *llmwire.Response {
+	h := newHarness(t, harnessOptions{respond: func(_ string, _ []llmwire.Message) *llmwire.Response {
 		if calls.Add(1) == 1 {
 			close(entered)
 		}
@@ -515,7 +492,7 @@ func TestHarnessScenario_LongSessionAcceptsInputWithoutChatReceipt(t *testing.T)
 		<-release
 
 		return &llmwire.Response{Text: "first model progress"}
-	})
+	}})
 	defer func() {
 		close(release)
 		h.shutdown()
@@ -548,12 +525,12 @@ func TestHarnessScenario_WorkingMainModelRefreshesProgressEveryThirtySeconds(t *
 	release := make(chan struct{})
 	entered := make(chan struct{})
 	var enteredOnce sync.Once
-	h := newSubagentHarnessWith(t, func(_ string, _ []llmwire.Message) *llmwire.Response {
+	h := newHarness(t, harnessOptions{respond: func(_ string, _ []llmwire.Message) *llmwire.Response {
 		enteredOnce.Do(func() { close(entered) })
 		<-release
 
 		return &llmwire.Response{Text: "late response"}
-	})
+	}})
 	collector := collectEvents(h.mgr.bus.SubscribeAll())
 	defer func() {
 		close(release)
@@ -567,7 +544,7 @@ func TestHarnessScenario_WorkingMainModelRefreshesProgressEveryThirtySeconds(t *
 	})
 	require.NoError(t, err)
 	waitForScenarioSignal(t, entered, "working main model call")
-	progressStore := h.sessStore
+	progressStore := h.store
 	facts, err := progressStore.CaptureProgress(h.ctx, sessionID)
 	require.NoError(t, err)
 	require.Nil(t, facts.LastSemanticOutputAt)
@@ -598,7 +575,7 @@ func TestHarnessScenario_ReactivatedEpisodeGetsFullMainModelInterval(t *testing.
 	enteredSecond := make(chan struct{})
 	secondOnce := sync.Once{}
 	var calls atomic.Int64
-	h := newSubagentHarnessWith(t, func(_ string, _ []llmwire.Message) *llmwire.Response {
+	h := newHarness(t, harnessOptions{respond: func(_ string, _ []llmwire.Message) *llmwire.Response {
 		// Episodes one and two each spend a candidate call and a confirming
 		// call; only episode two's first call arms the progress probe.
 		switch calls.Add(1) {
@@ -610,7 +587,7 @@ func TestHarnessScenario_ReactivatedEpisodeGetsFullMainModelInterval(t *testing.
 		<-release
 
 		return &llmwire.Response{Text: "new final"}
-	})
+	}})
 	collector := collectEvents(h.mgr.bus.SubscribeAll())
 	defer func() {
 		close(release)
@@ -634,7 +611,7 @@ func TestHarnessScenario_ReactivatedEpisodeGetsFullMainModelInterval(t *testing.
 	require.NoError(t, h.mgr.sendToSession(h.ctx, sessionID, "second episode"))
 	waitForScenarioSignal(t, enteredSecond, "reactivated model call")
 
-	progressStore := h.sessStore
+	progressStore := h.store
 	facts, err := progressStore.CaptureProgress(h.ctx, sessionID)
 	require.NoError(t, err)
 	require.NotNil(t, facts.EpisodeStartedAt)
@@ -655,12 +632,12 @@ func TestHarnessScenario_EmptyRootStartsEpisodeWithFirstInput(t *testing.T) {
 	release := make(chan struct{})
 	entered := make(chan struct{})
 	enteredOnce := sync.Once{}
-	h := newSubagentHarnessWith(t, func(_ string, _ []llmwire.Message) *llmwire.Response {
+	h := newHarness(t, harnessOptions{respond: func(_ string, _ []llmwire.Message) *llmwire.Response {
 		enteredOnce.Do(func() { close(entered) })
 		<-release
 
 		return &llmwire.Response{Text: "done"}
-	})
+	}})
 	defer func() {
 		close(release)
 		h.shutdown()
@@ -672,7 +649,7 @@ func TestHarnessScenario_EmptyRootStartsEpisodeWithFirstInput(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	progressStore := h.sessStore
+	progressStore := h.store
 	roots, err := progressStore.ListAutonomousProgressRoots(h.ctx)
 	require.NoError(t, err)
 	assert.NotContains(t, roots, sessionID)
@@ -701,29 +678,10 @@ func TestManagementRoot_ThreeManagersShareProjectKeepOwnership(t *testing.T) {
 	root := t.TempDir()
 	dbPath := filepath.Join(root, "mgmt.db")
 
-	db, err := migrate.OpenDB(ctx, dbPath)
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = db.Close() })
-	require.NoError(t, migrate.Run(ctx, db, dbPath))
-
-	sessions := sessionstore.NewStore(db)
+	h := newHarness(t, harnessOptions{dbPath: dbPath, respond: trivialRespond})
+	db, sessions := h.db, h.store
 	cfg := &config.Config{UnifiedConfig: &config.UnifiedConfig{ProjectsRoot: filepath.Join(root, "projects")}}
-	svc, _ := newScenarioDaemon(
-		ctx,
-		scriptedBuildInput(
-			t,
-			&config.Config{Model: "fake-model"},
-			sessions,
-			nil,
-			func(*config.Config) (llm.Client, error) { return &scriptedLLM{respond: trivialRespond}, nil },
-		),
-		sessions,
-		subagent.NewStore(db, sessions),
-		nil,
-		nil,
-		func() string { return "fake-model" },
-		db,
-	)
+	svc := h.mgr
 	factory := newTestController(svc, cfg, nil, nil)
 
 	const topicBase = 7000
@@ -806,7 +764,7 @@ func TestHarnessScenario_OutputChainReportedOrder(t *testing.T) {
 		}
 	}
 
-	h := newSubagentHarnessWith(t, respond)
+	h := newHarness(t, harnessOptions{respond: respond})
 	defer func() {
 		closeOnce.Do(func() { close(followUpQueued) })
 		h.shutdown()
@@ -824,7 +782,7 @@ func TestHarnessScenario_OutputChainReportedOrder(t *testing.T) {
 
 	// The follow-up is enqueued while the first tool is unresolved, so it may
 	// only enter history after settlement — advancing the generation exactly once.
-	_, err = h.sessStore.Enqueue(
+	_, err = h.store.Enqueue(
 		h.ctx,
 		sessionstore.Input{
 			SessionID: root,
@@ -874,7 +832,7 @@ func TestHarnessScenario_OutputChainNarratedToolIterations(t *testing.T) {
 		}
 	}
 
-	h := newSubagentHarnessWith(t, respond)
+	h := newHarness(t, harnessOptions{respond: respond})
 	defer h.shutdown()
 
 	collector := collectEvents(h.mgr.bus.SubscribeAll())
@@ -923,7 +881,7 @@ func TestHarnessScenario_ProcessCompletionAtBusyToolBoundary(t *testing.T) {
 		return &llmwire.Response{Text: "unexpected activation"}
 	}
 
-	h := newSubagentHarnessWith(t, respond)
+	h := newHarness(t, harnessOptions{respond: respond})
 	service := installScenarioProcessService(t, h)
 	collector := collectEvents(h.mgr.bus.SubscribeAll())
 	defer func() {
@@ -995,7 +953,7 @@ func TestHarnessScenario_AgentCancelsOwnedBackgroundProcess(t *testing.T) {
 		}}}
 	}
 
-	h := newSubagentHarnessWith(t, respond)
+	h := newHarness(t, harnessOptions{respond: respond})
 	service := installScenarioProcessService(t, h)
 	h.mgr.build.ProcessService = service
 	collector := collectEvents(h.mgr.bus.SubscribeAll())
@@ -1026,23 +984,23 @@ func TestHarnessScenario_AgentCancelsOwnedBackgroundProcess(t *testing.T) {
 
 func TestHarnessScenario_ProcessCompletionAtIdleTransition(t *testing.T) {
 	var modelCalls atomic.Int64
-	h := newSubagentHarnessWith(t, func(_ string, messages []llmwire.Message) *llmwire.Response {
+	h := newHarness(t, harnessOptions{respond: func(_ string, messages []llmwire.Message) *llmwire.Response {
 		modelCalls.Add(1)
 		require.True(t, hasUserContaining(messages, "<process_completion>"))
 
 		return &llmwire.Response{Text: "idle-transition completion observed"}
-	})
+	}})
 	collector := collectEvents(h.mgr.bus.SubscribeAll())
 	defer func() {
 		collector.stop()
 		h.shutdown()
 	}()
 
-	root, err := h.sessStore.CreateSession(h.ctx, h.projectID, "fake-model", "", map[string]any{
+	root, err := h.store.CreateSession(h.ctx, h.projectID, "fake-model", "", map[string]any{
 		"manager_id": scenarioManagerID,
 	})
 	require.NoError(t, err)
-	require.NoError(t, h.sessStore.UpdateSessionStatus(
+	require.NoError(t, h.store.UpdateSessionStatus(
 		h.ctx, root.ID, sessionstore.SessionStatusCompleted,
 	))
 	_, err = h.mgr.store.Enqueue(
@@ -1077,12 +1035,12 @@ func TestHarnessScenario_ProcessCompletionAtIdleTransition(t *testing.T) {
 
 func TestHarnessScenario_ProcessCompletionRevivesCompletedRoot(t *testing.T) {
 	var calls atomic.Int64
-	h := newSubagentHarnessWith(t, func(_ string, messages []llmwire.Message) *llmwire.Response {
+	h := newHarness(t, harnessOptions{respond: func(_ string, messages []llmwire.Message) *llmwire.Response {
 		calls.Add(1)
 		require.True(t, hasUserContaining(messages, "<process_completion>"))
 
 		return &llmwire.Response{Text: "idle process completion observed"}
-	})
+	}})
 	service := installScenarioProcessService(t, h)
 	collector := collectEvents(h.mgr.bus.SubscribeAll())
 	defer func() {
@@ -1090,11 +1048,11 @@ func TestHarnessScenario_ProcessCompletionRevivesCompletedRoot(t *testing.T) {
 		h.shutdown()
 	}()
 
-	root, err := h.sessStore.CreateSession(h.ctx, h.projectID, "fake-model", "", map[string]any{
+	root, err := h.store.CreateSession(h.ctx, h.projectID, "fake-model", "", map[string]any{
 		"manager_id": scenarioManagerID,
 	})
 	require.NoError(t, err)
-	require.NoError(t, h.sessStore.UpdateSessionStatus(
+	require.NoError(t, h.store.UpdateSessionStatus(
 		h.ctx, root.ID, sessionstore.SessionStatusCompleted,
 	))
 
@@ -1138,7 +1096,7 @@ func TestHarnessScenario_ProcessCompletionInterruptsSleep(t *testing.T) {
 		}}}
 	}
 
-	h := newSubagentHarnessWith(t, respond)
+	h := newHarness(t, harnessOptions{respond: respond})
 	service := installScenarioProcessService(t, h)
 	collector := collectEvents(h.mgr.bus.SubscribeAll())
 	defer func() {
@@ -1197,7 +1155,7 @@ func TestHarnessScenario_ProcessCompletionWaitsForForegroundChild(t *testing.T) 
 		}}}
 	}
 
-	h := newSubagentHarnessWith(t, respond)
+	h := newHarness(t, harnessOptions{respond: respond})
 	service := installScenarioProcessService(t, h)
 	collector := collectEvents(h.mgr.bus.SubscribeAll())
 	defer func() {
@@ -1214,7 +1172,7 @@ func TestHarnessScenario_ProcessCompletionWaitsForForegroundChild(t *testing.T) 
 	process := startScenarioProcess(t, service, rootID, rootID, "printf 'queued\\n'")
 	waitScenarioProcessState(t, h, process.ID, backgroundprocess.StateCompleted)
 	h.waitUntil("process wake remains behind foreground child", func() bool {
-		pending, err := h.sessStore.PeekPending(h.ctx, rootID)
+		pending, err := h.store.PeekPending(h.ctx, rootID)
 		return err == nil && pending.Source == sessionstore.InputSourceProcess
 	})
 	h.waitUntil("process wake runner parked", func() bool { return !h.mgr.HasActiveLoop(rootID) })
@@ -1245,11 +1203,11 @@ func TestProcessCompletionRetainsInputWithoutWakingStoppedOrErroredSession(t *te
 	} {
 		t.Run(string(status), func(t *testing.T) {
 			var calls atomic.Int64
-			h := newSubagentHarnessWith(t, func(string, []llmwire.Message) *llmwire.Response {
+			h := newHarness(t, harnessOptions{respond: func(string, []llmwire.Message) *llmwire.Response {
 				calls.Add(1)
 
 				return &llmwire.Response{Text: "must not run"}
-			})
+			}})
 			collector := collectEvents(h.mgr.bus.SubscribeAll())
 			service := backgroundprocess.NewService(h.mgr.processStore, backgroundprocess.Options{
 				OutputDir: t.TempDir(),
@@ -1260,16 +1218,16 @@ func TestProcessCompletionRetainsInputWithoutWakingStoppedOrErroredSession(t *te
 				h.shutdown()
 			}()
 
-			root, err := h.sessStore.CreateSession(h.ctx, h.projectID, "fake-model", "", nil)
+			root, err := h.store.CreateSession(h.ctx, h.projectID, "fake-model", "", nil)
 			require.NoError(t, err)
-			require.NoError(t, h.sessStore.UpdateSessionStatus(h.ctx, root.ID, status))
+			require.NoError(t, h.store.UpdateSessionStatus(h.ctx, root.ID, status))
 			observer := &wakeObserver{Store: h.mgr.store, sessionID: root.ID, observed: make(chan struct{})}
 			h.mgr.store = observer
 			h.startInboxWake()
 
 			process := startScenarioProcess(t, service, root.ID, root.ID, "printf 'parked\\n'")
 			require.Eventually(t, func() bool {
-				row, err := h.sessStore.PeekPending(h.ctx, root.ID)
+				row, err := h.store.PeekPending(h.ctx, root.ID)
 				return err == nil && row.Attributes["process_id"] == process.ID
 			}, 5*time.Second, 10*time.Millisecond)
 			select {
@@ -1308,7 +1266,13 @@ func TestProcessCompletionRetainsInputWithoutWakingStoppedOrErroredSession(t *te
 func TestPublishRoutingModel_ManagerOwnershipSurvivesTransitions(t *testing.T) {
 	t.Parallel()
 
-	mgr, _, store := newTestManager(t)
+	testFactory := &mockFactory{}
+
+	testHarness := newHarness(t, harnessOptions{configure: withTestModels, clientFor: testFactory.client})
+
+	mgr := testHarness.mgr
+
+	store := testHarness.store
 	ctx := context.Background()
 	subscribers := map[string]<-chan controllerapi.SessionNotification{
 		"alpha": mgr.bus.SubscribeManager("alpha"),
@@ -1366,7 +1330,7 @@ func TestPublishRoutingModel_ManagerOwnershipSurvivesTransitions(t *testing.T) {
 }
 
 func TestSpawnedChildProducesNoPubSubEvents(t *testing.T) {
-	h := newSubagentHarness(t)
+	h := newHarness(t, harnessOptions{})
 	collector := collectEvents(h.mgr.bus.SubscribeAll())
 
 	defer func() {
@@ -1404,13 +1368,9 @@ func TestReadinessSuppressesIdleWhileRootIsActiveLoop(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
-	db, err := migrate.OpenDB(ctx, filepath.Join(t.TempDir(), "readiness.db"))
-	require.NoError(t, err)
-	require.NoError(t, migrate.Run(ctx, db, filepath.Join(t.TempDir(), "unused.db")))
-	t.Cleanup(func() { _ = db.Close() })
-
-	sessions := sessionstore.NewStore(db)
-	store := sessionstore.NewStore(db)
+	h := newHarness(t, harnessOptions{respond: trivialRespond})
+	db, sessions := h.db, h.store
+	store := h.store
 	projectID := testProject(t, store, "/tmp/readiness-fixture")
 	record, err := sessions.CreateSession(ctx, projectID, "model", "", map[string]any{
 		controllerapi.SessionAttributeManagerID: "manager-readiness",
@@ -1427,22 +1387,7 @@ func TestReadinessSuppressesIdleWhileRootIsActiveLoop(t *testing.T) {
 		RETURNING id`,
 		sessionID).Scan(&outputID))
 
-	mgr, _ := newScenarioDaemon(
-		context.Background(),
-		scriptedBuildInput(
-			t,
-			&config.Config{Model: "fake-model"},
-			sessions,
-			nil,
-			func(*config.Config) (llm.Client, error) { return &scriptedLLM{respond: trivialRespond}, nil },
-		),
-		sessions,
-		subagent.NewStore(db, store),
-		nil,
-		nil,
-		nil,
-		db,
-	)
+	mgr := h.mgr
 	controllers := newTestController(mgr, &config.Config{}, nil, nil)
 	notifications := controllers.ForManager("manager-readiness").Subscribe()
 
@@ -1472,13 +1417,9 @@ func TestReconcileLatestReadinessPublishesIdleAfterTeardown(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
-	db, err := migrate.OpenDB(ctx, filepath.Join(t.TempDir(), "readiness2.db"))
-	require.NoError(t, err)
-	require.NoError(t, migrate.Run(ctx, db, filepath.Join(t.TempDir(), "unused.db")))
-	t.Cleanup(func() { _ = db.Close() })
-
-	sessions := sessionstore.NewStore(db)
-	store := sessionstore.NewStore(db)
+	h := newHarness(t, harnessOptions{respond: trivialRespond})
+	db, sessions := h.db, h.store
+	store := h.store
 	projectID := testProject(t, store, "/tmp/readiness-fixture")
 	record, err := sessions.CreateSession(ctx, projectID, "model", "", map[string]any{
 		controllerapi.SessionAttributeManagerID: "manager-readiness",
@@ -1494,22 +1435,7 @@ func TestReconcileLatestReadinessPublishesIdleAfterTeardown(t *testing.T) {
 		RETURNING id`,
 		record.ID).Scan(&outputID))
 
-	mgr, _ := newScenarioDaemon(
-		context.Background(),
-		scriptedBuildInput(
-			t,
-			&config.Config{Model: "fake-model"},
-			sessions,
-			nil,
-			func(*config.Config) (llm.Client, error) { return &scriptedLLM{respond: trivialRespond}, nil },
-		),
-		sessions,
-		subagent.NewStore(db, store),
-		nil,
-		nil,
-		nil,
-		db,
-	)
+	mgr := h.mgr
 	controllers := newTestController(mgr, &config.Config{}, nil, nil)
 	notifications := controllers.ForManager("manager-readiness").Subscribe()
 
@@ -1529,7 +1455,10 @@ func TestReconcileLatestReadinessPublishesIdleAfterTeardown(t *testing.T) {
 }
 
 func TestOwnerlessIdleIsSuppressedByReplacementRunner(t *testing.T) {
-	mgr, _, projects := newTestManager(t)
+	testFactory := &mockFactory{}
+	testHarness := newHarness(t, harnessOptions{configure: withTestModels, clientFor: testFactory.client})
+	mgr := testHarness.mgr
+	projects := testHarness.store
 	defer mgr.Shutdown(time.Second)
 
 	ctx := context.Background()
@@ -1550,7 +1479,7 @@ func TestOwnerlessIdleIsSuppressedByReplacementRunner(t *testing.T) {
 }
 
 func TestHarnessScenario_LengthAttemptIsDiscardedBeforeToolExecution(t *testing.T) {
-	h := newSubagentHarnessWith(t, lengthRecoveryResponder(t))
+	h := newHarness(t, harnessOptions{respond: lengthRecoveryResponder(t)})
 	collector := collectEvents(h.mgr.bus.SubscribeAll())
 	defer func() {
 		collector.stop()
@@ -1609,9 +1538,9 @@ func TestHarnessScenario_RejectedFinishPublishesCanonicalError(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			h := newSubagentHarnessWith(t, func(string, []llmwire.Message) *llmwire.Response {
+			h := newHarness(t, harnessOptions{respond: func(string, []llmwire.Message) *llmwire.Response {
 				return &tt.response
-			})
+			}})
 			collector := collectEvents(h.mgr.bus.SubscribeAll())
 			defer func() { collector.stop(); h.shutdown() }()
 			h.startInboxWake()
@@ -1634,11 +1563,16 @@ func TestHarnessScenario_RejectedFinishPublishesCanonicalError(t *testing.T) {
 }
 
 func TestScenario_StartFailureParksWithoutConsumingInput(t *testing.T) {
-	h := newModelAwareHarness(
+	h := newHarness(
 		t,
-		[]string{"removed-model", "working-model"},
-		func(string, []llmwire.Message) *llmwire.Response {
-			return &llmwire.Response{Text: "done"}
+		harnessOptions{
+			configure: withKnownModels([]string{"removed-model", "working-model"}),
+			clientFor: knownModelClient(
+				[]string{"removed-model", "working-model"},
+				func(string, []llmwire.Message) *llmwire.Response {
+					return &llmwire.Response{Text: "done"}
+				},
+			),
 		},
 	)
 	defer h.shutdown()
@@ -1651,21 +1585,21 @@ func TestScenario_StartFailureParksWithoutConsumingInput(t *testing.T) {
 	h.startInboxWake()
 	require.NoError(t, h.mgr.sendToSession(h.ctx, id, "keep this input"))
 	h.waitUntil("failure observed", func() bool {
-		record, err := h.sessStore.GetSession(h.ctx, id)
+		record, err := h.store.GetSession(h.ctx, id)
 		return err == nil && record.Status == sessionstore.SessionStatusError
 	})
 	h.mgr.waitIdle(id)
-	record, err := h.sessStore.GetSession(h.ctx, id)
+	record, err := h.store.GetSession(h.ctx, id)
 	require.NoError(t, err)
 	assert.Equal(t, sessionstore.SessionStatusError, record.Status)
-	pending, err := h.sessStore.PeekPending(h.ctx, id)
+	pending, err := h.store.PeekPending(h.ctx, id)
 	require.NoError(t, err)
 	assert.Equal(t, "keep this input", pending.RawContent)
 	require.NoError(t, h.mgr.SetModel(h.ctx, id, "working-model", ""))
 	h.startInboxWake()
 	require.NoError(t, h.mgr.sendToSession(h.ctx, id, "retry now"))
 	h.waitUntil("retry consumes preserved work", func() bool {
-		_, err := h.sessStore.PeekPending(h.ctx, id)
+		_, err := h.store.PeekPending(h.ctx, id)
 		return errors.Is(err, sessionstore.ErrNoPendingInput)
 	})
 	h.mgr.waitIdle(id)
@@ -1673,15 +1607,21 @@ func TestScenario_StartFailureParksWithoutConsumingInput(t *testing.T) {
 }
 
 func TestScenario_RepeatedStartFailureCreatesOneOutput(t *testing.T) {
-	h := newModelAwareHarness(t, []string{"working-model"}, func(string, []llmwire.Message) *llmwire.Response {
-		return &llmwire.Response{Text: "done"}
-	})
+	h := newHarness(
+		t,
+		harnessOptions{
+			configure: withKnownModels([]string{"working-model"}),
+			clientFor: knownModelClient([]string{"working-model"}, func(string, []llmwire.Message) *llmwire.Response {
+				return &llmwire.Response{Text: "done"}
+			}),
+		},
+	)
 	defer h.shutdown()
-	record, err := h.sessStore.CreateSession(h.ctx, h.projectID, "removed-model", "", map[string]any{
+	record, err := h.store.CreateSession(h.ctx, h.projectID, "removed-model", "", map[string]any{
 		controllerapi.SessionAttributeManagerID: "test-manager",
 	})
 	require.NoError(t, err)
-	_, err = h.sessStore.Enqueue(
+	_, err = h.store.Enqueue(
 		h.ctx,
 		sessionstore.Input{SessionID: record.ID, Source: sessionstore.InputSourceUser, Content: "work"},
 	)
@@ -1695,7 +1635,7 @@ func TestScenario_RepeatedStartFailureCreatesOneOutput(t *testing.T) {
 			errors.New("model removed-model not found in config"),
 		)
 	}
-	status, err := h.sessStore.OutputQueueStatus(h.ctx, "test-manager")
+	status, err := h.store.OutputQueueStatus(h.ctx, "test-manager")
 	require.NoError(t, err)
 	assert.Equal(t, 1, status.Pending)
 	var notices int
@@ -1712,13 +1652,20 @@ func TestScenario_StartFailureRestartKeepsOneReceipt(t *testing.T) {
 	respond := func(string, []llmwire.Message) *llmwire.Response {
 		return &llmwire.Response{Text: "done"}
 	}
-	first := newModelAwareHarnessAtDB(t, dbPath, []string{"working-model"}, respond)
+	first := newHarness(
+		t,
+		harnessOptions{
+			dbPath:    dbPath,
+			configure: withKnownModels([]string{"working-model"}),
+			clientFor: knownModelClient([]string{"working-model"}, respond),
+		},
+	)
 	t.Cleanup(first.shutdown)
-	root, err := first.sessStore.CreateSession(first.ctx, first.projectID, "removed-model", "", map[string]any{
+	root, err := first.store.CreateSession(first.ctx, first.projectID, "removed-model", "", map[string]any{
 		controllerapi.SessionAttributeManagerID: "test-manager",
 	})
 	require.NoError(t, err)
-	input, err := first.sessStore.Enqueue(
+	input, err := first.store.Enqueue(
 		first.ctx,
 		sessionstore.Input{SessionID: root.ID, Source: sessionstore.InputSourceUser, Content: "preserved work"},
 	)
@@ -1726,19 +1673,26 @@ func TestScenario_StartFailureRestartKeepsOneReceipt(t *testing.T) {
 	first.shutdown()
 
 	for range 2 {
-		h := newModelAwareHarnessAtDB(t, dbPath, []string{"working-model"}, respond)
+		h := newHarness(
+			t,
+			harnessOptions{
+				dbPath:    dbPath,
+				configure: withKnownModels([]string{"working-model"}),
+				clientFor: knownModelClient([]string{"working-model"}, respond),
+			},
+		)
 		t.Cleanup(h.shutdown)
 		h.startInboxWake()
 		h.mgr.resumeAfterRestart(h.ctx)
 		h.waitUntil("failed recovery parked", func() bool {
-			record, err := h.sessStore.GetSession(h.ctx, root.ID)
+			record, err := h.store.GetSession(h.ctx, root.ID)
 			return err == nil && record.Status == sessionstore.SessionStatusError && !h.mgr.HasActiveLoop(root.ID)
 		})
 		h.shutdown()
-		status, err := h.sessStore.OutputQueueStatus(h.ctx, "test-manager")
+		status, err := h.store.OutputQueueStatus(h.ctx, "test-manager")
 		require.NoError(t, err)
 		assert.Equal(t, 1, status.Pending)
-		pending, err := h.sessStore.PeekPending(h.ctx, root.ID)
+		pending, err := h.store.PeekPending(h.ctx, root.ID)
 		require.NoError(t, err)
 		assert.Equal(t, input.Input.ID, pending.ID)
 	}
@@ -1770,7 +1724,7 @@ func TestHarnessScenario_StatusMidActivationDoesNotStrandJustExecutedToolResults
 		}}}
 	}
 
-	h := newSubagentHarnessWith(t, respond)
+	h := newHarness(t, harnessOptions{respond: respond})
 	collector := collectEvents(h.mgr.bus.SubscribeAll())
 
 	released := false
@@ -1830,7 +1784,7 @@ func TestHarnessScenario_StatusMidActivationDoesNotStrandJustExecutedToolResults
 // activation itself rather than hand the provider a conversation asking nothing.
 func TestHarnessScenario_StatusOnAFreshSessionCostsNoModelTurn(t *testing.T) {
 	rec := &skillRecorder{}
-	h := newSubagentHarnessWith(t, rec.wrap(plainRespond))
+	h := newHarness(t, harnessOptions{respond: rec.wrap(plainRespond)})
 	collector := collectEvents(h.mgr.bus.SubscribeAll())
 
 	defer func() {
@@ -1857,7 +1811,7 @@ func TestHarnessScenario_StatusOnAFreshSessionCostsNoModelTurn(t *testing.T) {
 // answered on the spot and leaves the pending join untouched.
 func TestHarnessScenario_StatusIsAnsweredWhileABlockingChildIsOut(t *testing.T) {
 	release := make(chan struct{})
-	h := newSubagentHarnessWith(t, blockingCompactRespond(release))
+	h := newHarness(t, harnessOptions{respond: blockingCompactRespond(release)})
 	collector := collectEvents(h.mgr.bus.SubscribeAll())
 
 	released := false
@@ -1912,7 +1866,7 @@ func TestHarnessScenario_StatusIsAnsweredWhileABlockingChildIsOut(t *testing.T) 
 // The full /status list must render canonical order, icon-only rows, no
 // priority text, and the legend after one blank line.
 func TestHarnessScenario_StatusFullTodoListOrderingAndIcons(t *testing.T) {
-	h := newSubagentHarnessWith(t, trivialRespond)
+	h := newHarness(t, harnessOptions{respond: trivialRespond})
 	collector := collectEvents(h.mgr.bus.SubscribeAll())
 	defer func() {
 		collector.stop()
@@ -1937,7 +1891,7 @@ func TestHarnessScenario_StatusFullTodoListOrderingAndIcons(t *testing.T) {
 		`{"id":"legacy","content":"legacy item","status":"pending","priority":"medium"}` +
 		`]`
 	raw := json.RawMessage(todos)
-	_, err = h.sessStore.Commit(
+	_, err = h.store.Commit(
 		h.ctx,
 		sessionstore.Commit{SessionID: root, State: sessionstore.StatePatch{TodoItems: &raw}},
 	)
@@ -1989,7 +1943,7 @@ func TestScenario_StoppedRootAnswersStatusWithoutReactivating(t *testing.T) {
 		}}}
 	}
 
-	h := newSubagentHarnessWith(t, respond)
+	h := newHarness(t, harnessOptions{respond: respond})
 	collector := collectEvents(h.mgr.bus.SubscribeAll())
 
 	defer func() {
@@ -2007,7 +1961,7 @@ func TestScenario_StoppedRootAnswersStatusWithoutReactivating(t *testing.T) {
 
 	require.NoError(t, h.mgr.sendToSession(h.ctx, sessionID, "/stop"))
 	h.waitUntil("stop completed", func() bool {
-		rec, getErr := h.sessStore.GetSession(h.ctx, sessionID)
+		rec, getErr := h.store.GetSession(h.ctx, sessionID)
 		return getErr == nil && rec.Status == sessionstore.SessionStatusStopped
 	})
 
@@ -2029,7 +1983,7 @@ func TestScenario_StoppedRootAnswersStatusWithoutReactivating(t *testing.T) {
 
 	assert.Len(t, statusReports(collector.snapshot(), sessionID), 1, "the stopped root answers /status")
 
-	rec, err := h.sessStore.GetSession(h.ctx, sessionID)
+	rec, err := h.store.GetSession(h.ctx, sessionID)
 	require.NoError(t, err)
 	assert.Equal(t, sessionstore.SessionStatusStopped, rec.Status,
 		"a read-only command must not reactivate the stopped root")

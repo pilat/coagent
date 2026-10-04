@@ -545,7 +545,10 @@ type providerRequest struct {
 	Model     string            `json:"model"`
 	SessionID string            `json:"session_id"`
 	Messages  []providerMessage `json:"messages"`
-	Tools     []struct {
+	Reasoning struct {
+		Effort string `json:"effort"`
+	} `json:"reasoning"`
+	Tools []struct {
 		Function llmwire.ToolSchema `json:"function"`
 	} `json:"tools"`
 }
@@ -584,7 +587,8 @@ func scriptedBuildInput(
 			return
 		}
 		mu.Lock()
-		client := clients[request.SessionID]
+		clientKey := request.SessionID + ":" + request.Model
+		client := clients[clientKey]
 		if client == nil {
 			view := *cfg
 			view.Model = request.Model
@@ -596,7 +600,7 @@ func scriptedBuildInput(
 				return
 			}
 			client.SetSessionID(request.SessionID)
-			clients[request.SessionID] = client
+			clients[clientKey] = client
 		}
 		mu.Unlock()
 		var system string
@@ -632,6 +636,9 @@ func scriptedBuildInput(
 		var schemas []llmwire.ToolSchema
 		for _, entry := range request.Tools {
 			schemas = append(schemas, entry.Function)
+		}
+		if request.Reasoning.Effort != "" {
+			client.SetReasoningLevel(request.Reasoning.Effort)
 		}
 		response, err := client.Chat(r.Context(), system, messages, schemas)
 		if err != nil {

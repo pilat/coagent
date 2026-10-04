@@ -294,7 +294,7 @@ func TestScenario_AMarkerForACallTheTranscriptDoesNotCarryIsNeverConsumed(t *tes
 	_, err = d.bootVerdict(t)
 	require.NoError(t, err)
 	d.waitUntil("stale verdict resolved", func() bool {
-		pending, err := d.sessStore.ListPending(d.ctx, sessionID)
+		pending, err := d.store.ListPending(d.ctx, sessionID)
 		return err == nil && len(pending) == 0 && !d.mgr.HasActiveLoop(sessionID)
 	})
 	var state string
@@ -400,7 +400,7 @@ func TestScenario_ConfigApplyCallIsNotReExecutedBeforeItsVerdict(t *testing.T) {
 
 	second.mgr.waitIdle(sessionID)
 
-	queued, err := second.sessStore.PeekPending(second.ctx, sessionID)
+	queued, err := second.store.PeekPending(second.ctx, sessionID)
 	require.NoError(t, err)
 	assert.Equal(t, "are you done yet?", queued.RawContent)
 
@@ -431,7 +431,7 @@ func TestScenario_ConfigApplyRejectionReachesTheSessionInProcess(t *testing.T) {
 	d := newApplyDaemon(t, dbPath, configDir)
 	defer d.shutdown()
 
-	d.mgr.applier = configapply.New(failingCommitOps{d.ops}, d.sessStore)
+	d.mgr.applier = configapply.New(failingCommitOps{d.ops}, d.store)
 
 	sessionID := startConfigEditSession(t, d, "switch the default model")
 
@@ -532,14 +532,14 @@ func TestScenario_ConfigEditGrantIsOneShot(t *testing.T) {
 		return !first.mgr.HasActiveLoop(sessionID)
 	})
 
-	consumed := currentActivationOf(t, first.subagentHarness, sessionID)
+	consumed := currentActivationOf(t, first.harness, sessionID)
 	require.NotNil(t, consumed)
 	require.Equal(t, sessionstore.ActivationConsumed, consumed.State,
 		"the successful apply spent the grant")
 
 	// A second successful mutation cannot use the same grant: consuming again
 	// with a different call id conflicts, and the session was never re-suspended.
-	err := first.sessStore.ConsumeActivationBinding(
+	err := first.store.ConsumeActivationBinding(
 		first.ctx, sessionstore.ActivationBinding{
 			InputID: consumed.InputID, SessionID: sessionID,
 			ToolID: tool.IDConfigEdit, Command: configapply.ConfigEditCommand, ToolCallID: "cfg-edit-call-2",
@@ -581,7 +581,7 @@ func TestScenario_ConfigEditCrashBeforeGrantConsumeSettlesOnBoot(t *testing.T) {
 	second := newApplyDaemonWith(t, dbPath, configDir, configEditRespond)
 	defer second.shutdown()
 
-	activation, err := second.sessStore.
+	activation, err := second.store.
 		CurrentActivation(second.ctx, sessionID)
 	require.NoError(t, err)
 	require.Equal(t, sessionstore.ActivationPending, activation.State,
@@ -597,14 +597,14 @@ func TestScenario_ConfigEditCrashBeforeGrantConsumeSettlesOnBoot(t *testing.T) {
 		second.ctx, outcome.Pending.SessionID, outcome.Pending.ToolCallID,
 	)
 
-	consumed, err := second.sessStore.
+	consumed, err := second.store.
 		CurrentActivation(second.ctx, sessionID)
 	require.NoError(t, err)
 	require.Equal(t, sessionstore.ActivationConsumed, consumed.State,
 		"the boot spends the grant the crashed process left pending")
 
 	// One-shot is not re-armed: a second settlement attempt must conflict.
-	err = second.sessStore.ConsumeActivationBinding(
+	err = second.store.ConsumeActivationBinding(
 		second.ctx, sessionstore.ActivationBinding{
 			InputID: consumed.InputID, SessionID: sessionID,
 			ToolID: tool.IDConfigEdit, Command: configapply.ConfigEditCommand, ToolCallID: "cfg-edit-call-2",
@@ -736,7 +736,7 @@ func TestScenario_ConfigEditVerdictReachesTheSessionAfterRestart(t *testing.T) {
 	require.Equal(t, 1, countAssistantToolCallsFor(msgs, tool.IDConfigEdit))
 	require.Zero(t, countToolResultsFor(msgs, tool.IDConfigEdit), "the call is out with the world")
 
-	consumed := currentActivationOf(t, first.subagentHarness, sessionID)
+	consumed := currentActivationOf(t, first.harness, sessionID)
 	require.NotNil(t, consumed, "the /config grant exists")
 	require.Equal(t, sessionstore.ActivationConsumed, consumed.State,
 		"the successful apply spends the grant; it may not stay pending")
@@ -809,7 +809,7 @@ func TestScenario_ConfigEditWithoutActivationNeverStages(t *testing.T) {
 	assert.Contains(t, lastToolResultContent(msgs, tool.IDConfigEdit), "/config")
 	assert.Zero(t, d.restartCount(), "an unauthorized call never applies")
 	assert.Equal(t, toolConfig, configBytesOf(t, configDir))
-	assert.Nil(t, currentActivationOf(t, d.subagentHarness, sessionID))
+	assert.Nil(t, currentActivationOf(t, d.harness, sessionID))
 }
 
 // A syntactically valid candidate whose boot fails is rolled back and the
@@ -1130,7 +1130,13 @@ func TestScenario_ConfigDocumentThroughHTTPPreservesModelIDs(t *testing.T) {
 // is what the record must carry — the record is the only thing the next run reads.
 func TestSetModelRecordsTheEffortTheNextRunSends(t *testing.T) {
 	provider := newEffortProvider(t)
-	h := newEffortHarness(t, provider.url)
+	h := newHarness(
+		t,
+		harnessOptions{
+			configure: withEffortModels(provider.url),
+			clientFor: configuredClient(withEffortModels(provider.url)),
+		},
+	)
 
 	defer h.shutdown()
 
@@ -1146,7 +1152,7 @@ func TestSetModelRecordsTheEffortTheNextRunSends(t *testing.T) {
 
 	require.NoError(t, h.mgr.SetModel(h.ctx, id, "thinker", ""))
 
-	rec, err := h.sessStore.GetSession(h.ctx, id)
+	rec, err := h.store.GetSession(h.ctx, id)
 	require.NoError(t, err)
 	assert.Equal(t, "high", rec.ReasoningLevel,
 		"an unnamed level settles on the model's default, and the record keeps that")

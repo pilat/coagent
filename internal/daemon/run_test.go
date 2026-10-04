@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"path/filepath"
 	"testing"
 	"time"
 
@@ -13,15 +12,14 @@ import (
 
 	"github.com/pilat/coagent/internal/config"
 	"github.com/pilat/coagent/internal/controllerapi"
-	"github.com/pilat/coagent/internal/llm"
-	"github.com/pilat/coagent/internal/migrate"
 	"github.com/pilat/coagent/internal/sessionevent"
-	"github.com/pilat/coagent/internal/sessionstore"
-	"github.com/pilat/coagent/internal/subagent"
 )
 
 func TestManager_NormalCompletion(t *testing.T) {
-	mgr, factory, s := newTestManager(t)
+	factory := &mockFactory{}
+	testHarness := newHarness(t, harnessOptions{configure: withTestModels, clientFor: factory.client})
+	mgr := testHarness.mgr
+	s := testHarness.store
 	ch := mgr.bus.SubscribeAll()
 
 	sess := &mockSession{completeAfter: 50 * time.Millisecond}
@@ -39,7 +37,10 @@ func TestManager_NormalCompletion(t *testing.T) {
 }
 
 func TestManager_ErrorPath(t *testing.T) {
-	mgr, factory, s := newTestManager(t)
+	factory := &mockFactory{}
+	testHarness := newHarness(t, harnessOptions{configure: withTestModels, clientFor: factory.client})
+	mgr := testHarness.mgr
+	s := testHarness.store
 	ch := mgr.bus.SubscribeAll()
 
 	sess := &mockSession{
@@ -82,7 +83,10 @@ func TestManager_ErrorPath(t *testing.T) {
 
 func TestFinishRunnerCancellationEscapesContendedTreeFence(t *testing.T) {
 	ctx := context.Background()
-	mgr, _, projects := newTestManager(t)
+	testFactory := &mockFactory{}
+	testHarness := newHarness(t, harnessOptions{configure: withTestModels, clientFor: testFactory.client})
+	mgr := testHarness.mgr
+	projects := testHarness.store
 	projectID := testProject(t, projects, "/tmp/runner-fence-cancel")
 	record, err := mgr.store.CreateSession(ctx, projectID, "fake-model", "", nil)
 	require.NoError(t, err)
@@ -131,13 +135,9 @@ func TestTeardownOnStoreFailureDoesNotPublishIdle(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
-	db, err := migrate.OpenDB(ctx, filepath.Join(t.TempDir(), "teardownfail.db"))
-	require.NoError(t, err)
-	require.NoError(t, migrate.Run(ctx, db, filepath.Join(t.TempDir(), "unused.db")))
-	t.Cleanup(func() { _ = db.Close() })
-
-	sessions := sessionstore.NewStore(db)
-	store := sessionstore.NewStore(db)
+	h := newHarness(t, harnessOptions{respond: trivialRespond})
+	sessions := h.store
+	store := h.store
 	projectID := testProject(t, store, "/tmp/teardown-failure")
 	record, err := sessions.CreateSession(ctx, projectID, "model", "", map[string]any{
 		controllerapi.SessionAttributeManagerID: "manager-teardown",
@@ -149,22 +149,7 @@ func TestTeardownOnStoreFailureDoesNotPublishIdle(t *testing.T) {
 		err:   errors.New("disk hiccup"),
 	}
 	failing.pending.Store(true)
-	mgr, _ := newScenarioDaemon(
-		context.Background(),
-		scriptedBuildInput(
-			t,
-			&config.Config{Model: "fake-model"},
-			sessions,
-			nil,
-			func(*config.Config) (llm.Client, error) { return &scriptedLLM{respond: trivialRespond}, nil },
-		),
-		sessions,
-		subagent.NewStore(db, sessions),
-		nil,
-		nil,
-		nil,
-		db,
-	)
+	mgr := h.mgr
 	mgr.store = failing
 	controllers := newTestController(mgr, &config.Config{}, nil, nil)
 	notifications := controllers.ForManager("manager-teardown").Subscribe()

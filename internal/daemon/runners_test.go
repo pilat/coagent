@@ -24,7 +24,10 @@ import (
 // TestDrainPendingRunners_DerivesPromotedRecoveryAfterCapacityWait preserves the
 // crash obligation through an admission delay without relying on queue metadata.
 func TestDrainPendingRunners_DerivesPromotedRecoveryAfterCapacityWait(t *testing.T) {
-	mgr, factory, projects := newTestManager(t)
+	factory := &mockFactory{}
+	testHarness := newHarness(t, harnessOptions{configure: withTestModels, clientFor: factory.client})
+	mgr := testHarness.mgr
+	projects := testHarness.store
 	ctx := context.Background()
 
 	reserved := maxTotal
@@ -86,19 +89,19 @@ func TestDrainPendingRunners_DerivesPromotedRecoveryAfterCapacityWait(t *testing
 func TestDrainQueue_UnknownChildStateDefers(t *testing.T) {
 	var flaky *flakyLinkStore
 
-	h := newSubagentHarnessDecorated(t, trivialRespond, func(inner subagent.Store) subagent.Store {
+	h := newHarness(t, harnessOptions{respond: trivialRespond, links: func(inner subagent.Store) subagent.Store {
 		flaky = newFlakyLinkStore(inner)
 		return flaky
-	})
+	}})
 	defer h.shutdown()
 
-	parent, err := h.sessStore.CreateSession(h.ctx, h.projectID, "fake-model", "", nil)
+	parent, err := h.store.CreateSession(h.ctx, h.projectID, "fake-model", "", nil)
 	require.NoError(t, err)
 
 	for _, callID := range []string{"bg-1", "bg-2", "bg-3"} {
 		childID, cerr := func() (int64, error) {
 			var id int64
-			err := h.sessStore.WithTx(h.ctx, func(tx *sql.Tx) error {
+			err := h.store.WithTx(h.ctx, func(tx *sql.Tx) error {
 				var err error
 				id, err = sessionstore.CreateSubagentSessionTx(
 					h.ctx,
@@ -117,7 +120,7 @@ func TestDrainQueue_UnknownChildStateDefers(t *testing.T) {
 			return id, err
 		}()
 		require.NoError(t, cerr)
-		require.NoError(t, seedChildLink(h.ctx, h.sessStore, subagent.Link{
+		require.NoError(t, seedChildLink(h.ctx, h.store, subagent.Link{
 			ParentID: parent.ID, ChildID: childID, TaskCallID: callID,
 		}))
 		h.mgr.runners.wait(waitingRunner{sessionID: childID, parentID: parent.ID, child: true})
@@ -147,7 +150,10 @@ func TestDrainQueue_UnknownChildStateDefers(t *testing.T) {
 func TestStartSkipsTerminalAndStoppedChildren(t *testing.T) {
 	for _, state := range []subagent.State{subagent.StateCompleted, subagent.StateStopped, subagent.StateKilled} {
 		t.Run(string(state), func(t *testing.T) {
-			mgr, _, projects := newTestManager(t)
+			testFactory := &mockFactory{}
+			testHarness := newHarness(t, harnessOptions{configure: withTestModels, clientFor: testFactory.client})
+			mgr := testHarness.mgr
+			projects := testHarness.store
 			defer mgr.Shutdown(time.Second)
 
 			ctx := context.Background()
@@ -168,7 +174,10 @@ func TestStartSkipsTerminalAndStoppedChildren(t *testing.T) {
 }
 
 func TestStartRejectsKilledSessionWithRunningChildLink(t *testing.T) {
-	mgr, _, projects := newTestManager(t)
+	testFactory := &mockFactory{}
+	testHarness := newHarness(t, harnessOptions{configure: withTestModels, clientFor: testFactory.client})
+	mgr := testHarness.mgr
+	projects := testHarness.store
 	defer mgr.Shutdown(time.Second)
 
 	ctx := context.Background()
@@ -218,7 +227,7 @@ func TestScenario_RunnerAddsNoChildLifetimeDeadline(t *testing.T) {
 		}}}
 	}
 
-	h := newSubagentHarnessWith(t, respond)
+	h := newHarness(t, harnessOptions{respond: respond})
 	defer func() {
 		closeOnce(childRelease)
 		h.shutdown()
@@ -257,7 +266,10 @@ func TestScenario_RunnerAddsNoChildLifetimeDeadline(t *testing.T) {
 }
 
 func TestEnsureRunner_EmptyRootPublishesCreatedAndIdle(t *testing.T) {
-	mgr, _, projects := newTestManager(t)
+	testFactory := &mockFactory{}
+	testHarness := newHarness(t, harnessOptions{configure: withTestModels, clientFor: testFactory.client})
+	mgr := testHarness.mgr
+	projects := testHarness.store
 	ctx := context.Background()
 	workDir := t.TempDir()
 	projectID := testProject(t, projects, workDir)
@@ -277,7 +289,7 @@ func TestEnsureRunner_EmptyRootPublishesCreatedAndIdle(t *testing.T) {
 }
 
 func TestStartLockedRejectsShutdown(t *testing.T) {
-	h := newSubagentHarness(t)
+	h := newHarness(t, harnessOptions{})
 	h.mgr.life.close()
 
 	err := h.mgr.startLocked(h.ctx, 1)
@@ -288,13 +300,13 @@ func TestStartLockedRejectsShutdown(t *testing.T) {
 func TestEnsureRunner_ClassifyErrorBlocksStart(t *testing.T) {
 	var flaky *flakyLinkStore
 
-	h := newSubagentHarnessDecorated(t, trivialRespond, func(inner subagent.Store) subagent.Store {
+	h := newHarness(t, harnessOptions{respond: trivialRespond, links: func(inner subagent.Store) subagent.Store {
 		flaky = newFlakyLinkStore(inner)
 		return flaky
-	})
+	}})
 	defer h.shutdown()
 
-	rec, err := h.sessStore.CreateSession(h.ctx, h.projectID, "fake-model", "", nil)
+	rec, err := h.store.CreateSession(h.ctx, h.projectID, "fake-model", "", nil)
 	require.NoError(t, err)
 
 	totalBefore, childrenBefore := runnerRunningCount(h.mgr.runners), runnerChildCount(h.mgr.runners)
@@ -313,18 +325,18 @@ func TestEnsureRunner_ClassifyErrorBlocksStart(t *testing.T) {
 func TestDrainQueue_StartErrorRetainsWaitingInput(t *testing.T) {
 	var flaky *flakyLinkStore
 
-	h := newSubagentHarnessDecorated(t, trivialRespond, func(inner subagent.Store) subagent.Store {
+	h := newHarness(t, harnessOptions{respond: trivialRespond, links: func(inner subagent.Store) subagent.Store {
 		flaky = newFlakyLinkStore(inner)
 		return flaky
-	})
+	}})
 	defer h.shutdown()
 
-	parent, err := h.sessStore.CreateSession(h.ctx, h.projectID, "fake-model", "", nil)
+	parent, err := h.store.CreateSession(h.ctx, h.projectID, "fake-model", "", nil)
 	require.NoError(t, err)
 
 	childID, err := func() (int64, error) {
 		var id int64
-		err := h.sessStore.WithTx(h.ctx, func(tx *sql.Tx) error {
+		err := h.store.WithTx(h.ctx, func(tx *sql.Tx) error {
 			var err error
 			id, err = sessionstore.CreateSubagentSessionTx(
 				h.ctx,
@@ -343,7 +355,7 @@ func TestDrainQueue_StartErrorRetainsWaitingInput(t *testing.T) {
 		return id, err
 	}()
 	require.NoError(t, err)
-	require.NoError(t, seedChildLink(h.ctx, h.sessStore, subagent.Link{
+	require.NoError(t, seedChildLink(h.ctx, h.store, subagent.Link{
 		ParentID: parent.ID, ChildID: childID, TaskCallID: "bg",
 	}))
 
@@ -366,15 +378,15 @@ func TestDrainQueue_StartErrorRetainsWaitingInput(t *testing.T) {
 
 // Capacity is rechecked against the durable parent after selecting a waiter.
 func TestDrainQueue_CapacityReparks(t *testing.T) {
-	h := newSubagentHarnessWith(t, trivialRespond)
+	h := newHarness(t, harnessOptions{respond: trivialRespond})
 	defer h.shutdown()
 
-	parent, err := h.sessStore.CreateSession(h.ctx, h.projectID, "fake-model", "", nil)
+	parent, err := h.store.CreateSession(h.ctx, h.projectID, "fake-model", "", nil)
 	require.NoError(t, err)
 
 	childID, err := func() (int64, error) {
 		var id int64
-		err := h.sessStore.WithTx(h.ctx, func(tx *sql.Tx) error {
+		err := h.store.WithTx(h.ctx, func(tx *sql.Tx) error {
 			var err error
 			id, err = sessionstore.CreateSubagentSessionTx(
 				h.ctx,
@@ -395,7 +407,7 @@ func TestDrainQueue_CapacityReparks(t *testing.T) {
 	require.NoError(t, err)
 	// Blocking: a blocking child errors on admit-fail instead of self-queueing,
 	// which is the only way to reach the re-park branch.
-	require.NoError(t, seedChildLink(h.ctx, h.sessStore, subagent.Link{
+	require.NoError(t, seedChildLink(h.ctx, h.store, subagent.Link{
 		ParentID: parent.ID, ChildID: childID, TaskCallID: "b", Blocking: true,
 	}))
 
@@ -424,17 +436,17 @@ func TestDrainQueue_CapacityReparks(t *testing.T) {
 // TestDrainQueue_SkipsKilledChild: a queued child cascade-killed before it ran is
 // never launched by a subsequent drainQueue.
 func TestDrainQueue_SkipsKilledChild(t *testing.T) {
-	h := newSubagentHarnessWith(t, trivialRespond)
+	h := newHarness(t, harnessOptions{respond: trivialRespond})
 	defer h.shutdown()
 
 	ctx := h.ctx
 
-	parent, err := h.sessStore.CreateSession(ctx, h.projectID, "fake-model", "", nil)
+	parent, err := h.store.CreateSession(ctx, h.projectID, "fake-model", "", nil)
 	require.NoError(t, err)
 
 	childID, err := func() (int64, error) {
 		var id int64
-		err := h.sessStore.WithTx(ctx, func(tx *sql.Tx) error {
+		err := h.store.WithTx(ctx, func(tx *sql.Tx) error {
 			var err error
 			id, err = sessionstore.CreateSubagentSessionTx(
 				ctx,
@@ -453,7 +465,7 @@ func TestDrainQueue_SkipsKilledChild(t *testing.T) {
 		return id, err
 	}()
 	require.NoError(t, err)
-	require.NoError(t, seedChildLink(ctx, h.sessStore, subagent.Link{
+	require.NoError(t, seedChildLink(ctx, h.store, subagent.Link{
 		ParentID: parent.ID, ChildID: childID, TaskCallID: "bg",
 	}))
 

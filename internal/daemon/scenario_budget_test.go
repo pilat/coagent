@@ -3,7 +3,6 @@ package daemon
 import (
 	"context"
 	"encoding/json"
-	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -13,13 +12,9 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/pilat/coagent/internal/budget"
-	"github.com/pilat/coagent/internal/config"
 	"github.com/pilat/coagent/internal/controllerapi"
-	"github.com/pilat/coagent/internal/llm"
 	"github.com/pilat/coagent/internal/llmwire"
-	"github.com/pilat/coagent/internal/migrate"
 	"github.com/pilat/coagent/internal/sessionstore"
-	"github.com/pilat/coagent/internal/subagent"
 	"github.com/pilat/coagent/internal/tool"
 )
 
@@ -37,7 +32,7 @@ func TestHarnessScenario_BudgetMutationRequiresAndConsumesUserGrant(t *testing.T
 			Arguments: []byte(`{"action":"set","duration":"1m"}`),
 		}}}
 	}
-	h := newSubagentHarnessWith(t, respond)
+	h := newHarness(t, harnessOptions{respond: respond})
 	defer func() {
 		close(release)
 		h.shutdown()
@@ -49,18 +44,18 @@ func TestHarnessScenario_BudgetMutationRequiresAndConsumesUserGrant(t *testing.T
 	})
 	require.NoError(t, err)
 	h.waitUntil("budget is armed", func() bool {
-		record, loadErr := h.sessStore.Get(h.ctx, sessionID)
+		record, loadErr := h.store.Get(h.ctx, sessionID)
 
 		return loadErr == nil && record.State == budget.Armed
 	})
 
-	budgetRecord, err := h.sessStore.Get(h.ctx, sessionID)
+	budgetRecord, err := h.store.Get(h.ctx, sessionID)
 	require.NoError(t, err)
 	assert.Equal(t, budget.Armed, budgetRecord.State)
 	require.NotNil(t, budgetRecord.DurationSeconds)
 	assert.Equal(t, int64(60), *budgetRecord.DurationSeconds)
 
-	activation, err := h.sessStore.PendingActivation(h.ctx, sessionID)
+	activation, err := h.store.PendingActivation(h.ctx, sessionID)
 	require.ErrorIs(t, err, sessionstore.ErrActivationNotFound)
 	assert.Nil(t, activation)
 
@@ -100,7 +95,7 @@ func TestHarnessScenario_BackgroundChildRetainsBudgetUntilCompletion(t *testing.
 		}}}
 	}
 
-	h := newSubagentHarnessWith(t, respond)
+	h := newHarness(t, harnessOptions{respond: respond})
 	collector := collectEvents(h.mgr.bus.SubscribeAll())
 	defer func() {
 		closeOnce(childRelease)
@@ -114,7 +109,7 @@ func TestHarnessScenario_BackgroundChildRetainsBudgetUntilCompletion(t *testing.
 	})
 	require.NoError(t, err)
 	waitForVisibleMessage(t, collector, sessionID, "budget child still running")
-	record, err := h.sessStore.Get(h.ctx, sessionID)
+	record, err := h.store.Get(h.ctx, sessionID)
 	require.NoError(t, err)
 	assert.Equal(t, budget.Armed, record.State)
 	generation := record.Generation
@@ -122,28 +117,28 @@ func TestHarnessScenario_BackgroundChildRetainsBudgetUntilCompletion(t *testing.
 	close(childRelease)
 	waitForVisibleMessage(t, collector, sessionID, "budget completion handled")
 	h.waitUntil("budget released after completion", func() bool {
-		current, loadErr := h.sessStore.Get(h.ctx, sessionID)
+		current, loadErr := h.store.Get(h.ctx, sessionID)
 		return loadErr == nil && current.State == budget.Released
 	})
-	record, err = h.sessStore.Get(h.ctx, sessionID)
+	record, err = h.store.Get(h.ctx, sessionID)
 	require.NoError(t, err)
 	assert.Equal(t, generation, record.Generation)
 }
 
 func TestHarnessScenario_AgentInputCannotActivateBudget(t *testing.T) {
-	h := newSubagentHarnessWith(t, trivialRespond)
+	h := newHarness(t, harnessOptions{respond: trivialRespond})
 	defer h.shutdown()
-	record, err := h.sessStore.CreateSession(h.ctx, h.projectID, "fake-model", "", map[string]any{
+	record, err := h.store.CreateSession(h.ctx, h.projectID, "fake-model", "", map[string]any{
 		"manager_id": "telegram:main",
 	})
 	require.NoError(t, err)
-	input, err := h.sessStore.Enqueue(
+	input, err := h.store.Enqueue(
 		h.ctx,
 		sessionstore.Input{SessionID: record.ID, Source: sessionstore.InputSourceAgent, Content: "/budget 1m"},
 	)
 	require.NoError(t, err)
 
-	_, err = h.sessStore.Commit(h.ctx, sessionstore.Commit{
+	_, err = h.store.Commit(h.ctx, sessionstore.Commit{
 		SessionID: record.ID,
 		Accept: []sessionstore.Accept{
 			{InputID: input.Input.ID, State: sessionstore.InputStateAccepted, Content: "/budget 1m", LinkRef: -1},
@@ -158,12 +153,12 @@ func TestHarnessScenario_FinalIncludesNonEmptyTodoAndBudget(t *testing.T) {
 	entered := make(chan struct{})
 	var enterOnce, releaseOnce sync.Once
 	releaseModel := func() { releaseOnce.Do(func() { close(release) }) }
-	h := newSubagentHarnessWith(t, func(_ string, _ []llmwire.Message) *llmwire.Response {
+	h := newHarness(t, harnessOptions{respond: func(_ string, _ []llmwire.Message) *llmwire.Response {
 		enterOnce.Do(func() { close(entered) })
 		<-release
 
 		return &llmwire.Response{Text: "task answer"}
-	})
+	}})
 	defer func() {
 		releaseModel()
 		h.shutdown()
@@ -179,7 +174,7 @@ func TestHarnessScenario_FinalIncludesNonEmptyTodoAndBudget(t *testing.T) {
 	todos := json.RawMessage(`[{"id":"todo-1","content":"ship change","status":"in_progress","priority":"high"}]`)
 	require.NoError(t, func() error {
 		raw := todos
-		_, err := h.sessStore.Commit(
+		_, err := h.store.Commit(
 			h.ctx,
 			sessionstore.Commit{SessionID: sessionID, State: sessionstore.StatePatch{TodoItems: &raw}},
 		)
@@ -235,7 +230,7 @@ func TestHarnessScenario_CompletionCheckBudgetCrossingOnCandidateHidesText(t *te
 		return &llmwire.Response{Text: "unconfirmed candidate under budget", CostUSD: 0.01}
 	}
 
-	h := newSubagentHarnessWith(t, respond)
+	h := newHarness(t, harnessOptions{respond: respond})
 	collector := collectEvents(h.mgr.bus.SubscribeAll())
 	defer func() {
 		collector.stop()
@@ -278,7 +273,7 @@ func TestHarnessScenario_CompletionCheckBudgetCrossingOnCandidateHidesText(t *te
 		Scan(&leaks))
 	assert.Zero(t, leaks, "the unconfirmed candidate text never publishes")
 
-	record, err := h.sessStore.Get(h.ctx, root)
+	record, err := h.store.Get(h.ctx, root)
 	require.NoError(t, err)
 	assert.Equal(t, budget.Fired, record.State)
 }
@@ -289,13 +284,9 @@ func TestSendToSessionDuringBudgetDrainExplainsParking(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
-	db, err := migrate.OpenDB(ctx, filepath.Join(t.TempDir(), "parkrace.db"))
-	require.NoError(t, err)
-	require.NoError(t, migrate.Run(ctx, db, filepath.Join(t.TempDir(), "unused.db")))
-	t.Cleanup(func() { _ = db.Close() })
-
-	sessions := sessionstore.NewStore(db)
-	store := sessionstore.NewStore(db)
+	h := newHarness(t, harnessOptions{respond: trivialRespond})
+	sessions := h.store
+	store := h.store
 	projectID := testProject(t, store, "/tmp/park-race")
 	root, err := sessions.CreateSession(ctx, projectID, "priced", "", map[string]any{
 		controllerapi.SessionAttributeManagerID: "manager-park",
@@ -331,22 +322,7 @@ func TestSendToSessionDuringBudgetDrainExplainsParking(t *testing.T) {
 	_, err = sessions.BeginBudgetDrain(ctx, root.ID, fired.Generation, fired.ParkOwner)
 	require.NoError(t, err)
 
-	mgr, _ := newScenarioDaemon(
-		context.Background(),
-		scriptedBuildInput(
-			t,
-			&config.Config{Model: "fake-model"},
-			sessions,
-			nil,
-			func(*config.Config) (llm.Client, error) { return &scriptedLLM{respond: trivialRespond}, nil },
-		),
-		sessions,
-		subagent.NewStore(db, store),
-		nil,
-		nil,
-		nil,
-		db,
-	)
+	mgr := h.mgr
 	err = mgr.sendToSession(ctx, root.ID, "resume the work")
 	require.Error(t, err)
 
@@ -362,7 +338,7 @@ func TestResponseIntegrity_BudgetCrossingSuppressesRecoveryAndCallStubs(t *testi
 	entered := make(chan struct{})
 	release := make(chan struct{})
 	var once sync.Once
-	h := newSubagentHarnessWith(t, func(_ string, _ []llmwire.Message) *llmwire.Response {
+	h := newHarness(t, harnessOptions{respond: func(_ string, _ []llmwire.Message) *llmwire.Response {
 		once.Do(func() { close(entered) })
 		<-release
 
@@ -370,7 +346,7 @@ func TestResponseIntegrity_BudgetCrossingSuppressesRecoveryAndCallStubs(t *testi
 			FinishType: llmwire.FinishLength, CostUSD: 0.5,
 			ToolCalls: []llmwire.ToolCall{{ID: "rejected", Name: tool.IDTask, Arguments: []byte(`{}`)}},
 		}
-	})
+	}})
 	defer func() {
 		select {
 		case <-release:
@@ -393,7 +369,7 @@ func TestResponseIntegrity_BudgetCrossingSuppressesRecoveryAndCallStubs(t *testi
 	close(release)
 
 	h.waitUntil("budget park completes", func() bool {
-		record, loadErr := h.sessStore.Get(h.ctx, sessionID)
+		record, loadErr := h.store.Get(h.ctx, sessionID)
 		return loadErr == nil && record.State == budget.Fired && record.ParkPhase == "parked"
 	})
 

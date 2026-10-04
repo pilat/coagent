@@ -27,7 +27,7 @@ func TestHarnessModel_ScheduleCapabilityBoundary(t *testing.T) {
 		return &llmwire.Response{Text: "ready"}
 	}
 
-	h := newSubagentHarnessWith(t, respond)
+	h := newHarness(t, harnessOptions{respond: respond})
 	defer h.shutdown()
 	h.startInboxWake()
 	rootID, err := h.mgr.Send(t.Context(), h.projectID, "initialize", "fake-model", nil)
@@ -97,7 +97,7 @@ func TestHarnessScenario_SleepProjectsWakeAtAndUserInputInterruptsIt(t *testing.
 		}}}
 	}
 
-	h := newSubagentHarnessWith(t, respond)
+	h := newHarness(t, harnessOptions{respond: respond})
 	collector := collectEvents(h.mgr.bus.SubscribeAll())
 	defer func() {
 		collector.stop()
@@ -134,7 +134,7 @@ func TestHarnessScenario_SleepProjectsWakeAtAndUserInputInterruptsIt(t *testing.
 	assert.Equal(t, 1, countToolResultsFor(messages, tool.IDSleep))
 	assert.Contains(t, lastToolResultContent(messages, tool.IDSleep), "Sleep interrupted")
 
-	schedules, err := h.schedStore.ListSchedules(h.ctx, parentID)
+	schedules, err := h.schedules.ListSchedules(h.ctx, parentID)
 	require.NoError(t, err)
 	assert.Empty(t, schedules)
 
@@ -159,7 +159,7 @@ func TestIntegration_SchedulerWakesExactSleepThroughDaemonQueue(t *testing.T) {
 		}}}
 	}
 
-	h := newSubagentHarnessWith(t, respond)
+	h := newHarness(t, harnessOptions{respond: respond})
 	defer h.shutdown()
 
 	h.startInboxWake()
@@ -167,17 +167,17 @@ func TestIntegration_SchedulerWakesExactSleepThroughDaemonQueue(t *testing.T) {
 	require.NoError(t, err)
 
 	require.Eventually(t, func() bool {
-		schedules, listErr := h.schedStore.ListSchedules(h.ctx, parentID)
+		schedules, listErr := h.schedules.ListSchedules(h.ctx, parentID)
 
 		return listErr == nil && len(schedules) == 1 && !h.mgr.HasActiveLoop(parentID)
 	}, 5*time.Second, 10*time.Millisecond, "sleep must be durable before the scheduler fires")
 
-	executor := schedule.NewExecutor(h.schedStore, h.mgr)
+	executor := schedule.NewExecutor(h.schedules, h.mgr)
 	executor.Start(h.ctx)
 	defer executor.Stop()
 
 	require.Eventually(t, func() bool {
-		schedules, listErr := h.schedStore.ListSchedules(h.ctx, parentID)
+		schedules, listErr := h.schedules.ListSchedules(h.ctx, parentID)
 		if listErr != nil || len(schedules) != 0 {
 			return false
 		}
@@ -208,7 +208,7 @@ func TestIntegration_SchedulerWakesExactSleepThroughDaemonQueue(t *testing.T) {
 	assert.Equal(t, sleepCallID, result.ToolCallID)
 	assert.Contains(t, result.Content, "Sleep completed")
 
-	schedules, err := h.schedStore.ListSchedules(h.ctx, parentID)
+	schedules, err := h.schedules.ListSchedules(h.ctx, parentID)
 	require.NoError(t, err)
 	assert.Empty(t, schedules, "accepted one-shot must be removed only after transcript delivery")
 }
@@ -228,20 +228,20 @@ func TestIntegration_UserInterruptCancelsSleepWithoutDeletingStandaloneOneShot(t
 		}}}
 	}
 
-	h := newSubagentHarnessWith(t, respond)
+	h := newHarness(t, harnessOptions{respond: respond})
 	defer h.shutdown()
 
 	h.startInboxWake()
 	parentID, err := h.mgr.Send(h.ctx, h.projectID, "sleep until interrupted", "fake-model", nil)
 	require.NoError(t, err)
 	require.Eventually(t, func() bool {
-		schedules, listErr := h.schedStore.ListSchedules(h.ctx, parentID)
+		schedules, listErr := h.schedules.ListSchedules(h.ctx, parentID)
 
 		return listErr == nil && len(schedules) == 1 && !h.mgr.HasActiveLoop(parentID)
 	}, 5*time.Second, 10*time.Millisecond, "sleep must suspend with one durable timer")
 
 	standaloneAt := time.Now().Add(2 * time.Hour).UTC()
-	_, err = h.schedStore.AddSchedule(
+	_, err = h.schedules.AddSchedule(
 		h.ctx, parentID, "", &standaloneAt, "standalone future input", false,
 	)
 	require.NoError(t, err)
@@ -256,7 +256,7 @@ func TestIntegration_UserInterruptCancelsSleepWithoutDeletingStandaloneOneShot(t
 	assert.Contains(t, lastToolResultContent(messages, tool.IDSleep), "Sleep interrupted")
 	assert.Equal(t, "interrupt handled", lastAssistantTextDTO(messages))
 
-	schedules, err := h.schedStore.ListSchedules(h.ctx, parentID)
+	schedules, err := h.schedules.ListSchedules(h.ctx, parentID)
 	require.NoError(t, err)
 	require.Len(t, schedules, 1, "interrupt must remove only the pending sleep timer")
 	assert.Equal(t, "standalone future input", schedules[0].InputMessage())
@@ -271,7 +271,7 @@ func TestIntegration_StandaloneOneShotFlowsThroughExecutorAndDaemonQueue(t *test
 		return &llmwire.Response{Text: "ready"}
 	}
 
-	h := newSubagentHarnessWith(t, respond)
+	h := newHarness(t, harnessOptions{respond: respond})
 	defer h.shutdown()
 
 	h.startInboxWake()
@@ -280,17 +280,17 @@ func TestIntegration_StandaloneOneShotFlowsThroughExecutorAndDaemonQueue(t *test
 	h.mgr.waitIdle(parentID)
 
 	due := time.Now().Add(-time.Minute).UTC()
-	_, err = h.schedStore.AddSchedule(
+	_, err = h.schedules.AddSchedule(
 		h.ctx, parentID, "", &due, "one-time scheduled work", false,
 	)
 	require.NoError(t, err)
 
-	executor := schedule.NewExecutor(h.schedStore, h.mgr)
+	executor := schedule.NewExecutor(h.schedules, h.mgr)
 	executor.Start(h.ctx)
 	defer executor.Stop()
 
 	require.Eventually(t, func() bool {
-		schedules, listErr := h.schedStore.ListSchedules(h.ctx, parentID)
+		schedules, listErr := h.schedules.ListSchedules(h.ctx, parentID)
 		if listErr != nil || len(schedules) != 0 || h.mgr.HasActiveLoop(parentID) {
 			return false
 		}
@@ -313,7 +313,7 @@ func TestIntegration_OneShotAckFailureRedeliversWithoutDuplicateTranscriptOrPubl
 		return &llmwire.Response{Text: "ready"}
 	}
 
-	h := newSubagentHarnessWith(t, respond)
+	h := newHarness(t, harnessOptions{respond: respond})
 	defer h.shutdown()
 
 	h.startInboxWake()
@@ -322,7 +322,7 @@ func TestIntegration_OneShotAckFailureRedeliversWithoutDuplicateTranscriptOrPubl
 	h.mgr.waitIdle(parentID)
 
 	due := time.Now().Add(-time.Minute).UTC()
-	_, err = h.schedStore.AddSchedule(
+	_, err = h.schedules.AddSchedule(
 		h.ctx, parentID, "", &due, "one-time retry-safe work", false,
 	)
 	require.NoError(t, err)
@@ -331,7 +331,7 @@ func TestIntegration_OneShotAckFailureRedeliversWithoutDuplicateTranscriptOrPubl
 	defer h.mgr.bus.Unsubscribe(parentID, sub)
 
 	flaky := &failFirstRemoveScheduleStore{
-		Store: h.schedStore, attempted: make(chan struct{}),
+		Store: h.schedules, attempted: make(chan struct{}),
 	}
 	first := schedule.NewExecutor(flaky, h.mgr)
 	first.Start(h.ctx)
@@ -343,14 +343,14 @@ func TestIntegration_OneShotAckFailureRedeliversWithoutDuplicateTranscriptOrPubl
 	first.Stop()
 	h.mgr.waitIdle(parentID)
 
-	remaining, err := h.schedStore.ListSchedules(h.ctx, parentID)
+	remaining, err := h.schedules.ListSchedules(h.ctx, parentID)
 	require.NoError(t, err)
 	require.Len(t, remaining, 1, "failed producer ack must leave the one-shot retryable")
 
-	second := schedule.NewExecutor(h.schedStore, h.mgr)
+	second := schedule.NewExecutor(h.schedules, h.mgr)
 	second.Start(h.ctx)
 	require.Eventually(t, func() bool {
-		schedules, listErr := h.schedStore.ListSchedules(h.ctx, parentID)
+		schedules, listErr := h.schedules.ListSchedules(h.ctx, parentID)
 		return listErr == nil && len(schedules) == 0 && !h.mgr.HasActiveLoop(parentID)
 	}, 5*time.Second, 10*time.Millisecond)
 	second.Stop()
@@ -383,7 +383,7 @@ func TestIntegration_FreshScheduleDuplicateDoesNotResetOrRunTwice(t *testing.T) 
 		return &llmwire.Response{Text: "ready"}
 	}
 
-	h := newSubagentHarnessWith(t, respond)
+	h := newHarness(t, harnessOptions{respond: respond})
 	defer h.shutdown()
 
 	h.startInboxWake()
@@ -474,7 +474,7 @@ func TestScheduledDeliveryToSubagentIsAcknowledgedWithoutMutation(t *testing.T) 
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			h := newSubagentHarnessWith(t, trivialRespond)
+			h := newHarness(t, harnessOptions{respond: trivialRespond})
 			defer h.shutdown()
 
 			childID := createScheduleBoundarySubagent(t, h)
@@ -486,7 +486,7 @@ func TestScheduledDeliveryToSubagentIsAcknowledgedWithoutMutation(t *testing.T) 
 			assert.False(t, h.mgr.HasActiveLoop(childID))
 			assert.Equal(t, before, h.parentMessages(childID))
 
-			rec, err := h.sessStore.GetSession(t.Context(), childID)
+			rec, err := h.store.GetSession(t.Context(), childID)
 			require.NoError(t, err)
 			assert.Equal(t, sessionstore.SessionStatusCompleted, rec.Status)
 			assert.Zero(t, rec.Iteration)
@@ -495,27 +495,27 @@ func TestScheduledDeliveryToSubagentIsAcknowledgedWithoutMutation(t *testing.T) 
 }
 
 func TestIntegration_LegacySubagentOneShotIsDiscardedWithoutRun(t *testing.T) {
-	h := newSubagentHarnessWith(t, trivialRespond)
+	h := newHarness(t, harnessOptions{respond: trivialRespond})
 	defer h.shutdown()
 
 	childID := createScheduleBoundarySubagent(t, h)
 	due := time.Now().Add(-time.Minute).UTC()
-	_, err := h.schedStore.AddSchedule(t.Context(), childID, "", &due, "legacy task", false)
+	_, err := h.schedules.AddSchedule(t.Context(), childID, "", &due, "legacy task", false)
 	require.NoError(t, err)
 
-	executor := schedule.NewExecutor(h.schedStore, h.mgr)
+	executor := schedule.NewExecutor(h.schedules, h.mgr)
 	executor.Start(t.Context())
 	defer executor.Stop()
 
 	require.Eventually(t, func() bool {
-		entries, listErr := h.schedStore.ListSchedules(t.Context(), childID)
+		entries, listErr := h.schedules.ListSchedules(t.Context(), childID)
 		return listErr == nil && len(entries) == 0
 	}, 5*time.Second, 10*time.Millisecond)
 	executor.Stop()
 
 	assert.False(t, h.mgr.HasActiveLoop(childID))
 	assert.Empty(t, h.parentMessages(childID))
-	rec, err := h.sessStore.GetSession(t.Context(), childID)
+	rec, err := h.store.GetSession(t.Context(), childID)
 	require.NoError(t, err)
 	assert.Equal(t, sessionstore.SessionStatusCompleted, rec.Status)
 	assert.Zero(t, rec.Iteration)
@@ -532,7 +532,7 @@ func TestIntegration_LegacySubagentCronOccurrencesAreAcknowledgedWithoutRun(t *t
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			h := newSubagentHarnessWith(t, trivialRespond)
+			h := newHarness(t, harnessOptions{respond: trivialRespond})
 			defer h.shutdown()
 
 			childID := createScheduleBoundarySubagent(t, h)
@@ -540,15 +540,15 @@ func TestIntegration_LegacySubagentCronOccurrencesAreAcknowledgedWithoutRun(t *t
 			collector := collectEvents(h.mgr.bus.SubscribeAll())
 			defer collector.stop()
 
-			entry, err := h.schedStore.AddSchedule(t.Context(), childID, "* * * * *", nil, "legacy task", tt.fresh)
+			entry, err := h.schedules.AddSchedule(t.Context(), childID, "* * * * *", nil, "legacy task", tt.fresh)
 			require.NoError(t, err)
 
-			executor := schedule.NewExecutor(h.schedStore, h.mgr)
+			executor := schedule.NewExecutor(h.schedules, h.mgr)
 			executor.Start(t.Context())
 			defer executor.Stop()
 
 			require.Eventually(t, func() bool {
-				schedules, listErr := h.schedStore.ListSchedules(t.Context(), childID)
+				schedules, listErr := h.schedules.ListSchedules(t.Context(), childID)
 				return listErr == nil && len(schedules) == 1 && schedules[0].ID() == entry.ID() &&
 					schedules[0].LastFiredAt() != nil
 			}, 5*time.Second, 10*time.Millisecond)
@@ -557,7 +557,7 @@ func TestIntegration_LegacySubagentCronOccurrencesAreAcknowledgedWithoutRun(t *t
 			assert.False(t, h.mgr.HasActiveLoop(childID))
 			assert.Equal(t, before, h.parentMessages(childID))
 			assert.Empty(t, collector.snapshot(), "an acknowledged legacy occurrence is not published")
-			rec, err := h.sessStore.GetSession(t.Context(), childID)
+			rec, err := h.store.GetSession(t.Context(), childID)
 			require.NoError(t, err)
 			assert.Equal(t, sessionstore.SessionStatusCompleted, rec.Status)
 			assert.Zero(t, rec.Iteration)
@@ -576,7 +576,7 @@ func TestHarnessScenario_ScheduledTurnChain(t *testing.T) {
 		return &llmwire.Response{Text: "Hi there."}
 	}
 
-	h := newSubagentHarnessWith(t, respond)
+	h := newHarness(t, harnessOptions{respond: respond})
 	defer h.shutdown()
 
 	collector := collectEvents(h.mgr.bus.SubscribeAll())
@@ -588,7 +588,7 @@ func TestHarnessScenario_ScheduledTurnChain(t *testing.T) {
 	})
 	require.NoError(t, err)
 	h.waitUntil("first turn completed", func() bool {
-		record, loadErr := h.sessStore.GetSession(h.ctx, root)
+		record, loadErr := h.store.GetSession(h.ctx, root)
 
 		return loadErr == nil && record.Status == sessionstore.SessionStatusCompleted
 	})

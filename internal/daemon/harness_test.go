@@ -43,13 +43,11 @@ import (
 	"github.com/pilat/coagent/internal/progressruntime"
 	"github.com/pilat/coagent/internal/schedule"
 	"github.com/pilat/coagent/internal/session"
-	"github.com/pilat/coagent/internal/sessionbuild"
 	"github.com/pilat/coagent/internal/sessionbus"
 	"github.com/pilat/coagent/internal/sessionevent"
 	"github.com/pilat/coagent/internal/sessionstore"
 	"github.com/pilat/coagent/internal/subagent"
 	"github.com/pilat/coagent/internal/tool"
-	"github.com/pilat/coagent/internal/tool/builtin"
 	"github.com/pilat/coagent/internal/transcript"
 )
 
@@ -135,7 +133,7 @@ func indexOfSubagentCompletion(msgs []llmwire.Message) int {
 	return -1
 }
 
-func (h *subagentHarness) waitUntil(label string, cond func() bool) {
+func (h *harness) waitUntil(label string, cond func() bool) {
 	h.t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
 
@@ -317,7 +315,7 @@ func hasSummaryRow(msgs []llmwire.Message) bool {
 // ledgerHarness is a live daemon whose link store fails on demand, plus the ids
 // of a parent and one non-terminal child of it.
 type ledgerHarness struct {
-	*subagentHarness
+	*harness
 
 	flaky      *flakyLinkStore
 	activation *flakyActivationStore
@@ -342,19 +340,19 @@ func newLedgerHarness(t *testing.T) *ledgerHarness {
 
 	var flaky *flakyLinkStore
 
-	h := newSubagentHarnessDecorated(t, trivialRespond, func(inner subagent.Store) subagent.Store {
+	h := newHarness(t, harnessOptions{respond: trivialRespond, links: func(inner subagent.Store) subagent.Store {
 		flaky = newFlakyLinkStore(inner)
 		return flaky
-	})
+	}})
 	activation := &flakyActivationStore{Store: h.mgr.links}
 	h.mgr.links = activation
 
-	parent, err := h.sessStore.CreateSession(h.ctx, h.projectID, "fake-model", "", nil)
+	parent, err := h.store.CreateSession(h.ctx, h.projectID, "fake-model", "", nil)
 	require.NoError(t, err)
 
 	childID, err := func() (int64, error) {
 		var id int64
-		err := h.sessStore.WithTx(h.ctx, func(tx *sql.Tx) error {
+		err := h.store.WithTx(h.ctx, func(tx *sql.Tx) error {
 			var err error
 			id, err = sessionstore.CreateSubagentSessionTx(
 				h.ctx,
@@ -373,12 +371,12 @@ func newLedgerHarness(t *testing.T) *ledgerHarness {
 		return id, err
 	}()
 	require.NoError(t, err)
-	require.NoError(t, seedChildLink(h.ctx, h.sessStore, subagent.Link{
+	require.NoError(t, seedChildLink(h.ctx, h.store, subagent.Link{
 		ParentID: parent.ID, ChildID: childID, TaskCallID: "bg",
 	}))
 
 	return &ledgerHarness{
-		subagentHarness: h, flaky: flaky, activation: activation,
+		harness: h, flaky: flaky, activation: activation,
 		parentID: parent.ID, childID: childID,
 	}
 }
@@ -443,11 +441,11 @@ func closeOnce(ch chan struct{}) {
 	}
 }
 
-func (h *subagentHarness) queueLen() int {
+func (h *harness) queueLen() int {
 	return runnerWaitingCount(h.mgr.runners)
 }
 
-func (h *subagentHarness) waitForLinkByCall(parentID int64, callID string) subagent.Link {
+func (h *harness) waitForLinkByCall(parentID int64, callID string) subagent.Link {
 	h.t.Helper()
 	h.waitUntil("link for "+callID, func() bool {
 		link, err := h.links.GetLinkByTaskCallID(h.ctx, parentID, callID)
@@ -522,12 +520,12 @@ func newApplyDaemonWith(
 ) *applyDaemon {
 	t.Helper()
 
-	h := newSubagentHarnessOnDB(t, dbPath, respond, nil)
+	h := newHarness(t, harnessOptions{dbPath: dbPath, respond: respond})
 	ops := configops.New(filepath.Join(configDir, "config.yaml"), filepath.Join(configDir, "secrets"))
 
-	h.mgr.applier = configapply.New(ops, h.sessStore)
+	h.mgr.applier = configapply.New(ops, h.store)
 
-	return &applyDaemon{subagentHarness: h, ops: ops, restarts: h.mgr.applier.Restart()}
+	return &applyDaemon{harness: h, ops: ops, restarts: h.mgr.applier.Restart()}
 }
 
 func defaultModelInFile(t *testing.T, configDir string) string {
@@ -554,7 +552,7 @@ const applyCallID = "cfg-call-1"
 // config directory, so a test can take one down and bring the next one up on the
 // same durable state the way a restart-apply does.
 type applyDaemon struct {
-	*subagentHarness
+	*harness
 	ops      configops.Service
 	restarts <-chan struct{}
 }
@@ -749,7 +747,7 @@ func testAbandonedConfigCommand(t *testing.T, restart bool) {
 	d.mgr.waitIdle(id)
 	d.waitUntil(
 		"abandoned config activation expired",
-		func() bool { return currentActivationOf(t, d.subagentHarness, id) == nil },
+		func() bool { return currentActivationOf(t, d.harness, id) == nil },
 	)
 	if !restart {
 		d.waitUntil(
@@ -758,7 +756,7 @@ func testAbandonedConfigCommand(t *testing.T, restart bool) {
 		)
 	}
 
-	activation := currentActivationOf(t, d.subagentHarness, id)
+	activation := currentActivationOf(t, d.harness, id)
 	assert.Nil(t, activation)
 	if restart {
 		assert.False(t, hasToolResultFor(d.parentMessages(id), tool.IDConfigEdit))
@@ -793,7 +791,7 @@ func testAbandonedApply(t *testing.T, failure string) {
 	d.mgr.waitIdle(id)
 	calls, err := json.Marshal([]llmwire.ToolCall{{ID: configEditCallID, Name: tool.IDConfigEdit}})
 	require.NoError(t, err)
-	_, err = d.sessStore.Commit(d.ctx, sessionstore.Commit{SessionID: id, Messages: []*transcript.Message{{
+	_, err = d.store.Commit(d.ctx, sessionstore.Commit{SessionID: id, Messages: []*transcript.Message{{
 		Role: llmwire.RoleAssistant, ToolCalls: calls,
 	}}})
 	require.NoError(t, err)
@@ -824,13 +822,13 @@ func testAbandonedApply(t *testing.T, failure string) {
 	}
 	d.mgr.waitIdle(id)
 	d.waitUntil("failed construction settled its staged apply", func() bool {
-		record, err := d.sessStore.GetSession(d.ctx, id)
+		record, err := d.store.GetSession(d.ctx, id)
 
 		return err == nil && record.Status == sessionstore.SessionStatusError &&
 			!d.mgr.HasActiveLoop(id) && (failWrite || !d.mgr.applier.Has(id))
 	})
 
-	pending, err := d.sessStore.PeekPending(d.ctx, id)
+	pending, err := d.store.PeekPending(d.ctx, id)
 	require.NoError(t, err)
 	assert.Equal(t, "keep this input", pending.RawContent)
 	if failWrite {
@@ -842,7 +840,7 @@ func testAbandonedApply(t *testing.T, failure string) {
 		d.mgr.build.Config.UnifiedConfig.Models = configuredModels
 		require.NoError(t, d.mgr.sendToSession(d.ctx, id, "retry now"))
 		d.mgr.waitIdle(id)
-		_, err = d.sessStore.PeekPending(d.ctx, id)
+		_, err = d.store.PeekPending(d.ctx, id)
 		require.ErrorIs(t, err, sessionstore.ErrNoPendingInput)
 		assert.True(t, hasUserContaining(d.parentMessages(id), "keep this input"))
 	}
@@ -927,10 +925,10 @@ func startConfigEditSession(t *testing.T, d *applyDaemon, prompt string) int64 {
 
 // currentActivationOf returns the session's current grant. A missing grant is
 // nil; any read failure fails the test instead of passing as absence.
-func currentActivationOf(t *testing.T, h *subagentHarness, sessionID int64) *sessionstore.ToolActivation {
+func currentActivationOf(t *testing.T, h *harness, sessionID int64) *sessionstore.ToolActivation {
 	t.Helper()
 
-	activation, err := h.sessStore.
+	activation, err := h.store.
 		CurrentActivation(context.Background(), sessionID)
 	if errors.Is(err, sessionstore.ErrActivationNotFound) {
 		return nil
@@ -966,13 +964,11 @@ models:
 const toolSecrets = "WORK_API_KEY=sk-ant-work-0000000000\n"
 
 type configHarness struct {
-	mgr *svc
+	*harness
 	// sessionID is a real session row: the apply pipeline reads its transcript
 	// before it commits, so a config tool needs somewhere to have suspended.
 	sessionID int64
-	projectID int64
 	sessions  *sessionstore.Store
-	store     Store
 	factory   *mockFactory
 	tools     map[string]tool.Tool
 	restarts  int
@@ -990,12 +986,13 @@ func newConfigHarness(t *testing.T) *configHarness {
 	require.NoError(t, os.WriteFile(configPath, []byte(toolConfig), 0o600))
 	require.NoError(t, os.WriteFile(secretsPath, []byte(toolSecrets), 0o600))
 
-	h := &configHarness{config: configPath}
-	mgr, factory, store := newTestManager(t)
+	factory := &mockFactory{}
+	base := newHarness(t, harnessOptions{configure: withTestModels, clientFor: factory.client})
+	h := &configHarness{harness: base, config: configPath}
+	mgr, store := base.mgr, base.store
 	sessions, ok := mgr.store.(*sessionstore.Store)
 	require.True(t, ok)
 	h.sessions = sessions
-	h.store = store
 	h.factory = factory
 	projectID, err := store.GetOrCreateProject(context.Background(), t.TempDir())
 	require.NoError(t, err)
@@ -1287,7 +1284,7 @@ func newTestController(
 // gatingHarness is the subagent harness over a project WorkDir carrying
 // .claude/agents, recording the tool schemas each session offered its model.
 type gatingHarness struct {
-	*subagentHarness
+	*harness
 
 	schemas *schemaRecorder
 }
@@ -1327,56 +1324,19 @@ func (r *schemaRecorder) offered(sessionID int64) map[string]bool {
 func newGatingHarness(
 	t *testing.T,
 	agents map[string]string,
-	respond func(system string, msgs []llmwire.Message) *llmwire.Response,
+	respond func(string, []llmwire.Message) *llmwire.Response,
 ) *gatingHarness {
 	t.Helper()
-
-	ctx := context.Background()
-	dir := t.TempDir()
-	dbPath := filepath.Join(dir, "test.db")
-
-	db, err := migrate.OpenDB(ctx, dbPath)
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = db.Close() })
-	require.NoError(t, migrate.Run(ctx, db, dbPath))
-
-	store := sessionstore.NewStore(db)
-	sessStore := sessionstore.NewStore(db)
-	links := subagent.NewStore(db, sessStore)
-	schedStore := schedule.NewStore(db, sessStore)
-
-	workDir := t.TempDir()
-	writeProjectAgents(t, workDir, agents)
-
 	rec := &schemaRecorder{names: make(map[int64]map[string]bool)}
-	cfg := &config.Config{WorkDir: workDir, Model: "fake-model"}
-
-	factory := scriptedBuildInput(t, cfg, sessStore, nil, func(_ *config.Config) (llm.Client, error) {
-		return &recordingLLM{respond: respond, rec: rec}, nil
-	})
-
-	mgr, _ := newScenarioDaemon(
-		context.Background(),
-		factory,
-		sessStore,
-		links,
-		budget.New(sessStore),
-		schedule.NewService(schedStore, sessStore),
-		func() string { return "fake-model" },
-		db,
-	)
-	mgr.applier = configapply.New(newTestConfigOps(t, dir), sessStore)
-
-	pid, err := store.GetOrCreateProject(ctx, workDir)
-	require.NoError(t, err)
-
-	return &gatingHarness{
-		subagentHarness: &subagentHarness{
-			t: t, mgr: mgr, sessStore: sessStore, links: links, schedStore: schedStore,
-			projectID: pid, ctx: ctx,
+	h := newHarness(
+		t,
+		harnessOptions{
+			configure: func(cfg *config.Config) { writeProjectAgents(t, cfg.WorkDir, agents) },
+			clientFor: func(*config.Config) (llm.Client, error) { return &recordingLLM{respond: respond, rec: rec}, nil },
 		},
-		schemas: rec,
-	}
+	)
+	h.mgr.applier = configapply.New(newTestConfigOps(t, t.TempDir()), h.store)
+	return &gatingHarness{harness: h, schemas: rec}
 }
 
 // newTestConfigOps gives the daemon a real config mutation layer over temp
@@ -1681,7 +1641,7 @@ func (m *scheduleBoundaryModel) step(command scheduleBoundaryCommand) (bool, boo
 
 func applyScheduleBoundaryCommand(
 	t *testing.T,
-	h *subagentHarness,
+	h *harness,
 	rootID, subagentID int64,
 	command scheduleBoundaryCommand,
 ) scheduleBoundaryObservation {
@@ -1695,16 +1655,16 @@ func applyScheduleBoundaryCommand(
 	}
 
 	require.Eventually(t, func() bool {
-		pending, pendingErr := h.sessStore.ListPending(t.Context(), rootID)
+		pending, pendingErr := h.store.ListPending(t.Context(), rootID)
 
 		return pendingErr == nil && len(pending) == wantPending &&
 			!h.mgr.HasActiveLoop(rootID) && !h.mgr.HasActiveLoop(subagentID)
 	}, time.Second, 10*time.Millisecond)
-	root, loadRootErr := h.sessStore.GetSession(t.Context(), rootID)
+	root, loadRootErr := h.store.GetSession(t.Context(), rootID)
 	require.NoError(t, loadRootErr)
-	subagent, loadSubagentErr := h.sessStore.GetSession(t.Context(), subagentID)
+	subagent, loadSubagentErr := h.store.GetSession(t.Context(), subagentID)
 	require.NoError(t, loadSubagentErr)
-	pending, pendingErr := h.sessStore.ListPending(t.Context(), rootID)
+	pending, pendingErr := h.store.ListPending(t.Context(), rootID)
 	require.NoError(t, pendingErr)
 
 	return scheduleBoundaryObservation{
@@ -1720,7 +1680,7 @@ func applyScheduleBoundaryCommand(
 
 func executeScheduleBoundaryCommand(
 	t *testing.T,
-	h *subagentHarness,
+	h *harness,
 	rootID, subagentID int64,
 	command scheduleBoundaryCommand,
 ) (bool, error) {
@@ -1860,7 +1820,7 @@ func registryPromptRespond(fake *fakeMCPServer) func(string, []llmwire.Message) 
 
 func assertInitialRegistryProjection(
 	t *testing.T,
-	h *subagentHarness,
+	h *harness,
 	schemas *activationSchemas,
 	prompts *promptRecorder,
 	parentID, childID int64,
@@ -1889,7 +1849,7 @@ func assertInitialRegistryProjection(
 
 func assertNextRegistryProjection(
 	t *testing.T,
-	h *subagentHarness,
+	h *harness,
 	schemas *activationSchemas,
 	prompts *promptRecorder,
 	parentID int64,
@@ -1954,16 +1914,6 @@ func (r *activationSchemas) last(t *testing.T, sessionID int64) []string {
 	return append([]string(nil), requests[len(requests)-1]...)
 }
 
-type registryPromptDeps struct {
-	ctx          context.Context
-	db           *sql.DB
-	store        *sessionstore.Store
-	sessionStore *sessionstore.Store
-	links        subagent.Store
-	schedules    schedule.Store
-	mcpRegistry  mcpstore.Store
-}
-
 func (r *promptRecorder) last(t *testing.T, role string) string {
 	t.Helper()
 	r.mu.Lock()
@@ -1974,90 +1924,24 @@ func (r *promptRecorder) last(t *testing.T, role string) string {
 	return requests[len(requests)-1]
 }
 
-func newRegistryPromptDeps(t *testing.T) registryPromptDeps {
-	t.Helper()
-	ctx := context.Background()
-	dbPath := filepath.Join(t.TempDir(), "registry-prompt.db")
-	db, err := migrate.OpenDB(ctx, dbPath)
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = db.Close() })
-	require.NoError(t, migrate.Run(ctx, db, dbPath))
-
-	sessions := sessionstore.NewStore(db)
-	return registryPromptDeps{
-		ctx:          ctx,
-		db:           db,
-		store:        sessions,
-		sessionStore: sessions,
-		links: subagent.NewStore(
-			db,
-			sessions,
-		),
-		schedules:   schedule.NewStore(db, sessions),
-		mcpRegistry: mcpstore.NewStore(db),
-	}
+type registryPromptHarness struct {
+	*harness
+	schemas *activationSchemas
+	prompts *promptRecorder
 }
 
-// newRegistryPromptHarness is the composition-root MCP wiring over an ordinary
-// project with a scripted LLM that records each live registry projection.
 func newRegistryPromptHarness(
 	t *testing.T,
 	respond func(string, []llmwire.Message) *llmwire.Response,
-) (*subagentHarness, *activationSchemas, *promptRecorder, mcpstore.Store) {
+) *registryPromptHarness {
 	t.Helper()
-
-	deps := newRegistryPromptDeps(t)
-
-	workDir := t.TempDir()
-	cfg := &config.Config{WorkDir: workDir, Model: "fake-model"}
 	recorder := &activationSchemas{byID: make(map[int64][][]string)}
 	prompts := newPromptRecorder()
-
-	factory := newRegistryPromptFactory(t, cfg, deps, respond, recorder, prompts)
-	mgr := newRegistryPromptManager(deps, factory, t)
-	projectID, err := deps.store.GetOrCreateProject(deps.ctx, workDir)
-	require.NoError(t, err)
-
-	return &subagentHarness{
-		t: t, mgr: mgr, sessStore: deps.sessionStore, links: deps.links, schedStore: deps.schedules,
-		projectID: projectID, ctx: deps.ctx,
-	}, recorder, prompts, deps.mcpRegistry
-}
-
-func newRegistryPromptFactory(
-	t *testing.T,
-	cfg *config.Config,
-	deps registryPromptDeps,
-	respond func(string, []llmwire.Message) *llmwire.Response,
-	recorder *activationSchemas,
-	prompts *promptRecorder,
-) sessionbuild.BuildInput {
-	return scriptedBuildInput(t, cfg, deps.sessionStore, deps.mcpRegistry, func(_ *config.Config) (llm.Client, error) {
-		return &registryPromptLLM{
-			respond: respond, recorder: recorder, prompts: prompts,
-		}, nil
-	})
-}
-
-func newRegistryPromptManager(
-	deps registryPromptDeps,
-	factory sessionbuild.BuildInput,
-	t *testing.T,
-) *svc {
-	mgr, _ := newScenarioDaemon(
-		context.Background(),
-		factory,
-		deps.sessionStore,
-		deps.links,
-		budget.New(deps.sessionStore),
-		schedule.NewService(deps.schedules, deps.sessionStore),
-		func() string { return "fake-model" },
-		deps.db,
-	)
-	mgr.mcpStore = deps.mcpRegistry
-	mgr.applier = configapply.New(newTestConfigOps(t, t.TempDir()), deps.sessionStore)
-
-	return mgr
+	h := newHarness(t, harnessOptions{clientFor: func(*config.Config) (llm.Client, error) {
+		return &registryPromptLLM{respond: respond, recorder: recorder, prompts: prompts}, nil
+	}})
+	h.mgr.applier = configapply.New(newTestConfigOps(t, t.TempDir()), h.store)
+	return &registryPromptHarness{harness: h, schemas: recorder, prompts: prompts}
 }
 
 func firstLine(s string) string {
@@ -2067,7 +1951,7 @@ func firstLine(s string) string {
 }
 
 type scheduleRestartHarness struct {
-	*subagentHarness
+	*harness
 	db        *sql.DB
 	closeOnce sync.Once
 	closeErr  error
@@ -2145,10 +2029,10 @@ func createScheduleSession(t *testing.T, h *scheduleRestartHarness, events *even
 func addFlakyDueOneShot(t *testing.T, h *scheduleRestartHarness, sessionID int64) *failFirstRemoveScheduleStore {
 	t.Helper()
 	due := time.Now().Add(-time.Minute).UTC()
-	_, err := h.schedStore.AddSchedule(h.ctx, sessionID, "", &due, "scheduled once", false)
+	_, err := h.schedules.AddSchedule(h.ctx, sessionID, "", &due, "scheduled once", false)
 	require.NoError(t, err)
 
-	return &failFirstRemoveScheduleStore{Store: h.schedStore, attempted: make(chan struct{})}
+	return &failFirstRemoveScheduleStore{Store: h.schedules, attempted: make(chan struct{})}
 }
 
 func waitForScheduledInput(t *testing.T, events *eventCollector, sessionID int64) {
@@ -2167,7 +2051,7 @@ func waitForScheduledInput(t *testing.T, events *eventCollector, sessionID int64
 
 func requireOneShotRemainsRetryable(t *testing.T, h *scheduleRestartHarness, sessionID int64) {
 	t.Helper()
-	remaining, err := h.schedStore.ListSchedules(h.ctx, sessionID)
+	remaining, err := h.schedules.ListSchedules(h.ctx, sessionID)
 	require.NoError(t, err)
 	require.Len(t, remaining, 1, "failed acknowledgement must leave the accepted one-shot retryable")
 	assert.Equal(t, 1, countToolResultsFor(h.parentMessages(sessionID), tool.IDSchedule))
@@ -2184,12 +2068,12 @@ func retryOneShotAfterRestart(
 	events := collectEvents(h.mgr.bus.SubscribeManager("telegram-main"))
 	t.Cleanup(events.stop)
 	require.NoError(t, h.mgr.Start(h.ctx))
-	executor := schedule.NewExecutor(h.schedStore, h.mgr)
+	executor := schedule.NewExecutor(h.schedules, h.mgr)
 	executor.Start(h.ctx)
 	t.Cleanup(executor.Stop)
 
 	require.Eventually(t, func() bool {
-		schedules, err := h.schedStore.ListSchedules(h.ctx, sessionID)
+		schedules, err := h.schedules.ListSchedules(h.ctx, sessionID)
 		return err == nil && len(schedules) == 0 && !h.mgr.HasActiveLoop(sessionID)
 	}, 5*time.Second, 10*time.Millisecond, "restart retry must acknowledge the accepted one-shot")
 	executor.Stop()
@@ -2259,66 +2143,13 @@ func newScheduleRestartHarness(
 	respond func(string, []llmwire.Message) *llmwire.Response,
 ) *scheduleRestartHarness {
 	t.Helper()
-	db := openScheduleRestartDB(t, dbPath)
-	h := &scheduleRestartHarness{db: db}
-	h.subagentHarness = buildScheduleRestartHarness(t, db, workDir, respond)
-	t.Cleanup(func() { require.NoError(t, h.close()) })
-
-	return h
-}
-
-func openScheduleRestartDB(t *testing.T, dbPath string) *sql.DB {
-	t.Helper()
-	db, err := migrate.OpenDB(context.Background(), dbPath)
-	require.NoError(t, err)
-	require.NoError(t, migrate.Run(context.Background(), db, dbPath))
-
-	return db
-}
-
-func buildScheduleRestartHarness(
-	t *testing.T,
-	db *sql.DB,
-	workDir string,
-	respond func(string, []llmwire.Message) *llmwire.Response,
-) *subagentHarness {
-	t.Helper()
-	store := sessionstore.NewStore(db)
-	sessionStore := sessionstore.NewStore(db)
-	links := subagent.NewStore(db, sessionStore)
-	schedules := schedule.NewStore(db, sessionStore)
-	factory := scheduleRestartFactory(t, workDir, sessionStore, respond)
-	mgr, _ := newScenarioDaemon(
-		context.Background(),
-		factory,
-		sessionStore,
-		links,
-		budget.New(sessionStore),
-		schedule.NewService(schedules, sessionStore),
-		func() string {
-			return "fake-model"
-		},
-		db,
+	base := newHarness(
+		t,
+		harnessOptions{dbPath: dbPath, respond: respond, configure: func(cfg *config.Config) { cfg.WorkDir = workDir }},
 	)
-	projectID, err := store.GetOrCreateProject(context.Background(), workDir)
-	require.NoError(t, err)
-
-	return &subagentHarness{
-		t: t, mgr: mgr, sessStore: sessionStore, links: links, schedStore: schedules,
-		projectID: projectID, ctx: context.Background(),
-	}
-}
-
-func scheduleRestartFactory(
-	t *testing.T,
-	workDir string,
-	store *sessionstore.Store,
-	respond func(string, []llmwire.Message) *llmwire.Response,
-) sessionbuild.BuildInput {
-	cfg := &config.Config{WorkDir: workDir, Model: "fake-model"}
-	return scriptedBuildInput(t, cfg, store, nil, func(*config.Config) (llm.Client, error) {
-		return &scriptedLLM{respond: respond}, nil
-	})
+	h := &scheduleRestartHarness{harness: base, db: base.db}
+	t.Cleanup(func() { require.NoError(t, h.close()) })
+	return h
 }
 
 func (h *scheduleRestartHarness) close() error {
@@ -2739,7 +2570,7 @@ const helpWithGWT = "## Session commands\n" +
 
 func runAcceptedInputRestartScenario(
 	t *testing.T,
-	afterInput func(*testing.T, *subagentHarness, int64),
+	afterInput func(*testing.T, *harness, int64),
 	traceName, sourceTest string,
 ) {
 	t.Helper()
@@ -2753,15 +2584,15 @@ func runAcceptedInputRestartScenario(
 		return &llmwire.Response{Text: "unexpected prompt"}
 	}
 
-	first := newSubagentHarnessOnDB(t, dbPath, respond, nil)
-	root, err := first.sessStore.CreateSession(first.ctx, first.projectID, "fake-model", "", nil)
+	first := newHarness(t, harnessOptions{dbPath: dbPath, respond: respond})
+	root, err := first.store.CreateSession(first.ctx, first.projectID, "fake-model", "", nil)
 	require.NoError(t, err)
-	input, err := first.sessStore.Enqueue(
+	input, err := first.store.Enqueue(
 		first.ctx,
 		sessionstore.Input{SessionID: root.ID, Source: sessionstore.InputSourceUser, Content: "accepted before crash"},
 	)
 	require.NoError(t, err)
-	_, err = first.sessStore.Commit(
+	_, err = first.store.Commit(
 		first.ctx,
 		sessionstore.Commit{
 			SessionID: input.Input.SessionID,
@@ -2782,7 +2613,7 @@ func runAcceptedInputRestartScenario(
 	}
 	first.shutdown()
 
-	second := newSubagentHarnessOnDB(t, dbPath, respond, nil)
+	second := newHarness(t, harnessOptions{dbPath: dbPath, respond: respond})
 	collector := collectEvents(second.mgr.bus.SubscribeAll())
 	defer func() {
 		collector.stop()
@@ -2799,18 +2630,18 @@ func runAcceptedInputRestartScenario(
 	assertHarnessTraceForScenario(t, sourceTest, traceName, collector.snapshot(), root.ID)
 }
 
-func appendCrashToolProgress(t *testing.T, h *subagentHarness, sessionID int64) {
+func appendCrashToolProgress(t *testing.T, h *harness, sessionID int64) {
 	t.Helper()
 
 	calls, err := json.Marshal([]llmwire.ToolCall{{
 		ID: "crash-tool", Name: "read", Arguments: []byte(`{"path":"README.md"}`),
 	}})
 	require.NoError(t, err)
-	_, err = h.sessStore.Commit(h.ctx, sessionstore.Commit{SessionID: sessionID, Messages: []*transcript.Message{{
+	_, err = h.store.Commit(h.ctx, sessionstore.Commit{SessionID: sessionID, Messages: []*transcript.Message{{
 		Role: llmwire.RoleAssistant, ToolCalls: calls,
 	}}})
 	require.NoError(t, err)
-	_, err = h.sessStore.Commit(h.ctx, sessionstore.Commit{SessionID: sessionID, Messages: []*transcript.Message{{
+	_, err = h.store.Commit(h.ctx, sessionstore.Commit{SessionID: sessionID, Messages: []*transcript.Message{{
 		Role: llmwire.RoleTool, ToolCallID: "crash-tool", ToolName: "read", Content: "durable tool result",
 	}}})
 	require.NoError(t, err)
@@ -2822,30 +2653,31 @@ type contextInfo struct {
 	hasDeadline bool
 }
 
-// subagentHarness wires a real sessionbuild.BuildInput (fake LLM) + daemon svc over a
+// harness wires a real sessionbuild.BuildInput (fake LLM) + daemon svc over a
 // temp SQLite DB.
-type subagentHarness struct {
-	t          *testing.T
-	db         *sql.DB
-	mgr        *svc
-	sessStore  *sessionstore.Store
-	links      subagent.Store
-	schedStore schedule.Store
-	projectID  int64
-	ctx        context.Context
+type harness struct {
+	t         *testing.T
+	db        *sql.DB
+	mgr       *svc
+	store     *sessionstore.Store
+	links     subagent.Store
+	schedules schedule.Store
+	projectID int64
+	ctx       context.Context
 
-	llmMu    sync.Mutex
-	llmRefs  []*scriptedLLM // every client the session factory created
-	wakeOnce sync.Once
+	llmMu        sync.Mutex
+	llmRefs      []*scriptedLLM // every client the session factory created
+	wakeOnce     sync.Once
+	shutdownOnce sync.Once
 }
 
-func (h *subagentHarness) startInboxWake() {
+func (h *harness) startInboxWake() {
 	h.wakeOnce.Do(func() { h.mgr.startWake() })
 }
 
 // sessionClient returns the scripted client bound to the session whose
 // SetSessionID matched id — the raw seam between runner and session loop.
-func (h *subagentHarness) sessionClient(sessionID string) *scriptedLLM {
+func (h *harness) sessionClient(sessionID string) *scriptedLLM {
 	h.llmMu.Lock()
 	defer h.llmMu.Unlock()
 
@@ -2898,110 +2730,69 @@ func subagentRespond(_ string, msgs []llmwire.Message) *llmwire.Response {
 	}}}
 }
 
-func newSubagentHarness(t *testing.T) *subagentHarness {
-	return newSubagentHarnessWith(t, subagentRespond)
+type harnessOptions struct {
+	dbPath    string
+	respond   func(string, []llmwire.Message) *llmwire.Response
+	clientFor func(*config.Config) (llm.Client, error)
+	configure func(*config.Config)
+	links     func(subagent.Store) subagent.Store
+	mcp       mcpstore.Store
 }
 
-func newSubagentHarnessWith(
-	t *testing.T,
-	respond func(system string, msgs []llmwire.Message) *llmwire.Response,
-) *subagentHarness {
-	t.Helper()
-
-	return newSubagentHarnessDecorated(t, respond, nil)
-}
-
-// newSubagentHarnessDecorated is newSubagentHarnessWith plus an injection point
-// for the link store, so ledger-failure paths can be exercised on a live daemon.
-func newSubagentHarnessDecorated(
-	t *testing.T,
-	respond func(system string, msgs []llmwire.Message) *llmwire.Response,
-	decorate func(subagent.Store) subagent.Store,
-) *subagentHarness {
-	t.Helper()
-
-	return newSubagentHarnessOnDB(t, filepath.Join(t.TempDir(), "test.db"), respond, decorate)
-}
-
-// newSubagentHarnessOnDB builds a harness over an explicit database file, so a
-// test can shut one daemon down and bring another up on the same durable state.
-func newSubagentHarnessOnDB(
-	t *testing.T,
-	dbPath string,
-	respond func(system string, msgs []llmwire.Message) *llmwire.Response,
-	decorate func(subagent.Store) subagent.Store,
-) *subagentHarness {
-	return newSubagentHarnessOnDBWithProjectConfig(
-		t, dbPath, respond, decorate, nil,
-	)
-}
-
-func newSubagentHarnessOnDBWithProjectConfig(
-	t *testing.T,
-	dbPath string,
-	respond func(system string, msgs []llmwire.Message) *llmwire.Response,
-	decorate func(subagent.Store) subagent.Store,
-	configure func(*config.Config),
-) *subagentHarness {
+func newHarness(t *testing.T, o harnessOptions) *harness {
 	t.Helper()
 	if _, err := coagenthome.UserHome(); err != nil {
-		t.Setenv("HOME", t.TempDir())
+		t.Cleanup(coagenthome.Override(t.TempDir()))
 	}
-
-	db, err := migrate.OpenDB(context.Background(), dbPath)
+	if o.dbPath == "" {
+		o.dbPath = filepath.Join(t.TempDir(), "test.db")
+	}
+	ctx := context.Background()
+	db, err := migrate.OpenDB(ctx, o.dbPath)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = db.Close() })
-	require.NoError(t, migrate.Run(context.Background(), db, dbPath))
-
+	require.NoError(t, migrate.Run(ctx, db, o.dbPath))
 	store := sessionstore.NewStore(db)
-	sessStore := sessionstore.NewStore(db)
-	links := subagent.NewStore(db, sessStore)
-	schedStore := schedule.NewStore(db, sessStore)
-
-	if decorate != nil {
-		links = decorate(links)
+	links := subagent.NewStore(db, store)
+	if o.links != nil {
+		links = o.links(links)
 	}
-
-	workDir := t.TempDir()
-	cfg := &config.Config{WorkDir: workDir, Model: "fake-model"}
-	if configure != nil {
-		configure(cfg)
+	schedules := schedule.NewStore(db, store)
+	cfg := &config.Config{WorkDir: t.TempDir(), Model: "fake-model"}
+	if o.configure != nil {
+		o.configure(cfg)
 	}
-
-	var (
-		pid int64
-		h   = &subagentHarness{
-			t: t, db: db, sessStore: sessStore, links: links, schedStore: schedStore,
-			ctx: context.Background(),
-		}
-	)
-	pid, err = store.GetOrCreateProject(context.Background(), workDir)
+	h := &harness{t: t, ctx: ctx, db: db, store: store, links: links, schedules: schedules}
+	h.projectID, err = store.GetOrCreateProject(ctx, cfg.WorkDir)
 	require.NoError(t, err)
-
-	factory := scriptedBuildInput(t, cfg, sessStore, nil, func(_ *config.Config) (llm.Client, error) {
-		client := &scriptedLLM{respond: respond}
-
-		h.llmMu.Lock()
-		h.llmRefs = append(h.llmRefs, client)
-		h.llmMu.Unlock()
-
-		return client, nil
-	})
-
-	mgr, _ := newScenarioDaemon(
-		context.Background(),
+	if o.respond == nil {
+		o.respond = subagentRespond
+	}
+	clientFor := o.clientFor
+	if clientFor == nil {
+		clientFor = func(*config.Config) (llm.Client, error) {
+			client := &scriptedLLM{respond: o.respond}
+			h.llmMu.Lock()
+			h.llmRefs = append(h.llmRefs, client)
+			h.llmMu.Unlock()
+			return client, nil
+		}
+	}
+	if o.mcp == nil {
+		o.mcp = mcpstore.NewStore(db)
+	}
+	factory := scriptedBuildInput(t, cfg, store, o.mcp, clientFor)
+	h.mgr, _ = newScenarioDaemon(
+		ctx,
 		factory,
-		sessStore,
+		store,
 		links,
-		budget.New(sessStore),
-		schedule.NewService(schedStore, sessStore),
-		func() string { return "fake-model" },
+		budget.New(store),
+		schedule.NewService(schedules, store),
+		func() string { return cfg.Model },
 		db,
 	)
-
-	h.mgr = mgr
-	h.projectID = pid
-
+	t.Cleanup(h.shutdown)
 	return h
 }
 
@@ -3050,9 +2841,9 @@ func countAssistantToolCallsFor(msgs []llmwire.Message, toolName string) int {
 	return count
 }
 
-func (h *subagentHarness) shutdown() { h.mgr.Shutdown(5 * time.Second) }
+func (h *harness) shutdown() { h.shutdownOnce.Do(func() { h.mgr.Shutdown(5 * time.Second) }) }
 
-func (h *subagentHarness) waitForChildLink(parentID int64) subagent.Link {
+func (h *harness) waitForChildLink(parentID int64) subagent.Link {
 	h.t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
 
@@ -3072,7 +2863,7 @@ func (h *subagentHarness) waitForChildLink(parentID int64) subagent.Link {
 	return subagent.Link{}
 }
 
-func (h *subagentHarness) waitForDelivery(childID int64) {
+func (h *harness) waitForDelivery(childID int64) {
 	h.t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
 
@@ -3090,7 +2881,7 @@ func (h *subagentHarness) waitForDelivery(childID int64) {
 	h.t.Fatalf("timed out waiting for completion delivery of child %d", childID)
 }
 
-func (h *subagentHarness) waitForParentCompletions(parentID, childID int64, want int) {
+func (h *harness) waitForParentCompletions(parentID, childID int64, want int) {
 	h.t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
@@ -3102,9 +2893,9 @@ func (h *subagentHarness) waitForParentCompletions(parentID, childID int64, want
 	h.t.Fatalf("timed out waiting for %d parent inbox completions for child %d", want, childID)
 }
 
-func (h *subagentHarness) parentMessages(parentID int64) []llmwire.Message {
+func (h *harness) parentMessages(parentID int64) []llmwire.Message {
 	h.t.Helper()
-	stored, err := h.sessStore.LoadActiveMessages(h.ctx, parentID)
+	stored, err := h.store.LoadActiveMessages(h.ctx, parentID)
 	require.NoError(h.t, err)
 
 	return toDTO(stored)
@@ -3197,67 +2988,6 @@ func countMessageContentContaining(messages []llmwire.Message, fragment string) 
 	return count
 }
 
-// newMCPHarness wires one registry store into session tool stacks.
-func newMCPHarness(
-	t *testing.T,
-	respond func(system string, msgs []llmwire.Message) *llmwire.Response,
-) (*subagentHarness, mcpstore.Store) {
-	return newMCPHarnessConfigured(t, respond, nil)
-}
-
-func newMCPHarnessConfigured(
-	t *testing.T,
-	respond func(system string, msgs []llmwire.Message) *llmwire.Response,
-	configure func(*config.Config),
-) (*subagentHarness, mcpstore.Store) {
-	t.Helper()
-	t.Setenv("HOME", t.TempDir())
-
-	ctx := context.Background()
-	dbPath := filepath.Join(t.TempDir(), "test.db")
-
-	db, err := migrate.OpenDB(ctx, dbPath)
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = db.Close() })
-	require.NoError(t, migrate.Run(ctx, db, dbPath))
-
-	store := sessionstore.NewStore(db)
-	sessStore := sessionstore.NewStore(db)
-	links := subagent.NewStore(db, sessStore)
-	schedStore := schedule.NewStore(db, sessStore)
-	registry := mcpstore.NewStore(db)
-
-	workDir := t.TempDir()
-	cfg := &config.Config{WorkDir: workDir, Model: "fake-model"}
-	if configure != nil {
-		configure(cfg)
-	}
-
-	factory := scriptedBuildInput(t, cfg, sessStore, registry, func(_ *config.Config) (llm.Client, error) {
-		return &scriptedLLM{respond: respond}, nil
-	})
-
-	mgr, _ := newScenarioDaemon(
-		context.Background(),
-		factory,
-		sessStore,
-		links,
-		budget.New(sessStore),
-		schedule.NewService(schedStore, sessStore),
-		func() string { return "fake-model" },
-		db,
-	)
-	mgr.mcpStore = registry
-
-	pid, err := store.GetOrCreateProject(ctx, workDir)
-	require.NoError(t, err)
-
-	return &subagentHarness{
-		t: t, db: db, mgr: mgr, sessStore: sessStore, links: links, schedStore: schedStore,
-		projectID: pid, ctx: ctx,
-	}, registry
-}
-
 // waitIdle blocks until the session has no live runner (best-effort settle).
 func (s *svc) waitIdle(sessionID int64) {
 	for range 200 {
@@ -3303,7 +3033,7 @@ func finalizeTestChild(ctx context.Context, t *testing.T, manager *svc, childID 
 	}
 }
 
-func countSilenceIntents(t *testing.T, h *subagentHarness, sessionID int64) int {
+func countSilenceIntents(t *testing.T, h *harness, sessionID int64) int {
 	t.Helper()
 
 	var count int
@@ -3419,35 +3149,14 @@ func (f *mockFactory) client(*config.Config) (llm.Client, error) {
 	return client, nil
 }
 
-func newTestManager(t *testing.T) (*svc, *mockFactory, *sessionstore.Store) {
-	t.Helper()
-	mgr, factory, store, _ := newTestManagerWithSchedule(t)
-	return mgr, factory, store
-}
-
-func newTestManagerWithSchedule(t *testing.T) (*svc, *mockFactory, *sessionstore.Store, schedule.Store) {
-	t.Helper()
-	restore := coagenthome.Override(t.TempDir())
-	t.Cleanup(restore)
-	dbPath := filepath.Join(t.TempDir(), "test.db")
-	db, err := migrate.OpenDB(t.Context(), dbPath)
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = db.Close() })
-	require.NoError(t, migrate.Run(t.Context(), db, dbPath))
-	store := sessionstore.NewStore(db)
-	schedules := schedule.NewStore(db, store)
-	factory := &mockFactory{}
-	cfg := &config.Config{
-		Model:   "fake-model",
-		WorkDir: t.TempDir(),
-		UnifiedConfig: &config.UnifiedConfig{
-			Models: []config.ModelEntry{
-				{ID: "fake-model"},
-				{ID: "test-model"},
-				{ID: "my-model"},
-				{ID: "old-model"},
-				{ID: "new-model"},
-			},
+func withTestModels(cfg *config.Config) {
+	cfg.UnifiedConfig = &config.UnifiedConfig{
+		Models: []config.ModelEntry{
+			{ID: "fake-model"},
+			{ID: "test-model"},
+			{ID: "my-model"},
+			{ID: "old-model"},
+			{ID: "new-model"},
 		},
 	}
 	for index := range cfg.UnifiedConfig.Models {
@@ -3458,19 +3167,6 @@ func newTestManagerWithSchedule(t *testing.T) (*svc, *mockFactory, *sessionstore
 		}
 		cfg.UnifiedConfig.Models[index].EffortLevels = []string{"low", "medium", "high"}
 	}
-	in := scriptedBuildInput(t, cfg, store, nil, factory.client)
-	mgr, _ := newScenarioDaemon(
-		t.Context(),
-		in,
-		store,
-		subagent.NewStore(db, store),
-		budget.New(store),
-		schedule.NewService(schedules, store),
-		func() string { return "fake-model" },
-		db,
-	)
-	t.Cleanup(func() { mgr.Shutdown(3 * time.Second) })
-	return mgr, factory, store, schedules
 }
 
 // waitForLoopStart blocks until a "running" state_changed notification arrives.
@@ -3600,9 +3296,8 @@ type registryReference struct {
 }
 
 type registryModelHarness struct {
-	db        *sql.DB
-	store     mcpstore.Store
-	projectID int64
+	*harness
+	registry  mcpstore.Store
 	workDir   string
 	fake      *exitTrackingMCPServer
 	service   mcp.Service
@@ -3611,25 +3306,9 @@ type registryModelHarness struct {
 
 func newRegistryModelHarness(t *testing.T) *registryModelHarness {
 	t.Helper()
-	ctx := context.Background()
-	dbPath := filepath.Join(t.TempDir(), "mcp-registry-model.db")
-	db, err := migrate.OpenDB(ctx, dbPath)
-	require.NoError(t, err)
-	require.NoError(t, migrate.Run(ctx, db, dbPath))
-
-	workDir := t.TempDir()
-	projectStore := sessionstore.NewStore(db)
-	projectID, err := projectStore.GetOrCreateProject(ctx, workDir)
-	require.NoError(t, err)
-
+	h := newHarness(t, harnessOptions{})
 	fake := newExitTrackingMCPServer(t, "pong from model")
-	return &registryModelHarness{
-		db:        db,
-		store:     mcpstore.NewStore(db),
-		projectID: projectID,
-		workDir:   workDir,
-		fake:      fake,
-	}
+	return &registryModelHarness{harness: h, registry: h.mgr.mcpStore, workDir: h.workDir(), fake: fake}
 }
 
 func (h *registryModelHarness) apply(t *testing.T, command registryModelCommand) {
@@ -3638,7 +3317,7 @@ func (h *registryModelHarness) apply(t *testing.T, command registryModelCommand)
 
 	switch command {
 	case registryAdd:
-		err := h.store.Add(ctx, &h.projectID, mcpstore.ServerDef{
+		err := h.registry.Add(ctx, &h.projectID, mcpstore.ServerDef{
 			Name: "fake", Command: h.fake.path, Args: h.fake.args(), Enabled: true,
 		})
 		require.NoError(t, err)
@@ -3647,7 +3326,7 @@ func (h *registryModelHarness) apply(t *testing.T, command registryModelCommand)
 	case registryRebuild:
 		h.rebuild(t)
 	case registryDisable:
-		require.NoError(t, h.store.SetEnabled(ctx, &h.projectID, "fake", false))
+		require.NoError(t, h.registry.SetEnabled(ctx, &h.projectID, "fake", false))
 		h.reference.enabled = false
 	case registryRelease:
 		if h.service != nil {
@@ -3656,10 +3335,10 @@ func (h *registryModelHarness) apply(t *testing.T, command registryModelCommand)
 		}
 		h.reference.visible = false
 	case registryEnable:
-		require.NoError(t, h.store.SetEnabled(ctx, &h.projectID, "fake", true))
+		require.NoError(t, h.registry.SetEnabled(ctx, &h.projectID, "fake", true))
 		h.reference.enabled = true
 	case registryRemove:
-		require.NoError(t, h.store.Remove(ctx, &h.projectID, "fake"))
+		require.NoError(t, h.registry.Remove(ctx, &h.projectID, "fake"))
 		h.reference.registered = false
 		h.reference.enabled = false
 	case registryRestart:
@@ -3675,7 +3354,7 @@ func (h *registryModelHarness) apply(t *testing.T, command registryModelCommand)
 
 func (h *registryModelHarness) rebuild(t *testing.T) {
 	t.Helper()
-	defs, err := h.store.ListForProject(context.Background(), h.projectID)
+	defs, err := h.registry.ListForProject(context.Background(), h.projectID)
 	require.NoError(t, err)
 	configs := make(map[string]mcp.ServerConfig, len(defs))
 	for _, def := range defs {
@@ -3770,57 +3449,24 @@ func toolResultForCallID(msgs []llmwire.Message, callID string) string {
 }
 
 type mcpRestartHarness struct {
-	*subagentHarness
+	*harness
 	db       *sql.DB
 	registry mcpstore.Store
 }
 
 func newMCPRestartHarness(
 	t *testing.T,
-	dbPath string,
-	workDir string,
+	dbPath, workDir string,
 	respond func(string, []llmwire.Message) *llmwire.Response,
 ) *mcpRestartHarness {
 	t.Helper()
-	ctx := context.Background()
-	db, err := migrate.OpenDB(ctx, dbPath)
-	require.NoError(t, err)
-	require.NoError(t, migrate.Run(ctx, db, dbPath))
-
-	store := sessionstore.NewStore(db)
-	sessStore := sessionstore.NewStore(db)
-	links := subagent.NewStore(db, sessStore)
-	schedStore := schedule.NewStore(db, sessStore)
-	registry := mcpstore.NewStore(db)
-	cfg := &config.Config{WorkDir: workDir, Model: "fake-model"}
-	factory := scriptedBuildInput(t, cfg, sessStore, registry, func(_ *config.Config) (llm.Client, error) {
-		return &scriptedLLM{respond: respond}, nil
-	})
-	mgr, _ := newScenarioDaemon(
-		context.Background(),
-		factory,
-		sessStore,
-		links,
-		budget.New(sessStore),
-		schedule.NewService(schedStore, sessStore),
-		func() string { return "fake-model" },
-		db,
+	h := newHarness(
+		t,
+		harnessOptions{dbPath: dbPath, respond: respond, configure: func(cfg *config.Config) { cfg.WorkDir = workDir }},
 	)
-	mgr.mcpStore = registry
-	projectID, err := store.GetOrCreateProject(ctx, workDir)
-	require.NoError(t, err)
-
-	h := &mcpRestartHarness{
-		subagentHarness: &subagentHarness{
-			t: t, mgr: mgr, sessStore: sessStore, links: links, schedStore: schedStore,
-			projectID: projectID, ctx: ctx,
-		},
-		db:       db,
-		registry: registry,
-	}
-	t.Cleanup(h.close)
-
-	return h
+	out := &mcpRestartHarness{harness: h, db: h.db, registry: h.mgr.mcpStore}
+	t.Cleanup(out.close)
+	return out
 }
 
 func (h *mcpRestartHarness) close() {
@@ -3860,12 +3506,12 @@ func newExternalCallDaemon(
 ) *applyDaemon {
 	t.Helper()
 
-	h := newSubagentHarnessOnDB(t, dbPath, respond, nil)
+	h := newHarness(t, harnessOptions{dbPath: dbPath, respond: respond})
 	ops := configops.New(filepath.Join(configDir, "config.yaml"), filepath.Join(configDir, "secrets"))
 
-	h.mgr.applier = configapply.New(ops, h.sessStore)
+	h.mgr.applier = configapply.New(ops, h.store)
 
-	return &applyDaemon{subagentHarness: h, ops: ops, restarts: h.mgr.applier.Restart()}
+	return &applyDaemon{harness: h, ops: ops, restarts: h.mgr.applier.Restart()}
 }
 
 // stageTaskAndStop parks a session on a blocking child, marks the child link
@@ -3963,7 +3609,7 @@ func (r *modelRequests) assertAllPaired(t *testing.T) {
 // two model iterations the loop briefly counts as inactive, and a wait keyed on
 // that flag races the next iteration on a fast machine.
 func (d *applyDaemon) parkedOnChild(sessionID int64) bool {
-	rec, err := d.sessStore.GetSession(d.ctx, sessionID)
+	rec, err := d.store.GetSession(d.ctx, sessionID)
 	if err != nil || rec.Status != sessionstore.SessionStatusSuspended {
 		return false
 	}
@@ -3979,7 +3625,7 @@ func storedAssistant(toolCalls string) *transcript.Message {
 // recorded claims must come from a real manager-bound controller.
 const scenarioManagerID = "telegram:main"
 
-func newChainController(t *testing.T, h *subagentHarness) controllerapi.OutputQueueController {
+func newChainController(t *testing.T, h *harness) controllerapi.OutputQueueController {
 	t.Helper()
 
 	queue, ok := newTestController(h.mgr, &config.Config{}, nil, nil).
@@ -4006,7 +3652,7 @@ func countUserCompletions(messages []llmwire.Message, marker string) int {
 	return count
 }
 
-func installScenarioProcessService(t *testing.T, h *subagentHarness) backgroundprocess.Service {
+func installScenarioProcessService(t *testing.T, h *harness) backgroundprocess.Service {
 	t.Helper()
 
 	service := backgroundprocess.NewService(h.mgr.processStore, backgroundprocess.Options{
@@ -4040,7 +3686,7 @@ func startScenarioProcess(
 
 func waitScenarioProcessState(
 	t *testing.T,
-	h *subagentHarness,
+	h *harness,
 	processID string,
 	want backgroundprocess.State,
 ) backgroundprocess.Process {
@@ -4251,15 +3897,18 @@ func interruptFirstRecovery(t *testing.T, dbPath string) int64 {
 	secondCall := make(chan struct{})
 	release := make(chan struct{})
 	var calls int
-	first := newSubagentHarnessOnDB(t, dbPath, func(_ string, _ []llmwire.Message) *llmwire.Response {
-		calls++
-		if calls == 1 {
-			return &llmwire.Response{Text: "discarded before restart", FinishType: llmwire.FinishLength}
-		}
-		close(secondCall)
-		<-release
-		return &llmwire.Response{Text: "must be canceled", FinishType: llmwire.FinishStop}
-	}, nil)
+	first := newHarness(
+		t,
+		harnessOptions{dbPath: dbPath, respond: func(_ string, _ []llmwire.Message) *llmwire.Response {
+			calls++
+			if calls == 1 {
+				return &llmwire.Response{Text: "discarded before restart", FinishType: llmwire.FinishLength}
+			}
+			close(secondCall)
+			<-release
+			return &llmwire.Response{Text: "must be canceled", FinishType: llmwire.FinishStop}
+		}},
+	)
 
 	first.startInboxWake()
 	rootID, err := first.mgr.Send(first.ctx, first.projectID, "restart the recovery", "fake-model", map[string]any{
@@ -4280,13 +3929,16 @@ func interruptFirstRecovery(t *testing.T, dbPath string) int64 {
 func completeRecoveryAfterRestart(t *testing.T, dbPath string, rootID int64) {
 	t.Helper()
 	var resumedCalls int
-	second := newSubagentHarnessOnDB(t, dbPath, func(_ string, messages []llmwire.Message) *llmwire.Response {
-		resumedCalls++
-		visible := scenarioTranscriptText(messages)
-		require.Contains(t, visible, sessionstore.OutputLengthRecoveryPrompt)
-		require.NotContains(t, visible, "discarded before restart")
-		return &llmwire.Response{Text: "recovered after restart", FinishType: llmwire.FinishStop}
-	}, nil)
+	second := newHarness(
+		t,
+		harnessOptions{dbPath: dbPath, respond: func(_ string, messages []llmwire.Message) *llmwire.Response {
+			resumedCalls++
+			visible := scenarioTranscriptText(messages)
+			require.Contains(t, visible, sessionstore.OutputLengthRecoveryPrompt)
+			require.NotContains(t, visible, "discarded before restart")
+			return &llmwire.Response{Text: "recovered after restart", FinishType: llmwire.FinishStop}
+		}},
+	)
 	collector := collectEvents(second.mgr.bus.SubscribeAll())
 	second.startInboxWake()
 	second.mgr.resumeAfterRestart(second.ctx)
@@ -4300,10 +3952,13 @@ func completeRecoveryAfterRestart(t *testing.T, dbPath string, rootID int64) {
 	collector.stop()
 
 	var unexpectedCalls atomic.Int64
-	third := newSubagentHarnessOnDB(t, dbPath, func(_ string, _ []llmwire.Message) *llmwire.Response {
-		unexpectedCalls.Add(1)
-		return &llmwire.Response{Text: "unexpected rerun", FinishType: llmwire.FinishStop}
-	}, nil)
+	third := newHarness(
+		t,
+		harnessOptions{dbPath: dbPath, respond: func(_ string, _ []llmwire.Message) *llmwire.Response {
+			unexpectedCalls.Add(1)
+			return &llmwire.Response{Text: "unexpected rerun", FinishType: llmwire.FinishStop}
+		}},
+	)
 	defer third.shutdown()
 	third.startInboxWake()
 	third.mgr.resumeAfterRestart(third.ctx)
@@ -4345,7 +4000,7 @@ func visibleEventMessages(events []controllerapi.SessionNotification, sessionID 
 func runIncompleteChildResponse(
 	t *testing.T,
 	childResponse *llmwire.Response,
-) (*subagentHarness, subagent.Link) {
+) (*harness, subagent.Link) {
 	t.Helper()
 	respond := func(_ string, messages []llmwire.Message) *llmwire.Response {
 		if hasUserContaining(messages, "CHILD_EMPTY_TOOL_FINISH") {
@@ -4358,7 +4013,7 @@ func runIncompleteChildResponse(
 		return taskResponse("CHILD_EMPTY_TOOL_FINISH", "empty finish")
 	}
 
-	h := newSubagentHarnessWith(t, respond)
+	h := newHarness(t, harnessOptions{respond: respond})
 	t.Cleanup(h.shutdown)
 	h.startInboxWake()
 	parentID, err := h.mgr.Send(h.ctx, h.projectID, "start empty-finish child", "fake-model", nil)
@@ -4437,8 +4092,8 @@ func registerTestRunner(ctx context.Context, manager *svc, rs *runner) (*runner,
 	return existing, registered
 }
 
-func transcriptOf(h *subagentHarness, sessionID int64) []llmwire.Message {
-	messages, err := h.sessStore.LoadActiveMessages(h.ctx, sessionID)
+func transcriptOf(h *harness, sessionID int64) []llmwire.Message {
+	messages, err := h.store.LoadActiveMessages(h.ctx, sessionID)
 	if err != nil {
 		h.t.Fatalf("load transcript for session %d: %v", sessionID, err)
 	}
@@ -4454,9 +4109,18 @@ func runStoppedRootScheduleScenario(t *testing.T, tc stoppedRootScheduleCase) {
 	t.Helper()
 	started := make(chan struct{})
 	release := make(chan struct{})
-	h, rootID, collector := newStoppedRootScheduleHarness(t, tc, started, release)
+	h := newHarness(t, harnessOptions{respond: stoppedRootScheduleResponder(tc, started, release)})
+	h.startInboxWake()
+	rootID, err := h.mgr.Send(t.Context(), h.projectID, "initialize", "fake-model", map[string]any{
+		controllerapi.SessionAttributeManagerID: "telegram-main",
+	})
+	require.NoError(t, err)
+	h.mgr.waitIdle(rootID)
+	require.NoError(t, h.mgr.sendToSession(t.Context(), rootID, "/stop"))
+	collector := collectEvents(h.mgr.bus.SubscribeManager("telegram-main"))
+	t.Cleanup(collector.stop)
 	oldEpisode := time.Now().UTC().Add(-time.Hour)
-	_, err := h.db.ExecContext(t.Context(),
+	_, err = h.db.ExecContext(t.Context(),
 		`UPDATE sessions SET episode_started_at = ? WHERE id = ?`, oldEpisode, rootID)
 	require.NoError(t, err)
 	deliveryID := runDueStoppedRootSchedule(t, h, rootID, collector, tc, started, release)
@@ -4469,29 +4133,6 @@ func runStoppedRootScheduleScenario(t *testing.T, tc stoppedRootScheduleCase) {
 	assertHarnessTrace(t, tc.trace, successfulTrace, rootID)
 }
 
-func newStoppedRootScheduleHarness(
-	t *testing.T,
-	tc stoppedRootScheduleCase,
-	started chan<- struct{},
-	release <-chan struct{},
-) (*subagentHarness, int64, *eventCollector) {
-	t.Helper()
-	h := newSubagentHarnessWith(t, stoppedRootScheduleResponder(tc, started, release))
-	t.Cleanup(h.shutdown)
-
-	h.startInboxWake()
-	rootID, err := h.mgr.Send(t.Context(), h.projectID, "initialize", "fake-model", map[string]any{
-		controllerapi.SessionAttributeManagerID: "telegram-main",
-	})
-	require.NoError(t, err)
-	h.mgr.waitIdle(rootID)
-	require.NoError(t, h.mgr.sendToSession(t.Context(), rootID, "/stop"))
-	collector := collectEvents(h.mgr.bus.SubscribeManager("telegram-main"))
-	t.Cleanup(collector.stop)
-
-	return h, rootID, collector
-}
-
 func scheduledTurnRequested(tc stoppedRootScheduleCase, messages []llmwire.Message) bool {
 	if tc.fresh {
 		return hasUserContaining(messages, tc.prompt)
@@ -4502,7 +4143,7 @@ func scheduledTurnRequested(tc stoppedRootScheduleCase, messages []llmwire.Messa
 
 func runDueStoppedRootSchedule(
 	t *testing.T,
-	h *subagentHarness,
+	h *harness,
 	rootID int64,
 	collector *eventCollector,
 	tc stoppedRootScheduleCase,
@@ -4511,12 +4152,12 @@ func runDueStoppedRootSchedule(
 ) string {
 	t.Helper()
 	due := time.Now().Add(-time.Minute).UTC()
-	entry, err := h.schedStore.AddSchedule(t.Context(), rootID, "", &due, tc.prompt, tc.fresh)
+	entry, err := h.schedules.AddSchedule(t.Context(), rootID, "", &due, tc.prompt, tc.fresh)
 	require.NoError(t, err)
 
 	observer := newScheduleRunningObserver(t, h.mgr.bus)
 	sender := &orderedScheduleSender{SessionSender: h.mgr, running: observer.running, done: observer.done}
-	executor := schedule.NewExecutor(h.schedStore, sender)
+	executor := schedule.NewExecutor(h.schedules, sender)
 	executor.Start(t.Context())
 	t.Cleanup(executor.Stop)
 	requireSignal(t, started)
@@ -4524,7 +4165,7 @@ func runDueStoppedRootSchedule(
 	close(release)
 
 	require.Eventually(t, func() bool {
-		entries, listErr := h.schedStore.ListSchedules(t.Context(), rootID)
+		entries, listErr := h.schedules.ListSchedules(t.Context(), rootID)
 		return listErr == nil && len(entries) == 0 && !h.mgr.HasActiveLoop(rootID) &&
 			lastAssistantTextDTO(h.parentMessages(rootID)) == tc.answer
 	}, 5*time.Second, 10*time.Millisecond)
@@ -4534,14 +4175,14 @@ func runDueStoppedRootSchedule(
 	return fmt.Sprintf("schedule:one-shot:%d", entry.ID())
 }
 
-func assertStoppedRootActive(t *testing.T, h *subagentHarness, rootID int64) {
+func assertStoppedRootActive(t *testing.T, h *harness, rootID int64) {
 	t.Helper()
-	rec, err := h.sessStore.GetSession(t.Context(), rootID)
+	rec, err := h.store.GetSession(t.Context(), rootID)
 	require.NoError(t, err)
 	assert.Equal(t, sessionstore.SessionStatusActive, rec.Status)
 }
 
-func assertStoppedRootScheduleResult(t *testing.T, h *subagentHarness, rootID int64, tc stoppedRootScheduleCase) {
+func assertStoppedRootScheduleResult(t *testing.T, h *harness, rootID int64, tc stoppedRootScheduleCase) {
 	t.Helper()
 	messages := h.parentMessages(rootID)
 	if tc.fresh {
@@ -4558,7 +4199,7 @@ func assertStoppedRootScheduleResult(t *testing.T, h *subagentHarness, rootID in
 
 func assertStoppedRootScheduleDuplicate(
 	t *testing.T,
-	h *subagentHarness,
+	h *harness,
 	rootID int64,
 	deliveryID string,
 	tc stoppedRootScheduleCase,
@@ -4571,7 +4212,7 @@ func assertStoppedRootScheduleDuplicate(
 	assert.False(t, applied, "an acknowledged retry must not create another turn")
 	require.Eventually(t, func() bool { return !h.mgr.HasActiveLoop(rootID) }, time.Second, 10*time.Millisecond)
 
-	rec, err := h.sessStore.GetSession(t.Context(), rootID)
+	rec, err := h.store.GetSession(t.Context(), rootID)
 	require.NoError(t, err)
 	assert.Equal(t, sessionstore.SessionStatusStopped, rec.Status)
 	assert.Equal(t, episodeStartedAt, sessionEpisodeStart(t, h, rootID))
@@ -4579,12 +4220,12 @@ func assertStoppedRootScheduleDuplicate(
 	_, err = enqueueCallResult(t.Context(), h.mgr.store, rootID, "missing-call", tool.IDSleep, "must stay stopped")
 	require.NoError(t, err)
 	assert.False(t, h.mgr.HasActiveLoop(rootID), "a late call result must not revive a stopped root")
-	record, err := h.sessStore.GetSession(t.Context(), rootID)
+	record, err := h.store.GetSession(t.Context(), rootID)
 	require.NoError(t, err)
 	assert.Equal(t, sessionstore.SessionStatusStopped, record.Status)
 }
 
-func sessionEpisodeStart(t *testing.T, h *subagentHarness, rootID int64) time.Time {
+func sessionEpisodeStart(t *testing.T, h *harness, rootID int64) time.Time {
 	t.Helper()
 
 	var startedAt time.Time
@@ -4609,14 +4250,14 @@ func deliverStoppedRootSchedule(
 	return enqueueScheduledInput(t.Context(), mgr.store, rootID, deliveryID, tc.prompt, false)
 }
 
-func createScheduleBoundarySubagent(t *testing.T, h *subagentHarness) int64 {
+func createScheduleBoundarySubagent(t *testing.T, h *harness) int64 {
 	t.Helper()
 
-	parent, err := h.sessStore.CreateSession(t.Context(), h.projectID, "fake-model", "", nil)
+	parent, err := h.store.CreateSession(t.Context(), h.projectID, "fake-model", "", nil)
 	require.NoError(t, err)
 	childID, err := func() (int64, error) {
 		var id int64
-		err := h.sessStore.WithTx(t.Context(), func(tx *sql.Tx) error {
+		err := h.store.WithTx(t.Context(), func(tx *sql.Tx) error {
 			var err error
 			id, err = sessionstore.CreateSubagentSessionTx(
 				t.Context(),
@@ -4635,7 +4276,7 @@ func createScheduleBoundarySubagent(t *testing.T, h *subagentHarness) int64 {
 		return id, err
 	}()
 	require.NoError(t, err)
-	require.NoError(t, h.sessStore.UpdateSessionStatus(
+	require.NoError(t, h.store.UpdateSessionStatus(
 		t.Context(), childID, sessionstore.SessionStatusCompleted,
 	))
 
@@ -4674,131 +4315,61 @@ type effortRequest struct {
 	effort string
 }
 
-// newEffortHarness is the daemon harness with real LLM clients pointed at a stub
-// endpoint, and two models: one with no effort selector, one defaulting to "high".
-func newEffortHarness(t *testing.T, baseURL string) *subagentHarness {
-	t.Helper()
-
-	ctx := context.Background()
-	dbPath := filepath.Join(t.TempDir(), "test.db")
-
-	db, err := migrate.OpenDB(ctx, dbPath)
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = db.Close() })
-	require.NoError(t, migrate.Run(ctx, db, dbPath))
-
-	store := sessionstore.NewStore(db)
-	sessStore := sessionstore.NewStore(db)
-	links := subagent.NewStore(db, sessStore)
-	schedStore := schedule.NewStore(db, sessStore)
-
-	workDir := t.TempDir()
-	cfg := &config.Config{WorkDir: workDir, Model: "plain-model", UnifiedConfig: &config.UnifiedConfig{
-		Providers: map[string]config.ProviderEntry{
-			"or": {Driver: "openrouter", APIKey: "key", BaseURL: baseURL},
-		},
-		Models: []config.ModelEntry{
-			{ID: "plain-model", Provider: "or", ContextWindow: 200_000, MaxTokens: 64_000},
-			{
-				ID: "thinker", Provider: "or", ContextWindow: 200_000, MaxTokens: 64_000,
-				EffortLevels:  []string{"low", "high"},
-				DefaultEffort: "high",
-				Reasoning:     &config.ReasoningSpec{Supported: true, Efforts: []string{"low", "high"}},
+func withEffortModels(baseURL string) func(*config.Config) {
+	return func(cfg *config.Config) {
+		cfg.Model = "plain-model"
+		cfg.UnifiedConfig = &config.UnifiedConfig{
+			Providers: map[string]config.ProviderEntry{
+				"or": {Driver: "openrouter", APIKey: "key", BaseURL: baseURL},
 			},
-		},
-	}}
-
-	factory := sessionbuild.BuildInput{Config: cfg, Store: sessStore, Resources: builtin.NewResources()}
-
-	mgr, _ := newScenarioDaemon(
-		context.Background(),
-		factory,
-		sessStore,
-		links,
-		budget.New(sessStore),
-		schedule.NewService(schedStore, sessStore),
-		func() string { return "plain-model" },
-		db,
-	)
-	mgr.models = newModels(cfg)
-
-	pid, err := store.GetOrCreateProject(ctx, workDir)
-	require.NoError(t, err)
-
-	return &subagentHarness{
-		t: t, mgr: mgr, sessStore: sessStore, links: links, schedStore: schedStore,
-		projectID: pid, ctx: ctx,
+			Models: []config.ModelEntry{
+				{ID: "plain-model", Provider: "or", ContextWindow: 200_000, MaxTokens: 64_000},
+				{
+					ID: "thinker", Provider: "or", ContextWindow: 200_000, MaxTokens: 64_000,
+					EffortLevels:  []string{"low", "high"},
+					DefaultEffort: "high",
+					Reasoning:     &config.ReasoningSpec{Supported: true, Efforts: []string{"low", "high"}},
+				},
+			},
+		}
 	}
 }
 
-// newModelAwareHarness is the subagent harness with an LLM client factory that
-// mirrors llm.NewClient: an id outside the catalog cannot build a client.
-func newModelAwareHarness(
-	t *testing.T,
-	known []string,
-	respond func(system string, msgs []llmwire.Message) *llmwire.Response,
-) *subagentHarness {
-	t.Helper()
+func configuredClient(configure func(*config.Config)) func(*config.Config) (llm.Client, error) {
+	cfg := &config.Config{}
+	configure(cfg)
 
-	return newModelAwareHarnessAtDB(t, filepath.Join(t.TempDir(), "test.db"), known, respond)
+	return func(view *config.Config) (llm.Client, error) {
+		return llm.NewClientWithModel(cfg, view.Model)
+	}
 }
 
-func newModelAwareHarnessAtDB(
-	t *testing.T,
-	dbPath string,
+func withKnownModels(known []string) func(*config.Config) {
+	return func(cfg *config.Config) {
+		cfg.Model = known[0]
+		cfg.UnifiedConfig = &config.UnifiedConfig{}
+		for _, model := range known {
+			cfg.UnifiedConfig.Models = append(
+				cfg.UnifiedConfig.Models,
+				config.ModelEntry{ID: model, ContextWindow: 200000},
+			)
+		}
+	}
+}
+
+func knownModelClient(
 	known []string,
 	respond func(string, []llmwire.Message) *llmwire.Response,
-) *subagentHarness {
-	t.Helper()
-
-	ctx := context.Background()
-
-	db, err := migrate.OpenDB(ctx, dbPath)
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = db.Close() })
-	require.NoError(t, migrate.Run(ctx, db, dbPath))
-
-	store := sessionstore.NewStore(db)
-	sessStore := sessionstore.NewStore(db)
-	links := subagent.NewStore(db, sessStore)
-	schedStore := schedule.NewStore(db, sessStore)
-
-	workDir := t.TempDir()
-	cfg := &config.Config{WorkDir: workDir, Model: known[0]}
-	cfg.UnifiedConfig = &config.UnifiedConfig{}
-	for _, model := range known {
-		cfg.UnifiedConfig.Models = append(cfg.UnifiedConfig.Models, config.ModelEntry{ID: model, ContextWindow: 200000})
-	}
-
-	factory := scriptedBuildInput(t, cfg, sessStore, nil, func(c *config.Config) (llm.Client, error) {
+) func(*config.Config) (llm.Client, error) {
+	return func(c *config.Config) (llm.Client, error) {
 		if !slices.Contains(known, c.Model) {
 			return nil, fmt.Errorf("model %q not found in config", c.Model)
 		}
-
 		return &scriptedLLM{respond: respond}, nil
-	})
-
-	mgr, _ := newScenarioDaemon(
-		context.Background(),
-		factory,
-		sessStore,
-		links,
-		budget.New(sessStore),
-		schedule.NewService(schedStore, sessStore),
-		func() string { return known[0] },
-		db,
-	)
-
-	pid, err := store.GetOrCreateProject(ctx, workDir)
-	require.NoError(t, err)
-
-	return &subagentHarness{
-		t: t, mgr: mgr, sessStore: sessStore, links: links, schedStore: schedStore,
-		projectID: pid, ctx: ctx,
 	}
 }
 
-func (h *subagentHarness) liveSession(sessionID int64) *session.Session {
+func (h *harness) liveSession(sessionID int64) *session.Session {
 	rs, ok := h.mgr.runners.load(sessionID)
 
 	if !ok {
@@ -4850,32 +4421,6 @@ func skillScenarioHasEnvelope(msgs []llmwire.Message) bool {
 	return false
 }
 
-// newSkillScenarioHarness is the standard daemon harness over a project
-// directory carrying one user-invocable project skill.
-func newSkillScenarioHarness(
-	t *testing.T,
-	respond func(system string, msgs []llmwire.Message) *llmwire.Response,
-) *subagentHarness {
-	t.Helper()
-
-	h := newSubagentHarnessOnDBWithProjectConfig(
-		t, filepath.Join(t.TempDir(), "test.db"), respond, nil, nil,
-	)
-
-	var workDir string
-	require.NoError(t, h.db.QueryRow(
-		`SELECT work_dir FROM projects WHERE id = ?`, h.projectID,
-	).Scan(&workDir))
-
-	skillsDir := filepath.Join(workDir, ".claude", "skills", "review")
-	require.NoError(t, os.MkdirAll(skillsDir, 0o755))
-	require.NoError(t, os.WriteFile(
-		filepath.Join(skillsDir, "SKILL.md"), []byte(skillScenarioSkill), 0o600,
-	))
-
-	return h
-}
-
 func traceClaims(t *testing.T, name string) []harnessTraceClaim {
 	t.Helper()
 
@@ -4888,7 +4433,7 @@ func traceClaims(t *testing.T, name string) []harnessTraceClaim {
 	return file.Claims
 }
 
-func inputIDOf(t *testing.T, h *subagentHarness, root int64) int64 {
+func inputIDOf(t *testing.T, h *harness, root int64) int64 {
 	t.Helper()
 
 	var inputID int64
@@ -4942,18 +4487,20 @@ func (r *skillRecorder) snapshot() []skillCall {
 	return append([]skillCall(nil), r.calls...)
 }
 
-// newSkillHarness is the subagent harness over a project WorkDir carrying
-// .claude/skills. Skills load when a session is created, so writing them before
-// the first Send is enough.
+type skillHarness struct {
+	*harness
+	recorder *skillRecorder
+}
+
 func newSkillHarness(
 	t *testing.T,
 	skills map[string]string,
 	respond func(string, []llmwire.Message) *llmwire.Response,
-) (*subagentHarness, *skillRecorder) {
+) *skillHarness {
 	t.Helper()
 
 	rec := &skillRecorder{}
-	h := newSubagentHarnessWith(t, rec.wrap(respond))
+	h := newHarness(t, harnessOptions{respond: rec.wrap(respond)})
 
 	for name, body := range skills {
 		dir := filepath.Join(h.workDir(), ".claude", "skills", name)
@@ -4961,10 +4508,10 @@ func newSkillHarness(
 		require.NoError(t, os.WriteFile(filepath.Join(dir, "SKILL.md"), []byte(body), 0o600))
 	}
 
-	return h, rec
+	return &skillHarness{harness: h, recorder: rec}
 }
 
-func (h *subagentHarness) workDir() string {
+func (h *harness) workDir() string {
 	h.t.Helper()
 
 	workDir, err := h.mgr.store.GetProjectWorkDir(h.ctx, h.projectID)
@@ -5020,63 +4567,25 @@ func warningNotices(events []controllerapi.SessionNotification, sessionID int64)
 	return out
 }
 
-func (h *subagentHarness) requireInboxDrained(sessionID int64) {
+func (h *harness) requireInboxDrained(sessionID int64) {
 	h.t.Helper()
 
-	_, err := h.sessStore.PeekPending(h.ctx, sessionID)
+	_, err := h.store.PeekPending(h.ctx, sessionID)
 	require.ErrorIs(h.t, err, sessionstore.ErrNoPendingInput, "the rejected input must leave the inbox")
 }
 
-// newSpawnEffortHarness is the daemon harness with real LLM clients pointed at a
-// stub endpoint, and two reasoning models whose effort vocabularies overlap only
-// on "low" — so an inherited level is distinguishable from a settled one.
-func newSpawnEffortHarness(t *testing.T, baseURL string) *subagentHarness {
-	t.Helper()
-
-	ctx := context.Background()
-	dbPath := filepath.Join(t.TempDir(), "test.db")
-
-	db, err := migrate.OpenDB(ctx, dbPath)
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = db.Close() })
-	require.NoError(t, migrate.Run(ctx, db, dbPath))
-
-	store := sessionstore.NewStore(db)
-	sessStore := sessionstore.NewStore(db)
-	links := subagent.NewStore(db, sessStore)
-	schedStore := schedule.NewStore(db, sessStore)
-
-	workDir := t.TempDir()
-	cfg := &config.Config{WorkDir: workDir, Model: "parent-model", UnifiedConfig: &config.UnifiedConfig{
-		Providers: map[string]config.ProviderEntry{
-			"or": {Driver: "openrouter", APIKey: "key", BaseURL: baseURL},
-		},
-		Models: []config.ModelEntry{
-			reasoningModelEntry("parent-model", []string{"low", "high"}, "high"),
-			reasoningModelEntry("child-model", []string{"low", "medium"}, "low"),
-		},
-	}}
-
-	factory := sessionbuild.BuildInput{Config: cfg, Store: sessStore}
-
-	mgr, _ := newScenarioDaemon(
-		context.Background(),
-		factory,
-		sessStore,
-		links,
-		budget.New(sessStore),
-		schedule.NewService(schedStore, sessStore),
-		func() string { return "parent-model" },
-		db,
-	)
-	mgr.models = newModels(cfg)
-
-	pid, err := store.GetOrCreateProject(ctx, workDir)
-	require.NoError(t, err)
-
-	return &subagentHarness{
-		t: t, mgr: mgr, sessStore: sessStore, links: links, schedStore: schedStore,
-		projectID: pid, ctx: ctx,
+func withSpawnEffortModels(baseURL string) func(*config.Config) {
+	return func(cfg *config.Config) {
+		cfg.Model = "parent-model"
+		cfg.UnifiedConfig = &config.UnifiedConfig{
+			Providers: map[string]config.ProviderEntry{
+				"or": {Driver: "openrouter", APIKey: "key", BaseURL: baseURL},
+			},
+			Models: []config.ModelEntry{
+				reasoningModelEntry("parent-model", []string{"low", "high"}, "high"),
+				reasoningModelEntry("child-model", []string{"low", "medium"}, "low"),
+			},
+		}
 	}
 }
 
@@ -5169,7 +4678,7 @@ func testProject(t *testing.T, s interface {
 // seedChildCandidateConfirm drives the child through the two-phase check at
 // the store level: a hidden candidate plus its host nudge, then a confirming
 // (ack) stop. It returns the candidate's transcript id.
-func seedChildCandidateConfirm(t *testing.T, h *subagentHarness, childID int64) int64 {
+func seedChildCandidateConfirm(t *testing.T, h *harness, childID int64) int64 {
 	t.Helper()
 	ctx := h.ctx
 
@@ -5178,7 +4687,7 @@ func seedChildCandidateConfirm(t *testing.T, h *subagentHarness, childID int64) 
 	}
 
 	iteration := 1
-	_, err := h.sessStore.Commit(
+	_, err := h.store.Commit(
 		ctx,
 		sessionstore.Commit{
 			SessionID: childID,
@@ -5194,13 +4703,13 @@ func seedChildCandidateConfirm(t *testing.T, h *subagentHarness, childID int64) 
 	)
 	require.NoError(t, err)
 
-	state, err := h.sessStore.LoadCompletionCheckState(ctx, childID)
+	state, err := h.store.LoadCompletionCheckState(ctx, childID)
 	require.NoError(t, err)
 	require.NotNil(t, state.CandidateID)
 	candidateID := *state.CandidateID
 
 	iteration = 2
-	_, err = h.sessStore.Commit(
+	_, err = h.store.Commit(
 		ctx,
 		sessionstore.Commit{
 			SessionID: childID,
@@ -5214,7 +4723,7 @@ func seedChildCandidateConfirm(t *testing.T, h *subagentHarness, childID int64) 
 	)
 	require.NoError(t, err)
 
-	require.NoError(t, h.sessStore.UpdateSessionStatus(ctx, childID, sessionstore.SessionStatusCompleted))
+	require.NoError(t, h.store.UpdateSessionStatus(ctx, childID, sessionstore.SessionStatusCompleted))
 
 	var pointer int64
 	require.NoError(t, h.db.QueryRowContext(ctx,
@@ -5251,7 +4760,9 @@ func assertProcessInputDoesNotRearmAfterStop(t *testing.T, stopChild bool) {
 	t.Helper()
 
 	ctx := context.Background()
-	mgr, _, projects := newTestManager(t)
+	factory := &mockFactory{}
+	testHarness := newHarness(t, harnessOptions{configure: withTestModels, clientFor: factory.client})
+	mgr, projects := testHarness.mgr, testHarness.store
 	projectID := testProject(t, projects, "/tmp/process-stop-rearm")
 	root, err := mgr.store.CreateSession(ctx, projectID, "fake-model", "", nil)
 	require.NoError(t, err)

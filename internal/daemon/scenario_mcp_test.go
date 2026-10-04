@@ -43,7 +43,7 @@ func TestScenario_NextMCPStackReusesProcessAndRefreshesTools(t *testing.T) {
 			return mcpToolCall("add-1", tool.IDMCPAdd, fake.addParams("fake", "project"))
 		}
 	}
-	h, _ := newMCPHarness(t, respond)
+	h := newHarness(t, harnessOptions{respond: respond})
 	defer h.shutdown()
 
 	h.startInboxWake()
@@ -140,7 +140,7 @@ func TestScenario_MCPDisableDoesNotBreakAnInFlightStack(t *testing.T) {
 		}
 	}
 
-	h, _ := newMCPHarness(t, respond)
+	h := newHarness(t, harnessOptions{respond: respond})
 	defer h.shutdown()
 
 	h.startInboxWake()
@@ -229,7 +229,7 @@ func TestScenario_MCPDisableRemovesTheToolFromTheNextRun(t *testing.T) {
 		}
 	}
 
-	h, _ := newMCPHarness(t, respond)
+	h := newHarness(t, harnessOptions{respond: respond})
 	defer h.shutdown()
 
 	h.startInboxWake()
@@ -323,7 +323,7 @@ func TestScenario_MCPAddReachesTheNextRunOnly(t *testing.T) {
 		return mcpToolCall("add-1", tool.IDMCPAdd, fake.addParams("fake", "project"))
 	}
 
-	h, _ := newMCPHarness(t, respond)
+	h := newHarness(t, harnessOptions{respond: respond})
 	defer h.shutdown()
 
 	h.startInboxWake()
@@ -381,7 +381,7 @@ func TestScenario_ProjectMCPServerOverridesTheGlobalOfTheSameName(t *testing.T) 
 		return mcpToolCall("add-global", tool.IDMCPAdd, global.addParams("fake", "global"))
 	}
 
-	h, _ := newMCPHarness(t, respond)
+	h := newHarness(t, harnessOptions{respond: respond})
 	defer h.shutdown()
 
 	h.startInboxWake()

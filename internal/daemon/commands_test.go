@@ -18,7 +18,13 @@ import (
 func TestManagerBoundControllerRejectsEveryForeignSessionOperation(t *testing.T) {
 	t.Parallel()
 
-	mgr, _, store := newTestManager(t)
+	testFactory := &mockFactory{}
+
+	testHarness := newHarness(t, harnessOptions{configure: withTestModels, clientFor: testFactory.client})
+
+	mgr := testHarness.mgr
+
+	store := testHarness.store
 	ctx := context.Background()
 	projectID := testProject(t, store, "/tmp/controller-owner-operations")
 	alphaRecord, err := mgr.store.CreateSession(ctx, projectID, "model", "", map[string]any{
@@ -76,7 +82,9 @@ func TestManagerBoundControllerRejectsEveryForeignSessionOperation(t *testing.T)
 
 func TestCreateSession_PersistsOnlyTheBoundManagerOwner(t *testing.T) {
 	ctx := context.Background()
-	mgr, _, _ := newTestManager(t)
+	testFactory := &mockFactory{}
+	testHarness := newHarness(t, harnessOptions{configure: withTestModels, clientFor: testFactory.client})
+	mgr := testHarness.mgr
 	ctrl := newTestController(mgr, &config.Config{}, nil, nil).ForManager("alpha")
 	workDir := t.TempDir()
 
@@ -106,7 +114,10 @@ func TestCreateSession_PersistsOnlyTheBoundManagerOwner(t *testing.T) {
 }
 
 func TestManager_Send(t *testing.T) {
-	mgr, factory, s := newTestManager(t)
+	factory := &mockFactory{}
+	testHarness := newHarness(t, harnessOptions{configure: withTestModels, clientFor: factory.client})
+	mgr := testHarness.mgr
+	s := testHarness.store
 	ch := mgr.bus.SubscribeAll()
 
 	// Use completeAfter so Kill (which no longer cancels context) lets session finish naturally
@@ -131,7 +142,10 @@ func TestManager_Send(t *testing.T) {
 }
 
 func TestManager_SendToSession_PersistsWhileRunning(t *testing.T) {
-	mgr, factory, s := newTestManager(t)
+	factory := &mockFactory{}
+	testHarness := newHarness(t, harnessOptions{configure: withTestModels, clientFor: factory.client})
+	mgr := testHarness.mgr
+	s := testHarness.store
 
 	// Subscribe to all notifications via pubsub
 	ch := mgr.bus.SubscribeAll()
@@ -170,7 +184,10 @@ func TestManager_SendToSession_PersistsWhileRunning(t *testing.T) {
 }
 
 func TestManager_SendDuplicateWorkdir(t *testing.T) {
-	mgr, _, s := newTestManager(t)
+	testFactory := &mockFactory{}
+	testHarness := newHarness(t, harnessOptions{configure: withTestModels, clientFor: testFactory.client})
+	mgr := testHarness.mgr
+	s := testHarness.store
 
 	ctx := context.Background()
 	pid := testProject(t, s, t.TempDir())
@@ -186,7 +203,10 @@ func TestManager_SendDuplicateWorkdir(t *testing.T) {
 }
 
 func TestManager_InputReceivedPubSub(t *testing.T) {
-	mgr, _, s := newTestManager(t)
+	testFactory := &mockFactory{}
+	testHarness := newHarness(t, harnessOptions{configure: withTestModels, clientFor: testFactory.client})
+	mgr := testHarness.mgr
+	s := testHarness.store
 
 	ctx := context.Background()
 	pid := testProject(t, s, t.TempDir())
@@ -215,7 +235,10 @@ func TestManager_InputReceivedPubSub(t *testing.T) {
 }
 
 func TestManager_SendCreatesNewSessionAfterCompletion(t *testing.T) {
-	mgr, factory, s := newTestManager(t)
+	factory := &mockFactory{}
+	testHarness := newHarness(t, harnessOptions{configure: withTestModels, clientFor: factory.client})
+	mgr := testHarness.mgr
+	s := testHarness.store
 	ch := mgr.bus.SubscribeAll()
 
 	// First session completes quickly
@@ -240,7 +263,10 @@ func TestManager_SendCreatesNewSessionAfterCompletion(t *testing.T) {
 }
 
 func TestManager_SendToSession_AlreadyRunningUsesDurableInbox(t *testing.T) {
-	mgr, _, s := newTestManager(t)
+	testFactory := &mockFactory{}
+	testHarness := newHarness(t, harnessOptions{configure: withTestModels, clientFor: testFactory.client})
+	mgr := testHarness.mgr
+	s := testHarness.store
 	ch := mgr.bus.SubscribeAll()
 
 	ctx := context.Background()
@@ -266,7 +292,10 @@ func TestManager_SendToSession_AlreadyRunningUsesDurableInbox(t *testing.T) {
 }
 
 func TestManager_SecondSendCreatesNewLoop(t *testing.T) {
-	mgr, factory, s := newTestManager(t)
+	factory := &mockFactory{}
+	testHarness := newHarness(t, harnessOptions{configure: withTestModels, clientFor: factory.client})
+	mgr := testHarness.mgr
+	s := testHarness.store
 	ch := mgr.bus.SubscribeAll()
 
 	factory.nextSess = &mockSession{completeAfter: 50 * time.Millisecond}
@@ -301,7 +330,10 @@ func TestManager_SecondSendCreatesNewLoop(t *testing.T) {
 }
 
 func TestManager_SendAlwaysCreatesNew(t *testing.T) {
-	mgr, factory, s := newTestManager(t)
+	factory := &mockFactory{}
+	testHarness := newHarness(t, harnessOptions{configure: withTestModels, clientFor: factory.client})
+	mgr := testHarness.mgr
+	s := testHarness.store
 	ch := mgr.bus.SubscribeAll()
 
 	// First session completes quickly so Kill can work
@@ -327,7 +359,10 @@ func TestManager_SendAlwaysCreatesNew(t *testing.T) {
 }
 
 func TestManager_SetModel_IdleSession(t *testing.T) {
-	mgr, factory, s := newTestManager(t)
+	factory := &mockFactory{}
+	testHarness := newHarness(t, harnessOptions{configure: withTestModels, clientFor: factory.client})
+	mgr := testHarness.mgr
+	s := testHarness.store
 	ch := mgr.bus.SubscribeAll()
 
 	// Session completes quickly → loop exits → session is idle
@@ -353,7 +388,10 @@ func TestManager_SetModel_IdleSession(t *testing.T) {
 }
 
 func TestManager_SendToSession_RejectsKilledSession(t *testing.T) {
-	mgr, factory, s := newTestManager(t)
+	factory := &mockFactory{}
+	testHarness := newHarness(t, harnessOptions{configure: withTestModels, clientFor: factory.client})
+	mgr := testHarness.mgr
+	s := testHarness.store
 	ch := mgr.bus.SubscribeAll()
 
 	factory.nextSess = &mockSession{completeAfter: 50 * time.Millisecond}
@@ -380,7 +418,10 @@ func TestManager_SendToSession_RejectsKilledSession(t *testing.T) {
 }
 
 func TestManager_SetAttributesCannotRemoveOrRebindManagerOwner(t *testing.T) {
-	mgr, _, store := newTestManager(t)
+	testFactory := &mockFactory{}
+	testHarness := newHarness(t, harnessOptions{configure: withTestModels, clientFor: testFactory.client})
+	mgr := testHarness.mgr
+	store := testHarness.store
 	ctx := context.Background()
 	pid := testProject(t, store, t.TempDir())
 	rec, err := mgr.store.CreateSession(ctx, pid, "test-model", "", map[string]any{
@@ -404,7 +445,10 @@ func TestManager_SetAttributesCannotRemoveOrRebindManagerOwner(t *testing.T) {
 }
 
 func TestManager_ConcurrentManagerClaimsHaveExactlyOneWinner(t *testing.T) {
-	mgr, _, store := newTestManager(t)
+	testFactory := &mockFactory{}
+	testHarness := newHarness(t, harnessOptions{configure: withTestModels, clientFor: testFactory.client})
+	mgr := testHarness.mgr
+	store := testHarness.store
 	ctx := context.Background()
 	pid := testProject(t, store, t.TempDir())
 	rec, err := mgr.store.CreateSession(ctx, pid, "test-model", "", nil)
@@ -440,7 +484,13 @@ func TestManager_ConcurrentManagerClaimsHaveExactlyOneWinner(t *testing.T) {
 // must start on its model's default — anything else is a level nobody chose.
 func TestNewSessionSettlesTheEffortOnItsModel(t *testing.T) {
 	provider := newSpawnEffortProvider(t)
-	h := newSpawnEffortHarness(t, provider.url)
+	h := newHarness(
+		t,
+		harnessOptions{
+			configure: withSpawnEffortModels(provider.url),
+			clientFor: configuredClient(withSpawnEffortModels(provider.url)),
+		},
+	)
 
 	defer h.shutdown()
 
@@ -454,7 +504,7 @@ func TestNewSessionSettlesTheEffortOnItsModel(t *testing.T) {
 	})
 	h.mgr.waitIdle(id)
 
-	rec, err := h.sessStore.GetSession(h.ctx, id)
+	rec, err := h.store.GetSession(h.ctx, id)
 	require.NoError(t, err)
 	assert.Equal(t, "high", rec.ReasoningLevel,
 		"the record is all a later run reads, so it must carry the model's default")
@@ -464,7 +514,10 @@ func TestNewSessionSettlesTheEffortOnItsModel(t *testing.T) {
 
 func TestSendSessionMessageResolvedFollowsOwnedReplacement(t *testing.T) {
 	ctx := context.Background()
-	mgr, _, store := newTestManager(t)
+	testFactory := &mockFactory{}
+	testHarness := newHarness(t, harnessOptions{configure: withTestModels, clientFor: testFactory.client})
+	mgr := testHarness.mgr
+	store := testHarness.store
 	projectID, err := store.GetOrCreateProject(ctx, t.TempDir())
 	require.NoError(t, err)
 	old, err := mgr.store.CreateSession(ctx, projectID, "fake-model", "", map[string]any{
@@ -492,7 +545,13 @@ func TestSetModelUnknownModelNeverReachesTheRecord(t *testing.T) {
 		return &llmwire.Response{Text: "done"}
 	}
 
-	h := newModelAwareHarness(t, []string{"fake-model"}, respond)
+	h := newHarness(
+		t,
+		harnessOptions{
+			configure: withKnownModels([]string{"fake-model"}),
+			clientFor: knownModelClient([]string{"fake-model"}, respond),
+		},
+	)
 	defer h.shutdown()
 
 	events := collectEvents(h.mgr.bus.SubscribeAll())
@@ -512,7 +571,7 @@ func TestSetModelUnknownModelNeverReachesTheRecord(t *testing.T) {
 	require.Error(t, err, "an unknown model must be rejected, not persisted")
 	assert.Contains(t, err.Error(), "ghost-model")
 
-	rec, err := h.sessStore.GetSession(h.ctx, id)
+	rec, err := h.store.GetSession(h.ctx, id)
 	require.NoError(t, err)
 	assert.Equal(t, "fake-model", rec.Model, "the record keeps the model the session can actually run")
 
@@ -539,7 +598,13 @@ func TestSetModelLiveRefusalDoesNotPersist(t *testing.T) {
 		return &llmwire.Response{Text: "done"}
 	}
 
-	h := newModelAwareHarness(t, []string{"fake-model", "other-model"}, respond)
+	h := newHarness(
+		t,
+		harnessOptions{
+			configure: withKnownModels([]string{"fake-model", "other-model"}),
+			clientFor: knownModelClient([]string{"fake-model", "other-model"}, respond),
+		},
+	)
 
 	defer h.shutdown()
 	defer close(release)
@@ -549,14 +614,14 @@ func TestSetModelLiveRefusalDoesNotPersist(t *testing.T) {
 	require.NoError(t, err)
 	h.waitUntil("live session attached", func() bool { return h.liveSession(id) != nil })
 
-	before, err := h.sessStore.GetSession(h.ctx, id)
+	before, err := h.store.GetSession(h.ctx, id)
 	require.NoError(t, err)
 
 	h.mgr.build.Config.UnifiedConfig.Models[1].Provider = "missing"
 	err = h.mgr.SetModel(h.ctx, id, "other-model", "high")
 	require.Error(t, err, "a refused switch must surface to the caller")
 
-	rec, err := h.sessStore.GetSession(h.ctx, id)
+	rec, err := h.store.GetSession(h.ctx, id)
 	require.NoError(t, err)
 	assert.Equal(t, "fake-model", rec.Model)
 	assert.Equal(t, before.ReasoningLevel, rec.ReasoningLevel)

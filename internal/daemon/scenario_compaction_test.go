@@ -45,7 +45,7 @@ func TestScenario_AutomaticCompactionRunsInsideTheDaemon(t *testing.T) {
 		}
 	}
 
-	h := newSubagentHarnessWith(t, respond)
+	h := newHarness(t, harnessOptions{respond: respond})
 	defer h.shutdown()
 
 	events := collectEvents(h.mgr.bus.SubscribeAll())
@@ -142,7 +142,7 @@ func TestScenario_AutoCompactionWhileABackgroundChildIsInFlight(t *testing.T) {
 		}
 	}
 
-	h := newSubagentHarnessWith(t, respond)
+	h := newHarness(t, harnessOptions{respond: respond})
 	defer h.shutdown()
 
 	events := collectEvents(h.mgr.bus.SubscribeAll())
@@ -209,7 +209,7 @@ func TestScenario_AutoCompactionWhileABackgroundChildIsInFlight(t *testing.T) {
 func TestScenario_DeferredCompactAnnouncesItselfOncePerEpisode(t *testing.T) {
 	release := make(chan struct{})
 
-	h := newSubagentHarnessWith(t, blockingCompactRespond(release))
+	h := newHarness(t, harnessOptions{respond: blockingCompactRespond(release)})
 	collector := collectEvents(h.mgr.bus.SubscribeAll())
 
 	closed := false
@@ -271,7 +271,7 @@ func TestScenario_DeferredCompactAnnouncesItselfOncePerEpisode(t *testing.T) {
 // Compaction's progress messages are only useful if they leave the session:
 // pin the ordered trace a controller actually receives.
 func TestScenario_CompactPublishesItsOrderedNoticeTrace(t *testing.T) {
-	h := newSubagentHarnessWith(t, compactOnlyRespond)
+	h := newHarness(t, harnessOptions{respond: compactOnlyRespond})
 	collector := collectEvents(h.mgr.bus.SubscribeAll())
 
 	defer func() {
@@ -313,7 +313,7 @@ func TestScenario_CompactPublishesItsOrderedNoticeTrace(t *testing.T) {
 // A subagent compacting its own context is housekeeping the human never asked
 // for: the publish gate must keep those notices inside the tree.
 func TestScenario_SubagentCompactionNoticesStayInsideTheTree(t *testing.T) {
-	h := newSubagentHarness(t)
+	h := newHarness(t, harnessOptions{})
 	collector := collectEvents(h.mgr.bus.SubscribeAll())
 
 	defer func() {
@@ -331,7 +331,7 @@ func TestScenario_SubagentCompactionNoticesStayInsideTheTree(t *testing.T) {
 
 	require.NoError(t, h.mgr.SendToChild(h.ctx, link.ChildID, "/compact"))
 	h.waitUntil("child compacted", func() bool {
-		stored, loadErr := h.sessStore.LoadActiveMessages(h.ctx, link.ChildID)
+		stored, loadErr := h.store.LoadActiveMessages(h.ctx, link.ChildID)
 
 		return loadErr == nil && hasSummaryRow(toDTO(stored))
 	})
@@ -349,7 +349,7 @@ func TestScenario_SubagentCompactionNoticesStayInsideTheTree(t *testing.T) {
 func TestScenario_CompactWaitsForABlockingChildThenRuns(t *testing.T) {
 	release := make(chan struct{})
 
-	h := newSubagentHarnessWith(t, blockingCompactRespond(release))
+	h := newHarness(t, harnessOptions{respond: blockingCompactRespond(release)})
 
 	closed := false
 	defer func() {
@@ -411,7 +411,7 @@ func TestScenario_DeferredCompactSurvivesADaemonRestart(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "restart.db")
 	release := make(chan struct{})
 
-	first := newSubagentHarnessOnDB(t, dbPath, blockingCompactRespond(release), nil)
+	first := newHarness(t, harnessOptions{dbPath: dbPath, respond: blockingCompactRespond(release)})
 
 	first.startInboxWake()
 	parentID, err := first.mgr.Send(first.ctx, first.projectID, "do work then spawn", "fake-model", nil)
@@ -432,7 +432,7 @@ func TestScenario_DeferredCompactSurvivesADaemonRestart(t *testing.T) {
 
 	// A second daemon on the same durable state: its sweep resumes the child,
 	// whose completion revives the parent, which then finds the queued /compact.
-	second := newSubagentHarnessOnDB(t, dbPath, blockingCompactRespond(nil), nil)
+	second := newHarness(t, harnessOptions{dbPath: dbPath, respond: blockingCompactRespond(nil)})
 	defer second.shutdown()
 
 	require.NoError(t, second.mgr.Start(second.ctx))
@@ -485,7 +485,7 @@ func TestHarnessScenario_CompactMidActivationStillAnswersTheInterruptedWork(t *t
 		}}}
 	}
 
-	h := newSubagentHarnessWith(t, respond)
+	h := newHarness(t, harnessOptions{respond: respond})
 	collector := collectEvents(h.mgr.bus.SubscribeAll())
 
 	released := false
@@ -557,7 +557,7 @@ func TestHarnessScenario_CompactSuccessChain(t *testing.T) {
 		return &llmwire.Response{Text: "Compacted summary."}
 	}
 
-	h := newSubagentHarnessWith(t, respond)
+	h := newHarness(t, harnessOptions{respond: respond})
 	defer h.shutdown()
 
 	collector := collectEvents(h.mgr.bus.SubscribeAll())

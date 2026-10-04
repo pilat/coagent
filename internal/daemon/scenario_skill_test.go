@@ -45,7 +45,7 @@ func TestHarnessScenario_SkillSeededTaskStartsWithRenderedEnvelope(t *testing.T)
 		}}}
 	}
 
-	h := newSubagentHarnessWith(t, respond)
+	h := newHarness(t, harnessOptions{respond: respond})
 	defer h.shutdown()
 	workDir, err := h.mgr.store.GetProjectWorkDir(h.ctx, h.projectID)
 	require.NoError(t, err)
@@ -105,7 +105,10 @@ func TestHarnessScenario_SkillActivationReceiptOrdersTheOutputChain(t *testing.T
 		}
 	}
 
-	h := newSkillScenarioHarness(t, respond)
+	h := newHarness(t, harnessOptions{respond: respond})
+	skillsDir := filepath.Join(h.workDir(), ".claude", "skills", "review")
+	require.NoError(t, os.MkdirAll(skillsDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(skillsDir, "SKILL.md"), []byte(skillScenarioSkill), 0o600))
 	defer h.shutdown()
 	defer closeOnce(modelFollowUpQueued)
 
@@ -211,9 +214,10 @@ func TestHarnessScenario_SkillActivationReceiptOrdersTheOutputChain(t *testing.T
 func TestHarnessScenario_SkillSurvivesTwoCompactionsExactlyOnce(t *testing.T) {
 	const skillName = "playbook"
 
-	h, rec := newSkillHarness(t, map[string]string{
+	wrapped := newSkillHarness(t, map[string]string{
 		skillName: skillDoc(skillName, "The playbook", "Follow these steps for $ARGUMENTS."),
 	}, skillCompactRespond)
+	h, rec := wrapped.harness, wrapped.recorder
 	collector := collectEvents(h.mgr.bus.SubscribeAll())
 
 	defer func() {
@@ -287,9 +291,10 @@ func TestHarnessScenario_SkillSurvivesTwoCompactionsExactlyOnce(t *testing.T) {
 func TestHarnessScenario_SkillCommandExpandsBeforeTheModelCall(t *testing.T) {
 	const skillName = "release-notes"
 
-	h, rec := newSkillHarness(t, map[string]string{
+	wrapped := newSkillHarness(t, map[string]string{
 		skillName: skillDoc(skillName, "Draft release notes", "Draft notes for $ARGUMENTS."),
 	}, plainRespond)
+	h, rec := wrapped.harness, wrapped.recorder
 	collector := collectEvents(h.mgr.bus.SubscribeAll())
 
 	defer func() {
@@ -346,9 +351,10 @@ func TestHarnessScenario_SkillInvocationPolicySeparatesUserAndModelPaths(t *test
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			h, rec := newSkillHarness(t, map[string]string{
+			wrapped := newSkillHarness(t, map[string]string{
 				tc.skill: skillDoc(tc.skill, "policy probe", "Body of "+tc.skill+".", tc.frontmatter),
 			}, plainRespond)
+			h, rec := wrapped.harness, wrapped.recorder
 			collector := collectEvents(h.mgr.bus.SubscribeAll())
 
 			defer func() {
@@ -395,7 +401,8 @@ func TestHarnessScenario_SkillInvocationPolicySeparatesUserAndModelPaths(t *test
 // durable row is consumed, the human is told once, and the model is never asked
 // to answer a command that never became a message.
 func TestHarnessScenario_UnknownSkillCommandIsRejectedOnceAndDrains(t *testing.T) {
-	h, rec := newSkillHarness(t, nil, plainRespond)
+	wrapped := newSkillHarness(t, nil, plainRespond)
+	h, rec := wrapped.harness, wrapped.recorder
 	collector := collectEvents(h.mgr.bus.SubscribeAll())
 
 	defer func() {
@@ -443,7 +450,8 @@ func TestHarnessScenario_UnknownSkillOnAFreshSessionCostsNoModelTurn(t *testing.
 		{name: "project with a CLAUDE.md header", claudeMD: "# House rules\nBe careful.", wantStart: 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			h, rec := newSkillHarness(t, nil, plainRespond)
+			wrapped := newSkillHarness(t, nil, plainRespond)
+			h, rec := wrapped.harness, wrapped.recorder
 			collector := collectEvents(h.mgr.bus.SubscribeAll())
 
 			defer func() {

@@ -12,7 +12,10 @@ import (
 )
 
 func TestManager_Shutdown(t *testing.T) {
-	mgr, _, s := newTestManager(t)
+	testFactory := &mockFactory{}
+	testHarness := newHarness(t, harnessOptions{configure: withTestModels, clientFor: testFactory.client})
+	mgr := testHarness.mgr
+	s := testHarness.store
 
 	ctx := context.Background()
 	pidA := testProject(t, s, t.TempDir())
@@ -30,7 +33,7 @@ func TestManager_Shutdown(t *testing.T) {
 
 // Recovery is background work, but it must exit before shutdown lets its stores close.
 func TestShutdownCancelsBackgroundRecovery(t *testing.T) {
-	h := newSubagentHarness(t)
+	h := newHarness(t, harnessOptions{})
 	links := &blockingRecoveryLinks{
 		Store:       h.mgr.links,
 		entered:     make(chan struct{}),
@@ -75,7 +78,9 @@ func TestShutdownCancelsBackgroundRecovery(t *testing.T) {
 // Runner cancellation must not wait for an unrelated background owner to join:
 // the composition root may close persistence as soon as Shutdown returns.
 func TestShutdownCancelsRunnersBeforeWaitingForProgress(t *testing.T) {
-	mgr, _, _ := newTestManager(t)
+	testFactory := &mockFactory{}
+	testHarness := newHarness(t, harnessOptions{configure: withTestModels, clientFor: testFactory.client})
+	mgr := testHarness.mgr
 
 	runnerCtx, cancel := context.WithCancel(context.Background())
 	activeRunner := newRunner(
@@ -117,7 +122,9 @@ func TestShutdownCancelsRunnersBeforeWaitingForProgress(t *testing.T) {
 }
 
 func TestShutdownWaitsForStartupProcessRecovery(t *testing.T) {
-	mgr, _, _ := newTestManager(t)
+	testFactory := &mockFactory{}
+	testHarness := newHarness(t, harnessOptions{configure: withTestModels, clientFor: testFactory.client})
+	mgr := testHarness.mgr
 	processes := &blockingStartupProcesses{
 		Service: mgr.processes,
 		entered: make(chan struct{}),

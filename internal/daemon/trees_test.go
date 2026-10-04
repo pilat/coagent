@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"os/exec"
-	"path/filepath"
 	"testing"
 	"time"
 
@@ -14,8 +13,6 @@ import (
 	"github.com/pilat/coagent/internal/backgroundprocess"
 	"github.com/pilat/coagent/internal/config"
 	"github.com/pilat/coagent/internal/controllerapi"
-	"github.com/pilat/coagent/internal/llm"
-	"github.com/pilat/coagent/internal/migrate"
 	"github.com/pilat/coagent/internal/schedule"
 	"github.com/pilat/coagent/internal/sessionevent"
 	"github.com/pilat/coagent/internal/sessionstore"
@@ -23,7 +20,10 @@ import (
 )
 
 func TestManager_GracefulKill(t *testing.T) {
-	mgr, factory, s := newTestManager(t)
+	factory := &mockFactory{}
+	testHarness := newHarness(t, harnessOptions{configure: withTestModels, clientFor: factory.client})
+	mgr := testHarness.mgr
+	s := testHarness.store
 	ch := mgr.bus.SubscribeAll()
 
 	// Session completes after 200ms — Kill sets killed flag, session finishes naturally
@@ -46,7 +46,10 @@ func TestManager_GracefulKill(t *testing.T) {
 }
 
 func TestManager_Kill_GracefulRunningSession(t *testing.T) {
-	mgr, factory, s := newTestManager(t)
+	factory := &mockFactory{}
+	testHarness := newHarness(t, harnessOptions{configure: withTestModels, clientFor: factory.client})
+	mgr := testHarness.mgr
+	s := testHarness.store
 	ch := mgr.bus.SubscribeAll()
 
 	// Session that blocks until context cancelled (Kill calls stop → cancel)
@@ -75,7 +78,10 @@ func TestManager_Kill_GracefulRunningSession(t *testing.T) {
 }
 
 func TestManager_Kill_NonRunningSession(t *testing.T) {
-	mgr, factory, s := newTestManager(t)
+	factory := &mockFactory{}
+	testHarness := newHarness(t, harnessOptions{configure: withTestModels, clientFor: factory.client})
+	mgr := testHarness.mgr
+	s := testHarness.store
 	ch := mgr.bus.SubscribeAll()
 
 	factory.nextSess = &mockSession{completeAfter: 50 * time.Millisecond}
@@ -100,7 +106,11 @@ func TestManager_Kill_NonRunningSession(t *testing.T) {
 // and cron rows for the killed session are deleted, and other sessions' rows
 // survive.
 func TestManager_Kill_RemovesSchedules(t *testing.T) {
-	mgr, factory, s, schedStore := newTestManagerWithSchedule(t)
+	factory := &mockFactory{}
+	testHarness := newHarness(t, harnessOptions{configure: withTestModels, clientFor: factory.client})
+	mgr := testHarness.mgr
+	s := testHarness.store
+	schedStore := testHarness.schedules
 	ch := mgr.bus.SubscribeAll()
 
 	factory.nextSess = &mockSession{completeAfter: 50 * time.Millisecond}
@@ -139,7 +149,11 @@ func TestManager_Kill_RemovesSchedules(t *testing.T) {
 }
 
 func TestManager_StopCancelsPendingSleepButPreservesScheduledWork(t *testing.T) {
-	mgr, factory, projects, schedStore := newTestManagerWithSchedule(t)
+	factory := &mockFactory{}
+	testHarness := newHarness(t, harnessOptions{configure: withTestModels, clientFor: factory.client})
+	mgr := testHarness.mgr
+	projects := testHarness.store
+	schedStore := testHarness.schedules
 	events := mgr.bus.SubscribeAll()
 
 	factory.nextSess = &mockSession{completeAfter: 50 * time.Millisecond}
@@ -174,7 +188,10 @@ func TestManager_StopCancelsPendingSleepButPreservesScheduledWork(t *testing.T) 
 }
 
 func TestManager_Clear(t *testing.T) {
-	mgr, factory, s := newTestManager(t)
+	factory := &mockFactory{}
+	testHarness := newHarness(t, harnessOptions{configure: withTestModels, clientFor: factory.client})
+	mgr := testHarness.mgr
+	s := testHarness.store
 	ch := mgr.bus.SubscribeAll()
 
 	// Session completes quickly → loop exits → session is idle
@@ -235,7 +252,10 @@ func TestManager_Clear(t *testing.T) {
 }
 
 func TestManager_ClearRejectsAConcurrentLateOwnerClaim(t *testing.T) {
-	mgr, _, store := newTestManager(t)
+	testFactory := &mockFactory{}
+	testHarness := newHarness(t, harnessOptions{configure: withTestModels, clientFor: testFactory.client})
+	mgr := testHarness.mgr
+	store := testHarness.store
 	ctx := context.Background()
 	pid := testProject(t, store, t.TempDir())
 	rec, err := mgr.store.CreateSession(ctx, pid, "test-model", "", nil)
@@ -284,7 +304,10 @@ func TestManager_ClearRejectsAConcurrentLateOwnerClaim(t *testing.T) {
 }
 
 func TestManager_ClearWhileRunning(t *testing.T) {
-	mgr, factory, s := newTestManager(t)
+	factory := &mockFactory{}
+	testHarness := newHarness(t, harnessOptions{configure: withTestModels, clientFor: factory.client})
+	mgr := testHarness.mgr
+	s := testHarness.store
 	ch := mgr.bus.SubscribeAll()
 
 	// Session that blocks until context cancelled
@@ -338,13 +361,9 @@ func TestStopOnStoreFailureDoesNotPublishIdle(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
-	db, err := migrate.OpenDB(ctx, filepath.Join(t.TempDir(), "stopfail.db"))
-	require.NoError(t, err)
-	require.NoError(t, migrate.Run(ctx, db, filepath.Join(t.TempDir(), "unused.db")))
-	t.Cleanup(func() { _ = db.Close() })
-
-	sessions := sessionstore.NewStore(db)
-	store := sessionstore.NewStore(db)
+	h := newHarness(t, harnessOptions{respond: trivialRespond})
+	sessions := h.store
+	store := h.store
 	projectID := testProject(t, store, "/tmp/stop-failure")
 	record, err := sessions.CreateSession(ctx, projectID, "model", "", map[string]any{
 		controllerapi.SessionAttributeManagerID: "manager-stop",
@@ -358,22 +377,7 @@ func TestStopOnStoreFailureDoesNotPublishIdle(t *testing.T) {
 	failing.pending.Store(true)
 	// Tree acquisition and the stopped check precede the ownership projection.
 	failing.skip = 2
-	mgr, _ := newScenarioDaemon(
-		context.Background(),
-		scriptedBuildInput(
-			t,
-			&config.Config{Model: "fake-model"},
-			sessions,
-			nil,
-			func(*config.Config) (llm.Client, error) { return &scriptedLLM{respond: trivialRespond}, nil },
-		),
-		sessions,
-		subagent.NewStore(db, sessions),
-		nil,
-		nil,
-		nil,
-		db,
-	)
+	mgr := h.mgr
 	mgr.store = failing
 	controllers := newTestController(mgr, &config.Config{}, nil, nil)
 	notifications := controllers.ForManager("manager-stop").Subscribe()
@@ -390,7 +394,10 @@ func TestStopOnStoreFailureDoesNotPublishIdle(t *testing.T) {
 
 func TestStopParksWholeTreeAndExplicitFollowUpResumesOnlyChild(t *testing.T) {
 	ctx := context.Background()
-	mgr, _, projects := newTestManager(t)
+	testFactory := &mockFactory{}
+	testHarness := newHarness(t, harnessOptions{configure: withTestModels, clientFor: testFactory.client})
+	mgr := testHarness.mgr
+	projects := testHarness.store
 	projectID := testProject(t, projects, "/tmp/stop-tree")
 	parent, err := mgr.store.CreateSession(ctx, projectID, "fake-model", "", nil)
 	require.NoError(t, err)
@@ -446,7 +453,10 @@ func TestStopParksWholeTreeAndExplicitFollowUpResumesOnlyChild(t *testing.T) {
 
 func TestStopParksActiveDescendantBelowCompletedChild(t *testing.T) {
 	ctx := context.Background()
-	mgr, _, projects := newTestManager(t)
+	testFactory := &mockFactory{}
+	testHarness := newHarness(t, harnessOptions{configure: withTestModels, clientFor: testFactory.client})
+	mgr := testHarness.mgr
+	projects := testHarness.store
 	projectID := testProject(t, projects, "/tmp/stop-terminal-ancestor")
 	root, err := mgr.store.CreateSession(ctx, projectID, "fake-model", "", nil)
 	require.NoError(t, err)
@@ -467,7 +477,10 @@ func TestStopParksActiveDescendantBelowCompletedChild(t *testing.T) {
 
 func TestStopDirectChildParksItsOwnLinkWithoutStoppingParent(t *testing.T) {
 	ctx := context.Background()
-	mgr, _, projects := newTestManager(t)
+	testFactory := &mockFactory{}
+	testHarness := newHarness(t, harnessOptions{configure: withTestModels, clientFor: testFactory.client})
+	mgr := testHarness.mgr
+	projects := testHarness.store
 	projectID := testProject(t, projects, "/tmp/stop-direct-child")
 	parent, err := mgr.store.CreateSession(ctx, projectID, "fake-model", "", nil)
 	require.NoError(t, err)
@@ -493,7 +506,10 @@ func TestStopDirectChildParksItsOwnLinkWithoutStoppingParent(t *testing.T) {
 
 func TestStopTreeCleanupPreservesBackgroundProcessesForBudgetPark(t *testing.T) {
 	ctx := context.Background()
-	mgr, _, projects := newTestManager(t)
+	testFactory := &mockFactory{}
+	testHarness := newHarness(t, harnessOptions{configure: withTestModels, clientFor: testFactory.client})
+	mgr := testHarness.mgr
+	projects := testHarness.store
 	projectID := testProject(t, projects, "/tmp/budget-process")
 	root, err := mgr.store.CreateSession(ctx, projectID, "fake-model", "", nil)
 	require.NoError(t, err)

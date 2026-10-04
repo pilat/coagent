@@ -22,7 +22,10 @@ import (
 )
 
 func TestManager_KillTerminatingOnStartup(t *testing.T) {
-	mgr, factory, s := newTestManager(t)
+	factory := &mockFactory{}
+	testHarness := newHarness(t, harnessOptions{configure: withTestModels, clientFor: factory.client})
+	mgr := testHarness.mgr
+	s := testHarness.store
 	ch := mgr.bus.SubscribeAll()
 
 	factory.nextSess = &mockSession{completeAfter: 50 * time.Millisecond}
@@ -47,7 +50,10 @@ func TestManager_KillTerminatingOnStartup(t *testing.T) {
 }
 
 func TestSettleUnresolvedCallsDeduplicatesRepeatedCallID(t *testing.T) {
-	mgr, _, sessions := newTestManager(t)
+	testFactory := &mockFactory{}
+	testHarness := newHarness(t, harnessOptions{configure: withTestModels, clientFor: testFactory.client})
+	mgr := testHarness.mgr
+	sessions := testHarness.store
 	ctx := t.Context()
 	projectID := testProject(t, sessions, t.TempDir())
 	record, err := sessions.CreateSession(ctx, projectID, "fake-model", "", nil)
@@ -104,7 +110,7 @@ func TestOrphanedCallNotice(t *testing.T) {
 }
 
 func TestStartDoesNotLaunchRecoveryAfterShutdown(t *testing.T) {
-	h := newSubagentHarness(t)
+	h := newHarness(t, harnessOptions{})
 	links := &blockingRecoveryLinks{
 		Store: h.mgr.links, entered: make(chan struct{}),
 		cancelled: make(chan struct{}), allowReturn: make(chan struct{}),
@@ -126,7 +132,10 @@ func TestStartDoesNotLaunchRecoveryAfterShutdown(t *testing.T) {
 
 func TestStartFinishesInterruptedStopBeforeRecoverySweep(t *testing.T) {
 	ctx := context.Background()
-	mgr, _, projects := newTestManager(t)
+	testFactory := &mockFactory{}
+	testHarness := newHarness(t, harnessOptions{configure: withTestModels, clientFor: testFactory.client})
+	mgr := testHarness.mgr
+	projects := testHarness.store
 	projectID := testProject(t, projects, "/tmp/recover-stop")
 	parent, err := mgr.store.CreateSession(ctx, projectID, "fake-model", "", nil)
 	require.NoError(t, err)
