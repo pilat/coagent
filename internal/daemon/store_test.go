@@ -2,41 +2,23 @@ package daemon
 
 import (
 	"context"
-	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/pilat/coagent/internal/migrate"
-	"github.com/pilat/coagent/internal/schedule"
+	"github.com/pilat/coagent/internal/controllerapi"
 	"github.com/pilat/coagent/internal/sessionstore"
 )
 
-func newTestStore(t *testing.T) *sessionstore.Store {
-	t.Helper()
-	s, _ := newTestStoreWithSchedule(t)
-	return s
-}
-
-func newTestStoreWithSchedule(t *testing.T) (*sessionstore.Store, schedule.Store) {
-	t.Helper()
-	dbPath := filepath.Join(t.TempDir(), "test.db")
-	db, err := migrate.OpenDB(context.Background(), dbPath)
-	require.NoError(t, err)
-	t.Cleanup(func() { db.Close() })
-	require.NoError(t, migrate.Run(context.Background(), db, dbPath))
-	return sessionstore.NewStore(db), schedule.NewStore(db, sessionstore.NewStore(db))
-}
-
-func testProject(t *testing.T, s interface {
-	GetOrCreateProject(context.Context, string) (int64, error)
-}, workDir string,
-) int64 {
-	t.Helper()
-	pid, err := s.GetOrCreateProject(context.Background(), workDir)
-	require.NoError(t, err)
-	return pid
+// controllerapi mirrors the outbox type vocabulary as wire literals because it
+// must not import sessionstore; this test is the pin that keeps them identical.
+func TestOutputTypeVocabularyMatchesStore(t *testing.T) {
+	assert.Equal(t, controllerapi.OutputMessageReplaceable, string(sessionstore.OutputMessageReplaceable))
+	assert.Equal(t, controllerapi.OutputMessagePersistent, string(sessionstore.OutputMessagePersistent))
+	assert.Equal(t, controllerapi.OutputSessionOpened, string(sessionstore.OutputSessionOpened))
+	assert.Equal(t, controllerapi.OutputSessionReplaced, string(sessionstore.OutputSessionReplaced))
+	assert.Equal(t, controllerapi.OutputSessionClosed, string(sessionstore.OutputSessionClosed))
 }
 
 func TestStore_GetOrCreateProject(t *testing.T) {

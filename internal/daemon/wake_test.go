@@ -1,0 +1,92 @@
+package daemon
+
+import (
+	"context"
+	"testing"
+	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	"github.com/pilat/coagent/internal/sessionstore"
+	"github.com/pilat/coagent/internal/subagent"
+)
+
+func TestProcessInputRearmsCompletedChildAfterPriorOutcomeHandoff(t *testing.T) {
+	ctx := context.Background()
+	mgr, _, projects := newTestManager(t)
+	projectID := testProject(t, projects, t.TempDir())
+	parent, err := mgr.store.CreateSession(ctx, projectID, "fake-model", "", nil)
+	require.NoError(t, err)
+	childID := createBackgroundChild(t, mgr, projectID, parent.ID)
+
+	for i := range maxChildren {
+		require.True(t, mgr.runners.tryAdmit(true, int64(20_000+i)))
+		defer mgr.runners.release(true, int64(20_000+i))
+	}
+
+	require.NoError(
+		t,
+		seedTerminalChild(ctx, projects, childID, subagent.StateCompleted, "first outcome", subagent.OutcomeCompleted),
+	)
+	require.NoError(t, mgr.store.UpdateSessionStatus(ctx, childID, sessionstore.SessionStatusCompleted))
+	mgr.startWake()
+	processInput, err := mgr.store.Enqueue(
+		ctx,
+		sessionstore.Input{
+			SessionID:  childID,
+			Source:     sessionstore.InputSourceProcess,
+			Content:    "<process_completion>late process</process_completion>",
+			Attributes: map[string]any{"process_id": "late-process"},
+		},
+	)
+	require.NoError(t, err)
+
+	require.NoError(t, mgr.inputReady(ctx, childID))
+
+	link, err := mgr.links.GetLink(ctx, childID)
+	require.NoError(t, err)
+	require.NotNil(t, link)
+	assert.Equal(t, subagent.StateRunning, link.State)
+	assert.Equal(t, int64(2), link.ActivationSeq)
+	assert.False(t, link.Blocking)
+	assert.Zero(t, link.DeliveredAt)
+
+	pending, err := mgr.store.PeekPending(ctx, childID)
+	require.NoError(t, err)
+	assert.Equal(t, processInput.Input.ID, pending.ID)
+	assert.Equal(t, sessionstore.InputSourceProcess, pending.Source)
+
+	require.Eventually(t, func() bool {
+		messages, msgErr := mgr.store.LoadActiveMessages(ctx, parent.ID)
+		if msgErr != nil {
+			return false
+		}
+
+		for _, message := range messages {
+			if message.Role == "user" &&
+				containsAll(message.Content, "<subagent_completion>", "first outcome", "outcome: completed") {
+				return true
+			}
+		}
+
+		return false
+	}, 5*time.Second, 10*time.Millisecond)
+
+	mgr.Shutdown(3 * time.Second)
+}
+
+func TestProcessInputDoesNotRearmCompletedChildAfterStop(t *testing.T) {
+	cases := []struct {
+		name      string
+		stopChild bool
+	}{
+		{name: "root stops"},
+		{name: "direct child stop", stopChild: true},
+	}
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			assertProcessInputDoesNotRearmAfterStop(t, tt.stopChild)
+		})
+	}
+}
