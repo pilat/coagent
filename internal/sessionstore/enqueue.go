@@ -212,8 +212,12 @@ func (s *Store) recordWoken(id int64) {
 }
 
 func isExactControlCommand(content string) bool {
+	if readOnlyCommandReceipt(content) {
+		return true
+	}
+
 	switch strings.TrimSpace(content) {
-	case "/stop", "/clear", "/kill", "/status", "/help", "/schedules", "/compact":
+	case "/stop", "/clear", "/kill":
 		return true
 	default:
 		return false

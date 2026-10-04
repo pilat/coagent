@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -11,6 +12,56 @@ import (
 	"github.com/pilat/coagent/internal/budget"
 	"github.com/pilat/coagent/internal/transcript"
 )
+
+func TestEnqueueCompactWithFocusKeepsParkedBudget(t *testing.T) {
+	for _, content := range []string{"/compact", "/compact keep API notes", "  /compact keep API notes  ", "keep going"} {
+		t.Run(content, func(t *testing.T) {
+			t.Parallel()
+			ctx := context.Background()
+			store, db, projectID := newTestStore(t)
+			root, err := store.CreateSession(ctx, projectID, "priced", "", map[string]any{"manager_id": "cli:main"})
+			require.NoError(t, err)
+			input, err := enqueueInput(ctx, store, root.ID, InputSourceUser, "/budget")
+			require.NoError(t, err)
+			_, _, err = acceptActivation(ctx, store, input.ID, "/budget\n\nactivate",
+				ActivationDraft{ToolID: "set_budget", Command: "/budget"})
+			require.NoError(t, err)
+			limit := 1.0
+			_, err = store.Arm(ctx, budget.Mutation{
+				RootSessionID: root.ID, InputID: input.ID, ToolID: "set_budget", Command: "/budget",
+				ToolCallID: "arm", CostLimitUSD: &limit, Receipt: "Budget armed",
+			})
+			require.NoError(t, err)
+			fired, _, err := store.FireBudget(ctx, root.ID, 1, "cost", 1.5, "Budget checkpoint reached (cost).")
+			require.NoError(t, err)
+			_, err = store.BeginBudgetDrain(ctx, root.ID, fired.Generation, fired.ParkOwner)
+			require.NoError(t, err)
+			_, err = store.MarkBudgetParked(ctx, root.ID, fired.Generation, fired.ParkOwner)
+			require.NoError(t, err)
+			require.NoError(t, store.UpdateSessionStatus(ctx, root.ID, SessionStatusStopped))
+			var before time.Time
+			require.NoError(t, db.QueryRowContext(ctx, `SELECT episode_started_at FROM sessions WHERE id = ?`,
+				root.ID).Scan(&before))
+
+			_, err = enqueueInput(ctx, store, root.ID, InputSourceUser, content)
+			require.NoError(t, err)
+			record, err := store.Get(ctx, root.ID)
+			require.NoError(t, err)
+			if content == "keep going" {
+				assert.Equal(t, budget.Released, record.State)
+				assert.Equal(t, "resumed", record.ReleasedReason)
+				return
+			}
+
+			assert.Equal(t, budget.Fired, record.State)
+			assert.Equal(t, "parked", record.ParkPhase)
+			var after time.Time
+			require.NoError(t, db.QueryRowContext(ctx, `SELECT episode_started_at FROM sessions WHERE id = ?`,
+				root.ID).Scan(&after))
+			assert.Equal(t, before, after)
+		})
+	}
+}
 
 func TestBudgetStore_ArmFireAndReplayAreAtomic(t *testing.T) {
 	t.Parallel()
