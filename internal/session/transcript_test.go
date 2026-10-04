@@ -521,3 +521,61 @@ func TestRepairTranscript_Empty(t *testing.T) {
 	result := repairTranscript(nil)
 	assert.Nil(t, result)
 }
+
+// Durable call names determine which owner must settle each unanswered call.
+func TestUnresolvedStoredExternalCalls(t *testing.T) {
+	tests := []struct {
+		name string
+		msgs []*transcript.Message
+		want []PendingToolCall
+	}{
+		{
+			name: "an unresolved external call is pending",
+			msgs: []*transcript.Message{storedAssistant(`[{"id":"c1","name":"config_edit"}]`)},
+			want: []PendingToolCall{{ID: "c1", Name: tool.IDConfigEdit}},
+		},
+		{
+			name: "an answered call is not",
+			msgs: []*transcript.Message{
+				storedAssistant(`[{"id":"c1","name":"config_edit"}]`),
+				storedToolResult("c1"),
+			},
+		},
+		{
+			name: "an unresolved in-loop tool is pending",
+			msgs: []*transcript.Message{storedAssistant(`[{"id":"c1","name":"bash"}]`)},
+			want: []PendingToolCall{{ID: "c1", Name: "bash"}},
+		},
+		{
+			name: "a call with no id cannot be answered and is skipped",
+			msgs: []*transcript.Message{storedAssistant(`[{"name":"sleep"}]`)},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := UnresolvedStoredCalls(tt.msgs)
+			require.NoError(t, err)
+			if len(tt.want) == 0 {
+				assert.Empty(t, got)
+			} else {
+				assert.Equal(t, tt.want, got)
+			}
+		})
+	}
+}
+
+// Corrupt tool-call rows must fail the sweep rather than hide pending work.
+func TestUnresolvedStoredExternalCalls_UndecodableRow(t *testing.T) {
+	_, err := UnresolvedStoredCalls([]*transcript.Message{storedAssistant(`{`)})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "decode tool calls")
+}
+
+func storedAssistant(toolCalls string) *transcript.Message {
+	return &transcript.Message{Role: "assistant", ToolCalls: []byte(toolCalls)}
+}
+
+func storedToolResult(callID string) *transcript.Message {
+	return &transcript.Message{Role: "tool", ToolCallID: callID, Content: "done"}
+}

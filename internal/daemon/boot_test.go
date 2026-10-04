@@ -15,7 +15,6 @@ import (
 	"github.com/pilat/coagent/internal/backgroundprocess"
 	"github.com/pilat/coagent/internal/controllerapi"
 	"github.com/pilat/coagent/internal/logger"
-	"github.com/pilat/coagent/internal/session"
 	"github.com/pilat/coagent/internal/sessionstore"
 	"github.com/pilat/coagent/internal/subagent"
 	"github.com/pilat/coagent/internal/tool"
@@ -47,50 +46,6 @@ func TestManager_KillTerminatingOnStartup(t *testing.T) {
 	assert.NotNil(t, rec.KilledAt, "terminating session should be killed on startup")
 }
 
-// The name-keyed pending set read from the durable transcript is what decides
-// whether a call needs an owner at all, so its edges are load-bearing.
-func TestUnresolvedStoredExternalCalls(t *testing.T) {
-	tests := []struct {
-		name string
-		msgs []*transcript.Message
-		want []session.PendingToolCall
-	}{
-		{
-			name: "an unresolved external call is pending",
-			msgs: []*transcript.Message{storedAssistant(`[{"id":"c1","name":"config_edit"}]`)},
-			want: []session.PendingToolCall{{ID: "c1", Name: tool.IDConfigEdit}},
-		},
-		{
-			name: "an answered call is not",
-			msgs: []*transcript.Message{
-				storedAssistant(`[{"id":"c1","name":"config_edit"}]`),
-				storedToolResult("c1"),
-			},
-		},
-		{
-			name: "an unresolved in-loop tool is pending",
-			msgs: []*transcript.Message{storedAssistant(`[{"id":"c1","name":"bash"}]`)},
-			want: []session.PendingToolCall{{ID: "c1", Name: "bash"}},
-		},
-		{
-			name: "a call with no id cannot be answered and is skipped",
-			msgs: []*transcript.Message{storedAssistant(`[{"name":"sleep"}]`)},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got, err := session.UnresolvedStoredCalls(tt.msgs)
-			require.NoError(t, err)
-			if len(tt.want) == 0 {
-				assert.Empty(t, got)
-			} else {
-				assert.Equal(t, tt.want, got)
-			}
-		})
-	}
-}
-
 func TestSettleUnresolvedCallsDeduplicatesRepeatedCallID(t *testing.T) {
 	mgr, _, sessions := newTestManager(t)
 	ctx := t.Context()
@@ -109,14 +64,6 @@ func TestSettleUnresolvedCallsDeduplicatesRepeatedCallID(t *testing.T) {
 	assert.Equal(t, sessionstore.InputSourceCallResult, pending[0].Source)
 	assert.Equal(t, "c1", pending[0].Attributes["call_id"])
 	assert.Equal(t, tool.IDSleep, pending[0].Attributes["tool_id"])
-}
-
-// A transcript row nobody can decode must fail the session's sweep, not be read
-// as "nothing is pending here".
-func TestUnresolvedStoredExternalCalls_UndecodableRow(t *testing.T) {
-	_, err := session.UnresolvedStoredCalls([]*transcript.Message{storedAssistant(`{`)})
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "decode tool calls")
 }
 
 // Only a session that can still ship its transcript needs its calls closed;

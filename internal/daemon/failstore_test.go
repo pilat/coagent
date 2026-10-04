@@ -212,32 +212,6 @@ func (s *failFirstRemoveScheduleStore) RemoveSchedule(ctx context.Context, id in
 	return s.Store.RemoveSchedule(ctx, id)
 }
 
-// newTestLinkStore opens a migrated temp SQLite DB and returns a *sessionstore.Store
-// (for the session/message rows link tests reference), a subagent.Store, and a project
-// id the sessions can reference (FKs are enforced).
-func newTestLinkStore(t *testing.T) (*sessionstore.Store, subagent.Store, int64) {
-	t.Helper()
-
-	dbPath := filepath.Join(t.TempDir(), "test.db")
-	db, err := migrate.OpenDB(context.Background(), dbPath)
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = db.Close() })
-	require.NoError(t, migrate.Run(context.Background(), db, dbPath))
-
-	res, err := db.ExecContext(
-		context.Background(),
-		`INSERT INTO projects (work_dir, name) VALUES (?, ?)`,
-		t.TempDir(), "test",
-	)
-	require.NoError(t, err)
-	projectID, err := res.LastInsertId()
-	require.NoError(t, err)
-
-	sessions := sessionstore.NewStore(db)
-	links := subagent.NewStore(db, sessions)
-	return sessions, links, projectID
-}
-
 type blockingCreateSessionStore struct {
 	Store
 	entered, release chan struct{}

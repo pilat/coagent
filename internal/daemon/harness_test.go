@@ -3303,22 +3303,6 @@ func finalizeTestChild(ctx context.Context, t *testing.T, manager *svc, childID 
 	}
 }
 
-func deliverOneLink(t *testing.T, links subagent.Store, parentID, childID int64) {
-	t.Helper()
-	link, err := links.GetLink(context.Background(), childID)
-	require.NoError(t, err)
-	require.NotNil(t, link)
-	require.Equal(t, parentID, link.ParentID)
-	if !link.Terminal() {
-		link, err = links.Finalize(context.Background(), childID, false)
-		require.NoError(t, err)
-		require.NotNil(t, link)
-	}
-	won, err := links.DeliverBackgroundCompletion(context.Background(), *link, 1)
-	require.NoError(t, err)
-	require.True(t, won)
-}
-
 func countSilenceIntents(t *testing.T, h *subagentHarness, sessionID int64) int {
 	t.Helper()
 
@@ -3989,10 +3973,6 @@ func (d *applyDaemon) parkedOnChild(sessionID int64) bool {
 
 func storedAssistant(toolCalls string) *transcript.Message {
 	return &transcript.Message{Role: "assistant", ToolCalls: []byte(toolCalls)}
-}
-
-func storedToolResult(callID string) *transcript.Message {
-	return &transcript.Message{Role: "tool", ToolCallID: callID, Content: "done"}
 }
 
 // scenarioManagerID is the manager owner every output-chain scenario uses; the
