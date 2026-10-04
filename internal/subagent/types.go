@@ -59,14 +59,14 @@ type Create struct {
 }
 
 // Store owns subagent links and atomic cross-table lifecycle transitions.
+//
+//nolint:interfacebloat // Link reads and atomic transitions share one ledger.
 type Store interface {
-	interface {
-		GetLink(ctx context.Context, childID int64) (*Link, error)
-		GetLinkByTaskCallID(ctx context.Context, parentID int64, taskCallID string) (*Link, error)
-		ListPendingChildLinks(ctx context.Context, parentID int64) ([]Link, error)
-		ListRunningChildLinks(ctx context.Context) ([]Link, error)
-		ListUndeliveredParentLinks(ctx context.Context) ([]Link, error)
-	}
+	GetLink(ctx context.Context, childID int64) (*Link, error)
+	GetLinkByTaskCallID(ctx context.Context, parentID int64, taskCallID string) (*Link, error)
+	ListPendingChildLinks(ctx context.Context, parentID int64) ([]Link, error)
+	ListRunningChildLinks(ctx context.Context) ([]Link, error)
+	ListUndeliveredParentLinks(ctx context.Context) ([]Link, error)
 	MarkLinkStopped(ctx context.Context, childID int64) error
 	MakeStoppedLinkResumable(ctx context.Context, childID int64) error
 	Create(ctx context.Context, create Create) (int64, error)
