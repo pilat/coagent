@@ -366,9 +366,9 @@ New standalone work injected by a one-shot or cron schedule, rather than the res
 _Avoid_: sleep wake, subagent wake.
 
 **admission control**:
-The `admission` package's concurrency governor — caps on total, child, and
-per-parent sessions plus spawn depth. The daemon coordinates its verdict
-with durable-aware FIFO overflow queues and runner registration.
+The daemon's concurrency governor — caps on total, child, and per-parent
+sessions plus spawn depth, decided in the runner set together with
+durable-aware FIFO overflow and runner registration.
 
 **subagent link ledger** (`subagent.Store`):
 The subagent package's durable record (`subagent_links` table) of parent↔child
