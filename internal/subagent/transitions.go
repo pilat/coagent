@@ -315,21 +315,21 @@ func (s *store) deliver(ctx context.Context, link Link, input sessionstore.Input
 		if blocking != link.Blocking || !validTerminalLink(State(state), link.Outcome) {
 			return fmt.Errorf("completion link %d changed before delivery", link.ChildID)
 		}
-		var killed bool
+		var skip bool
 
 		err = tx.QueryRowContext(ctx, `SELECT
-			parent.killed_at IS NOT NULL OR parent.status IN ('terminating', 'killed')
+			parent.killed_at IS NOT NULL OR parent.status IN ('stopping', 'terminating', 'killed')
 			OR root.killed_at IS NOT NULL OR root.status IN ('terminating', 'killed')
 			FROM sessions parent
 			JOIN sessions root ON root.id = CASE
 				WHEN parent.parent_id = 0 THEN parent.id ELSE parent.root_id END
-			WHERE parent.id = ?`, link.ParentID).Scan(&killed)
+			WHERE parent.id = ?`, link.ParentID).Scan(&skip)
 		if err != nil {
 			return fmt.Errorf("load completion parent lifecycle: %w", err)
 		}
 
 		queued := &sessionstore.Enqueued{}
-		if !killed {
+		if !skip {
 			queued, err = sessionstore.EnqueueTx(ctx, tx, input)
 			if err != nil {
 				return fmt.Errorf("deliver: %w", err)

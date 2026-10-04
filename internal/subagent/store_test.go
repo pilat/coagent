@@ -15,6 +15,37 @@ import (
 	"github.com/pilat/coagent/internal/transcript"
 )
 
+func TestDeliverCompletionToStoppingParentSettlesLink(t *testing.T) {
+	t.Parallel()
+	links, sessions, db, projectID := newTestStore(t)
+	ctx := context.Background()
+	parent, err := sessions.CreateSession(ctx, projectID, "m", "", nil)
+	require.NoError(t, err)
+	childID, err := links.Create(ctx, Create{
+		ProjectID: projectID, ParentID: parent.ID, RootID: parent.ID, Model: "m",
+		TaskCallID: "blocking", Blocking: true, State: StateRunning,
+	})
+	require.NoError(t, err)
+	link, err := links.Finalize(ctx, childID, false)
+	require.NoError(t, err)
+	require.NotNil(t, link)
+	require.NoError(t, sessions.UpdateSessionStatus(ctx, parent.ID, sessionstore.SessionStatusStopping))
+
+	won, err := links.DeliverCompletion(ctx, *link, "result")
+	require.NoError(t, err)
+	assert.False(t, won)
+
+	var deliveredAt, inputID sql.NullInt64
+	require.NoError(t, db.QueryRowContext(ctx, `SELECT delivered_at, delivered_input_id
+		FROM subagent_links WHERE child_id = ?`, childID).Scan(&deliveredAt, &inputID))
+	assert.True(t, deliveredAt.Valid)
+	assert.False(t, inputID.Valid)
+	var count int
+	require.NoError(t, db.QueryRowContext(ctx, `SELECT COUNT(*) FROM session_inbox
+		WHERE session_id = ? AND source = 'call_result'`, parent.ID).Scan(&count))
+	assert.Zero(t, count)
+}
+
 func TestLinkStore_CreateAndRead(t *testing.T) {
 	ls, ss, _, projectID := newTestStore(t)
 	ctx := context.Background()
