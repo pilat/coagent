@@ -15,6 +15,7 @@ import (
 	"github.com/pilat/coagent/internal/backgroundprocess"
 	"github.com/pilat/coagent/internal/controllerapi"
 	"github.com/pilat/coagent/internal/logger"
+	"github.com/pilat/coagent/internal/sessionevent"
 	"github.com/pilat/coagent/internal/sessionstore"
 	"github.com/pilat/coagent/internal/subagent"
 	"github.com/pilat/coagent/internal/tool"
@@ -26,7 +27,8 @@ func TestManager_KillTerminatingOnStartup(t *testing.T) {
 	testHarness := newHarness(t, harnessOptions{configure: withTestModels, clientFor: factory.client})
 	mgr := testHarness.mgr
 	s := testHarness.store
-	ch := mgr.bus.SubscribeAll()
+	ch := collectEvents(t, mgr.bus.SubscribeAll())
+	t.Cleanup(ch.stop)
 
 	factory.nextSess = &mockSession{completeAfter: 50 * time.Millisecond}
 
@@ -35,7 +37,15 @@ func TestManager_KillTerminatingOnStartup(t *testing.T) {
 	id, err := mgr.Send(ctx, pid, "init", "", nil)
 	require.NoError(t, err)
 
-	waitForState(t, ch, id, controllerapi.StateIdle, 3*time.Second)
+	ch.waitFor(t, "session state", func(events []controllerapi.SessionNotification) bool {
+		for _, event := range events {
+			if event.SessionID == id && event.Notification.Type == sessionevent.NotifyStateChanged &&
+				event.Notification.Status == controllerapi.StateIdle {
+				return true
+			}
+		}
+		return false
+	})
 
 	// Simulate: Clear set terminating but daemon died before Kill completed
 	require.NoError(t, mgr.store.UpdateSessionStatus(
@@ -159,8 +169,8 @@ func TestStartFinishesInterruptedStopBeforeRecoverySweep(t *testing.T) {
 	require.NoError(t, mgr.Start(ctx))
 
 	for _, id := range []int64{parent.ID, childID} {
-		rec, getErr := mgr.store.GetSession(ctx, id)
-		require.NoError(t, getErr)
+		rec, err := mgr.store.GetSession(context.Background(), id)
+		require.NoError(t, err)
 		assert.Equal(t, sessionstore.SessionStatusStopped, rec.Status)
 	}
 	link, err := mgr.links.GetLink(ctx, childID)

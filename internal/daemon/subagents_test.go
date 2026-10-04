@@ -151,7 +151,7 @@ func TestTerminalChildDeliversPreviousOutcomeBeforeRearm(t *testing.T) {
 
 	require.NoError(t, mgr.SendToChild(ctx, childID, "follow-up after completion"))
 
-	require.Eventually(t, func() bool {
+	testHarness.waitUntil("TestTerminalChildDeliversPreviousOutcomeBeforeRearm", func() bool {
 		link, linkErr := mgr.links.GetLink(ctx, childID)
 		if linkErr != nil || link == nil || link.State != subagent.StateRunning || link.DeliveredAt != 0 {
 			return false
@@ -168,7 +168,7 @@ func TestTerminalChildDeliversPreviousOutcomeBeforeRearm(t *testing.T) {
 			}
 		}
 		return false
-	}, 5*time.Second, 10*time.Millisecond)
+	})
 
 	mgr.Shutdown(3 * time.Second)
 }

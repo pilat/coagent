@@ -2,11 +2,11 @@ package daemon
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -39,13 +39,10 @@ func TestHarnessScenario_CompletionCheckCrashAfterToolPersistenceRestartsClean(t
 		t,
 		harnessOptions{dbPath: dbPath, respond: func(_ string, messages []llmwire.Message) *llmwire.Response {
 			if hasToolResultFor(messages, tool.IDSleep) {
-				return &llmwire.Response{Text: "after sleep"}
+				return textReply("after sleep")
 			}
 
-			return &llmwire.Response{ToolCalls: []llmwire.ToolCall{{
-				ID: "sleep-call", Name: tool.IDSleep,
-				Arguments: []byte(`{"duration":"10m","reason":"hold the turn"}`),
-			}}}
+			return callReply("sleep-call", tool.IDSleep, `{"duration":"10m","reason":"hold the turn"}`)
 		}},
 	)
 
@@ -54,9 +51,9 @@ func TestHarnessScenario_CompletionCheckCrashAfterToolPersistenceRestartsClean(t
 		"manager_id": scenarioManagerID,
 	})
 	require.NoError(t, err)
-	firstCollector := collectEvents(first.mgr.bus.SubscribeAll())
+	firstCollector := collectEvents(t, first.mgr.bus.SubscribeAll())
 	defer firstCollector.stop()
-	waitForWaitKind(t, firstCollector, root, sessionevent.WaitSleep)
+	firstCollector.waitWait(root, sessionevent.WaitSleep)
 
 	// The tool-bearing response committed with its cleared completion state;
 	// the daemon dies before the sleep resolves.
@@ -69,10 +66,10 @@ func TestHarnessScenario_CompletionCheckCrashAfterToolPersistenceRestartsClean(t
 		t,
 		harnessOptions{dbPath: dbPath, respond: func(_ string, messages []llmwire.Message) *llmwire.Response {
 			if hasUserContaining(messages, "<interrupted>") {
-				return &llmwire.Response{Text: "settled interrupted call"}
+				return textReply("settled interrupted call")
 			}
 
-			return &llmwire.Response{Text: "fresh confirmation after crash"}
+			return textReply("fresh confirmation after crash")
 		}},
 	)
 	defer second.shutdown()
@@ -92,7 +89,7 @@ func TestHarnessScenario_RestartResumesExplicitInputQueuedOnStoppedRoot(t *testi
 		require.True(t, hasUserContaining(messages, "retained process fact"))
 		require.True(t, hasUserContaining(messages, "explicit resume after stop"))
 
-		return &llmwire.Response{Text: "stopped root resumed after restart"}
+		return textReply("stopped root resumed after restart")
 	}
 
 	first := newHarness(t, harnessOptions{dbPath: dbPath, respond: respond})
@@ -125,16 +122,16 @@ func TestHarnessScenario_RestartResumesExplicitInputQueuedOnStoppedRoot(t *testi
 	first.shutdown()
 
 	second := newHarness(t, harnessOptions{dbPath: dbPath, respond: respond})
-	collector := collectEvents(second.mgr.bus.SubscribeAll())
+	collector := collectEvents(t, second.mgr.bus.SubscribeAll())
 	defer func() {
 		collector.stop()
 		second.shutdown()
 	}()
 	second.startInboxWake()
 	second.mgr.resumeAfterRestart(second.ctx)
-	waitForVisibleMessage(t, collector, root.ID, "stopped root resumed after restart")
+	collector.waitMessage(root.ID, "stopped root resumed after restart")
 	drainScenarioClaims(t, "explicit_stopped_resume_restart.json", newChainController(t, second))
-	waitForIdleAfterMessage(t, collector, root.ID, "stopped root resumed after restart")
+	collector.waitIdleAfter(root.ID, "stopped root resumed after restart")
 	// The explicit resume turn still runs the two-phase check: candidate
 	// response, then the confirmation call after the host nudge.
 	assert.Equal(t, int64(2), modelCalls.Load())
@@ -147,7 +144,7 @@ func TestHarnessScenario_RestartConsumesReadOnlyInputQueuedOnStoppedRoot(t *test
 	respond := func(string, []llmwire.Message) *llmwire.Response {
 		modelCalls.Add(1)
 
-		return &llmwire.Response{Text: "must not call model"}
+		return textReply("must not call model")
 	}
 
 	first := newHarness(t, harnessOptions{dbPath: dbPath, respond: respond})
@@ -176,12 +173,11 @@ func TestHarnessScenario_RestartConsumesReadOnlyInputQueuedOnStoppedRoot(t *test
 	first.shutdown()
 
 	second := newHarness(t, harnessOptions{dbPath: dbPath, respond: respond})
-	beforeRecovery, err := second.store.GetSession(second.ctx, root.ID)
-	require.NoError(t, err)
+	beforeRecovery := second.session(root.ID)
 	preserveStopped, err := second.mgr.commandOnlyStoppedRoot(second.ctx, beforeRecovery)
 	require.NoError(t, err)
 	require.True(t, preserveStopped)
-	collector := collectEvents(second.mgr.bus.SubscribeAll())
+	collector := collectEvents(t, second.mgr.bus.SubscribeAll())
 	defer func() {
 		collector.stop()
 		second.shutdown()
@@ -202,8 +198,7 @@ func TestHarnessScenario_RestartConsumesReadOnlyInputQueuedOnStoppedRoot(t *test
 			!second.mgr.HasActiveLoop(root.ID)
 	})
 
-	record, err := second.store.GetSession(second.ctx, root.ID)
-	require.NoError(t, err)
+	record := second.session(root.ID)
 	assert.Equal(t, sessionstore.SessionStatusStopped, record.Status)
 	assert.Zero(t, modelCalls.Load())
 	pending, err := second.store.PeekPending(second.ctx, root.ID)
@@ -216,7 +211,7 @@ func TestHarnessScenario_RestartConsumesReadOnlyInputQueuedOnStoppedRoot(t *test
 func TestScenario_RestartResumesExplicitInputQueuedOnErroredChild(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "errored-child-explicit-resume.db")
 	first := newHarness(t, harnessOptions{dbPath: dbPath, respond: func(string, []llmwire.Message) *llmwire.Response {
-		return &llmwire.Response{Text: "must remain queued"}
+		return textReply("must remain queued")
 	}})
 	root, err := first.store.CreateSession(first.ctx, first.projectID, "fake-model", "", nil)
 	require.NoError(t, err)
@@ -239,8 +234,7 @@ func TestScenario_RestartResumesExplicitInputQueuedOnErroredChild(t *testing.T) 
 	require.NoError(t, first.store.UpdateSessionStatus(
 		first.ctx, childID, sessionstore.SessionStatusError,
 	))
-	link, err := first.links.GetLink(first.ctx, childID)
-	require.NoError(t, err)
+	link := first.link(childID)
 	require.NotNil(t, link)
 	won, err := first.mgr.links.DeliverBackgroundCompletion(first.ctx, *link, 1)
 	require.NoError(t, err)
@@ -260,7 +254,7 @@ func TestScenario_RestartResumesExplicitInputQueuedOnErroredChild(t *testing.T) 
 	first.shutdown()
 
 	second := newHarness(t, harnessOptions{dbPath: dbPath, respond: func(string, []llmwire.Message) *llmwire.Response {
-		return &llmwire.Response{Text: "must remain queued"}
+		return textReply("must remain queued")
 	}})
 	defer second.shutdown()
 	for i := range maxChildren {
@@ -271,8 +265,7 @@ func TestScenario_RestartResumesExplicitInputQueuedOnErroredChild(t *testing.T) 
 	resumed, err := second.mgr.resumeSessionsWithRecoverableInput(second.ctx)
 	require.NoError(t, err)
 	assert.Equal(t, 1, resumed)
-	link, err = second.links.GetLink(second.ctx, childID)
-	require.NoError(t, err)
+	link = second.link(childID)
 	require.NotNil(t, link)
 	assert.Equal(t, subagent.StateRunning, link.State)
 	assert.Equal(t, int64(2), link.ActivationSeq)
@@ -314,7 +307,7 @@ func TestHarnessScenario_RestartSettlesPersistedFinalWithoutRepublishing(t *test
 	var modelCalls atomic.Int64
 	respond := func(_ string, _ []llmwire.Message) *llmwire.Response {
 		modelCalls.Add(1)
-		return &llmwire.Response{Text: "must not run"}
+		return textReply("must not run")
 	}
 
 	first := newHarness(t, harnessOptions{dbPath: dbPath, respond: respond})
@@ -361,7 +354,7 @@ func TestHarnessScenario_RestartSettlesPersistedFinalWithoutRepublishing(t *test
 	first.shutdown()
 
 	second := newHarness(t, harnessOptions{dbPath: dbPath, respond: respond})
-	collector := collectEvents(second.mgr.bus.SubscribeAll())
+	collector := collectEvents(t, second.mgr.bus.SubscribeAll())
 	defer func() {
 		collector.stop()
 		second.shutdown()
@@ -380,8 +373,7 @@ func TestHarnessScenario_RestartSettlesPersistedFinalWithoutRepublishing(t *test
 	assert.Zero(t, modelCalls.Load(), "a durable final answer must not call the model again")
 	assert.Zero(t, countPublishedMessage(collector.snapshot(), root.ID, "persisted final"),
 		"historical output is state, not a new publication")
-	record, err := second.store.GetSession(second.ctx, root.ID)
-	require.NoError(t, err)
+	record := second.session(root.ID)
 	assert.Equal(t, sessionstore.SessionStatusCompleted, record.Status)
 	assertHarnessTrace(t, "accepted_input_persisted_final_restart.json", collector.snapshot(), root.ID)
 }
@@ -391,7 +383,7 @@ func TestHarnessScenario_RestartDoesNotRunHandledHeaderOnlySession(t *testing.T)
 	var modelCalls atomic.Int64
 	respond := func(_ string, _ []llmwire.Message) *llmwire.Response {
 		modelCalls.Add(1)
-		return &llmwire.Response{Text: "must not run"}
+		return textReply("must not run")
 	}
 
 	first := newHarness(t, harnessOptions{dbPath: dbPath, respond: respond})
@@ -426,7 +418,7 @@ func TestHarnessScenario_RestartDoesNotRunHandledHeaderOnlySession(t *testing.T)
 	first.shutdown()
 
 	second := newHarness(t, harnessOptions{dbPath: dbPath, respond: respond})
-	collector := collectEvents(second.mgr.bus.SubscribeAll())
+	collector := collectEvents(t, second.mgr.bus.SubscribeAll())
 	defer func() {
 		collector.stop()
 		second.shutdown()
@@ -450,31 +442,9 @@ func TestIntegration_SweepRedeliversIdempotently(t *testing.T) {
 	parent, err := h.store.CreateSession(ctx, h.projectID, "fake-model", "", nil)
 	require.NoError(t, err)
 
-	childID, err := func() (int64, error) {
-		var id int64
-		err := h.store.WithTx(ctx, func(tx *sql.Tx) error {
-			var err error
-			id, err = sessionstore.CreateSubagentSessionTx(
-				ctx,
-				tx,
-				sessionstore.CreateSubagentSession{
-					ProjectID:      h.projectID,
-					ParentID:       parent.ID,
-					RootID:         parent.ID,
-					AgentType:      "general",
-					Model:          "fake-model",
-					ReasoningLevel: "",
-				},
-			)
-			return err
-		})
-		return id, err
-	}()
-	require.NoError(t, err)
-
-	require.NoError(t, seedChildLink(ctx, h.store, subagent.Link{
-		ParentID: parent.ID, ChildID: childID, TaskCallID: "orphan-call",
-	}))
+	childID := h.createChild(parent.ID, subagent.Link{
+		TaskCallID: "orphan-call",
+	})
 	// Child wrote its final message before dying; its result was stored on the link
 	// at terminalization (as a real run would), so delivery reads the column.
 	_, err = h.store.Commit(ctx, sessionstore.Commit{SessionID: childID, Messages: []*transcript.Message{{
@@ -497,31 +467,76 @@ func TestIntegration_SweepRedeliversIdempotently(t *testing.T) {
 	// First sweep delivers exactly one completion.
 	h.startInboxWake()
 	h.mgr.resumeAfterRestart(ctx)
-	h.waitForDelivery(childID)
-	h.waitForParentCompletions(parent.ID, childID, 1)
-	h.mgr.waitIdle(parent.ID)
+	h.waitUntil(
+		"child delivery",
+		func() bool { delivery := h.link(childID); return delivery != nil && delivery.DeliveredAt != 0 },
+	)
+	h.waitUntil("parent completions", func() bool {
+		count := 0
+		needle := "child_id: " + strconv.FormatInt(childID, 10)
+		for _, message := range h.messages(parent.ID) {
+			if message.Role == llmwire.RoleUser && strings.Contains(message.Content, "<subagent_completion>") &&
+				strings.Contains(message.Content, needle) {
+				count++
+			}
+		}
+		return count >= 1
+	})
+	h.waitUntil("session idle", func() bool { return !h.mgr.HasActiveLoop(parent.ID) })
 
-	msgs := h.parentMessages(parent.ID)
+	msgs := h.messages(parent.ID)
 	require.NoError(t, llm.ValidateToolPairing(msgs))
-	assert.Equal(t, 1, countSubagentCompletions(msgs, childID), "exactly one record after first sweep")
+	assert.Equal(t, 1, func(messages []llmwire.Message, childID int64) int {
+		needle := "child_id: " + strconv.FormatInt(childID, 10)
+		count := 0
+		for _, message := range messages {
+			if message.Role == llmwire.RoleUser && strings.Contains(message.Content, "<subagent_completion>") &&
+				strings.Contains(message.Content, needle) {
+				count++
+			}
+		}
+
+		return count
+	}(msgs, childID), "exactly one record after first sweep")
 
 	// Second sweep is idempotent: the link is now delivered (delivered_at set by the
 	// atomic CAS), so it is excluded from the undelivered set and re-injects nothing
 	// — still exactly one record, never zero.
 	h.startInboxWake()
 	h.mgr.resumeAfterRestart(ctx)
-	h.mgr.waitIdle(parent.ID)
+	h.waitUntil("session idle", func() bool { return !h.mgr.HasActiveLoop(parent.ID) })
 
-	msgs = h.parentMessages(parent.ID)
+	msgs = h.messages(parent.ID)
 	assert.Equal(
 		t,
 		1,
-		countSubagentCompletions(msgs, childID),
+		func(messages []llmwire.Message, childID int64) int {
+			needle := "child_id: " + strconv.FormatInt(childID, 10)
+			count := 0
+			for _, message := range messages {
+				if message.Role == llmwire.RoleUser && strings.Contains(message.Content, "<subagent_completion>") &&
+					strings.Contains(message.Content, needle) {
+					count++
+				}
+			}
+
+			return count
+		}(msgs, childID),
 		"still exactly one record after second sweep (never zero)",
 	)
 
 	// The delivered completion reflects the stored result + outcome.
-	require.Contains(t, lastSubagentCompletion(msgs, childID), "outcome: completed")
+	require.Contains(t, func(messages []llmwire.Message, childID int64) string {
+		needle := "child_id: " + strconv.FormatInt(childID, 10)
+		for _, message := range slices.Backward(messages) {
+			if message.Role == llmwire.RoleUser && strings.Contains(message.Content, "<subagent_completion>") &&
+				strings.Contains(message.Content, needle) {
+				return message.Content
+			}
+		}
+
+		return ""
+	}(msgs, childID), "outcome: completed")
 }
 
 // Restart reconciliation resumes the same live root and patches a recreated
@@ -565,7 +580,7 @@ func TestHarnessModel_PendingExternalCallOwnershipAgreesAfterRestart(t *testing.
 		owners, err := d.mgr.callOwners(d.ctx, sessionID)
 		require.NoError(t, err)
 
-		assert.Equal(t, unresolvedExternalCallsByName(d.parentMessages(sessionID)), owners,
+		assert.Equal(t, unresolvedExternalCallsByName(d.messages(sessionID)), owners,
 			"an unresolved external call the provider can see must have a producer that can resolve it")
 	}
 
@@ -582,12 +597,12 @@ func TestHarnessModel_PendingExternalCallOwnershipAgreesAfterRestart(t *testing.
 
 		require.NoError(t, second.mgr.Start(second.ctx))
 		second.waitUntil("orphaned task result consumed", func() bool {
-			return countToolResultsFor(second.parentMessages(sessionID), tool.IDTask) == 1
+			return countToolResultsFor(second.messages(sessionID), tool.IDTask) == 1
 		})
 
 		assertAgrees(t, second, sessionID)
 
-		msgs := second.parentMessages(sessionID)
+		msgs := second.messages(sessionID)
 		require.NoError(t, llm.ValidateToolPairing(msgs))
 		assert.Equal(t, 1, countToolResultsFor(msgs, tool.IDTask),
 			"the orphaned task is closed exactly once")
@@ -606,7 +621,7 @@ func TestHarnessModel_PendingExternalCallOwnershipAgreesAfterRestart(t *testing.
 		require.NoError(t, err)
 
 		first.waitUntil("the parent parked on the child", func() bool {
-			return countAssistantToolCallsFor(first.parentMessages(sessionID), tool.IDTask) == 1 &&
+			return countAssistantToolCallsFor(first.messages(sessionID), tool.IDTask) == 1 &&
 				!first.mgr.HasActiveLoop(sessionID)
 		})
 
@@ -615,7 +630,7 @@ func TestHarnessModel_PendingExternalCallOwnershipAgreesAfterRestart(t *testing.
 		first.mgr.resumeAfterRestart(first.ctx)
 
 		assertAgrees(t, first, sessionID)
-		assert.Zero(t, countToolResultsFor(first.parentMessages(sessionID), tool.IDTask),
+		assert.Zero(t, countToolResultsFor(first.messages(sessionID), tool.IDTask),
 			"a call whose child survived must stay pending")
 
 		first.shutdown()
@@ -633,7 +648,7 @@ func TestHarnessModel_PendingExternalCallOwnershipAgreesAfterRestart(t *testing.
 		require.NoError(t, second.mgr.Start(second.ctx))
 
 		assertAgrees(t, second, sessionID)
-		assert.Zero(t, countToolResultsFor(second.parentMessages(sessionID), tool.IDConfigEdit),
+		assert.Zero(t, countToolResultsFor(second.messages(sessionID), tool.IDConfigEdit),
 			"the marker still owes this call its verdict")
 
 		_, err := second.bootVerdict(t)
@@ -652,12 +667,12 @@ func TestHarnessModel_PendingExternalCallOwnershipAgreesAfterRestart(t *testing.
 
 		require.NoError(t, second.mgr.Start(second.ctx))
 		second.waitUntil("orphaned config result consumed", func() bool {
-			return countToolResultsFor(second.parentMessages(sessionID), tool.IDConfigEdit) == 1
+			return countToolResultsFor(second.messages(sessionID), tool.IDConfigEdit) == 1
 		})
 
 		assertAgrees(t, second, sessionID)
 
-		msgs := second.parentMessages(sessionID)
+		msgs := second.messages(sessionID)
 		require.NoError(t, llm.ValidateToolPairing(msgs))
 		assert.Equal(t, 1, countToolResultsFor(msgs, tool.IDConfigEdit),
 			"a verdict nobody can produce must be closed, not left dangling")
@@ -691,8 +706,7 @@ func TestScenario_BlockingTaskOrphanedByARestartIsClosedOnce(t *testing.T) {
 	})
 
 	// The child never finishes; the restart must not resurrect it as a producer.
-	link, err := first.links.GetLinkByTaskCallID(first.ctx, sessionID, orphanTaskCallID)
-	require.NoError(t, err)
+	link := first.linkByCall(sessionID, orphanTaskCallID)
 	require.NotNil(t, link, "the suspended parent owes its call to a child link")
 	_, err = first.db.ExecContext(
 		first.ctx, `DELETE FROM subagent_links WHERE child_id = ?`, link.ChildID,
@@ -706,25 +720,33 @@ func TestScenario_BlockingTaskOrphanedByARestartIsClosedOnce(t *testing.T) {
 
 	require.NoError(t, second.mgr.Start(second.ctx))
 	second.waitUntil("orphan cancellation consumed", func() bool {
-		return countToolResultsFor(second.parentMessages(sessionID), tool.IDTask) == 1 &&
+		return countToolResultsFor(second.messages(sessionID), tool.IDTask) == 1 &&
 			!second.mgr.HasActiveLoop(sessionID)
 	})
 
-	recovered := second.parentMessages(sessionID)
+	recovered := second.messages(sessionID)
 	require.NoError(t, llm.ValidateToolPairing(recovered), "boot must leave a transcript a provider accepts")
 	require.Equal(t, 1, countToolResultsFor(recovered, tool.IDTask),
 		"the abandoned task is closed exactly once")
-	assert.Contains(t, lastToolResultContent(recovered, tool.IDTask), "restarted")
+	assert.Contains(t, func(msgs []llmwire.Message, toolName string) string {
+		for _, v := range slices.Backward(msgs) {
+			if v.Role == llmwire.RoleTool && v.ToolName == toolName {
+				return v.Content
+			}
+		}
+
+		return ""
+	}(recovered, tool.IDTask), "restarted")
 
 	second.startInboxWake()
 	require.NoError(t, second.mgr.sendToSession(second.ctx, sessionID, "any progress?"))
 	second.waitUntil("follow-up consumed", func() bool {
-		return hasUserContaining(second.parentMessages(sessionID), "any progress?") &&
+		return hasUserContaining(second.messages(sessionID), "any progress?") &&
 			!second.mgr.HasActiveLoop(sessionID)
 	})
-	second.mgr.waitIdle(sessionID)
+	second.waitUntil("session idle", func() bool { return !second.mgr.HasActiveLoop(sessionID) })
 
-	final := second.parentMessages(sessionID)
+	final := second.messages(sessionID)
 	require.NoError(t, llm.ValidateToolPairing(final))
 	assert.Equal(t, 1, countAssistantToolCallsFor(final, tool.IDTask),
 		"the suspended call is answered, never re-executed")
@@ -751,21 +773,21 @@ func TestScenario_OrphanedCallsAreClosedBeforeStartReturns(t *testing.T) {
 
 	require.NoError(t, second.mgr.Start(second.ctx))
 
-	if countToolResultsFor(second.parentMessages(sessionID), tool.IDTask) == 0 {
+	if countToolResultsFor(second.messages(sessionID), tool.IDTask) == 0 {
 		pending, err := second.store.ListPending(second.ctx, sessionID)
 		require.NoError(t, err)
 		queued := slices.ContainsFunc(pending, func(input *sessionstore.InboxInput) bool {
 			return input.Source == sessionstore.InputSourceCallResult &&
 				input.Attributes["call_id"] == orphanTaskCallID && input.Attributes["tool_id"] == tool.IDTask
 		})
-		require.True(t, queued || countToolResultsFor(second.parentMessages(sessionID), tool.IDTask) == 1,
+		require.True(t, queued || countToolResultsFor(second.messages(sessionID), tool.IDTask) == 1,
 			"boot commits the exact cancellation before controllers can open a runner")
 	}
 	second.waitUntil("boot orphan result consumed", func() bool {
-		return countToolResultsFor(second.parentMessages(sessionID), tool.IDTask) == 1
+		return countToolResultsFor(second.messages(sessionID), tool.IDTask) == 1
 	})
 
-	msgs := second.parentMessages(sessionID)
+	msgs := second.messages(sessionID)
 	require.NoError(t, llm.ValidateToolPairing(msgs),
 		"a controller may open a runner the instant Start returns")
 	assert.Equal(t, 1, countToolResultsFor(msgs, tool.IDTask),
@@ -816,11 +838,10 @@ func TestScenario_MessageQueuedBehindAnOrphanedTaskRunsAfterRecovery(t *testing.
 
 		return pendErr == nil && !first.mgr.HasActiveLoop(sessionID)
 	})
-	require.False(t, hasUserContaining(first.parentMessages(sessionID), "any progress?"),
+	require.False(t, hasUserContaining(first.messages(sessionID), "any progress?"),
 		"a user turn may not split a tool_use from its result")
 
-	link, linkErr := first.links.GetLinkByTaskCallID(first.ctx, sessionID, orphanTaskCallID)
-	require.NoError(t, linkErr)
+	link := first.linkByCall(sessionID, orphanTaskCallID)
 	require.NotNil(t, link, "the suspended parent owes its call to a child link")
 	_, delErr := first.db.ExecContext(
 		first.ctx, `DELETE FROM subagent_links WHERE child_id = ?`, link.ChildID,
@@ -834,11 +855,11 @@ func TestScenario_MessageQueuedBehindAnOrphanedTaskRunsAfterRecovery(t *testing.
 
 	require.NoError(t, second.mgr.Start(second.ctx))
 	second.waitUntil("the queued message finally ran", func() bool {
-		return hasUserContaining(second.parentMessages(sessionID), "any progress?")
+		return hasUserContaining(second.messages(sessionID), "any progress?")
 	})
-	second.mgr.waitIdle(sessionID)
+	second.waitUntil("session idle", func() bool { return !second.mgr.HasActiveLoop(sessionID) })
 
-	final := second.parentMessages(sessionID)
+	final := second.messages(sessionID)
 	require.NoError(t, llm.ValidateToolPairing(final))
 	assert.Equal(t, 1, countAssistantToolCallsFor(final, tool.IDTask))
 	assert.Equal(t, 1, countToolResultsFor(final, tool.IDTask))
@@ -855,7 +876,7 @@ func TestHarnessScenario_ProcessCrashRestartDeliversInterruptedOnce(t *testing.T
 		require.True(t, hasUserContaining(messages, "<process_completion>"))
 		require.True(t, hasUserContaining(messages, "state: interrupted"))
 
-		return &llmwire.Response{Text: "interrupted process recovered"}
+		return textReply("interrupted process recovered")
 	}
 
 	first := newHarness(t, harnessOptions{dbPath: dbPath, respond: respond})
@@ -878,16 +899,16 @@ func TestHarnessScenario_ProcessCrashRestartDeliversInterruptedOnce(t *testing.T
 	require.NoError(t, first.mgr.processStore.InsertProcess(first.ctx, process))
 
 	second := newHarness(t, harnessOptions{dbPath: dbPath, respond: respond})
-	collector := collectEvents(second.mgr.bus.SubscribeAll())
+	collector := collectEvents(t, second.mgr.bus.SubscribeAll())
 	defer func() {
 		collector.stop()
 		second.shutdown()
 		first.shutdown()
 	}()
 	require.NoError(t, second.mgr.Start(second.ctx))
-	waitForVisibleMessage(t, collector, root.ID, "interrupted process recovered")
+	collector.waitMessage(root.ID, "interrupted process recovered")
 	drainScenarioClaims(t, "process_crash_restart.json", newChainController(t, second))
-	waitForIdleAfterMessage(t, collector, root.ID, "interrupted process recovered")
+	collector.waitIdleAfter(root.ID, "interrupted process recovered")
 
 	final, err := second.mgr.processStore.GetProcess(second.ctx, process.ID)
 	require.NoError(t, err)
@@ -908,10 +929,10 @@ func TestHarnessScenario_ForegroundBashCrashRestartResolvesInterruptedCall(t *te
 	respond := func(_ string, messages []llmwire.Message) *llmwire.Response {
 		modelCalls.Add(1)
 		if hasToolResultFor(messages, "bash") {
-			return &llmwire.Response{Text: "interrupted bash resolved"}
+			return textReply("interrupted bash resolved")
 		}
 
-		return &llmwire.Response{Text: "unexpected activation"}
+		return textReply("unexpected activation")
 	}
 
 	first := newHarness(t, harnessOptions{dbPath: dbPath, respond: respond})
@@ -959,15 +980,15 @@ func TestHarnessScenario_ForegroundBashCrashRestartResolvesInterruptedCall(t *te
 	require.NoError(t, first.mgr.processStore.InsertProcess(first.ctx, process))
 
 	second := newHarness(t, harnessOptions{dbPath: dbPath, respond: respond})
-	collector := collectEvents(second.mgr.bus.SubscribeAll())
+	collector := collectEvents(t, second.mgr.bus.SubscribeAll())
 	defer func() {
 		collector.stop()
 		second.shutdown()
 		first.shutdown()
 	}()
 	require.NoError(t, second.mgr.Start(second.ctx))
-	waitForVisibleMessage(t, collector, root.ID, "interrupted bash resolved")
-	waitForIdleAfterMessage(t, collector, root.ID, "interrupted bash resolved")
+	collector.waitMessage(root.ID, "interrupted bash resolved")
+	collector.waitIdleAfter(root.ID, "interrupted bash resolved")
 
 	final, err := second.mgr.processStore.GetProcess(second.ctx, process.ID)
 	require.NoError(t, err)
@@ -977,7 +998,7 @@ func TestHarnessScenario_ForegroundBashCrashRestartResolvesInterruptedCall(t *te
 	assert.Equal(t, int64(2), modelCalls.Load())
 
 	var bashResults, readResults int
-	for _, message := range second.parentMessages(root.ID) {
+	for _, message := range second.messages(root.ID) {
 		if message.Role != llmwire.RoleTool {
 			continue
 		}
@@ -997,7 +1018,7 @@ func TestHarnessScenario_ForegroundBashCrashRestartResolvesInterruptedCall(t *te
 
 func TestScenario_InterruptedCallSettlementNeedsNoProjectOrModel(t *testing.T) {
 	h := newHarness(t, harnessOptions{respond: func(string, []llmwire.Message) *llmwire.Response {
-		return &llmwire.Response{Text: "unused"}
+		return textReply("unused")
 	}})
 	defer h.shutdown()
 
@@ -1044,9 +1065,8 @@ func TestResponseIntegrity_RestartAfterTerminalFailureDoesNotRetry(t *testing.T)
 	first.startInboxWake()
 	rootID, err := first.mgr.Send(first.ctx, first.projectID, "fail terminally", "fake-model", nil)
 	require.NoError(t, err)
-	first.mgr.waitIdle(rootID)
-	record, err := first.store.GetSession(first.ctx, rootID)
-	require.NoError(t, err)
+	first.waitUntil("session idle", func() bool { return !first.mgr.HasActiveLoop(rootID) })
+	record := first.session(rootID)
 	require.Equal(t, sessionstore.SessionStatusError, record.Status)
 	first.shutdown()
 
@@ -1070,14 +1090,12 @@ func TestResponseIntegrity_RestartAfterTerminalFailureDoesNotRetry(t *testing.T)
 func TestScenario_StopOrdinaryBashDoesNotReplayAfterNewInputOrRestart(t *testing.T) {
 	respond := func(_ string, msgs []llmwire.Message) *llmwire.Response {
 		if hasUserContaining(msgs, "what happened?") {
-			return &llmwire.Response{Text: "fresh response"}
+			return textReply("fresh response")
 		}
-		if hasAssistantToolCall(msgs, "bash") {
-			return &llmwire.Response{Text: "old work was interrupted"}
+		if countAssistantToolCallsFor(msgs, "bash") > 0 {
+			return textReply("old work was interrupted")
 		}
-		return &llmwire.Response{ToolCalls: []llmwire.ToolCall{{
-			ID: "long-bash", Name: "bash", Arguments: []byte(`{"command":"sleep 30"}`),
-		}}}
+		return callReply("long-bash", "bash", `{"command":"sleep 30"}`)
 	}
 
 	for _, restart := range []bool{false, true} {
@@ -1088,7 +1106,7 @@ func TestScenario_StopOrdinaryBashDoesNotReplayAfterNewInputOrRestart(t *testing
 			firstID, err := first.mgr.Send(first.ctx, first.projectID, "watch checks", "fake-model", nil)
 			require.NoError(t, err)
 			first.waitUntil("ordinary bash started", func() bool {
-				return countAssistantToolCallsFor(first.parentMessages(firstID), "bash") == 1 &&
+				return countAssistantToolCallsFor(first.messages(firstID), "bash") == 1 &&
 					first.mgr.HasActiveLoop(firstID)
 			})
 
@@ -1098,7 +1116,7 @@ func TestScenario_StopOrdinaryBashDoesNotReplayAfterNewInputOrRestart(t *testing
 				return getErr == nil && rec.Status == sessionstore.SessionStatusStopped
 			})
 
-			active := first.parentMessages(firstID)
+			active := first.messages(firstID)
 			require.NoError(t, llm.ValidateToolPairing(active))
 			assert.Equal(t, 1, countToolResultsFor(active, "bash"))
 
@@ -1112,12 +1130,20 @@ func TestScenario_StopOrdinaryBashDoesNotReplayAfterNewInputOrRestart(t *testing
 
 			d.startInboxWake()
 			require.NoError(t, d.mgr.sendToSession(d.ctx, firstID, "what happened?"))
-			d.mgr.waitIdle(firstID)
-			final := d.parentMessages(firstID)
+			d.waitUntil("session idle", func() bool { return !d.mgr.HasActiveLoop(firstID) })
+			final := d.messages(firstID)
 			assert.Equal(t, 1, countAssistantToolCallsFor(final, "bash"))
 			assert.Equal(t, 1, countToolResultsFor(final, "bash"))
 			assert.True(t, hasUserContaining(final, "what happened?"))
-			assert.Contains(t, assistantTexts(final), "fresh response")
+			assert.Contains(t, func(messages []llmwire.Message) []string {
+				var texts []string
+				for _, message := range messages {
+					if message.Role == llmwire.RoleAssistant && message.Content != "" {
+						texts = append(texts, message.Content)
+					}
+				}
+				return texts
+			}(final), "fresh response")
 		})
 	}
 }
@@ -1140,7 +1166,7 @@ func TestScenario_StopThatDidNotSurviveItsRestartStillSettlesTheOrphan(t *testin
 	require.NoError(t, err)
 
 	first.waitUntil("the parent parked on the child", func() bool {
-		return countAssistantToolCallsFor(first.parentMessages(sessionID), tool.IDTask) == 1 &&
+		return countAssistantToolCallsFor(first.messages(sessionID), tool.IDTask) == 1 &&
 			!first.mgr.HasActiveLoop(sessionID)
 	})
 
@@ -1157,11 +1183,10 @@ func TestScenario_StopThatDidNotSurviveItsRestartStillSettlesTheOrphan(t *testin
 	second.startInboxWake()
 	second.mgr.resumeAfterRestart(second.ctx)
 
-	rec, err := second.store.GetSession(second.ctx, sessionID)
-	require.NoError(t, err)
+	rec := second.session(sessionID)
 	require.Equal(t, sessionstore.SessionStatusStopped, rec.Status, "the recovery finished the park")
 
-	recovered := second.parentMessages(sessionID)
+	recovered := second.messages(sessionID)
 	require.NoError(t, llm.ValidateToolPairing(recovered),
 		"a resumable stopped session must carry a transcript a provider accepts")
 	require.Equal(t, 1, countToolResultsFor(recovered, tool.IDTask),
@@ -1169,9 +1194,9 @@ func TestScenario_StopThatDidNotSurviveItsRestartStillSettlesTheOrphan(t *testin
 
 	second.startInboxWake()
 	require.NoError(t, second.mgr.sendToSession(second.ctx, sessionID, "any progress?"))
-	second.mgr.waitIdle(sessionID)
+	second.waitUntil("session idle", func() bool { return !second.mgr.HasActiveLoop(sessionID) })
 
-	final := second.parentMessages(sessionID)
+	final := second.messages(sessionID)
 	require.NoError(t, llm.ValidateToolPairing(final))
 	assert.Equal(t, 1, countAssistantToolCallsFor(final, tool.IDTask),
 		"the suspended call is answered, never re-executed")
@@ -1196,9 +1221,20 @@ func TestScenario_CrashBetweenFinalizationAndDeliveryRedeliversExactlyOnce(t *te
 			},
 		},
 		{
-			name:        "background child arrives through the parent inbox",
-			background:  true,
-			completions: countSubagentCompletions,
+			name:       "background child arrives through the parent inbox",
+			background: true,
+			completions: func(messages []llmwire.Message, childID int64) int {
+				needle := "child_id: " + strconv.FormatInt(childID, 10)
+				count := 0
+				for _, message := range messages {
+					if message.Role == llmwire.RoleUser && strings.Contains(message.Content, "<subagent_completion>") &&
+						strings.Contains(message.Content, needle) {
+						count++
+					}
+				}
+
+				return count
+			},
 		},
 	}
 
@@ -1214,7 +1250,8 @@ func TestScenario_CrashBetweenFinalizationAndDeliveryRedeliversExactlyOnce(t *te
 			parentID, err := first.mgr.Send(first.ctx, first.projectID, "spawn a child", "fake-model", nil)
 			require.NoError(t, err)
 
-			link := first.waitForChildLink(parentID)
+			first.waitUntil("child link", func() bool { return first.linkByCall(parentID, taskCallID) != nil })
+			link := *first.linkByCall(parentID, taskCallID)
 
 			select {
 			case <-gate.rejected:
@@ -1227,12 +1264,11 @@ func TestScenario_CrashBetweenFinalizationAndDeliveryRedeliversExactlyOnce(t *te
 			second := newHarness(t, harnessOptions{dbPath: dbPath, respond: crashWindowRespond(tc.background)})
 			defer second.shutdown()
 
-			owed, err := second.links.GetLink(second.ctx, link.ChildID)
-			require.NoError(t, err)
+			owed := second.link(link.ChildID)
 			require.NotNil(t, owed)
 			require.True(t, owed.Terminal(), "the child was finalized before the crash")
 			require.Zero(t, owed.DeliveredAt, "the completion handoff never committed before the crash")
-			require.Zero(t, tc.completions(second.parentMessages(parentID), link.ChildID),
+			require.Zero(t, tc.completions(second.messages(parentID), link.ChildID),
 				"the completion must not reach the transcript before the restart")
 
 			require.NoError(t, second.mgr.Start(second.ctx))
@@ -1240,11 +1276,11 @@ func TestScenario_CrashBetweenFinalizationAndDeliveryRedeliversExactlyOnce(t *te
 			// Waiting for one completion is not enough: it becomes visible when
 			// the parent's turn accepts it, before the turn's own reply commits.
 			second.waitUntil("sweep redelivered the owed completion", func() bool {
-				return lastAssistantTextDTO(second.parentMessages(parentID)) == "parent got the child result"
+				return lastAssistantTextDTO(second.messages(parentID)) == "parent got the child result"
 			})
-			second.mgr.waitIdle(parentID)
+			second.waitUntil("session idle", func() bool { return !second.mgr.HasActiveLoop(parentID) })
 
-			msgs := second.parentMessages(parentID)
+			msgs := second.messages(parentID)
 			require.NoError(t, llm.ValidateToolPairing(msgs), "the recovered transcript must stay provider-valid")
 			assert.Equal(t, 1, tc.completions(msgs, link.ChildID), "the redelivery commits exactly one completion")
 			assert.Equal(t, "parent got the child result", lastAssistantTextDTO(msgs),
@@ -1264,19 +1300,18 @@ func TestScenario_StoppedChildSurvivesARestartWithoutResurrection(t *testing.T) 
 	held := func(_ string, msgs []llmwire.Message) *llmwire.Response {
 		if hasUserContaining(msgs, "CHILD_TASK") {
 			<-release
-			return &llmwire.Response{Text: "child must never finish"}
+			return textReply("child must never finish")
 		}
 
 		if hasToolResultFor(msgs, "task") {
-			return &llmwire.Response{Text: "child launched"}
+			return textReply("child launched")
 		}
 
-		return &llmwire.Response{ToolCalls: []llmwire.ToolCall{{
-			ID: taskCallID, Name: "task",
-			Arguments: []byte(
-				`{"prompt":"CHILD_TASK hang","description":"c","subagent_type":"general","background":true}`,
-			),
-		}}}
+		return callReply(
+			taskCallID,
+			"task",
+			`{"prompt":"CHILD_TASK hang","description":"c","subagent_type":"general","background":true}`,
+		)
 	}
 
 	// Daemon B's child would answer immediately, so a wrongly resumed child shows
@@ -1289,13 +1324,13 @@ func TestScenario_StoppedChildSurvivesARestartWithoutResurrection(t *testing.T) 
 	parentID, err := first.mgr.Send(first.ctx, first.projectID, "spawn a child", "fake-model", nil)
 	require.NoError(t, err)
 
-	link := first.waitForChildLink(parentID)
+	first.waitUntil("child link", func() bool { return first.linkByCall(parentID, taskCallID) != nil })
+	link := *first.linkByCall(parentID, taskCallID)
 	first.waitUntil("child loop is live", func() bool { return first.mgr.HasActiveLoop(link.ChildID) })
 
 	require.NoError(t, first.mgr.sendToSession(first.ctx, link.ChildID, "/stop"))
 
-	parked, err := first.links.GetLink(first.ctx, link.ChildID)
-	require.NoError(t, err)
+	parked := first.link(link.ChildID)
 	require.Equal(t, subagent.StateStopped, parked.State)
 
 	first.shutdown()
@@ -1313,7 +1348,18 @@ func TestScenario_StoppedChildSurvivesARestartWithoutResurrection(t *testing.T) 
 			(current.State != subagent.StateStopped || current.DeliveredAt != 0)
 	}, 500*time.Millisecond, 25*time.Millisecond, "a stopped child stays parked across a restart")
 
-	assert.Zero(t, countSubagentCompletions(second.parentMessages(parentID), link.ChildID),
+	assert.Zero(t, func(messages []llmwire.Message, childID int64) int {
+		needle := "child_id: " + strconv.FormatInt(childID, 10)
+		count := 0
+		for _, message := range messages {
+			if message.Role == llmwire.RoleUser && strings.Contains(message.Content, "<subagent_completion>") &&
+				strings.Contains(message.Content, needle) {
+				count++
+			}
+		}
+
+		return count
+	}(second.messages(parentID), link.ChildID),
 		"a stopped child owes the parent nothing")
 	assert.False(t, second.mgr.HasActiveLoop(link.ChildID), "the sweep must not start a stopped child")
 }
@@ -1384,10 +1430,10 @@ func TestScenario_OwnedTaskCallSurvivesSchemaUpgradeAndRestarts(t *testing.T) {
 	// Boot a real daemon on the staged database: Run applies every later migration.
 	respond := func(_ string, msgs []llmwire.Message) *llmwire.Response {
 		if hasUserContaining(msgs, "CHILD_STAGED") {
-			return &llmwire.Response{Text: "staged child finished"}
+			return textReply("staged child finished")
 		}
 
-		return &llmwire.Response{Text: "parent done"}
+		return textReply("parent done")
 	}
 	h := newHarness(t, harnessOptions{dbPath: dbPath, respond: respond})
 	defer h.shutdown()
@@ -1401,35 +1447,44 @@ func TestScenario_OwnedTaskCallSurvivesSchemaUpgradeAndRestarts(t *testing.T) {
 		`SELECT COUNT(*) FROM pragma_table_info('subagent_links') WHERE name = 'timeout_sec'`).Scan(&timeoutCol))
 	assert.Zero(t, timeoutCol, "the boot migration must drop the legacy column")
 
-	link, err := h.links.GetLinkByTaskCallID(h.ctx, parent.ID, "tc_staged")
-	require.NoError(t, err)
+	link := h.linkByCall(parent.ID, "tc_staged")
 	require.NotNil(t, link)
 	assert.Equal(t, childID, link.ChildID,
 		"the staged link still owns the call — no new child may spawn")
 
 	// The child completes and delivers exactly once to the suspended parent.
-	h.waitForDelivery(childID)
+	h.waitUntil(
+		"child delivery",
+		func() bool { delivery := h.link(childID); return delivery != nil && delivery.DeliveredAt != 0 },
+	)
 	h.waitUntil("the parent consumed the staged child's completion", func() bool {
-		return countToolResultsFor(h.parentMessages(parent.ID), tool.IDTask) == 1 &&
+		return countToolResultsFor(h.messages(parent.ID), tool.IDTask) == 1 &&
 			!h.mgr.HasActiveLoop(parent.ID)
 	})
-	h.mgr.waitIdle(parent.ID)
+	h.waitUntil("session idle", func() bool { return !h.mgr.HasActiveLoop(parent.ID) })
 
-	final := h.parentMessages(parent.ID)
+	final := h.messages(parent.ID)
 	require.NoError(t, llm.ValidateToolPairing(final))
 	assert.Equal(t, 1, countAssistantToolCallsFor(final, tool.IDTask),
 		"the task call is never re-issued")
 	assert.Equal(t, 1, countToolResultsFor(final, tool.IDTask),
 		"exactly one completion fills the staged call")
-	require.Contains(t, lastToolResultContent(final, tool.IDTask), "staged child finished")
+	require.Contains(t, func(msgs []llmwire.Message, toolName string) string {
+		for _, v := range slices.Backward(msgs) {
+			if v.Role == llmwire.RoleTool && v.ToolName == toolName {
+				return v.Content
+			}
+		}
+
+		return ""
+	}(final, tool.IDTask), "staged child finished")
 
 	var spawnCount int
 	require.NoError(t, h.db.QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM sessions WHERE parent_id = ?`, parent.ID).Scan(&spawnCount))
 	assert.Equal(t, 1, spawnCount, "recovery spawns no replacement child")
 
-	link, err = h.links.GetLink(h.ctx, childID)
-	require.NoError(t, err)
+	link = h.link(childID)
 	require.NotNil(t, link)
 	assert.Equal(t, subagent.OutcomeCompleted, link.Outcome)
 }

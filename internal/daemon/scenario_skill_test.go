@@ -31,18 +31,17 @@ func TestHarnessScenario_SkillSeededTaskStartsWithRenderedEnvelope(t *testing.T)
 				}
 			}
 
-			return &llmwire.Response{Text: "skill child done"}
+			return textReply("skill child done")
 		}
 		if hasToolResultFor(messages, tool.IDTask) {
-			return &llmwire.Response{Text: "skill task delivered"}
+			return textReply("skill task delivered")
 		}
 
-		return &llmwire.Response{ToolCalls: []llmwire.ToolCall{{
-			ID: taskCallID, Name: tool.IDTask,
-			Arguments: []byte(
-				`{"skill":" REVIEW ","skill_args":"the diff","description":"review","subagent_type":"general"}`,
-			),
-		}}}
+		return callReply(
+			taskCallID,
+			tool.IDTask,
+			`{"skill":" REVIEW ","skill_args":"the diff","description":"review","subagent_type":"general"}`,
+		)
 	}
 
 	h := newHarness(t, harnessOptions{respond: respond})
@@ -61,7 +60,7 @@ Review $ARGUMENTS.
 	h.startInboxWake()
 	parentID, err := h.mgr.Send(h.ctx, h.projectID, "run review skill", "fake-model", nil)
 	require.NoError(t, err)
-	h.mgr.waitIdle(parentID)
+	h.waitUntil("session idle", func() bool { return !h.mgr.HasActiveLoop(parentID) })
 
 	select {
 	case input := <-childInput:
@@ -80,13 +79,11 @@ func TestHarnessScenario_SkillActivationReceiptOrdersTheOutputChain(t *testing.T
 	modelFollowUpQueued := make(chan struct{})
 	respond := func(_ string, msgs []llmwire.Message) *llmwire.Response {
 		if hasToolResultFor(msgs, "skill") {
-			return &llmwire.Response{Text: "model activation complete"}
+			return textReply("model activation complete")
 		}
 
 		if hasUserContaining(msgs, "invoke the skill yourself") {
-			return &llmwire.Response{ToolCalls: []llmwire.ToolCall{{
-				ID: "receipt-skill", Name: "skill", Arguments: []byte(`{"name":"review"}`),
-			}}}
+			return callReply("receipt-skill", "skill", `{"name":"review"}`)
 		}
 
 		if skillScenarioHasEnvelope(msgs) || hasToolResultFor(msgs, "ls") {
@@ -94,7 +91,7 @@ func TestHarnessScenario_SkillActivationReceiptOrdersTheOutputChain(t *testing.T
 				<-modelFollowUpQueued
 			}
 
-			return &llmwire.Response{Text: "probe answer"}
+			return textReply("probe answer")
 		}
 
 		return &llmwire.Response{
@@ -112,7 +109,7 @@ func TestHarnessScenario_SkillActivationReceiptOrdersTheOutputChain(t *testing.T
 	defer h.shutdown()
 	defer closeOnce(modelFollowUpQueued)
 
-	collector := collectEvents(h.mgr.bus.SubscribeAll())
+	collector := collectEvents(t, h.mgr.bus.SubscribeAll())
 	defer collector.stop()
 
 	h.startInboxWake()
@@ -120,7 +117,7 @@ func TestHarnessScenario_SkillActivationReceiptOrdersTheOutputChain(t *testing.T
 		"manager_id": scenarioManagerID,
 	})
 	require.NoError(t, err)
-	waitForVisibleMessage(t, collector, root, "probe answer")
+	collector.waitMessage(root, "probe answer")
 	// Settle before the next input: sending into a live loop keeps the same
 	// runner and races the session re-creation the golden trace records.
 	h.waitUntil("first turn settled", func() bool { return !h.mgr.HasActiveLoop(root) })
@@ -128,7 +125,7 @@ func TestHarnessScenario_SkillActivationReceiptOrdersTheOutputChain(t *testing.T
 	// Explicit /skill activation through the durable input boundary.
 	h.startInboxWake()
 	require.NoError(t, h.mgr.sendToSession(h.ctx, root, "/skill review"))
-	waitForVisibleMessage(t, collector, root, "🔧 Activated skill: review")
+	collector.waitMessage(root, "🔧 Activated skill: review")
 
 	// Model-initiated activation through the skill tool. The skill tool
 	// commits its result in-activation, so the model's next stop answers the
@@ -137,35 +134,22 @@ func TestHarnessScenario_SkillActivationReceiptOrdersTheOutputChain(t *testing.T
 	h.startInboxWake()
 	require.NoError(t, h.mgr.sendToSession(h.ctx, root, "invoke the skill yourself"))
 	closeOnce(modelFollowUpQueued)
-	waitForVisibleMessage(t, collector, root, "model activation complete")
+	collector.waitMessage(root, "model activation complete")
 
 	controller := newChainController(t, h)
 	drainScenarioClaims(t, "skill_activation_receipt.json", controller)
-	waitForIdleAfterMessage(t, collector, root, "model activation complete")
+	collector.waitIdleAfter(root, "model activation complete")
 
 	assertHarnessTrace(t, "skill_activation_receipt.json", collector.snapshot(), root)
 
 	// Exactly one receipt row per activation path, each a persistent message
 	// carrying the canonical skill name and nothing else.
-	var receipts []struct {
-		ID      int64
-		Type    string
-		Content string
-	}
-	rows, err := h.db.Query(`SELECT id, type, content FROM session_outbox
-		WHERE session_id = ? AND content LIKE '🔧 Activated skill: %' ORDER BY id`, root)
-	require.NoError(t, err)
-	defer rows.Close()
-	for rows.Next() {
-		var row struct {
-			ID      int64
-			Type    string
-			Content string
+	var receipts []outboxRow
+	for _, row := range h.outbox(root) {
+		if strings.HasPrefix(strings.ToLower(row.Content), "🔧 activated skill: ") {
+			receipts = append(receipts, row)
 		}
-		require.NoError(t, rows.Scan(&row.ID, &row.Type, &row.Content))
-		receipts = append(receipts, row)
 	}
-	require.NoError(t, rows.Err())
 	require.Len(t, receipts, 2, "one receipt per activation path")
 	for _, row := range receipts {
 		assert.Equal(t, "message_persistent", row.Type)
@@ -175,10 +159,11 @@ func TestHarnessScenario_SkillActivationReceiptOrdersTheOutputChain(t *testing.T
 	// A replaceable progress output exists before the first receipt and later
 	// progress starts after it: the persistent receipt closed the chain.
 	var progressBefore int
-	err = h.db.QueryRow(`SELECT COUNT(*) FROM session_outbox
-		WHERE session_id = ? AND type = 'message_replaceable' AND id < ?`,
-		root, receipts[0].ID).Scan(&progressBefore)
-	require.NoError(t, err)
+	for _, row := range h.outbox(root) {
+		if row.Type == "message_replaceable" && row.ID < receipts[0].ID {
+			progressBefore++
+		}
+	}
 	assert.Positive(t, progressBefore, "a replaceable card existed before the receipt")
 
 	// The receipt's source key binds it to its accepted input, so a promotion
@@ -218,7 +203,7 @@ func TestHarnessScenario_SkillSurvivesTwoCompactionsExactlyOnce(t *testing.T) {
 		skillName: skillDoc(skillName, "The playbook", "Follow these steps for $ARGUMENTS."),
 	}, skillCompactRespond)
 	h, rec := wrapped.harness, wrapped.recorder
-	collector := collectEvents(h.mgr.bus.SubscribeAll())
+	collector := collectEvents(t, h.mgr.bus.SubscribeAll())
 
 	defer func() {
 		collector.stop()
@@ -228,14 +213,14 @@ func TestHarnessScenario_SkillSurvivesTwoCompactionsExactlyOnce(t *testing.T) {
 	h.startInboxWake()
 	sessionID, err := h.mgr.Send(h.ctx, h.projectID, "start the work", "fake-model", nil)
 	require.NoError(t, err)
-	h.mgr.waitIdle(sessionID)
+	h.waitUntil("session idle", func() bool { return !h.mgr.HasActiveLoop(sessionID) })
 
 	h.startInboxWake()
 	require.NoError(t, h.mgr.sendToSession(h.ctx, sessionID, "/skill "+skillName+" the release"))
 	h.waitUntil("skill attached", func() bool {
-		return countMessagesWithSkill(h.parentMessages(sessionID), skillName) == 1
+		return countMessagesWithSkill(h.messages(sessionID), skillName) == 1
 	})
-	h.mgr.waitIdle(sessionID)
+	h.waitUntil("session idle", func() bool { return !h.mgr.HasActiveLoop(sessionID) })
 
 	compactOnce := func(round int) {
 		h.startInboxWake()
@@ -243,12 +228,12 @@ func TestHarnessScenario_SkillSurvivesTwoCompactionsExactlyOnce(t *testing.T) {
 		collector.waitFor(t, "compaction reported", func(e []controllerapi.SessionNotification) bool {
 			return countPublishedMessage(e, sessionID, noticeCompacted) == round
 		})
-		h.mgr.waitIdle(sessionID)
+		h.waitUntil("session idle", func() bool { return !h.mgr.HasActiveLoop(sessionID) })
 	}
 
 	compactOnce(1)
 
-	first := h.parentMessages(sessionID)
+	first := h.messages(sessionID)
 	require.True(t, hasSummaryRow(first))
 	require.Equal(t, 1, countMessagesWithSkill(first, skillName), "the skill is reattached exactly once")
 
@@ -256,11 +241,11 @@ func TestHarnessScenario_SkillSurvivesTwoCompactionsExactlyOnce(t *testing.T) {
 	// summarize and must decide what to do with the envelope it wrote itself.
 	h.startInboxWake()
 	require.NoError(t, h.mgr.sendToSession(h.ctx, sessionID, "keep going"))
-	h.mgr.waitIdle(sessionID)
+	h.waitUntil("session idle", func() bool { return !h.mgr.HasActiveLoop(sessionID) })
 
 	compactOnce(2)
 
-	second := h.parentMessages(sessionID)
+	second := h.messages(sessionID)
 	require.True(t, hasSummaryRow(second))
 	assert.Equal(t, 1, countMessagesWithSkill(second, skillName),
 		"a second compaction neither duplicates nor drops the reattached skill")
@@ -278,7 +263,7 @@ func TestHarnessScenario_SkillSurvivesTwoCompactionsExactlyOnce(t *testing.T) {
 	// The reattachment is not decoration: the model gets it on the next turn.
 	h.startInboxWake()
 	require.NoError(t, h.mgr.sendToSession(h.ctx, sessionID, "what next?"))
-	h.mgr.waitIdle(sessionID)
+	h.waitUntil("session idle", func() bool { return !h.mgr.HasActiveLoop(sessionID) })
 
 	calls := rec.snapshot()
 	require.NotEmpty(t, calls)
@@ -295,7 +280,7 @@ func TestHarnessScenario_SkillCommandExpandsBeforeTheModelCall(t *testing.T) {
 		skillName: skillDoc(skillName, "Draft release notes", "Draft notes for $ARGUMENTS."),
 	}, plainRespond)
 	h, rec := wrapped.harness, wrapped.recorder
-	collector := collectEvents(h.mgr.bus.SubscribeAll())
+	collector := collectEvents(t, h.mgr.bus.SubscribeAll())
 
 	defer func() {
 		collector.stop()
@@ -305,14 +290,14 @@ func TestHarnessScenario_SkillCommandExpandsBeforeTheModelCall(t *testing.T) {
 	h.startInboxWake()
 	sessionID, err := h.mgr.Send(h.ctx, h.projectID, "warm up", "fake-model", nil)
 	require.NoError(t, err)
-	h.mgr.waitIdle(sessionID)
+	h.waitUntil("session idle", func() bool { return !h.mgr.HasActiveLoop(sessionID) })
 
 	h.startInboxWake()
 	require.NoError(t, h.mgr.sendToSession(h.ctx, sessionID, "/skill "+skillName+" v1.2.3"))
 	h.waitUntil("expanded skill reaches the transcript", func() bool {
-		return countMessagesWithSkill(h.parentMessages(sessionID), skillName) == 1
+		return countMessagesWithSkill(h.messages(sessionID), skillName) == 1
 	})
-	h.mgr.waitIdle(sessionID)
+	h.waitUntil("session idle", func() bool { return !h.mgr.HasActiveLoop(sessionID) })
 
 	calls := rec.snapshot()
 	require.NotEmpty(t, calls)
@@ -355,7 +340,7 @@ func TestHarnessScenario_SkillInvocationPolicySeparatesUserAndModelPaths(t *test
 				tc.skill: skillDoc(tc.skill, "policy probe", "Body of "+tc.skill+".", tc.frontmatter),
 			}, plainRespond)
 			h, rec := wrapped.harness, wrapped.recorder
-			collector := collectEvents(h.mgr.bus.SubscribeAll())
+			collector := collectEvents(t, h.mgr.bus.SubscribeAll())
 
 			defer func() {
 				collector.stop()
@@ -365,7 +350,7 @@ func TestHarnessScenario_SkillInvocationPolicySeparatesUserAndModelPaths(t *test
 			h.startInboxWake()
 			sessionID, err := h.mgr.Send(h.ctx, h.projectID, "warm up", "fake-model", nil)
 			require.NoError(t, err)
-			h.mgr.waitIdle(sessionID)
+			h.waitUntil("session idle", func() bool { return !h.mgr.HasActiveLoop(sessionID) })
 
 			calls := rec.snapshot()
 			require.NotEmpty(t, calls)
@@ -377,9 +362,9 @@ func TestHarnessScenario_SkillInvocationPolicySeparatesUserAndModelPaths(t *test
 
 			if tc.wantExpanded {
 				h.waitUntil("expanded skill reaches the transcript", func() bool {
-					return countMessagesWithSkill(h.parentMessages(sessionID), tc.skill) == 1
+					return countMessagesWithSkill(h.messages(sessionID), tc.skill) == 1
 				})
-				h.mgr.waitIdle(sessionID)
+				h.waitUntil("session idle", func() bool { return !h.mgr.HasActiveLoop(sessionID) })
 				assert.Empty(t, warningNotices(collector.snapshot(), sessionID))
 
 				return
@@ -388,10 +373,10 @@ func TestHarnessScenario_SkillInvocationPolicySeparatesUserAndModelPaths(t *test
 			collector.waitFor(t, "rejection notice", func(e []controllerapi.SessionNotification) bool {
 				return len(warningNotices(e, sessionID)) > 0
 			})
-			h.mgr.waitIdle(sessionID)
+			h.waitUntil("session idle", func() bool { return !h.mgr.HasActiveLoop(sessionID) })
 
 			assert.Contains(t, warningNotices(collector.snapshot(), sessionID)[0], "skill unavailable: "+tc.skill)
-			assert.Zero(t, countMessagesWithSkill(h.parentMessages(sessionID), tc.skill))
+			assert.Zero(t, countMessagesWithSkill(h.messages(sessionID), tc.skill))
 			h.requireInboxDrained(sessionID)
 		})
 	}
@@ -403,7 +388,7 @@ func TestHarnessScenario_SkillInvocationPolicySeparatesUserAndModelPaths(t *test
 func TestHarnessScenario_UnknownSkillCommandIsRejectedOnceAndDrains(t *testing.T) {
 	wrapped := newSkillHarness(t, nil, plainRespond)
 	h, rec := wrapped.harness, wrapped.recorder
-	collector := collectEvents(h.mgr.bus.SubscribeAll())
+	collector := collectEvents(t, h.mgr.bus.SubscribeAll())
 
 	defer func() {
 		collector.stop()
@@ -413,7 +398,7 @@ func TestHarnessScenario_UnknownSkillCommandIsRejectedOnceAndDrains(t *testing.T
 	h.startInboxWake()
 	sessionID, err := h.mgr.Send(h.ctx, h.projectID, "warm up", "fake-model", nil)
 	require.NoError(t, err)
-	h.mgr.waitIdle(sessionID)
+	h.waitUntil("session idle", func() bool { return !h.mgr.HasActiveLoop(sessionID) })
 
 	callsBefore := len(rec.snapshot())
 
@@ -422,7 +407,7 @@ func TestHarnessScenario_UnknownSkillCommandIsRejectedOnceAndDrains(t *testing.T
 	collector.waitFor(t, "rejection notice reaches the controller", func(e []controllerapi.SessionNotification) bool {
 		return len(warningNotices(e, sessionID)) > 0
 	})
-	h.mgr.waitIdle(sessionID)
+	h.waitUntil("session idle", func() bool { return !h.mgr.HasActiveLoop(sessionID) })
 
 	notices := warningNotices(collector.snapshot(), sessionID)
 	require.Len(t, notices, 1, "exactly one rejection notice")
@@ -430,7 +415,7 @@ func TestHarnessScenario_UnknownSkillCommandIsRejectedOnceAndDrains(t *testing.T
 
 	h.requireInboxDrained(sessionID)
 
-	msgs := h.parentMessages(sessionID)
+	msgs := h.messages(sessionID)
 	assert.False(t, hasUserContaining(msgs, "/skill nonexistent"), "a rejected command never enters the transcript")
 	assert.Len(t, rec.snapshot(), callsBefore, "a rejected command must not cost a model turn")
 	assert.False(t, h.mgr.HasActiveLoop(sessionID))
@@ -452,7 +437,7 @@ func TestHarnessScenario_UnknownSkillOnAFreshSessionCostsNoModelTurn(t *testing.
 		t.Run(tc.name, func(t *testing.T) {
 			wrapped := newSkillHarness(t, nil, plainRespond)
 			h, rec := wrapped.harness, wrapped.recorder
-			collector := collectEvents(h.mgr.bus.SubscribeAll())
+			collector := collectEvents(t, h.mgr.bus.SubscribeAll())
 
 			defer func() {
 				collector.stop()
@@ -472,12 +457,12 @@ func TestHarnessScenario_UnknownSkillOnAFreshSessionCostsNoModelTurn(t *testing.
 			collector.waitFor(t, "rejection notice", func(e []controllerapi.SessionNotification) bool {
 				return len(warningNotices(e, sessionID)) > 0
 			})
-			h.mgr.waitIdle(sessionID)
+			h.waitUntil("session idle", func() bool { return !h.mgr.HasActiveLoop(sessionID) })
 
 			assert.Len(t, warningNotices(collector.snapshot(), sessionID), 1, "exactly one rejection notice")
 			h.requireInboxDrained(sessionID)
 			assert.Empty(t, rec.snapshot(), "a conversation that asks nothing is never sent to the provider")
-			assert.Len(t, h.parentMessages(sessionID), tc.wantStart, "a rejected command writes nothing")
+			assert.Len(t, h.messages(sessionID), tc.wantStart, "a rejected command writes nothing")
 		})
 	}
 }

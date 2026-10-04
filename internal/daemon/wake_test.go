@@ -60,7 +60,7 @@ func TestProcessInputRearmsCompletedChildAfterPriorOutcomeHandoff(t *testing.T) 
 	assert.Equal(t, processInput.Input.ID, pending.ID)
 	assert.Equal(t, sessionstore.InputSourceProcess, pending.Source)
 
-	require.Eventually(t, func() bool {
+	testHarness.waitUntil("TestProcessInputRearmsCompletedChildAfterPriorOutcomeHandoff", func() bool {
 		messages, msgErr := mgr.store.LoadActiveMessages(ctx, parent.ID)
 		if msgErr != nil {
 			return false
@@ -74,7 +74,7 @@ func TestProcessInputRearmsCompletedChildAfterPriorOutcomeHandoff(t *testing.T) 
 		}
 
 		return false
-	}, 5*time.Second, 10*time.Millisecond)
+	})
 
 	mgr.Shutdown(3 * time.Second)
 }

@@ -86,13 +86,7 @@ func scriptedToolCall(name, args string) *llmwire.Response {
 
 	scriptedCallCounter++
 
-	return measuredResponse(&llmwire.Response{
-		ToolCalls: []llmwire.ToolCall{{
-			ID:        fmt.Sprintf("%s-call-%d", name, scriptedCallCounter),
-			Name:      name,
-			Arguments: []byte(args),
-		}},
-	})
+	return measuredResponse(callReply(fmt.Sprintf("%s-call-%d", name, scriptedCallCounter), name, args))
 }
 
 // isCompactionPrompt recognises the summarization call: the replayed prefix
@@ -135,17 +129,22 @@ func indexOfSubagentCompletion(msgs []llmwire.Message) int {
 
 func (h *harness) waitUntil(label string, cond func() bool) {
 	h.t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
+	timer := time.NewTimer(5 * time.Second)
+	defer timer.Stop()
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
 
-	for time.Now().Before(deadline) {
+	for {
 		if cond() {
 			return
 		}
 
-		time.Sleep(10 * time.Millisecond)
+		select {
+		case <-ticker.C:
+		case <-timer.C:
+			h.t.Fatalf("timed out waiting for: %s", label)
+		}
 	}
-
-	h.t.Fatalf("timed out waiting for: %s", label)
 }
 
 var errBudgetParkProbe = errors.New("budget park probe")
@@ -226,22 +225,14 @@ func compactionNotices(events []controllerapi.SessionNotification, sessionID int
 // with plain text.
 func compactOnlyRespond(_ string, msgs []llmwire.Message) *llmwire.Response {
 	if isCompactionInstruction(msgs) {
-		return &llmwire.Response{
-			Text: "## Goal\nsome work\n## Progress\n- done\n## Context for Continuation\ncarry on",
-		}
+		return textReply("## Goal\nsome work\n## Progress\n- done\n## Context for Continuation\ncarry on")
 	}
 
 	if hasToolResultFor(msgs, "ls") {
-		return &llmwire.Response{Text: "work done"}
+		return textReply("work done")
 	}
 
-	return &llmwire.Response{
-		ToolCalls: []llmwire.ToolCall{{
-			ID:        "ls-1",
-			Name:      "ls",
-			Arguments: []byte(`{"path":"."}`),
-		}},
-	}
+	return callReply("ls-1", "ls", `{"path":"."}`)
 }
 
 const contextSummaryPrefix = "[CONTEXT SUMMARY"
@@ -267,9 +258,7 @@ func isCompactionInstruction(msgs []llmwire.Message) bool {
 func blockingCompactRespond(release <-chan struct{}) func(string, []llmwire.Message) *llmwire.Response {
 	return func(_ string, msgs []llmwire.Message) *llmwire.Response {
 		if isCompactionInstruction(msgs) {
-			return &llmwire.Response{
-				Text: "## Goal\nspawn work\n## Progress\n- child ran\n## Context for Continuation\ncarry on",
-			}
+			return textReply("## Goal\nspawn work\n## Progress\n- child ran\n## Context for Continuation\ncarry on")
 		}
 
 		if hasUserContaining(msgs, "CHILD_TASK") {
@@ -277,28 +266,24 @@ func blockingCompactRespond(release <-chan struct{}) func(string, []llmwire.Mess
 				<-release
 			}
 
-			return &llmwire.Response{Text: "blocking child done: 7"}
+			return textReply("blocking child done: 7")
 		}
 
 		// The deferred /compact continues the activation, so the parent may be
 		// asked again over the compacted transcript — answer, don't re-spawn.
 		if hasSummaryRow(msgs) || hasToolResultFor(msgs, "task") {
-			return &llmwire.Response{Text: "parent got the child result"}
+			return textReply("parent got the child result")
 		}
 
 		if !hasToolResultFor(msgs, "ls") {
-			return &llmwire.Response{ToolCalls: []llmwire.ToolCall{{
-				ID:        "ls-before-spawn",
-				Name:      "ls",
-				Arguments: []byte(`{"path":"."}`),
-			}}}
+			return callReply("ls-before-spawn", "ls", `{"path":"."}`)
 		}
 
-		return &llmwire.Response{ToolCalls: []llmwire.ToolCall{{
-			ID:        taskCallID,
-			Name:      "task",
-			Arguments: []byte(`{"prompt":"CHILD_TASK do it","description":"c","subagent_type":"general"}`),
-		}}}
+		return callReply(
+			taskCallID,
+			"task",
+			`{"prompt":"CHILD_TASK do it","description":"c","subagent_type":"general"}`,
+		)
 	}
 }
 
@@ -347,37 +332,15 @@ func newLedgerHarness(t *testing.T) *ledgerHarness {
 	activation := &flakyActivationStore{Store: h.mgr.links}
 	h.mgr.links = activation
 
-	parent, err := h.store.CreateSession(h.ctx, h.projectID, "fake-model", "", nil)
-	require.NoError(t, err)
+	parentID := h.createRoot(nil)
 
-	childID, err := func() (int64, error) {
-		var id int64
-		err := h.store.WithTx(h.ctx, func(tx *sql.Tx) error {
-			var err error
-			id, err = sessionstore.CreateSubagentSessionTx(
-				h.ctx,
-				tx,
-				sessionstore.CreateSubagentSession{
-					ProjectID:      h.projectID,
-					ParentID:       parent.ID,
-					RootID:         parent.ID,
-					AgentType:      "general",
-					Model:          "fake-model",
-					ReasoningLevel: "",
-				},
-			)
-			return err
-		})
-		return id, err
-	}()
-	require.NoError(t, err)
-	require.NoError(t, seedChildLink(h.ctx, h.store, subagent.Link{
-		ParentID: parent.ID, ChildID: childID, TaskCallID: "bg",
-	}))
+	childID := h.createChild(parentID, subagent.Link{
+		TaskCallID: "bg",
+	})
 
 	return &ledgerHarness{
 		harness: h, flaky: flaky, activation: activation,
-		parentID: parent.ID, childID: childID,
+		parentID: parentID, childID: childID,
 	}
 }
 
@@ -398,7 +361,7 @@ func drainNotifications(ch <-chan sessionevent.Notification) []sessionevent.Noti
 // trivialRespond: every session finishes immediately. Used when the test drives
 // Spawn directly and does not want children to spawn further.
 func trivialRespond(_ string, _ []llmwire.Message) *llmwire.Response {
-	return &llmwire.Response{Text: "done"}
+	return textReply("done")
 }
 
 // blockingParentRespond builds a respond that spawns one blocking child, then
@@ -410,14 +373,10 @@ func blockingParentRespond(childBody func() *llmwire.Response) func(string, []ll
 		}
 
 		if hasToolResultFor(msgs, "task") {
-			return &llmwire.Response{Text: "parent done"}
+			return textReply("parent done")
 		}
 
-		return &llmwire.Response{ToolCalls: []llmwire.ToolCall{{
-			ID:        taskCallID,
-			Name:      "task",
-			Arguments: []byte(`{"prompt":"CHILD_TASK","description":"c","subagent_type":"general"}`),
-		}}}
+		return callReply(taskCallID, "task", `{"prompt":"CHILD_TASK","description":"c","subagent_type":"general"}`)
 	}
 }
 
@@ -445,19 +404,6 @@ func (h *harness) queueLen() int {
 	return runnerWaitingCount(h.mgr.runners)
 }
 
-func (h *harness) waitForLinkByCall(parentID int64, callID string) subagent.Link {
-	h.t.Helper()
-	h.waitUntil("link for "+callID, func() bool {
-		link, err := h.links.GetLinkByTaskCallID(h.ctx, parentID, callID)
-		return err == nil && link != nil
-	})
-
-	link, err := h.links.GetLinkByTaskCallID(h.ctx, parentID, callID)
-	require.NoError(h.t, err)
-
-	return *link
-}
-
 const (
 	applyCallA = "cfg-call-a"
 	applyCallB = "cfg-call-b"
@@ -469,26 +415,18 @@ const (
 // in the transcript it belongs to.
 func twoSessionApplyRespond(_ string, msgs []llmwire.Message) *llmwire.Response {
 	if hasToolResultFor(msgs, tool.IDConfigEdit) {
-		return &llmwire.Response{Text: "configuration replaced"}
+		return textReply("configuration replaced")
 	}
 
 	if !hasUserContaining(msgs, configapply.ConfigEditCommand) {
-		return &llmwire.Response{Text: "ready to reconfigure"}
+		return textReply("ready to reconfigure")
 	}
 
 	if hasUserContaining(msgs, "APPLY_B") {
-		return &llmwire.Response{ToolCalls: []llmwire.ToolCall{{
-			ID:        applyCallB,
-			Name:      tool.IDConfigEdit,
-			Arguments: json.RawMessage(`{"document":` + mustQuoteJSON(configEditCandidateB) + `}`),
-		}}}
+		return callReply(applyCallB, tool.IDConfigEdit, `{"document":`+mustQuoteJSON(configEditCandidateB)+`}`)
 	}
 
-	return &llmwire.Response{ToolCalls: []llmwire.ToolCall{{
-		ID:        applyCallA,
-		Name:      tool.IDConfigEdit,
-		Arguments: json.RawMessage(`{"document":` + mustQuoteJSON(configEditCandidateA) + `}`),
-	}}}
+	return callReply(applyCallA, tool.IDConfigEdit, `{"document":`+mustQuoteJSON(configEditCandidateA)+`}`)
 }
 
 const configEditCandidateA = `providers:
@@ -562,18 +500,14 @@ type applyDaemon struct {
 // suspended call was re-executed.
 func configApplyRespond(_ string, msgs []llmwire.Message) *llmwire.Response {
 	if hasToolResultFor(msgs, tool.IDConfigEdit) {
-		return &llmwire.Response{Text: "configuration replaced"}
+		return textReply("configuration replaced")
 	}
 
 	if hasUserContaining(msgs, configapply.ConfigEditCommand) {
-		return &llmwire.Response{ToolCalls: []llmwire.ToolCall{{
-			ID:        applyCallID,
-			Name:      tool.IDConfigEdit,
-			Arguments: json.RawMessage(`{"document":` + mustQuoteJSON(configEditCandidate) + `}`),
-		}}}
+		return callReply(applyCallID, tool.IDConfigEdit, `{"document":`+mustQuoteJSON(configEditCandidate)+`}`)
 	}
 
-	return &llmwire.Response{Text: "ready to reconfigure"}
+	return textReply("ready to reconfigure")
 }
 
 func newApplyConfigDir(t *testing.T) string {
@@ -599,22 +533,6 @@ func newApplyDaemon(t *testing.T, dbPath, configDir string) *applyDaemon {
 }
 
 func (d *applyDaemon) restartCount() int { return len(d.restarts) }
-
-func (d *applyDaemon) waitForConfigResult(sessionID int64) {
-	d.waitUntil("config verdict consumed", func() bool {
-		return hasToolResultFor(d.parentMessages(sessionID), tool.IDConfigEdit) && !d.mgr.HasActiveLoop(sessionID)
-	})
-}
-
-func (d *applyDaemon) waitForRestart(t *testing.T) {
-	t.Helper()
-
-	select {
-	case <-d.restarts:
-	case <-time.After(5 * time.Second):
-		t.Fatal("the staged config change never asked for a restart")
-	}
-}
 
 // bootVerdict replays what cmd/coagent's boot does with a marker: resolve it,
 // spend the grant behind an applied verdict, then hand the verdict to the
@@ -671,12 +589,19 @@ func stageApplyAndStop(t *testing.T, dbPath, configDir string) int64 {
 	first.waitUntil("opener turn settled", func() bool {
 		return !first.mgr.HasActiveLoop(sessionID)
 	})
-	first.mgr.waitIdle(sessionID)
+	first.waitUntil("session idle", func() bool { return !first.mgr.HasActiveLoop(sessionID) })
 
 	first.startInboxWake()
 	require.NoError(t, first.mgr.sendToSession(first.ctx, sessionID, configapply.ConfigEditCommand))
 
-	first.waitForRestart(t)
+	first.waitUntil("restart requested", func() bool {
+		select {
+		case <-first.restarts:
+			return true
+		default:
+			return false
+		}
+	})
 	first.waitUntil("session suspended on the config call", func() bool {
 		return !first.mgr.HasActiveLoop(sessionID)
 	})
@@ -688,7 +613,7 @@ func stageApplyAndStop(t *testing.T, dbPath, configDir string) int64 {
 	require.Equal(t, applyCallID, pending.ToolCallID)
 	require.Equal(t, tool.IDConfigEdit, pending.ToolName)
 
-	msgs := first.parentMessages(sessionID)
+	msgs := first.messages(sessionID)
 	require.Equal(t, 1, countAssistantToolCallsFor(msgs, tool.IDConfigEdit))
 	require.Zero(t, countToolResultsFor(msgs, tool.IDConfigEdit), "the call is out with the world")
 
@@ -731,7 +656,7 @@ func testAbandonedConfigCommand(t *testing.T, restart bool) {
 	d.startInboxWake()
 	id, err := d.mgr.Send(d.ctx, d.projectID, "hello", "fake-model", map[string]any{"manager_id": "telegram:main"})
 	require.NoError(t, err)
-	d.mgr.waitIdle(id)
+	d.waitUntil("session idle", func() bool { return !d.mgr.HasActiveLoop(id) })
 	_, err = d.db.ExecContext(
 		d.ctx,
 		`CREATE TRIGGER reject_config_suspend BEFORE UPDATE OF status ON sessions WHEN NEW.status = 'suspended' BEGIN SELECT RAISE(ABORT, 'injected suspend failure'); END`,
@@ -744,7 +669,7 @@ func testAbandonedConfigCommand(t *testing.T, restart bool) {
 		require.NoError(t, err)
 	}
 	require.NoError(t, d.mgr.sendToSession(d.ctx, id, "/config change the default model"))
-	d.mgr.waitIdle(id)
+	d.waitUntil("session idle", func() bool { return !d.mgr.HasActiveLoop(id) })
 	d.waitUntil(
 		"abandoned config activation expired",
 		func() bool { return currentActivationOf(t, d.harness, id) == nil },
@@ -752,14 +677,14 @@ func testAbandonedConfigCommand(t *testing.T, restart bool) {
 	if !restart {
 		d.waitUntil(
 			"abandoned config result settled",
-			func() bool { return hasToolResultFor(d.parentMessages(id), tool.IDConfigEdit) },
+			func() bool { return hasToolResultFor(d.messages(id), tool.IDConfigEdit) },
 		)
 	}
 
 	activation := currentActivationOf(t, d.harness, id)
 	assert.Nil(t, activation)
 	if restart {
-		assert.False(t, hasToolResultFor(d.parentMessages(id), tool.IDConfigEdit))
+		assert.False(t, hasToolResultFor(d.messages(id), tool.IDConfigEdit))
 		_, err = d.db.ExecContext(d.ctx, "DROP TRIGGER reject_apply_result")
 		require.NoError(t, err)
 		_, err = d.db.ExecContext(d.ctx, "DROP TRIGGER reject_config_suspend")
@@ -767,28 +692,36 @@ func testAbandonedConfigCommand(t *testing.T, restart bool) {
 		d.shutdown()
 		d = newApplyDaemonWith(t, dbPath, configDir, configEditRespond)
 		require.NoError(t, d.mgr.Start(d.ctx))
-		d.mgr.waitIdle(id)
+		d.waitUntil("session idle", func() bool { return !d.mgr.HasActiveLoop(id) })
 	} else {
 		_, err = d.db.ExecContext(d.ctx, "DROP TRIGGER reject_config_suspend")
 		require.NoError(t, err)
-		assert.Contains(t, lastToolResultContent(d.parentMessages(id), tool.IDConfigEdit), "Config change abandoned")
+		assert.Contains(t, func(msgs []llmwire.Message, toolName string) string {
+			for _, v := range slices.Backward(msgs) {
+				if v.Role == llmwire.RoleTool && v.ToolName == toolName {
+					return v.Content
+				}
+			}
+
+			return ""
+		}(d.messages(id), tool.IDConfigEdit), "Config change abandoned")
 	}
 	require.NoError(t, d.mgr.sendToSession(d.ctx, id, "continue after cancellation"))
-	d.mgr.waitIdle(id)
-	assert.True(t, hasUserContaining(d.parentMessages(id), "continue after cancellation"))
-	assert.Equal(t, 1, countToolResultsFor(d.parentMessages(id), tool.IDConfigEdit))
+	d.waitUntil("session idle", func() bool { return !d.mgr.HasActiveLoop(id) })
+	assert.True(t, hasUserContaining(d.messages(id), "continue after cancellation"))
+	assert.Equal(t, 1, countToolResultsFor(d.messages(id), tool.IDConfigEdit))
 	assert.Zero(t, d.restartCount())
 }
 
 func testAbandonedApply(t *testing.T, failure string) {
 	t.Helper()
 	d := newApplyDaemonWith(t, filepath.Join(t.TempDir(), "abandoned.db"), newApplyConfigDir(t),
-		func(string, []llmwire.Message) *llmwire.Response { return &llmwire.Response{Text: "ready"} })
+		func(string, []llmwire.Message) *llmwire.Response { return textReply("ready") })
 	defer d.shutdown()
 	d.startInboxWake()
 	id, err := d.mgr.Send(d.ctx, d.projectID, "hello", "fake-model", nil)
 	require.NoError(t, err)
-	d.mgr.waitIdle(id)
+	d.waitUntil("session idle", func() bool { return !d.mgr.HasActiveLoop(id) })
 	calls, err := json.Marshal([]llmwire.ToolCall{{ID: configEditCallID, Name: tool.IDConfigEdit}})
 	require.NoError(t, err)
 	_, err = d.store.Commit(d.ctx, sessionstore.Commit{SessionID: id, Messages: []*transcript.Message{{
@@ -812,15 +745,23 @@ func testAbandonedApply(t *testing.T, failure string) {
 	if failure == "stop" || failure == "kill" {
 		if failure == "stop" {
 			require.NoError(t, d.mgr.sendToSession(d.ctx, id, "/stop"))
-			assert.Contains(t, lastToolResultContent(d.parentMessages(id), tool.IDConfigEdit), "Stopped by user")
+			assert.Contains(t, func(msgs []llmwire.Message, toolName string) string {
+				for _, v := range slices.Backward(msgs) {
+					if v.Role == llmwire.RoleTool && v.ToolName == toolName {
+						return v.Content
+					}
+				}
+
+				return ""
+			}(d.messages(id), tool.IDConfigEdit), "Stopped by user")
 		} else {
 			require.NoError(t, d.mgr.sendToSession(d.ctx, id, "/kill"))
-			assert.False(t, hasToolResultFor(d.parentMessages(id), tool.IDConfigEdit))
+			assert.False(t, hasToolResultFor(d.messages(id), tool.IDConfigEdit))
 		}
 		assert.Zero(t, d.restartCount())
 		return
 	}
-	d.mgr.waitIdle(id)
+	d.waitUntil("session idle", func() bool { return !d.mgr.HasActiveLoop(id) })
 	d.waitUntil("failed construction settled its staged apply", func() bool {
 		record, err := d.store.GetSession(d.ctx, id)
 
@@ -833,19 +774,27 @@ func testAbandonedApply(t *testing.T, failure string) {
 	assert.Equal(t, "keep this input", pending.RawContent)
 	if failWrite {
 		assert.True(t, d.mgr.applier.Has(id))
-		assert.False(t, hasToolResultFor(d.parentMessages(id), tool.IDConfigEdit))
+		assert.False(t, hasToolResultFor(d.messages(id), tool.IDConfigEdit))
 		_, err = d.db.ExecContext(d.ctx, "DROP TRIGGER reject_apply_result")
 		require.NoError(t, err)
 
 		d.mgr.build.Config.UnifiedConfig.Models = configuredModels
 		require.NoError(t, d.mgr.sendToSession(d.ctx, id, "retry now"))
-		d.mgr.waitIdle(id)
+		d.waitUntil("session idle", func() bool { return !d.mgr.HasActiveLoop(id) })
 		_, err = d.store.PeekPending(d.ctx, id)
 		require.ErrorIs(t, err, sessionstore.ErrNoPendingInput)
-		assert.True(t, hasUserContaining(d.parentMessages(id), "keep this input"))
+		assert.True(t, hasUserContaining(d.messages(id), "keep this input"))
 	}
 	assert.False(t, d.mgr.applier.Has(id))
-	assert.Contains(t, lastToolResultContent(d.parentMessages(id), tool.IDConfigEdit), "Config change abandoned")
+	assert.Contains(t, func(msgs []llmwire.Message, toolName string) string {
+		for _, v := range slices.Backward(msgs) {
+			if v.Role == llmwire.RoleTool && v.ToolName == toolName {
+				return v.Content
+			}
+		}
+
+		return ""
+	}(d.messages(id), tool.IDConfigEdit), "Config change abandoned")
 	assert.Zero(t, d.restartCount())
 	apply, err := d.ops.LoadPending()
 	require.NoError(t, err)
@@ -859,32 +808,24 @@ func testAbandonedApply(t *testing.T, failure string) {
 // A second call would mean the suspended call was re-executed.
 func configEditRespond(_ string, msgs []llmwire.Message) *llmwire.Response {
 	if hasToolResultFor(msgs, tool.IDConfigEdit) {
-		return &llmwire.Response{Text: "configuration replaced"}
+		return textReply("configuration replaced")
 	}
 
 	if hasUserContaining(msgs, configapply.ConfigEditCommand) {
-		return &llmwire.Response{ToolCalls: []llmwire.ToolCall{{
-			ID:        configEditCallID,
-			Name:      tool.IDConfigEdit,
-			Arguments: json.RawMessage(`{"document":` + mustQuoteJSON(configEditCandidate) + `}`),
-		}}}
+		return callReply(configEditCallID, tool.IDConfigEdit, `{"document":`+mustQuoteJSON(configEditCandidate)+`}`)
 	}
 
-	return &llmwire.Response{Text: "ready to reconfigure"}
+	return textReply("ready to reconfigure")
 }
 
 // unauthorizedConfigEditRespond calls config_edit with no /config turn, so the
 // session must answer the authorization refusal in-process.
 func unauthorizedConfigEditRespond(_ string, msgs []llmwire.Message) *llmwire.Response {
 	if hasToolResultFor(msgs, tool.IDConfigEdit) {
-		return &llmwire.Response{Text: "configuration replaced"}
+		return textReply("configuration replaced")
 	}
 
-	return &llmwire.Response{ToolCalls: []llmwire.ToolCall{{
-		ID:        configEditCallID,
-		Name:      tool.IDConfigEdit,
-		Arguments: json.RawMessage(`{"document":` + mustQuoteJSON(configEditCandidate) + `}`),
-	}}}
+	return callReply(configEditCallID, tool.IDConfigEdit, `{"document":`+mustQuoteJSON(configEditCandidate)+`}`)
 }
 
 func mustQuoteJSON(s string) string {
@@ -916,7 +857,7 @@ func startConfigEditSession(t *testing.T, d *applyDaemon, prompt string) int64 {
 	d.waitUntil("opener turn settled", func() bool {
 		return !d.mgr.HasActiveLoop(sessionID)
 	})
-	d.mgr.waitIdle(sessionID)
+	d.waitUntil("session idle", func() bool { return !d.mgr.HasActiveLoop(sessionID) })
 
 	require.NoError(t, d.mgr.sendToSession(d.ctx, sessionID, configapply.ConfigEditCommand))
 
@@ -1232,10 +1173,10 @@ func testConfigDocumentThroughHTTP(t *testing.T, damaged bool) {
 	d.mgr.build.Config = wireConfig
 	d.mgr.build.WorkDir = workDir
 	id := startConfigEditSession(t, d, "hello")
-	d.mgr.waitIdle(id)
+	d.waitUntil("session idle", func() bool { return !d.mgr.HasActiveLoop(id) })
 	assert.True(t, sawRead.Load())
 	var storedDocuments []string
-	for _, message := range d.parentMessages(id) {
+	for _, message := range d.messages(id) {
 		for _, call := range message.ToolCalls {
 			if call.Name == tool.IDConfigEdit {
 				var args struct {
@@ -1252,7 +1193,15 @@ func testConfigDocumentThroughHTTP(t *testing.T, damaged bool) {
 	if damaged {
 		assert.Equal(t, initial, string(actual))
 		assert.Zero(t, d.restartCount())
-		assert.Contains(t, lastToolResultContent(d.parentMessages(id), tool.IDConfigEdit), "duplicate model id")
+		assert.Contains(t, func(msgs []llmwire.Message, toolName string) string {
+			for _, v := range slices.Backward(msgs) {
+				if v.Role == llmwire.RoleTool && v.ToolName == toolName {
+					return v.Content
+				}
+			}
+
+			return ""
+		}(d.messages(id), tool.IDConfigEdit), "duplicate model id")
 		return
 	}
 	assert.Equal(t, candidate, string(actual))
@@ -1332,7 +1281,9 @@ func newGatingHarness(
 		t,
 		harnessOptions{
 			configure: func(cfg *config.Config) { writeProjectAgents(t, cfg.WorkDir, agents) },
-			clientFor: func(*config.Config) (llm.Client, error) { return &recordingLLM{respond: respond, rec: rec}, nil },
+			clientFor: func(*config.Config) (llm.Client, error) {
+				return &recordingLLM{respond: respond, rec: rec}, nil
+			},
 		},
 	)
 	h.mgr.applier = configapply.New(newTestConfigOps(t, t.TempDir()), h.store)
@@ -1367,22 +1318,6 @@ func writeProjectAgents(t *testing.T, workDir string, agents map[string]string) 
 	}
 }
 
-func (h *gatingHarness) waitForLink(parentID int64, callID string) subagent.Link {
-	h.t.Helper()
-
-	var link *subagent.Link
-
-	require.Eventually(h.t, func() bool {
-		found, err := h.links.GetLinkByTaskCallID(h.ctx, parentID, callID)
-		require.NoError(h.t, err)
-		link = found
-
-		return found != nil
-	}, 5*time.Second, 10*time.Millisecond, "child link for %s", callID)
-
-	return *link
-}
-
 // spawnTaskCall is a background task tool_call for the given project/built-in type.
 func spawnTaskCall(callID, agentType, marker string) llmwire.ToolCall {
 	return llmwire.ToolCall{
@@ -1403,23 +1338,29 @@ func probeMissingTools(msgs []llmwire.Message, prefix string, ids []string) *llm
 			continue
 		}
 
-		return &llmwire.Response{ToolCalls: []llmwire.ToolCall{{
-			ID: fmt.Sprintf("%s-probe-%d", prefix, i), Name: id, Arguments: []byte(`{}`),
-		}}}
+		return callReply(fmt.Sprintf("%s-probe-%d", prefix, i), id, `{}`)
 	}
 
-	return &llmwire.Response{Text: prefix + " done"}
+	return textReply(prefix + " done")
 }
 
 func (h *gatingHarness) assertUnknownTools(sessionID int64, ids []string) {
 	h.t.Helper()
 
-	msgs := h.parentMessages(sessionID)
+	msgs := h.messages(sessionID)
 	require.NoError(h.t, llm.ValidateToolPairing(msgs), "child transcript must stay provider-valid")
 
 	for _, id := range ids {
 		assert.Equal(h.t, 1, countToolResultsFor(msgs, id), "one result for the %q probe", id)
-		assert.Contains(h.t, lastToolResultContent(msgs, id), "unknown tool: "+id)
+		assert.Contains(h.t, func(msgs []llmwire.Message, toolName string) string {
+			for _, v := range slices.Backward(msgs) {
+				if v.Role == llmwire.RoleTool && v.ToolName == toolName {
+					return v.Content
+				}
+			}
+
+			return ""
+		}(msgs, id), "unknown tool: "+id)
 	}
 }
 
@@ -1654,12 +1595,12 @@ func applyScheduleBoundaryCommand(
 		wantPending = 1
 	}
 
-	require.Eventually(t, func() bool {
+	h.waitUntil("applyScheduleBoundaryCommand", func() bool {
 		pending, pendingErr := h.store.ListPending(t.Context(), rootID)
 
 		return pendingErr == nil && len(pending) == wantPending &&
 			!h.mgr.HasActiveLoop(rootID) && !h.mgr.HasActiveLoop(subagentID)
-	}, time.Second, 10*time.Millisecond)
+	})
 	root, loadRootErr := h.store.GetSession(t.Context(), rootID)
 	require.NoError(t, loadRootErr)
 	subagent, loadSubagentErr := h.store.GetSession(t.Context(), subagentID)
@@ -1671,10 +1612,10 @@ func applyScheduleBoundaryCommand(
 		applied:          applied,
 		errored:          err != nil,
 		rootStatus:       root.Status,
-		rootRuns:         countToolResultsFor(h.parentMessages(rootID), tool.IDSchedule),
+		rootRuns:         countToolResultsFor(h.messages(rootID), tool.IDSchedule),
 		rootPending:      len(pending),
 		subagentStatus:   subagent.Status,
-		subagentMessages: len(h.parentMessages(subagentID)),
+		subagentMessages: len(h.messages(subagentID)),
 	}
 }
 
@@ -1789,20 +1730,20 @@ const (
 func registryPromptRespond(fake *fakeMCPServer) func(string, []llmwire.Message) *llmwire.Response {
 	return func(_ string, messages []llmwire.Message) *llmwire.Response {
 		if hasUserContaining(messages, registryChildMarker) {
-			return &llmwire.Response{Text: "child complete"}
+			return textReply("child complete")
 		}
 
 		if hasUserContaining(messages, registryUseMarker) {
-			if hasToolResultForCallID(messages, "ping-next-activation") {
-				return &llmwire.Response{Text: "mcp complete"}
+			if toolResultForCallID(messages, "ping-next-activation") != nil {
+				return textReply("mcp complete")
 			}
 
 			return mcpPingCall("ping-next-activation")
 		}
 
 		if hasToolResultFor(messages, tool.IDMCPAdd) {
-			if hasToolResultForCallID(messages, "ping-same-activation") {
-				return &llmwire.Response{Text: "registered"}
+			if toolResultForCallID(messages, "ping-same-activation") != nil {
+				return textReply("registered")
 			}
 
 			return mcpPingCall("ping-same-activation")
@@ -1859,7 +1800,7 @@ func assertNextRegistryProjection(
 	assert.Contains(t, lastSchemas, "mcp__fake__ping")
 	assert.Contains(t, lastSchemas, tool.IDTask)
 	assert.Contains(t, lastSchemas, tool.IDConfigEdit)
-	assert.Contains(t, toolResultForCallID(h.parentMessages(parentID), "ping-next-activation"), "pong from registry")
+	assert.Contains(t, toolResultForCallID(h.messages(parentID), "ping-next-activation").Content, "pong from registry")
 
 	lastPrompt := prompts.last(t, strconv.FormatInt(parentID, 10))
 	assert.Contains(t, lastPrompt, "Sub-agents: task")
@@ -1994,7 +1935,7 @@ func deliverOneShotBeforeRestart(
 	release chan<- struct{},
 ) (int64, *eventCollector) {
 	t.Helper()
-	events := collectEvents(h.mgr.bus.SubscribeManager("telegram-main"))
+	events := collectEvents(t, h.mgr.bus.SubscribeManager("telegram-main"))
 	t.Cleanup(events.stop)
 	parentID := createScheduleSession(t, h, events)
 	flaky := addFlakyDueOneShot(t, h, parentID)
@@ -2007,7 +1948,7 @@ func deliverOneShotBeforeRestart(
 	waitForScheduledInput(t, events, parentID)
 	requireSignal(t, flaky.attempted)
 	close(release)
-	waitForVisibleMessage(t, events, parentID, "scheduled work completed")
+	events.waitMessage(parentID, "scheduled work completed")
 	executor.Stop()
 
 	requireOneShotRemainsRetryable(t, h, parentID)
@@ -2021,7 +1962,7 @@ func createScheduleSession(t *testing.T, h *scheduleRestartHarness, events *even
 		controllerapi.SessionAttributeManagerID: "telegram-main",
 	})
 	require.NoError(t, err)
-	waitForVisibleMessage(t, events, parentID, "ready for schedule")
+	events.waitMessage(parentID, "ready for schedule")
 
 	return parentID
 }
@@ -2054,7 +1995,7 @@ func requireOneShotRemainsRetryable(t *testing.T, h *scheduleRestartHarness, ses
 	remaining, err := h.schedules.ListSchedules(h.ctx, sessionID)
 	require.NoError(t, err)
 	require.Len(t, remaining, 1, "failed acknowledgement must leave the accepted one-shot retryable")
-	assert.Equal(t, 1, countToolResultsFor(h.parentMessages(sessionID), tool.IDSchedule))
+	assert.Equal(t, 1, countToolResultsFor(h.messages(sessionID), tool.IDSchedule))
 }
 
 func retryOneShotAfterRestart(
@@ -2065,17 +2006,17 @@ func retryOneShotAfterRestart(
 	t.Helper()
 	// Subscribe before Start: recovery announces the resumed runner, and a
 	// subscription that loses that race drops the session_created trace event.
-	events := collectEvents(h.mgr.bus.SubscribeManager("telegram-main"))
+	events := collectEvents(t, h.mgr.bus.SubscribeManager("telegram-main"))
 	t.Cleanup(events.stop)
 	require.NoError(t, h.mgr.Start(h.ctx))
 	executor := schedule.NewExecutor(h.schedules, h.mgr)
 	executor.Start(h.ctx)
 	t.Cleanup(executor.Stop)
 
-	require.Eventually(t, func() bool {
+	h.waitUntil("restart retry must acknowledge the accepted one-shot", func() bool {
 		schedules, err := h.schedules.ListSchedules(h.ctx, sessionID)
 		return err == nil && len(schedules) == 0 && !h.mgr.HasActiveLoop(sessionID)
-	}, 5*time.Second, 10*time.Millisecond, "restart retry must acknowledge the accepted one-shot")
+	})
 	executor.Stop()
 
 	return events
@@ -2159,118 +2100,6 @@ func (h *scheduleRestartHarness) close() error {
 	})
 
 	return h.closeErr
-}
-
-func waitForWaitKind(
-	t *testing.T,
-	collector *eventCollector,
-	sessionID int64,
-	kind sessionevent.WaitKind,
-) {
-	t.Helper()
-	collector.waitFor(
-		t,
-		fmt.Sprintf("waiting kind %s", kind),
-		func(events []controllerapi.SessionNotification) bool {
-			for _, event := range events {
-				if event.SessionID != sessionID || event.Notification.Type != sessionevent.NotifyWaiting {
-					continue
-				}
-
-				for _, item := range event.Notification.Waiting {
-					if item.Kind == kind {
-						return true
-					}
-				}
-			}
-
-			return false
-		},
-	)
-}
-
-func waitForSubagentSet(
-	t *testing.T,
-	collector *eventCollector,
-	sessionID int64,
-	want []int64,
-) {
-	t.Helper()
-	collector.waitFor(
-		t,
-		fmt.Sprintf("subagent wait set %v", want),
-		func(events []controllerapi.SessionNotification) bool {
-			for _, event := range events {
-				if event.SessionID != sessionID || event.Notification.Type != sessionevent.NotifyWaiting {
-					continue
-				}
-
-				var got []int64
-				for _, item := range event.Notification.Waiting {
-					if item.Kind != sessionevent.WaitSubagent {
-						return false
-					}
-					got = append(got, item.ChildID)
-				}
-				slices.Sort(got)
-				if slices.Equal(got, want) {
-					return true
-				}
-			}
-
-			return false
-		},
-	)
-}
-
-func waitForVisibleMessage(
-	t *testing.T,
-	collector *eventCollector,
-	sessionID int64,
-	message string,
-) {
-	waitForVisibleMessageCount(t, collector, sessionID, message, 1)
-}
-
-func waitForVisibleMessageCount(
-	t *testing.T,
-	collector *eventCollector,
-	sessionID int64,
-	message string,
-	want int,
-) {
-	t.Helper()
-	collector.waitFor(t, message, func(events []controllerapi.SessionNotification) bool {
-		return countPublishedMessage(events, sessionID, message) == want
-	})
-}
-
-func waitForIdleAfterMessage(
-	t *testing.T,
-	collector *eventCollector,
-	sessionID int64,
-	message string,
-) {
-	t.Helper()
-	collector.waitFor(t, "idle after "+message, func(events []controllerapi.SessionNotification) bool {
-		messageSeen := false
-		for _, event := range events {
-			if event.SessionID != sessionID {
-				continue
-			}
-
-			if event.Notification.Type == sessionevent.NotifyMessage && event.Notification.Message == message {
-				messageSeen = true
-			}
-
-			if messageSeen && event.Notification.Type == sessionevent.NotifyStateChanged &&
-				event.Notification.Status == sessionevent.StateIdle {
-				return true
-			}
-		}
-
-		return false
-	})
 }
 
 const untrustedProbeMarker = "PROBE_UNTRUSTED"
@@ -2578,10 +2407,10 @@ func runAcceptedInputRestartScenario(
 	dbPath := filepath.Join(t.TempDir(), "accepted-input.db")
 	respond := func(_ string, messages []llmwire.Message) *llmwire.Response {
 		if hasUserContaining(messages, "accepted before crash") {
-			return &llmwire.Response{Text: "accepted input recovered"}
+			return textReply("accepted input recovered")
 		}
 
-		return &llmwire.Response{Text: "unexpected prompt"}
+		return textReply("unexpected prompt")
 	}
 
 	first := newHarness(t, harnessOptions{dbPath: dbPath, respond: respond})
@@ -2614,7 +2443,7 @@ func runAcceptedInputRestartScenario(
 	first.shutdown()
 
 	second := newHarness(t, harnessOptions{dbPath: dbPath, respond: respond})
-	collector := collectEvents(second.mgr.bus.SubscribeAll())
+	collector := collectEvents(t, second.mgr.bus.SubscribeAll())
 	defer func() {
 		collector.stop()
 		second.shutdown()
@@ -2622,11 +2451,11 @@ func runAcceptedInputRestartScenario(
 
 	second.startInboxWake()
 	second.mgr.resumeAfterRestart(second.ctx)
-	waitForVisibleMessage(t, collector, root.ID, "accepted input recovered")
-	waitForIdleAfterMessage(t, collector, root.ID, "accepted input recovered")
+	collector.waitMessage(root.ID, "accepted input recovered")
+	collector.waitIdleAfter(root.ID, "accepted input recovered")
 
-	assert.Equal(t, "accepted input recovered", lastAssistantTextDTO(second.parentMessages(root.ID)))
-	require.NoError(t, llm.ValidateToolPairing(second.parentMessages(root.ID)))
+	assert.Equal(t, "accepted input recovered", lastAssistantTextDTO(second.messages(root.ID)))
+	require.NoError(t, llm.ValidateToolPairing(second.messages(root.ID)))
 	assertHarnessTraceForScenario(t, sourceTest, traceName, collector.snapshot(), root.ID)
 }
 
@@ -2702,32 +2531,26 @@ const taskCallID = "task-call-1"
 // it has something to summarize besides the never-empty tail.
 func subagentRespond(_ string, msgs []llmwire.Message) *llmwire.Response {
 	if isCompactionPrompt(msgs) {
-		return &llmwire.Response{Text: "child checkpoint: ran ls, finished 42"}
+		return textReply("child checkpoint: ran ls, finished 42")
 	}
 
 	if hasUserContaining(msgs, "CHILD_TASK") {
 		if hasToolResultFor(msgs, "ls") {
-			return &llmwire.Response{Text: "child finished: 42"}
+			return textReply("child finished: 42")
 		}
 
-		return &llmwire.Response{ToolCalls: []llmwire.ToolCall{{
-			ID:        "child-ls-1",
-			Name:      "ls",
-			Arguments: []byte(`{"path":"."}`),
-		}}}
+		return callReply("child-ls-1", "ls", `{"path":"."}`)
 	}
 
 	if hasToolResultFor(msgs, "task") || hasUserContaining(msgs, "<subagent_completion>") {
-		return &llmwire.Response{Text: "all set, child launched"}
+		return textReply("all set, child launched")
 	}
 
-	return &llmwire.Response{ToolCalls: []llmwire.ToolCall{{
-		ID:   taskCallID,
-		Name: "task",
-		Arguments: []byte(
-			`{"prompt":"CHILD_TASK do the thing","description":"child work","subagent_type":"general","background":true}`,
-		),
-	}}}
+	return callReply(
+		taskCallID,
+		"task",
+		`{"prompt":"CHILD_TASK do the thing","description":"child work","subagent_type":"general","background":true}`,
+	)
 }
 
 type harnessOptions struct {
@@ -2796,22 +2619,6 @@ func newHarness(t *testing.T, o harnessOptions) *harness {
 	return h
 }
 
-func hasAssistantToolCall(msgs []llmwire.Message, toolName string) bool {
-	for _, m := range msgs {
-		if m.Role != llmwire.RoleAssistant {
-			continue
-		}
-
-		for _, tc := range m.ToolCalls {
-			if tc.Name == toolName {
-				return true
-			}
-		}
-	}
-
-	return false
-}
-
 func countToolResultsFor(msgs []llmwire.Message, toolName string) int {
 	count := 0
 
@@ -2843,57 +2650,7 @@ func countAssistantToolCallsFor(msgs []llmwire.Message, toolName string) int {
 
 func (h *harness) shutdown() { h.shutdownOnce.Do(func() { h.mgr.Shutdown(5 * time.Second) }) }
 
-func (h *harness) waitForChildLink(parentID int64) subagent.Link {
-	h.t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
-
-	for time.Now().Before(deadline) {
-		link, err := h.links.GetLinkByTaskCallID(h.ctx, parentID, taskCallID)
-		require.NoError(h.t, err)
-
-		if link != nil {
-			return *link
-		}
-
-		time.Sleep(10 * time.Millisecond)
-	}
-
-	h.t.Fatalf("timed out waiting for child link of parent %d", parentID)
-
-	return subagent.Link{}
-}
-
-func (h *harness) waitForDelivery(childID int64) {
-	h.t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
-
-	for time.Now().Before(deadline) {
-		link, err := h.links.GetLink(h.ctx, childID)
-		require.NoError(h.t, err)
-
-		if link != nil && link.DeliveredAt != 0 {
-			return
-		}
-
-		time.Sleep(10 * time.Millisecond)
-	}
-
-	h.t.Fatalf("timed out waiting for completion delivery of child %d", childID)
-}
-
-func (h *harness) waitForParentCompletions(parentID, childID int64, want int) {
-	h.t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		if countSubagentCompletions(h.parentMessages(parentID), childID) >= want {
-			return
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	h.t.Fatalf("timed out waiting for %d parent inbox completions for child %d", want, childID)
-}
-
-func (h *harness) parentMessages(parentID int64) []llmwire.Message {
+func (h *harness) messages(parentID int64) []llmwire.Message {
 	h.t.Helper()
 	stored, err := h.store.LoadActiveMessages(h.ctx, parentID)
 	require.NoError(h.t, err)
@@ -2965,18 +2722,6 @@ func countSubagentCompletions(messages []llmwire.Message, childID int64) int {
 	return count
 }
 
-func lastSubagentCompletion(messages []llmwire.Message, childID int64) string {
-	needle := "child_id: " + strconv.FormatInt(childID, 10)
-	for _, message := range slices.Backward(messages) {
-		if message.Role == llmwire.RoleUser && strings.Contains(message.Content, "<subagent_completion>") &&
-			strings.Contains(message.Content, needle) {
-			return message.Content
-		}
-	}
-
-	return ""
-}
-
 func countMessageContentContaining(messages []llmwire.Message, fragment string) int {
 	count := 0
 	for _, message := range messages {
@@ -2988,28 +2733,57 @@ func countMessageContentContaining(messages []llmwire.Message, fragment string) 
 	return count
 }
 
-// waitIdle blocks until the session has no live runner (best-effort settle).
-func (s *svc) waitIdle(sessionID int64) {
-	for range 200 {
-		if !s.HasActiveLoop(sessionID) {
-			return
-		}
-
-		time.Sleep(10 * time.Millisecond)
-	}
+func (h *harness) createChild(parentID int64, link subagent.Link) int64 {
+	h.t.Helper()
+	return h.createChildSession(parentID, "fake-model", &link)
 }
 
-func seedChildLink(ctx context.Context, sessions *sessionstore.Store, link subagent.Link) error {
+func (h *harness) createUnlinkedChild(parentID int64) int64 {
+	h.t.Helper()
+	return h.createChildSession(parentID, "fake-model", nil)
+}
+
+func (h *harness) createChildSession(parentID int64, model string, link *subagent.Link) int64 {
+	h.t.Helper()
+	parent, err := h.store.GetSession(h.ctx, parentID)
+	require.NoError(h.t, err)
+	require.NotNil(h.t, parent)
+	rootID := parent.RootID
+	if rootID == 0 {
+		rootID = parentID
+	}
+	var childID int64
+	require.NoError(h.t, h.store.WithTx(h.ctx, func(tx *sql.Tx) error {
+		var createErr error
+		childID, createErr = sessionstore.CreateSubagentSessionTx(h.ctx, tx, sessionstore.CreateSubagentSession{
+			ProjectID: parent.ProjectID, ParentID: parentID, RootID: rootID,
+			AgentType: "general", Model: model, ReasoningLevel: "",
+		})
+		if createErr != nil || link == nil {
+			return createErr
+		}
+		link.ParentID, link.ChildID = parentID, childID
+		return insertChildLink(h.ctx, tx, *link)
+	}))
+	return childID
+}
+
+func (h *harness) attachChildLink(link subagent.Link) {
+	h.t.Helper()
+	require.NoError(h.t, h.store.WithTx(h.ctx, func(tx *sql.Tx) error {
+		return insertChildLink(h.ctx, tx, link)
+	}))
+}
+
+func insertChildLink(ctx context.Context, tx *sql.Tx, link subagent.Link) error {
 	if link.State == "" {
 		link.State = subagent.StateSpawned
 	}
-	return sessions.WithTx(ctx, func(tx *sql.Tx) error {
-		_, err := tx.ExecContext(ctx, `INSERT INTO subagent_links
+	_, err := tx.ExecContext(ctx, `INSERT INTO subagent_links
 		(parent_id,child_id,task_call_id,blocking,depth,state,created_at,result,outcome) VALUES (?,?,?,?,?,?,?,?,?)`,
-			link.ParentID, link.ChildID, link.TaskCallID, link.Blocking, link.Depth, link.State,
-			time.Now().UTC().Unix(), link.Result, link.Outcome)
-		return err
-	})
+		link.ParentID, link.ChildID, link.TaskCallID, link.Blocking, link.Depth, link.State,
+		time.Now().UTC().Unix(), link.Result, link.Outcome)
+	return err
 }
 
 func seedTerminalChild(ctx context.Context, sessions *sessionstore.Store, childID int64,
@@ -3037,8 +2811,11 @@ func countSilenceIntents(t *testing.T, h *harness, sessionID int64) int {
 	t.Helper()
 
 	var count int
-	require.NoError(t, h.db.QueryRowContext(h.ctx, `SELECT COUNT(*) FROM session_outbox
-		WHERE session_id = ? AND source_key LIKE 'progress:silence:%'`, sessionID).Scan(&count))
+	for _, row := range h.outbox(sessionID) {
+		if strings.HasPrefix(row.SourceKey, "progress:silence:") {
+			count++
+		}
+	}
 
 	return count
 }
@@ -3166,60 +2943,6 @@ func withTestModels(cfg *config.Config) {
 			Efforts:      []string{"low", "medium", "high"},
 		}
 		cfg.UnifiedConfig.Models[index].EffortLevels = []string{"low", "medium", "high"}
-	}
-}
-
-// waitForLoopStart blocks until a "running" state_changed notification arrives.
-func waitForLoopStart(
-	t *testing.T,
-	ch <-chan controllerapi.SessionNotification,
-	sessionID int64,
-	timeout time.Duration,
-) {
-	t.Helper()
-	waitForState(t, ch, sessionID, controllerapi.StateRunning, timeout)
-}
-
-func waitForPendingInput(
-	t *testing.T,
-	store *sessionstore.Store,
-	sessionID int64,
-	want bool,
-	timeout time.Duration,
-) {
-	t.Helper()
-	require.Eventually(t, func() bool {
-		_, err := store.PeekPending(context.Background(), sessionID)
-		if want {
-			return err == nil
-		}
-
-		return errors.Is(err, sessionstore.ErrNoPendingInput)
-	}, timeout, 10*time.Millisecond)
-}
-
-// waitForState blocks until a specific state_changed notification arrives.
-func waitForState(
-	t *testing.T,
-	ch <-chan controllerapi.SessionNotification,
-	sessionID int64,
-	want controllerapi.State,
-	timeout time.Duration,
-) {
-	t.Helper()
-	deadline := time.After(timeout)
-	for {
-		select {
-		case sn := <-ch:
-			if sn.SessionID != sessionID {
-				continue
-			}
-			if sn.Notification.Type == sessionevent.NotifyStateChanged && sn.Notification.Status == want {
-				return
-			}
-		case <-deadline:
-			t.Fatalf("timed out waiting for state %q on session %d", want, sessionID)
-		}
 	}
 }
 
@@ -3417,35 +3140,21 @@ done
 `
 
 func mcpPingCall(id string) *llmwire.Response {
-	return &llmwire.Response{ToolCalls: []llmwire.ToolCall{{
-		ID: id, Name: "mcp__fake__ping", Arguments: []byte(`{}`),
-	}}}
+	return callReply(id, "mcp__fake__ping", `{}`)
 }
 
 func mcpToolCall(id, name, params string) *llmwire.Response {
-	return &llmwire.Response{ToolCalls: []llmwire.ToolCall{{
-		ID: id, Name: name, Arguments: []byte(params),
-	}}}
+	return callReply(id, name, params)
 }
 
-func hasToolResultForCallID(msgs []llmwire.Message, callID string) bool {
+func toolResultForCallID(msgs []llmwire.Message, callID string) *llmwire.Message {
 	for _, m := range msgs {
 		if m.Role == llmwire.RoleTool && m.ToolCallID == callID {
-			return true
+			return &m
 		}
 	}
 
-	return false
-}
-
-func toolResultForCallID(msgs []llmwire.Message, callID string) string {
-	for _, m := range msgs {
-		if m.Role == llmwire.RoleTool && m.ToolCallID == callID {
-			return m.Content
-		}
-	}
-
-	return ""
+	return nil
 }
 
 type mcpRestartHarness struct {
@@ -3487,14 +3196,22 @@ type modelRequests struct {
 // to whatever came back for it.
 func askForBlockingTaskRespond(_ string, msgs []llmwire.Message) *llmwire.Response {
 	if hasToolResultFor(msgs, tool.IDTask) {
-		return &llmwire.Response{Text: "noted: " + lastToolResultContent(msgs, tool.IDTask)}
+		return textReply("noted: " + func(msgs []llmwire.Message, toolName string) string {
+			for _, v := range slices.Backward(msgs) {
+				if v.Role == llmwire.RoleTool && v.ToolName == toolName {
+					return v.Content
+				}
+			}
+
+			return ""
+		}(msgs, tool.IDTask))
 	}
 
-	return &llmwire.Response{ToolCalls: []llmwire.ToolCall{{
-		ID:        orphanTaskCallID,
-		Name:      tool.IDTask,
-		Arguments: []byte(`{"prompt":"do the thing","description":"orphan probe","subagent_type":"general"}`),
-	}}}
+	return callReply(
+		orphanTaskCallID,
+		tool.IDTask,
+		`{"prompt":"do the thing","description":"orphan probe","subagent_type":"general"}`,
+	)
 }
 
 // newExternalCallDaemon is one daemon image with a config applier wired, so a
@@ -3529,11 +3246,11 @@ func stageTaskAndStop(t *testing.T, dbPath, configDir string, seen *modelRequest
 	require.NoError(t, err)
 
 	first.waitUntil("the parent parked on the child", func() bool {
-		return countAssistantToolCallsFor(first.parentMessages(sessionID), tool.IDTask) == 1 &&
+		return countAssistantToolCallsFor(first.messages(sessionID), tool.IDTask) == 1 &&
 			!first.mgr.HasActiveLoop(sessionID)
 	})
 
-	msgs := first.parentMessages(sessionID)
+	msgs := first.messages(sessionID)
 	require.Equal(t, 1, countAssistantToolCallsFor(msgs, tool.IDTask))
 	require.Zero(t, countToolResultsFor(msgs, tool.IDTask), "the task is out with the world")
 
@@ -3614,7 +3331,7 @@ func (d *applyDaemon) parkedOnChild(sessionID int64) bool {
 		return false
 	}
 
-	return countAssistantToolCallsFor(d.parentMessages(sessionID), tool.IDTask) == 1
+	return countAssistantToolCallsFor(d.messages(sessionID), tool.IDTask) == 1
 }
 
 func storedAssistant(toolCalls string) *transcript.Message {
@@ -3684,29 +3401,6 @@ func startScenarioProcess(
 	return record
 }
 
-func waitScenarioProcessState(
-	t *testing.T,
-	h *harness,
-	processID string,
-	want backgroundprocess.State,
-) backgroundprocess.Process {
-	t.Helper()
-
-	var record backgroundprocess.Process
-	require.Eventually(t, func() bool {
-		current, err := h.mgr.processStore.GetProcess(context.Background(), processID)
-		if err != nil {
-			return false
-		}
-
-		record = current
-
-		return current.State == want
-	}, 5*time.Second, 10*time.Millisecond)
-
-	return record
-}
-
 func assertModelDeliveries(
 	t *testing.T,
 	subscribers map[string]<-chan controllerapi.SessionNotification,
@@ -3743,6 +3437,7 @@ var errSessionRead = errors.New("session store unavailable")
 // eventCollector accumulates everything a SubscribeAll channel yields, so a test
 // can assert on the whole stream after the fact instead of racing it.
 type eventCollector struct {
+	t       *testing.T
 	mu      sync.Mutex
 	events  []controllerapi.SessionNotification
 	done    chan struct{}
@@ -3772,8 +3467,9 @@ func requireSignal(t *testing.T, ch <-chan struct{}) {
 	}
 }
 
-func collectEvents(ch <-chan controllerapi.SessionNotification) *eventCollector {
-	c := &eventCollector{done: make(chan struct{}), changed: make(chan struct{}, 1)}
+func collectEvents(t *testing.T, ch <-chan controllerapi.SessionNotification) *eventCollector {
+	t.Helper()
+	c := &eventCollector{t: t, done: make(chan struct{}), changed: make(chan struct{}, 1)}
 
 	go func() {
 		for {
@@ -3810,6 +3506,50 @@ func (c *eventCollector) snapshot() []controllerapi.SessionNotification {
 	return out
 }
 
+func (c *eventCollector) waitMessage(sessionID int64, message string) {
+	c.t.Helper()
+	c.waitFor(c.t, message, func(events []controllerapi.SessionNotification) bool {
+		return countPublishedMessage(events, sessionID, message) == 1
+	})
+}
+
+func (c *eventCollector) waitIdleAfter(sessionID int64, message string) {
+	c.t.Helper()
+	c.waitFor(c.t, "idle after "+message, func(events []controllerapi.SessionNotification) bool {
+		messageSeen := false
+		for _, event := range events {
+			if event.SessionID != sessionID {
+				continue
+			}
+			if event.Notification.Type == sessionevent.NotifyMessage && event.Notification.Message == message {
+				messageSeen = true
+			}
+			if messageSeen && event.Notification.Type == sessionevent.NotifyStateChanged &&
+				event.Notification.Status == sessionevent.StateIdle {
+				return true
+			}
+		}
+		return false
+	})
+}
+
+func (c *eventCollector) waitWait(sessionID int64, kind sessionevent.WaitKind) {
+	c.t.Helper()
+	c.waitFor(c.t, fmt.Sprintf("waiting kind %s", kind), func(events []controllerapi.SessionNotification) bool {
+		for _, event := range events {
+			if event.SessionID != sessionID || event.Notification.Type != sessionevent.NotifyWaiting {
+				continue
+			}
+			for _, item := range event.Notification.Waiting {
+				if item.Kind == kind {
+					return true
+				}
+			}
+		}
+		return false
+	})
+}
+
 func (c *eventCollector) waitFor(
 	t *testing.T,
 	label string,
@@ -3835,36 +3575,16 @@ func (c *eventCollector) waitFor(
 func (c *eventCollector) stop() { close(c.done) }
 
 // newTestChild creates a root session and returns the ID of a subagent child of it.
-func newTestChild(t *testing.T, mgr *svc, store *sessionstore.Store, workDir string) int64 {
+func newTestChild(t *testing.T, h *harness, workDir string) int64 {
 	t.Helper()
 
 	ctx := context.Background()
-	pid := testProject(t, store, workDir)
+	pid := testProject(t, h.store, workDir)
 
-	parent, err := mgr.store.CreateSession(ctx, pid, "fake-model", "", nil)
+	parent, err := h.store.CreateSession(ctx, pid, "fake-model", "", nil)
 	require.NoError(t, err)
 
-	childID, err := func() (int64, error) {
-		var id int64
-		err := mgr.store.(*sessionstore.Store).WithTx(ctx, func(tx *sql.Tx) error {
-			var err error
-			id, err = sessionstore.CreateSubagentSessionTx(
-				ctx,
-				tx,
-				sessionstore.CreateSubagentSession{
-					ProjectID:      pid,
-					ParentID:       parent.ID,
-					RootID:         parent.ID,
-					AgentType:      "general",
-					Model:          "fake-model",
-					ReasoningLevel: "",
-				},
-			)
-			return err
-		})
-		return id, err
-	}()
-	require.NoError(t, err)
+	childID := h.createUnlinkedChild(parent.ID)
 
 	return childID
 }
@@ -3939,12 +3659,12 @@ func completeRecoveryAfterRestart(t *testing.T, dbPath string, rootID int64) {
 			return &llmwire.Response{Text: "recovered after restart", FinishType: llmwire.FinishStop}
 		}},
 	)
-	collector := collectEvents(second.mgr.bus.SubscribeAll())
+	collector := collectEvents(t, second.mgr.bus.SubscribeAll())
 	second.startInboxWake()
 	second.mgr.resumeAfterRestart(second.ctx)
-	waitForVisibleMessage(t, collector, rootID, "recovered after restart")
+	collector.waitMessage(rootID, "recovered after restart")
 	drainScenarioClaims(t, "unused-response-restart.json", newChainController(t, second))
-	waitForIdleAfterMessage(t, collector, rootID, "recovered after restart")
+	collector.waitIdleAfter(rootID, "recovered after restart")
 	// The recovery retry is a no-wake non-empty stop, so the two-phase check
 	// spends one hidden candidate call and one confirming call.
 	assert.Equal(t, 2, resumedCalls)
@@ -4007,7 +3727,7 @@ func runIncompleteChildResponse(
 			return childResponse
 		}
 		if hasToolResultFor(messages, tool.IDTask) {
-			return &llmwire.Response{Text: "parent handled incomplete child"}
+			return textReply("parent handled incomplete child")
 		}
 
 		return taskResponse("CHILD_EMPTY_TOOL_FINISH", "empty finish")
@@ -4018,9 +3738,13 @@ func runIncompleteChildResponse(
 	h.startInboxWake()
 	parentID, err := h.mgr.Send(h.ctx, h.projectID, "start empty-finish child", "fake-model", nil)
 	require.NoError(t, err)
-	link := h.waitForChildLink(parentID)
-	h.waitForDelivery(link.ChildID)
-	h.mgr.waitIdle(parentID)
+	h.waitUntil("child link", func() bool { return h.linkByCall(parentID, taskCallID) != nil })
+	link := *h.linkByCall(parentID, taskCallID)
+	h.waitUntil(
+		"child delivery",
+		func() bool { link := h.link(link.ChildID); return link != nil && link.DeliveredAt != 0 },
+	)
+	h.waitUntil("session idle", func() bool { return !h.mgr.HasActiveLoop(parentID) })
 	current, err := h.links.GetLink(h.ctx, link.ChildID)
 	require.NoError(t, err)
 
@@ -4028,11 +3752,8 @@ func runIncompleteChildResponse(
 }
 
 func taskResponse(prompt, description string) *llmwire.Response {
-	return &llmwire.Response{ToolCalls: []llmwire.ToolCall{{
-		ID: taskCallID, Name: tool.IDTask,
-		Arguments: []byte(`{"prompt":"` + prompt + `","description":"` + description +
-			`","subagent_type":"general"}`),
-	}}}
+	return callReply(taskCallID, tool.IDTask, `{"prompt":"`+prompt+`","description":"`+description+
+		`","subagent_type":"general"}`)
 }
 
 func runnerWaitingCount(runners *runnerSet) int {
@@ -4115,9 +3836,9 @@ func runStoppedRootScheduleScenario(t *testing.T, tc stoppedRootScheduleCase) {
 		controllerapi.SessionAttributeManagerID: "telegram-main",
 	})
 	require.NoError(t, err)
-	h.mgr.waitIdle(rootID)
+	h.waitUntil("session idle", func() bool { return !h.mgr.HasActiveLoop(rootID) })
 	require.NoError(t, h.mgr.sendToSession(t.Context(), rootID, "/stop"))
-	collector := collectEvents(h.mgr.bus.SubscribeManager("telegram-main"))
+	collector := collectEvents(t, h.mgr.bus.SubscribeManager("telegram-main"))
 	t.Cleanup(collector.stop)
 	oldEpisode := time.Now().UTC().Add(-time.Hour)
 	_, err = h.db.ExecContext(t.Context(),
@@ -4164,13 +3885,13 @@ func runDueStoppedRootSchedule(
 	assertStoppedRootActive(t, h, rootID)
 	close(release)
 
-	require.Eventually(t, func() bool {
+	h.waitUntil("runDueStoppedRootSchedule", func() bool {
 		entries, listErr := h.schedules.ListSchedules(t.Context(), rootID)
 		return listErr == nil && len(entries) == 0 && !h.mgr.HasActiveLoop(rootID) &&
-			lastAssistantTextDTO(h.parentMessages(rootID)) == tc.answer
-	}, 5*time.Second, 10*time.Millisecond)
+			lastAssistantTextDTO(h.messages(rootID)) == tc.answer
+	})
 	executor.Stop()
-	waitForVisibleMessage(t, collector, rootID, tc.answer)
+	collector.waitMessage(rootID, tc.answer)
 
 	return fmt.Sprintf("schedule:one-shot:%d", entry.ID())
 }
@@ -4184,12 +3905,30 @@ func assertStoppedRootActive(t *testing.T, h *harness, rootID int64) {
 
 func assertStoppedRootScheduleResult(t *testing.T, h *harness, rootID int64, tc stoppedRootScheduleCase) {
 	t.Helper()
-	messages := h.parentMessages(rootID)
+	messages := h.messages(rootID)
 	if tc.fresh {
 		// The confirmed stop publishes one answer; its hidden candidate row
 		// stays in the transcript with the same text.
-		assert.Equal(t, 1, countMessageContentContaining(messages, tc.prompt))
-		assert.Equal(t, 2, countMessageContentContaining(messages, tc.answer))
+		assert.Equal(t, 1, func(messages []llmwire.Message, fragment string) int {
+			count := 0
+			for _, message := range messages {
+				if strings.Contains(message.Content, fragment) {
+					count++
+				}
+			}
+
+			return count
+		}(messages, tc.prompt))
+		assert.Equal(t, 2, func(messages []llmwire.Message, fragment string) int {
+			count := 0
+			for _, message := range messages {
+				if strings.Contains(message.Content, fragment) {
+					count++
+				}
+			}
+
+			return count
+		}(messages, tc.answer))
 
 		return
 	}
@@ -4210,7 +3949,7 @@ func assertStoppedRootScheduleDuplicate(
 	applied, err := deliverStoppedRootSchedule(t, h.mgr, rootID, deliveryID, tc)
 	require.NoError(t, err)
 	assert.False(t, applied, "an acknowledged retry must not create another turn")
-	require.Eventually(t, func() bool { return !h.mgr.HasActiveLoop(rootID) }, time.Second, 10*time.Millisecond)
+	h.waitUntil("assertStoppedRootScheduleDuplicate", func() bool { return !h.mgr.HasActiveLoop(rootID) })
 
 	rec, err := h.store.GetSession(t.Context(), rootID)
 	require.NoError(t, err)
@@ -4255,27 +3994,7 @@ func createScheduleBoundarySubagent(t *testing.T, h *harness) int64 {
 
 	parent, err := h.store.CreateSession(t.Context(), h.projectID, "fake-model", "", nil)
 	require.NoError(t, err)
-	childID, err := func() (int64, error) {
-		var id int64
-		err := h.store.WithTx(t.Context(), func(tx *sql.Tx) error {
-			var err error
-			id, err = sessionstore.CreateSubagentSessionTx(
-				t.Context(),
-				tx,
-				sessionstore.CreateSubagentSession{
-					ProjectID:      h.projectID,
-					ParentID:       parent.ID,
-					RootID:         parent.ID,
-					AgentType:      "general",
-					Model:          "fake-model",
-					ReasoningLevel: "",
-				},
-			)
-			return err
-		})
-		return id, err
-	}()
-	require.NoError(t, err)
+	childID := h.createUnlinkedChild(parent.ID)
 	require.NoError(t, h.store.UpdateSessionStatus(
 		t.Context(), childID, sessionstore.SessionStatusCompleted,
 	))
@@ -4447,12 +4166,10 @@ func inputIDOf(t *testing.T, h *harness, root int64) int64 {
 // turn with text, so each send reaches idle in one turn.
 func skillCompactRespond(_ string, msgs []llmwire.Message) *llmwire.Response {
 	if isCompactionInstruction(msgs) {
-		return &llmwire.Response{
-			Text: "## Goal\nfollow the playbook\n## Progress\n- read it\n## Context for Continuation\ncarry on",
-		}
+		return textReply("## Goal\nfollow the playbook\n## Progress\n- read it\n## Context for Continuation\ncarry on")
 	}
 
-	return &llmwire.Response{Text: "work done"}
+	return textReply("work done")
 }
 
 // skillRecorder captures what every scripted provider call was handed — the
@@ -4522,7 +4239,7 @@ func (h *harness) workDir() string {
 
 // plainRespond answers every turn with text, so a session reaches idle in one turn.
 func plainRespond(_ string, _ []llmwire.Message) *llmwire.Response {
-	return &llmwire.Response{Text: "work done"}
+	return textReply("work done")
 }
 
 func skillDoc(name, description, body string, extraFrontmatter ...string) string {
@@ -4641,16 +4358,6 @@ func todoRows(report string) []string {
 	}
 
 	return rows
-}
-
-func assistantTexts(messages []llmwire.Message) []string {
-	var texts []string
-	for _, message := range messages {
-		if message.Role == llmwire.RoleAssistant && message.Content != "" {
-			texts = append(texts, message.Content)
-		}
-	}
-	return texts
 }
 
 func lastIdleStatus(events []controllerapi.SessionNotification, sessionID int64) *sessionevent.Notification {
@@ -4860,33 +4567,17 @@ func crashWindowRespond(background bool) func(string, []llmwire.Message) *llmwir
 	return func(_ string, msgs []llmwire.Message) *llmwire.Response {
 		switch {
 		case hasUserContaining(msgs, "CHILD_TASK"):
-			return &llmwire.Response{Text: "child finished: 42"}
+			return textReply("child finished: 42")
 		case hasUserContaining(msgs, "<subagent_completion>"):
-			return &llmwire.Response{Text: "parent got the child result"}
+			return textReply("parent got the child result")
 		case hasToolResultFor(msgs, "task") && background:
-			return &llmwire.Response{Text: "child launched"}
+			return textReply("child launched")
 		case hasToolResultFor(msgs, "task"):
-			return &llmwire.Response{Text: "parent got the child result"}
+			return textReply("parent got the child result")
 		}
 
-		return &llmwire.Response{ToolCalls: []llmwire.ToolCall{{
-			ID: taskCallID, Name: "task", Arguments: []byte(args),
-		}}}
+		return callReply(taskCallID, "task", args)
 	}
-}
-
-func containsMessage(
-	events []controllerapi.SessionNotification,
-	sessionID int64,
-	message string,
-) bool {
-	for _, event := range events {
-		if event.SessionID == sessionID && event.Notification.Message == message {
-			return true
-		}
-	}
-
-	return false
 }
 
 func containsState(
@@ -4932,4 +4623,70 @@ func (s *wakeObserver) GetSession(ctx context.Context, id int64) (*sessionstore.
 		s.once.Do(func() { close(s.observed) })
 	}
 	return record, err
+}
+
+type outboxRow struct {
+	ID            int64
+	SessionID     int64
+	Type          string
+	SourceKey     string
+	Content       string
+	ReleasesInput bool
+}
+
+func textReply(text string) *llmwire.Response {
+	return &llmwire.Response{Text: text}
+}
+
+func callReply(id, name, args string) *llmwire.Response {
+	return &llmwire.Response{ToolCalls: []llmwire.ToolCall{{ID: id, Name: name, Arguments: []byte(args)}}}
+}
+
+func (h *harness) session(id int64) *sessionstore.SessionRecord {
+	h.t.Helper()
+	record, err := h.store.GetSession(h.ctx, id)
+	require.NoError(h.t, err)
+	require.NotNil(h.t, record)
+	return record
+}
+
+func (h *harness) link(childID int64) *subagent.Link {
+	h.t.Helper()
+	link, err := h.links.GetLink(h.ctx, childID)
+	require.NoError(h.t, err)
+	return link
+}
+
+func (h *harness) linkByCall(parentID int64, callID string) *subagent.Link {
+	h.t.Helper()
+	link, err := h.links.GetLinkByTaskCallID(h.ctx, parentID, callID)
+	require.NoError(h.t, err)
+	return link
+}
+
+func (h *harness) outbox(sessionID int64) []outboxRow {
+	h.t.Helper()
+	rows, err := h.db.QueryContext(h.ctx, `SELECT id, session_id, type, source_key, content, releases_input
+		FROM session_outbox WHERE session_id = ? ORDER BY id`, sessionID)
+	require.NoError(h.t, err)
+	defer rows.Close()
+	var out []outboxRow
+	for rows.Next() {
+		var row outboxRow
+		require.NoError(
+			h.t,
+			rows.Scan(&row.ID, &row.SessionID, &row.Type, &row.SourceKey, &row.Content, &row.ReleasesInput),
+		)
+		out = append(out, row)
+	}
+	require.NoError(h.t, rows.Err())
+	return out
+}
+
+func (h *harness) createRoot(attrs map[string]any) int64 {
+	h.t.Helper()
+	root, err := h.store.CreateSession(h.ctx, h.projectID, "fake-model", "", attrs)
+	require.NoError(h.t, err)
+	require.NotNil(h.t, root)
+	return root.ID
 }

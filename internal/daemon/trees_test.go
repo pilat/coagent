@@ -24,7 +24,8 @@ func TestManager_GracefulKill(t *testing.T) {
 	testHarness := newHarness(t, harnessOptions{configure: withTestModels, clientFor: factory.client})
 	mgr := testHarness.mgr
 	s := testHarness.store
-	ch := mgr.bus.SubscribeAll()
+	ch := collectEvents(t, mgr.bus.SubscribeAll())
+	t.Cleanup(ch.stop)
 
 	// Session completes after 200ms — Kill sets killed flag, session finishes naturally
 	sess := &mockSession{completeAfter: 200 * time.Millisecond}
@@ -35,13 +36,29 @@ func TestManager_GracefulKill(t *testing.T) {
 	id, err := mgr.Send(ctx, pid, "init", "", nil)
 	require.NoError(t, err)
 
-	waitForLoopStart(t, ch, id, 3*time.Second)
+	ch.waitFor(t, "session state", func(events []controllerapi.SessionNotification) bool {
+		for _, event := range events {
+			if event.SessionID == id && event.Notification.Type == sessionevent.NotifyStateChanged &&
+				event.Notification.Status == controllerapi.StateRunning {
+				return true
+			}
+		}
+		return false
+	})
 
 	// Kill sets killed flag — does NOT cancel context
 	err = mgr.sendToSession(context.Background(), id, "/kill")
 	require.NoError(t, err)
 
-	waitForState(t, ch, id, controllerapi.StateIdle, 3*time.Second)
+	ch.waitFor(t, "session state", func(events []controllerapi.SessionNotification) bool {
+		for _, event := range events {
+			if event.SessionID == id && event.Notification.Type == sessionevent.NotifyStateChanged &&
+				event.Notification.Status == controllerapi.StateIdle {
+				return true
+			}
+		}
+		return false
+	})
 	assert.False(t, mgr.HasActiveLoop(id))
 }
 
@@ -50,7 +67,8 @@ func TestManager_Kill_GracefulRunningSession(t *testing.T) {
 	testHarness := newHarness(t, harnessOptions{configure: withTestModels, clientFor: factory.client})
 	mgr := testHarness.mgr
 	s := testHarness.store
-	ch := mgr.bus.SubscribeAll()
+	ch := collectEvents(t, mgr.bus.SubscribeAll())
+	t.Cleanup(ch.stop)
 
 	// Session that blocks until context cancelled (Kill calls stop → cancel)
 	factory.nextSess = &mockSession{}
@@ -60,13 +78,29 @@ func TestManager_Kill_GracefulRunningSession(t *testing.T) {
 	id, err := mgr.Send(ctx, pid, "init", "", nil)
 	require.NoError(t, err)
 
-	waitForLoopStart(t, ch, id, 3*time.Second)
+	ch.waitFor(t, "session state", func(events []controllerapi.SessionNotification) bool {
+		for _, event := range events {
+			if event.SessionID == id && event.Notification.Type == sessionevent.NotifyStateChanged &&
+				event.Notification.Status == controllerapi.StateRunning {
+				return true
+			}
+		}
+		return false
+	})
 
 	// Kill is blocking: stop() + mark killed.
 	err = mgr.sendToSession(context.Background(), id, "/kill")
 	require.NoError(t, err)
 
-	waitForState(t, ch, id, controllerapi.StateIdle, 3*time.Second)
+	ch.waitFor(t, "session state", func(events []controllerapi.SessionNotification) bool {
+		for _, event := range events {
+			if event.SessionID == id && event.Notification.Type == sessionevent.NotifyStateChanged &&
+				event.Notification.Status == controllerapi.StateIdle {
+				return true
+			}
+		}
+		return false
+	})
 
 	// Session must be soft-deleted (killed_at set, but still in DB)
 	rec, err := mgr.store.GetSession(context.Background(), id)
@@ -82,7 +116,8 @@ func TestManager_Kill_NonRunningSession(t *testing.T) {
 	testHarness := newHarness(t, harnessOptions{configure: withTestModels, clientFor: factory.client})
 	mgr := testHarness.mgr
 	s := testHarness.store
-	ch := mgr.bus.SubscribeAll()
+	ch := collectEvents(t, mgr.bus.SubscribeAll())
+	t.Cleanup(ch.stop)
 
 	factory.nextSess = &mockSession{completeAfter: 50 * time.Millisecond}
 
@@ -91,7 +126,15 @@ func TestManager_Kill_NonRunningSession(t *testing.T) {
 	id, err := mgr.Send(ctx, pid, "init", "", nil)
 	require.NoError(t, err)
 
-	waitForState(t, ch, id, controllerapi.StateIdle, 3*time.Second)
+	ch.waitFor(t, "session state", func(events []controllerapi.SessionNotification) bool {
+		for _, event := range events {
+			if event.SessionID == id && event.Notification.Type == sessionevent.NotifyStateChanged &&
+				event.Notification.Status == controllerapi.StateIdle {
+				return true
+			}
+		}
+		return false
+	})
 
 	// Session is now idle (not in-memory). Kill should mark it killed.
 	err = mgr.sendToSession(context.Background(), id, "/kill")
@@ -111,7 +154,8 @@ func TestManager_Kill_RemovesSchedules(t *testing.T) {
 	mgr := testHarness.mgr
 	s := testHarness.store
 	schedStore := testHarness.schedules
-	ch := mgr.bus.SubscribeAll()
+	ch := collectEvents(t, mgr.bus.SubscribeAll())
+	t.Cleanup(ch.stop)
 
 	factory.nextSess = &mockSession{completeAfter: 50 * time.Millisecond}
 
@@ -120,7 +164,15 @@ func TestManager_Kill_RemovesSchedules(t *testing.T) {
 	id, err := mgr.Send(ctx, pid, "init", "", nil)
 	require.NoError(t, err)
 
-	waitForState(t, ch, id, controllerapi.StateIdle, 3*time.Second)
+	ch.waitFor(t, "session state", func(events []controllerapi.SessionNotification) bool {
+		for _, event := range events {
+			if event.SessionID == id && event.Notification.Type == sessionevent.NotifyStateChanged &&
+				event.Notification.Status == controllerapi.StateIdle {
+				return true
+			}
+		}
+		return false
+	})
 
 	oneShot := time.Now().Add(time.Hour).UTC()
 	_, err = schedStore.AddSchedule(ctx, id, "", &oneShot, "one-shot", false)
@@ -131,7 +183,15 @@ func TestManager_Kill_RemovesSchedules(t *testing.T) {
 	factory.nextSess = &mockSession{completeAfter: 50 * time.Millisecond}
 	otherID, err := mgr.Send(ctx, pid, "other", "", nil)
 	require.NoError(t, err)
-	waitForState(t, ch, otherID, controllerapi.StateIdle, 3*time.Second)
+	ch.waitFor(t, "session state", func(events []controllerapi.SessionNotification) bool {
+		for _, event := range events {
+			if event.SessionID == otherID && event.Notification.Type == sessionevent.NotifyStateChanged &&
+				event.Notification.Status == controllerapi.StateIdle {
+				return true
+			}
+		}
+		return false
+	})
 	otherOneShot := time.Now().Add(time.Hour).UTC()
 	_, err = schedStore.AddSchedule(ctx, otherID, "", &otherOneShot, "untouched", false)
 	require.NoError(t, err)
@@ -154,14 +214,23 @@ func TestManager_StopCancelsPendingSleepButPreservesScheduledWork(t *testing.T) 
 	mgr := testHarness.mgr
 	projects := testHarness.store
 	schedStore := testHarness.schedules
-	events := mgr.bus.SubscribeAll()
+	events := collectEvents(t, mgr.bus.SubscribeAll())
+	t.Cleanup(events.stop)
 
 	factory.nextSess = &mockSession{completeAfter: 50 * time.Millisecond}
 	ctx := context.Background()
 	projectID := testProject(t, projects, t.TempDir())
 	sessionID, err := mgr.Send(ctx, projectID, "init", "", nil)
 	require.NoError(t, err)
-	waitForState(t, events, sessionID, controllerapi.StateIdle, 3*time.Second)
+	events.waitFor(t, "session state", func(events []controllerapi.SessionNotification) bool {
+		for _, event := range events {
+			if event.SessionID == sessionID && event.Notification.Type == sessionevent.NotifyStateChanged &&
+				event.Notification.Status == controllerapi.StateIdle {
+				return true
+			}
+		}
+		return false
+	})
 
 	oneShot := time.Now().Add(time.Hour).UTC()
 	_, err = schedStore.AddSchedule(ctx, sessionID, "", &oneShot, "scheduled work", false)
@@ -192,7 +261,8 @@ func TestManager_Clear(t *testing.T) {
 	testHarness := newHarness(t, harnessOptions{configure: withTestModels, clientFor: factory.client})
 	mgr := testHarness.mgr
 	s := testHarness.store
-	ch := mgr.bus.SubscribeAll()
+	ch := collectEvents(t, mgr.bus.SubscribeAll())
+	t.Cleanup(ch.stop)
 
 	// Session completes quickly → loop exits → session is idle
 	factory.nextSess = &mockSession{completeAfter: 50 * time.Millisecond}
@@ -206,9 +276,9 @@ func TestManager_Clear(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	require.Eventually(t, func() bool {
+	testHarness.waitUntil("TestManager_Clear", func() bool {
 		return !mgr.HasActiveLoop(id)
-	}, 3*time.Second, 10*time.Millisecond)
+	})
 
 	// Set reasoning level on the session before clearing
 	err = mgr.SetModel(context.Background(), id, "test-model", "high")
@@ -235,20 +305,16 @@ func TestManager_Clear(t *testing.T) {
 	assert.NotNil(t, oldRec.KilledAt, "old session should be killed")
 
 	// Verify session.cleared notification was published
-	var cleared bool
-	deadline := time.After(2 * time.Second)
-	for !cleared {
-		select {
-		case sn := <-ch:
+	ch.waitFor(t, "session cleared", func(events []controllerapi.SessionNotification) bool {
+		for _, sn := range events {
 			if sn.Notification.Type == sessionevent.NotifySessionCleared {
 				assert.Equal(t, id, sn.Notification.OldSessionID)
 				assert.Equal(t, newID, sn.Notification.NewSessionID)
-				cleared = true
+				return true
 			}
-		case <-deadline:
-			t.Fatal("timed out waiting for session.cleared notification")
 		}
-	}
+		return false
+	})
 }
 
 func TestManager_ClearRejectsAConcurrentLateOwnerClaim(t *testing.T) {
@@ -308,7 +374,8 @@ func TestManager_ClearWhileRunning(t *testing.T) {
 	testHarness := newHarness(t, harnessOptions{configure: withTestModels, clientFor: factory.client})
 	mgr := testHarness.mgr
 	s := testHarness.store
-	ch := mgr.bus.SubscribeAll()
+	ch := collectEvents(t, mgr.bus.SubscribeAll())
+	t.Cleanup(ch.stop)
 
 	// Session that blocks until context cancelled
 	factory.nextSess = &mockSession{}
@@ -318,7 +385,15 @@ func TestManager_ClearWhileRunning(t *testing.T) {
 	id, err := mgr.Send(ctx, pid, "init", "my-model", map[string]any{"lang": "en"})
 	require.NoError(t, err)
 
-	waitForLoopStart(t, ch, id, 3*time.Second)
+	ch.waitFor(t, "session state", func(events []controllerapi.SessionNotification) bool {
+		for _, event := range events {
+			if event.SessionID == id && event.Notification.Type == sessionevent.NotifyStateChanged &&
+				event.Notification.Status == controllerapi.StateRunning {
+				return true
+			}
+		}
+		return false
+	})
 
 	// Clear: notifies immediately (via pubsub buffer), then kills old session synchronously
 	newID, err := mgr.clear(context.Background(), lifecycleInput(context.Background(), t, mgr, id, "/clear"))
@@ -339,20 +414,16 @@ func TestManager_ClearWhileRunning(t *testing.T) {
 	assert.NotNil(t, oldRec.KilledAt)
 
 	// Verify notification was published
-	var cleared bool
-	deadline := time.After(2 * time.Second)
-	for !cleared {
-		select {
-		case sn := <-ch:
+	ch.waitFor(t, "session cleared", func(events []controllerapi.SessionNotification) bool {
+		for _, sn := range events {
 			if sn.Notification.Type == sessionevent.NotifySessionCleared {
 				assert.Equal(t, id, sn.Notification.OldSessionID)
 				assert.Equal(t, newID, sn.Notification.NewSessionID)
-				cleared = true
+				return true
 			}
-		case <-deadline:
-			t.Fatal("timed out waiting for session.cleared notification")
 		}
-	}
+		return false
+	})
 }
 
 // A transient store failure while loading the session must not classify an
@@ -421,8 +492,8 @@ func TestStopParksWholeTreeAndExplicitFollowUpResumesOnlyChild(t *testing.T) {
 	require.NoError(t, mgr.sendToSession(ctx, parent.ID, "/stop"))
 
 	for _, id := range []int64{parent.ID, childID} {
-		rec, getErr := mgr.store.GetSession(ctx, id)
-		require.NoError(t, getErr)
+		rec, err := mgr.store.GetSession(context.Background(), id)
+		require.NoError(t, err)
 		assert.Equal(t, sessionstore.SessionStatusStopped, rec.Status)
 		_, pendingErr := mgr.store.PeekPending(ctx, id)
 		require.ErrorIs(t, pendingErr, sessionstore.ErrNoPendingInput)
@@ -439,10 +510,10 @@ func TestStopParksWholeTreeAndExplicitFollowUpResumesOnlyChild(t *testing.T) {
 	)
 
 	require.NoError(t, mgr.SendToChild(ctx, childID, "resume just this child"))
-	require.Eventually(t, func() bool {
+	testHarness.waitUntil("TestStopParksWholeTreeAndExplicitFollowUpResumesOnlyChild", func() bool {
 		resumed, getErr := mgr.links.GetLink(ctx, childID)
 		return getErr == nil && resumed != nil && resumed.State == subagent.StateRunning
-	}, 3*time.Second, 10*time.Millisecond)
+	})
 
 	parentRec, err := mgr.store.GetSession(ctx, parent.ID)
 	require.NoError(t, err)

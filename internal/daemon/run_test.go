@@ -20,7 +20,8 @@ func TestManager_NormalCompletion(t *testing.T) {
 	testHarness := newHarness(t, harnessOptions{configure: withTestModels, clientFor: factory.client})
 	mgr := testHarness.mgr
 	s := testHarness.store
-	ch := mgr.bus.SubscribeAll()
+	ch := collectEvents(t, mgr.bus.SubscribeAll())
+	t.Cleanup(ch.stop)
 
 	sess := &mockSession{completeAfter: 50 * time.Millisecond}
 	factory.nextSess = sess
@@ -30,7 +31,15 @@ func TestManager_NormalCompletion(t *testing.T) {
 	id, err := mgr.Send(ctx, pid, "hi", "", nil)
 	require.NoError(t, err)
 
-	waitForState(t, ch, id, controllerapi.StateIdle, 3*time.Second)
+	ch.waitFor(t, "session state", func(events []controllerapi.SessionNotification) bool {
+		for _, event := range events {
+			if event.SessionID == id && event.Notification.Type == sessionevent.NotifyStateChanged &&
+				event.Notification.Status == controllerapi.StateIdle {
+				return true
+			}
+		}
+		return false
+	})
 
 	// Verify session removed from in-memory map
 	assert.False(t, mgr.HasActiveLoop(id))
@@ -41,7 +50,8 @@ func TestManager_ErrorPath(t *testing.T) {
 	testHarness := newHarness(t, harnessOptions{configure: withTestModels, clientFor: factory.client})
 	mgr := testHarness.mgr
 	s := testHarness.store
-	ch := mgr.bus.SubscribeAll()
+	ch := collectEvents(t, mgr.bus.SubscribeAll())
+	t.Cleanup(ch.stop)
 
 	sess := &mockSession{
 		completeAfter: 50 * time.Millisecond,
@@ -58,11 +68,8 @@ func TestManager_ErrorPath(t *testing.T) {
 	// Errors no longer kill the session — instead the daemon sends an error message
 	// and transitions to idle so the session can receive new messages.
 	var errMessage string
-	var gotIdle bool
-	deadline := time.After(3 * time.Second)
-	for !gotIdle {
-		select {
-		case sn := <-ch:
+	ch.waitFor(t, "error and idle", func(events []controllerapi.SessionNotification) bool {
+		for _, sn := range events {
 			if sn.SessionID != id {
 				continue
 			}
@@ -71,12 +78,11 @@ func TestManager_ErrorPath(t *testing.T) {
 			}
 			if sn.Notification.Type == sessionevent.NotifyStateChanged &&
 				sn.Notification.Status == controllerapi.StateIdle {
-				gotIdle = true
+				return true
 			}
-		case <-deadline:
-			t.Fatal("timed out waiting for error/idle notifications")
 		}
-	}
+		return false
+	})
 
 	assert.Contains(t, errMessage, "something went wrong")
 }

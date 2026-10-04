@@ -15,7 +15,6 @@ import (
 	"strings"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -120,10 +119,10 @@ func scheduleRestartResponder(release <-chan struct{}) func(string, []llmwire.Me
 		if hasToolResultFor(messages, tool.IDSchedule) {
 			<-release
 
-			return &llmwire.Response{Text: "scheduled work completed"}
+			return textReply("scheduled work completed")
 		}
 
-		return &llmwire.Response{Text: "ready for schedule"}
+		return textReply("ready for schedule")
 	}
 }
 
@@ -335,17 +334,6 @@ func (f *exitTrackingMCPServer) count(t *testing.T, event string) int {
 	return strings.Count(string(data), event+"\n")
 }
 
-func (f *exitTrackingMCPServer) waitForExit(t *testing.T) {
-	f.waitForExitCount(t, 1)
-}
-
-func (f *exitTrackingMCPServer) waitForExitCount(t *testing.T, want int) {
-	t.Helper()
-	require.Eventually(t, func() bool {
-		return f.count(t, "exit") >= want
-	}, 5*time.Second, 10*time.Millisecond, "MCP subprocesses did not exit")
-}
-
 func exitTrackingParams(t *testing.T, fake *exitTrackingMCPServer) string {
 	t.Helper()
 	data, err := json.Marshal(fake.args())
@@ -424,26 +412,41 @@ func (f *fakeMCPServer) countNoFail(event string) int {
 
 func disableScenarioResponder(fake *fakeMCPServer) func(string, []llmwire.Message) *llmwire.Response {
 	return func(_ string, messages []llmwire.Message) *llmwire.Response {
-		last := lastUserText(messages)
+		last := func(msgs []llmwire.Message) string {
+			const nudgePrefix = "You ended your previous response without calling a tool."
+
+			text := ""
+
+			for _, m := range msgs {
+				// The host completion nudge is not a user turn: the confirmation turn
+				// must answer the task prompt again, not fall through to the default
+				// registration branch.
+				if m.Role == llmwire.RoleUser && !strings.HasPrefix(m.Content, nudgePrefix) {
+					text = m.Content
+				}
+			}
+
+			return text
+		}(messages)
 		switch {
 		case strings.Contains(last, "USE_AFTER_RESTART"):
-			if hasToolResultForCallID(messages, "ping-after-restart") {
-				return &llmwire.Response{Text: "used after restart"}
+			if toolResultForCallID(messages, "ping-after-restart") != nil {
+				return textReply("used after restart")
 			}
 			return mcpPingCall("ping-after-restart")
 		case strings.Contains(last, "USE_IT"):
-			if hasToolResultForCallID(messages, "ping-before-restart") {
-				return &llmwire.Response{Text: "used before restart"}
+			if toolResultForCallID(messages, "ping-before-restart") != nil {
+				return textReply("used before restart")
 			}
 			return mcpPingCall("ping-before-restart")
 		case strings.Contains(last, "DISABLE_IT"):
 			if hasToolResultFor(messages, tool.IDMCPDisable) {
-				return &llmwire.Response{Text: "disabled"}
+				return textReply("disabled")
 			}
 			return mcpToolCall("disable-1", tool.IDMCPDisable, `{"name":"fake","scope":"project"}`)
 		default:
 			if hasToolResultFor(messages, tool.IDMCPAdd) {
-				return &llmwire.Response{Text: "registered"}
+				return textReply("registered")
 			}
 			return mcpToolCall("add-1", tool.IDMCPAdd, fake.addParams("fake", "project"))
 		}
@@ -457,29 +460,44 @@ func removeScenarioResponder(
 	t.Helper()
 
 	return func(_ string, messages []llmwire.Message) *llmwire.Response {
-		last := lastUserText(messages)
+		last := func(msgs []llmwire.Message) string {
+			const nudgePrefix = "You ended your previous response without calling a tool."
+
+			text := ""
+
+			for _, m := range msgs {
+				// The host completion nudge is not a user turn: the confirmation turn
+				// must answer the task prompt again, not fall through to the default
+				// registration branch.
+				if m.Role == llmwire.RoleUser && !strings.HasPrefix(m.Content, nudgePrefix) {
+					text = m.Content
+				}
+			}
+
+			return text
+		}(messages)
 		switch {
 		case strings.Contains(last, "USE_AFTER_REMOVE"):
-			if hasToolResultForCallID(messages, "ping-after-remove") {
-				return &llmwire.Response{Text: "used after remove"}
+			if toolResultForCallID(messages, "ping-after-remove") != nil {
+				return textReply("used after remove")
 			}
 
 			return mcpPingCall("ping-after-remove")
 		case strings.Contains(last, "USE_IT"):
-			if hasToolResultForCallID(messages, "ping-before-remove") {
-				return &llmwire.Response{Text: "used before remove"}
+			if toolResultForCallID(messages, "ping-before-remove") != nil {
+				return textReply("used before remove")
 			}
 
 			return mcpPingCall("ping-before-remove")
 		case strings.Contains(last, "REMOVE_IT"):
 			if hasToolResultFor(messages, tool.IDMCPRemove) {
-				return &llmwire.Response{Text: "removed"}
+				return textReply("removed")
 			}
 
 			return mcpToolCall("remove-1", tool.IDMCPRemove, `{"name":"fake","scope":"project"}`)
 		default:
 			if hasToolResultFor(messages, tool.IDMCPAdd) {
-				return &llmwire.Response{Text: "registered"}
+				return textReply("registered")
 			}
 
 			return mcpToolCall("add-1", tool.IDMCPAdd, exitTrackingParams(t, fake))
@@ -534,10 +552,10 @@ func stoppedRootScheduleResponder(
 			once.Do(func() { close(started) })
 			<-release
 
-			return &llmwire.Response{Text: tc.answer}
+			return textReply(tc.answer)
 		}
 
-		return &llmwire.Response{Text: "ready"}
+		return textReply("ready")
 	}
 }
 

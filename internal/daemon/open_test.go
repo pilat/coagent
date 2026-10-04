@@ -1,7 +1,6 @@
 package daemon
 
 import (
-	"database/sql"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -142,59 +141,17 @@ func TestSessionRepoRoot_InheritedAcrossDurableSubagentTree(t *testing.T) {
 		"repo_root": "/source",
 	})
 	require.NoError(t, err)
-	childID, err := func() (int64, error) {
-		var id int64
-		err := h.store.WithTx(h.ctx, func(tx *sql.Tx) error {
-			var err error
-			id, err = sessionstore.CreateSubagentSessionTx(
-				h.ctx,
-				tx,
-				sessionstore.CreateSubagentSession{
-					ProjectID:      h.projectID,
-					ParentID:       root.ID,
-					RootID:         root.ID,
-					AgentType:      "general",
-					Model:          "fake-model",
-					ReasoningLevel: "",
-				},
-			)
-			return err
-		})
-		return id, err
-	}()
-	require.NoError(t, err)
-	grandchildID, err := func() (int64, error) {
-		var id int64
-		err := h.store.WithTx(h.ctx, func(tx *sql.Tx) error {
-			var err error
-			id, err = sessionstore.CreateSubagentSessionTx(
-				h.ctx,
-				tx,
-				sessionstore.CreateSubagentSession{
-					ProjectID:      h.projectID,
-					ParentID:       childID,
-					RootID:         root.ID,
-					AgentType:      "general",
-					Model:          "fake-model",
-					ReasoningLevel: "",
-				},
-			)
-			return err
-		})
-		return id, err
-	}()
-	require.NoError(t, err)
+	childID := h.createUnlinkedChild(root.ID)
+	grandchildID := h.createUnlinkedChild(childID)
 
 	for _, sessionID := range []int64{root.ID, childID, grandchildID} {
-		rec, loadErr := h.store.GetSession(h.ctx, sessionID)
-		require.NoError(t, loadErr)
+		rec := h.session(sessionID)
 		got, rootErr := h.mgr.sessionRepoRoot(h.ctx, rec)
 		require.NoError(t, rootErr)
 		assert.Equal(t, "/source", got)
 	}
 
-	child, err := h.store.GetSession(h.ctx, childID)
-	require.NoError(t, err)
+	child := h.session(childID)
 	assert.Empty(t, child.Attributes["repo_root"])
 
 	plain, err := h.store.CreateSession(h.ctx, h.projectID, "fake-model", "", nil)

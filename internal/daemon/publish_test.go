@@ -140,10 +140,9 @@ func TestPublishGate_ChildDropped(t *testing.T) {
 	testFactory := &mockFactory{}
 	testHarness := newHarness(t, harnessOptions{configure: withTestModels, clientFor: testFactory.client})
 	mgr := testHarness.mgr
-	store := testHarness.store
 	ch := mgr.bus.SubscribeAll()
 
-	childID := newTestChild(t, mgr, store, "/tmp/publish-child")
+	childID := newTestChild(t, testHarness, "/tmp/publish-child")
 
 	mgr.NotifySession(childID, sessionevent.Notification{Type: sessionevent.NotifyMessage, Message: "hi"})
 
@@ -154,8 +153,7 @@ func TestPublishGate_CachesChildVerdict(t *testing.T) {
 	testFactory := &mockFactory{}
 	testHarness := newHarness(t, harnessOptions{configure: withTestModels, clientFor: testFactory.client})
 	mgr := testHarness.mgr
-	store := testHarness.store
-	childID := newTestChild(t, mgr, store, "/tmp/publish-cache")
+	childID := newTestChild(t, testHarness, "/tmp/publish-cache")
 
 	counting := &countingSessionStore{Store: mgr.store}
 	mgr.store = counting
@@ -173,10 +171,9 @@ func TestPublishGate_FailOpenDoesNotPoisonCache(t *testing.T) {
 	testFactory := &mockFactory{}
 	testHarness := newHarness(t, harnessOptions{configure: withTestModels, clientFor: testFactory.client})
 	mgr := testHarness.mgr
-	store := testHarness.store
 	ch := mgr.bus.SubscribeAll()
 
-	childID := newTestChild(t, mgr, store, "/tmp/publish-failopen")
+	childID := newTestChild(t, testHarness, "/tmp/publish-failopen")
 
 	counting := &countingSessionStore{Store: mgr.store, failNth: 1}
 	mgr.store = counting

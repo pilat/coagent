@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -24,13 +25,10 @@ func TestHarnessScenario_BudgetMutationRequiresAndConsumesUserGrant(t *testing.T
 		if hasToolResultFor(messages, "set_budget") {
 			<-release
 
-			return &llmwire.Response{Text: "budget configured"}
+			return textReply("budget configured")
 		}
 
-		return &llmwire.Response{ToolCalls: []llmwire.ToolCall{{
-			ID: "budget-call", Name: "set_budget",
-			Arguments: []byte(`{"action":"set","duration":"1m"}`),
-		}}}
+		return callReply("budget-call", "set_budget", `{"action":"set","duration":"1m"}`)
 	}
 	h := newHarness(t, harnessOptions{respond: respond})
 	defer func() {
@@ -60,8 +58,11 @@ func TestHarnessScenario_BudgetMutationRequiresAndConsumesUserGrant(t *testing.T
 	assert.Nil(t, activation)
 
 	var receipts int
-	require.NoError(t, h.db.QueryRowContext(h.ctx, `SELECT COUNT(*) FROM session_outbox
-		WHERE session_id = ? AND content LIKE 'Budget armed:%'`, sessionID).Scan(&receipts))
+	for _, row := range h.outbox(sessionID) {
+		if strings.HasPrefix(strings.ToLower(row.Content), "budget armed:") {
+			receipts++
+		}
+	}
 	assert.Equal(t, 1, receipts)
 }
 
@@ -70,33 +71,27 @@ func TestHarnessScenario_BackgroundChildRetainsBudgetUntilCompletion(t *testing.
 	respond := func(_ string, messages []llmwire.Message) *llmwire.Response {
 		if hasUserContaining(messages, "BUDGET_CHILD") {
 			<-childRelease
-			return &llmwire.Response{Text: "budget child complete"}
+			return textReply("budget child complete")
 		}
 		if hasUserContaining(messages, "<subagent_completion>") {
-			return &llmwire.Response{Text: "budget completion handled"}
+			return textReply("budget completion handled")
 		}
 		if hasToolResultFor(messages, "task") {
-			return &llmwire.Response{Text: "budget child still running"}
+			return textReply("budget child still running")
 		}
 		if hasToolResultFor(messages, "set_budget") {
-			return &llmwire.Response{ToolCalls: []llmwire.ToolCall{
-				{
-					ID:   "budget-child-call",
-					Name: "task",
-					Arguments: []byte(
-						`{"prompt":"BUDGET_CHILD","description":"budget child","subagent_type":"general","background":true}`,
-					),
-				},
-			}}
+			return callReply(
+				"budget-child-call",
+				"task",
+				`{"prompt":"BUDGET_CHILD","description":"budget child","subagent_type":"general","background":true}`,
+			)
 		}
 
-		return &llmwire.Response{ToolCalls: []llmwire.ToolCall{{
-			ID: "budget-arm", Name: "set_budget", Arguments: []byte(`{"action":"set","duration":"1m"}`),
-		}}}
+		return callReply("budget-arm", "set_budget", `{"action":"set","duration":"1m"}`)
 	}
 
 	h := newHarness(t, harnessOptions{respond: respond})
-	collector := collectEvents(h.mgr.bus.SubscribeAll())
+	collector := collectEvents(t, h.mgr.bus.SubscribeAll())
 	defer func() {
 		closeOnce(childRelease)
 		collector.stop()
@@ -108,14 +103,14 @@ func TestHarnessScenario_BackgroundChildRetainsBudgetUntilCompletion(t *testing.
 		"manager_id": scenarioManagerID,
 	})
 	require.NoError(t, err)
-	waitForVisibleMessage(t, collector, sessionID, "budget child still running")
+	collector.waitMessage(sessionID, "budget child still running")
 	record, err := h.store.Get(h.ctx, sessionID)
 	require.NoError(t, err)
 	assert.Equal(t, budget.Armed, record.State)
 	generation := record.Generation
 
 	close(childRelease)
-	waitForVisibleMessage(t, collector, sessionID, "budget completion handled")
+	collector.waitMessage(sessionID, "budget completion handled")
 	h.waitUntil("budget released after completion", func() bool {
 		current, loadErr := h.store.Get(h.ctx, sessionID)
 		return loadErr == nil && current.State == budget.Released
@@ -157,7 +152,7 @@ func TestHarnessScenario_FinalIncludesNonEmptyTodoAndBudget(t *testing.T) {
 		enterOnce.Do(func() { close(entered) })
 		<-release
 
-		return &llmwire.Response{Text: "task answer"}
+		return textReply("task answer")
 	}})
 	defer func() {
 		releaseModel()
@@ -194,19 +189,14 @@ func TestHarnessScenario_FinalIncludesNonEmptyTodoAndBudget(t *testing.T) {
 		"📋 TODO · 1 active · 1 remaining · 0 done\n" +
 		"ℹ️ /status shows the full TODO list\n" +
 		"💸 Budget: armed (generation 1) · $0.000000 / $1.000000 · $1.000000 remaining"
-	h.mgr.waitIdle(sessionID)
+	h.waitUntil("session idle", func() bool { return !h.mgr.HasActiveLoop(sessionID) })
 
 	var finals []string
-	rows, err := h.db.QueryContext(h.ctx, `SELECT content FROM session_outbox
-		WHERE session_id = ? AND source_key LIKE 'message:%:final' ORDER BY id`, sessionID)
-	require.NoError(t, err)
-	defer rows.Close()
-	for rows.Next() {
-		var content string
-		require.NoError(t, rows.Scan(&content))
-		finals = append(finals, content)
+	for _, row := range h.outbox(sessionID) {
+		if strings.HasPrefix(row.SourceKey, "message:") && strings.HasSuffix(row.SourceKey, ":final") {
+			finals = append(finals, row.Content)
+		}
 	}
-	require.NoError(t, rows.Err())
 	require.Len(t, finals, 1, "the manager sees exactly the confirmed answer")
 	assert.Equal(t, want, finals[0])
 }
@@ -231,7 +221,7 @@ func TestHarnessScenario_CompletionCheckBudgetCrossingOnCandidateHidesText(t *te
 	}
 
 	h := newHarness(t, harnessOptions{respond: respond})
-	collector := collectEvents(h.mgr.bus.SubscribeAll())
+	collector := collectEvents(t, h.mgr.bus.SubscribeAll())
 	defer func() {
 		collector.stop()
 		h.shutdown()
@@ -255,10 +245,10 @@ func TestHarnessScenario_CompletionCheckBudgetCrossingOnCandidateHidesText(t *te
 	// owns its delivery, so assert the committed row rather than a push event.
 	h.waitUntil("budget checkpoint committed", func() bool {
 		var checkpoints int
-		if loadErr := h.db.QueryRowContext(h.ctx, `SELECT COUNT(*) FROM session_outbox
-			WHERE session_id = ? AND content LIKE 'Budget checkpoint reached%'`, root).
-			Scan(&checkpoints); loadErr != nil {
-			return false
+		for _, row := range h.outbox(root) {
+			if strings.HasPrefix(strings.ToLower(row.Content), "budget checkpoint reached") {
+				checkpoints++
+			}
 		}
 
 		return checkpoints == 1
@@ -268,9 +258,11 @@ func TestHarnessScenario_CompletionCheckBudgetCrossingOnCandidateHidesText(t *te
 		"the crossing fires on the candidate disposition, before any confirmation call")
 
 	var leaks int
-	require.NoError(t, h.db.QueryRowContext(h.ctx, `SELECT COUNT(*) FROM session_outbox
-		WHERE session_id = ? AND content LIKE '%unconfirmed candidate under budget%'`, root).
-		Scan(&leaks))
+	for _, row := range h.outbox(root) {
+		if strings.Contains(strings.ToLower(row.Content), "unconfirmed candidate under budget") {
+			leaks++
+		}
+	}
 	assert.Zero(t, leaks, "the unconfirmed candidate text never publishes")
 
 	record, err := h.store.Get(h.ctx, root)

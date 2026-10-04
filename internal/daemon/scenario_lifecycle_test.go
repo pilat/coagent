@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"context"
 	"database/sql"
 	"path/filepath"
 	"testing"
@@ -32,10 +33,10 @@ func TestCascadeKill_BackgroundDescendant(t *testing.T) {
 			entered <- struct{}{}
 			<-release // hang until kill cancels the loop ctx
 
-			return &llmwire.Response{Text: "unreached"}
+			return textReply("unreached")
 		}
 
-		return &llmwire.Response{Text: "idle"}
+		return textReply("idle")
 	}
 
 	h := newHarness(t, harnessOptions{respond: respond})
@@ -96,8 +97,7 @@ func TestCascadeKill_BackgroundDescendant(t *testing.T) {
 	})
 
 	for _, id := range []int64{child.ChildID, grandchild.ChildID} {
-		rec, gerr := h.store.GetSession(ctx, id)
-		require.NoError(t, gerr)
+		rec := h.session(id)
 		assert.NotNil(t, rec.KilledAt, "descendant %d is killed with its tree", id)
 	}
 	for _, inputID := range []int64{childInput.Input.ID, grandchildInput.Input.ID} {
@@ -122,10 +122,10 @@ func TestCascadeKill_RemovesChildSchedules(t *testing.T) {
 		if hasUserContaining(msgs, "HANG") {
 			<-release // hang until kill cancels the loop ctx
 
-			return &llmwire.Response{Text: "unreached"}
+			return textReply("unreached")
 		}
 
-		return &llmwire.Response{Text: "idle"}
+		return textReply("idle")
 	}
 
 	h := newHarness(t, harnessOptions{respond: respond})
@@ -166,30 +166,9 @@ func TestCascadeKill_KilledTreeSuppressesTerminalBackgroundCompletion(t *testing
 
 	parent, err := h.store.CreateSession(h.ctx, h.projectID, "fake-model", "", nil)
 	require.NoError(t, err)
-	childID, err := func() (int64, error) {
-		var id int64
-		err := h.store.WithTx(h.ctx, func(tx *sql.Tx) error {
-			var err error
-			id, err = sessionstore.CreateSubagentSessionTx(
-				h.ctx,
-				tx,
-				sessionstore.CreateSubagentSession{
-					ProjectID:      h.projectID,
-					ParentID:       parent.ID,
-					RootID:         parent.ID,
-					AgentType:      "general",
-					Model:          "fake-model",
-					ReasoningLevel: "",
-				},
-			)
-			return err
-		})
-		return id, err
-	}()
-	require.NoError(t, err)
-	require.NoError(t, seedChildLink(h.ctx, h.store, subagent.Link{
-		ParentID: parent.ID, ChildID: childID, TaskCallID: "background",
-	}))
+	childID := h.createChild(parent.ID, subagent.Link{
+		TaskCallID: "background",
+	})
 	require.NoError(
 		t,
 		seedTerminalChild(h.ctx, h.store, childID, subagent.StateCompleted, "done", subagent.OutcomeCompleted),
@@ -204,8 +183,7 @@ func TestCascadeKill_KilledTreeSuppressesTerminalBackgroundCompletion(t *testing
 
 	h.mgr.killDescendants(h.ctx, parent.ID, 0)
 
-	link, err := h.links.GetLink(h.ctx, childID)
-	require.NoError(t, err)
+	link := h.link(childID)
 	require.NotNil(t, link)
 	assert.Equal(t, subagent.StateCompleted, link.State)
 	assert.Equal(t, "done", link.Result)
@@ -231,7 +209,7 @@ func TestHarnessScenario_LiveStopChain(t *testing.T) {
 			<-release
 		}
 
-		return &llmwire.Response{Text: "never reached"}
+		return textReply("never reached")
 	}
 
 	h := newHarness(t, harnessOptions{respond: respond})
@@ -240,7 +218,7 @@ func TestHarnessScenario_LiveStopChain(t *testing.T) {
 		h.shutdown()
 	}()
 
-	collector := collectEvents(h.mgr.bus.SubscribeAll())
+	collector := collectEvents(t, h.mgr.bus.SubscribeAll())
 	defer collector.stop()
 
 	h.startInboxWake()
@@ -259,7 +237,15 @@ func TestHarnessScenario_LiveStopChain(t *testing.T) {
 
 		return loadErr == nil && record.Status == sessionstore.SessionStatusStopped
 	})
-	stoppedProcess := waitScenarioProcessState(t, h, process.ID, backgroundprocess.StateCancelled)
+	stoppedProcess := func() backgroundprocess.Process {
+		var record backgroundprocess.Process
+		h.waitUntil("process state", func() bool {
+			var err error
+			record, err = h.mgr.processStore.GetProcess(context.Background(), process.ID)
+			return err == nil && record.State == backgroundprocess.StateCancelled
+		})
+		return record
+	}()
 	require.Equal(t, backgroundprocess.IntentSessionStopped, stoppedProcess.HostIntent)
 
 	controller := newChainController(t, h)
@@ -276,7 +262,7 @@ func TestHarnessScenario_LiveStopChain(t *testing.T) {
 // same terminal transaction without running any model or tool work.
 func TestHarnessScenario_InterruptedStopChain(t *testing.T) {
 	respond := func(_ string, _ []llmwire.Message) *llmwire.Response {
-		return &llmwire.Response{Text: "must not run"}
+		return textReply("must not run")
 	}
 
 	dbPath := filepath.Join(t.TempDir(), "interrupted-stop.db")
@@ -301,18 +287,17 @@ func TestHarnessScenario_InterruptedStopChain(t *testing.T) {
 	respond2 := func(_ string, _ []llmwire.Message) *llmwire.Response {
 		modelCalls++
 
-		return &llmwire.Response{Text: "must not run"}
+		return textReply("must not run")
 	}
 	h2 := newHarness(t, harnessOptions{dbPath: dbPath, respond: respond2})
 	defer h2.shutdown()
 	require.NoError(t, h2.mgr.Start(h2.ctx))
 
-	record, err := h2.store.GetSession(h2.ctx, root.ID)
-	require.NoError(t, err)
+	record := h2.session(root.ID)
 	require.Equal(t, sessionstore.SessionStatusStopped, record.Status)
 	require.Zero(t, modelCalls, "stop recovery must never run the model")
 
-	collector := collectEvents(h2.mgr.bus.SubscribeAll())
+	collector := collectEvents(t, h2.mgr.bus.SubscribeAll())
 	defer collector.stop()
 
 	controller := newChainController(t, h2)
@@ -329,11 +314,11 @@ func TestHarnessScenario_InterruptedStopChain(t *testing.T) {
 func TestHarnessScenario_LaterFreshTurnAfterStop(t *testing.T) {
 	respond := func(_ string, msgs []llmwire.Message) *llmwire.Response {
 		if hasUserContaining(msgs, "continue please") {
-			return &llmwire.Response{Text: "Resumed and done."}
+			return textReply("Resumed and done.")
 		}
 
 		if hasToolResultFor(msgs, "ls") {
-			return &llmwire.Response{Text: "Working on it, done for now."}
+			return textReply("Working on it, done for now.")
 		}
 
 		return &llmwire.Response{
@@ -347,7 +332,7 @@ func TestHarnessScenario_LaterFreshTurnAfterStop(t *testing.T) {
 	h := newHarness(t, harnessOptions{respond: respond})
 	defer h.shutdown()
 
-	collector := collectEvents(h.mgr.bus.SubscribeAll())
+	collector := collectEvents(t, h.mgr.bus.SubscribeAll())
 	defer collector.stop()
 
 	h.startInboxWake()
@@ -355,7 +340,7 @@ func TestHarnessScenario_LaterFreshTurnAfterStop(t *testing.T) {
 		"manager_id": scenarioManagerID,
 	})
 	require.NoError(t, err)
-	waitForVisibleMessage(t, collector, root, "Working on it, done for now.")
+	collector.waitMessage(root, "Working on it, done for now.")
 	h.waitUntil("first runner gone", func() bool { return !h.mgr.HasActiveLoop(root) })
 
 	h.startInboxWake()
@@ -368,11 +353,11 @@ func TestHarnessScenario_LaterFreshTurnAfterStop(t *testing.T) {
 
 	h.startInboxWake()
 	require.NoError(t, h.mgr.sendToSession(h.ctx, root, "continue please"))
-	waitForVisibleMessage(t, collector, root, "Resumed and done.")
+	collector.waitMessage(root, "Resumed and done.")
 
 	controller := newChainController(t, h)
 	drainScenarioClaims(t, "stop_then_fresh_turn.json", controller)
-	waitForIdleAfterMessage(t, collector, root, "Resumed and done.")
+	collector.waitIdleAfter(root, "Resumed and done.")
 
 	assertHarnessTrace(t, "stop_then_fresh_turn.json", collector.snapshot(), root)
 }

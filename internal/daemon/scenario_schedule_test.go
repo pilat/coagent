@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"path/filepath"
+	"slices"
 	"testing"
 	"time"
 
@@ -21,10 +22,10 @@ import (
 func TestHarnessModel_ScheduleCapabilityBoundary(t *testing.T) {
 	respond := func(_ string, messages []llmwire.Message) *llmwire.Response {
 		if hasToolResultFor(messages, tool.IDSchedule) {
-			return &llmwire.Response{Text: "scheduled turn completed"}
+			return textReply("scheduled turn completed")
 		}
 
-		return &llmwire.Response{Text: "ready"}
+		return textReply("ready")
 	}
 
 	h := newHarness(t, harnessOptions{respond: respond})
@@ -32,7 +33,7 @@ func TestHarnessModel_ScheduleCapabilityBoundary(t *testing.T) {
 	h.startInboxWake()
 	rootID, err := h.mgr.Send(t.Context(), h.projectID, "initialize", "fake-model", nil)
 	require.NoError(t, err)
-	h.mgr.waitIdle(rootID)
+	h.waitUntil("session idle", func() bool { return !h.mgr.HasActiveLoop(rootID) })
 	require.NoError(t, h.mgr.sendToSession(t.Context(), rootID, "/stop"))
 	subagentID := createScheduleBoundarySubagent(t, h)
 
@@ -74,8 +75,8 @@ func TestHarnessScenario_OneShotAckRetrySurvivesDaemonRestartAndRendersOnce(t *t
 	second := newScheduleRestartHarness(t, dbPath, workDir, respond)
 	retryEvents := retryOneShotAfterRestart(t, second, parentID)
 	assertNoRetryPublication(t, retryEvents.snapshot())
-	assert.Equal(t, 1, countToolResultsFor(second.parentMessages(parentID), tool.IDSchedule))
-	assert.Equal(t, "scheduled work completed", lastAssistantTextDTO(second.parentMessages(parentID)))
+	assert.Equal(t, 1, countToolResultsFor(second.messages(parentID), tool.IDSchedule))
+	assert.Equal(t, "scheduled work completed", lastAssistantTextDTO(second.messages(parentID)))
 
 	trace := append(events.snapshot(), retryEvents.snapshot()...)
 	// Runner-activation echoes are timing around a restart: an announce races
@@ -87,18 +88,14 @@ func TestHarnessScenario_OneShotAckRetrySurvivesDaemonRestartAndRendersOnce(t *t
 func TestHarnessScenario_SleepProjectsWakeAtAndUserInputInterruptsIt(t *testing.T) {
 	respond := func(_ string, messages []llmwire.Message) *llmwire.Response {
 		if hasToolResultFor(messages, tool.IDSleep) {
-			return &llmwire.Response{Text: "sleep interruption handled"}
+			return textReply("sleep interruption handled")
 		}
 
-		return &llmwire.Response{ToolCalls: []llmwire.ToolCall{{
-			ID:        "scenario-sleep",
-			Name:      tool.IDSleep,
-			Arguments: []byte(`{"duration":"1h","reason":"scenario"}`),
-		}}}
+		return callReply("scenario-sleep", tool.IDSleep, `{"duration":"1h","reason":"scenario"}`)
 	}
 
 	h := newHarness(t, harnessOptions{respond: respond})
-	collector := collectEvents(h.mgr.bus.SubscribeAll())
+	collector := collectEvents(t, h.mgr.bus.SubscribeAll())
 	defer func() {
 		collector.stop()
 		h.shutdown()
@@ -126,13 +123,21 @@ func TestHarnessScenario_SleepProjectsWakeAtAndUserInputInterruptsIt(t *testing.
 
 	h.startInboxWake()
 	require.NoError(t, h.mgr.sendToSession(h.ctx, parentID, "interrupt now"))
-	waitForVisibleMessage(t, collector, parentID, "sleep interruption handled")
-	waitForIdleAfterMessage(t, collector, parentID, "sleep interruption handled")
+	collector.waitMessage(parentID, "sleep interruption handled")
+	collector.waitIdleAfter(parentID, "sleep interruption handled")
 
-	messages := h.parentMessages(parentID)
+	messages := h.messages(parentID)
 	require.NoError(t, llm.ValidateToolPairing(messages))
 	assert.Equal(t, 1, countToolResultsFor(messages, tool.IDSleep))
-	assert.Contains(t, lastToolResultContent(messages, tool.IDSleep), "Sleep interrupted")
+	assert.Contains(t, func(msgs []llmwire.Message, toolName string) string {
+		for _, v := range slices.Backward(msgs) {
+			if v.Role == llmwire.RoleTool && v.ToolName == toolName {
+				return v.Content
+			}
+		}
+
+		return ""
+	}(messages, tool.IDSleep), "Sleep interrupted")
 
 	schedules, err := h.schedules.ListSchedules(h.ctx, parentID)
 	require.NoError(t, err)
@@ -149,14 +154,10 @@ func TestIntegration_SchedulerWakesExactSleepThroughDaemonQueue(t *testing.T) {
 
 	respond := func(_ string, msgs []llmwire.Message) *llmwire.Response {
 		if hasToolResultFor(msgs, tool.IDSleep) {
-			return &llmwire.Response{Text: "timer handled"}
+			return textReply("timer handled")
 		}
 
-		return &llmwire.Response{ToolCalls: []llmwire.ToolCall{{
-			ID:        sleepCallID,
-			Name:      tool.IDSleep,
-			Arguments: []byte(`{"duration":"1ms","reason":"boundary test"}`),
-		}}}
+		return callReply(sleepCallID, tool.IDSleep, `{"duration":"1ms","reason":"boundary test"}`)
 	}
 
 	h := newHarness(t, harnessOptions{respond: respond})
@@ -166,32 +167,32 @@ func TestIntegration_SchedulerWakesExactSleepThroughDaemonQueue(t *testing.T) {
 	parentID, err := h.mgr.Send(h.ctx, h.projectID, "sleep briefly", "fake-model", nil)
 	require.NoError(t, err)
 
-	require.Eventually(t, func() bool {
+	h.waitUntil("sleep must be durable before the scheduler fires", func() bool {
 		schedules, listErr := h.schedules.ListSchedules(h.ctx, parentID)
 
 		return listErr == nil && len(schedules) == 1 && !h.mgr.HasActiveLoop(parentID)
-	}, 5*time.Second, 10*time.Millisecond, "sleep must be durable before the scheduler fires")
+	})
 
 	executor := schedule.NewExecutor(h.schedules, h.mgr)
 	executor.Start(h.ctx)
 	defer executor.Stop()
 
-	require.Eventually(t, func() bool {
+	h.waitUntil("scheduler must commit the exact result before removing its ledger", func() bool {
 		schedules, listErr := h.schedules.ListSchedules(h.ctx, parentID)
 		if listErr != nil || len(schedules) != 0 {
 			return false
 		}
 
-		for _, msg := range h.parentMessages(parentID) {
+		for _, msg := range h.messages(parentID) {
 			if msg.Role == llmwire.RoleTool && msg.ToolCallID == sleepCallID {
 				return !h.mgr.HasActiveLoop(parentID)
 			}
 		}
 
 		return false
-	}, 5*time.Second, 10*time.Millisecond, "scheduler must commit the exact result before removing its ledger")
+	})
 
-	msgs := h.parentMessages(parentID)
+	msgs := h.messages(parentID)
 	require.NoError(t, llm.ValidateToolPairing(msgs))
 	assert.Equal(t, 1, countAssistantToolCallsFor(msgs, tool.IDSleep))
 	assert.Equal(t, 1, countToolResultsFor(msgs, tool.IDSleep))
@@ -218,14 +219,10 @@ func TestIntegration_UserInterruptCancelsSleepWithoutDeletingStandaloneOneShot(t
 
 	respond := func(_ string, msgs []llmwire.Message) *llmwire.Response {
 		if hasToolResultFor(msgs, tool.IDSleep) {
-			return &llmwire.Response{Text: "interrupt handled"}
+			return textReply("interrupt handled")
 		}
 
-		return &llmwire.Response{ToolCalls: []llmwire.ToolCall{{
-			ID:        sleepCallID,
-			Name:      tool.IDSleep,
-			Arguments: []byte(`{"duration":"1h","reason":"boundary test"}`),
-		}}}
+		return callReply(sleepCallID, tool.IDSleep, `{"duration":"1h","reason":"boundary test"}`)
 	}
 
 	h := newHarness(t, harnessOptions{respond: respond})
@@ -234,11 +231,11 @@ func TestIntegration_UserInterruptCancelsSleepWithoutDeletingStandaloneOneShot(t
 	h.startInboxWake()
 	parentID, err := h.mgr.Send(h.ctx, h.projectID, "sleep until interrupted", "fake-model", nil)
 	require.NoError(t, err)
-	require.Eventually(t, func() bool {
+	h.waitUntil("sleep must suspend with one durable timer", func() bool {
 		schedules, listErr := h.schedules.ListSchedules(h.ctx, parentID)
 
 		return listErr == nil && len(schedules) == 1 && !h.mgr.HasActiveLoop(parentID)
-	}, 5*time.Second, 10*time.Millisecond, "sleep must suspend with one durable timer")
+	})
 
 	standaloneAt := time.Now().Add(2 * time.Hour).UTC()
 	_, err = h.schedules.AddSchedule(
@@ -248,12 +245,20 @@ func TestIntegration_UserInterruptCancelsSleepWithoutDeletingStandaloneOneShot(t
 
 	h.startInboxWake()
 	require.NoError(t, h.mgr.sendToSession(h.ctx, parentID, "interrupt now"))
-	h.mgr.waitIdle(parentID)
+	h.waitUntil("session idle", func() bool { return !h.mgr.HasActiveLoop(parentID) })
 
-	messages := h.parentMessages(parentID)
+	messages := h.messages(parentID)
 	require.NoError(t, llm.ValidateToolPairing(messages))
 	assert.Equal(t, 1, countToolResultsFor(messages, tool.IDSleep))
-	assert.Contains(t, lastToolResultContent(messages, tool.IDSleep), "Sleep interrupted")
+	assert.Contains(t, func(msgs []llmwire.Message, toolName string) string {
+		for _, v := range slices.Backward(msgs) {
+			if v.Role == llmwire.RoleTool && v.ToolName == toolName {
+				return v.Content
+			}
+		}
+
+		return ""
+	}(messages, tool.IDSleep), "Sleep interrupted")
 	assert.Equal(t, "interrupt handled", lastAssistantTextDTO(messages))
 
 	schedules, err := h.schedules.ListSchedules(h.ctx, parentID)
@@ -265,10 +270,10 @@ func TestIntegration_UserInterruptCancelsSleepWithoutDeletingStandaloneOneShot(t
 func TestIntegration_StandaloneOneShotFlowsThroughExecutorAndDaemonQueue(t *testing.T) {
 	respond := func(_ string, msgs []llmwire.Message) *llmwire.Response {
 		if hasToolResultFor(msgs, tool.IDSchedule) {
-			return &llmwire.Response{Text: "one-shot handled"}
+			return textReply("one-shot handled")
 		}
 
-		return &llmwire.Response{Text: "ready"}
+		return textReply("ready")
 	}
 
 	h := newHarness(t, harnessOptions{respond: respond})
@@ -277,7 +282,7 @@ func TestIntegration_StandaloneOneShotFlowsThroughExecutorAndDaemonQueue(t *test
 	h.startInboxWake()
 	parentID, err := h.mgr.Send(h.ctx, h.projectID, "initialize", "fake-model", nil)
 	require.NoError(t, err)
-	h.mgr.waitIdle(parentID)
+	h.waitUntil("session idle", func() bool { return !h.mgr.HasActiveLoop(parentID) })
 
 	due := time.Now().Add(-time.Minute).UTC()
 	_, err = h.schedules.AddSchedule(
@@ -289,28 +294,36 @@ func TestIntegration_StandaloneOneShotFlowsThroughExecutorAndDaemonQueue(t *test
 	executor.Start(h.ctx)
 	defer executor.Stop()
 
-	require.Eventually(t, func() bool {
+	h.waitUntil("TestIntegration_StandaloneOneShotFlowsThroughExecutorAndDaemonQueue", func() bool {
 		schedules, listErr := h.schedules.ListSchedules(h.ctx, parentID)
 		if listErr != nil || len(schedules) != 0 || h.mgr.HasActiveLoop(parentID) {
 			return false
 		}
 
-		return lastAssistantTextDTO(h.parentMessages(parentID)) == "one-shot handled"
-	}, 5*time.Second, 10*time.Millisecond)
+		return lastAssistantTextDTO(h.messages(parentID)) == "one-shot handled"
+	})
 
-	messages := h.parentMessages(parentID)
+	messages := h.messages(parentID)
 	require.NoError(t, llm.ValidateToolPairing(messages))
 	assert.Equal(t, 1, countToolResultsFor(messages, tool.IDSchedule))
-	assert.Contains(t, lastToolResultContent(messages, tool.IDSchedule), "one-time scheduled work")
+	assert.Contains(t, func(msgs []llmwire.Message, toolName string) string {
+		for _, v := range slices.Backward(msgs) {
+			if v.Role == llmwire.RoleTool && v.ToolName == toolName {
+				return v.Content
+			}
+		}
+
+		return ""
+	}(messages, tool.IDSchedule), "one-time scheduled work")
 }
 
 func TestIntegration_OneShotAckFailureRedeliversWithoutDuplicateTranscriptOrPublication(t *testing.T) {
 	respond := func(_ string, msgs []llmwire.Message) *llmwire.Response {
 		if hasToolResultFor(msgs, tool.IDSchedule) {
-			return &llmwire.Response{Text: "one-shot handled once"}
+			return textReply("one-shot handled once")
 		}
 
-		return &llmwire.Response{Text: "ready"}
+		return textReply("ready")
 	}
 
 	h := newHarness(t, harnessOptions{respond: respond})
@@ -319,7 +332,7 @@ func TestIntegration_OneShotAckFailureRedeliversWithoutDuplicateTranscriptOrPubl
 	h.startInboxWake()
 	parentID, err := h.mgr.Send(h.ctx, h.projectID, "initialize", "fake-model", nil)
 	require.NoError(t, err)
-	h.mgr.waitIdle(parentID)
+	h.waitUntil("session idle", func() bool { return !h.mgr.HasActiveLoop(parentID) })
 
 	due := time.Now().Add(-time.Minute).UTC()
 	_, err = h.schedules.AddSchedule(
@@ -341,7 +354,7 @@ func TestIntegration_OneShotAckFailureRedeliversWithoutDuplicateTranscriptOrPubl
 		t.Fatal("first executor did not reach the failing acknowledgement")
 	}
 	first.Stop()
-	h.mgr.waitIdle(parentID)
+	h.waitUntil("session idle", func() bool { return !h.mgr.HasActiveLoop(parentID) })
 
 	remaining, err := h.schedules.ListSchedules(h.ctx, parentID)
 	require.NoError(t, err)
@@ -349,13 +362,13 @@ func TestIntegration_OneShotAckFailureRedeliversWithoutDuplicateTranscriptOrPubl
 
 	second := schedule.NewExecutor(h.schedules, h.mgr)
 	second.Start(h.ctx)
-	require.Eventually(t, func() bool {
+	h.waitUntil("TestIntegration_OneShotAckFailureRedeliversWithoutDuplicateTranscriptOrPublication", func() bool {
 		schedules, listErr := h.schedules.ListSchedules(h.ctx, parentID)
 		return listErr == nil && len(schedules) == 0 && !h.mgr.HasActiveLoop(parentID)
-	}, 5*time.Second, 10*time.Millisecond)
+	})
 	second.Stop()
 
-	messages := h.parentMessages(parentID)
+	messages := h.messages(parentID)
 	require.NoError(t, llm.ValidateToolPairing(messages))
 	assert.Equal(t, 1, countToolResultsFor(messages, tool.IDSchedule))
 	assert.Equal(t, "one-shot handled once", lastAssistantTextDTO(messages))
@@ -377,10 +390,10 @@ func TestIntegration_OneShotAckFailureRedeliversWithoutDuplicateTranscriptOrPubl
 func TestIntegration_FreshScheduleDuplicateDoesNotResetOrRunTwice(t *testing.T) {
 	respond := func(_ string, msgs []llmwire.Message) *llmwire.Response {
 		if hasUserContaining(msgs, "fresh scheduled work") {
-			return &llmwire.Response{Text: "fresh handled once"}
+			return textReply("fresh handled once")
 		}
 
-		return &llmwire.Response{Text: "ready"}
+		return textReply("ready")
 	}
 
 	h := newHarness(t, harnessOptions{respond: respond})
@@ -389,23 +402,23 @@ func TestIntegration_FreshScheduleDuplicateDoesNotResetOrRunTwice(t *testing.T) 
 	h.startInboxWake()
 	parentID, err := h.mgr.Send(h.ctx, h.projectID, "initialize", "fake-model", nil)
 	require.NoError(t, err)
-	h.mgr.waitIdle(parentID)
+	h.waitUntil("session idle", func() bool { return !h.mgr.HasActiveLoop(parentID) })
 
 	const deliveryID = "schedule:cron:23:20260814T1200Z"
 	applied, err := enqueueScheduledInput(h.ctx, h.mgr.store, parentID, deliveryID, "fresh scheduled work", true)
 	require.NoError(t, err)
 	assert.True(t, applied)
 	h.waitUntil("fresh schedule completed", func() bool {
-		return countMessageContentContaining(h.parentMessages(parentID), "fresh handled once") == 2
+		return countMessageContentContaining(h.messages(parentID), "fresh handled once") == 2
 	})
-	h.mgr.waitIdle(parentID)
+	h.waitUntil("session idle", func() bool { return !h.mgr.HasActiveLoop(parentID) })
 
 	applied, err = enqueueScheduledInput(h.ctx, h.mgr.store, parentID, deliveryID, "fresh scheduled work", true)
 	require.NoError(t, err)
 	assert.False(t, applied)
-	h.mgr.waitIdle(parentID)
+	h.waitUntil("session idle", func() bool { return !h.mgr.HasActiveLoop(parentID) })
 
-	messages := h.parentMessages(parentID)
+	messages := h.messages(parentID)
 	require.NoError(t, llm.ValidateToolPairing(messages))
 	assert.Equal(t, 1, countMessageContentContaining(messages, "fresh scheduled work"))
 	// The confirmed stop publishes one answer; its hidden candidate row stays
@@ -478,16 +491,15 @@ func TestScheduledDeliveryToSubagentIsAcknowledgedWithoutMutation(t *testing.T) 
 			defer h.shutdown()
 
 			childID := createScheduleBoundarySubagent(t, h)
-			before := h.parentMessages(childID)
+			before := h.messages(childID)
 
 			applied, err := tt.deliver(h.mgr, childID)
 			require.NoError(t, err)
 			assert.False(t, applied)
 			assert.False(t, h.mgr.HasActiveLoop(childID))
-			assert.Equal(t, before, h.parentMessages(childID))
+			assert.Equal(t, before, h.messages(childID))
 
-			rec, err := h.store.GetSession(t.Context(), childID)
-			require.NoError(t, err)
+			rec := h.session(childID)
 			assert.Equal(t, sessionstore.SessionStatusCompleted, rec.Status)
 			assert.Zero(t, rec.Iteration)
 		})
@@ -507,16 +519,15 @@ func TestIntegration_LegacySubagentOneShotIsDiscardedWithoutRun(t *testing.T) {
 	executor.Start(t.Context())
 	defer executor.Stop()
 
-	require.Eventually(t, func() bool {
+	h.waitUntil("TestIntegration_LegacySubagentOneShotIsDiscardedWithoutRun", func() bool {
 		entries, listErr := h.schedules.ListSchedules(t.Context(), childID)
 		return listErr == nil && len(entries) == 0
-	}, 5*time.Second, 10*time.Millisecond)
+	})
 	executor.Stop()
 
 	assert.False(t, h.mgr.HasActiveLoop(childID))
-	assert.Empty(t, h.parentMessages(childID))
-	rec, err := h.store.GetSession(t.Context(), childID)
-	require.NoError(t, err)
+	assert.Empty(t, h.messages(childID))
+	rec := h.session(childID)
 	assert.Equal(t, sessionstore.SessionStatusCompleted, rec.Status)
 	assert.Zero(t, rec.Iteration)
 }
@@ -536,8 +547,8 @@ func TestIntegration_LegacySubagentCronOccurrencesAreAcknowledgedWithoutRun(t *t
 			defer h.shutdown()
 
 			childID := createScheduleBoundarySubagent(t, h)
-			before := h.parentMessages(childID)
-			collector := collectEvents(h.mgr.bus.SubscribeAll())
+			before := h.messages(childID)
+			collector := collectEvents(t, h.mgr.bus.SubscribeAll())
 			defer collector.stop()
 
 			entry, err := h.schedules.AddSchedule(t.Context(), childID, "* * * * *", nil, "legacy task", tt.fresh)
@@ -547,18 +558,17 @@ func TestIntegration_LegacySubagentCronOccurrencesAreAcknowledgedWithoutRun(t *t
 			executor.Start(t.Context())
 			defer executor.Stop()
 
-			require.Eventually(t, func() bool {
+			h.waitUntil("TestIntegration_LegacySubagentCronOccurrencesAreAcknowledgedWithoutRun", func() bool {
 				schedules, listErr := h.schedules.ListSchedules(t.Context(), childID)
 				return listErr == nil && len(schedules) == 1 && schedules[0].ID() == entry.ID() &&
 					schedules[0].LastFiredAt() != nil
-			}, 5*time.Second, 10*time.Millisecond)
+			})
 			executor.Stop()
 
 			assert.False(t, h.mgr.HasActiveLoop(childID))
-			assert.Equal(t, before, h.parentMessages(childID))
+			assert.Equal(t, before, h.messages(childID))
 			assert.Empty(t, collector.snapshot(), "an acknowledged legacy occurrence is not published")
-			rec, err := h.store.GetSession(t.Context(), childID)
-			require.NoError(t, err)
+			rec := h.session(childID)
 			assert.Equal(t, sessionstore.SessionStatusCompleted, rec.Status)
 			assert.Zero(t, rec.Iteration)
 		})
@@ -570,16 +580,16 @@ func TestIntegration_LegacySubagentCronOccurrencesAreAcknowledgedWithoutRun(t *t
 func TestHarnessScenario_ScheduledTurnChain(t *testing.T) {
 	respond := func(_ string, msgs []llmwire.Message) *llmwire.Response {
 		if hasToolResultFor(msgs, "schedule") {
-			return &llmwire.Response{Text: "Report ready."}
+			return textReply("Report ready.")
 		}
 
-		return &llmwire.Response{Text: "Hi there."}
+		return textReply("Hi there.")
 	}
 
 	h := newHarness(t, harnessOptions{respond: respond})
 	defer h.shutdown()
 
-	collector := collectEvents(h.mgr.bus.SubscribeAll())
+	collector := collectEvents(t, h.mgr.bus.SubscribeAll())
 	defer collector.stop()
 
 	h.startInboxWake()
@@ -608,11 +618,11 @@ func TestHarnessScenario_ScheduledTurnChain(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, delivered)
 
-	waitForVisibleMessage(t, collector, root, "Report ready.")
+	collector.waitMessage(root, "Report ready.")
 
 	controller := newChainController(t, h)
 	drainScenarioClaims(t, "scheduled_turn_chain.json", controller)
-	waitForIdleAfterMessage(t, collector, root, "Report ready.")
+	collector.waitIdleAfter(root, "Report ready.")
 
 	assertHarnessTrace(t, "scheduled_turn_chain.json", collector.snapshot(), root)
 }

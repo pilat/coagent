@@ -1,7 +1,6 @@
 package daemon
 
 import (
-	"database/sql"
 	"errors"
 	"testing"
 
@@ -19,36 +18,16 @@ func TestBackgroundObligationProjectsTreeLedgersAndInbox(t *testing.T) {
 
 	root, err := h.store.CreateSession(h.ctx, h.projectID, "fake-model", "", nil)
 	require.NoError(t, err)
-	child, err := func() (int64, error) {
-		var id int64
-		err := h.store.WithTx(h.ctx, func(tx *sql.Tx) error {
-			var err error
-			id, err = sessionstore.CreateSubagentSessionTx(
-				h.ctx,
-				tx,
-				sessionstore.CreateSubagentSession{
-					ProjectID:      h.projectID,
-					ParentID:       root.ID,
-					RootID:         root.ID,
-					AgentType:      "general",
-					Model:          "fake-model",
-					ReasoningLevel: "",
-				},
-			)
-			return err
-		})
-		return id, err
-	}()
-	require.NoError(t, err)
+	child := h.createUnlinkedChild(root.ID)
 
 	obligation, err := h.mgr.store.HasBackgroundObligationByRoot(h.ctx, root.ID)
 	require.NoError(t, err)
 	assert.False(t, obligation)
 
-	require.NoError(t, seedChildLink(h.ctx, h.store, subagent.Link{
+	h.attachChildLink(subagent.Link{
 		ParentID: root.ID, ChildID: child, TaskCallID: "background", Blocking: false,
 		State: subagent.StateRunning,
-	}))
+	})
 	obligation, err = h.mgr.store.HasBackgroundObligationByRoot(h.ctx, root.ID)
 	require.NoError(t, err)
 	assert.True(t, obligation)
@@ -80,61 +59,17 @@ func TestBackgroundObligationProjectsTreeLedgersAndInbox(t *testing.T) {
 	// A stopped or killed link promises no wake: it neither bypasses the
 	// completion check nor retains the budget on that promise (D4/D5).
 	for _, state := range []subagent.State{subagent.StateStopped, subagent.StateKilled} {
-		stoppedChild, err := func() (int64, error) {
-			var id int64
-			err := h.store.WithTx(h.ctx, func(tx *sql.Tx) error {
-				var err error
-				id, err = sessionstore.CreateSubagentSessionTx(
-					h.ctx,
-					tx,
-					sessionstore.CreateSubagentSession{
-						ProjectID:      h.projectID,
-						ParentID:       root.ID,
-						RootID:         root.ID,
-						AgentType:      "general",
-						Model:          "fake-model",
-						ReasoningLevel: "",
-					},
-				)
-				return err
-			})
-			return id, err
-		}()
-		require.NoError(t, err)
-		require.NoError(t, seedChildLink(h.ctx, h.store, subagent.Link{
-			ParentID: root.ID, ChildID: stoppedChild,
+		h.createChild(root.ID, subagent.Link{
 			TaskCallID: "background-" + string(state), Blocking: false, State: state,
-		}))
+		})
 	}
 
 	otherRoot, err := h.store.CreateSession(h.ctx, h.projectID, "fake-model", "", nil)
 	require.NoError(t, err)
 	for _, state := range []subagent.State{subagent.StateStopped, subagent.StateKilled} {
-		otherChild, err := func() (int64, error) {
-			var id int64
-			err := h.store.WithTx(h.ctx, func(tx *sql.Tx) error {
-				var err error
-				id, err = sessionstore.CreateSubagentSessionTx(
-					h.ctx,
-					tx,
-					sessionstore.CreateSubagentSession{
-						ProjectID:      h.projectID,
-						ParentID:       otherRoot.ID,
-						RootID:         otherRoot.ID,
-						AgentType:      "general",
-						Model:          "fake-model",
-						ReasoningLevel: "",
-					},
-				)
-				return err
-			})
-			return id, err
-		}()
-		require.NoError(t, err)
-		require.NoError(t, seedChildLink(h.ctx, h.store, subagent.Link{
-			ParentID: otherRoot.ID, ChildID: otherChild,
+		h.createChild(otherRoot.ID, subagent.Link{
 			TaskCallID: "background-" + string(state), Blocking: false, State: state,
-		}))
+		})
 	}
 	obligation, err = h.mgr.store.HasBackgroundObligationByRoot(h.ctx, otherRoot.ID)
 	require.NoError(t, err)

@@ -2,11 +2,11 @@ package daemon
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"fmt"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -33,18 +33,18 @@ func TestIntegration_BlockingTaskSuspendsAndResumes(t *testing.T) {
 	respond := func(_ string, msgs []llmwire.Message) *llmwire.Response {
 		if hasUserContaining(msgs, "CHILD_TASK") {
 			<-release // hold the child so we can observe the suspended parent
-			return &llmwire.Response{Text: "blocking child done: 7"}
+			return textReply("blocking child done: 7")
 		}
 
 		if hasToolResultFor(msgs, "task") {
-			return &llmwire.Response{Text: "parent got the child result"}
+			return textReply("parent got the child result")
 		}
 
-		return &llmwire.Response{ToolCalls: []llmwire.ToolCall{{
-			ID:        taskCallID,
-			Name:      "task",
-			Arguments: []byte(`{"prompt":"CHILD_TASK do it","description":"c","subagent_type":"general"}`),
-		}}}
+		return callReply(
+			taskCallID,
+			"task",
+			`{"prompt":"CHILD_TASK do it","description":"c","subagent_type":"general"}`,
+		)
 	}
 
 	h := newHarness(t, harnessOptions{respond: respond})
@@ -62,7 +62,8 @@ func TestIntegration_BlockingTaskSuspendsAndResumes(t *testing.T) {
 	parentID, err := h.mgr.Send(h.ctx, h.projectID, "do work then spawn", "fake-model", nil)
 	require.NoError(t, err)
 
-	link := h.waitForChildLink(parentID)
+	h.waitUntil("child link", func() bool { return h.linkByCall(parentID, taskCallID) != nil })
+	link := *h.linkByCall(parentID, taskCallID)
 	assert.True(t, link.Blocking, "blocking task must create a blocking link")
 
 	// The suspended parent must hold NO run-slot: its loop goroutine exits while
@@ -74,16 +75,19 @@ func TestIntegration_BlockingTaskSuspendsAndResumes(t *testing.T) {
 	// Release the child — it completes and its result fills the pending task call.
 	close(release)
 
-	h.waitForDelivery(link.ChildID)
+	h.waitUntil(
+		"child delivery",
+		func() bool { link := h.link(link.ChildID); return link != nil && link.DeliveredAt != 0 },
+	)
 	h.waitUntil("parent consumed blocking child result", func() bool {
-		messages := h.parentMessages(parentID)
+		messages := h.messages(parentID)
 
 		return countToolResultsFor(messages, "task") == 1 &&
 			lastAssistantTextDTO(messages) == "parent got the child result"
 	})
-	h.mgr.waitIdle(parentID)
+	h.waitUntil("session idle", func() bool { return !h.mgr.HasActiveLoop(parentID) })
 
-	msgs := h.parentMessages(parentID)
+	msgs := h.messages(parentID)
 	require.NoError(t, llm.ValidateToolPairing(msgs))
 	assert.Equal(t, 1, countToolResultsFor(msgs, "task"), "the task tool_use is filled by the child result")
 
@@ -104,26 +108,21 @@ func TestIntegration_CompletedForegroundChildAcceptsFollowUpInSameSession(t *tes
 	respond := func(_ string, msgs []llmwire.Message) *llmwire.Response {
 		if hasUserContaining(msgs, "CHILD_INITIAL") {
 			if hasUserContaining(msgs, "FOLLOW_UP") {
-				return &llmwire.Response{Text: "child continuation answer"}
+				return textReply("child continuation answer")
 			}
 
-			return &llmwire.Response{Text: "child initial answer"}
+			return textReply("child initial answer")
 		}
 
 		if hasUserContaining(msgs, "<subagent_completion>") {
-			return &llmwire.Response{Text: "parent received continuation"}
+			return textReply("parent received continuation")
 		}
 
 		if hasToolResultFor(msgs, "task") {
-			return &llmwire.Response{Text: "parent received initial answer"}
+			return textReply("parent received initial answer")
 		}
 
-		return &llmwire.Response{ToolCalls: []llmwire.ToolCall{{
-			ID: taskCallID, Name: "task",
-			Arguments: []byte(
-				`{"prompt":"CHILD_INITIAL","description":"c","subagent_type":"general"}`,
-			),
-		}}}
+		return callReply(taskCallID, "task", `{"prompt":"CHILD_INITIAL","description":"c","subagent_type":"general"}`)
 	}
 
 	h := newHarness(t, harnessOptions{respond: respond})
@@ -132,10 +131,14 @@ func TestIntegration_CompletedForegroundChildAcceptsFollowUpInSameSession(t *tes
 	h.startInboxWake()
 	parentID, err := h.mgr.Send(h.ctx, h.projectID, "start foreground child", "fake-model", nil)
 	require.NoError(t, err)
-	link := h.waitForChildLink(parentID)
+	h.waitUntil("child link", func() bool { return h.linkByCall(parentID, taskCallID) != nil })
+	link := *h.linkByCall(parentID, taskCallID)
 	require.True(t, link.Blocking)
-	h.waitForDelivery(link.ChildID)
-	h.mgr.waitIdle(parentID)
+	h.waitUntil(
+		"child delivery",
+		func() bool { link := h.link(link.ChildID); return link != nil && link.DeliveredAt != 0 },
+	)
+	h.waitUntil("session idle", func() bool { return !h.mgr.HasActiveLoop(parentID) })
 
 	require.NoError(t, h.mgr.SendToChild(h.ctx, link.ChildID, "FOLLOW_UP answer one more thing"))
 	h.waitUntil("foreground continuation delivered", func() bool {
@@ -144,20 +147,19 @@ func TestIntegration_CompletedForegroundChildAcceptsFollowUpInSameSession(t *tes
 			current.DeliveredAt != 0 && current.ActivationSeq == 2
 	})
 	h.waitUntil("parent consumed continuation", func() bool {
-		messages := h.parentMessages(parentID)
+		messages := h.messages(parentID)
 
 		return countSubagentCompletions(messages, link.ChildID) == 1 &&
 			lastAssistantTextDTO(messages) == "parent received continuation"
 	})
-	h.mgr.waitIdle(parentID)
+	h.waitUntil("session idle", func() bool { return !h.mgr.HasActiveLoop(parentID) })
 
-	continued, err := h.links.GetLink(h.ctx, link.ChildID)
-	require.NoError(t, err)
+	continued := h.link(link.ChildID)
 	require.NotNil(t, continued)
 	assert.False(t, continued.Blocking, "a resolved foreground task continues via async completion")
 	assert.Equal(t, int64(2), continued.ActivationSeq)
 
-	messages := h.parentMessages(parentID)
+	messages := h.messages(parentID)
 	assert.Equal(t, 1, countToolResultsFor(messages, "task"))
 	assert.Equal(t, 1, countSubagentCompletions(messages, link.ChildID))
 	assert.Equal(t, "parent received continuation", lastAssistantTextDTO(messages))
@@ -168,13 +170,13 @@ func TestIntegration_ScatterGatherBlockingTasks(t *testing.T) {
 
 	respond := func(_ string, msgs []llmwire.Message) *llmwire.Response {
 		if hasUserContaining(msgs, "CHILD_TASK") {
-			return &llmwire.Response{Text: "child done"}
+			return textReply("child done")
 		}
 
 		// Once the 3 tasks have been emitted, only return final text — never
 		// re-emit (would double-fork).
-		if hasAssistantToolCall(msgs, "task") {
-			return &llmwire.Response{Text: "all three children done"}
+		if countAssistantToolCallsFor(msgs, "task") > 0 {
+			return textReply("all three children done")
 		}
 
 		calls := make([]llmwire.ToolCall, len(callIDs))
@@ -206,24 +208,26 @@ func TestIntegration_ScatterGatherBlockingTasks(t *testing.T) {
 			return lerr == nil && link != nil
 		})
 
-		link, err := h.links.GetLinkByTaskCallID(h.ctx, parentID, callID)
-		require.NoError(t, err)
+		link := h.linkByCall(parentID, callID)
 		assert.True(t, link.Blocking)
 		childIDs = append(childIDs, link.ChildID)
 	}
 
 	for _, childID := range childIDs {
-		h.waitForDelivery(childID)
+		h.waitUntil(
+			"child delivery",
+			func() bool { link := h.link(childID); return link != nil && link.DeliveredAt != 0 },
+		)
 	}
 
 	h.waitUntil("parent final answer", func() bool {
-		return lastAssistantTextDTO(h.parentMessages(parentID)) == "all three children done"
+		return lastAssistantTextDTO(h.messages(parentID)) == "all three children done"
 	})
-	h.mgr.waitIdle(parentID)
+	h.waitUntil("session idle", func() bool { return !h.mgr.HasActiveLoop(parentID) })
 
 	// Each task tool_use is filled by its own child — exactly three results, and
 	// the parent proceeds to the LLM only once all are resolved (transcript valid).
-	msgs := h.parentMessages(parentID)
+	msgs := h.messages(parentID)
 	require.NoError(t, llm.ValidateToolPairing(msgs))
 	assert.Equal(t, 3, countToolResultsFor(msgs, "task"), "each of the 3 task calls gets its own result")
 }
@@ -335,7 +339,7 @@ func TestIntegration_SuspendedParentHoldsNoSlot(t *testing.T) {
 	h := newHarness(t, harnessOptions{respond: blockingParentRespond(func() *llmwire.Response {
 		<-release
 
-		return &llmwire.Response{Text: "child done"}
+		return textReply("child done")
 	})})
 	defer func() {
 		closeOnce(release)
@@ -346,7 +350,8 @@ func TestIntegration_SuspendedParentHoldsNoSlot(t *testing.T) {
 	parentID, err := h.mgr.Send(h.ctx, h.projectID, "spawn blocking", "fake-model", nil)
 	require.NoError(t, err)
 
-	link := h.waitForChildLink(parentID)
+	h.waitUntil("child link", func() bool { return h.linkByCall(parentID, taskCallID) != nil })
+	link := *h.linkByCall(parentID, taskCallID)
 
 	// The parent suspends (loop exits, slot released); only the in-flight child
 	// holds a slot. The suspended parent holds ZERO.
@@ -356,7 +361,10 @@ func TestIntegration_SuspendedParentHoldsNoSlot(t *testing.T) {
 	assert.Equal(t, 1, runnerChildCount(h.mgr.runners))
 
 	closeOnce(release)
-	h.waitForDelivery(link.ChildID)
+	h.waitUntil(
+		"child delivery",
+		func() bool { link := h.link(link.ChildID); return link != nil && link.DeliveredAt != 0 },
+	)
 }
 
 func TestIntegration_CascadeKillsBlockingChild(t *testing.T) {
@@ -365,7 +373,7 @@ func TestIntegration_CascadeKillsBlockingChild(t *testing.T) {
 	h := newHarness(t, harnessOptions{respond: blockingParentRespond(func() *llmwire.Response {
 		<-release
 
-		return &llmwire.Response{Text: "child done"}
+		return textReply("child done")
 	})})
 	defer func() {
 		closeOnce(release)
@@ -376,7 +384,8 @@ func TestIntegration_CascadeKillsBlockingChild(t *testing.T) {
 	parentID, err := h.mgr.Send(h.ctx, h.projectID, "spawn blocking", "fake-model", nil)
 	require.NoError(t, err)
 
-	link := h.waitForChildLink(parentID)
+	h.waitUntil("child link", func() bool { return h.linkByCall(parentID, taskCallID) != nil })
+	link := *h.linkByCall(parentID, taskCallID)
 	h.waitUntil("parent suspended", func() bool { return !h.mgr.HasActiveLoop(parentID) })
 
 	// Killing the parent must cascade-kill its in-flight blocking child.
@@ -387,19 +396,17 @@ func TestIntegration_CascadeKillsBlockingChild(t *testing.T) {
 		return gerr == nil && rec.KilledAt != nil
 	})
 
-	childRec, err := h.store.GetSession(h.ctx, link.ChildID)
-	require.NoError(t, err)
+	childRec := h.session(link.ChildID)
 	assert.NotNil(t, childRec.KilledAt, "blocking descendant is killed with its parent")
 
-	childLink, err := h.links.GetLink(h.ctx, link.ChildID)
-	require.NoError(t, err)
+	childLink := h.link(link.ChildID)
 	assert.Equal(t, subagent.StateKilled, childLink.State)
 	assert.Equal(t, subagent.OutcomeKilled, childLink.Outcome, "a killed child reports the killed outcome")
 }
 
 func TestIntegration_ChildPanicMarksError(t *testing.T) {
 	h := newHarness(t, harnessOptions{respond: blockingParentRespond(func() *llmwire.Response {
-		return &llmwire.Response{Text: "child model result"}
+		return textReply("child model result")
 	})})
 	// HTTP handler panics cannot reach the runner; the child's model commit can.
 	h.mgr.build.Store = &panickingChildCommitStore{Store: h.store}
@@ -409,28 +416,32 @@ func TestIntegration_ChildPanicMarksError(t *testing.T) {
 	parentID, err := h.mgr.Send(h.ctx, h.projectID, "spawn blocking", "fake-model", nil)
 	require.NoError(t, err)
 
-	link := h.waitForChildLink(parentID)
+	h.waitUntil("child link", func() bool { return h.linkByCall(parentID, taskCallID) != nil })
+	link := *h.linkByCall(parentID, taskCallID)
 
 	// The panicked child is marked error and its parent is unblocked.
-	h.waitForDelivery(link.ChildID)
+	h.waitUntil(
+		"child delivery",
+		func() bool { link := h.link(link.ChildID); return link != nil && link.DeliveredAt != 0 },
+	)
 	h.waitUntil("parent consumed panicked child result", func() bool {
-		return countToolResultsFor(h.parentMessages(parentID), "task") == 1
+		return countToolResultsFor(h.messages(parentID), "task") == 1
 	})
-	h.mgr.waitIdle(parentID)
+	h.waitUntil("session idle", func() bool { return !h.mgr.HasActiveLoop(parentID) })
 
 	res, err := h.mgr.Result(h.ctx, link.ChildID)
 	require.NoError(t, err)
 	assert.Equal(t, subagent.StateError, res.State)
 	assert.Equal(t, subagent.OutcomeError, res.Outcome, "a panicked child reports the error outcome")
 
-	msgs := h.parentMessages(parentID)
+	msgs := h.messages(parentID)
 	require.NoError(t, llm.ValidateToolPairing(msgs))
 	assert.Equal(t, 1, countToolResultsFor(msgs, "task"), "parent's task call is resolved with the error")
 }
 
 func TestIntegration_StressBlockingNoDeadlock(t *testing.T) {
 	h := newHarness(t, harnessOptions{respond: blockingParentRespond(func() *llmwire.Response {
-		return &llmwire.Response{Text: "child done"}
+		return textReply("child done")
 	})})
 	defer h.shutdown()
 
@@ -448,18 +459,22 @@ func TestIntegration_StressBlockingNoDeadlock(t *testing.T) {
 	// Each parent spawns its child, suspends, the child completes, the parent
 	// resumes — under saturation, with no deadlock.
 	for _, pid := range ids {
-		link := h.waitForChildLink(pid)
-		h.waitForDelivery(link.ChildID)
+		h.waitUntil("child link", func() bool { return h.linkByCall(pid, taskCallID) != nil })
+		link := *h.linkByCall(pid, taskCallID)
+		h.waitUntil(
+			"child delivery",
+			func() bool { link := h.link(link.ChildID); return link != nil && link.DeliveredAt != 0 },
+		)
 	}
 
 	for _, pid := range ids {
 		h.waitUntil("saturated parent consumed child result", func() bool {
-			messages := h.parentMessages(pid)
+			messages := h.messages(pid)
 
 			return countToolResultsFor(messages, "task") == 1 && lastAssistantTextDTO(messages) == "parent done"
 		})
-		h.mgr.waitIdle(pid)
-		msgs := h.parentMessages(pid)
+		h.waitUntil("session idle", func() bool { return !h.mgr.HasActiveLoop(pid) })
+		msgs := h.messages(pid)
 		require.NoError(t, llm.ValidateToolPairing(msgs))
 		assert.Equal(t, "parent done", lastAssistantTextDTO(msgs), "parent %d resumed to completion", pid)
 	}
@@ -481,11 +496,11 @@ func TestIntegration_BackgroundQueueDrains(t *testing.T) {
 		if hasUserContaining(msgs, "CHILD_TASK") {
 			<-release
 
-			return &llmwire.Response{Text: "child done"}
+			return textReply("child done")
 		}
 
 		if hasToolResultFor(msgs, "task") {
-			return &llmwire.Response{Text: "parent done"}
+			return textReply("parent done")
 		}
 
 		calls := make([]llmwire.ToolCall, len(ids))
@@ -522,8 +537,12 @@ func TestIntegration_BackgroundQueueDrains(t *testing.T) {
 	closeOnce(release)
 
 	for _, id := range ids {
-		link := h.waitForLinkByCall(parentID, id)
-		h.waitForDelivery(link.ChildID)
+		h.waitUntil("child link", func() bool { return h.linkByCall(parentID, id) != nil })
+		link := *h.linkByCall(parentID, id)
+		h.waitUntil(
+			"child delivery",
+			func() bool { link := h.link(link.ChildID); return link != nil && link.DeliveredAt != 0 },
+		)
 	}
 
 	h.waitUntil("queue drained", func() bool { return h.queueLen() == 0 })
@@ -542,7 +561,7 @@ func TestIntegration_ExploreChildIsDeniedControlPlaneTools(t *testing.T) {
 		}
 
 		if hasToolResultFor(msgs, tool.IDTask) || hasUserContaining(msgs, "<subagent_completion>") {
-			return &llmwire.Response{Text: "parent done"}
+			return textReply("parent done")
 		}
 
 		return &llmwire.Response{
@@ -559,9 +578,13 @@ func TestIntegration_ExploreChildIsDeniedControlPlaneTools(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	link := h.waitForLink(parentID, exploreCallID)
-	h.waitForDelivery(link.ChildID)
-	h.mgr.waitIdle(parentID)
+	h.waitUntil("child link", func() bool { return h.linkByCall(parentID, exploreCallID) != nil })
+	link := *h.linkByCall(parentID, exploreCallID)
+	h.waitUntil(
+		"child delivery",
+		func() bool { link := h.link(link.ChildID); return link != nil && link.DeliveredAt != 0 },
+	)
+	h.waitUntil("session idle", func() bool { return !h.mgr.HasActiveLoop(parentID) })
 
 	h.assertUnknownTools(link.ChildID, controlPlaneTools)
 
@@ -576,7 +599,7 @@ func TestIntegration_ExploreChildIsDeniedControlPlaneTools(t *testing.T) {
 		assert.Contains(t, parentOffered, id, "root session must keep %q", id)
 	}
 
-	require.NoError(t, llm.ValidateToolPairing(h.parentMessages(parentID)))
+	require.NoError(t, llm.ValidateToolPairing(h.messages(parentID)))
 }
 
 // config_edit reaches every root session whatever its channel or manager
@@ -599,14 +622,14 @@ func TestIntegration_ConfigEditReachesEveryRootNoChild(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			h := newGatingHarness(t, nil, func(string, []llmwire.Message) *llmwire.Response {
-				return &llmwire.Response{Text: "done"}
+				return textReply("done")
 			})
 			defer h.shutdown()
 
 			h.startInboxWake()
 			sessionID, err := h.mgr.Send(h.ctx, h.projectID, "configure", "fake-model", tt.attrs)
 			require.NoError(t, err)
-			h.mgr.waitIdle(sessionID)
+			h.waitUntil("session idle", func() bool { return !h.mgr.HasActiveLoop(sessionID) })
 
 			assert.Contains(t, h.schemas.offered(sessionID), tool.IDConfigEdit)
 		})
@@ -621,7 +644,7 @@ func TestIntegration_ConfigEditReachesEveryRootNoChild(t *testing.T) {
 			}
 
 			if hasToolResultFor(msgs, tool.IDTask) || hasUserContaining(msgs, "<subagent_completion>") {
-				return &llmwire.Response{Text: "parent done"}
+				return textReply("parent done")
 			}
 
 			return &llmwire.Response{
@@ -636,9 +659,13 @@ func TestIntegration_ConfigEditReachesEveryRootNoChild(t *testing.T) {
 		parentID, err := h.mgr.Send(h.ctx, h.projectID, "spawn an explore child", "fake-model", nil)
 		require.NoError(t, err)
 
-		link := h.waitForLink(parentID, exploreCallID)
-		h.waitForDelivery(link.ChildID)
-		h.mgr.waitIdle(parentID)
+		h.waitUntil("child link", func() bool { return h.linkByCall(parentID, exploreCallID) != nil })
+		link := *h.linkByCall(parentID, exploreCallID)
+		h.waitUntil(
+			"child delivery",
+			func() bool { link := h.link(link.ChildID); return link != nil && link.DeliveredAt != 0 },
+		)
+		h.waitUntil("session idle", func() bool { return !h.mgr.HasActiveLoop(parentID) })
 
 		h.assertUnknownTools(link.ChildID, configPlaneTools)
 		assertNotOffered(t, h.schemas.offered(link.ChildID), configPlaneTools)
@@ -665,7 +692,7 @@ func TestIntegration_ProjectSubagentToolGating(t *testing.T) {
 		}
 
 		if hasToolResultFor(msgs, tool.IDTask) || hasUserContaining(msgs, "<subagent_completion>") {
-			return &llmwire.Response{Text: "parent done"}
+			return textReply("parent done")
 		}
 
 		return &llmwire.Response{ToolCalls: []llmwire.ToolCall{
@@ -683,11 +710,19 @@ func TestIntegration_ProjectSubagentToolGating(t *testing.T) {
 	parentID, err := h.mgr.Send(h.ctx, h.projectID, "spawn project children", "fake-model", nil)
 	require.NoError(t, err)
 
-	scout := h.waitForLink(parentID, scoutCallID)
-	wide := h.waitForLink(parentID, wideCallID)
-	h.waitForDelivery(scout.ChildID)
-	h.waitForDelivery(wide.ChildID)
-	h.mgr.waitIdle(parentID)
+	h.waitUntil("child link", func() bool { return h.linkByCall(parentID, scoutCallID) != nil })
+	scout := *h.linkByCall(parentID, scoutCallID)
+	h.waitUntil("child link", func() bool { return h.linkByCall(parentID, wideCallID) != nil })
+	wide := *h.linkByCall(parentID, wideCallID)
+	h.waitUntil(
+		"child delivery",
+		func() bool { link := h.link(scout.ChildID); return link != nil && link.DeliveredAt != 0 },
+	)
+	h.waitUntil(
+		"child delivery",
+		func() bool { link := h.link(wide.ChildID); return link != nil && link.DeliveredAt != 0 },
+	)
+	h.waitUntil("session idle", func() bool { return !h.mgr.HasActiveLoop(parentID) })
 
 	h.assertUnknownTools(scout.ChildID, controlPlaneTools)
 	scoutOffered := h.schemas.offered(scout.ChildID)
@@ -712,7 +747,7 @@ func TestIntegration_GeneralSubagentCannotScheduleButCanSleep(t *testing.T) {
 		}
 
 		if hasToolResultFor(msgs, tool.IDTask) || hasUserContaining(msgs, "<subagent_completion>") {
-			return &llmwire.Response{Text: "parent done"}
+			return textReply("parent done")
 		}
 
 		return &llmwire.Response{ToolCalls: []llmwire.ToolCall{
@@ -727,9 +762,13 @@ func TestIntegration_GeneralSubagentCannotScheduleButCanSleep(t *testing.T) {
 	parentID, err := h.mgr.Send(h.ctx, h.projectID, "spawn general subagent", "fake-model", nil)
 	require.NoError(t, err)
 
-	link := h.waitForLink(parentID, callID)
-	h.waitForDelivery(link.ChildID)
-	h.mgr.waitIdle(parentID)
+	h.waitUntil("child link", func() bool { return h.linkByCall(parentID, callID) != nil })
+	link := *h.linkByCall(parentID, callID)
+	h.waitUntil(
+		"child delivery",
+		func() bool { link := h.link(link.ChildID); return link != nil && link.DeliveredAt != 0 },
+	)
+	h.waitUntil("session idle", func() bool { return !h.mgr.HasActiveLoop(parentID) })
 
 	h.assertUnknownTools(link.ChildID, []string{tool.IDSchedule})
 	offered := h.schemas.offered(link.ChildID)
@@ -754,16 +793,14 @@ func TestHarnessScenario_BatchCannotEscapeSubagentAllowlist(t *testing.T) {
 	respond := func(_ string, msgs []llmwire.Message) *llmwire.Response {
 		if hasUserContaining(msgs, "CHILD_BATCH") {
 			if hasToolResultFor(msgs, tool.IDBatch) {
-				return &llmwire.Response{Text: "batcher done"}
+				return textReply("batcher done")
 			}
 
-			return &llmwire.Response{ToolCalls: []llmwire.ToolCall{{
-				ID: "batch-escape", Name: tool.IDBatch, Arguments: []byte(escapeCall),
-			}}}
+			return callReply("batch-escape", tool.IDBatch, escapeCall)
 		}
 
 		if hasToolResultFor(msgs, tool.IDTask) || hasUserContaining(msgs, "<subagent_completion>") {
-			return &llmwire.Response{Text: "parent done"}
+			return textReply("parent done")
 		}
 
 		return &llmwire.Response{ToolCalls: []llmwire.ToolCall{
@@ -778,16 +815,28 @@ func TestHarnessScenario_BatchCannotEscapeSubagentAllowlist(t *testing.T) {
 	parentID, err := h.mgr.Send(h.ctx, h.projectID, "spawn a batching child", "fake-model", nil)
 	require.NoError(t, err)
 
-	link := h.waitForLink(parentID, batchCallID)
-	h.waitForDelivery(link.ChildID)
-	h.mgr.waitIdle(parentID)
+	h.waitUntil("child link", func() bool { return h.linkByCall(parentID, batchCallID) != nil })
+	link := *h.linkByCall(parentID, batchCallID)
+	h.waitUntil(
+		"child delivery",
+		func() bool { link := h.link(link.ChildID); return link != nil && link.DeliveredAt != 0 },
+	)
+	h.waitUntil("session idle", func() bool { return !h.mgr.HasActiveLoop(parentID) })
 
-	msgs := h.parentMessages(link.ChildID)
+	msgs := h.messages(link.ChildID)
 	require.NoError(t, llm.ValidateToolPairing(msgs), "child transcript must stay provider-valid")
 
 	assert.Equal(t, 1, countToolResultsFor(msgs, tool.IDBatch))
 
-	batchResult := lastToolResultContent(msgs, tool.IDBatch)
+	batchResult := func(msgs []llmwire.Message, toolName string) string {
+		for _, v := range slices.Backward(msgs) {
+			if v.Role == llmwire.RoleTool && v.ToolName == toolName {
+				return v.Content
+			}
+		}
+
+		return ""
+	}(msgs, tool.IDBatch)
 	assert.Contains(t, batchResult, `unknown tool "bash"`)
 	assert.NotContains(t, batchResult, escapeMarker, "the forbidden call must not have run")
 	assert.NoFileExists(t, filepath.Join(h.workDir(), escapeFile))
@@ -810,33 +859,27 @@ func TestHarnessScenario_ForegroundChildHasNoLifetimeLimit(t *testing.T) {
 			rounds := countToolResultsFor(msgs, "ls")
 			switch {
 			case rounds >= childTotalRounds:
-				return &llmwire.Response{Text: "long child finished"}
+				return textReply("long child finished")
 			case rounds == childHoldRounds:
 				<-childRelease
 			}
 
-			return &llmwire.Response{ToolCalls: []llmwire.ToolCall{{
-				ID:        fmt.Sprintf("ls-%d", rounds+1),
-				Name:      "ls",
-				Arguments: []byte(`{"path":"."}`),
-			}}}
+			return callReply(fmt.Sprintf("ls-%d", rounds+1), "ls", `{"path":"."}`)
 		}
 
 		if hasToolResultFor(msgs, tool.IDTask) {
-			return &llmwire.Response{Text: "parent collected the long child"}
+			return textReply("parent collected the long child")
 		}
 
-		return &llmwire.Response{ToolCalls: []llmwire.ToolCall{{
-			ID:   taskCallID,
-			Name: tool.IDTask,
-			Arguments: []byte(
-				`{"prompt":"CHILD_LONG_RUN","description":"scenario","subagent_type":"explore","timeout":1}`,
-			),
-		}}}
+		return callReply(
+			taskCallID,
+			tool.IDTask,
+			`{"prompt":"CHILD_LONG_RUN","description":"scenario","subagent_type":"explore","timeout":1}`,
+		)
 	}
 
 	h := newHarness(t, harnessOptions{respond: respond})
-	collector := collectEvents(h.mgr.bus.SubscribeAll())
+	collector := collectEvents(t, h.mgr.bus.SubscribeAll())
 	released := false
 	defer func() {
 		if !released {
@@ -864,65 +907,69 @@ func TestHarnessScenario_ForegroundChildHasNoLifetimeLimit(t *testing.T) {
 
 		return recErr == nil && rec.Status == sessionstore.SessionStatusSuspended
 	})
-	link, err := h.links.GetLinkByTaskCallID(h.ctx, parentID, taskCallID)
-	require.NoError(t, err)
+	link := h.linkByCall(parentID, taskCallID)
 
-	parentRec, err := h.store.GetSession(h.ctx, parentID)
-	require.NoError(t, err)
+	parentRec := h.session(parentID)
 	assert.Equal(t, sessionstore.SessionStatusSuspended, parentRec.Status,
 		"the parent is durably suspended on the blocking child")
-	childRec, err := h.store.GetSession(h.ctx, link.ChildID)
-	require.NoError(t, err)
+	childRec := h.session(link.ChildID)
 	assert.Equal(t, sessionstore.SessionStatusActive, childRec.Status,
 		"the child runs with no deadline over its head")
 	assert.True(t, link.Blocking)
 	assert.Equal(t, subagent.StateSpawned, link.State)
 	assert.Zero(t, link.DeliveredAt, "the blocking link is undelivered")
-	parentMsgs := h.parentMessages(parentID)
+	parentMsgs := h.messages(parentID)
 	assert.Zero(t, countToolResultsFor(parentMsgs, tool.IDTask),
 		"the parent's task call is still unresolved")
-	waitForWaitKind(t, collector, parentID, sessionevent.WaitSubagent)
+	collector.waitWait(parentID, sessionevent.WaitSubagent)
 
-	var waitingCard string
-	require.NoError(t, h.db.QueryRowContext(h.ctx, `SELECT content FROM session_outbox
-		WHERE session_id = ? AND type = 'message_replaceable' ORDER BY id DESC LIMIT 1`, parentID).
-		Scan(&waitingCard))
+	var waitingRow *outboxRow
+	var waitingCards int
+	for _, row := range h.outbox(parentID) {
+		if row.Type == "message_replaceable" {
+			waitingRow = &row
+			waitingCards++
+		}
+	}
+	require.NotNil(t, waitingRow)
+	waitingCard := waitingRow.Content
 	assert.Contains(t, waitingCard, "🧩 Subagents · 1 foreground · 0 background")
 	assert.NotContains(t, waitingCard, "🟢 Working",
 		"the suspended parent must not look active while its child works")
 
-	var waitingCards int
-	require.NoError(t, h.db.QueryRowContext(h.ctx, `SELECT COUNT(*) FROM session_outbox
-		WHERE session_id = ? AND type = 'message_replaceable'`, parentID).Scan(&waitingCards))
 	assert.Equal(t, 1, waitingCards,
 		"spawn and suspension must reuse one durable foreground waiting card")
 
 	close(childRelease)
 	released = true
 
-	waitForVisibleMessage(t, collector, parentID, "parent collected the long child")
+	collector.waitMessage(parentID, "parent collected the long child")
 	drainScenarioClaims(t, "foreground_child_no_lifetime.json", newChainController(t, h))
-	waitForIdleAfterMessage(t, collector, parentID, "parent collected the long child")
+	collector.waitIdleAfter(parentID, "parent collected the long child")
 
-	link, err = h.links.GetLink(h.ctx, link.ChildID)
-	require.NoError(t, err)
+	link = h.link(link.ChildID)
 	require.NotNil(t, link)
 	assert.Equal(t, subagent.OutcomeCompleted, link.Outcome)
 
-	var stoppedCard string
-	require.NoError(t, h.db.QueryRowContext(h.ctx, `SELECT content FROM session_outbox
-		WHERE session_id = ? AND source_key LIKE ? ORDER BY id DESC LIMIT 1`,
-		parentID, fmt.Sprintf("progress:change:subagent:%d:%%:completed:g%%", link.ChildID)).
-		Scan(&stoppedCard))
+	var stoppedRow *outboxRow
+	for _, row := range h.outbox(parentID) {
+		prefix := fmt.Sprintf("progress:change:subagent:%d:", link.ChildID)
+		if strings.HasPrefix(row.SourceKey, prefix) &&
+			strings.Contains(strings.TrimPrefix(row.SourceKey, prefix), ":completed:g") {
+			stoppedRow = &row
+		}
+	}
+	require.NotNil(t, stoppedRow)
+	stoppedCard := stoppedRow.Content
 	assert.NotContains(t, stoppedCard, "Subagents",
 		"terminalization must publish the card that removes the finished child")
 
-	child := h.parentMessages(link.ChildID)
+	child := h.messages(link.ChildID)
 	require.NoError(t, llm.ValidateToolPairing(child))
 	assert.Greater(t, countToolResultsFor(child, "ls"), 10,
 		"the explore child crossed the former tenth-iteration cap on its own work")
 
-	final := h.parentMessages(parentID)
+	final := h.messages(parentID)
 	require.NoError(t, llm.ValidateToolPairing(final))
 	assert.Equal(t, 1, countToolResultsFor(final, tool.IDTask),
 		"exactly one parent result resolves the task call")
@@ -935,7 +982,7 @@ func TestHarnessScenario_SubagentTextWithToolsCompletes(t *testing.T) {
 	respond := func(_ string, messages []llmwire.Message) *llmwire.Response {
 		if hasUserContaining(messages, "CHILD_TEXT_WITH_TOOL") {
 			if hasToolResultFor(messages, "ls") {
-				return &llmwire.Response{Text: "child inspection complete"}
+				return textReply("child inspection complete")
 			}
 
 			<-childRelease
@@ -949,20 +996,18 @@ func TestHarnessScenario_SubagentTextWithToolsCompletes(t *testing.T) {
 		}
 
 		if hasToolResultFor(messages, tool.IDTask) {
-			return &llmwire.Response{Text: "child completion delivered"}
+			return textReply("child completion delivered")
 		}
 
-		return &llmwire.Response{ToolCalls: []llmwire.ToolCall{{
-			ID:   taskCallID,
-			Name: tool.IDTask,
-			Arguments: []byte(
-				`{"prompt":"CHILD_TEXT_WITH_TOOL","description":"scenario","subagent_type":"general"}`,
-			),
-		}}}
+		return callReply(
+			taskCallID,
+			tool.IDTask,
+			`{"prompt":"CHILD_TEXT_WITH_TOOL","description":"scenario","subagent_type":"general"}`,
+		)
 	}
 
 	h := newHarness(t, harnessOptions{respond: respond})
-	collector := collectEvents(h.mgr.bus.SubscribeAll())
+	collector := collectEvents(t, h.mgr.bus.SubscribeAll())
 	released := false
 	defer func() {
 		if !released {
@@ -983,11 +1028,10 @@ func TestHarnessScenario_SubagentTextWithToolsCompletes(t *testing.T) {
 	})
 	close(childRelease)
 	released = true
-	waitForVisibleMessage(t, collector, parentID, "child completion delivered")
-	waitForIdleAfterMessage(t, collector, parentID, "child completion delivered")
+	collector.waitMessage(parentID, "child completion delivered")
+	collector.waitIdleAfter(parentID, "child completion delivered")
 
-	link, err := h.links.GetLinkByTaskCallID(h.ctx, parentID, taskCallID)
-	require.NoError(t, err)
+	link := h.linkByCall(parentID, taskCallID)
 	require.NotNil(t, link)
 	assert.Equal(t, subagent.OutcomeCompleted, link.Outcome)
 	assert.Equal(t, 1, countToolResultsFor(transcriptOf(h, link.ChildID), "ls"))
@@ -1004,7 +1048,7 @@ func TestHarnessScenario_ForegroundChildContinuesWithoutSleep(t *testing.T) {
 		if hasUserContaining(messages, "CHILD_INITIAL") {
 			if hasUserContaining(messages, "FOLLOW_UP") {
 				<-followUpRelease
-				return &llmwire.Response{Text: "child continuation answer"}
+				return textReply("child continuation answer")
 			}
 
 			// Hold the child until the parent's suspension has projected its
@@ -1013,16 +1057,16 @@ func TestHarnessScenario_ForegroundChildContinuesWithoutSleep(t *testing.T) {
 			// project nothing.
 			<-initialRelease
 
-			return &llmwire.Response{Text: "child initial answer"}
+			return textReply("child initial answer")
 		}
 
 		if hasUserContaining(messages, "<subagent_completion>") {
-			return &llmwire.Response{Text: "continuation delivered"}
+			return textReply("continuation delivered")
 		}
 
 		if hasUserContaining(messages, "continue the same child") {
 			if hasToolResultFor(messages, "send_to_subagent") {
-				return &llmwire.Response{Text: "follow-up accepted"}
+				return textReply("follow-up accepted")
 			}
 
 			id := childID.Load()
@@ -1048,20 +1092,18 @@ func TestHarnessScenario_ForegroundChildContinuesWithoutSleep(t *testing.T) {
 		}
 
 		if hasToolResultFor(messages, "task") {
-			return &llmwire.Response{Text: "initial child delivered"}
+			return textReply("initial child delivered")
 		}
 
-		return &llmwire.Response{ToolCalls: []llmwire.ToolCall{{
-			ID:   taskCallID,
-			Name: "task",
-			Arguments: []byte(
-				`{"prompt":"CHILD_INITIAL","description":"scenario","subagent_type":"general"}`,
-			),
-		}}}
+		return callReply(
+			taskCallID,
+			"task",
+			`{"prompt":"CHILD_INITIAL","description":"scenario","subagent_type":"general"}`,
+		)
 	}
 
 	h := newHarness(t, harnessOptions{respond: respond})
-	collector := collectEvents(h.mgr.bus.SubscribeAll())
+	collector := collectEvents(t, h.mgr.bus.SubscribeAll())
 	defer func() {
 		closeOnce(initialRelease)
 		closeOnce(followUpRelease)
@@ -1072,34 +1114,40 @@ func TestHarnessScenario_ForegroundChildContinuesWithoutSleep(t *testing.T) {
 	h.startInboxWake()
 	parentID, err := h.mgr.Send(h.ctx, h.projectID, "start foreground child", "fake-model", nil)
 	require.NoError(t, err)
-	waitForWaitKind(t, collector, parentID, sessionevent.WaitSubagent)
+	collector.waitWait(parentID, sessionevent.WaitSubagent)
 	close(initialRelease)
-	waitForVisibleMessage(t, collector, parentID, "initial child delivered")
-	waitForIdleAfterMessage(t, collector, parentID, "initial child delivered")
+	collector.waitMessage(parentID, "initial child delivered")
+	collector.waitIdleAfter(parentID, "initial child delivered")
 
-	link, err := h.links.GetLinkByTaskCallID(h.ctx, parentID, taskCallID)
-	require.NoError(t, err)
+	link := h.linkByCall(parentID, taskCallID)
 	require.NotNil(t, link)
 	require.True(t, link.Blocking, "the initial task must exercise foreground mode")
 	childID.Store(link.ChildID)
 
 	h.startInboxWake()
 	require.NoError(t, h.mgr.sendToSession(h.ctx, parentID, "continue the same child"))
-	waitForVisibleMessage(t, collector, parentID, "follow-up accepted")
-	waitForIdleAfterMessage(t, collector, parentID, "follow-up accepted")
+	collector.waitMessage(parentID, "follow-up accepted")
+	collector.waitIdleAfter(parentID, "follow-up accepted")
 
 	close(followUpRelease)
-	waitForVisibleMessage(t, collector, parentID, "continuation delivered")
-	waitForIdleAfterMessage(t, collector, parentID, "continuation delivered")
+	collector.waitMessage(parentID, "continuation delivered")
+	collector.waitIdleAfter(parentID, "continuation delivered")
 
-	continued, err := h.links.GetLink(h.ctx, link.ChildID)
-	require.NoError(t, err)
+	continued := h.link(link.ChildID)
 	require.NotNil(t, continued)
 	assert.Equal(t, int64(2), continued.ActivationSeq)
 	assert.False(t, continued.Blocking, "a foreground child continues asynchronously after its task result")
-	parentMessages := h.parentMessages(parentID)
+	parentMessages := h.messages(parentID)
 	assert.Equal(t, 1, countToolResultsFor(parentMessages, tool.IDSleep))
-	assert.Contains(t, lastToolResultContent(parentMessages, tool.IDSleep),
+	assert.Contains(t, func(msgs []llmwire.Message, toolName string) string {
+		for _, v := range slices.Backward(msgs) {
+			if v.Role == llmwire.RoleTool && v.ToolName == toolName {
+				return v.Content
+			}
+		}
+
+		return ""
+	}(parentMessages, tool.IDSleep),
 		"sleep cannot be combined with send_to_subagent")
 	schedules, err := h.schedules.ListSchedules(h.ctx, parentID)
 	require.NoError(t, err)
@@ -1114,36 +1162,34 @@ func TestHarnessScenario_BackgroundChildIsTheWakeSource(t *testing.T) {
 		if hasUserContaining(messages, "CHILD_BACKGROUND") {
 			<-childRelease
 
-			return &llmwire.Response{Text: "background child answer"}
+			return textReply("background child answer")
 		}
 
 		if hasUserContaining(messages, "<subagent_completion>") {
-			return &llmwire.Response{Text: "background completion delivered"}
+			return textReply("background completion delivered")
 		}
 
 		if hasToolResultFor(messages, tool.IDSleep) {
-			return &llmwire.Response{Text: "background launched; yielded without sleep"}
+			return textReply("background launched; yielded without sleep")
 		}
 
 		if hasToolResultFor(messages, tool.IDTask) {
-			return &llmwire.Response{ToolCalls: []llmwire.ToolCall{{
-				ID:        "sleep-after-task-result",
-				Name:      tool.IDSleep,
-				Arguments: []byte(`{"duration":"1h","reason":"wait for background child"}`),
-			}}}
+			return callReply(
+				"sleep-after-task-result",
+				tool.IDSleep,
+				`{"duration":"1h","reason":"wait for background child"}`,
+			)
 		}
 
-		return &llmwire.Response{ToolCalls: []llmwire.ToolCall{{
-			ID:   taskCallID,
-			Name: tool.IDTask,
-			Arguments: []byte(
-				`{"prompt":"CHILD_BACKGROUND wait for release","description":"scenario","subagent_type":"general","background":true}`,
-			),
-		}}}
+		return callReply(
+			taskCallID,
+			tool.IDTask,
+			`{"prompt":"CHILD_BACKGROUND wait for release","description":"scenario","subagent_type":"general","background":true}`,
+		)
 	}
 
 	h := newHarness(t, harnessOptions{respond: respond})
-	collector := collectEvents(h.mgr.bus.SubscribeAll())
+	collector := collectEvents(t, h.mgr.bus.SubscribeAll())
 	defer func() {
 		closeOnce(childRelease)
 		collector.stop()
@@ -1155,39 +1201,56 @@ func TestHarnessScenario_BackgroundChildIsTheWakeSource(t *testing.T) {
 		"manager_id": scenarioManagerID,
 	})
 	require.NoError(t, err)
-	waitForVisibleMessage(t, collector, parentID, "background launched; yielded without sleep")
+	collector.waitMessage(parentID, "background launched; yielded without sleep")
 
-	link, err := h.links.GetLinkByTaskCallID(h.ctx, parentID, taskCallID)
-	require.NoError(t, err)
+	link := h.linkByCall(parentID, taskCallID)
 	require.NotNil(t, link)
 	assert.False(t, link.Blocking)
 
-	var runningCard string
-	require.NoError(t, h.db.QueryRowContext(h.ctx, `SELECT content FROM session_outbox
-		WHERE session_id = ? AND source_key LIKE ? ORDER BY id DESC LIMIT 1`,
-		parentID, fmt.Sprintf("progress:change:subagent:%d:%%:spawned:g%%", link.ChildID)).
-		Scan(&runningCard))
+	var runningRow *outboxRow
+	for _, row := range h.outbox(parentID) {
+		prefix := fmt.Sprintf("progress:change:subagent:%d:", link.ChildID)
+		if strings.HasPrefix(row.SourceKey, prefix) &&
+			strings.Contains(strings.TrimPrefix(row.SourceKey, prefix), ":spawned:g") {
+			runningRow = &row
+		}
+	}
+	require.NotNil(t, runningRow)
+	runningCard := runningRow.Content
 	assert.Contains(t, runningCard, "🧩 Subagents · 0 foreground · 1 background")
 
-	parentMessages := h.parentMessages(parentID)
+	parentMessages := h.messages(parentID)
 	assert.Equal(t, 1, countToolResultsFor(parentMessages, tool.IDSleep))
-	assert.Contains(t, lastToolResultContent(parentMessages, tool.IDSleep),
+	assert.Contains(t, func(msgs []llmwire.Message, toolName string) string {
+		for _, v := range slices.Backward(msgs) {
+			if v.Role == llmwire.RoleTool && v.ToolName == toolName {
+				return v.Content
+			}
+		}
+
+		return ""
+	}(parentMessages, tool.IDSleep),
 		"result arrives automatically in a later turn")
 	schedules, err := h.schedules.ListSchedules(h.ctx, parentID)
 	require.NoError(t, err)
 	assert.Empty(t, schedules, "pending child must remain the sole wake source")
-	h.mgr.waitIdle(parentID)
+	h.waitUntil("session idle", func() bool { return !h.mgr.HasActiveLoop(parentID) })
 
 	close(childRelease)
-	waitForVisibleMessage(t, collector, parentID, "background completion delivered")
+	collector.waitMessage(parentID, "background completion delivered")
 	drainScenarioClaims(t, "background_child_no_sleep.json", newChainController(t, h))
-	waitForIdleAfterMessage(t, collector, parentID, "background completion delivered")
+	collector.waitIdleAfter(parentID, "background completion delivered")
 
-	var stoppedCard string
-	require.NoError(t, h.db.QueryRowContext(h.ctx, `SELECT content FROM session_outbox
-		WHERE session_id = ? AND source_key LIKE ? ORDER BY id DESC LIMIT 1`,
-		parentID, fmt.Sprintf("progress:change:subagent:%d:%%:completed:g%%", link.ChildID)).
-		Scan(&stoppedCard))
+	var stoppedRow *outboxRow
+	for _, row := range h.outbox(parentID) {
+		prefix := fmt.Sprintf("progress:change:subagent:%d:", link.ChildID)
+		if strings.HasPrefix(row.SourceKey, prefix) &&
+			strings.Contains(strings.TrimPrefix(row.SourceKey, prefix), ":completed:g") {
+			stoppedRow = &row
+		}
+	}
+	require.NotNil(t, stoppedRow)
+	stoppedCard := stoppedRow.Content
 	assert.NotContains(t, stoppedCard, "Subagents")
 
 	assertHarnessTrace(t, "background_child_no_sleep.json", collector.snapshot(), parentID)
@@ -1201,28 +1264,27 @@ func TestHarnessScenario_BackgroundFinalResponseResumesOnCompletion(t *testing.T
 		if hasUserContaining(messages, "CHILD_CANARY") {
 			<-childRelease
 
-			return &llmwire.Response{Text: "canary child complete"}
+			return textReply("canary child complete")
 		}
 		rootCalls.Add(1)
 
 		if hasUserContaining(messages, "<subagent_completion>") {
-			return &llmwire.Response{Text: "completion after wait"}
+			return textReply("completion after wait")
 		}
 
 		if hasToolResultFor(messages, tool.IDTask) {
-			return &llmwire.Response{Text: "child still running"}
+			return textReply("child still running")
 		}
 
-		return &llmwire.Response{ToolCalls: []llmwire.ToolCall{{
-			ID: taskCallID, Name: tool.IDTask,
-			Arguments: []byte(
-				`{"prompt":"CHILD_CANARY","description":"scenario","subagent_type":"general","background":true}`,
-			),
-		}}}
+		return callReply(
+			taskCallID,
+			tool.IDTask,
+			`{"prompt":"CHILD_CANARY","description":"scenario","subagent_type":"general","background":true}`,
+		)
 	}
 
 	h := newHarness(t, harnessOptions{respond: respond})
-	collector := collectEvents(h.mgr.bus.SubscribeAll())
+	collector := collectEvents(t, h.mgr.bus.SubscribeAll())
 	defer func() {
 		closeOnce(childRelease)
 		collector.stop()
@@ -1234,18 +1296,22 @@ func TestHarnessScenario_BackgroundFinalResponseResumesOnCompletion(t *testing.T
 		"manager_id": scenarioManagerID,
 	})
 	require.NoError(t, err)
-	waitForVisibleMessage(t, collector, parentID, "child still running")
+	collector.waitMessage(parentID, "child still running")
 
-	parentMessages := h.parentMessages(parentID)
+	parentMessages := h.messages(parentID)
 	require.True(t, slices.ContainsFunc(parentMessages, func(message llmwire.Message) bool {
 		return message.Role == llmwire.RoleAssistant &&
 			message.Content == "child still running" && len(message.ToolCalls) == 0
 	}))
 
-	var outputType, output string
-	require.NoError(t, h.db.QueryRowContext(h.ctx, `SELECT type, content FROM session_outbox
-		WHERE session_id = ? AND content LIKE '%child still running%' ORDER BY id DESC LIMIT 1`, parentID).
-		Scan(&outputType, &output))
+	var outputRow *outboxRow
+	for _, row := range h.outbox(parentID) {
+		if strings.Contains(strings.ToLower(row.Content), "child still running") {
+			outputRow = &row
+		}
+	}
+	require.NotNil(t, outputRow)
+	outputType, output := outputRow.Type, outputRow.Content
 	assert.Equal(t, string(sessionstore.OutputMessagePersistent), outputType)
 	// The yield final carries the background badge title ahead of the model text.
 	assert.True(t, strings.HasPrefix(output, "🟣 Background\n\n"), "yield card: %q", output)
@@ -1253,11 +1319,11 @@ func TestHarnessScenario_BackgroundFinalResponseResumesOnCompletion(t *testing.T
 
 	// Settle the root's runner before releasing the child: the golden trace pins
 	// the resume as a fresh session loop, which requires the old runner to be gone.
-	h.mgr.waitIdle(parentID)
+	h.waitUntil("session idle", func() bool { return !h.mgr.HasActiveLoop(parentID) })
 	close(childRelease)
-	waitForVisibleMessage(t, collector, parentID, "completion after wait")
+	collector.waitMessage(parentID, "completion after wait")
 	drainScenarioClaims(t, "background_wait_canary.json", newChainController(t, h))
-	waitForIdleAfterMessage(t, collector, parentID, "completion after wait")
+	collector.waitIdleAfter(parentID, "completion after wait")
 	// The completion wake's candidate and its confirmation plus the earlier
 	// task turn and its yield: four root calls under the two-phase check.
 	assert.Equal(t, int64(4), rootCalls.Load())
@@ -1273,12 +1339,12 @@ func TestHarnessScenario_ForegroundScatterGatherProjectsShrinkingAllWaitSet(t *t
 			if hasUserContaining(messages, fmt.Sprintf("CHILD_WAIT_%d", i+1)) {
 				<-releases[i]
 
-				return &llmwire.Response{Text: fmt.Sprintf("child %d done", i+1)}
+				return textReply(fmt.Sprintf("child %d done", i+1))
 			}
 		}
 
-		if hasAssistantToolCall(messages, tool.IDTask) {
-			return &llmwire.Response{Text: "all children delivered"}
+		if countAssistantToolCallsFor(messages, tool.IDTask) > 0 {
+			return textReply("all children delivered")
 		}
 
 		calls := make([]llmwire.ToolCall, len(callIDs))
@@ -1297,7 +1363,7 @@ func TestHarnessScenario_ForegroundScatterGatherProjectsShrinkingAllWaitSet(t *t
 	}
 
 	h := newHarness(t, harnessOptions{respond: respond})
-	collector := collectEvents(h.mgr.bus.SubscribeAll())
+	collector := collectEvents(t, h.mgr.bus.SubscribeAll())
 	defer func() {
 		for _, release := range releases {
 			closeOnce(release)
@@ -1318,14 +1384,31 @@ func TestHarnessScenario_ForegroundScatterGatherProjectsShrinkingAllWaitSet(t *t
 
 			return linkErr == nil && link != nil
 		})
-		link, linkErr := h.links.GetLinkByTaskCallID(h.ctx, parentID, callID)
-		require.NoError(t, linkErr)
+		link := h.linkByCall(parentID, callID)
 		releaseOf[link.ChildID] = releases[i]
 		childIDs = append(childIDs, link.ChildID)
 	}
 	slices.Sort(childIDs)
 
-	waitForSubagentSet(t, collector, parentID, childIDs)
+	collector.waitFor(t, "subagent wait set", func(events []controllerapi.SessionNotification) bool {
+		for _, event := range events {
+			if event.SessionID != parentID || event.Notification.Type != sessionevent.NotifyWaiting {
+				continue
+			}
+			var got []int64
+			for _, item := range event.Notification.Waiting {
+				if item.Kind != sessionevent.WaitSubagent {
+					return false
+				}
+				got = append(got, item.ChildID)
+			}
+			slices.Sort(got)
+			if slices.Equal(got, childIDs) {
+				return true
+			}
+		}
+		return false
+	})
 	assert.Zero(t, countPublishedMessage(collector.snapshot(), parentID, "all children delivered"),
 		"the model must not run while any foreground child is pending")
 
@@ -1333,15 +1416,36 @@ func TestHarnessScenario_ForegroundScatterGatherProjectsShrinkingAllWaitSet(t *t
 	// fixed, so only this makes the recorded shrink sequence reproducible.
 	for i, childID := range childIDs {
 		close(releaseOf[childID])
-		h.waitForDelivery(childID)
+		h.waitUntil(
+			"child delivery",
+			func() bool { link := h.link(childID); return link != nil && link.DeliveredAt != 0 },
+		)
 
 		if i < len(childIDs)-1 {
-			waitForSubagentSet(t, collector, parentID, childIDs[i+1:])
+			collector.waitFor(t, "subagent wait set", func(events []controllerapi.SessionNotification) bool {
+				for _, event := range events {
+					if event.SessionID != parentID || event.Notification.Type != sessionevent.NotifyWaiting {
+						continue
+					}
+					var got []int64
+					for _, item := range event.Notification.Waiting {
+						if item.Kind != sessionevent.WaitSubagent {
+							return false
+						}
+						got = append(got, item.ChildID)
+					}
+					slices.Sort(got)
+					if slices.Equal(got, childIDs[i+1:]) {
+						return true
+					}
+				}
+				return false
+			})
 		}
 	}
 
-	waitForVisibleMessage(t, collector, parentID, "all children delivered")
-	waitForIdleAfterMessage(t, collector, parentID, "all children delivered")
+	collector.waitMessage(parentID, "all children delivered")
+	collector.waitIdleAfter(parentID, "all children delivered")
 
 	for _, event := range collector.snapshot() {
 		if event.SessionID != parentID || event.Notification.Type != sessionevent.NotifyWaiting {
@@ -1365,7 +1469,8 @@ func TestIntegration_BackgroundSubagentCompletes(t *testing.T) {
 	parentID, err := h.mgr.Send(h.ctx, h.projectID, "SPAWN_CHILD please", "fake-model", nil)
 	require.NoError(t, err)
 
-	link := h.waitForChildLink(parentID)
+	h.waitUntil("child link", func() bool { return h.linkByCall(parentID, taskCallID) != nil })
+	link := *h.linkByCall(parentID, taskCallID)
 	assert.Equal(t, parentID, link.ParentID)
 	assert.Equal(t, taskCallID, link.TaskCallID)
 	assert.False(t, link.Blocking)
@@ -1373,11 +1478,17 @@ func TestIntegration_BackgroundSubagentCompletes(t *testing.T) {
 	// Regression guard for the cascade-kill change (#12): an *idle* (not killed)
 	// parent must still survive its background child and be revived by the child's
 	// completion — only a deliberately killed tree drops background descendants.
-	h.waitForDelivery(link.ChildID)
-	h.waitForParentCompletions(parentID, link.ChildID, 1)
+	h.waitUntil(
+		"child delivery",
+		func() bool { link := h.link(link.ChildID); return link != nil && link.DeliveredAt != 0 },
+	)
+	h.waitUntil(
+		"parent completions",
+		func() bool { return countSubagentCompletions(h.messages(parentID), link.ChildID) >= 1 },
+	)
 
 	// Parent transcript is a valid tool_use/tool_result pairing.
-	msgs := h.parentMessages(parentID)
+	msgs := h.messages(parentID)
 	require.NoError(t, llm.ValidateToolPairing(msgs), "parent transcript must be transcript-valid")
 
 	// Exactly one completion record for the child.
@@ -1391,7 +1502,17 @@ func TestIntegration_BackgroundSubagentCompletes(t *testing.T) {
 	assert.Equal(t, subagent.StateCompleted, res.State)
 	assert.Equal(t, subagent.OutcomeCompleted, res.Outcome)
 	assert.Contains(t, res.Output, "child finished")
-	completion := lastSubagentCompletion(msgs, link.ChildID)
+	completion := func(messages []llmwire.Message, childID int64) string {
+		needle := "child_id: " + strconv.FormatInt(childID, 10)
+		for _, message := range slices.Backward(messages) {
+			if message.Role == llmwire.RoleUser && strings.Contains(message.Content, "<subagent_completion>") &&
+				strings.Contains(message.Content, needle) {
+				return message.Content
+			}
+		}
+
+		return ""
+	}(msgs, link.ChildID)
 	assert.Contains(t, completion, "outcome: completed")
 	assert.Contains(t, completion, "result:\nchild finished: 42")
 }
@@ -1407,15 +1528,15 @@ func TestIntegration_BackgroundTaskRejectsCompetingSleepProtocol(t *testing.T) {
 	respond := func(_ string, msgs []llmwire.Message) *llmwire.Response {
 		if hasUserContaining(msgs, "CHILD_TASK") {
 			<-childRelease
-			return &llmwire.Response{Text: "child finished while parent slept"}
+			return textReply("child finished while parent slept")
 		}
 
 		if hasUserContaining(msgs, "<subagent_completion>") {
-			return &llmwire.Response{Text: "child completion handled"}
+			return textReply("child completion handled")
 		}
 
 		if hasToolResultFor(msgs, tool.IDSleep) {
-			return &llmwire.Response{Text: "background launched; yielding without sleep"}
+			return textReply("background launched; yielding without sleep")
 		}
 
 		return &llmwire.Response{ToolCalls: []llmwire.ToolCall{
@@ -1440,7 +1561,8 @@ func TestIntegration_BackgroundTaskRejectsCompetingSleepProtocol(t *testing.T) {
 	h.startInboxWake()
 	parentID, err := h.mgr.Send(h.ctx, h.projectID, "spawn and wait", "fake-model", nil)
 	require.NoError(t, err)
-	link := h.waitForChildLink(parentID)
+	h.waitUntil("child link", func() bool { return h.linkByCall(parentID, taskCallID) != nil })
+	link := *h.linkByCall(parentID, taskCallID)
 
 	h.waitUntil("parent yields without sleeping", func() bool { return !h.mgr.HasActiveLoop(parentID) })
 
@@ -1449,11 +1571,17 @@ func TestIntegration_BackgroundTaskRejectsCompetingSleepProtocol(t *testing.T) {
 	require.Empty(t, schedules, "rejected sleep must stage no timer")
 
 	close(childRelease)
-	h.waitForDelivery(link.ChildID)
-	h.waitForParentCompletions(parentID, link.ChildID, 1)
-	h.mgr.waitIdle(parentID)
+	h.waitUntil(
+		"child delivery",
+		func() bool { link := h.link(link.ChildID); return link != nil && link.DeliveredAt != 0 },
+	)
+	h.waitUntil(
+		"parent completions",
+		func() bool { return countSubagentCompletions(h.messages(parentID), link.ChildID) >= 1 },
+	)
+	h.waitUntil("session idle", func() bool { return !h.mgr.HasActiveLoop(parentID) })
 
-	msgs := h.parentMessages(parentID)
+	msgs := h.messages(parentID)
 	require.NoError(t, llm.ValidateToolPairing(msgs), "the whole transcript must remain provider-valid")
 	assert.Equal(t, 1, countAssistantToolCallsFor(msgs, tool.IDSleep))
 	assert.Equal(t, 1, countToolResultsFor(msgs, tool.IDSleep), "the rejected call gets one error result")
@@ -1483,18 +1611,31 @@ func TestIntegration_SendToSubagentReNotifies(t *testing.T) {
 	parentID, err := h.mgr.Send(h.ctx, h.projectID, "SPAWN_CHILD please", "fake-model", nil)
 	require.NoError(t, err)
 
-	link := h.waitForChildLink(parentID)
-	h.waitForDelivery(link.ChildID)
-	h.waitForParentCompletions(parentID, link.ChildID, 1)
+	h.waitUntil("child link", func() bool { return h.linkByCall(parentID, taskCallID) != nil })
+	link := *h.linkByCall(parentID, taskCallID)
+	h.waitUntil(
+		"child delivery",
+		func() bool { link := h.link(link.ChildID); return link != nil && link.DeliveredAt != 0 },
+	)
+	h.waitUntil(
+		"parent completions",
+		func() bool { return countSubagentCompletions(h.messages(parentID), link.ChildID) >= 1 },
+	)
 
 	// Re-engage the finished child with follow-up work.
 	require.NoError(t, h.mgr.SendToChild(h.ctx, link.ChildID, "MORE_WORK for the CHILD_TASK"))
 
 	// A new completion is owed and re-delivered.
-	h.waitForDelivery(link.ChildID)
-	h.waitForParentCompletions(parentID, link.ChildID, 2)
+	h.waitUntil(
+		"child delivery",
+		func() bool { link := h.link(link.ChildID); return link != nil && link.DeliveredAt != 0 },
+	)
+	h.waitUntil(
+		"parent completions",
+		func() bool { return countSubagentCompletions(h.messages(parentID), link.ChildID) >= 2 },
+	)
 
-	msgs := h.parentMessages(parentID)
+	msgs := h.messages(parentID)
 	require.NoError(t, llm.ValidateToolPairing(msgs))
 	assert.GreaterOrEqual(
 		t,
@@ -1525,8 +1666,11 @@ func TestLedgerFailure_SpawnRefusesInsteadOfDegrading(t *testing.T) {
 	ok, err := h.mgr.Spawn(h.ctx, subagent.SpawnRequest{ParentID: root.ID, AgentType: "general", Prompt: "x"})
 	require.NoError(t, err)
 	require.NotZero(t, ok.ChildID)
-	h.waitForDelivery(ok.ChildID)
-	h.mgr.waitIdle(ok.ChildID)
+	h.waitUntil(
+		"child delivery",
+		func() bool { link := h.link(ok.ChildID); return link != nil && link.DeliveredAt != 0 },
+	)
+	h.waitUntil("session idle", func() bool { return !h.mgr.HasActiveLoop(ok.ChildID) })
 	h.waitUntil("healthy child runner removed", func() bool { return runnerCount(h.mgr.runners) == 0 })
 
 	loopsBefore := runnerCount(h.mgr.runners)
@@ -1554,10 +1698,10 @@ func TestResponseIntegrity_ReusedChildReportsCurrentErrorInsteadOfPriorAnswer(t 
 			if hasUserContaining(messages, "FAIL_CURRENT_ROUND") {
 				return &llmwire.Response{Text: "rejected child partial", FinishType: llmwire.FinishUnknown}
 			}
-			return &llmwire.Response{Text: "prior child answer"}
+			return textReply("prior child answer")
 		}
 		if hasUserContaining(messages, "<subagent_completion>") {
-			return &llmwire.Response{Text: "parent consumed child outcome"}
+			return textReply("parent consumed child outcome")
 		}
 
 		return taskResponse("CHILD_INTEGRITY", "integrity")
@@ -1568,9 +1712,13 @@ func TestResponseIntegrity_ReusedChildReportsCurrentErrorInsteadOfPriorAnswer(t 
 	h.startInboxWake()
 	parentID, err := h.mgr.Send(h.ctx, h.projectID, "start integrity child", "fake-model", nil)
 	require.NoError(t, err)
-	link := h.waitForChildLink(parentID)
-	h.waitForDelivery(link.ChildID)
-	h.mgr.waitIdle(parentID)
+	h.waitUntil("child link", func() bool { return h.linkByCall(parentID, taskCallID) != nil })
+	link := *h.linkByCall(parentID, taskCallID)
+	h.waitUntil(
+		"child delivery",
+		func() bool { link := h.link(link.ChildID); return link != nil && link.DeliveredAt != 0 },
+	)
+	h.waitUntil("session idle", func() bool { return !h.mgr.HasActiveLoop(parentID) })
 
 	require.NoError(t, h.mgr.SendToChild(h.ctx, link.ChildID, "FAIL_CURRENT_ROUND"))
 	h.waitUntil("integrity-error continuation delivered", func() bool {
@@ -1578,8 +1726,7 @@ func TestResponseIntegrity_ReusedChildReportsCurrentErrorInsteadOfPriorAnswer(t 
 		return linkErr == nil && current != nil && current.Terminal() && current.DeliveredAt != 0 &&
 			current.ActivationSeq == 2
 	})
-	current, err := h.links.GetLink(h.ctx, link.ChildID)
-	require.NoError(t, err)
+	current := h.link(link.ChildID)
 	assert.Equal(t, subagent.OutcomeError, current.Outcome)
 	assert.Equal(t, sessionstore.UnknownFinishTerminalError, current.Result)
 	assert.NotContains(t, current.Result, "prior child answer")
@@ -1622,30 +1769,9 @@ func TestResponseIntegrity_MissingTerminalRejectionNeverReusesOlderAnswer(t *tes
 	defer h.shutdown()
 	parent, err := h.store.CreateSession(h.ctx, h.projectID, "fake-model", "", nil)
 	require.NoError(t, err)
-	childID, err := func() (int64, error) {
-		var id int64
-		err := h.store.WithTx(h.ctx, func(tx *sql.Tx) error {
-			var err error
-			id, err = sessionstore.CreateSubagentSessionTx(
-				h.ctx,
-				tx,
-				sessionstore.CreateSubagentSession{
-					ProjectID:      h.projectID,
-					ParentID:       parent.ID,
-					RootID:         parent.ID,
-					AgentType:      "general",
-					Model:          "fake-model",
-					ReasoningLevel: "",
-				},
-			)
-			return err
-		})
-		return id, err
-	}()
-	require.NoError(t, err)
-	require.NoError(t, seedChildLink(h.ctx, h.store, subagent.Link{
-		ParentID: parent.ID, ChildID: childID, TaskCallID: "missing-rejection",
-	}))
+	childID := h.createChild(parent.ID, subagent.Link{
+		TaskCallID: "missing-rejection",
+	})
 	_, err = h.store.Commit(h.ctx, sessionstore.Commit{SessionID: childID, Messages: []*transcript.Message{{
 		Role: llmwire.RoleAssistant, Content: "older accepted answer", FinishType: llmwire.FinishStop,
 	}}})
@@ -1664,8 +1790,7 @@ func TestResponseIntegrity_MissingTerminalRejectionNeverReusesOlderAnswer(t *tes
 	}())
 
 	finalizeTestChild(h.ctx, t, h.mgr, childID)
-	link, err := h.links.GetLink(h.ctx, childID)
-	require.NoError(t, err)
+	link := h.link(childID)
 	assert.Equal(t, subagent.OutcomeError, link.Outcome)
 	assert.NotContains(t, link.Result, "older accepted answer")
 	assert.Contains(t, link.Result, "crashed after 2 iterations")
@@ -1693,9 +1818,19 @@ func TestSpawnSettlesTheChildEffortOnTheChildModel(t *testing.T) {
 	// The two-phase check spends a hidden candidate and a confirmation, both
 	// "done" from the stub, so one visible turn is two assistant rows.
 	h.waitUntil("parent answered", func() bool {
-		return countAssistantReplies(h.parentMessages(parentID)) == 2
+		return func(msgs []llmwire.Message) int {
+			count := 0
+
+			for _, m := range msgs {
+				if m.Role == llmwire.RoleAssistant && m.Content != "" {
+					count++
+				}
+			}
+
+			return count
+		}(h.messages(parentID)) == 2
 	})
-	h.mgr.waitIdle(parentID)
+	h.waitUntil("session idle", func() bool { return !h.mgr.HasActiveLoop(parentID) })
 
 	require.NoError(t, h.mgr.SetModel(h.ctx, parentID, "parent-model", "high"))
 
@@ -1707,10 +1842,12 @@ func TestSpawnSettlesTheChildEffortOnTheChildModel(t *testing.T) {
 		Prompt:    "child work",
 	})
 	require.NoError(t, err)
-	h.waitForDelivery(child.ChildID)
+	h.waitUntil(
+		"child delivery",
+		func() bool { link := h.link(child.ChildID); return link != nil && link.DeliveredAt != 0 },
+	)
 
-	rec, err := h.store.GetSession(h.ctx, child.ChildID)
-	require.NoError(t, err)
+	rec := h.session(child.ChildID)
 	assert.Equal(t, "low", rec.ReasoningLevel,
 		"the parent's level is not a level the child model offers, so the child model's default wins")
 
@@ -1819,8 +1956,7 @@ func TestChildDepth_NoLinkKeepsDepthOne(t *testing.T) {
 	child, err := h.mgr.Spawn(h.ctx, subagent.SpawnRequest{ParentID: root.ID, AgentType: "general", Prompt: "x"})
 	require.NoError(t, err)
 
-	link, err := h.links.GetLink(h.ctx, child.ChildID)
-	require.NoError(t, err)
+	link := h.link(child.ChildID)
 	require.NotNil(t, link)
 	assert.Equal(t, 1, link.Depth)
 }
@@ -1835,30 +1971,9 @@ func TestSubagentResult_CarriesCandidateAnswerNotAck(t *testing.T) {
 	ctx := h.ctx
 	parent, err := h.store.CreateSession(ctx, h.projectID, "fake-model", "", nil)
 	require.NoError(t, err)
-	childID, err := func() (int64, error) {
-		var id int64
-		err := h.store.WithTx(ctx, func(tx *sql.Tx) error {
-			var err error
-			id, err = sessionstore.CreateSubagentSessionTx(
-				ctx,
-				tx,
-				sessionstore.CreateSubagentSession{
-					ProjectID:      h.projectID,
-					ParentID:       parent.ID,
-					RootID:         parent.ID,
-					AgentType:      "general",
-					Model:          "fake-model",
-					ReasoningLevel: "",
-				},
-			)
-			return err
-		})
-		return id, err
-	}()
-	require.NoError(t, err)
-	require.NoError(t, seedChildLink(ctx, h.store, subagent.Link{
-		ParentID: parent.ID, ChildID: childID, TaskCallID: "cand",
-	}))
+	childID := h.createChild(parent.ID, subagent.Link{
+		TaskCallID: "cand",
+	})
 
 	seedChildCandidateConfirm(t, h, childID)
 
@@ -1866,8 +1981,7 @@ func TestSubagentResult_CarriesCandidateAnswerNotAck(t *testing.T) {
 
 	finalizeTestChild(ctx, t, h.mgr, childID)
 
-	link, err := h.links.GetLink(ctx, childID)
-	require.NoError(t, err)
+	link := h.link(childID)
 	require.NotNil(t, link)
 	assert.Equal(t, subagent.OutcomeCompleted, link.Outcome)
 	assert.Contains(t, link.Result, "the full child answer",
@@ -1885,30 +1999,9 @@ func TestSubagentResult_ErrorBeatsStalePointer(t *testing.T) {
 	ctx := h.ctx
 	parent, err := h.store.CreateSession(ctx, h.projectID, "fake-model", "", nil)
 	require.NoError(t, err)
-	childID, err := func() (int64, error) {
-		var id int64
-		err := h.store.WithTx(ctx, func(tx *sql.Tx) error {
-			var err error
-			id, err = sessionstore.CreateSubagentSessionTx(
-				ctx,
-				tx,
-				sessionstore.CreateSubagentSession{
-					ProjectID:      h.projectID,
-					ParentID:       parent.ID,
-					RootID:         parent.ID,
-					AgentType:      "general",
-					Model:          "fake-model",
-					ReasoningLevel: "",
-				},
-			)
-			return err
-		})
-		return id, err
-	}()
-	require.NoError(t, err)
-	require.NoError(t, seedChildLink(ctx, h.store, subagent.Link{
-		ParentID: parent.ID, ChildID: childID, TaskCallID: "stale",
-	}))
+	childID := h.createChild(parent.ID, subagent.Link{
+		TaskCallID: "stale",
+	})
 
 	seedChildCandidateConfirm(t, h, childID)
 
@@ -1923,8 +2016,7 @@ func TestSubagentResult_ErrorBeatsStalePointer(t *testing.T) {
 
 	finalizeTestChild(ctx, t, h.mgr, childID)
 
-	link, err := h.links.GetLink(ctx, childID)
-	require.NoError(t, err)
+	link := h.link(childID)
 	require.NotNil(t, link)
 	assert.Equal(t, subagent.OutcomeIncomplete, link.Outcome,
 		"the pointer must not mask a failed child: error precedence gives the incomplete outcome")
@@ -1944,30 +2036,9 @@ func TestFinalizeChild_IncompleteWhenNoFinalAnswer(t *testing.T) {
 	parent, err := h.store.CreateSession(ctx, h.projectID, "fake-model", "", nil)
 	require.NoError(t, err)
 
-	childID, err := func() (int64, error) {
-		var id int64
-		err := h.store.WithTx(ctx, func(tx *sql.Tx) error {
-			var err error
-			id, err = sessionstore.CreateSubagentSessionTx(
-				ctx,
-				tx,
-				sessionstore.CreateSubagentSession{
-					ProjectID:      h.projectID,
-					ParentID:       parent.ID,
-					RootID:         parent.ID,
-					AgentType:      "general",
-					Model:          "fake-model",
-					ReasoningLevel: "",
-				},
-			)
-			return err
-		})
-		return id, err
-	}()
-	require.NoError(t, err)
-	require.NoError(t, seedChildLink(ctx, h.store, subagent.Link{
-		ParentID: parent.ID, ChildID: childID, TaskCallID: "bg",
-	}))
+	childID := h.createChild(parent.ID, subagent.Link{
+		TaskCallID: "bg",
+	})
 
 	// The child's last message is a tool call — it stopped mid-tool / hit its cap.
 	toolCalls, err := json.Marshal([]llmwire.ToolCall{{ID: "x", Name: "bash", Arguments: []byte(`{}`)}})
@@ -1994,17 +2065,26 @@ func TestFinalizeChild_IncompleteWhenNoFinalAnswer(t *testing.T) {
 
 	finalizeTestChild(ctx, t, h.mgr, childID)
 
-	link, err := h.links.GetLink(ctx, childID)
-	require.NoError(t, err)
+	link := h.link(childID)
 	assert.Equal(t, subagent.OutcomeIncomplete, link.Outcome, "no final answer → incomplete")
 	assert.Contains(t, link.Result, "without a final answer")
 	assert.Contains(t, link.Result, "12", "result note carries the iteration count")
 	assert.Equal(t, subagent.StateError, link.State, "max-iterations keeps the state=error lifecycle value")
 
 	// The parent receives the explicit incomplete outcome, never a masked completed.
-	h.waitForDelivery(childID)
-	h.mgr.waitIdle(parent.ID)
-	assert.Contains(t, lastSubagentCompletion(h.parentMessages(parent.ID), childID), "outcome: incomplete")
+	h.waitUntil("child delivery", func() bool { link := h.link(childID); return link != nil && link.DeliveredAt != 0 })
+	h.waitUntil("session idle", func() bool { return !h.mgr.HasActiveLoop(parent.ID) })
+	assert.Contains(t, func(messages []llmwire.Message, childID int64) string {
+		needle := "child_id: " + strconv.FormatInt(childID, 10)
+		for _, message := range slices.Backward(messages) {
+			if message.Role == llmwire.RoleUser && strings.Contains(message.Content, "<subagent_completion>") &&
+				strings.Contains(message.Content, needle) {
+				return message.Content
+			}
+		}
+
+		return ""
+	}(h.messages(parent.ID), childID), "outcome: incomplete")
 }
 
 // Activation 1 confirms (pointer set), a re-activation ends in a
@@ -2018,30 +2098,9 @@ func TestSubagentResult_BackgroundYieldFallsBackToYieldText(t *testing.T) {
 	ctx := h.ctx
 	parent, err := h.store.CreateSession(ctx, h.projectID, "fake-model", "", nil)
 	require.NoError(t, err)
-	childID, err := func() (int64, error) {
-		var id int64
-		err := h.store.WithTx(ctx, func(tx *sql.Tx) error {
-			var err error
-			id, err = sessionstore.CreateSubagentSessionTx(
-				ctx,
-				tx,
-				sessionstore.CreateSubagentSession{
-					ProjectID:      h.projectID,
-					ParentID:       parent.ID,
-					RootID:         parent.ID,
-					AgentType:      "general",
-					Model:          "fake-model",
-					ReasoningLevel: "",
-				},
-			)
-			return err
-		})
-		return id, err
-	}()
-	require.NoError(t, err)
-	require.NoError(t, seedChildLink(ctx, h.store, subagent.Link{
-		ParentID: parent.ID, ChildID: childID, TaskCallID: "yield",
-	}))
+	childID := h.createChild(parent.ID, subagent.Link{
+		TaskCallID: "yield",
+	})
 
 	// Activation 1: candidate + confirm leaves the durable pointer.
 	seedChildCandidateConfirm(t, h, childID)
@@ -2093,8 +2152,7 @@ func TestSubagentResult_BackgroundYieldFallsBackToYieldText(t *testing.T) {
 
 	finalizeTestChild(ctx, t, h.mgr, childID)
 
-	link, err := h.links.GetLink(ctx, childID)
-	require.NoError(t, err)
+	link := h.link(childID)
 	require.NotNil(t, link)
 	assert.Equal(t, subagent.OutcomeCompleted, link.Outcome)
 	assert.Contains(t, link.Result, "fresh yield text", "the fallback is the real final text")

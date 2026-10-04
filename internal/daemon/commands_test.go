@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -118,7 +119,8 @@ func TestManager_Send(t *testing.T) {
 	testHarness := newHarness(t, harnessOptions{configure: withTestModels, clientFor: factory.client})
 	mgr := testHarness.mgr
 	s := testHarness.store
-	ch := mgr.bus.SubscribeAll()
+	ch := collectEvents(t, mgr.bus.SubscribeAll())
+	t.Cleanup(ch.stop)
 
 	// Use completeAfter so Kill (which no longer cancels context) lets session finish naturally
 	factory.nextSess = &mockSession{completeAfter: 200 * time.Millisecond}
@@ -136,7 +138,15 @@ func TestManager_Send(t *testing.T) {
 	err = mgr.sendToSession(context.Background(), id, "/kill")
 	require.NoError(t, err)
 
-	waitForState(t, ch, id, controllerapi.StateIdle, 3*time.Second)
+	ch.waitFor(t, "session state", func(events []controllerapi.SessionNotification) bool {
+		for _, event := range events {
+			if event.SessionID == id && event.Notification.Type == sessionevent.NotifyStateChanged &&
+				event.Notification.Status == controllerapi.StateIdle {
+				return true
+			}
+		}
+		return false
+	})
 
 	assert.False(t, mgr.HasActiveLoop(id))
 }
@@ -148,7 +158,8 @@ func TestManager_SendToSession_PersistsWhileRunning(t *testing.T) {
 	s := testHarness.store
 
 	// Subscribe to all notifications via pubsub
-	ch := mgr.bus.SubscribeAll()
+	ch := collectEvents(t, mgr.bus.SubscribeAll())
+	t.Cleanup(ch.stop)
 
 	ctx := context.Background()
 	pid := testProject(t, s, t.TempDir())
@@ -156,14 +167,26 @@ func TestManager_SendToSession_PersistsWhileRunning(t *testing.T) {
 	require.NoError(t, err)
 
 	// Wait for RunDaemon to start
-	waitForLoopStart(t, ch, id, 3*time.Second)
-	waitForPendingInput(t, mgr.store.(*sessionstore.Store), id, false, 3*time.Second)
+	ch.waitFor(t, "session state", func(events []controllerapi.SessionNotification) bool {
+		for _, event := range events {
+			if event.SessionID == id && event.Notification.Type == sessionevent.NotifyStateChanged &&
+				event.Notification.Status == controllerapi.StateRunning {
+				return true
+			}
+		}
+		return false
+	})
+	testHarness.waitUntil("pending input", func() bool {
+		_, err := mgr.store.(*sessionstore.Store).PeekPending(context.Background(), id)
+		if false {
+			return err == nil
+		}
+		return errors.Is(err, sessionstore.ErrNoPendingInput)
+	})
 
-	require.Eventually(
-		t,
+	testHarness.waitUntil(
+		"TestManager_SendToSession_PersistsWhileRunning",
 		func() bool { factory.mu.Lock(); defer factory.mu.Unlock(); return len(factory.sessions) == 1 },
-		time.Second,
-		10*time.Millisecond,
 	)
 	factory.mu.Lock()
 	require.Len(t, factory.sessions, 1, "factory should have created one session")
@@ -239,7 +262,8 @@ func TestManager_SendCreatesNewSessionAfterCompletion(t *testing.T) {
 	testHarness := newHarness(t, harnessOptions{configure: withTestModels, clientFor: factory.client})
 	mgr := testHarness.mgr
 	s := testHarness.store
-	ch := mgr.bus.SubscribeAll()
+	ch := collectEvents(t, mgr.bus.SubscribeAll())
+	t.Cleanup(ch.stop)
 
 	// First session completes quickly
 	factory.nextSess = &mockSession{completeAfter: 50 * time.Millisecond}
@@ -249,7 +273,15 @@ func TestManager_SendCreatesNewSessionAfterCompletion(t *testing.T) {
 	id1, err := mgr.Send(ctx, pid, "init", "", nil)
 	require.NoError(t, err)
 
-	waitForState(t, ch, id1, controllerapi.StateIdle, 3*time.Second)
+	ch.waitFor(t, "session state", func(events []controllerapi.SessionNotification) bool {
+		for _, event := range events {
+			if event.SessionID == id1 && event.Notification.Type == sessionevent.NotifyStateChanged &&
+				event.Notification.Status == controllerapi.StateIdle {
+				return true
+			}
+		}
+		return false
+	})
 
 	// Second Send creates a new session — no resume
 	factory.nextSess = &mockSession{completeAfter: 50 * time.Millisecond}
@@ -257,7 +289,15 @@ func TestManager_SendCreatesNewSessionAfterCompletion(t *testing.T) {
 	require.NoError(t, err)
 	assert.NotEqual(t, id1, id2, "Send should create new session, not resume")
 
-	waitForLoopStart(t, ch, id2, 3*time.Second)
+	ch.waitFor(t, "session state", func(events []controllerapi.SessionNotification) bool {
+		for _, event := range events {
+			if event.SessionID == id2 && event.Notification.Type == sessionevent.NotifyStateChanged &&
+				event.Notification.Status == controllerapi.StateRunning {
+				return true
+			}
+		}
+		return false
+	})
 
 	mgr.Shutdown(3 * time.Second)
 }
@@ -267,15 +307,30 @@ func TestManager_SendToSession_AlreadyRunningUsesDurableInbox(t *testing.T) {
 	testHarness := newHarness(t, harnessOptions{configure: withTestModels, clientFor: testFactory.client})
 	mgr := testHarness.mgr
 	s := testHarness.store
-	ch := mgr.bus.SubscribeAll()
+	ch := collectEvents(t, mgr.bus.SubscribeAll())
+	t.Cleanup(ch.stop)
 
 	ctx := context.Background()
 	pid := testProject(t, s, t.TempDir())
 	id, err := mgr.Send(ctx, pid, "init", "", nil)
 	require.NoError(t, err)
 
-	waitForLoopStart(t, ch, id, 3*time.Second)
-	waitForPendingInput(t, mgr.store.(*sessionstore.Store), id, false, 3*time.Second)
+	ch.waitFor(t, "session state", func(events []controllerapi.SessionNotification) bool {
+		for _, event := range events {
+			if event.SessionID == id && event.Notification.Type == sessionevent.NotifyStateChanged &&
+				event.Notification.Status == controllerapi.StateRunning {
+				return true
+			}
+		}
+		return false
+	})
+	testHarness.waitUntil("pending input", func() bool {
+		_, err := mgr.store.(*sessionstore.Store).PeekPending(context.Background(), id)
+		if false {
+			return err == nil
+		}
+		return errors.Is(err, sessionstore.ErrNoPendingInput)
+	})
 
 	// SendToSession on an already-running session — should route to inbox
 	err = mgr.sendToSession(ctx, id, "steer message")
@@ -296,7 +351,8 @@ func TestManager_SecondSendCreatesNewLoop(t *testing.T) {
 	testHarness := newHarness(t, harnessOptions{configure: withTestModels, clientFor: factory.client})
 	mgr := testHarness.mgr
 	s := testHarness.store
-	ch := mgr.bus.SubscribeAll()
+	ch := collectEvents(t, mgr.bus.SubscribeAll())
+	t.Cleanup(ch.stop)
 
 	factory.nextSess = &mockSession{completeAfter: 50 * time.Millisecond}
 
@@ -305,7 +361,15 @@ func TestManager_SecondSendCreatesNewLoop(t *testing.T) {
 	id1, err := mgr.Send(ctx, pid, "first", "", nil)
 	require.NoError(t, err)
 
-	waitForState(t, ch, id1, controllerapi.StateIdle, 3*time.Second)
+	ch.waitFor(t, "session state", func(events []controllerapi.SessionNotification) bool {
+		for _, event := range events {
+			if event.SessionID == id1 && event.Notification.Type == sessionevent.NotifyStateChanged &&
+				event.Notification.Status == controllerapi.StateIdle {
+				return true
+			}
+		}
+		return false
+	})
 
 	// Second Send creates a new session with its own loop
 	factory.nextSess = &mockSession{completeAfter: 50 * time.Millisecond}
@@ -313,13 +377,21 @@ func TestManager_SecondSendCreatesNewLoop(t *testing.T) {
 	require.NoError(t, err)
 	assert.NotEqual(t, id1, id2, "should create new session")
 
-	waitForLoopStart(t, ch, id2, 3*time.Second)
-	require.Eventually(t, func() bool {
+	ch.waitFor(t, "session state", func(events []controllerapi.SessionNotification) bool {
+		for _, event := range events {
+			if event.SessionID == id2 && event.Notification.Type == sessionevent.NotifyStateChanged &&
+				event.Notification.Status == controllerapi.StateRunning {
+				return true
+			}
+		}
+		return false
+	})
+	testHarness.waitUntil("TestManager_SecondSendCreatesNewLoop", func() bool {
 		factory.mu.Lock()
 		defer factory.mu.Unlock()
 
 		return len(factory.sessions) >= 2
-	}, time.Second, 10*time.Millisecond)
+	})
 
 	factory.mu.Lock()
 	sessCount := len(factory.sessions)
@@ -334,7 +406,8 @@ func TestManager_SendAlwaysCreatesNew(t *testing.T) {
 	testHarness := newHarness(t, harnessOptions{configure: withTestModels, clientFor: factory.client})
 	mgr := testHarness.mgr
 	s := testHarness.store
-	ch := mgr.bus.SubscribeAll()
+	ch := collectEvents(t, mgr.bus.SubscribeAll())
+	t.Cleanup(ch.stop)
 
 	// First session completes quickly so Kill can work
 	factory.nextSess = &mockSession{completeAfter: 100 * time.Millisecond}
@@ -345,7 +418,15 @@ func TestManager_SendAlwaysCreatesNew(t *testing.T) {
 	require.NoError(t, err)
 
 	_ = mgr.sendToSession(context.Background(), id1, "/kill")
-	waitForState(t, ch, id1, controllerapi.StateIdle, 3*time.Second)
+	ch.waitFor(t, "session state", func(events []controllerapi.SessionNotification) bool {
+		for _, event := range events {
+			if event.SessionID == id1 && event.Notification.Type == sessionevent.NotifyStateChanged &&
+				event.Notification.Status == controllerapi.StateIdle {
+				return true
+			}
+		}
+		return false
+	})
 
 	// Second Send to same project must create a new session, not resume
 	factory.nextSess = &mockSession{completeAfter: 100 * time.Millisecond}
@@ -353,7 +434,15 @@ func TestManager_SendAlwaysCreatesNew(t *testing.T) {
 	require.NoError(t, err)
 	assert.NotEqual(t, id1, id2, "Send should produce a different session ID")
 
-	waitForLoopStart(t, ch, id2, 3*time.Second)
+	ch.waitFor(t, "session state", func(events []controllerapi.SessionNotification) bool {
+		for _, event := range events {
+			if event.SessionID == id2 && event.Notification.Type == sessionevent.NotifyStateChanged &&
+				event.Notification.Status == controllerapi.StateRunning {
+				return true
+			}
+		}
+		return false
+	})
 
 	mgr.Shutdown(3 * time.Second)
 }
@@ -363,7 +452,8 @@ func TestManager_SetModel_IdleSession(t *testing.T) {
 	testHarness := newHarness(t, harnessOptions{configure: withTestModels, clientFor: factory.client})
 	mgr := testHarness.mgr
 	s := testHarness.store
-	ch := mgr.bus.SubscribeAll()
+	ch := collectEvents(t, mgr.bus.SubscribeAll())
+	t.Cleanup(ch.stop)
 
 	// Session completes quickly → loop exits → session is idle
 	factory.nextSess = &mockSession{completeAfter: 50 * time.Millisecond}
@@ -373,7 +463,15 @@ func TestManager_SetModel_IdleSession(t *testing.T) {
 	id, err := mgr.Send(ctx, pid, "init", "old-model", nil)
 	require.NoError(t, err)
 
-	waitForState(t, ch, id, controllerapi.StateIdle, 3*time.Second)
+	ch.waitFor(t, "session state", func(events []controllerapi.SessionNotification) bool {
+		for _, event := range events {
+			if event.SessionID == id && event.Notification.Type == sessionevent.NotifyStateChanged &&
+				event.Notification.Status == controllerapi.StateIdle {
+				return true
+			}
+		}
+		return false
+	})
 	assert.False(t, mgr.HasActiveLoop(id), "session should not be running after idle")
 
 	// SetModel on an idle session must succeed (DB-first pattern)
@@ -392,7 +490,8 @@ func TestManager_SendToSession_RejectsKilledSession(t *testing.T) {
 	testHarness := newHarness(t, harnessOptions{configure: withTestModels, clientFor: factory.client})
 	mgr := testHarness.mgr
 	s := testHarness.store
-	ch := mgr.bus.SubscribeAll()
+	ch := collectEvents(t, mgr.bus.SubscribeAll())
+	t.Cleanup(ch.stop)
 
 	factory.nextSess = &mockSession{completeAfter: 50 * time.Millisecond}
 
@@ -401,7 +500,15 @@ func TestManager_SendToSession_RejectsKilledSession(t *testing.T) {
 	id, err := mgr.Send(ctx, pid, "init", "", nil)
 	require.NoError(t, err)
 
-	waitForState(t, ch, id, controllerapi.StateIdle, 3*time.Second)
+	ch.waitFor(t, "session state", func(events []controllerapi.SessionNotification) bool {
+		for _, event := range events {
+			if event.SessionID == id && event.Notification.Type == sessionevent.NotifyStateChanged &&
+				event.Notification.Status == controllerapi.StateIdle {
+				return true
+			}
+		}
+		return false
+	})
 
 	// Prepare a mock for the kill's resume path
 	factory.mu.Lock()
@@ -500,12 +607,11 @@ func TestNewSessionSettlesTheEffortOnItsModel(t *testing.T) {
 	// The two-phase check spends a hidden candidate and a confirmation, both
 	// "done" from the stub, so one visible turn is two assistant rows.
 	h.waitUntil("answered", func() bool {
-		return countAssistantReplies(h.parentMessages(id)) == 2
+		return countAssistantReplies(h.messages(id)) == 2
 	})
-	h.mgr.waitIdle(id)
+	h.waitUntil("session idle", func() bool { return !h.mgr.HasActiveLoop(id) })
 
-	rec, err := h.store.GetSession(h.ctx, id)
-	require.NoError(t, err)
+	rec := h.session(id)
 	assert.Equal(t, "high", rec.ReasoningLevel,
 		"the record is all a later run reads, so it must carry the model's default")
 	assert.Equal(t, "high", provider.effortFor("parent-model"),
@@ -542,7 +648,7 @@ func TestSendSessionMessageResolvedFollowsOwnedReplacement(t *testing.T) {
 // caller, and must leave the session resumable.
 func TestSetModelUnknownModelNeverReachesTheRecord(t *testing.T) {
 	respond := func(_ string, _ []llmwire.Message) *llmwire.Response {
-		return &llmwire.Response{Text: "done"}
+		return textReply("done")
 	}
 
 	h := newHarness(
@@ -554,7 +660,7 @@ func TestSetModelUnknownModelNeverReachesTheRecord(t *testing.T) {
 	)
 	defer h.shutdown()
 
-	events := collectEvents(h.mgr.bus.SubscribeAll())
+	events := collectEvents(t, h.mgr.bus.SubscribeAll())
 	defer events.stop()
 
 	h.startInboxWake()
@@ -563,26 +669,25 @@ func TestSetModelUnknownModelNeverReachesTheRecord(t *testing.T) {
 	// The no-wake two-phase check finishes one turn as two assistant rows: the
 	// hidden candidate plus the confirmation, both "done" from the stub.
 	h.waitUntil("first turn answered", func() bool {
-		return countAssistantReplies(h.parentMessages(id)) == 2
+		return countAssistantReplies(h.messages(id)) == 2
 	})
-	h.mgr.waitIdle(id)
+	h.waitUntil("session idle", func() bool { return !h.mgr.HasActiveLoop(id) })
 
 	err = h.mgr.SetModel(h.ctx, id, "ghost-model", "")
 	require.Error(t, err, "an unknown model must be rejected, not persisted")
 	assert.Contains(t, err.Error(), "ghost-model")
 
-	rec, err := h.store.GetSession(h.ctx, id)
-	require.NoError(t, err)
+	rec := h.session(id)
 	assert.Equal(t, "fake-model", rec.Model, "the record keeps the model the session can actually run")
 
 	h.startInboxWake()
 	require.NoError(t, h.mgr.sendToSession(h.ctx, id, "second"))
 	h.waitUntil("second turn settled", func() bool {
-		return countAssistantReplies(h.parentMessages(id)) == 4 || hasSessionErrorNotice(events.snapshot())
+		return countAssistantReplies(h.messages(id)) == 4 || hasSessionErrorNotice(events.snapshot())
 	})
 
 	assert.False(t, hasSessionErrorNotice(events.snapshot()), "the session must still be resumable")
-	assert.Equal(t, 4, countAssistantReplies(h.parentMessages(id)))
+	assert.Equal(t, 4, countAssistantReplies(h.messages(id)))
 }
 
 // TestSetModelLiveRefusalDoesNotPersist covers the running-loop branch: the live
@@ -595,7 +700,7 @@ func TestSetModelLiveRefusalDoesNotPersist(t *testing.T) {
 			<-release
 		}
 
-		return &llmwire.Response{Text: "done"}
+		return textReply("done")
 	}
 
 	h := newHarness(
@@ -614,15 +719,13 @@ func TestSetModelLiveRefusalDoesNotPersist(t *testing.T) {
 	require.NoError(t, err)
 	h.waitUntil("live session attached", func() bool { return h.liveSession(id) != nil })
 
-	before, err := h.store.GetSession(h.ctx, id)
-	require.NoError(t, err)
+	before := h.session(id)
 
 	h.mgr.build.Config.UnifiedConfig.Models[1].Provider = "missing"
 	err = h.mgr.SetModel(h.ctx, id, "other-model", "high")
 	require.Error(t, err, "a refused switch must surface to the caller")
 
-	rec, err := h.store.GetSession(h.ctx, id)
-	require.NoError(t, err)
+	rec := h.session(id)
 	assert.Equal(t, "fake-model", rec.Model)
 	assert.Equal(t, before.ReasoningLevel, rec.ReasoningLevel)
 }

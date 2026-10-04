@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -36,13 +37,13 @@ func TestHarnessScenario_SystemPromptMatchesTheDaemonRegisteredToolset(t *testin
 		if hasUserContaining(msgs, "CHILD_PROMPT") {
 			prompts.record("child", system)
 
-			return &llmwire.Response{Text: "child done"}
+			return textReply("child done")
 		}
 
 		prompts.record("root", system)
 
 		if hasToolResultFor(msgs, tool.IDTask) || hasUserContaining(msgs, "<subagent_completion>") {
-			return &llmwire.Response{Text: "parent done"}
+			return textReply("parent done")
 		}
 
 		return &llmwire.Response{
@@ -57,9 +58,13 @@ func TestHarnessScenario_SystemPromptMatchesTheDaemonRegisteredToolset(t *testin
 	parentID, err := h.mgr.Send(h.ctx, h.projectID, "spawn an explore child", "fake-model", nil)
 	require.NoError(t, err)
 
-	link := h.waitForLink(parentID, exploreCallID)
-	h.waitForDelivery(link.ChildID)
-	h.mgr.waitIdle(parentID)
+	h.waitUntil("child link", func() bool { return h.linkByCall(parentID, exploreCallID) != nil })
+	link := *h.linkByCall(parentID, exploreCallID)
+	h.waitUntil(
+		"child delivery",
+		func() bool { link := h.link(link.ChildID); return link != nil && link.DeliveredAt != 0 },
+	)
+	h.waitUntil("session idle", func() bool { return !h.mgr.HasActiveLoop(parentID) })
 
 	root := prompts.first(t, "root")
 	assert.Contains(t, root, "Sub-agents: task", "the inventory names the daemon-registered task tool")
@@ -86,17 +91,14 @@ func TestHarnessScenario_ActiveProcessPromptAndSleepGuard(t *testing.T) {
 		}
 		requestMu.Unlock()
 		if hasToolResultFor(messages, tool.IDSleep) {
-			return &llmwire.Response{Text: "background process polling rejected"}
+			return textReply("background process polling rejected")
 		}
 
-		return &llmwire.Response{ToolCalls: []llmwire.ToolCall{{
-			ID: "poll-process", Name: tool.IDSleep,
-			Arguments: []byte(`{"duration":"1h","reason":"poll background process"}`),
-		}}}
+		return callReply("poll-process", tool.IDSleep, `{"duration":"1h","reason":"poll background process"}`)
 	}
 
 	h := newHarness(t, harnessOptions{respond: respond})
-	collector := collectEvents(h.mgr.bus.SubscribeAll())
+	collector := collectEvents(t, h.mgr.bus.SubscribeAll())
 	defer func() {
 		collector.stop()
 		h.shutdown()
@@ -120,7 +122,7 @@ func TestHarnessScenario_ActiveProcessPromptAndSleepGuard(t *testing.T) {
 
 	h.startInboxWake()
 	require.NoError(t, h.mgr.sendToSession(h.ctx, root.ID, "wait for the process"))
-	waitForVisibleMessage(t, collector, root.ID, "background process polling rejected")
+	collector.waitMessage(root.ID, "background process polling rejected")
 	_, _, err = h.mgr.processStore.FinalizeWithIntent(
 		context.Background(), "bgp_prompt_guard", backgroundprocess.IntentSessionKilled, 0,
 	)
@@ -131,14 +133,39 @@ func TestHarnessScenario_ActiveProcessPromptAndSleepGuard(t *testing.T) {
 	requestMu.Lock()
 	firstRequest := append([]llmwire.Message(nil), requestMessages...)
 	requestMu.Unlock()
-	require.Equal(t, 1, countMessageContentContaining(firstRequest, "# Active background work"))
+	require.Equal(t, 1, func(messages []llmwire.Message, fragment string) int {
+		count := 0
+		for _, message := range messages {
+			if strings.Contains(message.Content, fragment) {
+				count++
+			}
+		}
+
+		return count
+	}(firstRequest, "# Active background work"))
 	assert.True(t, hasUserContaining(firstRequest, "process bgp_prompt_guard (running)"))
 	assert.True(t, hasUserContaining(firstRequest, "Snapshot from activation start"))
 
-	messages := h.parentMessages(root.ID)
+	messages := h.messages(root.ID)
 	require.Equal(t, 1, countToolResultsFor(messages, tool.IDSleep))
-	assert.Contains(t, lastToolResultContent(messages, tool.IDSleep), "sleep is unavailable")
-	assert.Contains(t, lastToolResultContent(messages, tool.IDSleep), "end the response")
+	assert.Contains(t, func(msgs []llmwire.Message, toolName string) string {
+		for _, v := range slices.Backward(msgs) {
+			if v.Role == llmwire.RoleTool && v.ToolName == toolName {
+				return v.Content
+			}
+		}
+
+		return ""
+	}(messages, tool.IDSleep), "sleep is unavailable")
+	assert.Contains(t, func(msgs []llmwire.Message, toolName string) string {
+		for _, v := range slices.Backward(msgs) {
+			if v.Role == llmwire.RoleTool && v.ToolName == toolName {
+				return v.Content
+			}
+		}
+
+		return ""
+	}(messages, tool.IDSleep), "end the response")
 	assert.Equal(t, llmwire.RoleAssistant, messages[len(messages)-1].Role)
 
 	schedules, err := h.schedules.ListSchedules(h.ctx, root.ID)
@@ -155,7 +182,7 @@ func TestHarnessScenario_EmptyActiveBackgroundAddsNoProviderRow(t *testing.T) {
 		requestMessages = append([]llmwire.Message(nil), messages...)
 		requestMu.Unlock()
 
-		return &llmwire.Response{Text: "done"}
+		return textReply("done")
 	}
 
 	h := newHarness(t, harnessOptions{respond: respond})
@@ -164,13 +191,22 @@ func TestHarnessScenario_EmptyActiveBackgroundAddsNoProviderRow(t *testing.T) {
 	h.startInboxWake()
 	root, err := h.mgr.Send(h.ctx, h.projectID, "ordinary task", "fake-model", nil)
 	require.NoError(t, err)
-	h.mgr.waitIdle(root)
+	h.waitUntil("session idle", func() bool { return !h.mgr.HasActiveLoop(root) })
 
 	requestMu.Lock()
 	recorded := append([]llmwire.Message(nil), requestMessages...)
 	requestMu.Unlock()
 	require.NotEmpty(t, recorded)
-	assert.Zero(t, countMessageContentContaining(recorded, "# Active background work"))
+	assert.Zero(t, func(messages []llmwire.Message, fragment string) int {
+		count := 0
+		for _, message := range messages {
+			if strings.Contains(message.Content, fragment) {
+				count++
+			}
+		}
+
+		return count
+	}(recorded, "# Active background work"))
 }
 
 func TestHarnessScenario_DynamicRegistryPromptMatchesEachActivation(t *testing.T) {
@@ -185,15 +221,27 @@ func TestHarnessScenario_DynamicRegistryPromptMatchesEachActivation(t *testing.T
 	})
 	require.NoError(t, err)
 
-	link := h.waitForLinkByCall(parentID, "task-registry")
-	h.waitForDelivery(link.ChildID)
-	h.mgr.waitIdle(parentID)
+	h.waitUntil("child link", func() bool { return h.linkByCall(parentID, "task-registry") != nil })
+	link := *h.linkByCall(parentID, "task-registry")
+	h.waitUntil(
+		"child delivery",
+		func() bool { link := h.link(link.ChildID); return link != nil && link.DeliveredAt != 0 },
+	)
+	h.waitUntil("session idle", func() bool { return !h.mgr.HasActiveLoop(parentID) })
 
 	assertInitialRegistryProjection(t, h, schemas, prompts, parentID, link.ChildID)
-	assert.Contains(t, lastToolResultContent(h.parentMessages(parentID), "mcp__fake__ping"), "unknown tool")
+	assert.Contains(t, func(msgs []llmwire.Message, toolName string) string {
+		for _, v := range slices.Backward(msgs) {
+			if v.Role == llmwire.RoleTool && v.ToolName == toolName {
+				return v.Content
+			}
+		}
+
+		return ""
+	}(h.messages(parentID), "mcp__fake__ping"), "unknown tool")
 	h.startInboxWake()
 	require.NoError(t, h.mgr.sendToSession(h.ctx, parentID, registryUseMarker))
-	h.mgr.waitIdle(parentID)
+	h.waitUntil("session idle", func() bool { return !h.mgr.HasActiveLoop(parentID) })
 
 	assertNextRegistryProjection(t, h, schemas, prompts, parentID)
 }
@@ -207,7 +255,7 @@ func TestHarnessScenario_RootSessionRunsAsTheBuildAgent(t *testing.T) {
 	respond := func(system string, _ []llmwire.Message) *llmwire.Response {
 		prompts.record("root", system)
 
-		return &llmwire.Response{Text: "done"}
+		return textReply("done")
 	}
 
 	h := newGatingHarness(t, nil, respond)
@@ -217,7 +265,7 @@ func TestHarnessScenario_RootSessionRunsAsTheBuildAgent(t *testing.T) {
 	rootID, err := h.mgr.Send(h.ctx, h.projectID, "do the thing", "fake-model", nil)
 	require.NoError(t, err)
 
-	h.mgr.waitIdle(rootID)
+	h.waitUntil("session idle", func() bool { return !h.mgr.HasActiveLoop(rootID) })
 
 	system := prompts.first(t, "root")
 	assert.True(t, strings.HasPrefix(system, agentregistry.BuildAgentPrompt),
@@ -228,8 +276,7 @@ func TestHarnessScenario_RootSessionRunsAsTheBuildAgent(t *testing.T) {
 	assert.Contains(t, offered, "todoread", "todo tools belong to the primary agent")
 	assert.Contains(t, offered, "todowrite")
 
-	rec, err := h.store.GetSession(h.ctx, rootID)
-	require.NoError(t, err)
+	rec := h.session(rootID)
 	assert.Equal(t, string(agentregistry.AgentTypeBuild), rec.AgentType,
 		"the root row names the agent it runs")
 }
@@ -254,14 +301,12 @@ func TestHarnessScenario_UntrustedToolOutputCarriesWrapperAndGuidance(t *testing
 		requests.record(msgs)
 
 		if hasToolResultFor(msgs, "webfetch") {
-			return &llmwire.Response{Text: "untrusted probe done"}
+			return textReply("untrusted probe done")
 		}
 
 		args, _ := json.Marshal(map[string]string{"url": page.URL})
 
-		return &llmwire.Response{ToolCalls: []llmwire.ToolCall{{
-			ID: "fetch-1", Name: "webfetch", Arguments: args,
-		}}}
+		return callReply("fetch-1", "webfetch", string(args))
 	}
 
 	h := newGatingHarness(t, nil, respond)
@@ -271,16 +316,32 @@ func TestHarnessScenario_UntrustedToolOutputCarriesWrapperAndGuidance(t *testing
 	parentID, err := h.mgr.Send(h.ctx, h.projectID, "probe untrusted output", "fake-model", nil)
 	require.NoError(t, err)
 
-	require.Eventually(t, func() bool {
-		return strings.Contains(lastToolResultContent(h.parentMessages(parentID), "webfetch"),
-			untrustedProbeMarker)
-	}, 10*time.Second, 20*time.Millisecond, "the webfetch result must reach the transcript")
-	h.mgr.waitIdle(parentID)
+	h.waitUntil("the webfetch result must reach the transcript", func() bool {
+		return strings.Contains(func(msgs []llmwire.Message, toolName string) string {
+			for _, v := range slices.Backward(msgs) {
+				if v.Role == llmwire.RoleTool && v.ToolName == toolName {
+					return v.Content
+				}
+			}
 
-	msgs := h.parentMessages(parentID)
+			return ""
+		}(h.messages(parentID), "webfetch"),
+			untrustedProbeMarker)
+	})
+	h.waitUntil("session idle", func() bool { return !h.mgr.HasActiveLoop(parentID) })
+
+	msgs := h.messages(parentID)
 	require.NoError(t, llm.ValidateToolPairing(msgs), "transcript must stay provider-valid")
 
-	content := lastToolResultContent(msgs, "webfetch")
+	content := func(msgs []llmwire.Message, toolName string) string {
+		for _, v := range slices.Backward(msgs) {
+			if v.Role == llmwire.RoleTool && v.ToolName == toolName {
+				return v.Content
+			}
+		}
+
+		return ""
+	}(msgs, "webfetch")
 	markers := regexp.MustCompile(`<<<BEGIN_UNTRUSTED_EXTERNAL_DATA id="([0-9a-f]{16})">>>`).FindStringSubmatch(content)
 	require.Len(t, markers, 2)
 	assert.True(t, strings.HasSuffix(content, `<<<END_UNTRUSTED_EXTERNAL_DATA id="`+markers[1]+`">>>`))
@@ -289,17 +350,41 @@ func TestHarnessScenario_UntrustedToolOutputCarriesWrapperAndGuidance(t *testing
 	// The next model request re-derives its messages from the durable
 	// transcript: the persisted wrapper must survive into that request too.
 	requestMsgs := requests.lastMessages(t)
-	requestContent := lastToolResultContent(requestMsgs, "webfetch")
+	requestContent := func(msgs []llmwire.Message, toolName string) string {
+		for _, v := range slices.Backward(msgs) {
+			if v.Role == llmwire.RoleTool && v.ToolName == toolName {
+				return v.Content
+			}
+		}
+
+		return ""
+	}(requestMsgs, "webfetch")
 	assert.Equal(t, content, requestContent)
 
 	h.startInboxWake()
 	require.NoError(t, h.mgr.sendToSession(h.ctx, parentID, "continue the probe"))
-	require.Eventually(t, func() bool {
+	h.waitUntil("the next activation must reach the model", func() bool {
 		return hasUserContaining(requests.lastMessages(t), "continue the probe")
-	}, 10*time.Second, 20*time.Millisecond, "the next activation must reach the model")
-	h.mgr.waitIdle(parentID)
-	assert.Equal(t, content, lastToolResultContent(requests.lastMessages(t), "webfetch"))
-	assert.Equal(t, content, lastToolResultContent(h.parentMessages(parentID), "webfetch"))
+	})
+	h.waitUntil("session idle", func() bool { return !h.mgr.HasActiveLoop(parentID) })
+	assert.Equal(t, content, func(msgs []llmwire.Message, toolName string) string {
+		for _, v := range slices.Backward(msgs) {
+			if v.Role == llmwire.RoleTool && v.ToolName == toolName {
+				return v.Content
+			}
+		}
+
+		return ""
+	}(requests.lastMessages(t), "webfetch"))
+	assert.Equal(t, content, func(msgs []llmwire.Message, toolName string) string {
+		for _, v := range slices.Backward(msgs) {
+			if v.Role == llmwire.RoleTool && v.ToolName == toolName {
+				return v.Content
+			}
+		}
+
+		return ""
+	}(h.messages(parentID), "webfetch"))
 
 	// The system prompt carries the matching dynamic guidance for the
 	// registered toolset.
@@ -316,9 +401,9 @@ func TestHarnessScenario_HelpIncludesGWT(t *testing.T) {
 	h := newHarness(t, harnessOptions{respond: func(string, []llmwire.Message) *llmwire.Response {
 		modelCalls.Add(1)
 
-		return &llmwire.Response{Text: "session ready"}
+		return textReply("session ready")
 	}})
-	collector := collectEvents(h.mgr.bus.SubscribeAll())
+	collector := collectEvents(t, h.mgr.bus.SubscribeAll())
 	defer func() {
 		collector.stop()
 		h.shutdown()
@@ -330,16 +415,16 @@ func TestHarnessScenario_HelpIncludesGWT(t *testing.T) {
 		"channel":                               "telegram",
 	})
 	require.NoError(t, err)
-	waitForVisibleMessage(t, collector, sessionID, "session ready")
-	h.mgr.waitIdle(sessionID)
+	collector.waitMessage(sessionID, "session ready")
+	h.waitUntil("session idle", func() bool { return !h.mgr.HasActiveLoop(sessionID) })
 
 	h.startInboxWake()
 	require.NoError(t, h.mgr.sendToSession(h.ctx, sessionID, "/help"))
-	waitForVisibleMessage(t, collector, sessionID, helpWithGWT)
+	collector.waitMessage(sessionID, helpWithGWT)
 
 	controller := newChainController(t, h)
 	drainScenarioClaims(t, "help_includes_gwt.json", controller)
-	waitForIdleAfterMessage(t, collector, sessionID, helpWithGWT)
+	collector.waitIdleAfter(sessionID, helpWithGWT)
 
 	// The opening turn runs the two-phase check: candidate response, then the
 	// confirmation call after the host nudge. /help itself must not invoke

@@ -2,6 +2,8 @@ package daemon
 
 import (
 	"path/filepath"
+	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -27,19 +29,13 @@ func TestScenario_AutomaticCompactionRunsInsideTheDaemon(t *testing.T) {
 	respond := func(_ string, msgs []llmwire.Message) *llmwire.Response {
 		switch {
 		case isCompactionPrompt(msgs):
-			return &llmwire.Response{Text: autoCompactionBrief}
+			return textReply(autoCompactionBrief)
 		case hasUserContaining(msgs, contextSummaryPrefix):
-			return &llmwire.Response{Text: "work complete"}
+			return textReply("work complete")
 		case hasToolResultFor(msgs, "read"):
-			return &llmwire.Response{Text: "uncompacted fallback"}
+			return textReply("uncompacted fallback")
 		case hasToolResultFor(msgs, "ls"):
-			return &llmwire.Response{
-				ToolCalls: []llmwire.ToolCall{{
-					ID:        "read-followup",
-					Name:      "read",
-					Arguments: []byte(`{"file_path":"go.mod"}`),
-				}},
-			}
+			return callReply("read-followup", "read", `{"file_path":"go.mod"}`)
 		default:
 			return scriptedToolCall("ls", `{"path":"."}`)
 		}
@@ -48,7 +44,7 @@ func TestScenario_AutomaticCompactionRunsInsideTheDaemon(t *testing.T) {
 	h := newHarness(t, harnessOptions{respond: respond})
 	defer h.shutdown()
 
-	events := collectEvents(h.mgr.bus.SubscribeAll())
+	events := collectEvents(t, h.mgr.bus.SubscribeAll())
 	defer events.stop()
 
 	h.startInboxWake()
@@ -57,10 +53,10 @@ func TestScenario_AutomaticCompactionRunsInsideTheDaemon(t *testing.T) {
 
 	h.waitUntil("session finishes on the compacted transcript", func() bool {
 		return !h.mgr.HasActiveLoop(parentID) &&
-			lastAssistantTextDTO(h.parentMessages(parentID)) == "work complete"
+			lastAssistantTextDTO(h.messages(parentID)) == "work complete"
 	})
 
-	msgs := h.parentMessages(parentID)
+	msgs := h.messages(parentID)
 	require.NoError(t, llm.ValidateToolPairing(msgs), "the rebuilt transcript must stay provider-valid")
 
 	// header → marked summary → the verbatim tail (the follow-up round) → the
@@ -75,7 +71,7 @@ func TestScenario_AutomaticCompactionRunsInsideTheDaemon(t *testing.T) {
 	assert.Equal(t, "work complete", msgs[len(msgs)-1].Content, "the loop continued on the checkpoint")
 
 	// Everything the summary replaced is gone, including the settled tool pair.
-	assert.False(t, hasAssistantToolCall(msgs, "ls"), "the summarized tool_use is gone")
+	assert.False(t, (countAssistantToolCallsFor(msgs, "ls") > 0), "the summarized tool_use is gone")
 	assert.Zero(t, countToolResultsFor(msgs, "ls"))
 
 	trace := events.snapshot()
@@ -107,52 +103,41 @@ func TestScenario_AutoCompactionWhileABackgroundChildIsInFlight(t *testing.T) {
 			enteredOnce.Do(func() { close(compactionEntered) })
 			<-compactionRelease
 
-			return &llmwire.Response{Text: autoCompactionBrief}
+			return textReply(autoCompactionBrief)
 		case hasUserContaining(msgs, "CHILD_TASK"):
 			<-childRelease
 
-			return &llmwire.Response{Text: "background child done: 7"}
+			return textReply("background child done: 7")
 		case hasUserContaining(msgs, "<subagent_completion>"):
-			return &llmwire.Response{Text: "child completion handled"}
+			return textReply("child completion handled")
 		case hasUserContaining(msgs, contextSummaryPrefix):
-			return &llmwire.Response{Text: "parent continued after compaction"}
+			return textReply("parent continued after compaction")
 		case hasToolResultFor(msgs, tool.IDTask):
 			// The follow-up round is deliberately unmeasured: it only exists so
 			// the raw range holds two groups when the threshold fires — the
 			// newest group stays verbatim in the tail, the launch pair (the
 			// thing this scenario watches mid-flight) is what gets summarized.
-			return &llmwire.Response{
-				ToolCalls: []llmwire.ToolCall{{
-					ID:        "ls-followup",
-					Name:      "ls",
-					Arguments: []byte(`{"path":"."}`),
-				}},
-			}
+			return callReply("ls-followup", "ls", `{"path":"."}`)
 		default:
-			return measuredResponse(&llmwire.Response{
-				ToolCalls: []llmwire.ToolCall{{
-					ID:   taskCallID,
-					Name: tool.IDTask,
-					Arguments: []byte(
-						`{"prompt":"CHILD_TASK do the thing","description":"child work",` +
-							`"subagent_type":"general","background":true}`,
-					),
-				}},
-			})
+			return measuredResponse(
+				callReply(taskCallID, tool.IDTask, `{"prompt":"CHILD_TASK do the thing","description":"child work",`+
+					`"subagent_type":"general","background":true}`),
+			)
 		}
 	}
 
 	h := newHarness(t, harnessOptions{respond: respond})
 	defer h.shutdown()
 
-	events := collectEvents(h.mgr.bus.SubscribeAll())
+	events := collectEvents(t, h.mgr.bus.SubscribeAll())
 	defer events.stop()
 
 	h.startInboxWake()
 	parentID, err := h.mgr.Send(h.ctx, h.projectID, "spawn then keep working", "fake-model", nil)
 	require.NoError(t, err)
 
-	link := h.waitForChildLink(parentID)
+	h.waitUntil("child link", func() bool { return h.linkByCall(parentID, taskCallID) != nil })
+	link := *h.linkByCall(parentID, taskCallID)
 	require.False(t, link.Blocking, "the scenario needs a background child")
 
 	select {
@@ -172,20 +157,34 @@ func TestScenario_AutoCompactionWhileABackgroundChildIsInFlight(t *testing.T) {
 
 	close(compactionRelease)
 
-	h.waitForDelivery(link.ChildID)
+	h.waitUntil(
+		"child delivery",
+		func() bool { link := h.link(link.ChildID); return link != nil && link.DeliveredAt != 0 },
+	)
 	// Delivery commits the inbox before the parent resumes; an idle gap is not completion.
-	waitForIdleAfterMessage(t, events, parentID, "child completion handled")
+	events.waitIdleAfter(parentID, "child completion handled")
 
-	msgs := h.parentMessages(parentID)
+	msgs := h.messages(parentID)
 	require.NoError(t, llm.ValidateToolPairing(msgs),
 		"a completion committed around a compaction must not cross or orphan a tool pair")
 	assert.Equal(t, 1, countSummaryRows(msgs), "exactly one summary row")
-	assert.Equal(t, 1, countSubagentCompletions(msgs, link.ChildID), "exactly one completion record")
+	assert.Equal(t, 1, func(messages []llmwire.Message, childID int64) int {
+		needle := "child_id: " + strconv.FormatInt(childID, 10)
+		count := 0
+		for _, message := range messages {
+			if message.Role == llmwire.RoleUser && strings.Contains(message.Content, "<subagent_completion>") &&
+				strings.Contains(message.Content, needle) {
+				count++
+			}
+		}
+
+		return count
+	}(msgs, link.ChildID), "exactly one completion record")
 	assert.Zero(t, countToolResultsFor(msgs, "subagent_event"))
 
 	// The launch pair was summarized away while the child was still out; the
 	// completion is a self-contained event, so it still lands transcript-valid.
-	assert.False(t, hasAssistantToolCall(msgs, tool.IDTask), "the launch pair was compacted mid-flight")
+	assert.False(t, (countAssistantToolCallsFor(msgs, tool.IDTask) > 0), "the launch pair was compacted mid-flight")
 	assert.Zero(t, countToolResultsFor(msgs, tool.IDTask))
 
 	// The completion is reachable by the model: it survives after the summary.
@@ -210,7 +209,7 @@ func TestScenario_DeferredCompactAnnouncesItselfOncePerEpisode(t *testing.T) {
 	release := make(chan struct{})
 
 	h := newHarness(t, harnessOptions{respond: blockingCompactRespond(release)})
-	collector := collectEvents(h.mgr.bus.SubscribeAll())
+	collector := collectEvents(t, h.mgr.bus.SubscribeAll())
 
 	closed := false
 
@@ -227,7 +226,8 @@ func TestScenario_DeferredCompactAnnouncesItselfOncePerEpisode(t *testing.T) {
 	parentID, err := h.mgr.Send(h.ctx, h.projectID, "do work then spawn", "fake-model", nil)
 	require.NoError(t, err)
 
-	link := h.waitForChildLink(parentID)
+	h.waitUntil("child link", func() bool { return h.linkByCall(parentID, taskCallID) != nil })
+	link := *h.linkByCall(parentID, taskCallID)
 	require.True(t, link.Blocking)
 
 	h.waitUntil("parent suspended", func() bool { return !h.mgr.HasActiveLoop(parentID) })
@@ -258,21 +258,24 @@ func TestScenario_DeferredCompactAnnouncesItselfOncePerEpisode(t *testing.T) {
 	close(release)
 	closed = true
 
-	h.waitForDelivery(link.ChildID)
-	h.mgr.waitIdle(parentID)
+	h.waitUntil(
+		"child delivery",
+		func() bool { link := h.link(link.ChildID); return link != nil && link.DeliveredAt != 0 },
+	)
+	h.waitUntil("session idle", func() bool { return !h.mgr.HasActiveLoop(parentID) })
 
 	// The episode ends by running: the deferred request is not silently dropped.
 	collector.waitFor(t, "the deferred compaction runs", func(events []controllerapi.SessionNotification) bool {
 		return countPublishedMessage(events, parentID, noticeCompacted) == 1
 	})
-	assert.True(t, hasSummaryRow(h.parentMessages(parentID)))
+	assert.True(t, hasSummaryRow(h.messages(parentID)))
 }
 
 // Compaction's progress messages are only useful if they leave the session:
 // pin the ordered trace a controller actually receives.
 func TestScenario_CompactPublishesItsOrderedNoticeTrace(t *testing.T) {
 	h := newHarness(t, harnessOptions{respond: compactOnlyRespond})
-	collector := collectEvents(h.mgr.bus.SubscribeAll())
+	collector := collectEvents(t, h.mgr.bus.SubscribeAll())
 
 	defer func() {
 		collector.stop()
@@ -282,16 +285,16 @@ func TestScenario_CompactPublishesItsOrderedNoticeTrace(t *testing.T) {
 	h.startInboxWake()
 	sessionID, err := h.mgr.Send(h.ctx, h.projectID, "do some work", "fake-model", nil)
 	require.NoError(t, err)
-	h.mgr.waitIdle(sessionID)
+	h.waitUntil("session idle", func() bool { return !h.mgr.HasActiveLoop(sessionID) })
 
 	h.startInboxWake()
 	require.NoError(t, h.mgr.sendToSession(h.ctx, sessionID, "/compact"))
 	collector.waitFor(t, "first compaction reported", func(events []controllerapi.SessionNotification) bool {
 		return countPublishedMessage(events, sessionID, noticeCompacted) == 1
 	})
-	h.mgr.waitIdle(sessionID)
+	h.waitUntil("session idle", func() bool { return !h.mgr.HasActiveLoop(sessionID) })
 
-	require.True(t, hasSummaryRow(h.parentMessages(sessionID)))
+	require.True(t, hasSummaryRow(h.messages(sessionID)))
 
 	// The confirmation turn the completion check added after the first
 	// compact is a fresh raw group, so a second /compact summarizes it and
@@ -302,7 +305,7 @@ func TestScenario_CompactPublishesItsOrderedNoticeTrace(t *testing.T) {
 	collector.waitFor(t, "second compaction reported", func(events []controllerapi.SessionNotification) bool {
 		return countPublishedMessage(events, sessionID, noticeCompacted) == 2
 	})
-	h.mgr.waitIdle(sessionID)
+	h.waitUntil("session idle", func() bool { return !h.mgr.HasActiveLoop(sessionID) })
 
 	assert.Equal(t,
 		[]string{noticeCompacting, noticeCompacted, noticeCompacting, noticeCompacted},
@@ -314,7 +317,7 @@ func TestScenario_CompactPublishesItsOrderedNoticeTrace(t *testing.T) {
 // for: the publish gate must keep those notices inside the tree.
 func TestScenario_SubagentCompactionNoticesStayInsideTheTree(t *testing.T) {
 	h := newHarness(t, harnessOptions{})
-	collector := collectEvents(h.mgr.bus.SubscribeAll())
+	collector := collectEvents(t, h.mgr.bus.SubscribeAll())
 
 	defer func() {
 		collector.stop()
@@ -325,9 +328,13 @@ func TestScenario_SubagentCompactionNoticesStayInsideTheTree(t *testing.T) {
 	parentID, err := h.mgr.Send(h.ctx, h.projectID, "SPAWN_CHILD please", "fake-model", nil)
 	require.NoError(t, err)
 
-	link := h.waitForChildLink(parentID)
-	h.waitForDelivery(link.ChildID)
-	h.mgr.waitIdle(parentID)
+	h.waitUntil("child link", func() bool { return h.linkByCall(parentID, taskCallID) != nil })
+	link := *h.linkByCall(parentID, taskCallID)
+	h.waitUntil(
+		"child delivery",
+		func() bool { link := h.link(link.ChildID); return link != nil && link.DeliveredAt != 0 },
+	)
+	h.waitUntil("session idle", func() bool { return !h.mgr.HasActiveLoop(parentID) })
 
 	require.NoError(t, h.mgr.SendToChild(h.ctx, link.ChildID, "/compact"))
 	h.waitUntil("child compacted", func() bool {
@@ -335,7 +342,7 @@ func TestScenario_SubagentCompactionNoticesStayInsideTheTree(t *testing.T) {
 
 		return loadErr == nil && hasSummaryRow(toDTO(stored))
 	})
-	h.mgr.waitIdle(link.ChildID)
+	h.waitUntil("session idle", func() bool { return !h.mgr.HasActiveLoop(link.ChildID) })
 
 	assert.Empty(t, compactionNotices(collector.snapshot(), link.ChildID),
 		"a child's compaction notices must never reach a controller")
@@ -364,7 +371,8 @@ func TestScenario_CompactWaitsForABlockingChildThenRuns(t *testing.T) {
 	parentID, err := h.mgr.Send(h.ctx, h.projectID, "do work then spawn", "fake-model", nil)
 	require.NoError(t, err)
 
-	link := h.waitForChildLink(parentID)
+	h.waitUntil("child link", func() bool { return h.linkByCall(parentID, taskCallID) != nil })
+	link := *h.linkByCall(parentID, taskCallID)
 	require.True(t, link.Blocking)
 
 	h.waitUntil("parent suspended", func() bool { return !h.mgr.HasActiveLoop(parentID) })
@@ -374,30 +382,33 @@ func TestScenario_CompactWaitsForABlockingChildThenRuns(t *testing.T) {
 
 	// A non-sleep pending call keeps the session unrunnable, so nothing compacts:
 	// the transcript still owes the task call its result.
-	msgs := h.parentMessages(parentID)
+	msgs := h.messages(parentID)
 	assert.False(t, hasSummaryRow(msgs), "compaction must not run while the call is out")
-	assert.True(t, hasAssistantToolCall(msgs, "task"), "the tool_use the child owns is still there")
+	assert.True(t, (countAssistantToolCallsFor(msgs, "task") > 0), "the tool_use the child owns is still there")
 	assert.Zero(t, countToolResultsFor(msgs, "task"))
 
 	close(release)
 	closed = true
 
-	h.waitForDelivery(link.ChildID)
+	h.waitUntil(
+		"child delivery",
+		func() bool { link := h.link(link.ChildID); return link != nil && link.DeliveredAt != 0 },
+	)
 	h.waitUntil("deferred compaction consumed child result", func() bool {
-		messages := h.parentMessages(parentID)
+		messages := h.messages(parentID)
 
 		return hasSummaryRow(messages) && countToolResultsFor(messages, "task") == 1
 	})
-	h.mgr.waitIdle(parentID)
+	h.waitUntil("session idle", func() bool { return !h.mgr.HasActiveLoop(parentID) })
 
 	// The result landed in its own tool_use first; only then did the queued
 	// /compact run. Nothing is left dangling for ResolvePendingCall to fail on.
-	final := h.parentMessages(parentID)
+	final := h.messages(parentID)
 	assert.True(t, hasSummaryRow(final), "the deferred /compact ran once the call was settled")
 	require.NoError(t, llm.ValidateToolPairing(final))
 	// The verbatim tail is never empty (D3): the settled launch pair is the
 	// newest group and stays verbatim instead of being summarized.
-	assert.True(t, hasAssistantToolCall(final, "task"), "the settled pair stays verbatim in the tail")
+	assert.True(t, (countAssistantToolCallsFor(final, "task") > 0), "the settled pair stays verbatim in the tail")
 	assert.Equal(t, 1, countToolResultsFor(final, "task"), "the result landed before the deferred compact ran")
 
 	res, err := h.mgr.Result(h.ctx, link.ChildID)
@@ -417,14 +428,15 @@ func TestScenario_DeferredCompactSurvivesADaemonRestart(t *testing.T) {
 	parentID, err := first.mgr.Send(first.ctx, first.projectID, "do work then spawn", "fake-model", nil)
 	require.NoError(t, err)
 
-	link := first.waitForChildLink(parentID)
+	first.waitUntil("child link", func() bool { return first.linkByCall(parentID, taskCallID) != nil })
+	link := *first.linkByCall(parentID, taskCallID)
 	require.True(t, link.Blocking)
 
 	first.waitUntil("parent suspended", func() bool { return !first.mgr.HasActiveLoop(parentID) })
 	first.startInboxWake()
 	require.NoError(t, first.mgr.sendToSession(first.ctx, parentID, "/compact"))
 
-	require.False(t, hasSummaryRow(first.parentMessages(parentID)))
+	require.False(t, hasSummaryRow(first.messages(parentID)))
 
 	// Daemon goes down with the child still running and /compact still queued.
 	close(release)
@@ -438,10 +450,10 @@ func TestScenario_DeferredCompactSurvivesADaemonRestart(t *testing.T) {
 	require.NoError(t, second.mgr.Start(second.ctx))
 
 	second.waitUntil("deferred compaction ran after the restart", func() bool {
-		return hasSummaryRow(second.parentMessages(parentID))
+		return hasSummaryRow(second.messages(parentID))
 	})
 
-	require.NoError(t, llm.ValidateToolPairing(second.parentMessages(parentID)))
+	require.NoError(t, llm.ValidateToolPairing(second.messages(parentID)))
 }
 
 // /compact follows the same rule as /status: it may end the activation only
@@ -457,13 +469,13 @@ func TestHarnessScenario_CompactMidActivationStillAnswersTheInterruptedWork(t *t
 
 	respond := func(_ string, msgs []llmwire.Message) *llmwire.Response {
 		if isCompactionInstruction(msgs) {
-			return &llmwire.Response{
-				Text: "## Goal\nlist the workdir\n## Progress\n- listed\n## Context for Continuation\nreport back",
-			}
+			return textReply(
+				"## Goal\nlist the workdir\n## Progress\n- listed\n## Context for Continuation\nreport back",
+			)
 		}
 
 		if hasToolResultFor(msgs, "read") || hasSummaryRow(msgs) {
-			return &llmwire.Response{Text: "work done"}
+			return textReply("work done")
 		}
 
 		if hasToolResultFor(msgs, "ls") {
@@ -471,22 +483,14 @@ func TestHarnessScenario_CompactMidActivationStillAnswersTheInterruptedWork(t *t
 			once.Do(func() { close(entered) })
 			<-release
 
-			return &llmwire.Response{ToolCalls: []llmwire.ToolCall{{
-				ID:        "read-call-1",
-				Name:      "read",
-				Arguments: []byte(`{"file_path":"go.mod"}`),
-			}}}
+			return callReply("read-call-1", "read", `{"file_path":"go.mod"}`)
 		}
 
-		return &llmwire.Response{ToolCalls: []llmwire.ToolCall{{
-			ID:        "ls-call-1",
-			Name:      "ls",
-			Arguments: []byte(`{"path":"."}`),
-		}}}
+		return callReply("ls-call-1", "ls", `{"path":"."}`)
 	}
 
 	h := newHarness(t, harnessOptions{respond: respond})
-	collector := collectEvents(h.mgr.bus.SubscribeAll())
+	collector := collectEvents(t, h.mgr.bus.SubscribeAll())
 
 	released := false
 
@@ -519,13 +523,13 @@ func TestHarnessScenario_CompactMidActivationStillAnswersTheInterruptedWork(t *t
 	collector.waitFor(t, "the requested compaction runs", func(e []controllerapi.SessionNotification) bool {
 		return countPublishedMessage(e, sessionID, noticeCompacted) == 1
 	})
-	h.mgr.waitIdle(sessionID)
+	h.waitUntil("session idle", func() bool { return !h.mgr.HasActiveLoop(sessionID) })
 
 	collector.waitFor(t, "the interrupted work is still answered", func(e []controllerapi.SessionNotification) bool {
 		return countPublishedMessage(e, sessionID, "work done") == 1
 	})
 
-	msgs := h.parentMessages(sessionID)
+	msgs := h.messages(sessionID)
 	require.NoError(t, llm.ValidateToolPairing(msgs))
 	assert.True(t, hasSummaryRow(msgs), "the requested compaction ran")
 	h.requireInboxDrained(sessionID)
@@ -539,28 +543,24 @@ func TestHarnessScenario_CompactSuccessChain(t *testing.T) {
 	respond := func(_ string, msgs []llmwire.Message) *llmwire.Response {
 		calls++
 		if calls == 1 {
-			return &llmwire.Response{ToolCalls: []llmwire.ToolCall{{
-				ID:        "ls-call-1",
-				Name:      "ls",
-				Arguments: []byte(`{"path":"."}`),
-			}}}
+			return callReply("ls-call-1", "ls", `{"path":"."}`)
 		}
 
 		if calls == 2 || calls == 3 {
 			// The first stop is the hidden candidate; the confirmation turn
 			// answers the same prompt again.
-			return &llmwire.Response{Text: "First answer."}
+			return textReply("First answer.")
 		}
 
 		// Later calls serve both the compaction summary and the post-compact
 		// turn; the summary text lands in the brief either way.
-		return &llmwire.Response{Text: "Compacted summary."}
+		return textReply("Compacted summary.")
 	}
 
 	h := newHarness(t, harnessOptions{respond: respond})
 	defer h.shutdown()
 
-	collector := collectEvents(h.mgr.bus.SubscribeAll())
+	collector := collectEvents(t, h.mgr.bus.SubscribeAll())
 	defer collector.stop()
 
 	h.startInboxWake()
@@ -569,7 +569,7 @@ func TestHarnessScenario_CompactSuccessChain(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	waitForVisibleMessage(t, collector, root, "First answer.")
+	collector.waitMessage(root, "First answer.")
 	// Wait for the loop teardown so the /compact deterministically re-announces
 	// the session instead of racing the runner cleanup.
 	h.waitUntil("first runner gone", func() bool { return !h.mgr.HasActiveLoop(root) })
@@ -577,7 +577,19 @@ func TestHarnessScenario_CompactSuccessChain(t *testing.T) {
 	h.startInboxWake()
 	require.NoError(t, h.mgr.sendToSession(h.ctx, root, "/compact keep the TODO state"))
 	collector.waitFor(t, "compaction finished", func(events []controllerapi.SessionNotification) bool {
-		return containsMessage(events, root, "✅ Context compacted")
+		return func(
+			events []controllerapi.SessionNotification,
+			sessionID int64,
+			message string,
+		) bool {
+			for _, event := range events {
+				if event.SessionID == sessionID && event.Notification.Message == message {
+					return true
+				}
+			}
+
+			return false
+		}(events, root, "✅ Context compacted")
 	})
 
 	controller := newChainController(t, h)

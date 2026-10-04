@@ -2,7 +2,6 @@ package daemon
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -38,11 +37,18 @@ func TestScenario_ASecondSessionCannotOverwriteAStagedApply(t *testing.T) {
 	)
 	require.NoError(t, err)
 	first.waitUntil("A's opener settled", func() bool { return !first.mgr.HasActiveLoop(sessionA) })
-	first.mgr.waitIdle(sessionA)
+	first.waitUntil("session idle", func() bool { return !first.mgr.HasActiveLoop(sessionA) })
 	first.startInboxWake()
 	require.NoError(t, first.mgr.sendToSession(first.ctx, sessionA, configapply.ConfigEditCommand))
 
-	first.waitForRestart(t)
+	first.waitUntil("restart requested", func() bool {
+		select {
+		case <-first.restarts:
+			return true
+		default:
+			return false
+		}
+	})
 	first.waitUntil("A suspended on its config call", func() bool { return !first.mgr.HasActiveLoop(sessionA) })
 
 	// B stages against the config A is already restarting into.
@@ -53,11 +59,11 @@ func TestScenario_ASecondSessionCannotOverwriteAStagedApply(t *testing.T) {
 	)
 	require.NoError(t, err)
 	first.waitUntil("B's opener settled", func() bool { return !first.mgr.HasActiveLoop(sessionB) })
-	first.mgr.waitIdle(sessionB)
+	first.waitUntil("session idle", func() bool { return !first.mgr.HasActiveLoop(sessionB) })
 	first.startInboxWake()
 	require.NoError(t, first.mgr.sendToSession(first.ctx, sessionB, configapply.ConfigEditCommand))
 
-	first.mgr.waitIdle(sessionB)
+	first.waitUntil("session idle", func() bool { return !first.mgr.HasActiveLoop(sessionB) })
 
 	pending, err := first.ops.LoadPending()
 	require.NoError(t, err)
@@ -67,7 +73,7 @@ func TestScenario_ASecondSessionCannotOverwriteAStagedApply(t *testing.T) {
 	assert.Equal(t, "claude-opus-5", defaultModelInFile(t, configDir), "A's change is the one on disk")
 	assert.Zero(t, first.restartCount(), "a refused stage never asks for a second restart")
 
-	msgsB := first.parentMessages(sessionB)
+	msgsB := first.messages(sessionB)
 	require.NoError(t, llm.ValidateToolPairing(msgsB))
 	assert.Equal(t, 1, countToolResultsFor(msgsB, tool.IDConfigEdit), "B is answered in-process")
 	assert.Contains(t, lastToolResultContent(msgsB, tool.IDConfigEdit), "config change")
@@ -83,10 +89,12 @@ func TestScenario_ASecondSessionCannotOverwriteAStagedApply(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, outcome.Verdict.Applied, outcome.Verdict.Reason())
 
-	second.waitForConfigResult(sessionA)
-	second.mgr.waitIdle(sessionA)
+	second.waitUntil("config result", func() bool {
+		return hasToolResultFor(second.messages(sessionA), tool.IDConfigEdit) && !second.mgr.HasActiveLoop(sessionA)
+	})
+	second.waitUntil("session idle", func() bool { return !second.mgr.HasActiveLoop(sessionA) })
 
-	msgsA := second.parentMessages(sessionA)
+	msgsA := second.messages(sessionA)
 	require.NoError(t, llm.ValidateToolPairing(msgsA))
 	assert.Equal(t, 1, countAssistantToolCallsFor(msgsA, tool.IDConfigEdit))
 	assert.Equal(t, 1, countToolResultsFor(msgsA, tool.IDConfigEdit), "A's call is resolved exactly once")
@@ -167,15 +175,22 @@ func TestScenario_ConcurrentAppliesResolveExactlyOnce(t *testing.T) {
 	first.waitUntil("both openers settled", func() bool {
 		return !first.mgr.HasActiveLoop(sessionA) && !first.mgr.HasActiveLoop(sessionB)
 	})
-	first.mgr.waitIdle(sessionA)
-	first.mgr.waitIdle(sessionB)
+	first.waitUntil("session idle", func() bool { return !first.mgr.HasActiveLoop(sessionA) })
+	first.waitUntil("session idle", func() bool { return !first.mgr.HasActiveLoop(sessionB) })
 
 	for _, session := range []int64{sessionA, sessionB} {
 		first.startInboxWake()
 		require.NoError(t, first.mgr.sendToSession(first.ctx, session, configapply.ConfigEditCommand))
 	}
 
-	first.waitForRestart(t)
+	first.waitUntil("restart requested", func() bool {
+		select {
+		case <-first.restarts:
+			return true
+		default:
+			return false
+		}
+	})
 	first.waitUntil("both sessions settled", func() bool {
 		return !first.mgr.HasActiveLoop(sessionA) && !first.mgr.HasActiveLoop(sessionB)
 	})
@@ -194,7 +209,7 @@ func TestScenario_ConcurrentAppliesResolveExactlyOnce(t *testing.T) {
 	require.Equal(t, winner, pending.SessionID)
 	assert.Equal(t, winnerCall, pending.ToolCallID)
 
-	msgsLoser := first.parentMessages(loser)
+	msgsLoser := first.messages(loser)
 	require.NoError(t, llm.ValidateToolPairing(msgsLoser))
 	assert.Equal(t, 1, countToolResultsFor(msgsLoser, tool.IDConfigEdit),
 		"the refused call is answered rather than suspended")
@@ -209,10 +224,12 @@ func TestScenario_ConcurrentAppliesResolveExactlyOnce(t *testing.T) {
 	_, err = second.bootVerdict(t)
 	require.NoError(t, err)
 
-	second.waitForConfigResult(winner)
-	second.mgr.waitIdle(winner)
+	second.waitUntil("config result", func() bool {
+		return hasToolResultFor(second.messages(winner), tool.IDConfigEdit) && !second.mgr.HasActiveLoop(winner)
+	})
+	second.waitUntil("session idle", func() bool { return !second.mgr.HasActiveLoop(winner) })
 
-	msgsWinner := second.parentMessages(winner)
+	msgsWinner := second.messages(winner)
 	require.NoError(t, llm.ValidateToolPairing(msgsWinner))
 	assert.Equal(t, 1, countAssistantToolCallsFor(msgsWinner, tool.IDConfigEdit))
 	assert.Equal(t, 1, countToolResultsFor(msgsWinner, tool.IDConfigEdit))
@@ -282,7 +299,7 @@ func TestScenario_AMarkerForACallTheTranscriptDoesNotCarryIsNeverConsumed(t *tes
 
 	sessionID, err := d.mgr.Send(d.ctx, d.projectID, "say hello", "fake-model", nil)
 	require.NoError(t, err)
-	d.mgr.waitIdle(sessionID)
+	d.waitUntil("session idle", func() bool { return !d.mgr.HasActiveLoop(sessionID) })
 
 	staged, v := d.ops.StageDocument([]byte(toolConfig))
 	require.False(t, v.Failed(), "%s", v.Reason())
@@ -290,7 +307,7 @@ func TestScenario_AMarkerForACallTheTranscriptDoesNotCarryIsNeverConsumed(t *tes
 		SessionID: sessionID, ToolCallID: "ghost-call", ToolName: tool.IDConfigEdit,
 	}).Failed())
 
-	before := len(d.parentMessages(sessionID))
+	before := len(d.messages(sessionID))
 	_, err = d.bootVerdict(t)
 	require.NoError(t, err)
 	d.waitUntil("stale verdict resolved", func() bool {
@@ -304,12 +321,12 @@ func TestScenario_AMarkerForACallTheTranscriptDoesNotCarryIsNeverConsumed(t *tes
 			Scan(&state),
 	)
 	assert.Equal(t, string(sessionstore.InputStateRejected), state)
-	assert.Len(t, d.parentMessages(sessionID), before)
-	assert.Zero(t, countToolResultsFor(d.parentMessages(sessionID), tool.IDConfigEdit))
+	assert.Len(t, d.messages(sessionID), before)
+	assert.Zero(t, countToolResultsFor(d.messages(sessionID), tool.IDConfigEdit))
 	still, err := d.ops.LoadPending()
 	require.NoError(t, err)
 	assert.Nil(t, still, "a committed stale verdict must not arm later unrelated rollback")
-	assert.NoError(t, llm.ValidateToolPairing(d.parentMessages(sessionID)))
+	assert.NoError(t, llm.ValidateToolPairing(d.messages(sessionID)))
 }
 
 // The verdict for a session-owned apply is produced by a different process image
@@ -330,10 +347,12 @@ func TestScenario_ConfigApplyVerdictReachesTheSessionAfterRestart(t *testing.T) 
 	require.True(t, outcome.Verdict.Applied, outcome.Verdict.Reason())
 	assert.False(t, outcome.RolledBack)
 
-	second.waitForConfigResult(sessionID)
-	second.mgr.waitIdle(sessionID)
+	second.waitUntil("config result", func() bool {
+		return hasToolResultFor(second.messages(sessionID), tool.IDConfigEdit) && !second.mgr.HasActiveLoop(sessionID)
+	})
+	second.waitUntil("session idle", func() bool { return !second.mgr.HasActiveLoop(sessionID) })
 
-	msgs := second.parentMessages(sessionID)
+	msgs := second.messages(sessionID)
 	require.NoError(t, llm.ValidateToolPairing(msgs))
 	assert.Equal(t, 1, countAssistantToolCallsFor(msgs, tool.IDConfigEdit),
 		"the suspended call is answered, never re-executed")
@@ -373,10 +392,12 @@ func TestScenario_ConfigApplyVerdictSurvivesADaemonThatDiesBeforeDelivering(t *t
 	_, err = third.bootVerdict(t)
 	require.NoError(t, err)
 
-	third.waitForConfigResult(sessionID)
-	third.mgr.waitIdle(sessionID)
+	third.waitUntil("config result", func() bool {
+		return hasToolResultFor(third.messages(sessionID), tool.IDConfigEdit) && !third.mgr.HasActiveLoop(sessionID)
+	})
+	third.waitUntil("session idle", func() bool { return !third.mgr.HasActiveLoop(sessionID) })
 
-	msgs := third.parentMessages(sessionID)
+	msgs := third.messages(sessionID)
 	require.NoError(t, llm.ValidateToolPairing(msgs))
 	assert.Equal(t, 1, countToolResultsFor(msgs, tool.IDConfigEdit))
 	assert.Equal(t, 1, countAssistantToolCallsFor(msgs, tool.IDConfigEdit))
@@ -398,13 +419,13 @@ func TestScenario_ConfigApplyCallIsNotReExecutedBeforeItsVerdict(t *testing.T) {
 	second.startInboxWake()
 	require.NoError(t, second.mgr.sendToSession(second.ctx, sessionID, "are you done yet?"))
 
-	second.mgr.waitIdle(sessionID)
+	second.waitUntil("session idle", func() bool { return !second.mgr.HasActiveLoop(sessionID) })
 
 	queued, err := second.store.PeekPending(second.ctx, sessionID)
 	require.NoError(t, err)
 	assert.Equal(t, "are you done yet?", queued.RawContent)
 
-	msgs := second.parentMessages(sessionID)
+	msgs := second.messages(sessionID)
 	assert.Equal(t, 1, countAssistantToolCallsFor(msgs, tool.IDConfigEdit), "the apply was not repeated")
 	assert.Zero(t, countToolResultsFor(msgs, tool.IDConfigEdit), "the call is still out with the world")
 	assert.Zero(t, second.restartCount(), "a wake-up must not stage a second apply")
@@ -413,10 +434,12 @@ func TestScenario_ConfigApplyCallIsNotReExecutedBeforeItsVerdict(t *testing.T) {
 	_, err = second.bootVerdict(t)
 	require.NoError(t, err)
 
-	second.waitForConfigResult(sessionID)
-	second.mgr.waitIdle(sessionID)
+	second.waitUntil("config result", func() bool {
+		return hasToolResultFor(second.messages(sessionID), tool.IDConfigEdit) && !second.mgr.HasActiveLoop(sessionID)
+	})
+	second.waitUntil("session idle", func() bool { return !second.mgr.HasActiveLoop(sessionID) })
 
-	final := second.parentMessages(sessionID)
+	final := second.messages(sessionID)
 	require.NoError(t, llm.ValidateToolPairing(final))
 	assert.Equal(t, 1, countToolResultsFor(final, tool.IDConfigEdit))
 	assert.True(t, hasUserContaining(final, "are you done yet?"), "the queued message runs after the verdict")
@@ -436,12 +459,12 @@ func TestScenario_ConfigApplyRejectionReachesTheSessionInProcess(t *testing.T) {
 	sessionID := startConfigEditSession(t, d, "switch the default model")
 
 	d.waitUntil("the rejection reached the transcript", func() bool {
-		return countToolResultsFor(d.parentMessages(sessionID), tool.IDConfigEdit) == 1
+		return countToolResultsFor(d.messages(sessionID), tool.IDConfigEdit) == 1
 	})
 
-	d.mgr.waitIdle(sessionID)
+	d.waitUntil("session idle", func() bool { return !d.mgr.HasActiveLoop(sessionID) })
 
-	msgs := d.parentMessages(sessionID)
+	msgs := d.messages(sessionID)
 	require.NoError(t, llm.ValidateToolPairing(msgs))
 	assert.Contains(t, lastToolResultContent(msgs, tool.IDConfigEdit), "rejected")
 	assert.Equal(t, 1, countAssistantToolCallsFor(msgs, tool.IDConfigEdit))
@@ -508,10 +531,12 @@ func TestScenario_ConfigApplyVerdictRedeliveryIsIdempotent(t *testing.T) {
 
 	require.NoError(t, third.ops.ClearPending(*replay))
 
-	third.waitForConfigResult(sessionID)
-	third.mgr.waitIdle(sessionID)
+	third.waitUntil("config result", func() bool {
+		return hasToolResultFor(third.messages(sessionID), tool.IDConfigEdit) && !third.mgr.HasActiveLoop(sessionID)
+	})
+	third.waitUntil("session idle", func() bool { return !third.mgr.HasActiveLoop(sessionID) })
 
-	msgs := third.parentMessages(sessionID)
+	msgs := third.messages(sessionID)
 	require.NoError(t, llm.ValidateToolPairing(msgs))
 	assert.Equal(t, 1, countToolResultsFor(msgs, tool.IDConfigEdit))
 	assert.Equal(t, 1, countAssistantToolCallsFor(msgs, tool.IDConfigEdit))
@@ -527,7 +552,14 @@ func TestScenario_ConfigEditGrantIsOneShot(t *testing.T) {
 
 	sessionID := startConfigEditSession(t, first, "reconfigure the daemon")
 
-	first.waitForRestart(t)
+	first.waitUntil("restart requested", func() bool {
+		select {
+		case <-first.restarts:
+			return true
+		default:
+			return false
+		}
+	})
 	first.waitUntil("session suspended on the config_edit call", func() bool {
 		return !first.mgr.HasActiveLoop(sessionID)
 	})
@@ -558,7 +590,14 @@ func TestScenario_ConfigEditCrashBeforeGrantConsumeSettlesOnBoot(t *testing.T) {
 
 	sessionID := startConfigEditSession(t, first, "reconfigure the daemon")
 
-	first.waitForRestart(t)
+	first.waitUntil("restart requested", func() bool {
+		select {
+		case <-first.restarts:
+			return true
+		default:
+			return false
+		}
+	})
 	first.waitUntil("session suspended on the config_edit call", func() bool {
 		return !first.mgr.HasActiveLoop(sessionID)
 	})
@@ -628,10 +667,12 @@ func TestScenario_ConfigEditCrashBeforeGrantConsumeSettlesOnBoot(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, second.ops.ClearPending(outcome.Pending))
 
-	second.waitForConfigResult(sessionID)
-	second.mgr.waitIdle(sessionID)
+	second.waitUntil("config result", func() bool {
+		return hasToolResultFor(second.messages(sessionID), tool.IDConfigEdit) && !second.mgr.HasActiveLoop(sessionID)
+	})
+	second.waitUntil("session idle", func() bool { return !second.mgr.HasActiveLoop(sessionID) })
 
-	msgs := second.parentMessages(sessionID)
+	msgs := second.messages(sessionID)
 	require.NoError(t, llm.ValidateToolPairing(msgs))
 	assert.Equal(t, 1, countToolResultsFor(msgs, tool.IDConfigEdit))
 	assert.Contains(t, lastToolResultContent(msgs, tool.IDConfigEdit), "Config applied")
@@ -675,20 +716,16 @@ func TestScenario_ConfigQuestionCannotReplaceDocumentWithSandboxFragment(t *test
 	d := newApplyDaemonWith(t, filepath.Join(t.TempDir(), "config-question.db"), configDir,
 		func(_ string, messages []llmwire.Message) *llmwire.Response {
 			if hasToolResultFor(messages, tool.IDConfigEdit) {
-				return &llmwire.Response{Text: "configuration unchanged"}
+				return textReply("configuration unchanged")
 			}
 			if hasUserContaining(messages, "/config") {
-				return &llmwire.Response{ToolCalls: []llmwire.ToolCall{
-					{
-						ID:   "fragment",
-						Name: tool.IDConfigEdit,
-						Arguments: json.RawMessage(
-							`{"document":"sandbox:\n  enabled: true\n  projects:\n    /tmp/project:\n      rules: []\n"}`,
-						),
-					},
-				}}
+				return callReply(
+					"fragment",
+					tool.IDConfigEdit,
+					`{"document":"sandbox:\n  enabled: true\n  projects:\n    /tmp/project:\n      rules: []\n"}`,
+				)
 			}
-			return &llmwire.Response{Text: "ready"}
+			return textReply("ready")
 		})
 	defer d.shutdown()
 	d.startInboxWake()
@@ -697,7 +734,7 @@ func TestScenario_ConfigQuestionCannotReplaceDocumentWithSandboxFragment(t *test
 	d.waitUntil("opening turn settled", func() bool { return !d.mgr.HasActiveLoop(id) })
 	require.NoError(t, d.mgr.sendToSession(d.ctx, id, "/config - is the sandbox unconfigured?"))
 	d.waitUntil("invalid replacement answered", func() bool {
-		return hasToolResultFor(d.parentMessages(id), tool.IDConfigEdit) && !d.mgr.HasActiveLoop(id)
+		return hasToolResultFor(d.messages(id), tool.IDConfigEdit) && !d.mgr.HasActiveLoop(id)
 	})
 	after, err := os.ReadFile(configPath)
 	require.NoError(t, err)
@@ -706,7 +743,7 @@ func TestScenario_ConfigQuestionCannotReplaceDocumentWithSandboxFragment(t *test
 	pending, err := d.ops.LoadPending()
 	require.NoError(t, err)
 	assert.Nil(t, pending)
-	assert.Contains(t, lastToolResultContent(d.parentMessages(id), tool.IDConfigEdit), "configuration fragments")
+	assert.Contains(t, lastToolResultContent(d.messages(id), tool.IDConfigEdit), "configuration fragments")
 }
 
 // The full happy path: a real /config user turn authorizes exactly one solo
@@ -720,7 +757,14 @@ func TestScenario_ConfigEditVerdictReachesTheSessionAfterRestart(t *testing.T) {
 
 	sessionID := startConfigEditSession(t, first, "reconfigure the daemon")
 
-	first.waitForRestart(t)
+	first.waitUntil("restart requested", func() bool {
+		select {
+		case <-first.restarts:
+			return true
+		default:
+			return false
+		}
+	})
 	first.waitUntil("session suspended on the config_edit call", func() bool {
 		return !first.mgr.HasActiveLoop(sessionID)
 	})
@@ -732,7 +776,7 @@ func TestScenario_ConfigEditVerdictReachesTheSessionAfterRestart(t *testing.T) {
 	require.Equal(t, configEditCallID, pending.ToolCallID)
 	require.Equal(t, tool.IDConfigEdit, pending.ToolName)
 
-	msgs := first.parentMessages(sessionID)
+	msgs := first.messages(sessionID)
 	require.Equal(t, 1, countAssistantToolCallsFor(msgs, tool.IDConfigEdit))
 	require.Zero(t, countToolResultsFor(msgs, tool.IDConfigEdit), "the call is out with the world")
 
@@ -754,12 +798,12 @@ func TestScenario_ConfigEditVerdictReachesTheSessionAfterRestart(t *testing.T) {
 	assert.False(t, outcome.RolledBack)
 
 	second.waitUntil("config verdict answered", func() bool {
-		return countToolResultsFor(second.parentMessages(sessionID), tool.IDConfigEdit) == 1 &&
+		return countToolResultsFor(second.messages(sessionID), tool.IDConfigEdit) == 1 &&
 			!second.mgr.HasActiveLoop(sessionID)
 	})
-	second.mgr.waitIdle(sessionID)
+	second.waitUntil("session idle", func() bool { return !second.mgr.HasActiveLoop(sessionID) })
 
-	msgs = second.parentMessages(sessionID)
+	msgs = second.messages(sessionID)
 	require.NoError(t, llm.ValidateToolPairing(msgs))
 	assert.Equal(t, 1, countAssistantToolCallsFor(msgs, tool.IDConfigEdit),
 		"the suspended call is answered, never re-executed")
@@ -799,11 +843,11 @@ func TestScenario_ConfigEditWithoutActivationNeverStages(t *testing.T) {
 	require.NoError(t, err)
 
 	d.waitUntil("the refused call reached the transcript", func() bool {
-		return countToolResultsFor(d.parentMessages(sessionID), tool.IDConfigEdit) == 1
+		return countToolResultsFor(d.messages(sessionID), tool.IDConfigEdit) == 1
 	})
-	d.mgr.waitIdle(sessionID)
+	d.waitUntil("session idle", func() bool { return !d.mgr.HasActiveLoop(sessionID) })
 
-	msgs := d.parentMessages(sessionID)
+	msgs := d.messages(sessionID)
 	require.NoError(t, llm.ValidateToolPairing(msgs))
 	assert.Equal(t, 1, countAssistantToolCallsFor(msgs, tool.IDConfigEdit))
 	assert.Contains(t, lastToolResultContent(msgs, tool.IDConfigEdit), "/config")
@@ -822,7 +866,14 @@ func TestScenario_ConfigEditBootInvalidCandidateRollsBack(t *testing.T) {
 
 	sessionID := startConfigEditSession(t, first, "reconfigure the daemon")
 
-	first.waitForRestart(t)
+	first.waitUntil("restart requested", func() bool {
+		select {
+		case <-first.restarts:
+			return true
+		default:
+			return false
+		}
+	})
 	first.waitUntil("session suspended on the config_edit call", func() bool {
 		return !first.mgr.HasActiveLoop(sessionID)
 	})
@@ -858,12 +909,12 @@ func TestScenario_ConfigEditBootInvalidCandidateRollsBack(t *testing.T) {
 	require.NoError(t, second.ops.ClearPending(outcome.Pending))
 
 	second.waitUntil("config verdict answered", func() bool {
-		return countToolResultsFor(second.parentMessages(sessionID), tool.IDConfigEdit) == 1 &&
+		return countToolResultsFor(second.messages(sessionID), tool.IDConfigEdit) == 1 &&
 			!second.mgr.HasActiveLoop(sessionID)
 	})
-	second.mgr.waitIdle(sessionID)
+	second.waitUntil("session idle", func() bool { return !second.mgr.HasActiveLoop(sessionID) })
 
-	msgs := second.parentMessages(sessionID)
+	msgs := second.messages(sessionID)
 	require.NoError(t, llm.ValidateToolPairing(msgs))
 	assert.Equal(t, 1, countToolResultsFor(msgs, tool.IDConfigEdit))
 	assert.Contains(t, lastToolResultContent(msgs, tool.IDConfigEdit), "rolled back")
@@ -881,7 +932,14 @@ func TestScenario_ConfigEditVerdictRedeliveryIsIdempotent(t *testing.T) {
 
 	sessionID := startConfigEditSession(t, first, "reconfigure the daemon")
 
-	first.waitForRestart(t)
+	first.waitUntil("restart requested", func() bool {
+		select {
+		case <-first.restarts:
+			return true
+		default:
+			return false
+		}
+	})
 	first.waitUntil("session suspended on the config_edit call", func() bool {
 		return !first.mgr.HasActiveLoop(sessionID)
 	})
@@ -939,12 +997,12 @@ func TestScenario_ConfigEditVerdictRedeliveryIsIdempotent(t *testing.T) {
 	require.NoError(t, third.ops.ClearPending(*replay))
 
 	third.waitUntil("config verdict answered", func() bool {
-		return countToolResultsFor(third.parentMessages(sessionID), tool.IDConfigEdit) == 1 &&
+		return countToolResultsFor(third.messages(sessionID), tool.IDConfigEdit) == 1 &&
 			!third.mgr.HasActiveLoop(sessionID)
 	})
-	third.mgr.waitIdle(sessionID)
+	third.waitUntil("session idle", func() bool { return !third.mgr.HasActiveLoop(sessionID) })
 
-	msgs := third.parentMessages(sessionID)
+	msgs := third.messages(sessionID)
 	require.NoError(t, llm.ValidateToolPairing(msgs))
 	assert.Equal(t, 1, countToolResultsFor(msgs, tool.IDConfigEdit))
 	assert.Equal(t, 1, countAssistantToolCallsFor(msgs, tool.IDConfigEdit))
@@ -1146,23 +1204,42 @@ func TestSetModelRecordsTheEffortTheNextRunSends(t *testing.T) {
 	// The two-phase check spends a hidden candidate and a confirmation, both
 	// "answer N" from the stub, so one visible turn is two assistant rows.
 	h.waitUntil("first turn answered", func() bool {
-		return countAssistantReplies(h.parentMessages(id)) == 2
+		return func(msgs []llmwire.Message) int {
+			count := 0
+
+			for _, m := range msgs {
+				if m.Role == llmwire.RoleAssistant && m.Content != "" {
+					count++
+				}
+			}
+
+			return count
+		}(h.messages(id)) == 2
 	})
-	h.mgr.waitIdle(id)
+	h.waitUntil("session idle", func() bool { return !h.mgr.HasActiveLoop(id) })
 
 	require.NoError(t, h.mgr.SetModel(h.ctx, id, "thinker", ""))
 
-	rec, err := h.store.GetSession(h.ctx, id)
-	require.NoError(t, err)
+	rec := h.session(id)
 	assert.Equal(t, "high", rec.ReasoningLevel,
 		"an unnamed level settles on the model's default, and the record keeps that")
 
 	h.startInboxWake()
 	require.NoError(t, h.mgr.sendToSession(h.ctx, id, "second"))
 	h.waitUntil("second turn answered", func() bool {
-		return countAssistantReplies(h.parentMessages(id)) == 4
+		return func(msgs []llmwire.Message) int {
+			count := 0
+
+			for _, m := range msgs {
+				if m.Role == llmwire.RoleAssistant && m.Content != "" {
+					count++
+				}
+			}
+
+			return count
+		}(h.messages(id)) == 4
 	})
-	h.mgr.waitIdle(id)
+	h.waitUntil("session idle", func() bool { return !h.mgr.HasActiveLoop(id) })
 
 	reqs := provider.snapshot()
 	require.Len(t, reqs, 4)

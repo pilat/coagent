@@ -2,7 +2,6 @@ package daemon
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -26,6 +25,7 @@ import (
 	"github.com/pilat/coagent/internal/progressruntime"
 	"github.com/pilat/coagent/internal/sessionevent"
 	"github.com/pilat/coagent/internal/sessionstore"
+	"github.com/pilat/coagent/internal/subagent"
 	"github.com/pilat/coagent/internal/tool"
 )
 
@@ -38,14 +38,14 @@ func TestHarnessScenario_CompletionCheckConfirmsBeforePublishing(t *testing.T) {
 	respond := func(_ string, messages []llmwire.Message) *llmwire.Response {
 		calls++
 		if calls == 1 {
-			return &llmwire.Response{Text: "premature candidate answer"}
+			return textReply("premature candidate answer")
 		}
 
-		return &llmwire.Response{Text: "why I am stopping"}
+		return textReply("why I am stopping")
 	}
 
 	h := newHarness(t, harnessOptions{respond: respond})
-	collector := collectEvents(h.mgr.bus.SubscribeAll())
+	collector := collectEvents(t, h.mgr.bus.SubscribeAll())
 	defer func() {
 		collector.stop()
 		h.shutdown()
@@ -56,29 +56,32 @@ func TestHarnessScenario_CompletionCheckConfirmsBeforePublishing(t *testing.T) {
 		"manager_id": scenarioManagerID,
 	})
 	require.NoError(t, err)
-	waitForVisibleMessage(t, collector, root, "premature candidate answer")
+	collector.waitMessage(root, "premature candidate answer")
 
 	drainScenarioClaims(t, "completion_check_confirmed_final.json", newChainController(t, h))
-	waitForIdleAfterMessage(t, collector, root, "premature candidate answer")
+	collector.waitIdleAfter(root, "premature candidate answer")
 
 	assert.Equal(t, 2, calls, "the no-wake stop costs exactly one confirmation call")
 
-	var ackLeaks int
-	require.NoError(t, h.db.QueryRowContext(h.ctx, `SELECT COUNT(*) FROM session_outbox
-		WHERE session_id = ? AND content LIKE '%why I am stopping%'`, root).
-		Scan(&ackLeaks))
+	var ackLeaks, persistent, releases int
+	for _, row := range h.outbox(root) {
+		content := strings.ToLower(row.Content)
+		if strings.Contains(content, "why i am stopping") {
+			ackLeaks++
+		}
+		if row.Type == "message_persistent" {
+			if strings.HasPrefix(content, "premature candidate answer") {
+				persistent++
+			}
+			if row.ReleasesInput {
+				releases++
+			}
+		}
+	}
 	assert.Zero(t, ackLeaks, "the discarded nudge ack must never reach any outbox row")
 
-	var persistent int
-	require.NoError(t, h.db.QueryRowContext(h.ctx, `SELECT COUNT(*) FROM session_outbox
-		WHERE session_id = ? AND type = 'message_persistent'
-		AND content LIKE 'premature candidate answer%'`, root).Scan(&persistent))
 	assert.Equal(t, 1, persistent, "exactly one persistent manager answer commits: the candidate text")
 
-	var releases int
-	require.NoError(t, h.db.QueryRowContext(h.ctx, `SELECT COUNT(*) FROM session_outbox
-		WHERE session_id = ? AND type = 'message_persistent' AND releases_input = 1`, root).
-		Scan(&releases))
 	assert.Equal(t, 1, releases, "the confirmed output releases the manager input")
 
 	assertHarnessTrace(t, "completion_check_confirmed_final.json", collector.snapshot(), root)
@@ -98,18 +101,18 @@ func TestHarnessScenario_CompletionCheckBackgroundProcessYieldPublishesOnce(t *t
 			// running process, so the wake projection sees the ledger row.
 			<-processRunning
 
-			return &llmwire.Response{Text: "yielding to the running process"}
+			return textReply("yielding to the running process")
 		}
 
 		if hasUserContaining(messages, "<process_completion>") {
-			return &llmwire.Response{Text: "resumed after process completion"}
+			return textReply("resumed after process completion")
 		}
 
-		return &llmwire.Response{Text: "follow-up answer"}
+		return textReply("follow-up answer")
 	}
 
 	h := newHarness(t, harnessOptions{respond: respond})
-	collector := collectEvents(h.mgr.bus.SubscribeAll())
+	collector := collectEvents(t, h.mgr.bus.SubscribeAll())
 	defer func() {
 		collector.stop()
 		h.shutdown()
@@ -128,23 +131,34 @@ func TestHarnessScenario_CompletionCheckBackgroundProcessYieldPublishesOnce(t *t
 	release := filepath.Join(t.TempDir(), "release")
 	process := startScenarioProcess(t, service, root, root,
 		fmt.Sprintf("while [ ! -f %s ]; do sleep 0.05; done; printf 'done\\n'", release))
-	waitScenarioProcessState(t, h, process.ID, backgroundprocess.StateRunning)
+	func() backgroundprocess.Process {
+		var record backgroundprocess.Process
+		h.waitUntil("process state", func() bool {
+			var err error
+			record, err = h.mgr.processStore.GetProcess(context.Background(), process.ID)
+			return err == nil && record.State == backgroundprocess.StateRunning
+		})
+		return record
+	}()
 	close(processRunning)
 
-	waitForVisibleMessage(t, collector, root, "yielding to the running process")
-	h.mgr.waitIdle(root)
+	collector.waitMessage(root, "yielding to the running process")
+	h.waitUntil("session idle", func() bool { return !h.mgr.HasActiveLoop(root) })
 
 	assert.Equal(t, int64(1), calls.Load(), "a wake yield trusts the stop without a confirmation call")
 
 	var yieldOutputs int
-	require.NoError(t, h.db.QueryRowContext(h.ctx, `SELECT COUNT(*) FROM session_outbox
-		WHERE session_id = ? AND type = 'message_persistent'
-		AND content LIKE '🟣 Background%yielding to the running process%'`,
-		root).Scan(&yieldOutputs))
+	for _, row := range h.outbox(root) {
+		content := strings.ToLower(row.Content)
+		if row.Type == "message_persistent" && strings.HasPrefix(content, "🟣 background") &&
+			strings.Contains(strings.TrimPrefix(content, "🟣 background"), "yielding to the running process") {
+			yieldOutputs++
+		}
+	}
 	assert.Equal(t, 1, yieldOutputs,
 		"the wake yield publishes ordinary output once, opening with the background badge")
 
-	for _, message := range h.parentMessages(root) {
+	for _, message := range h.messages(root) {
 		if message.Role == llmwire.RoleUser {
 			assert.NotContains(t, message.Content, "returned a final answer",
 				"no completion nudge accompanies a wake yield")
@@ -152,7 +166,7 @@ func TestHarnessScenario_CompletionCheckBackgroundProcessYieldPublishesOnce(t *t
 	}
 
 	require.NoError(t, os.WriteFile(release, []byte("go"), 0o644))
-	waitForVisibleMessage(t, collector, root, "resumed after process completion")
+	collector.waitMessage(root, "resumed after process completion")
 	assert.Equal(t, int64(3), calls.Load(),
 		"the completion wake resumes through the ordinary two-phase check")
 }
@@ -170,11 +184,11 @@ func TestHarnessScenario_CompletionCheckEmptyBackgroundYieldYieldsSilently(t *te
 			return &llmwire.Response{}
 		}
 
-		return &llmwire.Response{Text: "resumed after silent yield"}
+		return textReply("resumed after silent yield")
 	}
 
 	h := newHarness(t, harnessOptions{respond: respond})
-	collector := collectEvents(h.mgr.bus.SubscribeAll())
+	collector := collectEvents(t, h.mgr.bus.SubscribeAll())
 	defer func() {
 		collector.stop()
 		h.shutdown()
@@ -191,14 +205,22 @@ func TestHarnessScenario_CompletionCheckEmptyBackgroundYieldYieldsSilently(t *te
 	release := filepath.Join(t.TempDir(), "release")
 	process := startScenarioProcess(t, service, root, root,
 		fmt.Sprintf("while [ ! -f %s ]; do sleep 0.05; done; printf 'done\\n'", release))
-	waitScenarioProcessState(t, h, process.ID, backgroundprocess.StateRunning)
+	func() backgroundprocess.Process {
+		var record backgroundprocess.Process
+		h.waitUntil("process state", func() bool {
+			var err error
+			record, err = h.mgr.processStore.GetProcess(context.Background(), process.ID)
+			return err == nil && record.State == backgroundprocess.StateRunning
+		})
+		return record
+	}()
 	close(processRunning)
 
-	h.mgr.waitIdle(root)
+	h.waitUntil("session idle", func() bool { return !h.mgr.HasActiveLoop(root) })
 	assert.Equal(t, int64(1), calls.Load(), "an empty wake yield ends the activation immediately")
 
 	var nudges int
-	for _, message := range h.parentMessages(root) {
+	for _, message := range h.messages(root) {
 		if message.Role == llmwire.RoleUser && strings.Contains(message.Content, "empty response") {
 			nudges++
 		}
@@ -206,7 +228,7 @@ func TestHarnessScenario_CompletionCheckEmptyBackgroundYieldYieldsSilently(t *te
 	assert.Zero(t, nudges, "an empty wake yield appends no empty-stop nudge")
 
 	require.NoError(t, os.WriteFile(release, []byte("go"), 0o644))
-	waitForVisibleMessage(t, collector, root, "resumed after silent yield")
+	collector.waitMessage(root, "resumed after silent yield")
 }
 
 // A stopped or killed undelivered child link promises no wake: the stop opens
@@ -223,14 +245,14 @@ func TestHarnessScenario_CompletionCheckStoppedLinkIsNotAWakeSource(t *testing.T
 					// The dead link must exist before the first stop decision.
 					<-linkSeeded
 
-					return &llmwire.Response{Text: "premature answer over dead child"}
+					return textReply("premature answer over dead child")
 				}
 
-				return &llmwire.Response{Text: "confirmed answer over dead child"}
+				return textReply("confirmed answer over dead child")
 			}
 
 			h := newHarness(t, harnessOptions{respond: respond})
-			collector := collectEvents(h.mgr.bus.SubscribeAll())
+			collector := collectEvents(t, h.mgr.bus.SubscribeAll())
 			defer func() {
 				collector.stop()
 				h.shutdown()
@@ -242,35 +264,10 @@ func TestHarnessScenario_CompletionCheckStoppedLinkIsNotAWakeSource(t *testing.T
 			})
 			require.NoError(t, err)
 
-			child, err := func() (int64, error) {
-				var id int64
-				err := h.store.WithTx(h.ctx, func(tx *sql.Tx) error {
-					var err error
-					id, err = sessionstore.CreateSubagentSessionTx(
-						h.ctx,
-						tx,
-						sessionstore.CreateSubagentSession{
-							ProjectID:      h.projectID,
-							ParentID:       root,
-							RootID:         root,
-							AgentType:      "general",
-							Model:          "fake-model",
-							ReasoningLevel: "",
-						},
-					)
-					return err
-				})
-				return id, err
-			}()
-			require.NoError(t, err)
-			_, err = h.db.ExecContext(h.ctx, `INSERT INTO subagent_links
-				(parent_id, child_id, task_call_id, blocking, depth, state, created_at)
-				VALUES (?, ?, ?, 0, 0, ?, ?)`,
-				root, child, "task-dead", state, time.Now().UTC().Unix())
-			require.NoError(t, err)
+			h.createChild(root, subagent.Link{TaskCallID: "task-dead", State: subagent.State(state)})
 			close(linkSeeded)
 
-			waitForVisibleMessage(t, collector, root, "premature answer over dead child")
+			collector.waitMessage(root, "premature answer over dead child")
 
 			assert.Equal(t, int64(2), calls.Load(),
 				"a %s link promises no wake: the two-phase check runs", state)
@@ -319,12 +316,12 @@ func TestControllerManagerSubscriptionIsExactAcrossRestart(t *testing.T) {
 func TestHarnessScenario_SecondInputDoesNotReplayPreviousFinal(t *testing.T) {
 	h := newHarness(t, harnessOptions{respond: func(_ string, messages []llmwire.Message) *llmwire.Response {
 		if hasUserContaining(messages, "second question") {
-			return &llmwire.Response{Text: "second answer"}
+			return textReply("second answer")
 		}
 
-		return &llmwire.Response{Text: "first answer"}
+		return textReply("first answer")
 	}})
-	collector := collectEvents(h.mgr.bus.SubscribeAll())
+	collector := collectEvents(t, h.mgr.bus.SubscribeAll())
 	defer func() {
 		collector.stop()
 		h.shutdown()
@@ -333,22 +330,22 @@ func TestHarnessScenario_SecondInputDoesNotReplayPreviousFinal(t *testing.T) {
 	h.startInboxWake()
 	sessionID, err := h.mgr.Send(h.ctx, h.projectID, "first question", "fake-model", nil)
 	require.NoError(t, err)
-	waitForVisibleMessage(t, collector, sessionID, "first answer")
-	waitForIdleAfterMessage(t, collector, sessionID, "first answer")
+	collector.waitMessage(sessionID, "first answer")
+	collector.waitIdleAfter(sessionID, "first answer")
 
 	h.startInboxWake()
 	require.NoError(t, h.mgr.sendToSession(h.ctx, sessionID, "second question"))
-	waitForVisibleMessage(t, collector, sessionID, "second answer")
-	waitForIdleAfterMessage(t, collector, sessionID, "second answer")
+	collector.waitMessage(sessionID, "second answer")
+	collector.waitIdleAfter(sessionID, "second answer")
 
 	assertHarnessTrace(t, "second_input_no_replay.json", collector.snapshot(), sessionID)
 }
 
 func TestHarnessScenario_CLIConversationIsManagerOwned(t *testing.T) {
 	h := newHarness(t, harnessOptions{respond: func(string, []llmwire.Message) *llmwire.Response {
-		return &llmwire.Response{Text: "configuration answer"}
+		return textReply("configuration answer")
 	}})
-	collector := collectEvents(h.mgr.bus.SubscribeAll())
+	collector := collectEvents(t, h.mgr.bus.SubscribeAll())
 	defer func() {
 		collector.stop()
 		h.shutdown()
@@ -360,7 +357,7 @@ func TestHarnessScenario_CLIConversationIsManagerOwned(t *testing.T) {
 		"channel":                               "cli",
 	})
 	require.NoError(t, err)
-	waitForVisibleMessage(t, collector, sessionID, "configuration answer")
+	collector.waitMessage(sessionID, "configuration answer")
 
 	assertHarnessTrace(t, "cli_conversation_manager_owned.json", collector.snapshot(), sessionID)
 }
@@ -377,41 +374,37 @@ func TestHarnessScenario_BackgroundChildCheckpointUpdatesRootCard(t *testing.T) 
 				childSecondOnce.Do(func() { close(childSecondEntered) })
 				<-childSecondRelease
 
-				return &llmwire.Response{Text: "background child answer"}
+				return textReply("background child answer")
 			}
 
-			return &llmwire.Response{ToolCalls: []llmwire.ToolCall{{
-				ID: "child-progress", Name: "ls", Arguments: []byte(`{"path":"."}`),
-			}}}
+			return callReply("child-progress", "ls", `{"path":"."}`)
 		}
 
 		if hasUserContaining(messages, "<subagent_completion>") {
-			return &llmwire.Response{Text: "background completion delivered"}
+			return textReply("background completion delivered")
 		}
 
 		if hasToolResultFor(messages, tool.IDSleep) {
-			return &llmwire.Response{Text: "background launched; yielded without sleep"}
+			return textReply("background launched; yielded without sleep")
 		}
 
 		if hasToolResultFor(messages, tool.IDTask) {
-			return &llmwire.Response{ToolCalls: []llmwire.ToolCall{{
-				ID:        "sleep-after-task-result",
-				Name:      tool.IDSleep,
-				Arguments: []byte(`{"duration":"1h","reason":"wait for background child"}`),
-			}}}
+			return callReply(
+				"sleep-after-task-result",
+				tool.IDSleep,
+				`{"duration":"1h","reason":"wait for background child"}`,
+			)
 		}
 
-		return &llmwire.Response{ToolCalls: []llmwire.ToolCall{{
-			ID:   taskCallID,
-			Name: tool.IDTask,
-			Arguments: []byte(
-				`{"prompt":"CHILD_PROGRESS","description":"scenario","subagent_type":"general","background":true}`,
-			),
-		}}}
+		return callReply(
+			taskCallID,
+			tool.IDTask,
+			`{"prompt":"CHILD_PROGRESS","description":"scenario","subagent_type":"general","background":true}`,
+		)
 	}
 
 	h := newHarness(t, harnessOptions{respond: respond})
-	collector := collectEvents(h.mgr.bus.SubscribeAll())
+	collector := collectEvents(t, h.mgr.bus.SubscribeAll())
 	defer func() {
 		if !released {
 			close(childSecondRelease)
@@ -425,10 +418,9 @@ func TestHarnessScenario_BackgroundChildCheckpointUpdatesRootCard(t *testing.T) 
 		"manager_id": scenarioManagerID,
 	})
 	require.NoError(t, err)
-	waitForVisibleMessage(t, collector, parentID, "background launched; yielded without sleep")
+	collector.waitMessage(parentID, "background launched; yielded without sleep")
 
-	link, err := h.links.GetLinkByTaskCallID(h.ctx, parentID, taskCallID)
-	require.NoError(t, err)
+	link := h.linkByCall(parentID, taskCallID)
 	require.NotNil(t, link)
 	require.False(t, link.Blocking)
 	waitForScenarioSignal(t, childSecondEntered, "child second model call")
@@ -440,11 +432,16 @@ func TestHarnessScenario_BackgroundChildCheckpointUpdatesRootCard(t *testing.T) 
 		link.ChildID,
 		link.ActivationSeq,
 	)
-	require.Eventually(t, func() bool {
-		return h.db.QueryRowContext(h.ctx, `SELECT session_id, content FROM session_outbox
-			WHERE session_id = ? AND source_key LIKE ? ORDER BY id DESC LIMIT 1`,
-			parentID, checkpointSource).Scan(&checkpointOwner, &checkpointCard) == nil
-	}, 5*time.Second, 10*time.Millisecond, "child checkpoint progress card")
+	h.waitUntil("child checkpoint progress card", func() bool {
+		var found bool
+		for _, row := range h.outbox(parentID) {
+			if strings.HasPrefix(row.SourceKey, strings.TrimSuffix(checkpointSource, "%")) {
+				checkpointOwner, checkpointCard = row.SessionID, row.Content
+				found = true
+			}
+		}
+		return found
+	})
 
 	assert.Contains(t, checkpointCard, "iteration ")
 	assert.NotContains(t, checkpointCard, "root iteration")
@@ -454,7 +451,7 @@ func TestHarnessScenario_BackgroundChildCheckpointUpdatesRootCard(t *testing.T) 
 
 	close(childSecondRelease)
 	released = true
-	waitForVisibleMessage(t, collector, parentID, "background completion delivered")
+	collector.waitMessage(parentID, "background completion delivered")
 }
 
 func TestHarnessScenario_LongSessionFixturePreservesReportedOrdering(t *testing.T) {
@@ -491,7 +488,7 @@ func TestHarnessScenario_LongSessionAcceptsInputWithoutChatReceipt(t *testing.T)
 
 		<-release
 
-		return &llmwire.Response{Text: "first model progress"}
+		return textReply("first model progress")
 	}})
 	defer func() {
 		close(release)
@@ -512,11 +509,11 @@ func TestHarnessScenario_LongSessionAcceptsInputWithoutChatReceipt(t *testing.T)
 		SELECT COUNT(*) FROM session_inbox WHERE session_id = ?`,
 		sessionID,
 	).Scan(&inputs))
-	require.NoError(t, h.db.QueryRowContext(h.ctx, `
-		SELECT COUNT(*) FROM session_outbox
-		WHERE session_id = ? AND type IN ('message_persistent', 'message_replaceable')`,
-		sessionID,
-	).Scan(&acknowledgements))
+	for _, row := range h.outbox(sessionID) {
+		if row.Type == "message_persistent" || row.Type == "message_replaceable" {
+			acknowledgements++
+		}
+	}
 	assert.Equal(t, 2, inputs, "initial and queued input must both remain durable")
 	assert.Zero(t, acknowledgements, "input acceptance must not become a chat message")
 }
@@ -529,9 +526,9 @@ func TestHarnessScenario_WorkingMainModelRefreshesProgressEveryThirtySeconds(t *
 		enteredOnce.Do(func() { close(entered) })
 		<-release
 
-		return &llmwire.Response{Text: "late response"}
+		return textReply("late response")
 	}})
-	collector := collectEvents(h.mgr.bus.SubscribeAll())
+	collector := collectEvents(t, h.mgr.bus.SubscribeAll())
 	defer func() {
 		close(release)
 		collector.stop()
@@ -580,15 +577,15 @@ func TestHarnessScenario_ReactivatedEpisodeGetsFullMainModelInterval(t *testing.
 		// call; only episode two's first call arms the progress probe.
 		switch calls.Add(1) {
 		case 1, 2:
-			return &llmwire.Response{Text: "old final"}
+			return textReply("old final")
 		}
 
 		secondOnce.Do(func() { close(enteredSecond) })
 		<-release
 
-		return &llmwire.Response{Text: "new final"}
+		return textReply("new final")
 	}})
-	collector := collectEvents(h.mgr.bus.SubscribeAll())
+	collector := collectEvents(t, h.mgr.bus.SubscribeAll())
 	defer func() {
 		close(release)
 		collector.stop()
@@ -600,8 +597,8 @@ func TestHarnessScenario_ReactivatedEpisodeGetsFullMainModelInterval(t *testing.
 		"manager_id": "telegram:main",
 	})
 	require.NoError(t, err)
-	waitForVisibleMessage(t, collector, sessionID, "old final")
-	h.mgr.waitIdle(sessionID)
+	collector.waitMessage(sessionID, "old final")
+	h.waitUntil("session idle", func() bool { return !h.mgr.HasActiveLoop(sessionID) })
 
 	old := time.Now().UTC().Add(-time.Hour)
 	_, err = h.db.ExecContext(h.ctx, `UPDATE session_outbox SET created_at = ?
@@ -636,7 +633,7 @@ func TestHarnessScenario_EmptyRootStartsEpisodeWithFirstInput(t *testing.T) {
 		enteredOnce.Do(func() { close(entered) })
 		<-release
 
-		return &llmwire.Response{Text: "done"}
+		return textReply("done")
 	}})
 	defer func() {
 		close(release)
@@ -760,7 +757,7 @@ func TestHarnessScenario_OutputChainReportedOrder(t *testing.T) {
 				},
 			}}
 		default:
-			return &llmwire.Response{Text: "All done."}
+			return textReply("All done.")
 		}
 	}
 
@@ -770,7 +767,7 @@ func TestHarnessScenario_OutputChainReportedOrder(t *testing.T) {
 		h.shutdown()
 	}()
 
-	collector := collectEvents(h.mgr.bus.SubscribeAll())
+	collector := collectEvents(t, h.mgr.bus.SubscribeAll())
 	defer collector.stop()
 
 	h.startInboxWake()
@@ -793,11 +790,11 @@ func TestHarnessScenario_OutputChainReportedOrder(t *testing.T) {
 	require.NoError(t, err)
 	closeOnce.Do(func() { close(followUpQueued) })
 
-	waitForVisibleMessage(t, collector, root, "All done.")
+	collector.waitMessage(root, "All done.")
 
 	controller := newChainController(t, h)
 	drainScenarioClaims(t, "output_chain_reported_order.json", controller)
-	waitForIdleAfterMessage(t, collector, root, "All done.")
+	collector.waitIdleAfter(root, "All done.")
 
 	assertHarnessTrace(t, "output_chain_reported_order.json", collector.snapshot(), root)
 }
@@ -828,14 +825,14 @@ func TestHarnessScenario_OutputChainNarratedToolIterations(t *testing.T) {
 				}},
 			}
 		default:
-			return &llmwire.Response{Text: "All done."}
+			return textReply("All done.")
 		}
 	}
 
 	h := newHarness(t, harnessOptions{respond: respond})
 	defer h.shutdown()
 
-	collector := collectEvents(h.mgr.bus.SubscribeAll())
+	collector := collectEvents(t, h.mgr.bus.SubscribeAll())
 	defer collector.stop()
 
 	h.startInboxWake()
@@ -843,11 +840,11 @@ func TestHarnessScenario_OutputChainNarratedToolIterations(t *testing.T) {
 		"manager_id": scenarioManagerID,
 	})
 	require.NoError(t, err)
-	waitForVisibleMessage(t, collector, root, "All done.")
+	collector.waitMessage(root, "All done.")
 
 	controller := newChainController(t, h)
 	drainScenarioClaims(t, "output_chain_narrated_tools.json", controller)
-	waitForIdleAfterMessage(t, collector, root, "All done.")
+	collector.waitIdleAfter(root, "All done.")
 
 	assertHarnessTrace(t, "output_chain_narrated_tools.json", collector.snapshot(), root)
 }
@@ -867,23 +864,21 @@ func TestHarnessScenario_ProcessCompletionAtBusyToolBoundary(t *testing.T) {
 			observed = slices.Clone(messages)
 			observedMu.Unlock()
 
-			return &llmwire.Response{Text: "busy process completion observed"}
+			return textReply("busy process completion observed")
 		}
 		if hasUserContaining(messages, "start busy process scenario") {
 			once.Do(func() { close(entered) })
 			<-release
 
-			return &llmwire.Response{ToolCalls: []llmwire.ToolCall{{
-				ID: "busy-read", Name: "ls", Arguments: []byte(`{"path":"."}`),
-			}}}
+			return callReply("busy-read", "ls", `{"path":"."}`)
 		}
 
-		return &llmwire.Response{Text: "unexpected activation"}
+		return textReply("unexpected activation")
 	}
 
 	h := newHarness(t, harnessOptions{respond: respond})
 	service := installScenarioProcessService(t, h)
-	collector := collectEvents(h.mgr.bus.SubscribeAll())
+	collector := collectEvents(t, h.mgr.bus.SubscribeAll())
 	defer func() {
 		closeOnce(release)
 		collector.stop()
@@ -895,9 +890,17 @@ func TestHarnessScenario_ProcessCompletionAtBusyToolBoundary(t *testing.T) {
 	require.NoError(t, err)
 	<-entered
 	process := startScenarioProcess(t, service, rootID, rootID, "printf 'finished\\n'")
-	waitScenarioProcessState(t, h, process.ID, backgroundprocess.StateCompleted)
+	func() backgroundprocess.Process {
+		var record backgroundprocess.Process
+		h.waitUntil("process state", func() bool {
+			var err error
+			record, err = h.mgr.processStore.GetProcess(context.Background(), process.ID)
+			return err == nil && record.State == backgroundprocess.StateCompleted
+		})
+		return record
+	}()
 	close(release)
-	waitForVisibleMessage(t, collector, rootID, "busy process completion observed")
+	collector.waitMessage(rootID, "busy process completion observed")
 
 	observedMu.Lock()
 	messages := slices.Clone(observed)
@@ -917,7 +920,7 @@ func TestHarnessScenario_ProcessCompletionAtBusyToolBoundary(t *testing.T) {
 		WHERE source = 'process' AND json_extract(attributes, '$.process_id') = ?`, process.ID).Scan(&state))
 	assert.Equal(t, string(sessionstore.InputStateAccepted), state)
 	drainScenarioClaims(t, "process_busy_boundary.json", newChainController(t, h))
-	waitForIdleAfterMessage(t, collector, rootID, "busy process completion observed")
+	collector.waitIdleAfter(rootID, "busy process completion observed")
 	// The completion wake opened the two-phase check; the confirming stop
 	// adds one model call.
 	assert.Equal(t, int64(3), modelCalls.Load())
@@ -928,35 +931,37 @@ func TestHarnessScenario_AgentCancelsOwnedBackgroundProcess(t *testing.T) {
 	var processID atomic.Value
 	respond := func(_ string, messages []llmwire.Message) *llmwire.Response {
 		if hasToolResultFor(messages, tool.IDCancelProcess) {
-			return &llmwire.Response{Text: "unused background process cancelled"}
+			return textReply("unused background process cancelled")
 		}
 		if hasToolResultFor(messages, "bash") {
 			const prefix = "Background process ID (not an operating-system PID): "
-			content := lastToolResultContent(messages, "bash")
+			content := func(msgs []llmwire.Message, toolName string) string {
+				for _, v := range slices.Backward(msgs) {
+					if v.Role == llmwire.RoleTool && v.ToolName == toolName {
+						return v.Content
+					}
+				}
+
+				return ""
+			}(messages, "bash")
 			_, after, found := strings.Cut(content, prefix)
 			if !found {
-				return &llmwire.Response{Text: "background process ID missing"}
+				return textReply("background process ID missing")
 			}
 
 			id, _, _ := strings.Cut(after, "\n")
 			processID.Store(id)
 
-			return &llmwire.Response{ToolCalls: []llmwire.ToolCall{{
-				ID: "cancel-background", Name: tool.IDCancelProcess,
-				Arguments: []byte(`{"process_id":"` + id + `"}`),
-			}}}
+			return callReply("cancel-background", tool.IDCancelProcess, `{"process_id":"`+id+`"}`)
 		}
 
-		return &llmwire.Response{ToolCalls: []llmwire.ToolCall{{
-			ID: "start-background", Name: "bash",
-			Arguments: []byte(`{"command":"sleep 30","background":true}`),
-		}}}
+		return callReply("start-background", "bash", `{"command":"sleep 30","background":true}`)
 	}
 
 	h := newHarness(t, harnessOptions{respond: respond})
 	service := installScenarioProcessService(t, h)
 	h.mgr.build.ProcessService = service
-	collector := collectEvents(h.mgr.bus.SubscribeAll())
+	collector := collectEvents(t, h.mgr.bus.SubscribeAll())
 	defer func() {
 		collector.stop()
 		h.shutdown()
@@ -967,7 +972,7 @@ func TestHarnessScenario_AgentCancelsOwnedBackgroundProcess(t *testing.T) {
 		"manager_id": scenarioManagerID,
 	})
 	require.NoError(t, err)
-	waitForVisibleMessage(t, collector, rootID, "unused background process cancelled")
+	collector.waitMessage(rootID, "unused background process cancelled")
 
 	id, ok := processID.Load().(string)
 	require.True(t, ok)
@@ -988,9 +993,9 @@ func TestHarnessScenario_ProcessCompletionAtIdleTransition(t *testing.T) {
 		modelCalls.Add(1)
 		require.True(t, hasUserContaining(messages, "<process_completion>"))
 
-		return &llmwire.Response{Text: "idle-transition completion observed"}
+		return textReply("idle-transition completion observed")
 	}})
-	collector := collectEvents(h.mgr.bus.SubscribeAll())
+	collector := collectEvents(t, h.mgr.bus.SubscribeAll())
 	defer func() {
 		collector.stop()
 		h.shutdown()
@@ -1024,9 +1029,9 @@ func TestHarnessScenario_ProcessCompletionAtIdleTransition(t *testing.T) {
 	require.NoError(t, h.mgr.inputReady(h.ctx, root.ID))
 	h.mgr.finishRunner(h.ctx, ending, runOutcome{publishIdle: true}, nil)
 
-	waitForVisibleMessage(t, collector, root.ID, "idle-transition completion observed")
+	collector.waitMessage(root.ID, "idle-transition completion observed")
 	drainScenarioClaims(t, "process_idle_transition.json", newChainController(t, h))
-	waitForIdleAfterMessage(t, collector, root.ID, "idle-transition completion observed")
+	collector.waitIdleAfter(root.ID, "idle-transition completion observed")
 	// The confirmed stop costs a second model call; the completion wake itself
 	// opened the two-phase check with call one.
 	assert.Equal(t, int64(2), modelCalls.Load())
@@ -1039,10 +1044,10 @@ func TestHarnessScenario_ProcessCompletionRevivesCompletedRoot(t *testing.T) {
 		calls.Add(1)
 		require.True(t, hasUserContaining(messages, "<process_completion>"))
 
-		return &llmwire.Response{Text: "idle process completion observed"}
+		return textReply("idle process completion observed")
 	}})
 	service := installScenarioProcessService(t, h)
-	collector := collectEvents(h.mgr.bus.SubscribeAll())
+	collector := collectEvents(t, h.mgr.bus.SubscribeAll())
 	defer func() {
 		collector.stop()
 		h.shutdown()
@@ -1057,21 +1062,30 @@ func TestHarnessScenario_ProcessCompletionRevivesCompletedRoot(t *testing.T) {
 	))
 
 	process := startScenarioProcess(t, service, root.ID, root.ID, "printf 'finished\\n'")
-	waitForVisibleMessage(t, collector, root.ID, "idle process completion observed")
+	collector.waitMessage(root.ID, "idle process completion observed")
 	drainScenarioClaims(t, "process_completed_root.json", newChainController(t, h))
-	waitForIdleAfterMessage(t, collector, root.ID, "idle process completion observed")
+	collector.waitIdleAfter(root.ID, "idle process completion observed")
 
 	// The wake's first stop is the hidden candidate; the confirmed second stop
 	// publishes the replaceable completion (rendered with its final footer) and
 	// releases the accepted input.
 	assert.Equal(t, int64(2), calls.Load())
-	assert.Equal(t, 1, countUserCompletions(h.parentMessages(root.ID), "<process_completion>"))
+	assert.Equal(t, 1, countUserCompletions(h.messages(root.ID), "<process_completion>"))
 	var persistent, replaceable, releasing int
-	require.NoError(t, h.db.QueryRowContext(h.ctx, `SELECT
-		COUNT(*) FILTER (WHERE type = 'message_persistent' AND content LIKE 'idle process completion observed%'),
-		COUNT(*) FILTER (WHERE type = 'message_replaceable' AND content LIKE 'idle process completion observed%'),
-		COUNT(*) FILTER (WHERE releases_input = 1 AND content LIKE 'idle process completion observed%')
-		FROM session_outbox WHERE session_id = ?`, root.ID).Scan(&persistent, &replaceable, &releasing))
+	for _, row := range h.outbox(root.ID) {
+		if !strings.HasPrefix(strings.ToLower(row.Content), "idle process completion observed") {
+			continue
+		}
+		if row.Type == "message_persistent" {
+			persistent++
+		}
+		if row.Type == "message_replaceable" {
+			replaceable++
+		}
+		if row.ReleasesInput {
+			releasing++
+		}
+	}
 	assert.Zero(t, persistent, "process-only input must not create a manager direct reply")
 	assert.Equal(t, 1, replaceable)
 	assert.Equal(t, 1, releasing, "terminal progress still releases the accepted asynchronous input")
@@ -1087,18 +1101,15 @@ func TestHarnessScenario_ProcessCompletionInterruptsSleep(t *testing.T) {
 	respond := func(_ string, messages []llmwire.Message) *llmwire.Response {
 		modelCalls.Add(1)
 		if hasUserContaining(messages, "<process_completion>") {
-			return &llmwire.Response{Text: "process interrupted sleep"}
+			return textReply("process interrupted sleep")
 		}
 
-		return &llmwire.Response{ToolCalls: []llmwire.ToolCall{{
-			ID: "process-sleep", Name: tool.IDSleep,
-			Arguments: []byte(`{"duration":"1h","reason":"wait for process"}`),
-		}}}
+		return callReply("process-sleep", tool.IDSleep, `{"duration":"1h","reason":"wait for process"}`)
 	}
 
 	h := newHarness(t, harnessOptions{respond: respond})
 	service := installScenarioProcessService(t, h)
-	collector := collectEvents(h.mgr.bus.SubscribeAll())
+	collector := collectEvents(t, h.mgr.bus.SubscribeAll())
 	defer func() {
 		collector.stop()
 		h.shutdown()
@@ -1109,21 +1120,37 @@ func TestHarnessScenario_ProcessCompletionInterruptsSleep(t *testing.T) {
 		"manager_id": scenarioManagerID,
 	})
 	require.NoError(t, err)
-	waitForWaitKind(t, collector, rootID, sessionevent.WaitSleep)
+	collector.waitWait(rootID, sessionevent.WaitSleep)
 	process := startScenarioProcess(t, service, rootID, rootID, "printf 'wake\\n'")
-	waitForVisibleMessage(t, collector, rootID, "process interrupted sleep")
+	collector.waitMessage(rootID, "process interrupted sleep")
 	drainScenarioClaims(t, "process_interrupts_sleep.json", newChainController(t, h))
-	waitForIdleAfterMessage(t, collector, rootID, "process interrupted sleep")
+	collector.waitIdleAfter(rootID, "process interrupted sleep")
 
-	messages := h.parentMessages(rootID)
+	messages := h.messages(rootID)
 	// The completion wake's stop is the hidden candidate; the confirmation
 	// adds the second stop of the two-phase check.
 	assert.Equal(t, int64(3), modelCalls.Load())
 	assert.Equal(t, 1, countUserCompletions(messages, "<process_completion>"))
 	assert.Equal(t, 1, countToolResultsFor(messages, tool.IDSleep))
-	assert.Contains(t, lastToolResultContent(messages, tool.IDSleep), "Sleep interrupted")
+	assert.Contains(t, func(msgs []llmwire.Message, toolName string) string {
+		for _, v := range slices.Backward(msgs) {
+			if v.Role == llmwire.RoleTool && v.ToolName == toolName {
+				return v.Content
+			}
+		}
+
+		return ""
+	}(messages, tool.IDSleep), "Sleep interrupted")
 	assert.Equal(t, backgroundprocess.StateCompleted,
-		waitScenarioProcessState(t, h, process.ID, backgroundprocess.StateCompleted).State)
+		func() backgroundprocess.Process {
+			var record backgroundprocess.Process
+			h.waitUntil("process state", func() bool {
+				var err error
+				record, err = h.mgr.processStore.GetProcess(context.Background(), process.ID)
+				return err == nil && record.State == backgroundprocess.StateCompleted
+			})
+			return record
+		}().State)
 	assertHarnessTrace(t, "process_interrupts_sleep.json", collector.snapshot(), rootID)
 }
 
@@ -1135,7 +1162,7 @@ func TestHarnessScenario_ProcessCompletionWaitsForForegroundChild(t *testing.T) 
 		if hasUserContaining(messages, "CHILD_PROCESS_BLOCK") {
 			<-childRelease
 
-			return &llmwire.Response{Text: "foreground child finished"}
+			return textReply("foreground child finished")
 		}
 
 		parentCalls.Add(1)
@@ -1144,20 +1171,19 @@ func TestHarnessScenario_ProcessCompletionWaitsForForegroundChild(t *testing.T) 
 				missingTaskResult.Store(true)
 			}
 
-			return &llmwire.Response{Text: "foreground result preceded process input"}
+			return textReply("foreground result preceded process input")
 		}
 
-		return &llmwire.Response{ToolCalls: []llmwire.ToolCall{{
-			ID: taskCallID, Name: tool.IDTask,
-			Arguments: []byte(
-				`{"prompt":"CHILD_PROCESS_BLOCK","description":"block","subagent_type":"general"}`,
-			),
-		}}}
+		return callReply(
+			taskCallID,
+			tool.IDTask,
+			`{"prompt":"CHILD_PROCESS_BLOCK","description":"block","subagent_type":"general"}`,
+		)
 	}
 
 	h := newHarness(t, harnessOptions{respond: respond})
 	service := installScenarioProcessService(t, h)
-	collector := collectEvents(h.mgr.bus.SubscribeAll())
+	collector := collectEvents(t, h.mgr.bus.SubscribeAll())
 	defer func() {
 		closeOnce(childRelease)
 		collector.stop()
@@ -1167,10 +1193,18 @@ func TestHarnessScenario_ProcessCompletionWaitsForForegroundChild(t *testing.T) 
 	h.startInboxWake()
 	rootID, err := h.mgr.Send(h.ctx, h.projectID, "start foreground process ordering", "fake-model", nil)
 	require.NoError(t, err)
-	waitForWaitKind(t, collector, rootID, sessionevent.WaitSubagent)
+	collector.waitWait(rootID, sessionevent.WaitSubagent)
 	h.waitUntil("foreground parent parked", func() bool { return !h.mgr.HasActiveLoop(rootID) })
 	process := startScenarioProcess(t, service, rootID, rootID, "printf 'queued\\n'")
-	waitScenarioProcessState(t, h, process.ID, backgroundprocess.StateCompleted)
+	func() backgroundprocess.Process {
+		var record backgroundprocess.Process
+		h.waitUntil("process state", func() bool {
+			var err error
+			record, err = h.mgr.processStore.GetProcess(context.Background(), process.ID)
+			return err == nil && record.State == backgroundprocess.StateCompleted
+		})
+		return record
+	}()
 	h.waitUntil("process wake remains behind foreground child", func() bool {
 		pending, err := h.store.PeekPending(h.ctx, rootID)
 		return err == nil && pending.Source == sessionstore.InputSourceProcess
@@ -1182,10 +1216,10 @@ func TestHarnessScenario_ProcessCompletionWaitsForForegroundChild(t *testing.T) 
 	assert.Equal(t, sessionstore.InputSourceProcess, pending.Source)
 	assert.Equal(t, int64(1), parentCalls.Load(), "process input cannot cross the foreground task call")
 	close(childRelease)
-	waitForVisibleMessage(t, collector, rootID, "foreground result preceded process input")
-	waitForIdleAfterMessage(t, collector, rootID, "foreground result preceded process input")
+	collector.waitMessage(rootID, "foreground result preceded process input")
+	collector.waitIdleAfter(rootID, "foreground result preceded process input")
 
-	messages := h.parentMessages(rootID)
+	messages := h.messages(rootID)
 	assert.False(t, missingTaskResult.Load())
 	// The child's completion wake runs the two-phase check (two calls); the
 	// process completion arrives while the confirming call is still out and
@@ -1206,9 +1240,9 @@ func TestProcessCompletionRetainsInputWithoutWakingStoppedOrErroredSession(t *te
 			h := newHarness(t, harnessOptions{respond: func(string, []llmwire.Message) *llmwire.Response {
 				calls.Add(1)
 
-				return &llmwire.Response{Text: "must not run"}
+				return textReply("must not run")
 			}})
-			collector := collectEvents(h.mgr.bus.SubscribeAll())
+			collector := collectEvents(t, h.mgr.bus.SubscribeAll())
 			service := backgroundprocess.NewService(h.mgr.processStore, backgroundprocess.Options{
 				OutputDir: t.TempDir(),
 			})
@@ -1226,10 +1260,10 @@ func TestProcessCompletionRetainsInputWithoutWakingStoppedOrErroredSession(t *te
 			h.startInboxWake()
 
 			process := startScenarioProcess(t, service, root.ID, root.ID, "printf 'parked\\n'")
-			require.Eventually(t, func() bool {
+			h.waitUntil("TestProcessCompletionRetainsInputWithoutWakingStoppedOrErroredSession", func() bool {
 				row, err := h.store.PeekPending(h.ctx, root.ID)
 				return err == nil && row.Attributes["process_id"] == process.ID
-			}, 5*time.Second, 10*time.Millisecond)
+			})
 			select {
 			case <-observer.observed:
 			case <-time.After(5 * time.Second):
@@ -1331,7 +1365,7 @@ func TestPublishRoutingModel_ManagerOwnershipSurvivesTransitions(t *testing.T) {
 
 func TestSpawnedChildProducesNoPubSubEvents(t *testing.T) {
 	h := newHarness(t, harnessOptions{})
-	collector := collectEvents(h.mgr.bus.SubscribeAll())
+	collector := collectEvents(t, h.mgr.bus.SubscribeAll())
 
 	defer func() {
 		collector.stop()
@@ -1344,9 +1378,13 @@ func TestSpawnedChildProducesNoPubSubEvents(t *testing.T) {
 
 	// Wait for the child to reach a terminal state: its loop — and with it
 	// announceSession — must actually have run, or the assertion below is vacuous.
-	link := h.waitForChildLink(parentID)
-	h.waitForDelivery(link.ChildID)
-	h.mgr.waitIdle(parentID)
+	h.waitUntil("child link", func() bool { return h.linkByCall(parentID, taskCallID) != nil })
+	link := *h.linkByCall(parentID, taskCallID)
+	h.waitUntil(
+		"child delivery",
+		func() bool { link := h.link(link.ChildID); return link != nil && link.DeliveredAt != 0 },
+	)
+	h.waitUntil("session idle", func() bool { return !h.mgr.HasActiveLoop(parentID) })
 
 	var parentEvents int
 
@@ -1480,7 +1518,7 @@ func TestOwnerlessIdleIsSuppressedByReplacementRunner(t *testing.T) {
 
 func TestHarnessScenario_LengthAttemptIsDiscardedBeforeToolExecution(t *testing.T) {
 	h := newHarness(t, harnessOptions{respond: lengthRecoveryResponder(t)})
-	collector := collectEvents(h.mgr.bus.SubscribeAll())
+	collector := collectEvents(t, h.mgr.bus.SubscribeAll())
 	defer func() {
 		collector.stop()
 		h.shutdown()
@@ -1491,9 +1529,9 @@ func TestHarnessScenario_LengthAttemptIsDiscardedBeforeToolExecution(t *testing.
 		"manager_id": scenarioManagerID,
 	})
 	require.NoError(t, err)
-	waitForVisibleMessage(t, collector, sessionID, "recovered complete answer")
+	collector.waitMessage(sessionID, "recovered complete answer")
 	drainScenarioClaims(t, "model_response_length_recovery.json", newChainController(t, h))
-	waitForIdleAfterMessage(t, collector, sessionID, "recovered complete answer")
+	collector.waitIdleAfter(sessionID, "recovered complete answer")
 
 	messages := transcriptOf(h, sessionID)
 	assert.Zero(t, countToolResultsFor(messages, "todowrite"))
@@ -1541,7 +1579,7 @@ func TestHarnessScenario_RejectedFinishPublishesCanonicalError(t *testing.T) {
 			h := newHarness(t, harnessOptions{respond: func(string, []llmwire.Message) *llmwire.Response {
 				return &tt.response
 			}})
-			collector := collectEvents(h.mgr.bus.SubscribeAll())
+			collector := collectEvents(t, h.mgr.bus.SubscribeAll())
 			defer func() { collector.stop(); h.shutdown() }()
 			h.startInboxWake()
 			sessionID, err := h.mgr.Send(h.ctx, h.projectID, tt.prompt, "fake-model", map[string]any{
@@ -1549,9 +1587,9 @@ func TestHarnessScenario_RejectedFinishPublishesCanonicalError(t *testing.T) {
 			})
 			require.NoError(t, err)
 			want := sessionstore.IntegrityErrorNotice(tt.error)
-			waitForVisibleMessage(t, collector, sessionID, want)
+			collector.waitMessage(sessionID, want)
 			drainScenarioClaims(t, tt.trace, newChainController(t, h))
-			waitForIdleAfterMessage(t, collector, sessionID, want)
+			collector.waitIdleAfter(sessionID, want)
 			assert.NotContains(
 				t,
 				strings.Join(visibleEventMessages(collector.snapshot(), sessionID), "\n"),
@@ -1570,7 +1608,7 @@ func TestScenario_StartFailureParksWithoutConsumingInput(t *testing.T) {
 			clientFor: knownModelClient(
 				[]string{"removed-model", "working-model"},
 				func(string, []llmwire.Message) *llmwire.Response {
-					return &llmwire.Response{Text: "done"}
+					return textReply("done")
 				},
 			),
 		},
@@ -1579,8 +1617,20 @@ func TestScenario_StartFailureParksWithoutConsumingInput(t *testing.T) {
 	h.startInboxWake()
 	id, err := h.mgr.Send(h.ctx, h.projectID, "first", "removed-model", nil)
 	require.NoError(t, err)
-	h.waitUntil("first answer", func() bool { return countAssistantReplies(h.parentMessages(id)) == 2 })
-	h.mgr.waitIdle(id)
+	h.waitUntil("first answer", func() bool {
+		return func(msgs []llmwire.Message) int {
+			count := 0
+
+			for _, m := range msgs {
+				if m.Role == llmwire.RoleAssistant && m.Content != "" {
+					count++
+				}
+			}
+
+			return count
+		}(h.messages(id)) == 2
+	})
+	h.waitUntil("session idle", func() bool { return !h.mgr.HasActiveLoop(id) })
 	h.mgr.build.Config.UnifiedConfig.Models = h.mgr.build.Config.UnifiedConfig.Models[1:]
 	h.startInboxWake()
 	require.NoError(t, h.mgr.sendToSession(h.ctx, id, "keep this input"))
@@ -1588,9 +1638,8 @@ func TestScenario_StartFailureParksWithoutConsumingInput(t *testing.T) {
 		record, err := h.store.GetSession(h.ctx, id)
 		return err == nil && record.Status == sessionstore.SessionStatusError
 	})
-	h.mgr.waitIdle(id)
-	record, err := h.store.GetSession(h.ctx, id)
-	require.NoError(t, err)
+	h.waitUntil("session idle", func() bool { return !h.mgr.HasActiveLoop(id) })
+	record := h.session(id)
 	assert.Equal(t, sessionstore.SessionStatusError, record.Status)
 	pending, err := h.store.PeekPending(h.ctx, id)
 	require.NoError(t, err)
@@ -1602,8 +1651,8 @@ func TestScenario_StartFailureParksWithoutConsumingInput(t *testing.T) {
 		_, err := h.store.PeekPending(h.ctx, id)
 		return errors.Is(err, sessionstore.ErrNoPendingInput)
 	})
-	h.mgr.waitIdle(id)
-	assert.True(t, hasUserContaining(h.parentMessages(id), "keep this input"))
+	h.waitUntil("session idle", func() bool { return !h.mgr.HasActiveLoop(id) })
+	assert.True(t, hasUserContaining(h.messages(id), "keep this input"))
 }
 
 func TestScenario_RepeatedStartFailureCreatesOneOutput(t *testing.T) {
@@ -1612,7 +1661,7 @@ func TestScenario_RepeatedStartFailureCreatesOneOutput(t *testing.T) {
 		harnessOptions{
 			configure: withKnownModels([]string{"working-model"}),
 			clientFor: knownModelClient([]string{"working-model"}, func(string, []llmwire.Message) *llmwire.Response {
-				return &llmwire.Response{Text: "done"}
+				return textReply("done")
 			}),
 		},
 	)
@@ -1650,7 +1699,7 @@ func TestScenario_RepeatedStartFailureCreatesOneOutput(t *testing.T) {
 func TestScenario_StartFailureRestartKeepsOneReceipt(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "restart.db")
 	respond := func(string, []llmwire.Message) *llmwire.Response {
-		return &llmwire.Response{Text: "done"}
+		return textReply("done")
 	}
 	first := newHarness(
 		t,
@@ -1709,7 +1758,7 @@ func TestHarnessScenario_StatusMidActivationDoesNotStrandJustExecutedToolResults
 
 	respond := func(_ string, msgs []llmwire.Message) *llmwire.Response {
 		if hasToolResultFor(msgs, "ls") {
-			return &llmwire.Response{Text: "work done"}
+			return textReply("work done")
 		}
 
 		// Hold the first turn open so /status is durable before the loop reaches
@@ -1717,15 +1766,11 @@ func TestHarnessScenario_StatusMidActivationDoesNotStrandJustExecutedToolResults
 		once.Do(func() { close(entered) })
 		<-release
 
-		return &llmwire.Response{ToolCalls: []llmwire.ToolCall{{
-			ID:        "ls-call-1",
-			Name:      "ls",
-			Arguments: []byte(`{"path":"."}`),
-		}}}
+		return callReply("ls-call-1", "ls", `{"path":"."}`)
 	}
 
 	h := newHarness(t, harnessOptions{respond: respond})
-	collector := collectEvents(h.mgr.bus.SubscribeAll())
+	collector := collectEvents(t, h.mgr.bus.SubscribeAll())
 
 	released := false
 
@@ -1766,13 +1811,13 @@ func TestHarnessScenario_StatusMidActivationDoesNotStrandJustExecutedToolResults
 	collector.waitFor(t, "the interrupted work is still answered", func(e []controllerapi.SessionNotification) bool {
 		return countPublishedMessage(e, sessionID, "work done") == 1
 	})
-	h.mgr.waitIdle(sessionID)
+	h.waitUntil("session idle", func() bool { return !h.mgr.HasActiveLoop(sessionID) })
 
 	events := collector.snapshot()
 	assert.Len(t, statusReports(events, sessionID), 1, "exactly one status report")
 	assert.Equal(t, 1, countPublishedMessage(events, sessionID, "work done"), "the answer reaches the human once")
 
-	msgs := h.parentMessages(sessionID)
+	msgs := h.messages(sessionID)
 	require.NoError(t, llm.ValidateToolPairing(msgs))
 	assert.Equal(t, 1, countToolResultsFor(msgs, "ls"))
 	assert.Equal(t, "work done", lastAssistantTextDTO(msgs))
@@ -1785,7 +1830,7 @@ func TestHarnessScenario_StatusMidActivationDoesNotStrandJustExecutedToolResults
 func TestHarnessScenario_StatusOnAFreshSessionCostsNoModelTurn(t *testing.T) {
 	rec := &skillRecorder{}
 	h := newHarness(t, harnessOptions{respond: rec.wrap(plainRespond)})
-	collector := collectEvents(h.mgr.bus.SubscribeAll())
+	collector := collectEvents(t, h.mgr.bus.SubscribeAll())
 
 	defer func() {
 		collector.stop()
@@ -1799,11 +1844,11 @@ func TestHarnessScenario_StatusOnAFreshSessionCostsNoModelTurn(t *testing.T) {
 	collector.waitFor(t, "status report reaches the controller", func(e []controllerapi.SessionNotification) bool {
 		return len(statusReports(e, sessionID)) == 1
 	})
-	h.mgr.waitIdle(sessionID)
+	h.waitUntil("session idle", func() bool { return !h.mgr.HasActiveLoop(sessionID) })
 
 	assert.Len(t, statusReports(collector.snapshot(), sessionID), 1, "exactly one status report")
 	assert.Empty(t, rec.snapshot(), "a conversation that asks nothing is never sent to the provider")
-	assert.Empty(t, h.parentMessages(sessionID), "the status command writes nothing")
+	assert.Empty(t, h.messages(sessionID), "the status command writes nothing")
 	h.requireInboxDrained(sessionID)
 }
 
@@ -1812,7 +1857,7 @@ func TestHarnessScenario_StatusOnAFreshSessionCostsNoModelTurn(t *testing.T) {
 func TestHarnessScenario_StatusIsAnsweredWhileABlockingChildIsOut(t *testing.T) {
 	release := make(chan struct{})
 	h := newHarness(t, harnessOptions{respond: blockingCompactRespond(release)})
-	collector := collectEvents(h.mgr.bus.SubscribeAll())
+	collector := collectEvents(t, h.mgr.bus.SubscribeAll())
 
 	released := false
 
@@ -1829,7 +1874,8 @@ func TestHarnessScenario_StatusIsAnsweredWhileABlockingChildIsOut(t *testing.T) 
 	parentID, err := h.mgr.Send(h.ctx, h.projectID, "do work then spawn", "fake-model", nil)
 	require.NoError(t, err)
 
-	link := h.waitForChildLink(parentID)
+	h.waitUntil("child link", func() bool { return h.linkByCall(parentID, taskCallID) != nil })
+	link := *h.linkByCall(parentID, taskCallID)
 	require.True(t, link.Blocking)
 	h.waitUntil("parent suspended", func() bool { return !h.mgr.HasActiveLoop(parentID) })
 
@@ -1840,7 +1886,7 @@ func TestHarnessScenario_StatusIsAnsweredWhileABlockingChildIsOut(t *testing.T) 
 	})
 	h.waitUntil("status wake finished", func() bool { return !h.mgr.HasActiveLoop(parentID) })
 
-	waiting := h.parentMessages(parentID)
+	waiting := h.messages(parentID)
 	assert.Equal(t, 1, countAssistantToolCallsFor(waiting, "task"))
 	assert.Equal(t, 0, countToolResultsFor(waiting, "task"), "the join must still be owed to the child")
 
@@ -1848,14 +1894,17 @@ func TestHarnessScenario_StatusIsAnsweredWhileABlockingChildIsOut(t *testing.T) 
 
 	released = true
 
-	h.waitForDelivery(link.ChildID)
-	h.mgr.waitIdle(parentID)
+	h.waitUntil(
+		"child delivery",
+		func() bool { link := h.link(link.ChildID); return link != nil && link.DeliveredAt != 0 },
+	)
+	h.waitUntil("session idle", func() bool { return !h.mgr.HasActiveLoop(parentID) })
 
 	collector.waitFor(t, "the parent answers once the child returns", func(e []controllerapi.SessionNotification) bool {
 		return countPublishedMessage(e, parentID, "parent got the child result") == 1
 	})
 
-	msgs := h.parentMessages(parentID)
+	msgs := h.messages(parentID)
 	require.NoError(t, llm.ValidateToolPairing(msgs))
 	assert.Equal(t, 1, countToolResultsFor(msgs, "task"))
 	assert.Len(t, statusReports(collector.snapshot(), parentID), 1, "still exactly one status report")
@@ -1867,7 +1916,7 @@ func TestHarnessScenario_StatusIsAnsweredWhileABlockingChildIsOut(t *testing.T) 
 // priority text, and the legend after one blank line.
 func TestHarnessScenario_StatusFullTodoListOrderingAndIcons(t *testing.T) {
 	h := newHarness(t, harnessOptions{respond: trivialRespond})
-	collector := collectEvents(h.mgr.bus.SubscribeAll())
+	collector := collectEvents(t, h.mgr.bus.SubscribeAll())
 	defer func() {
 		collector.stop()
 		h.shutdown()
@@ -1878,7 +1927,7 @@ func TestHarnessScenario_StatusFullTodoListOrderingAndIcons(t *testing.T) {
 		"manager_id": scenarioManagerID,
 	})
 	require.NoError(t, err)
-	h.mgr.waitIdle(root)
+	h.waitUntil("session idle", func() bool { return !h.mgr.HasActiveLoop(root) })
 
 	base := time.Now().UTC().Add(-time.Hour)
 	stamp := func(d time.Duration) string { return base.Add(d).Format(time.RFC3339Nano) }
@@ -1902,7 +1951,7 @@ func TestHarnessScenario_StatusFullTodoListOrderingAndIcons(t *testing.T) {
 	collector.waitFor(t, "full /status TODO list", func(e []controllerapi.SessionNotification) bool {
 		return len(statusReports(e, root)) > 0
 	})
-	h.mgr.waitIdle(root)
+	h.waitUntil("session idle", func() bool { return !h.mgr.HasActiveLoop(root) })
 
 	reports := statusReports(collector.snapshot(), root)
 	report := reports[len(reports)-1]
@@ -1933,18 +1982,16 @@ func TestHarnessScenario_StatusFullTodoListOrderingAndIcons(t *testing.T) {
 func TestScenario_StoppedRootAnswersStatusWithoutReactivating(t *testing.T) {
 	respond := func(_ string, msgs []llmwire.Message) *llmwire.Response {
 		if hasUserContaining(msgs, "what happened?") {
-			return &llmwire.Response{Text: "fresh response"}
+			return textReply("fresh response")
 		}
-		if hasAssistantToolCall(msgs, "bash") {
-			return &llmwire.Response{Text: "old work was interrupted"}
+		if countAssistantToolCallsFor(msgs, "bash") > 0 {
+			return textReply("old work was interrupted")
 		}
-		return &llmwire.Response{ToolCalls: []llmwire.ToolCall{{
-			ID: "long-bash", Name: "bash", Arguments: []byte(`{"command":"sleep 30"}`),
-		}}}
+		return callReply("long-bash", "bash", `{"command":"sleep 30"}`)
 	}
 
 	h := newHarness(t, harnessOptions{respond: respond})
-	collector := collectEvents(h.mgr.bus.SubscribeAll())
+	collector := collectEvents(t, h.mgr.bus.SubscribeAll())
 
 	defer func() {
 		collector.stop()
@@ -1955,7 +2002,7 @@ func TestScenario_StoppedRootAnswersStatusWithoutReactivating(t *testing.T) {
 	sessionID, err := h.mgr.Send(h.ctx, h.projectID, "watch checks", "fake-model", nil)
 	require.NoError(t, err)
 	h.waitUntil("ordinary bash started", func() bool {
-		return countAssistantToolCallsFor(h.parentMessages(sessionID), "bash") == 1 &&
+		return countAssistantToolCallsFor(h.messages(sessionID), "bash") == 1 &&
 			h.mgr.HasActiveLoop(sessionID)
 	})
 
@@ -1979,12 +2026,11 @@ func TestScenario_StoppedRootAnswersStatusWithoutReactivating(t *testing.T) {
 				event.Notification.Reason == ""
 		})
 	})
-	h.mgr.waitIdle(sessionID)
+	h.waitUntil("session idle", func() bool { return !h.mgr.HasActiveLoop(sessionID) })
 
 	assert.Len(t, statusReports(collector.snapshot(), sessionID), 1, "the stopped root answers /status")
 
-	rec, err := h.store.GetSession(h.ctx, sessionID)
-	require.NoError(t, err)
+	rec := h.session(sessionID)
 	assert.Equal(t, sessionstore.SessionStatusStopped, rec.Status,
 		"a read-only command must not reactivate the stopped root")
 
