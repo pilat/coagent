@@ -7,12 +7,16 @@ import (
 	"fmt"
 	"math"
 	"time"
+
+	"github.com/pilat/coagent/internal/budget"
 )
 
-func (s *store) GetBudget(ctx context.Context, rootID int64) (*BudgetRecord, error) {
+var _ budget.Store = (*Store)(nil)
+
+func (s *Store) Get(ctx context.Context, rootID int64) (*budget.Record, error) {
 	record, err := scanBudget(s.db.QueryRowContext(ctx, budgetSelect+` WHERE root_session_id = ?`, rootID))
 	if errors.Is(err, sql.ErrNoRows) {
-		return nil, ErrBudgetNotFound
+		return nil, budget.ErrNotFound
 	}
 
 	if err != nil {
@@ -22,33 +26,32 @@ func (s *store) GetBudget(ctx context.Context, rootID int64) (*BudgetRecord, err
 	return record, nil
 }
 
-func (s *store) ArmBudget(
+func (s *Store) Arm(
 	ctx context.Context,
-	mutation BudgetMutation,
-) (*BudgetRecord, *OutputCommit, error) {
+	mutation budget.Mutation,
+) (*budget.Record, error) {
 	if err := validateBudgetMutation(mutation, true); err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
-		return nil, nil, fmt.Errorf("begin arm budget: %w", err)
+		return nil, fmt.Errorf("begin arm budget: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	owner, baseline, err := budgetRootFacts(ctx, tx, mutation.RootSessionID)
+	baseline, err := budgetRootFacts(ctx, tx, mutation.RootSessionID)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 
-	if replayed, replayCommit, replayErr := replayBudgetMutation(
+	if replayed, replayErr := replayBudgetMutation(
 		ctx,
 		tx,
 		mutation,
-		owner,
 	); replayed != nil ||
 		replayErr != nil {
-		return replayed, replayCommit, replayErr
+		return replayed, replayErr
 	}
 
 	generation := int64(1)
@@ -59,7 +62,7 @@ func (s *store) ArmBudget(
 	if err == nil {
 		generation = previous + 1
 	} else if !errors.Is(err, sql.ErrNoRows) {
-		return nil, nil, fmt.Errorf("load budget generation: %w", err)
+		return nil, fmt.Errorf("load budget generation: %w", err)
 	}
 
 	now := time.Now().UTC()
@@ -75,56 +78,58 @@ func (s *store) ArmBudget(
 		mutation.RootSessionID, generation, now, baseline,
 		nullFloat(mutation.CostLimitUSD), nullInt64(mutation.DurationSeconds))
 	if err != nil {
-		return nil, nil, fmt.Errorf("arm budget: %w", err)
+		return nil, fmt.Errorf("arm budget: %w", err)
 	}
 
 	if err := consumeActivationTx(ctx, tx, mutation); err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 
-	commit, err := insertDirectOutput(ctx, tx, mutation.RootSessionID, owner,
-		mutation.ToolCallID, 0, mutation.Receipt)
+	_, err = insertOutputTx(ctx, tx, OutputDraft{
+		SessionID: mutation.RootSessionID, Type: OutputMessagePersistent, Content: mutation.Receipt,
+		SourceKey: fmt.Sprintf("tool:%s:direct:0", mutation.ToolCallID),
+	}, CommitLoop)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 
 	if err := tx.Commit(); err != nil {
-		return nil, nil, fmt.Errorf("commit arm budget: %w", err)
+		return nil, fmt.Errorf("commit arm budget: %w", err)
 	}
 
-	record, err := s.GetBudget(ctx, mutation.RootSessionID)
+	s.recordWoken(mutation.RootSessionID)
+	record, err := s.Get(ctx, mutation.RootSessionID)
 
-	return record, commit, err
+	return record, err
 }
 
-func (s *store) ClearBudget(
+func (s *Store) Clear(
 	ctx context.Context,
-	mutation BudgetMutation,
-) (*BudgetRecord, *OutputCommit, error) {
+	mutation budget.Mutation,
+) (*budget.Record, error) {
 	if err := validateBudgetMutation(mutation, false); err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
-		return nil, nil, fmt.Errorf("begin clear budget: %w", err)
+		return nil, fmt.Errorf("begin clear budget: %w", err)
 	}
 
 	defer func() { _ = tx.Rollback() }()
 
-	owner, baseline, err := budgetRootFacts(ctx, tx, mutation.RootSessionID)
+	baseline, err := budgetRootFacts(ctx, tx, mutation.RootSessionID)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 
-	if replayed, replayCommit, replayErr := replayBudgetMutation(
+	if replayed, replayErr := replayBudgetMutation(
 		ctx,
 		tx,
 		mutation,
-		owner,
 	); replayed != nil ||
 		replayErr != nil {
-		return replayed, replayCommit, replayErr
+		return replayed, replayErr
 	}
 
 	now := time.Now().UTC()
@@ -133,7 +138,7 @@ func (s *store) ClearBudget(
 		released_reason = 'cleared', park_owner = '' WHERE root_session_id = ?
 			AND park_phase <> 'draining'`, now, mutation.RootSessionID)
 	if err != nil {
-		return nil, nil, fmt.Errorf("clear budget: %w", err)
+		return nil, fmt.Errorf("clear budget: %w", err)
 	}
 
 	affected, _ := result.RowsAffected()
@@ -144,65 +149,68 @@ func (s *store) ClearBudget(
 
 		if loadErr == nil {
 			// The row exists but the drain owns it: no external release wins the window.
-			return nil, nil, ErrBudgetConflict
+			return nil, budget.ErrConflict
 		}
 
 		_, err = tx.ExecContext(ctx, `INSERT INTO session_budgets
 			(root_session_id, state, generation, armed_at, baseline_cost_usd, released_at, released_reason)
 			VALUES (?, 'released', 1, ?, ?, ?, 'cleared')`, mutation.RootSessionID, now, baseline, now)
 		if err != nil {
-			return nil, nil, fmt.Errorf("record absent budget clear: %w", err)
+			return nil, fmt.Errorf("record absent budget clear: %w", err)
 		}
 	}
 
 	if err := consumeActivationTx(ctx, tx, mutation); err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 
-	commit, err := insertDirectOutput(ctx, tx, mutation.RootSessionID, owner,
-		mutation.ToolCallID, 0, mutation.Receipt)
+	_, err = insertOutputTx(ctx, tx, OutputDraft{
+		SessionID: mutation.RootSessionID, Type: OutputMessagePersistent, Content: mutation.Receipt,
+		SourceKey: fmt.Sprintf("tool:%s:direct:0", mutation.ToolCallID),
+	}, CommitLoop)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 
 	if err := tx.Commit(); err != nil {
-		return nil, nil, fmt.Errorf("commit clear budget: %w", err)
+		return nil, fmt.Errorf("commit clear budget: %w", err)
 	}
 
-	record, err := s.GetBudget(ctx, mutation.RootSessionID)
+	s.recordWoken(mutation.RootSessionID)
+	record, err := s.Get(ctx, mutation.RootSessionID)
 
-	return record, commit, err
+	return record, err
 }
 
-func validateBudgetMutation(mutation BudgetMutation, arm bool) error {
+func validateBudgetMutation(mutation budget.Mutation, arm bool) error {
 	if mutation.RootSessionID <= 0 || mutation.InputID <= 0 || mutation.ToolID == "" ||
 		mutation.Command == "" || mutation.ToolCallID == "" || mutation.Receipt == "" {
-		return ErrBudgetConflict
+		return budget.ErrConflict
 	}
 
 	if arm == (mutation.CostLimitUSD == nil && mutation.DurationSeconds == nil) {
-		return ErrBudgetConflict
+		return budget.ErrConflict
 	}
 
 	if mutation.CostLimitUSD != nil && (*mutation.CostLimitUSD <= 0 || *mutation.CostLimitUSD > 1_000_000 ||
 		math.IsNaN(*mutation.CostLimitUSD) || math.IsInf(*mutation.CostLimitUSD, 0)) {
-		return ErrBudgetConflict
+		return budget.ErrConflict
 	}
 
 	if mutation.DurationSeconds != nil && (*mutation.DurationSeconds < 60 || *mutation.DurationSeconds > 31_536_000) {
-		return ErrBudgetConflict
+		return budget.ErrConflict
 	}
 
 	return nil
 }
 
-func consumeActivationTx(ctx context.Context, tx *sql.Tx, mutation BudgetMutation) error {
+func consumeActivationTx(ctx context.Context, tx *sql.Tx, mutation budget.Mutation) error {
 	err := ConsumeActivationTx(ctx, tx, ActivationBinding{
 		InputID: mutation.InputID, SessionID: mutation.RootSessionID,
 		ToolID: mutation.ToolID, Command: mutation.Command, ToolCallID: mutation.ToolCallID,
 	})
 	if errors.Is(err, ErrActivationConflict) {
-		return ErrBudgetConflict
+		return budget.ErrConflict
 	}
 
 	if err != nil {
@@ -215,51 +223,53 @@ func consumeActivationTx(ctx context.Context, tx *sql.Tx, mutation BudgetMutatio
 func replayBudgetMutation(
 	ctx context.Context,
 	tx *sql.Tx,
-	mutation BudgetMutation,
-	owner string,
-) (*BudgetRecord, *OutputCommit, error) {
+	mutation budget.Mutation,
+) (*budget.Record, error) {
 	var state, callID, toolID, command string
 
 	err := tx.QueryRowContext(ctx, `SELECT state, COALESCE(tool_call_id, ''), tool_id, command
 		FROM session_tool_activations WHERE input_id = ? AND session_id = ?`,
 		mutation.InputID, mutation.RootSessionID).Scan(&state, &callID, &toolID, &command)
 	if errors.Is(err, sql.ErrNoRows) || state == "pending" {
-		return nil, nil, nil
+		//nolint:nilnil // An unresolved activation falls through to the new mutation.
+		return nil, nil
 	}
 
 	if err != nil {
-		return nil, nil, fmt.Errorf("load budget activation replay: %w", err)
+		return nil, fmt.Errorf("load budget activation replay: %w", err)
 	}
 
 	if state != "consumed" || callID != mutation.ToolCallID || toolID != mutation.ToolID ||
 		command != mutation.Command {
-		return nil, nil, ErrBudgetConflict
+		return nil, budget.ErrConflict
 	}
 
 	record, err := scanBudget(
 		tx.QueryRowContext(ctx, budgetSelect+` WHERE root_session_id = ?`, mutation.RootSessionID),
 	)
 	if err != nil {
-		return nil, nil, fmt.Errorf("load replayed budget: %w", err)
+		return nil, fmt.Errorf("load replayed budget: %w", err)
 	}
 
-	commit, err := insertDirectOutput(ctx, tx, mutation.RootSessionID, owner,
-		mutation.ToolCallID, 0, mutation.Receipt)
+	_, err = insertOutputTx(ctx, tx, OutputDraft{
+		SessionID: mutation.RootSessionID, Type: OutputMessagePersistent, Content: mutation.Receipt,
+		SourceKey: fmt.Sprintf("tool:%s:direct:0", mutation.ToolCallID),
+	}, CommitLoop)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 
 	if err := tx.Commit(); err != nil {
-		return nil, nil, fmt.Errorf("commit budget replay: %w", err)
+		return nil, fmt.Errorf("commit budget replay: %w", err)
 	}
 
-	return record, commit, nil
+	return record, nil
 }
 
-func budgetRootFacts(ctx context.Context, tx *sql.Tx, rootID int64) (string, float64, error) {
-	owner, err := outputOwner(ctx, tx, rootID)
+func budgetRootFacts(ctx context.Context, tx *sql.Tx, rootID int64) (float64, error) {
+	_, err := outputOwner(ctx, tx, rootID)
 	if err != nil {
-		return "", 0, err
+		return 0, err
 	}
 	var parent int64
 	var cost float64
@@ -269,10 +279,10 @@ func budgetRootFacts(ctx context.Context, tx *sql.Tx, rootID int64) (string, flo
 		LEFT JOIN messages ON messages.session_id = tree.id WHERE sessions.id = ? GROUP BY sessions.id`, rootID).
 		Scan(&parent, &cost)
 	if err != nil || parent != 0 || math.IsNaN(cost) || math.IsInf(cost, 0) || cost < 0 {
-		return "", 0, ErrBudgetConflict
+		return 0, budget.ErrConflict
 	}
 
-	return owner, cost, nil
+	return cost, nil
 }
 
 func nullFloat(value *float64) any {

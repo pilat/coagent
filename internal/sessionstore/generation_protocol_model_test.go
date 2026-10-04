@@ -91,13 +91,17 @@ func (m *generationProtocolModel) apply(command generationProtocolCommand) {
 		m.pending++
 		m.inputSeq++ // consumes one durable inbox identity
 	case genPromote:
-		if m.pending == 0 {
+		if m.pending == 0 || m.stopping {
 			return
 		}
 
 		m.pending--
 		m.generation++
+		m.stopped = false
 	case genScheduleTick:
+		if m.stopping {
+			return
+		}
 		// Exactly-once delivery: re-delivery never advances or duplicates.
 		already := false
 		for _, row := range m.rows {
@@ -107,6 +111,7 @@ func (m *generationProtocolModel) apply(command generationProtocolCommand) {
 		}
 		if !already {
 			m.generation++
+			m.stopped = false
 			m.rows = append(m.rows, generationModelRow{
 				generation: m.generation, sourceKey: "schedule:schedule:model:tick:announcement",
 			})
@@ -141,10 +146,6 @@ func (m *generationProtocolModel) apply(command generationProtocolCommand) {
 		if m.claim >= 0 {
 			row := &m.rows[m.claim]
 			row.delivered = true
-			if row.stopDone {
-				m.stopped = true
-			}
-
 			m.claim = -1
 		}
 	case genStaleProgress:
@@ -170,6 +171,7 @@ func (m *generationProtocolModel) apply(command generationProtocolCommand) {
 		}
 
 		m.stopping = false
+		m.stopped = true
 		m.hasBudget = false
 		m.rows = append(m.rows, generationModelRow{
 			generation: m.generation, releases: true, inputID: m.stopInput,
@@ -183,7 +185,7 @@ func (m *generationProtocolModel) apply(command generationProtocolCommand) {
 type generationProduction struct {
 	t               *testing.T
 	ctx             context.Context
-	store           Store
+	store           *Store
 	db              *sql.DB
 	root            int64
 	inputs          int64
@@ -212,22 +214,37 @@ func (p *generationProduction) apply(command generationProtocolCommand) {
 			return
 		}
 
-		_, err := p.store.EnqueueModelInput(p.ctx, p.root, "queued follow-up")
+		_, err := enqueueUser(p.ctx, p.store, p.root, "queued follow-up")
 		require.NoError(p.t, err)
 	case genPromote:
+		if p.rootStatus() == SessionStatusStopping {
+			return
+		}
 		input, err := p.store.PeekPending(p.ctx, p.root)
 		if err != nil {
 			require.ErrorIs(p.t, err, ErrNoPendingInput)
 
 			return
 		}
-		_, err = p.store.PromoteInput(p.ctx, input.ID, input.RawContent)
+		_, err = acceptInput(p.ctx, p.store, input.ID, input.RawContent)
 		require.NoError(p.t, err)
 	case genScheduleTick:
-		_, _, _, err := p.store.InsertScheduledToolNotificationPairOnce(
-			p.ctx, p.root, "schedule:model:tick", "schedule-model-fingerprint",
+		if p.rootStatus() == SessionStatusStopping {
+			_, err := p.store.Enqueue(
+				p.ctx,
+				Input{
+					SessionID:   p.root,
+					Source:      InputSourceSchedule,
+					Content:     "scheduled event",
+					DeliveryKey: "schedule:model:tick",
+				},
+			)
+			require.ErrorIs(p.t, err, ErrSessionNotAcceptingInput)
+			return
+		}
+		_, _, _, err := scheduledTurn(p.ctx, p.store, p.root, "schedule:model:tick", "schedule-model-fingerprint",
 			&transcript.Message{
-				Role: llmwire.RoleAssistant, ToolCalls: []byte(`[{"id":"s1","name":"schedule"}]`),
+				Role: llmwire.RoleAssistant, ToolCalls: []byte(`[{"ID":"s1","Name":"schedule"}]`),
 			},
 			&transcript.Message{
 				Role: llmwire.RoleTool, Content: "scheduled event",
@@ -259,9 +276,9 @@ func (p *generationProduction) apply(command generationProtocolCommand) {
 			return
 		}
 
-		_, _, err := p.store.InsertAssistantMessageWithOutput(p.ctx, p.root, &transcript.Message{
+		_, _, err := appendPublished(p.ctx, p.store, p.root, &transcript.Message{
 			Role: "assistant", Content: "reply before tool",
-			ToolCalls: []byte(`[{"id":"reply-tool","name":"bash"}]`),
+			ToolCalls: []byte(`[{"ID":"reply-tool","Name":"bash"}]`),
 		}, OutputMessagePersistent, "reply before tool", false)
 		require.NoError(p.t, err)
 	case genClaim:
@@ -303,7 +320,7 @@ func (p *generationProduction) apply(command generationProtocolCommand) {
 			return
 		}
 
-		input, err := p.store.EnqueueInput(p.ctx, p.root, InputSourceUser, "/stop")
+		input, err := enqueueInput(p.ctx, p.store, p.root, InputSourceUser, "/stop")
 		require.NoError(p.t, err)
 		p.lastStopInputID = input.ID
 		_, err = p.store.BeginLifecycleInput(p.ctx, input.ID, "stop", "⏳ Stopping…")
@@ -317,6 +334,9 @@ func (p *generationProduction) apply(command generationProtocolCommand) {
 	case genStopCleanupCrash:
 		// Cleanup is in-flight when the process dies; nothing commits.
 	case genStopComplete:
+		if !p.rootStopping() {
+			return
+		}
 		var inputID sql.NullInt64
 		require.NoError(p.t, p.db.QueryRowContext(p.ctx, `SELECT MAX(id) FROM session_inbox
 			WHERE session_id = ? AND resolution_reason = 'stop'`, p.root).Scan(&inputID))
@@ -328,7 +348,7 @@ func (p *generationProduction) apply(command generationProtocolCommand) {
 		_, err := p.store.CompleteExplicitStop(p.ctx, p.root, inputID.Int64, 0)
 		require.NoError(p.t, err)
 	case genRestart:
-		p.store = NewStore(p.db)
+		p.store = testStore(p.db)
 		p.claim = nil
 	}
 }
@@ -344,11 +364,16 @@ func (p *generationProduction) currentGeneration() int64 {
 
 // rootStopping reports the durable fence state the emit path must respect.
 func (p *generationProduction) rootStopping() bool {
-	var status string
+	status := p.rootStatus()
+	return status == SessionStatusStopping || status == SessionStatusStopped
+}
+
+func (p *generationProduction) rootStatus() SessionStatus {
+	var status SessionStatus
 	require.NoError(p.t, p.db.QueryRowContext(p.ctx,
 		`SELECT status FROM sessions WHERE id = ?`, p.root).Scan(&status))
 
-	return status == "stopping" || status == "stopped"
+	return status
 }
 
 func (p *generationProduction) assertMatches(model *generationProtocolModel, step int) {
@@ -477,6 +502,24 @@ func TestGenerationProtocol_ExplicitStopLifecycle(t *testing.T) {
 		byte(genStopComplete), // terminal effects happen exactly once
 		byte(genRestart),
 		byte(genStopComplete), // still exactly once after restart
+	})
+}
+
+func TestGenerationProtocol_ResumeBeforeStopReceiptDelivery(t *testing.T) {
+	runGenerationProtocol(t, []byte{
+		byte(genStopStart),
+		byte(genScheduleTick),
+		byte(genStopComplete),
+		byte(genEmitMessage),
+		byte(genEnqueuePending),
+		byte(genPromote),
+		byte(genEmitDirectReply),
+		byte(genClaim),
+		byte(genAck),
+		byte(genClaim),
+		byte(genAck),
+		byte(genEmitMessage),
+		byte(genRestart),
 	})
 }
 

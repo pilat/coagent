@@ -120,9 +120,9 @@ func (s *service) listSessions(
 	ctx context.Context,
 	managerID string,
 ) ([]controllerapi.SessionInfo, error) {
-	records, err := s.backend.List(ctx)
+	records, err := s.store.ListSessions(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("list sessions: %w", err)
+		return nil, fmt.Errorf("list sessions: list sessions: %w", err)
 	}
 
 	infos := make([]controllerapi.SessionInfo, 0, len(records))
@@ -131,8 +131,8 @@ func (s *service) listSessions(
 			continue
 		}
 
-		workDir, _ := s.backend.GetProjectWorkDir(ctx, record.ProjectID)
-		projectName, _ := s.backend.GetProjectName(ctx, record.ProjectID)
+		workDir, _ := s.store.GetProjectWorkDir(ctx, record.ProjectID)
+		projectName, _ := s.store.GetProjectName(ctx, record.ProjectID)
 		infos = append(infos, controllerapi.SessionInfo{
 			ID: record.ID, Name: fmt.Sprintf("%s - %d", projectName, record.ID),
 			WorkDir: workDir, ProjectID: record.ProjectID, ProjectName: projectName,
@@ -186,7 +186,12 @@ func (s *service) currentProgress(
 		return nil, err
 	}
 
-	return s.backend.CurrentProgress(ctx, sessionID) //nolint:wrapcheck // Backend supplies operation context.
+	current, err := s.progress.Current(ctx, sessionID)
+	if err != nil {
+		return nil, fmt.Errorf("current progress: %w", err)
+	}
+
+	return current, nil
 }
 
 func (s *service) refreshProgress(ctx context.Context, managerID string, sessionID int64) error {
@@ -194,7 +199,11 @@ func (s *service) refreshProgress(ctx context.Context, managerID string, session
 		return err
 	}
 
-	return s.backend.RefreshProgress(ctx, sessionID) //nolint:wrapcheck // Backend supplies operation context.
+	if err := s.progress.Refresh(ctx, sessionID); err != nil {
+		return fmt.Errorf("refresh progress: %w", err)
+	}
+
+	return nil
 }
 
 func (s *service) subscribe(managerID string) <-chan controllerapi.SessionNotification {
@@ -202,11 +211,11 @@ func (s *service) subscribe(managerID string) <-chan controllerapi.SessionNotifi
 		return make(chan controllerapi.SessionNotification)
 	}
 
-	return s.backend.PubSub().SubscribeManager(managerID)
+	return s.bus.SubscribeManager(managerID)
 }
 
 func (s *service) unsubscribe(ch <-chan controllerapi.SessionNotification) {
-	s.backend.PubSub().UnsubscribeManager(ch)
+	s.bus.UnsubscribeManager(ch)
 }
 
 func (s *service) publishInputReceived(sessionID int64, message, source string) {

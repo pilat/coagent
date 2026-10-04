@@ -14,20 +14,30 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/pilat/coagent/internal/backgroundprocess"
 	"github.com/pilat/coagent/internal/budget"
 	"github.com/pilat/coagent/internal/config"
+	"github.com/pilat/coagent/internal/configapply"
+	"github.com/pilat/coagent/internal/configops"
 	"github.com/pilat/coagent/internal/controllerapi"
 	"github.com/pilat/coagent/internal/daemon"
 	"github.com/pilat/coagent/internal/managercontrol"
 	"github.com/pilat/coagent/internal/managerdelivery"
+	"github.com/pilat/coagent/internal/managerdiscovery"
+	"github.com/pilat/coagent/internal/mcpstore"
 	"github.com/pilat/coagent/internal/migrate"
+	"github.com/pilat/coagent/internal/progressruntime"
+	"github.com/pilat/coagent/internal/schedule"
+	"github.com/pilat/coagent/internal/sessionbuild"
+	"github.com/pilat/coagent/internal/sessionbus"
 	"github.com/pilat/coagent/internal/sessionstore"
 	"github.com/pilat/coagent/internal/subagent"
+	"github.com/pilat/coagent/internal/tool/builtin"
 )
 
 type telegramOwnershipHarness struct {
 	svc               daemon.Service
-	sessions          sessionstore.Store
+	sessions          *sessionstore.Store
 	projectID         int64
 	manager           *Manager
 	foreignController controllerapi.Controller
@@ -61,15 +71,31 @@ func newTelegramOwnershipHarness(t *testing.T) *telegramOwnershipHarness {
 	t.Cleanup(func() { _ = db.Close() })
 	require.NoError(t, migrate.Run(ctx, db, dbPath))
 
-	projects := daemon.NewStore(db)
+	projects := sessionstore.NewStore(db)
 	sessions := sessionstore.NewStore(db)
 	cfg := &config.Config{UnifiedConfig: &config.UnifiedConfig{ProjectsRoot: filepath.Join(root, "projects")}}
+	bus := sessionbus.New()
+	progress := progressruntime.New(sessions, bus)
 	svc := daemon.New(
-		context.Background(), nil, projects, sessions, sessions, sessions, sessions, sessions, sessions, sessions,
-		subagent.NewStore(db), subagent.NewTransactions(db),
-		budget.New(sessions), sessions, nil, cfg, nil, nil,
+		context.Background(),
+		sessionbuild.BuildInput{Config: cfg, Store: sessions, Resources: builtin.NewResources()},
+		sessions,
+		subagent.NewStore(db, sessions),
+		budget.New(sessions),
+		backgroundprocess.NewStore(db, sessions),
+		progress,
+		bus,
+		schedule.NewService(schedule.NewStore(db, sessions), sessions),
+		cfg,
+		mcpstore.NewStore(db),
+		configapply.New(
+			configops.New(filepath.Join(root, "config.yaml"), filepath.Join(root, "secrets.yaml")),
+			sessions,
+		),
 	)
-	controllers := managercontrol.New(svc, svc, sessions, cfg, nil)
+	t.Cleanup(func() { svc.Shutdown(3 * time.Second) })
+
+	controllers := managercontrol.New(svc, sessions, managerdiscovery.New(sessions, cfg, nil), progress, bus, cfg, nil)
 	telegramController := controllers.ForManager("telegram-main")
 	projectID, err := projects.GetOrCreateProject(ctx, filepath.Join(root, "project"))
 	require.NoError(t, err)

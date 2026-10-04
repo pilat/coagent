@@ -126,7 +126,7 @@ func TestBuildStackResourcesReuseShellSnapshot(t *testing.T) {
 	assert.NotSame(t, second.resources.provider, child.resources.provider)
 }
 
-func TestResourcePolicyAndProjectInvalidation(t *testing.T) {
+func TestResourcePolicyChangeRetiresPriorStack(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	owner := NewResources()
 	defer func() { require.NoError(t, owner.Close()) }()
@@ -141,14 +141,4 @@ func TestResourcePolicyAndProjectInvalidation(t *testing.T) {
 	assert.NotSame(t, first.provider, second.provider)
 	assert.Equal(t, 1, client.stops)
 	require.NoError(t, second.release())
-	require.NoError(t, owner.Invalidate(8))
-	third, err := owner.acquire(cfg, bashsandbox.Config{Enabled: true})
-	require.NoError(t, err)
-	assert.Same(t, second, third)
-	require.NoError(t, owner.Invalidate(7))
-	require.NoError(t, third.release())
-	fourth, err := owner.acquire(cfg, bashsandbox.Config{Enabled: true})
-	require.NoError(t, err)
-	assert.NotSame(t, third, fourth)
-	require.NoError(t, fourth.release())
 }

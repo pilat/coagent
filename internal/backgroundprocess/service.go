@@ -39,6 +39,8 @@ var (
 	ErrFenced = errors.New("session tree is being stopped")
 )
 
+var _ Service = (*svc)(nil)
+
 // Spec describes process ownership and execution limits.
 type Spec struct {
 	ProjectDir    string
@@ -66,19 +68,15 @@ type Completion struct {
 	BinaryTail  bool
 }
 
-// OnCompletion receives an advertised process completion.
-type OnCompletion func(ctx context.Context, completion Completion)
-
-// TreeFence holds process admission against a root-tree stop transition.
-type TreeFence func(ctx context.Context, rootSessionID int64) (release func(), err error)
+// Fence keeps process admission inside the root-tree stop boundary.
+type Fence interface {
+	Fence(ctx context.Context, rootSessionID int64) (release func(), err error)
+}
 
 // Options configures process storage, delivery, and admission.
 type Options struct {
-	OutputDir       string
-	OnCompletion    OnCompletion
-	TreeFence       TreeFence
-	Now             func() time.Time
-	GuardianCommand func(guardPath string, readyWriter, leaseReader *os.File) *exec.Cmd
+	OutputDir string
+	Fence     Fence
 }
 
 // Service owns process execution and durable lifecycle transitions.
@@ -93,8 +91,6 @@ type Service interface {
 	CancelAll(ctx context.Context, intent HostIntent) (int, error)
 	InterruptNonterminal(ctx context.Context) (int, error)
 }
-
-var _ Service = (*svc)(nil)
 
 type svc struct {
 	store           Store
@@ -125,14 +121,6 @@ type launchResult struct {
 
 // NewService constructs a process lifecycle service.
 func NewService(store Store, opts Options) Service {
-	if opts.Now == nil {
-		opts.Now = time.Now
-	}
-
-	if opts.GuardianCommand == nil {
-		opts.GuardianCommand = newGuardianCommand
-	}
-
 	return &svc{
 		store: store, opts: opts, live: make(map[int64]int),
 		background: make(map[int64]int), candidates: make(map[int64]int),
@@ -176,10 +164,10 @@ func (s *svc) Start(
 		return Process{}, errors.New("process output directory is unavailable")
 	}
 
-	if s.opts.TreeFence != nil {
-		releaseFence, err := s.opts.TreeFence(ctx, spec.RootSessionID)
+	if s.opts.Fence != nil {
+		releaseFence, err := s.opts.Fence.Fence(ctx, spec.RootSessionID)
 		if err != nil {
-			return Process{}, err
+			return Process{}, fmt.Errorf("start: %w", err)
 		}
 		defer releaseFence()
 	}
@@ -235,7 +223,7 @@ func (s *svc) Advertise(ctx context.Context, processID string) (bool, error) {
 
 	record, tracked := s.liveRecords[processID]
 	if !tracked || s.classes[processID] != admissionCandidate {
-		advertised, err := s.store.Advertise(ctx, processID, s.opts.Now())
+		advertised, err := s.store.Advertise(ctx, processID, time.Now())
 		if err != nil {
 			return false, fmt.Errorf("advertise untracked process: %w", err)
 		}
@@ -246,7 +234,7 @@ func (s *svc) Advertise(ctx context.Context, processID string) (bool, error) {
 		return false, ErrSlotLimit
 	}
 
-	advertised, err := s.store.Advertise(ctx, processID, s.opts.Now())
+	advertised, err := s.store.Advertise(ctx, processID, time.Now())
 	if err != nil {
 		return false, fmt.Errorf("advertise process: %w", err)
 	}

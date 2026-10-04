@@ -8,22 +8,24 @@ import (
 	"fmt"
 	"math"
 	"time"
+
+	"github.com/pilat/coagent/internal/budget"
 )
 
 const budgetSelect = `SELECT root_session_id, state, generation, armed_at, baseline_cost_usd,
 	cost_limit_usd, duration_seconds, fired_at, released_at, fired_reason, released_reason,
 	observed_cost_usd, park_phase, park_owner FROM session_budgets`
 
-func (s *store) FireBudget(
+func (s *Store) FireBudget(
 	ctx context.Context,
 	rootID, generation int64,
 	reason string,
 	observedCost float64,
 	content string,
-) (*BudgetRecord, *OutputCommit, error) {
+) (*budget.Record, *OutputCommit, error) {
 	if rootID <= 0 || generation <= 0 || (reason != "cost" && reason != "duration") || content == "" ||
 		observedCost < 0 || math.IsNaN(observedCost) || math.IsInf(observedCost, 0) {
-		return nil, nil, ErrBudgetConflict
+		return nil, nil, budget.ErrConflict
 	}
 
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -32,12 +34,12 @@ func (s *store) FireBudget(
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	owner, err := outputOwner(ctx, tx, rootID)
+	_, err = outputOwner(ctx, tx, rootID)
 	if err != nil {
 		return nil, nil, err
 	}
 
-	record, commit, err := fireBudgetTx(ctx, tx, rootID, generation, reason, observedCost, content, owner)
+	record, commit, err := fireBudgetTx(ctx, tx, rootID, generation, reason, observedCost, content)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -46,11 +48,11 @@ func (s *store) FireBudget(
 		return nil, nil, fmt.Errorf("commit fire budget: %w", err)
 	}
 
-	if commit.Existing {
+	if commit != nil && commit.Existing {
 		return record, commit, nil
 	}
 
-	fired, err := s.GetBudget(ctx, rootID)
+	fired, err := s.Get(ctx, rootID)
 
 	return fired, commit, err
 }
@@ -58,12 +60,12 @@ func (s *store) FireBudget(
 // ObserveBudget is the single-transaction admission observation: it reads the
 // budget, computes the crossing from the in-transaction tree cost and, on a
 // crossing, fires within the same writer serialization — no read-then-CAS gap.
-func (s *store) ObserveBudget(
+func (s *Store) ObserveBudget(
 	ctx context.Context,
 	rootID int64,
 	observedAt time.Time,
 	assistantText string,
-) (*BudgetRecord, bool, error) {
+) (*budget.Record, bool, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, false, fmt.Errorf("begin budget observation: %w", err)
@@ -79,8 +81,8 @@ func (s *store) ObserveBudget(
 		return nil, false, fmt.Errorf("load observed budget: %w", err)
 	}
 
-	if record.State != BudgetArmed {
-		return record, record.State == BudgetFired, nil
+	if record.State != budget.Armed {
+		return record, record.State == budget.Fired, nil
 	}
 
 	reason, delta, err := budgetCrossing(ctx, tx, record, observedAt)
@@ -99,12 +101,12 @@ func (s *store) ObserveBudget(
 		content = assistantText + "\n\n" + content
 	}
 
-	owner, err := outputOwner(ctx, tx, rootID)
+	_, err = outputOwner(ctx, tx, rootID)
 	if err != nil {
 		return nil, false, err
 	}
 
-	fired, _, err := fireBudgetTx(ctx, tx, rootID, record.Generation, reason, delta, content, owner)
+	fired, _, err := fireBudgetTx(ctx, tx, rootID, record.Generation, reason, delta, content)
 	if err != nil {
 		return nil, false, err
 	}
@@ -114,13 +116,44 @@ func (s *store) ObserveBudget(
 	}
 
 	if fired == nil {
-		fired, err = s.GetBudget(ctx, rootID)
+		fired, err = s.Get(ctx, rootID)
 		if err != nil {
 			return nil, false, err
 		}
 	}
 
 	return fired, true, nil
+}
+
+func (s *Store) ReleaseBudget(
+	ctx context.Context,
+	rootID, generation int64,
+	reason string,
+) (*budget.Record, error) {
+	if !validBudgetReleaseReason(reason) {
+		return nil, budget.ErrConflict
+	}
+
+	result, err := s.db.ExecContext(ctx, `UPDATE session_budgets SET state = 'released', released_at = ?,
+		released_reason = ?, park_owner = '' WHERE root_session_id = ? AND generation = ?
+			AND state IN ('armed', 'fired') AND park_phase <> 'draining'`,
+		time.Now().UTC(), reason, rootID, generation)
+	if err != nil {
+		return nil, fmt.Errorf("release budget: %w", err)
+	}
+
+	affected, _ := result.RowsAffected()
+	if affected == 0 {
+		existing, loadErr := s.Get(ctx, rootID)
+		if loadErr == nil && existing.Generation == generation && existing.State == budget.Released &&
+			existing.ReleasedReason == reason {
+			return existing, nil
+		}
+
+		return nil, budget.ErrConflict
+	}
+
+	return s.Get(ctx, rootID)
 }
 
 // fireBudgetTx CASes armed→fired and inserts the checkpoint inside the caller's
@@ -132,8 +165,8 @@ func fireBudgetTx(
 	rootID, generation int64,
 	reason string,
 	observedCost float64,
-	content, owner string,
-) (*BudgetRecord, *OutputCommit, error) {
+	content string,
+) (*budget.Record, *OutputCommit, error) {
 	now := time.Now().UTC()
 	parkOwner := fmt.Sprintf("budget:%d:%d", rootID, generation)
 
@@ -149,8 +182,8 @@ func fireBudgetTx(
 	if affected == 0 {
 		existing, loadErr := scanBudget(tx.QueryRowContext(ctx, budgetSelect+
 			` WHERE root_session_id = ? AND generation = ?`, rootID, generation))
-		if loadErr != nil || existing.State != BudgetFired {
-			return nil, nil, ErrBudgetConflict
+		if loadErr != nil || existing.State != budget.Fired {
+			return nil, nil, budget.ErrConflict
 		}
 
 		commit, commitErr := budgetOutputByKey(ctx, tx, rootID, generation)
@@ -163,7 +196,10 @@ func fireBudgetTx(
 
 	key := fmt.Sprintf("budget:%d:checkpoint", generation)
 
-	commit, err := insertMessageOutput(ctx, tx, rootID, owner, content, key, now, true)
+	commit, err := insertOutputTx(ctx, tx, OutputDraft{
+		SessionID: rootID, Type: OutputMessagePersistent,
+		Content: content, SourceKey: key, CreatedAt: now, ReleasesInput: true,
+	}, CommitLifecycle)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -171,39 +207,8 @@ func fireBudgetTx(
 	return nil, commit, nil
 }
 
-func (s *store) ReleaseBudget(
-	ctx context.Context,
-	rootID, generation int64,
-	reason string,
-) (*BudgetRecord, error) {
-	if !validBudgetReleaseReason(reason) {
-		return nil, ErrBudgetConflict
-	}
-
-	result, err := s.db.ExecContext(ctx, `UPDATE session_budgets SET state = 'released', released_at = ?,
-		released_reason = ?, park_owner = '' WHERE root_session_id = ? AND generation = ?
-			AND state IN ('armed', 'fired') AND park_phase <> 'draining'`,
-		time.Now().UTC(), reason, rootID, generation)
-	if err != nil {
-		return nil, fmt.Errorf("release budget: %w", err)
-	}
-
-	affected, _ := result.RowsAffected()
-	if affected == 0 {
-		existing, loadErr := s.GetBudget(ctx, rootID)
-		if loadErr == nil && existing.Generation == generation && existing.State == BudgetReleased &&
-			existing.ReleasedReason == reason {
-			return existing, nil
-		}
-
-		return nil, ErrBudgetConflict
-	}
-
-	return s.GetBudget(ctx, rootID)
-}
-
-func scanBudget(row interface{ Scan(...any) error }) (*BudgetRecord, error) {
-	var record BudgetRecord
+func scanBudget(row interface{ Scan(...any) error }) (*budget.Record, error) {
+	var record budget.Record
 	var cost sql.NullFloat64
 	var duration sql.NullInt64
 	var firedAt, releasedAt sql.NullTime

@@ -14,7 +14,7 @@ import (
 
 func insertUsageRow(
 	t *testing.T,
-	store Store,
+	store *Store,
 	sessionID int64,
 	prompt, completion int,
 	cost float64,
@@ -24,7 +24,7 @@ func insertUsageRow(
 	usage, err := json.Marshal(llmwire.MessageUsage{PromptTokens: prompt, CompletionTokens: completion})
 	require.NoError(t, err)
 
-	id, err := store.InsertMessage(context.Background(), sessionID, &transcript.Message{
+	id, err := appendMessage(context.Background(), store, sessionID, &transcript.Message{
 		Role:    llmwire.RoleAssistant,
 		Content: "work",
 		CostUSD: cost,
@@ -44,13 +44,13 @@ func TestGetSessionTreeUsage(t *testing.T) {
 	root, err := store.CreateSession(ctx, projectID, "m", "medium", nil)
 	require.NoError(t, err)
 
-	sub, err := store.CreateSubagentSession(ctx, projectID, root.ID, root.ID, "explore", "m", "medium")
+	sub, err := createChild(ctx, store, projectID, root.ID, root.ID, "explore", "m", "medium")
 	require.NoError(t, err)
 
 	// Root's own: one active + one that gets compacted (still counted).
 	insertUsageRow(t, store, root.ID, 1000, 100, 0.05)
 	compactedID := insertUsageRow(t, store, root.ID, 2000, 200, 0.10)
-	require.NoError(t, store.MarkCompacted(ctx, []int64{compactedID}))
+	require.NoError(t, compactHead(ctx, store, []int64{compactedID}))
 
 	// Subagent's messages count too.
 	insertUsageRow(t, store, sub, 500, 50, 0.02)

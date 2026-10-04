@@ -9,7 +9,7 @@ import (
 
 // RecordSessionStartFailure parks failed work without consuming input and records
 // its first error once, including across process restarts and delivery retries.
-func (s *store) RecordSessionStartFailure(ctx context.Context, sessionID int64, content string) (bool, error) {
+func (s *Store) RecordSessionStartFailure(ctx context.Context, sessionID int64, content string) (bool, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return false, fmt.Errorf("begin start failure: %w", err)
@@ -76,10 +76,10 @@ func recordStartFailureOutputTx(ctx context.Context, tx *sql.Tx, record *Session
 		return false, nil
 	}
 
-	_, err := enqueueOutputTx(ctx, tx, OutputDraft{
+	_, err := insertOutputTx(ctx, tx, OutputDraft{
 		SessionID: record.ID, Type: OutputMessagePersistent, Content: content,
 		SourceKey: key, Fingerprint: OutputFingerprint(OutputMessagePersistent, content, record.ID, nil),
-	})
+	}, CommitLoop)
 	if err != nil {
 		return false, fmt.Errorf("record start failure receipt: %w", err)
 	}

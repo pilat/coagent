@@ -34,7 +34,7 @@ func (s *service) CreateProject(
 }
 
 func (s *service) ListRecentProjects(ctx context.Context) (*controllerapi.ProjectListResultData, error) {
-	recent, err := s.backend.ListRecentProjects(ctx, projectpath.ResolveRoot(s.unifiedConfig()))
+	recent, err := listRecentProjects(ctx, s.backend, projectpath.ResolveRoot(s.unifiedConfig()))
 	if err != nil {
 		return nil, fmt.Errorf("list recent projects: %w", err)
 	}
@@ -45,7 +45,7 @@ func (s *service) ListRecentProjects(ctx context.Context) (*controllerapi.Projec
 // hiddenDirNames lists work dirs backed by hidden project rows, so /spawn
 // navigation omits exactly those directories without inferring from a basename.
 func (s *service) hiddenDirNames(ctx context.Context) map[string]bool {
-	dirs, err := s.backend.ListHiddenProjectDirs(ctx)
+	dirs, err := listHiddenProjectDirs(ctx, s.backend)
 	if err != nil {
 		return nil
 	}

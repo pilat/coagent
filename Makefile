@@ -153,7 +153,7 @@ race:
 CI_STRESS_COUNT ?= 25
 CI_STRESS_TIMEOUT ?= 15m
 CI_STRESS_PACKAGES := ./internal/session ./internal/sessionstore ./internal/daemon ./internal/schedule ./internal/managerdelivery ./internal/managers/telegram ./internal/migrate
-CI_STRESS_RUN := Test(Harness|Worker|OutputTransport|ExecuteToolCalls_(RejectsSleepAlongside|RejectedSleepDoesNotSkip)|Integration_(StressBlockingNoDeadlock|BackgroundTaskRejectsCompetingSleepProtocol|ScatterGatherBlockingTasks|OneShotAckFailureRedeliversWithoutDuplicateTranscriptOrPublication|FreshScheduleDuplicateDoesNotResetOrRunTwice)|Executor_CronAckRetryKeepsCanonicalIdentityAndPayload|ScheduledDeliveryStore_ContextResetRollsBackClaimAndTranscriptOnInsertFailure|SendMessage_DoesNotDuplicateOnRateLimitOrAmbiguousTransportFailure|FollowUpAcceptedBeforeTerminalBoundaryStaysInSameActivation|Stop(ParksWholeTreeAndExplicitFollowUpResumesOnlyChild|DirectChildParksItsOwnLinkWithoutStoppingParent)|StartFinishesInterruptedStopBeforeRecoverySweep|SubagentWaitGuardRejectsSleepUntilCompletionDelivered|OpenDB_ExplicitTransactionsReserveWriterAtBegin|BudgetStore_ArmFireAndReplayAreAtomic)
+CI_STRESS_RUN := Test(Harness|Worker|OutputTransport|ExecuteToolCalls_RejectsSleepAlongside|Integration_(StressBlockingNoDeadlock|BackgroundTaskRejectsCompetingSleepProtocol|ScatterGatherBlockingTasks|OneShotAckFailureRedeliversWithoutDuplicateTranscriptOrPublication|FreshScheduleDuplicateDoesNotResetOrRunTwice)|Executor_CronAckRetryKeepsCanonicalIdentityAndPayload|SendMessage_DoesNotDuplicateOnRateLimitOrAmbiguousTransportFailure|FollowUpAcceptedBeforeTerminalBoundaryStaysInSameActivation|Stop(ParksWholeTreeAndExplicitFollowUpResumesOnlyChild|DirectChildParksItsOwnLinkWithoutStoppingParent)|StartFinishesInterruptedStopBeforeRecoverySweep|OpenDB_ExplicitTransactionsReserveWriterAtBegin|BudgetStore_ArmFireAndReplayAreAtomic)
 
 stress:
 	$(require_ci)
@@ -233,17 +233,17 @@ MUTATION_TIMEOUT_COEFFICIENT ?= 30
 # This CI-only diagnostic keeps a curated scope for targeted test audits. It is
 # deliberately not a prerequisite of any verification target.
 CRITICAL_MUTATION_DIR := internal/session
-CRITICAL_MUTATION_FILES := toolexec.go message_persist.go loop_boundary.go todo_replace.go
+CRITICAL_MUTATION_FILES := step_tools.go step_model.go step_boundary.go transcript.go
 # Gremlins patterns are unanchored regexps, so a bare basename like "store.go"
 # would also match every *_store.go — anchor each exclude to the basename.
 CRITICAL_MUTATION_EXCLUDES = $(foreach file,$(filter-out $(CRITICAL_MUTATION_FILES),$(filter-out %_test.go,$(notdir $(wildcard $(CRITICAL_MUTATION_DIR)/*.go)))),--exclude-files '(^|/)$(file)$$')
 CRITICAL_SCHEDULE_MUTATION_FILES := executor.go service.go store.go
 CRITICAL_SCHEDULE_MUTATION_EXCLUDES = $(foreach file,$(filter-out $(CRITICAL_SCHEDULE_MUTATION_FILES),$(filter-out %_test.go,$(notdir $(wildcard internal/schedule/*.go)))),--exclude-files '(^|/)$(file)$$')
-CRITICAL_STORE_MUTATION_FILES := scheduled_delivery_store.go output_delivery_store.go output_lifecycle_store.go output_message_store.go activation_store.go budget_state_store.go budget_output_store.go direct_output_store.go progress_store.go readiness_store.go
+CRITICAL_STORE_MUTATION_FILES := enqueue.go output_delivery_store.go output_lifecycle_store.go output_message_store.go activation_store.go budget_state_store.go budget_output_store.go direct_output_store.go progress_store.go readiness_store.go
 CRITICAL_STORE_MUTATION_EXCLUDES = $(foreach file,$(filter-out $(CRITICAL_STORE_MUTATION_FILES),$(filter-out %_test.go,$(notdir $(wildcard internal/sessionstore/*.go)))),--exclude-files '(^|/)$(file)$$')
 CRITICAL_TELEGRAM_MUTATION_FILES := delivery.go delivery_errors.go
 CRITICAL_TELEGRAM_MUTATION_EXCLUDES = $(foreach file,$(filter-out $(CRITICAL_TELEGRAM_MUTATION_FILES),$(filter-out %_test.go,$(notdir $(wildcard internal/managers/telegram/*.go)))),--exclude-files '(^|/)$(file)$$')
-CRITICAL_DAEMON_MUTATION_FILES := budget_park.go progress.go readiness.go
+CRITICAL_DAEMON_MUTATION_FILES := budget.go progress.go publish.go
 CRITICAL_DAEMON_MUTATION_EXCLUDES = $(foreach file,$(filter-out $(CRITICAL_DAEMON_MUTATION_FILES),$(filter-out %_test.go,$(notdir $(wildcard internal/daemon/*.go)))),--exclude-files '(^|/)$(file)$$')
 
 mutation.critical:
@@ -293,20 +293,20 @@ NIGHTLY_MUTATION_SHARDS := commands runtime persistence async managers models to
 NIGHTLY_MUTATION_PATHS_commands := ./cmd/coagent ./cmd/releasebuilder
 NIGHTLY_MUTATION_PATHS_runtime := ./internal/session
 NIGHTLY_MUTATION_PATHS_persistence := ./internal/sessionstore
-NIGHTLY_MUTATION_PATHS_async := ./internal/admission ./internal/budget ./internal/inputruntime ./internal/migrate ./internal/progress ./internal/progressruntime ./internal/schedule ./internal/sessionbus ./internal/sessionevent ./internal/sessionlifecycle ./internal/subagent
+NIGHTLY_MUTATION_PATHS_async := ./internal/budget ./internal/migrate ./internal/progress ./internal/progressruntime ./internal/schedule ./internal/sessionbus ./internal/sessionevent ./internal/subagent
 NIGHTLY_MUTATION_PATHS_managers := ./internal/controllerapi ./internal/ctl ./internal/managercontrol ./internal/managerdelivery ./internal/managerdiscovery ./internal/managers ./internal/managers/telegram
 NIGHTLY_MUTATION_PATHS_models := ./internal/catalog ./internal/llm ./internal/llmwire ./internal/registry
 NIGHTLY_MUTATION_PATHS_tooling := ./internal/bashsandbox ./internal/lsp ./internal/mcp ./internal/mcpstore ./internal/shellenv ./internal/tool ./internal/tool/builtin
-NIGHTLY_MUTATION_PATHS_config := ./internal/config ./internal/configapply ./internal/configops ./internal/configtools ./internal/loader ./internal/memory
+NIGHTLY_MUTATION_PATHS_config := ./internal/config ./internal/configapply ./internal/configops ./internal/loader ./internal/memory
 NIGHTLY_MUTATION_PATHS_support := ./internal/coagenthome ./internal/git ./internal/humanize ./internal/id ./internal/install ./internal/logger ./internal/projectpath ./internal/todo ./internal/transcript ./internal/version
 NIGHTLY_MUTATION_PATHS_daemon-lifecycle := ./internal/daemon
-NIGHTLY_MUTATION_FILES_daemon-lifecycle := admission.go budget_park.go finalize.go input_recovery.go manager.go pending_runner.go queued_stop.go runner.go session_input.go
+NIGHTLY_MUTATION_FILES_daemon-lifecycle := runners.go run.go trees.go boot.go wake.go
 NIGHTLY_MUTATION_PATHS_daemon-subagents := ./internal/daemon
-NIGHTLY_MUTATION_FILES_daemon-subagents := completion.go completion_wiring.go orphan_calls.go spawner.go subagent.go subagent_result.go subagent_send.go subagent_wait_guard.go task.go
+NIGHTLY_MUTATION_FILES_daemon-subagents := subagents.go open.go
 NIGHTLY_MUTATION_PATHS_daemon-ops := ./internal/daemon
-NIGHTLY_MUTATION_FILES_daemon-ops := budget_tool.go compaction_defer.go config_gate.go config_tools.go mcp_tools.go mcp_tools_schema.go secret_tool.go staged.go
+NIGHTLY_MUTATION_FILES_daemon-ops := commands.go budget.go
 NIGHTLY_MUTATION_PATHS_daemon-output := ./internal/daemon
-NIGHTLY_MUTATION_FILES_daemon-output := progress.go project.go publish.go readiness.go store.go
+NIGHTLY_MUTATION_FILES_daemon-output := publish.go progress.go
 
 NIGHTLY_MUTATION_PATHS = $(NIGHTLY_MUTATION_PATHS_$(NIGHTLY_MUTATION_SHARD))
 NIGHTLY_MUTATION_FILES = $(NIGHTLY_MUTATION_FILES_$(NIGHTLY_MUTATION_SHARD))

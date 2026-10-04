@@ -141,10 +141,10 @@ func (d *ServerDef) decode(argsJSON, envJSON string) error {
 
 func scopeName(projectID *int64) string {
 	if projectID == nil {
-		return "global"
+		return mcpScopeGlobal
 	}
 
-	return "project"
+	return mcpScopeProject
 }
 
 func boolToInt(v bool) int {

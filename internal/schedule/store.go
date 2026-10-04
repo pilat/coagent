@@ -7,11 +7,15 @@ import (
 	"errors"
 	"fmt"
 	"time"
+
+	"github.com/pilat/coagent/internal/sessionstore"
 )
 
 const (
 	scheduleColumns = `id, session_id, cron_expr, one_shot_at, input_message, last_fired_at, metadata, fire_count, fresh, created_at`
 )
+
+var _ Store = (*store)(nil)
 
 type (
 	ScheduleMetadata struct {
@@ -31,7 +35,10 @@ type (
 		createdAt    time.Time
 	}
 
+	//nolint:interfacebloat // Occurrence persistence and exact-call admission form one schedule protocol.
 	Store interface {
+		Enqueue(ctx context.Context, input sessionstore.Input) (*sessionstore.Enqueued, error)
+		CallPending(ctx context.Context, sessionID int64, callID string) (bool, error)
 		AddSchedule(
 			ctx context.Context,
 			sessionID int64,
@@ -61,22 +68,45 @@ type (
 	}
 
 	store struct {
-		db *sql.DB
+		db       *sql.DB
+		sessions *sessionstore.Store
 	}
 )
 
-var _ Store = (*store)(nil)
+func (s *Schedule) ID() int64 { return s.id }
 
-func (s *Schedule) ID() int64               { return s.id }
-func (s *Schedule) SessionID() int64        { return s.sessionID }
-func (s *Schedule) CronExpr() string        { return s.cronExpr }
-func (s *Schedule) OneShotAt() *time.Time   { return s.oneShotAt }
-func (s *Schedule) InputMessage() string    { return s.inputMessage }
+func (s *Schedule) SessionID() int64 { return s.sessionID }
+
+func (s *Schedule) CronExpr() string { return s.cronExpr }
+
+func (s *Schedule) OneShotAt() *time.Time { return s.oneShotAt }
+
+func (s *Schedule) InputMessage() string { return s.inputMessage }
+
 func (s *Schedule) LastFiredAt() *time.Time { return s.lastFiredAt }
-func (s *Schedule) Fresh() bool             { return s.fresh }
 
-func NewStore(db *sql.DB) Store {
-	return &store{db: db}
+func (s *Schedule) Fresh() bool { return s.fresh }
+
+func NewStore(db *sql.DB, sessions *sessionstore.Store) Store {
+	return &store{db: db, sessions: sessions}
+}
+
+func (s *store) Enqueue(ctx context.Context, input sessionstore.Input) (*sessionstore.Enqueued, error) {
+	result, err := s.sessions.Enqueue(ctx, input)
+	if err != nil {
+		return nil, fmt.Errorf("enqueue scheduled input: %w", err)
+	}
+
+	return result, nil
+}
+
+func (s *store) CallPending(ctx context.Context, sessionID int64, callID string) (bool, error) {
+	pending, err := s.sessions.CallPending(ctx, sessionID, callID)
+	if err != nil {
+		return false, fmt.Errorf("check scheduled call: %w", err)
+	}
+
+	return pending, nil
 }
 
 func (s *store) AddSchedule(

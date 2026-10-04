@@ -2,8 +2,6 @@ package subagent
 
 import (
 	"context"
-
-	"github.com/pilat/coagent/internal/transcript"
 )
 
 // State is the durable subagent-link lifecycle vocabulary.
@@ -60,39 +58,24 @@ type Create struct {
 	InitialInput   string
 }
 
-// Store owns ordinary durable subagent-ledger access.
+// Store owns subagent links and atomic cross-table lifecycle transitions.
+//
+//nolint:interfacebloat // Link reads and atomic transitions share one ledger.
 type Store interface {
-	InsertSubagentLink(ctx context.Context, link Link) error
 	GetLink(ctx context.Context, childID int64) (*Link, error)
 	GetLinkByTaskCallID(ctx context.Context, parentID int64, taskCallID string) (*Link, error)
 	ListPendingChildLinks(ctx context.Context, parentID int64) ([]Link, error)
 	ListRunningChildLinks(ctx context.Context) ([]Link, error)
 	ListUndeliveredParentLinks(ctx context.Context) ([]Link, error)
-	MarkLinkTerminal(ctx context.Context, childID int64, state State, result string, outcome Outcome) error
-	ResetLinkRunning(ctx context.Context, childID int64) error
 	MarkLinkStopped(ctx context.Context, childID int64) error
 	MakeStoppedLinkResumable(ctx context.Context, childID int64) error
-}
-
-// Transactions owns cross-table transitions that preserve subagent obligations.
-type Transactions interface {
 	Create(ctx context.Context, create Create) (int64, error)
-	TryFinalizeActivation(
-		ctx context.Context,
-		childID int64,
-		state State,
-		result string,
-		outcome Outcome,
-	) (bool, error)
-	DeliverCompletion(
-		ctx context.Context,
-		parentID int64,
-		messages []*transcript.Message,
-		childID int64,
-		activationSeq int64,
-	) (messageIDs []int64, won bool, err error)
+	Finalize(ctx context.Context, childID int64, errored bool) (*Link, error)
+	Kill(ctx context.Context, childID int64) error
+	Resume(ctx context.Context, childID int64) error
+	Rearm(ctx context.Context, childID int64) (bool, error)
+	DeliverCompletion(ctx context.Context, link Link, content string) (won bool, err error)
 	DeliverBackgroundCompletion(ctx context.Context, link Link, iterations int) (won bool, err error)
-	RearmDeliveredWithPendingInput(ctx context.Context, childID int64) (bool, error)
 }
 
 // Terminal reports whether the current activation has finished.

@@ -6,32 +6,23 @@ import (
 	"errors"
 	"fmt"
 	"time"
-
-	"github.com/pilat/coagent/internal/sessionstore"
 )
 
 type Service interface {
-	Get(ctx context.Context, rootID int64) (*sessionstore.BudgetRecord, error)
-	Set(
-		ctx context.Context,
-		grant Grant,
-		cost *float64,
-		duration *time.Duration,
-	) (*sessionstore.BudgetRecord, string, error)
-	Clear(ctx context.Context, grant Grant) (*sessionstore.BudgetRecord, string, error)
+	Get(ctx context.Context, rootID int64) (*Record, error)
 	Observe(
 		ctx context.Context,
 		rootID int64,
 		persistedCost float64,
 		observedAt time.Time,
 		assistantText string,
-	) (*sessionstore.BudgetRecord, bool, error)
+	) (*Record, bool, error)
 	Admit(ctx context.Context, rootID int64, now time.Time) error
-	BeginDrain(ctx context.Context, rootID, generation int64, owner string) (*sessionstore.BudgetRecord, error)
-	MarkParked(ctx context.Context, rootID, generation int64, owner string) (*sessionstore.BudgetRecord, error)
-	Release(ctx context.Context, rootID, generation int64, reason string) (*sessionstore.BudgetRecord, error)
-	ListPendingParks(ctx context.Context) ([]*sessionstore.BudgetRecord, error)
-	ListArmed(ctx context.Context) ([]*sessionstore.BudgetRecord, error)
+	BeginDrain(ctx context.Context, rootID, generation int64, owner string) (*Record, error)
+	MarkParked(ctx context.Context, rootID, generation int64, owner string) (*Record, error)
+	Release(ctx context.Context, rootID, generation int64, reason string) (*Record, error)
+	ListPendingParks(ctx context.Context) ([]*Record, error)
+	ListArmed(ctx context.Context) ([]*Record, error)
 }
 
 type Grant struct {
@@ -43,12 +34,12 @@ type Grant struct {
 }
 
 type svc struct {
-	store sessionstore.BudgetStore
+	store PolicyStore
 }
 
 var _ Service = (*svc)(nil)
 
-func New(store sessionstore.BudgetStore) Service {
+func New(store PolicyStore) Service {
 	return &svc{store: store}
 }
 
@@ -56,7 +47,7 @@ func (s *svc) BeginDrain(
 	ctx context.Context,
 	rootID, generation int64,
 	owner string,
-) (*sessionstore.BudgetRecord, error) {
+) (*Record, error) {
 	record, err := s.store.BeginBudgetDrain(ctx, rootID, generation, owner)
 	if err != nil {
 		return nil, fmt.Errorf("begin budget drain: %w", err)
@@ -69,7 +60,7 @@ func (s *svc) MarkParked(
 	ctx context.Context,
 	rootID, generation int64,
 	owner string,
-) (*sessionstore.BudgetRecord, error) {
+) (*Record, error) {
 	record, err := s.store.MarkBudgetParked(ctx, rootID, generation, owner)
 	if err != nil {
 		return nil, fmt.Errorf("mark budget parked: %w", err)
@@ -82,59 +73,20 @@ func (s *svc) Release(
 	ctx context.Context,
 	rootID, generation int64,
 	reason string,
-) (*sessionstore.BudgetRecord, error) {
+) (*Record, error) {
 	return s.store.ReleaseBudget(ctx, rootID, generation, reason)
 }
 
-func (s *svc) ListPendingParks(ctx context.Context) ([]*sessionstore.BudgetRecord, error) {
+func (s *svc) ListPendingParks(ctx context.Context) ([]*Record, error) {
 	return s.store.ListPendingBudgetParks(ctx)
 }
 
-func (s *svc) ListArmed(ctx context.Context) ([]*sessionstore.BudgetRecord, error) {
+func (s *svc) ListArmed(ctx context.Context) ([]*Record, error) {
 	return s.store.ListArmedBudgets(ctx)
 }
 
-func (s *svc) Get(ctx context.Context, rootID int64) (*sessionstore.BudgetRecord, error) {
-	return s.store.GetBudget(ctx, rootID)
-}
-
-func (s *svc) Set(
-	ctx context.Context,
-	grant Grant,
-	cost *float64,
-	duration *time.Duration,
-) (*sessionstore.BudgetRecord, string, error) {
-	if cost == nil && duration == nil {
-		return nil, "", errors.New("set requires cost_usd, duration, or both")
-	}
-	var seconds *int64
-
-	if duration != nil {
-		value := int64(duration.Seconds())
-		seconds = &value
-	}
-
-	receipt := "Budget armed: " + renderLimits(cost, duration)
-	record, _, err := s.store.ArmBudget(ctx, sessionstore.BudgetMutation{
-		RootSessionID: grant.RootID, InputID: grant.InputID, ToolID: grant.ToolID,
-		Command: grant.Command, ToolCallID: grant.ToolCallID, CostLimitUSD: cost,
-		DurationSeconds: seconds, Receipt: receipt,
-	})
-
-	return record, receipt, err
-}
-
-func (s *svc) Clear(
-	ctx context.Context,
-	grant Grant,
-) (*sessionstore.BudgetRecord, string, error) {
-	const receipt = "Budget cleared"
-	record, _, err := s.store.ClearBudget(ctx, sessionstore.BudgetMutation{
-		RootSessionID: grant.RootID, InputID: grant.InputID, ToolID: grant.ToolID,
-		Command: grant.Command, ToolCallID: grant.ToolCallID, Receipt: receipt,
-	})
-
-	return record, receipt, err
+func (s *svc) Get(ctx context.Context, rootID int64) (*Record, error) {
+	return s.store.Get(ctx, rootID)
 }
 
 // Observe delegates to the store's single-transaction observation: the
@@ -146,13 +98,13 @@ func (s *svc) Observe(
 	_ float64,
 	observedAt time.Time,
 	assistantText string,
-) (*sessionstore.BudgetRecord, bool, error) {
+) (*Record, bool, error) {
 	return s.store.ObserveBudget(ctx, rootID, observedAt, assistantText)
 }
 
 func (s *svc) Admit(ctx context.Context, rootID int64, now time.Time) error {
-	record, err := s.store.GetBudget(ctx, rootID)
-	if errors.Is(err, sessionstore.ErrBudgetNotFound) || (err == nil && record.State == sessionstore.BudgetReleased) {
+	record, err := s.store.Get(ctx, rootID)
+	if errors.Is(err, ErrNotFound) || (err == nil && record.State == Released) {
 		return nil
 	}
 
@@ -160,7 +112,7 @@ func (s *svc) Admit(ctx context.Context, rootID int64, now time.Time) error {
 		return err
 	}
 
-	if record.State == sessionstore.BudgetFired {
+	if record.State == Fired {
 		return errors.New("budget checkpoint fired")
 	}
 

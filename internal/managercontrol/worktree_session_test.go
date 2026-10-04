@@ -12,14 +12,12 @@ import (
 	"github.com/pilat/coagent/internal/controllerapi"
 	"github.com/pilat/coagent/internal/git"
 	"github.com/pilat/coagent/internal/projectpath"
-	"github.com/pilat/coagent/internal/sessionbus"
 	"github.com/pilat/coagent/internal/sessionevent"
 	"github.com/pilat/coagent/internal/sessionstore"
 )
 
-// stubWorktreeBackend serves createSession's needs only: Send and
-// GetOrCreateNamedProject record their calls, everything else is unused.
 type stubWorktreeBackend struct {
+	Store
 	sendErr       error
 	namedProject  string
 	sentProjectID int64
@@ -54,58 +52,20 @@ func (f *stubWorktreeBackend) GetSession(context.Context, int64) (*sessionstore.
 	return f.session, nil
 }
 
-func (f *stubWorktreeBackend) List(context.Context) ([]*sessionstore.SessionRecord, error) {
-	return nil, nil
-}
-
 func (f *stubWorktreeBackend) SetModel(context.Context, int64, string, string) error { return nil }
 
 func (f *stubWorktreeBackend) SetAttributes(context.Context, int64, map[string]any) error {
 	return nil
 }
 
-func (f *stubWorktreeBackend) GetOrCreateProject(context.Context, string) (int64, error) {
-	return 0, nil
-}
-
-func (f *stubWorktreeBackend) GetOrCreateHiddenProject(context.Context, string) (int64, error) {
-	return 0, nil
-}
-
-func (f *stubWorktreeBackend) EnsureManagementRoot(
-	context.Context, int64, string, int64, string, string,
-) (*sessionstore.SessionRecord, *sessionstore.OutputCommit, error) {
-	return nil, nil, nil
-}
-
-func (f *stubWorktreeBackend) GetProjectWorkDir(context.Context, int64) (string, error) {
-	return "", nil
-}
-
-func (f *stubWorktreeBackend) GetProjectName(context.Context, int64) (string, error) {
-	return "", nil
-}
-
 func (f *stubWorktreeBackend) HasActiveLoop(int64) bool { return false }
-
-func (f *stubWorktreeBackend) PubSub() sessionbus.Source { return nil }
 
 func (f *stubWorktreeBackend) NotifySession(int64, sessionevent.Notification) {}
 
-func (f *stubWorktreeBackend) CurrentProgress(context.Context, int64) (*controllerapi.ProgressData, error) {
-	return nil, nil
-}
-
-func (f *stubWorktreeBackend) RefreshProgress(context.Context, int64) error { return nil }
-
-func (f *stubWorktreeBackend) ReconcileOutputReadiness(context.Context, int64) error {
-	return nil
-}
-
-func worktreeSessionService(t *testing.T, backend Backend) *service {
+func worktreeSessionService(t *testing.T, backend *stubWorktreeBackend) *service {
 	t.Helper()
 
-	return &service{backend: backend, cfg: &config.Config{
+	return &service{backend: backend, store: backend, cfg: &config.Config{
 		UnifiedConfig: &config.UnifiedConfig{WorktreesRoot: t.TempDir()},
 	}}
 }

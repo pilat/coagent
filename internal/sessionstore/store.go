@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/pilat/coagent/internal/transcript"
@@ -21,10 +22,6 @@ const (
 // 'general', a subagent type that strips the primary agent's todo tools.
 const rootAgentType = "build"
 
-// SessionStatus is the persisted sessions.status vocabulary. It is deliberately
-// distinct from controller runtime state and daemon subagent-link state.
-type SessionStatus string
-
 const (
 	SessionStatusActive      SessionStatus = "active"
 	SessionStatusCompleted   SessionStatus = "completed"
@@ -36,26 +33,14 @@ const (
 	SessionStatusKilled      SessionStatus = "killed"
 )
 
-func (s SessionStatus) valid() bool {
-	switch s {
-	case SessionStatusActive,
-		SessionStatusCompleted,
-		SessionStatusSuspended,
-		SessionStatusError,
-		SessionStatusStopping,
-		SessionStatusStopped,
-		SessionStatusTerminating,
-		SessionStatusKilled:
-		return true
-	default:
-		return false
-	}
-}
-
 const sessionColumns = `id, project_id, model, reasoning_level, master_enabled, attributes, agent_type, parent_id, iteration, status, todo_items, created_at, updated_at, killed_at, root_id, model_input_generation, model_input_boundary, context_baseline_model, context_baseline_prompt_tokens, context_baseline_message_count, completion_check_candidate_id, manager_reply_pending, empty_stop_streak, completion_check_confirmed_answer_id`
 
 // errSessionNotFound signals a lookup query matched no row.
 var errSessionNotFound = errors.New("session not found")
+
+// SessionStatus is the persisted sessions.status vocabulary. It is deliberately
+// distinct from controller runtime state and daemon subagent-link state.
+type SessionStatus string
 
 // SessionRecord represents a row in the sessions table.
 type SessionRecord struct {
@@ -111,153 +96,39 @@ type CompactionEntry struct {
 	Message    *transcript.Message
 }
 
-// RuntimeStore is the persistence capability used by a live agent session. It
-// deliberately excludes session creation, discovery and lifecycle orchestration:
-// a session may checkpoint itself and mutate its transcript, but cannot create
-// or kill another session.
-type RuntimeStore interface { //nolint:interfacebloat // Response integrity joins the existing live-loop transaction surface.
-	InsertMessage(ctx context.Context, sessionID int64, msg *transcript.Message) (int64, error)
-	// InsertMessages commits several transcript rows in one transaction and
-	// returns their ids in input order.
-	InsertMessages(ctx context.Context, sessionID int64, msgs []*transcript.Message) ([]int64, error)
-	MarkCompacted(ctx context.Context, ids []int64) error
-	ReplaceCompactedMessages(
-		ctx context.Context,
-		sessionID int64,
-		compactedIDs []int64,
-		entries []CompactionEntry,
-	) ([]int64, error)
-	LoadActiveMessages(ctx context.Context, sessionID int64) ([]*transcript.Message, error)
-
-	UpdateSessionIteration(ctx context.Context, id int64, iteration int, status SessionStatus) error
-	UpdateSessionTodoItems(ctx context.Context, id int64, items json.RawMessage) error
-	// SaveContextBaseline persists the last provider-measured context size;
-	// ClearContextBaseline drops it when the transcript it described is gone.
-	SaveContextBaseline(ctx context.Context, sessionID int64, b ContextBaseline) error
-	ClearContextBaseline(ctx context.Context, sessionID int64) error
-	GetChildSessionStats(ctx context.Context, rootID int64) (count int, totalIterations int, err error)
-	// GetSessionTreeUsage sums token usage and cost over the whole session tree
-	// rooted at rootID, including compacted rows.
-	GetSessionTreeUsage(
-		ctx context.Context,
-		rootID int64,
-	) (promptTokens int, completionTokens int, costUSD float64, err error)
-	ResponseIntegrityStore
-
-	SyntheticDeliveryStore
+// Store owns session, input, output and project persistence.
+type Store struct {
+	db            *sql.DB
+	wokenMu       sync.Mutex
+	wokenSessions map[int64]struct{}
+	woken         chan struct{}
 }
 
-// SyntheticDeliveryStore linearizes a transcript mutation with the durable
-// identity supplied by its external producer. Re-delivery of the same identity
-// and fingerprint is a successful no-op; reuse with different semantics fails.
-type SyntheticDeliveryStore interface {
-	InsertScheduledToolNotificationPairOnce(
-		ctx context.Context,
-		sessionID int64,
-		deliveryID, fingerprint string,
-		assistant, toolResult *transcript.Message,
-	) (asstID, resultID int64, inserted bool, err error)
-	InsertInternalToolNotificationPairOnce(
-		ctx context.Context,
-		sessionID int64,
-		deliveryID, fingerprint string,
-		assistant, toolResult *transcript.Message,
-	) (asstID, resultID int64, inserted bool, err error)
-	ResetSessionContextOnce(
-		ctx context.Context,
-		sessionID int64,
-		deliveryID, fingerprint string,
-		opening []*transcript.Message,
-	) (messageIDs []int64, inserted bool, err error)
+// execer is satisfied by both *sql.DB and *sql.Tx.
+type execer interface {
+	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
+	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
 }
 
-// OrchestrationStore is the capability used by the daemon. It owns session-row
-// lifecycle and the two cross-table subagent transactions. It may read a child
-// transcript and atomically append a delivered completion, but cannot perform
-// ordinary loop-owned transcript rewrites or checkpoint loop-local state.
-type OrchestrationStore interface { //nolint:interfacebloat // one bounded orchestration capability, kept at the 15-method cap
-	CreateSession(
-		ctx context.Context,
-		projectID int64,
-		model, reasoningLevel string,
-		attrs map[string]any,
-	) (*SessionRecord, error)
-	CreateReplacementSession(ctx context.Context, oldSessionID int64) (*SessionRecord, error)
-	CreateSubagentSession(
-		ctx context.Context,
-		projectID, parentID, rootID int64,
-		agentType, model, reasoningLevel string,
-	) (int64, error)
-	SetAttributes(ctx context.Context, id int64, attrs map[string]any) error
-	UpdateSessionModel(ctx context.Context, id int64, model, reasoningLevel string) error
-	GetSession(ctx context.Context, id int64) (*SessionRecord, error)
-	ListSessions(ctx context.Context) ([]*SessionRecord, error)
-	ListAllSessions(ctx context.Context) ([]*SessionRecord, error)
-	FindSessionByProjectID(ctx context.Context, projectID int64) (*SessionRecord, error)
-	LatestActivityByProject(ctx context.Context, projectIDs []int64) (map[int64]time.Time, error)
-	MarkSessionKilled(ctx context.Context, id int64) error
-	UpdateSessionStatus(ctx context.Context, id int64, status SessionStatus) error
-	KillTerminatingSessions(ctx context.Context) error
-	LoadActiveMessages(ctx context.Context, sessionID int64) ([]*transcript.Message, error)
-	// LoadMessageContentByID resolves one message's text regardless of
-	// compaction state: compaction never rewrites content, so a confirmed
-	// answer pointer stays resolvable for the session's whole life.
-	LoadMessageContentByID(ctx context.Context, sessionID, messageID int64) (string, error)
-	TerminalRejectionStore
+// rowScanner is satisfied by both *sql.Row and *sql.Rows.
+type rowScanner interface {
+	Scan(dest ...any) error
 }
 
-// Store is the complete persistence surface returned by NewStore. Consumers
-// should accept RuntimeStore or OrchestrationStore unless they truly need both.
-type Store interface { //nolint:interfacebloat // Complete constructor result; consumers use narrow capabilities.
-	AgentRuntimeStore
-	OrchestrationStore
-	InboxStore
-	ManagerOutputStore
-	RuntimeOutputStore
-	ManagerRootTransactions
-	SessionLifecycleStore
-	ActivationStore
-	BudgetStore
-	ModelInputStore
-	ProgressStore
-	ReadinessStore
-	StopCompletionStore
-	WakeSourceStore
-	FileReadStore
+type scannedMessageValues struct {
+	toolCallID, toolName, toolCallsRaw, reasoningContent, reasoningRaw sql.NullString
+	attachmentsRaw, usageRaw, finishType, providerFinishReason         sql.NullString
+	rejectedReason                                                     sql.NullString
+	retryOfMessageID                                                   sql.NullInt64
+	compactedAt                                                        sql.NullTime
+	costUSD                                                            sql.NullFloat64
 }
 
-var (
-	_ Store                 = (*store)(nil)
-	_ AgentRuntimeStore     = (*store)(nil)
-	_ RuntimeStore          = (*store)(nil)
-	_ OrchestrationStore    = (*store)(nil)
-	_ InboxStore            = (*store)(nil)
-	_ OutputStore           = (*store)(nil)
-	_ ManagerOutputStore    = (*store)(nil)
-	_ RuntimeOutputStore    = (*store)(nil)
-	_ ManagerRootStore      = (*store)(nil)
-	_ CommandOutputStore    = (*store)(nil)
-	_ LifecycleOutputStore  = (*store)(nil)
-	_ LifecycleCommandStore = (*store)(nil)
-	_ ReplacementStore      = (*store)(nil)
-	_ ActivationStore       = (*store)(nil)
-	_ DirectOutputStore     = (*store)(nil)
-	_ BudgetStore           = (*store)(nil)
-	_ ModelInputStore       = (*store)(nil)
-	_ ProgressStore         = (*store)(nil)
-	_ ReadinessStore        = (*store)(nil)
-	_ StopCompletionStore   = (*store)(nil)
-)
-
-type store struct {
-	db *sql.DB
+func NewStore(db *sql.DB) *Store {
+	return &Store{db: db, wokenSessions: make(map[int64]struct{}), woken: make(chan struct{}, 1)}
 }
 
-func NewStore(db *sql.DB) Store {
-	return &store{db: db}
-}
-
-func (s *store) CreateSession(
+func (s *Store) CreateSession(
 	ctx context.Context,
 	projectID int64,
 	model, reasoningLevel string,
@@ -313,7 +184,7 @@ func (s *store) CreateSession(
 	return rec, nil
 }
 
-func (s *store) CreateSubagentSession(
+func (s *Store) CreateSubagentSession(
 	ctx context.Context,
 	projectID, parentID, rootID int64,
 	agentType, model, reasoningLevel string,
@@ -361,7 +232,7 @@ func (s *store) CreateSubagentSession(
 }
 
 //nolint:wsl_v5 // Fencing and replacement creation must remain one transaction.
-func (s *store) CreateReplacementSession(
+func (s *Store) CreateReplacementSession(
 	ctx context.Context,
 	oldSessionID int64,
 ) (*SessionRecord, error) {
@@ -414,7 +285,7 @@ func (s *store) CreateReplacementSession(
 	}, nil
 }
 
-func (s *store) SetAttributes(ctx context.Context, id int64, attrs map[string]any) error {
+func (s *Store) SetAttributes(ctx context.Context, id int64, attrs map[string]any) error {
 	attrsJSON, err := json.Marshal(attrs)
 	if err != nil {
 		return fmt.Errorf("marshal attributes: %w", err)
@@ -443,7 +314,7 @@ func (s *store) SetAttributes(ctx context.Context, id int64, attrs map[string]an
 	return nil
 }
 
-func (s *store) UpdateSessionModel(ctx context.Context, id int64, model, reasoningLevel string) error {
+func (s *Store) UpdateSessionModel(ctx context.Context, id int64, model, reasoningLevel string) error {
 	now := time.Now().UTC()
 
 	// Written verbatim: a model that offers no effort choice legitimately carries
@@ -469,7 +340,7 @@ func (s *store) UpdateSessionModel(ctx context.Context, id int64, model, reasoni
 	return nil
 }
 
-func (s *store) GetSession(ctx context.Context, id int64) (*SessionRecord, error) {
+func (s *Store) GetSession(ctx context.Context, id int64) (*SessionRecord, error) {
 	row := s.db.QueryRowContext(
 		ctx,
 		`SELECT `+sessionColumns+` FROM sessions WHERE id = ?`, id,
@@ -478,7 +349,7 @@ func (s *store) GetSession(ctx context.Context, id int64) (*SessionRecord, error
 	return scanSession(row)
 }
 
-func (s *store) ListSessions(ctx context.Context) ([]*SessionRecord, error) {
+func (s *Store) ListSessions(ctx context.Context) ([]*SessionRecord, error) {
 	rows, err := s.db.QueryContext(
 		ctx,
 		`SELECT `+sessionColumns+` FROM sessions WHERE parent_id = 0 ORDER BY updated_at DESC`,
@@ -508,7 +379,7 @@ func (s *store) ListSessions(ctx context.Context) ([]*SessionRecord, error) {
 
 // ListAllSessions is the daemon lifecycle view, including descendants. Public
 // session listings intentionally use ListSessions, which returns roots only.
-func (s *store) ListAllSessions(ctx context.Context) ([]*SessionRecord, error) {
+func (s *Store) ListAllSessions(ctx context.Context) ([]*SessionRecord, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT `+sessionColumns+` FROM sessions ORDER BY id`)
 	if err != nil {
 		return nil, fmt.Errorf("query all sessions: %w", err)
@@ -533,7 +404,38 @@ func (s *store) ListAllSessions(ctx context.Context) ([]*SessionRecord, error) {
 	return records, nil
 }
 
-func (s *store) FindSessionByProjectID(ctx context.Context, projectID int64) (*SessionRecord, error) {
+// ListTree returns the root and all its descendants in session order.
+func (s *Store) ListTree(ctx context.Context, rootID int64) ([]*SessionRecord, error) {
+	rows, err := s.db.QueryContext(
+		ctx,
+		`SELECT `+sessionColumns+` FROM sessions WHERE id = ? OR root_id = ? ORDER BY id`,
+		rootID,
+		rootID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("query session tree: %w", err)
+	}
+	defer rows.Close()
+
+	var records []*SessionRecord
+
+	for rows.Next() {
+		rec, scanErr := scanSessionRows(rows)
+		if scanErr != nil {
+			return nil, scanErr
+		}
+
+		records = append(records, rec)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate session tree: %w", err)
+	}
+
+	return records, nil
+}
+
+func (s *Store) FindSessionByProjectID(ctx context.Context, projectID int64) (*SessionRecord, error) {
 	row := s.db.QueryRowContext(
 		ctx,
 		`SELECT `+sessionColumns+` FROM sessions WHERE project_id = ? AND parent_id = 0 AND killed_at IS NULL ORDER BY updated_at DESC LIMIT 1`,
@@ -555,7 +457,7 @@ func (s *store) FindSessionByProjectID(ctx context.Context, projectID int64) (*S
 // with no sessions are absent from the map. The plain updated_at column is read
 // via ORDER BY ... LIMIT 1 (not MAX()) so modernc.org/sqlite keeps the DATETIME
 // decltype and scans straight into time.Time.
-func (s *store) LatestActivityByProject(ctx context.Context, projectIDs []int64) (map[int64]time.Time, error) {
+func (s *Store) LatestActivityByProject(ctx context.Context, projectIDs []int64) (map[int64]time.Time, error) {
 	result := make(map[int64]time.Time, len(projectIDs))
 
 	for _, pid := range projectIDs {
@@ -572,14 +474,8 @@ func (s *store) LatestActivityByProject(ctx context.Context, projectIDs []int64)
 	return result, nil
 }
 
-func (s *store) MarkSessionKilled(ctx context.Context, id int64) error {
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("begin tx: %w", err)
-	}
-
-	defer func() { _ = tx.Rollback() }()
-
+// MarkSessionKilledTx kills the session and cancels its pending input within the caller's transaction.
+func MarkSessionKilledTx(ctx context.Context, tx *sql.Tx, id int64) error {
 	now := time.Now().UTC()
 
 	var parentID int64
@@ -607,25 +503,22 @@ func (s *store) MarkSessionKilled(ctx context.Context, id int64) error {
 		return fmt.Errorf("session %d not found", id)
 	}
 
-	if err := cancelPendingInputTree(ctx, tx, id, parentID == 0, now); err != nil {
-		return err
-	}
-
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("commit tx: %w", err)
-	}
-
-	return nil
+	return cancelPendingInputTree(ctx, tx, id, parentID == 0, now)
 }
 
-func (s *store) UpdateSessionStatus(ctx context.Context, id int64, status SessionStatus) error {
+func (s *Store) UpdateSessionStatus(ctx context.Context, id int64, status SessionStatus) error {
+	return s.WithTx(ctx, func(tx *sql.Tx) error { return UpdateSessionStatusTx(ctx, tx, id, status) })
+}
+
+// UpdateSessionStatusTx changes status within the caller's lifecycle transaction.
+func UpdateSessionStatusTx(ctx context.Context, tx *sql.Tx, id int64, status SessionStatus) error {
 	if !status.valid() {
 		return fmt.Errorf("invalid session status %q", status)
 	}
 
 	now := time.Now().UTC()
 
-	result, err := s.db.ExecContext(ctx, `UPDATE sessions SET status = ?, updated_at = ? WHERE id = ?`, status, now, id)
+	result, err := tx.ExecContext(ctx, `UPDATE sessions SET status = ?, updated_at = ? WHERE id = ?`, status, now, id)
 	if err != nil {
 		return fmt.Errorf("update session status: %w", err)
 	}
@@ -642,59 +535,8 @@ func (s *store) UpdateSessionStatus(ctx context.Context, id int64, status Sessio
 	return nil
 }
 
-// KillTerminatingSessions finishes the boot reconciliation of roots left mid
-// clear or kill: a matching replacement row means clear transferred the
-// surface, its absence selects kill cleanup with a close output.
-func (s *store) KillTerminatingSessions(ctx context.Context) error {
-	now := time.Now().UTC()
-
-	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, attributes FROM sessions
-		WHERE status = 'terminating' AND killed_at IS NULL`)
-	if err != nil {
-		return fmt.Errorf("list terminating sessions: %w", err)
-	}
-	defer rows.Close()
-
-	type terminating struct {
-		id    int64
-		owner string
-	}
-
-	targets := make([]terminating, 0)
-
-	for rows.Next() {
-		var target terminating
-
-		var encoded string
-		if err := rows.Scan(&target.id, &encoded); err != nil {
-			return fmt.Errorf("scan terminating session: %w", err)
-		}
-
-		var attributes map[string]any
-		if err := json.Unmarshal([]byte(encoded), &attributes); err != nil {
-			return fmt.Errorf("decode session %d attributes: %w", target.id, err)
-		}
-
-		target.owner, _ = attributes[managerIDAttribute].(string)
-		targets = append(targets, target)
-	}
-
-	if err := rows.Err(); err != nil {
-		return fmt.Errorf("iterate terminating sessions: %w", err)
-	}
-
-	for _, target := range targets {
-		if err := s.killTerminatingTarget(ctx, target.id, target.owner, now); err != nil {
-			return err
-		}
-	}
-
-	return nil
-}
-
 //nolint:nonamedreturns // two same-typed int results are ambiguous at call sites without names
-func (s *store) GetChildSessionStats(ctx context.Context, rootID int64) (count, totalIterations int, err error) {
+func (s *Store) GetChildSessionStats(ctx context.Context, rootID int64) (count, totalIterations int, err error) {
 	err = s.db.QueryRowContext(
 		ctx,
 		`SELECT COUNT(*), COALESCE(SUM(iteration), 0) FROM sessions WHERE root_id = ?`,
@@ -709,7 +551,7 @@ func (s *store) GetChildSessionStats(ctx context.Context, rootID int64) (count, 
 }
 
 //nolint:nonamedreturns // three heterogeneous results are ambiguous at call sites without names
-func (s *store) GetSessionTreeUsage(
+func (s *Store) GetSessionTreeUsage(
 	ctx context.Context,
 	rootID int64,
 ) (promptTokens, completionTokens int, costUSD float64, err error) {
@@ -732,10 +574,59 @@ func (s *store) GetSessionTreeUsage(
 	return promptTokens, completionTokens, costUSD, nil
 }
 
-// execer is satisfied by both *sql.DB and *sql.Tx.
-type execer interface {
-	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
-	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
+// LoadMessageContentByID resolves one message's text regardless of compaction
+// state: compaction only stamps compacted_at and never rewrites content, so a
+// confirmed answer pointer stays resolvable for the session's whole life.
+func (s *Store) LoadMessageContentByID(ctx context.Context, sessionID, messageID int64) (string, error) {
+	var content sql.NullString
+
+	err := s.db.QueryRowContext(ctx,
+		`SELECT content FROM messages WHERE session_id = ? AND id = ?`,
+		sessionID, messageID,
+	).Scan(&content)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", errSessionNotFound
+	}
+
+	if err != nil {
+		return "", fmt.Errorf("load message content by id: %w", err)
+	}
+
+	return content.String, nil
+}
+
+func (s *Store) LoadActiveMessages(ctx context.Context, sessionID int64) ([]*transcript.Message, error) {
+	rows, err := s.db.QueryContext(
+		ctx,
+		`SELECT id, session_id, role, content, tool_call_id, tool_name, tool_error, tool_calls,
+			reasoning_content, reasoning_raw, attachments, cost_usd, usage, finish_type,
+			provider_finish_reason, rejected_reason, retry_of_message_id, compacted_at, created_at
+		FROM messages WHERE session_id = ? AND compacted_at IS NULL AND rejected_reason IS NULL
+		ORDER BY position IS NULL, position, id`,
+		sessionID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("query active messages: %w", err)
+	}
+	defer rows.Close()
+
+	return scanMessages(rows)
+}
+
+func (s SessionStatus) valid() bool {
+	switch s {
+	case SessionStatusActive,
+		SessionStatusCompleted,
+		SessionStatusSuspended,
+		SessionStatusError,
+		SessionStatusStopping,
+		SessionStatusStopped,
+		SessionStatusTerminating,
+		SessionStatusKilled:
+		return true
+	default:
+		return false
+	}
 }
 
 func insertMessageWith(ctx context.Context, q execer, sessionID int64, msg *transcript.Message) (int64, error) {
@@ -800,86 +691,6 @@ func validateRetryReference(ctx context.Context, q execer, sessionID, retryOfMes
 	return nil
 }
 
-func (s *store) InsertMessage(ctx context.Context, sessionID int64, msg *transcript.Message) (int64, error) {
-	return insertMessageWith(ctx, s.db, sessionID, msg)
-}
-
-func (s *store) InsertMessages(ctx context.Context, sessionID int64, msgs []*transcript.Message) ([]int64, error) {
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return nil, fmt.Errorf("begin message set: %w", err)
-	}
-
-	defer func() { _ = tx.Rollback() }()
-
-	ids := make([]int64, len(msgs))
-	for i, msg := range msgs {
-		id, insertErr := insertMessageWith(ctx, tx, sessionID, msg)
-		if insertErr != nil {
-			return nil, insertErr
-		}
-
-		ids[i] = id
-	}
-
-	if err := tx.Commit(); err != nil {
-		return nil, fmt.Errorf("commit message set: %w", err)
-	}
-
-	return ids, nil
-}
-
-func (s *store) MarkCompacted(ctx context.Context, ids []int64) error {
-	if len(ids) == 0 {
-		return nil
-	}
-
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("begin tx: %w", err)
-	}
-
-	defer func() { _ = tx.Rollback() }()
-
-	now := time.Now().UTC()
-	for _, id := range ids {
-		if _, err := tx.ExecContext(ctx, `UPDATE messages SET compacted_at = ? WHERE id = ?`, now, id); err != nil {
-			return fmt.Errorf("mark compacted %d: %w", id, err)
-		}
-	}
-
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("commit tx: %w", err)
-	}
-
-	return nil
-}
-
-func (s *store) ReplaceCompactedMessages(
-	ctx context.Context,
-	sessionID int64,
-	compactedIDs []int64,
-	entries []CompactionEntry,
-) ([]int64, error) {
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return nil, fmt.Errorf("begin compaction replacement: %w", err)
-	}
-
-	defer func() { _ = tx.Rollback() }()
-
-	ids, err := replaceCompactedMessagesTx(ctx, tx, sessionID, compactedIDs, entries, time.Now().UTC())
-	if err != nil {
-		return nil, err
-	}
-
-	if err := tx.Commit(); err != nil {
-		return nil, fmt.Errorf("commit compaction replacement: %w", err)
-	}
-
-	return ids, nil
-}
-
 func replaceCompactedMessagesTx(
 	ctx context.Context,
 	tx *sql.Tx,
@@ -889,8 +700,24 @@ func replaceCompactedMessagesTx(
 	now time.Time,
 ) ([]int64, error) {
 	for _, id := range compactedIDs {
-		if _, err := tx.ExecContext(ctx, `UPDATE messages SET compacted_at = ? WHERE id = ?`, now, id); err != nil {
+		result, err := tx.ExecContext(
+			ctx,
+			`UPDATE messages SET compacted_at = ? WHERE id = ? AND session_id = ?`,
+			now,
+			id,
+			sessionID,
+		)
+		if err != nil {
 			return nil, fmt.Errorf("mark compacted %d: %w", id, err)
+		}
+
+		rows, err := result.RowsAffected()
+		if err != nil {
+			return nil, fmt.Errorf("count compacted message %d: %w", id, err)
+		}
+
+		if rows != 1 {
+			return nil, fmt.Errorf("compacted message %d does not belong to session %d", id, sessionID)
 		}
 	}
 
@@ -943,157 +770,7 @@ func replaceCompactedMessagesTx(
 	return ids, nil
 }
 
-// LoadMessageContentByID resolves one message's text regardless of compaction
-// state: compaction only stamps compacted_at and never rewrites content, so a
-// confirmed answer pointer stays resolvable for the session's whole life.
-func (s *store) LoadMessageContentByID(ctx context.Context, sessionID, messageID int64) (string, error) {
-	var content sql.NullString
-
-	err := s.db.QueryRowContext(ctx,
-		`SELECT content FROM messages WHERE session_id = ? AND id = ?`,
-		sessionID, messageID,
-	).Scan(&content)
-	if errors.Is(err, sql.ErrNoRows) {
-		return "", errSessionNotFound
-	}
-
-	if err != nil {
-		return "", fmt.Errorf("load message content by id: %w", err)
-	}
-
-	return content.String, nil
-}
-
-func (s *store) LoadActiveMessages(ctx context.Context, sessionID int64) ([]*transcript.Message, error) {
-	rows, err := s.db.QueryContext(
-		ctx,
-		`SELECT id, session_id, role, content, tool_call_id, tool_name, tool_error, tool_calls,
-			reasoning_content, reasoning_raw, attachments, cost_usd, usage, finish_type,
-			provider_finish_reason, rejected_reason, retry_of_message_id, compacted_at, created_at
-		FROM messages WHERE session_id = ? AND compacted_at IS NULL AND rejected_reason IS NULL
-		ORDER BY position IS NULL, position, id`,
-		sessionID,
-	)
-	if err != nil {
-		return nil, fmt.Errorf("query active messages: %w", err)
-	}
-	defer rows.Close()
-
-	return scanMessages(rows)
-}
-
-func (s *store) UpdateSessionIteration(
-	ctx context.Context,
-	id int64,
-	iteration int,
-	status SessionStatus,
-) error {
-	if !status.valid() {
-		return fmt.Errorf("invalid session status %q", status)
-	}
-
-	now := time.Now().UTC()
-
-	result, err := s.db.ExecContext(
-		ctx,
-		`UPDATE sessions SET iteration = ?, status = ?, updated_at = ?
-		WHERE id = ? AND killed_at IS NULL
-			AND status NOT IN ('stopping', 'terminating', 'killed')`,
-		iteration, status, now, id,
-	)
-	if err != nil {
-		return fmt.Errorf("update session iteration: %w", err)
-	}
-
-	rows, err := result.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("rows affected: %w", err)
-	}
-
-	if rows == 0 {
-		return fmt.Errorf("session %d not found", id)
-	}
-
-	return nil
-}
-
-func (s *store) UpdateSessionTodoItems(ctx context.Context, id int64, items json.RawMessage) error {
-	now := time.Now().UTC()
-
-	result, err := s.db.ExecContext(
-		ctx,
-		`UPDATE sessions SET todo_items = ?, updated_at = ? WHERE id = ?`,
-		string(items), now, id,
-	)
-	if err != nil {
-		return fmt.Errorf("update session todo items: %w", err)
-	}
-
-	rows, err := result.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("rows affected: %w", err)
-	}
-
-	if rows == 0 {
-		return fmt.Errorf("session %d not found", id)
-	}
-
-	return nil
-}
-
-// killTerminatingTarget commits one root's killed transition and its close
-// output in a single transaction: a crash after a committed killed UPDATE but
-// before the close INSERT would strand the obligation on a root that is never
-// re-selected.
-func (s *store) killTerminatingTarget(ctx context.Context, id int64, owner string, now time.Time) error {
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("begin terminating kill: %w", err)
-	}
-	defer func() { _ = tx.Rollback() }()
-
-	result, err := tx.ExecContext(
-		ctx,
-		`UPDATE sessions SET status = 'killed', killed_at = ?, updated_at = ?
-		WHERE id = ? AND status = 'terminating' AND killed_at IS NULL`,
-		now, now, id,
-	)
-	if err != nil {
-		return fmt.Errorf("kill terminating sessions: %w", err)
-	}
-
-	affected, err := result.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("kill terminating rows affected: %w", err)
-	}
-
-	if affected == 0 || owner == "" {
-		if err := tx.Commit(); err != nil {
-			return fmt.Errorf("commit terminating kill: %w", err)
-		}
-
-		return nil
-	}
-
-	replaced, err := hasReplacementRow(ctx, tx, id, owner)
-	if err != nil {
-		return err
-	}
-
-	if !replaced {
-		if _, err := insertClosedOutput(ctx, tx, id, owner, now, 0); err != nil {
-			return err
-		}
-	}
-
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("commit terminating kill: %w", err)
-	}
-
-	return nil
-}
-
-func (s *store) latestActivity(ctx context.Context, projectID int64) (time.Time, bool, error) {
+func (s *Store) latestActivity(ctx context.Context, projectID int64) (time.Time, bool, error) {
 	t, ok, err := s.maxUpdatedAt(ctx, projectID, true)
 	if err != nil || ok {
 		return t, ok, err
@@ -1102,7 +779,7 @@ func (s *store) latestActivity(ctx context.Context, projectID int64) (time.Time,
 	return s.maxUpdatedAt(ctx, projectID, false)
 }
 
-func (s *store) maxUpdatedAt(ctx context.Context, projectID int64, excludeKilled bool) (time.Time, bool, error) {
+func (s *Store) maxUpdatedAt(ctx context.Context, projectID int64, excludeKilled bool) (time.Time, bool, error) {
 	// parent_id = 0: rank a project by its top-level dialogs, not internal subagent
 	// churn — mirrors FindSessionByProjectID.
 	query := `SELECT updated_at FROM sessions WHERE project_id = ? AND parent_id = 0`
@@ -1124,20 +801,6 @@ func (s *store) maxUpdatedAt(ctx context.Context, projectID int64, excludeKilled
 	}
 
 	return t, true, nil
-}
-
-// rowScanner is satisfied by both *sql.Row and *sql.Rows.
-type rowScanner interface {
-	Scan(dest ...any) error
-}
-
-type scannedMessageValues struct {
-	toolCallID, toolName, toolCallsRaw, reasoningContent, reasoningRaw sql.NullString
-	attachmentsRaw, usageRaw, finishType, providerFinishReason         sql.NullString
-	rejectedReason                                                     sql.NullString
-	retryOfMessageID                                                   sql.NullInt64
-	compactedAt                                                        sql.NullTime
-	costUSD                                                            sql.NullFloat64
 }
 
 func scanSession(row *sql.Row) (*SessionRecord, error) {

@@ -23,7 +23,7 @@ func (s *service) requireOwnedSession(ctx context.Context, managerID string, ses
 		return err
 	}
 
-	record, err := s.backend.GetSession(ctx, sessionID)
+	record, err := s.store.GetSession(ctx, sessionID)
 	if err != nil || record == nil {
 		return fmt.Errorf("session %d not found", sessionID)
 	}
@@ -55,7 +55,7 @@ func (s *service) authorizeAttributeUpdate(
 		return err
 	}
 
-	record, err := s.backend.GetSession(ctx, data.SessionID)
+	record, err := s.store.GetSession(ctx, data.SessionID)
 	if err != nil || record == nil {
 		return fmt.Errorf("session %d not found", data.SessionID)
 	}

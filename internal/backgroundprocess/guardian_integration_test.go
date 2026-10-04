@@ -20,6 +20,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/pilat/coagent/internal/migrate"
+	"github.com/pilat/coagent/internal/sessionstore"
 )
 
 func TestGuardian_DaemonDeathKillsGroupAndRestartInterruptsOnce(t *testing.T) {
@@ -58,7 +59,7 @@ func TestGuardian_DaemonDeathKillsGroupAndRestartInterruptsOnce(t *testing.T) {
 	helperDone = true
 
 	restarted := NewService(ledger, Options{
-		OutputDir: outputDir, GuardianCommand: testGuardianCommand,
+		OutputDir: outputDir,
 	})
 	count, err := restarted.InterruptNonterminal(ctx)
 	require.NoError(t, err)
@@ -104,8 +105,8 @@ func TestGuardianDaemonHelper(t *testing.T) {
 	}
 	defer db.Close()
 
-	service := NewService(NewStore(db), Options{
-		OutputDir: os.Args[separator+2], GuardianCommand: testGuardianCommand,
+	service := NewService(NewStore(db, sessionstore.NewStore(db)), Options{
+		OutputDir: os.Args[separator+2],
 	})
 	record, err := service.Start(context.Background(), testSpec(2), func(ctx context.Context) (*exec.Cmd, error) {
 		return exec.CommandContext(ctx, "sh", "-c", "echo $$; exec sleep 30"), nil

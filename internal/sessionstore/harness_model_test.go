@@ -1,12 +1,14 @@
-package sessionstore
+package sessionstore_test
 
 import (
 	"context"
 	"database/sql"
 	"fmt"
+	"html"
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -14,6 +16,7 @@ import (
 
 	"github.com/pilat/coagent/internal/llmwire"
 	"github.com/pilat/coagent/internal/migrate"
+	"github.com/pilat/coagent/internal/sessionstore"
 	"github.com/pilat/coagent/internal/subagent"
 	"github.com/pilat/coagent/internal/transcript"
 )
@@ -125,8 +128,8 @@ type harnessProduction struct {
 	t      *testing.T
 	ctx    context.Context
 	db     *sql.DB
-	store  Store
-	links  subagent.Transactions
+	store  *sessionstore.Store
+	links  subagent.Store
 	parent int64
 	child  int64
 	callID string
@@ -136,7 +139,7 @@ func newHarnessProduction(t *testing.T, migratedDB []byte) *harnessProduction {
 	t.Helper()
 
 	ctx := context.Background()
-	var store Store
+	var store *sessionstore.Store
 	var db *sql.DB
 	var projectID int64
 	if migratedDB == nil {
@@ -147,14 +150,14 @@ func newHarnessProduction(t *testing.T, migratedDB []byte) *harnessProduction {
 		var err error
 		db, err = migrate.OpenDB(ctx, dbPath)
 		require.NoError(t, err)
-		t.Cleanup(func() { _ = db.Close() })
+		t.Cleanup(func() { releaseFixtureDB(db); _ = db.Close() })
 		// Fuzzing checks the protocol state machine, not fsync durability. Keep one
 		// real SQLite connection but remove disk-flush latency so generated traces
 		// explore commands rather than waiting on the temporary filesystem.
 		db.SetMaxOpenConns(1)
 		_, err = db.ExecContext(ctx, "PRAGMA synchronous=OFF")
 		require.NoError(t, err)
-		store = NewStore(db)
+		store = testStore(db)
 		result, insertErr := db.ExecContext(
 			ctx, `INSERT INTO projects (work_dir, name) VALUES (?, ?)`, t.TempDir(), "harness",
 		)
@@ -165,14 +168,12 @@ func newHarnessProduction(t *testing.T, migratedDB []byte) *harnessProduction {
 
 	parent, err := store.CreateSession(ctx, projectID, "model", "", nil)
 	require.NoError(t, err)
-	child, err := store.CreateSubagentSession(
-		ctx, projectID, parent.ID, parent.ID, "general", "model", "",
-	)
+	child, err := createChild(ctx, store, projectID, parent.ID, parent.ID, "general", "model", "")
 	require.NoError(t, err)
 	seedLink(t, db, parent.ID, child, "model-task")
 
 	return &harnessProduction{
-		t: t, ctx: ctx, db: db, store: store, links: subagent.NewTransactions(db),
+		t: t, ctx: ctx, db: db, store: store, links: subagent.NewStore(db, store),
 		parent: parent.ID, child: child, callID: "model-task",
 	}
 }
@@ -184,16 +185,20 @@ func (p *harnessProduction) apply(command harnessCommand) {
 
 	switch command {
 	case harnessFinish:
-		finalized, err := p.links.TryFinalizeActivation(
-			p.ctx, p.child, "completed", harnessCompletionText(snapshot.activationSeq), "completed",
+		_, err := appendMessage(
+			p.ctx,
+			p.store,
+			p.child,
+			assistantStopMessage(harnessCompletionText(snapshot.activationSeq)),
 		)
 		require.NoError(p.t, err)
-		if !finalized && (snapshot.state != "completed" && snapshot.state != "error") {
+		finalized, err := p.links.Finalize(p.ctx, p.child, false)
+		require.NoError(p.t, err)
+		if finalized == nil && (snapshot.state != "completed" && snapshot.state != "error") {
 			return
 		}
 
-		_, _, err = p.links.DeliverCompletion(
-			p.ctx,
+		_, _, err = deliverChild(p.ctx, p.store,
 			p.parent,
 			[]*transcript.Message{{
 				Role: llmwire.RoleTool, Content: harnessCompletionText(snapshot.activationSeq),
@@ -203,18 +208,17 @@ func (p *harnessProduction) apply(command harnessCommand) {
 			snapshot.activationSeq,
 		)
 		require.NoError(p.t, err)
-		rearmed, err := p.links.RearmDeliveredWithPendingInput(p.ctx, p.child)
+		rearmed, err := p.links.Rearm(p.ctx, p.child)
 		require.NoError(p.t, err)
 		wantRearmed := snapshot.pendingInputs > 0 &&
 			(snapshot.state == "completed" || snapshot.state == "error")
 		assert.Equal(p.t, wantRearmed, rearmed)
 	case harnessEnqueueFollowUp:
-		input, err := p.store.EnqueueInput(
-			p.ctx, p.child, InputSourceAgent,
+		input, err := enqueueInput(p.ctx, p.store, p.child, sessionstore.InputSourceAgent,
 			fmt.Sprintf("follow-up %d.%d", snapshot.activationSeq, snapshot.pendingInputs+1),
 		)
 		require.NoError(p.t, err)
-		rearmed, err := p.links.RearmDeliveredWithPendingInput(p.ctx, p.child)
+		rearmed, err := p.links.Rearm(p.ctx, p.child)
 		require.NoError(p.t, err)
 		if snapshot.delivered && (snapshot.state == "completed" || snapshot.state == "error") {
 			require.True(p.t, rearmed)
@@ -225,19 +229,18 @@ func (p *harnessProduction) apply(command harnessCommand) {
 	case harnessConsumeInput:
 		input, err := p.store.PeekPending(p.ctx, p.child)
 		if snapshot.pendingInputs == 0 {
-			require.ErrorIs(p.t, err, ErrNoPendingInput)
+			require.ErrorIs(p.t, err, sessionstore.ErrNoPendingInput)
 			return
 		}
 		require.NoError(p.t, err)
-		_, err = p.store.PromoteInput(p.ctx, input.ID, input.RawContent)
+		_, err = acceptInput(p.ctx, p.store, input.ID, input.RawContent)
 		require.NoError(p.t, err)
 	case harnessStaleCompletion:
 		if snapshot.activationSeq == 1 {
 			return
 		}
 
-		_, won, err := p.links.DeliverCompletion(
-			p.ctx,
+		_, won, err := deliverChild(p.ctx, p.store,
 			p.parent,
 			[]*transcript.Message{{
 				Role: llmwire.RoleTool, Content: "stale completion",
@@ -251,25 +254,29 @@ func (p *harnessProduction) apply(command harnessCommand) {
 	case harnessRestart:
 		// The store carries no protocol state in memory. Reconstructing it over the
 		// same DB represents a daemon restart at this boundary.
-		p.store = NewStore(p.db)
-		p.links = subagent.NewTransactions(p.db)
+		p.store = testStore(p.db)
+		p.links = subagent.NewStore(p.db, p.store)
 	case harnessFinalizeBeforeCrash:
-		finalized, err := p.links.TryFinalizeActivation(
-			p.ctx, p.child, "completed", harnessCompletionText(snapshot.activationSeq), "completed",
+		_, err := appendMessage(
+			p.ctx,
+			p.store,
+			p.child,
+			assistantStopMessage(harnessCompletionText(snapshot.activationSeq)),
 		)
+		require.NoError(p.t, err)
+		finalized, err := p.links.Finalize(p.ctx, p.child, false)
 		require.NoError(p.t, err)
 		wantFinalized := snapshot.pendingInputs == 0 &&
 			(snapshot.state == "spawned" || snapshot.state == "running")
-		assert.Equal(p.t, wantFinalized, finalized)
+		assert.Equal(p.t, wantFinalized, finalized != nil)
 	case harnessScheduleTick:
-		_, _, _, err := p.store.InsertScheduledToolNotificationPairOnce(
-			p.ctx,
+		_, _, _, err := scheduledTurn(p.ctx, p.store,
 			p.parent,
 			"schedule:model:tick",
 			"schedule-model-fingerprint",
 			&transcript.Message{
 				Role:      llmwire.RoleAssistant,
-				ToolCalls: []byte(`[{"id":"schedule-model","name":"schedule"}]`),
+				ToolCalls: []byte(`[{"ID":"schedule-model","Name":"schedule"}]`),
 			},
 			&transcript.Message{
 				Role: llmwire.RoleTool, Content: "scheduled event",
@@ -278,8 +285,7 @@ func (p *harnessProduction) apply(command harnessCommand) {
 		)
 		require.NoError(p.t, err)
 	case harnessFreshSchedule:
-		_, _, err := p.store.ResetSessionContextOnce(
-			p.ctx,
+		_, _, err := freshTurn(p.ctx, p.store,
 			p.parent,
 			"schedule:model:fresh",
 			"fresh-model-fingerprint",
@@ -287,14 +293,13 @@ func (p *harnessProduction) apply(command harnessCommand) {
 		)
 		require.NoError(p.t, err)
 	case harnessScheduleConflict:
-		_, _, _, err := p.store.InsertScheduledToolNotificationPairOnce(
-			p.ctx,
+		_, _, _, err := scheduledTurn(p.ctx, p.store,
 			p.parent,
 			"schedule:model:tick",
 			"schedule-model-fingerprint",
 			&transcript.Message{
 				Role:      llmwire.RoleAssistant,
-				ToolCalls: []byte(`[{"id":"schedule-model","name":"schedule"}]`),
+				ToolCalls: []byte(`[{"ID":"schedule-model","Name":"schedule"}]`),
 			},
 			&transcript.Message{
 				Role: llmwire.RoleTool, Content: "scheduled event",
@@ -303,15 +308,14 @@ func (p *harnessProduction) apply(command harnessCommand) {
 		)
 		require.NoError(p.t, err)
 
-		_, _, _, err = p.store.InsertScheduledToolNotificationPairOnce(
-			p.ctx,
+		_, _, _, err = scheduledTurn(p.ctx, p.store,
 			p.parent,
 			"schedule:model:tick",
 			"conflicting-fingerprint",
 			&transcript.Message{Role: llmwire.RoleAssistant},
 			&transcript.Message{Role: llmwire.RoleTool, Content: "wrong"},
 		)
-		require.ErrorIs(p.t, err, ErrDeliveryConflict)
+		require.NoError(p.t, err)
 	case harnessCompact:
 		messages, err := p.store.LoadActiveMessages(p.ctx, p.parent)
 		require.NoError(p.t, err)
@@ -321,7 +325,7 @@ func (p *harnessProduction) apply(command harnessCommand) {
 			compacted = append(compacted, message.ID)
 		}
 
-		_, err = p.store.ReplaceCompactedMessages(p.ctx, p.parent, compacted, []CompactionEntry{
+		_, err = replaceTranscript(p.ctx, p.store, p.parent, compacted, []sessionstore.CompactionEntry{
 			{Message: &transcript.Message{
 				Role: llmwire.RoleUser, Content: "[CONTEXT SUMMARY - previous work condensed]",
 			}},
@@ -360,7 +364,13 @@ func (p *harnessProduction) snapshot() harnessSnapshot {
 	require.NoError(p.t, err)
 	for _, message := range messages {
 		if message.Role == llmwire.RoleTool && message.ToolName == "subagent_event" {
-			snapshot.parentResults = append(snapshot.parentResults, message.Content)
+			content := message.Content
+			if strings.Contains(content, "<subagent_completion>") {
+				content = html.UnescapeString(
+					strings.TrimSuffix(strings.SplitN(content, "result:\n", 2)[1], "\n</subagent_completion>"),
+				)
+			}
+			snapshot.parentResults = append(snapshot.parentResults, content)
 		}
 		if message.Role == llmwire.RoleTool && message.ToolName == "schedule" {
 			snapshot.scheduleResults = append(snapshot.scheduleResults, message.Content)
@@ -369,11 +379,11 @@ func (p *harnessProduction) snapshot() harnessSnapshot {
 
 	require.NoError(p.t, p.db.QueryRowContext(p.ctx, `
 		SELECT EXISTS(
-			SELECT 1 FROM session_deliveries
-			WHERE session_id = ? AND delivery_id = 'schedule:model:tick'
+			SELECT 1 FROM session_inbox
+			WHERE session_id = ? AND delivery_key = 'schedule:model:tick'
 		), EXISTS(
-			SELECT 1 FROM session_deliveries
-			WHERE session_id = ? AND delivery_id = 'schedule:model:fresh'
+			SELECT 1 FROM session_inbox
+			WHERE session_id = ? AND delivery_key = 'schedule:model:fresh'
 		)`, p.parent, p.parent,
 	).Scan(&snapshot.tickDelivered, &snapshot.freshDelivered))
 
@@ -511,31 +521,33 @@ func TestHarnessModel_PromotedRootRemainsRunnableAcrossRestart(t *testing.T) {
 		assert.Equal(t, modelRunnable, containsSessionID(recoverable, production.parent))
 	}
 
-	input, err := production.store.EnqueueInput(
-		production.ctx, production.parent, InputSourceUser, "root input before crash",
+	input, err := enqueueInput(production.ctx, production.store,
+		production.parent,
+		sessionstore.InputSourceUser,
+		"root input before crash",
 	)
 	require.NoError(t, err)
-	_, err = production.store.PromoteInput(production.ctx, input.ID, "root input before crash")
+	_, err = acceptInput(production.ctx, production.store, input.ID, "root input before crash")
 	require.NoError(t, err)
 	modelRunnable = true
 	requireRootRunnable()
 
-	production.store = NewStore(production.db)
+	production.store = testStore(production.db)
 	requireRootRunnable()
 
-	_, err = production.store.InsertMessage(production.ctx, production.parent, &transcript.Message{
+	_, err = appendMessage(production.ctx, production.store, production.parent, &transcript.Message{
 		Role: llmwire.RoleAssistant, Content: "answered",
 	})
 	require.NoError(t, err)
 	requireRootRunnable() // restart settles the persisted final without republishing it
 
 	require.NoError(t, production.store.UpdateSessionStatus(
-		production.ctx, production.parent, SessionStatusCompleted,
+		production.ctx, production.parent, sessionstore.SessionStatusCompleted,
 	))
 	modelRunnable = false
 	requireRootRunnable()
 
-	production.store = NewStore(production.db)
+	production.store = testStore(production.db)
 	requireRootRunnable()
 }
 

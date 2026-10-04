@@ -22,15 +22,15 @@ func (s *service) bindOutputDelivery(
 		return err
 	}
 
-	if s.outputs == nil {
+	if s.store == nil {
 		return errors.New("output delivery is unavailable")
 	}
 
-	if err := s.outputs.BindManager(ctx, managerID, data.Driver, data.Attributes); err != nil {
+	if err := s.store.BindManager(ctx, managerID, data.Driver, data.Attributes); err != nil {
 		return fmt.Errorf("bind output delivery: %w", err)
 	}
 
-	if _, err := s.outputs.RetryBlockedHead(ctx, managerID); err != nil {
+	if _, err := s.store.RetryBlockedHead(ctx, managerID); err != nil {
 		return fmt.Errorf("retry blocked output head: %w", err)
 	}
 
@@ -41,11 +41,11 @@ func (s *service) claimOutput(
 	ctx context.Context,
 	managerID string,
 ) (*controllerapi.OutputClaimData, error) {
-	if s.outputs == nil {
+	if s.store == nil {
 		return nil, errors.New("output delivery is unavailable")
 	}
 
-	claim, err := s.outputs.ClaimOutputHead(ctx, managerID)
+	claim, err := s.store.ClaimOutputHead(ctx, managerID)
 
 	if pending, ok := errors.AsType[*sessionstore.OutputRetryPendingError](err); ok {
 		return nil, &controllerapi.OutputRetryPendingError{NextAt: pending.NextAt}
@@ -97,18 +97,18 @@ func (s *service) ackOutput(
 	managerID string,
 	data controllerapi.OutputAckData,
 ) error {
-	if s.outputs == nil {
+	if s.store == nil {
 		return errors.New("output delivery is unavailable")
 	}
 
-	if err := s.outputs.AckOutput(
+	if err := s.store.AckOutput(
 		ctx, managerID, data.ID, data.AttemptID, data.MessageIDs, data.SessionPatch,
 	); err != nil {
 		return fmt.Errorf("ack output: %w", err)
 	}
 
-	if err := s.backend.ReconcileOutputReadiness(ctx, data.ID); err != nil {
-		return fmt.Errorf("reconcile output readiness: %w", err)
+	if err := s.progress.ReconcileOutputReadiness(ctx, data.ID); err != nil {
+		return fmt.Errorf("reconcile output readiness: reconcile output readiness: %w", err)
 	}
 
 	return nil
@@ -119,11 +119,11 @@ func (s *service) retryOutput(
 	managerID string,
 	data controllerapi.OutputRetryData,
 ) error {
-	if s.outputs == nil {
+	if s.store == nil {
 		return errors.New("output delivery is unavailable")
 	}
 
-	if err := s.outputs.RetryOutput(ctx, managerID, data.ID, data.AttemptID, data.Error, data.NextAt); err != nil {
+	if err := s.store.RetryOutput(ctx, managerID, data.ID, data.AttemptID, data.Error, data.NextAt); err != nil {
 		return fmt.Errorf("retry output: %w", err)
 	}
 
@@ -135,11 +135,11 @@ func (s *service) blockOutput(
 	managerID string,
 	data controllerapi.OutputBlockData,
 ) error {
-	if s.outputs == nil {
+	if s.store == nil {
 		return errors.New("output delivery is unavailable")
 	}
 
-	if err := s.outputs.BlockOutput(ctx, managerID, data.ID, data.AttemptID, data.Error); err != nil {
+	if err := s.store.BlockOutput(ctx, managerID, data.ID, data.AttemptID, data.Error); err != nil {
 		return fmt.Errorf("block output: %w", err)
 	}
 
@@ -147,11 +147,11 @@ func (s *service) blockOutput(
 }
 
 func (s *service) wakeOutput(ctx context.Context, managerID string) error {
-	if s.outputs == nil {
+	if s.store == nil {
 		return errors.New("output delivery is unavailable")
 	}
 
-	if _, err := s.outputs.WakeOutputHead(ctx, managerID); err != nil {
+	if _, err := s.store.WakeOutputHead(ctx, managerID); err != nil {
 		return fmt.Errorf("wake output head: %w", err)
 	}
 
@@ -168,26 +168,26 @@ func (s *service) repairSessionSurface(
 		return err
 	}
 
-	if s.outputs == nil {
+	if s.store == nil {
 		return errors.New("output delivery is unavailable")
 	}
 
-	record, err := s.backend.GetSession(ctx, sessionID)
+	record, err := s.store.GetSession(ctx, sessionID)
 	if err != nil {
-		return fmt.Errorf("load session for surface repair: %w", err)
+		return fmt.Errorf("load session for surface repair: load session record: %w", err)
 	}
 
-	name, err := s.backend.GetProjectName(ctx, record.ProjectID)
+	name, err := s.store.GetProjectName(ctx, record.ProjectID)
 	if err != nil {
-		return fmt.Errorf("load repair project name: %w", err)
+		return fmt.Errorf("load repair project name: get project name: %w", err)
 	}
 
-	workDir, err := s.backend.GetProjectWorkDir(ctx, record.ProjectID)
+	workDir, err := s.store.GetProjectWorkDir(ctx, record.ProjectID)
 	if err != nil {
-		return fmt.Errorf("load repair work dir: %w", err)
+		return fmt.Errorf("load repair work dir: get project workdir: %w", err)
 	}
 
-	lifecycleID, err := s.outputs.LatestLifecycleOutputID(ctx, sessionID)
+	lifecycleID, err := s.store.LatestLifecycleOutputID(ctx, sessionID)
 	if err != nil {
 		return fmt.Errorf("load surface repair lifecycle: %w", err)
 	}
@@ -197,7 +197,7 @@ func (s *service) repairSessionSurface(
 	key := "session:" + strconv.FormatInt(sessionID, 10) + ":repair:" +
 		strconv.FormatInt(lifecycleID, 10) + ":" + hex.EncodeToString(digest[:])
 
-	_, err = s.outputs.EnqueueOutput(ctx, sessionstore.OutputDraft{
+	_, err = s.store.EnqueueOutput(ctx, sessionstore.OutputDraft{
 		SessionID: sessionID, Type: sessionstore.OutputSessionOpened,
 		Attributes: attributes, SourceKey: key,
 		Fingerprint: sessionstore.OutputFingerprint(sessionstore.OutputSessionOpened, "", sessionID, attributes),
@@ -213,11 +213,11 @@ func (s *service) outputQueueStatus(
 	ctx context.Context,
 	managerID string,
 ) (controllerapi.OutputQueueStatusData, error) {
-	if s.outputs == nil {
+	if s.store == nil {
 		return controllerapi.OutputQueueStatusData{}, errors.New("output delivery is unavailable")
 	}
 
-	status, err := s.outputs.OutputQueueStatus(ctx, managerID)
+	status, err := s.store.OutputQueueStatus(ctx, managerID)
 	if err != nil {
 		return controllerapi.OutputQueueStatusData{}, fmt.Errorf("load output queue status: %w", err)
 	}
@@ -233,11 +233,11 @@ func (s *service) outputQueueStatus(
 }
 
 func (s *service) unresolvedOutputOwners(ctx context.Context) ([]string, error) {
-	if s.outputs == nil {
+	if s.store == nil {
 		return nil, errors.New("output delivery is unavailable")
 	}
 
-	values, err := s.outputs.ListUnresolvedOutputOwners(ctx)
+	values, err := s.store.ListUnresolvedOutputOwners(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("list unresolved output owners: %w", err)
 	}

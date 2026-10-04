@@ -4,13 +4,29 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"time"
+	"strings"
 
 	"go.uber.org/zap"
 
 	"github.com/pilat/coagent/internal/llmwire"
 	"github.com/pilat/coagent/internal/logger"
+	"github.com/pilat/coagent/internal/sessionprompt"
 	"github.com/pilat/coagent/internal/sessionstore"
+	"github.com/pilat/coagent/internal/tool"
+)
+
+// compactionHeaderTooLargeNotice is what the human sees when no summary can
+// help: the untouchable header alone is over the trigger.
+const compactionHeaderTooLargeNotice = "⚠️ Project context and system prompt alone exceed the compaction " +
+	"threshold for this model — switch to a model with a larger context window."
+
+const compactionNotConvergingNotice = "⚠️ Context window too small for this workload — compaction is no " +
+	"longer freeing enough space. Automatic compaction is paused for this run; switch to a model with a " +
+	"larger context window."
+
+const (
+	// legacyBackgroundSectionMarker keeps pre-rename checkpoints readable.
+	legacyBackgroundSectionMarker = "\n\n# Active subagents\n"
 )
 
 var (
@@ -33,11 +49,6 @@ var (
 		"compaction rejected: the resulting projection stays above the pressure threshold",
 	)
 )
-
-// compactionHeaderTooLargeNotice is what the human sees when no summary can
-// help: the untouchable header alone is over the trigger.
-const compactionHeaderTooLargeNotice = "⚠️ Project context and system prompt alone exceed the compaction " +
-	"threshold for this model — switch to a model with a larger context window."
 
 // compactionUsage sums the LLM cost/usage one compact() spends across its
 // summarizer call, so the summary row carries compaction's own real cost.
@@ -63,7 +74,7 @@ func (a *compactionUsage) add(resp *llmwire.Response) {
 
 // focusSection renders the optional /compact focus as a prompt section, or "" when
 // no focus is set (bare /compact and every auto-compaction).
-func (s *svc) focusSection() string {
+func (s *Session) focusSection() string {
 	if s.compactionFocus == "" {
 		return ""
 	}
@@ -74,10 +85,10 @@ func (s *svc) focusSection() string {
 // compact builds one checkpoint candidate and, only when every candidate check
 // passes, commits it as one atomic positioned replacement. A failed or
 // non-relieving attempt changes no active transcript metadata.
-func (s *svc) compact(ctx context.Context, commandInput *PendingInput) (bool, error) {
+func (s *Session) compact(ctx context.Context, commandInput *PendingInput) (bool, error) {
 	// Defence in depth: a caller that forgets the gate must not compact a
 	// transcript that still owes a tool_use its result.
-	if s.HasPendingExternalCall() || s.HasPendingWork() {
+	if s.HasPendingExternalCall() || len(s.pendingInLoopCalls()) > 0 {
 		return false, errCompactionPendingCall
 	}
 
@@ -98,12 +109,12 @@ func (s *svc) compact(ctx context.Context, commandInput *PendingInput) (bool, er
 // tail rows until the check resolves. The second result reports that a durable
 // check is pending at all, so a candidate the live transcript cannot place
 // keeps compaction non-relieving instead of relaxing the tail cap.
-func (s *svc) completionCompactionPin(ctx context.Context) (int, bool) {
-	if s.dispositions == nil {
+func (s *Session) completionCompactionPin(ctx context.Context) (int, bool) {
+	if s.store == nil {
 		return 0, false
 	}
 
-	state, err := s.dispositions.LoadCompletionCheckState(ctx, s.id)
+	state, err := s.store.LoadCompletionCheckState(ctx, s.id)
 	if err != nil || state == nil || state.CandidateID == nil {
 		return 0, false
 	}
@@ -121,7 +132,7 @@ func (s *svc) completionCompactionPin(ctx context.Context) (int, bool) {
 }
 
 // compactLocked is compact's transcript-mutating half, under s.ms.mu.
-func (s *svc) compactLocked(
+func (s *Session) compactLocked(
 	ctx context.Context,
 	background string,
 	commandInput *PendingInput,
@@ -189,7 +200,6 @@ func (s *svc) compactLocked(
 	}
 
 	s.resetContextBaseline() // the transcript the measurement described is gone
-	s.clearPersistedBaseline(ctx)
 
 	if commandInput == nil {
 		s.compactionSummaryDBID = newRowIDs[headerSize]
@@ -200,7 +210,7 @@ func (s *svc) compactLocked(
 	return true, nil
 }
 
-func (s *svc) logCompactionLocked(
+func (s *Session) logCompactionLocked(
 	log *zap.Logger,
 	beforeMessages, afterMessages, summarized int,
 	cp checkpointPrefix,
@@ -217,7 +227,7 @@ func (s *svc) logCompactionLocked(
 
 // buildCheckpointCandidate selects the split, runs the summarizer and wraps the
 // marked summary row. Caller holds s.ms.mu.
-func (s *svc) buildCheckpointCandidate(
+func (s *Session) buildCheckpointCandidate(
 	ctx context.Context,
 	cp checkpointPrefix,
 	background string,
@@ -248,7 +258,7 @@ func (s *svc) buildCheckpointCandidate(
 // commitCheckpointLocked persists the replacement in the transaction the
 // situation demands — budgeted, command-settling, or plain — then adopts the
 // new projection in memory. Caller holds s.ms.mu.
-func (s *svc) commitCheckpointLocked(
+func (s *Session) commitCheckpointLocked(
 	ctx context.Context,
 	newMessages []llmwire.Message,
 	newRowIDs []int64,
@@ -260,75 +270,314 @@ func (s *svc) commitCheckpointLocked(
 		return err
 	}
 
-	switch {
-	case s.budgetGate != nil:
-		inputID := int64(0)
-		if commandInput != nil {
-			inputID = commandInput.ID
-		}
+	c := s.newCommit()
+	c.Replace = &sessionstore.Replace{HeadIDs: compactedIDs, Entries: entries}
+	c.ObserveBudget = true
 
-		ids, fired, persistErr := s.budgetGate.PersistCompaction(ctx, sessionstore.BudgetedCompaction{
-			InputID: inputID, CompactedIDs: compactedIDs, Entries: entries,
-			ObservedAt: time.Now().UTC(),
-		})
-		if persistErr != nil {
-			return fmt.Errorf("replace budgeted compacted messages: %w", persistErr)
+	c.State.ClearContextBaseline = true
+	if commandInput != nil {
+		c.Accept = []sessionstore.Accept{
+			{InputID: commandInput.ID, State: sessionstore.InputStateHandled, Reason: "compact command", LinkRef: -1},
 		}
-
-		if err := stampCompactionIDs(newRowIDs, ids); err != nil {
-			return err
-		}
-
-		s.budgetFired = fired
-	case commandInput != nil:
-		if err := s.ms.completeCompactionCommandLocked(
-			ctx, *commandInput, compactedIDs, newMessages, newRowIDs,
-		); err != nil {
-			return err
-		}
-	default:
-		if err := s.ms.replaceCompactedMessagesLocked(ctx, compactedIDs, newMessages, newRowIDs); err != nil {
-			return fmt.Errorf("replace compacted messages: %w", err)
+		c.Outputs = []sessionstore.Output{
+			{
+				Type:          sessionstore.OutputMessagePersistent,
+				Content:       "✅ Context compacted",
+				Key:           fmt.Sprintf("input:%d:compact:succeeded", commandInput.ID),
+				MessageRef:    -1,
+				ReleasesInput: true,
+			},
 		}
 	}
 
-	s.ms.messages = newMessages
-	s.ms.rowIDs = newRowIDs
-
-	return s.publishCompactionProgress(ctx)
-}
-
-// stampCompactionIDs adopts the store's returned row IDs into the in-memory
-// projection, in entry order.
-func stampCompactionIDs(rowIDs, ids []int64) error {
-	if len(ids) != len(rowIDs) {
-		return fmt.Errorf("budgeted compaction returned %d ids for %d messages", len(ids), len(rowIDs))
+	result, err := s.store.Commit(ctx, c)
+	if err != nil {
+		return fmt.Errorf("commit checkpoint locked: %w", err)
 	}
 
-	copy(rowIDs, ids)
+	s.budgetFired = result.BudgetFired
+
+	s.compactionOutputs = s.liveOutputs(c, result)
+	if err := s.ms.reloadMessagesLocked(ctx); err != nil {
+		return err
+	}
+
+	copy(newRowIDs, s.ms.rowIDs)
 
 	return nil
 }
 
-// publishCompactionProgress publishes the post-compaction operator snapshot.
-// A session without an output owner (hermetic tests) tolerates the owner error.
-func (s *svc) publishCompactionProgress(ctx context.Context) error {
-	provider, ok := s.boundary.(progressChangeBoundary)
-	if !ok {
+// applyContextEvents is the single sanctioned compaction point: an explicit
+// request forces, otherwise the projected request size decides.
+//
+//nolint:gocyclo,nestif,funlen // Explicit compaction has a durable start, terminal outcome, and auto-path fallback.
+func (s *Session) compactionStep(ctx context.Context, r *runState) error {
+	if s.HasPendingExternalCall() || len(s.pendingInLoopCalls()) > 0 {
 		return nil
 	}
 
-	_, published, err := provider.ProgressChange(ctx)
-	if err != nil {
-		if errors.Is(err, sessionstore.ErrOutputOwner) ||
-			errors.Is(err, sessionstore.ErrProgressSuperseded) {
-			return nil
-		}
+	command := s.compactionCommandInput()
+	explicit := s.consumePendingCompaction()
 
-		return fmt.Errorf("enqueue compaction progress snapshot: %w", err)
+	window := s.contextWindow()
+	if !explicit && (r.autoCompactionOff || !s.shouldCompact(window) || !s.hasCompactionCandidate(window)) {
+		return nil
 	}
 
-	_ = published
+	fired, err := s.observeBudget(ctx)
+	if err != nil {
+		return err
+	}
+
+	if fired {
+		s.budgetFired = true
+		if command != nil {
+			return s.finishCompactionCommand(
+				ctx,
+				*command,
+				"parked",
+				"⏸ Budget checkpoint reached — the session is parked. Send a message to resume.",
+			)
+		}
+
+		return nil
+	}
+
+	c := s.newCommit()
+
+	c.Outputs = []sessionstore.Output{
+		{Type: sessionstore.OutputMessageReplaceable, Content: "🔄 Compacting context...", MessageRef: -1},
+	}
+	if command != nil {
+		c.Outputs[0].Key = fmt.Sprintf("input:%d:compact:started", command.ID)
+	}
+
+	if _, err := s.commit(ctx, c); err != nil {
+		return err
+	}
+
+	ok, compactErr := s.compact(ctx, command)
+	s.emitCommitted(s.compactionOutputs, s.budgetFired)
+	s.compactionOutputs = nil
+	s.setCompactionFocus("")
+
+	terminal := ""
+
+	switch {
+	case errors.Is(compactErr, errCompactionHeaderTooLarge):
+		terminal = compactionHeaderTooLargeNotice
+	case compactErr != nil:
+		terminal = "❌ Compaction failed"
+	case ok:
+		terminal = "✅ Context compacted"
+	case explicit:
+		terminal = "Nothing to compact"
+	}
+
+	if command != nil {
+		if !ok {
+			if err := s.finishCompactionCommand(
+				ctx,
+				*command,
+				compactionOutcomePhase(ok, compactErr),
+				terminal,
+			); err != nil {
+				return err
+			}
+		}
+
+		s.clearCompactionCommandInput()
+	} else if terminal != "" {
+		c := s.newCommit()
+
+		c.Outputs = []sessionstore.Output{
+			{Type: sessionstore.OutputMessagePersistent, Content: terminal, MessageRef: -1},
+		}
+		if ok {
+			c.Outputs[0].Key = fmt.Sprintf("compaction:%d:succeeded", s.compactionSummaryDBID)
+		}
+
+		if _, err := s.commit(ctx, c); err != nil {
+			return err
+		}
+	}
+
+	if !explicit {
+		if ok && compactErr == nil && !s.shouldCompact(window) {
+			r.compactionFailures = 0
+		} else {
+			r.compactionFailures++
+		}
+
+		if r.compactionFailures >= compactionAttemptCap {
+			r.autoCompactionOff = true
+			c := s.newCommit()
+
+			c.Outputs = []sessionstore.Output{
+				{Type: sessionstore.OutputMessagePersistent, Content: compactionNotConvergingNotice, MessageRef: -1},
+			}
+			if _, err := s.commit(ctx, c); err != nil {
+				return err
+			}
+		}
+	}
 
 	return nil
+}
+
+func compactionOutcomePhase(ok bool, err error) string {
+	if ok {
+		return "succeeded"
+	}
+
+	if err == nil {
+		return "nothing"
+	}
+
+	return "failed"
+}
+
+func (s *Session) finishCompactionCommand(ctx context.Context, input PendingInput, phase, content string) error {
+	c := s.newCommit()
+	c.Accept = []sessionstore.Accept{
+		{InputID: input.ID, State: sessionstore.InputStateHandled, Reason: "compact command", LinkRef: -1},
+	}
+	c.Outputs = []sessionstore.Output{
+		{
+			Type:          sessionstore.OutputMessagePersistent,
+			Content:       content,
+			Key:           fmt.Sprintf("input:%d:compact:%s", input.ID, phase),
+			MessageRef:    -1,
+			ReleasesInput: true,
+		},
+	}
+	_, err := s.commit(ctx, c)
+
+	return err
+}
+
+// summarizeCheckpoint runs the one no-tools model call that produces the
+// checkpoint: the ordinary repaired prefix from the transcript beginning
+// through the split, the same system prompt, schemas and tool-choice behavior
+// an ordinary request carries, and one final role-user instruction. A model
+// that answers a tool call instead of text gets one tools-unavailable nudge
+// and must then answer in plain text. A failed attempt persists no boundary
+// and may submit the same head again on a later attempt.
+func (s *Session) summarizeCheckpoint(
+	ctx context.Context,
+	split int,
+	pendingExternal map[string]bool,
+	window int,
+) (string, *compactionUsage, error) {
+	activeTools := s.registry.List()
+	if s.loopDetector.forceTextOnly {
+		activeTools = nil
+	}
+
+	schemas := tool.ToSchemas(activeTools)
+
+	messages := append(
+		repairTranscriptExcluding(s.ms.messages[:split], pendingExternal),
+		compactionInstructionMessage(s.focusSection()),
+	)
+
+	// The normal full output reserve: the ordinary complement of the input
+	// fraction, not a summary-length target — any useful completed length passes.
+	reserve := int((1 - llmwire.ContextInputFraction) * float64(window))
+
+	resp, err := s.chat(ctx, s.prompt.SystemPrompt(), messages, schemas, llmwire.WithMaxTokens(reserve))
+	if err != nil {
+		return "", nil, fmt.Errorf("compaction chat: %w", err)
+	}
+
+	acc := &compactionUsage{}
+	acc.add(resp)
+
+	if len(resp.ToolCalls) > 0 {
+		retry, err := s.rejectSummarizerToolCall(ctx, messages, schemas, reserve, resp)
+		if err != nil {
+			return "", acc, err
+		}
+
+		acc.add(retry)
+		resp = retry
+	}
+
+	summaryText, err := acceptedCheckpointText(resp)
+	if err != nil {
+		return "", acc, err
+	}
+
+	return summaryText, acc, nil
+}
+
+// rejectSummarizerToolCall answers a tool-calling summarizer once, in role:
+// the call keeps its recorded tool results, so the transcript stays provider-
+// valid, and the demand to summarize is restated. One nudge only.
+func (s *Session) rejectSummarizerToolCall(
+	ctx context.Context,
+	messages []llmwire.Message,
+	schemas []llmwire.ToolSchema,
+	reserve int,
+	resp *llmwire.Response,
+) (*llmwire.Response, error) {
+	replies := make([]llmwire.Message, 0, len(resp.ToolCalls))
+
+	for _, tc := range resp.ToolCalls {
+		replies = append(replies, llmwire.Message{
+			Role:       llmwire.RoleTool,
+			ToolCallID: tc.ID,
+			ToolName:   tc.Name,
+			Content:    "TOOLS ARE UNAVAILABLE. Do not call any tools. I am waiting for the summary text right now.",
+		})
+	}
+
+	followUp := append(append([]llmwire.Message{}, messages...), replies...)
+
+	retry, err := s.chat(ctx, s.prompt.SystemPrompt(), followUp, schemas, llmwire.WithMaxTokens(reserve))
+	if err != nil {
+		return nil, fmt.Errorf("compaction retry after tool call: %w", err)
+	}
+
+	return retry, nil
+}
+
+// acceptedCheckpointText validates the single accepted shape: one fully
+// completed, non-empty text response with no tool calls. Missing headings or a
+// short answer are fine; anything else is not a checkpoint.
+func acceptedCheckpointText(resp *llmwire.Response) (string, error) {
+	if resp == nil {
+		return "", errors.New("empty summarizer response")
+	}
+
+	if len(resp.ToolCalls) > 0 {
+		return "", errors.New("summarizer attempted tool calls")
+	}
+
+	switch resp.FinishType {
+	case llmwire.FinishStop:
+	case llmwire.FinishLength:
+		return "", errors.New("summarizer output stopped for length")
+	default:
+		return "", fmt.Errorf("summarizer finished with %q, not a normal completion", resp.FinishType)
+	}
+
+	if strings.TrimSpace(resp.Text) == "" {
+		return "", errors.New("summarizer returned no text")
+	}
+
+	return strings.TrimSpace(resp.Text), nil
+}
+
+// compactionInstructionMessage renders the final role-user instruction:
+// the revised checkpoint prompt plus the optional /compact focus.
+func compactionInstructionMessage(focus string) llmwire.Message {
+	content := sessionprompt.CompactionSummaryPrompt + focus
+
+	return llmwire.Message{Role: llmwire.RoleUser, Content: content}
+}
+
+// activeBackgroundSection preserves producer identities and waiting guidance across compaction.
+func (s *Session) activeBackgroundSection(context.Context) string {
+	return s.activeBackgroundSnapshot
 }

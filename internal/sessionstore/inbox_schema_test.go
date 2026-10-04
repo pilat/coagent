@@ -1,4 +1,4 @@
-package sessionstore
+package sessionstore_test
 
 import (
 	"context"
@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/pilat/coagent/internal/sessionstore"
 	"github.com/pilat/coagent/internal/subagent"
 	"github.com/pilat/coagent/internal/transcript"
 )
@@ -20,7 +21,7 @@ func TestSessionInboxSchema_ResolutionTruthTable(t *testing.T) {
 	store, db, projectID := newTestStore(t)
 	rec, err := store.CreateSession(ctx, projectID, "model", "", nil)
 	require.NoError(t, err)
-	messageID, err := store.InsertMessage(ctx, rec.ID, &transcript.Message{Role: "user", Content: "accepted"})
+	messageID, err := appendMessage(ctx, store, rec.ID, &transcript.Message{Role: "user", Content: "accepted"})
 	require.NoError(t, err)
 	now := time.Now().UTC()
 
@@ -114,8 +115,8 @@ func TestSessionOutboxSchema_ManagerHeadIndex(t *testing.T) {
 	store, db, projectID := newTestStore(t)
 	record, err := store.CreateSession(ctx, projectID, "model", "", map[string]any{"manager_id": "telegram"})
 	require.NoError(t, err)
-	_, err = store.EnqueueOutput(ctx, OutputDraft{
-		SessionID: record.ID, Type: OutputMessagePersistent, Content: "queued",
+	_, err = store.EnqueueOutput(ctx, sessionstore.OutputDraft{
+		SessionID: record.ID, Type: sessionstore.OutputMessagePersistent, Content: "queued",
 	})
 	require.NoError(t, err)
 
@@ -144,7 +145,7 @@ func TestSubagentLinkSchema_ActivationSequenceStartsAtOne(t *testing.T) {
 	store, db, projectID := newTestStore(t)
 	parent, err := store.CreateSession(ctx, projectID, "model", "", nil)
 	require.NoError(t, err)
-	childID, err := subagent.NewTransactions(db).Create(ctx, subagent.Create{
+	childID, err := subagent.NewStore(db, store).Create(ctx, subagent.Create{
 		ProjectID: projectID, ParentID: parent.ID, RootID: parent.ID,
 		Model: "model", TaskCallID: "task-1", State: "spawned",
 	})

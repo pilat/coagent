@@ -4,12 +4,64 @@ import (
 	"context"
 	"encoding/json"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/pilat/coagent/internal/budget"
 	"github.com/pilat/coagent/internal/transcript"
 )
+
+func TestEnqueueCompactWithFocusKeepsParkedBudget(t *testing.T) {
+	for _, content := range []string{"/compact", "/compact keep API notes", "  /compact keep API notes  ", "keep going"} {
+		t.Run(content, func(t *testing.T) {
+			t.Parallel()
+			ctx := context.Background()
+			store, db, projectID := newTestStore(t)
+			root, err := store.CreateSession(ctx, projectID, "priced", "", map[string]any{"manager_id": "cli:main"})
+			require.NoError(t, err)
+			input, err := enqueueInput(ctx, store, root.ID, InputSourceUser, "/budget")
+			require.NoError(t, err)
+			_, _, err = acceptActivation(ctx, store, input.ID, "/budget\n\nactivate",
+				ActivationDraft{ToolID: "set_budget", Command: "/budget"})
+			require.NoError(t, err)
+			limit := 1.0
+			_, err = store.Arm(ctx, budget.Mutation{
+				RootSessionID: root.ID, InputID: input.ID, ToolID: "set_budget", Command: "/budget",
+				ToolCallID: "arm", CostLimitUSD: &limit, Receipt: "Budget armed",
+			})
+			require.NoError(t, err)
+			fired, _, err := store.FireBudget(ctx, root.ID, 1, "cost", 1.5, "Budget checkpoint reached (cost).")
+			require.NoError(t, err)
+			_, err = store.BeginBudgetDrain(ctx, root.ID, fired.Generation, fired.ParkOwner)
+			require.NoError(t, err)
+			_, err = store.MarkBudgetParked(ctx, root.ID, fired.Generation, fired.ParkOwner)
+			require.NoError(t, err)
+			require.NoError(t, store.UpdateSessionStatus(ctx, root.ID, SessionStatusStopped))
+			var before time.Time
+			require.NoError(t, db.QueryRowContext(ctx, `SELECT episode_started_at FROM sessions WHERE id = ?`,
+				root.ID).Scan(&before))
+
+			_, err = enqueueInput(ctx, store, root.ID, InputSourceUser, content)
+			require.NoError(t, err)
+			record, err := store.Get(ctx, root.ID)
+			require.NoError(t, err)
+			if content == "keep going" {
+				assert.Equal(t, budget.Released, record.State)
+				assert.Equal(t, "resumed", record.ReleasedReason)
+				return
+			}
+
+			assert.Equal(t, budget.Fired, record.State)
+			assert.Equal(t, "parked", record.ParkPhase)
+			var after time.Time
+			require.NoError(t, db.QueryRowContext(ctx, `SELECT episode_started_at FROM sessions WHERE id = ?`,
+				root.ID).Scan(&after))
+			assert.Equal(t, before, after)
+		})
+	}
+}
 
 func TestBudgetStore_ArmFireAndReplayAreAtomic(t *testing.T) {
 	t.Parallel()
@@ -17,33 +69,35 @@ func TestBudgetStore_ArmFireAndReplayAreAtomic(t *testing.T) {
 	store, db, projectID := newTestStore(t)
 	root, err := store.CreateSession(ctx, projectID, "priced", "", map[string]any{"manager_id": "telegram:main"})
 	require.NoError(t, err)
-	input, err := store.EnqueueInput(ctx, root.ID, InputSourceUser, "/budget two dollars")
+	input, err := enqueueInput(ctx, store, root.ID, InputSourceUser, "/budget two dollars")
 	require.NoError(t, err)
-	_, _, err = store.PromoteInputWithActivation(ctx, input.ID, "/budget two dollars\n\nactivate",
+	_, _, err = acceptActivation(ctx, store, input.ID, "/budget two dollars\n\nactivate",
 		ActivationDraft{ToolID: "set_budget", Command: "/budget"})
 	require.NoError(t, err)
 	limit := 2.0
-	mutation := BudgetMutation{
+	mutation := budget.Mutation{
 		RootSessionID: root.ID, InputID: input.ID,
 		ToolID: "set_budget", Command: "/budget", ToolCallID: "call-budget",
 		CostLimitUSD: &limit, Receipt: "Budget armed: $2.000000 additional persisted cost",
 	}
 
-	armed, receipt, err := store.ArmBudget(ctx, mutation)
+	armed, err := store.Arm(ctx, mutation)
 	require.NoError(t, err)
-	assert.Equal(t, BudgetArmed, armed.State)
-	assert.False(t, receipt.Existing)
+	assert.Equal(t, budget.Armed, armed.State)
 
-	replayed, replayReceipt, err := store.ArmBudget(ctx, mutation)
+	replayed, err := store.Arm(ctx, mutation)
 	require.NoError(t, err)
 	assert.Equal(t, armed.Generation, replayed.Generation)
-	assert.True(t, replayReceipt.Existing)
+	var receipts int
+	require.NoError(t, db.QueryRowContext(ctx, `SELECT COUNT(*) FROM session_outbox
+		WHERE session_id = ? AND source_key = 'tool:call-budget:direct:0'`, root.ID).Scan(&receipts))
+	assert.Equal(t, 1, receipts)
 
 	fired, checkpoint, err := store.FireBudget(ctx, root.ID, armed.Generation, "cost", 2.25,
 		"Budget checkpoint reached (cost).")
 	require.NoError(t, err)
-	assert.Equal(t, BudgetFired, fired.State)
-	assert.Greater(t, checkpoint.OutputID, receipt.OutputID)
+	assert.Equal(t, budget.Fired, fired.State)
+	assert.Positive(t, checkpoint.OutputID)
 
 	duplicate, duplicateCheckpoint, err := store.FireBudget(ctx, root.ID, armed.Generation, "cost", 2.25,
 		"Budget checkpoint reached (cost).")
@@ -63,36 +117,36 @@ func TestBudgetStore_CrossingResponseCommitsUsageNonExecutionAndCheckpointTogeth
 	store, db, projectID := newTestStore(t)
 	root, err := store.CreateSession(ctx, projectID, "priced", "", map[string]any{"manager_id": "cli:main"})
 	require.NoError(t, err)
-	input, err := store.EnqueueInput(ctx, root.ID, InputSourceUser, "/budget")
+	input, err := enqueueInput(ctx, store, root.ID, InputSourceUser, "/budget")
 	require.NoError(t, err)
-	_, _, err = store.PromoteInputWithActivation(ctx, input.ID, "/budget\n\nactivate",
+	_, _, err = acceptActivation(ctx, store, input.ID, "/budget\n\nactivate",
 		ActivationDraft{ToolID: "set_budget", Command: "/budget"})
 	require.NoError(t, err)
 	limit := 0.5
-	_, _, err = store.ArmBudget(ctx, BudgetMutation{
+	_, err = store.Arm(ctx, budget.Mutation{
 		RootSessionID: root.ID, InputID: input.ID, ToolID: "set_budget", Command: "/budget",
 		ToolCallID: "arm", CostLimitUSD: &limit, Receipt: "Budget armed",
 	})
 	require.NoError(t, err)
 
-	result, err := store.InsertBudgetedResponse(ctx, BudgetedResponse{
-		SessionID: root.ID, RootID: root.ID,
-		Message: &transcript.Message{
+	result, err := store.Commit(
+		ctx,
+		Commit{SessionID: root.ID, RootID: root.ID, ObserveBudget: true, Messages: []*transcript.Message{{
 			Role: "assistant", Content: "checkpoint summary", CostUSD: 0.75,
-			ToolCalls: json.RawMessage(`[{"id":"danger","name":"bash","arguments":{"command":"false"}}]`),
-		},
-	})
+			ToolCalls: json.RawMessage(`[{"ID":"danger","Name":"bash","Arguments":{"command":"false"}}]`),
+		}}},
+	)
 	require.NoError(t, err)
-	require.True(t, result.Fired)
-	late, err := store.InsertBudgetedResponse(ctx, BudgetedResponse{
-		SessionID: root.ID, RootID: root.ID,
-		Message: &transcript.Message{
+	require.True(t, result.BudgetFired)
+	late, err := store.Commit(
+		ctx,
+		Commit{SessionID: root.ID, RootID: root.ID, ObserveBudget: true, Messages: []*transcript.Message{{
 			Role: "assistant", Content: "late parallel response", CostUSD: 0.1,
-			ToolCalls: json.RawMessage(`[{"id":"late","name":"bash","arguments":{}}]`),
-		},
-	})
+			ToolCalls: json.RawMessage(`[{"ID":"late","Name":"bash","Arguments":{}}]`),
+		}}},
+	)
 	require.NoError(t, err)
-	assert.True(t, late.Fired)
+	assert.True(t, late.BudgetFired)
 
 	var assistantCount, resultCount, checkpointCount int
 	require.NoError(t, db.QueryRowContext(ctx, `SELECT COUNT(*) FROM messages
@@ -112,38 +166,6 @@ func TestBudgetStore_CrossingResponseCommitsUsageNonExecutionAndCheckpointTogeth
 	assert.Equal(t, 1, lateResults)
 }
 
-func TestBudgetStore_CompactionCrossingCommitsReplacementAndCheckpointTogether(t *testing.T) {
-	t.Parallel()
-	ctx := context.Background()
-	store, db, projectID := newTestStore(t)
-	root, err := store.CreateSession(ctx, projectID, "priced", "", map[string]any{"manager_id": "cli:main"})
-	require.NoError(t, err)
-	input, err := store.EnqueueInput(ctx, root.ID, InputSourceUser, "/budget")
-	require.NoError(t, err)
-	_, _, err = store.PromoteInputWithActivation(ctx, input.ID, "/budget\n\nactivate",
-		ActivationDraft{ToolID: "set_budget", Command: "/budget"})
-	require.NoError(t, err)
-	limit := 0.5
-	_, _, err = store.ArmBudget(ctx, BudgetMutation{
-		RootSessionID: root.ID, InputID: input.ID, ToolID: "set_budget", Command: "/budget",
-		ToolCallID: "arm", CostLimitUSD: &limit, Receipt: "Budget armed",
-	})
-	require.NoError(t, err)
-
-	result, err := store.ReplaceCompactedMessagesBudgeted(ctx, BudgetedCompaction{
-		SessionID: root.ID, RootID: root.ID,
-		Entries: []CompactionEntry{{Message: &transcript.Message{Role: "user", Content: "summary", CostUSD: 0.75}}},
-	})
-	require.NoError(t, err)
-	require.True(t, result.Fired)
-	require.Len(t, result.MessageIDs, 1)
-
-	var checkpoints int
-	require.NoError(t, db.QueryRowContext(ctx, `SELECT COUNT(*) FROM session_outbox
-		WHERE session_id = ? AND source_key = 'budget:1:checkpoint'`, root.ID).Scan(&checkpoints))
-	assert.Equal(t, 1, checkpoints)
-}
-
 func TestBudgetStore_RejectsCrossSessionGrant(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -152,16 +174,16 @@ func TestBudgetStore_RejectsCrossSessionGrant(t *testing.T) {
 	require.NoError(t, err)
 	second, err := store.CreateSession(ctx, projectID, "priced", "", map[string]any{"manager_id": "two"})
 	require.NoError(t, err)
-	input, err := store.EnqueueInput(ctx, first.ID, InputSourceUser, "/budget")
+	input, err := enqueueInput(ctx, store, first.ID, InputSourceUser, "/budget")
 	require.NoError(t, err)
-	_, _, err = store.PromoteInputWithActivation(ctx, input.ID, "/budget\n\nactivate",
+	_, _, err = acceptActivation(ctx, store, input.ID, "/budget\n\nactivate",
 		ActivationDraft{ToolID: "set_budget", Command: "/budget"})
 	require.NoError(t, err)
 	limit := 1.0
-	_, _, err = store.ArmBudget(ctx, BudgetMutation{
+	_, err = store.Arm(ctx, budget.Mutation{
 		RootSessionID: second.ID, InputID: input.ID,
 		ToolID: "set_budget", Command: "/budget", ToolCallID: "wrong", CostLimitUSD: &limit,
 		Receipt: "Budget armed: $1.000000 additional persisted cost",
 	})
-	require.ErrorIs(t, err, ErrBudgetConflict)
+	require.ErrorIs(t, err, budget.ErrConflict)
 }

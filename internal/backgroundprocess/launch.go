@@ -12,10 +12,6 @@ import (
 	"strings"
 	"syscall"
 	"time"
-
-	"go.uber.org/zap"
-
-	"github.com/pilat/coagent/internal/logger"
 )
 
 func (s *svc) launch(
@@ -99,7 +95,7 @@ func (s *svc) startGuardian(ctx context.Context, outputPath string) (*exec.Cmd, 
 		return nil, nil, fmt.Errorf("create guardian lease pipe: %w", err)
 	}
 
-	guardian := s.opts.GuardianCommand(outputPath+".guard", readyWriter, leaseReader)
+	guardian := newGuardianCommand(ctx, outputPath+".guard", readyWriter, leaseReader)
 
 	guardian.SysProcAttr = guardianProcessSysProcAttr()
 	if err := guardian.Start(); err != nil {
@@ -179,7 +175,7 @@ func (s *svc) prepareOutput(
 		return nil, Process{}, nil, fmt.Errorf("create process output file: %w", err)
 	}
 
-	now := s.opts.Now()
+	now := time.Now()
 
 	record := Process{
 		ID: processID, SessionID: spec.SessionID, RootSessionID: spec.RootSessionID,
@@ -191,17 +187,7 @@ func (s *svc) prepareOutput(
 	}
 
 	quotaReady := make(chan bool, 1)
-	collector := newCollector(file, MaxOutputBytes, func() {
-		if persisted := <-quotaReady; persisted {
-			if _, err := s.store.RecordIntent(ctx, processID, IntentOutputLimit); err != nil {
-				logger.Ctx(ctx).Named("backgroundprocess.output").Warn(
-					"output_limit_intent_failed", zap.String("process", processID), zap.Error(err),
-				)
-			}
-		}
-
-		_ = killGroup(cmd)
-	})
+	collector := newCollector(ctx, file, MaxOutputBytes, s.store, processID, quotaReady, cmd)
 
 	return collector, record, quotaReady, nil
 }
@@ -212,7 +198,7 @@ func (s *svc) newProcessID() string {
 
 	s.ids++
 
-	return fmt.Sprintf("bgp_%d_%d", s.opts.Now().UnixNano(), s.ids)
+	return fmt.Sprintf("bgp_%d_%d", time.Now().UnixNano(), s.ids)
 }
 
 func killGroup(cmd *exec.Cmd) error {

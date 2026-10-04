@@ -1,14 +1,9 @@
 package sessionstore
 
 import (
-	"context"
 	"errors"
 	"time"
-
-	"github.com/pilat/coagent/internal/transcript"
 )
-
-type OutputType string
 
 const (
 	OutputMessageReplaceable OutputType = "message_replaceable"
@@ -18,8 +13,6 @@ const (
 	OutputSessionClosed      OutputType = "session_closed"
 )
 
-type OutputState string
-
 const (
 	OutputStatePending    OutputState = "pending"
 	OutputStateDelivering OutputState = "delivering"
@@ -27,21 +20,6 @@ const (
 	OutputStateDelivered  OutputState = "delivered"
 	OutputStateBlocked    OutputState = "blocked"
 )
-
-var (
-	ErrNoOutput       = errors.New("manager has no deliverable output")
-	ErrOutputConflict = errors.New("session output identity conflict")
-	ErrOutputAttempt  = errors.New("session output attempt conflict")
-	ErrManagerBinding = errors.New("manager binding conflict")
-	ErrOutputOwner    = errors.New("session output has no manager owner")
-	ErrOutputNotRoot  = errors.New("session output belongs to a subagent")
-)
-
-type OutputRetryPendingError struct{ NextAt time.Time }
-
-func (e *OutputRetryPendingError) Error() string { return "manager output retry is not due" }
-
-func (e *OutputRetryPendingError) Unwrap() error { return ErrNoOutput }
 
 const managerIDAttribute = "manager_id"
 
@@ -57,6 +35,21 @@ const (
 	outputSourceAgent      = "agent"
 	outputSourceScheduler  = "scheduler"
 )
+
+var (
+	ErrNoOutput       = errors.New("manager has no deliverable output")
+	ErrOutputConflict = errors.New("session output identity conflict")
+	ErrOutputAttempt  = errors.New("session output attempt conflict")
+	ErrManagerBinding = errors.New("manager binding conflict")
+	ErrOutputOwner    = errors.New("session output has no manager owner")
+	ErrOutputNotRoot  = errors.New("session output belongs to a subagent")
+)
+
+type OutputType string
+
+type OutputState string
+
+type OutputRetryPendingError struct{ NextAt time.Time }
 
 type OutputDraft struct {
 	SessionID     int64
@@ -96,9 +89,12 @@ type OutputClaim struct {
 }
 
 type OutputCommit struct {
-	OutputID int64
-	OwnerID  string
-	Existing bool
+	PersistOnly bool
+	OutputID    int64
+	OwnerID     string
+	Existing    bool
+	Content     string
+	LiveContent string
 }
 
 type OutputQueueStatus struct {
@@ -106,30 +102,6 @@ type OutputQueueStatus struct {
 	BlockedID     int64
 	BlockedAt     *time.Time
 	DeliveryError string
-}
-
-// ManagerRootStore keeps manager-facing root lifecycle facts and their output
-// obligations in the same transaction. The daemon uses it opportunistically so
-// narrow store fakes do not acquire a second creation API.
-type ManagerRootStore interface {
-	CreateManagerRoot(ctx context.Context, create ManagerRootCreate) (*SessionRecord, *OutputCommit, error)
-	EnsureManagementRoot(
-		ctx context.Context,
-		projectID int64,
-		owner string,
-		topicID int64,
-		name, workDir string,
-	) (*SessionRecord, *OutputCommit, error)
-	ReplaceManagerRoot(
-		ctx context.Context,
-		oldSessionID int64,
-		name, workDir string,
-	) (*SessionRecord, *OutputCommit, error)
-	ReplaceManagerRootForInput(
-		ctx context.Context,
-		oldSessionID, inputID int64,
-		name, workDir string,
-	) (*SessionRecord, *OutputCommit, error)
 }
 
 type ManagerRootCreate struct {
@@ -143,81 +115,6 @@ type ManagerRootCreate struct {
 	WorkDir        string
 }
 
-type OutputStore interface {
-	EnqueueOutput(ctx context.Context, draft OutputDraft) (*OutputCommit, error)
-	InsertAssistantMessageWithOutput(
-		ctx context.Context,
-		sessionID int64,
-		message *transcript.Message,
-		outputType OutputType,
-		content string,
-		releasesInput bool,
-	) (messageID int64, output *OutputCommit, err error)
-	BindManager(ctx context.Context, managerID, driver string, attributes map[string]any) error
-	ClaimOutputHead(ctx context.Context, managerID string) (*OutputClaim, error)
-	AckOutput(
-		ctx context.Context,
-		managerID string,
-		outputID int64,
-		attemptID string,
-		messageIDs []string,
-		sessionPatch map[string]any,
-	) error
-	RetryOutput(ctx context.Context, managerID string, outputID int64, attemptID, failure string, next time.Time) error
-	BlockOutput(ctx context.Context, managerID string, outputID int64, attemptID, failure string) error
-	RecoverInterruptedOutputs(ctx context.Context) (int64, error)
-	RetryBlockedHead(ctx context.Context, managerID string) (bool, error)
-	WakeOutputHead(ctx context.Context, managerID string) (bool, error)
-	OutputQueueStatus(ctx context.Context, managerID string) (*OutputQueueStatus, error)
-}
+func (e *OutputRetryPendingError) Error() string { return "manager output retry is not due" }
 
-// RuntimeOutputStore is the atomic output surface required by a live session.
-// Delivery claims and acknowledgements remain outside the agent loop.
-type RuntimeOutputStore interface {
-	StateOutputStore
-	DirectOutputStore
-	CompactionCommandStore
-	CommandOutputStore
-	AssistantOutputStore
-	EnqueueOutput(ctx context.Context, draft OutputDraft) (*OutputCommit, error)
-}
-
-type OutputIdentityStore interface { //nolint:iface // Optional reconciliation capability.
-	OutputBySourceKey(ctx context.Context, sessionID int64, sourceKey string) (*OutputRecord, error)
-}
-
-// CommandOutputStore resolves an inbox command and its visible result together;
-// normal input promotion remains owned by the session boundary.
-type CommandOutputStore interface {
-	HandleInputWithOutput(ctx context.Context, inputID int64, reason string, draft OutputDraft) (*OutputCommit, error)
-}
-
-// LifecycleOutputStore commits terminal state with its manager-visible output.
-type LifecycleOutputStore interface {
-	MarkSessionKilledWithOutput(
-		ctx context.Context,
-		sessionID int64,
-		cancelledProcesses int,
-	) (*OutputCommit, error)
-}
-
-type LifecycleCommandStore interface {
-	BeginLifecycleInput(ctx context.Context, inputID int64, command, content string) (*OutputCommit, error)
-}
-
-type ReplacementStore interface {
-	ResolveReplacement(ctx context.Context, sessionID int64, managerID string) (int64, error)
-}
-
-// AssistantOutputStore commits an assistant transcript row and its manager
-// output together as part of RuntimeOutputStore.
-type AssistantOutputStore interface {
-	InsertAssistantMessageWithOutput(
-		ctx context.Context,
-		sessionID int64,
-		message *transcript.Message,
-		outputType OutputType,
-		content string,
-		releasesInput bool,
-	) (messageID int64, output *OutputCommit, err error)
-}
+func (e *OutputRetryPendingError) Unwrap() error { return ErrNoOutput }

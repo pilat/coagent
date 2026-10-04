@@ -7,9 +7,16 @@ import (
 	"time"
 
 	"github.com/robfig/cron/v3"
+
+	"github.com/pilat/coagent/internal/sessionstore"
+	"github.com/pilat/coagent/internal/tool"
 )
 
+var _ Service = (*svc)(nil)
+
 type Service interface {
+	Render(ctx context.Context, sessionID int64) (string, error)
+	SleepTool(sessionID int64) tool.Tool
 	ListSchedules(ctx context.Context, sessionID int64) ([]Entry, error)
 	PendingSleeps(ctx context.Context, sessionID int64) ([]PendingSleep, error)
 	RemoveSchedule(ctx context.Context, sessionID int64, scheduleID int64) error
@@ -33,14 +40,18 @@ type Service interface {
 	RemoveAllForSession(ctx context.Context, sessionID int64) error
 }
 
-var _ Service = (*svc)(nil)
-
 type svc struct {
-	store Store
+	store    Store
+	sessions *sessionstore.Store
 }
 
-func NewService(store Store) Service {
-	return &svc{store: store}
+func NewService(store Store, sessions *sessionstore.Store) Service {
+	return &svc{store: store, sessions: sessions}
+}
+
+// SleepTool rejects competing timers while a background producer owns the wake.
+func (s *svc) SleepTool(sessionID int64) tool.Tool {
+	return NewGuardedSleepTool(s, sessionID, s.sessions)
 }
 
 func (s *svc) ListSchedules(ctx context.Context, sessionID int64) ([]Entry, error) {
@@ -68,6 +79,19 @@ func (s *svc) PendingSleeps(ctx context.Context, sessionID int64) ([]PendingSlee
 
 	for _, sched := range schedules {
 		if sched.oneShotAt != nil && sched.metadata.ToolCallID != "" {
+			valid, err := s.store.CallPending(ctx, sessionID, sched.metadata.ToolCallID)
+			if err != nil {
+				return nil, fmt.Errorf("check pending sleep: %w", err)
+			}
+
+			if !valid {
+				if err := s.store.RemoveSchedule(ctx, sched.id); err != nil {
+					return nil, fmt.Errorf("pending sleeps: %w", err)
+				}
+
+				continue
+			}
+
 			pending = append(pending, PendingSleep{
 				CallID: sched.metadata.ToolCallID,
 				WakeAt: *sched.oneShotAt,

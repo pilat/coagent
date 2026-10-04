@@ -22,6 +22,7 @@ import (
 	"github.com/pilat/coagent/internal/procexec"
 	"github.com/pilat/coagent/internal/safefile"
 	"github.com/pilat/coagent/internal/sandboxpolicy"
+	"github.com/pilat/coagent/internal/sessionstore"
 	"github.com/pilat/coagent/internal/tool"
 )
 
@@ -156,7 +157,7 @@ func newTestProcessServiceAt(t *testing.T, outputDir string) (backgroundprocess.
 	require.NoError(t, err)
 
 	service := backgroundprocess.NewService(
-		backgroundprocess.NewStore(db),
+		backgroundprocess.NewStore(db, sessionstore.NewStore(db)),
 		backgroundprocess.Options{OutputDir: outputDir},
 	)
 	t.Cleanup(func() {

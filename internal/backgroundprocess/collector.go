@@ -1,31 +1,54 @@
 package backgroundprocess
 
 import (
+	"context"
 	"fmt"
 	"os"
+	"os/exec"
 	"sync"
+
+	"go.uber.org/zap"
+
+	"github.com/pilat/coagent/internal/logger"
 )
 
 // overflowMarker is the host-owned terminal marker appended after the cap.
 const overflowMarker = "\n[process output truncated at limit]\n"
 
-// collector merges stdout and stderr into one file-backed bounded stream.
-// Writes are serialized so the recorded order is the observed order across
-// the two descriptors. Past the byte cap it invokes the overflow callback
-// once and keeps discarding: pipe draining must continue while cancellation
-// proceeds, and a writer error would rely on SIGPIPE instead.
+// Overflow keeps draining while cancellation proceeds; a writer error would
+// rely on SIGPIPE instead of recording the terminal intent.
 type collector struct {
-	file     *os.File
-	quota    int64
-	onQuota  func()
-	mu       sync.Mutex
-	written  int64
-	overflow bool
-	done     bool
+	file       *os.File
+	quota      int64
+	ctx        context.Context //nolint:containedctx // Output capture shares the detached process lifetime.
+	store      Store
+	processID  string
+	quotaReady <-chan bool
+	cmd        *exec.Cmd
+	mu         sync.Mutex
+	written    int64
+	overflow   bool
+	done       bool
 }
 
-func newCollector(file *os.File, quota int64, onQuota func()) *collector {
-	return &collector{file: file, quota: quota, onQuota: onQuota}
+func newCollector(
+	ctx context.Context,
+	file *os.File,
+	quota int64,
+	store Store,
+	processID string,
+	quotaReady <-chan bool,
+	cmd *exec.Cmd,
+) *collector {
+	return &collector{
+		ctx:        ctx,
+		file:       file,
+		quota:      quota,
+		store:      store,
+		processID:  processID,
+		quotaReady: quotaReady,
+		cmd:        cmd,
+	}
 }
 
 func (c *collector) Write(p []byte) (int, error) {
@@ -60,7 +83,7 @@ func (c *collector) Write(p []byte) (int, error) {
 
 	c.written = c.quota
 	c.overflow = true
-	c.onQuota()
+	c.quotaReached()
 
 	return len(p), nil
 }
@@ -101,4 +124,16 @@ func (c *collector) overflowed() bool {
 	defer c.mu.Unlock()
 
 	return c.overflow
+}
+
+func (c *collector) quotaReached() {
+	if persisted := <-c.quotaReady; persisted {
+		if _, err := c.store.RecordIntent(c.ctx, c.processID, IntentOutputLimit); err != nil {
+			logger.Ctx(c.ctx).Named("backgroundprocess.output").Warn(
+				"output_limit_intent_failed", zap.String("process", c.processID), zap.Error(err),
+			)
+		}
+	}
+
+	_ = killGroup(c.cmd)
 }

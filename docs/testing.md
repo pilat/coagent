@@ -295,7 +295,7 @@ testing convention:
 - `internal/sessionstore/harness_model_test.go` — reference protocol model versus
   migrated SQLite for inbox acceptance/consumption, activation finalization,
   duplicate/stale delivery, crash windows, and restart;
-- `internal/daemon/*_scenario_test.go` — one shared real daemon/session loop and
+- `internal/daemon/scenario_*_test.go` — one shared real daemon/session loop and
   controller-visible golden conversations, including adversarial tool batches,
   all-wait scatter/gather, sleep interruption, and restart after normal input was
   promoted either before an assistant response or after durable tool progress;

@@ -11,6 +11,8 @@ import (
 	"time"
 )
 
+const outputColumns = `id, session_id, type, content, attributes, COALESCE(source_key, ''), COALESCE(fingerprint, ''), state, attempt_seq, COALESCE(attempt_id, ''), last_attempt_at, next_attempt_at, delivered_at, blocked_at, last_error, created_at, releases_input`
+
 func outputOwner(ctx context.Context, tx *sql.Tx, sessionID int64) (string, error) {
 	var parentID int64
 	var attributes string
@@ -66,8 +68,6 @@ func selectOutputHead(ctx context.Context, tx *sql.Tx, managerID string) (*Outpu
 
 	return scanOutputRecord(row)
 }
-
-const outputColumns = `id, session_id, type, content, attributes, COALESCE(source_key, ''), COALESCE(fingerprint, ''), state, attempt_seq, COALESCE(attempt_id, ''), last_attempt_at, next_attempt_at, delivered_at, blocked_at, last_error, created_at, releases_input`
 
 func scanOutputRecord(row interface{ Scan(...any) error }) (*OutputRecord, error) {
 	var record OutputRecord
@@ -237,7 +237,7 @@ func outputForAttempt(
 	return record, nil
 }
 
-func (s *store) resolveOutputAttempt(
+func (s *Store) resolveOutputAttempt(
 	ctx context.Context,
 	managerID string,
 	outputID int64,

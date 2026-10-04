@@ -37,7 +37,7 @@ func TestCreateSubagentSessionKeepsItsOwnAgentType(t *testing.T) {
 	root, err := store.CreateSession(ctx, projectID, "model-a", "medium", nil)
 	require.NoError(t, err)
 
-	childID, err := store.CreateSubagentSession(ctx, projectID, root.ID, root.ID, "explore", "model-a", "medium")
+	childID, err := createChild(ctx, store, projectID, root.ID, root.ID, "explore", "model-a", "medium")
 	require.NoError(t, err)
 
 	child, err := store.GetSession(ctx, childID)

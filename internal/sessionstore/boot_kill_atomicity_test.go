@@ -30,7 +30,8 @@ func TestOutputStore_BootKillCloseIsAtomicWithKilledTransition(t *testing.T) {
 		BEGIN SELECT RAISE(ABORT, 'injected close failure'); END`)
 	require.NoError(t, err)
 
-	require.Error(t, store.KillTerminatingSessions(ctx))
+	_, err = store.MarkSessionKilledWithOutput(ctx, record.ID, 0)
+	require.Error(t, err)
 
 	var status string
 	var killedAt *time.Time
@@ -45,7 +46,8 @@ func TestOutputStore_BootKillCloseIsAtomicWithKilledTransition(t *testing.T) {
 	require.NoError(t, err)
 
 	// The retry after repair completes both sides of the transition.
-	require.NoError(t, store.KillTerminatingSessions(ctx))
+	_, err = store.MarkSessionKilledWithOutput(ctx, record.ID, 0)
+	require.NoError(t, err)
 
 	require.NoError(t, db.QueryRowContext(
 		ctx, `SELECT status, killed_at FROM sessions WHERE id = ?`, record.ID,

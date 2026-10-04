@@ -7,13 +7,7 @@ import (
 	"fmt"
 )
 
-// LifecycleOutputHistoryStore supplies the lifecycle anchor for a repaired
-// manager surface without exposing delivery receipts to producers.
-type LifecycleOutputHistoryStore interface {
-	LatestLifecycleOutputID(ctx context.Context, sessionID int64) (int64, error)
-}
-
-func (s *store) LatestLifecycleOutputID(ctx context.Context, sessionID int64) (int64, error) {
+func (s *Store) LatestLifecycleOutputID(ctx context.Context, sessionID int64) (int64, error) {
 	var id sql.NullInt64
 
 	err := s.db.QueryRowContext(ctx, `SELECT MAX(id) FROM session_outbox

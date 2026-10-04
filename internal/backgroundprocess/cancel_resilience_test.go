@@ -140,7 +140,7 @@ func TestStore_RejectsOwnerRootMismatch(t *testing.T) {
 func TestService_CancelSessionsDoesNotCancelSiblingOwner(t *testing.T) {
 	ctx := context.Background()
 	store := newTestStore(t)
-	service := newTestService(t, store, nil, nil)
+	service := newTestService(t, store, nil)
 
 	child := startTestProcess(t, service, testSpec(2), "sleep 30")
 	sibling := startTestProcess(t, service, testSpec(3), "sleep 30")
@@ -162,7 +162,7 @@ func TestService_CancelAllJoinsEveryHandleAfterIntentFailure(t *testing.T) {
 	ctx := context.Background()
 	base := newTestStore(t)
 	store := &recordIntentFailStore{Store: base}
-	service := newTestService(t, store, nil, nil)
+	service := newTestService(t, store, nil)
 
 	first := startTestProcess(t, service, testSpec(2), "sleep 30")
 	second := startTestProcess(t, service, testSpec(3), "sleep 30")
@@ -171,8 +171,12 @@ func TestService_CancelAllJoinsEveryHandleAfterIntentFailure(t *testing.T) {
 	cancelled, err := service.CancelAll(ctx, IntentDaemonShutdown)
 	require.ErrorContains(t, err, "injected intent failure")
 	assert.Equal(t, 1, cancelled)
-	assert.Zero(t, service.liveCount(2))
-	assert.Zero(t, service.liveCount(3))
+	assert.Nil(t, service.trackedCancel(first.ID))
+	assert.Nil(t, service.trackedCancel(second.ID))
+	service.mu.Lock()
+	assert.Zero(t, service.live[2])
+	assert.Zero(t, service.live[3])
+	service.mu.Unlock()
 	_ = waitState(t, base, first.ID, StateInterrupted, 5*time.Second)
 	assert.Equal(t, StateInterrupted, waitState(
 		t, base, second.ID, StateInterrupted, 5*time.Second,
@@ -195,7 +199,7 @@ func TestService_FallbackIntentPreservesCancellationOutcome(t *testing.T) {
 			ctx := context.Background()
 			base := newTestStore(t)
 			store := &recordIntentFailStore{Store: base}
-			service := newTestService(t, store, nil, nil)
+			service := newTestService(t, store, nil)
 			process := startTestProcess(t, service, testSpec(2), "sleep 30")
 			store.failID = process.ID
 
@@ -220,7 +224,7 @@ func TestService_FinalizationExcludesLateFallbackIntent(t *testing.T) {
 		Store: base, entered: make(chan struct{}), release: make(chan struct{}),
 	}
 	store := &recordIntentFailStore{Store: blocked}
-	service := newTestService(t, store, nil, nil)
+	service := newTestService(t, store, nil)
 	process := startTestProcess(t, service, testSpec(2), "true")
 	store.failID = process.ID
 	<-blocked.entered
@@ -241,14 +245,17 @@ func TestService_FinalizationExcludesLateFallbackIntent(t *testing.T) {
 	require.ErrorContains(t, <-done, "injected intent failure")
 	final := waitState(t, base, process.ID, StateCompleted, 5*time.Second)
 	assert.Equal(t, IntentNone, final.HostIntent)
-	assert.Zero(t, service.liveCount(2))
+	assert.Nil(t, service.trackedCancel(process.ID))
+	service.mu.Lock()
+	assert.Zero(t, service.live[2])
+	service.mu.Unlock()
 }
 
 func TestService_CancelAllListFailureStillInterruptsEveryHandle(t *testing.T) {
 	ctx := context.Background()
 	base := newTestStore(t)
 	store := listRunningFailStore{Store: base}
-	service := newTestService(t, store, nil, nil)
+	service := newTestService(t, store, nil)
 	first := startTestProcess(t, service, testSpec(2), "sleep 30")
 	second := startTestProcess(t, service, testSpec(3), "sleep 30")
 
@@ -260,15 +267,19 @@ func TestService_CancelAllListFailureStillInterruptsEveryHandle(t *testing.T) {
 		final := waitState(t, base, process.ID, StateInterrupted, 5*time.Second)
 		assert.Equal(t, IntentDaemonShutdown, final.HostIntent)
 	}
-	assert.Zero(t, service.liveCount(2))
-	assert.Zero(t, service.liveCount(3))
+	assert.Nil(t, service.trackedCancel(first.ID))
+	assert.Nil(t, service.trackedCancel(second.ID))
+	service.mu.Lock()
+	assert.Zero(t, service.live[2])
+	assert.Zero(t, service.live[3])
+	service.mu.Unlock()
 }
 
 func TestService_CancelProcessReadFailurePreservesIntent(t *testing.T) {
 	ctx := context.Background()
 	base := newTestStore(t)
 	store := getProcessFailStore{Store: base}
-	service := newTestService(t, store, nil, nil)
+	service := newTestService(t, store, nil)
 	process := startTestProcess(t, service, testSpec(2), "sleep 30")
 
 	cancelled, err := service.CancelProcess(ctx, process.ID, IntentSessionStopped)
@@ -284,7 +295,7 @@ func TestService_DetachedCancellationFailurePersistsIntent(t *testing.T) {
 	base := newTestStore(t)
 	process := runningRecord(t, base, 2)
 	store := &recordIntentFailStore{Store: base, failID: process.ID}
-	service := newTestService(t, store, nil, nil)
+	service := newTestService(t, store, nil)
 
 	cancelled, err := service.CancelSessions(ctx, []int64{2}, IntentSessionKilled)
 	require.ErrorContains(t, err, "injected intent failure")
@@ -318,7 +329,7 @@ func TestService_DetachedCancellationRetriesTerminalization(t *testing.T) {
 			if tt.failIntent {
 				store = &recordIntentFailStore{Store: transient, failID: process.ID}
 			}
-			service := newTestService(t, store, nil, nil)
+			service := newTestService(t, store, nil)
 
 			cancelled, err := service.CancelSessions(ctx, []int64{2}, IntentSessionKilled)
 			if tt.wantCancelErr {
@@ -363,7 +374,7 @@ func TestService_ScopedListFailureCancelsMatchingHandles(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			ctx := context.Background()
 			base := newTestStore(t)
-			service := newTestService(t, tt.wrap(base), nil, nil)
+			service := newTestService(t, tt.wrap(base), nil)
 			matched := startTestProcess(t, service, testSpec(2), "sleep 30")
 			sibling := startTestProcess(t, service, testSpec(3), "sleep 30")
 			if tt.name == "tree" {

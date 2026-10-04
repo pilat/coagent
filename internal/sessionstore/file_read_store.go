@@ -14,16 +14,8 @@ type FileReadRecord struct {
 	Hash          string
 }
 
-// FileReadStore persists fingerprints of files observed by a session.
-type FileReadStore interface {
-	LookupRead(ctx context.Context, sessionID int64, path string) (FileReadRecord, bool, error)
-	RecordRead(ctx context.Context, sessionID int64, path string, record FileReadRecord) error
-}
-
-var _ FileReadStore = (*store)(nil)
-
 //nolint:wsl_v5 // Lookup keeps query, not-found handling, and scan errors together.
-func (s *store) LookupRead(ctx context.Context, sessionID int64, path string) (FileReadRecord, bool, error) {
+func (s *Store) LookupRead(ctx context.Context, sessionID int64, path string) (FileReadRecord, bool, error) {
 	var record FileReadRecord
 	err := s.db.QueryRowContext(ctx, `SELECT mtime_unix_nano, size, hash
 		FROM session_file_reads WHERE session_id = ? AND path = ?`, sessionID, path).
@@ -38,7 +30,7 @@ func (s *store) LookupRead(ctx context.Context, sessionID int64, path string) (F
 	return record, true, nil
 }
 
-func (s *store) RecordRead(ctx context.Context, sessionID int64, path string, record FileReadRecord) error {
+func (s *Store) RecordRead(ctx context.Context, sessionID int64, path string, record FileReadRecord) error {
 	_, err := s.db.ExecContext(ctx, `INSERT INTO session_file_reads
 		(session_id, path, mtime_unix_nano, size, hash, updated_at)
 		VALUES (?, ?, ?, ?, ?, ?)

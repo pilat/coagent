@@ -38,7 +38,7 @@ func TestEnsureManagementRoot_RepeatedEnsureReturnsSameRoot(t *testing.T) {
 	assert.Nil(t, commit, "repeated ensure must not write another lifecycle row")
 
 	var count int
-	require.NoError(t, st.(*store).db.QueryRowContext(ctx,
+	require.NoError(t, st.db.QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM session_outbox WHERE session_id = ? AND type = 'session_opened'`,
 		first.ID).Scan(&count))
 	assert.Equal(t, 1, count)
@@ -77,13 +77,13 @@ func TestEnsureManagementRoot_ConcurrentEnsureProducesOneRoot(t *testing.T) {
 	}
 
 	var roots int
-	require.NoError(t, st.(*store).db.QueryRowContext(ctx,
+	require.NoError(t, st.db.QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM sessions WHERE project_id = ? AND parent_id = 0 AND killed_at IS NULL
 			AND status NOT IN ('terminating', 'killed')`, projectID).Scan(&roots))
 	assert.Equal(t, 1, roots)
 
 	var opened int
-	require.NoError(t, st.(*store).db.QueryRowContext(ctx,
+	require.NoError(t, st.db.QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM session_outbox WHERE type = 'session_opened'`).Scan(&opened))
 	assert.Equal(t, 1, opened)
 }

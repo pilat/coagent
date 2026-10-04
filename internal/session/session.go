@@ -2,168 +2,86 @@ package session
 
 import (
 	"context"
-	"errors"
+	"encoding/json"
 	"fmt"
-	"runtime"
 	"slices"
 	"strconv"
+	"strings"
 	"sync"
-	"time"
 
 	"go.uber.org/zap"
 
-	"github.com/pilat/coagent/internal/config"
-	"github.com/pilat/coagent/internal/git"
-	"github.com/pilat/coagent/internal/id"
 	"github.com/pilat/coagent/internal/llm"
 	"github.com/pilat/coagent/internal/llmwire"
 	"github.com/pilat/coagent/internal/loader"
 	"github.com/pilat/coagent/internal/logger"
-	"github.com/pilat/coagent/internal/memory"
-	"github.com/pilat/coagent/internal/registry"
 	"github.com/pilat/coagent/internal/sessionevent"
+	"github.com/pilat/coagent/internal/sessionprompt"
 	"github.com/pilat/coagent/internal/sessionstore"
-	"github.com/pilat/coagent/internal/todo"
 	"github.com/pilat/coagent/internal/tool"
-	"github.com/pilat/coagent/internal/tool/builtin"
 	"github.com/pilat/coagent/internal/transcript"
 )
 
-const (
-	compactionThreshold = 80000
-)
+const compactionThreshold = 80000
 
-// Service manages the state for a single agent session.
-//
-//nolint:interfacebloat // Daemon lifecycle needs one session-scoped capability.
-type Service interface {
-	// RunDaemon runs the session with durable boundary input and notifications.
-	// working reports main-model engagement so the host can clear its live
-	// "main model working" flag before a final response is published.
-	RunDaemon(
-		ctx context.Context,
-		notify func(sessionevent.Notification),
-		working func(bool),
-	) (RunResult, error)
-	PrepareUserMessage(message string) (string, error)
-
-	// SetModel switches the LLM model and reasoning level for a running session.
-	SetModel(model, reasoningLevel string) error
-
-	// AgentTypes returns the session's immutable agent-type set (built-ins overlaid
-	// with this session's project-local subagents).
-	AgentTypes() *registry.Set
-
-	// RegisterGatedTool registers t on the live registry if the session's own
-	// agent-type allowlist permits it, and reports whether it was registered.
-	RegisterGatedTool(t tool.Tool) bool
-
-	// PendingExternalCalls returns every unresolved call whose result is produced
-	// outside the ReAct loop. It scans the whole active transcript deliberately:
-	// a newer synthetic event must never make an older suspended call disappear.
-	PendingExternalCalls() []PendingToolCall
-
-	// ResolvePendingCall durably answers one exact external call. Re-delivery is
-	// idempotent; an unknown call or a mismatched tool name is rejected.
-	ResolvePendingCall(ctx context.Context, call PendingToolCall, content string) (CallResolution, error)
-
-	// SettleStoppedCalls durably closes external calls and unresolved calls in the
-	// current assistant turn after lifecycle code has fenced their producers.
-	SettleStoppedCalls(ctx context.Context, content string) error
-
-	// ResolveInterruptedCalls durably closes the given in-loop calls with a typed
-	// failure. The boot sweep uses it to settle calls left pending by a daemon
-	// restart; calls not in the current turn are skipped.
-	ResolveInterruptedCalls(ctx context.Context, calls []PendingToolCall, content string) error
-
-	// InjectToolNotificationOnce adds a synthetic tool_call + tool_result pair,
-	// applying one externally identified event at most once, including across
-	// process restart and producer acknowledgement failure.
-	InjectToolNotificationOnce(ctx context.Context, deliveryID, toolName, content string) (bool, error)
-
-	// ResetContextAndInjectOnce discards the session's accumulated context
-	// (transcript, compaction brief, todos) and starts a fresh turn with prompt as
-	// the new task, at most once per delivery identity. Used by fresh schedules so
-	// each tick runs from a blank slate. On error the previous transcript is left
-	// intact.
-	ResetContextAndInjectOnce(ctx context.Context, deliveryID, prompt string) (bool, error)
-
-	// ReloadDeliveredCompletion replaces the in-memory transcript with the
-	// authoritative SQLite projection. Called after a winning completion CAS:
-	// either reload order yields one copy of each DBID, and both operations
-	// replace the whole projection rather than append rows.
-	ReloadDeliveredCompletion(ctx context.Context) error
-
-	// HasPendingWork reports whether the last assistant turn has unresolved
-	// tool calls that are not external-pending (sleep/task) — i.e. work the loop
-	// should continue when resumed without a new stimulus.
-	HasPendingWork() bool
-
-	// Close releases session resources.
-	Close()
+// Events receives live, non-durable notifications for the controller.
+type Events interface {
+	Emit(sessionevent.Notification)
 }
 
-// ActiveSubagentInfo summarizes one of a session's in-flight children for the
-// activation-start context snapshot. The daemon (owner of the subagent ledger)
-// pushes these at session create/resume.
-type ActiveSubagentInfo struct {
-	ChildID  int64
-	Blocking bool
-	State    string
+// Input carries the assembled dependencies and durable activation snapshot.
+type Input struct {
+	ImageAuthorizer          llm.ImageAuthorizer
+	Record                   *sessionstore.SessionRecord
+	Client                   llm.Client
+	Loader                   loader.Service
+	Registry                 tool.Registry
+	Prompt                   *sessionprompt.Builder
+	Store                    Store
+	Events                   Events
+	ExternalCalls            map[string]string
+	OpeningContext           string
+	OutputEnabled            bool
+	PreserveStopped          bool
+	Schedules                string
+	Status                   string
+	BackgroundSnapshot       string
+	CompactionDeferAnnounced bool
 }
 
-// ActiveProcessInfo summarizes one advertised process owned by this session.
-type ActiveProcessInfo struct {
-	ID         string
-	OutputPath string
-}
-
-var _ Service = (*svc)(nil)
-
-type svc struct {
+// Session executes one activation over an assembled tool and model stack.
+type Session struct {
+	imageAuthorizer   llm.ImageAuthorizer
 	workDir           string
-	gitClient         git.Client
 	projectID         int64
 	llmClient         llm.Client
-	stack             *builtin.Stack
 	loader            loader.Service
-	todoStore         todo.Service
 	registry          tool.Registry
 	activationIndex   map[string]string
 	currentActivation *tool.ActivationGrant
 	agentsMD          string
-	memoryStore       memory.CuratedStore
-	store             sessionstore.RuntimeStore
-	outputStore       sessionstore.RuntimeOutputStore
-	dispositions      sessionstore.ResponseDispositionStore
+	store             Store
 	rootID            int64
 	id                int64
 	model             string
-	agentType         registry.AgentType
-	agentTypes        *registry.Set
 	iterationOffset   int
-	newLLMWithModel   func(cfg *config.Config, model string) (llm.Client, error)
 	reasoningLevel    string
-	// modelMu guards the mutable model triplet (llmClient/model/reasoningLevel),
-	// swapped by handleSetModel (daemon goroutine) while the loop reads them.
+	// modelMu orders queued clients and context measurements with model adoption.
 	modelMu         sync.RWMutex
 	closeOnce       sync.Once
-	cfg             *config.Config
-	loopOpts        loopOptions
-	stamper         timestamper
-	prompt          *promptBuilder
-	boundary        InputBoundary
+	stamper         sessionprompt.Timestamper
+	prompt          *sessionprompt.Builder
+	events          Events
+	schedules       string
+	status          string
 	outputEnabled   bool
 	preserveStopped bool
-	budgetGate      BudgetGate
 	budgetFired     bool
 
 	// Loop execution state
 	ms           *messageStore
 	loopDetector *loopDetector
-	// resumeCompletion seeds the reply cache on resume; the loop re-reads
-	// SQLite per turn, so a crash between resume and the next turn still
-	// observes the durable state.
+	// Durable completion state is re-read each turn; this only seeds the cache.
 	resumeCompletion  *sessionstore.CompletionCheckState
 	compactionFocus   string // optional /compact focus, set for one compact() then cleared
 	pendingCompaction bool
@@ -171,418 +89,153 @@ type svc struct {
 	// Summary row of the last auto compaction; keys its success output
 	// (`compaction:<id>:succeeded`) so a replay is an idempotent no-op.
 	compactionSummaryDBID int64
+	compactionOutputs     []*sessionstore.OutputCommit
 	// compactionDeferAnnounced survives the session object: the daemon rebuilds
-	// this svc on every wake, so per-run state would re-announce per wake.
+	// this Session on every wake, so per-run state would re-announce per wake.
 	compactionDeferAnnounced bool
 	suspended                bool
 	// stagedCalls are tool_call ids the daemon has already started outside work
 	// for (call id → tool name). Loop-read only; set once at construction.
-	stagedCalls map[string]string
-	// Reads the daemon's background ledgers live; nil outside a daemon.
-	activeSubagentsProvider  func(context.Context) []ActiveSubagentInfo
-	activeProcessesProvider  func(context.Context) []ActiveProcessInfo
+	stagedCalls              map[string]string
 	activeBackgroundSnapshot string
-	onIterationPersisted     func(context.Context, int)
 	// Under modelMu with the model triplet: a measurement describes one model's
 	// window and tokenizer. nil baseline = nothing measured.
-	baseline   *contextBaseline
-	modelEpoch uint64
+	baseline     *contextBaseline
+	pendingModel *modelSwitch
+	modelClosed  bool
+	modelEpoch   uint64
 }
 
-type params struct {
-	Config      *config.Config
-	LLMClient   llm.Client
-	TodoStore   todo.Service
-	Loader      loader.Service
-	Stack       *builtin.Stack
-	Registry    tool.Registry
-	Store       sessionstore.RuntimeStore
-	OutputStore sessionstore.RuntimeOutputStore
-	// Dispositions commits every accepted assistant response; nil only in
-	// tests without persistence, where the loop keeps the legacy paths.
-	Dispositions sessionstore.ResponseDispositionStore
-	GitClient    git.Client
-	MemoryStore  memory.CuratedStore
+type modelSwitch struct {
+	client  llm.Client
+	section sessionprompt.ModelSection
 }
 
-type options struct {
-	ID             int64
-	AgentType      registry.AgentType
-	ProjectID      int64
-	RootID         int64 // 0 = root session (rootID := ID); non-zero = child's root
-	ReasoningLevel string
+// Store is the persistence view required by session.
+type Store interface {
+	Commit(context.Context, sessionstore.Commit) (*sessionstore.CommitResult, error)
+	ListPending(context.Context, int64) ([]*sessionstore.InboxInput, error)
+	PendingActivation(context.Context, int64) (*sessionstore.ToolActivation, error)
 
-	// DB-based resume fields
-	ResumeMessages  []llmwire.Message
-	ResumeRowIDs    []int64
-	ResumeIteration int
-	ResumeTodoItems []*todo.Item
-	LastActivityAt  time.Time
-	InputBoundary   InputBoundary
-	OutputEnabled   bool
-	BudgetGate      BudgetGate
-
-	// ContextBaseline is the persisted provider measurement from the previous
-	// run; nil when none was taken. Installed only when it describes this
-	// session's model.
-	ContextBaseline *sessionstore.ContextBaseline
-
-	// SettlementOpen marks a lifecycle settlement open: it may not reactivate
-	// the root past a won stop/clear/kill fence (the store rejects such writes).
-	SettlementOpen bool
-
-	// PreserveStopped marks a command-only activation of a stopped root: the
-	// run must not reactivate the root past its prior stopped status.
-	PreserveStopped bool
-
-	// ActiveSubagents is the daemon-pushed set of this session's in-flight
-	// children, rendered into activation-start context.
-	ActiveSubagents []ActiveSubagentInfo
-	ActiveProcesses []ActiveProcessInfo
-
-	// ActiveSubagentsProvider reads the same ledger live, at the moment a
-	// compaction writes its summary — the create-time snapshot is stale by then.
-	ActiveSubagentsProvider func(context.Context) []ActiveSubagentInfo
-	ActiveProcessesProvider func(context.Context) []ActiveProcessInfo
-
-	// OnIterationPersisted observes a durable checkpoint after each model response.
-	OnIterationPersisted func(context.Context, int)
-
-	// ExtraSkills are daemon-injected, session-scoped skills that are registered
-	// for discovery and activated directly in the system prompt.
-	ExtraSkills []*loader.Skill
-
-	// StagedExternalCalls are tool_call ids the daemon owes a result for.
-	StagedExternalCalls map[string]string
-
-	// ResumeCompletionState is the durable check, reply obligation, and empty
-	// streak the daemon hands back on resume. SQLite stays authoritative; the
-	// loop re-reads it per turn, these fields only seed the in-memory caches.
-	ResumeCompletionState *sessionstore.CompletionCheckState
-
-	// CompactionDeferAnnounced is the previous run's deferral-notice verdict.
-	CompactionDeferAnnounced bool
+	HasBackgroundWakeSource(context.Context, int64) (bool, error)
+	LoadActiveMessages(context.Context, int64) ([]*transcript.Message, error)
+	LoadCompletionCheckState(context.Context, int64) (*sessionstore.CompletionCheckState, error)
+	HasOutstandingResponseRecovery(context.Context, int64) (bool, error)
+	GetChildSessionStats(context.Context, int64) (int, int, error)
+	GetSessionTreeUsage(context.Context, int64) (int, int, float64, error)
+	LookupRead(ctx context.Context, sessionID int64, path string) (sessionstore.FileReadRecord, bool, error)
+	RecordRead(ctx context.Context, sessionID int64, path string, record sessionstore.FileReadRecord) error
 }
 
-func newWithOptions(ctx context.Context, p params, opts options) (Service, error) {
-	log := logger.Ctx(ctx).Named("session.new")
+// New installs a prepared session and restores its durable transcript.
+func New(ctx context.Context, in Input) (*Session, error) {
+	r := in.Record
 
-	workDir := p.Config.WorkDir
-	if workDir == "" {
-		workDir = "."
+	s := &Session{
+		imageAuthorizer:          in.ImageAuthorizer,
+		workDir:                  in.Prompt.WorkDir,
+		projectID:                r.ProjectID,
+		id:                       r.ID,
+		rootID:                   r.RootID,
+		llmClient:                in.Client,
+		loader:                   in.Loader,
+		registry:                 in.Registry,
+		prompt:                   in.Prompt,
+		agentsMD:                 in.OpeningContext,
+		store:                    in.Store,
+		model:                    r.Model,
+		reasoningLevel:           in.Client.GetReasoningLevel(),
+		stamper:                  sessionprompt.NewTimestamper(r.UpdatedAt),
+		loopDetector:             newLoopDetector(),
+		stagedCalls:              in.ExternalCalls,
+		schedules:                in.Schedules,
+		status:                   in.Status,
+		events:                   in.Events,
+		outputEnabled:            in.OutputEnabled,
+		preserveStopped:          in.PreserveStopped,
+		activeBackgroundSnapshot: in.BackgroundSnapshot,
+		compactionDeferAnnounced: in.CompactionDeferAnnounced,
+		iterationOffset:          r.Iteration,
+	}
+	if s.rootID == 0 {
+		s.rootID = s.id
 	}
 
-	agentType := opts.AgentType
-	if agentType == "" {
-		agentType = registry.AgentTypeBuild
+	s.ms = newMessageStore(in.Store, r.ID)
+	if err := s.ms.reloadMessages(ctx); err != nil {
+		return nil, fmt.Errorf("restore transcript: %w", err)
 	}
 
-	projectSubagents := loadProjectSubagents(ctx, p, workDir)
-	set := registry.NewSet(projectSubagents)
+	s.installPersistedBaseline(r.ContextBaseline())
+	s.seedResumeCompletion(
+		&sessionstore.CompletionCheckState{
+			CandidateID:         r.CompletionCheckCandidateID,
+			ManagerReplyPending: r.ManagerReplyPending,
+			EmptyStopStreak:     r.EmptyStopStreak,
+		},
+	)
 
-	agentConfig, ok := set.Get(agentType)
-	if !ok {
-		return nil, fmt.Errorf("unknown agent type: %s", agentType)
-	}
-
-	var openingContext string
-	if !agentConfig.OmitProjectContext {
-		openingContext = loadProjectInstructions(ctx, p, workDir)
-		if p.MemoryStore != nil && opts.ProjectID != 0 {
-			openingContext += buildMemoriesSection(ctx, p.MemoryStore, opts.ProjectID)
-		}
-
-		// Injected before the prompt is built: a skill registered after the skills
-		// section is rendered is one the model never learns exists.
-		for _, skill := range opts.ExtraSkills {
-			p.Loader.RegisterSkill(skill)
+	if len(s.ms.getMessages()) == 0 {
+		if err := s.persistState(ctx, 0, sessionstore.SessionStatusActive); err != nil {
+			return nil, err
 		}
 	}
 
-	session := newSession(p, opts, workDir, agentConfig, openingContext)
-	session.agentTypes = set
-	session.prompt = buildPrompt(p, opts, workDir, agentConfig)
-	// The native-search bit must precede setupRegistry: the tools section it
-	// builds reports search guidance for the active client.
-	session.prompt.setNativeSearch(p.Config.UnifiedConfig.SearchNativeActive(p.Config.Model))
-	session.setupRegistry(p, agentConfig)
-
-	if err := session.applyResumeOrInit(ctx, opts, log); err != nil {
-		return nil, err
-	}
-
-	session.activeBackgroundSnapshot = buildActiveBackgroundSection(
-		opts.ActiveProcesses,
-		opts.ActiveSubagents,
-	)
-
-	if opts.ReasoningLevel != "" {
-		session.reasoningLevel = opts.ReasoningLevel
-	}
-
-	sessionID := strconv.FormatInt(session.id, 10)
-	if session.id != session.rootID {
-		sessionID = fmt.Sprintf("%d:%d", session.rootID, session.id)
-	}
-
-	session.llmClient.SetSessionID(sessionID)
-	session.llmClient.SetReasoningLevel(session.reasoningLevel)
-
-	log.Info(
-		"agent_config",
-		zap.Int("system_prompt_len", len(session.prompt.systemPrompt())),
-		zap.Int("tools_count", len(session.registry.List())),
-		zap.Int64("root_id", session.rootID),
-	)
-
-	return session, nil
+	return s, nil
 }
 
-// newSession constructs a bare svc with all fields populated except prompt and registry.
-func newSession(p params, opts options, workDir string, agentConfig registry.AgentTypeConfig, agentsMD string) *svc {
-	s := &svc{
-		workDir:         workDir,
-		projectID:       opts.ProjectID,
-		llmClient:       p.LLMClient,
-		stack:           p.Stack,
-		loader:          p.Loader,
-		todoStore:       p.TodoStore,
-		registry:        p.Registry,
-		memoryStore:     p.MemoryStore,
-		agentsMD:        agentsMD,
-		store:           p.Store,
-		outputStore:     p.OutputStore,
-		dispositions:    p.Dispositions,
-		model:           p.Config.Model,
-		agentType:       agentConfig.Name,
-		reasoningLevel:  string(llm.ReasoningMedium),
-		newLLMWithModel: llm.NewClientWithModel,
-		gitClient:       projectContextGitClient(p.GitClient, agentConfig),
-		cfg:             p.Config,
-		stamper:         timestamper{lastActivity: opts.LastActivityAt},
-		loopDetector:    newLoopDetector(),
-		stagedCalls:     opts.StagedExternalCalls,
-		boundary:        opts.InputBoundary,
-		outputEnabled:   opts.OutputEnabled,
-		budgetGate:      opts.BudgetGate,
-		preserveStopped: opts.PreserveStopped,
-
-		compactionDeferAnnounced: opts.CompactionDeferAnnounced,
-		resumeCompletion:         opts.ResumeCompletionState,
-		activeSubagentsProvider:  opts.ActiveSubagentsProvider,
-		activeProcessesProvider:  opts.ActiveProcessesProvider,
-		onIterationPersisted:     opts.OnIterationPersisted,
-	}
-	var msStore sessionstore.RuntimeStore
-
-	if s.store != nil {
-		msStore = s.store
-	}
-
-	s.ms = newMessageStore(msStore, opts.ID, p.OutputStore)
-	s.attachImageAuthorizer(s.llmClient)
-	s.confineGitClient()
-
-	return s
-}
-
-func (s *svc) SetModel(model, reasoningLevel string) error {
-	return s.handleSetModel(model, reasoningLevel)
-}
-
-func (s *svc) AgentTypes() *registry.Set {
-	return s.agentTypes
-}
-
-func (s *svc) SkillCatalog() loader.SkillCatalog {
-	return s.loader
-}
-
-// RegisterGatedTool applies the same agent-type filter used at construction
-// (filterRegistryForAgent) to a single tool registered after the fact.
-func (s *svc) RegisterGatedTool(t tool.Tool) bool {
-	if len(s.agentTypes.FilterTools([]string{t.ID()}, s.agentType)) == 0 {
-		return false
-	}
-
-	s.registry.Register(t)
-
-	return true
-}
-
-func (s *svc) InjectToolNotificationOnce(
-	ctx context.Context,
-	deliveryID, toolName, content string,
-) (bool, error) {
-	if deliveryID == "" {
-		return false, errors.New("inject idempotent tool notification: empty delivery id")
-	}
-
-	if pending := s.PendingExternalCalls(); len(pending) > 0 {
-		return false, fmt.Errorf(
-			"inject synthetic %s event: external call %s (%s) is still pending",
-			toolName,
-			pending[0].ID,
-			pending[0].Name,
-		)
-	}
-
-	return s.ms.addScheduledToolNotificationPairOnce(
-		ctx,
-		deliveryID,
-		id.Generate(),
-		toolName,
-		content,
-	)
-}
-
-func (s *svc) ResetContextAndInjectOnce(
-	ctx context.Context,
-	deliveryID, prompt string,
-) (bool, error) {
-	if deliveryID == "" {
-		return false, errors.New("idempotent context reset: empty delivery id")
-	}
-
-	if pending := s.PendingExternalCalls(); len(pending) > 0 {
-		return false, fmt.Errorf(
-			"reset context: external call %s (%s) is still pending",
-			pending[0].ID,
-			pending[0].Name,
-		)
-	}
-
-	// The opening turn is the same one a brand-new session starts from: frozen
-	// project context plus the exact task protected from lossy compaction.
-	opening := s.openingTurn(prompt)
-	fingerprint := deliveryFingerprint("context_reset", s.agentsMD, prompt)
-
-	inserted, err := s.ms.resetToOnce(ctx, deliveryID, fingerprint, opening)
-	if err != nil {
-		return false, fmt.Errorf("reset transcript: %w", err)
-	}
-
-	if !inserted {
-		return false, nil
-	}
-
-	// In-memory derived state drops only once the durable swap succeeded.
-	s.todoStore.Clear()
-	s.loopDetector.resetWindow()
-	s.resetContextBaseline()
-	s.clearPersistedBaseline(ctx)
-
-	return true, nil
-}
-
-// BuildBlockingSubagentCompletion builds the exact tool result that resolves a
-// blocking task call. Keeping this separate from the background-event builder
-// makes it impossible for callers to reinterpret one delivery mode as the other.
-func BuildBlockingSubagentCompletion(
-	taskCallID string,
-	content string,
-) ([]*transcript.Message, error) {
-	if taskCallID == "" {
-		return nil, errors.New("build blocking subagent completion: task call id is required")
-	}
-
-	stored := &transcript.Message{
-		Role:       llmwire.RoleTool,
-		Content:    content,
-		ToolCallID: taskCallID,
-		ToolName:   tool.IDTask,
-	}
-
-	return []*transcript.Message{stored}, nil
-}
-
-// ReloadDeliveredCompletion refreshes the live in-memory transcript from the
-// authoritative active-message projection. No DB write.
-func (s *svc) ReloadDeliveredCompletion(ctx context.Context) error {
-	return s.ms.reloadMessages(ctx)
-}
-
-func (s *svc) Close() {
+// Close releases model clients after the activation has joined.
+func (s *Session) Close() {
 	s.closeOnce.Do(func() {
-		if s.llmClient != nil {
-			if err := s.closeLLM(); err != nil {
-				logger.Named("session.close").Warn("llm_close_failed", zap.Error(err))
-			}
-		}
-
-		if s.stack != nil {
-			_ = s.stack.Close()
+		if err := s.closeLLM(); err != nil {
+			logger.Named("session.close").Warn("llm_close_failed", zap.Error(err))
 		}
 	})
 }
 
-// RequestCompaction requests a forced compaction at the next loop iteration.
-func (s *svc) RequestCompaction() {
+// RequestCompaction queues a forced checkpoint for the next boundary.
+func (s *Session) RequestCompaction() {
 	s.ms.mu.Lock()
 	defer s.ms.mu.Unlock()
 
 	s.pendingCompaction = true
 }
 
-// buildPrompt assembles the promptBuilder for a session before tool registration.
-// Registry-derived sections stay empty until refreshRegistrySections runs.
-func buildPrompt(
-	p params,
-	opts options,
-	workDir string,
-	agentConfig registry.AgentTypeConfig,
-) *promptBuilder {
-	basePrompt := agentConfig.Prompt +
-		fmt.Sprintf(
-			"\n\n# Environment\n- Working directory: %s\n- Platform: %s/%s\n- Timestamped user input is prefixed with `[+elapsed DOW YYYY-MM-DD HH:MM ZONE ±HH:MM]`, where `+elapsed` is optional. Use it for temporal reasoning.",
-			workDir,
-			runtime.GOOS,
-			runtime.GOARCH,
-		)
+// SwitchModel transfers a prepared client for the next model step.
+func (s *Session) SwitchModel(client llm.Client, modelsSection sessionprompt.ModelSection) {
+	s.modelMu.Lock()
+	if s.modelClosed {
+		s.modelMu.Unlock()
 
-	var modelsSection string
-	if !agentConfig.OmitProjectContext {
-		modelsSection = buildModelsSection(p.Config.Model)
+		_ = client.Close()
+
+		return
 	}
 
-	return newPromptBuilder(
-		basePrompt,
-		modelsSection,
-		activeProjectSkills(opts.ExtraSkills, agentConfig)...,
-	)
+	previous := s.pendingModel
+	client.SetImageAuthorizer(s.imageAuthorizer)
+	s.pendingModel = &modelSwitch{client: client, section: modelsSection}
+	s.modelMu.Unlock()
+
+	if previous != nil {
+		_ = previous.client.Close()
+	}
 }
 
-func projectContextGitClient(client git.Client, agentConfig registry.AgentTypeConfig) git.Client {
-	if agentConfig.OmitProjectContext {
-		return nil
+func (s *Session) PrepareUserMessage(message string) (string, error) {
+	prepared, err := s.PrepareUserMessageDetailed(message)
+	return prepared.Content, err
+}
+
+func (s *Session) PrepareUserMessageDetailed(message string) (sessionprompt.PreparedMessage, error) {
+	prepared, err := sessionprompt.PrepareUserMessageDetailed(s.loader, message)
+	if err != nil {
+		return prepared, fmt.Errorf("prepare user message: %w", err)
 	}
 
-	return client
+	return prepared, nil
 }
 
-func activeProjectSkills(skills []*loader.Skill, agentConfig registry.AgentTypeConfig) []*loader.Skill {
-	if agentConfig.OmitProjectContext {
-		return nil
-	}
-
-	return skills
-}
-
-// filterRegistryForAgent creates a filtered copy of the registry based on agent
-// type config. Todo-tool exclusions live in the agent config's Tools list (the
-// set normalizes them for subagents), so no agent-mode special-case is needed here.
-func filterRegistryForAgent(set *registry.Set, reg tool.Registry, agentConfig registry.AgentTypeConfig) tool.Registry {
-	allIDs := reg.IDs()
-	allowedIDs := set.FilterTools(allIDs, agentConfig.Name)
-
-	return reg.Filter(allowedIDs)
-}
-
-// unresolvedToolCalls returns id→name for tool_calls in the current (most recent)
-// assistant turn that have no matching tool_result. Returns nil when that turn is
-// text-only, or when a newer user message has superseded it — a tool call left
-// dangling before a user interruption is abandoned, not pending (repair still
-// stubs it for API validity, independently of this scan).
 func unresolvedToolCalls(messages []llmwire.Message) map[string]string {
 	for i, v := range slices.Backward(messages) {
 		if v.Role == llmwire.RoleUser {
@@ -619,50 +272,7 @@ func unresolvedToolCalls(messages []llmwire.Message) map[string]string {
 	return nil
 }
 
-// setupRegistry filters the tool registry for the agent type, registers session-scoped tools,
-// and finalises the dynamic tools section in the prompt.
-func (s *svc) setupRegistry(p params, agentConfig registry.AgentTypeConfig) {
-	// Bind the skill tool to this session's loader, overriding whatever the
-	// incoming registry carried.
-	p.Registry.Register(builtin.NewSkillTool(p.Loader))
-
-	filtered := filterRegistryForAgent(s.agentTypes, p.Registry, agentConfig)
-	s.registry = filtered
-	registerSessionTools(s)
-	s.refreshRegistrySections()
-}
-
-// refreshRegistrySections recomputes the prompt sections derived from the live tool
-// registry, which the daemon extends after construction. Once per activation.
-func (s *svc) refreshRegistrySections() {
-	s.prompt.refreshToolsSection(s.registry)
-
-	var skills string
-	if s.registry.Get(tool.IDSkill) != nil {
-		skills = buildSkillsSection(s.loader)
-	}
-
-	s.prompt.setSkillsSection(skills)
-
-	// A section naming a tool the allowlist removed is worse than no section.
-	var subagents string
-	if s.registry.Get(tool.IDTask) != nil {
-		subagents = buildSubagentsSection(s.loader)
-	}
-
-	s.prompt.setSubagentsSection(subagents)
-}
-
-// compactionRequested reports whether a forced compaction is queued, without
-// consuming it.
-func (s *svc) compactionRequested() bool {
-	s.ms.mu.Lock()
-	defer s.ms.mu.Unlock()
-
-	return s.pendingCompaction
-}
-
-func (s *svc) compactionCommandInput() *PendingInput {
+func (s *Session) compactionCommandInput() *PendingInput {
 	s.ms.mu.Lock()
 	defer s.ms.mu.Unlock()
 
@@ -675,14 +285,14 @@ func (s *svc) compactionCommandInput() *PendingInput {
 	return &input
 }
 
-func (s *svc) setCompactionCommandInput(input PendingInput) {
+func (s *Session) setCompactionCommandInput(input PendingInput) {
 	s.ms.mu.Lock()
 	defer s.ms.mu.Unlock()
 
 	s.compactionInput = &input
 }
 
-func (s *svc) clearCompactionCommandInput() {
+func (s *Session) clearCompactionCommandInput() {
 	s.ms.mu.Lock()
 	defer s.ms.mu.Unlock()
 
@@ -690,7 +300,7 @@ func (s *svc) clearCompactionCommandInput() {
 }
 
 // setCompactionFocus records (or clears) the one-shot /compact focus.
-func (s *svc) setCompactionFocus(focus string) {
+func (s *Session) setCompactionFocus(focus string) {
 	s.ms.mu.Lock()
 	defer s.ms.mu.Unlock()
 
@@ -698,7 +308,7 @@ func (s *svc) setCompactionFocus(focus string) {
 }
 
 // consumePendingCompaction atomically reads and clears the pending compaction request.
-func (s *svc) consumePendingCompaction() bool {
+func (s *Session) consumePendingCompaction() bool {
 	s.ms.mu.Lock()
 	defer s.ms.mu.Unlock()
 
@@ -708,7 +318,7 @@ func (s *svc) consumePendingCompaction() bool {
 	return pending
 }
 
-func (s *svc) contextWindow() int {
+func (s *Session) contextWindow() int {
 	if cw := s.currentLLM().ContextWindow(); cw > 0 {
 		return cw
 	}
@@ -716,77 +326,122 @@ func (s *svc) contextWindow() int {
 	return compactionThreshold
 }
 
-// seedResumeCompletion installs the durable completion projection into the
-// in-memory reply cache. The loop still re-reads SQLite per turn, so this is
-// a seed, not authority.
-func (s *svc) seedResumeCompletion(state *sessionstore.CompletionCheckState) {
+func (s *Session) seedResumeCompletion(state *sessionstore.CompletionCheckState) {
 	s.resumeCompletion = state
 }
 
-// applyResumeOrInit sets session IDs and either restores state from DB or persists the initial state.
-func (s *svc) applyResumeOrInit(ctx context.Context, opts options, log *zap.Logger) error {
-	if opts.ID == 0 {
-		return errors.New("session ID is required")
+func (s *Session) persistState(ctx context.Context, iteration int, status sessionstore.SessionStatus) error {
+	raw, err := json.Marshal(s.prompt.Todos.List())
+	if err != nil {
+		return fmt.Errorf("persist state: %w", err)
 	}
 
-	s.id = opts.ID
-	if opts.RootID != 0 {
-		s.rootID = opts.RootID
-	} else {
-		s.rootID = opts.ID
+	data := json.RawMessage(raw)
+	c := s.newCommit()
+	c.State = sessionstore.StatePatch{Iteration: &iteration, Status: &status, TodoItems: &data}
+	_, err = s.commit(ctx, c)
+
+	return err
+}
+
+func (s *Session) applyModelSwitch() {
+	s.modelMu.Lock()
+
+	pending := s.pendingModel
+	if pending == nil {
+		s.modelMu.Unlock()
+		return
 	}
 
-	if opts.ResumeMessages != nil {
-		if opts.ResumeRowIDs == nil {
-			s.ms.setMessages(opts.ResumeMessages)
-		} else if err := s.ms.setMessagesWithRowIDs(opts.ResumeMessages, opts.ResumeRowIDs); err != nil {
-			return fmt.Errorf("restore transcript identities: %w", err)
-		}
+	s.pendingModel = nil
+	old := s.llmClient
+	s.llmClient = pending.client
+	s.model = pending.section.ID
+	s.reasoningLevel = pending.client.GetReasoningLevel()
+	s.baseline = nil
+	s.modelEpoch++
 
-		s.iterationOffset = opts.ResumeIteration
-
-		if len(opts.ResumeTodoItems) > 0 {
-			s.todoStore.Replace(opts.ResumeTodoItems)
-		}
-
-		s.seedResumeCompletion(opts.ResumeCompletionState)
-
-		s.installPersistedBaseline(opts.ContextBaseline)
-
-		log.Info("resumed_from_db", zap.Int64("root_id", s.rootID), zap.Int("iteration", opts.ResumeIteration))
-
-		return nil
+	sessionID := strconv.FormatInt(s.id, 10)
+	if s.id != s.rootID {
+		sessionID = fmt.Sprintf("%d:%d", s.rootID, s.id)
 	}
 
-	if !opts.SettlementOpen {
-		if err := s.persistState(ctx, 0, "active"); err != nil {
-			return fmt.Errorf("persist initial state: %w", err)
-		}
+	s.llmClient.SetSessionID(sessionID)
+	s.prompt.SetModelsSection(pending.section.Text)
+	s.prompt.SetModelSearch(s.registry, pending.section.NativeSearch)
+	s.modelMu.Unlock()
+
+	if err := old.Close(); err != nil {
+		logger.Named("session.model").Warn("old_llm_close_failed", zap.Error(err))
+	}
+
+	s.emit(sessionevent.Notification{Type: sessionevent.NotifyContextChanged})
+}
+
+// Only the loop adopts queued clients, and Close runs after the loop joins.
+// Holding a model lease over IO would delay command handling until Chat returns.
+func (s *Session) chat(
+	ctx context.Context,
+	system string,
+	messages []llmwire.Message,
+	tools []llmwire.ToolSchema,
+	opts ...llmwire.ChatOption,
+) (*llmwire.Response, error) {
+	//nolint:wrapcheck // wrapped at the two operation-level callers
+	return s.currentLLM().Chat(ctx, system, messages, tools, opts...)
+}
+
+// The joined loop cannot use a client after this closes adoption.
+func (s *Session) closeLLM() error {
+	s.modelMu.Lock()
+	defer s.modelMu.Unlock()
+
+	s.modelClosed = true
+	if s.pendingModel != nil {
+		_ = s.pendingModel.client.Close()
+		s.pendingModel = nil
+	}
+
+	if err := s.llmClient.Close(); err != nil {
+		return fmt.Errorf("close LLM client: %w", err)
 	}
 
 	return nil
 }
 
-// attachImageAuthorizer gives a client the session's current filesystem
-// authority, so a deferred attachment read is re-authorized at materialization
-// and a revoked grant is not re-read through a historical reference.
-func (s *svc) attachImageAuthorizer(client llm.Client) {
-	if client == nil || s.stack == nil {
-		return
-	}
+// currentLLM returns a short-lived snapshot for non-resource operations such as
+// reading ContextWindow. Resource-using calls go through chat/closeLLM instead.
+func (s *Session) currentLLM() llm.Client {
+	s.modelMu.RLock()
+	defer s.modelMu.RUnlock()
 
-	client.SetImageAuthorizer(s.stack.Access())
+	return s.llmClient
 }
 
-// confineGitClient routes session-owned Git through the session's confinement
-// runner, so project-dependent hooks, helpers and fsmonitor cannot execute
-// outside the policy. A session without a runner keeps the daemon client.
-func (s *svc) confineGitClient() {
-	if s.gitClient == nil || s.stack == nil {
-		return
+func (s *Session) renderSessionHelp() string {
+	lines := []string{
+		"## Session commands",
+		"`/status` — show session status",
+		"`/stop` — stop the current run",
+		"`/clear` — start a fresh session",
+		"`/kill` — close this session",
+		"`/compact [focus]` — compact the context",
+		"`/schedules` — list schedules",
+		"`/budget <request>` — arm, replace, inspect, or clear a one-shot cost/wall-time checkpoint",
+		"`/gwt <name>` — fork into a worktree (Telegram session topics only)",
+	}
+	if s.loader == nil {
+		return strings.Join(lines, "\n")
 	}
 
-	if sandboxed := s.stack.SandboxedGit(); sandboxed != nil {
-		s.gitClient = sandboxed
+	for _, skill := range s.loader.ListUserInvocableSkills() {
+		line := "`/skill " + skill.Name + "`"
+		if skill.Description != "" {
+			line += " — " + skill.Description
+		}
+
+		lines = append(lines, line)
 	}
+
+	return strings.Join(lines, "\n")
 }

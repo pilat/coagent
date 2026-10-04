@@ -15,7 +15,6 @@ import (
 
 	"github.com/pilat/coagent/internal/loader"
 	"github.com/pilat/coagent/internal/tool"
-	"github.com/pilat/coagent/internal/toolexec"
 )
 
 type scriptedTool struct {
@@ -216,8 +215,8 @@ func TestBatchToolReportsPerCallOutcome(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Equal(t, "=== titled (call 1) ===\n[T]\nfirst\n\n"+
-		"=== broken (call 2) ===\nError: execute broken: boom\n\n"+
-		"=== untitled (call 3) ===\nError: "+toolexec.ErrSkipped.Error(), result.Output)
+		"=== broken (call 2) ===\nError: execute tool broken: boom\n\n"+
+		"=== untitled (call 3) ===\nError: "+tool.ErrSkipped.Error(), result.Output)
 	assert.Equal(t, "Batch: 1/3 succeeded", result.Title)
 	assert.Equal(t, 3, result.Metadata["total"])
 	assert.Equal(t, 1, result.Metadata["success"])

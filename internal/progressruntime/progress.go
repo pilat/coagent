@@ -10,8 +10,8 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/pilat/coagent/internal/budget"
 	"github.com/pilat/coagent/internal/controllerapi"
-	"github.com/pilat/coagent/internal/logger"
 	"github.com/pilat/coagent/internal/progress"
 	"github.com/pilat/coagent/internal/sessionstore"
 	"github.com/pilat/coagent/internal/todo"
@@ -26,20 +26,20 @@ func (r *runtime) current(
 		return nil, err
 	}
 
-	now := r.progressNow().UTC()
+	now := time.Now().UTC()
 
 	snapshot, err := r.progressSnapshot(facts, now)
 	if err != nil {
 		return nil, err
 	}
 
-	if contextProjection, ok := r.liveContextProjection(ctx, facts.RootID); ok {
-		snapshot.Context = contextProjection
+	if live := r.liveState(facts.RootID); live.Active {
+		snapshot.Context = live.Context
 	}
 
 	return &controllerapi.ProgressData{
 		SessionID: rootID, Revision: snapshot.Revision, OutboxWatermark: snapshot.OutboxWatermark,
-		ObservedAt: now, Rendered: progress.RenderFull(snapshot, logger.Redact),
+		ObservedAt: now, Rendered: progress.RenderFull(snapshot),
 	}, nil
 }
 
@@ -56,29 +56,6 @@ func (r *runtime) refresh(ctx context.Context, rootID int64) error {
 	}
 
 	return err
-}
-
-func (r *runtime) renderFinalOutput(ctx context.Context, rootID int64, text string) (string, error) {
-	facts, err := r.sessionStore.CaptureProgress(ctx, rootID)
-	if err != nil {
-		return "", fmt.Errorf("capture final progress: %w", err)
-	}
-
-	snapshot, err := r.progressSnapshot(facts, r.progressNow().UTC())
-	if err != nil {
-		return "", err
-	}
-
-	footer := progress.RenderFinalCompact(snapshot)
-	if footer == "" {
-		return text, nil
-	}
-
-	if text == "" {
-		return footer, nil
-	}
-
-	return text + "\n\n" + footer, nil
 }
 
 func (r *runtime) progressSnapshot(
@@ -98,7 +75,7 @@ func (r *runtime) progressSnapshot(
 		RootID: facts.RootID, DurableWatermark: facts.MessageWatermark,
 		OutboxWatermark: facts.OutboxWatermark, PersistedReason: string(facts.Status),
 		ObservedAt: observedAt, Model: facts.Model, RootIteration: facts.Iteration,
-		MainModelWorking: r.mainModelWorking(facts.RootID),
+		MainModelWorking: r.liveState(facts.RootID).Working && facts.Status != sessionstore.SessionStatusSuspended,
 		ChildCount:       facts.ChildCount, ChildIterations: facts.ChildIterations,
 		Lifetime: progress.Usage{
 			PromptTokens:     facts.PromptTokens,
@@ -108,7 +85,7 @@ func (r *runtime) progressSnapshot(
 		LastSemanticOutputAt: facts.LastSemanticOutputAt,
 		ActiveSubagents:      facts.ActiveSubagents, BackgroundSubagents: facts.BackgroundSubagents,
 	}
-	if r.hasActiveLoop(facts.RootID) {
+	if r.liveState(facts.RootID).Active {
 		snapshot.RuntimeState = "running"
 	} else {
 		snapshot.RuntimeState = "idle"
@@ -159,7 +136,7 @@ func (r *runtime) progressSnapshot(
 }
 
 //nolint:wsl_v5 // Derived budget fields are assembled as one projection.
-func progressBudget(record *sessionstore.BudgetRecord, cost float64, now time.Time) *progress.Budget {
+func progressBudget(record *budget.Record, cost float64, now time.Time) *progress.Budget {
 	if record == nil {
 		return nil
 	}

@@ -27,11 +27,11 @@ func TestHarnessModel_AsyncInboxMixedFIFOStopErrorKillAndRestart(t *testing.T) {
 		{source: InputSourceUser, state: InputStatePending},
 		{source: InputSourceSubagent, state: InputStatePending},
 	}
-	process, err := store.EnqueueAsyncInput(ctx, record.ID, InputSourceProcess, "process", nil)
+	process, err := enqueueFact(ctx, store, record.ID, InputSourceProcess, "process", nil)
 	require.NoError(t, err)
-	user, err := store.EnqueueInput(ctx, record.ID, InputSourceUser, "user")
+	user, err := enqueueInput(ctx, store, record.ID, InputSourceUser, "user")
 	require.NoError(t, err)
-	child, err := store.EnqueueAsyncInput(ctx, record.ID, InputSourceSubagent, "subagent", nil)
+	child, err := enqueueFact(ctx, store, record.ID, InputSourceSubagent, "subagent", nil)
 	require.NoError(t, err)
 	assertAsyncInboxMatchesModel(t, db, record.ID, model)
 
@@ -39,24 +39,24 @@ func TestHarnessModel_AsyncInboxMixedFIFOStopErrorKillAndRestart(t *testing.T) {
 		head, peekErr := store.PeekPending(ctx, record.ID)
 		require.NoError(t, peekErr)
 		assert.Equal(t, input.ID, head.ID, "production peek preserves the mixed-source FIFO")
-		message, promoteErr := store.PromoteInput(ctx, input.ID, input.RawContent)
+		message, promoteErr := acceptInput(ctx, store, input.ID, input.RawContent)
 		require.NoError(t, promoteErr)
 		model[i].state = InputStateAccepted
-		duplicate, duplicateErr := store.PromoteInput(ctx, input.ID, "changed duplicate")
+		duplicate, duplicateErr := acceptInput(ctx, store, input.ID, "changed duplicate")
 		require.NoError(t, duplicateErr)
 		assert.Equal(t, message.ID, duplicate.ID)
 		assertAsyncInboxMatchesModel(t, db, record.ID, model)
 	}
 
 	require.NoError(t, store.UpdateSessionStatus(ctx, record.ID, SessionStatusError))
-	_, err = store.EnqueueAsyncInput(ctx, record.ID, InputSourceProcess, "retained error fact", nil)
+	_, err = enqueueFact(ctx, store, record.ID, InputSourceProcess, "retained error fact", nil)
 	require.NoError(t, err)
 	model = append(model, asyncInboxModelRow{source: InputSourceProcess, state: InputStatePending})
-	store = NewStore(db)
+	store = testStore(db)
 	recoverable, err := store.ListSessionsWithRecoverableInput(ctx)
 	require.NoError(t, err)
 	assert.NotContains(t, recoverable, record.ID, "async-only error input stays parked")
-	_, err = store.EnqueueInput(ctx, record.ID, InputSourceUser, "explicit retry")
+	_, err = enqueueInput(ctx, store, record.ID, InputSourceUser, "explicit retry")
 	require.NoError(t, err)
 	model = append(model, asyncInboxModelRow{source: InputSourceUser, state: InputStatePending})
 	recoverable, err = store.ListSessionsWithRecoverableInput(ctx)
@@ -68,11 +68,11 @@ func TestHarnessModel_AsyncInboxMixedFIFOStopErrorKillAndRestart(t *testing.T) {
 	assert.Equal(t, int64(1), count)
 	model[4].state = InputStateCancelled
 	require.NoError(t, store.UpdateSessionStatus(ctx, record.ID, SessionStatusStopped))
-	store = NewStore(db)
+	store = testStore(db)
 	recoverable, err = store.ListSessionsWithRecoverableInput(ctx)
 	require.NoError(t, err)
 	assert.NotContains(t, recoverable, record.ID)
-	_, err = store.EnqueueInput(ctx, record.ID, InputSourceAgent, "explicit resume")
+	_, err = enqueueInput(ctx, store, record.ID, InputSourceAgent, "explicit resume")
 	require.NoError(t, err)
 	model = append(model, asyncInboxModelRow{source: InputSourceAgent, state: InputStatePending})
 	recoverable, err = store.ListSessionsWithRecoverableInput(ctx)
@@ -80,10 +80,10 @@ func TestHarnessModel_AsyncInboxMixedFIFOStopErrorKillAndRestart(t *testing.T) {
 	assert.Contains(t, recoverable, record.ID)
 	assertAsyncInboxMatchesModel(t, db, record.ID, model)
 
-	require.NoError(t, store.MarkSessionKilled(ctx, record.ID))
+	require.NoError(t, store.WithTx(ctx, func(tx *sql.Tx) error { return MarkSessionKilledTx(ctx, tx, record.ID) }))
 	model[3].state = InputStateCancelled
 	model[5].state = InputStateCancelled
-	store = NewStore(db)
+	store = testStore(db)
 	recoverable, err = store.ListSessionsWithRecoverableInput(ctx)
 	require.NoError(t, err)
 	assert.NotContains(t, recoverable, record.ID)

@@ -1,0 +1,100 @@
+package managerdiscovery
+
+import (
+	"context"
+	"fmt"
+	"path/filepath"
+	"sort"
+
+	"github.com/pilat/coagent/internal/controllerapi"
+	"github.com/pilat/coagent/internal/sessionstore"
+)
+
+// ListHiddenProjectDirs exposes hidden project work dirs so /spawn navigation
+// omits their directories without inferring hidden state from a basename.
+func listHiddenProjectDirs(ctx context.Context, backend Backend) ([]string, error) {
+	rows, err := backend.ListProjects(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list hidden projects: %w", err)
+	}
+
+	var dirs []string
+
+	for _, row := range rows {
+		if row.Hidden {
+			dirs = append(dirs, row.WorkDir)
+		}
+	}
+
+	return dirs, nil
+}
+
+// ListRecentProjects returns the folder-projects that are direct children of
+// root, newest activity first. Only direct children: a pick reconstructs the
+// folder as root/<name>, so a nested project (or a basename collision) would
+// otherwise open the wrong directory. Projects with no sessions sort ahead of all
+// others (a just-provisioned project tops the list); every tie breaks by id desc.
+// root is expected pre-resolved (abs + clean) by the caller.
+func listRecentProjects(ctx context.Context, backend Backend, root string) ([]controllerapi.RecentProjectInfo, error) {
+	rows, err := backend.ListProjects(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list projects: %w", err)
+	}
+
+	var (
+		filtered []sessionstore.ProjectRow
+		ids      []int64
+	)
+
+	for _, r := range rows {
+		if filepath.Dir(r.WorkDir) != root || r.Hidden {
+			continue
+		}
+
+		filtered = append(filtered, r)
+		ids = append(ids, r.ID)
+	}
+
+	activity, err := backend.LatestActivityByProject(ctx, ids)
+	if err != nil {
+		return nil, fmt.Errorf("latest activity: %w", err)
+	}
+
+	projects := make([]controllerapi.RecentProjectInfo, 0, len(filtered))
+
+	for _, r := range filtered {
+		p := controllerapi.RecentProjectInfo{ID: r.ID, Name: r.Name, Path: r.WorkDir}
+		if t, ok := activity[r.ID]; ok {
+			p.LastActivity = &t
+		}
+
+		projects = append(projects, p)
+	}
+
+	sortRecentProjects(projects)
+
+	return projects, nil
+}
+
+// sortRecentProjects orders newest-activity-first; a nil LastActivity (no
+// sessions) sorts ahead of any timestamped project, and every tie breaks by id
+// descending.
+func sortRecentProjects(projects []controllerapi.RecentProjectInfo) {
+	sort.SliceStable(projects, func(i, j int) bool {
+		a, b := projects[i], projects[j]
+
+		if a.LastActivity == nil || b.LastActivity == nil {
+			if (a.LastActivity == nil) != (b.LastActivity == nil) {
+				return a.LastActivity == nil
+			}
+
+			return a.ID > b.ID
+		}
+
+		if a.LastActivity.Equal(*b.LastActivity) {
+			return a.ID > b.ID
+		}
+
+		return a.LastActivity.After(*b.LastActivity)
+	})
+}

@@ -2,7 +2,6 @@ package sessionstore
 
 import (
 	"context"
-	"strconv"
 	"testing"
 	"time"
 
@@ -166,13 +165,18 @@ func TestOutputStore_RejectsIdentityAndOwnershipViolations(t *testing.T) {
 	require.NoError(t, err)
 	ownerless, err := store.CreateSession(ctx, projectID, "model", "", nil)
 	require.NoError(t, err)
-	child, err := store.CreateSubagentSession(ctx, projectID, owned.ID, owned.ID, "general", "model", "")
+	child, err := createChild(ctx, store, projectID, owned.ID, owned.ID, "general", "model", "")
 	require.NoError(t, err)
 
-	_, err = store.EnqueueOutput(ctx, OutputDraft{SessionID: ownerless.ID, Type: OutputMessagePersistent, Content: "x"})
-	require.ErrorIs(t, err, ErrOutputOwner)
-	_, err = store.EnqueueOutput(ctx, OutputDraft{SessionID: child, Type: OutputMessagePersistent, Content: "x"})
-	require.ErrorIs(t, err, ErrOutputNotRoot)
+	skipped, err := store.EnqueueOutput(
+		ctx,
+		OutputDraft{SessionID: ownerless.ID, Type: OutputMessagePersistent, Content: "x"},
+	)
+	require.NoError(t, err)
+	assert.Nil(t, skipped)
+	skipped, err = store.EnqueueOutput(ctx, OutputDraft{SessionID: child, Type: OutputMessagePersistent, Content: "x"})
+	require.NoError(t, err)
+	assert.Nil(t, skipped)
 	_, err = store.EnqueueOutput(
 		ctx,
 		OutputDraft{
@@ -384,72 +388,16 @@ func TestOutputStore_AcceptsMaximumLengthAttemptErrors(t *testing.T) {
 	require.NoError(t, store.BlockOutput(ctx, "telegram", claim.Output.ID, claim.Output.AttemptID, failure))
 }
 
-func TestOutputStore_AssistantMessageAndOutputCommitTogether(t *testing.T) {
-	ctx := context.Background()
-	store, db, projectID := newTestStore(t)
-	record, err := store.CreateSession(ctx, projectID, "model", "", map[string]any{"manager_id": "alpha"})
-	require.NoError(t, err)
-
-	messageID, output, err := store.InsertAssistantMessageWithOutput(ctx, record.ID, &transcript.Message{
-		Role: "assistant", Content: "answer",
-	}, OutputMessagePersistent, "✅ answer", true)
-	require.NoError(t, err)
-	require.NotZero(t, messageID)
-	require.NotZero(t, output.OutputID)
-
-	var sessionID int64
-	var sourceKey string
-	require.NoError(t, db.QueryRowContext(ctx,
-		`SELECT session_id, source_key FROM session_outbox WHERE id = ?`, output.OutputID).Scan(&sessionID, &sourceKey))
-	assert.Equal(t, record.ID, sessionID)
-	assert.Equal(t, "message:"+strconv.FormatInt(messageID, 10)+":final", sourceKey)
-}
-
-func TestOutputStore_HandleInputWithOutputCommitsTheCommandAndAnswerTogether(t *testing.T) {
-	ctx := context.Background()
-	store, db, projectID := newTestStore(t)
-	record, err := store.CreateSession(ctx, projectID, "model", "", map[string]any{"manager_id": "alpha"})
-	require.NoError(t, err)
-	input, err := store.EnqueueInput(ctx, record.ID, InputSourceUser, "/status")
-	require.NoError(t, err)
-
-	output, err := store.HandleInputWithOutput(ctx, input.ID, "status command", OutputDraft{
-		SessionID: record.ID,
-		Type:      OutputMessagePersistent,
-		Content:   "## Session Status",
-	})
-	require.NoError(t, err)
-	require.NotZero(t, output.OutputID)
-
-	var state, content, sourceKey string
-	require.NoError(t, db.QueryRowContext(ctx,
-		`SELECT state FROM session_inbox WHERE id = ?`, input.ID).Scan(&state))
-	require.NoError(t, db.QueryRowContext(ctx,
-		`SELECT content, source_key FROM session_outbox WHERE id = ?`, output.OutputID).Scan(&content, &sourceKey))
-	assert.Equal(t, string(InputStateHandled), state)
-	assert.Equal(t, "## Session Status", content)
-	assert.Equal(t, "input:"+strconv.FormatInt(input.ID, 10)+":status:result", sourceKey)
-
-	_, err = store.HandleInputWithOutput(ctx, input.ID, "status command", OutputDraft{
-		SessionID: record.ID,
-		Type:      OutputMessagePersistent,
-		Content:   "## Session Status",
-	})
-	require.ErrorIs(t, err, ErrInputResolved)
-}
-
 func TestOutputStore_MarkSessionKilledWithOutputCommitsBoth(t *testing.T) {
 	ctx := context.Background()
 	store, db, projectID := newTestStore(t)
 	record, err := store.CreateSession(ctx, projectID, "model", "", map[string]any{"manager_id": "alpha"})
 	require.NoError(t, err)
-	childID, err := store.CreateSubagentSession(
-		ctx, projectID, record.ID, record.ID, "general", "model", "",
-	)
+	childID, err := createChild(ctx, store, projectID, record.ID, record.ID, "general", "model", "")
 	require.NoError(t, err)
-	rootInput, err := store.EnqueueAsyncInput(ctx, record.ID, InputSourceProcess, "root process", nil)
+	rootInput, err := enqueueFact(ctx, store, record.ID, InputSourceProcess, "root process", nil)
 	require.NoError(t, err)
-	childInput, err := store.EnqueueAsyncInput(ctx, childID, InputSourceSubagent, "child completion", nil)
+	childInput, err := enqueueFact(ctx, store, childID, InputSourceSubagent, "child completion", nil)
 	require.NoError(t, err)
 
 	output, err := store.MarkSessionKilledWithOutput(ctx, record.ID, 3)
@@ -553,7 +501,7 @@ func TestOutputStore_ClearInputReplacesRootAndAcknowledgesAtomically(t *testing.
 		Name: "project", WorkDir: "/work/project",
 	})
 	require.NoError(t, err)
-	input, err := store.EnqueueInput(ctx, old.ID, InputSourceUser, "/clear")
+	input, err := enqueueInput(ctx, store, old.ID, InputSourceUser, "/clear")
 	require.NoError(t, err)
 	newRecord, _, err := store.ReplaceManagerRootForInput(ctx, old.ID, input.ID, "project", "/work/project")
 	require.NoError(t, err)
@@ -587,7 +535,7 @@ func TestOutputStore_LifecycleInputSetsFenceAndAcknowledgementTogether(t *testin
 	store, db, projectID := newTestStore(t)
 	record, err := store.CreateSession(ctx, projectID, "model", "", map[string]any{"manager_id": "telegram"})
 	require.NoError(t, err)
-	input, err := store.EnqueueInput(ctx, record.ID, InputSourceUser, "/stop")
+	input, err := enqueueInput(ctx, store, record.ID, InputSourceUser, "/stop")
 	require.NoError(t, err)
 	commit, err := store.BeginLifecycleInput(ctx, input.ID, "stop", "⏹ Stopping...")
 	require.NoError(t, err)
@@ -614,7 +562,7 @@ func TestOutputStore_KillInputFencesTerminating(t *testing.T) {
 	store, db, projectID := newTestStore(t)
 	record, err := store.CreateSession(ctx, projectID, "model", "", map[string]any{"manager_id": "telegram"})
 	require.NoError(t, err)
-	input, err := store.EnqueueInput(ctx, record.ID, InputSourceUser, "/kill")
+	input, err := enqueueInput(ctx, store, record.ID, InputSourceUser, "/kill")
 	require.NoError(t, err)
 
 	_, err = store.BeginLifecycleInput(ctx, input.ID, "kill", "Stopping session...")
@@ -646,7 +594,10 @@ func TestOutputStore_BootReconciliationEmitsCloseWithoutReplacement(t *testing.T
 	_, _, err = store.ReplaceManagerRoot(ctx, cleared.ID, "project", "/work/project")
 	require.NoError(t, err)
 
-	require.NoError(t, store.KillTerminatingSessions(ctx))
+	for _, id := range []int64{killed.ID, cleared.ID} {
+		_, err = store.MarkSessionKilledWithOutput(ctx, id, 0)
+		require.NoError(t, err)
+	}
 
 	for _, id := range []int64{killed.ID, cleared.ID} {
 		var status string
@@ -681,10 +632,10 @@ func TestOutputStore_RejectsAssistantOutputAfterLifecycleFence(t *testing.T) {
 	record, err := store.CreateSession(ctx, projectID, "model", "", map[string]any{"manager_id": "telegram"})
 	require.NoError(t, err)
 	require.NoError(t, store.UpdateSessionStatus(ctx, record.ID, SessionStatusStopping))
-	_, _, err = store.InsertAssistantMessageWithOutput(ctx, record.ID, &transcript.Message{
+	_, _, err = appendPublished(ctx, store, record.ID, &transcript.Message{
 		Role: "assistant", Content: "late answer",
 	}, OutputMessagePersistent, "✅ late answer", true)
-	require.ErrorContains(t, err, "cannot commit ordinary output")
+	require.ErrorIs(t, err, ErrSessionStopping)
 }
 
 func TestOutputStore_ResolvesManagerOwnedReplacementChain(t *testing.T) {

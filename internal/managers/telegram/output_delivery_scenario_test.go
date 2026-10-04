@@ -18,26 +18,34 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/pilat/coagent/internal/backgroundprocess"
 	"github.com/pilat/coagent/internal/budget"
 	"github.com/pilat/coagent/internal/coagenthome"
 	"github.com/pilat/coagent/internal/config"
+	"github.com/pilat/coagent/internal/configapply"
+	"github.com/pilat/coagent/internal/configops"
 	"github.com/pilat/coagent/internal/controllerapi"
 	"github.com/pilat/coagent/internal/daemon"
 	"github.com/pilat/coagent/internal/llm"
 	"github.com/pilat/coagent/internal/llmwire"
 	"github.com/pilat/coagent/internal/managercontrol"
+	"github.com/pilat/coagent/internal/managerdiscovery"
+	"github.com/pilat/coagent/internal/mcpstore"
 	"github.com/pilat/coagent/internal/migrate"
+	"github.com/pilat/coagent/internal/progressruntime"
 	"github.com/pilat/coagent/internal/schedule"
-	"github.com/pilat/coagent/internal/session"
+	"github.com/pilat/coagent/internal/sessionbuild"
+	"github.com/pilat/coagent/internal/sessionbus"
 	"github.com/pilat/coagent/internal/sessionstore"
 	"github.com/pilat/coagent/internal/subagent"
+	"github.com/pilat/coagent/internal/tool/builtin"
 )
 
 const delayedTelegramManagerID = "telegram-delayed"
 
 type delayedTelegramHarness struct {
 	controller controllerapi.Controller
-	sessions   sessionstore.Store
+	sessions   *sessionstore.Store
 	service    daemon.Service
 	workDir    string
 	recorder   *delayedTelegramRecorder
@@ -95,22 +103,54 @@ func newDelayedTelegramHarnessWithClient(
 	t.Cleanup(func() { _ = db.Close() })
 	require.NoError(t, migrate.Run(t.Context(), db, dbPath))
 
-	projects := daemon.NewStore(db)
 	sessions := sessionstore.NewStore(db)
 	workDir := filepath.Join(home, "project")
 	require.NoError(t, os.Mkdir(workDir, 0o700))
 	cfg := &config.Config{Model: "fake-model", WorkDir: workDir}
-	factory := session.NewFactoryWithOptions(
-		cfg, nil, nil, sessions, sessions, nil, nil, nil,
-		session.WithLLMClientFactory(clientFactory),
-	)
+	client, clientErr := clientFactory(cfg)
+	var build sessionbuild.BuildInput
+	if clientErr != nil {
+		cfg.UnifiedConfig = &config.UnifiedConfig{Models: []config.ModelEntry{{ID: "fake-model", Provider: "missing"}}}
+		build = sessionbuild.BuildInput{Config: cfg, Store: sessions, Resources: builtin.NewResources()}
+	} else {
+		build = scriptedBuildInput(
+			t,
+			cfg,
+			sessions,
+			nil,
+			func(*config.Config) (llm.Client, error) { return client, nil },
+		)
+	}
+	bus := sessionbus.New()
+	progress := progressruntime.New(sessions, bus)
 	service := daemon.New(
-		context.Background(), factory, projects, sessions, sessions, sessions, sessions, sessions, sessions, sessions,
-		subagent.NewStore(db), subagent.NewTransactions(db),
-		budget.New(sessions), sessions, schedule.NewService(schedule.NewStore(db)), cfg, nil, nil,
+		context.Background(),
+		build,
+		sessions,
+		subagent.NewStore(db, sessions),
+		budget.New(sessions),
+		backgroundprocess.NewStore(db, sessions),
+		progress,
+		bus,
+		schedule.NewService(schedule.NewStore(db, sessions), sessions),
+		cfg,
+		mcpstore.NewStore(db),
+		configapply.New(
+			configops.New(filepath.Join(home, "config.yaml"), filepath.Join(home, "secrets.yaml")),
+			sessions,
+		),
 	)
+
 	t.Cleanup(func() { service.Shutdown(3 * time.Second) })
-	controllers := managercontrol.New(service, service, sessions, cfg, nil)
+	controllers := managercontrol.New(
+		service,
+		sessions,
+		managerdiscovery.New(sessions, cfg, nil),
+		progress,
+		bus,
+		cfg,
+		nil,
+	)
 
 	return &delayedTelegramHarness{
 		controller: controllers.ForManager(delayedTelegramManagerID), sessions: sessions,

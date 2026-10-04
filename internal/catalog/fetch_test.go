@@ -24,14 +24,16 @@ const (
 	junkBody = `<html>maintenance</html>`
 )
 
-func jsonValidator(body []byte) error {
+type jsonValidator struct{}
+
+func (jsonValidator) Validate(body []byte) error {
 	var parsed map[string]any
 
 	return json.Unmarshal(body, &parsed)
 }
 
 func testSource(url string) Source {
-	return Source{URL: url, CacheName: "probe.json", Validate: jsonValidator}
+	return Source{URL: url, CacheName: "probe.json", Validator: jsonValidator{}}
 }
 
 func TestFetchCachesAndMemoizesPerURL(t *testing.T) {
@@ -170,7 +172,7 @@ func TestFetchDerivesACacheNameWhenSourceOmitsOne(t *testing.T) {
 	cacheDir := t.TempDir()
 	f := New(WithCacheDir(cacheDir), WithHTTPClient(srv.Client()))
 
-	_, err := f.Fetch(context.Background(), Source{URL: srv.URL, Validate: jsonValidator})
+	_, err := f.Fetch(context.Background(), Source{URL: srv.URL, Validator: jsonValidator{}})
 	require.NoError(t, err)
 
 	entries, err := os.ReadDir(cacheDir)

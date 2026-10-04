@@ -18,7 +18,6 @@ import (
 // Resources retains isolated session resources between tool-stack activations.
 type Resources interface {
 	Retire(sessionID int64) error
-	Invalidate(projectID int64) error
 	Close() error
 	acquire(StackConfig, bashsandbox.Config) (*resourceLease, error)
 }
@@ -68,32 +67,6 @@ func (r *resources) Retire(sessionID int64) error {
 	}
 
 	return nil
-}
-
-func (r *resources) Invalidate(projectID int64) error {
-	r.mu.Lock()
-	var idle []*resourceLease
-
-	for id, entry := range r.entries {
-		if projectID != 0 && entry.projectID != projectID {
-			continue
-		}
-
-		entry.retired = true
-		if !entry.busy {
-			idle = append(idle, entry)
-
-			delete(r.entries, id)
-		}
-	}
-	r.mu.Unlock()
-
-	var err error
-	for _, entry := range idle {
-		err = errors.Join(err, entry.close())
-	}
-
-	return err
 }
 
 func (r *resources) Close() error {

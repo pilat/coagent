@@ -2,173 +2,75 @@ package daemon
 
 import (
 	"context"
-	"database/sql"
-	"fmt"
-	"path/filepath"
-	"strings"
+	"time"
 
-	"github.com/pilat/coagent/internal/controllerapi"
+	"github.com/pilat/coagent/internal/budget"
+	"github.com/pilat/coagent/internal/sessionstore"
+	"github.com/pilat/coagent/internal/transcript"
 )
 
-// Store persists daemon state (project registry) in SQLite.
-type Store interface {
-	GetOrCreateProject(ctx context.Context, workDir string) (int64, error)
-	GetOrCreateNamedProject(ctx context.Context, workDir, name string) (int64, error)
-	GetOrCreateHiddenProject(ctx context.Context, workDir string) (int64, error)
+// Store is the persistence view required by daemon.
+type Store interface { //nolint:interfacebloat // Lifecycle commands share atomic session, inbox and output state.
+	Commit(context.Context, sessionstore.Commit) (*sessionstore.CommitResult, error)
+	ListPending(context.Context, int64) ([]*sessionstore.InboxInput, error)
+	PendingActivation(context.Context, int64) (*sessionstore.ToolActivation, error)
+	ObserveBudget(context.Context, int64, time.Time, string) (*budget.Record, bool, error)
+	LoadActiveMessages(context.Context, int64) ([]*transcript.Message, error)
+	CreateSession(
+		ctx context.Context,
+		projectID int64,
+		model, reasoningLevel string,
+		attrs map[string]any,
+	) (*sessionstore.SessionRecord, error)
+	CreateReplacementSession(ctx context.Context, oldSessionID int64) (*sessionstore.SessionRecord, error)
+	SetAttributes(ctx context.Context, id int64, attrs map[string]any) error
+	UpdateSessionModel(ctx context.Context, id int64, model, reasoningLevel string) error
+	GetSession(ctx context.Context, id int64) (*sessionstore.SessionRecord, error)
+	ListAllSessions(ctx context.Context) ([]*sessionstore.SessionRecord, error)
+	ListTree(ctx context.Context, rootID int64) ([]*sessionstore.SessionRecord, error)
+	UpdateSessionStatus(ctx context.Context, id int64, status sessionstore.SessionStatus) error
+	Enqueue(context.Context, sessionstore.Input) (*sessionstore.Enqueued, error)
+	Woken() <-chan struct{}
+	TakeWoken() []int64
+	PeekPending(context.Context, int64) (*sessionstore.InboxInput, error)
+	CancelPendingInputsForStop(context.Context, []int64, string) (int64, error)
+	HasAcceptedInput(context.Context, int64) (bool, error)
+	ListSessionsWithRecoverableInput(context.Context) ([]int64, error)
+	EnqueueOutput(ctx context.Context, draft sessionstore.OutputDraft) (*sessionstore.OutputCommit, error)
+	WakeOutputHead(ctx context.Context, managerID string) (bool, error)
+	CreateManagerRoot(
+		ctx context.Context,
+		create sessionstore.ManagerRootCreate,
+	) (*sessionstore.SessionRecord, *sessionstore.OutputCommit, error)
+	ReplaceManagerRoot(
+		ctx context.Context,
+		oldSessionID int64,
+		name, workDir string,
+	) (*sessionstore.SessionRecord, *sessionstore.OutputCommit, error)
+	ReplaceManagerRootForInput(
+		ctx context.Context,
+		oldSessionID, inputID int64,
+		name, workDir string,
+	) (*sessionstore.SessionRecord, *sessionstore.OutputCommit, error)
+	ResolveReplacement(ctx context.Context, sessionID int64, managerID string) (int64, error)
+	RecordSessionStartFailure(context.Context, int64, string) (bool, error)
+	BeginLifecycleInput(ctx context.Context, inputID int64, command, content string) (*sessionstore.OutputCommit, error)
+	MarkSessionKilledWithOutput(
+		ctx context.Context,
+		sessionID int64,
+		cancelledProcesses int,
+	) (*sessionstore.OutputCommit, error)
+	CompleteExplicitStop(
+		ctx context.Context,
+		rootID, inputID int64,
+		cancelledProcesses int,
+	) (*sessionstore.OutputCommit, error)
+	SelectInterruptedExplicitStops(ctx context.Context) ([]sessionstore.InterruptedExplicitStop, error)
+	Get(ctx context.Context, rootID int64) (*budget.Record, error)
+	Arm(ctx context.Context, mutation budget.Mutation) (*budget.Record, error)
+	Clear(ctx context.Context, mutation budget.Mutation) (*budget.Record, error)
+	HasBackgroundObligationByRoot(ctx context.Context, rootID int64) (bool, error)
 	GetProjectWorkDir(ctx context.Context, projectID int64) (string, error)
 	GetProjectName(ctx context.Context, projectID int64) (string, error)
-	ListProjects(ctx context.Context) ([]ProjectRow, error)
-}
-
-// ProjectRow is a project registry row.
-type ProjectRow struct {
-	ID      int64
-	Name    string
-	WorkDir string
-	Hidden  bool
-}
-
-var _ Store = (*store)(nil)
-
-type store struct {
-	db *sql.DB
-}
-
-func NewStore(db *sql.DB) Store {
-	return &store{db: db}
-}
-
-func (s *store) GetOrCreateProject(ctx context.Context, workDir string) (int64, error) {
-	absPath, err := filepath.Abs(workDir)
-	if err != nil {
-		absPath = workDir
-	}
-
-	name := filepath.Base(absPath)
-	if name == controllerapi.CoagentManagementProjectDir || strings.ContainsRune(name, ':') {
-		return 0, fmt.Errorf("project directory name %q is reserved", name)
-	}
-
-	return s.getOrCreateProject(ctx, absPath, name)
-}
-
-// GetOrCreateNamedProject registers workDir under an explicit display name that
-// need not equal the directory basename. /gwt uses it so a worktree whose leaf is
-// a bare branch name reads as "<repo>/<branch>". The name is display-only; ':'
-// stays rejected so display names never collide with directory-derived identity.
-func (s *store) GetOrCreateNamedProject(ctx context.Context, workDir, name string) (int64, error) {
-	absPath, err := filepath.Abs(workDir)
-	if err != nil {
-		absPath = workDir
-	}
-
-	if name == "" || strings.ContainsRune(name, ':') {
-		return 0, fmt.Errorf("invalid project name %q", name)
-	}
-
-	return s.getOrCreateProject(ctx, absPath, name)
-}
-
-func (s *store) GetOrCreateHiddenProject(ctx context.Context, workDir string) (int64, error) {
-	absPath, err := filepath.Abs(workDir)
-	if err != nil {
-		absPath = workDir
-	}
-
-	name := filepath.Base(absPath)
-
-	_, err = s.db.ExecContext(
-		ctx,
-		`INSERT INTO projects (work_dir, name, hidden) VALUES (?, ?, TRUE)
-			ON CONFLICT(work_dir) DO UPDATE SET hidden = excluded.hidden`,
-		absPath,
-		name,
-	)
-	if err != nil {
-		return 0, fmt.Errorf("upsert hidden project: %w", err)
-	}
-
-	var projectID int64
-
-	err = s.db.QueryRowContext(ctx, `SELECT id FROM projects WHERE work_dir = ?`, absPath).Scan(&projectID)
-	if err != nil {
-		return 0, fmt.Errorf("select project: %w", err)
-	}
-
-	return projectID, nil
-}
-
-func (s *store) GetProjectName(ctx context.Context, projectID int64) (string, error) {
-	var name string
-
-	err := s.db.QueryRowContext(ctx, `SELECT name FROM projects WHERE id = ?`, projectID).Scan(&name)
-	if err != nil {
-		return "", fmt.Errorf("project %d not found: %w", projectID, err)
-	}
-
-	return name, nil
-}
-
-func (s *store) GetProjectWorkDir(ctx context.Context, projectID int64) (string, error) {
-	var workDir string
-
-	err := s.db.QueryRowContext(ctx, `SELECT work_dir FROM projects WHERE id = ?`, projectID).Scan(&workDir)
-	if err != nil {
-		return "", fmt.Errorf("project %d not found: %w", projectID, err)
-	}
-
-	return workDir, nil
-}
-
-// ListProjects returns every project. Root-prefix filtering is done by the caller
-// in Go, not via SQL LIKE — an underscore in a home path is a LIKE wildcard.
-func (s *store) ListProjects(ctx context.Context) ([]ProjectRow, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id, name, work_dir, hidden FROM projects`)
-	if err != nil {
-		return nil, fmt.Errorf("list projects: %w", err)
-	}
-	defer rows.Close()
-
-	var projects []ProjectRow
-
-	for rows.Next() {
-		var p ProjectRow
-		if err := rows.Scan(&p.ID, &p.Name, &p.WorkDir, &p.Hidden); err != nil {
-			return nil, fmt.Errorf("scan project: %w", err)
-		}
-
-		projects = append(projects, p)
-	}
-
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate projects: %w", err)
-	}
-
-	return projects, nil
-}
-
-// DB exposes the underlying database for the background-process ledger.
-func (s *store) DB() *sql.DB {
-	return s.db
-}
-
-func (s *store) getOrCreateProject(ctx context.Context, absPath, name string) (int64, error) {
-	_, err := s.db.ExecContext(
-		ctx,
-		`INSERT OR IGNORE INTO projects (work_dir, name) VALUES (?, ?)`,
-		absPath,
-		name,
-	)
-	if err != nil {
-		return 0, fmt.Errorf("upsert project: %w", err)
-	}
-
-	var projectID int64
-
-	err = s.db.QueryRowContext(ctx, `SELECT id FROM projects WHERE work_dir = ?`, absPath).Scan(&projectID)
-	if err != nil {
-		return 0, fmt.Errorf("select project: %w", err)
-	}
-
-	return projectID, nil
+	ReactivateForSchedule(context.Context, int64) (bool, error)
 }

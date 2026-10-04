@@ -28,16 +28,17 @@ func TestRejectedAttemptProjectionNeverReachesProviderConverters(t *testing.T) {
 	store := sessionstore.NewStore(db)
 	session, err := store.CreateSession(t.Context(), 1, "model", "", nil)
 	require.NoError(t, err)
-	_, err = store.InsertMessage(t.Context(), session.ID, &transcript.Message{
-		Role: llmwire.RoleUser, Content: "task",
+	_, err = store.Commit(t.Context(), sessionstore.Commit{
+		SessionID: session.ID,
+		Messages:  []*transcript.Message{{Role: llmwire.RoleUser, Content: "task"}},
 	})
 	require.NoError(t, err)
-	_, err = store.CommitRejectedResponse(t.Context(), sessionstore.RejectedResponse{
-		SessionID: session.ID, RootID: session.ID, Iteration: 1,
-		Message: &transcript.Message{
+	_, err = store.Commit(t.Context(), sessionstore.Commit{
+		SessionID: session.ID, RootID: session.ID, State: sessionstore.StatePatch{Iteration: new(1)},
+		Messages: []*transcript.Message{{
 			Role: llmwire.RoleAssistant, Content: "rejected provider text",
 			FinishType: llmwire.FinishLength, RejectedReason: sessionstore.RejectedReasonOutputLength,
-		},
+		}, {Role: llmwire.RoleUser, Content: sessionstore.OutputLengthRecoveryPrompt}},
 	})
 	require.NoError(t, err)
 

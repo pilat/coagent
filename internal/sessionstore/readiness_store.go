@@ -16,15 +16,8 @@ type Readiness struct {
 	Reason        string
 }
 
-type ReadinessStore interface {
-	OutputReadiness(ctx context.Context, outputID int64) (*Readiness, error)
-	LatestReleasingOutputID(ctx context.Context, sessionID int64) (int64, error)
-}
-
-var _ ReadinessStore = (*store)(nil)
-
 //nolint:wsl_v5 // Readiness derives one result from the joined durable row.
-func (s *store) OutputReadiness(ctx context.Context, outputID int64) (*Readiness, error) {
+func (s *Store) OutputReadiness(ctx context.Context, outputID int64) (*Readiness, error) {
 	// One read transaction keeps the row lookup and the newest-releasing check
 	// on the same snapshot: a releasing row committing between them must not
 	// flash readiness for a row that just lost the crown.
@@ -103,7 +96,7 @@ func (s *store) OutputReadiness(ctx context.Context, outputID int64) (*Readiness
 	return &readiness, nil
 }
 
-func (s *store) LatestReleasingOutputID(ctx context.Context, sessionID int64) (int64, error) {
+func (s *Store) LatestReleasingOutputID(ctx context.Context, sessionID int64) (int64, error) {
 	var id int64
 
 	err := s.db.QueryRowContext(ctx, `SELECT id FROM session_outbox

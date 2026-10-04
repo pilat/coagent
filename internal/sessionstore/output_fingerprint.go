@@ -12,16 +12,6 @@ func OutputFingerprint(kind OutputType, content string, sessionID int64, attribu
 	return outputFingerprintWithRelease(kind, content, sessionID, attributes, false)
 }
 
-func OutputFingerprintWithRelease(
-	kind OutputType,
-	content string,
-	sessionID int64,
-	attributes map[string]any,
-	releasesInput bool,
-) string {
-	return outputFingerprintWithRelease(kind, content, sessionID, attributes, releasesInput)
-}
-
 func outputFingerprintWithRelease(
 	kind OutputType,
 	content string,
@@ -114,10 +104,6 @@ func stringValue(value any) string {
 	text, _ := value.(string)
 
 	return text
-}
-
-func outputFingerprint(kind OutputType, content string, sessionID int64, attributes map[string]any) string {
-	return OutputFingerprint(kind, content, sessionID, attributes)
 }
 
 func validOutputType(kind OutputType) bool {

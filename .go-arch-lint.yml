@@ -16,6 +16,7 @@ allow:
 # tmp/ holds an unrelated vendored project (openclaw) with its own go.mod.
 exclude:
   - tmp
+  - ai
 
 # Arch rules govern production dependency direction. Test wiring (e.g. tests
 # pulling migrate to build a temp DB) is not an architectural edge.
@@ -25,7 +26,6 @@ excludeFiles:
 components:
   main:           { in: cmd/coagent }
 
-  admission:      { in: internal/admission }
   coagenthome:    { in: internal/coagenthome }
   config:         { in: internal/config }
   configapply:    { in: internal/configapply }
@@ -34,7 +34,6 @@ components:
   humanize:       { in: internal/humanize }
   safefile:       { in: internal/safefile }
   sessionevent:   { in: internal/sessionevent }
-  sessionlifecycle: { in: internal/sessionlifecycle }
   sessionbus:     { in: internal/sessionbus }
   controllerapi:  { in: internal/controllerapi }
   id:             { in: internal/id }
@@ -51,7 +50,6 @@ components:
   memory:       { in: internal/memory }
   mcpstore:     { in: internal/mcpstore }
   sessionstore: { in: internal/sessionstore }
-  inputruntime: { in: internal/inputruntime }
   subagent:     { in: internal/subagent }
   transcript:   { in: internal/transcript }
   managerdelivery: { in: internal/managerdelivery }
@@ -63,7 +61,6 @@ components:
   budget:        { in: internal/budget }
 
   tool:       { in: internal/tool }
-  toolexec:   { in: internal/toolexec }
   bashsandbox: { in: internal/bashsandbox }
   sandboxpolicy: { in: internal/sandboxpolicy }
   procexec:   { in: internal/procexec }
@@ -75,6 +72,8 @@ components:
   shellenv:   { in: internal/shellenv }
 
   session:    { in: internal/session }
+  sessionbuild: { in: internal/sessionbuild }
+  sessionprompt: { in: internal/sessionprompt }
   schedule:   { in: internal/schedule }
 
   telegram:   { in: internal/managers/telegram }
@@ -83,7 +82,6 @@ components:
   daemon:     { in: internal/daemon }
 
   configops:  { in: internal/configops }
-  configtools: { in: internal/configtools }
   ctl:        { in: internal/ctl }
 
 deps:
@@ -105,25 +103,24 @@ deps:
   todo:
     mayDependOn: [id]
   budget:
-    mayDependOn: [sessionstore, tool]
+    mayDependOn: [tool]
   sessionstore:
-    mayDependOn: [transcript]
-  inputruntime:
-    mayDependOn: [controllerapi, schedule, session, sessionstore, tool]
+    mayDependOn: [budget, controllerapi, progress, todo, transcript]
   subagent:
-    mayDependOn: [transcript]
+    mayDependOn: [loader, logger, registry, sessionstore, tool, transcript]
+  mcpstore:
+    mayDependOn: [coagenthome, tool]
   sessionbus:
     mayDependOn: [controllerapi, logger, sessionevent]
-  sessionlifecycle:
-    mayDependOn: [admission, controllerapi, logger, session, sessionstore, subagent, transcript]
   progressruntime:
-    mayDependOn: [budget, controllerapi, logger, progress, sessionevent, sessionstore, todo]
+    mayDependOn: [budget, controllerapi, logger, progress, sessionbus, sessionevent, sessionstore, todo]
   projectpath:
     mayDependOn: [coagenthome, config, controllerapi]
   safefile:
     mayDependOn: [coagenthome, sandboxpolicy]
   managercontrol:
-    mayDependOn: [config, controllerapi, daemon, git, loader, managerdiscovery, projectpath, sessionbus, sessionevent, sessionstore]
+    # Deep scan also checks the injected command backend; source imports use Backend.
+    mayDependOn: [config, controllerapi, daemon, git, loader, managerdiscovery, progressruntime, projectpath, sessionbus, sessionevent, sessionstore]
   managerdiscovery:
     mayDependOn: [coagenthome, config, controllerapi, loader, projectpath, sessionstore]
 
@@ -146,7 +143,7 @@ deps:
     anyProjectDeps: false
     anyVendorDeps: true
   backgroundprocess:
-    mayDependOn: [logger, procexec]
+    mayDependOn: [logger, procexec, sessionstore]
   shellenv:
     mayDependOn: [coagenthome, logger, procexec]
 
@@ -154,16 +151,14 @@ deps:
   tool:
     mayDependOn: [llmwire]
 
-  # Stage planner and bounded runner for model-issued tool calls: a leaf that
-  # knows no tool IDs, sessions or providers.
-  toolexec:
-    mayDependOn: [tool]
-
   # External model catalogs — the drivers' source of model metadata.
   catalog:
     mayDependOn: [coagenthome, config, logger]
   llm:
     mayDependOn: [catalog, config, llmwire, logger, safefile]
+
+  progress:
+    mayDependOn: [logger]
 
   # Presentation-only formatting helpers shared across packages; stdlib only.
   humanize:
@@ -172,16 +167,21 @@ deps:
 
   # Capability hub: tool implementations reach into a few leaf services.
   builtin:
-    mayDependOn: [backgroundprocess, bashsandbox, coagenthome, config, git, humanize, llmwire, loader, logger, lsp, mcp, memory, procexec, projectpath, safefile, sandboxpolicy, shellenv, todo, toolexec, tool]
+    mayDependOn: [backgroundprocess, bashsandbox, coagenthome, config, git, humanize, llmwire, loader, logger, lsp, mcp, memory, procexec, projectpath, safefile, sandboxpolicy, shellenv, todo, tool]
 
-  # ReAct loop — the heaviest service.
+  # The loop receives assembled dependencies and only emits live events.
   session:
-    mayDependOn: [backgroundprocess, builtin, config, git, id, llm, llmwire, loader, logger, mcp, mcpstore, memory, progress, registry, sessionevent, sessionstore, shellenv, todo, toolexec, tool, transcript]
+    mayDependOn: [llm, llmwire, loader, logger, sessionevent, sessionprompt, sessionstore, tool, transcript]
+  sessionbuild:
+    mayDependOn: [backgroundprocess, builtin, config, git, llm, loader, logger, mcp, mcpstore, memory, registry, session, sessionprompt, sessionstore, todo, tool]
+  sessionprompt:
+    mayDependOn: [git, llmwire, loader, logger, memory, todo, tool]
+  registry:
+    mayDependOn: [sessionprompt]
 
-  # schedule fires wake-ups only through its own SessionSender interface; it has
-  # protocol/logging edges but cannot import session or daemon.
+  # Schedule writes inbox rows through sessionstore; its sender publishes only events.
   schedule:
-    mayDependOn: [logger, sessionevent, tool]
+    mayDependOn: [logger, sessionevent, sessionstore, tool]
 
   # Controllers.
   telegram:
@@ -191,16 +191,13 @@ deps:
 
   # Orchestrator.
   daemon:
-    mayDependOn: [admission, backgroundprocess, budget, coagenthome, config, configapply, configops, configtools, controllerapi, git, id, inputruntime, llmwire, loader, logger, mcp, mcpstore, progress, progressruntime, projectpath, registry, schedule, session, sessionbus, sessionevent, sessionlifecycle, sessionstore, subagent, todo, tool, transcript]
+    mayDependOn: [backgroundprocess, budget, coagenthome, config, configapply, controllerapi, git, id, llmwire, loader, logger, mcp, mcpstore, progress, progressruntime, projectpath, registry, schedule, session, sessionbuild, sessionprompt, sessionbus, sessionevent, sessionstore, subagent, todo, tool, transcript]
 
   configops:
     mayDependOn: [coagenthome, config, logger]
 
   configapply:
-    mayDependOn: [configops]
-
-  configtools:
-    mayDependOn: [coagenthome, config, configops, tool]
+    mayDependOn: [coagenthome, config, configops, logger, sessionstore, tool, transcript]
 
   # Local control plane: pure transport plus the daemon-state ops it answers from.
   ctl:

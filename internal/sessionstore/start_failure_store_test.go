@@ -19,13 +19,13 @@ func TestStartFailureLedgerSurvivesRestartRetryAndDelivery(t *testing.T) {
 	require.NoError(t, store.BindManager(ctx, "telegram", "telegram", map[string]any{
 		"bot_user_id": int64(1), "chat_id": int64(2), "topology": "group",
 	}))
-	input, err := store.EnqueueInput(ctx, root.ID, InputSourceUser, "preserve this task")
+	input, err := enqueueInput(ctx, store, root.ID, InputSourceUser, "preserve this task")
 	require.NoError(t, err)
 	for i := range 100 {
 		reported, err := store.RecordSessionStartFailure(ctx, root.ID, fmt.Sprintf("failure variant %d", i))
 		require.NoError(t, err)
 		assert.Equal(t, i == 0, reported)
-		store = NewStore(db)
+		store = testStore(db)
 	}
 	pending, err := store.PeekPending(ctx, root.ID)
 	require.NoError(t, err)
@@ -44,7 +44,7 @@ func TestStartFailureLedgerSurvivesRestartRetryAndDelivery(t *testing.T) {
 			time.Now().Add(-time.Second),
 		),
 	)
-	store = NewStore(db)
+	store = testStore(db)
 	reported, err := store.RecordSessionStartFailure(ctx, root.ID, "recovered daemon still cannot start")
 	require.NoError(t, err)
 	assert.False(t, reported)
@@ -52,15 +52,15 @@ func TestStartFailureLedgerSurvivesRestartRetryAndDelivery(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, claim.Output.ID, retry.Output.ID)
 	require.NoError(t, store.AckOutput(ctx, "telegram", retry.Output.ID, retry.Output.AttemptID, []string{"1"}, nil))
-	store = NewStore(db)
+	store = testStore(db)
 	reported, err = store.RecordSessionStartFailure(ctx, root.ID, "another retry after delivery")
 	require.NoError(t, err)
 	assert.False(t, reported)
 	_, err = store.ClaimOutputHead(ctx, "telegram")
 	require.ErrorIs(t, err, ErrNoOutput)
-	_, err = store.PromoteInput(ctx, input.ID, input.RawContent)
+	_, err = acceptInput(ctx, store, input.ID, input.RawContent)
 	require.NoError(t, err)
-	_, err = store.EnqueueInput(ctx, root.ID, InputSourceUser, "new task after recovery")
+	_, err = enqueueInput(ctx, store, root.ID, InputSourceUser, "new task after recovery")
 	require.NoError(t, err)
 	reported, err = store.RecordSessionStartFailure(ctx, root.ID, "failure for new work")
 	require.NoError(t, err)
@@ -94,7 +94,7 @@ func TestStartFailureConcurrentProducersCommitOneReceipt(t *testing.T) {
 	store, _, projectID := newTestStore(t)
 	root, err := store.CreateSession(t.Context(), projectID, "model", "", map[string]any{"manager_id": "telegram"})
 	require.NoError(t, err)
-	_, err = store.EnqueueInput(t.Context(), root.ID, InputSourceUser, "work")
+	_, err = enqueueInput(t.Context(), store, root.ID, InputSourceUser, "work")
 	require.NoError(t, err)
 	var wg sync.WaitGroup
 	var reports atomic.Int64
@@ -123,7 +123,7 @@ func TestStartFailureRollsBackWhenReceiptCannotBeWritten(t *testing.T) {
 	store, db, projectID := newTestStore(t)
 	root, err := store.CreateSession(t.Context(), projectID, "model", "", map[string]any{"manager_id": "telegram"})
 	require.NoError(t, err)
-	input, err := store.EnqueueInput(t.Context(), root.ID, InputSourceUser, "work")
+	input, err := enqueueInput(t.Context(), store, root.ID, InputSourceUser, "work")
 	require.NoError(t, err)
 	_, err = db.ExecContext(t.Context(), `CREATE TRIGGER fail_error_receipt BEFORE INSERT ON session_outbox
 		BEGIN SELECT RAISE(ABORT, 'outbox unavailable'); END`)

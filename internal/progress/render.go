@@ -6,18 +6,16 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/pilat/coagent/internal/logger"
 )
 
 const todoHint = "ℹ️ /status shows the full TODO list"
 
-func RenderCompact(snapshot Snapshot, redact func(string) string) string {
-	if redact == nil {
-		redact = func(value string) string { return value }
-	}
-
+func RenderCompact(snapshot Snapshot) string {
 	lines := []string{"**" + cardTitle(snapshot) + "**"}
 
-	if note := strings.TrimSpace(redact(snapshot.LatestModelProgress)); note != "" {
+	if note := strings.TrimSpace(logger.Redact(snapshot.LatestModelProgress)); note != "" {
 		lines = append(lines, "", note)
 	}
 
@@ -81,11 +79,7 @@ func RenderFinalCompact(snapshot Snapshot) string {
 	return strings.Join(lines, "\n")
 }
 
-func RenderFull(snapshot Snapshot, redact func(string) string) string {
-	if redact == nil {
-		redact = func(value string) string { return value }
-	}
-
+func RenderFull(snapshot Snapshot) string {
 	lines := []string{"## Session progress"}
 
 	state := snapshot.RuntimeState
@@ -106,8 +100,8 @@ func RenderFull(snapshot Snapshot, redact func(string) string) string {
 		lines = append(lines, "- Wall time: unavailable")
 	}
 
-	lines = append(lines, renderTodos(snapshot.Todos, redact)...)
-	if note := strings.TrimSpace(redact(snapshot.LatestModelProgress)); note != "" {
+	lines = append(lines, renderTodos(snapshot.Todos)...)
+	if note := strings.TrimSpace(logger.Redact(snapshot.LatestModelProgress)); note != "" {
 		lines = append(lines, "- Latest agent note: "+note)
 	}
 
@@ -146,7 +140,7 @@ func RenderFull(snapshot Snapshot, redact func(string) string) string {
 // RenderFooter is the final-output tail: TODO summaries only, then the budget
 // line separated by one blank line. No TODO summary is produced when no list
 // exists.
-func RenderFooter(snapshot Snapshot, redact func(string) string) string {
+func RenderFooter(snapshot Snapshot) string {
 	var parts []string
 	if summary := renderTodoSummary(snapshot.Todos); summary != "" {
 		parts = append(parts, summary)
@@ -285,7 +279,7 @@ func renderUsage(value Usage) string {
 		value.CostUSD, value.PromptTokens, value.CompletionTokens)
 }
 
-func renderTodos(items []TodoItem, redact func(string) string) []string {
+func renderTodos(items []TodoItem) []string {
 	if len(items) == 0 {
 		return []string{"- TODO: no TODO is declared"}
 	}
@@ -298,7 +292,7 @@ func renderTodos(items []TodoItem, redact func(string) string) []string {
 	}
 
 	for _, item := range items {
-		lines = append(lines, fmt.Sprintf("  - %s %s", todoStatusIcon(item.Status), redact(item.Content)))
+		lines = append(lines, fmt.Sprintf("  - %s %s", todoStatusIcon(item.Status), logger.Redact(item.Content)))
 	}
 
 	lines = append(lines, "", "Legend: ⏳ pending · 🔄 in progress · ✅ completed · 🚫 cancelled")

@@ -50,7 +50,6 @@ func (s *svc) supervise(ctx context.Context, launched *launchResult) {
 	}
 
 	release()
-	s.emit(ctx, launched.record, won)
 }
 
 func (s *svc) waitForExit(ctx context.Context, launched *launchResult) (State, *int) {
@@ -116,36 +115,4 @@ func classifyExit(err error) (State, *int) {
 	}
 
 	return StateOutputDrainTimeout, nil
-}
-
-func (s *svc) emit(ctx context.Context, record Process, won bool) {
-	if s.opts.OnCompletion == nil || !won {
-		return
-	}
-
-	if record.AdvertisedAt == nil || record.WakeSuppressed() || record.State == StateInterrupted {
-		return
-	}
-
-	tail, truncated, ok := ExtractTail(record.OutputPath, TailPreviewLines, TailPreviewBytes)
-	binaryTail := !ok || !ValidEventTail(tail)
-
-	if binaryTail {
-		tail = ""
-	} else if truncated {
-		tail = TruncateTailToBytes(tail, TailPreviewBytes)
-	}
-
-	completion := Completion{
-		ProcessID: record.ID, SessionID: record.SessionID, RootID: record.RootSessionID,
-		ToolCallID: record.ToolCallID, State: record.State,
-		Duration: record.FinishedAt.Sub(record.CreatedAt), OutputPath: record.OutputPath,
-		OutputSize: record.OutputSize, Tail: tail, TailOmitted: binaryTail, BinaryTail: binaryTail,
-	}
-	if record.ExitCode != nil {
-		completion.ExitCode = *record.ExitCode
-		completion.HasExitCode = true
-	}
-
-	s.opts.OnCompletion(ctx, completion)
 }

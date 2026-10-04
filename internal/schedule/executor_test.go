@@ -11,12 +11,12 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/pilat/coagent/internal/daemon"
 	"github.com/pilat/coagent/internal/migrate"
 	"github.com/pilat/coagent/internal/schedule"
 	"github.com/pilat/coagent/internal/sessionevent"
 	"github.com/pilat/coagent/internal/sessionstore"
 	"github.com/pilat/coagent/internal/tool"
+	"github.com/pilat/coagent/internal/transcript"
 )
 
 type mockSender struct {
@@ -93,14 +93,49 @@ func (m *mockSender) getNotifications() []sessionevent.Notification {
 	return append([]sessionevent.Notification{}, m.notifications...)
 }
 
-func newTestDB(t *testing.T) (schedule.Store, daemon.Store, sessionstore.Store) {
+type recordingScheduleStore struct {
+	schedule.Store
+	sender *mockSender
+}
+
+func (s recordingScheduleStore) Enqueue(ctx context.Context, in sessionstore.Input) (*sessionstore.Enqueued, error) {
+	var applied bool
+	var err error
+	if in.Source == sessionstore.InputSourceCallResult {
+		applied, err = s.sender.DeliverPendingCallResult(
+			ctx,
+			in.SessionID,
+			in.Attributes["call_id"].(string),
+			in.Attributes["tool_id"].(string),
+			in.Content,
+		)
+	} else if fresh, _ := in.Attributes["fresh"].(bool); fresh {
+		applied, err = s.sender.DeliverFreshSchedule(ctx, in.SessionID, in.DeliveryKey, in.Content)
+	} else {
+		applied, err = s.sender.DeliverScheduleTick(ctx, in.SessionID, in.DeliveryKey, in.Content)
+	}
+	if err != nil {
+		return nil, err
+	}
+	if !applied {
+		return &sessionstore.Enqueued{}, nil
+	}
+	return s.Store.Enqueue(ctx, in)
+}
+
+func newTestExecutor(store schedule.Store, sender *mockSender) schedule.Executor {
+	return schedule.NewExecutor(recordingScheduleStore{Store: store, sender: sender}, sender)
+}
+
+func newTestDB(t *testing.T) (schedule.Store, *sessionstore.Store, *sessionstore.Store) {
 	t.Helper()
 	dbPath := filepath.Join(t.TempDir(), "test.db")
 	db, err := migrate.OpenDB(context.Background(), dbPath)
 	require.NoError(t, err)
 	t.Cleanup(func() { db.Close() })
 	require.NoError(t, migrate.Run(context.Background(), db, dbPath))
-	return schedule.NewStore(db), daemon.NewStore(db), sessionstore.NewStore(db)
+	sessions := sessionstore.NewStore(db)
+	return schedule.NewStore(db, sessions), sessions, sessions
 }
 
 func TestExecutor_OneShotFires(t *testing.T) {
@@ -110,6 +145,17 @@ func TestExecutor_OneShotFires(t *testing.T) {
 	pid, err := daemonStore.GetOrCreateProject(context.Background(), "/tmp/test")
 	require.NoError(t, err)
 	rec, err := sessStore.CreateSession(context.Background(), pid, "", "", nil)
+	require.NoError(t, err)
+
+	_, err = sessStore.Commit(
+		t.Context(),
+		sessionstore.Commit{
+			SessionID: rec.ID,
+			Messages: []*transcript.Message{
+				{Role: "assistant", ToolCalls: []byte(`[{"ID":"sleep-call-1","Name":"sleep","Arguments":"e30="}]`)},
+			},
+		},
+	)
 	require.NoError(t, err)
 
 	past := time.Now().Add(-time.Minute).UTC()
@@ -124,7 +170,7 @@ func TestExecutor_OneShotFires(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	executor := schedule.NewExecutor(schedStore, sender)
+	executor := newTestExecutor(schedStore, sender)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	executor.Start(ctx)
@@ -160,7 +206,7 @@ func TestExecutor_StandaloneOneShotDeliversFutureInput(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	executor := schedule.NewExecutor(schedStore, sender)
+	executor := newTestExecutor(schedStore, sender)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	executor.Start(ctx)
@@ -199,7 +245,7 @@ func TestExecutor_FreshStandaloneOneShotUsesFreshDelivery(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	executor := schedule.NewExecutor(schedStore, sender)
+	executor := newTestExecutor(schedStore, sender)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	executor.Start(ctx)
@@ -224,7 +270,7 @@ func TestExecutor_CronFires(t *testing.T) {
 	_, err = schedStore.AddSchedule(context.Background(), rec.ID, "* * * * *", nil, "periodic check", false)
 	require.NoError(t, err)
 
-	executor := schedule.NewExecutor(schedStore, sender)
+	executor := newTestExecutor(schedStore, sender)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	executor.Start(ctx)
@@ -256,7 +302,7 @@ func TestExecutor_CronDeliveryFailureIsNotAcknowledged(t *testing.T) {
 	_, err = schedStore.AddSchedule(context.Background(), rec.ID, "* * * * *", nil, "retry me", false)
 	require.NoError(t, err)
 
-	executor := schedule.NewExecutor(schedStore, sender)
+	executor := newTestExecutor(schedStore, sender)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	executor.Start(ctx)
@@ -282,7 +328,7 @@ func TestExecutor_FreshCronFires(t *testing.T) {
 	_, err = schedStore.AddSchedule(context.Background(), rec.ID, "* * * * *", nil, "do the fresh job", true)
 	require.NoError(t, err)
 
-	executor := schedule.NewExecutor(schedStore, sender)
+	executor := newTestExecutor(schedStore, sender)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	executor.Start(ctx)
@@ -314,7 +360,7 @@ func TestExecutor_CronDoesNotDoubleFire(t *testing.T) {
 	err = schedStore.UpdateScheduleLastFired(context.Background(), sched.ID(), now)
 	require.NoError(t, err)
 
-	executor := schedule.NewExecutor(schedStore, sender)
+	executor := newTestExecutor(schedStore, sender)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	executor.Start(ctx)
@@ -330,7 +376,7 @@ func TestExecutor_StopIsClean(t *testing.T) {
 	schedStore, _, _ := newTestDB(t)
 	sender := &mockSender{}
 
-	executor := schedule.NewExecutor(schedStore, sender)
+	executor := newTestExecutor(schedStore, sender)
 	ctx := context.Background()
 	executor.Start(ctx)
 	executor.Stop()

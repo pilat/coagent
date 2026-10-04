@@ -1,0 +1,158 @@
+package sessionprompt
+
+import (
+	"testing"
+	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+func TestTimestampStamp(t *testing.T) {
+	base := time.Date(2026, 3, 29, 10, 0, 0, 0, time.UTC)
+
+	tests := []struct {
+		name    string
+		elapsed time.Duration
+		msg     string
+		want    string
+	}{
+		{
+			name: "first message no elapsed",
+			msg:  "hello",
+			want: "[Sun 2026-03-29 10:00 UTC +00:00] hello",
+		},
+		{
+			name:    "30 seconds shows seconds",
+			elapsed: 30 * time.Second,
+			msg:     "quick follow-up",
+			want:    "[+30s Sun 2026-03-29 10:00 UTC +00:00] quick follow-up",
+		},
+		{
+			name:    "exactly 60s shows 1m",
+			elapsed: 60 * time.Second,
+			msg:     "one minute later",
+			want:    "[+1m Sun 2026-03-29 10:01 UTC +00:00] one minute later",
+		},
+		{
+			name:    "90s shows 1m30s",
+			elapsed: 90 * time.Second,
+			msg:     "after 90 seconds",
+			want:    "[+1m30s Sun 2026-03-29 10:01 UTC +00:00] after 90 seconds",
+		},
+		{
+			name:    "2 hour gap",
+			elapsed: 2 * time.Hour,
+			msg:     "after 2 hours",
+			want:    "[+2h Sun 2026-03-29 12:00 UTC +00:00] after 2 hours",
+		},
+		{
+			name:    "2h30m compound",
+			elapsed: 2*time.Hour + 30*time.Minute,
+			msg:     "after 2.5 hours",
+			want:    "[+2h30m Sun 2026-03-29 12:30 UTC +00:00] after 2.5 hours",
+		},
+		{
+			name:    "1 day gap",
+			elapsed: 24 * time.Hour,
+			msg:     "next day",
+			want:    "[+1d Mon 2026-03-30 10:00 UTC +00:00] next day",
+		},
+		{
+			name:    "1d2h15m compound",
+			elapsed: 26*time.Hour + 15*time.Minute,
+			msg:     "over a day",
+			want:    "[+1d2h15m Mon 2026-03-30 12:15 UTC +00:00] over a day",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			now := base
+			ts := Timestamper{}
+
+			if tt.elapsed > 0 {
+				// Send first message to set lastActivity.
+				ts.StampAt("setup", now)
+				now = now.Add(tt.elapsed)
+			}
+
+			got := ts.StampAt(tt.msg, now)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestTimestampEmptyPassthrough(t *testing.T) {
+	base := time.Date(2026, 3, 29, 10, 0, 0, 0, time.UTC)
+	now := base
+	ts := Timestamper{}
+
+	// First real message sets the clock.
+	got := ts.StampAt("first", now)
+	assert.Equal(t, "[Sun 2026-03-29 10:00 UTC +00:00] first", got)
+
+	// Empty message does NOT advance the clock.
+	now = now.Add(5 * time.Minute)
+	got = ts.StampAt("", now)
+	assert.Empty(t, got)
+
+	// Next real message shows elapsed from "first", not from the empty call.
+	now = now.Add(5 * time.Minute)
+	got = ts.StampAt("second", now)
+	assert.Equal(t, "[+10m Sun 2026-03-29 10:10 UTC +00:00] second", got)
+}
+
+func TestTimestampTouchResetsElapsed(t *testing.T) {
+	before := time.Now()
+	ts := NewTimestamper(before.Add(-8 * time.Minute))
+	ts.Touch()
+	require.False(t, ts.lastActivity.Before(before))
+	after := time.Now()
+	require.False(t, ts.lastActivity.After(after))
+	assert.Contains(t, ts.StampAt("follow-up", ts.lastActivity.Add(3*time.Minute)), "[+3m ")
+}
+
+func TestTimestampStampAtIncludesDaylightSavingZone(t *testing.T) {
+	location, err := time.LoadLocation("Europe/Berlin")
+	require.NoError(t, err)
+
+	ts := Timestamper{}
+	winter := time.Date(2026, 1, 15, 10, 0, 0, 0, location)
+	summer := time.Date(2026, 7, 15, 10, 0, 0, 0, location)
+
+	assert.Equal(t, "[Thu 2026-01-15 10:00 CET +01:00] winter", ts.StampAt("winter", winter))
+	assert.Equal(t, "[+180d23h Wed 2026-07-15 10:00 CEST +02:00] summer", ts.StampAt("summer", summer))
+}
+
+func TestFormatElapsed(t *testing.T) {
+	tests := []struct {
+		name string
+		d    time.Duration
+		want string
+	}{
+		{"zero", 0, "+0s"},
+		{"5 seconds", 5 * time.Second, "+5s"},
+		{"59 seconds", 59 * time.Second, "+59s"},
+		{"exactly 1 minute", 60 * time.Second, "+1m"},
+		{"1m30s", 90 * time.Second, "+1m30s"},
+		{"5m", 5 * time.Minute, "+5m"},
+		{"59m59s", 59*time.Minute + 59*time.Second, "+59m59s"},
+		{"exactly 1 hour", time.Hour, "+1h"},
+		{"1h1m", time.Hour + time.Minute, "+1h1m"},
+		{"2h30m", 2*time.Hour + 30*time.Minute, "+2h30m"},
+		{"23h59m", 23*time.Hour + 59*time.Minute, "+23h59m"},
+		{"exactly 1 day", 24 * time.Hour, "+1d"},
+		{"1d2h", 26 * time.Hour, "+1d2h"},
+		{"1d0h15m", 24*time.Hour + 15*time.Minute, "+1d15m"},
+		{"2d", 48 * time.Hour, "+2d"},
+		{"3d5m", 72*time.Hour + 5*time.Minute, "+3d5m"},
+		{"3d2h15m", 74*time.Hour + 15*time.Minute, "+3d2h15m"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, formatElapsed(tt.d))
+		})
+	}
+}

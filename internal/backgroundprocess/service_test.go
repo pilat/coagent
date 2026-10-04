@@ -17,6 +17,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/pilat/coagent/internal/migrate"
+	"github.com/pilat/coagent/internal/sessionstore"
 )
 
 func newTestDB(t *testing.T) *sql.DB {
@@ -61,7 +62,7 @@ func newTestStore(t *testing.T) Store {
 		VALUES (4, 1, 'm', 'build')`)
 	require.NoError(t, err)
 
-	return NewStore(db)
+	return NewStore(db, sessionstore.NewStore(db))
 }
 
 func testSpec(sessionID int64) Spec {
@@ -177,7 +178,7 @@ func TestStore_FinalizeInsertsProcessInboxInput(t *testing.T) {
 	db := newTestDB(t)
 	require.NoError(t, migrate.Run(ctx, db, ""))
 	require.NoError(t, seedProcessTestSessions(ctx, db))
-	store := NewStore(db)
+	store := NewStore(db, sessionstore.NewStore(db))
 	record := runningRecord(t, store, 2)
 	zero := 0
 	_, won, err := store.Finalize(ctx, record.ID, StateCompleted, &zero, 0)
@@ -228,7 +229,7 @@ func TestStore_FinalizeRetainsFactsBySessionStatus(t *testing.T) {
 				tt.status, killedAt)
 			require.NoError(t, err)
 
-			ledger := NewStore(db)
+			ledger := NewStore(db, sessionstore.NewStore(db))
 			record := runningRecord(t, ledger, 2)
 			zero := 0
 			_, won, err := ledger.Finalize(ctx, record.ID, StateCompleted, &zero, 0)
@@ -356,21 +357,28 @@ func waitState(
 	return Process{}
 }
 
-func newTestService(
-	t *testing.T,
-	store Store,
-	onCompletion func(context.Context, Completion),
-	fence TreeFence,
-) *svc {
-	t.Helper()
+type testFence func(context.Context, int64) (func(), error)
 
-	return NewService(store, Options{
-		OutputDir:       t.TempDir(),
-		OnCompletion:    onCompletion,
-		TreeFence:       fence,
-		Now:             func() time.Time { return time.Now().UTC() },
-		GuardianCommand: testGuardianCommand,
-	}).(*svc)
+func (f testFence) Fence(ctx context.Context, rootID int64) (func(), error) { return f(ctx, rootID) }
+
+func newTestService(t *testing.T, store Store, fence Fence) *svc {
+	t.Helper()
+	return NewService(store, Options{OutputDir: t.TempDir(), Fence: fence}).(*svc)
+}
+
+func TestMain(m *testing.M) {
+	if len(os.Args) > 1 && os.Args[1] == guardianMode {
+		if os.Getenv("COAGENT_TEST_GUARDIAN_EXEC_FAILURE") == "1" {
+			os.Exit(1)
+		}
+		_, err := RunGuardian(os.Args[1:])
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		os.Exit(0)
+	}
+	os.Exit(m.Run())
 }
 
 func TestProcessGuardianHelper(t *testing.T) {
@@ -400,7 +408,7 @@ func TestProcessGuardianHelper(t *testing.T) {
 func TestService_SlotLimitPerSession(t *testing.T) {
 	ctx := context.Background()
 	store := newTestStore(t)
-	service := newTestService(t, store, nil, nil)
+	service := newTestService(t, store, nil)
 
 	spawn := func(ctx context.Context) (*exec.Cmd, error) {
 		return exec.CommandContext(ctx, "sleep", "30"), nil
@@ -428,14 +436,15 @@ func TestService_SlotLimitPerSession(t *testing.T) {
 	assert.Equal(t, 8, cancelled)
 
 	assert.Eventually(t, func() bool {
-		return service.liveCount(2) == 0 && service.liveCount(3) == 0
+		return func() int { service.mu.Lock(); defer service.mu.Unlock(); return service.live[2] }() == 0 &&
+			func() int { service.mu.Lock(); defer service.mu.Unlock(); return service.live[3] }() == 0
 	}, 10*time.Second, 20*time.Millisecond)
 }
 
 func TestService_AdmissionSeparatesCandidateAndBackgroundCapacity(t *testing.T) {
 	ctx := context.Background()
 	store := newTestStore(t)
-	service := newTestService(t, store, nil, nil)
+	service := newTestService(t, store, nil)
 	spawn := func(ctx context.Context) (*exec.Cmd, error) {
 		return exec.CommandContext(ctx, "sleep", "30"), nil
 	}
@@ -466,7 +475,7 @@ func TestService_AdmissionSeparatesCandidateAndBackgroundCapacity(t *testing.T) 
 func TestService_AdvertisePromotesCandidateAdmissionClass(t *testing.T) {
 	ctx := context.Background()
 	store := newTestStore(t)
-	service := newTestService(t, store, nil, nil)
+	service := newTestService(t, store, nil)
 	spawn := func(ctx context.Context) (*exec.Cmd, error) {
 		return exec.CommandContext(ctx, "sleep", "30"), nil
 	}
@@ -491,21 +500,16 @@ func TestService_AdvertisePromotesCandidateAdmissionClass(t *testing.T) {
 
 	_, err = service.CancelTree(ctx, 1, IntentSessionKilled)
 	require.NoError(t, err)
-	assert.Eventually(t, func() bool { return service.liveCount(2) == 0 }, 10*time.Second, 20*time.Millisecond)
+	assert.Eventually(t, func() bool {
+		return func() int { service.mu.Lock(); defer service.mu.Unlock(); return service.live[2] }() == 0
+	}, 10*time.Second, 20*time.Millisecond)
 }
 
 func TestService_ForegroundCompletion(t *testing.T) {
 	ctx := context.Background()
 	store := newTestStore(t)
 
-	var mu sync.Mutex
-	var completions []Completion
-	service := newTestService(t, store, func(_ context.Context, completion Completion) {
-		mu.Lock()
-		defer mu.Unlock()
-
-		completions = append(completions, completion)
-	}, nil)
+	service := newTestService(t, store, nil)
 
 	record, err := service.Start(ctx, testSpec(2),
 		func(ctx context.Context) (*exec.Cmd, error) {
@@ -516,23 +520,14 @@ func TestService_ForegroundCompletion(t *testing.T) {
 	assert.NotEmpty(t, record.ID)
 	assert.Contains(t, record.OutputPath, filepath.Join("project-1", "2"))
 
-	assert.Eventually(t, func() bool {
-		mu.Lock()
-		defer mu.Unlock()
-
-		return len(completions) == 1
-	}, 10*time.Second, 20*time.Millisecond)
-
-	mu.Lock()
-	completion := completions[0]
-	mu.Unlock()
-
-	assert.Equal(t, record.ID, completion.ProcessID)
-	assert.Equal(t, StateCompleted, completion.State)
-	assert.Equal(t, int64(2), completion.SessionID)
-	assert.Equal(t, int64(1), completion.RootID)
-	assert.Contains(t, completion.Tail, "hello")
-	assert.Contains(t, completion.Tail, "oops")
+	waitState(t, store, record.ID, StateCompleted, 10*time.Second)
+	inputs, err := processInputs(ctx, store, 2)
+	require.NoError(t, err)
+	require.Len(t, inputs, 1)
+	assert.Equal(t, sessionstore.InputSourceProcess, inputs[0].Source)
+	assert.Equal(t, record.ID, inputs[0].Attributes["process_id"])
+	assert.Contains(t, inputs[0].RawContent, "hello")
+	assert.Contains(t, inputs[0].RawContent, "oops")
 
 	final, err := store.GetProcess(ctx, record.ID)
 	require.NoError(t, err)
@@ -543,32 +538,14 @@ func TestService_ForegroundCompletion(t *testing.T) {
 	assert.Contains(t, string(data), "hello")
 
 	assert.Eventually(t, func() bool {
-		return service.liveCount(2) == 0
+		return func() int { service.mu.Lock(); defer service.mu.Unlock(); return service.live[2] }() == 0
 	}, 10*time.Second, 20*time.Millisecond)
-}
-
-func TestService_CompletionPanicDoesNotEscapeSupervisor(t *testing.T) {
-	ctx := context.Background()
-	store := newTestStore(t)
-	service := newTestService(t, store, func(context.Context, Completion) {
-		panic("completion callback")
-	}, nil)
-
-	record, err := service.Start(ctx, testSpec(2), func(ctx context.Context) (*exec.Cmd, error) {
-		return exec.CommandContext(ctx, "sh", "-c", "printf done"), nil
-	})
-	require.NoError(t, err)
-
-	waitState(t, store, record.ID, StateCompleted, 5*time.Second)
-	assert.Eventually(t, func() bool {
-		return service.liveCount(2) == 0
-	}, 5*time.Second, 20*time.Millisecond)
 }
 
 func TestService_OutputLimitKillsGroupAndKeepsDraining(t *testing.T) {
 	ctx := context.Background()
 	store := newTestStore(t)
-	service := newTestService(t, store, nil, nil)
+	service := newTestService(t, store, nil)
 
 	record, err := service.Start(ctx, testSpec(2),
 		func(ctx context.Context) (*exec.Cmd, error) {
@@ -585,14 +562,14 @@ func TestService_OutputLimitKillsGroupAndKeepsDraining(t *testing.T) {
 	assert.LessOrEqual(t, len(data), int(MaxOutputBytes)+len(overflowMarker))
 
 	assert.Eventually(t, func() bool {
-		return service.liveCount(2) == 0
+		return func() int { service.mu.Lock(); defer service.mu.Unlock(); return service.live[2] }() == 0
 	}, 10*time.Second, 20*time.Millisecond)
 }
 
 func TestService_DeadlineKillsGroup(t *testing.T) {
 	ctx := context.Background()
 	store := newTestStore(t)
-	service := newTestService(t, store, nil, nil)
+	service := newTestService(t, store, nil)
 
 	spec := testSpec(2)
 	spec.Deadline = 300 * time.Millisecond
@@ -607,7 +584,7 @@ func TestService_DeadlineKillsGroup(t *testing.T) {
 	assert.Nil(t, final.ExitCode, "a group-killed deadline has no meaningful exit code")
 
 	assert.Eventually(t, func() bool {
-		return service.liveCount(2) == 0
+		return func() int { service.mu.Lock(); defer service.mu.Unlock(); return service.live[2] }() == 0
 	}, 10*time.Second, 20*time.Millisecond)
 }
 
@@ -615,14 +592,7 @@ func TestService_CancelTreeSuppressesAndCounts(t *testing.T) {
 	ctx := context.Background()
 	store := newTestStore(t)
 
-	var mu sync.Mutex
-	var completions []Completion
-	service := newTestService(t, store, func(_ context.Context, completion Completion) {
-		mu.Lock()
-		defer mu.Unlock()
-
-		completions = append(completions, completion)
-	}, nil)
+	service := newTestService(t, store, nil)
 
 	_, err := service.Start(ctx, testSpec(2),
 		func(ctx context.Context) (*exec.Cmd, error) {
@@ -644,15 +614,12 @@ func TestService_CancelTreeSuppressesAndCounts(t *testing.T) {
 	assert.Equal(t, 1, cancelled)
 
 	assert.Eventually(t, func() bool {
-		return service.liveCount(2) == 0
+		return func() int { service.mu.Lock(); defer service.mu.Unlock(); return service.live[2] }() == 0
 	}, 10*time.Second, 20*time.Millisecond)
 
-	time.Sleep(200 * time.Millisecond)
-
-	mu.Lock()
-	count := len(completions)
-	mu.Unlock()
-	assert.Equal(t, 0, count, "cancellation must suppress wake events")
+	inputs, err := processInputs(ctx, store, 2)
+	require.NoError(t, err)
+	assert.Empty(t, inputs, "cancellation must suppress wake inputs")
 
 	// Cleanup for the outside-tree process.
 	_, err = service.CancelTree(ctx, 4, IntentSessionKilled)
@@ -663,33 +630,29 @@ func TestService_TreeFenceRejectsStart(t *testing.T) {
 	ctx := context.Background()
 	store := newTestStore(t)
 
-	service := newTestService(t, store, nil, func(context.Context, int64) (func(), error) {
+	service := newTestService(t, store, testFence(func(context.Context, int64) (func(), error) {
 		return nil, ErrFenced
-	})
+	}))
 
 	_, err := service.Start(ctx, testSpec(2),
 		func(ctx context.Context) (*exec.Cmd, error) {
 			return exec.CommandContext(ctx, "sleep", "30"), nil
 		})
 	require.ErrorIs(t, err, ErrFenced)
-	assert.Equal(t, 0, service.liveCount(2))
+	assert.Equal(t, 0, func() int { service.mu.Lock(); defer service.mu.Unlock(); return service.live[2] }())
 }
 
 func TestService_GuardianExecFailureStartsNoCommand(t *testing.T) {
 	ctx := context.Background()
 	store := newTestStore(t)
 	marker := filepath.Join(t.TempDir(), "started")
-	service := NewService(store, Options{
-		OutputDir: t.TempDir(),
-		GuardianCommand: func(string, *os.File, *os.File) *exec.Cmd {
-			return exec.Command(filepath.Join(t.TempDir(), "missing-guardian"))
-		},
-	})
+	t.Setenv("COAGENT_TEST_GUARDIAN_EXEC_FAILURE", "1")
+	service := NewService(store, Options{OutputDir: t.TempDir()})
 
 	_, err := service.Start(ctx, testSpec(2), func(ctx context.Context) (*exec.Cmd, error) {
 		return exec.CommandContext(ctx, "sh", "-c", "touch "+marker), nil
 	})
-	require.ErrorContains(t, err, "start process guardian")
+	require.Error(t, err)
 	assert.NoFileExists(t, marker)
 
 	running, err := store.ListRunning(ctx)
@@ -700,7 +663,7 @@ func TestService_GuardianExecFailureStartsNoCommand(t *testing.T) {
 func TestService_InterruptNonterminalSweepsAdvertised(t *testing.T) {
 	ctx := context.Background()
 	store := newTestStore(t)
-	service := newTestService(t, store, nil, nil)
+	service := newTestService(t, store, nil)
 
 	spec := testSpec(2)
 
@@ -718,7 +681,7 @@ func TestService_InterruptNonterminalSweepsAdvertised(t *testing.T) {
 	assert.Nil(t, final.ExitCode, "an interrupted sweep never signals a stored PID")
 
 	assert.Eventually(t, func() bool {
-		return service.liveCount(2) == 0
+		return func() int { service.mu.Lock(); defer service.mu.Unlock(); return service.live[2] }() == 0
 	}, 10*time.Second, 20*time.Millisecond)
 }
 
@@ -730,10 +693,9 @@ func TestCollector_DiscardAfterCap(t *testing.T) {
 		os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
 	require.NoError(t, err)
 
-	capped := make(chan struct{}, 1)
-	collector := newCollector(file, 16, func() {
-		capped <- struct{}{}
-	})
+	quotaReady := make(chan bool, 1)
+	quotaReady <- false
+	collector := newCollector(t.Context(), file, 16, nil, "", quotaReady, &exec.Cmd{})
 
 	_, err = collector.Write([]byte("0123456789"))
 	require.NoError(t, err)
@@ -743,11 +705,7 @@ func TestCollector_DiscardAfterCap(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 10, n)
 
-	select {
-	case <-capped:
-	default:
-		t.Fatal("cap callback did not fire")
-	}
+	assert.True(t, collector.overflowed())
 
 	require.NoError(t, collector.Close())
 
@@ -819,11 +777,11 @@ func TestService_StopRacingStartCannotMissProcess(t *testing.T) {
 	var fence sync.Mutex
 	admitted := make(chan struct{})
 	spawn := make(chan struct{})
-	service := newTestService(t, store, nil, func(context.Context, int64) (func(), error) {
+	service := newTestService(t, store, testFence(func(context.Context, int64) (func(), error) {
 		fence.Lock()
 
 		return fence.Unlock, nil
-	})
+	}))
 
 	startDone := make(chan error, 1)
 	go func() {
@@ -860,7 +818,7 @@ func TestService_StopRacingStartCannotMissProcess(t *testing.T) {
 	require.NoError(t, <-stopErr)
 
 	assert.Eventually(t, func() bool {
-		return service.liveCount(2) == 0
+		return func() int { service.mu.Lock(); defer service.mu.Unlock(); return service.live[2] }() == 0
 	}, 5*time.Second, 20*time.Millisecond)
 }
 
@@ -870,7 +828,7 @@ func TestService_ShutdownRacingInsertCannotMissProcess(t *testing.T) {
 		Store: newTestStore(t), reached: make(chan Process, 1), proceed: make(chan struct{}),
 		failRecordIntent: true,
 	}
-	service := newTestService(t, store, nil, nil)
+	service := newTestService(t, store, nil)
 	startDone := make(chan error, 1)
 
 	go func() {
@@ -903,7 +861,7 @@ func TestService_ShutdownRacingInsertCannotMissProcess(t *testing.T) {
 	assert.Equal(t, IntentDaemonShutdown, final.HostIntent)
 
 	assert.Eventually(t, func() bool {
-		return service.liveCount(2) == 0
+		return func() int { service.mu.Lock(); defer service.mu.Unlock(); return service.live[2] }() == 0
 	}, 5*time.Second, 20*time.Millisecond)
 }
 
@@ -913,7 +871,7 @@ func TestService_ShutdownRacingFastInsertInterruptsBeforeSupervision(t *testing.
 		Store: newTestStore(t), reached: make(chan Process, 1), proceed: make(chan struct{}),
 		failRecordIntent: true,
 	}
-	service := newTestService(t, store, nil, nil)
+	service := newTestService(t, store, nil)
 	startDone := make(chan error, 1)
 
 	go func() {
@@ -947,7 +905,7 @@ func TestService_ShutdownRacingFastInsertInterruptsBeforeSupervision(t *testing.
 func TestService_RepeatedInterruptIsIdempotent(t *testing.T) {
 	ctx := context.Background()
 	store := newTestStore(t)
-	service := newTestService(t, store, nil, nil)
+	service := newTestService(t, store, nil)
 
 	spec := testSpec(2)
 
@@ -976,7 +934,7 @@ func TestService_RestartSweepDoesNotDuplicateJoinedShutdown(t *testing.T) {
 	store := newTestStore(t)
 	outputDir := t.TempDir()
 
-	first := NewService(store, Options{OutputDir: outputDir, GuardianCommand: testGuardianCommand})
+	first := NewService(store, Options{OutputDir: outputDir})
 	spec := testSpec(2)
 
 	record, err := first.Start(ctx, spec,
@@ -988,7 +946,7 @@ func TestService_RestartSweepDoesNotDuplicateJoinedShutdown(t *testing.T) {
 	_, err = first.CancelAll(ctx, IntentDaemonShutdown)
 	require.NoError(t, err)
 
-	second := NewService(store, Options{OutputDir: outputDir, GuardianCommand: testGuardianCommand})
+	second := NewService(store, Options{OutputDir: outputDir})
 
 	count, err := second.InterruptNonterminal(ctx)
 	require.NoError(t, err)
@@ -1033,15 +991,4 @@ func isolatedGuardianEnv(environ []string, home string) []string {
 	}
 
 	return result
-}
-
-func testGuardianCommand(guardPath string, readyWriter, leaseReader *os.File) *exec.Cmd {
-	cmd := exec.Command( //nolint:gosec // The current test binary is the hermetic helper.
-		os.Args[0], "-test.run=^TestProcessGuardianHelper$", "--", guardianMode, guardPath,
-	)
-	cmd.Env = append(isolatedGuardianEnv(os.Environ(), filepath.Dir(guardPath)),
-		"COAGENT_TEST_PROCESS_GUARDIAN=1")
-	cmd.ExtraFiles = []*os.File{readyWriter, leaseReader}
-
-	return cmd
 }

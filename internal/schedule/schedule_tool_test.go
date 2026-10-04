@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/pilat/coagent/internal/schedule"
+	"github.com/pilat/coagent/internal/tool"
 )
 
 // mockScheduleStore implements schedule.Service for testing.
@@ -22,6 +23,12 @@ type mockScheduleStore struct {
 	lastFresh    bool
 	lastInputMsg string
 	lastCallID   string
+}
+
+func (s *mockScheduleStore) SleepTool(id int64) tool.Tool { return schedule.NewSleepTool(s, id) }
+
+func (*mockScheduleStore) Render(context.Context, int64) (string, error) {
+	panic("unexpected schedule render")
 }
 
 type mockScheduleEntry struct {

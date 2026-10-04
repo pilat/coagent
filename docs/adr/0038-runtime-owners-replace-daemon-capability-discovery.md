@@ -1,6 +1,6 @@
 # ADR-0038: Runtime owners replace daemon capability discovery
 
-- **Status:** Accepted
+- **Status:** Superseded in part by [ADR-0065](0065-daemon-owns-lifecycle-composition.md)
 - **Date:** 2026-08-31
 
 ## Context

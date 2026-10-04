@@ -7,11 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"time"
-
-	"github.com/pilat/coagent/internal/transcript"
 )
-
-type ActivationState string
 
 const (
 	ActivationPending  ActivationState = "pending"
@@ -23,6 +19,8 @@ var (
 	ErrActivationNotFound = errors.New("tool activation not found")
 	ErrActivationConflict = errors.New("tool activation conflict")
 )
+
+type ActivationState string
 
 type ActivationDraft struct {
 	ToolID  string
@@ -38,31 +36,6 @@ type ToolActivation struct {
 	ToolCallID string
 	CreatedAt  time.Time
 	ResolvedAt *time.Time
-}
-
-type ActivationStore interface {
-	PromoteInputWithActivation(
-		ctx context.Context,
-		inputID int64,
-		preparedContent string,
-		activation ActivationDraft,
-	) (*transcript.Message, *ToolActivation, error)
-	PendingActivation(ctx context.Context, sessionID int64) (*ToolActivation, error)
-	CurrentActivation(ctx context.Context, sessionID int64) (*ToolActivation, error)
-	ExpireActivation(ctx context.Context, inputID, sessionID int64) (*ToolActivation, error)
-	ExpireActivationWithOutput(
-		ctx context.Context,
-		inputID, sessionID int64,
-		content string,
-	) (*ToolActivation, *OutputCommit, error)
-	// ConsumeActivationBinding claims a pending grant by CAS: an
-	// already-consumed identical grant is a no-op, so a replayed settlement
-	// can neither fail nor apply twice. Callers that must claim inside their
-	// own mutation transaction use the package-level ConsumeActivationTx.
-	ConsumeActivationBinding(
-		ctx context.Context,
-		binding ActivationBinding,
-	) error
 }
 
 // ActivationBinding names the exact grant a mutating service claims: the
@@ -115,7 +88,7 @@ func ConsumeActivationTx(ctx context.Context, tx *sql.Tx, binding ActivationBind
 	return nil
 }
 
-func (s *store) ConsumeActivationBinding(ctx context.Context, binding ActivationBinding) error {
+func (s *Store) ConsumeActivationBinding(ctx context.Context, binding ActivationBinding) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin activation consume: %w", err)
@@ -134,9 +107,7 @@ func (s *store) ConsumeActivationBinding(ctx context.Context, binding Activation
 	return nil
 }
 
-var _ ActivationStore = (*store)(nil)
-
-func (s *store) CurrentActivation(ctx context.Context, sessionID int64) (*ToolActivation, error) {
+func (s *Store) CurrentActivation(ctx context.Context, sessionID int64) (*ToolActivation, error) {
 	activation, err := scanActivation(s.db.QueryRowContext(ctx, `SELECT input_id, session_id, tool_id,
 		command, state, COALESCE(tool_call_id, ''), created_at, resolved_at
 		FROM session_tool_activations WHERE session_id = ? AND state IN ('pending', 'consumed')
@@ -152,7 +123,7 @@ func (s *store) CurrentActivation(ctx context.Context, sessionID int64) (*ToolAc
 	return activation, nil
 }
 
-func (s *store) PendingActivation(ctx context.Context, sessionID int64) (*ToolActivation, error) {
+func (s *Store) PendingActivation(ctx context.Context, sessionID int64) (*ToolActivation, error) {
 	activation, err := scanActivation(s.db.QueryRowContext(ctx, `SELECT input_id, session_id, tool_id,
 		command, state, COALESCE(tool_call_id, ''), created_at, resolved_at
 		FROM session_tool_activations WHERE session_id = ? AND state = 'pending'`, sessionID))
@@ -162,128 +133,6 @@ func (s *store) PendingActivation(ctx context.Context, sessionID int64) (*ToolAc
 
 	if err != nil {
 		return nil, fmt.Errorf("load pending activation: %w", err)
-	}
-
-	return activation, nil
-}
-
-func (s *store) ExpireActivation(
-	ctx context.Context,
-	inputID, sessionID int64,
-) (*ToolActivation, error) {
-	result, err := s.db.ExecContext(ctx, `UPDATE session_tool_activations
-		SET state = 'expired', resolved_at = ?
-		WHERE input_id = ? AND session_id = ? AND state = 'pending'`,
-		time.Now().UTC(), inputID, sessionID)
-	if err != nil {
-		return nil, fmt.Errorf("expire tool activation: %w", err)
-	}
-
-	affected, err := result.RowsAffected()
-	if err != nil {
-		return nil, fmt.Errorf("expire tool activation rows affected: %w", err)
-	}
-
-	if affected == 0 {
-		existing, loadErr := s.activationByInput(ctx, inputID)
-		if loadErr == nil &&
-			(existing.SessionID == sessionID && existing.State == ActivationExpired ||
-				consumedForSession(existing, sessionID)) {
-			return existing, nil
-		}
-
-		return nil, ErrActivationConflict
-	}
-
-	return s.activationByInput(ctx, inputID)
-}
-
-func (s *store) ExpireActivationWithOutput(
-	ctx context.Context,
-	inputID, sessionID int64,
-	content string,
-) (*ToolActivation, *OutputCommit, error) {
-	if content == "" {
-		return nil, nil, ErrActivationConflict
-	}
-
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return nil, nil, fmt.Errorf("begin activation expiry: %w", err)
-	}
-
-	defer func() { _ = tx.Rollback() }()
-
-	owner, err := outputOwner(ctx, tx, sessionID)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	now := time.Now().UTC()
-
-	result, err := tx.ExecContext(ctx, `UPDATE session_tool_activations
-		SET state = 'expired', resolved_at = ?
-		WHERE input_id = ? AND session_id = ? AND state = 'pending'`, now, inputID, sessionID)
-	if err != nil {
-		return nil, nil, fmt.Errorf("expire activation with output: %w", err)
-	}
-
-	affected, _ := result.RowsAffected()
-	if affected == 0 {
-		activation, loadErr := scanActivation(tx.QueryRowContext(ctx, `SELECT input_id, session_id,
-			tool_id, command, state, COALESCE(tool_call_id, ''), created_at, resolved_at
-			FROM session_tool_activations WHERE input_id = ?`, inputID))
-		if loadErr != nil {
-			return nil, nil, ErrActivationConflict
-		}
-
-		if consumedForSession(activation, sessionID) {
-			// The mutation already paid for the grant; its result answers the
-			// call, so expiry adds nothing.
-			return activation, nil, nil
-		}
-
-		if activation.State != ActivationExpired {
-			return nil, nil, ErrActivationConflict
-		}
-	}
-
-	commit, err := insertMessageOutput(ctx, tx, sessionID, owner, content,
-		fmt.Sprintf("input:%d:activation:expired", inputID), now, false)
-	if err != nil {
-		if !isUniqueConstraintError(err) {
-			return nil, nil, err
-		}
-
-		var id int64
-		if err := tx.QueryRowContext(ctx, `SELECT id FROM session_outbox
-			WHERE session_id = ? AND source_key = ?`, sessionID,
-			fmt.Sprintf("input:%d:activation:expired", inputID)).Scan(&id); err != nil {
-			return nil, nil, err
-		}
-
-		commit = &OutputCommit{OutputID: id, OwnerID: owner, Existing: true}
-	}
-
-	if err := tx.Commit(); err != nil {
-		return nil, nil, fmt.Errorf("commit activation expiry: %w", err)
-	}
-
-	activation, err := s.activationByInput(ctx, inputID)
-
-	return activation, commit, err
-}
-
-func (s *store) activationByInput(ctx context.Context, inputID int64) (*ToolActivation, error) {
-	activation, err := scanActivation(s.db.QueryRowContext(ctx, `SELECT input_id, session_id, tool_id,
-		command, state, COALESCE(tool_call_id, ''), created_at, resolved_at
-		FROM session_tool_activations WHERE input_id = ?`, inputID))
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, ErrActivationNotFound
-	}
-
-	if err != nil {
-		return nil, fmt.Errorf("load tool activation: %w", err)
 	}
 
 	return activation, nil
@@ -316,11 +165,4 @@ func requireActivationChanged(result sql.Result) error {
 	}
 
 	return nil
-}
-
-// consumedForSession reports whether the grant is already paid by its own
-// mutation, making terminal settlement a no-op instead of a conflict.
-func consumedForSession(activation *ToolActivation, sessionID int64) bool {
-	return activation != nil && activation.SessionID == sessionID &&
-		activation.State == ActivationConsumed
 }

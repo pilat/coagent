@@ -2,571 +2,481 @@ package session
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
+	"go.uber.org/zap/zaptest/observer"
 
 	"github.com/pilat/coagent/internal/llmwire"
+	"github.com/pilat/coagent/internal/loader"
+	"github.com/pilat/coagent/internal/logger"
+	"github.com/pilat/coagent/internal/sessionprompt"
+	"github.com/pilat/coagent/internal/sessionstore"
+	"github.com/pilat/coagent/internal/todo"
 	"github.com/pilat/coagent/internal/tool"
-	"github.com/pilat/coagent/internal/toolexec"
+	"github.com/pilat/coagent/internal/tool/builtin"
 )
 
-func TestShouldCompact(t *testing.T) {
-	const window = 80000
-
-	cutoff := compactionCutoff(window) // 68000
-
+func TestLiveOutputs(t *testing.T) {
+	drafts := []sessionstore.Output{
+		{Content: "scheduled", Attributes: map[string]any{"source": "scheduler"}, PersistOnly: true},
+		{Content: "direct", Key: "tool:call:direct:0", PersistOnly: true},
+		{Content: "final"},
+	}
+	committed := []*sessionstore.OutputCommit{
+		{LiveContent: "scheduled", PersistOnly: true},
+		{LiveContent: "direct", PersistOnly: true},
+		{LiveContent: "final", Content: "final with progress footer"},
+	}
 	tests := []struct {
-		name     string
-		tokens   int
-		baseline *contextBaseline
-		want     bool
+		name          string
+		outputEnabled bool
+		commit        sessionstore.Commit
+		result        sessionstore.CommitResult
+		want          []*sessionstore.OutputCommit
 	}{
-		{"below cutoff, unmeasured", cutoff - 1000, nil, false},
-		{"above cutoff, unmeasured", cutoff + 1000, nil, true},
-		{"at cutoff exactly is not over", cutoff, nil, false},
 		{
-			"measurement outranks the estimate downward",
-			cutoff + 1000,
-			&contextBaseline{promptTokens: 1000, messageCount: 1},
-			false,
+			name:          "outbox filters persist-only outputs",
+			outputEnabled: true,
+			commit:        sessionstore.Commit{Outputs: drafts},
+			result:        sessionstore.CommitResult{Outputs: committed},
+			want:          []*sessionstore.OutputCommit{committed[2]},
 		},
 		{
-			"measurement outranks the estimate upward",
-			cutoff - 1000,
-			&contextBaseline{promptTokens: cutoff + 1, messageCount: 1},
-			true,
+			name: "outbox keeps a final reply matching direct output text",
+			commit: sessionstore.Commit{Outputs: []sessionstore.Output{
+				{Content: "same", Key: "tool:call:direct:0", PersistOnly: true},
+				{Content: "same"},
+			}},
+			result: sessionstore.CommitResult{Outputs: []*sessionstore.OutputCommit{
+				{LiveContent: "same", PersistOnly: true},
+				{LiveContent: "same", Content: "same with progress footer"},
+			}},
+			want: []*sessionstore.OutputCommit{{LiveContent: "same", Content: "same with progress footer"}},
+		},
+		{
+			name:   "drafts filter persist-only outputs",
+			commit: sessionstore.Commit{Outputs: drafts[:2], Unfired: sessionstore.Parts{Outputs: drafts[2:]}},
+			want:   []*sessionstore.OutputCommit{{LiveContent: "final"}},
+		},
+		{
+			name: "fired budget excludes unfired drafts",
+			commit: sessionstore.Commit{
+				Outputs: []sessionstore.Output{{Content: "checkpoint"}},
+				Unfired: sessionstore.Parts{Outputs: drafts},
+			},
+			result: sessionstore.CommitResult{BudgetFired: true},
+			want:   []*sessionstore.OutputCommit{{LiveContent: "checkpoint"}},
 		},
 	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 
+			s := &Session{outputEnabled: tt.outputEnabled}
+			assert.Equal(t, tt.want, s.liveOutputs(tt.commit, &tt.result))
+		})
+	}
+}
+
+// A read-heavy parallel fixture reaches the same final answer in fewer model
+// iterations than its serial twin and records exactly one native tool_schedule
+// summary with the decided field meanings. The fallback twin records one
+// tool.batch summary instead.
+func TestRunLoop_ReadHeavyFixtureFewerIterations(t *testing.T) {
+	const reads = 5
+
+	newReadAgent := func() *Session {
+		agent := newTestAgent(&stubTool{id: "read", result: "file body", parallelSafe: true})
+		setTestMessages(agent, []llmwire.Message{usr("task")})
+
+		return agent
+	}
+
+	// Parallel: one turn schedules all five reads, the next turn answers.
+	parallelAgent := newReadAgent()
+	parallelLLM := &loopScriptLLM{responses: []*llmwire.Response{
+		{ToolCalls: readCalls(reads)},
+		{Text: "same final answer"},
+		{Text: "confirmed"},
+	}}
+	parallelAgent.llmClient = parallelLLM
+
+	core, logs := observer.New(zapcore.InfoLevel)
+	ctx := logger.ToContext(t.Context(), zap.New(core))
+
+	result, err := parallelAgent.Run(ctx)
+	require.NoError(t, err)
+
+	assert.Equal(t, "same final answer", result.Final)
+	assert.Equal(t, 3, parallelLLM.calls, "one scheduling turn plus answer and confirmation")
+
+	schedules := logs.FilterMessage("tool_schedule").All()
+	require.Len(t, schedules, 1, "exactly one native tool_schedule summary")
+
+	fields := schedules[0].ContextMap()
+	assert.Equal(t, int64(reads), fields["calls"])
+	assert.Equal(t, int64(1), fields["stages"], "five parallel-safe reads form one stage")
+	// max_parallel is the observed peak overlap, bounded by the 4-slot window.
+	assert.GreaterOrEqual(t, fields["max_parallel"], int64(1))
+	assert.LessOrEqual(t, fields["max_parallel"], int64(4))
+	assert.Equal(t, int64(reads), fields["executed"])
+	assert.Equal(t, int64(0), fields["failed"])
+	assert.Equal(t, int64(0), fields["skipped"])
+
+	// Serial twin: the same five reads, one per turn.
+	serialAgent := newReadAgent()
+	serialResponses := make([]*llmwire.Response, 0, reads+1)
+	for range reads {
+		serialResponses = append(serialResponses, &llmwire.Response{ToolCalls: readCalls(1)})
+	}
+	serialResponses = append(serialResponses, &llmwire.Response{Text: "same final answer"})
+	serialResponses = append(serialResponses, &llmwire.Response{Text: "confirmed"})
+
+	serialLLM := &loopScriptLLM{responses: serialResponses}
+	serialAgent.llmClient = serialLLM
+
+	serialCore, _ := observer.New(zapcore.InfoLevel)
+	serialCtx := logger.ToContext(t.Context(), zap.New(serialCore))
+
+	serialResult, err := serialAgent.Run(serialCtx)
+	require.NoError(t, err)
+
+	assert.Equal(t, "same final answer", serialResult.Final)
+	assert.Equal(t, reads+2, serialLLM.calls, "one call per turn plus answer and confirmation")
+	assert.Less(t, parallelLLM.calls, serialLLM.calls, "the parallel fixture beats the serial one")
+}
+
+// The fallback twin of the read-heavy fixture: one batch call covering the same
+// five reads, recording exactly one tool.batch summary.
+func TestRunLoop_BatchFallbackFixtureRecordsOneSummary(t *testing.T) {
+	agent := newTestAgent(&stubTool{id: "read", result: "file body", parallelSafe: true})
+	setTestMessages(agent, []llmwire.Message{usr("task")})
+	agent.registry.Register(builtin.NewBatchTool(agent.registry))
+
+	params := `{"calls":[`
+	for i := range 5 {
+		if i > 0 {
+			params += ","
+		}
+		params += fmt.Sprintf(`{"tool":"read","params":{"path":"file-%d.go"}}`, i)
+	}
+	params += `]}`
+
+	batchLLM := &loopScriptLLM{responses: []*llmwire.Response{
+		{ToolCalls: []llmwire.ToolCall{{
+			ID:        "batch-1",
+			Name:      tool.IDBatch,
+			Arguments: []byte(params),
+		}}},
+		{Text: "same final answer"},
+		{Text: "confirmed"},
+	}}
+	agent.llmClient = batchLLM
+
+	core, logs := observer.New(zapcore.InfoLevel)
+	ctx := logger.ToContext(t.Context(), zap.New(core))
+
+	result, err := agent.Run(ctx)
+	require.NoError(t, err)
+
+	assert.Equal(t, "same final answer", result.Final)
+	assert.Equal(t, 3, batchLLM.calls)
+
+	batchSummaries := make([]any, 0)
+	for _, entry := range logs.FilterMessage("tool_schedule").All() {
+		if entry.LoggerName == "tool.batch" {
+			batchSummaries = append(batchSummaries, entry)
+		}
+	}
+
+	require.Len(t, batchSummaries, 1, "exactly one tool.batch summary")
+
+	var fields map[string]any
+	for _, entry := range logs.FilterMessage("tool_schedule").All() {
+		if entry.LoggerName == "tool.batch" {
+			fields = entry.ContextMap()
+		}
+	}
+
+	assert.Equal(t, int64(5), fields["calls"])
+	assert.Equal(t, int64(5), fields["executed"])
+	assert.Equal(t, int64(0), fields["failed"])
+}
+
+func TestRun_DurableTurns(t *testing.T) {
+	tests := []struct {
+		name, input string
+		responses   []*llmwire.Response
+		tools       []tool.Tool
+		calls       int
+		final       string
+		status      sessionstore.SessionStatus
+		wantError   bool
+		ownerless   bool
+	}{
+		{
+			name:      "confirmed answer",
+			input:     "answer the request",
+			responses: []*llmwire.Response{textResponse("candidate"), textResponse("confirmed")},
+			calls:     2,
+			final:     "candidate",
+			status:    sessionstore.SessionStatusCompleted,
+		},
+		{
+			name:      "ownerless observer answer",
+			input:     "answer the request",
+			responses: []*llmwire.Response{textResponse("candidate"), textResponse("confirmed")},
+			calls:     2,
+			final:     "candidate",
+			status:    sessionstore.SessionStatusCompleted,
+			ownerless: true,
+		},
+		{
+			name:  "ordinary tool then confirmation",
+			input: "read a file",
+			responses: []*llmwire.Response{
+				toolCallResponse("read-1", "read"),
+				textResponse("candidate"),
+				textResponse("confirmed"),
+			},
+			tools:  []tool.Tool{&stubTool{id: "read", result: "body"}},
+			calls:  3,
+			final:  "candidate",
+			status: sessionstore.SessionStatusCompleted,
+		},
+		{
+			name:      "owned sleep suspends",
+			input:     "wait",
+			responses: []*llmwire.Response{toolCallResponse("sleep-1", tool.IDSleep)},
+			tools:     []tool.Tool{&stubTool{id: tool.IDSleep, err: tool.ErrSuspend}},
+			calls:     1,
+			status:    sessionstore.SessionStatusSuspended,
+		},
+		{
+			name:  "empty stop breaks after six",
+			input: "answer",
+			responses: []*llmwire.Response{
+				textResponse(""),
+				textResponse(""),
+				textResponse(""),
+				textResponse(""),
+				textResponse(""),
+				textResponse(""),
+			},
+			calls:  6,
+			status: sessionstore.SessionStatusError,
+		},
+		{
+			name:      "unknown finish retains cost",
+			input:     "answer",
+			responses: []*llmwire.Response{{Text: "partial", FinishType: llmwire.FinishUnknown, CostUSD: 0.25}},
+			calls:     1,
+			status:    sessionstore.SessionStatusError,
+			wantError: true,
+		},
+		{
+			name:  "length retry retains rejected cost",
+			input: "answer",
+			responses: []*llmwire.Response{
+				{Text: "partial", FinishType: llmwire.FinishLength, CostUSD: 0.25},
+				textResponse("candidate"),
+				textResponse("confirmed"),
+			},
+			calls:  3,
+			final:  "candidate",
+			status: sessionstore.SessionStatusCompleted,
+		},
+		{name: "status does not call model", input: "/status", calls: 0, status: sessionstore.SessionStatusCompleted},
+		{
+			name:   "unknown skill rejection does not call model",
+			input:  "/skill missing",
+			calls:  0,
+			status: sessionstore.SessionStatusCompleted,
+		},
+	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			agent := newTestAgent()
-			agent.prompt = newPromptBuilder("", "") // zero overhead: the cutoff cases are exact
-			agent.ms.setMessages(buildMessagesWithTokens(tc.tokens))
-			if tc.baseline != nil {
-				agent.recordContextBaseline(
-					context.Background(),
-					tc.baseline.promptTokens,
-					tc.baseline.messageCount,
-					agent.modelGeneration(),
-				)
+			_, store, id := newAttachmentsStore(t)
+			if tc.ownerless {
+				require.NoError(t, store.SetAttributes(t.Context(), id, nil))
 			}
-
-			assert.Equal(t, tc.want, agent.shouldCompact(window))
-		})
-	}
-}
-
-// The delta is counted over the tail alone: the measured prefix keeps its
-// measured cost no matter what len/4 thinks of it.
-func TestProjectContextSizeCountsOnlyTheTailAfterTheBaseline(t *testing.T) {
-	msgs := append(buildMessagesWithTokens(50000), buildMessagesWithTokens(1000)...)
-	base := &contextBaseline{promptTokens: 9000, messageCount: 1}
-
-	assert.Equal(t, 10000, projectContextSize(msgs, base, 777))
-	assert.Equal(t, 51777, projectContextSize(msgs, nil, 777), "no measurement: whole transcript plus overhead")
-}
-
-// A baseline that no longer indexes the transcript (compaction shrank it under
-// the recorded position) must not be trusted into an inflated projection.
-func TestProjectContextSizeDiscardsAStaleBaseline(t *testing.T) {
-	msgs := buildMessagesWithTokens(1000)
-	base := &contextBaseline{promptTokens: 90000, messageCount: 40}
-
-	assert.Equal(t, 1100, projectContextSize(msgs, base, 100))
-}
-
-func TestCallLLMRecordsTheProviderBaseline(t *testing.T) {
-	agent := newTestAgent()
-	agent.llmClient = &loopScriptLLM{responses: []*llmwire.Response{
-		{Text: "done", Usage: &llmwire.MessageUsage{PromptTokens: 5000}},
-	}}
-	agent.ms.setMessages(buildMessagesWithTokens(1000))
-
-	_, err := runLoop(t.Context(), agent, loopOptions{}, iterationGuard(5))
-	require.NoError(t, err)
-
-	base := agent.loadContextBaseline()
-	require.NotNil(t, base)
-	assert.Equal(t, 5000, base.promptTokens)
-	assert.Equal(t, 1, base.messageCount, "the position is the transcript as sent, before the reply landed")
-
-	size, estimated := agent.projectContextSize()
-	assert.False(t, estimated)
-	// The assistant reply ("done") is the tail the measurement did not cover.
-	assert.Equal(t, 5000+estimateTokens(agent.ms.getMessages()[1:]), size)
-}
-
-func TestCallLLMLeavesTheProjectionEstimatedWithoutUsage(t *testing.T) {
-	agent := newTestAgent()
-	agent.llmClient = &loopScriptLLM{responses: []*llmwire.Response{
-		{Text: "done", Usage: &llmwire.MessageUsage{PromptTokens: 0}},
-	}}
-	agent.ms.setMessages(buildMessagesWithTokens(1000))
-
-	_, err := runLoop(t.Context(), agent, loopOptions{}, iterationGuard(5))
-	require.NoError(t, err)
-
-	assert.Nil(t, agent.loadContextBaseline(), "a provider that reports zero has measured nothing")
-
-	_, estimated := agent.projectContextSize()
-	assert.True(t, estimated)
-}
-
-// TestEstimateTokensCountsToolCallArguments pins that write/edit/apply_patch file
-// bodies (carried in tool-call Arguments) are part of the trigger estimate.
-func TestEstimateTokensCountsToolCallArguments(t *testing.T) {
-	args := []byte(strings.Repeat("x", 4000)) // ~1000 est tokens
-	msgs := []llmwire.Message{{
-		Role:      llmwire.RoleAssistant,
-		ToolCalls: []llmwire.ToolCall{{ID: "c1", Name: "write", Arguments: args}},
-	}}
-
-	assert.Equal(t, 1000, estimateTokens(msgs))
-}
-
-func TestFormatToolResult_SizeDiffersByContextWindow(t *testing.T) {
-	bigOutput := strings.Repeat("x", 100000)
-	result := &tool.Result{Output: bigOutput}
-
-	smallWindowResult := formatToolResult(result, 15000)
-	largeWindowResult := formatToolResult(result, 200000)
-
-	assert.Less(t, len(smallWindowResult), len(largeWindowResult))
-}
-
-func TestFormatToolResult_PreservesPresentationContract(t *testing.T) {
-	tests := []struct {
-		name   string
-		result *tool.Result
-		want   string
-	}{
-		{
-			name:   "plain output",
-			result: &tool.Result{Output: "body"},
-			want:   "body",
-		},
-		{
-			name:   "title",
-			result: &tool.Result{Title: "Read file", Output: "body"},
-			want:   "[Read file]\nbody",
-		},
-		{
-			name: "self-reported truncation",
-			result: &tool.Result{
-				Output:   "body",
-				Metadata: map[string]any{"truncated": true},
-			},
-			want: "body\n(output truncated: 4 bytes total)",
-		},
-		{
-			name: "false truncation metadata",
-			result: &tool.Result{
-				Output:   "body",
-				Metadata: map[string]any{"truncated": false},
-			},
-			want: "body",
-		},
-		{
-			name: "malformed truncation metadata",
-			result: &tool.Result{
-				Output:   "body",
-				Metadata: map[string]any{"truncated": "true"},
-			},
-			want: "body",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			assert.Equal(t, tt.want, formatToolResult(tt.result, 200000))
-		})
-	}
-}
-
-func TestPrependLoopWarning_ReportsExactWindowDiversity(t *testing.T) {
-	agent := newTestAgent()
-	agent.loopDetector.window = []toolRecord{
-		{name: "read", resultHash: 1},
-		{name: "read", resultHash: 1},
-		{name: "grep", resultHash: 2},
-		{name: "grep", resultHash: 2},
-	}
-
-	want := fmt.Sprintf(loopWarningTemplate, 50, 4, 2) + "\n\nbody"
-	assert.Equal(t, want, prependLoopWarning(t.Context(), agent, actionWarn, "grep", "body"))
-}
-
-func TestPrependLoopWarning_HandlesEmptyWindow(t *testing.T) {
-	agent := newTestAgent()
-
-	want := fmt.Sprintf(loopWarningTemplate, 0, 0, 0) + "\n\nbody"
-	assert.Equal(t, want, prependLoopWarning(t.Context(), agent, actionWarn, "read", "body"))
-}
-
-func TestPrependLoopWarning_ReportsExactFailureStreak(t *testing.T) {
-	agent := newTestAgent()
-	agent.loopDetector.window = []toolRecord{
-		{name: "edit", failed: true},
-		{name: "edit", failed: true},
-		{name: "edit", failed: true},
-	}
-
-	want := fmt.Sprintf(loopFailureWarningTemplate, "edit", 3) + "\n\nbody"
-	assert.Equal(t, want, prependLoopWarning(t.Context(), agent, actionWarnFailure, "edit", "body"))
-}
-
-func TestExecuteToolCall_RejectsNilResult(t *testing.T) {
-	registry := tool.NewRegistry()
-	registry.Register(&nilResultTool{})
-
-	agent := newTestAgent(&nilResultTool{})
-
-	items := executeToolCallsInternal(t.Context(), agent, []llmwire.ToolCall{{
-		ID:        "call-1",
-		Name:      "nil-result",
-		Arguments: json.RawMessage(`{}`),
-	}})
-
-	require.Len(t, items, 1)
-	require.Equal(t, toolexec.OutcomeFailed, items[0].outcome)
-	require.Equal(t, "Error: execute tool nil-result: tool returned nil result", items[0].content)
-}
-
-type nilResultTool struct{}
-
-func (*nilResultTool) ID() string                  { return "nil-result" }
-func (*nilResultTool) Description() string         { return "returns an invalid nil result" }
-func (*nilResultTool) Parameters() json.RawMessage { return json.RawMessage(`{}`) }
-func (*nilResultTool) ParallelSafe() bool          { return false }
-func (*nilResultTool) Execute(context.Context, json.RawMessage) (*tool.Result, error) {
-	return nil, nil
-}
-
-func buildMessagesWithTokens(tokens int) []llmwire.Message {
-	totalChars := tokens * 4
-	content := strings.Repeat("a", totalChars)
-	return []llmwire.Message{{Role: llmwire.RoleUser, Content: content}}
-}
-
-func TestLastAssistantState(t *testing.T) {
-	tests := []struct {
-		name     string
-		messages []llmwire.Message
-		want     *assistantState
-	}{
-		{
-			name:     "empty messages",
-			messages: nil,
-			want:     nil,
-		},
-		{
-			name: "last message is user",
-			messages: []llmwire.Message{
-				{Role: llmwire.RoleUser, Content: "hello"},
-			},
-			want: nil,
-		},
-		{
-			name: "last message is tool (all resolved)",
-			messages: []llmwire.Message{
-				{Role: llmwire.RoleUser, Content: "do stuff"},
-				{Role: llmwire.RoleAssistant, Content: "", ToolCalls: []llmwire.ToolCall{
-					{ID: "tc1", Name: "read", Arguments: []byte(`{}`)},
-				}},
-				{Role: llmwire.RoleTool, ToolCallID: "tc1", Content: "file content"},
-			},
-			want: nil,
-		},
-		{
-			name: "assistant with text only",
-			messages: []llmwire.Message{
-				{Role: llmwire.RoleUser, Content: "hello"},
-				{Role: llmwire.RoleAssistant, Content: "Here is my response"},
-			},
-			want: &assistantState{HasText: true, Text: "Here is my response"},
-		},
-		{
-			name: "assistant empty (no text no tools)",
-			messages: []llmwire.Message{
-				{Role: llmwire.RoleUser, Content: "hello"},
-				{Role: llmwire.RoleAssistant, Content: ""},
-			},
-			want: &assistantState{},
-		},
-		{
-			name: "assistant with all pending tools (crash before execution)",
-			messages: []llmwire.Message{
-				{Role: llmwire.RoleUser, Content: "do stuff"},
-				{Role: llmwire.RoleAssistant, Content: "Let me help", ToolCalls: []llmwire.ToolCall{
-					{ID: "tc1", Name: "read", Arguments: []byte(`{"path":"a.go"}`)},
-					{ID: "tc2", Name: "grep", Arguments: []byte(`{"pattern":"foo"}`)},
-				}},
-			},
-			want: &assistantState{
-				HasPendingTools: true,
-				PendingTools: []llmwire.ToolCall{
-					{ID: "tc1", Name: "read", Arguments: []byte(`{"path":"a.go"}`)},
-					{ID: "tc2", Name: "grep", Arguments: []byte(`{"pattern":"foo"}`)},
+			_, err := store.Enqueue(
+				t.Context(),
+				sessionstore.Input{SessionID: id, Source: sessionstore.InputSourceUser, Content: tc.input},
+			)
+			require.NoError(t, err)
+			record, err := store.GetSession(t.Context(), id)
+			require.NoError(t, err)
+			client := &loopScriptLLM{responses: tc.responses}
+			reg := tool.NewRegistry()
+			for _, tt := range tc.tools {
+				reg.Register(tt)
+			}
+			prompt := sessionprompt.NewBuilder("stable system prompt", "")
+			prompt.WorkDir = t.TempDir()
+			prompt.Todos = todo.New()
+			var notes []string
+			s, err := New(
+				t.Context(),
+				Input{
+					Record:         record,
+					Client:         client,
+					Loader:         loader.New(),
+					Registry:       reg,
+					Prompt:         prompt,
+					Store:          store,
+					Events:         noteEvents{notes: &notes},
+					OpeningContext: "project instructions",
+					OutputEnabled:  !tc.ownerless,
 				},
-				HasText: true,
-				Text:    "Let me help",
-			},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := lastAssistantState(tt.messages)
-			assert.Equal(t, tt.want, got)
+			)
+			require.NoError(t, err)
+			t.Cleanup(s.Close)
+			result, err := s.Run(t.Context())
+			if tc.wantError {
+				require.Error(t, err)
+			} else {
+				require.NoError(t, err)
+			}
+			assert.Equal(t, tc.calls, client.calls)
+			assert.Equal(t, tc.final, result.Final)
+			record, err = store.GetSession(t.Context(), id)
+			require.NoError(t, err)
+			assert.Equal(t, tc.status, record.Status)
+			pending, err := store.ListPending(t.Context(), id)
+			require.NoError(t, err)
+			assert.Empty(t, pending)
+			if tc.status == sessionstore.SessionStatusSuspended {
+				assert.True(t, result.Suspended)
+				assert.Equal(t, []PendingToolCall{{ID: "sleep-1", Name: tool.IDSleep}}, s.PendingExternalCalls())
+			}
+			if tc.final != "" {
+				assert.Equal(t, 1, countNotes(notes, tc.final), "candidate appears only after confirmation")
+				assert.Contains(t, notes, tc.final, "live observers receive the raw answer")
+				reloaded, err := New(
+					t.Context(),
+					Input{
+						Record:        record,
+						Client:        &loopScriptLLM{},
+						Loader:        loader.New(),
+						Registry:      reg,
+						Prompt:        prompt,
+						Store:         store,
+						Events:        noteEvents{notes: &notes},
+						OutputEnabled: !tc.ownerless,
+					},
+				)
+				require.NoError(t, err)
+				t.Cleanup(reloaded.Close)
+				_, err = reloaded.Run(t.Context())
+				require.NoError(t, err)
+				assert.Equal(t, 1, countNotes(notes, tc.final), "reconstruction does not publish historical output")
+			}
+			if tc.name == "unknown finish retains cost" || tc.name == "length retry retains rejected cost" {
+				_, _, cost, err := store.GetSessionTreeUsage(context.Background(), id)
+				require.NoError(t, err)
+				assert.InDelta(t, 0.25, cost, 0.000001)
+			}
 		})
 	}
 }
 
-func TestCountUniqueOutcomes(t *testing.T) {
-	window := []toolRecord{
-		{name: "read", argsHash: 1, resultHash: 100},
-		{name: "read", argsHash: 2, resultHash: 100},
-		{name: "grep", argsHash: 3, resultHash: 200},
-		{name: "grep", argsHash: 4, resultHash: 200},
-		{name: "edit", argsHash: 5, resultHash: 300},
-	}
+// TestBuildSessionStatus_LifetimeFromTreeOccupancyFromProjection verifies lifetime
+// comes from the DB tree-sum (survives compaction, keeps climbing) while occupancy
+// is the compaction trigger's own projection, denominated by the same window source.
+func TestBuildSessionStatus_LifetimeFromTreeOccupancyFromProjection(t *testing.T) {
+	mockLLM := &compactionMockLLM{contextWindow: 200000}
+	store := &statusStubStore{in: 500000, out: 50000, cost: 12.34, subagents: 2}
 
-	assert.Equal(t, 3, countUniqueOutcomes(window))
+	s := newCompactionTestSvc(mockLLM)
+	s.store = store
+	s.ms = newMessageStore(store, 1)
+	s.rootID = 1
+	s.model = "test-model"
+	setTestMessages(s, []llmwire.Message{
+		{Role: llmwire.RoleUser, Content: "task"},
+		{Role: llmwire.RoleAssistant, Content: "big turn"},
+	})
+	s.storeContextBaseline(150000, 2, s.modelGeneration())
+
+	st := s.buildSessionStatus(context.Background())
+
+	assert.Equal(t, 500000, st.LifetimeIn)
+	assert.Equal(t, 50000, st.LifetimeOut)
+	assert.InDelta(t, 12.34, st.LifetimeCost, 1e-9)
+	assert.Equal(t, 150000, st.ContextUsed, "occupancy is the measured baseline plus its (empty) tail")
+	assert.False(t, st.ContextIsEst, "a provider measurement backs it")
+	assert.Equal(t, 200000, st.ContextMax, "denominator is s.contextWindow(), not a literal")
+	assert.Equal(t, 2, st.SubagentCount)
+
+	// A new message after the measurement is counted as a len/4 delta on top.
+	require.NoError(t, appendTestUser(context.Background(), s.ms, strings.Repeat("x", 4000)))
+
+	grown := s.buildSessionStatus(context.Background())
+	assert.Equal(t, 151000, grown.ContextUsed, "baseline plus the tail estimate")
+	assert.False(t, grown.ContextIsEst)
 }
 
-// stubTool is a minimal tool implementation for integration tests.
-type stubTool struct {
-	id            string
-	result        string
-	err           error
-	parallelSafe  bool
-	resultIsError bool
+// After a compaction the baseline is gone, so /status falls back to a whole-
+// transcript estimate — marked as one, and never 0%.
+func TestBuildSessionStatus_AfterCompactionEstimatesAndIsNotZero(t *testing.T) {
+	mockLLM := &compactionMockLLM{contextWindow: 200000}
+
+	s := newCompactionTestSvc(mockLLM)
+	store := &statusStubStore{in: 600000, out: 50000, cost: 15.0}
+	s.store = store
+	s.ms = newMessageStore(store, 1)
+	s.rootID = 1
+	setTestMessages(s, []llmwire.Message{
+		{Role: llmwire.RoleUser, Content: "[CONTEXT SUMMARY - previous work condensed] " + strings.Repeat("b", 4000)},
+	})
+	s.resetContextBaseline()
+
+	st := s.buildSessionStatus(context.Background())
+
+	assert.True(t, st.ContextIsEst, "no measurement survives a compaction")
+	assert.Positive(t, st.ContextUsed, "0% right after a compaction would lie in the dangerous direction")
+	assert.Contains(t, renderStatus(st), "~", "an estimate is visibly marked")
 }
 
-func (s *stubTool) ParallelSafe() bool { return s.parallelSafe }
+func TestRenderStatus_BandsAndBar(t *testing.T) {
+	// Fresh session (no assistant turn) → 0%, green, empty bar.
+	fresh := renderStatus(sessionStatus{Model: "m", ContextMax: 200000})
+	assert.Contains(t, fresh, "🟢")
+	assert.Contains(t, fresh, "0%")
+	assert.Contains(t, fresh, "`░░░░░░░░░░`")
 
-type progressTrapBoundary struct {
-	*loopInputBoundary
-	calls int
+	// 90% → red + compacting soon; round(90/10)=9 filled cells.
+	red := renderStatus(sessionStatus{Model: "m", ContextUsed: 180000, ContextMax: 200000})
+	assert.Contains(t, red, "🔴")
+	assert.Contains(t, red, "compacting soon")
+	assert.Contains(t, red, "`█████████░`")
+	assert.Contains(t, red, "90%")
+
+	// 75% → yellow, no compacting-soon tail; round(75/10)=8 filled cells.
+	yellow := renderStatus(sessionStatus{Model: "m", ContextUsed: 150000, ContextMax: 200000})
+	assert.Contains(t, yellow, "🟡")
+	assert.NotContains(t, yellow, "compacting soon")
+	assert.Contains(t, yellow, "`████████░░`")
+
+	// Exactly 85% is the red cut (compactionFraction).
+	edge := renderStatus(sessionStatus{Model: "m", ContextUsed: 170000, ContextMax: 200000})
+	assert.Contains(t, edge, "🔴")
 }
 
-func (b *progressTrapBoundary) ProgressChange(context.Context) (string, bool, error) {
-	b.calls++
-
-	return "", false, fmt.Errorf("progress must stay root-only")
-}
-
-func (s *stubTool) ID() string                  { return s.id }
-func (s *stubTool) Description() string         { return "stub" }
-func (s *stubTool) Parameters() json.RawMessage { return json.RawMessage(`{}`) }
-func (s *stubTool) Execute(_ context.Context, _ json.RawMessage) (*tool.Result, error) {
-	if s.err != nil {
-		return nil, s.err
-	}
-
-	return &tool.Result{Output: s.result, IsError: s.resultIsError}, nil
-}
-
-func TestHandlePreviousResult_SubagentTextWithToolsSkipsProgress(t *testing.T) {
-	read := &countingTool{id: "read"}
-	agent := newTestAgent(read)
-	boundary := &progressTrapBoundary{loopInputBoundary: &loopInputBoundary{agent: agent}}
-	agent.boundary = boundary
-	agent.ms.setMessages([]llmwire.Message{
-		{Role: llmwire.RoleUser, Content: "inspect"},
-		{Role: llmwire.RoleAssistant, Content: "Inspecting files", ToolCalls: []llmwire.ToolCall{{
-			ID: "read-1", Name: "read", Arguments: []byte(`{}`),
-		}}},
+func TestRenderStatus_CostHeadlineAndTokenSuffixes(t *testing.T) {
+	out := renderStatus(sessionStatus{
+		Model: "m", LifetimeCost: 12.3456, LifetimeIn: 2_500_000, LifetimeOut: 40000, ContextMax: 200000,
 	})
 
-	done, err := stagedRunner(agent).handlePreviousResult(t.Context())
-	require.NoError(t, err)
-	assert.False(t, done)
-	assert.Zero(t, boundary.calls)
-	assert.Equal(t, int64(1), read.runs.Load())
-	messages := agent.ms.getMessages()
-	require.Len(t, messages, 3)
-	assert.Equal(t, llmwire.RoleTool, messages[2].Role)
-	assert.Equal(t, "read", messages[2].ToolName)
-}
-
-// newTestAgent creates a minimal svc with the given tools registered.
-func newTestAgent(tools ...tool.Tool) *svc {
-	reg := tool.NewRegistry()
-	for _, t := range tools {
-		reg.Register(t)
-	}
-	return &svc{
-		llmClient:    &mockLLMRunOnce{response: &llmwire.Response{Text: "ok"}},
-		ms:           newMessageStore(nil, 0, nil),
-		loopDetector: newLoopDetector(),
-		registry:     reg,
-		prompt:       newPromptBuilder("test", ""),
-	}
-}
-
-func TestExecuteToolCalls_WarnOnLowDiversity(t *testing.T) {
-	agent := newTestAgent(&stubTool{id: "edit", result: "old_string not found"})
-
-	tc := llmwire.ToolCall{Name: "edit", Arguments: []byte(`{"old":"a","new":"b"}`)}
-	for i := range loopDetectorConsecutiveWarn {
-		tc.ID = fmt.Sprintf("tc_%d", i)
-		require.NoError(t, executeToolCalls(context.Background(), agent, []llmwire.ToolCall{tc}))
-	}
-
-	found := false
-	for _, msg := range agent.ms.getMessages() {
-		if msg.Role == llmwire.RoleTool && strings.Contains(msg.Content, "[LOOP WARNING:") {
-			found = true
-			break
-		}
-	}
-	assert.True(t, found, "some tool result should contain [LOOP WARNING:")
-}
-
-func TestExecuteToolCalls_BlockAfterWarnIgnored(t *testing.T) {
-	agent := newTestAgent(&stubTool{id: "edit", result: "old_string not found"})
-
-	tc := llmwire.ToolCall{Name: "edit", Arguments: []byte(`{"old":"a","new":"b"}`)}
-
-	for i := range loopDetectorConsecutiveWarn {
-		tc.ID = fmt.Sprintf("tc_%d", i)
-		require.NoError(t, executeToolCalls(context.Background(), agent, []llmwire.ToolCall{tc}))
-	}
-	require.True(t, agent.loopDetector.warnActive)
-
-	tc.ID = "tc_block"
-	require.NoError(t, executeToolCalls(context.Background(), agent, []llmwire.ToolCall{tc}))
-
-	msgs := agent.ms.getMessages()
-	lastToolMsg := msgs[len(msgs)-1]
-	assert.Contains(t, lastToolMsg.Content, "[BLOCKED:", "should get block message after ignoring warn")
-}
-
-func TestExecuteToolCalls_NoWarningOnDiverseCalls(t *testing.T) {
-	tools := make([]tool.Tool, 0, 20)
-	for i := range 20 {
-		tools = append(tools, &stubTool{
-			id:     fmt.Sprintf("tool_%d", i),
-			result: fmt.Sprintf("result_%d", i),
-		})
-	}
-	agent := newTestAgent(tools...)
-
-	for i := range 20 {
-		tc := llmwire.ToolCall{
-			ID:        fmt.Sprintf("tc_%d", i),
-			Name:      fmt.Sprintf("tool_%d", i),
-			Arguments: fmt.Appendf(nil, `{"key":"%d"}`, i),
-		}
-		require.NoError(t, executeToolCalls(context.Background(), agent, []llmwire.ToolCall{tc}))
-	}
-
-	for _, msg := range agent.ms.getMessages() {
-		if msg.Role == llmwire.RoleTool {
-			assert.NotContains(t, msg.Content, "[LOOP WARNING:")
-			assert.NotContains(t, msg.Content, "[BLOCKED:")
-		}
-	}
-}
-
-func TestExecuteToolCalls_ParallelDedupInRound(t *testing.T) {
-	agent := newTestAgent(&stubTool{id: "read", result: "content"})
-
-	tcs := []llmwire.ToolCall{
-		{ID: "tc_1", Name: "read", Arguments: []byte(`{"path":"a.go"}`)},
-		{ID: "tc_2", Name: "read", Arguments: []byte(`{"path":"a.go"}`)},
-	}
-	require.NoError(t, executeToolCalls(context.Background(), agent, tcs))
-
-	assert.Len(t, agent.loopDetector.window, 1)
-}
-
-func TestExecuteToolCalls_RejectsSleepAlongsideTaskBeforeSideEffect(t *testing.T) {
-	taskTool := &countingTool{id: tool.IDTask}
-	sleepTool := &countingTool{id: tool.IDSleep}
-	agent := newTestAgent(taskTool, sleepTool)
-
-	require.NoError(t, executeToolCalls(t.Context(), agent, []llmwire.ToolCall{
-		{ID: "task-1", Name: tool.IDTask, Arguments: []byte(`{}`)},
-		{ID: "sleep-1", Name: tool.IDSleep, Arguments: []byte(`{"duration":"10s"}`)},
-	}))
-
-	assert.Equal(t, int64(1), taskTool.runs.Load())
-	assert.Zero(t, sleepTool.runs.Load(), "sleep must not stage a competing wake-up")
-	messages := agent.ms.getMessages()
-	require.Len(t, messages, 2)
-	assert.Contains(t, messages[1].Content, "subagent completion wakes the session automatically")
-}
-
-func TestExecuteToolCalls_RejectsSleepAlongsideSubagentFollowUpBeforeSideEffect(t *testing.T) {
-	followUpTool := &countingTool{id: tool.IDSendToSubagent}
-	sleepTool := &countingTool{id: tool.IDSleep}
-	agent := newTestAgent(followUpTool, sleepTool)
-
-	require.NoError(t, executeToolCalls(t.Context(), agent, []llmwire.ToolCall{
-		{ID: "follow-up-1", Name: tool.IDSendToSubagent, Arguments: []byte(`{"id":42,"message":"more"}`)},
-		{ID: "sleep-1", Name: tool.IDSleep, Arguments: []byte(`{"duration":"10s"}`)},
-	}))
-
-	assert.Equal(t, int64(1), followUpTool.runs.Load())
-	assert.Zero(t, sleepTool.runs.Load(), "sleep must not race durable follow-up acceptance")
-	messages := agent.ms.getMessages()
-	require.Len(t, messages, 2)
-	assert.Contains(t, messages[1].Content, "subagent completion wakes the session automatically")
-}
-
-func TestExecuteToolCalls_RejectedSleepSkipsLaterStages(t *testing.T) {
-	followUpTool := &countingTool{id: tool.IDSendToSubagent}
-	sleepTool := &countingTool{id: tool.IDSleep}
-	readTool := &countingTool{id: "read"}
-	agent := newTestAgent(followUpTool, sleepTool, readTool)
-
-	require.NoError(t, executeToolCalls(t.Context(), agent, []llmwire.ToolCall{
-		{ID: "follow-up-1", Name: tool.IDSendToSubagent, Arguments: []byte(`{"id":42,"message":"more"}`)},
-		{ID: "sleep-1", Name: tool.IDSleep, Arguments: []byte(`{"duration":"10s"}`)},
-		{ID: "read-1", Name: "read", Arguments: []byte(`{"path":"next.go"}`)},
-	}))
-
-	// Plan decision: only sleep is invalid next to send_to_subagent — earlier
-	// stages run, the sleep fails as its own barrier stage, later stages skip.
-	assert.Equal(t, int64(1), followUpTool.runs.Load())
-	assert.Zero(t, sleepTool.runs.Load())
-	assert.Zero(t, readTool.runs.Load(),
-		"the failed sleep barrier must stop the read stage before any effect")
-
-	messages := agent.ms.getMessages()
-	require.Len(t, messages, 3)
-	assert.Equal(t, "ran", messages[0].Content)
-	assert.Contains(t, messages[1].Content, "subagent completion wakes the session automatically")
-	assert.True(t, messages[1].ToolError, "the rejected sleep persists as a typed failure")
-	assert.Contains(t, messages[2].Content, toolexec.ErrSkipped.Error())
-	assert.True(t, messages[2].ToolError, "the skipped call persists as an explicit error result")
-}
-
-func TestExecuteToolCalls_ForceTextOnly(t *testing.T) {
-	agent := newTestAgent(&stubTool{id: "edit", result: "error"})
-
-	tc := llmwire.ToolCall{Name: "edit", Arguments: []byte(`{}`)}
-
-	for i := range loopDetectorMinFill {
-		tc.ID = fmt.Sprintf("tc_%d", i)
-		require.NoError(t, executeToolCalls(context.Background(), agent, []llmwire.ToolCall{tc}))
-	}
-	for i := range loopDetectorMaxBlocks + 2 {
-		tc.ID = fmt.Sprintf("tc_esc_%d", i)
-		require.NoError(t, executeToolCalls(context.Background(), agent, []llmwire.ToolCall{tc}))
-	}
-
-	assert.True(t, agent.loopDetector.forceTextOnly)
-
-	agent.loopDetector.clearForceTextOnly()
-	assert.False(t, agent.loopDetector.forceTextOnly)
-	assert.False(t, agent.loopDetector.blocked)
+	assert.Contains(t, out, "**$12.35**", "cost is bold, 2 decimals")
+	assert.Contains(t, out, "all-in")
+	assert.Contains(t, out, "2.5M in")
+	assert.Contains(t, out, "40.0k out")
 }

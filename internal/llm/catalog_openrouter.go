@@ -24,24 +24,7 @@ const (
 	defaultOpenRouterURL = "https://openrouter.ai/api/v1/models"
 )
 
-// openRouterSource derives the models endpoint from the provider's base_url, so a
-// self-hosted gateway is read from its own catalog rather than the public one.
-func openRouterSource(baseURL string) catalog.Source {
-	url := defaultOpenRouterURL
-	if baseURL != "" {
-		url = strings.TrimRight(baseURL, "/") + "/models"
-	}
-
-	return catalog.Source{
-		URL:       url,
-		CacheName: catalog.CacheName("openrouter", url),
-		Validate: func(body []byte) error {
-			_, err := parseOpenRouter(body)
-
-			return err
-		},
-	}
-}
+var _ catalog.Validator = openRouterValidator{}
 
 type (
 	openRouterResponse struct {
@@ -84,6 +67,28 @@ type (
 		InputCacheWrite string `json:"input_cache_write"`
 	}
 )
+
+type openRouterValidator struct{}
+
+func (openRouterValidator) Validate(body []byte) error {
+	_, err := parseOpenRouter(body)
+	return err
+}
+
+// openRouterSource derives the models endpoint from the provider's base_url, so a
+// self-hosted gateway is read from its own catalog rather than the public one.
+func openRouterSource(baseURL string) catalog.Source {
+	url := defaultOpenRouterURL
+	if baseURL != "" {
+		url = strings.TrimRight(baseURL, "/") + "/models"
+	}
+
+	return catalog.Source{
+		URL:       url,
+		CacheName: catalog.CacheName("openrouter", url),
+		Validator: openRouterValidator{},
+	}
+}
 
 // parseOpenRouter converts the /api/v1/models payload into id → spec.
 func parseOpenRouter(body []byte) (map[string]catalog.ModelSpec, error) {

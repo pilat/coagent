@@ -42,9 +42,7 @@ func TestWaitingOutputChainRetainsRepeatedSet(t *testing.T) {
 	}
 
 	assert.Len(t, map[int64]struct{}{ids[0]: {}, ids[1]: {}, ids[2]: {}}, 3)
-	waiting, ok := store.(WaitingOutputStore)
-	require.True(t, ok)
-	latest, err := waiting.LatestWaitingOutput(ctx, record.ID)
+	latest, err := store.LatestWaitingOutput(ctx, record.ID)
 	require.NoError(t, err)
 	require.NotNil(t, latest)
 	assert.Equal(t, ids[2], latest.ID)

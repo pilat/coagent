@@ -17,18 +17,18 @@ func TestProcessDeliverySurvivesCompactionConcurrentInputAndRetry(t *testing.T) 
 	session, err := store.CreateSession(ctx, projectID, "m", "", nil)
 	require.NoError(t, err)
 
-	oldUser, err := store.InsertMessage(ctx, session.ID, &transcript.Message{
+	oldUser, err := appendMessage(ctx, store, session.ID, &transcript.Message{
 		Role: llmwire.RoleUser, Content: "old task",
 	})
 	require.NoError(t, err)
-	oldAnswer, err := store.InsertMessage(ctx, session.ID, &transcript.Message{
+	oldAnswer, err := appendMessage(ctx, store, session.ID, &transcript.Message{
 		Role: llmwire.RoleAssistant, Content: "old answer",
 	})
 	require.NoError(t, err)
 
 	assistant := &transcript.Message{
 		Role: llmwire.RoleAssistant,
-		ToolCalls: []byte(`[{"id":"process-event-1","name":"process_event","arguments":` +
+		ToolCalls: []byte(`[{"ID":"process-event-1","Name":"process_event","Arguments":` +
 			`{"process_id":"bgp_1","origin_session_id":1,"event":"completed"}}]`),
 	}
 	result := &transcript.Message{
@@ -41,23 +41,26 @@ func TestProcessDeliverySurvivesCompactionConcurrentInputAndRetry(t *testing.T) 
 
 	go func() {
 		<-start
-		_, _, inserted, insertErr := store.InsertInternalToolNotificationPairOnce(
-			ctx, session.ID, "bgp_1", "process-fingerprint", assistant, result,
+		_, _, inserted, insertErr := internalTurn(ctx, store,
+			session.ID,
+			"bgp_1",
+			"process-fingerprint",
+			assistant,
+			result,
 		)
 		insertedResult <- inserted
 		errs <- insertErr
 	}()
 	go func() {
 		<-start
-		_, insertErr := store.InsertMessage(ctx, session.ID, &transcript.Message{
+		_, insertErr := appendMessage(ctx, store, session.ID, &transcript.Message{
 			Role: llmwire.RoleUser, Content: "concurrent user input",
 		})
 		errs <- insertErr
 	}()
 	go func() {
 		<-start
-		_, compactErr := store.ReplaceCompactedMessages(
-			ctx,
+		_, compactErr := replaceTranscript(ctx, store,
 			session.ID,
 			[]int64{oldUser, oldAnswer},
 			[]CompactionEntry{
@@ -74,9 +77,7 @@ func TestProcessDeliverySurvivesCompactionConcurrentInputAndRetry(t *testing.T) 
 	}
 	require.True(t, <-insertedResult)
 
-	_, _, inserted, err := store.InsertInternalToolNotificationPairOnce(
-		ctx, session.ID, "bgp_1", "process-fingerprint", assistant, result,
-	)
+	_, _, inserted, err := internalTurn(ctx, store, session.ID, "bgp_1", "process-fingerprint", assistant, result)
 	require.NoError(t, err)
 	assert.False(t, inserted)
 

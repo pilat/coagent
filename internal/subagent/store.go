@@ -5,7 +5,8 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"time"
+
+	"github.com/pilat/coagent/internal/sessionstore"
 )
 
 const subagentLinkColumns = `parent_id, child_id, task_call_id, blocking, depth, state, delivered_at, delivered_msg_id, delivered_input_id, created_at, result, outcome, activation_seq`
@@ -17,7 +18,8 @@ const subagentLinkColumnsSL = `sl.parent_id, sl.child_id, sl.task_call_id, sl.bl
 var _ Store = (*store)(nil)
 
 type store struct {
-	db *sql.DB
+	db       *sql.DB
+	sessions *sessionstore.Store
 }
 
 // rowScanner is satisfied by both *sql.Row and *sql.Rows.
@@ -25,40 +27,8 @@ type rowScanner interface {
 	Scan(dest ...any) error
 }
 
-func NewStore(db *sql.DB) Store {
-	return &store{db: db}
-}
-
-func (s *store) InsertSubagentLink(ctx context.Context, link Link) error {
-	if link.CreatedAt == 0 {
-		link.CreatedAt = time.Now().UTC().Unix()
-	}
-
-	if link.State == "" {
-		link.State = StateSpawned
-	}
-
-	if !link.State.valid() {
-		return fmt.Errorf("insert subagent link: invalid state %q", link.State)
-	}
-
-	_, err := s.db.ExecContext(
-		ctx,
-		`INSERT INTO subagent_links (parent_id, child_id, task_call_id, blocking, depth, state, created_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		link.ParentID,
-		link.ChildID,
-		link.TaskCallID,
-		link.Blocking,
-		link.Depth,
-		link.State,
-		link.CreatedAt,
-	)
-	if err != nil {
-		return fmt.Errorf("insert subagent link: %w", err)
-	}
-
-	return nil
+func NewStore(db *sql.DB, sessions *sessionstore.Store) Store {
+	return &store{db: db, sessions: sessions}
 }
 
 func (s *store) GetLink(ctx context.Context, childID int64) (*Link, error) {
@@ -134,71 +104,6 @@ func (s *store) ListUndeliveredParentLinks(ctx context.Context) ([]Link, error) 
 	defer rows.Close()
 
 	return scanLinkRows(rows)
-}
-
-// MarkLinkTerminal sets the link state, result, and outcome. result/outcome
-// overwrite unconditionally (so a re-engaged child's second terminalization
-// replaces the prior run's values). The caller must have committed the child's
-// final message first (call-ordering guarantee, Appendix G7).
-func (s *store) MarkLinkTerminal(
-	ctx context.Context,
-	childID int64,
-	state State,
-	result string,
-	outcome Outcome,
-) error {
-	if !state.valid() || !outcome.valid() || !validTerminalLink(state, outcome) {
-		return fmt.Errorf("invalid terminal link state/outcome %q/%q", state, outcome)
-	}
-
-	resultExec, err := s.db.ExecContext(
-		ctx,
-		`UPDATE subagent_links SET state = ?, result = ?, outcome = ? WHERE child_id = ?`,
-		state, result, outcome, childID,
-	)
-	if err != nil {
-		return fmt.Errorf("update link state: %w", err)
-	}
-
-	rows, err := resultExec.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("link rows affected: %w", err)
-	}
-
-	if rows == 0 {
-		return fmt.Errorf("subagent link for child %d not found", childID)
-	}
-
-	return nil
-}
-
-// ResetLinkRunning re-arms a link for a follow-up message: state back to running,
-// delivery marker cleared so a new completion is owed. result/outcome are left
-// stale until the next MarkLinkTerminal overwrites them; childSnapshot guards
-// reads with the terminal check so the stale value is never surfaced mid-rerun.
-func (s *store) ResetLinkRunning(ctx context.Context, childID int64) error {
-	result, err := s.db.ExecContext(
-		ctx,
-		`UPDATE subagent_links
-		 SET state = ?, blocking = 0, activation_seq = activation_seq + 1,
-		     delivered_at = NULL, delivered_msg_id = NULL, delivered_input_id = NULL
-		 WHERE child_id = ?`,
-		StateRunning, childID,
-	)
-	if err != nil {
-		return fmt.Errorf("reset link running: %w", err)
-	}
-
-	rows, err := result.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("link rows affected: %w", err)
-	}
-
-	if rows == 0 {
-		return fmt.Errorf("subagent link for child %d not found", childID)
-	}
-
-	return nil
 }
 
 func (s *store) MarkLinkStopped(ctx context.Context, childID int64) error {

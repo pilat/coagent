@@ -2,6 +2,7 @@ package sessionstore
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"testing"
 
@@ -51,7 +52,7 @@ func TestMarkSessionKilledMarksTheTerminalStatus(t *testing.T) {
 	record, err := store.CreateSession(ctx, projectID, "model", "", nil)
 	require.NoError(t, err)
 
-	require.NoError(t, store.MarkSessionKilled(ctx, record.ID))
+	require.NoError(t, store.WithTx(ctx, func(tx *sql.Tx) error { return MarkSessionKilledTx(ctx, tx, record.ID) }))
 	killed, err := store.GetSession(ctx, record.ID)
 	require.NoError(t, err)
 	assert.Equal(t, SessionStatusKilled, killed.Status)
@@ -83,14 +84,14 @@ func TestReasoningRawSurvivesReload(t *testing.T) {
 
 	envelope := json.RawMessage(`{"model":"claude-opus-5","payload":[{"type":"thinking","signature":"sig"}]}`)
 
-	_, err = store.InsertMessage(ctx, rec.ID, &transcript.Message{
+	_, err = appendMessage(ctx, store, rec.ID, &transcript.Message{
 		Role:         "assistant",
 		Content:      "thinking out loud",
 		ReasoningRaw: envelope,
 	})
 	require.NoError(t, err)
 
-	_, err = store.InsertMessage(ctx, rec.ID, &transcript.Message{Role: "user", Content: "next"})
+	_, err = appendMessage(ctx, store, rec.ID, &transcript.Message{Role: "user", Content: "next"})
 	require.NoError(t, err)
 
 	loaded, err := store.LoadActiveMessages(ctx, rec.ID)
@@ -110,7 +111,7 @@ func TestAttachmentsSurviveReload(t *testing.T) {
 
 	refs := json.RawMessage(`[{"path":"/tmp/coagent-a1b2.png","mime":"image/png","size":1234}]`)
 
-	_, err = store.InsertMessage(ctx, rec.ID, &transcript.Message{
+	_, err = appendMessage(ctx, store, rec.ID, &transcript.Message{
 		Role:        llmwire.RoleTool,
 		Content:     "[/tmp/coagent-a1b2.png]",
 		ToolCallID:  "call-1",
@@ -118,7 +119,7 @@ func TestAttachmentsSurviveReload(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	_, err = store.InsertMessage(ctx, rec.ID, &transcript.Message{Role: llmwire.RoleUser, Content: "next"})
+	_, err = appendMessage(ctx, store, rec.ID, &transcript.Message{Role: llmwire.RoleUser, Content: "next"})
 	require.NoError(t, err)
 
 	loaded, err := store.LoadActiveMessages(ctx, rec.ID)

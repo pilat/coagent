@@ -8,10 +8,10 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/pilat/coagent/internal/daemon"
+	"github.com/pilat/coagent/internal/sessionstore"
 )
 
-func testProject(t *testing.T, ds daemon.Store, workDir string) int64 {
+func testProject(t *testing.T, ds *sessionstore.Store, workDir string) int64 {
 	t.Helper()
 	pid, err := ds.GetOrCreateProject(context.Background(), workDir)
 	require.NoError(t, err)

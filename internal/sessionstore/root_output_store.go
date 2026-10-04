@@ -10,11 +10,11 @@ import (
 	"time"
 )
 
-func (s *store) CreateManagerRoot(
+func (s *Store) CreateManagerRoot(
 	ctx context.Context,
 	create ManagerRootCreate,
 ) (*SessionRecord, *OutputCommit, error) {
-	owner, err := managerOwner(create.Attributes)
+	err := requireManagerOwner(create.Attributes)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -26,41 +26,46 @@ func (s *store) CreateManagerRoot(
 	if create.ReasoningLevel == "" {
 		create.ReasoningLevel = defaultReasoningLevel
 	}
+	var record *SessionRecord
+	var output *OutputCommit
+	err = s.WithTx(ctx, func(tx *sql.Tx) error {
+		now := time.Now().UTC()
+		var err error
 
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return nil, nil, fmt.Errorf("begin manager root: %w", err)
-	}
-	defer func() { _ = tx.Rollback() }()
-
-	now := time.Now().UTC()
-
-	record, err := insertManagerRoot(ctx, tx, create, now)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	commit, err := insertLifecycleOutput(ctx, tx, record.ID, OutputSessionOpened, "", owner,
-		map[string]any{outputAttributeName: create.Name, outputAttributeWorkDir: create.WorkDir},
-		fmt.Sprintf("session:%d:opened", record.ID), now)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	if create.Prompt != "" {
-		if inputErr := insertManagerInput(ctx, tx, record.ID, create.Prompt, owner, now); inputErr != nil {
-			return nil, nil, inputErr
+		record, err = insertManagerRoot(ctx, tx, create, now)
+		if err != nil {
+			return err
 		}
-	}
 
-	if err := tx.Commit(); err != nil {
-		return nil, nil, fmt.Errorf("commit manager root: %w", err)
-	}
+		output, err = insertLifecycleOutput(
+			ctx,
+			tx,
+			record.ID,
+			OutputSessionOpened,
+			"",
 
-	return record, commit, nil
+			map[string]any{
+				outputAttributeName:    create.Name,
+				outputAttributeWorkDir: create.WorkDir,
+			},
+			fmt.Sprintf("session:%d:opened", record.ID),
+			now,
+		)
+		if err != nil {
+			return err
+		}
+
+		if create.Prompt != "" {
+			_, err = EnqueueTx(ctx, tx, Input{SessionID: record.ID, Source: InputSourceUser, Content: create.Prompt})
+		}
+
+		return err
+	})
+
+	return record, output, err
 }
 
-func (s *store) ReplaceManagerRoot(
+func (s *Store) ReplaceManagerRoot(
 	ctx context.Context,
 	oldSessionID int64,
 	name, workDir string,
@@ -68,7 +73,7 @@ func (s *store) ReplaceManagerRoot(
 	return s.replaceManagerRoot(ctx, oldSessionID, 0, name, workDir)
 }
 
-func (s *store) ReplaceManagerRootForInput(
+func (s *Store) ReplaceManagerRootForInput(
 	ctx context.Context,
 	oldSessionID, inputID int64,
 	name, workDir string,
@@ -81,7 +86,7 @@ func (s *store) ReplaceManagerRootForInput(
 }
 
 //nolint:funlen // Replacement preserves a single transaction across old root, new root, and lifecycle output.
-func (s *store) replaceManagerRoot(
+func (s *Store) replaceManagerRoot(
 	ctx context.Context,
 	oldSessionID, inputID int64,
 	name, workDir string,
@@ -104,7 +109,7 @@ func (s *store) replaceManagerRoot(
 		return nil, nil, fmt.Errorf("load replacement root: %w", err)
 	}
 
-	owner, err := managerOwner(old.Attributes)
+	err = requireManagerOwner(old.Attributes)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -147,14 +152,14 @@ func (s *store) replaceManagerRoot(
 		outputAttributeWorkDir: workDir,
 	}
 
-	commit, err := insertLifecycleOutput(ctx, tx, newRecord.ID, OutputSessionReplaced, "", owner, attrs,
+	commit, err := insertLifecycleOutput(ctx, tx, newRecord.ID, OutputSessionReplaced, "", attrs,
 		fmt.Sprintf("session:%d:replaced:%d", oldSessionID, newRecord.ID), now)
 	if err != nil {
 		return nil, nil, err
 	}
 
 	if inputID > 0 {
-		if err := insertClearNotice(ctx, tx, newRecord.ID, inputID, owner, now); err != nil {
+		if err := insertClearNotice(ctx, tx, newRecord.ID, inputID, now); err != nil {
 			return nil, nil, err
 		}
 	}
@@ -177,37 +182,22 @@ func handleReplacementInput(ctx context.Context, tx *sql.Tx, inputID, sessionID 
 	return requireOnePendingResolution(ctx, tx, result, inputID)
 }
 
-func insertClearNotice(ctx context.Context, tx *sql.Tx, sessionID, inputID int64, owner string, now time.Time) error {
-	attributes, err := stampMessageOutputAttributes(ctx, tx, sessionID, owner, nil)
-	if err != nil {
-		return err
-	}
+func insertClearNotice(ctx context.Context, tx *sql.Tx, sessionID, inputID int64, now time.Time) error {
+	_, err := insertOutputTx(ctx, tx, OutputDraft{
+		SessionID: sessionID, Type: OutputMessagePersistent, Content: "Session cleared.",
+		SourceKey: fmt.Sprintf("input:%d:clear:result", inputID), ReleasesInput: true, CreatedAt: now,
+	}, CommitLifecycle)
 
-	attrs, err := json.Marshal(attributes)
-	if err != nil {
-		return fmt.Errorf("marshal clear output attributes: %w", err)
-	}
+	return err
+}
 
-	content := "Session cleared."
-	key := fmt.Sprintf("input:%d:clear:result", inputID)
-
-	fingerprint := outputFingerprintWithRelease(OutputMessagePersistent, content, sessionID, nil, true)
-	if _, err := tx.ExecContext(ctx, `
-		INSERT INTO session_outbox (session_id, type, content, attributes, source_key, fingerprint, created_at, releases_input)
-		VALUES (?, 'message_persistent', ?, ?, ?, ?, ?, 1)`, sessionID, content, string(attrs), key, fingerprint, now); err != nil {
-		return fmt.Errorf("insert clear output: %w", err)
+func requireManagerOwner(attrs map[string]any) error {
+	owner, _ := attrs[managerIDAttribute].(string)
+	if owner == "" {
+		return ErrOutputOwner
 	}
 
 	return nil
-}
-
-func managerOwner(attrs map[string]any) (string, error) {
-	owner, _ := attrs[managerIDAttribute].(string)
-	if owner == "" {
-		return "", ErrOutputOwner
-	}
-
-	return owner, nil
 }
 
 func insertManagerRoot(
@@ -248,96 +238,18 @@ func insertManagerRoot(
 	}, nil
 }
 
-func insertManagerInput(
-	ctx context.Context,
-	tx *sql.Tx,
-	sessionID int64,
-	prompt, owner string,
-	now time.Time,
-) error {
-	attrs, err := json.Marshal(map[string]any{managerIDAttribute: owner})
-	if err != nil {
-		return fmt.Errorf("marshal manager input attributes: %w", err)
-	}
-
-	_, err = tx.ExecContext(ctx, `
-		INSERT INTO session_inbox (session_id, source, raw_content, attributes, received_at)
-		VALUES (?, 'user', ?, ?, ?)`, sessionID, prompt, string(attrs), now)
-	if err != nil {
-		return fmt.Errorf("insert manager root input: %w", err)
-	}
-
-	return nil
-}
-
-func insertMessageOutput(
-	ctx context.Context,
-	tx *sql.Tx,
-	sessionID int64,
-	owner, content, sourceKey string,
-	now time.Time,
-	releasesInput bool,
-) (*OutputCommit, error) {
-	attributes, err := stampMessageOutputAttributes(ctx, tx, sessionID, owner, nil)
-	if err != nil {
-		return nil, err
-	}
-
-	encoded, err := json.Marshal(attributes)
-	if err != nil {
-		return nil, fmt.Errorf("marshal message output attributes: %w", err)
-	}
-
-	fingerprint := outputFingerprintWithRelease(
-		OutputMessagePersistent, content, sessionID, nil, releasesInput,
-	)
-
-	result, err := tx.ExecContext(ctx, `INSERT INTO session_outbox
-		(session_id, type, content, attributes, source_key, fingerprint, created_at, releases_input)
-		VALUES (?, 'message_persistent', ?, ?, ?, ?, ?, ?)`,
-		sessionID, content, string(encoded), sourceKey, fingerprint, now, releasesInput)
-	if err != nil {
-		return nil, fmt.Errorf("insert message output: %w", err)
-	}
-
-	id, err := result.LastInsertId()
-	if err != nil {
-		return nil, fmt.Errorf("message output id: %w", err)
-	}
-
-	return &OutputCommit{OutputID: id, OwnerID: owner}, nil
-}
-
 func insertLifecycleOutput(
 	ctx context.Context,
 	tx *sql.Tx,
 	sessionID int64,
 	kind OutputType,
-	content, owner string,
+	content string,
 	attrs map[string]any,
 	key string,
 	now time.Time,
 ) (*OutputCommit, error) {
-	fingerprint := outputFingerprint(kind, content, sessionID, attrs)
-	encodedAttrs := cloneAttributes(attrs)
-	encodedAttrs[managerIDAttribute] = owner
-
-	encoded, err := json.Marshal(encodedAttrs)
-	if err != nil {
-		return nil, fmt.Errorf("marshal lifecycle output attributes: %w", err)
-	}
-
-	result, err := tx.ExecContext(ctx, `
-		INSERT INTO session_outbox (session_id, type, content, attributes, source_key, fingerprint, created_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?)`, sessionID, kind, content, string(encoded), key, fingerprint, now)
-	if err != nil {
-		return nil, fmt.Errorf("insert lifecycle output: %w", err)
-	}
-
-	id, err := result.LastInsertId()
-	if err != nil {
-		return nil, fmt.Errorf("lifecycle output id: %w", err)
-	}
-
-	return &OutputCommit{OutputID: id, OwnerID: owner}, nil
+	return insertOutputTx(ctx, tx, OutputDraft{
+		SessionID: sessionID, Type: kind, Content: content, Attributes: attrs,
+		SourceKey: key, CreatedAt: now,
+	}, CommitLifecycle)
 }

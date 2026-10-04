@@ -11,11 +11,18 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/pilat/coagent/internal/sessionevent"
+	"github.com/pilat/coagent/internal/sessionstore"
 )
 
 type cronAckFailStore struct {
 	Store
-	due *Schedule
+	due    *Schedule
+	sender *idempotentScheduleSender
+}
+
+func (s *cronAckFailStore) Enqueue(ctx context.Context, in sessionstore.Input) (*sessionstore.Enqueued, error) {
+	applied, err := s.sender.DeliverScheduleTick(ctx, in.SessionID, in.DeliveryKey, in.Content)
+	return &sessionstore.Enqueued{Applied: applied}, err
 }
 
 func (s *cronAckFailStore) ListDueCronSchedules(_ context.Context, _ time.Time) ([]*Schedule, error) {
@@ -74,6 +81,7 @@ func TestExecutor_CronAckRetryKeepsCanonicalIdentityAndPayload(t *testing.T) {
 		id: 11, sessionID: 3, cronExpr: "* * * * *", inputMessage: "canonical retry",
 	}}
 	sender := &idempotentScheduleSender{payloadByID: make(map[string]string)}
+	store.sender = sender
 	executor := NewExecutor(store, sender).(*executor)
 
 	require.NoError(t, executor.fireCronSchedules(context.Background(), firstTick, zap.NewNop()))

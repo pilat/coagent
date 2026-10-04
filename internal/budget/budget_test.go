@@ -1,4 +1,4 @@
-package budget
+package budget_test
 
 import (
 	"context"
@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/pilat/coagent/internal/budget"
 	"github.com/pilat/coagent/internal/migrate"
 	"github.com/pilat/coagent/internal/sessionstore"
 	"github.com/pilat/coagent/internal/tool"
@@ -23,8 +24,8 @@ import (
 type budgetFixture struct {
 	t      *testing.T
 	db     *sql.DB
-	store  sessionstore.Store
-	svc    Service
+	store  *sessionstore.Store
+	svc    budget.Service
 	rootID int64
 	input  *sessionstore.InboxInput
 	grants int
@@ -49,20 +50,38 @@ func newBudgetFixture(ctx context.Context, t *testing.T) *budgetFixture {
 	require.NoError(t, err)
 	input := fGrant(ctx, t, store, root.ID)
 
-	return &budgetFixture{t: t, db: db, store: store, svc: New(store), rootID: root.ID, input: input}
+	return &budgetFixture{t: t, db: db, store: store, svc: budget.New(store), rootID: root.ID, input: input}
 }
 
 // fGrant enqueues one /budget user input and promotes it with a pending grant.
-func fGrant(ctx context.Context, t *testing.T, store sessionstore.Store, rootID int64) *sessionstore.InboxInput {
+func fGrant(ctx context.Context, t *testing.T, store *sessionstore.Store, rootID int64) *sessionstore.InboxInput {
 	t.Helper()
 
-	input, err := store.EnqueueInput(ctx, rootID, sessionstore.InputSourceUser, "/budget five dollars")
+	input, err := store.Enqueue(
+		ctx,
+		sessionstore.Input{SessionID: rootID, Source: sessionstore.InputSourceUser, Content: "/budget five dollars"},
+	)
 	require.NoError(t, err)
-	_, _, err = store.PromoteInputWithActivation(ctx, input.ID, "/budget five dollars\n\nactivate",
-		sessionstore.ActivationDraft{ToolID: ToolID, Command: "/budget"})
+	_, err = store.Commit(ctx, sessionstore.Commit{
+		SessionID: rootID,
+		Accept: []sessionstore.Accept{
+			{
+				InputID: input.Input.ID,
+				State:   sessionstore.InputStateAccepted,
+				Content: "/budget five dollars\n\nactivate",
+				LinkRef: -1,
+			},
+		},
+		Activation: &sessionstore.ActivationChange{
+			InputID: input.Input.ID,
+			State:   sessionstore.ActivationPending,
+			ToolID:  budget.ToolID,
+			Command: "/budget",
+		},
+	})
 	require.NoError(t, err)
 
-	return input
+	return input.Input
 }
 
 // seedCost writes one message row carrying cost, so a later arm captures a
@@ -88,25 +107,21 @@ func (f *budgetFixture) checkpointContent(ctx context.Context, generation int64)
 	return content
 }
 
-func (f *budgetFixture) grant() Grant {
-	return Grant{
-		RootID: f.rootID, InputID: f.input.ID, ToolID: ToolID,
+func (f *budgetFixture) grant() budget.Grant {
+	return budget.Grant{
+		RootID: f.rootID, InputID: f.input.ID, ToolID: budget.ToolID,
 		Command: "/budget", ToolCallID: "call-budget-1",
 	}
 }
 
 // newGrant creates a fresh user turn with its own pending grant.
-func (f *budgetFixture) newGrant(ctx context.Context) Grant {
+func (f *budgetFixture) newGrant(ctx context.Context) budget.Grant {
 	f.grants++
 
-	input, err := f.store.EnqueueInput(ctx, f.rootID, sessionstore.InputSourceUser, "/budget more")
-	require.NoError(f.t, err)
-	_, _, err = f.store.PromoteInputWithActivation(ctx, input.ID, "/budget more\n\nactivate",
-		sessionstore.ActivationDraft{ToolID: ToolID, Command: "/budget"})
-	require.NoError(f.t, err)
+	input := fGrant(ctx, f.t, f.store, f.rootID)
 
-	return Grant{
-		RootID: f.rootID, InputID: input.ID, ToolID: ToolID,
+	return budget.Grant{
+		RootID: f.rootID, InputID: input.ID, ToolID: budget.ToolID,
 		Command: "/budget", ToolCallID: "call-budget-" + strconv.Itoa(f.grants+1),
 	}
 }
@@ -121,38 +136,38 @@ func TestBudgetServiceSetClearAndRearm(t *testing.T) {
 	f := newBudgetFixture(ctx, t)
 
 	cost := 5.0
-	armed, receipt, err := f.svc.Set(ctx, f.grant(), &cost, nil)
+	armed, receipt, err := f.set(ctx, f.grant(), &cost, nil)
 	require.NoError(t, err)
-	assert.Equal(t, sessionstore.BudgetArmed, armed.State)
+	assert.Equal(t, budget.Armed, armed.State)
 	assert.Equal(t, int64(1), armed.Generation)
 	assert.Equal(t, "Budget armed: $5.000000 additional persisted cost", receipt)
 
 	// A duplicate arm with the same consumed grant is the crash-replay
 	// contract: the same generation and receipt, no second mutation.
-	replayed, replayReceipt, err := f.svc.Set(ctx, f.grant(), &cost, nil)
+	replayed, replayReceipt, err := f.set(ctx, f.grant(), &cost, nil)
 	require.NoError(t, err)
 	assert.Equal(t, armed.Generation, replayed.Generation)
 	assert.Equal(t, receipt, replayReceipt)
 
-	rearmed, receipt2, err := f.svc.Set(ctx, f.newGrant(ctx), nil, new(2*time.Hour))
+	rearmed, receipt2, err := f.set(ctx, f.newGrant(ctx), nil, new(2*time.Hour))
 	require.NoError(t, err)
 	assert.Equal(t, int64(2), rearmed.Generation, "a re-arm bumps the generation")
-	assert.Equal(t, sessionstore.BudgetArmed, rearmed.State)
+	assert.Equal(t, budget.Armed, rearmed.State)
 	assert.Nil(t, rearmed.CostLimitUSD, "a re-arm replaces the whole limit")
 	assert.Equal(t, "Budget armed: 2h0m0s wall time", receipt2)
 
-	both, bothReceipt, err := f.svc.Set(ctx, f.newGrant(ctx), &cost, new(2*time.Hour))
+	both, bothReceipt, err := f.set(ctx, f.newGrant(ctx), &cost, new(2*time.Hour))
 	require.NoError(t, err)
 	assert.Equal(t, int64(3), both.Generation)
 	assert.Equal(t, "Budget armed: $5.000000 additional persisted cost or 2h0m0s wall time", bothReceipt)
 
-	cleared, clearReceipt, err := f.svc.Clear(ctx, f.newGrant(ctx))
+	cleared, clearReceipt, err := f.clear(ctx, f.newGrant(ctx))
 	require.NoError(t, err)
-	assert.Equal(t, sessionstore.BudgetReleased, cleared.State)
+	assert.Equal(t, budget.Released, cleared.State)
 	assert.Equal(t, "Budget cleared", clearReceipt)
 
 	// Clearing with no budget present still answers the turn.
-	_, _, err = f.svc.Clear(ctx, f.newGrant(ctx))
+	_, _, err = f.clear(ctx, f.newGrant(ctx))
 	require.NoError(t, err)
 }
 
@@ -167,7 +182,7 @@ func TestBudgetServiceAdmit(t *testing.T) {
 	require.NoError(t, f.svc.Admit(ctx, f.rootID, now), "no budget admits")
 
 	cost := 5.0
-	armed, _, err := f.svc.Set(ctx, f.grant(), &cost, nil)
+	armed, _, err := f.set(ctx, f.grant(), &cost, nil)
 	require.NoError(t, err)
 	require.NoError(t, f.svc.Admit(ctx, f.rootID, time.Now().UTC()), "armed admits at a later clock")
 
@@ -194,7 +209,7 @@ func TestBudgetServiceObserveFirePrecedence(t *testing.T) {
 		t.Helper()
 
 		f := newBudgetFixture(ctx, t)
-		_, _, err := f.svc.Set(ctx, f.grant(), cost, &duration)
+		_, _, err := f.set(ctx, f.grant(), cost, &duration)
 		require.NoError(t, err)
 
 		return f
@@ -216,7 +231,7 @@ func TestBudgetServiceObserveFirePrecedence(t *testing.T) {
 		f := newBudgetFixture(ctx, t)
 		f.seedCost(ctx, 1.25)
 		cost := 5.0
-		_, _, err := f.svc.Set(ctx, f.grant(), &cost, new(365*24*time.Hour))
+		_, _, err := f.set(ctx, f.grant(), &cost, new(365*24*time.Hour))
 		require.NoError(t, err)
 		// Delta counts only cost accumulated after the arm baseline: the arm saw
 		// 1.25, the observation's own transaction sums 6.25.
@@ -224,7 +239,7 @@ func TestBudgetServiceObserveFirePrecedence(t *testing.T) {
 		record, fired, err := f.svc.Observe(
 			ctx, f.rootID, 0, time.Now().UTC(), "Working on it.")
 		require.NoError(t, err)
-		require.Equal(t, sessionstore.BudgetFired, record.State)
+		require.Equal(t, budget.Fired, record.State)
 		assert.Equal(t, "cost", record.FiredReason)
 		assert.True(t, fired, "a crossing Observe reports the fire to its caller")
 		require.NotNil(t, record.ObservedCostUSD)
@@ -245,13 +260,13 @@ func TestBudgetServiceObserveFirePrecedence(t *testing.T) {
 		f := newBudgetFixture(ctx, t)
 		f.seedCost(ctx, 0.25)
 		cost := 5.0
-		_, _, err := f.svc.Set(ctx, f.grant(), &cost, new(365*24*time.Hour))
+		_, _, err := f.set(ctx, f.grant(), &cost, new(365*24*time.Hour))
 		require.NoError(t, err)
 		f.seedCost(ctx, 5)
 		record, _, err := f.svc.Observe(
 			ctx, f.rootID, 0, time.Now().UTC(), "")
 		require.NoError(t, err)
-		assert.Equal(t, sessionstore.BudgetFired, record.State, "delta == limit must fire")
+		assert.Equal(t, budget.Fired, record.State, "delta == limit must fire")
 		assert.NotContains(t, f.checkpointContent(ctx, record.Generation), "prefix must be absent for empty text\n\n")
 	})
 
@@ -265,7 +280,7 @@ func TestBudgetServiceObserveFirePrecedence(t *testing.T) {
 			ctx, f.rootID, 0, armedAt.Add(time.Hour), "",
 		)
 		require.NoError(t, err)
-		require.Equal(t, sessionstore.BudgetFired, record.State)
+		require.Equal(t, budget.Fired, record.State)
 		assert.Equal(t, "duration", record.FiredReason)
 		assert.True(t, fired)
 	})
@@ -280,7 +295,7 @@ func TestBudgetServiceObserveFirePrecedence(t *testing.T) {
 			ctx, f.rootID, 0, armedAt.Add(30*time.Minute), "",
 		)
 		require.NoError(t, err)
-		require.Equal(t, sessionstore.BudgetFired, record.State)
+		require.Equal(t, budget.Fired, record.State)
 		assert.Equal(t, "cost", record.FiredReason)
 		assert.True(t, fired)
 	})
@@ -308,10 +323,10 @@ func TestBudgetToolAuthorizationAndReceipts(t *testing.T) {
 
 	ctx := t.Context()
 	f := newBudgetFixture(ctx, t)
-	pricedTool := NewTool(f.svc, f.rootID, true)
-	toolFor := func(fx *budgetFixture) tool.Tool { return NewTool(fx.svc, fx.rootID, true) }
+	pricedTool := budget.NewTool(f.store, f.rootID, true)
+	toolFor := func(fx *budgetFixture) tool.Tool { return budget.NewTool(fx.store, fx.rootID, true) }
 
-	authoredCtx := func(grant Grant) context.Context {
+	authoredCtx := func(grant budget.Grant) context.Context {
 		return tool.WithActivationGrant(tool.WithCallID(ctx, grant.ToolCallID), tool.ActivationGrant{
 			SessionID: grant.RootID, InputID: grant.InputID, ToolID: grant.ToolID,
 			Command: grant.Command,
@@ -327,7 +342,7 @@ func TestBudgetToolAuthorizationAndReceipts(t *testing.T) {
 	t.Run("set without a grant is refused and leaves it pending", func(t *testing.T) {
 		cost := 5.0
 		_, err := pricedTool.Execute(ctx, mustJSON(t, map[string]any{"action": "set", "cost_usd": cost}))
-		require.EqualError(t, err, noActivationMessage)
+		require.EqualError(t, err, "This change requires a current user message beginning with /budget.")
 
 		// The grant was not consumed: an authorized retry still arms.
 		result, err := pricedTool.Execute(authoredCtx(f.grant()), mustJSON(t, map[string]any{
@@ -341,13 +356,13 @@ func TestBudgetToolAuthorizationAndReceipts(t *testing.T) {
 		f2 := newBudgetFixture(ctx, t)
 		f2Tool := toolFor(f2)
 
-		refused := func(t *testing.T, grant Grant) {
+		refused := func(t *testing.T, grant budget.Grant) {
 			t.Helper()
 
 			_, err := f2Tool.Execute(authoredCtx(grant), mustJSON(t, map[string]any{
 				"action": "set", "cost_usd": 1.0,
 			}))
-			require.EqualError(t, err, noActivationMessage)
+			require.EqualError(t, err, "This change requires a current user message beginning with /budget.")
 		}
 
 		base := f2.grant()
@@ -362,12 +377,12 @@ func TestBudgetToolAuthorizationAndReceipts(t *testing.T) {
 
 		wrongSessionCtx := tool.WithActivationGrant(tool.WithCallID(ctx, base.ToolCallID),
 			tool.ActivationGrant{
-				SessionID: f2.rootID + 1, InputID: base.InputID, ToolID: ToolID, Command: "/budget",
+				SessionID: f2.rootID + 1, InputID: base.InputID, ToolID: budget.ToolID, Command: "/budget",
 			})
 		_, err := f2Tool.Execute(wrongSessionCtx, mustJSON(t, map[string]any{
 			"action": "set", "cost_usd": 1.0,
 		}))
-		require.EqualError(t, err, noActivationMessage)
+		require.EqualError(t, err, "This change requires a current user message beginning with /budget.")
 	})
 
 	t.Run("get rejects limit fields", func(t *testing.T) {
@@ -377,7 +392,7 @@ func TestBudgetToolAuthorizationAndReceipts(t *testing.T) {
 
 	t.Run("unpriced model refuses cost but allows duration", func(t *testing.T) {
 		f2 := newBudgetFixture(ctx, t)
-		unpriced := NewTool(f2.svc, f2.rootID, false)
+		unpriced := budget.NewTool(f2.store, f2.rootID, false)
 
 		_, err := unpriced.Execute(authoredCtx(f2.grant()), mustJSON(t, map[string]any{
 			"action": "set", "cost_usd": 5.0,
@@ -400,7 +415,7 @@ func TestBudgetToolAuthorizationAndReceipts(t *testing.T) {
 			"action": "set", "cost_usd": -1.0,
 		}))
 		require.Error(t, err)
-		assert.NotContains(t, err.Error(), noActivationMessage)
+		assert.NotContains(t, err.Error(), "This change requires a current user message beginning with /budget.")
 
 		_, err = f2Tool.Execute(authoredCtx(f2.grant()), mustJSON(t, map[string]any{
 			"action": "set", "duration": "2026-08-27T10:00:00Z",
@@ -418,7 +433,7 @@ func TestBudgetToolAuthorizationAndReceipts(t *testing.T) {
 	t.Run("clear consumes the grant and emits its receipt", func(t *testing.T) {
 		f2 := newBudgetFixture(ctx, t)
 		cost := 2.0
-		_, _, err := f2.svc.Set(ctx, f2.grant(), &cost, nil)
+		_, _, err := f2.set(ctx, f2.grant(), &cost, nil)
 		require.NoError(t, err)
 
 		f2Tool := toolFor(f2)
@@ -433,10 +448,10 @@ func TestBudgetToolAuthorizationAndReceipts(t *testing.T) {
 		// with the exact contract text.
 		_, err = f2Tool.Execute(tool.WithActivationGrant(tool.WithCallID(ctx, "call-later"),
 			tool.ActivationGrant{
-				SessionID: f2.rootID, InputID: grant2.InputID, ToolID: ToolID,
+				SessionID: f2.rootID, InputID: grant2.InputID, ToolID: budget.ToolID,
 				Command: "/budget", ToolCallID: "call-budget-2",
 			}), mustJSON(t, map[string]any{"action": "clear"}))
-		require.EqualError(t, err, noActivationMessage)
+		require.EqualError(t, err, "This change requires a current user message beginning with /budget.")
 	})
 
 	t.Run("clear rejects limit fields", func(t *testing.T) {
@@ -458,8 +473,56 @@ func TestBudgetToolAuthorizationAndReceipts(t *testing.T) {
 	})
 }
 
-func budgetStore(f *budgetFixture) sessionstore.BudgetStore {
-	return f.store.(sessionstore.BudgetStore)
+func budgetStore(f *budgetFixture) *sessionstore.Store { return f.store }
+
+func (f *budgetFixture) set(
+	ctx context.Context,
+	grant budget.Grant,
+	cost *float64,
+	duration *time.Duration,
+) (*budget.Record, string, error) {
+	var seconds *int64
+	receipt := "Budget armed: "
+	if cost != nil {
+		receipt += fmt.Sprintf("$%.6f additional persisted cost", *cost)
+	}
+	if duration != nil {
+		seconds = new(int64(duration.Seconds()))
+		if cost != nil {
+			receipt += " or "
+		}
+		receipt += duration.String() + " wall time"
+	}
+	record, err := f.store.Arm(
+		ctx,
+		budget.Mutation{
+			RootSessionID:   grant.RootID,
+			InputID:         grant.InputID,
+			ToolID:          grant.ToolID,
+			Command:         grant.Command,
+			ToolCallID:      grant.ToolCallID,
+			CostLimitUSD:    cost,
+			DurationSeconds: seconds,
+			Receipt:         receipt,
+		},
+	)
+	return record, receipt, err
+}
+
+func (f *budgetFixture) clear(ctx context.Context, grant budget.Grant) (*budget.Record, string, error) {
+	const receipt = "Budget cleared"
+	record, err := f.store.Clear(
+		ctx,
+		budget.Mutation{
+			RootSessionID: grant.RootID,
+			InputID:       grant.InputID,
+			ToolID:        grant.ToolID,
+			Command:       grant.Command,
+			ToolCallID:    grant.ToolCallID,
+			Receipt:       receipt,
+		},
+	)
+	return record, receipt, err
 }
 
 func mustJSON(t *testing.T, value any) json.RawMessage {
