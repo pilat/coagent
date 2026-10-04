@@ -53,6 +53,10 @@ func (s *svc) kill(ctx context.Context, input *sessionstore.InboxInput) error {
 	}
 	defer unlock()
 
+	if pending, err := s.commandPending(ctx, input); err != nil || !pending {
+		return err
+	}
+
 	if err := s.handleLifecycleInput(ctx, input, "Stopping session..."); err != nil {
 		return err
 	}
@@ -67,6 +71,10 @@ func (s *svc) stop(ctx context.Context, input *sessionstore.InboxInput) error {
 		return err
 	}
 	defer unlock()
+
+	if pending, err := s.commandPending(ctx, input); err != nil || !pending {
+		return err
+	}
 
 	record, err := s.store.GetSession(ctx, input.SessionID)
 	if err != nil {
@@ -349,6 +357,10 @@ func (s *svc) clear(ctx context.Context, input *sessionstore.InboxInput) (int64,
 		return 0, err
 	}
 	defer unlock()
+
+	if pending, err := s.commandPending(ctx, input); err != nil || !pending {
+		return 0, err
+	}
 
 	return s.clearLocked(ctx, input.SessionID, input.ID)
 }

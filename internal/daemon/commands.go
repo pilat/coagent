@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"slices"
 	"strings"
 
 	"go.uber.org/zap"
@@ -197,6 +198,16 @@ func (s *svc) SetAttributes(ctx context.Context, sessionID int64, attrs map[stri
 	s.routes.setOwner(sessionID, requestedOwner)
 
 	return nil
+}
+
+// A runner exit also dispatches pending commands, so the second holder of the fence finds this one resolved.
+func (s *svc) commandPending(ctx context.Context, input *sessionstore.InboxInput) (bool, error) {
+	rows, err := s.store.ListPending(ctx, input.SessionID)
+	if err != nil {
+		return false, fmt.Errorf("list pending commands: %w", err)
+	}
+
+	return slices.ContainsFunc(rows, func(row *sessionstore.InboxInput) bool { return row.ID == input.ID }), nil
 }
 
 func (s *svc) handleGenericCommand(ctx context.Context, input *sessionstore.InboxInput) (bool, error) {

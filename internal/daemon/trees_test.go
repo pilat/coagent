@@ -500,3 +500,24 @@ func (s *blockingCreateSessionStore) CreateReplacementSession(
 	<-s.release
 	return s.Store.CreateReplacementSession(ctx, oldID)
 }
+
+func TestLifecycleCommandIgnoresSecondDispatch(t *testing.T) {
+	for _, command := range []string{"/stop", "/kill", "/clear"} {
+		t.Run(command, func(t *testing.T) {
+			factory := &mockFactory{}
+			h := newHarness(t, harnessOptions{configure: withTestModels, clientFor: factory.client})
+			factory.nextSess = &mockSession{completeAfter: 10 * time.Millisecond}
+			id, err := h.mgr.Send(h.ctx, testProject(t, h.store, t.TempDir()), "init", "test-model", nil)
+			require.NoError(t, err)
+			h.waitUntil("session idle", func() bool { return !h.mgr.HasActiveLoop(id) })
+
+			input := lifecycleInput(h.ctx, t, h.mgr, id, command)
+			handled, err := h.mgr.handleGenericCommand(h.ctx, input)
+			require.True(t, handled)
+			require.NoError(t, err)
+			handled, err = h.mgr.handleGenericCommand(h.ctx, input)
+			assert.True(t, handled)
+			assert.NoError(t, err)
+		})
+	}
+}
