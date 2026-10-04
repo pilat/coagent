@@ -60,7 +60,9 @@ CREATE TABLE session_tool_activations (
 );
 
 INSERT INTO session_tool_activations
-SELECT * FROM session_tool_activations_legacy_00045;
+    (input_id, session_id, tool_id, command, state, tool_call_id, created_at, resolved_at)
+SELECT input_id, session_id, tool_id, command, state, tool_call_id, created_at, resolved_at
+FROM session_tool_activations_legacy_00045;
 
 CREATE TABLE subagent_links (
     parent_id INTEGER NOT NULL,
@@ -79,8 +81,13 @@ CREATE TABLE subagent_links (
     PRIMARY KEY (parent_id, child_id)
 );
 
+-- Explicit columns: older databases carry these columns in a different order.
 INSERT INTO subagent_links
-SELECT * FROM subagent_links_legacy_00045;
+    (parent_id, child_id, task_call_id, blocking, depth, state, delivered_at, delivered_msg_id,
+     created_at, result, outcome, activation_seq, delivered_input_id)
+SELECT parent_id, child_id, task_call_id, blocking, depth, state, delivered_at, delivered_msg_id,
+       created_at, result, outcome, activation_seq, delivered_input_id
+FROM subagent_links_legacy_00045;
 
 INSERT INTO sqlite_sequence (name, seq)
 SELECT 'session_inbox', seq FROM session_inbox_sequence_00045
