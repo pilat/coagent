@@ -1,21 +1,24 @@
 package daemon
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"flag"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"regexp"
 	"runtime"
-	"strconv"
 	"strings"
 	"sync"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/pilat/coagent/internal/backgroundprocess"
@@ -23,6 +26,7 @@ import (
 	"github.com/pilat/coagent/internal/config"
 	"github.com/pilat/coagent/internal/configapply"
 	"github.com/pilat/coagent/internal/configops"
+	"github.com/pilat/coagent/internal/controllerapi"
 	"github.com/pilat/coagent/internal/llm"
 	"github.com/pilat/coagent/internal/llmwire"
 	"github.com/pilat/coagent/internal/mcpstore"
@@ -30,14 +34,13 @@ import (
 	"github.com/pilat/coagent/internal/schedule"
 	"github.com/pilat/coagent/internal/sessionbuild"
 	"github.com/pilat/coagent/internal/sessionbus"
+	"github.com/pilat/coagent/internal/sessionevent"
 	"github.com/pilat/coagent/internal/sessionstore"
 	"github.com/pilat/coagent/internal/subagent"
-	"github.com/pilat/coagent/internal/tool"
 	"github.com/pilat/coagent/internal/tool/builtin"
 )
 
-// recordingLLM is the scripted client that reports what the session's registry
-// produced — the boundary a user's model actually sees.
+// Record the registry schemas actually delivered to the session's model.
 type recordingLLM struct {
 	scriptedLLM
 
@@ -55,7 +58,6 @@ func (c *recordingLLM) SetSessionID(id string) {
 	if idx := strings.LastIndex(id, ":"); idx >= 0 {
 		id = id[idx+1:]
 	}
-
 	var parsed int64
 	_, _ = fmt.Sscanf(id, "%d", &parsed)
 	c.sessionID = parsed
@@ -71,63 +73,11 @@ func (c *recordingLLM) Chat(
 	c.mu.Lock()
 	sessionID := c.sessionID
 	c.mu.Unlock()
-
 	c.rec.record(sessionID, tools)
-
 	return c.scriptedLLM.Chat(ctx, system, msgs, tools, opts...)
 }
 
-type registryPromptLLM struct {
-	scriptedLLM
-	recorder *activationSchemas
-	prompts  *promptRecorder
-
-	mu        sync.Mutex
-	sessionID int64
-}
-
-func (c *registryPromptLLM) SetSessionID(id string) {
-	if index := strings.LastIndex(id, ":"); index >= 0 {
-		id = id[index+1:]
-	}
-
-	parsed, _ := strconv.ParseInt(id, 10, 64)
-	c.mu.Lock()
-	c.sessionID = parsed
-	c.mu.Unlock()
-}
-
-func (c *registryPromptLLM) Chat(
-	ctx context.Context,
-	system string,
-	messages []llmwire.Message,
-	tools []llmwire.ToolSchema,
-	opts ...llmwire.ChatOption,
-) (*llmwire.Response, error) {
-	c.mu.Lock()
-	sessionID := c.sessionID
-	c.mu.Unlock()
-
-	c.prompts.record(strconv.FormatInt(sessionID, 10), system)
-	c.recorder.record(sessionID, tools)
-
-	return c.scriptedLLM.Chat(ctx, system, messages, tools, opts...)
-}
-
-func scheduleRestartResponder(release <-chan struct{}) func(string, []llmwire.Message) *llmwire.Response {
-	return func(_ string, messages []llmwire.Message) *llmwire.Response {
-		if hasToolResultFor(messages, tool.IDSchedule) {
-			<-release
-
-			return textReply("scheduled work completed")
-		}
-
-		return textReply("ready for schedule")
-	}
-}
-
-// scriptedLLM is a fake llm.Client whose responses are produced by a
-// test-supplied function inspecting the system prompt and messages.
+// Responses inspect the real system prompt and transcript to preserve scenario ordering.
 type scriptedLLM struct {
 	respond func(system string, msgs []llmwire.Message) *llmwire.Response
 
@@ -144,32 +94,24 @@ func (c *scriptedLLM) Chat(
 	_ []llmwire.ToolSchema,
 	_ ...llmwire.ChatOption,
 ) (*llmwire.Response, error) {
-	// Run respond off the loop goroutine so a ctx deadline/cancel (a blocking
-	// child's timeout, or a kill) preempts a respond that blocks — mirroring a real
-	// client honoring ctx. A panic in respond is re-raised on the caller (the
-	// session loop goroutine) so its panic-recovery can mark the child errored.
+	// Cancellation must preempt a blocked responder; responder panics return to the loop's recovery boundary.
 	type outcome struct {
 		resp  *llmwire.Response
 		panic any
 	}
-
 	_, hasDeadline := ctx.Deadline()
 	c.mu.Lock()
 	c.chatContext = &contextInfo{hasDeadline: hasDeadline}
 	c.mu.Unlock()
-
 	ch := make(chan outcome, 1)
-
 	go func() {
 		defer func() {
 			if p := recover(); p != nil {
 				ch <- outcome{panic: p}
 			}
 		}()
-
 		ch <- outcome{resp: c.respond(system, msgs)}
 	}()
-
 	select {
 	case <-ctx.Done():
 		c.mu.Lock()
@@ -182,14 +124,12 @@ func (c *scriptedLLM) Chat(
 			panic(o.panic)
 		}
 
-		// A nil response is the scripted way to say "provider failure": return
-		// it as an error, exactly as a real failing client would.
+		// A nil scripted response must behave like a real provider error.
 		if o.resp == nil {
 			return nil, errors.New("scripted provider failure")
 		}
 
-		// The scripted harness bypasses provider parsing, so give an unparsed
-		// response the normal completion outcome a real client would report.
+		// Unparsed scripted responses need the completion outcome normally supplied by provider parsing.
 		if o.resp.FinishType == "" {
 			if len(o.resp.ToolCalls) > 0 {
 				o.resp.FinishType = llmwire.FinishToolCalls
@@ -221,16 +161,13 @@ func (c *scriptedLLM) GetReasoningLevel() string { return "medium" }
 func (c *scriptedLLM) SetSessionID(id string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-
 	c.sessionID = id
 }
 
-// chatRanWithDeadline reports whether any Chat of this client ran under a ctx
-// that carried a deadline — the child-lifetime deadline the runner must not add.
+// Recorded Chat contexts expose any child lifetime deadline incorrectly added by the runner.
 func (c *scriptedLLM) chatRanWithDeadline() bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-
 	return c.chatContext != nil && c.chatContext.hasDeadline
 }
 
@@ -238,108 +175,13 @@ func (c *scriptedLLM) chatRanWithDeadline() bool {
 func (c *scriptedLLM) hasChatContext() bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-
 	return c.chatContext != nil
 }
 
 func (c *scriptedLLM) sawCancellation() bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-
 	return c.cancelSeen
-}
-
-func newShiftingMCPServer(t *testing.T, pong string) *fakeMCPServer {
-	t.Helper()
-
-	if runtime.GOOS == "windows" {
-		t.Skip("the fake MCP server is a POSIX shell script")
-	}
-
-	dir := t.TempDir()
-	f := &fakeMCPServer{
-		path: filepath.Join(dir, "shiftingmcp.sh"),
-		log:  filepath.Join(dir, "events.log"),
-		pong: pong,
-	}
-
-	require.NoError(t, os.WriteFile(f.path, []byte(shiftingMCPScript), 0o700))
-	require.NoError(t, os.WriteFile(f.log, nil, 0o600))
-
-	return f
-}
-
-const exitTrackingMCPScript = `#!/bin/sh
-LOG="$1"
-PONG="$2"
-(
-  parent=$$
-  while kill -0 "$parent" 2>/dev/null; do sleep 0.01; done
-  echo exit >> "$LOG"
-) &
-echo spawn >> "$LOG"
-while IFS= read -r line; do
-  id=$(printf '%s' "$line" | sed -n 's/.*"id":\([0-9]*\).*/\1/p')
-  [ -n "$id" ] || continue
-  case "$line" in
-    *'"method":"initialize"'*)
-      printf '{"jsonrpc":"2.0","id":%s,"result":{"protocolVersion":"2024-11-05","capabilities":{"tools":{}},"serverInfo":{"name":"exit-mcp","version":"0.0.1"}}}\n' "$id"
-      ;;
-    *'"method":"tools/list"'*)
-      printf '{"jsonrpc":"2.0","id":%s,"result":{"tools":[{"name":"ping","description":"Answers pong.","inputSchema":{"type":"object","properties":{}}}]}}\n' "$id"
-      ;;
-    *'"method":"tools/call"'*)
-      printf '{"jsonrpc":"2.0","id":%s,"result":{"content":[{"type":"text","text":"%s"}]}}\n' "$id" "$PONG"
-      ;;
-    *)
-      printf '{"jsonrpc":"2.0","id":%s,"error":{"code":-32601,"message":"Method not found"}}\n' "$id"
-      ;;
-  esac
-done
-`
-
-type exitTrackingMCPServer struct {
-	path string
-	log  string
-	pong string
-}
-
-func newExitTrackingMCPServer(t *testing.T, pong string) *exitTrackingMCPServer {
-	t.Helper()
-	if runtime.GOOS == "windows" {
-		t.Skip("the fake MCP server is a POSIX shell script")
-	}
-
-	dir := t.TempDir()
-	fake := &exitTrackingMCPServer{
-		path: filepath.Join(dir, "exit-mcp.sh"),
-		log:  filepath.Join(dir, "events.log"),
-		pong: pong,
-	}
-	require.NoError(t, os.WriteFile(fake.path, []byte(exitTrackingMCPScript), 0o700))
-	require.NoError(t, os.WriteFile(fake.log, nil, 0o600))
-
-	return fake
-}
-
-func (f *exitTrackingMCPServer) args() []string {
-	return []string{f.log, f.pong}
-}
-
-func (f *exitTrackingMCPServer) count(t *testing.T, event string) int {
-	t.Helper()
-	data, err := os.ReadFile(f.log)
-	require.NoError(t, err)
-
-	return strings.Count(string(data), event+"\n")
-}
-
-func exitTrackingParams(t *testing.T, fake *exitTrackingMCPServer) string {
-	t.Helper()
-	data, err := json.Marshal(fake.args())
-	require.NoError(t, err)
-
-	return `{"name":"fake","scope":"project","command":"` + fake.path + `","args":` + string(data) + `}`
 }
 
 // fakeMCPServer is one on-disk stdio server plus the log that records its spawns.
@@ -350,29 +192,19 @@ type fakeMCPServer struct {
 	release string
 }
 
-// newFakeMCPServer writes a server that answers with pong. A held server blocks
-// every tools/call until release() is called.
+// A held server delays every tool call until release, exposing cancellation and restart ordering.
 func newFakeMCPServer(t *testing.T, pong string, held bool) *fakeMCPServer {
 	t.Helper()
-
 	if runtime.GOOS == "windows" {
 		t.Skip("the fake MCP server is a POSIX shell script")
 	}
-
 	dir := t.TempDir()
-	f := &fakeMCPServer{
-		path: filepath.Join(dir, "fakemcp.sh"),
-		log:  filepath.Join(dir, "events.log"),
-		pong: pong,
-	}
-
+	f := &fakeMCPServer{path: filepath.Join(dir, "fakemcp.sh"), log: filepath.Join(dir, "events.log"), pong: pong}
 	if held {
 		f.release = filepath.Join(dir, "release")
 	}
-
 	require.NoError(t, os.WriteFile(f.path, []byte(fakeMCPScript), 0o700))
 	require.NoError(t, os.WriteFile(f.log, nil, 0o600))
-
 	return f
 }
 
@@ -381,7 +213,6 @@ func (f *fakeMCPServer) addParams(name, scope string) string {
 	if err != nil {
 		panic(err)
 	}
-
 	return `{"name":"` + name + `","scope":"` + scope + `","command":"` + f.path + `","args":` + string(args) + `}`
 }
 
@@ -392,171 +223,18 @@ func (f *fakeMCPServer) unblock(t *testing.T) {
 
 func (f *fakeMCPServer) count(t *testing.T, event string) int {
 	t.Helper()
-
 	data, err := os.ReadFile(f.log)
 	require.NoError(t, err)
-
 	return strings.Count(string(data), event+"\n")
 }
 
-// countNoFail samples the log without a testing.T, for observers that run on
-// session goroutines (scripted LLM responders). A read error returns -1.
+// Goroutine observers cannot use testing.T; a log read failure must remain observable as -1.
 func (f *fakeMCPServer) countNoFail(event string) int {
 	data, err := os.ReadFile(f.log)
 	if err != nil {
 		return -1
 	}
-
 	return strings.Count(string(data), event+"\n")
-}
-
-func disableScenarioResponder(fake *fakeMCPServer) func(string, []llmwire.Message) *llmwire.Response {
-	return func(_ string, messages []llmwire.Message) *llmwire.Response {
-		last := func(msgs []llmwire.Message) string {
-			const nudgePrefix = "You ended your previous response without calling a tool."
-
-			text := ""
-
-			for _, m := range msgs {
-				// The host completion nudge is not a user turn: the confirmation turn
-				// must answer the task prompt again, not fall through to the default
-				// registration branch.
-				if m.Role == llmwire.RoleUser && !strings.HasPrefix(m.Content, nudgePrefix) {
-					text = m.Content
-				}
-			}
-
-			return text
-		}(messages)
-		switch {
-		case strings.Contains(last, "USE_AFTER_RESTART"):
-			if toolResultForCallID(messages, "ping-after-restart") != nil {
-				return textReply("used after restart")
-			}
-			return mcpPingCall("ping-after-restart")
-		case strings.Contains(last, "USE_IT"):
-			if toolResultForCallID(messages, "ping-before-restart") != nil {
-				return textReply("used before restart")
-			}
-			return mcpPingCall("ping-before-restart")
-		case strings.Contains(last, "DISABLE_IT"):
-			if hasToolResultFor(messages, tool.IDMCPDisable) {
-				return textReply("disabled")
-			}
-			return mcpToolCall("disable-1", tool.IDMCPDisable, `{"name":"fake","scope":"project"}`)
-		default:
-			if hasToolResultFor(messages, tool.IDMCPAdd) {
-				return textReply("registered")
-			}
-			return mcpToolCall("add-1", tool.IDMCPAdd, fake.addParams("fake", "project"))
-		}
-	}
-}
-
-func removeScenarioResponder(
-	t *testing.T,
-	fake *exitTrackingMCPServer,
-) func(string, []llmwire.Message) *llmwire.Response {
-	t.Helper()
-
-	return func(_ string, messages []llmwire.Message) *llmwire.Response {
-		last := func(msgs []llmwire.Message) string {
-			const nudgePrefix = "You ended your previous response without calling a tool."
-
-			text := ""
-
-			for _, m := range msgs {
-				// The host completion nudge is not a user turn: the confirmation turn
-				// must answer the task prompt again, not fall through to the default
-				// registration branch.
-				if m.Role == llmwire.RoleUser && !strings.HasPrefix(m.Content, nudgePrefix) {
-					text = m.Content
-				}
-			}
-
-			return text
-		}(messages)
-		switch {
-		case strings.Contains(last, "USE_AFTER_REMOVE"):
-			if toolResultForCallID(messages, "ping-after-remove") != nil {
-				return textReply("used after remove")
-			}
-
-			return mcpPingCall("ping-after-remove")
-		case strings.Contains(last, "USE_IT"):
-			if toolResultForCallID(messages, "ping-before-remove") != nil {
-				return textReply("used before remove")
-			}
-
-			return mcpPingCall("ping-before-remove")
-		case strings.Contains(last, "REMOVE_IT"):
-			if hasToolResultFor(messages, tool.IDMCPRemove) {
-				return textReply("removed")
-			}
-
-			return mcpToolCall("remove-1", tool.IDMCPRemove, `{"name":"fake","scope":"project"}`)
-		default:
-			if hasToolResultFor(messages, tool.IDMCPAdd) {
-				return textReply("registered")
-			}
-
-			return mcpToolCall("add-1", tool.IDMCPAdd, exitTrackingParams(t, fake))
-		}
-	}
-}
-
-func lengthRecoveryResponder(t *testing.T) func(string, []llmwire.Message) *llmwire.Response {
-	t.Helper()
-	var calls int
-
-	return func(_ string, messages []llmwire.Message) *llmwire.Response {
-		calls++
-		if calls > 1 {
-			visible := scenarioTranscriptText(messages)
-			require.NotContains(t, visible, "rejected private fragment")
-			require.Contains(t, visible, sessionstore.OutputLengthRecoveryPrompt)
-
-			return &llmwire.Response{Text: "recovered complete answer", FinishType: llmwire.FinishStop}
-		}
-
-		return &llmwire.Response{
-			Text: "rejected private fragment", FinishType: llmwire.FinishLength,
-			ProviderFinishReason: "length", CostUSD: 0.5,
-			Usage: &llmwire.MessageUsage{PromptTokens: 100, CompletionTokens: 200},
-			ToolCalls: []llmwire.ToolCall{
-				{
-					ID: "side-effect-probe", Name: "todowrite",
-					Arguments: []byte(
-						`{"items":[{"id":"must-not-run","content":"must not run","status":"in_progress","priority":"high"}]}`,
-					),
-				},
-				{ID: "truncated-call", Name: "bash", Arguments: []byte(
-					`{"command":"` + strings.Repeat("x", 128*1024),
-				)},
-			},
-		}
-	}
-}
-
-func stoppedRootScheduleResponder(
-	tc stoppedRootScheduleCase,
-	started chan<- struct{},
-	release <-chan struct{},
-) func(string, []llmwire.Message) *llmwire.Response {
-	// The completion check calls the model twice for one scheduled turn; only
-	// the first call arms the signal.
-	var once sync.Once
-
-	return func(_ string, messages []llmwire.Message) *llmwire.Response {
-		if scheduledTurnRequested(tc, messages) {
-			once.Do(func() { close(started) })
-			<-release
-
-			return textReply(tc.answer)
-		}
-
-		return textReply("ready")
-	}
 }
 
 type providerRequest struct {
@@ -569,6 +247,10 @@ type providerRequest struct {
 	Tools []struct {
 		Function llmwire.ToolSchema `json:"function"`
 	} `json:"tools"`
+}
+
+type scriptedClientKey struct {
+	sessionID, model string
 }
 
 type providerMessage struct {
@@ -597,7 +279,7 @@ func scriptedBuildInput(
 		cfg.WorkDir = t.TempDir()
 	}
 	var mu sync.Mutex
-	clients := make(map[string]llm.Client)
+	clients := make(map[scriptedClientKey]llm.Client)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var request providerRequest
 		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
@@ -605,7 +287,7 @@ func scriptedBuildInput(
 			return
 		}
 		mu.Lock()
-		clientKey := request.SessionID + ":" + request.Model
+		clientKey := scriptedClientKey{request.SessionID, request.Model}
 		client := clients[clientKey]
 		if client == nil {
 			view := *cfg
@@ -641,8 +323,7 @@ func scriptedBuildInput(
 			message := llmwire.Message{Role: row.Role, Content: content, ToolCallID: row.ToolCallID, ToolName: row.Name}
 			for _, call := range row.ToolCalls {
 				message.ToolCalls = append(
-					message.ToolCalls,
-					llmwire.ToolCall{
+					message.ToolCalls, llmwire.ToolCall{
 						ID:        call.ID,
 						Name:      call.Function.Name,
 						Arguments: json.RawMessage(call.Function.Arguments),
@@ -666,8 +347,7 @@ func scriptedBuildInput(
 		var calls []map[string]any
 		for index, call := range response.ToolCalls {
 			calls = append(
-				calls,
-				map[string]any{
+				calls, map[string]any{
 					"index":    index,
 					"id":       call.ID,
 					"type":     "function",
@@ -765,18 +445,8 @@ func newScenarioDaemon(
 		store,
 	)
 	service := New(
-		ctx,
-		in,
-		store,
-		links,
-		budgets,
-		backgroundprocess.NewStore(db, store),
-		progressruntime.New(store, bus),
-		bus,
-		schedules,
-		in.Config,
-		mcp,
-		applier,
+		ctx, in, store, links, budgets, backgroundprocess.NewStore(db, store), progressruntime.New(store, bus), bus,
+		schedules, in.Config, mcp, applier,
 	).(*svc)
 	return service, service.processes
 }
@@ -788,31 +458,13 @@ func lifecycleInput(ctx context.Context, t *testing.T, s *svc, id int64, command
 	return input
 }
 
-func enqueueScheduledInput(ctx context.Context, store Store, id int64, key, content string, fresh bool) (bool, error) {
-	result, err := store.Enqueue(
-		ctx,
-		sessionstore.Input{
-			SessionID:   id,
-			Source:      sessionstore.InputSourceSchedule,
-			Content:     content,
-			DeliveryKey: key,
-			Attributes:  map[string]any{"fresh": fresh},
-		},
-	)
-	if err != nil {
-		return false, err
-	}
-	return result.Applied, nil
-}
-
 func enqueueCallResult(ctx context.Context, store Store, id int64, callID, name, content string) (bool, error) {
 	key := "result:" + callID
 	if name == "config_edit" {
 		key = "config_apply:" + callID
 	}
 	result, err := store.Enqueue(
-		ctx,
-		sessionstore.Input{
+		ctx, sessionstore.Input{
 			SessionID:   id,
 			Source:      sessionstore.InputSourceCallResult,
 			Content:     content,
@@ -826,55 +478,7 @@ func enqueueCallResult(ctx context.Context, store Store, id int64, callID, name,
 	return result.Applied, nil
 }
 
-// effortProvider is an OpenRouter-shaped endpoint recording the reasoning effort
-// of every call, so what a session actually asks for is observable.
-type effortProvider struct {
-	url string
-
-	mu       sync.Mutex
-	requests []effortRequest
-}
-
-func newEffortProvider(t *testing.T) *effortProvider {
-	t.Helper()
-
-	p := &effortProvider{}
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var body struct {
-			Model     string `json:"model"`
-			Reasoning struct {
-				Effort string `json:"effort"`
-			} `json:"reasoning"`
-		}
-
-		require.NoError(t, json.NewDecoder(r.Body).Decode(&body))
-
-		p.mu.Lock()
-		p.requests = append(p.requests, effortRequest{model: body.Model, effort: body.Reasoning.Effort})
-		turn := len(p.requests)
-		p.mu.Unlock()
-
-		_, _ = fmt.Fprintf(w,
-			`{"choices":[{"message":{"role":"assistant","content":"answer %d"},"finish_reason":"stop"}],"usage":{}}`,
-			turn,
-		)
-	}))
-	t.Cleanup(srv.Close)
-
-	p.url = srv.URL
-
-	return p
-}
-
-func (p *effortProvider) snapshot() []effortRequest {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-
-	return append([]effortRequest(nil), p.requests...)
-}
-
-// spawnEffortProvider is an OpenRouter-shaped endpoint recording the reasoning
-// effort of every call per model, so what each session asks for is observable.
+// Record reasoning effort per model to expose each session's actual request.
 type spawnEffortProvider struct {
 	url string
 
@@ -884,7 +488,6 @@ type spawnEffortProvider struct {
 
 func newSpawnEffortProvider(t *testing.T) *spawnEffortProvider {
 	t.Helper()
-
 	p := &spawnEffortProvider{efforts: map[string]string{}}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var body struct {
@@ -893,31 +496,342 @@ func newSpawnEffortProvider(t *testing.T) *spawnEffortProvider {
 				Effort string `json:"effort"`
 			} `json:"reasoning"`
 		}
-
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
-
 			return
 		}
-
 		p.mu.Lock()
 		p.efforts[body.Model] = body.Reasoning.Effort
 		p.mu.Unlock()
-
 		_, _ = fmt.Fprint(w,
 			`{"choices":[{"message":{"role":"assistant","content":"done"},"finish_reason":"stop"}],"usage":{}}`,
 		)
 	}))
 	t.Cleanup(srv.Close)
-
 	p.url = srv.URL
-
 	return p
 }
 
 func (p *spawnEffortProvider) effortFor(model string) string {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-
 	return p.efforts[model]
+}
+
+// Production claims are acknowledged in assertion and recording modes, preserving ack-triggered readiness events.
+func drainScenarioClaims(t *testing.T, name string, controller controllerapi.OutputQueueController) {
+	t.Helper()
+	path := harnessTracePath(name)
+	file := harnessTraceFile{SourceTest: t.Name()}
+	if *updateHarnessTraces {
+		if data, err := os.ReadFile(path); err == nil {
+			require.NoError(t, json.Unmarshal(data, &file))
+			file.SourceTest = t.Name()
+		}
+
+		// One drain corresponds to one scenario run: recorded claims are
+		// replaced, never accumulated across recording passes.
+		file.Claims = nil
+	}
+	receipts := map[string]string{}
+	placeholderSeq := 0
+	for {
+		claim, err := controller.ClaimOutput(t.Context())
+		if errors.Is(err, controllerapi.ErrNoOutput) {
+			break
+		}
+		require.NoError(t, err, "production claim must succeed while recording")
+		if *updateHarnessTraces {
+			recorded := harnessTraceClaim{
+				Type:                         claim.Type,
+				Content:                      normalizeClaimContent(claim.Content),
+				Attributes:                   sanitizeClaimAttributes(t, claim.Attributes),
+				SourceKey:                    claim.SourceKey,
+				ModelInputGeneration:         claim.ModelInputGeneration,
+				PreviousMessageType:          claim.PreviousMessageType,
+				PreviousModelInputGeneration: claim.PreviousModelInputGeneration,
+				ReleasesInput:                claim.ReleasesInput,
+			}
+			for _, raw := range previousMessageIDs(claim) {
+				placeholder, ok := receipts[raw]
+				if !ok {
+					placeholderSeq++
+					placeholder = fmt.Sprintf("%s%d>", messagePlaceholderPrefix, placeholderSeq)
+					receipts[raw] = placeholder
+				}
+				recorded.PreviousMessageIDs = append(recorded.PreviousMessageIDs, placeholder)
+			}
+			file.Claims = append(file.Claims, recorded)
+		}
+		if claim.Type == controllerapi.OutputMessageReplaceable ||
+			claim.Type == controllerapi.OutputMessagePersistent {
+			require.NoError(t, controller.AckOutput(t.Context(), controllerapi.OutputAckData{
+				ID: claim.ID, AttemptID: claim.AttemptID,
+				MessageIDs: []string{fmt.Sprintf("recorded-%d", claim.ID)},
+			}), "production ack must succeed while recording")
+		} else {
+			require.NoError(t, controller.AckOutput(t.Context(), controllerapi.OutputAckData{
+				ID: claim.ID, AttemptID: claim.AttemptID,
+			}))
+		}
+	}
+	if *updateHarnessTraces {
+		writeHarnessTrace(t, path, file)
+	}
+}
+
+// Wall time varies between runs; other card content must remain exact in golden claims.
+func normalizeClaimContent(content string) string {
+	return elapsedPattern.ReplaceAllString(content, "⌚ <elapsed>")
+}
+
+// Temporary paths and progress hashes carry no conversation meaning and must not destabilize recorded claims.
+func sanitizeClaimAttributes(t *testing.T, attributes map[string]any) map[string]any {
+	t.Helper()
+	sanitized := make(map[string]any, len(attributes))
+	for key, value := range attributes {
+		if key == "progress_revision" {
+			continue
+		}
+		if key == "work_dir" {
+			sanitized[key] = workDirPlaceholder
+			continue
+		}
+		sanitized[key] = value
+	}
+	if len(sanitized) == 0 {
+		return nil
+	}
+	return sanitized
+}
+
+func previousMessageIDs(claim *controllerapi.OutputClaimData) []string {
+	values, ok := claim.PreviousMessageAttributes["message_ids"].([]any)
+	if !ok {
+		return nil
+	}
+	ids := make([]string, 0, len(values))
+	for _, value := range values {
+		id, ok := value.(string)
+		if !ok {
+			continue
+		}
+		ids = append(ids, id)
+	}
+	return ids
+}
+
+// Keep wake-time formatting exact so production layout changes break the golden.
+const (
+	waitTimeLayout     = "15:04 02 Jan"
+	wakePlaceholder    = "<wake>"
+	workDirPlaceholder = "<workdir>"
+	// Normalize the temporary project path; it carries no scenario meaning.
+	namePlaceholder = "<name>"
+)
+
+// The -update-traces flag records new golden traces instead of asserting existing ones.
+var updateHarnessTraces = flag.Bool(
+	"update-traces", false, "rewrite the recorded controller traces under internal/testdata",
+)
+
+var childRefPattern = regexp.MustCompile(`#(\d+)`)
+
+// Elapsed card time depends on scheduling and carries no conversation meaning.
+var elapsedPattern = regexp.MustCompile(`⌚ [0-9.]+[a-z0-9.]+`)
+
+// Shared traces preserve ordered notifications and claims; receipt IDs normalize, generations stay exact.
+type harnessTraceFile struct {
+	SourceTest string              `json:"source_test"`
+	Trace      []harnessTraceEvent `json:"trace"`
+	Claims     []harnessTraceClaim `json:"claims,omitempty"`
+}
+
+// Telegram replay maps normalized receipts to real targets so edits and chunk bookkeeping use valid message IDs.
+const messagePlaceholderPrefix = "<msg-"
+
+// Claim generations stay exact; random attempt IDs and raw receipts do not survive normalization.
+type harnessTraceClaim struct {
+	Type                         string         `json:"type"`
+	Content                      string         `json:"content"`
+	Attributes                   map[string]any `json:"attributes,omitempty"`
+	SourceKey                    string         `json:"source_key,omitempty"`
+	ModelInputGeneration         *int64         `json:"model_input_generation,omitempty"`
+	PreviousMessageType          string         `json:"previous_message_type,omitempty"`
+	PreviousModelInputGeneration *int64         `json:"previous_model_input_generation,omitempty"`
+	PreviousMessageIDs           []string       `json:"previous_message_ids,omitempty"`
+	ReleasesInput                bool           `json:"releases_input"`
+}
+
+type harnessTraceEvent struct {
+	Type       string             `json:"type"`
+	Message    string             `json:"message,omitempty"`
+	Status     string             `json:"status,omitempty"`
+	Reason     string             `json:"reason,omitempty"`
+	Source     string             `json:"source,omitempty"`
+	Name       string             `json:"name,omitempty"`
+	WorkDir    string             `json:"work_dir,omitempty"`
+	Attributes map[string]any     `json:"attributes,omitempty"`
+	Waiting    []harnessTraceWait `json:"waiting,omitempty"`
+}
+
+type harnessTraceWait struct {
+	Kind  string `json:"kind"`
+	Child string `json:"child,omitempty"`
+	Wake  string `json:"wake,omitempty"`
+}
+
+func assertHarnessTrace(
+	t *testing.T,
+	name string,
+	events []controllerapi.SessionNotification,
+	sessionID int64,
+) {
+	t.Helper()
+	assertHarnessTraceForScenario(t, t.Name(), name, events, sessionID)
+}
+
+func assertHarnessTraceForScenario(
+	t *testing.T,
+	sourceTest, name string,
+	events []controllerapi.SessionNotification,
+	sessionID int64,
+) {
+	t.Helper()
+	got := harnessTraceFile{SourceTest: sourceTest, Trace: normalizeHarnessTrace(t, events, sessionID)}
+	path := harnessTracePath(name)
+	if *updateHarnessTraces {
+		stored := readHarnessTraceFileForUpdate(t, path)
+		stored.SourceTest = sourceTest
+		stored.Trace = got.Trace
+		writeHarnessTrace(t, path, stored)
+		return
+	}
+	want := readHarnessTraceFile(t, path)
+	assert.Equal(t, want.SourceTest, got.SourceTest, "golden %s belongs to another scenario", name)
+	assert.Equal(t, want.Trace, got.Trace, "controller-visible notification trace")
+}
+
+// Daemon and manager tests must consume the same trace artifacts to prevent contract drift.
+func harnessTracePath(name string) string {
+	return filepath.Join("..", "testdata", "harness_scenarios", name)
+}
+
+func readHarnessTraceFile(t *testing.T, path string) harnessTraceFile {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	require.NoError(t, err, "missing recorded trace; regenerate with -update-traces")
+	decoder := json.NewDecoder(strings.NewReader(string(data)))
+	decoder.DisallowUnknownFields()
+	var file harnessTraceFile
+	require.NoError(t, decoder.Decode(&file))
+	require.NotEmpty(t, file.Trace)
+	return file
+}
+
+// Recording may read an artifact containing only the notification pass.
+func readHarnessTraceFileForUpdate(t *testing.T, path string) harnessTraceFile {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	require.NoError(t, err, "run the notification trace recording before claim recording")
+	var file harnessTraceFile
+	require.NoError(t, json.Unmarshal(data, &file))
+	return file
+}
+
+func writeHarnessTrace(t *testing.T, path string, file harnessTraceFile) {
+	t.Helper()
+	var buf bytes.Buffer
+	encoder := json.NewEncoder(&buf)
+	encoder.SetEscapeHTML(false)
+	encoder.SetIndent("", "  ")
+	require.NoError(t, encoder.Encode(file))
+	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
+	require.NoError(t, os.WriteFile(path, buf.Bytes(), 0o600))
+	t.Logf("recorded controller trace %s", path)
+}
+
+func normalizeHarnessTrace(
+	t *testing.T,
+	events []controllerapi.SessionNotification,
+	sessionID int64,
+) []harnessTraceEvent {
+	t.Helper()
+	children := map[int64]string{}
+	wakes := []string{}
+	out := make([]harnessTraceEvent, 0, len(events))
+	for _, event := range events {
+		if event.SessionID != sessionID {
+			continue
+		}
+		n := event.Notification
+		if n.Type == sessionevent.NotifyHeartbeat {
+			// Periodic heartbeat counts vary with wall time and only drive typing, so deterministic goldens exclude them.
+			continue
+		}
+		requireRecordableNotification(t, n)
+		recorded := harnessTraceEvent{
+			Type:   string(n.Type),
+			Status: string(n.Status),
+			Reason: n.Reason,
+			Source: n.Source,
+		}
+		if len(n.Attributes) > 0 {
+			recorded.Attributes = n.Attributes
+		}
+		if n.Name != "" {
+			recorded.Name = namePlaceholder
+		}
+		if n.WorkDir != "" {
+			recorded.WorkDir = workDirPlaceholder
+		}
+		for _, item := range n.Waiting {
+			wait := harnessTraceWait{Kind: string(item.Kind)}
+			switch item.Kind {
+			case sessionevent.WaitSubagent:
+				wait.Child = childRef(children, item.ChildID)
+			case sessionevent.WaitSleep:
+				wait.Wake = wakePlaceholder
+				wakes = append(wakes, item.WakeAt.Local().Format(waitTimeLayout))
+			}
+			recorded.Waiting = append(recorded.Waiting, wait)
+		}
+		recorded.Message = normalizeHarnessMessage(n.Message, children, wakes)
+		out = append(out, recorded)
+	}
+	return out
+}
+
+// Unsupported notification payloads must fail recording rather than silently disappear.
+func requireRecordableNotification(t *testing.T, n sessionevent.Notification) {
+	t.Helper()
+	require.Zero(t, n.OldSessionID, "extend the trace schema before recording session clears")
+	require.Zero(t, n.NewSessionID, "extend the trace schema before recording session clears")
+}
+
+func childRef(children map[int64]string, id int64) string {
+	if ref, ok := children[id]; ok {
+		return ref
+	}
+	ref := fmt.Sprintf("#%d", len(children)+1)
+	children[id] = ref
+	return ref
+}
+
+func normalizeHarnessMessage(message string, children map[int64]string, wakes []string) string {
+	if message == "" {
+		return ""
+	}
+	message = elapsedPattern.ReplaceAllString(message, "⌚ <elapsed>")
+	for _, wake := range wakes {
+		message = strings.ReplaceAll(message, wake, wakePlaceholder)
+	}
+	return childRefPattern.ReplaceAllStringFunc(message, func(match string) string {
+		for id, ref := range children {
+			if match == fmt.Sprintf("#%d", id) {
+				return ref
+			}
+		}
+		return match
+	})
 }

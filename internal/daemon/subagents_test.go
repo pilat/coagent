@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"path/filepath"
 	"testing"
 	"time"
@@ -22,17 +23,12 @@ import (
 
 func TestDeliverCompletionLogsRejectedParent(t *testing.T) {
 	t.Parallel()
-
 	killedAt := time.Now()
 	sessions := &childStateSessionStore{record: &sessionstore.SessionRecord{KilledAt: &killedAt}}
 	manager := &svc{store: sessions, links: rejectingCompletionTransactions{}}
 	core, logs := observer.New(zap.ErrorLevel)
 	ctx := logger.ToContext(t.Context(), zap.New(core))
-
-	manager.deliverCompletionToParent(ctx, subagent.Link{
-		ParentID: 7, ChildID: 8, ActivationSeq: 1, Blocking: true,
-	})
-
+	manager.deliverCompletionToParent(ctx, subagent.Link{ParentID: 7, ChildID: 8, ActivationSeq: 1, Blocking: true})
 	entries := logs.FilterMessage("deliver_completion_dropped").All()
 	require.Len(t, entries, 1)
 	assert.Equal(t, int64(8), entries[0].ContextMap()["child"])
@@ -41,15 +37,10 @@ func TestDeliverCompletionLogsRejectedParent(t *testing.T) {
 
 func TestCompletionContentIncludesPersistedIteration(t *testing.T) {
 	t.Parallel()
-
-	manager := &svc{store: &childStateSessionStore{
-		record: &sessionstore.SessionRecord{ID: 8, Iteration: 4},
-	}}
-
+	manager := &svc{store: &childStateSessionStore{record: &sessionstore.SessionRecord{ID: 8, Iteration: 4}}}
 	content := manager.completionContent(t.Context(), subagent.Link{
 		ChildID: 8, State: subagent.StateCompleted, Outcome: subagent.OutcomeCompleted,
 	})
-
 	assert.Contains(t, content, "(4 iterations)")
 }
 
@@ -57,8 +48,7 @@ func TestPendingExternalCallsRetainsAtomicChildHandoff(t *testing.T) {
 	ctx := t.Context()
 	dbPath := filepath.Join(t.TempDir(), "handoff.db")
 	h := newHarness(t, harnessOptions{dbPath: dbPath, respond: trivialRespond})
-	sessions := h.store
-	links := h.links
+	sessions, links := h.store, h.links
 	projectID := testProject(t, sessions, t.TempDir())
 	parent, err := sessions.CreateSession(ctx, projectID, "fake-model", "", nil)
 	require.NoError(t, err)
@@ -84,7 +74,6 @@ func TestPendingExternalCallsRetainsAtomicChildHandoff(t *testing.T) {
 	handoff := &deliveringChildLinks{Store: links, link: *link}
 	h.mgr.links = handoff
 	manager := h.mgr
-
 	owners, err := manager.callOwners(ctx, parent.ID)
 	require.NoError(t, err)
 	require.True(t, handoff.delivered)
@@ -102,10 +91,8 @@ func TestPendingExternalCallsRetainsAtomicChildHandoff(t *testing.T) {
 
 func TestFollowUpAcceptedBeforeTerminalBoundaryStaysInSameActivation(t *testing.T) {
 	ctx := context.Background()
-	testFactory := &mockFactory{}
-	testHarness := newHarness(t, harnessOptions{configure: withTestModels, clientFor: testFactory.client})
-	mgr := testHarness.mgr
-	projects := testHarness.store
+	h := newHarness(t, harnessOptions{configure: withTestModels, clientFor: (&mockFactory{}).client})
+	mgr, projects := h.mgr, h.store
 	projectID := testProject(t, projects, "/tmp/follow-up-boundary")
 	parent, err := mgr.store.CreateSession(ctx, projectID, "fake-model", "", nil)
 	require.NoError(t, err)
@@ -117,15 +104,12 @@ func TestFollowUpAcceptedBeforeTerminalBoundaryStaysInSameActivation(t *testing.
 		require.True(t, mgr.runners.tryAdmit(true, int64(10_000+i)))
 		defer mgr.runners.release(true, int64(10_000+i))
 	}
-
 	require.NoError(t, mgr.SendToChild(ctx, childID, "one more question"))
 	finalizeTestChild(ctx, t, mgr, childID)
-
 	link, err := mgr.links.GetLink(ctx, childID)
 	require.NoError(t, err)
 	require.NotNil(t, link)
 	assert.False(t, link.Terminal(), "accepted input wins the activation boundary")
-
 	pending, err := mgr.store.PeekPending(ctx, childID)
 	require.NoError(t, err)
 	assert.Equal(t, "one more question", pending.RawContent)
@@ -133,30 +117,24 @@ func TestFollowUpAcceptedBeforeTerminalBoundaryStaysInSameActivation(t *testing.
 
 func TestTerminalChildDeliversPreviousOutcomeBeforeRearm(t *testing.T) {
 	ctx := context.Background()
-	testFactory := &mockFactory{}
-	testHarness := newHarness(t, harnessOptions{configure: withTestModels, clientFor: testFactory.client})
-	mgr := testHarness.mgr
-	projects := testHarness.store
+	h := newHarness(t, harnessOptions{configure: withTestModels, clientFor: (&mockFactory{}).client})
+	mgr, projects := h.mgr, h.store
 	projectID := testProject(t, projects, t.TempDir())
 	parent, err := mgr.store.CreateSession(ctx, projectID, "fake-model", "", nil)
 	require.NoError(t, err)
 	childID := createBackgroundChild(t, mgr, projectID, parent.ID)
-
 	require.NoError(
 		t,
 		seedTerminalChild(ctx, projects, childID, subagent.StateCompleted, "first outcome", subagent.OutcomeCompleted),
 	)
 	require.NoError(t, mgr.store.UpdateSessionStatus(ctx, childID, sessionstore.SessionStatusCompleted))
 	mgr.startWake()
-
 	require.NoError(t, mgr.SendToChild(ctx, childID, "follow-up after completion"))
-
-	testHarness.waitUntil("TestTerminalChildDeliversPreviousOutcomeBeforeRearm", func() bool {
+	h.waitUntil("prior outcome delivered", func() bool {
 		link, linkErr := mgr.links.GetLink(ctx, childID)
 		if linkErr != nil || link == nil || link.State != subagent.StateRunning || link.DeliveredAt != 0 {
 			return false
 		}
-
 		messages, msgErr := mgr.store.LoadActiveMessages(ctx, parent.ID)
 		if msgErr != nil {
 			return false
@@ -169,6 +147,52 @@ func TestTerminalChildDeliversPreviousOutcomeBeforeRearm(t *testing.T) {
 		}
 		return false
 	})
-
 	mgr.Shutdown(3 * time.Second)
+}
+
+type childStateSessionStore struct {
+	Store
+	record *sessionstore.SessionRecord
+	reads  int
+}
+
+func (s *childStateSessionStore) GetSession(context.Context, int64) (*sessionstore.SessionRecord, error) {
+	s.reads++
+	return s.record, nil
+}
+
+type deliveringChildLinks struct {
+	subagent.Store
+	link      subagent.Link
+	delivered bool
+}
+
+func (s *deliveringChildLinks) ListPendingChildLinks(ctx context.Context, parentID int64) ([]subagent.Link, error) {
+	if parentID == s.link.ParentID && !s.delivered {
+		won, err := s.DeliverCompletion(ctx, s.link, "child finished during ownership capture")
+		if err != nil {
+			return nil, fmt.Errorf("deliver ownership handoff: %w", err)
+		}
+		if !won {
+			return nil, fmt.Errorf("ownership handoff did not commit for child %d", s.link.ChildID)
+		}
+		s.delivered = true
+	}
+	links, err := s.Store.ListPendingChildLinks(ctx, parentID)
+	if err != nil {
+		return nil, fmt.Errorf("read handed-off child links: %w", err)
+	}
+	return links, nil
+}
+
+type rejectingCompletionTransactions struct {
+	subagent.Store
+}
+
+func (rejectingCompletionTransactions) DeliverCompletion(
+	context.Context,
+	subagent.Link,
+	string,
+) (bool, error) {
+	return false, sessionstore.ErrSessionNotAcceptingInput
 }

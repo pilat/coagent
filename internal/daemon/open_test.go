@@ -18,27 +18,22 @@ import (
 
 func TestModelHasPricingRequiresMatchingPricedEntry(t *testing.T) {
 	t.Parallel()
-
 	manager := &svc{models: models{entries: []config.ModelEntry{
 		{ID: "unpriced"},
 		{ID: "priced", Pricing: &config.ModelPricing{}},
 	}}}
-
 	assert.False(t, manager.models.priced("missing"))
 	assert.False(t, manager.models.priced("unpriced"))
 	assert.True(t, manager.models.priced("priced"))
 }
 
-// TestResolveChildEffort covers the settling rules a spawn applies before the
-// child's level is persisted, including the shape a brand-new session needs
-// (nothing asked for, nothing inherited).
+// Spawn must settle child effort before persistence, including an uninherited default for a new session.
 func TestResolveChildEffort(t *testing.T) {
 	entries := []config.ModelEntry{
 		reasoningModelEntry("parent-model", []string{"low", "high"}, "high"),
 		reasoningModelEntry("child-model", []string{"low", "medium"}, "low"),
 		{ID: "plain-model", Provider: "or"},
 	}
-
 	tests := []struct {
 		name      string
 		entries   []config.ModelEntry
@@ -82,26 +77,21 @@ func TestResolveChildEffort(t *testing.T) {
 			model: "child-model", inherited: "high", want: "high",
 		},
 	}
-
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			s := &svc{models: models{entries: tt.entries}}
-
 			got, err := s.models.effort(tt.model, tt.requested, tt.inherited)
 			if tt.wantErr != "" {
 				require.ErrorContains(t, err, tt.wantErr)
 				return
 			}
-
 			require.NoError(t, err)
 			assert.Equal(t, tt.want, got)
 		})
 	}
 }
 
-// TestProductionTools_ParallelSafePolicies pins the concurrency declarations
-// of every tool the daemon registers into session registries: task is the only
-// parallel-safe one; any accidental opt-in or opt-out must fail here.
+// Only task is parallel-safe among daemon-registered tools; accidental policy changes must fail this test.
 func TestProductionTools_ParallelSafePolicies(t *testing.T) {
 	tools := map[string]tool.Tool{
 		tool.IDTask:           subagent.NewTaskTool(nil, 0, nil, nil),
@@ -111,49 +101,37 @@ func TestProductionTools_ParallelSafePolicies(t *testing.T) {
 		tool.IDSleep:          schedule.NewSleepTool(nil, 0),
 		budget.ToolID:         budget.NewTool(nil, 0, false),
 	}
-
 	for _, tl := range []tool.Tool{configapply.NewConfigEdit(0, nil)} {
 		tools[tl.ID()] = tl
 	}
-
 	for _, tl := range mcpstore.NewTools(nil, 0) {
 		tools[tl.ID()] = tl
 	}
-
 	want := make(map[string]bool, len(tools))
 	for id := range tools {
 		want[id] = id == tool.IDTask
 	}
-
 	got := make(map[string]bool, len(tools))
 	for id, tl := range tools {
 		got[id] = tl.ParallelSafe()
 	}
-
 	assert.Equal(t, want, got)
-
 	assert.False(t, schedule.NewGuardedSleepTool(nil, 0, nil).ParallelSafe())
 }
 
 func TestSessionRepoRoot_InheritedAcrossDurableSubagentTree(t *testing.T) {
 	h := newHarness(t, harnessOptions{})
-	root, err := h.store.CreateSession(h.ctx, h.projectID, "fake-model", "", map[string]any{
-		"repo_root": "/source",
-	})
-	require.NoError(t, err)
-	childID := h.createUnlinkedChild(root.ID)
+	root := h.createRoot(map[string]any{"repo_root": "/source"})
+	childID := h.createUnlinkedChild(root)
 	grandchildID := h.createUnlinkedChild(childID)
-
-	for _, sessionID := range []int64{root.ID, childID, grandchildID} {
+	for _, sessionID := range []int64{root, childID, grandchildID} {
 		rec := h.session(sessionID)
 		got, rootErr := h.mgr.sessionRepoRoot(h.ctx, rec)
 		require.NoError(t, rootErr)
 		assert.Equal(t, "/source", got)
 	}
-
 	child := h.session(childID)
 	assert.Empty(t, child.Attributes["repo_root"])
-
 	plain, err := h.store.CreateSession(h.ctx, h.projectID, "fake-model", "", nil)
 	require.NoError(t, err)
 	got, err := h.mgr.sessionRepoRoot(h.ctx, plain)
@@ -163,11 +141,9 @@ func TestSessionRepoRoot_InheritedAcrossDurableSubagentTree(t *testing.T) {
 
 func TestSessionRepoRoot_RejectsCrossProjectRoot(t *testing.T) {
 	h := newHarness(t, harnessOptions{})
-	root, err := h.store.CreateSession(h.ctx, h.projectID, "fake-model", "", map[string]any{
-		"repo_root": "/source",
-	})
-	require.NoError(t, err)
-	other := &sessionstore.SessionRecord{RootID: root.ID, ProjectID: h.projectID + 1}
+	var err error
+	root := h.createRoot(map[string]any{"repo_root": "/source"})
+	other := &sessionstore.SessionRecord{RootID: root, ProjectID: h.projectID + 1}
 	_, err = h.mgr.sessionRepoRoot(h.ctx, other)
 	require.ErrorContains(t, err, "does not match project")
 }

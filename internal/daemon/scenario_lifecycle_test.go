@@ -21,13 +21,10 @@ import (
 	"github.com/pilat/coagent/internal/subagent"
 )
 
-// TestCascadeKill_BackgroundDescendant: killing a parent stops every non-terminal
-// descendant — blocking AND background — across the depth bound, and each killed
-// unfinished descendant produces exactly one WARN audit line.
+// Parent kill stops all unfinished descendants and records one warning per killed descendant across the depth limit.
 func TestCascadeKill_BackgroundDescendant(t *testing.T) {
 	release := make(chan struct{})
 	entered := make(chan struct{}, 2)
-
 	respond := func(_ string, msgs []llmwire.Message) *llmwire.Response {
 		if hasUserContaining(msgs, "HANG") {
 			entered <- struct{}{}
@@ -35,39 +32,31 @@ func TestCascadeKill_BackgroundDescendant(t *testing.T) {
 
 			return textReply("unreached")
 		}
-
 		return textReply("idle")
 	}
-
 	h := newHarness(t, harnessOptions{respond: respond})
 	defer func() {
 		closeOnce(release)
 		h.shutdown()
 	}()
-
 	ctx := h.ctx
-
-	root, err := h.store.CreateSession(ctx, h.projectID, "fake-model", "", nil)
-	require.NoError(t, err)
-
+	root := h.createRoot(nil)
 	h.startInboxWake()
 	child, err := h.mgr.Spawn(ctx, subagent.SpawnRequest{
-		ParentID: root.ID, AgentType: "general", Prompt: "HANG", Blocking: false,
+		ParentID: root, AgentType: "general", Prompt: "HANG", Blocking: false,
 	})
 	require.NoError(t, err)
 	h.waitUntil("background child running", func() bool { return h.mgr.HasActiveLoop(child.ChildID) })
-	h.waitUntil("background child entered model call", func() bool { return len(entered) >= 1 })
-
+	h.waitUntil("child model entered", func() bool { return len(entered) >= 1 })
 	h.startInboxWake()
 	grandchild, err := h.mgr.Spawn(ctx, subagent.SpawnRequest{
 		ParentID: child.ChildID, AgentType: "general", Prompt: "HANG", Blocking: false,
 	})
 	require.NoError(t, err)
 	h.waitUntil("background grandchild running", func() bool { return h.mgr.HasActiveLoop(grandchild.ChildID) })
-	h.waitUntil("background grandchild entered model call", func() bool { return len(entered) >= 2 })
+	h.waitUntil("grandchild model entered", func() bool { return len(entered) >= 2 })
 	childInput, err := h.store.Enqueue(
-		ctx,
-		sessionstore.Input{
+		ctx, sessionstore.Input{
 			SessionID:  child.ChildID,
 			Source:     sessionstore.InputSourceProcess,
 			Content:    "pending",
@@ -76,8 +65,7 @@ func TestCascadeKill_BackgroundDescendant(t *testing.T) {
 	)
 	require.NoError(t, err)
 	grandchildInput, err := h.store.Enqueue(
-		ctx,
-		sessionstore.Input{
+		ctx, sessionstore.Input{
 			SessionID:  grandchild.ChildID,
 			Source:     sessionstore.InputSourceSubagent,
 			Content:    "complete",
@@ -89,13 +77,10 @@ func TestCascadeKill_BackgroundDescendant(t *testing.T) {
 	// Capture WARN audit lines emitted during the cascade kill.
 	core, logs := observer.New(zap.WarnLevel)
 	killCtx := logger.ToContext(ctx, zap.New(core))
-
-	require.NoError(t, h.mgr.sendToSession(killCtx, root.ID, "/kill"))
-
+	require.NoError(t, h.mgr.sendToSession(killCtx, root, "/kill"))
 	h.waitUntil("both descendants gone", func() bool {
 		return !h.mgr.HasActiveLoop(child.ChildID) && !h.mgr.HasActiveLoop(grandchild.ChildID)
 	})
-
 	for _, id := range []int64{child.ChildID, grandchild.ChildID} {
 		rec := h.session(id)
 		assert.NotNil(t, rec.KilledAt, "descendant %d is killed with its tree", id)
@@ -107,54 +92,40 @@ func TestCascadeKill_BackgroundDescendant(t *testing.T) {
 		).Scan(&state))
 		assert.Equal(t, string(sessionstore.InputStateCancelled), state)
 	}
-
-	assert.Len(t, logs.FilterMessage("cascade_killed_descendant").All(), 2,
-		"one WARN per killed unfinished descendant")
+	assert.Len(t, logs.FilterMessage("cascade_killed_descendant").All(), 2, "one WARN per killed unfinished descendant")
 }
 
-// TestCascadeKill_RemovesChildSchedules: cascade-killing a background child
-// deletes its schedules too — killSubagent owns schedule teardown, same as the
-// direct Kill path.
+// Cascade kill removes a background child's schedules just as direct kill removes root schedules.
 func TestCascadeKill_RemovesChildSchedules(t *testing.T) {
 	release := make(chan struct{})
-
 	respond := func(_ string, msgs []llmwire.Message) *llmwire.Response {
 		if hasUserContaining(msgs, "HANG") {
 			<-release // hang until kill cancels the loop ctx
 
 			return textReply("unreached")
 		}
-
 		return textReply("idle")
 	}
-
 	h := newHarness(t, harnessOptions{respond: respond})
 	defer func() {
 		closeOnce(release)
 		h.shutdown()
 	}()
-
 	ctx := h.ctx
-
-	root, err := h.store.CreateSession(ctx, h.projectID, "fake-model", "", nil)
-	require.NoError(t, err)
-
+	root := h.createRoot(nil)
 	h.startInboxWake()
 	child, err := h.mgr.Spawn(ctx, subagent.SpawnRequest{
-		ParentID: root.ID, AgentType: "general", Prompt: "HANG", Blocking: false,
+		ParentID: root, AgentType: "general", Prompt: "HANG", Blocking: false,
 	})
 	require.NoError(t, err)
 	h.waitUntil("background child running", func() bool { return h.mgr.HasActiveLoop(child.ChildID) })
-
 	oneShot := time.Now().Add(time.Hour).UTC()
 	_, err = h.schedules.AddSchedule(ctx, child.ChildID, "", &oneShot, "child one-shot", false)
 	require.NoError(t, err)
 	_, err = h.schedules.AddSchedule(ctx, child.ChildID, "0 9 * * *", nil, "child cron", false)
 	require.NoError(t, err)
-
-	require.NoError(t, h.mgr.sendToSession(ctx, root.ID, "/kill"))
+	require.NoError(t, h.mgr.sendToSession(ctx, root, "/kill"))
 	h.waitUntil("child gone", func() bool { return !h.mgr.HasActiveLoop(child.ChildID) })
-
 	remaining, err := h.schedules.ListSchedules(ctx, child.ChildID)
 	require.NoError(t, err)
 	assert.Empty(t, remaining, "cascade-killed child's schedules are removed")
@@ -162,27 +133,20 @@ func TestCascadeKill_RemovesChildSchedules(t *testing.T) {
 
 func TestCascadeKill_KilledTreeSuppressesTerminalBackgroundCompletion(t *testing.T) {
 	h := newHarness(t, harnessOptions{respond: trivialRespond})
-	defer h.shutdown()
-
-	parent, err := h.store.CreateSession(h.ctx, h.projectID, "fake-model", "", nil)
-	require.NoError(t, err)
-	childID := h.createChild(parent.ID, subagent.Link{
-		TaskCallID: "background",
-	})
+	var err error
+	parent := h.createRoot(nil)
+	childID := h.createChild(parent, subagent.Link{TaskCallID: "background"})
 	require.NoError(
-		t,
-		seedTerminalChild(h.ctx, h.store, childID, subagent.StateCompleted, "done", subagent.OutcomeCompleted),
+		t, seedTerminalChild(h.ctx, h.store, childID, subagent.StateCompleted, "done", subagent.OutcomeCompleted),
 	)
 	require.NoError(
 		t,
 		h.store.WithTx(
 			h.ctx,
-			func(tx *sql.Tx) error { return sessionstore.MarkSessionKilledTx(h.ctx, tx, parent.ID) },
+			func(tx *sql.Tx) error { return sessionstore.MarkSessionKilledTx(h.ctx, tx, parent) },
 		),
 	)
-
-	h.mgr.killDescendants(h.ctx, parent.ID, 0)
-
+	h.mgr.killDescendants(h.ctx, parent, 0)
 	link := h.link(childID)
 	require.NotNil(t, link)
 	assert.Equal(t, subagent.StateCompleted, link.State)
@@ -191,13 +155,11 @@ func TestCascadeKill_KilledTreeSuppressesTerminalBackgroundCompletion(t *testing
 	assert.Positive(t, link.DeliveredAt)
 	assert.Zero(t, link.DeliveredInputID)
 	assert.Zero(t, link.DeliveredMsgID)
-	_, err = h.store.PeekPending(h.ctx, parent.ID)
+	_, err = h.store.PeekPending(h.ctx, parent)
 	require.ErrorIs(t, err, sessionstore.ErrNoPendingInput)
 }
 
-// A live explicit stop: the fence and its replaceable start row commit while
-// the model call is in flight, cleanup settles the unresolved call, and one
-// terminal transaction releases the root with its persistent completion.
+// An in-flight stop commits its fence/start, settles the call and releases the root through one terminal completion.
 func TestHarnessScenario_LiveStopChain(t *testing.T) {
 	entered := make(chan struct{})
 	release := make(chan struct{})
@@ -208,10 +170,8 @@ func TestHarnessScenario_LiveStopChain(t *testing.T) {
 			close(entered)
 			<-release
 		}
-
 		return textReply("never reached")
 	}
-
 	h := newHarness(t, harnessOptions{respond: respond})
 	defer func() {
 		close(release)
@@ -220,21 +180,16 @@ func TestHarnessScenario_LiveStopChain(t *testing.T) {
 
 	collector := collectEvents(t, h.mgr.bus.SubscribeAll())
 	defer collector.stop()
-
 	h.startInboxWake()
-	root, err := h.mgr.Send(h.ctx, h.projectID, "long work", "fake-model", map[string]any{
-		"manager_id": scenarioManagerID,
-	})
+	root, err := h.mgr.Send(h.ctx, h.projectID, "long work", "fake-model", managerAttrs(scenarioManagerID))
 	require.NoError(t, err)
 	waitForScenarioSignal(t, entered, "model call")
 	service := installScenarioProcessService(t, h)
 	process := startScenarioProcess(t, service, root, root, "sleep 30")
-
 	h.startInboxWake()
 	require.NoError(t, h.mgr.sendToSession(h.ctx, root, "/stop"))
 	h.waitUntil("root stopped", func() bool {
 		record, loadErr := h.store.GetSession(h.ctx, root)
-
 		return loadErr == nil && record.Status == sessionstore.SessionStatusStopped
 	})
 	stoppedProcess := func() backgroundprocess.Process {
@@ -247,66 +202,50 @@ func TestHarnessScenario_LiveStopChain(t *testing.T) {
 		return record
 	}()
 	require.Equal(t, backgroundprocess.IntentSessionStopped, stoppedProcess.HostIntent)
-
 	controller := newChainController(t, h)
 	drainScenarioClaims(t, "stop_live_chain.json", controller)
 	collector.waitFor(t, "stopped readiness", func(events []controllerapi.SessionNotification) bool {
 		return containsStateWithReason(events, root, sessionevent.StateIdle, "stopped")
 	})
-
 	assertHarnessTrace(t, "stop_live_chain.json", collector.snapshot(), root)
 }
 
-// An interrupted explicit stop converges on restart: the first process dies
-// right after the fence commit; the next one finishes cleanup and commits the
-// same terminal transaction without running any model or tool work.
+// Restart finishes a committed stop fence and terminal completion without executing more model or tool work.
 func TestHarnessScenario_InterruptedStopChain(t *testing.T) {
 	respond := func(_ string, _ []llmwire.Message) *llmwire.Response {
 		return textReply("must not run")
 	}
-
 	dbPath := filepath.Join(t.TempDir(), "interrupted-stop.db")
 	h1 := newHarness(t, harnessOptions{dbPath: dbPath, respond: respond})
-	root, err := h1.store.CreateSession(h1.ctx, h1.projectID, "fake-model", "", map[string]any{
-		"manager_id": scenarioManagerID,
-	})
-	require.NoError(t, err)
+	root := h1.createRoot(managerAttrs(scenarioManagerID))
 	require.NoError(t, h1.store.BindManager(h1.ctx, scenarioManagerID, "telegram", map[string]any{
 		"bot_user_id": int64(1), "chat_id": int64(2), "topology": "group",
 	}))
 	input, err := h1.store.Enqueue(
-		h1.ctx,
-		sessionstore.Input{SessionID: root.ID, Source: sessionstore.InputSourceUser, Content: "/stop"},
+		h1.ctx, sessionstore.Input{SessionID: root, Source: sessionstore.InputSourceUser, Content: "/stop"},
 	)
 	require.NoError(t, err)
 	_, err = h1.store.BeginLifecycleInput(h1.ctx, input.Input.ID, "stop", "⏳ Stopping…")
 	require.NoError(t, err)
 	h1.shutdown()
-
 	var modelCalls int
 	respond2 := func(_ string, _ []llmwire.Message) *llmwire.Response {
 		modelCalls++
-
 		return textReply("must not run")
 	}
 	h2 := newHarness(t, harnessOptions{dbPath: dbPath, respond: respond2})
-	defer h2.shutdown()
 	require.NoError(t, h2.mgr.Start(h2.ctx))
-
-	record := h2.session(root.ID)
+	record := h2.session(root)
 	require.Equal(t, sessionstore.SessionStatusStopped, record.Status)
 	require.Zero(t, modelCalls, "stop recovery must never run the model")
-
 	collector := collectEvents(t, h2.mgr.bus.SubscribeAll())
 	defer collector.stop()
-
 	controller := newChainController(t, h2)
 	drainScenarioClaims(t, "stop_interrupted_chain.json", controller)
 	collector.waitFor(t, "stopped readiness", func(events []controllerapi.SessionNotification) bool {
-		return containsStateWithReason(events, root.ID, sessionevent.StateIdle, "stopped")
+		return containsStateWithReason(events, root, sessionevent.StateIdle, "stopped")
 	})
-
-	assertHarnessTrace(t, "stop_interrupted_chain.json", collector.snapshot(), root.ID)
+	assertHarnessTrace(t, "stop_interrupted_chain.json", collector.snapshot(), root)
 }
 
 // A later ordinary input on a stopped root is a fresh generation on preserved
@@ -316,48 +255,49 @@ func TestHarnessScenario_LaterFreshTurnAfterStop(t *testing.T) {
 		if hasUserContaining(msgs, "continue please") {
 			return textReply("Resumed and done.")
 		}
-
 		if hasToolResultFor(msgs, "ls") {
 			return textReply("Working on it, done for now.")
 		}
-
 		return &llmwire.Response{
-			Text: "Working on it",
-			ToolCalls: []llmwire.ToolCall{{
-				ID: "fresh-ls", Name: "ls", Arguments: []byte(`{"path":"."}`),
-			}},
+			Text:      "Working on it",
+			ToolCalls: []llmwire.ToolCall{{ID: "fresh-ls", Name: "ls", Arguments: []byte(`{"path":"."}`)}},
 		}
 	}
-
 	h := newHarness(t, harnessOptions{respond: respond})
-	defer h.shutdown()
 
 	collector := collectEvents(t, h.mgr.bus.SubscribeAll())
 	defer collector.stop()
-
 	h.startInboxWake()
-	root, err := h.mgr.Send(h.ctx, h.projectID, "long work", "fake-model", map[string]any{
-		"manager_id": scenarioManagerID,
-	})
+	root, err := h.mgr.Send(h.ctx, h.projectID, "long work", "fake-model", managerAttrs(scenarioManagerID))
 	require.NoError(t, err)
 	collector.waitMessage(root, "Working on it, done for now.")
 	h.waitUntil("first runner gone", func() bool { return !h.mgr.HasActiveLoop(root) })
-
 	h.startInboxWake()
 	require.NoError(t, h.mgr.sendToSession(h.ctx, root, "/stop"))
 	h.waitUntil("root stopped", func() bool {
 		record, loadErr := h.store.GetSession(h.ctx, root)
-
 		return loadErr == nil && record.Status == sessionstore.SessionStatusStopped
 	})
-
 	h.startInboxWake()
 	require.NoError(t, h.mgr.sendToSession(h.ctx, root, "continue please"))
 	collector.waitMessage(root, "Resumed and done.")
-
 	controller := newChainController(t, h)
 	drainScenarioClaims(t, "stop_then_fresh_turn.json", controller)
 	collector.waitIdleAfter(root, "Resumed and done.")
-
 	assertHarnessTrace(t, "stop_then_fresh_turn.json", collector.snapshot(), root)
+}
+
+func containsStateWithReason(
+	events []controllerapi.SessionNotification,
+	sessionID int64,
+	status sessionevent.State,
+	reason string,
+) bool {
+	for _, event := range events {
+		if event.SessionID == sessionID && event.Notification.Status == status &&
+			event.Notification.Reason == reason {
+			return true
+		}
+	}
+	return false
 }

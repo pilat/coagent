@@ -15,7 +15,6 @@ import (
 	"github.com/pilat/coagent/internal/backgroundprocess"
 	"github.com/pilat/coagent/internal/controllerapi"
 	"github.com/pilat/coagent/internal/logger"
-	"github.com/pilat/coagent/internal/sessionevent"
 	"github.com/pilat/coagent/internal/sessionstore"
 	"github.com/pilat/coagent/internal/subagent"
 	"github.com/pilat/coagent/internal/tool"
@@ -24,46 +23,29 @@ import (
 
 func TestManager_KillTerminatingOnStartup(t *testing.T) {
 	factory := &mockFactory{}
-	testHarness := newHarness(t, harnessOptions{configure: withTestModels, clientFor: factory.client})
-	mgr := testHarness.mgr
-	s := testHarness.store
+	h := newHarness(t, harnessOptions{configure: withTestModels, clientFor: factory.client})
+	mgr, s := h.mgr, h.store
 	ch := collectEvents(t, mgr.bus.SubscribeAll())
 	t.Cleanup(ch.stop)
-
 	factory.nextSess = &mockSession{completeAfter: 50 * time.Millisecond}
-
 	ctx := context.Background()
 	pid := testProject(t, s, t.TempDir())
 	id, err := mgr.Send(ctx, pid, "init", "", nil)
 	require.NoError(t, err)
-
 	ch.waitFor(t, "session state", func(events []controllerapi.SessionNotification) bool {
-		for _, event := range events {
-			if event.SessionID == id && event.Notification.Type == sessionevent.NotifyStateChanged &&
-				event.Notification.Status == controllerapi.StateIdle {
-				return true
-			}
-		}
-		return false
+		return hasStateEvent(events, id, controllerapi.StateIdle)
 	})
 
 	// Simulate: Clear set terminating but daemon died before Kill completed
-	require.NoError(t, mgr.store.UpdateSessionStatus(
-		context.Background(), id, sessionstore.SessionStatusTerminating,
-	))
-
+	require.NoError(t, mgr.store.UpdateSessionStatus(context.Background(), id, sessionstore.SessionStatusTerminating))
 	require.NoError(t, mgr.Start(ctx))
-
-	rec, err := mgr.store.GetSession(context.Background(), id)
-	require.NoError(t, err)
+	rec := h.session(id)
 	assert.NotNil(t, rec.KilledAt, "terminating session should be killed on startup")
 }
 
 func TestSettleUnresolvedCallsDeduplicatesRepeatedCallID(t *testing.T) {
-	testFactory := &mockFactory{}
-	testHarness := newHarness(t, harnessOptions{configure: withTestModels, clientFor: testFactory.client})
-	mgr := testHarness.mgr
-	sessions := testHarness.store
+	h := newHarness(t, harnessOptions{configure: withTestModels, clientFor: (&mockFactory{}).client})
+	mgr, sessions := h.mgr, h.store
 	ctx := t.Context()
 	projectID := testProject(t, sessions, t.TempDir())
 	record, err := sessions.CreateSession(ctx, projectID, "fake-model", "", nil)
@@ -82,11 +64,9 @@ func TestSettleUnresolvedCallsDeduplicatesRepeatedCallID(t *testing.T) {
 	assert.Equal(t, tool.IDSleep, pending[0].Attributes["tool_id"])
 }
 
-// Only a session that can still ship its transcript needs its calls closed;
-// everything else is parked or gone.
+// Only a session that can still ship its transcript needs its calls closed; everything else is parked or gone.
 func TestOrphanSweepCandidate(t *testing.T) {
 	killedAt := time.Now()
-
 	tests := []struct {
 		name string
 		rec  *sessionstore.SessionRecord
@@ -104,7 +84,6 @@ func TestOrphanSweepCandidate(t *testing.T) {
 			rec:  &sessionstore.SessionRecord{Status: sessionstore.SessionStatusSuspended, KilledAt: &killedAt},
 		},
 	}
-
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			assert.Equal(t, tt.want, orphanSweepCandidate(tt.rec))
@@ -128,7 +107,6 @@ func TestStartDoesNotLaunchRecoveryAfterShutdown(t *testing.T) {
 	close(links.allowReturn)
 	h.mgr.links = links
 	h.mgr.Shutdown(time.Second)
-
 	require.ErrorIs(t, h.mgr.Start(h.ctx), errDaemonShuttingDown)
 	assert.Never(t, func() bool {
 		select {
@@ -142,10 +120,8 @@ func TestStartDoesNotLaunchRecoveryAfterShutdown(t *testing.T) {
 
 func TestStartFinishesInterruptedStopBeforeRecoverySweep(t *testing.T) {
 	ctx := context.Background()
-	testFactory := &mockFactory{}
-	testHarness := newHarness(t, harnessOptions{configure: withTestModels, clientFor: testFactory.client})
-	mgr := testHarness.mgr
-	projects := testHarness.store
+	h := newHarness(t, harnessOptions{configure: withTestModels, clientFor: (&mockFactory{}).client})
+	mgr, projects := h.mgr, h.store
 	projectID := testProject(t, projects, "/tmp/recover-stop")
 	parent, err := mgr.store.CreateSession(ctx, projectID, "fake-model", "", nil)
 	require.NoError(t, err)
@@ -156,7 +132,6 @@ func TestStartFinishesInterruptedStopBeforeRecoverySweep(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, mgr.store.UpdateSessionStatus(ctx, parent.ID, sessionstore.SessionStatusStopping))
 	require.NoError(t, mgr.store.UpdateSessionStatus(ctx, childID, sessionstore.SessionStatusStopping))
-
 	outputPath := filepath.Join(t.TempDir(), "stopping.output")
 	require.NoError(t, os.WriteFile(outputPath, []byte("partial"), 0o600))
 	now := time.Now().UTC()
@@ -165,12 +140,9 @@ func TestStartFinishesInterruptedStopBeforeRecoverySweep(t *testing.T) {
 		ToolCallID: "stopping-call", OutputPath: outputPath, CreatedAt: now,
 		Deadline: now.Add(time.Minute), AdvertisedAt: &now, State: backgroundprocess.StateRunning,
 	}))
-
 	require.NoError(t, mgr.Start(ctx))
-
 	for _, id := range []int64{parent.ID, childID} {
-		rec, err := mgr.store.GetSession(context.Background(), id)
-		require.NoError(t, err)
+		rec := h.session(id)
 		assert.Equal(t, sessionstore.SessionStatusStopped, rec.Status)
 	}
 	link, err := mgr.links.GetLink(ctx, childID)
@@ -183,7 +155,6 @@ func TestStartFinishesInterruptedStopBeforeRecoverySweep(t *testing.T) {
 	messages, err := mgr.store.LoadActiveMessages(ctx, parent.ID)
 	require.NoError(t, err)
 	assert.Equal(t, 0, countToolResultsFor(toDTO(messages), "process_event"))
-
 	mgr.Shutdown(3 * time.Second)
 }
 
@@ -191,39 +162,32 @@ func TestStartFinishesInterruptedStopBeforeRecoverySweep(t *testing.T) {
 // `sweep_done resumed=0` — crash recovery reporting success it never performed.
 func TestSweep_PartialFailureIsNotSuccess(t *testing.T) {
 	h := newLedgerHarness(t)
-	defer h.shutdown()
-
 	h.flaky.listRunningFail = true
 
-	// Observe at Info: sweep_done is an Info line, so a Warn-level observer would
-	// make both assertions vacuously pass.
+	// Observe at Info: sweep_done is an Info line, so a Warn-level observer would make both assertions vacuously pass.
 	core, logs := observer.New(zap.InfoLevel)
 	ctx := logger.ToContext(h.ctx, zap.New(core))
-
 	h.startInboxWake()
 	h.mgr.resumeAfterRestart(ctx)
-
 	entries := logs.FilterMessage("sweep_incomplete").All()
 	require.Len(t, entries, 1)
-
 	fields := entries[0].ContextMap()
 	assert.Equal(t, true, fields["running_failed"])
 	assert.Equal(t, false, fields["undelivered_failed"], "PASS 2 still ran")
-
 	assert.Empty(t, logs.FilterMessage("sweep_done").All(), "a partial sweep never reports done")
 }
 
 // TestSweep_CleanRunReportsDone: the healthy path keeps its existing line.
 func TestSweep_CleanRunReportsDone(t *testing.T) {
 	h := newLedgerHarness(t)
-	defer h.shutdown()
-
 	core, logs := observer.New(zap.InfoLevel)
 	ctx := logger.ToContext(h.ctx, zap.New(core))
-
 	h.startInboxWake()
 	h.mgr.resumeAfterRestart(ctx)
-
 	assert.Len(t, logs.FilterMessage("sweep_done").All(), 1)
 	assert.Empty(t, logs.FilterMessage("sweep_incomplete").All())
+}
+
+func storedAssistant(toolCalls string) *transcript.Message {
+	return &transcript.Message{Role: "assistant", ToolCalls: []byte(toolCalls)}
 }
