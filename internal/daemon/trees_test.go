@@ -19,6 +19,34 @@ import (
 	"github.com/pilat/coagent/internal/subagent"
 )
 
+type enqueueAfterFinishSchedules struct {
+	schedule.Service
+	h *harness
+}
+
+func (s *enqueueAfterFinishSchedules) CancelPendingSleeps(ctx context.Context, sessionID int64) (int64, error) {
+	_, err := s.h.store.Enqueue(ctx, sessionstore.Input{
+		SessionID: sessionID, Source: sessionstore.InputSourceUser, Content: "after finish",
+	})
+	require.NoError(s.h.t, err)
+
+	return s.Service.CancelPendingSleeps(ctx, sessionID)
+}
+
+func TestStopTreeCleanupKeepsInputAcceptedAfterFinish(t *testing.T) {
+	h := newHarness(t, harnessOptions{})
+	root := h.createRoot(nil)
+	h.mgr.schedules = &enqueueAfterFinishSchedules{Service: h.mgr.schedules, h: h}
+
+	require.NoError(t, h.mgr.stopTreeCleanup(h.ctx, root, stopTreeOptions{}))
+
+	var state string
+	require.NoError(t, h.db.QueryRowContext(h.ctx, `SELECT state FROM session_inbox
+		WHERE session_id = ? AND raw_content = 'after finish'`, root).Scan(&state))
+	assert.Equal(t, "pending", state)
+	assert.Equal(t, sessionstore.SessionStatusStopped, h.session(root).Status)
+}
+
 func TestManager_GracefulKill(t *testing.T) {
 	factory := &mockFactory{}
 	h := newHarness(t, harnessOptions{configure: withTestModels, clientFor: factory.client})

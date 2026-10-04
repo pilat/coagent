@@ -286,6 +286,10 @@ func (s *svc) stopTreeCleanup(ctx context.Context, sessionID int64, options stop
 		return err
 	}
 
+	if err := s.cancelStopInputs(cleanupCtx, plan); err != nil {
+		return err
+	}
+
 	if err := s.settleStoppedTree(cleanupCtx, ids); err != nil {
 		return err
 	}
@@ -307,7 +311,7 @@ func (s *svc) stopTreeCleanup(ctx context.Context, sessionID int64, options stop
 			return fmt.Errorf("cancel one-shot waits for session %d: %w", id, err)
 		}
 	}
-	return s.cancelStopInputs(cleanupCtx, plan)
+	return nil
 }
 
 func (s *svc) stopTreeBackgroundProcesses(ctx context.Context, sessionID int64, options stopTreeOptions) error {
