@@ -23,13 +23,14 @@ const (
 	DBFileName           = "daemon.db"
 	PendingApplyFileName = "pending-apply.json"
 
-	ProjectsDirName     = "projects"
-	WorktreesDirName    = "worktrees"
-	CacheDirName        = "cache"
-	CatalogDirName      = "catalog"
-	MarketplacesDirName = "marketplaces"
-	ProcessesDirName    = "processes"
-	SandboxDirName      = "sandbox"
+	ProjectsDirName       = "projects"
+	WorktreesDirName      = "worktrees"
+	CacheDirName          = "cache"
+	CatalogDirName        = "catalog"
+	MarketplacesDirName   = "marketplaces"
+	ProcessesDirName      = "processes"
+	MCPAttachmentsDirName = "mcp-attachments"
+	SandboxDirName        = "sandbox"
 
 	// TelegramServiceFilePattern is the legacy target-chat-keyed service record.
 	TelegramServiceFilePattern = "tg-service-%d.json"

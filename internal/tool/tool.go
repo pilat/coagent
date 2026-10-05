@@ -28,8 +28,24 @@ const (
 	IDMCPDisable     = "mcp_disable"
 	IDMCPList        = "mcp_list"
 
-	IDConfigEdit = "config_edit"
+	IDConfigEdit         = "config_edit"
+	BrowserAgentType     = "browser"
+	PlaywrightServerName = "playwright"
+	PlaywrightToolPrefix = "mcp__playwright__"
+	BrowserTaskState     = "task_state"
 )
+
+func IsBrowserToolID(id string) bool { return strings.HasPrefix(id, PlaywrightToolPrefix) }
+
+func ValidBrowserTaskState(value any) bool {
+	state, ok := value.(string)
+	return ok && strings.TrimSpace(state) != ""
+}
+
+// BrowserAvailability configures the task tool after MCP discovery.
+type BrowserAvailability interface { //nolint:iface // Its implementation and consumer are in other packages.
+	SetBrowserAvailable(bool)
+}
 
 // externalCallTools suspend the loop awaiting an outcome produced outside it.
 // Never re-executed, never stubbed by repair; only an injection resolves one.

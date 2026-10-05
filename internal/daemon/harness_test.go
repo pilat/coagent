@@ -444,12 +444,13 @@ func subagentRespond(_ string, msgs []llmwire.Message) *llmwire.Response {
 }
 
 type harnessOptions struct {
-	dbPath    string
-	respond   func(string, []llmwire.Message) *llmwire.Response
-	clientFor func(*config.Config) (llm.Client, error)
-	configure func(*config.Config)
-	links     func(subagent.Store) subagent.Store
-	mcp       mcpstore.Store
+	dbPath         string
+	respond        func(string, []llmwire.Message) *llmwire.Response
+	clientFor      func(*config.Config) (llm.Client, error)
+	configure      func(*config.Config)
+	links          func(subagent.Store) subagent.Store
+	mcp            mcpstore.Store
+	observeRequest func(providerRequest)
 }
 
 func newHarness(t *testing.T, o harnessOptions) *harness {
@@ -494,7 +495,7 @@ func newHarness(t *testing.T, o harnessOptions) *harness {
 	if o.mcp == nil {
 		o.mcp = mcpstore.NewStore(db)
 	}
-	factory := scriptedBuildInput(t, cfg, store, o.mcp, clientFor)
+	factory := scriptedBuildInput(t, cfg, store, o.mcp, clientFor, o.observeRequest)
 	h.mgr, _ = newScenarioDaemon(
 		ctx,
 		factory,

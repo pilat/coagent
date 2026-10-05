@@ -108,7 +108,7 @@ The identity a session runs in: one `projects` row keyed by absolute `work_dir` 
 _Avoid_: workspace, space; dialog (a dialog is a topic *on* a project, not the project).
 
 **agent type**:
-A named agent configuration — tool allowlist, prompt template, model override, mode and optional project-context omission — that the `task` tool selects from. Built-ins: `build`, `general`, `explore`, `compaction`. Not every agent type is spawnable (`build`/`compaction` are not subagent types). The built-in `explore` type is deliberately lean: it has read-only code-search tools and starts without project instructions, skills, curated memory, Git state or model catalog; its assignment must supply relevant constraints. Agent type selects behavior and tools, never a work budget.
+A named agent configuration — tool allowlist, prompt template, model override, mode and optional project-context omission — that the `task` tool selects from. Built-ins: `build`, `general`, `explore`, `browser`, `compaction`. Not every agent type is spawnable (`build`/`compaction` are not subagent types). The built-in `explore` type is deliberately lean: it has read-only code-search tools and starts without project instructions, skills, curated memory, Git state or model catalog; its assignment must supply relevant constraints. The built-in `browser` type has only the project's Playwright tools and the same project-context omission. Agent type selects behavior and tools, never a work budget.
 _Avoid_: role, persona, mode (mode is a separate axis on the same config).
 
 **control socket**:
@@ -173,11 +173,19 @@ _Avoid_: max_tokens (as a name for the budget rather than the wire field), outpu
 The invariant that stored message content is immutable after insert. Compaction is a metadata event (`compacted_at`) plus appended rows; "what the model sees" is a projection computed at load, so the prompt prefix stays byte-stable between compactions — nothing edits history in between.
 
 **insertion-time truncation**:
-Capping an oversized tool result *before* the tool step commits it to conversation history. What enters the transcript is already trimmed and never changes afterward, so the cached prompt prefix stays intact. The opposite — going back and editing messages already in the history (**retroactive pruning**) — invalidates the provider's prompt cache from the edited point onward, and coagent deliberately does not do it.
+Capping an oversized tool result *before* the tool step commits it to conversation history. What enters the transcript is already trimmed and never changes afterward, so the cached prompt prefix stays intact. The opposite — going back and editing messages already in the history (**retroactive pruning**) — invalidates the provider's prompt cache from the edited point onward, and coagent deliberately does not do it, except for replaced **browser frame**s.
 _Avoid_: pruning (names the retroactive anti-pattern), clearing (a separate metadata event).
 
 **loop detection**:
 A diversity-based detector that catches repetitive tool-call patterns and forces the agent to break out. The "loop" here means *repetition* — unrelated to the **agent loop** (the execution cycle), despite the shared word.
+
+**browser frame**:
+The whole result of one call to a `playwright` MCP tool inside a `browser` subagent — page text and screenshot together. Once a `playwright` call from a later model turn succeeds, the browser session's projection replaces the earlier frame with a fixed placeholder; failed calls never do, and the stored row never changes. The browser subagent's scoped exception to **insertion-time truncation**: only frames are replaced, never assistant messages or reasoning.
+_Avoid_: observation, screenshot (a frame may carry no image), image eviction (that rejected idea pruned all images, not superseded frames).
+
+**browser task state**:
+The model-authored `task_state` argument every `playwright` call must carry: verdict on the previous action, task facts worth keeping from the current frame, next goal. It is the only record of a frame once that frame is replaced; coagent strips it before the call reaches the MCP server.
+_Avoid_: memory (that is curated memory), state (a `playwright` tool already has a `state` parameter), observation, page description (it records task progress, not what the screen looks like).
 
 ## Tools, skills & extensions
 

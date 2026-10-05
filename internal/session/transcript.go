@@ -38,12 +38,15 @@ const (
 
 // messageStore manages the agent's conversation message history with optional persistence.
 type messageStore struct {
-	mu       sync.Mutex
-	messages []llmwire.Message
-	rowIDs   []int64
-	store    Store // nil = in-memory only (tests without persistence)
-	sessID   int64 // session ID for persistence
+	mu        sync.Mutex
+	messages  []llmwire.Message
+	rowIDs    []int64
+	store     Store // nil = in-memory only (tests without persistence)
+	sessID    int64 // session ID for persistence
+	agentType string
 }
+
+const supersededBrowserFrame = "[browser frame replaced — its task facts are in the task_state of the next playwright call]"
 
 // PendingToolCall identifies one exact suspended tool invocation.
 type PendingToolCall struct {
@@ -133,12 +136,19 @@ func SettleResults(calls []PendingToolCall, text string) []*transcript.Message {
 func newMessageStore(
 	store Store,
 	sessID int64,
+	agentTypes ...string,
 ) *messageStore {
+	agentType := ""
+	if len(agentTypes) > 0 {
+		agentType = agentTypes[0]
+	}
+
 	return &messageStore{
-		messages: make([]llmwire.Message, 0),
-		rowIDs:   make([]int64, 0),
-		store:    store,
-		sessID:   sessID,
+		messages:  make([]llmwire.Message, 0),
+		rowIDs:    make([]int64, 0),
+		store:     store,
+		sessID:    sessID,
+		agentType: agentType,
 	}
 }
 
@@ -237,10 +247,90 @@ func (ms *messageStore) reloadMessagesLocked(ctx context.Context) error {
 		rowIDs[i] = sm.ID
 	}
 
+	if ms.agentType == tool.BrowserAgentType {
+		messages = projectBrowserFrames(messages)
+	}
+
 	ms.messages = messages
 	ms.rowIDs = rowIDs
 
 	return nil
+}
+
+func projectBrowserFrames(messages []llmwire.Message) []llmwire.Message {
+	out := append([]llmwire.Message(nil), messages...)
+	callOwner := make(map[string]int)
+
+	for i, message := range messages {
+		if message.Role != llmwire.RoleAssistant {
+			continue
+		}
+
+		for _, call := range message.ToolCalls {
+			callOwner[call.ID] = i
+		}
+	}
+
+	latestSuccessCall := -1
+
+	for _, message := range messages {
+		if message.Role != llmwire.RoleTool || message.ToolError || !tool.IsBrowserToolID(message.ToolName) {
+			continue
+		}
+
+		if owner, ok := callOwner[message.ToolCallID]; ok && owner > latestSuccessCall {
+			latestSuccessCall = owner
+		}
+	}
+
+	for i := range out {
+		if out[i].Role == llmwire.RoleTool && tool.IsBrowserToolID(out[i].ToolName) && latestSuccessCall > i {
+			out[i].Content = supersededBrowserFrame
+			out[i].Images = nil
+		}
+	}
+
+	return out
+}
+
+func browserResultChangesMeasuredPrefix(messages []llmwire.Message, results []*transcript.Message, prefixLen int) bool {
+	owners := make(map[string]int)
+
+	for i, message := range messages {
+		if message.Role != llmwire.RoleAssistant {
+			continue
+		}
+
+		for _, call := range message.ToolCalls {
+			owners[call.ID] = i
+		}
+	}
+
+	latestSuccessCall := -1
+
+	for _, result := range results {
+		if result.ToolError || !tool.IsBrowserToolID(result.ToolName) {
+			continue
+		}
+
+		if owner, ok := owners[result.ToolCallID]; ok && owner > latestSuccessCall {
+			latestSuccessCall = owner
+		}
+	}
+
+	if latestSuccessCall < 0 {
+		return false
+	}
+
+	for i := range min(prefixLen, latestSuccessCall) {
+		message := messages[i]
+		if message.Role == llmwire.RoleTool && tool.IsBrowserToolID(message.ToolName) &&
+			(message.Content != supersededBrowserFrame || len(message.Images) != 0) {
+			return true
+		}
+	}
+
+	return false
 }
 
 func storedMessage(msg *llmwire.Message) (*transcript.Message, error) {

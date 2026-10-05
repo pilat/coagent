@@ -273,6 +273,7 @@ func scriptedBuildInput(
 	store *sessionstore.Store,
 	mcp mcpstore.Store,
 	clientFor func(*config.Config) (llm.Client, error),
+	observers ...func(providerRequest),
 ) sessionbuild.BuildInput {
 	t.Helper()
 	if cfg.WorkDir == "" {
@@ -285,6 +286,11 @@ func scriptedBuildInput(
 		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
+		}
+		for _, observe := range observers {
+			if observe != nil {
+				observe(request)
+			}
 		}
 		mu.Lock()
 		clientKey := scriptedClientKey{request.SessionID, request.Model}

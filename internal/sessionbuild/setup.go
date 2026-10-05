@@ -10,6 +10,7 @@ import (
 	"github.com/pilat/coagent/internal/loader"
 	"github.com/pilat/coagent/internal/logger"
 	"github.com/pilat/coagent/internal/registry"
+	"github.com/pilat/coagent/internal/tool"
 )
 
 func loadMarketplaces(ctx context.Context, p BuildInput, log *zap.Logger) {
@@ -76,6 +77,11 @@ func subagentConfigs(
 	configs := make([]registry.AgentTypeConfig, 0, len(subs))
 
 	for _, sa := range subs {
+		if sa.Name == tool.BrowserAgentType {
+			logger.Ctx(ctx).Named("session.setup").Warn("subagent_browser_reserved", zap.String("path", sa.Path))
+			continue
+		}
+
 		model := sa.Model
 		if !modelConfigured(models, model) {
 			logger.Ctx(ctx).Named("session.setup").Warn(

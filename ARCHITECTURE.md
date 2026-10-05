@@ -79,7 +79,7 @@ does not imply a tier except where it expresses an implementation variant.
 - `internal/managers/telegram` — Telegram manager implementation. Each manager
   owns one bot account, immutable group- or bot-forum target, polling loop, and
   manager-scoped service-topic identity; failures remain isolated at startup.
-- `internal/mcp` — session-owned external MCP process lifecycle and tool discovery.
+- `internal/mcp` — session-owned external MCP process lifecycle, tool discovery and structured content conversion.
 - `internal/mcpstore` — durable MCP server definitions, scope precedence and registry tools.
 - `internal/memory` — curated per-project long-term memory.
 - `internal/managerdelivery` — manager-neutral single-worker durable output drain and retry policy.
@@ -351,9 +351,13 @@ the answer or applying two unrelated changes to the same suspended call.
 ### Append-only transcript and compaction
 
 Stored message content never changes after insertion. The model-visible
-conversation is a projection of rows plus context metadata, which keeps an
-unchanged prompt prefix byte-stable between context events. Oversized tool output
-is capped before insertion; the system never retroactively rewrites history.
+conversation is a projection of rows plus context metadata, which keeps ordinary
+sessions' unchanged prompt prefix byte-stable between context events. Oversized tool output
+is capped before insertion. In `browser` sessions only, the projection replaces
+an earlier Playwright result's text and image references with a fixed placeholder
+after a successful Playwright call from a later assistant turn; failed calls leave
+the prior frame live. Stored rows and assistant reasoning remain unchanged
+([ADR-0067](docs/adr/0067-browser-subagent-supersedes-frames.md)).
 Identifiable external tool output (web, search, MCP) is additionally wrapped in
 host-authored provenance markers with a matching random ID before insertion.
 IDs are assigned after loop fingerprinting and remain unchanged during replay
@@ -363,7 +367,9 @@ history. Rejected attempts remain included in lifetime usage, cost and message
 watermarks, but are excluded from provider, compaction, progress, manager,
 subagent-result and orphan-call projections.
 Image-bearing tool results store disk references (`messages.attachments`), not
-pixels. A project-confined read also persists its canonical rooted-read
+pixels. MCP binary content is split before text budgeting: supported images
+become references to files beneath the project's process-output root, and other
+blobs become files named in untrusted tool text. A project-confined image attachment persists its canonical rooted-read
 authority and root identity; drivers reopen through that root, so a renamed
 project path or later symlink substitution cannot redirect the reference
 outside its original authority. Unconfined historical references retain their
@@ -373,8 +379,9 @@ changed message onward; authority fields never enter provider or compaction wire
 
 Compaction is the sole automatic response to context pressure. At one safe loop
 point, when no tool call is pending, it summarizes a bounded older head through
-one no-tools model call over the native repaired conversation prefix — full tool
-evidence, never placeholders — replayed as ordinary messages with the ordinary
+one no-tools model call over the native repaired conversation prefix. The
+browser projection replaces superseded frames there too; other tool evidence
+remains full. The prefix is replayed as ordinary messages with the ordinary
 system prompt, schemas and tool choice, plus one final checkpoint instruction,
 and commits the checkpoint as one atomic positioned replacement: header →
 marked summary → optional current-skill envelope → verbatim raw tail. The
@@ -400,8 +407,9 @@ estimate of appended content, and image pressure: attachments totalling over
 12 MB base64, or more than 20 of them, trigger compaction on their own because
 the token projection cannot see the request-size wall they create. The
 prompt-token measurement persists across restarts, is discarded when the
-session's model changed, and is cleared when compaction replaces the transcript
-it described; absent measurement is explicitly approximate. Repeated automatic
+session's model changed, and is cleared when compaction or browser-frame
+replacement changes the measured prefix; absent measurement is explicitly
+approximate. Repeated automatic
 attempts that cannot relieve pressure disable only the automatic path for that
 activation. The transcript remains the durable audit and recovery source even
 when its model projection is compacted.
@@ -675,8 +683,8 @@ broader rule that buries it incidentally is refused as a configuration error
 
 The project section ends with mandatory read-only access to its daemon-owned
 process-output directory, after the project's configured rules. Stack construction materializes
-that directory before mounting it, so later output from roots and subagents
-remains readable. The exception opens no other coagent state or project output;
+that directory before mounting it, so later process output and MCP attachments
+from roots and subagents remain readable. The exception opens no other coagent state or project output;
 the daemon remains the writer. Shell snapshots instead use inherited descriptors,
 and subagent results and context summaries remain database-backed.
 
@@ -894,6 +902,13 @@ selection, while the live session registry controls what is actually callable.
 The built-in `explore` type deliberately starts without project instructions,
 skills, curated memory, Git state or the model catalog, and receives only
 read-only code-search tools; its parent supplies constraints in the assignment.
+The built-in `browser` type likewise omits project context and receives only
+tools from an enabled MCP server named `playwright`; those tools are hidden from
+every other agent type, including project subagents. It is offered to `task`
+only when this activation discovered one of those tools. Every browser call
+requires a model-written `task_state`, retained in its stored tool arguments
+and stripped before forwarding to the server. Browser sessions suppress native
+integrated search as well as ordinary tools.
 Todo tracking is root-session-local durable state. The tool replaces the whole
 list atomically, and progress treats it as planning state rather than a separate
 workflow engine.
@@ -948,7 +963,8 @@ passthrough, an explicit disable removes all integrated search, and an
 unconfigured section falls back to the OpenRouter driver's server-side
 web-search injection
 ([ADR-0043](docs/adr/0043-integrated-search-quality-first.md)). Tool-less
-requests — the compaction summarizer — carry no injection. Search precedence
+requests — the compaction summarizer — carry no injection; `browser` sessions
+disable integrated search before client construction. Search precedence
 lives in config, so drivers and sessions read one resolver.
 
 Catalog owns externally fetched model metadata and cache validity, not product

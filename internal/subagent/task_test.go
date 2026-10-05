@@ -78,6 +78,19 @@ func taskToolWithSkills(sp *mockSpawner, skills ...*loader.Skill) tool.Tool {
 	return NewTaskTool(sp, 7, catalog, nil)
 }
 
+func TestTaskToolBrowserAvailability(t *testing.T) {
+	task := NewTaskTool(&mockSpawner{}, 7, loader.New(), nil).(*taskTool)
+	params := TaskParams{Prompt: "inspect", Description: "browse", SubagentType: tool.BrowserAgentType}
+	assert.NotContains(t, string(task.Parameters()), `"browser"`)
+	assert.NotContains(t, task.Description(), "browser")
+	require.Error(t, task.validateParams(params))
+	task.SetBrowserAvailable(true)
+	assert.Contains(t, string(task.Parameters()), `"browser"`)
+	assert.Contains(t, task.Description(), "- browser:")
+	assert.Contains(t, task.Description(), "at most one browser subagent")
+	assert.NoError(t, task.validateParams(params))
+}
+
 func TestTaskTool_SkillSeedsForegroundAndBackground(t *testing.T) {
 	for _, background := range []bool{false, true} {
 		t.Run(fmt.Sprintf("background_%t", background), func(t *testing.T) {

@@ -243,7 +243,7 @@ func executeToolCalls(ctx context.Context, agent *Session, toolCalls []llmwire.T
 		records = append(records, toolRecord{
 			name:       r.toolCall.Name,
 			argsHash:   fingerprintArgs(r.toolCall.Arguments),
-			resultHash: fingerprintResult(r.content),
+			resultHash: fingerprintResult(r.content, r.images...),
 			failed:     r.outcome == tool.OutcomeFailed,
 		})
 	}

@@ -230,6 +230,21 @@ func (s *Session) newCommit() sessionstore.Commit {
 }
 
 func (s *Session) commit(ctx context.Context, c sessionstore.Commit) (*sessionstore.CommitResult, error) {
+	invalidateBaseline := false
+
+	if s.ms.agentType == tool.BrowserAgentType {
+		if base := s.loadContextBaseline(); base != nil {
+			invalidateBaseline = browserResultChangesMeasuredPrefix(
+				s.ms.getMessages(),
+				c.ToolResults,
+				base.messageCount,
+			)
+			if invalidateBaseline {
+				c.State.ClearContextBaseline = true
+			}
+		}
+	}
+
 	for _, output := range append(append([]sessionstore.Output{}, c.Outputs...), c.Unfired.Outputs...) {
 		if output.ReleasesInput {
 			s.emit(
@@ -251,6 +266,10 @@ func (s *Session) commit(ctx context.Context, c sessionstore.Commit) (*sessionst
 	s.budgetFired = s.budgetFired || result.BudgetFired
 	if err := s.ms.reloadMessages(ctx); err != nil {
 		return nil, err
+	}
+
+	if invalidateBaseline {
+		s.resetContextBaseline()
 	}
 
 	if c.ObserveBudget && c.State.Iteration != nil {
