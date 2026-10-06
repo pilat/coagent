@@ -140,6 +140,76 @@ func TestIntegration_CompletedForegroundChildAcceptsFollowUpInSameSession(t *tes
 	assert.Equal(t, "parent received continuation", lastAssistantTextDTO(messages))
 }
 
+func TestScenario_SubagentContinuedCheckPublishesLastAnswerAndRenudgesOnFollowUp(t *testing.T) {
+	respond := func(_ string, msgs []llmwire.Message) *llmwire.Response {
+		if hasUserContaining(msgs, "CHILD_NUDGE") {
+			return continuedChildResponse(msgs)
+		}
+		if hasUserContaining(msgs, "<subagent_completion>") {
+			return textReply("parent received follow-up")
+		}
+		if toolResultForCallID(msgs, "child-task") != nil {
+			return textReply("parent received child answer")
+		}
+		return callReply("child-task", tool.IDTask,
+			`{"prompt":"CHILD_NUDGE inspect project","description":"inspect project","subagent_type":"general"}`)
+	}
+	h := newHarness(t, harnessOptions{respond: respond})
+	h.startInboxWake()
+	parentID, err := h.mgr.Send(h.ctx, h.projectID, "launch child", "fake-model", nil)
+	require.NoError(t, err)
+	h.waitUntil("child spawned", func() bool { return h.linkByCall(parentID, "child-task") != nil })
+	childID := h.linkByCall(parentID, "child-task").ChildID
+	h.waitUntil("child delivered", func() bool {
+		link := h.link(childID)
+		return link != nil && link.DeliveredAt != 0 && link.State == subagent.StateCompleted
+	})
+	assert.Contains(t, h.link(childID).Result, "complete child answer after tool")
+	assert.NotContains(t, h.link(childID).Result, "initial child candidate")
+	assert.Equal(t, 1, countToolResultsFor(h.messages(childID), "read"))
+	countNudges := func() int {
+		count := 0
+		for _, message := range h.messages(childID) {
+			if message.Role == llmwire.RoleUser &&
+				strings.Contains(message.Content, "You ended your previous response") {
+				count++
+			}
+		}
+		return count
+	}
+	assert.Equal(t, 1, countNudges())
+	require.NoError(t, h.mgr.SendToChild(h.ctx, childID, "FOLLOW_UP answer another question"))
+	h.waitUntil("follow-up delivered", func() bool {
+		link := h.link(childID)
+		return link != nil && link.ActivationSeq == 2 && link.DeliveredAt != 0 &&
+			strings.Contains(link.Result, "follow-up candidate")
+	})
+	assert.Equal(t, 2, countNudges())
+}
+
+func continuedChildResponse(msgs []llmwire.Message) *llmwire.Response {
+	nudges := 0
+	for _, message := range msgs {
+		if message.Role == llmwire.RoleUser &&
+			strings.Contains(message.Content, "You ended your previous response") {
+			nudges++
+		}
+	}
+	if hasUserContaining(msgs, "FOLLOW_UP") {
+		if nudges >= 2 {
+			return textReply("follow-up confirmed")
+		}
+		return textReply("follow-up candidate")
+	}
+	if toolResultForCallID(msgs, "child-check") != nil {
+		return textReply("complete child answer after tool")
+	}
+	if nudges == 1 {
+		return callReply("child-check", "read", `{"file_path":"go.mod"}`)
+	}
+	return textReply("initial child candidate")
+}
+
 func TestIntegration_ScatterGatherBlockingTasks(t *testing.T) {
 	callIDs := []string{"sg-1", "sg-2", "sg-3"}
 	respond := func(_ string, msgs []llmwire.Message) *llmwire.Response {

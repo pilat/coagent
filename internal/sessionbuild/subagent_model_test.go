@@ -52,3 +52,12 @@ func TestSubagentConfigs_NoCatalogKeepsModelOverride(t *testing.T) {
 	require.Len(t, configs, 1)
 	assert.Equal(t, "sonnet", configs[0].Model)
 }
+
+func TestSubagentConfigsBrowserIsReserved(t *testing.T) {
+	ldr := loader.New()
+	ldr.RegisterSubagent(&loader.Subagent{Name: "browser", Path: "/project/.coagent/agents/browser.md"})
+	core, logs := observer.New(zapcore.WarnLevel)
+	ctx := logger.ToContext(t.Context(), zap.New(core))
+	assert.Empty(t, subagentConfigs(ctx, ldr, nil))
+	assert.Len(t, logs.FilterMessage("subagent_browser_reserved").All(), 1)
+}

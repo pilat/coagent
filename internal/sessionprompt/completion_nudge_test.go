@@ -16,6 +16,8 @@ func TestRenderCompletionNudge_OmitsTodoClauseWhenNoneOpen(t *testing.T) {
 	assert.NotContains(t, nudge, "todo", "no open items means no todo wording")
 	assert.NotContains(t, nudge, "done work")
 	assert.Contains(t, nudge, "why you are stopping")
+	assert.Contains(t, nudge, "next text-only response ends the task")
+	assert.Contains(t, nudge, "complete answer")
 }
 
 func TestRenderCompletionNudge_NamesOnlyOpenItems(t *testing.T) {
@@ -26,6 +28,7 @@ func TestRenderCompletionNudge_NamesOnlyOpenItems(t *testing.T) {
 	})
 	assert.Contains(t, nudge, "pending work")
 	assert.Contains(t, nudge, "active work")
+	assert.Contains(t, nudge, "next text-only response ends the task")
 	assert.NotContains(t, nudge, "done work")
 	assert.NotContains(t, nudge, "OK", "the protocol never requires exact acknowledgement text")
 }

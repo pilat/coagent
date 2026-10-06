@@ -248,7 +248,15 @@ func BuildSubagentsSection(ldr loader.Registry) string {
 	var b strings.Builder
 	b.WriteString("\n## Available Subagents\nYou can spawn these subagents using the 'task' tool:\n")
 
+	visible := 0
+
 	for _, sa := range subagents {
+		if sa.Name == tool.BrowserAgentType {
+			continue
+		}
+
+		visible++
+
 		fmt.Fprintf(&b, "- **%s**", sa.Name)
 
 		if sa.Description != "" {
@@ -256,6 +264,10 @@ func BuildSubagentsSection(ldr loader.Registry) string {
 		}
 
 		b.WriteString("\n")
+	}
+
+	if visible == 0 {
+		return ""
 	}
 
 	return b.String()

@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"hash/fnv"
+
+	"github.com/pilat/coagent/internal/llmwire"
 )
 
 const (
@@ -258,9 +260,13 @@ func (ld *loopDetector) clearForceTextOnly() {
 
 // fingerprintResult hashes a tool result using FNV-64.
 // Uses length + head + tail for stable fingerprinting of large outputs.
-func fingerprintResult(result string) uint64 {
+func fingerprintResult(result string, images ...llmwire.ImageRef) uint64 {
 	h := fnv.New64a()
+
 	_, _ = fmt.Fprintf(h, "%d:%s:%s", len(result), headBytes(result, 256), tailBytes(result, 256))
+	for _, image := range images {
+		_, _ = fmt.Fprintf(h, ":image:%s", image.Digest)
+	}
 
 	return h.Sum64()
 }

@@ -3,14 +3,17 @@ package registry
 import (
 	"cmp"
 	"slices"
+	"strings"
 
 	"github.com/pilat/coagent/internal/sessionprompt"
+	"github.com/pilat/coagent/internal/tool"
 )
 
 const (
 	AgentTypeBuild      AgentType = "build"
 	AgentTypeGeneral    AgentType = "general"
 	AgentTypeExplore    AgentType = "explore"
+	AgentTypeBrowser    AgentType = tool.BrowserAgentType
 	AgentTypeCompaction AgentType = "compaction"
 )
 
@@ -26,14 +29,14 @@ var builtinAgentTypes = map[AgentType]AgentTypeConfig{
 		Name:        AgentTypeBuild,
 		Description: "Primary build agent with full tool access",
 		Mode:        ModePrimary,
-		Tools:       []string{"*"},
+		Tools:       []string{"*", "-" + tool.PlaywrightToolPrefix + "*"},
 		Prompt:      BuildAgentPrompt,
 	},
 	AgentTypeGeneral: {
 		Name:        AgentTypeGeneral,
 		Description: "General subagent for bounded implementation, testing, or research requiring commands or web access. Can modify files. Give a self-contained assignment and verification requirements; use the same session for related follow-up work.",
 		Mode:        ModeSubagent,
-		Tools:       []string{"*", "-todoread", "-todowrite"},
+		Tools:       []string{"*", "-todoread", "-todowrite", "-" + tool.PlaywrightToolPrefix + "*"},
 		Prompt:      GeneralAgentPrompt,
 	},
 	AgentTypeExplore: {
@@ -42,6 +45,14 @@ var builtinAgentTypes = map[AgentType]AgentTypeConfig{
 		Mode:               ModeSubagent,
 		Tools:              []string{"read", "grep", "glob", "ls"},
 		Prompt:             ExploreAgentPrompt,
+		OmitProjectContext: true,
+	},
+	AgentTypeBrowser: {
+		Name:               AgentTypeBrowser,
+		Description:        "Drive the project's Playwright browser with browser tools only. Receives no project context; supply a self-contained goal, constraints, starting URL or site, and the facts to return.",
+		Mode:               ModeSubagent,
+		Tools:              []string{tool.PlaywrightToolPrefix + "*"},
+		Prompt:             BrowserAgentPrompt,
 		OmitProjectContext: true,
 	},
 	AgentTypeCompaction: {
@@ -88,6 +99,10 @@ func NewSet(projectSubagents []AgentTypeConfig) *Set {
 	}
 
 	for _, cfg := range projectSubagents {
+		if cfg.Name == AgentTypeBrowser {
+			continue
+		}
+
 		cfg = cloneConfig(cfg)
 		types[cfg.Name] = normalizeSubagent(cfg)
 	}
@@ -136,33 +151,42 @@ func (s *Set) FilterTools(allTools []string, t AgentType) []string {
 		return []string{}
 	}
 
-	excludeSet := make(map[string]bool)
+	var excludes []string
 	includeAll := false
-	includeSet := make(map[string]bool)
+	var includes []string
 
 	for _, tl := range config.Tools {
 		if tl == "*" {
 			includeAll = true
 		} else if tl != "" && tl[0] == '-' {
-			excludeSet[tl[1:]] = true
+			excludes = append(excludes, tl[1:])
 		} else {
-			includeSet[tl] = true
+			includes = append(includes, tl)
 		}
 	}
 
 	var result []string
 
 	for _, tl := range allTools {
-		if excludeSet[tl] {
+		if slices.ContainsFunc(excludes, func(pattern string) bool { return toolPatternMatches(pattern, tl) }) {
 			continue
 		}
 
-		if includeAll || includeSet[tl] {
+		if includeAll ||
+			slices.ContainsFunc(includes, func(pattern string) bool { return toolPatternMatches(pattern, tl) }) {
 			result = append(result, tl)
 		}
 	}
 
 	return result
+}
+
+func toolPatternMatches(pattern, id string) bool {
+	if prefix, ok := strings.CutSuffix(pattern, "*"); ok {
+		return strings.HasPrefix(id, prefix)
+	}
+
+	return pattern == id
 }
 
 func cloneConfig(config AgentTypeConfig) AgentTypeConfig {
@@ -182,6 +206,8 @@ func normalizeSubagent(config AgentTypeConfig) AgentTypeConfig {
 	if config.Mode == ModeSubagent {
 		config.Tools = excludeTodoTools(config.Tools)
 	}
+
+	config.Tools = append(config.Tools, "-"+tool.PlaywrightToolPrefix+"*")
 
 	return config
 }

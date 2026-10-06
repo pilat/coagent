@@ -51,6 +51,11 @@ func sniffImageMIMEFile(file *os.File) string {
 
 	buf = buf[:n]
 
+	return sniffImageMIMEBytes(buf)
+}
+
+func sniffImageMIMEBytes(buf []byte) string {
+	n := len(buf)
 	switch {
 	case bytes.HasPrefix(buf, []byte{0x89, 'P', 'N', 'G'}):
 		return llmwire.MimeImagePng

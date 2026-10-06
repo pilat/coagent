@@ -98,7 +98,7 @@ func TestNewSet_ClonesProjectToolsBeforeNormalization(t *testing.T) {
 
 	cfg, ok := set.Get("reviewer")
 	require.True(t, ok)
-	assert.Equal(t, []string{"read", "-todoread", "-todowrite"}, cfg.Tools)
+	assert.Equal(t, []string{"read", "-todoread", "-todowrite", "-mcp__playwright__*"}, cfg.Tools)
 }
 
 func TestSet_GetReturnsClonedTools(t *testing.T) {
@@ -152,7 +152,7 @@ func TestSet_ListSubagentsDeterministic(t *testing.T) {
 	}
 
 	// build (primary) and compaction (hidden) are excluded; result is name-sorted.
-	assert.Equal(t, []string{"alpha", "explore", "general", "zeta"}, names)
+	assert.Equal(t, []string{"alpha", "browser", "explore", "general", "zeta"}, names)
 }
 
 func TestSet_FilterTools(t *testing.T) {
@@ -171,4 +171,25 @@ func TestSet_FilterTools(t *testing.T) {
 	assert.NotContains(t, explore, "bash")
 
 	assert.Nil(t, set.FilterTools(all, AgentType("nonexistent")))
+}
+
+func TestBrowserToolVisibility(t *testing.T) {
+	set := NewSet([]AgentTypeConfig{
+		{Name: "custom", Mode: ModeSubagent, Tools: []string{"mcp__playwright__click", "read"}},
+		{Name: AgentTypeBrowser, Mode: ModeSubagent, Tools: []string{"*"}, Description: "shadow"},
+	})
+	all := []string{"read", "mcp__playwright__click", "mcp__playwright__snapshot", "mcp__other__click"}
+	for _, agent := range []AgentType{AgentTypeBuild, AgentTypeGeneral, "custom"} {
+		assert.NotContains(t, set.FilterTools(all, agent), "mcp__playwright__click")
+		assert.NotContains(t, set.FilterTools(all, agent), "mcp__playwright__snapshot")
+	}
+	assert.Equal(
+		t,
+		[]string{"mcp__playwright__click", "mcp__playwright__snapshot"},
+		set.FilterTools(all, AgentTypeBrowser),
+	)
+	cfg, ok := set.Get(AgentTypeBrowser)
+	require.True(t, ok)
+	assert.NotEqual(t, "shadow", cfg.Description)
+	assert.True(t, cfg.OmitProjectContext)
 }

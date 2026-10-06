@@ -71,8 +71,9 @@ type ImageRef struct {
 	Size       int64  `json:"size"`
 	// Decoded pixel dimensions when the format is stdlib-decodable; zero on
 	// rows written before they existed and on undecodable formats.
-	Width  int `json:"width,omitempty"`
-	Height int `json:"height,omitempty"`
+	Width  int    `json:"width,omitempty"`
+	Height int    `json:"height,omitempty"`
+	Digest string `json:"digest,omitempty"`
 }
 
 type Message struct {

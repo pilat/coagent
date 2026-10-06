@@ -91,5 +91,6 @@ func TestNewClient_ModernServerSkipsHandshake(t *testing.T) {
 
 	output, err := client.CallTool(context.Background(), "ping", nil)
 	require.NoError(t, err)
-	require.Equal(t, "pong", output)
+	require.Equal(t, []string{"pong"}, output.Text)
+	require.Empty(t, output.Binary)
 }

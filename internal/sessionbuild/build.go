@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"runtime"
+	"slices"
 	"strconv"
 	"sync"
 
@@ -60,7 +61,14 @@ func Build(ctx context.Context, in BuildInput) (*session.Session, func(), error)
 	}
 
 	cfg := *in.Config
+
 	cfg.WorkDir, cfg.RepoRoot = in.WorkDir, in.RepoRoot
+	if in.Record.AgentType == tool.BrowserAgentType && cfg.UnifiedConfig != nil {
+		unified := *cfg.UnifiedConfig
+		disabled := false
+		unified.Tools.Search.Enabled = &disabled
+		cfg.UnifiedConfig = &unified
+	}
 
 	cfg.Model = in.Record.Model
 	if cfg.Model == "" {
@@ -142,6 +150,13 @@ func build(ctx context.Context, in BuildInput, client llm.Client) (*session.Sess
 	attachImageAuthorizer(client, stack)
 	configureClient(client, in.Record)
 	registerSessionTools(reg, in)
+
+	browserAvailable := slices.ContainsFunc(reg.IDs(), tool.IsBrowserToolID)
+	if taskTool := reg.Get(tool.IDTask); taskTool != nil {
+		if aware, ok := taskTool.(tool.BrowserAvailability); ok {
+			aware.SetBrowserAvailable(browserAvailable)
+		}
+	}
 
 	reg = filterRegistryForAgent(set, reg, agentConfig)
 	if reg.Get("batch") != nil {

@@ -138,7 +138,7 @@ deps:
   loader:
     mayDependOn: [coagenthome, config, git, logger, safefile]
   mcp:
-    mayDependOn: [logger, procexec, shellenv, tool]
+    mayDependOn: [llmwire, logger, procexec, shellenv, tool]
   procexec:
     anyProjectDeps: false
     anyVendorDeps: true
@@ -177,7 +177,7 @@ deps:
   sessionprompt:
     mayDependOn: [git, llmwire, loader, logger, memory, todo, tool]
   registry:
-    mayDependOn: [sessionprompt]
+    mayDependOn: [sessionprompt, tool]
 
   # Schedule writes inbox rows through sessionstore; its sender publishes only events.
   schedule:

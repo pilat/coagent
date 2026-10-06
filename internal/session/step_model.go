@@ -287,8 +287,9 @@ func (s *Session) prepareStopResponse(
 	}
 
 	candidate := durableCandidateID(state)
-	if candidate == 0 {
+	if candidate == 0 && (state == nil || !state.NudgedThisGeneration) {
 		c.Unfired.State.Candidate = &sessionstore.CandidateChange{Expected: 0, NextRef: 0}
+		c.Unfired.State.MarkCompletionNudge = true
 		c.Unfired.Messages = []*transcript.Message{
 			hostUserMessage(sessionprompt.RenderCompletionNudge(s.prompt.Todos.List())),
 		}
@@ -296,8 +297,10 @@ func (s *Session) prepareStopResponse(
 		return
 	}
 
-	c.State.Candidate = &sessionstore.CandidateChange{Expected: candidate, NextRef: -1}
-	c.State.ConfirmedAnswerID = &candidate
+	if candidate != 0 {
+		c.State.Candidate = &sessionstore.CandidateChange{Expected: candidate, NextRef: -1}
+		c.State.ConfirmedAnswerID = &candidate
+	}
 
 	text := response.Text
 	if state.CandidateText != "" {

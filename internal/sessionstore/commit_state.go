@@ -199,6 +199,9 @@ func applyStatePatchTx(
 	}
 
 	sets, args = appendContextStateFields(sets, args, state)
+	if state.MarkCompletionNudge {
+		sets = append(sets, "completion_nudge_generation = model_input_generation")
+	}
 
 	if state.ConfirmedAnswerID != nil {
 		sets = append(sets, "completion_check_confirmed_answer_id = ?")

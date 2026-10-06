@@ -71,6 +71,44 @@ func TestHarnessScenario_CompletionCheckConfirmsBeforePublishing(t *testing.T) {
 	assertHarnessTrace(t, "completion_check_confirmed_final.json", collector.snapshot(), root)
 }
 
+func TestHarnessScenario_CompletionNudgeAfterToolStopsOnce(t *testing.T) {
+	var calls int
+	respond := func(_ string, messages []llmwire.Message) *llmwire.Response {
+		calls++
+		if toolResultForCallID(messages, "check-work") != nil {
+			return textReply("complete answer after checking work")
+		}
+		if hasUserContaining(messages, "You ended your previous response") {
+			return callReply("check-work", "read", `{"file_path":"go.mod"}`)
+		}
+		return textReply("initial candidate")
+	}
+	h := newHarness(t, harnessOptions{respond: respond})
+	h.startInboxWake()
+	root, err := h.mgr.Send(h.ctx, h.projectID, "inspect the project", "fake-model", managerAttrs(scenarioManagerID))
+	require.NoError(t, err)
+	h.waitUntil("final answer", func() bool {
+		return lastAssistantTextDTO(h.messages(root)) == "complete answer after checking work" &&
+			!h.mgr.HasActiveLoop(root)
+	})
+	assert.Equal(t, 3, calls)
+	assert.Equal(t, 1, countToolResultsFor(h.messages(root), "read"))
+	var nudges, finals int
+	for _, row := range h.messages(root) {
+		if row.Role == llmwire.RoleUser && strings.Contains(row.Content, "You ended your previous response") {
+			nudges++
+		}
+	}
+	for _, row := range h.outbox(root) {
+		if row.Type == "message_persistent" && row.ReleasesInput &&
+			strings.Contains(row.Content, "complete answer after checking work") {
+			finals++
+		}
+	}
+	assert.Equal(t, 1, nudges)
+	assert.Equal(t, 1, finals)
+}
+
 // A live background process owns the wake, so a non-empty stop publishes once without a completion nudge.
 func TestHarnessScenario_CompletionCheckBackgroundProcessYieldPublishesOnce(t *testing.T) {
 	var calls atomic.Int64

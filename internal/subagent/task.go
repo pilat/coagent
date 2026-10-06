@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/pilat/coagent/internal/loader"
@@ -25,15 +26,21 @@ type TaskParams struct {
 
 // taskTool spawns subagents to handle complex tasks.
 type taskTool struct {
-	spawner      Spawner
-	parentID     int64
-	loader       loader.Service
-	models       []ModelInfo
-	modelCatalog []ModelInfo
-	skillCatalog loader.SkillCatalog
+	spawner          Spawner
+	parentID         int64
+	loader           loader.Service
+	models           []ModelInfo
+	modelCatalog     []ModelInfo
+	skillCatalog     loader.SkillCatalog
+	browserAvailable bool
 }
 
-var _ tool.Tool = (*taskTool)(nil)
+var (
+	_ tool.Tool                = (*taskTool)(nil)
+	_ tool.BrowserAvailability = (*taskTool)(nil)
+)
+
+func (t *taskTool) SetBrowserAvailable(available bool) { t.browserAvailable = available }
 
 // NewTaskTool observes the loader after session assembly has loaded project artifacts.
 func NewTaskTool(sp Spawner, parentID int64, ldr loader.Service, models []ModelInfo) tool.Tool {
@@ -72,6 +79,15 @@ func (t *taskTool) Description() string {
 	}
 
 	modelList := b.String()
+	browserGuidance := ""
+	contextOmission := "built-in explore skips them"
+	followupTypes := "general or custom"
+
+	if t.browserAvailable {
+		browserGuidance = "\nFor browser, provide a self-contained assignment with the goal, constraints, starting URL or site if known, and what to return. Run at most one browser subagent at a time because the browser profile cannot serve concurrent clients. For related browser follow-ups, launch a new browser task and include the previous result's findings (names, addresses, URLs, verdicts) along with the goal and constraints. Use send_to_subagent with the same browser child only to continue an unfinished multi-step flow that needs its action history.\n"
+		contextOmission = "built-in explore and browser skip them"
+		followupTypes = "general or custom"
+	}
 
 	return fmt.Sprintf(`Launch a subagent to work autonomously with its own context and tools.
 
@@ -101,13 +117,13 @@ Choose the execution mode deliberately:
 Never use sleep, schedule, or repeated get_subagent_result calls to wait for subagents. get_subagent_result is a diagnostic snapshot only.
 
 
-The subagent does not receive the parent conversation. general and project-defined subagents load the same context files (global, project, and local) and curated memories as you; built-in explore skips them, so restate any constraints that matter for the task in the prompt. State the question or outcome, known facts, paths, constraints, whether to MODIFY code or RESEARCH only, and what to return. For implementation, include relevant verification requirements.
+The subagent does not receive the parent conversation. general and project-defined subagents load the same context files (global, project, and local) and curated memories as you; %s, so restate any constraints that matter for the task in the prompt. State the question or outcome, known facts, paths, constraints, whether to MODIFY code or RESEARCH only, and what to return. For implementation, include relevant verification requirements.
 
 For explore, request one self-contained answer with file:line evidence and material gaps. State the question's boundaries; simple lookups need less detail than a cross-package trace. Use its supported findings directly; do not duplicate the subagent's work. Resolve small gaps locally, or start a new bounded exploration for a substantial unanswered question. Do not routinely resume explore or ask it to confirm its answer.
 
 Example research prompt: "Trace refresh-token deletion and session persistence in internal/auth/service.go and store.go. Determine their order and what happens if persistence fails. Return the answer, file:line evidence, and any gaps. Do not edit code."
 
-For related follow-up work on a general or custom subagent's assignment, use send_to_subagent with the numeric subagent_id shown in the task result to retain its context. Review changed code and relevant verification before integrating its work.%s`, typeList.String(), modelList)
+For related follow-up work on a %s subagent's assignment, use send_to_subagent with the numeric subagent_id shown in the task result to retain its context. Review changed code and relevant verification before integrating its work.%s%s`, typeList.String(), contextOmission, followupTypes, modelList, browserGuidance)
 }
 
 func (t *taskTool) Parameters() json.RawMessage {
@@ -334,6 +350,12 @@ func taskMetadata(id int64) string {
 
 func (t *taskTool) agentTypes() []agentInfo {
 	configs := t.agentSet().ListSubagents()
+	if !t.browserAvailable {
+		configs = slices.DeleteFunc(
+			configs,
+			func(cfg registry.AgentTypeConfig) bool { return cfg.Name == registry.AgentTypeBrowser },
+		)
+	}
 
 	types := make([]agentInfo, 0, len(configs))
 	for _, cfg := range configs {
@@ -348,6 +370,10 @@ func (t *taskTool) agentSet() *registry.Set {
 
 	if t.loader != nil {
 		for _, agent := range t.loader.ListSubagents() {
+			if agent.Name == tool.BrowserAgentType {
+				continue
+			}
+
 			model := agent.Model
 			if model != "" && len(t.models) != 0 {
 				found := false

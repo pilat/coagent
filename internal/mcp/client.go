@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -36,6 +37,19 @@ type Client struct {
 	cancelRun context.CancelFunc // force-kills the server subprocess on close
 	closeOnce sync.Once
 	closeErr  error
+}
+
+type BinaryPart struct {
+	Kind        string
+	MIME        string
+	Data        []byte
+	DecodeError error
+}
+
+type CallResult struct {
+	Text    []string
+	Binary  []BinaryPart
+	IsError bool
 }
 
 // buildEnv builds environment variables from config. ${VAR} references were
@@ -239,7 +253,7 @@ func (c *Client) Tools() map[string]mcp.Tool {
 	return c.tools
 }
 
-func (c *Client) CallTool(ctx context.Context, name string, args map[string]any) (string, error) {
+func (c *Client) CallTool(ctx context.Context, name string, args map[string]any) (CallResult, error) {
 	ctx, cancel := context.WithTimeout(ctx, callTimeout)
 	defer cancel()
 
@@ -249,31 +263,134 @@ func (c *Client) CallTool(ctx context.Context, name string, args map[string]any)
 
 	result, err := c.client.CallTool(ctx, req)
 	if err != nil {
-		return "", fmt.Errorf("MCP tool call: %w", err)
+		return CallResult{}, fmt.Errorf("MCP tool call: %w", err)
 	}
 
+	out := CallResult{IsError: result.IsError}
 	if result.IsError {
-		if len(result.Content) > 0 {
-			text := mcp.GetTextFromContent(result.Content[0])
-			return "", fmt.Errorf("MCP tool error: %s", text)
-		}
+		binary := false
 
-		return "", errors.New("MCP tool returned error")
-	}
-
-	var output string
-
-	for _, content := range result.Content {
-		if text := mcp.GetTextFromContent(content); text != "" {
-			if output != "" {
-				output += "\n"
+		for _, content := range result.Content {
+			if text, ok := contentText(content); ok && text != "" {
+				out.Text = append(out.Text, text)
 			}
 
-			output += text
+			if isBinaryContent(content) {
+				binary = true
+			}
+		}
+
+		if len(out.Text) == 0 {
+			out.Text = append(out.Text, "MCP tool returned error")
+		}
+
+		if binary {
+			out.Text = append(out.Text, "[binary error content omitted]")
+		}
+
+		return out, nil
+	}
+
+	for _, content := range result.Content {
+		if part, ok := contentBinary(content); ok {
+			out.Binary = append(out.Binary, part)
+			continue
+		}
+
+		if text, ok := contentText(content); ok && text != "" {
+			out.Text = append(out.Text, text)
 		}
 	}
 
-	return output, nil
+	return out, nil
+}
+
+func isBinaryContent(content mcp.Content) bool {
+	switch c := content.(type) {
+	case mcp.ImageContent, *mcp.ImageContent, mcp.AudioContent, *mcp.AudioContent:
+		return true
+	case mcp.EmbeddedResource:
+		return isBlobResource(c.Resource)
+	case *mcp.EmbeddedResource:
+		return isBlobResource(c.Resource)
+	default:
+		return false
+	}
+}
+
+func isBlobResource(resource mcp.ResourceContents) bool {
+	switch resource.(type) {
+	case mcp.BlobResourceContents, *mcp.BlobResourceContents:
+		return true
+	default:
+		return false
+	}
+}
+
+func contentBinary(content mcp.Content) (BinaryPart, bool) {
+	decode := func(kind, mime, encoded string) (BinaryPart, bool) {
+		data, err := base64.StdEncoding.DecodeString(encoded)
+		return BinaryPart{Kind: kind, MIME: mime, Data: data, DecodeError: err}, true
+	}
+
+	switch c := content.(type) {
+	case mcp.ImageContent:
+		return decode("image", c.MIMEType, c.Data)
+	case *mcp.ImageContent:
+		return decode("image", c.MIMEType, c.Data)
+	case mcp.AudioContent:
+		return decode("audio", c.MIMEType, c.Data)
+	case *mcp.AudioContent:
+		return decode("audio", c.MIMEType, c.Data)
+	case mcp.EmbeddedResource:
+		return resourceBinary(c.Resource)
+	case *mcp.EmbeddedResource:
+		return resourceBinary(c.Resource)
+	default:
+		return BinaryPart{}, false
+	}
+}
+
+func resourceBinary(resource mcp.ResourceContents) (BinaryPart, bool) {
+	switch r := resource.(type) {
+	case mcp.BlobResourceContents:
+		data, err := base64.StdEncoding.DecodeString(r.Blob)
+		return BinaryPart{Kind: "resource", MIME: r.MIMEType, Data: data, DecodeError: err}, true
+	case *mcp.BlobResourceContents:
+		return resourceBinary(*r)
+	default:
+		return BinaryPart{}, false
+	}
+}
+
+func contentText(content mcp.Content) (string, bool) {
+	switch c := content.(type) {
+	case mcp.TextContent:
+		return c.Text, true
+	case *mcp.TextContent:
+		return c.Text, true
+	case mcp.ResourceLink:
+		return fmt.Sprintf("resource: %s (%s)", c.URI, c.MIMEType), true
+	case *mcp.ResourceLink:
+		return fmt.Sprintf("resource: %s (%s)", c.URI, c.MIMEType), true
+	case mcp.EmbeddedResource:
+		return resourceText(c.Resource)
+	case *mcp.EmbeddedResource:
+		return resourceText(c.Resource)
+	default:
+		return "", false
+	}
+}
+
+func resourceText(resource mcp.ResourceContents) (string, bool) {
+	switch r := resource.(type) {
+	case mcp.TextResourceContents:
+		return r.Text, true
+	case *mcp.TextResourceContents:
+		return r.Text, true
+	default:
+		return "", false
+	}
 }
 
 func (c *Client) Close() error {

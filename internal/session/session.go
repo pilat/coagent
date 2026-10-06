@@ -161,7 +161,7 @@ func New(ctx context.Context, in Input) (*Session, error) {
 		s.rootID = s.id
 	}
 
-	s.ms = newMessageStore(in.Store, r.ID)
+	s.ms = newMessageStore(in.Store, r.ID, r.AgentType)
 	if err := s.ms.reloadMessages(ctx); err != nil {
 		return nil, fmt.Errorf("restore transcript: %w", err)
 	}
