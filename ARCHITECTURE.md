@@ -291,11 +291,15 @@ process, an undelivered non-blocking child link in `spawned`, `running`,
 `completed` or `error`, or pending process/subagent inbox input. Without a
 wake source the first non-empty stop commits a hidden candidate plus one
 host-authored completion nudge and keeps the session active; the candidate's
-text is meanwhile the live progress card's note, and the next accepted
-non-empty stop is the deliberate confirmation that publishes the candidate's
-text — not the confirming stop's own ack — and finishes
+text is meanwhile the live progress card's note. A direct non-empty stop
+confirms and publishes the candidate's text, not the confirming ack. A tool
+call invalidates that candidate, but the durable nudge generation remains:
+the next non-empty no-tool stop in the same model-input generation publishes
+its own text and finishes without another nudge. Genuine model-bound input
+advances the generation and restores the one-nudge allowance
 ([ADR-0060](docs/adr/0060-wake-aware-model-completion-check.md), amended by
-[ADR-0061](docs/adr/0061-completion-check-publishes-the-candidate-answer.md)).
+[ADR-0061](docs/adr/0061-completion-check-publishes-the-candidate-answer.md) and
+[ADR-0068](docs/adr/0068-one-completion-nudge-per-model-input.md)).
 Empty no-wake stops are a durable anti-loop signal instead: the third receives
 the strong warning, the sixth commits one host notice and ends the activation
 through ordinary successful completion. Every accepted response commits its
@@ -356,8 +360,13 @@ sessions' unchanged prompt prefix byte-stable between context events. Oversized 
 is capped before insertion. In `browser` sessions only, the projection replaces
 an earlier Playwright result's text and image references with a fixed placeholder
 after a successful Playwright call from a later assistant turn; failed calls leave
-the prior frame live. Stored rows and assistant reasoning remain unchanged
-([ADR-0067](docs/adr/0067-browser-subagent-supersedes-frames.md)).
+the prior frame live. Only the first Playwright call in a browser assistant
+message runs; later calls are stored as skipped errors without reaching the
+server. Browser Playwright results alone use a 120,000-character truncation
+budget, capped at 30% of the context window's character estimate. Stored rows
+and assistant reasoning remain unchanged
+([ADR-0067](docs/adr/0067-browser-subagent-supersedes-frames.md), amended by
+[ADR-0069](docs/adr/0069-browser-takes-one-action-per-turn.md)).
 Identifiable external tool output (web, search, MCP) is additionally wrapped in
 host-authored provenance markers with a matching random ID before insertion.
 IDs are assigned after loop fingerprinting and remain unchanged during replay

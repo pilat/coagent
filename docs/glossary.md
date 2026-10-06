@@ -180,7 +180,7 @@ _Avoid_: pruning (names the retroactive anti-pattern), clearing (a separate meta
 A diversity-based detector that catches repetitive tool-call patterns and forces the agent to break out. The "loop" here means *repetition* — unrelated to the **agent loop** (the execution cycle), despite the shared word.
 
 **browser frame**:
-The whole result of one call to a `playwright` MCP tool inside a `browser` subagent — page text and screenshot together. Once a `playwright` call from a later model turn succeeds, the browser session's projection replaces the earlier frame with a fixed placeholder; failed calls never do, and the stored row never changes. The browser subagent's scoped exception to **insertion-time truncation**: only frames are replaced, never assistant messages or reasoning.
+The whole result of one call to a `playwright` MCP tool inside a `browser` subagent — page text and screenshot together. Once a `playwright` call from a later model turn succeeds, the browser session's projection replaces the earlier frame with a fixed placeholder; failed calls never do, and the stored row never changes. The browser subagent's scoped exception to **insertion-time truncation**: only frames are replaced, never assistant messages or reasoning. Only the first `playwright` call of an assistant message runs, so one turn yields at most one fresh frame, and a frame is truncated against a larger browser budget than other tool results ([ADR-0069](adr/0069-browser-takes-one-action-per-turn.md)).
 _Avoid_: observation, screenshot (a frame may carry no image), image eviction (that rejected idea pruned all images, not superseded frames).
 
 **browser task state**:
@@ -457,6 +457,9 @@ The confirmation publishes the candidate's text, not the confirming response;
 a durable pointer to the candidate row lets a subagent's parent receive the
 same answer. A later external model-bound input or tool-bearing response
 invalidates the check; an empty response remains subject to loop detection.
+At most one nudge is issued per model-input generation: once the model continued
+with tools after it, its next text stop is final and published as-is
+([ADR-0068](adr/0068-one-completion-nudge-per-model-input.md)).
 _Avoid_: stop marker, magic acknowledgement, final-answer tool.
 
 **attachment** (referenced image attachment):

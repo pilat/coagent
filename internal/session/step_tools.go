@@ -20,6 +20,8 @@ import (
 	"github.com/pilat/coagent/internal/transcript"
 )
 
+const browserExtraActionNotice = "Only one browser action runs per turn; this call was not executed. Look at the result of the first call, then act again. Use browser_fill_form to fill several fields at once."
+
 // toolCallResultItem holds the decided outcome of one scheduled tool call.
 // Only items whose outcome is executed or failed carry persisted content;
 // suspended and cancelled items stay out of the transcript.
@@ -108,12 +110,16 @@ func executeToolCallsInternal(ctx context.Context, agent *Session, toolCalls []l
 		}
 	}
 
+	scheduledCalls, scheduledIndexes := filterExtraBrowserActions(
+		agent.ms.agentType == tool.BrowserAgentType, toolCalls, results,
+	)
+
 	// Resolve once while planning: the same tool instance is classified and
 	// executed, so a mid-turn registry swap cannot split the policy from the
 	// execution.
-	calls := make([]tool.Call, len(toolCalls))
-	for i, tc := range toolCalls {
-		err := batchConflict(toolCalls, tc)
+	calls := make([]tool.Call, len(scheduledCalls))
+	for i, tc := range scheduledCalls {
+		err := batchConflict(scheduledCalls, tc)
 		if err != nil {
 			log.Warn("tool_conflict", zap.String("name", tc.Name), zap.Error(err))
 		}
@@ -141,7 +147,51 @@ func executeToolCallsInternal(ctx context.Context, agent *Session, toolCalls []l
 		zap.Int64("duration_ms", report.Summary.DurationMS),
 	)
 
-	return mapExecutorReport(agent, log, toolCalls, report)
+	mapped := mapExecutorReport(agent, log, scheduledCalls, report)
+	if scheduledIndexes == nil {
+		return mapped
+	}
+
+	for i, item := range mapped {
+		item.index = scheduledIndexes[i]
+		results[item.index] = item
+	}
+
+	return results
+}
+
+func filterExtraBrowserActions(
+	browser bool,
+	toolCalls []llmwire.ToolCall,
+	results []toolCallResultItem,
+) ([]llmwire.ToolCall, []int) {
+	if !browser {
+		return toolCalls, nil
+	}
+
+	scheduled := make([]llmwire.ToolCall, 0, len(toolCalls))
+	indexes := make([]int, 0, len(toolCalls))
+	seenBrowser := false
+
+	for i, call := range toolCalls {
+		if tool.IsBrowserToolID(call.Name) {
+			if seenBrowser {
+				results[i] = toolCallResultItem{
+					index: i, toolCall: call, outcome: tool.OutcomeSkipped,
+					content: browserExtraActionNotice,
+				}
+
+				continue
+			}
+
+			seenBrowser = true
+		}
+
+		scheduled = append(scheduled, call)
+		indexes = append(indexes, i)
+	}
+
+	return scheduled, indexes
 }
 
 // mapExecutorReport folds the executor's ordered report into decided items,
@@ -186,7 +236,8 @@ func mapExecutorReport(
 			}
 
 			results[i] = toolCallResultItem{
-				index: i, toolCall: tc, content: formatToolResult(r.Result, agent.contextWindow()),
+				index: i, toolCall: tc, content: formatToolResult(r.Result, agent.contextWindow(),
+					agent.ms.agentType == tool.BrowserAgentType && tool.IsBrowserToolID(tc.Name)),
 				untrusted: r.Result.Untrusted, images: r.Result.Images,
 				directMessages: r.Result.DirectMessages, outcome: r.Outcome,
 			}
@@ -514,7 +565,15 @@ func countUniqueOutcomes(window []toolRecord) int {
 
 // External titles and notices share the payload budget; local results retain
 // their historical output-only truncation.
-func formatToolResult(result *tool.Result, contextWindow int) string {
+func formatToolResult(result *tool.Result, contextWindow int, browserFrame bool) string {
+	budget := tool.DynamicToolResultBudgetForWindow(contextWindow)
+	hint := ""
+
+	if browserFrame {
+		budget = tool.BrowserFrameBudgetForWindow(contextWindow)
+		hint = " Read an omitted part with browser_snapshot target (a CSS selector or a visible container ref) and/or depth."
+	}
+
 	if result.Untrusted {
 		var sb strings.Builder
 
@@ -522,13 +581,13 @@ func formatToolResult(result *tool.Result, contextWindow int) string {
 		sb.WriteString(result.Output)
 		appendTruncationNotice(&sb, result)
 
-		return wrapUntrustedContent(sb.String(), contextWindow)
+		return wrapUntrustedContentWithBudget(sb.String(), budget, hint)
 	}
 
 	var sb strings.Builder
 
 	appendResultTitle(&sb, result.Title)
-	sb.WriteString(truncateHeadTail(result.Output, tool.DynamicToolResultBudgetForWindow(contextWindow)))
+	sb.WriteString(truncateHeadTailWithHint(result.Output, budget, hint))
 	appendTruncationNotice(&sb, result)
 
 	return sb.String()
@@ -551,10 +610,14 @@ func appendTruncationNotice(sb *strings.Builder, result *tool.Result) {
 
 // Truncate before escaping so a cut cannot recreate a boundary token.
 func wrapUntrustedContent(payload string, contextWindow int) string {
+	return wrapUntrustedContentWithBudget(payload, tool.DynamicToolResultBudgetForWindow(contextWindow), "")
+}
+
+func wrapUntrustedContentWithBudget(payload string, budget int, hint string) string {
 	begin := tool.UntrustedContentBegin
 	end := tool.UntrustedContentEnd
 
-	payload = truncateHeadTail(payload, tool.DynamicToolResultBudgetForWindow(contextWindow))
+	payload = truncateHeadTailWithHint(payload, budget, hint)
 
 	for _, marker := range []string{begin, end} {
 		prefix := strings.TrimSuffix(marker, ">>>")
@@ -587,6 +650,10 @@ func identifyUntrustedContent(content string) string {
 // A middle marker showing omitted size is counted inside the limit.
 // Returns s unchanged if under maxRunes.
 func truncateHeadTail(s string, maxRunes int) string {
+	return truncateHeadTailWithHint(s, maxRunes, "")
+}
+
+func truncateHeadTailWithHint(s string, maxRunes int, hint string) string {
 	const defaultHeadRatio = 0.7
 
 	headRatio := defaultHeadRatio
@@ -596,7 +663,7 @@ func truncateHeadTail(s string, maxRunes int) string {
 		return s
 	}
 
-	marker := fmt.Sprintf("\n... (omitted %d chars) ...\n", len(runes)-maxRunes)
+	marker := fmt.Sprintf("\n... (omitted %d chars) ...%s\n", len(runes)-maxRunes, hint)
 	markerRunes := []rune(marker)
 
 	available := maxRunes - len(markerRunes)

@@ -70,6 +70,7 @@ type StatePatch struct {
 	ContextBaseline      *ContextBaseline
 	ClearContextBaseline bool
 	Candidate            *CandidateChange
+	MarkCompletionNudge  bool
 	ConfirmedAnswerID    *int64
 	EmptyStopStreak      *int
 	ManagerReplyPending  *bool

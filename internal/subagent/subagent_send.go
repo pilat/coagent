@@ -35,7 +35,7 @@ func (t *sendToSubagentTool) ParallelSafe() bool { return false }
 func (t *sendToSubagentTool) Description() string {
 	return `Durably enqueue a follow-up message to the same subagent session previously launched with task, whether it was foreground or background.
 
-Use this for related follow-up work while preserving that session's full context, including when re-engaging a finished subagent. Treat explore as a single research assignment; do not routinely resume it or request confirmation of its findings. A completed foreground subagent continues asynchronously because its original task call is already resolved. This is not a status check or a way to wait. Continue only useful independent work; the parent receives the next result automatically in a later turn. Do not use sleep or schedule to poll. When none remains, briefly report what is still running and end the response.`
+Use this for related follow-up work while preserving that session's full context, including when re-engaging a finished subagent. For browser follow-ups, start a new task with the previous findings unless continuing an unfinished flow that needs this session's action history. Treat explore as a single research assignment; do not routinely resume it or request confirmation of its findings. After a completed foreground task, this follow-up runs asynchronously and its result arrives automatically in a later turn. Continue only useful independent work; when none remains, briefly report what is still running and end the response to wait for the result. This is not a status check. Do not use sleep or schedule to poll.`
 }
 
 func (t *sendToSubagentTool) Parameters() json.RawMessage {

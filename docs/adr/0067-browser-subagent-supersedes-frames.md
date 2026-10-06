@@ -2,6 +2,7 @@
 
 - **Status:** Accepted
 - **Date:** 2026-10-05
+- **Amended by:** [ADR-0069](0069-browser-takes-one-action-per-turn.md) — one browser action per turn and a larger frame budget
 
 ## Context
 

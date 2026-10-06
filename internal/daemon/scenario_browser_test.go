@@ -203,6 +203,69 @@ func TestScenario_BrowserFramesStayStoredAndProjectToLatest(t *testing.T) {
 	assert.Equal(t, 4, wirePlaceholderCount(restarted))
 }
 
+func TestScenario_BrowserRunsOnlyFirstActionInMessage(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX fake MCP server")
+	}
+	dir := t.TempDir()
+	server := filepath.Join(dir, "browser.sh")
+	log := filepath.Join(dir, "calls.log")
+	encoded := base64.StdEncoding.EncodeToString(browserScenarioPNG(t))
+	require.NoError(
+		t,
+		os.WriteFile(server, []byte(strings.ReplaceAll(browserScenarioScript, "IMAGE_DATA", encoded)), 0o700),
+	)
+	require.NoError(t, os.WriteFile(log, nil, 0o600))
+	respond := func(_ string, msgs []llmwire.Message) *llmwire.Response {
+		if hasUserContaining(msgs, "BROWSER_DOUBLE") {
+			if toolResultForCallID(msgs, "first-navigation") != nil {
+				return textReply("one navigation complete")
+			}
+			return &llmwire.Response{ToolCalls: []llmwire.ToolCall{
+				{
+					ID:        "first-navigation",
+					Name:      tool.PlaywrightToolPrefix + "view",
+					Arguments: []byte(`{"task_state":"open the first page"}`),
+				},
+				{
+					ID:        "second-navigation",
+					Name:      tool.PlaywrightToolPrefix + "view",
+					Arguments: []byte(`{"task_state":"open another page"}`),
+				},
+			}}
+		}
+		if toolResultForCallID(msgs, "browser-task") != nil {
+			return textReply("parent received browser result")
+		}
+		return callReply("browser-task", tool.IDTask,
+			`{"prompt":"BROWSER_DOUBLE inspect example.test","description":"inspect site","subagent_type":"browser"}`)
+	}
+	h := newHarness(t, harnessOptions{respond: respond, configure: func(cfg *config.Config) {
+		cfg.WorkDir = t.TempDir()
+	}})
+	require.NoError(t, h.mgr.mcpStore.Add(h.ctx, &h.projectID, mcpstore.ServerDef{
+		Name: tool.PlaywrightServerName, Command: server, Args: []string{log}, Enabled: true,
+	}))
+	h.startInboxWake()
+	rootID, err := h.mgr.Send(h.ctx, h.projectID, "inspect site", "fake-model", nil)
+	require.NoError(t, err)
+	h.waitUntil("browser child spawned", func() bool { return h.linkByCall(rootID, "browser-task") != nil })
+	childID := h.linkByCall(rootID, "browser-task").ChildID
+	h.waitUntil("browser child complete", func() bool {
+		return lastAssistantTextDTO(h.messages(childID)) == "one navigation complete" && !h.mgr.HasActiveLoop(childID)
+	})
+	data, err := os.ReadFile(log)
+	require.NoError(t, err)
+	assert.Equal(t, 1, strings.Count(string(data), "call\n"))
+	first := toolResultForCallID(h.messages(childID), "first-navigation")
+	second := toolResultForCallID(h.messages(childID), "second-navigation")
+	require.NotNil(t, first)
+	require.NotNil(t, second)
+	assert.False(t, first.ToolError)
+	assert.True(t, second.ToolError)
+	assert.Contains(t, second.Content, "Only one browser action")
+}
+
 func TestScenario_BrowserUnavailableWithoutPlaywright(t *testing.T) {
 	var mu sync.Mutex
 	var requests []providerRequest

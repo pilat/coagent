@@ -88,6 +88,10 @@ func TestTaskToolBrowserAvailability(t *testing.T) {
 	assert.Contains(t, string(task.Parameters()), `"browser"`)
 	assert.Contains(t, task.Description(), "- browser:")
 	assert.Contains(t, task.Description(), "at most one browser subagent")
+	assert.Contains(t, task.Description(), "launch a new browser task")
+	assert.Contains(t, task.Description(), "previous result's findings")
+	assert.Contains(t, task.Description(), "unfinished multi-step flow")
+	assert.NotContains(t, task.Description(), "general, browser, or custom")
 	assert.NoError(t, task.validateParams(params))
 }
 
@@ -285,8 +289,9 @@ func TestSubagentToolDescriptionsTeachExecutionContract(t *testing.T) {
 	for _, want := range []string{
 		"same subagent session previously launched with task, whether it was foreground or background",
 		"preserving that session's full context",
-		"not a status check or a way to wait",
-		"parent receives the next result automatically in a later turn",
+		"For browser follow-ups, start a new task with the previous findings",
+		"not a status check",
+		"result arrives automatically in a later turn",
 		"Do not use sleep or schedule to poll",
 		"end the response",
 	} {

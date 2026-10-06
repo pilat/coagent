@@ -144,6 +144,49 @@ func TestHarnessModel_CompletionCheckRestartAndDelivery(t *testing.T) {
 	assert.Equal(t, 1, outbox, "a stale replay must not publish a second output")
 }
 
+func TestHarnessModel_CompletionNudgeGenerationSurvivesToolAndRestart(t *testing.T) {
+	ctx := context.Background()
+	store, db, projectID := newTestStore(t)
+	sessionID := seedCompletionSession(t, store, db, projectID)
+	input, err := enqueueInput(ctx, store, sessionID, sessionstore.InputSourceUser, "first task")
+	require.NoError(t, err)
+	_, err = acceptInput(ctx, store, input.ID, "first task")
+	require.NoError(t, err)
+	_, err = store.Commit(ctx, sessionstore.Commit{
+		SessionID: sessionID, Messages: []*transcript.Message{assistantStopMessage("candidate")},
+		Unfired: sessionstore.Parts{
+			Messages: []*transcript.Message{{Role: "user", Content: "second look"}},
+			State: sessionstore.StatePatch{
+				Candidate: &sessionstore.CandidateChange{NextRef: 0}, MarkCompletionNudge: true,
+			},
+		},
+	})
+	require.NoError(t, err)
+	state, err := testStore(db).LoadCompletionCheckState(ctx, sessionID)
+	require.NoError(t, err)
+	assert.True(t, state.NudgedThisGeneration)
+	require.NotNil(t, state.CandidateID)
+	var nudgeGeneration, inputGeneration int64
+	require.NoError(t, db.QueryRowContext(ctx, `SELECT completion_nudge_generation, model_input_generation
+		FROM sessions WHERE id = ?`, sessionID).Scan(&nudgeGeneration, &inputGeneration))
+	assert.Equal(t, inputGeneration, nudgeGeneration)
+	_, err = store.Commit(ctx, sessionstore.Commit{SessionID: sessionID, ToolResults: []*transcript.Message{{
+		Role: "tool", ToolCallID: "c1", ToolName: "read", Content: "ran",
+	}}})
+	require.NoError(t, err)
+	state, err = testStore(db).LoadCompletionCheckState(ctx, sessionID)
+	require.NoError(t, err)
+	assert.Nil(t, state.CandidateID)
+	assert.True(t, state.NudgedThisGeneration)
+	input, err = enqueueInput(ctx, store, sessionID, sessionstore.InputSourceUser, "follow-up")
+	require.NoError(t, err)
+	_, err = acceptInput(ctx, store, input.ID, "follow-up")
+	require.NoError(t, err)
+	state, err = testStore(db).LoadCompletionCheckState(ctx, sessionID)
+	require.NoError(t, err)
+	assert.False(t, state.NudgedThisGeneration)
+}
+
 // The empty-stop ladder is durable per attempt: restarts between attempts
 // continue the same count, and the terminal notice commits exactly once.
 func TestHarnessModel_CompletionEmptyStopEscalation(t *testing.T) {

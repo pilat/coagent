@@ -39,6 +39,9 @@ func RenderCompletionNudge(items []*todo.Item) string {
 	}
 
 	sb.WriteString("Otherwise answer once more with a concise explanation of why you are stopping.")
+	sb.WriteString(
+		" If you continue with tools, your next text-only response ends the task without another check and replaces this answer; include the complete answer, not only what changed.",
+	)
 
 	return sb.String()
 }
