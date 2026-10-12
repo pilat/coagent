@@ -7,7 +7,8 @@ import (
 	"github.com/pilat/coagent/internal/todo"
 )
 
-// RenderCompletionNudge asks for a second look while permitting an explained stop.
+// RenderCompletionNudge asks for a second look: a confirmation keeps the previous answer,
+// a continuation must end in a complete replacement answer.
 func RenderCompletionNudge(items []*todo.Item) string {
 	var open []string
 
@@ -38,9 +39,13 @@ func RenderCompletionNudge(items []*todo.Item) string {
 		)
 	}
 
-	sb.WriteString("Otherwise answer once more with a concise explanation of why you are stopping.")
 	sb.WriteString(
-		" If you continue with tools, your next text-only response ends the task without another check and replaces this answer; include the complete answer, not only what changed.",
+		"Otherwise reply with one sentence confirming you are done; your previous answer is delivered as is and this confirmation is never shown.",
+	)
+	sb.WriteString(
+		" If you continue with tools, your next text-only response ends the task without another check" +
+			" and is delivered to the user in place of your previous answer: write it to the user as the complete answer" +
+			" to the original request, keeping every finding and caveat from your previous answer, not as a report of this re-check.",
 	)
 
 	return sb.String()
