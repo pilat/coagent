@@ -79,6 +79,7 @@ func (s *store) Create(ctx context.Context, create Create) (int64, error) {
 }
 
 // Finalize commits the terminal link and session status together, preserving pending activations.
+// A successful stop while the child owns a live advertised process is a yield: the link stays open.
 func (s *store) Finalize(ctx context.Context, childID int64, errored bool) (*Link, error) {
 	var finalized *Link
 
@@ -120,8 +121,11 @@ func (s *store) Finalize(ctx context.Context, childID int64, errored bool) (*Lin
      WHERE sess.id = subagent_links.child_id
       AND sess.status NOT IN ('stopping', 'stopped', 'killed') AND sess.killed_at IS NULL)
     AND NOT EXISTS (SELECT 1 FROM session_inbox input
-     WHERE input.session_id = subagent_links.child_id AND input.state = 'pending')`,
-			state, result, outcome, childID)
+     WHERE input.session_id = subagent_links.child_id AND input.state = 'pending')
+    AND (? OR NOT EXISTS (SELECT 1 FROM background_processes process
+     WHERE process.session_id = subagent_links.child_id AND process.state = 'running'
+      AND process.advertised_at IS NOT NULL))`,
+			state, result, outcome, childID, state == StateError)
 		if err != nil {
 			return fmt.Errorf("conditionally finalize subagent activation: %w", err)
 		}

@@ -462,6 +462,15 @@ with tools after it, its next text stop is final and published as-is
 ([ADR-0068](adr/0068-one-completion-nudge-per-model-input.md)).
 _Avoid_: stop marker, magic acknowledgement, final-answer tool.
 
+**background-exit nudge**:
+The host-authored model input a subagent receives when it stops while its own
+advertised background processes still run. It lists them and offers two exits:
+cancel unneeded ones and answer in full, or end the turn and be resumed on
+completion. It shares the completion check's one-nudge-per-generation marker.
+A subagent's yield with live processes never becomes its parent's result
+([ADR-0071](adr/0071-subagent-result-waits-for-its-own-background-work.md)).
+_Avoid_: interim result, waiting marker.
+
 **attachment** (referenced image attachment):
 A disk reference stored on a tool-result row in `messages.attachments` — never
 the pixels themselves. Alongside path, MIME, and size, a `read` persists its

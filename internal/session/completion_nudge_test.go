@@ -2,6 +2,7 @@ package session
 
 import (
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -39,4 +40,67 @@ func TestPrepareStopResponseAfterNudge(t *testing.T) {
 	assert.Empty(t, wake.Unfired.Messages)
 	require.Len(t, wake.Unfired.Outputs, 1)
 	assert.True(t, wake.Unfired.Outputs[0].FinalFooter.BackgroundYield)
+}
+
+func TestPrepareAcceptedAttempt_SubagentBackgroundExit(t *testing.T) {
+	live := []sessionstore.LiveProcess{
+		{ID: "bgp_7", ToolCallID: "search", CreatedAt: time.Now().UTC().Add(-time.Minute)},
+	}
+	tests := []struct {
+		name      string
+		parentID  int64
+		live      []sessionstore.LiveProcess
+		otherWake bool
+		nudged    bool
+		wantNudge bool
+		wantYield bool
+	}{
+		{name: "subagent with live process is nudged", parentID: 1, live: live, wantNudge: true},
+		{name: "subagent stop after the nudge yields", parentID: 1, live: live, nudged: true, wantYield: true},
+		{name: "root keeps the background yield", live: live, wantYield: true},
+		{name: "subagent waiting on another source yields", parentID: 1, otherWake: true, wantYield: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			agent := newTestAgent()
+			agent.id, agent.parentID = 2, tt.parentID
+			store, ok := agent.store.(*mockSessionStore)
+			require.True(t, ok)
+			store.live, store.wake = tt.live, tt.otherWake
+			store.completion = sessionstore.CompletionCheckState{NudgedThisGeneration: tt.nudged}
+			setTestMessages(agent, []llmwire.Message{{
+				Role: llmwire.RoleAssistant,
+				ToolCalls: []llmwire.ToolCall{
+					{
+						ID:        "search",
+						Name:      "bash",
+						Arguments: []byte(`{"command":"curl -s https://example.test","background":true}`),
+					},
+				},
+			}})
+
+			c := agent.newCommit()
+			run := &runState{}
+			require.NoError(t, agent.prepareAcceptedAttempt(t.Context(), run, &c, &llmwire.Response{Text: "report"}))
+
+			assert.Equal(t, tt.wantYield, run.terminal)
+			assert.Equal(t, tt.wantNudge, c.Unfired.State.MarkCompletionNudge)
+			if tt.wantNudge {
+				require.Len(t, c.Unfired.Messages, 1)
+				assert.Contains(
+					t,
+					c.Unfired.Messages[0].Content,
+					"- bgp_7 (running 1m0s): curl -s https://example.test",
+				)
+				assert.Empty(t, c.Unfired.Outputs, "a nudged stop publishes nothing")
+				assert.Nil(t, c.Unfired.State.Candidate, "the background nudge opens no completion candidate")
+			}
+			if tt.wantYield {
+				assert.Empty(t, c.Unfired.Messages)
+				require.Len(t, c.Unfired.Outputs, 1)
+				assert.True(t, c.Unfired.Outputs[0].FinalFooter.BackgroundYield)
+			}
+		})
+	}
 }

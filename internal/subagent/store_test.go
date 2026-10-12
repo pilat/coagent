@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -246,6 +247,70 @@ func TestLinkStore_Finalize(t *testing.T) {
 	preserved, err := links.GetLink(ctx, childID)
 	require.NoError(t, err)
 	assert.Equal(t, link.Result, preserved.Result)
+}
+
+func TestLinkStore_FinalizeYieldsWhileChildOwnsLiveProcess(t *testing.T) {
+	links, ss, db, projectID := newTestStore(t)
+	ctx := t.Context()
+	parent, err := ss.CreateSession(ctx, projectID, "m", "", nil)
+	require.NoError(t, err)
+	childID, err := links.Create(ctx, Create{
+		ProjectID: projectID, ParentID: parent.ID, RootID: parent.ID, Model: "m",
+		TaskCallID: "c1", Blocking: true, State: StateRunning,
+	})
+	require.NoError(t, err)
+	_, err = ss.Commit(ctx, sessionstore.Commit{
+		SessionID: childID,
+		Messages:  []*transcript.Message{{Role: "assistant", Content: "interim report"}},
+	})
+	require.NoError(t, err)
+	now := time.Now().UTC()
+	insert := func(id string, owner int64, advertised any) {
+		t.Helper()
+		_, err := db.ExecContext(ctx, `INSERT INTO background_processes
+			(id, session_id, root_session_id, tool_call_id, output_path, deadline_at, created_at, advertised_at)
+			VALUES (?, ?, ?, 'bash-call', '/tmp/out', ?, ?, ?)`,
+			id, owner, parent.ID, now.Add(time.Hour), now, advertised)
+		require.NoError(t, err)
+	}
+	insert("parent-owned", parent.ID, now)
+	insert("unadvertised", childID, nil)
+
+	link, err := links.Finalize(ctx, childID, false)
+	require.NoError(t, err)
+	require.NotNil(t, link, "only the child's own advertised processes hold its result")
+	require.NoError(
+		t,
+		seedChildLink(ctx, ss, Link{ChildID: childID, TaskCallID: "c1", Blocking: true, State: StateRunning}),
+	)
+
+	insert("child-owned", childID, now)
+	yielded, err := links.Finalize(ctx, childID, false)
+	require.NoError(t, err)
+	assert.Nil(t, yielded, "a successful stop with a live child process is a yield, not a result")
+	open, err := links.GetLink(ctx, childID)
+	require.NoError(t, err)
+	assert.Equal(t, StateRunning, open.State)
+	assert.Empty(t, open.Result)
+
+	errored, err := links.Finalize(ctx, childID, true)
+	require.NoError(t, err)
+	require.NotNil(t, errored, "a failed activation still terminalizes")
+	assert.Equal(t, StateError, errored.State)
+
+	require.NoError(
+		t,
+		seedChildLink(ctx, ss, Link{ChildID: childID, TaskCallID: "c1", Blocking: true, State: StateRunning}),
+	)
+	require.NoError(t, ss.UpdateSessionStatus(ctx, childID, sessionstore.SessionStatusCompleted))
+	_, err = db.ExecContext(ctx, `UPDATE background_processes SET state = 'cancelled', host_intent = 'agent_cancelled',
+		finished_at = ? WHERE id = 'child-owned'`, now)
+	require.NoError(t, err)
+	final, err := links.Finalize(ctx, childID, false)
+	require.NoError(t, err)
+	require.NotNil(t, final, "the stop after the last live process ends delivers the one result")
+	assert.Equal(t, StateCompleted, final.State)
+	assert.Equal(t, "interim report", final.Result)
 }
 
 func TestLinkStore_ResetRunning(t *testing.T) {

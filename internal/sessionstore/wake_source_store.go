@@ -3,7 +3,15 @@ package sessionstore
 import (
 	"context"
 	"fmt"
+	"time"
 )
+
+// LiveProcess is an advertised running background process of one exact session.
+type LiveProcess struct {
+	ID         string
+	ToolCallID string
+	CreatedAt  time.Time
+}
 
 func (s *Store) HasBackgroundObligationByRoot(ctx context.Context, rootID int64) (bool, error) {
 	var advertised int
@@ -66,6 +74,35 @@ func (s *Store) HasBackgroundWakeSource(ctx context.Context, sessionID int64) (b
 	}
 
 	return pending, nil
+}
+
+// ListLiveProcesses returns the session's own advertised running processes, oldest first.
+func (s *Store) ListLiveProcesses(ctx context.Context, sessionID int64) ([]LiveProcess, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT id, tool_call_id, created_at FROM background_processes
+		WHERE session_id = ? AND state = 'running' AND advertised_at IS NOT NULL
+		ORDER BY created_at, id`, sessionID)
+	if err != nil {
+		return nil, fmt.Errorf("list live processes: %w", err)
+	}
+
+	defer rows.Close()
+
+	var live []LiveProcess
+
+	for rows.Next() {
+		var process LiveProcess
+		if err := rows.Scan(&process.ID, &process.ToolCallID, &process.CreatedAt); err != nil {
+			return nil, fmt.Errorf("scan live process: %w", err)
+		}
+
+		live = append(live, process)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate live processes: %w", err)
+	}
+
+	return live, nil
 }
 
 // HasPendingBackgroundWait preserves timer admission across all undelivered child links.

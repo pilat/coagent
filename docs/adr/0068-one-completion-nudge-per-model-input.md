@@ -3,6 +3,7 @@
 - **Status:** Accepted
 - **Date:** 2026-10-05
 - **Amends:** [ADR-0060](0060-wake-aware-model-completion-check.md)
+- **Amended by:** [ADR-0071](0071-subagent-result-waits-for-its-own-background-work.md) — the subagent background-exit nudge shares this one-nudge-per-generation marker
 
 ## Context
 
