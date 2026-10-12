@@ -23,8 +23,9 @@ func TestRenderBackgroundExitNudge_ListsProcessesAndBothExits(t *testing.T) {
 	assert.Contains(t, nudge, "…\n")
 	assert.NotContains(t, nudge, strings.Repeat("x", 120), "a long command is cut to an excerpt")
 	assert.Contains(t, nudge, "- bgp_3 (running 1s)\n")
-	assert.Contains(t, nudge, "cancel it with cancel_process, then give your final answer")
-	assert.Contains(t, nudge, "whole result for your parent")
-	assert.Contains(t, nudge, "end your turn: you are resumed when the process completes")
+	assert.Contains(t, nudge, "Your parent receives only your final answer, and it replaces everything you said before")
+	assert.Contains(t, nudge, "complete result with every finding and caveat, not only what changed since")
+	assert.Contains(t, nudge, "cancel it with cancel_process, then give that final answer")
+	assert.Contains(t, nudge, "end your turn now: you are resumed when the process completes")
 	assert.Contains(t, nudge, "only then does your parent receive your result")
 }

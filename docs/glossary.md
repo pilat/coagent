@@ -465,8 +465,8 @@ _Avoid_: stop marker, magic acknowledgement, final-answer tool.
 **background-exit nudge**:
 The host-authored model input a subagent receives when it stops while its own
 advertised background processes still run. It lists them and offers two exits:
-cancel unneeded ones and answer in full, or end the turn and be resumed on
-completion. It shares the completion check's one-nudge-per-generation marker.
+cancel unneeded ones and answer, or end the turn and be resumed on completion;
+either way the final answer replaces everything said before. It shares the completion check's one-nudge-per-generation marker.
 A subagent's yield with live processes never becomes its parent's result
 ([ADR-0071](adr/0071-subagent-result-waits-for-its-own-background-work.md)).
 _Avoid_: interim result, waiting marker.

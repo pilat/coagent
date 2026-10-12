@@ -32,9 +32,10 @@ func RenderBackgroundExitNudge(processes []LiveProcess) string {
 	}
 
 	sb.WriteString(
-		"\nIf you no longer need a process's result, cancel it with cancel_process, then give your final answer." +
-			" It is your whole result for your parent, so make it complete." +
-			" If you need a result, end your turn: you are resumed when the process completes," +
+		"\nYour parent receives only your final answer, and it replaces everything you said before:" +
+			" write it as the complete result with every finding and caveat, not only what changed since." +
+			"\nIf you no longer need a process's result, cancel it with cancel_process, then give that final answer." +
+			"\nIf you need a result, end your turn now: you are resumed when the process completes," +
 			" and only then does your parent receive your result.",
 	)
 

@@ -597,7 +597,9 @@ Cascade stop, failed delivery and restart recovery preserve the link's
 obligation until it is resolved or explicitly stopped. Finalization leaves a
 successful activation open while the child owns a live advertised process, so
 its process completion resumes the same activation and the parent receives one
-result per assignment
+result per assignment. A resumed foreground child that finds no runner capacity
+fails with an error result instead of queueing, and stop plans include such open
+yielded children
 ([ADR-0071](docs/adr/0071-subagent-result-waits-for-its-own-background-work.md)).
 The same completion
 rules apply to roots and every subagent type: a child with no todo list

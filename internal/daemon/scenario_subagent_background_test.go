@@ -1,12 +1,14 @@
 package daemon
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -31,8 +33,11 @@ type backgroundChildScript struct {
 	release    string
 	background bool
 	cancel     bool
-	processID  atomic.Value
-	childCalls atomic.Int64
+	// beforeNudgeReply runs when the child first answers the background-exit nudge.
+	beforeNudgeReply func()
+	nudgeOnce        atomic.Bool
+	processID        atomic.Value
+	childCalls       atomic.Int64
 }
 
 func newBackgroundChildScript(t *testing.T) *backgroundChildScript {
@@ -61,15 +66,23 @@ func (s *backgroundChildScript) respond(_ string, messages []llmwire.Message) *l
 }
 
 func (s *backgroundChildScript) child(messages []llmwire.Message) *llmwire.Response {
+	nudged := hasUserContaining(messages, backgroundExitNudgeMarker)
+	if nudged && s.beforeNudgeReply != nil && s.nudgeOnce.CompareAndSwap(false, true) {
+		s.beforeNudgeReply()
+	}
 	switch {
+	case hasUserContaining(messages, "<process_completion>") &&
+		!hasUserContaining(messages, "it replaces everything you said before"):
+		// The incident's delta-shaped answer, which the nudge must rule out.
+		return textReply("background search confirmed the report")
 	case hasUserContaining(messages, "<process_completion>"):
 		return textReply("final report with search")
 	case hasToolResultFor(messages, tool.IDCancelProcess):
 		return textReply("final report without search")
-	case hasUserContaining(messages, backgroundExitNudgeMarker) && s.cancel:
+	case nudged && s.cancel:
 		id, _ := s.processID.Load().(string)
 		return callReply("cancel-search", tool.IDCancelProcess, `{"process_id":"`+id+`"}`)
-	case hasUserContaining(messages, backgroundExitNudgeMarker):
+	case nudged:
 		return textReply("waiting for the search")
 	case hasToolResultFor(messages, "bash"):
 		s.processID.Store(backgroundProcessID(messages))
@@ -132,7 +145,26 @@ func assertOneChildResult(t *testing.T, h *harness, parentID int64, link *subage
 	for _, message := range parent {
 		assert.NotContains(t, message.Content, "interim report", "a yield is never delivered as a result")
 	}
-	assert.Equal(t, 1, countUserCompletions(h.messages(link.ChildID), backgroundExitNudgeMarker))
+	child := h.messages(link.ChildID)
+	assert.Equal(t, 1, countUserCompletions(child, backgroundExitNudgeMarker))
+	assert.True(t, hasUserContaining(child, "it replaces everything you said before"),
+		"the nudge tells a waiting child its next answer must be the complete result")
+}
+
+// releaseAndAwaitExit lets the search finish and waits for its durable terminal row.
+func (s *backgroundChildScript) releaseAndAwaitExit(t *testing.T, h **harness) {
+	t.Helper()
+	s.releaseSearch(t)
+	id, _ := s.processID.Load().(string)
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		process, err := (*h).mgr.processStore.GetProcess(context.Background(), id)
+		if err == nil && process.State.Terminal() {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Errorf("process %s did not finish", id)
 }
 
 func TestHarnessScenario_ForegroundSubagentBackgroundWorkDeliversOneResult(t *testing.T) {

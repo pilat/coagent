@@ -313,6 +313,50 @@ func TestLinkStore_FinalizeYieldsWhileChildOwnsLiveProcess(t *testing.T) {
 	assert.Equal(t, "interim report", final.Result)
 }
 
+func TestLinkStore_FailResumeKeepsLastAnswerForForegroundOnly(t *testing.T) {
+	links, ss, _, projectID := newTestStore(t)
+	ctx := t.Context()
+	parent, err := ss.CreateSession(ctx, projectID, "m", "", nil)
+	require.NoError(t, err)
+	create := func(blocking bool) int64 {
+		t.Helper()
+		childID, err := links.Create(ctx, Create{
+			ProjectID: projectID, ParentID: parent.ID, RootID: parent.ID, Model: "m",
+			TaskCallID: "c" + strconv.FormatBool(blocking), Blocking: blocking, State: StateRunning,
+		})
+		require.NoError(t, err)
+		_, err = ss.Commit(ctx, sessionstore.Commit{
+			SessionID: childID,
+			Messages:  []*transcript.Message{{Role: "assistant", Content: "full report"}},
+		})
+		require.NoError(t, err)
+		return childID
+	}
+
+	background := create(false)
+	skipped, err := links.FailResume(ctx, background, "no capacity")
+	require.NoError(t, err)
+	assert.Nil(t, skipped, "background children queue instead")
+
+	foreground := create(true)
+	failed, err := links.FailResume(ctx, foreground, "no capacity")
+	require.NoError(t, err)
+	require.NotNil(t, failed)
+	assert.Equal(t, StateError, failed.State)
+	assert.Equal(t, OutcomeError, failed.Outcome)
+	assert.Equal(t, "no capacity\n\nLast answer before the interruption:\nfull report", failed.Result)
+	stored, err := links.GetLink(ctx, foreground)
+	require.NoError(t, err)
+	assert.Equal(t, failed.Result, stored.Result)
+	rec, err := ss.GetSession(ctx, foreground)
+	require.NoError(t, err)
+	assert.Equal(t, sessionstore.SessionStatusError, rec.Status)
+
+	again, err := links.FailResume(ctx, foreground, "no capacity")
+	require.NoError(t, err)
+	assert.Nil(t, again, "a terminal activation is never failed twice")
+}
+
 func TestLinkStore_ResetRunning(t *testing.T) {
 	ls, ss, _, projectID := newTestStore(t)
 	ctx := context.Background()

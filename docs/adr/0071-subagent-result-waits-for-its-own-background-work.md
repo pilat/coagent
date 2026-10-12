@@ -38,9 +38,12 @@ For subagents only, a stop while the child still owns live background processes
 - **Background-exit nudge.** On such a stop the host appends one host-authored
   user-role message listing each live process (ID, command excerpt, running
   time) and states both exits: cancel a process whose result is no longer needed
-  with `cancel_process` and then give the complete final answer, or end the turn
-  to be resumed when the process completes, after which the parent receives the
-  result. The stop is not terminal; the loop continues to the next model call.
+  with `cancel_process` and then give the final answer, or end the turn to be
+  resumed when the process completes, after which the parent receives the result.
+  For both exits it says the final answer replaces everything said before and
+  must be the complete result with every finding and caveat, not only what the
+  process changed: the incident's child answered with exactly such a delta. The
+  stop is not terminal; the loop continues to the next model call.
 - **One host nudge per generation.** The background-exit nudge and the ADR-0060
   completion nudge share ADR-0068's durable `completion_nudge_generation`
   marker. The background check runs first, inside the wake branch, so a single
@@ -57,6 +60,18 @@ For subagents only, a stop while the child still owns live background processes
   (activation sequence unchanged). The parent receives exactly one result, when
   the child stops with no live processes of its own; the ordinary completion check
   applies then. Errored activations still terminalize immediately.
+- **Re-admission of a foreground child is fail-fast.** Foreground children are
+  never queued for a runner slot: spawn already returns a capacity error rather
+  than suspend the parent behind a queue. A foreground child that has already
+  run and finds no capacity when its process completion (or the restart sweep)
+  resumes it is terminalized by the ledger (`FailResume`) as an `error` outcome
+  whose result states that the session capacity is full and carries the child's
+  last answer. Delivery follows outside the tree lock, so the parent's `task`
+  call returns now instead of waiting for a restart.
+- **Stop and park include yielded children.** The stop plan also takes children
+  whose session completed a yield but whose link is still open, so `/stop` and a
+  budget park mark the link stopped like any active child. Park preserves the
+  process; its later completion stays in the stopped child's inbox.
 
 Roots are unchanged: background yield, 🟣 Background badge, wake on completion,
 no background-exit nudge. Other wake sources of a subagent (an undelivered
@@ -77,12 +92,16 @@ owed to the still-open child, which startup recovery resumes.
 - A foreground parent may wait for the full lifetime of the child's process
   (bounded by its deadline, at most thirty minutes). That is the intended price:
   the parent asked for a result that depends on that work.
-- The nudge costs at most one extra child model call per input generation. A
-  child that cancels and answers must restate its answer in full; the nudge says
-  so, and the earlier stop text is not carried over.
-- The link can stay non-terminal while no child runner exists. Readers that treat
-  `spawned`/`running` links as live work (progress, restart sweep, budget
-  obligation) already see the child's advertised process as outstanding.
+- The nudge costs at most one extra child model call per input generation. The
+  child must restate its answer in full after either exit; the nudge says so, and
+  the earlier stop text is not carried over. Compliance remains a prompt property.
+- The link can stay non-terminal while the session is `completed` and no runner
+  exists. Readers that treat `spawned`/`running` links as live work (progress,
+  restart sweep, budget obligation, kill) already see it; the stop plan had to be
+  taught to.
+- Under full child capacity a foreground child loses its post-wait turn and the
+  parent gets an error result instead of the final answer. Accepted: it matches
+  the spawn policy and keeps the parent from hanging.
 - Restart between yield and process completion needs no new state: shutdown or
   crash recovery commits the interrupted process and its inbox row together, and
   the restart sweep starts the open child.
@@ -108,6 +127,9 @@ owed to the still-open child, which startup recovery resumes.
   external call and drives waiting-slot publication and staged configuration
   apply; overloading it would change those paths. The ledger guard is atomic with
   the process ledger instead.
+- **Queue a foreground child that cannot be re-admitted.** Rejected: spawn
+  deliberately never queues foreground children, and a queued foreground child
+  leaves its parent's call waiting on unrelated sessions to finish.
 - **A separate durable marker for the background-exit nudge.** Rejected: two
   host nudges for one response, or one after another in the same generation,
   would reintroduce the nudge loop ADR-0068 closed.
