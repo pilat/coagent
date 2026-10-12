@@ -717,6 +717,13 @@ func (s *svc) stopPlan(ctx context.Context, rootID int64) (*stopPlan, error) {
 		included[record.ID] = true
 	}
 
+	yielded, err := s.yieldedChildren(ctx, t, rootID, included)
+	if err != nil {
+		return nil, err
+	}
+
+	ids = append(ids, yielded...)
+
 	links := make([]subagent.Link, 0, len(ids))
 	for _, id := range ids {
 		link, linkErr := s.links.GetLink(ctx, id)
@@ -730,6 +737,36 @@ func (s *svc) stopPlan(ctx context.Context, rootID int64) (*stopPlan, error) {
 	}
 
 	return &stopPlan{rootID: rootID, sessionIDs: ids, links: links}, nil
+}
+
+// yieldedChildren finds children whose session completed a yield while their
+// activation stays open on a live background process (ADR-0071).
+func (s *svc) yieldedChildren(ctx context.Context, t *tree, rootID int64, included map[int64]bool) ([]int64, error) {
+	subtree, err := t.subtree(rootID)
+	if err != nil {
+		return nil, err
+	}
+
+	var ids []int64
+
+	for _, id := range subtree {
+		record := t.byID[id]
+		if included[id] || record.KilledAt != nil || record.Status != sessionstore.SessionStatusCompleted {
+			continue
+		}
+
+		link, err := s.links.GetLink(ctx, id)
+		if err != nil {
+			return nil, fmt.Errorf("load subagent link for session %d: %w", id, err)
+		}
+
+		if link != nil && !link.Terminal() && link.State != subagent.StateStopped {
+			ids = append(ids, id)
+			included[id] = true
+		}
+	}
+
+	return ids, nil
 }
 
 func stopActive(status sessionstore.SessionStatus) bool {

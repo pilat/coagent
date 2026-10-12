@@ -79,6 +79,7 @@ func (s *store) Create(ctx context.Context, create Create) (int64, error) {
 }
 
 // Finalize commits the terminal link and session status together, preserving pending activations.
+// A successful stop while the child owns a live advertised process is a yield: the link stays open.
 func (s *store) Finalize(ctx context.Context, childID int64, errored bool) (*Link, error) {
 	var finalized *Link
 
@@ -120,8 +121,11 @@ func (s *store) Finalize(ctx context.Context, childID int64, errored bool) (*Lin
      WHERE sess.id = subagent_links.child_id
       AND sess.status NOT IN ('stopping', 'stopped', 'killed') AND sess.killed_at IS NULL)
     AND NOT EXISTS (SELECT 1 FROM session_inbox input
-     WHERE input.session_id = subagent_links.child_id AND input.state = 'pending')`,
-			state, result, outcome, childID)
+     WHERE input.session_id = subagent_links.child_id AND input.state = 'pending')
+    AND (? OR NOT EXISTS (SELECT 1 FROM background_processes process
+     WHERE process.session_id = subagent_links.child_id AND process.state = 'running'
+      AND process.advertised_at IS NOT NULL))`,
+			state, result, outcome, childID, state == StateError)
 		if err != nil {
 			return fmt.Errorf("conditionally finalize subagent activation: %w", err)
 		}
@@ -154,6 +158,66 @@ func (s *store) Finalize(ctx context.Context, childID int64, errored bool) (*Lin
 	}
 
 	return finalized, nil
+}
+
+// FailResume terminalizes an open foreground activation that cannot be re-admitted.
+// The result keeps the child's last answer so its work is not lost.
+func (s *store) FailResume(ctx context.Context, childID int64, reason string) (*Link, error) {
+	link, err := s.GetLink(ctx, childID)
+	if err != nil || link == nil || !link.Blocking || link.Terminal() || link.State == StateStopped {
+		return nil, err
+	}
+
+	messages, err := s.sessions.LoadActiveMessages(ctx, childID)
+	if err != nil {
+		return nil, fmt.Errorf("load unresumable child transcript: %w", err)
+	}
+
+	result := reason
+	if text := lastAssistantText(messages); text != "" {
+		result += "\n\nLast answer before the interruption:\n" + text
+	}
+
+	var failed *Link
+
+	err = s.sessions.WithTx(ctx, func(tx *sql.Tx) error {
+		execResult, err := tx.ExecContext(ctx, `UPDATE subagent_links
+   SET state = 'error', result = ?, outcome = ?
+   WHERE child_id = ? AND blocking = 1 AND state IN ('spawned', 'running')
+    AND EXISTS (SELECT 1 FROM sessions sess
+     WHERE sess.id = subagent_links.child_id
+      AND sess.status NOT IN ('stopping', 'stopped', 'killed') AND sess.killed_at IS NULL)`,
+			result, OutcomeError, childID)
+		if err != nil {
+			return fmt.Errorf("fail unresumable subagent activation: %w", err)
+		}
+
+		rows, err := execResult.RowsAffected()
+		if err != nil {
+			return fmt.Errorf("fail unresumable activation rows affected: %w", err)
+		}
+
+		if rows == 0 {
+			return nil
+		}
+
+		if err := sessionstore.UpdateSessionStatusTx(ctx, tx, childID, sessionstore.SessionStatusError); err != nil {
+			return fmt.Errorf("fail unresumable child status: %w", err)
+		}
+
+		failed = link
+
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("fail resume: %w", err)
+	}
+
+	if failed != nil {
+		failed.State, failed.Result, failed.Outcome = StateError, result, OutcomeError
+	}
+
+	return failed, nil
 }
 
 // Kill terminalizes the link before killing its session in the same transaction.

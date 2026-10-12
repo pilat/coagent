@@ -71,6 +71,7 @@ type Store interface {
 	MakeStoppedLinkResumable(ctx context.Context, childID int64) error
 	Create(ctx context.Context, create Create) (int64, error)
 	Finalize(ctx context.Context, childID int64, errored bool) (*Link, error)
+	FailResume(ctx context.Context, childID int64, reason string) (*Link, error)
 	Kill(ctx context.Context, childID int64) error
 	Resume(ctx context.Context, childID int64) error
 	Rearm(ctx context.Context, childID int64) (bool, error)

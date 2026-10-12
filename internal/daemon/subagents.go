@@ -13,6 +13,9 @@ import (
 	"github.com/pilat/coagent/internal/subagent"
 )
 
+const unresumableChildNotice = "Subagent could not resume: the daemon's session capacity is full. " +
+	"Its work stopped here; retry later."
+
 var _ subagent.Spawner = (*svc)(nil)
 
 // Spawn starts a durably linked child and returns its ID without waiting.
@@ -315,6 +318,28 @@ func (s *svc) finalizeChildLocked(ctx context.Context, childID int64, errored bo
 	s.publishSubagentProgress(ctx, childID)
 
 	return func() { s.deliverCompletionToParent(ctx, *link) }
+}
+
+// Foreground children are never queued (as at spawn), so a resumed one that finds
+// no capacity fails now instead of leaving its parent's call pending.
+func (s *svc) failUnresumableChildLocked(ctx context.Context, childID int64) error {
+	link, err := s.links.FailResume(ctx, childID, unresumableChildNotice)
+	if err != nil {
+		return fmt.Errorf("fail unresumable child %d: %w", childID, err)
+	}
+
+	if link == nil {
+		return nil
+	}
+
+	s.publishSubagentProgress(ctx, childID)
+
+	// Delivery re-locks the tree; the restart sweep redelivers if this goroutine never runs.
+	failed := *link
+
+	s.life.Go("daemon.completion", func(ctx context.Context) { s.deliverCompletionToParent(ctx, failed) })
+
+	return nil
 }
 
 func (s *svc) rearmChildAfterDelivery(ctx context.Context, childID int64) error {

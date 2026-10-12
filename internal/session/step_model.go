@@ -172,6 +172,18 @@ func (s *Session) prepareAcceptedAttempt(
 		return nil
 	}
 
+	if wake {
+		nudged, err := s.prepareBackgroundExit(ctx, c, state)
+		if err != nil {
+			s.prepareProjectionError(r, c, err)
+			return nil
+		}
+
+		if nudged {
+			return nil
+		}
+	}
+
 	s.prepareStopResponse(r, c, response, state, wake)
 
 	return nil

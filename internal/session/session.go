@@ -62,6 +62,7 @@ type Session struct {
 	agentsMD          string
 	store             Store
 	rootID            int64
+	parentID          int64
 	id                int64
 	model             string
 	iterationOffset   int
@@ -118,6 +119,7 @@ type Store interface {
 	PendingActivation(context.Context, int64) (*sessionstore.ToolActivation, error)
 
 	HasBackgroundWakeSource(context.Context, int64) (bool, error)
+	ListLiveProcesses(context.Context, int64) ([]sessionstore.LiveProcess, error)
 	LoadActiveMessages(context.Context, int64) ([]*transcript.Message, error)
 	LoadCompletionCheckState(context.Context, int64) (*sessionstore.CompletionCheckState, error)
 	HasOutstandingResponseRecovery(context.Context, int64) (bool, error)
@@ -137,6 +139,7 @@ func New(ctx context.Context, in Input) (*Session, error) {
 		projectID:                r.ProjectID,
 		id:                       r.ID,
 		rootID:                   r.RootID,
+		parentID:                 r.ParentID,
 		llmClient:                in.Client,
 		loader:                   in.Loader,
 		registry:                 in.Registry,

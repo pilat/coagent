@@ -307,7 +307,11 @@ assistant message, iteration, completion state, empty streak, budget verdict,
 nudge and optional manager output in one SQLite step transaction.
 
 A no-tool `stop` with a wake source completes the current activation even
-while a background process or subagent remains. Completion input in
+while a background process or subagent remains. A subagent that still owns a
+live advertised process first receives one background-exit nudge, sharing the
+one-nudge-per-generation marker, and its later yield is not a result
+([ADR-0071](docs/adr/0071-subagent-result-waits-for-its-own-background-work.md)).
+Completion input in
 `session_inbox` reactivates that completed session for one later turn. Session construction
 captures advertised process identities and pending subagent links; the first
 boundary that will invoke the model durably appends a non-empty snapshot as
@@ -590,7 +594,14 @@ the same transaction closes the link obligation without creating inbox input;
 startup recovery retains that suppression path across a crash window. The parent
 boundary inserts the foreground result and reloads its transcript from SQLite.
 Cascade stop, failed delivery and restart recovery preserve the link's
-obligation until it is resolved or explicitly stopped. The same completion
+obligation until it is resolved or explicitly stopped. Finalization leaves a
+successful activation open while the child owns a live advertised process, so
+its process completion resumes the same activation and the parent receives one
+result per assignment. A resumed foreground child that finds no runner capacity
+fails with an error result instead of queueing, and stop plans include such open
+yielded children
+([ADR-0071](docs/adr/0071-subagent-result-waits-for-its-own-background-work.md)).
+The same completion
 rules apply to roots and every subagent type: a child with no todo list
 receives the same generic second look, only its confirmed response becomes the
 parent-facing result, and a child that ended through the terminal empty-stop

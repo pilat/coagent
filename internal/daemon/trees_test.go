@@ -432,6 +432,10 @@ func TestStopParksActiveDescendantBelowCompletedChild(t *testing.T) {
 	require.NoError(t, err)
 	completedID := createBackgroundChild(t, mgr, projectID, root.ID)
 	require.NoError(t, mgr.store.UpdateSessionStatus(ctx, completedID, sessionstore.SessionStatusCompleted))
+	// A completed session with an open link is a yield (ADR-0071), so the ancestor's activation is terminal too.
+	_, err = h.db.ExecContext(ctx, `UPDATE subagent_links SET state = 'completed', outcome = 'completed'
+		WHERE child_id = ?`, completedID)
+	require.NoError(t, err)
 	activeID := createBackgroundChild(t, mgr, projectID, completedID)
 	require.NoError(t, mgr.sendToSession(ctx, root.ID, "/stop"))
 	completed := h.session(completedID)

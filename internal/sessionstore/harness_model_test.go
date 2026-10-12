@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -37,6 +38,8 @@ const (
 	harnessFreshSchedule
 	harnessScheduleConflict
 	harnessCompact
+	harnessLaunchProcess
+	harnessProcessComplete
 )
 
 type harnessModel struct {
@@ -44,6 +47,7 @@ type harnessModel struct {
 	state           string
 	delivered       bool
 	pendingInputs   int
+	liveProcesses   int
 	parentResults   []string
 	scheduleResults []string
 	tickDelivered   bool
@@ -62,7 +66,8 @@ func (m *harnessModel) apply(command harnessCommand) {
 		}
 
 		if m.state == "spawned" || m.state == "running" {
-			if m.pendingInputs > 0 {
+			// A live child-owned process makes the stop a yield: one result per activation.
+			if m.pendingInputs > 0 || m.liveProcesses > 0 {
 				return
 			}
 
@@ -91,8 +96,24 @@ func (m *harnessModel) apply(command harnessCommand) {
 			m.pendingInputs--
 		}
 	case harnessFinalizeBeforeCrash:
-		if m.pendingInputs == 0 && (m.state == "spawned" || m.state == "running") {
+		if m.pendingInputs == 0 && m.liveProcesses == 0 && (m.state == "spawned" || m.state == "running") {
 			m.state = "completed"
+		}
+	case harnessLaunchProcess:
+		if m.state == "spawned" || m.state == "running" {
+			m.liveProcesses++
+		}
+	case harnessProcessComplete:
+		if m.liveProcesses == 0 {
+			return
+		}
+
+		m.liveProcesses--
+		m.pendingInputs++
+		if m.delivered && m.state == "completed" {
+			m.activationSeq++
+			m.state = "running"
+			m.delivered = false
 		}
 	case harnessScheduleTick:
 		if !m.tickDelivered {
@@ -266,7 +287,7 @@ func (p *harnessProduction) apply(command harnessCommand) {
 		require.NoError(p.t, err)
 		finalized, err := p.links.Finalize(p.ctx, p.child, false)
 		require.NoError(p.t, err)
-		wantFinalized := snapshot.pendingInputs == 0 &&
+		wantFinalized := snapshot.pendingInputs == 0 && snapshot.liveProcesses == 0 &&
 			(snapshot.state == "spawned" || snapshot.state == "running")
 		assert.Equal(p.t, wantFinalized, finalized != nil)
 	case harnessScheduleTick:
@@ -331,7 +352,63 @@ func (p *harnessProduction) apply(command harnessCommand) {
 			}},
 		})
 		require.NoError(p.t, err)
+	case harnessLaunchProcess:
+		if snapshot.state != "spawned" && snapshot.state != "running" {
+			return
+		}
+
+		p.launchProcess()
+	case harnessProcessComplete:
+		p.completeProcess(snapshot)
 	}
+}
+
+func (p *harnessProduction) launchProcess() {
+	p.t.Helper()
+
+	var count int
+	require.NoError(p.t, p.db.QueryRowContext(p.ctx, `SELECT COUNT(*) FROM background_processes`).Scan(&count))
+	now := time.Now().UTC()
+	_, err := p.db.ExecContext(p.ctx, `INSERT INTO background_processes
+		(id, session_id, root_session_id, tool_call_id, output_path, deadline_at, created_at, advertised_at)
+		VALUES (?, ?, ?, 'bash-call', '/tmp/out', ?, ?, ?)`,
+		fmt.Sprintf("proc-%d", count), p.child, p.parent, now.Add(time.Hour), now, now)
+	require.NoError(p.t, err)
+}
+
+// completeProcess mirrors process finalization (terminal row plus inbox row in one
+// transaction) followed by the daemon's input-ready re-arm attempt.
+func (p *harnessProduction) completeProcess(snapshot harnessSnapshot) {
+	p.t.Helper()
+
+	if snapshot.liveProcesses == 0 {
+		return
+	}
+
+	err := p.store.WithTx(p.ctx, func(tx *sql.Tx) error {
+		var id string
+		if err := tx.QueryRowContext(p.ctx, `SELECT id FROM background_processes
+			WHERE session_id = ? AND state = 'running' ORDER BY id LIMIT 1`, p.child).Scan(&id); err != nil {
+			return err
+		}
+
+		if _, err := tx.ExecContext(p.ctx, `UPDATE background_processes
+			SET state = 'completed', exit_code = 0, finished_at = ? WHERE id = ?`, time.Now().UTC(), id); err != nil {
+			return err
+		}
+
+		_, err := sessionstore.EnqueueTx(p.ctx, tx, sessionstore.Input{
+			SessionID: p.child, Source: sessionstore.InputSourceProcess, Content: "process " + id + " completed",
+			DeliveryKey: "process:" + id,
+		})
+
+		return err
+	})
+	require.NoError(p.t, err)
+
+	rearmed, err := p.links.Rearm(p.ctx, p.child)
+	require.NoError(p.t, err)
+	assert.Equal(p.t, snapshot.delivered && snapshot.state == "completed", rearmed)
 }
 
 type harnessSnapshot struct {
@@ -339,6 +416,7 @@ type harnessSnapshot struct {
 	state           string
 	delivered       bool
 	pendingInputs   int
+	liveProcesses   int
 	parentResults   []string
 	scheduleResults []string
 	tickDelivered   bool
@@ -359,6 +437,10 @@ func (p *harnessProduction) snapshot() harnessSnapshot {
 		SELECT COUNT(*) FROM session_inbox
 		WHERE session_id = ? AND state = 'pending'`, p.child,
 	).Scan(&snapshot.pendingInputs))
+	require.NoError(p.t, p.db.QueryRowContext(p.ctx, `
+		SELECT COUNT(*) FROM background_processes
+		WHERE session_id = ? AND state = 'running'`, p.child,
+	).Scan(&snapshot.liveProcesses))
 
 	messages, err := p.store.LoadActiveMessages(p.ctx, p.parent)
 	require.NoError(p.t, err)
@@ -402,6 +484,7 @@ func assertHarnessMatchesModel(t *testing.T, model *harnessModel, production *ha
 	assert.Equal(t, model.state, actual.state, "link state")
 	assert.Equal(t, model.delivered, actual.delivered, "completion delivery marker")
 	assert.Equal(t, model.pendingInputs, actual.pendingInputs, "pending durable inputs")
+	assert.Equal(t, model.liveProcesses, actual.liveProcesses, "live child processes")
 	assert.Equal(t, model.parentResults, actual.parentResults, "parent-visible completions")
 	assert.Equal(t, model.scheduleResults, actual.scheduleResults, "scheduled deliveries")
 	assert.Equal(t, model.tickDelivered, actual.tickDelivered, "tick delivery claim")
@@ -416,7 +499,7 @@ func runHarnessCommands(t *testing.T, commands, migratedDB []byte) {
 	assertHarnessMatchesModel(t, model, production)
 
 	for index, raw := range commands {
-		command := harnessCommand(raw % byte(harnessCompact+1))
+		command := harnessCommand(raw % byte(harnessProcessComplete+1))
 		model.apply(command)
 		production.apply(command)
 		if !assertHarnessMatchesModelAt(t, index, command, model, production) {
@@ -440,6 +523,7 @@ func assertHarnessMatchesModelAt(
 	matched = assert.Equal(t, model.state, actual.state, step+": state") && matched
 	matched = assert.Equal(t, model.delivered, actual.delivered, step+": delivery") && matched
 	matched = assert.Equal(t, model.pendingInputs, actual.pendingInputs, step+": inbox") && matched
+	matched = assert.Equal(t, model.liveProcesses, actual.liveProcesses, step+": processes") && matched
 	matched = assert.Equal(t, model.parentResults, actual.parentResults, step+": results") && matched
 	matched = assert.Equal(t, model.scheduleResults, actual.scheduleResults, step+": schedules") && matched
 	matched = assert.Equal(t, model.tickDelivered, actual.tickDelivered, step+": tick claim") && matched
@@ -476,6 +560,28 @@ func TestHarnessModel_FollowUpAfterTerminalBeforeDeliveryPreservesBothActivation
 		byte(harnessFinish), // deliver activation one, then re-arm behind that barrier
 		byte(harnessConsumeInput),
 		byte(harnessFinish),
+	}, nil)
+}
+
+func TestHarnessModel_ChildProcessDefersTheOneResult(t *testing.T) {
+	runHarnessCommands(t, []byte{
+		byte(harnessLaunchProcess),
+		byte(harnessLaunchProcess),
+		byte(harnessFinish), // yield: no parent result while the child owns live work
+		byte(harnessFinalizeBeforeCrash),
+		byte(harnessRestart),
+		byte(harnessFinish),
+		byte(harnessProcessComplete),
+		byte(harnessConsumeInput),
+		byte(harnessFinish), // still one live process
+		byte(harnessProcessComplete),
+		byte(harnessRestart),
+		byte(harnessFinish), // the completion input is not consumed yet
+		byte(harnessConsumeInput),
+		byte(harnessFinish), // the single result of activation one
+		byte(harnessFinish),
+		byte(harnessProcessComplete), // nothing live: no late rearm
+		byte(harnessStaleCompletion),
 	}, nil)
 }
 

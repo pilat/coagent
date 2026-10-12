@@ -153,6 +153,8 @@ type mockSessionStore struct {
 	insertCalls, insertFailAt int
 	insertErr                 error
 	completion                sessionstore.CompletionCheckState
+	wake                      bool
+	live                      []sessionstore.LiveProcess
 }
 
 type noteEvents struct{ notes *[]string }
@@ -419,8 +421,12 @@ func (*mockSessionStore) PendingActivation(context.Context, int64) (*sessionstor
 	return nil, sessionstore.ErrActivationNotFound
 }
 
-func (*mockSessionStore) HasBackgroundWakeSource(context.Context, int64) (bool, error) {
-	return false, nil
+func (m *mockSessionStore) HasBackgroundWakeSource(context.Context, int64) (bool, error) {
+	return m.wake || len(m.live) > 0, nil
+}
+
+func (m *mockSessionStore) ListLiveProcesses(context.Context, int64) ([]sessionstore.LiveProcess, error) {
+	return m.live, nil
 }
 
 func (m *mockSessionStore) LoadCompletionCheckState(

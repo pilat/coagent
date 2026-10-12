@@ -307,7 +307,8 @@ testing convention:
 
 The model protocol also includes scheduled-delivery duplicate, conflict, fresh
 reset and restart commands, and a `compact` command interleaving whole-transcript
-compaction with deliveries, restarts and stale completions. Nightly mutation
+compaction with deliveries, restarts and stale completions, and child-owned
+process launch/completion commands that defer the child's one result. Nightly mutation
 diagnostics cover the production Go module in bounded shards.
 
 Useful focused commands:

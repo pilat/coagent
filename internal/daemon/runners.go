@@ -295,20 +295,34 @@ func (s *svc) startLocked(ctx context.Context, id int64) error {
 	}
 
 	if !s.runners.tryAdmit(w.child, w.parentID) {
-		if link != nil && link.Blocking {
-			return errNoCapacity
-		}
-
-		s.runners.wait(w)
-
-		if s.runners.hasAdmissible() {
-			s.life.Go("daemon.admission", s.drain)
-		}
-
-		return nil
+		return s.deferUnadmitted(ctx, rec, link, w)
 	}
 
 	return s.startAdmitted(ctx, rec, w, preserve)
+}
+
+// Foreground children never queue: a fresh one is refused, a resumed one fails.
+func (s *svc) deferUnadmitted(
+	ctx context.Context,
+	rec *sessionstore.SessionRecord,
+	link *subagent.Link,
+	w waitingRunner,
+) error {
+	if link != nil && link.Blocking && rec.Iteration > 0 {
+		return s.failUnresumableChildLocked(ctx, link.ChildID)
+	}
+
+	if link != nil && link.Blocking {
+		return errNoCapacity
+	}
+
+	s.runners.wait(w)
+
+	if s.runners.hasAdmissible() {
+		s.life.Go("daemon.admission", s.drain)
+	}
+
+	return nil
 }
 
 func (s *svc) startAdmitted(

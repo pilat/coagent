@@ -5,6 +5,7 @@
 - **Supersedes:** [ADR-0053](0053-background-handoff-uses-ordinary-completion.md)
 - **Amended by:** [ADR-0061](0061-completion-check-publishes-the-candidate-answer.md) — the published/human-visible answer is now the candidate, not the confirming response (reverses the visibility grain in this ADR's Decision and Consequences; the two-phase mechanism stands)
 - **Amended by:** [ADR-0068](0068-one-completion-nudge-per-model-input.md) — at most one nudge per model-input generation; a stop after a continued check is final (replaces "a later stop begin a new check" in Consequences)
+- **Amended by:** [ADR-0071](0071-subagent-result-waits-for-its-own-background-work.md) — for subagents, a stop while the child owns live background processes gets a background-exit nudge and then yields without becoming the parent's result
 
 ## Context
 
