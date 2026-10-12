@@ -41,6 +41,13 @@ The nudge text keeps its ADR-0061 shape. It gains one sentence: if the model
 continues with tools, its next text-only response ends the task without another
 check and replaces this answer, so it must be complete.
 
+*Amended 2026-10-12:* a continuation still ended in a report of the re-check that
+dropped the earlier answer's caveats. The nudge now asks a confirmation for one
+sentence only, since the previous answer is what gets delivered, and says the
+post-continuation response reaches the user in its place, so it must be the
+complete answer to the original request, keep every finding and caveat, and not
+report the re-check.
+
 Everything else in ADR-0060 and ADR-0061 stands: wake-aware yield, the empty-stop
 streak, the manager-reply obligation, publishing the candidate on a direct
 confirmation, restart recovery.
