@@ -20,17 +20,39 @@ const noConfigActivationMessage = "This change requires a current user message b
 const restartNotice = "Applying this restarts the daemon; you receive the verdict when it comes back. " +
 	"A change that would break the daemon is refused instead, and the refusal comes back straight away."
 
-const secretsDisplayPath = "~/" + coagenthome.DirName + "/" + coagenthome.SecretsFileName
+const (
+	secretsDisplayPath = "~/" + coagenthome.DirName + "/" + coagenthome.SecretsFileName
+	configDisplayPath  = "~/" + coagenthome.DirName + "/" + coagenthome.ConfigFileName
+)
 
-const editAuthorityDoc = "Replaces the complete application configuration with the supplied YAML document. " +
+// wholeDocumentRule is repeated in the description, the parameter and every
+// refusal because a model that sends only its change wipes the rest.
+const wholeDocumentRule = "config_edit is not a patch or merge: the document replaces the ENTIRE configuration " +
+	"in " + configDisplayPath + ", and every section or entry missing from it is DELETED " +
+	"(providers, models, managers, marketplaces, sandbox, tools and everything else). " +
+	"First read the current file with the read tool, change only what the user asked for, and send back " +
+	"the complete document with every untouched section copied verbatim. Never send a fragment or only the changed keys. " +
+	"If you cannot read the current file, stop and ask the operator for it; never reconstruct it from memory."
+
+const editAuthorityDoc = wholeDocumentRule + " " +
 	"Use only when the user explicitly requests a configuration change. A /config prefix alone is not a change request. " +
-	"Answer configuration questions without calling this tool. Preserve every unrelated setting; never submit a fragment. " +
+	"Answer configuration questions without calling this tool. " +
 	"Credentials may be literal values or ${VAR} references to entries in " + secretsDisplayPath + ", " +
 	"which the operator maintains by hand outside this protocol. " +
 	"An invalid candidate is refused immediately with nothing written. " +
 	"The sandbox is one ordered list of allow/deny path rules under sandbox.rules and sandbox.projects.<path>.rules; " +
 	"the last matching rule decides. The current project's daemon-owned process output is always read-only after " +
 	"all operator rules. A rule that buries a project's own writability is refused."
+
+const documentParamDoc = "The COMPLETE configuration YAML: the full current " + configDisplayPath +
+	" with only the requested change applied. It replaces the entire configuration; any section or entry " +
+	"omitted here is deleted. Never a fragment. Credentials may be literal values; ${VAR} references to " +
+	secretsDisplayPath + " keep working but their entries are maintained by hand outside this protocol."
+
+// RefusalReminder rides on every config_edit refusal, where a model fixing the
+// error is most tempted to shrink the document further.
+const RefusalReminder = "The live configuration is unchanged. Retry with the full current document from " +
+	configDisplayPath + ": the replacement must still contain every section you were not asked to change."
 
 var (
 	_ tool.Tool               = (*configEditTool)(nil)
@@ -65,7 +87,7 @@ func (t *configEditTool) Parameters() json.RawMessage {
 	return json.RawMessage(`{
   "type": "object",
   "properties": {
-    "document": {"type": "string", "description": "The complete replacement configuration YAML. Credentials may be literal values; ${VAR} references to ` + secretsDisplayPath + ` keep working but their entries are maintained by hand outside this protocol."}
+    "document": {"type": "string", "description": "` + documentParamDoc + `"}
   },
   "required": ["document"]
 }`)
@@ -102,7 +124,7 @@ func (t *configEditTool) Execute(ctx context.Context, params json.RawMessage) (*
 
 	staged, v := t.service.ops.StageDocument([]byte(p.Document))
 	if v.Failed() {
-		return nil, errors.New(v.Reason())
+		return nil, errors.New(v.Reason() + "\n" + RefusalReminder)
 	}
 
 	if !t.service.stageApply(t.sessionID, callID, staged) {

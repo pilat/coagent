@@ -193,3 +193,17 @@ func TestRun_ExternalCallOwnership(t *testing.T) {
 		})
 	}
 }
+
+// "Call it as the only tool" made a model skip reading the state it had to
+// preserve; preparatory calls in earlier responses must stay allowed.
+func TestActivationInstruction_AllowsPreparationButIsolatesTheMutation(t *testing.T) {
+	t.Parallel()
+
+	text := activationInstruction(tool.IDConfigEdit, "/config")
+
+	assert.Contains(t, text, "authorizes config_edit to handle /config")
+	assert.Contains(t, text, "Earlier responses in this turn may use other tools to gather what config_edit needs")
+	assert.Contains(t, text, "the response that calls config_edit must contain no other tool call")
+	assert.Contains(t, text, "No change has occurred until the host emits its receipt")
+	assert.NotContains(t, text, "%!")
+}

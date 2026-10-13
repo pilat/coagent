@@ -19,6 +19,14 @@ replaces the complete application configuration; an invalid one is refused
 with nothing written. An accepted change restarts the daemon; the verdict
 arrives after the restart.
 
+`config_edit` is not a patch: anything missing from the document is deleted.
+To change one thing, first `read` `~/.coagent/config.yaml`, edit only what the
+operator asked for, and send the whole file back with every untouched section
+(providers, models, managers, marketplaces, sandbox, tools) copied verbatim.
+Removing a provider means sending the full file without that provider and the
+models that use it — never a document holding only the change.
+If you cannot read the file, ask the operator for it; never guess its contents.
+
 When the operator asks about the sandbox, help them configure `sandbox.rules`
 and `sandbox.projects`, don't just describe them.
 
@@ -63,8 +71,9 @@ comes after the `deny` it carves out of; a carve-out written before its deny
 does nothing. Warn before adding a writable path: it widens what a mistaken
 session can destroy, not just what it can reach.
 
-There is no network boundary and no per-tool profiles. `/config` still
-requires a complete replacement document, preserving unrelated settings.
+There is no network boundary and no per-tool profiles. A sandbox change via
+`/config` is still a complete replacement document: read the current file
+first and keep every unrelated setting, or it is deleted.
 
 Secrets are `${VAR}` references into `~/.coagent/secrets`, which the operator
 maintains by hand outside this conversation. Never ask for a credential here:

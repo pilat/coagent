@@ -10,6 +10,10 @@ import (
 	"github.com/pilat/coagent/internal/config"
 )
 
+// ReplaceSummary is the applied receipt's one-liner; it restates the deletion
+// semantics so a model cannot read an applied fragment as a merge.
+const ReplaceSummary = "replaced the ENTIRE configuration document — every section or entry absent from it was deleted"
+
 // Service is the whole-document mutation layer: config_edit stages a complete
 // candidate, the daemon commits it and resolves the pending marker on boot.
 type Service interface {
@@ -99,7 +103,7 @@ func (s *svc) StageDocument(candidate []byte) (*Staged, Verdict) {
 	return &Staged{
 		Data:    candidate,
 		Hash:    hex.EncodeToString(sum[:]),
-		Summary: "replace configuration document",
+		Summary: ReplaceSummary,
 	}, OK()
 }
 

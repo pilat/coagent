@@ -383,7 +383,10 @@ func leadingSlashCommand(content string) string {
 
 func activationInstruction(toolID, command string) string {
 	return fmt.Sprintf(
-		"\n\n[Host activation: call %s as the only tool in this assistant response to handle %s. No change has occurred until the host emits its receipt.]",
+		"\n\n[Host activation: this turn authorizes %[1]s to handle %[2]s. "+
+			"Earlier responses in this turn may use other tools to gather what %[1]s needs; "+
+			"the response that calls %[1]s must contain no other tool call. "+
+			"No change has occurred until the host emits its receipt.]",
 		toolID,
 		command,
 	)
