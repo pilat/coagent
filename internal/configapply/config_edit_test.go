@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -116,9 +117,56 @@ func TestConfigEditTool_InvalidCandidateReturnsOrdinaryError(t *testing.T) {
 		tool.ActivationGrant{SessionID: 7, InputID: 3, ToolID: tool.IDConfigEdit, Command: "/config"})
 
 	_, err := tl.Execute(authored, mustJSON(t, map[string]any{"document": "bad: [yaml"}))
-	require.EqualError(t, err, "parsing config file: bad yaml")
+	require.EqualError(t, err, "parsing config file: bad yaml\n"+RefusalReminder)
 	assert.True(t, stager.called)
 	assert.False(t, *applied, "a rejected candidate never reaches the apply callback")
+}
+
+// A model that sent only its change wiped the rest of a live config, so the
+// whole-document rule must be stated wherever the model composes the document.
+func TestConfigEditTool_StatesWholeDocumentReplacementWhereTheModelDecides(t *testing.T) {
+	t.Parallel()
+
+	tl, _, _ := newConfigEditFixture()
+
+	var schema struct {
+		Properties struct {
+			Document struct {
+				Description string `json:"description"`
+			} `json:"document"`
+		} `json:"properties"`
+	}
+	require.NoError(t, json.Unmarshal(tl.Parameters(), &schema), "schema must stay valid JSON")
+
+	surfaces := map[string]string{
+		"description": tl.Description(),
+		"parameter":   schema.Properties.Document.Description,
+	}
+	for name, text := range surfaces {
+		for _, want := range []string{
+			"~/.coagent/config.yaml",
+			"replaces the entire configuration",
+			"Never",
+			"fragment",
+		} {
+			assert.Contains(t, strings.ToLower(text), strings.ToLower(want), "%s: %s", name, want)
+		}
+		assert.Regexp(t, `(?i)(missing from it|omitted here) is deleted`, text, name)
+	}
+
+	for _, want := range []string{
+		"not a patch or merge",
+		"First read the current file with the read tool",
+		"change only what the user asked for",
+		"every untouched section copied verbatim",
+		"providers, models, managers, marketplaces, sandbox",
+		"stop and ask the operator for it",
+	} {
+		assert.Contains(t, tl.Description(), want)
+	}
+
+	assert.Contains(t, RefusalReminder, "~/.coagent/config.yaml")
+	assert.Contains(t, RefusalReminder, "every section you were not asked to change")
 }
 
 func mustJSON(t *testing.T, value any) json.RawMessage {

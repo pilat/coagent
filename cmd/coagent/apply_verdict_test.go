@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -104,7 +105,7 @@ func TestDeliverApplyVerdict_MarkerClearedOnlyAfterDelivery(t *testing.T) {
 					assert.Equal(t, sessionstore.InputSourceCallResult, rows[0].Source)
 					assert.Equal(t, "c1", rows[0].Attributes["call_id"])
 					assert.Equal(t, tool.IDConfigEdit, rows[0].Attributes["tool_id"])
-					assert.Contains(t, rows[0].RawContent, "Config applied:")
+					assert.Contains(t, rows[0].RawContent, "Config applied: "+configops.ReplaceSummary)
 				}
 			}
 		})
@@ -143,6 +144,27 @@ func TestDeliverApplyVerdict_UndeliverableVerdictConsumesTheMarker(t *testing.T)
 		deliverApplyVerdict(t.Context(), store, configapply.New(ops, store), ops, &outcome)
 		assert.NoFileExists(t, marker)
 	})
+}
+
+// The rolled-back verdict is where a model retries, so it repeats the
+// whole-document rule instead of inviting a smaller fragment.
+func TestDeliverApplyVerdict_RolledBackVerdictRepeatsWholeDocumentRule(t *testing.T) {
+	ops, _ := commitMarker(t, 7)
+	store := verdictStore(t)
+	pending, err := ops.LoadPending()
+	require.NoError(t, err)
+	outcome, err := ops.ResolvePending(*pending, errors.New("model catalog: unknown model"))
+	require.NoError(t, err)
+	require.True(t, outcome.RolledBack)
+
+	deliverApplyVerdict(t.Context(), store, configapply.New(ops, store), ops, &outcome)
+
+	rows, err := store.ListPending(t.Context(), 7)
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	assert.Contains(t, rows[0].RawContent, "Config change rejected — ")
+	assert.Contains(t, rows[0].RawContent, "rolled back")
+	assert.True(t, strings.HasSuffix(rows[0].RawContent, "\n"+configapply.RefusalReminder))
 }
 
 func TestDeliverApplyVerdict_RolledBackUnattendedApplyHasNobodyToTell(t *testing.T) {

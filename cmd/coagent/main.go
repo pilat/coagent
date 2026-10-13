@@ -492,7 +492,7 @@ func deliverApplyVerdict(
 
 		message := "Config applied: " + outcome.Pending.Summary
 		if outcome.Verdict.Failed() {
-			message = "Config change rejected — " + outcome.Verdict.Reason()
+			message = "Config change rejected — " + outcome.Verdict.Reason() + "\n" + configapply.RefusalReminder
 		}
 
 		_, err := sender.Enqueue(ctx, sessionstore.Input{

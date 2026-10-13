@@ -46,7 +46,9 @@ models:
 
 	assert.Equal(t, int64(42), p.SessionID)
 	assert.Equal(t, "call-1", p.ToolCallID)
-	assert.Equal(t, "replace configuration document", p.Summary)
+	assert.Equal(t, ReplaceSummary, p.Summary)
+	assert.Contains(t, p.Summary, "ENTIRE configuration", "the applied receipt restates whole-document semantics")
+	assert.Contains(t, p.Summary, "was deleted")
 
 	// The backup names the file that was live, and the hash the one that landed.
 	require.NotEmpty(t, p.BakPath)
