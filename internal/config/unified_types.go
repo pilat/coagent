@@ -123,6 +123,7 @@ type (
 		AllowedUserIDs          []int64 `yaml:"allowed_user_ids,omitempty"`
 		TargetChatID            *int64  `yaml:"target_chat_id,omitempty"`
 		ServiceTopicName        string  `yaml:"service_topic_name,omitempty"`
+		AssistantTopicName      string  `yaml:"assistant_topic_name,omitempty"`
 		ServiceTopicIconEmojiID string  `yaml:"service_topic_icon_emoji_id,omitempty"`
 		SessionTopicIconEmojiID string  `yaml:"session_topic_icon_emoji_id,omitempty"`
 		SendChunkDelayMS        int     `yaml:"send_chunk_delay_ms,omitempty"`

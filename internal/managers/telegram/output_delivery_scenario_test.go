@@ -18,6 +18,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/pilat/coagent/internal/assistant"
 	"github.com/pilat/coagent/internal/backgroundprocess"
 	"github.com/pilat/coagent/internal/budget"
 	"github.com/pilat/coagent/internal/coagenthome"
@@ -139,6 +140,7 @@ func newDelayedTelegramHarnessWithClient(
 			configops.New(filepath.Join(home, "config.yaml"), filepath.Join(home, "secrets.yaml")),
 			sessions,
 		),
+		assistant.New(db),
 	)
 
 	t.Cleanup(func() { service.Shutdown(3 * time.Second) })
@@ -242,14 +244,18 @@ func (delayedTelegramClient) GetReasoningLevel() string              { return "m
 func (delayedTelegramClient) SetSessionID(string)                    {}
 
 type delayedTelegramCall struct {
-	Method string
-	Text   string
+	Method   string
+	Text     string
+	Name     string
+	ThreadID int64
+	Markup   string
 }
 
 type delayedTelegramRecorder struct {
-	mu          sync.Mutex
-	calls       []delayedTelegramCall
-	nextTopicID int64
+	mu             sync.Mutex
+	calls          []delayedTelegramCall
+	nextTopicID    int64
+	missingTopicID int64
 }
 
 func (r *delayedTelegramRecorder) RoundTrip(request *http.Request) (*http.Response, error) {
@@ -260,19 +266,30 @@ func (r *delayedTelegramRecorder) RoundTrip(request *http.Request) (*http.Respon
 	}
 
 	var payload struct {
-		Text string `json:"text"`
+		Text     string          `json:"text"`
+		Name     string          `json:"name"`
+		ThreadID int64           `json:"message_thread_id"`
+		Markup   json.RawMessage `json:"reply_markup"`
 	}
 	if err := json.NewDecoder(request.Body).Decode(&payload); err != nil {
 		return nil, fmt.Errorf("decode %s request: %w", method, err)
 	}
 
 	r.mu.Lock()
-	r.calls = append(r.calls, delayedTelegramCall{Method: method, Text: payload.Text})
+	r.calls = append(r.calls, delayedTelegramCall{
+		Method: method, Text: payload.Text, Name: payload.Name,
+		ThreadID: payload.ThreadID, Markup: string(payload.Markup),
+	})
 	if method == "createForumTopic" {
 		r.nextTopicID++
 	}
 	topicID := r.nextTopicID
+	missing := r.missingTopicID != 0 && r.missingTopicID == payload.ThreadID
 	r.mu.Unlock()
+
+	if missing && method == "editForumTopic" {
+		return harnessResponse(request, `{"ok":false,"error_code":400,"description":"message thread not found"}`), nil
+	}
 
 	result := `true`
 	switch method {
@@ -285,6 +302,10 @@ func (r *delayedTelegramRecorder) RoundTrip(request *http.Request) (*http.Respon
 	case "createForumTopic":
 		result = fmt.Sprintf(`{"message_thread_id":%d}`, topicID)
 	case "sendMessage":
+		if strings.TrimSpace(payload.Text) == "" {
+			return harnessResponse(request, `{"ok":false,"error_code":400,"description":"message text is empty"}`), nil
+		}
+
 		result = fmt.Sprintf(`{"message_id":123,"message_thread_id":%d}`, topicID)
 	}
 

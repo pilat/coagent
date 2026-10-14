@@ -14,6 +14,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/pilat/coagent/internal/assistant"
 	"github.com/pilat/coagent/internal/backgroundprocess"
 	"github.com/pilat/coagent/internal/budget"
 	"github.com/pilat/coagent/internal/config"
@@ -92,6 +93,7 @@ func newTelegramOwnershipHarness(t *testing.T) *telegramOwnershipHarness {
 			configops.New(filepath.Join(root, "config.yaml"), filepath.Join(root, "secrets.yaml")),
 			sessions,
 		),
+		assistant.New(db),
 	)
 	t.Cleanup(func() { svc.Shutdown(3 * time.Second) })
 

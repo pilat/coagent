@@ -11,6 +11,7 @@ import (
 	"github.com/pilat/coagent/internal/session"
 	"github.com/pilat/coagent/internal/sessionevent"
 	"github.com/pilat/coagent/internal/sessionstore"
+	"github.com/pilat/coagent/internal/tool"
 )
 
 // A stale runnability projection must not spin runners without new input.
@@ -18,6 +19,7 @@ const maxEmptyLoopIterations = 3
 
 type runOutcome struct {
 	again, hadInput, errored, publishIdle bool
+	runError                              error
 }
 
 func (s *svc) runSession(ctx context.Context, rs *runner) {
@@ -65,6 +67,9 @@ func (s *svc) runOnce(ctx context.Context, rs *runner) runOutcome {
 	}
 
 	idle := ownerlessSession(rec)
+	if rec.AgentType == tool.AssistantAgentType {
+		return s.runAssistant(ctx, rs)
+	}
 
 	sess, cleanup, err := s.openRunner(ctx, rs)
 	if err != nil {
@@ -156,6 +161,7 @@ func (s *svc) concludeRun(ctx context.Context, rs *runner, result session.RunRes
 	runErr error, out runOutcome, idle bool,
 ) runOutcome {
 	if runErr != nil {
+		out.runError = runErr
 		s.handleRunError(ctx, rs.sessionID, result.ErrorNotice, runErr)
 
 		out.errored, out.publishIdle = true, idle
@@ -230,6 +236,9 @@ func (s *svc) finishRunner(ctx context.Context, rs *runner, out runOutcome, pani
 
 	if err == nil {
 		deliver = s.finishRunnerDelivery(ctx, rs, out, errored)
+		if observeErr := s.observeAssistantWork(cleanup, id, out.runError); observeErr != nil {
+			logger.Ctx(cleanup).Named("daemon.assistant").Error("observe finished work", zap.Error(observeErr))
+		}
 	}
 
 	if unlock != nil {

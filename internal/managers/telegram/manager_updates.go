@@ -145,6 +145,14 @@ func (m *Manager) processTopicUpdate(ctx context.Context, msg *telegramMessage, 
 		return
 	}
 
+	if hasSession && hasAttachment(msg) && m.isAssistantSession(ctx, sessionID) {
+		if msg.Caption != "" {
+			m.handleSessionTopicMessage(ctx, sessionID, threadID, normalizeTextCommand(msg.Caption))
+		}
+
+		return
+	}
+
 	// Attachments dispatch at voice's position: ahead of service-topic routing,
 	// so an upload into any session topic cannot be eaten as a command.
 	if att := attachmentOf(msg); att != nil {

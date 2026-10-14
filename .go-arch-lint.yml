@@ -72,6 +72,7 @@ components:
   shellenv:   { in: internal/shellenv }
 
   session:    { in: internal/session }
+  assistant:  { in: internal/assistant }
   sessionbuild: { in: internal/sessionbuild }
   sessionprompt: { in: internal/sessionprompt }
   schedule:   { in: internal/schedule }
@@ -191,7 +192,10 @@ deps:
 
   # Orchestrator.
   daemon:
-    mayDependOn: [backgroundprocess, budget, coagenthome, config, configapply, controllerapi, git, id, llmwire, loader, logger, mcp, mcpstore, progress, progressruntime, projectpath, registry, schedule, session, sessionbuild, sessionprompt, sessionbus, sessionevent, sessionstore, subagent, todo, tool, transcript]
+    mayDependOn: [assistant, backgroundprocess, budget, coagenthome, config, configapply, controllerapi, git, id, llm, llmwire, loader, logger, mcp, mcpstore, progress, progressruntime, projectpath, registry, schedule, session, sessionbuild, sessionprompt, sessionbus, sessionevent, sessionstore, subagent, todo, tool, transcript]
+
+  assistant:
+    mayDependOn: [llm, llmwire, logger, registry, sessionstore, transcript, tool]
 
   configops:
     mayDependOn: [coagenthome, config, logger]

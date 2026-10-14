@@ -37,6 +37,8 @@ Telegram manager ── controller contract / status-only control socket ──>
 
 A manager submits work as a session. A session owns one agent-loop activation:
 its model client, tool registry, prompt projection, and conversation handling.
+The Assistant topic instead runs a bounded desk loop over its own root row;
+it delegates work to ordinary sessions and retells their answers.
 The daemon coordinates work that crosses sessions, survives a process restart,
 or needs global admission decisions; the owning domain package retains each
 ledger. Built-in managers program against the private controller
@@ -56,6 +58,7 @@ The map is an ownership index, not a list of exported symbols. Directory nesting
 does not imply a tier except where it expresses an implementation variant.
 
 - `cmd/coagent` — composition root, CLI product policy and daemon lifecycle commands. Refuses any non-Linux platform at process entry, before the guardian or command dispatch ([ADR-0062](docs/adr/0062-linux-only-supported-runtime.md)).
+- `internal/assistant` — bounded desk loop, answer referee, and durable desk, tape, send and turn state.
 - `internal/bashsandbox` — Linux Bubblewrap confinement and process launch for session-owned workloads. Builds one ordered mount plan from a compiled policy; non-Linux builds carry only a compile-time fallback that returns an unsupported-backend error.
 - `internal/budget` — one-shot root-tree budget policy and its user-authorized tool.
 - `internal/catalog` — external model metadata acquisition, caching and identifier matching.
@@ -123,8 +126,9 @@ projects, sessions, append-only messages, durable inbox entries, delivery
 identity, subagent links, schedules, curated memory, MCP definitions, and
 delivery records, including tool-activation grants, root-tree budgets, durable
 TODO state, per-session file-read ledger (storing `{mtime_unix_nano, size, hash}`
-for write-guard checks) and the background-process lifecycle ledger. Configuration files, their recoverable backups and the
-pending-apply marker are atomic filesystem state owned by config operations.
+for write-guard checks), the assistant desk and observation obligations, and the
+background-process lifecycle ledger. Configuration files, their recoverable
+backups and the pending-apply marker are atomic filesystem state owned by config operations.
 Other memory is coordination or cache only and must be reconstructible from
 durable state. A runtime state label shown by a controller is an in-memory
 projection; persisted session status is the recovery source.
@@ -833,13 +837,42 @@ cannot claim — and owns exactly one live management root in its service topic.
 A durable management-surface session attribute, not the project's discovery-only
 `hidden` flag, selects the embedded management instruction and service-topic
 delivery routing for that root; the attribute grants no tools or authority.
-The `config_edit` tool remains advertised on root sessions and can commit only
+The `config_edit` tool remains advertised on ordinary root sessions and can commit only
 under the durable activation created by a manager-owned `/config` command.
 That capability does not turn a configuration question into a change request;
 its apply restarts, boot-validates, and rolls back on failure. Ordinary project
 roots and subagents receive none of these management surfaces.
 
 ## Package profiles
+
+### Assistant desk
+
+`assistant` owns fixed-size notebook, stickers and focus slots, an append-only
+numbered tape with hideable ranges, sent-input observation obligations and turn
+records. A unique assistant root per manager shares the hidden management project
+but runs outside `session`: its transcript stays empty, it has no tools or
+compaction, and its status is completed between activations. The host renders
+the desk, a manager-scoped work-session board and one event for each model call;
+the referee checks JSON fields, slot limits and action targets before any effect.
+Displayed tape text is capped at 6000 Unicode characters per line and an event at
+20000 with its middle elided; full stored user/say text and delivered replies are
+preserved. Hides never reach the last six dialog lines, a running turn's own lines
+or lines the model has not seen. Cards name where a project lives and its last
+request; `open` accepts a card's path when names collide.
+
+Each successful step atomically saves slots, tape, turn evidence, an input receipt
+and footer-free persistent output. Notifications wake delivery after commit;
+work-session actions follow through daemon lifecycle paths. The accepted POC
+crash window between commit and action application is not replayed. Work answers
+are observed only for recorded assistant sends, bounded by the next accepted
+user input and carrying every final in that window. A send is answered only when
+the window ends in a final with no completion check pending and the session has no
+own wake source; a terminal session reports failure with its last finals, and
+superseded sends settle silently. An answer event notes what
+the assistant already said after reading that session. Runner completion, stop/kill transitions and the boot sweep commit
+observation events with send settlement. Ordinary work topics keep their own output. Assistant
+roots are protected from kill/clear and excluded from progress cards.
+The design decision is recorded in [ADR-0072](docs/adr/0072-assistant-desk-loop.md).
 
 ### Daemon, sessions and persistence
 
@@ -983,7 +1016,7 @@ passthrough, an explicit disable removes all integrated search, and an
 unconfigured section falls back to the OpenRouter driver's server-side
 web-search injection
 ([ADR-0043](docs/adr/0043-integrated-search-quality-first.md)). Tool-less
-requests — the compaction summarizer — carry no injection; `browser` sessions
+requests — the compaction summarizer — carry no injection; `browser` and assistant sessions
 disable integrated search before client construction. Search precedence
 lives in config, so drivers and sessions read one resolver.
 
@@ -1021,7 +1054,7 @@ Config owns parsing and secret-sink resolution; config operations own
 whole-document staging that accepts literal credential values and `${VAR}`
 references alike, backup retention and pending-apply recovery. Config apply owns
 the agent-facing schema and strict argument parsing; the `/config`
-activation-gated full-document tool registers on every root session and can
+activation-gated full-document tool registers on every ordinary root session and can
 commit only under the durable `/config` activation. Config apply owns the staged
 ledger, process-wide commit claim and restart channel; the daemon gates tool
 availability and calls apply under its tree fence after suspension persists.
@@ -1054,6 +1087,10 @@ transport attribute or numeric session ID, marks each manager's management root;
 its delivery always resolves the manager's current service topic, and management
 roots are excluded from manager-level kill flows. Session-event defines
 the event vocabulary shared at this boundary.
+Telegram also ensures one configurable Assistant topic before starting delivery,
+preserving its full root attributes when binding or repairing the topic. Its
+`/desk` reads host-rendered state; `/model` works, while stop, clear, compact and
+kill are refused and the root is excluded from the kill picker and callbacks.
 
 Control owns socket framing, greeting/readiness behavior, `status` registration
 and single-instance coordination. The socket carries responses only, so a slow

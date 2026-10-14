@@ -130,6 +130,60 @@ _Avoid_: setup agent, onboarding skill (removed).
 
 ## Agent loop & context management
 
+**assistant**:
+Coagent's single voice in the Assistant topic: a separate bounded desk loop with
+a durable root row that delegates work to ordinary sessions and retells results.
+_Avoid_: coordinator, dispatcher, work-item manager.
+
+**desk**:
+The assistant's entire model context: notebook, stickers, focus, a read-only board,
+a bounded visible tape window and one event, rebuilt by the host for every step.
+_Avoid_: transcript, context compaction.
+
+**notebook** (`diary`):
+The assistant's keyed long-term facts, rewritten as one size-limited map each step.
+_Avoid_: ledger, project memory (that is the separate curated-memory store).
+
+**stickers**:
+Size-limited short-term notes about work in flight and what to do with its result.
+_Avoid_: work items, dispatch records.
+
+**focus**:
+The assistant's size-limited single line describing the current subject.
+
+**board**:
+The host-rendered cards of this manager's recent or unread work sessions, each
+with where its project lives (`repo <path>`, `scratch` or `dir <path>`), its last
+request and its last final; it is read-only and bounds the session targets
+allowed in the assistant's answer.
+
+**tape**:
+The assistant's host-kept, numbered, timestamped history of events, speech and
+moves. Hiding ranges changes visibility, never the stored lines or their IDs; the
+last six user and say lines, the running turn's own lines and lines the model
+has not seen stay visible regardless of a hide.
+_Avoid_: transcript, ledger.
+
+**event** (assistant):
+The current user input, observed work answer or failure, action failure, or read
+result handed to the desk loop. Inbox-backed events are drained in FIFO order.
+_Avoid_: dispatch, work item.
+
+**referee**:
+The host validation of the assistant's JSON answer, memory limits and action
+authority, with bounded re-asks and a visible warning on exhausted failures.
+
+**move**:
+An assistant-requested open, send or stop action applied through the daemon's
+ordinary session lifecycle after committing the desk step.
+_Avoid_: dispatch intent.
+
+**observation** (assistant):
+A host-supplied work result or requested session tail. A work result belongs to
+a recorded assistant send and carries every final of its answer window; a tail
+carries user requests and finals, newest first. Direct user exchanges appear only
+on the board.
+
 **context artifact**:
 One of the three instruction files a session loads at open — **global**, **project**, or **local** — each resolved by a first-match-wins search over an ordered candidate list, then merged into the opening context as a `[role] <path>` labeled section with the home directory abbreviated to `~`. The section's path is the winning candidate, not the resolved symlink target.
 _Avoid_: project instructions (the pre-rename name for the merged string), AGENTS.md (one candidate, not the resolved artifact).

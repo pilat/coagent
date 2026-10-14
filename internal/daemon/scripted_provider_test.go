@@ -21,6 +21,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/pilat/coagent/internal/assistant"
 	"github.com/pilat/coagent/internal/backgroundprocess"
 	"github.com/pilat/coagent/internal/budget"
 	"github.com/pilat/coagent/internal/config"
@@ -452,7 +453,7 @@ func newScenarioDaemon(
 	)
 	service := New(
 		ctx, in, store, links, budgets, backgroundprocess.NewStore(db, store), progressruntime.New(store, bus), bus,
-		schedules, in.Config, mcp, applier,
+		schedules, in.Config, mcp, applier, assistant.New(db),
 	).(*svc)
 	return service, service.processes
 }

@@ -158,6 +158,10 @@ func (t *outputTransport) ensureSessionTopic(
 		name = fmt.Sprintf("Session %d", claim.SessionID)
 	}
 
+	if claim.SessionID == t.manager.assistantRootID {
+		name = t.manager.assistantTopicName()
+	}
+
 	topicID, err := t.manager.createForumTopic(ctx, name, t.manager.cfg.SessionTopicIconEmojiID)
 	if err != nil {
 		return 0, nil, fmt.Errorf("create session topic: %w", err)

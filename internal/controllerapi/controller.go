@@ -83,12 +83,26 @@ type ManagementRootController interface {
 	EnsureManagementRoot(ctx context.Context, data ManagementRootEnsureData) (int64, error)
 }
 
+// AssistantRootEnsureData preserves all attributes when the manager adds its topic binding.
+type AssistantRootEnsureData struct {
+	SessionID  int64          `json:"session_id"`
+	WorkDir    string         `json:"work_dir"`
+	Attributes map[string]any `json:"attributes"`
+}
+
+// AssistantController exposes the manager's assistant identity and read-only desk.
+type AssistantController interface {
+	EnsureAssistantRoot(context.Context) (*AssistantRootEnsureData, error)
+	AssistantDesk(context.Context, int64) (string, error)
+}
+
 // Controller is the complete in-process API the daemon exposes to rich
 // built-in managers such as Telegram. Narrower consumers should depend on a named
 // capability interface such as ChatController instead of this aggregate.
 type Controller interface {
 	ChatController
 	ManagementRootController
+	AssistantController
 	ListDir(ctx context.Context, data FsListDirData) (*FsListDirResultData, error)
 	ListSkills(ctx context.Context, data ConfigSkillsData) (*ConfigSkillsResultData, error)
 	ListRecentProjects(ctx context.Context) (*ProjectListResultData, error)
