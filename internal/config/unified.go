@@ -27,6 +27,7 @@ const (
 	DefaultUnifiedConfigFile = "~/" + coagenthome.DirName + "/" + coagenthome.ConfigFileName
 
 	defaultTelegramServiceTopicName        = "Coagent"
+	defaultTelegramAssistantTopicName      = "Assistant"
 	defaultTelegramServiceTopicIconEmojiID = "5309832892262654231"
 	defaultTelegramSessionTopicIconEmojiID = "5312016608254762256"
 	defaultTelegramSendChunkDelayMS        = 100
@@ -265,6 +266,10 @@ func (c *UnifiedConfig) validateTelegramManager(m *ManagerEntry) error {
 		return fmt.Errorf("manager %q (driver: telegram) service_topic_name exceeds 128 characters", m.ID)
 	}
 
+	if utf8.RuneCountInString(m.AssistantTopicName) > 128 {
+		return fmt.Errorf("manager %q (driver: telegram) assistant_topic_name exceeds 128 characters", m.ID)
+	}
+
 	if m.SendChunkDelayMS < 0 {
 		return fmt.Errorf("manager %q (driver: telegram) requires \"send_chunk_delay_ms\" to be >= 0", m.ID)
 	}
@@ -282,6 +287,10 @@ func (c *UnifiedConfig) validateTelegramManager(m *ManagerEntry) error {
 }
 
 func applyTelegramDefaults(m *ManagerEntry) {
+	if m.AssistantTopicName == "" {
+		m.AssistantTopicName = defaultTelegramAssistantTopicName
+	}
+
 	if m.ServiceTopicName == "" {
 		m.ServiceTopicName = defaultTelegramServiceTopicName
 	}

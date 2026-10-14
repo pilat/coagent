@@ -130,6 +130,10 @@ func (m *Manager) handleServiceTopicHelp(ctx context.Context) {
 }
 
 func (m *Manager) handleSessionTopicMessage(ctx context.Context, sessionID, threadID int64, text string) {
+	if m.isAssistantSession(ctx, sessionID) && m.handleAssistantCommand(ctx, sessionID, threadID, text) {
+		return
+	}
+
 	// /new belongs to the service topic; steer it there instead of to the LLM.
 	if _, ok := parseNewCommand(text); ok {
 		_, _ = m.sendMessage(ctx, "Use this command in the service topic.", nil, threadID)
@@ -355,6 +359,7 @@ func (m *Manager) handleKill(ctx context.Context, sessionID, threadID int64) {
 	// The management root is never offered or destroyed by /kill: the service
 	// topic must survive, and a replacement comes from ensure/clear paths.
 	sessions = filterOutManagementRoot(sessions, m.managementRootID)
+	sessions = filterOutAssistantRoots(sessions)
 
 	if len(sessions) == 0 {
 		_, _ = m.sendMessage(ctx, "No sessions to kill.", nil, m.serviceTopicID)
@@ -549,6 +554,11 @@ func (m *Manager) handleCallbackMore(ctx context.Context, cb *telegramCallbackDa
 }
 
 func (m *Manager) handleCallbackKill(ctx context.Context, cb *telegramCallbackData, action callbackAction) {
+	if m.isAssistantSession(ctx, action.Session) {
+		m.answerCallback(ctx, cb.ID, "The assistant cannot be killed")
+		return
+	}
+
 	if !m.ownsActiveSessionID(ctx, action.Session) {
 		m.answerCallback(ctx, cb.ID, "Session is no longer available")
 		return

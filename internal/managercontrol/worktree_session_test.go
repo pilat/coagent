@@ -17,6 +17,7 @@ import (
 )
 
 type stubWorktreeBackend struct {
+	Backend
 	Store
 	sendErr       error
 	namedProject  string

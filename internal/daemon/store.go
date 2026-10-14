@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"database/sql"
 	"time"
 
 	"github.com/pilat/coagent/internal/budget"
@@ -11,6 +12,15 @@ import (
 
 // Store is the persistence view required by daemon.
 type Store interface { //nolint:interfacebloat // Lifecycle commands share atomic session, inbox and output state.
+	WithTx(context.Context, func(*sql.Tx) error) error
+	EnsureAssistantRoot(context.Context, int64, string, string) (*sessionstore.SessionRecord, error)
+	GetOrCreateHiddenProject(context.Context, string) (int64, error)
+	GetOrCreateProject(context.Context, string) (int64, error)
+	ListProjects(context.Context) ([]sessionstore.ProjectRow, error)
+	LatestModelOutput(context.Context, int64) (*sessionstore.OutputRecord, error)
+	LastUserInput(context.Context, int64) (string, error)
+	HasBackgroundWakeSource(context.Context, int64) (bool, error)
+	AcceptedUserMessageIDs(context.Context, int64) ([]int64, error)
 	Commit(context.Context, sessionstore.Commit) (*sessionstore.CommitResult, error)
 	ListPending(context.Context, int64) ([]*sessionstore.InboxInput, error)
 	PendingActivation(context.Context, int64) (*sessionstore.ToolActivation, error)

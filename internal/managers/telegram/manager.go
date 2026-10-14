@@ -41,6 +41,7 @@ type Manager struct {
 
 	serviceTopicID   int64
 	managementRootID int64
+	assistantRootID  int64
 	target           forumTarget
 	botUserID        int64
 	updateOffset     int64
@@ -250,6 +251,10 @@ func (m *Manager) Start(ctx context.Context) error {
 	m.managementRootID = rootID
 	m.registerTopic(rootID, serviceTopicID)
 
+	if err := m.ensureAssistantRoot(runCtx); err != nil {
+		return fmt.Errorf("ensure assistant topic: %w", err)
+	}
+
 	subscription := m.controller.Subscribe()
 	m.mu.Lock()
 	m.subscription = subscription
@@ -288,21 +293,9 @@ func (m *Manager) Start(ctx context.Context) error {
 		m.delivery.Start(runCtx)
 	}
 
-	if progressController, ok := m.controller.(controllerapi.ProgressController); ok {
-		sessions, listErr := m.controller.ListSessions(runCtx)
-		if listErr != nil {
-			cancel()
-			return fmt.Errorf("list sessions for progress refresh: %w", listErr)
-		}
-
-		for _, session := range sessions {
-			if session.HasActiveLoop {
-				if refreshErr := progressController.RefreshProgress(runCtx, session.ID); refreshErr != nil {
-					cancel()
-					return fmt.Errorf("refresh session %d progress: %w", session.ID, refreshErr)
-				}
-			}
-		}
+	if err := m.refreshActiveProgress(runCtx); err != nil {
+		cancel()
+		return err
 	}
 
 	if err := m.setCommands(runCtx); err != nil {

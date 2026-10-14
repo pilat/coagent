@@ -7,6 +7,7 @@ import (
 
 	"go.uber.org/zap"
 
+	"github.com/pilat/coagent/internal/assistant"
 	"github.com/pilat/coagent/internal/backgroundprocess"
 	"github.com/pilat/coagent/internal/budget"
 	"github.com/pilat/coagent/internal/config"
@@ -18,6 +19,7 @@ import (
 	"github.com/pilat/coagent/internal/sessionbuild"
 	"github.com/pilat/coagent/internal/sessionbus"
 	"github.com/pilat/coagent/internal/sessionevent"
+	"github.com/pilat/coagent/internal/sessionstore"
 	"github.com/pilat/coagent/internal/subagent"
 )
 
@@ -27,6 +29,8 @@ var (
 )
 
 type Service interface {
+	EnsureAssistantRoot(context.Context, string) (*sessionstore.SessionRecord, error)
+	AssistantDesk(context.Context, int64) (string, error)
 	Start(ctx context.Context) error
 	Shutdown(timeout time.Duration)
 	Send(ctx context.Context, projectID int64, prompt, model string, attrs map[string]any) (int64, error)
@@ -46,24 +50,25 @@ type lifetime struct {
 }
 
 type svc struct {
-	store        Store
-	links        subagent.Store
-	schedules    schedule.Service
-	budgets      budget.Service
-	processStore backgroundprocess.Store
-	processes    backgroundprocess.Service
-	progress     progressruntime.Service
-	applier      configapply.Service
-	mcpStore     mcpstore.Store
-	bus          sessionbus.Bus
-	build        sessionbuild.BuildInput
-	models       models
-	life         *lifetime
-	runners      *runnerSet
-	trees        *treeLocks
-	routes       *routes
-	clock        *budgetClock
-	liveMu       sync.Mutex
+	assistantStore assistant.Store
+	store          Store
+	links          subagent.Store
+	schedules      schedule.Service
+	budgets        budget.Service
+	processStore   backgroundprocess.Store
+	processes      backgroundprocess.Service
+	progress       progressruntime.Service
+	applier        configapply.Service
+	mcpStore       mcpstore.Store
+	bus            sessionbus.Bus
+	build          sessionbuild.BuildInput
+	models         models
+	life           *lifetime
+	runners        *runnerSet
+	trees          *treeLocks
+	routes         *routes
+	clock          *budgetClock
+	liveMu         sync.Mutex
 }
 
 func New(
@@ -80,14 +85,16 @@ func New(
 	cfg *config.Config,
 	mcpStore mcpstore.Store,
 	applier configapply.Service,
+	assistantStore assistant.Store,
 ) Service {
 	s := &svc{
-		runners:      newRunnerSet(),
-		build:        build,
-		store:        store,
-		processStore: processStore,
-		mcpStore:     mcpStore,
-		applier:      applier,
+		assistantStore: assistantStore,
+		runners:        newRunnerSet(),
+		build:          build,
+		store:          store,
+		processStore:   processStore,
+		mcpStore:       mcpStore,
+		applier:        applier,
 
 		links:     links,
 		budgets:   budgetSvc,

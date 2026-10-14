@@ -27,10 +27,12 @@ func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
 }
 
 type fakeController struct {
-	lastSetAttrs controllerapi.SessionSetAttributesData
-	listSessions []controllerapi.SessionInfo
-	listSkills   []controllerapi.ConfigSkillInfo
-	messageCalls []controllerapi.SessionMessageData
+	assistantRoot *controllerapi.AssistantRootEnsureData
+	desk          string
+	lastSetAttrs  controllerapi.SessionSetAttributesData
+	listSessions  []controllerapi.SessionInfo
+	listSkills    []controllerapi.ConfigSkillInfo
+	messageCalls  []controllerapi.SessionMessageData
 
 	ensureRootID        int64
 	ensureRootErr       error
@@ -102,11 +104,29 @@ func (f *fakeController) SetSessionModel(_ context.Context, data controllerapi.S
 
 func (f *fakeController) SetSessionAttributes(_ context.Context, data controllerapi.SessionSetAttributesData) error {
 	f.lastSetAttrs = data
+	if f.assistantRoot != nil && f.assistantRoot.SessionID == data.SessionID {
+		f.assistantRoot.Attributes = data.Attributes
+	}
 	if f.setAttrsHook != nil {
 		f.setAttrsHook(data)
 	}
 
 	return f.setAttrsErr
+}
+
+func (f *fakeController) EnsureAssistantRoot(context.Context) (*controllerapi.AssistantRootEnsureData, error) {
+	if f.assistantRoot == nil {
+		f.assistantRoot = &controllerapi.AssistantRootEnsureData{
+			SessionID: 99001, WorkDir: "/assistant",
+			Attributes: map[string]any{"telegram_topic_id": int64(99002)},
+		}
+	}
+
+	return f.assistantRoot, nil
+}
+
+func (f *fakeController) AssistantDesk(context.Context, int64) (string, error) {
+	return f.desk, nil
 }
 
 func (f *fakeController) ListDir(

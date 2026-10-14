@@ -182,6 +182,10 @@ func (s *service) repairSessionSurface(
 		return fmt.Errorf("load repair project name: get project name: %w", err)
 	}
 
+	if record.AgentType == "assistant" {
+		name = s.assistantTopicName(managerID)
+	}
+
 	workDir, err := s.store.GetProjectWorkDir(ctx, record.ProjectID)
 	if err != nil {
 		return fmt.Errorf("load repair work dir: get project workdir: %w", err)

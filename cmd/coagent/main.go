@@ -13,6 +13,7 @@ import (
 
 	"go.uber.org/zap"
 
+	"github.com/pilat/coagent/internal/assistant"
 	"github.com/pilat/coagent/internal/backgroundprocess"
 	"github.com/pilat/coagent/internal/bashsandbox"
 	"github.com/pilat/coagent/internal/budget"
@@ -594,6 +595,7 @@ func startCore(
 		cfg,
 		mcpRegistry,
 		applier,
+		assistant.New(db),
 	)
 
 	discovery := managerdiscovery.New(sessionStore, cfg, cache)
