@@ -853,7 +853,8 @@ records. A unique assistant root per manager shares the hidden management projec
 but runs outside `session`: its transcript stays empty, it has no tools or
 compaction, and its status is completed between activations. The host renders
 the desk, a manager-scoped work-session board and one event for each model call;
-the referee checks JSON fields, slot limits and action targets before any effect.
+the referee checks JSON fields, the slots left after the answer's edits, sticker
+pins and action targets before any effect.
 Displayed tape text is capped at 6000 Unicode characters per line and an event at
 20000 with its middle elided; full stored user/say text and delivered replies are
 preserved. Hides never reach the last six dialog lines, a running turn's own lines
@@ -862,7 +863,8 @@ request; `open` accepts a card's path when names collide.
 
 Each successful step atomically saves slots, tape, turn evidence, an input receipt
 and footer-free persistent output. Notifications wake delivery after commit;
-work-session actions follow through daemon lifecycle paths. The accepted POC
+work-session actions follow through daemon lifecycle paths, and an open moves
+stickers pinned to its project onto the session it started. The accepted POC
 crash window between commit and action application is not replayed. Work answers
 are observed only for recorded assistant sends, bounded by the next accepted
 user input and carrying every final in that window. A send is answered only when

@@ -16,8 +16,8 @@ func (l *loop) commitStep(ctx context.Context, s step) error {
 	err := l.deps.Store.WithTx(ctx, func(tx *sql.Tx) error {
 		now := l.deps.Now()
 		if err := SaveDeskTx(ctx, tx, l.sessionID, Desk{
-			Diary: s.answer.Diary, Stickers: s.answer.Stickers,
-			Focus: s.answer.Focus, LastTurnAt: now, UpdatedAt: now,
+			Diary: s.next.Diary, Stickers: s.next.Stickers,
+			Focus: s.next.Focus, LastTurnAt: now, UpdatedAt: now,
 		}); err != nil {
 			return err
 		}

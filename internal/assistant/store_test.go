@@ -25,7 +25,7 @@ func TestAssistantStoreRoundTrip(t *testing.T) {
 	assert.True(t, desk.LastTurnAt.IsZero())
 	at := time.Now().UTC()
 	want := Desk{
-		Diary: map[string]string{"user": "Русский"}, Stickers: []string{"waiting"},
+		Diary: map[string]string{"user": "Русский"}, Stickers: []Sticker{{Key: "wait.ci", Text: "waiting", On: "244"}},
 		Focus: "migration", LastTurnAt: at, UpdatedAt: at,
 	}
 	input, err := sessions.Enqueue(
