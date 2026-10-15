@@ -46,11 +46,15 @@ func Render(d Desk, board []Card, tape []Line, event Event, now time.Time) strin
 		fmt.Fprintf(&b, "%s: %s\n", key, d.Diary[key])
 	}
 
-	fmt.Fprintf(&b, "\n## stickers (%d/8, %d/1000 chars)\n", len(d.Stickers),
-		utf8.RuneCountInString(strings.Join(d.Stickers, "")))
+	fmt.Fprintf(&b, "\n## stickers (%d/8, %d/1000 chars)\n", len(d.Stickers), stickerChars(d.Stickers))
 
 	for _, sticker := range d.Stickers {
-		fmt.Fprintf(&b, "- %s\n", sticker)
+		on := ""
+		if sticker.On != "" {
+			on = " @" + sticker.On
+		}
+
+		fmt.Fprintf(&b, "- %s%s: %s\n", sticker.Key, on, sticker.Text)
 	}
 
 	fmt.Fprintf(&b, "\n## focus\n%s\n\n## board\n", d.Focus)
@@ -70,6 +74,50 @@ func Render(d Desk, board []Card, tape []Line, event Event, now time.Time) strin
 		event.LineID, ClipMiddle(event.Text, eventTextLimit))
 
 	return b.String()
+}
+
+// Edited applies an answer's edits; slots the answer leaves out stay as they are.
+func (d Desk) Edited(a Answer) Desk {
+	next := d
+
+	next.Diary = maps.Clone(d.Diary)
+	if next.Diary == nil {
+		next.Diary = map[string]string{}
+	}
+
+	for _, key := range slices.Sorted(maps.Keys(a.Diary)) {
+		if entry := a.Diary[key]; entry != nil {
+			next.Diary[key] = *entry
+		} else {
+			delete(next.Diary, key)
+		}
+	}
+
+	next.Stickers = slices.Clone(d.Stickers)
+
+	for _, key := range slices.Sorted(maps.Keys(a.Stickers)) {
+		edit := a.Stickers[key]
+		at := slices.IndexFunc(next.Stickers, func(s Sticker) bool { return s.Key == key })
+
+		switch {
+		case edit == nil && at >= 0:
+			next.Stickers = slices.Delete(next.Stickers, at, at+1)
+		case edit == nil:
+		case at >= 0:
+			next.Stickers[at].Text = edit.Text
+			if edit.On != "" {
+				next.Stickers[at].On = edit.On
+			}
+		default:
+			next.Stickers = append(next.Stickers, Sticker{Key: key, Text: edit.Text, On: edit.On})
+		}
+	}
+
+	if a.Focus != nil {
+		next.Focus = *a.Focus
+	}
+
+	return next
 }
 
 // Clip limits Unicode characters, including the marker when text is shortened.
@@ -128,6 +176,15 @@ func renderTape(b *strings.Builder, lastID int64, tape []Line, event Event, now 
 	for _, line := range lines {
 		fmt.Fprintf(b, "%d %s %s\n", line.ID, deskTime(line.At, now), Clip(line.Text, deskTextLimit))
 	}
+}
+
+func stickerChars(stickers []Sticker) int {
+	var count int
+	for _, sticker := range stickers {
+		count += utf8.RuneCountInString(sticker.Text)
+	}
+
+	return count
 }
 
 func deskTime(at, now time.Time) string {

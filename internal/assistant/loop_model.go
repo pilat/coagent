@@ -34,8 +34,10 @@ func (l *loop) ask(ctx context.Context, s *step) (bool, error) {
 
 		s.answer, err = Parse(raw)
 		if err == nil {
+			s.next = s.desk.Edited(s.answer)
+
 			var reasons []string
-			for _, v := range Validate(s.answer, DefaultRules(), s.board, s.tape) {
+			for _, v := range Validate(s.answer, s.next, DefaultRules(), s.board) {
 				reasons = append(reasons, string(v))
 			}
 

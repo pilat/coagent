@@ -141,11 +141,13 @@ a bounded visible tape window and one event, rebuilt by the host for every step.
 _Avoid_: transcript, context compaction.
 
 **notebook** (`diary`):
-The assistant's keyed long-term facts, rewritten as one size-limited map each step.
+The assistant's keyed long-term facts in one size-limited map; each step writes or
+removes single entries, and the rest stay.
 _Avoid_: ledger, project memory (that is the separate curated-memory store).
 
 **stickers**:
-Size-limited short-term notes about work in flight and what to do with its result.
+Size-limited keyed short-term notes about work in flight and what to do with its
+result, each optionally pinned to the work session it waits on.
 _Avoid_: work items, dispatch records.
 
 **focus**:

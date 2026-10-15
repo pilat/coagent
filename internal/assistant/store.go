@@ -19,14 +19,22 @@ type Store interface {
 	UnobservedSends(context.Context, int64) ([]Send, error)
 }
 
-// Desk is replaced as a whole on each successful step.
+// Desk is saved whole after each successful step has applied its edits.
 type Desk struct {
 	Diary      map[string]string
-	Stickers   []string
+	Stickers   []Sticker
 	Focus      string
 	LastTurnAt time.Time
 	UpdatedAt  time.Time
 	TapeLastID int64
+}
+
+// Sticker is a keyed short-term note. On is the session id it waits on, or the
+// project name of an open until that open lands.
+type Sticker struct {
+	Key  string `json:"key"`
+	Text string `json:"text"`
+	On   string `json:"on,omitempty"`
 }
 
 // Line retains its identity even after it is hidden from the desk.
@@ -67,7 +75,7 @@ func New(db *sql.DB) Store {
 
 // LoadDesk returns empty slots before the first successful step.
 func (s *store) LoadDesk(ctx context.Context, sessionID int64) (Desk, error) {
-	desk := Desk{Diary: map[string]string{}, Stickers: []string{}}
+	desk := Desk{Diary: map[string]string{}, Stickers: []Sticker{}}
 	if err := s.db.QueryRowContext(ctx, `SELECT COALESCE(MAX(id), 0) FROM assistant_tape WHERE session_id = ?`,
 		sessionID).Scan(&desk.TapeLastID); err != nil {
 		return Desk{}, fmt.Errorf("load assistant tape position: %w", err)
@@ -107,7 +115,7 @@ func SaveDeskTx(ctx context.Context, tx *sql.Tx, sessionID int64, desk Desk) err
 	}
 
 	if desk.Stickers == nil {
-		desk.Stickers = []string{}
+		desk.Stickers = []Sticker{}
 	}
 
 	diary, err := json.Marshal(desk.Diary)

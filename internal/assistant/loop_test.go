@@ -97,14 +97,14 @@ func TestAssistantLoopTurns(t *testing.T) {
 
 func TestAssistantLoopReadAndSlots(t *testing.T) {
 	t.Parallel()
-	f := newLoopFixture(t, `{"say":"checking","focus":"saved focus","stickers":["wait"],"diary":{"key":"fact"},
+	f := newLoopFixture(t, `{"say":"checking","focus":"saved focus","stickers":{"wait":"jobs"},"diary":{"key":"fact"},
 		"do":[{"read":{"session":244,"lines":3}},{"read":{"session":244,"lines":1}}]}`, sayAnswer("read result"))
 	f.enqueue("read it")
 	require.NoError(t, Run(t.Context(), f.deps, f.root))
 	require.Len(t, f.client.desks, 2)
 	assert.Contains(t, f.client.desks[1], "saved focus")
 	assert.Contains(t, f.client.desks[1], "key: fact")
-	assert.Contains(t, f.client.desks[1], "- wait")
+	assert.Contains(t, f.client.desks[1], "- wait: jobs")
 	assert.Contains(t, f.client.desks[1], "tail 3")
 	assert.Contains(t, f.client.desks[1], "tail 1")
 	assert.Equal(t, []string{"checking", "read result"}, f.notified)
@@ -160,6 +160,22 @@ func TestAssistantLoopActionsAndFailure(t *testing.T) {
 	assert.Equal(t, []string{"could not send"}, f.notified)
 }
 
+func TestAssistantLoopBindsStickerToOpenedSession(t *testing.T) {
+	t.Parallel()
+	f := newLoopFixture(t,
+		`{"say":null,"do":[{"open":{"project":"devbox","text":"new"}}],
+			"stickers":{"wait.devbox":{"text":"tell when done","on":"devbox"}}}`,
+		`{"say":"ok","stickers":{"wait.devbox":"tell when done, briefly"}}`,
+	)
+	f.enqueue("start")
+	f.enqueue("next")
+	require.NoError(t, Run(t.Context(), f.deps, f.root))
+	desk, err := f.deps.Memory.LoadDesk(t.Context(), f.root)
+	require.NoError(t, err)
+	assert.Equal(t, []Sticker{{Key: "wait.devbox", Text: "tell when done, briefly", On: "245"}}, desk.Stickers)
+	assert.Contains(t, f.client.desks[1], "- wait.devbox @245: tell when done")
+}
+
 func TestAssistantLoopCommitRollback(t *testing.T) {
 	t.Parallel()
 	f := newLoopFixture(t, sayAnswer("lost"))
@@ -181,8 +197,8 @@ func TestAssistantLoopCommitRollback(t *testing.T) {
 func TestAssistantLoopForgetKeepsTurnUntilItEnds(t *testing.T) {
 	t.Parallel()
 	f := newLoopFixture(t,
-		`{"say":null,"focus":"","stickers":[],"diary":{},"do":[{"read":{"session":244,"lines":1}}],"forget":[[1,999]]}`,
-		`{"say":"done","focus":"","stickers":[],"diary":{},"forget":[[1,999]]}`,
+		`{"say":null,"do":[{"read":{"session":244,"lines":1}}],"forget":[[1,999]]}`,
+		`{"say":"done","forget":[[1,999]]}`,
 		sayAnswer("next"),
 	)
 	f.enqueue("check it")
@@ -310,16 +326,16 @@ func (s *loopSessions) Stop(_ context.Context, id int64) error {
 }
 
 func sayAnswer(say string) string {
-	return fmt.Sprintf(`{"say":%q,"focus":"","stickers":[],"diary":{}}`, say)
+	return fmt.Sprintf(`{"say":%q}`, say)
 }
 
 func actionAnswer(actions string) string {
-	return `{"say":null,"focus":"","stickers":[],"diary":{},"do":[` + actions + `]}`
+	return `{"say":null,"do":[` + actions + `]}`
 }
 
 func TestAssistantLoopPinsDialogTail(t *testing.T) {
 	t.Parallel()
-	forgetAll := `{"say":"ok","focus":"","stickers":[],"diary":{},"forget":[[1,999]]}`
+	forgetAll := `{"say":"ok","forget":[[1,999]]}`
 	f := newLoopFixture(t, forgetAll, forgetAll, forgetAll, forgetAll, forgetAll)
 	for _, text := range []string{"one", "two", "three", "four", "five"} {
 		f.enqueue(text)
@@ -338,7 +354,7 @@ func TestAssistantLoopNotesWhatWasAlreadyTold(t *testing.T) {
 	f := newLoopFixture(t,
 		actionAnswer(`{"read":{"session":244,"lines":5}}`),
 		sayAnswer("CI is green"),
-		`{"say":null,"focus":"","stickers":[],"diary":{}}`,
+		`{"say":null}`,
 	)
 	f.enqueue("status?")
 	require.NoError(t, Run(t.Context(), f.deps, f.root))

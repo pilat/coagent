@@ -30,9 +30,11 @@ The assistant runs as its own small ReAct loop (`internal/assistant`) over a **d
 the host re-renders from the database on every turn: a keyed notebook, a few
 stickers, one focus line, a read-only board of sessions, a numbered tape of recent
 lines and the one new event. The model answers with exactly one JSON object holding
-what to say, what to do with sessions (`open`, `send`, `read`, `stop`) and the new
-contents of its slots. The host is the referee: it validates the answer against fixed
-sizes and rules, re-asks on a violation, and drops the step after the third. Slots
+what to say, what to do with sessions (`open`, `send`, `read`, `stop`) and only the
+edits to its slots: a written key replaces, a null key removes, an absent one stays.
+A sticker may be pinned to a session. The host is the referee: it validates the answer
+and the desk it leaves against fixed sizes and rules, re-asks on a violation, and
+drops the step after the third. Slots
 have fixed limits, so the prompt is bounded by construction and nothing is ever
 compacted; the tape is host-kept and never deleted, only hidden on request.
 
@@ -50,8 +52,9 @@ are reused, but the session runtime never runs it.
   or happens in the session's own topic, where the assistant sees only the card.
 - The prompt describes the world and the role; rules are habits with a reason. There
   is no tool-call mode, so the model is not pulled into terse executor behavior.
-- The context is bounded without any compaction policy, trigger or backstop; the cost
-  is that long-term memory erodes through rewrites, mitigated by keyed entries.
+- The context is bounded without any compaction policy, trigger or backstop. Memory
+  is never copied forward by the model, so an entry is lost only when the model
+  removes it.
 - Session-side mechanisms that key on root rows must exclude this type explicitly
   (progress reconciler, kill/clear, stop); a new agent type is a new case for them.
 - Structured output is not enforced by the drivers; the referee is the enforcement,
@@ -67,9 +70,19 @@ are reused, but the session runtime never runs it.
   Anthropic compaction and context editing) still needs a host-owned overflow
   backstop, and the assistant would again be a session with special cases. The desk
   removes the growing transcript instead of managing it.
-- **Native tool calls for the assistant's actions.** Rejected: tool calling trains
-  the model into executor mode and would put it in two modes at once (JSON answer plus
-  agentic calls); actions as JSON fields keep one mode and one voice.
+- **Rewriting the whole notebook, sticker list and focus every step** (the first
+  version, run live). Replaced by edits: in a chained simulation (three scripted
+  dialogs, three samples, blind grading) a rewrite dropped the user's standing rules
+  from the notebook. It spent the most output tokens, and copying memory forward was
+  about a quarter of a step's cost.
+- **Native tool calls for the assistant's actions,** including a `say` tool and desk
+  tools (`stick`, `note`, `focus`, …) applied together without tool results.
+  Rejected on measurement. On the same simulation the tool-call assistant stayed
+  silent on 9 of 20 handovers (JSON: 0 of 21) and left work unpinned on 10% of steps
+  (JSON: 0%). Once it wrote its answer as plain text outside `say`. Host rules that
+  reject these fixed the bookkeeping but scored lowest in blind grading. Knowledge was
+  equal across forms. Letta reached the same point and dropped its `send_message` tool
+  and tool rules.
 - **Work sessions answering the user directly in the dialog** (ADR-0070 of the
   parked POC). Rejected: it is the root of the two-voices problem; it saved one model
   call per answer and cost coherence.

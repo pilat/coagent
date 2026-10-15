@@ -14,7 +14,7 @@ func TestAssistantRender(t *testing.T) {
 	now := time.Date(2026, time.October, 14, 12, 9, 0, 0, time.UTC)
 	desk := Desk{
 		Diary:      map[string]string{"z": "я", "a": "b"},
-		Stickers:   []string{"жду"},
+		Stickers:   []Sticker{{Key: "wait", Text: "жду", On: "244"}, {Key: "note", Text: "x"}},
 		Focus:      "devbox",
 		TapeLastID: 38,
 	}
@@ -27,7 +27,7 @@ func TestAssistantRender(t *testing.T) {
 	got := Render(desk, board, tape, event, now)
 	want := "now: 2026-10-14 12:09 UTC\n\n" +
 		"## notebook (2/30 entries, 4/2000 chars)\na: b\nz: я\n\n" +
-		"## stickers (1/8, 3/1000 chars)\n- жду\n\n## focus\ndevbox\n\n## board\n" +
+		"## stickers (2/8, 4/1000 chars)\n- wait @244: жду\n- note: x\n\n## focus\ndevbox\n\n## board\n" +
 		"244  devbox  repo ~/projects/devbox  done  Oct 13 12:09  asked: \"check\"  last: \"ready\"  [unread]\n\n" +
 		"## tape (visible lines 34–35 of 38)\n" +
 		"34 12:09 ← devbox (244) answered: ready\n35 12:09 say: «hello»\n\n" +

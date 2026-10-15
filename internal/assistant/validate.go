@@ -2,7 +2,9 @@ package assistant
 
 import (
 	"fmt"
+	"maps"
 	"slices"
+	"strconv"
 	"strings"
 	"unicode/utf8"
 )
@@ -28,25 +30,39 @@ func DefaultRules() Rules {
 	}
 }
 
-// Validate applies the same authority and capacity checks on every re-ask.
-func Validate(a Answer, rules Rules, board []Card, _ []Line) []Violation {
+// Validate checks the answer and the desk it leaves behind, the same way on every re-ask.
+func Validate(a Answer, next Desk, rules Rules, board []Card) []Violation {
 	var violations []Violation
 	check := func(bad bool, message string) {
 		if bad {
 			violations = append(violations, Violation(message))
 		}
 	}
-	check(len(a.Diary) > rules.DiaryEntries, "too many diary entries")
-	check(diaryChars(a.Diary) > rules.DiaryChars, "diary character limit exceeded")
+	check(len(next.Diary) > rules.DiaryEntries, "too many diary entries: erase spent ones with null")
+	check(diaryChars(next.Diary) > rules.DiaryChars, "diary character limit exceeded")
 
-	for key := range a.Diary {
-		check(utf8.RuneCountInString(key) > rules.KeyChars, "diary key character limit exceeded")
+	for _, key := range slices.Sorted(maps.Keys(a.Diary)) {
+		entry := a.Diary[key]
+		check(!validKey(key, rules), fmt.Sprintf("diary keys must be one line of 1-%d characters", rules.KeyChars))
+		check(entry != nil && strings.TrimSpace(*entry) == "", "a diary entry needs text; null erases it")
 	}
 
-	check(len(a.Stickers) > rules.Stickers, "too many stickers")
-	check(utf8.RuneCountInString(strings.Join(a.Stickers, "")) > rules.StickerChars, "sticker character limit exceeded")
-	check(utf8.RuneCountInString(a.Focus) > rules.FocusChars, "focus character limit exceeded")
-	check(strings.ContainsAny(a.Focus, "\r\n"), "focus must be one line")
+	check(len(next.Stickers) > rules.Stickers, "too many stickers: peel spent ones with null")
+	check(stickerChars(next.Stickers) > rules.StickerChars, "sticker character limit exceeded")
+
+	for _, key := range slices.Sorted(maps.Keys(a.Stickers)) {
+		edit := a.Stickers[key]
+		check(!validKey(key, rules), fmt.Sprintf("sticker keys must be one line of 1-%d characters", rules.KeyChars))
+		check(edit != nil && strings.TrimSpace(edit.Text) == "", "a sticker needs text; null peels it")
+
+		if edit != nil && edit.On != "" && !bindable(edit.On, a, board) {
+			violations = append(violations, Violation(fmt.Sprintf(
+				"sticker %s: on %q is neither a board session nor a project opened in this answer", key, edit.On)))
+		}
+	}
+
+	check(utf8.RuneCountInString(next.Focus) > rules.FocusChars, "focus character limit exceeded")
+	check(strings.ContainsAny(next.Focus, "\r\n"), "focus must be one line")
 	check(len(a.Do) > rules.Actions, "too many actions")
 
 	for _, action := range a.Do {
@@ -105,6 +121,21 @@ func validateAction(a Action, board []Card) []Violation {
 	}
 
 	return violations
+}
+
+func validKey(key string, rules Rules) bool {
+	return strings.TrimSpace(key) != "" && utf8.RuneCountInString(key) <= rules.KeyChars &&
+		!strings.ContainsAny(key, "\r\n")
+}
+
+func bindable(on string, a Answer, board []Card) bool {
+	if id, err := strconv.ParseInt(on, 10, 64); err == nil {
+		return slices.ContainsFunc(board, func(card Card) bool { return card.ID == id })
+	}
+
+	return slices.ContainsFunc(a.Do, func(action Action) bool {
+		return action.Open != nil && action.Open.Project == on
+	})
 }
 
 func diaryChars(diary map[string]string) int {

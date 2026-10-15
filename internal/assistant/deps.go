@@ -41,6 +41,7 @@ type step struct {
 	origin  int64
 	event   Event
 	desk    Desk
+	next    Desk
 	board   []Card
 	tape    []Line
 	render  string

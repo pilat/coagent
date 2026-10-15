@@ -144,7 +144,12 @@ func (c *openAICompatibleClient) Chat(
 	// Workaround: inject system prompt as a user message prefix.
 	// Other providers (GLM, OpenRouter, etc.) use standard system message.
 	if systemPrompt != "" {
-		fullPrompt := systemPrompt + "\n\n" + openAISuffix
+		fullPrompt := systemPrompt
+		// A request without tools must not be told to call them.
+		if len(tools) > 0 {
+			fullPrompt += "\n\n" + openAISuffix
+		}
+
 		if c.isDeepSeek {
 			reqBody.Messages = append([]map[string]any{
 				{msgKeyRole: roleUser, msgKeyContent: fullPrompt},

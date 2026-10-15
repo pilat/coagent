@@ -172,7 +172,7 @@ func TestHarnessScenario_AssistantSupersededSend(t *testing.T) {
 }
 
 func assistantJSON(say, actions string) string {
-	return fmt.Sprintf(`{"say":%q,"focus":"","stickers":[],"diary":{},"do":[%s]}`, say, actions)
+	return fmt.Sprintf(`{"say":%q,"do":[%s]}`, say, actions)
 }
 
 func assistantSayCount(t *testing.T, h *harness, id int64, text string) int {

@@ -2,7 +2,9 @@ package assistant
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/pilat/coagent/internal/logger"
@@ -53,6 +55,10 @@ func (l *loop) applyAction(ctx context.Context, action Action) (string, error) {
 			return "", fmt.Errorf("open work session: %w", err)
 		}
 
+		if err := l.bindOpened(ctx, action.Open.Project, card.ID); err != nil {
+			return "", err
+		}
+
 		_, err = l.appendLine(
 			ctx,
 			"move",
@@ -78,6 +84,36 @@ func (l *loop) applyAction(ctx context.Context, action Action) (string, error) {
 	}
 
 	return "", nil
+}
+
+// bindOpened moves stickers pinned to an opened project onto the session it started.
+func (l *loop) bindOpened(ctx context.Context, project string, id int64) error {
+	desk, err := l.deps.Memory.LoadDesk(ctx, l.sessionID)
+	if err != nil {
+		return fmt.Errorf("load desk to bind opened session: %w", err)
+	}
+
+	bound := false
+
+	for i := range desk.Stickers {
+		if desk.Stickers[i].On == project {
+			desk.Stickers[i].On = strconv.FormatInt(id, 10)
+			bound = true
+		}
+	}
+
+	if !bound {
+		return nil
+	}
+
+	desk.UpdatedAt = l.deps.Now()
+
+	err = l.deps.Store.WithTx(ctx, func(tx *sql.Tx) error { return SaveDeskTx(ctx, tx, l.sessionID, desk) })
+	if err != nil {
+		return fmt.Errorf("bind stickers to opened session: %w", err)
+	}
+
+	return nil
 }
 
 func (l *loop) actionFailure(ctx context.Context, action Action, reason string) error {
