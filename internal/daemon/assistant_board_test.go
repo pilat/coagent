@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"database/sql"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -9,12 +10,13 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/pilat/coagent/internal/assistant"
 	"github.com/pilat/coagent/internal/coagenthome"
 	"github.com/pilat/coagent/internal/sessionstore"
 	"github.com/pilat/coagent/internal/transcript"
 )
 
-func TestAssistantBoardAndRead(t *testing.T) {
+func TestAssistantCatalogAndRead(t *testing.T) {
 	h := newHarness(t, harnessOptions{})
 	root, err := h.mgr.EnsureAssistantRoot(h.ctx, scenarioManagerID)
 	require.NoError(t, err)
@@ -25,6 +27,18 @@ func TestAssistantBoardAndRead(t *testing.T) {
 		sessionstore.Input{SessionID: work.ID, Source: sessionstore.InputSourceUser, Content: "real user"},
 	)
 	require.NoError(t, err)
+	require.NoError(t, h.store.WithTx(h.ctx, func(tx *sql.Tx) error {
+		return assistant.RecordSendTx(
+			h.ctx,
+			tx,
+			assistant.Send{
+				InputID:            in.Input.ID,
+				AssistantSessionID: root.ID,
+				SessionID:          work.ID,
+				CreatedAt:          time.Now().UTC(),
+			},
+		)
+	}))
 	_, err = h.store.Commit(h.ctx, sessionstore.Commit{
 		SessionID: work.ID,
 		Accept: []sessionstore.Accept{
@@ -48,8 +62,12 @@ func TestAssistantBoardAndRead(t *testing.T) {
 	_, err = h.store.CreateSession(h.ctx, h.projectID, "fake-model", "", managerAttrs("another-manager"))
 	require.NoError(t, err)
 	a := &assistantSessions{daemon: h.mgr, root: root.ID, owner: scenarioManagerID}
-	cards, err := a.Board(h.ctx, time.Time{})
+	projects, err := a.Catalog(h.ctx, time.Time{})
 	require.NoError(t, err)
+	var cards []assistant.Card
+	for _, project := range projects {
+		cards = append(cards, project.Sessions...)
+	}
 	require.Len(t, cards, 1)
 	assert.Equal(t, work.ID, cards[0].ID)
 	assert.Equal(t, "model answer", cards[0].LastLine)

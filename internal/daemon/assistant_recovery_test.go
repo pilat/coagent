@@ -150,6 +150,42 @@ func TestHarnessScenario_AssistantCrashAfterStepCommit(t *testing.T) {
 	)
 	require.NoError(t, err)
 	workID = work.ID
+	prior, err := first.store.Enqueue(first.ctx, sessionstore.Input{
+		SessionID: workID, Source: sessionstore.InputSourceUser, Content: "prior assistant work",
+	})
+	require.NoError(t, err)
+	_, err = first.store.Commit(first.ctx, sessionstore.Commit{
+		SessionID: workID,
+		Accept: []sessionstore.Accept{
+			{
+				InputID: prior.Input.ID,
+				State:   sessionstore.InputStateAccepted,
+				Content: "prior assistant work",
+				LinkRef: -1,
+			},
+		},
+		Messages: []*transcript.Message{
+			{Role: "user", Content: "prior assistant work"},
+			{Role: "assistant", Content: "prior result", FinishType: "stop"},
+		},
+	})
+	require.NoError(t, err)
+	require.NoError(t, first.store.WithTx(first.ctx, func(tx *sql.Tx) error {
+		if err := assistant.RecordSendTx(
+			first.ctx,
+			tx,
+			assistant.Send{
+				InputID:            prior.Input.ID,
+				AssistantSessionID: root.ID,
+				SessionID:          workID,
+				CreatedAt:          time.Now().UTC(),
+			},
+		); err != nil {
+			return err
+		}
+		_, err := assistant.MarkObservedTx(first.ctx, tx, prior.Input.ID, time.Now().UTC())
+		return err
+	}))
 	require.NoError(t, first.store.UpdateSessionStatus(first.ctx, workID, sessionstore.SessionStatusCompleted))
 	barrier := &assistantCommitBarrier{Store: first.store, reached: make(chan struct{}), release: make(chan struct{})}
 	first.mgr.store = barrier
@@ -177,7 +213,7 @@ func TestHarnessScenario_AssistantCrashAfterStepCommit(t *testing.T) {
 		second.db.QueryRowContext(second.ctx, `SELECT count(*) FROM session_inbox WHERE session_id = ?`, workID).
 			Scan(&workInputs),
 	)
-	assert.Zero(t, workInputs)
+	assert.Equal(t, 1, workInputs)
 	lines, err := second.mgr.assistantStore.VisibleTape(second.ctx, root.ID, 40, 0)
 	require.NoError(t, err)
 	require.Len(t, lines, 3)

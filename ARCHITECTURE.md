@@ -847,24 +847,31 @@ roots and subagents receive none of these management surfaces.
 
 ### Assistant desk
 
-`assistant` owns fixed-size notebook, stickers and focus slots, an append-only
+`assistant` owns scoped, timestamped notes and a bounded focus line, an append-only
 numbered tape with hideable ranges, sent-input observation obligations and turn
 records. A unique assistant root per manager shares the hidden management project
 but runs outside `session`: its transcript stays empty, it has no tools or
 compaction, and its status is completed between activations. The host renders
-the desk, a manager-scoped work-session board and one event for each model call;
-the referee checks JSON fields, the slots left after the answer's edits, sticker
-pins and action targets before any effect.
+the desk, a project catalog and one event for each model call. User, rule and open
+notes have aggregate text limits; project, session and wait notes bind structural
+keys and have per-note limits. The referee validates the edited memory and action
+authority before any effect; only user-origin turns may write user or rule notes.
 Displayed tape text is capped at 6000 Unicode characters per line and an event at
 20000 with its middle elided; full stored user/say text and delivered replies are
 preserved. Hides never reach the last six dialog lines, a running turn's own lines
-or lines the model has not seen. Cards name where a project lives and its last
-request; `open` accepts a card's path when names collide.
+or lines the model has not seen. The catalog excludes hidden projects, missing
+folders and host worktrees; its work roots require a recorded assistant send and
+the manager's ownership. A shared budget projection keeps pending, unread and
+event-related sessions visible; other entries may be cut. Full identities retain
+orphan detection and project-note authority. Paths disambiguate project names.
 
-Each successful step atomically saves slots, tape, turn evidence, an input receipt
+Each successful step atomically saves note edits, focus, tape, turn evidence, an input receipt
 and footer-free persistent output. Notifications wake delivery after commit;
-work-session actions follow through daemon lifecycle paths, and an open moves
-stickers pinned to its project onto the session it started. The accepted POC
+work-session actions follow through daemon lifecycle paths. Open records its purpose
+note with the first send before admitting input, then binds the answer's raw wait
+and new-project notes without changing their ages. Failed opens remove temporary
+bindings; post-open rekey failures retain orphaned notes and do not report a false
+action failure. The accepted POC
 crash window between commit and action application is not replayed. Work answers
 are observed only for recorded assistant sends, bounded by the next accepted
 user input and carrying every final in that window. A send is answered only when

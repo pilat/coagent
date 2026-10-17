@@ -30,7 +30,7 @@ func (s *svc) AssistantDesk(ctx context.Context, id int64) (string, error) {
 	owner, _ := record.Attributes[controllerapi.SessionAttributeManagerID].(string)
 	sessions := &assistantSessions{daemon: s, root: id, owner: owner}
 
-	board, err := sessions.Board(ctx, desk.LastTurnAt)
+	catalog, err := sessions.Catalog(ctx, desk.LastTurnAt)
 	if err != nil {
 		return "", err
 	}
@@ -47,5 +47,5 @@ func (s *svc) AssistantDesk(ctx context.Context, id int64) (string, error) {
 		event = assistant.Event{LineID: last.ID, At: last.At, Kind: last.Kind, Text: last.Text}
 	}
 
-	return assistant.Render(desk, board, tape, event, time.Now().UTC()), nil
+	return assistant.Render(desk, catalog, tape, event, time.Now().UTC()), nil
 }

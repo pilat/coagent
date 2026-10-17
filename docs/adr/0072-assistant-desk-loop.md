@@ -38,6 +38,15 @@ drops the step after the third. Slots
 have fixed limits, so the prompt is bounded by construction and nothing is ever
 compacted; the tape is host-kept and never deleted, only hidden on request.
 
+Amended 2026-10-17 (plan `plan-2026-10-17-assistant-catalog`): the assistant is a
+router. Its memory is one set of notes whose key prefix is the scope: `user.`, `rule.`,
+`open.`, `project.<key>`, `session.<id>`, `wait.<id>`. Each scope is shown in its own
+place with its write age when known. The board becomes a catalog: every known
+project except hidden projects, missing folders and host worktrees, with its note;
+under it, the sessions the assistant opened or sent to, with their
+notes and the cost of continuing. Work either continues a session or starts a fresh
+one; nothing is cleared.
+
 The assistant is the only voice in its dialog. Work sessions are ordinary roots; their
 answers to inputs the assistant sent come back to the assistant as events and are
 retold by it. The assistant's durable identity is one root session row of agent type
@@ -83,6 +92,15 @@ are reused, but the session runtime never runs it.
   reject these fixed the bookkeeping but scored lowest in blind grading. Knowledge was
   equal across forms. Letta reached the same point and dropped its `send_message` tool
   and tool rules.
+- **A tagged-notes store with host ranking, decay and `recall`.** Rejected
+  2026-10-17: over seven simulated weeks the notebook used 791 of 2000 characters, so
+  capacity was not the problem. A design review found that hiding by score loses
+  rules and unknown-unknowns that an optional `recall` does not recover.
+- **A host-run recap turn in each work session after its final answer.** Rejected: a
+  full-context call per answer, a host-initiated turn in the answer-observation path,
+  and the facts it would extract already arrive in the answer event.
+- **Leaving project state to the sessions' own project memory.** Rejected by the
+  owner: the assistant cannot coordinate projects it does not understand.
 - **Work sessions answering the user directly in the dialog** (ADR-0070 of the
   parked POC). Rejected: it is the root of the two-voices problem; it saved one model
   call per answer and cost coherence.

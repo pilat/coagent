@@ -2,8 +2,8 @@ package assistant
 
 import (
 	"fmt"
-	"maps"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -20,55 +20,48 @@ type Card struct {
 	ID      int64
 	Project string
 	// Place says what the project is: "repo <path>", "scratch" or "dir <path>".
-	Place    string
-	Status   string
-	Activity time.Time
-	Asked    string
-	LastLine string
-	Unread   bool
+	Place         string
+	Status        string
+	Activity      time.Time
+	Asked         string
+	LastLine      string
+	Unread        bool
+	ProjectKey    string
+	ContextTokens int
+	CostUSD       float64
+	LastFinalAt   time.Time
+	Pending       bool
 }
 
 // Event preserves the full input separately from its shorter tape representation.
 type Event struct {
-	LineID int64
-	At     time.Time
-	Kind   string
-	Text   string
+	LineID   int64
+	At       time.Time
+	Kind     string
+	Text     string
+	Sessions []int64
 }
 
 // Render produces the sole user message supplied on each assistant step.
-func Render(d Desk, board []Card, tape []Line, event Event, now time.Time) string {
+func Render(d Desk, projects []Project, tape []Line, event Event, now time.Time) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "now: %s\n\n## notebook (%d/30 entries, %d/2000 chars)\n",
-		now.UTC().Format("2006-01-02 15:04 MST"), len(d.Diary), diaryChars(d.Diary))
+	fmt.Fprintf(&b, "now: %s\n\n", now.UTC().Format("2006-01-02 15:04 MST"))
+	renderNoteScopes(&b, d.Notes, now)
+	fmt.Fprintf(&b, "\n## focus\n%s\n\n", d.Focus)
+	shown := TrimCatalog(projects, d, event, now)
 
-	for _, key := range slices.Sorted(maps.Keys(d.Diary)) {
-		fmt.Fprintf(&b, "%s: %s\n", key, d.Diary[key])
+	b.WriteString(catalogHeader)
+
+	notes := noteMap(d.Notes)
+	for _, project := range shown.Projects {
+		b.WriteString(renderProject(project, notes, now))
 	}
 
-	fmt.Fprintf(&b, "\n## stickers (%d/8, %d/1000 chars)\n", len(d.Stickers), stickerChars(d.Stickers))
-
-	for _, sticker := range d.Stickers {
-		on := ""
-		if sticker.On != "" {
-			on = " @" + sticker.On
-		}
-
-		fmt.Fprintf(&b, "- %s%s: %s\n", sticker.Key, on, sticker.Text)
+	if shown.MoreProjects > 0 {
+		fmt.Fprintf(&b, "+%d more projects\n", shown.MoreProjects)
 	}
 
-	fmt.Fprintf(&b, "\n## focus\n%s\n\n## board\n", d.Focus)
-
-	for _, card := range board {
-		unread := ""
-		if card.Unread {
-			unread = "  [unread]"
-		}
-
-		fmt.Fprintf(&b, "%d  %s  %s  %s  %s  asked: %q  last: %q%s\n", card.ID, card.Project, card.Place, card.Status,
-			deskTime(card.Activity, now), Clip(card.Asked, 120), Clip(card.LastLine, 200), unread)
-	}
-
+	renderOrphaned(&b, d.Notes, shown, now)
 	renderTape(&b, d.TapeLastID, tape, event, now)
 	fmt.Fprintf(&b, "\n## event (line %d)\n%s\n\nAnswer with exactly one JSON object and nothing else.\n",
 		event.LineID, ClipMiddle(event.Text, eventTextLimit))
@@ -76,48 +69,93 @@ func Render(d Desk, board []Card, tape []Line, event Event, now time.Time) strin
 	return b.String()
 }
 
-// Edited applies an answer's edits; slots the answer leaves out stay as they are.
-func (d Desk) Edited(a Answer) Desk {
+// Edited stamps only the note keys written in this answer.
+func (d Desk) Edited(a Answer, now time.Time) Desk {
 	next := d
 
-	next.Diary = maps.Clone(d.Diary)
-	if next.Diary == nil {
-		next.Diary = map[string]string{}
-	}
-
-	for _, key := range slices.Sorted(maps.Keys(a.Diary)) {
-		if entry := a.Diary[key]; entry != nil {
-			next.Diary[key] = *entry
+	indexed := noteMap(d.Notes)
+	for key, text := range a.Notes {
+		if text == nil {
+			delete(indexed, key)
 		} else {
-			delete(next.Diary, key)
+			indexed[key] = Note{Key: key, Text: *text, WrittenAt: now.Unix()}
 		}
 	}
 
-	next.Stickers = slices.Clone(d.Stickers)
-
-	for _, key := range slices.Sorted(maps.Keys(a.Stickers)) {
-		edit := a.Stickers[key]
-		at := slices.IndexFunc(next.Stickers, func(s Sticker) bool { return s.Key == key })
-
-		switch {
-		case edit == nil && at >= 0:
-			next.Stickers = slices.Delete(next.Stickers, at, at+1)
-		case edit == nil:
-		case at >= 0:
-			next.Stickers[at].Text = edit.Text
-			if edit.On != "" {
-				next.Stickers[at].On = edit.On
-			}
-		default:
-			next.Stickers = append(next.Stickers, Sticker{Key: key, Text: edit.Text, On: edit.On})
-		}
+	next.Notes = nil
+	for _, note := range indexed {
+		next.Notes = append(next.Notes, note)
 	}
+
+	slices.SortFunc(next.Notes, func(a, b Note) int { return strings.Compare(a.Key, b.Key) })
 
 	if a.Focus != nil {
 		next.Focus = *a.Focus
 	}
 
 	return next
+}
+
+func renderNoteScopes(b *strings.Builder, notes []Note, now time.Time) {
+	fmt.Fprintf(b, "## you (%d/1500)\n", scopeChars(notes, "user.")+scopeChars(notes, "rule."))
+	ordered := slices.Clone(notes)
+	slices.SortFunc(ordered, func(a, b Note) int { return strings.Compare(a.Key, b.Key) })
+
+	for _, prefix := range []string{"user.", "rule.", "open."} {
+		if prefix == "open." {
+			fmt.Fprintf(b, "\n## open (%d/800)\n", scopeChars(notes, prefix))
+		}
+
+		for _, note := range ordered {
+			if strings.HasPrefix(note.Key, prefix) {
+				fmt.Fprintf(b, "%s%s: %s\n", note.Key, noteAge(note, now), note.Text)
+			}
+		}
+	}
+}
+
+func renderOrphaned(b *strings.Builder, notes []Note, shown ShownCatalog, now time.Time) {
+	var orphaned []Note
+
+	for _, note := range notes {
+		scope, target, _ := strings.Cut(note.Key, ".")
+		missing := false
+
+		switch scope {
+		case noteScopeProject:
+			missing = !shown.ProjectKeys[target]
+		case noteScopeSession, noteScopeWait:
+			id, err := strconv.ParseInt(target, 10, 64)
+			missing = err != nil || !shown.SessionIDs[id]
+		}
+
+		if missing {
+			orphaned = append(orphaned, note)
+		}
+	}
+
+	if len(orphaned) == 0 {
+		return
+	}
+
+	slices.SortFunc(orphaned, func(a, b Note) int { return strings.Compare(a.Key, b.Key) })
+	b.WriteString("\n## orphaned\n")
+
+	for _, note := range orphaned {
+		fmt.Fprintf(b, "%s%s: %s\n", note.Key, noteAge(note, now), note.Text)
+	}
+}
+
+func scopeChars(notes []Note, prefix string) int {
+	total := 0
+
+	for _, note := range notes {
+		if strings.HasPrefix(note.Key, prefix) {
+			total += utf8.RuneCountInString(note.Text)
+		}
+	}
+
+	return total
 }
 
 // Clip limits Unicode characters, including the marker when text is shortened.
@@ -176,15 +214,6 @@ func renderTape(b *strings.Builder, lastID int64, tape []Line, event Event, now 
 	for _, line := range lines {
 		fmt.Fprintf(b, "%d %s %s\n", line.ID, deskTime(line.At, now), Clip(line.Text, deskTextLimit))
 	}
-}
-
-func stickerChars(stickers []Sticker) int {
-	var count int
-	for _, sticker := range stickers {
-		count += utf8.RuneCountInString(sticker.Text)
-	}
-
-	return count
 }
 
 func deskTime(at, now time.Time) string {

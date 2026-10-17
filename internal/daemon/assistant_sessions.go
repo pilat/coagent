@@ -18,7 +18,7 @@ import (
 	"github.com/pilat/coagent/internal/tool"
 )
 
-func (a *assistantSessions) Open(ctx context.Context, project, text string) (assistant.Card, error) {
+func (a *assistantSessions) Open(ctx context.Context, project, text, about string) (assistant.Card, error) {
 	id, path, name, err := a.resolveProject(ctx, project)
 	if err != nil {
 		return assistant.Card{}, err
@@ -39,14 +39,29 @@ func (a *assistantSessions) Open(ctx context.Context, project, text string) (ass
 		return assistant.Card{}, fmt.Errorf("create assistant work session: %w", err)
 	}
 
-	if err := a.Send(ctx, record.ID, text); err != nil {
+	key, err := a.catalogProjectKey(ctx, id, name)
+	if err != nil {
 		return assistant.Card{}, err
 	}
 
-	return assistant.Card{ID: record.ID, Project: name, Status: assistantWorking, Activity: time.Now().UTC()}, nil
+	if err := a.send(ctx, record.ID, text, about); err != nil {
+		return assistant.Card{}, err
+	}
+
+	return assistant.Card{
+		ID:         record.ID,
+		Project:    name,
+		ProjectKey: key,
+		Status:     assistantWorking,
+		Activity:   time.Now().UTC(),
+	}, nil
 }
 
 func (a *assistantSessions) Send(ctx context.Context, id int64, text string) error {
+	return a.send(ctx, id, text, "")
+}
+
+func (a *assistantSessions) send(ctx context.Context, id int64, text, about string) error {
 	s := a.daemon
 
 	unlock, err := s.lockSessionTree(ctx, id)
@@ -70,10 +85,20 @@ func (a *assistantSessions) Send(ctx context.Context, id int64, text string) err
 			return fmt.Errorf("enqueue assistant instruction: %w", err)
 		}
 
-		return assistant.RecordSendTx(ctx, tx, assistant.Send{
+		if err := assistant.RecordSendTx(ctx, tx, assistant.Send{
 			InputID: in.Input.ID, AssistantSessionID: a.root,
 			SessionID: id, CreatedAt: time.Now().UTC(),
-		})
+		}); err != nil {
+			return fmt.Errorf("record assistant send: %w", err)
+		}
+
+		if about != "" {
+			return assistant.SaveNotesTx(ctx, tx, a.root, map[string]*string{
+				fmt.Sprintf("session.%d", id): &about,
+			}, time.Now().UTC())
+		}
+
+		return nil
 	}); err != nil {
 		return fmt.Errorf("commit assistant instruction: %w", err)
 	}
@@ -144,7 +169,7 @@ func (a *assistantSessions) resolveProject(ctx context.Context, raw string) (int
 	for i := range projects {
 		if projects[i].Name == name && !projects[i].Hidden {
 			if existing != nil {
-				return 0, "", "", fmt.Errorf("project name %q is ambiguous; open it by its path from the board", name)
+				return 0, "", "", fmt.Errorf("project name %q is ambiguous; open it by its path from the catalog", name)
 			}
 
 			existing = &projects[i]
@@ -173,7 +198,7 @@ func (a *assistantSessions) resolveProject(ctx context.Context, raw string) (int
 	return id, path, name, nil
 }
 
-// projectPathArg accepts the path a board card shows, so a name shared by several
+// projectPathArg accepts the catalog's path key, so a name shared by several
 // projects can still be opened.
 func projectPathArg(raw string) (string, bool) {
 	if strings.HasPrefix(raw, "~/") {

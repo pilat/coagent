@@ -3,6 +3,7 @@ package assistant
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -41,7 +42,9 @@ type loopClient struct {
 }
 
 type loopSessions struct {
-	board []Card
+	cards []Card
+	store *sessionstore.Store
+	root  int64
 	moves []string
 	err   error
 }
@@ -97,14 +100,14 @@ func TestAssistantLoopTurns(t *testing.T) {
 
 func TestAssistantLoopReadAndSlots(t *testing.T) {
 	t.Parallel()
-	f := newLoopFixture(t, `{"say":"checking","focus":"saved focus","stickers":{"wait":"jobs"},"diary":{"key":"fact"},
+	f := newLoopFixture(t, `{"say":"checking","focus":"saved focus","notes":{"wait.244":"jobs","user.lang":"fact"},
 		"do":[{"read":{"session":244,"lines":3}},{"read":{"session":244,"lines":1}}]}`, sayAnswer("read result"))
 	f.enqueue("read it")
 	require.NoError(t, Run(t.Context(), f.deps, f.root))
 	require.Len(t, f.client.desks, 2)
 	assert.Contains(t, f.client.desks[1], "saved focus")
-	assert.Contains(t, f.client.desks[1], "key: fact")
-	assert.Contains(t, f.client.desks[1], "- wait: jobs")
+	assert.Contains(t, f.client.desks[1], "user.lang (now): fact")
+	assert.Contains(t, f.client.desks[1], "⏳ wait (now): jobs")
 	assert.Contains(t, f.client.desks[1], "tail 3")
 	assert.Contains(t, f.client.desks[1], "tail 1")
 	assert.Equal(t, []string{"checking", "read result"}, f.notified)
@@ -160,25 +163,30 @@ func TestAssistantLoopActionsAndFailure(t *testing.T) {
 	assert.Equal(t, []string{"could not send"}, f.notified)
 }
 
-func TestAssistantLoopBindsStickerToOpenedSession(t *testing.T) {
+func TestAssistantLoopBindsNotesToOpenedSession(t *testing.T) {
 	t.Parallel()
-	f := newLoopFixture(t,
-		`{"say":null,"do":[{"open":{"project":"devbox","text":"new"}}],
-			"stickers":{"wait.devbox":{"text":"tell when done","on":"devbox"}}}`,
-		`{"say":"ok","stickers":{"wait.devbox":"tell when done, briefly"}}`,
+	f := newLoopFixture(
+		t,
+		`{"say":null,"do":[{"open":{"project":"devbox","text":"new","about":"why it exists"}}],"notes":{"wait.devbox":"tell when done","project.devbox":"project state"}}`,
+		`{"say":"ok","notes":{"wait.245":"tell when done, briefly"}}`,
 	)
 	f.enqueue("start")
 	f.enqueue("next")
 	require.NoError(t, Run(t.Context(), f.deps, f.root))
 	desk, err := f.deps.Memory.LoadDesk(t.Context(), f.root)
 	require.NoError(t, err)
-	assert.Equal(t, []Sticker{{Key: "wait.devbox", Text: "tell when done, briefly", On: "245"}}, desk.Stickers)
-	assert.Contains(t, f.client.desks[1], "- wait.devbox @245: tell when done")
+	notes := noteMap(desk.Notes)
+	assert.Equal(t, "tell when done, briefly", notes["wait.245"].Text)
+	assert.Equal(t, "why it exists", notes["session.245"].Text)
+	assert.Equal(t, "project state", notes["project.devbox"].Text)
+	assert.NotContains(t, notes, "wait.devbox")
+	assert.Contains(t, f.client.desks[1], "session (now): why it exists")
+	assert.Contains(t, f.client.desks[1], "⏳ wait (now): tell when done")
 }
 
 func TestAssistantLoopCommitRollback(t *testing.T) {
 	t.Parallel()
-	f := newLoopFixture(t, sayAnswer("lost"))
+	f := newLoopFixture(t, `{"say":"lost","notes":{"open.pending":"lost"}}`)
 	f.enqueue("hello")
 	f.deps.SayTx = func(context.Context, *sql.Tx, string) error { return errors.New("outbox unavailable") }
 	require.ErrorContains(t, Run(t.Context(), f.deps, f.root), "outbox unavailable")
@@ -192,6 +200,7 @@ func TestAssistantLoopCommitRollback(t *testing.T) {
 	desk, err := f.deps.Memory.LoadDesk(t.Context(), f.root)
 	require.NoError(t, err)
 	assert.True(t, desk.LastTurnAt.IsZero())
+	assert.Empty(t, desk.Notes)
 }
 
 func TestAssistantLoopForgetKeepsTurnUntilItEnds(t *testing.T) {
@@ -233,8 +242,9 @@ func newLoopFixture(t *testing.T, responses ...string) *loopFixture {
 	require.NoError(t, err)
 	f := &loopFixture{
 		t: t, db: db, store: sessions, root: root, client: &loopClient{t: t, responses: responses},
-		sessions: &loopSessions{board: []Card{{ID: 244, Project: "devbox", Status: "done"}}},
+		sessions: &loopSessions{cards: []Card{{ID: 244, Project: "devbox", Status: "done"}}},
 	}
+	f.sessions.store, f.sessions.root = sessions, root
 	f.deps = Deps{
 		Store: sessions, Memory: memory, Sessions: f.sessions, Now: func() time.Time { return time.Now().UTC() },
 		NewClient: func(model string) (llm.Client, error) {
@@ -302,15 +312,31 @@ func (c *loopClient) Chat(
 
 func (c *loopClient) Close() error { c.closes++; return nil }
 
-func (s *loopSessions) Board(context.Context, time.Time) ([]Card, error) { return s.board, nil }
+func (s *loopSessions) Catalog(context.Context, time.Time, ...int64) ([]Project, error) {
+	var ids []int64
+	for _, card := range s.cards {
+		ids = append(ids, card.ID)
+	}
+	return []Project{{Key: "devbox", Name: "devbox", Sessions: s.cards, SessionIDs: ids}}, nil
+}
+
 func (s *loopSessions) Read(_ context.Context, _ int64, lines int) (string, error) {
 	return fmt.Sprintf("tail %d", lines), nil
 }
 
-func (s *loopSessions) Open(_ context.Context, project, text string) (Card, error) {
+func (s *loopSessions) Open(ctx context.Context, project, text, about string) (Card, error) {
 	s.moves = append(s.moves, "open "+project+" "+text)
-
-	return Card{ID: 245, Project: project}, s.err
+	card := Card{ID: 245, Project: project, ProjectKey: project}
+	if s.err != nil {
+		return Card{}, s.err
+	}
+	if err := s.store.WithTx(ctx, func(tx *sql.Tx) error {
+		return SaveNotesTx(ctx, tx, s.root, map[string]*string{"session.245": &about}, time.Now().UTC())
+	}); err != nil {
+		return Card{}, err
+	}
+	s.cards = append(s.cards, card)
+	return card, nil
 }
 
 func (s *loopSessions) Send(_ context.Context, id int64, text string) error {
@@ -330,7 +356,27 @@ func sayAnswer(say string) string {
 }
 
 func actionAnswer(actions string) string {
-	return `{"say":null,"do":[` + actions + `]}`
+	var do []Action
+	if err := json.Unmarshal([]byte("["+actions+"]"), &do); err != nil {
+		panic(err)
+	}
+	a := Answer{Do: do, Notes: map[string]*string{}}
+	for _, action := range a.Do {
+		if action.Open != nil {
+			if action.Open.About == "" {
+				action.Open.About = "purpose"
+			}
+			a.Notes["wait."+action.Open.Project] = new("retell")
+		}
+		if action.Send != nil {
+			a.Notes[fmt.Sprintf("wait.%d", action.Send.Session)] = new("retell")
+		}
+	}
+	data, err := json.Marshal(a)
+	if err != nil {
+		panic(err)
+	}
+	return string(data)
 }
 
 func TestAssistantLoopPinsDialogTail(t *testing.T) {

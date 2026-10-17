@@ -7,21 +7,19 @@ import (
 	"strconv"
 	"strings"
 
+	"go.uber.org/zap"
+
 	"github.com/pilat/coagent/internal/logger"
 )
 
 func (l *loop) applyActions(ctx context.Context, s step) (*Event, error) {
 	var reads, labels []string
+	var readIDs []int64
 
 	for _, action := range s.answer.Do {
-		text, err := l.applyAction(ctx, action)
+		text, err := l.applyAction(ctx, s, action)
 		if err != nil {
-			if ctx.Err() != nil {
-				return nil, fmt.Errorf("assistant action interrupted: %w", ctx.Err())
-			}
-
-			reason := "! error: " + actionFailureName(action, s.board) + " failed: " + logger.Redact(err.Error())
-			if err := l.actionFailure(ctx, action, reason); err != nil {
+			if err := l.handleActionFailure(ctx, s, action, err); err != nil {
 				return nil, err
 			}
 
@@ -29,7 +27,8 @@ func (l *loop) applyActions(ctx context.Context, s step) (*Event, error) {
 		}
 
 		if action.Read != nil {
-			label := actionLine(action, s.board)
+			readIDs = append(readIDs, action.Read.Session)
+			label := actionLine(action, s.cards)
 			labels = append(labels, label)
 			reads = append(reads, label+"\n"+text)
 		}
@@ -44,19 +43,42 @@ func (l *loop) applyActions(ctx context.Context, s step) (*Event, error) {
 		return nil, err
 	}
 
-	return &Event{LineID: id, At: l.deps.Now(), Kind: observeKind, Text: strings.Join(reads, "\n\n")}, nil
+	return &Event{
+		LineID:   id,
+		At:       l.deps.Now(),
+		Kind:     observeKind,
+		Text:     strings.Join(reads, "\n\n"),
+		Sessions: readIDs,
+	}, nil
 }
 
-func (l *loop) applyAction(ctx context.Context, action Action) (string, error) {
+func (l *loop) handleActionFailure(ctx context.Context, s step, action Action, cause error) error {
+	if ctx.Err() != nil {
+		return fmt.Errorf("assistant action interrupted: %w", ctx.Err())
+	}
+
+	reason := "! error: " + actionFailureName(action, s.cards) + " failed: " + logger.Redact(cause.Error())
+	if action.Open != nil {
+		if err := l.discardOpened(ctx, s, action.Open.Project); err != nil {
+			return err
+		}
+	}
+
+	return l.actionFailure(ctx, action, reason)
+}
+
+func (l *loop) applyAction(ctx context.Context, s step, action Action) (string, error) {
 	switch {
 	case action.Open != nil:
-		card, err := l.deps.Sessions.Open(ctx, action.Open.Project, action.Open.Text)
+		card, err := l.deps.Sessions.Open(ctx, action.Open.Project, action.Open.Text, action.Open.About)
 		if err != nil {
 			return "", fmt.Errorf("open work session: %w", err)
 		}
 
-		if err := l.bindOpened(ctx, action.Open.Project, card.ID); err != nil {
-			return "", err
+		if err := l.bindOpened(ctx, s, action.Open.Project, card); err != nil {
+			logger.Ctx(ctx).
+				Named("assistant.open").
+				Error("bind notes after open", zap.Int64("session_id", card.ID), zap.Error(err))
 		}
 
 		_, err = l.appendLine(
@@ -86,31 +108,49 @@ func (l *loop) applyAction(ctx context.Context, action Action) (string, error) {
 	return "", nil
 }
 
-// bindOpened moves stickers pinned to an opened project onto the session it started.
-func (l *loop) bindOpened(ctx context.Context, project string, id int64) error {
-	desk, err := l.deps.Memory.LoadDesk(ctx, l.sessionID)
-	if err != nil {
-		return fmt.Errorf("load desk to bind opened session: %w", err)
-	}
-
-	bound := false
-
-	for i := range desk.Stickers {
-		if desk.Stickers[i].On == project {
-			desk.Stickers[i].On = strconv.FormatInt(id, 10)
-			bound = true
+func (l *loop) bindOpened(ctx context.Context, s step, raw string, card Card) error {
+	err := l.deps.Store.WithTx(ctx, func(tx *sql.Tx) error {
+		if s.answer.Notes["wait."+raw] != nil {
+			if err := rekeyNoteTx(
+				ctx,
+				tx,
+				l.sessionID,
+				"wait."+raw,
+				"wait."+strconv.FormatInt(card.ID, 10),
+			); err != nil {
+				return err
+			}
 		}
-	}
 
-	if !bound {
+		if !s.shown.ProjectKeys[raw] && s.answer.Notes["project."+raw] != nil {
+			if err := rekeyNoteTx(ctx, tx, l.sessionID, "project."+raw, "project."+card.ProjectKey); err != nil {
+				return err
+			}
+		}
+
 		return nil
+	})
+	if err != nil {
+		return fmt.Errorf("bind opened notes: %w", err)
 	}
 
-	desk.UpdatedAt = l.deps.Now()
+	return nil
+}
 
-	err = l.deps.Store.WithTx(ctx, func(tx *sql.Tx) error { return SaveDeskTx(ctx, tx, l.sessionID, desk) })
-	if err != nil {
-		return fmt.Errorf("bind stickers to opened session: %w", err)
+func (l *loop) discardOpened(ctx context.Context, s step, raw string) error {
+	edits := map[string]*string{}
+	if s.answer.Notes["wait."+raw] != nil {
+		edits["wait."+raw] = nil
+	}
+
+	if !s.shown.ProjectKeys[raw] && s.answer.Notes["project."+raw] != nil {
+		edits["project."+raw] = nil
+	}
+
+	if err := l.deps.Store.WithTx(ctx, func(tx *sql.Tx) error {
+		return SaveNotesTx(ctx, tx, l.sessionID, edits, l.deps.Now())
+	}); err != nil {
+		return fmt.Errorf("discard failed open notes: %w", err)
 	}
 
 	return nil
@@ -128,11 +168,11 @@ func (l *loop) actionFailure(ctx context.Context, action Action, reason string) 
 	return nil
 }
 
-func actionLine(a Action, board []Card) string {
+func actionLine(a Action, cards []Card) string {
 	id := actionSession(a)
 	var project string
 
-	for _, card := range board {
+	for _, card := range cards {
 		if card.ID == id {
 			project = card.Project
 		}
@@ -163,15 +203,15 @@ func actionSession(a Action) int64 {
 	}
 }
 
-func actionFailureName(a Action, board []Card) string {
+func actionFailureName(a Action, cards []Card) string {
 	if a.Open != nil || a.Read != nil {
-		return actionLine(a, board)
+		return actionLine(a, cards)
 	}
 
 	id := actionSession(a)
 	var project string
 
-	for _, card := range board {
+	for _, card := range cards {
 		if card.ID == id {
 			project = card.Project
 		}

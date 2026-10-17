@@ -66,6 +66,10 @@ func (l *loop) turn(ctx context.Context, input *sessionstore.InboxInput) error {
 	}
 
 	event := Event{At: l.deps.Now(), Kind: observeKind, Text: input.RawContent}
+	if id, ok := attributeID(input.Attributes["session_id"]); ok {
+		event.Sessions = []int64{id}
+	}
+
 	tapeText := Clip(event.Text, 300)
 
 	if input.Source == sessionstore.InputSourceUser {
@@ -92,9 +96,10 @@ func (l *loop) turn(ctx context.Context, input *sessionstore.InboxInput) error {
 	}
 
 	origin := event.LineID
+	originKind := event.Kind
 
 	for number := 1; number <= 3; number++ {
-		current := step{inputID: input.ID, number: number, origin: origin, event: event}
+		current := step{inputID: input.ID, number: number, origin: origin, originKind: originKind, event: event}
 
 		ok, err := l.ask(ctx, &current)
 		if err != nil || !ok {

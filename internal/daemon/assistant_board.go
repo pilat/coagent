@@ -13,9 +13,7 @@ import (
 
 	"github.com/pilat/coagent/internal/assistant"
 	"github.com/pilat/coagent/internal/coagenthome"
-	"github.com/pilat/coagent/internal/controllerapi"
 	"github.com/pilat/coagent/internal/sessionstore"
-	"github.com/pilat/coagent/internal/tool"
 )
 
 const (
@@ -23,38 +21,6 @@ const (
 	// Below the event limit, so a read observation is never cut in the middle.
 	readBudget = 18000
 )
-
-func (a *assistantSessions) Board(ctx context.Context, lastTurn time.Time) ([]assistant.Card, error) {
-	records, err := a.daemon.store.ListAllSessions(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("list assistant board: %w", err)
-	}
-
-	var cards []assistant.Card
-
-	for _, record := range records {
-		owner, _ := record.Attributes[controllerapi.SessionAttributeManagerID].(string)
-		if owner != a.owner || record.ParentID != 0 || record.AgentType == tool.AssistantAgentType ||
-			isManagementSurface(
-				record.Attributes,
-			) || record.KilledAt != nil || record.Status == sessionstore.SessionStatusKilled {
-			continue
-		}
-
-		card, err := a.card(ctx, record, lastTurn)
-		if err != nil {
-			return nil, err
-		}
-
-		if card.Unread || card.Activity.After(time.Now().UTC().Add(-7*24*time.Hour)) {
-			cards = append(cards, card)
-		}
-	}
-
-	slices.SortFunc(cards, func(a, b assistant.Card) int { return b.Activity.Compare(a.Activity) })
-
-	return cards[:min(10, len(cards))], nil
-}
 
 func (a *assistantSessions) Read(ctx context.Context, id int64, count int) (string, error) {
 	if _, err := a.workRoot(ctx, id); err != nil {
@@ -105,8 +71,14 @@ func (a *assistantSessions) card(
 
 	card := assistant.Card{
 		ID: record.ID, Project: name, Place: projectPlace(workDir), Activity: record.UpdatedAt,
-		Status: assistantCardStatus(record.Status, a.daemon.HasActiveLoop(record.ID)),
-		Asked:  strings.Join(strings.Fields(asked), " "),
+		Status:        assistantCardStatus(record.Status, a.daemon.HasActiveLoop(record.ID)),
+		Asked:         strings.Join(strings.Fields(asked), " "),
+		ContextTokens: record.ContextBaselinePromptTokens,
+	}
+
+	card.CostUSD, err = a.daemon.store.SessionTreeCost(ctx, record.ID)
+	if err != nil {
+		return assistant.Card{}, fmt.Errorf("read assistant card cost: %w", err)
 	}
 
 	output, err := a.daemon.store.LatestModelOutput(ctx, record.ID)
@@ -120,6 +92,7 @@ func (a *assistantSessions) card(
 
 	card.LastLine = assistant.Clip(withoutFooter(output.Content), 200)
 	card.Unread = output.CreatedAt.After(lastTurn)
+	card.LastFinalAt = output.CreatedAt
 
 	if output.CreatedAt.After(card.Activity) {
 		card.Activity = output.CreatedAt

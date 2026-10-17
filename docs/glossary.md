@@ -136,28 +136,30 @@ a durable root row that delegates work to ordinary sessions and retells results.
 _Avoid_: coordinator, dispatcher, work-item manager.
 
 **desk**:
-The assistant's entire model context: notebook, stickers, focus, a read-only board,
+The assistant's entire model context: scoped notes, focus, a read-only catalog,
 a bounded visible tape window and one event, rebuilt by the host for every step.
 _Avoid_: transcript, context compaction.
 
-**notebook** (`diary`):
-The assistant's keyed long-term facts in one size-limited map; each step writes or
-removes single entries, and the rest stay.
-_Avoid_: ledger, project memory (that is the separate curated-memory store).
-
-**stickers**:
-Size-limited keyed short-term notes about work in flight and what to do with its
-result, each optionally pinned to the work session it waits on.
-_Avoid_: work items, dispatch records.
+**note** (assistant):
+One keyed, timestamped piece of assistant memory. Its prefix binds its scope:
+`user.` and `rule.` describe the user and standing rules; `open.` holds unresolved
+things without work in flight; `project.<key>` records project state;
+`session.<id>` records why a session exists and its outcome; `wait.<id>` records
+what to tell the user when work answers. Edits replace or delete individual keys;
+absent keys retain their text and age. Notes occupy their scope's place on the desk.
+_Avoid_: notebook, diary, stickers, dispatch records, project memory (that is the
+separate curated-memory store).
 
 **focus**:
 The assistant's size-limited single line describing the current subject.
 
-**board**:
-The host-rendered cards of this manager's recent or unread work sessions, each
-with where its project lives (`repo <path>`, `scratch` or `dir <path>`), its last
-request and its last final; it is read-only and bounds the session targets
-allowed in the assistant's answer.
+**catalog** (assistant):
+The host-rendered known projects and this manager's assistant-touched work roots,
+with scoped notes, places, ages, context size and accumulated cost. It excludes
+hidden projects, missing folders and host worktrees. One shared budget projection
+bounds session targets while retaining unread, event-related and pending work;
+the host retains the full project key set. Distinct from the model catalog below.
+_Avoid_: board, recent-session list.
 
 **tape**:
 The assistant's host-kept, numbered, timestamped history of events, speech and
@@ -184,7 +186,7 @@ _Avoid_: dispatch intent.
 A host-supplied work result or requested session tail. A work result belongs to
 a recorded assistant send and carries every final of its answer window; a tail
 carries user requests and finals, newest first. Direct user exchanges appear only
-on the board.
+in the catalog.
 
 **context artifact**:
 One of the three instruction files a session loads at open — **global**, **project**, or **local** — each resolved by a first-match-wins search over an ordered candidate list, then merged into the opening context as a `[role] <path>` labeled section with the home directory abbreviated to `~`. The section's path is the winning candidate, not the resolved symlink target.
@@ -558,7 +560,7 @@ _Avoid_: using "provider" for the driver, or for the vendor behind an OpenAI-com
 **driver**:
 The private `llm.driverProtocol` implementation that owns one provider protocol end to end: constructing clients (`NewClient`) and answering where its models' characteristics come from (`ListModels`). Four exist: `anthropic`, `openai`, `openrouter`, `google-sa`. Adding one means implementing both halves — the compiler will not let a new driver skip its catalog.
 
-**catalog**:
+**catalog** (models):
 The external source of model metadata — display name, context window, max output tokens, pricing, reasoning capability. models.dev for the `anthropic` / `openai` / `google-sa` drivers (section selected by the provider's `catalog` key), OpenRouter's own `/api/v1/models` for `openrouter`. Fetched once at daemon startup, cached under `~/.coagent/cache/catalog`, and the **only** source for those fields — config carries none of them, and a model the catalog does not know is a startup error ([ADR-0003](adr/0003-external-model-catalogs.md)).
 _Avoid_: "model config" for this data.
 

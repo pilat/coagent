@@ -12,24 +12,47 @@ import (
 func TestAssistantRender(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, time.October, 14, 12, 9, 0, 0, time.UTC)
-	desk := Desk{
-		Diary:      map[string]string{"z": "я", "a": "b"},
-		Stickers:   []Sticker{{Key: "wait", Text: "жду", On: "244"}, {Key: "note", Text: "x"}},
-		Focus:      "devbox",
-		TapeLastID: 38,
-	}
-	board := []Card{{
-		ID: 244, Project: "devbox", Place: "repo ~/projects/devbox", Status: "done", Activity: now.Add(-24 * time.Hour),
-		Asked: "check", LastLine: "ready", Unread: true,
+	desk := Desk{Focus: "devbox", TapeLastID: 38, Notes: []Note{
+		{Key: "user.lang", Text: "Русский", WrittenAt: now.Add(-12 * 24 * time.Hour).Unix()},
+		{Key: "rule.safe", Text: "safe"},
+		{Key: "open.google-docs", Text: "OAuth"},
+		{Key: "project.devbox", Text: "state"},
+		{Key: "session.244", Text: "purpose", WrittenAt: now.Add(-2 * time.Hour).Unix()},
+		{Key: "wait.244", Text: "retell", WrittenAt: now.Add(-time.Hour).Unix()},
+		{Key: "session.999", Text: "gone"},
 	}}
+	projects := []Project{
+		{
+			Key:        "devbox",
+			Place:      "repo ~/projects/devbox",
+			Activity:   now.Add(-24 * time.Hour),
+			SessionIDs: []int64{244},
+			Sessions: []Card{
+				{
+					ID:            244,
+					Project:       "devbox",
+					Status:        "done",
+					Activity:      now.Add(-24 * time.Hour),
+					ContextTokens: 40000,
+					CostUSD:       0.12,
+					LastLine:      "ready",
+					LastFinalAt:   now.Add(-time.Hour),
+					Unread:        true,
+				},
+			},
+		},
+	}
 	tape := []Line{{ID: 35, At: now, Kind: "say", Text: "say: «hello»"}}
-	event := Event{LineID: 34, At: now, Kind: "observe", Text: "← devbox (244) answered: ready"}
-	got := Render(desk, board, tape, event, now)
+	event := Event{LineID: 34, At: now, Kind: "observe", Text: "← devbox (244) answered: ready", Sessions: []int64{244}}
+	got := Render(desk, projects, tape, event, now)
 	want := "now: 2026-10-14 12:09 UTC\n\n" +
-		"## notebook (2/30 entries, 4/2000 chars)\na: b\nz: я\n\n" +
-		"## stickers (2/8, 4/1000 chars)\n- wait @244: жду\n- note: x\n\n## focus\ndevbox\n\n## board\n" +
-		"244  devbox  repo ~/projects/devbox  done  Oct 13 12:09  asked: \"check\"  last: \"ready\"  [unread]\n\n" +
-		"## tape (visible lines 34–35 of 38)\n" +
+		"## you (11/1500)\nuser.lang (12d): Русский\nrule.safe: safe\n\n" +
+		"## open (5/800)\nopen.google-docs: OAuth\n\n## focus\ndevbox\n\n" +
+		"## catalog (projects by last activity; sessions you opened)\n" +
+		"devbox  repo ~/projects/devbox  1d\n  project: state\n" +
+		"  244  done  1d  ctx 40k  $0.12  [unread]\n    session (2h): purpose\n    last: \"ready\"\n    ⏳ wait (1h): retell\n" +
+		"\n## orphaned\nsession.999: gone\n" +
+		"\n## tape (visible lines 34–35 of 38)\n" +
 		"34 12:09 ← devbox (244) answered: ready\n35 12:09 say: «hello»\n\n" +
 		"## event (line 34)\n← devbox (244) answered: ready\n\n" +
 		"Answer with exactly one JSON object and nothing else.\n"

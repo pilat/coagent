@@ -11,9 +11,9 @@ import (
 
 // Sessions is the assistant's manager-scoped authority over ordinary work roots.
 type Sessions interface {
-	Board(context.Context, time.Time) ([]Card, error)
+	Catalog(context.Context, time.Time, ...int64) ([]Project, error)
 	Read(context.Context, int64, int) (string, error)
-	Open(context.Context, string, string) (Card, error)
+	Open(context.Context, string, string, string) (Card, error)
 	Send(context.Context, int64, string) error
 	Stop(context.Context, int64) error
 }
@@ -36,15 +36,18 @@ type loop struct {
 }
 
 type step struct {
-	inputID int64
-	number  int
-	origin  int64
-	event   Event
-	desk    Desk
-	next    Desk
-	board   []Card
-	tape    []Line
-	render  string
-	raw     string
-	answer  Answer
+	inputID    int64
+	number     int
+	origin     int64
+	originKind string
+	event      Event
+	desk       Desk
+	next       Desk
+	cards      []Card
+	catalog    []Project
+	shown      ShownCatalog
+	tape       []Line
+	render     string
+	raw        string
+	answer     Answer
 }
