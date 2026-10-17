@@ -62,3 +62,17 @@ func (s *Store) LatestModelOutput(ctx context.Context, sessionID int64) (*Output
 
 	return row, err
 }
+
+// SessionTreeCost excludes corrupt cost rows without discarding valid sibling usage.
+func (s *Store) SessionTreeCost(ctx context.Context, root int64) (float64, error) {
+	var cost float64
+
+	err := s.db.QueryRowContext(ctx, `SELECT COALESCE(SUM(m.cost_usd), 0)
+		FROM messages m JOIN sessions s ON s.id = m.session_id
+		WHERE (s.id = ? OR s.root_id = ?) AND m.cost_usd BETWEEN 0 AND 100`, root, root).Scan(&cost)
+	if err != nil {
+		return 0, fmt.Errorf("read session tree cost: %w", err)
+	}
+
+	return cost, nil
+}

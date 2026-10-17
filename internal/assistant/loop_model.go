@@ -34,10 +34,17 @@ func (l *loop) ask(ctx context.Context, s *step) (bool, error) {
 
 		s.answer, err = Parse(raw)
 		if err == nil {
-			s.next = s.desk.Edited(s.answer)
+			s.next = s.desk.Edited(s.answer, l.deps.Now())
+
+			existing := map[string]bool{}
+			for _, note := range s.desk.Notes {
+				existing[note.Key] = true
+			}
 
 			var reasons []string
-			for _, v := range Validate(s.answer, s.next, DefaultRules(), s.board) {
+			for _, v := range Validate(s.answer, s.next, DefaultRules(), ValidationContext{
+				OriginKind: s.originKind, Shown: s.shown, ProjectKeys: s.shown.ProjectKeys, ExistingKeys: existing,
+			}) {
 				reasons = append(reasons, string(v))
 			}
 
@@ -71,17 +78,21 @@ func (l *loop) loadStep(ctx context.Context, s *step) error {
 		return fmt.Errorf("load step desk: %w", err)
 	}
 
-	s.board, err = l.deps.Sessions.Board(ctx, s.desk.LastTurnAt)
+	s.catalog, err = l.deps.Sessions.Catalog(ctx, s.desk.LastTurnAt, s.event.Sessions...)
 	if err != nil {
-		return fmt.Errorf("load assistant board: %w", err)
+		return fmt.Errorf("load assistant catalog: %w", err)
 	}
+
+	now := l.deps.Now()
+	s.shown = TrimCatalog(s.catalog, s.desk, s.event, now)
+	s.cards = s.shown.Cards
 
 	s.tape, err = l.deps.Memory.VisibleTape(ctx, l.sessionID, 40, s.event.LineID)
 	if err != nil {
 		return fmt.Errorf("load step tape: %w", err)
 	}
 
-	s.render = Render(s.desk, s.board, s.tape, s.event, l.deps.Now())
+	s.render = Render(s.desk, s.catalog, s.tape, s.event, now)
 
 	return nil
 }

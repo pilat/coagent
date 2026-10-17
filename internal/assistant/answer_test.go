@@ -4,87 +4,97 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-const validAnswer = `{"say":null}`
+const validAnswer = "{\"say\":null}"
 
 func TestAssistantParse(t *testing.T) {
-	for _, tc := range []struct {
-		name string
-		text string
-		bad  string
-	}{
+	for _, tc := range []struct{ name, text, bad string }{
 		{"plain", validAnswer, ""},
-		{"empty object", `{}`, ""},
+		{"empty object", "{}", ""},
 		{"fenced", "```json\n" + validAnswer + "\n```", ""},
 		{"prose", "Here is the answer: " + validAnswer + " trailing prose", ""},
 		{"braces in strings", `{"say":"a } \\\" { b"}`, ""},
-		{"edits", `{"focus":"f","stickers":{"a":"t","b":{"text":"t","on":244},"c":null},"diary":{"k":"v","x":null}}`, ""},
-		{"unknown field", `{"extra":1,"say":null}`, "unknown field"},
-		{"think is gone", `{"think":"hm","say":null}`, "unknown field"},
-		{"rewritten stickers", `{"stickers":["whole list"]}`, "cannot unmarshal"},
-		{"sticker unknown", `{"stickers":{"a":{"text":"t","x":1}}}`, "unknown field"},
-		{"sticker bad on", `{"stickers":{"a":{"text":"t","on":true}}}`, "session id or a project name"},
+		{"edits", `{"notes":{"user.lang":"Russian","open.old":null},"focus":"f"}`, ""},
+		{"unknown field", `{"extra":1}`, "unknown field"},
+		{"think is gone", `{"think":"hm"}`, "unknown field"},
+		{"diary is gone", `{"diary":{"k":"v"}}`, "unknown field"},
+		{"stickers are gone", `{"stickers":{}}`, "unknown field"},
+		{"object note", `{"notes":{"user.lang":{"text":"v"}}}`, "cannot unmarshal"},
+		{"number note", `{"notes":{"user.lang":5}}`, "cannot unmarshal"},
 		{"bad say", `{"say":4}`, "cannot unmarshal"},
-		{"nested unknown", `{"say":null,"do":[{"stop":{"session":1,"extra":1}}]}`, "unknown field"},
+		{"nested unknown", `{"do":[{"stop":{"session":1,"extra":1}}]}`, "unknown field"},
 		{"unfinished", `{"say":`, "unfinished"},
 		{"absent", "no answer", "no JSON"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			answer, err := Parse(tc.text)
+			_, err := Parse(tc.text)
 			if tc.bad != "" {
 				require.ErrorContains(t, err, tc.bad)
 				return
 			}
-
 			require.NoError(t, err)
-			assert.Empty(t, Validate(answer, Desk{}.Edited(answer), DefaultRules(), []Card{{ID: 244}}))
 		})
 	}
 }
 
-func TestAssistantParseStickerEdits(t *testing.T) {
+func TestAssistantParseNotesAndOpen(t *testing.T) {
 	t.Parallel()
-	a, err := Parse(`{"stickers":{"plain":"text","id":{"text":"t","on":244},"name":{"text":"t","on":"@devbox"},
-		"quoted":{"text":"t","on":"245"},"peel":null}}`)
+	a, err := Parse(
+		`{"notes":{"user.lang":"Russian","open.old":null},"do":[{"open":{"project":"devbox","text":"go","about":"why"}}]}`,
+	)
 	require.NoError(t, err)
-	assert.Equal(t, &StickerEdit{Text: "text"}, a.Stickers["plain"])
-	assert.Equal(t, &StickerEdit{Text: "t", On: "244"}, a.Stickers["id"])
-	assert.Equal(t, &StickerEdit{Text: "t", On: "devbox"}, a.Stickers["name"])
-	assert.Equal(t, &StickerEdit{Text: "t", On: "245"}, a.Stickers["quoted"])
-	peel, exists := a.Stickers["peel"]
+	require.NotNil(t, a.Notes["user.lang"])
+	assert.Equal(t, "Russian", *a.Notes["user.lang"])
+	text, exists := a.Notes["open.old"]
 	assert.True(t, exists)
-	assert.Nil(t, peel)
+	assert.Nil(t, text)
+	assert.Equal(t, "why", a.Do[0].Open.About)
 }
 
 func TestAssistantDeskEdited(t *testing.T) {
 	t.Parallel()
+	now := time.Unix(1000, 0)
 	before := Desk{
-		Diary:    map[string]string{"a": "1", "b": "2"},
-		Stickers: []Sticker{{Key: "k1", Text: "t1", On: "244"}, {Key: "k2", Text: "t2"}},
-		Focus:    "f",
+		Notes: []Note{
+			{Key: "open.a", Text: "1", WrittenAt: 10},
+			{Key: "open.b", Text: "2", WrittenAt: 20},
+			{Key: "rule.keep", Text: "safe", WrittenAt: 30},
+		},
+		Focus: "f",
 	}
-	a, err := Parse(`{"diary":{"a":"x","b":null,"c":"new","gone":null},
-		"stickers":{"k1":"t1b","k2":null,"k4":{"text":"t4"},"k3":{"text":"t3","on":"devbox"},"never":null}}`)
+	a, err := Parse(`{"notes":{"open.a":"x","open.b":null,"open.c":"new","open.gone":null}}`)
 	require.NoError(t, err)
+	after := before.Edited(a, now)
+	assert.Equal(
+		t,
+		[]Note{
+			{Key: "open.a", Text: "x", WrittenAt: 1000},
+			{Key: "open.c", Text: "new", WrittenAt: 1000},
+			{Key: "rule.keep", Text: "safe", WrittenAt: 30},
+		},
+		after.Notes,
+	)
+	assert.Equal(t, "f", after.Focus)
+	assert.Equal(t, "1", before.Notes[0].Text)
+	empty := ""
+	assert.Empty(t, before.Edited(Answer{Focus: &empty}, now).Focus)
+}
 
-	after := before.Edited(a)
-	assert.Equal(t, map[string]string{"a": "x", "c": "new"}, after.Diary)
-	assert.Equal(t, []Sticker{
-		{Key: "k1", Text: "t1b", On: "244"},
-		{Key: "k3", Text: "t3", On: "devbox"},
-		{Key: "k4", Text: "t4"},
-	}, after.Stickers, "a rewrite keeps the binding; new keys append in key order")
-	assert.Equal(t, "f", after.Focus, "an absent focus stays")
-	assert.Equal(t, map[string]string{"a": "1", "b": "2"}, before.Diary, "the loaded desk is not aliased")
-	assert.Equal(t, "t1", before.Stickers[0].Text)
-
-	focus := ""
-	assert.Empty(t, before.Edited(Answer{Focus: &focus}).Focus, "a written empty focus clears it")
+func validationFixture() ValidationContext {
+	projects := []Project{{Key: "devbox", Sessions: []Card{{ID: 244}}, SessionIDs: []int64{244}}}
+	shown := TrimCatalog(projects, Desk{}, Event{}, time.Unix(1000, 0))
+	return ValidationContext{
+		OriginKind:   "user",
+		Shown:        shown,
+		ProjectKeys:  shown.ProjectKeys,
+		ExistingKeys: map[string]bool{"wait.999": true, "project.gone": true},
+	}
 }
 
 func TestAssistantValidate(t *testing.T) {
@@ -95,34 +105,76 @@ func TestAssistantValidate(t *testing.T) {
 		bad    string
 	}{
 		{"null say", func(*Answer) {}, ""},
-		{"ninth sticker", func(a *Answer) {
-			for i := range 9 {
-				a.Stickers[fmt.Sprint(i)] = &StickerEdit{Text: "t"}
-			}
-		}, "too many stickers"},
-		{"sticker chars", func(a *Answer) { a.Stickers["k"] = &StickerEdit{Text: strings.Repeat("я", 1001)} }, "sticker character"},
-		{"sticker text", func(a *Answer) { a.Stickers["k"] = &StickerEdit{Text: " "} }, "a sticker needs text"},
-		{"sticker key", func(a *Answer) { a.Stickers["one\ntwo"] = &StickerEdit{Text: "t"} }, "sticker keys"},
-		{"sticker on board", func(a *Answer) { a.Stickers["k"] = &StickerEdit{Text: "t", On: "244"} }, ""},
-		{"sticker on unknown", func(a *Answer) { a.Stickers["k"] = &StickerEdit{Text: "t", On: "42"} }, "neither a board"},
-		{"sticker on opened", func(a *Answer) {
-			a.Do = []Action{{Open: &OpenAction{Project: "devbox", Text: "go"}}}
-			a.Stickers["k"] = &StickerEdit{Text: "t", On: "devbox"}
+		{"user boundary", func(a *Answer) { a.Notes["user.pref"] = text(strings.Repeat("я", 1500)) }, ""},
+		{"user and rule combined", func(a *Answer) {
+			a.Notes["user.pref"] = text(strings.Repeat("я", 1000))
+			a.Notes["rule.git"] = text(strings.Repeat("я", 501))
+		}, "exceed 1500"},
+		{"open boundary", func(a *Answer) { a.Notes["open.todo"] = text(strings.Repeat("я", 800)) }, ""},
+		{"open over", func(a *Answer) { a.Notes["open.todo"] = text(strings.Repeat("я", 801)) }, "exceed 800"},
+		{"project boundary", func(a *Answer) { a.Notes["project.devbox"] = text(strings.Repeat("я", 300)) }, ""},
+		{"project over", func(a *Answer) { a.Notes["project.devbox"] = text(strings.Repeat("я", 301)) }, "exceed 300"},
+		{"session boundary", func(a *Answer) { a.Notes["session.244"] = text(strings.Repeat("я", 300)) }, ""},
+		{"session over", func(a *Answer) { a.Notes["session.244"] = text(strings.Repeat("я", 301)) }, "exceed 300"},
+		{"wait boundary", func(a *Answer) { a.Notes["wait.244"] = text(strings.Repeat("я", 300)) }, ""},
+		{"wait over", func(a *Answer) { a.Notes["wait.244"] = text(strings.Repeat("я", 301)) }, "exceed 300"},
+		{"empty note", func(a *Answer) { a.Notes["open.a"] = text(" ") }, "needs text"},
+		{"unknown scope", func(a *Answer) { a.Notes["diary.a"] = text("x") }, "valid target"},
+		{"empty suffix", func(a *Answer) { a.Notes["user."] = text("x") }, "valid target"},
+		{"suffix boundary", func(a *Answer) { a.Notes["user."+strings.Repeat("я", 64)] = text("x") }, ""},
+		{"suffix over", func(a *Answer) { a.Notes["user."+strings.Repeat("я", 65)] = text("x") }, "valid target"},
+		{"multiline key", func(a *Answer) { a.Notes["project.devbox\nx"] = text("x") }, "valid target"},
+		{"unknown project", func(a *Answer) { a.Notes["project.unknown"] = text("x") }, "neither in the catalog"},
+		{"unknown session", func(a *Answer) { a.Notes["session.42"] = text("x") }, "neither in the catalog"},
+		{"unknown wait", func(a *Answer) { a.Notes["wait.42"] = text("x") }, "neither in the catalog"},
+		{"orphan deletion", func(a *Answer) { a.Notes["wait.999"] = nil; a.Notes["project.gone"] = nil }, ""},
+		{"opened project", func(a *Answer) {
+			a.Do = []Action{{Open: &OpenAction{Project: "new", Text: "go", About: "why"}}}
+			a.Notes["wait.new"] = text("retell")
+			a.Notes["project.new"] = text("purpose")
 		}, ""},
-		{"sticker on unopened", func(a *Answer) { a.Stickers["k"] = &StickerEdit{Text: "t", On: "devbox"} }, "neither a board"},
-		{"diary chars", func(a *Answer) { a.Diary["k"] = text(strings.Repeat("я", 2000)) }, "diary character"},
-		{"diary boundary", func(a *Answer) { a.Diary["k"] = text(strings.Repeat("я", 1999)) }, ""},
-		{"diary key", func(a *Answer) { a.Diary[strings.Repeat("я", 65)] = text("v") }, "diary keys"},
-		{"diary text", func(a *Answer) { a.Diary["k"] = text("") }, "a diary entry needs text"},
-		{"diary entries", func(a *Answer) {
-			for i := range 31 {
-				a.Diary[string(rune('а'+i))] = text("v")
-			}
-		}, "too many diary"},
+		{"existing project open", func(a *Answer) {
+			a.Do = []Action{{Open: &OpenAction{Project: "devbox", Text: "go", About: "why"}}}
+			a.Notes["wait.devbox"] = text("retell")
+			a.Notes["project.devbox"] = text("purpose")
+		}, ""},
+		{"raw session forbidden", func(a *Answer) {
+			a.Do = []Action{{Open: &OpenAction{Project: "new", Text: "go", About: "why"}}}
+			a.Notes["wait.new"] = text("retell")
+			a.Notes["session.new"] = text("wrong")
+		}, "neither in the catalog"},
+		{"duplicate open", func(a *Answer) {
+			a.Do = []Action{{Open: &OpenAction{Project: "devbox", Text: "a", About: "a"}}, {Open: &OpenAction{Project: "devbox", Text: "b", About: "b"}}}
+			a.Notes["wait.devbox"] = text("retell")
+		}, "one open per project"},
+		{"open without wait", func(a *Answer) { a.Do = []Action{{Open: &OpenAction{Project: "devbox", Text: "go", About: "why"}}} }, "needs a wait note"},
+		{"open without about", func(a *Answer) {
+			a.Do = []Action{{Open: &OpenAction{Project: "devbox", Text: "go"}}}
+			a.Notes["wait.devbox"] = text("retell")
+		}, "open.about"},
+		{"about boundary", func(a *Answer) {
+			a.Do = []Action{{Open: &OpenAction{Project: "devbox", Text: "go", About: strings.Repeat("я", 200)}}}
+			a.Notes["wait.devbox"] = text("retell")
+		}, ""},
+		{"about over", func(a *Answer) {
+			a.Do = []Action{{Open: &OpenAction{Project: "devbox", Text: "go", About: strings.Repeat("я", 201)}}}
+			a.Notes["wait.devbox"] = text("retell")
+		}, "open.about"},
+		{"about multiline", func(a *Answer) {
+			a.Do = []Action{{Open: &OpenAction{Project: "devbox", Text: "go", About: "one\ntwo"}}}
+			a.Notes["wait.devbox"] = text("retell")
+		}, "open.about"},
 		{"focus chars", func(a *Answer) { a.Focus = text(strings.Repeat("я", 201)) }, "focus character"},
 		{"focus line", func(a *Answer) { a.Focus = text("one\ntwo") }, "one line"},
-		{"unknown session", func(a *Answer) { a.Do = []Action{{Send: &SendAction{Session: 42, Text: "go"}}} }, "not on the board"},
-		{"known session", func(a *Answer) { a.Do = []Action{{Send: &SendAction{Session: 244, Text: "go"}}} }, ""},
+		{"unknown action target", func(a *Answer) {
+			a.Do = []Action{{Send: &SendAction{Session: 42, Text: "go"}}}
+			a.Notes["wait.42"] = text("retell")
+		}, "session 42 is not in the catalog"},
+		{"send paired", func(a *Answer) {
+			a.Do = []Action{{Send: &SendAction{Session: 244, Text: "go"}}}
+			a.Notes["wait.244"] = text("retell")
+		}, ""},
+		{"send unpaired", func(a *Answer) { a.Do = []Action{{Send: &SendAction{Session: 244, Text: "go"}}} }, "needs a wait note"},
 		{"read zero", func(a *Answer) { a.Do = []Action{{Read: &ReadAction{Session: 244}}} }, "read.lines"},
 		{"read 61", func(a *Answer) { a.Do = []Action{{Read: &ReadAction{Session: 244, Lines: 61}}} }, "read.lines"},
 		{"read 60", func(a *Answer) { a.Do = []Action{{Read: &ReadAction{Session: 244, Lines: 60}}} }, ""},
@@ -138,14 +190,13 @@ func TestAssistantValidate(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			a := Answer{Stickers: map[string]*StickerEdit{}, Diary: map[string]*string{}}
+			a := Answer{Notes: map[string]*string{}}
 			tc.change(&a)
-			violations := Validate(a, Desk{}.Edited(a), DefaultRules(), []Card{{ID: 244}})
+			violations := Validate(a, Desk{}.Edited(a, time.Unix(1000, 0)), DefaultRules(), validationFixture())
 			if tc.bad == "" {
 				assert.Empty(t, violations)
 				return
 			}
-
 			assert.Contains(t, violationsText(violations), tc.bad)
 		})
 	}
@@ -153,24 +204,50 @@ func TestAssistantValidate(t *testing.T) {
 
 func TestAssistantValidateCountsTheEditedDesk(t *testing.T) {
 	t.Parallel()
-	full := Desk{Diary: map[string]string{}}
+	full := Desk{}
+	ctx := validationFixture()
 	for i := range 8 {
-		full.Stickers = append(full.Stickers, Sticker{Key: fmt.Sprint(i), Text: "t"})
+		full.Notes = append(full.Notes, Note{Key: fmt.Sprintf("wait.%d", i+1), Text: "t"})
+		ctx.Shown.Cards = append(ctx.Shown.Cards, Card{ID: int64(i + 1)})
 	}
+	add := Answer{Notes: map[string]*string{"wait.244": new("new")}}
+	assert.Contains(
+		t,
+		violationsText(Validate(add, full.Edited(add, time.Now()), DefaultRules(), ctx)),
+		"exceed 8 entries",
+	)
+	swap := Answer{Notes: map[string]*string{"wait.244": new("new"), "wait.1": nil}}
+	assert.Empty(t, Validate(swap, full.Edited(swap, time.Now()), DefaultRules(), ctx))
+	existing := Answer{Do: []Action{{Send: &SendAction{Session: 244, Text: "go"}}}}
+	assert.Empty(t, Validate(existing, Desk{Notes: []Note{{Key: "wait.244", Text: "pending"}}}, DefaultRules(), ctx))
+}
 
-	add := Answer{Stickers: map[string]*StickerEdit{"new": {Text: "t"}}}
-	assert.Contains(t, violationsText(Validate(add, full.Edited(add), DefaultRules(), nil)), "too many stickers")
-
-	swap := Answer{Stickers: map[string]*StickerEdit{"new": {Text: "t"}, "0": nil}}
-	assert.Empty(t, Validate(swap, full.Edited(swap), DefaultRules(), nil), "peeling one makes room")
+func TestAssistantPinnedOriginAndFullProjectKeys(t *testing.T) {
+	t.Parallel()
+	ctx := validationFixture()
+	ctx.OriginKind = "observe"
+	ctx.ProjectKeys["~/"+strings.Repeat("long/", 20)+"repo"] = true
+	a := Answer{Notes: map[string]*string{"user.pref": new("short")}}
+	assert.Contains(
+		t,
+		violationsText(Validate(a, Desk{}.Edited(a, time.Now()), DefaultRules(), ctx)),
+		"starts with the user's message",
+	)
+	a.Notes = map[string]*string{"user.pref": nil}
+	assert.Empty(t, Validate(a, Desk{}, DefaultRules(), ctx))
+	a.Notes = map[string]*string{"project.~ /wrong": new("x")}
+	assert.NotEmpty(t, Validate(a, Desk{}.Edited(a, time.Now()), DefaultRules(), ctx))
+	for key := range ctx.ProjectKeys {
+		a.Notes = map[string]*string{"project." + key: new("state")}
+		assert.Empty(t, Validate(a, Desk{}.Edited(a, time.Now()), DefaultRules(), ctx))
+	}
 }
 
 func violationsText(violations []Violation) string {
 	var parts []string
-	for _, violation := range violations {
-		parts = append(parts, string(violation))
+	for _, v := range violations {
+		parts = append(parts, string(v))
 	}
-
 	return strings.Join(parts, "; ")
 }
 

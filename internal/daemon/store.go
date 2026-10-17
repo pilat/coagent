@@ -18,6 +18,7 @@ type Store interface { //nolint:interfacebloat // Lifecycle commands share atomi
 	GetOrCreateProject(context.Context, string) (int64, error)
 	ListProjects(context.Context) ([]sessionstore.ProjectRow, error)
 	LatestModelOutput(context.Context, int64) (*sessionstore.OutputRecord, error)
+	SessionTreeCost(context.Context, int64) (float64, error)
 	LastUserInput(context.Context, int64) (string, error)
 	HasBackgroundWakeSource(context.Context, int64) (bool, error)
 	AcceptedUserMessageIDs(context.Context, int64) ([]int64, error)
@@ -37,6 +38,7 @@ type Store interface { //nolint:interfacebloat // Lifecycle commands share atomi
 	UpdateSessionModel(ctx context.Context, id int64, model, reasoningLevel string) error
 	GetSession(ctx context.Context, id int64) (*sessionstore.SessionRecord, error)
 	ListAllSessions(ctx context.Context) ([]*sessionstore.SessionRecord, error)
+	ListSessions(context.Context) ([]*sessionstore.SessionRecord, error)
 	ListTree(ctx context.Context, rootID int64) ([]*sessionstore.SessionRecord, error)
 	UpdateSessionStatus(ctx context.Context, id int64, status sessionstore.SessionStatus) error
 	Enqueue(context.Context, sessionstore.Input) (*sessionstore.Enqueued, error)

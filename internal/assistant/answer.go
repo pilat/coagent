@@ -1,11 +1,9 @@
 package assistant
 
 import (
-	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"strconv"
 	"strings"
 )
 
@@ -15,21 +13,13 @@ const (
 	observeKind = "observe"
 )
 
-// Answer holds one step's speech, actions and desk edits. In Stickers and Diary a
-// written key replaces, a null key removes, and an absent key stays as it is.
+// Answer holds one step's speech, actions and note edits; absent keys retain their value.
 type Answer struct {
-	Say      *string                 `json:"say"`
-	Do       []Action                `json:"do,omitempty"`
-	Focus    *string                 `json:"focus,omitempty"`
-	Stickers map[string]*StickerEdit `json:"stickers,omitempty"`
-	Diary    map[string]*string      `json:"diary,omitempty"`
-	Forget   [][]int64               `json:"forget,omitempty"`
-}
-
-// StickerEdit writes a sticker's text; an empty On keeps its current binding.
-type StickerEdit struct {
-	Text string
-	On   string
+	Say    *string            `json:"say"`
+	Do     []Action           `json:"do,omitempty"`
+	Focus  *string            `json:"focus,omitempty"`
+	Notes  map[string]*string `json:"notes,omitempty"`
+	Forget [][]int64          `json:"forget,omitempty"`
 }
 
 // Action is a union: exactly one operation may be present.
@@ -42,6 +32,7 @@ type Action struct {
 
 type OpenAction struct {
 	Project string `json:"project"`
+	About   string `json:"about"`
 	Text    string `json:"text"`
 }
 
@@ -57,48 +48,6 @@ type ReadAction struct {
 
 type StopAction struct {
 	Session int64 `json:"session"`
-}
-
-// UnmarshalJSON accepts a plain text or {"text", "on"}, where on is a session id or a project name.
-func (e *StickerEdit) UnmarshalJSON(data []byte) error {
-	if bytes.HasPrefix(bytes.TrimSpace(data), []byte(`"`)) {
-		if err := json.Unmarshal(data, &e.Text); err != nil {
-			return fmt.Errorf("decode sticker text: %w", err)
-		}
-
-		return nil
-	}
-
-	var raw struct {
-		Text string          `json:"text"`
-		On   json.RawMessage `json:"on"`
-	}
-
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.DisallowUnknownFields()
-
-	if err := decoder.Decode(&raw); err != nil {
-		return fmt.Errorf("decode sticker: %w", err)
-	}
-
-	e.Text = raw.Text
-
-	var id int64
-	if err := json.Unmarshal(raw.On, &id); err == nil {
-		e.On = strconv.FormatInt(id, 10)
-		return nil
-	}
-
-	var name string
-	if len(raw.On) > 0 && string(raw.On) != "null" {
-		if err := json.Unmarshal(raw.On, &name); err != nil {
-			return fmt.Errorf("sticker on must be a session id or a project name: %w", err)
-		}
-	}
-
-	e.On = strings.TrimPrefix(strings.TrimSpace(name), "@")
-
-	return nil
 }
 
 // Parse tolerates wrappers but rejects unknown contract fields.

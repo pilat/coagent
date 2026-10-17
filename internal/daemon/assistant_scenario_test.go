@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"testing"
@@ -76,7 +77,7 @@ func TestHarnessScenario_AssistantOpenRegisteredWorktree(t *testing.T) {
 	require.NoError(t, err)
 	a := &assistantSessions{daemon: h.mgr, root: root.ID, owner: scenarioManagerID}
 	h.startInboxWake()
-	card, err := a.Open(h.ctx, name, "inspect existing worktree")
+	card, err := a.Open(h.ctx, name, "inspect existing worktree", "inspect existing worktree")
 	require.NoError(t, err)
 	assert.Equal(t, name, card.Project)
 	work, err := h.store.GetSession(h.ctx, card.ID)
@@ -87,7 +88,7 @@ func TestHarnessScenario_AssistantOpenRegisteredWorktree(t *testing.T) {
 	})
 
 	for _, invalid := range []string{"unknown/feature", "../outside", "sys_coagent"} {
-		_, err := a.Open(h.ctx, invalid, "must not create")
+		_, err := a.Open(h.ctx, invalid, "must not create", "invalid project")
 		require.Error(t, err)
 	}
 }
@@ -172,7 +173,28 @@ func TestHarnessScenario_AssistantSupersededSend(t *testing.T) {
 }
 
 func assistantJSON(say, actions string) string {
-	return fmt.Sprintf(`{"say":%q,"do":[%s]}`, say, actions)
+	var do []assistant.Action
+	if err := json.Unmarshal([]byte("["+actions+"]"), &do); err != nil {
+		panic(err)
+	}
+	a := assistant.Answer{Say: &say, Do: do, Notes: map[string]*string{}}
+	for _, action := range do {
+		wait := "retell result"
+		if action.Open != nil {
+			if action.Open.About == "" {
+				action.Open.About = "work purpose"
+			}
+			a.Notes["wait."+action.Open.Project] = &wait
+		}
+		if action.Send != nil {
+			a.Notes[fmt.Sprintf("wait.%d", action.Send.Session)] = &wait
+		}
+	}
+	data, err := json.Marshal(a)
+	if err != nil {
+		panic(err)
+	}
+	return string(data)
 }
 
 func assistantSayCount(t *testing.T, h *harness, id int64, text string) int {

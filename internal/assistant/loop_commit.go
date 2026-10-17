@@ -15,8 +15,11 @@ const dialogTailLines = 6
 func (l *loop) commitStep(ctx context.Context, s step) error {
 	err := l.deps.Store.WithTx(ctx, func(tx *sql.Tx) error {
 		now := l.deps.Now()
+		if err := SaveNotesTx(ctx, tx, l.sessionID, s.answer.Notes, now); err != nil {
+			return err
+		}
+
 		if err := SaveDeskTx(ctx, tx, l.sessionID, Desk{
-			Diary: s.next.Diary, Stickers: s.next.Stickers,
 			Focus: s.next.Focus, LastTurnAt: now, UpdatedAt: now,
 		}); err != nil {
 			return err
@@ -73,7 +76,7 @@ func (l *loop) commitTape(ctx context.Context, tx *sql.Tx, s step) error {
 
 	for _, action := range s.answer.Do {
 		if action.Send != nil || action.Stop != nil {
-			lines = append(lines, actionLine(action, s.board))
+			lines = append(lines, actionLine(action, s.cards))
 		}
 	}
 

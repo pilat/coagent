@@ -3,7 +3,6 @@ package assistant
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -14,27 +13,27 @@ var _ Store = (*store)(nil)
 // Store reads the assistant's durable memory and outstanding sends.
 type Store interface {
 	LoadDesk(context.Context, int64) (Desk, error)
+	Notes(context.Context, int64) ([]Note, error)
+	WorkReferences(context.Context, int64) ([]WorkReference, error)
 	VisibleTape(context.Context, int64, int, int64) ([]Line, error)
 	RecentTape(context.Context, int64, int) ([]Line, error)
 	UnobservedSends(context.Context, int64) ([]Send, error)
 }
 
-// Desk is saved whole after each successful step has applied its edits.
+// Desk combines durable memory with the host's current tape position.
 type Desk struct {
-	Diary      map[string]string
-	Stickers   []Sticker
+	Notes      []Note
 	Focus      string
 	LastTurnAt time.Time
 	UpdatedAt  time.Time
 	TapeLastID int64
 }
 
-// Sticker is a keyed short-term note. On is the session id it waits on, or the
-// project name of an open until that open lands.
-type Sticker struct {
-	Key  string `json:"key"`
-	Text string `json:"text"`
-	On   string `json:"on,omitempty"`
+// Note binds its scope through its key; WrittenAt zero means its age is unknown.
+type Note struct {
+	Key       string
+	Text      string
+	WrittenAt int64
 }
 
 // Line retains its identity even after it is hidden from the desk.
@@ -73,20 +72,26 @@ func New(db *sql.DB) Store {
 	return &store{db: db}
 }
 
-// LoadDesk returns empty slots before the first successful step.
+// LoadDesk includes notes written before the root's first successful step.
 func (s *store) LoadDesk(ctx context.Context, sessionID int64) (Desk, error) {
-	desk := Desk{Diary: map[string]string{}, Stickers: []Sticker{}}
+	desk := Desk{}
+	var err error
+
+	desk.Notes, err = s.Notes(ctx, sessionID)
+	if err != nil {
+		return Desk{}, err
+	}
+
 	if err := s.db.QueryRowContext(ctx, `SELECT COALESCE(MAX(id), 0) FROM assistant_tape WHERE session_id = ?`,
 		sessionID).Scan(&desk.TapeLastID); err != nil {
 		return Desk{}, fmt.Errorf("load assistant tape position: %w", err)
 	}
 
-	var diary, stickers string
 	var last sql.NullTime
 
-	err := s.db.QueryRowContext(ctx, `SELECT diary, stickers, focus, last_turn_at, updated_at
+	err = s.db.QueryRowContext(ctx, `SELECT focus, last_turn_at, updated_at
 		FROM assistant_desk WHERE session_id = ?`, sessionID).
-		Scan(&diary, &stickers, &desk.Focus, &last, &desk.UpdatedAt)
+		Scan(&desk.Focus, &last, &desk.UpdatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return desk, nil
 	}
@@ -95,44 +100,18 @@ func (s *store) LoadDesk(ctx context.Context, sessionID int64) (Desk, error) {
 		return Desk{}, fmt.Errorf("load assistant desk: %w", err)
 	}
 
-	if err := json.Unmarshal([]byte(diary), &desk.Diary); err != nil {
-		return Desk{}, fmt.Errorf("decode assistant diary: %w", err)
-	}
-
-	if err := json.Unmarshal([]byte(stickers), &desk.Stickers); err != nil {
-		return Desk{}, fmt.Errorf("decode assistant stickers: %w", err)
-	}
-
 	desk.LastTurnAt = last.Time
 
 	return desk, nil
 }
 
-// SaveDeskTx commits slots alongside the input receipt and user-visible reply.
+// SaveDeskTx commits focus and turn timestamps alongside the input receipt and reply.
 func SaveDeskTx(ctx context.Context, tx *sql.Tx, sessionID int64, desk Desk) error {
-	if desk.Diary == nil {
-		desk.Diary = map[string]string{}
-	}
-
-	if desk.Stickers == nil {
-		desk.Stickers = []Sticker{}
-	}
-
-	diary, err := json.Marshal(desk.Diary)
-	if err != nil {
-		return fmt.Errorf("encode assistant diary: %w", err)
-	}
-
-	stickers, err := json.Marshal(desk.Stickers)
-	if err != nil {
-		return fmt.Errorf("encode assistant stickers: %w", err)
-	}
-
-	_, err = tx.ExecContext(ctx, `INSERT INTO assistant_desk
-		(session_id, diary, stickers, focus, last_turn_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)
-		ON CONFLICT(session_id) DO UPDATE SET diary = excluded.diary, stickers = excluded.stickers,
+	_, err := tx.ExecContext(ctx, `INSERT INTO assistant_desk
+		(session_id, focus, last_turn_at, updated_at) VALUES (?, ?, ?, ?)
+		ON CONFLICT(session_id) DO UPDATE SET
 		focus = excluded.focus, last_turn_at = excluded.last_turn_at, updated_at = excluded.updated_at`,
-		sessionID, string(diary), string(stickers), desk.Focus, nullableTime(desk.LastTurnAt), desk.UpdatedAt)
+		sessionID, desk.Focus, nullableTime(desk.LastTurnAt), desk.UpdatedAt)
 	if err != nil {
 		return fmt.Errorf("save assistant desk: %w", err)
 	}

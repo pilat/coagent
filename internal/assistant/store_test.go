@@ -20,13 +20,17 @@ func TestAssistantStoreRoundTrip(t *testing.T) {
 	db, sessions, memory, root := assistantFixture(t)
 	desk, err := memory.LoadDesk(ctx, root)
 	require.NoError(t, err)
-	assert.Empty(t, desk.Diary)
-	assert.Empty(t, desk.Stickers)
+	assert.Empty(t, desk.Notes)
 	assert.True(t, desk.LastTurnAt.IsZero())
 	at := time.Now().UTC()
 	want := Desk{
-		Diary: map[string]string{"user": "Русский"}, Stickers: []Sticker{{Key: "wait.ci", Text: "waiting", On: "244"}},
-		Focus: "migration", LastTurnAt: at, UpdatedAt: at,
+		Notes: []Note{
+			{Key: "user.lang", Text: "Русский", WrittenAt: at.Unix()},
+			{Key: "wait.244", Text: "waiting", WrittenAt: at.Unix()},
+		},
+		Focus:      "migration",
+		LastTurnAt: at,
+		UpdatedAt:  at,
 	}
 	input, err := sessions.Enqueue(
 		ctx,
@@ -35,6 +39,16 @@ func TestAssistantStoreRoundTrip(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, sessions.WithTx(ctx, func(tx *sql.Tx) error {
 		require.NoError(t, SaveDeskTx(ctx, tx, root, want))
+		require.NoError(
+			t,
+			SaveNotesTx(
+				ctx,
+				tx,
+				root,
+				map[string]*string{"user.lang": &want.Notes[0].Text, "wait.244": &want.Notes[1].Text},
+				at,
+			),
+		)
 		require.NoError(
 			t,
 			RecordSendTx(
