@@ -47,6 +47,16 @@ under it, the sessions the assistant opened or sent to, with their
 notes and the cost of continuing. Work either continues a session or starts a fresh
 one; nothing is cleared.
 
+Amended 2026-10-17 (plan `plan-2026-10-17-assistant-structured-output`): when the
+catalog says the assistant's model supports structured outputs and the model is served
+through OpenRouter, each step sends the answer contract as a strict JSON schema. The
+schema only enforces shape: every model gets the same contract, prompt and parser, and
+the referee still checks meaning. Strict schemas forbid arbitrary keys, so `notes` is a
+`[{key, text}]` list in the model's JSON and a map inside the host. A note rewritten
+with its current text is not an edit and keeps its age. `require_parameters` is not
+sent: a provider that ignores the schema still answers by the prompt, which is no worse
+than before.
+
 The assistant is the only voice in its dialog. Work sessions are ordinary roots; their
 answers to inputs the assistant sent come back to the assistant as events and are
 retold by it. The assistant's durable identity is one root session row of agent type
@@ -66,8 +76,9 @@ are reused, but the session runtime never runs it.
   removes it.
 - Session-side mechanisms that key on root rows must exclude this type explicitly
   (progress reconciler, kill/clear, stop); a new agent type is a new case for them.
-- Structured output is not enforced by the drivers; the referee is the enforcement,
-  and a model that cannot keep to the JSON is unusable as the assistant.
+- Structured output is enforced only for capable models on OpenRouter; for every other
+  model the referee is the enforcement, and a model that cannot keep to the JSON is
+  unusable as the assistant.
 
 ## Alternatives Considered
 
@@ -101,6 +112,10 @@ are reused, but the session runtime never runs it.
   and the facts it would extract already arrive in the answer event.
 - **Leaving project state to the sessions' own project memory.** Rejected by the
   owner: the assistant cannot coordinate projects it does not understand.
+- **Note edits as actions inside `do`.** Rejected: they would compete with the
+  five-action cap and split desk edits from `focus` and `forget`.
+- **`json_object` mode instead of a schema.** Rejected: it guarantees syntax, not
+  shape. The live `forget` answer sent as a bare number would still have failed.
 - **Work sessions answering the user directly in the dialog** (ADR-0070 of the
   parked POC). Rejected: it is the root of the two-voices problem; it saved one model
   call per answer and cost coherence.
