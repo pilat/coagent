@@ -100,8 +100,12 @@ func TestAssistantLoopTurns(t *testing.T) {
 
 func TestAssistantLoopReadAndSlots(t *testing.T) {
 	t.Parallel()
-	f := newLoopFixture(t, `{"say":"checking","focus":"saved focus","notes":{"wait.244":"jobs","user.lang":"fact"},
-		"do":[{"read":{"session":244,"lines":3}},{"read":{"session":244,"lines":1}}]}`, sayAnswer("read result"))
+	f := newLoopFixture(
+		t,
+		`{"say":"checking","focus":"saved focus","notes":[{"key":"wait.244","text":"jobs"},{"key":"user.lang","text":"fact"}],
+		"do":[{"read":{"session":244,"lines":3}},{"read":{"session":244,"lines":1}}]}`,
+		sayAnswer("read result"),
+	)
 	f.enqueue("read it")
 	require.NoError(t, Run(t.Context(), f.deps, f.root))
 	require.Len(t, f.client.desks, 2)
@@ -167,8 +171,8 @@ func TestAssistantLoopBindsNotesToOpenedSession(t *testing.T) {
 	t.Parallel()
 	f := newLoopFixture(
 		t,
-		`{"say":null,"do":[{"open":{"project":"devbox","text":"new","about":"why it exists"}}],"notes":{"wait.devbox":"tell when done","project.devbox":"project state"}}`,
-		`{"say":"ok","notes":{"wait.245":"tell when done, briefly"}}`,
+		`{"say":null,"do":[{"open":{"project":"devbox","text":"new","about":"why it exists"}}],"notes":[{"key":"wait.devbox","text":"tell when done"},{"key":"project.devbox","text":"project state"}]}`,
+		`{"say":"ok","notes":[{"key":"wait.245","text":"tell when done, briefly"}]}`,
 	)
 	f.enqueue("start")
 	f.enqueue("next")
@@ -186,7 +190,7 @@ func TestAssistantLoopBindsNotesToOpenedSession(t *testing.T) {
 
 func TestAssistantLoopCommitRollback(t *testing.T) {
 	t.Parallel()
-	f := newLoopFixture(t, `{"say":"lost","notes":{"open.pending":"lost"}}`)
+	f := newLoopFixture(t, `{"say":"lost","notes":[{"key":"open.pending","text":"lost"}]}`)
 	f.enqueue("hello")
 	f.deps.SayTx = func(context.Context, *sql.Tx, string) error { return errors.New("outbox unavailable") }
 	require.ErrorContains(t, Run(t.Context(), f.deps, f.root), "outbox unavailable")
@@ -292,7 +296,7 @@ func (c *loopClient) Chat(
 	system string,
 	messages []llmwire.Message,
 	tools []llmwire.ToolSchema,
-	_ ...llmwire.ChatOption,
+	opts ...llmwire.ChatOption,
 ) (*llmwire.Response, error) {
 	c.calls++
 	c.calledAt = append(c.calledAt, time.Now())
@@ -300,6 +304,10 @@ func (c *loopClient) Chat(
 	require.Len(c.t, messages, 1)
 	assert.Equal(c.t, "user", messages[0].Role)
 	assert.Empty(c.t, tools)
+	options := llmwire.ApplyChatOptions(opts)
+	require.NotNil(c.t, options.ResponseSchema)
+	assert.Equal(c.t, "assistant_answer", options.ResponseSchema.Name)
+	assert.JSONEq(c.t, AnswerSchema, string(options.ResponseSchema.Schema))
 	c.desks = append(c.desks, messages[0].Content)
 	if c.err != nil {
 		return nil, c.err

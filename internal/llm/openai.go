@@ -44,7 +44,8 @@ type openAICompatibleClient struct {
 	sessionID string
 	// nativeSearch enables the OpenRouter server-tool web-search passthrough.
 	// Injection happens per request and only alongside client-side tools.
-	nativeSearch bool
+	nativeSearch      bool
+	structuredOutputs bool
 }
 
 type openAICompatibleParams struct {
@@ -99,11 +100,12 @@ func newOpenAICompatibleClient(params openAICompatibleParams) (Client, error) {
 	client.replayReasoning = params.IsOpenRouter
 
 	return &openAICompatibleClient{
-		openaiClient: client,
-		isDeepSeek:   isDeepSeek,
-		isAnthropic:  isAnthropic,
-		isOpenRouter: params.IsOpenRouter,
-		nativeSearch: params.IsOpenRouter && params.NativeSearch,
+		openaiClient:      client,
+		isDeepSeek:        isDeepSeek,
+		isAnthropic:       isAnthropic,
+		isOpenRouter:      params.IsOpenRouter,
+		nativeSearch:      params.IsOpenRouter && params.NativeSearch,
+		structuredOutputs: params.IsOpenRouter && params.Model.StructuredOutputs,
 	}, nil
 }
 
@@ -138,7 +140,17 @@ func (c *openAICompatibleClient) Chat(
 
 	// OpenRouter normalizes max_tokens for all providers (including OpenAI).
 	// Do NOT send max_completion_tokens — it's not in OpenRouter's supported_parameters.
-	reqBody.MaxTokens = llmwire.ApplyChatOptions(opts).EffectiveMaxTokens(c.maxTokens)
+	options := llmwire.ApplyChatOptions(opts)
+	reqBody.MaxTokens = options.EffectiveMaxTokens(c.maxTokens)
+
+	if c.structuredOutputs && options.ResponseSchema != nil {
+		reqBody.ResponseFormat = &oaiResponseFormat{
+			Type: "json_schema",
+			JSONSchema: oaiJSONSchema{
+				Name: options.ResponseSchema.Name, Strict: true, Schema: options.ResponseSchema.Schema,
+			},
+		}
+	}
 
 	// DeepSeek breaks function calling when a system prompt is used.
 	// Workaround: inject system prompt as a user message prefix.
