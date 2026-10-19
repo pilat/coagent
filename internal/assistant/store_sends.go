@@ -63,13 +63,12 @@ func MarkObservedTx(ctx context.Context, tx *sql.Tx, inputID int64, at time.Time
 	return changed > 0, nil
 }
 
-// RecordTurnTx keeps rejected responses as well as committed steps for inspection.
-func RecordTurnTx(ctx context.Context, tx *sql.Tx, turn Turn) error {
-	_, err := tx.ExecContext(ctx, `INSERT INTO assistant_turns
-		(session_id, input_id, step, desk, response, outcome, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		turn.SessionID, turn.InputID, turn.Step, turn.Desk, turn.Response, turn.Outcome, turn.CreatedAt)
+// SaveAboutTx commits why a work session exists together with its first instruction.
+func SaveAboutTx(ctx context.Context, tx *sql.Tx, sessionID int64, about string, at time.Time) error {
+	_, err := tx.ExecContext(ctx, `INSERT INTO assistant_work (session_id, about, created_at) VALUES (?, ?, ?)
+		ON CONFLICT(session_id) DO UPDATE SET about = excluded.about`, sessionID, about, at)
 	if err != nil {
-		return fmt.Errorf("record assistant turn: %w", err)
+		return fmt.Errorf("save assistant work about: %w", err)
 	}
 
 	return nil

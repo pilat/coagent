@@ -31,7 +31,7 @@ func TestMigrate_00047_AssistantDesk(t *testing.T) {
 				require.NoError(t, err)
 			}
 
-			_, err = provider.Up(ctx)
+			_, err = provider.UpTo(ctx, 47)
 			require.NoError(t, err)
 
 			for _, table := range []string{"assistant_desk", "assistant_tape", "assistant_sends", "assistant_turns"} {

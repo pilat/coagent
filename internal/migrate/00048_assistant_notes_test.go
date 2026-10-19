@@ -31,7 +31,7 @@ func TestMigrate_00048_AssistantNotes(t *testing.T) {
 					'[]','keep focus','2026-10-17 02:10:40.186539774 +0000 UTC')`)
 				require.NoError(t, err)
 			}
-			_, err = provider.Up(ctx)
+			_, err = provider.UpTo(ctx, 48)
 			require.NoError(t, err)
 			assert.True(t, columnExists(t, db, "assistant_notes", "written_at"))
 			if !previous {
@@ -87,7 +87,7 @@ func TestMigrate_00048_PinnedStickersAndGoogleDocs(t *testing.T) {
 		'[{"key":"a","text":"pending","on":"758"},{"key":"duplicate","text":"second","on":"758"},{"key":"bad","text":"drop","on":"758x"},{"key":"empty","text":"drop","on":""},{"key":"raw","text":"drop","on":"devbox"}]',
 		'2026-10-17 02:10:40.186539774 +0000 UTC')`)
 	require.NoError(t, err)
-	_, err = provider.Up(ctx)
+	_, err = provider.UpTo(ctx, 48)
 	require.NoError(t, err)
 	var count int
 	var text string

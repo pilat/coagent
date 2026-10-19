@@ -131,62 +131,67 @@ _Avoid_: setup agent, onboarding skill (removed).
 ## Agent loop & context management
 
 **assistant**:
-Coagent's single voice in the Assistant topic: a separate bounded desk loop with
-a durable root row that delegates work to ordinary sessions and retells results.
+Coagent's single voice in the Assistant topic: a separate tool loop over its own
+durable root row that delegates work to ordinary sessions and retells results.
 _Avoid_: coordinator, dispatcher, work-item manager.
 
-**desk**:
-The assistant's entire model context: scoped notes, focus, a read-only catalog,
-a bounded visible tape window and one event, rebuilt by the host for every step.
-_Avoid_: transcript, context compaction.
+**turn** (assistant):
+One inbox input handled as one model conversation that starts from one rendered
+desk: main phase, optional consolidation, guard, then a single commit. Nothing of
+the conversation survives the turn except what memory and focus record.
+_Avoid_: step (the removed JSON contract re-rendered the desk per step).
 
-**note** (assistant):
-One keyed, timestamped piece of assistant memory. Its prefix binds its scope:
-`user.` and `rule.` describe the user and standing rules; `open.` holds unresolved
-things without work in flight; `project.<key>` records project state;
-`session.<id>` records why a session exists and its outcome; `wait.<id>` records
-what to tell the user when work answers. Edits replace or delete individual keys;
-absent keys retain their text and age. Notes occupy their scope's place on the desk.
-_Avoid_: notebook, diary, stickers, dispatch records, project memory (that is the
-separate curated-memory store).
+**desk**:
+The first message of a turn: live memory, the newest focus items, the newest
+assistant-touched sessions, the last conversation lines and the event. Every list
+states how much it shows and which tool shows the rest.
+_Avoid_: transcript, context compaction, catalog.
+
+**memory** (assistant):
+Small assistant notes, permanent or temporary with an `until` date, each at most
+300 characters and together at most 4000 live characters. Expired notes leave the
+desk but stay searchable; a deleted note leaves search too.
+_Avoid_: keyed or scoped notes (the removed `user.`/`wait.` scheme), diary, stickers,
+project memory (that is the separate curated-memory store).
 
 **focus**:
-The assistant's size-limited single line describing the current subject.
+The assistant's live list of what is being done now: items of at most 200
+characters, each with the session ids or handles it waits on; at most 30 live.
 
-**catalog** (assistant):
-The host-rendered known projects and this manager's assistant-touched work roots,
-with scoped notes, places, ages, context size and accumulated cost. It excludes
-hidden projects, missing folders and host worktrees. One shared budget projection
-bounds session targets while retaining unread, event-related and pending work;
-the host retains the full project key set. Distinct from the model catalog below.
-_Avoid_: board, recent-session list.
+**handle**:
+The stand-in `new-<input>-<n>` an `open` returns for a session that exists only
+after the turn commits; the host replaces it with the real id in that turn's
+focus refs and sends.
+
+**look tool** / **do tool**:
+A look tool (`search`, `around`, `read`, `sessions`, `projects`, `focus_list`)
+returns real data at once. A do tool (open, send, stop and memory or focus edits)
+is validated at once but only recorded, and applies after the turn commits.
 
 **tape**:
-The assistant's host-kept, numbered, timestamped history of events, speech and
-moves. Hiding ranges changes visibility, never the stored lines or their IDs; the
-last six user and say lines, the running turn's own lines and lines the model
-has not seen stay visible regardless of a hide.
+The assistant's host-kept, numbered, timestamped history of events, speech, reads
+and moves. User and say lines are searchable; the desk shows the last ten of them.
 _Avoid_: transcript, ledger.
 
 **event** (assistant):
-The current user input, observed work answer or failure, action failure, or read
-result handed to the desk loop. Inbox-backed events are drained in FIFO order.
+The current user input, observed work answer or failure, or action failure that
+starts a turn. Inbox-backed events are drained in FIFO order.
 _Avoid_: dispatch, work item.
 
-**referee**:
-The host validation of the assistant's JSON answer, memory limits and action
-authority, with bounded re-asks and a visible warning on exhausted failures.
+**guard** (assistant):
+The host's bookkeeping check after the reply is fixed: opens and sends need focus,
+answered or stopped work needs its focus updated, a search needs a written result,
+memory must fit. It may ask for fixes twice and never fails a turn.
+_Avoid_: referee (the removed JSON validator).
 
 **move**:
-An assistant-requested open, send or stop action applied through the daemon's
-ordinary session lifecycle after committing the desk step.
+An assistant-requested open, send or stop applied through the daemon's ordinary
+session lifecycle after the turn commits.
 _Avoid_: dispatch intent.
 
 **observation** (assistant):
-A host-supplied work result or requested session tail. A work result belongs to
-a recorded assistant send and carries every final of its answer window; a tail
-carries user requests and finals, newest first. Direct user exchanges appear only
-in the catalog.
+A host-supplied work result: it belongs to a recorded assistant send and carries
+every final of its answer window.
 
 **context artifact**:
 One of the three instruction files a session loads at open — **global**, **project**, or **local** — each resolved by a first-match-wins search over an ordered candidate list, then merged into the opening context as a `[role] <path>` labeled section with the home directory abbreviated to `~`. The section's path is the winning candidate, not the resolved symlink target.

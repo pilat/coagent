@@ -11,7 +11,7 @@ import (
 	"github.com/pilat/coagent/internal/tool"
 )
 
-// AssistantDesk renders persisted slots without running a model or marking cards read.
+// AssistantDesk renders the desk the next turn would see, without running a model.
 func (s *svc) AssistantDesk(ctx context.Context, id int64) (string, error) {
 	record, err := s.store.GetSession(ctx, id)
 	if err != nil {
@@ -22,20 +22,7 @@ func (s *svc) AssistantDesk(ctx context.Context, id int64) (string, error) {
 		return "", errors.New("session has no assistant desk")
 	}
 
-	desk, err := s.assistantStore.LoadDesk(ctx, id)
-	if err != nil {
-		return "", fmt.Errorf("load desk: %w", err)
-	}
-
-	owner, _ := record.Attributes[controllerapi.SessionAttributeManagerID].(string)
-	sessions := &assistantSessions{daemon: s, root: id, owner: owner}
-
-	catalog, err := sessions.Catalog(ctx, desk.LastTurnAt)
-	if err != nil {
-		return "", err
-	}
-
-	tape, err := s.assistantStore.VisibleTape(ctx, id, 40, 0)
+	tape, err := s.assistantStore.RecentTape(ctx, id, 1)
 	if err != nil {
 		return "", fmt.Errorf("load desk tape: %w", err)
 	}
@@ -44,8 +31,23 @@ func (s *svc) AssistantDesk(ctx context.Context, id int64) (string, error) {
 
 	if len(tape) > 0 {
 		last := tape[len(tape)-1]
-		event = assistant.Event{LineID: last.ID, At: last.At, Kind: last.Kind, Text: last.Text}
+		event = assistant.Event{LineID: last.ID, Kind: last.Kind, Text: last.Text}
 	}
 
-	return assistant.Render(desk, catalog, tape, event, time.Now().UTC()), nil
+	owner, _ := record.Attributes[controllerapi.SessionAttributeManagerID].(string)
+	now := time.Now().UTC()
+
+	desk, err := s.assistantStore.LoadDesk(ctx, id, event.LineID, now)
+	if err != nil {
+		return "", fmt.Errorf("load desk: %w", err)
+	}
+
+	sessions := &assistantSessions{daemon: s, root: id, owner: owner}
+
+	recent, total, err := sessions.Recent(ctx, assistant.RecentSessions)
+	if err != nil {
+		return "", err
+	}
+
+	return assistant.Render(assistant.View{Desk: desk, Recent: recent, Total: total, Event: event}, now), nil
 }

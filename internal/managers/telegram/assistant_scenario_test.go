@@ -184,7 +184,7 @@ func (c *assistantTelegramClient) Chat(
 		return nil, ctx.Err()
 	case <-c.release:
 		return &llmwire.Response{
-			Text:       `{"say":"Plain assistant reply","focus":"hello"}`,
+			Text:       "Plain assistant reply",
 			FinishType: llmwire.FinishStop,
 		}, nil
 	}
@@ -199,7 +199,7 @@ func (c silentAssistantClient) Chat(
 ) (*llmwire.Response, error) {
 	if strings.HasPrefix(system, registry.AssistantPrompt) {
 		return &llmwire.Response{
-			Text: `{"say":""}`, FinishType: llmwire.FinishStop,
+			Text: "", FinishType: llmwire.FinishStop,
 		}, nil
 	}
 

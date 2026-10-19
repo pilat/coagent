@@ -66,7 +66,7 @@ func TestHarnessScenario_AssistantUserCancellationWithoutRunner(t *testing.T) {
 				t.Cleanup(func() { closeOnce(ready) })
 				h := newHarness(t, harnessOptions{respond: func(system string, _ []llmwire.Message) *llmwire.Response {
 					if strings.HasPrefix(system, registry.AssistantPrompt) {
-						return textReply(assistantJSON("observed completion", ""))
+						return textReply("observed completion")
 					}
 
 					<-ready

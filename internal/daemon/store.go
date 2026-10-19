@@ -17,9 +17,6 @@ type Store interface { //nolint:interfacebloat // Lifecycle commands share atomi
 	GetOrCreateHiddenProject(context.Context, string) (int64, error)
 	GetOrCreateProject(context.Context, string) (int64, error)
 	ListProjects(context.Context) ([]sessionstore.ProjectRow, error)
-	LatestModelOutput(context.Context, int64) (*sessionstore.OutputRecord, error)
-	SessionTreeCost(context.Context, int64) (float64, error)
-	LastUserInput(context.Context, int64) (string, error)
 	HasBackgroundWakeSource(context.Context, int64) (bool, error)
 	AcceptedUserMessageIDs(context.Context, int64) ([]int64, error)
 	Commit(context.Context, sessionstore.Commit) (*sessionstore.CommitResult, error)
@@ -27,6 +24,7 @@ type Store interface { //nolint:interfacebloat // Lifecycle commands share atomi
 	PendingActivation(context.Context, int64) (*sessionstore.ToolActivation, error)
 	ObserveBudget(context.Context, int64, time.Time, string) (*budget.Record, bool, error)
 	LoadActiveMessages(context.Context, int64) ([]*transcript.Message, error)
+	LoadReadableMessages(context.Context, int64) ([]*transcript.Message, error)
 	CreateSession(
 		ctx context.Context,
 		projectID int64,
