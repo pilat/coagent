@@ -3,8 +3,7 @@ package daemon
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
-	"fmt"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -19,18 +18,40 @@ import (
 	"github.com/pilat/coagent/internal/tool"
 )
 
+var (
+	assistantHandle   = regexp.MustCompile(`new-\d+-\d+`)
+	assistantFocusRef = regexp.MustCompile(`\[f\d+\]`)
+)
+
 func TestHarnessScenario_AssistantOpenAndRetell(t *testing.T) {
 	h := newHarness(t, harnessOptions{respond: func(system string, messages []llmwire.Message) *llmwire.Response {
 		if !strings.HasPrefix(system, registry.AssistantPrompt) {
 			return textReply("work answer")
 		}
 
+		last := messages[len(messages)-1]
 		_, event, _ := strings.Cut(messages[0].Content, "## event")
-		if strings.Contains(event, "answered:") {
-			return textReply(assistantJSON("retold answer", ""))
-		}
 
-		return textReply(assistantJSON("checking", `{"open":{"project":"deskwork","text":"check this"}}`))
+		switch {
+		case len(messages) == 1 && strings.Contains(event, "answered:"):
+			focus := assistantFocusRef.FindString(messages[0].Content)
+			return assistantCalls("retold answer", llmwire.ToolCall{
+				ID: "done", Name: "done_focus", Arguments: []byte(`{"id":"` + strings.Trim(focus, "[]") + `"}`),
+			})
+		case len(messages) == 1:
+			return assistantCalls("", llmwire.ToolCall{
+				ID:        "open",
+				Name:      "open",
+				Arguments: []byte(`{"project":"deskwork","about":"check","text":"check this"}`),
+			})
+		case last.ToolName == "open":
+			handle := assistantHandle.FindString(last.Content)
+			return assistantCalls("checking", llmwire.ToolCall{
+				ID: "focus", Name: "focus", Arguments: []byte(`{"text":"Check","sessions":["` + handle + `"]}`),
+			})
+		default:
+			return textReply("")
+		}
 	}})
 	root, err := h.mgr.EnsureAssistantRoot(h.ctx, scenarioManagerID)
 	require.NoError(t, err)
@@ -65,7 +86,7 @@ func TestHarnessScenario_AssistantOpenAndRetell(t *testing.T) {
 func TestHarnessScenario_AssistantOpenRegisteredWorktree(t *testing.T) {
 	h := newHarness(t, harnessOptions{respond: func(system string, _ []llmwire.Message) *llmwire.Response {
 		if strings.HasPrefix(system, registry.AssistantPrompt) {
-			return textReply(assistantJSON("worktree result", ""))
+			return textReply("worktree result")
 		}
 
 		return textReply("worktree answer")
@@ -96,7 +117,7 @@ func TestHarnessScenario_AssistantOpenRegisteredWorktree(t *testing.T) {
 func TestHarnessScenario_AssistantSendResumesStoppedAndRefusesKill(t *testing.T) {
 	h := newHarness(t, harnessOptions{respond: func(system string, _ []llmwire.Message) *llmwire.Response {
 		if strings.HasPrefix(system, registry.AssistantPrompt) {
-			return textReply(assistantJSON("done", ""))
+			return textReply("done")
 		}
 
 		return textReply("resumed work")
@@ -131,7 +152,7 @@ func TestHarnessScenario_AssistantSendResumesStoppedAndRefusesKill(t *testing.T)
 func TestHarnessScenario_AssistantSupersededSend(t *testing.T) {
 	h := newHarness(t, harnessOptions{respond: func(system string, _ []llmwire.Message) *llmwire.Response {
 		if strings.HasPrefix(system, registry.AssistantPrompt) {
-			return textReply(assistantJSON("combined", ""))
+			return textReply("combined")
 		}
 
 		return textReply("one work answer")
@@ -172,29 +193,8 @@ func TestHarnessScenario_AssistantSupersededSend(t *testing.T) {
 	assert.Equal(t, 2, accepted)
 }
 
-func assistantJSON(say, actions string) string {
-	var do []assistant.Action
-	if err := json.Unmarshal([]byte("["+actions+"]"), &do); err != nil {
-		panic(err)
-	}
-	a := assistant.Answer{Say: &say, Do: do, Notes: map[string]*string{}}
-	for _, action := range do {
-		wait := "retell result"
-		if action.Open != nil {
-			if action.Open.About == "" {
-				action.Open.About = "work purpose"
-			}
-			a.Notes["wait."+action.Open.Project] = &wait
-		}
-		if action.Send != nil {
-			a.Notes[fmt.Sprintf("wait.%d", action.Send.Session)] = &wait
-		}
-	}
-	data, err := json.Marshal(a)
-	if err != nil {
-		panic(err)
-	}
-	return string(data)
+func assistantCalls(text string, calls ...llmwire.ToolCall) *llmwire.Response {
+	return &llmwire.Response{Text: text, ToolCalls: calls}
 }
 
 func assistantSayCount(t *testing.T, h *harness, id int64, text string) int {

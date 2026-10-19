@@ -3,16 +3,24 @@ package assistant
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"time"
 
 	"github.com/pilat/coagent/internal/llm"
 	"github.com/pilat/coagent/internal/sessionstore"
 )
 
-// Sessions is the assistant's manager-scoped authority over ordinary work roots.
+// Sessions is the assistant's manager-scoped authority over ordinary work roots;
+// every session-addressed call applies the same predicate as listings and search.
 type Sessions interface {
-	Catalog(context.Context, time.Time, ...int64) ([]Project, error)
+	Recent(context.Context, int) ([]Card, int, error)
+	List(context.Context, int, int, string) ([]Card, int, error)
+	Projects(context.Context) ([]Project, error)
+	Search(context.Context, string) ([]Hit, error)
+	Around(context.Context, string, int) (string, error)
 	Read(context.Context, int64, int) (string, error)
+	Target(context.Context, int64) (Card, error)
+	CheckProject(context.Context, string) error
 	Open(context.Context, string, string, string) (Card, error)
 	Send(context.Context, int64, string) error
 	Stop(context.Context, int64) error
@@ -35,19 +43,24 @@ type loop struct {
 	sessionID int64
 }
 
-type step struct {
-	inputID    int64
-	number     int
-	origin     int64
-	originKind string
-	event      Event
-	desk       Desk
-	next       Desk
-	cards      []Card
-	catalog    []Project
-	shown      ShownCatalog
-	tape       []Line
-	render     string
-	raw        string
-	answer     Answer
+// loadView gathers the desk the next turn would see for this event.
+func loadView(
+	ctx context.Context,
+	memory Store,
+	sessions Sessions,
+	root int64,
+	event Event,
+	now time.Time,
+) (View, error) {
+	desk, err := memory.LoadDesk(ctx, root, event.LineID, now)
+	if err != nil {
+		return View{}, fmt.Errorf("read desk: %w", err)
+	}
+
+	recent, total, err := sessions.Recent(ctx, RecentSessions)
+	if err != nil {
+		return View{}, fmt.Errorf("read recent sessions: %w", err)
+	}
+
+	return View{Desk: desk, Recent: recent, Total: total, Event: event}, nil
 }

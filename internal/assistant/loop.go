@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/pilat/coagent/internal/llmwire"
 	"github.com/pilat/coagent/internal/sessionstore"
 )
 
@@ -65,11 +66,43 @@ func (l *loop) turn(ctx context.Context, input *sessionstore.InboxInput) error {
 		return nil
 	}
 
-	event := Event{At: l.deps.Now(), Kind: observeKind, Text: input.RawContent}
-	if id, ok := attributeID(input.Attributes["session_id"]); ok {
-		event.Sessions = []int64{id}
+	event, err := l.event(ctx, input)
+	if err != nil {
+		return err
 	}
 
+	t, err := l.begin(ctx, input, event)
+	if err != nil {
+		return err
+	}
+
+	if err := l.mainPhase(ctx, t); err != nil {
+		if ctx.Err() != nil {
+			return fmt.Errorf("assistant model interrupted: %w", ctx.Err())
+		}
+
+		return l.fail(ctx, t, err.Error())
+	}
+
+	reply, err := l.consolidate(ctx, t)
+	if err != nil {
+		return err
+	}
+
+	outcome, err := l.guard(ctx, t)
+	if err != nil {
+		return err
+	}
+
+	if err := l.commit(ctx, t, reply, outcome); err != nil {
+		return err
+	}
+
+	return l.apply(context.WithoutCancel(ctx), t)
+}
+
+func (l *loop) event(ctx context.Context, input *sessionstore.InboxInput) (Event, error) {
+	event := Event{Kind: observeKind, Text: input.RawContent}
 	tapeText := Clip(event.Text, 300)
 
 	if input.Source == sessionstore.InputSourceUser {
@@ -79,46 +112,43 @@ func (l *loop) turn(ctx context.Context, input *sessionstore.InboxInput) error {
 	}
 
 	if kind, _ := input.Attributes["assistant_event"].(string); kind == "action_failed" {
-		event.Kind = "error"
+		event.Kind = errorKind
 	}
 
-	if note, err := l.alreadyTold(ctx, input); err != nil {
-		return err
-	} else if note != "" {
+	note, err := l.alreadyTold(ctx, input)
+	if err != nil {
+		return Event{}, err
+	}
+
+	if note != "" {
 		event.Text += "\n\n" + note
 	}
 
-	var err error
-
 	event.LineID, err = l.appendLine(ctx, event.Kind, tapeText)
 	if err != nil {
-		return err
+		return Event{}, err
 	}
 
-	origin := event.LineID
-	originKind := event.Kind
+	return event, nil
+}
 
-	for number := 1; number <= 3; number++ {
-		current := step{inputID: input.ID, number: number, origin: origin, originKind: originKind, event: event}
+func (l *loop) begin(ctx context.Context, input *sessionstore.InboxInput, event Event) (*turn, error) {
+	now := l.deps.Now()
 
-		ok, err := l.ask(ctx, &current)
-		if err != nil || !ok {
-			return err
-		}
-
-		if err := l.commitStep(ctx, current); err != nil {
-			return err
-		}
-
-		next, err := l.applyActions(ctx, current)
-		if err != nil || next == nil {
-			return err
-		}
-
-		event = *next
+	view, err := loadView(ctx, l.deps.Memory, l.deps.Sessions, l.sessionID, event, now)
+	if err != nil {
+		return nil, fmt.Errorf("load assistant desk: %w", err)
 	}
 
-	return nil
+	memory, err := l.deps.Memory.Memory(ctx, l.sessionID)
+	if err != nil {
+		return nil, fmt.Errorf("load assistant turn memory: %w", err)
+	}
+
+	t := newTurn(input, memory, view.Desk.Focus, now)
+	t.messages = []llmwire.Message{{Role: llmwire.RoleUser, Content: Render(view, now)}}
+
+	return t, nil
 }
 
 func (l *loop) appendLine(ctx context.Context, kind, text string) (int64, error) {

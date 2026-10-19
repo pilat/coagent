@@ -43,7 +43,7 @@ func RejectAssistantCommandTx(ctx context.Context, tx *sql.Tx, sessionID, inputI
 	return true, nil
 }
 
-// HandleAssistantInputTx keeps desk steps out of the ordinary transcript acceptance path.
+// HandleAssistantInputTx keeps assistant turns out of the ordinary transcript acceptance path; a turn resolves its input once.
 func HandleAssistantInputTx(
 	ctx context.Context,
 	tx *sql.Tx,
@@ -54,8 +54,7 @@ func HandleAssistantInputTx(
 	result, err := tx.ExecContext(
 		ctx,
 		`UPDATE session_inbox SET state = 'handled', resolved_at = ?, resolution_reason = ?
-		WHERE id = ? AND session_id = ? AND (state = 'pending' OR
-		(state = 'handled' AND resolution_reason = 'assistant_turn'))`,
+		WHERE id = ? AND session_id = ? AND state = 'pending'`,
 		at,
 		reason,
 		inputID,

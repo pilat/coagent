@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/pilat/coagent/internal/llmwire"
 	"github.com/pilat/coagent/internal/sessionstore"
 )
 
@@ -64,4 +65,55 @@ func TestAssistantLoopRetryCancellation(t *testing.T) {
 			})
 		})
 	}
+}
+
+func TestAssistantLoopModelErrorAppliesNothing(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		f := newLoopFixture(t, act(use(toolSend, `{"session":244,"text":"go"}`),
+			use(toolRemember, `{"text":"never kept"}`)))
+		f.client.err, f.client.failFrom = errors.New("provider unavailable"), 2
+		f.enqueue("go")
+		require.NoError(t, Run(t.Context(), f.deps, f.root))
+		assert.Equal(t, 5, f.client.calls)
+		assert.Empty(t, f.sessions.moves, "a failed turn applies none of its buffered effects")
+		require.Len(t, f.notified, 1)
+		assert.Contains(t, f.notified[0], "⚠️ turn failed:")
+		memory, err := f.deps.Memory.Memory(t.Context(), f.root)
+		require.NoError(t, err)
+		assert.Empty(t, memory)
+		assert.Equal(t, []string{"failed"}, f.callOutcomes())
+		var reason string
+		require.NoError(t, f.db.QueryRowContext(t.Context(), `SELECT resolution_reason FROM session_inbox`).
+			Scan(&reason))
+		assert.Equal(t, "assistant_turn_failed", reason)
+	})
+}
+
+func TestAssistantLoopGuardFailureCommitsTheReply(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		f := newLoopFixture(t, act(use(toolSend, `{"session":244,"text":"go"}`)), say("Отправил."))
+		f.client.err, f.client.failFrom = errors.New("provider unavailable"), 3
+		f.enqueue("go")
+		require.NoError(t, Run(t.Context(), f.deps, f.root))
+		assert.Equal(t, 6, f.client.calls, "two main calls and one guard call with its retries")
+		assert.Equal(t, []string{"Отправил."}, f.notified)
+		assert.Equal(t, []string{"send 244 go"}, f.sessions.moves)
+		assert.Equal(t, []string{"guard_unresolved"}, f.callOutcomes())
+		var reason string
+		require.NoError(t, f.db.QueryRowContext(t.Context(), `SELECT resolution_reason FROM session_inbox`).
+			Scan(&reason))
+		assert.Equal(t, "assistant_turn", reason)
+	})
+}
+
+func TestAssistantLoopRejectsCutOffReplies(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		cut := &llmwire.Response{Text: "Половина отв", FinishType: llmwire.FinishLength}
+		f := newLoopFixture(t, cut, cut, cut, cut)
+		f.enqueue("hello")
+		require.NoError(t, Run(t.Context(), f.deps, f.root))
+		require.Len(t, f.notified, 1)
+		assert.Contains(t, f.notified[0], "⚠️ turn failed:")
+		assert.Contains(t, f.notified[0], "stopped early: length")
+	})
 }

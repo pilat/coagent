@@ -1,6 +1,6 @@
 # ADR-0072: The assistant is a desk loop, not a session
 
-- **Status:** Proposed
+- **Status:** Superseded by [ADR-0073](0073-assistant-turn-is-a-buffered-tool-loop.md)
 - **Date:** 2026-10-14
 
 ## Context

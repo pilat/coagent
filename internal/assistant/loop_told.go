@@ -32,7 +32,7 @@ func (l *loop) alreadyTold(ctx context.Context, input *sessionstore.InboxInput) 
 
 	for i, line := range lines {
 		switch {
-		case line.Kind == "move" && strings.HasPrefix(line.Text, "→ ") && strings.Contains(line.Text, marker):
+		case line.Kind == moveKind && strings.HasPrefix(line.Text, "→ ") && strings.Contains(line.Text, marker):
 			readAt = -1
 		case line.Kind == observeKind && strings.HasPrefix(line.Text, "read ") && strings.Contains(line.Text, marker):
 			readAt = i
@@ -44,7 +44,7 @@ func (l *loop) alreadyTold(ctx context.Context, input *sessionstore.InboxInput) 
 	}
 
 	for _, line := range lines[readAt+1:] {
-		if line.Kind == sayField {
+		if line.Kind == sayKind {
 			return fmt.Sprintf("Host note: after reading this session at %s you already told the user: %s "+
 				"Add only what is new, or say nothing.", line.At.UTC().Format("15:04"), Clip(line.Text, 400)), nil
 		}

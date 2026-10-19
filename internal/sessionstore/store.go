@@ -613,6 +613,24 @@ func (s *Store) LoadActiveMessages(ctx context.Context, sessionID int64) ([]*tra
 	return scanMessages(rows)
 }
 
+// LoadReadableMessages keeps compacted rows in insertion order; positions only order the active window.
+func (s *Store) LoadReadableMessages(ctx context.Context, sessionID int64) ([]*transcript.Message, error) {
+	rows, err := s.db.QueryContext(
+		ctx,
+		`SELECT id, session_id, role, content, tool_call_id, tool_name, tool_error, tool_calls,
+			reasoning_content, reasoning_raw, attachments, cost_usd, usage, finish_type,
+			provider_finish_reason, rejected_reason, retry_of_message_id, compacted_at, created_at
+		FROM messages WHERE session_id = ? AND rejected_reason IS NULL ORDER BY id`,
+		sessionID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("query readable messages: %w", err)
+	}
+	defer rows.Close()
+
+	return scanMessages(rows)
+}
+
 func (s SessionStatus) valid() bool {
 	switch s {
 	case SessionStatusActive,

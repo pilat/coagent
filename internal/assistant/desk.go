@@ -2,160 +2,71 @@ package assistant
 
 import (
 	"fmt"
-	"slices"
-	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
 )
 
 const (
-	deskTextLimit = 6000
 	// A work answer is the thing to retell, so the event keeps its head and tail.
-	eventTextLimit = 20000
+	eventTextLimit   = 20000
+	dialogTextLimit  = 2000
+	deskFocusItems   = 10
+	memoryNoteChars  = 300
+	memoryTotalChars = 4000
+	toolTime         = "Jan 02 15:04"
+	// RecentSessions is how many assistant-touched sessions the desk shows.
+	RecentSessions = 10
 )
 
 // Card is the host's read-only projection of a work session.
 type Card struct {
-	ID      int64
-	Project string
-	// Place says what the project is: "repo <path>", "scratch" or "dir <path>".
-	Place         string
-	Status        string
-	Activity      time.Time
-	Asked         string
-	LastLine      string
-	Unread        bool
-	ProjectKey    string
+	ID        int64
+	Project   string
+	Status    string
+	CreatedAt time.Time
+	Activity  time.Time
+	// ContextTokens is what every further step of the session carries; zero when unknown.
 	ContextTokens int
-	CostUSD       float64
-	LastFinalAt   time.Time
 	Pending       bool
+	About         string
+}
+
+// Project is one place work can be opened; Key is what open and sessions accept.
+type Project struct {
+	Name string
+	Key  string
+	// Place says what the project is: "repo <path>", "scratch" or "dir <path>".
+	Place    string
+	Activity time.Time
 }
 
 // Event preserves the full input separately from its shorter tape representation.
 type Event struct {
-	LineID   int64
-	At       time.Time
-	Kind     string
-	Text     string
-	Sessions []int64
+	LineID int64
+	Kind   string
+	Text   string
 }
 
-// Render produces the sole user message supplied on each assistant step.
-func Render(d Desk, projects []Project, tape []Line, event Event, now time.Time) string {
+// View is everything one desk render shows.
+type View struct {
+	Desk   Desk
+	Recent []Card
+	Total  int
+	Event  Event
+}
+
+// Render produces the turn's first user message; every truncated list names the tool that shows more.
+func Render(v View, now time.Time) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "now: %s\n\n", now.UTC().Format("2006-01-02 15:04 MST"))
-	renderNoteScopes(&b, d.Notes, now)
-	fmt.Fprintf(&b, "\n## focus\n%s\n\n", d.Focus)
-	shown := TrimCatalog(projects, d, event, now)
-
-	b.WriteString(catalogHeader)
-
-	notes := noteMap(d.Notes)
-	for _, project := range shown.Projects {
-		b.WriteString(renderProject(project, notes, now))
-	}
-
-	if shown.MoreProjects > 0 {
-		fmt.Fprintf(&b, "+%d more projects\n", shown.MoreProjects)
-	}
-
-	renderOrphaned(&b, d.Notes, shown, now)
-	renderTape(&b, d.TapeLastID, tape, event, now)
-	fmt.Fprintf(&b, "\n## event (line %d)\n%s\n\nAnswer with exactly one JSON object and nothing else.\n",
-		event.LineID, ClipMiddle(event.Text, eventTextLimit))
+	renderMemory(&b, v.Desk.Memory)
+	renderFocus(&b, v.Desk.Focus, deskFocusItems, now)
+	renderRecent(&b, v.Recent, v.Total, now)
+	renderConversation(&b, v.Desk.Conversation, v.Desk.Spoken, now)
+	fmt.Fprintf(&b, "\n## event\n%s\n", ClipMiddle(v.Event.Text, eventTextLimit))
 
 	return b.String()
-}
-
-// Edited stamps only the note keys written in this answer.
-func (d Desk) Edited(a Answer, now time.Time) Desk {
-	next := d
-
-	indexed := noteMap(d.Notes)
-	for key, text := range a.Notes {
-		if text == nil {
-			delete(indexed, key)
-		} else {
-			indexed[key] = Note{Key: key, Text: *text, WrittenAt: now.Unix()}
-		}
-	}
-
-	next.Notes = nil
-	for _, note := range indexed {
-		next.Notes = append(next.Notes, note)
-	}
-
-	slices.SortFunc(next.Notes, func(a, b Note) int { return strings.Compare(a.Key, b.Key) })
-
-	if a.Focus != nil {
-		next.Focus = *a.Focus
-	}
-
-	return next
-}
-
-func renderNoteScopes(b *strings.Builder, notes []Note, now time.Time) {
-	fmt.Fprintf(b, "## you (%d/1500)\n", scopeChars(notes, "user.")+scopeChars(notes, "rule."))
-	ordered := slices.Clone(notes)
-	slices.SortFunc(ordered, func(a, b Note) int { return strings.Compare(a.Key, b.Key) })
-
-	for _, prefix := range []string{"user.", "rule.", "open."} {
-		if prefix == "open." {
-			fmt.Fprintf(b, "\n## open (%d/800)\n", scopeChars(notes, prefix))
-		}
-
-		for _, note := range ordered {
-			if strings.HasPrefix(note.Key, prefix) {
-				fmt.Fprintf(b, "%s%s: %s\n", note.Key, noteAge(note, now), note.Text)
-			}
-		}
-	}
-}
-
-func renderOrphaned(b *strings.Builder, notes []Note, shown ShownCatalog, now time.Time) {
-	var orphaned []Note
-
-	for _, note := range notes {
-		scope, target, _ := strings.Cut(note.Key, ".")
-		missing := false
-
-		switch scope {
-		case noteScopeProject:
-			missing = !shown.ProjectKeys[target]
-		case noteScopeSession, noteScopeWait:
-			id, err := strconv.ParseInt(target, 10, 64)
-			missing = err != nil || !shown.SessionIDs[id]
-		}
-
-		if missing {
-			orphaned = append(orphaned, note)
-		}
-	}
-
-	if len(orphaned) == 0 {
-		return
-	}
-
-	slices.SortFunc(orphaned, func(a, b Note) int { return strings.Compare(a.Key, b.Key) })
-	b.WriteString("\n## orphaned\n")
-
-	for _, note := range orphaned {
-		fmt.Fprintf(b, "%s%s: %s\n", note.Key, noteAge(note, now), note.Text)
-	}
-}
-
-func scopeChars(notes []Note, prefix string) int {
-	total := 0
-
-	for _, note := range notes {
-		if strings.HasPrefix(note.Key, prefix) {
-			total += utf8.RuneCountInString(note.Text)
-		}
-	}
-
-	return total
 }
 
 // Clip limits Unicode characters, including the marker when text is shortened.
@@ -185,35 +96,97 @@ func ClipMiddle(text string, limit int) string {
 	return string(chars[:head]) + marker + string(chars[len(chars)-tail:])
 }
 
-func renderTape(b *strings.Builder, lastID int64, tape []Line, event Event, now time.Time) {
-	lines := slices.Clone(tape)
-	if event.LineID > 0 && !slices.ContainsFunc(lines, func(line Line) bool { return line.ID == event.LineID }) {
-		lines = append(lines, Line{ID: event.LineID, At: event.At, Kind: event.Kind, Text: Clip(event.Text, 300)})
+func renderMemory(b *strings.Builder, notes []Memory) {
+	total := 0
+	for _, note := range notes {
+		total += utf8.RuneCountInString(note.Text)
 	}
 
-	slices.SortFunc(lines, func(a, b Line) int {
-		if a.ID < b.ID {
-			return -1
-		}
+	fmt.Fprintf(b, "## memory (%d/%d)\n", total, memoryTotalChars)
 
-		if a.ID > b.ID {
-			return 1
-		}
+	for _, note := range notes {
+		fmt.Fprintf(b, "%s\n", memoryLine(fmt.Sprintf("m%d", note.ID), note))
+	}
+}
 
-		return 0
-	})
-
-	if len(lines) == 0 {
-		b.WriteString("\n## tape (empty)\n")
-		return
+func renderFocus(b *strings.Builder, items []Focus, limit int, now time.Time) {
+	switch {
+	case len(items) == 0:
+		b.WriteString("\n## focus (empty)\n")
+	case len(items) > limit:
+		fmt.Fprintf(b, "\n## focus (%d of %d — focus_list shows all)\n", limit, len(items))
+	default:
+		fmt.Fprintf(b, "\n## focus (%d)\n", len(items))
 	}
 
-	last := lines[len(lines)-1].ID
-	fmt.Fprintf(b, "\n## tape (visible lines %d–%d of %d)\n", lines[0].ID, last, max(lastID, last))
+	for _, item := range items[:min(limit, len(items))] {
+		fmt.Fprintf(b, "%s\n", focusLine(fmt.Sprintf("f%d", item.ID), item, now))
+	}
+}
+
+func renderRecent(b *strings.Builder, cards []Card, total int, now time.Time) {
+	fmt.Fprintf(b, "\n## recent sessions (%d of %d — sessions lists all work, search finds older)\n",
+		len(cards), total)
+
+	for _, card := range cards {
+		b.WriteString(cardLines(card, now))
+	}
+}
+
+func renderConversation(b *strings.Builder, lines []Line, total int, now time.Time) {
+	switch {
+	case len(lines) == 0:
+		b.WriteString("\n## conversation (empty)\n")
+	case total > len(lines):
+		fmt.Fprintf(b, "\n## conversation (last %d of %d — search finds older)\n", len(lines), total)
+	default:
+		fmt.Fprintf(b, "\n## conversation (last %d)\n", len(lines))
+	}
 
 	for _, line := range lines {
-		fmt.Fprintf(b, "%d %s %s\n", line.ID, deskTime(line.At, now), Clip(line.Text, deskTextLimit))
+		text := line.Text
+		if rest, ok := strings.CutPrefix(text, "say: "); ok && line.Kind == sayKind {
+			text = "you: " + rest
+		}
+
+		fmt.Fprintf(b, "%s %s\n", deskTime(line.At, now), Clip(text, dialogTextLimit))
 	}
+}
+
+func memoryLine(ref string, note Memory) string {
+	lifetime := "permanent"
+	if note.Until != "" {
+		lifetime = "until " + note.Until
+	}
+
+	return fmt.Sprintf("[%s] (%s) %s", ref, lifetime, note.Text)
+}
+
+func focusLine(ref string, item Focus, now time.Time) string {
+	line := fmt.Sprintf("[%s] %s · %s", ref, age(item.UpdatedAt, now), item.Text)
+	if len(item.Sessions) > 0 {
+		line += " → " + strings.Join(item.Sessions, ", ")
+	}
+
+	return line
+}
+
+func cardLines(card Card, now time.Time) string {
+	line := fmt.Sprintf("%d %s · %s · created %s · touched %s", card.ID, card.Project, card.Status,
+		card.CreatedAt.UTC().Format("Jan 02"), age(card.Activity, now))
+	if card.ContextTokens > 0 {
+		line += fmt.Sprintf(" · ctx %dk", max(1, (card.ContextTokens+500)/1000))
+	}
+
+	if card.Pending {
+		line += " · ⏳ awaiting answer"
+	}
+
+	if card.About == "" {
+		return line + "\n"
+	}
+
+	return line + "\n    about: " + card.About + "\n"
 }
 
 func deskTime(at, now time.Time) string {
@@ -221,5 +194,18 @@ func deskTime(at, now time.Time) string {
 		return at.UTC().Format("15:04")
 	}
 
-	return at.UTC().Format("Jan 02 15:04")
+	return at.UTC().Format(toolTime)
+}
+
+func age(at, now time.Time) string {
+	delta := now.Sub(at)
+	if delta < time.Hour {
+		return "now"
+	}
+
+	if delta < 24*time.Hour {
+		return fmt.Sprintf("%dh", int(delta/time.Hour))
+	}
+
+	return fmt.Sprintf("%dd", int(delta/(24*time.Hour)))
 }

@@ -34,7 +34,7 @@ func TestHarnessScenario_AssistantBackgroundResult(t *testing.T) {
 	t.Cleanup(func() { closeOnce(processRunning) })
 	h := newHarness(t, harnessOptions{respond: func(system string, messages []llmwire.Message) *llmwire.Response {
 		if strings.HasPrefix(system, registry.AssistantPrompt) {
-			return textReply(assistantJSON("full result", ""))
+			return textReply("full result")
 		}
 
 		if hasUserContaining(messages, "<process_completion>") {
@@ -119,7 +119,7 @@ func TestHarnessScenario_AssistantBootObservesCompletedSend(t *testing.T) {
 	second := newHarness(
 		t,
 		harnessOptions{dbPath: path, respond: func(_ string, _ []llmwire.Message) *llmwire.Response {
-			return textReply(assistantJSON("recovered answer", ""))
+			return textReply("recovered answer")
 		}},
 	)
 	require.NoError(t, second.mgr.Start(second.ctx))
@@ -131,14 +131,27 @@ func TestHarnessScenario_AssistantBootObservesCompletedSend(t *testing.T) {
 	assert.Equal(t, 1, assistantEventCount(t, second, root.ID))
 }
 
-func TestHarnessScenario_AssistantCrashAfterStepCommit(t *testing.T) {
+func TestHarnessScenario_AssistantShutdownAfterCommitKeepsEffects(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "gap.db")
 	var workID int64
-	first := newHarness(t, harnessOptions{dbPath: path, respond: func(_ string, _ []llmwire.Message) *llmwire.Response {
-		return textReply(
-			assistantJSON("committed reply", fmt.Sprintf(`{"send":{"session":%d,"text":"not applied"}}`, workID)),
-		)
-	}})
+	first := newHarness(
+		t,
+		harnessOptions{dbPath: path, respond: func(_ string, messages []llmwire.Message) *llmwire.Response {
+			if len(messages) > 1 {
+				return textReply("")
+			}
+
+			return assistantCalls("committed reply",
+				llmwire.ToolCall{
+					ID: "send", Name: "send",
+					Arguments: fmt.Appendf(nil, `{"session":%d,"text":"not applied"}`, workID),
+				},
+				llmwire.ToolCall{
+					ID: "focus", Name: "focus",
+					Arguments: fmt.Appendf(nil, `{"text":"Await","sessions":["%d"]}`, workID),
+				})
+		}},
+	)
 	root, err := first.mgr.EnsureAssistantRoot(first.ctx, scenarioManagerID)
 	require.NoError(t, err)
 	work, err := first.store.CreateSession(
@@ -204,17 +217,16 @@ func TestHarnessScenario_AssistantCrashAfterStepCommit(t *testing.T) {
 			Scan(&state),
 	)
 	assert.Equal(t, "handled", state)
-	inputs, err := second.store.ListPending(second.ctx, workID)
-	require.NoError(t, err)
-	assert.Empty(t, inputs)
-	var workInputs int
-	require.NoError(
-		t,
-		second.db.QueryRowContext(second.ctx, `SELECT count(*) FROM session_inbox WHERE session_id = ?`, workID).
-			Scan(&workInputs),
-	)
-	assert.Equal(t, 1, workInputs)
-	lines, err := second.mgr.assistantStore.VisibleTape(second.ctx, root.ID, 40, 0)
+	var sent int
+	require.NoError(t, second.db.QueryRowContext(second.ctx, `SELECT count(*) FROM session_inbox
+		WHERE session_id = ? AND raw_content = 'not applied'`, workID).Scan(&sent))
+	assert.Equal(t, 1, sent, "a graceful shutdown does not cut the committed turn's effects")
+	var failures int
+	require.NoError(t, second.db.QueryRowContext(second.ctx, `SELECT count(*) FROM session_inbox
+		WHERE session_id = ? AND json_extract(attributes, '$.assistant_event') = 'action_failed'`, root.ID).
+		Scan(&failures))
+	assert.Zero(t, failures, "a durable send is not reported as failed")
+	lines, err := second.mgr.assistantStore.RecentTape(second.ctx, root.ID, 40)
 	require.NoError(t, err)
 	require.Len(t, lines, 3)
 	assert.Contains(t, lines[2].Text, "not applied")
