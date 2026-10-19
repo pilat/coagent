@@ -856,12 +856,6 @@ the desk, a project catalog and one event for each model call. User, rule and op
 notes have aggregate text limits; project, session and wait notes bind structural
 keys and have per-note limits. The referee validates the edited memory and action
 authority before any effect; only user-origin turns may write user or rule notes.
-The model's JSON carries note edits as a list; the host keeps a map and rejects
-duplicate keys. Rewriting identical text preserves a note's age and grants no new
-write authority, except raw wait/project edits paired with an open still bind.
-The assistant requests one strict answer schema through per-call options; only
-OpenRouter models declaring structured outputs receive it. Every model uses the
-same prompt, parser and semantic referee; provider preferences are unchanged.
 Displayed tape text is capped at 6000 Unicode characters per line and an event at
 20000 with its middle elided; full stored user/say text and delivered replies are
 preserved. Hides never reach the last six dialog lines, a running turn's own lines

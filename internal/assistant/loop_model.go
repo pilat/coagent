@@ -2,7 +2,6 @@ package assistant
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
@@ -35,7 +34,6 @@ func (l *loop) ask(ctx context.Context, s *step) (bool, error) {
 
 		s.answer, err = Parse(raw)
 		if err == nil {
-			FilterUnchangedNotes(&s.answer, s.desk)
 			s.next = s.desk.Edited(s.answer, l.deps.Now())
 
 			existing := map[string]bool{}
@@ -138,8 +136,7 @@ func (l *loop) chatOnce(ctx context.Context, desk string) (string, error) {
 	}()
 
 	response, err := client.Chat(ctx, registry.AssistantPrompt,
-		[]llmwire.Message{{Role: llmwire.RoleUser, Content: desk}}, nil,
-		llmwire.WithResponseSchema("assistant_answer", json.RawMessage(AnswerSchema)))
+		[]llmwire.Message{{Role: llmwire.RoleUser, Content: desk}}, nil)
 	if err != nil {
 		return "", fmt.Errorf("call assistant model: %w", err)
 	}

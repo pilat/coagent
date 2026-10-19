@@ -45,8 +45,8 @@ type Usage struct {
 // Anthropic's native input_tokens excludes cache, so its extractor sums
 // input + cache_read + cache_creation to satisfy this.
 type Client interface {
-	// Chat sends one request. Options narrow limits or request capabilities;
-	// the client's configuration remains the ceiling.
+	// Chat sends one request. Options narrow that request only — a client's own
+	// configuration is the ceiling, never raised by an option.
 	Chat(
 		ctx context.Context,
 		systemPrompt string,

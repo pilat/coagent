@@ -1,12 +1,9 @@
 package assistant
 
 import (
-	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"maps"
-	"slices"
 	"strings"
 )
 
@@ -51,80 +48,6 @@ type ReadAction struct {
 
 type StopAction struct {
 	Session int64 `json:"session"`
-}
-
-type noteEdit struct {
-	Key  string  `json:"key"`
-	Text *string `json:"text"`
-}
-
-type answerWire struct {
-	Say    *string    `json:"say"`
-	Do     []Action   `json:"do"`
-	Focus  *string    `json:"focus"`
-	Notes  []noteEdit `json:"notes"`
-	Forget [][]int64  `json:"forget"`
-}
-
-// MarshalJSON emits list-shaped notes in key order, including when marshaling a value.
-func (a Answer) MarshalJSON() ([]byte, error) {
-	notes := make([]noteEdit, 0, len(a.Notes))
-	for _, key := range slices.Sorted(maps.Keys(a.Notes)) {
-		notes = append(notes, noteEdit{Key: key, Text: a.Notes[key]})
-	}
-
-	data, err := json.Marshal(answerWire{
-		Say: a.Say, Do: append([]Action{}, a.Do...), Focus: a.Focus,
-		Notes: notes, Forget: append([][]int64{}, a.Forget...),
-	})
-	if err != nil {
-		return nil, fmt.Errorf("encode assistant answer: %w", err)
-	}
-
-	return data, nil
-}
-
-// UnmarshalJSON rejects unknown fields and duplicate note keys before any edits apply.
-func (a *Answer) UnmarshalJSON(data []byte) error {
-	var wire answerWire
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.DisallowUnknownFields()
-
-	if err := decoder.Decode(&wire); err != nil {
-		return fmt.Errorf("decode answer fields: %w", err)
-	}
-
-	var notes map[string]*string
-	if len(wire.Notes) > 0 {
-		notes = make(map[string]*string, len(wire.Notes))
-	}
-
-	for _, edit := range wire.Notes {
-		if _, exists := notes[edit.Key]; exists {
-			return fmt.Errorf("note %s is written twice in one answer", edit.Key)
-		}
-
-		notes[edit.Key] = edit.Text
-	}
-
-	*a = Answer{Say: wire.Say, Do: wire.Do, Focus: wire.Focus, Notes: notes, Forget: wire.Forget}
-
-	return nil
-}
-
-// FilterUnchangedNotes removes repeated writes while preserving deletes and open bindings.
-func FilterUnchangedNotes(a *Answer, desk Desk) {
-	current := noteMap(desk.Notes)
-	for key, text := range a.Notes {
-		scope, target, _ := strings.Cut(key, ".")
-		if text == nil || ((scope == noteScopeWait || scope == noteScopeProject) && openedProject(*a, target)) {
-			continue
-		}
-
-		if note, exists := current[key]; exists && note.Text == *text {
-			delete(a.Notes, key)
-		}
-	}
 }
 
 // Parse tolerates wrappers but rejects unknown contract fields.
