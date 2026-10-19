@@ -45,8 +45,6 @@ type (
 		// InputModalities is the catalog's declared input types ("text", "image",
 		// ...). Nil means unknown — capability gates must fail closed.
 		InputModalities []string `json:"-" yaml:"-"`
-		// StructuredOutputs is false when unknown or unsupported by the catalog.
-		StructuredOutputs bool `json:"-" yaml:"-"`
 
 		// EffortLevels is what the picker offers for this model — the catalog's
 		// allowlist narrowed to what the driver can actually deliver. Empty = no step.

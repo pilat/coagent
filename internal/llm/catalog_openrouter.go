@@ -128,12 +128,11 @@ func (m openRouterModel) toSpec() catalog.ModelSpec {
 	}
 
 	return catalog.ModelSpec{
-		Name:              m.Name,
-		Source:            "openrouter",
-		ContextWindow:     contextWindow,
-		MaxTokens:         maxTokens,
-		InputModalities:   parseOpenRouterModality(modality),
-		StructuredOutputs: slices.Contains(m.SupportedParameters, "structured_outputs"),
+		Name:            m.Name,
+		Source:          "openrouter",
+		ContextWindow:   contextWindow,
+		MaxTokens:       maxTokens,
+		InputModalities: parseOpenRouterModality(modality),
 		Pricing: &config.ModelPricing{
 			InputPrice:      perMillion(m.Pricing.Prompt),
 			OutputPrice:     perMillion(m.Pricing.Completion),

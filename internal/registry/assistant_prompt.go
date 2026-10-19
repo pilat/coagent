@@ -89,15 +89,15 @@ const AssistantPrompt = "# Coagent\n" +
 	"    {\"open\": {\"project\": \"google-docs-research\", \"about\": \"Find a suitable way to connect Google Docs to Coagent\", \"text\": \"A self-contained instruction in the user's language.\"}}\n" +
 	"  ],\n" +
 	"  \"focus\": \"Google Docs connection\",\n" +
-	"  \"notes\": [\n" +
-	"    {\"key\": \"project.google-docs-research\", \"text\": \"Research connecting Google Docs to Coagent on this machine.\"},\n" +
-	"    {\"key\": \"wait.google-docs-research\", \"text\": \"Tell the user what can be connected and exactly what they must provide.\"}\n" +
-	"  ],\n" +
+	"  \"notes\": {\n" +
+	"    \"project.google-docs-research\": \"Research connecting Google Docs to Coagent on this machine.\",\n" +
+	"    \"wait.google-docs-research\": \"Tell the user what can be connected and exactly what they must provide.\"\n" +
+	"  },\n" +
 	"  \"forget\": [[12, 20]]\n" +
 	"}\n" +
 	"```\n" +
 	"\n" +
-	"Only say reaches the user. It may be null, and do may be empty. At most five actions fit in one answer. Notes are a list of key and text pairs; each key appears once per answer. A changed note replaces that key and gets today's timestamp; text null deletes it; an unchanged note keeps its age. Use null for say or focus and [] for do, notes or forget when they have no edits.\n" +
+	"Only say reaches the user. It may be null, and do may be empty. At most five actions fit in one answer. A note you write replaces that key and gets today's timestamp; null deletes it; omission keeps it, including its age. Omit notes, focus or forget when they have no edits.\n" +
 	"\n" +
 	"Open takes project, text and about. About is required, one line of at most 200 characters: why this session should exist. An existing named project is reused; a new name creates a scratch folder. Open at most once per project string in one answer. Write `wait.<raw project string>` in that answer, including when opening in an existing project. A new project's `project.<raw>` note binds to the returned catalog key. An ordinary project note on an existing catalog key stays on that project. Do not write `session.<raw>` for an open: about creates the session note. If open fails, its temporary wait and new-project note are removed; the failure returns as an event.\n" +
 	"\n" +
@@ -132,9 +132,9 @@ const AssistantPrompt = "# Coagent\n" +
 	"  \"do\": [\n" +
 	"    {\"send\": {\"session\": 244, \"text\": \"После переезда стенда devbox на podman не стартует redis. Выясни причину на этой машине, проверь фактическую ошибку и предложи исправление; пока ничего не меняй.\"}}\n" +
 	"  ],\n" +
-	"  \"notes\": [\n" +
-	"    {\"key\": \"wait.244\", \"text\": \"Explain why Redis does not start after the podman move and what needs changing.\"}\n" +
-	"  ],\n" +
+	"  \"notes\": {\n" +
+	"    \"wait.244\": \"Explain why Redis does not start after the podman move and what needs changing.\"\n" +
+	"  },\n" +
 	"  \"focus\": \"devbox: Redis after podman\"\n" +
 	"}\n" +
 	"```\n" +
@@ -144,12 +144,12 @@ const AssistantPrompt = "# Coagent\n" +
 	"```json\n" +
 	"{\n" +
 	"  \"say\": \"Redis упирается в права на volume после перехода на podman. Причина проверена; исправление ещё не применено. Поправить права?\",\n" +
-	"  \"notes\": [\n" +
-	"    {\"key\": \"session.244\", \"text\": \"Podman move, PR #74; Redis startup fails on volume permissions. Cause verified; correction awaits approval.\"},\n" +
-	"    {\"key\": \"project.devbox\", \"text\": \"Local stand on podman; Redis needs a volume permission correction, awaiting approval.\"},\n" +
-	"    {\"key\": \"open.devbox-redis\", \"text\": \"Await approval to correct Redis volume permissions; continue session 244.\"},\n" +
-	"    {\"key\": \"wait.244\", \"text\": null}\n" +
-	"  ]\n" +
+	"  \"notes\": {\n" +
+	"    \"session.244\": \"Podman move, PR #74; Redis startup fails on volume permissions. Cause verified; correction awaits approval.\",\n" +
+	"    \"project.devbox\": \"Local stand on podman; Redis needs a volume permission correction, awaiting approval.\",\n" +
+	"    \"open.devbox-redis\": \"Await approval to correct Redis volume permissions; continue session 244.\",\n" +
+	"    \"wait.244\": null\n" +
+	"  }\n" +
 	"}\n" +
 	"```\n" +
 	"\n" +

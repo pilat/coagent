@@ -42,27 +42,15 @@ type oaiRequest struct {
 	ToolChoice string           `json:"tool_choice,omitempty"`
 	// MaxToolCalls is OpenRouter's top-level server-tool budget (sibling of
 	// messages/tools), set alongside the injected web-search server tool.
-	MaxToolCalls       int                `json:"max_tool_calls,omitempty"`
-	Stream             bool               `json:"stream,omitempty"`
-	Temperature        float32            `json:"temperature,omitempty"`
-	MaxTokens          int                `json:"max_tokens,omitempty"`
-	ChatTemplateKwargs map[string]any     `json:"chat_template_kwargs,omitempty"` // DeepSeek thinking
-	Thinking           map[string]any     `json:"thinking,omitempty"`             // OpenAI-style (GLM-5, etc.)
-	Reasoning          map[string]any     `json:"reasoning,omitempty"`            // OpenAI o1-style reasoning
-	Provider           *oaiProvider       `json:"provider,omitempty"`             // OpenRouter-specific provider config
-	SessionID          string             `json:"session_id,omitempty"`           // OpenRouter UI session grouping
-	ResponseFormat     *oaiResponseFormat `json:"response_format,omitempty"`
-}
-
-type oaiResponseFormat struct {
-	Type       string        `json:"type"`
-	JSONSchema oaiJSONSchema `json:"json_schema"`
-}
-
-type oaiJSONSchema struct {
-	Name   string          `json:"name"`
-	Strict bool            `json:"strict"`
-	Schema json.RawMessage `json:"schema"`
+	MaxToolCalls       int            `json:"max_tool_calls,omitempty"`
+	Stream             bool           `json:"stream,omitempty"`
+	Temperature        float32        `json:"temperature,omitempty"`
+	MaxTokens          int            `json:"max_tokens,omitempty"`
+	ChatTemplateKwargs map[string]any `json:"chat_template_kwargs,omitempty"` // DeepSeek thinking
+	Thinking           map[string]any `json:"thinking,omitempty"`             // OpenAI-style (GLM-5, etc.)
+	Reasoning          map[string]any `json:"reasoning,omitempty"`            // OpenAI o1-style reasoning
+	Provider           *oaiProvider   `json:"provider,omitempty"`             // OpenRouter-specific provider config
+	SessionID          string         `json:"session_id,omitempty"`           // OpenRouter UI session grouping
 }
 
 // oaiProvider holds OpenRouter provider configuration.

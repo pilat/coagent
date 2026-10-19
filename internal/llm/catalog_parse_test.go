@@ -136,12 +136,6 @@ func TestParseOpenRouter(t *testing.T) {
 	models, err := parseOpenRouter(fixture(t, "openrouter.json"))
 	require.NoError(t, err)
 
-	t.Run("structured outputs require an explicit catalog declaration", func(t *testing.T) {
-		assert.True(t, models["openai/gpt-5-mini"].StructuredOutputs)
-		assert.False(t, models["anthropic/claude-opus-5"].StructuredOutputs)
-		assert.False(t, models["unknown"].StructuredOutputs)
-	})
-
 	t.Run("per-token string prices scale to per-million", func(t *testing.T) {
 		spec := models["anthropic/claude-opus-5"]
 		assert.Equal(t, "Anthropic: Claude Opus 5", spec.Name)

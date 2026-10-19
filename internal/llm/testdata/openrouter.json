@@ -66,7 +66,7 @@
       "architecture": { "modality": "text->text" },
       "pricing": { "prompt": "0.00000025", "completion": "0.000002" },
       "top_provider": { "context_length": 400000, "max_completion_tokens": null },
-      "supported_parameters": ["max_tokens", "tools", "structured_outputs"]
+      "supported_parameters": ["max_tokens", "tools"]
     },
     {
       "id": "qwen/qwen3-14b-20250101",

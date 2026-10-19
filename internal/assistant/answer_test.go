@@ -19,16 +19,13 @@ func TestAssistantParse(t *testing.T) {
 		{"fenced", "```json\n" + validAnswer + "\n```", ""},
 		{"prose", "Here is the answer: " + validAnswer + " trailing prose", ""},
 		{"braces in strings", `{"say":"a } \\\" { b"}`, ""},
-		{"edits", `{"notes":[{"key":"user.lang","text":"Russian"},{"key":"open.old","text":null}],"focus":"f"}`, ""},
+		{"edits", `{"notes":{"user.lang":"Russian","open.old":null},"focus":"f"}`, ""},
 		{"unknown field", `{"extra":1}`, "unknown field"},
 		{"think is gone", `{"think":"hm"}`, "unknown field"},
 		{"diary is gone", `{"diary":{"k":"v"}}`, "unknown field"},
 		{"stickers are gone", `{"stickers":{}}`, "unknown field"},
-		{"map notes", `{"notes":{"user.lang":"Russian"}}`, "cannot unmarshal"},
-		{"object note", `{"notes":[{"key":"user.lang","text":{"text":"v"}}]}`, "cannot unmarshal"},
-		{"number note", `{"notes":[{"key":"user.lang","text":5}]}`, "cannot unmarshal"},
-		{"unknown note field", `{"notes":[{"key":"user.lang","text":"v","extra":1}]}`, "unknown field"},
-		{"duplicate note", `{"notes":[{"key":"user.lang","text":"v"},{"key":"user.lang","text":null}]}`, "note user.lang is written twice in one answer"},
+		{"object note", `{"notes":{"user.lang":{"text":"v"}}}`, "cannot unmarshal"},
+		{"number note", `{"notes":{"user.lang":5}}`, "cannot unmarshal"},
 		{"bad say", `{"say":4}`, "cannot unmarshal"},
 		{"nested unknown", `{"do":[{"stop":{"session":1,"extra":1}}]}`, "unknown field"},
 		{"unfinished", `{"say":`, "unfinished"},
@@ -49,7 +46,7 @@ func TestAssistantParse(t *testing.T) {
 func TestAssistantParseNotesAndOpen(t *testing.T) {
 	t.Parallel()
 	a, err := Parse(
-		`{"notes":[{"key":"user.lang","text":"Russian"},{"key":"open.old","text":null}],"do":[{"open":{"project":"devbox","text":"go","about":"why"}}]}`,
+		`{"notes":{"user.lang":"Russian","open.old":null},"do":[{"open":{"project":"devbox","text":"go","about":"why"}}]}`,
 	)
 	require.NoError(t, err)
 	require.NotNil(t, a.Notes["user.lang"])
@@ -71,9 +68,7 @@ func TestAssistantDeskEdited(t *testing.T) {
 		},
 		Focus: "f",
 	}
-	a, err := Parse(
-		`{"notes":[{"key":"open.a","text":"x"},{"key":"open.b","text":null},{"key":"open.c","text":"new"},{"key":"open.gone","text":null}]}`,
-	)
+	a, err := Parse(`{"notes":{"open.a":"x","open.b":null,"open.c":"new","open.gone":null}}`)
 	require.NoError(t, err)
 	after := before.Edited(a, now)
 	assert.Equal(

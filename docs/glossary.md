@@ -146,8 +146,7 @@ One keyed, timestamped piece of assistant memory. Its prefix binds its scope:
 things without work in flight; `project.<key>` records project state;
 `session.<id>` records why a session exists and its outcome; `wait.<id>` records
 what to tell the user when work answers. Edits replace or delete individual keys;
-absent keys and identical rewrites retain their text and age, except raw bindings
-paired with an open. Notes occupy their scope's place on the desk.
+absent keys retain their text and age. Notes occupy their scope's place on the desk.
 _Avoid_: notebook, diary, stickers, dispatch records, project memory (that is the
 separate curated-memory store).
 

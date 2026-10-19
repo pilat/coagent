@@ -34,13 +34,12 @@ func (d *stubDriver) ListModels(
 func TestEnrichCatalogFillsEntries(t *testing.T) {
 	driver := &stubDriver{models: map[string]catalog.ModelSpec{
 		"claude-opus-5": {
-			Name:              "Claude Opus 5",
-			Source:            "anthropic",
-			ContextWindow:     1_000_000,
-			MaxTokens:         128_000,
-			Pricing:           &config.ModelPricing{InputPrice: 5, OutputPrice: 25},
-			Reasoning:         &config.ReasoningSpec{Supported: true, NativeEffort: true},
-			StructuredOutputs: true,
+			Name:          "Claude Opus 5",
+			Source:        "anthropic",
+			ContextWindow: 1_000_000,
+			MaxTokens:     128_000,
+			Pricing:       &config.ModelPricing{InputPrice: 5, OutputPrice: 25},
+			Reasoning:     &config.ReasoningSpec{Supported: true, NativeEffort: true},
 		},
 		"claude-haiku-4-5-20251001": {Name: "Claude Haiku 4.5", ContextWindow: 200_000, MaxTokens: 64_000},
 	}}
@@ -60,10 +59,8 @@ func TestEnrichCatalogFillsEntries(t *testing.T) {
 	assert.Equal(t, 128_000, opus.MaxTokens)
 	assert.InDelta(t, 5.0, opus.Pricing.InputPrice, 1e-9)
 	assert.True(t, opus.Reasoning.Supported)
-	assert.True(t, opus.StructuredOutputs)
 
 	haiku := cfg.UnifiedConfig.Models[1]
-	assert.False(t, haiku.StructuredOutputs)
 	assert.Equal(t, "prod/Claude Haiku 4.5", haiku.DisplayName, "date-normalized match still enriches")
 }
 
