@@ -29,19 +29,6 @@ func (c *controller) EnsureAssistantRoot(ctx context.Context) (*controllerapi.As
 	}, nil
 }
 
-func (c *controller) AssistantDesk(ctx context.Context, id int64) (string, error) {
-	if err := c.app.requireOwnedSession(ctx, c.managerID, id); err != nil {
-		return "", err
-	}
-
-	desk, err := c.app.backend.AssistantDesk(ctx, id)
-	if err != nil {
-		return "", fmt.Errorf("render assistant desk: %w", err)
-	}
-
-	return desk, nil
-}
-
 func (s *service) assistantTopicName(managerID string) string {
 	if cfg := s.unifiedConfig(); cfg != nil {
 		for _, manager := range cfg.Managers {

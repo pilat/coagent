@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"slices"
 	"time"
+
+	"github.com/pilat/coagent/internal/sessionstore"
 )
 
 const (
@@ -19,26 +21,6 @@ const (
 	// conversationLines bounds the dialog the desk repeats; older lines are found by search.
 	conversationLines = 10
 )
-
-var _ Store = (*store)(nil)
-
-// Searcher finds what fell off the desk; the FTS store is one backend.
-type Searcher interface {
-	Search(context.Context, Scope, string) ([]Hit, error)
-}
-
-// Store reads the assistant's durable memory, history and the work it may address.
-type Store interface {
-	Searcher
-	LoadDesk(context.Context, int64, int64, time.Time) (Desk, error)
-	Memory(context.Context, int64) ([]Memory, error)
-	Focus(context.Context, int64) ([]Focus, error)
-	Around(context.Context, Scope, string, int) (string, error)
-	WorkRoots(context.Context, Scope, bool) ([]WorkRoot, error)
-	Authorized(context.Context, string, int64) (bool, error)
-	RecentTape(context.Context, int64, int) ([]Line, error)
-	UnobservedSends(context.Context, int64) ([]Send, error)
-}
 
 // Desk is the durable part of what one turn sees; expired memory is already left out.
 type Desk struct {
@@ -73,14 +55,6 @@ type Line struct {
 	Text string
 }
 
-// Send links an assistant instruction to the work session's durable input.
-type Send struct {
-	InputID            int64
-	AssistantSessionID int64
-	SessionID          int64
-	CreatedAt          time.Time
-}
-
 // Call records one model call of a turn for inspection only.
 type Call struct {
 	SessionID int64
@@ -99,13 +73,16 @@ type Scope struct {
 	Owner string
 }
 
-type store struct {
-	db *sql.DB
+// Store owns the assistant's durable state and its reads of the work roots it may address.
+type Store struct {
+	db           *sql.DB
+	sessions     *sessionstore.Store
+	projectsRoot string
 }
 
 // New shares the session database without owning its lifetime.
-func New(db *sql.DB) Store {
-	return &store{db: db}
+func New(db *sql.DB, sessions *sessionstore.Store, projectsRoot string) *Store {
+	return &Store{db: db, sessions: sessions, projectsRoot: projectsRoot}
 }
 
 // Live reports whether the note still belongs on the desk on the given UTC date.
@@ -114,7 +91,7 @@ func (m Memory) Live(today string) bool {
 }
 
 // LoadDesk shows the dialog before line `before`, so the turn's own event is not repeated.
-func (s *store) LoadDesk(ctx context.Context, root, before int64, now time.Time) (Desk, error) {
+func (s *Store) LoadDesk(ctx context.Context, root, before int64, now time.Time) (Desk, error) {
 	memory, err := s.Memory(ctx, root)
 	if err != nil {
 		return Desk{}, err
@@ -152,7 +129,7 @@ func (s *store) LoadDesk(ctx context.Context, root, before int64, now time.Time)
 }
 
 // Memory includes expired notes: search can still surface them for rewriting or removal.
-func (s *store) Memory(ctx context.Context, root int64) ([]Memory, error) {
+func (s *Store) Memory(ctx context.Context, root int64) ([]Memory, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT id, text, COALESCE(until, ''), updated_at
 		FROM assistant_memory WHERE session_id = ? ORDER BY id`, root)
 	if err != nil {
@@ -179,7 +156,7 @@ func (s *store) Memory(ctx context.Context, root int64) ([]Memory, error) {
 }
 
 // Focus returns every live item, most recently updated first.
-func (s *store) Focus(ctx context.Context, root int64) ([]Focus, error) {
+func (s *Store) Focus(ctx context.Context, root int64) ([]Focus, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT id, text, sessions, created_at, updated_at
 		FROM assistant_focus WHERE session_id = ?`, root)
 	if err != nil {
@@ -220,7 +197,7 @@ func (s *store) Focus(ctx context.Context, root int64) ([]Focus, error) {
 }
 
 // RecentTape returns the newest lines, hidden ones included, oldest first.
-func (s *store) RecentTape(ctx context.Context, root int64, limit int) ([]Line, error) {
+func (s *Store) RecentTape(ctx context.Context, root int64, limit int) ([]Line, error) {
 	lines, err := s.tape(ctx, `SELECT id, at, kind, text FROM (
 		SELECT id, at, kind, text FROM assistant_tape WHERE session_id = ? ORDER BY id DESC LIMIT ?
 	) ORDER BY id`, root, max(0, limit))
@@ -275,7 +252,7 @@ func RecordCallTx(ctx context.Context, tx *sql.Tx, call Call) error {
 	return nil
 }
 
-func (s *store) tape(ctx context.Context, query string, args ...any) ([]Line, error) {
+func (s *Store) tape(ctx context.Context, query string, args ...any) ([]Line, error) {
 	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("query assistant tape: %w", err)

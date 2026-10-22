@@ -30,7 +30,7 @@ func (l *loop) apply(ctx context.Context, t *turn) error {
 		case effectSend:
 			err = l.applySend(ctx, e, opened, failed)
 		default:
-			if cause := l.deps.Sessions.Stop(ctx, e.target.ID); cause != nil {
+			if cause := l.store.Stop(ctx, l.host, l.scope, e.target.ID); cause != nil {
 				err = l.actionFailure(ctx, e.target.ID, fmt.Sprintf("! error: stop %s (%d) failed: %s",
 					e.target.Project, e.target.ID, logger.Redact(cause.Error())))
 			}
@@ -54,7 +54,7 @@ func (l *loop) applyOpen(
 ) error {
 	e := t.effects[index]
 
-	card, err := l.deps.Sessions.Open(ctx, e.project, e.text, e.about)
+	card, err := l.store.Open(ctx, l.host, l.scope, e.project, e.text, e.about)
 	if err != nil {
 		failed[e.handle] = true
 		reason := []string{fmt.Sprintf("! error: open %s failed: %s", e.project, logger.Redact(err.Error()))}
@@ -87,7 +87,7 @@ func (l *loop) applySend(ctx context.Context, e *effect, opened map[string]Card,
 		target = opened[e.handle]
 	}
 
-	if err := l.deps.Sessions.Send(ctx, target.ID, e.text); err != nil {
+	if err := l.store.Send(ctx, l.host, l.scope, target.ID, e.text); err != nil {
 		return l.actionFailure(ctx, target.ID, fmt.Sprintf("! error: send %s (%d) failed: %s",
 			target.Project, target.ID, logger.Redact(err.Error())))
 	}
@@ -103,7 +103,7 @@ func (l *loop) applySend(ctx context.Context, e *effect, opened map[string]Card,
 
 // resolveHandle rewrites this turn's handle in the committed focus refs; an empty id drops it.
 func (l *loop) resolveHandle(ctx context.Context, t *turn, handle, id string) error {
-	err := l.deps.Store.WithTx(ctx, func(tx *sql.Tx) error {
+	err := l.store.sessions.WithTx(ctx, func(tx *sql.Tx) error {
 		for _, item := range t.focus {
 			if item.deleted || item.ID == 0 || !slices.Contains(item.Sessions, handle) {
 				continue
@@ -121,7 +121,7 @@ func (l *loop) resolveHandle(ctx context.Context, t *turn, handle, id string) er
 			}
 
 			item.Sessions = sessions
-			if err := setFocusSessionsTx(ctx, tx, l.sessionID, item.ID, sessions); err != nil {
+			if err := setFocusSessionsTx(ctx, tx, l.scope.Root, item.ID, sessions); err != nil {
 				return err
 			}
 		}
@@ -140,7 +140,7 @@ func (l *loop) actionFailure(ctx context.Context, target int64, reason string) e
 		return err
 	}
 
-	if err := l.deps.Enqueue(ctx, "action_failed", target, reason); err != nil {
+	if _, err := l.store.sessions.Enqueue(ctx, eventInput(l.scope.Root, target, "action_failed", reason)); err != nil {
 		return fmt.Errorf("enqueue assistant action failure: %w", err)
 	}
 

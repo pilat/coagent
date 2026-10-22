@@ -58,7 +58,7 @@ The map is an ownership index, not a list of exported symbols. Directory nesting
 does not imply a tier except where it expresses an implementation variant.
 
 - `cmd/coagent` — composition root, CLI product policy and daemon lifecycle commands. Refuses any non-Linux platform at process entry, before the guardian or command dispatch ([ADR-0062](docs/adr/0062-linux-only-supported-runtime.md)).
-- `internal/assistant` — buffered tool turn loop, bookkeeping guard, and durable memory, focus, tape, search index, send and call state.
+- `internal/assistant` — buffered tool turn loop, bookkeeping guard, work-root reads and answer observation, and durable memory, focus, tape, search index, send and call state.
 - `internal/bashsandbox` — Linux Bubblewrap confinement and process launch for session-owned workloads. Builds one ordered mount plan from a compiled policy; non-Linux builds carry only a compile-time fallback that returns an unsupported-backend error.
 - `internal/budget` — one-shot root-tree budget policy and its user-authorized tool.
 - `internal/catalog` — external model metadata acquisition, caching and identifier matching.
@@ -881,7 +881,7 @@ footer-free persistent output. A model failure commits a failure receipt and
 reply and applies nothing. After commit, effects run in call order through daemon
 lifecycle paths on an uncancelled context; handles resolve to real ids in that
 turn's focus refs and sends, a failed open drops its handle and skips its sends,
-and failures return as `action_failed` events. A send already durably queued is
+and failures return as `action_failed` events. The daemon side is four lifecycle calls (create a work root, deliver under the tree lock, stop, notify) plus a client factory; the assistant authorizes inside the delivery transaction. A send already durably queued is
 not reported as failed when the daemon shuts down. The accepted POC crash window
 between commit and effects is not replayed. Open records its `about` with the
 first send before admitting input.
@@ -891,8 +891,7 @@ accepted user input and carrying every final in that window. A send is answered
 only when the window ends in a final with no completion check pending and the
 session has no own wake source; a terminal session reports failure with its last
 finals, and superseded sends settle silently. An answer event notes what the
-assistant already said after reading that session. Runner completion, stop/kill
-transitions and the boot sweep commit observation events with send settlement.
+assistant already said after reading that session. Runner completion, stop/kill transitions and the boot sweep call the assistant's observation, which commits events with send settlement.
 Ordinary work topics keep their own output. Assistant roots are protected from
 kill/clear and excluded from progress cards. The design decision is recorded in
 [ADR-0073](docs/adr/0073-assistant-turn-is-a-buffered-tool-loop.md), superseding
@@ -1113,7 +1112,7 @@ roots are excluded from manager-level kill flows. Session-event defines
 the event vocabulary shared at this boundary.
 Telegram also ensures one configurable Assistant topic before starting delivery,
 preserving its full root attributes when binding or repairing the topic. Its
-`/desk` reads host-rendered state; `/model` works, while stop, clear, compact and
+`/model` works, while stop, clear, compact and
 kill are refused and the root is excluded from the kill picker and callbacks.
 
 Control owns socket framing, greeting/readiness behavior, `status` registration

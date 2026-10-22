@@ -3,11 +3,11 @@ package daemon
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
-	"time"
 
 	"go.uber.org/zap"
 
@@ -21,12 +21,11 @@ import (
 	"github.com/pilat/coagent/internal/sessionstore"
 )
 
-var _ assistant.Sessions = (*assistantSessions)(nil)
+var _ assistant.Host = assistantHost{}
 
-type assistantSessions struct {
-	daemon *svc
-	root   int64
-	owner  string
+// assistantHost gives assistant roots the daemon lifecycle for work roots.
+type assistantHost struct {
+	s *svc
 }
 
 // EnsureAssistantRoot reuses the hidden management project without a management surface marker.
@@ -52,16 +51,82 @@ func (s *svc) EnsureAssistantRoot(ctx context.Context, owner string) (*sessionst
 	return record, nil
 }
 
-func (s *svc) runAssistant(ctx context.Context, rs *runner) runOutcome {
-	deps, err := s.assistantDeps(ctx, rs.sessionID)
-	if err != nil {
-		logger.Ctx(ctx).Named("daemon.assistant").Error("prepare assistant", zap.Error(err))
-		return runOutcome{errored: true}
+func (h assistantHost) NewClient(id int64, model, level string) (llm.Client, error) {
+	if model == "" {
+		model = h.s.build.Config.DefaultModel()
 	}
 
+	cfg := *h.s.build.Config
+	unified := *cfg.UnifiedConfig
+	disabled := false
+	unified.Tools.Search.Enabled = &disabled
+	cfg.UnifiedConfig = &unified
+
+	client, _, err := sessionbuild.BuildClient(&cfg, model, level)
+	if err != nil {
+		return nil, fmt.Errorf("build assistant client: %w", err)
+	}
+
+	client.SetSessionID(strconv.FormatInt(id, 10))
+
+	return client, nil
+}
+
+func (h assistantHost) CreateWork(
+	ctx context.Context,
+	owner string,
+	projectID int64,
+	name, workDir string,
+) (int64, error) {
+	level, err := h.s.models.effort(h.s.models.defaultModel, "", "")
+	if err != nil {
+		return 0, err
+	}
+
+	record, _, err := h.s.store.CreateManagerRoot(ctx, sessionstore.ManagerRootCreate{
+		ProjectID: projectID, Model: h.s.models.defaultModel, ReasoningLevel: level,
+		Attributes: map[string]any{controllerapi.SessionAttributeManagerID: owner},
+		Name:       name, WorkDir: workDir,
+	})
+	if err != nil {
+		return 0, fmt.Errorf("create assistant work session: %w", err)
+	}
+
+	return record.ID, nil
+}
+
+func (h assistantHost) Deliver(ctx context.Context, id int64, text string, enqueue func(*sql.Tx) error) error {
+	unlock, err := h.s.lockSessionTree(ctx, id)
+	if err != nil {
+		return err
+	}
+	defer unlock()
+
+	if err := h.s.store.WithTx(ctx, enqueue); err != nil {
+		return fmt.Errorf("commit assistant instruction: %w", err)
+	}
+
+	// The instruction is already durable; boot recovery starts it after a shutdown.
+	if err := h.s.sendToSessionLocked(ctx, id, text); err != nil && !errors.Is(err, errDaemonShuttingDown) {
+		return err
+	}
+
+	return nil
+}
+
+func (h assistantHost) Stop(ctx context.Context, id int64) error {
+	return h.s.sendToSession(ctx, id, stopCommand)
+}
+
+func (h assistantHost) Notify(id int64, text string) {
+	h.s.publish(id, sessionevent.Notification{Type: sessionevent.NotifyMessage, Message: text})
+}
+
+func (s *svc) runAssistant(ctx context.Context, rs *runner) runOutcome {
 	rs.MarkRun()
 
-	if err := assistant.Run(ctx, deps, rs.sessionID); err != nil {
+	// The explicit conversion keeps arch-lint's deep scan from reading a daemon type as an assistant dependency.
+	if err := assistant.Run(ctx, s.assistant, assistant.Host(assistantHost{s: s}), rs.sessionID); err != nil {
 		logger.Ctx(ctx).Named("daemon.assistant").Error("run assistant", zap.Error(err))
 		return runOutcome{errored: true}
 	}
@@ -69,68 +134,28 @@ func (s *svc) runAssistant(ctx context.Context, rs *runner) runOutcome {
 	return runOutcome{hadInput: true}
 }
 
-func (s *svc) assistantDeps(ctx context.Context, id int64) (assistant.Deps, error) {
-	record, err := s.store.GetSession(ctx, id)
+func (s *svc) sweepAssistantObservations(ctx context.Context) error {
+	ids, err := s.assistant.AwaitedSessions(ctx)
 	if err != nil {
-		return assistant.Deps{}, fmt.Errorf("load assistant: %w", err)
+		return fmt.Errorf("list awaited assistant sessions: %w", err)
 	}
 
-	owner, _ := record.Attributes[controllerapi.SessionAttributeManagerID].(string)
-	var message string
+	for _, id := range ids {
+		unlock, err := s.lockSessionTree(ctx, id)
+		if err != nil {
+			return err
+		}
 
-	return assistant.Deps{
-		Store: s.store, Memory: s.assistantStore,
-		Sessions: &assistantSessions{daemon: s, root: id, owner: owner},
-		Now:      func() time.Time { return time.Now().UTC() },
-		NewClient: func(model string) (llm.Client, error) {
-			if model == "" {
-				model = s.build.Config.DefaultModel()
-			}
+		if !s.HasActiveLoop(id) {
+			err = s.assistant.Observe(ctx, id, nil)
+		}
 
-			current, err := s.store.GetSession(ctx, id)
-			if err != nil {
-				return nil, fmt.Errorf("load assistant reasoning level: %w", err)
-			}
+		unlock()
 
-			cfg := *s.build.Config
-			unified := *cfg.UnifiedConfig
-			disabled := false
-			unified.Tools.Search.Enabled = &disabled
-			cfg.UnifiedConfig = &unified
-
-			client, _, err := sessionbuild.BuildClient(&cfg, model, current.ReasoningLevel)
-			if err != nil {
-				return nil, fmt.Errorf("build assistant client: %w", err)
-			}
-
-			client.SetSessionID(strconv.FormatInt(id, 10))
-
-			return client, nil
-		},
-		SayTx: func(ctx context.Context, tx *sql.Tx, text string) error {
-			if err := sessionstore.PublishAssistantMessageTx(ctx, tx, id, text); err != nil {
-				return fmt.Errorf("publish assistant reply: %w", err)
-			}
-
-			message = text
-
-			return nil
-		},
-		Notify: func() { s.publish(id, sessionevent.Notification{Type: sessionevent.NotifyMessage, Message: message}) },
-		Enqueue: func(ctx context.Context, kind string, target int64, text string) error {
-			_, err := s.store.Enqueue(ctx, assistantEventInput(id, target, kind, text))
-			if err != nil {
-				return fmt.Errorf("enqueue assistant event: %w", err)
-			}
-
-			return nil
-		},
-	}, nil
-}
-
-func assistantEventInput(id, target int64, kind, text string) sessionstore.Input {
-	return sessionstore.Input{
-		SessionID: id, Source: sessionstore.InputSourceAgent, Content: text,
-		Attributes: map[string]any{"assistant_event": kind, "session_id": target},
+		if err != nil {
+			return fmt.Errorf("observe assistant work %d: %w", id, err)
+		}
 	}
+
+	return nil
 }

@@ -6,22 +6,48 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
+	"github.com/pilat/coagent/internal/controllerapi"
+	"github.com/pilat/coagent/internal/llm"
 	"github.com/pilat/coagent/internal/llmwire"
 	"github.com/pilat/coagent/internal/sessionstore"
 )
 
+// Host is the daemon lifecycle behind assistant roots; Deliver's enqueue authorizes, other ids are authorized first.
+type Host interface {
+	NewClient(sessionID int64, model, level string) (llm.Client, error)
+	CreateWork(ctx context.Context, owner string, projectID int64, name, workDir string) (int64, error)
+	// Deliver commits enqueue under the session's tree lock, then wakes the session.
+	Deliver(ctx context.Context, sessionID int64, text string, enqueue func(*sql.Tx) error) error
+	Stop(ctx context.Context, sessionID int64) error
+	Notify(sessionID int64, text string)
+}
+
+type loop struct {
+	store *Store
+	host  Host
+	scope Scope
+}
+
 // Run drains FIFO inputs without entering the ordinary session runtime.
-func Run(ctx context.Context, deps Deps, sessionID int64) error {
-	l := loop{deps: deps, sessionID: sessionID}
-	if err := deps.Store.UpdateSessionStatus(ctx, sessionID, sessionstore.SessionStatusActive); err != nil {
+func Run(ctx context.Context, store *Store, host Host, sessionID int64) error {
+	record, err := store.sessions.GetSession(ctx, sessionID)
+	if err != nil {
+		return fmt.Errorf("load assistant: %w", err)
+	}
+
+	owner, _ := record.Attributes[controllerapi.SessionAttributeManagerID].(string)
+	l := loop{store: store, host: host, scope: Scope{Root: sessionID, Owner: owner}}
+
+	if err := store.sessions.UpdateSessionStatus(ctx, l.scope.Root, sessionstore.SessionStatusActive); err != nil {
 		return fmt.Errorf("activate assistant: %w", err)
 	}
 
-	err := l.drain(ctx)
-	finishErr := deps.Store.UpdateSessionStatus(
+	err = l.drain(ctx)
+	finishErr := store.sessions.UpdateSessionStatus(
 		context.WithoutCancel(ctx),
-		sessionID,
+		l.scope.Root,
 		sessionstore.SessionStatusCompleted,
 	)
 
@@ -30,7 +56,7 @@ func Run(ctx context.Context, deps Deps, sessionID int64) error {
 
 func (l *loop) drain(ctx context.Context) error {
 	for ctx.Err() == nil {
-		inputs, err := l.deps.Store.ListPending(ctx, l.sessionID)
+		inputs, err := l.store.sessions.ListPending(ctx, l.scope.Root)
 		if err != nil {
 			return fmt.Errorf("list assistant inputs: %w", err)
 		}
@@ -51,9 +77,9 @@ func (l *loop) drain(ctx context.Context) error {
 
 func (l *loop) turn(ctx context.Context, input *sessionstore.InboxInput) error {
 	if input.Source == sessionstore.InputSourceUser && strings.HasPrefix(strings.TrimSpace(input.RawContent), "/") {
-		err := l.deps.Store.WithTx(ctx, func(tx *sql.Tx) error {
-			return sessionstore.HandleAssistantInputTx(ctx, tx, l.sessionID, input.ID,
-				"assistant_ignored_command", l.deps.Now())
+		err := l.store.sessions.WithTx(ctx, func(tx *sql.Tx) error {
+			return sessionstore.HandleAssistantInputTx(ctx, tx, l.scope.Root, input.ID,
+				"assistant_ignored_command", time.Now().UTC())
 		})
 		if errors.Is(err, sessionstore.ErrInputResolved) {
 			return nil
@@ -133,19 +159,25 @@ func (l *loop) event(ctx context.Context, input *sessionstore.InboxInput) (Event
 }
 
 func (l *loop) begin(ctx context.Context, input *sessionstore.InboxInput, event Event) (*turn, error) {
-	now := l.deps.Now()
+	now := time.Now().UTC()
 
-	view, err := loadView(ctx, l.deps.Memory, l.deps.Sessions, l.sessionID, event, now)
+	desk, err := l.store.LoadDesk(ctx, l.scope.Root, event.LineID, now)
 	if err != nil {
-		return nil, fmt.Errorf("load assistant desk: %w", err)
+		return nil, fmt.Errorf("load assistant desk: read desk: %w", err)
 	}
 
-	memory, err := l.deps.Memory.Memory(ctx, l.sessionID)
+	recent, total, err := l.store.Recent(ctx, l.scope, RecentSessions)
+	if err != nil {
+		return nil, fmt.Errorf("load assistant desk: read recent sessions: %w", err)
+	}
+
+	memory, err := l.store.Memory(ctx, l.scope.Root)
 	if err != nil {
 		return nil, fmt.Errorf("load assistant turn memory: %w", err)
 	}
 
-	t := newTurn(input, memory, view.Desk.Focus, now)
+	view := View{Desk: desk, Recent: recent, Total: total, Event: event}
+	t := newTurn(input, memory, desk.Focus, now)
 	t.messages = []llmwire.Message{{Role: llmwire.RoleUser, Content: Render(view, now)}}
 
 	return t, nil
@@ -154,9 +186,9 @@ func (l *loop) begin(ctx context.Context, input *sessionstore.InboxInput, event 
 func (l *loop) appendLine(ctx context.Context, kind, text string) (int64, error) {
 	var id int64
 
-	err := l.deps.Store.WithTx(ctx, func(tx *sql.Tx) error {
+	err := l.store.sessions.WithTx(ctx, func(tx *sql.Tx) error {
 		var err error
-		id, err = AppendTapeTx(ctx, tx, l.sessionID, Line{At: l.deps.Now(), Kind: kind, Text: text})
+		id, err = AppendTapeTx(ctx, tx, l.scope.Root, Line{At: time.Now().UTC(), Kind: kind, Text: text})
 
 		return err
 	})

@@ -22,7 +22,7 @@ func (l *loop) alreadyTold(ctx context.Context, input *sessionstore.InboxInput) 
 		return "", nil
 	}
 
-	lines, err := l.deps.Memory.RecentTape(ctx, l.sessionID, toldLookback)
+	lines, err := l.store.RecentTape(ctx, l.scope.Root, toldLookback)
 	if err != nil {
 		return "", fmt.Errorf("load told lines: %w", err)
 	}

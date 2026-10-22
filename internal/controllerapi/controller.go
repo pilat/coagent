@@ -90,10 +90,9 @@ type AssistantRootEnsureData struct {
 	Attributes map[string]any `json:"attributes"`
 }
 
-// AssistantController exposes the manager's assistant identity and read-only desk.
+// AssistantController exposes the manager's assistant identity.
 type AssistantController interface {
 	EnsureAssistantRoot(context.Context) (*AssistantRootEnsureData, error)
-	AssistantDesk(context.Context, int64) (string, error)
 }
 
 // Controller is the complete in-process API the daemon exposes to rich

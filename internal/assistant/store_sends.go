@@ -7,11 +7,44 @@ import (
 	"time"
 )
 
-// RecordSendTx commits the observation obligation with the work input.
-func RecordSendTx(ctx context.Context, tx *sql.Tx, send Send) error {
+// send links an assistant instruction to the work session's durable input.
+type send struct {
+	inputID, root, sessionID int64
+	createdAt                time.Time
+}
+
+// AwaitedSessions lists work sessions with unobserved sends, oldest obligation first.
+func (s *Store) AwaitedSessions(ctx context.Context) ([]int64, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT session_id FROM assistant_sends WHERE observed_at IS NULL
+		GROUP BY session_id ORDER BY MIN(input_id)`)
+	if err != nil {
+		return nil, fmt.Errorf("load assistant recovery obligations: %w", err)
+	}
+	defer rows.Close()
+
+	var ids []int64
+
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("load assistant recovery obligations: %w", err)
+		}
+
+		ids = append(ids, id)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("load assistant recovery obligations: %w", err)
+	}
+
+	return ids, nil
+}
+
+// recordSendTx commits the observation obligation with the work input.
+func recordSendTx(ctx context.Context, tx *sql.Tx, sd send) error {
 	_, err := tx.ExecContext(ctx, `INSERT INTO assistant_sends
 		(input_id, assistant_session_id, session_id, created_at) VALUES (?, ?, ?, ?)`,
-		send.InputID, send.AssistantSessionID, send.SessionID, send.CreatedAt)
+		sd.inputID, sd.root, sd.sessionID, sd.createdAt)
 	if err != nil {
 		return fmt.Errorf("record assistant send: %w", err)
 	}
@@ -19,25 +52,24 @@ func RecordSendTx(ctx context.Context, tx *sql.Tx, send Send) error {
 	return nil
 }
 
-// UnobservedSends returns FIFO obligations; sessionID zero selects the boot sweep.
-func (s *store) UnobservedSends(ctx context.Context, sessionID int64) ([]Send, error) {
+// unobservedSends returns one session's obligations in FIFO order.
+func (s *Store) unobservedSends(ctx context.Context, sessionID int64) ([]send, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT input_id, assistant_session_id, session_id, created_at
-		FROM assistant_sends WHERE observed_at IS NULL AND (? = 0 OR session_id = ?) ORDER BY input_id`,
-		sessionID, sessionID)
+		FROM assistant_sends WHERE observed_at IS NULL AND session_id = ? ORDER BY input_id`, sessionID)
 	if err != nil {
 		return nil, fmt.Errorf("load assistant sends: %w", err)
 	}
 	defer rows.Close()
 
-	var sends []Send
+	var sends []send
 
 	for rows.Next() {
-		var send Send
-		if err := rows.Scan(&send.InputID, &send.AssistantSessionID, &send.SessionID, &send.CreatedAt); err != nil {
+		var sd send
+		if err := rows.Scan(&sd.inputID, &sd.root, &sd.sessionID, &sd.createdAt); err != nil {
 			return nil, fmt.Errorf("scan assistant send: %w", err)
 		}
 
-		sends = append(sends, send)
+		sends = append(sends, sd)
 	}
 
 	if err := rows.Err(); err != nil {
@@ -47,8 +79,19 @@ func (s *store) UnobservedSends(ctx context.Context, sessionID int64) ([]Send, e
 	return sends, nil
 }
 
-// MarkObservedTx reports whether this transaction won settlement; only the winner may emit an event.
-func MarkObservedTx(ctx context.Context, tx *sql.Tx, inputID int64, at time.Time) (bool, error) {
+// settleSends marks a stopped session's sends observed without emitting anything.
+func (s *Store) settleSends(ctx context.Context, sessionID int64) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE assistant_sends SET observed_at = ?
+		WHERE session_id = ? AND observed_at IS NULL`, time.Now().UTC(), sessionID)
+	if err != nil {
+		return fmt.Errorf("settle stopped assistant sends: %w", err)
+	}
+
+	return nil
+}
+
+// markObservedTx reports whether this transaction won settlement; only the winner may emit an event.
+func markObservedTx(ctx context.Context, tx *sql.Tx, inputID int64, at time.Time) (bool, error) {
 	result, err := tx.ExecContext(ctx, `UPDATE assistant_sends SET observed_at = ?
 		WHERE input_id = ? AND observed_at IS NULL`, at, inputID)
 	if err != nil {
@@ -63,8 +106,8 @@ func MarkObservedTx(ctx context.Context, tx *sql.Tx, inputID int64, at time.Time
 	return changed > 0, nil
 }
 
-// SaveAboutTx commits why a work session exists together with its first instruction.
-func SaveAboutTx(ctx context.Context, tx *sql.Tx, sessionID int64, about string, at time.Time) error {
+// saveAboutTx commits why a work session exists together with its first instruction.
+func saveAboutTx(ctx context.Context, tx *sql.Tx, sessionID int64, about string, at time.Time) error {
 	_, err := tx.ExecContext(ctx, `INSERT INTO assistant_work (session_id, about, created_at) VALUES (?, ?, ?)
 		ON CONFLICT(session_id) DO UPDATE SET about = excluded.about`, sessionID, about, at)
 	if err != nil {

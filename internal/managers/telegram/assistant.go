@@ -77,16 +77,6 @@ func (m *Manager) handleAssistantCommand(ctx context.Context, id, topic int64, t
 	case commandKill, commandStop, commandClear, "/compact":
 		_, _ = m.sendMessage(ctx, "This command is unavailable in the Assistant topic.", nil, topic)
 		return true
-	case "/desk":
-		desk, err := m.controller.AssistantDesk(ctx, id)
-		if err != nil {
-			_, _ = m.sendMessage(ctx, "Could not read the desk: "+err.Error(), nil, topic)
-			return true
-		}
-
-		_, _ = m.sendMessage(ctx, desk, nil, topic)
-
-		return true
 	default:
 		return false
 	}

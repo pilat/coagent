@@ -31,6 +31,7 @@ var errFinalReply = errors.New("the reply is final; no new work in this phase")
 // turn is one input's conversation; nothing in it has an effect before commit.
 type turn struct {
 	input      *sessionstore.InboxInput
+	now        time.Time
 	today      string
 	messages   []llmwire.Message
 	recorded   int
@@ -74,7 +75,7 @@ type effect struct {
 }
 
 func newTurn(input *sessionstore.InboxInput, memory []Memory, focus []Focus, now time.Time) *turn {
-	t := &turn{input: input, today: now.UTC().Format(time.DateOnly), before: focus}
+	t := &turn{input: input, now: now, today: now.UTC().Format(time.DateOnly), before: focus}
 
 	for _, note := range memory {
 		t.memory = append(t.memory, &memoryItem{Memory: note, ref: fmt.Sprintf("m%d", note.ID)})

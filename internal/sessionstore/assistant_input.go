@@ -7,16 +7,6 @@ import (
 	"time"
 )
 
-var _ AssistantInbox = (*Store)(nil)
-
-// AssistantInbox shares lifecycle and inbox transactions with the independent desk loop.
-type AssistantInbox interface {
-	WithTx(context.Context, func(*sql.Tx) error) error
-	ListPending(context.Context, int64) ([]*InboxInput, error)
-	GetSession(context.Context, int64) (*SessionRecord, error)
-	UpdateSessionStatus(context.Context, int64, SessionStatus) error
-}
-
 // RejectAssistantCommandTx lets the lifecycle refusal win over a concurrent ignored-command receipt.
 func RejectAssistantCommandTx(ctx context.Context, tx *sql.Tx, sessionID, inputID int64, text string) (bool, error) {
 	result, err := tx.ExecContext(ctx, `UPDATE session_inbox
