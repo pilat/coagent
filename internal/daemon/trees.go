@@ -19,7 +19,6 @@ import (
 	"github.com/pilat/coagent/internal/sessionevent"
 	"github.com/pilat/coagent/internal/sessionstore"
 	"github.com/pilat/coagent/internal/subagent"
-	"github.com/pilat/coagent/internal/tool"
 )
 
 // keepRootStopping leaves the terminal status and visible output to the caller's transaction.
@@ -48,7 +47,7 @@ type stopPlan struct {
 }
 
 func (s *svc) kill(ctx context.Context, input *sessionstore.InboxInput) error {
-	if refused, err := s.refuseAssistantCommand(ctx, input); refused || err != nil {
+	if refused, err := s.refuseAssistantRoot(ctx, input); refused || err != nil {
 		return err
 	}
 
@@ -132,15 +131,6 @@ func (s *svc) Fence(fenceCtx context.Context, rootSessionID int64) (func(), erro
 }
 
 func (s *svc) killLocked(ctx context.Context, sessionID int64) error {
-	rec, err := s.store.GetSession(ctx, sessionID)
-	if err != nil {
-		return fmt.Errorf("load kill session: %w", err)
-	}
-
-	if rec.AgentType == tool.AssistantAgentType {
-		return errors.New("assistant root cannot be killed")
-	}
-
 	rs, ok := s.runners.load(sessionID)
 
 	if ok {
@@ -153,6 +143,11 @@ func (s *svc) killLocked(ctx context.Context, sessionID int64) error {
 		)
 
 		rs.Stop()
+	}
+
+	rec, err := s.store.GetSession(ctx, sessionID)
+	if err != nil {
+		return fmt.Errorf("session %d not found", sessionID)
 	}
 
 	if rec.KilledAt != nil {
@@ -369,7 +364,7 @@ func (s *svc) settleStoppedTree(ctx context.Context, ids []int64) error {
 }
 
 func (s *svc) clear(ctx context.Context, input *sessionstore.InboxInput) (int64, error) {
-	if refused, err := s.refuseAssistantCommand(ctx, input); refused || err != nil {
+	if refused, err := s.refuseAssistantRoot(ctx, input); refused || err != nil {
 		return 0, err
 	}
 
@@ -399,10 +394,6 @@ func (s *svc) clearLocked(ctx context.Context, sessionID, inputID int64) (int64,
 
 	if rec.KilledAt != nil {
 		return 0, fmt.Errorf("session %d is already killed", sessionID)
-	}
-
-	if rec.AgentType == tool.AssistantAgentType {
-		return 0, errors.New("assistant root cannot be cleared")
 	}
 
 	workDir, _ := s.store.GetProjectWorkDir(ctx, rec.ProjectID)

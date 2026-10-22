@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"time"
 
 	"go.uber.org/zap"
 
@@ -19,6 +20,7 @@ import (
 	"github.com/pilat/coagent/internal/sessionbuild"
 	"github.com/pilat/coagent/internal/sessionevent"
 	"github.com/pilat/coagent/internal/sessionstore"
+	"github.com/pilat/coagent/internal/tool"
 )
 
 var _ assistant.Host = assistantHost{}
@@ -132,6 +134,28 @@ func (s *svc) runAssistant(ctx context.Context, rs *runner) runOutcome {
 	}
 
 	return runOutcome{hadInput: true}
+}
+
+// refuseAssistantRoot resolves a kill or clear aimed at an assistant root with the loop's own ignore receipt.
+func (s *svc) refuseAssistantRoot(ctx context.Context, input *sessionstore.InboxInput) (bool, error) {
+	record, err := s.store.GetSession(ctx, input.SessionID)
+	if err != nil {
+		return false, fmt.Errorf("load command target: %w", err)
+	}
+
+	if record.AgentType != tool.AssistantAgentType {
+		return false, nil
+	}
+
+	err = s.store.WithTx(ctx, func(tx *sql.Tx) error {
+		return sessionstore.HandleAssistantInputTx(ctx, tx, record.ID, input.ID,
+			"assistant_ignored_command", time.Now().UTC())
+	})
+	if err != nil && !errors.Is(err, sessionstore.ErrInputResolved) {
+		return true, fmt.Errorf("ignore assistant command: %w", err)
+	}
+
+	return true, nil
 }
 
 func (s *svc) sweepAssistantObservations(ctx context.Context) error {
