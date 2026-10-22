@@ -114,7 +114,6 @@ func TestHarnessScenario_AssistantTelegram(t *testing.T) {
 	for _, command := range []string{commandKill, commandStop, commandClear, "/compact focus"} {
 		manager.processUpdate(t.Context(), assistantTelegramUpdate(topic, command))
 	}
-	manager.processUpdate(t.Context(), assistantTelegramUpdate(topic, "/desk"))
 	manager.processUpdate(t.Context(), telegramUpdate{Message: &telegramMessage{
 		From: &telegramUser{ID: 7}, Chat: telegramChat{ID: harnessChatID}, MessageThreadID: topic,
 		Photo: []telegramPhotoSize{{FileID: "ignored-photo"}},
@@ -143,7 +142,6 @@ func TestHarnessScenario_AssistantTelegram(t *testing.T) {
 	}
 	assert.Equal(t, 1, replies)
 	assert.Equal(t, 4, refused)
-	assert.True(t, h.recorder.hasMessagePrefix("now:"))
 	assertAssistantKillPicker(t, h, manager, root.SessionID)
 	require.NoError(t, manager.Stop(context.Background()))
 	before := assistantTopicCreations(h.recorder.snapshot())

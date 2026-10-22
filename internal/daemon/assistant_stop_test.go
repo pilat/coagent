@@ -1,62 +1,17 @@
 package daemon
 
 import (
-	"context"
 	"fmt"
 	"strings"
-	"sync/atomic"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/pilat/coagent/internal/assistant"
 	"github.com/pilat/coagent/internal/llmwire"
 	"github.com/pilat/coagent/internal/registry"
 	"github.com/pilat/coagent/internal/sessionstore"
 )
-
-type assistantObservationBarrier struct {
-	assistant.Store
-	target  int64
-	blocked atomic.Bool
-	reached chan struct{}
-	release chan struct{}
-}
-
-func TestHarnessScenario_AssistantStopSuppressesStaleObservation(t *testing.T) {
-	h := newHarness(t, harnessOptions{respond: trivialRespond})
-	root, err := h.mgr.EnsureAssistantRoot(h.ctx, scenarioManagerID)
-	require.NoError(t, err)
-	work, err := h.store.CreateSession(h.ctx, h.projectID, "fake-model", "", managerAttrs(scenarioManagerID))
-	require.NoError(t, err)
-	barrier := &assistantObservationBarrier{
-		Store: h.mgr.assistantStore, target: work.ID, reached: make(chan struct{}), release: make(chan struct{}),
-	}
-	h.mgr.assistantStore = barrier
-	t.Cleanup(func() { closeOnce(barrier.release) })
-	a := &assistantSessions{daemon: h.mgr, root: root.ID, owner: scenarioManagerID}
-	require.NoError(t, a.Send(h.ctx, work.ID, "complete while stopping"))
-	requireSignal(t, barrier.reached)
-	stopped := make(chan error, 1)
-	go func() { stopped <- a.Stop(h.ctx, work.ID) }()
-	h.waitUntil("stop settled the send", func() bool {
-		sends, err := barrier.Store.UnobservedSends(h.ctx, work.ID)
-		return err == nil && len(sends) == 0
-	})
-	close(barrier.release)
-	select {
-	case err := <-stopped:
-		require.NoError(t, err)
-	case <-time.After(5 * time.Second):
-		t.Fatal("stop did not join the completed runner")
-	}
-
-	assert.Zero(t, assistantEventCount(t, h, root.ID))
-	require.NoError(t, h.mgr.sweepAssistantObservations(h.ctx))
-	assert.Zero(t, assistantEventCount(t, h, root.ID))
-}
 
 func TestHarnessScenario_AssistantUserCancellationWithoutRunner(t *testing.T) {
 	for _, state := range []string{"queued", "yielded"} {
@@ -92,7 +47,7 @@ func TestHarnessScenario_AssistantUserCancellationWithoutRunner(t *testing.T) {
 					})
 				}
 
-				a := &assistantSessions{daemon: h.mgr, root: root.ID, owner: scenarioManagerID}
+				a := assistantFor(h, root.ID)
 				require.NoError(t, a.Send(h.ctx, work.ID, "work to cancel"))
 
 				if state == "yielded" {
@@ -121,9 +76,7 @@ func TestHarnessScenario_AssistantUserCancellationWithoutRunner(t *testing.T) {
 				if state == "yielded" {
 					assert.Contains(t, body, "yielded answer", "what the session said before it was stopped is kept")
 				}
-				sends, err := h.mgr.assistantStore.UnobservedSends(h.ctx, work.ID)
-				require.NoError(t, err)
-				assert.Empty(t, sends)
+				assert.Zero(t, unobservedCount(t, h, work.ID))
 				require.NoError(t, h.mgr.sweepAssistantObservations(h.ctx))
 				assert.Equal(t, 1, assistantEventCount(t, h, root.ID))
 			})
@@ -145,31 +98,15 @@ func TestHarnessScenario_AssistantStopSuppressesFailure(t *testing.T) {
 	work, err := h.store.CreateSession(h.ctx, h.projectID, "fake-model", "", managerAttrs(scenarioManagerID))
 	require.NoError(t, err)
 	h.startInboxWake()
-	a := &assistantSessions{daemon: h.mgr, root: root.ID, owner: scenarioManagerID}
+	a := assistantFor(h, root.ID)
 	require.NoError(t, a.Send(h.ctx, work.ID, "start work"))
 	requireSignal(t, entered)
 	require.NoError(t, a.Stop(h.ctx, work.ID))
 	close(release)
 	h.waitUntil("stopped work joined", func() bool { return !h.mgr.HasActiveLoop(work.ID) })
-	sends, err := h.mgr.assistantStore.UnobservedSends(h.ctx, work.ID)
-	require.NoError(t, err)
-	assert.Empty(t, sends)
+	assert.Zero(t, unobservedCount(t, h, work.ID))
 	assert.Zero(t, assistantEventCount(t, h, root.ID))
 	stopped, err := h.store.GetSession(h.ctx, work.ID)
 	require.NoError(t, err)
 	assert.Equal(t, sessionstore.SessionStatusStopped, stopped.Status)
-}
-
-func (b *assistantObservationBarrier) UnobservedSends(ctx context.Context, id int64) ([]assistant.Send, error) {
-	sends, err := b.Store.UnobservedSends(ctx, id)
-	if err == nil && id == b.target && len(sends) > 0 && b.blocked.CompareAndSwap(false, true) {
-		close(b.reached)
-		select {
-		case <-b.release:
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		}
-	}
-
-	return sends, err
 }

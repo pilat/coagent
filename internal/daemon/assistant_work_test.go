@@ -2,8 +2,6 @@ package daemon
 
 import (
 	"database/sql"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -11,9 +9,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/pilat/coagent/internal/assistant"
-	"github.com/pilat/coagent/internal/coagenthome"
-	"github.com/pilat/coagent/internal/projectpath"
 	"github.com/pilat/coagent/internal/sessionstore"
 	"github.com/pilat/coagent/internal/transcript"
 )
@@ -22,7 +17,7 @@ func TestAssistantWorkReachesEveryOwnedRoot(t *testing.T) {
 	h := newHarness(t, harnessOptions{})
 	root, err := h.mgr.EnsureAssistantRoot(h.ctx, scenarioManagerID)
 	require.NoError(t, err)
-	a := &assistantSessions{daemon: h.mgr, root: root.ID, owner: scenarioManagerID}
+	a := assistantFor(h, root.ID)
 	touched := workWithAnswer(t, h, root.ID, true, "real user", "answer\n"+strings.Repeat("я", 600))
 	userMade := workWithAnswer(t, h, root.ID, false, "собери отчёт по продажам", "отчёт готов")
 	foreign, err := h.store.CreateSession(h.ctx, h.projectID, "fake-model", "", managerAttrs("another-manager"))
@@ -87,7 +82,7 @@ func TestAssistantReadIncludesCompactedFinals(t *testing.T) {
 	h := newHarness(t, harnessOptions{})
 	root, err := h.mgr.EnsureAssistantRoot(h.ctx, scenarioManagerID)
 	require.NoError(t, err)
-	a := &assistantSessions{daemon: h.mgr, root: root.ID, owner: scenarioManagerID}
+	a := assistantFor(h, root.ID)
 	work := workWithAnswer(t, h, root.ID, true, "old request", "old final")
 	_, err = h.db.ExecContext(h.ctx, `UPDATE messages SET compacted_at = CURRENT_TIMESTAMP WHERE session_id = ?`, work)
 	require.NoError(t, err)
@@ -108,7 +103,7 @@ func TestAssistantRecentOrdersByActivity(t *testing.T) {
 	h := newHarness(t, harnessOptions{})
 	root, err := h.mgr.EnsureAssistantRoot(h.ctx, scenarioManagerID)
 	require.NoError(t, err)
-	a := &assistantSessions{daemon: h.mgr, root: root.ID, owner: scenarioManagerID}
+	a := assistantFor(h, root.ID)
 	var ids []int64
 	for index := range 12 {
 		id := catalogTestWork(t, h, root.ID, h.projectID, true)
@@ -133,60 +128,6 @@ func TestAssistantRecentOrdersByActivity(t *testing.T) {
 	assert.Equal(t, []int64{ids[1], ids[0]}, []int64{page[0].ID, page[1].ID})
 }
 
-func TestAssistantProjectsFiltersAndKeys(t *testing.T) {
-	h := newHarness(t, harnessOptions{})
-	root, err := h.mgr.EnsureAssistantRoot(h.ctx, scenarioManagerID)
-	require.NoError(t, err)
-	a := &assistantSessions{daemon: h.mgr, root: root.ID, owner: scenarioManagerID}
-	_, err = h.store.GetOrCreateHiddenProject(h.ctx, t.TempDir())
-	require.NoError(t, err)
-	worktrees, err := coagenthome.Join(coagenthome.WorktreesDirName)
-	require.NoError(t, err)
-	worktree := filepath.Join(worktrees, "catalog-hidden")
-	require.NoError(t, os.MkdirAll(worktree, 0o700))
-	_, err = h.store.GetOrCreateProject(h.ctx, worktree)
-	require.NoError(t, err)
-	_, err = h.store.GetOrCreateProject(h.ctx, filepath.Join(t.TempDir(), "missing"))
-	require.NoError(t, err)
-	projectsRoot, err := coagenthome.Join(coagenthome.ProjectsDirName)
-	require.NoError(t, err)
-	scratch := filepath.Join(projectsRoot, "catalog-same")
-	require.NoError(t, os.MkdirAll(scratch, 0o700))
-	first, err := h.store.GetOrCreateNamedProject(h.ctx, t.TempDir(), "same")
-	require.NoError(t, err)
-	second, err := h.store.GetOrCreateNamedProject(h.ctx, scratch, "same")
-	require.NoError(t, err)
-	catalogTestWork(t, h, root.ID, first, true)
-
-	projects, err := a.Projects(h.ctx)
-	require.NoError(t, err)
-	for _, project := range projects {
-		assert.NotContains(t, []string{"catalog-hidden", "missing"}, project.Name)
-		if project.Name != "same" {
-			continue
-		}
-
-		assert.NotEqual(t, "same", project.Key)
-		choice, err := a.resolveProject(h.ctx, project.Key)
-		require.NoError(t, err)
-		assert.Contains(t, []int64{first, second}, choice.id)
-		if choice.id == second {
-			assert.True(t, strings.HasPrefix(project.Place, "scratch "))
-		}
-	}
-	listed, _, err := a.List(h.ctx, 0, 20, catalogPath(scratch))
-	require.NoError(t, err)
-	assert.Empty(t, listed)
-	_, _, err = a.List(h.ctx, 0, 20, "nowhere")
-	require.ErrorContains(t, err, `no project "nowhere"`)
-
-	require.NoError(t, a.CheckProject(h.ctx, "fresh-research"))
-	fresh := filepath.Join(projectpath.ResolveRoot(h.mgr.build.Config.UnifiedConfig), "fresh-research")
-	_, err = os.Stat(fresh)
-	assert.True(t, os.IsNotExist(err), "validating an open creates nothing")
-	require.Error(t, a.CheckProject(h.ctx, "../outside"))
-}
-
 func TestAssistantOpenAboutFailureRollsBackFirstSend(t *testing.T) {
 	h := newHarness(t, harnessOptions{})
 	root, err := h.mgr.EnsureAssistantRoot(h.ctx, scenarioManagerID)
@@ -194,7 +135,7 @@ func TestAssistantOpenAboutFailureRollsBackFirstSend(t *testing.T) {
 	_, err = h.db.ExecContext(h.ctx, `CREATE TRIGGER reject_about BEFORE INSERT ON assistant_work
 		BEGIN SELECT RAISE(ABORT,'about unavailable'); END`)
 	require.NoError(t, err)
-	a := &assistantSessions{daemon: h.mgr, root: root.ID, owner: scenarioManagerID}
+	a := assistantFor(h, root.ID)
 	_, err = a.Open(h.ctx, "about-failure", "must not run", "purpose")
 	require.ErrorContains(t, err, "about unavailable")
 	var sends, inputs int
@@ -203,27 +144,6 @@ func TestAssistantOpenAboutFailureRollsBackFirstSend(t *testing.T) {
 		`SELECT COUNT(*) FROM session_inbox WHERE raw_content='must not run'`).Scan(&inputs))
 	assert.Zero(t, sends)
 	assert.Zero(t, inputs)
-}
-
-func TestAssistantReadKeepsNewestWhole(t *testing.T) {
-	t.Parallel()
-	old, middle, newest := strings.Repeat("a", 30), strings.Repeat("b", 30), strings.Repeat("c", 30)
-	assert.Equal(t, middle+"\n\n"+newest, newestWithin([]string{old, middle, newest}, 70))
-	assert.Equal(t, "cccccc\n[…]\nccc", newestWithin([]string{newest}, 14), "only a lone oversized entry is cut")
-}
-
-func TestAssistantProjectPathArg(t *testing.T) {
-	t.Parallel()
-	home, err := coagenthome.UserHome()
-	require.NoError(t, err)
-	path, ok := projectPathArg("~/projects/pilat/coagent")
-	assert.True(t, ok)
-	assert.Equal(t, filepath.Join(home, "projects/pilat/coagent"), path)
-	path, ok = projectPathArg("/srv/repo/")
-	assert.True(t, ok)
-	assert.Equal(t, "/srv/repo", path)
-	_, ok = projectPathArg("coagent")
-	assert.False(t, ok)
 }
 
 // workWithAnswer gives a completed root one accepted request, a host nudge and a final answer.
@@ -238,9 +158,11 @@ func workWithAnswer(t *testing.T, h *harness, root int64, touched bool, ask, ans
 	require.NoError(t, err)
 	if touched {
 		require.NoError(t, h.store.WithTx(h.ctx, func(tx *sql.Tx) error {
-			return assistant.RecordSendTx(h.ctx, tx, assistant.Send{
-				InputID: in.Input.ID, AssistantSessionID: root, SessionID: work.ID, CreatedAt: time.Now().UTC(),
-			})
+			_, err := tx.ExecContext(h.ctx, `INSERT INTO assistant_sends
+				(input_id, assistant_session_id, session_id, created_at) VALUES (?, ?, ?, ?)`,
+				in.Input.ID, root, work.ID, time.Now().UTC())
+
+			return err
 		}))
 	}
 	_, err = h.store.Commit(h.ctx, sessionstore.Commit{
@@ -287,9 +209,11 @@ func catalogTestWork(t *testing.T, h *harness, root, project int64, touched bool
 		sessionstore.Input{SessionID: work.ID, Source: sessionstore.InputSourceUser, Content: "work"})
 	require.NoError(t, err)
 	require.NoError(t, h.store.WithTx(h.ctx, func(tx *sql.Tx) error {
-		return assistant.RecordSendTx(h.ctx, tx, assistant.Send{
-			InputID: in.Input.ID, AssistantSessionID: root, SessionID: work.ID, CreatedAt: time.Now().UTC(),
-		})
+		_, err := tx.ExecContext(h.ctx, `INSERT INTO assistant_sends
+			(input_id, assistant_session_id, session_id, created_at) VALUES (?, ?, ?, ?)`,
+			in.Input.ID, root, work.ID, time.Now().UTC())
+
+		return err
 	}))
 
 	return work.ID

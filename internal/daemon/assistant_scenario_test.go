@@ -96,7 +96,7 @@ func TestHarnessScenario_AssistantOpenRegisteredWorktree(t *testing.T) {
 	path, name := t.TempDir(), "repo-abcd1234/feature"
 	project, err := h.store.GetOrCreateNamedProject(h.ctx, path, name)
 	require.NoError(t, err)
-	a := &assistantSessions{daemon: h.mgr, root: root.ID, owner: scenarioManagerID}
+	a := assistantFor(h, root.ID)
 	h.startInboxWake()
 	card, err := a.Open(h.ctx, name, "inspect existing worktree", "inspect existing worktree")
 	require.NoError(t, err)
@@ -128,17 +128,18 @@ func TestHarnessScenario_AssistantSendResumesStoppedAndRefusesKill(t *testing.T)
 	require.NoError(t, err)
 	require.NoError(t, h.store.UpdateSessionStatus(h.ctx, work.ID, sessionstore.SessionStatusStopped))
 	h.startInboxWake()
-	a := &assistantSessions{daemon: h.mgr, root: root.ID, owner: scenarioManagerID}
+	a := assistantFor(h, root.ID)
 	require.NoError(t, a.Send(h.ctx, work.ID, "resume"))
 	h.waitUntil("resumed assistant result", func() bool { return assistantSayCount(t, h, root.ID, "done") == 1 })
 	h.waitUntil("assistant idle", func() bool { return !h.mgr.HasActiveLoop(root.ID) })
 
 	for _, command := range []string{killCommand, clearCommand} {
 		require.NoError(t, h.mgr.sendToSession(h.ctx, root.ID, command))
-		var state string
-		require.NoError(t, h.db.QueryRowContext(h.ctx, `SELECT state FROM session_inbox
-			WHERE session_id = ? AND raw_content = ? ORDER BY id DESC LIMIT 1`, root.ID, command).Scan(&state))
-		assert.Equal(t, "rejected", state)
+		var state, reason string
+		require.NoError(t, h.db.QueryRowContext(h.ctx, `SELECT state, resolution_reason FROM session_inbox
+			WHERE session_id = ? AND raw_content = ? ORDER BY id DESC LIMIT 1`, root.ID, command).Scan(&state, &reason))
+		assert.Equal(t, "handled", state)
+		assert.Equal(t, "assistant_ignored_command", reason)
 		record, err := h.store.GetSession(h.ctx, root.ID)
 		require.NoError(t, err)
 		assert.Nil(t, record.KilledAt)
@@ -172,10 +173,11 @@ func TestHarnessScenario_AssistantSupersededSend(t *testing.T) {
 				return err
 			}
 
-			return assistant.RecordSendTx(h.ctx, tx, assistant.Send{
-				InputID:            in.Input.ID,
-				AssistantSessionID: root.ID, SessionID: work.ID, CreatedAt: time.Now().UTC(),
-			})
+			_, err = tx.ExecContext(h.ctx, `INSERT INTO assistant_sends
+				(input_id, assistant_session_id, session_id, created_at) VALUES (?, ?, ?, ?)`,
+				in.Input.ID, root.ID, work.ID, time.Now().UTC())
+
+			return err
 		}))
 	}
 
@@ -184,13 +186,66 @@ func TestHarnessScenario_AssistantSupersededSend(t *testing.T) {
 	h.waitUntil("combined result", func() bool { return assistantSayCount(t, h, root.ID, "combined") == 1 })
 	h.waitUntil("assistant idle", func() bool { return !h.mgr.HasActiveLoop(root.ID) })
 	assert.Equal(t, 1, assistantEventCount(t, h, root.ID))
-	sends, err := h.mgr.assistantStore.UnobservedSends(h.ctx, work.ID)
-	require.NoError(t, err)
-	assert.Empty(t, sends)
+	assert.Zero(t, unobservedCount(t, h, work.ID))
 	var accepted int
 	require.NoError(t, h.db.QueryRowContext(h.ctx, `SELECT count(*) FROM session_inbox
 		WHERE session_id = ? AND source = 'user' AND state = 'accepted'`, work.ID).Scan(&accepted))
 	assert.Equal(t, 2, accepted)
+}
+
+type assistantDriver struct {
+	h     *harness
+	scope assistant.Scope
+}
+
+func assistantFor(h *harness, root int64) assistantDriver {
+	return assistantDriver{h: h, scope: assistant.Scope{Root: root, Owner: scenarioManagerID}}
+}
+
+func (d assistantDriver) Open(ctx context.Context, project, text, about string) (assistant.Card, error) {
+	return d.h.mgr.assistant.Open(ctx, assistant.Host(assistantHost{s: d.h.mgr}), d.scope, project, text, about)
+}
+
+func (d assistantDriver) Send(ctx context.Context, id int64, text string) error {
+	return d.h.mgr.assistant.Send(ctx, assistant.Host(assistantHost{s: d.h.mgr}), d.scope, id, text)
+}
+
+func (d assistantDriver) Stop(ctx context.Context, id int64) error {
+	return d.h.mgr.assistant.Stop(ctx, assistant.Host(assistantHost{s: d.h.mgr}), d.scope, id)
+}
+
+func (d assistantDriver) List(ctx context.Context, offset, limit int, project string) ([]assistant.Card, int, error) {
+	return d.h.mgr.assistant.List(ctx, d.scope, offset, limit, project)
+}
+
+func (d assistantDriver) Recent(ctx context.Context, limit int) ([]assistant.Card, int, error) {
+	return d.h.mgr.assistant.Recent(ctx, d.scope, limit)
+}
+
+func (d assistantDriver) Target(ctx context.Context, id int64) (assistant.Card, error) {
+	return d.h.mgr.assistant.Target(ctx, d.scope, id)
+}
+
+func (d assistantDriver) Search(ctx context.Context, query string) ([]assistant.Hit, error) {
+	return d.h.mgr.assistant.Search(ctx, d.scope, query)
+}
+
+// Read authorizes first, as the read tool does.
+func (d assistantDriver) Read(ctx context.Context, id int64, count int) (string, error) {
+	if _, err := d.Target(ctx, id); err != nil {
+		return "", err
+	}
+
+	return d.h.mgr.assistant.Read(ctx, id, count)
+}
+
+func unobservedCount(t *testing.T, h *harness, id int64) int {
+	t.Helper()
+	var count int
+	require.NoError(t, h.db.QueryRowContext(h.ctx, `SELECT count(*) FROM assistant_sends
+		WHERE observed_at IS NULL AND session_id = ?`, id).Scan(&count))
+
+	return count
 }
 
 func assistantCalls(text string, calls ...llmwire.ToolCall) *llmwire.Response {
