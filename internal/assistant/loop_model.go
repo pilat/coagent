@@ -131,8 +131,8 @@ func (l *loop) guard(ctx context.Context, t *turn) (string, error) {
 
 func (l *loop) ask(ctx context.Context, t *turn, phase string, messages []llmwire.Message) (*llmwire.Response, error) {
 	call := Call{
-		SessionID: l.sessionID, InputID: t.input.ID, Number: len(t.calls) + 1, Phase: phase,
-		Request: callRequest(messages[min(t.recorded, len(messages)):]), CreatedAt: l.deps.Now(),
+		SessionID: l.scope.Root, InputID: t.input.ID, Number: len(t.calls) + 1, Phase: phase,
+		Request: callRequest(messages[min(t.recorded, len(messages)):]), CreatedAt: time.Now().UTC(),
 	}
 
 	response, err := l.chat(ctx, messages)
@@ -173,12 +173,12 @@ func (l *loop) chat(ctx context.Context, messages []llmwire.Message) (*llmwire.R
 func (l *loop) chatOnce(ctx context.Context, messages []llmwire.Message) (*llmwire.Response, error) {
 	log := logger.Ctx(ctx).Named("assistant.chat")
 
-	record, err := l.deps.Store.GetSession(ctx, l.sessionID)
+	record, err := l.store.sessions.GetSession(ctx, l.scope.Root)
 	if err != nil {
 		return nil, fmt.Errorf("load assistant model: %w", err)
 	}
 
-	client, err := l.deps.NewClient(record.Model)
+	client, err := l.host.NewClient(l.scope.Root, record.Model, record.ReasoningLevel)
 	if err != nil {
 		return nil, fmt.Errorf("build assistant model: %w", err)
 	}

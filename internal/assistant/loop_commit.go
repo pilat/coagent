@@ -12,8 +12,8 @@ import (
 
 // commit applies the whole turn at once; the tape order matters to alreadyTold: reads, then the reply, then moves.
 func (l *loop) commit(ctx context.Context, t *turn, reply, outcome string) error {
-	err := l.deps.Store.WithTx(ctx, func(tx *sql.Tx) error {
-		now := l.deps.Now()
+	err := l.store.sessions.WithTx(ctx, func(tx *sql.Tx) error {
+		now := time.Now().UTC()
 		if err := l.saveMemory(ctx, tx, t, now); err != nil {
 			return err
 		}
@@ -33,7 +33,7 @@ func (l *loop) commit(ctx context.Context, t *turn, reply, outcome string) error
 		if err := sessionstore.HandleAssistantInputTx(
 			ctx,
 			tx,
-			l.sessionID,
+			l.scope.Root,
 			t.input.ID,
 			"assistant_turn",
 			now,
@@ -41,8 +41,12 @@ func (l *loop) commit(ctx context.Context, t *turn, reply, outcome string) error
 			return fmt.Errorf("commit assistant input: %w", err)
 		}
 
-		if reply != "" {
-			return l.deps.SayTx(ctx, tx, reply)
+		if reply == "" {
+			return nil
+		}
+
+		if err := sessionstore.PublishAssistantMessageTx(ctx, tx, l.scope.Root, reply); err != nil {
+			return fmt.Errorf("publish assistant reply: %w", err)
 		}
 
 		return nil
@@ -52,7 +56,7 @@ func (l *loop) commit(ctx context.Context, t *turn, reply, outcome string) error
 	}
 
 	if reply != "" {
-		l.deps.Notify()
+		l.host.Notify(l.scope.Root, reply)
 	}
 
 	return nil
@@ -62,9 +66,11 @@ func (l *loop) commit(ctx context.Context, t *turn, reply, outcome string) error
 func (l *loop) fail(ctx context.Context, t *turn, reason string) error {
 	reason = logger.Redact(reason)
 
-	err := l.deps.Store.WithTx(ctx, func(tx *sql.Tx) error {
-		now := l.deps.Now()
-		if _, err := AppendTapeTx(ctx, tx, l.sessionID,
+	text := "⚠️ turn failed: " + reason
+
+	err := l.store.sessions.WithTx(ctx, func(tx *sql.Tx) error {
+		now := time.Now().UTC()
+		if _, err := AppendTapeTx(ctx, tx, l.scope.Root,
 			Line{At: now, Kind: errorKind, Text: "! error: " + reason}); err != nil {
 			return err
 		}
@@ -74,18 +80,22 @@ func (l *loop) fail(ctx context.Context, t *turn, reason string) error {
 		}
 
 		if err := sessionstore.HandleAssistantInputTx(
-			ctx, tx, l.sessionID, t.input.ID, "assistant_turn_failed", now,
+			ctx, tx, l.scope.Root, t.input.ID, "assistant_turn_failed", now,
 		); err != nil {
 			return fmt.Errorf("fail assistant input: %w", err)
 		}
 
-		return l.deps.SayTx(ctx, tx, "⚠️ turn failed: "+reason)
+		if err := sessionstore.PublishAssistantMessageTx(ctx, tx, l.scope.Root, text); err != nil {
+			return fmt.Errorf("publish assistant reply: %w", err)
+		}
+
+		return nil
 	})
 	if err != nil {
 		return fmt.Errorf("fail assistant turn: %w", err)
 	}
 
-	l.deps.Notify()
+	l.host.Notify(l.scope.Root, text)
 
 	return nil
 }
@@ -96,12 +106,12 @@ func (l *loop) saveMemory(ctx context.Context, tx *sql.Tx, t *turn, now time.Tim
 
 		switch {
 		case item.deleted && item.ID > 0:
-			err = deleteMemoryTx(ctx, tx, l.sessionID, item.ID)
+			err = deleteMemoryTx(ctx, tx, l.scope.Root, item.ID)
 		case item.deleted || !item.changed:
 		case item.ID == 0:
-			item.ID, err = insertMemoryTx(ctx, tx, l.sessionID, item.Memory, now)
+			item.ID, err = insertMemoryTx(ctx, tx, l.scope.Root, item.Memory, now)
 		default:
-			err = updateMemoryTx(ctx, tx, l.sessionID, item.Memory, now)
+			err = updateMemoryTx(ctx, tx, l.scope.Root, item.Memory, now)
 		}
 
 		if err != nil {
@@ -118,12 +128,12 @@ func (l *loop) saveFocus(ctx context.Context, tx *sql.Tx, t *turn, now time.Time
 
 		switch {
 		case item.deleted && item.ID > 0:
-			err = deleteFocusTx(ctx, tx, l.sessionID, item.ID)
+			err = deleteFocusTx(ctx, tx, l.scope.Root, item.ID)
 		case item.deleted || !item.changed:
 		case item.ID == 0:
-			item.ID, err = insertFocusTx(ctx, tx, l.sessionID, item.Focus, now)
+			item.ID, err = insertFocusTx(ctx, tx, l.scope.Root, item.Focus, now)
 		default:
-			err = updateFocusTx(ctx, tx, l.sessionID, item.Focus, now)
+			err = updateFocusTx(ctx, tx, l.scope.Root, item.Focus, now)
 		}
 
 		if err != nil {
@@ -159,7 +169,7 @@ func (l *loop) commitTape(ctx context.Context, tx *sql.Tx, t *turn, reply string
 
 	for _, line := range lines {
 		line.At = now
-		if _, err := AppendTapeTx(ctx, tx, l.sessionID, line); err != nil {
+		if _, err := AppendTapeTx(ctx, tx, l.scope.Root, line); err != nil {
 			return err
 		}
 	}

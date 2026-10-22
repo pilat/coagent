@@ -25,17 +25,16 @@ const (
 	searchHits      = 10
 	indexBatchSize  = 500
 	aroundTextChars = 2000
-	// indexableSQL mirrors sessionstore.IsFinalAssistantMessage and AcceptedUserMessageIDs over `messages m`.
 	// indexRootSQL skips children and assistant roots over `sessions s`.
 	indexRootSQL = `COALESCE(s.parent_id, 0) = 0 AND COALESCE(s.agent_type, '') <> '` + tool.AssistantAgentType + `'`
-	indexableSQL = `m.rejected_reason IS NULL AND (
-		(m.role = 'user' AND EXISTS (SELECT 1 FROM session_inbox i WHERE i.session_id = m.session_id
-			AND i.state = 'accepted' AND i.accepted_message_id IS NOT NULL
-			AND i.accepted_message_id = m.id AND i.source = 'user'))
-		OR (m.role = 'assistant' AND COALESCE(m.tool_calls, '') IN ('', '[]', 'null')
-			AND TRIM(COALESCE(m.content, ''), ' ' || char(9, 10, 13)) <> ''
-			AND COALESCE(m.finish_type, '') IN ('', 'stop'))
-	)`
+	// requestSQL and finalSQL over `messages m` define what counts as a work request and a work answer.
+	requestSQL = `(m.role = 'user' AND EXISTS (SELECT 1 FROM session_inbox i WHERE i.session_id = m.session_id
+		AND i.state = 'accepted' AND i.accepted_message_id IS NOT NULL
+		AND i.accepted_message_id = m.id AND i.source = 'user'))`
+	finalSQL = `(m.role = 'assistant' AND COALESCE(m.tool_calls, '') IN ('', '[]', 'null')
+		AND TRIM(COALESCE(m.content, ''), ' ' || char(9, 10, 13)) <> ''
+		AND COALESCE(m.finish_type, '') IN ('', 'stop'))`
+	indexableSQL = `m.rejected_reason IS NULL AND (` + requestSQL + ` OR ` + finalSQL + `)`
 )
 
 // ErrEmptyQuery reports a query with no searchable word.
@@ -52,7 +51,7 @@ type Hit struct {
 }
 
 // Search catches the message index up before matching, so it never misses a committed final.
-func (s *store) Search(ctx context.Context, scope Scope, query string) ([]Hit, error) {
+func (s *Store) Search(ctx context.Context, scope Scope, query string) ([]Hit, error) {
 	match, err := matchQuery(query)
 	if err != nil {
 		return nil, err
@@ -118,7 +117,7 @@ func (s *store) Search(ctx context.Context, scope Scope, query string) ([]Hit, e
 }
 
 // Around shows a found message among its session's dialog, or a tape line among its neighbours.
-func (s *store) Around(ctx context.Context, scope Scope, ref string, count int) (string, error) {
+func (s *Store) Around(ctx context.Context, scope Scope, ref string, count int) (string, error) {
 	kind, raw, _ := strings.Cut(strings.TrimSpace(ref), " ")
 
 	id, err := strconv.ParseInt(strings.TrimSpace(raw), 10, 64)
@@ -136,7 +135,7 @@ func (s *store) Around(ctx context.Context, scope Scope, ref string, count int) 
 	}
 }
 
-func (s *store) aroundMessage(ctx context.Context, scope Scope, id int64, count int) (string, error) {
+func (s *Store) aroundMessage(ctx context.Context, scope Scope, id int64, count int) (string, error) {
 	var session int64
 	var project string
 
@@ -186,7 +185,7 @@ func (s *store) aroundMessage(ctx context.Context, scope Scope, id int64, count 
 	return b.String(), nil
 }
 
-func (s *store) aroundLine(ctx context.Context, root, id int64, count int) (string, error) {
+func (s *Store) aroundLine(ctx context.Context, root, id int64, count int) (string, error) {
 	lines, err := s.tape(ctx, `SELECT id, at, kind, text FROM assistant_tape WHERE session_id = ? AND (id = ?
 			OR id IN (SELECT id FROM assistant_tape WHERE session_id = ? AND id < ? ORDER BY id DESC LIMIT ?)
 			OR id IN (SELECT id FROM assistant_tape WHERE session_id = ? AND id > ? ORDER BY id LIMIT ?))
@@ -212,7 +211,7 @@ func (s *store) aroundLine(ctx context.Context, root, id int64, count int) (stri
 	return b.String(), nil
 }
 
-func (s *store) describeHit(ctx context.Context, hit *Hit, id int64, kind int) error {
+func (s *Store) describeHit(ctx context.Context, hit *Hit, id int64, kind int) error {
 	var err error
 
 	switch kind {
@@ -242,7 +241,7 @@ func (s *store) describeHit(ctx context.Context, hit *Hit, id int64, kind int) e
 	return nil
 }
 
-func (s *store) catchUp(ctx context.Context) error {
+func (s *Store) catchUp(ctx context.Context) error {
 	for {
 		indexed, err := s.indexBatch(ctx)
 		if err != nil {
@@ -256,7 +255,7 @@ func (s *store) catchUp(ctx context.Context) error {
 }
 
 // indexBatch reads the watermark inside its write transaction, because every root shares it.
-func (s *store) indexBatch(ctx context.Context) (int, error) {
+func (s *Store) indexBatch(ctx context.Context) (int, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return 0, fmt.Errorf("begin assistant index batch: %w", err)

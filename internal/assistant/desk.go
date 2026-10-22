@@ -30,6 +30,8 @@ type Card struct {
 	ContextTokens int
 	Pending       bool
 	About         string
+	projectID     int64
+	touched       bool
 }
 
 // Project is one place work can be opened; Key is what open and sessions accept.

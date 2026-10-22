@@ -196,7 +196,11 @@ func (s *svc) killLocked(ctx context.Context, sessionID int64) error {
 		})
 	}
 
-	return s.observeAssistantWork(cleanupCtx, sessionID, nil)
+	if err := s.assistant.Observe(cleanupCtx, sessionID, nil); err != nil {
+		return fmt.Errorf("observe assistant work: %w", err)
+	}
+
+	return nil
 }
 
 func (s *svc) stopLocked(ctx context.Context, sessionID, inputID int64) error {
@@ -244,7 +248,11 @@ func (s *svc) stopLocked(ctx context.Context, sessionID, inputID int64) error {
 		})
 	}
 
-	return s.observeAssistantWork(context.WithoutCancel(ctx), sessionID, nil)
+	if err := s.assistant.Observe(context.WithoutCancel(ctx), sessionID, nil); err != nil {
+		return fmt.Errorf("observe assistant work: %w", err)
+	}
+
+	return nil
 }
 
 // A committed start receipt needs a terminal output even if ownership lookup failed.
@@ -696,8 +704,8 @@ func (s *svc) completeExplicitStop(
 	}
 
 	// Queued and yielded roots have no runner exit to settle assistant sends.
-	if err := s.observeAssistantWork(ctx, rootID, nil); err != nil {
-		return err
+	if err := s.assistant.Observe(ctx, rootID, nil); err != nil {
+		return fmt.Errorf("observe assistant work: %w", err)
 	}
 
 	if _, err := s.store.ReactivateForSchedule(ctx, rootID); err != nil {

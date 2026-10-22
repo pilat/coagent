@@ -236,7 +236,7 @@ func (s *svc) finishRunner(ctx context.Context, rs *runner, out runOutcome, pani
 
 	if err == nil {
 		deliver = s.finishRunnerDelivery(ctx, rs, out, errored)
-		if observeErr := s.observeAssistantWork(cleanup, id, out.runError); observeErr != nil {
+		if observeErr := s.assistant.Observe(cleanup, id, out.runError); observeErr != nil {
 			logger.Ctx(cleanup).Named("daemon.assistant").Error("observe finished work", zap.Error(observeErr))
 		}
 	}

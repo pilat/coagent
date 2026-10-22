@@ -1,4 +1,3 @@
-//nolint:wrapcheck // Tool errors are already model-facing domain errors.; nosemgrep: semgrep.coagent-no-preamble-before-package
 package assistant
 
 import (
@@ -75,7 +74,7 @@ func (l *loop) look(ctx context.Context, t *turn, call llmwire.ToolCall) (string
 			return "", err
 		}
 
-		hits, err := l.deps.Sessions.Search(ctx, args.Query)
+		hits, err := l.store.Search(ctx, l.scope, args.Query)
 		if err != nil {
 			return "", err
 		}
@@ -93,7 +92,7 @@ func (l *loop) look(ctx context.Context, t *turn, call llmwire.ToolCall) (string
 			return "", fmt.Errorf("count must be between 1 and %d", aroundMaxCount)
 		}
 
-		return l.deps.Sessions.Around(ctx, args.Ref, args.Count)
+		return l.store.Around(ctx, l.scope, args.Ref, args.Count)
 	case toolRead:
 		return l.read(ctx, t, call)
 	case toolSessions:
@@ -102,8 +101,9 @@ func (l *loop) look(ctx context.Context, t *turn, call llmwire.ToolCall) (string
 			return "", err
 		}
 
-		cards, total, err := l.deps.Sessions.List(
+		cards, total, err := l.store.List(
 			ctx,
+			l.scope,
 			max(0, args.Offset),
 			sessionsPage,
 			strings.TrimSpace(args.Project),
@@ -112,16 +112,16 @@ func (l *loop) look(ctx context.Context, t *turn, call llmwire.ToolCall) (string
 			return "", err
 		}
 
-		return renderSessions(cards, max(0, args.Offset), total, l.deps.Now()), nil
+		return renderSessions(cards, max(0, args.Offset), total, t.now), nil
 	case toolProjects:
-		projects, err := l.deps.Sessions.Projects(ctx)
+		projects, err := l.store.Projects(ctx)
 		if err != nil {
 			return "", err
 		}
 
-		return renderProjects(projects, l.deps.Now()), nil
+		return renderProjects(projects, t.now), nil
 	default:
-		return renderFocusList(t, l.deps.Now()), nil
+		return renderFocusList(t, t.now), nil
 	}
 }
 
@@ -140,12 +140,12 @@ func (l *loop) read(ctx context.Context, t *turn, call llmwire.ToolCall) (string
 		return "", fmt.Errorf("count must be between 1 and %d", readMaxEntries)
 	}
 
-	card, err := l.deps.Sessions.Target(ctx, id)
+	card, err := l.store.Target(ctx, l.scope, id)
 	if err != nil {
 		return "", err
 	}
 
-	text, err := l.deps.Sessions.Read(ctx, id, args.Count)
+	text, err := l.store.Read(ctx, id, args.Count)
 	if err != nil {
 		return "", err
 	}
@@ -177,7 +177,7 @@ func (l *loop) work(ctx context.Context, t *turn, call llmwire.ToolCall) (string
 			return "", fmt.Errorf("about must be one line of 1-%d characters", aboutChars)
 		}
 
-		if err := l.deps.Sessions.CheckProject(ctx, e.project); err != nil {
+		if _, err := l.store.lookupProject(ctx, e.project); err != nil {
 			return "", err
 		}
 
@@ -229,7 +229,7 @@ func (l *loop) target(ctx context.Context, e *effect, ref sessionRef) error {
 		return fmt.Errorf("session %q is neither a session id nor a handle opened in this turn", ref)
 	}
 
-	card, err := l.deps.Sessions.Target(ctx, id)
+	card, err := l.store.Target(ctx, l.scope, id)
 	if err != nil {
 		return err
 	}
@@ -300,7 +300,7 @@ func (l *loop) focusSessions(ctx context.Context, t *turn, refs []sessionRef) ([
 				return nil, fmt.Errorf("session %q is neither a session id nor a handle opened in this turn", ref)
 			}
 
-			if _, err := l.deps.Sessions.Target(ctx, id); err != nil {
+			if _, err := l.store.Target(ctx, l.scope, id); err != nil {
 				return nil, err
 			}
 

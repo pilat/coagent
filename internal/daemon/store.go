@@ -15,16 +15,11 @@ type Store interface { //nolint:interfacebloat // Lifecycle commands share atomi
 	WithTx(context.Context, func(*sql.Tx) error) error
 	EnsureAssistantRoot(context.Context, int64, string, string) (*sessionstore.SessionRecord, error)
 	GetOrCreateHiddenProject(context.Context, string) (int64, error)
-	GetOrCreateProject(context.Context, string) (int64, error)
-	ListProjects(context.Context) ([]sessionstore.ProjectRow, error)
-	HasBackgroundWakeSource(context.Context, int64) (bool, error)
-	AcceptedUserMessageIDs(context.Context, int64) ([]int64, error)
 	Commit(context.Context, sessionstore.Commit) (*sessionstore.CommitResult, error)
 	ListPending(context.Context, int64) ([]*sessionstore.InboxInput, error)
 	PendingActivation(context.Context, int64) (*sessionstore.ToolActivation, error)
 	ObserveBudget(context.Context, int64, time.Time, string) (*budget.Record, bool, error)
 	LoadActiveMessages(context.Context, int64) ([]*transcript.Message, error)
-	LoadReadableMessages(context.Context, int64) ([]*transcript.Message, error)
 	CreateSession(
 		ctx context.Context,
 		projectID int64,
@@ -36,7 +31,6 @@ type Store interface { //nolint:interfacebloat // Lifecycle commands share atomi
 	UpdateSessionModel(ctx context.Context, id int64, model, reasoningLevel string) error
 	GetSession(ctx context.Context, id int64) (*sessionstore.SessionRecord, error)
 	ListAllSessions(ctx context.Context) ([]*sessionstore.SessionRecord, error)
-	ListSessions(context.Context) ([]*sessionstore.SessionRecord, error)
 	ListTree(ctx context.Context, rootID int64) ([]*sessionstore.SessionRecord, error)
 	UpdateSessionStatus(ctx context.Context, id int64, status sessionstore.SessionStatus) error
 	Enqueue(context.Context, sessionstore.Input) (*sessionstore.Enqueued, error)
