@@ -32,6 +32,7 @@ import (
 	"github.com/pilat/coagent/internal/llmwire"
 	"github.com/pilat/coagent/internal/mcpstore"
 	"github.com/pilat/coagent/internal/progressruntime"
+	"github.com/pilat/coagent/internal/projectpath"
 	"github.com/pilat/coagent/internal/schedule"
 	"github.com/pilat/coagent/internal/sessionbuild"
 	"github.com/pilat/coagent/internal/sessionbus"
@@ -453,7 +454,8 @@ func newScenarioDaemon(
 	)
 	service := New(
 		ctx, in, store, links, budgets, backgroundprocess.NewStore(db, store), progressruntime.New(store, bus), bus,
-		schedules, in.Config, mcp, applier, assistant.New(db),
+		schedules, in.Config, mcp, applier,
+		assistant.New(db, store, projectpath.ResolveRoot(in.Config.UnifiedConfig)),
 	).(*svc)
 	return service, service.processes
 }

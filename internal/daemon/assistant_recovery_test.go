@@ -15,7 +15,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/pilat/coagent/internal/assistant"
 	"github.com/pilat/coagent/internal/llmwire"
 	"github.com/pilat/coagent/internal/registry"
 	"github.com/pilat/coagent/internal/sessionstore"
@@ -50,7 +49,7 @@ func TestHarnessScenario_AssistantBackgroundResult(t *testing.T) {
 	work, err := h.store.CreateSession(h.ctx, h.projectID, "fake-model", "", managerAttrs(scenarioManagerID))
 	require.NoError(t, err)
 	service := installScenarioProcessService(t, h)
-	a := &assistantSessions{daemon: h.mgr, root: root.ID, owner: scenarioManagerID}
+	a := assistantFor(h, root.ID)
 	require.NoError(t, a.Send(h.ctx, work.ID, "work with process"))
 	release := filepath.Join(t.TempDir(), "release")
 	startScenarioProcess(
@@ -63,9 +62,7 @@ func TestHarnessScenario_AssistantBackgroundResult(t *testing.T) {
 	close(processRunning)
 	h.waitUntil("work yielded", func() bool { return !h.mgr.HasActiveLoop(work.ID) })
 	assert.Zero(t, assistantEventCount(t, h, root.ID))
-	sends, err := h.mgr.assistantStore.UnobservedSends(h.ctx, work.ID)
-	require.NoError(t, err)
-	assert.Len(t, sends, 1)
+	assert.Equal(t, 1, unobservedCount(t, h, work.ID))
 	require.NoError(t, os.WriteFile(release, nil, 0o600))
 	h.waitUntil("process result retold", func() bool { return assistantSayCount(t, h, root.ID, "full result") == 1 })
 	var body string
@@ -100,10 +97,11 @@ func TestHarnessScenario_AssistantBootObservesCompletedSend(t *testing.T) {
 
 		input = in.Input.ID
 
-		return assistant.RecordSendTx(first.ctx, tx, assistant.Send{
-			InputID: input, SessionID: work.ID,
-			AssistantSessionID: root.ID, CreatedAt: time.Now().UTC(),
-		})
+		_, err = tx.ExecContext(first.ctx, `INSERT INTO assistant_sends
+			(input_id, assistant_session_id, session_id, created_at) VALUES (?, ?, ?, ?)`,
+			input, root.ID, work.ID, time.Now().UTC())
+
+		return err
 	}))
 	completed := sessionstore.SessionStatusCompleted
 	_, err = first.store.Commit(first.ctx, sessionstore.Commit{
@@ -184,19 +182,13 @@ func TestHarnessScenario_AssistantShutdownAfterCommitKeepsEffects(t *testing.T) 
 	})
 	require.NoError(t, err)
 	require.NoError(t, first.store.WithTx(first.ctx, func(tx *sql.Tx) error {
-		if err := assistant.RecordSendTx(
-			first.ctx,
-			tx,
-			assistant.Send{
-				InputID:            prior.Input.ID,
-				AssistantSessionID: root.ID,
-				SessionID:          workID,
-				CreatedAt:          time.Now().UTC(),
-			},
-		); err != nil {
+		if _, err := tx.ExecContext(first.ctx, `INSERT INTO assistant_sends
+			(input_id, assistant_session_id, session_id, created_at) VALUES (?, ?, ?, ?)`,
+			prior.Input.ID, root.ID, workID, time.Now().UTC()); err != nil {
 			return err
 		}
-		_, err := assistant.MarkObservedTx(first.ctx, tx, prior.Input.ID, time.Now().UTC())
+		_, err := tx.ExecContext(first.ctx, `UPDATE assistant_sends SET observed_at = ?
+			WHERE input_id = ? AND observed_at IS NULL`, time.Now().UTC(), prior.Input.ID)
 		return err
 	}))
 	require.NoError(t, first.store.UpdateSessionStatus(first.ctx, workID, sessionstore.SessionStatusCompleted))
@@ -226,7 +218,7 @@ func TestHarnessScenario_AssistantShutdownAfterCommitKeepsEffects(t *testing.T) 
 		WHERE session_id = ? AND json_extract(attributes, '$.assistant_event') = 'action_failed'`, root.ID).
 		Scan(&failures))
 	assert.Zero(t, failures, "a durable send is not reported as failed")
-	lines, err := second.mgr.assistantStore.RecentTape(second.ctx, root.ID, 40)
+	lines, err := second.mgr.assistant.RecentTape(second.ctx, root.ID, 40)
 	require.NoError(t, err)
 	require.Len(t, lines, 3)
 	assert.Contains(t, lines[2].Text, "not applied")
@@ -267,9 +259,11 @@ func TestHarnessScenario_AssistantWaitsForWorkSleep(t *testing.T) {
 
 		input = in.Input.ID
 
-		return assistant.RecordSendTx(h.ctx, tx, assistant.Send{
-			InputID: input, SessionID: work.ID, AssistantSessionID: root.ID, CreatedAt: time.Now().UTC(),
-		})
+		_, err = tx.ExecContext(h.ctx, `INSERT INTO assistant_sends
+			(input_id, assistant_session_id, session_id, created_at) VALUES (?, ?, ?, ?)`,
+			input, root.ID, work.ID, time.Now().UTC())
+
+		return err
 	}))
 	_, err = h.store.Commit(h.ctx, sessionstore.Commit{
 		SessionID: work.ID,
@@ -283,7 +277,7 @@ func TestHarnessScenario_AssistantWaitsForWorkSleep(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	require.NoError(t, h.mgr.observeAssistantWork(h.ctx, work.ID, nil))
+	require.NoError(t, h.mgr.assistant.Observe(h.ctx, work.ID, nil))
 	assert.Zero(t, assistantEventCount(t, h, root.ID), "a session paused inside a tool call has not answered")
 
 	_, err = h.store.Commit(h.ctx, sessionstore.Commit{
@@ -291,7 +285,7 @@ func TestHarnessScenario_AssistantWaitsForWorkSleep(t *testing.T) {
 		Messages:  []*transcript.Message{{Role: "assistant", Content: "both merged", FinishType: "stop"}},
 	})
 	require.NoError(t, err)
-	require.NoError(t, h.mgr.observeAssistantWork(h.ctx, work.ID, nil))
+	require.NoError(t, h.mgr.assistant.Observe(h.ctx, work.ID, nil))
 	var body string
 	require.NoError(t, h.db.QueryRowContext(h.ctx, `SELECT raw_content FROM session_inbox
 		WHERE session_id = ? AND source = 'agent'`, root.ID).Scan(&body))

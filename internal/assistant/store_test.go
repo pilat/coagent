@@ -3,6 +3,7 @@ package assistant
 import (
 	"database/sql"
 	"errors"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -22,7 +23,7 @@ const testOwner = "manager-a"
 func TestAssistantStoreSendsAndCalls(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
-	db, sessions, memory, root := assistantFixture(t)
+	db, sessions, s, root := assistantFixture(t)
 	input, err := sessions.Enqueue(
 		ctx,
 		sessionstore.Input{SessionID: root, Source: sessionstore.InputSourceUser, Content: "hello"},
@@ -30,31 +31,31 @@ func TestAssistantStoreSendsAndCalls(t *testing.T) {
 	require.NoError(t, err)
 	at := time.Now().UTC()
 	require.NoError(t, sessions.WithTx(ctx, func(tx *sql.Tx) error {
-		require.NoError(t, RecordSendTx(ctx, tx,
-			Send{InputID: input.Input.ID, AssistantSessionID: root, SessionID: root, CreatedAt: at}))
+		require.NoError(t, recordSendTx(ctx, tx,
+			send{inputID: input.Input.ID, root: root, sessionID: root, createdAt: at}))
 
 		return RecordCallTx(ctx, tx, Call{
 			SessionID: root, InputID: input.Input.ID, Number: 1, Phase: phaseMain,
 			Request: "desk", Response: "raw", Outcome: "ok", CreatedAt: at,
 		})
 	}))
-	sends, err := memory.UnobservedSends(ctx, root)
+	sends, err := s.unobservedSends(ctx, root)
 	require.NoError(t, err)
 	require.Len(t, sends, 1)
-	assert.Equal(t, at, sends[0].CreatedAt)
+	assert.Equal(t, at, sends[0].createdAt)
 	require.NoError(t, sessions.WithTx(ctx, func(tx *sql.Tx) error {
-		won, err := MarkObservedTx(ctx, tx, input.Input.ID, at)
+		won, err := markObservedTx(ctx, tx, input.Input.ID, at)
 		require.NoError(t, err)
 		assert.True(t, won)
-		won, err = MarkObservedTx(ctx, tx, input.Input.ID, at.Add(time.Second))
+		won, err = markObservedTx(ctx, tx, input.Input.ID, at.Add(time.Second))
 		require.NoError(t, err)
 		assert.False(t, won)
 
 		return nil
 	}))
-	sends, err = memory.UnobservedSends(ctx, 0)
+	awaited, err := s.AwaitedSessions(ctx)
 	require.NoError(t, err)
-	assert.Empty(t, sends)
+	assert.Empty(t, awaited)
 	var phase, request, outcome string
 	require.NoError(t, db.QueryRowContext(ctx, `SELECT phase, request, outcome FROM assistant_turns`).
 		Scan(&phase, &request, &outcome))
@@ -77,7 +78,7 @@ func TestAssistantStoreSendsAndCalls(t *testing.T) {
 func TestAssistantTapeRollsBackWithItsIndex(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
-	_, sessions, memory, root := assistantFixture(t)
+	_, sessions, s, root := assistantFixture(t)
 	abort := errors.New("abort turn")
 	err := sessions.WithTx(ctx, func(tx *sql.Tx) error {
 		_, err := AppendTapeTx(ctx, tx, root, Line{At: time.Now().UTC(), Kind: sayKind, Text: "say: «потеряно»"})
@@ -86,10 +87,10 @@ func TestAssistantTapeRollsBackWithItsIndex(t *testing.T) {
 		return abort
 	})
 	require.ErrorIs(t, err, abort)
-	hits, err := memory.Search(ctx, Scope{Root: root, Owner: testOwner}, "потеряно")
+	hits, err := s.Search(ctx, Scope{Root: root, Owner: testOwner}, "потеряно")
 	require.NoError(t, err)
 	assert.Empty(t, hits)
-	lines, err := memory.RecentTape(ctx, root, 10)
+	lines, err := s.RecentTape(ctx, root, 10)
 	require.NoError(t, err)
 	assert.Empty(t, lines)
 }
@@ -97,7 +98,7 @@ func TestAssistantTapeRollsBackWithItsIndex(t *testing.T) {
 func TestAssistantSearchFindsInflectedWordsAndCompactedFinals(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
-	db, sessions, memory, root := assistantFixture(t)
+	db, sessions, s, root := assistantFixture(t)
 	work := workSession(t, sessions, map[string]any{"manager_id": testOwner})
 	_, final := answered(t, sessions, work, "Почини права", "Причина: проблема кеширования прав на volume")
 	_, err := db.ExecContext(ctx, `UPDATE messages SET compacted_at = CURRENT_TIMESTAMP WHERE id = ?`, final)
@@ -114,22 +115,22 @@ func TestAssistantSearchFindsInflectedWordsAndCompactedFinals(t *testing.T) {
 	}))
 	scope := Scope{Root: root, Owner: testOwner}
 
-	hits, err := memory.Search(ctx, scope, "кеширован*")
+	hits, err := s.Search(ctx, scope, "кеширован*")
 	require.NoError(t, err)
 	refs := hitRefs(hits)
 	assert.Contains(t, refs, "msg "+itoa(final), "a compacted final is still found")
 	assert.Len(t, refs, 3, "the final, the say line and the memory note: %v", refs)
-	hits, err = memory.Search(ctx, scope, "кешированию")
+	hits, err = s.Search(ctx, scope, "кешированию")
 	require.NoError(t, err)
 	assert.Empty(t, hits, "a move line is never indexed")
-	hits, err = memory.Search(ctx, scope, "кеширование")
+	hits, err = s.Search(ctx, scope, "кеширование")
 	require.NoError(t, err)
 	require.Len(t, hits, 1, "no stemming: only the exact form matches")
 	assert.Equal(t, "say", hits[0].Kind)
 	assert.Contains(t, hits[0].Snippet, "[кеширование]")
-	_, err = memory.Search(ctx, scope, `" * "`)
+	_, err = s.Search(ctx, scope, `" * "`)
 	require.ErrorIs(t, err, ErrEmptyQuery)
-	hits, err = memory.Search(ctx, scope, `NEAR(кеш*) OR "прав`)
+	hits, err = s.Search(ctx, scope, `NEAR(кеш*) OR "прав`)
 	require.NoError(t, err, "model text is never FTS syntax")
 	assert.NotEmpty(t, hits)
 }
@@ -137,13 +138,13 @@ func TestAssistantSearchFindsInflectedWordsAndCompactedFinals(t *testing.T) {
 func TestAssistantSearchKeepsToAuthorizedRoots(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
-	db, sessions, memory, root := assistantFixture(t)
+	db, sessions, s, root := assistantFixture(t)
 	own := workSession(t, sessions, map[string]any{"manager_id": testOwner})
 	userMade := workSession(t, sessions, map[string]any{"manager_id": testOwner})
 	foreign := workSession(t, sessions, map[string]any{"manager_id": "manager-b"})
 	child := workSession(t, sessions, map[string]any{"manager_id": testOwner})
 	surface := workSession(t, sessions, map[string]any{"manager_id": testOwner, "management_surface": true})
-	assistantRoot := workSession(t, sessions, map[string]any{"manager_id": testOwner})
+	assistantRoot := root
 	killed := workSession(t, sessions, map[string]any{"manager_id": testOwner})
 	for _, id := range []int64{own, userMade, foreign, child, surface, assistantRoot, killed} {
 		answered(t, sessions, id, "найди секрет", "секрет найден")
@@ -151,13 +152,11 @@ func TestAssistantSearchKeepsToAuthorizedRoots(t *testing.T) {
 
 	_, err := db.ExecContext(ctx, `UPDATE sessions SET parent_id = ?, root_id = ? WHERE id = ?`, own, own, child)
 	require.NoError(t, err)
-	_, err = db.ExecContext(ctx, `UPDATE sessions SET agent_type = 'assistant' WHERE id = ?`, assistantRoot)
-	require.NoError(t, err)
 	_, err = db.ExecContext(ctx, `UPDATE sessions SET killed_at = CURRENT_TIMESTAMP, status = 'killed' WHERE id = ?`,
 		killed)
 	require.NoError(t, err)
 
-	hits, err := memory.Search(ctx, Scope{Root: root, Owner: testOwner}, "секрет")
+	hits, err := s.Search(ctx, Scope{Root: root, Owner: testOwner}, "секрет")
 	require.NoError(t, err)
 	sessionsFound := map[int64]bool{}
 	for _, hit := range hits {
@@ -167,22 +166,30 @@ func TestAssistantSearchKeepsToAuthorizedRoots(t *testing.T) {
 	assert.Len(t, hits, 4, "the accepted request and the final of each root")
 
 	for _, id := range []int64{foreign, child, surface, assistantRoot, killed} {
-		ok, err := memory.Authorized(ctx, testOwner, id)
-		require.NoError(t, err)
-		assert.False(t, ok, id)
+		require.NoError(t, sessions.WithTx(ctx, func(tx *sql.Tx) error {
+			ok, err := authorizedTx(ctx, tx, testOwner, id)
+			require.NoError(t, err)
+			assert.False(t, ok, id)
+
+			return nil
+		}))
 	}
 
-	ok, err := memory.Authorized(ctx, testOwner, userMade)
-	require.NoError(t, err)
-	assert.True(t, ok, "a root the user created is addressable too")
-	_, err = memory.Around(ctx, Scope{Root: root, Owner: testOwner}, "msg "+itoa(lastMessage(t, db, foreign)), 2)
+	require.NoError(t, sessions.WithTx(ctx, func(tx *sql.Tx) error {
+		ok, err := authorizedTx(ctx, tx, testOwner, userMade)
+		require.NoError(t, err)
+		assert.True(t, ok, "a root the user created is addressable too")
+
+		return nil
+	}))
+	_, err = s.Around(ctx, Scope{Root: root, Owner: testOwner}, "msg "+itoa(lastMessage(t, db, foreign)), 2)
 	require.ErrorContains(t, err, "not a message of a session you can see")
 }
 
 func TestAssistantSearchSkipsNoiseAndRejectedRows(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
-	db, sessions, memory, root := assistantFixture(t)
+	db, sessions, s, root := assistantFixture(t)
 	work := workSession(t, sessions, map[string]any{"manager_id": testOwner})
 	answered(t, sessions, work, "начало", "итог")
 	_, err := sessions.Commit(ctx, sessionstore.Commit{SessionID: work, Messages: []*transcript.Message{
@@ -193,7 +200,7 @@ func TestAssistantSearchSkipsNoiseAndRejectedRows(t *testing.T) {
 	}})
 	require.NoError(t, err)
 	scope := Scope{Root: root, Owner: testOwner}
-	hits, err := memory.Search(ctx, scope, "служебн*")
+	hits, err := s.Search(ctx, scope, "служебн*")
 	require.NoError(t, err)
 	require.Len(t, hits, 1)
 	assert.Contains(t, hits[0].Snippet, "ответ")
@@ -206,7 +213,7 @@ func TestAssistantSearchSkipsNoiseAndRejectedRows(t *testing.T) {
 func TestAssistantSearchCatchesUpInBatches(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
-	db, sessions, memory, root := assistantFixture(t)
+	db, sessions, s, root := assistantFixture(t)
 	work := workSession(t, sessions, map[string]any{"manager_id": testOwner})
 	messages := make([]*transcript.Message, 0, indexBatchSize+20)
 	for range indexBatchSize + 20 {
@@ -214,7 +221,7 @@ func TestAssistantSearchCatchesUpInBatches(t *testing.T) {
 	}
 	_, err := sessions.Commit(ctx, sessionstore.Commit{SessionID: work, Messages: messages})
 	require.NoError(t, err)
-	hits, err := memory.Search(ctx, Scope{Root: root, Owner: testOwner}, "пакет")
+	hits, err := s.Search(ctx, Scope{Root: root, Owner: testOwner}, "пакет")
 	require.NoError(t, err)
 	assert.Len(t, hits, searchHits)
 	var indexed int
@@ -226,7 +233,7 @@ func TestAssistantSearchCatchesUpInBatches(t *testing.T) {
 func TestAssistantMemoryExpiryAndDeletion(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
-	_, sessions, memory, root := assistantFixture(t)
+	_, sessions, s, root := assistantFixture(t)
 	now := time.Now().UTC()
 	var expired, permanent int64
 	require.NoError(t, sessions.WithTx(ctx, func(tx *sql.Tx) error {
@@ -238,21 +245,21 @@ func TestAssistantMemoryExpiryAndDeletion(t *testing.T) {
 
 		return err
 	}))
-	desk, err := memory.LoadDesk(ctx, root, 0, now)
+	desk, err := s.LoadDesk(ctx, root, 0, now)
 	require.NoError(t, err)
 	require.Len(t, desk.Memory, 1)
 	assert.Equal(t, permanent, desk.Memory[0].ID)
-	all, err := memory.Memory(ctx, root)
+	all, err := s.Memory(ctx, root)
 	require.NoError(t, err)
 	assert.Len(t, all, 2)
 	scope := Scope{Root: root, Owner: testOwner}
-	hits, err := memory.Search(ctx, scope, "отчёт")
+	hits, err := s.Search(ctx, scope, "отчёт")
 	require.NoError(t, err)
 	assert.ElementsMatch(t, []string{"m" + itoa(expired), "m" + itoa(permanent)}, hitRefs(hits))
 	require.NoError(t, sessions.WithTx(ctx, func(tx *sql.Tx) error {
 		return deleteMemoryTx(ctx, tx, root, permanent)
 	}))
-	hits, err = memory.Search(ctx, scope, "отчёт")
+	hits, err = s.Search(ctx, scope, "отчёт")
 	require.NoError(t, err)
 	assert.Equal(t, []string{"m" + itoa(expired)}, hitRefs(hits), "a deleted note is never found again")
 }
@@ -260,13 +267,13 @@ func TestAssistantMemoryExpiryAndDeletion(t *testing.T) {
 func TestAssistantAroundShowsNeighbours(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
-	_, sessions, memory, root := assistantFixture(t)
+	_, sessions, s, root := assistantFixture(t)
 	work := workSession(t, sessions, map[string]any{"manager_id": testOwner})
 	answered(t, sessions, work, "первый вопрос", "первый ответ")
 	_, middle := answered(t, sessions, work, "второй вопрос", "второй ответ")
 	answered(t, sessions, work, "третий вопрос", "третий ответ")
 	scope := Scope{Root: root, Owner: testOwner}
-	text, err := memory.Around(ctx, scope, "msg "+itoa(middle), 1)
+	text, err := s.Around(ctx, scope, "msg "+itoa(middle), 1)
 	require.NoError(t, err)
 	assert.Contains(t, text, "user: второй вопрос")
 	assert.Contains(t, text, "> msg "+itoa(middle))
@@ -282,19 +289,19 @@ func TestAssistantAroundShowsNeighbours(t *testing.T) {
 
 		return nil
 	}))
-	text, err = memory.Around(ctx, scope, "line "+itoa(ids[1]), 1)
+	text, err = s.Around(ctx, scope, "line "+itoa(ids[1]), 1)
 	require.NoError(t, err)
 	assert.Equal(t, 3, strings.Count(text, "line "))
-	_, err = memory.Around(ctx, scope, "line 999", 1)
+	_, err = s.Around(ctx, scope, "line 999", 1)
 	require.ErrorContains(t, err, "not on your tape")
-	_, err = memory.Around(ctx, scope, "m12", 1)
+	_, err = s.Around(ctx, scope, "m12", 1)
 	require.ErrorContains(t, err, "use \"msg <id>\"")
 }
 
 func TestAssistantWorkRoots(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
-	_, sessions, memory, root := assistantFixture(t)
+	_, sessions, s, root := assistantFixture(t)
 	touched := workSession(t, sessions, map[string]any{"manager_id": testOwner})
 	userMade := workSession(t, sessions, map[string]any{"manager_id": testOwner})
 	answered(t, sessions, userMade, strings.Repeat("длинный вопрос ", 20), "ответ")
@@ -304,31 +311,73 @@ func TestAssistantWorkRoots(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.NoError(t, sessions.WithTx(ctx, func(tx *sql.Tx) error {
-		require.NoError(t, RecordSendTx(ctx, tx,
-			Send{InputID: in.Input.ID, AssistantSessionID: root, SessionID: touched, CreatedAt: time.Now().UTC()}))
+		require.NoError(t, recordSendTx(ctx, tx,
+			send{inputID: in.Input.ID, root: root, sessionID: touched, createdAt: time.Now().UTC()}))
 
-		return SaveAboutTx(ctx, tx, touched, "why it exists", time.Now().UTC())
+		return saveAboutTx(ctx, tx, touched, "why it exists", time.Now().UTC())
 	}))
 	scope := Scope{Root: root, Owner: testOwner}
-	roots, err := memory.WorkRoots(ctx, scope, true)
+	roots, _, err := s.Recent(ctx, scope, 100)
 	require.NoError(t, err)
 	require.Len(t, roots, 1)
 	assert.Equal(t, touched, roots[0].ID)
 	assert.True(t, roots[0].Pending)
 	assert.Equal(t, "why it exists", roots[0].About)
-	roots, err = memory.WorkRoots(ctx, scope, false)
+	roots, err = s.cards(ctx, scope, 0)
 	require.NoError(t, err)
 	require.Len(t, roots, 2)
 	for _, work := range roots {
 		if work.ID == userMade {
-			assert.False(t, work.Touched)
+			assert.False(t, work.touched)
 			assert.Len(t, []rune(work.About), aboutFallbackChars)
 			assert.True(t, strings.HasPrefix(work.About, "длинный вопрос длинный"))
 		}
 	}
 }
 
-func assistantFixture(t *testing.T) (*sql.DB, *sessionstore.Store, Store, int64) {
+func TestAssistantStopSuppressesStaleObservation(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	db, sessions, s, root := assistantFixture(t)
+	work := workSession(t, sessions, map[string]any{"manager_id": testOwner})
+	host := &loopHost{sessions: sessions}
+	require.NoError(t, s.Send(ctx, host, Scope{Root: root, Owner: testOwner}, work, "complete while stopping"))
+	var pending int64
+	require.NoError(
+		t,
+		db.QueryRowContext(ctx, `SELECT id FROM session_inbox WHERE session_id = ? AND state = 'pending'`,
+			work).Scan(&pending),
+	)
+	_, err := sessions.Commit(ctx, sessionstore.Commit{
+		SessionID: work,
+		Accept: []sessionstore.Accept{
+			{InputID: pending, State: sessionstore.InputStateAccepted, Content: "complete while stopping", LinkRef: -1},
+		},
+		Messages: []*transcript.Message{{Role: "assistant", Content: "done", FinishType: "stop"}},
+	})
+	require.NoError(t, err)
+	sends, err := s.unobservedSends(ctx, work)
+	require.NoError(t, err)
+	require.Len(t, sends, 1)
+	require.NoError(t, s.settleSends(ctx, work))
+	require.NoError(t, s.observeSend(ctx, sends[0], "devbox", false, nil))
+	var events int
+	require.NoError(
+		t,
+		db.QueryRowContext(ctx, `SELECT COUNT(*) FROM session_inbox WHERE session_id = ? AND source = 'agent'`,
+			root).Scan(&events),
+	)
+	assert.Zero(t, events, "an observation that listed the send before the stop settled it emits nothing")
+}
+
+func TestAssistantReadKeepsNewestWhole(t *testing.T) {
+	t.Parallel()
+	old, middle, newest := strings.Repeat("a", 30), strings.Repeat("b", 30), strings.Repeat("c", 30)
+	assert.Equal(t, middle+"\n\n"+newest, newestWithin([]string{old, middle, newest}, 70))
+	assert.Equal(t, "cccccc\n[…]\nccc", newestWithin([]string{newest}, 14), "only a lone oversized entry is cut")
+}
+
+func assistantFixture(t *testing.T) (*sql.DB, *sessionstore.Store, *Store, int64) {
 	t.Helper()
 	ctx := t.Context()
 	path := filepath.Join(t.TempDir(), "assistant.db")
@@ -339,10 +388,34 @@ func assistantFixture(t *testing.T) (*sql.DB, *sessionstore.Store, Store, int64)
 	sessions := sessionstore.NewStore(db)
 	project, err := sessions.GetOrCreateProject(ctx, "/project")
 	require.NoError(t, err)
-	root, err := sessions.CreateSession(ctx, project, "model", "", nil)
+	root, err := sessions.CreateSession(ctx, project, "model", "", map[string]any{"manager_id": testOwner})
+	require.NoError(t, err)
+	_, err = db.ExecContext(ctx, `UPDATE sessions SET agent_type = 'assistant' WHERE id = ?`, root.ID)
 	require.NoError(t, err)
 
-	return db, sessions, New(db), root.ID
+	return db, sessions, New(db, sessions, t.TempDir()), root.ID
+}
+
+// devboxWork seeds a completed work root in its own devbox project, answered once to an observed send.
+func devboxWork(t *testing.T, db *sql.DB, sessions *sessionstore.Store, root int64) int64 {
+	t.Helper()
+	ctx := t.Context()
+	dir := filepath.Join(t.TempDir(), "devbox")
+	require.NoError(t, os.MkdirAll(dir, 0o755))
+	project, err := sessions.GetOrCreateProject(ctx, dir)
+	require.NoError(t, err)
+	record, err := sessions.CreateSession(ctx, project, "model", "", map[string]any{"manager_id": testOwner})
+	require.NoError(t, err)
+	answered(t, sessions, record.ID, "build", "tail ok")
+	require.NoError(t, sessions.UpdateSessionStatus(ctx, record.ID, sessionstore.SessionStatusCompleted))
+	now := time.Now().UTC()
+	_, err = db.ExecContext(ctx, `INSERT INTO assistant_sends
+		(input_id, assistant_session_id, session_id, created_at, observed_at)
+		SELECT id, ?, session_id, ?, ? FROM session_inbox WHERE session_id = ?`,
+		root, now, now, record.ID)
+	require.NoError(t, err)
+
+	return record.ID
 }
 
 func workSession(t *testing.T, sessions *sessionstore.Store, attrs map[string]any) int64 {

@@ -28,7 +28,6 @@ func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
 
 type fakeController struct {
 	assistantRoot *controllerapi.AssistantRootEnsureData
-	desk          string
 	lastSetAttrs  controllerapi.SessionSetAttributesData
 	listSessions  []controllerapi.SessionInfo
 	listSkills    []controllerapi.ConfigSkillInfo
@@ -123,10 +122,6 @@ func (f *fakeController) EnsureAssistantRoot(context.Context) (*controllerapi.As
 	}
 
 	return f.assistantRoot, nil
-}
-
-func (f *fakeController) AssistantDesk(context.Context, int64) (string, error) {
-	return f.desk, nil
 }
 
 func (f *fakeController) ListDir(

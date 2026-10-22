@@ -34,6 +34,7 @@ import (
 	"github.com/pilat/coagent/internal/mcpstore"
 	"github.com/pilat/coagent/internal/migrate"
 	"github.com/pilat/coagent/internal/progressruntime"
+	"github.com/pilat/coagent/internal/projectpath"
 	"github.com/pilat/coagent/internal/schedule"
 	"github.com/pilat/coagent/internal/sessionbuild"
 	"github.com/pilat/coagent/internal/sessionbus"
@@ -140,7 +141,7 @@ func newDelayedTelegramHarnessWithClient(
 			configops.New(filepath.Join(home, "config.yaml"), filepath.Join(home, "secrets.yaml")),
 			sessions,
 		),
-		assistant.New(db),
+		assistant.New(db, sessions, projectpath.ResolveRoot(cfg.UnifiedConfig)),
 	)
 
 	t.Cleanup(func() { service.Shutdown(3 * time.Second) })

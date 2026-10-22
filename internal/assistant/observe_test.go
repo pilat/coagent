@@ -1,4 +1,4 @@
-package daemon
+package assistant
 
 import (
 	"errors"
@@ -37,16 +37,8 @@ func TestAssistantObservationDecisions(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			view := &sessionstore.AssistantObservation{
-				Input: &sessionstore.InboxInput{State: tc.input},
-				Session: &sessionstore.SessionRecord{
-					Status: tc.status,
-				},
-				NextUser: tc.next,
-				Answer:   tc.answer,
-				Settled:  tc.final,
-			}
-			kind, text, settled := assistantObservation(view, tc.busy, errors.New("run failure"))
+			w := window{state: tc.input, status: tc.status, nextUser: tc.next, answer: tc.answer, settled: tc.final}
+			kind, text, settled := decide(w, tc.busy, errors.New("run failure"))
 			assert.Equal(t, tc.kind, kind)
 			assert.Equal(t, tc.text, text)
 			assert.Equal(t, tc.settled, settled)

@@ -28,6 +28,7 @@ import (
 	"github.com/pilat/coagent/internal/mcpstore"
 	"github.com/pilat/coagent/internal/migrate"
 	"github.com/pilat/coagent/internal/progressruntime"
+	"github.com/pilat/coagent/internal/projectpath"
 	"github.com/pilat/coagent/internal/schedule"
 	"github.com/pilat/coagent/internal/sessionbuild"
 	"github.com/pilat/coagent/internal/sessionbus"
@@ -93,7 +94,7 @@ func newTelegramOwnershipHarness(t *testing.T) *telegramOwnershipHarness {
 			configops.New(filepath.Join(root, "config.yaml"), filepath.Join(root, "secrets.yaml")),
 			sessions,
 		),
-		assistant.New(db),
+		assistant.New(db, sessions, projectpath.ResolveRoot(cfg.UnifiedConfig)),
 	)
 	t.Cleanup(func() { svc.Shutdown(3 * time.Second) })
 
