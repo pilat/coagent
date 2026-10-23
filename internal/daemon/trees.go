@@ -147,7 +147,7 @@ func (s *svc) killLocked(ctx context.Context, sessionID int64) error {
 
 	rec, err := s.store.GetSession(ctx, sessionID)
 	if err != nil {
-		return fmt.Errorf("session %d not found", sessionID)
+		return fmt.Errorf("load kill session %d: %w", sessionID, err)
 	}
 
 	if rec.KilledAt != nil {
