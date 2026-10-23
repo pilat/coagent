@@ -378,6 +378,18 @@ func TestStopOnStoreFailureDoesNotPublishIdle(t *testing.T) {
 	requireNoManagerNotification(t, notifications)
 }
 
+func TestKillLockedKeepsLoadError(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t, harnessOptions{respond: trivialRespond})
+	record, err := h.store.CreateSession(h.ctx, testProject(t, h.store, t.TempDir()), "model", "", nil)
+	require.NoError(t, err)
+	loadErr := errors.New("disk hiccup")
+	failing := &failingGetSessionStore{Store: h.store, err: loadErr}
+	failing.pending.Store(true)
+	h.mgr.store = failing
+	assert.ErrorIs(t, h.mgr.killLocked(h.ctx, record.ID), loadErr)
+}
+
 func TestStopParksWholeTreeAndExplicitFollowUpResumesOnlyChild(t *testing.T) {
 	ctx := context.Background()
 	h := newHarness(t, harnessOptions{configure: withTestModels, clientFor: (&mockFactory{}).client})
