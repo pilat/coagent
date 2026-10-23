@@ -21,8 +21,11 @@ import (
 	"github.com/pilat/coagent/internal/transcript"
 )
 
+// Trips on the delivery's tree-lock lookup, after the turn commits and before the lock and instruction.
 type assistantCommitBarrier struct {
 	Store
+	db      *sql.DB
+	target  int64
 	once    sync.Once
 	reached chan struct{}
 	release chan struct{}
@@ -192,7 +195,10 @@ func TestHarnessScenario_AssistantShutdownAfterCommitKeepsEffects(t *testing.T) 
 		return err
 	}))
 	require.NoError(t, first.store.UpdateSessionStatus(first.ctx, workID, sessionstore.SessionStatusCompleted))
-	barrier := &assistantCommitBarrier{Store: first.store, reached: make(chan struct{}), release: make(chan struct{})}
+	barrier := &assistantCommitBarrier{
+		Store: first.store, db: first.db, target: workID,
+		reached: make(chan struct{}), release: make(chan struct{}),
+	}
 	first.mgr.store = barrier
 	t.Cleanup(func() { closeOnce(barrier.release) })
 	require.NoError(t, first.mgr.sendToSession(first.ctx, root.ID, "send work"))
@@ -225,21 +231,22 @@ func TestHarnessScenario_AssistantShutdownAfterCommitKeepsEffects(t *testing.T) 
 	assert.Equal(t, 1, assistantSayCount(t, second, root.ID, "committed reply"))
 }
 
-func (b *assistantCommitBarrier) WithTx(ctx context.Context, fn func(*sql.Tx) error) error {
-	committedStep := false
-	err := b.Store.WithTx(ctx, func(tx *sql.Tx) error {
-		if err := fn(tx); err != nil {
-			return err
-		}
+func (b *assistantCommitBarrier) GetSession(ctx context.Context, id int64) (*sessionstore.SessionRecord, error) {
+	if id != b.target {
+		return b.Store.GetSession(ctx, id)
+	}
 
-		return tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM assistant_turns WHERE outcome = 'ok')`).
-			Scan(&committedStep)
-	})
-	if err == nil && committedStep {
+	var committedStep bool
+	if err := b.db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM assistant_turns WHERE outcome = 'ok')`).
+		Scan(&committedStep); err != nil {
+		return nil, err
+	}
+
+	if committedStep {
 		b.once.Do(func() { close(b.reached); <-b.release })
 	}
 
-	return err
+	return b.Store.GetSession(ctx, id)
 }
 
 func TestHarnessScenario_AssistantWaitsForWorkSleep(t *testing.T) {
