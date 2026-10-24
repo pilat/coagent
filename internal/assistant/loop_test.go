@@ -10,7 +10,6 @@ import (
 	"slices"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -38,15 +37,16 @@ type loopClient struct {
 	responses []*llmwire.Response
 	requests  [][]llmwire.Message
 	calls     int
-	calledAt  []time.Time
 	closes    int
 	err       error
 	failFrom  int
+	onCall    func()
 }
 
 type loopHost struct {
 	sessions *sessionstore.Store
 	client   *loopClient
+	clients  int
 	moves    []string
 	notified []string
 	err      error // returned by Deliver and Stop
@@ -84,7 +84,8 @@ func TestAssistantLoopTurns(t *testing.T) {
 			assert.Equal(t, tc.reason, reason)
 			assert.Equal(t, tc.says, f.host.notified)
 			assert.Equal(t, len(tc.responses), f.client.calls)
-			assert.Equal(t, f.client.calls, f.client.closes)
+			assert.Equal(t, min(len(tc.responses), 1), f.host.clients, "one client per turn that reached the model")
+			assert.Equal(t, f.host.clients, f.client.closes)
 			assert.Empty(t, f.host.moves)
 			record, err := f.sessions.GetSession(t.Context(), f.root)
 			require.NoError(t, err)
@@ -498,18 +499,25 @@ func (f *loopFixture) newest() int64 {
 }
 
 func (c *loopClient) Chat(
-	_ context.Context,
+	ctx context.Context,
 	system string,
 	messages []llmwire.Message,
 	tools []llmwire.ToolSchema,
 	_ ...llmwire.ChatOption,
 ) (*llmwire.Response, error) {
+	if c.onCall != nil {
+		c.onCall()
+	}
+
 	c.calls++
-	c.calledAt = append(c.calledAt, time.Now())
 	assert.Equal(c.t, registry.AssistantPrompt, system)
 	assert.Equal(c.t, Tools(), tools, "the tool list never changes within a turn")
 	assert.Equal(c.t, llmwire.RoleUser, messages[0].Role)
 	c.requests = append(c.requests, slices.Clone(messages))
+
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 
 	if c.err != nil && c.calls >= c.failFrom {
 		return nil, c.err
@@ -523,6 +531,7 @@ func (c *loopClient) Chat(
 func (c *loopClient) Close() error { c.closes++; return nil }
 
 func (h *loopHost) NewClient(_ int64, model, _ string) (llm.Client, error) {
+	h.clients++
 	if h.client.t != nil {
 		assert.Equal(h.client.t, "model", model)
 	}

@@ -9,6 +9,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/pilat/coagent/internal/llm"
 	"github.com/pilat/coagent/internal/llmwire"
 	"github.com/pilat/coagent/internal/sessionstore"
 )
@@ -31,6 +32,7 @@ var errFinalReply = errors.New("the reply is final; no new work in this phase")
 // turn is one input's conversation; nothing in it has an effect before commit.
 type turn struct {
 	input      *sessionstore.InboxInput
+	client     llm.Client
 	now        time.Time
 	today      string
 	messages   []llmwire.Message

@@ -135,7 +135,7 @@ func (l *loop) ask(ctx context.Context, t *turn, phase string, messages []llmwir
 		Request: callRequest(messages[min(t.recorded, len(messages)):]), CreatedAt: time.Now().UTC(),
 	}
 
-	response, err := l.chat(ctx, messages)
+	response, err := l.chat(ctx, t, messages)
 	if err != nil {
 		call.Response = "error: " + logger.Redact(err.Error())
 		t.calls = append(t.calls, call)
@@ -149,46 +149,9 @@ func (l *loop) ask(ctx context.Context, t *turn, phase string, messages []llmwir
 	return response, nil
 }
 
-func (l *loop) chat(ctx context.Context, messages []llmwire.Message) (*llmwire.Response, error) {
-	var last error
-	delays := []time.Duration{0, 2 * time.Second, 5 * time.Second, 15 * time.Second}
-
-	for _, delay := range delays {
-		if err := waitRetry(ctx, delay); err != nil {
-			return nil, err
-		}
-
-		response, err := l.chatOnce(ctx, messages)
-		if err == nil {
-			return response, nil
-		}
-
-		last = err
-	}
-
-	return nil, fmt.Errorf("assistant model retries exhausted: %w", last)
-}
-
-// chatOnce sends the same tools on every call so the provider's prompt cache keeps hitting.
-func (l *loop) chatOnce(ctx context.Context, messages []llmwire.Message) (*llmwire.Response, error) {
-	log := logger.Ctx(ctx).Named("assistant.chat")
-
-	record, err := l.store.sessions.GetSession(ctx, l.scope.Root)
-	if err != nil {
-		return nil, fmt.Errorf("load assistant model: %w", err)
-	}
-
-	client, err := l.host.NewClient(l.scope.Root, record.Model, record.ReasoningLevel)
-	if err != nil {
-		return nil, fmt.Errorf("build assistant model: %w", err)
-	}
-	defer func() {
-		if err := client.Close(); err != nil {
-			log.Warn("close model", zap.Error(err))
-		}
-	}()
-
-	response, err := client.Chat(ctx, registry.AssistantPrompt, messages, Tools())
+// chat sends the same tools on every call so the provider's prompt cache keeps hitting.
+func (l *loop) chat(ctx context.Context, t *turn, messages []llmwire.Message) (*llmwire.Response, error) {
+	response, err := t.client.Chat(ctx, registry.AssistantPrompt, messages, Tools())
 	if err != nil {
 		return nil, fmt.Errorf("call assistant model: %w", err)
 	}
@@ -199,7 +162,8 @@ func (l *loop) chatOnce(ctx context.Context, messages []llmwire.Message) (*llmwi
 			response.ProviderFinishReason)
 	}
 
-	log.Info("call usage", zap.Any("usage", response.Usage), zap.Float64("cost_usd", response.CostUSD))
+	logger.Ctx(ctx).Named("assistant.chat").Info("call usage",
+		zap.Any("usage", response.Usage), zap.Float64("cost_usd", response.CostUSD))
 
 	return response, nil
 }
@@ -283,16 +247,4 @@ func callResponse(response *llmwire.Response) string {
 	}
 
 	return string(data)
-}
-
-func waitRetry(ctx context.Context, delay time.Duration) error {
-	timer := time.NewTimer(delay)
-	defer timer.Stop()
-
-	select {
-	case <-ctx.Done():
-		return fmt.Errorf("assistant retry interrupted: %w", ctx.Err())
-	case <-timer.C:
-		return nil
-	}
 }

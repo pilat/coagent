@@ -5,7 +5,6 @@ import (
 	"errors"
 	"testing"
 	"testing/synctest"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -19,14 +18,10 @@ func TestAssistantLoopProviderFailure(t *testing.T) {
 		f := newLoopFixture(t)
 		f.client.err = errors.New("provider unavailable")
 		f.enqueue("hello")
-		started := time.Now()
 		require.NoError(t, Run(t.Context(), f.store, f.host, f.root))
-		assert.Equal(t, 4, f.client.calls)
-		assert.Equal(t, []time.Time{
-			started, started.Add(2 * time.Second),
-			started.Add(7 * time.Second), started.Add(22 * time.Second),
-		}, f.client.calledAt)
-		assert.Equal(t, f.client.calls, f.client.closes)
+		assert.Equal(t, 1, f.client.calls)
+		assert.Equal(t, 1, f.host.clients)
+		assert.Equal(t, f.host.clients, f.client.closes)
 		require.Len(t, f.host.notified, 1)
 		assert.Contains(t, f.host.notified[0], "⚠️ turn failed:")
 		assert.Contains(t, f.host.notified[0], "provider unavailable")
@@ -43,29 +38,24 @@ func TestAssistantLoopProviderFailure(t *testing.T) {
 	})
 }
 
-func TestAssistantLoopRetryCancellation(t *testing.T) {
-	for i, timeout := range []time.Duration{time.Second, 3 * time.Second, 8 * time.Second} {
-		t.Run(timeout.String(), func(t *testing.T) {
-			synctest.Test(t, func(t *testing.T) {
-				f := newLoopFixture(t)
-				f.client.err = errors.New("provider unavailable")
-				f.enqueue("hello")
-				started := time.Now()
-				ctx, cancel := context.WithTimeout(t.Context(), timeout)
-				defer cancel()
-				require.ErrorIs(t, Run(ctx, f.store, f.host, f.root), context.DeadlineExceeded)
-				assert.Equal(t, i+1, f.client.calls)
-				assert.Equal(t, timeout, time.Since(started))
-				assert.Empty(t, f.host.notified)
-				inputs, err := f.sessions.ListPending(t.Context(), f.root)
-				require.NoError(t, err)
-				assert.Len(t, inputs, 1)
-				record, err := f.sessions.GetSession(t.Context(), f.root)
-				require.NoError(t, err)
-				assert.Equal(t, sessionstore.SessionStatusCompleted, record.Status)
-			})
-		})
-	}
+func TestAssistantLoopInterruptedTurnKeepsItsInput(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		f := newLoopFixture(t)
+		f.enqueue("hello")
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		f.client.onCall = cancel
+		require.ErrorIs(t, Run(ctx, f.store, f.host, f.root), context.Canceled)
+		assert.Equal(t, 1, f.client.calls)
+		assert.Equal(t, f.host.clients, f.client.closes)
+		assert.Empty(t, f.host.notified)
+		inputs, err := f.sessions.ListPending(t.Context(), f.root)
+		require.NoError(t, err)
+		assert.Len(t, inputs, 1)
+		record, err := f.sessions.GetSession(t.Context(), f.root)
+		require.NoError(t, err)
+		assert.Equal(t, sessionstore.SessionStatusCompleted, record.Status)
+	})
 }
 
 func TestAssistantLoopModelErrorAppliesNothing(t *testing.T) {
@@ -75,7 +65,7 @@ func TestAssistantLoopModelErrorAppliesNothing(t *testing.T) {
 		f.client.err, f.client.failFrom = errors.New("provider unavailable"), 2
 		f.enqueue("go")
 		require.NoError(t, Run(t.Context(), f.store, f.host, f.root))
-		assert.Equal(t, 5, f.client.calls)
+		assert.Equal(t, 2, f.client.calls)
 		assert.Empty(t, f.host.moves, "a failed turn applies none of its buffered effects")
 		require.Len(t, f.host.notified, 1)
 		assert.Contains(t, f.host.notified[0], "⚠️ turn failed:")
@@ -99,7 +89,7 @@ func TestAssistantLoopGuardFailureCommitsTheReply(t *testing.T) {
 		f.client.err, f.client.failFrom = errors.New("provider unavailable"), 3
 		f.enqueue("go")
 		require.NoError(t, Run(t.Context(), f.store, f.host, f.root))
-		assert.Equal(t, 6, f.client.calls, "two main calls and one guard call with its retries")
+		assert.Equal(t, 3, f.client.calls, "two main calls and one guard call")
 		assert.Equal(t, []string{"Отправил."}, f.host.notified)
 		assert.Equal(t, []string{"send 2 go"}, f.host.moves)
 		assert.Equal(t, []string{"guard_unresolved"}, f.callOutcomes())
@@ -116,7 +106,7 @@ func TestAssistantLoopGuardFailureCommitsTheReply(t *testing.T) {
 func TestAssistantLoopRejectsCutOffReplies(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		cut := &llmwire.Response{Text: "Половина отв", FinishType: llmwire.FinishLength}
-		f := newLoopFixture(t, cut, cut, cut, cut)
+		f := newLoopFixture(t, cut)
 		f.enqueue("hello")
 		require.NoError(t, Run(t.Context(), f.store, f.host, f.root))
 		require.Len(t, f.host.notified, 1)

@@ -8,9 +8,12 @@ import (
 	"strings"
 	"time"
 
+	"go.uber.org/zap"
+
 	"github.com/pilat/coagent/internal/controllerapi"
 	"github.com/pilat/coagent/internal/llm"
 	"github.com/pilat/coagent/internal/llmwire"
+	"github.com/pilat/coagent/internal/logger"
 	"github.com/pilat/coagent/internal/sessionstore"
 )
 
@@ -101,6 +104,11 @@ func (l *loop) turn(ctx context.Context, input *sessionstore.InboxInput) error {
 	if err != nil {
 		return err
 	}
+	defer func() {
+		if err := t.client.Close(); err != nil {
+			logger.Ctx(ctx).Named("assistant.chat").Warn("close model", zap.Error(err))
+		}
+	}()
 
 	if err := l.mainPhase(ctx, t); err != nil {
 		if ctx.Err() != nil {
@@ -176,8 +184,19 @@ func (l *loop) begin(ctx context.Context, input *sessionstore.InboxInput, event 
 		return nil, fmt.Errorf("load assistant turn memory: %w", err)
 	}
 
+	record, err := l.store.sessions.GetSession(ctx, l.scope.Root)
+	if err != nil {
+		return nil, fmt.Errorf("load assistant model: %w", err)
+	}
+
+	client, err := l.host.NewClient(l.scope.Root, record.Model, record.ReasoningLevel)
+	if err != nil {
+		return nil, fmt.Errorf("build assistant model: %w", err)
+	}
+
 	view := View{Desk: desk, Recent: recent, Total: total, Event: event}
 	t := newTurn(input, memory, desk.Focus, now)
+	t.client = client
 	t.messages = []llmwire.Message{{Role: llmwire.RoleUser, Content: Render(view, now)}}
 
 	return t, nil
