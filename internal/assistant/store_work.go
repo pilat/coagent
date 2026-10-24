@@ -11,13 +11,12 @@ import (
 	"unicode/utf8"
 
 	"github.com/pilat/coagent/internal/sessionstore"
-	"github.com/pilat/coagent/internal/tool"
 )
 
 const (
 	// workRootSQL is the single authority predicate over `sessions s`; its one placeholder binds the owner.
 	workRootSQL = `json_extract(s.attributes, '$.manager_id') = ? AND COALESCE(s.parent_id, 0) = 0
-		AND COALESCE(s.agent_type, '') <> '` + tool.AssistantAgentType + `'
+		AND COALESCE(s.agent_type, '') <> '` + sessionstore.AssistantAgentType + `'
 		AND s.killed_at IS NULL AND COALESCE(s.status, '') <> 'killed'
 		AND (COALESCE(json_type(s.attributes, '$.management_surface'), 'null') IN ('null', 'false')
 			OR (json_type(s.attributes, '$.management_surface') = 'text'

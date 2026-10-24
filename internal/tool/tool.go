@@ -30,7 +30,6 @@ const (
 
 	IDConfigEdit         = "config_edit"
 	BrowserAgentType     = "browser"
-	AssistantAgentType   = "assistant"
 	PlaywrightServerName = "playwright"
 	PlaywrightToolPrefix = "mcp__playwright__"
 	BrowserTaskState     = "task_state"

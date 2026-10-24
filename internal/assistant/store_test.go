@@ -390,7 +390,12 @@ func assistantFixture(t *testing.T) (*sql.DB, *sessionstore.Store, *Store, int64
 	require.NoError(t, err)
 	root, err := sessions.CreateSession(ctx, project, "model", "", map[string]any{"manager_id": testOwner})
 	require.NoError(t, err)
-	_, err = db.ExecContext(ctx, `UPDATE sessions SET agent_type = 'assistant' WHERE id = ?`, root.ID)
+	_, err = db.ExecContext(
+		ctx,
+		`UPDATE sessions SET agent_type = ? WHERE id = ?`,
+		sessionstore.AssistantAgentType,
+		root.ID,
+	)
 	require.NoError(t, err)
 
 	return db, sessions, New(db, sessions, t.TempDir()), root.ID

@@ -206,7 +206,6 @@ type RecentProjectInfo struct {
 }
 
 type SessionInfo struct {
-	AgentType      string         `json:"agent_type,omitempty"`
 	ID             int64          `json:"id"`
 	Name           string         `json:"name"`
 	WorkDir        string         `json:"work_dir"`

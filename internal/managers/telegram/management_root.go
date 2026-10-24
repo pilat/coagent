@@ -43,9 +43,9 @@ func isManagementSession(attrs map[string]any) bool {
 	}
 }
 
-// filterOutManagementRoot drops the management root from session pickers so
-// /kill can never offer or destroy it.
-func filterOutManagementRoot(sessions []controllerapi.SessionInfo, rootID int64) []controllerapi.SessionInfo {
+// filterOutRoot drops a manager-owned root from session pickers so /kill can
+// never offer or destroy it.
+func filterOutRoot(sessions []controllerapi.SessionInfo, rootID int64) []controllerapi.SessionInfo {
 	if rootID <= 0 {
 		return sessions
 	}

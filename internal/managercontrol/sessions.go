@@ -134,8 +134,7 @@ func (s *service) listSessions(
 		workDir, _ := s.store.GetProjectWorkDir(ctx, record.ProjectID)
 		projectName, _ := s.store.GetProjectName(ctx, record.ProjectID)
 		infos = append(infos, controllerapi.SessionInfo{
-			AgentType: record.AgentType,
-			ID:        record.ID, Name: fmt.Sprintf("%s - %d", projectName, record.ID),
+			ID: record.ID, Name: fmt.Sprintf("%s - %d", projectName, record.ID),
 			WorkDir: workDir, ProjectID: record.ProjectID, ProjectName: projectName,
 			HasActiveLoop: s.backend.HasActiveLoop(record.ID), Model: record.Model,
 			ReasoningLevel: record.ReasoningLevel, Status: string(record.Status),

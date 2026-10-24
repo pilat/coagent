@@ -15,7 +15,6 @@ import (
 	"github.com/pilat/coagent/internal/llmwire"
 	"github.com/pilat/coagent/internal/registry"
 	"github.com/pilat/coagent/internal/sessionstore"
-	"github.com/pilat/coagent/internal/tool"
 )
 
 var (
@@ -58,7 +57,7 @@ func TestHarnessScenario_AssistantOpenAndRetell(t *testing.T) {
 	again, err := h.mgr.EnsureAssistantRoot(h.ctx, scenarioManagerID)
 	require.NoError(t, err)
 	assert.Equal(t, root.ID, again.ID)
-	assert.Equal(t, tool.AssistantAgentType, root.AgentType)
+	assert.Equal(t, sessionstore.AssistantAgentType, root.AgentType)
 	h.startInboxWake()
 	require.NoError(t, h.mgr.sendToSession(h.ctx, root.ID, "please check"))
 	h.waitUntil("assistant retelling", func() bool { return assistantSayCount(t, h, root.ID, "retold answer") == 1 })

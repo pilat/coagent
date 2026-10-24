@@ -9,6 +9,9 @@ import (
 	"time"
 )
 
+// AssistantAgentType is the agent type of a manager's assistant root.
+const AssistantAgentType = "assistant"
+
 // EnsureAssistantRoot preserves one durable desk identity per manager.
 func (s *Store) EnsureAssistantRoot(
 	ctx context.Context,
@@ -25,7 +28,7 @@ func (s *Store) EnsureAssistantRoot(
 		var err error
 
 		record, err = scanSession(tx.QueryRowContext(ctx, `SELECT `+sessionColumns+` FROM sessions
-			WHERE agent_type = 'assistant' AND parent_id = 0 AND json_extract(attributes, '$.manager_id') = ?`, owner))
+			WHERE agent_type = '`+AssistantAgentType+`' AND parent_id = 0 AND json_extract(attributes, '$.manager_id') = ?`, owner))
 		if !errors.Is(err, errSessionNotFound) {
 			return err
 		}
@@ -39,7 +42,7 @@ func (s *Store) EnsureAssistantRoot(
 
 		result, err := tx.ExecContext(ctx, `INSERT INTO sessions
 			(project_id, model, reasoning_level, attributes, agent_type, status, created_at, updated_at)
-			VALUES (?, '', '', ?, 'assistant', 'completed', ?, ?)`, projectID, string(attrs), now, now)
+			VALUES (?, '', '', ?, '`+AssistantAgentType+`', 'completed', ?, ?)`, projectID, string(attrs), now, now)
 		if err != nil {
 			return fmt.Errorf("insert assistant root: %w", err)
 		}

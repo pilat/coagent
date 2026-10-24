@@ -19,7 +19,7 @@ func (m *Manager) refreshActiveProgress(ctx context.Context) error {
 	}
 
 	for _, session := range sessions {
-		if !session.HasActiveLoop || session.AgentType == assistantAgentType {
+		if !session.HasActiveLoop || session.ID == m.assistantRootID {
 			continue
 		}
 

@@ -57,11 +57,11 @@ func TestHarnessScenario_KillPickerExcludesManagementRoot(t *testing.T) {
 		{ID: 7, Name: "worker"},
 	}
 
-	kept := filterOutManagementRoot(sessions, 42)
+	kept := filterOutRoot(sessions, 42)
 	require.Len(t, kept, 1)
 	assert.Equal(t, int64(7), kept[0].ID)
 
-	assert.Len(t, filterOutManagementRoot(sessions, 0), 2, "no root id keeps the picker unchanged")
+	assert.Len(t, filterOutRoot(sessions, 0), 2, "no root id keeps the picker unchanged")
 }
 
 func TestHarnessScenario_ManagementDeliveryAlwaysResolvesServiceTopic(t *testing.T) {
@@ -133,7 +133,7 @@ func TestHarnessScenario_ClearNotificationRefreshesManagementRootID(t *testing.T
 		{ID: 77, Name: "management successor"},
 		{ID: 7, Name: "worker"},
 	}
-	kept := filterOutManagementRoot(sessions, manager.managementRootID)
+	kept := filterOutRoot(sessions, manager.managementRootID)
 	require.Len(t, kept, 1)
 	assert.Equal(t, int64(7), kept[0].ID)
 }

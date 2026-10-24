@@ -167,7 +167,7 @@ func (s *Store) ListAutonomousProgressRoots(ctx context.Context) ([]int64, error
 	rows, err := s.db.QueryContext(ctx, `SELECT DISTINCT root.id FROM sessions root
 		LEFT JOIN sessions child ON child.root_id = root.id
 		WHERE root.parent_id = 0 AND root.killed_at IS NULL
-			AND root.agent_type <> 'assistant'
+			AND root.agent_type <> '`+AssistantAgentType+`'
 			AND json_type(root.attributes, '$.manager_id') = 'text'
 			AND json_extract(root.attributes, '$.manager_id') <> ''
 			AND root.episode_started_at IS NOT NULL

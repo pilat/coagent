@@ -10,7 +10,7 @@ import (
 	"time"
 	"unicode"
 
-	"github.com/pilat/coagent/internal/tool"
+	"github.com/pilat/coagent/internal/sessionstore"
 )
 
 const (
@@ -26,7 +26,7 @@ const (
 	indexBatchSize  = 500
 	aroundTextChars = 2000
 	// indexRootSQL skips children and assistant roots over `sessions s`.
-	indexRootSQL = `COALESCE(s.parent_id, 0) = 0 AND COALESCE(s.agent_type, '') <> '` + tool.AssistantAgentType + `'`
+	indexRootSQL = `COALESCE(s.parent_id, 0) = 0 AND COALESCE(s.agent_type, '') <> '` + sessionstore.AssistantAgentType + `'`
 	// requestSQL and finalSQL over `messages m` define what counts as a work request and a work answer.
 	requestSQL = `(m.role = 'user' AND EXISTS (SELECT 1 FROM session_inbox i WHERE i.session_id = m.session_id
 		AND i.state = 'accepted' AND i.accepted_message_id IS NOT NULL
