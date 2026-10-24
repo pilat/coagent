@@ -20,7 +20,6 @@ import (
 	"github.com/pilat/coagent/internal/sessionbuild"
 	"github.com/pilat/coagent/internal/sessionevent"
 	"github.com/pilat/coagent/internal/sessionstore"
-	"github.com/pilat/coagent/internal/tool"
 )
 
 var _ assistant.Host = assistantHost{}
@@ -143,7 +142,7 @@ func (s *svc) refuseAssistantRoot(ctx context.Context, input *sessionstore.Inbox
 		return false, fmt.Errorf("load command target: %w", err)
 	}
 
-	if record.AgentType != tool.AssistantAgentType {
+	if record.AgentType != sessionstore.AssistantAgentType {
 		return false, nil
 	}
 

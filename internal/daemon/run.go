@@ -11,7 +11,6 @@ import (
 	"github.com/pilat/coagent/internal/session"
 	"github.com/pilat/coagent/internal/sessionevent"
 	"github.com/pilat/coagent/internal/sessionstore"
-	"github.com/pilat/coagent/internal/tool"
 )
 
 // A stale runnability projection must not spin runners without new input.
@@ -67,7 +66,7 @@ func (s *svc) runOnce(ctx context.Context, rs *runner) runOutcome {
 	}
 
 	idle := ownerlessSession(rec)
-	if rec.AgentType == tool.AssistantAgentType {
+	if rec.AgentType == sessionstore.AssistantAgentType {
 		return s.runAssistant(ctx, rs)
 	}
 

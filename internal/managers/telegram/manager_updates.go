@@ -145,7 +145,7 @@ func (m *Manager) processTopicUpdate(ctx context.Context, msg *telegramMessage, 
 		return
 	}
 
-	if hasSession && hasAttachment(msg) && m.isAssistantSession(ctx, sessionID) {
+	if hasSession && hasAttachment(msg) && m.isAssistantRoot(sessionID) {
 		if msg.Caption != "" {
 			m.handleSessionTopicMessage(ctx, sessionID, threadID, normalizeTextCommand(msg.Caption))
 		}

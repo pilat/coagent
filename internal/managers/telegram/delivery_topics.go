@@ -159,7 +159,7 @@ func (t *outputTransport) ensureSessionTopic(
 	}
 
 	if claim.SessionID == t.manager.assistantRootID {
-		name = t.manager.assistantTopicName()
+		name = t.manager.cfg.AssistantTopicName
 	}
 
 	topicID, err := t.manager.createForumTopic(ctx, name, t.manager.cfg.SessionTopicIconEmojiID)

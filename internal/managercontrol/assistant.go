@@ -32,11 +32,11 @@ func (c *controller) EnsureAssistantRoot(ctx context.Context) (*controllerapi.As
 func (s *service) assistantTopicName(managerID string) string {
 	if cfg := s.unifiedConfig(); cfg != nil {
 		for _, manager := range cfg.Managers {
-			if manager.ID == managerID && manager.AssistantTopicName != "" {
+			if manager.ID == managerID {
 				return manager.AssistantTopicName
 			}
 		}
 	}
 
-	return "Assistant"
+	return ""
 }
