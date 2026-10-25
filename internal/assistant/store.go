@@ -19,7 +19,7 @@ const (
 	moveKind    = "move"
 	errorKind   = "error"
 	// conversationLines bounds the dialog the desk repeats; older lines are found by search.
-	conversationLines = 10
+	conversationLines = 40
 )
 
 // Desk is the durable part of what one turn sees; expired memory is already left out.
