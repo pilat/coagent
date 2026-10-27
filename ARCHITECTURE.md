@@ -886,6 +886,12 @@ not reported as failed when the daemon shuts down. The accepted POC crash window
 between commit and effects is not replayed. Open records its `about` with the
 first send before admitting input.
 
+For a user turn with exactly one open or send, delivery appends the current user
+message as a blockquote, after trimming whitespace and normalizing CRLF, unless
+the instruction is a command or already contains that text exactly. Any stops
+must target the same existing session as the send. Split hand-overs and agent
+events carry no quote; tape move lines keep only the assistant's instruction.
+
 Work answers are observed only for recorded assistant sends, bounded by the next
 accepted user input and carrying every final in that window. A send is answered
 only when the window ends in a final with no completion check pending and the

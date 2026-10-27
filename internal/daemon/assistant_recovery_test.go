@@ -217,7 +217,8 @@ func TestHarnessScenario_AssistantShutdownAfterCommitKeepsEffects(t *testing.T) 
 	assert.Equal(t, "handled", state)
 	var sent int
 	require.NoError(t, second.db.QueryRowContext(second.ctx, `SELECT count(*) FROM session_inbox
-		WHERE session_id = ? AND raw_content = 'not applied'`, workID).Scan(&sent))
+		WHERE session_id = ? AND raw_content = ?`, workID,
+		"not applied\n\nThe user's own words:\n> send work").Scan(&sent))
 	assert.Equal(t, 1, sent, "a graceful shutdown does not cut the committed turn's effects")
 	var failures int
 	require.NoError(t, second.db.QueryRowContext(second.ctx, `SELECT count(*) FROM session_inbox
