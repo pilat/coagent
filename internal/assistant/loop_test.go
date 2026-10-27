@@ -154,7 +154,7 @@ func TestAssistantLoopGuardAsksForFocus(t *testing.T) {
 	f.enqueue("redis лежит")
 	require.NoError(t, Run(t.Context(), f.store, f.host, f.root))
 	assert.Equal(t, []string{"Проверю redis."}, f.host.notified, "guard text never reaches the user")
-	assert.Equal(t, []string{"send 2 почини redis"}, f.host.moves)
+	assert.Equal(t, []string{"send 2 почини redis\n\nThe user's own words:\n> redis лежит"}, f.host.moves)
 	guardRequest := f.client.requests[2]
 	assert.Contains(t, guardRequest[len(guardRequest)-1].Content, "send to 2 devbox has no focus item")
 	focus, err := f.store.Focus(t.Context(), f.root)
@@ -426,6 +426,211 @@ func TestAssistantToolsMatchPrompt(t *testing.T) {
 
 	for _, banned := range []string{`"say"`, `"do"`, "`forget`", "JSON object", "forget\":"} {
 		assert.NotContains(t, registry.AssistantPrompt, banned)
+	}
+}
+
+func TestAssistantLoopSendUserWords(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		input string
+		text  string
+		want  string
+	}{
+		{
+			name: "paraphrase", input: "переделай на SQLite, схему не трогай",
+			text: "Переведи локальный режим на SQLite",
+			want: "Переведи локальный режим на SQLite\n\nThe user's own words:\n> переделай на SQLite, схему не трогай",
+		},
+		{
+			name: "multiline", input: "первая строка\n\nвторая строка", text: "Проверь",
+			want: "Проверь\n\nThe user's own words:\n> первая строка\n>\n> вторая строка",
+		},
+		{
+			name: "whitespace and CRLF", input: "  a\r\nb\n", text: "Check",
+			want: "Check\n\nThe user's own words:\n> a\n> b",
+		},
+		{name: "command", input: "сожми контекст", text: "/compact", want: "/compact"},
+		{name: "trimmed command", input: "сожми контекст", text: " \t/compact\n", want: "/compact"},
+		{name: "verbatim", input: "go", text: "go", want: "go"},
+		{name: "substring", input: "go", text: "Please go ahead", want: "Please go ahead"},
+		{name: "normalized user substring", input: " a\r\nb\n", text: "Check a\nb first", want: "Check a\nb first"},
+		{
+			name: "CRLF instruction differs", input: " a\r\nb\n", text: "Check a\r\nb first",
+			want: "Check a\r\nb first\n\nThe user's own words:\n> a\n> b",
+		},
+		{name: "case sensitive", input: "go", text: "GO", want: "GO\n\nThe user's own words:\n> go"},
+		{
+			name: "unclipped", input: strings.Repeat("я", eventTextLimit+1000), text: "Check",
+			want: "Check\n\nThe user's own words:\n> " + strings.Repeat("я", eventTextLimit+1000),
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			f := newLoopFixture(t, act(
+				use(toolSend, fmt.Sprintf(`{"session":2,"text":%q}`, tc.text)),
+				use(toolFocus, `{"text":"Check","sessions":["2"]}`),
+			), say("ok"))
+			f.enqueue(tc.input)
+			require.NoError(t, Run(t.Context(), f.store, f.host, f.root))
+			assert.Equal(t, []string{"send 2 " + tc.want}, f.host.moves)
+			assert.Equal(t, []string{
+				"user: «" + tc.input + "»", "say: «ok»",
+				fmt.Sprintf("→ devbox (2): %q", strings.TrimSpace(tc.text)),
+			}, f.tapeTexts())
+			assert.Equal(t, []string{"main", "main"}, f.callPhases())
+		})
+	}
+}
+
+func TestAssistantLoopOpenUserWords(t *testing.T) {
+	t.Parallel()
+	f := newLoopFixture(t, act(
+		use(toolOpen, `{"project":"devbox","about":"Redis diagnosis","text":"Выясни, почему не стартует Redis"}`),
+		use(toolFocus, `{"text":"Redis diagnosis","sessions":["new-2-1"]}`),
+	), say("Проверю."))
+	f.enqueue("проверь redis в devbox, схему не трогай")
+	require.NoError(t, Run(t.Context(), f.store, f.host, f.root))
+	assert.Equal(t, []string{
+		"open devbox",
+		"send 3 Выясни, почему не стартует Redis\n\nThe user's own words:\n> проверь redis в devbox, схему не трогай",
+	}, f.host.moves)
+	var about string
+	require.NoError(
+		t,
+		f.db.QueryRowContext(t.Context(), `SELECT about FROM assistant_work WHERE session_id = 3`).Scan(&about),
+	)
+	assert.Equal(t, "Redis diagnosis", about)
+	assert.Equal(t, []string{
+		"user: «проверь redis в devbox, схему не трогай»", "say: «Проверю.»",
+		`→ devbox (3): "Выясни, почему не стартует Redis"`,
+	}, f.tapeTexts())
+	assert.Equal(t, []string{"main", "main"}, f.callPhases())
+}
+
+func TestAssistantLoopUserWordsWithOtherEffects(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		second bool
+		calls  []llmwire.ToolCall
+		moves  []string
+		tape   []string
+	}{
+		{
+			name: "open and stop",
+			calls: []llmwire.ToolCall{
+				use(toolOpen, `{"project":"devbox","about":"Check","text":"Check Redis"}`),
+				use(toolStop, `{"session":2}`),
+				use(toolFocus, `{"text":"Check","sessions":["new-2-1"]}`),
+			},
+			moves: []string{"open devbox", "send 3 Check Redis", "stop 2"},
+			tape:  []string{"⏹ stopped devbox (2)", `→ devbox (3): "Check Redis"`},
+		},
+		{
+			name: "open and send to existing session",
+			calls: []llmwire.ToolCall{
+				use(toolOpen, `{"project":"devbox","about":"Check","text":"Check Redis"}`),
+				use(toolSend, `{"session":2,"text":"Check SQLite"}`),
+				use(toolFocus, `{"text":"Check","sessions":["new-2-1","2"]}`),
+			},
+			moves: []string{"open devbox", "send 3 Check Redis", "send 2 Check SQLite"},
+			tape:  []string{`→ devbox (2): "Check SQLite"`, `→ devbox (3): "Check Redis"`},
+		},
+		{
+			name: "two sends to different sessions", second: true,
+			calls: []llmwire.ToolCall{
+				use(toolSend, `{"session":2,"text":"Check Redis"}`),
+				use(toolSend, `{"session":3,"text":"Check SQLite"}`),
+				use(toolFocus, `{"text":"Check","sessions":["2","3"]}`),
+			},
+			moves: []string{"send 2 Check Redis", "send 3 Check SQLite"},
+			tape:  []string{`→ devbox (2): "Check Redis"`, `→ project (3): "Check SQLite"`},
+		},
+		{
+			name: "two sends to same session",
+			calls: []llmwire.ToolCall{
+				use(toolSend, `{"session":2,"text":"Check Redis"}`),
+				use(toolSend, `{"session":2,"text":"Check SQLite"}`),
+				use(toolFocus, `{"text":"Check","sessions":["2"]}`),
+			},
+			moves: []string{"send 2 Check Redis", "send 2 Check SQLite"},
+			tape:  []string{`→ devbox (2): "Check Redis"`, `→ devbox (2): "Check SQLite"`},
+		},
+		{
+			name: "stop and send to same session",
+			calls: []llmwire.ToolCall{
+				use(toolStop, `{"session":2}`),
+				use(toolSend, `{"session":2,"text":"Check Redis"}`),
+				use(toolFocus, `{"text":"Check","sessions":["2"]}`),
+			},
+			moves: []string{"stop 2", "send 2 Check Redis\n\nThe user's own words:\n> check without changes"},
+			tape:  []string{"⏹ stopped devbox (2)", `→ devbox (2): "Check Redis"`},
+		},
+		{
+			name: "stop another session and send", second: true,
+			calls: []llmwire.ToolCall{
+				use(toolStop, `{"session":3}`),
+				use(toolSend, `{"session":2,"text":"Check Redis"}`),
+				use(toolFocus, `{"text":"Check","sessions":["2"]}`),
+			},
+			moves: []string{"stop 3", "send 2 Check Redis"},
+			tape:  []string{"⏹ stopped project (3)", `→ devbox (2): "Check Redis"`},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			f := newLoopFixture(t)
+			if tc.second {
+				require.Equal(t, int64(3), workSession(t, f.sessions, map[string]any{"manager_id": testOwner}))
+			}
+			f.client.responses = []*llmwire.Response{act(tc.calls...), say("ok")}
+			f.enqueue("check without changes")
+			require.NoError(t, Run(t.Context(), f.store, f.host, f.root))
+			assert.Equal(t, tc.moves, f.host.moves)
+			assert.Equal(t, append([]string{"user: «check without changes»", "say: «ok»"}, tc.tape...), f.tapeTexts())
+			assert.Equal(t, []string{"main", "main"}, f.callPhases())
+		})
+	}
+}
+
+func TestAssistantLoopAgentEventDoesNotQuoteUserWords(t *testing.T) {
+	t.Parallel()
+	f := newLoopFixture(t, act(
+		use(toolSend, `{"session":2,"text":"Check Redis"}`),
+		use(toolFocus, `{"text":"Check","sessions":["2"]}`),
+	), say("ok"))
+	_, err := f.sessions.Enqueue(t.Context(), eventInput(f.root, f.work, "answered", `← devbox (2) answered: "green"`))
+	require.NoError(t, err)
+	require.NoError(t, Run(t.Context(), f.store, f.host, f.root))
+	assert.Equal(t, []string{"send 2 Check Redis"}, f.host.moves)
+	assert.Equal(
+		t,
+		[]string{`← devbox (2) answered: "green"`, "say: «ok»", `→ devbox (2): "Check Redis"`},
+		f.tapeTexts(),
+	)
+	assert.Equal(t, []string{"main", "main"}, f.callPhases())
+}
+
+func TestAssistantHandoverQuoteWithoutUserWords(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		input   string
+		effects []*effect
+	}{
+		{name: "empty input", effects: []*effect{{kind: effectSend, target: Card{ID: 2}}}},
+		{name: "whitespace input", input: " \r\n\t ", effects: []*effect{{kind: effectOpen}}},
+		{name: "no work", input: "check"},
+		{name: "stop only", input: "check", effects: []*effect{{kind: effectStop, target: Card{ID: 2}}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			turn := &turn{
+				input:   &sessionstore.InboxInput{Source: sessionstore.InputSourceUser, RawContent: tc.input},
+				effects: tc.effects,
+			}
+			handover, words := turn.handoverQuote()
+			assert.Nil(t, handover)
+			assert.Empty(t, words)
+		})
 	}
 }
 
