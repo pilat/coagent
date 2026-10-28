@@ -16,10 +16,10 @@ const AssistantAgentType = "assistant"
 func (s *Store) EnsureAssistantRoot(
 	ctx context.Context,
 	projectID int64,
-	owner, workDir string,
+	owner, workDir, model, level string,
 ) (*SessionRecord, error) {
-	if projectID <= 0 || owner == "" || workDir == "" {
-		return nil, errors.New("assistant root requires project, owner and work dir")
+	if projectID <= 0 || owner == "" || workDir == "" || model == "" {
+		return nil, errors.New("assistant root requires project, owner, work dir and model")
 	}
 
 	var record *SessionRecord
@@ -29,6 +29,10 @@ func (s *Store) EnsureAssistantRoot(
 
 		record, err = scanSession(tx.QueryRowContext(ctx, `SELECT `+sessionColumns+` FROM sessions
 			WHERE agent_type = '`+AssistantAgentType+`' AND parent_id = 0 AND json_extract(attributes, '$.manager_id') = ?`, owner))
+		if err == nil {
+			return initializeAssistantModelTx(ctx, tx, record, model, level)
+		}
+
 		if !errors.Is(err, errSessionNotFound) {
 			return err
 		}
@@ -42,7 +46,7 @@ func (s *Store) EnsureAssistantRoot(
 
 		result, err := tx.ExecContext(ctx, `INSERT INTO sessions
 			(project_id, model, reasoning_level, attributes, agent_type, status, created_at, updated_at)
-			VALUES (?, '', '', ?, '`+AssistantAgentType+`', 'completed', ?, ?)`, projectID, string(attrs), now, now)
+			VALUES (?, ?, ?, ?, '`+AssistantAgentType+`', 'completed', ?, ?)`, projectID, model, level, string(attrs), now, now)
 		if err != nil {
 			return fmt.Errorf("insert assistant root: %w", err)
 		}
@@ -52,7 +56,7 @@ func (s *Store) EnsureAssistantRoot(
 			return fmt.Errorf("assistant root id: %w", err)
 		}
 
-		if _, err := insertLifecycleOutput(ctx, tx, id, OutputSessionOpened, "",
+		if _, err := insertLifecycleOutput(ctx, tx, id, OutputSessionOpened,
 			map[string]any{outputAttributeName: "Assistant", outputAttributeWorkDir: workDir},
 			fmt.Sprintf("session:%d:opened", id), now); err != nil {
 			return err
@@ -66,13 +70,22 @@ func (s *Store) EnsureAssistantRoot(
 	return record, err
 }
 
-// PublishAssistantMessageTx makes the reply durable in the desk step's transaction.
-func PublishAssistantMessageTx(ctx context.Context, tx *sql.Tx, sessionID int64, text string) error {
-	if err := outputSessionWritable(ctx, tx, sessionID); err != nil {
-		return err
+func initializeAssistantModelTx(ctx context.Context, tx *sql.Tx, record *SessionRecord, model, level string) error {
+	if record.Model != "" {
+		return nil
 	}
 
-	_, err := insertLifecycleOutput(ctx, tx, sessionID, OutputMessagePersistent, text, nil, "", time.Now().UTC())
+	if _, err := tx.ExecContext(
+		ctx,
+		`UPDATE sessions SET model = ?, reasoning_level = ? WHERE id = ?`,
+		model,
+		level,
+		record.ID,
+	); err != nil {
+		return fmt.Errorf("initialize assistant model: %w", err)
+	}
 
-	return err
+	record.Model, record.ReasoningLevel = model, level
+
+	return nil
 }

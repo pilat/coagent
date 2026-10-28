@@ -7,7 +7,7 @@ import (
 	"time"
 )
 
-// HandleAssistantInputTx keeps assistant turns out of the ordinary transcript acceptance path; a turn resolves its input once.
+// HandleAssistantInputTx resolves a refused command without adding model input.
 func HandleAssistantInputTx(
 	ctx context.Context,
 	tx *sql.Tx,

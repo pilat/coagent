@@ -137,17 +137,15 @@ func TestMigrationsApplyToAnExistingDatabase(t *testing.T) {
 		`ALTER TABLE sessions DROP COLUMN completion_check_confirmed_answer_id`,
 		`ALTER TABLE sessions DROP COLUMN completion_nudge_generation`,
 		// 00044 drops the column 00033 added; net effect across both is none.
-		// 00047–00049 added the assistant root index and its state tables.
+		// 00050 already removed the tape and turn tables added by 00047–00049.
 		`DROP INDEX IF EXISTS idx_sessions_assistant_root`,
-		`DROP TABLE assistant_tape`,
 		`DROP TABLE assistant_sends`,
-		`DROP TABLE assistant_turns`,
 		`DROP TABLE assistant_memory`,
 		`DROP TABLE assistant_focus`,
 		`DROP TABLE assistant_work`,
 		`DROP TABLE assistant_search`,
 		`DROP TABLE assistant_search_state`,
-		`DELETE FROM goose_db_version WHERE version_id BETWEEN 16 AND 49`,
+		`DELETE FROM goose_db_version WHERE version_id >= 16`,
 	} {
 		_, err = db.ExecContext(ctx, stmt)
 		require.NoError(t, err, stmt)

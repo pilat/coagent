@@ -2,7 +2,9 @@ package assistant
 
 import (
 	"errors"
+	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/stretchr/testify/assert"
 
@@ -44,4 +46,15 @@ func TestAssistantObservationDecisions(t *testing.T) {
 			assert.Equal(t, tc.settled, settled)
 		})
 	}
+}
+
+func TestAssistantEventInputClipsWorkAnswerInTheMiddle(t *testing.T) {
+	t.Parallel()
+	text := "answer begins " + strings.Repeat("я", eventTextLimit) + " answer ends"
+	input := eventInput(1, 2, answeredKind, text)
+	assert.Equal(t, sessionstore.InputSourceAgent, input.Source)
+	assert.Equal(t, eventTextLimit, utf8.RuneCountInString(input.Content))
+	assert.True(t, strings.HasPrefix(input.Content, "answer begins "))
+	assert.True(t, strings.HasSuffix(input.Content, " answer ends"))
+	assert.Contains(t, input.Content, "\n[…]\n")
 }

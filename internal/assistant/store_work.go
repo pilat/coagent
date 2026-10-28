@@ -108,6 +108,13 @@ func (s *Store) Read(ctx context.Context, id int64, count int) (string, error) {
 
 // Open creates the work root, then sends its first instruction with the about line.
 func (s *Store) Open(ctx context.Context, host Host, scope Scope, project, text, about string) (Card, error) {
+	words, err := s.sessions.ActiveUserInput(ctx, scope.Root)
+	if err != nil {
+		return Card{}, fmt.Errorf("quote current user input: %w", err)
+	}
+
+	text = withUserWords(text, words)
+
 	choice, err := s.resolveProject(ctx, project)
 	if err != nil {
 		return Card{}, err
@@ -129,6 +136,13 @@ func (s *Store) Open(ctx context.Context, host Host, scope Scope, project, text,
 
 // Send re-checks authority inside the delivery transaction.
 func (s *Store) Send(ctx context.Context, host Host, scope Scope, id int64, text string) error {
+	words, err := s.sessions.ActiveUserInput(ctx, scope.Root)
+	if err != nil {
+		return fmt.Errorf("quote current user input: %w", err)
+	}
+
+	text = withUserWords(text, words)
+
 	return s.deliver(ctx, host, scope, id, text, "")
 }
 

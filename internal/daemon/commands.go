@@ -131,7 +131,15 @@ func (s *svc) SetModel(ctx context.Context, sessionID int64, model, reasoningLev
 		return fmt.Errorf("load budget for model switch: %w", err)
 	}
 
-	client, section, err := sessionbuild.BuildClient(s.build.Config, model, reasoningLevel)
+	workDir, err := s.store.GetProjectWorkDir(ctx, record.ProjectID)
+	if err != nil {
+		return fmt.Errorf("resolve model-switch project: %w", err)
+	}
+
+	in := s.build
+	in.Record, in.WorkDir, in.Loader = record, workDir, nil
+
+	client, section, err := sessionbuild.BuildClient(ctx, in, model, reasoningLevel)
 	if err != nil {
 		return fmt.Errorf("construct model %s: %w", model, err)
 	}

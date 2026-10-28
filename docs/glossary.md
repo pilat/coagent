@@ -108,7 +108,7 @@ The identity a session runs in: one `projects` row keyed by absolute `work_dir` 
 _Avoid_: workspace, space; dialog (a dialog is a topic *on* a project, not the project).
 
 **agent type**:
-A named agent configuration — tool allowlist, prompt template, model override, mode and optional project-context omission — that the `task` tool selects from. Built-ins: `build`, `general`, `explore`, `browser`, `compaction`. Not every agent type is spawnable (`build`/`compaction` are not subagent types). The built-in `explore` type is deliberately lean: it has read-only code-search tools and starts without project instructions, skills, curated memory, Git state or model catalog; its assignment must supply relevant constraints. The built-in `browser` type has only the project's Playwright tools and the same project-context omission. Agent type selects behavior and tools, never a work budget.
+A named agent configuration — tool allowlist, prompt template, model override, mode and optional project-context omission — that session assembly selects. Built-ins: `build`, `general`, `explore`, `browser`, `assistant`, `compaction`. The `task` tool offers only spawnable types; `build`, `assistant` and `compaction` are not subagent types. The built-in `explore` type is deliberately lean: it has read-only code-search tools and starts without project instructions, skills, curated memory, Git state or model catalog; its assignment must supply relevant constraints. The built-in `browser` type has only the project's Playwright tools and the same project-context omission. The hidden `assistant` type receives its own tools and a desk head, without project context. Browser and assistant disable integrated search. Agent type selects behavior and tools, never a work budget.
 _Avoid_: role, persona, mode (mode is a separate axis on the same config).
 
 **control socket**:
@@ -131,20 +131,22 @@ _Avoid_: setup agent, onboarding skill (removed).
 ## Agent loop & context management
 
 **assistant**:
-Coagent's single voice in the Assistant topic: a separate tool loop over its own
-durable root row that delegates work to ordinary sessions and retells results.
+Coagent's single voice in the Assistant topic: an ordinary root session of the
+hidden `assistant` type, with a desk head and immediate tools for delegating work
+to other root sessions and retelling results.
 _Avoid_: coordinator, dispatcher, work-item manager.
 
 **turn** (assistant):
-One inbox input handled as one model conversation that starts from one rendered
-desk: main phase, optional consolidation, guard, then a single commit. Nothing of
-the conversation survives the turn except what memory and focus record.
-_Avoid_: step (the removed JSON contract re-rendered the desk per step).
+One ordinary agent-loop activation. Its first accepted input rebuilds the desk
+head and compacts the preceding activation atomically; later inputs and tool
+results append within the activation. Transcript rows remain durable history.
+Resuming without new input preserves the existing head and transcript.
 
 **desk**:
-The first message of a turn: live memory, the newest focus items, the newest
-assistant-touched sessions, the last conversation lines and the event. Every list
-states how much it shows and which tool shows the rest.
+The first message of an assistant activation: live memory, the newest focus items,
+the newest assistant-touched sessions and the last forty conversation lines.
+The accepted inputs follow the head. Every list states how much it shows and
+which tool shows the rest; a trailing unanswered user line is still owed a reply.
 _Avoid_: transcript, context compaction, catalog.
 
 **memory** (assistant):
@@ -156,42 +158,27 @@ project memory (that is the separate curated-memory store).
 
 **focus**:
 The assistant's live list of what is being done now: items of at most 200
-characters, each with the session ids or handles it waits on; at most 30 live.
+characters, each with the real session ids it waits on; at most 30 live.
 
-**handle**:
-The stand-in `new-<input>-<n>` an `open` returns for a session that exists only
-after the turn commits; the host replaces it with the real id in that turn's
-focus refs and sends.
+**assistant tool**:
+A tool bound to the assistant's store, root scope and daemon lifecycle host.
+Reads return current data; actions and memory/focus edits take effect during
+execution and return real ids through the ordinary tool-result path.
 
-**look tool** / **do tool**:
-A look tool (`search`, `around`, `read`, `sessions`, `projects`, `focus_list`)
-returns real data at once. A do tool (open, send, stop and memory or focus edits)
-is validated at once but only recorded, and applies after the turn commits.
-
-**tape**:
-The assistant's host-kept, numbered, timestamped history of events, speech, reads
-and moves. User and say lines are searchable; the desk shows the last ten of them.
-_Avoid_: transcript, ledger.
-
-**event** (assistant):
-The current user input, observed work answer or failure, or action failure that
-starts a turn. Inbox-backed events are drained in FIFO order.
-_Avoid_: dispatch, work item.
-
-**guard** (assistant):
-The host's bookkeeping check after the reply is fixed: opens and sends need focus,
-answered or stopped work needs its focus updated, a search needs a written result,
-memory must fit. It may ask for fixes twice and never fails a turn.
-_Avoid_: referee (the removed JSON validator).
+**second look** (assistant):
+The ordinary completion nudge asking the model to check its answer and
+bookkeeping before finishing. Tool-based corrections invalidate the candidate;
+the next answer must repeat the complete response.
 
 **move**:
-An assistant-requested open, send or stop applied through the daemon's ordinary
-session lifecycle after the turn commits.
+An assistant-requested open, send or stop applied immediately through the daemon's
+ordinary session lifecycle during tool execution.
 _Avoid_: dispatch intent.
 
 **observation** (assistant):
-A host-supplied work result: it belongs to a recorded assistant send and carries
-every final of its answer window.
+A host-supplied work result queued as agent input: it belongs to a recorded
+assistant send and carries every final of its answer window, bounded by the next
+accepted user input. The send settles in the same transaction as its observation.
 
 **context artifact**:
 One of the three instruction files a session loads at open — **global**, **project**, or **local** — each resolved by a first-match-wins search over an ordered candidate list, then merged into the opening context as a `[role] <path>` labeled section with the home directory abbreviated to `~`. The section's path is the winning candidate, not the resolved symlink target.

@@ -105,7 +105,7 @@ func wakeWorthy(rec *sessionstore.SessionRecord, rows []*sessionstore.InboxInput
 
 	if rec.Status == sessionstore.SessionStatusError {
 		return rec.ParentID == 0 && slices.ContainsFunc(rows, func(row *sessionstore.InboxInput) bool {
-			return row.Source == sessionstore.InputSourceSchedule
+			return row.Source == sessionstore.InputSourceSchedule || row.Source == sessionstore.InputSourceAgent
 		})
 	}
 

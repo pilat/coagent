@@ -37,8 +37,8 @@ Telegram manager ── controller contract / status-only control socket ──>
 
 A manager submits work as a session. A session owns one agent-loop activation:
 its model client, tool registry, prompt projection, and conversation handling.
-The Assistant topic instead runs a buffered tool loop over its own root row;
-it delegates work to ordinary sessions and retells their answers.
+The Assistant topic runs an ordinary root session with restricted assistant tools
+and a deterministic desk head; it delegates work to other roots and retells their answers.
 The daemon coordinates work that crosses sessions, survives a process restart,
 or needs global admission decisions; the owning domain package retains each
 ledger. Built-in managers program against the private controller
@@ -58,7 +58,7 @@ The map is an ownership index, not a list of exported symbols. Directory nesting
 does not imply a tier except where it expresses an implementation variant.
 
 - `cmd/coagent` — composition root, CLI product policy and daemon lifecycle commands. Refuses any non-Linux platform at process entry, before the guardian or command dispatch ([ADR-0062](docs/adr/0062-linux-only-supported-runtime.md)).
-- `internal/assistant` — buffered tool turn loop, bookkeeping guard, work-root reads and answer observation, and durable memory, focus, tape, search index, send and call state.
+- `internal/assistant` — desk rendering, immediate assistant tools, work-root reads and answer observation, and durable memory, focus, work descriptions, search index and send state.
 - `internal/bashsandbox` — Linux Bubblewrap confinement and process launch for session-owned workloads. Builds one ordered mount plan from a compiled policy; non-Linux builds carry only a compile-time fallback that returns an unsupported-backend error.
 - `internal/budget` — one-shot root-tree budget policy and its user-authorized tool.
 - `internal/catalog` — external model metadata acquisition, caching and identifier matching.
@@ -126,7 +126,7 @@ projects, sessions, append-only messages, durable inbox entries, delivery
 identity, subagent links, schedules, curated memory, MCP definitions, and
 delivery records, including tool-activation grants, root-tree budgets, durable
 TODO state, per-session file-read ledger (storing `{mtime_unix_nano, size, hash}`
-for write-guard checks), assistant memory, focus, tape, search index and observation obligations, and the
+for write-guard checks), assistant memory, focus, work descriptions, search index and observation obligations, and the
 background-process lifecycle ledger. Configuration files, their recoverable
 backups and the pending-apply marker are atomic filesystem state owned by config operations.
 Other memory is coordination or cache only and must be reconstructible from
@@ -275,6 +275,8 @@ The status and first failure receipt commit together, keyed by the pending input
 or accepted-input generation; retries and daemon restarts cannot enqueue another
 receipt for that work. Stop/kill fences suppress late failure receipts. A fresh
 user action or explicit daemon restart may retry after configuration repair.
+Pending agent or schedule input also wakes an errored root; a user command alone
+does not trigger that automatic wake.
 Teardown releases an abandoned configuration apply and settles its durable call
 under the lifecycle fence through a direct store commit, without constructing
 another session. Its grant expires before the result is written; a failed result
@@ -306,7 +308,7 @@ advances the generation and restores the one-nudge allowance
 [ADR-0068](docs/adr/0068-one-completion-nudge-per-model-input.md)).
 Empty no-wake stops are a durable anti-loop signal instead: the third receives
 the strong warning, the sixth commits one host notice and ends the activation
-through ordinary successful completion. Every accepted response commits its
+in error. Every accepted response commits its
 assistant message, iteration, completion state, empty streak, budget verdict,
 nudge and optional manager output in one SQLite step transaction.
 
@@ -338,7 +340,7 @@ confirmed final or background yield observes the accepted output and completes
 without another model call, and a pending empty streak resumes at its durable
 count. Before any session resumes, a PASS 0 sweep settles every pending
 in-loop tool call as a typed failure ([ADR-0059](docs/adr/0059-pending-tool-calls-are-never-reexecuted-on-resume.md)):
-the loop never re-executes an operation the model did not watch complete, and
+boot recovery never re-executes an operation the model did not watch complete, and
 the model retries explicitly. A stopped link is retained for explicit follow-up
 but is not automatically resumed.
 `/stop` is stronger than an ordinary interruption: it fences an active tree,
@@ -848,60 +850,71 @@ roots and subagents receive none of these management surfaces.
 ### Assistant desk
 
 `assistant` owns small permanent or dated memory notes, live focus items with
-session refs, an append-only numbered tape, a full-text index over its root's
-dialog, memory and focus plus every work root's accepted requests and finals,
-sent-input observation obligations, per-work-session `about` lines and per-call
-records. A unique assistant root per manager shares the hidden management project
-but runs outside `session`: its transcript stays empty, it has no compaction, and
-its status is completed between activations.
+real session refs, a full-text index, per-work-session `about` lines and
+sent-input observation obligations. Each manager owns one ordinary root of the
+hidden, non-spawnable `assistant` type in the shared management project, without
+a management surface. Its model and effort selection persist like other roots;
+legacy roots with no model receive the defaults. Its agent policy omits project
+context, native integrated search and the final footer, and exposes only its
+owner-supplied assistant tools.
 
-Each inbox input is one turn. The host renders one desk — live memory (at most
-4000 characters), the ten newest focus items, the ten newest assistant-touched
-roots, the last ten dialog lines and the event (20000 characters, middle elided)
-— and every truncated list names the tool that shows more. The model drives
-native tool calls with `tool_choice` left at auto and an unchanged tool list on
-every call. Look tools read committed state immediately; do tools are validated
-without side effects and buffered, with `new-<input>-<n>` handles standing for
-opens and temporary ids for new notes and items. All text of the main phase is
-buffered and, when it has several pieces, consolidated on a branch into the one
-reply. A host guard then checks typed bookkeeping (focus for every open and send,
-updated focus for answered or stopped work, a written result after a search,
-memory within its limit) for at most two rounds; it never fails a turn.
+The ordinary session boundary renders a fresh desk when an activation first
+accepts model-bound input and has no pending call. That same transaction marks
+previous active rows compacted, prepends the desk to accepted inputs, resets
+context-dependent state and sets the compaction header to the desk row. Rendering
+failure follows the ordinary durable error path without accepting the input.
+The head commits at most once per `Run`; tool results and later inputs append.
+A resume without newly accepted input keeps the prior desk and transcript. New
+input may replace an unanswered activation: the desk retains that user's words
+as an answer still owed. Automatic compaction preserves the first desk row.
 
-One authority predicate decides what the assistant may address: a parentless,
-non-assistant, unkilled, non-management root owned by the same manager. Send,
-stop, read, `around`, listings and search all apply it, so work the user started
-directly is reachable too. Messages enter the index lazily before each search,
-in batches behind one shared watermark read inside the write transaction; tape,
-memory and focus rows change their index rows in the same transaction.
+The desk shows live memory (at most 4000 characters), the ten newest focus items,
+the ten newest assistant-touched roots and forty chronological conversation
+lines clipped to 2000 characters each. Conversation joins accepted user inbox
+rows with model-speech outbox rows, excluding host notices. Older compacted
+history stays available through search. Observations enter as ordinary agent
+inputs after the head, with their event text clipped to 20000 characters.
 
-A turn commits once: memory and focus edits, tape lines in the order reads, reply,
-moves (which `alreadyTold` relies on), call records, the input receipt and
-footer-free persistent output. A model failure commits a failure receipt and
-reply and applies nothing. After commit, effects run in call order through daemon
-lifecycle paths on an uncancelled context; handles resolve to real ids in that
-turn's focus refs and sends, a failed open drops its handle and skips its sends,
-and failures return as `action_failed` events. The daemon side is four lifecycle calls (create a work root, deliver under the tree lock, stop, notify) plus a client factory; the assistant authorizes inside the delivery transaction. A send already durably queued is
-not reported as failed when the daemon shuts down. The accepted POC crash window
-between commit and effects is not replayed. Open records its `about` with the
-first send before admitting input.
+One authority predicate decides what work the assistant may address: a
+parentless, non-assistant, unkilled, non-management root owned by the same
+manager. Actions, work reads, listings and search apply it, including work the
+user started directly. Search and around additionally admit the exact assistant
+root's own accepted user messages and non-rejected assistant speech, including
+speech accompanying tool calls. The shared message index catches up lazily
+behind one transactional watermark; memory and focus edits update their index
+rows atomically. Compacted rows remain searchable; another assistant's dialog
+never becomes visible through the own-root branch.
 
-For a user turn with exactly one open or send, delivery appends the current user
-message as a blockquote, after trimming whitespace and normalizing CRLF, unless
-the instruction is a command or already contains that text exactly. Any stops
-must target the same existing session as the send. Split hand-overs and agent
-events carry no quote; tape move lines keep only the assistant's instruction.
+All tool effects execute immediately through the ordinary tool protocol, return
+real ids and survive a later model failure. Memory and focus enforce their limits
+inside their write transactions. Open records its `about` with the first send
+before admitting input; delivery authorizes inside the tree lock. The daemon
+host supplies creation, delivery and stop, while the session owns model calls,
+step commits, durable errors and output. Effects and their tool-result commits
+are separate: a runtime result-commit failure can leave a call unresolved for a
+later activation; boot instead settles interrupted calls as typed failures.
+
+Every open/send appends the latest accepted user input still linked to an active
+transcript row, trimmed and CRLF-normalized as a blockquote. Its label warns that
+the user works with several sessions and some words may concern other work.
+Commands, instructions already containing those words and activations without
+an active user row receive no quote. Multiple handovers each receive it.
 
 Work answers are observed only for recorded assistant sends, bounded by the next
 accepted user input and carrying every final in that window. A send is answered
 only when the window ends in a final with no completion check pending and the
 session has no own wake source; a terminal session reports failure with its last
-finals, and superseded sends settle silently. An answer event notes what the
-assistant already said after reading that session. Runner completion, stop/kill transitions and the boot sweep call the assistant's observation, which commits events with send settlement.
-Ordinary work topics keep their own output. Assistant roots are protected from
-kill/clear and excluded from progress cards. The design decision is recorded in
-[ADR-0073](docs/adr/0073-assistant-turn-is-a-buffered-tool-loop.md), superseding
-[ADR-0072](docs/adr/0072-assistant-desk-loop.md).
+finals, and superseded sends settle silently. Runner completion, stop/kill
+transitions and the boot sweep invoke observation, which commits inputs with
+send settlement. Ordinary work topics keep their own output.
+
+The assistant uses ordinary reply, final, completion-nudge and empty-stop/error
+semantics. Its prompt requires text even when an observation changes nothing;
+if tools correct a candidate answer, the next answer repeats it whole. State
+notifications and heartbeat typing flow normally. Assistant roots remain
+protected from kill/clear and excluded from progress cards. The decision is
+recorded in [ADR-0074](docs/adr/0074-assistant-is-an-ordinary-session-with-a-desk-head.md),
+superseding [ADR-0073](docs/adr/0073-assistant-turn-is-a-buffered-tool-loop.md).
 
 ### Daemon, sessions and persistence
 
@@ -930,13 +943,14 @@ detection. `sessionbuild` assembles the client, loader, builtin/MCP stack and
 owner tools under the agent-type allowlist. `sessionprompt` renders system and
 transcript context. The loop receives those prepared values and emits live
 notifications through its sole outward events port. Live answer notifications
-retain the raw answer; durable manager output includes its captured final footer.
+retain the raw answer; durable manager output includes its captured final footer
+unless the agent-type policy omits it.
 Scheduled announcements and tool direct outputs reach managers only through
 the outbox; their commit metadata excludes them from live message events.
 Ownerless sessions publish live answers without creating manager outbox rows.
-Model changes are prepared
-by session assembly before their durable record is written, then transferred to
-the live session for its next model step. Session-store owns immutable
+Initial and replacement model clients share agent-policy preparation in session
+assembly. A replacement is constructed before its durable record is written,
+then transferred to the live session for its next model step. Session-store owns immutable
 messages, compaction metadata/replacement ordering and durable inbox sequencing.
 It also owns the `session_file_reads` ledger (`(session_id, path)` PK) storing
 `{mtime_unix_nano, size, hash}`; `write` checks it before overwriting existing files,
@@ -977,6 +991,8 @@ Policy/configuration changes retire the previous generation; shell recapture
 restarts MCP. Stop/kill retire the whole tree, including idle descendants, and
 shutdown closes the cache after runners join. MCP registry changes replace clients lazily when the next stack acquires the
 resolved server set; an active stack retains its current tools and schemas.
+MCP acquisition precedes agent-type tool filtering, so enabled clients may start
+even when the allowlist subsequently removes every tool they expose.
 
 Registry produces an immutable per-session agent-type set: built-ins plus
 project-local overlays. Agent type controls tool filtering, prompt and model
@@ -989,8 +1005,9 @@ tools from an enabled MCP server named `playwright`; those tools are hidden from
 every other agent type, including project subagents. It is offered to `task`
 only when this activation discovered one of those tools. Every browser call
 requires a model-written `task_state`, retained in its stored tool arguments
-and stripped before forwarding to the server. Browser sessions suppress native
-integrated search as well as ordinary tools.
+and stripped before forwarding to the server. Browser and assistant types disable
+integrated search before client construction. The hidden assistant type omits
+project context and exposes only its owner tools; project overlays cannot replace it.
 Todo tracking is root-session-local durable state. The tool replaces the whole
 list atomically, and progress treats it as planning state rather than a separate
 workflow engine.
@@ -1045,8 +1062,8 @@ passthrough, an explicit disable removes all integrated search, and an
 unconfigured section falls back to the OpenRouter driver's server-side
 web-search injection
 ([ADR-0043](docs/adr/0043-integrated-search-quality-first.md)). Tool-less
-requests — the compaction summarizer — carry no injection; `browser` and assistant sessions
-disable integrated search before client construction. Search precedence
+requests — the compaction summarizer — carry no injection; `browser` and `assistant`
+sessions disable integrated search for initial and replacement clients. Search precedence
 lives in config, so drivers and sessions read one resolver.
 
 Catalog owns externally fetched model metadata and cache validity, not product

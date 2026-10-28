@@ -76,21 +76,6 @@ func updateFocusTx(ctx context.Context, tx *sql.Tx, root int64, item Focus, now 
 	return indexTx(ctx, tx, searchFocus, item.ID, root, item.Text)
 }
 
-// setFocusSessionsTx resolves handles without counting as the model's own update.
-func setFocusSessionsTx(ctx context.Context, tx *sql.Tx, root, id int64, sessions []string) error {
-	refs, err := focusRefs(sessions)
-	if err != nil {
-		return err
-	}
-
-	if _, err := tx.ExecContext(ctx, `UPDATE assistant_focus SET sessions = ? WHERE id = ? AND session_id = ?`,
-		refs, id, root); err != nil {
-		return fmt.Errorf("resolve assistant focus %d sessions: %w", id, err)
-	}
-
-	return nil
-}
-
 func deleteFocusTx(ctx context.Context, tx *sql.Tx, root, id int64) error {
 	if _, err := tx.ExecContext(ctx, `DELETE FROM assistant_focus WHERE id = ? AND session_id = ?`,
 		id, root); err != nil {

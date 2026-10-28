@@ -42,7 +42,6 @@ func (s *Store) CreateManagerRoot(
 			tx,
 			record.ID,
 			OutputSessionOpened,
-			"",
 
 			map[string]any{
 				outputAttributeName:    create.Name,
@@ -152,7 +151,7 @@ func (s *Store) replaceManagerRoot(
 		outputAttributeWorkDir: workDir,
 	}
 
-	commit, err := insertLifecycleOutput(ctx, tx, newRecord.ID, OutputSessionReplaced, "", attrs,
+	commit, err := insertLifecycleOutput(ctx, tx, newRecord.ID, OutputSessionReplaced, attrs,
 		fmt.Sprintf("session:%d:replaced:%d", oldSessionID, newRecord.ID), now)
 	if err != nil {
 		return nil, nil, err
@@ -243,13 +242,12 @@ func insertLifecycleOutput(
 	tx *sql.Tx,
 	sessionID int64,
 	kind OutputType,
-	content string,
 	attrs map[string]any,
 	key string,
 	now time.Time,
 ) (*OutputCommit, error) {
 	return insertOutputTx(ctx, tx, OutputDraft{
-		SessionID: sessionID, Type: kind, Content: content, Attributes: attrs,
+		SessionID: sessionID, Type: kind, Attributes: attrs,
 		SourceKey: key, CreatedAt: now,
 	}, CommitLifecycle)
 }

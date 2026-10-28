@@ -61,3 +61,12 @@ func TestSubagentConfigsBrowserIsReserved(t *testing.T) {
 	assert.Empty(t, subagentConfigs(ctx, ldr, nil))
 	assert.Len(t, logs.FilterMessage("subagent_browser_reserved").All(), 1)
 }
+
+func TestSubagentConfigsAssistantIsReserved(t *testing.T) {
+	ldr := loader.New()
+	ldr.RegisterSubagent(&loader.Subagent{Name: "assistant", Path: "/project/.coagent/agents/assistant.md"})
+	core, logs := observer.New(zapcore.WarnLevel)
+	ctx := logger.ToContext(t.Context(), zap.New(core))
+	assert.Empty(t, subagentConfigs(ctx, ldr, nil))
+	assert.Len(t, logs.FilterMessage("subagent_assistant_reserved").All(), 1)
+}

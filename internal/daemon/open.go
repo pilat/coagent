@@ -9,6 +9,7 @@ import (
 
 	"go.uber.org/zap"
 
+	"github.com/pilat/coagent/internal/assistant"
 	"github.com/pilat/coagent/internal/budget"
 	"github.com/pilat/coagent/internal/config"
 	"github.com/pilat/coagent/internal/configapply"
@@ -114,7 +115,14 @@ func (s *svc) openSession(
 		in.ExtraSkills = append(in.ExtraSkills, skill)
 	}
 
-	in.OwnerTools = s.ownerTools(rec, in.Loader)
+	if rec.AgentType == sessionstore.AssistantAgentType {
+		scope := assistant.Scope{Root: rec.ID, Owner: owner}
+		in.OwnerTools = assistant.Tools(s.assistant, scope, assistant.Host(assistantHost{s: s}))
+		in.ExtraSkills = nil
+		in.Head = s.assistantHead(scope)
+	} else {
+		in.OwnerTools = s.ownerTools(rec, in.Loader)
+	}
 
 	sess, cleanup, err := sessionbuild.Build(ctx, in)
 	if err != nil {

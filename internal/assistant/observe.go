@@ -15,7 +15,10 @@ import (
 	"github.com/pilat/coagent/internal/sessionstore"
 )
 
-const answeredKind = "answered"
+const (
+	answeredKind   = "answered"
+	eventTextLimit = 20000
+)
 
 // window is one send's user-bounded answer window.
 type window struct {
@@ -249,7 +252,7 @@ func failureCause(status sessionstore.SessionStatus, runErr error) string {
 
 func eventInput(root, target int64, kind, text string) sessionstore.Input {
 	return sessionstore.Input{
-		SessionID: root, Source: sessionstore.InputSourceAgent, Content: text,
+		SessionID: root, Source: sessionstore.InputSourceAgent, Content: ClipMiddle(text, eventTextLimit),
 		Attributes: map[string]any{"assistant_event": kind, "session_id": target},
 	}
 }

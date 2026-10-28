@@ -13,11 +13,8 @@ import (
 )
 
 const (
-	userKind    = "user"
-	sayKind     = "say"
-	observeKind = "observe"
-	moveKind    = "move"
-	errorKind   = "error"
+	userKind = "user"
+	sayKind  = "say"
 	// conversationLines bounds the dialog the desk repeats; older lines are found by search.
 	conversationLines = 40
 )
@@ -38,7 +35,7 @@ type Memory struct {
 	UpdatedAt time.Time
 }
 
-// Focus refs are session ids or this turn's open handles.
+// Focus refs identify the work sessions this item waits on.
 type Focus struct {
 	ID        int64
 	Text      string
@@ -47,24 +44,12 @@ type Focus struct {
 	UpdatedAt time.Time
 }
 
-// Line retains its identity after it falls off the desk.
+// Line is one accepted user input or published model message.
 type Line struct {
 	ID   int64
 	At   time.Time
 	Kind string
 	Text string
-}
-
-// Call records one model call of a turn for inspection only.
-type Call struct {
-	SessionID int64
-	InputID   int64
-	Number    int
-	Phase     string
-	Request   string
-	Response  string
-	Outcome   string
-	CreatedAt time.Time
 }
 
 // Scope names the assistant root and the manager whose work roots it may address.
@@ -90,8 +75,8 @@ func (m Memory) Live(today string) bool {
 	return m.Until == "" || m.Until >= today
 }
 
-// LoadDesk shows the dialog before line `before`, so the turn's own event is not repeated.
-func (s *Store) LoadDesk(ctx context.Context, root, before int64, now time.Time) (Desk, error) {
+// LoadDesk reads bounded conversation history and the current live notes.
+func (s *Store) LoadDesk(ctx context.Context, root int64, now time.Time) (Desk, error) {
 	memory, err := s.Memory(ctx, root)
 	if err != nil {
 		return Desk{}, err
@@ -111,16 +96,7 @@ func (s *Store) LoadDesk(ctx context.Context, root, before int64, now time.Time)
 		return Desk{}, err
 	}
 
-	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM assistant_tape
-		WHERE session_id = ? AND kind IN ('user', 'say') AND (? = 0 OR id < ?)`, root, before, before).
-		Scan(&desk.Spoken); err != nil {
-		return Desk{}, fmt.Errorf("count assistant conversation: %w", err)
-	}
-
-	desk.Conversation, err = s.tape(ctx, `SELECT id, at, kind, text FROM (
-		SELECT id, at, kind, text FROM assistant_tape
-		WHERE session_id = ? AND kind IN ('user', 'say') AND (? = 0 OR id < ?) ORDER BY id DESC LIMIT ?
-	) ORDER BY id`, root, before, before, conversationLines)
+	desk.Conversation, desk.Spoken, err = s.conversation(ctx, root)
 	if err != nil {
 		return Desk{}, fmt.Errorf("load assistant conversation: %w", err)
 	}
@@ -194,85 +170,4 @@ func (s *Store) Focus(ctx context.Context, root int64) ([]Focus, error) {
 	})
 
 	return items, nil
-}
-
-// RecentTape returns the newest lines, hidden ones included, oldest first.
-func (s *Store) RecentTape(ctx context.Context, root int64, limit int) ([]Line, error) {
-	lines, err := s.tape(ctx, `SELECT id, at, kind, text FROM (
-		SELECT id, at, kind, text FROM assistant_tape WHERE session_id = ? ORDER BY id DESC LIMIT ?
-	) ORDER BY id`, root, max(0, limit))
-	if err != nil {
-		return nil, fmt.Errorf("load recent assistant tape: %w", err)
-	}
-
-	return lines, nil
-}
-
-// AppendTapeTx never reuses a committed line's number; dialog lines become searchable with it.
-func AppendTapeTx(ctx context.Context, tx *sql.Tx, root int64, line Line) (int64, error) {
-	result, err := tx.ExecContext(ctx, `INSERT INTO assistant_tape (session_id, at, kind, text)
-		VALUES (?, ?, ?, ?)`, root, line.At, line.Kind, line.Text)
-	if err != nil {
-		return 0, fmt.Errorf("append assistant tape: %w", err)
-	}
-
-	id, err := result.LastInsertId()
-	if err != nil {
-		return 0, fmt.Errorf("assistant tape id: %w", err)
-	}
-
-	if line.Kind == userKind || line.Kind == sayKind {
-		if err := indexTx(ctx, tx, searchLine, id, root, line.Text); err != nil {
-			return 0, err
-		}
-	}
-
-	return id, nil
-}
-
-// RecordCallTx keeps every call of committed and failed turns for inspection.
-func RecordCallTx(ctx context.Context, tx *sql.Tx, call Call) error {
-	_, err := tx.ExecContext(
-		ctx,
-		`INSERT INTO assistant_turns
-		(session_id, input_id, call, phase, request, response, outcome, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-		call.SessionID,
-		call.InputID,
-		call.Number,
-		call.Phase,
-		call.Request,
-		call.Response,
-		call.Outcome,
-		call.CreatedAt,
-	)
-	if err != nil {
-		return fmt.Errorf("record assistant call: %w", err)
-	}
-
-	return nil
-}
-
-func (s *Store) tape(ctx context.Context, query string, args ...any) ([]Line, error) {
-	rows, err := s.db.QueryContext(ctx, query, args...)
-	if err != nil {
-		return nil, fmt.Errorf("query assistant tape: %w", err)
-	}
-	defer rows.Close()
-
-	var lines []Line
-
-	for rows.Next() {
-		var line Line
-		if err := rows.Scan(&line.ID, &line.At, &line.Kind, &line.Text); err != nil {
-			return nil, fmt.Errorf("scan assistant tape: %w", err)
-		}
-
-		lines = append(lines, line)
-	}
-
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("read assistant tape: %w", err)
-	}
-
-	return lines, nil
 }

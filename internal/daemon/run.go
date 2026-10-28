@@ -66,9 +66,6 @@ func (s *svc) runOnce(ctx context.Context, rs *runner) runOutcome {
 	}
 
 	idle := ownerlessSession(rec)
-	if rec.AgentType == sessionstore.AssistantAgentType {
-		return s.runAssistant(ctx, rs)
-	}
 
 	sess, cleanup, err := s.openRunner(ctx, rs)
 	if err != nil {

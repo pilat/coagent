@@ -56,6 +56,7 @@ type runState struct {
 	backgroundInserted bool
 	compactionFailures int
 	autoCompactionOff  bool
+	headCommitted      bool
 }
 
 // Context reports the live projection without exposing progress-runtime policy.

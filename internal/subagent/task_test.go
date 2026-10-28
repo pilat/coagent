@@ -95,6 +95,21 @@ func TestTaskToolBrowserAvailability(t *testing.T) {
 	assert.NoError(t, task.validateParams(params))
 }
 
+func TestTaskToolAssistantIsNotSpawnable(t *testing.T) {
+	ldr := loader.New()
+	ldr.RegisterSubagent(&loader.Subagent{Name: "assistant", Description: "project override"})
+	sp := &mockSpawner{}
+	task := NewTaskTool(sp, 7, ldr, nil)
+	assert.NotContains(t, string(task.Parameters()), `"assistant"`)
+	assert.NotContains(t, task.Description(), "- assistant:")
+	_, err := task.Execute(
+		t.Context(),
+		json.RawMessage(`{"prompt":"work","description":"work","subagent_type":"assistant"}`),
+	)
+	require.ErrorContains(t, err, "invalid subagent_type")
+	assert.Zero(t, sp.spawnCount)
+}
+
 func TestTaskTool_SkillSeedsForegroundAndBackground(t *testing.T) {
 	for _, background := range []bool{false, true} {
 		t.Run(fmt.Sprintf("background_%t", background), func(t *testing.T) {

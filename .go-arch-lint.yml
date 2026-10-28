@@ -195,7 +195,7 @@ deps:
     mayDependOn: [assistant, backgroundprocess, budget, coagenthome, config, configapply, controllerapi, git, id, llm, llmwire, loader, logger, mcp, mcpstore, progress, progressruntime, projectpath, registry, schedule, session, sessionbuild, sessionprompt, sessionbus, sessionevent, sessionstore, subagent, todo, tool, transcript]
 
   assistant:
-    mayDependOn: [coagenthome, controllerapi, llm, llmwire, logger, projectpath, registry, sessionstore, tool]
+    mayDependOn: [coagenthome, llmwire, logger, projectpath, sessionstore, tool]
 
   configops:
     mayDependOn: [coagenthome, config, logger]

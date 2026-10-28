@@ -52,6 +52,7 @@ type BuildInput struct {
 	ActiveSubagents          []sessionprompt.ActiveSubagentInfo
 	ActiveProcesses          []sessionprompt.ActiveProcessInfo
 	CompactionDeferAnnounced bool
+	Head                     func(context.Context) (string, error)
 }
 
 // Build transfers the model to the session and returns its tool-stack release.
@@ -60,32 +61,17 @@ func Build(ctx context.Context, in BuildInput) (*session.Session, func(), error)
 		return nil, nil, errors.New("session record, workdir and store are required")
 	}
 
-	cfg := *in.Config
-
-	cfg.WorkDir, cfg.RepoRoot = in.WorkDir, in.RepoRoot
-	if in.Record.AgentType == tool.BrowserAgentType && cfg.UnifiedConfig != nil {
-		unified := *cfg.UnifiedConfig
-		disabled := false
-		unified.Tools.Search.Enabled = &disabled
-		cfg.UnifiedConfig = &unified
+	set, agentConfig, err := prepareClientInput(ctx, &in)
+	if err != nil {
+		return nil, nil, err
 	}
 
-	cfg.Model = in.Record.Model
-	if cfg.Model == "" {
-		cfg.Model = cfg.DefaultModel()
-	}
-
-	in.Config = &cfg
-	if in.Loader == nil {
-		in.Loader = loader.New(in.MarketplaceCache)
-	}
-
-	client, err := llm.NewClient(&cfg)
+	client, err := llm.NewClient(in.Config)
 	if err != nil {
 		return nil, nil, fmt.Errorf("create LLM client: %w", err)
 	}
 
-	sess, cleanup, err := build(ctx, in, client)
+	sess, cleanup, err := build(ctx, in, client, set, agentConfig)
 	if err != nil {
 		_ = client.Close()
 		return nil, nil, err
@@ -120,19 +106,13 @@ func CloseToolResources(resources builtin.Resources) error {
 	return nil
 }
 
-func build(ctx context.Context, in BuildInput, client llm.Client) (*session.Session, func(), error) {
-	set := registry.NewSet(loadProjectSubagents(ctx, in, in.WorkDir))
-
-	agentType := registry.AgentType(in.Record.AgentType)
-	if agentType == "" {
-		agentType = registry.AgentTypeBuild
-	}
-
-	agentConfig, ok := set.Get(agentType)
-	if !ok {
-		return nil, nil, fmt.Errorf("unknown agent type: %s", agentType)
-	}
-
+func build(
+	ctx context.Context,
+	in BuildInput,
+	client llm.Client,
+	set *registry.Set,
+	agentConfig registry.AgentTypeConfig,
+) (*session.Session, func(), error) {
 	openingContext, skills := loadOpeningContext(ctx, in, agentConfig)
 
 	todos, err := restoreTodos(in.Record.TodoItems)
@@ -181,6 +161,8 @@ func build(ctx context.Context, in BuildInput, client llm.Client) (*session.Sess
 		Status:                   in.Status,
 		BackgroundSnapshot:       sessionprompt.BuildActiveBackgroundSection(in.ActiveProcesses, in.ActiveSubagents),
 		CompactionDeferAnnounced: in.CompactionDeferAnnounced,
+		Head:                     in.Head,
+		OmitFinalFooter:          agentConfig.OmitFinalFooter,
 		ImageAuthorizer:          stack.Access(),
 	})
 	if err != nil {

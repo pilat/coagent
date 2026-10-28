@@ -7,18 +7,11 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strconv"
 	"time"
-
-	"go.uber.org/zap"
 
 	"github.com/pilat/coagent/internal/assistant"
 	"github.com/pilat/coagent/internal/controllerapi"
-	"github.com/pilat/coagent/internal/llm"
-	"github.com/pilat/coagent/internal/logger"
 	"github.com/pilat/coagent/internal/projectpath"
-	"github.com/pilat/coagent/internal/sessionbuild"
-	"github.com/pilat/coagent/internal/sessionevent"
 	"github.com/pilat/coagent/internal/sessionstore"
 )
 
@@ -44,33 +37,17 @@ func (s *svc) EnsureAssistantRoot(ctx context.Context, owner string) (*sessionst
 		return nil, fmt.Errorf("resolve assistant project: %w", err)
 	}
 
-	record, err := s.store.EnsureAssistantRoot(ctx, project, owner, path)
+	level, err := s.models.effort(s.models.defaultModel, "", "")
+	if err != nil {
+		return nil, err
+	}
+
+	record, err := s.store.EnsureAssistantRoot(ctx, project, owner, path, s.models.defaultModel, level)
 	if err != nil {
 		return nil, fmt.Errorf("ensure assistant root: %w", err)
 	}
 
 	return record, nil
-}
-
-func (h assistantHost) NewClient(id int64, model, level string) (llm.Client, error) {
-	if model == "" {
-		model = h.s.build.Config.DefaultModel()
-	}
-
-	cfg := *h.s.build.Config
-	unified := *cfg.UnifiedConfig
-	disabled := false
-	unified.Tools.Search.Enabled = &disabled
-	cfg.UnifiedConfig = &unified
-
-	client, _, err := sessionbuild.BuildClient(&cfg, model, level)
-	if err != nil {
-		return nil, fmt.Errorf("build assistant client: %w", err)
-	}
-
-	client.SetSessionID(strconv.FormatInt(id, 10))
-
-	return client, nil
 }
 
 func (h assistantHost) CreateWork(
@@ -119,23 +96,25 @@ func (h assistantHost) Stop(ctx context.Context, id int64) error {
 	return h.s.sendToSession(ctx, id, stopCommand)
 }
 
-func (h assistantHost) Notify(id int64, text string) {
-	h.s.publish(id, sessionevent.Notification{Type: sessionevent.NotifyMessage, Message: text})
-}
+func (s *svc) assistantHead(scope assistant.Scope) func(context.Context) (string, error) {
+	return func(ctx context.Context) (string, error) {
+		now := time.Now().UTC()
 
-func (s *svc) runAssistant(ctx context.Context, rs *runner) runOutcome {
-	rs.MarkRun()
+		desk, err := s.assistant.LoadDesk(ctx, scope.Root, now)
+		if err != nil {
+			return "", fmt.Errorf("load assistant desk: %w", err)
+		}
 
-	// The explicit conversion keeps arch-lint's deep scan from reading a daemon type as an assistant dependency.
-	if err := assistant.Run(ctx, s.assistant, assistant.Host(assistantHost{s: s}), rs.sessionID); err != nil {
-		logger.Ctx(ctx).Named("daemon.assistant").Error("run assistant", zap.Error(err))
-		return runOutcome{errored: true}
+		recent, total, err := s.assistant.Recent(ctx, scope, assistant.RecentSessions)
+		if err != nil {
+			return "", fmt.Errorf("load assistant recent sessions: %w", err)
+		}
+
+		return assistant.Render(assistant.View{Desk: desk, Recent: recent, Total: total}, now), nil
 	}
-
-	return runOutcome{hadInput: true}
 }
 
-// refuseAssistantRoot resolves a kill or clear aimed at an assistant root with the loop's own ignore receipt.
+// refuseAssistantRoot keeps refused lifecycle commands out of the model transcript.
 func (s *svc) refuseAssistantRoot(ctx context.Context, input *sessionstore.InboxInput) (bool, error) {
 	record, err := s.store.GetSession(ctx, input.SessionID)
 	if err != nil {
