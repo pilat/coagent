@@ -77,6 +77,15 @@ func TestAssistantToolsImmediateEffects(t *testing.T) {
 	assert.Equal(t, []string{"continue", "resume stopped work"}, f.host.deliveries)
 	f.execute(t, toolOpen, `{"project":"devbox","about":"registered work","text":"start"}`)
 	f.execute(t, toolOpen, `{"project":"fresh-research","about":"scratch work","text":"research"}`)
+	for _, instruction := range []string{"continue", "resume stopped work", "start", "research"} {
+		var from string
+		var observer int64
+		require.NoError(t, f.db.QueryRowContext(t.Context(), `SELECT json_extract(attributes, '$.from'),
+json_extract(attributes, '$.observer_session_id') FROM session_inbox WHERE raw_content = ?`, instruction).
+			Scan(&from, &observer))
+		assert.Equal(t, "assistant", from)
+		assert.Equal(t, f.root, observer)
+	}
 	require.Len(t, f.host.created, 2)
 	for _, id := range f.host.created {
 		card, err := f.store.Target(t.Context(), Scope{Root: f.root, Owner: testOwner}, id)

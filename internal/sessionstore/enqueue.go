@@ -46,7 +46,7 @@ func (s *Store) Enqueue(ctx context.Context, in Input) (*Enqueued, error) {
 	return result, err
 }
 
-// EnqueueTx requires WithTx so producer facts and input become visible before waking.
+// EnqueueTx requires a registered store transaction so facts and input become visible before waking.
 func EnqueueTx(ctx context.Context, tx *sql.Tx, in Input) (*Enqueued, error) {
 	registered, ok := enqueueTransactions.Load(tx)
 	if !ok {
@@ -122,9 +122,7 @@ func (s *Store) WithTx(ctx context.Context, fn func(*sql.Tx) error) error {
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	pending := &enqueueTransaction{sessions: make(map[int64]struct{})}
-
-	enqueueTransactions.Store(tx, pending)
+	pending := registerEnqueueTransaction(tx)
 	defer enqueueTransactions.Delete(tx)
 
 	if err := fn(tx); err != nil {
@@ -135,12 +133,7 @@ func (s *Store) WithTx(ctx context.Context, fn func(*sql.Tx) error) error {
 		return fmt.Errorf("commit store transaction: %w", err)
 	}
 
-	pending.mu.Lock()
-	defer pending.mu.Unlock()
-
-	for id := range pending.sessions {
-		s.recordWoken(id)
-	}
+	s.wakeEnqueued(pending)
 
 	return nil
 }
@@ -202,6 +195,22 @@ func (s *Store) CallPending(ctx context.Context, sessionID int64, callID string)
 	}
 
 	return pending, nil
+}
+
+func registerEnqueueTransaction(tx *sql.Tx) *enqueueTransaction {
+	pending := &enqueueTransaction{sessions: make(map[int64]struct{})}
+	enqueueTransactions.Store(tx, pending)
+
+	return pending
+}
+
+func (s *Store) wakeEnqueued(pending *enqueueTransaction) {
+	pending.mu.Lock()
+	defer pending.mu.Unlock()
+
+	for id := range pending.sessions {
+		s.recordWoken(id)
+	}
 }
 
 func (s *Store) recordWoken(id int64) {

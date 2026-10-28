@@ -4,41 +4,37 @@ CREATE UNIQUE INDEX idx_sessions_assistant_root
     ON sessions(json_extract(attributes, '$.manager_id'))
     WHERE agent_type = 'assistant' AND parent_id = 0;
 
-CREATE TABLE assistant_desk (
-    session_id INTEGER PRIMARY KEY REFERENCES sessions(id),
-    diary TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(diary) AND json_type(diary) = 'object'),
-    stickers TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(stickers) AND json_type(stickers) = 'array'),
-    focus TEXT NOT NULL DEFAULT '',
-    last_turn_at DATETIME,
-    updated_at DATETIME NOT NULL
-);
-
-CREATE TABLE assistant_tape (
+CREATE TABLE assistant_memory (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     session_id INTEGER NOT NULL REFERENCES sessions(id),
-    at DATETIME NOT NULL,
-    kind TEXT NOT NULL CHECK (kind IN ('user', 'say', 'move', 'observe', 'error')),
     text TEXT NOT NULL,
-    hidden INTEGER NOT NULL DEFAULT 0 CHECK (hidden IN (0, 1))
-);
-CREATE INDEX idx_assistant_tape_session ON assistant_tape(session_id, id);
-
-CREATE TABLE assistant_sends (
-    input_id INTEGER PRIMARY KEY REFERENCES session_inbox(id),
-    assistant_session_id INTEGER NOT NULL REFERENCES sessions(id),
-    session_id INTEGER NOT NULL REFERENCES sessions(id),
+    until TEXT CHECK (until IS NULL OR until GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]'),
     created_at DATETIME NOT NULL,
-    observed_at DATETIME
+    updated_at DATETIME NOT NULL
 );
-CREATE INDEX idx_assistant_sends_unobserved ON assistant_sends(session_id, observed_at);
+CREATE INDEX idx_assistant_memory_session ON assistant_memory(session_id, id);
 
-CREATE TABLE assistant_turns (
-    id INTEGER PRIMARY KEY,
+CREATE TABLE assistant_focus (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
     session_id INTEGER NOT NULL REFERENCES sessions(id),
-    input_id INTEGER NOT NULL REFERENCES session_inbox(id),
-    step INTEGER NOT NULL,
-    desk TEXT NOT NULL,
-    response TEXT NOT NULL,
-    outcome TEXT NOT NULL CHECK (outcome IN ('ok', 'retry', 'failed')),
+    text TEXT NOT NULL,
+    sessions TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(sessions) AND json_type(sessions) = 'array'),
+    created_at DATETIME NOT NULL,
+    updated_at DATETIME NOT NULL
+);
+CREATE INDEX idx_assistant_focus_session ON assistant_focus(session_id, id);
+
+CREATE TABLE assistant_work (
+    session_id INTEGER PRIMARY KEY REFERENCES sessions(id),
+    about TEXT NOT NULL,
     created_at DATETIME NOT NULL
 );
+
+-- rowid = source id * 4 + kind (0 message, 1 unused, 2 memory, 3 focus), so a source row is deleted by rowid.
+CREATE VIRTUAL TABLE assistant_search USING fts5(body, scope UNINDEXED);
+
+CREATE TABLE assistant_search_state (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    message_id INTEGER NOT NULL
+);
+INSERT INTO assistant_search_state (id, message_id) VALUES (1, 0);

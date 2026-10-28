@@ -42,6 +42,20 @@ func TestPrepareStopResponseAfterNudge(t *testing.T) {
 	assert.True(t, wake.Unfired.Outputs[0].FinalFooter.BackgroundYield)
 }
 
+func TestFinalPartsYield(t *testing.T) {
+	for _, yield := range []bool{false, true} {
+		agent := newTestAgent()
+		agent.omitFinalFooter = true
+		step := agent.newCommit()
+		run := &runState{}
+		state := &sessionstore.CompletionCheckState{NudgedThisGeneration: true}
+		agent.prepareStopResponse(run, &step, &llmwire.Response{Text: "answer"}, state, yield)
+		require.Len(t, step.Unfired.Outputs, 1)
+		assert.Equal(t, yield, step.Unfired.Outputs[0].Yield)
+		assert.Nil(t, step.Unfired.Outputs[0].FinalFooter)
+	}
+}
+
 func TestPrepareAcceptedAttempt_SubagentBackgroundExit(t *testing.T) {
 	live := []sessionstore.LiveProcess{
 		{ID: "bgp_7", ToolCallID: "search", CreatedAt: time.Now().UTC().Add(-time.Minute)},

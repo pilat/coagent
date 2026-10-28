@@ -72,21 +72,6 @@ func Clip(text string, limit int) string {
 	return string(chars[:max(0, limit-3)]) + marker
 }
 
-// ClipMiddle keeps the head and the tail so the end of a long text stays visible.
-func ClipMiddle(text string, limit int) string {
-	chars := []rune(text)
-	if len(chars) <= limit {
-		return text
-	}
-
-	const marker = "\n[…]\n"
-
-	tail := max(0, limit/4)
-	head := max(0, limit-tail-utf8.RuneCountInString(marker))
-
-	return string(chars[:head]) + marker + string(chars[len(chars)-tail:])
-}
-
 func renderMemory(b *strings.Builder, notes []Memory) {
 	total := 0
 	for _, note := range notes {

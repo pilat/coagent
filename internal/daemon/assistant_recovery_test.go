@@ -1,14 +1,12 @@
 package daemon
 
 import (
-	"database/sql"
 	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -53,7 +51,7 @@ func TestHarnessScenario_AssistantBackgroundResult(t *testing.T) {
 	close(processRunning)
 	h.waitUntil("work yielded", func() bool { return !h.mgr.HasActiveLoop(work.ID) })
 	assert.Zero(t, assistantEventCount(t, h, root.ID))
-	assert.Equal(t, 1, unobservedCount(t, h, work.ID))
+	assert.True(t, assistantPending(t, h, root.ID, work.ID))
 	require.NoError(t, os.WriteFile(release, nil, 0o600))
 	h.waitUntil("process result retold", func() bool { return assistantSayCount(t, h, root.ID, "full result") == 1 })
 	var body string
@@ -77,33 +75,35 @@ func TestHarnessScenario_AssistantBootObservesCompletedSend(t *testing.T) {
 		managerAttrs(scenarioManagerID),
 	)
 	require.NoError(t, err)
-	var input int64
-	require.NoError(t, first.store.WithTx(first.ctx, func(tx *sql.Tx) error {
-		in, err := sessionstore.EnqueueTx(first.ctx, tx, sessionstore.Input{
-			SessionID: work.ID, Source: sessionstore.InputSourceUser, Content: "finish before crash",
-		})
-		if err != nil {
-			return err
-		}
+	in, err := first.store.Enqueue(first.ctx, sessionstore.Input{
+		SessionID: work.ID, Source: sessionstore.InputSourceUser, Content: "finish before crash",
+		Attributes: map[string]any{"from": "assistant", sessionstore.ObserverSessionIDAttribute: root.ID},
+	})
+	require.NoError(t, err)
+	_, err = first.store.Commit(first.ctx, sessionstore.Commit{SessionID: work.ID, Accept: []sessionstore.Accept{
+		{InputID: in.Input.ID, State: sessionstore.InputStateAccepted, Content: "finish before crash", LinkRef: -1},
+	}})
+	require.NoError(t, err)
 
-		input = in.Input.ID
-
-		_, err = tx.ExecContext(first.ctx, `INSERT INTO assistant_sends
-			(input_id, assistant_session_id, session_id, created_at) VALUES (?, ?, ?, ?)`,
-			input, root.ID, work.ID, time.Now().UTC())
-
-		return err
-	}))
 	completed := sessionstore.SessionStatusCompleted
 	_, err = first.store.Commit(first.ctx, sessionstore.Commit{
 		SessionID: work.ID,
-		Accept: []sessionstore.Accept{
-			{InputID: input, State: sessionstore.InputStateAccepted, Content: "finish before crash", LinkRef: -1},
-		},
+
 		Messages: []*transcript.Message{{Role: "assistant", Content: "finished before crash", FinishType: "stop"}},
 		State:    sessionstore.StatePatch{Status: &completed},
+		Outputs: []sessionstore.Output{
+			{
+				Type:          sessionstore.OutputMessagePersistent,
+				Content:       "finished before crash",
+				Phase:         "final",
+				MessageRef:    0,
+				ReleasesInput: true,
+			},
+		},
 	})
 	require.NoError(t, err)
+	assert.Equal(t, 1, assistantEventCount(t, first, root.ID))
+	assert.False(t, first.mgr.HasActiveLoop(root.ID))
 	first.shutdown()
 	second := newHarness(
 		t,
@@ -116,7 +116,6 @@ func TestHarnessScenario_AssistantBootObservesCompletedSend(t *testing.T) {
 		"recovered observation",
 		func() bool { return assistantSayCount(t, second, root.ID, "recovered answer") == 1 },
 	)
-	require.NoError(t, second.mgr.sweepAssistantObservations(second.ctx))
 	assert.Equal(t, 1, assistantEventCount(t, second, root.ID))
 }
 
@@ -196,27 +195,16 @@ func TestHarnessScenario_AssistantWaitsForWorkSleep(t *testing.T) {
 	require.NoError(t, err)
 	work, err := h.store.CreateSession(h.ctx, h.projectID, "fake-model", "", managerAttrs(scenarioManagerID))
 	require.NoError(t, err)
-	var input int64
-	require.NoError(t, h.store.WithTx(h.ctx, func(tx *sql.Tx) error {
-		in, err := sessionstore.EnqueueTx(h.ctx, tx, sessionstore.Input{
-			SessionID: work.ID, Source: sessionstore.InputSourceUser, Content: "merge when green",
-		})
-		if err != nil {
-			return err
-		}
+	in, err := h.store.Enqueue(h.ctx, sessionstore.Input{
+		SessionID: work.ID, Source: sessionstore.InputSourceUser, Content: "merge when green",
+		Attributes: map[string]any{"from": "assistant", sessionstore.ObserverSessionIDAttribute: root.ID},
+	})
+	require.NoError(t, err)
 
-		input = in.Input.ID
-
-		_, err = tx.ExecContext(h.ctx, `INSERT INTO assistant_sends
-			(input_id, assistant_session_id, session_id, created_at) VALUES (?, ?, ?, ?)`,
-			input, root.ID, work.ID, time.Now().UTC())
-
-		return err
-	}))
 	_, err = h.store.Commit(h.ctx, sessionstore.Commit{
 		SessionID: work.ID,
 		Accept: []sessionstore.Accept{
-			{InputID: input, State: sessionstore.InputStateAccepted, Content: "merge when green", LinkRef: -1},
+			{InputID: in.Input.ID, State: sessionstore.InputStateAccepted, Content: "merge when green", LinkRef: -1},
 		},
 		Messages: []*transcript.Message{
 			{Role: "assistant", Content: "merging, waiting for CI", FinishType: "stop"},
@@ -225,15 +213,28 @@ func TestHarnessScenario_AssistantWaitsForWorkSleep(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	require.NoError(t, h.mgr.assistant.Observe(h.ctx, work.ID, nil))
 	assert.Zero(t, assistantEventCount(t, h, root.ID), "a session paused inside a tool call has not answered")
+
+	_, err = h.store.Commit(h.ctx, sessionstore.Commit{SessionID: work.ID, ToolResults: []*transcript.Message{
+		{Role: "tool", ToolCallID: "call_sleep", ToolName: "sleep", Content: "ready"},
+	}})
+	require.NoError(t, err)
 
 	_, err = h.store.Commit(h.ctx, sessionstore.Commit{
 		SessionID: work.ID,
 		Messages:  []*transcript.Message{{Role: "assistant", Content: "both merged", FinishType: "stop"}},
+		State:     sessionstore.StatePatch{Status: new(sessionstore.SessionStatusCompleted)},
+		Outputs: []sessionstore.Output{
+			{
+				Type:          sessionstore.OutputMessagePersistent,
+				Content:       "both merged",
+				Phase:         "final",
+				MessageRef:    0,
+				ReleasesInput: true,
+			},
+		},
 	})
 	require.NoError(t, err)
-	require.NoError(t, h.mgr.assistant.Observe(h.ctx, work.ID, nil))
 	var body string
 	require.NoError(t, h.db.QueryRowContext(h.ctx, `SELECT raw_content FROM session_inbox
 		WHERE session_id = ? AND source = 'agent'`, root.ID).Scan(&body))

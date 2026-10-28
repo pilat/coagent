@@ -384,6 +384,7 @@ func (s *Session) finalParts(c *sessionstore.Commit, text string, reply, yield b
 			MessageRef:    0,
 			Phase:         "final",
 			ReleasesInput: true,
+			Yield:         yield,
 		},
 	}
 	if !s.omitFinalFooter {

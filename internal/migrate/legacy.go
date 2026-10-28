@@ -7,9 +7,8 @@ import (
 	"github.com/pressly/goose/v3"
 )
 
-// legacyMigrations returns no-op placeholders for historical Go migrations 1–6
-// plus the data transformations that outgrew SQL. New installs still run the
-// Go migrations so upgraded and fresh databases converge on one schema.
+// legacyMigrations keeps placeholders for versions 1–6 and squashed 48–49, plus data transformations.
+// Fresh installs and upgraded databases retain the same version sequence.
 func legacyMigrations() []*goose.Migration {
 	noop := &goose.GoFunc{RunDB: func(_ context.Context, _ *sql.DB) error { return nil }}
 
@@ -20,6 +19,8 @@ func legacyMigrations() []*goose.Migration {
 		goose.NewGoMigration(4, noop, nil),
 		goose.NewGoMigration(5, noop, nil),
 		goose.NewGoMigration(6, noop, nil),
+		goose.NewGoMigration(48, noop, nil),
+		goose.NewGoMigration(49, noop, nil),
 		managerOutboxBackfillMigration(),
 		managementProjectMigration(),
 	}

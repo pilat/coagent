@@ -1,7 +1,6 @@
 package daemon
 
 import (
-	"database/sql"
 	"strings"
 	"testing"
 	"time"
@@ -61,8 +60,12 @@ func TestAssistantWorkReachesEveryOwnedRoot(t *testing.T) {
 	assert.Equal(t, userMade, card.ID)
 	require.NoError(t, a.Send(h.ctx, userMade, "продолжи отчёт"))
 	var sent int
-	require.NoError(t, h.db.QueryRowContext(h.ctx, `SELECT COUNT(*) FROM assistant_sends WHERE session_id = ?`,
-		userMade).Scan(&sent))
+	require.NoError(
+		t,
+		h.db.QueryRowContext(h.ctx, `SELECT COUNT(*) FROM session_inbox WHERE session_id = ? AND json_extract(attributes,'$.observer_session_id') = ?`,
+			userMade, root.ID).
+			Scan(&sent),
+	)
 	assert.Equal(t, 1, sent, "a root the user created is sendable")
 	for _, id := range []int64{foreign.ID, killed, root.ID} {
 		_, err := a.Target(h.ctx, id)
@@ -112,8 +115,12 @@ func TestAssistantRecentOrdersByActivity(t *testing.T) {
 			time.Now().UTC().Add(time.Duration(index)*time.Minute), id)
 		require.NoError(t, err)
 	}
-	_, err = h.db.ExecContext(h.ctx, `UPDATE assistant_sends SET observed_at=CURRENT_TIMESTAMP WHERE session_id!=?`,
-		ids[11])
+	_, err = h.db.ExecContext(
+		h.ctx,
+		`UPDATE session_inbox SET state='cancelled',resolved_at=CURRENT_TIMESTAMP,resolution_reason='test' WHERE session_id!=? AND json_extract(attributes,'$.observer_session_id')=?`,
+		ids[11],
+		root.ID,
+	)
 	require.NoError(t, err)
 	recent, total, err := a.Recent(h.ctx, 10)
 	require.NoError(t, err)
@@ -139,7 +146,11 @@ func TestAssistantOpenAboutFailureRollsBackFirstSend(t *testing.T) {
 	_, err = a.Open(h.ctx, "about-failure", "must not run", "purpose")
 	require.ErrorContains(t, err, "about unavailable")
 	var sends, inputs int
-	require.NoError(t, h.db.QueryRowContext(h.ctx, `SELECT COUNT(*) FROM assistant_sends`).Scan(&sends))
+	require.NoError(
+		t,
+		h.db.QueryRowContext(h.ctx, `SELECT COUNT(*) FROM session_inbox WHERE json_extract(attributes,'$.observer_session_id') IS NOT NULL`).
+			Scan(&sends),
+	)
 	require.NoError(t, h.db.QueryRowContext(h.ctx,
 		`SELECT COUNT(*) FROM session_inbox WHERE raw_content='must not run'`).Scan(&inputs))
 	assert.Zero(t, sends)
@@ -151,20 +162,16 @@ func workWithAnswer(t *testing.T, h *harness, root int64, touched bool, ask, ans
 	t.Helper()
 	work, err := h.store.CreateSession(h.ctx, h.projectID, "fake-model", "", managerAttrs(scenarioManagerID))
 	require.NoError(t, err)
+	var attrs map[string]any
+	if touched {
+		attrs = map[string]any{"from": "assistant", sessionstore.ObserverSessionIDAttribute: root}
+	}
 	in, err := h.store.Enqueue(h.ctx, sessionstore.Input{
 		SessionID: work.ID, Source: sessionstore.InputSourceUser,
-		Content: ask,
+		Content: ask, Attributes: attrs,
 	})
 	require.NoError(t, err)
-	if touched {
-		require.NoError(t, h.store.WithTx(h.ctx, func(tx *sql.Tx) error {
-			_, err := tx.ExecContext(h.ctx, `INSERT INTO assistant_sends
-				(input_id, assistant_session_id, session_id, created_at) VALUES (?, ?, ?, ?)`,
-				in.Input.ID, root, work.ID, time.Now().UTC())
 
-			return err
-		}))
-	}
 	_, err = h.store.Commit(h.ctx, sessionstore.Commit{
 		SessionID: work.ID,
 		Accept: []sessionstore.Accept{
@@ -205,16 +212,11 @@ func catalogTestWork(t *testing.T, h *harness, root, project int64, touched bool
 	if !touched {
 		return work.ID
 	}
-	in, err := h.store.Enqueue(h.ctx,
-		sessionstore.Input{SessionID: work.ID, Source: sessionstore.InputSourceUser, Content: "work"})
+	_, err = h.store.Enqueue(h.ctx, sessionstore.Input{
+		SessionID: work.ID, Source: sessionstore.InputSourceUser, Content: "work",
+		Attributes: map[string]any{"from": "assistant", sessionstore.ObserverSessionIDAttribute: root},
+	})
 	require.NoError(t, err)
-	require.NoError(t, h.store.WithTx(h.ctx, func(tx *sql.Tx) error {
-		_, err := tx.ExecContext(h.ctx, `INSERT INTO assistant_sends
-			(input_id, assistant_session_id, session_id, created_at) VALUES (?, ?, ?, ?)`,
-			in.Input.ID, root, work.ID, time.Now().UTC())
-
-		return err
-	}))
 
 	return work.ID
 }

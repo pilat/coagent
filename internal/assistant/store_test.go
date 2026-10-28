@@ -19,39 +19,10 @@ import (
 
 const testOwner = "manager-a"
 
-func TestAssistantStoreSends(t *testing.T) {
+func TestAssistantNoteSchema(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
-	db, sessions, s, root := assistantFixture(t)
-	input, err := sessions.Enqueue(
-		ctx,
-		sessionstore.Input{SessionID: root, Source: sessionstore.InputSourceUser, Content: "hello"},
-	)
-	require.NoError(t, err)
-	at := time.Now().UTC()
-	require.NoError(t, sessions.WithTx(ctx, func(tx *sql.Tx) error {
-		require.NoError(t, recordSendTx(ctx, tx,
-			send{inputID: input.Input.ID, root: root, sessionID: root, createdAt: at}))
-
-		return nil
-	}))
-	sends, err := s.unobservedSends(ctx, root)
-	require.NoError(t, err)
-	require.Len(t, sends, 1)
-	assert.Equal(t, at, sends[0].createdAt)
-	require.NoError(t, sessions.WithTx(ctx, func(tx *sql.Tx) error {
-		won, err := markObservedTx(ctx, tx, input.Input.ID, at)
-		require.NoError(t, err)
-		assert.True(t, won)
-		won, err = markObservedTx(ctx, tx, input.Input.ID, at.Add(time.Second))
-		require.NoError(t, err)
-		assert.False(t, won)
-
-		return nil
-	}))
-	awaited, err := s.AwaitedSessions(ctx)
-	require.NoError(t, err)
-	assert.Empty(t, awaited)
+	db, _, _, _ := assistantFixture(t)
 	for _, query := range []string{
 		`INSERT INTO assistant_memory (session_id, text, until, created_at, updated_at)
 			VALUES (1, 'x', 'tomorrow', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
@@ -252,15 +223,12 @@ func TestAssistantWorkRoots(t *testing.T) {
 	touched := workSession(t, sessions, map[string]any{"manager_id": testOwner})
 	userMade := workSession(t, sessions, map[string]any{"manager_id": testOwner})
 	answered(t, sessions, userMade, strings.Repeat("длинный вопрос ", 20), "ответ")
-	in, err := sessions.Enqueue(ctx, sessionstore.Input{
+	_, err := sessions.Enqueue(ctx, sessionstore.Input{
 		SessionID: touched, Source: sessionstore.InputSourceUser,
-		Content: "go",
+		Content: "go", Attributes: map[string]any{sessionstore.ObserverSessionIDAttribute: root},
 	})
 	require.NoError(t, err)
 	require.NoError(t, sessions.WithTx(ctx, func(tx *sql.Tx) error {
-		require.NoError(t, recordSendTx(ctx, tx,
-			send{inputID: in.Input.ID, root: root, sessionID: touched, createdAt: time.Now().UTC()}))
-
 		return saveAboutTx(ctx, tx, touched, "why it exists", time.Now().UTC())
 	}))
 	scope := Scope{Root: root, Owner: testOwner}
@@ -282,39 +250,40 @@ func TestAssistantWorkRoots(t *testing.T) {
 	}
 }
 
-func TestAssistantStopSuppressesStaleObservation(t *testing.T) {
+func TestAssistantCardsPendingStatuses(t *testing.T) {
 	t.Parallel()
-	ctx := t.Context()
-	db, sessions, s, root := assistantFixture(t)
+	db, sessions, store, root := assistantFixture(t)
 	work := workSession(t, sessions, map[string]any{"manager_id": testOwner})
-	host := &toolHost{sessions: sessions}
-	require.NoError(t, s.Send(ctx, host, Scope{Root: root, Owner: testOwner}, work, "complete while stopping"))
-	var pending int64
-	require.NoError(
-		t,
-		db.QueryRowContext(ctx, `SELECT id FROM session_inbox WHERE session_id = ? AND state = 'pending'`,
-			work).Scan(&pending),
-	)
-	_, err := sessions.Commit(ctx, sessionstore.Commit{
-		SessionID: work,
-		Accept: []sessionstore.Accept{
-			{InputID: pending, State: sessionstore.InputStateAccepted, Content: "complete while stopping", LinkRef: -1},
-		},
-		Messages: []*transcript.Message{{Role: "assistant", Content: "done", FinishType: "stop"}},
+	scope := Scope{Root: root, Owner: testOwner}
+	in, err := sessions.Enqueue(t.Context(), sessionstore.Input{
+		SessionID: work, Source: sessionstore.InputSourceUser,
+		Content: "instruction", Attributes: map[string]any{sessionstore.ObserverSessionIDAttribute: root},
 	})
 	require.NoError(t, err)
-	sends, err := s.unobservedSends(ctx, work)
-	require.NoError(t, err)
-	require.Len(t, sends, 1)
-	require.NoError(t, s.settleSends(ctx, work))
-	require.NoError(t, s.observeSend(ctx, sends[0], "devbox", false, nil))
-	var events int
-	require.NoError(
-		t,
-		db.QueryRowContext(ctx, `SELECT COUNT(*) FROM session_inbox WHERE session_id = ? AND source = 'agent'`,
-			root).Scan(&events),
+	for _, status := range []sessionstore.SessionStatus{
+		sessionstore.SessionStatusActive, sessionstore.SessionStatusSuspended,
+		sessionstore.SessionStatusCompleted, sessionstore.SessionStatusStopped, sessionstore.SessionStatusStopping,
+		sessionstore.SessionStatusTerminating, sessionstore.SessionStatusError,
+	} {
+		require.NoError(t, sessions.UpdateSessionStatus(t.Context(), work, status))
+		card, err := store.Target(t.Context(), scope, work)
+		require.NoError(t, err)
+		want := status == sessionstore.SessionStatusActive || status == sessionstore.SessionStatusSuspended ||
+			status == sessionstore.SessionStatusCompleted
+		assert.Equal(t, want, card.Pending, status)
+		assert.True(t, card.touched)
+	}
+	require.NoError(t, sessions.UpdateSessionStatus(t.Context(), work, sessionstore.SessionStatusActive))
+	_, err = db.ExecContext(
+		t.Context(),
+		`UPDATE session_inbox SET state='cancelled',resolved_at=CURRENT_TIMESTAMP,resolution_reason='test' WHERE id=?`,
+		in.Input.ID,
 	)
-	assert.Zero(t, events, "an observation that listed the send before the stop settled it emits nothing")
+	require.NoError(t, err)
+	card, err := store.Target(t.Context(), scope, work)
+	require.NoError(t, err)
+	assert.False(t, card.Pending)
+	assert.True(t, card.touched)
 }
 
 func TestAssistantReadKeepsNewestWhole(t *testing.T) {
@@ -348,7 +317,7 @@ func assistantFixture(t *testing.T) (*sql.DB, *sessionstore.Store, *Store, int64
 	return db, sessions, New(db, sessions, t.TempDir()), root.ID
 }
 
-// devboxWork seeds a completed work root in its own devbox project, answered once to an observed send.
+// devboxWork seeds a completed work root in its own devbox project, with an answered observer instruction.
 func devboxWork(t *testing.T, db *sql.DB, sessions *sessionstore.Store, root int64) int64 {
 	t.Helper()
 	ctx := t.Context()
@@ -358,13 +327,25 @@ func devboxWork(t *testing.T, db *sql.DB, sessions *sessionstore.Store, root int
 	require.NoError(t, err)
 	record, err := sessions.CreateSession(ctx, project, "model", "", map[string]any{"manager_id": testOwner})
 	require.NoError(t, err)
-	answered(t, sessions, record.ID, "build", "tail ok")
+	request, final := answered(t, sessions, record.ID, "build", "tail ok")
 	require.NoError(t, sessions.UpdateSessionStatus(ctx, record.ID, sessionstore.SessionStatusCompleted))
-	now := time.Now().UTC()
-	_, err = db.ExecContext(ctx, `INSERT INTO assistant_sends
-		(input_id, assistant_session_id, session_id, created_at, observed_at)
-		SELECT id, ?, session_id, ?, ? FROM session_inbox WHERE session_id = ?`,
-		root, now, now, record.ID)
+	_, err = db.ExecContext(
+		ctx,
+		`UPDATE session_inbox SET attributes=json_set(attributes,'$.observer_session_id',?) WHERE accepted_message_id=?`,
+		root,
+		request,
+	)
+	require.NoError(t, err)
+	_, err = sessions.Enqueue(ctx, sessionstore.Input{
+		SessionID: root,
+		Source:    sessionstore.InputSourceAgent,
+		Content:   "answered",
+		Attributes: map[string]any{
+			sessionstore.ObservedSessionIDAttribute: record.ID,
+			sessionstore.ObservedKindAttribute:      "answered",
+			sessionstore.ObservedMessageIDAttribute: final,
+		},
+	})
 	require.NoError(t, err)
 
 	return record.ID

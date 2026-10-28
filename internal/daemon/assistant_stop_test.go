@@ -1,7 +1,6 @@
 package daemon
 
 import (
-	"fmt"
 	"strings"
 	"testing"
 
@@ -62,23 +61,18 @@ func TestHarnessScenario_AssistantUserCancellationWithoutRunner(t *testing.T) {
 				require.False(t, h.mgr.HasActiveLoop(work.ID))
 				require.Zero(t, assistantEventCount(t, h, root.ID))
 				require.NoError(t, h.mgr.sendToSession(h.ctx, work.ID, command))
-				require.Equal(t, 1, assistantEventCount(t, h, root.ID))
-
-				var body string
-				require.NoError(t, h.db.QueryRowContext(h.ctx, `SELECT raw_content FROM session_inbox
-					WHERE session_id = ? AND source = 'agent'`, root.ID).Scan(&body))
-				cause := "stopped"
-				if command == killCommand {
-					cause = "killed"
+				require.Zero(t, assistantEventCount(t, h, root.ID))
+				if command == stopCommand {
+					assert.False(t, assistantPending(t, h, root.ID, work.ID))
+				} else {
+					_, err := a.Target(h.ctx, work.ID)
+					require.Error(t, err)
+					cards, _, err := a.List(h.ctx, 0, 100, "")
+					require.NoError(t, err)
+					for _, card := range cards {
+						assert.NotEqual(t, work.ID, card.ID)
+					}
 				}
-
-				assert.Contains(t, body, fmt.Sprintf("(%d) failed: %s", work.ID, cause))
-				if state == "yielded" {
-					assert.Contains(t, body, "yielded answer", "what the session said before it was stopped is kept")
-				}
-				assert.Zero(t, unobservedCount(t, h, work.ID))
-				require.NoError(t, h.mgr.sweepAssistantObservations(h.ctx))
-				assert.Equal(t, 1, assistantEventCount(t, h, root.ID))
 			})
 		}
 	}
@@ -104,7 +98,7 @@ func TestHarnessScenario_AssistantStopSuppressesFailure(t *testing.T) {
 	require.NoError(t, a.Stop(h.ctx, work.ID))
 	close(release)
 	h.waitUntil("stopped work joined", func() bool { return !h.mgr.HasActiveLoop(work.ID) })
-	assert.Zero(t, unobservedCount(t, h, work.ID))
+	assert.False(t, assistantPending(t, h, root.ID, work.ID))
 	assert.Zero(t, assistantEventCount(t, h, root.ID))
 	stopped, err := h.store.GetSession(h.ctx, work.ID)
 	require.NoError(t, err)
