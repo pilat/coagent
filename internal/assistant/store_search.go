@@ -15,7 +15,7 @@ import (
 
 const (
 	searchMessage = iota
-	searchLine
+	_
 	searchMemory
 	searchFocus
 	searchKinds
@@ -34,7 +34,9 @@ const (
 	finalSQL = `(m.role = 'assistant' AND COALESCE(m.tool_calls, '') IN ('', '[]', 'null')
 		AND TRIM(COALESCE(m.content, ''), ' ' || char(9, 10, 13)) <> ''
 		AND COALESCE(m.finish_type, '') IN ('', 'stop'))`
-	indexableSQL = `m.rejected_reason IS NULL AND (` + requestSQL + ` OR ` + finalSQL + `)`
+	indexableSQL    = `m.rejected_reason IS NULL AND (` + requestSQL + ` OR ` + finalSQL + `)`
+	ownIndexableSQL = `m.rejected_reason IS NULL AND (` + requestSQL + ` OR (m.role = 'assistant'
+		AND TRIM(COALESCE(m.content, ''), ' ' || char(9, 10, 13)) <> ''))`
 )
 
 // ErrEmptyQuery reports a query with no searchable word.
@@ -68,9 +70,10 @@ func (s *Store) Search(ctx context.Context, scope Scope, query string) ([]Hit, e
 			(assistant_search.rowid % 4 <> 0 AND assistant_search.scope = ?)
 			OR (assistant_search.rowid % 4 = 0 AND EXISTS (
 				SELECT 1 FROM messages m JOIN sessions s ON s.id = m.session_id
-				WHERE m.id = assistant_search.rowid / 4 AND m.rejected_reason IS NULL AND `+workRootSQL+`))
+				WHERE m.id = assistant_search.rowid / 4 AND m.rejected_reason IS NULL
+				AND (`+workRootSQL+` OR m.session_id = ?)))
 		)
-		ORDER BY bm25(assistant_search) LIMIT ?`, match, scope.Root, scope.Owner, searchHits)
+		ORDER BY bm25(assistant_search) LIMIT ?`, match, scope.Root, scope.Owner, scope.Root, searchHits)
 	if err != nil {
 		return nil, fmt.Errorf("search assistant history: %w", err)
 	}
@@ -116,23 +119,16 @@ func (s *Store) Search(ctx context.Context, scope Scope, query string) ([]Hit, e
 	return described, nil
 }
 
-// Around shows a found message among its session's dialog, or a tape line among its neighbours.
+// Around shows a message among its session's requests and replies.
 func (s *Store) Around(ctx context.Context, scope Scope, ref string, count int) (string, error) {
 	kind, raw, _ := strings.Cut(strings.TrimSpace(ref), " ")
 
 	id, err := strconv.ParseInt(strings.TrimSpace(raw), 10, 64)
-	if err != nil || id <= 0 {
-		return "", fmt.Errorf("ref %q: use \"msg <id>\" or \"line <id>\" from a search result", ref)
+	if err != nil || id <= 0 || kind != "msg" {
+		return "", fmt.Errorf("ref %q: use \"msg <id>\" from a search result", ref)
 	}
 
-	switch kind {
-	case "msg":
-		return s.aroundMessage(ctx, scope, id, count)
-	case "line":
-		return s.aroundLine(ctx, scope.Root, id, count)
-	default:
-		return "", fmt.Errorf("ref %q: use \"msg <id>\" or \"line <id>\" from a search result", ref)
-	}
+	return s.aroundMessage(ctx, scope, id, count)
 }
 
 func (s *Store) aroundMessage(ctx context.Context, scope Scope, id int64, count int) (string, error) {
@@ -141,7 +137,8 @@ func (s *Store) aroundMessage(ctx context.Context, scope Scope, id int64, count 
 
 	err := s.db.QueryRowContext(ctx, `SELECT m.session_id, COALESCE(p.name, '')
 		FROM messages m JOIN sessions s ON s.id = m.session_id LEFT JOIN projects p ON p.id = s.project_id
-		WHERE m.id = ? AND `+indexableSQL+` AND `+workRootSQL, id, scope.Owner).Scan(&session, &project)
+		WHERE m.id = ? AND ((m.session_id = ? AND `+ownIndexableSQL+`)
+		OR (`+indexableSQL+` AND `+workRootSQL+`))`, id, scope.Root, scope.Owner).Scan(&session, &project)
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", fmt.Errorf("msg %d is not a message of a session you can see", id)
 	}
@@ -150,11 +147,16 @@ func (s *Store) aroundMessage(ctx context.Context, scope Scope, id int64, count 
 		return "", fmt.Errorf("locate assistant message %d: %w", id, err)
 	}
 
+	predicate := indexableSQL
+	if session == scope.Root {
+		predicate = ownIndexableSQL
+	}
+
 	rows, err := s.db.QueryContext(ctx, `SELECT m.id, m.role, COALESCE(m.content, ''), m.created_at
-		FROM messages m WHERE m.session_id = ? AND `+indexableSQL+` AND (m.id = ?
-			OR m.id IN (SELECT m.id FROM messages m WHERE m.session_id = ? AND m.id < ? AND `+indexableSQL+`
+		FROM messages m WHERE m.session_id = ? AND `+predicate+` AND (m.id = ?
+			OR m.id IN (SELECT m.id FROM messages m WHERE m.session_id = ? AND m.id < ? AND `+predicate+`
 				ORDER BY m.id DESC LIMIT ?)
-			OR m.id IN (SELECT m.id FROM messages m WHERE m.session_id = ? AND m.id > ? AND `+indexableSQL+`
+			OR m.id IN (SELECT m.id FROM messages m WHERE m.session_id = ? AND m.id > ? AND `+predicate+`
 				ORDER BY m.id LIMIT ?))
 		ORDER BY m.id`, session, id, session, id, count, session, id, count)
 	if err != nil {
@@ -185,32 +187,6 @@ func (s *Store) aroundMessage(ctx context.Context, scope Scope, id int64, count 
 	return b.String(), nil
 }
 
-func (s *Store) aroundLine(ctx context.Context, root, id int64, count int) (string, error) {
-	lines, err := s.tape(ctx, `SELECT id, at, kind, text FROM assistant_tape WHERE session_id = ? AND (id = ?
-			OR id IN (SELECT id FROM assistant_tape WHERE session_id = ? AND id < ? ORDER BY id DESC LIMIT ?)
-			OR id IN (SELECT id FROM assistant_tape WHERE session_id = ? AND id > ? ORDER BY id LIMIT ?))
-		ORDER BY id`, root, id, root, id, count, root, id, count)
-	if err != nil {
-		return "", fmt.Errorf("load tape around %d: %w", id, err)
-	}
-
-	found := false
-
-	var b strings.Builder
-
-	for _, line := range lines {
-		found = found || line.ID == id
-		fmt.Fprintf(&b, "%sline %d · %s · %s\n", aroundMarker(line.ID == id), line.ID,
-			line.At.UTC().Format(toolTime), Clip(line.Text, aroundTextChars))
-	}
-
-	if !found {
-		return "", fmt.Errorf("line %d is not on your tape", id)
-	}
-
-	return b.String(), nil
-}
-
 func (s *Store) describeHit(ctx context.Context, hit *Hit, id int64, kind int) error {
 	var err error
 
@@ -220,10 +196,6 @@ func (s *Store) describeHit(ctx context.Context, hit *Hit, id int64, kind int) e
 		err = s.db.QueryRowContext(ctx, `SELECT m.session_id, m.role, m.created_at, COALESCE(p.name, '')
 			FROM messages m JOIN sessions s ON s.id = m.session_id LEFT JOIN projects p ON p.id = s.project_id
 			WHERE m.id = ?`, id).Scan(&hit.Session, &hit.Kind, &hit.At, &hit.Project)
-	case searchLine:
-		hit.Ref = fmt.Sprintf("line %d", id)
-		err = s.db.QueryRowContext(ctx, `SELECT kind, at FROM assistant_tape WHERE id = ?`, id).
-			Scan(&hit.Kind, &hit.At)
 	case searchMemory:
 		hit.Ref = fmt.Sprintf("m%d", id)
 		err = s.db.QueryRowContext(ctx, `SELECT COALESCE('until ' || until, 'permanent'), updated_at
@@ -280,10 +252,11 @@ func (s *Store) indexBatch(ctx context.Context) (int, error) {
 		return 0, nil
 	}
 
-	// parent_id and agent_type never change, so children and assistant roots can be skipped for good.
 	if _, err := tx.ExecContext(ctx, `INSERT INTO assistant_search (rowid, body, scope)
 		SELECT m.id * 4, m.content, m.session_id FROM messages m JOIN sessions s ON s.id = m.session_id
-		WHERE m.id > ? AND m.id <= ? AND `+indexRootSQL+` AND `+indexableSQL, from, to); err != nil {
+		WHERE m.id > ? AND m.id <= ? AND ((`+indexRootSQL+` AND `+indexableSQL+`)
+		OR (COALESCE(s.parent_id, 0) = 0 AND s.agent_type = ?
+		AND `+ownIndexableSQL+`))`, from, to, sessionstore.AssistantAgentType); err != nil {
 		return 0, fmt.Errorf("index assistant messages: %w", err)
 	}
 

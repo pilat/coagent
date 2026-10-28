@@ -35,7 +35,7 @@ func TestMigrate_00049_AssistantToolDesk(t *testing.T) {
 			(1,'2026-10-17 02:10:41','say','say: «ответ»',0),
 			(1,'2026-10-17 02:10:42','move','→ devbox (244): "кеширование"',0);`)
 	require.NoError(t, err)
-	_, err = provider.Up(ctx)
+	_, err = provider.UpTo(ctx, 49)
 	require.NoError(t, err)
 
 	assert.Equal(t, []string{

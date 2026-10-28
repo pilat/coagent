@@ -384,9 +384,12 @@ func (s *Session) finalParts(c *sessionstore.Commit, text string, reply, yield b
 			MessageRef:    0,
 			Phase:         "final",
 			ReleasesInput: true,
-			FinalFooter:   &sessionstore.Footer{BackgroundYield: yield},
 		},
 	}
+	if !s.omitFinalFooter {
+		c.Unfired.Outputs[0].FinalFooter = &sessionstore.Footer{BackgroundYield: yield}
+	}
+
 	no := false
 	c.Unfired.State.ManagerReplyPending = &no
 }

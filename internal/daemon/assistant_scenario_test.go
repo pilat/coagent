@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"regexp"
 	"strings"
 	"testing"
@@ -17,39 +18,44 @@ import (
 	"github.com/pilat/coagent/internal/sessionstore"
 )
 
-var (
-	assistantHandle   = regexp.MustCompile(`new-\d+-\d+`)
-	assistantFocusRef = regexp.MustCompile(`\[f\d+\]`)
-)
+var assistantFocusRef = regexp.MustCompile(`\[f\d+\]`)
 
 func TestHarnessScenario_AssistantOpenAndRetell(t *testing.T) {
+	workRelease := make(chan struct{})
+	t.Cleanup(func() { closeOnce(workRelease) })
 	h := newHarness(t, harnessOptions{respond: func(system string, messages []llmwire.Message) *llmwire.Response {
 		if !strings.HasPrefix(system, registry.AssistantPrompt) {
+			<-workRelease
 			return textReply("work answer")
 		}
 
-		last := messages[len(messages)-1]
-		_, event, _ := strings.Cut(messages[0].Content, "## event")
-
 		switch {
-		case len(messages) == 1 && strings.Contains(event, "answered:"):
+		case hasUserContaining(messages, "answered:"):
+			if hasToolResultFor(messages, "done_focus") {
+				return textReply("retold answer")
+			}
 			focus := assistantFocusRef.FindString(messages[0].Content)
-			return assistantCalls("retold answer", llmwire.ToolCall{
+			return assistantCalls("", llmwire.ToolCall{
 				ID: "done", Name: "done_focus", Arguments: []byte(`{"id":"` + strings.Trim(focus, "[]") + `"}`),
 			})
-		case len(messages) == 1:
+		case !hasToolResultFor(messages, "open"):
 			return assistantCalls("", llmwire.ToolCall{
 				ID:        "open",
 				Name:      "open",
 				Arguments: []byte(`{"project":"deskwork","about":"check","text":"check this"}`),
 			})
-		case last.ToolName == "open":
-			handle := assistantHandle.FindString(last.Content)
-			return assistantCalls("checking", llmwire.ToolCall{
-				ID: "focus", Name: "focus", Arguments: []byte(`{"text":"Check","sessions":["` + handle + `"]}`),
+		case !hasToolResultFor(messages, "focus"):
+			var id int64
+			for _, message := range messages {
+				if message.Role == llmwire.RoleTool && message.ToolName == "open" {
+					_, _ = fmt.Sscan(message.Content, &id)
+				}
+			}
+			return assistantCalls("", llmwire.ToolCall{
+				ID: "focus", Name: "focus", Arguments: fmt.Appendf(nil, `{"text":"Check","sessions":["%d"]}`, id),
 			})
 		default:
-			return textReply("")
+			return textReply("checking")
 		}
 	}})
 	root, err := h.mgr.EnsureAssistantRoot(h.ctx, scenarioManagerID)
@@ -60,9 +66,12 @@ func TestHarnessScenario_AssistantOpenAndRetell(t *testing.T) {
 	assert.Equal(t, sessionstore.AssistantAgentType, root.AgentType)
 	h.startInboxWake()
 	require.NoError(t, h.mgr.sendToSession(h.ctx, root.ID, "please check"))
+	h.waitUntil("assistant checking", func() bool { return assistantSayCount(t, h, root.ID, "checking") == 1 })
+	close(workRelease)
 	h.waitUntil("assistant retelling", func() bool { return assistantSayCount(t, h, root.ID, "retold answer") == 1 })
 	h.waitUntil("assistant idle", func() bool { return !h.mgr.HasActiveLoop(root.ID) })
-	assert.Empty(t, h.messages(root.ID))
+	assert.NotEmpty(t, h.messages(root.ID), "the assistant now uses the ordinary transcript")
+	assert.Zero(t, countToolResultsFor(h.messages(root.ID), "open"), "the prior activation's tools were compacted")
 	assert.Equal(t, 1, assistantSayCount(t, h, root.ID, "checking"))
 	var work int64
 	require.NoError(t, h.db.QueryRowContext(h.ctx, `SELECT session_id FROM assistant_sends`).Scan(&work))
@@ -78,7 +87,7 @@ func TestHarnessScenario_AssistantOpenAndRetell(t *testing.T) {
 	h.mgr.progress.Reconcile(h.ctx, time.Now().UTC().Add(6*time.Minute))
 	var cards int
 	require.NoError(t, h.db.QueryRowContext(h.ctx, `SELECT count(*) FROM session_outbox
-		WHERE session_id = ? AND type = 'message_replaceable'`, root.ID).Scan(&cards))
+		WHERE session_id = ? AND type = 'message_replaceable' AND source_key NOT LIKE 'message:%'`, root.ID).Scan(&cards))
 	assert.Zero(t, cards)
 }
 
@@ -255,7 +264,8 @@ func assistantSayCount(t *testing.T, h *harness, id int64, text string) int {
 	t.Helper()
 	var count int
 	require.NoError(t, h.db.QueryRowContext(context.Background(), `SELECT count(*) FROM session_outbox
-		WHERE session_id = ? AND type = 'message_persistent' AND content = ?`, id, text).Scan(&count))
+		WHERE session_id = ? AND type IN ('message_persistent','message_replaceable')
+		AND source_key LIKE 'message:%' AND content = ?`, id, text).Scan(&count))
 
 	return count
 }

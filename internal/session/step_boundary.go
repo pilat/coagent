@@ -233,6 +233,11 @@ func (s *Session) commitBoundaryBatch(
 		batch.accepted = true
 	}
 
+	head, err := s.prepareHead(ctx, r, batch)
+	if err != nil {
+		return false, err
+	}
+
 	willModel := batch.accepted || s.unansweredWork() || len(c.ToolResults) > 0
 	if willModel && !r.boundaryAgain && len(batch.pending) == 0 && !r.backgroundInserted &&
 		s.activeBackgroundSnapshot != "" {
@@ -248,6 +253,8 @@ func (s *Session) commitBoundaryBatch(
 	if err != nil {
 		return false, err
 	}
+
+	r.headCommitted = r.headCommitted || head
 
 	if c.State.ResetContext {
 		s.prompt.Todos.Clear()

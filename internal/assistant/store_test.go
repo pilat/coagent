@@ -2,7 +2,6 @@ package assistant
 
 import (
 	"database/sql"
-	"errors"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -20,7 +19,7 @@ import (
 
 const testOwner = "manager-a"
 
-func TestAssistantStoreSendsAndCalls(t *testing.T) {
+func TestAssistantStoreSends(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
 	db, sessions, s, root := assistantFixture(t)
@@ -34,10 +33,7 @@ func TestAssistantStoreSendsAndCalls(t *testing.T) {
 		require.NoError(t, recordSendTx(ctx, tx,
 			send{inputID: input.Input.ID, root: root, sessionID: root, createdAt: at}))
 
-		return RecordCallTx(ctx, tx, Call{
-			SessionID: root, InputID: input.Input.ID, Number: 1, Phase: phaseMain,
-			Request: "desk", Response: "raw", Outcome: "ok", CreatedAt: at,
-		})
+		return nil
 	}))
 	sends, err := s.unobservedSends(ctx, root)
 	require.NoError(t, err)
@@ -56,15 +52,7 @@ func TestAssistantStoreSendsAndCalls(t *testing.T) {
 	awaited, err := s.AwaitedSessions(ctx)
 	require.NoError(t, err)
 	assert.Empty(t, awaited)
-	var phase, request, outcome string
-	require.NoError(t, db.QueryRowContext(ctx, `SELECT phase, request, outcome FROM assistant_turns`).
-		Scan(&phase, &request, &outcome))
-	assert.Equal(t, []string{phaseMain, "desk", "ok"}, []string{phase, request, outcome})
-
 	for _, query := range []string{
-		`INSERT INTO assistant_tape (session_id, at, kind, text) VALUES (1, CURRENT_TIMESTAMP, 'invalid', '')`,
-		`INSERT INTO assistant_turns (session_id, input_id, call, phase, request, response, outcome, created_at)
-			VALUES (1, 1, 1, 'main', '', '', 'invalid', CURRENT_TIMESTAMP)`,
 		`INSERT INTO assistant_memory (session_id, text, until, created_at, updated_at)
 			VALUES (1, 'x', 'tomorrow', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
 		`INSERT INTO assistant_focus (session_id, text, sessions, created_at, updated_at)
@@ -73,26 +61,6 @@ func TestAssistantStoreSendsAndCalls(t *testing.T) {
 		_, err := db.ExecContext(ctx, query)
 		require.ErrorContains(t, err, "CHECK", query)
 	}
-}
-
-func TestAssistantTapeRollsBackWithItsIndex(t *testing.T) {
-	t.Parallel()
-	ctx := t.Context()
-	_, sessions, s, root := assistantFixture(t)
-	abort := errors.New("abort turn")
-	err := sessions.WithTx(ctx, func(tx *sql.Tx) error {
-		_, err := AppendTapeTx(ctx, tx, root, Line{At: time.Now().UTC(), Kind: sayKind, Text: "say: «потеряно»"})
-		require.NoError(t, err)
-
-		return abort
-	})
-	require.ErrorIs(t, err, abort)
-	hits, err := s.Search(ctx, Scope{Root: root, Owner: testOwner}, "потеряно")
-	require.NoError(t, err)
-	assert.Empty(t, hits)
-	lines, err := s.RecentTape(ctx, root, 10)
-	require.NoError(t, err)
-	assert.Empty(t, lines)
 }
 
 func TestAssistantSearchFindsInflectedWordsAndCompactedFinals(t *testing.T) {
@@ -105,11 +73,7 @@ func TestAssistantSearchFindsInflectedWordsAndCompactedFinals(t *testing.T) {
 	require.NoError(t, err)
 	now := time.Now().UTC()
 	require.NoError(t, sessions.WithTx(ctx, func(tx *sql.Tx) error {
-		_, err := AppendTapeTx(ctx, tx, root, Line{At: now, Kind: sayKind, Text: "say: «включу кеширование»"})
-		require.NoError(t, err)
-		_, err = AppendTapeTx(ctx, tx, root, Line{At: now, Kind: moveKind, Text: "→ кешированию не место"})
-		require.NoError(t, err)
-		_, err = insertMemoryTx(ctx, tx, root, Memory{Text: "Кешированный ответ хранится сутки"}, now)
+		_, err := insertMemoryTx(ctx, tx, root, Memory{Text: "Кешированный ответ хранится сутки"}, now)
 
 		return err
 	}))
@@ -119,15 +83,13 @@ func TestAssistantSearchFindsInflectedWordsAndCompactedFinals(t *testing.T) {
 	require.NoError(t, err)
 	refs := hitRefs(hits)
 	assert.Contains(t, refs, "msg "+itoa(final), "a compacted final is still found")
-	assert.Len(t, refs, 3, "the final, the say line and the memory note: %v", refs)
+	assert.Len(t, refs, 2, "the final and the memory note: %v", refs)
 	hits, err = s.Search(ctx, scope, "кешированию")
 	require.NoError(t, err)
-	assert.Empty(t, hits, "a move line is never indexed")
+	assert.Empty(t, hits, "only indexed word forms can match")
 	hits, err = s.Search(ctx, scope, "кеширование")
 	require.NoError(t, err)
-	require.Len(t, hits, 1, "no stemming: only the exact form matches")
-	assert.Equal(t, "say", hits[0].Kind)
-	assert.Contains(t, hits[0].Snippet, "[кеширование]")
+	assert.Empty(t, hits, "no stemming: an unindexed exact form is not found")
 	_, err = s.Search(ctx, scope, `" * "`)
 	require.ErrorIs(t, err, ErrEmptyQuery)
 	hits, err = s.Search(ctx, scope, `NEAR(кеш*) OR "прав`)
@@ -162,8 +124,8 @@ func TestAssistantSearchKeepsToAuthorizedRoots(t *testing.T) {
 	for _, hit := range hits {
 		sessionsFound[hit.Session] = true
 	}
-	assert.Equal(t, map[int64]bool{own: true, userMade: true}, sessionsFound)
-	assert.Len(t, hits, 4, "the accepted request and the final of each root")
+	assert.Equal(t, map[int64]bool{own: true, userMade: true, root: true}, sessionsFound)
+	assert.Len(t, hits, 6, "the accepted request and reply of the assistant and each authorized work root")
 
 	for _, id := range []int64{foreign, child, surface, assistantRoot, killed} {
 		require.NoError(t, sessions.WithTx(ctx, func(tx *sql.Tx) error {
@@ -245,7 +207,7 @@ func TestAssistantMemoryExpiryAndDeletion(t *testing.T) {
 
 		return err
 	}))
-	desk, err := s.LoadDesk(ctx, root, 0, now)
+	desk, err := s.LoadDesk(ctx, root, now)
 	require.NoError(t, err)
 	require.Len(t, desk.Memory, 1)
 	assert.Equal(t, permanent, desk.Memory[0].ID)
@@ -279,21 +241,6 @@ func TestAssistantAroundShowsNeighbours(t *testing.T) {
 	assert.Contains(t, text, "> msg "+itoa(middle))
 	assert.Contains(t, text, "user: третий вопрос")
 	assert.NotContains(t, text, "первый")
-	var ids []int64
-	require.NoError(t, sessions.WithTx(ctx, func(tx *sql.Tx) error {
-		for _, text := range []string{"one", "two", "three"} {
-			id, err := AppendTapeTx(ctx, tx, root, Line{At: time.Now().UTC(), Kind: observeKind, Text: text})
-			require.NoError(t, err)
-			ids = append(ids, id)
-		}
-
-		return nil
-	}))
-	text, err = s.Around(ctx, scope, "line "+itoa(ids[1]), 1)
-	require.NoError(t, err)
-	assert.Equal(t, 3, strings.Count(text, "line "))
-	_, err = s.Around(ctx, scope, "line 999", 1)
-	require.ErrorContains(t, err, "not on your tape")
 	_, err = s.Around(ctx, scope, "m12", 1)
 	require.ErrorContains(t, err, "use \"msg <id>\"")
 }
@@ -340,7 +287,7 @@ func TestAssistantStopSuppressesStaleObservation(t *testing.T) {
 	ctx := t.Context()
 	db, sessions, s, root := assistantFixture(t)
 	work := workSession(t, sessions, map[string]any{"manager_id": testOwner})
-	host := &loopHost{sessions: sessions}
+	host := &toolHost{sessions: sessions}
 	require.NoError(t, s.Send(ctx, host, Scope{Root: root, Owner: testOwner}, work, "complete while stopping"))
 	var pending int64
 	require.NoError(

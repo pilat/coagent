@@ -8,8 +8,6 @@ import (
 )
 
 const (
-	// A work answer is the thing to retell, so the event keeps its head and tail.
-	eventTextLimit   = 20000
 	dialogTextLimit  = 2000
 	deskFocusItems   = 10
 	memoryNoteChars  = 300
@@ -43,19 +41,11 @@ type Project struct {
 	Activity time.Time
 }
 
-// Event preserves the full input separately from its shorter tape representation.
-type Event struct {
-	LineID int64
-	Kind   string
-	Text   string
-}
-
 // View is everything one desk render shows.
 type View struct {
 	Desk   Desk
 	Recent []Card
 	Total  int
-	Event  Event
 }
 
 // Render produces the turn's first user message; every truncated list names the tool that shows more.
@@ -66,7 +56,6 @@ func Render(v View, now time.Time) string {
 	renderFocus(&b, v.Desk.Focus, deskFocusItems, now)
 	renderRecent(&b, v.Recent, v.Total, now)
 	renderConversation(&b, v.Desk.Conversation, v.Desk.Spoken, now)
-	fmt.Fprintf(&b, "\n## event\n%s\n", ClipMiddle(v.Event.Text, eventTextLimit))
 
 	return b.String()
 }
@@ -146,12 +135,12 @@ func renderConversation(b *strings.Builder, lines []Line, total int, now time.Ti
 	}
 
 	for _, line := range lines {
-		text := line.Text
-		if rest, ok := strings.CutPrefix(text, "say: "); ok && line.Kind == sayKind {
-			text = "you: " + rest
+		role := "user"
+		if line.Kind == sayKind {
+			role = "you"
 		}
 
-		fmt.Fprintf(b, "%s %s\n", deskTime(line.At, now), Clip(text, dialogTextLimit))
+		fmt.Fprintf(b, "%s %s\n", deskTime(line.At, now), Clip(role+": «"+line.Text+"»", dialogTextLimit))
 	}
 }
 

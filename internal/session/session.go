@@ -47,6 +47,8 @@ type Input struct {
 	Status                   string
 	BackgroundSnapshot       string
 	CompactionDeferAnnounced bool
+	Head                     func(context.Context) (string, error)
+	OmitFinalFooter          bool
 }
 
 // Session executes one activation over an assembled tool and model stack.
@@ -78,6 +80,8 @@ type Session struct {
 	outputEnabled   bool
 	preserveStopped bool
 	budgetFired     bool
+	head            func(context.Context) (string, error)
+	omitFinalFooter bool
 
 	// Loop execution state
 	ms           *messageStore
@@ -159,6 +163,8 @@ func New(ctx context.Context, in Input) (*Session, error) {
 		activeBackgroundSnapshot: in.BackgroundSnapshot,
 		compactionDeferAnnounced: in.CompactionDeferAnnounced,
 		iterationOffset:          r.Iteration,
+		head:                     in.Head,
+		omitFinalFooter:          in.OmitFinalFooter,
 	}
 	if s.rootID == 0 {
 		s.rootID = s.id

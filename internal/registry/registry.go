@@ -14,6 +14,7 @@ const (
 	AgentTypeGeneral    AgentType = "general"
 	AgentTypeExplore    AgentType = "explore"
 	AgentTypeBrowser    AgentType = tool.BrowserAgentType
+	AgentTypeAssistant  AgentType = "assistant"
 	AgentTypeCompaction AgentType = "compaction"
 )
 
@@ -48,12 +49,27 @@ var builtinAgentTypes = map[AgentType]AgentTypeConfig{
 		OmitProjectContext: true,
 	},
 	AgentTypeBrowser: {
-		Name:               AgentTypeBrowser,
-		Description:        "Drive the project's Playwright browser with browser tools only. Receives no project context; supply a self-contained goal, constraints, starting URL or site, and the facts to return.",
-		Mode:               ModeSubagent,
-		Tools:              []string{tool.PlaywrightToolPrefix + "*"},
-		Prompt:             BrowserAgentPrompt,
-		OmitProjectContext: true,
+		Name:                    AgentTypeBrowser,
+		Description:             "Drive the project's Playwright browser with browser tools only. Receives no project context; supply a self-contained goal, constraints, starting URL or site, and the facts to return.",
+		Mode:                    ModeSubagent,
+		Tools:                   []string{tool.PlaywrightToolPrefix + "*"},
+		Prompt:                  BrowserAgentPrompt,
+		OmitProjectContext:      true,
+		DisableIntegratedSearch: true,
+	},
+	AgentTypeAssistant: {
+		Name:        AgentTypeAssistant,
+		Description: "The manager's assistant with a live desk and work-session tools",
+		Mode:        ModeHidden,
+		Tools: []string{
+			"search", "around", "read_session", "sessions", "projects", "focus_list",
+			"open", "send", "stop", "remember", "rewrite_memory", "forget_memory",
+			"focus", "update_focus", "done_focus",
+		},
+		Prompt:                  AssistantPrompt,
+		OmitProjectContext:      true,
+		DisableIntegratedSearch: true,
+		OmitFinalFooter:         true,
 	},
 	AgentTypeCompaction: {
 		Name:        AgentTypeCompaction,
@@ -78,7 +94,9 @@ type (
 		Model       string // optional model override for this agent type
 		// OmitProjectContext keeps a built-in specialist's startup prompt lean.
 		// Project-defined subagents default to the full session context.
-		OmitProjectContext bool
+		OmitProjectContext      bool
+		DisableIntegratedSearch bool
+		OmitFinalFooter         bool
 	}
 )
 
@@ -99,7 +117,7 @@ func NewSet(projectSubagents []AgentTypeConfig) *Set {
 	}
 
 	for _, cfg := range projectSubagents {
-		if cfg.Name == AgentTypeBrowser {
+		if cfg.Name == AgentTypeBrowser || cfg.Name == AgentTypeAssistant {
 			continue
 		}
 

@@ -68,23 +68,15 @@ func renderProjects(projects []Project, now time.Time) string {
 	return b.String()
 }
 
-func renderFocusList(t *turn, now time.Time) string {
-	live := t.liveFocus()
-	if len(live) == 0 {
+func renderFocusList(items []Focus, now time.Time) string {
+	if len(items) == 0 {
 		return "focus is empty"
 	}
 
 	var b strings.Builder
 
-	for _, item := range live {
-		at := item.UpdatedAt
-		if item.changed {
-			at = now
-		}
-
-		focus := item.Focus
-		focus.UpdatedAt = at
-		fmt.Fprintf(&b, "%s\n", focusLine(item.ref, focus, now))
+	for _, item := range items {
+		fmt.Fprintf(&b, "%s\n", focusLine(fmt.Sprintf("f%d", item.ID), item, now))
 	}
 
 	return b.String()

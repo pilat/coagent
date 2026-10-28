@@ -30,33 +30,54 @@ type assistantTelegramClient struct {
 	calls   atomic.Int64
 }
 
-type silentAssistantClient struct{ delayedTelegramClient }
+type busyAssistantClient struct {
+	delayedTelegramClient
+	once             sync.Once
+	entered, release chan struct{}
+}
 
-func TestHarnessScenario_AssistantSilenceDoesNotBlockWorkOutput(t *testing.T) {
-	h := newDelayedTelegramHarnessWithClient(t, func(*config.Config) (llm.Client, error) {
-		return silentAssistantClient{}, nil
+func TestHarnessScenario_AssistantInProgressDoesNotBlockWorkOutput(t *testing.T) {
+	client := &busyAssistantClient{entered: make(chan struct{}), release: make(chan struct{})}
+	t.Cleanup(func() {
+		select {
+		case <-client.release:
+		default:
+			close(client.release)
+		}
 	})
+	h := newDelayedTelegramHarnessWithClient(t, func(*config.Config) (llm.Client, error) { return client, nil })
 	require.NoError(t, h.service.Start(t.Context()))
 	manager := newAssistantTelegramManager(t, h)
 	require.NoError(t, manager.Start(t.Context()))
 	t.Cleanup(func() { require.NoError(t, manager.Stop(context.Background())) })
 	topic, ok := manager.getTopicBySessionID(manager.assistantRootID)
 	require.True(t, ok)
-	manager.processUpdate(t.Context(), assistantTelegramUpdate(topic, "nothing to say"))
-	require.Eventually(t, func() bool {
-		var handled bool
-		err := h.sessions.WithTx(t.Context(), func(tx *sql.Tx) error {
-			return tx.QueryRowContext(t.Context(), `SELECT EXISTS(SELECT 1 FROM session_inbox
-				WHERE session_id = ? AND state = 'handled')`, manager.assistantRootID).Scan(&handled)
-		})
-		return err == nil && handled
-	}, 3*time.Second, 10*time.Millisecond)
-
+	manager.processUpdate(t.Context(), assistantTelegramUpdate(topic, "check for changes"))
+	select {
+	case <-client.entered:
+	case <-time.After(3 * time.Second):
+		t.Fatal("assistant did not start")
+	}
 	h.produceBeforeManager(t)
-	require.Eventually(t, func() bool {
-		return h.recorder.hasMessagePrefix("delayed telegram answer\n\n")
-	}, 5*time.Second, 10*time.Millisecond)
+	require.Eventually(
+		t,
+		func() bool { return h.recorder.hasMessagePrefix("delayed telegram answer\n\n") },
+		5*time.Second,
+		10*time.Millisecond,
+	)
 	awaitAssistantQueue(t, h)
+	assert.False(
+		t,
+		hasTelegramMessage(h.recorder.snapshot(), "No change."),
+		"work output arrives while the assistant is thinking",
+	)
+	close(client.release)
+	require.Eventually(
+		t,
+		func() bool { return hasTelegramMessage(h.recorder.snapshot(), "No change.") },
+		3*time.Second,
+		10*time.Millisecond,
+	)
 	assert.False(t, hasTelegramMessage(h.recorder.snapshot(), ""))
 }
 
@@ -103,9 +124,21 @@ func TestHarnessScenario_AssistantTelegram(t *testing.T) {
 	}
 	inputs, err := h.sessions.ListPending(t.Context(), root.SessionID)
 	require.NoError(t, err)
-	require.Len(t, inputs, 1)
-	assert.Equal(t, sessionstore.InputSourceUser, inputs[0].Source)
-	assert.Equal(t, "hello", inputs[0].RawContent)
+	assert.Empty(t, inputs, "the ordinary boundary accepts input before the first model call")
+	var accepted bool
+	require.NoError(t, h.sessions.WithTx(t.Context(), func(tx *sql.Tx) error {
+		return tx.QueryRowContext(t.Context(), `SELECT EXISTS(SELECT 1 FROM session_inbox WHERE session_id = ? AND source = 'user' AND state = 'accepted' AND raw_content = 'hello')`, root.SessionID).
+			Scan(&accepted)
+	}))
+	assert.True(t, accepted)
+	require.Eventually(t, func() bool {
+		for _, call := range h.recorder.snapshot() {
+			if call.Method == "sendChatAction" && call.ThreadID == topic {
+				return true
+			}
+		}
+		return false
+	}, 3*time.Second, 10*time.Millisecond, "the blocked model call must produce an ordinary heartbeat")
 	close(client.release)
 	require.Eventually(t, func() bool { return hasTelegramMessage(h.recorder.snapshot(), "Plain assistant reply") },
 		3*time.Second, 10*time.Millisecond, "delivery must wake from the notification, before the one-minute timer")
@@ -128,9 +161,12 @@ func TestHarnessScenario_AssistantTelegram(t *testing.T) {
 	stored, err = h.sessions.GetSession(t.Context(), root.SessionID)
 	require.NoError(t, err)
 	assert.Equal(t, "fake-model", stored.Model)
-	assert.Equal(t, int64(1), client.calls.Load())
-	var refused, replies int
+	assert.Equal(t, int64(2), client.calls.Load(), "the ordinary completion nudge confirms the first answer")
+	var refused, replies, typing int
 	for _, call := range h.recorder.snapshot() {
+		if call.Method == "sendChatAction" && call.ThreadID == topic {
+			typing++
+		}
 		if call.Method == "sendMessage" && call.Text == "Plain assistant reply" {
 			replies++
 			assert.Equal(t, topic, call.ThreadID)
@@ -142,6 +178,7 @@ func TestHarnessScenario_AssistantTelegram(t *testing.T) {
 	}
 	assert.Equal(t, 1, replies)
 	assert.Equal(t, 4, refused)
+	assert.Positive(t, typing, "the ordinary assistant runner emits typing in its topic")
 	assertAssistantKillPicker(t, h, manager, root.SessionID)
 	require.NoError(t, manager.Stop(context.Background()))
 	before := assistantTopicCreations(h.recorder.snapshot())
@@ -188,7 +225,7 @@ func (c *assistantTelegramClient) Chat(
 	}
 }
 
-func (c silentAssistantClient) Chat(
+func (c *busyAssistantClient) Chat(
 	ctx context.Context,
 	system string,
 	messages []llmwire.Message,
@@ -196,8 +233,14 @@ func (c silentAssistantClient) Chat(
 	options ...llmwire.ChatOption,
 ) (*llmwire.Response, error) {
 	if strings.HasPrefix(system, registry.AssistantPrompt) {
+		c.once.Do(func() { close(c.entered) })
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-c.release:
+		}
 		return &llmwire.Response{
-			Text: "", FinishType: llmwire.FinishStop,
+			Text: "No change.", FinishType: llmwire.FinishStop,
 		}, nil
 	}
 

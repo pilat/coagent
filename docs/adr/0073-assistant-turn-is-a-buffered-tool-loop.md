@@ -1,6 +1,6 @@
 # ADR-0073: The assistant turn is a buffered tool loop over a working-set desk
 
-- **Status:** Accepted
+- **Status:** Superseded by [ADR-0074](0074-assistant-is-an-ordinary-session-with-a-desk-head.md)
 - **Date:** 2026-10-19
 - **Supersedes:** [ADR-0072](0072-assistant-desk-loop.md)
 

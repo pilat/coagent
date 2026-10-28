@@ -1,7 +1,6 @@
 package sessionstore
 
 import (
-	"database/sql"
 	"sync"
 	"testing"
 	"time"
@@ -20,7 +19,7 @@ func TestAssistantRootConcurrentEnsureAndProgress(t *testing.T) {
 	for i := range ids {
 		wg.Go(func() {
 			var record *SessionRecord
-			record, errs[i] = s.EnsureAssistantRoot(ctx, project, "owner", "/project")
+			record, errs[i] = s.EnsureAssistantRoot(ctx, project, "owner", "/project", "model", "medium")
 			if record != nil {
 				ids[i] = record.ID
 			}
@@ -47,14 +46,26 @@ func TestAssistantRootConcurrentEnsureAndProgress(t *testing.T) {
 	roots, err := s.ListAutonomousProgressRoots(ctx)
 	require.NoError(t, err)
 	assert.NotContains(t, roots, ids[0])
-	require.NoError(
-		t,
-		s.WithTx(ctx, func(tx *sql.Tx) error { return PublishAssistantMessageTx(ctx, tx, ids[0], "plain reply") }),
-	)
-	var content string
-	require.NoError(
-		t,
-		db.QueryRowContext(ctx, `SELECT content FROM session_outbox WHERE type = 'message_persistent'`).Scan(&content),
-	)
-	assert.Equal(t, "plain reply", content)
+}
+
+func TestAssistantRootInitializesMissingModelAndPreservesSelection(t *testing.T) {
+	t.Parallel()
+	s, db, project := newTestStore(t)
+	record, err := s.EnsureAssistantRoot(t.Context(), project, "owner", "/project", "model", "medium")
+	require.NoError(t, err)
+	assert.Equal(t, "model", record.Model)
+	assert.Equal(t, "medium", record.ReasoningLevel)
+	again, err := s.EnsureAssistantRoot(t.Context(), project, "owner", "/project", "other-model", "high")
+	require.NoError(t, err)
+	assert.Equal(t, "model", again.Model)
+	assert.Equal(t, "medium", again.ReasoningLevel)
+	_, err = db.ExecContext(t.Context(), `UPDATE sessions SET model = '', reasoning_level = '' WHERE id = ?`, record.ID)
+	require.NoError(t, err)
+	again, err = s.EnsureAssistantRoot(t.Context(), project, "owner", "/project", "other-model", "high")
+	require.NoError(t, err)
+	assert.Equal(t, record.ID, again.ID)
+	stored, err := s.GetSession(t.Context(), record.ID)
+	require.NoError(t, err)
+	assert.Equal(t, "other-model", stored.Model)
+	assert.Equal(t, "high", stored.ReasoningLevel)
 }
