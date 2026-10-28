@@ -18,6 +18,9 @@ func (s *Store) Commit(ctx context.Context, c Commit) (*CommitResult, error) {
 	}
 	defer func() { _ = tx.Rollback() }()
 
+	pending := registerEnqueueTransaction(tx)
+	defer enqueueTransactions.Delete(tx)
+
 	c, replay, err := prepareCommitTx(ctx, tx, c)
 	if err != nil {
 		return nil, err
@@ -37,6 +40,8 @@ func (s *Store) Commit(ctx context.Context, c Commit) (*CommitResult, error) {
 	if result.BudgetFired && c.RootID != c.SessionID {
 		s.recordWoken(c.RootID)
 	}
+
+	s.wakeEnqueued(pending)
 
 	return result, nil
 }
@@ -136,7 +141,11 @@ func commitOutputsTx(ctx context.Context, tx *sql.Tx, c Commit, outputs []Output
 		if out != nil {
 			out.LiveContent = output.Content
 			out.PersistOnly = output.PersistOnly
+
 			result.Outputs = append(result.Outputs, out)
+			if err := notifyObserverOutputTx(ctx, tx, c, output, out, result); err != nil {
+				return err
+			}
 		}
 	}
 

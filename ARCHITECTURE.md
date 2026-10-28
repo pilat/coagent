@@ -58,7 +58,7 @@ The map is an ownership index, not a list of exported symbols. Directory nesting
 does not imply a tier except where it expresses an implementation variant.
 
 - `cmd/coagent` — composition root, CLI product policy and daemon lifecycle commands. Refuses any non-Linux platform at process entry, before the guardian or command dispatch ([ADR-0062](docs/adr/0062-linux-only-supported-runtime.md)).
-- `internal/assistant` — desk rendering, immediate assistant tools, work-root reads and answer observation, and durable memory, focus, work descriptions, search index and send state.
+- `internal/assistant` — desk rendering, immediate assistant tools, work-root reads, and durable memory, focus, work descriptions and search index.
 - `internal/bashsandbox` — Linux Bubblewrap confinement and process launch for session-owned workloads. Builds one ordered mount plan from a compiled policy; non-Linux builds carry only a compile-time fallback that returns an unsupported-backend error.
 - `internal/budget` — one-shot root-tree budget policy and its user-authorized tool.
 - `internal/catalog` — external model metadata acquisition, caching and identifier matching.
@@ -107,7 +107,7 @@ does not imply a tier except where it expresses an implementation variant.
 - `internal/sessionprompt` — system and transcript prompt rendering, timestamps, skill parsing and todo normalization.
 - `internal/sessionbus` — in-process session-event subscriptions and non-blocking fan-out.
 - `internal/sessionevent` — session-to-controller notification vocabulary.
-- `internal/sessionstore` — project registry, durable sessions, messages, inbox, atomic delivery primitives and the session-file-read ledger for write-guard checks.
+- `internal/sessionstore` — project registry, durable sessions, messages, inbox, transactional observer inputs, atomic delivery primitives and the session-file-read ledger for write-guard checks.
 - `internal/shellenv` — captured per-worktree shell environment for child processes.
 - `internal/subagent` — parent-child link ledger, completion transactions and agent-facing tools.
 - `internal/todo` — session-local task tracking.
@@ -126,7 +126,7 @@ projects, sessions, append-only messages, durable inbox entries, delivery
 identity, subagent links, schedules, curated memory, MCP definitions, and
 delivery records, including tool-activation grants, root-tree budgets, durable
 TODO state, per-session file-read ledger (storing `{mtime_unix_nano, size, hash}`
-for write-guard checks), assistant memory, focus, work descriptions, search index and observation obligations, and the
+for write-guard checks), assistant memory, focus, work descriptions and search index, and the
 background-process lifecycle ledger. Configuration files, their recoverable
 backups and the pending-apply marker are atomic filesystem state owned by config operations.
 Other memory is coordination or cache only and must be reconstructible from
@@ -850,9 +850,9 @@ roots and subagents receive none of these management surfaces.
 ### Assistant desk
 
 `assistant` owns small permanent or dated memory notes, live focus items with
-real session refs, a full-text index, per-work-session `about` lines and
-sent-input observation obligations. Each manager owns one ordinary root of the
-hidden, non-spawnable `assistant` type in the shared management project, without
+real session refs, a full-text index and per-work-session `about` lines. Each
+manager owns one ordinary root of the hidden, non-spawnable `assistant` type in
+the shared management project, without
 a management surface. Its model and effort selection persist like other roots;
 legacy roots with no model receive the defaults. Its agent policy omits project
 context, native integrated search and the final footer, and exposes only its
@@ -900,13 +900,20 @@ the user works with several sessions and some words may concern other work.
 Commands, instructions already containing those words and activations without
 an active user row receive no quote. Multiple handovers each receive it.
 
-Work answers are observed only for recorded assistant sends, bounded by the next
-accepted user input and carrying every final in that window. A send is answered
-only when the window ends in a final with no completion check pending and the
-session has no own wake source; a terminal session reports failure with its last
-finals, and superseded sends settle silently. Runner completion, stop/kill
-transitions and the boot sweep invoke observation, which commits inputs with
-send settlement. Ordinary work topics keep their own output.
+Every assistant instruction carries its observer root reference in its work
+inbox row. A non-yield final of the work root enqueues one answered agent input
+per observer in the same transaction, joining active finals since that observer's
+earliest open instruction. The latest non-cancelled answered inbox event anchors
+the next window on the work root's message ids; direct user input does not close
+an outstanding observer instruction. A committed terminal error or a fresh
+start-failure receipt enqueues the error notice without moving that anchor.
+Yield finals leave the window open. Cards derive touched and pending from the
+same inbox refs and window rule, hiding pending for stopped or errored work.
+The inbox-row reference is written only in-process and is never accepted from a
+controller. No send ledger, daemon notification hook or boot sweep is involved;
+ordinary inbox recovery delivers committed events after restart. Kill, clear
+and stop notify nobody. A non-accepting observer is skipped; other enqueue errors
+roll back the work transaction. Ordinary work topics keep their own output.
 
 The assistant uses ordinary reply, final, completion-nudge and empty-stop/error
 semantics. Its prompt requires text even when an observation changes nothing;
@@ -914,7 +921,8 @@ if tools correct a candidate answer, the next answer repeats it whole. State
 notifications and heartbeat typing flow normally. Assistant roots remain
 protected from kill/clear and excluded from progress cards. The decision is
 recorded in [ADR-0074](docs/adr/0074-assistant-is-an-ordinary-session-with-a-desk-head.md),
-superseding [ADR-0073](docs/adr/0073-assistant-turn-is-a-buffered-tool-loop.md).
+superseding [ADR-0073](docs/adr/0073-assistant-turn-is-a-buffered-tool-loop.md), with
+observer delivery recorded in [ADR-0075](docs/adr/0075-work-answers-reach-the-observer-through-its-inbox.md).
 
 ### Daemon, sessions and persistence
 
@@ -959,8 +967,10 @@ mismatch. `transcript` owns the durable message-row vocabulary shared with produ
 The daemon converts the session's context projection into `progress`'s neutral
 operator-snapshot vocabulary.
 The session reads pending inbox rows directly and reloads the active transcript
-after every step commit. Stop commits unresolved-call failures and activation
-expiry without status or output changes, then finishes the stop and cancels
+after every step commit. A root commit may enqueue observer input in its own
+transaction; its targets wake only after commit. Stop commits unresolved-call
+failures and activation expiry without status or output changes, then finishes
+the stop and cancels
 producer obligations. Explicit stop completes the manager-owned root atomically
 with its terminal output; pending scheduled input can then reactivate it.
 Boot finishes interrupted lifecycle operations and process interruptions,

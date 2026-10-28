@@ -27,14 +27,11 @@ const (
 	aroundTextChars = 2000
 	// indexRootSQL skips children and assistant roots over `sessions s`.
 	indexRootSQL = `COALESCE(s.parent_id, 0) = 0 AND COALESCE(s.agent_type, '') <> '` + sessionstore.AssistantAgentType + `'`
-	// requestSQL and finalSQL over `messages m` define what counts as a work request and a work answer.
+	// requestSQL identifies accepted work requests over messages aliased as m.
 	requestSQL = `(m.role = 'user' AND EXISTS (SELECT 1 FROM session_inbox i WHERE i.session_id = m.session_id
 		AND i.state = 'accepted' AND i.accepted_message_id IS NOT NULL
 		AND i.accepted_message_id = m.id AND i.source = 'user'))`
-	finalSQL = `(m.role = 'assistant' AND COALESCE(m.tool_calls, '') IN ('', '[]', 'null')
-		AND TRIM(COALESCE(m.content, ''), ' ' || char(9, 10, 13)) <> ''
-		AND COALESCE(m.finish_type, '') IN ('', 'stop'))`
-	indexableSQL    = `m.rejected_reason IS NULL AND (` + requestSQL + ` OR ` + finalSQL + `)`
+	indexableSQL    = `m.rejected_reason IS NULL AND (` + requestSQL + ` OR ` + sessionstore.FinalMessageSQL + `)`
 	ownIndexableSQL = `m.rejected_reason IS NULL AND (` + requestSQL + ` OR (m.role = 'assistant'
 		AND TRIM(COALESCE(m.content, ''), ' ' || char(9, 10, 13)) <> ''))`
 )
@@ -177,7 +174,7 @@ func (s *Store) aroundMessage(ctx context.Context, scope Scope, id int64, count 
 		}
 
 		fmt.Fprintf(&b, "%smsg %d · %s · %s: %s\n", aroundMarker(other == id), other, at.UTC().Format(toolTime),
-			role, ClipMiddle(strings.TrimSpace(text), aroundTextChars))
+			role, sessionstore.ClipMiddle(strings.TrimSpace(text), aroundTextChars))
 	}
 
 	if err := rows.Err(); err != nil {

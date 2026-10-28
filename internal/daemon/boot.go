@@ -334,11 +334,6 @@ func (s *svc) resumeAfterRestart(ctx context.Context) {
 
 	resumedInput, inputErr := s.resumeSessionsWithRecoverableInput(ctx)
 
-	observeErr := s.sweepAssistantObservations(ctx)
-	if observeErr != nil {
-		log.Error("recover assistant observations", zap.Error(observeErr))
-	}
-
 	counts := []zap.Field{
 		zap.Int("resumed", len(running)),
 		zap.Int("redelivered", len(undelivered)),
@@ -347,7 +342,7 @@ func (s *svc) resumeAfterRestart(ctx context.Context) {
 
 	// A failed pass leaves children unresumed and completions undelivered — that
 	// must never be reported with the same line as a clean recovery.
-	if runningErr != nil || undeliveredErr != nil || inputErr != nil || observeErr != nil {
+	if runningErr != nil || undeliveredErr != nil || inputErr != nil {
 		log.Error("sweep_incomplete", append(counts,
 			zap.Bool("running_failed", runningErr != nil),
 			zap.Bool("undelivered_failed", undeliveredErr != nil),

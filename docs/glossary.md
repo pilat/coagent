@@ -176,9 +176,11 @@ ordinary session lifecycle during tool execution.
 _Avoid_: dispatch intent.
 
 **observation** (assistant):
-A host-supplied work result queued as agent input: it belongs to a recorded
-assistant send and carries every final of its answer window, bounded by the next
-accepted user input. The send settles in the same transaction as its observation.
+A work answer or error notice queued as agent input in the work root's own
+transaction, for instructions carrying an observer reference. A non-yield final
+reports the joined window answer and anchors the next window through its inbox
+event, unless that event is cancelled; a failure leaves the window open. Kill,
+clear and stop produce no observation.
 
 **context artifact**:
 One of the three instruction files a session loads at open — **global**, **project**, or **local** — each resolved by a first-match-wins search over an ordered candidate list, then merged into the opening context as a `[role] <path>` labeled section with the home directory abbreviated to `~`. The section's path is the winning candidate, not the resolved symlink target.

@@ -74,7 +74,11 @@ func TestHarnessScenario_AssistantOpenAndRetell(t *testing.T) {
 	assert.Zero(t, countToolResultsFor(h.messages(root.ID), "open"), "the prior activation's tools were compacted")
 	assert.Equal(t, 1, assistantSayCount(t, h, root.ID, "checking"))
 	var work int64
-	require.NoError(t, h.db.QueryRowContext(h.ctx, `SELECT session_id FROM assistant_sends`).Scan(&work))
+	require.NoError(
+		t,
+		h.db.QueryRowContext(h.ctx, `SELECT session_id FROM session_inbox WHERE json_extract(attributes, '$.observer_session_id') = ?`, root.ID).
+			Scan(&work),
+	)
 	assert.Equal(t, 1, assistantEventCount(t, h, root.ID))
 	var workOutputs int
 	require.NoError(t, h.db.QueryRowContext(h.ctx, `SELECT count(*) FROM session_outbox
@@ -173,17 +177,15 @@ func TestHarnessScenario_AssistantSupersededSend(t *testing.T) {
 
 	for _, text := range []string{"first instruction", "second instruction"} {
 		require.NoError(t, h.store.WithTx(h.ctx, func(tx *sql.Tx) error {
-			in, err := sessionstore.EnqueueTx(h.ctx, tx, sessionstore.Input{
-				SessionID: work.ID,
-				Source:    sessionstore.InputSourceUser, Content: text, Attributes: map[string]any{"from": "assistant"},
+			_, err := sessionstore.EnqueueTx(h.ctx, tx, sessionstore.Input{
+				SessionID:  work.ID,
+				Source:     sessionstore.InputSourceUser,
+				Content:    text,
+				Attributes: map[string]any{"from": "assistant", sessionstore.ObserverSessionIDAttribute: root.ID},
 			})
 			if err != nil {
 				return err
 			}
-
-			_, err = tx.ExecContext(h.ctx, `INSERT INTO assistant_sends
-				(input_id, assistant_session_id, session_id, created_at) VALUES (?, ?, ?, ?)`,
-				in.Input.ID, root.ID, work.ID, time.Now().UTC())
 
 			return err
 		}))
@@ -194,7 +196,7 @@ func TestHarnessScenario_AssistantSupersededSend(t *testing.T) {
 	h.waitUntil("combined result", func() bool { return assistantSayCount(t, h, root.ID, "combined") == 1 })
 	h.waitUntil("assistant idle", func() bool { return !h.mgr.HasActiveLoop(root.ID) })
 	assert.Equal(t, 1, assistantEventCount(t, h, root.ID))
-	assert.Zero(t, unobservedCount(t, h, work.ID))
+	assert.False(t, assistantPending(t, h, root.ID, work.ID))
 	var accepted int
 	require.NoError(t, h.db.QueryRowContext(h.ctx, `SELECT count(*) FROM session_inbox
 		WHERE session_id = ? AND source = 'user' AND state = 'accepted'`, work.ID).Scan(&accepted))
@@ -247,13 +249,11 @@ func (d assistantDriver) Read(ctx context.Context, id int64, count int) (string,
 	return d.h.mgr.assistant.Read(ctx, id, count)
 }
 
-func unobservedCount(t *testing.T, h *harness, id int64) int {
+func assistantPending(t *testing.T, h *harness, root, work int64) bool {
 	t.Helper()
-	var count int
-	require.NoError(t, h.db.QueryRowContext(h.ctx, `SELECT count(*) FROM assistant_sends
-		WHERE observed_at IS NULL AND session_id = ?`, id).Scan(&count))
-
-	return count
+	card, err := assistantFor(h, root).Target(h.ctx, work)
+	require.NoError(t, err)
+	return card.Pending
 }
 
 func assistantCalls(text string, calls ...llmwire.ToolCall) *llmwire.Response {
@@ -274,7 +274,7 @@ func assistantEventCount(t *testing.T, h *harness, id int64) int {
 	t.Helper()
 	var count int
 	require.NoError(t, h.db.QueryRowContext(h.ctx, `SELECT count(*) FROM session_inbox
-		WHERE session_id = ? AND source = 'agent'`, id).Scan(&count))
+		WHERE session_id = ? AND source = 'agent' AND json_extract(attributes, '$.observed_kind') IS NOT NULL`, id).Scan(&count))
 
 	return count
 }

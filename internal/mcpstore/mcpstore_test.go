@@ -137,9 +137,8 @@ func TestMigrationsApplyToAnExistingDatabase(t *testing.T) {
 		`ALTER TABLE sessions DROP COLUMN completion_check_confirmed_answer_id`,
 		`ALTER TABLE sessions DROP COLUMN completion_nudge_generation`,
 		// 00044 drops the column 00033 added; net effect across both is none.
-		// 00050 already removed the tape and turn tables added by 00047–00049.
+		// 00050 removes the legacy assistant tables.
 		`DROP INDEX IF EXISTS idx_sessions_assistant_root`,
-		`DROP TABLE assistant_sends`,
 		`DROP TABLE assistant_memory`,
 		`DROP TABLE assistant_focus`,
 		`DROP TABLE assistant_work`,

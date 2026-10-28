@@ -191,10 +191,6 @@ func (s *svc) killLocked(ctx context.Context, sessionID int64) error {
 		})
 	}
 
-	if err := s.assistant.Observe(cleanupCtx, sessionID, nil); err != nil {
-		return fmt.Errorf("observe assistant work: %w", err)
-	}
-
 	return nil
 }
 
@@ -241,10 +237,6 @@ func (s *svc) stopLocked(ctx context.Context, sessionID, inputID int64) error {
 		s.publish(sessionID, sessionevent.Notification{
 			Type: sessionevent.NotifyStateChanged, Status: controllerapi.StateIdle, Reason: "stopped",
 		})
-	}
-
-	if err := s.assistant.Observe(context.WithoutCancel(ctx), sessionID, nil); err != nil {
-		return fmt.Errorf("observe assistant work: %w", err)
 	}
 
 	return nil
@@ -692,11 +684,6 @@ func (s *svc) completeExplicitStop(
 ) error {
 	if _, err := s.store.CompleteExplicitStop(ctx, rootID, inputID, cancelledProcesses); err != nil {
 		return fmt.Errorf("commit explicit stop completion: %w", err)
-	}
-
-	// Queued and yielded roots have no runner exit to settle assistant sends.
-	if err := s.assistant.Observe(ctx, rootID, nil); err != nil {
-		return fmt.Errorf("observe assistant work: %w", err)
 	}
 
 	if _, err := s.store.ReactivateForSchedule(ctx, rootID); err != nil {

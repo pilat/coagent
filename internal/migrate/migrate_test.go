@@ -664,3 +664,19 @@ func TestMigrate_MessageAttachments(t *testing.T) {
 		db.QueryRowContext(ctx, `SELECT attachments FROM messages WHERE session_id = 1`).Scan(&attachments))
 	assert.False(t, attachments.Valid, "pre-existing row defaults attachments to NULL")
 }
+
+func stringColumn(t *testing.T, db *sql.DB, query string) []string {
+	t.Helper()
+	rows, err := db.QueryContext(t.Context(), query)
+	require.NoError(t, err)
+	defer rows.Close()
+	var values []string
+	for rows.Next() {
+		var value string
+		require.NoError(t, rows.Scan(&value))
+		values = append(values, value)
+	}
+	require.NoError(t, rows.Err())
+
+	return values
+}

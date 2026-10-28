@@ -135,29 +135,3 @@ func (s *svc) refuseAssistantRoot(ctx context.Context, input *sessionstore.Inbox
 
 	return true, nil
 }
-
-func (s *svc) sweepAssistantObservations(ctx context.Context) error {
-	ids, err := s.assistant.AwaitedSessions(ctx)
-	if err != nil {
-		return fmt.Errorf("list awaited assistant sessions: %w", err)
-	}
-
-	for _, id := range ids {
-		unlock, err := s.lockSessionTree(ctx, id)
-		if err != nil {
-			return err
-		}
-
-		if !s.HasActiveLoop(id) {
-			err = s.assistant.Observe(ctx, id, nil)
-		}
-
-		unlock()
-
-		if err != nil {
-			return fmt.Errorf("observe assistant work %d: %w", id, err)
-		}
-	}
-
-	return nil
-}

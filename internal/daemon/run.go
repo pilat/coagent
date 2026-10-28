@@ -18,7 +18,6 @@ const maxEmptyLoopIterations = 3
 
 type runOutcome struct {
 	again, hadInput, errored, publishIdle bool
-	runError                              error
 }
 
 func (s *svc) runSession(ctx context.Context, rs *runner) {
@@ -157,7 +156,6 @@ func (s *svc) concludeRun(ctx context.Context, rs *runner, result session.RunRes
 	runErr error, out runOutcome, idle bool,
 ) runOutcome {
 	if runErr != nil {
-		out.runError = runErr
 		s.handleRunError(ctx, rs.sessionID, result.ErrorNotice, runErr)
 
 		out.errored, out.publishIdle = true, idle
@@ -232,9 +230,6 @@ func (s *svc) finishRunner(ctx context.Context, rs *runner, out runOutcome, pani
 
 	if err == nil {
 		deliver = s.finishRunnerDelivery(ctx, rs, out, errored)
-		if observeErr := s.assistant.Observe(cleanup, id, out.runError); observeErr != nil {
-			logger.Ctx(cleanup).Named("daemon.assistant").Error("observe finished work", zap.Error(observeErr))
-		}
 	}
 
 	if unlock != nil {

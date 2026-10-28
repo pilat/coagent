@@ -87,6 +87,7 @@ type Output struct {
 	MessageRef    int
 	Phase         string
 	ReleasesInput bool
+	Yield         bool
 	FinalFooter   *Footer
 	Session       int64
 }

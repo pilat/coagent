@@ -1,12 +1,10 @@
 package assistant
 
 import (
-	"database/sql"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -40,16 +38,11 @@ func TestAssistantProjectsFiltersAndKeys(t *testing.T) {
 	require.NoError(t, err)
 	work, err := sessions.CreateSession(ctx, first, "model", "", map[string]any{"manager_id": testOwner})
 	require.NoError(t, err)
-	in, err := sessions.Enqueue(ctx,
-		sessionstore.Input{SessionID: work.ID, Source: sessionstore.InputSourceUser, Content: "work"})
+	_, err = sessions.Enqueue(ctx, sessionstore.Input{
+		SessionID: work.ID, Source: sessionstore.InputSourceUser, Content: "work",
+		Attributes: map[string]any{"from": "assistant", sessionstore.ObserverSessionIDAttribute: root},
+	})
 	require.NoError(t, err)
-	require.NoError(t, sessions.WithTx(ctx, func(tx *sql.Tx) error {
-		return recordSendTx(
-			ctx,
-			tx,
-			send{inputID: in.Input.ID, root: root, sessionID: work.ID, createdAt: time.Now().UTC()},
-		)
-	}))
 
 	projects, err := s.Projects(ctx)
 	require.NoError(t, err)
