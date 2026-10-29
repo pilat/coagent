@@ -24,7 +24,7 @@ func (s *Store) GetOrCreateProject(ctx context.Context, workDir string) (int64, 
 	}
 
 	name := filepath.Base(absPath)
-	if name == controllerapi.CoagentManagementProjectDir || strings.ContainsRune(name, ':') {
+	if name == controllerapi.AssistantProjectDir || strings.ContainsRune(name, ':') {
 		return 0, fmt.Errorf("project directory name %q is reserved", name)
 	}
 

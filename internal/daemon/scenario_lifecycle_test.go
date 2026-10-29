@@ -202,12 +202,12 @@ func TestHarnessScenario_LiveStopChain(t *testing.T) {
 		return record
 	}()
 	require.Equal(t, backgroundprocess.IntentSessionStopped, stoppedProcess.HostIntent)
-	controller := newChainController(t, h)
-	drainScenarioClaims(t, "stop_live_chain.json", controller)
-	collector.waitFor(t, "stopped readiness", func(events []controllerapi.SessionNotification) bool {
-		return containsStateWithReason(events, root, sessionevent.StateIdle, "stopped")
-	})
-	assertHarnessTrace(t, "stop_live_chain.json", collector.snapshot(), root)
+	collector.waitFor(
+		t, "stopped without output acknowledgement", func(events []controllerapi.SessionNotification) bool {
+			return containsStateWithReason(events, root, sessionevent.StateIdle, "stopped")
+		},
+	)
+	assertHarnessTrace(t, h, "stop_live_chain.json", collector.snapshot(), root)
 }
 
 // Restart finishes a committed stop fence and terminal completion without executing more model or tool work.
@@ -218,9 +218,6 @@ func TestHarnessScenario_InterruptedStopChain(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "interrupted-stop.db")
 	h1 := newHarness(t, harnessOptions{dbPath: dbPath, respond: respond})
 	root := h1.createRoot(managerAttrs(scenarioManagerID))
-	require.NoError(t, h1.store.BindManager(h1.ctx, scenarioManagerID, "telegram", map[string]any{
-		"bot_user_id": int64(1), "chat_id": int64(2), "topology": "group",
-	}))
 	input, err := h1.store.Enqueue(
 		h1.ctx, sessionstore.Input{SessionID: root, Source: sessionstore.InputSourceUser, Content: "/stop"},
 	)
@@ -234,18 +231,16 @@ func TestHarnessScenario_InterruptedStopChain(t *testing.T) {
 		return textReply("must not run")
 	}
 	h2 := newHarness(t, harnessOptions{dbPath: dbPath, respond: respond2})
+	collector := collectEvents(t, h2.mgr.bus.SubscribeAll())
+	defer collector.stop()
 	require.NoError(t, h2.mgr.Start(h2.ctx))
 	record := h2.session(root)
 	require.Equal(t, sessionstore.SessionStatusStopped, record.Status)
 	require.Zero(t, modelCalls, "stop recovery must never run the model")
-	collector := collectEvents(t, h2.mgr.bus.SubscribeAll())
-	defer collector.stop()
-	controller := newChainController(t, h2)
-	drainScenarioClaims(t, "stop_interrupted_chain.json", controller)
-	collector.waitFor(t, "stopped readiness", func(events []controllerapi.SessionNotification) bool {
+	collector.waitFor(t, "recovered stop becomes idle", func(events []controllerapi.SessionNotification) bool {
 		return containsStateWithReason(events, root, sessionevent.StateIdle, "stopped")
 	})
-	assertHarnessTrace(t, "stop_interrupted_chain.json", collector.snapshot(), root)
+	assertHarnessTrace(t, h2, "stop_interrupted_chain.json", collector.snapshot(), root)
 }
 
 // A later ordinary input on a stopped root is a fresh generation on preserved
@@ -281,10 +276,8 @@ func TestHarnessScenario_LaterFreshTurnAfterStop(t *testing.T) {
 	h.startInboxWake()
 	require.NoError(t, h.mgr.sendToSession(h.ctx, root, "continue please"))
 	collector.waitMessage(root, "Resumed and done.")
-	controller := newChainController(t, h)
-	drainScenarioClaims(t, "stop_then_fresh_turn.json", controller)
 	collector.waitIdleAfter(root, "Resumed and done.")
-	assertHarnessTrace(t, "stop_then_fresh_turn.json", collector.snapshot(), root)
+	assertHarnessTrace(t, h, "stop_then_fresh_turn.json", collector.snapshot(), root)
 }
 
 func containsStateWithReason(

@@ -47,11 +47,6 @@ func TestManagerBoundControllerRejectsEveryForeignSessionOperation(t *testing.T)
 				SessionID: betaRecord.ID, Model: "other",
 			})
 		}},
-		{name: "set attributes", call: func() error {
-			return controller.SetSessionAttributes(ctx, controllerapi.SessionSetAttributesData{
-				SessionID: betaRecord.ID, Attributes: map[string]any{"topic": 9},
-			})
-		}},
 		{name: "list skills", call: func() error {
 			_, listErr := controller.ListSkills(ctx, controllerapi.ConfigSkillsData{SessionID: betaRecord.ID})
 			return listErr

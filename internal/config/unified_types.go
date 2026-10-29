@@ -119,15 +119,11 @@ type (
 		Driver  string `yaml:"driver"`
 		Enabled *bool  `yaml:"enabled,omitempty"`
 
-		BotToken                string  `yaml:"bot_token,omitempty"`
-		AllowedUserIDs          []int64 `yaml:"allowed_user_ids,omitempty"`
-		TargetChatID            *int64  `yaml:"target_chat_id,omitempty"`
-		ServiceTopicName        string  `yaml:"service_topic_name,omitempty"`
-		AssistantTopicName      string  `yaml:"assistant_topic_name,omitempty"`
-		ServiceTopicIconEmojiID string  `yaml:"service_topic_icon_emoji_id,omitempty"`
-		SessionTopicIconEmojiID string  `yaml:"session_topic_icon_emoji_id,omitempty"`
-		SendChunkDelayMS        int     `yaml:"send_chunk_delay_ms,omitempty"`
-		PollTimeoutSec          int     `yaml:"poll_timeout_sec,omitempty"`
+		BotToken         string  `yaml:"bot_token,omitempty"`
+		AllowedUserIDs   []int64 `yaml:"allowed_user_ids,omitempty"`
+		TargetChatID     *int64  `yaml:"target_chat_id,omitempty"`
+		SendChunkDelayMS int     `yaml:"send_chunk_delay_ms,omitempty"`
+		PollTimeoutSec   int     `yaml:"poll_timeout_sec,omitempty"`
 
 		Whisper *ManagerWhisperEntry `yaml:"whisper,omitempty"`
 	}
@@ -153,15 +149,16 @@ type (
 
 	// UnifiedConfig represents the unified configuration file (~/.coagent/config.yaml)
 	UnifiedConfig struct {
-		Providers      map[string]ProviderEntry `yaml:"providers,omitempty"`
-		Marketplaces   []MarketplaceEntry       `yaml:"marketplaces,omitempty"`
-		Models         []ModelEntry             `yaml:"models,omitempty"`
-		SpawnFavorites []string                 `yaml:"spawn_favorites,omitempty"`
-		ProjectsRoot   string                   `yaml:"projects_root,omitempty"`  // root for /new folder-projects; empty → ~/.coagent/projects (resolved in daemon)
-		WorktreesRoot  string                   `yaml:"worktrees_root,omitempty"` // root for /gwt worktrees; empty → ~/.coagent/worktrees (resolved in daemon)
-		Managers       []ManagerEntry           `yaml:"managers,omitempty"`
-		Sandbox        SandboxConfig            `yaml:"sandbox"`
-		Tools          ToolsConfig              `yaml:"tools,omitempty"`
+		RemovedManagerKeys []string                 `yaml:"-"`
+		Providers          map[string]ProviderEntry `yaml:"providers,omitempty"`
+		Marketplaces       []MarketplaceEntry       `yaml:"marketplaces,omitempty"`
+		Models             []ModelEntry             `yaml:"models,omitempty"`
+		SpawnFavorites     []string                 `yaml:"spawn_favorites,omitempty"`
+		ProjectsRoot       string                   `yaml:"projects_root,omitempty"`  // root for /new folder-projects; empty → ~/.coagent/projects (resolved in daemon)
+		WorktreesRoot      string                   `yaml:"worktrees_root,omitempty"` // root for /gwt worktrees; empty → ~/.coagent/worktrees (resolved in daemon)
+		Managers           []ManagerEntry           `yaml:"managers,omitempty"`
+		Sandbox            SandboxConfig            `yaml:"sandbox"`
+		Tools              ToolsConfig              `yaml:"tools,omitempty"`
 	}
 )
 

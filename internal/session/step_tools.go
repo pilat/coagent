@@ -14,7 +14,6 @@ import (
 
 	"github.com/pilat/coagent/internal/llmwire"
 	"github.com/pilat/coagent/internal/logger"
-	"github.com/pilat/coagent/internal/sessionevent"
 	"github.com/pilat/coagent/internal/sessionstore"
 	"github.com/pilat/coagent/internal/tool"
 	"github.com/pilat/coagent/internal/transcript"
@@ -367,7 +366,7 @@ func recordToolResults(
 			c.Outputs = append(
 				c.Outputs,
 				sessionstore.Output{
-					Type:        sessionstore.OutputMessagePersistent,
+					Type:        sessionstore.OutputMessage,
 					Content:     text,
 					Key:         fmt.Sprintf("tool:%s:direct:%d", r.toolCall.ID, j),
 					PersistOnly: true,
@@ -400,41 +399,22 @@ func commitToolState(ctx context.Context, agent *Session, c sessionstore.Commit,
 			continue
 		}
 
-		if activated := consumeActivation(agent, r); activated {
-			if err := publishProgressSnapshot(ctx, agent); err != nil {
-				return err
-			}
-		}
+		consumeActivation(agent, r)
 	}
 
 	return nil
 }
 
-// consumeActivation clears the current activation grant when its owning tool
-// just executed and reports whether the progress snapshot must republish.
-func consumeActivation(agent *Session, r toolCallResultItem) bool {
+func consumeActivation(agent *Session, r toolCallResultItem) {
 	activatedDirect := len(r.directMessages) > 0 && agent.currentActivation != nil &&
 		r.toolCall.Name == agent.currentActivation.ToolID
 
 	if activatedDirect {
 		agent.currentActivation = nil
 	}
-
-	return r.toolCall.Name == "todowrite" || activatedDirect
-}
-
-// publishProgressSnapshot enqueues the TODO progress snapshot through the
-// boundary and notifies through the loop's channel, superseding tolerated.
-func publishProgressSnapshot(_ context.Context, agent *Session) error {
-	agent.emit(sessionevent.Notification{Type: sessionevent.NotifyProgressChanged})
-	return nil
 }
 
 func (s *Session) toolStep(ctx context.Context, calls []llmwire.ToolCall) error {
-	if narratedToolCalls(s.ms.getMessages(), calls) {
-		s.emit(sessionevent.Notification{Type: sessionevent.NotifyProgressChanged})
-	}
-
 	err := executeToolCalls(ctx, s, calls)
 	if s.suspended {
 		if s.stagedCalls == nil {
@@ -449,22 +429,6 @@ func (s *Session) toolStep(ctx context.Context, calls []llmwire.ToolCall) error 
 	}
 
 	return err
-}
-
-func narratedToolCalls(messages []llmwire.Message, calls []llmwire.ToolCall) bool {
-	if len(calls) == 0 {
-		return false
-	}
-
-	for _, message := range slices.Backward(messages) {
-		for _, call := range message.ToolCalls {
-			if call.ID == calls[0].ID {
-				return strings.TrimSpace(message.Content) != ""
-			}
-		}
-	}
-
-	return false
 }
 
 // capDirectOutput trims one result row's direct output to the store's per-row

@@ -32,25 +32,6 @@ func (s *Store) EnqueueOutput(ctx context.Context, draft OutputDraft) (*OutputCo
 	return commit, nil
 }
 
-//nolint:wsl_v5 // Identity lookup keeps sentinel handling adjacent.
-func (s *Store) OutputBySourceKey(
-	ctx context.Context,
-	sessionID int64,
-	sourceKey string,
-) (*OutputRecord, error) {
-	record, err := scanOutputRecord(s.db.QueryRowContext(ctx, `SELECT `+outputColumns+
-		` FROM session_outbox WHERE session_id = ? AND source_key = ?`, sessionID, sourceKey))
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, ErrNoOutput
-	}
-	if err != nil {
-		return nil, fmt.Errorf("load output by source key: %w", err)
-	}
-
-	return record, nil
-}
-
-//nolint:dupl // EnqueueOutput and EnqueueProgressOutput differ only in their eligibility gate.
 func insertOutputTx(ctx context.Context, tx *sql.Tx, draft OutputDraft, mode CommitMode) (*OutputCommit, error) {
 	owner, err := outputOwner(ctx, tx, draft.SessionID)
 	if errors.Is(err, ErrOutputOwner) || errors.Is(err, ErrOutputNotRoot) {
@@ -85,13 +66,6 @@ func insertOutputTx(ctx context.Context, tx *sql.Tx, draft OutputDraft, mode Com
 
 	attributes := cloneAttributes(draft.Attributes)
 	attributes[managerIDAttribute] = owner
-
-	if isMessageOutput(draft.Type) {
-		attributes, err = stampMessageOutputAttributes(ctx, tx, draft.SessionID, owner, draft.Attributes)
-		if err != nil {
-			return nil, err
-		}
-	}
 
 	encoded, err := json.Marshal(attributes)
 	if err != nil {

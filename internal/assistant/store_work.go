@@ -17,10 +17,7 @@ const (
 	// workRootSQL is the single authority predicate over `sessions s`; its one placeholder binds the owner.
 	workRootSQL = `json_extract(s.attributes, '$.manager_id') = ? AND COALESCE(s.parent_id, 0) = 0
 		AND COALESCE(s.agent_type, '') <> '` + sessionstore.AssistantAgentType + `'
-		AND s.killed_at IS NULL AND COALESCE(s.status, '') <> 'killed'
-		AND (COALESCE(json_type(s.attributes, '$.management_surface'), 'null') IN ('null', 'false')
-			OR (json_type(s.attributes, '$.management_surface') = 'text'
-				AND json_extract(s.attributes, '$.management_surface') IN ('', 'false', '0')))`
+		AND s.killed_at IS NULL AND COALESCE(s.status, '') <> 'killed'`
 	aboutFallbackChars = 120
 	// Below the event limit, so a read is never cut in the middle by the desk.
 	readBudget    = 18000
@@ -171,7 +168,7 @@ func (s *Store) cards(ctx context.Context, scope Scope, id int64) ([]Card, error
 		FROM sessions s
 		LEFT JOIN projects p ON p.id = s.project_id
 		LEFT JOIN session_outbox o ON o.id = (SELECT id FROM session_outbox WHERE session_id = s.id
-			AND type = 'message_persistent' AND source_key LIKE 'message:%' ORDER BY id DESC LIMIT 1)
+			AND type = 'message' AND source_key LIKE 'message:%' ORDER BY id DESC LIMIT 1)
 		LEFT JOIN assistant_work w ON w.session_id = s.id
 		LEFT JOIN session_inbox i ON i.id = (SELECT id FROM session_inbox WHERE session_id = s.id
 			AND source = 'user' AND state = 'accepted' ORDER BY id LIMIT 1)

@@ -15,7 +15,7 @@ import (
 )
 
 func TestCommit_Parts(t *testing.T) {
-	for _, name := range []string{"accept and receipt", "resolutions", "linked acceptance", "messages and retry", "tool result replay", "replace", "activation", "state", "candidate CAS", "outputs and replay", "unfired", "budget suppression", "budget hidden candidate", "budget rejected attempt", "rollback", "lifecycle fence", "ownerless output", "keyless outputs", "host keyless outputs", "reset context", "final footer", "activation provenance", "activation expiry", "call pending"} {
+	for _, name := range []string{"accept and receipt", "resolutions", "linked acceptance", "messages and retry", "tool result replay", "replace", "activation", "state", "candidate CAS", "outputs and replay", "unfired", "budget suppression", "budget hidden candidate", "budget rejected attempt", "rollback", "lifecycle fence", "ownerless output", "keyless outputs", "host keyless outputs", "reset context", "final content", "activation provenance", "activation expiry", "call pending"} {
 		t.Run(name, func(t *testing.T) {
 			ctx := t.Context()
 			store, db, projectID := newTestStore(t)
@@ -188,12 +188,11 @@ func TestCommit_Parts(t *testing.T) {
 				return
 			case "state":
 				step.State = StatePatch{
-					Iteration:           new(3),
-					Status:              new(SessionStatusCompleted),
-					TodoItems:           new(json.RawMessage(`[{"content":"work","status":"pending"}]`)),
-					ContextBaseline:     &ContextBaseline{Model: "model", PromptTokens: 200, MessageCount: 2},
-					EmptyStopStreak:     new(2),
-					ManagerReplyPending: new(true),
+					Iteration:       new(3),
+					Status:          new(SessionStatusCompleted),
+					TodoItems:       new(json.RawMessage(`[{"content":"work","status":"pending"}]`)),
+					ContextBaseline: &ContextBaseline{Model: "model", PromptTokens: 200, MessageCount: 2},
+					EmptyStopStreak: new(2),
 				}
 			case "candidate CAS":
 				step.Messages = []*transcript.Message{{Role: "assistant", Content: "candidate", FinishType: "stop"}}
@@ -211,7 +210,7 @@ func TestCommit_Parts(t *testing.T) {
 				return
 			case "outputs and replay":
 				step.Outputs = []Output{
-					{Type: OutputMessagePersistent, Content: "answer", Key: "answer", ReleasesInput: true},
+					{Type: OutputMessage, Content: "answer", Key: "answer", ReleasesInput: true},
 				}
 				first, commitErr := store.Commit(ctx, step)
 				require.NoError(t, commitErr)
@@ -230,13 +229,13 @@ func TestCommit_Parts(t *testing.T) {
 							ctx,
 							Commit{
 								SessionID: root.ID,
-								Outputs:   []Output{{Type: OutputMessagePersistent, Content: "repeatable"}},
+								Outputs:   []Output{{Type: OutputMessage, Content: "repeatable"}},
 							},
 						)
 					} else {
 						_, err = store.EnqueueOutput(
 							ctx,
-							OutputDraft{SessionID: root.ID, Type: OutputMessagePersistent, Content: "repeatable"},
+							OutputDraft{SessionID: root.ID, Type: OutputMessage, Content: "repeatable"},
 						)
 					}
 					require.NoError(t, err)
@@ -264,7 +263,7 @@ func TestCommit_Parts(t *testing.T) {
 				require.NoError(t, writeErr)
 				step.State.ResetContext = true
 				step.Messages = []*transcript.Message{{Role: "user", Content: "fresh opening"}}
-			case "final footer":
+			case "final content":
 				step.Messages = []*transcript.Message{
 					{
 						Role:    "assistant",
@@ -276,11 +275,10 @@ func TestCommit_Parts(t *testing.T) {
 				step.State.Iteration = new(3)
 				step.Outputs = []Output{
 					{
-						Type:          OutputMessagePersistent,
+						Type:          OutputMessage,
 						Content:       "answer",
 						MessageRef:    0,
 						Phase:         "final",
-						FinalFooter:   &Footer{BackgroundYield: true},
 						ReleasesInput: true,
 					},
 				}
@@ -365,7 +363,7 @@ func TestCommit_Parts(t *testing.T) {
 				step.Unfired = Parts{
 					Messages: []*transcript.Message{{Role: "user", Content: "continue"}},
 					State:    StatePatch{Iteration: new(8)},
-					Outputs:  []Output{{Type: OutputMessagePersistent, Content: "normal output"}},
+					Outputs:  []Output{{Type: OutputMessage, Content: "normal output"}},
 				}
 				step.State.EmptyStopStreak = new(3)
 				if name == "budget hidden candidate" {
@@ -392,7 +390,7 @@ func TestCommit_Parts(t *testing.T) {
 				step.Messages = []*transcript.Message{{Role: "assistant", Content: "must roll back"}}
 				step.State.Iteration = new(7)
 				step.Outputs = []Output{
-					{Type: OutputMessagePersistent, Content: "invalid ref", MessageRef: 99, Phase: "final"},
+					{Type: OutputMessage, Content: "invalid ref", MessageRef: 99, Phase: "final"},
 				}
 			case "lifecycle fence":
 				require.NoError(t, store.UpdateSessionStatus(ctx, root.ID, SessionStatusStopping))
@@ -401,7 +399,7 @@ func TestCommit_Parts(t *testing.T) {
 				require.ErrorIs(t, commitErr, ErrSessionStopping)
 				step.Mode = CommitLifecycle
 			case "ownerless output":
-				step.Outputs = []Output{{Type: OutputMessagePersistent, Content: "no manager"}}
+				step.Outputs = []Output{{Type: OutputMessage, Content: "no manager"}}
 			}
 			result, commitErr := store.Commit(ctx, step)
 			if name == "rollback" {
@@ -467,10 +465,9 @@ func TestCommit_Parts(t *testing.T) {
 				check, checkErr := store.LoadCompletionCheckState(ctx, root.ID)
 				require.NoError(t, checkErr)
 				assert.Zero(t, check.EmptyStopStreak)
-			case "final footer":
+			case "final content":
 				require.Len(t, result.Outputs, 1)
-				assert.Contains(t, result.Outputs[0].Content, "🟣 Background\n\nanswer")
-				assert.Contains(t, result.Outputs[0].Content, "💰 $0.25 total")
+				assert.Equal(t, "answer", result.Outputs[0].Content)
 			case "budget suppression", "unfired", "budget hidden candidate", "budget rejected attempt":
 				assert.Equal(t, name != "unfired", result.BudgetFired)
 				record, getErr := store.GetSession(ctx, root.ID)

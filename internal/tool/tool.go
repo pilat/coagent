@@ -29,6 +29,7 @@ const (
 	IDMCPList        = "mcp_list"
 
 	IDConfigEdit         = "config_edit"
+	IDConfigRead         = "config_read"
 	BrowserAgentType     = "browser"
 	PlaywrightServerName = "playwright"
 	PlaywrightToolPrefix = "mcp__playwright__"

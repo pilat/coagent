@@ -2,231 +2,94 @@ package telegram
 
 import (
 	"context"
-	"errors"
 	"fmt"
-	"strconv"
-	"time"
 
 	"github.com/pilat/coagent/internal/controllerapi"
 	"github.com/pilat/coagent/internal/managerdelivery"
 )
 
-type outputQueue struct {
-	controllerapi.OutputQueueController
-}
+var (
+	_ managerdelivery.ChatPort      = (*chatPort)(nil)
+	_ managerdelivery.ChatTransport = (*outputTransport)(nil)
+)
 
-func newOutputQueue(controller controllerapi.OutputQueueController) *outputQueue {
-	return &outputQueue{OutputQueueController: controller}
-}
-
-func (q *outputQueue) Claim(ctx context.Context) (*managerdelivery.Item, error) {
-	claim, err := q.ClaimOutput(ctx)
-
-	if retryPending, ok := errors.AsType[*controllerapi.OutputRetryPendingError](err); ok {
-		return nil, &managerdelivery.RetryPendingError{NextAt: retryPending.NextAt}
-	}
-
-	if errors.Is(err, controllerapi.ErrNoOutput) {
-		return nil, managerdelivery.ErrNoItem
-	}
-
-	if err != nil {
-		return nil, fmt.Errorf("claim telegram output: %w", err)
-	}
-
-	return &managerdelivery.Item{
-		ID: claim.ID, AttemptID: claim.AttemptID, Attempts: claim.AttemptSeq, Payload: claim,
-	}, nil
-}
-
-func (q *outputQueue) Ack(ctx context.Context, item *managerdelivery.Item, result managerdelivery.Result) error {
-	if err := q.AckOutput(ctx, controllerapi.OutputAckData{
-		ID: item.ID, AttemptID: item.AttemptID, MessageIDs: result.MessageIDs, SessionPatch: result.SessionPatch,
-	}); err != nil {
-		return fmt.Errorf("ack telegram output: %w", err)
-	}
-
-	return nil
-}
-
-func (q *outputQueue) Retry(ctx context.Context, item *managerdelivery.Item, failure string, next time.Time) error {
-	if err := q.RetryOutput(ctx, controllerapi.OutputRetryData{
-		ID: item.ID, AttemptID: item.AttemptID, Error: failure, NextAt: next,
-	}); err != nil {
-		return fmt.Errorf("retry telegram output: %w", err)
-	}
-
-	return nil
-}
-
-func (q *outputQueue) Block(ctx context.Context, item *managerdelivery.Item, failure string) error {
-	if err := q.BlockOutput(ctx, controllerapi.OutputBlockData{
-		ID: item.ID, AttemptID: item.AttemptID, Error: failure,
-	}); err != nil {
-		return fmt.Errorf("block telegram output: %w", err)
-	}
-
-	return nil
+type chatPort struct {
+	controller controllerapi.ChatFocusController
+	chatID     string
 }
 
 type outputTransport struct{ manager *Manager }
 
-func (t *outputTransport) Deliver(ctx context.Context, item *managerdelivery.Item) managerdelivery.Result {
-	claim, ok := item.Payload.(*controllerapi.OutputClaimData)
-	if !ok {
-		return managerdelivery.Result{Error: "invalid durable output payload"}
-	}
-
-	switch claim.Type {
-	case controllerapi.OutputSessionOpened:
-		return t.openSession(ctx, claim)
-	case controllerapi.OutputSessionReplaced:
-		return t.replaceSession(ctx, claim)
-	case controllerapi.OutputSessionClosed:
-		return t.closeSession(ctx, claim)
-	case controllerapi.OutputMessageReplaceable, controllerapi.OutputMessagePersistent:
-	default:
-		return managerdelivery.Result{Error: "unsupported durable output type"}
-	}
-
-	topicID, patch, err := t.ensureSessionTopic(ctx, claim)
+func (p *chatPort) Focus(ctx context.Context) (int64, error) {
+	focus, err := p.controller.ChatFocus(ctx, p.chatID)
 	if err != nil {
-		return t.deliveryFailure(err)
+		return 0, fmt.Errorf("read telegram chat focus: %w", err)
 	}
 
-	messageIDs, err := t.renderMessage(ctx, claim, topicID)
-	if err != nil {
-		return t.deliveryFailure(err)
-	}
-
-	return managerdelivery.Result{MessageIDs: messageIDs, SessionPatch: patch}
+	return focus, nil
 }
 
-func (t *outputTransport) renderMessage(
-	ctx context.Context,
-	claim *controllerapi.OutputClaimData,
-	topicID int64,
-) ([]string, error) {
-	chunks := splitMessageChunks(textToTelegramHTML(claim.Content), maxMessageChunk)
-	previous := previousMessageIDs(claim)
-
-	editPrevious := mayReusePreviousReceipts(claim) && len(previous) > 0
-	if !editPrevious {
-		return t.sendChunks(ctx, chunks, topicID)
+func (p *chatPort) ResetFocus(ctx context.Context, from int64) (bool, error) {
+	reset, err := p.controller.ResetChatFocus(ctx, p.chatID, from)
+	if err != nil {
+		return false, fmt.Errorf("reset telegram chat focus: %w", err)
 	}
 
-	common := min(len(previous), len(chunks))
-	for i := range common {
-		messageID, err := strconv.ParseInt(previous[i], 10, 64)
-		if err != nil {
-			return t.sendChunks(ctx, chunks, topicID)
-		}
-
-		if err := t.manager.editMessageRawHTML(ctx, messageID, chunks[i], nil); err != nil {
-			if isMessageNotModified(err) {
-				continue
-			}
-
-			if isMessageMissing(err) {
-				// The missing target proves nothing about the receipts behind
-				// it; leaving them alive would leak them into the topic forever.
-				if err := t.deleteReceipts(ctx, previous[i+1:]); err != nil {
-					return nil, err
-				}
-
-				return t.sendChunks(ctx, chunks, topicID)
-			}
-
-			return nil, fmt.Errorf("edit output chunk: %w", err)
-		}
-	}
-
-	ids := append([]string(nil), previous[:common]...)
-	if len(chunks) > common {
-		more, err := t.sendChunks(ctx, chunks[common:], topicID)
-		if err != nil {
-			return nil, err
-		}
-
-		ids = append(ids, more...)
-	}
-
-	if err := t.deleteReceipts(ctx, previous[common:]); err != nil {
-		return nil, err
-	}
-
-	return ids, nil
+	return reset, nil
 }
 
-func (t *outputTransport) deleteReceipts(ctx context.Context, ids []string) error {
-	for _, id := range ids {
-		messageID, err := strconv.ParseInt(id, 10, 64)
-		if err != nil {
-			continue
-		}
+func (p *chatPort) Outputs(ctx context.Context, sessionID int64, limit int) ([]managerdelivery.ChatRow, error) {
+	rows, err := p.controller.ChatOutputs(ctx, p.chatID, sessionID, limit)
+	if err != nil {
+		return nil, fmt.Errorf("read telegram chat outputs: %w", err)
+	}
 
-		if err := t.manager.deleteMessage(ctx, messageID); err != nil && !isMessageMissing(err) {
-			return fmt.Errorf("delete surplus output chunk: %w", err)
-		}
+	outputs := make([]managerdelivery.ChatRow, 0, len(rows))
+	for _, row := range rows {
+		outputs = append(outputs, managerdelivery.ChatRow{ID: row.ID, Type: row.Type, Content: row.Content})
+	}
+
+	return outputs, nil
+}
+
+func (p *chatPort) MarkSeen(ctx context.Context, sessionID, outboxID int64) error {
+	if err := p.controller.MarkChatSeen(ctx, p.chatID, sessionID, outboxID); err != nil {
+		return fmt.Errorf("mark telegram chat seen: %w", err)
 	}
 
 	return nil
 }
 
-func (t *outputTransport) sendChunks(ctx context.Context, chunks []string, topicID int64) ([]string, error) {
-	ids := make([]string, 0, len(chunks))
-	for _, chunk := range chunks {
-		id, err := t.manager.sendMessageChunk(ctx, chunk, nil, topicID)
-		if err != nil && shouldFallbackToPlain(err) {
-			id, err = t.manager.sendPlainFallback(ctx, chunk, nil, topicID)
-		}
-
-		if err != nil {
-			return nil, fmt.Errorf("send output chunk: %w", err)
-		}
-
-		ids = append(ids, strconv.FormatInt(id, 10))
+func (p *chatPort) Sessions(ctx context.Context) ([]managerdelivery.ChatSession, error) {
+	rows, err := p.controller.ChatSessions(ctx, p.chatID)
+	if err != nil {
+		return nil, fmt.Errorf("read telegram chat sessions: %w", err)
 	}
 
-	return ids, nil
+	sessions := make([]managerdelivery.ChatSession, 0, len(rows))
+	for _, row := range rows {
+		sessions = append(sessions, managerdelivery.ChatSession{
+			ID: row.ID, Name: row.Name, Unread: row.Unread, LatestUnread: row.LatestUnread,
+			LatestUnreadID: row.LatestUnreadID,
+		})
+	}
+
+	return sessions, nil
 }
 
-func previousMessageIDs(claim *controllerapi.OutputClaimData) []string {
-	values, ok := claim.PreviousMessageAttributes["message_ids"].([]any)
-	if !ok {
-		return nil
+func (p *chatPort) Killed(ctx context.Context, sessionID int64) (bool, error) {
+	killed, err := p.controller.SessionKilled(ctx, sessionID)
+	if err != nil {
+		return false, fmt.Errorf("read telegram session killed state: %w", err)
 	}
 
-	ids := make([]string, 0, len(values))
-	for _, value := range values {
-		id, ok := value.(string)
-		if !ok || id == "" {
-			return nil
-		}
-
-		ids = append(ids, id)
-	}
-
-	return ids
+	return killed, nil
 }
 
-// mayReusePreviousReceipts compares only the persisted generations of the
-// adjacent outbox rows. Equal generations (or two legacy rows without one)
-// permit editing the previous replaceable receipt; any other pair — a changed
-// generation, or one row with a generation and one without — starts a new
-// external message.
-func mayReusePreviousReceipts(claim *controllerapi.OutputClaimData) bool {
-	if claim.PreviousMessageType != controllerapi.OutputMessageReplaceable {
-		return false
+func (t *outputTransport) Send(ctx context.Context, text string) managerdelivery.SendResult {
+	if _, err := t.manager.sendMessage(ctx, text); err != nil {
+		return classifyDeliveryError(err)
 	}
 
-	current, previous := claim.ModelInputGeneration, claim.PreviousModelInputGeneration
-	switch {
-	case current == nil && previous == nil:
-		return true
-	case current != nil && previous != nil:
-		return *current == *previous
-	default:
-		return false
-	}
+	return managerdelivery.SendResult{}
 }

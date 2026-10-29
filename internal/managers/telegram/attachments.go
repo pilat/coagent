@@ -22,29 +22,20 @@ import (
 // transfer of whatever fits beneath that ceiling.
 const attachmentDownloadTimeout = 10 * time.Minute
 
-// handleAttachment ingests one uploaded file: download → /tmp under a random
-// name → confirmation echo → synthetic metadata message into the session.
-// No attachment payload crosses any manager boundary — controllerapi stays
-// strings-only; seeing pixels is read's job.
 func (m *Manager) handleAttachment(
 	ctx context.Context,
 	msg *telegramMessage,
 	att *tgAttachment,
-	threadID, sessionID int64,
-	hasSession bool,
+	sessionID int64,
 ) {
-	if !hasSession {
-		return // no-session topics drop silently (voice precedent)
-	}
-
 	log := logger.Ctx(ctx).Named("telegram.attachments")
 
-	_ = m.sendTyping(ctx, threadID)
+	_ = m.sendTyping(ctx)
 
 	savedPath, err := m.saveAttachment(ctx, att)
 	if err != nil {
 		log.Error("attachment_save_failed", zap.String("name", att.name), zap.Error(err))
-		_, _ = m.sendMessage(ctx, "❌ Failed to save "+att.displayName()+": "+err.Error(), nil, threadID)
+		_, _ = m.sendMessage(ctx, "❌ Failed to save "+att.displayName()+": "+err.Error())
 
 		return
 	}
@@ -57,12 +48,10 @@ func (m *Manager) handleAttachment(
 	_, _ = m.sendMessage(
 		ctx,
 		fmt.Sprintf("📎 %s (%s) → %s", name, sizeText, savedPath),
-		nil,
-		threadID,
 	)
 
 	synthetic := buildSyntheticMessage(name, sizeText, savedPath, msg.Caption)
-	m.handleSessionMessage(ctx, sessionID, synthetic, threadID)
+	m.handleSessionMessage(ctx, sessionID, synthetic)
 }
 
 // tgAttachment normalizes the four upload shapes behind one accessor set.

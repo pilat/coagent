@@ -115,15 +115,15 @@ func TestAssistantToolsRefuseUnauthorizedWork(t *testing.T) {
 	child := workSession(t, f.sessions, map[string]any{"manager_id": testOwner})
 	_, err := f.db.ExecContext(t.Context(), `UPDATE sessions SET parent_id = ? WHERE id = ?`, f.work, child)
 	require.NoError(t, err)
-	management := workSession(t, f.sessions, map[string]any{"manager_id": testOwner, "management_surface": true})
+	retired := workSession(t, f.sessions, map[string]any{"manager_id": testOwner})
 	killed := workSession(t, f.sessions, map[string]any{"manager_id": testOwner})
 	_, err = f.db.ExecContext(
 		t.Context(),
-		`UPDATE sessions SET killed_at = CURRENT_TIMESTAMP, status = 'killed' WHERE id = ?`,
-		killed,
+		`UPDATE sessions SET killed_at = CURRENT_TIMESTAMP, status = 'killed' WHERE id IN (?, ?)`,
+		killed, retired,
 	)
 	require.NoError(t, err)
-	for _, target := range []int64{foreign, child, management, killed, f.root} {
+	for _, target := range []int64{foreign, child, retired, killed, f.root} {
 		for _, id := range []string{toolRead, toolSend, toolStop} {
 			_, err := f.tools[id].Execute(
 				t.Context(),

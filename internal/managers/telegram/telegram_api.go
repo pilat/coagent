@@ -18,7 +18,6 @@ const (
 	tgKeyDescription = "description"
 	tgKeyChatID      = "chat_id"
 	tgKeyText        = "text"
-	tgKeyMessageID   = "message_id"
 	tgKeyParseMode   = "parse_mode"
 	tgKeyLinkPreview = "link_preview_options"
 
@@ -45,21 +44,7 @@ type tgAPIError struct {
 }
 
 type telegramBotUser struct {
-	ID                        int64 `json:"id"`
-	HasTopicsEnabled          bool  `json:"has_topics_enabled"`
-	AllowsUsersToCreateTopics bool  `json:"allows_users_to_create_topics"`
-}
-
-type telegramForumChat struct {
-	ID      int64  `json:"id"`
-	Type    string `json:"type"`
-	IsForum bool   `json:"is_forum"`
-}
-
-type telegramChatMember struct {
-	Status            string `json:"status"`
-	CanManageTopics   bool   `json:"can_manage_topics"`
-	CanDeleteMessages bool   `json:"can_delete_messages"`
+	ID int64 `json:"id"`
 }
 
 func (e *tgAPIError) Error() string {
@@ -177,7 +162,7 @@ func sanitizeTransportError(err error) error {
 
 // disableLinkPreview suppresses URL preview cards on outgoing messages unless the caller set the option.
 func disableLinkPreview(method string, params map[string]any) {
-	if method != "sendMessage" && method != "editMessageText" {
+	if method != "sendMessage" {
 		return
 	}
 
@@ -195,7 +180,6 @@ func (m *Manager) getUpdates(ctx context.Context, offset int64) ([]telegramUpdat
 		"timeout": m.cfg.PollTimeoutSec,
 		"allowed_updates": []string{
 			"message",
-			"callback_query",
 		},
 	}, &updates); err != nil {
 		return nil, err
@@ -213,65 +197,26 @@ func (m *Manager) getMe(ctx context.Context) (telegramBotUser, error) {
 	return out, nil
 }
 
-func (m *Manager) getChat(ctx context.Context, chatID int64) (telegramForumChat, error) {
-	var out telegramForumChat
+func (m *Manager) getChat(ctx context.Context, chatID int64) (telegramChat, error) {
+	var out telegramChat
 	if err := m.tg(ctx, "getChat", map[string]any{tgKeyChatID: chatID}, &out); err != nil {
-		return telegramForumChat{}, err
-	}
-
-	return out, nil
-}
-
-func (m *Manager) getChatMember(ctx context.Context, chatID, userID int64) (telegramChatMember, error) {
-	var out telegramChatMember
-	if err := m.tg(ctx, "getChatMember", map[string]any{tgKeyChatID: chatID, "user_id": userID}, &out); err != nil {
-		return telegramChatMember{}, err
+		return telegramChat{}, err
 	}
 
 	return out, nil
 }
 
 func (m *Manager) setCommands(ctx context.Context) error {
-	return m.tg(ctx, "setMyCommands", map[string]any{
-		"commands": []map[string]string{
-			{tgKeyCommand: "new", tgKeyDescription: "New dialog project by name, or pick one"},
-			{tgKeyCommand: "spawn", tgKeyDescription: "Open folder picker for new session"},
-			{tgKeyCommand: "gwt", tgKeyDescription: "Fork this project into a git worktree"},
-			{tgKeyCommand: "kill", tgKeyDescription: "End this session (terminal)"},
-			{tgKeyCommand: "stop", tgKeyDescription: "Stop the current run (keep session)"},
-			{tgKeyCommand: "clear", tgKeyDescription: "Clear session (fresh start, same topic)"},
-			{tgKeyCommand: "model", tgKeyDescription: "Choose LLM model"},
-			{tgKeyCommand: "status", tgKeyDescription: "Show session stats (tokens, cost, context)"},
-			{tgKeyCommand: "budget", tgKeyDescription: "Set a cost or wall-time checkpoint"},
-			{tgKeyCommand: "help", tgKeyDescription: "Show available commands"},
-		},
+	return m.tg(ctx, "setMyCommands", map[string]any{"commands": publishedCommands}, nil)
+}
+
+func (m *Manager) sendTyping(ctx context.Context) error {
+	return m.tg(ctx, "sendChatAction", map[string]any{
+		tgKeyChatID: m.effectiveChatID(), "action": "typing",
 	}, nil)
 }
 
-func (m *Manager) answerCallback(ctx context.Context, callbackID, text string) {
-	params := map[string]any{
-		"callback_query_id": callbackID,
-	}
-	if text != "" {
-		params[tgKeyText] = text
-	}
-
-	_ = m.tg(ctx, "answerCallbackQuery", params, nil)
-}
-
-func (m *Manager) sendTyping(ctx context.Context, threadID int64) error {
-	params := map[string]any{
-		tgKeyChatID: m.effectiveChatID(),
-		"action":    "typing",
-	}
-	if threadID > 0 {
-		params["message_thread_id"] = threadID
-	}
-
-	return m.tg(ctx, "sendChatAction", params, nil)
-}
-
-func (m *Manager) sendMessage(ctx context.Context, text string, markup *tgReplyMarkup, threadID int64) (int64, error) {
+func (m *Manager) sendMessage(ctx context.Context, text string) (int64, error) {
 	fullHTML := textToTelegramHTML(text)
 	chunks := splitMessageChunks(fullHTML, maxMessageChunk)
 
@@ -286,15 +231,15 @@ func (m *Manager) sendMessage(ctx context.Context, text string, markup *tgReplyM
 			}
 		}
 
-		id, err := m.sendMessageChunk(ctx, chunk, markup, threadID)
+		id, err := m.sendMessageChunk(ctx, chunk)
 		if err != nil {
 			if !shouldFallbackToPlain(err) {
 				return 0, err
 			}
 
-			plainID, plainErr := m.sendPlainFallback(ctx, chunk, markup, threadID)
+			plainID, plainErr := m.sendPlainFallback(ctx, chunk)
 			if plainErr != nil {
-				return 0, err
+				return 0, plainErr
 			}
 
 			lastID = plainID
@@ -308,10 +253,7 @@ func (m *Manager) sendMessage(ctx context.Context, text string, markup *tgReplyM
 	return lastID, nil
 }
 
-// shouldFallbackToPlain is deliberately narrow. Retrying an ambiguous transport
-// or server failure as a second sendMessage can duplicate a message Telegram
-// already accepted. Only an explicit 400 entity-parse rejection proves the HTML
-// request was not accepted and that removing parse_mode can make it valid.
+// Only an explicit parse rejection permits another send without duplicating an accepted chunk.
 func shouldFallbackToPlain(err error) bool {
 	var apiErr *tgAPIError
 	if !errors.As(err, &apiErr) || apiErr.ErrorCode != http.StatusBadRequest {
@@ -321,18 +263,11 @@ func shouldFallbackToPlain(err error) bool {
 	return strings.Contains(strings.ToLower(apiErr.Description), "parse entities")
 }
 
-func (m *Manager) sendRawHTML(ctx context.Context, html string, markup *tgReplyMarkup, threadID int64) (int64, error) {
+func (m *Manager) sendRawHTML(ctx context.Context, html string) (int64, error) {
 	params := map[string]any{
 		tgKeyChatID:    m.effectiveChatID(),
 		tgKeyText:      html,
 		tgKeyParseMode: tgParseModeHTML,
-	}
-	if markup != nil {
-		params["reply_markup"] = markup
-	}
-
-	if threadID > 0 {
-		params["message_thread_id"] = threadID
 	}
 
 	var out struct {
@@ -346,123 +281,12 @@ func (m *Manager) sendRawHTML(ctx context.Context, html string, markup *tgReplyM
 	return out.MessageID, nil
 }
 
-func (m *Manager) editMessageText(ctx context.Context, messageID int64, text string, markup *tgReplyMarkup) error {
-	params := map[string]any{
-		tgKeyChatID:    m.effectiveChatID(),
-		tgKeyMessageID: messageID,
-		tgKeyText:      textToTelegramHTML(text),
-		tgKeyParseMode: tgParseModeHTML,
-	}
-	if markup != nil {
-		params["reply_markup"] = markup
-	}
-
-	return m.tg(ctx, "editMessageText", params, nil)
-}
-
-func (m *Manager) editMessageRawHTML(ctx context.Context, messageID int64, html string, markup *tgReplyMarkup) error {
-	params := map[string]any{
-		tgKeyChatID:    m.effectiveChatID(),
-		tgKeyMessageID: messageID,
-		tgKeyText:      html,
-		tgKeyParseMode: tgParseModeHTML,
-	}
-	if markup != nil {
-		params["reply_markup"] = markup
-	}
-
-	return m.tg(ctx, "editMessageText", params, nil)
-}
-
-func (m *Manager) deleteMessage(ctx context.Context, messageID int64) error {
-	return m.tg(ctx, "deleteMessage", map[string]any{
-		tgKeyChatID:    m.effectiveChatID(),
-		tgKeyMessageID: messageID,
-	}, nil)
-}
-
-func (m *Manager) createForumTopic(ctx context.Context, name, emojiID string) (int64, error) {
-	params := map[string]any{
-		tgKeyChatID: m.effectiveChatID(),
-		"name":      name,
-	}
-	if emojiID != "" {
-		params["icon_custom_emoji_id"] = emojiID
-	}
-
-	var out struct {
-		MessageThreadID int64 `json:"message_thread_id"`
-	}
-
-	if err := m.tg(ctx, "createForumTopic", params, &out); err != nil {
-		return 0, err
-	}
-
-	if out.MessageThreadID <= 0 {
-		return 0, errors.New("telegram createForumTopic returned an invalid message_thread_id")
-	}
-
-	return out.MessageThreadID, nil
-}
-
-func (m *Manager) deleteForumTopic(ctx context.Context, topicID int64) error {
-	return m.tg(ctx, "deleteForumTopic", map[string]any{
-		tgKeyChatID:         m.effectiveChatID(),
-		"message_thread_id": topicID,
-	}, nil)
-}
-
-func (m *Manager) editForumTopic(ctx context.Context, topicID int64, name, emojiID string) error {
-	params := map[string]any{
-		tgKeyChatID:         m.effectiveChatID(),
-		"message_thread_id": topicID,
-	}
-	if name != "" {
-		params["name"] = name
-	}
-
-	if emojiID != "" {
-		params["icon_custom_emoji_id"] = emojiID
-	}
-
-	err := m.tg(ctx, "editForumTopic", params, nil)
-	if err == nil {
-		return nil
-	}
-
-	apiErr := &tgAPIError{}
-
-	ok := errors.As(err, &apiErr)
-	if !ok {
-		return err
-	}
-
-	description := strings.ToLower(apiErr.Description)
-	if strings.Contains(description, "not modified") || strings.Contains(description, "not_modified") {
-		return nil
-	}
-
-	return err
-}
-
-func (m *Manager) sendMessageChunk(
-	ctx context.Context,
-	chunk string,
-	markup *tgReplyMarkup,
-	threadID int64,
-) (int64, error) {
+func (m *Manager) sendMessageChunk(ctx context.Context, chunk string) (int64, error) {
 	params := map[string]any{
 		tgKeyChatID:    m.effectiveChatID(),
 		tgKeyText:      chunk,
 		tgKeyParseMode: tgParseModeHTML,
 	}
-	if markup != nil {
-		params["reply_markup"] = markup
-	}
-
-	if threadID > 0 {
-		params["message_thread_id"] = threadID
-	}
 
 	var out struct {
 		MessageID int64 `json:"message_id"`
@@ -475,22 +299,10 @@ func (m *Manager) sendMessageChunk(
 	return out.MessageID, nil
 }
 
-func (m *Manager) sendPlainFallback(
-	ctx context.Context,
-	html string,
-	markup *tgReplyMarkup,
-	threadID int64,
-) (int64, error) {
+func (m *Manager) sendPlainFallback(ctx context.Context, html string) (int64, error) {
 	params := map[string]any{
 		tgKeyChatID: m.effectiveChatID(),
 		tgKeyText:   stripHTMLToPlain(html),
-	}
-	if markup != nil {
-		params["reply_markup"] = markup
-	}
-
-	if threadID > 0 {
-		params["message_thread_id"] = threadID
 	}
 
 	var out struct {

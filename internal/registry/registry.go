@@ -65,11 +65,12 @@ var builtinAgentTypes = map[AgentType]AgentTypeConfig{
 			"search", "around", "read_session", "sessions", "projects", "focus_list",
 			"open", "send", "stop", "remember", "rewrite_memory", "forget_memory",
 			"focus", "update_focus", "done_focus",
+			tool.IDSchedule, tool.IDMCPAdd, tool.IDMCPRemove, tool.IDMCPEnable, tool.IDMCPDisable, tool.IDMCPList,
+			tool.IDConfigRead, tool.IDConfigEdit, "set_budget",
 		},
 		Prompt:                  AssistantPrompt,
 		OmitProjectContext:      true,
 		DisableIntegratedSearch: true,
-		OmitFinalFooter:         true,
 	},
 	AgentTypeCompaction: {
 		Name:        AgentTypeCompaction,
@@ -96,7 +97,6 @@ type (
 		// Project-defined subagents default to the full session context.
 		OmitProjectContext      bool
 		DisableIntegratedSearch bool
-		OmitFinalFooter         bool
 	}
 )
 

@@ -41,7 +41,6 @@ type Store interface { //nolint:interfacebloat // Lifecycle commands share atomi
 	HasAcceptedInput(context.Context, int64) (bool, error)
 	ListSessionsWithRecoverableInput(context.Context) ([]int64, error)
 	EnqueueOutput(ctx context.Context, draft sessionstore.OutputDraft) (*sessionstore.OutputCommit, error)
-	WakeOutputHead(ctx context.Context, managerID string) (bool, error)
 	CreateManagerRoot(
 		ctx context.Context,
 		create sessionstore.ManagerRootCreate,

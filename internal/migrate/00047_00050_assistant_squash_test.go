@@ -18,10 +18,10 @@ type assistantSchemaRow struct{ kind, name, table, sql string }
 
 func TestMigrate_00047_00050_Convergence(t *testing.T) {
 	fresh, freshProvider := assistantSquashDB(t, false)
-	_, err := freshProvider.Up(t.Context())
+	_, err := freshProvider.UpTo(t.Context(), 50)
 	require.NoError(t, err)
 	legacy, legacyProvider := assistantSquashDB(t, true)
-	applied, err := legacyProvider.Up(t.Context())
+	applied, err := legacyProvider.UpTo(t.Context(), 50)
 	require.NoError(t, err)
 	require.Len(t, applied, 1)
 	assert.EqualValues(t, 50, applied[0].Source.Version)

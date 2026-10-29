@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/pilat/coagent/internal/progress"
 	"github.com/pilat/coagent/internal/transcript"
 )
 
@@ -114,24 +113,8 @@ func commitOutputsTx(ctx context.Context, tx *sql.Tx, c Commit, outputs []Output
 			key = fmt.Sprintf("message:%d:%s", result.MessageIDs[output.MessageRef], output.Phase)
 		}
 
-		content := output.Content
-		if output.FinalFooter != nil {
-			facts, err := CaptureProgressTx(ctx, tx, target)
-			if err != nil {
-				return err
-			}
-
-			final, err := finalFactsFromProgress(facts, c.At)
-			if err != nil {
-				return err
-			}
-
-			final.IsBackgroundYield = output.FinalFooter.BackgroundYield
-			content = progress.RenderFinalFromFacts(content, final)
-		}
-
 		out, err := insertOutputTx(ctx, tx, OutputDraft{
-			SessionID: target, Type: output.Type, Content: content,
+			SessionID: target, Type: output.Type, Content: output.Content,
 			Attributes: output.Attributes, SourceKey: key, ReleasesInput: output.ReleasesInput, CreatedAt: c.At,
 		}, c.Mode)
 		if err != nil {

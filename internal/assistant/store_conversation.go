@@ -12,7 +12,7 @@ SELECT id, received_at AS at, 'user' AS kind, raw_content AS text
 FROM session_inbox WHERE session_id = ? AND source = 'user' AND state = 'accepted'
 UNION ALL
 SELECT id, created_at AS at, 'say' AS kind, content AS text
-FROM session_outbox WHERE session_id = ? AND type IN ('message_persistent', 'message_replaceable')
+FROM session_outbox WHERE session_id = ? AND type = 'message'
 AND source_key LIKE 'message:%'
 ) ORDER BY at DESC, id DESC, kind DESC LIMIT ?`, root, root, conversationLines)
 	if err != nil {

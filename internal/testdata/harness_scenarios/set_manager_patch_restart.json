@@ -31,5 +31,6 @@
       "type": "message",
       "message": "manager settings updated"
     }
-  ]
+  ],
+  "outputs": []
 }

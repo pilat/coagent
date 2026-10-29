@@ -10,7 +10,6 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/pilat/coagent/internal/config"
-	"github.com/pilat/coagent/internal/controllerapi"
 	"github.com/pilat/coagent/internal/logger"
 )
 
@@ -72,50 +71,13 @@ func (s *Server) status(ctx context.Context) StatusResult {
 		out.ModelCount = len(cfg.UnifiedConfig.Models)
 		out.DefaultModel = cfg.DefaultModel()
 		out.Search = searchStatus(cfg.UnifiedConfig, cfg.DefaultModel())
-		out.Managers = s.managerStatuses(ctx, cfg.UnifiedConfig.Managers)
+		out.Managers = s.managerStatuses(cfg.UnifiedConfig.Managers)
 	}
-
-	s.appendRemovedManagerBacklogs(ctx, &out)
 
 	return out
 }
 
-func (s *Server) appendRemovedManagerBacklogs(ctx context.Context, out *StatusResult) {
-	owners, ok := s.deps.Delivery.(controllerapi.OutputOwnerStatusFactory)
-	if !ok {
-		return
-	}
-
-	ids, err := owners.UnresolvedOutputOwners(ctx)
-	if err != nil {
-		return
-	}
-
-	known := make(map[string]struct{}, len(out.Managers))
-	for _, manager := range out.Managers {
-		known[manager.ID] = struct{}{}
-	}
-
-	for _, id := range ids {
-		if _, exists := known[id]; exists {
-			continue
-		}
-
-		manager := ManagerStatus{ID: id, Driver: "removed"}
-
-		health, err := s.deps.Delivery.OutputQueueStatus(ctx, id)
-		if err == nil {
-			manager.PendingOutputs = health.Pending
-			manager.BlockedOutputID = health.BlockedID
-			manager.BlockedForSeconds = health.BlockedForSec
-			manager.DeliveryError = health.DeliveryError
-		}
-
-		out.Managers = append(out.Managers, manager)
-	}
-}
-
-func (s *Server) managerStatuses(ctx context.Context, entries []config.ManagerEntry) []ManagerStatus {
+func (s *Server) managerStatuses(entries []config.ManagerEntry) []ManagerStatus {
 	running := map[string]struct{}{}
 
 	if s.deps.Managers != nil {
@@ -134,15 +96,6 @@ func (s *Server) managerStatuses(ctx context.Context, entries []config.ManagerEn
 			Driver:  m.Driver,
 			Enabled: m.Enabled != nil && *m.Enabled,
 			Running: isRunning,
-		}
-		if s.deps.Delivery != nil {
-			health, err := s.deps.Delivery.OutputQueueStatus(ctx, m.ID)
-			if err == nil {
-				st.PendingOutputs = health.Pending
-				st.BlockedOutputID = health.BlockedID
-				st.BlockedForSeconds = health.BlockedForSec
-				st.DeliveryError = health.DeliveryError
-			}
 		}
 
 		if st.Enabled && !isRunning {

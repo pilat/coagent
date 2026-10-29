@@ -38,7 +38,7 @@ func TestProgressSnapshot_ProjectsTodosInCanonicalOrder(t *testing.T) {
 	facts := &sessionstore.ProgressFacts{
 		RootID: 7, TodoItems: json.RawMessage(todos),
 	}
-	runtime, ok := New(nil, nil).(*runtime)
+	runtime, ok := New(nil).(*runtime)
 	require.True(t, ok, "New must return the concrete runtime")
 
 	snapshot, err := runtime.progressSnapshot(facts, base.Add(time.Hour))

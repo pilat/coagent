@@ -98,7 +98,7 @@ func (p *integrityProtocolProduction) apply(command integrityProtocolCommand) {
 			step.State.Status = &status
 			step.Outputs = []Output{
 				{
-					Type:          OutputMessagePersistent,
+					Type:          OutputMessage,
 					Content:       IntegrityErrorNotice(OutputLengthTerminalError),
 					MessageRef:    0,
 					Phase:         "final",

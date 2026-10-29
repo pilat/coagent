@@ -217,7 +217,7 @@ func answerTool(ctx context.Context, s *Store,
 		parts = append(
 			parts,
 			Output{
-				Type:          OutputMessagePersistent,
+				Type:          OutputMessage,
 				Content:       draft,
 				Key:           fmt.Sprintf("tool:%s:direct:%d", message.ToolCallID, i),
 				ReleasesInput: true,
@@ -253,7 +253,7 @@ func scheduledTurn(ctx context.Context, s *Store,
 			Messages:  []*transcript.Message{assistant, result},
 			Outputs: []Output{
 				{
-					Type:       OutputMessagePersistent,
+					Type:       OutputMessage,
 					Content:    result.Content,
 					Key:        "schedule:" + key + ":announcement",
 					Attributes: map[string]any{"source": "scheduler"},

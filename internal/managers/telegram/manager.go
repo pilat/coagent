@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strconv"
 	"sync"
 	"time"
 
@@ -14,9 +15,7 @@ import (
 )
 
 const (
-	foldersPerPage       = 10
 	maxMessageChunk      = 4000
-	maxTopicNameRunes    = 128 // Telegram forum-topic name limit
 	reconnectBackoffBase = 3 * time.Second
 	reconnectBackoffMax  = 60 * time.Second
 	startupRetryTimeout  = 30 * time.Second
@@ -34,53 +33,39 @@ type Manager struct {
 	cfg            config.ManagerEntry
 	unifiedCfg     *config.UnifiedConfig
 	controller     controllerapi.Controller
+	chat           controllerapi.ChatFocusController
 	httpClient     *http.Client // poll/API calls: bounded by the poll timeout
 	downloadClient *http.Client // bot-API file downloads: request-scoped deadlines only
 
 	mu sync.RWMutex
 
-	serviceTopicID   int64
-	managementRootID int64
-	assistantRootID  int64
-	target           forumTarget
-	botUserID        int64
-	updateOffset     int64
-	daemonHome       string
-	availableModels  []controllerapi.ConfigModelInfo
-	availableSkills  []controllerapi.ConfigSkillInfo
-
-	navCounter int64
-	navPaths   map[int64]string
-	pathToNav  map[string]int64
-
-	sessionToTopic map[int64]int64
-	topicToSession map[int64]int64
-	workDirs       map[int64]string
+	assistantRootID int64
+	chatID          int64
+	updateOffset    int64
+	workDirs        map[int64]string
 
 	subscription <-chan controllerapi.SessionNotification
-	delivery     managerdelivery.Worker
+	delivery     managerdelivery.ChatLoop
 	cancel       context.CancelFunc
 	done         chan struct{}
 }
 
 type telegramUpdate struct {
-	UpdateID      int64                 `json:"update_id"`
-	Message       *telegramMessage      `json:"message,omitempty"`
-	CallbackQuery *telegramCallbackData `json:"callback_query,omitempty"`
+	UpdateID int64            `json:"update_id"`
+	Message  *telegramMessage `json:"message,omitempty"`
 }
 
 type telegramMessage struct {
-	MessageID       int64                 `json:"message_id"`
-	MessageThreadID int64                 `json:"message_thread_id,omitempty"`
-	From            *telegramUser         `json:"from,omitempty"`
-	Chat            telegramChat          `json:"chat"`
-	Text            string                `json:"text,omitempty"`
-	Caption         string                `json:"caption,omitempty"`
-	Voice           *telegramVoiceMessage `json:"voice,omitempty"`
-	Document        *telegramDocument     `json:"document,omitempty"`
-	Photo           []telegramPhotoSize   `json:"photo,omitempty"`
-	Video           *telegramVideo        `json:"video,omitempty"`
-	Audio           *telegramAudio        `json:"audio,omitempty"`
+	MessageID int64                 `json:"message_id"`
+	From      *telegramUser         `json:"from,omitempty"`
+	Chat      telegramChat          `json:"chat"`
+	Text      string                `json:"text,omitempty"`
+	Caption   string                `json:"caption,omitempty"`
+	Voice     *telegramVoiceMessage `json:"voice,omitempty"`
+	Document  *telegramDocument     `json:"document,omitempty"`
+	Photo     []telegramPhotoSize   `json:"photo,omitempty"`
+	Video     *telegramVideo        `json:"video,omitempty"`
+	Audio     *telegramAudio        `json:"audio,omitempty"`
 }
 
 type telegramUser struct {
@@ -126,28 +111,6 @@ type telegramAudio struct {
 	FileSize int64  `json:"file_size,omitempty"`
 }
 
-type telegramCallbackData struct {
-	ID      string                `json:"id"`
-	From    *telegramUser         `json:"from,omitempty"`
-	Message *telegramCallbackMeta `json:"message,omitempty"`
-	Data    string                `json:"data,omitempty"`
-}
-
-type telegramCallbackMeta struct {
-	Chat            telegramChat `json:"chat"`
-	MessageID       int64        `json:"message_id"`
-	MessageThreadID int64        `json:"message_thread_id,omitempty"`
-}
-
-type tgReplyMarkup struct {
-	InlineKeyboard [][]tgInlineButton `json:"inline_keyboard"`
-}
-
-type tgInlineButton struct {
-	Text         string `json:"text"`
-	CallbackData string `json:"callback_data"`
-}
-
 func New(
 	entry config.ManagerEntry,
 	unifiedCfg *config.UnifiedConfig,
@@ -155,6 +118,11 @@ func New(
 ) (*Manager, error) {
 	if controller == nil {
 		return nil, errors.New("controller is required")
+	}
+
+	chat, ok := controller.(controllerapi.ChatFocusController)
+	if !ok {
+		return nil, errors.New("chat focus capability is required")
 	}
 
 	timeout, err := httpTimeoutFor(entry.PollTimeoutSec)
@@ -167,21 +135,18 @@ func New(
 		cfg:            entry,
 		unifiedCfg:     unifiedCfg,
 		controller:     controller,
+		chat:           chat,
 		httpClient:     &http.Client{Timeout: timeout},
 		downloadClient: &http.Client{}, // request-scoped deadlines: bot-API downloads must outlive PollTimeoutSec
-		navPaths:       make(map[int64]string),
-		pathToNav:      make(map[string]int64),
-		sessionToTopic: make(map[int64]int64),
-		topicToSession: make(map[int64]int64),
 		workDirs:       make(map[int64]string),
 	}
 
-	target, err := m.resolveForumTarget()
+	chatID, err := m.resolveChatID()
 	if err != nil {
 		return nil, err
 	}
 
-	m.target = target
+	m.chatID = chatID
 
 	return m, nil
 }
@@ -190,37 +155,22 @@ func (m *Manager) ID() string {
 	return m.id
 }
 
-//nolint:contextcheck,funlen // Startup orders identity, repair, then delivery; cleanup outlives run context.
+//nolint:contextcheck // Failed startup cleanup must outlive the cancelled run context.
 func (m *Manager) Start(ctx context.Context) error {
 	runCtx, cancel := context.WithCancel(ctx)
 	done := make(chan struct{})
 
 	m.mu.Lock()
-	m.cancel = cancel
-	m.done = done
+	m.cancel, m.done = cancel, done
 	m.mu.Unlock()
-
-	if m.target.chatID == 0 {
-		target, err := m.resolveForumTarget()
-		if err != nil {
-			cancel()
-			return err
-		}
-
-		m.target = target
-	}
 
 	started := false
 	defer func() {
 		if !started {
 			cancel()
 
-			m.mu.RLock()
-			subscription := m.subscription
-			m.mu.RUnlock()
-
-			if subscription != nil {
-				m.controller.Unsubscribe(subscription)
+			if m.subscription != nil {
+				m.controller.Unsubscribe(m.subscription)
 			}
 
 			close(done)
@@ -228,107 +178,42 @@ func (m *Manager) Start(ctx context.Context) error {
 	}()
 
 	if err := m.preflightWithRetry(runCtx, defaultStartupRetryPolicy()); err != nil {
-		cancel()
-		return fmt.Errorf("preflight forum target: %w", err)
+		return fmt.Errorf("preflight chat: %w", err)
 	}
 
-	serviceTopicID, err := m.ensureServiceTopic(runCtx)
+	root, err := m.controller.EnsureAssistantRoot(runCtx)
 	if err != nil {
-		cancel()
-		return fmt.Errorf("ensure service topic: %w", err)
+		return fmt.Errorf("ensure assistant: %w", err)
 	}
 
-	m.serviceTopicID = serviceTopicID
-
-	// The management root must exist and match this service topic before any
-	// output can deliver: queued work may already target this conversation.
-	rootID, err := m.ensureManagementRoot(runCtx, serviceTopicID)
-	if err != nil {
-		cancel()
-		return fmt.Errorf("ensure management root: %w", err)
-	}
-
-	m.managementRootID = rootID
-	m.registerTopic(rootID, serviceTopicID)
-
-	if err := m.ensureAssistantRoot(runCtx); err != nil {
-		return fmt.Errorf("ensure assistant topic: %w", err)
-	}
-
+	m.assistantRootID = root.SessionID
+	m.setWorkDir(root.SessionID, root.WorkDir)
 	subscription := m.controller.Subscribe()
-	m.mu.Lock()
-	m.subscription = subscription
-	m.mu.Unlock()
-
-	if queue, ok := m.controller.(controllerapi.OutputQueueController); ok {
-		if err := queue.BindOutputDelivery(runCtx, controllerapi.OutputBindingData{
-			Driver: telegramChannel,
-			Attributes: map[string]any{
-				"bot_user_id": m.botUserID,
-				"chat_id":     m.target.chatID,
-				"topology":    string(m.target.topology),
-			},
-		}); err != nil {
-			cancel()
-			return fmt.Errorf("bind durable output delivery: %w", err)
-		}
-
-		var deliveryQueue managerdelivery.Queue = newOutputQueue(queue)
-		var transport managerdelivery.Transport = &outputTransport{manager: m}
-		delivery := managerdelivery.New(deliveryQueue, transport)
-
-		m.mu.Lock()
-		m.delivery = delivery
-		m.mu.Unlock()
-	}
-
-	if err := m.reconcileOnStartup(runCtx); err != nil {
-		cancel()
-		return fmt.Errorf("reconcile sessions: %w", err)
-	}
-
-	// The worker starts only after reconciliation: a queued output with a stale
-	// service-topic binding must not race startup into creating a session topic.
-	if m.delivery != nil {
-		m.delivery.Start(runCtx)
-	}
-
-	if err := m.refreshActiveProgress(runCtx); err != nil {
-		cancel()
-		return err
-	}
 
 	if err := m.setCommands(runCtx); err != nil {
-		cancel()
+		m.controller.Unsubscribe(subscription)
 		return fmt.Errorf("set commands: %w", err)
 	}
 
+	var port managerdelivery.ChatPort = &chatPort{
+		controller: m.chat, chatID: strconv.FormatInt(m.effectiveChatID(), 10),
+	}
+	var transport managerdelivery.ChatTransport = &outputTransport{manager: m}
+	delivery := managerdelivery.NewChat(port, transport)
+
+	m.mu.Lock()
+	m.subscription, m.delivery = subscription, delivery
+	m.mu.Unlock()
+	delivery.Start(runCtx)
+
 	go func() {
 		defer close(done)
-		defer func() {
-			m.mu.RLock()
-			delivery := m.delivery
-			m.mu.RUnlock()
+		defer func() { _ = delivery.Stop(context.Background()) }()
 
-			if delivery != nil {
-				_ = delivery.Stop(context.Background())
-			}
-		}()
 		var wg sync.WaitGroup
 
-		wg.Add(2)
-
-		go func() {
-			defer wg.Done()
-
-			m.notificationsLoop(runCtx)
-		}()
-		go func() {
-			defer wg.Done()
-
-			m.pollLoop(runCtx)
-		}()
-
+		wg.Go(func() { m.notificationsLoop(runCtx) })
+		wg.Go(func() { m.pollLoop(runCtx) })
 		wg.Wait()
 	}()
 

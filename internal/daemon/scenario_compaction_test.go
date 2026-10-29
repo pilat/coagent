@@ -446,12 +446,10 @@ func TestHarnessScenario_CompactSuccessChain(t *testing.T) {
 		}
 		return false
 	})
-	controller := newChainController(t, h)
-	drainScenarioClaims(t, "compact_success_chain.json", controller)
 	collector.waitFor(t, "idle after compact", func(events []controllerapi.SessionNotification) bool {
 		return containsState(events, root, sessionevent.StateIdle)
 	})
-	assertHarnessTrace(t, "compact_success_chain.json", collector.snapshot(), root)
+	assertHarnessTrace(t, h, "compact_success_chain.json", collector.snapshot(), root)
 }
 
 // Usage exceeds the 85% threshold of the 200k window while leaving the transcript small enough to summarize.

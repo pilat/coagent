@@ -19,32 +19,26 @@
     },
     {
       "type": "state_changed",
-      "status": "idle",
-      "reason": "error"
+      "status": "idle"
     }
   ],
-  "claims": [
+  "outputs": [
     {
+      "id": 1,
+      "session_id": 1,
       "type": "session_opened",
       "content": "",
-      "attributes": {
-        "manager_id": "telegram:main",
-        "name": "002",
-        "work_dir": "<workdir>"
-      },
-      "source_key": "session:1:opened",
-      "releases_input": false
+      "source_key": "session:1:opened"
     },
     {
-      "type": "message_persistent",
+      "id": 2,
+      "session_id": 1,
+      "type": "message",
       "content": "❌ LLM error: Model response ended with an unknown finish reason.",
-      "attributes": {
-        "manager_id": "telegram:main",
-        "model_input_generation": 1
-      },
-      "source_key": "integrity:1:error",
-      "model_input_generation": 1,
-      "releases_input": true
+      "source_key": "integrity:1:error"
     }
-  ]
+  ],
+  "owners": {
+    "1": "telegram:main"
+  }
 }

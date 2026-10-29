@@ -12,7 +12,7 @@ The shared vocabulary of coagent — the words that name its concepts, so code, 
 The single long-lived coagent process. It coordinates session lifecycle, durable
 producer ledgers and admission. `managercontrol`
 implements the in-process `controllerapi.Controller` over the daemon's command
-backend and reads persistence, progress and subscriptions from their owners.
+backend and reads persistence and subscriptions from their owners.
 Domain packages own durable ledgers; the daemon owns runner lifecycle and
 capacity counters. It binds no *network* socket — the only thing it
 listens on is the **control socket**, a same-user unix socket.
@@ -84,7 +84,10 @@ supported external API.
 _Avoid_: using "controller" for a front-end integration — that is a manager.
 
 **manager**:
-A built-in front end (Telegram today) that drives the daemon through `controllerapi.Controller`. A new manager is a source-level contribution, not a third-party plugin.
+A built-in front end that drives the daemon through its private controller.
+A Telegram manager owns one durable manager ID, one bot account, one chat and
+one polling instance. Enabled managers cannot reuse a bot token. Adding a
+manager is a source-level contribution, not a third-party plugin.
 _Avoid_: controller, bot, adapter, integration.
 
 **manager ownership**:
@@ -104,8 +107,10 @@ One bounded activation of an existing subagent session, ending in a completed, f
 _Avoid_: run, execution (both are overloaded by the runner and agent loop); treating the subagent session itself as one disposable invocation.
 
 **project**:
-The identity a session runs in: one `projects` row keyed by absolute `work_dir` (`GetOrCreateProject`), plus whatever the folder itself carries — `CLAUDE.md`/`AGENTS.md`, skills, curated memory. Nothing requires code or git: any folder is a project, and one project can host many Telegram-topic dialogs (notes, blog drafts, a repo — same machinery).
-_Avoid_: workspace, space; dialog (a dialog is a topic *on* a project, not the project).
+The identity a session runs in: one `projects` row keyed by absolute `work_dir`,
+plus the folder's instructions, skills and curated memory. Any folder can be a
+project, with or without code or Git; many independent sessions can share it.
+_Avoid_: workspace, space; dialog (a dialog is a session in a project).
 
 **agent type**:
 A named agent configuration — tool allowlist, prompt template, model override, mode and optional project-context omission — that session assembly selects. Built-ins: `build`, `general`, `explore`, `browser`, `assistant`, `compaction`. The `task` tool offers only spawnable types; `build`, `assistant` and `compaction` are not subagent types. The built-in `explore` type is deliberately lean: it has read-only code-search tools and starts without project instructions, skills, curated memory, Git state or model catalog; its assignment must supply relevant constraints. The built-in `browser` type has only the project's Playwright tools and the same project-context omission. The hidden `assistant` type receives its own tools and a desk head, without project context. Browser and assistant disable integrated search. Agent type selects behavior and tools, never a work budget.
@@ -116,24 +121,20 @@ _Avoid_: role, persona, mode (mode is a separate axis on the same config).
 The daemon begins accepting only after every startup op owner has registered, so a greeting is also a control-plane readiness boundary rather than a partially initialized view.
 _Avoid_: RPC server, API server, IPC channel.
 
-**management session**:
-The one live root session each Telegram manager owns in its service topic, marked by a durable management-surface session attribute. All managers' management sessions share one hidden ordinary project at `<projects_root>/sys_coagent` while keeping their own transcripts and manager ownership. The attribute — never the project's `hidden` flag — selects the management instruction and service-topic routing; it grants no tools or authority.
-_Avoid_: admin session, system session, CLI session.
-
-**management project**:
-The hidden ordinary project at `<projects_root>/sys_coagent` that all Telegram managers' management sessions share. `hidden` is a discovery-only flag: the project never appears in `/new`, recent-project results, or `/spawn` navigation, and grants no tools, instructions, or daemon authority. The directory name is reserved so a user project cannot claim it.
-_Avoid_: admin project, system project, privileged project.
-
-**management instruction**:
-The coagent administration guide embedded in the binary (`internal/loader/builtin/management`), activated directly only in a management session. It explains coagent's active configuration, status, project, manager, and command behavior and grants no authority; `/config` there remains gated by its own durable activation.
-_Avoid_: setup agent, onboarding skill (removed).
+**assistant project**:
+The hidden ordinary project at `<projects_root>/sys_coagent` shared by the
+managers' assistant roots. Its reserved name prevents user-created projects from
+claiming it. `hidden` affects discovery only and grants no tools or authority.
+_Avoid_: management project, privileged project.
 
 ## Agent loop & context management
 
 **assistant**:
-Coagent's single voice in the Assistant topic: an ordinary root session of the
-hidden `assistant` type, with a desk head and immediate tools for delegating work
-to other root sessions and retelling results.
+Coagent's `#0` in a manager's chat: an ordinary root of the hidden `assistant`
+type, with a desk head and immediate tools for delegating work and retelling
+answers. Its nine owner tools administer global MCP registration, its own
+schedules and budget, and configuration under `/config`. It has no general
+file, shell or web tools. `/assistant` and `/switch 0` select it.
 _Avoid_: coordinator, dispatcher, work-item manager.
 
 **turn** (assistant):
@@ -266,7 +267,7 @@ The unit of ordered scheduling (`internal/tool`): a maximal contiguous run of pa
 _Avoid_: worker pool (there is no shared queue), fan-out (the removed unconditional concurrency).
 
 **skill**:
-A `SKILL.md` instruction bundle loaded from project, global, or marketplace dirs. Two *independent* discovery axes: `disable-model-invocation: true` hides it from the model's available-skills inventory and skill tool; `user-invocable: false` rejects `/skill <name>`. A leading `/skill <name> [args]` expands before the LLM call. Daemon-selected system instructions, currently the management instruction, may be activated directly without becoming model-invocable.
+A `SKILL.md` instruction bundle loaded from project, global, or marketplace dirs. Two *independent* discovery axes: `disable-model-invocation: true` hides it from the model's available-skills inventory and skill tool; `user-invocable: false` rejects `/skill <name>`. A leading `/skill <name> [args]` expands before the LLM call.
 The `task` tool may also seed a new subagent from one model-invocable skill: the parent resolves the canonical name and renders the envelope before spawn, so the child receives content rather than rediscovering the skill.
 _Avoid_: plugin (a plugin is a marketplace bundle), command.
 
@@ -316,41 +317,45 @@ A session→controller event — a message chunk, a state change, a heartbeat (`
 _Avoid_: bare "Notification".
 
 **model-input generation**:
-The session-local monotonic counter (plus its transcript boundary message ID)
-that advances atomically only when model-bound input enters conversation
-history — ordinary inbox promotion and standalone scheduled-turn injection.
-Pending inbox input, tool results, external-call completions, compaction, and
-host-handled commands never advance it. Every manager message output snapshots
-the current generation as host-owned outbox metadata in its insertion
-transaction; progress narration is scoped to rows after the boundary.
+The session-local monotonic counter and transcript boundary message ID that
+advance atomically when model-bound input enters conversation history: inbox
+promotion or standalone scheduled-turn injection. Pending input, tool results,
+external-call completions, compaction and host-handled commands do not advance
+it. Completion nudges use it to enforce one nudge per accepted input generation.
 _Avoid_: iteration (loop counter), activation sequence (subagent delivery CAS).
 
-**replaceable output**:
-A durable manager-output message that may reuse the external message identities
-of the immediately preceding replaceable output only when both adjacent rows
-carry the same model-input generation — or both carry none under the legacy
-rule. A changed or mixed generation starts a new external message. A following
-same-generation persistent output may reuse those identities once and closes
-the replaceable chain. Managers whose transport cannot edit append a new
-rendering instead.
-_Avoid_: manager replacement, cursor.
+**output log**:
+The append-only `session_outbox` rows for owned root messages and lifecycle
+facts, with stable source identities. It is neither the model transcript nor a
+delivery queue; unread state is derived with per-chat watermarks.
+_Avoid_: output queue, delivery backlog.
 
-**persistent output**:
-A durable manager-output message that cannot be replaced by later output. It
-closes an immediately preceding replaceable chain, potentially by editing that
-chain's external messages; otherwise it creates new external messages.
-_Avoid_: final output (persistent output is not necessarily a task result).
+**chat focus**:
+The durable session selected by one manager and chat. Public ID `0` denotes its
+assistant, stored as NULL in `chat_focus`. It is independent of the assistant's
+**focus** items and does not change which sessions keep running.
+_Avoid_: active session (several sessions may run at once), assistant focus.
 
-**direct reply**:
-The persistent, non-releasing text published only when the first assistant
-response after newly promoted manager input contains both text and tool calls.
-That response consumes eligibility even when it is tool-only or rejected, so
-later narration feeds replaceable progress instead. A published direct reply is
-excluded from progress narration rather than repeated inside the card.
-_Avoid_: final output, progress note.
+**watermark**:
+`chat_seen.last_outbox_id`, the monotonic position reached for one manager,
+chat and session after a successful send, probe-confirmed skip or non-rendering
+lifecycle row. It is not a transport receipt or a per-row delivery flag.
+_Avoid_: delivery receipt, shared cursor.
+
+**unread digest**:
+The focus-change message showing each other live owned session's newest unread
+message, ordered newest first. It does not mark those messages seen and is not
+the effective policy's **digest**.
+_Avoid_: policy digest, full unread history.
+
+**tail**:
+The selected session's output-log rows above that chat's watermark, read in
+ascending ID order. It is not every session's unread history; other roots stay
+unread until selected.
+_Avoid_: backlog, transcript.
 
 **skill activation receipt**:
-The manager-visible persistent output that confirms one explicit skill
+The output-log message that confirms one explicit skill
 activation — `🔧 Activated skill: <canonical-name>`, nothing else. An explicit
 `/skill` command commits it inside its promotion transaction (releasing, keyed
 idempotently by the accepted input); the skill tool returns it as an ordinary
@@ -359,20 +364,11 @@ skills and auto-activation produce none.
 _Avoid_: activation notice, skill notification.
 
 **autonomous episode**:
-The interval of manager-owned root work that starts with initial or reactivating
+The interval of manager-owned root work starting with initial or reactivating
 model-bound input, or an applied scheduled turn. Queued input keeps the current
-episode; empty roots and read-only commands do not create one. Its durable start
-anchors operator wall time and the progress-refresh deadline.
-_Avoid_: accepted task, queued message, run (ambiguous with one process activation).
-
-**progress snapshot**:
-The canonical root-session operator view: runtime/persisted state, live context
-projection when available, lifetime persisted usage, autonomous-episode wall
-time, durable TODO items, latest model progress, main-model activity, exact waits,
-active foreground/background subagent topology and an optional one-shot budget.
-Automatic cards, `/status`, reconnect and final footers render this shared
-transport-neutral value.
-_Avoid_: progress message (the output remains replaceable output), heartbeat.
+episode; empty roots and read-only commands create none. Its durable start
+anchors the wall time shown by `/status`.
+_Avoid_: accepted task, queued message, run (ambiguous with process activation).
 
 **one-shot budget**:
 A user-authorized root-tree checkpoint over additional persisted USD cost,
@@ -387,13 +383,6 @@ leading command matches a tool's declared activation command. It is bound to
 the exact input/session/tool/command and is consumed only by the first valid
 matching mutation; prompt text is never authority.
 _Avoid_: command text authorization, hidden tool.
-
-**manager delivery receipt**:
-The manager-owned external message identities recorded when one durable output
-is acknowledged. It is scoped by manager ID, may contain multiple identities
-for a chunked rendering, and is stored and returned without daemon-side
-interpretation.
-_Avoid_: message ID (singular), cursor.
 
 **suspend** (`ErrSuspend`):
 A sentinel error `sleep` returns to checkpoint and exit the agent loop *without* recording a result; the timer's exact result is injected on resume. The persisted status is `suspended`. Standalone `schedule` creates future work but does not suspend the calling session.
@@ -503,7 +492,7 @@ _Avoid_: unfinished todo, pending external call, background prompt snapshot.
 **completion check**:
 The session-wide second-look transition for a non-empty `stop` response with no
 tool calls and no background wake source. The first response is a final
-candidate — hidden from delivery, but shown as the progress card's note — and a
+candidate, hidden from delivery, and a
 host-authored model input asks the same agent to continue or confirm stopping.
 The confirmation publishes the candidate's text, not the confirming response;
 a durable pointer to the candidate row lets a subagent's parent receive the
@@ -609,12 +598,4 @@ Naming conflicts this vocabulary resolves. "Resolved" means the winner above is 
 - **Notification (overloaded type)** — *Resolved.* Use **session event** / `sessionevent.Notification` for live session→controller events; it collides with `lsp.Notification` (JSON-RPC). Durable session input is a `sessionstore.Input` inbox row.
 - **memory vs conversation history** — *Resolved.* "memory" means the curated `CuratedStore` only; the transcript is **conversation history** / the message store.
 - **loop (agent) vs loop (detection)** — *Resolved.* The **agent loop** is the execution cycle; **loop detection** is about repetitive-call *repetition*. Same word, unrelated meanings — always qualify.
-- **project vs space/workspace/dialog (folders for non-code chats)** — *Resolved.* A folder for notes/blog-style dialogs is an ordinary **project** (daemon-provisioned ones default under `~/.coagent/projects/`); no separate container term. "workspace" stays unused (git connotation); topic/thread name the Telegram dialog *on* a project, never the folder.
-- **Telegram group forum vs bot forum** — *Resolved.* A **group forum** is a
-  topic-enabled supergroup containing the bot; a **bot forum** is the topic-enabled
-  private chat between one user and the bot. Both contain Telegram **topics**,
-  but neither topology is itself a topic.
-- **Telegram manager vs Telegram bot** — *Resolved.* A configured Telegram
-  **manager** has one durable manager ID, one forum target and one Telegram bot
-  account. Each manager owns its polling instance; two enabled managers must not
-  reuse the same bot token.
+- **project vs space/workspace/dialog (folders for non-code chats)** — *Resolved.* A folder for notes/blog-style dialogs is an ordinary **project** (daemon-provisioned ones default under `~/.coagent/projects/`); no separate container term. "workspace" stays unused (git connotation); a dialog is a session in a project, never the folder itself.

@@ -33,7 +33,7 @@ const (
 	SessionStatusKilled      SessionStatus = "killed"
 )
 
-const sessionColumns = `id, project_id, model, reasoning_level, master_enabled, attributes, agent_type, parent_id, iteration, status, todo_items, created_at, updated_at, killed_at, root_id, model_input_generation, model_input_boundary, context_baseline_model, context_baseline_prompt_tokens, context_baseline_message_count, completion_check_candidate_id, manager_reply_pending, empty_stop_streak, completion_check_confirmed_answer_id`
+const sessionColumns = `id, project_id, model, reasoning_level, master_enabled, attributes, agent_type, parent_id, iteration, status, todo_items, created_at, updated_at, killed_at, root_id, model_input_generation, model_input_boundary, context_baseline_model, context_baseline_prompt_tokens, context_baseline_message_count, completion_check_candidate_id, empty_stop_streak, completion_check_confirmed_answer_id`
 
 // errSessionNotFound signals a lookup query matched no row.
 var errSessionNotFound = errors.New("session not found")
@@ -81,10 +81,6 @@ type SessionRecord struct {
 	// confirmed check published: a finalizing child resolves it to the full
 	// answer instead of the ack. Nil when no confirmed answer is outstanding.
 	CompletionCheckConfirmedAnswerID *int64
-	// ManagerReplyPending is the durable manager-reply obligation: set when a
-	// manager-owned model input is promoted, cleared only by a releasing output
-	// or a terminal settlement that supersedes the turn.
-	ManagerReplyPending bool
 	// EmptyStopStreak is the durable trailing count of empty no-wake stop
 	// responses feeding loop detection's 3/6 escalation.
 	EmptyStopStreak int
@@ -829,7 +825,6 @@ func scanSessionFrom(sc rowScanner) (*SessionRecord, error) {
 	var killedAt sql.NullTime
 	var boundary sql.NullInt64
 	var candidateID sql.NullInt64
-	var managerReplyPending sql.NullBool
 	var emptyStopStreak sql.NullInt64
 	var confirmedAnswerID sql.NullInt64
 
@@ -838,7 +833,7 @@ func scanSessionFrom(sc rowScanner) (*SessionRecord, error) {
 		&rec.CreatedAt, &rec.UpdatedAt, &killedAt, &rootID,
 		&rec.ModelInputGeneration, &boundary,
 		&rec.ContextBaselineModel, &rec.ContextBaselinePromptTokens, &rec.ContextBaselineMessageCount,
-		&candidateID, &managerReplyPending, &emptyStopStreak, &confirmedAnswerID)
+		&candidateID, &emptyStopStreak, &confirmedAnswerID)
 	if err != nil {
 		return nil, fmt.Errorf("scan session: %w", err)
 	}
@@ -872,7 +867,6 @@ func scanSessionFrom(sc rowScanner) (*SessionRecord, error) {
 		rec.CompletionCheckConfirmedAnswerID = &confirmedAnswerID.Int64
 	}
 
-	rec.ManagerReplyPending = managerReplyPending.Bool
 	rec.EmptyStopStreak = int(emptyStopStreak.Int64)
 
 	return &rec, nil

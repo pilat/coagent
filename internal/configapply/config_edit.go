@@ -30,7 +30,7 @@ const (
 const wholeDocumentRule = "config_edit is not a patch or merge: the document replaces the ENTIRE configuration " +
 	"in " + configDisplayPath + ", and every section or entry missing from it is DELETED " +
 	"(providers, models, managers, marketplaces, sandbox, tools and everything else). " +
-	"First read the current file with the read tool, change only what the user asked for, and send back " +
+	"First read the current file with config_read, change only what the user asked for, and send back " +
 	"the complete document with every untouched section copied verbatim. Never send a fragment or only the changed keys. " +
 	"If you cannot read the current file, stop and ask the operator for it; never reconstruct it from memory."
 

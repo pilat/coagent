@@ -23,20 +23,7 @@ func (c *controller) EnsureAssistantRoot(ctx context.Context) (*controllerapi.As
 	}
 
 	return &controllerapi.AssistantRootEnsureData{
-		SessionID:  record.ID,
-		WorkDir:    dir,
-		Attributes: record.Attributes,
+		SessionID: record.ID,
+		WorkDir:   dir,
 	}, nil
-}
-
-func (s *service) assistantTopicName(managerID string) string {
-	if cfg := s.unifiedConfig(); cfg != nil {
-		for _, manager := range cfg.Managers {
-			if manager.ID == managerID {
-				return manager.AssistantTopicName
-			}
-		}
-	}
-
-	return ""
 }

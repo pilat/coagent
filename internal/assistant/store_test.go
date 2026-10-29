@@ -76,17 +76,21 @@ func TestAssistantSearchKeepsToAuthorizedRoots(t *testing.T) {
 	userMade := workSession(t, sessions, map[string]any{"manager_id": testOwner})
 	foreign := workSession(t, sessions, map[string]any{"manager_id": "manager-b"})
 	child := workSession(t, sessions, map[string]any{"manager_id": testOwner})
-	surface := workSession(t, sessions, map[string]any{"manager_id": testOwner, "management_surface": true})
+	retired := workSession(t, sessions, map[string]any{"manager_id": testOwner})
 	assistantRoot := root
 	killed := workSession(t, sessions, map[string]any{"manager_id": testOwner})
-	for _, id := range []int64{own, userMade, foreign, child, surface, assistantRoot, killed} {
+	for _, id := range []int64{own, userMade, foreign, child, retired, assistantRoot, killed} {
 		answered(t, sessions, id, "найди секрет", "секрет найден")
 	}
 
 	_, err := db.ExecContext(ctx, `UPDATE sessions SET parent_id = ?, root_id = ? WHERE id = ?`, own, own, child)
 	require.NoError(t, err)
-	_, err = db.ExecContext(ctx, `UPDATE sessions SET killed_at = CURRENT_TIMESTAMP, status = 'killed' WHERE id = ?`,
-		killed)
+	_, err = db.ExecContext(
+		ctx,
+		`UPDATE sessions SET killed_at = CURRENT_TIMESTAMP, status = 'killed' WHERE id IN (?, ?)`,
+		killed,
+		retired,
+	)
 	require.NoError(t, err)
 
 	hits, err := s.Search(ctx, Scope{Root: root, Owner: testOwner}, "секрет")
@@ -98,7 +102,7 @@ func TestAssistantSearchKeepsToAuthorizedRoots(t *testing.T) {
 	assert.Equal(t, map[int64]bool{own: true, userMade: true, root: true}, sessionsFound)
 	assert.Len(t, hits, 6, "the accepted request and reply of the assistant and each authorized work root")
 
-	for _, id := range []int64{foreign, child, surface, assistantRoot, killed} {
+	for _, id := range []int64{foreign, child, retired, assistantRoot, killed} {
 		require.NoError(t, sessions.WithTx(ctx, func(tx *sql.Tx) error {
 			ok, err := authorizedTx(ctx, tx, testOwner, id)
 			require.NoError(t, err)

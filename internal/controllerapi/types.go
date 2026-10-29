@@ -6,77 +6,13 @@ import (
 	"github.com/pilat/coagent/internal/sessionevent"
 )
 
-type OutputBindingData struct {
-	Driver     string         `json:"driver"`
-	Attributes map[string]any `json:"attributes"`
-}
-
-// Durable output type vocabulary. controllerapi must not import sessionstore,
-// so the wire values are mirrored here; a sync test in internal/daemon pins
-// both spellings together.
+// These wire values mirror sessionstore; the daemon's vocabulary test pins them.
 const (
-	OutputMessageReplaceable = "message_replaceable"
-	OutputMessagePersistent  = "message_persistent"
-	OutputSessionOpened      = "session_opened"
-	OutputSessionReplaced    = "session_replaced"
-	OutputSessionClosed      = "session_closed"
+	OutputMessage         = "message"
+	OutputSessionOpened   = "session_opened"
+	OutputSessionReplaced = "session_replaced"
+	OutputSessionClosed   = "session_closed"
 )
-
-type OutputClaimData struct {
-	ID                        int64          `json:"id"`
-	SessionID                 int64          `json:"session_id"`
-	Type                      string         `json:"type"`
-	Content                   string         `json:"content"`
-	Attributes                map[string]any `json:"attributes"`
-	AttemptID                 string         `json:"attempt_id"`
-	AttemptSeq                int64          `json:"attempt_seq"`
-	SourceKey                 string         `json:"source_key,omitempty"`
-	SessionAttributes         map[string]any `json:"session_attributes"`
-	PreviousMessageAttributes map[string]any `json:"previous_message_attributes,omitempty"`
-	PreviousMessageType       string         `json:"previous_message_type,omitempty"`
-	ReleasesInput             bool           `json:"releases_input"`
-	// ModelInputGeneration snapshots this row's insertion-time generation.
-	// Presence-bearing: nil is legacy absence, while zero is a valid value.
-	ModelInputGeneration *int64 `json:"model_input_generation,omitempty"`
-	// PreviousModelInputGeneration snapshots the preceding delivered message
-	// output's generation with the same nil-means-legacy rule.
-	PreviousModelInputGeneration *int64 `json:"previous_model_input_generation,omitempty"`
-}
-
-type ProgressData struct {
-	SessionID       int64     `json:"session_id"`
-	Revision        string    `json:"revision"`
-	OutboxWatermark int64     `json:"outbox_watermark"`
-	ObservedAt      time.Time `json:"observed_at"`
-	Rendered        string    `json:"rendered"`
-}
-
-type OutputAckData struct {
-	ID           int64          `json:"id"`
-	AttemptID    string         `json:"attempt_id"`
-	MessageIDs   []string       `json:"message_ids"`
-	SessionPatch map[string]any `json:"session_patch,omitempty"`
-}
-
-type OutputRetryData struct {
-	ID        int64     `json:"id"`
-	AttemptID string    `json:"attempt_id"`
-	Error     string    `json:"error"`
-	NextAt    time.Time `json:"next_at"`
-}
-
-type OutputBlockData struct {
-	ID        int64  `json:"id"`
-	AttemptID string `json:"attempt_id"`
-	Error     string `json:"error"`
-}
-
-type OutputQueueStatusData struct {
-	Pending       int    `json:"pending"`
-	BlockedID     int64  `json:"blocked_id,omitempty"`
-	BlockedForSec int64  `json:"blocked_for_seconds,omitempty"`
-	DeliveryError string `json:"delivery_error,omitempty"`
-}
 
 // Runtime session states (not persisted, derived from in-memory map).
 const (
@@ -85,28 +21,17 @@ const (
 	StateError   = sessionevent.StateError
 )
 
-// CoagentManagementProjectDir is the reserved directory of the shared hidden
-// ordinary project that hosts every Telegram manager's management root.
-// The name is reserved from user-created /new projects; the hidden flag is
-// discovery-only and grants no authority.
+// AssistantProjectDir reserves the assistant's hidden project; hiding grants no authority.
 const (
-	CoagentManagementProjectDir = "sys_coagent"
+	AssistantProjectDir = "sys_coagent"
 	// SessionAttributeManagerID is the durable owner of a root session. Manager
 	// subscriptions are routed by this value, so one manager never receives
 	// another manager's conversation.
 	SessionAttributeManagerID = "manager_id"
-	// SessionAttributeManagementSurface marks a manager-owned root as the
-	// service-topic management conversation. It selects routing and the
-	// management instruction only; it grants no authority.
-	SessionAttributeManagementSurface = "management_surface"
 	// SessionAttributeWorktreeOrigin attests that the controller created a /gwt
 	// worktree; it is not accepted from a manager or ordinary session attributes.
 	SessionAttributeWorktreeOrigin = "coagent_worktree_origin"
 	WorktreeOriginController       = "controller-created-v1"
-	// SessionAttributeTelegramTopicID binds a root to the manager's current
-	// service topic, so restart reconciliation patches output there instead of
-	// creating another topic.
-	SessionAttributeTelegramTopicID = "telegram_topic_id"
 )
 
 // State aliases the notification-layer runtime state for controller clients.
@@ -159,12 +84,6 @@ type SessionSetModelData struct {
 	ReasoningLevel string `json:"reasoning_level,omitempty"` // defaults to "medium"
 }
 
-// SessionSetAttributesData defines input for setting session attributes.
-type SessionSetAttributesData struct {
-	SessionID  int64          `json:"session_id"`
-	Attributes map[string]any `json:"attributes"`
-}
-
 // ConfigSkillsData defines input for listing skills.
 type ConfigSkillsData struct {
 	SessionID int64 `json:"session_id,omitempty"`
@@ -175,10 +94,8 @@ type FsListDirData struct {
 	Path string `json:"path,omitempty"`
 }
 
-// ProjectCreateData defines input for provisioning (get-or-create) a
-// daemon-managed folder-project by name under the configured projects root.
-// Every project created here is visible; the hidden management project is
-// ensured only through the management-root path.
+// ProjectCreateData provisions a visible folder-project under the configured root.
+// The hidden assistant project is reserved for EnsureAssistantRoot.
 type ProjectCreateData struct {
 	Name string `json:"name"`
 }

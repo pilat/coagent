@@ -19,7 +19,6 @@ import (
 
 	"github.com/pilat/coagent/internal/backgroundprocess"
 	"github.com/pilat/coagent/internal/coagenthome"
-	"github.com/pilat/coagent/internal/config"
 	"github.com/pilat/coagent/internal/configapply"
 	"github.com/pilat/coagent/internal/configops"
 	"github.com/pilat/coagent/internal/controllerapi"
@@ -112,11 +111,10 @@ func TestHarnessScenario_RestartResumesExplicitInputQueuedOnStoppedRoot(t *testi
 	second.startInboxWake()
 	second.mgr.resumeAfterRestart(second.ctx)
 	collector.waitMessage(root, "stopped root resumed after restart")
-	drainScenarioClaims(t, "explicit_stopped_resume_restart.json", newChainController(t, second))
 	collector.waitIdleAfter(root, "stopped root resumed after restart")
 	// Explicit resume still spends a hidden candidate and a confirmation call.
 	assert.Equal(t, int64(2), modelCalls.Load())
-	assertHarnessTrace(t, "explicit_stopped_resume_restart.json", collector.snapshot(), root)
+	assertHarnessTrace(t, second, "explicit_stopped_resume_restart.json", collector.snapshot(), root)
 }
 
 func TestHarnessScenario_RestartConsumesReadOnlyInputQueuedOnStoppedRoot(t *testing.T) {
@@ -159,7 +157,6 @@ func TestHarnessScenario_RestartConsumesReadOnlyInputQueuedOnStoppedRoot(t *test
 				strings.Contains(event.Notification.Message, "## Session commands")
 		})
 	})
-	drainScenarioClaims(t, "stopped_read_only_restart.json", newChainController(t, second))
 	second.waitUntil("stopped recovery", func() bool {
 		record, getErr := second.store.GetSession(second.ctx, root)
 		return getErr == nil && record.Status == sessionstore.SessionStatusStopped &&
@@ -172,7 +169,7 @@ func TestHarnessScenario_RestartConsumesReadOnlyInputQueuedOnStoppedRoot(t *test
 	require.NoError(t, err)
 	assert.Equal(t, asyncInput.Input.ID, pending.ID)
 	assert.Equal(t, sessionstore.InputSourceProcess, pending.Source)
-	assertHarnessTrace(t, "stopped_read_only_restart.json", collector.snapshot(), root)
+	assertHarnessTrace(t, second, "stopped_read_only_restart.json", collector.snapshot(), root)
 }
 
 func TestScenario_RestartResumesExplicitInputQueuedOnErroredChild(t *testing.T) {
@@ -314,7 +311,7 @@ func TestHarnessScenario_RestartSettlesPersistedFinalWithoutRepublishing(t *test
 		"historical output is state, not a new publication")
 	record := second.session(root)
 	assert.Equal(t, sessionstore.SessionStatusCompleted, record.Status)
-	assertHarnessTrace(t, "accepted_input_persisted_final_restart.json", collector.snapshot(), root)
+	assertHarnessTrace(t, second, "accepted_input_persisted_final_restart.json", collector.snapshot(), root)
 }
 
 func TestHarnessScenario_RestartDoesNotRunHandledHeaderOnlySession(t *testing.T) {
@@ -427,30 +424,6 @@ func TestIntegration_SweepRedeliversIdempotently(t *testing.T) {
 		}
 	}
 	require.Contains(t, completionText, "outcome: completed")
-}
-
-// Restart must reuse the live root and replace its service topic without duplication.
-func TestManagementRoot_RestartResumesSameRootAndPatchesTopic(t *testing.T) {
-	ctx := context.Background()
-	root := t.TempDir()
-	dbPath := filepath.Join(root, "mgmt.db")
-	h := newHarness(t, harnessOptions{dbPath: dbPath, respond: trivialRespond})
-	cfg := &config.Config{UnifiedConfig: &config.UnifiedConfig{ProjectsRoot: filepath.Join(root, "projects")}}
-	svc := h.mgr
-	factory := newTestController(svc, cfg, nil, nil)
-	first, err := factory.ForManager("tg-main").EnsureManagementRoot(ctx, controllerapi.ManagementRootEnsureData{
-		TopicID: 7001,
-	})
-	require.NoError(t, err)
-	second, err := factory.ForManager("tg-main").EnsureManagementRoot(ctx, controllerapi.ManagementRootEnsureData{
-		TopicID: 7002,
-	})
-	require.NoError(t, err)
-	assert.Equal(t, first, second, "restart with a recreated topic resumes the same root")
-	record := h.session(second)
-	raw, ok := record.Attributes[controllerapi.SessionAttributeTelegramTopicID]
-	require.True(t, ok, "the topic binding is patched to the current service topic")
-	assert.Equal(t, int64(7002), topicAttrNumber(raw))
 }
 
 // Ledger-keyed and transcript-derived pending calls must agree across restart, with an owner for every call.
@@ -688,7 +661,6 @@ func TestHarnessScenario_ProcessCrashRestartDeliversInterruptedOnce(t *testing.T
 	}()
 	require.NoError(t, second.mgr.Start(second.ctx))
 	collector.waitMessage(root, "interrupted process recovered")
-	drainScenarioClaims(t, "process_crash_restart.json", newChainController(t, second))
 	collector.waitIdleAfter(root, "interrupted process recovered")
 	final, err := second.mgr.processStore.GetProcess(second.ctx, process.ID)
 	require.NoError(t, err)
@@ -699,7 +671,7 @@ func TestHarnessScenario_ProcessCrashRestartDeliversInterruptedOnce(t *testing.T
 	require.NoError(t, second.db.QueryRowContext(second.ctx, `SELECT COUNT(*) FROM session_inbox
 		WHERE source = 'process' AND json_extract(attributes, '$.process_id') = ?`, process.ID).Scan(&inputs))
 	assert.Equal(t, 1, inputs)
-	assertHarnessTrace(t, "process_crash_restart.json", collector.snapshot(), root)
+	assertHarnessTrace(t, second, "process_crash_restart.json", collector.snapshot(), root)
 }
 
 func TestHarnessScenario_ForegroundBashCrashRestartResolvesInterruptedCall(t *testing.T) {
@@ -1199,7 +1171,7 @@ func runAcceptedInputRestartScenario(
 	collector.waitIdleAfter(root, "accepted input recovered")
 	assert.Equal(t, "accepted input recovered", lastAssistantTextDTO(second.messages(root)))
 	require.NoError(t, llm.ValidateToolPairing(second.messages(root)))
-	assertHarnessTraceForScenario(t, sourceTest, traceName, collector.snapshot(), root)
+	assertHarnessTraceForScenario(t, second, sourceTest, traceName, collector.snapshot(), root)
 }
 
 func appendCrashToolProgress(t *testing.T, h *harness, sessionID int64) {
@@ -1216,19 +1188,6 @@ func appendCrashToolProgress(t *testing.T, h *harness, sessionID int64) {
 		Role: llmwire.RoleTool, ToolCallID: "crash-tool", ToolName: "read", Content: "durable tool result",
 	}}})
 	require.NoError(t, err)
-}
-
-func topicAttrNumber(raw any) int64 {
-	switch v := raw.(type) {
-	case int:
-		return int64(v)
-	case int64:
-		return v
-	case float64:
-		return int64(v)
-	default:
-		return 0
-	}
 }
 
 const orphanTaskCallID = "orphan-task-1"
@@ -1379,7 +1338,6 @@ func completeRecoveryAfterRestart(t *testing.T, dbPath string, rootID int64) {
 	second.startInboxWake()
 	second.mgr.resumeAfterRestart(second.ctx)
 	collector.waitMessage(rootID, "recovered after restart")
-	drainScenarioClaims(t, "unused-response-restart.json", newChainController(t, second))
 	collector.waitIdleAfter(rootID, "recovered after restart")
 	// A no-wake recovery retry spends a hidden candidate and a confirmation call.
 	assert.Equal(t, 2, resumedCalls)

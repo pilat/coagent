@@ -28,7 +28,6 @@ func (s *Session) modelStep(ctx context.Context, r *runState) error {
 	}
 
 	if response.FinishType == llmwire.FinishLength || response.FinishType == llmwire.FinishUnknown {
-		r.directReply = false
 		if err := s.prepareRejectedAttempt(ctx, r, &c, response); err != nil {
 			return s.commitProjectionFailure(ctx, r, c, err)
 		}
@@ -136,7 +135,7 @@ func (s *Session) prepareRejectedAttempt(
 		status := sessionstore.SessionStatusError
 		c.Unfired.State.Status = &status
 		c.Unfired.Outputs = []sessionstore.Output{{
-			Type: sessionstore.OutputMessagePersistent, Content: sessionstore.IntegrityErrorNotice(notice),
+			Type: sessionstore.OutputMessage, Content: sessionstore.IntegrityErrorNotice(notice),
 			Key: fmt.Sprintf("integrity:%d:error", *c.State.Iteration), MessageRef: -1, ReleasesInput: true,
 		}}
 		r.terminal = true
@@ -162,7 +161,7 @@ func (s *Session) prepareAcceptedAttempt(
 
 	c.State.EmptyStopStreak = &zero
 	if len(response.ToolCalls) > 0 {
-		prepareToolResponse(r, c, response, state)
+		prepareToolResponse(c, response, state)
 		return nil
 	}
 
@@ -194,8 +193,6 @@ func (s *Session) commitModelAttempt(ctx context.Context, r *runState, c session
 	if err != nil {
 		return err
 	}
-
-	r.directReply = false
 
 	r.result.BudgetFired = result.BudgetFired
 	if result.BudgetFired {
@@ -238,7 +235,7 @@ func (s *Session) commitProjectionFailure(ctx context.Context, r *runState, c se
 	c.Unfired.State.Status = &status
 	c.Unfired.Outputs = []sessionstore.Output{
 		{
-			Type:          sessionstore.OutputMessagePersistent,
+			Type:          sessionstore.OutputMessage,
 			Content:       notice,
 			Key:           fmt.Sprintf("projection-error:%d:terminal", s.iterationOffset+r.iterations),
 			MessageRef:    -1,
@@ -264,15 +261,14 @@ func (s *Session) commitProjectionFailure(ctx context.Context, r *runState, c se
 }
 
 func prepareToolResponse(
-	r *runState,
 	c *sessionstore.Commit,
 	response *llmwire.Response,
 	state *sessionstore.CompletionCheckState,
 ) {
 	c.State.Candidate = &sessionstore.CandidateChange{Expected: durableCandidateID(state), NextRef: -1}
-	if r.directReply && strings.TrimSpace(response.Text) != "" {
+	if strings.TrimSpace(response.Text) != "" {
 		c.Unfired.Outputs = []sessionstore.Output{
-			{Type: sessionstore.OutputMessagePersistent, Content: response.Text, MessageRef: 0, Phase: "reply"},
+			{Type: sessionstore.OutputMessage, Content: response.Text, MessageRef: 0, Phase: "reply"},
 		}
 	}
 }
@@ -284,9 +280,8 @@ func (s *Session) prepareStopResponse(
 	state *sessionstore.CompletionCheckState,
 	wake bool,
 ) {
-	reply := state != nil && state.ManagerReplyPending
 	if wake {
-		s.finalParts(c, response.Text, reply, true)
+		s.finalParts(c, response.Text, true)
 		r.result.Final = response.Text
 		r.terminal = true
 
@@ -319,7 +314,7 @@ func (s *Session) prepareStopResponse(
 		text = state.CandidateText
 	}
 
-	s.finalParts(c, text, reply, false)
+	s.finalParts(c, text, false)
 	r.result.Final = text
 	r.terminal = true
 }
@@ -335,7 +330,7 @@ func prepareEmptyStop(r *runState, c *sessionstore.Commit, state *sessionstore.C
 		status := sessionstore.SessionStatusError
 		c.Unfired.State.Status = &status
 		c.Unfired.Outputs = []sessionstore.Output{{
-			Type: sessionstore.OutputMessagePersistent, Content: sessionstore.EmptyStopTerminalNotice(next),
+			Type: sessionstore.OutputMessage, Content: sessionstore.EmptyStopTerminalNotice(next),
 			Key: fmt.Sprintf("empty:%d:terminal", *c.State.Iteration), MessageRef: -1, ReleasesInput: true,
 		}}
 		r.terminal = true
@@ -359,7 +354,7 @@ func (s *Session) prepareProjectionError(r *runState, c *sessionstore.Commit, ca
 	status := sessionstore.SessionStatusError
 	c.Unfired.State.Status = &status
 	c.Unfired.Outputs = []sessionstore.Output{{
-		Type: sessionstore.OutputMessagePersistent, Content: projectionErrorNotice(cause),
+		Type: sessionstore.OutputMessage, Content: projectionErrorNotice(cause),
 		Key: fmt.Sprintf("projection-error:%d:terminal", *c.State.Iteration), MessageRef: -1, ReleasesInput: true,
 	}}
 	r.result.ErrorNotice = projectionErrorNotice(cause)
@@ -367,19 +362,14 @@ func (s *Session) prepareProjectionError(r *runState, c *sessionstore.Commit, ca
 	r.terminalState = true
 }
 
-func (s *Session) finalParts(c *sessionstore.Commit, text string, reply, yield bool) {
+func (s *Session) finalParts(c *sessionstore.Commit, text string, yield bool) {
 	if strings.TrimSpace(text) == "" {
 		return
 	}
 
-	kind := sessionstore.OutputMessageReplaceable
-	if reply {
-		kind = sessionstore.OutputMessagePersistent
-	}
-
 	c.Unfired.Outputs = []sessionstore.Output{
 		{
-			Type:          kind,
+			Type:          sessionstore.OutputMessage,
 			Content:       text,
 			MessageRef:    0,
 			Phase:         "final",
@@ -387,12 +377,6 @@ func (s *Session) finalParts(c *sessionstore.Commit, text string, reply, yield b
 			Yield:         yield,
 		},
 	}
-	if !s.omitFinalFooter {
-		c.Unfired.Outputs[0].FinalFooter = &sessionstore.Footer{BackgroundYield: yield}
-	}
-
-	no := false
-	c.Unfired.State.ManagerReplyPending = &no
 }
 
 func durableCandidateID(state *sessionstore.CompletionCheckState) int64 {

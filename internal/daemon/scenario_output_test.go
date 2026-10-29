@@ -47,18 +47,17 @@ func TestHarnessScenario_CompletionCheckConfirmsBeforePublishing(t *testing.T) {
 	root, err := h.mgr.Send(h.ctx, h.projectID, "do the work", "fake-model", managerAttrs(scenarioManagerID))
 	require.NoError(t, err)
 	collector.waitMessage(root, "premature candidate answer")
-	drainScenarioClaims(t, "completion_check_confirmed_final.json", newChainController(t, h))
 	collector.waitIdleAfter(root, "premature candidate answer")
 	assert.Equal(t, 2, calls, "the no-wake stop costs exactly one confirmation call")
-	var ackLeaks, persistent, releases int
+	var ackLeaks, messages, releases int
 	for _, row := range h.outbox(root) {
 		content := strings.ToLower(row.Content)
 		if strings.Contains(content, "why i am stopping") {
 			ackLeaks++
 		}
-		if row.Type == "message_persistent" {
+		if row.Type == "message" {
 			if strings.HasPrefix(content, "premature candidate answer") {
-				persistent++
+				messages++
 			}
 			if row.ReleasesInput {
 				releases++
@@ -66,9 +65,9 @@ func TestHarnessScenario_CompletionCheckConfirmsBeforePublishing(t *testing.T) {
 		}
 	}
 	assert.Zero(t, ackLeaks, "the discarded nudge ack must never reach any outbox row")
-	assert.Equal(t, 1, persistent, "exactly one persistent manager answer commits: the candidate text")
+	assert.Equal(t, 1, messages, "exactly one manager answer commits: the candidate text")
 	assert.Equal(t, 1, releases, "the confirmed output releases the manager input")
-	assertHarnessTrace(t, "completion_check_confirmed_final.json", collector.snapshot(), root)
+	assertHarnessTrace(t, h, "completion_check_confirmed_final.json", collector.snapshot(), root)
 }
 
 func TestHarnessScenario_CompletionNudgeAfterToolStopsOnce(t *testing.T) {
@@ -100,7 +99,7 @@ func TestHarnessScenario_CompletionNudgeAfterToolStopsOnce(t *testing.T) {
 		}
 	}
 	for _, row := range h.outbox(root) {
-		if row.Type == "message_persistent" && row.ReleasesInput &&
+		if row.Type == "message" && row.ReleasesInput &&
 			strings.Contains(row.Content, "complete answer after checking work") {
 			finals++
 		}
@@ -153,13 +152,11 @@ func TestHarnessScenario_CompletionCheckBackgroundProcessYieldPublishesOnce(t *t
 	assert.Equal(t, int64(1), calls.Load(), "a wake yield trusts the stop without a confirmation call")
 	var yieldOutputs int
 	for _, row := range h.outbox(root) {
-		content := strings.ToLower(row.Content)
-		if row.Type == "message_persistent" && strings.HasPrefix(content, "🟣 background") &&
-			strings.Contains(strings.TrimPrefix(content, "🟣 background"), "yielding to the running process") {
+		if row.Type == "message" && row.Content == "yielding to the running process" && row.ReleasesInput {
 			yieldOutputs++
 		}
 	}
-	assert.Equal(t, 1, yieldOutputs, "the wake yield publishes ordinary output once, opening with the background badge")
+	assert.Equal(t, 1, yieldOutputs, "the wake yield publishes the unchanged answer once")
 	for _, message := range h.messages(root) {
 		if message.Role == llmwire.RoleUser {
 			assert.NotContains(t, message.Content, "returned a final answer",
@@ -297,7 +294,7 @@ func TestHarnessScenario_SecondInputDoesNotReplayPreviousFinal(t *testing.T) {
 	require.NoError(t, h.mgr.sendToSession(h.ctx, sessionID, "second question"))
 	collector.waitMessage(sessionID, "second answer")
 	collector.waitIdleAfter(sessionID, "second answer")
-	assertHarnessTrace(t, "second_input_no_replay.json", collector.snapshot(), sessionID)
+	assertHarnessTrace(t, h, "second_input_no_replay.json", collector.snapshot(), sessionID)
 }
 
 func TestHarnessScenario_CLIConversationIsManagerOwned(t *testing.T) {
@@ -313,79 +310,7 @@ func TestHarnessScenario_CLIConversationIsManagerOwned(t *testing.T) {
 	})
 	require.NoError(t, err)
 	collector.waitMessage(sessionID, "configuration answer")
-	assertHarnessTrace(t, "cli_conversation_manager_owned.json", collector.snapshot(), sessionID)
-}
-
-func TestHarnessScenario_BackgroundChildCheckpointUpdatesRootCard(t *testing.T) {
-	childSecondEntered := make(chan struct{})
-	childSecondRelease := make(chan struct{})
-	var childSecondOnce sync.Once
-	released := false
-	respond := func(_ string, messages []llmwire.Message) *llmwire.Response {
-		if hasUserContaining(messages, "CHILD_PROGRESS") {
-			if hasToolResultFor(messages, "ls") {
-				childSecondOnce.Do(func() { close(childSecondEntered) })
-				<-childSecondRelease
-				return textReply("background child answer")
-			}
-			return callReply("child-progress", "ls", `{"path":"."}`)
-		}
-		if hasUserContaining(messages, "<subagent_completion>") {
-			return textReply("background completion delivered")
-		}
-		if hasToolResultFor(messages, tool.IDSleep) {
-			return textReply("background launched; yielded without sleep")
-		}
-		if hasToolResultFor(messages, tool.IDTask) {
-			return callReply(
-				"sleep-after-task-result", tool.IDSleep, `{"duration":"1h","reason":"wait for background child"}`,
-			)
-		}
-		return callReply(
-			taskCallID, tool.IDTask,
-			`{"prompt":"CHILD_PROGRESS","description":"scenario","subagent_type":"general","background":true}`,
-		)
-	}
-	h := newHarness(t, harnessOptions{respond: respond})
-	collector := collectEvents(t, h.mgr.bus.SubscribeAll())
-	defer func() {
-		if !released {
-			close(childSecondRelease)
-		}
-		collector.stop()
-		h.shutdown()
-	}()
-	h.startInboxWake()
-	parentID, err := h.mgr.Send(
-		h.ctx, h.projectID, "start background child", "fake-model", managerAttrs(scenarioManagerID),
-	)
-	require.NoError(t, err)
-	collector.waitMessage(parentID, "background launched; yielded without sleep")
-	link := h.linkByCall(parentID, taskCallID)
-	require.NotNil(t, link)
-	require.False(t, link.Blocking)
-	waitForScenarioSignal(t, childSecondEntered, "child second model call")
-	var checkpointCard string
-	var checkpointOwner int64
-	checkpointSource := fmt.Sprintf("progress:change:subagent:%d:%d:checkpoint:1:g%%", link.ChildID, link.ActivationSeq)
-	h.waitUntil("child checkpoint progress card", func() bool {
-		var found bool
-		for _, row := range h.outbox(parentID) {
-			if strings.HasPrefix(row.SourceKey, strings.TrimSuffix(checkpointSource, "%")) {
-				checkpointOwner, checkpointCard = row.SessionID, row.Content
-				found = true
-			}
-		}
-		return found
-	})
-	assert.Contains(t, checkpointCard, "iteration ")
-	assert.NotContains(t, checkpointCard, "root iteration")
-	assert.NotContains(t, checkpointCard, "child iterations")
-	assert.NotContains(t, checkpointCard, "tree iterations")
-	assert.Equal(t, parentID, checkpointOwner, "checkpoint output must remain root-owned")
-	close(childSecondRelease)
-	released = true
-	collector.waitMessage(parentID, "background completion delivered")
+	assertHarnessTrace(t, h, "cli_conversation_manager_owned.json", collector.snapshot(), sessionID)
 }
 
 func TestHarnessScenario_LongSessionFixturePreservesReportedOrdering(t *testing.T) {
@@ -440,7 +365,7 @@ func TestHarnessScenario_LongSessionAcceptsInputWithoutChatReceipt(t *testing.T)
 		sessionID,
 	).Scan(&inputs))
 	for _, row := range h.outbox(sessionID) {
-		if row.Type == "message_persistent" || row.Type == "message_replaceable" {
+		if row.Type == "message" {
 			acknowledgements++
 		}
 	}
@@ -448,170 +373,7 @@ func TestHarnessScenario_LongSessionAcceptsInputWithoutChatReceipt(t *testing.T)
 	assert.Zero(t, acknowledgements, "input acceptance must not become a chat message")
 }
 
-func TestHarnessScenario_WorkingMainModelRefreshesProgressEveryThirtySeconds(t *testing.T) {
-	release := make(chan struct{})
-	entered := make(chan struct{})
-	var enteredOnce sync.Once
-	h := newHarness(t, harnessOptions{respond: func(_ string, _ []llmwire.Message) *llmwire.Response {
-		enteredOnce.Do(func() { close(entered) })
-		<-release
-		return textReply("late response")
-	}})
-	collector := collectEvents(t, h.mgr.bus.SubscribeAll())
-	defer func() {
-		close(release)
-		collector.stop()
-		h.shutdown()
-	}()
-	h.startInboxWake()
-	sessionID, err := h.mgr.Send(h.ctx, h.projectID, "sanitized long work", "fake-model", managerAttrs("telegram:main"))
-	require.NoError(t, err)
-	waitForScenarioSignal(t, entered, "working main model call")
-	progressStore := h.store
-	facts, err := progressStore.CaptureProgress(h.ctx, sessionID)
-	require.NoError(t, err)
-	require.Nil(t, facts.LastSemanticOutputAt)
-	require.NotNil(t, facts.EpisodeStartedAt)
-	deadline := facts.EpisodeStartedAt.Add(progressruntime.MainModelProgressInterval)
-	h.mgr.progress.Reconcile(h.ctx, deadline.Add(-time.Second))
-	assert.Equal(t, 0, countSilenceIntents(t, h, sessionID))
-	h.mgr.progress.Reconcile(h.ctx, deadline)
-	h.mgr.progress.Reconcile(h.ctx, deadline)
-	collector.waitFor(t, "working main model progress", func(events []controllerapi.SessionNotification) bool {
-		return slices.ContainsFunc(events, func(event controllerapi.SessionNotification) bool {
-			return event.SessionID == sessionID && event.Notification.Type == sessionevent.NotifyMessage &&
-				strings.Contains(event.Notification.Message, "**🟢 Working**")
-		})
-	})
-	assert.Equal(t, 1, countSilenceIntents(t, h, sessionID),
-		"duplicate deadline ticks must reuse one durable progress intent")
-	h.mgr.progress.Reconcile(h.ctx, deadline.Add(progressruntime.MainModelProgressInterval))
-	assert.Equal(t, 2, countSilenceIntents(t, h, sessionID),
-		"an active main model must refresh the card again after another interval")
-}
-
-func TestHarnessScenario_ReactivatedEpisodeGetsFullMainModelInterval(t *testing.T) {
-	release := make(chan struct{})
-	enteredSecond := make(chan struct{})
-	secondOnce := sync.Once{}
-	var calls atomic.Int64
-	h := newHarness(t, harnessOptions{respond: func(_ string, _ []llmwire.Message) *llmwire.Response {
-		// Episodes one and two each spend a candidate call and a confirming
-		// call; only episode two's first call arms the progress probe.
-		switch calls.Add(1) {
-		case 1, 2:
-			return textReply("old final")
-		}
-		secondOnce.Do(func() { close(enteredSecond) })
-		<-release
-		return textReply("new final")
-	}})
-	collector := collectEvents(t, h.mgr.bus.SubscribeAll())
-	defer func() {
-		close(release)
-		collector.stop()
-		h.shutdown()
-	}()
-	h.startInboxWake()
-	sessionID, err := h.mgr.Send(h.ctx, h.projectID, "first episode", "fake-model", managerAttrs("telegram:main"))
-	require.NoError(t, err)
-	collector.waitMessage(sessionID, "old final")
-	h.waitUntil("session idle", func() bool { return !h.mgr.HasActiveLoop(sessionID) })
-	old := time.Now().UTC().Add(-time.Hour)
-	_, err = h.db.ExecContext(h.ctx, `UPDATE session_outbox SET created_at = ?
-		WHERE session_id = ? AND type IN ('message_persistent', 'message_replaceable')`, old, sessionID)
-	require.NoError(t, err)
-	h.startInboxWake()
-	require.NoError(t, h.mgr.sendToSession(h.ctx, sessionID, "second episode"))
-	waitForScenarioSignal(t, enteredSecond, "reactivated model call")
-	progressStore := h.store
-	facts, err := progressStore.CaptureProgress(h.ctx, sessionID)
-	require.NoError(t, err)
-	require.NotNil(t, facts.EpisodeStartedAt)
-	require.NotNil(t, facts.LastSemanticOutputAt)
-	require.True(t, facts.EpisodeStartedAt.After(*facts.LastSemanticOutputAt))
-	h.mgr.progress.Reconcile(h.ctx, facts.EpisodeStartedAt.Add(progressruntime.MainModelProgressInterval-time.Second))
-	assert.Equal(t, 0, countSilenceIntents(t, h, sessionID))
-	h.mgr.progress.Reconcile(h.ctx, facts.EpisodeStartedAt.Add(progressruntime.MainModelProgressInterval))
-	assert.Equal(t, 1, countSilenceIntents(t, h, sessionID))
-}
-
-func TestHarnessScenario_EmptyRootStartsEpisodeWithFirstInput(t *testing.T) {
-	release := make(chan struct{})
-	entered := make(chan struct{})
-	enteredOnce := sync.Once{}
-	h := newHarness(t, harnessOptions{respond: func(_ string, _ []llmwire.Message) *llmwire.Response {
-		enteredOnce.Do(func() { close(entered) })
-		<-release
-		return textReply("done")
-	}})
-	defer func() {
-		close(release)
-		h.shutdown()
-	}()
-	h.startInboxWake()
-	sessionID, err := h.mgr.Send(h.ctx, h.projectID, "", "fake-model", managerAttrs("telegram:main"))
-	require.NoError(t, err)
-	progressStore := h.store
-	roots, err := progressStore.ListAutonomousProgressRoots(h.ctx)
-	require.NoError(t, err)
-	assert.NotContains(t, roots, sessionID)
-	current, err := h.mgr.progress.Current(h.ctx, sessionID)
-	require.NoError(t, err)
-	assert.Contains(t, current.Rendered, "Wall time: unavailable")
-	h.startInboxWake()
-	require.NoError(t, h.mgr.sendToSession(h.ctx, sessionID, "first task"))
-	waitForScenarioSignal(t, entered, "first model call")
-	var episodeStartedAt time.Time
-	require.NoError(t, h.db.QueryRowContext(h.ctx,
-		`SELECT episode_started_at FROM sessions WHERE id = ?`, sessionID).Scan(&episodeStartedAt))
-	assert.False(t, episodeStartedAt.IsZero())
-	roots, err = progressStore.ListAutonomousProgressRoots(h.ctx)
-	require.NoError(t, err)
-	assert.Contains(t, roots, sessionID)
-}
-
-// Three managers share one hidden project but own three independent roots, each bound to its own service topic.
-func TestManagementRoot_ThreeManagersShareProjectKeepOwnership(t *testing.T) {
-	ctx := context.Background()
-	root := t.TempDir()
-	dbPath := filepath.Join(root, "mgmt.db")
-	h := newHarness(t, harnessOptions{dbPath: dbPath, respond: trivialRespond})
-	db := h.db
-	cfg := &config.Config{UnifiedConfig: &config.UnifiedConfig{ProjectsRoot: filepath.Join(root, "projects")}}
-	svc := h.mgr
-	factory := newTestController(svc, cfg, nil, nil)
-	const topicBase = 7000
-	roots := make(map[string]int64)
-	for i, managerID := range []string{"tg-one", "tg-two", "tg-three"} {
-		id, err := factory.ForManager(managerID).EnsureManagementRoot(ctx, controllerapi.ManagementRootEnsureData{
-			TopicID: int64(topicBase + i),
-		})
-		require.NoError(t, err)
-		require.NotZero(t, id)
-		roots[managerID] = id
-	}
-	assert.Len(t, roots, 3, "three managers own three distinct roots")
-	projectIDs := map[int64]bool{}
-	for managerID, id := range roots {
-		record := h.session(id)
-		projectIDs[record.ProjectID] = true
-		assert.Equal(t, managerID, record.Attributes[controllerapi.SessionAttributeManagerID])
-		assert.Contains(t, record.Attributes, controllerapi.SessionAttributeManagementSurface)
-	}
-	assert.Len(t, projectIDs, 1, "all management roots share one hidden project")
-	var hidden bool
-	for projectID := range projectIDs {
-		require.NoError(t, db.QueryRowContext(ctx, `SELECT hidden FROM projects WHERE id = ?`, projectID).Scan(&hidden))
-		assert.True(t, hidden, "the shared management project is hidden")
-		var name string
-		require.NoError(t, db.QueryRowContext(ctx, `SELECT name FROM projects WHERE id = ?`, projectID).Scan(&name))
-		assert.Equal(t, controllerapi.CoagentManagementProjectDir, name)
-	}
-}
-
-// Claims protect generation-scoped card replacement; the trace pins follow-up promotion, tool settlement and final
-// output.
+// Follow-up promotion must preserve both narrations and the confirmed final in causal order.
 func TestHarnessScenario_OutputChainReportedOrder(t *testing.T) {
 	var calls int
 	entered := make(chan struct{})
@@ -669,14 +431,12 @@ func TestHarnessScenario_OutputChainReportedOrder(t *testing.T) {
 	require.NoError(t, err)
 	closeOnce.Do(func() { close(followUpQueued) })
 	collector.waitMessage(root, "All done.")
-	controller := newChainController(t, h)
-	drainScenarioClaims(t, "output_chain_reported_order.json", controller)
+	assertNarratedOutputOrder(t, h, root, "Reading the repo", "Stopping the mutation run", "All done.")
 	collector.waitIdleAfter(root, "All done.")
-	assertHarnessTrace(t, "output_chain_reported_order.json", collector.snapshot(), root)
+	assertHarnessTrace(t, h, "output_chain_reported_order.json", collector.snapshot(), root)
 }
 
-// One manager-owned input keeps its causal obligation through every tool
-// iteration while direct-reply eligibility is consumed by the first response.
+// Every narrated tool response is a separate durable message, followed by the confirmed final.
 func TestHarnessScenario_OutputChainNarratedToolIterations(t *testing.T) {
 	var calls int
 	respond := func(_ string, _ []llmwire.Message) *llmwire.Response {
@@ -710,10 +470,9 @@ func TestHarnessScenario_OutputChainNarratedToolIterations(t *testing.T) {
 	root, err := h.mgr.Send(h.ctx, h.projectID, "do the work", "fake-model", managerAttrs(scenarioManagerID))
 	require.NoError(t, err)
 	collector.waitMessage(root, "All done.")
-	controller := newChainController(t, h)
-	drainScenarioClaims(t, "output_chain_narrated_tools.json", controller)
+	assertNarratedOutputOrder(t, h, root, "Reading the repo", "Updating the task list", "All done.")
 	collector.waitIdleAfter(root, "All done.")
-	assertHarnessTrace(t, "output_chain_narrated_tools.json", collector.snapshot(), root)
+	assertHarnessTrace(t, h, "output_chain_narrated_tools.json", collector.snapshot(), root)
 }
 
 func TestHarnessScenario_ProcessCompletionAtBusyToolBoundary(t *testing.T) {
@@ -778,11 +537,10 @@ func TestHarnessScenario_ProcessCompletionAtBusyToolBoundary(t *testing.T) {
 	require.NoError(t, h.db.QueryRowContext(h.ctx, `SELECT state FROM session_inbox
 		WHERE source = 'process' AND json_extract(attributes, '$.process_id') = ?`, process.ID).Scan(&state))
 	assert.Equal(t, string(sessionstore.InputStateAccepted), state)
-	drainScenarioClaims(t, "process_busy_boundary.json", newChainController(t, h))
 	collector.waitIdleAfter(rootID, "busy process completion observed")
 	// The completion wake opened the two-phase check; the confirming stop adds one model call.
 	assert.Equal(t, int64(3), modelCalls.Load())
-	assertHarnessTrace(t, "process_busy_boundary.json", collector.snapshot(), rootID)
+	assertHarnessTrace(t, h, "process_busy_boundary.json", collector.snapshot(), rootID)
 }
 
 func TestHarnessScenario_AgentCancelsOwnedBackgroundProcess(t *testing.T) {
@@ -864,12 +622,11 @@ func TestHarnessScenario_ProcessCompletionAtIdleTransition(t *testing.T) {
 	require.NoError(t, h.mgr.inputReady(h.ctx, root.ID))
 	h.mgr.finishRunner(h.ctx, ending, runOutcome{publishIdle: true}, nil)
 	collector.waitMessage(root.ID, "idle-transition completion observed")
-	drainScenarioClaims(t, "process_idle_transition.json", newChainController(t, h))
 	collector.waitIdleAfter(root.ID, "idle-transition completion observed")
 	// The confirmed stop costs a second model call; the completion wake itself
 	// opened the two-phase check with call one.
 	assert.Equal(t, int64(2), modelCalls.Load())
-	assertHarnessTrace(t, "process_idle_transition.json", collector.snapshot(), root.ID)
+	assertHarnessTrace(t, h, "process_idle_transition.json", collector.snapshot(), root.ID)
 }
 
 func TestHarnessScenario_ProcessCompletionRevivesCompletedRoot(t *testing.T) {
@@ -886,35 +643,30 @@ func TestHarnessScenario_ProcessCompletionRevivesCompletedRoot(t *testing.T) {
 	require.NoError(t, h.store.UpdateSessionStatus(h.ctx, root, sessionstore.SessionStatusCompleted))
 	process := startScenarioProcess(t, service, root, root, "printf 'finished\\n'")
 	collector.waitMessage(root, "idle process completion observed")
-	drainScenarioClaims(t, "process_completed_root.json", newChainController(t, h))
 	collector.waitIdleAfter(root, "idle process completion observed")
 
-	// A completion wake hides its first candidate, then confirms a replaceable result that releases the accepted input.
+	// A completion wake hides its first candidate, then commits one persistent releasing answer.
 	assert.Equal(t, int64(2), calls.Load())
 	assert.Equal(t, 1, countUserCompletions(h.messages(root), "<process_completion>"))
-	var persistent, replaceable, releasing int
+	var messages, releasing int
 	for _, row := range h.outbox(root) {
 		if !strings.HasPrefix(strings.ToLower(row.Content), "idle process completion observed") {
 			continue
 		}
-		if row.Type == "message_persistent" {
-			persistent++
-		}
-		if row.Type == "message_replaceable" {
-			replaceable++
+		if row.Type == "message" {
+			messages++
 		}
 		if row.ReleasesInput {
 			releasing++
 		}
 	}
-	assert.Zero(t, persistent, "process-only input must not create a manager direct reply")
-	assert.Equal(t, 1, replaceable)
-	assert.Equal(t, 1, releasing, "terminal progress still releases the accepted asynchronous input")
+	assert.Equal(t, 1, messages)
+	assert.Equal(t, 1, releasing, "terminal output still releases the accepted asynchronous input")
 	var state string
 	require.NoError(t, h.db.QueryRowContext(h.ctx, `SELECT state FROM session_inbox
 		WHERE source = 'process' AND json_extract(attributes, '$.process_id') = ?`, process.ID).Scan(&state))
 	assert.Equal(t, string(sessionstore.InputStateAccepted), state)
-	assertHarnessTrace(t, "process_completed_root.json", collector.snapshot(), root)
+	assertHarnessTrace(t, h, "process_completed_root.json", collector.snapshot(), root)
 }
 
 func TestHarnessScenario_ProcessCompletionInterruptsSleep(t *testing.T) {
@@ -936,7 +688,6 @@ func TestHarnessScenario_ProcessCompletionInterruptsSleep(t *testing.T) {
 	collector.waitWait(rootID, sessionevent.WaitSleep)
 	process := startScenarioProcess(t, service, rootID, rootID, "printf 'wake\\n'")
 	collector.waitMessage(rootID, "process interrupted sleep")
-	drainScenarioClaims(t, "process_interrupts_sleep.json", newChainController(t, h))
 	collector.waitIdleAfter(rootID, "process interrupted sleep")
 	messages := h.messages(rootID)
 	// The completion wake's stop is the hidden candidate; the confirmation adds the second stop of the two-phase check.
@@ -961,7 +712,7 @@ func TestHarnessScenario_ProcessCompletionInterruptsSleep(t *testing.T) {
 			})
 			return record
 		}().State)
-	assertHarnessTrace(t, "process_interrupts_sleep.json", collector.snapshot(), rootID)
+	assertHarnessTrace(t, h, "process_interrupts_sleep.json", collector.snapshot(), rootID)
 }
 
 func TestHarnessScenario_ProcessCompletionWaitsForForegroundChild(t *testing.T) {
@@ -1025,7 +776,7 @@ func TestHarnessScenario_ProcessCompletionWaitsForForegroundChild(t *testing.T) 
 	assert.Equal(t, int64(3), parentCalls.Load())
 	assert.Equal(t, 1, countToolResultsFor(messages, tool.IDTask))
 	assert.Equal(t, 1, countUserCompletions(messages, "<process_completion>"))
-	assertHarnessTrace(t, "process_waits_for_foreground.json", collector.snapshot(), rootID)
+	assertHarnessTrace(t, h, "process_waits_for_foreground.json", collector.snapshot(), rootID)
 }
 
 func TestProcessCompletionRetainsInputWithoutWakingStoppedOrErroredSession(t *testing.T) {
@@ -1131,6 +882,12 @@ func TestPublishRoutingModel_ManagerOwnershipSurvivesTransitions(t *testing.T) {
 	require.NoError(t, err)
 	model[newAlphaID] = model[alphaID]
 	assertModelDeliveries(t, subscribers, "alpha", alphaID, "")
+	killed := requireManagerNotification(t, subscribers["alpha"])
+	assert.Equal(t, alphaID, killed.SessionID)
+	assert.Equal(t, sessionevent.NotifyStateChanged, killed.Notification.Type)
+	assert.Equal(t, controllerapi.StateIdle, killed.Notification.Status)
+	assert.Equal(t, "killed", killed.Notification.Reason)
+	requireNoManagerNotification(t, subscribers["beta"])
 	publish(newAlphaID, "clear preserved alpha")
 }
 
@@ -1161,78 +918,7 @@ func TestSpawnedChildProducesNoPubSubEvents(t *testing.T) {
 	assert.Positive(t, parentEvents, "the parent's own events still flow")
 }
 
-// Releasing output must not publish idle while queued user input has already reactivated the root's loop.
-func TestReadinessSuppressesIdleWhileRootIsActiveLoop(t *testing.T) {
-	t.Parallel()
-	ctx := context.Background()
-	h := newHarness(t, harnessOptions{respond: trivialRespond})
-	db, sessions := h.db, h.store
-	store := h.store
-	projectID := testProject(t, store, "/tmp/readiness-fixture")
-	record, err := sessions.CreateSession(ctx, projectID, "model", "", managerAttrs("manager-readiness"))
-	require.NoError(t, err)
-	sessionID := record.ID
-	var outputID int64
-	require.NoError(t, db.QueryRow(`INSERT INTO session_outbox
-		(session_id, type, content, attributes, source_key, fingerprint, created_at, releases_input, state,
-		 attempt_seq, last_attempt_at, delivered_at, last_error)
-		VALUES (?, 'message_persistent', 'final', '{}', 'test:final', 'fp', datetime('now'), 1, 'delivered',
-		 1, datetime('now'), datetime('now'), '')
-		RETURNING id`,
-		sessionID).Scan(&outputID))
-	mgr := h.mgr
-	controllers := newTestController(mgr, &config.Config{}, nil, nil)
-	notifications := controllers.ForManager("manager-readiness").Subscribe()
-	active := newRunner(func() {}, "", record, waitingRunner{sessionID: record.ID}, false)
-	_, registered := registerTestRunner(ctx, mgr, active)
-	require.True(t, registered)
-	require.NoError(t, mgr.progress.ReconcileOutputReadiness(ctx, outputID))
-	requireNoManagerNotification(t, notifications)
-	mgr.removeRunner(ctx, active)
-	require.False(t, mgr.HasActiveLoop(sessionID))
-	require.NoError(t, mgr.progress.ReconcileOutputReadiness(ctx, outputID))
-	notification := requireManagerNotification(t, notifications)
-	assert.Equal(t, controllerapi.StateIdle, notification.Notification.Status)
-	require.NoError(t, mgr.progress.ReconcileOutputReadiness(ctx, outputID))
-	mgr.progress.ReconcileLatestReadiness(ctx, record.ID)
-	requireNoManagerNotification(t, notifications)
-}
-
-// The runner-teardown reconcile must consult the latest releasing output and
-// publish idle for it once the live loop is gone.
-func TestReconcileLatestReadinessPublishesIdleAfterTeardown(t *testing.T) {
-	t.Parallel()
-	ctx := context.Background()
-	h := newHarness(t, harnessOptions{respond: trivialRespond})
-	db, sessions := h.db, h.store
-	store := h.store
-	projectID := testProject(t, store, "/tmp/readiness-fixture")
-	record, err := sessions.CreateSession(ctx, projectID, "model", "", managerAttrs("manager-readiness"))
-	require.NoError(t, err)
-	var outputID int64
-	require.NoError(t, db.QueryRow(`INSERT INTO session_outbox
-		(session_id, type, content, attributes, source_key, fingerprint, created_at, releases_input, state,
-		 attempt_seq, last_attempt_at, delivered_at, last_error)
-		VALUES (?, 'message_persistent', 'final', '{}', 'test:final', 'fp', datetime('now'), 1, 'delivered',
-		 1, datetime('now'), datetime('now'), '')
-		RETURNING id`,
-		record.ID).Scan(&outputID))
-	mgr := h.mgr
-	controllers := newTestController(mgr, &config.Config{}, nil, nil)
-	notifications := controllers.ForManager("manager-readiness").Subscribe()
-	active := newRunner(func() {}, "", record, waitingRunner{sessionID: record.ID}, false)
-	_, registered := registerTestRunner(ctx, mgr, active)
-	require.True(t, registered)
-	mgr.progress.ReconcileLatestReadiness(ctx, record.ID)
-	requireNoManagerNotification(t, notifications)
-	mgr.removeRunner(ctx, active)
-	require.False(t, mgr.HasActiveLoop(record.ID))
-	mgr.progress.ReconcileLatestReadiness(ctx, record.ID)
-	notification := requireManagerNotification(t, notifications)
-	assert.Equal(t, controllerapi.StateIdle, notification.Notification.Status)
-}
-
-func TestOwnerlessIdleIsSuppressedByReplacementRunner(t *testing.T) {
+func TestIdleIsSuppressedByReplacementRunner(t *testing.T) {
 	h := newHarness(t, harnessOptions{configure: withTestModels, clientFor: (&mockFactory{}).client})
 	mgr, projects := h.mgr, h.store
 	defer mgr.Shutdown(time.Second)
@@ -1244,7 +930,7 @@ func TestOwnerlessIdleIsSuppressedByReplacementRunner(t *testing.T) {
 	replacement := newRunner(func() {}, "", record, waitingRunner{sessionID: record.ID}, false)
 	_, registered := registerTestRunner(ctx, mgr, replacement)
 	require.True(t, registered)
-	mgr.publishOwnerlessIdle(ctx, record.ID)
+	mgr.publishIdle(ctx, record.ID)
 	requireNoNotification(t, notifications)
 	mgr.removeRunner(ctx, replacement)
 	replacement.Complete()
@@ -1260,7 +946,6 @@ func TestHarnessScenario_LengthAttemptIsDiscardedBeforeToolExecution(t *testing.
 	)
 	require.NoError(t, err)
 	collector.waitMessage(sessionID, "recovered complete answer")
-	drainScenarioClaims(t, "model_response_length_recovery.json", newChainController(t, h))
 	collector.waitIdleAfter(sessionID, "recovered complete answer")
 	messages := transcriptOf(h, sessionID)
 	assert.Zero(t, countToolResultsFor(messages, "todowrite"))
@@ -1272,7 +957,7 @@ func TestHarnessScenario_LengthAttemptIsDiscardedBeforeToolExecution(t *testing.
 	require.NoError(t, h.db.QueryRowContext(h.ctx,
 		`SELECT todo_items FROM sessions WHERE id = ?`, sessionID).Scan(&todoItems))
 	assert.JSONEq(t, `[]`, todoItems, "the valid side-effect probe before the truncated call never executes")
-	assertHarnessTrace(t, "model_response_length_recovery.json", collector.snapshot(), sessionID)
+	assertHarnessTrace(t, h, "model_response_length_recovery.json", collector.snapshot(), sessionID)
 }
 
 func TestHarnessScenario_RejectedFinishPublishesCanonicalError(t *testing.T) {
@@ -1313,12 +998,11 @@ func TestHarnessScenario_RejectedFinishPublishesCanonicalError(t *testing.T) {
 			require.NoError(t, err)
 			want := sessionstore.IntegrityErrorNotice(tt.error)
 			collector.waitMessage(sessionID, want)
-			drainScenarioClaims(t, tt.trace, newChainController(t, h))
 			collector.waitIdleAfter(sessionID, want)
 			assert.NotContains(
 				t, strings.Join(visibleEventMessages(collector.snapshot(), sessionID), "\n"), tt.response.Text,
 			)
-			assertHarnessTraceForScenario(t, tt.sourceTest, tt.trace, collector.snapshot(), sessionID)
+			assertHarnessTraceForScenario(t, h, tt.sourceTest, tt.trace, collector.snapshot(), sessionID)
 		})
 	}
 }
@@ -1394,9 +1078,7 @@ func TestScenario_RepeatedStartFailureCreatesOneOutput(t *testing.T) {
 	for range 100 {
 		h.mgr.reportSessionUnstarted(h.ctx, record.ID, errors.New("model removed-model not found in config"))
 	}
-	status, err := h.store.OutputQueueStatus(h.ctx, "test-manager")
-	require.NoError(t, err)
-	assert.Equal(t, 1, status.Pending)
+	assert.Len(t, h.outbox(record.ID), 1)
 	var notices int
 	for len(notifications) > 0 {
 		if (<-notifications).Type == sessionevent.NotifyMessage {
@@ -1446,9 +1128,7 @@ func TestScenario_StartFailureRestartKeepsOneReceipt(t *testing.T) {
 			return err == nil && record.Status == sessionstore.SessionStatusError && !h.mgr.HasActiveLoop(root.ID)
 		})
 		h.shutdown()
-		status, err := h.store.OutputQueueStatus(h.ctx, "test-manager")
-		require.NoError(t, err)
-		assert.Equal(t, 1, status.Pending)
+		assert.Len(t, h.outbox(root.ID), 1)
 		pending, err := h.store.PeekPending(h.ctx, root.ID)
 		require.NoError(t, err)
 		assert.Equal(t, input.Input.ID, pending.ID)
@@ -1683,17 +1363,6 @@ func TestScenario_StoppedRootAnswersStatusWithoutReactivating(t *testing.T) {
 	if idle != nil {
 		assert.Empty(t, idle.Reason, "read-only processing must not be mistaken for a lifecycle stop")
 	}
-}
-
-func countSilenceIntents(t *testing.T, h *harness, sessionID int64) int {
-	t.Helper()
-	var count int
-	for _, row := range h.outbox(sessionID) {
-		if strings.HasPrefix(row.SourceKey, "progress:silence:") {
-			count++
-		}
-	}
-	return count
 }
 
 func countUserCompletions(messages []llmwire.Message, marker string) int {

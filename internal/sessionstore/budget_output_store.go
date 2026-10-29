@@ -197,7 +197,7 @@ func fireBudgetTx(
 	key := fmt.Sprintf("budget:%d:checkpoint", generation)
 
 	commit, err := insertOutputTx(ctx, tx, OutputDraft{
-		SessionID: rootID, Type: OutputMessagePersistent,
+		SessionID: rootID, Type: OutputMessage,
 		Content: content, SourceKey: key, CreatedAt: now, ReleasesInput: true,
 	}, CommitLifecycle)
 	if err != nil {

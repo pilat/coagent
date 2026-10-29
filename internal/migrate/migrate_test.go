@@ -97,8 +97,8 @@ func TestMigrate_FreshDB(t *testing.T) {
 		"messages.retry_of_message_id must exist")
 	assert.True(t, columnExists(t, db, "sessions", "completion_check_candidate_id"),
 		"sessions.completion_check_candidate_id must exist")
-	assert.True(t, columnExists(t, db, "sessions", "manager_reply_pending"),
-		"sessions.manager_reply_pending must exist")
+	assert.False(t, columnExists(t, db, "sessions", "manager_reply_pending"),
+		"sessions.manager_reply_pending is retired")
 	assert.True(t, columnExists(t, db, "sessions", "empty_stop_streak"),
 		"sessions.empty_stop_streak must exist")
 }

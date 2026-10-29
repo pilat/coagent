@@ -49,7 +49,7 @@ func TestHarnessScenario_AttachmentBecomesDurableSyntheticMessage(t *testing.T) 
 		},
 	}
 
-	manager.handleAttachment(context.Background(), msg, attachmentOf(msg), harnessTopicID, sessionID, true)
+	manager.handleAttachment(context.Background(), msg, attachmentOf(msg), sessionID)
 
 	// The pre-manager harness queued its own initial-prompt input first; skip
 	// any pending inputs until the synthetic message surfaces.

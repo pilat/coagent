@@ -8,17 +8,15 @@ import (
 )
 
 const (
-	NotifyMessage            NotificationType = "message"
-	NotifyHeartbeat          NotificationType = "heartbeat"
-	NotifyStateChanged       NotificationType = "state_changed"
-	NotifyInputReceived      NotificationType = "input_received"
-	NotifySessionCreated     NotificationType = "session_created"
-	NotifySessionCleared     NotificationType = "session_cleared"
-	NotifyWaiting            NotificationType = "waiting"
-	NotifyModelWorking       NotificationType = "model_working"
-	NotifyContextChanged     NotificationType = "context_changed"
-	NotifyProgressChanged    NotificationType = "progress_change"
-	NotifyIterationPersisted NotificationType = "iteration_persisted"
+	NotifyMessage        NotificationType = "message"
+	NotifyHeartbeat      NotificationType = "heartbeat"
+	NotifyStateChanged   NotificationType = "state_changed"
+	NotifyInputReceived  NotificationType = "input_received"
+	NotifySessionCreated NotificationType = "session_created"
+	NotifySessionCleared NotificationType = "session_cleared"
+	NotifyWaiting        NotificationType = "waiting"
+	NotifyModelWorking   NotificationType = "model_working"
+	NotifyContextChanged NotificationType = "context_changed"
 )
 
 type WaitKind string
@@ -93,11 +91,8 @@ func (n Notification) variantContract() (map[string]bool, error) {
 	switch n.Type {
 	case NotifyMessage:
 		return fields("message"), n.require(n.Message != "", "message")
-	case NotifyHeartbeat, NotifyContextChanged, NotifyProgressChanged:
+	case NotifyHeartbeat, NotifyContextChanged:
 		return fields(), nil
-	case NotifyIterationPersisted:
-		_, valid := n.Attributes["iteration"].(int)
-		return fields("attributes"), n.require(valid && len(n.Attributes) == 1, "one integer iteration attribute")
 	case NotifyModelWorking:
 		_, valid := n.Attributes["working"].(bool)
 		return fields("attributes"), n.require(valid && len(n.Attributes) == 1, "one boolean working attribute")

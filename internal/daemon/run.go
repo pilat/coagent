@@ -64,7 +64,7 @@ func (s *svc) runOnce(ctx context.Context, rs *runner) runOutcome {
 		return runOutcome{}
 	}
 
-	idle := ownerlessSession(rec)
+	idle := true
 
 	sess, cleanup, err := s.openRunner(ctx, rs)
 	if err != nil {
@@ -91,16 +91,12 @@ func (s *svc) runOnce(ctx context.Context, rs *runner) runOutcome {
 		return runOutcome{publishIdle: idle}
 	}
 
-	if rec.ParentID == 0 {
-		s.progress.Wake()
-	}
-
 	rs.MarkRun()
 	s.publish(id, sessionevent.Notification{Type: sessionevent.NotifyStateChanged, Status: sessionevent.StateRunning})
 
 	result, runErr := sess.Run(ctx)
 	runErr = s.settleRunBudget(ctx, rec, result, runErr)
-	s.closeRunner(ctx, rs, rec, result, sess, cleanup)
+	s.closeRunner(ctx, rs, result, sess, cleanup)
 
 	if runErr == nil && result.Suspended {
 		runErr = s.applySuspendedConfig(ctx, id)
@@ -136,17 +132,12 @@ func (s *svc) openRunner(ctx context.Context, rs *runner) (*session.Session, fun
 	return sess, cleanup, nil
 }
 
-func (s *svc) closeRunner(ctx context.Context, rs *runner, rec *sessionstore.SessionRecord,
+func (s *svc) closeRunner(ctx context.Context, rs *runner,
 	result session.RunResult, sess *session.Session, cleanup func(),
 ) {
-	s.progress.ReconcileLatestReadiness(ctx, rs.sessionID)
 	s.runners.recordDefer(rs.sessionID, result.DeferNoticeAnnounced)
 	rs.SetService(nil)
 	s.updateLive(ctx, rs.sessionID)
-
-	if rec.ParentID == 0 {
-		s.progress.Wake()
-	}
 
 	sess.Close()
 	cleanup()
@@ -268,10 +259,9 @@ func (s *svc) finishRunnerDelivery(ctx context.Context, rs *runner, out runOutco
 	}
 
 	deliver := s.finalizeChildLocked(cleanup, id, errored)
-	s.progress.ReconcileLatestReadiness(cleanup, id)
 
 	if out.publishIdle && ctx.Err() == nil {
-		s.publishOwnerlessIdle(cleanup, id)
+		s.publishIdle(cleanup, id)
 	}
 
 	return deliver
@@ -361,21 +351,17 @@ func (s *svc) reportSessionUnstarted(ctx context.Context, sessionID int64, err e
 	})
 }
 
-func (s *svc) publishOwnerlessIdle(ctx context.Context, sessionID int64) {
+func (s *svc) publishIdle(ctx context.Context, sessionID int64) {
 	if s.HasActiveLoop(sessionID) {
 		return
 	}
 
-	record, err := s.store.GetSession(ctx, sessionID)
+	_, err := s.store.GetSession(ctx, sessionID)
 	if err != nil {
 		logger.Ctx(ctx).Named("daemon.runner").Warn(
-			"idle_owner_lookup_failed", zap.Int64("session_id", sessionID), zap.Error(err),
+			"idle_session_lookup_failed", zap.Int64("session_id", sessionID), zap.Error(err),
 		)
 
-		return
-	}
-
-	if !ownerlessSession(record) {
 		return
 	}
 

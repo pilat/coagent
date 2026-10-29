@@ -190,7 +190,7 @@ func SanitizeName(raw string) (string, error) {
 		return "", errors.New(`project name must not contain "/", "\", ":", or a NUL byte`)
 	}
 
-	if name == controllerapi.CoagentManagementProjectDir {
+	if name == controllerapi.AssistantProjectDir {
 		return "", errors.New("project name is reserved")
 	}
 

@@ -79,7 +79,7 @@ func TestHarnessScenario_OneShotAckRetrySurvivesDaemonRestartAndRendersOnce(t *t
 	assert.Equal(t, "scheduled work completed", lastAssistantTextDTO(second.messages(parentID)))
 	trace := append(events.snapshot(), retryEvents.snapshot()...)
 	// Restart announcements race runner drains; pin message and delivery order instead of activation timing noise.
-	assertHarnessTrace(t, "one_shot_ack_retry_restart.json", dropTransientEvents(trace), parentID)
+	assertHarnessTrace(t, second.harness, "one_shot_ack_retry_restart.json", dropTransientEvents(trace), parentID)
 }
 
 func TestHarnessScenario_SleepProjectsWakeAtAndUserInputInterruptsIt(t *testing.T) {
@@ -119,7 +119,7 @@ func TestHarnessScenario_SleepProjectsWakeAtAndUserInputInterruptsIt(t *testing.
 	schedules, err := h.schedules.ListSchedules(h.ctx, parentID)
 	require.NoError(t, err)
 	assert.Empty(t, schedules)
-	assertHarnessTrace(t, "sleep_interrupted_by_input.json", collector.snapshot(), parentID)
+	assertHarnessTrace(t, h, "sleep_interrupted_by_input.json", collector.snapshot(), parentID)
 }
 
 // The real executor, daemon sender and session must attach one exact scheduled result to its original tool call.
@@ -471,10 +471,8 @@ func TestHarnessScenario_ScheduledTurnChain(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, delivered)
 	collector.waitMessage(root, "Report ready.")
-	controller := newChainController(t, h)
-	drainScenarioClaims(t, "scheduled_turn_chain.json", controller)
 	collector.waitIdleAfter(root, "Report ready.")
-	assertHarnessTrace(t, "scheduled_turn_chain.json", collector.snapshot(), root)
+	assertHarnessTrace(t, h, "scheduled_turn_chain.json", collector.snapshot(), root)
 }
 
 func scheduleLastToolResultContent(msgs []llmwire.Message, toolName string) string {
@@ -857,7 +855,7 @@ func runStoppedRootScheduleScenario(t *testing.T, tc stoppedRootScheduleCase) {
 	assert.True(t, newEpisode.After(oldEpisode))
 	assertStoppedRootScheduleResult(t, h, rootID, tc)
 	assertStoppedRootScheduleDuplicate(t, h, rootID, deliveryID, tc, newEpisode)
-	assertHarnessTrace(t, tc.trace, successfulTrace, rootID)
+	assertHarnessTrace(t, h, tc.trace, successfulTrace, rootID)
 }
 
 func scheduledTurnRequested(tc stoppedRootScheduleCase, messages []llmwire.Message) bool {

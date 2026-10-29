@@ -356,6 +356,10 @@ func logConfigStatus(cfg *config.Config) {
 		zap.Int("sandbox_projects", len(cfg.UnifiedConfig.Sandbox.Projects)),
 	)
 
+	if keys := cfg.UnifiedConfig.RemovedManagerKeys; len(keys) > 0 {
+		log.Warn("removed manager configuration keys ignored", zap.Strings("keys", keys))
+	}
+
 	// coagent ships no built-in deny rule: an allow-only configuration is a
 	// legitimate operator choice, not a default. This warns so nobody assumes
 	// the boundary withholds credentials when it does not.
@@ -430,9 +434,7 @@ func runDaemon(
 
 	mgrRuntime := managers.NewRuntime(cfg, core.controller)
 
-	deliveryStatus, _ := core.controller.(controllerapi.OutputStatusFactory)
-
-	ctlSrv, err := prepareControlSocket(ctx, cfg, mgrRuntime, deliveryStatus)
+	ctlSrv, err := prepareControlSocket(ctx, cfg, mgrRuntime)
 	if err != nil {
 		return err
 	}
@@ -570,10 +572,6 @@ func startCore(
 	budgetSvc := budget.New(budget.PolicyStore(sessionStore))
 	mcpRegistry := mcpstore.NewStore(db)
 
-	if _, err := sessionStore.RecoverInterruptedOutputs(ctx); err != nil {
-		return nil, fmt.Errorf("recover interrupted manager output: %w", err)
-	}
-
 	scheduleSvc := schedule.NewService(scheduleStore, sessionStore)
 
 	buildInput := sessionbuild.BuildInput{
@@ -582,7 +580,7 @@ func startCore(
 	}
 
 	bus := sessionbus.New()
-	progressSvc := progressruntime.New(sessionStore, bus)
+	progressSvc := progressruntime.New(sessionStore)
 	daemonSvc := daemon.New(
 		ctx,
 		buildInput,
@@ -600,7 +598,7 @@ func startCore(
 	)
 
 	discovery := managerdiscovery.New(sessionStore, cfg, cache)
-	controller := managercontrol.New(daemonSvc, sessionStore, discovery, progressSvc, bus, cfg, cache)
+	controller := managercontrol.New(daemonSvc, sessionStore, discovery, bus, cfg, cache)
 
 	noticeSearchUnconfigured(ctx, cfg)
 
@@ -681,7 +679,6 @@ func prepareControlSocket(
 	ctx context.Context,
 	cfg *config.Config,
 	mgrs ctl.ManagerControl,
-	delivery controllerapi.OutputStatusFactory,
 ) (*ctl.Server, error) {
 	path, err := ctl.SocketPath()
 	if err != nil {
@@ -692,7 +689,6 @@ func prepareControlSocket(
 		Config:     cfg,
 		ConfigPath: config.DefaultUnifiedConfigFile,
 		Managers:   mgrs,
-		Delivery:   delivery,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("control socket: %w", err)

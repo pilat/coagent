@@ -2,6 +2,10 @@
   "source_test": "TestHarnessScenario_ProcessCompletionAtIdleTransition",
   "trace": [
     {
+      "type": "state_changed",
+      "status": "idle"
+    },
+    {
       "type": "session_created",
       "name": "<name>",
       "work_dir": "<workdir>",
@@ -22,17 +26,16 @@
       "status": "idle"
     }
   ],
-  "claims": [
+  "outputs": [
     {
-      "type": "message_replaceable",
-      "content": "idle-transition completion observed\n\n🤖 `fake-model` · iteration 2",
-      "attributes": {
-        "manager_id": "telegram:main",
-        "model_input_generation": 1
-      },
-      "source_key": "message:4:final",
-      "model_input_generation": 1,
-      "releases_input": true
+      "id": 1,
+      "session_id": 1,
+      "type": "message",
+      "content": "idle-transition completion observed",
+      "source_key": "message:4:final"
     }
-  ]
+  ],
+  "owners": {
+    "1": "telegram:main"
+  }
 }

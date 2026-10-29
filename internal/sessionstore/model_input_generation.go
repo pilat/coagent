@@ -3,7 +3,6 @@ package sessionstore
 import (
 	"context"
 	"fmt"
-	"time"
 )
 
 // advanceModelInputGeneration commits one model-input boundary inside the
@@ -47,41 +46,6 @@ func invalidateCompletionCheckTx(ctx context.Context, q execer, sessionID int64)
 
 	if _, err := result.RowsAffected(); err != nil {
 		return fmt.Errorf("invalidate completion check rows affected: %w", err)
-	}
-
-	return nil
-}
-
-// setManagerReplyPendingTx records the durable manager-reply obligation in the
-// same transaction that promotes a manager-owned model input.
-func setManagerReplyPendingTx(ctx context.Context, q execer, sessionID int64) error {
-	result, err := q.ExecContext(ctx, `
-		UPDATE sessions SET manager_reply_pending = TRUE
-		WHERE id = ? AND manager_reply_pending = FALSE`, sessionID)
-	if err != nil {
-		return fmt.Errorf("set manager reply pending for session %d: %w", sessionID, err)
-	}
-
-	if _, err := result.RowsAffected(); err != nil {
-		return fmt.Errorf("set manager reply pending rows affected: %w", err)
-	}
-
-	return nil
-}
-
-// clearManagerReplyPendingTx settles the durable manager-reply obligation in
-// the same transaction that commits a terminal lifecycle output superseding
-// the owed reply.
-func clearManagerReplyPendingTx(ctx context.Context, q execer, sessionID int64, now time.Time) error {
-	result, err := q.ExecContext(ctx, `
-		UPDATE sessions SET manager_reply_pending = FALSE, updated_at = ?
-		WHERE id = ? AND manager_reply_pending = TRUE`, now, sessionID)
-	if err != nil {
-		return fmt.Errorf("clear manager reply pending for session %d: %w", sessionID, err)
-	}
-
-	if _, err := result.RowsAffected(); err != nil {
-		return fmt.Errorf("clear manager reply pending rows affected: %w", err)
 	}
 
 	return nil

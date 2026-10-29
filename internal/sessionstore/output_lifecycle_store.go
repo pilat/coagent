@@ -192,12 +192,6 @@ func (s *Store) MarkSessionKilledWithOutput(
 		return nil, err
 	}
 
-	// A kill supersedes the owed manager reply on this session row even when
-	// a replacement inherits the manager surface.
-	if err := clearManagerReplyPendingTx(ctx, tx, sessionID, now); err != nil {
-		return nil, err
-	}
-
 	if err := cancelPendingInputTree(ctx, tx, sessionID, includeDescendants, now); err != nil {
 		return nil, err
 	}
@@ -232,10 +226,7 @@ func (s *Store) MarkSessionKilledWithOutput(
 	return &OutputCommit{OutputID: outputID, OwnerID: owner}, nil
 }
 
-// insertLifecycleAcknowledgement writes the command's visible start. /stop gets
-// a replaceable, non-releasing start row that a later terminal completion
-// transaction edits into the final result; other lifecycle commands keep the
-// persistent releasing acknowledgement.
+// /stop keeps input blocked until its separate completion row commits.
 func insertLifecycleAcknowledgement(
 	ctx context.Context,
 	tx *sql.Tx,
@@ -243,12 +234,11 @@ func insertLifecycleAcknowledgement(
 	command, content string,
 	now time.Time,
 ) (int64, error) {
-	kind := OutputMessagePersistent
+	kind := OutputMessage
 	releases := true
 
 	key := fmt.Sprintf("input:%d:%s:result", inputID, command)
 	if command == lifecycleStop {
-		kind = OutputMessageReplaceable
 		releases = false
 		key = fmt.Sprintf("input:%d:stop:started", inputID)
 	}

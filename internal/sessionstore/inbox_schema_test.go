@@ -108,7 +108,7 @@ func TestSessionInboxSchema_AcceptedIndex(t *testing.T) {
 	assert.Contains(t, indexSQL.String, "accepted_message_id IS NOT NULL")
 }
 
-func TestSessionOutboxSchema_ManagerHeadIndex(t *testing.T) {
+func TestSessionOutboxSchema_SessionTailIndex(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
@@ -116,14 +116,14 @@ func TestSessionOutboxSchema_ManagerHeadIndex(t *testing.T) {
 	record, err := store.CreateSession(ctx, projectID, "model", "", map[string]any{"manager_id": "telegram"})
 	require.NoError(t, err)
 	_, err = store.EnqueueOutput(ctx, sessionstore.OutputDraft{
-		SessionID: record.ID, Type: sessionstore.OutputMessagePersistent, Content: "queued",
+		SessionID: record.ID, Type: sessionstore.OutputMessage, Content: "logged",
 	})
 	require.NoError(t, err)
 
 	rows, err := db.QueryContext(ctx, `EXPLAIN QUERY PLAN
 		SELECT id FROM session_outbox
-		WHERE json_extract(attributes, '$.manager_id') = ? AND state <> 'delivered'
-		ORDER BY id LIMIT 1`, "telegram")
+		WHERE session_id = ? AND id > ?
+		ORDER BY id LIMIT 100`, record.ID, 0)
 	require.NoError(t, err)
 	defer rows.Close()
 
@@ -135,7 +135,11 @@ func TestSessionOutboxSchema_ManagerHeadIndex(t *testing.T) {
 		details = append(details, detail)
 	}
 	require.NoError(t, rows.Err())
-	assert.Contains(t, details, "SEARCH session_outbox USING INDEX idx_session_outbox_manager_head (<expr>=?)")
+	assert.Contains(
+		t,
+		details,
+		"SEARCH session_outbox USING COVERING INDEX idx_session_outbox_session_id (session_id=? AND id>?)",
+	)
 }
 
 func TestSubagentLinkSchema_ActivationSequenceStartsAtOne(t *testing.T) {

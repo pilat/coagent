@@ -281,7 +281,7 @@ func (s *Session) commitCheckpointLocked(
 		}
 		c.Outputs = []sessionstore.Output{
 			{
-				Type:          sessionstore.OutputMessagePersistent,
+				Type:          sessionstore.OutputMessage,
 				Content:       "✅ Context compacted",
 				Key:           fmt.Sprintf("input:%d:compact:succeeded", commandInput.ID),
 				MessageRef:    -1,
@@ -346,7 +346,7 @@ func (s *Session) compactionStep(ctx context.Context, r *runState) error {
 	c := s.newCommit()
 
 	c.Outputs = []sessionstore.Output{
-		{Type: sessionstore.OutputMessageReplaceable, Content: "🔄 Compacting context...", MessageRef: -1},
+		{Type: sessionstore.OutputMessage, Content: "🔄 Compacting context...", MessageRef: -1},
 	}
 	if command != nil {
 		c.Outputs[0].Key = fmt.Sprintf("input:%d:compact:started", command.ID)
@@ -391,7 +391,7 @@ func (s *Session) compactionStep(ctx context.Context, r *runState) error {
 		c := s.newCommit()
 
 		c.Outputs = []sessionstore.Output{
-			{Type: sessionstore.OutputMessagePersistent, Content: terminal, MessageRef: -1},
+			{Type: sessionstore.OutputMessage, Content: terminal, MessageRef: -1},
 		}
 		if ok {
 			c.Outputs[0].Key = fmt.Sprintf("compaction:%d:succeeded", s.compactionSummaryDBID)
@@ -414,7 +414,7 @@ func (s *Session) compactionStep(ctx context.Context, r *runState) error {
 			c := s.newCommit()
 
 			c.Outputs = []sessionstore.Output{
-				{Type: sessionstore.OutputMessagePersistent, Content: compactionNotConvergingNotice, MessageRef: -1},
+				{Type: sessionstore.OutputMessage, Content: compactionNotConvergingNotice, MessageRef: -1},
 			}
 			if _, err := s.commit(ctx, c); err != nil {
 				return err
@@ -444,7 +444,7 @@ func (s *Session) finishCompactionCommand(ctx context.Context, input PendingInpu
 	}
 	c.Outputs = []sessionstore.Output{
 		{
-			Type:          sessionstore.OutputMessagePersistent,
+			Type:          sessionstore.OutputMessage,
 			Content:       content,
 			Key:           fmt.Sprintf("input:%d:compact:%s", input.ID, phase),
 			MessageRef:    -1,

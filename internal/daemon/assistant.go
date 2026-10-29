@@ -22,11 +22,11 @@ type assistantHost struct {
 	s *svc
 }
 
-// EnsureAssistantRoot reuses the hidden management project without a management surface marker.
+// EnsureAssistantRoot preserves each manager's assistant identity in the shared hidden project.
 func (s *svc) EnsureAssistantRoot(ctx context.Context, owner string) (*sessionstore.SessionRecord, error) {
 	path := filepath.Join(
 		projectpath.ResolveRoot(s.build.Config.UnifiedConfig),
-		controllerapi.CoagentManagementProjectDir,
+		controllerapi.AssistantProjectDir,
 	)
 	if err := os.MkdirAll(path, 0o755); err != nil {
 		return nil, fmt.Errorf("create assistant project: %w", err)

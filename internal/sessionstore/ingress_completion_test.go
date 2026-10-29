@@ -28,18 +28,17 @@ func seedPendingCheck(t *testing.T, db *sql.DB, sessionID int64) {
 	require.NoError(t, err)
 }
 
-func readCompletionState(t *testing.T, db *sql.DB, sessionID int64) (sql.NullInt64, bool, int) {
+func readCompletionState(t *testing.T, db *sql.DB, sessionID int64) (sql.NullInt64, int) {
 	t.Helper()
 
 	var candidate sql.NullInt64
-	var replyPending bool
 	var streak int
 
 	require.NoError(t, db.QueryRowContext(context.Background(), `SELECT
-		completion_check_candidate_id, manager_reply_pending, empty_stop_streak
-		FROM sessions WHERE id = ?`, sessionID).Scan(&candidate, &replyPending, &streak))
+		completion_check_candidate_id, empty_stop_streak
+		FROM sessions WHERE id = ?`, sessionID).Scan(&candidate, &streak))
 
-	return candidate, replyPending, streak
+	return candidate, streak
 }
 
 func TestInputPromotion_ClearsCompletionState(t *testing.T) {
@@ -54,13 +53,12 @@ func TestInputPromotion_ClearsCompletionState(t *testing.T) {
 	_, err = acceptInput(ctx, store, input.ID, "fresh user input")
 	require.NoError(t, err)
 
-	candidate, replyPending, streak := readCompletionState(t, db, sessionID)
+	candidate, streak := readCompletionState(t, db, sessionID)
 	assert.False(t, candidate.Valid, "promotion clears the stale candidate")
 	assert.Zero(t, streak, "promotion resets the empty streak")
-	assert.True(t, replyPending, "a manager-owned promotion opens the reply obligation")
 }
 
-func TestInputPromotion_ReadOnlyReceiptOpensNoReplyObligation(t *testing.T) {
+func TestInputPromotion_CommandsClearCompletionState(t *testing.T) {
 	ctx := context.Background()
 	store, db, projectID := newTestStore(t)
 	sessionID := seedCompletionSession(t, store, db, projectID)
@@ -73,8 +71,8 @@ func TestInputPromotion_ReadOnlyReceiptOpensNoReplyObligation(t *testing.T) {
 		_, err = acceptInput(ctx, store, input.ID, content)
 		require.NoError(t, err)
 
-		_, replyPending, streak := readCompletionState(t, db, sessionID)
-		assert.False(t, replyPending, "read-only %q opens no reply obligation", content)
+		candidate, streak := readCompletionState(t, db, sessionID)
+		assert.False(t, candidate.Valid, "command %q clears the stale candidate", content)
 		assert.Zero(t, streak, "read-only %q still resets the empty streak", content)
 
 		_, err = db.ExecContext(ctx, `UPDATE sessions
@@ -83,7 +81,7 @@ func TestInputPromotion_ReadOnlyReceiptOpensNoReplyObligation(t *testing.T) {
 	}
 }
 
-func TestInputAgentPromotion_ClearsCompletionWithoutReply(t *testing.T) {
+func TestInputAgentPromotion_ClearsCompletionState(t *testing.T) {
 	ctx := context.Background()
 	store, db, projectID := newTestStore(t)
 	sessionID := seedCompletionSession(t, store, db, projectID)
@@ -95,10 +93,9 @@ func TestInputAgentPromotion_ClearsCompletionWithoutReply(t *testing.T) {
 	_, err = acceptInput(ctx, store, input.ID, "agent follow-up")
 	require.NoError(t, err)
 
-	candidate, replyPending, streak := readCompletionState(t, db, sessionID)
+	candidate, streak := readCompletionState(t, db, sessionID)
 	assert.False(t, candidate.Valid)
 	assert.Zero(t, streak)
-	assert.False(t, replyPending, "a non-manager ingress never sets the reply obligation")
 }
 
 func TestDeliveryScheduledTurn_ClearsCompletionState(t *testing.T) {
@@ -114,7 +111,7 @@ func TestDeliveryScheduledTurn_ClearsCompletionState(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, inserted)
 
-	candidate, _, streak := readCompletionState(t, db, sessionID)
+	candidate, streak := readCompletionState(t, db, sessionID)
 	assert.False(t, candidate.Valid)
 	assert.Zero(t, streak)
 }
@@ -130,7 +127,7 @@ func TestDeliveryDirectToolResult_ClearsCompletionState(t *testing.T) {
 	}, nil)
 	require.NoError(t, err)
 
-	candidate, _, streak := readCompletionState(t, db, sessionID)
+	candidate, streak := readCompletionState(t, db, sessionID)
 	assert.False(t, candidate.Valid)
 	assert.Zero(t, streak)
 }
@@ -152,7 +149,7 @@ func TestDeliveryReplay_KeepsNewerCompletionState(t *testing.T) {
 	_, _, err = answerTool(ctx, store, sessionID, result, nil)
 	require.NoError(t, err)
 
-	candidate, _, streak := readCompletionState(t, db, sessionID)
+	candidate, streak := readCompletionState(t, db, sessionID)
 	assert.True(t, candidate.Valid, "an idempotent replay must not clear a newer check")
 	assert.Equal(t, 2, streak)
 }
@@ -168,7 +165,7 @@ func TestResetContext_ClearsCompletionState(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, inserted)
 
-	candidate, _, streak := readCompletionState(t, db, sessionID)
+	candidate, streak := readCompletionState(t, db, sessionID)
 	assert.False(t, candidate.Valid)
 	assert.Zero(t, streak)
 }
@@ -191,7 +188,7 @@ func TestDeliverCompletion_ClearsCompletionState(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, won)
 
-	candidate, _, streak := readCompletionState(t, db, sessionID)
+	candidate, streak := readCompletionState(t, db, sessionID)
 	assert.False(t, candidate.Valid)
 	assert.Zero(t, streak)
 }

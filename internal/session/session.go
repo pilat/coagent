@@ -48,7 +48,6 @@ type Input struct {
 	BackgroundSnapshot       string
 	CompactionDeferAnnounced bool
 	Head                     func(context.Context) (string, error)
-	OmitFinalFooter          bool
 }
 
 // Session executes one activation over an assembled tool and model stack.
@@ -81,7 +80,6 @@ type Session struct {
 	preserveStopped bool
 	budgetFired     bool
 	head            func(context.Context) (string, error)
-	omitFinalFooter bool
 
 	// Loop execution state
 	ms           *messageStore
@@ -164,7 +162,6 @@ func New(ctx context.Context, in Input) (*Session, error) {
 		compactionDeferAnnounced: in.CompactionDeferAnnounced,
 		iterationOffset:          r.Iteration,
 		head:                     in.Head,
-		omitFinalFooter:          in.OmitFinalFooter,
 	}
 	if s.rootID == 0 {
 		s.rootID = s.id
@@ -178,9 +175,8 @@ func New(ctx context.Context, in Input) (*Session, error) {
 	s.installPersistedBaseline(r.ContextBaseline())
 	s.seedResumeCompletion(
 		&sessionstore.CompletionCheckState{
-			CandidateID:         r.CompletionCheckCandidateID,
-			ManagerReplyPending: r.ManagerReplyPending,
-			EmptyStopStreak:     r.EmptyStopStreak,
+			CandidateID:     r.CompletionCheckCandidateID,
+			EmptyStopStreak: r.EmptyStopStreak,
 		},
 	)
 
@@ -437,7 +433,7 @@ func (s *Session) renderSessionHelp() string {
 		"`/compact [focus]` — compact the context",
 		"`/schedules` — list schedules",
 		"`/budget <request>` — arm, replace, inspect, or clear a one-shot cost/wall-time checkpoint",
-		"`/gwt <name>` — fork into a worktree (Telegram session topics only)",
+		"`/gwt <name>` — fork into a worktree (work sessions only)",
 	}
 	if s.loader == nil {
 		return strings.Join(lines, "\n")

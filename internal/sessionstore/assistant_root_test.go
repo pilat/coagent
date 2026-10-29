@@ -3,13 +3,12 @@ package sessionstore
 import (
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-func TestAssistantRootConcurrentEnsureAndProgress(t *testing.T) {
+func TestAssistantRootConcurrentEnsure(t *testing.T) {
 	t.Parallel()
 	s, db, project := newTestStore(t)
 	ctx := t.Context()
@@ -36,16 +35,6 @@ func TestAssistantRootConcurrentEnsureAndProgress(t *testing.T) {
 		db.QueryRowContext(ctx, `SELECT count(*) FROM session_outbox WHERE type = 'session_opened'`).Scan(&opened),
 	)
 	assert.Equal(t, 1, opened)
-	_, err := db.ExecContext(
-		ctx,
-		`UPDATE sessions SET status = 'active', episode_started_at = ? WHERE id = ?`,
-		time.Now().UTC(),
-		ids[0],
-	)
-	require.NoError(t, err)
-	roots, err := s.ListAutonomousProgressRoots(ctx)
-	require.NoError(t, err)
-	assert.NotContains(t, roots, ids[0])
 }
 
 func TestAssistantRootInitializesMissingModelAndPreservesSelection(t *testing.T) {

@@ -350,9 +350,8 @@ func TestManager_ClearWhileRunning(t *testing.T) {
 	})
 }
 
-// A transient store failure while loading the session must not classify an
-// owned session as ownerless: the idle publication is skipped, not faked.
-func TestStopOnStoreFailureDoesNotPublishIdle(t *testing.T) {
+// A failed intermediate projection cannot erase the later committed stop result.
+func TestStopOnStoreReadFailureStillPublishesCommittedIdle(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	h := newHarness(t, harnessOptions{respond: trivialRespond})
@@ -371,10 +370,18 @@ func TestStopOnStoreFailureDoesNotPublishIdle(t *testing.T) {
 	require.NoError(t, mgr.sendToSession(ctx, record.ID, "/stop"),
 		"the stop itself must succeed: the cleanup ran on the real store")
 
-	// The unconditional stop announcement is legitimate; the idle publication
-	// must be the one thing a failed ownership lookup suppresses.
 	stopping := requireManagerNotification(t, notifications)
 	require.Equal(t, sessionevent.NotifyMessage, stopping.Notification.Type)
+	idle := requireManagerNotification(t, notifications)
+	assert.Equal(t, record.ID, idle.SessionID)
+	assert.Equal(t, sessionevent.NotifyStateChanged, idle.Notification.Type)
+	assert.Equal(t, controllerapi.StateIdle, idle.Notification.Status)
+	assert.Equal(t, "stopped", idle.Notification.Reason)
+	assert.False(t, failing.pending.Load(), "the store failure must actually occur")
+	assert.Equal(t, sessionstore.SessionStatusStopped, h.session(record.ID).Status)
+	outputs := h.outbox(record.ID)
+	require.Len(t, outputs, 2)
+	assert.Contains(t, outputs[1].SourceKey, ":stop:completed")
 	requireNoManagerNotification(t, notifications)
 }
 

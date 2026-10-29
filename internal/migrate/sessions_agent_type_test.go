@@ -87,8 +87,7 @@ func TestMigrate_SessionsAgentTypeRebuildPreservesExistingDB(t *testing.T) {
 		// pending candidate, no reply obligation, and a zero empty streak.
 		assert.False(t, rowsAfter[i]["completion_check_candidate_id"].Valid)
 		delete(rowsAfter[i], "completion_check_candidate_id")
-		assert.Equal(t, "0", rowsAfter[i]["manager_reply_pending"].String)
-		delete(rowsAfter[i], "manager_reply_pending")
+		assert.NotContains(t, rowsAfter[i], "manager_reply_pending")
 		assert.Equal(t, "0", rowsAfter[i]["empty_stop_streak"].String)
 		delete(rowsAfter[i], "empty_stop_streak")
 		// 00043 adds the confirmed-answer pointer; legacy rows point nowhere.
@@ -131,12 +130,11 @@ func TestMigrate_SessionsAgentTypeRebuildPreservesExistingDB(t *testing.T) {
 	}
 
 	indexesAfter := dumpRows(t, db, sessionIndexes)
-	require.Len(t, indexesAfter, 4,
-		"the operator contract adds the root history index, 00041 the management index and 00047 the assistant index")
-	assert.Equal(t, indexesBefore[0], indexesAfter[2], "the existing sessions index is recreated verbatim")
+	require.Len(t, indexesAfter, 3,
+		"root history and assistant indexes survive; 00052 retires the management index")
+	assert.Equal(t, indexesBefore[0], indexesAfter[1], "the existing sessions index is recreated verbatim")
 	assert.Equal(t, "idx_sessions_assistant_root", indexesAfter[0]["name"].String)
-	assert.Equal(t, "idx_sessions_management_root", indexesAfter[1]["name"].String)
-	assert.Equal(t, "idx_sessions_root_history", indexesAfter[3]["name"].String)
+	assert.Equal(t, "idx_sessions_root_history", indexesAfter[2]["name"].String)
 
 	assert.Empty(t, dumpRows(t, db, `PRAGMA foreign_key_check`), "no dangling references after the rebuild")
 

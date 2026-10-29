@@ -15,29 +15,23 @@ import (
 func (m *Manager) handleVoiceMessage(
 	ctx context.Context,
 	msg *telegramMessage,
-	threadID, sessionID int64,
-	hasSession bool,
+	sessionID int64,
 ) {
-	if !hasSession {
-		return
-	}
-
 	if msg.Voice == nil {
 		return
 	}
 
-	_ = m.sendTyping(ctx, threadID)
+	_ = m.sendTyping(ctx)
 
 	transcript, err := m.transcribeVoice(ctx, msg.Voice.FileID)
 	if err != nil {
-		_, _ = m.sendMessage(ctx, "Voice transcription failed: "+err.Error(), nil, threadID)
+		_, _ = m.sendMessage(ctx, "Voice transcription failed: "+err.Error())
 		return
 	}
 
-	_ = m.deleteMessage(ctx, msg.MessageID)
-	_, _ = m.sendRawHTML(ctx, "🗣 <i>"+escapeHTML(transcript)+"</i>", nil, threadID)
+	_, _ = m.sendRawHTML(ctx, "🗣 <i>"+escapeHTML(transcript)+"</i>")
 
-	m.handleSessionMessage(ctx, sessionID, transcript, threadID)
+	m.handleSessionMessage(ctx, sessionID, transcript)
 }
 
 func (m *Manager) transcribeVoice(ctx context.Context, fileID string) (string, error) {
