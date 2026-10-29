@@ -52,7 +52,6 @@ type runState struct {
 	terminalState      bool
 	handledControl     bool
 	boundaryAgain      bool
-	directReply        bool
 	backgroundInserted bool
 	compactionFailures int
 	autoCompactionOff  bool
@@ -273,15 +272,6 @@ func (s *Session) commit(ctx context.Context, c sessionstore.Commit) (*sessionst
 		s.resetContextBaseline()
 	}
 
-	if c.ObserveBudget && c.State.Iteration != nil {
-		s.emit(
-			sessionevent.Notification{
-				Type:       sessionevent.NotifyIterationPersisted,
-				Attributes: map[string]any{"iteration": *c.State.Iteration},
-			},
-		)
-	}
-
 	s.emit(sessionevent.Notification{Type: sessionevent.NotifyContextChanged})
 	s.emitCommitted(s.liveOutputs(c, result), result.BudgetFired)
 
@@ -373,7 +363,7 @@ func (s *Session) expireActivation(ctx context.Context, suspended bool) error {
 
 	c.Outputs = []sessionstore.Output{
 		{
-			Type:          sessionstore.OutputMessagePersistent,
+			Type:          sessionstore.OutputMessage,
 			Content:       grant.Command + " was not changed",
 			Key:           fmt.Sprintf("input:%d:activation:expired", grant.InputID),
 			MessageRef:    -1,
@@ -588,7 +578,7 @@ func (s *Session) commitRunState(ctx context.Context, r *runState, runErr error)
 		}
 
 		c.Outputs = []sessionstore.Output{{
-			Type: sessionstore.OutputMessagePersistent, Content: r.result.ErrorNotice,
+			Type: sessionstore.OutputMessage, Content: r.result.ErrorNotice,
 			Key: fmt.Sprintf("run:%d:error", iteration), MessageRef: -1, ReleasesInput: true,
 		}}
 	}

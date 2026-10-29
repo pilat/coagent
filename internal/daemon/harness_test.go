@@ -303,7 +303,7 @@ func newTestController(
 		outputs, _ = svc.store.(*sessionstore.Store)
 	}
 	return managercontrol.New(
-		svc, outputs, managerdiscovery.New(outputs, cfg, cache), svc.progress, svc.bus, cfg, cache,
+		svc, outputs, managerdiscovery.New(outputs, cfg, cache), svc.bus, cfg, cache,
 	)
 }
 
@@ -812,20 +812,8 @@ func toolResultForCallID(msgs []llmwire.Message, callID string) *llmwire.Message
 	return nil
 }
 
-// Output-chain claims must come from a controller bound to the owning manager.
+// Shared trace ownership matches the manager used by output-chain scenarios.
 const scenarioManagerID = "telegram:main"
-
-func newChainController(t *testing.T, h *harness) controllerapi.OutputQueueController {
-	t.Helper()
-	queue, ok := newTestController(h.mgr, &config.Config{}, nil, nil).
-		ForManager(scenarioManagerID).(controllerapi.OutputQueueController)
-	require.True(t, ok)
-	require.NoError(t, queue.BindOutputDelivery(t.Context(), controllerapi.OutputBindingData{
-		Driver:     "telegram",
-		Attributes: map[string]any{"bot_user_id": int64(1), "chat_id": int64(2), "topology": "group"},
-	}))
-	return queue
-}
 
 func installScenarioProcessService(t *testing.T, h *harness) backgroundprocess.Service {
 	t.Helper()

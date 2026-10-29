@@ -231,8 +231,6 @@ func (s *svc) createChildSession(ctx context.Context, req subagent.SpawnRequest)
 		return 0, "", 0, fmt.Errorf("create subagent with link: %w", err)
 	}
 
-	s.publishSubagentProgress(ctx, childID)
-
 	return childID, workDir, parentRec.ProjectID, nil
 }
 
@@ -240,8 +238,6 @@ func (s *svc) resumeChildWithPendingInputLocked(ctx context.Context, childID int
 	if err := s.links.Resume(ctx, childID); err != nil {
 		return fmt.Errorf("resume subagent link: %w", err)
 	}
-
-	s.publishSubagentProgress(ctx, childID)
 
 	return s.startLocked(ctx, childID)
 }
@@ -315,8 +311,6 @@ func (s *svc) finalizeChildLocked(ctx context.Context, childID int64, errored bo
 		return nil
 	}
 
-	s.publishSubagentProgress(ctx, childID)
-
 	return func() { s.deliverCompletionToParent(ctx, *link) }
 }
 
@@ -331,8 +325,6 @@ func (s *svc) failUnresumableChildLocked(ctx context.Context, childID int64) err
 	if link == nil {
 		return nil
 	}
-
-	s.publishSubagentProgress(ctx, childID)
 
 	// Delivery re-locks the tree; the restart sweep redelivers if this goroutine never runs.
 	failed := *link
@@ -361,8 +353,6 @@ func (s *svc) rearm(ctx context.Context, childID int64) error {
 	if !rearmed {
 		return nil
 	}
-
-	s.publishSubagentProgress(ctx, childID)
 
 	if err := s.startLocked(ctx, childID); err != nil {
 		return fmt.Errorf("start rearmed child %d: %w", childID, err)
@@ -467,12 +457,12 @@ func (s *svc) enqueueChildFailureOutput(ctx context.Context, parentID, childID i
 
 	_, err = outputs.EnqueueOutput(ctx, sessionstore.OutputDraft{
 		SessionID:  parentID,
-		Type:       sessionstore.OutputMessagePersistent,
+		Type:       sessionstore.OutputMessage,
 		Content:    message,
 		Attributes: attributes,
 		SourceKey:  fmt.Sprintf("child:%d:%d:outcome", childID, link.ActivationSeq),
 		Fingerprint: sessionstore.OutputFingerprint(
-			sessionstore.OutputMessagePersistent,
+			sessionstore.OutputMessage,
 			message,
 			parentID,
 			attributes,

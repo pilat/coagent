@@ -1,6 +1,6 @@
 # ADR-0060: Telegram service topics own daemon management
 
-- **Status:** Accepted
+- **Status:** Superseded by [ADR-0076](0076-flat-chat-with-a-focus.md): the service topic and the management session are removed; its status-only control socket remains
 - **Date:** 2026-09-14
 
 ## Context

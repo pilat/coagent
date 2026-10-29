@@ -1,4 +1,3 @@
-// nosemgrep: semgrep.coagent-no-preamble-before-package
 package sessionstore
 
 import (
@@ -13,31 +12,22 @@ import (
 )
 
 type ProgressFacts struct {
-	RootID           int64
-	Model            string
-	Iteration        int
-	Status           SessionStatus
-	TodoItems        json.RawMessage
-	PromptTokens     int
-	CompletionTokens int
-	CostUSD          float64
-	ChildCount       int
-	ChildIterations  int
-	// ModelInputGeneration and ModelInputBoundary snapshot the causal chain a
-	// progress card belongs to; the note query only reads rows after the
-	// boundary so an older turn's narration can never serve a newer one.
-	ModelInputGeneration int64
-	ModelInputBoundary   int64
-	LatestModelProgress  string
-	EpisodeStartedAt     *time.Time
-	LastSemanticOutputAt *time.Time
-	MessageWatermark     int64
-	OutboxWatermark      int64
-	Budget               *budget.Record
-	Waiting              []ProgressWait
-	ActiveSubagents      int
-	BackgroundSubagents  int
-	BackgroundProcesses  []ProcessProgress
+	RootID              int64
+	Model               string
+	Iteration           int
+	Status              SessionStatus
+	TodoItems           json.RawMessage
+	PromptTokens        int
+	CompletionTokens    int
+	CostUSD             float64
+	ChildCount          int
+	ChildIterations     int
+	EpisodeStartedAt    *time.Time
+	Budget              *budget.Record
+	Waiting             []ProgressWait
+	ActiveSubagents     int
+	BackgroundSubagents int
+	BackgroundProcesses []ProcessProgress
 }
 
 // ProcessProgress projects one live background Bash process into status
@@ -59,13 +49,13 @@ type ProgressWait struct {
 }
 
 func (s *Store) CaptureProgress(ctx context.Context, rootID int64) (*ProgressFacts, error) {
-	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, fmt.Errorf("begin progress capture: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	facts, err := CaptureProgressTx(ctx, tx, rootID)
+	facts, err := captureProgressTx(ctx, tx, rootID)
 	if err != nil {
 		return nil, err
 	}
@@ -77,10 +67,7 @@ func (s *Store) CaptureProgress(ctx context.Context, rootID int64) (*ProgressFac
 	return facts, nil
 }
 
-// CaptureProgressTx projects post-disposition progress facts through the
-// caller's open transaction, so a response disposition can render its final
-// output from the exact state it commits. Read-only: performs no writes.
-func CaptureProgressTx(ctx context.Context, tx *sql.Tx, rootID int64) (*ProgressFacts, error) {
+func captureProgressTx(ctx context.Context, tx *sql.Tx, rootID int64) (*ProgressFacts, error) {
 	facts := &ProgressFacts{RootID: rootID}
 	if err := captureProgressRoot(ctx, tx, facts); err != nil {
 		return nil, err
@@ -89,44 +76,16 @@ func CaptureProgressTx(ctx context.Context, tx *sql.Tx, rootID int64) (*Progress
 	if err := tx.QueryRowContext(ctx, `SELECT
 		COALESCE(SUM(json_extract(messages.usage, '$.promptTokens')), 0),
 		COALESCE(SUM(json_extract(messages.usage, '$.completionTokens')), 0),
-		COALESCE(SUM(messages.cost_usd), 0),
-		COALESCE(MAX(messages.id), 0)
+		COALESCE(SUM(messages.cost_usd), 0)
 		FROM sessions LEFT JOIN messages ON messages.session_id = sessions.id
 		WHERE sessions.id = ? OR sessions.root_id = ?`, rootID, rootID).
-		Scan(&facts.PromptTokens, &facts.CompletionTokens, &facts.CostUSD, &facts.MessageWatermark); err != nil {
+		Scan(&facts.PromptTokens, &facts.CompletionTokens, &facts.CostUSD); err != nil {
 		return nil, fmt.Errorf("load progress tree usage: %w", err)
 	}
 
 	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*), COALESCE(SUM(iteration), 0)
 		FROM sessions WHERE root_id = ?`, rootID).Scan(&facts.ChildCount, &facts.ChildIterations); err != nil {
 		return nil, fmt.Errorf("load progress child stats: %w", err)
-	}
-
-	// The current-generation note is the newest unpublished assistant narration
-	// after the generation boundary. A pending completion-check candidate
-	// outranks it: the model's deliberate no-tool stop is its newest statement,
-	// and the Working card must carry it while the confirm turn is pending. A
-	// direct reply already has its own durable output and must not be
-	// duplicated inside the replaceable progress card.
-	if facts.ModelInputBoundary > 0 {
-		var latest sql.NullString
-
-		scanErr := tx.QueryRowContext(ctx, `SELECT messages.content FROM messages
-			JOIN sessions ON sessions.completion_check_candidate_id = messages.id
-			WHERE messages.session_id = ? AND messages.role = 'assistant'
-			AND messages.id > ? AND TRIM(COALESCE(messages.content, '')) <> ''
-			AND COALESCE(json_array_length(messages.tool_calls), 0) = 0`,
-			rootID, facts.ModelInputBoundary).Scan(&latest)
-		switch {
-		case scanErr == nil:
-			facts.LatestModelProgress = latest.String
-		case errors.Is(scanErr, sql.ErrNoRows):
-			if err := captureProgressNarrationNote(ctx, tx, facts); err != nil {
-				return nil, err
-			}
-		default:
-			return nil, fmt.Errorf("load pending candidate note: %w", scanErr)
-		}
 	}
 
 	if err := captureProgressTimes(ctx, tx, facts); err != nil {
@@ -151,82 +110,12 @@ func CaptureProgressTx(ctx context.Context, tx *sql.Tx, rootID int64) (*Progress
 	return facts, nil
 }
 
-// OutboxWatermark is the light single-fact re-read producers use to detect a
-// semantic output committed after their snapshot capture.
-func (s *Store) OutboxWatermark(ctx context.Context, sessionID int64) (int64, error) {
-	var watermark int64
-	if err := s.db.QueryRowContext(ctx, `SELECT COALESCE(MAX(id), 0) FROM session_outbox
-		WHERE session_id = ?`, sessionID).Scan(&watermark); err != nil {
-		return 0, fmt.Errorf("load outbox watermark: %w", err)
-	}
-
-	return watermark, nil
-}
-
-func (s *Store) ListAutonomousProgressRoots(ctx context.Context) ([]int64, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT DISTINCT root.id FROM sessions root
-		LEFT JOIN sessions child ON child.root_id = root.id
-		WHERE root.parent_id = 0 AND root.killed_at IS NULL
-			AND root.agent_type <> '`+AssistantAgentType+`'
-			AND json_type(root.attributes, '$.manager_id') = 'text'
-			AND json_extract(root.attributes, '$.manager_id') <> ''
-			AND root.episode_started_at IS NOT NULL
-			AND root.status NOT IN ('stopping', 'stopped', 'terminating', 'killed')
-			AND (root.status IN ('active', 'suspended') OR child.status IN ('active', 'suspended'))
-		ORDER BY root.id`)
-	if err != nil {
-		return nil, fmt.Errorf("list progress roots: %w", err)
-	}
-	defer rows.Close()
-	var ids []int64
-
-	for rows.Next() {
-		var id int64
-		if err := rows.Scan(&id); err != nil {
-			return nil, fmt.Errorf("scan autonomous progress root: %w", err)
-		}
-
-		ids = append(ids, id)
-	}
-
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate autonomous progress roots: %w", err)
-	}
-
-	return ids, nil
-}
-
-// captureProgressNarrationNote is the legacy note path: the newest unpublished
-// tool-bearing assistant narration after the generation boundary.
-func captureProgressNarrationNote(ctx context.Context, tx *sql.Tx, facts *ProgressFacts) error {
-	var latest sql.NullString
-
-	scanErr := tx.QueryRowContext(ctx, `SELECT messages.content FROM messages
-		WHERE messages.session_id = ? AND messages.role = 'assistant' AND messages.id > ?
-		AND messages.compacted_at IS NULL AND messages.rejected_reason IS NULL
-		AND TRIM(COALESCE(messages.content, '')) <> ''
-		AND json_type(messages.tool_calls) = 'array' AND json_array_length(messages.tool_calls) > 0
-		AND NOT EXISTS (SELECT 1 FROM session_outbox WHERE session_outbox.session_id = messages.session_id
-			AND session_outbox.source_key = 'message:' || messages.id || ':reply')
-		ORDER BY messages.id DESC LIMIT 1`, facts.RootID, facts.ModelInputBoundary).Scan(&latest)
-	if scanErr != nil && !errors.Is(scanErr, sql.ErrNoRows) {
-		return fmt.Errorf("load latest model progress: %w", scanErr)
-	}
-
-	facts.LatestModelProgress = latest.String
-
-	return nil
-}
-
 func captureProgressRoot(ctx context.Context, tx *sql.Tx, facts *ProgressFacts) error {
 	var todos string
-	var boundary sql.NullInt64
 
-	err := tx.QueryRowContext(ctx, `SELECT model, iteration, status, todo_items,
-		model_input_generation, model_input_boundary
+	err := tx.QueryRowContext(ctx, `SELECT model, iteration, status, todo_items
 		FROM sessions WHERE id = ? AND parent_id = 0`, facts.RootID).
-		Scan(&facts.Model, &facts.Iteration, &facts.Status, &todos,
-			&facts.ModelInputGeneration, &boundary)
+		Scan(&facts.Model, &facts.Iteration, &facts.Status, &todos)
 	if errors.Is(err, sql.ErrNoRows) {
 		return ErrOutputNotRoot
 	}
@@ -236,7 +125,6 @@ func captureProgressRoot(ctx context.Context, tx *sql.Tx, facts *ProgressFacts) 
 	}
 
 	facts.TodoItems = json.RawMessage(todos)
-	facts.ModelInputBoundary = boundary.Int64
 
 	return nil
 }
@@ -316,7 +204,6 @@ func captureProgressSleeps(ctx context.Context, tx *sql.Tx, facts *ProgressFacts
 
 func captureProgressTimes(ctx context.Context, tx *sql.Tx, facts *ProgressFacts) error {
 	var episode sql.NullTime
-	var semantic time.Time
 
 	err := tx.QueryRowContext(ctx, `SELECT episode_started_at
 		FROM sessions WHERE id = ?`, facts.RootID).Scan(&episode)
@@ -326,20 +213,6 @@ func captureProgressTimes(ctx context.Context, tx *sql.Tx, facts *ProgressFacts)
 
 	if episode.Valid {
 		facts.EpisodeStartedAt = &episode.Time
-	}
-
-	err = tx.QueryRowContext(ctx, `SELECT created_at FROM session_outbox WHERE session_id = ?
-		AND type IN ('message_replaceable', 'message_persistent') ORDER BY id DESC LIMIT 1`, facts.RootID).
-		Scan(&semantic)
-	if err == nil {
-		facts.LastSemanticOutputAt = &semantic
-	} else if !errors.Is(err, sql.ErrNoRows) {
-		return fmt.Errorf("load last semantic output: %w", err)
-	}
-
-	if err := tx.QueryRowContext(ctx, `SELECT COALESCE(MAX(id), 0) FROM session_outbox
-		WHERE session_id = ?`, facts.RootID).Scan(&facts.OutboxWatermark); err != nil {
-		return fmt.Errorf("load progress outbox watermark: %w", err)
 	}
 
 	return nil

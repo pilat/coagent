@@ -1,6 +1,6 @@
 # ADR-0035: Model-input generations delimit replaceable output
 
-- **Status:** Accepted
+- **Status:** Superseded by [ADR-0076](0076-flat-chat-with-a-focus.md)
 - **Date:** 2026-08-29
 
 ## Context

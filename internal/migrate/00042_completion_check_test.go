@@ -34,7 +34,7 @@ func TestMigrate_42_CompletionCheckDefaultsLegacyRows(t *testing.T) {
 		VALUES (1, 1, 'm', 'build')`)
 	require.NoError(t, err)
 
-	_, err = provider.Up(ctx)
+	_, err = provider.UpTo(ctx, 42)
 	require.NoError(t, err)
 
 	assert.True(t, columnExists(t, db, "sessions", "completion_check_candidate_id"),
@@ -81,19 +81,17 @@ func TestMigrate_42_CompletionCheckRoundTripsOnFreshDB(t *testing.T) {
 	require.NoError(t, err)
 
 	_, err = db.ExecContext(ctx, `UPDATE sessions
-		SET completion_check_candidate_id = 1, manager_reply_pending = 1, empty_stop_streak = 2
+		SET completion_check_candidate_id = 1, empty_stop_streak = 2
 		WHERE id = 1`)
 	require.NoError(t, err)
 
 	var candidate sql.NullInt64
-	var replyPending bool
 	var streak int
 	require.NoError(t, db.QueryRowContext(ctx, `SELECT completion_check_candidate_id,
-		manager_reply_pending, empty_stop_streak FROM sessions WHERE id = 1`).
-		Scan(&candidate, &replyPending, &streak))
+		empty_stop_streak FROM sessions WHERE id = 1`).
+		Scan(&candidate, &streak))
 	require.True(t, candidate.Valid)
 	assert.Equal(t, int64(1), candidate.Int64)
-	assert.True(t, replyPending)
 	assert.Equal(t, 2, streak)
 
 	_, err = db.ExecContext(ctx, `UPDATE sessions SET empty_stop_streak = -1 WHERE id = 1`)

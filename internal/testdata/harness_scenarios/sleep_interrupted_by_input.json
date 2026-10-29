@@ -37,5 +37,6 @@
       "type": "state_changed",
       "status": "idle"
     }
-  ]
+  ],
+  "outputs": []
 }

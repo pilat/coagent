@@ -256,7 +256,7 @@ func (s *svc) handleStatusInput(ctx context.Context, input *sessionstore.InboxIn
 			{InputID: input.ID, State: sessionstore.InputStateHandled, Reason: "status command", LinkRef: -1},
 		},
 		Outputs: []sessionstore.Output{
-			{Type: sessionstore.OutputMessagePersistent, Content: current.Rendered, MessageRef: -1},
+			{Type: sessionstore.OutputMessage, Content: current, MessageRef: -1},
 		},
 	})
 	if errors.Is(err, sessionstore.ErrInputResolved) {
@@ -267,7 +267,7 @@ func (s *svc) handleStatusInput(ctx context.Context, input *sessionstore.InboxIn
 		return fmt.Errorf("handle status input: %w", err)
 	}
 
-	s.publish(input.SessionID, sessionevent.Notification{Type: sessionevent.NotifyMessage, Message: current.Rendered})
+	s.publish(input.SessionID, sessionevent.Notification{Type: sessionevent.NotifyMessage, Message: current})
 
 	if !s.HasActiveLoop(input.SessionID) {
 		s.publish(
@@ -287,7 +287,7 @@ func (s *svc) handleStoppedStop(ctx context.Context, input *sessionstore.InboxIn
 		},
 		Outputs: []sessionstore.Output{
 			{
-				Type:       sessionstore.OutputMessagePersistent,
+				Type:       sessionstore.OutputMessage,
 				Content:    "Session already stopped.",
 				Key:        fmt.Sprintf("input:%d:stop:already_stopped", input.ID),
 				MessageRef: -1,
@@ -329,7 +329,7 @@ func (s *svc) handleLifecycleInput(ctx context.Context, input *sessionstore.Inbo
 
 func (s *svc) enqueuePersistentOutput(ctx context.Context, sessionID int64, content string) error {
 	if _, err := s.store.EnqueueOutput(ctx, sessionstore.OutputDraft{
-		SessionID: sessionID, Type: sessionstore.OutputMessagePersistent, Content: content,
+		SessionID: sessionID, Type: sessionstore.OutputMessage, Content: content,
 	}); err != nil {
 		return fmt.Errorf("enqueue persistent output: %w", err)
 	}
@@ -385,7 +385,7 @@ func (s *svc) enqueueUserSessionInput(
 			return nil, fmt.Errorf("current progress: %w", err)
 		}
 
-		attributes["status"] = current.Rendered
+		attributes["status"] = current
 	}
 
 	result, err := s.store.Enqueue(

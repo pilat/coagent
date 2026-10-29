@@ -86,7 +86,7 @@ func (s *Store) Arm(
 	}
 
 	_, err = insertOutputTx(ctx, tx, OutputDraft{
-		SessionID: mutation.RootSessionID, Type: OutputMessagePersistent, Content: mutation.Receipt,
+		SessionID: mutation.RootSessionID, Type: OutputMessage, Content: mutation.Receipt,
 		SourceKey: fmt.Sprintf("tool:%s:direct:0", mutation.ToolCallID),
 	}, CommitLoop)
 	if err != nil {
@@ -165,7 +165,7 @@ func (s *Store) Clear(
 	}
 
 	_, err = insertOutputTx(ctx, tx, OutputDraft{
-		SessionID: mutation.RootSessionID, Type: OutputMessagePersistent, Content: mutation.Receipt,
+		SessionID: mutation.RootSessionID, Type: OutputMessage, Content: mutation.Receipt,
 		SourceKey: fmt.Sprintf("tool:%s:direct:0", mutation.ToolCallID),
 	}, CommitLoop)
 	if err != nil {
@@ -252,7 +252,7 @@ func replayBudgetMutation(
 	}
 
 	_, err = insertOutputTx(ctx, tx, OutputDraft{
-		SessionID: mutation.RootSessionID, Type: OutputMessagePersistent, Content: mutation.Receipt,
+		SessionID: mutation.RootSessionID, Type: OutputMessage, Content: mutation.Receipt,
 		SourceKey: fmt.Sprintf("tool:%s:direct:0", mutation.ToolCallID),
 	}, CommitLoop)
 	if err != nil {

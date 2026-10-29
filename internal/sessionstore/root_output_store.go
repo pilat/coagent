@@ -1,4 +1,3 @@
-// nosemgrep: semgrep.coagent-no-preamble-before-package
 package sessionstore
 
 import (
@@ -84,7 +83,6 @@ func (s *Store) ReplaceManagerRootForInput(
 	return s.replaceManagerRoot(ctx, oldSessionID, inputID, name, workDir)
 }
 
-//nolint:funlen // Replacement preserves a single transaction across old root, new root, and lifecycle output.
 func (s *Store) replaceManagerRoot(
 	ctx context.Context,
 	oldSessionID, inputID int64,
@@ -157,10 +155,8 @@ func (s *Store) replaceManagerRoot(
 		return nil, nil, err
 	}
 
-	if inputID > 0 {
-		if err := insertClearNotice(ctx, tx, newRecord.ID, inputID, now); err != nil {
-			return nil, nil, err
-		}
+	if err := replaceChatTx(ctx, tx, oldSessionID, newRecord.ID, inputID, now); err != nil {
+		return nil, nil, err
 	}
 
 	if err := tx.Commit(); err != nil {
@@ -181,13 +177,22 @@ func handleReplacementInput(ctx context.Context, tx *sql.Tx, inputID, sessionID 
 	return requireOnePendingResolution(ctx, tx, result, inputID)
 }
 
-func insertClearNotice(ctx context.Context, tx *sql.Tx, sessionID, inputID int64, now time.Time) error {
-	_, err := insertOutputTx(ctx, tx, OutputDraft{
-		SessionID: sessionID, Type: OutputMessagePersistent, Content: "Session cleared.",
-		SourceKey: fmt.Sprintf("input:%d:clear:result", inputID), ReleasesInput: true, CreatedAt: now,
-	}, CommitLifecycle)
+func replaceChatTx(ctx context.Context, tx *sql.Tx, oldID, newID, inputID int64, now time.Time) error {
+	if inputID > 0 {
+		if _, err := insertOutputTx(ctx, tx, OutputDraft{
+			SessionID: newID, Type: OutputMessage, Content: "Session cleared.",
+			SourceKey: fmt.Sprintf("input:%d:clear:result", inputID), ReleasesInput: true, CreatedAt: now,
+		}, CommitLifecycle); err != nil {
+			return err
+		}
+	}
 
-	return err
+	if _, err := tx.ExecContext(ctx, `UPDATE chat_focus SET session_id = ? WHERE session_id = ?`,
+		newID, oldID); err != nil {
+		return fmt.Errorf("transfer replacement chat focus: %w", err)
+	}
+
+	return nil
 }
 
 func requireManagerOwner(attrs map[string]any) error {

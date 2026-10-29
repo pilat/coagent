@@ -1,10 +1,7 @@
 package telegram
 
 import (
-	"context"
 	"net/http"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -12,7 +9,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/pilat/coagent/internal/coagenthome"
 	"github.com/pilat/coagent/internal/config"
 )
 
@@ -52,60 +48,18 @@ func TestTextPreview(t *testing.T) {
 }
 
 func TestStartDoesNotAnnounceStartup(t *testing.T) {
-	home := t.TempDir()
-	restoreHome := coagenthome.Override(home)
-	defer restoreHome()
-
-	require.NoError(t, os.Mkdir(filepath.Join(home, coagenthome.DirName), 0o700))
-
-	methods := make([]string, 0, 2)
-	manager := &Manager{
-		id: "telegram-main",
-		cfg: config.ManagerEntry{
-			ID:             "telegram-main",
-			BotToken:       "token",
-			TargetChatID:   new(int64(-100123)),
-			PollTimeoutSec: 30,
-		},
-		target:     forumTarget{chatID: -100123, topology: forumTopologyGroup},
-		botUserID:  42,
-		controller: &fakeController{},
-		httpClient: &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
-			method := filepath.Base(req.URL.Path)
-			methods = append(methods, method)
-			if method == "getUpdates" {
-				<-req.Context().Done()
-
-				return nil, req.Context().Err()
-			}
-
-			switch method {
-			case "getMe":
-				return telegramResponse(req, `{"ok":true,"result":{"id":42}}`), nil
-			case "getChat":
-				return telegramResponse(
-					req,
-					`{"ok":true,"result":{"id":-100123,"type":"supergroup","is_forum":true}}`,
-				), nil
-			case "getChatMember":
-				return telegramResponse(
-					req,
-					`{"ok":true,"result":{"status":"administrator","can_manage_topics":true,"can_delete_messages":true}}`,
-				), nil
-			default:
-				return telegramResponse(req, `{"ok":true,"result":true}`), nil
-			}
-		})},
-		navPaths:       map[int64]string{},
-		pathToNav:      map[string]int64{},
-		sessionToTopic: map[int64]int64{},
-		topicToSession: map[int64]int64{},
-		workDirs:       map[int64]string{},
+	recorder := &delayedTelegramRecorder{}
+	manager, err := New(config.ManagerEntry{
+		ID: "telegram-main", BotToken: "test-token", TargetChatID: new(int64(harnessChatID)),
+	}, nil, &fakeController{})
+	require.NoError(t, err)
+	manager.httpClient = &http.Client{Transport: recorder}
+	require.NoError(t, manager.Start(t.Context()))
+	require.NoError(t, manager.Stop(t.Context()))
+	var methods []string
+	for _, call := range recorder.snapshot() {
+		methods = append(methods, call.Method)
 	}
-	require.NoError(t, manager.saveServiceTopicID(7001))
-
-	require.NoError(t, manager.Start(context.Background()))
-	require.NoError(t, manager.Stop(context.Background()))
-
-	assert.NotContains(t, methods, "sendMessage")
+	assert.Equal(t, []string{"getMe", "getChat", "setMyCommands"}, methods)
+	assert.False(t, manager.Alive())
 }

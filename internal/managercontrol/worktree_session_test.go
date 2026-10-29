@@ -139,25 +139,3 @@ func TestCreateSession_RejectsCallerSuppliedRepoRoot(t *testing.T) {
 	}
 	assert.Nil(t, backend.sentAttrs)
 }
-
-func TestSetSessionAttributes_PreservesWorktreeRepoRoot(t *testing.T) {
-	backend := &stubWorktreeBackend{session: &sessionstore.SessionRecord{
-		Attributes: map[string]any{
-			controllerapi.SessionAttributeManagerID:      "telegram",
-			controllerapi.SessionAttributeWorktreeOrigin: controllerapi.WorktreeOriginController,
-			"repo_root": "/source",
-		},
-	}}
-	s := worktreeSessionService(t, backend)
-	data := controllerapi.SessionSetAttributesData{SessionID: 7, Attributes: map[string]any{"topic": 1}}
-	require.NoError(t, s.authorizeAttributeUpdate(t.Context(), "telegram", &data))
-	assert.Equal(t, "/source", data.Attributes["repo_root"])
-	assert.Equal(t, controllerapi.WorktreeOriginController,
-		data.Attributes[controllerapi.SessionAttributeWorktreeOrigin])
-
-	data.Attributes["repo_root"] = "/other"
-	require.ErrorContains(t, s.authorizeAttributeUpdate(t.Context(), "telegram", &data), "reserved")
-	delete(data.Attributes, "repo_root")
-	data.Attributes[controllerapi.SessionAttributeWorktreeOrigin] = "spoofed"
-	require.ErrorContains(t, s.authorizeAttributeUpdate(t.Context(), "telegram", &data), "reserved")
-}

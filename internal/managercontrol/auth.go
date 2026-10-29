@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"maps"
 
 	"github.com/pilat/coagent/internal/controllerapi"
 	"github.com/pilat/coagent/internal/sessionstore"
@@ -44,63 +43,4 @@ func (s *service) canListSession(
 	owner, _ := record.Attributes[controllerapi.SessionAttributeManagerID].(string)
 
 	return owner == managerID && owner != ""
-}
-
-func (s *service) authorizeAttributeUpdate(
-	ctx context.Context,
-	managerID string,
-	data *controllerapi.SessionSetAttributesData,
-) error {
-	if err := requireManagerIdentity(managerID); err != nil {
-		return err
-	}
-
-	record, err := s.store.GetSession(ctx, data.SessionID)
-	if err != nil || record == nil {
-		return fmt.Errorf("session %d not found", data.SessionID)
-	}
-
-	owner, _ := record.Attributes[controllerapi.SessionAttributeManagerID].(string)
-	if owner == "" {
-		return fmt.Errorf("session %d has no claimable manager owner", data.SessionID)
-	}
-
-	if owner != managerID {
-		return fmt.Errorf("session %d belongs to another manager", data.SessionID)
-	}
-
-	data.Attributes = maps.Clone(data.Attributes)
-	if data.Attributes == nil {
-		data.Attributes = make(map[string]any)
-	}
-
-	if requested, supplied := data.Attributes["repo_root"]; supplied {
-		requestedRoot, ok := requested.(string)
-
-		existingRoot, exists := record.Attributes["repo_root"].(string)
-		if !ok || !exists || requestedRoot != existingRoot {
-			return errors.New("repo_root attribute is reserved for created worktrees")
-		}
-	}
-
-	if existing, exists := record.Attributes["repo_root"]; exists {
-		data.Attributes["repo_root"] = existing
-	}
-
-	if requested, supplied := data.Attributes[controllerapi.SessionAttributeWorktreeOrigin]; supplied {
-		requestedOrigin, ok := requested.(string)
-
-		existingOrigin, exists := record.Attributes[controllerapi.SessionAttributeWorktreeOrigin].(string)
-		if !ok || !exists || requestedOrigin != existingOrigin {
-			return errors.New("worktree origin is reserved for created worktrees")
-		}
-	}
-
-	if existing, exists := record.Attributes[controllerapi.SessionAttributeWorktreeOrigin]; exists {
-		data.Attributes[controllerapi.SessionAttributeWorktreeOrigin] = existing
-	}
-
-	data.Attributes[controllerapi.SessionAttributeManagerID] = managerID
-
-	return nil
 }

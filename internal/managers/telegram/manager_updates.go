@@ -3,7 +3,6 @@ package telegram
 import (
 	"context"
 	"errors"
-	"fmt"
 	"net/http"
 	"slices"
 	"time"
@@ -82,11 +81,6 @@ func isFatalPollError(code int) bool {
 }
 
 func (m *Manager) processUpdate(ctx context.Context, update telegramUpdate) {
-	if update.CallbackQuery != nil {
-		m.handleCallback(ctx, update.CallbackQuery)
-		return
-	}
-
 	log := logger.Ctx(ctx).Named("telegram")
 
 	msg := update.Message
@@ -110,69 +104,42 @@ func (m *Manager) processUpdate(ctx context.Context, update telegramUpdate) {
 		return
 	}
 
-	m.processTopicUpdate(ctx, msg, log)
+	log.Info("message_received", zap.String("text", textPreview(msg.Text)))
+	m.processChatUpdate(ctx, msg)
 }
 
-func (m *Manager) processTopicUpdate(ctx context.Context, msg *telegramMessage, log *zap.Logger) {
-	threadID := msg.MessageThreadID
-	if threadID == 0 {
-		if m.target.topology == forumTopologyBot {
-			_, _ = m.sendMessage(
-				ctx,
-				fmt.Sprintf("Open the “%s” topic to create or manage sessions.", m.cfg.ServiceTopicName),
-				nil,
-				0,
-			)
-		}
-
-		log.Debug("update_dropped", zap.String("reason", "no_topic"))
-
+func (m *Manager) processChatUpdate(ctx context.Context, msg *telegramMessage) {
+	if msg.Voice == nil && !hasAttachment(msg) {
+		m.handleChatText(ctx, normalizeTextCommand(msg.Text))
 		return
 	}
 
-	sessionID, hasSession := m.resolveSessionByTopicID(ctx, threadID)
-	log.Info(
-		"message_received",
-		zap.Int64("thread_id", threadID),
-		zap.Int64("session_id", sessionID),
-		zap.Bool("has_session", hasSession),
-		zap.String("text", textPreview(msg.Text)),
-	)
+	focus, err := m.chat.ChatFocus(ctx, m.chatKey())
+	if err != nil {
+		m.reply(ctx, err.Error())
+		return
+	}
+
+	sessionID, err := m.inputSessionID(ctx, focus)
+	if err != nil {
+		m.reply(ctx, err.Error())
+		return
+	}
 
 	if msg.Voice != nil {
-		m.handleVoiceMessage(ctx, msg, threadID, sessionID, hasSession)
-
+		m.handleVoiceMessage(ctx, msg, sessionID)
 		return
 	}
 
-	if hasSession && hasAttachment(msg) && m.isAssistantRoot(sessionID) {
+	if focus == 0 {
 		if msg.Caption != "" {
-			m.handleSessionTopicMessage(ctx, sessionID, threadID, normalizeTextCommand(msg.Caption))
+			m.handleChatText(ctx, normalizeTextCommand(msg.Caption))
 		}
 
 		return
 	}
 
-	// Attachments dispatch at voice's position: ahead of service-topic routing,
-	// so an upload into any session topic cannot be eaten as a command.
-	if att := attachmentOf(msg); att != nil {
-		m.handleAttachment(ctx, msg, att, threadID, sessionID, hasSession)
-
-		return
-	}
-
-	text := normalizeTextCommand(msg.Text)
-	if threadID == m.serviceTopicID {
-		m.handleServiceTopicMessage(ctx, text)
-		return
-	}
-
-	if hasSession {
-		m.handleSessionTopicMessage(ctx, sessionID, threadID, text)
-		return
-	}
-
-	log.Info("update_dropped", zap.String("reason", "no_session_for_topic"), zap.Int64("thread_id", threadID))
+	m.handleAttachment(ctx, msg, attachmentOf(msg), sessionID)
 }
 
 func textPreview(value string) string {

@@ -161,51 +161,6 @@ func (s *service) setSessionModel(
 	return nil
 }
 
-func (s *service) setSessionAttributes(
-	ctx context.Context,
-	managerID string,
-	data controllerapi.SessionSetAttributesData,
-) error {
-	if err := s.authorizeAttributeUpdate(ctx, managerID, &data); err != nil {
-		return err
-	}
-
-	if err := s.backend.SetAttributes(ctx, data.SessionID, data.Attributes); err != nil {
-		return fmt.Errorf("set session attributes: %w", err)
-	}
-
-	return nil
-}
-
-func (s *service) currentProgress(
-	ctx context.Context,
-	managerID string,
-	sessionID int64,
-) (*controllerapi.ProgressData, error) {
-	if err := s.requireOwnedSession(ctx, managerID, sessionID); err != nil {
-		return nil, err
-	}
-
-	current, err := s.progress.Current(ctx, sessionID)
-	if err != nil {
-		return nil, fmt.Errorf("current progress: %w", err)
-	}
-
-	return current, nil
-}
-
-func (s *service) refreshProgress(ctx context.Context, managerID string, sessionID int64) error {
-	if err := s.requireOwnedSession(ctx, managerID, sessionID); err != nil {
-		return err
-	}
-
-	if err := s.progress.Refresh(ctx, sessionID); err != nil {
-		return fmt.Errorf("refresh progress: %w", err)
-	}
-
-	return nil
-}
-
 func (s *service) subscribe(managerID string) <-chan controllerapi.SessionNotification {
 	if managerID == "" {
 		return make(chan controllerapi.SessionNotification)

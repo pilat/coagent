@@ -45,23 +45,6 @@ func newModels(cfg *config.Config) models {
 	return result
 }
 
-// The marker crosses JSON as a bool or string; only explicit false-like values opt out.
-func isManagementSurface(attrs map[string]any) bool {
-	v, ok := attrs[controllerapi.SessionAttributeManagementSurface]
-	if !ok || v == nil {
-		return false
-	}
-
-	switch v := v.(type) {
-	case bool:
-		return v
-	case string:
-		return v != "" && v != "false" && v != "0"
-	default:
-		return true
-	}
-}
-
 func (s *svc) openSession(
 	ctx context.Context,
 	sessionID int64,
@@ -99,25 +82,18 @@ func (s *svc) openSession(
 		return nil, nil, fmt.Errorf("capture construction status: %w", statusErr)
 	}
 
-	in.Status = status.Rendered
+	in.Status = status
 
 	owner, _ := rec.Attributes[controllerapi.SessionAttributeManagerID].(string)
 	in.OutputEnabled = rec.ParentID == 0 && owner != ""
 	in.ActiveSubagents = s.activeSubagentInfos(ctx, sessionID)
 	in.ActiveProcesses = s.activeProcessInfos(ctx, sessionID)
 
-	if rec.ParentID == 0 && isManagementSurface(rec.Attributes) {
-		skill, err := loader.BuiltinSkill(loader.ManagementSkillName)
-		if err != nil {
-			return nil, nil, fmt.Errorf("load management skill: %w", err)
-		}
-
-		in.ExtraSkills = append(in.ExtraSkills, skill)
-	}
-
 	if rec.AgentType == sessionstore.AssistantAgentType {
 		scope := assistant.Scope{Root: rec.ID, Owner: owner}
 		in.OwnerTools = assistant.Tools(s.assistant, scope, assistant.Host(assistantHost{s: s}))
+		in.OwnerTools = append(in.OwnerTools, schedule.NewScheduleTool(rec.ID, s.schedules, time.Local))
+		in.OwnerTools = append(in.OwnerTools, s.administrationTools(rec, 0)...)
 		in.ExtraSkills = nil
 		in.Head = s.assistantHead(scope)
 	} else {
@@ -282,15 +258,20 @@ func (s *svc) ownerTools(rec *sessionstore.SessionRecord, ldr loader.Service) []
 	tools = append(tools, s.schedules.SleepTool(rec.ID))
 
 	if rec.ParentID == 0 {
-		tools = append(tools, mcpstore.NewTools(s.mcpStore, rec.ProjectID)...)
-
-		tools = append(tools,
-			configapply.NewConfigEdit(rec.ID, s.applier),
-			budget.NewTool(budget.Store(s.store), rec.ID, s.models.priced(rec.Model)),
-		)
+		tools = append(tools, s.administrationTools(rec, rec.ProjectID)...)
 	}
 
 	return tools
+}
+
+func (s *svc) administrationTools(rec *sessionstore.SessionRecord, projectID int64) []tool.Tool {
+	tools := mcpstore.NewTools(s.mcpStore, projectID)
+
+	return append(tools,
+		configapply.NewConfigEdit(rec.ID, s.applier),
+		configapply.NewConfigRead(rec.ID, s.applier),
+		budget.NewTool(budget.Store(s.store), rec.ID, s.models.priced(rec.Model)),
+	)
 }
 
 func (s *svc) pendingResultOwners(ctx context.Context, sessionID int64, actual, calls map[string]string) error {

@@ -156,7 +156,7 @@ func TestConfigEditTool_StatesWholeDocumentReplacementWhereTheModelDecides(t *te
 
 	for _, want := range []string{
 		"not a patch or merge",
-		"First read the current file with the read tool",
+		"First read the current file with config_read",
 		"change only what the user asked for",
 		"every untouched section copied verbatim",
 		"providers, models, managers, marketplaces, sandbox",

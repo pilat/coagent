@@ -14,10 +14,7 @@ import (
 	"github.com/pilat/coagent/internal/transcript"
 )
 
-// generationProtocolCommand enumerates the externally meaningful transitions of
-// the model-input generation protocol: transcript-entry advancement, output
-// emission with insertion-time generation stamping, manager replay, stale
-// progress suppression, and the explicit stop lifecycle.
+// Input boundaries advance generation independently of output, replay and stop settlement.
 type generationProtocolCommand byte
 
 const (
@@ -26,9 +23,6 @@ const (
 	genScheduleTick
 	genEmitMessage
 	genEmitDirectReply
-	genClaim
-	genAck
-	genStaleProgress
 	genStopStart
 	genStopCleanupCrash
 	genStopComplete
@@ -40,9 +34,7 @@ const (
 // generationModelRow mirrors one message outbox row the protocol can observe.
 type generationModelRow struct {
 	generation  int64
-	replacing   bool
 	releases    bool
-	delivered   bool
 	sourceKey   string
 	inputID     int64
 	stopStarted bool
@@ -50,14 +42,11 @@ type generationModelRow struct {
 	directReply bool
 }
 
-// generationProtocolModel is the protocol oracle. Generation advances only on
-// transcript-entry transitions; every emitted row freezes its insertion-time
-// generation; stop terminal effects happen at most once.
+// Outputs preserve identity across generations; stop settlement happens at most once.
 type generationProtocolModel struct {
 	generation int64
 	pending    int
 	rows       []generationModelRow
-	claim      int
 	inputSeq   int64
 	emitSeq    int64
 	stopInput  int64
@@ -67,17 +56,7 @@ type generationProtocolModel struct {
 }
 
 func newGenerationModel() *generationProtocolModel {
-	return &generationProtocolModel{claim: -1}
-}
-
-func (m *generationProtocolModel) head() int {
-	for i, row := range m.rows {
-		if !row.delivered {
-			return i
-		}
-	}
-
-	return -1
+	return &generationProtocolModel{}
 }
 
 func (m *generationProtocolModel) apply(command generationProtocolCommand) {
@@ -127,7 +106,6 @@ func (m *generationProtocolModel) apply(command generationProtocolCommand) {
 		m.emitSeq++
 		m.rows = append(m.rows, generationModelRow{
 			generation: m.generation,
-			replacing:  m.emitSeq%2 == 1,
 			sourceKey:  "model:" + strconv.FormatInt(m.emitSeq, 10),
 		})
 	case genEmitDirectReply:
@@ -138,18 +116,6 @@ func (m *generationProtocolModel) apply(command generationProtocolCommand) {
 		m.rows = append(m.rows, generationModelRow{
 			generation: m.generation, directReply: true,
 		})
-	case genClaim:
-		if head := m.head(); head >= 0 {
-			m.claim = head
-		}
-	case genAck:
-		if m.claim >= 0 {
-			row := &m.rows[m.claim]
-			row.delivered = true
-			m.claim = -1
-		}
-	case genStaleProgress:
-		// A stale snapshot inserts nothing: modeled as a no-op.
 	case genStopStart:
 		if m.stopping || m.stopped {
 			return
@@ -160,7 +126,7 @@ func (m *generationProtocolModel) apply(command generationProtocolCommand) {
 		m.hasBudget = true
 		m.stopInput = m.inputSeq
 		m.rows = append(m.rows, generationModelRow{
-			generation: m.generation, replacing: true, inputID: m.stopInput,
+			generation: m.generation, inputID: m.stopInput,
 			sourceKey: "input:" + strconv.FormatInt(m.stopInput, 10) + ":stop:started", stopStarted: true,
 		})
 	case genStopCleanupCrash:
@@ -190,7 +156,6 @@ type generationProduction struct {
 	root            int64
 	inputs          int64
 	lastStopInputID int64
-	claim           *OutputClaim
 }
 
 func newGenerationProduction(t *testing.T) *generationProduction {
@@ -199,7 +164,6 @@ func newGenerationProduction(t *testing.T) *generationProduction {
 
 	root, err := store.CreateSession(ctx, projectID, "model", "", map[string]any{"manager_id": "mgr"})
 	require.NoError(t, err)
-	require.NoError(t, store.BindManager(ctx, "mgr", "cli", map[string]any{"local": true}))
 
 	return &generationProduction{t: t, ctx: ctx, store: store, db: db, root: root.ID}
 }
@@ -259,10 +223,7 @@ func (p *generationProduction) apply(command generationProtocolCommand) {
 		}
 
 		p.inputs++
-		kind := OutputMessagePersistent
-		if p.inputs%2 == 1 {
-			kind = OutputMessageReplaceable
-		}
+		kind := OutputMessage
 
 		key := "model:" + strconv.FormatInt(p.inputs, 10)
 		_, err := p.store.EnqueueOutput(p.ctx, OutputDraft{
@@ -279,41 +240,8 @@ func (p *generationProduction) apply(command generationProtocolCommand) {
 		_, _, err := appendPublished(p.ctx, p.store, p.root, &transcript.Message{
 			Role: "assistant", Content: "reply before tool",
 			ToolCalls: []byte(`[{"ID":"reply-tool","Name":"bash"}]`),
-		}, OutputMessagePersistent, "reply before tool", false)
+		}, OutputMessage, "reply before tool", false)
 		require.NoError(p.t, err)
-	case genClaim:
-		if p.claim != nil {
-			_, err := p.store.ClaimOutputHead(p.ctx, "mgr")
-			require.ErrorIs(p.t, err, ErrNoOutput)
-
-			return
-		}
-
-		claim, err := p.store.ClaimOutputHead(p.ctx, "mgr")
-		if err == nil {
-			p.claim = claim
-		} else {
-			require.ErrorIs(p.t, err, ErrNoOutput)
-		}
-	case genAck:
-		if p.claim == nil {
-			return
-		}
-
-		require.NoError(p.t, p.store.AckOutput(
-			p.ctx, "mgr", p.claim.Output.ID, p.claim.Output.AttemptID, []string{"1"}, nil,
-		))
-		p.claim = nil
-	case genStaleProgress:
-		draft := OutputDraft{
-			SessionID: p.root, Type: OutputMessageReplaceable, Content: "stale card",
-			SourceKey:   "progress:stale:" + strconv.FormatInt(p.inputs, 10),
-			Fingerprint: OutputFingerprint(OutputMessageReplaceable, "stale card", p.root, nil),
-		}
-		_, err := p.store.EnqueueProgressOutput(
-			p.ctx, draft, p.currentGeneration()-1, SessionStatusActive,
-		)
-		require.ErrorIs(p.t, err, ErrProgressSuperseded)
 	case genStopStart:
 		if p.rootStopping() {
 			// /stop on a stopping or stopped root never opens a new fence.
@@ -349,7 +277,6 @@ func (p *generationProduction) apply(command generationProtocolCommand) {
 		require.NoError(p.t, err)
 	case genRestart:
 		p.store = testStore(p.db)
-		p.claim = nil
 	}
 }
 
@@ -385,18 +312,21 @@ func (p *generationProduction) assertMatches(model *generationProtocolModel, ste
 		`SELECT COUNT(*) FROM session_outbox WHERE session_id = ?`, p.root).Scan(&count))
 	require.Len(p.t, model.rows, count, "step %d: outbox row count", step)
 
-	rows, err := p.db.QueryContext(p.ctx, `SELECT COALESCE(source_key, ''), attributes,
+	rows, err := p.db.QueryContext(p.ctx, `SELECT type, COALESCE(source_key, ''), attributes,
 		releases_input FROM session_outbox WHERE session_id = ? ORDER BY id`, p.root)
 	require.NoError(p.t, err)
 	defer rows.Close()
 
 	i := 0
 	for rows.Next() {
-		var sourceKey, attributes string
+		var kind, sourceKey, attributes string
 		var releases bool
-		require.NoError(p.t, rows.Scan(&sourceKey, &attributes, &releases))
+		require.NoError(p.t, rows.Scan(&kind, &sourceKey, &attributes, &releases))
 
 		want := model.rows[i]
+		wantKind := OutputMessage
+		assert.Equal(p.t, string(wantKind), kind, "step %d row %d: type", step, i)
+
 		if want.directReply {
 			assert.True(p.t, strings.HasPrefix(sourceKey, "message:"),
 				"step %d row %d: direct reply message key", step, i)
@@ -416,10 +346,7 @@ func (p *generationProduction) assertMatches(model *generationProtocolModel, ste
 		}
 
 		assert.Equal(p.t, want.releases, releases, "step %d row %d: release flag", step, i)
-		assert.Contains(p.t, attributes, `"model_input_generation":`, "step %d row %d", step, i)
-		assert.Regexp(p.t,
-			`"model_input_generation":`+strconv.FormatInt(want.generation, 10)+`[},]`,
-			attributes, "step %d row %d: insertion-time generation", step, i)
+		assert.NotContains(p.t, attributes, `"model_input_generation":`, "step %d row %d", step, i)
 
 		i++
 	}
@@ -474,15 +401,12 @@ func TestGenerationProtocol_TranscriptEntryAdvancesAndReplayPreserves(t *testing
 		byte(genPromote),         // promotion advances
 		byte(genEmitDirectReply), // direct reply is persistent but non-releasing
 		byte(genEmitMessage),     // new generation card
-		byte(genClaim),
-		byte(genAck),
 		byte(genEmitMessage),
 		byte(genScheduleTick), // scheduled turn advances
 		byte(genScheduleTick), // duplicate delivery: no advance
 		byte(genRestart),
 		byte(genScheduleTick), // duplicate after restart: no advance
 		byte(genEmitMessage),
-		byte(genStaleProgress), // stale snapshot inserts nothing
 	})
 }
 
@@ -490,15 +414,9 @@ func TestGenerationProtocol_ExplicitStopLifecycle(t *testing.T) {
 	runGenerationProtocol(t, []byte{
 		byte(genStopStart),
 		byte(genStopCleanupCrash),
-		byte(genStaleProgress), // stale snapshot cannot commit behind the fence
-		byte(genRestart),       // crash before terminal commit
-		byte(genStopComplete),  // recovery completes the terminal transaction
-		byte(genClaim),
-		byte(genAck),
-		byte(genClaim),
-		byte(genAck),
-		byte(genClaim),
-		byte(genAck),
+
+		byte(genRestart),      // crash before terminal commit
+		byte(genStopComplete), // recovery completes the terminal transaction
 		byte(genStopComplete), // terminal effects happen exactly once
 		byte(genRestart),
 		byte(genStopComplete), // still exactly once after restart
@@ -514,24 +432,20 @@ func TestGenerationProtocol_ResumeBeforeStopReceiptDelivery(t *testing.T) {
 		byte(genEnqueuePending),
 		byte(genPromote),
 		byte(genEmitDirectReply),
-		byte(genClaim),
-		byte(genAck),
-		byte(genClaim),
-		byte(genAck),
 		byte(genEmitMessage),
 		byte(genRestart),
 	})
 }
 
 func FuzzGenerationProtocol(f *testing.F) {
-	f.Add([]byte{byte(genEmitMessage), byte(genPromote), byte(genClaim)})
+	f.Add([]byte{byte(genEmitMessage), byte(genPromote)})
 	f.Add([]byte{
 		byte(genStopStart), byte(genStopCleanupCrash), byte(genRestart),
-		byte(genStopComplete), byte(genAck),
+		byte(genStopComplete),
 	})
 	f.Add([]byte{
 		byte(genScheduleTick), byte(genScheduleTick), byte(genEmitMessage),
-		byte(genEmitDirectReply), byte(genStaleProgress), byte(genClaim), byte(genAck),
+		byte(genEmitDirectReply),
 	})
 
 	f.Fuzz(func(t *testing.T, commands []byte) {

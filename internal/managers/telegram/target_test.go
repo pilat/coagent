@@ -1,7 +1,7 @@
 package telegram
 
 import (
-	"context"
+	"fmt"
 	"net/http"
 	"path/filepath"
 	"testing"
@@ -12,73 +12,49 @@ import (
 	"github.com/pilat/coagent/internal/config"
 )
 
-func TestPreflight_BotForum(t *testing.T) {
-	methods := make([]string, 0, 2)
-	m := &Manager{
-		cfg:    config.ManagerEntry{BotToken: "token", AllowedUserIDs: []int64{7}},
-		target: forumTarget{chatID: 7, topology: forumTopologyBot},
-		httpClient: &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
-			method := filepath.Base(req.URL.Path)
-			methods = append(methods, method)
-			if method == "getMe" {
-				return telegramResponse(req, `{"ok":true,"result":{"id":9,"has_topics_enabled":true}}`), nil
-			}
-			return telegramResponse(req, `{"ok":true,"result":{"id":7,"type":"private"}}`), nil
-		})},
-	}
-
-	require.NoError(t, m.preflight(context.Background()))
-	assert.Equal(t, []string{"getMe", "getChat"}, methods)
-	assert.Equal(t, int64(9), m.botUserID)
-}
-
-func TestPreflight_BotForumRefusalsStopBeforeTopicMutation(t *testing.T) {
-	tests := []struct {
-		name string
-		me   string
-		chat string
-		want string
-	}{
-		{"threaded mode", `{"id":9}`, `{"id":7,"type":"private"}`, "Threaded Mode"},
-		{
-			"user topics",
-			`{"id":9,"has_topics_enabled":true,"allows_users_to_create_topics":true}`,
-			`{"id":7,"type":"private"}`,
-			"Disallow users",
-		},
-		{"wrong chat", `{"id":9,"has_topics_enabled":true}`, `{"id":7,"type":"supergroup"}`, "private chat"},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			methods := make([]string, 0, 2)
+func TestPreflight_UsesOnlyIdentityAndChat(t *testing.T) {
+	for _, chatType := range []string{"private", "group", "supergroup"} {
+		t.Run(chatType, func(t *testing.T) {
+			var methods []string
 			m := &Manager{
-				cfg:    config.ManagerEntry{BotToken: "token"},
-				target: forumTarget{chatID: 7, topology: forumTopologyBot},
+				cfg: config.ManagerEntry{BotToken: "test-token", AllowedUserIDs: []int64{7}},
 				httpClient: &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 					method := filepath.Base(req.URL.Path)
 					methods = append(methods, method)
 					if method == "getMe" {
-						return telegramResponse(req, `{"ok":true,"result":`+tt.me+`}`), nil
+						return telegramResponse(req, `{"ok":true,"result":{"id":9}}`), nil
 					}
-					return telegramResponse(req, `{"ok":true,"result":`+tt.chat+`}`), nil
+					return telegramResponse(req, fmt.Sprintf(`{"ok":true,"result":{"id":7,"type":%q}}`, chatType)), nil
 				})},
 			}
-
-			err := m.preflight(context.Background())
-			require.ErrorContains(t, err, tt.want)
-			assert.NotContains(t, methods, "createForumTopic")
+			require.NoError(t, m.preflight(t.Context()))
+			assert.Equal(t, []string{"getMe", "getChat"}, methods)
 		})
 	}
 }
 
 func TestPreflight_RejectsMissingBotID(t *testing.T) {
 	m := &Manager{
-		cfg:    config.ManagerEntry{BotToken: "token"},
-		target: forumTarget{chatID: 7, topology: forumTopologyBot},
+		cfg: config.ManagerEntry{BotToken: "test-token", AllowedUserIDs: []int64{7}},
 		httpClient: &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
-			return telegramResponse(req, `{"ok":true,"result":{"has_topics_enabled":true}}`), nil
+			return telegramResponse(req, `{"ok":true,"result":{}}`), nil
 		})},
 	}
+	require.ErrorContains(t, m.preflight(t.Context()), "invalid bot user id")
+}
 
-	require.ErrorContains(t, m.preflight(context.Background()), "invalid bot user id")
+func TestPreflight_PrivateChatNotFoundExplainsStart(t *testing.T) {
+	m := &Manager{
+		cfg: config.ManagerEntry{BotToken: "test-token", AllowedUserIDs: []int64{7}},
+		httpClient: &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			if filepath.Base(req.URL.Path) == "getMe" {
+				return telegramResponse(req, `{"ok":true,"result":{"id":9}}`), nil
+			}
+			return telegramResponse(
+				req,
+				`{"ok":false,"error_code":400,"description":"Bad Request: chat not found"}`,
+			), nil
+		})},
+	}
+	require.EqualError(t, m.preflight(t.Context()), "private chat not found; open the bot and send /start first")
 }

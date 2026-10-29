@@ -48,23 +48,21 @@ sandbox needs only `bwrap` (Bubblewrap) on the host.
 
 Updating is a manual binary replace plus `coagent restart`.
 
-For Telegram, create a private bot with BotFather, enable Threaded Mode, and
-disallow users from creating topics; send the bot `/start`, and give the manager
-your numeric user ID. For a shared group, use a forum-enabled supergroup and
-provide its numeric chat ID. Each manager needs its own bot token; changing a
-forum target requires a new manager ID.
+For Telegram, create a bot with BotFather, send it `/start`, and configure your
+numeric user ID in the manager's allowed users. The default target is the private
+chat with that sole allowed user. To use a group, add the bot and configure its
+numeric `target_chat_id`. Each enabled manager needs its own bot token.
 
-Each configured manager owns a *service topic* — the daemon's management
-surface. It hosts the management session that reports the daemon's active
-configuration, status, projects, managers and command behavior, and `/config`
-there is the only model-facing configuration mutation: it applies a complete
-candidate `config.yaml` behind an explicit activation, restarts the daemon, and
-rolls back if the new configuration cannot boot. Secrets stay in
-`~/.coagent/secrets`, maintained by hand outside the conversation — never paste
-a credential into a chat.
+One chat holds Assistant (`#0`) and the work sessions you select with `/switch`.
+Assistant can start and coordinate work, register global MCP servers, schedule
+itself, and administer configuration and its budget. `/config` authorizes reading
+the current document and applying the complete candidate `config.yaml`; an
+accepted edit restarts the daemon and rolls back if the configuration cannot
+boot. Secrets stay in `~/.coagent/secrets`, maintained by hand outside the
+conversation — never paste a credential into a chat.
 
-Then send `/spawn` to the bot, choose an existing checkout, and hand off the
-task:
+Send `/spawn /absolute/path/to/checkout` to select a new work session, or
+`/new project-name` for a managed project, then give it the task:
 
 ```text
 Find why TestSettlement occasionally hangs. Reproduce it, fix the root cause,
@@ -137,9 +135,10 @@ opinionated product, not an agent framework with a public plugin API.
   policy allows it.
 - **Schedules:** cron expressions with `CRON_TZ` and one-shot wakes. Fresh
   schedules reset the transcript on every run while curated memory persists.
-- **Telegram:** one forum topic per session, repository picker, git worktrees
-  via `/gwt <name>`, model switching, cost/context status, schedules, and a hard
-  user allow-list.
+- **Telegram:** one chat with session switching, unread indicators and a digest
+  when you switch. Selected sessions receive their unread output in order.
+  Numbered project/model lists, git worktrees via `/gwt <name>`, status, schedules
+  and a hard user allow-list are built in.
 
 ## Security model
 
@@ -211,7 +210,7 @@ for vulnerability reporting.
 ## Configuration and project context
 
 Configuration is a hand-edited `~/.coagent/config.yaml`, or a whole-document
-`/config` apply from the Telegram service topic's management session. The
+`/config` apply from Assistant or a selected work session. The
 underlying state is intentionally inspectable:
 
 - `~/.coagent/config.yaml` — providers, models, managers, marketplaces, and tool
@@ -336,9 +335,9 @@ native injection — while configured MCP search tools coexist alongside it.
 - The first model-catalog lookup needs network access. Later starts try the
   network again but can fall back to the last valid disk snapshot. Arbitrary
   local model IDs need a matching catalog entry.
-- Repository selection lives in Telegram, where `/gwt <name>` inside a session
-  topic forks that repository into a fresh worktree branched off its remote
-  default branch.
+- `/spawn <path>` selects an existing checkout in Telegram; `/gwt <name>` from
+  a selected work session forks its repository into a fresh worktree branched
+  off the remote default branch.
 - Shell environment activation is Bash-based. zsh and fish users can still run
   coagent, but do not get automatic per-directory mise/asdf/nvm/direnv capture.
 - Language servers are user- or project-owned. Coagent discovers them through
@@ -357,8 +356,27 @@ coagent uninstall|start|stop|restart   manage the service
 coagent daemon          run in the foreground
 ```
 
-Inside a Telegram session, `/status`, `/stop`, `/clear`, `/compact`, `/model`,
-and `/schedules` are control commands and do not become model instructions.
+Telegram commands operate on the selected session unless they name an ID:
+
+| Command | Effect |
+| --- | --- |
+| `/new [name]` | List recent managed projects, or create/open one and select a new session |
+| `/spawn <path>` | Start and select a session in an existing directory |
+| `/sessions` | List Assistant and live owned sessions with unread and selection markers |
+| `/switch N`, `/assistant` | Select a work session, or return to Assistant (`/switch 0`) |
+| `/gwt <name>` | Create and select a worktree session from the selected work repository |
+| `/kill [N]`, `/stop [N]` | Kill a work session or stop its loop; an ID leaves focus unchanged |
+| `/model [N [effort]]` | List configured models or select one by its number |
+| `/status`, `/budget <request>`, `/schedules` | Inspect status, authorize a budget change, or list schedules |
+| `/clear`, `/compact [focus]` | Replace a work root or compact its context |
+| `/config <request>`, `/skill <name> [args]` | Authorize configuration work or activate a skill |
+| `/help`, `/start` | Show command help |
+
+Assistant refuses stop, kill, clear, compact and worktree commands. Text and
+attachments go to the selected session; Assistant receives attachment captions.
+Switching sends a header, a digest of other live sessions' unread messages, then
+the selected tail. Every narration and final answer is a new message. A crash
+between sending and saving the watermark can repeat a message.
 
 ## Development
 

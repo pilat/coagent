@@ -38,10 +38,7 @@ func outputFingerprintWithRelease(
 
 func fingerprintAttributes(kind OutputType, attributes map[string]any) json.RawMessage {
 	type messageAttributes struct {
-		Source           string          `json:"source,omitempty"`
-		Waiting          json.RawMessage `json:"waiting,omitempty"`
-		WaitingIdentity  json.RawMessage `json:"waiting_identity,omitempty"`
-		ProgressRevision string          `json:"progress_revision,omitempty"`
+		Source string `json:"source,omitempty"`
 	}
 	type openedAttributes struct {
 		Name    string `json:"name"`
@@ -60,23 +57,8 @@ func fingerprintAttributes(kind OutputType, attributes map[string]any) json.RawM
 	var value any = struct{}{}
 
 	switch kind {
-	case OutputMessageReplaceable, OutputMessagePersistent:
-		waiting, err := json.Marshal(attributes["waiting"])
-		if err != nil {
-			return nil
-		}
-
-		identity, err := json.Marshal(attributes["waiting_identity"])
-		if err != nil {
-			return nil
-		}
-
-		value = messageAttributes{
-			Source:           stringValue(attributes["source"]),
-			Waiting:          waiting,
-			WaitingIdentity:  identity,
-			ProgressRevision: stringValue(attributes["progress_revision"]),
-		}
+	case OutputMessage:
+		value = messageAttributes{Source: stringValue(attributes["source"])}
 	case OutputSessionOpened:
 		value = openedAttributes{
 			Name:    stringValue(attributes[outputAttributeName]),
@@ -108,8 +90,7 @@ func stringValue(value any) string {
 
 func validOutputType(kind OutputType) bool {
 	switch kind {
-	case OutputMessageReplaceable,
-		OutputMessagePersistent,
+	case OutputMessage,
 		OutputSessionOpened,
 		OutputSessionReplaced,
 		OutputSessionClosed:
@@ -120,5 +101,5 @@ func validOutputType(kind OutputType) bool {
 }
 
 func isMessageOutput(kind OutputType) bool {
-	return kind == OutputMessageReplaceable || kind == OutputMessagePersistent
+	return kind == OutputMessage
 }

@@ -8,7 +8,6 @@ import (
 	"github.com/pilat/coagent/internal/controllerapi"
 	"github.com/pilat/coagent/internal/loader"
 	"github.com/pilat/coagent/internal/managerdiscovery"
-	"github.com/pilat/coagent/internal/progressruntime"
 	"github.com/pilat/coagent/internal/sessionbus"
 )
 
@@ -28,13 +27,12 @@ func New(
 	backend Backend,
 	store Store,
 	discovery managerdiscovery.Service,
-	progress progressruntime.Service,
 	bus sessionbus.Source,
 	cfg *config.Config,
 	cache loader.MarketplaceCache,
 ) controllerapi.ManagerControllerFactory {
 	return &factory{app: &service{
-		backend: backend, store: store, discovery: discovery, progress: progress,
+		backend: backend, store: store, discovery: discovery,
 		bus: bus, cfg: cfg, cache: cache,
 	}}
 }
@@ -43,65 +41,8 @@ func (f *factory) ForManager(managerID string) controllerapi.Controller {
 	return &controller{app: f.app, managerID: managerID}
 }
 
-func (f *factory) OutputQueueStatus(
-	ctx context.Context,
-	managerID string,
-) (controllerapi.OutputQueueStatusData, error) {
-	return f.app.outputQueueStatus(ctx, managerID)
-}
-
-func (f *factory) UnresolvedOutputOwners(ctx context.Context) ([]string, error) {
-	return f.app.unresolvedOutputOwners(ctx)
-}
-
-func (c *controller) BindOutputDelivery(ctx context.Context, data controllerapi.OutputBindingData) error {
-	return c.app.bindOutputDelivery(ctx, c.managerID, data)
-}
-
-func (c *controller) ClaimOutput(ctx context.Context) (*controllerapi.OutputClaimData, error) {
-	return c.app.claimOutput(ctx, c.managerID)
-}
-
-func (c *controller) AckOutput(ctx context.Context, data controllerapi.OutputAckData) error {
-	return c.app.ackOutput(ctx, c.managerID, data)
-}
-
-func (c *controller) RetryOutput(ctx context.Context, data controllerapi.OutputRetryData) error {
-	return c.app.retryOutput(ctx, c.managerID, data)
-}
-
-func (c *controller) BlockOutput(ctx context.Context, data controllerapi.OutputBlockData) error {
-	return c.app.blockOutput(ctx, c.managerID, data)
-}
-
-func (c *controller) WakeOutput(ctx context.Context) error {
-	return c.app.wakeOutput(ctx, c.managerID)
-}
-
-func (c *controller) RepairSessionSurface(ctx context.Context, sessionID int64, binding string) error {
-	return c.app.repairSessionSurface(ctx, c.managerID, sessionID, binding)
-}
-
-func (c *controller) CurrentProgress(
-	ctx context.Context,
-	sessionID int64,
-) (*controllerapi.ProgressData, error) {
-	return c.app.currentProgress(ctx, c.managerID, sessionID)
-}
-
-func (c *controller) RefreshProgress(ctx context.Context, sessionID int64) error {
-	return c.app.refreshProgress(ctx, c.managerID, sessionID)
-}
-
 func (c *controller) CreateSession(ctx context.Context, data controllerapi.SessionCreateData) (int64, error) {
 	return c.app.createSession(ctx, c.managerID, data)
-}
-
-func (c *controller) EnsureManagementRoot(
-	ctx context.Context,
-	data controllerapi.ManagementRootEnsureData,
-) (int64, error) {
-	return c.app.ensureManagementRoot(ctx, c.managerID, data.TopicID)
 }
 
 func (c *controller) SendSessionMessage(ctx context.Context, data controllerapi.SessionMessageData) error {
@@ -123,13 +64,6 @@ func (c *controller) ListSessions(ctx context.Context) ([]controllerapi.SessionI
 
 func (c *controller) SetSessionModel(ctx context.Context, data controllerapi.SessionSetModelData) error {
 	return c.app.setSessionModel(ctx, c.managerID, data)
-}
-
-func (c *controller) SetSessionAttributes(
-	ctx context.Context,
-	data controllerapi.SessionSetAttributesData,
-) error {
-	return c.app.setSessionAttributes(ctx, c.managerID, data)
 }
 
 func (c *controller) ListDir(

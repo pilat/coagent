@@ -185,6 +185,8 @@ deps:
     mayDependOn: [logger, sessionevent, sessionstore, tool]
 
   # Controllers.
+  managerdelivery:
+    mayDependOn: [logger]
   telegram:
     mayDependOn: [coagenthome, config, controllerapi, humanize, llmwire, logger, managerdelivery, sessionevent]
   managers:

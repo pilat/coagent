@@ -162,7 +162,6 @@ func build(
 		BackgroundSnapshot:       sessionprompt.BuildActiveBackgroundSection(in.ActiveProcesses, in.ActiveSubagents),
 		CompactionDeferAnnounced: in.CompactionDeferAnnounced,
 		Head:                     in.Head,
-		OmitFinalFooter:          agentConfig.OmitFinalFooter,
 		ImageAuthorizer:          stack.Access(),
 	})
 	if err != nil {

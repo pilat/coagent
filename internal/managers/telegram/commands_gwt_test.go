@@ -1,15 +1,12 @@
 package telegram
 
 import (
-	"context"
 	"errors"
-	"net/http"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/pilat/coagent/internal/config"
 	"github.com/pilat/coagent/internal/controllerapi"
 )
 
@@ -36,96 +33,41 @@ func TestParseGwtCommand(t *testing.T) {
 
 func TestGwtDispatchCreatesWorktreeSession(t *testing.T) {
 	var messages []string
-	ctrl := &fakeController{}
-	m := &Manager{
-		cfg:        config.ManagerEntry{BotToken: "token", TargetChatID: new(int64(-100123))},
-		controller: ctrl,
-		httpClient: &http.Client{Transport: telegramMessageRecorder(t, &messages)},
-		workDirs:   map[int64]string{42: "/repo/work"},
-	}
-
-	m.handleSessionTopicMessage(context.Background(), 42, 99, "/gwt api")
-
+	ctrl := &fakeController{focus: 42, listSessions: []controllerapi.SessionInfo{{
+		ID: 42, WorkDir: "/repo/work", Attributes: map[string]any{"manager_id": "telegram-main"},
+	}}}
+	m := newCmdTestManager(t, ctrl, &messages)
+	m.handleChatText(t.Context(), "/gwt api")
 	require.Len(t, ctrl.createSessionCalls, 1)
 	assert.Equal(t, controllerapi.SessionCreateData{
-		WorkDir:      "/repo/work",
-		WorktreeName: "api",
-		Attributes:   map[string]any{"channel": telegramChannel},
+		WorkDir: "/repo/work", WorktreeName: "api", Attributes: map[string]any{"channel": telegramChannel},
 	}, ctrl.createSessionCalls[0])
-	assert.Empty(t, ctrl.messageCalls, "/gwt must not be steered to the model")
+	assert.Empty(t, ctrl.messageCalls)
+	assert.Empty(t, messages)
+	assert.Equal(t, int64(1), ctrl.focus)
 }
 
-func TestGwtEditsProgressIntoCreatedWithProjectName(t *testing.T) {
+func TestGwtFailureSendsOneErrorAndKeepsSelection(t *testing.T) {
 	var messages []string
-	ctrl := &fakeController{
-		listSessions: []controllerapi.SessionInfo{{
-			ID: 1, ProjectName: "clone-9f3e21ab/api", WorkDir: "/wt/clone-9f3e21ab/api",
-		}},
-	}
-	m := &Manager{
-		cfg:        config.ManagerEntry{BotToken: "token", TargetChatID: new(int64(-100123))},
-		controller: ctrl,
-		httpClient: &http.Client{Transport: telegramMessageRecorder(t, &messages)},
-		workDirs:   map[int64]string{42: "/repo/work"},
-	}
-
-	m.handleSessionTopicMessage(context.Background(), 42, 99, "/gwt api")
-
-	require.Len(t, messages, 2, "the pending bubble must be edited, not left dangling")
-	assert.Contains(t, messages[0], "Creating worktree")
-	assert.Contains(t, messages[1], "Worktree created")
-	assert.Contains(t, messages[1], "clone-9f3e21ab/api",
-		"the fork must be reported under its registered project name")
-	assert.Contains(t, messages[1], "#1")
-}
-
-func TestGwtFailureEditsProgressIntoError(t *testing.T) {
-	var messages []string
-	ctrl := &fakeController{createSessionErr: errors.New("boom")}
-	m := &Manager{
-		cfg:        config.ManagerEntry{BotToken: "token", TargetChatID: new(int64(-100123))},
-		controller: ctrl,
-		httpClient: &http.Client{Transport: telegramMessageRecorder(t, &messages)},
-		workDirs:   map[int64]string{42: "/repo/work"},
-	}
-
-	m.handleSessionTopicMessage(context.Background(), 42, 99, "/gwt api")
-
-	require.Len(t, messages, 2, "the pending bubble must turn into the failure")
-	assert.Contains(t, messages[0], "Creating worktree")
-	assert.Contains(t, messages[1], "/gwt failed")
-}
-
-func TestGwtBareShowsUsage(t *testing.T) {
-	var messages []string
-	ctrl := &fakeController{}
-	m := &Manager{
-		cfg:        config.ManagerEntry{BotToken: "token", TargetChatID: new(int64(-100123))},
-		controller: ctrl,
-		httpClient: &http.Client{Transport: telegramMessageRecorder(t, &messages)},
-		workDirs:   map[int64]string{42: "/repo/work"},
-	}
-
-	m.handleSessionTopicMessage(context.Background(), 42, 99, "/gwt")
-
-	assert.Empty(t, ctrl.createSessionCalls, "bare /gwt creates nothing")
+	ctrl := &fakeController{focus: 42, createSessionErr: errors.New("git failed")}
+	m := newCmdTestManager(t, ctrl, &messages)
+	m.workDirs[42] = "/repo/work"
+	m.handleChatText(t.Context(), "/gwt api")
 	require.Len(t, messages, 1)
-	assert.Contains(t, messages[0], "Usage")
+	assert.Contains(t, messages[0], "git failed")
+	assert.Equal(t, int64(42), ctrl.focus)
 }
 
-func TestGwtInServiceTopicSteersToSession(t *testing.T) {
+func TestGwtBareShowsUsageAndAssistantRefuses(t *testing.T) {
 	var messages []string
-	ctrl := &fakeController{}
-	m := &Manager{
-		cfg:            config.ManagerEntry{BotToken: "token", TargetChatID: new(int64(-100123))},
-		controller:     ctrl,
-		httpClient:     &http.Client{Transport: telegramMessageRecorder(t, &messages)},
-		serviceTopicID: 7,
-	}
-
-	m.handleServiceTopicMessage(context.Background(), "/gwt api")
-
-	assert.Empty(t, ctrl.createSessionCalls, "/gwt in the service topic must not fork")
+	ctrl := &fakeController{focus: 42}
+	m := newCmdTestManager(t, ctrl, &messages)
+	m.handleChatText(t.Context(), "/gwt")
 	require.Len(t, messages, 1)
-	assert.Contains(t, messages[0], "session topic")
+	assert.Contains(t, messages[0], "Usage: /gwt")
+	ctrl.focus = 0
+	m.handleChatText(t.Context(), "/gwt api")
+	require.Len(t, messages, 2)
+	assert.Contains(t, messages[1], "Switch to a work session")
+	assert.Empty(t, ctrl.createSessionCalls)
 }

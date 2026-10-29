@@ -83,11 +83,9 @@ func (s *svc) Start(ctx context.Context) error {
 
 	s.startWake()
 
-	if !s.life.whileOpen(func() { s.progress.Start(ctx) }) {
+	if !s.life.Go("daemon.recovery", s.resumeAfterRestart) {
 		return errDaemonShuttingDown
 	}
-
-	s.life.Go("daemon.recovery", s.resumeAfterRestart)
 
 	return nil
 }

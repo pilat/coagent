@@ -405,7 +405,7 @@ func (s *svc) parkBudgetTree(ctx context.Context, record *budget.Record) {
 		return
 	}
 
-	s.progress.ReconcileLatestReadiness(ctx, record.RootSessionID)
+	s.publishIdle(ctx, record.RootSessionID)
 }
 
 func (s *svc) startPark(record *budget.Record) {

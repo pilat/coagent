@@ -7,7 +7,6 @@ import (
 	"regexp"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -82,16 +81,15 @@ func TestHarnessScenario_AssistantOpenAndRetell(t *testing.T) {
 	assert.Equal(t, 1, assistantEventCount(t, h, root.ID))
 	var workOutputs int
 	require.NoError(t, h.db.QueryRowContext(h.ctx, `SELECT count(*) FROM session_outbox
-		WHERE session_id = ? AND type = 'message_persistent' AND content LIKE 'work answer%'`, work).Scan(&workOutputs))
+		WHERE session_id = ? AND type = 'message' AND content LIKE 'work answer%'`, work).Scan(&workOutputs))
 	assert.Equal(t, 1, workOutputs)
 
 	require.NoError(t, h.mgr.sendToSession(h.ctx, work, "direct user follow-up"))
 	h.waitUntil("direct reply finished", func() bool { return !h.mgr.HasActiveLoop(work) })
 	assert.Equal(t, 1, assistantEventCount(t, h, root.ID))
-	h.mgr.progress.Reconcile(h.ctx, time.Now().UTC().Add(6*time.Minute))
 	var cards int
 	require.NoError(t, h.db.QueryRowContext(h.ctx, `SELECT count(*) FROM session_outbox
-		WHERE session_id = ? AND type = 'message_replaceable' AND source_key NOT LIKE 'message:%'`, root.ID).Scan(&cards))
+		WHERE session_id = ? AND type = 'message' AND source_key NOT LIKE 'message:%'`, root.ID).Scan(&cards))
 	assert.Zero(t, cards)
 }
 
@@ -264,7 +262,7 @@ func assistantSayCount(t *testing.T, h *harness, id int64, text string) int {
 	t.Helper()
 	var count int
 	require.NoError(t, h.db.QueryRowContext(context.Background(), `SELECT count(*) FROM session_outbox
-		WHERE session_id = ? AND type IN ('message_persistent','message_replaceable')
+		WHERE session_id = ? AND type = 'message'
 		AND source_key LIKE 'message:%' AND content = ?`, id, text).Scan(&count))
 
 	return count

@@ -34,10 +34,9 @@ func TestHarnessModel_CompletionCheckRestartAndDelivery(t *testing.T) {
 			Unfired: sessionstore.Parts{
 				Messages: []*transcript.Message{{Role: "user", Content: "second look"}},
 				State: sessionstore.StatePatch{
-					Iteration:           new(1),
-					EmptyStopStreak:     new(2),
-					ManagerReplyPending: new(true),
-					Candidate:           &sessionstore.CandidateChange{Expected: 0, NextRef: 0},
+					Iteration:       new(1),
+					EmptyStopStreak: new(2),
+					Candidate:       &sessionstore.CandidateChange{Expected: 0, NextRef: 0},
 				},
 			},
 		},
@@ -54,8 +53,6 @@ func TestHarnessModel_CompletionCheckRestartAndDelivery(t *testing.T) {
 	require.NotNil(t, state.CandidateID)
 	assert.Equal(t, candidate.MessageIDs[0], *state.CandidateID,
 		"restart must preserve the pending candidate identity")
-	assert.True(t, state.ManagerReplyPending,
-		"restart must preserve the manager reply obligation")
 	assert.Equal(t, 2, state.EmptyStopStreak,
 		"restart must preserve the durable empty streak")
 
@@ -69,7 +66,7 @@ func TestHarnessModel_CompletionCheckRestartAndDelivery(t *testing.T) {
 			Unfired: sessionstore.Parts{
 				Outputs: []sessionstore.Output{
 					{
-						Type:          sessionstore.OutputMessagePersistent,
+						Type:          sessionstore.OutputMessage,
 						Content:       "confirmed answer",
 						MessageRef:    0,
 						Phase:         "final",
@@ -77,11 +74,10 @@ func TestHarnessModel_CompletionCheckRestartAndDelivery(t *testing.T) {
 					},
 				},
 				State: sessionstore.StatePatch{
-					Iteration:           new(2),
-					EmptyStopStreak:     new(0),
-					ManagerReplyPending: new(false),
-					Candidate:           &sessionstore.CandidateChange{Expected: candidate.MessageIDs[0], NextRef: -1},
-					ConfirmedAnswerID:   new(candidate.MessageIDs[0]),
+					Iteration:         new(2),
+					EmptyStopStreak:   new(0),
+					Candidate:         &sessionstore.CandidateChange{Expected: candidate.MessageIDs[0], NextRef: -1},
+					ConfirmedAnswerID: new(candidate.MessageIDs[0]),
 				},
 			},
 		},
@@ -106,7 +102,6 @@ func TestHarnessModel_CompletionCheckRestartAndDelivery(t *testing.T) {
 	state, err = restarted.LoadCompletionCheckState(ctx, sessionID)
 	require.NoError(t, err)
 	assert.Nil(t, state.CandidateID, "confirmation clears the pending check")
-	assert.False(t, state.ManagerReplyPending, "a releasing output clears the reply obligation")
 
 	// Replaying the confirmed commit with the same candidate id is a stale
 	// transition, not a second publication.
@@ -120,7 +115,7 @@ func TestHarnessModel_CompletionCheckRestartAndDelivery(t *testing.T) {
 			Unfired: sessionstore.Parts{
 				Outputs: []sessionstore.Output{
 					{
-						Type:          sessionstore.OutputMessagePersistent,
+						Type:          sessionstore.OutputMessage,
 						Content:       "replayed confirmation",
 						MessageRef:    0,
 						Phase:         "final",
@@ -128,11 +123,10 @@ func TestHarnessModel_CompletionCheckRestartAndDelivery(t *testing.T) {
 					},
 				},
 				State: sessionstore.StatePatch{
-					Iteration:           new(3),
-					EmptyStopStreak:     new(0),
-					ManagerReplyPending: new(false),
-					Candidate:           &sessionstore.CandidateChange{Expected: candidate.MessageIDs[0], NextRef: -1},
-					ConfirmedAnswerID:   new(candidate.MessageIDs[0]),
+					Iteration:         new(3),
+					EmptyStopStreak:   new(0),
+					Candidate:         &sessionstore.CandidateChange{Expected: candidate.MessageIDs[0], NextRef: -1},
+					ConfirmedAnswerID: new(candidate.MessageIDs[0]),
 				},
 			},
 		},
@@ -207,9 +201,8 @@ func TestHarnessModel_CompletionEmptyStopEscalation(t *testing.T) {
 				Unfired: sessionstore.Parts{
 					Messages: []*transcript.Message{{Role: "user", Content: "continue"}},
 					State: sessionstore.StatePatch{
-						Iteration:           new(attempt),
-						EmptyStopStreak:     new(attempt),
-						ManagerReplyPending: new(false),
+						Iteration:       new(attempt),
+						EmptyStopStreak: new(attempt),
 					},
 				},
 			},
@@ -243,7 +236,7 @@ func TestHarnessModel_CompletionEmptyStopEscalation(t *testing.T) {
 			Unfired: sessionstore.Parts{
 				Outputs: []sessionstore.Output{
 					{
-						Type:          sessionstore.OutputMessagePersistent,
+						Type:          sessionstore.OutputMessage,
 						Content:       sessionstore.EmptyStopTerminalNotice(sessionstore.EmptyStopTerminalStreak),
 						MessageRef:    0,
 						Phase:         "final",
@@ -251,9 +244,8 @@ func TestHarnessModel_CompletionEmptyStopEscalation(t *testing.T) {
 					},
 				},
 				State: sessionstore.StatePatch{
-					Iteration:           new(6),
-					EmptyStopStreak:     new(sessionstore.EmptyStopTerminalStreak),
-					ManagerReplyPending: new(false),
+					Iteration:       new(6),
+					EmptyStopStreak: new(sessionstore.EmptyStopTerminalStreak),
 				},
 			},
 		},
@@ -277,7 +269,7 @@ func TestHarnessModel_CompletionEmptyStopEscalation(t *testing.T) {
 	// the same source key with the same fingerprint is a no-op returning the
 	// existing row, never a second notice.
 	replay, err := store.EnqueueOutput(ctx, sessionstore.OutputDraft{
-		SessionID: sessionID, Type: sessionstore.OutputMessagePersistent,
+		SessionID: sessionID, Type: sessionstore.OutputMessage,
 		Content:   sessionstore.EmptyStopTerminalNotice(sessionstore.EmptyStopTerminalStreak),
 		SourceKey: sourceKey, Fingerprint: fingerprint, ReleasesInput: true,
 	})
@@ -291,7 +283,7 @@ func TestHarnessModel_CompletionEmptyStopEscalation(t *testing.T) {
 	// Reusing the key with different content fails closed instead of
 	// replacing the committed notice.
 	_, err = store.EnqueueOutput(ctx, sessionstore.OutputDraft{
-		SessionID: sessionID, Type: sessionstore.OutputMessagePersistent,
+		SessionID: sessionID, Type: sessionstore.OutputMessage,
 		Content:   "different notice",
 		SourceKey: sourceKey, Fingerprint: "different-fingerprint", ReleasesInput: true,
 	})
@@ -388,7 +380,7 @@ func TestHarnessModel_CompletionDeliveryThenPromotionInvalidates(t *testing.T) {
 	_, err = acceptInput(ctx, store, input.ID, input.RawContent)
 	require.NoError(t, err)
 
-	candidate, _, streak := readCompletionState(t, db, parent.ID)
+	candidate, streak := readCompletionState(t, db, parent.ID)
 	assert.False(t, candidate.Valid, "promotion clears the stale candidate")
 	assert.Zero(t, streak, "promotion resets the empty streak")
 }

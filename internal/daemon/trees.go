@@ -185,11 +185,9 @@ func (s *svc) killLocked(ctx context.Context, sessionID int64) error {
 
 	s.killDescendants(cleanupCtx, sessionID, 0)
 
-	if ownerlessSession(rec) {
-		s.publish(sessionID, sessionevent.Notification{
-			Type: sessionevent.NotifyStateChanged, Status: controllerapi.StateIdle, Reason: "killed",
-		})
-	}
+	s.publish(sessionID, sessionevent.Notification{
+		Type: sessionevent.NotifyStateChanged, Status: controllerapi.StateIdle, Reason: "killed",
+	})
 
 	return nil
 }
@@ -233,7 +231,7 @@ func (s *svc) stopLocked(ctx context.Context, sessionID, inputID int64) error {
 		return err
 	}
 
-	if record != nil && ownerlessSession(record) {
+	if record != nil {
 		s.publish(sessionID, sessionevent.Notification{
 			Type: sessionevent.NotifyStateChanged, Status: controllerapi.StateIdle, Reason: "stopped",
 		})
@@ -686,16 +684,12 @@ func (s *svc) completeExplicitStop(
 		return fmt.Errorf("commit explicit stop completion: %w", err)
 	}
 
+	s.publish(rootID, sessionevent.Notification{
+		Type: sessionevent.NotifyStateChanged, Status: controllerapi.StateIdle, Reason: "stopped",
+	})
+
 	if _, err := s.store.ReactivateForSchedule(ctx, rootID); err != nil {
 		return fmt.Errorf("complete explicit stop: %w", err)
-	}
-
-	record, err := s.store.GetSession(ctx, rootID)
-	if err == nil {
-		owner, _ := record.Attributes[controllerapi.SessionAttributeManagerID].(string)
-		if owner != "" {
-			_, _ = s.store.WakeOutputHead(ctx, owner)
-		}
 	}
 
 	return nil

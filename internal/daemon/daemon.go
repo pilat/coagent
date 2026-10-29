@@ -131,8 +131,6 @@ func (s *svc) Shutdown(timeout time.Duration) {
 			logger.Ctx(ctx).Named("daemon.process").Warn("shutdown_cancel_failed", zap.Error(err))
 		}
 
-		_ = s.progress.Stop(ctx)
-
 		for _, rs := range runners {
 			<-rs.Done()
 		}
@@ -209,17 +207,3 @@ func (l *lifetime) close() {
 }
 
 func (l *lifetime) wait() { l.wg.Wait() }
-
-// whileOpen runs fn under the lifetime lock unless Shutdown began; close waits for it.
-func (l *lifetime) whileOpen(fn func()) bool {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-
-	if l.closing {
-		return false
-	}
-
-	fn()
-
-	return true
-}

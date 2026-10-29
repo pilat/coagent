@@ -119,25 +119,8 @@ func (e *sessionEvents) Emit(n sessionevent.Notification) {
 		}
 
 		s.updateLive(ctx, e.sessionID)
-		s.progress.Wake()
 	case sessionevent.NotifyContextChanged:
 		s.updateLive(ctx, e.sessionID)
-	case sessionevent.NotifyIterationPersisted:
-		if iteration, ok := n.Attributes["iteration"].(int); ok {
-			s.publishSubagentIterationProgress(ctx, e.sessionID, int64(iteration))
-		}
-	case sessionevent.NotifyProgressChanged:
-		s.updateLive(ctx, e.sessionID)
-
-		content, published, err := s.progress.EnqueueChange(ctx, e.sessionID)
-		if err != nil {
-			logger.Ctx(ctx).Named("daemon.progress").Warn("enqueue_progress_change", zap.Error(err))
-			return
-		}
-
-		if published {
-			s.publish(e.sessionID, sessionevent.Notification{Type: sessionevent.NotifyMessage, Message: content})
-		}
 	case sessionevent.NotifyMessage,
 		sessionevent.NotifyHeartbeat,
 		sessionevent.NotifyStateChanged,

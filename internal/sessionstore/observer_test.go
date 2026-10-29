@@ -134,7 +134,7 @@ func TestObserverFailureWindows(t *testing.T) {
 			f.store.TakeWoken()
 			step := Commit{SessionID: f.work, State: StatePatch{Status: new(SessionStatusError)}, Outputs: []Output{
 				{
-					Type:          OutputMessagePersistent,
+					Type:          OutputMessage,
 					Content:       "error notice",
 					Key:           "failure",
 					ReleasesInput: true,
@@ -370,7 +370,7 @@ func observerFinal(work int64, text string, yield bool) Commit {
 		State:     StatePatch{Status: new(SessionStatusCompleted)},
 		Outputs: []Output{
 			{
-				Type:          OutputMessagePersistent,
+				Type:          OutputMessage,
 				Content:       text,
 				Phase:         "final",
 				MessageRef:    0,

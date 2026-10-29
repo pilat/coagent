@@ -18,6 +18,10 @@
       "message": "Hi there."
     },
     {
+      "type": "state_changed",
+      "status": "idle"
+    },
+    {
       "type": "session_created",
       "name": "<name>",
       "work_dir": "<workdir>",
@@ -38,61 +42,37 @@
       "status": "idle"
     }
   ],
-  "claims": [
+  "outputs": [
     {
+      "id": 1,
+      "session_id": 1,
       "type": "session_opened",
       "content": "",
-      "attributes": {
-        "manager_id": "telegram:main",
-        "name": "002",
-        "work_dir": "<workdir>"
-      },
-      "source_key": "session:1:opened",
-      "releases_input": false
+      "source_key": "session:1:opened"
     },
     {
-      "type": "message_persistent",
-      "content": "Hi there.\n\n🤖 `fake-model` · iteration 2",
-      "attributes": {
-        "manager_id": "telegram:main",
-        "model_input_generation": 1
-      },
-      "source_key": "message:4:final",
-      "model_input_generation": 1,
-      "releases_input": true
+      "id": 2,
+      "session_id": 1,
+      "type": "message",
+      "content": "Hi there.",
+      "source_key": "message:4:final"
     },
     {
-      "type": "message_persistent",
+      "id": 3,
+      "session_id": 1,
+      "type": "message",
       "content": "⏰ scheduled\n\nproduce the weekly report",
-      "attributes": {
-        "manager_id": "telegram:main",
-        "model_input_generation": 2,
-        "source": "scheduler"
-      },
-      "source_key": "schedule:delivery-chain-1:announcement",
-      "model_input_generation": 2,
-      "previous_message_type": "message_persistent",
-      "previous_model_input_generation": 1,
-      "previous_message_ids": [
-        "<msg-1>"
-      ],
-      "releases_input": false
+      "source_key": "schedule:delivery-chain-1:announcement"
     },
     {
-      "type": "message_replaceable",
-      "content": "Report ready.\n\n🤖 `fake-model` · iteration 4",
-      "attributes": {
-        "manager_id": "telegram:main",
-        "model_input_generation": 2
-      },
-      "source_key": "message:9:final",
-      "model_input_generation": 2,
-      "previous_message_type": "message_persistent",
-      "previous_model_input_generation": 2,
-      "previous_message_ids": [
-        "<msg-2>"
-      ],
-      "releases_input": true
+      "id": 4,
+      "session_id": 1,
+      "type": "message",
+      "content": "Report ready.",
+      "source_key": "message:9:final"
     }
-  ]
+  ],
+  "owners": {
+    "1": "telegram:main"
+  }
 }

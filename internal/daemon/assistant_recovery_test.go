@@ -93,7 +93,7 @@ func TestHarnessScenario_AssistantBootObservesCompletedSend(t *testing.T) {
 		State:    sessionstore.StatePatch{Status: &completed},
 		Outputs: []sessionstore.Output{
 			{
-				Type:          sessionstore.OutputMessagePersistent,
+				Type:          sessionstore.OutputMessage,
 				Content:       "finished before crash",
 				Phase:         "final",
 				MessageRef:    0,
@@ -226,7 +226,7 @@ func TestHarnessScenario_AssistantWaitsForWorkSleep(t *testing.T) {
 		State:     sessionstore.StatePatch{Status: new(sessionstore.SessionStatusCompleted)},
 		Outputs: []sessionstore.Output{
 			{
-				Type:          sessionstore.OutputMessagePersistent,
+				Type:          sessionstore.OutputMessage,
 				Content:       "both merged",
 				Phase:         "final",
 				MessageRef:    0,

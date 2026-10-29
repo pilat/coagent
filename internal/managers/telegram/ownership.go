@@ -1,8 +1,6 @@
 package telegram
 
 import (
-	"context"
-
 	"github.com/pilat/coagent/internal/controllerapi"
 )
 
@@ -29,19 +27,4 @@ func (m *Manager) filterOwnedActiveSessions(
 	}
 
 	return owned
-}
-
-func (m *Manager) ownsActiveSessionID(ctx context.Context, sessionID int64) bool {
-	sessions, err := m.controller.ListSessions(ctx)
-	if err != nil {
-		return false
-	}
-
-	for _, session := range m.filterOwnedActiveSessions(sessions) {
-		if session.ID == sessionID {
-			return true
-		}
-	}
-
-	return false
 }

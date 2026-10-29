@@ -305,7 +305,7 @@ func (s *Session) acceptBoundaryCommand(
 	c.Outputs = append(
 		c.Outputs,
 		sessionstore.Output{
-			Type:          sessionstore.OutputMessagePersistent,
+			Type:          sessionstore.OutputMessage,
 			Content:       output,
 			Key:           fmt.Sprintf("input:%d:%s:result", input.ID, strings.TrimPrefix(command, "/")),
 			MessageRef:    -1,
@@ -345,7 +345,7 @@ func (s *Session) deferBoundaryCompaction(batch *boundaryBatch, input *sessionst
 	}
 
 	batch.commit.Outputs = append(batch.commit.Outputs, sessionstore.Output{
-		Type: sessionstore.OutputMessagePersistent, Content: compactionDeferredNotice,
+		Type: sessionstore.OutputMessage, Content: compactionDeferredNotice,
 		Key: fmt.Sprintf("input:%d:compact:deferred", input.ID), MessageRef: -1,
 	})
 	s.compactionDeferAnnounced = true
@@ -487,7 +487,7 @@ func (s *Session) acceptBoundarySchedule(batch *boundaryBatch, input *sessionsto
 	c.Outputs = append(
 		c.Outputs,
 		sessionstore.Output{
-			Type:        sessionstore.OutputMessagePersistent,
+			Type:        sessionstore.OutputMessage,
 			Content:     "⏰ scheduled\n\n" + input.RawContent,
 			PersistOnly: true,
 			Key:         "schedule:" + deliveryKey + ":announcement",
@@ -558,10 +558,6 @@ func (s *Session) acceptBoundaryText(
 		s.preserveStopped = false
 	}
 
-	if owner != "" && input.Source == sessionstore.InputSourceUser {
-		r.directReply = true
-	}
-
 	s.loopDetector.resetWindow()
 
 	if command != "" || c.Activation != nil {
@@ -585,7 +581,7 @@ func rejectBoundaryInput(batch *boundaryBatch, input *sessionstore.InboxInput, c
 	c.Outputs = append(
 		c.Outputs,
 		sessionstore.Output{
-			Type:          sessionstore.OutputMessagePersistent,
+			Type:          sessionstore.OutputMessage,
 			Content:       "⚠️ " + cause.Error(),
 			Key:           fmt.Sprintf("input:%d:rejected", input.ID),
 			MessageRef:    -1,

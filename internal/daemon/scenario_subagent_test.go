@@ -792,40 +792,19 @@ func TestHarnessScenario_ForegroundChildHasNoLifetimeLimit(t *testing.T) {
 	parentMsgs := h.messages(parentID)
 	assert.Zero(t, countToolResultsFor(parentMsgs, tool.IDTask), "the parent's task call is still unresolved")
 	collector.waitWait(parentID, sessionevent.WaitSubagent)
-	var waitingRow *outboxRow
-	var waitingCards int
-	for _, row := range h.outbox(parentID) {
-		if row.Type == "message_replaceable" {
-			waitingRow = &row
-			waitingCards++
-		}
-	}
-	require.NotNil(t, waitingRow)
-	waitingCard := waitingRow.Content
-	assert.Contains(t, waitingCard, "🧩 Subagents · 1 foreground · 0 background")
-	assert.NotContains(t, waitingCard, "🟢 Working",
-		"the suspended parent must not look active while its child works")
-	assert.Equal(t, 1, waitingCards, "spawn and suspension must reuse one durable foreground waiting card")
+	status, err := h.mgr.progress.Current(h.ctx, parentID)
+	require.NoError(t, err)
+	assert.Contains(t, status, "- Active subagents: 1 foreground · 0 background")
 	close(childRelease)
 	released = true
 	collector.waitMessage(parentID, "parent collected the long child")
-	drainScenarioClaims(t, "foreground_child_no_lifetime.json", newChainController(t, h))
 	collector.waitIdleAfter(parentID, "parent collected the long child")
 	link = h.link(link.ChildID)
 	require.NotNil(t, link)
 	assert.Equal(t, subagent.OutcomeCompleted, link.Outcome)
-	var stoppedRow *outboxRow
-	for _, row := range h.outbox(parentID) {
-		prefix := fmt.Sprintf("progress:change:subagent:%d:", link.ChildID)
-		if strings.HasPrefix(row.SourceKey, prefix) &&
-			strings.Contains(strings.TrimPrefix(row.SourceKey, prefix), ":completed:g") {
-			stoppedRow = &row
-		}
-	}
-	require.NotNil(t, stoppedRow)
-	stoppedCard := stoppedRow.Content
-	assert.NotContains(t, stoppedCard, "Subagents",
-		"terminalization must publish the card that removes the finished child")
+	status, err = h.mgr.progress.Current(h.ctx, parentID)
+	require.NoError(t, err)
+	assert.NotContains(t, status, "Active subagents:")
 	child := h.messages(link.ChildID)
 	require.NoError(t, llm.ValidateToolPairing(child))
 	assert.Greater(t, countToolResultsFor(child, "ls"), 10,
@@ -833,7 +812,7 @@ func TestHarnessScenario_ForegroundChildHasNoLifetimeLimit(t *testing.T) {
 	final := h.messages(parentID)
 	require.NoError(t, llm.ValidateToolPairing(final))
 	assert.Equal(t, 1, countToolResultsFor(final, tool.IDTask), "exactly one parent result resolves the task call")
-	assertHarnessTrace(t, "foreground_child_no_lifetime.json", collector.snapshot(), parentID)
+	assertHarnessTrace(t, h, "foreground_child_no_lifetime.json", collector.snapshot(), parentID)
 }
 
 func TestHarnessScenario_SubagentTextWithToolsCompletes(t *testing.T) {
@@ -883,7 +862,7 @@ func TestHarnessScenario_SubagentTextWithToolsCompletes(t *testing.T) {
 	require.NotNil(t, link)
 	assert.Equal(t, subagent.OutcomeCompleted, link.Outcome)
 	assert.Equal(t, 1, countToolResultsFor(transcriptOf(h, link.ChildID), "ls"))
-	assertHarnessTrace(t, "subagent_text_with_tools.json", collector.snapshot(), parentID)
+	assertHarnessTrace(t, h, "subagent_text_with_tools.json", collector.snapshot(), parentID)
 }
 
 func TestHarnessScenario_ForegroundChildContinuesWithoutSleep(t *testing.T) {
@@ -969,7 +948,7 @@ func TestHarnessScenario_ForegroundChildContinuesWithoutSleep(t *testing.T) {
 	schedules, err := h.schedules.ListSchedules(h.ctx, parentID)
 	require.NoError(t, err)
 	assert.Empty(t, schedules, "rejected sleep must not leave a competing wake-up")
-	assertHarnessTrace(t, "foreground_followup_no_sleep.json", collector.snapshot(), parentID)
+	assertHarnessTrace(t, h, "foreground_followup_no_sleep.json", collector.snapshot(), parentID)
 }
 
 func TestHarnessScenario_BackgroundChildIsTheWakeSource(t *testing.T) {
@@ -1012,17 +991,9 @@ func TestHarnessScenario_BackgroundChildIsTheWakeSource(t *testing.T) {
 	link := h.linkByCall(parentID, taskCallID)
 	require.NotNil(t, link)
 	assert.False(t, link.Blocking)
-	var runningRow *outboxRow
-	for _, row := range h.outbox(parentID) {
-		prefix := fmt.Sprintf("progress:change:subagent:%d:", link.ChildID)
-		if strings.HasPrefix(row.SourceKey, prefix) &&
-			strings.Contains(strings.TrimPrefix(row.SourceKey, prefix), ":spawned:g") {
-			runningRow = &row
-		}
-	}
-	require.NotNil(t, runningRow)
-	runningCard := runningRow.Content
-	assert.Contains(t, runningCard, "🧩 Subagents · 0 foreground · 1 background")
+	status, err := h.mgr.progress.Current(h.ctx, parentID)
+	require.NoError(t, err)
+	assert.Contains(t, status, "- Active subagents: 0 foreground · 1 background")
 	parentMessages := h.messages(parentID)
 	assert.Equal(t, 1, countToolResultsFor(parentMessages, tool.IDSleep))
 	assert.Contains(t, subagentLastToolResultContent(parentMessages, tool.IDSleep),
@@ -1033,27 +1004,20 @@ func TestHarnessScenario_BackgroundChildIsTheWakeSource(t *testing.T) {
 	h.waitUntil("session idle", func() bool { return !h.mgr.HasActiveLoop(parentID) })
 	close(childRelease)
 	collector.waitMessage(parentID, "background completion delivered")
-	drainScenarioClaims(t, "background_child_no_sleep.json", newChainController(t, h))
 	collector.waitIdleAfter(parentID, "background completion delivered")
-	var stoppedRow *outboxRow
-	for _, row := range h.outbox(parentID) {
-		prefix := fmt.Sprintf("progress:change:subagent:%d:", link.ChildID)
-		if strings.HasPrefix(row.SourceKey, prefix) &&
-			strings.Contains(strings.TrimPrefix(row.SourceKey, prefix), ":completed:g") {
-			stoppedRow = &row
-		}
-	}
-	require.NotNil(t, stoppedRow)
-	stoppedCard := stoppedRow.Content
-	assert.NotContains(t, stoppedCard, "Subagents")
-	assertHarnessTrace(t, "background_child_no_sleep.json", collector.snapshot(), parentID)
+	status, err = h.mgr.progress.Current(h.ctx, parentID)
+	require.NoError(t, err)
+	assert.NotContains(t, status, "Active subagents:")
+	assertHarnessTrace(t, h, "background_child_no_sleep.json", collector.snapshot(), parentID)
 }
 
 func TestHarnessScenario_BackgroundFinalResponseResumesOnCompletion(t *testing.T) {
 	childRelease := make(chan struct{})
+	childStarted := make(chan struct{})
 	var rootCalls atomic.Int64
 	respond := func(_ string, messages []llmwire.Message) *llmwire.Response {
 		if hasUserContaining(messages, "CHILD_CANARY") {
+			closeOnce(childStarted)
 			<-childRelease
 			return textReply("canary child complete")
 		}
@@ -1062,6 +1026,12 @@ func TestHarnessScenario_BackgroundFinalResponseResumesOnCompletion(t *testing.T
 			return textReply("completion after wait")
 		}
 		if hasToolResultFor(messages, tool.IDTask) {
+			select {
+			case <-childStarted:
+			case <-time.After(5 * time.Second):
+				t.Error("child history did not commit before the parent yield")
+			}
+
 			return textReply("child still running")
 		}
 		return callReply(
@@ -1093,20 +1063,17 @@ func TestHarnessScenario_BackgroundFinalResponseResumesOnCompletion(t *testing.T
 	}
 	require.NotNil(t, outputRow)
 	outputType, output := outputRow.Type, outputRow.Content
-	assert.Equal(t, string(sessionstore.OutputMessagePersistent), outputType)
-	// The yield final carries the background badge title ahead of the model text.
-	assert.True(t, strings.HasPrefix(output, "🟣 Background\n\n"), "yield card: %q", output)
-	assert.Contains(t, output, "child still running")
+	assert.Equal(t, string(sessionstore.OutputMessage), outputType)
+	assert.Equal(t, "child still running", output)
 
 	// Settle the old parent runner before releasing the child; the golden requires a fresh resumed loop.
 	h.waitUntil("session idle", func() bool { return !h.mgr.HasActiveLoop(parentID) })
 	close(childRelease)
 	collector.waitMessage(parentID, "completion after wait")
-	drainScenarioClaims(t, "background_wait_canary.json", newChainController(t, h))
 	collector.waitIdleAfter(parentID, "completion after wait")
 	// The task turn, yield, completion candidate and confirmation require four parent model calls.
 	assert.Equal(t, int64(4), rootCalls.Load())
-	assertHarnessTrace(t, "background_wait_canary.json", collector.snapshot(), parentID)
+	assertHarnessTrace(t, h, "background_wait_canary.json", collector.snapshot(), parentID)
 }
 
 func TestHarnessScenario_ForegroundScatterGatherProjectsShrinkingAllWaitSet(t *testing.T) {
@@ -1220,7 +1187,7 @@ func TestHarnessScenario_ForegroundScatterGatherProjectsShrinkingAllWaitSet(t *t
 			assert.Nil(t, item.WakeAt)
 		}
 	}
-	assertHarnessTrace(t, "scatter_gather_shrinking_wait_set.json", collector.snapshot(), parentID)
+	assertHarnessTrace(t, h, "scatter_gather_shrinking_wait_set.json", collector.snapshot(), parentID)
 }
 
 func TestIntegration_BackgroundSubagentCompletes(t *testing.T) {
@@ -1876,7 +1843,7 @@ func assertNotOffered(t *testing.T, offered map[string]bool, ids []string) {
 // A subagent must never reach the control plane, whatever its allowlist says.
 var controlPlaneTools = []string{tool.IDSleep, tool.IDTask, tool.IDSchedule}
 
-var configPlaneTools = []string{tool.IDConfigEdit}
+var configPlaneTools = []string{tool.IDConfigEdit, tool.IDConfigRead}
 
 const scoutAgentFile = `---
 name: scout

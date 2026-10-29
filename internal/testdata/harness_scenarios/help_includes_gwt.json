@@ -19,6 +19,10 @@
       "message": "session ready"
     },
     {
+      "type": "state_changed",
+      "status": "idle"
+    },
+    {
       "type": "session_created",
       "name": "<name>",
       "work_dir": "<workdir>",
@@ -33,51 +37,37 @@
     },
     {
       "type": "message",
-      "message": "## Session commands\n`/status` — show session status\n`/stop` — stop the current run\n`/clear` — start a fresh session\n`/kill` — close this session\n`/compact [focus]` — compact the context\n`/schedules` — list schedules\n`/budget <request>` — arm, replace, inspect, or clear a one-shot cost/wall-time checkpoint\n`/gwt <name>` — fork into a worktree (Telegram session topics only)"
+      "message": "## Session commands\n`/status` — show session status\n`/stop` — stop the current run\n`/clear` — start a fresh session\n`/kill` — close this session\n`/compact [focus]` — compact the context\n`/schedules` — list schedules\n`/budget <request>` — arm, replace, inspect, or clear a one-shot cost/wall-time checkpoint\n`/gwt <name>` — fork into a worktree (work sessions only)"
     },
     {
       "type": "state_changed",
       "status": "idle"
     }
   ],
-  "claims": [
+  "outputs": [
     {
+      "id": 1,
+      "session_id": 1,
       "type": "session_opened",
       "content": "",
-      "attributes": {
-        "manager_id": "telegram:main",
-        "name": "003",
-        "work_dir": "<workdir>"
-      },
-      "source_key": "session:1:opened",
-      "releases_input": false
+      "source_key": "session:1:opened"
     },
     {
-      "type": "message_persistent",
-      "content": "session ready\n\n🤖 `fake-model` · iteration 2",
-      "attributes": {
-        "manager_id": "telegram:main",
-        "model_input_generation": 1
-      },
-      "source_key": "message:4:final",
-      "model_input_generation": 1,
-      "releases_input": true
+      "id": 2,
+      "session_id": 1,
+      "type": "message",
+      "content": "session ready",
+      "source_key": "message:4:final"
     },
     {
-      "type": "message_persistent",
-      "content": "## Session commands\n`/status` — show session status\n`/stop` — stop the current run\n`/clear` — start a fresh session\n`/kill` — close this session\n`/compact [focus]` — compact the context\n`/schedules` — list schedules\n`/budget <request>` — arm, replace, inspect, or clear a one-shot cost/wall-time checkpoint\n`/gwt <name>` — fork into a worktree (Telegram session topics only)",
-      "attributes": {
-        "manager_id": "telegram:main",
-        "model_input_generation": 1
-      },
-      "source_key": "input:2:help:result",
-      "model_input_generation": 1,
-      "previous_message_type": "message_persistent",
-      "previous_model_input_generation": 1,
-      "previous_message_ids": [
-        "<msg-1>"
-      ],
-      "releases_input": false
+      "id": 3,
+      "session_id": 1,
+      "type": "message",
+      "content": "## Session commands\n`/status` — show session status\n`/stop` — stop the current run\n`/clear` — start a fresh session\n`/kill` — close this session\n`/compact [focus]` — compact the context\n`/schedules` — list schedules\n`/budget <request>` — arm, replace, inspect, or clear a one-shot cost/wall-time checkpoint\n`/gwt <name>` — fork into a worktree (work sessions only)",
+      "source_key": "input:2:help:result"
     }
-  ]
+  ],
+  "owners": {
+    "1": "telegram:main"
+  }
 }

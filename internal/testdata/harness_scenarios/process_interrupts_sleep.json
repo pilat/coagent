@@ -44,44 +44,23 @@
       "status": "idle"
     }
   ],
-  "claims": [
+  "outputs": [
     {
+      "id": 1,
+      "session_id": 1,
       "type": "session_opened",
       "content": "",
-      "attributes": {
-        "manager_id": "telegram:main",
-        "name": "003",
-        "work_dir": "<workdir>"
-      },
-      "source_key": "session:1:opened",
-      "releases_input": false
+      "source_key": "session:1:opened"
     },
     {
-      "type": "message_replaceable",
-      "content": "**🟣 Background**\n\n🤖 `fake-model` · iteration 1\n⌚ <elapsed> · 💰 $0.0 total",
-      "attributes": {
-        "manager_id": "telegram:main",
-        "model_input_generation": 1
-      },
-      "source_key": "progress:change:waiting:43be6c0f21655309f3c7b2477923ee3b54d24031cf212696177a5e6b206f3404:g1",
-      "model_input_generation": 1,
-      "releases_input": false
-    },
-    {
-      "type": "message_persistent",
-      "content": "process interrupted sleep\n\n🤖 `fake-model` · iteration 3",
-      "attributes": {
-        "manager_id": "telegram:main",
-        "model_input_generation": 2
-      },
-      "source_key": "message:7:final",
-      "model_input_generation": 2,
-      "previous_message_type": "message_replaceable",
-      "previous_model_input_generation": 1,
-      "previous_message_ids": [
-        "<msg-1>"
-      ],
-      "releases_input": true
+      "id": 2,
+      "session_id": 1,
+      "type": "message",
+      "content": "process interrupted sleep",
+      "source_key": "message:7:final"
     }
-  ]
+  ],
+  "owners": {
+    "1": "telegram:main"
+  }
 }

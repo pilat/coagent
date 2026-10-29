@@ -41,19 +41,19 @@ func TestAssistantDeskConversationFromInboxAndOutbox(t *testing.T) {
 		t.Context(),
 		sessionstore.Commit{SessionID: root, At: now.Add(26 * time.Minute), Outputs: []sessionstore.Output{
 			{
-				Type:       sessionstore.OutputMessagePersistent,
+				Type:       sessionstore.OutputMessage,
 				Key:        "host:error",
 				Content:    "host error notice",
 				MessageRef: -1,
 			},
 			{
-				Type:       sessionstore.OutputMessageReplaceable,
+				Type:       sessionstore.OutputMessage,
 				Key:        "host:compaction",
 				Content:    "host compaction notice",
 				MessageRef: -1,
 			},
 			{
-				Type:       sessionstore.OutputMessagePersistent,
+				Type:       sessionstore.OutputMessage,
 				Key:        "input:status",
 				Content:    "host status receipt",
 				MessageRef: -1,
@@ -131,9 +131,9 @@ func seedDeskExchange(t *testing.T, db *sql.DB, sessions *sessionstore.Store, ro
 	require.NoError(t, err)
 	_, err = db.ExecContext(t.Context(), `UPDATE session_inbox SET received_at = ? WHERE id = ?`, at, input.Input.ID)
 	require.NoError(t, err)
-	kind := sessionstore.OutputMessagePersistent
+	kind := sessionstore.OutputMessage
 	if index%2 == 1 {
-		kind = sessionstore.OutputMessageReplaceable
+		kind = sessionstore.OutputMessage
 	}
 	_, err = sessions.Commit(t.Context(), sessionstore.Commit{
 		SessionID: root,
