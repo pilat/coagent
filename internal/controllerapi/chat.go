@@ -6,6 +6,7 @@ import "context"
 //
 //nolint:iface // optional capability asserted by built-in chat managers.
 type ChatFocusController interface {
+	BindChat(ctx context.Context, chatID string) error
 	ChatFocus(ctx context.Context, chatID string) (int64, error)
 	SetChatFocus(ctx context.Context, chatID string, sessionID int64) error
 	ResetChatFocus(ctx context.Context, chatID string, from int64) (bool, error)

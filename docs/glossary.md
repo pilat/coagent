@@ -132,9 +132,11 @@ _Avoid_: management project, privileged project.
 **assistant**:
 Coagent's `#0` in a manager's chat: an ordinary root of the hidden `assistant`
 type, with a desk head and immediate tools for delegating work and retelling
-answers. Its nine owner tools administer global MCP registration, its own
-schedules and budget, and configuration under `/config`. It has no general
-file, shell or web tools. `/assistant` and `/switch 0` select it.
+answers. It can switch the user into live owned work from `#0`, list configured
+models and change work roots' models. Its owner tools administer global MCP
+registration, its own schedules, configuration under `/config`, and budgets for
+itself or addressable work roots under its current `/budget` grant. It has no
+general file, shell or web tools. `/assistant` and `/switch 0` select it.
 _Avoid_: coordinator, dispatcher, work-item manager.
 
 **turn** (assistant):
@@ -334,6 +336,9 @@ _Avoid_: output queue, delivery backlog.
 The durable session selected by one manager and chat. Public ID `0` denotes its
 assistant, stored as NULL in `chat_focus`. It is independent of the assistant's
 **focus** items and does not change which sessions keep running.
+The manager creates its row at startup without overwriting an existing selection.
+The assistant may switch the user into work only from `#0`; leaving a live work
+session, for Assistant or another session, belongs to the user.
 _Avoid_: active session (several sessions may run at once), assistant focus.
 
 **watermark**:

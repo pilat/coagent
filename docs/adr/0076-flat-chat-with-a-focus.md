@@ -11,6 +11,7 @@
   [ADR-0061](0061-completion-check-publishes-the-candidate-answer.md),
   [ADR-0074](0074-assistant-is-an-ordinary-session-with-a-desk-head.md),
   [ADR-0075](0075-work-answers-reach-the-observer-through-its-inbox.md)
+- **Amended by:** [ADR-0077](0077-assistant-moves-the-user-in-never-out.md) — the assistant may move the focus from `#0` into a work session; only the user moves it out
 
 ## Context
 

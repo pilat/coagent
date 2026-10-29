@@ -491,7 +491,9 @@ a one-shot root-tree cost/duration checkpoint, consuming the grant inside the
 same transaction as the mutation it authorizes. Model responses and successful
 compaction summaries commit usage, fire comparison, skipped returned-tool
 results and checkpoint intent in one session-store transaction. The daemon
-closes admission before a generation drains and parks; managed park workers are
+closes admission before a generation drains and parks. Rearming refuses a fired
+generation whose park is requested or draining, preserving its owner and generation;
+a released row's leftover phase does not block rearming. Managed park workers are
 cancelled and joined at shutdown. Startup reconciles armed and half-parked
 generations before normal session recovery. A synchronized budget clock sends
 due roots to the inbox wake worker; timer callbacks never perform ledger writes.
@@ -505,6 +507,11 @@ An armed generation remains armed across an ordinary final response while the
 tree has an advertised running process, an undelivered background child, or
 pending asynchronous completion input. Producer ledgers are checked before the
 inbox so their atomic terminal-to-input transition cannot disappear between reads.
+
+Terminal release targets the generation observed during settlement. A release
+CAS conflict means that budget state was superseded: it is logged at info and
+leaves the current budget untouched, without failing successful work or
+blocking pending input from continuing. Other release failures still propagate.
 
 For a rejected ordinary model attempt, the session chooses recovery or terminal
 error. Its store commit advances the iteration, records usage and finish evidence,
@@ -833,7 +840,8 @@ manager owns one ordinary root of the hidden, non-spawnable `assistant` type in
 the shared assistant project. Its model and effort selection persist like other roots;
 legacy roots with no model receive the defaults. Its agent policy omits project
 context and native integrated search. It exposes its desk tools plus schedule,
-five global MCP registry tools, config read/edit and its budget tool. General
+five global MCP registry tools, config read/edit, configured-model discovery and
+work-root model changes, and budgets for itself or addressable work roots. General
 filesystem, shell, external MCP and subagent tools remain absent.
 
 The ordinary session boundary renders a fresh desk when an activation first
@@ -863,11 +871,24 @@ behind one transactional watermark; memory and focus edits update their index
 rows atomically. Compacted rows remain searchable; another assistant's dialog
 never becomes visible through the own-root branch.
 
+The assistant can switch the user into live owned work only from Assistant.
+The manager binds its chat at startup without overwriting the selection; the
+daemon switches by manager identity, rechecking target liveness and the NULL
+selection in the same transaction. An unbound chat or a user already in work is
+refused. The assistant cannot move the user out of work or back to itself;
+delivery observes the ordinary selection change without a separate chat message.
+Work-root model changes use the same daemon path as the manager's model picker.
+Targeted budgets consume the assistant root's current `/budget` grant while
+arming or clearing the target root and capturing its cost baseline. Pricing is
+read from the target's model at execution. Only the assistant receives the receipt;
+the work root's output log receives neither budget nor model notices.
+
 All tool effects execute immediately through the ordinary tool protocol, return
 real ids and survive a later model failure. Memory and focus enforce their limits
 inside their write transactions. Open records its `about` with the first send
 before admitting input; delivery authorizes inside the tree lock. The daemon
-host supplies creation, delivery and stop, while the session owns model calls,
+host supplies creation, delivery, stop, chat switching and model administration,
+while the session owns model calls,
 step commits, durable errors and output. Effects and their tool-result commits
 are separate: a runtime result-commit failure can leave a call unresolved for a
 later activation; boot instead settles interrupted calls as typed failures.
@@ -875,8 +896,12 @@ later activation; boot instead settles interrupted calls as typed failures.
 Every open/send appends the latest accepted user input still linked to an active
 transcript row, trimmed and CRLF-normalized as a blockquote. Its label warns that
 the user works with several sessions and some words may concern other work.
-Commands, instructions already containing those words and activations without
-an active user row receive no quote. Multiple handovers each receive it.
+Instructions already containing those words and activations without an active
+user row receive no quote. Multiple handovers each receive it. Open/send refuse
+slash-prefixed instructions before effects, including root creation. The store's
+enqueue boundary independently refuses trimmed slash text carrying assistant
+provenance (`observer_session_id` or `from=assistant`), preventing forged user
+commands and activation grants.
 
 Every assistant instruction carries its observer root reference in its work
 inbox row. A non-yield final of the work root enqueues one answered agent input
@@ -901,7 +926,8 @@ notifications and heartbeat typing flow normally. Assistant roots remain
 protected from stop, kill, clear and compact. The session model is
 recorded in [ADR-0074](docs/adr/0074-assistant-is-an-ordinary-session-with-a-desk-head.md),
 superseding [ADR-0073](docs/adr/0073-assistant-turn-is-a-buffered-tool-loop.md), with
-observer delivery recorded in [ADR-0075](docs/adr/0075-work-answers-reach-the-observer-through-its-inbox.md).
+observer delivery recorded in [ADR-0075](docs/adr/0075-work-answers-reach-the-observer-through-its-inbox.md)
+and work administration in [ADR-0077](docs/adr/0077-assistant-moves-the-user-in-never-out.md).
 
 ### Daemon, sessions and persistence
 
@@ -1116,8 +1142,10 @@ liveness validation, DTO conversion, focus/seen operations and project resolutio
 composition root supplies the daemon backend, store, discovery and session bus.
 
 Each Telegram manager owns one private or group chat. Startup validates the bot
-and chat, ensures its assistant and starts polling and the send-only chat loop.
-`/switch` selects only live owned roots; `/assistant` selects public ID 0.
+and chat, ensures its assistant, binds the chat without overwriting its selection,
+and starts polling and the send-only chat loop. `/switch` selects only live owned
+roots; `/assistant` selects public ID 0. `/switch`, numbered `/kill` and `/stop`
+accept one leading `#` on the session number.
 Commands and media route to the durable focus; heartbeats type only for the
 loop's focused root. The assistant accepts model, configuration, budget and
 schedule operations, but refuses work-only stop/kill/clear/compact/worktree flows.

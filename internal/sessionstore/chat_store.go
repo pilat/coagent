@@ -11,6 +11,8 @@ const liveChatRootSQL = `s.parent_id = 0 AND s.killed_at IS NULL
 	AND s.status NOT IN ('terminating', 'killed')
 	AND json_extract(s.attributes, '$.manager_id') = ?`
 
+const assistantChatRootSQL = liveChatRootSQL + ` AND COALESCE(s.agent_type, '') <> 'assistant'`
+
 // ChatOutput includes non-rendering lifecycle rows that still advance the chat watermark.
 type ChatOutput struct {
 	ID        int64
@@ -27,6 +29,24 @@ type ChatSession struct {
 	Unread         int64
 	LatestUnread   string
 	LatestUnreadID int64
+}
+
+// BindChat preserves the user's selection across manager restarts.
+func (s *Store) BindChat(ctx context.Context, managerID, chatID string) error {
+	_, err := s.db.ExecContext(ctx, `INSERT INTO chat_focus (manager_id, chat_id, session_id)
+		VALUES (?, ?, NULL) ON CONFLICT(manager_id, chat_id) DO NOTHING`, managerID, chatID)
+	if err != nil {
+		return fmt.Errorf("bind chat: %w", err)
+	}
+
+	return nil
+}
+
+// FocusOwnerChat only moves a user who is still talking to the assistant.
+func (s *Store) FocusOwnerChat(ctx context.Context, managerID string, sessionID int64) error {
+	return s.WithTx(ctx, func(tx *sql.Tx) error {
+		return focusOwnerChatTx(ctx, tx, managerID, sessionID)
+	})
 }
 
 // ChatFocus returns zero for the assistant, including a missing chat binding.
@@ -160,4 +180,50 @@ func (s *Store) ChatOutputs(
 	}
 
 	return outputs, nil
+}
+
+func focusOwnerChatTx(ctx context.Context, tx *sql.Tx, managerID string, sessionID int64) error {
+	var bound, live bool
+	if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM chat_focus WHERE manager_id = ?)`,
+		managerID).Scan(&bound); err != nil {
+		return fmt.Errorf("check chat binding: %w", err)
+	}
+
+	if !bound {
+		return ErrChatNotBound
+	}
+
+	if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM sessions s WHERE s.id = ? AND `+
+		assistantChatRootSQL+`)`, sessionID, managerID).Scan(&live); err != nil {
+		return fmt.Errorf("check chat target: %w", err)
+	}
+
+	if !live {
+		return fmt.Errorf("#%d is not a live session", sessionID)
+	}
+
+	result, err := tx.ExecContext(ctx, `UPDATE chat_focus SET session_id = ?
+		WHERE manager_id = ? AND session_id IS NULL
+		AND EXISTS(SELECT 1 FROM sessions s WHERE s.id = ? AND `+assistantChatRootSQL+`)`,
+		sessionID, managerID, sessionID, managerID)
+	if err != nil {
+		return fmt.Errorf("switch owner chat: %w", err)
+	}
+
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("count owner chat switch: %w", err)
+	}
+
+	if affected > 0 {
+		return nil
+	}
+
+	var current int64
+	if err := tx.QueryRowContext(ctx, `SELECT session_id FROM chat_focus
+		WHERE manager_id = ? AND session_id IS NOT NULL LIMIT 1`, managerID).Scan(&current); err != nil {
+		return fmt.Errorf("read current chat selection: %w", err)
+	}
+
+	return fmt.Errorf("the user is in session #%d; they switch themselves", current)
 }

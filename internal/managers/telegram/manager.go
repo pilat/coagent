@@ -188,6 +188,11 @@ func (m *Manager) Start(ctx context.Context) error {
 
 	m.assistantRootID = root.SessionID
 	m.setWorkDir(root.SessionID, root.WorkDir)
+
+	if err := m.chat.BindChat(runCtx, m.chatKey()); err != nil {
+		return fmt.Errorf("bind chat: %w", err)
+	}
+
 	subscription := m.controller.Subscribe()
 
 	if err := m.setCommands(runCtx); err != nil {

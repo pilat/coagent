@@ -10,6 +10,18 @@ import (
 
 var _ controllerapi.ChatFocusController = (*controller)(nil)
 
+func (c *controller) BindChat(ctx context.Context, chatID string) error {
+	if err := requireManagerIdentity(c.managerID); err != nil {
+		return err
+	}
+
+	if err := c.app.store.BindChat(ctx, c.managerID, chatID); err != nil {
+		return fmt.Errorf("bind manager chat: %w", err)
+	}
+
+	return nil
+}
+
 func (c *controller) ChatFocus(ctx context.Context, chatID string) (int64, error) {
 	if err := requireManagerIdentity(c.managerID); err != nil {
 		return 0, err

@@ -3,12 +3,16 @@ package daemon
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zaptest/observer"
 
 	"github.com/pilat/coagent/internal/budget"
+	"github.com/pilat/coagent/internal/logger"
 	"github.com/pilat/coagent/internal/sessionstore"
 	"github.com/pilat/coagent/internal/subagent"
 )
@@ -87,6 +91,22 @@ func TestReleaseArmedBudgetHonorsStateAndErrors(t *testing.T) {
 		err := manager.releaseArmedBudget(t.Context(), 1, "stopped")
 		require.ErrorIs(t, err, releaseErr)
 		assert.Equal(t, 1, service.releaseCalls)
+	})
+	t.Run("superseded budget completes with an info log", func(t *testing.T) {
+		core, logs := observer.New(zap.InfoLevel)
+		ctx := logger.ToContext(t.Context(), zap.New(core))
+		service := &budgetServiceProbe{
+			record:     &budget.Record{State: budget.Armed, Generation: 3},
+			releaseErr: fmt.Errorf("stale release: %w", budget.ErrConflict),
+		}
+		manager := &svc{budgets: service}
+		require.NoError(t, manager.releaseArmedBudget(ctx, 12, "completed"))
+		assert.Equal(t, 1, service.releaseCalls)
+		entries := logs.FilterMessage("terminal_budget_release_superseded").All()
+		require.Len(t, entries, 1)
+		assert.Equal(t, zap.InfoLevel, entries[0].Level)
+		assert.Equal(t, int64(12), entries[0].ContextMap()["session_id"])
+		assert.Equal(t, int64(3), entries[0].ContextMap()["generation"])
 	})
 }
 

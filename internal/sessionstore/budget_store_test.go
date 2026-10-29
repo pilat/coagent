@@ -50,6 +50,13 @@ func TestEnqueueCompactWithFocusKeepsParkedBudget(t *testing.T) {
 			if content == "keep going" {
 				assert.Equal(t, budget.Released, record.State)
 				assert.Equal(t, "resumed", record.ReleasedReason)
+				assert.Equal(t, "parked", record.ParkPhase)
+				rearm := targetedBudgetMutation(t, store, root.ID, root.ID, "rearm")
+				rearmed, armErr := store.Arm(ctx, rearm)
+				require.NoError(t, armErr)
+				assert.Equal(t, budget.Armed, rearmed.State)
+				assert.Equal(t, record.Generation+1, rearmed.Generation)
+				assert.Empty(t, rearmed.ParkPhase)
 				return
 			}
 

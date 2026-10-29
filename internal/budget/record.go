@@ -38,6 +38,7 @@ type Record struct {
 
 type Mutation struct {
 	RootSessionID   int64
+	GrantSessionID  int64
 	InputID         int64
 	ToolID          string
 	Command         string

@@ -4,6 +4,7 @@
 - **Date:** 2026-10-28
 - **Supersedes:** [ADR-0073](0073-assistant-turn-is-a-buffered-tool-loop.md)
 - **Amended by:** [ADR-0075](0075-work-answers-reach-the-observer-through-its-inbox.md) — work answers reach the assistant as inbox input written in the work root's own commit; the send ledger, the observation calls and the boot sweep are gone
+- **Amended by:** [ADR-0077](0077-assistant-moves-the-user-in-never-out.md) — the assistant switches the user from `#0` into work, sets work roots' model and budget, and never sends slash commands
 
 ## Context
 

@@ -1,6 +1,7 @@
 package sessionstore
 
 import (
+	"cmp"
 	"context"
 	"database/sql"
 	"errors"
@@ -30,6 +31,8 @@ func (s *Store) Arm(
 	ctx context.Context,
 	mutation budget.Mutation,
 ) (*budget.Record, error) {
+	mutation.GrantSessionID = cmp.Or(mutation.GrantSessionID, mutation.RootSessionID)
+
 	if err := validateBudgetMutation(mutation, true); err != nil {
 		return nil, err
 	}
@@ -54,15 +57,9 @@ func (s *Store) Arm(
 		return replayed, replayErr
 	}
 
-	generation := int64(1)
-	var previous int64
-
-	err = tx.QueryRowContext(ctx, `SELECT generation FROM session_budgets WHERE root_session_id = ?`,
-		mutation.RootSessionID).Scan(&previous)
-	if err == nil {
-		generation = previous + 1
-	} else if !errors.Is(err, sql.ErrNoRows) {
-		return nil, fmt.Errorf("load budget generation: %w", err)
+	generation, err := nextBudgetGenerationTx(ctx, tx, mutation.RootSessionID)
+	if err != nil {
+		return nil, err
 	}
 
 	now := time.Now().UTC()
@@ -86,7 +83,7 @@ func (s *Store) Arm(
 	}
 
 	_, err = insertOutputTx(ctx, tx, OutputDraft{
-		SessionID: mutation.RootSessionID, Type: OutputMessage, Content: mutation.Receipt,
+		SessionID: mutation.GrantSessionID, Type: OutputMessage, Content: mutation.Receipt,
 		SourceKey: fmt.Sprintf("tool:%s:direct:0", mutation.ToolCallID),
 	}, CommitLoop)
 	if err != nil {
@@ -107,6 +104,8 @@ func (s *Store) Clear(
 	ctx context.Context,
 	mutation budget.Mutation,
 ) (*budget.Record, error) {
+	mutation.GrantSessionID = cmp.Or(mutation.GrantSessionID, mutation.RootSessionID)
+
 	if err := validateBudgetMutation(mutation, false); err != nil {
 		return nil, err
 	}
@@ -165,7 +164,7 @@ func (s *Store) Clear(
 	}
 
 	_, err = insertOutputTx(ctx, tx, OutputDraft{
-		SessionID: mutation.RootSessionID, Type: OutputMessage, Content: mutation.Receipt,
+		SessionID: mutation.GrantSessionID, Type: OutputMessage, Content: mutation.Receipt,
 		SourceKey: fmt.Sprintf("tool:%s:direct:0", mutation.ToolCallID),
 	}, CommitLoop)
 	if err != nil {
@@ -183,7 +182,7 @@ func (s *Store) Clear(
 }
 
 func validateBudgetMutation(mutation budget.Mutation, arm bool) error {
-	if mutation.RootSessionID <= 0 || mutation.InputID <= 0 || mutation.ToolID == "" ||
+	if mutation.RootSessionID <= 0 || mutation.GrantSessionID < 0 || mutation.InputID <= 0 || mutation.ToolID == "" ||
 		mutation.Command == "" || mutation.ToolCallID == "" || mutation.Receipt == "" {
 		return budget.ErrConflict
 	}
@@ -204,9 +203,30 @@ func validateBudgetMutation(mutation budget.Mutation, arm bool) error {
 	return nil
 }
 
+func nextBudgetGenerationTx(ctx context.Context, tx *sql.Tx, rootID int64) (int64, error) {
+	var previous int64
+	var state, phase string
+
+	err := tx.QueryRowContext(ctx, `SELECT generation,state,park_phase FROM session_budgets WHERE root_session_id = ?`,
+		rootID).Scan(&previous, &state, &phase)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 1, nil
+	}
+
+	if err != nil {
+		return 0, fmt.Errorf("load budget generation: %w", err)
+	}
+
+	if state == "fired" && (phase == "requested" || phase == "draining") {
+		return 0, fmt.Errorf("session #%d is parking after a budget checkpoint; try again once it stops", rootID)
+	}
+
+	return previous + 1, nil
+}
+
 func consumeActivationTx(ctx context.Context, tx *sql.Tx, mutation budget.Mutation) error {
 	err := ConsumeActivationTx(ctx, tx, ActivationBinding{
-		InputID: mutation.InputID, SessionID: mutation.RootSessionID,
+		InputID: mutation.InputID, SessionID: mutation.GrantSessionID,
 		ToolID: mutation.ToolID, Command: mutation.Command, ToolCallID: mutation.ToolCallID,
 	})
 	if errors.Is(err, ErrActivationConflict) {
@@ -229,7 +249,7 @@ func replayBudgetMutation(
 
 	err := tx.QueryRowContext(ctx, `SELECT state, COALESCE(tool_call_id, ''), tool_id, command
 		FROM session_tool_activations WHERE input_id = ? AND session_id = ?`,
-		mutation.InputID, mutation.RootSessionID).Scan(&state, &callID, &toolID, &command)
+		mutation.InputID, mutation.GrantSessionID).Scan(&state, &callID, &toolID, &command)
 	if errors.Is(err, sql.ErrNoRows) || state == "pending" {
 		//nolint:nilnil // An unresolved activation falls through to the new mutation.
 		return nil, nil
@@ -252,7 +272,7 @@ func replayBudgetMutation(
 	}
 
 	_, err = insertOutputTx(ctx, tx, OutputDraft{
-		SessionID: mutation.RootSessionID, Type: OutputMessage, Content: mutation.Receipt,
+		SessionID: mutation.GrantSessionID, Type: OutputMessage, Content: mutation.Receipt,
 		SourceKey: fmt.Sprintf("tool:%s:direct:0", mutation.ToolCallID),
 	}, CommitLoop)
 	if err != nil {
