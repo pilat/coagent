@@ -58,7 +58,15 @@ func (s *svc) releaseArmedBudget(ctx context.Context, rootID int64, reason strin
 		return fmt.Errorf("load budget for terminal release: %w", err)
 	}
 
-	if _, err := s.budgets.Release(ctx, rootID, record.Generation, reason); err != nil {
+	_, err = s.budgets.Release(ctx, rootID, record.Generation, reason)
+	if errors.Is(err, budget.ErrConflict) {
+		logger.Ctx(ctx).Named("daemon.budget").Info("terminal_budget_release_superseded",
+			zap.Int64("session_id", rootID), zap.Int64("generation", record.Generation), zap.String("reason", reason))
+
+		return nil
+	}
+
+	if err != nil {
 		return fmt.Errorf("release terminal budget: %w", err)
 	}
 

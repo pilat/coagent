@@ -137,11 +137,21 @@ func TestChatCapability_RejectsAnUnboundManager(t *testing.T) {
 
 	factory, _, _ := newChatControl(t)
 	chat := chatCapability(t, factory, "")
+	require.ErrorContains(t, chat.BindChat(t.Context(), "chat"), "no manager identity")
 	_, err := chat.ChatFocus(t.Context(), "chat")
 	require.ErrorContains(t, err, "no manager identity")
 	require.ErrorContains(t, chat.SetChatFocus(t.Context(), "chat", 0), "no manager identity")
 	_, err = chat.ChatSessions(t.Context(), "chat")
 	require.ErrorContains(t, err, "no manager identity")
+}
+
+func TestChatCapability_BindsOnlyItsManager(t *testing.T) {
+	t.Parallel()
+	factory, store, _ := newChatControl(t)
+	chat := chatCapability(t, factory, "owner")
+	require.NoError(t, chat.BindChat(t.Context(), "chat"))
+	require.ErrorIs(t, store.FocusOwnerChat(t.Context(), "other", 1), sessionstore.ErrChatNotBound)
+	require.EqualError(t, store.FocusOwnerChat(t.Context(), "owner", 999999), "#999999 is not a live session")
 }
 
 func (b *chatTestBackend) EnsureAssistantRoot(

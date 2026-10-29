@@ -20,6 +20,7 @@ func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
 type fakeController struct {
 	mu            sync.Mutex
 	focus         int64
+	boundChats    map[string]bool
 	outputs       map[int64][]controllerapi.ChatOutput
 	seen          map[int64]int64
 	managerID     string
@@ -156,6 +157,16 @@ func (f *fakeController) ChatFocus(context.Context, string) (int64, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.focus, nil
+}
+
+func (f *fakeController) BindChat(_ context.Context, chatID string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.boundChats == nil {
+		f.boundChats = make(map[string]bool)
+	}
+	f.boundChats[chatID] = true
+	return nil
 }
 
 func (f *fakeController) SetChatFocus(_ context.Context, _ string, id int64) error {

@@ -79,7 +79,7 @@ func (m *Manager) handleChatText(ctx context.Context, text string) {
 	case "/sessions":
 		m.handleSessions(ctx)
 	case "/switch":
-		id, err := strconv.ParseInt(arg, 10, 64)
+		id, err := strconv.ParseInt(strings.TrimPrefix(arg, "#"), 10, 64)
 		if err != nil {
 			m.reply(ctx, "Usage: /switch N.")
 			return
@@ -173,7 +173,7 @@ func (m *Manager) switchChat(ctx context.Context, id int64) {
 }
 
 func (m *Manager) handleNumberedControl(ctx context.Context, command, arg string) {
-	id, err := strconv.ParseInt(arg, 10, 64)
+	id, err := strconv.ParseInt(strings.TrimPrefix(arg, "#"), 10, 64)
 	if err != nil {
 		m.reply(ctx, "Usage: "+command+" N.")
 		return

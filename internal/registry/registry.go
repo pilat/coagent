@@ -65,6 +65,7 @@ var builtinAgentTypes = map[AgentType]AgentTypeConfig{
 			"search", "around", "read_session", "sessions", "projects", "focus_list",
 			"open", "send", "stop", "remember", "rewrite_memory", "forget_memory",
 			"focus", "update_focus", "done_focus",
+			"switch", "models", "set_model",
 			tool.IDSchedule, tool.IDMCPAdd, tool.IDMCPRemove, tool.IDMCPEnable, tool.IDMCPDisable, tool.IDMCPList,
 			tool.IDConfigRead, tool.IDConfigEdit, "set_budget",
 		},

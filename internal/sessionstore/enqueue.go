@@ -61,6 +61,11 @@ func EnqueueTx(ctx context.Context, tx *sql.Tx, in Input) (*Enqueued, error) {
 	if err := validateEnqueueInput(in); err != nil {
 		return nil, err
 	}
+
+	_, observed := in.Attributes["observer_session_id"]
+	if (observed || in.Attributes["from"] == "assistant") && strings.HasPrefix(strings.TrimSpace(in.Content), "/") {
+		return nil, ErrAssistantCommand
+	}
 	var parentID int64
 	var status SessionStatus
 	var killed sql.NullTime

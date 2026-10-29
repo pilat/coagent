@@ -4,7 +4,7 @@ import "strings"
 
 func withUserWords(text, words string) string {
 	words = strings.ReplaceAll(strings.TrimSpace(words), "\r\n", "\n")
-	if words == "" || strings.HasPrefix(strings.TrimSpace(text), "/") || strings.Contains(text, words) {
+	if words == "" || strings.Contains(text, words) {
 		return text
 	}
 

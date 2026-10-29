@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
+	"strings"
 
 	"github.com/pilat/coagent/internal/tool"
 )
@@ -14,25 +16,32 @@ const ToolID = "set_budget"
 
 const noActivationMessage = "This change requires a current user message beginning with /budget."
 
-type budgetTool struct {
-	store  Store
-	rootID int64
-	priced bool
-}
-
-type toolParams struct {
-	Action   string   `json:"action"`
-	CostUSD  *float64 `json:"cost_usd,omitempty"`
-	Duration string   `json:"duration,omitempty"`
-}
-
 var (
 	_ tool.Tool               = (*budgetTool)(nil)
 	_ tool.ActivationDeclarer = (*budgetTool)(nil)
 )
 
+type budgetTool struct {
+	store   Store
+	rootID  int64
+	priced  bool
+	resolve func(context.Context, int64) (int64, bool, error)
+}
+
+type toolParams struct {
+	Action   string          `json:"action"`
+	CostUSD  *float64        `json:"cost_usd,omitempty"`
+	Duration string          `json:"duration,omitempty"`
+	Session  json.RawMessage `json:"session,omitempty"`
+}
+
 func NewTool(store Store, rootID int64, priced bool) tool.Tool {
 	return &budgetTool{store: store, rootID: rootID, priced: priced}
+}
+
+// NewTargetedTool keeps grants on the caller while resolving current target authority and pricing.
+func NewTargetedTool(store Store, rootID int64, resolve func(context.Context, int64) (int64, bool, error)) tool.Tool {
+	return &budgetTool{store: store, rootID: rootID, resolve: resolve}
 }
 
 func (t *budgetTool) ID() string { return ToolID }
@@ -40,6 +49,11 @@ func (t *budgetTool) ID() string { return ToolID }
 func (t *budgetTool) ParallelSafe() bool { return false }
 
 func (t *budgetTool) Description() string {
+	if t.resolve != nil {
+		return "Reads or changes a work session's one-shot cost/wall-time checkpoint; omit session for your own root. " +
+			"action=get is read-only; set and clear require the current real user message to begin with /budget."
+	}
+
 	return "Reads or changes the root session's one-shot cost/wall-time checkpoint. " +
 		"action=get is read-only; set and clear require the current real user message to begin with /budget."
 }
@@ -47,6 +61,12 @@ func (t *budgetTool) Description() string {
 func (t *budgetTool) ActivationCommands() []string { return []string{"/budget"} }
 
 func (t *budgetTool) Parameters() json.RawMessage {
+	if t.resolve != nil {
+		return json.RawMessage(
+			`{"type":"object","properties":{"action":{"type":"string","enum":["get","set","clear"]},"cost_usd":{"type":"number"},"duration":{"type":"string"},"session":{"type":"string","description":"A session id like \"244\" or \"#244\"; omit for your own budget."}},"required":["action"]}`,
+		)
+	}
+
 	return json.RawMessage(
 		`{"type":"object","properties":{"action":{"type":"string","enum":["get","set","clear"]},"cost_usd":{"type":"number"},"duration":{"type":"string"}},"required":["action"]}`,
 	)
@@ -75,7 +95,12 @@ func (t *budgetTool) get(ctx context.Context, params toolParams) (*tool.Result, 
 		return nil, errors.New("get does not accept limit fields")
 	}
 
-	record, err := t.store.Get(ctx, t.rootID)
+	root, _, err := t.target(ctx, params.Session)
+	if err != nil {
+		return nil, err
+	}
+
+	record, err := t.store.Get(ctx, root)
 	if errors.Is(err, ErrNotFound) {
 		return &tool.Result{Output: "No budget is configured."}, nil
 	}
@@ -88,7 +113,12 @@ func (t *budgetTool) get(ctx context.Context, params toolParams) (*tool.Result, 
 }
 
 func (t *budgetTool) set(ctx context.Context, params toolParams) (*tool.Result, error) {
-	if !t.priced && params.CostUSD != nil {
+	root, priced, err := t.target(ctx, params.Session)
+	if err != nil {
+		return nil, err
+	}
+
+	if !priced && params.CostUSD != nil {
 		return nil, errors.New("cost budget unavailable: the current model has no catalog pricing")
 	}
 
@@ -117,10 +147,10 @@ func (t *budgetTool) set(ctx context.Context, params toolParams) (*tool.Result, 
 		seconds = &value
 	}
 
-	receipt := "Budget armed: " + renderLimits(cost, duration)
+	receipt := "Budget armed" + t.targetSuffix(root) + ": " + renderLimits(cost, duration)
 
 	record, err := t.store.Arm(ctx, Mutation{
-		RootSessionID: grant.RootID, InputID: grant.InputID, ToolID: grant.ToolID,
+		RootSessionID: root, GrantSessionID: grant.RootID, InputID: grant.InputID, ToolID: grant.ToolID,
 		Command: grant.Command, ToolCallID: grant.ToolCallID,
 		CostLimitUSD: cost, DurationSeconds: seconds, Receipt: receipt,
 	})
@@ -141,10 +171,15 @@ func (t *budgetTool) clear(ctx context.Context, params toolParams) (*tool.Result
 		return nil, err
 	}
 
-	const receipt = "Budget cleared"
+	root, _, err := t.target(ctx, params.Session)
+	if err != nil {
+		return nil, err
+	}
+
+	receipt := "Budget cleared" + t.targetSuffix(root)
 
 	record, err := t.store.Clear(ctx, Mutation{
-		RootSessionID: grant.RootID, InputID: grant.InputID, ToolID: grant.ToolID,
+		RootSessionID: root, GrantSessionID: grant.RootID, InputID: grant.InputID, ToolID: grant.ToolID,
 		Command: grant.Command, ToolCallID: grant.ToolCallID, Receipt: receipt,
 	})
 	if err != nil {
@@ -152,6 +187,42 @@ func (t *budgetTool) clear(ctx context.Context, params toolParams) (*tool.Result
 	}
 
 	return &tool.Result{Output: renderRecord(record), DirectMessages: []string{receipt}}, nil
+}
+
+func (t *budgetTool) target(ctx context.Context, raw json.RawMessage) (int64, bool, error) {
+	if t.resolve == nil {
+		return t.rootID, t.priced, nil
+	}
+
+	var id int64
+
+	if len(raw) != 0 {
+		var text string
+		if err := json.Unmarshal(raw, &text); err == nil {
+			parsed, parseErr := strconv.ParseInt(strings.TrimPrefix(strings.TrimSpace(text), "#"), 10, 64)
+			if parseErr != nil {
+				return 0, false, errors.New("session must be a session id")
+			}
+
+			id = parsed
+		} else if err := json.Unmarshal(raw, &id); err != nil {
+			return 0, false, errors.New("session must be a session id")
+		}
+	}
+
+	if id < 0 {
+		return 0, false, errors.New("session must be a session id")
+	}
+
+	return t.resolve(ctx, id)
+}
+
+func (t *budgetTool) targetSuffix(root int64) string {
+	if root == t.rootID {
+		return ""
+	}
+
+	return fmt.Sprintf(" for #%d", root)
 }
 
 func currentGrant(ctx context.Context, rootID int64) (Grant, error) {

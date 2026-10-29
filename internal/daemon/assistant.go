@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"cmp"
 	"context"
 	"database/sql"
 	"errors"
@@ -10,9 +11,11 @@ import (
 	"time"
 
 	"github.com/pilat/coagent/internal/assistant"
+	"github.com/pilat/coagent/internal/budget"
 	"github.com/pilat/coagent/internal/controllerapi"
 	"github.com/pilat/coagent/internal/projectpath"
 	"github.com/pilat/coagent/internal/sessionstore"
+	"github.com/pilat/coagent/internal/tool"
 )
 
 var _ assistant.Host = assistantHost{}
@@ -96,6 +99,32 @@ func (h assistantHost) Stop(ctx context.Context, id int64) error {
 	return h.s.sendToSession(ctx, id, stopCommand)
 }
 
+func (h assistantHost) FocusChat(ctx context.Context, owner string, id int64) error {
+	return h.s.store.FocusOwnerChat(ctx, owner, id) //nolint:wrapcheck // Preserve chat refusal text.
+}
+
+func (h assistantHost) Models(context.Context) ([]assistant.Model, error) {
+	result := make([]assistant.Model, 0, len(h.s.models.entries))
+	for _, entry := range h.s.models.entries {
+		model := assistant.Model{
+			ID: entry.ID, DisplayName: cmp.Or(entry.DisplayName, entry.Name, entry.ID),
+			EffortLevels: entry.EffortLevels, DefaultEffort: entry.DefaultEffort,
+			Reasoning: entry.Reasoning != nil && entry.Reasoning.Supported,
+		}
+		if entry.Pricing != nil {
+			model.Priced, model.InputPrice, model.OutputPrice = true, entry.Pricing.InputPrice, entry.Pricing.OutputPrice
+		}
+
+		result = append(result, model)
+	}
+
+	return result, nil
+}
+
+func (h assistantHost) SetModel(ctx context.Context, id int64, model, effort string) error {
+	return h.s.SetModel(ctx, id, model, effort)
+}
+
 func (s *svc) assistantHead(scope assistant.Scope) func(context.Context) (string, error) {
 	return func(ctx context.Context) (string, error) {
 		now := time.Now().UTC()
@@ -111,6 +140,34 @@ func (s *svc) assistantHead(scope assistant.Scope) func(context.Context) (string
 		}
 
 		return assistant.Render(assistant.View{Desk: desk, Recent: recent, Total: total}, now), nil
+	}
+}
+
+func (s *svc) assistantAdministrationTools(rec *sessionstore.SessionRecord, scope assistant.Scope) []tool.Tool {
+	tools := s.administrationTools(rec, 0)
+	for i, instance := range tools {
+		if instance.ID() == budget.ToolID {
+			tools[i] = budget.NewTargetedTool(budget.Store(s.store), rec.ID, s.assistantBudgetTarget(scope))
+		}
+	}
+
+	return tools
+}
+
+func (s *svc) assistantBudgetTarget(scope assistant.Scope) func(context.Context, int64) (int64, bool, error) {
+	return func(ctx context.Context, id int64) (int64, bool, error) {
+		if id == 0 {
+			id = scope.Root
+		} else if _, err := s.assistant.Target(ctx, scope, id); err != nil {
+			return 0, false, err //nolint:wrapcheck // Preserve target refusal text.
+		}
+
+		record, err := s.store.GetSession(ctx, id)
+		if err != nil {
+			return 0, false, fmt.Errorf("load budget target: %w", err)
+		}
+
+		return id, s.models.priced(record.Model), nil
 	}
 }
 

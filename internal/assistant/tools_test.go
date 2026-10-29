@@ -25,6 +25,9 @@ type toolHost struct {
 	deliveries []string
 	created    []int64
 	stopped    []int64
+	focused    []int64
+	models     []Model
+	modelCalls []modelArgs
 }
 
 type toolFixture struct {
@@ -101,7 +104,8 @@ json_extract(attributes, '$.observer_session_id') FROM session_inbox WHERE raw_c
 		assert.NotEmpty(t, instance.Description(), id)
 		assert.Equal(
 			t,
-			id == toolAround || id == toolRead || id == toolSessions || id == toolProjects || id == toolFocusList,
+			id == toolAround || id == toolRead || id == toolSessions || id == toolProjects || id == toolFocusList ||
+				id == toolModels,
 			instance.ParallelSafe(),
 			id,
 		)
@@ -195,7 +199,7 @@ func newToolFixture(t *testing.T) *toolFixture {
 	for _, instance := range Tools(store, Scope{Root: root, Owner: testOwner}, f.host) {
 		f.tools[instance.ID()] = instance
 	}
-	require.Len(t, f.tools, 15)
+	require.Len(t, f.tools, 18)
 	return f
 }
 
@@ -227,6 +231,20 @@ func (h *toolHost) Deliver(ctx context.Context, id int64, text string, enqueue f
 func (h *toolHost) Stop(ctx context.Context, id int64) error {
 	h.stopped = append(h.stopped, id)
 	return h.sessions.UpdateSessionStatus(ctx, id, sessionstore.SessionStatusStopped)
+}
+
+func (h *toolHost) FocusChat(ctx context.Context, owner string, id int64) error {
+	h.focused = append(h.focused, id)
+	return h.sessions.FocusOwnerChat(ctx, owner, id)
+}
+
+func (h *toolHost) Models(context.Context) ([]Model, error) {
+	return h.models, nil
+}
+
+func (h *toolHost) SetModel(ctx context.Context, id int64, model, effort string) error {
+	h.modelCalls = append(h.modelCalls, modelArgs{Session: sessionRef(itoa(id)), Model: model, Effort: &effort})
+	return h.sessions.UpdateSessionModel(ctx, id, model, effort)
 }
 
 func TestAssistantFocusLimit(t *testing.T) {

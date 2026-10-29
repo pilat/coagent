@@ -22,6 +22,9 @@ const (
 	toolOpen          = "open"
 	toolSend          = "send"
 	toolStop          = "stop"
+	toolSwitch        = "switch"
+	toolModels        = "models"
+	toolSetModel      = "set_model"
 	toolRemember      = "remember"
 	toolRewriteMemory = "rewrite_memory"
 	toolForgetMemory  = "forget_memory"
@@ -49,7 +52,7 @@ var toolSchemas = []llmwire.ToolSchema{
 		`{"ref":{"type":"string","description":"\"msg 5012\" from a search result."},`+
 			`"count":{"type":"integer","minimum":1,"maximum":10,"description":"Entries on each side."}}`, "ref", "count"),
 	schema(toolRead, "Look: the last requests and final answers of one work session, each whole.",
-		`{"session":{"type":"integer","description":"Session id."},`+
+		`{"session":{"type":"string","description":"A session id like \"244\" or \"#244\"."},`+
 			`"count":{"type":"integer","minimum":1,"maximum":60,"description":"How many entries."}}`,
 		"session", "count"),
 	schema(toolSessions, "Look: every work session you may address, most recently active first, 20 per page.",
@@ -63,10 +66,29 @@ var toolSchemas = []llmwire.ToolSchema{
 			`"text":{"type":"string","description":"The instruction, in the user's language."}}`,
 		"project", "about", "text"),
 	schema(toolSend, "Do: immediately continue a work session, finished or stopped or still running.",
-		`{"session":{"type":"string","description":"A session id like \"244\"."},`+
+		`{"session":{"type":"string","description":"A session id like \"244\" or \"#244\"."},`+
 			`"text":{"type":"string","description":"The instruction, in the user's language."}}`, "session", "text"),
 	schema(toolStop, "Do: stop a work session's current work immediately.",
-		`{"session":{"type":"integer","description":"Session id."}}`, "session"),
+		`{"session":{"type":"string","description":"A session id like \"244\" or \"#244\"."}}`, "session"),
+	schema(
+		toolSwitch,
+		"Do: switch the user into a work session while they are talking to you; they return with /assistant.",
+		`{"session":{"type":"string","description":"A session id like \"244\" or \"#244\"."}}`,
+		"session",
+	),
+	schema(
+		toolModels,
+		"Look: configured models in order, with default, effort choices, reasoning and catalog prices.",
+		`{}`,
+	),
+	schema(
+		toolSetModel,
+		"Do: set a work session's configured model and optional effort; omitted effort uses its default.",
+		`{"session":{"type":"string","description":"A session id like \"244\" or \"#244\"."},`+
+			`"model":{"type":"string"},"effort":{"type":"string"}}`,
+		"session",
+		"model",
+	),
 	schema(toolRemember, "Do: add a memory note (at most 300 characters). Without until it is permanent; "+
 		"with until it leaves the desk after that date but stays searchable.",
 		`{"text":{"type":"string"},"until":{"type":"string","description":"YYYY-MM-DD, optional."}}`, "text"),
@@ -94,6 +116,20 @@ type Host interface {
 	// Deliver commits enqueue under the session's tree lock, then wakes it.
 	Deliver(ctx context.Context, sessionID int64, text string, enqueue func(*sql.Tx) error) error
 	Stop(ctx context.Context, sessionID int64) error
+	FocusChat(ctx context.Context, owner string, sessionID int64) error
+	Models(ctx context.Context) ([]Model, error)
+	SetModel(ctx context.Context, sessionID int64, model, effort string) error
+}
+
+type Model struct {
+	ID            string
+	DisplayName   string
+	EffortLevels  []string
+	DefaultEffort string
+	Reasoning     bool
+	Priced        bool
+	InputPrice    float64
+	OutputPrice   float64
 }
 
 type assistantTool struct {
@@ -163,7 +199,7 @@ func (t *assistantTool) Description() string         { return t.spec.Description
 func (t *assistantTool) Parameters() json.RawMessage { return t.spec.Parameters }
 func (t *assistantTool) ParallelSafe() bool {
 	switch t.ID() {
-	case toolAround, toolRead, toolSessions, toolProjects, toolFocusList:
+	case toolAround, toolRead, toolSessions, toolProjects, toolFocusList, toolModels:
 		return true
 	default:
 		return false
@@ -180,6 +216,12 @@ func (t *assistantTool) Execute(ctx context.Context, args json.RawMessage) (*too
 		text, err = t.look(ctx, call)
 	case toolOpen, toolSend, toolStop:
 		text, err = t.work(ctx, call)
+	case toolSwitch:
+		text, err = t.switchChat(ctx, call)
+	case toolModels:
+		text, err = t.models(ctx)
+	case toolSetModel:
+		text, err = t.setModel(ctx, call)
 	default:
 		text, err = t.edit(ctx, call)
 	}
@@ -209,7 +251,7 @@ func (r *sessionRef) UnmarshalJSON(data []byte) error {
 }
 
 func (r sessionRef) id() (int64, bool) {
-	id, err := strconv.ParseInt(string(r), 10, 64)
+	id, err := strconv.ParseInt(strings.TrimPrefix(string(r), "#"), 10, 64)
 	return id, err == nil && id > 0
 }
 
