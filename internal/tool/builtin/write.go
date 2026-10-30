@@ -40,13 +40,13 @@ type writeTool struct {
 	workDir string
 	lspMgr  lsp.Manager
 	mutator fileMutator
-	access  safefile.Access
+	access  *safefile.Access
 	tracker FileReadTracker
 }
 
 func newWriteToolWithAccess(
 	workDir string,
-	access safefile.Access,
+	access *safefile.Access,
 	lspMgr lsp.Manager,
 	mutator fileMutator,
 	tracker FileReadTracker,

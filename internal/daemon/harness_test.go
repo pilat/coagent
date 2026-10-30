@@ -322,9 +322,9 @@ models:
 const toolSecrets = "WORK_API_KEY=sk-ant-work-0000000000\n"
 
 func newTestController(
-	svc *svc,
+	svc *Service,
 	cfg *config.Config,
-	cache loader.MarketplaceCache,
+	cache *loader.MarketplaceCache,
 	_ schedule.Service,
 ) controllerapi.ManagerControllerFactory {
 	var outputs *sessionstore.Store
@@ -433,7 +433,7 @@ type contextInfo struct {
 type harness struct {
 	t         *testing.T
 	db        *sql.DB
-	mgr       *svc
+	mgr       *Service
 	store     *sessionstore.Store
 	links     subagent.Store
 	schedules schedule.Store
@@ -564,7 +564,7 @@ func countAssistantToolCallsFor(msgs []llmwire.Message, toolName string) int {
 	return count
 }
 
-func (h *harness) shutdown() { h.shutdownOnce.Do(func() { h.mgr.Shutdown(5 * time.Second) }) }
+func (h *harness) shutdown() { h.shutdownOnce.Do(func() { h.mgr.Shutdown(h.ctx, 5*time.Second) }) }
 
 func (h *harness) messages(parentID int64) []llmwire.Message {
 	h.t.Helper()
@@ -672,7 +672,7 @@ func seedTerminalChild(ctx context.Context, sessions *sessionstore.Store, childI
 	})
 }
 
-func finalizeTestChild(ctx context.Context, t *testing.T, manager *svc, childID int64) {
+func finalizeTestChild(ctx context.Context, t *testing.T, manager *Service, childID int64) {
 	t.Helper()
 	unlock, err := manager.lockSessionTree(ctx, childID)
 	require.NoError(t, err)
@@ -1215,7 +1215,7 @@ func testProject(t *testing.T, s interface {
 	return pid
 }
 
-func createBackgroundChild(t *testing.T, mgr *svc, projectID, parentID int64) int64 {
+func createBackgroundChild(t *testing.T, mgr *Service, projectID, parentID int64) int64 {
 	t.Helper()
 	parent, err := mgr.store.GetSession(context.Background(), parentID)
 	require.NoError(t, err)

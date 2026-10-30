@@ -123,7 +123,7 @@ func (s recordingScheduleStore) Enqueue(ctx context.Context, in sessionstore.Inp
 	return s.Store.Enqueue(ctx, in)
 }
 
-func newTestExecutor(store schedule.Store, sender *mockSender) schedule.Executor {
+func newTestExecutor(store schedule.Store, sender *mockSender) *schedule.Executor {
 	return schedule.NewExecutor(recordingScheduleStore{Store: store, sender: sender}, sender)
 }
 

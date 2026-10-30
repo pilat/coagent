@@ -13,12 +13,12 @@ import (
 var _ tool.Tool = (*configReadTool)(nil)
 
 type configReadTool struct {
-	service   Service
+	service   *Service
 	sessionID int64
 }
 
 // NewConfigRead shares config_edit's session grant without declaring another /config route.
-func NewConfigRead(sessionID int64, service Service) tool.Tool {
+func NewConfigRead(sessionID int64, service *Service) tool.Tool {
 	return &configReadTool{service: service, sessionID: sessionID}
 }
 

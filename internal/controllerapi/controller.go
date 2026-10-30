@@ -26,14 +26,6 @@ type ChatController interface {
 	Unsubscribe(ch <-chan SessionNotification)
 }
 
-// SessionMessageRouter returns the root session that durably accepted a
-// message, which may be a replacement of the ID supplied by the caller.
-//
-//nolint:iface // optional extension keeps ordinary ChatController fakes narrow.
-type SessionMessageRouter interface {
-	SendSessionMessageResolved(ctx context.Context, data SessionMessageData) (int64, error)
-}
-
 // AssistantRootEnsureData identifies the manager's durable assistant root.
 type AssistantRootEnsureData struct {
 	SessionID int64  `json:"session_id"`

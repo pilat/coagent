@@ -14,6 +14,19 @@ import (
 	"github.com/pilat/coagent/internal/tool"
 )
 
+func TestSkillToolNilLoaderReturnsUnavailable(t *testing.T) {
+	t.Parallel()
+
+	skillTool := NewSkillTool(nil)
+	var result *tool.Result
+	var err error
+	require.NotPanics(t, func() {
+		result, err = skillTool.Execute(t.Context(), json.RawMessage(`{"name":"review"}`))
+	})
+	require.Nil(t, result)
+	require.EqualError(t, err, "resolve skill: skill catalog is unavailable")
+}
+
 func TestSkillToolDirectReceiptNamesCanonicalSkillOnly(t *testing.T) {
 	ldr := loader.New()
 	ldr.RegisterSkill(&loader.Skill{Name: "both", Content: "content for $ARGUMENTS"})

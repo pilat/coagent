@@ -27,7 +27,7 @@ func TestListDir_OmitsHiddenProjectDirByPath(t *testing.T) {
 	store, _ := newProjectTestManager(t)
 	_, err := store.GetOrCreateHiddenProject(t.Context(), hidden)
 	require.NoError(t, err)
-	svc := &service{backend: store}
+	svc := &Service{backend: store}
 
 	result, err := svc.ListDir(context.Background(), controllerapi.FsListDirData{
 		Path: filepath.Join(root, "projects"),

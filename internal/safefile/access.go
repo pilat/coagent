@@ -41,29 +41,7 @@ type Rooted struct {
 }
 
 // Access is the filesystem authority one session's tools share.
-type Access interface {
-	Scope() Scope
-	WorkDir() string
-	CanonicalRoot() string
-	Resolve(name string) (Path, error)
-	ResolveTarget(name string) (Path, error)
-	Open(name string) (*Opened, error)
-	OpenFile(name string, flag int, perm fs.FileMode) (*Opened, error)
-	OpenRoot(name string) (*Rooted, error)
-	Stat(name string) (fs.FileInfo, Path, error)
-	ReadDir(name string) ([]fs.DirEntry, Path, error)
-
-	// AuthorizeRead confirms that a previously resolved path is still readable:
-	// the recorded root identity must match and the current policy must still
-	// grant it. A revoked entry must not be re-read through an old reference.
-	AuthorizeRead(canonical, rootIdentity string) error
-
-	Close() error
-}
-
-var _ Access = (*access)(nil)
-
-type access struct {
+type Access struct {
 	scope         Scope
 	workDir       string
 	canonicalRoot string
@@ -73,7 +51,7 @@ type access struct {
 
 // New enforces the compiled policy for file tools running inside the daemon.
 // An empty policy leaves reads and writes unrestricted.
-func New(policy sandboxpolicy.Policy, workDir string) (Access, error) {
+func New(policy sandboxpolicy.Policy, workDir string) (*Access, error) {
 	display, err := filepath.Abs(workDir)
 	if err != nil {
 		return nil, fmt.Errorf("resolve project spelling: %w", err)
@@ -82,7 +60,7 @@ func New(policy sandboxpolicy.Policy, workDir string) (Access, error) {
 	display = filepath.Clean(display)
 
 	if len(policy.Entries) == 0 {
-		return &access{scope: HostReadable, workDir: display, canonicalRoot: canonicalOrSelf(display)}, nil
+		return &Access{scope: HostReadable, workDir: display, canonicalRoot: canonicalOrSelf(display)}, nil
 	}
 
 	roots, err := openWritableRoots(policy)
@@ -95,7 +73,7 @@ func New(policy sandboxpolicy.Policy, workDir string) (Access, error) {
 		canonical = display
 	}
 
-	return &access{
+	return &Access{
 		scope: ProjectConfined, workDir: display, canonicalRoot: canonical, policy: policy, roots: roots,
 	}, nil
 }
@@ -109,11 +87,11 @@ func canonicalOrSelf(path string) string {
 	return resolved
 }
 
-func (a *access) Scope() Scope          { return a.scope }
-func (a *access) WorkDir() string       { return a.workDir }
-func (a *access) CanonicalRoot() string { return a.canonicalRoot }
+func (a *Access) Scope() Scope          { return a.scope }
+func (a *Access) WorkDir() string       { return a.workDir }
+func (a *Access) CanonicalRoot() string { return a.canonicalRoot }
 
-func (a *access) Resolve(name string) (Path, error) {
+func (a *Access) Resolve(name string) (Path, error) {
 	display, err := resolveHostPath(a.workDir, name)
 	if err != nil {
 		return Path{}, err
@@ -172,7 +150,7 @@ func (a *access) Resolve(name string) (Path, error) {
 	return Path{}, fmt.Errorf("resolve path %s: %w", display, os.ErrNotExist)
 }
 
-func (a *access) ResolveTarget(name string) (Path, error) {
+func (a *Access) ResolveTarget(name string) (Path, error) {
 	display, err := resolveHostPath(a.workDir, name)
 	if err != nil {
 		return Path{}, err
@@ -208,7 +186,7 @@ func (a *access) ResolveTarget(name string) (Path, error) {
 	return Path{Display: display, Canonical: canonical, Writable: a.policy.AllowsWrite(canonical)}, nil
 }
 
-func (a *access) Open(name string) (*Opened, error) {
+func (a *Access) Open(name string) (*Opened, error) {
 	path, err := a.Resolve(name)
 	if err != nil {
 		return nil, err
@@ -240,7 +218,7 @@ func (a *access) Open(name string) (*Opened, error) {
 	return &Opened{File: file, Path: path}, nil
 }
 
-func (a *access) OpenFile(name string, flag int, perm fs.FileMode) (*Opened, error) {
+func (a *Access) OpenFile(name string, flag int, perm fs.FileMode) (*Opened, error) {
 	path, err := a.ResolveTarget(name)
 	if err != nil {
 		return nil, err
@@ -278,7 +256,7 @@ func (a *access) OpenFile(name string, flag int, perm fs.FileMode) (*Opened, err
 	return &Opened{File: file, Path: path}, nil
 }
 
-func (a *access) OpenRoot(name string) (*Rooted, error) {
+func (a *Access) OpenRoot(name string) (*Rooted, error) {
 	path, err := a.Resolve(name)
 	if err != nil {
 		return nil, err
@@ -307,7 +285,7 @@ func (a *access) OpenRoot(name string) (*Rooted, error) {
 	return &Rooted{Root: root, Path: path}, nil
 }
 
-func (a *access) Stat(name string) (fs.FileInfo, Path, error) {
+func (a *Access) Stat(name string) (fs.FileInfo, Path, error) {
 	path, err := a.Resolve(name)
 	if err != nil {
 		return nil, Path{}, err
@@ -345,7 +323,7 @@ func (a *access) Stat(name string) (fs.FileInfo, Path, error) {
 	return info, path, nil
 }
 
-func (a *access) ReadDir(name string) ([]fs.DirEntry, Path, error) {
+func (a *Access) ReadDir(name string) ([]fs.DirEntry, Path, error) {
 	opened, err := a.Open(name)
 	if err != nil {
 		return nil, Path{}, err
@@ -361,7 +339,7 @@ func (a *access) ReadDir(name string) ([]fs.DirEntry, Path, error) {
 }
 
 // AuthorizeRead re-checks a deferred read against the current authority.
-func (a *access) AuthorizeRead(canonical, rootIdentity string) error {
+func (a *Access) AuthorizeRead(canonical, rootIdentity string) error {
 	if a.scope == HostReadable {
 		return nil
 	}
@@ -382,7 +360,7 @@ func (a *access) AuthorizeRead(canonical, rootIdentity string) error {
 	return nil
 }
 
-func (a *access) Close() error {
+func (a *Access) Close() error {
 	for _, root := range a.roots {
 		if root.handle != nil {
 			_ = root.handle.Close()
@@ -392,7 +370,7 @@ func (a *access) Close() error {
 	return nil
 }
 
-func (a *access) authorizeWrite(path Path, flag int) error {
+func (a *Access) authorizeWrite(path Path, flag int) error {
 	if !isWriteFlag(flag) || path.Writable {
 		return nil
 	}
@@ -400,7 +378,7 @@ func (a *access) authorizeWrite(path Path, flag int) error {
 	return outsideError(path.Display)
 }
 
-func (a *access) openHostFile(path string, flag int, perm fs.FileMode) (*os.File, error) {
+func (a *Access) openHostFile(path string, flag int, perm fs.FileMode) (*os.File, error) {
 	if a.scope == HostReadable {
 		file, err := os.OpenFile(path, flag, perm)
 		if err != nil {

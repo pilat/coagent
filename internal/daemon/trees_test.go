@@ -439,7 +439,7 @@ func TestStopParksWholeTreeAndExplicitFollowUpResumesOnlyChild(t *testing.T) {
 	})
 	parentRec := h.session(parent.ID)
 	assert.Equal(t, sessionstore.SessionStatusStopped, parentRec.Status)
-	mgr.Shutdown(3 * time.Second)
+	mgr.Shutdown(t.Context(), 3*time.Second)
 }
 
 func TestStopParksActiveDescendantBelowCompletedChild(t *testing.T) {

@@ -50,7 +50,7 @@ type bashTool struct {
 	project string
 	session int64
 	root    int64
-	access  safefile.Access
+	access  *safefile.Access
 }
 
 //nolint:unparam // Tests use the stable synthetic project directory; production injects access below.
@@ -70,7 +70,7 @@ func newBashToolWithAccess(
 	process backgroundprocess.Service,
 	projectDir string,
 	sessionID, rootID int64,
-	access safefile.Access,
+	access *safefile.Access,
 ) *bashTool {
 	return &bashTool{
 		workDir: workDir,

@@ -18,7 +18,7 @@ import (
 
 func TestModelHasPricingRequiresMatchingPricedEntry(t *testing.T) {
 	t.Parallel()
-	manager := &svc{models: models{entries: []config.ModelEntry{
+	manager := &Service{models: models{entries: []config.ModelEntry{
 		{ID: "unpriced"},
 		{ID: "priced", Pricing: &config.ModelPricing{}},
 	}}}
@@ -79,7 +79,7 @@ func TestResolveChildEffort(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			s := &svc{models: models{entries: tt.entries}}
+			s := &Service{models: models{entries: tt.entries}}
 			got, err := s.models.effort(tt.model, tt.requested, tt.inherited)
 			if tt.wantErr != "" {
 				require.ErrorContains(t, err, tt.wantErr)

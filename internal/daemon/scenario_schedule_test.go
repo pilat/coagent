@@ -349,11 +349,11 @@ func TestHarnessScenario_StoppedRootScheduleStartsOneTurn(t *testing.T) {
 func TestScheduledDeliveryToSubagentIsAcknowledgedWithoutMutation(t *testing.T) {
 	tests := []struct {
 		name    string
-		deliver func(*svc, int64) (bool, error)
+		deliver func(*Service, int64) (bool, error)
 	}{
 		{
 			name: "normal",
-			deliver: func(mgr *svc, sessionID int64) (bool, error) {
+			deliver: func(mgr *Service, sessionID int64) (bool, error) {
 				return enqueueScheduledInput(
 					t.Context(), mgr.store, sessionID, "schedule:test:normal", "legacy task", false,
 				)
@@ -361,7 +361,7 @@ func TestScheduledDeliveryToSubagentIsAcknowledgedWithoutMutation(t *testing.T) 
 		},
 		{
 			name: "fresh",
-			deliver: func(mgr *svc, sessionID int64) (bool, error) {
+			deliver: func(mgr *Service, sessionID int64) (bool, error) {
 				return enqueueScheduledInput(
 					t.Context(), mgr.store, sessionID, "schedule:test:fresh", "legacy fresh task", true,
 				)
@@ -631,7 +631,7 @@ type scheduleRestartHarness struct {
 }
 
 type scheduleRunningObserver struct {
-	source       sessionbus.Source
+	source       *sessionbus.Bus
 	subscription <-chan controllerapi.SessionNotification
 	running      chan struct{}
 	done         chan struct{}
@@ -751,7 +751,7 @@ func assertNoRetryPublication(t *testing.T, events []controllerapi.SessionNotifi
 	}
 }
 
-func newScheduleRunningObserver(t *testing.T, source sessionbus.Source) *scheduleRunningObserver {
+func newScheduleRunningObserver(t *testing.T, source *sessionbus.Bus) *scheduleRunningObserver {
 	t.Helper()
 	o := &scheduleRunningObserver{
 		source: source, subscription: source.SubscribeManager("telegram-main"),
@@ -963,7 +963,7 @@ func sessionEpisodeStart(t *testing.T, h *harness, rootID int64) time.Time {
 
 func deliverStoppedRootSchedule(
 	t *testing.T,
-	mgr *svc,
+	mgr *Service,
 	rootID int64,
 	deliveryID string,
 	tc stoppedRootScheduleCase,

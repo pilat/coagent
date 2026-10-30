@@ -94,7 +94,7 @@ type core struct {
 	scheduleStore  schedule.Store
 	scheduleSender schedule.SessionSender
 	sessionStore   *sessionstore.Store
-	applier        configapply.Service
+	applier        *configapply.Service
 }
 
 // ensureLinuxPlatform rejects a non-Linux build before it can reach any
@@ -473,7 +473,7 @@ func runDaemon(
 func deliverApplyVerdict(
 	ctx context.Context,
 	sender *sessionstore.Store,
-	applier configapply.Service,
+	applier *configapply.Service,
 	ops configops.Service,
 	outcome *configops.Outcome,
 ) {
@@ -606,7 +606,7 @@ func startCore(
 		return nil, fmt.Errorf("start daemon: %w", err)
 	}
 
-	a.onStop("daemon", func(context.Context) error { daemonSvc.Shutdown(30 * time.Second); return nil })
+	a.onStop("daemon", func(ctx context.Context) error { daemonSvc.Shutdown(ctx, 30*time.Second); return nil })
 
 	return &core{
 		controller:     controller,

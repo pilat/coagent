@@ -51,7 +51,7 @@ func TestHarnessScenario_AssistantOpensOnRequestedModel(t *testing.T) {
 
 func TestAssistantHostModels(t *testing.T) {
 	t.Parallel()
-	host := assistantHost{s: &svc{models: models{entries: []config.ModelEntry{
+	host := assistantHost{s: &Service{models: models{entries: []config.ModelEntry{
 		{
 			ID:            "one",
 			Name:          "name",

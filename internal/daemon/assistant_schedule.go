@@ -11,7 +11,7 @@ import (
 	"github.com/pilat/coagent/internal/tool"
 )
 
-func (s *svc) assistantScheduleTool(scope assistant.Scope) tool.Tool {
+func (s *Service) assistantScheduleTool(scope assistant.Scope) tool.Tool {
 	resolve := func(ctx context.Context, id int64) (string, error) {
 		card, err := s.assistant.Target(ctx, scope, id)
 		if err != nil {

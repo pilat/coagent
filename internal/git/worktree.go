@@ -13,52 +13,13 @@ import (
 )
 
 // WorktreeClient runs host git with optional repository-execution restrictions.
-type WorktreeClient interface {
-	// CheckRepositoryConfig refuses includes and command-running local or worktree configuration.
-	CheckRepositoryConfig(ctx context.Context, repoRoot string) error
-	// RepoRoot returns the absolute main-worktree root of the repository holding
-	// path: the parent of the common git dir for standard layouts, the tree
-	// behind a detached (--separate-git-dir) git dir, or the bare git dir
-	// itself — a stable repo identity for namespacing and a safe directory to
-	// run repo commands from.
-	RepoRoot(ctx context.Context, path string) (string, error)
-	// DefaultBranch reports the remote and its default branch, read
-	// authoritatively from the remote itself (git ls-remote --symref). It makes
-	// no assumption that the branch is named "main". The remote-advertised
-	// branch is validated before returning: it is untrusted input that would
-	// otherwise flow into fetch argv.
-	DefaultBranch(ctx context.Context, repoRoot string) (remote, branch string, err error)
-	// FetchBranch updates the remote-tracking ref for remote/branch so a worktree
-	// can be based on the freshest remote state.
-	FetchBranch(ctx context.Context, repoRoot, remote, branch string) error
-	// BranchExists reports whether a local branch of that name already exists.
-	BranchExists(ctx context.Context, repoRoot, branch string) (bool, error)
-	// ValidateBranchName rejects names git could not use as a branch ref.
-	ValidateBranchName(ctx context.Context, name string) error
-	// CreateBranch creates branch at startRef without checking it out. The
-	// underlying git branch is atomic: a taken name is refused without side
-	// effects, so a failed CreateBranch leaves nothing to roll back and cannot
-	// damage a branch a concurrent creator just won.
-	CreateBranch(ctx context.Context, repoRoot, branch, startRef string) error
-	// AddWorktree checks the existing branch out into worktreePath, running the
-	// repository's post-checkout hook. git's combined output is returned for
-	// surfacing on failure.
-	AddWorktree(ctx context.Context, repoRoot, worktreePath, branch string) (string, error)
-	// RemoveWorktree rolls a worktree and its branch back (best-effort), used to
-	// keep /gwt atomic when creation reports failure. A worktree path that was
-	// never materialized is skipped so branch deletion alone still succeeds.
-	RemoveWorktree(ctx context.Context, repoRoot, worktreePath, branch string) error
+type WorktreeClient struct{ noExecution bool }
+
+func NewWorktreeClient(noExecution ...bool) *WorktreeClient {
+	return &WorktreeClient{noExecution: len(noExecution) > 0 && noExecution[0]}
 }
 
-var _ WorktreeClient = (*worktreeClient)(nil)
-
-type worktreeClient struct{ noExecution bool }
-
-func NewWorktreeClient(noExecution ...bool) WorktreeClient {
-	return &worktreeClient{noExecution: len(noExecution) > 0 && noExecution[0]}
-}
-
-func (c *worktreeClient) RepoRoot(ctx context.Context, path string) (string, error) {
+func (c *WorktreeClient) RepoRoot(ctx context.Context, path string) (string, error) {
 	out, err := c.runGit(ctx, path, "rev-parse", "--path-format=absolute", "--git-common-dir")
 	if err != nil {
 		return "", fmt.Errorf("resolving git repository for %s: %w", path, err)
@@ -102,7 +63,7 @@ func (c *worktreeClient) RepoRoot(ctx context.Context, path string) (string, err
 	return filepath.Dir(commonDir), nil
 }
 
-func (c *worktreeClient) DefaultBranch(ctx context.Context, repoRoot string) (string, string, error) {
+func (c *WorktreeClient) DefaultBranch(ctx context.Context, repoRoot string) (string, string, error) {
 	remote, err := c.resolveRemote(ctx, repoRoot)
 	if err != nil {
 		return "", "", err
@@ -130,7 +91,7 @@ func (c *worktreeClient) DefaultBranch(ctx context.Context, repoRoot string) (st
 	return remote, branch, nil
 }
 
-func (c *worktreeClient) FetchBranch(ctx context.Context, repoRoot, remote, branch string) error {
+func (c *WorktreeClient) FetchBranch(ctx context.Context, repoRoot, remote, branch string) error {
 	ctx, cancel := context.WithTimeout(ctx, gitTimeout)
 	defer cancel()
 
@@ -142,7 +103,7 @@ func (c *worktreeClient) FetchBranch(ctx context.Context, repoRoot, remote, bran
 	return nil
 }
 
-func (c *worktreeClient) BranchExists(ctx context.Context, repoRoot, branch string) (bool, error) {
+func (c *WorktreeClient) BranchExists(ctx context.Context, repoRoot, branch string) (bool, error) {
 	cmd := exec.CommandContext(
 		ctx,
 		"git",
@@ -159,7 +120,7 @@ func (c *worktreeClient) BranchExists(ctx context.Context, repoRoot, branch stri
 	return true, nil
 }
 
-func (c *worktreeClient) ValidateBranchName(ctx context.Context, name string) error {
+func (c *WorktreeClient) ValidateBranchName(ctx context.Context, name string) error {
 	if _, err := c.runGit(ctx, "", "check-ref-format", "refs/heads/"+name); err != nil {
 		return fmt.Errorf("%q is not a valid branch name", name)
 	}
@@ -167,7 +128,7 @@ func (c *worktreeClient) ValidateBranchName(ctx context.Context, name string) er
 	return nil
 }
 
-func (c *worktreeClient) CreateBranch(ctx context.Context, repoRoot, branch, startRef string) error {
+func (c *WorktreeClient) CreateBranch(ctx context.Context, repoRoot, branch, startRef string) error {
 	if _, err := c.runGit(ctx, repoRoot, "branch", "--no-track", branch, startRef); err != nil {
 		return fmt.Errorf("creating branch %q: %w", branch, err)
 	}
@@ -175,7 +136,7 @@ func (c *worktreeClient) CreateBranch(ctx context.Context, repoRoot, branch, sta
 	return nil
 }
 
-func (c *worktreeClient) AddWorktree(
+func (c *WorktreeClient) AddWorktree(
 	ctx context.Context,
 	repoRoot, worktreePath, branch string,
 ) (string, error) {
@@ -196,7 +157,7 @@ func (c *worktreeClient) AddWorktree(
 	return string(output), nil
 }
 
-func (c *worktreeClient) RemoveWorktree(ctx context.Context, repoRoot, worktreePath, branch string) error {
+func (c *WorktreeClient) RemoveWorktree(ctx context.Context, repoRoot, worktreePath, branch string) error {
 	var errs []error
 
 	if c.worktreeAtBranch(ctx, repoRoot, worktreePath, branch) {
@@ -212,7 +173,7 @@ func (c *worktreeClient) RemoveWorktree(ctx context.Context, repoRoot, worktreeP
 	return errors.Join(errs...)
 }
 
-func (c *worktreeClient) CheckRepositoryConfig(ctx context.Context, repoRoot string) error {
+func (c *WorktreeClient) CheckRepositoryConfig(ctx context.Context, repoRoot string) error {
 	const keys = `^(include\.path|includeif\..*\.path|filter\..*|credential(\..*)?\.helper|core\.(sshcommand|gitproxy|alternaterefscommand|askpass)|remote\..*\.uploadpack)$`
 
 	// An inactive conditional include can become active during the new worktree's checkout.
@@ -247,7 +208,7 @@ func (c *worktreeClient) CheckRepositoryConfig(ctx context.Context, repoRoot str
 // worktreeAtBranch reports whether repoRoot has a registered worktree at
 // worktreePath checked out at branch. Rollback may run long after our
 // existence check, so the path can have been claimed by a foreign worktree.
-func (c *worktreeClient) worktreeAtBranch(ctx context.Context, repoRoot, worktreePath, branch string) bool {
+func (c *WorktreeClient) worktreeAtBranch(ctx context.Context, repoRoot, worktreePath, branch string) bool {
 	out, err := c.runGit(ctx, repoRoot, "worktree", "list", "--porcelain")
 	if err != nil {
 		return false
@@ -298,7 +259,7 @@ func canonicalizePath(p string) string {
 // resolveRemote picks the remote to base a worktree on: origin when present,
 // otherwise the sole remote. Ambiguity and absence are both errors — /gwt is
 // remote-first and refuses to guess.
-func (c *worktreeClient) resolveRemote(ctx context.Context, repoRoot string) (string, error) {
+func (c *WorktreeClient) resolveRemote(ctx context.Context, repoRoot string) (string, error) {
 	out, err := c.runGit(ctx, repoRoot, "remote")
 	if err != nil {
 		return "", fmt.Errorf("listing remotes: %w", err)
@@ -322,7 +283,7 @@ func (c *worktreeClient) resolveRemote(ctx context.Context, repoRoot string) (st
 	return "", fmt.Errorf("repository has multiple remotes and none named origin: %s", strings.Join(remotes, ", "))
 }
 
-func (c *worktreeClient) runGit(ctx context.Context, dir string, args ...string) (string, error) {
+func (c *WorktreeClient) runGit(ctx context.Context, dir string, args ...string) (string, error) {
 	full := c.gitArgs(dir, args...)
 
 	cmd := exec.CommandContext(ctx, "git", full...)
@@ -361,7 +322,7 @@ func parseSymrefHead(out string) string {
 	return ""
 }
 
-func (c *worktreeClient) gitArgs(dir string, args ...string) []string {
+func (c *WorktreeClient) gitArgs(dir string, args ...string) []string {
 	var full []string
 	if c.noExecution {
 		full = append(full, "-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false",

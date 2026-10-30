@@ -341,6 +341,8 @@ process-output diagnostics available.
 
 Shutdown stops admission, cancels daemon workers and live runners, and joins
 startup and complete runner teardown before closing session tool resources.
+Its deadline derives from the composition root's independent shutdown context,
+not the cancelled daemon lifetime.
 The composition root stops managers and pooled resources before closing stores. Startup recovery
 rebuilds runnable sessions from persisted rows and producer ledgers. Restart
 replays obligations, not decisions: a crash after candidate+nudge commit

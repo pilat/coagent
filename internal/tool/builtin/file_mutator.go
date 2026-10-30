@@ -41,7 +41,7 @@ type fileMutator interface {
 type directFileMutator struct{}
 
 type exactGrantFileMutator struct {
-	access   safefile.Access
+	access   *safefile.Access
 	fallback fileMutator
 }
 

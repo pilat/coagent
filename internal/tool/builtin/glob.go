@@ -42,7 +42,7 @@ type globParams struct {
 
 type globTool struct {
 	workDir string
-	access  safefile.Access
+	access  *safefile.Access
 }
 
 type fileMatch struct {
@@ -54,7 +54,7 @@ func newGlobTool(workDir string) *globTool {
 	return &globTool{workDir: workDir}
 }
 
-func newGlobToolWithAccess(workDir string, access safefile.Access) *globTool {
+func newGlobToolWithAccess(workDir string, access *safefile.Access) *globTool {
 	return &globTool{workDir: workDir, access: access}
 }
 

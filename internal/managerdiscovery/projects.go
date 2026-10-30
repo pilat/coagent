@@ -10,7 +10,7 @@ import (
 	"github.com/pilat/coagent/internal/projectpath"
 )
 
-func (s *service) CreateProject(
+func (s *Service) CreateProject(
 	ctx context.Context,
 	_ string,
 	data controllerapi.ProjectCreateData,
@@ -33,7 +33,7 @@ func (s *service) CreateProject(
 	return &controllerapi.ProjectCreateResultData{ID: projectID, Name: name, Path: path}, nil
 }
 
-func (s *service) ListRecentProjects(ctx context.Context) (*controllerapi.ProjectListResultData, error) {
+func (s *Service) ListRecentProjects(ctx context.Context) (*controllerapi.ProjectListResultData, error) {
 	recent, err := listRecentProjects(ctx, s.backend, projectpath.ResolveRoot(s.unifiedConfig()))
 	if err != nil {
 		return nil, fmt.Errorf("list recent projects: %w", err)
@@ -44,7 +44,7 @@ func (s *service) ListRecentProjects(ctx context.Context) (*controllerapi.Projec
 
 // hiddenDirNames lists work dirs backed by hidden project rows, so /spawn
 // navigation omits exactly those directories without inferring from a basename.
-func (s *service) hiddenDirNames(ctx context.Context) map[string]bool {
+func (s *Service) hiddenDirNames(ctx context.Context) map[string]bool {
 	dirs, err := listHiddenProjectDirs(ctx, s.backend)
 	if err != nil {
 		return nil

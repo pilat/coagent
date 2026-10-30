@@ -82,7 +82,7 @@ func TestExecutor_CronAckRetryKeepsCanonicalIdentityAndPayload(t *testing.T) {
 	}}
 	sender := &idempotentScheduleSender{payloadByID: make(map[string]string)}
 	store.sender = sender
-	executor := NewExecutor(store, sender).(*executor)
+	executor := NewExecutor(store, sender)
 
 	require.NoError(t, executor.fireCronSchedules(context.Background(), firstTick, zap.NewNop()))
 	require.NoError(t, executor.fireCronSchedules(context.Background(), secondTick, zap.NewNop()))

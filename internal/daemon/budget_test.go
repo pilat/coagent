@@ -74,20 +74,20 @@ func TestReleaseArmedBudgetHonorsStateAndErrors(t *testing.T) {
 	t.Parallel()
 	t.Run("released budget is unchanged", func(t *testing.T) {
 		service := &budgetServiceProbe{record: &budget.Record{State: budget.Released}}
-		manager := &svc{budgets: service}
+		manager := &Service{budgets: service}
 		require.NoError(t, manager.releaseArmedBudget(t.Context(), 1, "stopped"))
 		assert.Zero(t, service.releaseCalls)
 	})
 	t.Run("armed budget is released", func(t *testing.T) {
 		service := &budgetServiceProbe{record: &budget.Record{State: budget.Armed, Generation: 3}}
-		manager := &svc{budgets: service}
+		manager := &Service{budgets: service}
 		require.NoError(t, manager.releaseArmedBudget(t.Context(), 1, "stopped"))
 		assert.Equal(t, 1, service.releaseCalls)
 	})
 	t.Run("release error is preserved", func(t *testing.T) {
 		releaseErr := errors.New("release failed")
 		service := &budgetServiceProbe{record: &budget.Record{State: budget.Armed}, releaseErr: releaseErr}
-		manager := &svc{budgets: service}
+		manager := &Service{budgets: service}
 		err := manager.releaseArmedBudget(t.Context(), 1, "stopped")
 		require.ErrorIs(t, err, releaseErr)
 		assert.Equal(t, 1, service.releaseCalls)
@@ -99,7 +99,7 @@ func TestReleaseArmedBudgetHonorsStateAndErrors(t *testing.T) {
 			record:     &budget.Record{State: budget.Armed, Generation: 3},
 			releaseErr: fmt.Errorf("stale release: %w", budget.ErrConflict),
 		}
-		manager := &svc{budgets: service}
+		manager := &Service{budgets: service}
 		require.NoError(t, manager.releaseArmedBudget(ctx, 12, "completed"))
 		assert.Equal(t, 1, service.releaseCalls)
 		entries := logs.FilterMessage("terminal_budget_release_superseded").All()

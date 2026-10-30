@@ -28,7 +28,7 @@ type TaskParams struct {
 type taskTool struct {
 	spawner          Spawner
 	parentID         int64
-	loader           loader.Service
+	loader           *loader.Service
 	models           []ModelInfo
 	modelCatalog     []ModelInfo
 	skillCatalog     loader.SkillCatalog
@@ -43,7 +43,7 @@ var (
 func (t *taskTool) SetBrowserAvailable(available bool) { t.browserAvailable = available }
 
 // NewTaskTool observes the loader after session assembly has loaded project artifacts.
-func NewTaskTool(sp Spawner, parentID int64, ldr loader.Service, models []ModelInfo) tool.Tool {
+func NewTaskTool(sp Spawner, parentID int64, ldr *loader.Service, models []ModelInfo) tool.Tool {
 	candidates := make([]ModelInfo, 0, len(models))
 	for _, model := range models {
 		if len(model.Tags) != 0 {
@@ -51,10 +51,15 @@ func NewTaskTool(sp Spawner, parentID int64, ldr loader.Service, models []ModelI
 		}
 	}
 
-	return &taskTool{
+	t := &taskTool{
 		spawner: sp, parentID: parentID, loader: ldr, models: models,
-		modelCatalog: candidates, skillCatalog: ldr,
+		modelCatalog: candidates,
 	}
+	if ldr != nil {
+		t.skillCatalog = ldr
+	}
+
+	return t
 }
 
 func (t *taskTool) ID() string { return tool.IDTask }

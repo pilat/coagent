@@ -7,31 +7,19 @@ import (
 	"github.com/pilat/coagent/internal/id"
 )
 
-type Service interface {
-	Add(content string, priority Priority) *Item
-	Get(id string) *Item
-	Update(id string, content string, status Status, priority Priority) bool
-	Delete(id string) bool
-	List() []*Item
-	Replace(items []*Item)
-	Clear()
-	Count() int
-}
-
-var _ Service = (*svc)(nil)
-
-type svc struct {
+// Service manages an isolated, concurrency-safe collection of todo items.
+type Service struct {
 	mu    sync.RWMutex
 	items map[string]*Item
 }
 
-func New() Service {
-	return &svc{
+func New() *Service {
+	return &Service{
 		items: make(map[string]*Item),
 	}
 }
 
-func (s *svc) Add(content string, priority Priority) *Item {
+func (s *Service) Add(content string, priority Priority) *Item {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -49,7 +37,7 @@ func (s *svc) Add(content string, priority Priority) *Item {
 	return item
 }
 
-func (s *svc) Get(itemID string) *Item {
+func (s *Service) Get(itemID string) *Item {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -63,7 +51,7 @@ func (s *svc) Get(itemID string) *Item {
 	return &cpy
 }
 
-func (s *svc) Update(itemID, content string, status Status, priority Priority) bool {
+func (s *Service) Update(itemID, content string, status Status, priority Priority) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -89,7 +77,7 @@ func (s *svc) Update(itemID, content string, status Status, priority Priority) b
 	return true
 }
 
-func (s *svc) Delete(itemID string) bool {
+func (s *Service) Delete(itemID string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -102,7 +90,7 @@ func (s *svc) Delete(itemID string) bool {
 	return true
 }
 
-func (s *svc) List() []*Item {
+func (s *Service) List() []*Item {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -116,7 +104,7 @@ func (s *svc) List() []*Item {
 	return items
 }
 
-func (s *svc) Replace(items []*Item) {
+func (s *Service) Replace(items []*Item) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -147,14 +135,14 @@ func (s *svc) Replace(items []*Item) {
 	}
 }
 
-func (s *svc) Clear() {
+func (s *Service) Clear() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	s.items = make(map[string]*Item)
 }
 
-func (s *svc) Count() int {
+func (s *Service) Count() int {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 

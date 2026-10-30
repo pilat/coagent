@@ -14,7 +14,7 @@ import (
 	"github.com/pilat/coagent/internal/todo"
 )
 
-func (r *runtime) current(
+func (r *Runtime) current(
 	ctx context.Context,
 	rootID int64,
 ) (string, error) {
@@ -37,7 +37,7 @@ func (r *runtime) current(
 	return progress.RenderFull(snapshot), nil
 }
 
-func (r *runtime) progressSnapshot(
+func (r *Runtime) progressSnapshot(
 	facts *sessionstore.ProgressFacts,
 	observedAt time.Time,
 ) (progress.Snapshot, error) {

@@ -69,7 +69,7 @@ func TestIntegration_Marketplace_LocalGitRepository(t *testing.T) {
 	t.Setenv("HOME", home)
 	sourceDir := newLocalMarketplaceRepository(t)
 	gitClient := &localRepoGitClient{delegate: coagentgit.New(), sourceDir: sourceDir}
-	service := New(NewMarketplaceCache(gitClient)).(*svc)
+	service := New(NewMarketplaceCache(gitClient))
 	entry := fixtureMarketplaceEntry()
 
 	require.NoError(t, service.ProcessMarketplace(context.Background(), entry, nil))
@@ -105,14 +105,14 @@ func TestIntegration_Marketplace_DiskCachePullsLocalRepository(t *testing.T) {
 	gitClient := &localRepoGitClient{delegate: coagentgit.New(), sourceDir: sourceDir}
 	entry := fixtureMarketplaceEntry()
 
-	first := New(NewMarketplaceCache(gitClient)).(*svc)
+	first := New(NewMarketplaceCache(gitClient))
 	require.NoError(t, first.ProcessMarketplace(context.Background(), entry, nil))
 	assert.Equal(t, 1, gitClient.cloneCalls)
 
 	addFixtureSkill(t, sourceDir, "second-skill")
 	commitLocalRepository(t, sourceDir, "add second skill")
 
-	second := New(NewMarketplaceCache(gitClient)).(*svc)
+	second := New(NewMarketplaceCache(gitClient))
 	require.NoError(t, second.ProcessMarketplace(context.Background(), entry, nil))
 	require.NoError(t, second.LoadSkills(t.TempDir()))
 	assert.NotNil(t, second.GetSkill(fixturePluginName+":second-skill"))
@@ -137,7 +137,7 @@ func TestIntegration_Marketplace_RecoversCorruptClone(t *testing.T) {
 	gitClient := &localRepoGitClient{delegate: coagentgit.New(), sourceDir: sourceDir}
 	entry := fixtureMarketplaceEntry()
 
-	first := New(NewMarketplaceCache(gitClient)).(*svc)
+	first := New(NewMarketplaceCache(gitClient))
 	require.NoError(t, first.ProcessMarketplace(context.Background(), entry, nil))
 
 	owner, repo, err := parseGitHubURL(fixtureMarketplaceURL)
@@ -162,7 +162,7 @@ func TestIntegration_Marketplace_RecoversCorruptClone(t *testing.T) {
 	addFixtureSkill(t, sourceDir, "recovered-skill")
 	commitLocalRepository(t, sourceDir, "add recovered skill")
 
-	second := New(NewMarketplaceCache(gitClient)).(*svc)
+	second := New(NewMarketplaceCache(gitClient))
 	require.NoError(t, second.ProcessMarketplace(context.Background(), entry, nil))
 	require.NoError(t, second.LoadSkills(t.TempDir()))
 	assert.NotNil(t, second.GetSkill(fixturePluginName+":recovered-skill"),

@@ -631,7 +631,7 @@ func newMCPRestartHarness(
 }
 
 func (h *mcpRestartHarness) close() {
-	h.mgr.Shutdown(5 * time.Second)
+	h.mgr.Shutdown(h.ctx, 5*time.Second)
 	_ = h.db.Close()
 }
 

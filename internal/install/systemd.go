@@ -44,9 +44,8 @@ type unitParams struct {
 	BinaryPath string
 }
 
-var _ Manager = (*systemdManager)(nil)
-
-type systemdManager struct {
+// Manager performs service lifecycle actions for one platform and scope.
+type Manager struct {
 	unitPath   string
 	binaryPath string
 	target     target
@@ -64,13 +63,13 @@ func renderUnit(p unitParams) (string, error) {
 	return sb.String(), nil
 }
 
-func newSystemd() (Manager, error) {
+func newSystemd() (*Manager, error) {
 	t, err := resolveTarget()
 	if err != nil {
 		return nil, err
 	}
 
-	return &systemdManager{
+	return &Manager{
 		unitPath:   filepath.Join(systemUnitDir, unitName),
 		binaryPath: binaryPathFor(t),
 		target:     t,
@@ -87,9 +86,7 @@ func expectedUnit(t target) (string, string, error) {
 	return filepath.Join(systemUnitDir, unitName), unit, nil
 }
 
-func (m *systemdManager) Info() Info {
-	ctx := context.Background()
-
+func (m *Manager) Info(ctx context.Context) Info {
 	info := Info{
 		Platform:   platformLinux,
 		Supported:  true,
@@ -109,7 +106,7 @@ func (m *systemdManager) Info() Info {
 	return info
 }
 
-func (m *systemdManager) Plan() Plan {
+func (m *Manager) Plan() Plan {
 	return Plan{
 		Description: "systemd system unit: " + unitName,
 		UnitPath:    m.unitPath,
@@ -120,7 +117,7 @@ func (m *systemdManager) Plan() Plan {
 	}
 }
 
-func (m *systemdManager) Install(ctx context.Context) error {
+func (m *Manager) Install(ctx context.Context) error {
 	if err := installBinary(m.binaryPath, m.target); err != nil {
 		return err
 	}
@@ -147,7 +144,7 @@ func (m *systemdManager) Install(ctx context.Context) error {
 	return runSystemctl(ctx, "restart", unitName)
 }
 
-func (m *systemdManager) Uninstall(ctx context.Context) error {
+func (m *Manager) Uninstall(ctx context.Context) error {
 	// Errors are ignored deliberately: uninstall must finish on a half-installed
 	// or already-stopped service, and "not loaded" is exactly that state.
 	_ = runSystemctl(ctx, "disable", "--now", unitName)
@@ -168,18 +165,18 @@ func (m *systemdManager) Uninstall(ctx context.Context) error {
 	return nil
 }
 
-func (m *systemdManager) Start(ctx context.Context) error {
+func (m *Manager) Start(ctx context.Context) error {
 	return runSystemctl(ctx, "start", unitName)
 }
 
-func (m *systemdManager) Stop(ctx context.Context) error {
+func (m *Manager) Stop(ctx context.Context) error {
 	return runSystemctl(ctx, "stop", unitName)
 }
 
-func (m *systemdManager) Restart(ctx context.Context) error {
+func (m *Manager) Restart(ctx context.Context) error {
 	return runSystemctl(ctx, "restart", unitName)
 }
 
-func (m *systemdManager) reload(ctx context.Context) error {
+func (m *Manager) reload(ctx context.Context) error {
 	return runSystemctl(ctx, "daemon-reload")
 }

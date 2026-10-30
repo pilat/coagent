@@ -24,11 +24,11 @@ var _ assistant.Host = assistantHost{}
 
 // assistantHost gives assistant roots the daemon lifecycle for work roots.
 type assistantHost struct {
-	s *svc
+	s *Service
 }
 
 // EnsureAssistantRoot preserves each manager's assistant identity in the shared hidden project.
-func (s *svc) EnsureAssistantRoot(ctx context.Context, owner string) (*sessionstore.SessionRecord, error) {
+func (s *Service) EnsureAssistantRoot(ctx context.Context, owner string) (*sessionstore.SessionRecord, error) {
 	path := filepath.Join(
 		projectpath.ResolveRoot(s.build.Config.UnifiedConfig),
 		controllerapi.AssistantProjectDir,
@@ -198,7 +198,7 @@ func (h assistantHost) workProject(
 	return spec, created, nil
 }
 
-func (s *svc) assistantHead(scope assistant.Scope) func(context.Context) (string, error) {
+func (s *Service) assistantHead(scope assistant.Scope) func(context.Context) (string, error) {
 	return func(ctx context.Context) (string, error) {
 		now := time.Now().UTC()
 
@@ -221,7 +221,7 @@ func (s *svc) assistantHead(scope assistant.Scope) func(context.Context) (string
 	}
 }
 
-func (s *svc) assistantAdministrationTools(rec *sessionstore.SessionRecord, scope assistant.Scope) []tool.Tool {
+func (s *Service) assistantAdministrationTools(rec *sessionstore.SessionRecord, scope assistant.Scope) []tool.Tool {
 	tools := s.administrationTools(rec, 0)
 	for i, instance := range tools {
 		if instance.ID() == budget.ToolID {
@@ -232,7 +232,7 @@ func (s *svc) assistantAdministrationTools(rec *sessionstore.SessionRecord, scop
 	return append(tools, configapply.NewConfigEdit(rec.ID, s.applier), configapply.NewConfigRead(rec.ID, s.applier))
 }
 
-func (s *svc) assistantBudgetTarget(scope assistant.Scope) func(context.Context, int64) (int64, bool, error) {
+func (s *Service) assistantBudgetTarget(scope assistant.Scope) func(context.Context, int64) (int64, bool, error) {
 	return func(ctx context.Context, id int64) (int64, bool, error) {
 		if id == 0 {
 			id = scope.Root
@@ -250,7 +250,7 @@ func (s *svc) assistantBudgetTarget(scope assistant.Scope) func(context.Context,
 }
 
 // refuseAssistantRoot keeps refused lifecycle commands out of the model transcript.
-func (s *svc) refuseAssistantRoot(ctx context.Context, input *sessionstore.InboxInput) (bool, error) {
+func (s *Service) refuseAssistantRoot(ctx context.Context, input *sessionstore.InboxInput) (bool, error) {
 	record, err := s.store.GetSession(ctx, input.SessionID)
 	if err != nil {
 		return false, fmt.Errorf("load command target: %w", err)

@@ -18,10 +18,10 @@ Returns:
 var _ tool.Tool = (*todoReadTool)(nil)
 
 type todoReadTool struct {
-	store todo.Service
+	store *todo.Service
 }
 
-func newTodoReadTool(store todo.Service) *todoReadTool {
+func newTodoReadTool(store *todo.Service) *todoReadTool {
 	return &todoReadTool{store: store}
 }
 

@@ -17,7 +17,7 @@ type PreparedMessage struct {
 }
 
 // PrepareUserMessageDetailed expands leading skill commands and preserves ordinary messages.
-func PrepareUserMessageDetailed(ldr loader.Registry, message string) (PreparedMessage, error) {
+func PrepareUserMessageDetailed(ldr *loader.Service, message string) (PreparedMessage, error) {
 	expanded, skillName, matched, err := expandSkillCommand(ldr, message)
 	if !matched {
 		return PreparedMessage{Content: message}, nil
@@ -26,7 +26,7 @@ func PrepareUserMessageDetailed(ldr loader.Registry, message string) (PreparedMe
 	return PreparedMessage{Content: expanded, SkillName: skillName}, err
 }
 
-func expandSkillCommand(ldr loader.Registry, message string) (string, string, bool, error) {
+func expandSkillCommand(ldr *loader.Service, message string) (string, string, bool, error) {
 	name, args, matched, err := parseSkillCommand(message)
 	if !matched || err != nil {
 		return message, "", matched, err

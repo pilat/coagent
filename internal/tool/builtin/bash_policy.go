@@ -11,7 +11,7 @@ import (
 )
 
 //nolint:wsl_v5 // Fail-open classification keeps each rejection guard next to its evidence.
-func directProjectCatTargets(command string, access safefile.Access) ([]string, bool) {
+func directProjectCatTargets(command string, access *safefile.Access) ([]string, bool) {
 	if access == nil {
 		return nil, false
 	}

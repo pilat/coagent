@@ -15,16 +15,8 @@ import (
 	"github.com/pilat/coagent/internal/managers/telegram"
 )
 
-type Runtime interface {
-	Start(ctx context.Context) error
-	Stop(ctx context.Context) error
-	RunningIDs() []string
-	StartError(id string) error
-}
-
-var _ Runtime = (*runtime)(nil)
-
-type runtime struct {
+// Runtime owns enabled managers and records their startup failures.
+type Runtime struct {
 	cfg         *config.Config
 	controllers controllerapi.ManagerControllerFactory
 	builder     func(config.ManagerEntry) (Manager, error)
@@ -34,8 +26,8 @@ type runtime struct {
 	startErrs map[string]error
 }
 
-func NewRuntime(cfg *config.Config, controllers controllerapi.ManagerControllerFactory) Runtime {
-	r := &runtime{
+func NewRuntime(cfg *config.Config, controllers controllerapi.ManagerControllerFactory) *Runtime {
+	r := &Runtime{
 		cfg:         cfg,
 		controllers: controllers,
 		builder:     nil,
@@ -47,7 +39,7 @@ func NewRuntime(cfg *config.Config, controllers controllerapi.ManagerControllerF
 
 // Start brings up every enabled manager. A failure is recorded and skipped
 // rather than fatal; repair the config by hand and `coagent restart`.
-func (r *runtime) Start(ctx context.Context) error {
+func (r *Runtime) Start(ctx context.Context) error {
 	if r.cfg.UnifiedConfig == nil || len(r.cfg.UnifiedConfig.Managers) == 0 {
 		return nil
 	}
@@ -114,7 +106,7 @@ func telegramTokenConflicts(entries []config.ManagerEntry) map[string]error {
 	return conflicts
 }
 
-func (r *runtime) Stop(ctx context.Context) error {
+func (r *Runtime) Stop(ctx context.Context) error {
 	r.mu.Lock()
 	list := r.managers
 	r.managers = nil
@@ -125,7 +117,7 @@ func (r *runtime) Stop(ctx context.Context) error {
 
 // RunningIDs lists managers that started, were not stopped, and whose loops are still
 // up — `status` diffs it against the configured set to show enabled-but-down.
-func (r *runtime) RunningIDs() []string {
+func (r *Runtime) RunningIDs() []string {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
@@ -144,14 +136,14 @@ func (r *runtime) RunningIDs() []string {
 
 // StartError reports why this manager did not come up, or nil when it started —
 // including when it started and died later, which is not a start failure.
-func (r *runtime) StartError(id string) error {
+func (r *Runtime) StartError(id string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
 	return r.startErrs[id]
 }
 
-func (r *runtime) startOne(ctx context.Context, entry config.ManagerEntry) (Manager, error) {
+func (r *Runtime) startOne(ctx context.Context, entry config.ManagerEntry) (Manager, error) {
 	mgr, err := r.builder(entry)
 	if err != nil {
 		return nil, err
@@ -164,7 +156,7 @@ func (r *runtime) startOne(ctx context.Context, entry config.ManagerEntry) (Mana
 	return mgr, nil
 }
 
-func (r *runtime) stopManagers(ctx context.Context, list []Manager) error {
+func (r *Runtime) stopManagers(ctx context.Context, list []Manager) error {
 	var firstErr error
 
 	for _, v := range slices.Backward(list) {
@@ -176,7 +168,7 @@ func (r *runtime) stopManagers(ctx context.Context, list []Manager) error {
 	return firstErr
 }
 
-func (r *runtime) buildManager(entry config.ManagerEntry) (Manager, error) {
+func (r *Runtime) buildManager(entry config.ManagerEntry) (Manager, error) {
 	switch entry.Driver {
 	case "telegram":
 		mgr, err := telegram.New(entry, r.cfg.UnifiedConfig, r.controllers.ForManager(entry.ID))

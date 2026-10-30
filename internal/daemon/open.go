@@ -44,7 +44,7 @@ func newModels(cfg *config.Config) models {
 	return result
 }
 
-func (s *svc) openSession(
+func (s *Service) openSession(
 	ctx context.Context,
 	sessionID int64,
 	workDir string,
@@ -109,7 +109,7 @@ func (s *svc) openSession(
 }
 
 // Children do not copy manager-owned attributes, so confinement follows the durable root.
-func (s *svc) sessionRepoRoot(ctx context.Context, rec *sessionstore.SessionRecord) (string, error) {
+func (s *Service) sessionRepoRoot(ctx context.Context, rec *sessionstore.SessionRecord) (string, error) {
 	if rec.RootID == 0 {
 		repoRoot, _ := rec.Attributes["repo_root"].(string)
 
@@ -131,7 +131,7 @@ func (s *svc) sessionRepoRoot(ctx context.Context, rec *sessionstore.SessionReco
 }
 
 // Ownership comes from producer ledgers and exact queued results, never tool names alone.
-func (s *svc) callOwners(ctx context.Context, sessionID int64) (map[string]string, error) {
+func (s *Service) callOwners(ctx context.Context, sessionID int64) (map[string]string, error) {
 	stored, err := s.store.LoadActiveMessages(ctx, sessionID)
 	if err != nil {
 		return nil, fmt.Errorf("load pending external calls: %w", err)
@@ -197,7 +197,7 @@ func (s *svc) callOwners(ctx context.Context, sessionID int64) (map[string]strin
 	return calls, nil
 }
 
-func (s *svc) activeSubagentInfos(ctx context.Context, sessionID int64) []sessionprompt.ActiveSubagentInfo {
+func (s *Service) activeSubagentInfos(ctx context.Context, sessionID int64) []sessionprompt.ActiveSubagentInfo {
 	links, err := s.links.ListPendingChildLinks(ctx, sessionID)
 	if err != nil {
 		logger.Ctx(ctx).Named("daemon.runner").
@@ -222,7 +222,7 @@ func (s *svc) activeSubagentInfos(ctx context.Context, sessionID int64) []sessio
 	return infos
 }
 
-func (s *svc) activeProcessInfos(ctx context.Context, sessionID int64) []sessionprompt.ActiveProcessInfo {
+func (s *Service) activeProcessInfos(ctx context.Context, sessionID int64) []sessionprompt.ActiveProcessInfo {
 	processes, err := s.processStore.ListRunningBySessions(ctx, []int64{sessionID})
 	if err != nil {
 		logger.Ctx(ctx).Named("daemon.runner").
@@ -245,7 +245,7 @@ func (s *svc) activeProcessInfos(ctx context.Context, sessionID int64) []session
 	return infos
 }
 
-func (s *svc) ownerTools(rec *sessionstore.SessionRecord, ldr loader.Service) []tool.Tool {
+func (s *Service) ownerTools(rec *sessionstore.SessionRecord, ldr *loader.Service) []tool.Tool {
 	tools := []tool.Tool{
 		subagent.NewTaskTool(subagent.Spawner(s), rec.ID, ldr, s.models.infos),
 		subagent.NewGetSubagentResultTool(subagent.Spawner(s)), subagent.NewSendToSubagentTool(subagent.Spawner(s)),
@@ -264,7 +264,7 @@ func (s *svc) ownerTools(rec *sessionstore.SessionRecord, ldr loader.Service) []
 	return tools
 }
 
-func (s *svc) administrationTools(rec *sessionstore.SessionRecord, projectID int64) []tool.Tool {
+func (s *Service) administrationTools(rec *sessionstore.SessionRecord, projectID int64) []tool.Tool {
 	tools := mcpstore.NewTools(s.mcpStore, projectID)
 
 	return append(tools,
@@ -272,7 +272,7 @@ func (s *svc) administrationTools(rec *sessionstore.SessionRecord, projectID int
 	)
 }
 
-func (s *svc) pendingResultOwners(ctx context.Context, sessionID int64, actual, calls map[string]string) error {
+func (s *Service) pendingResultOwners(ctx context.Context, sessionID int64, actual, calls map[string]string) error {
 	pending, err := s.store.ListPending(ctx, sessionID)
 	if err != nil {
 		return fmt.Errorf("load pending result owners: %w", err)

@@ -808,7 +808,7 @@ func TestExecuteToolCalls_TypedFailureKeepsPartialOutput(t *testing.T) {
 func TestBatchFallbackParityWithNativeScheduling(t *testing.T) {
 	const grepErr = "grep payload failure"
 
-	buildRegistry := func(grep *gateTool) tool.Registry {
+	buildRegistry := func(grep *gateTool) *tool.Registry {
 		read := newGateTool("read", true)
 		edit := newGateTool("edit", false)
 
@@ -826,7 +826,7 @@ func TestBatchFallbackParityWithNativeScheduling(t *testing.T) {
 		return reg
 	}
 
-	runNative := func(grep *gateTool, reg tool.Registry) (*Session, chan error) {
+	runNative := func(grep *gateTool, reg *tool.Registry) (*Session, chan error) {
 		agent := newTestAgent()
 		agent.registry = reg
 

@@ -18,7 +18,7 @@ import (
 // LoadSkills finds and parses all SKILL.md files from search paths.
 // Local skills take priority over global skills. .claude over .coagent.
 // Marketplace skills are prefixed with plugin name (e.g., "pilat:brainstormer").
-func (s *svc) LoadSkills(workDir string) error {
+func (s *Service) LoadSkills(workDir string) error {
 	s.skills = make(map[string]*Skill)
 
 	// Build search sources - lowest priority first
@@ -66,7 +66,7 @@ func (s *svc) LoadSkills(workDir string) error {
 	return errors.Join(errs...)
 }
 
-func (s *svc) loadSkillsFromPath(source sourceInfo, access safefile.Access) error {
+func (s *Service) loadSkillsFromPath(source sourceInfo, access *safefile.Access) error {
 	entries, err := readSourceDir(source.path, access)
 	if err != nil {
 		return fmt.Errorf("scan skill directory %s: %w", source.path, err)
@@ -89,7 +89,11 @@ func (s *svc) loadSkillsFromPath(source sourceInfo, access safefile.Access) erro
 	return nil
 }
 
-func (s *svc) parseSkillEntry(source sourceInfo, entry os.DirEntry, access safefile.Access) (*Skill, string, bool) {
+func (s *Service) parseSkillEntry(
+	source sourceInfo,
+	entry os.DirEntry,
+	access *safefile.Access,
+) (*Skill, string, bool) {
 	isDir := entry.IsDir()
 	if entry.Type()&os.ModeSymlink != 0 {
 		if info, err := statSource(filepath.Join(source.path, entry.Name()), access); err == nil {
@@ -132,7 +136,7 @@ func (s *svc) parseSkillEntry(source sourceInfo, entry os.DirEntry, access safef
 	return skill, skillName, true
 }
 
-func parseSkillFile(path string, access safefile.Access) (*Skill, error) {
+func parseSkillFile(path string, access *safefile.Access) (*Skill, error) {
 	frontmatter, content, err := parseSourceFrontmatter(path, access)
 	if err != nil {
 		return nil, err
@@ -152,12 +156,12 @@ func parseSkillFile(path string, access safefile.Access) (*Skill, error) {
 	return skill, nil
 }
 
-func (s *svc) GetSkill(name string) *Skill {
+func (s *Service) GetSkill(name string) *Skill {
 	return s.skills[name]
 }
 
 // ListSkills returns all loaded skills sorted by name for stable ordering.
-func (s *svc) ListSkills() []*Skill {
+func (s *Service) ListSkills() []*Skill {
 	skills := make([]*Skill, 0, len(s.skills))
 	for _, sk := range s.skills {
 		skills = append(skills, sk)
@@ -168,7 +172,7 @@ func (s *svc) ListSkills() []*Skill {
 	return skills
 }
 
-func (s *svc) ListUserInvocableSkills() []*Skill {
+func (s *Service) ListUserInvocableSkills() []*Skill {
 	skills := make([]*Skill, 0)
 	for _, sk := range s.skills {
 		if sk.IsUserInvocable() {
@@ -182,7 +186,7 @@ func (s *svc) ListUserInvocableSkills() []*Skill {
 }
 
 // ListModelInvocableSkills returns model-visible skills sorted by name.
-func (s *svc) ListModelInvocableSkills() []*Skill {
+func (s *Service) ListModelInvocableSkills() []*Skill {
 	skills := make([]*Skill, 0)
 	for _, sk := range s.skills {
 		if sk.IsModelInvocable() {
@@ -196,6 +200,6 @@ func (s *svc) ListModelInvocableSkills() []*Skill {
 }
 
 // RegisterSkill adds a skill directly, bypassing filesystem discovery.
-func (s *svc) RegisterSkill(skill *Skill) {
+func (s *Service) RegisterSkill(skill *Skill) {
 	s.skills[skill.Name] = skill
 }

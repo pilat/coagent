@@ -19,11 +19,16 @@ type skillParams struct {
 }
 
 type skillTool struct {
-	loader loader.Registry
+	loader loader.SkillCatalog
 }
 
-func NewSkillTool(ldr loader.Registry) tool.Tool {
-	return &skillTool{loader: ldr}
+func NewSkillTool(ldr *loader.Service) tool.Tool {
+	t := &skillTool{}
+	if ldr != nil {
+		t.loader = ldr
+	}
+
+	return t
 }
 
 // RenderSkill renders the canonical conversation envelope for a skill invocation.

@@ -1,7 +1,6 @@
 package install
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -76,23 +75,6 @@ type Plan struct {
 	NeedsRoot   bool
 }
 
-// Manager performs service lifecycle actions for one platform and scope.
-type Manager interface {
-	// Info reports the local, socket-free view of the service.
-	Info() Info
-	// Plan describes what Install would do.
-	Plan() Plan
-	// Install copies the binary, writes the unit, enables and starts it. It is
-	// idempotent: reinstalling over a running service replaces both and restarts.
-	Install(ctx context.Context) error
-	// Uninstall stops the service, then removes the unit and the binary. It
-	// leaves ~/.coagent alone — config and secrets outlive the service.
-	Uninstall(ctx context.Context) error
-	Start(ctx context.Context) error
-	Stop(ctx context.Context) error
-	Restart(ctx context.Context) error
-}
-
 // target is the account the service runs as. Under sudo that is the invoking
 // user, never root: the daemon owns ~/.coagent, and root's copy of it is not the
 // one anybody configured.
@@ -105,7 +87,7 @@ type target struct {
 
 // New returns the service manager for this platform. There is one install mode:
 // a systemd system unit that drops to the target user.
-func New() (Manager, error) {
+func New() (*Manager, error) {
 	if !platformSupported(runtime.GOOS) {
 		return nil, unsupportedPlatformError(runtime.GOOS)
 	}

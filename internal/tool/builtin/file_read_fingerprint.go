@@ -11,7 +11,7 @@ import (
 )
 
 //nolint:wsl_v5 // Stat and full-byte hashing must describe one observed version.
-func recordFingerprint(access safefile.Access, workDir, name string) (string, ReadRecord, error) {
+func recordFingerprint(access *safefile.Access, workDir, name string) (string, ReadRecord, error) {
 	path, err := resolveAccessTarget(access, workDir, name)
 	if err != nil {
 		return "", ReadRecord{}, err
@@ -56,7 +56,7 @@ func canonicalExistingPath(path string) string {
 }
 
 //nolint:wsl_v5 // Access resolution and host fallback are one canonicalization rule.
-func ledgerPath(access safefile.Access, workDir, name string) (string, error) {
+func ledgerPath(access *safefile.Access, workDir, name string) (string, error) {
 	if access != nil {
 		resolved, err := access.Resolve(name)
 		if err != nil {

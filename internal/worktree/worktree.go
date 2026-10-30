@@ -137,7 +137,7 @@ func (r Result) StampAttributes(attributes map[string]any) {
 
 func sourceRepository(
 	ctx context.Context,
-	client git.WorktreeClient,
+	client *git.WorktreeClient,
 	workDir string,
 	noExecution bool,
 ) (string, error) {
@@ -176,7 +176,7 @@ func validateWorktreeName(name string) (string, error) {
 	return name, nil
 }
 
-func assertNameFree(ctx context.Context, client git.WorktreeClient, repoRoot, name string) error {
+func assertNameFree(ctx context.Context, client *git.WorktreeClient, repoRoot, name string) error {
 	exists, err := client.BranchExists(ctx, repoRoot, name)
 	if err != nil {
 		return err //nolint:wrapcheck // git client wraps with operation context.

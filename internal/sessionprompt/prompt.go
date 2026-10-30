@@ -79,7 +79,7 @@ var knownSearchMCPs = []string{
 type Builder struct {
 	GitClient           git.Client
 	WorkDir             string
-	Todos               todo.Service
+	Todos               *todo.Service
 	mu                  sync.RWMutex
 	basePrompt          string
 	activeSkillsSection string
@@ -134,7 +134,7 @@ func (p *Builder) SetNativeSearch(active bool) {
 
 // SetModelSearch atomically replaces search availability and tool guidance.
 // A nil registry leaves both unchanged.
-func (p *Builder) SetModelSearch(reg tool.Registry, native bool) {
+func (p *Builder) SetModelSearch(reg *tool.Registry, native bool) {
 	p.mu.Lock()
 
 	if reg != nil {
@@ -146,7 +146,7 @@ func (p *Builder) SetModelSearch(reg tool.Registry, native bool) {
 }
 
 // RefreshToolsSection rebuilds the inventory against a consistent search policy.
-func (p *Builder) RefreshToolsSection(reg tool.Registry) {
+func (p *Builder) RefreshToolsSection(reg *tool.Registry) {
 	p.mu.Lock()
 	p.toolsSection = buildToolsSection(reg, p.nativeSearch)
 	p.mu.Unlock()
@@ -192,7 +192,7 @@ func BuildModelsSection(displayName, id, level string) string {
 }
 
 // BuildSkillsSection lists skills the model can invoke.
-func BuildSkillsSection(ldr loader.Registry) string {
+func BuildSkillsSection(ldr *loader.Service) string {
 	skills := ldr.ListModelInvocableSkills()
 
 	if len(skills) == 0 {
@@ -248,7 +248,7 @@ func BuildActiveBackgroundSection(processes []ActiveProcessInfo, links []ActiveS
 }
 
 // BuildSubagentsSection lists spawnable subagent definitions.
-func BuildSubagentsSection(ldr loader.Registry) string {
+func BuildSubagentsSection(ldr *loader.Service) string {
 	subagents := ldr.ListSubagents()
 	if len(subagents) == 0 {
 		return ""
@@ -304,7 +304,7 @@ func buildActiveSkillsSection(skills []*loader.Skill) string {
 	return section.String()
 }
 
-func buildToolsSection(reg tool.Registry, nativeSearch bool) string {
+func buildToolsSection(reg *tool.Registry, nativeSearch bool) string {
 	ids := reg.IDs()
 	registered := make(map[string]bool, len(ids))
 

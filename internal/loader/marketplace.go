@@ -63,7 +63,11 @@ func cacheDirForMarketplace(owner, repo string) (string, error) {
 
 // ProcessMarketplaces processes every entry via ProcessMarketplace, logging and
 // continuing past a failing entry so one bad marketplace can't block the rest.
-func (s *svc) ProcessMarketplaces(ctx context.Context, entries []config.MarketplaceEntry, resolver RepositoryResolver) {
+func (s *Service) ProcessMarketplaces(
+	ctx context.Context,
+	entries []config.MarketplaceEntry,
+	resolver RepositoryResolver,
+) {
 	for _, entry := range entries {
 		if err := s.ProcessMarketplace(ctx, entry, resolver); err != nil {
 			logger.Named("loader").Warn("processing_marketplace_failed", zap.String("url", entry.URL), zap.Error(err))
@@ -71,7 +75,7 @@ func (s *svc) ProcessMarketplaces(ctx context.Context, entries []config.Marketpl
 	}
 }
 
-func (s *svc) ProcessMarketplace(
+func (s *Service) ProcessMarketplace(
 	ctx context.Context,
 	entry config.MarketplaceEntry,
 	resolver RepositoryResolver,
@@ -83,8 +87,8 @@ func (s *svc) ProcessMarketplace(
 	return s.processMarketplaceDirect(ctx, entry, resolver)
 }
 
-func (s *svc) processMarketplaceWithCache(ctx context.Context, entry config.MarketplaceEntry) error {
-	skills, agents, err := s.marketplaceCache.Resolve(ctx, entry)
+func (s *Service) processMarketplaceWithCache(ctx context.Context, entry config.MarketplaceEntry) error {
+	skills, agents, err := s.marketplaceCache.resolve(ctx, entry)
 	if err != nil {
 		return fmt.Errorf("resolving marketplace via cache: %w", err)
 	}
@@ -95,7 +99,7 @@ func (s *svc) processMarketplaceWithCache(ctx context.Context, entry config.Mark
 	return nil
 }
 
-func (s *svc) processMarketplaceDirect(
+func (s *Service) processMarketplaceDirect(
 	ctx context.Context,
 	entry config.MarketplaceEntry,
 	resolver RepositoryResolver,

@@ -63,7 +63,7 @@ func TestDrainPendingRunners_DerivesPromotedRecoveryAfterCapacityWait(t *testing
 		for range reserved {
 			mgr.runners.release(false, 0)
 		}
-		mgr.Shutdown(3 * time.Second)
+		mgr.Shutdown(t.Context(), 3*time.Second)
 	})
 	projectID := testProject(t, projects, t.TempDir())
 	rec, err := mgr.store.CreateSession(ctx, projectID, "fake-model", "", nil)
@@ -140,7 +140,7 @@ func TestStartSkipsTerminalAndStoppedChildren(t *testing.T) {
 		t.Run(string(state), func(t *testing.T) {
 			h := newHarness(t, harnessOptions{configure: withTestModels, clientFor: (&mockFactory{}).client})
 			mgr, projects := h.mgr, h.store
-			defer mgr.Shutdown(time.Second)
+			defer mgr.Shutdown(t.Context(), time.Second)
 			ctx := context.Background()
 			projectID := testProject(t, projects, t.TempDir())
 			parent, err := mgr.store.CreateSession(ctx, projectID, "fake-model", "", nil)
@@ -160,7 +160,7 @@ func TestStartSkipsTerminalAndStoppedChildren(t *testing.T) {
 func TestStartRejectsKilledSessionWithRunningChildLink(t *testing.T) {
 	h := newHarness(t, harnessOptions{configure: withTestModels, clientFor: (&mockFactory{}).client})
 	mgr, projects := h.mgr, h.store
-	defer mgr.Shutdown(time.Second)
+	defer mgr.Shutdown(t.Context(), time.Second)
 	ctx := context.Background()
 	projectID := testProject(t, projects, t.TempDir())
 	parent, err := mgr.store.CreateSession(ctx, projectID, "fake-model", "", nil)

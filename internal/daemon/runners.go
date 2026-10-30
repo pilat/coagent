@@ -68,8 +68,8 @@ type runner struct {
 	preserveStopped bool
 }
 
-func (s *svc) HasActiveLoop(id int64) bool { _, ok := s.runners.load(id); return ok }
-func (r refusal) Error() string            { return string(r) }
+func (s *Service) HasActiveLoop(id int64) bool { _, ok := s.runners.load(id); return ok }
+func (r refusal) Error() string                { return string(r) }
 
 func newRunnerSet() *runnerSet {
 	return &runnerSet{byID: make(map[int64]*runner), perParent: make(map[int64]int), deferred: make(map[int64]bool)}
@@ -239,7 +239,7 @@ func (s *runnerSet) recordDefer(id int64, announced bool) {
 	}
 }
 
-func (s *svc) start(ctx context.Context, id int64) error {
+func (s *Service) start(ctx context.Context, id int64) error {
 	unlock, err := s.lockSessionTree(ctx, id)
 	if err != nil {
 		return err
@@ -249,7 +249,7 @@ func (s *svc) start(ctx context.Context, id int64) error {
 	return s.startLocked(ctx, id)
 }
 
-func (s *svc) startLocked(ctx context.Context, id int64) error {
+func (s *Service) startLocked(ctx context.Context, id int64) error {
 	if s.life.closed() {
 		return errDaemonShuttingDown
 	}
@@ -302,7 +302,7 @@ func (s *svc) startLocked(ctx context.Context, id int64) error {
 }
 
 // Foreground children never queue: a fresh one is refused, a resumed one fails.
-func (s *svc) deferUnadmitted(
+func (s *Service) deferUnadmitted(
 	ctx context.Context,
 	rec *sessionstore.SessionRecord,
 	link *subagent.Link,
@@ -325,7 +325,7 @@ func (s *svc) deferUnadmitted(
 	return nil
 }
 
-func (s *svc) startAdmitted(
+func (s *Service) startAdmitted(
 	ctx context.Context,
 	rec *sessionstore.SessionRecord,
 	w waitingRunner,
@@ -371,7 +371,7 @@ func (s *svc) startAdmitted(
 	return nil
 }
 
-func (s *svc) drain(ctx context.Context) {
+func (s *Service) drain(ctx context.Context) {
 	for {
 		w, ok := s.runners.nextAdmissible()
 		if !ok {
@@ -419,7 +419,7 @@ func (s *svc) drain(ctx context.Context) {
 	}
 }
 
-func (s *svc) removeRunner(ctx context.Context, rs *runner) {
+func (s *Service) removeRunner(ctx context.Context, rs *runner) {
 	s.liveMu.Lock()
 	defer s.liveMu.Unlock()
 
@@ -427,7 +427,10 @@ func (s *svc) removeRunner(ctx context.Context, rs *runner) {
 	s.updateLiveLocked(ctx, rs.sessionID)
 }
 
-func (s *svc) releaseRunner(ctx context.Context, rs *runner) { s.removeRunner(ctx, rs); rs.Complete() }
+func (s *Service) releaseRunner(ctx context.Context, rs *runner) {
+	s.removeRunner(ctx, rs)
+	rs.Complete()
+}
 
 func newRunner(
 	cancel context.CancelFunc,

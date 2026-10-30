@@ -101,7 +101,7 @@ type oneShotHarness struct {
 	session  int64
 	schedule int64
 	sender   *modelSender
-	exec     *executor
+	exec     *Executor
 	model    oneShotModel
 	now      time.Time
 }
@@ -152,7 +152,7 @@ func seedOneShotSession(ctx context.Context, t *testing.T, db *sql.DB) int64 {
 }
 
 func (h *oneShotHarness) restart() {
-	h.exec = NewExecutor(oneShotDeliveryStore{Store: h.store, sender: h.sender}, h.sender).(*executor)
+	h.exec = NewExecutor(oneShotDeliveryStore{Store: h.store, sender: h.sender}, h.sender)
 }
 
 func (h *oneShotHarness) step(action oneShotAction) {

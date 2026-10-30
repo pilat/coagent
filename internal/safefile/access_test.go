@@ -44,7 +44,7 @@ func confinedPolicy(project string, extra ...sandboxpolicy.Entry) sandboxpolicy.
 	}
 }
 
-func newGrantedAccess(t *testing.T, policy sandboxpolicy.Policy) Access {
+func newGrantedAccess(t *testing.T, policy sandboxpolicy.Policy) *Access {
 	t.Helper()
 
 	access, err := New(policy, policy.WorkDir)

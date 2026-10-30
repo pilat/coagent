@@ -319,7 +319,7 @@ The runtime status a controller sees — `running` / `idle` / `error` (`controll
 _Avoid_: treating "running" (runtime) and "active" (persisted) as the same word.
 
 **notification** (session event):
-A session→controller event — a message chunk, a state change, a heartbeat (`sessionevent.Notification`, delivered as `controllerapi.SessionNotification`). Only *root* sessions have them: `svc.publish` drops every event whose session is a subagent. Manager subscriptions additionally receive only events whose durable manager owner matches their ID; daemon-internal observers may inspect all root events. The bare type name "Notification" is overloaded elsewhere (LSP JSON-RPC, tool notifications), so qualify it as a *session event*.
+A session→controller event — a message chunk, a state change, a heartbeat (`sessionevent.Notification`, delivered as `controllerapi.SessionNotification`). Only *root* sessions have them: the daemon drops every event whose session is a subagent. Manager subscriptions additionally receive only events whose durable manager owner matches their ID; daemon-internal observers may inspect all root events. The bare type name "Notification" is overloaded elsewhere (LSP JSON-RPC, tool notifications), so qualify it as a *session event*.
 _Avoid_: bare "Notification".
 
 **model-input generation**:
