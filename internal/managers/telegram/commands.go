@@ -240,6 +240,10 @@ func (m *Manager) handleSessions(ctx context.Context) {
 	lines := make([]string, 0, min(len(sessions), sessionListLimit)+1)
 	for _, session := range sessions[:min(len(sessions), sessionListLimit)] {
 		line := fmt.Sprintf("#%d %s", session.ID, session.Name)
+		if session.Scheduled {
+			line += " ⏰"
+		}
+
 		if session.Unread > 0 {
 			line += fmt.Sprintf(" · %d new", session.Unread)
 		}

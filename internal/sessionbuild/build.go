@@ -1,6 +1,7 @@
 package sessionbuild
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -129,7 +130,7 @@ func build(
 	cleanup := func() { once.Do(func() { _ = stack.Close() }) }
 
 	attachImageAuthorizer(client, stack)
-	configureClient(client, in.Record)
+	level := configureClient(client, in.Record)
 	registerSessionTools(reg, in)
 
 	browserAvailable := slices.ContainsFunc(reg.IDs(), tool.IsBrowserToolID)
@@ -144,7 +145,7 @@ func build(
 		reg.Register(builtin.NewBatchTool(reg))
 	}
 
-	prompt := preparePrompt(in, agentConfig, skills, todos, reg, stack)
+	prompt := preparePrompt(in, agentConfig, skills, todos, reg, stack, level)
 
 	sess, err := session.New(ctx, session.Input{
 		Record:                   in.Record,
@@ -207,12 +208,9 @@ func restoreTodos(raw string) (todo.Service, error) {
 	return todos, nil
 }
 
-func configureClient(client llm.Client, record *sessionstore.SessionRecord) {
-	client.SetReasoningLevel(string(llm.ReasoningMedium))
-
-	if record.ReasoningLevel != "" {
-		client.SetReasoningLevel(record.ReasoningLevel)
-	}
+func configureClient(client llm.Client, record *sessionstore.SessionRecord) string {
+	level := cmp.Or(record.ReasoningLevel, string(llm.ReasoningMedium))
+	client.SetReasoningLevel(level)
 
 	sessionID := strconv.FormatInt(record.ID, 10)
 	if record.RootID != 0 && record.RootID != record.ID {
@@ -220,6 +218,8 @@ func configureClient(client llm.Client, record *sessionstore.SessionRecord) {
 	}
 
 	client.SetSessionID(sessionID)
+
+	return level
 }
 
 func preparePrompt(
@@ -229,8 +229,9 @@ func preparePrompt(
 	todos todo.Service,
 	reg tool.Registry,
 	stack *builtin.Stack,
+	level string,
 ) *sessionprompt.Builder {
-	prompt := buildPrompt(in, cfg, skills)
+	prompt := buildPrompt(in, cfg, skills, level)
 
 	prompt.Todos, prompt.WorkDir = todos, in.WorkDir
 	if !cfg.OmitProjectContext {
@@ -298,7 +299,12 @@ func filterRegistryForAgent(set *registry.Set, reg tool.Registry, cfg registry.A
 	return reg.Filter(set.FilterTools(reg.IDs(), cfg.Name))
 }
 
-func buildPrompt(in BuildInput, cfg registry.AgentTypeConfig, skills []*loader.Skill) *sessionprompt.Builder {
+func buildPrompt(
+	in BuildInput,
+	cfg registry.AgentTypeConfig,
+	skills []*loader.Skill,
+	level string,
+) *sessionprompt.Builder {
 	base := cfg.Prompt + fmt.Sprintf(
 		"\n\n# Environment\n- Working directory: %s\n- Platform: %s/%s\n- Timestamped user input is prefixed with `[+elapsed DOW YYYY-MM-DD HH:MM ZONE ±HH:MM]`, where `+elapsed` is optional. Use it for temporal reasoning.",
 		in.WorkDir,
@@ -306,10 +312,7 @@ func buildPrompt(in BuildInput, cfg registry.AgentTypeConfig, skills []*loader.S
 		runtime.GOARCH,
 	)
 
-	models := ""
-	if !cfg.OmitProjectContext {
-		models = sessionprompt.BuildModelsSection(in.Config.Model)
-	}
+	models := modelSection(in.Config, in.Config.Model, level)
 
 	prompt := sessionprompt.NewBuilder(base, models, skills...)
 	prompt.SetNativeSearch(in.Config.UnifiedConfig.SearchNativeActive(in.Config.Model))

@@ -248,16 +248,17 @@ func TestAssistantWorkRoots(t *testing.T) {
 	scope := Scope{Root: root, Owner: testOwner}
 	roots, _, err := s.Recent(ctx, scope, 100)
 	require.NoError(t, err)
-	require.Len(t, roots, 1)
-	assert.Equal(t, touched, roots[0].ID)
-	assert.True(t, roots[0].Pending)
-	assert.Equal(t, "why it exists", roots[0].Title)
+	require.Len(t, roots, 2)
+	card, err := s.Target(ctx, scope, touched)
+	require.NoError(t, err)
+	assert.True(t, card.Pending)
+	assert.Equal(t, "why it exists", card.Title)
 	roots, err = s.cards(ctx, scope, 0)
 	require.NoError(t, err)
 	require.Len(t, roots, 2)
 	for _, work := range roots {
 		if work.ID == userMade {
-			assert.False(t, work.touched)
+			assert.True(t, work.touched)
 			assert.Len(t, []rune(work.Title), aboutFallbackChars)
 			assert.True(t, strings.HasPrefix(work.Title, "длинный вопрос длинный"))
 		}

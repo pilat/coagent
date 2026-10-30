@@ -27,7 +27,7 @@ func renderHits(query string, hits []Hit) string {
 	return b.String()
 }
 
-func renderSessions(cards []Card, offset, total int, now time.Time) string {
+func renderSessions(cards []Card, offset, total int, now time.Time, models []Model) string {
 	if len(cards) == 0 {
 		return fmt.Sprintf("no sessions at offset %d of %d", offset, total)
 	}
@@ -42,7 +42,7 @@ func renderSessions(cards []Card, offset, total int, now time.Time) string {
 	b.WriteString(":\n")
 
 	for _, card := range cards {
-		b.WriteString(cardLines(card, now))
+		b.WriteString(cardLines(card, now, models))
 	}
 
 	return b.String()

@@ -50,7 +50,7 @@ func TestEnqueueBudgetCheckpointRequiresHumanInput(t *testing.T) {
 					require.NoError(t, enqueueErr)
 					require.True(t, result.Applied)
 					assert.Equal(t, before, record)
-				case kind != "human":
+				case kind == "assistant":
 					require.ErrorIs(t, enqueueErr, ErrBudgetParked)
 					require.EqualError(
 						t,

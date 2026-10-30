@@ -216,7 +216,7 @@ func TestBoundaryActivationRequiresHumanInput(t *testing.T) {
 		human bool
 	}{
 		{"human", nil, true},
-		{"observer", map[string]any{sessionstore.ObserverSessionIDAttribute: nil}, false},
+		{"observer", map[string]any{sessionstore.ObserverSessionIDAttribute: nil}, true},
 		{"assistant", map[string]any{"from": "assistant"}, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

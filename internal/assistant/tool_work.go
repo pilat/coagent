@@ -63,10 +63,46 @@ func (t *assistantTool) open(ctx context.Context, call llmwire.ToolCall) (string
 		return "", errors.New("about must be one line of 1-80 characters")
 	}
 
-	card, err := t.store.Open(ctx, t.host, t.scope, args.Project, args.Text, title)
+	model, effort, err := t.openModelChoice(ctx, args)
 	if err != nil {
 		return "", err
 	}
 
-	return cardLines(card, time.Now().UTC()), nil
+	card, err := t.store.Open(ctx, t.host, t.scope, args.Project, args.Text, title, model, effort, args.Worktree)
+	if err != nil {
+		return "", err
+	}
+
+	models, err := t.host.Models(ctx)
+	if err != nil {
+		return "", fmt.Errorf("list models: %w", err)
+	}
+
+	return cardLines(card, time.Now().UTC(), models), nil
+}
+
+func (t *assistantTool) openModelChoice(ctx context.Context, args openArgs) (string, string, error) {
+	if args.Model == "" && args.Effort == nil {
+		return "", "", nil
+	}
+
+	if args.Model == "" {
+		models, err := t.host.Models(ctx)
+		if err != nil {
+			return "", "", fmt.Errorf("list models: %w", err)
+		}
+
+		if len(models) == 0 {
+			return "", "", errors.New("no models configured")
+		}
+
+		args.Model = models[0].ID
+	}
+
+	model, effort, err := t.modelChoice(ctx, modelArgs{Model: args.Model, Effort: args.Effort})
+	if err != nil {
+		return "", "", err
+	}
+
+	return model.ID, effort, nil
 }

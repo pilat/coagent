@@ -83,6 +83,50 @@ func TestHarnessScenario_SwitchShowsSessionTitles(t *testing.T) {
 	}, messages)
 }
 
+func TestHarnessScenario_ScheduledSessionMarkers(t *testing.T) {
+	h := newDelayedTelegramHarness(t)
+	work := createChatWork(t, h)
+	require.NoError(t, h.sessions.SetSessionTitle(t.Context(), delayedTelegramManagerID, work, "daily check"))
+	manager := newAssistantTelegramManager(t, h)
+	require.NoError(t, manager.Start(t.Context()))
+	t.Cleanup(func() { require.NoError(t, manager.Stop(context.Background())) })
+	awaitChatTail(t, h, manager.assistantRootID)
+	require.NoError(t, h.sessions.WithTx(t.Context(), func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(
+			t.Context(),
+			`INSERT INTO schedules(session_id,cron_expr,input_message) VALUES (?, '0 9 * * *',''), (?, '0 9 * * *','')`,
+			work,
+			manager.assistantRootID,
+		)
+		return err
+	}))
+	enqueueChatMessage(t, h, work, "scheduled work result")
+	manager.processUpdate(t.Context(), assistantTelegramUpdate("/sessions"))
+	require.Eventually(t, func() bool {
+		return hasTelegramMessage(
+			h.recorder.snapshot(),
+			fmt.Sprintf("#0 Assistant ⏰ ◀\n#%d project · daily check ⏰ · 1 new", work),
+		)
+	}, time.Second, time.Millisecond)
+	manager.processUpdate(t.Context(), assistantTelegramUpdate(fmt.Sprintf("/switch %d", work)))
+	awaitChatTail(t, h, work)
+	assert.True(t, hasTelegramMessage(h.recorder.snapshot(), fmt.Sprintf("→ #%d project · daily check ⏰", work)))
+	assert.True(
+		t,
+		hasTelegramMessage(
+			h.recorder.snapshot(),
+			fmt.Sprintf("#%d project · daily check\nscheduled work result", work),
+		),
+	)
+	manager.processUpdate(t.Context(), assistantTelegramUpdate("/assistant"))
+	require.Eventually(
+		t,
+		func() bool { return hasTelegramMessage(h.recorder.snapshot(), "→ #0 Assistant ⏰") },
+		time.Second,
+		time.Millisecond,
+	)
+}
+
 func TestHarnessScenario_NumberedControlsAndTextKeepTheirRouting(t *testing.T) {
 	h := newDelayedTelegramHarness(t)
 	one := createChatWork(t, h)

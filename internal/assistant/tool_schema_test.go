@@ -20,6 +20,9 @@ func TestAssistantSessionSchemasUseStrings(t *testing.T) {
 			}
 			require.NoError(t, json.Unmarshal(spec.Parameters, &params))
 			if spec.Name == toolOpen {
+				assert.Equal(t, "string", params.Properties["model"].Type)
+				assert.Equal(t, "string", params.Properties["effort"].Type)
+				assert.Equal(t, "string", params.Properties["worktree"].Type)
 				assert.Equal(
 					t,
 					"One line, why this session exists (1-80 characters).",

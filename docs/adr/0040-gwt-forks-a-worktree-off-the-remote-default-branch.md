@@ -2,6 +2,7 @@
 
 - **Status:** Accepted
 - **Date:** 2026-09-02
+- **Amended by:** [ADR-0080](0080-assistant-administers-work-at-open-and-hears-direct-exchanges.md) — worktrees the assistant opens run host git without repository hooks or config-driven commands; human `/gwt` is unchanged
 
 ## Context
 

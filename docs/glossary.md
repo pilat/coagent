@@ -134,7 +134,7 @@ Coagent's `#0` in a manager's chat: an ordinary root of the hidden `assistant`
 type, with a desk head and immediate tools for delegating work and retelling
 answers. It can switch the user into live owned work from `#0`, list configured
 models and change work roots' models. Its owner tools administer global MCP
-registration, its own schedules, and configuration under `/config`. It sets
+registration, its own and addressable work roots' schedules, and configuration under `/config`. It sets
 budgets for addressable work roots on request without a grant; changing its own
 budget requires a current `/budget` grant on `#0`. It has no general file, shell
 or web tools. `/assistant` and `/switch 0` select it.
@@ -181,7 +181,10 @@ _Avoid_: dispatch intent.
 
 **observation** (assistant):
 A work answer or error notice queued as agent input in the work root's own
-transaction, for instructions carrying an observer reference. A non-yield final
+transaction, for inputs carrying an observer reference: assistant instructions,
+direct human input, or schedules with `report_to`. Human ref rows add bounded
+quote lines and reported schedules add firing notices to that same event.
+A non-yield final
 reports the joined window answer and anchors the next window through its inbox
 event, unless that event is cancelled; a failure leaves the window open. Kill,
 clear and stop produce no observation.
@@ -415,8 +418,8 @@ It is not a permanent spending policy.
 _Avoid_: iteration budget, billing limit, permanent ceiling.
 
 **human input**:
-A `source = 'user'` session input with no assistant provenance
-(`observer_session_id`, `from=assistant`). Only human input creates tool
+A `source = 'user'` session input with `from` different from `assistant`.
+An `observer_session_id` does not change its authority. Only human input creates tool
 activation grants or lifts a fired budget. Assistant input with `source = 'user'`
 otherwise behaves like the user's, including commands and skills.
 _Avoid_: user input (it includes the assistant's), real user message.
@@ -443,16 +446,21 @@ session; “steering” and “waking” are no longer separate data transports.
 _Avoid_: steering message, wake message, in-memory inbox.
 
 **waiting projection**:
-A structured `NotifyWaiting` session event projected from authoritative ledgers: pending sleep rows that own an exact `metadata.tool_call_id`, plus foreground subagent links. Metadata-free one-shot schedules are future inputs, not waits. Managers render that projection; they never infer “sleeping” from a generic suspension or transcript text. Multiple foreground children currently form an all-wait set.
+A structured `NotifyWaiting` session event projected from authoritative ledgers: pending sleep rows that own an exact `metadata.tool_call_id`, plus foreground subagent links. One-shot schedules without `tool_call_id` are future inputs, not waits. Managers render that projection; they never infer “sleeping” from a generic suspension or transcript text. Multiple foreground children currently form an all-wait set.
 _Avoid_: synthetic sleep notice, polling message.
 
 **pending sleep**:
-A one-shot schedule carrying `metadata.tool_call_id`, and therefore owning the eventual result of one exact suspended `sleep` call. `PendingSleeps` is the only schedule-domain projection used for waiting UI and interruption. A metadata-free one-shot is standalone scheduled input and must survive `/stop` or interruption of a different sleep.
+A one-shot schedule carrying `metadata.tool_call_id`, and therefore owning the eventual result of one exact suspended `sleep` call. `PendingSleeps` is the only schedule-domain projection used for waiting UI and interruption. A one-shot without `tool_call_id` is standalone scheduled input and must survive `/stop` or interruption of a different sleep.
 _Avoid_: one-shot wait (ambiguous), any one-shot is sleep.
 
 **scheduled delivery identity**:
 A deterministic ID for one standalone one-shot or cron occurrence, stored as a unique per-session inbox delivery key. Producer retries return `applied=false`; pre-upgrade claims in `session_deliveries` also suppress replay. Cron uses one canonical minute for ID and payload.
 _Avoid_: schedule message ID, retry token.
+
+**scheduled root**:
+A root with at least one schedule that is not a pending sleep. The `⏰` marker
+appears on its assistant card, in `/sessions` and in its switch header, including
+Assistant (`#0`); individual delivered messages do not repeat it.
 
 **scheduled turn**:
 New standalone work injected by a one-shot or cron schedule, rather than the result of a pending external call. Only a root session may own a scheduled turn. A due scheduled turn may reactivate a stopped root after its deterministic delivery identity is claimed; duplicate acknowledgement leaves that root stopped. A legacy scheduled occurrence addressed to a subagent is acknowledged as an unapplied no-op.

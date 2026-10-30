@@ -5,6 +5,8 @@ import (
 	"strings"
 	"time"
 	"unicode/utf8"
+
+	"github.com/pilat/coagent/internal/budget"
 )
 
 const (
@@ -28,6 +30,11 @@ type Card struct {
 	ContextTokens int
 	Pending       bool
 	Title         string
+	Model         string
+	Effort        string
+	Budget        *budget.Record
+	TreeCostUSD   *float64
+	Scheduled     bool
 	projectID     int64
 	touched       bool
 }
@@ -46,6 +53,7 @@ type View struct {
 	Desk   Desk
 	Recent []Card
 	Total  int
+	Models []Model
 }
 
 // Render produces the turn's first user message; every truncated list names the tool that shows more.
@@ -54,7 +62,7 @@ func Render(v View, now time.Time) string {
 	fmt.Fprintf(&b, "now: %s\n\n", now.UTC().Format("2006-01-02 15:04 MST"))
 	renderMemory(&b, v.Desk.Memory)
 	renderFocus(&b, v.Desk.Focus, deskFocusItems, now)
-	renderRecent(&b, v.Recent, v.Total, now)
+	renderRecent(&b, v.Recent, v.Total, now, v.Models)
 	renderConversation(&b, v.Desk.Conversation, v.Desk.Spoken, now)
 
 	return b.String()
@@ -100,12 +108,12 @@ func renderFocus(b *strings.Builder, items []Focus, limit int, now time.Time) {
 	}
 }
 
-func renderRecent(b *strings.Builder, cards []Card, total int, now time.Time) {
+func renderRecent(b *strings.Builder, cards []Card, total int, now time.Time, models []Model) {
 	fmt.Fprintf(b, "\n## recent sessions (%d of %d — sessions lists all work, search finds older)\n",
 		len(cards), total)
 
 	for _, card := range cards {
-		b.WriteString(cardLines(card, now))
+		b.WriteString(cardLines(card, now, models))
 	}
 }
 
@@ -147,11 +155,23 @@ func focusLine(ref string, item Focus, now time.Time) string {
 	return line
 }
 
-func cardLines(card Card, now time.Time) string {
+func cardLines(card Card, now time.Time, models []Model) string {
 	line := fmt.Sprintf("%d %s · %s · created %s · touched %s", card.ID, card.Project, card.Status,
 		card.CreatedAt.UTC().Format("Jan 02"), age(card.Activity, now))
 	if card.ContextTokens > 0 {
 		line += fmt.Sprintf(" · ctx %dk", max(1, (card.ContextTokens+500)/1000))
+	}
+
+	if model := cardModel(card, models); model != "" {
+		line += " · " + model
+	}
+
+	if remaining := cardBudget(card, now); remaining != "" {
+		line += " · " + remaining
+	}
+
+	if card.Scheduled {
+		line += " · ⏰"
 	}
 
 	if card.Pending {

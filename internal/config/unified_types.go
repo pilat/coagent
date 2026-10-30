@@ -1,6 +1,10 @@
 package config
 
-import "github.com/pilat/coagent/internal/sandboxpolicy"
+import (
+	"cmp"
+
+	"github.com/pilat/coagent/internal/sandboxpolicy"
+)
 
 // Search provider names accepted by tools.search.provider.
 const (
@@ -161,6 +165,11 @@ type (
 		Tools              ToolsConfig              `yaml:"tools,omitempty"`
 	}
 )
+
+// Label uses catalog display metadata with a stable identifier fallback.
+func (m ModelEntry) Label() string {
+	return cmp.Or(m.DisplayName, m.Name, m.ID)
+}
 
 // SearchActive reports whether the section selects the builtin REST search
 // tool: a provider set and not explicitly disabled.

@@ -110,7 +110,6 @@ func (r *runtime) progressSnapshot(
 	return snapshot, nil
 }
 
-//nolint:wsl_v5 // Derived budget fields are assembled as one projection.
 func progressBudget(record *budget.Record, cost float64, now time.Time) *progress.Budget {
 	if record == nil {
 		return nil
@@ -122,10 +121,7 @@ func progressBudget(record *budget.Record, cost float64, now time.Time) *progres
 	}
 	used := cost - record.BaselineCostUSD
 	value.CostUsedUSD = &used
-	if record.CostLimitUSD != nil {
-		remaining := max(*record.CostLimitUSD-used, 0)
-		value.CostRemainingUSD = &remaining
-	}
+	value.CostRemainingUSD, value.DurationRemaining = record.Remaining(cost, now)
 
 	if record.DurationSeconds != nil {
 		limit := time.Duration(*record.DurationSeconds) * time.Second
@@ -134,8 +130,6 @@ func progressBudget(record *budget.Record, cost float64, now time.Time) *progres
 		if !now.Before(record.ArmedAt) {
 			elapsed := now.Sub(record.ArmedAt)
 			value.Elapsed = &elapsed
-			remaining := max(limit-elapsed, 0)
-			value.DurationRemaining = &remaining
 		}
 	}
 

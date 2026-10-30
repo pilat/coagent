@@ -80,6 +80,7 @@ func (p *chatPort) Sessions(ctx context.Context) ([]managerdelivery.ChatSession,
 		sessions = append(sessions, managerdelivery.ChatSession{
 			ID: row.ID, Name: row.Name, Unread: row.Unread, LatestUnread: row.LatestUnread,
 			LatestUnreadID: row.LatestUnreadID,
+			Scheduled:      row.Scheduled,
 		})
 	}
 

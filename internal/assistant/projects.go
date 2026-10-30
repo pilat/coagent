@@ -141,6 +141,23 @@ func (s *Store) resolveProject(ctx context.Context, raw string) (projectChoice, 
 	return choice, nil
 }
 
+func (s *Store) openProject(ctx context.Context, raw, worktree string) (projectChoice, error) {
+	if worktree == "" {
+		return s.resolveProject(ctx, raw)
+	}
+
+	choice, err := s.lookupProject(ctx, raw)
+	if err != nil {
+		return projectChoice{}, err
+	}
+
+	if choice.id == 0 {
+		return projectChoice{}, fmt.Errorf("worktree needs an existing project: %s", raw)
+	}
+
+	return choice, nil
+}
+
 // lookupProject never creates anything, so open can be validated long before it runs.
 func (s *Store) lookupProject(ctx context.Context, raw string) (projectChoice, error) {
 	name := strings.TrimSpace(raw)

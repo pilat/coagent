@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/pilat/coagent/internal/catalog"
 	"github.com/pilat/coagent/internal/config"
 	"github.com/pilat/coagent/internal/llm"
 	"github.com/pilat/coagent/internal/loader"
@@ -59,9 +60,29 @@ func BuildClient(
 
 	return client, sessionprompt.ModelSection{
 		ID:           model,
-		Text:         sessionprompt.BuildModelsSection(model),
+		Text:         modelSection(cfg, model, level),
 		NativeSearch: cfg.UnifiedConfig.SearchNativeActive(model),
 	}, nil
+}
+
+func modelSection(cfg *config.Config, id, level string) string {
+	if cfg.UnifiedConfig != nil {
+		for _, entry := range cfg.UnifiedConfig.Models {
+			if entry.ID != id {
+				continue
+			}
+
+			if len(entry.EffortLevels) == 0 {
+				level = ""
+			} else if entry.Reasoning != nil {
+				level = catalog.ClampEffort(level, entry.Reasoning.Efforts)
+			}
+
+			return sessionprompt.BuildModelsSection(entry.Label(), id, level)
+		}
+	}
+
+	return sessionprompt.BuildModelsSection("", id, "")
 }
 
 func prepareClientInput(ctx context.Context, in *BuildInput) (*registry.Set, registry.AgentTypeConfig, error) {

@@ -176,10 +176,19 @@ func BuildMemoriesSection(ctx context.Context, store memory.CuratedStore, projec
 	return sb.String()
 }
 
-// BuildModelsSection records the inherited model without duplicating task's
-// tagged-candidate policy into the general system prompt.
-func BuildModelsSection(currentModel string) string {
-	return "\n- Model: " + currentModel
+// BuildModelsSection makes current runtime identity authoritative over older conversation claims.
+func BuildModelsSection(displayName, id, level string) string {
+	identity := id
+	if displayName != "" {
+		identity = displayName + " (" + id + ")"
+	}
+
+	if level != "" {
+		identity += ", effort " + level
+	}
+
+	return "\nYou are running on " + identity +
+		". Trust this over anything said earlier in the conversation about which model you are."
 }
 
 // BuildSkillsSection lists skills the model can invoke.
@@ -375,7 +384,7 @@ func appendScheduleSection(sb *strings.Builder, registered map[string]bool) {
 		)
 	case hasSchedule:
 		sb.WriteString(
-			"Use schedule only for recurring future work or reminders. " +
+			"Use schedule only for future work or reminders. " +
 				"Never use it to poll the status or completion of already-started work, including processes, builds, tests, CI runs, deployments, subagents, or output files.\n",
 		)
 	default:

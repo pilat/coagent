@@ -17,6 +17,7 @@ import (
 	"github.com/pilat/coagent/internal/projectpath"
 	"github.com/pilat/coagent/internal/sessionstore"
 	"github.com/pilat/coagent/internal/tool"
+	"github.com/pilat/coagent/internal/worktree"
 )
 
 var _ assistant.Host = assistantHost{}
@@ -57,27 +58,36 @@ func (s *svc) EnsureAssistantRoot(ctx context.Context, owner string) (*sessionst
 func (h assistantHost) CreateWork(
 	ctx context.Context,
 	owner string,
-	projectID int64,
-	name, workDir, title string,
-) (int64, error) {
-	level, err := h.s.models.effort(h.s.models.defaultModel, "", "")
+	spec assistant.WorkSpec,
+) (int64, string, error) {
+	model := cmp.Or(spec.Model, h.s.models.defaultModel)
+
+	level, err := h.s.models.effort(model, "", spec.Effort)
 	if err != nil {
-		return 0, err
+		return 0, "", err
 	}
+
+	spec, created, err := h.workProject(ctx, spec)
+	if err != nil {
+		return 0, "", err
+	}
+
+	attributes := map[string]any{
+		controllerapi.SessionAttributeManagerID: owner,
+		controllerapi.SessionAttributeTitle:     spec.Title,
+	}
+	created.StampAttributes(attributes)
 
 	record, _, err := h.s.store.CreateManagerRoot(ctx, sessionstore.ManagerRootCreate{
-		ProjectID: projectID, Model: h.s.models.defaultModel, ReasoningLevel: level,
-		Attributes: map[string]any{
-			controllerapi.SessionAttributeManagerID: owner,
-			controllerapi.SessionAttributeTitle:     title,
-		},
-		Name: name, WorkDir: workDir,
+		ProjectID: spec.ProjectID, Model: model, ReasoningLevel: level,
+		Attributes: attributes,
+		Name:       spec.Name, WorkDir: spec.WorkDir,
 	})
 	if err != nil {
-		return 0, fmt.Errorf("create assistant work session: %w", err)
+		return 0, "", fmt.Errorf("create assistant work session: %w", created.Abandon(err))
 	}
 
-	return record.ID, nil
+	return record.ID, spec.Name, nil
 }
 
 func (h assistantHost) Deliver(
@@ -143,10 +153,14 @@ func (h assistantHost) Models(context.Context) ([]assistant.Model, error) {
 	result := make([]assistant.Model, 0, len(h.s.models.entries))
 	for _, entry := range h.s.models.entries {
 		model := assistant.Model{
-			ID: entry.ID, DisplayName: cmp.Or(entry.DisplayName, entry.Name, entry.ID),
+			ID: entry.ID, DisplayName: entry.Label(),
 			EffortLevels: entry.EffortLevels, DefaultEffort: entry.DefaultEffort,
 			Reasoning: entry.Reasoning != nil && entry.Reasoning.Supported,
 		}
+		if entry.Reasoning != nil {
+			model.EffortAllowlist = entry.Reasoning.Efforts
+		}
+
 		if entry.Pricing != nil {
 			model.Priced, model.InputPrice, model.OutputPrice = true, entry.Pricing.InputPrice, entry.Pricing.OutputPrice
 		}
@@ -159,6 +173,29 @@ func (h assistantHost) Models(context.Context) ([]assistant.Model, error) {
 
 func (h assistantHost) SetModel(ctx context.Context, id int64, model, effort string) error {
 	return h.s.SetModel(ctx, id, model, effort)
+}
+
+func (h assistantHost) workProject(
+	ctx context.Context,
+	spec assistant.WorkSpec,
+) (assistant.WorkSpec, worktree.Result, error) {
+	if spec.Worktree == "" {
+		return spec, worktree.Result{}, nil
+	}
+
+	created, err := worktree.Create(ctx, h.s.build.Config.UnifiedConfig, spec.WorkDir, spec.Worktree, true)
+	if err != nil {
+		return spec, worktree.Result{}, fmt.Errorf("create worktree: %w", err)
+	}
+
+	project, err := h.s.store.GetOrCreateNamedProject(ctx, created.Path, created.DisplayName)
+	if err != nil {
+		return spec, worktree.Result{}, fmt.Errorf("register worktree project: %w", created.Abandon(err))
+	}
+
+	spec.ProjectID, spec.WorkDir, spec.Name = project, created.Path, created.DisplayName
+
+	return spec, created, nil
 }
 
 func (s *svc) assistantHead(scope assistant.Scope) func(context.Context) (string, error) {
@@ -175,7 +212,12 @@ func (s *svc) assistantHead(scope assistant.Scope) func(context.Context) (string
 			return "", fmt.Errorf("load assistant recent sessions: %w", err)
 		}
 
-		return assistant.Render(assistant.View{Desk: desk, Recent: recent, Total: total}, now), nil
+		models, err := (assistantHost{s: s}).Models(ctx)
+		if err != nil {
+			return "", fmt.Errorf("load assistant models: %w", err)
+		}
+
+		return assistant.Render(assistant.View{Desk: desk, Recent: recent, Total: total, Models: models}, now), nil
 	}
 }
 

@@ -33,6 +33,8 @@ func TestAssistantToolsDeliverCommandsVerbatim(t *testing.T) {
 				require.NoError(t, err)
 				require.Len(t, pending, 1)
 				assert.Equal(t, text, pending[0].RawContent)
+				assert.Equal(t, "assistant", pending[0].Attributes["from"])
+				assert.EqualValues(t, f.root, pending[0].Attributes[sessionstore.ObserverSessionIDAttribute])
 			})
 		}
 	}

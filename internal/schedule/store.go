@@ -20,6 +20,7 @@ var _ Store = (*store)(nil)
 type (
 	ScheduleMetadata struct {
 		ToolCallID string `json:"tool_call_id,omitempty"`
+		ReportTo   int64  `json:"report_to,omitempty"`
 	}
 
 	Schedule struct {
@@ -86,6 +87,10 @@ func (s *Schedule) InputMessage() string { return s.inputMessage }
 func (s *Schedule) LastFiredAt() *time.Time { return s.lastFiredAt }
 
 func (s *Schedule) Fresh() bool { return s.fresh }
+
+func (s *Schedule) Sleep() bool { return s.oneShotAt != nil && s.metadata.ToolCallID != "" }
+
+func (s *Schedule) ReportTo() int64 { return s.metadata.ReportTo }
 
 func NewStore(db *sql.DB, sessions *sessionstore.Store) Store {
 	return &store{db: db, sessions: sessions}
@@ -237,12 +242,11 @@ func (s *store) RemoveOneShotSchedules(ctx context.Context, sessionID int64) (in
 // sleep tool call. Generic one-shot schedules are standalone future inputs and
 // must survive interruption of the current sleep.
 func (s *store) RemoveSleepSchedules(ctx context.Context, sessionID int64) (int64, error) {
+	const query = `DELETE FROM schedules WHERE session_id = ? AND ` + sessionstore.SleepScheduleSQL
+
 	result, err := s.db.ExecContext(
 		ctx,
-		`DELETE FROM schedules
-		 WHERE session_id = ?
-		   AND one_shot_at IS NOT NULL
-		   AND COALESCE(json_extract(metadata, '$.tool_call_id'), '') <> ''`,
+		query,
 		sessionID,
 	)
 	if err != nil {

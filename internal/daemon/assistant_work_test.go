@@ -31,26 +31,27 @@ func TestAssistantWorkReachesEveryOwnedRoot(t *testing.T) {
 
 	recent, total, err := a.Recent(h.ctx, 10)
 	require.NoError(t, err)
-	require.Len(t, recent, 1)
-	assert.Equal(t, 1, total)
-	assert.Equal(t, touched, recent[0].ID)
-	assert.Equal(t, "done", recent[0].Status)
-	assert.True(t, recent[0].Pending)
-	assert.Equal(t, "real user", recent[0].Title, "the first user input names the session")
+	require.Len(t, recent, 2)
+	assert.Equal(t, 2, total)
+	card, err := a.Target(h.ctx, touched)
+	require.NoError(t, err)
+	assert.Equal(t, "done", card.Status)
+	assert.True(t, card.Pending)
+	assert.Equal(t, "real user", card.Title, "the first user input names the session")
 	_, err = h.db.ExecContext(
 		h.ctx,
 		`UPDATE sessions SET attributes = json_remove(attributes, '$.title') WHERE id = ?`,
 		touched,
 	)
 	require.NoError(t, err)
-	recent, _, err = a.Recent(h.ctx, 10)
+	card, err = a.Target(h.ctx, touched)
 	require.NoError(t, err)
-	assert.Equal(t, "real user", recent[0].Title, "untitled roots keep the first-request fallback")
+	assert.Equal(t, "real user", card.Title, "untitled roots keep the first-request fallback")
 	_, err = h.db.ExecContext(h.ctx, `UPDATE sessions SET context_baseline_prompt_tokens = 40000 WHERE id = ?`, touched)
 	require.NoError(t, err)
-	recent, _, err = a.Recent(h.ctx, 10)
+	card, err = a.Target(h.ctx, touched)
 	require.NoError(t, err)
-	assert.Equal(t, 40000, recent[0].ContextTokens, "the desk shows what continuing the session costs")
+	assert.Equal(t, 40000, card.ContextTokens, "the desk shows what continuing the session costs")
 
 	listed, total, err := a.List(h.ctx, 0, 20, "")
 	require.NoError(t, err)
@@ -64,7 +65,7 @@ func TestAssistantWorkReachesEveryOwnedRoot(t *testing.T) {
 		assert.Equal(t, userMade, hit.Session, "a root the user created is searchable")
 	}
 
-	card, err := a.Target(h.ctx, userMade)
+	card, err = a.Target(h.ctx, userMade)
 	require.NoError(t, err)
 	assert.Equal(t, userMade, card.ID)
 	require.NoError(t, a.Send(h.ctx, userMade, "продолжи отчёт"))
@@ -75,7 +76,7 @@ func TestAssistantWorkReachesEveryOwnedRoot(t *testing.T) {
 			userMade, root.ID).
 			Scan(&sent),
 	)
-	assert.Equal(t, 1, sent, "a root the user created is sendable")
+	assert.Equal(t, 2, sent, "direct human input and assistant instructions share observation")
 	for _, id := range []int64{foreign.ID, killed, root.ID} {
 		_, err := a.Target(h.ctx, id)
 		require.ErrorContains(t, err, "not a work session you can address", id)

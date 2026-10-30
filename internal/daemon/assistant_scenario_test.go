@@ -29,6 +29,8 @@ func TestHarnessScenario_AssistantOpenAndRetell(t *testing.T) {
 		}
 
 		switch {
+		case hasUserContaining(messages, "user wrote:"):
+			return textReply("direct exchange noted")
 		case hasUserContaining(messages, "answered:"):
 			if hasToolResultFor(messages, "done_focus") {
 				return textReply("retold answer")
@@ -66,18 +68,20 @@ func TestHarnessScenario_AssistantOpenAndRetell(t *testing.T) {
 	h.startInboxWake()
 	require.NoError(t, h.mgr.sendToSession(h.ctx, root.ID, "please check"))
 	h.waitUntil("assistant checking", func() bool { return assistantSayCount(t, h, root.ID, "checking") == 1 })
+	var work int64
+	require.NoError(t, h.db.QueryRowContext(h.ctx, `SELECT session_id FROM session_inbox
+		WHERE json_extract(attributes, '$.observer_session_id') = ?`, root.ID).Scan(&work))
+	require.NoError(t, h.store.BindChat(h.ctx, scenarioManagerID, "chat"))
+	require.NoError(t, h.store.SetChatFocus(h.ctx, scenarioManagerID, "chat", work))
 	close(workRelease)
 	h.waitUntil("assistant retelling", func() bool { return assistantSayCount(t, h, root.ID, "retold answer") == 1 })
 	h.waitUntil("assistant idle", func() bool { return !h.mgr.HasActiveLoop(root.ID) })
 	assert.NotEmpty(t, h.messages(root.ID), "the assistant now uses the ordinary transcript")
 	assert.Zero(t, countToolResultsFor(h.messages(root.ID), "open"), "the prior activation's tools were compacted")
 	assert.Equal(t, 1, assistantSayCount(t, h, root.ID, "checking"))
-	var work int64
-	require.NoError(
-		t,
-		h.db.QueryRowContext(h.ctx, `SELECT session_id FROM session_inbox WHERE json_extract(attributes, '$.observer_session_id') = ?`, root.ID).
-			Scan(&work),
-	)
+	focus, err := h.store.ChatFocus(h.ctx, scenarioManagerID, "chat")
+	require.NoError(t, err)
+	assert.Equal(t, work, focus, "focus does not change observer delivery")
 	assert.Equal(t, 1, assistantEventCount(t, h, root.ID))
 	var workOutputs int
 	require.NoError(t, h.db.QueryRowContext(h.ctx, `SELECT count(*) FROM session_outbox
@@ -86,7 +90,21 @@ func TestHarnessScenario_AssistantOpenAndRetell(t *testing.T) {
 
 	require.NoError(t, h.mgr.sendToSession(h.ctx, work, "direct user follow-up"))
 	h.waitUntil("direct reply finished", func() bool { return !h.mgr.HasActiveLoop(work) })
-	assert.Equal(t, 1, assistantEventCount(t, h, root.ID))
+	h.waitUntil(
+		"direct exchange noted",
+		func() bool { return assistantSayCount(t, h, root.ID, "direct exchange noted") == 1 },
+	)
+	assert.Equal(t, 2, assistantEventCount(t, h, root.ID))
+	var exchange string
+	require.NoError(t, h.db.QueryRowContext(h.ctx, `SELECT raw_content FROM session_inbox
+		WHERE session_id = ? AND source = 'agent' ORDER BY id DESC LIMIT 1`, root.ID).Scan(&exchange))
+	assert.Contains(t, exchange, `user wrote: "direct user follow-up"`)
+	require.NoError(t, h.mgr.sendToSession(h.ctx, work, "/status"))
+	assert.Equal(t, 2, assistantEventCount(t, h, root.ID))
+	var observed bool
+	require.NoError(t, h.db.QueryRowContext(h.ctx, `SELECT json_type(attributes, '$.observer_session_id') IS NOT NULL
+		FROM session_inbox WHERE session_id = ? AND raw_content = '/status'`, work).Scan(&observed))
+	assert.False(t, observed)
 	var cards int
 	require.NoError(t, h.db.QueryRowContext(h.ctx, `SELECT count(*) FROM session_outbox
 		WHERE session_id = ? AND type = 'message' AND source_key NOT LIKE 'message:%'`, root.ID).Scan(&cards))
@@ -211,7 +229,17 @@ func assistantFor(h *harness, root int64) assistantDriver {
 }
 
 func (d assistantDriver) Open(ctx context.Context, project, text, about string) (assistant.Card, error) {
-	return d.h.mgr.assistant.Open(ctx, assistant.Host(assistantHost{s: d.h.mgr}), d.scope, project, text, about)
+	return d.h.mgr.assistant.Open(
+		ctx,
+		assistant.Host(assistantHost{s: d.h.mgr}),
+		d.scope,
+		project,
+		text,
+		about,
+		"",
+		"",
+		"",
+	)
 }
 
 func (d assistantDriver) Send(ctx context.Context, id int64, text string) error {
