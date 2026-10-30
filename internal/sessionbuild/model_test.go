@@ -5,10 +5,12 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/pilat/coagent/internal/assistant"
 	"github.com/pilat/coagent/internal/config"
 	"github.com/pilat/coagent/internal/llm"
 	"github.com/pilat/coagent/internal/registry"
@@ -65,14 +67,14 @@ func TestBuildPromptModelIdentity(t *testing.T) {
 
 func TestModelIdentityMatchesRequestEffort(t *testing.T) {
 	for _, tc := range []struct {
-		name, stored, want string
-		levels, allowlist  []string
+		name, stored, defaultEffort, want string
+		levels, allowlist                 []string
 	}{
-		{"missing stored level", "", "low", []string{"low", "high"}, []string{"low", "high"}},
-		{"unsupported stored level", "medium", "low", []string{"low", "high"}, []string{"low", "high"}},
-		{"narrowed catalog", "high", "low", []string{"low"}, []string{"low"}},
-		{"supported stored level", "high", "high", []string{"low", "high"}, []string{"low", "high"}},
-		{"any effort", "max", "max", []string{"low", "medium", "high"}, nil},
+		{"missing stored level", "", "high", "low", []string{"low", "high"}, []string{"low", "high"}},
+		{"unsupported stored level", "medium", "high", "low", []string{"low", "high"}, []string{"low", "high"}},
+		{"narrowed catalog", "high", "low", "low", []string{"low"}, []string{"low"}},
+		{"supported stored level", "high", "high", "high", []string{"low", "high"}, []string{"low", "high"}},
+		{"any effort", "max", "medium", "max", []string{"low", "medium", "high"}, nil},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -101,10 +103,11 @@ func TestModelIdentityMatchesRequestEffort(t *testing.T) {
 				},
 				Models: []config.ModelEntry{
 					{
-						ID:           "model",
-						Provider:     "fixture",
-						DisplayName:  "Display",
-						EffortLevels: tc.levels,
+						ID:            "model",
+						Provider:      "fixture",
+						DisplayName:   "Display",
+						EffortLevels:  tc.levels,
+						DefaultEffort: tc.defaultEffort,
 						Reasoning: &config.ReasoningSpec{
 							Supported: true,
 							Efforts:   tc.allowlist,
@@ -125,6 +128,16 @@ func TestModelIdentityMatchesRequestEffort(t *testing.T) {
 			case effort := <-requests:
 				assert.Equal(t, tc.want, effort)
 				assert.Contains(t, prompt, "Display (model), effort "+effort+".")
+				entry := cfg.UnifiedConfig.Models[0]
+				card := assistant.Card{ID: in.Record.ID, Model: cfg.Model, Effort: in.Record.ReasoningLevel}
+				desk := assistant.Render(assistant.View{
+					Recent: []assistant.Card{card},
+					Models: []assistant.Model{{
+						ID: entry.ID, DisplayName: entry.DisplayName, DefaultEffort: entry.DefaultEffort,
+						EffortLevels: entry.EffortLevels, EffortAllowlist: entry.Reasoning.Efforts,
+					}},
+				}, time.Time{})
+				assert.Contains(t, desk, "Display · "+effort+"\n")
 			default:
 				t.Fatal("no model request received")
 			}

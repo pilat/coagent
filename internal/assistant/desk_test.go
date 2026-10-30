@@ -53,20 +53,24 @@ func TestAssistantCardModelAndBudget(t *testing.T) {
 
 func TestAssistantCardEffectiveEffort(t *testing.T) {
 	for _, tc := range []struct {
-		name, stored, want string
-		levels, allowlist  []string
+		name, stored, defaultEffort, want string
+		levels, allowlist                 []string
 	}{
-		{"missing stored level", "", "low", []string{"low", "high"}, []string{"low", "high"}},
-		{"unsupported stored level", "medium", "low", []string{"low", "high"}, []string{"low", "high"}},
-		{"narrowed catalog", "high", "low", []string{"low"}, []string{"low"}},
-		{"supported stored level", "high", "high", []string{"low", "high"}, []string{"low", "high"}},
-		{"any effort", "max", "max", []string{"low", "medium", "high"}, nil},
+		{"missing stored level", "", "high", "low", []string{"low", "high"}, []string{"low", "high"}},
+		{"missing stored ignores model default", "", "max", "low", []string{"low", "high"}, []string{"low", "high"}},
+		{"unsupported stored level", "medium", "high", "low", []string{"low", "high"}, []string{"low", "high"}},
+		{"narrowed catalog", "high", "low", "low", []string{"low"}, []string{"low"}},
+		{"supported stored level", "high", "low", "high", []string{"low", "high"}, []string{"low", "high"}},
+		{"any effort", "max", "low", "max", []string{"low", "medium", "high"}, nil},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			card := Card{ID: 7, Project: "project", Model: "model", Effort: tc.stored}
 			models := []Model{
-				{ID: "model", DisplayName: "Display", EffortLevels: tc.levels, EffortAllowlist: tc.allowlist},
+				{
+					ID: "model", DisplayName: "Display", EffortLevels: tc.levels,
+					EffortAllowlist: tc.allowlist, DefaultEffort: tc.defaultEffort,
+				},
 			}
 			assert.Contains(t, cardLines(card, time.Now(), models), "Display · "+tc.want)
 		})

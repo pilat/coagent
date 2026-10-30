@@ -1,7 +1,6 @@
 package sessionbuild
 
 import (
-	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -12,6 +11,7 @@ import (
 	"sync"
 
 	"github.com/pilat/coagent/internal/backgroundprocess"
+	"github.com/pilat/coagent/internal/catalog"
 	"github.com/pilat/coagent/internal/config"
 	"github.com/pilat/coagent/internal/git"
 	"github.com/pilat/coagent/internal/llm"
@@ -209,7 +209,7 @@ func restoreTodos(raw string) (todo.Service, error) {
 }
 
 func configureClient(client llm.Client, record *sessionstore.SessionRecord) string {
-	level := cmp.Or(record.ReasoningLevel, string(llm.ReasoningMedium))
+	level := catalog.StoredEffort(record.ReasoningLevel)
 	client.SetReasoningLevel(level)
 
 	sessionID := strconv.FormatInt(record.ID, 10)

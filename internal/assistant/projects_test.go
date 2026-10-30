@@ -53,7 +53,7 @@ func TestAssistantProjectsFiltersAndKeys(t *testing.T) {
 		}
 
 		assert.NotEqual(t, "same", project.Key)
-		choice, err := s.resolveProject(ctx, project.Key)
+		choice, err := s.openTarget(ctx, project.Key, false)
 		require.NoError(t, err)
 		assert.Contains(t, []int64{first, second}, choice.id)
 		if choice.id == second {
@@ -66,11 +66,11 @@ func TestAssistantProjectsFiltersAndKeys(t *testing.T) {
 	_, _, err = s.List(ctx, scope, 0, 20, "nowhere")
 	require.ErrorContains(t, err, `no project "nowhere"`)
 
-	_, err = s.lookupProject(ctx, "fresh-research")
-	require.NoError(t, err)
+	_, err = s.openTarget(ctx, "fresh-research", true)
+	require.ErrorContains(t, err, "worktree needs an existing project: fresh-research")
 	_, err = os.Stat(filepath.Join(s.projectsRoot, "fresh-research"))
 	assert.True(t, os.IsNotExist(err), "validating an open creates nothing")
-	_, err = s.lookupProject(ctx, "../outside")
+	_, err = s.openTarget(ctx, "../outside", false)
 	require.Error(t, err)
 }
 
@@ -86,4 +86,33 @@ func TestAssistantProjectPathArg(t *testing.T) {
 	assert.Equal(t, "/srv/repo", path)
 	_, ok = projectPathArg("coagent")
 	assert.False(t, ok)
+}
+
+func TestAssistantOpenIgnoresProjectsWithMissingFolders(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	_, sessions, s, _ := assistantFixture(t)
+	s.projectsRoot = t.TempDir()
+	missing := filepath.Join(t.TempDir(), "gone")
+	oldID, err := sessions.GetOrCreateNamedProject(ctx, missing, "gone")
+	require.NoError(t, err)
+
+	choice, err := s.openTarget(ctx, "gone", false)
+	require.NoError(t, err)
+	assert.Equal(t, filepath.Join(s.projectsRoot, "gone"), choice.path)
+	assert.DirExists(t, choice.path)
+	assert.NotEqual(t, oldID, choice.id)
+
+	worktrees, err := coagenthome.Join(coagenthome.WorktreesDirName)
+	require.NoError(t, err)
+	worktree := filepath.Join(worktrees, filepath.Base(t.TempDir()), "wt")
+	require.NoError(t, os.MkdirAll(worktree, 0o700))
+	worktreeID, err := sessions.GetOrCreateNamedProject(ctx, worktree, "wt")
+	require.NoError(t, err)
+
+	choice, err = s.openTarget(ctx, "wt", false)
+	require.NoError(t, err)
+	assert.Equal(t, filepath.Join(s.projectsRoot, "wt"), choice.path)
+	assert.DirExists(t, choice.path)
+	assert.NotEqual(t, worktreeID, choice.id)
 }

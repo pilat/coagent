@@ -1,10 +1,20 @@
 package catalog
 
-import "slices"
+import (
+	"cmp"
+	"slices"
+)
+
+const defaultStoredEffort = "medium"
 
 // effortOrder is the effort vocabulary both catalogs draw from, weakest first.
 // models.dev emits ascending, OpenRouter descending — everything is normalized here.
 var effortOrder = []string{"none", "minimal", "low", "medium", "high", "xhigh", "max"}
+
+// StoredEffort keeps the legacy medium fallback for an unset persisted level.
+func StoredEffort(stored string) string {
+	return cmp.Or(stored, defaultStoredEffort)
+}
 
 // SortEfforts normalizes a catalog's level list to canonical weakest-first order,
 // dropping duplicates and anything outside the known vocabulary.

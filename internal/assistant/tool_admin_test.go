@@ -13,18 +13,18 @@ func TestAssistantSwitch(t *testing.T) {
 	t.Parallel()
 	f := newToolFixture(t)
 	for _, ref := range []string{`0`, `"0"`, `"#0"`} {
-		_, err := f.tools[toolSwitch].Execute(t.Context(), json.RawMessage(`{"session":`+ref+`}`))
+		_, err := f.tools["switch"].Execute(t.Context(), json.RawMessage(`{"session":`+ref+`}`))
 		require.EqualError(t, err, "switch: you cannot switch the user to Assistant; they return with /assistant")
 	}
 	foreign := workSession(t, f.sessions, map[string]any{"manager_id": "other"})
 	for _, id := range []int64{foreign, f.root} {
-		_, err := f.tools[toolSwitch].Execute(t.Context(), json.RawMessage(fmt.Sprintf(`{"session":%d}`, id)))
+		_, err := f.tools["switch"].Execute(t.Context(), json.RawMessage(fmt.Sprintf(`{"session":%d}`, id)))
 		require.ErrorContains(t, err, "not a work session")
 	}
 	assert.Empty(t, f.host.focused)
 	require.NoError(t, f.sessions.BindChat(t.Context(), testOwner, "chat"))
 	assert.Equal(t, fmt.Sprintf("switched the user to session %d; they return with /assistant", f.work),
-		f.execute(t, toolSwitch, fmt.Sprintf(`{"session":"#%d"}`, f.work)))
+		f.execute(t, "switch", fmt.Sprintf(`{"session":"#%d"}`, f.work)))
 	assert.Equal(t, []int64{f.work}, f.host.focused)
 }
 
@@ -45,10 +45,10 @@ func TestAssistantModels(t *testing.T) {
 		{ID: "second"},
 	}
 	assert.Equal(t, "first · First model · default · efforts: low, high · default effort: low · reasoning · $1/$4\n"+
-		"second · second · no effort choice · unpriced", f.execute(t, toolModels, `{}`))
-	assert.True(t, f.tools[toolModels].ParallelSafe())
-	assert.False(t, f.tools[toolSwitch].ParallelSafe())
-	assert.False(t, f.tools[toolSetModel].ParallelSafe())
+		"second · second · no effort choice · unpriced", f.execute(t, "models", `{}`))
+	assert.True(t, f.tools["models"].ParallelSafe())
+	assert.False(t, f.tools["switch"].ParallelSafe())
+	assert.False(t, f.tools["set_model"].ParallelSafe())
 }
 
 func TestAssistantSetModel(t *testing.T) {
@@ -76,7 +76,7 @@ func TestAssistantSetModel(t *testing.T) {
 			if tc.self {
 				target = f.root
 			}
-			result, err := f.tools[toolSetModel].Execute(t.Context(), json.RawMessage(fmt.Sprintf(
+			result, err := f.tools["set_model"].Execute(t.Context(), json.RawMessage(fmt.Sprintf(
 				`{"session":%d,"model":%q%s}`, target, tc.model, tc.effort)))
 			if tc.want != "" {
 				require.ErrorContains(t, err, tc.want)

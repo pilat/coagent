@@ -12,7 +12,7 @@ import (
 func TestAssistantOpenWorktreeNeedsExistingProject(t *testing.T) {
 	t.Parallel()
 	f := newToolFixture(t)
-	_, err := f.tools[toolOpen].Execute(t.Context(), json.RawMessage(
+	_, err := f.tools["open"].Execute(t.Context(), json.RawMessage(
 		`{"project":"missing","about":"work","text":"start","worktree":"feat-x"}`))
 	require.EqualError(t, err, "open: worktree needs an existing project: missing")
 	assert.Empty(t, f.host.created)
@@ -36,7 +36,7 @@ func TestAssistantOpenModel(t *testing.T) {
 				{ID: "reasoner", EffortLevels: []string{"low", "high"}, DefaultEffort: "low"},
 				{ID: "plain"},
 			}
-			_, err := f.tools[toolOpen].Execute(t.Context(), json.RawMessage(
+			_, err := f.tools["open"].Execute(t.Context(), json.RawMessage(
 				`{"project":"devbox","about":"work","text":"start"`+tc.args+`}`))
 			if tc.want != "" {
 				require.EqualError(t, err, "open: "+tc.want)
@@ -52,4 +52,28 @@ func TestAssistantOpenModel(t *testing.T) {
 			assert.Equal(t, tc.effort, record.ReasoningLevel)
 		})
 	}
+}
+
+func TestAssistantOpenFetchesModelsOnce(t *testing.T) {
+	for _, args := range []string{"", `,"model":"reasoner"`, `,"effort":"high"`, `,"model":"reasoner","effort":"high"`} {
+		t.Run(args, func(t *testing.T) {
+			t.Parallel()
+			f := newToolFixture(t)
+			f.host.models = []Model{{ID: "reasoner", EffortLevels: []string{"low", "high"}, DefaultEffort: "low"}}
+			f.execute(t, "open", `{"project":"devbox","about":"work","text":"start"`+args+`}`)
+			assert.Equal(t, 1, f.host.modelsRead)
+		})
+	}
+}
+
+func TestAssistantOpenEffortWithoutModelsRefusesBeforeCreation(t *testing.T) {
+	t.Parallel()
+	f := newToolFixture(t)
+	_, err := f.tools["open"].Execute(t.Context(), json.RawMessage(
+		`{"project":"fresh","about":"work","text":"start","effort":"high"}`))
+	require.EqualError(t, err, "open: no models configured")
+	assert.Equal(t, 1, f.host.modelsRead)
+	assert.Empty(t, f.host.created)
+	assert.Empty(t, f.host.deliveries)
+	assert.NoDirExists(t, filepath.Join(f.store.projectsRoot, "fresh"))
 }

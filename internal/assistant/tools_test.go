@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"flag"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -18,7 +19,10 @@ import (
 	"github.com/pilat/coagent/internal/tool"
 )
 
-var _ Host = (*toolHost)(nil)
+var (
+	_                 Host = (*toolHost)(nil)
+	updateToolSurface      = flag.Bool("update", false, "update the assistant tool surface golden")
+)
 
 type toolHost struct {
 	sessions   *sessionstore.Store
@@ -28,6 +32,7 @@ type toolHost struct {
 	stopped    []int64
 	focused    []int64
 	models     []Model
+	modelsRead int
 	modelCalls []modelArgs
 }
 
@@ -40,47 +45,76 @@ type toolFixture struct {
 	tools      map[string]tool.Tool
 }
 
+func TestAssistantToolSurfaceUnchanged(t *testing.T) {
+	t.Parallel()
+	type surface struct {
+		ID           string          `json:"id"`
+		Description  string          `json:"description"`
+		Parameters   json.RawMessage `json:"parameters"`
+		ParallelSafe bool            `json:"parallel_safe"`
+	}
+
+	var entries []surface
+	for _, instance := range Tools(nil, Scope{}, nil) {
+		entries = append(entries, surface{
+			ID: instance.ID(), Description: instance.Description(),
+			Parameters: instance.Parameters(), ParallelSafe: instance.ParallelSafe(),
+		})
+	}
+	data, err := json.MarshalIndent(entries, "", "  ")
+	require.NoError(t, err)
+	data = append(data, '\n')
+	path := filepath.Join("testdata", "tool_surface.golden.json")
+	if *updateToolSurface {
+		require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
+		require.NoError(t, os.WriteFile(path, data, 0o600))
+	}
+	golden, err := os.ReadFile(path)
+	require.NoError(t, err)
+	assert.Equal(t, string(golden), string(data))
+}
+
 func TestAssistantToolsImmediateEffects(t *testing.T) {
 	t.Parallel()
 	f := newToolFixture(t)
-	assert.Contains(t, f.execute(t, toolRead, `{"session":`+itoa(f.work)+`,"count":2}`), "tail ok")
-	assert.Contains(t, f.execute(t, toolSessions, `{"offset":0}`), itoa(f.work))
-	assert.Contains(t, f.execute(t, toolProjects, `{}`), "devbox")
-	assert.Equal(t, "focus is empty", f.execute(t, toolFocusList, `{}`))
-	memory := f.execute(t, toolRemember, `{"text":"searchable fact"}`)
+	assert.Contains(t, f.execute(t, "read_session", `{"session":`+itoa(f.work)+`,"count":2}`), "tail ok")
+	assert.Contains(t, f.execute(t, "sessions", `{"offset":0}`), itoa(f.work))
+	assert.Contains(t, f.execute(t, "projects", `{}`), "devbox")
+	assert.Equal(t, "focus is empty", f.execute(t, "focus_list", `{}`))
+	memory := f.execute(t, "remember", `{"text":"searchable fact"}`)
 	assert.Regexp(t, `^m[0-9]+$`, memory)
-	assert.Contains(t, f.execute(t, toolSearch, `{"query":"searchable"}`), memory)
-	f.execute(t, toolRewriteMemory, `{"id":"`+memory+`","text":"corrected fact"}`)
+	assert.Contains(t, f.execute(t, "search", `{"query":"searchable"}`), memory)
+	f.execute(t, "rewrite_memory", `{"id":"`+memory+`","text":"corrected fact"}`)
 	notes, err := f.store.Memory(t.Context(), f.root)
 	require.NoError(t, err)
 	require.Len(t, notes, 1)
 	assert.Equal(t, "corrected fact", notes[0].Text)
-	f.execute(t, toolForgetMemory, `{"id":"`+memory+`"}`)
-	assert.Contains(t, f.execute(t, toolSearch, `{"query":"corrected"}`), "nothing matches")
-	focus := f.execute(t, toolFocus, `{"text":"waiting","sessions":["`+itoa(f.work)+`",`+itoa(f.work)+`]}`)
+	f.execute(t, "forget_memory", `{"id":"`+memory+`"}`)
+	assert.Contains(t, f.execute(t, "search", `{"query":"corrected"}`), "nothing matches")
+	focus := f.execute(t, "focus", `{"text":"waiting","sessions":["`+itoa(f.work)+`",`+itoa(f.work)+`]}`)
 	assert.Regexp(t, `^f[0-9]+$`, focus)
-	f.execute(t, toolUpdateFocus, `{"id":"`+focus+`","text":"still waiting"}`)
+	f.execute(t, "update_focus", `{"id":"`+focus+`","text":"still waiting"}`)
 	items, err := f.store.Focus(t.Context(), f.root)
 	require.NoError(t, err)
 	require.Len(t, items, 1)
 	assert.Equal(t, []string{itoa(f.work)}, items[0].Sessions, "omitting sessions preserves the wait")
-	assert.Contains(t, f.execute(t, toolFocusList, `{}`), "still waiting → "+itoa(f.work))
-	f.execute(t, toolUpdateFocus, `{"id":"`+focus+`","text":"finished","sessions":[]}`)
+	assert.Contains(t, f.execute(t, "focus_list", `{}`), "still waiting → "+itoa(f.work))
+	f.execute(t, "update_focus", `{"id":"`+focus+`","text":"finished","sessions":[]}`)
 	items, err = f.store.Focus(t.Context(), f.root)
 	require.NoError(t, err)
 	assert.Empty(t, items[0].Sessions)
-	f.execute(t, toolDoneFocus, `{"id":"`+focus+`"}`)
-	assert.Equal(t, "focus is empty", f.execute(t, toolFocusList, `{}`))
+	f.execute(t, "done_focus", `{"id":"`+focus+`"}`)
+	assert.Equal(t, "focus is empty", f.execute(t, "focus_list", `{}`))
 	_, final := answered(t, f.sessions, f.work, "other request", "answer with context")
-	assert.Contains(t, f.execute(t, toolAround, fmt.Sprintf(`{"ref":"msg %d","count":2}`, final)), "other request")
-	f.execute(t, toolSend, `{"session":"`+itoa(f.work)+`","text":"continue"}`)
+	assert.Contains(t, f.execute(t, "around", fmt.Sprintf(`{"ref":"msg %d","count":2}`, final)), "other request")
+	f.execute(t, "send", `{"session":"`+itoa(f.work)+`","text":"continue"}`)
 	assert.Equal(t, []string{"continue"}, f.host.deliveries)
-	f.execute(t, toolStop, `{"session":`+itoa(f.work)+`}`)
+	f.execute(t, "stop", `{"session":`+itoa(f.work)+`}`)
 	assert.Equal(t, []int64{f.work}, f.host.stopped)
-	f.execute(t, toolSend, `{"session":`+itoa(f.work)+`,"text":"resume stopped work"}`)
+	f.execute(t, "send", `{"session":`+itoa(f.work)+`,"text":"resume stopped work"}`)
 	assert.Equal(t, []string{"continue", "resume stopped work"}, f.host.deliveries)
-	f.execute(t, toolOpen, `{"project":"devbox","about":"registered work","text":"start"}`)
-	f.execute(t, toolOpen, `{"project":"fresh-research","about":"scratch work","text":"research"}`)
+	f.execute(t, "open", `{"project":"devbox","about":"registered work","text":"start"}`)
+	f.execute(t, "open", `{"project":"fresh-research","about":"scratch work","text":"research"}`)
 	for _, instruction := range []string{"continue", "resume stopped work", "start", "research"} {
 		var from string
 		var observer int64
@@ -105,8 +139,8 @@ json_extract(attributes, '$.observer_session_id') FROM session_inbox WHERE raw_c
 		assert.NotEmpty(t, instance.Description(), id)
 		assert.Equal(
 			t,
-			id == toolAround || id == toolRead || id == toolSessions || id == toolProjects || id == toolFocusList ||
-				id == toolModels,
+			id == "around" || id == "read_session" || id == "sessions" || id == "projects" || id == "focus_list" ||
+				id == "models",
 			instance.ParallelSafe(),
 			id,
 		)
@@ -129,14 +163,14 @@ func TestAssistantToolsRefuseUnauthorizedWork(t *testing.T) {
 	)
 	require.NoError(t, err)
 	for _, target := range []int64{foreign, child, retired, killed, f.root} {
-		for _, id := range []string{toolRead, toolSend, toolStop} {
+		for _, id := range []string{"read_session", "send", "stop"} {
 			_, err := f.tools[id].Execute(
 				t.Context(),
 				json.RawMessage(fmt.Sprintf(`{"session":%d,"text":"go","count":1}`, target)),
 			)
 			require.ErrorContains(t, err, "not a work session", id)
 		}
-		_, err := f.tools[toolFocus].Execute(
+		_, err := f.tools["focus"].Execute(
 			t.Context(),
 			json.RawMessage(fmt.Sprintf(`{"text":"wait","sessions":[%d]}`, target)),
 		)
@@ -148,26 +182,26 @@ func TestAssistantToolsRefuseUnauthorizedWork(t *testing.T) {
 
 func TestAssistantToolValidation(t *testing.T) {
 	for _, tc := range []struct{ id, args, want string }{
-		{toolOpen, `{"project":"devbox","text":"go"}`, "about must be one line"},
-		{toolOpen, `{"project":"devbox","about":"a\nb","text":"go"}`, "about must be one line"},
-		{toolOpen, `{"project":"devbox","about":"` + strings.Repeat("界", 81) + `","text":"go"}`, "about must be one line of 1-80 characters"},
-		{toolOpen, `{"project":"../outside","about":"why","text":"go"}`, "project name must not contain"},
-		{toolOpen, `{"project":"devbox","about":"why"}`, "needs a project and a text"},
-		{toolSend, `{"session":"new-7-1","text":"go"}`, "must be a session id"},
-		{toolSend, `{"session":2,"text":" "}`, "send needs a text"},
-		{toolRead, `{"session":2,"count":61}`, "count must be between 1 and 60"},
-		{toolAround, `{"ref":"msg 1","count":11}`, "count must be between 1 and 10"},
-		{toolRemember, `{"text":" "}`, "needs text"},
-		{toolRemember, `{"text":"` + strings.Repeat("ж", 301) + `"}`, "at most 300 characters"},
-		{toolRemember, `{"text":"x","until":"next week"}`, "must be a date"},
-		{toolRewriteMemory, `{"id":"m999","text":"x"}`, "no memory note"},
-		{toolForgetMemory, `{"id":"m-new-1"}`, "invalid m id"},
-		{toolFocus, `{"text":"","sessions":[]}`, "one line of text"},
-		{toolFocus, `{"text":"` + strings.Repeat("f", 201) + `","sessions":[]}`, "at most 200"},
-		{toolFocus, `{"text":"x","sessions":["devbox"]}`, "must be a session id"},
-		{toolUpdateFocus, `{"id":"f999","text":"x","sessions":[]}`, "no focus item"},
-		{toolDoneFocus, `{"id":"f999"}`, "no focus item"},
-		{toolSend, `{"session":true}`, "arguments for send"},
+		{"open", `{"project":"devbox","text":"go"}`, "about must be one line"},
+		{"open", `{"project":"devbox","about":"a\nb","text":"go"}`, "about must be one line"},
+		{"open", `{"project":"devbox","about":"` + strings.Repeat("界", 81) + `","text":"go"}`, "about must be one line of 1-80 characters"},
+		{"open", `{"project":"../outside","about":"why","text":"go"}`, "project name must not contain"},
+		{"open", `{"project":"devbox","about":"why"}`, "needs a project and a text"},
+		{"send", `{"session":"new-7-1","text":"go"}`, "must be a session id"},
+		{"send", `{"session":2,"text":" "}`, "send needs a text"},
+		{"read_session", `{"session":2,"count":61}`, "count must be between 1 and 60"},
+		{"around", `{"ref":"msg 1","count":11}`, "count must be between 1 and 10"},
+		{"remember", `{"text":" "}`, "needs text"},
+		{"remember", `{"text":"` + strings.Repeat("ж", 301) + `"}`, "at most 300 characters"},
+		{"remember", `{"text":"x","until":"next week"}`, "must be a date"},
+		{"rewrite_memory", `{"id":"m999","text":"x"}`, "no memory note"},
+		{"forget_memory", `{"id":"m-new-1"}`, "invalid m id"},
+		{"focus", `{"text":"","sessions":[]}`, "one line of text"},
+		{"focus", `{"text":"` + strings.Repeat("f", 201) + `","sessions":[]}`, "at most 200"},
+		{"focus", `{"text":"x","sessions":["devbox"]}`, "must be a session id"},
+		{"update_focus", `{"id":"f999","text":"x","sessions":[]}`, "no focus item"},
+		{"done_focus", `{"id":"f999"}`, "no focus item"},
+		{"send", `{"session":true}`, "arguments for send"},
 	} {
 		t.Run(tc.id+tc.want, func(t *testing.T) {
 			t.Parallel()
@@ -257,6 +291,7 @@ func (h *toolHost) FocusChat(ctx context.Context, owner string, id int64) error 
 }
 
 func (h *toolHost) Models(context.Context) ([]Model, error) {
+	h.modelsRead++
 	return h.models, nil
 }
 
@@ -269,9 +304,9 @@ func TestAssistantFocusLimit(t *testing.T) {
 	t.Parallel()
 	f := newToolFixture(t)
 	for range focusLiveItems {
-		f.execute(t, toolFocus, `{"text":"busy","sessions":[]}`)
+		f.execute(t, "focus", `{"text":"busy","sessions":[]}`)
 	}
-	_, err := f.tools[toolFocus].Execute(t.Context(), json.RawMessage(`{"text":"extra","sessions":[]}`))
+	_, err := f.tools["focus"].Execute(t.Context(), json.RawMessage(`{"text":"extra","sessions":[]}`))
 	require.ErrorContains(t, err, "at most 30")
 	items, err := f.store.Focus(t.Context(), f.root)
 	require.NoError(t, err)
@@ -283,15 +318,15 @@ func TestAssistantMemoryLimitRefusalsWriteNothing(t *testing.T) {
 	f := newToolFixture(t)
 	var last string
 	for range 13 {
-		last = f.execute(t, toolRemember, `{"text":"`+strings.Repeat("я", 300)+`"}`)
+		last = f.execute(t, "remember", `{"text":"`+strings.Repeat("я", 300)+`"}`)
 	}
-	short := f.execute(t, toolRemember, `{"text":"`+strings.Repeat("я", 100)+`"}`)
+	short := f.execute(t, "remember", `{"text":"`+strings.Repeat("я", 100)+`"}`)
 	before, err := f.store.Memory(t.Context(), f.root)
 	require.NoError(t, err)
 	for _, tc := range []struct{ id, args string }{
-		{toolRemember, `{"text":"x"}`},
-		{toolRewriteMemory, `{"id":"` + last + `","text":"` + strings.Repeat("x", 301) + `"}`},
-		{toolRewriteMemory, `{"id":"` + short + `","text":"` + strings.Repeat("x", 101) + `"}`},
+		{"remember", `{"text":"x"}`},
+		{"rewrite_memory", `{"id":"` + last + `","text":"` + strings.Repeat("x", 301) + `"}`},
+		{"rewrite_memory", `{"id":"` + short + `","text":"` + strings.Repeat("x", 101) + `"}`},
 	} {
 		_, err := f.tools[tc.id].Execute(t.Context(), json.RawMessage(tc.args))
 		require.Error(t, err)
@@ -299,8 +334,8 @@ func TestAssistantMemoryLimitRefusalsWriteNothing(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, before, after)
 	}
-	f.execute(t, toolRewriteMemory, `{"id":"`+last+`","text":"short"}`)
-	f.execute(t, toolRemember, `{"text":"now fits"}`)
+	f.execute(t, "rewrite_memory", `{"id":"`+last+`","text":"short"}`)
+	f.execute(t, "remember", `{"text":"now fits"}`)
 	yesterday := time.Now().UTC().AddDate(0, 0, -1).Format(time.DateOnly)
-	f.execute(t, toolRemember, `{"text":"`+strings.Repeat("x", 300)+`","until":"`+yesterday+`"}`)
+	f.execute(t, "remember", `{"text":"`+strings.Repeat("x", 300)+`","until":"`+yesterday+`"}`)
 }
