@@ -43,7 +43,7 @@ func (s *Store) Arm(
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	baseline, err := budgetRootFacts(ctx, tx, mutation.RootSessionID)
+	baseline, err := budgetMutationFacts(ctx, tx, mutation)
 	if err != nil {
 		return nil, err
 	}
@@ -117,7 +117,7 @@ func (s *Store) Clear(
 
 	defer func() { _ = tx.Rollback() }()
 
-	baseline, err := budgetRootFacts(ctx, tx, mutation.RootSessionID)
+	baseline, err := budgetMutationFacts(ctx, tx, mutation)
 	if err != nil {
 		return nil, err
 	}
@@ -182,9 +182,13 @@ func (s *Store) Clear(
 }
 
 func validateBudgetMutation(mutation budget.Mutation, arm bool) error {
-	if mutation.RootSessionID <= 0 || mutation.GrantSessionID < 0 || mutation.InputID <= 0 || mutation.ToolID == "" ||
-		mutation.Command == "" || mutation.ToolCallID == "" || mutation.Receipt == "" {
+	if mutation.RootSessionID <= 0 || mutation.GrantSessionID < 0 || mutation.ToolID == "" ||
+		mutation.ToolCallID == "" || mutation.Receipt == "" {
 		return budget.ErrConflict
+	}
+
+	if err := validateBudgetBinding(mutation); err != nil {
+		return err
 	}
 
 	if arm == (mutation.CostLimitUSD == nil && mutation.DurationSeconds == nil) {
@@ -225,6 +229,10 @@ func nextBudgetGenerationTx(ctx context.Context, tx *sql.Tx, rootID int64) (int6
 }
 
 func consumeActivationTx(ctx context.Context, tx *sql.Tx, mutation budget.Mutation) error {
+	if delegatedBudgetMutation(mutation) {
+		return nil
+	}
+
 	err := ConsumeActivationTx(ctx, tx, ActivationBinding{
 		InputID: mutation.InputID, SessionID: mutation.GrantSessionID,
 		ToolID: mutation.ToolID, Command: mutation.Command, ToolCallID: mutation.ToolCallID,
@@ -245,6 +253,10 @@ func replayBudgetMutation(
 	tx *sql.Tx,
 	mutation budget.Mutation,
 ) (*budget.Record, error) {
+	if delegatedBudgetMutation(mutation) {
+		return replayDelegatedBudgetTx(ctx, tx, mutation)
+	}
+
 	var state, callID, toolID, command string
 
 	err := tx.QueryRowContext(ctx, `SELECT state, COALESCE(tool_call_id, ''), tool_id, command

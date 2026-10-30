@@ -33,10 +33,10 @@ func TestHarnessScenario_ForeignBudgetMutationPreservesCompletionAndPendingInput
 			assistant, err := h.mgr.EnsureAssistantRoot(h.ctx, scenarioManagerID)
 			require.NoError(t, err)
 			work := h.createRoot(managerAttrs(scenarioManagerID))
-			initial := foreignBudgetMutation(t, h, assistant.ID, work, "initial")
+			initial := foreignBudgetMutation(assistant.ID, work, "initial")
 			_, err = h.store.Arm(h.ctx, initial)
 			require.NoError(t, err)
-			mutation := foreignBudgetMutation(t, h, assistant.ID, work, action)
+			mutation := foreignBudgetMutation(assistant.ID, work, action)
 			h.mgr.budgets = &terminalBudgetReleaseHook{
 				Service: h.mgr.budgets,
 				before: func(ctx context.Context, root, generation int64, reason string) error {
@@ -104,25 +104,10 @@ func (h *terminalBudgetReleaseHook) Release(
 	return h.Service.Release(ctx, root, generation, reason)
 }
 
-func foreignBudgetMutation(t *testing.T, h *harness, grant, target int64, call string) budget.Mutation {
-	t.Helper()
-	input, err := h.store.Enqueue(h.ctx, sessionstore.Input{
-		SessionID: grant, Source: sessionstore.InputSourceUser, Content: "/budget 1m",
-	})
-	require.NoError(t, err)
-	_, err = h.store.Commit(h.ctx, sessionstore.Commit{
-		SessionID: grant,
-		Accept: []sessionstore.Accept{{
-			InputID: input.Input.ID, State: sessionstore.InputStateAccepted, Content: "/budget 1m", LinkRef: -1,
-		}},
-		Activation: &sessionstore.ActivationChange{
-			InputID: input.Input.ID, ToolID: budget.ToolID, Command: "/budget", State: sessionstore.ActivationPending,
-		},
-	})
-	require.NoError(t, err)
+func foreignBudgetMutation(grant, target int64, call string) budget.Mutation {
 	return budget.Mutation{
-		RootSessionID: target, GrantSessionID: grant, InputID: input.Input.ID, ToolID: budget.ToolID,
-		Command: "/budget", ToolCallID: call, DurationSeconds: new(int64(60)), Receipt: "Budget " + call,
+		RootSessionID: target, GrantSessionID: grant, ToolID: budget.ToolID,
+		ToolCallID: call, DurationSeconds: new(int64(60)), Receipt: "Budget " + call,
 	}
 }
 

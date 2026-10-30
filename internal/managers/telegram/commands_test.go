@@ -2,6 +2,7 @@ package telegram
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -51,7 +52,6 @@ func TestFocusedCommandsEnterDurableInboxVerbatim(t *testing.T) {
 		"/compact keep tests",
 		"/status",
 		"/budget 1 usd",
-		"/config",
 		"/skill pilat:plan-handoff",
 		"/pilat:plan-handoff /pilat___plan__handoff",
 	}
@@ -63,6 +63,34 @@ func TestFocusedCommandsEnterDurableInboxVerbatim(t *testing.T) {
 		assert.Equal(t, controllerapi.SessionMessageData{SessionID: 42, Message: text}, ctrl.messageCalls[i])
 	}
 	assert.Empty(t, messages)
+	m.handleChatText(t.Context(), "/config")
+	assert.Len(t, ctrl.messageCalls, len(inputs))
+	assert.Equal(t, []string{"/config works on the assistant: /assistant, then /config"}, messages)
+}
+
+func TestConfigCommandIsOnlyForwardedFromAssistant(t *testing.T) {
+	for _, focus := range []int64{0, 12} {
+		for _, text := range []string{"/config x", "/config@bot x"} {
+			t.Run(fmt.Sprintf("%d/%s", focus, text), func(t *testing.T) {
+				t.Parallel()
+				var messages []string
+				ctrl := &fakeController{focus: focus}
+				m := newCmdTestManager(t, ctrl, &messages)
+				m.processUpdate(t.Context(), telegramUpdate{Message: &telegramMessage{
+					From: &telegramUser{ID: 42}, Chat: telegramChat{ID: harnessChatID}, Text: text,
+				}})
+				if focus != 0 {
+					assert.Empty(t, ctrl.messageCalls)
+					assert.Equal(t, []string{"/config works on the assistant: /assistant, then /config"}, messages)
+					return
+				}
+				require.Len(t, ctrl.messageCalls, 1)
+				assert.Equal(t, ctrl.assistantRoot.SessionID, ctrl.messageCalls[0].SessionID)
+				assert.Equal(t, "/config x", ctrl.messageCalls[0].Message)
+				assert.Empty(t, messages)
+			})
+		}
+	}
 }
 
 func TestNumberedControlsDoNotChangeSelection(t *testing.T) {

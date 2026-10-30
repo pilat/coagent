@@ -55,7 +55,7 @@ numeric `target_chat_id`. Each enabled manager needs its own bot token.
 
 One chat holds Assistant (`#0`) and the work sessions you select with `/switch`.
 Assistant can start and coordinate work, register global MCP servers, schedule
-itself, and administer configuration and its budget. `/config` authorizes reading
+itself, and administer configuration and budgets. `/config` on Assistant (`#0`) authorizes reading
 the current document and applying the complete candidate `config.yaml`; an
 accepted edit restarts the daemon and rolls back if the configuration cannot
 boot. Secrets stay in `~/.coagent/secrets`, maintained by hand outside the
@@ -210,7 +210,7 @@ for vulnerability reporting.
 ## Configuration and project context
 
 Configuration is a hand-edited `~/.coagent/config.yaml`, or a whole-document
-`/config` apply from Assistant or a selected work session. The
+`/config` apply from Assistant (`#0`) only. The
 underlying state is intentionally inspectable:
 
 - `~/.coagent/config.yaml` — providers, models, managers, marketplaces, and tool
@@ -369,7 +369,8 @@ Telegram commands operate on the selected session unless they name an ID:
 | `/model [N [effort]]` | List configured models or select one by its number |
 | `/status`, `/budget <request>`, `/schedules` | Inspect status, authorize a budget change, or list schedules |
 | `/clear`, `/compact [focus]` | Replace a work root or compact its context |
-| `/config <request>`, `/skill <name> [args]` | Authorize configuration work or activate a skill |
+| `/config <request>` | Authorize configuration work on Assistant (`#0`) only |
+| `/skill <name> [args]` | Activate a skill in the selected session |
 | `/help`, `/start` | Show command help |
 
 Assistant refuses stop, kill, clear, compact and worktree commands. Text and

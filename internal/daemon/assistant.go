@@ -12,6 +12,7 @@ import (
 
 	"github.com/pilat/coagent/internal/assistant"
 	"github.com/pilat/coagent/internal/budget"
+	"github.com/pilat/coagent/internal/configapply"
 	"github.com/pilat/coagent/internal/controllerapi"
 	"github.com/pilat/coagent/internal/projectpath"
 	"github.com/pilat/coagent/internal/sessionstore"
@@ -79,23 +80,55 @@ func (h assistantHost) CreateWork(
 	return record.ID, nil
 }
 
-func (h assistantHost) Deliver(ctx context.Context, id int64, text string, enqueue func(*sql.Tx) error) error {
+func (h assistantHost) Deliver(
+	ctx context.Context,
+	id int64,
+	text string,
+	enqueue func(*sql.Tx, map[string]any) (*sessionstore.InboxInput, error),
+) error {
 	unlock, err := h.s.lockSessionTree(ctx, id)
 	if err != nil {
 		return err
 	}
-	defer unlock()
+	var input *sessionstore.InboxInput
+	command := false
 
-	if err := h.s.store.WithTx(ctx, enqueue); err != nil {
-		return fmt.Errorf("commit assistant instruction: %w", err)
-	}
+	err = func() error {
+		defer unlock()
 
-	// The instruction is already durable; boot recovery starts it after a shutdown.
-	if err := h.s.sendToSessionLocked(ctx, id, text); err != nil && !errors.Is(err, errDaemonShuttingDown) {
+		attributes, err := h.s.sessionInputAttributes(ctx, id, text)
+		if err != nil {
+			return err
+		}
+
+		if err := h.s.store.WithTx(ctx, func(tx *sql.Tx) error {
+			var enqueueErr error
+			input, enqueueErr = enqueue(tx, attributes)
+
+			return enqueueErr
+		}); err != nil {
+			return fmt.Errorf("commit assistant instruction: %w", err)
+		}
+
+		command = input != nil && isEnqueueCommand(text)
+		if command {
+			return nil
+		}
+
+		// The instruction is already durable; boot recovery starts it after a shutdown.
+		if err := h.s.sendToSessionLocked(ctx, id, text); err != nil && !errors.Is(err, errDaemonShuttingDown) {
+			return err
+		}
+
+		return nil
+	}()
+	if err != nil || !command {
 		return err
 	}
 
-	return nil
+	_, err = h.s.handleGenericCommand(ctx, input)
+
+	return err
 }
 
 func (h assistantHost) Stop(ctx context.Context, id int64) error {
@@ -154,7 +187,7 @@ func (s *svc) assistantAdministrationTools(rec *sessionstore.SessionRecord, scop
 		}
 	}
 
-	return tools
+	return append(tools, configapply.NewConfigEdit(rec.ID, s.applier), configapply.NewConfigRead(rec.ID, s.applier))
 }
 
 func (s *svc) assistantBudgetTarget(scope assistant.Scope) func(context.Context, int64) (int64, bool, error) {

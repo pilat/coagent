@@ -538,7 +538,7 @@ func (s *Session) acceptBoundaryText(
 		accept.Receipt = loader.SkillReceipt(prepared.SkillName)
 	}
 
-	if toolID := s.activationIndex[command]; toolID != "" {
+	if toolID := s.activationIndex[command]; toolID != "" && sessionstore.IsHumanInput(input.Source, input.Attributes) {
 		accept.Content += activationInstruction(toolID, command)
 		c.Activation = &sessionstore.ActivationChange{
 			InputID: input.ID,

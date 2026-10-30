@@ -2,6 +2,7 @@ package sessionstore
 
 import (
 	"database/sql"
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -16,7 +17,7 @@ func TestEnqueueTx_AssistantCommands(t *testing.T) {
 		{"observer", map[string]any{"observer_session_id": nil}},
 		{"from", map[string]any{"from": "assistant"}},
 	} {
-		for _, content := range []string{"/budget 5$", "  /config", "/stop", "fix the build", "see a/b"} {
+		for _, content := range []string{"/budget 5$", "/config x", "/review", "/stop", "fix the build", "see a/b"} {
 			t.Run(provenance.name+"/"+content, func(t *testing.T) {
 				t.Parallel()
 				store, db, projectID := newTestStore(t)
@@ -28,16 +29,13 @@ func TestEnqueueTx_AssistantCommands(t *testing.T) {
 					map[string]any{"manager_id": "mgr"},
 				)
 				require.NoError(t, err)
-				rejected := content != "fix the build" && content != "see a/b"
 				err = store.WithTx(t.Context(), func(tx *sql.Tx) error {
-					_, enqueueErr := EnqueueTx(t.Context(), tx, Input{
+					result, enqueueErr := EnqueueTx(t.Context(), tx, Input{
 						SessionID: root.ID, Source: InputSourceUser, Content: content, Attributes: provenance.attrs,
 					})
-					if rejected {
-						require.ErrorIs(t, enqueueErr, ErrAssistantCommand)
-					} else {
-						require.NoError(t, enqueueErr)
-					}
+					require.NoError(t, enqueueErr)
+					require.True(t, result.Applied)
+					assert.Equal(t, content, result.Input.RawContent)
 					return nil
 				})
 				require.NoError(t, err)
@@ -53,12 +51,7 @@ func TestEnqueueTx_AssistantCommands(t *testing.T) {
 						Scan(&activations),
 				)
 				assert.Zero(t, activations)
-				if rejected {
-					assert.Zero(t, inputs)
-					assert.Empty(t, store.TakeWoken())
-				} else {
-					assert.Equal(t, 1, inputs)
-				}
+				assert.Equal(t, 1, inputs)
 			})
 		}
 	}
@@ -73,4 +66,30 @@ func TestEnqueueTx_UserCommand(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, result.Applied)
 	assert.Equal(t, "/budget 5$", result.Input.RawContent)
+}
+
+func TestActivationRejectsAssistantProvenance(t *testing.T) {
+	for _, attrs := range []map[string]any{
+		{ObserverSessionIDAttribute: nil},
+		{"from": "assistant"},
+	} {
+		t.Run(fmt.Sprint(attrs), func(t *testing.T) {
+			t.Parallel()
+			store, db, projectID := newTestStore(t)
+			root, err := store.CreateSession(t.Context(), projectID, "model", "", map[string]any{"manager_id": "mgr"})
+			require.NoError(t, err)
+			result, err := store.Enqueue(t.Context(), Input{
+				SessionID: root.ID, Source: InputSourceUser, Content: "/config x", Attributes: attrs,
+			})
+			require.NoError(t, err)
+			_, _, err = acceptActivation(t.Context(), store, result.Input.ID, "/config x",
+				ActivationDraft{ToolID: "config_edit", Command: "/config"})
+			require.ErrorIs(t, err, ErrActivationConflict)
+			assertInputState(t, db, result.Input.ID, InputStatePending)
+			var grants int
+			require.NoError(t, db.QueryRowContext(t.Context(),
+				`SELECT COUNT(*) FROM session_tool_activations WHERE session_id = ?`, root.ID).Scan(&grants))
+			assert.Zero(t, grants)
+		})
+	}
 }

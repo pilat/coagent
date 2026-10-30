@@ -549,20 +549,22 @@ func TestIntegration_ExploreChildIsDeniedControlPlaneTools(t *testing.T) {
 
 	// Without this the child assertions would pass on a daemon that registers nothing at all.
 	parentOffered := h.schemas.offered(parentID)
-	for _, id := range append(append([]string{}, controlPlaneTools...), configPlaneTools...) {
+	for _, id := range controlPlaneTools {
 		assert.Contains(t, parentOffered, id, "root session must keep %q", id)
 	}
+	assertNotOffered(t, parentOffered, configPlaneTools)
 	require.NoError(t, llm.ValidateToolPairing(h.messages(parentID)))
 }
 
-// config_edit reaches every root session whatever its channel or manager attributes; children never receive it.
-func TestIntegration_ConfigEditReachesEveryRootNoChild(t *testing.T) {
+func TestIntegration_ConfigToolsReachOnlyAssistantRoots(t *testing.T) {
 	tests := []struct {
 		name  string
 		attrs map[string]any
+		agent string
 	}{
 		{name: "channel-less root"},
 		{name: "ordinary cli root", attrs: map[string]any{"channel": "cli"}},
+		{name: "general root", attrs: managerAttrs("telegram-main"), agent: "general"},
 		{
 			name:  "manager-owned root",
 			attrs: managerAttrs("telegram-main"),
@@ -574,12 +576,33 @@ func TestIntegration_ConfigEditReachesEveryRootNoChild(t *testing.T) {
 				return textReply("done")
 			})
 			h.startInboxWake()
-			sessionID, err := h.mgr.Send(h.ctx, h.projectID, "configure", "fake-model", tt.attrs)
-			require.NoError(t, err)
+			sessionID := h.createRoot(tt.attrs)
+			if tt.agent != "" {
+				_, err := h.db.ExecContext(
+					h.ctx,
+					`UPDATE sessions SET agent_type = ? WHERE id = ?`,
+					tt.agent,
+					sessionID,
+				)
+				require.NoError(t, err)
+			}
+			require.NoError(t, h.mgr.sendToSession(h.ctx, sessionID, "configure"))
 			h.waitUntil("session idle", func() bool { return !h.mgr.HasActiveLoop(sessionID) })
-			assert.Contains(t, h.schemas.offered(sessionID), tool.IDConfigEdit)
+			assertNotOffered(t, h.schemas.offered(sessionID), configPlaneTools)
 		})
 	}
+	t.Run("assistant", func(t *testing.T) {
+		h := newGatingHarness(t, nil, func(string, []llmwire.Message) *llmwire.Response {
+			return textReply("done")
+		})
+		root, err := h.mgr.EnsureAssistantRoot(h.ctx, "telegram-main")
+		require.NoError(t, err)
+		require.NoError(t, h.mgr.sendToSession(h.ctx, root.ID, "configure"))
+		h.waitUntil("assistant idle", func() bool { return !h.mgr.HasActiveLoop(root.ID) })
+		for _, id := range configPlaneTools {
+			assert.Contains(t, h.schemas.offered(root.ID), id)
+		}
+	})
 	t.Run("child", func(t *testing.T) {
 		const exploreCallID = "task-explore-config-edit"
 		respond := func(_ string, msgs []llmwire.Message) *llmwire.Response {
@@ -606,7 +629,7 @@ func TestIntegration_ConfigEditReachesEveryRootNoChild(t *testing.T) {
 		h.waitUntil("session idle", func() bool { return !h.mgr.HasActiveLoop(parentID) })
 		h.assertUnknownTools(link.ChildID, configPlaneTools)
 		assertNotOffered(t, h.schemas.offered(link.ChildID), configPlaneTools)
-		assert.Contains(t, h.schemas.offered(parentID), tool.IDConfigEdit)
+		assertNotOffered(t, h.schemas.offered(parentID), configPlaneTools)
 	})
 }
 

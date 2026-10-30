@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/pilat/coagent/internal/llmwire"
+	"github.com/pilat/coagent/internal/sessionstore"
 	"github.com/pilat/coagent/internal/tool"
 )
 
@@ -112,8 +113,13 @@ var _ tool.Tool = (*assistantTool)(nil)
 // Host provides work-session lifecycle; Deliver's transaction rechecks authority.
 type Host interface {
 	CreateWork(ctx context.Context, owner string, projectID int64, name, workDir, title string) (int64, error)
-	// Deliver commits enqueue under the session's tree lock, then wakes it.
-	Deliver(ctx context.Context, sessionID int64, text string, enqueue func(*sql.Tx) error) error
+	// Deliver commits enqueue under the tree lock, then dispatches commands or wakes the session.
+	Deliver(
+		ctx context.Context,
+		sessionID int64,
+		text string,
+		enqueue func(*sql.Tx, map[string]any) (*sessionstore.InboxInput, error),
+	) error
 	Stop(ctx context.Context, sessionID int64) error
 	FocusChat(ctx context.Context, owner string, sessionID int64) error
 	Models(ctx context.Context) ([]Model, error)

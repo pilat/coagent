@@ -61,7 +61,7 @@ does not imply a tier except where it expresses an implementation variant.
 - `cmd/coagent` — composition root, CLI product policy and daemon lifecycle commands. Refuses any non-Linux platform at process entry, before the guardian or command dispatch ([ADR-0062](docs/adr/0062-linux-only-supported-runtime.md)).
 - `internal/assistant` — desk rendering, immediate assistant tools, work-root reads, and durable memory, focus and search index.
 - `internal/bashsandbox` — Linux Bubblewrap confinement and process launch for session-owned workloads. Builds one ordered mount plan from a compiled policy; non-Linux builds carry only a compile-time fallback that returns an unsupported-backend error.
-- `internal/budget` — one-shot root-tree budget policy and its user-authorized tool.
+- `internal/budget` — one-shot root-tree budget policy, human-granted changes and assistant-delegated work budgets.
 - `internal/catalog` — external model metadata acquisition, caching and identifier matching.
 - `internal/coagenthome` — sole resolver and name owner for the coagent home directory, including each project's process output.
 - `internal/config` — typed configuration and secrets resolution policy.
@@ -486,7 +486,7 @@ Neither package publishes automatic output or owns delivery readiness. The
 daemon publishes idle for a completed, parked, stopped or killed root when its
 runner is no longer active, regardless of whether its output has been sent.
 
-`/budget` grants one exact manager-user input authority to arm, replace or clear
+`/budget` grants one exact manager-owned human input authority to arm, replace or clear
 a one-shot root-tree cost/duration checkpoint, consuming the grant inside the
 same transaction as the mutation it authorizes. Model responses and successful
 compaction summaries commit usage, fire comparison, skipped returned-tool
@@ -500,8 +500,10 @@ due roots to the inbox wake worker; timer callbacks never perform ledger writes.
 Failed deadline observations and unfinished parks remain retryable without
 reviving a newer generation. Parking joins runners before taking the tree fence,
 then rechecks liveness under that fence.
-The next ordinary model-bound root
-input atomically releases a fired checkpoint and resumes only the root.
+The next ordinary model-bound human input to the root atomically releases a fired
+checkpoint and resumes only the root. Assistant input is refused while the budget
+is fired; control and read-only commands still pass. The assistant lifts a work
+checkpoint explicitly by setting or clearing its budget.
 
 An armed generation remains armed across an ordinary final response while the
 tree has an advertised running process, an undelivered background child, or
@@ -821,8 +823,8 @@ child's ordinary initial-input path; the child does not rediscover it by name.
 Every configured manager ensures an assistant root in the hidden ordinary
 project at `<projects_root>/sys_coagent`. The reserved directory cannot be
 claimed by user projects; `hidden` controls discovery and grants no authority.
-Work roots and the assistant expose `config_read` and `config_edit` under the
-same durable `/config` grant. Only edit declares the activation route; read
+Only the assistant root exposes `config_read` and `config_edit` under the
+same durable human `/config` grant. Only edit declares the activation route; read
 returns the exact trusted configuration document without consuming the grant.
 An edit replaces the complete document, restarts, boot-validates and rolls back
 on failure. A configuration question or bare activation is not a change request.
@@ -878,10 +880,13 @@ selection in the same transaction. An unbound chat or a user already in work is
 refused. The assistant cannot move the user out of work or back to itself;
 delivery observes the ordinary selection change without a separate chat message.
 Work-root model changes use the same daemon path as the manager's model picker.
-Targeted budgets consume the assistant root's current `/budget` grant while
-arming or clearing the target root and capturing its cost baseline. Pricing is
-read from the target's model at execution. Only the assistant receives the receipt;
-the work root's output log receives neither budget nor model notices.
+The assistant sets or clears work-root budgets on an ordinary request; its own
+budget still requires the current human `/budget` grant. A current grant is consumed
+for any target. Without one, the store authorizes a delegated mutation only from
+an assistant root to a different live, non-assistant root with the same non-empty
+manager owner. The receipt key makes replay a no-op before generation or baseline
+changes. Pricing is read from the target's model at execution. Only the assistant
+receives the receipt; the work root's output log receives neither budget nor model notices.
 
 All tool effects execute immediately through the ordinary tool protocol, return
 real ids and survive a later model failure. Memory and focus enforce their limits
@@ -896,12 +901,14 @@ later activation; boot instead settles interrupted calls as typed failures.
 Every open/send appends the latest accepted user input still linked to an active
 transcript row, trimmed and CRLF-normalized as a blockquote. Its label warns that
 the user works with several sessions and some words may concern other work.
-Instructions already containing those words and activations without an active
-user row receive no quote. Multiple handovers each receive it. Open/send refuse
-slash-prefixed instructions before effects, including root creation. The store's
-enqueue boundary independently refuses trimmed slash text carrying assistant
-provenance (`observer_session_id` or `from=assistant`), preventing forged user
-commands and activation grants.
+Instructions already containing those words, slash-prefixed instructions and
+activations without an active user row receive no quote. Multiple handovers each
+receive it. Open/send deliver commands and `/skill <name> [args]` verbatim. Generic
+commands dispatch after delivery releases the tree lock, just as human commands do.
+One session-store predicate defines human input: `source=user`, no
+`observer_session_id` key regardless of value, and `from` different from `assistant`.
+Only human input creates activation grants or releases a fired budget; assistant
+commands otherwise retain ordinary command dispatch, skill expansion and resume semantics.
 
 Every assistant instruction carries its observer root reference in its work
 inbox row. A non-yield final of the work root enqueues one answered agent input
@@ -927,7 +934,8 @@ protected from stop, kill, clear and compact. The session model is
 recorded in [ADR-0074](docs/adr/0074-assistant-is-an-ordinary-session-with-a-desk-head.md),
 superseding [ADR-0073](docs/adr/0073-assistant-turn-is-a-buffered-tool-loop.md), with
 observer delivery recorded in [ADR-0075](docs/adr/0075-work-answers-reach-the-observer-through-its-inbox.md)
-and work administration in [ADR-0077](docs/adr/0077-assistant-moves-the-user-in-never-out.md).
+and work administration in [ADR-0077](docs/adr/0077-assistant-moves-the-user-in-never-out.md),
+amended by [ADR-0078](docs/adr/0078-assistant-input-is-never-human-authority.md).
 
 ### Daemon, sessions and persistence
 
@@ -1114,8 +1122,8 @@ Config owns parsing and secret-sink resolution; config operations own
 whole-document staging that accepts literal credential values and `${VAR}`
 references alike, backup retention and pending-apply recovery. Config apply owns
 the agent-facing schema and strict argument parsing; the `/config`
-read/edit tools register on work roots and the assistant; an edit commits only
-under the durable `/config` activation. Config apply owns the staged
+read/edit tools register only on the assistant root; an edit commits only
+under the durable human `/config` activation. Config apply owns the staged
 ledger, process-wide commit claim and restart channel; the daemon gates tool
 availability and calls apply under its tree fence after suspension persists.
 One-shot `/config` grant settlement
@@ -1149,6 +1157,7 @@ accept one leading `#` on the session number.
 Commands and media route to the durable focus; heartbeats type only for the
 loop's focused root. The assistant accepts model, configuration, budget and
 schedule operations, but refuses work-only stop/kill/clear/compact/worktree flows.
+`/config` is accepted only on Assistant; work focus receives a refusal before forwarding.
 
 Work roots carry a one-line session title in their attributes. The first inserted
 non-command user input names an untitled root atomically with its inbox row;

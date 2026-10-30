@@ -170,7 +170,7 @@ func configApplyRespond(_ string, msgs []llmwire.Message) *llmwire.Response {
 	if hasToolResultFor(msgs, tool.IDConfigEdit) {
 		return textReply("configuration replaced")
 	}
-	if hasUserContaining(msgs, configapply.ConfigEditCommand) {
+	if hasConfigInput(msgs) {
 		return callReply(applyCallID, tool.IDConfigEdit, `{"document":`+mustQuoteJSON(configEditCandidate)+`}`)
 	}
 	return textReply("ready to reconfigure")
@@ -224,16 +224,7 @@ func stageApplyAndStop(t *testing.T, dbPath, configDir string) int64 {
 	t.Helper()
 	first := newApplyDaemon(t, dbPath, configDir)
 	first.startInboxWake()
-	sessionID, err := first.mgr.Send(
-		first.ctx, first.projectID, "reconfigure the daemon", "fake-model", managerAttrs("telegram:main"),
-	)
-	require.NoError(t, err)
-	first.waitUntil("opener turn settled", func() bool {
-		return !first.mgr.HasActiveLoop(sessionID)
-	})
-	first.waitUntil("session idle", func() bool { return !first.mgr.HasActiveLoop(sessionID) })
-	first.startInboxWake()
-	require.NoError(t, first.mgr.sendToSession(first.ctx, sessionID, configapply.ConfigEditCommand))
+	sessionID := startConfigEditSession(t, first, "reconfigure the daemon")
 	first.waitUntil("restart requested", func() bool {
 		select {
 		case <-first.restarts:
@@ -256,6 +247,44 @@ func stageApplyAndStop(t *testing.T, dbPath, configDir string) int64 {
 	require.Zero(t, countToolResultsFor(msgs, tool.IDConfigEdit), "the call is out with the world")
 	first.shutdown()
 	return sessionID
+}
+
+func stagePlainRootApplyAndStop(t *testing.T, dbPath, configDir string) int64 {
+	t.Helper()
+	first := newApplyDaemon(t, dbPath, configDir)
+	id := first.createRoot(managerAttrs("telegram:main"))
+	input, err := first.store.Enqueue(first.ctx, sessionstore.Input{
+		SessionID: id, Source: sessionstore.InputSourceUser, Content: configapply.ConfigEditCommand,
+	})
+	require.NoError(t, err)
+	calls, err := json.Marshal([]llmwire.ToolCall{{ID: applyCallID, Name: tool.IDConfigEdit}})
+	require.NoError(t, err)
+	_, err = first.store.Commit(first.ctx, sessionstore.Commit{
+		SessionID: id,
+		Accept: []sessionstore.Accept{{
+			InputID: input.Input.ID, State: sessionstore.InputStateAccepted,
+			Content: configapply.ConfigEditCommand, LinkRef: -1, ModelBound: true,
+		}},
+		Activation: &sessionstore.ActivationChange{
+			InputID: input.Input.ID, ToolID: tool.IDConfigEdit,
+			Command: configapply.ConfigEditCommand, State: sessionstore.ActivationPending,
+		},
+		Messages: []*transcript.Message{{Role: llmwire.RoleAssistant, ToolCalls: calls}},
+	})
+	require.NoError(t, err)
+	_, err = configapply.NewConfigEdit(id, first.mgr.applier).Execute(
+		grantedCall(first.ctx, id, applyCallID), configEditArgs(configEditCandidate))
+	require.ErrorIs(t, err, tool.ErrSuspend)
+	require.NoError(t, first.store.UpdateSessionStatus(first.ctx, id, sessionstore.SessionStatusSuspended))
+	first.mgr.applier.RunStagedApply(first.ctx, id)
+	require.Len(t, first.restarts, 1)
+	pending, err := first.ops.LoadPending()
+	require.NoError(t, err)
+	require.NotNil(t, pending)
+	require.Equal(t, id, pending.SessionID)
+	require.Equal(t, applyCallID, pending.ToolCallID)
+	first.shutdown()
+	return id
 }
 
 const configEditCandidate = `providers:
@@ -1260,8 +1289,12 @@ func (h *harness) linkByCall(parentID int64, callID string) *subagent.Link {
 
 func (h *harness) outbox(sessionID int64) []outboxRow {
 	h.t.Helper()
-	rows, err := h.db.QueryContext(h.ctx, `SELECT id, session_id, type, source_key, content, releases_input
-		FROM session_outbox WHERE session_id = ? ORDER BY id`, sessionID)
+	rows, err := h.db.QueryContext(
+		h.ctx,
+		`SELECT id, session_id, type, COALESCE(source_key, ''), content, releases_input
+		FROM session_outbox WHERE session_id = ? ORDER BY id`,
+		sessionID,
+	)
 	require.NoError(h.t, err)
 	defer rows.Close()
 	var out []outboxRow

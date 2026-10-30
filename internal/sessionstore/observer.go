@@ -33,6 +33,12 @@ const ObserverOpenInputSQL = `json_type(i.attributes, '$.observer_session_id') =
 
 type observerWindow struct{ observer, lower int64 }
 
+// IsHumanInput excludes assistant provenance from authority-bearing user input.
+func IsHumanInput(source InputSource, attributes map[string]any) bool {
+	_, observed := attributes[ObserverSessionIDAttribute]
+	return source == InputSourceUser && !observed && attributes["from"] != "assistant"
+}
+
 // ClipMiddle keeps the head and tail so the end of a long text stays visible.
 func ClipMiddle(text string, limit int) string {
 	chars := []rune(text)

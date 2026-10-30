@@ -4,6 +4,7 @@
 - **Date:** 2026-10-29
 - **Amends:** [ADR-0074](0074-assistant-is-an-ordinary-session-with-a-desk-head.md),
   [ADR-0076](0076-flat-chat-with-a-focus.md)
+- **Amended by:** [ADR-0078](0078-assistant-input-is-never-human-authority.md) — reverses "Slash commands belong to the user" and "Budgets for work go through the user's /budget grant on #0"; the store barrier gives way to a human-input predicate
 
 ## Context
 

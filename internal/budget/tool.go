@@ -12,7 +12,10 @@ import (
 	"github.com/pilat/coagent/internal/tool"
 )
 
-const ToolID = "set_budget"
+const (
+	ToolID        = "set_budget"
+	budgetCommand = "/budget"
+)
 
 const noActivationMessage = "This change requires a current user message beginning with /budget."
 
@@ -39,7 +42,7 @@ func NewTool(store Store, rootID int64, priced bool) tool.Tool {
 	return &budgetTool{store: store, rootID: rootID, priced: priced}
 }
 
-// NewTargetedTool keeps grants on the caller while resolving current target authority and pricing.
+// NewTargetedTool resolves work authority and pricing while gating changes to the caller's own budget.
 func NewTargetedTool(store Store, rootID int64, resolve func(context.Context, int64) (int64, bool, error)) tool.Tool {
 	return &budgetTool{store: store, rootID: rootID, resolve: resolve}
 }
@@ -51,14 +54,15 @@ func (t *budgetTool) ParallelSafe() bool { return false }
 func (t *budgetTool) Description() string {
 	if t.resolve != nil {
 		return "Reads or changes a work session's one-shot cost/wall-time checkpoint; omit session for your own root. " +
-			"action=get is read-only; set and clear require the current real user message to begin with /budget."
+			"For a work session, set and clear act at once on an ordinary request. action=get is read-only; " +
+			"changing your own budget requires the current real user message to begin with /budget."
 	}
 
 	return "Reads or changes the root session's one-shot cost/wall-time checkpoint. " +
 		"action=get is read-only; set and clear require the current real user message to begin with /budget."
 }
 
-func (t *budgetTool) ActivationCommands() []string { return []string{"/budget"} }
+func (t *budgetTool) ActivationCommands() []string { return []string{budgetCommand} }
 
 func (t *budgetTool) Parameters() json.RawMessage {
 	if t.resolve != nil {
@@ -132,7 +136,7 @@ func (t *budgetTool) set(ctx context.Context, params toolParams) (*tool.Result, 
 		return nil, err
 	}
 
-	grant, err := currentGrant(ctx, t.rootID)
+	mutation, err := t.mutation(ctx, root)
 	if err != nil {
 		return nil, err
 	}
@@ -149,11 +153,9 @@ func (t *budgetTool) set(ctx context.Context, params toolParams) (*tool.Result, 
 
 	receipt := "Budget armed" + t.targetSuffix(root) + ": " + renderLimits(cost, duration)
 
-	record, err := t.store.Arm(ctx, Mutation{
-		RootSessionID: root, GrantSessionID: grant.RootID, InputID: grant.InputID, ToolID: grant.ToolID,
-		Command: grant.Command, ToolCallID: grant.ToolCallID,
-		CostLimitUSD: cost, DurationSeconds: seconds, Receipt: receipt,
-	})
+	mutation.CostLimitUSD, mutation.DurationSeconds, mutation.Receipt = cost, seconds, receipt
+
+	record, err := t.store.Arm(ctx, mutation)
 	if err != nil {
 		return nil, err
 	}
@@ -166,22 +168,21 @@ func (t *budgetTool) clear(ctx context.Context, params toolParams) (*tool.Result
 		return nil, errors.New("clear does not accept limit fields")
 	}
 
-	grant, err := currentGrant(ctx, t.rootID)
+	root, _, err := t.target(ctx, params.Session)
 	if err != nil {
 		return nil, err
 	}
 
-	root, _, err := t.target(ctx, params.Session)
+	mutation, err := t.mutation(ctx, root)
 	if err != nil {
 		return nil, err
 	}
 
 	receipt := "Budget cleared" + t.targetSuffix(root)
 
-	record, err := t.store.Clear(ctx, Mutation{
-		RootSessionID: root, GrantSessionID: grant.RootID, InputID: grant.InputID, ToolID: grant.ToolID,
-		Command: grant.Command, ToolCallID: grant.ToolCallID, Receipt: receipt,
-	})
+	mutation.Receipt = receipt
+
+	record, err := t.store.Clear(ctx, mutation)
 	if err != nil {
 		return nil, err
 	}
@@ -225,11 +226,35 @@ func (t *budgetTool) targetSuffix(root int64) string {
 	return fmt.Sprintf(" for #%d", root)
 }
 
+func (t *budgetTool) mutation(ctx context.Context, root int64) (Mutation, error) {
+	value, ok := tool.ActivationGrantFromContext(ctx)
+
+	current := ok && value.SessionID == t.rootID && value.ToolID == ToolID && value.Command == budgetCommand
+	if t.resolve != nil && root != t.rootID && !current {
+		callID := tool.CallIDFromContext(ctx)
+		if callID == "" {
+			return Mutation{}, errors.New("budget change requires a tool call id")
+		}
+
+		return Mutation{RootSessionID: root, GrantSessionID: t.rootID, ToolID: ToolID, ToolCallID: callID}, nil
+	}
+
+	grant, err := currentGrant(ctx, t.rootID)
+	if err != nil {
+		return Mutation{}, err
+	}
+
+	return Mutation{
+		RootSessionID: root, GrantSessionID: grant.RootID, InputID: grant.InputID, ToolID: grant.ToolID,
+		Command: grant.Command, ToolCallID: grant.ToolCallID,
+	}, nil
+}
+
 func currentGrant(ctx context.Context, rootID int64) (Grant, error) {
 	value, ok := tool.ActivationGrantFromContext(ctx)
 
 	callID := tool.CallIDFromContext(ctx)
-	if !ok || value.SessionID != rootID || value.ToolID != ToolID || value.Command != "/budget" ||
+	if !ok || value.SessionID != rootID || value.ToolID != ToolID || value.Command != budgetCommand ||
 		(value.ToolCallID != "" && value.ToolCallID != callID) {
 		//nolint:staticcheck // Exact user-facing contract includes punctuation.
 		return Grant{}, errors.New(noActivationMessage)

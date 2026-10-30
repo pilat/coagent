@@ -52,9 +52,10 @@ func TestAssistantPromptIncludesBoundedHostAdministration(t *testing.T) {
 		"/switch", "global MCP", "every turn kind", "no general file, shell or web access",
 		"switch the user into a session", "they switch themselves", "they return with /assistant",
 		"models to list configured model ids", "set_model(session, model, effort?)",
-		"message beginning with /budget on #0", "only tool call in its response",
-		"One /budget message permits one successful mutation", "Omit session for your own budget",
-		"Never put slash commands into send/open", "instruction must not begin with /",
+		"only tool call in its response", "Omit session for your own budget",
+		"change your own budget first", "/skill <name> [args]", "on an ordinary request",
+		"/config and /budget sent there grant you nothing", "/config on #0, never inside a work session",
+		"refuses send until you raise or clear its budget",
 	} {
 		assert.Contains(t, AssistantPrompt, text)
 	}
@@ -64,4 +65,6 @@ func TestAssistantPromptIncludesBoundedHostAdministration(t *testing.T) {
 	}
 	assert.NotContains(t, AssistantPrompt, "set your own budget on /budget")
 	assert.NotContains(t, AssistantPrompt, "Your schedule and budget tools affect your own assistant root")
+	assert.NotContains(t, AssistantPrompt, "commands belong to the user")
+	assert.NotContains(t, AssistantPrompt, "/etc/nginx.conf")
 }

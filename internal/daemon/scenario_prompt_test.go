@@ -367,8 +367,11 @@ func assertInitialRegistryProjection(
 ) {
 	t.Helper()
 	firstSchemas := schemas.first(t, parentID)
-	for _, id := range append(dynamicRootTools(), configToolsForPromptScenario()...) {
+	for _, id := range dynamicRootTools() {
 		assert.Contains(t, firstSchemas, id, "root activation must expose daemon-registered %q", id)
+	}
+	for _, id := range configToolsForPromptScenario() {
+		assert.NotContains(t, firstSchemas, id)
 	}
 	assert.NotContains(t, firstSchemas, "mcp__fake__ping")
 	firstPrompt := prompts.first(t, strconv.FormatInt(parentID, 10))
@@ -396,8 +399,9 @@ func assertNextRegistryProjection(
 	lastSchemas := schemas.last(t, parentID)
 	assert.Contains(t, lastSchemas, "mcp__fake__ping")
 	assert.Contains(t, lastSchemas, tool.IDTask)
-	assert.Contains(t, lastSchemas, tool.IDConfigEdit)
-	assert.Contains(t, lastSchemas, tool.IDConfigRead)
+	for _, id := range configToolsForPromptScenario() {
+		assert.NotContains(t, lastSchemas, id)
+	}
 	assert.Contains(t, toolResultForCallID(h.messages(parentID), "ping-next-activation").Content, "pong from registry")
 	lastPrompt := prompts.last(t, strconv.FormatInt(parentID, 10))
 	assert.Contains(t, lastPrompt, "Sub-agents: task")
