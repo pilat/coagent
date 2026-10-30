@@ -46,10 +46,19 @@ func (p *chatPort) Outputs(ctx context.Context, sessionID int64, limit int) ([]m
 
 	outputs := make([]managerdelivery.ChatRow, 0, len(rows))
 	for _, row := range rows {
-		outputs = append(outputs, managerdelivery.ChatRow{ID: row.ID, Type: row.Type, Content: row.Content})
+		outputs = append(outputs, chatRow(row))
 	}
 
 	return outputs, nil
+}
+
+func (p *chatPort) LastSeen(ctx context.Context, sessionID int64) (managerdelivery.ChatRow, bool, error) {
+	row, found, err := p.controller.LastSeenChatOutput(ctx, p.chatID, sessionID)
+	if err != nil {
+		return managerdelivery.ChatRow{}, false, fmt.Errorf("read telegram last seen chat output: %w", err)
+	}
+
+	return chatRow(row), found, nil
 }
 
 func (p *chatPort) MarkSeen(ctx context.Context, sessionID, outboxID int64) error {
@@ -92,4 +101,8 @@ func (t *outputTransport) Send(ctx context.Context, text string) managerdelivery
 	}
 
 	return managerdelivery.SendResult{}
+}
+
+func chatRow(row controllerapi.ChatOutput) managerdelivery.ChatRow {
+	return managerdelivery.ChatRow{ID: row.ID, Name: row.Name, Type: row.Type, Content: row.Content}
 }

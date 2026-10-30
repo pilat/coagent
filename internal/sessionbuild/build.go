@@ -48,6 +48,7 @@ type BuildInput struct {
 	Schedules                string
 	Status                   string
 	OutputEnabled            bool
+	ToolTrail                bool
 	PreserveStoppedStatus    bool
 	ActiveSubagents          []sessionprompt.ActiveSubagentInfo
 	ActiveProcesses          []sessionprompt.ActiveProcessInfo
@@ -156,6 +157,7 @@ func build(
 		ExternalCalls:            in.ExternalCalls,
 		OpeningContext:           openingContext,
 		OutputEnabled:            in.OutputEnabled,
+		ToolTrail:                in.ToolTrail,
 		PreserveStopped:          in.PreserveStoppedStatus,
 		Schedules:                in.Schedules,
 		Status:                   in.Status,

@@ -6,12 +6,17 @@
       "name": "<name>",
       "work_dir": "<workdir>",
       "attributes": {
-        "manager_id": "telegram:main"
+        "manager_id": "telegram:main",
+        "title": "run the long child"
       }
     },
     {
       "type": "state_changed",
       "status": "running"
+    },
+    {
+      "type": "message",
+      "message": "→ task: `scenario`"
     },
     {
       "type": "waiting",
@@ -28,7 +33,8 @@
       "name": "<name>",
       "work_dir": "<workdir>",
       "attributes": {
-        "manager_id": "telegram:main"
+        "manager_id": "telegram:main",
+        "title": "run the long child"
       }
     },
     {
@@ -54,6 +60,13 @@
     },
     {
       "id": 2,
+      "session_id": 1,
+      "type": "message",
+      "content": "→ task: `scenario`",
+      "source_key": "message:2:reply"
+    },
+    {
+      "id": 3,
       "session_id": 1,
       "type": "message",
       "content": "parent collected the long child",

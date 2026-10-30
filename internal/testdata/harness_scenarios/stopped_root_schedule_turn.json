@@ -6,7 +6,8 @@
       "name": "<name>",
       "work_dir": "<workdir>",
       "attributes": {
-        "manager_id": "telegram-main"
+        "manager_id": "telegram-main",
+        "title": "initialize"
       }
     },
     {

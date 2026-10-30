@@ -6,7 +6,8 @@
       "name": "<name>",
       "work_dir": "<workdir>",
       "attributes": {
-        "manager_id": "telegram:main"
+        "manager_id": "telegram:main",
+        "title": "long work"
       }
     },
     {
@@ -15,7 +16,7 @@
     },
     {
       "type": "message",
-      "message": "Working on it"
+      "message": "Working on it\n\n→ ls: `.`"
     },
     {
       "type": "message",
@@ -35,7 +36,8 @@
       "name": "<name>",
       "work_dir": "<workdir>",
       "attributes": {
-        "manager_id": "telegram:main"
+        "manager_id": "telegram:main",
+        "title": "long work"
       }
     },
     {
@@ -63,7 +65,7 @@
       "id": 2,
       "session_id": 1,
       "type": "message",
-      "content": "Working on it",
+      "content": "Working on it\n\n→ ls: `.`",
       "source_key": "message:2:reply"
     },
     {

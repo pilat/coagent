@@ -161,7 +161,7 @@ func (s *Session) prepareAcceptedAttempt(
 
 	c.State.EmptyStopStreak = &zero
 	if len(response.ToolCalls) > 0 {
-		prepareToolResponse(c, response, state)
+		s.prepareToolResponse(c, response, state)
 		return nil
 	}
 
@@ -260,15 +260,26 @@ func (s *Session) commitProjectionFailure(ctx context.Context, r *runState, c se
 	return cause
 }
 
-func prepareToolResponse(
+func (s *Session) prepareToolResponse(
 	c *sessionstore.Commit,
 	response *llmwire.Response,
 	state *sessionstore.CompletionCheckState,
 ) {
 	c.State.Candidate = &sessionstore.CandidateChange{Expected: durableCandidateID(state), NextRef: -1}
-	if strings.TrimSpace(response.Text) != "" {
+
+	text := response.Text
+	if s.toolTrail {
+		trail := renderToolTrail(response.ToolCalls, s.workDir)
+		if strings.TrimSpace(text) == "" {
+			text = trail
+		} else {
+			text += "\n\n" + trail
+		}
+	}
+
+	if strings.TrimSpace(text) != "" {
 		c.Unfired.Outputs = []sessionstore.Output{
-			{Type: sessionstore.OutputMessage, Content: response.Text, MessageRef: 0, Phase: "reply"},
+			{Type: sessionstore.OutputMessage, Content: text, MessageRef: 0, Phase: "reply"},
 		}
 	}
 }

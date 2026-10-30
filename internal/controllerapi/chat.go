@@ -12,6 +12,7 @@ type ChatFocusController interface {
 	SetSessionTitle(ctx context.Context, chatID string, sessionID int64, title string) error
 	ResetChatFocus(ctx context.Context, chatID string, from int64) (bool, error)
 	ChatOutputs(ctx context.Context, chatID string, sessionID int64, limit int) ([]ChatOutput, error)
+	LastSeenChatOutput(ctx context.Context, chatID string, sessionID int64) (ChatOutput, bool, error)
 	MarkChatSeen(ctx context.Context, chatID string, sessionID, outboxID int64) error
 	ChatSessions(ctx context.Context, chatID string) ([]ChatSessionInfo, error)
 	SessionKilled(ctx context.Context, sessionID int64) (bool, error)
@@ -20,6 +21,7 @@ type ChatFocusController interface {
 type ChatOutput struct {
 	ID        int64  `json:"id"`
 	SessionID int64  `json:"session_id"`
+	Name      string `json:"name"`
 	Type      string `json:"type"`
 	Content   string `json:"content"`
 }

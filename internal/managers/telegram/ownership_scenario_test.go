@@ -2,6 +2,7 @@ package telegram
 
 import (
 	"context"
+	"fmt"
 	"strconv"
 	"testing"
 
@@ -50,7 +51,9 @@ func TestHarnessScenario_DurableManagerOwnershipReachesOnlyTelegramRenderer(t *t
 			messages = append(messages, call.Text)
 		}
 	}
-	assert.Equal(t, []string{"owner answer", "owner barrier"}, messages)
+	assert.Equal(t, []string{
+		fmt.Sprintf("#%d project\nowner answer", owned.ID), fmt.Sprintf("#%d project\nowner barrier", owned.ID),
+	}, messages)
 	seen, err := h.sessions.ChatSeen(t.Context(), delayedTelegramManagerID, chatID, foreign.ID)
 	require.NoError(t, err)
 	assert.Zero(t, seen)

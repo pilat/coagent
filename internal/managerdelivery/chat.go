@@ -19,6 +19,11 @@ const (
 
 var _ ChatLoop = (*chatLoop)(nil)
 
+type chatPreludeItem struct {
+	text               string
+	dropOnRowPermanent bool
+}
+
 type chatLoop struct {
 	port      ChatPort
 	transport ChatTransport
@@ -31,7 +36,7 @@ type chatLoop struct {
 
 	initialized bool
 	lastFocus   int64
-	prelude     []string
+	prelude     []chatPreludeItem
 	failures    int64
 }
 
@@ -140,7 +145,13 @@ func (w *chatLoop) pass(ctx context.Context) time.Duration {
 	}
 
 	for len(w.prelude) > 0 {
-		result := w.send(ctx, w.prelude[0])
+		item := w.prelude[0]
+
+		result := w.send(ctx, item.text)
+		if result.Class == SendRowPermanent && item.dropOnRowPermanent {
+			result.Class = SendOK
+		}
+
 		if result.Class != SendOK {
 			if result.Class == SendRowPermanent {
 				result.Class = SendChatFailure
@@ -206,7 +217,7 @@ func (w *chatLoop) tail(ctx context.Context, focus int64) (bool, SendResult) {
 		}
 
 		for _, row := range rows {
-			if result := w.deliverRow(ctx, row); result.Class != SendOK {
+			if result := w.deliverRow(ctx, focus, row); result.Class != SendOK {
 				return false, result
 			}
 
@@ -234,12 +245,12 @@ func (w *chatLoop) tail(ctx context.Context, focus int64) (bool, SendResult) {
 	return false, SendResult{Class: SendTransient, Reason: ctx.Err().Error()}
 }
 
-func (w *chatLoop) deliverRow(ctx context.Context, row ChatRow) SendResult {
+func (w *chatLoop) deliverRow(ctx context.Context, focus int64, row ChatRow) SendResult {
 	if row.Type == "session_opened" || row.Type == "session_replaced" {
 		return SendResult{}
 	}
 
-	result := w.send(ctx, row.Content)
+	result := w.send(ctx, chatRowText(focus, row))
 	if result.Class != SendRowPermanent {
 		return result
 	}

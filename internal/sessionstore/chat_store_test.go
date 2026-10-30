@@ -112,8 +112,8 @@ func TestChatOutputs_OrderedBatchesIncludeLifecycleRows(t *testing.T) {
 	outputs, err := store.ChatOutputs(ctx, "owner", "chat", root.ID, 2)
 	require.NoError(t, err)
 	require.Equal(t, []ChatOutput{
-		{ID: opened.OutputID, SessionID: root.ID, Type: OutputSessionOpened},
-		{ID: first, SessionID: root.ID, Type: OutputMessage, Content: "first"},
+		{ID: opened.OutputID, SessionID: root.ID, Name: "test", Type: OutputSessionOpened},
+		{ID: first, SessionID: root.ID, Name: "test", Type: OutputMessage, Content: "first"},
 	}, outputs)
 	seen, err := store.ChatSeen(ctx, "owner", "chat", root.ID)
 	require.NoError(t, err)
@@ -124,9 +124,9 @@ func TestChatOutputs_OrderedBatchesIncludeLifecycleRows(t *testing.T) {
 	outputs, err = store.ChatOutputs(ctx, "owner", "chat", root.ID, 10)
 	require.NoError(t, err)
 	require.Equal(t, []ChatOutput{
-		{ID: second, SessionID: root.ID, Type: OutputMessage, Content: "second"},
+		{ID: second, SessionID: root.ID, Name: "test", Type: OutputMessage, Content: "second"},
 		{
-			ID: closed.OutputID, SessionID: root.ID, Type: OutputSessionClosed,
+			ID: closed.OutputID, SessionID: root.ID, Name: "test", Type: OutputSessionClosed,
 			Content: "Session killed. Cancelled background processes: 2",
 		},
 	}, outputs)

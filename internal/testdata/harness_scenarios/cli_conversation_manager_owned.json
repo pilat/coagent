@@ -7,7 +7,8 @@
       "work_dir": "<workdir>",
       "attributes": {
         "channel": "cli",
-        "manager_id": "cli"
+        "manager_id": "cli",
+        "title": "configure coagent"
       }
     },
     {

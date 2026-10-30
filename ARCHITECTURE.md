@@ -159,8 +159,11 @@ the same transaction as their transcript/control effects. Its closed vocabulary
 is `message`, `session_opened`, `session_replaced` and `session_closed`.
 Rows keep their owner and stable source-key/fingerprint identity; there are no
 attempts, transport receipts, delivery states or external-message edits.
-Every tool-calling response with text publishes that text as a separate message
-on every turn kind. Confirmed finals and compaction/stop notices also append;
+Every accepted tool-calling step of a work root publishes one message: model text
+when present, then a tool trail, including steps with no text. The assistant
+publishes only non-blank model text, without a trail; subagents publish nothing.
+The trail stays out of the model transcript and observer answers.
+Confirmed finals and compaction/stop notices also append;
 model answers have no footer. A completion candidate stays hidden until confirmed.
 Budget observation and response output share the step transaction.
 
@@ -474,7 +477,11 @@ inbox cancellation for the complete session tree with its terminal state;
 completion committed later observes the killed root and suppresses its handoff.
 Clear uses the same killed-tree boundary.
 Status and events expose stable IDs, state, timing, size, path and bounded text
-previews, never raw command text or complete output.
+previews, never raw command text or complete output. The deliberate exception is
+a work root's step message and its `NotifyMessage` event to the owning manager:
+its tool trail includes the bash command after registered-secret redaction and
+clipping to 80 runes. `/status`, process status/previews and other event kinds
+keep the invariant ([ADR-0079](docs/adr/0079-chat-shows-where-each-message-comes-from-and-every-model-step.md)).
 
 ### Diagnostic status and one-shot budgets
 
@@ -963,8 +970,10 @@ The session package owns model-tool iteration, context projection and loop
 detection. `sessionbuild` assembles the client, loader, builtin/MCP stack and
 owner tools under the agent-type allowlist. `sessionprompt` renders system and
 transcript context. The loop receives those prepared values and emits live
-notifications through its sole outward events port. Live answer notifications
+notifications through its sole outward events port. Final answer notifications
 retain the raw answer; durable manager messages carry the same unadorned text.
+Work-step messages and their live notifications include the same tool trail;
+session assembly fixes this policy at construction, with assistant roots excluded.
 Scheduled announcements and tool direct outputs reach managers only through
 the outbox; their commit metadata excludes them from live message events.
 Ownerless sessions publish live answers without creating manager outbox rows.
@@ -1164,10 +1173,22 @@ non-command user input names an untitled root atomically with its inbox row;
 `/title` renames the focused work root, and `/clear` starts untitled. These writes
 preserve session list order. Session summaries, switch headers and unread digests
 share the display name `<project> · <title>`, or `<project>` when untitled;
-`/sessions` and digests show unread counts.
+`/sessions` and digests show unread counts. `/sessions` puts Assistant first,
+then unread roots, then read roots, each group ordered by last activity and
+descending session ID on ties. Activity is the later timestamp of the newest
+output and newest user/agent inbox row, falling back to creation for empty roots.
+The command shows at most 30 sessions, including Assistant, then an overflow
+count; digest and numbered control commands retain the complete list.
 
-Startup drains the selected tail. A focus change sends a header, an unread
-digest for other live owned roots, then that tail. Digest rows remain unread.
+Startup drains the selected tail. A focus change sends the switch header and,
+only on return to Assistant, an unread digest for other live owned roots.
+Digest rows remain unread. The selected tail follows when unread exists;
+otherwise entry context replays the newest already-seen renderable row without
+moving its watermark. No context is sent when no such row exists.
+Every delivered work row carries a session header, with its display name read
+once per batch; Assistant rows have no session header. Headers are added at
+delivery and are absent from stored output. A row-permanent context failure
+drops that prelude item; transient and chat failures retain it for backoff.
 After each marked row, the loop re-reads chat focus. A changed selection ends
 the old tail before kill/reset handling and immediately starts a new pass;
 remaining old rows stay unread for the next digest.

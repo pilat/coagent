@@ -2,7 +2,6 @@ package managerdelivery
 
 import (
 	"fmt"
-	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -20,6 +19,7 @@ type killDeliveryModel struct {
 	killed      bool
 	reset       bool
 	delivered   []string
+	prelude     []string
 }
 
 type switchDeliveryModel struct {
@@ -66,7 +66,7 @@ func TestHarnessModel_ChatSwitchLeavesOldTailUnread(t *testing.T) {
 				assert.Equal(t, cutoff, fake.seen[12])
 				assert.Equal(t, int64(126), fake.seen[9])
 				assert.Equal(t, []string{
-					"→ #9 B", fmt.Sprintf("#12 A · %d new · A125", switchTailSize-cutoff), "B answer",
+					"→ #9 B", "#9 B\nB answer",
 				}, model.prelude)
 			})
 		}
@@ -96,7 +96,7 @@ func TestChatLoop_KillResetCASPreservesNewSelection(t *testing.T) {
 	w := NewChat(fake, fake).(*chatLoop)
 	require.Zero(t, w.pass(t.Context()))
 	assert.Equal(t, int64(9), fake.focus)
-	assert.Equal(t, []string{"Session killed."}, fake.sent)
+	assert.Equal(t, []string{"#12 project - 12\nSession killed."}, fake.sent)
 	assert.Equal(t, int64(1), fake.seen[12])
 }
 
@@ -111,19 +111,21 @@ func (m *killDeliveryModel) commitKill(t *testing.T) {
 func (m *killDeliveryModel) acceptSend(t *testing.T, text string) {
 	t.Helper()
 
-	if strings.HasPrefix(text, "→") {
-		require.True(t, m.reset)
-		require.Equal(t, "→ #0 Assistant", text)
+	if m.reset {
+		expected := []string{"→ #0 Assistant", "assistant context"}
+		require.Less(t, len(m.prelude), len(expected))
+		require.Equal(t, expected[len(m.prelude)], text)
+		m.prelude = append(m.prelude, text)
 		return
 	}
 
-	expected := []string{"answer"}
+	expected := []string{"#12 project - 12\nanswer"}
 	if m.terminating {
-		expected = append(expected, "Stopping session...")
+		expected = append(expected, "#12 project - 12\nStopping session...")
 	}
 
 	if m.killed {
-		expected = append(expected, "Session killed.")
+		expected = append(expected, "#12 project - 12\nSession killed.")
 	}
 
 	require.Less(t, len(m.delivered), len(expected), "unexpected send after obligations drained")
@@ -134,7 +136,9 @@ func (m *killDeliveryModel) acceptSend(t *testing.T, text string) {
 func (m *killDeliveryModel) acceptReset(t *testing.T, watermark int64) {
 	t.Helper()
 	require.True(t, m.killed, "the terminating fence is insufficient for reset")
-	require.Equal(t, []string{"answer", "Stopping session...", "Session killed."}, m.delivered)
+	require.Equal(t, []string{
+		"#12 project - 12\nanswer", "#12 project - 12\nStopping session...", "#12 project - 12\nSession killed.",
+	}, m.delivered)
 	require.Equal(t, int64(3), watermark, "close must be marked before reset")
 	m.reset = true
 }
@@ -151,13 +155,13 @@ func (m *switchDeliveryModel) acceptSend(t *testing.T, text string) {
 	if !m.switched {
 		require.Less(t, m.sent, m.cutoff, "old-session sends must stop at the switch")
 		m.sent++
-		require.Equal(t, fmt.Sprintf("A%d", m.sent), text)
+		require.Equal(t, fmt.Sprintf("#12 A\nA%d", m.sent), text)
 		return
 	}
 
-	expected := []string{"→ #9 B", fmt.Sprintf("#12 A · %d new · A125", switchTailSize-m.cutoff), "B answer"}
+	expected := []string{"→ #9 B", "#9 B\nB answer"}
 	require.Less(t, len(m.prelude), len(expected), "unexpected send after the new tail")
-	require.Equal(t, expected[len(m.prelude)], text, "old unread output belongs only in the digest")
+	require.Equal(t, expected[len(m.prelude)], text, "a work-session switch must send only its own tail")
 	m.prelude = append(m.prelude, text)
 }
 
@@ -169,6 +173,9 @@ func runChatKillInterleaving(t *testing.T, fenceAt, killAt int) {
 	fake.focus = 12
 	fake.rows[12] = []ChatRow{{ID: 1, Type: "message", Content: "answer"}}
 	fake.rows[9] = []ChatRow{{ID: 50, Type: "message", Content: "never read"}}
+	fake.rows[0] = []ChatRow{{ID: 40, Type: "message", Content: "assistant context"}}
+	fake.seen[0] = 40
+	fake.sessions = []ChatSession{{ID: 0, Name: "Assistant"}}
 	w := NewChat(fake, fake).(*chatLoop)
 	boundary := 0
 	commitFence := func() {
@@ -222,7 +229,10 @@ func runChatKillInterleaving(t *testing.T, fenceAt, killAt int) {
 	require.True(t, model.reset)
 	require.Zero(t, fake.focus)
 	require.Zero(t, w.pass(t.Context()))
-	assert.Equal(t, []string{"answer", "Stopping session...", "Session killed.", "→ #0 Assistant"}, fake.sent)
+	assert.Equal(t, []string{
+		"#12 project - 12\nanswer", "#12 project - 12\nStopping session...",
+		"#12 project - 12\nSession killed.", "→ #0 Assistant", "assistant context",
+	}, fake.sent)
 	assert.Equal(t, int64(3), fake.seen[12])
 	assert.NotContains(t, fake.reads, int64(9))
 	assert.Zero(t, fake.seen[9])

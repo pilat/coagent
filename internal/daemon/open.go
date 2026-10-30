@@ -85,6 +85,7 @@ func (s *svc) openSession(
 
 	owner, _ := rec.Attributes[controllerapi.SessionAttributeManagerID].(string)
 	in.OutputEnabled = rec.ParentID == 0 && owner != ""
+	in.ToolTrail = in.OutputEnabled && rec.AgentType != sessionstore.AssistantAgentType
 	in.ActiveSubagents = s.activeSubagentInfos(ctx, sessionID)
 	in.ActiveProcesses = s.activeProcessInfos(ctx, sessionID)
 

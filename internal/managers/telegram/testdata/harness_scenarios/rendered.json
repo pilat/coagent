@@ -22,13 +22,25 @@
         {
           "method": "sendMessage",
           "chat_id": -100123,
-          "text": "background launched; yielded without sleep",
+          "text": "#1 &lt;name&gt;\n→ task: <code>scenario</code>",
           "parse_mode": "HTML"
         },
         {
           "method": "sendMessage",
           "chat_id": -100123,
-          "text": "background completion delivered",
+          "text": "#1 &lt;name&gt;\n→ sleep",
+          "parse_mode": "HTML"
+        },
+        {
+          "method": "sendMessage",
+          "chat_id": -100123,
+          "text": "#1 &lt;name&gt;\nbackground launched; yielded without sleep",
+          "parse_mode": "HTML"
+        },
+        {
+          "method": "sendMessage",
+          "chat_id": -100123,
+          "text": "#1 &lt;name&gt;\nbackground completion delivered",
           "parse_mode": "HTML"
         }
       ]
@@ -40,13 +52,19 @@
         {
           "method": "sendMessage",
           "chat_id": -100123,
-          "text": "child still running",
+          "text": "#1 &lt;name&gt;\n→ task: <code>scenario</code>",
           "parse_mode": "HTML"
         },
         {
           "method": "sendMessage",
           "chat_id": -100123,
-          "text": "completion after wait",
+          "text": "#1 &lt;name&gt;\nchild still running",
+          "parse_mode": "HTML"
+        },
+        {
+          "method": "sendMessage",
+          "chat_id": -100123,
+          "text": "#1 &lt;name&gt;\ncompletion after wait",
           "parse_mode": "HTML"
         }
       ]
@@ -63,19 +81,25 @@
         {
           "method": "sendMessage",
           "chat_id": -100123,
-          "text": "First answer.",
+          "text": "#1 &lt;name&gt;\n→ ls: <code>.</code>",
           "parse_mode": "HTML"
         },
         {
           "method": "sendMessage",
           "chat_id": -100123,
-          "text": "🔄 Compacting context...",
+          "text": "#1 &lt;name&gt;\nFirst answer.",
           "parse_mode": "HTML"
         },
         {
           "method": "sendMessage",
           "chat_id": -100123,
-          "text": "✅ Context compacted",
+          "text": "#1 &lt;name&gt;\n🔄 Compacting context...",
+          "parse_mode": "HTML"
+        },
+        {
+          "method": "sendMessage",
+          "chat_id": -100123,
+          "text": "#1 &lt;name&gt;\n✅ Context compacted",
           "parse_mode": "HTML"
         }
       ]
@@ -87,7 +111,7 @@
         {
           "method": "sendMessage",
           "chat_id": -100123,
-          "text": "premature candidate answer",
+          "text": "#1 &lt;name&gt;\npremature candidate answer",
           "parse_mode": "HTML"
         }
       ]
@@ -99,7 +123,7 @@
         {
           "method": "sendMessage",
           "chat_id": -100123,
-          "text": "stopped root resumed after restart",
+          "text": "#1 &lt;name&gt;\nstopped root resumed after restart",
           "parse_mode": "HTML"
         }
       ]
@@ -111,7 +135,13 @@
         {
           "method": "sendMessage",
           "chat_id": -100123,
-          "text": "parent collected the long child",
+          "text": "#1 &lt;name&gt;\n→ task: <code>scenario</code>",
+          "parse_mode": "HTML"
+        },
+        {
+          "method": "sendMessage",
+          "chat_id": -100123,
+          "text": "#1 &lt;name&gt;\nparent collected the long child",
           "parse_mode": "HTML"
         }
       ]
@@ -128,13 +158,13 @@
         {
           "method": "sendMessage",
           "chat_id": -100123,
-          "text": "session ready",
+          "text": "#1 &lt;name&gt;\nsession ready",
           "parse_mode": "HTML"
         },
         {
           "method": "sendMessage",
           "chat_id": -100123,
-          "text": "<b><u>Session commands</u></b>\n<code>/status</code> — show session status\n<code>/stop</code> — stop the current run\n<code>/clear</code> — start a fresh session\n<code>/kill</code> — close this session\n<code>/compact [focus]</code> — compact the context\n<code>/schedules</code> — list schedules\n<code>/budget &lt;request&gt;</code> — arm, replace, inspect, or clear a one-shot cost/wall-time checkpoint\n<code>/gwt &lt;name&gt;</code> — fork into a worktree (work sessions only)",
+          "text": "#1 &lt;name&gt;\n<b><u>Session commands</u></b>\n<code>/status</code> — show session status\n<code>/stop</code> — stop the current run\n<code>/clear</code> — start a fresh session\n<code>/kill</code> — close this session\n<code>/compact [focus]</code> — compact the context\n<code>/schedules</code> — list schedules\n<code>/budget &lt;request&gt;</code> — arm, replace, inspect, or clear a one-shot cost/wall-time checkpoint\n<code>/gwt &lt;name&gt;</code> — fork into a worktree (work sessions only)",
           "parse_mode": "HTML"
         }
       ]
@@ -146,7 +176,7 @@
         {
           "method": "sendMessage",
           "chat_id": -100123,
-          "text": "❌ LLM error: Model response reached the output limit twice.",
+          "text": "#1 &lt;name&gt;\n❌ LLM error: Model response reached the output limit twice.",
           "parse_mode": "HTML"
         }
       ]
@@ -158,7 +188,7 @@
         {
           "method": "sendMessage",
           "chat_id": -100123,
-          "text": "recovered complete answer",
+          "text": "#1 &lt;name&gt;\nrecovered complete answer",
           "parse_mode": "HTML"
         }
       ]
@@ -170,7 +200,7 @@
         {
           "method": "sendMessage",
           "chat_id": -100123,
-          "text": "❌ LLM error: Model response ended with an unknown finish reason.",
+          "text": "#1 &lt;name&gt;\n❌ LLM error: Model response ended with an unknown finish reason.",
           "parse_mode": "HTML"
         }
       ]
@@ -187,19 +217,19 @@
         {
           "method": "sendMessage",
           "chat_id": -100123,
-          "text": "Reading the repo",
+          "text": "#1 &lt;name&gt;\nReading the repo\n\n→ ls: <code>.</code>",
           "parse_mode": "HTML"
         },
         {
           "method": "sendMessage",
           "chat_id": -100123,
-          "text": "Updating the task list",
+          "text": "#1 &lt;name&gt;\nUpdating the task list\n\n→ todowrite",
           "parse_mode": "HTML"
         },
         {
           "method": "sendMessage",
           "chat_id": -100123,
-          "text": "All done.",
+          "text": "#1 &lt;name&gt;\nAll done.",
           "parse_mode": "HTML"
         }
       ]
@@ -211,19 +241,19 @@
         {
           "method": "sendMessage",
           "chat_id": -100123,
-          "text": "Reading the repo",
+          "text": "#1 &lt;name&gt;\nReading the repo\n\n→ ls: <code>.</code>",
           "parse_mode": "HTML"
         },
         {
           "method": "sendMessage",
           "chat_id": -100123,
-          "text": "Stopping the mutation run",
+          "text": "#1 &lt;name&gt;\nStopping the mutation run\n\n→ todowrite",
           "parse_mode": "HTML"
         },
         {
           "method": "sendMessage",
           "chat_id": -100123,
-          "text": "All done.",
+          "text": "#1 &lt;name&gt;\nAll done.",
           "parse_mode": "HTML"
         }
       ]
@@ -240,7 +270,7 @@
         {
           "method": "sendMessage",
           "chat_id": -100123,
-          "text": "idle process completion observed",
+          "text": "#1 &lt;name&gt;\nidle process completion observed",
           "parse_mode": "HTML"
         }
       ]
@@ -252,7 +282,7 @@
         {
           "method": "sendMessage",
           "chat_id": -100123,
-          "text": "interrupted process recovered",
+          "text": "#1 &lt;name&gt;\ninterrupted process recovered",
           "parse_mode": "HTML"
         }
       ]
@@ -264,7 +294,7 @@
         {
           "method": "sendMessage",
           "chat_id": -100123,
-          "text": "idle-transition completion observed",
+          "text": "#1 &lt;name&gt;\nidle-transition completion observed",
           "parse_mode": "HTML"
         }
       ]
@@ -276,7 +306,13 @@
         {
           "method": "sendMessage",
           "chat_id": -100123,
-          "text": "process interrupted sleep",
+          "text": "#1 &lt;name&gt;\n→ sleep",
+          "parse_mode": "HTML"
+        },
+        {
+          "method": "sendMessage",
+          "chat_id": -100123,
+          "text": "#1 &lt;name&gt;\nprocess interrupted sleep",
           "parse_mode": "HTML"
         }
       ]
@@ -298,19 +334,19 @@
         {
           "method": "sendMessage",
           "chat_id": -100123,
-          "text": "Hi there.",
+          "text": "#1 &lt;name&gt;\nHi there.",
           "parse_mode": "HTML"
         },
         {
           "method": "sendMessage",
           "chat_id": -100123,
-          "text": "⏰ scheduled\n\nproduce the weekly report",
+          "text": "#1 &lt;name&gt;\n⏰ scheduled\n\nproduce the weekly report",
           "parse_mode": "HTML"
         },
         {
           "method": "sendMessage",
           "chat_id": -100123,
-          "text": "Report ready.",
+          "text": "#1 &lt;name&gt;\nReport ready.",
           "parse_mode": "HTML"
         }
       ]
@@ -337,31 +373,37 @@
         {
           "method": "sendMessage",
           "chat_id": -100123,
-          "text": "Running the first probe",
+          "text": "#1 &lt;name&gt;\nRunning the first probe\n\n→ ls: <code>.</code>",
           "parse_mode": "HTML"
         },
         {
           "method": "sendMessage",
           "chat_id": -100123,
-          "text": "probe answer",
+          "text": "#1 &lt;name&gt;\nprobe answer",
           "parse_mode": "HTML"
         },
         {
           "method": "sendMessage",
           "chat_id": -100123,
-          "text": "🔧 Activated skill: review",
+          "text": "#1 &lt;name&gt;\n🔧 Activated skill: review",
           "parse_mode": "HTML"
         },
         {
           "method": "sendMessage",
           "chat_id": -100123,
-          "text": "🔧 Activated skill: review",
+          "text": "#1 &lt;name&gt;\n→ skill: <code>review</code>",
           "parse_mode": "HTML"
         },
         {
           "method": "sendMessage",
           "chat_id": -100123,
-          "text": "model activation complete",
+          "text": "#1 &lt;name&gt;\n🔧 Activated skill: review",
+          "parse_mode": "HTML"
+        },
+        {
+          "method": "sendMessage",
+          "chat_id": -100123,
+          "text": "#1 &lt;name&gt;\nmodel activation complete",
           "parse_mode": "HTML"
         }
       ]
@@ -378,13 +420,13 @@
         {
           "method": "sendMessage",
           "chat_id": -100123,
-          "text": "⏳ Stopping…",
+          "text": "#1 &lt;name&gt;\n⏳ Stopping…",
           "parse_mode": "HTML"
         },
         {
           "method": "sendMessage",
           "chat_id": -100123,
-          "text": "⏸️ Session stopped\nCancelled background processes: 0",
+          "text": "#1 &lt;name&gt;\n⏸️ Session stopped\nCancelled background processes: 0",
           "parse_mode": "HTML"
         }
       ]
@@ -396,13 +438,13 @@
         {
           "method": "sendMessage",
           "chat_id": -100123,
-          "text": "⏳ Stopping…",
+          "text": "#1 &lt;name&gt;\n⏳ Stopping…",
           "parse_mode": "HTML"
         },
         {
           "method": "sendMessage",
           "chat_id": -100123,
-          "text": "⏸️ Session stopped\nCancelled background processes: 1",
+          "text": "#1 &lt;name&gt;\n⏸️ Session stopped\nCancelled background processes: 1",
           "parse_mode": "HTML"
         }
       ]
@@ -414,31 +456,31 @@
         {
           "method": "sendMessage",
           "chat_id": -100123,
-          "text": "Working on it",
+          "text": "#1 &lt;name&gt;\nWorking on it\n\n→ ls: <code>.</code>",
           "parse_mode": "HTML"
         },
         {
           "method": "sendMessage",
           "chat_id": -100123,
-          "text": "Working on it, done for now.",
+          "text": "#1 &lt;name&gt;\nWorking on it, done for now.",
           "parse_mode": "HTML"
         },
         {
           "method": "sendMessage",
           "chat_id": -100123,
-          "text": "⏳ Stopping…",
+          "text": "#1 &lt;name&gt;\n⏳ Stopping…",
           "parse_mode": "HTML"
         },
         {
           "method": "sendMessage",
           "chat_id": -100123,
-          "text": "⏸️ Session stopped\nCancelled background processes: 0",
+          "text": "#1 &lt;name&gt;\n⏸️ Session stopped\nCancelled background processes: 0",
           "parse_mode": "HTML"
         },
         {
           "method": "sendMessage",
           "chat_id": -100123,
-          "text": "Resumed and done.",
+          "text": "#1 &lt;name&gt;\nResumed and done.",
           "parse_mode": "HTML"
         }
       ]
@@ -450,7 +492,7 @@
         {
           "method": "sendMessage",
           "chat_id": -100123,
-          "text": "<b><u>Session commands</u></b>\n<code>/status</code> — show session status\n<code>/stop</code> — stop the current run\n<code>/clear</code> — start a fresh session\n<code>/kill</code> — close this session\n<code>/compact [focus]</code> — compact the context\n<code>/schedules</code> — list schedules\n<code>/budget &lt;request&gt;</code> — arm, replace, inspect, or clear a one-shot cost/wall-time checkpoint\n<code>/gwt &lt;name&gt;</code> — fork into a worktree (work sessions only)",
+          "text": "#1 &lt;name&gt;\n<b><u>Session commands</u></b>\n<code>/status</code> — show session status\n<code>/stop</code> — stop the current run\n<code>/clear</code> — start a fresh session\n<code>/kill</code> — close this session\n<code>/compact [focus]</code> — compact the context\n<code>/schedules</code> — list schedules\n<code>/budget &lt;request&gt;</code> — arm, replace, inspect, or clear a one-shot cost/wall-time checkpoint\n<code>/gwt &lt;name&gt;</code> — fork into a worktree (work sessions only)",
           "parse_mode": "HTML"
         }
       ]
@@ -469,6 +511,30 @@
       "trace": "subagent_text_with_tools.json",
       "source_test": "TestHarnessScenario_SubagentTextWithToolsCompletes",
       "calls": null
+    },
+    {
+      "trace": "tool_trail_work_steps.json",
+      "source_test": "TestHarnessScenario_WorkToolStepsPublishOneMessageEach",
+      "calls": [
+        {
+          "method": "sendMessage",
+          "chat_id": -100123,
+          "text": "#1 &lt;name&gt;\n→ ls: <code>.</code>\n→ glob: <code>*.go</code>",
+          "parse_mode": "HTML"
+        },
+        {
+          "method": "sendMessage",
+          "chat_id": -100123,
+          "text": "#1 &lt;name&gt;\nChecking files\n\n→ ls: <code>.</code>",
+          "parse_mode": "HTML"
+        },
+        {
+          "method": "sendMessage",
+          "chat_id": -100123,
+          "text": "#1 &lt;name&gt;\nWork complete.",
+          "parse_mode": "HTML"
+        }
+      ]
     }
   ]
 }

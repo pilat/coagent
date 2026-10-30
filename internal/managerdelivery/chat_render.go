@@ -23,10 +23,13 @@ func (w *chatLoop) prepare(ctx context.Context, focus int64) error {
 	}
 
 	name := ""
+	contextEligible := false
 
 	for _, session := range sessions {
 		if session.ID == focus {
 			name = session.Name
+			contextEligible = session.Unread == 0
+
 			break
 		}
 	}
@@ -35,14 +38,36 @@ func (w *chatLoop) prepare(ctx context.Context, focus int64) error {
 		name = "Assistant"
 	}
 
-	w.prelude = []string{strings.TrimSpace(fmt.Sprintf("→ #%d %s", focus, name))}
-	if digest := unreadDigest(sessions, focus); digest != "" {
-		w.prelude = append(w.prelude, digest)
+	prelude := []chatPreludeItem{{text: strings.TrimSpace(fmt.Sprintf("→ #%d %s", focus, name))}}
+	if focus == 0 {
+		if digest := unreadDigest(sessions, focus); digest != "" {
+			prelude = append(prelude, chatPreludeItem{text: digest})
+		}
 	}
 
+	if contextEligible {
+		row, found, err := w.port.LastSeen(ctx, focus)
+		if err != nil {
+			return fmt.Errorf("read entry context: %w", err)
+		}
+
+		if found {
+			prelude = append(prelude, chatPreludeItem{text: chatRowText(focus, row), dropOnRowPermanent: true})
+		}
+	}
+
+	w.prelude = prelude
 	w.lastFocus = focus
 
 	return nil
+}
+
+func chatRowText(focus int64, row ChatRow) string {
+	if focus == 0 {
+		return row.Content
+	}
+
+	return fmt.Sprintf("#%d %s\n%s", focus, row.Name, row.Content)
 }
 
 func unreadDigest(sessions []ChatSession, focus int64) string {

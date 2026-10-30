@@ -6,7 +6,8 @@
       "name": "<name>",
       "work_dir": "<workdir>",
       "attributes": {
-        "manager_id": "telegram:main"
+        "manager_id": "telegram:main",
+        "title": "do the work"
       }
     },
     {
@@ -15,11 +16,11 @@
     },
     {
       "type": "message",
-      "message": "Reading the repo"
+      "message": "Reading the repo\n\n→ ls: `.`"
     },
     {
       "type": "message",
-      "message": "Updating the task list"
+      "message": "Updating the task list\n\n→ todowrite"
     },
     {
       "type": "message",
@@ -42,14 +43,14 @@
       "id": 2,
       "session_id": 1,
       "type": "message",
-      "content": "Reading the repo",
+      "content": "Reading the repo\n\n→ ls: `.`",
       "source_key": "message:2:reply"
     },
     {
       "id": 3,
       "session_id": 1,
       "type": "message",
-      "content": "Updating the task list",
+      "content": "Updating the task list\n\n→ todowrite",
       "source_key": "message:4:reply"
     },
     {

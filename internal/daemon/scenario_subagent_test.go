@@ -976,8 +976,10 @@ func TestHarnessScenario_ForegroundChildContinuesWithoutSleep(t *testing.T) {
 
 func TestHarnessScenario_BackgroundChildIsTheWakeSource(t *testing.T) {
 	childRelease := make(chan struct{})
+	childStarted := make(chan struct{})
 	respond := func(_ string, messages []llmwire.Message) *llmwire.Response {
 		if hasUserContaining(messages, "CHILD_BACKGROUND") {
+			closeOnce(childStarted)
 			<-childRelease
 			return textReply("background child answer")
 		}
@@ -988,6 +990,11 @@ func TestHarnessScenario_BackgroundChildIsTheWakeSource(t *testing.T) {
 			return textReply("background launched; yielded without sleep")
 		}
 		if hasToolResultFor(messages, tool.IDTask) {
+			select {
+			case <-childStarted:
+			case <-time.After(5 * time.Second):
+				t.Error("child input did not commit before the parent sleep step")
+			}
 			return callReply(
 				"sleep-after-task-result", tool.IDSleep, `{"duration":"1h","reason":"wait for background child"}`,
 			)
