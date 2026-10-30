@@ -92,7 +92,7 @@ func (s *svc) openSession(
 	if rec.AgentType == sessionstore.AssistantAgentType {
 		scope := assistant.Scope{Root: rec.ID, Owner: owner}
 		in.OwnerTools = assistant.Tools(s.assistant, scope, assistant.Host(assistantHost{s: s}))
-		in.OwnerTools = append(in.OwnerTools, schedule.NewScheduleTool(rec.ID, s.schedules, time.Local))
+		in.OwnerTools = append(in.OwnerTools, s.assistantScheduleTool(scope))
 		in.OwnerTools = append(in.OwnerTools, s.assistantAdministrationTools(rec, scope)...)
 		in.ExtraSkills = nil
 		in.Head = s.assistantHead(scope)

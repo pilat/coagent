@@ -216,17 +216,18 @@ func (f *toolFixture) execute(t *testing.T, id, args string) string {
 func (h *toolHost) CreateWork(
 	ctx context.Context,
 	owner string,
-	projectID int64,
-	name, workDir, title string,
-) (int64, error) {
-	record, err := h.sessions.CreateSession(ctx, projectID, "model", "", map[string]any{
-		"manager_id": owner, sessionstore.TitleAttribute: title,
+	spec WorkSpec,
+) (int64, string, error) {
+	record, _, err := h.sessions.CreateManagerRoot(ctx, sessionstore.ManagerRootCreate{
+		ProjectID: spec.ProjectID, Model: spec.Model, ReasoningLevel: spec.Effort,
+		Name: spec.Name, WorkDir: spec.WorkDir,
+		Attributes: map[string]any{"manager_id": owner, sessionstore.TitleAttribute: spec.Title},
 	})
 	if err != nil {
-		return 0, err
+		return 0, "", err
 	}
 	h.created = append(h.created, record.ID)
-	return record.ID, nil
+	return record.ID, spec.Name, nil
 }
 
 func (h *toolHost) Deliver(

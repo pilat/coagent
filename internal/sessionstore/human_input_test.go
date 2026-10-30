@@ -15,9 +15,9 @@ func TestIsHumanInput(t *testing.T) {
 	}{
 		{"user", InputSourceUser, nil, true},
 		{"user attributes", InputSourceUser, map[string]any{"from": "telegram"}, true},
-		{"observer integer", InputSourceUser, map[string]any{ObserverSessionIDAttribute: 1}, false},
-		{"observer null", InputSourceUser, map[string]any{ObserverSessionIDAttribute: nil}, false},
-		{"observer string", InputSourceUser, map[string]any{ObserverSessionIDAttribute: "invalid"}, false},
+		{"observer integer", InputSourceUser, map[string]any{ObserverSessionIDAttribute: 1}, true},
+		{"observer null", InputSourceUser, map[string]any{ObserverSessionIDAttribute: nil}, true},
+		{"observer string", InputSourceUser, map[string]any{ObserverSessionIDAttribute: "invalid"}, true},
 		{"assistant", InputSourceUser, map[string]any{"from": "assistant"}, false},
 		{"agent", InputSourceAgent, nil, false},
 		{"schedule", InputSourceSchedule, nil, false},

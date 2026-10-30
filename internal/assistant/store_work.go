@@ -10,6 +10,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/pilat/coagent/internal/budget"
 	"github.com/pilat/coagent/internal/sessionstore"
 )
 
@@ -104,7 +105,12 @@ func (s *Store) Read(ctx context.Context, id int64, count int) (string, error) {
 }
 
 // Open creates a titled work root before delivering its first instruction.
-func (s *Store) Open(ctx context.Context, host Host, scope Scope, project, text, about string) (Card, error) {
+func (s *Store) Open(
+	ctx context.Context,
+	host Host,
+	scope Scope,
+	project, text, about, model, effort, worktree string,
+) (Card, error) {
 	words, err := s.sessions.ActiveUserInput(ctx, scope.Root)
 	if err != nil {
 		return Card{}, fmt.Errorf("quote current user input: %w", err)
@@ -112,12 +118,15 @@ func (s *Store) Open(ctx context.Context, host Host, scope Scope, project, text,
 
 	text = withUserWords(text, words)
 
-	choice, err := s.resolveProject(ctx, project)
+	choice, err := s.openProject(ctx, project, worktree)
 	if err != nil {
 		return Card{}, err
 	}
 
-	id, err := host.CreateWork(ctx, scope.Owner, choice.id, choice.name, choice.path, about)
+	id, name, err := host.CreateWork(ctx, scope.Owner, WorkSpec{
+		ProjectID: choice.id, Name: choice.name, WorkDir: choice.path, Title: about, Model: model, Effort: effort,
+		Worktree: worktree,
+	})
 	if err != nil {
 		return Card{}, fmt.Errorf("open assistant work: %w", err)
 	}
@@ -126,9 +135,17 @@ func (s *Store) Open(ctx context.Context, host Host, scope Scope, project, text,
 		return Card{}, err
 	}
 
+	record, err := s.sessions.GetSession(ctx, id)
+	if err != nil {
+		return Card{}, fmt.Errorf("load opened session model: %w", err)
+	}
+
 	now := time.Now().UTC()
 
-	return Card{ID: id, Project: choice.name, Status: workingStatus, CreatedAt: now, Activity: now, Title: about}, nil
+	return Card{
+		ID: id, Project: name, Status: workingStatus, CreatedAt: now, Activity: now,
+		Title: about, Model: record.Model, Effort: record.ReasoningLevel,
+	}, nil
 }
 
 // Send re-checks authority inside the delivery transaction.
@@ -164,9 +181,16 @@ func (s *Store) cards(ctx context.Context, scope Scope, id int64) ([]Card, error
 			 AND json_extract(i.attributes, '$.observer_session_id') = ? AND ` + sessionstore.ObserverOpenInputSQL + `)),
 			EXISTS(SELECT 1 FROM session_inbox i WHERE i.session_id = s.id
 			 AND json_extract(i.attributes, '$.observer_session_id') = ?),
-			o.created_at, json_extract(s.attributes, '$.title'), i.raw_content
+			o.created_at, json_extract(s.attributes, '$.title'), i.raw_content,
+			s.model, s.reasoning_level, b.state, b.armed_at, b.baseline_cost_usd,
+			b.cost_limit_usd, b.duration_seconds, b.fired_reason, b.park_phase,
+			CASE WHEN b.state = 'armed' AND b.cost_limit_usd IS NOT NULL THEN
+			 (SELECT COALESCE(SUM(m.cost_usd), 0) FROM sessions tree
+			 LEFT JOIN messages m ON m.session_id = tree.id WHERE tree.id = s.id OR tree.root_id = s.id) END,
+			EXISTS (SELECT 1 FROM schedules WHERE schedules.session_id = s.id AND NOT (` + sessionstore.SleepScheduleSQL + `))
 		FROM sessions s
 		LEFT JOIN projects p ON p.id = s.project_id
+		LEFT JOIN session_budgets b ON b.root_session_id = s.id
 		LEFT JOIN session_outbox o ON o.id = (SELECT id FROM session_outbox WHERE session_id = s.id
 			AND type = 'message' AND source_key LIKE 'message:%' ORDER BY id DESC LIMIT 1)
 		LEFT JOIN session_inbox i ON i.id = (SELECT id FROM session_inbox WHERE session_id = s.id
@@ -201,16 +225,28 @@ func (s *Store) cards(ctx context.Context, scope Scope, id int64) ([]Card, error
 
 func scanCard(rows *sql.Rows) (Card, error) {
 	var (
-		card             Card
-		status           sql.NullString
-		created, updated sql.NullTime
-		final            sql.NullTime
-		title, asked     sql.NullString
+		card                 Card
+		status               sql.NullString
+		created, updated     sql.NullTime
+		final                sql.NullTime
+		title, asked         sql.NullString
+		state, reason, phase sql.NullString
+		armed                sql.NullTime
+		baseline             sql.NullFloat64
+		record               budget.Record
 	)
 
 	if err := rows.Scan(&card.ID, &card.projectID, &card.Project, &status, &created, &updated,
-		&card.ContextTokens, &card.Pending, &card.touched, &final, &title, &asked); err != nil {
+		&card.ContextTokens, &card.Pending, &card.touched, &final, &title, &asked,
+		&card.Model, &card.Effort, &state, &armed, &baseline, &record.CostLimitUSD,
+		&record.DurationSeconds, &reason, &phase, &card.TreeCostUSD, &card.Scheduled); err != nil {
 		return Card{}, fmt.Errorf("scan assistant work root: %w", err)
+	}
+
+	if state.Valid {
+		record.RootSessionID, record.State, record.ArmedAt = card.ID, budget.State(state.String), armed.Time
+		record.BaselineCostUSD, record.FiredReason, record.ParkPhase = baseline.Float64, reason.String, phase.String
+		card.Budget = &record
 	}
 
 	card.Status = cardStatus(sessionstore.SessionStatus(status.String))
@@ -314,16 +350,16 @@ func (s *Store) instructTx(
 
 // newestWithin keeps whole entries from the newest backwards; only a single oversized
 // entry is cut, and then in its middle.
-func newestWithin(entries []string, budget int) string {
+func newestWithin(entries []string, limit int) string {
 	var kept []string
 
 	used := 0
 
 	for _, entry := range slices.Backward(entries) {
 		size := utf8.RuneCountInString(entry) + 2
-		if used+size > budget {
+		if used+size > limit {
 			if len(kept) == 0 {
-				kept = append(kept, sessionstore.ClipMiddle(entry, budget))
+				kept = append(kept, sessionstore.ClipMiddle(entry, limit))
 			}
 
 			break

@@ -2,10 +2,47 @@ package sessionstore
 
 import (
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestChatSessions_ScheduledRoots(t *testing.T) {
+	t.Parallel()
+	store, db, project := newTestStore(t)
+	assistant, err := store.EnsureAssistantRoot(t.Context(), project, "owner", "/assistant", "model", "")
+	require.NoError(t, err)
+	cron := chatTestRoot(t, store, project, "owner")
+	once := chatTestRoot(t, store, project, "owner")
+	sleep := chatTestRoot(t, store, project, "owner")
+	for _, id := range []int64{assistant.ID, cron.ID} {
+		_, err := db.ExecContext(
+			t.Context(),
+			`INSERT INTO schedules(session_id,cron_expr,input_message) VALUES (?, '0 9 * * *', '')`,
+			id,
+		)
+		require.NoError(t, err)
+	}
+	for id, meta := range map[int64]string{once.ID: `{}`, sleep.ID: `{"tool_call_id":"sleep-call"}`} {
+		_, err := db.ExecContext(
+			t.Context(),
+			`INSERT INTO schedules(session_id,one_shot_at,metadata,input_message) VALUES (?,?,?,'')`,
+			id,
+			time.Now().Add(time.Hour),
+			meta,
+		)
+		require.NoError(t, err)
+	}
+	entries, err := store.ChatSessions(t.Context(), "owner", "chat")
+	require.NoError(t, err)
+	require.Len(t, entries, 4)
+	for _, entry := range entries {
+		assert.Equal(t, entry.SessionID != sleep.ID, entry.Scheduled)
+	}
+	assert.Zero(t, entries[0].ID)
+	assert.True(t, entries[0].Scheduled)
+}
 
 func TestChatSessions_LiveOwnedRootsAndRenderedUnread(t *testing.T) {
 	t.Parallel()

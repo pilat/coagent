@@ -128,7 +128,7 @@ func TestObserverFailureWindows(t *testing.T) {
 			require.NoError(t, err)
 			_, err = f.store.Enqueue(t.Context(), Input{
 				SessionID: f.work, Source: InputSourceUser, Content: "other observer",
-				Attributes: map[string]any{ObserverSessionIDAttribute: other.ID},
+				Attributes: map[string]any{"from": "assistant", ObserverSessionIDAttribute: other.ID},
 			})
 			require.NoError(t, err)
 			f.store.TakeWoken()
@@ -385,7 +385,7 @@ func (f observerFixture) ref(t *testing.T, accepted bool) int64 {
 	t.Helper()
 	in, err := f.store.Enqueue(t.Context(), Input{
 		SessionID: f.work, Source: InputSourceUser, Content: "instruction",
-		Attributes: map[string]any{ObserverSessionIDAttribute: f.observer},
+		Attributes: map[string]any{"from": "assistant", ObserverSessionIDAttribute: f.observer},
 	})
 	require.NoError(t, err)
 	if accepted {

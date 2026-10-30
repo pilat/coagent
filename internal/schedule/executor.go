@@ -276,9 +276,15 @@ func (e *executor) deliverCronSchedule(
 	sched *Schedule,
 	deliveryID, content string,
 ) (bool, error) {
+	attributes := map[string]any{"fresh": sched.fresh}
+	if sched.metadata.ReportTo != 0 {
+		attributes[sessionstore.ObserverSessionIDAttribute] = sched.metadata.ReportTo
+		attributes["schedule_id"] = sched.id
+	}
+
 	result, err := e.store.Enqueue(ctx, sessionstore.Input{
 		SessionID: sched.sessionID, Source: sessionstore.InputSourceSchedule,
-		Content: content, DeliveryKey: deliveryID, Attributes: map[string]any{"fresh": sched.fresh},
+		Content: content, DeliveryKey: deliveryID, Attributes: attributes,
 	})
 	if err != nil {
 		return false, fmt.Errorf("deliver schedule tick: %w", err)

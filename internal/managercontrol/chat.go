@@ -149,6 +149,7 @@ func (c *controller) ChatSessions(ctx context.Context, chatID string) ([]control
 		sessions = append(sessions, controllerapi.ChatSessionInfo{
 			ID: row.ID, SessionID: row.SessionID, Name: row.Name, Unread: row.Unread,
 			LatestUnread: row.LatestUnread, LatestUnreadID: row.LatestUnreadID,
+			Scheduled: row.Scheduled,
 		})
 	}
 

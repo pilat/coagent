@@ -100,7 +100,8 @@ does not imply a tier except where it expresses an implementation variant.
 - `internal/registry` — immutable per-session agent-type policy and prompt
   templates. The build-agent template owns the runtime identity contract: the
   agent presents as Coagent with the repo URL and does not volunteer the
-  underlying model vendor.
+  underlying model vendor; direct questions about its running model use the
+  current model line.
 - `cmd/releasebuilder` — build-time deterministic archive and checksum composition root. Accepts exactly the two Linux tuples (`linux-amd64`, `linux-arm64`), one binary each.
 - `internal/schedule` — durable schedules, sleep ownership and scheduled delivery execution.
 - `internal/session` — isolated agent loop and transcript projection.
@@ -116,6 +117,7 @@ does not imply a tier except where it expresses an implementation variant.
 - `internal/tool/builtin` — built-in tools and their common stack construction.
 - `internal/transcript` — durable append-only conversation row vocabulary.
 - `internal/version` — build-stamped version vocabulary.
+- `internal/worktree` — shared remote-default worktree creation, origin attestation and failure rollback.
 - `migrations` — immutable SQLite schema migration assets.
 
 ## Ownership and dependency boundaries
@@ -611,8 +613,8 @@ recovered from the durable streak, never fabricated.
 ### Schedule delivery identity
 
 Schedules are durable producer records. A one-shot with a tool-call identifier
-is a pending sleep and owes an exact suspended-call result; a metadata-free
-one-shot is future session input and must not be mistaken for a waiting sleep.
+is a pending sleep and owes an exact suspended-call result; a one-shot without
+`tool_call_id` is future session input and may carry `report_to` for its observer.
 Cron and standalone one-shot deliveries carry a deterministic identity. The
 identity is unique per session in the durable inbox. A duplicate occurrence is
 acknowledged without another row; legacy `session_deliveries` claims also prevent
@@ -632,6 +634,10 @@ existing pending call. An old standalone schedule addressed to a subagent is
 acknowledged as unapplied without a runner, transcript mutation, publication or
 retry. A newly claimed standalone occurrence can reactivate a stopped root as a
 new turn, while an already-claimed retry leaves it stopped. See ADR-0027.
+The assistant can schedule its own root or an addressable work root, using cron
+or a future local timestamp. Its list and cancellation exclude sleep rows.
+Reported schedules persist the assistant root in metadata; delivery stamps that
+observer and the schedule id on ordinary, non-human schedule input.
 
 ### Configuration restart verdict
 
@@ -747,6 +753,15 @@ and global instructions remain trusted daemon inputs.
 This is an integrity boundary, not confidentiality: with no rules, another
 checkout is readable, and so are the operator's own credentials.
 
+Assistant-created worktrees run host git with command-scoped overrides disabling
+hooks, fsmonitor, the ext protocol and submodule recursion. Before any
+remote operation, a preflight refuses all include directives and covered command-running
+keys in local or worktree scope, preserving the user's global includes, helpers and filters.
+Human `/gwt` retains repository hooks. This is a denylist: an unlisted git key may
+still execute. Sessions can write their repository's `.git` configuration and
+hooks; preventing those writes is separate work, and the same planted settings
+can affect ordinary git in the user's terminal ([ADR-0080](docs/adr/0080-assistant-administers-work-at-open-and-hears-direct-exchanges.md)).
+
 Before process admission, the Bash tool parses a direct simple `cat` command
 without an explicit working directory and pushes regular project-file operands
 to the native `read` tool. Dynamic or compound shell syntax and paths outside
@@ -844,7 +859,8 @@ unknown fields remain errors.
 ### Assistant desk
 
 `assistant` owns small permanent or dated memory notes, live focus items with
-real session refs and a full-text index. Work cards read the session title. Each
+real session refs and a full-text index. Work cards show the title, configured
+model and applicable effort, remaining or fired budget, and scheduled-root marker. Each
 manager owns one ordinary root of the hidden, non-spawnable `assistant` type in
 the shared assistant project. Its model and effort selection persist like other roots;
 legacy roots with no model receive the defaults. Its agent policy omits project
@@ -864,7 +880,7 @@ input may replace an unanswered activation: the desk retains that user's words
 as an answer still owed. Automatic compaction preserves the first desk row.
 
 The desk shows live memory (at most 4000 characters), the ten newest focus items,
-the ten newest assistant-touched roots and forty chronological conversation
+the ten newest roots touched by assistant instructions or direct human input and forty chronological conversation
 lines clipped to 2000 characters each. Conversation joins accepted user inbox
 rows with model-speech outbox rows, excluding host notices. Older compacted
 history stays available through search. Observations enter as ordinary agent
@@ -897,8 +913,11 @@ receives the receipt; the work root's output log receives neither budget nor mod
 
 All tool effects execute immediately through the ordinary tool protocol, return
 real ids and survive a later model failure. Memory and focus enforce their limits
-inside their write transactions. Open creates the root with its `about` as the session title
-before admitting input; delivery authorizes inside the tree lock. The daemon
+inside their write transactions. Open validates model and effort before creation,
+then creates the root with that selection and its title before admitting input.
+Optional worktree creation shares the human `/gwt` path and remote selection,
+fetches the remote default and rolls back on failures before the root exists.
+Delivery authorizes inside the tree lock. The daemon
 host supplies creation, delivery, stop, chat switching and model administration,
 while the session owns model calls,
 step commits, durable errors and output. Effects and their tool-result commits
@@ -912,15 +931,19 @@ Instructions already containing those words, slash-prefixed instructions and
 activations without an active user row receive no quote. Multiple handovers each
 receive it. Open/send deliver commands and `/skill <name> [args]` verbatim. Generic
 commands dispatch after delivery releases the tree lock, just as human commands do.
-One session-store predicate defines human input: `source=user`, no
-`observer_session_id` key regardless of value, and `from` different from `assistant`.
+One session-store predicate defines human input: `source=user` and `from`
+different from `assistant`; an observer reference does not change authority.
 Only human input creates activation grants or releases a fired budget; assistant
 commands otherwise retain ordinary command dispatch, skill expansion and resume semantics.
 
 Every assistant instruction carries its observer root reference in its work
-inbox row. A non-yield final of the work root enqueues one answered agent input
+inbox row. Enqueue also stamps human model-bound input to owned work roots with
+their manager's assistant reference, excluding the seven control/read-only
+commands, assistant roots and subagents. Reported schedule ticks carry the same
+reference. A non-yield final of the work root enqueues one answered agent input
 per observer in the same transaction, joining active finals since that observer's
-earliest open instruction. The latest non-cancelled answered inbox event anchors
+earliest open input. The event prefixes human ref rows with bounded quotes and
+reported schedule rows with a firing notice, in inbox order. The latest non-cancelled answered inbox event anchors
 the next window on the work root's message ids; direct user input does not close
 an outstanding observer instruction. A committed terminal error or a fresh
 start-failure receipt enqueues the error notice without moving that anchor.
@@ -942,7 +965,8 @@ recorded in [ADR-0074](docs/adr/0074-assistant-is-an-ordinary-session-with-a-des
 superseding [ADR-0073](docs/adr/0073-assistant-turn-is-a-buffered-tool-loop.md), with
 observer delivery recorded in [ADR-0075](docs/adr/0075-work-answers-reach-the-observer-through-its-inbox.md)
 and work administration in [ADR-0077](docs/adr/0077-assistant-moves-the-user-in-never-out.md),
-amended by [ADR-0078](docs/adr/0078-assistant-input-is-never-human-authority.md).
+amended by [ADR-0078](docs/adr/0078-assistant-input-is-never-human-authority.md)
+and [ADR-0080](docs/adr/0080-assistant-administers-work-at-open-and-hears-direct-exchanges.md).
 
 ### Daemon, sessions and persistence
 
@@ -1080,6 +1104,10 @@ retry rules and model listing. The wire package carries neutral message and tool
 types so session/tool code does not depend on provider SDKs. Reasoning payloads
 are stored verbatim with their originating model and are replayed only to that
 same model; a model change drops them rather than sending incompatible data.
+Every agent type's system prompt and assistant cards state the configured model
+identity and effective effort using the driver's catalog clamp, hiding effort for
+models without choices. Model or effort changes replace that line; older
+conversation claims cannot override it.
 Image references carried on user/tool messages are materialized inside each
 driver's conversion step and gated fail-closed on catalog-declared input
 modalities — unknown or absent modality information degrades the slot to a

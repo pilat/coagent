@@ -29,7 +29,8 @@ func (s *Store) ChatSessions(ctx context.Context, managerID, chatID string) ([]C
 	)
 	SELECT roots.id, roots.agent_type, roots.name, roots.title, unread.unread,
 		COALESCE(unread.latest_id, 0), COALESCE(latest.content, ''),
-		s.created_at, output.created_at, input.received_at
+		s.created_at, output.created_at, input.received_at,
+		EXISTS (SELECT 1 FROM schedules WHERE schedules.session_id = s.id AND NOT (`+SleepScheduleSQL+`))
 	FROM roots JOIN unread ON unread.id = roots.id
 	JOIN sessions s ON s.id = roots.id
 	LEFT JOIN session_outbox latest ON latest.id = unread.latest_id
@@ -75,7 +76,7 @@ func scanChatSession(rows *sql.Rows) (chatSessionActivity, error) {
 	var agentType, projectName, title string
 
 	if err := rows.Scan(&session.SessionID, &agentType, &projectName, &title, &session.Unread,
-		&session.LatestUnreadID, &session.LatestUnread, &created, &output, &input); err != nil {
+		&session.LatestUnreadID, &session.LatestUnread, &created, &output, &input, &session.Scheduled); err != nil {
 		return chatSessionActivity{}, fmt.Errorf("scan chat session summary: %w", err)
 	}
 

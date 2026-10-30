@@ -8,6 +8,13 @@ import (
 	"github.com/pilat/coagent/internal/sessionprompt"
 )
 
+func TestBuildAgentPromptModelIdentity(t *testing.T) {
+	t.Parallel()
+	assert.Contains(t, BuildAgentPrompt, "answer as Coagent and point to the repo")
+	assert.Contains(t, BuildAgentPrompt, "which model runs this session, answer from the current model line")
+	assert.Contains(t, BuildAgentPrompt, "Do not volunteer the underlying model vendor otherwise")
+}
+
 func TestBuildAgentPrompt_SubagentResultsAvoidDuplicateResearch(t *testing.T) {
 	t.Parallel()
 

@@ -57,6 +57,7 @@ components:
   managerdiscovery: { in: internal/managerdiscovery }
   progress:      { in: internal/progress }
   projectpath:   { in: internal/projectpath }
+  worktree:      { in: internal/worktree }
   progressruntime: { in: internal/progressruntime }
   budget:        { in: internal/budget }
 
@@ -117,11 +118,13 @@ deps:
     mayDependOn: [budget, controllerapi, logger, progress, sessionbus, sessionevent, sessionstore, todo]
   projectpath:
     mayDependOn: [coagenthome, config, controllerapi]
+  worktree:
+    mayDependOn: [config, controllerapi, git, projectpath]
   safefile:
     mayDependOn: [coagenthome, sandboxpolicy]
   managercontrol:
     # Deep scan also checks the injected command backend; source imports use Backend.
-    mayDependOn: [config, controllerapi, daemon, git, loader, managerdiscovery, progressruntime, projectpath, sessionbus, sessionevent, sessionstore]
+    mayDependOn: [config, controllerapi, daemon, git, loader, managerdiscovery, progressruntime, projectpath, sessionbus, sessionevent, sessionstore, worktree]
   managerdiscovery:
     mayDependOn: [coagenthome, config, controllerapi, loader, projectpath, sessionstore]
 
@@ -174,7 +177,7 @@ deps:
   session:
     mayDependOn: [llm, llmwire, loader, logger, sessionevent, sessionprompt, sessionstore, tool, transcript]
   sessionbuild:
-    mayDependOn: [backgroundprocess, builtin, config, git, llm, loader, logger, mcp, mcpstore, memory, registry, session, sessionprompt, sessionstore, todo, tool]
+    mayDependOn: [backgroundprocess, builtin, catalog, config, git, llm, loader, logger, mcp, mcpstore, memory, registry, session, sessionprompt, sessionstore, todo, tool]
   sessionprompt:
     mayDependOn: [git, llmwire, loader, logger, memory, todo, tool]
   registry:
@@ -194,10 +197,10 @@ deps:
 
   # Orchestrator.
   daemon:
-    mayDependOn: [assistant, backgroundprocess, budget, coagenthome, config, configapply, controllerapi, git, id, llm, llmwire, loader, logger, mcp, mcpstore, progress, progressruntime, projectpath, registry, schedule, session, sessionbuild, sessionprompt, sessionbus, sessionevent, sessionstore, subagent, todo, tool, transcript]
+    mayDependOn: [assistant, backgroundprocess, budget, coagenthome, config, configapply, controllerapi, git, id, llm, llmwire, loader, logger, mcp, mcpstore, progress, progressruntime, projectpath, registry, schedule, session, sessionbuild, sessionprompt, sessionbus, sessionevent, sessionstore, subagent, todo, tool, transcript, worktree]
 
   assistant:
-    mayDependOn: [coagenthome, llmwire, logger, projectpath, sessionstore, tool]
+    mayDependOn: [budget, catalog, coagenthome, llmwire, logger, projectpath, sessionstore, tool]
 
   configops:
     mayDependOn: [coagenthome, config, logger]

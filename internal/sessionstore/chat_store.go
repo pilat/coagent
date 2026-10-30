@@ -30,6 +30,7 @@ type ChatSession struct {
 	Unread         int64
 	LatestUnread   string
 	LatestUnreadID int64
+	Scheduled      bool
 }
 
 // BindChat preserves the user's selection across manager restarts.

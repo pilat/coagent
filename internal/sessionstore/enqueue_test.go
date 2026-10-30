@@ -84,6 +84,13 @@ func TestActivationRejectsAssistantProvenance(t *testing.T) {
 			require.NoError(t, err)
 			_, _, err = acceptActivation(t.Context(), store, result.Input.ID, "/config x",
 				ActivationDraft{ToolID: "config_edit", Command: "/config"})
+			if attrs["from"] != "assistant" {
+				require.NoError(t, err)
+				grant, err := store.PendingActivation(t.Context(), root.ID)
+				require.NoError(t, err)
+				assert.Equal(t, result.Input.ID, grant.InputID)
+				return
+			}
 			require.ErrorIs(t, err, ErrActivationConflict)
 			assertInputState(t, db, result.Input.ID, InputStatePending)
 			var grants int

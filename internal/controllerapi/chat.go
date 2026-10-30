@@ -34,4 +34,5 @@ type ChatSessionInfo struct {
 	Unread         int64  `json:"unread"`
 	LatestUnread   string `json:"latest_unread"`
 	LatestUnreadID int64  `json:"latest_unread_id"`
+	Scheduled      bool   `json:"scheduled"`
 }

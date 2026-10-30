@@ -2,14 +2,52 @@ package daemon
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/pilat/coagent/internal/config"
+	"github.com/pilat/coagent/internal/llm"
 	"github.com/pilat/coagent/internal/llmwire"
+	"github.com/pilat/coagent/internal/registry"
 )
+
+func TestHarnessScenario_AssistantOpensOnRequestedModel(t *testing.T) {
+	firstWorkModel := make(chan string, 8)
+	h := newHarness(t, harnessOptions{
+		configure: func(cfg *config.Config) {
+			withKnownModels([]string{"fake-model", "second"})(cfg)
+			cfg.UnifiedConfig.Models[1] = reasoningModelEntry("second", []string{"low", "high"}, "low")
+		},
+		clientFor: func(cfg *config.Config) (llm.Client, error) {
+			model := cfg.Model
+			return &scriptedLLM{respond: func(system string, messages []llmwire.Message) *llmwire.Response {
+				if !strings.HasPrefix(system, registry.AssistantPrompt) {
+					firstWorkModel <- model
+					return textReply("requested model answered")
+				}
+				if hasToolResultFor(messages, "open") || hasUserContaining(messages, "answered:") {
+					return textReply("opened")
+				}
+				return callReply("open-work", "open",
+					`{"project":"model-work","about":"check model","text":"start","model":"second","effort":"high"}`)
+			}}, nil
+		},
+	})
+	root, err := h.mgr.EnsureAssistantRoot(h.ctx, scenarioManagerID)
+	require.NoError(t, err)
+	h.startInboxWake()
+	require.NoError(t, h.mgr.sendToSession(h.ctx, root.ID, "start on second with high effort"))
+	h.waitUntil("first work call", func() bool { return len(firstWorkModel) > 0 })
+	assert.Equal(t, "second", <-firstWorkModel)
+	var model, effort string
+	require.NoError(t, h.db.QueryRowContext(h.ctx, `SELECT model, reasoning_level FROM sessions
+		WHERE agent_type <> 'assistant' OR agent_type IS NULL ORDER BY id DESC LIMIT 1`).Scan(&model, &effort))
+	assert.Equal(t, "second", model)
+	assert.Equal(t, "high", effort)
+}
 
 func TestAssistantHostModels(t *testing.T) {
 	t.Parallel()
@@ -19,16 +57,21 @@ func TestAssistantHostModels(t *testing.T) {
 			Name:          "name",
 			DisplayName:   "display",
 			Pricing:       &config.ModelPricing{InputPrice: 2, OutputPrice: 8},
-			Reasoning:     &config.ReasoningSpec{Supported: true},
+			Reasoning:     &config.ReasoningSpec{Supported: true, Efforts: []string{"low"}},
 			EffortLevels:  []string{"low"},
 			DefaultEffort: "low",
 		},
 		{ID: "two", Name: "name fallback", Reasoning: &config.ReasoningSpec{Supported: false}},
 		{ID: "three"},
+		{
+			ID:           "any",
+			EffortLevels: []string{"low", "medium", "high"},
+			Reasoning:    &config.ReasoningSpec{Supported: true, AnyEffort: true},
+		},
 	}}}}
 	entries, err := host.Models(t.Context())
 	require.NoError(t, err)
-	require.Len(t, entries, 3)
+	require.Len(t, entries, 4)
 	assert.Equal(t, "display", entries[0].DisplayName)
 	assert.Equal(t, "name fallback", entries[1].DisplayName)
 	assert.Equal(t, "three", entries[2].DisplayName)
@@ -37,9 +80,12 @@ func TestAssistantHostModels(t *testing.T) {
 	assert.InDelta(t, 2, entries[0].InputPrice, 1e-9)
 	assert.InDelta(t, 8, entries[0].OutputPrice, 1e-9)
 	assert.Equal(t, []string{"low"}, entries[0].EffortLevels)
+	assert.Equal(t, []string{"low"}, entries[0].EffortAllowlist)
 	assert.Equal(t, "low", entries[0].DefaultEffort)
 	assert.False(t, entries[1].Reasoning)
 	assert.False(t, entries[1].Priced)
+	assert.Equal(t, []string{"low", "medium", "high"}, entries[3].EffortLevels)
+	assert.Empty(t, entries[3].EffortAllowlist)
 }
 
 func TestHarnessScenario_AssistantSwitch(t *testing.T) {

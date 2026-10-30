@@ -66,9 +66,10 @@ func EnqueueTx(ctx context.Context, tx *sql.Tx, in Input) (*Enqueued, error) {
 	var status SessionStatus
 	var killed sql.NullTime
 	var attrs string
+	var agentType string
 
-	err := tx.QueryRowContext(ctx, `SELECT parent_id,status,killed_at,attributes FROM sessions WHERE id = ?`, in.SessionID).
-		Scan(&parentID, &status, &killed, &attrs)
+	err := tx.QueryRowContext(ctx, `SELECT parent_id,status,killed_at,attributes,COALESCE(agent_type, '') FROM sessions WHERE id = ?`, in.SessionID).
+		Scan(&parentID, &status, &killed, &attrs, &agentType)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrSessionNotAcceptingInput
 	}
@@ -97,7 +98,7 @@ func EnqueueTx(ctx context.Context, tx *sql.Tx, in Input) (*Enqueued, error) {
 
 	now := time.Now().UTC()
 
-	attributes, err := prepareEnqueueAttributesTx(ctx, tx, in, parentID, attrs, now)
+	attributes, err := prepareEnqueueAttributesTx(ctx, tx, in, parentID, attrs, agentType, now)
 	if err != nil {
 		return nil, err
 	}
@@ -388,7 +389,7 @@ func prepareEnqueueAttributesTx(
 	tx *sql.Tx,
 	in Input,
 	parentID int64,
-	raw string,
+	raw, agentType string,
 	at time.Time,
 ) (map[string]any, error) {
 	attributes := cloneAttributes(in.Attributes)
@@ -399,6 +400,21 @@ func prepareEnqueueAttributesTx(
 	}
 
 	attributes[managerIDAttribute] = owner
+
+	human := IsHumanInput(in.Source, in.Attributes)
+	if human && parentID == 0 && agentType != AssistantAgentType && !isExactControlCommand(in.Content) {
+		var observer int64
+
+		err := tx.QueryRowContext(ctx, `SELECT id FROM sessions WHERE parent_id = 0 AND agent_type = ?
+			AND json_extract(attributes, '$.manager_id') = ? AND killed_at IS NULL LIMIT 1`, AssistantAgentType, owner).Scan(&observer)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return nil, fmt.Errorf("find human input observer: %w", err)
+		}
+
+		if err == nil {
+			attributes[ObserverSessionIDAttribute] = observer
+		}
+	}
 
 	if title := TitleFromInput(in.Content); title != "" {
 		if _, err := tx.ExecContext(ctx, `UPDATE sessions
@@ -414,7 +430,7 @@ func prepareEnqueueAttributesTx(
 			ctx,
 			tx,
 			in.SessionID,
-			IsHumanInput(in.Source, in.Attributes),
+			human,
 			at,
 		); err != nil {
 			return nil, err

@@ -33,6 +33,7 @@ type ChatSession struct {
 	Unread         int64
 	LatestUnread   string
 	LatestUnreadID int64
+	Scheduled      bool
 }
 
 // ChatPort is bound to one manager and chat; session 0 denotes its assistant.

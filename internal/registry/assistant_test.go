@@ -56,6 +56,13 @@ func TestAssistantPromptIncludesBoundedHostAdministration(t *testing.T) {
 		"change your own budget first", "/skill <name> [args]", "on an ordinary request",
 		"/config and /budget sent there grant you nothing", "/config on #0, never inside a work session",
 		"refuses send until you raise or clear its budget",
+		"open(project, about, text, model?, effort?, worktree?)", "never open and then set_model",
+		"sessions and the desk show model · effort and budget", "action=get gives the budget state",
+		"or the user talked to directly", "⏰", "exactly one of cron or at",
+		"Set report only when the user wants to be told the result", "schedule #N fired",
+		"list shows yours and work sessions' schedules", "cancel removes one by id",
+		"one short line without retelling", "freshly fetched remote default branch",
+		"Never tell a session to create a worktree itself", "for a config refusal, suggest /gwt",
 	} {
 		assert.Contains(t, AssistantPrompt, text)
 	}

@@ -17,6 +17,9 @@ const (
 	ObservedMessageIDAttribute = "observed_message_id"
 )
 
+// SleepScheduleSQL identifies exact-call sleeps over unqualified schedules columns.
+const SleepScheduleSQL = `one_shot_at IS NOT NULL AND COALESCE(json_extract(metadata, '$.tool_call_id'), '') <> ''`
+
 // FinalMessageSQL identifies a work answer over messages aliased as m.
 const FinalMessageSQL = `(m.role = 'assistant' AND COALESCE(m.tool_calls, '') IN ('', '[]', 'null')
 		AND TRIM(COALESCE(m.content, ''), ' ' || char(9, 10, 13)) <> ''
@@ -35,8 +38,7 @@ type observerWindow struct{ observer, lower int64 }
 
 // IsHumanInput excludes assistant provenance from authority-bearing user input.
 func IsHumanInput(source InputSource, attributes map[string]any) bool {
-	_, observed := attributes[ObserverSessionIDAttribute]
-	return source == InputSourceUser && !observed && attributes["from"] != "assistant"
+	return source == InputSourceUser && attributes["from"] != "assistant"
 }
 
 // ClipMiddle keeps the head and tail so the end of a long text stays visible.
@@ -109,9 +111,16 @@ LEFT JOIN projects p ON p.id = s.project_id WHERE s.id = ?`, work).Scan(&project
 			attrs[ObservedKindAttribute], attrs[ObservedMessageIDAttribute] = kind, final
 		}
 
-		_, err := EnqueueTx(ctx, tx, Input{
+		quotes, err := observerQuotesTx(ctx, tx, work, window.observer, final, project)
+		if err != nil {
+			return err
+		}
+
+		content := strings.Join(append(quotes, fmt.Sprintf("← %s (%d) %s: %s", project, work, kind, text)), "\n")
+
+		_, err = EnqueueTx(ctx, tx, Input{
 			SessionID: window.observer, Source: InputSourceAgent,
-			Content:    ClipMiddle(fmt.Sprintf("← %s (%d) %s: %s", project, work, kind, text), 20000),
+			Content:    ClipMiddle(content, 20000),
 			Attributes: attrs, DeliveryKey: fmt.Sprintf("observer:%d", output),
 		})
 		if err != nil && !errors.Is(err, ErrSessionNotAcceptingInput) {

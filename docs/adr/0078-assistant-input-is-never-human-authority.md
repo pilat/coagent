@@ -4,6 +4,7 @@
 - **Date:** 2026-10-30
 - **Amends:** [ADR-0031](0031-user-commands-grant-one-turn-tool-authority.md),
   [ADR-0077](0077-assistant-moves-the-user-in-never-out.md)
+- **Amended by:** [ADR-0080](0080-assistant-administers-work-at-open-and-hears-direct-exchanges.md) — human input is `source = 'user'` without `from = assistant`; `observer_session_id` alone no longer removes authority
 
 ## Context
 

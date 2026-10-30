@@ -8,7 +8,70 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/pilat/coagent/internal/budget"
 )
+
+func TestAssistantCardModelAndBudget(t *testing.T) {
+	now := time.Now()
+	for _, tc := range []struct {
+		name, want string
+		record     *budget.Record
+	}{
+		{"cost", "$1.20 left", &budget.Record{State: budget.Armed, CostLimitUSD: new(2.0), BaselineCostUSD: 10}},
+		{"duration", "34m left", &budget.Record{State: budget.Armed, ArmedAt: now, DurationSeconds: new(int64(2040))}},
+		{"hours", "1h05m left", &budget.Record{State: budget.Armed, ArmedAt: now, DurationSeconds: new(int64(3900))}},
+		{"both", "$1.20 · 34m left", &budget.Record{
+			State: budget.Armed, ArmedAt: now,
+			CostLimitUSD: new(2.0), BaselineCostUSD: 10, DurationSeconds: new(int64(2040)),
+		}},
+		{"fired", "budget fired (cost)", &budget.Record{State: budget.Fired, FiredReason: "cost", ParkPhase: "requested"}},
+		{"parked", "budget parked (duration)", &budget.Record{State: budget.Fired, FiredReason: "duration", ParkPhase: "parked"}},
+		{"released", "", &budget.Record{State: budget.Released}},
+		{"none", "", nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			card := Card{
+				ID: 7, Project: "project", Model: "model", Effort: "high", Budget: tc.record,
+				TreeCostUSD: new(10.8), ContextTokens: 54000, Pending: true, Scheduled: true,
+			}
+			models := []Model{{ID: "model", DisplayName: "Display", EffortLevels: []string{"high"}}}
+			line := cardLines(card, now, models)
+			want := "ctx 54k · Display · high"
+			if tc.want != "" {
+				want += " · " + tc.want
+			}
+			assert.Contains(t, line, want+" · ⏰ · ⏳ awaiting answer")
+			models[0].EffortLevels = nil
+			assert.NotContains(t, cardLines(card, now, models), " · high")
+			assert.Contains(t, cardLines(card, now, nil), "ctx 54k · model")
+			assert.NotContains(t, cardLines(card, now, nil), " · high")
+		})
+	}
+}
+
+func TestAssistantCardEffectiveEffort(t *testing.T) {
+	for _, tc := range []struct {
+		name, stored, want string
+		levels, allowlist  []string
+	}{
+		{"missing stored level", "", "low", []string{"low", "high"}, []string{"low", "high"}},
+		{"unsupported stored level", "medium", "low", []string{"low", "high"}, []string{"low", "high"}},
+		{"narrowed catalog", "high", "low", []string{"low"}, []string{"low"}},
+		{"supported stored level", "high", "high", []string{"low", "high"}, []string{"low", "high"}},
+		{"any effort", "max", "max", []string{"low", "medium", "high"}, nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			card := Card{ID: 7, Project: "project", Model: "model", Effort: tc.stored}
+			models := []Model{
+				{ID: "model", DisplayName: "Display", EffortLevels: tc.levels, EffortAllowlist: tc.allowlist},
+			}
+			assert.Contains(t, cardLines(card, time.Now(), models), "Display · "+tc.want)
+		})
+	}
+}
 
 func TestAssistantRenderStatesTruncation(t *testing.T) {
 	t.Parallel()

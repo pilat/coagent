@@ -53,7 +53,12 @@ func (t *assistantTool) look(ctx context.Context, call llmwire.ToolCall) (string
 			return "", err
 		}
 
-		return renderSessions(cards, max(0, args.Offset), total, time.Now().UTC()), nil
+		models, err := t.host.Models(ctx)
+		if err != nil {
+			return "", fmt.Errorf("list models: %w", err)
+		}
+
+		return renderSessions(cards, max(0, args.Offset), total, time.Now().UTC(), models), nil
 	case toolProjects:
 		projects, err := t.store.Projects(ctx)
 		if err != nil {

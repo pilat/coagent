@@ -63,7 +63,10 @@ var toolSchemas = []llmwire.ToolSchema{
 	schema(toolOpen, "Do: start new work immediately with a self-contained instruction; returns the real session id.",
 		`{"project":{"type":"string","description":"An existing project key, or a new name for a scratch folder."},`+
 			`"about":{"type":"string","description":"One line, why this session exists (1-80 characters)."},`+
-			`"text":{"type":"string","description":"The instruction, in the user's language."}}`,
+			`"text":{"type":"string","description":"The instruction, in the user's language."},`+
+			`"model":{"type":"string","description":"Configured model id; omitted uses the default model."},`+
+			`"effort":{"type":"string","description":"Effort level; omitted uses the model's default."},`+
+			`"worktree":{"type":"string","description":"New branch and worktree name in an existing repository project."}}`,
 		"project", "about", "text"),
 	schema(toolSend, "Do: immediately continue a work session, finished or stopped or still running.",
 		`{"session":{"type":"string","description":"A session id like \"244\" or \"#244\"."},`+
@@ -112,7 +115,7 @@ var _ tool.Tool = (*assistantTool)(nil)
 
 // Host provides work-session lifecycle; Deliver's transaction rechecks authority.
 type Host interface {
-	CreateWork(ctx context.Context, owner string, projectID int64, name, workDir, title string) (int64, error)
+	CreateWork(ctx context.Context, owner string, spec WorkSpec) (int64, string, error)
 	// Deliver commits enqueue under the tree lock, then dispatches commands or wakes the session.
 	Deliver(
 		ctx context.Context,
@@ -127,14 +130,26 @@ type Host interface {
 }
 
 type Model struct {
-	ID            string
-	DisplayName   string
-	EffortLevels  []string
-	DefaultEffort string
-	Reasoning     bool
-	Priced        bool
-	InputPrice    float64
-	OutputPrice   float64
+	ID           string
+	DisplayName  string
+	EffortLevels []string
+	// EffortAllowlist is the driver's clamp input; empty means pass-through.
+	EffortAllowlist []string
+	DefaultEffort   string
+	Reasoning       bool
+	Priced          bool
+	InputPrice      float64
+	OutputPrice     float64
+}
+
+type WorkSpec struct {
+	ProjectID int64
+	Name      string
+	WorkDir   string
+	Title     string
+	Model     string
+	Effort    string
+	Worktree  string
 }
 
 type assistantTool struct {
@@ -164,9 +179,12 @@ type sessionsArgs struct {
 }
 
 type openArgs struct {
-	Project string `json:"project"`
-	About   string `json:"about"`
-	Text    string `json:"text"`
+	Project  string  `json:"project"`
+	About    string  `json:"about"`
+	Text     string  `json:"text"`
+	Model    string  `json:"model"`
+	Effort   *string `json:"effort"`
+	Worktree string  `json:"worktree"`
 }
 
 type sendArgs struct {

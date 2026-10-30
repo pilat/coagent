@@ -24,11 +24,13 @@ func (w *chatLoop) prepare(ctx context.Context, focus int64) error {
 
 	name := ""
 	contextEligible := false
+	scheduled := false
 
 	for _, session := range sessions {
 		if session.ID == focus {
 			name = session.Name
 			contextEligible = session.Unread == 0
+			scheduled = session.Scheduled
 
 			break
 		}
@@ -36,6 +38,10 @@ func (w *chatLoop) prepare(ctx context.Context, focus int64) error {
 
 	if focus == 0 {
 		name = "Assistant"
+	}
+
+	if scheduled {
+		name += " ⏰"
 	}
 
 	prelude := []chatPreludeItem{{text: strings.TrimSpace(fmt.Sprintf("→ #%d %s", focus, name))}}
