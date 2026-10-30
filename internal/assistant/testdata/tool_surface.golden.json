@@ -1,0 +1,368 @@
+[
+  {
+    "id": "search",
+    "description": "Look: full-text search over every work session's requests and answers, your past conversation, memory and focus. Search with word stems ending in * in both Russian and English (\"кеш* cach* прав* permission*\"). Returns at most 10 hits with refs for around, read_session, rewrite_memory and update_focus.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "query": {
+          "type": "string",
+          "description": "Words or stems; a trailing * matches any ending."
+        }
+      },
+      "required": [
+        "query"
+      ]
+    },
+    "parallel_safe": false
+  },
+  {
+    "id": "around",
+    "description": "Look: show a message search hit among that session's requests and answers.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "ref": {
+          "type": "string",
+          "description": "\"msg 5012\" from a search result."
+        },
+        "count": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 10,
+          "description": "Entries on each side."
+        }
+      },
+      "required": [
+        "ref",
+        "count"
+      ]
+    },
+    "parallel_safe": true
+  },
+  {
+    "id": "read_session",
+    "description": "Look: the last requests and final answers of one work session, each whole.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "session": {
+          "type": "string",
+          "description": "A session id like \"244\" or \"#244\"."
+        },
+        "count": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 60,
+          "description": "How many entries."
+        }
+      },
+      "required": [
+        "session",
+        "count"
+      ]
+    },
+    "parallel_safe": true
+  },
+  {
+    "id": "sessions",
+    "description": "Look: every work session you may address, most recently active first, 20 per page.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "offset": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "How many to skip."
+        },
+        "project": {
+          "type": "string",
+          "description": "Only this project key, optional."
+        }
+      },
+      "required": [
+        "offset"
+      ]
+    },
+    "parallel_safe": true
+  },
+  {
+    "id": "projects",
+    "description": "Look: the known projects with their keys, places and last activity.",
+    "parameters": {
+      "type": "object",
+      "properties": {},
+      "required": []
+    },
+    "parallel_safe": true
+  },
+  {
+    "id": "focus_list",
+    "description": "Look: every live focus item.",
+    "parameters": {
+      "type": "object",
+      "properties": {},
+      "required": []
+    },
+    "parallel_safe": true
+  },
+  {
+    "id": "open",
+    "description": "Do: start new work immediately with a self-contained instruction; returns the real session id.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "project": {
+          "type": "string",
+          "description": "An existing project key, or a new name for a scratch folder."
+        },
+        "about": {
+          "type": "string",
+          "description": "One line, why this session exists (1-80 characters)."
+        },
+        "text": {
+          "type": "string",
+          "description": "The instruction, in the user's language."
+        },
+        "model": {
+          "type": "string",
+          "description": "Configured model id; omitted uses the default model."
+        },
+        "effort": {
+          "type": "string",
+          "description": "Effort level; omitted uses the model's default."
+        },
+        "worktree": {
+          "type": "string",
+          "description": "New branch and worktree name in an existing repository project."
+        }
+      },
+      "required": [
+        "project",
+        "about",
+        "text"
+      ]
+    },
+    "parallel_safe": false
+  },
+  {
+    "id": "send",
+    "description": "Do: immediately continue a work session, finished or stopped or still running.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "session": {
+          "type": "string",
+          "description": "A session id like \"244\" or \"#244\"."
+        },
+        "text": {
+          "type": "string",
+          "description": "The instruction, in the user's language."
+        }
+      },
+      "required": [
+        "session",
+        "text"
+      ]
+    },
+    "parallel_safe": false
+  },
+  {
+    "id": "stop",
+    "description": "Do: stop a work session's current work immediately.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "session": {
+          "type": "string",
+          "description": "A session id like \"244\" or \"#244\"."
+        }
+      },
+      "required": [
+        "session"
+      ]
+    },
+    "parallel_safe": false
+  },
+  {
+    "id": "switch",
+    "description": "Do: switch the user into a work session while they are talking to you; they return with /assistant.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "session": {
+          "type": "string",
+          "description": "A session id like \"244\" or \"#244\"."
+        }
+      },
+      "required": [
+        "session"
+      ]
+    },
+    "parallel_safe": false
+  },
+  {
+    "id": "models",
+    "description": "Look: configured models in order, with default, effort choices, reasoning and catalog prices.",
+    "parameters": {
+      "type": "object",
+      "properties": {},
+      "required": []
+    },
+    "parallel_safe": true
+  },
+  {
+    "id": "set_model",
+    "description": "Do: set a work session's configured model and optional effort; omitted effort uses its default.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "session": {
+          "type": "string",
+          "description": "A session id like \"244\" or \"#244\"."
+        },
+        "model": {
+          "type": "string"
+        },
+        "effort": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "session",
+        "model"
+      ]
+    },
+    "parallel_safe": false
+  },
+  {
+    "id": "remember",
+    "description": "Do: add a memory note (at most 300 characters). Without until it is permanent; with until it leaves the desk after that date but stays searchable.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "text": {
+          "type": "string"
+        },
+        "until": {
+          "type": "string",
+          "description": "YYYY-MM-DD, optional."
+        }
+      },
+      "required": [
+        "text"
+      ]
+    },
+    "parallel_safe": false
+  },
+  {
+    "id": "rewrite_memory",
+    "description": "Do: replace a memory note's text and lifetime; omitting until makes it permanent.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Memory id, for example \"m12\"."
+        },
+        "text": {
+          "type": "string"
+        },
+        "until": {
+          "type": "string",
+          "description": "YYYY-MM-DD, optional."
+        }
+      },
+      "required": [
+        "id",
+        "text"
+      ]
+    },
+    "parallel_safe": false
+  },
+  {
+    "id": "forget_memory",
+    "description": "Do: delete a memory note; it can no longer be found.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Memory id, for example \"m12\"."
+        }
+      },
+      "required": [
+        "id"
+      ]
+    },
+    "parallel_safe": false
+  },
+  {
+    "id": "focus",
+    "description": "Do: add a focus item (at most 200 characters): what is being done now and what to tell the user when it answers.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "text": {
+          "type": "string"
+        },
+        "sessions": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Session ids this item waits on; may be empty."
+        }
+      },
+      "required": [
+        "text",
+        "sessions"
+      ]
+    },
+    "parallel_safe": false
+  },
+  {
+    "id": "update_focus",
+    "description": "Do: replace a focus item's text and sessions; omitted sessions are kept.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Focus id, for example \"f3\"."
+        },
+        "text": {
+          "type": "string"
+        },
+        "sessions": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "id",
+        "text"
+      ]
+    },
+    "parallel_safe": false
+  },
+  {
+    "id": "done_focus",
+    "description": "Do: remove a focus item that is finished or no longer wanted.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Focus id, for example \"f3\"."
+        }
+      },
+      "required": [
+        "id"
+      ]
+    },
+    "parallel_safe": false
+  }
+]

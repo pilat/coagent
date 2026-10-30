@@ -12,7 +12,7 @@ import (
 )
 
 func TestAssistantToolsDeliverCommandsVerbatim(t *testing.T) {
-	for _, id := range []string{toolOpen, toolSend} {
+	for _, id := range []string{"open", "send"} {
 		for _, text := range []string{"/skill review the diff", "/skill review x", "/budget 5$", "/config", "/etc/nginx.conf needs edits"} {
 			t.Run(id+text, func(t *testing.T) {
 				t.Parallel()
@@ -25,7 +25,7 @@ func TestAssistantToolsDeliverCommandsVerbatim(t *testing.T) {
 				require.NoError(t, err)
 				assert.Equal(t, []string{text}, f.host.deliveries)
 				work := f.work
-				if id == toolOpen {
+				if id == "open" {
 					require.Len(t, f.host.created, 1)
 					work = f.host.created[0]
 				}
@@ -48,7 +48,7 @@ func TestAssistantSendPreservesCommandSnapshotAndProvenance(t *testing.T) {
 		"from":                                  "user",
 		sessionstore.ObserverSessionIDAttribute: int64(-1),
 	}
-	f.execute(t, toolSend, fmt.Sprintf(`{"session":%d,"text":"/schedules"}`, f.work))
+	f.execute(t, "send", fmt.Sprintf(`{"session":%d,"text":"/schedules"}`, f.work))
 	pending, err := f.sessions.ListPending(t.Context(), f.work)
 	require.NoError(t, err)
 	require.Len(t, pending, 1)
@@ -61,7 +61,7 @@ func TestAssistantSendPreservesCommandSnapshotAndProvenance(t *testing.T) {
 func TestAssistantSendHashSession(t *testing.T) {
 	t.Parallel()
 	f := newToolFixture(t)
-	f.execute(t, toolSend, fmt.Sprintf(`{"session":"#%d","text":"continue"}`, f.work))
+	f.execute(t, "send", fmt.Sprintf(`{"session":"#%d","text":"continue"}`, f.work))
 	assert.Equal(t, []string{"continue"}, f.host.deliveries)
 	pending, err := f.sessions.ListPending(t.Context(), f.work)
 	require.NoError(t, err)

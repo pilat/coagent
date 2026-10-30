@@ -44,8 +44,8 @@ func TestHarnessScenario_AssistantCreatesWorktree(t *testing.T) {
 			_, err = h.store.GetOrCreateNamedProject(h.ctx, repo, "source")
 			require.NoError(t, err)
 			h.startInboxWake()
-			card, err := h.mgr.assistant.Open(h.ctx, assistantHost{s: h.mgr}, assistantFor(h, root.ID).scope,
-				"source", "inspect the fresh worktree", "worktree", "", "", "feat-x")
+			card, err := assistantFor(h, root.ID).Open(h.ctx,
+				"source", "inspect the fresh worktree", "worktree", "feat-x")
 			if !remote {
 				require.ErrorContains(t, err, "repository has no remote")
 				var count int

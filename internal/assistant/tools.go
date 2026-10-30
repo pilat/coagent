@@ -14,101 +14,76 @@ import (
 )
 
 const (
-	toolSearch        = "search"
-	toolAround        = "around"
-	toolRead          = "read_session"
-	toolSessions      = "sessions"
-	toolProjects      = "projects"
-	toolFocusList     = "focus_list"
-	toolOpen          = "open"
-	toolSend          = "send"
-	toolStop          = "stop"
-	toolSwitch        = "switch"
-	toolModels        = "models"
-	toolSetModel      = "set_model"
-	toolRemember      = "remember"
-	toolRewriteMemory = "rewrite_memory"
-	toolForgetMemory  = "forget_memory"
-	toolFocus         = "focus"
-	toolUpdateFocus   = "update_focus"
-	toolDoneFocus     = "done_focus"
-)
-
-const (
 	sessionsPage   = 20
 	readMaxEntries = 60
 	aroundMaxCount = 10
-	focusTextChars = 200
-	focusLiveItems = 30
 )
 
-var toolSchemas = []llmwire.ToolSchema{
-	schema(toolSearch, "Look: full-text search over every work session's requests and answers, your past "+
+var toolTable = []toolEntry{
+	{schema("search", "Look: full-text search over every work session's requests and answers, your past "+
 		"conversation, memory and focus. Search with word stems ending in * in both Russian and English "+
 		"(\"кеш* cach* прав* permission*\"). Returns at most 10 hits with refs for around, read_session, "+
 		"rewrite_memory and update_focus.",
-		`{"query":{"type":"string","description":"Words or stems; a trailing * matches any ending."}}`, "query"),
-	schema(toolAround, "Look: show a message search hit among that session's requests and answers.",
+		`{"query":{"type":"string","description":"Words or stems; a trailing * matches any ending."}}`, "query",
+	), false, (*assistantTool).search},
+	{schema("around", "Look: show a message search hit among that session's requests and answers.",
 		`{"ref":{"type":"string","description":"\"msg 5012\" from a search result."},`+
-			`"count":{"type":"integer","minimum":1,"maximum":10,"description":"Entries on each side."}}`, "ref", "count"),
-	schema(toolRead, "Look: the last requests and final answers of one work session, each whole.",
+			`"count":{"type":"integer","minimum":1,"maximum":10,"description":"Entries on each side."}}`, "ref", "count"), true, (*assistantTool).around},
+	{schema("read_session", "Look: the last requests and final answers of one work session, each whole.",
 		`{"session":{"type":"string","description":"A session id like \"244\" or \"#244\"."},`+
 			`"count":{"type":"integer","minimum":1,"maximum":60,"description":"How many entries."}}`,
-		"session", "count"),
-	schema(toolSessions, "Look: every work session you may address, most recently active first, 20 per page.",
+		"session", "count"), true, (*assistantTool).readSession},
+	{schema("sessions", "Look: every work session you may address, most recently active first, 20 per page.",
 		`{"offset":{"type":"integer","minimum":0,"description":"How many to skip."},`+
-			`"project":{"type":"string","description":"Only this project key, optional."}}`, "offset"),
-	schema(toolProjects, "Look: the known projects with their keys, places and last activity.", `{}`),
-	schema(toolFocusList, "Look: every live focus item.", `{}`),
-	schema(toolOpen, "Do: start new work immediately with a self-contained instruction; returns the real session id.",
+			`"project":{"type":"string","description":"Only this project key, optional."}}`, "offset"), true, (*assistantTool).sessions},
+	{schema("projects", "Look: the known projects with their keys, places and last activity.",
+		`{}`), true, (*assistantTool).projects},
+	{schema("focus_list", "Look: every live focus item.", `{}`), true, (*assistantTool).focusList},
+	{schema("open", "Do: start new work immediately with a self-contained instruction; returns the real session id.",
 		`{"project":{"type":"string","description":"An existing project key, or a new name for a scratch folder."},`+
 			`"about":{"type":"string","description":"One line, why this session exists (1-80 characters)."},`+
 			`"text":{"type":"string","description":"The instruction, in the user's language."},`+
 			`"model":{"type":"string","description":"Configured model id; omitted uses the default model."},`+
 			`"effort":{"type":"string","description":"Effort level; omitted uses the model's default."},`+
 			`"worktree":{"type":"string","description":"New branch and worktree name in an existing repository project."}}`,
-		"project", "about", "text"),
-	schema(toolSend, "Do: immediately continue a work session, finished or stopped or still running.",
+		"project", "about", "text"), false, (*assistantTool).open},
+	{schema("send", "Do: immediately continue a work session, finished or stopped or still running.",
 		`{"session":{"type":"string","description":"A session id like \"244\" or \"#244\"."},`+
-			`"text":{"type":"string","description":"The instruction, in the user's language."}}`, "session", "text"),
-	schema(toolStop, "Do: stop a work session's current work immediately.",
-		`{"session":{"type":"string","description":"A session id like \"244\" or \"#244\"."}}`, "session"),
-	schema(
-		toolSwitch,
+			`"text":{"type":"string","description":"The instruction, in the user's language."}}`, "session", "text"), false, (*assistantTool).send},
+	{schema("stop", "Do: stop a work session's current work immediately.",
+		`{"session":{"type":"string","description":"A session id like \"244\" or \"#244\"."}}`, "session",
+	), false, (*assistantTool).stop},
+	{schema("switch",
 		"Do: switch the user into a work session while they are talking to you; they return with /assistant.",
 		`{"session":{"type":"string","description":"A session id like \"244\" or \"#244\"."}}`,
-		"session",
-	),
-	schema(
-		toolModels,
-		"Look: configured models in order, with default, effort choices, reasoning and catalog prices.",
-		`{}`,
-	),
-	schema(
-		toolSetModel,
+		"session"), false, (*assistantTool).switchChat},
+	{schema("models", "Look: configured models in order, with default, effort choices, reasoning and catalog prices.",
+		`{}`), true, (*assistantTool).models},
+	{schema("set_model",
 		"Do: set a work session's configured model and optional effort; omitted effort uses its default.",
 		`{"session":{"type":"string","description":"A session id like \"244\" or \"#244\"."},`+
 			`"model":{"type":"string"},"effort":{"type":"string"}}`,
-		"session",
-		"model",
-	),
-	schema(toolRemember, "Do: add a memory note (at most 300 characters). Without until it is permanent; "+
+		"session", "model"), false, (*assistantTool).setModel},
+	{schema("remember", "Do: add a memory note (at most 300 characters). Without until it is permanent; "+
 		"with until it leaves the desk after that date but stays searchable.",
-		`{"text":{"type":"string"},"until":{"type":"string","description":"YYYY-MM-DD, optional."}}`, "text"),
-	schema(toolRewriteMemory, "Do: replace a memory note's text and lifetime; omitting until makes it permanent.",
+		`{"text":{"type":"string"},"until":{"type":"string","description":"YYYY-MM-DD, optional."}}`, "text",
+	), false, (*assistantTool).remember},
+	{schema("rewrite_memory", "Do: replace a memory note's text and lifetime; omitting until makes it permanent.",
 		`{"id":{"type":"string","description":"Memory id, for example \"m12\"."},`+
-			`"text":{"type":"string"},"until":{"type":"string","description":"YYYY-MM-DD, optional."}}`, "id", "text"),
-	schema(toolForgetMemory, "Do: delete a memory note; it can no longer be found.",
-		`{"id":{"type":"string","description":"Memory id, for example \"m12\"."}}`, "id"),
-	schema(toolFocus, "Do: add a focus item (at most 200 characters): what is being done now and what to tell "+
+			`"text":{"type":"string"},"until":{"type":"string","description":"YYYY-MM-DD, optional."}}`, "id", "text"), false, (*assistantTool).rewriteMemory},
+	{schema("forget_memory", "Do: delete a memory note; it can no longer be found.",
+		`{"id":{"type":"string","description":"Memory id, for example \"m12\"."}}`, "id",
+	), false, (*assistantTool).forgetMemory},
+	{schema("focus", "Do: add a focus item (at most 200 characters): what is being done now and what to tell "+
 		"the user when it answers.",
 		`{"text":{"type":"string"},"sessions":{"type":"array","items":{"type":"string"},`+
-			`"description":"Session ids this item waits on; may be empty."}}`, "text", "sessions"),
-	schema(toolUpdateFocus, "Do: replace a focus item's text and sessions; omitted sessions are kept.",
+			`"description":"Session ids this item waits on; may be empty."}}`, "text", "sessions"), false, (*assistantTool).addFocus},
+	{schema("update_focus", "Do: replace a focus item's text and sessions; omitted sessions are kept.",
 		`{"id":{"type":"string","description":"Focus id, for example \"f3\"."},"text":{"type":"string"},`+
-			`"sessions":{"type":"array","items":{"type":"string"}}}`, "id", "text"),
-	schema(toolDoneFocus, "Do: remove a focus item that is finished or no longer wanted.",
-		`{"id":{"type":"string","description":"Focus id, for example \"f3\"."}}`, "id"),
+			`"sessions":{"type":"array","items":{"type":"string"}}}`, "id", "text"), false, (*assistantTool).updateFocus},
+	{schema("done_focus", "Do: remove a focus item that is finished or no longer wanted.",
+		`{"id":{"type":"string","description":"Focus id, for example \"f3\"."}}`, "id",
+	), false, (*assistantTool).doneFocus},
 }
 
 var _ tool.Tool = (*assistantTool)(nil)
@@ -117,10 +92,7 @@ var _ tool.Tool = (*assistantTool)(nil)
 type Host interface {
 	CreateWork(ctx context.Context, owner string, spec WorkSpec) (int64, string, error)
 	// Deliver commits enqueue under the tree lock, then dispatches commands or wakes the session.
-	Deliver(
-		ctx context.Context,
-		sessionID int64,
-		text string,
+	Deliver(ctx context.Context, sessionID int64, text string,
 		enqueue func(*sql.Tx, map[string]any) (*sessionstore.InboxInput, error),
 	) error
 	Stop(ctx context.Context, sessionID int64) error
@@ -130,30 +102,26 @@ type Host interface {
 }
 
 type Model struct {
-	ID           string
-	DisplayName  string
-	EffortLevels []string
-	// EffortAllowlist is the driver's clamp input; empty means pass-through.
-	EffortAllowlist []string
-	DefaultEffort   string
-	Reasoning       bool
-	Priced          bool
-	InputPrice      float64
-	OutputPrice     float64
+	ID, DisplayName, DefaultEffort string
+	EffortLevels                   []string
+	EffortAllowlist                []string // Empty means pass-through to the driver.
+	Reasoning, Priced              bool
+	InputPrice, OutputPrice        float64
 }
 
 type WorkSpec struct {
-	ProjectID int64
-	Name      string
-	WorkDir   string
-	Title     string
-	Model     string
-	Effort    string
-	Worktree  string
+	ProjectID                                     int64
+	Name, WorkDir, Title, Model, Effort, Worktree string
+}
+
+type toolEntry struct {
+	schema   llmwire.ToolSchema
+	parallel bool
+	run      func(*assistantTool, context.Context, json.RawMessage) (string, error)
 }
 
 type assistantTool struct {
-	spec  llmwire.ToolSchema
+	entry toolEntry
 	store *Store
 	scope Scope
 	host  Host
@@ -204,51 +172,32 @@ type focusArgs struct {
 	Sessions []sessionRef `json:"sessions"`
 }
 
+type modelArgs struct {
+	Session sessionRef `json:"session"`
+	Model   string     `json:"model"`
+	Effort  *string    `json:"effort"`
+}
+
 // sessionRef accepts numeric and string ids because models write both.
 type sessionRef string
 
 // Tools binds the assistant's immediate tools to one root and its manager.
 func Tools(store *Store, scope Scope, host Host) []tool.Tool {
-	tools := make([]tool.Tool, 0, len(toolSchemas))
-	for _, spec := range toolSchemas {
-		tools = append(tools, &assistantTool{spec: spec, store: store, scope: scope, host: host})
+	tools := make([]tool.Tool, 0, len(toolTable))
+	for _, entry := range toolTable {
+		tools = append(tools, &assistantTool{entry: entry, store: store, scope: scope, host: host})
 	}
 
 	return tools
 }
 
-func (t *assistantTool) ID() string                  { return t.spec.Name }
-func (t *assistantTool) Description() string         { return t.spec.Description }
-func (t *assistantTool) Parameters() json.RawMessage { return t.spec.Parameters }
-func (t *assistantTool) ParallelSafe() bool {
-	switch t.ID() {
-	case toolAround, toolRead, toolSessions, toolProjects, toolFocusList, toolModels:
-		return true
-	default:
-		return false
-	}
-}
+func (t *assistantTool) ID() string                  { return t.entry.schema.Name }
+func (t *assistantTool) Description() string         { return t.entry.schema.Description }
+func (t *assistantTool) Parameters() json.RawMessage { return t.entry.schema.Parameters }
+func (t *assistantTool) ParallelSafe() bool          { return t.entry.parallel }
 
 func (t *assistantTool) Execute(ctx context.Context, args json.RawMessage) (*tool.Result, error) {
-	call := llmwire.ToolCall{Name: t.ID(), Arguments: args}
-	var text string
-	var err error
-
-	switch t.ID() {
-	case toolSearch, toolAround, toolRead, toolSessions, toolProjects, toolFocusList:
-		text, err = t.look(ctx, call)
-	case toolOpen, toolSend, toolStop:
-		text, err = t.work(ctx, call)
-	case toolSwitch:
-		text, err = t.switchChat(ctx, call)
-	case toolModels:
-		text, err = t.models(ctx)
-	case toolSetModel:
-		text, err = t.setModel(ctx, call)
-	default:
-		text, err = t.edit(ctx, call)
-	}
-
+	text, err := t.entry.run(t, ctx, args)
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", t.ID(), err)
 	}
@@ -273,9 +222,13 @@ func (r *sessionRef) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-func (r sessionRef) id() (int64, bool) {
+func (r sessionRef) parse() (int64, error) {
 	id, err := strconv.ParseInt(strings.TrimPrefix(string(r), "#"), 10, 64)
-	return id, err == nil && id > 0
+	if err != nil || id <= 0 {
+		return 0, fmt.Errorf("session %q must be a session id", r)
+	}
+
+	return id, nil
 }
 
 func schema(name, description, properties string, required ...string) llmwire.ToolSchema {
@@ -292,14 +245,13 @@ func schema(name, description, properties string, required ...string) llmwire.To
 	}
 }
 
-func decodeArgs(call llmwire.ToolCall, into any) error {
-	raw := call.Arguments
+func decodeArgs(name string, raw json.RawMessage, into any) error {
 	if strings.TrimSpace(string(raw)) == "" {
 		raw = []byte("{}")
 	}
 
 	if err := json.Unmarshal(raw, into); err != nil {
-		return fmt.Errorf("arguments for %s: %w", call.Name, err)
+		return fmt.Errorf("arguments for %s: %w", name, err)
 	}
 
 	return nil

@@ -1,6 +1,7 @@
 package assistant
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"os"
@@ -10,20 +11,17 @@ import (
 
 	"github.com/pilat/coagent/internal/coagenthome"
 	"github.com/pilat/coagent/internal/projectpath"
-	"github.com/pilat/coagent/internal/sessionstore"
 )
 
-// projectChoice is a resolved open target; id zero means a new scratch project at path.
 type projectChoice struct {
-	id   int64
-	path string
-	name string
+	id         int64
+	path, name string
 }
 
-// projectEntry is a listed project with the id the assistant never sees.
 type projectEntry struct {
 	Project
-	id int64
+	id      int64
+	workDir string
 }
 
 // Projects lists the catalog, most recently active first.
@@ -51,17 +49,12 @@ func (s *Store) Projects(ctx context.Context) ([]Project, error) {
 	}
 
 	slices.SortStableFunc(projects, func(a, b Project) int {
-		if order := b.Activity.Compare(a.Activity); order != 0 {
-			return order
-		}
-
-		return strings.Compare(a.Key, b.Key)
+		return cmp.Or(b.Activity.Compare(a.Activity), strings.Compare(a.Key, b.Key))
 	})
 
 	return projects, nil
 }
 
-// catalog excludes hidden projects, missing folders and worktrees; a name shared by several uses its path as key.
 func (s *Store) catalog(ctx context.Context) ([]projectEntry, error) {
 	rows, err := s.sessions.ListProjects(ctx)
 	if err != nil {
@@ -76,7 +69,6 @@ func (s *Store) catalog(ctx context.Context) ([]projectEntry, error) {
 	var entries []projectEntry
 
 	names := map[string]int{}
-	paths := map[int64]string{}
 
 	for _, row := range rows {
 		if row.Hidden || row.WorkDir == worktrees ||
@@ -90,15 +82,14 @@ func (s *Store) catalog(ctx context.Context) ([]projectEntry, error) {
 		}
 
 		entries = append(entries, projectEntry{
-			Name: row.Name, Key: row.Name, Place: projectPlace(row.WorkDir), id: row.ID,
+			Name: row.Name, Key: row.Name, Place: projectPlace(row.WorkDir), id: row.ID, workDir: row.WorkDir,
 		})
 		names[row.Name]++
-		paths[row.ID] = row.WorkDir
 	}
 
 	for i := range entries {
 		if names[entries[i].Name] > 1 {
-			entries[i].Key = catalogPath(paths[entries[i].id])
+			entries[i].Key = catalogPath(entries[i].workDir)
 			if entries[i].Place == "scratch" {
 				entries[i].Place += " " + entries[i].Key
 			}
@@ -123,87 +114,51 @@ func (s *Store) projectID(ctx context.Context, key string) (int64, error) {
 	return 0, fmt.Errorf("no project %q: projects lists the keys", key)
 }
 
-func (s *Store) resolveProject(ctx context.Context, raw string) (projectChoice, error) {
-	choice, err := s.lookupProject(ctx, raw)
-	if err != nil || choice.id != 0 {
-		return choice, err
-	}
+func (s *Store) openTarget(ctx context.Context, raw string, worktree bool) (projectChoice, error) {
+	key := strings.TrimSpace(raw)
 
-	if err := os.MkdirAll(choice.path, 0o755); err != nil {
-		return projectChoice{}, fmt.Errorf("create assistant work directory: %w", err)
-	}
-
-	choice.id, err = s.sessions.GetOrCreateProject(ctx, choice.path)
-	if err != nil {
-		return projectChoice{}, fmt.Errorf("create assistant work project: %w", err)
-	}
-
-	return choice, nil
-}
-
-func (s *Store) openProject(ctx context.Context, raw, worktree string) (projectChoice, error) {
-	if worktree == "" {
-		return s.resolveProject(ctx, raw)
-	}
-
-	choice, err := s.lookupProject(ctx, raw)
+	entries, err := s.catalog(ctx)
 	if err != nil {
 		return projectChoice{}, err
 	}
 
-	if choice.id == 0 {
-		return projectChoice{}, fmt.Errorf("worktree needs an existing project: %s", raw)
-	}
-
-	return choice, nil
-}
-
-// lookupProject never creates anything, so open can be validated long before it runs.
-func (s *Store) lookupProject(ctx context.Context, raw string) (projectChoice, error) {
-	name := strings.TrimSpace(raw)
-
-	projects, err := s.sessions.ListProjects(ctx)
-	if err != nil {
-		return projectChoice{}, fmt.Errorf("list assistant projects: %w", err)
-	}
-
-	if path, ok := projectPathArg(name); ok {
-		for _, project := range projects {
-			if project.WorkDir == path && !project.Hidden {
-				return projectChoice{id: project.ID, path: project.WorkDir, name: project.Name}, nil
-			}
+	path, isPath := projectPathArg(key)
+	for _, entry := range entries {
+		if (isPath && entry.workDir == path) || (!isPath && entry.Key == key) {
+			return projectChoice{id: entry.id, path: entry.workDir, name: entry.Name}, nil
 		}
+	}
 
+	if isPath {
 		return projectChoice{}, fmt.Errorf("no project at %s", raw)
 	}
 
-	var existing *sessionstore.ProjectRow
-
-	for i := range projects {
-		if projects[i].Name == name && !projects[i].Hidden {
-			if existing != nil {
-				return projectChoice{}, fmt.Errorf(
-					"project name %q is ambiguous; open it by its path from projects",
-					name,
-				)
-			}
-
-			existing = &projects[i]
+	for _, entry := range entries {
+		if entry.Name == key {
+			return projectChoice{}, fmt.Errorf("project name %q is ambiguous; open it by its path from projects", key)
 		}
 	}
 
-	if existing != nil {
-		return projectChoice{id: existing.ID, path: existing.WorkDir, name: existing.Name}, nil
+	if worktree {
+		return projectChoice{}, fmt.Errorf("worktree needs an existing project: %s", raw)
 	}
 
-	name, err = projectpath.SanitizeName(name)
+	name, err := projectpath.SanitizeName(key)
 	if err != nil {
 		return projectChoice{}, fmt.Errorf("resolve assistant project: %w", err)
 	}
 
-	path := filepath.Join(s.projectsRoot, name)
+	path = filepath.Join(s.projectsRoot, name)
+	if err := os.MkdirAll(path, 0o755); err != nil {
+		return projectChoice{}, fmt.Errorf("create assistant work directory: %w", err)
+	}
 
-	return projectChoice{path: path, name: name}, nil
+	id, err := s.sessions.GetOrCreateProject(ctx, path)
+	if err != nil {
+		return projectChoice{}, fmt.Errorf("create assistant work project: %w", err)
+	}
+
+	return projectChoice{id: id, path: path, name: name}, nil
 }
 
 // projectPathArg accepts the catalog's path key, so a name shared by several

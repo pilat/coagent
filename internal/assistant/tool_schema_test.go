@@ -10,7 +10,8 @@ import (
 
 func TestAssistantSessionSchemasUseStrings(t *testing.T) {
 	t.Parallel()
-	for _, spec := range toolSchemas {
+	for _, entry := range toolTable {
+		spec := entry.schema
 		t.Run(spec.Name, func(t *testing.T) {
 			var params struct {
 				Properties map[string]struct {
@@ -19,7 +20,7 @@ func TestAssistantSessionSchemasUseStrings(t *testing.T) {
 				} `json:"properties"`
 			}
 			require.NoError(t, json.Unmarshal(spec.Parameters, &params))
-			if spec.Name == toolOpen {
+			if spec.Name == "open" {
 				assert.Equal(t, "string", params.Properties["model"].Type)
 				assert.Equal(t, "string", params.Properties["effort"].Type)
 				assert.Equal(t, "string", params.Properties["worktree"].Type)

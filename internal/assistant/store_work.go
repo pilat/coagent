@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"slices"
 	"strings"
-	"time"
 	"unicode/utf8"
 
 	"github.com/pilat/coagent/internal/budget"
@@ -104,75 +103,6 @@ func (s *Store) Read(ctx context.Context, id int64, count int) (string, error) {
 	return newestWithin(entries[max(0, len(entries)-count):], readBudget), nil
 }
 
-// Open creates a titled work root before delivering its first instruction.
-func (s *Store) Open(
-	ctx context.Context,
-	host Host,
-	scope Scope,
-	project, text, about, model, effort, worktree string,
-) (Card, error) {
-	words, err := s.sessions.ActiveUserInput(ctx, scope.Root)
-	if err != nil {
-		return Card{}, fmt.Errorf("quote current user input: %w", err)
-	}
-
-	text = withUserWords(text, words)
-
-	choice, err := s.openProject(ctx, project, worktree)
-	if err != nil {
-		return Card{}, err
-	}
-
-	id, name, err := host.CreateWork(ctx, scope.Owner, WorkSpec{
-		ProjectID: choice.id, Name: choice.name, WorkDir: choice.path, Title: about, Model: model, Effort: effort,
-		Worktree: worktree,
-	})
-	if err != nil {
-		return Card{}, fmt.Errorf("open assistant work: %w", err)
-	}
-
-	if err := s.deliver(ctx, host, scope, id, text); err != nil {
-		return Card{}, err
-	}
-
-	record, err := s.sessions.GetSession(ctx, id)
-	if err != nil {
-		return Card{}, fmt.Errorf("load opened session model: %w", err)
-	}
-
-	now := time.Now().UTC()
-
-	return Card{
-		ID: id, Project: name, Status: workingStatus, CreatedAt: now, Activity: now,
-		Title: about, Model: record.Model, Effort: record.ReasoningLevel,
-	}, nil
-}
-
-// Send re-checks authority inside the delivery transaction.
-func (s *Store) Send(ctx context.Context, host Host, scope Scope, id int64, text string) error {
-	words, err := s.sessions.ActiveUserInput(ctx, scope.Root)
-	if err != nil {
-		return fmt.Errorf("quote current user input: %w", err)
-	}
-
-	text = withUserWords(text, words)
-
-	return s.deliver(ctx, host, scope, id, text)
-}
-
-// Stop authorizes the target before requesting its ordinary lifecycle stop.
-func (s *Store) Stop(ctx context.Context, host Host, scope Scope, id int64) error {
-	if _, err := s.Target(ctx, scope, id); err != nil {
-		return err
-	}
-
-	if err := host.Stop(ctx, id); err != nil {
-		return fmt.Errorf("stop assistant work: %w", err)
-	}
-
-	return nil
-}
-
 func (s *Store) cards(ctx context.Context, scope Scope, id int64) ([]Card, error) {
 	const query = `SELECT s.id, s.project_id, COALESCE(p.name, ''), s.status,
 			s.created_at, s.updated_at, COALESCE(s.context_baseline_prompt_tokens, 0),
@@ -266,11 +196,7 @@ func scanCard(rows *sql.Rows) (Card, error) {
 
 func sortCards(cards []Card) {
 	slices.SortStableFunc(cards, func(a, b Card) int {
-		if order := b.Activity.Compare(a.Activity); order != 0 {
-			return order
-		}
-
-		return cmp.Compare(b.ID, a.ID)
+		return cmp.Or(b.Activity.Compare(a.Activity), cmp.Compare(b.ID, a.ID))
 	})
 }
 
@@ -284,10 +210,9 @@ func cardStatus(status sessionstore.SessionStatus) string {
 		return failedStatus
 	case sessionstore.SessionStatusStopping, sessionstore.SessionStatusStopped,
 		sessionstore.SessionStatusTerminating, sessionstore.SessionStatusKilled:
-		return string(sessionstore.SessionStatusStopped)
-	default:
-		return string(sessionstore.SessionStatusStopped)
 	}
+
+	return string(sessionstore.SessionStatusStopped)
 }
 
 func authorizedTx(ctx context.Context, tx *sql.Tx, owner string, id int64) (bool, error) {
@@ -300,24 +225,8 @@ func authorizedTx(ctx context.Context, tx *sql.Tx, owner string, id int64) (bool
 	return ok, nil
 }
 
-func (s *Store) deliver(ctx context.Context, host Host, scope Scope, id int64, text string) error {
-	err := host.Deliver(ctx, id, text, func(tx *sql.Tx, attributes map[string]any) (*sessionstore.InboxInput, error) {
-		return s.instructTx(ctx, tx, scope, id, text, attributes)
-	})
-	if err != nil {
-		return fmt.Errorf("deliver assistant instruction: %w", err)
-	}
-
-	return nil
-}
-
-func (s *Store) instructTx(
-	ctx context.Context,
-	tx *sql.Tx,
-	scope Scope,
-	id int64,
-	text string,
-	attributes map[string]any,
+func (s *Store) instructTx(ctx context.Context, tx *sql.Tx, scope Scope,
+	id int64, text string, attributes map[string]any,
 ) (*sessionstore.InboxInput, error) {
 	ok, err := authorizedTx(ctx, tx, scope.Owner, id)
 	if err != nil {
@@ -351,25 +260,17 @@ func (s *Store) instructTx(
 // newestWithin keeps whole entries from the newest backwards; only a single oversized
 // entry is cut, and then in its middle.
 func newestWithin(entries []string, limit int) string {
-	var kept []string
-
 	used := 0
 
-	for _, entry := range slices.Backward(entries) {
-		size := utf8.RuneCountInString(entry) + 2
-		if used+size > limit {
-			if len(kept) == 0 {
-				kept = append(kept, sessionstore.ClipMiddle(entry, limit))
+	for i := range slices.Backward(entries) {
+		if used += utf8.RuneCountInString(entries[i]) + 2; used > limit {
+			if i == len(entries)-1 {
+				return sessionstore.ClipMiddle(entries[i], limit)
 			}
 
-			break
+			return strings.Join(entries[i+1:], "\n\n")
 		}
-
-		kept = append(kept, entry)
-		used += size
 	}
 
-	slices.Reverse(kept)
-
-	return strings.Join(kept, "\n\n")
+	return strings.Join(entries, "\n\n")
 }

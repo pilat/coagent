@@ -37,7 +37,7 @@ func TestAssistantToolsHandoverUserWords(t *testing.T) {
 				)
 				require.NoError(t, err)
 			}
-			for _, id := range []string{toolOpen, toolSend} {
+			for _, id := range []string{"open", "send"} {
 				args, err := json.Marshal(
 					map[string]any{"session": f.work, "project": "devbox", "about": "work", "text": tc.instruction},
 				)
@@ -57,7 +57,7 @@ func TestAssistantToolsHandoverUserWords(t *testing.T) {
 				}
 				var stored string
 				work := f.work
-				if id == toolOpen {
+				if id == "open" {
 					work = f.host.created[len(f.host.created)-1]
 				}
 				require.NoError(
@@ -97,7 +97,7 @@ func TestAssistantHandoverQuotesNewestActiveUserAcrossEvents(t *testing.T) {
 	)
 	require.NoError(t, err)
 	for range 2 {
-		f.execute(t, toolSend, `{"session":`+itoa(f.work)+`,"text":"follow up"}`)
+		f.execute(t, "send", `{"session":`+itoa(f.work)+`,"text":"follow up"}`)
 	}
 	for _, text := range f.host.deliveries {
 		assert.True(t, strings.HasSuffix(text, "> new request"))

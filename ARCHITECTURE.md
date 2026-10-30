@@ -896,6 +896,11 @@ behind one transactional watermark; memory and focus edits update their index
 rows atomically. Compacted rows remain searchable; another assistant's dialog
 never becomes visible through the own-root branch.
 
+Project discovery, project-filtered session listings and opening existing work
+share one catalog. It excludes hidden projects, missing directories and worktrees
+under the coagent home's worktree directory. A new scratch name creates its
+directory before root creation.
+
 The assistant can switch the user into live owned work only from Assistant.
 The manager binds its chat at startup without overwriting the selection; the
 daemon switches by manager identity, rechecking target liveness and the NULL
@@ -912,12 +917,14 @@ changes. Pricing is read from the target's model at execution. Only the assistan
 receives the receipt; the work root's output log receives neither budget nor model notices.
 
 All tool effects execute immediately through the ordinary tool protocol, return
-real ids and survive a later model failure. Memory and focus enforce their limits
-inside their write transactions. Open validates model and effort before creation,
+real ids and survive a later model failure. Tool handlers orchestrate work through
+the daemon host; the assistant store owns persistence queries and the transactional
+authority check. Memory and focus enforce their limits inside their write
+transactions. Open validates model and effort before creation,
 then creates the root with that selection and its title before admitting input.
 Optional worktree creation shares the human `/gwt` path and remote selection,
 fetches the remote default and rolls back on failures before the root exists.
-Delivery authorizes inside the tree lock. The daemon
+Delivery authorizes inside its enqueue transaction while holding the tree lock. The daemon
 host supplies creation, delivery, stop, chat switching and model administration,
 while the session owns model calls,
 step commits, durable errors and output. Effects and their tool-result commits
@@ -1106,8 +1113,9 @@ are stored verbatim with their originating model and are replayed only to that
 same model; a model change drops them rather than sending incompatible data.
 Every agent type's system prompt and assistant cards state the configured model
 identity and effective effort using the driver's catalog clamp, hiding effort for
-models without choices. Model or effort changes replace that line; older
-conversation claims cannot override it.
+models without choices. Runtime configuration and cards share the catalog's
+legacy `medium` fallback for an empty persisted effort before clamping. Model or
+effort changes replace that line; older conversation claims cannot override it.
 Image references carried on user/tool messages are materialized inside each
 driver's conversion step and gated fail-closed on catalog-declared input
 modalities — unknown or absent modality information degrades the slot to a

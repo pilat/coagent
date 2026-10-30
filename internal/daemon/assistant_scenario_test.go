@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"regexp"
 	"strings"
@@ -228,26 +229,59 @@ func assistantFor(h *harness, root int64) assistantDriver {
 	return assistantDriver{h: h, scope: assistant.Scope{Root: root, Owner: scenarioManagerID}}
 }
 
-func (d assistantDriver) Open(ctx context.Context, project, text, about string) (assistant.Card, error) {
-	return d.h.mgr.assistant.Open(
-		ctx,
-		assistant.Host(assistantHost{s: d.h.mgr}),
-		d.scope,
-		project,
-		text,
-		about,
-		"",
-		"",
-		"",
-	)
+func (d assistantDriver) Open(
+	ctx context.Context,
+	project, text, about string,
+	worktree ...string,
+) (assistant.Card, error) {
+	args := map[string]any{"project": project, "text": text, "about": about}
+	if len(worktree) > 0 {
+		args["worktree"] = worktree[0]
+	}
+
+	output, err := d.execute(ctx, "open", args)
+	if err != nil {
+		return assistant.Card{}, err
+	}
+
+	var id int64
+	if _, err := fmt.Sscan(output, &id); err != nil {
+		return assistant.Card{}, fmt.Errorf("read opened session id: %w", err)
+	}
+
+	return d.Target(ctx, id)
 }
 
 func (d assistantDriver) Send(ctx context.Context, id int64, text string) error {
-	return d.h.mgr.assistant.Send(ctx, assistant.Host(assistantHost{s: d.h.mgr}), d.scope, id, text)
+	_, err := d.execute(ctx, "send", map[string]any{"session": id, "text": text})
+	return err
 }
 
 func (d assistantDriver) Stop(ctx context.Context, id int64) error {
-	return d.h.mgr.assistant.Stop(ctx, assistant.Host(assistantHost{s: d.h.mgr}), d.scope, id)
+	_, err := d.execute(ctx, "stop", map[string]any{"session": id})
+	return err
+}
+
+func (d assistantDriver) execute(ctx context.Context, name string, args map[string]any) (string, error) {
+	raw, err := json.Marshal(args)
+	if err != nil {
+		return "", fmt.Errorf("encode assistant arguments: %w", err)
+	}
+
+	for _, instance := range assistant.Tools(d.h.mgr.assistant, d.scope, assistantHost{s: d.h.mgr}) {
+		if instance.ID() != name {
+			continue
+		}
+
+		result, err := instance.Execute(ctx, raw)
+		if err != nil {
+			return "", err
+		}
+
+		return result.Output, nil
+	}
+
+	return "", fmt.Errorf("unknown assistant tool %q", name)
 }
 
 func (d assistantDriver) List(ctx context.Context, offset, limit int, project string) ([]assistant.Card, int, error) {
