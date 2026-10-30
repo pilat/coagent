@@ -40,13 +40,48 @@ func TestHarnessScenario_SwitchDeliversHeaderDigestAndTail(t *testing.T) {
 		}
 	}
 	assert.Equal(t, []string{
-		"startup", fmt.Sprintf("→ #%d project - %d", two, two),
-		fmt.Sprintf("#%d project - %d · 1 new · third unread", three, three),
+		"startup", fmt.Sprintf("→ #%d project", two),
+		fmt.Sprintf("#%d project · 1 new · third unread", three),
 		"new tail one", "new tail two",
 	}, messages)
 	seen, err := h.sessions.ChatSeen(t.Context(), delayedTelegramManagerID, strconv.FormatInt(harnessChatID, 10), three)
 	require.NoError(t, err)
 	assert.Zero(t, seen)
+}
+
+func TestHarnessScenario_SwitchShowsSessionTitles(t *testing.T) {
+	h := newDelayedTelegramHarness(t)
+	one := createChatWork(t, h)
+	two := createChatWork(t, h)
+	for _, work := range []struct {
+		id    int64
+		title string
+	}{{one, "first work"}, {two, "second work"}} {
+		_, err := h.sessions.Enqueue(t.Context(), sessionstore.Input{
+			SessionID: work.id, Source: sessionstore.InputSourceUser, Content: work.title,
+		})
+		require.NoError(t, err)
+	}
+	chat := h.controller.(controllerapi.ChatFocusController)
+	require.NoError(t, chat.SetChatFocus(t.Context(), strconv.FormatInt(harnessChatID, 10), 0))
+	manager := newAssistantTelegramManager(t, h)
+	require.NoError(t, manager.Start(t.Context()))
+	t.Cleanup(func() { require.NoError(t, manager.Stop(context.Background())) })
+	awaitChatTail(t, h, manager.assistantRootID)
+	enqueueChatMessage(t, h, one, "first unread")
+	enqueueChatMessage(t, h, two, "second tail")
+	manager.processUpdate(t.Context(), assistantTelegramUpdate(fmt.Sprintf("/switch %d", two)))
+	awaitChatTail(t, h, two)
+	var messages []string
+	for _, call := range h.recorder.snapshot() {
+		if call.Method == "sendMessage" {
+			messages = append(messages, call.Text)
+		}
+	}
+	assert.Equal(t, []string{
+		fmt.Sprintf("→ #%d project · second work", two),
+		fmt.Sprintf("#%d project · first work · 1 new · first unread", one), "second tail",
+	}, messages)
 }
 
 func TestHarnessScenario_NumberedControlsAndTextKeepTheirRouting(t *testing.T) {

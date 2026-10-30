@@ -27,7 +27,7 @@ func TestAssistantRenderStatesTruncation(t *testing.T) {
 			CreatedAt: now.AddDate(0, 0, -14), Activity: now.Add(-2 * time.Hour),
 		})
 	}
-	recent[0].Pending, recent[0].About, recent[0].ContextTokens = true, "Move the stand to podman", 53667
+	recent[0].Pending, recent[0].Title, recent[0].ContextTokens = true, "Move the stand to podman", 53667
 	text := Render(View{
 		Desk: Desk{
 			Memory: []Memory{

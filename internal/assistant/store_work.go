@@ -103,7 +103,7 @@ func (s *Store) Read(ctx context.Context, id int64, count int) (string, error) {
 	return newestWithin(entries[max(0, len(entries)-count):], readBudget), nil
 }
 
-// Open creates the work root, then sends its first instruction with the about line.
+// Open creates a titled work root before delivering its first instruction.
 func (s *Store) Open(ctx context.Context, host Host, scope Scope, project, text, about string) (Card, error) {
 	words, err := s.sessions.ActiveUserInput(ctx, scope.Root)
 	if err != nil {
@@ -117,18 +117,18 @@ func (s *Store) Open(ctx context.Context, host Host, scope Scope, project, text,
 		return Card{}, err
 	}
 
-	id, err := host.CreateWork(ctx, scope.Owner, choice.id, choice.name, choice.path)
+	id, err := host.CreateWork(ctx, scope.Owner, choice.id, choice.name, choice.path, about)
 	if err != nil {
 		return Card{}, fmt.Errorf("open assistant work: %w", err)
 	}
 
-	if err := s.deliver(ctx, host, scope, id, text, about); err != nil {
+	if err := s.deliver(ctx, host, scope, id, text); err != nil {
 		return Card{}, err
 	}
 
 	now := time.Now().UTC()
 
-	return Card{ID: id, Project: choice.name, Status: workingStatus, CreatedAt: now, Activity: now, About: about}, nil
+	return Card{ID: id, Project: choice.name, Status: workingStatus, CreatedAt: now, Activity: now, Title: about}, nil
 }
 
 // Send re-checks authority inside the delivery transaction.
@@ -140,7 +140,7 @@ func (s *Store) Send(ctx context.Context, host Host, scope Scope, id int64, text
 
 	text = withUserWords(text, words)
 
-	return s.deliver(ctx, host, scope, id, text, "")
+	return s.deliver(ctx, host, scope, id, text)
 }
 
 // Stop authorizes the target before requesting its ordinary lifecycle stop.
@@ -164,12 +164,11 @@ func (s *Store) cards(ctx context.Context, scope Scope, id int64) ([]Card, error
 			 AND json_extract(i.attributes, '$.observer_session_id') = ? AND ` + sessionstore.ObserverOpenInputSQL + `)),
 			EXISTS(SELECT 1 FROM session_inbox i WHERE i.session_id = s.id
 			 AND json_extract(i.attributes, '$.observer_session_id') = ?),
-			o.created_at, w.about, i.raw_content
+			o.created_at, json_extract(s.attributes, '$.title'), i.raw_content
 		FROM sessions s
 		LEFT JOIN projects p ON p.id = s.project_id
 		LEFT JOIN session_outbox o ON o.id = (SELECT id FROM session_outbox WHERE session_id = s.id
 			AND type = 'message' AND source_key LIKE 'message:%' ORDER BY id DESC LIMIT 1)
-		LEFT JOIN assistant_work w ON w.session_id = s.id
 		LEFT JOIN session_inbox i ON i.id = (SELECT id FROM session_inbox WHERE session_id = s.id
 			AND source = 'user' AND state = 'accepted' ORDER BY id LIMIT 1)
 		WHERE ` + workRootSQL + ` AND (? = 0 OR s.id = ?)`
@@ -206,11 +205,11 @@ func scanCard(rows *sql.Rows) (Card, error) {
 		status           sql.NullString
 		created, updated sql.NullTime
 		final            sql.NullTime
-		about, asked     sql.NullString
+		title, asked     sql.NullString
 	)
 
 	if err := rows.Scan(&card.ID, &card.projectID, &card.Project, &status, &created, &updated,
-		&card.ContextTokens, &card.Pending, &card.touched, &final, &about, &asked); err != nil {
+		&card.ContextTokens, &card.Pending, &card.touched, &final, &title, &asked); err != nil {
 		return Card{}, fmt.Errorf("scan assistant work root: %w", err)
 	}
 
@@ -221,9 +220,9 @@ func scanCard(rows *sql.Rows) (Card, error) {
 		card.Activity = final.Time
 	}
 
-	card.About = about.String
-	if !about.Valid {
-		card.About = Clip(strings.Join(strings.Fields(asked.String), " "), aboutFallbackChars)
+	card.Title = title.String
+	if !title.Valid {
+		card.Title = Clip(strings.Join(strings.Fields(asked.String), " "), aboutFallbackChars)
 	}
 
 	return card, nil
@@ -265,9 +264,9 @@ func authorizedTx(ctx context.Context, tx *sql.Tx, owner string, id int64) (bool
 	return ok, nil
 }
 
-func (s *Store) deliver(ctx context.Context, host Host, scope Scope, id int64, text, about string) error {
+func (s *Store) deliver(ctx context.Context, host Host, scope Scope, id int64, text string) error {
 	err := host.Deliver(ctx, id, text, func(tx *sql.Tx) error {
-		return s.instructTx(ctx, tx, scope, id, text, about)
+		return s.instructTx(ctx, tx, scope, id, text)
 	})
 	if err != nil {
 		return fmt.Errorf("deliver assistant instruction: %w", err)
@@ -276,7 +275,7 @@ func (s *Store) deliver(ctx context.Context, host Host, scope Scope, id int64, t
 	return nil
 }
 
-func (s *Store) instructTx(ctx context.Context, tx *sql.Tx, scope Scope, id int64, text, about string) error {
+func (s *Store) instructTx(ctx context.Context, tx *sql.Tx, scope Scope, id int64, text string) error {
 	ok, err := authorizedTx(ctx, tx, scope.Owner, id)
 	if err != nil {
 		return err
@@ -294,12 +293,6 @@ func (s *Store) instructTx(ctx context.Context, tx *sql.Tx, scope Scope, id int6
 	})
 	if err != nil {
 		return fmt.Errorf("enqueue assistant instruction: %w", err)
-	}
-
-	now := time.Now().UTC()
-
-	if about != "" {
-		return saveAboutTx(ctx, tx, id, about, now)
 	}
 
 	return nil
@@ -329,15 +322,4 @@ func newestWithin(entries []string, budget int) string {
 	slices.Reverse(kept)
 
 	return strings.Join(kept, "\n\n")
-}
-
-// saveAboutTx commits why a work session exists together with its first instruction.
-func saveAboutTx(ctx context.Context, tx *sql.Tx, sessionID int64, about string, at time.Time) error {
-	_, err := tx.ExecContext(ctx, `INSERT INTO assistant_work (session_id, about, created_at) VALUES (?, ?, ?)
-		ON CONFLICT(session_id) DO UPDATE SET about = excluded.about`, sessionID, about, at)
-	if err != nil {
-		return fmt.Errorf("save assistant work about: %w", err)
-	}
-
-	return nil
 }

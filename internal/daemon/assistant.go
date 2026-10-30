@@ -57,7 +57,7 @@ func (h assistantHost) CreateWork(
 	ctx context.Context,
 	owner string,
 	projectID int64,
-	name, workDir string,
+	name, workDir, title string,
 ) (int64, error) {
 	level, err := h.s.models.effort(h.s.models.defaultModel, "", "")
 	if err != nil {
@@ -66,8 +66,11 @@ func (h assistantHost) CreateWork(
 
 	record, _, err := h.s.store.CreateManagerRoot(ctx, sessionstore.ManagerRootCreate{
 		ProjectID: projectID, Model: h.s.models.defaultModel, ReasoningLevel: level,
-		Attributes: map[string]any{controllerapi.SessionAttributeManagerID: owner},
-		Name:       name, WorkDir: workDir,
+		Attributes: map[string]any{
+			controllerapi.SessionAttributeManagerID: owner,
+			controllerapi.SessionAttributeTitle:     title,
+		},
+		Name: name, WorkDir: workDir,
 	})
 	if err != nil {
 		return 0, fmt.Errorf("create assistant work session: %w", err)

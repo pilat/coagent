@@ -22,6 +22,7 @@ var publishedCommands = []map[string]string{
 	{tgKeyCommand: "spawn", tgKeyDescription: "Create a session with /spawn path"},
 	{tgKeyCommand: "sessions", tgKeyDescription: "List sessions and unread output"},
 	{tgKeyCommand: "switch", tgKeyDescription: "Switch to a session with /switch N"},
+	{tgKeyCommand: "title", tgKeyDescription: "Rename the current session with /title text"},
 	{tgKeyCommand: "assistant", tgKeyDescription: "Switch to Assistant"},
 	{tgKeyCommand: "kill", tgKeyDescription: "End the current session, or /kill N"},
 	{tgKeyCommand: "stop", tgKeyDescription: "Stop the current run, or /stop N"},
@@ -110,7 +111,7 @@ func (m *Manager) handleFocusedText(ctx context.Context, text string) {
 	command, arg, _ := strings.Cut(text, " ")
 	if focus == 0 {
 		switch command {
-		case commandKill, commandStop, commandClear, "/compact":
+		case commandKill, commandStop, commandClear, "/compact", "/title":
 			m.reply(ctx, "This command is unavailable for Assistant.")
 			return
 		case commandGWT:
@@ -126,6 +127,8 @@ func (m *Manager) handleFocusedText(ctx context.Context, text string) {
 	}
 
 	switch command {
+	case "/title":
+		m.handleTitle(ctx, focus, arg)
 	case commandGWT:
 		name, _ := parseGwtCommand(text)
 		m.handleGWT(ctx, sessionID, name)
@@ -136,6 +139,26 @@ func (m *Manager) handleFocusedText(ctx context.Context, text string) {
 	default:
 		m.handleSessionMessage(ctx, sessionID, text)
 	}
+}
+
+func (m *Manager) handleTitle(ctx context.Context, focus int64, raw string) {
+	if strings.TrimSpace(raw) == "" {
+		m.reply(ctx, "Usage: /title text.")
+		return
+	}
+
+	title, ok := controllerapi.NormalizeSessionTitle(raw)
+	if !ok {
+		m.reply(ctx, "Title must be one line of 1-80 characters.")
+		return
+	}
+
+	if err := m.chat.SetSessionTitle(ctx, m.chatKey(), focus, title); err != nil {
+		m.reply(ctx, err.Error())
+		return
+	}
+
+	m.reply(ctx, fmt.Sprintf("Renamed #%d: %s", focus, title))
 }
 
 func (m *Manager) inputSessionID(ctx context.Context, focus int64) (int64, error) {
@@ -210,14 +233,9 @@ func (m *Manager) handleSessions(ctx context.Context) {
 
 	lines := make([]string, 0, len(sessions))
 	for _, session := range sessions {
-		name := session.Name
-		if session.ID == 0 {
-			name = "Assistant"
-		}
-
-		line := fmt.Sprintf("#%d %s", session.ID, name)
+		line := fmt.Sprintf("#%d %s", session.ID, session.Name)
 		if session.Unread > 0 {
-			line += " •"
+			line += fmt.Sprintf(" · %d new", session.Unread)
 		}
 
 		if session.ID == focus {

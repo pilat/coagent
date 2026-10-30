@@ -35,7 +35,7 @@ func TestHarnessScenario_AssistantSwitchDeliversHeaderThenWorkTail(t *testing.T)
 	require.Eventually(t, func() bool {
 		return hasTelegramMessage(h.recorder.snapshot(), "work tail after assistant switch")
 	}, 10*time.Second, 10*time.Millisecond)
-	header := fmt.Sprintf("→ #%d project - %d", client.work, client.work)
+	header := fmt.Sprintf("→ #%d project", client.work)
 	seenHeader, seenTail := false, false
 	for _, call := range h.recorder.snapshot() {
 		if call.Method != "sendMessage" {

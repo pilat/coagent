@@ -8,7 +8,8 @@ import (
 // ChatSessions derives unread summaries from the log and puts the assistant first as #0.
 func (s *Store) ChatSessions(ctx context.Context, managerID, chatID string) ([]ChatSession, error) {
 	rows, err := s.db.QueryContext(ctx, `WITH roots AS (
-		SELECT s.id, s.agent_type, s.updated_at, p.name FROM sessions s
+		SELECT s.id, s.agent_type, s.updated_at, p.name,
+			COALESCE(json_extract(s.attributes, '$.title'), '') AS title FROM sessions s
 		JOIN projects p ON p.id = s.project_id WHERE `+liveChatRootSQL+`
 	), unread AS (
 		SELECT roots.id, COUNT(o.id) AS unread, MAX(o.id) AS latest_id FROM roots
@@ -17,7 +18,7 @@ func (s *Store) ChatSessions(ctx context.Context, managerID, chatID string) ([]C
 			AND o.type = 'message'
 		GROUP BY roots.id
 	)
-	SELECT roots.id, roots.agent_type, roots.name, unread.unread,
+	SELECT roots.id, roots.agent_type, roots.name, roots.title, unread.unread,
 		COALESCE(unread.latest_id, 0), COALESCE(latest.content, '')
 	FROM roots JOIN unread ON unread.id = roots.id
 	LEFT JOIN session_outbox latest ON latest.id = unread.latest_id
@@ -33,14 +34,18 @@ func (s *Store) ChatSessions(ctx context.Context, managerID, chatID string) ([]C
 	for rows.Next() {
 		var session ChatSession
 
-		var agentType, projectName string
-		if err := rows.Scan(&session.SessionID, &agentType, &projectName, &session.Unread,
+		var agentType, projectName, title string
+		if err := rows.Scan(&session.SessionID, &agentType, &projectName, &title, &session.Unread,
 			&session.LatestUnreadID, &session.LatestUnread); err != nil {
 			return nil, fmt.Errorf("scan chat session summary: %w", err)
 		}
 
 		session.ID = session.SessionID
-		session.Name = fmt.Sprintf("%s - %d", projectName, session.ID)
+
+		session.Name = projectName
+		if title != "" {
+			session.Name += " · " + title
+		}
 
 		if agentType == AssistantAgentType {
 			session.ID, session.Name = 0, "Assistant"

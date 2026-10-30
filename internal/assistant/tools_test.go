@@ -90,11 +90,11 @@ json_extract(attributes, '$.observer_session_id') FROM session_inbox WHERE raw_c
 		assert.Equal(t, f.root, observer)
 	}
 	require.Len(t, f.host.created, 2)
-	for _, id := range f.host.created {
+	for index, id := range f.host.created {
 		card, err := f.store.Target(t.Context(), Scope{Root: f.root, Owner: testOwner}, id)
 		require.NoError(t, err)
 		assert.True(t, card.Pending)
-		assert.NotEmpty(t, card.About)
+		assert.Equal(t, []string{"registered work", "scratch work"}[index], card.Title)
 	}
 	info, err := os.Stat(filepath.Join(f.store.projectsRoot, "fresh-research"))
 	require.NoError(t, err)
@@ -149,6 +149,7 @@ func TestAssistantToolValidation(t *testing.T) {
 	for _, tc := range []struct{ id, args, want string }{
 		{toolOpen, `{"project":"devbox","text":"go"}`, "about must be one line"},
 		{toolOpen, `{"project":"devbox","about":"a\nb","text":"go"}`, "about must be one line"},
+		{toolOpen, `{"project":"devbox","about":"` + strings.Repeat("界", 81) + `","text":"go"}`, "about must be one line of 1-80 characters"},
 		{toolOpen, `{"project":"../outside","about":"why","text":"go"}`, "project name must not contain"},
 		{toolOpen, `{"project":"devbox","about":"why"}`, "needs a project and a text"},
 		{toolSend, `{"session":"new-7-1","text":"go"}`, "must be a session id"},
@@ -211,8 +212,15 @@ func (f *toolFixture) execute(t *testing.T, id, args string) string {
 	return result.Output
 }
 
-func (h *toolHost) CreateWork(ctx context.Context, owner string, projectID int64, name, workDir string) (int64, error) {
-	record, err := h.sessions.CreateSession(ctx, projectID, "model", "", map[string]any{"manager_id": owner})
+func (h *toolHost) CreateWork(
+	ctx context.Context,
+	owner string,
+	projectID int64,
+	name, workDir, title string,
+) (int64, error) {
+	record, err := h.sessions.CreateSession(ctx, projectID, "model", "", map[string]any{
+		"manager_id": owner, sessionstore.TitleAttribute: title,
+	})
 	if err != nil {
 		return 0, err
 	}

@@ -49,7 +49,7 @@ VALUES(1,1,1,'main','desk','answer','ok',CURRENT_TIMESTAMP);
 INSERT INTO assistant_search(rowid,body,scope) VALUES(5,'discarded tape',1),(6,'kept memory',1),(7,'kept focus',1),(8,'kept answer',2);
 UPDATE assistant_search_state SET message_id=2 WHERE id=1;`)
 	require.NoError(t, err)
-	_, err = provider.Up(t.Context())
+	_, err = provider.UpTo(t.Context(), 50)
 	require.NoError(t, err)
 	attrs := stringColumn(t, db, `SELECT attributes FROM session_inbox ORDER BY id`)
 	require.Len(t, attrs, 2)
@@ -73,7 +73,7 @@ UPDATE assistant_search_state SET message_id=2 WHERE id=1;`)
 
 func TestMigrate_00047_00050_FreshIdempotence(t *testing.T) {
 	db, provider := assistantSquashDB(t, false)
-	_, err := provider.Up(t.Context())
+	_, err := provider.UpTo(t.Context(), 50)
 	require.NoError(t, err)
 	before := assistantSchema(t, db)
 	cleanup, err := migrations.FS.ReadFile("00050_assistant_session.sql")

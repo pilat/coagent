@@ -341,6 +341,14 @@ The assistant may switch the user into work only from `#0`; leaving a live work
 session, for Assistant or another session, belongs to the user.
 _Avoid_: active session (several sessions may run at once), assistant focus.
 
+**session title**:
+A live owned work root's one-line name, `sessions.attributes.title`, 1–80
+characters. The assistant's `open` sets it from its `about` argument; otherwise
+the first accepted non-command user input names it once; the user renames it with
+`/title`. A `/clear` replacement starts untitled. A chat shows `<project> · <title>`.
+It is not `agent_type` and does not follow the work as it changes.
+_Avoid_: about (only the `open` argument that supplies it), label, session name.
+
 **watermark**:
 `chat_seen.last_outbox_id`, the monotonic position reached for one manager,
 chat and session after a successful send, probe-confirmed skip or non-rendering

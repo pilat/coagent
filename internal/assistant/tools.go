@@ -39,7 +39,6 @@ const (
 	aroundMaxCount = 10
 	focusTextChars = 200
 	focusLiveItems = 30
-	aboutChars     = 200
 )
 
 var toolSchemas = []llmwire.ToolSchema{
@@ -62,7 +61,7 @@ var toolSchemas = []llmwire.ToolSchema{
 	schema(toolFocusList, "Look: every live focus item.", `{}`),
 	schema(toolOpen, "Do: start new work immediately with a self-contained instruction; returns the real session id.",
 		`{"project":{"type":"string","description":"An existing project key, or a new name for a scratch folder."},`+
-			`"about":{"type":"string","description":"One line, why this session exists (1-200 characters)."},`+
+			`"about":{"type":"string","description":"One line, why this session exists (1-80 characters)."},`+
 			`"text":{"type":"string","description":"The instruction, in the user's language."}}`,
 		"project", "about", "text"),
 	schema(toolSend, "Do: immediately continue a work session, finished or stopped or still running.",
@@ -112,7 +111,7 @@ var _ tool.Tool = (*assistantTool)(nil)
 
 // Host provides work-session lifecycle; Deliver's transaction rechecks authority.
 type Host interface {
-	CreateWork(ctx context.Context, owner string, projectID int64, name, workDir string) (int64, error)
+	CreateWork(ctx context.Context, owner string, projectID int64, name, workDir, title string) (int64, error)
 	// Deliver commits enqueue under the session's tree lock, then wakes it.
 	Deliver(ctx context.Context, sessionID int64, text string, enqueue func(*sql.Tx) error) error
 	Stop(ctx context.Context, sessionID int64) error

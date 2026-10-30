@@ -2,6 +2,7 @@ package managercontrol
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/pilat/coagent/internal/controllerapi"
@@ -56,6 +57,24 @@ func (c *controller) ResetChatFocus(ctx context.Context, chatID string, from int
 	}
 
 	return reset, nil
+}
+
+func (c *controller) SetSessionTitle(ctx context.Context, _ string, sessionID int64, raw string) error {
+	if err := requireManagerIdentity(c.managerID); err != nil {
+		return err
+	}
+
+	if sessionID == 0 {
+		return fmt.Errorf("#%d is not a live session", sessionID)
+	}
+
+	title, ok := controllerapi.NormalizeSessionTitle(raw)
+	if !ok {
+		return errors.New("title must be one line of 1-80 characters")
+	}
+
+	//nolint:wrapcheck // Rejections are the exact user-visible response.
+	return c.app.store.SetSessionTitle(ctx, c.managerID, sessionID, title)
 }
 
 func (c *controller) ChatOutputs(

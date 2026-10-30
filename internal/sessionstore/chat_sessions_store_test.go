@@ -1,7 +1,6 @@
 package sessionstore
 
 import (
-	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -51,13 +50,24 @@ func TestChatSessions_LiveOwnedRootsAndRenderedUnread(t *testing.T) {
 		byID[session.ID] = session
 	}
 	assert.Equal(t, ChatSession{
-		ID: root.ID, SessionID: root.ID, Name: fmt.Sprintf("test - %d", root.ID),
+		ID: root.ID, SessionID: root.ID, Name: "test",
 		Unread: 1, LatestUnread: "latest answer\nsecond line", LatestUnreadID: latest,
 	}, byID[root.ID])
 	require.Contains(t, byID, stopped.ID)
 	assert.Zero(t, byID[stopped.ID].Unread)
 	assert.Empty(t, byID[stopped.ID].LatestUnread)
 	assert.Zero(t, byID[stopped.ID].LatestUnreadID)
+}
+
+func TestChatSessions_SessionTitle(t *testing.T) {
+	t.Parallel()
+	store, _, project := newTestStore(t)
+	root := chatTestRoot(t, store, project, "owner")
+	require.NoError(t, store.SetSessionTitle(t.Context(), "owner", root.ID, "fix login 500"))
+	sessions, err := store.ChatSessions(t.Context(), "owner", "chat")
+	require.NoError(t, err)
+	require.Len(t, sessions, 1)
+	assert.Equal(t, "test · fix login 500", sessions[0].Name)
 }
 
 func TestChatSessions_LifecycleRowsDoNotCountAsUnread(t *testing.T) {

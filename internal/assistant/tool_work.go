@@ -6,9 +6,9 @@ import (
 	"fmt"
 	"strings"
 	"time"
-	"unicode/utf8"
 
 	"github.com/pilat/coagent/internal/llmwire"
+	"github.com/pilat/coagent/internal/sessionstore"
 )
 
 func (t *assistantTool) work(ctx context.Context, call llmwire.ToolCall) (string, error) {
@@ -57,7 +57,6 @@ func (t *assistantTool) open(ctx context.Context, call llmwire.ToolCall) (string
 
 	args.Project = strings.TrimSpace(args.Project)
 	args.Text = strings.TrimSpace(args.Text)
-	args.About = strings.TrimSpace(args.About)
 
 	if strings.HasPrefix(args.Text, "/") {
 		return "", errors.New("commands belong to the user; use set_model, set_budget or stop")
@@ -67,12 +66,12 @@ func (t *assistantTool) open(ctx context.Context, call llmwire.ToolCall) (string
 		return "", errors.New("open needs a project and a text")
 	}
 
-	if args.About == "" || strings.ContainsAny(args.About, "\r\n") ||
-		utf8.RuneCountInString(args.About) > aboutChars {
-		return "", fmt.Errorf("about must be one line of 1-%d characters", aboutChars)
+	title, ok := sessionstore.NormalizeTitle(args.About)
+	if !ok {
+		return "", errors.New("about must be one line of 1-80 characters")
 	}
 
-	card, err := t.store.Open(ctx, t.host, t.scope, args.Project, args.Text, args.About)
+	card, err := t.store.Open(ctx, t.host, t.scope, args.Project, args.Text, title)
 	if err != nil {
 		return "", err
 	}
