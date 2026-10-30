@@ -117,7 +117,8 @@ func TestRunDaemon_ReadinessPrecedesStatusAndDeferredShutdownClosesSocket(t *tes
 	client := waitForReadyStatus(t, socket, result)
 	t.Cleanup(func() { _ = client.Close() })
 
-	st, err := client.Status(t.Context())
+	var st ctl.StatusResult
+	err = client.Call(t.Context(), ctl.OpStatus, nil, &st)
 	require.NoError(t, err)
 	assert.False(t, st.ConfigPresent, "no config file was provided")
 
@@ -160,7 +161,7 @@ func waitForReadyStatus(t *testing.T, socket string, result <-chan error) *ctl.C
 
 		candidate, err := ctl.Dial(context.Background(), socket)
 		if err == nil {
-			if _, err := candidate.Status(t.Context()); err == nil {
+			if err := candidate.Call(t.Context(), ctl.OpStatus, nil, &ctl.StatusResult{}); err == nil {
 				client = candidate
 				return true
 			}

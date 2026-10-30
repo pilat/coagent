@@ -31,11 +31,6 @@ func NewSkillTool(ldr *loader.Service) tool.Tool {
 	return t
 }
 
-// RenderSkill renders the canonical conversation envelope for a skill invocation.
-func RenderSkill(sk *loader.Skill, args string) string {
-	return loader.RenderSkillInvocation(sk, args)
-}
-
 func (t *skillTool) ID() string         { return tool.IDSkill }
 func (t *skillTool) ParallelSafe() bool { return false }
 
@@ -76,7 +71,7 @@ func (t *skillTool) Execute(ctx context.Context, params json.RawMessage) (*tool.
 
 	return &tool.Result{
 		Title:  sk.Name,
-		Output: RenderSkill(sk, p.Args),
+		Output: loader.RenderSkillInvocation(sk, p.Args),
 		Metadata: map[string]any{
 			"skill":     sk.Name,
 			metaKeyPath: sk.Path,

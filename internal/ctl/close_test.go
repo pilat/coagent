@@ -22,7 +22,7 @@ func TestConn_CloseReleasesOnlyItself(t *testing.T) {
 	require.NoError(t, first.Close())
 	require.Eventually(t, func() bool { return connCount(h.server) == 1 }, 3*time.Second, 10*time.Millisecond)
 
-	_, err := second.Status(context.Background())
+	err := second.Call(context.Background(), OpStatus, nil, &StatusResult{})
 	require.NoError(t, err, "the server keeps serving everyone else")
 
 	require.NoError(t, second.Close())

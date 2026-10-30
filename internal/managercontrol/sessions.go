@@ -155,10 +155,6 @@ func (s *service) subscribe(managerID string) <-chan controllerapi.SessionNotifi
 	return s.bus.SubscribeManager(managerID)
 }
 
-func (s *service) unsubscribe(ch <-chan controllerapi.SessionNotification) {
-	s.bus.UnsubscribeManager(ch)
-}
-
 func (s *service) publishInputReceived(sessionID int64, message, source string) {
 	s.backend.NotifySession(sessionID, sessionevent.Notification{
 		Type: sessionevent.NotifyInputReceived, Message: message, Source: source,

@@ -14,7 +14,7 @@ import (
 	"github.com/pilat/coagent/internal/todo"
 )
 
-func (r *Runtime) current(
+func (r *Runtime) Current(
 	ctx context.Context,
 	rootID int64,
 ) (string, error) {

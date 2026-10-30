@@ -206,10 +206,6 @@ func (m *Manager) getChat(ctx context.Context, chatID int64) (telegramChat, erro
 	return out, nil
 }
 
-func (m *Manager) setCommands(ctx context.Context) error {
-	return m.tg(ctx, "setMyCommands", map[string]any{"commands": publishedCommands}, nil)
-}
-
 func (m *Manager) sendTyping(ctx context.Context) error {
 	return m.tg(ctx, "sendChatAction", map[string]any{
 		tgKeyChatID: m.effectiveChatID(), "action": "typing",

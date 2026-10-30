@@ -137,14 +137,6 @@ func (c *Client) Call(ctx context.Context, method string, params, out any) error
 	}
 }
 
-// Status is the liveness-plus-state call every UI header polls.
-func (c *Client) Status(ctx context.Context) (StatusResult, error) {
-	var out StatusResult
-	err := c.Call(ctx, OpStatus, nil, &out)
-
-	return out, err
-}
-
 type outboundRequest struct {
 	id   int64
 	body []byte

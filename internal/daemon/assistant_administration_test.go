@@ -143,7 +143,15 @@ func TestHarnessScenario_AssistantSchedulePinsFreshAndNormalDeskHeads(t *testing
 				return assistantSayCount(t, h, root.ID, "assistant initialized") == 1 && !h.mgr.HasActiveLoop(root.ID)
 			})
 			due := time.Now().Add(-time.Minute)
-			_, err = h.schedules.AddSchedule(h.ctx, root.ID, "", &due, "assistant scheduled tick", fresh)
+			_, err = h.schedules.AddSchedule(
+				h.ctx,
+				root.ID,
+				"",
+				&due,
+				"assistant scheduled tick",
+				fresh,
+				schedule.ScheduleMetadata{},
+			)
 			require.NoError(t, err)
 			executor := schedule.NewExecutor(h.schedules, h.mgr)
 			executor.Start(h.ctx)

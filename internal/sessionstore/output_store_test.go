@@ -16,7 +16,7 @@ func TestOutputStore_AppendsAndReplaysWithoutMutatingHistory(t *testing.T) {
 	root, err := store.CreateSession(t.Context(), project, "model", "", map[string]any{"manager_id": "owner"})
 	require.NoError(t, err)
 	draft := OutputDraft{SessionID: root.ID, Type: OutputMessage, Content: "first", SourceKey: "first"}
-	draft.Fingerprint = OutputFingerprint(draft.Type, draft.Content, draft.SessionID, nil)
+	draft.Fingerprint = OutputFingerprint(draft.Type, draft.Content, draft.SessionID, nil, false)
 	first, err := store.EnqueueOutput(t.Context(), draft)
 	require.NoError(t, err)
 	second, err := store.EnqueueOutput(
@@ -64,7 +64,7 @@ func TestOutputStore_RejectsIdentityAndOwnershipViolations(t *testing.T) {
 			Type:        OutputMessage,
 			Content:     "x",
 			SourceKey:   "key",
-			Fingerprint: OutputFingerprint(OutputMessage, "x", owned.ID, nil),
+			Fingerprint: OutputFingerprint(OutputMessage, "x", owned.ID, nil, false),
 		},
 	)
 	require.NoError(t, err)
@@ -75,7 +75,7 @@ func TestOutputStore_RejectsIdentityAndOwnershipViolations(t *testing.T) {
 			Type:        OutputMessage,
 			Content:     "changed",
 			SourceKey:   "key",
-			Fingerprint: OutputFingerprint(OutputMessage, "changed", owned.ID, nil),
+			Fingerprint: OutputFingerprint(OutputMessage, "changed", owned.ID, nil, false),
 		},
 	)
 	require.ErrorIs(t, err, ErrOutputConflict)
@@ -87,7 +87,7 @@ func TestOutputStore_RejectsFingerprintThatDoesNotMatchPayload(t *testing.T) {
 	owned, err := store.CreateSession(ctx, projectID, "model", "", map[string]any{"manager_id": "alpha"})
 	require.NoError(t, err)
 
-	fingerprint := OutputFingerprint(OutputMessage, "original", owned.ID, nil)
+	fingerprint := OutputFingerprint(OutputMessage, "original", owned.ID, nil, false)
 	_, err = store.EnqueueOutput(ctx, OutputDraft{
 		SessionID: owned.ID, Type: OutputMessage, Content: "original",
 		SourceKey: "key", Fingerprint: fingerprint,

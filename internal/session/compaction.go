@@ -88,7 +88,7 @@ func (s *Session) focusSection() string {
 func (s *Session) compact(ctx context.Context, commandInput *PendingInput) (bool, error) {
 	// Defence in depth: a caller that forgets the gate must not compact a
 	// transcript that still owes a tool_use its result.
-	if s.HasPendingExternalCall() || len(s.pendingInLoopCalls()) > 0 {
+	if len(s.PendingExternalCalls()) > 0 || len(s.pendingInLoopCalls()) > 0 {
 		return false, errCompactionPendingCall
 	}
 
@@ -312,7 +312,7 @@ func (s *Session) commitCheckpointLocked(
 //
 //nolint:gocyclo,nestif,funlen // Explicit compaction has a durable start, terminal outcome, and auto-path fallback.
 func (s *Session) compactionStep(ctx context.Context, r *runState) error {
-	if s.HasPendingExternalCall() || len(s.pendingInLoopCalls()) > 0 {
+	if len(s.PendingExternalCalls()) > 0 || len(s.pendingInLoopCalls()) > 0 {
 		return nil
 	}
 
@@ -477,7 +477,7 @@ func (s *Session) summarizeCheckpoint(
 	schemas := tool.ToSchemas(activeTools)
 
 	messages := append(
-		repairTranscriptExcluding(s.ms.messages[:split], pendingExternal),
+		repairTranscript(s.ms.messages[:split], pendingExternal),
 		compactionInstructionMessage(s.focusSection()),
 	)
 

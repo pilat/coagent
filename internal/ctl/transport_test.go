@@ -37,7 +37,7 @@ func TestClient_ConcurrentStatusCallsAreNotCrossWired(t *testing.T) {
 
 	for i := range callers {
 		wg.Go(func() {
-			results[i], errs[i] = c.Status(context.Background())
+			errs[i] = c.Call(context.Background(), OpStatus, nil, &results[i])
 		})
 	}
 
@@ -56,20 +56,20 @@ func TestServer_ADroppedConnectionIsReleasedWhileTheOthersKeepServing(t *testing
 
 	first, second := h.dial(t), h.dial(t)
 
-	_, err := first.Status(context.Background())
+	err := first.Call(context.Background(), OpStatus, nil, &StatusResult{})
 	require.NoError(t, err)
-	_, err = second.Status(context.Background())
+	err = second.Call(context.Background(), OpStatus, nil, &StatusResult{})
 	require.NoError(t, err)
 	require.Equal(t, 2, connCount(h.server))
 
 	require.NoError(t, first.Close())
 	require.Eventually(t, func() bool { return connCount(h.server) == 1 }, 3*time.Second, 10*time.Millisecond)
 
-	_, err = second.Status(context.Background())
+	err = second.Call(context.Background(), OpStatus, nil, &StatusResult{})
 	require.NoError(t, err)
 
 	third := h.dial(t)
-	_, err = third.Status(context.Background())
+	err = third.Call(context.Background(), OpStatus, nil, &StatusResult{})
 	require.NoError(t, err)
 	assert.Equal(t, 2, connCount(h.server))
 }
@@ -84,7 +84,8 @@ func TestTransport_LargeFramesSurviveInBothDirections(t *testing.T) {
 	})
 	c := h.dial(t)
 
-	st, err := c.Status(context.Background())
+	var st StatusResult
+	err := c.Call(context.Background(), OpStatus, nil, &st)
 	require.NoError(t, err)
 	require.Len(t, st.Managers, 1)
 	assert.Equal(t, strings.Repeat("m", 1000), st.Managers[0].ID)

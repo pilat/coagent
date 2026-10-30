@@ -229,7 +229,7 @@ func (p *generationProduction) apply(command generationProtocolCommand) {
 		_, err := p.store.EnqueueOutput(p.ctx, OutputDraft{
 			SessionID: p.root, Type: kind, Content: "card " + strconv.FormatInt(p.inputs, 10),
 			SourceKey:   key,
-			Fingerprint: OutputFingerprint(kind, "card "+strconv.FormatInt(p.inputs, 10), p.root, nil),
+			Fingerprint: OutputFingerprint(kind, "card "+strconv.FormatInt(p.inputs, 10), p.root, nil, false),
 		})
 		require.NoError(p.t, err)
 	case genEmitDirectReply:

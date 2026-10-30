@@ -60,7 +60,7 @@ func (c *client) respondServerRequest(ctx context.Context, id json.RawMessage, r
 		return
 	}
 
-	if err := c.send(ctx, data); err != nil {
+	if _, err := c.send(ctx, data, nil); err != nil {
 		logger.Ctx(ctx).Debug("respond to LSP server request", zap.Error(err))
 	}
 }

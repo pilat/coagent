@@ -8,11 +8,7 @@ import (
 
 // OutputFingerprint makes deterministic identities for producers that reconcile
 // an existing durable fact instead of inventing a fresh standalone notice.
-func OutputFingerprint(kind OutputType, content string, sessionID int64, attributes map[string]any) string {
-	return outputFingerprintWithRelease(kind, content, sessionID, attributes, false)
-}
-
-func outputFingerprintWithRelease(
+func OutputFingerprint(
 	kind OutputType,
 	content string,
 	sessionID int64,

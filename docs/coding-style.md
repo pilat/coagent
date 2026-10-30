@@ -119,8 +119,10 @@ Use `go.uber.org/zap` via a project-local wrapper package (conventionally `inter
 - `logger.L` — global `*zap.Logger` (**forbidden outside the `logger` package itself**)
 - `logger.Named(name)` — returns a named child of `L` for background / lifecycle code
 - `logger.Ctx(ctx)` — returns the logger stored in ctx, falls back to `L` if none
-- `logger.With(ctx, fields...)` — returns a new ctx with enriched logger
 - `logger.ToContext(ctx, lg)` — stores a logger in ctx
+
+To enrich the context's logger, pass `logger.Ctx(ctx).With(fields...)` to
+`logger.ToContext(ctx, lg)`.
 
 ```go
 import (

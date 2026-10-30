@@ -111,8 +111,8 @@ func TestBrowserFrameBudgetAndCutHint(t *testing.T) {
 	assert.NotContains(t, large, "omitted ref")
 	small := formatToolResult(frame, 32000, true)
 	assert.LessOrEqual(t, len([]rune(small))-len([]rune(tool.UntrustedContentBegin+"\n\n"+tool.UntrustedContentEnd)),
-		tool.BrowserFrameBudgetForWindow(32000))
-	assert.Equal(t, 38400, tool.BrowserFrameBudgetForWindow(32000))
+		tool.ToolResultBudgetForWindow(32000, tool.MaxBrowserFrameSize))
+	assert.Equal(t, 38400, tool.ToolResultBudgetForWindow(32000, tool.MaxBrowserFrameSize))
 	frame.Output = strings.Repeat("x", 60000) + tool.UntrustedContentEnd + strings.Repeat("y", 140000)
 	escaped := formatToolResult(frame, 200000, true)
 	assert.Equal(t, 1, countUnescapedTokens(escaped, tool.UntrustedContentEnd))
@@ -957,13 +957,13 @@ func TestCapDirectOutput(t *testing.T) {
 
 func TestTruncateHeadTail_UnderLimit(t *testing.T) {
 	input := "short string"
-	result := truncateHeadTail(input, 25000)
+	result := truncateHeadTail(input, 25000, "")
 	assert.Equal(t, input, result)
 }
 
 func TestTruncateHeadTail_OverLimit(t *testing.T) {
 	input := strings.Repeat("x", 50000)
-	result := truncateHeadTail(input, 25000)
+	result := truncateHeadTail(input, 25000, "")
 
 	runes := []rune(result)
 	require.LessOrEqual(t, len(runes), 25000)
@@ -973,12 +973,12 @@ func TestTruncateHeadTail_OverLimit(t *testing.T) {
 }
 
 func TestTruncateHeadTail_Empty(t *testing.T) {
-	assert.Empty(t, truncateHeadTail("", 100))
+	assert.Empty(t, truncateHeadTail("", 100, ""))
 }
 
 func TestTruncateHeadTail_VerySmallLimit(t *testing.T) {
 	input := strings.Repeat("x", 100)
-	result := truncateHeadTail(input, 5)
+	result := truncateHeadTail(input, 5, "")
 	assert.LessOrEqual(t, len([]rune(result)), 5)
 }
 

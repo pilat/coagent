@@ -23,7 +23,7 @@ func (c *client) call(ctx context.Context, method string, params, result any) er
 	c.pending[id] = response
 	c.pendingMu.Unlock()
 
-	if err := c.send(ctx, data); err != nil {
+	if _, err := c.send(ctx, data, nil); err != nil {
 		c.removePending(id)
 		return fmt.Errorf("send request: %w", err)
 	}

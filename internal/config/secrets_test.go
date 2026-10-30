@@ -108,7 +108,7 @@ func TestSecretValues(t *testing.T) {
 		},
 	}
 
-	values := secretValues(secrets, unified)
+	values := SecretValues(secrets, unified)
 
 	assert.ElementsMatch(t, []string{
 		"8288787998:AAGlongenoughtoken",
@@ -118,7 +118,7 @@ func TestSecretValues(t *testing.T) {
 }
 
 func TestSecretValuesNilUnified(t *testing.T) {
-	values := secretValues(Secrets{"KEY": "longenoughsecret"}, nil)
+	values := SecretValues(Secrets{"KEY": "longenoughsecret"}, nil)
 
 	assert.Equal(t, []string{"longenoughsecret"}, values)
 }

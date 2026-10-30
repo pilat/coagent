@@ -17,12 +17,16 @@ func (m *Manager) handleModel(ctx context.Context, sessionID int64, arg string) 
 
 	result, err := m.controller.ListModels(ctx)
 	if err != nil {
-		m.reply(ctx, "Failed to list models: "+err.Error())
+		_, _ = m.sendMessage(ctx, strings.ReplaceAll("Failed to list models: "+err.Error(), "\n", " "))
 		return
 	}
 
 	if len(result.Models) == 0 {
-		m.reply(ctx, "No models configured. Add models to "+config.DefaultUnifiedConfigFile)
+		_, _ = m.sendMessage(
+			ctx,
+			strings.ReplaceAll("No models configured. Add models to "+config.DefaultUnifiedConfigFile, "\n", " "),
+		)
+
 		return
 	}
 
@@ -35,7 +39,11 @@ func (m *Manager) handleModel(ctx context.Context, sessionID int64, arg string) 
 
 	number, err := strconv.Atoi(parts[0])
 	if err != nil || number < 1 || number > len(result.Models) || len(parts) > 2 {
-		m.reply(ctx, "Usage: /model N [effort]. Choose a number from /model.")
+		_, _ = m.sendMessage(
+			ctx,
+			strings.ReplaceAll("Usage: /model N [effort]. Choose a number from /model.", "\n", " "),
+		)
+
 		return
 	}
 
@@ -50,7 +58,7 @@ func (m *Manager) handleModel(ctx context.Context, sessionID int64, arg string) 
 				allowed = "none"
 			}
 
-			m.reply(ctx, "Allowed effort levels: "+allowed+".")
+			_, _ = m.sendMessage(ctx, strings.ReplaceAll("Allowed effort levels: "+allowed+".", "\n", " "))
 
 			return
 		}
@@ -59,7 +67,7 @@ func (m *Manager) handleModel(ctx context.Context, sessionID int64, arg string) 
 	if err := m.controller.SetSessionModel(ctx, controllerapi.SessionSetModelData{
 		SessionID: sessionID, Model: model.ID, ReasoningLevel: effort,
 	}); err != nil {
-		m.reply(ctx, "Model switch failed: "+err.Error())
+		_, _ = m.sendMessage(ctx, strings.ReplaceAll("Model switch failed: "+err.Error(), "\n", " "))
 		return
 	}
 
@@ -69,7 +77,7 @@ func (m *Manager) handleModel(ctx context.Context, sessionID int64, arg string) 
 func (m *Manager) listModels(ctx context.Context, sessionID int64, models []controllerapi.ConfigModelInfo) {
 	sessions, err := m.controller.ListSessions(ctx)
 	if err != nil {
-		m.reply(ctx, "Failed to list sessions: "+err.Error())
+		_, _ = m.sendMessage(ctx, strings.ReplaceAll("Failed to list sessions: "+err.Error(), "\n", " "))
 		return
 	}
 

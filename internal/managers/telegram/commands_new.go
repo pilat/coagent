@@ -30,7 +30,7 @@ func (m *Manager) handleNew(ctx context.Context, name string) {
 
 	result, err := m.controller.CreateProject(ctx, controllerapi.ProjectCreateData{Name: name})
 	if err != nil {
-		m.reply(ctx, err.Error())
+		_, _ = m.sendMessage(ctx, strings.ReplaceAll(err.Error(), "\n", " "))
 		return
 	}
 
@@ -40,12 +40,12 @@ func (m *Manager) handleNew(ctx context.Context, name string) {
 func (m *Manager) listProjects(ctx context.Context) {
 	result, err := m.controller.ListRecentProjects(ctx)
 	if err != nil {
-		m.reply(ctx, "Failed to list projects: "+err.Error())
+		_, _ = m.sendMessage(ctx, strings.ReplaceAll("Failed to list projects: "+err.Error(), "\n", " "))
 		return
 	}
 
 	if len(result.Projects) == 0 {
-		m.reply(ctx, "No projects yet. Create one with /new <name>.")
+		_, _ = m.sendMessage(ctx, strings.ReplaceAll("No projects yet. Create one with /new <name>.", "\n", " "))
 		return
 	}
 
@@ -65,7 +65,7 @@ func (m *Manager) handleSpawn(ctx context.Context, path string) {
 
 	result, err := m.controller.ListDir(ctx, controllerapi.FsListDirData{})
 	if err != nil {
-		m.reply(ctx, "Failed to list favorites: "+err.Error())
+		_, _ = m.sendMessage(ctx, strings.ReplaceAll("Failed to list favorites: "+err.Error(), "\n", " "))
 		return
 	}
 
@@ -87,7 +87,7 @@ func (m *Manager) handleLaunch(ctx context.Context, path string) {
 func (m *Manager) createAndSwitch(ctx context.Context, data controllerapi.SessionCreateData) {
 	id, err := m.controller.CreateSession(ctx, data)
 	if err != nil {
-		m.reply(ctx, err.Error())
+		_, _ = m.sendMessage(ctx, strings.ReplaceAll(err.Error(), "\n", " "))
 		return
 	}
 

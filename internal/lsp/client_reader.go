@@ -37,7 +37,7 @@ func (c *client) readLoop(ctx context.Context) {
 			logger.Ctx(ctx).Error("LSP reader panic", zap.Any("recovered", recovered), zap.Stack("stack"))
 		}
 
-		c.handleReaderExit()
+		c.failWriter()
 	}()
 
 	for {
@@ -49,10 +49,6 @@ func (c *client) readLoop(ctx context.Context) {
 
 		c.routeFrame(ctx, body)
 	}
-}
-
-func (c *client) handleReaderExit() {
-	c.failWriter()
 }
 
 func readLSPFrame(reader *bufio.Reader) ([]byte, error) {

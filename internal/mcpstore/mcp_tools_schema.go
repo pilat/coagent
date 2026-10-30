@@ -86,12 +86,19 @@ func writeServerSection(b *strings.Builder, title string, defs []ServerDef) {
 }
 
 func nameScopeSchema() json.RawMessage {
+	encoded, err := json.Marshal(scopeParamDoc)
+
+	description := `""`
+	if err == nil {
+		description = string(encoded)
+	}
+
 	return json.RawMessage(`{
   "type": "object",
   "properties": {
     "name": {"type": "string", "description": "Registered server name."},
     "scope": {"type": "string", "enum": ["global", "project"], "description": ` +
-		quote(scopeParamDoc) + `}
+		description + `}
   },
   "required": ["name", "scope"]
 }`)

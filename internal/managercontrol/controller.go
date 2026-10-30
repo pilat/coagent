@@ -116,5 +116,5 @@ func (c *controller) Subscribe() <-chan controllerapi.SessionNotification {
 }
 
 func (c *controller) Unsubscribe(ch <-chan controllerapi.SessionNotification) {
-	c.app.unsubscribe(ch)
+	c.app.bus.UnsubscribeManager(ch)
 }

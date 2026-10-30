@@ -23,12 +23,15 @@ func TestClient_EnsureFileOpen_FIFORejected(t *testing.T) {
 	c := newClient()
 
 	done := make(chan error, 1)
-	go func() { done <- c.ensureFileOpen(context.Background(), fifo) }()
+	go func() {
+		_, err := c.syncFile(context.Background(), fifo)
+		done <- err
+	}()
 
 	select {
 	case err := <-done:
-		require.Error(t, err, "ensureFileOpen on a FIFO must return an error")
+		require.Error(t, err, "syncFile on a FIFO must return an error")
 	case <-time.After(5 * time.Second):
-		t.Fatal("ensureFileOpen hung opening a writer-less FIFO")
+		t.Fatal("syncFile hung opening a writer-less FIFO")
 	}
 }

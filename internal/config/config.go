@@ -66,7 +66,7 @@ func NewConfig() (*Config, Secrets, error) {
 	}
 
 	cfg.UnifiedConfig = unifiedCfg
-	cfg.SecretValues = secretValues(secrets, unifiedCfg)
+	cfg.SecretValues = SecretValues(secrets, unifiedCfg)
 
 	return &cfg, secrets, nil
 }

@@ -12,7 +12,7 @@ import (
 
 // A skill call that produced no envelope must not hide the calls after it.
 func TestExtractRenderedSkillsSkipsEnvelopeLessBatchCalls(t *testing.T) {
-	rendered := RenderSkill(&loader.Skill{Name: "invoked", Content: "Instructions."}, "")
+	rendered := loader.RenderSkillInvocation(&loader.Skill{Name: "invoked", Content: "Instructions."}, "")
 	content := "=== skill (call 1) ===\nError: skill unavailable: missing\n\n" +
 		"=== skill (call 2) ===\n" + rendered
 
@@ -39,7 +39,7 @@ func TestExtractRenderedSkillsIgnoresNamelessEnvelope(t *testing.T) {
 }
 
 func TestExtractRenderedSkillsKeepsPlainContentWhenNoBatchHeaders(t *testing.T) {
-	rendered := RenderSkill(&loader.Skill{Name: "solo", Content: "Body."}, "")
+	rendered := loader.RenderSkillInvocation(&loader.Skill{Name: "solo", Content: "Body."}, "")
 
 	skills := loader.ExtractRenderedSkills("[title]\n" + rendered)
 
@@ -50,7 +50,7 @@ func TestExtractRenderedSkillsKeepsPlainContentWhenNoBatchHeaders(t *testing.T) 
 // A skill envelope that opens before the first batch header belongs to the whole
 // content, not to a call segment.
 func TestExtractRenderedSkillsIgnoresHeadersAfterTheEnvelope(t *testing.T) {
-	rendered := RenderSkill(&loader.Skill{Name: "solo", Content: "Body."}, "")
+	rendered := loader.RenderSkillInvocation(&loader.Skill{Name: "solo", Content: "Body."}, "")
 	content := rendered + "\n\n=== read (call 1) ===\nfile contents"
 
 	skills := loader.ExtractRenderedSkills(content)
@@ -71,7 +71,7 @@ func TestRenderSkillAlwaysTerminatesBodyWithNewline(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			rendered := RenderSkill(&loader.Skill{Name: "s", Content: tt.content}, "")
+			rendered := loader.RenderSkillInvocation(&loader.Skill{Name: "s", Content: tt.content}, "")
 
 			assert.Equal(t, "<skill>\n<name>s</name>\n---\nBody.\n</skill>", rendered)
 			assert.True(t, strings.HasSuffix(rendered, "\n</skill>"))
@@ -81,7 +81,7 @@ func TestRenderSkillAlwaysTerminatesBodyWithNewline(t *testing.T) {
 
 // A malformed envelope in one batch segment must not swallow the segments after it.
 func TestExtractRenderedSkillsSkipsMalformedEnvelopes(t *testing.T) {
-	rendered := RenderSkill(&loader.Skill{Name: "invoked", Content: "Instructions."}, "")
+	rendered := loader.RenderSkillInvocation(&loader.Skill{Name: "invoked", Content: "Instructions."}, "")
 
 	tests := []struct {
 		name    string

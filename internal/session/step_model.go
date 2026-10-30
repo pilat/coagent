@@ -50,7 +50,7 @@ func (s *Session) callModel(ctx context.Context, r *runState) (*llmwire.Response
 	response, err := s.chat(
 		ctx,
 		s.prompt.SystemPrompt(),
-		repairTranscriptExcluding(messages, s.pendingExternalCallIDs()),
+		repairTranscript(messages, s.pendingExternalCallIDs()),
 		tool.ToSchemas(activeTools),
 	)
 	if err != nil {

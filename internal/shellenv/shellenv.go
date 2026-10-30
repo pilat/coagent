@@ -151,10 +151,6 @@ func (p *provider) Close() error {
 	return nil
 }
 
-func (p *provider) log() *zap.Logger {
-	return logger.Named("shellenv")
-}
-
 // resolveShell returns the resolved bash-family shell path, or "" when the
 // user's shell is not bash. zsh/dash lack `declare -f`/`shopt` compatible dumps;
 // supporting them is an explicit follow-up.

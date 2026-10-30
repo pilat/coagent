@@ -10,7 +10,7 @@ import (
 
 func (s *Session) prepareHead(ctx context.Context, r *runState, batch *boundaryBatch) (bool, error) {
 	if s.head == nil || r.headCommitted || !batch.accepted ||
-		len(s.pendingInLoopCalls()) > 0 || s.HasPendingExternalCall() {
+		len(s.pendingInLoopCalls()) > 0 || len(s.PendingExternalCalls()) > 0 {
 		return false, nil
 	}
 

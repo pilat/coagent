@@ -55,7 +55,7 @@ func (s *Service) publish(sessionID int64, n sessionevent.Notification) {
 				zap.Int64("session_id", sessionID),
 				zap.Error(err),
 			)
-			s.bus.PublishOwned(sessionID, "", n)
+			s.bus.Publish(sessionID, "", n)
 
 			return
 		}
@@ -69,7 +69,7 @@ func (s *Service) publish(sessionID int64, n sessionevent.Notification) {
 		return
 	}
 
-	s.bus.PublishOwned(sessionID, managerID, n)
+	s.bus.Publish(sessionID, managerID, n)
 }
 
 // lookupPublishRoute reports the immutable root/owner route for a session.

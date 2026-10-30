@@ -104,7 +104,8 @@ func tryStatus(socket string) (ctl.StatusResult, bool) {
 
 	defer func() { _ = c.Close() }()
 
-	st, err := c.Status(ctx)
+	var st ctl.StatusResult
+	err = c.Call(ctx, ctl.OpStatus, nil, &st)
 
 	return st, err == nil
 }

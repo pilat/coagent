@@ -79,7 +79,7 @@ type sessionStatus struct {
 }
 
 func (s *Session) Run(ctx context.Context) (RunResult, error) {
-	ctx = logger.With(ctx)
+	ctx = logger.ToContext(ctx, logger.Ctx(ctx).With())
 	if err := s.prepareRun(ctx); err != nil {
 		return RunResult{}, err
 	}
@@ -94,7 +94,7 @@ func (s *Session) Run(ctx context.Context) (RunResult, error) {
 	)
 	defer s.startHeartbeat(ctx)()
 
-	if !s.HasPendingExternalCall() {
+	if len(s.PendingExternalCalls()) == 0 {
 		s.compactionDeferAnnounced = false
 	}
 
@@ -146,7 +146,7 @@ func (s *Session) runIteration(ctx context.Context, r *runState) (bool, error) {
 		return true, nil
 	}
 
-	if s.HasPendingExternalCall() {
+	if len(s.PendingExternalCalls()) > 0 {
 		r.result.Suspended = true
 		return false, nil
 	}

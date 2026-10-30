@@ -18,7 +18,7 @@ func TestBus_MultipleSubscribers(t *testing.T) {
 	ch2 := ps.Subscribe(int64(1))
 
 	n := sessionevent.Notification{Type: sessionevent.NotifyMessage, Message: "hello"}
-	ps.Publish(int64(1), n)
+	ps.Publish(int64(1), "", n)
 
 	select {
 	case got := <-ch1:
@@ -40,8 +40,8 @@ func TestBus_GlobalSubscriber(t *testing.T) {
 
 	ch := ps.SubscribeAll()
 
-	ps.Publish(int64(1), sessionevent.Notification{Type: sessionevent.NotifyMessage, Message: "from s1"})
-	ps.Publish(int64(2), sessionevent.Notification{Type: sessionevent.NotifyMessage, Message: "from s2"})
+	ps.Publish(int64(1), "", sessionevent.Notification{Type: sessionevent.NotifyMessage, Message: "from s1"})
+	ps.Publish(int64(2), "", sessionevent.Notification{Type: sessionevent.NotifyMessage, Message: "from s2"})
 
 	var messages []string
 	var sessionIDs []int64
@@ -69,14 +69,14 @@ func TestBus_ManagerSubscribersReceiveOnlyTheirOwner(t *testing.T) {
 	observer := ps.SubscribeAll()
 	n := sessionevent.Notification{Type: sessionevent.NotifyMessage, Message: "owned"}
 
-	ps.PublishOwned(41, "alpha", n)
+	ps.Publish(41, "alpha", n)
 
 	assert.Equal(t, int64(41), requireManagerNotification(t, alpha).SessionID)
 	assert.Equal(t, int64(41), requireManagerNotification(t, observer).SessionID)
 	requireNoManagerNotification(t, beta)
 	requireNoManagerNotification(t, blank)
 
-	ps.PublishOwned(42, "", n)
+	ps.Publish(42, "", n)
 	requireNoManagerNotification(t, alpha)
 	requireNoManagerNotification(t, beta)
 	requireNoManagerNotification(t, blank)
@@ -88,7 +88,7 @@ func TestBus_UnsubscribeManager(t *testing.T) {
 	ch := ps.SubscribeManager("alpha")
 	ps.UnsubscribeManager(ch)
 
-	ps.PublishOwned(1, "alpha", sessionevent.Notification{Type: sessionevent.NotifyMessage})
+	ps.Publish(1, "alpha", sessionevent.Notification{Type: sessionevent.NotifyMessage})
 
 	requireNoManagerNotification(t, ch)
 }
@@ -100,13 +100,13 @@ func TestBus_SlowSubscriber(t *testing.T) {
 
 	// Fill the buffer
 	for range subscriberBufferSize {
-		ps.Publish(int64(1), sessionevent.Notification{Type: sessionevent.NotifyMessage, Message: "fill"})
+		ps.Publish(int64(1), "", sessionevent.Notification{Type: sessionevent.NotifyMessage, Message: "fill"})
 	}
 
 	// This should not block — the notification is dropped
 	done := make(chan struct{})
 	go func() {
-		ps.Publish(int64(1), sessionevent.Notification{Type: sessionevent.NotifyMessage, Message: "overflow"})
+		ps.Publish(int64(1), "", sessionevent.Notification{Type: sessionevent.NotifyMessage, Message: "overflow"})
 		close(done)
 	}()
 
@@ -137,7 +137,7 @@ func TestBus_Unsubscribe(t *testing.T) {
 	ps.Unsubscribe(int64(1), ch)
 
 	// Publish should not panic and ch should not receive
-	ps.Publish(int64(1), sessionevent.Notification{Type: sessionevent.NotifyMessage, Message: "after unsub"})
+	ps.Publish(int64(1), "", sessionevent.Notification{Type: sessionevent.NotifyMessage, Message: "after unsub"})
 
 	select {
 	case <-ch:
@@ -153,7 +153,7 @@ func TestBus_UnsubscribeAll(t *testing.T) {
 	ch := ps.SubscribeAll()
 	ps.UnsubscribeAll(ch)
 
-	ps.Publish(int64(1), sessionevent.Notification{Type: sessionevent.NotifyMessage, Message: "after unsub"})
+	ps.Publish(int64(1), "", sessionevent.Notification{Type: sessionevent.NotifyMessage, Message: "after unsub"})
 
 	select {
 	case <-ch:
@@ -169,7 +169,7 @@ func TestBus_PerSessionIsolation(t *testing.T) {
 	ch1 := ps.Subscribe(int64(1))
 	ch2 := ps.Subscribe(int64(2))
 
-	ps.Publish(int64(1), sessionevent.Notification{Type: sessionevent.NotifyMessage, Message: "for s1"})
+	ps.Publish(int64(1), "", sessionevent.Notification{Type: sessionevent.NotifyMessage, Message: "for s1"})
 
 	select {
 	case got := <-ch1:

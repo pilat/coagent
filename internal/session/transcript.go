@@ -78,13 +78,9 @@ func (s *Session) PendingExternalCalls() []PendingToolCall {
 	return result
 }
 
-func (s *Session) HasPendingExternalCall() bool {
-	return len(s.PendingExternalCalls()) > 0
-}
-
 // HasPendingWork includes host continuation rows so restarts retain unfinished turns.
 func (s *Session) HasPendingWork() bool {
-	if s.HasPendingExternalCall() {
+	if len(s.PendingExternalCalls()) > 0 {
 		return false
 	}
 
@@ -466,22 +462,9 @@ func (s *Session) unansweredWork() bool {
 	return last.Role != llmwire.RoleAssistant || len(s.pendingInLoopCalls()) > 0
 }
 
-// repairTranscript ensures tool calls and results are properly paired.
-// It performs four repairs matching OpenClaw's repairToolUseResultPairing:
-//  1. Drops orphaned tool results (no matching assistant tool call)
-//  2. Inserts synthetic error results for tool calls with no result
-//  3. Reorders tool results to immediately follow their assistant message
-//  4. Drops duplicate results for the same tool call ID
-func repairTranscript(messages []llmwire.Message) []llmwire.Message {
-	return repairTranscriptExcluding(messages, nil)
-}
-
-// repairTranscriptExcluding is repairTranscript that never fabricates a result
-// for a tool_call in pendingCallIDs — those are genuinely-pending external calls
-// (sleep, blocking task) awaiting an out-of-band outcome; stubbing them would
-// corrupt the resume. The loop never reaches the LLM with such a call pending
-// (handlePreviousResult returns first), so this is a defensive guard.
-func repairTranscriptExcluding(messages []llmwire.Message, pendingCallIDs map[string]bool) []llmwire.Message {
+// repairTranscript pairs tool calls and results without fabricating outcomes
+// for pending external calls, which must be resolved by their producer.
+func repairTranscript(messages []llmwire.Message, pendingCallIDs map[string]bool) []llmwire.Message {
 	if len(messages) == 0 {
 		return messages
 	}
@@ -747,7 +730,7 @@ func (s *Session) hasCompactionCandidate(window int) bool {
 	}
 
 	baseEstimate := s.summarizerBaseEstimateLocked()
-	minTail := minTailTokens(s.ms.messages, cp.rawStart, window)
+	minTail := min(window/10, estimateTokens(s.ms.messages[cp.rawStart:])/2)
 
 	for _, fraction := range []float64{compactionRequestFraction, llmwire.ContextInputFraction} {
 		for _, limit := range tailLevels() {

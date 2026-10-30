@@ -70,6 +70,7 @@ func TestMessageAndLifecycleOutputsDoNotStampGeneration(t *testing.T) {
 			"still working",
 			session.ID,
 			nil,
+			false,
 		),
 	}
 	commit, err = store.EnqueueOutput(ctx, draft)
@@ -98,7 +99,7 @@ func TestSourceKeyReplaySurvivesGenerationChange(t *testing.T) {
 	draft := sessionstore.OutputDraft{
 		SessionID: session.ID, Type: sessionstore.OutputMessage, Content: "card",
 		SourceKey:   "progress:change:x:g0",
-		Fingerprint: sessionstore.OutputFingerprint(sessionstore.OutputMessage, "card", session.ID, nil),
+		Fingerprint: sessionstore.OutputFingerprint(sessionstore.OutputMessage, "card", session.ID, nil, false),
 	}
 	commit, err := store.EnqueueOutput(ctx, draft)
 	require.NoError(t, err)

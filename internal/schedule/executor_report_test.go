@@ -19,7 +19,7 @@ func TestExecutor_ReportAttributes(t *testing.T) {
 			root, err := sessions.CreateSession(t.Context(), project, "model", "", nil)
 			require.NoError(t, err)
 			at := time.Now().Add(-time.Minute)
-			created, err := store.AddScheduleWithMeta(
+			created, err := store.AddSchedule(
 				t.Context(),
 				root.ID,
 				"",

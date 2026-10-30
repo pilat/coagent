@@ -16,7 +16,7 @@ func (m *manager) openFile(ctx context.Context, workDir, file string) (*client, 
 		return nil, fileIdentity{}, err
 	}
 
-	if err := cl.ensureFileOpen(ctx, identity.path); err != nil {
+	if _, err := cl.syncFile(ctx, identity.path); err != nil {
 		return nil, fileIdentity{}, fmt.Errorf("didOpen: %w", err)
 	}
 
@@ -25,13 +25,13 @@ func (m *manager) openFile(ctx context.Context, workDir, file string) (*client, 
 
 func positionParams(file string, line, character int) map[string]any {
 	return map[string]any{
-		lspKeyTextDocument: map[string]any{lspKeyURI: pathToURI(file)},
+		lspKeyTextDocument: map[string]any{lspKeyURI: fileURI(file)},
 		"position":         map[string]int{"line": line, "character": character},
 	}
 }
 
 func docParams(file string) map[string]any {
 	return map[string]any{
-		lspKeyTextDocument: map[string]any{lspKeyURI: pathToURI(file)},
+		lspKeyTextDocument: map[string]any{lspKeyURI: fileURI(file)},
 	}
 }

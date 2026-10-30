@@ -119,9 +119,7 @@ func newOneShotHarness(t *testing.T) *oneShotHarness {
 	store := NewStore(db, sessionstore.NewStore(db))
 	now := time.Date(2026, time.August, 18, 12, 0, 0, 0, time.UTC)
 	due := now.Add(-time.Second)
-	schedule, err := store.AddScheduleWithMeta(
-		ctx, sessionID, "", &due, "wake", false, ScheduleMetadata{ToolCallID: "sleep-1"},
-	)
+	schedule, err := store.AddSchedule(ctx, sessionID, "", &due, "wake", false, ScheduleMetadata{ToolCallID: "sleep-1"})
 	require.NoError(t, err)
 
 	h := &oneShotHarness{

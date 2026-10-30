@@ -16,6 +16,7 @@ import (
 	"github.com/pilat/coagent/internal/controllerapi"
 	"github.com/pilat/coagent/internal/llmwire"
 	"github.com/pilat/coagent/internal/logger"
+	"github.com/pilat/coagent/internal/schedule"
 	"github.com/pilat/coagent/internal/sessionevent"
 	"github.com/pilat/coagent/internal/sessionstore"
 	"github.com/pilat/coagent/internal/subagent"
@@ -120,9 +121,25 @@ func TestCascadeKill_RemovesChildSchedules(t *testing.T) {
 	require.NoError(t, err)
 	h.waitUntil("background child running", func() bool { return h.mgr.HasActiveLoop(child.ChildID) })
 	oneShot := time.Now().Add(time.Hour).UTC()
-	_, err = h.schedules.AddSchedule(ctx, child.ChildID, "", &oneShot, "child one-shot", false)
+	_, err = h.schedules.AddSchedule(
+		ctx,
+		child.ChildID,
+		"",
+		&oneShot,
+		"child one-shot",
+		false,
+		schedule.ScheduleMetadata{},
+	)
 	require.NoError(t, err)
-	_, err = h.schedules.AddSchedule(ctx, child.ChildID, "0 9 * * *", nil, "child cron", false)
+	_, err = h.schedules.AddSchedule(
+		ctx,
+		child.ChildID,
+		"0 9 * * *",
+		nil,
+		"child cron",
+		false,
+		schedule.ScheduleMetadata{},
+	)
 	require.NoError(t, err)
 	require.NoError(t, h.mgr.sendToSession(ctx, root, "/kill"))
 	h.waitUntil("child gone", func() bool { return !h.mgr.HasActiveLoop(child.ChildID) })

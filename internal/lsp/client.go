@@ -122,17 +122,14 @@ func (c *client) notify(ctx context.Context, method string, params any) error {
 		return err
 	}
 
-	return c.send(ctx, data)
+	_, err = c.send(ctx, data, nil)
+
+	return err
 }
 
 // send queues one complete JSON-RPC frame. A blocked server stdin cannot hold a
 // caller after its context is cancelled because waiting happens outside writer.
-func (c *client) send(ctx context.Context, data []byte) error {
-	_, err := c.sendFrame(ctx, data, nil)
-	return err
-}
-
-func (c *client) sendFrame(ctx context.Context, data []byte, beforeWrite func() uint64) (uint64, error) {
+func (c *client) send(ctx context.Context, data []byte, beforeWrite func() uint64) (uint64, error) {
 	if c.stdin == nil || c.hasExited() {
 		return 0, ErrClientExited
 	}

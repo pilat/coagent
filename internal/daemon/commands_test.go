@@ -180,7 +180,7 @@ func TestManager_InputReceivedPubSub(t *testing.T) {
 	require.NoError(t, err)
 	sub := mgr.bus.Subscribe(id)
 	defer mgr.bus.Unsubscribe(id, sub)
-	mgr.bus.Publish(id, sessionevent.Notification{
+	mgr.bus.Publish(id, "", sessionevent.Notification{
 		Type:    sessionevent.NotifyInputReceived,
 		Message: "hello from agent",
 		Source:  "agent",
