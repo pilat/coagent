@@ -39,7 +39,7 @@ func (m *fakeManager) Alive() bool {
 
 // runtimeFor wires one enabled config entry per fake, so a test only has to
 // describe the managers it cares about.
-func runtimeFor(mgrs ...*fakeManager) *runtime {
+func runtimeFor(mgrs ...*fakeManager) *Runtime {
 	enabled := true
 	entries := make([]config.ManagerEntry, 0, len(mgrs))
 	byID := make(map[string]Manager, len(mgrs))
@@ -49,7 +49,7 @@ func runtimeFor(mgrs ...*fakeManager) *runtime {
 		byID[m.id] = m
 	}
 
-	return &runtime{
+	return &Runtime{
 		cfg:     &config.Config{UnifiedConfig: &config.UnifiedConfig{Managers: entries}},
 		builder: func(entry config.ManagerEntry) (Manager, error) { return byID[entry.ID], nil },
 	}
@@ -69,7 +69,7 @@ func TestRuntime_OnStart_StartsOnlyEnabledManagers(t *testing.T) {
 	}
 
 	enabledMgr := &fakeManager{id: "enabled"}
-	r := &runtime{
+	r := &Runtime{
 		cfg: cfg,
 		builder: func(entry config.ManagerEntry) (Manager, error) {
 			if entry.ID == "enabled" {
@@ -124,7 +124,7 @@ func TestRuntime_OnStart_ReportsNoErrorWhenEveryManagerStarts(t *testing.T) {
 		},
 	}
 
-	r := &runtime{
+	r := &Runtime{
 		cfg:     cfg,
 		builder: func(entry config.ManagerEntry) (Manager, error) { return &fakeManager{id: entry.ID}, nil },
 	}
@@ -141,7 +141,7 @@ func TestRuntime_DuplicateTelegramTokensStopOnlyTheConflictSet(t *testing.T) {
 	second := &fakeManager{id: "second"}
 	third := &fakeManager{id: "third"}
 
-	r := &runtime{
+	r := &Runtime{
 		cfg: &config.Config{UnifiedConfig: &config.UnifiedConfig{Managers: []config.ManagerEntry{
 			{ID: "first", Driver: "telegram", Enabled: &enabled, BotToken: "same"},
 			{ID: "second", Driver: "telegram", Enabled: &enabled, BotToken: "same"},
@@ -185,7 +185,7 @@ func TestRuntime_RunningIDs_DropsAManagerWhoseLoopsDied(t *testing.T) {
 
 	died := &fakeManager{id: "died"}
 
-	r := &runtime{
+	r := &Runtime{
 		cfg: cfg,
 		builder: func(entry config.ManagerEntry) (Manager, error) {
 			if entry.ID == "died" {

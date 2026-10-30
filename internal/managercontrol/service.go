@@ -10,10 +10,10 @@ import (
 type service struct {
 	backend   Backend
 	store     Store
-	bus       sessionbus.Source
+	bus       *sessionbus.Bus
 	cfg       *config.Config
-	cache     loader.MarketplaceCache
-	discovery managerdiscovery.Service
+	cache     *loader.MarketplaceCache
+	discovery *managerdiscovery.Service
 }
 
 func (s *service) unifiedConfig() *config.UnifiedConfig {

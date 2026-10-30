@@ -125,5 +125,5 @@ func TestTeardownOnStoreFailureDoesNotPublishIdle(t *testing.T) {
 	notifications := controllers.ForManager("manager-teardown").Subscribe()
 	mgr.publishIdle(ctx, record.ID)
 	requireNoManagerNotification(t, notifications)
-	mgr.Shutdown(time.Second)
+	mgr.Shutdown(t.Context(), time.Second)
 }

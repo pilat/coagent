@@ -86,7 +86,7 @@ func TestFilterRegistryForAgent_BatchCannotReachExcludedTools(t *testing.T) {
 	assert.Contains(t, err.Error(), `unknown tool "bash"`)
 }
 
-func testRegistry() tool.Registry {
+func testRegistry() *tool.Registry {
 	reg := tool.NewRegistry()
 	reg.Register(testTool{id: "read"})
 	reg.Register(testTool{id: "bash"})

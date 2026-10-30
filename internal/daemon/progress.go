@@ -19,7 +19,7 @@ type waitingProjection struct {
 	key  string
 }
 
-func (s *svc) liveContextProjection(ctx context.Context, rootID int64) (progress.Context, bool) {
+func (s *Service) liveContextProjection(ctx context.Context, rootID int64) (progress.Context, bool) {
 	activeRunner, ok := s.runners.load(rootID)
 	if !ok {
 		return progress.Context{}, false
@@ -38,20 +38,20 @@ func (s *svc) liveContextProjection(ctx context.Context, rootID int64) (progress
 	}, true
 }
 
-func (s *svc) updateLive(ctx context.Context, sessionID int64) {
+func (s *Service) updateLive(ctx context.Context, sessionID int64) {
 	s.liveMu.Lock()
 	defer s.liveMu.Unlock()
 
 	s.updateLiveLocked(ctx, sessionID)
 }
 
-func (s *svc) updateLiveLocked(ctx context.Context, sessionID int64) {
+func (s *Service) updateLiveLocked(ctx context.Context, sessionID int64) {
 	live := progressruntime.Live{Active: s.HasActiveLoop(sessionID)}
 	live.Context, _ = s.liveContextProjection(ctx, sessionID)
 	s.progress.SetLive(sessionID, live)
 }
 
-func (s *svc) publishWaiting(ctx context.Context, sessionID int64) {
+func (s *Service) publishWaiting(ctx context.Context, sessionID int64) {
 	projections := s.collectWaitingProjections(ctx, sessionID)
 	if len(projections) == 0 {
 		return
@@ -67,7 +67,7 @@ func (s *svc) publishWaiting(ctx context.Context, sessionID int64) {
 	})
 }
 
-func (s *svc) collectWaitingProjections(ctx context.Context, sessionID int64) []waitingProjection {
+func (s *Service) collectWaitingProjections(ctx context.Context, sessionID int64) []waitingProjection {
 	projections := make([]waitingProjection, 0)
 	log := logger.Ctx(ctx).Named("daemon.waiting")
 

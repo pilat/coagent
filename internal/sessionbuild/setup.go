@@ -70,7 +70,7 @@ func loadProjectInstructions(ctx context.Context, p BuildInput, workDir string) 
 // Unknown model overrides fall back to inheritance rather than failing later at spawn.
 func subagentConfigs(
 	ctx context.Context,
-	ldr loader.Service,
+	ldr *loader.Service,
 	models []config.ModelEntry,
 ) []registry.AgentTypeConfig {
 	subs := ldr.ListSubagents()

@@ -37,7 +37,7 @@ func newConfigEditFixture() (*configEditTool, *fakeDocumentStager, *bool) {
 		staged:  &configops.Staged{Data: []byte("providers: {}"), Hash: "abc", Summary: "replace"},
 		verdict: configops.OK(),
 	}
-	service := &svc{ops: stager, calls: make(map[int64]map[string]stagedCall)}
+	service := &Service{ops: stager, calls: make(map[int64]map[string]stagedCall)}
 	return &configEditTool{service: service, sessionID: 7}, stager, &service.claimed
 }
 

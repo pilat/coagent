@@ -37,7 +37,7 @@ func TestManagerInputAttributesRemainSessionOnly(t *testing.T) {
 				Attributes: map[string]any{"from": "assistant", sessionstore.ObserverSessionIDAttribute: 987654},
 			})
 			require.NoError(t, err)
-			_, err = service.sendSessionMessage(
+			err = service.sendSessionMessage(
 				t.Context(),
 				"owner",
 				controllerapi.SessionMessageData{SessionID: id, Message: "follow-up"},

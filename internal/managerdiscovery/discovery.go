@@ -13,7 +13,7 @@ import (
 	"github.com/pilat/coagent/internal/loader"
 )
 
-func (s *service) ListModels(context.Context) (*controllerapi.ConfigModelsResultData, error) {
+func (s *Service) ListModels(context.Context) (*controllerapi.ConfigModelsResultData, error) {
 	var models []controllerapi.ConfigModelInfo
 
 	if unified := s.unifiedConfig(); unified != nil {
@@ -39,7 +39,7 @@ func (s *service) ListModels(context.Context) (*controllerapi.ConfigModelsResult
 	return &controllerapi.ConfigModelsResultData{Models: models, DefaultID: defaultID}, nil
 }
 
-func (s *service) ListSkills(
+func (s *Service) ListSkills(
 	ctx context.Context,
 	managerID string,
 	data controllerapi.ConfigSkillsData,
@@ -75,7 +75,7 @@ func (s *service) ListSkills(
 	return &controllerapi.ConfigSkillsResultData{Skills: skills}, nil
 }
 
-func (s *service) ListDir(
+func (s *Service) ListDir(
 	ctx context.Context,
 	data controllerapi.FsListDirData,
 ) (*controllerapi.FsListDirResultData, error) {
@@ -114,7 +114,7 @@ func (s *service) ListDir(
 	}, nil
 }
 
-func (s *service) readSubdirs(ctx context.Context, path string) ([]controllerapi.FsDirEntry, error) {
+func (s *Service) readSubdirs(ctx context.Context, path string) ([]controllerapi.FsDirEntry, error) {
 	entries, err := os.ReadDir(path)
 	if err != nil {
 		return nil, fmt.Errorf("readdir: %w", err)

@@ -24,14 +24,8 @@ type SessionSender interface {
 	NotifySession(sessionID int64, n sessionevent.Notification)
 }
 
-type Executor interface {
-	Start(ctx context.Context)
-	Stop()
-}
-
-var _ Executor = (*executor)(nil)
-
-type executor struct {
+// Executor delivers due schedules until stopped.
+type Executor struct {
 	store  Store
 	sender SessionSender
 	cancel context.CancelFunc
@@ -42,8 +36,8 @@ type executor struct {
 	oneShotAttempts map[int64]int
 }
 
-func NewExecutor(store Store, sender SessionSender) Executor {
-	return &executor{
+func NewExecutor(store Store, sender SessionSender) *Executor {
+	return &Executor{
 		store:           store,
 		sender:          sender,
 		done:            make(chan struct{}),
@@ -51,12 +45,12 @@ func NewExecutor(store Store, sender SessionSender) Executor {
 	}
 }
 
-func (e *executor) Start(ctx context.Context) {
+func (e *Executor) Start(ctx context.Context) {
 	ctx, e.cancel = context.WithCancel(ctx)
 	go e.loop(ctx)
 }
 
-func (e *executor) Stop() {
+func (e *Executor) Stop() {
 	if e.cancel != nil {
 		e.cancel()
 	}
@@ -64,7 +58,7 @@ func (e *executor) Stop() {
 	<-e.done
 }
 
-func (e *executor) loop(ctx context.Context) {
+func (e *Executor) loop(ctx context.Context) {
 	defer close(e.done)
 
 	l := logger.Ctx(ctx).Named("schedule.executor")
@@ -84,7 +78,7 @@ func (e *executor) loop(ctx context.Context) {
 	}
 }
 
-func (e *executor) tick(ctx context.Context, l *zap.Logger) {
+func (e *Executor) tick(ctx context.Context, l *zap.Logger) {
 	now := time.Now()
 
 	if err := e.fireOneShotSchedules(ctx, now, l); err != nil {
@@ -96,7 +90,7 @@ func (e *executor) tick(ctx context.Context, l *zap.Logger) {
 	}
 }
 
-func (e *executor) fireOneShotSchedules(ctx context.Context, now time.Time, l *zap.Logger) error {
+func (e *Executor) fireOneShotSchedules(ctx context.Context, now time.Time, l *zap.Logger) error {
 	schedules, err := e.store.ListDueSchedules(ctx, now)
 	if err != nil {
 		return fmt.Errorf("list due schedules: %w", err)
@@ -129,7 +123,7 @@ func (e *executor) fireOneShotSchedules(ctx context.Context, now time.Time, l *z
 	return nil
 }
 
-func (e *executor) deliverOneShot(ctx context.Context, sched *Schedule) (bool, error) {
+func (e *Executor) deliverOneShot(ctx context.Context, sched *Schedule) (bool, error) {
 	if sched.metadata.ToolCallID != "" {
 		pending, err := e.store.CallPending(ctx, sched.sessionID, sched.metadata.ToolCallID)
 		if err != nil {
@@ -157,7 +151,7 @@ func (e *executor) deliverOneShot(ctx context.Context, sched *Schedule) (bool, e
 
 // handleOneShotFailure records a delivery failure and drops the schedule once
 // retries are exhausted, so an undeliverable wake cannot retry every tick forever.
-func (e *executor) handleOneShotFailure(ctx context.Context, sched *Schedule, sendErr error, l *zap.Logger) {
+func (e *Executor) handleOneShotFailure(ctx context.Context, sched *Schedule, sendErr error, l *zap.Logger) {
 	e.oneShotAttempts[sched.id]++
 	attempts := e.oneShotAttempts[sched.id]
 
@@ -183,7 +177,7 @@ func (e *executor) handleOneShotFailure(ctx context.Context, sched *Schedule, se
 	delete(e.oneShotAttempts, sched.id)
 }
 
-func (e *executor) fireCronSchedules(ctx context.Context, now time.Time, l *zap.Logger) error {
+func (e *Executor) fireCronSchedules(ctx context.Context, now time.Time, l *zap.Logger) error {
 	schedules, err := e.store.ListDueCronSchedules(ctx, now)
 	if err != nil {
 		return fmt.Errorf("list cron schedules: %w", err)
@@ -271,7 +265,7 @@ func (e *executor) fireCronSchedules(ctx context.Context, now time.Time, l *zap.
 	return nil
 }
 
-func (e *executor) deliverCronSchedule(
+func (e *Executor) deliverCronSchedule(
 	ctx context.Context,
 	sched *Schedule,
 	deliveryID, content string,

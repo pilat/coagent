@@ -1,42 +1,23 @@
 package managerdiscovery
 
 import (
-	"context"
-
 	"github.com/pilat/coagent/internal/config"
-	"github.com/pilat/coagent/internal/controllerapi"
 	"github.com/pilat/coagent/internal/loader"
+	"github.com/pilat/coagent/internal/sessionstore"
 )
 
-type Service interface {
-	CreateProject(
-		context.Context,
-		string,
-		controllerapi.ProjectCreateData,
-	) (*controllerapi.ProjectCreateResultData, error)
-	ListRecentProjects(context.Context) (*controllerapi.ProjectListResultData, error)
-	ListDir(context.Context, controllerapi.FsListDirData) (*controllerapi.FsListDirResultData, error)
-	ListModels(context.Context) (*controllerapi.ConfigModelsResultData, error)
-	ListSkills(
-		context.Context,
-		string,
-		controllerapi.ConfigSkillsData,
-	) (*controllerapi.ConfigSkillsResultData, error)
-}
-
-var _ Service = (*service)(nil)
-
-type service struct {
-	backend Backend
+// Service provides manager-scoped project and configuration discovery.
+type Service struct {
+	backend *sessionstore.Store
 	cfg     *config.Config
-	cache   loader.MarketplaceCache
+	cache   *loader.MarketplaceCache
 }
 
-func New(backend Backend, cfg *config.Config, cache loader.MarketplaceCache) Service {
-	return &service{backend: backend, cfg: cfg, cache: cache}
+func New(backend *sessionstore.Store, cfg *config.Config, cache *loader.MarketplaceCache) *Service {
+	return &Service{backend: backend, cfg: cfg, cache: cache}
 }
 
-func (s *service) unifiedConfig() *config.UnifiedConfig {
+func (s *Service) unifiedConfig() *config.UnifiedConfig {
 	if s.cfg == nil {
 		return nil
 	}

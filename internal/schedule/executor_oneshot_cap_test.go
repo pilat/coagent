@@ -75,7 +75,7 @@ func TestExecutor_OneShotDroppedAfterMaxAttempts(t *testing.T) {
 	}
 	store := &capFakeStore{due: []*Schedule{sched}, removed: map[int64]bool{}}
 	sender := &capFailSender{}
-	e := NewExecutor(store, sender).(*executor)
+	e := NewExecutor(store, sender)
 
 	log := zap.NewNop()
 	ctx := context.Background()

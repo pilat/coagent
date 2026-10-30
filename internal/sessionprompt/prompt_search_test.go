@@ -24,7 +24,7 @@ func searchGuidanceConfig() *config.UnifiedConfig {
 	}
 }
 
-func registryWithTools(ids ...string) tool.Registry {
+func registryWithTools(ids ...string) *tool.Registry {
 	reg := tool.NewRegistry()
 	for _, id := range ids {
 		reg.Register(&stubTool{id: id})

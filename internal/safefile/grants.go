@@ -150,7 +150,7 @@ func closeWritableRoots(roots []writableRoot) {
 
 // matchWritableRoot returns the deepest writable root covering canonical, and
 // canonical's path relative to it.
-func (a *access) matchWritableRoot(canonical string) (writableRoot, string, bool) {
+func (a *Access) matchWritableRoot(canonical string) (writableRoot, string, bool) {
 	var best writableRoot
 
 	bestRel := ""
@@ -176,7 +176,7 @@ func (a *access) matchWritableRoot(canonical string) (writableRoot, string, bool
 
 // rootByPath returns the writable root recorded at path, empty string never
 // matches.
-func (a *access) rootByPath(path string) (writableRoot, bool) {
+func (a *Access) rootByPath(path string) (writableRoot, bool) {
 	if path == "" {
 		return writableRoot{}, false
 	}
@@ -191,7 +191,7 @@ func (a *access) rootByPath(path string) (writableRoot, bool) {
 }
 
 // fileRootFor returns the single-file writable root that owns canonical.
-func (a *access) fileRootFor(canonical string) (writableRoot, bool) {
+func (a *Access) fileRootFor(canonical string) (writableRoot, bool) {
 	for _, root := range a.roots {
 		if root.file && root.path == canonical {
 			return root, true
@@ -203,7 +203,7 @@ func (a *access) fileRootFor(canonical string) (writableRoot, bool) {
 
 // identityFor returns the recorded identity of the writable root that owns
 // canonical, for AuthorizeRead's replay check.
-func (a *access) identityFor(canonical string) (string, bool) {
+func (a *Access) identityFor(canonical string) (string, bool) {
 	if root, ok := a.fileRootFor(canonical); ok {
 		return root.identity, true
 	}

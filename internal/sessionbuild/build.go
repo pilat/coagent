@@ -36,10 +36,10 @@ type BuildInput struct {
 	Store                    session.Store
 	GitClient                git.Client
 	MCPStore                 mcpstore.Store
-	MarketplaceCache         loader.MarketplaceCache
+	MarketplaceCache         *loader.MarketplaceCache
 	ProcessService           backgroundprocess.Service
-	Resources                builtin.Resources
-	Loader                   loader.Service
+	Resources                *builtin.Resources
+	Loader                   *loader.Service
 	OwnerTools               []tool.Tool
 	ExternalCalls            map[string]string
 	Events                   session.Events
@@ -83,7 +83,7 @@ func Build(ctx context.Context, in BuildInput) (*session.Session, func(), error)
 }
 
 // RetireToolResources releases cached tools after a stopped session joins.
-func RetireToolResources(resources builtin.Resources, sessionID int64) error {
+func RetireToolResources(resources *builtin.Resources, sessionID int64) error {
 	if resources == nil {
 		return nil
 	}
@@ -96,7 +96,7 @@ func RetireToolResources(resources builtin.Resources, sessionID int64) error {
 }
 
 // CloseToolResources releases the shared cache after all runners join.
-func CloseToolResources(resources builtin.Resources) error {
+func CloseToolResources(resources *builtin.Resources) error {
 	if resources == nil {
 		return nil
 	}
@@ -129,7 +129,7 @@ func build(
 	var once sync.Once
 	cleanup := func() { once.Do(func() { _ = stack.Close() }) }
 
-	attachImageAuthorizer(client, stack)
+	imageAuthorizer := attachImageAuthorizer(client, stack)
 	level := configureClient(client, in.Record)
 	registerSessionTools(reg, in)
 
@@ -165,7 +165,7 @@ func build(
 		BackgroundSnapshot:       sessionprompt.BuildActiveBackgroundSection(in.ActiveProcesses, in.ActiveSubagents),
 		CompactionDeferAnnounced: in.CompactionDeferAnnounced,
 		Head:                     in.Head,
-		ImageAuthorizer:          stack.Access(),
+		ImageAuthorizer:          imageAuthorizer,
 	})
 	if err != nil {
 		cleanup()
@@ -192,7 +192,7 @@ func loadOpeningContext(ctx context.Context, in BuildInput, cfg registry.AgentTy
 	return openingContext, in.ExtraSkills
 }
 
-func restoreTodos(raw string) (todo.Service, error) {
+func restoreTodos(raw string) (*todo.Service, error) {
 	todos := todo.New()
 	if raw == "" {
 		return todos, nil
@@ -226,8 +226,8 @@ func preparePrompt(
 	in BuildInput,
 	cfg registry.AgentTypeConfig,
 	skills []*loader.Skill,
-	todos todo.Service,
-	reg tool.Registry,
+	todos *todo.Service,
+	reg *tool.Registry,
 	stack *builtin.Stack,
 	level string,
 ) *sessionprompt.Builder {
@@ -251,7 +251,7 @@ func preparePrompt(
 	return prompt
 }
 
-func buildRegistry(ctx context.Context, in BuildInput, todos todo.Service) (tool.Registry, *builtin.Stack, error) {
+func buildRegistry(ctx context.Context, in BuildInput, todos *todo.Service) (*tool.Registry, *builtin.Stack, error) {
 	rootID := in.Record.RootID
 	if rootID == 0 {
 		rootID = in.Record.ID
@@ -282,7 +282,7 @@ func buildRegistry(ctx context.Context, in BuildInput, todos todo.Service) (tool
 	return stack.Registry, stack, nil
 }
 
-func registerSessionTools(reg tool.Registry, in BuildInput) {
+func registerSessionTools(reg *tool.Registry, in BuildInput) {
 	reg.Register(builtin.NewSkillTool(in.Loader))
 
 	if in.Record.ProjectID != 0 && in.MemoryStore != nil {
@@ -295,7 +295,7 @@ func registerSessionTools(reg tool.Registry, in BuildInput) {
 	}
 }
 
-func filterRegistryForAgent(set *registry.Set, reg tool.Registry, cfg registry.AgentTypeConfig) tool.Registry {
+func filterRegistryForAgent(set *registry.Set, reg *tool.Registry, cfg registry.AgentTypeConfig) *tool.Registry {
 	return reg.Filter(set.FilterTools(reg.IDs(), cfg.Name))
 }
 
@@ -320,8 +320,15 @@ func buildPrompt(
 	return prompt
 }
 
-func attachImageAuthorizer(client llm.Client, stack *builtin.Stack) {
-	client.SetImageAuthorizer(stack.Access())
+func attachImageAuthorizer(client llm.Client, stack *builtin.Stack) llm.ImageAuthorizer {
+	var authorizer llm.ImageAuthorizer
+	if access := stack.Access(); access != nil {
+		authorizer = access
+	}
+
+	client.SetImageAuthorizer(authorizer)
+
+	return authorizer
 }
 
 func confineGitClient(client git.Client, stack *builtin.Stack) git.Client {

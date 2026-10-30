@@ -20,7 +20,7 @@ type runOutcome struct {
 	again, hadInput, errored, publishIdle bool
 }
 
-func (s *svc) runSession(ctx context.Context, rs *runner) {
+func (s *Service) runSession(ctx context.Context, rs *runner) {
 	defer s.life.leave()
 
 	var last runOutcome
@@ -56,7 +56,7 @@ func (s *svc) runSession(ctx context.Context, rs *runner) {
 	}
 }
 
-func (s *svc) runOnce(ctx context.Context, rs *runner) runOutcome {
+func (s *Service) runOnce(ctx context.Context, rs *runner) runOutcome {
 	id := rs.sessionID
 
 	rec, err := s.store.GetSession(ctx, id)
@@ -105,7 +105,7 @@ func (s *svc) runOnce(ctx context.Context, rs *runner) runOutcome {
 	return s.concludeRun(ctx, rs, result, runErr, runOutcome{hadInput: pending}, idle)
 }
 
-func (s *svc) openRunner(ctx context.Context, rs *runner) (*session.Session, func(), error) {
+func (s *Service) openRunner(ctx context.Context, rs *runner) (*session.Session, func(), error) {
 	if err := s.applier.SettleStagedResults(ctx, rs.sessionID); err != nil {
 		return nil, nil, fmt.Errorf("settle runner configuration results: %w", err)
 	}
@@ -132,7 +132,7 @@ func (s *svc) openRunner(ctx context.Context, rs *runner) (*session.Session, fun
 	return sess, cleanup, nil
 }
 
-func (s *svc) closeRunner(ctx context.Context, rs *runner,
+func (s *Service) closeRunner(ctx context.Context, rs *runner,
 	result session.RunResult, sess *session.Session, cleanup func(),
 ) {
 	s.runners.recordDefer(rs.sessionID, result.DeferNoticeAnnounced)
@@ -143,7 +143,7 @@ func (s *svc) closeRunner(ctx context.Context, rs *runner,
 	cleanup()
 }
 
-func (s *svc) concludeRun(ctx context.Context, rs *runner, result session.RunResult,
+func (s *Service) concludeRun(ctx context.Context, rs *runner, result session.RunResult,
 	runErr error, out runOutcome, idle bool,
 ) runOutcome {
 	if runErr != nil {
@@ -175,7 +175,7 @@ func (s *svc) concludeRun(ctx context.Context, rs *runner, result session.RunRes
 	return out
 }
 
-func (s *svc) finishRunner(ctx context.Context, rs *runner, out runOutcome, panicValue any) {
+func (s *Service) finishRunner(ctx context.Context, rs *runner, out runOutcome, panicValue any) {
 	id := rs.sessionID
 	closing := s.life.closed()
 
@@ -240,7 +240,7 @@ func (s *svc) finishRunner(ctx context.Context, rs *runner, out runOutcome, pani
 	}
 }
 
-func (s *svc) finishRunnerState(ctx context.Context, rs *runner, released bool) {
+func (s *Service) finishRunnerState(ctx context.Context, rs *runner, released bool) {
 	if rs.PreserveStopped() {
 		s.preserveRunnerStopped(ctx, rs.sessionID)
 	}
@@ -250,7 +250,7 @@ func (s *svc) finishRunnerState(ctx context.Context, rs *runner, released bool) 
 	}
 }
 
-func (s *svc) finishRunnerDelivery(ctx context.Context, rs *runner, out runOutcome, errored bool) func() {
+func (s *Service) finishRunnerDelivery(ctx context.Context, rs *runner, out runOutcome, errored bool) func() {
 	cleanup := context.WithoutCancel(ctx)
 	id := rs.sessionID
 
@@ -267,7 +267,7 @@ func (s *svc) finishRunnerDelivery(ctx context.Context, rs *runner, out runOutco
 	return deliver
 }
 
-func (s *svc) finishFence(ctx, cleanup context.Context, rs *runner, released bool) (func(), bool, error) {
+func (s *Service) finishFence(ctx, cleanup context.Context, rs *runner, released bool) (func(), bool, error) {
 	if released {
 		unlock, err := s.lockSessionTree(cleanup, rs.sessionID)
 		return unlock, false, err
@@ -284,7 +284,7 @@ func (s *svc) finishFence(ctx, cleanup context.Context, rs *runner, released boo
 	return unlock, true, err
 }
 
-func (s *svc) announceSession(ctx context.Context, rs *runner, rec *sessionstore.SessionRecord) {
+func (s *Service) announceSession(ctx context.Context, rs *runner, rec *sessionstore.SessionRecord) {
 	projectName, _ := s.store.GetProjectName(ctx, rs.projectID)
 	s.publish(rs.sessionID, sessionevent.Notification{
 		Type: sessionevent.NotifySessionCreated,
@@ -292,7 +292,7 @@ func (s *svc) announceSession(ctx context.Context, rs *runner, rec *sessionstore
 	})
 }
 
-func (s *svc) restartPendingAfterExit(ctx context.Context, sessionID int64) {
+func (s *Service) restartPendingAfterExit(ctx context.Context, sessionID int64) {
 	link, err := s.links.GetLink(ctx, sessionID)
 	if err != nil {
 		return
@@ -325,7 +325,7 @@ func (s *svc) restartPendingAfterExit(ctx context.Context, sessionID int64) {
 
 // Failed starts preserve input; only the first failure for that work is reported.
 // Shutdown cancellation leaves recovery to the next boot without an error receipt.
-func (s *svc) reportSessionUnstarted(ctx context.Context, sessionID int64, err error) {
+func (s *Service) reportSessionUnstarted(ctx context.Context, sessionID int64, err error) {
 	if ctx.Err() != nil {
 		return
 	}
@@ -351,7 +351,7 @@ func (s *svc) reportSessionUnstarted(ctx context.Context, sessionID int64, err e
 	})
 }
 
-func (s *svc) publishIdle(ctx context.Context, sessionID int64) {
+func (s *Service) publishIdle(ctx context.Context, sessionID int64) {
 	if s.HasActiveLoop(sessionID) {
 		return
 	}
@@ -371,7 +371,7 @@ func (s *svc) publishIdle(ctx context.Context, sessionID int64) {
 }
 
 // The caller is responsible for closing the session before calling this.
-func (s *svc) handleRunError(ctx context.Context, sessionID int64, message string, runErr error) {
+func (s *Service) handleRunError(ctx context.Context, sessionID int64, message string, runErr error) {
 	if ctx.Err() != nil {
 		// Shutdown leaves the session resumable without an error receipt.
 		return
@@ -391,7 +391,7 @@ func (s *svc) handleRunError(ctx context.Context, sessionID int64, message strin
 	s.publish(sessionID, sessionevent.Notification{Type: sessionevent.NotifyMessage, Message: message})
 }
 
-func (s *svc) preserveRunnerStopped(cleanup context.Context, sessionID int64) {
+func (s *Service) preserveRunnerStopped(cleanup context.Context, sessionID int64) {
 	record, loadErr := s.store.GetSession(cleanup, sessionID)
 	if loadErr == nil && record.Status == sessionstore.SessionStatusActive {
 		if statusErr := s.store.UpdateSessionStatus(
@@ -408,7 +408,7 @@ func settledActivation(rec *sessionstore.SessionRecord, hasRun bool) bool {
 	return hasRun || rec.CompletionCheckConfirmedAnswerID == nil
 }
 
-func (s *svc) applySuspendedConfig(ctx context.Context, id int64) error {
+func (s *Service) applySuspendedConfig(ctx context.Context, id int64) error {
 	unlock, err := s.lockSessionTree(ctx, id)
 	if err != nil {
 		return err

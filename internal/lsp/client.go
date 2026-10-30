@@ -64,7 +64,7 @@ type client struct {
 	exitOnce       sync.Once
 	processOnce    sync.Once
 	exited         atomic.Bool
-	access         safefile.Access
+	access         *safefile.Access
 }
 
 type rpcResult struct {

@@ -25,12 +25,12 @@ func runServiceAction(ctx context.Context, action string) int {
 		return exitError
 	}
 
-	report(mgr.Info(), action)
+	report(mgr.Info(ctx), action)
 
 	return exitOK
 }
 
-func perform(ctx context.Context, mgr install.Manager, action string) error {
+func perform(ctx context.Context, mgr *install.Manager, action string) error {
 	switch action {
 	case install.ActionInstall:
 		return mgr.Install(ctx)

@@ -23,7 +23,7 @@ func TestManager_Shutdown(t *testing.T) {
 	pidB := testProject(t, s, t.TempDir())
 	_, err = mgr.Send(ctx, pidB, "init", "", nil)
 	require.NoError(t, err)
-	mgr.Shutdown(5 * time.Second)
+	mgr.Shutdown(t.Context(), 5*time.Second)
 	remaining, _ := runnerCounts(mgr.runners)
 	assert.Zero(t, remaining, "all loops should be cleaned up after shutdown")
 }
@@ -46,7 +46,7 @@ func TestShutdownCancelsBackgroundRecovery(t *testing.T) {
 	}
 	shutdownDone := make(chan struct{})
 	go func() {
-		h.mgr.Shutdown(time.Second)
+		h.mgr.Shutdown(t.Context(), time.Second)
 		close(shutdownDone)
 	}()
 	select {
@@ -93,7 +93,7 @@ func TestShutdownCancelsRunnersBeforeWaitingForWorkers(t *testing.T) {
 		<-release
 	}))
 	shutdownDone := make(chan struct{})
-	go func() { mgr.Shutdown(5 * time.Second); close(shutdownDone) }()
+	go func() { mgr.Shutdown(t.Context(), 5*time.Second); close(shutdownDone) }()
 	requireBarrierSignal(t, workerCancelled, "shutdown did not cancel background workers")
 	requireBarrierSignal(t, runnerCtx.Done(), "runner cancellation waited for worker shutdown")
 	select {
@@ -118,7 +118,7 @@ func TestShutdownWaitsForStartupProcessRecovery(t *testing.T) {
 	go func() { startupDone <- mgr.Start(t.Context()) }()
 	requireBarrierSignal(t, processes.entered, "startup did not reach process recovery")
 	shutdownDone := make(chan struct{})
-	go func() { mgr.Shutdown(time.Second); close(shutdownDone) }()
+	go func() { mgr.Shutdown(t.Context(), time.Second); close(shutdownDone) }()
 	select {
 	case <-shutdownDone:
 		t.Fatal("shutdown returned before startup process recovery")

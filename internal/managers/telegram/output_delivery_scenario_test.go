@@ -50,7 +50,7 @@ type delayedTelegramHarness struct {
 	controller  controllerapi.Controller
 	controllers controllerapi.ManagerControllerFactory
 	sessions    *sessionstore.Store
-	service     daemon.Service
+	service     *daemon.Service
 	workDir     string
 	recorder    *delayedTelegramRecorder
 }
@@ -134,7 +134,7 @@ func newDelayedTelegramHarnessWithClient(
 		assistant.New(db, sessions, projectpath.ResolveRoot(cfg.UnifiedConfig)),
 	)
 
-	t.Cleanup(func() { service.Shutdown(3 * time.Second) })
+	t.Cleanup(func() { service.Shutdown(context.Background(), 3*time.Second) })
 	controllers := managercontrol.New(
 		service,
 		sessions,

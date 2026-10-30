@@ -28,7 +28,7 @@ type ServerStats struct {
 type Service interface {
 	Start(ctx context.Context, config *Config) (*ServerStats, error)
 	Stop()
-	RegisterTools(registry tool.Registry, sink AttachmentSink) int
+	RegisterTools(registry *tool.Registry, sink AttachmentSink) int
 	GetClient(name string) *Client
 	Stats() ServerStats
 	// Refresh checks live connections and refreshes their catalog before reuse.
@@ -139,7 +139,7 @@ func (s *svc) Stop() {
 	}
 }
 
-func (s *svc) RegisterTools(registry tool.Registry, sink AttachmentSink) int {
+func (s *svc) RegisterTools(registry *tool.Registry, sink AttachmentSink) int {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 

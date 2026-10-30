@@ -18,27 +18,10 @@ import (
 	"github.com/pilat/coagent/internal/schedule"
 	"github.com/pilat/coagent/internal/sessionbuild"
 	"github.com/pilat/coagent/internal/sessionbus"
-	"github.com/pilat/coagent/internal/sessionevent"
-	"github.com/pilat/coagent/internal/sessionstore"
 	"github.com/pilat/coagent/internal/subagent"
 )
 
-var (
-	_ Service                = (*svc)(nil)
-	_ schedule.SessionSender = (*svc)(nil)
-)
-
-type Service interface {
-	EnsureAssistantRoot(context.Context, string) (*sessionstore.SessionRecord, error)
-	Start(ctx context.Context) error
-	Shutdown(timeout time.Duration)
-	Send(ctx context.Context, projectID int64, prompt, model string, attrs map[string]any) (int64, error)
-	SendToSessionResolved(ctx context.Context, sessionID int64, prompt string) (int64, error)
-	SetModel(ctx context.Context, sessionID int64, model, reasoningLevel string) error
-	SetAttributes(ctx context.Context, sessionID int64, attrs map[string]any) error
-	HasActiveLoop(sessionID int64) bool
-	NotifySession(sessionID int64, n sessionevent.Notification)
-}
+var _ schedule.SessionSender = (*Service)(nil)
 
 type lifetime struct {
 	mu      sync.Mutex
@@ -48,7 +31,8 @@ type lifetime struct {
 	closing bool
 }
 
-type svc struct {
+// Service owns session runners, admission and recovery for the daemon lifetime.
+type Service struct {
 	assistant    *assistant.Store
 	store        Store
 	links        subagent.Store
@@ -56,10 +40,10 @@ type svc struct {
 	budgets      budget.Service
 	processStore backgroundprocess.Store
 	processes    backgroundprocess.Service
-	progress     progressruntime.Service
-	applier      configapply.Service
+	progress     *progressruntime.Runtime
+	applier      *configapply.Service
 	mcpStore     mcpstore.Store
-	bus          sessionbus.Bus
+	bus          *sessionbus.Bus
 	build        sessionbuild.BuildInput
 	models       models
 	life         *lifetime
@@ -78,15 +62,15 @@ func New(
 	links subagent.Store,
 	budgetSvc budget.Service,
 	processStore backgroundprocess.Store,
-	progressSvc progressruntime.Service,
-	pubsub sessionbus.Bus,
+	progressSvc *progressruntime.Runtime,
+	pubsub *sessionbus.Bus,
 	scheduleSvc schedule.Service,
 	cfg *config.Config,
 	mcpStore mcpstore.Store,
-	applier configapply.Service,
+	applier *configapply.Service,
 	assistantStore *assistant.Store,
-) Service {
-	s := &svc{
+) *Service {
+	s := &Service{
 		assistant:    assistantStore,
 		runners:      newRunnerSet(),
 		build:        build,
@@ -113,8 +97,8 @@ func New(
 	return s
 }
 
-func (s *svc) Shutdown(timeout time.Duration) {
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+func (s *Service) Shutdown(ctx context.Context, timeout time.Duration) {
+	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
 	s.life.close()

@@ -60,7 +60,7 @@ var (
 )
 
 type configEditTool struct {
-	service   *svc
+	service   *Service
 	sessionID int64
 }
 
@@ -68,9 +68,8 @@ type configEditParams struct {
 	Document string `json:"document"`
 }
 
-func NewConfigEdit(sessionID int64, service Service) tool.Tool {
-	concrete, _ := service.(*svc)
-	return &configEditTool{sessionID: sessionID, service: concrete}
+func NewConfigEdit(sessionID int64, service *Service) tool.Tool {
+	return &configEditTool{sessionID: sessionID, service: service}
 }
 
 func (t *configEditTool) ID() string { return tool.IDConfigEdit }

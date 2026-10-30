@@ -116,7 +116,7 @@ type ActivationDeclarer interface {
 // tool set it is served from.
 type RegistryBound interface {
 	Tool
-	BindRegistry(reg Registry) Tool
+	BindRegistry(reg *Registry) Tool
 }
 
 // ToSchemas converts tools to their LLM wire descriptors. Order is preserved —
@@ -156,7 +156,7 @@ type Result struct {
 // ActivationIndex returns the exact command owner map for a registry. Duplicate
 // ownership fails session setup instead of making command routing depend on
 // registration order.
-func ActivationIndex(reg Registry) (map[string]string, error) {
+func ActivationIndex(reg *Registry) (map[string]string, error) {
 	index := make(map[string]string)
 
 	for _, candidate := range reg.List() {
@@ -192,38 +192,25 @@ func ActivationIndex(reg Registry) (map[string]string, error) {
 }
 
 // Registry manages a collection of tools.
-type Registry interface {
-	Register(tool Tool)
-	Unregister(id string) bool
-	Get(id string) Tool
-	List() []Tool
-	IDs() []string
-	Execute(ctx context.Context, id string, params json.RawMessage) (*Result, error)
-	Clone() Registry
-	Filter(ids []string) Registry
-}
-
-var _ Registry = (*svc)(nil)
-
-type svc struct {
+type Registry struct {
 	mu    sync.RWMutex
 	tools map[string]Tool // WARNING: map iteration is non-deterministic — List()/IDs() MUST sort results
 }
 
-func NewRegistry() Registry {
-	return &svc{
+func NewRegistry() *Registry {
+	return &Registry{
 		tools: make(map[string]Tool),
 	}
 }
 
-func (s *svc) Register(tool Tool) {
+func (s *Registry) Register(tool Tool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	s.bind(tool.ID(), tool)
 }
 
-func (s *svc) Unregister(id string) bool {
+func (s *Registry) Unregister(id string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -235,14 +222,14 @@ func (s *svc) Unregister(id string) bool {
 	return false
 }
 
-func (s *svc) Get(id string) Tool {
+func (s *Registry) Get(id string) Tool {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
 	return s.tools[id]
 }
 
-func (s *svc) List() []Tool {
+func (s *Registry) List() []Tool {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -258,7 +245,7 @@ func (s *svc) List() []Tool {
 	return tools
 }
 
-func (s *svc) IDs() []string {
+func (s *Registry) IDs() []string {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -272,7 +259,7 @@ func (s *svc) IDs() []string {
 	return ids
 }
 
-func (s *svc) Execute(ctx context.Context, id string, params json.RawMessage) (*Result, error) {
+func (s *Registry) Execute(ctx context.Context, id string, params json.RawMessage) (*Result, error) {
 	tool := s.Get(id)
 	if tool == nil {
 		return nil, fmt.Errorf("tool not found: %s", id)
@@ -281,11 +268,11 @@ func (s *svc) Execute(ctx context.Context, id string, params json.RawMessage) (*
 	return tool.Execute(ctx, params)
 }
 
-func (s *svc) Clone() Registry {
+func (s *Registry) Clone() *Registry {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	newReg := &svc{tools: make(map[string]Tool)}
+	newReg := &Registry{tools: make(map[string]Tool)}
 	for id, t := range s.tools {
 		newReg.bind(id, t)
 	}
@@ -293,11 +280,11 @@ func (s *svc) Clone() Registry {
 	return newReg
 }
 
-func (s *svc) Filter(ids []string) Registry {
+func (s *Registry) Filter(ids []string) *Registry {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	newReg := &svc{tools: make(map[string]Tool)}
+	newReg := &Registry{tools: make(map[string]Tool)}
 
 	for _, id := range ids {
 		if t, ok := s.tools[id]; ok {
@@ -310,7 +297,7 @@ func (s *svc) Filter(ids []string) Registry {
 
 // bind installs t under id, rebinding registry-dispatching tools onto s so no
 // holder of s can execute what s does not itself carry. Callers hold the lock.
-func (s *svc) bind(id string, t Tool) {
+func (s *Registry) bind(id string, t Tool) {
 	if bound, ok := t.(RegistryBound); ok {
 		t = bound.BindRegistry(s)
 	}

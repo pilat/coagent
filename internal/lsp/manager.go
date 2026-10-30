@@ -46,7 +46,7 @@ type manager struct {
 	keyLocks sync.Map          // map[key]*sync.Mutex — per-root spawn dedupe without holding mu
 	provider shellenv.Provider // per-cwd shell activation; may be nil (fallback)
 	runner   procexec.Runner   // session process confinement; nil for unconfined callers
-	access   safefile.Access
+	access   *safefile.Access
 	mu       sync.RWMutex
 	closed   bool
 }
@@ -72,7 +72,7 @@ func NewManager(provider shellenv.Provider, runner procexec.Runner) Manager {
 func NewManagerWithAccess(
 	provider shellenv.Provider,
 	runner procexec.Runner,
-	access safefile.Access,
+	access *safefile.Access,
 ) Manager {
 	result := &manager{
 		servers: defaultServers(), clients: make(map[clientKey]*client),

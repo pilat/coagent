@@ -42,7 +42,9 @@ internal/               # flat package tree; dependency tiers are modeled by
 
 ### Interface-First Design
 
-Package shape (interface at top, private implementation, compile-time check, constructor returns interface) is defined in [§2](#2-package-shape). Canonical code form:
+Package shape is defined in [§2](#2-package-shape), including the concrete-type
+exception for interfaces without a substitution or dependency-inversion role.
+For an interface-backed component, the canonical code form is:
 
 ```go
 type Service interface {
@@ -64,22 +66,23 @@ func New(dep1 Dep1, dep2 Dep2) Service {
 
 - `var _ Interface = (*impl)(nil)` sits near the implementation, after the
   public interface has been declared.
-- `New*()` returns the interface for behavior-bearing types. Concrete-pointer
-  returns are only for pure data/helper objects with no substitutable behavior.
+- `New*()` returns the interface when substitution or dependency inversion needs
+  it. Concrete-pointer returns follow the exception in §2 or expose data/helper objects.
 
 ### Naming Conventions
 
 | What | Pattern | Example |
 |------|---------|---------|
 | Interface | `Service`, `Client`, `Registry`, `Store`, `Manager` | `type Service interface` |
-| Service implementation (root-wired component) | **`svc`** | `type svc struct` |
+| Service implementation behind an interface | **`svc`** | `type svc struct` |
+| Concrete service | exported purpose name | `type Service struct` |
 | Leaf utility implementation | purpose-named lowercase | `type client struct`, `type parser struct` |
 | Constructor | `New` (or `NewFoo` when a package exposes multiple) | `func New() Service` |
 | Constants | CamelCase, grouped in a `const (...)` block | `const (KindFunc = ...)` |
 | Test files | `*_test.go` next to code | `parser_test.go` |
 
 **Rules:**
-- For services wired by the composition root — use `svc` for the implementation struct. Grep-friendly, consistent across packages.
+- For services behind an interface — use `svc` for the implementation struct. Concrete services use their exported contract name under §2.
 - For leaf utilities — purpose-named lowercase is fine (`client`, `parser`, `resolver`). These packages often have multiple types or none, so `svc` doesn't fit.
 
 ### Error Handling
@@ -282,7 +285,7 @@ Use a real database in tests — open a fresh SQLite file under `t.TempDir()` an
 No DI framework — `cmd/coagent/main.go` is a hand-written composition root. Code-level notes:
 
 - Constructor arguments are plain Go values / interfaces — positional, no DI-bag param structs.
-- A component that owns background work exposes explicit `Start(ctx) error` / `Stop(ctx) error` (or `Shutdown(timeout)`); the root registers a named stop closure per component and replays them in reverse order on shutdown.
+- A component that owns background work exposes explicit `Start(ctx) error` / `Stop(ctx) error` (or `Shutdown(ctx, timeout)`); the root registers a named stop closure per component and replays them in reverse order on shutdown.
 - Leaf packages expose constructors, never package-level wiring helpers.
 
 Full wiring rules (composition-root discipline, lifecycle placement):
@@ -418,8 +421,8 @@ Before committing, verify:
 - [ ] `make test` passes (bounded local package suites)
 - [ ] `make lint` is clean
 - [ ] No `package main` outside `cmd/`
-- [ ] Interfaces declared above struct; `var _ Interface = (*impl)(nil)` present
-- [ ] `New*()` returns the interface, not `*struct` (see [§2](#2-package-shape))
+- [ ] Retained interfaces have `var _ Interface = (*impl)(nil)` conformance checks
+- [ ] `New*()` returns the interface or concrete pointer selected under [§2](#2-package-shape)
 - [ ] Errors wrapped as `fmt.Errorf("context: %w", err)` with terse lowercase phrasing
 - [ ] Table-driven tests for anything non-trivial
 - [ ] Files < 300 lines, functions ≤ 50 lines
@@ -518,7 +521,7 @@ func (s *svc) Close() error { ... }
 **Don't:**
 
 ```go
-// BAD: Exported struct instead of interface
+// BAD: Exposing a replaceable implementation instead of its interface
 type Parser struct { ... }
 func NewParser() *Parser { ... }
 
@@ -651,21 +654,32 @@ Project-specific mapping (which package lives in which tier) belongs in the proj
 
 ### §2. Package shape
 
-**2.1 — One primary interface per package.** Each package exports one primary
-behavior interface (`Service`, `Client`, `Registry`, `Store`, `Manager`,
-`Factory`, `Executor`, `Pool`). Secondary narrow role interfaces are allowed
+**2.1 — One primary contract per package.** Where substitution or dependency
+inversion requires an interface, a package exports one primary behavior interface
+(`Service`, `Client`, `Registry`, `Store`, `Manager`, `Factory`, `Executor`, `Pool`).
+Secondary narrow role interfaces are allowed
 when they are genuine dependency-inversion points (`Spawner`, `Compactor`,
 `SessionSender`) or when a package intentionally defines a small protocol
-family (`tool.Tool` + `tool.Registry`). The implementation is private (`svc` or
-a purpose-named lowercase struct). Compile-time check:
+family (`tool.Tool` + `tool.ActivationDeclarer`). An interface's implementation
+is private (`svc` or a purpose-named lowercase struct). Compile-time check:
 
 ```go
 var _ Service = (*svc)(nil)
 ```
 
-**2.2 — `New()` returns the interface, never `*concrete`.** Concrete-pointer returns are allowed only for leaf data types with no behavior surface. A type exposing lifecycle, side effects, or substitutable behavior must go behind an interface.
+An explicit refactor may remove a single-implementation interface when it has no
+test fake or dependency-inversion role and every consumer may import the
+implementation package. Export the concrete type with private state and pointer
+receivers; do not retain an alias or add a wrapper to preserve the deleted interface.
+Interfaces with test fakes and cross-layer ports remain separate contracts.
 
-Reason: consumers program against the contract; tests mock the interface; `var _` is the single source of truth for conformance.
+**2.2 — `New()` returns the primary contract.** Return the interface when callers
+need substitution or dependency inversion. Return a concrete pointer for the
+exception in §2.1 or for data/helper objects. Lifecycle and side effects alone do
+not require an interface.
+
+Reason: retain abstraction where tests or dependency boundaries need it; a
+constructor return type alone does not justify an interface.
 
 ---
 
@@ -730,7 +744,7 @@ store := daemon.NewStore(db)
 factory := session.NewFactory(cfg, ...)
 svc := daemon.New(factory, store, ...)
 svc.Start(ctx)
-a.onStop("daemon", func(ctx context.Context) error { svc.Shutdown(30 * time.Second); return nil })
+a.onStop("daemon", func(ctx context.Context) error { svc.Shutdown(ctx, 30*time.Second); return nil })
 ```
 
 Adding a provider (or a construction line) usually touches the composition
@@ -756,7 +770,7 @@ cleanup targets.
 
 ### §4. Lifecycle
 
-**4.1 — Accept a lifecycle hook (fx) or expose explicit `Start`/`Stop` (manual) iff you own background work.** A constructor takes `fx.Lifecycle` — or, in a manual composition root, the resulting object exposes `Start(ctx) error` / `Stop(ctx) error` (or `Shutdown(timeout)`) for the root to call explicitly — if and only if the resulting object owns at least one of:
+**4.1 — Accept a lifecycle hook (fx) or expose explicit `Start`/`Stop` (manual) iff you own background work.** A constructor takes `fx.Lifecycle` — or, in a manual composition root, the resulting object exposes `Start(ctx) error` / `Stop(ctx) error` (or `Shutdown(ctx, timeout)`) for the root to call explicitly — if and only if the resulting object owns at least one of:
 
 - a goroutine it spawns
 - a subprocess
@@ -771,7 +785,11 @@ should not reach into a service's internals to attach hooks. In a manual
 composition root, the root itself calls `Start` right after construction and
 registers a named stop closure calling `Stop`/`Shutdown` — see §3.2.
 
-**4.2 — Start/Stop (or `OnStart`/`OnStop` under fx) are paired.** `Stop(ctx)` accepts context; never `Stop(timeout Duration)` on the interface (a `Shutdown(timeout)` variant that wraps a context-based `Stop` internally is fine). The shutdown budget belongs to `fx.StopTimeout` at the app root, or to an explicit timeout the manual composition root passes into its own top-level shutdown context — services must not invent their own duplicate budgets.
+**4.2 — Start/Stop (or `OnStart`/`OnStop` under fx) are paired.** `Stop(ctx)` accepts
+context; a `Shutdown(ctx, timeout)` variant may narrow the caller's deadline. The
+composition root supplies an independent shutdown context after cancelling the
+running lifetime. The shutdown budget belongs to the root; services must not
+replace its context with `context.Background()` or invent duplicate budgets.
 
 **4.3 — Long-lived goroutines derive ctx from `context.Background()` inside the constructor or start hook.** Store `cancel context.CancelFunc` and a `done chan struct{}` on the receiver. `Stop()` cancels, then blocks on `<-done`.
 

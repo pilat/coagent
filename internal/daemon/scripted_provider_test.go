@@ -430,7 +430,7 @@ func newScenarioDaemon(
 	schedules schedule.Service,
 	model func() string,
 	db *sql.DB,
-) (*svc, backgroundprocess.Service) {
+) (*Service, backgroundprocess.Service) {
 	bus := sessionbus.New()
 	defaultModel := "fake-model"
 	if model != nil {
@@ -456,11 +456,11 @@ func newScenarioDaemon(
 		ctx, in, store, links, budgets, backgroundprocess.NewStore(db, store), progressruntime.New(store), bus,
 		schedules, in.Config, mcp, applier,
 		assistant.New(db, store, projectpath.ResolveRoot(in.Config.UnifiedConfig)),
-	).(*svc)
+	)
 	return service, service.processes
 }
 
-func lifecycleInput(ctx context.Context, t *testing.T, s *svc, id int64, command string) *sessionstore.InboxInput {
+func lifecycleInput(ctx context.Context, t *testing.T, s *Service, id int64, command string) *sessionstore.InboxInput {
 	t.Helper()
 	input, err := s.enqueueUserSessionInput(ctx, id, command)
 	require.NoError(t, err)

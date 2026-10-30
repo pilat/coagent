@@ -25,7 +25,7 @@ func TestDeliverCompletionLogsRejectedParent(t *testing.T) {
 	t.Parallel()
 	killedAt := time.Now()
 	sessions := &childStateSessionStore{record: &sessionstore.SessionRecord{KilledAt: &killedAt}}
-	manager := &svc{store: sessions, links: rejectingCompletionTransactions{}}
+	manager := &Service{store: sessions, links: rejectingCompletionTransactions{}}
 	core, logs := observer.New(zap.ErrorLevel)
 	ctx := logger.ToContext(t.Context(), zap.New(core))
 	manager.deliverCompletionToParent(ctx, subagent.Link{ParentID: 7, ChildID: 8, ActivationSeq: 1, Blocking: true})
@@ -37,7 +37,7 @@ func TestDeliverCompletionLogsRejectedParent(t *testing.T) {
 
 func TestCompletionContentIncludesPersistedIteration(t *testing.T) {
 	t.Parallel()
-	manager := &svc{store: &childStateSessionStore{record: &sessionstore.SessionRecord{ID: 8, Iteration: 4}}}
+	manager := &Service{store: &childStateSessionStore{record: &sessionstore.SessionRecord{ID: 8, Iteration: 4}}}
 	content := manager.completionContent(t.Context(), subagent.Link{
 		ChildID: 8, State: subagent.StateCompleted, Outcome: subagent.OutcomeCompleted,
 	})
@@ -147,7 +147,7 @@ func TestTerminalChildDeliversPreviousOutcomeBeforeRearm(t *testing.T) {
 		}
 		return false
 	})
-	mgr.Shutdown(3 * time.Second)
+	mgr.Shutdown(t.Context(), 3*time.Second)
 }
 
 type childStateSessionStore struct {

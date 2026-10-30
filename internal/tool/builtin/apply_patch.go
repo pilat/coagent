@@ -48,13 +48,13 @@ type applyPatchParams struct {
 type applyPatchTool struct {
 	workDir string
 	mutator fileMutator
-	access  safefile.Access
+	access  *safefile.Access
 	tracker FileReadTracker
 }
 
 func newApplyPatchToolWithAccess(
 	workDir string,
-	access safefile.Access,
+	access *safefile.Access,
 	mutator fileMutator,
 	tracker FileReadTracker,
 ) *applyPatchTool {
@@ -335,7 +335,7 @@ type filePatchPlan struct {
 
 func applyFilePatches(
 	ctx context.Context,
-	access safefile.Access,
+	access *safefile.Access,
 	mutator fileMutator,
 	filePath string,
 	hunks []patchHunk,
@@ -383,7 +383,7 @@ func uniqueStrings(values []string) []string {
 	return out
 }
 
-func planFilePatches(access safefile.Access, filePath string, hunks []patchHunk) (filePatchPlan, error) {
+func planFilePatches(access *safefile.Access, filePath string, hunks []patchHunk) (filePatchPlan, error) {
 	if err := rejectNonRegularAccess(access, filePath); err != nil {
 		return filePatchPlan{}, err
 	}
@@ -420,7 +420,7 @@ func planFilePatches(access safefile.Access, filePath string, hunks []patchHunk)
 
 func writeFilePatch(
 	ctx context.Context,
-	access safefile.Access,
+	access *safefile.Access,
 	mutator fileMutator,
 	filePath string,
 	content []byte,

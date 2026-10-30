@@ -26,10 +26,10 @@ type controller struct {
 func New(
 	backend Backend,
 	store Store,
-	discovery managerdiscovery.Service,
-	bus sessionbus.Source,
+	discovery *managerdiscovery.Service,
+	bus *sessionbus.Bus,
 	cfg *config.Config,
-	cache loader.MarketplaceCache,
+	cache *loader.MarketplaceCache,
 ) controllerapi.ManagerControllerFactory {
 	return &factory{app: &service{
 		backend: backend, store: store, discovery: discovery,
@@ -46,15 +46,6 @@ func (c *controller) CreateSession(ctx context.Context, data controllerapi.Sessi
 }
 
 func (c *controller) SendSessionMessage(ctx context.Context, data controllerapi.SessionMessageData) error {
-	_, err := c.app.sendSessionMessage(ctx, c.managerID, data)
-
-	return err
-}
-
-func (c *controller) SendSessionMessageResolved(
-	ctx context.Context,
-	data controllerapi.SessionMessageData,
-) (int64, error) {
 	return c.app.sendSessionMessage(ctx, c.managerID, data)
 }
 

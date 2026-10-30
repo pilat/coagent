@@ -44,13 +44,13 @@ type (
 	}
 
 	BatchTool struct {
-		registry tool.Registry
+		registry *tool.Registry
 	}
 )
 
 var _ tool.RegistryBound = (*BatchTool)(nil)
 
-func NewBatchTool(registry tool.Registry) *BatchTool {
+func NewBatchTool(registry *tool.Registry) *BatchTool {
 	return &BatchTool{registry: registry}
 }
 
@@ -63,7 +63,7 @@ func (t *BatchTool) ParallelSafe() bool { return false }
 
 // BindRegistry re-targets batch at the registry it is being served from, so a
 // filtered tool set stays the only thing a batch can reach.
-func (t *BatchTool) BindRegistry(reg tool.Registry) tool.Tool {
+func (t *BatchTool) BindRegistry(reg *tool.Registry) tool.Tool {
 	return NewBatchTool(reg)
 }
 

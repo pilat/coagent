@@ -85,21 +85,21 @@ func (s *service) sendSessionMessage(
 	ctx context.Context,
 	managerID string,
 	data controllerapi.SessionMessageData,
-) (int64, error) {
+) error {
 	if err := s.requireOwnedSession(ctx, managerID, data.SessionID); err != nil {
-		return 0, err
+		return err
 	}
 
 	acceptedID, err := s.backend.SendToSessionResolved(ctx, data.SessionID, data.Message)
 	if err != nil {
-		return 0, fmt.Errorf("send resolved session message: %w", err)
+		return fmt.Errorf("send resolved session message: %w", err)
 	}
 
 	if data.Message != "" {
 		s.publishInputReceived(acceptedID, data.Message, "user")
 	}
 
-	return acceptedID, nil
+	return nil
 }
 
 func (s *service) listSessions(

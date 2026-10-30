@@ -12,7 +12,7 @@ import (
 
 // ListHiddenProjectDirs exposes hidden project work dirs so /spawn navigation
 // omits their directories without inferring hidden state from a basename.
-func listHiddenProjectDirs(ctx context.Context, backend Backend) ([]string, error) {
+func listHiddenProjectDirs(ctx context.Context, backend *sessionstore.Store) ([]string, error) {
 	rows, err := backend.ListProjects(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("list hidden projects: %w", err)
@@ -35,7 +35,11 @@ func listHiddenProjectDirs(ctx context.Context, backend Backend) ([]string, erro
 // otherwise open the wrong directory. Projects with no sessions sort ahead of all
 // others (a just-provisioned project tops the list); every tie breaks by id desc.
 // root is expected pre-resolved (abs + clean) by the caller.
-func listRecentProjects(ctx context.Context, backend Backend, root string) ([]controllerapi.RecentProjectInfo, error) {
+func listRecentProjects(
+	ctx context.Context,
+	backend *sessionstore.Store,
+	root string,
+) ([]controllerapi.RecentProjectInfo, error) {
 	rows, err := backend.ListProjects(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("list projects: %w", err)

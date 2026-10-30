@@ -935,7 +935,7 @@ func TestSpawnedChildProducesNoPubSubEvents(t *testing.T) {
 func TestIdleIsSuppressedByReplacementRunner(t *testing.T) {
 	h := newHarness(t, harnessOptions{configure: withTestModels, clientFor: (&mockFactory{}).client})
 	mgr, projects := h.mgr, h.store
-	defer mgr.Shutdown(time.Second)
+	defer mgr.Shutdown(t.Context(), time.Second)
 	ctx := context.Background()
 	projectID := testProject(t, projects, "/tmp/replacement-idle")
 	record, err := mgr.store.CreateSession(ctx, projectID, "fake-model", "", nil)
@@ -1427,7 +1427,7 @@ func visibleEventMessages(events []controllerapi.SessionNotification, sessionID 
 	return messages
 }
 
-func registerTestRunner(ctx context.Context, manager *svc, rs *runner) (*runner, bool) {
+func registerTestRunner(ctx context.Context, manager *Service, rs *runner) (*runner, bool) {
 	if !manager.runners.tryAdmit(rs.child, rs.parentID) {
 		return nil, false
 	}

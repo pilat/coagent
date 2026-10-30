@@ -18,7 +18,7 @@ import (
 type mcpAttachmentSink struct {
 	projectID int64
 	sessionID int64
-	access    safefile.Access
+	access    *safefile.Access
 }
 
 var _ mcp.AttachmentSink = (*mcpAttachmentSink)(nil)

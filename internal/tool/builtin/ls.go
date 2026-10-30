@@ -29,7 +29,7 @@ type LsParams struct {
 
 type LsTool struct {
 	workDir string
-	access  safefile.Access
+	access  *safefile.Access
 }
 
 var _ tool.Tool = (*LsTool)(nil)
@@ -44,7 +44,7 @@ func NewLsTool(workDir string) *LsTool {
 	return &LsTool{workDir: workDir}
 }
 
-func newLsTool(workDir string, access safefile.Access) *LsTool {
+func newLsTool(workDir string, access *safefile.Access) *LsTool {
 	return &LsTool{workDir: workDir, access: access}
 }
 
@@ -110,7 +110,7 @@ func (t *LsTool) Execute(_ context.Context, params json.RawMessage) (*tool.Resul
 }
 
 //nolint:wsl_v5 // Rooted listing and metadata collection share one directory snapshot.
-func readAccessDirEntries(access safefile.Access, name string) ([]entryInfo, string, error) {
+func readAccessDirEntries(access *safefile.Access, name string) ([]entryInfo, string, error) {
 	if name == "" {
 		name = "."
 	}

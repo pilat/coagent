@@ -34,8 +34,8 @@ type Input struct {
 	ImageAuthorizer          llm.ImageAuthorizer
 	Record                   *sessionstore.SessionRecord
 	Client                   llm.Client
-	Loader                   loader.Service
-	Registry                 tool.Registry
+	Loader                   *loader.Service
+	Registry                 *tool.Registry
 	Prompt                   *sessionprompt.Builder
 	Store                    Store
 	Events                   Events
@@ -57,8 +57,8 @@ type Session struct {
 	workDir           string
 	projectID         int64
 	llmClient         llm.Client
-	loader            loader.Service
-	registry          tool.Registry
+	loader            *loader.Service
+	registry          *tool.Registry
 	activationIndex   map[string]string
 	currentActivation *tool.ActivationGrant
 	agentsMD          string

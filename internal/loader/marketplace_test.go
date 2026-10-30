@@ -55,7 +55,7 @@ func TestSvc_ProcessMarketplace_Success(t *testing.T) {
 		Plugins: []string{"test-plugin"},
 	}
 
-	svc := New().(*svc)
+	svc := New()
 	err := svc.ProcessMarketplace(context.Background(), entry, func(_ context.Context, url string) (string, error) {
 		return marketplaceDir, nil
 	})
@@ -68,7 +68,7 @@ func TestSvc_ProcessMarketplace_Success(t *testing.T) {
 func TestSvc_ProcessMarketplace_InvalidURL(t *testing.T) {
 	isolateMarketplaceHome(t)
 
-	svc := New().(*svc)
+	svc := New()
 	err := svc.ProcessMarketplace(context.Background(), config.MarketplaceEntry{
 		URL:     "gitlab.com/test-owner/test-repo",
 		Plugins: []string{"test-plugin"},
@@ -79,7 +79,7 @@ func TestSvc_ProcessMarketplace_InvalidURL(t *testing.T) {
 func TestSvc_ProcessMarketplace_ResolverError(t *testing.T) {
 	isolateMarketplaceHome(t)
 
-	svc := New().(*svc)
+	svc := New()
 	err := svc.ProcessMarketplace(context.Background(), config.MarketplaceEntry{
 		URL:     "github.com/test-owner/test-repo",
 		Plugins: []string{"test-plugin"},
@@ -101,7 +101,7 @@ func TestSvc_ProcessMarketplace_InvalidPluginManifest(t *testing.T) {
 		0o644,
 	))
 
-	svc := New().(*svc)
+	svc := New()
 	err := svc.ProcessMarketplace(context.Background(), config.MarketplaceEntry{
 		URL:     "github.com/test-owner/test-repo",
 		Plugins: []string{"test-plugin"},
@@ -127,7 +127,7 @@ func TestSvc_ProcessMarketplace_PluginNotInConfig(t *testing.T) {
 		},
 	})
 
-	svc := New().(*svc)
+	svc := New()
 	err := svc.ProcessMarketplace(context.Background(), config.MarketplaceEntry{
 		URL:     "github.com/test-owner/test-repo",
 		Plugins: []string{"enabled-plugin"},
@@ -160,7 +160,7 @@ func TestSvc_ProcessMarketplace_LocalPriority(t *testing.T) {
 		0o644,
 	))
 
-	svc := New().(*svc)
+	svc := New()
 	err := svc.ProcessMarketplace(context.Background(), config.MarketplaceEntry{
 		URL:     "github.com/owner/repo",
 		Plugins: []string{"plugin"},

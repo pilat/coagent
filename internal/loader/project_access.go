@@ -11,7 +11,7 @@ import (
 
 // readSourceFile reads one source file. A nil access marks a trusted host
 // input; project sources read through the project-confined root.
-func readSourceFile(path string, access safefile.Access) ([]byte, error) {
+func readSourceFile(path string, access *safefile.Access) ([]byte, error) {
 	if access == nil {
 		return os.ReadFile(path) //nolint:wrapcheck // Caller adds source context.
 	}
@@ -30,7 +30,7 @@ func readSourceFile(path string, access safefile.Access) ([]byte, error) {
 	return content, nil
 }
 
-func readSourceDir(path string, access safefile.Access) ([]fs.DirEntry, error) {
+func readSourceDir(path string, access *safefile.Access) ([]fs.DirEntry, error) {
 	if access == nil {
 		return os.ReadDir(path) //nolint:wrapcheck // Caller adds source context.
 	}
@@ -43,7 +43,7 @@ func readSourceDir(path string, access safefile.Access) ([]fs.DirEntry, error) {
 	return entries, nil
 }
 
-func statSource(path string, access safefile.Access) (fs.FileInfo, error) {
+func statSource(path string, access *safefile.Access) (fs.FileInfo, error) {
 	if access == nil {
 		return os.Stat(path) //nolint:wrapcheck // Caller treats absence as a skipped source.
 	}
@@ -56,7 +56,7 @@ func statSource(path string, access safefile.Access) (fs.FileInfo, error) {
 	return info, nil
 }
 
-func parseSourceFrontmatter(path string, access safefile.Access) ([]byte, string, error) {
+func parseSourceFrontmatter(path string, access *safefile.Access) ([]byte, string, error) {
 	if access == nil {
 		return parseFrontmatterFile(path)
 	}
@@ -72,7 +72,7 @@ func parseSourceFrontmatter(path string, access safefile.Access) ([]byte, string
 
 // sourceAccesses opens one project-confined root per distinct non-empty source
 // root; a failed root is recorded so the caller drops only its own sources.
-func sourceAccesses(sources []sourceInfo) (map[string]safefile.Access, []error) {
+func sourceAccesses(sources []sourceInfo) (map[string]*safefile.Access, []error) {
 	roots := make(map[string]struct{})
 
 	for _, src := range sources {
@@ -82,7 +82,7 @@ func sourceAccesses(sources []sourceInfo) (map[string]safefile.Access, []error) 
 	}
 
 	var errs []error
-	accesses := make(map[string]safefile.Access, len(roots))
+	accesses := make(map[string]*safefile.Access, len(roots))
 
 	for root := range roots {
 		access, err := safefile.New(safefile.ProjectPolicy(root), root)
@@ -97,7 +97,7 @@ func sourceAccesses(sources []sourceInfo) (map[string]safefile.Access, []error) 
 	return accesses, errs
 }
 
-func closeAccesses(accesses map[string]safefile.Access) {
+func closeAccesses(accesses map[string]*safefile.Access) {
 	for _, access := range accesses {
 		_ = access.Close()
 	}

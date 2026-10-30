@@ -16,10 +16,10 @@ import (
 const unresumableChildNotice = "Subagent could not resume: the daemon's session capacity is full. " +
 	"Its work stopped here; retry later."
 
-var _ subagent.Spawner = (*svc)(nil)
+var _ subagent.Spawner = (*Service)(nil)
 
 // Spawn starts a durably linked child and returns its ID without waiting.
-func (s *svc) Spawn(ctx context.Context, req subagent.SpawnRequest) (subagent.ChildResult, error) {
+func (s *Service) Spawn(ctx context.Context, req subagent.SpawnRequest) (subagent.ChildResult, error) {
 	unlock, err := s.lockSessionTree(ctx, req.ParentID)
 	if err != nil {
 		return subagent.ChildResult{}, err
@@ -39,12 +39,12 @@ func (s *svc) Spawn(ctx context.Context, req subagent.SpawnRequest) (subagent.Ch
 }
 
 // Result returns a snapshot of a child's state and (once terminal) its output.
-func (s *svc) Result(ctx context.Context, childID int64) (subagent.ChildResult, error) {
+func (s *Service) Result(ctx context.Context, childID int64) (subagent.ChildResult, error) {
 	return s.childSnapshot(ctx, childID)
 }
 
 // SendToChild preserves completion delivery before rearming a terminal child.
-func (s *svc) SendToChild(ctx context.Context, childID int64, msg string) error {
+func (s *Service) SendToChild(ctx context.Context, childID int64, msg string) error {
 	requestCtx := ctx
 
 	unlock, err := s.lockSessionTree(ctx, childID)
@@ -85,7 +85,7 @@ func (s *svc) SendToChild(ctx context.Context, childID int64, msg string) error 
 	return s.start(requestCtx, childID)
 }
 
-func (s *svc) enqueueChildFollowUpLocked(ctx context.Context, childID int64, msg string) (*subagent.Link, error) {
+func (s *Service) enqueueChildFollowUpLocked(ctx context.Context, childID int64, msg string) (*subagent.Link, error) {
 	link, err := s.links.GetLink(ctx, childID)
 	if err != nil {
 		return nil, fmt.Errorf("load subagent link: %w", err)
@@ -120,7 +120,7 @@ func (s *svc) enqueueChildFollowUpLocked(ctx context.Context, childID int64, msg
 	return link, nil
 }
 
-func (s *svc) resumeStoppedChildLocked(ctx context.Context, childID int64) error {
+func (s *Service) resumeStoppedChildLocked(ctx context.Context, childID int64) error {
 	rec, recErr := s.store.GetSession(ctx, childID)
 	if recErr != nil {
 		return fmt.Errorf("load stopped subagent session: %w", recErr)
@@ -133,7 +133,7 @@ func (s *svc) resumeStoppedChildLocked(ctx context.Context, childID int64) error
 	return s.resumeChildWithPendingInputLocked(ctx, childID)
 }
 
-func (s *svc) finishChildFollowUp(ctx context.Context, link subagent.Link) error {
+func (s *Service) finishChildFollowUp(ctx context.Context, link subagent.Link) error {
 	childID := link.ChildID
 	if link.DeliveredAt != 0 {
 		return s.rearmChildAfterDelivery(ctx, childID)
@@ -164,7 +164,7 @@ func (s *svc) finishChildFollowUp(ctx context.Context, link subagent.Link) error
 }
 
 // LinkPending prevents unresolved task calls from spawning the same child twice.
-func (s *svc) LinkPending(ctx context.Context, parentID int64, taskCallID string) (bool, error) {
+func (s *Service) LinkPending(ctx context.Context, parentID int64, taskCallID string) (bool, error) {
 	link, err := s.links.GetLinkByTaskCallID(ctx, parentID, taskCallID)
 	if err != nil {
 		return false, fmt.Errorf("check pending link: %w", err)
@@ -173,7 +173,7 @@ func (s *svc) LinkPending(ctx context.Context, parentID int64, taskCallID string
 	return link != nil, nil
 }
 
-func (s *svc) createChildSession(ctx context.Context, req subagent.SpawnRequest) (int64, string, int64, error) {
+func (s *Service) createChildSession(ctx context.Context, req subagent.SpawnRequest) (int64, string, int64, error) {
 	parentRec, err := s.store.GetSession(ctx, req.ParentID)
 	if err != nil {
 		return 0, "", 0, fmt.Errorf("parent session %d: %w", req.ParentID, err)
@@ -234,7 +234,7 @@ func (s *svc) createChildSession(ctx context.Context, req subagent.SpawnRequest)
 	return childID, workDir, parentRec.ProjectID, nil
 }
 
-func (s *svc) resumeChildWithPendingInputLocked(ctx context.Context, childID int64) error {
+func (s *Service) resumeChildWithPendingInputLocked(ctx context.Context, childID int64) error {
 	if err := s.links.Resume(ctx, childID); err != nil {
 		return fmt.Errorf("resume subagent link: %w", err)
 	}
@@ -242,7 +242,7 @@ func (s *svc) resumeChildWithPendingInputLocked(ctx context.Context, childID int
 	return s.startLocked(ctx, childID)
 }
 
-func (s *svc) childSnapshot(ctx context.Context, childID int64) (subagent.ChildResult, error) {
+func (s *Service) childSnapshot(ctx context.Context, childID int64) (subagent.ChildResult, error) {
 	link, err := s.links.GetLink(ctx, childID)
 	if err != nil {
 		return subagent.ChildResult{}, fmt.Errorf("get link: %w", err)
@@ -271,7 +271,7 @@ func (s *svc) childSnapshot(ctx context.Context, childID int64) (subagent.ChildR
 	return res, nil
 }
 
-func (s *svc) childDepth(ctx context.Context, parentID int64) (int, error) {
+func (s *Service) childDepth(ctx context.Context, parentID int64) (int, error) {
 	link, err := s.links.GetLink(ctx, parentID)
 	if err != nil {
 		return 0, fmt.Errorf("parent link %d: %w", parentID, err)
@@ -284,7 +284,7 @@ func (s *svc) childDepth(ctx context.Context, parentID int64) (int, error) {
 	return link.Depth + 1, nil
 }
 
-func (s *svc) resolveChildModel(req subagent.SpawnRequest, parentRec *sessionstore.SessionRecord) string {
+func (s *Service) resolveChildModel(req subagent.SpawnRequest, parentRec *sessionstore.SessionRecord) string {
 	switch {
 	case req.Model != "":
 		return req.Model
@@ -295,7 +295,7 @@ func (s *svc) resolveChildModel(req subagent.SpawnRequest, parentRec *sessionsto
 	}
 }
 
-func (s *svc) finalizeChildLocked(ctx context.Context, childID int64, errored bool) func() {
+func (s *Service) finalizeChildLocked(ctx context.Context, childID int64, errored bool) func() {
 	link, err := s.links.Finalize(ctx, childID, errored)
 	if err != nil {
 		logger.Ctx(ctx).Named("daemon.completion").Error("finalize_child", zap.Int64("child", childID), zap.Error(err))
@@ -316,7 +316,7 @@ func (s *svc) finalizeChildLocked(ctx context.Context, childID int64, errored bo
 
 // Foreground children are never queued (as at spawn), so a resumed one that finds
 // no capacity fails now instead of leaving its parent's call pending.
-func (s *svc) failUnresumableChildLocked(ctx context.Context, childID int64) error {
+func (s *Service) failUnresumableChildLocked(ctx context.Context, childID int64) error {
 	link, err := s.links.FailResume(ctx, childID, unresumableChildNotice)
 	if err != nil {
 		return fmt.Errorf("fail unresumable child %d: %w", childID, err)
@@ -334,7 +334,7 @@ func (s *svc) failUnresumableChildLocked(ctx context.Context, childID int64) err
 	return nil
 }
 
-func (s *svc) rearmChildAfterDelivery(ctx context.Context, childID int64) error {
+func (s *Service) rearmChildAfterDelivery(ctx context.Context, childID int64) error {
 	unlock, err := s.lockSessionTree(ctx, childID)
 	if err != nil {
 		return err
@@ -344,7 +344,7 @@ func (s *svc) rearmChildAfterDelivery(ctx context.Context, childID int64) error 
 	return s.rearm(context.WithoutCancel(ctx), childID)
 }
 
-func (s *svc) rearm(ctx context.Context, childID int64) error {
+func (s *Service) rearm(ctx context.Context, childID int64) error {
 	rearmed, err := s.links.Rearm(ctx, childID)
 	if err != nil {
 		return fmt.Errorf("rearm child %d after completion delivery: %w", childID, err)
@@ -361,7 +361,7 @@ func (s *svc) rearm(ctx context.Context, childID int64) error {
 	return nil
 }
 
-func (s *svc) deliverCompletionToParent(ctx context.Context, link subagent.Link) {
+func (s *Service) deliverCompletionToParent(ctx context.Context, link subagent.Link) {
 	if !link.Blocking {
 		s.deliverBackgroundCompletion(ctx, link)
 		return
@@ -385,7 +385,7 @@ func (s *svc) deliverCompletionToParent(ctx context.Context, link subagent.Link)
 	}
 }
 
-func (s *svc) deliverBackgroundCompletion(ctx context.Context, link subagent.Link) {
+func (s *Service) deliverBackgroundCompletion(ctx context.Context, link subagent.Link) {
 	child, err := s.store.GetSession(ctx, link.ChildID)
 	if err != nil {
 		logger.Ctx(ctx).Named("daemon.completion").Error(
@@ -415,7 +415,7 @@ func (s *svc) deliverBackgroundCompletion(ctx context.Context, link subagent.Lin
 	}
 }
 
-func (s *svc) completionContent(ctx context.Context, link subagent.Link) string {
+func (s *Service) completionContent(ctx context.Context, link subagent.Link) string {
 	res := subagent.ChildResult{
 		ChildID:  link.ChildID,
 		State:    link.State,
@@ -432,7 +432,7 @@ func (s *svc) completionContent(ctx context.Context, link subagent.Link) string 
 }
 
 // A child that failed before announcement has no topic, so failures go to its parent.
-func (s *svc) notifyChildFailure(ctx context.Context, parentID, childID int64, what string, err error) {
+func (s *Service) notifyChildFailure(ctx context.Context, parentID, childID int64, what string, err error) {
 	if parentID == 0 {
 		return
 	}
@@ -445,7 +445,7 @@ func (s *svc) notifyChildFailure(ctx context.Context, parentID, childID int64, w
 	s.publish(parentID, sessionevent.Notification{Type: sessionevent.NotifyMessage, Message: message})
 }
 
-func (s *svc) enqueueChildFailureOutput(ctx context.Context, parentID, childID int64, message string) error {
+func (s *Service) enqueueChildFailureOutput(ctx context.Context, parentID, childID int64, message string) error {
 	outputs := s.store
 
 	link, err := s.links.GetLink(ctx, childID)
@@ -479,7 +479,7 @@ func (s *svc) enqueueChildFailureOutput(ctx context.Context, parentID, childID i
 	return nil
 }
 
-func (s *svc) killDescendants(ctx context.Context, parentID int64, depth int) {
+func (s *Service) killDescendants(ctx context.Context, parentID int64, depth int) {
 	if depth >= maxDepth {
 		return
 	}
@@ -510,7 +510,7 @@ func (s *svc) killDescendants(ctx context.Context, parentID int64, depth int) {
 	}
 }
 
-func (s *svc) warnKilledDescendant(ctx context.Context, link subagent.Link) {
+func (s *Service) warnKilledDescendant(ctx context.Context, link subagent.Link) {
 	iteration := 0
 	if rec, err := s.store.GetSession(ctx, link.ChildID); err == nil {
 		iteration = rec.Iteration
@@ -526,7 +526,7 @@ func (s *svc) warnKilledDescendant(ctx context.Context, link subagent.Link) {
 }
 
 // The terminal link precedes runner cancellation so teardown cannot deliver a killed activation.
-func (s *svc) killSubagent(ctx context.Context, childID int64) {
+func (s *Service) killSubagent(ctx context.Context, childID int64) {
 	if err := s.retireTreeToolResources(ctx, childID); err != nil {
 		logger.Ctx(ctx).Named("daemon.completion").Warn("retire_child_tools", zap.Error(err))
 	}

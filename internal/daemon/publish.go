@@ -20,11 +20,11 @@ type routes struct {
 }
 
 type sessionEvents struct {
-	daemon    *svc
+	daemon    *Service
 	sessionID int64
 }
 
-func (s *svc) NotifySession(sessionID int64, n sessionevent.Notification) {
+func (s *Service) NotifySession(sessionID int64, n sessionevent.Notification) {
 	s.publish(sessionID, n)
 }
 
@@ -32,7 +32,7 @@ func (s *svc) NotifySession(sessionID int64, n sessionevent.Notification) {
 // silencing a root session on a transient DB error is the worse outcome.
 //
 //nolint:contextcheck,nolintlint // contextcheck reads this comment as config, so nolintlint sees it as unused
-func (s *svc) publish(sessionID int64, n sessionevent.Notification) {
+func (s *Service) publish(sessionID int64, n sessionevent.Notification) {
 	if err := n.Validate(); err != nil {
 		logger.Named("daemon.publish").Error(
 			"invalid_notification",
