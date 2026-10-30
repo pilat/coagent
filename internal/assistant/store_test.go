@@ -223,7 +223,7 @@ func TestAssistantAroundShowsNeighbours(t *testing.T) {
 func TestAssistantWorkRoots(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
-	_, sessions, s, root := assistantFixture(t)
+	db, sessions, s, root := assistantFixture(t)
 	touched := workSession(t, sessions, map[string]any{"manager_id": testOwner})
 	userMade := workSession(t, sessions, map[string]any{"manager_id": testOwner})
 	answered(t, sessions, userMade, strings.Repeat("длинный вопрос ", 20), "ответ")
@@ -232,24 +232,34 @@ func TestAssistantWorkRoots(t *testing.T) {
 		Content: "go", Attributes: map[string]any{sessionstore.ObserverSessionIDAttribute: root},
 	})
 	require.NoError(t, err)
-	require.NoError(t, sessions.WithTx(ctx, func(tx *sql.Tx) error {
-		return saveAboutTx(ctx, tx, touched, "why it exists", time.Now().UTC())
-	}))
+	_, err = db.ExecContext(
+		ctx,
+		`UPDATE sessions SET attributes = json_set(attributes, '$.title', ?) WHERE id = ?`,
+		"why it exists",
+		touched,
+	)
+	require.NoError(t, err)
+	_, err = db.ExecContext(
+		ctx,
+		`UPDATE sessions SET attributes = json_remove(attributes, '$.title') WHERE id = ?`,
+		userMade,
+	)
+	require.NoError(t, err)
 	scope := Scope{Root: root, Owner: testOwner}
 	roots, _, err := s.Recent(ctx, scope, 100)
 	require.NoError(t, err)
 	require.Len(t, roots, 1)
 	assert.Equal(t, touched, roots[0].ID)
 	assert.True(t, roots[0].Pending)
-	assert.Equal(t, "why it exists", roots[0].About)
+	assert.Equal(t, "why it exists", roots[0].Title)
 	roots, err = s.cards(ctx, scope, 0)
 	require.NoError(t, err)
 	require.Len(t, roots, 2)
 	for _, work := range roots {
 		if work.ID == userMade {
 			assert.False(t, work.touched)
-			assert.Len(t, []rune(work.About), aboutFallbackChars)
-			assert.True(t, strings.HasPrefix(work.About, "длинный вопрос длинный"))
+			assert.Len(t, []rune(work.Title), aboutFallbackChars)
+			assert.True(t, strings.HasPrefix(work.Title, "длинный вопрос длинный"))
 		}
 	}
 }

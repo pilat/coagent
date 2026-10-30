@@ -59,7 +59,7 @@ The map is an ownership index, not a list of exported symbols. Directory nesting
 does not imply a tier except where it expresses an implementation variant.
 
 - `cmd/coagent` — composition root, CLI product policy and daemon lifecycle commands. Refuses any non-Linux platform at process entry, before the guardian or command dispatch ([ADR-0062](docs/adr/0062-linux-only-supported-runtime.md)).
-- `internal/assistant` — desk rendering, immediate assistant tools, work-root reads, and durable memory, focus, work descriptions and search index.
+- `internal/assistant` — desk rendering, immediate assistant tools, work-root reads, and durable memory, focus and search index.
 - `internal/bashsandbox` — Linux Bubblewrap confinement and process launch for session-owned workloads. Builds one ordered mount plan from a compiled policy; non-Linux builds carry only a compile-time fallback that returns an unsupported-backend error.
 - `internal/budget` — one-shot root-tree budget policy and its user-authorized tool.
 - `internal/catalog` — external model metadata acquisition, caching and identifier matching.
@@ -128,7 +128,7 @@ identity, subagent links, schedules, curated memory, MCP definitions, producer
 delivery records, append-only manager output, chat focus and seen watermarks,
 tool-activation grants, root-tree budgets, durable
 TODO state, per-session file-read ledger (storing `{mtime_unix_nano, size, hash}`
-for write-guard checks), assistant memory, focus, work descriptions and search index, and the
+for write-guard checks), assistant memory, focus and search index, and the
 background-process lifecycle ledger. Configuration files, their recoverable
 backups and the pending-apply marker are atomic filesystem state owned by config operations.
 Other memory is coordination or cache only and must be reconstructible from
@@ -835,7 +835,7 @@ unknown fields remain errors.
 ### Assistant desk
 
 `assistant` owns small permanent or dated memory notes, live focus items with
-real session refs, a full-text index and per-work-session `about` lines. Each
+real session refs and a full-text index. Work cards read the session title. Each
 manager owns one ordinary root of the hidden, non-spawnable `assistant` type in
 the shared assistant project. Its model and effort selection persist like other roots;
 legacy roots with no model receive the defaults. Its agent policy omits project
@@ -885,7 +885,7 @@ the work root's output log receives neither budget nor model notices.
 
 All tool effects execute immediately through the ordinary tool protocol, return
 real ids and survive a later model failure. Memory and focus enforce their limits
-inside their write transactions. Open records its `about` with the first send
+inside their write transactions. Open creates the root with its `about` as the session title
 before admitting input; delivery authorizes inside the tree lock. The daemon
 host supplies creation, delivery, stop, chat switching and model administration,
 while the session owns model calls,
@@ -1149,6 +1149,13 @@ accept one leading `#` on the session number.
 Commands and media route to the durable focus; heartbeats type only for the
 loop's focused root. The assistant accepts model, configuration, budget and
 schedule operations, but refuses work-only stop/kill/clear/compact/worktree flows.
+
+Work roots carry a one-line session title in their attributes. The first inserted
+non-command user input names an untitled root atomically with its inbox row;
+`/title` renames the focused work root, and `/clear` starts untitled. These writes
+preserve session list order. Session summaries, switch headers and unread digests
+share the display name `<project> · <title>`, or `<project>` when untitled;
+`/sessions` and digests show unread counts.
 
 Startup drains the selected tail. A focus change sends a header, an unread
 digest for other live owned roots, then that tail. Digest rows remain unread.

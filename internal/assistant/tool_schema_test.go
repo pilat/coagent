@@ -19,6 +19,13 @@ func TestAssistantSessionSchemasUseStrings(t *testing.T) {
 				} `json:"properties"`
 			}
 			require.NoError(t, json.Unmarshal(spec.Parameters, &params))
+			if spec.Name == toolOpen {
+				assert.Equal(
+					t,
+					"One line, why this session exists (1-80 characters).",
+					params.Properties["about"].Description,
+				)
+			}
 			if session, ok := params.Properties["session"]; ok {
 				assert.Equal(t, "string", session.Type)
 				assert.Contains(t, session.Description, `"#244"`)

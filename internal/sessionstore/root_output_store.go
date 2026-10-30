@@ -106,8 +106,7 @@ func (s *Store) replaceManagerRoot(
 		return nil, nil, fmt.Errorf("load replacement root: %w", err)
 	}
 
-	err = requireManagerOwner(old.Attributes)
-	if err != nil {
+	if err := requireManagerOwner(old.Attributes); err != nil {
 		return nil, nil, err
 	}
 
@@ -129,11 +128,11 @@ func (s *Store) replaceManagerRoot(
 		return nil, nil, err
 	}
 
-	if inputID > 0 {
-		if err := handleReplacementInput(ctx, tx, inputID, oldSessionID, now); err != nil {
-			return nil, nil, err
-		}
+	if err := handleReplacementInput(ctx, tx, inputID, oldSessionID, now); err != nil {
+		return nil, nil, err
 	}
+
+	delete(old.Attributes, TitleAttribute)
 
 	newRecord, err := insertManagerRoot(ctx, tx, ManagerRootCreate{
 		ProjectID: old.ProjectID, Model: old.Model, ReasoningLevel: old.ReasoningLevel, Attributes: old.Attributes,
@@ -167,6 +166,10 @@ func (s *Store) replaceManagerRoot(
 }
 
 func handleReplacementInput(ctx context.Context, tx *sql.Tx, inputID, sessionID int64, now time.Time) error {
+	if inputID == 0 {
+		return nil
+	}
+
 	result, err := tx.ExecContext(ctx, `
 		UPDATE session_inbox SET state = 'handled', resolved_at = ?, resolution_reason = 'clear'
 		WHERE id = ? AND session_id = ? AND state = 'pending'`, now, inputID, sessionID)

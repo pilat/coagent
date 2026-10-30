@@ -30,6 +30,10 @@ type fakeController struct {
 	listSessions  []controllerapi.SessionInfo
 	listSkills    []controllerapi.ConfigSkillInfo
 	messageCalls  []controllerapi.SessionMessageData
+	titleCalls    []struct {
+		id    int64
+		title string
+	}
 
 	createSessionCalls  []controllerapi.SessionCreateData
 	createSessionErr    error
@@ -260,6 +264,16 @@ func (f *fakeController) SessionKilled(_ context.Context, id int64) (bool, error
 		}
 	}
 	return false, nil
+}
+
+func (f *fakeController) SetSessionTitle(_ context.Context, _ string, id int64, title string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.titleCalls = append(f.titleCalls, struct {
+		id    int64
+		title string
+	}{id, title})
+	return nil
 }
 
 func harnessResponse(req *http.Request, payload string) *http.Response {

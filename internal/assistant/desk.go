@@ -27,7 +27,7 @@ type Card struct {
 	// ContextTokens is what every further step of the session carries; zero when unknown.
 	ContextTokens int
 	Pending       bool
-	About         string
+	Title         string
 	projectID     int64
 	touched       bool
 }
@@ -158,11 +158,11 @@ func cardLines(card Card, now time.Time) string {
 		line += " · ⏳ awaiting answer"
 	}
 
-	if card.About == "" {
+	if card.Title == "" {
 		return line + "\n"
 	}
 
-	return line + "\n    about: " + card.About + "\n"
+	return line + "\n    about: " + card.Title + "\n"
 }
 
 func deskTime(at, now time.Time) string {

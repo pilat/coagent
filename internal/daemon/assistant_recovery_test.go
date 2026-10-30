@@ -150,7 +150,8 @@ func TestHarnessScenario_AssistantShutdownAfterCommitKeepsEffects(t *testing.T) 
 	require.NoError(t, first.mgr.sendToSession(first.ctx, root.ID, "open work"))
 	requireSignal(t, opened)
 	var workID int64
-	require.NoError(t, first.db.QueryRowContext(first.ctx, `SELECT session_id FROM assistant_work`).Scan(&workID))
+	require.NoError(t, first.db.QueryRowContext(first.ctx, `SELECT id FROM sessions
+		WHERE json_extract(attributes, '$.title') = 'persistent opened work'`).Scan(&workID))
 	assert.Equal(t, 0, assistantSayCount(t, first, root.ID, "reply after open"))
 	first.shutdown()
 	close(release)
@@ -176,7 +177,9 @@ func TestHarnessScenario_AssistantShutdownAfterCommitKeepsEffects(t *testing.T) 
 	requireSignal(t, seenDesk)
 	second.waitUntil("new activation settled", func() bool { return !second.mgr.HasActiveLoop(root.ID) })
 	var workCount, toolResults int
-	require.NoError(t, second.db.QueryRowContext(second.ctx, `SELECT COUNT(*) FROM assistant_work`).Scan(&workCount))
+	require.NoError(t, second.db.QueryRowContext(second.ctx, `SELECT COUNT(*) FROM sessions
+		WHERE parent_id = 0 AND COALESCE(agent_type, '') <> 'assistant'
+		AND json_extract(attributes, '$.title') = 'persistent opened work'`).Scan(&workCount))
 	require.NoError(
 		t,
 		second.db.QueryRowContext(second.ctx, `SELECT COUNT(*) FROM messages WHERE session_id = ? AND role = 'tool' AND tool_name = 'open'`, root.ID).

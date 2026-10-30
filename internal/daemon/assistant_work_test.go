@@ -36,7 +36,16 @@ func TestAssistantWorkReachesEveryOwnedRoot(t *testing.T) {
 	assert.Equal(t, touched, recent[0].ID)
 	assert.Equal(t, "done", recent[0].Status)
 	assert.True(t, recent[0].Pending)
-	assert.Equal(t, "real user", recent[0].About, "without a stored about the first request stands in")
+	assert.Equal(t, "real user", recent[0].Title, "the first user input names the session")
+	_, err = h.db.ExecContext(
+		h.ctx,
+		`UPDATE sessions SET attributes = json_remove(attributes, '$.title') WHERE id = ?`,
+		touched,
+	)
+	require.NoError(t, err)
+	recent, _, err = a.Recent(h.ctx, 10)
+	require.NoError(t, err)
+	assert.Equal(t, "real user", recent[0].Title, "untitled roots keep the first-request fallback")
 	_, err = h.db.ExecContext(h.ctx, `UPDATE sessions SET context_baseline_prompt_tokens = 40000 WHERE id = ?`, touched)
 	require.NoError(t, err)
 	recent, _, err = a.Recent(h.ctx, 10)
@@ -135,26 +144,30 @@ func TestAssistantRecentOrdersByActivity(t *testing.T) {
 	assert.Equal(t, []int64{ids[1], ids[0]}, []int64{page[0].ID, page[1].ID})
 }
 
-func TestAssistantOpenAboutFailureRollsBackFirstSend(t *testing.T) {
+func TestAssistantOpenTitlesRootBeforeFirstSend(t *testing.T) {
 	h := newHarness(t, harnessOptions{})
 	root, err := h.mgr.EnsureAssistantRoot(h.ctx, scenarioManagerID)
 	require.NoError(t, err)
-	_, err = h.db.ExecContext(h.ctx, `CREATE TRIGGER reject_about BEFORE INSERT ON assistant_work
-		BEGIN SELECT RAISE(ABORT,'about unavailable'); END`)
-	require.NoError(t, err)
 	a := assistantFor(h, root.ID)
-	_, err = a.Open(h.ctx, "about-failure", "must not run", "purpose")
-	require.ErrorContains(t, err, "about unavailable")
-	var sends, inputs int
-	require.NoError(
-		t,
-		h.db.QueryRowContext(h.ctx, `SELECT COUNT(*) FROM session_inbox WHERE json_extract(attributes,'$.observer_session_id') IS NOT NULL`).
-			Scan(&sends),
-	)
-	require.NoError(t, h.db.QueryRowContext(h.ctx,
-		`SELECT COUNT(*) FROM session_inbox WHERE raw_content='must not run'`).Scan(&inputs))
-	assert.Zero(t, sends)
-	assert.Zero(t, inputs)
+	card, err := a.Open(h.ctx, "titled-work", "first instruction", "purpose")
+	require.NoError(t, err)
+	assert.Equal(t, "purpose", card.Title)
+	work, err := h.store.GetSession(h.ctx, card.ID)
+	require.NoError(t, err)
+	assert.Equal(t, "purpose", work.Attributes[sessionstore.TitleAttribute])
+	var instructions int
+	require.NoError(t, h.db.QueryRowContext(h.ctx, `SELECT COUNT(*) FROM session_inbox
+		WHERE session_id = ? AND raw_content = 'first instruction'`, card.ID).Scan(&instructions))
+	assert.Equal(t, 1, instructions)
+	sessions, err := h.store.ChatSessions(h.ctx, scenarioManagerID, "chat")
+	require.NoError(t, err)
+	var name string
+	for _, session := range sessions {
+		if session.ID == card.ID {
+			name = session.Name
+		}
+	}
+	assert.Equal(t, "titled-work · purpose", name)
 }
 
 // workWithAnswer gives a completed root one accepted request, a host nudge and a final answer.

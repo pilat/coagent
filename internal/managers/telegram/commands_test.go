@@ -28,6 +28,7 @@ func TestHandleCommandsPreservesCanonicalSkillNames(t *testing.T) {
 	m.handleChatText(t.Context(), "/help")
 	require.Len(t, messages, 2)
 	assert.Contains(t, messages[0], "/switch")
+	assert.Contains(t, messages[0], "/title")
 	assert.Contains(t, messages[0], "/assistant")
 	assert.Equal(
 		t,

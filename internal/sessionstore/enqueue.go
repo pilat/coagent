@@ -400,6 +400,15 @@ func prepareEnqueueAttributesTx(
 
 	attributes[managerIDAttribute] = owner
 
+	if title := TitleFromInput(in.Content); title != "" {
+		if _, err := tx.ExecContext(ctx, `UPDATE sessions
+			SET attributes = json_set(COALESCE(attributes, '{}'), '$.title', ?)
+			WHERE id = ? AND parent_id = 0 AND COALESCE(agent_type, '') <> 'assistant'
+			AND json_extract(attributes, '$.title') IS NULL`, title, in.SessionID); err != nil {
+			return nil, fmt.Errorf("name session from input: %w", err)
+		}
+	}
+
 	if parentID == 0 && !isExactControlCommand(in.Content) {
 		if err := prepareManagerModelInputTx(ctx, tx, in.SessionID, at); err != nil {
 			return nil, err

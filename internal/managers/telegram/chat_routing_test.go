@@ -70,7 +70,7 @@ func TestSessionsListsAssistantUnreadAndCurrentSelection(t *testing.T) {
 	}
 	manager := newCmdTestManager(t, controller, &messages)
 	manager.handleChatText(t.Context(), "/sessions")
-	assert.Equal(t, []string{"#0 Assistant •\n#42 work • ◀\n#9 other"}, messages)
+	assert.Equal(t, []string{"#0 Assistant · 1 new\n#42 work · 1 new ◀\n#9 other"}, messages)
 }
 
 func (s *chatLoopStub) Start(context.Context)      {}
