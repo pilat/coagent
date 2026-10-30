@@ -134,9 +134,10 @@ Coagent's `#0` in a manager's chat: an ordinary root of the hidden `assistant`
 type, with a desk head and immediate tools for delegating work and retelling
 answers. It can switch the user into live owned work from `#0`, list configured
 models and change work roots' models. Its owner tools administer global MCP
-registration, its own schedules, configuration under `/config`, and budgets for
-itself or addressable work roots under its current `/budget` grant. It has no
-general file, shell or web tools. `/assistant` and `/switch 0` select it.
+registration, its own schedules, and configuration under `/config`. It sets
+budgets for addressable work roots on request without a grant; changing its own
+budget requires a current `/budget` grant on `#0`. It has no general file, shell
+or web tools. `/assistant` and `/switch 0` select it.
 _Avoid_: coordinator, dispatcher, work-item manager.
 
 **turn** (assistant):
@@ -384,14 +385,24 @@ anchors the wall time shown by `/status`.
 _Avoid_: accepted task, queued message, run (ambiguous with process activation).
 
 **one-shot budget**:
-A user-authorized root-tree checkpoint over additional persisted USD cost,
-additional wall time, or both. One generation is armed from durable baselines,
-fires once, closes admission and parks the tree, then is released by the next
-ordinary model-bound root input. It is not a permanent spending policy.
+A root-tree checkpoint over additional persisted USD cost, additional wall
+time, or both, set by the user's `/budget` grant or, for a work root, by the
+assistant on request. One generation is armed from durable baselines, fires
+once, closes admission and parks the tree, then is released by the next
+ordinary model-bound **human input** to the root. Assistant input into a parked
+root is refused; the assistant lifts a checkpoint only with `set_budget`.
+It is not a permanent spending policy.
 _Avoid_: iteration budget, billing limit, permanent ceiling.
 
+**human input**:
+A `source = 'user'` session input with no assistant provenance
+(`observer_session_id`, `from=assistant`). Only human input creates tool
+activation grants or lifts a fired budget. Assistant input with `source = 'user'`
+otherwise behaves like the user's, including commands and skills.
+_Avoid_: user input (it includes the assistant's), real user message.
+
 **tool activation grant**:
-Durable one-turn authority created only by a manager-owned user input whose
+Durable one-turn authority created only by a manager-owned **human input** whose
 leading command matches a tool's declared activation command. It is bound to
 the exact input/session/tool/command and is consumed only by the first valid
 matching mutation; prompt text is never authority.

@@ -12,7 +12,6 @@ import (
 	"github.com/pilat/coagent/internal/assistant"
 	"github.com/pilat/coagent/internal/budget"
 	"github.com/pilat/coagent/internal/config"
-	"github.com/pilat/coagent/internal/configapply"
 	"github.com/pilat/coagent/internal/controllerapi"
 	"github.com/pilat/coagent/internal/loader"
 	"github.com/pilat/coagent/internal/logger"
@@ -268,8 +267,6 @@ func (s *svc) administrationTools(rec *sessionstore.SessionRecord, projectID int
 	tools := mcpstore.NewTools(s.mcpStore, projectID)
 
 	return append(tools,
-		configapply.NewConfigEdit(rec.ID, s.applier),
-		configapply.NewConfigRead(rec.ID, s.applier),
 		budget.NewTool(budget.Store(s.store), rec.ID, s.models.priced(rec.Model)),
 	)
 }

@@ -265,8 +265,8 @@ func authorizedTx(ctx context.Context, tx *sql.Tx, owner string, id int64) (bool
 }
 
 func (s *Store) deliver(ctx context.Context, host Host, scope Scope, id int64, text string) error {
-	err := host.Deliver(ctx, id, text, func(tx *sql.Tx) error {
-		return s.instructTx(ctx, tx, scope, id, text)
+	err := host.Deliver(ctx, id, text, func(tx *sql.Tx, attributes map[string]any) (*sessionstore.InboxInput, error) {
+		return s.instructTx(ctx, tx, scope, id, text, attributes)
 	})
 	if err != nil {
 		return fmt.Errorf("deliver assistant instruction: %w", err)
@@ -275,27 +275,41 @@ func (s *Store) deliver(ctx context.Context, host Host, scope Scope, id int64, t
 	return nil
 }
 
-func (s *Store) instructTx(ctx context.Context, tx *sql.Tx, scope Scope, id int64, text string) error {
+func (s *Store) instructTx(
+	ctx context.Context,
+	tx *sql.Tx,
+	scope Scope,
+	id int64,
+	text string,
+	attributes map[string]any,
+) (*sessionstore.InboxInput, error) {
 	ok, err := authorizedTx(ctx, tx, scope.Owner, id)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	if !ok {
-		return fmt.Errorf("session %d is not a work session you can address", id)
+		return nil, fmt.Errorf("session %d is not a work session you can address", id)
 	}
 
-	_, err = sessionstore.EnqueueTx(ctx, tx, sessionstore.Input{
+	if attributes == nil {
+		attributes = make(map[string]any)
+	}
+
+	attributes["from"] = "assistant"
+	attributes[sessionstore.ObserverSessionIDAttribute] = scope.Root
+
+	result, err := sessionstore.EnqueueTx(ctx, tx, sessionstore.Input{
 		SessionID:  id,
 		Source:     sessionstore.InputSourceUser,
 		Content:    text,
-		Attributes: map[string]any{"from": "assistant", sessionstore.ObserverSessionIDAttribute: scope.Root},
+		Attributes: attributes,
 	})
 	if err != nil {
-		return fmt.Errorf("enqueue assistant instruction: %w", err)
+		return nil, fmt.Errorf("enqueue assistant instruction: %w", err)
 	}
 
-	return nil
+	return result.Input, nil
 }
 
 // newestWithin keeps whole entries from the newest backwards; only a single oversized

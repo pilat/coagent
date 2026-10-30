@@ -22,6 +22,7 @@ var _ Host = (*toolHost)(nil)
 
 type toolHost struct {
 	sessions   *sessionstore.Store
+	attributes map[string]any
 	deliveries []string
 	created    []int64
 	stopped    []int64
@@ -228,8 +229,16 @@ func (h *toolHost) CreateWork(
 	return record.ID, nil
 }
 
-func (h *toolHost) Deliver(ctx context.Context, id int64, text string, enqueue func(*sql.Tx) error) error {
-	if err := h.sessions.WithTx(ctx, enqueue); err != nil {
+func (h *toolHost) Deliver(
+	ctx context.Context,
+	id int64,
+	text string,
+	enqueue func(*sql.Tx, map[string]any) (*sessionstore.InboxInput, error),
+) error {
+	if err := h.sessions.WithTx(ctx, func(tx *sql.Tx) error {
+		_, err := enqueue(tx, h.attributes)
+		return err
+	}); err != nil {
 		return err
 	}
 	h.deliveries = append(h.deliveries, text)

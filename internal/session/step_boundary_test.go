@@ -6,6 +6,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/pilat/coagent/internal/configapply"
 	"github.com/pilat/coagent/internal/llmwire"
 	"github.com/pilat/coagent/internal/loader"
 	"github.com/pilat/coagent/internal/sessionprompt"
@@ -206,4 +207,49 @@ func TestActivationInstruction_AllowsPreparationButIsolatesTheMutation(t *testin
 	assert.Contains(t, text, "the response that calls config_edit must contain no other tool call")
 	assert.Contains(t, text, "No change has occurred until the host emits its receipt")
 	assert.NotContains(t, text, "%!")
+}
+
+func TestBoundaryActivationRequiresHumanInput(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		attrs map[string]any
+		human bool
+	}{
+		{"human", nil, true},
+		{"observer", map[string]any{sessionstore.ObserverSessionIDAttribute: nil}, false},
+		{"assistant", map[string]any{"from": "assistant"}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			_, store, s := newHeadFixture(t, nil)
+			s.registry.Register(configapply.NewConfigEdit(s.id, nil))
+			require.NoError(t, s.prepareRun(t.Context()))
+			input, err := store.Enqueue(t.Context(), sessionstore.Input{
+				SessionID: s.id, Source: sessionstore.InputSourceUser, Content: "/config x", Attributes: tc.attrs,
+			})
+			require.NoError(t, err)
+			batch := s.newBoundaryBatch()
+			_, err = s.acceptBoundaryText(t.Context(), &runState{}, batch, input.Input, "/config")
+			require.NoError(t, err)
+			require.Len(t, batch.commit.Messages, 1)
+			content := batch.commit.Messages[0].Content
+			assert.Contains(t, content, "/config x")
+			if tc.human {
+				require.NotNil(t, batch.commit.Activation)
+				assert.Contains(t, content, "Host activation")
+			} else {
+				assert.Nil(t, batch.commit.Activation)
+				assert.NotContains(t, content, "Host activation")
+			}
+			_, err = s.commitBoundaryBatch(t.Context(), &runState{}, batch, 1)
+			require.NoError(t, err)
+			grant, err := store.PendingActivation(t.Context(), s.id)
+			if tc.human {
+				require.NoError(t, err)
+				assert.Equal(t, input.Input.ID, grant.InputID)
+			} else {
+				require.ErrorIs(t, err, sessionstore.ErrActivationNotFound)
+			}
+		})
+	}
 }

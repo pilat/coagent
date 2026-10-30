@@ -369,6 +369,28 @@ func (s *svc) enqueueUserSessionInput(
 	sessionID int64,
 	prompt string,
 ) (*sessionstore.InboxInput, error) {
+	attributes, err := s.sessionInputAttributes(ctx, sessionID, prompt)
+	if err != nil {
+		return nil, err
+	}
+
+	result, err := s.store.Enqueue(
+		ctx,
+		sessionstore.Input{
+			SessionID:  sessionID,
+			Source:     sessionstore.InputSourceUser,
+			Content:    prompt,
+			Attributes: attributes,
+		},
+	)
+	if err != nil {
+		return nil, fmt.Errorf("enqueue user session input: %w", err)
+	}
+
+	return result.Input, nil
+}
+
+func (s *svc) sessionInputAttributes(ctx context.Context, sessionID int64, prompt string) (map[string]any, error) {
 	attributes := make(map[string]any)
 
 	switch strings.TrimSpace(prompt) {
@@ -388,20 +410,7 @@ func (s *svc) enqueueUserSessionInput(
 		attributes["status"] = current
 	}
 
-	result, err := s.store.Enqueue(
-		ctx,
-		sessionstore.Input{
-			SessionID:  sessionID,
-			Source:     sessionstore.InputSourceUser,
-			Content:    prompt,
-			Attributes: attributes,
-		},
-	)
-	if err != nil {
-		return nil, fmt.Errorf("enqueue user session input: %w", err)
-	}
-
-	return result.Input, nil
+	return attributes, nil
 }
 
 func (s *svc) send(ctx context.Context, projectID int64, prompt, model string, attrs map[string]any) (int64, error) {

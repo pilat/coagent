@@ -109,6 +109,11 @@ func (m *Manager) handleFocusedText(ctx context.Context, text string) {
 	}
 
 	command, arg, _ := strings.Cut(text, " ")
+	if focus != 0 && command == "/config" {
+		m.reply(ctx, "/config works on the assistant: /assistant, then /config")
+		return
+	}
+
 	if focus == 0 {
 		switch command {
 		case commandKill, commandStop, commandClear, "/compact", "/title":

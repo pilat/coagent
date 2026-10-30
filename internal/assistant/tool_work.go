@@ -38,10 +38,6 @@ func (t *assistantTool) work(ctx context.Context, call llmwire.ToolCall) (string
 		return "", errors.New("send needs a text")
 	}
 
-	if strings.HasPrefix(strings.TrimSpace(args.Text), "/") {
-		return "", errors.New("commands belong to the user; use set_model, set_budget or stop")
-	}
-
 	if err := t.store.Send(ctx, t.host, t.scope, id, strings.TrimSpace(args.Text)); err != nil {
 		return "", err
 	}
@@ -57,10 +53,6 @@ func (t *assistantTool) open(ctx context.Context, call llmwire.ToolCall) (string
 
 	args.Project = strings.TrimSpace(args.Project)
 	args.Text = strings.TrimSpace(args.Text)
-
-	if strings.HasPrefix(args.Text, "/") {
-		return "", errors.New("commands belong to the user; use set_model, set_budget or stop")
-	}
 
 	if args.Project == "" || args.Text == "" {
 		return "", errors.New("open needs a project and a text")

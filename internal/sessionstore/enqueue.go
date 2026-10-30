@@ -62,10 +62,6 @@ func EnqueueTx(ctx context.Context, tx *sql.Tx, in Input) (*Enqueued, error) {
 		return nil, err
 	}
 
-	_, observed := in.Attributes["observer_session_id"]
-	if (observed || in.Attributes["from"] == "assistant") && strings.HasPrefix(strings.TrimSpace(in.Content), "/") {
-		return nil, ErrAssistantCommand
-	}
 	var parentID int64
 	var status SessionStatus
 	var killed sql.NullTime
@@ -242,7 +238,7 @@ func isExactControlCommand(content string) bool {
 	}
 }
 
-func prepareManagerModelInputTx(ctx context.Context, tx *sql.Tx, id int64, now time.Time) error {
+func prepareManagerModelInputTx(ctx context.Context, tx *sql.Tx, id int64, human bool, now time.Time) error {
 	if _, err := tx.ExecContext(ctx, `UPDATE sessions SET episode_started_at = ? WHERE id = ?
   AND (episode_started_at IS NULL OR status NOT IN ('active','suspended'))`, now, id); err != nil {
 		return fmt.Errorf("start autonomous episode: %w", err)
@@ -261,6 +257,10 @@ func prepareManagerModelInputTx(ctx context.Context, tx *sql.Tx, id int64, now t
 
 	if state != "fired" {
 		return nil
+	}
+
+	if !human {
+		return fmt.Errorf("session #%d %w", id, ErrBudgetParked)
 	}
 
 	if phase == "draining" {
@@ -410,7 +410,13 @@ func prepareEnqueueAttributesTx(
 	}
 
 	if parentID == 0 && !isExactControlCommand(in.Content) {
-		if err := prepareManagerModelInputTx(ctx, tx, in.SessionID, at); err != nil {
+		if err := prepareManagerModelInputTx(
+			ctx,
+			tx,
+			in.SessionID,
+			IsHumanInput(in.Source, in.Attributes),
+			at,
+		); err != nil {
 			return nil, err
 		}
 	}

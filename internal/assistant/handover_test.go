@@ -19,6 +19,7 @@ func TestAssistantToolsHandoverUserWords(t *testing.T) {
 	}{
 		{"verbatim multiline", "  User's line one\r\n\r\nline three  ", "do the work", false, "> User's line one\n>\n> line three"},
 		{"already quoted", "do this", "Please do this carefully", false, ""},
+		{"slash command", "do this", "/status", false, ""},
 		{"compacted user", "old user words", "do the work", true, ""},
 		{"no active user", "", "do the work", false, ""},
 	} {
