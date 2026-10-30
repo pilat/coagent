@@ -6,12 +6,21 @@
       "name": "<name>",
       "work_dir": "<workdir>",
       "attributes": {
-        "manager_id": "telegram:main"
+        "manager_id": "telegram:main",
+        "title": "start background child"
       }
     },
     {
       "type": "state_changed",
       "status": "running"
+    },
+    {
+      "type": "message",
+      "message": "→ task: `scenario`"
+    },
+    {
+      "type": "message",
+      "message": "→ sleep"
     },
     {
       "type": "message",
@@ -26,7 +35,8 @@
       "name": "<name>",
       "work_dir": "<workdir>",
       "attributes": {
-        "manager_id": "telegram:main"
+        "manager_id": "telegram:main",
+        "title": "start background child"
       }
     },
     {
@@ -54,11 +64,25 @@
       "id": 2,
       "session_id": 1,
       "type": "message",
+      "content": "→ task: `scenario`",
+      "source_key": "message:2:reply"
+    },
+    {
+      "id": 3,
+      "session_id": 1,
+      "type": "message",
+      "content": "→ sleep",
+      "source_key": "message:5:reply"
+    },
+    {
+      "id": 4,
+      "session_id": 1,
+      "type": "message",
       "content": "background launched; yielded without sleep",
       "source_key": "message:7:final"
     },
     {
-      "id": 3,
+      "id": 5,
       "session_id": 1,
       "type": "message",
       "content": "background completion delivered",

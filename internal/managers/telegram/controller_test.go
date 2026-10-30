@@ -211,6 +211,7 @@ func (f *fakeController) ChatOutputs(
 	var rows []controllerapi.ChatOutput
 	for _, row := range f.outputs[id] {
 		if row.ID > f.seen[id] {
+			row.Name = f.chatName(id)
 			rows = append(rows, row)
 			if len(rows) == limit {
 				break
@@ -218,6 +219,25 @@ func (f *fakeController) ChatOutputs(
 		}
 	}
 	return rows, nil
+}
+
+func (f *fakeController) LastSeenChatOutput(
+	_ context.Context, _ string, id int64,
+) (controllerapi.ChatOutput, bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var last controllerapi.ChatOutput
+	for _, row := range f.outputs[id] {
+		if row.ID <= f.seen[id] && row.ID > last.ID &&
+			row.Type != controllerapi.OutputSessionOpened && row.Type != controllerapi.OutputSessionReplaced {
+			last = row
+		}
+	}
+	if last.ID == 0 {
+		return controllerapi.ChatOutput{}, false, nil
+	}
+	last.Name = f.chatName(id)
+	return last, true, nil
 }
 
 func (f *fakeController) MarkChatSeen(_ context.Context, _ string, id, outputID int64) error {
@@ -278,4 +298,16 @@ func (f *fakeController) SetSessionTitle(_ context.Context, _ string, id int64, 
 
 func harnessResponse(req *http.Request, payload string) *http.Response {
 	return telegramResponse(req, payload)
+}
+
+func (f *fakeController) chatName(id int64) string {
+	if id == 0 || (f.assistantRoot != nil && id == f.assistantRoot.SessionID) {
+		return "Assistant"
+	}
+	for _, session := range f.listSessions {
+		if session.ID == id {
+			return session.Name
+		}
+	}
+	return ""
 }

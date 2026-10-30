@@ -7,7 +7,8 @@
       "work_dir": "<workdir>",
       "attributes": {
         "channel": "telegram",
-        "manager_id": "telegram:main"
+        "manager_id": "telegram:main",
+        "title": "open session"
       }
     },
     {
@@ -28,7 +29,8 @@
       "work_dir": "<workdir>",
       "attributes": {
         "channel": "telegram",
-        "manager_id": "telegram:main"
+        "manager_id": "telegram:main",
+        "title": "open session"
       }
     },
     {

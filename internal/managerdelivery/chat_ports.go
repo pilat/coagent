@@ -22,6 +22,7 @@ type SendResult struct {
 
 type ChatRow struct {
 	ID      int64
+	Name    string
 	Type    string
 	Content string
 }
@@ -39,6 +40,7 @@ type ChatPort interface {
 	Focus(context.Context) (int64, error)
 	ResetFocus(context.Context, int64) (bool, error)
 	Outputs(context.Context, int64, int) ([]ChatRow, error)
+	LastSeen(context.Context, int64) (ChatRow, bool, error)
 	MarkSeen(context.Context, int64, int64) error
 	Sessions(context.Context) ([]ChatSession, error)
 	Killed(context.Context, int64) (bool, error)

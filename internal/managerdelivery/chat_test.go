@@ -51,7 +51,7 @@ func TestChatLoop_StartupTailAndFocusChange(t *testing.T) {
 	}
 	w := NewChat(fake, fake).(*chatLoop)
 	require.Zero(t, w.pass(t.Context()))
-	assert.Equal(t, []string{"first", "second"}, fake.sent)
+	assert.Equal(t, []string{"#12 project - 12\nfirst", "#12 project - 12\nsecond"}, fake.sent)
 	assert.Equal(t, int64(4), fake.seen[12])
 	assert.Equal(t, int64(12), w.Focus())
 	assert.NotContains(t, fake.reads, int64(9))
@@ -59,16 +59,20 @@ func TestChatLoop_StartupTailAndFocusChange(t *testing.T) {
 	fake.focus = 9
 	require.Zero(t, w.pass(t.Context()))
 	assert.Equal(t, []string{
-		"first", "second", "→ #9 project - 9",
-		"#12 project - 12 · 1 new · excluded\n#0 Assistant · 1 new · assistant", "other tail",
+		"#12 project - 12\nfirst", "#12 project - 12\nsecond", "→ #9 project - 9",
+		"#9 project - 9\nother tail",
 	}, fake.sent)
 	assert.Zero(t, fake.seen[0])
 
 	fake.focus = 12
 	require.Zero(t, w.pass(t.Context()))
-	assert.Equal(t, "→ #12 project - 12", fake.sent[5])
+	assert.Equal(t, "→ #12 project - 12", fake.sent[4])
+	assert.Len(t, fake.sent, 5)
+	fake.focus = 0
+	require.Zero(t, w.pass(t.Context()))
+	assert.Equal(t, "→ #0 Assistant", fake.sent[5])
 	assert.Equal(t,
-		"#0 Assistant · 1 new · assistant\n#9 project - 9 · 2 new · "+strings.Repeat("界", 120),
+		"#12 project - 12 · 1 new · excluded\n#9 project - 9 · 2 new · "+strings.Repeat("界", 120),
 		fake.sent[6],
 	)
 }
@@ -99,7 +103,7 @@ func TestChatLoop_SwitchDuringLongTail(t *testing.T) {
 			{ID: 9, Name: "B", Unread: 1, LatestUnread: "B answer", LatestUnreadID: 126},
 		}
 		fake.onSend = func(text string) {
-			if text == "A1" {
+			if text == "#12 A\nA1" {
 				fake.focus = 9
 			}
 		}
@@ -111,7 +115,7 @@ func TestChatLoop_SwitchDuringLongTail(t *testing.T) {
 		w := NewChat(fake, fake).(*chatLoop)
 
 		require.Zero(t, w.pass(t.Context()))
-		assert.Equal(t, []string{"A1"}, fake.sent)
+		assert.Equal(t, []string{"#12 A\nA1"}, fake.sent)
 		assert.Equal(t, int64(1), fake.seen[12])
 		assert.Equal(t, []int64{12}, fake.reads)
 		fake.onBoundary = nil
@@ -119,7 +123,7 @@ func TestChatLoop_SwitchDuringLongTail(t *testing.T) {
 		require.True(t, w.wait(t.Context(), 0))
 		assert.Equal(t, before, time.Now(), "switch must wake the next pass without a fallback delay")
 		require.Zero(t, w.pass(t.Context()))
-		assert.Equal(t, []string{"A1", "→ #9 B", "#12 A · 124 new · A125", "B answer"}, fake.sent)
+		assert.Equal(t, []string{"#12 A\nA1", "→ #9 B", "#9 B\nB answer"}, fake.sent)
 		assert.Equal(t, int64(1), fake.seen[12])
 		assert.Equal(t, int64(126), fake.seen[9])
 		assert.Equal(t, []int64{12, 9, 9}, fake.reads)
@@ -145,7 +149,7 @@ func TestChatLoop_SwitchDuringKilledTailSkipsReset(t *testing.T) {
 	w := NewChat(fake, fake).(*chatLoop)
 
 	require.Zero(t, w.pass(t.Context()))
-	assert.Equal(t, []string{"Session killed."}, fake.sent)
+	assert.Equal(t, []string{"#12 project - 12\nSession killed."}, fake.sent)
 	assert.Equal(t, int64(1), fake.seen[12])
 	assert.Equal(t, int64(9), fake.focus)
 }
@@ -295,19 +299,20 @@ func TestChatLoop_WakeFallbackAndRetryDeadline(t *testing.T) {
 
 func TestChatLoop_SwitchPreludeResumesWithoutRepeatingHeader(t *testing.T) {
 	fake := newChatFake()
+	fake.focus = 4
 	w := NewChat(fake, fake).(*chatLoop)
 	require.Zero(t, w.pass(t.Context()))
-	fake.focus = 4
+	fake.focus = 0
 	fake.sessions = []ChatSession{
-		{ID: 4, Name: "work"}, {ID: 0, Name: "Assistant", Unread: 1, LatestUnread: "new"},
+		{ID: 4, Name: "work", Unread: 1, LatestUnread: "new"}, {ID: 0, Name: "Assistant", Unread: 1},
 	}
-	fake.rows[4] = []ChatRow{{ID: 1, Type: "message", Content: "tail"}}
+	fake.rows[0] = []ChatRow{{ID: 1, Type: "message", Content: "tail"}}
 	fake.results = []SendResult{{}, {Class: SendTransient}}
 	assert.Equal(t, 3*time.Second, w.pass(t.Context()))
 	assert.Empty(t, fake.reads[1:])
 	require.Zero(t, w.pass(t.Context()))
 	assert.Equal(t,
-		[]string{"→ #4 work", "#0 Assistant · 1 new · new", "#0 Assistant · 1 new · new", "tail"},
+		[]string{"→ #0 Assistant", "#4 work · 1 new · new", "#4 work · 1 new · new", "tail"},
 		fake.sent,
 	)
 }
@@ -420,9 +425,11 @@ func (f *chatFake) Outputs(_ context.Context, sessionID int64, limit int) ([]Cha
 	f.reads = append(f.reads, sessionID)
 
 	var rows []ChatRow
+	name := f.rowName(sessionID)
 
 	for _, row := range f.rows[sessionID] {
 		if row.ID > f.seen[sessionID] {
+			row.Name = name
 			rows = append(rows, row)
 			if len(rows) == limit {
 				break
@@ -445,6 +452,29 @@ func (f *chatFake) MarkSeen(_ context.Context, sessionID, id int64) error {
 	f.boundary("after mark")
 
 	return nil
+}
+
+func (f *chatFake) LastSeen(_ context.Context, sessionID int64) (ChatRow, bool, error) {
+	f.boundary("before last seen")
+	var last ChatRow
+	for _, row := range f.rows[sessionID] {
+		if row.ID <= f.seen[sessionID] && row.ID > last.ID &&
+			row.Type != "session_opened" && row.Type != "session_replaced" {
+			last = row
+		}
+	}
+	f.boundary("after last seen")
+	last.Name = f.rowName(sessionID)
+	return last, last.ID != 0, nil
+}
+
+func (f *chatFake) rowName(sessionID int64) string {
+	for _, session := range f.sessions {
+		if session.ID == sessionID {
+			return session.Name
+		}
+	}
+	return fmt.Sprintf("project - %d", sessionID)
 }
 
 func (f *chatFake) Sessions(context.Context) ([]ChatSession, error) {

@@ -357,10 +357,30 @@ lifecycle row. It is not a transport receipt or a per-row delivery flag.
 _Avoid_: delivery receipt, shared cursor.
 
 **unread digest**:
-The focus-change message showing each other live owned session's newest unread
-message, ordered newest first. It does not mark those messages seen and is not
+The message sent only when chat focus returns to the assistant, showing each
+other live owned session's newest unread message, ordered newest first.
+It does not mark those messages seen and is not
 the effective policy's **digest**.
 _Avoid_: policy digest, full unread history.
+
+**session header**:
+The `#<id> <Name>` line prefixed at delivery to every renderable work-root row,
+using the same display name as `/sessions`. It is never stored in the output
+log; assistant rows have none.
+_Avoid_: switch header (the `→ #N <Name>` line confirming a focus change).
+
+**entry context**:
+The newest already-seen renderable output-log row replayed when entering a
+session with nothing unread. It never moves the watermark; a work row keeps
+its session header and an assistant row has none.
+_Avoid_: unread tail, new output.
+
+**tool trail**:
+The per-call lines of one work-root step message: `→ <tool>` or a tool name
+with its main argument in inline code, redacted and clipped to 80 runes.
+Batch calls expand one level. The model's text precedes the trail when present;
+assistant roots publish text only, and subagents publish no output-log rows.
+_Avoid_: tool result, progress card, one message per call.
 
 **tail**:
 The selected session's output-log rows above that chat's watermark, read in

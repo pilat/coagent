@@ -93,19 +93,32 @@ func (c *controller) ChatOutputs(
 		return nil, fmt.Errorf("read chat outputs: %w", err)
 	}
 
-	id := record.ID
-	if record.AgentType == sessionstore.AssistantAgentType {
-		id = 0
-	}
-
 	outputs := make([]controllerapi.ChatOutput, 0, len(rows))
 	for _, row := range rows {
-		outputs = append(outputs, controllerapi.ChatOutput{
-			ID: row.ID, SessionID: id, Type: string(row.Type), Content: row.Content,
-		})
+		outputs = append(outputs, chatOutput(record, row))
 	}
 
 	return outputs, nil
+}
+
+func (c *controller) LastSeenChatOutput(
+	ctx context.Context, chatID string, sessionID int64,
+) (controllerapi.ChatOutput, bool, error) {
+	record, err := c.chatSession(ctx, sessionID)
+	if err != nil {
+		return controllerapi.ChatOutput{}, false, err
+	}
+
+	row, found, err := c.app.store.LastSeenChatOutput(ctx, c.managerID, chatID, record.ID)
+	if err != nil {
+		return controllerapi.ChatOutput{}, false, fmt.Errorf("read last seen chat output: %w", err)
+	}
+
+	if !found {
+		return controllerapi.ChatOutput{}, false, nil
+	}
+
+	return chatOutput(record, row), true, nil
 }
 
 func (c *controller) MarkChatSeen(ctx context.Context, chatID string, sessionID, outboxID int64) error {
@@ -173,4 +186,15 @@ func (c *controller) chatSession(ctx context.Context, sessionID int64) (*session
 	}
 
 	return record, nil
+}
+
+func chatOutput(record *sessionstore.SessionRecord, row sessionstore.ChatOutput) controllerapi.ChatOutput {
+	id := record.ID
+	if record.AgentType == sessionstore.AssistantAgentType {
+		id = 0
+	}
+
+	return controllerapi.ChatOutput{
+		ID: row.ID, SessionID: id, Name: row.Name, Type: string(row.Type), Content: row.Content,
+	}
 }

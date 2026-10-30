@@ -42,6 +42,7 @@ type Input struct {
 	ExternalCalls            map[string]string
 	OpeningContext           string
 	OutputEnabled            bool
+	ToolTrail                bool
 	PreserveStopped          bool
 	Schedules                string
 	Status                   string
@@ -77,6 +78,7 @@ type Session struct {
 	schedules       string
 	status          string
 	outputEnabled   bool
+	toolTrail       bool
 	preserveStopped bool
 	budgetFired     bool
 	head            func(context.Context) (string, error)
@@ -157,6 +159,7 @@ func New(ctx context.Context, in Input) (*Session, error) {
 		status:                   in.Status,
 		events:                   in.Events,
 		outputEnabled:            in.OutputEnabled,
+		toolTrail:                in.ToolTrail,
 		preserveStopped:          in.PreserveStopped,
 		activeBackgroundSnapshot: in.BackgroundSnapshot,
 		compactionDeferAnnounced: in.CompactionDeferAnnounced,

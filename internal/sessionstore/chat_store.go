@@ -17,6 +17,7 @@ const assistantChatRootSQL = liveChatRootSQL + ` AND COALESCE(s.agent_type, '') 
 type ChatOutput struct {
 	ID        int64
 	SessionID int64
+	Name      string
 	Type      OutputType
 	Content   string
 }
@@ -155,6 +156,11 @@ func (s *Store) ChatOutputs(
 		return nil, errors.New("chat output limit must be positive")
 	}
 
+	name, err := s.chatOutputName(ctx, sessionID)
+	if err != nil {
+		return nil, err
+	}
+
 	rows, err := s.db.QueryContext(ctx, `SELECT id, session_id, type, content FROM session_outbox
 		WHERE session_id = ? AND id > COALESCE((SELECT last_outbox_id FROM chat_seen
 			WHERE manager_id = ? AND chat_id = ? AND session_id = ?), 0)
@@ -172,6 +178,8 @@ func (s *Store) ChatOutputs(
 			return nil, fmt.Errorf("scan unread chat output: %w", err)
 		}
 
+		output.Name = name
+
 		outputs = append(outputs, output)
 	}
 
@@ -180,6 +188,50 @@ func (s *Store) ChatOutputs(
 	}
 
 	return outputs, nil
+}
+
+// LastSeenChatOutput replays context without including unread or non-rendering lifecycle rows.
+func (s *Store) LastSeenChatOutput(
+	ctx context.Context,
+	managerID, chatID string,
+	sessionID int64,
+) (ChatOutput, bool, error) {
+	var output ChatOutput
+
+	err := s.db.QueryRowContext(ctx, `SELECT o.id, o.session_id, o.type, o.content FROM session_outbox o
+		JOIN chat_seen seen ON seen.session_id = o.session_id
+		WHERE seen.manager_id = ? AND seen.chat_id = ? AND o.session_id = ?
+			AND o.id <= seen.last_outbox_id AND o.type NOT IN ('session_opened', 'session_replaced')
+		ORDER BY o.id DESC LIMIT 1`, managerID, chatID, sessionID).
+		Scan(&output.ID, &output.SessionID, &output.Type, &output.Content)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ChatOutput{}, false, nil
+	}
+
+	if err != nil {
+		return ChatOutput{}, false, fmt.Errorf("load last seen chat output: %w", err)
+	}
+
+	output.Name, err = s.chatOutputName(ctx, sessionID)
+	if err != nil {
+		return ChatOutput{}, false, err
+	}
+
+	return output, true, nil
+}
+
+func (s *Store) chatOutputName(ctx context.Context, sessionID int64) (string, error) {
+	var agentType, project, title string
+
+	err := s.db.QueryRowContext(ctx, `SELECT s.agent_type, p.name,
+		COALESCE(json_extract(s.attributes, '$.title'), '') FROM sessions s
+		JOIN projects p ON p.id = s.project_id WHERE s.id = ?`, sessionID).
+		Scan(&agentType, &project, &title)
+	if err != nil {
+		return "", fmt.Errorf("load chat output name: %w", err)
+	}
+
+	return chatDisplayName(agentType, project, title), nil
 }
 
 func focusOwnerChatTx(ctx context.Context, tx *sql.Tx, managerID string, sessionID int64) error {

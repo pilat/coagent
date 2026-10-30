@@ -136,7 +136,7 @@ opinionated product, not an agent framework with a public plugin API.
 - **Schedules:** cron expressions with `CRON_TZ` and one-shot wakes. Fresh
   schedules reset the transcript on every run while curated memory persists.
 - **Telegram:** one chat with session switching, unread indicators and a digest
-  when you switch. Selected sessions receive their unread output in order.
+  when you return to Assistant. Selected sessions receive their unread output in order.
   Numbered project/model lists, git worktrees via `/gwt <name>`, status, schedules
   and a hard user allow-list are built in.
 
@@ -362,7 +362,7 @@ Telegram commands operate on the selected session unless they name an ID:
 | --- | --- |
 | `/new [name]` | List recent managed projects, or create/open one and select a new session |
 | `/spawn <path>` | Start and select a session in an existing directory |
-| `/sessions` | List Assistant and live owned sessions with unread and selection markers |
+| `/sessions` | Show up to 30 sessions: Assistant first, then unread before read, newest activity first; report any overflow |
 | `/switch N`, `/assistant` | Select a work session, or return to Assistant (`/switch 0`) |
 | `/gwt <name>` | Create and select a worktree session from the selected work repository |
 | `/kill [N]`, `/stop [N]` | Kill a work session or stop its loop; an ID leaves focus unchanged |
@@ -375,8 +375,12 @@ Telegram commands operate on the selected session unless they name an ID:
 
 Assistant refuses stop, kill, clear, compact and worktree commands. Text and
 attachments go to the selected session; Assistant receives attachment captions.
-Switching sends a header, a digest of other live sessions' unread messages, then
-the selected tail. Every narration and final answer is a new message. A crash
+Switching sends a switch header and the selected session's unread tail, or its
+last seen message as entry context when nothing is unread. The unread digest
+appears only when returning to Assistant. Every work message carries its session
+header. Tool-calling work steps are new messages with a compact tool trail,
+including silent steps; Assistant publishes text only. Final answers are new
+messages too. A crash
 between sending and saving the watermark can repeat a message.
 
 ## Development

@@ -10,11 +10,12 @@ import (
 )
 
 const (
-	commandKill     = "/kill"
-	commandStop     = "/stop"
-	commandClear    = "/clear"
-	commandGWT      = "/gwt"
-	telegramChannel = "telegram"
+	commandKill      = "/kill"
+	commandStop      = "/stop"
+	commandClear     = "/clear"
+	commandGWT       = "/gwt"
+	telegramChannel  = "telegram"
+	sessionListLimit = 30
 )
 
 var publishedCommands = []map[string]string{
@@ -236,8 +237,8 @@ func (m *Manager) handleSessions(ctx context.Context) {
 		return
 	}
 
-	lines := make([]string, 0, len(sessions))
-	for _, session := range sessions {
+	lines := make([]string, 0, min(len(sessions), sessionListLimit)+1)
+	for _, session := range sessions[:min(len(sessions), sessionListLimit)] {
 		line := fmt.Sprintf("#%d %s", session.ID, session.Name)
 		if session.Unread > 0 {
 			line += fmt.Sprintf(" · %d new", session.Unread)
@@ -248,6 +249,10 @@ func (m *Manager) handleSessions(ctx context.Context) {
 		}
 
 		lines = append(lines, line)
+	}
+
+	if remaining := len(sessions) - sessionListLimit; remaining > 0 {
+		lines = append(lines, fmt.Sprintf("… and %d more — ask the assistant to find one", remaining))
 	}
 
 	_, _ = m.sendMessage(ctx, strings.Join(lines, "\n"))

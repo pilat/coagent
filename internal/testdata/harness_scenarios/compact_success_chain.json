@@ -6,12 +6,17 @@
       "name": "<name>",
       "work_dir": "<workdir>",
       "attributes": {
-        "manager_id": "telegram:main"
+        "manager_id": "telegram:main",
+        "title": "first prompt"
       }
     },
     {
       "type": "state_changed",
       "status": "running"
+    },
+    {
+      "type": "message",
+      "message": "→ ls: `.`"
     },
     {
       "type": "message",
@@ -26,7 +31,8 @@
       "name": "<name>",
       "work_dir": "<workdir>",
       "attributes": {
-        "manager_id": "telegram:main"
+        "manager_id": "telegram:main",
+        "title": "first prompt"
       }
     },
     {
@@ -54,18 +60,25 @@
       "id": 2,
       "session_id": 1,
       "type": "message",
+      "content": "→ ls: `.`",
+      "source_key": "message:2:reply"
+    },
+    {
+      "id": 3,
+      "session_id": 1,
+      "type": "message",
       "content": "First answer.",
       "source_key": "message:6:final"
     },
     {
-      "id": 3,
+      "id": 4,
       "session_id": 1,
       "type": "message",
       "content": "🔄 Compacting context...",
       "source_key": "input:2:compact:started"
     },
     {
-      "id": 4,
+      "id": 5,
       "session_id": 1,
       "type": "message",
       "content": "✅ Context compacted",

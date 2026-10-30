@@ -15,7 +15,7 @@ import (
 	"github.com/pilat/coagent/internal/sessionstore"
 )
 
-func TestHarnessScenario_SwitchDeliversHeaderDigestAndTail(t *testing.T) {
+func TestHarnessScenario_SwitchDeliversHeaderAndTail(t *testing.T) {
 	h := newDelayedTelegramHarness(t)
 	one := createChatWork(t, h)
 	two := createChatWork(t, h)
@@ -40,9 +40,8 @@ func TestHarnessScenario_SwitchDeliversHeaderDigestAndTail(t *testing.T) {
 		}
 	}
 	assert.Equal(t, []string{
-		"startup", fmt.Sprintf("→ #%d project", two),
-		fmt.Sprintf("#%d project · 1 new · third unread", three),
-		"new tail one", "new tail two",
+		fmt.Sprintf("#%d project\nstartup", one), fmt.Sprintf("→ #%d project", two),
+		fmt.Sprintf("#%d project\nnew tail one", two), fmt.Sprintf("#%d project\nnew tail two", two),
 	}, messages)
 	seen, err := h.sessions.ChatSeen(t.Context(), delayedTelegramManagerID, strconv.FormatInt(harnessChatID, 10), three)
 	require.NoError(t, err)
@@ -80,7 +79,7 @@ func TestHarnessScenario_SwitchShowsSessionTitles(t *testing.T) {
 	}
 	assert.Equal(t, []string{
 		fmt.Sprintf("→ #%d project · second work", two),
-		fmt.Sprintf("#%d project · first work · 1 new · first unread", one), "second tail",
+		fmt.Sprintf("#%d project · second work\nsecond tail", two),
 	}, messages)
 }
 
@@ -151,7 +150,7 @@ func TestHarnessScenario_KilledSwitchRefusedAndFocusedKillDrainsClose(t *testing
 		}
 	}
 	assert.Equal(t, []string{
-		"Session killed. Cancelled background processes: 3", "→ #0 Assistant",
+		fmt.Sprintf("#%d project\nSession killed. Cancelled background processes: 3", id), "→ #0 Assistant",
 		fmt.Sprintf("#%d is not a live session", id),
 	}, messages)
 	focus, err := chat.ChatFocus(t.Context(), key)
@@ -171,7 +170,7 @@ func TestHarnessScenario_ForbiddenChatPausesWithoutMarking(t *testing.T) {
 	require.NoError(t, manager.Start(t.Context()))
 	t.Cleanup(func() { require.NoError(t, manager.Stop(context.Background())) })
 	require.Eventually(t, func() bool {
-		return hasTelegramMessage(h.recorder.snapshot(), "must remain unread")
+		return hasTelegramMessage(h.recorder.snapshot(), fmt.Sprintf("#%d project\nmust remain unread", id))
 	}, time.Second, time.Millisecond)
 	require.NoError(t, manager.Stop(t.Context()))
 	seen, err := h.sessions.ChatSeen(t.Context(), delayedTelegramManagerID, key, id)
@@ -202,8 +201,13 @@ func TestHarnessScenario_ParseRejectionFallsBackBeforeMarking(t *testing.T) {
 		}
 	}
 	assert.Equal(t, []delayedTelegramCall{
-		{Method: "sendMessage", Text: "<b>answer</b>", ChatID: harnessChatID, ParseMode: tgParseModeHTML},
-		{Method: "sendMessage", Text: "answer", ChatID: harnessChatID},
+		{
+			Method:    "sendMessage",
+			Text:      fmt.Sprintf("#%d project\n<b>answer</b>", id),
+			ChatID:    harnessChatID,
+			ParseMode: tgParseModeHTML,
+		},
+		{Method: "sendMessage", Text: fmt.Sprintf("#%d project\nanswer", id), ChatID: harnessChatID},
 	}, sends)
 	seen, err := h.sessions.ChatSeen(t.Context(), delayedTelegramManagerID, key, id)
 	require.NoError(t, err)

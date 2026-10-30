@@ -58,7 +58,8 @@ func TestHarnessScenario_AssistantInProgressDoesNotBlockWorkOutput(t *testing.T)
 	id := h.produceBeforeManager(t)
 	manager.processUpdate(t.Context(), assistantTelegramUpdate(fmt.Sprintf("/switch %d", id)))
 	require.Eventually(t, func() bool {
-		return hasTelegramMessage(h.recorder.snapshot(), "delayed telegram answer")
+		return hasTelegramMessage(h.recorder.snapshot(), fmt.Sprintf(
+			"#%d project · finish before telegram starts\ndelayed telegram answer", id))
 	}, 5*time.Second, 10*time.Millisecond)
 	assert.False(t, hasTelegramMessage(h.recorder.snapshot(), "No change."))
 	close(client.release)

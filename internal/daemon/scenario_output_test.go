@@ -431,7 +431,14 @@ func TestHarnessScenario_OutputChainReportedOrder(t *testing.T) {
 	require.NoError(t, err)
 	closeOnce.Do(func() { close(followUpQueued) })
 	collector.waitMessage(root, "All done.")
-	assertNarratedOutputOrder(t, h, root, "Reading the repo", "Stopping the mutation run", "All done.")
+	assertNarratedOutputOrder(
+		t,
+		h,
+		root,
+		"Reading the repo\n\n→ ls: `.`",
+		"Stopping the mutation run\n\n→ todowrite",
+		"All done.",
+	)
 	collector.waitIdleAfter(root, "All done.")
 	assertHarnessTrace(t, h, "output_chain_reported_order.json", collector.snapshot(), root)
 }
@@ -470,7 +477,14 @@ func TestHarnessScenario_OutputChainNarratedToolIterations(t *testing.T) {
 	root, err := h.mgr.Send(h.ctx, h.projectID, "do the work", "fake-model", managerAttrs(scenarioManagerID))
 	require.NoError(t, err)
 	collector.waitMessage(root, "All done.")
-	assertNarratedOutputOrder(t, h, root, "Reading the repo", "Updating the task list", "All done.")
+	assertNarratedOutputOrder(
+		t,
+		h,
+		root,
+		"Reading the repo\n\n→ ls: `.`",
+		"Updating the task list\n\n→ todowrite",
+		"All done.",
+	)
 	collector.waitIdleAfter(root, "All done.")
 	assertHarnessTrace(t, h, "output_chain_narrated_tools.json", collector.snapshot(), root)
 }

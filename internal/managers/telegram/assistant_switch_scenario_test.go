@@ -32,8 +32,9 @@ func TestHarnessScenario_AssistantSwitchDeliversHeaderThenWorkTail(t *testing.T)
 	awaitChatTail(t, h, manager.assistantRootID)
 	enqueueChatMessage(t, h, client.work, "work tail after assistant switch")
 	manager.processUpdate(t.Context(), assistantTelegramUpdate("connect me to the work session"))
+	tail := fmt.Sprintf("#%d project\nwork tail after assistant switch", client.work)
 	require.Eventually(t, func() bool {
-		return hasTelegramMessage(h.recorder.snapshot(), "work tail after assistant switch")
+		return hasTelegramMessage(h.recorder.snapshot(), tail)
 	}, 10*time.Second, 10*time.Millisecond)
 	header := fmt.Sprintf("→ #%d project", client.work)
 	seenHeader, seenTail := false, false
@@ -45,7 +46,7 @@ func TestHarnessScenario_AssistantSwitchDeliversHeaderThenWorkTail(t *testing.T)
 			assert.False(t, seenHeader, "one header per switch")
 			seenHeader = true
 		}
-		if call.Text == "work tail after assistant switch" {
+		if call.Text == tail {
 			assert.True(t, seenHeader, "the header precedes the work tail")
 			assert.False(t, seenTail, "the tail is delivered once")
 			seenTail = true
