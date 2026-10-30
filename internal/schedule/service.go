@@ -163,7 +163,7 @@ func (s *svc) AddRecurringReport(
 		return Created{}, errors.New("add recurring schedule: cron expression is required")
 	}
 
-	sched, err := s.store.AddScheduleWithMeta(
+	sched, err := s.store.AddSchedule(
 		ctx,
 		sessionID,
 		cronExpr,
@@ -192,15 +192,7 @@ func (s *svc) AddOnce(
 		return Created{}, errors.New("one-shot time must be in the future")
 	}
 
-	sched, err := s.store.AddScheduleWithMeta(
-		ctx,
-		sessionID,
-		"",
-		&at,
-		prompt,
-		fresh,
-		ScheduleMetadata{ReportTo: reportTo},
-	)
+	sched, err := s.store.AddSchedule(ctx, sessionID, "", &at, prompt, fresh, ScheduleMetadata{ReportTo: reportTo})
 	if err != nil {
 		return Created{}, fmt.Errorf("add one-shot schedule: %w", err)
 	}
@@ -219,15 +211,7 @@ func (s *svc) AddSleep(
 		return Created{}, errors.New("add sleep: tool call id is required")
 	}
 
-	sched, err := s.store.AddScheduleWithMeta(
-		ctx,
-		sessionID,
-		"",
-		&wakeAt,
-		result,
-		false,
-		ScheduleMetadata{ToolCallID: callID},
-	)
+	sched, err := s.store.AddSchedule(ctx, sessionID, "", &wakeAt, result, false, ScheduleMetadata{ToolCallID: callID})
 	if err != nil {
 		return Created{}, fmt.Errorf("add sleep: %w", err)
 	}

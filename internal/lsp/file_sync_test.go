@@ -65,7 +65,8 @@ func TestManager_QueriesSynchronizeOneOpenThenChanges(t *testing.T) {
 			return err
 		}
 
-		return cl.ensureFileOpen(t.Context(), file)
+		_, err := cl.syncFile(t.Context(), file)
+		return err
 	})
 
 	require.NoError(t, os.WriteFile(file, []byte("package second\n"), 0o600))
@@ -75,7 +76,8 @@ func TestManager_QueriesSynchronizeOneOpenThenChanges(t *testing.T) {
 			return err
 		}
 
-		return cl.ensureFileOpen(t.Context(), file)
+		_, err := cl.syncFile(t.Context(), file)
+		return err
 	})
 
 	notifications := capture.snapshot()

@@ -53,7 +53,7 @@ func insertOutputTx(ctx context.Context, tx *sql.Tx, draft OutputDraft, mode Com
 		return nil, err
 	}
 
-	draft.Fingerprint = outputFingerprintWithRelease(
+	draft.Fingerprint = OutputFingerprint(
 		draft.Type,
 		draft.Content,
 		draft.SessionID,

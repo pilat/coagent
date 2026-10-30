@@ -127,11 +127,11 @@ func TestTelegramCommandAndPollingContract(t *testing.T) {
 			return telegramResponse(req, `{"ok":true,"result":[]}`), nil
 		})},
 	}
-	require.NoError(t, manager.setCommands(t.Context()))
+	require.NoError(t, manager.tg(t.Context(), "setMyCommands", map[string]any{"commands": publishedCommands}, nil))
 	_, err := manager.getUpdates(t.Context(), 0)
 	require.NoError(t, err)
 	assert.Equal(t, []string{
-		"new", "spawn", "sessions", "switch", "assistant", "kill", "stop", "help", "start",
+		"new", "spawn", "sessions", "switch", "title", "assistant", "kill", "stop", "help", "start",
 		"gwt", "model", "clear", "compact", "status", "budget", "schedules", "config", "skill",
 	}, commands)
 	assert.Equal(t, []string{"message"}, updates)

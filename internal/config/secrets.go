@@ -65,12 +65,6 @@ func LoadSecretsFrom(path string) (Secrets, error) {
 	return values, nil
 }
 
-// SecretValues collects every string the process treats as a credential, for log
-// redaction.
-func SecretValues(secrets Secrets, unified *UnifiedConfig) []string {
-	return secretValues(secrets, unified)
-}
-
 // Environment overlays the real environment on top of the secrets, matching the
 // precedence godotenv applied before secrets stopped reaching the environment.
 func (s Secrets) Environment() map[string]string {
@@ -116,11 +110,9 @@ func (c *UnifiedConfig) resolveSecrets(secrets Secrets) error {
 	return nil
 }
 
-// secretValues collects every string the process treats as a credential:
-// secrets-file values plus the resolved api_key/bot_token sinks (which may be
-// inline literals). MCP server env is resolved at acquire time from these same
-// secrets-file values, so it needs no separate pass here.
-func secretValues(secrets Secrets, unified *UnifiedConfig) []string {
+// SecretValues collects credential values and resolved credential sinks for
+// redaction, including inline literals but excluding short strings.
+func SecretValues(secrets Secrets, unified *UnifiedConfig) []string {
 	seen := make(map[string]struct{})
 
 	var values []string

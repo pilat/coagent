@@ -140,5 +140,3 @@ func (c *client) ensureProcessWaiter() {
 		go c.waitForProcess()
 	})
 }
-
-func pathToURI(file string) string { return fileURI(file) }

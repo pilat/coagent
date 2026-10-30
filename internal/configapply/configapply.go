@@ -101,8 +101,6 @@ func (a *Service) Calls(sessionID int64) map[string]string {
 	return calls
 }
 
-func (a *Service) Has(sessionID int64) bool { return len(a.Calls(sessionID)) != 0 }
-
 func (a *Service) RunStagedApply(ctx context.Context, sessionID int64) {
 	callID, sc, ok := a.takePendingApply(sessionID)
 	if !ok {

@@ -144,9 +144,9 @@ func TestManager_Kill_RemovesSchedules(t *testing.T) {
 		return hasStateEvent(events, id, controllerapi.StateIdle)
 	})
 	oneShot := time.Now().Add(time.Hour).UTC()
-	_, err = schedStore.AddSchedule(ctx, id, "", &oneShot, "one-shot", false)
+	_, err = schedStore.AddSchedule(ctx, id, "", &oneShot, "one-shot", false, schedule.ScheduleMetadata{})
 	require.NoError(t, err)
-	_, err = schedStore.AddSchedule(ctx, id, "0 9 * * *", nil, "cron", false)
+	_, err = schedStore.AddSchedule(ctx, id, "0 9 * * *", nil, "cron", false, schedule.ScheduleMetadata{})
 	require.NoError(t, err)
 	factory.nextSess = &mockSession{completeAfter: 50 * time.Millisecond}
 	otherID, err := mgr.Send(ctx, pid, "other", "", nil)
@@ -155,7 +155,7 @@ func TestManager_Kill_RemovesSchedules(t *testing.T) {
 		return hasStateEvent(events, otherID, controllerapi.StateIdle)
 	})
 	otherOneShot := time.Now().Add(time.Hour).UTC()
-	_, err = schedStore.AddSchedule(ctx, otherID, "", &otherOneShot, "untouched", false)
+	_, err = schedStore.AddSchedule(ctx, otherID, "", &otherOneShot, "untouched", false, schedule.ScheduleMetadata{})
 	require.NoError(t, err)
 	factory.nextSess = &mockSession{completeAfter: 50 * time.Millisecond}
 	require.NoError(t, mgr.sendToSession(context.Background(), id, "/kill"))
@@ -182,9 +182,17 @@ func TestManager_StopCancelsPendingSleepButPreservesScheduledWork(t *testing.T) 
 		return hasStateEvent(events, sessionID, controllerapi.StateIdle)
 	})
 	oneShot := time.Now().Add(time.Hour).UTC()
-	_, err = schedStore.AddSchedule(ctx, sessionID, "", &oneShot, "scheduled work", false)
+	_, err = schedStore.AddSchedule(ctx, sessionID, "", &oneShot, "scheduled work", false, schedule.ScheduleMetadata{})
 	require.NoError(t, err)
-	_, err = schedStore.AddSchedule(ctx, sessionID, "0 9 * * *", nil, "recurring work", false)
+	_, err = schedStore.AddSchedule(
+		ctx,
+		sessionID,
+		"0 9 * * *",
+		nil,
+		"recurring work",
+		false,
+		schedule.ScheduleMetadata{},
+	)
 	require.NoError(t, err)
 	_, err = schedule.NewService(schedStore, mgr.build.Store.(*sessionstore.Store)).AddSleep(
 		ctx, sessionID, "sleep-call", time.Now().Add(2*time.Hour).UTC(), "wake",

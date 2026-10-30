@@ -103,7 +103,7 @@ func TestClientSyncFileExcludesVersionlessPublicationObservedBeforeWrite(t *test
 
 	c := newClient()
 	c.stdin = syncWriteCloser{Writer: io.Discard}
-	uri := pathToURI(file)
+	uri := fileURI(file)
 	c.publishDiagnostics(t, uri, nil, "before write")
 
 	document, err := c.syncFile(context.Background(), file)
@@ -119,7 +119,7 @@ func TestClientSyncFileAcceptsPublicationDuringSyncFrameWrite(t *testing.T) {
 	require.NoError(t, os.WriteFile(file, []byte("package main\n"), 0o644))
 
 	c := newClient()
-	uri := pathToURI(file)
+	uri := fileURI(file)
 	c.stdin = &syncPublishingWriter{client: c, uri: uri}
 	document, err := c.syncFile(context.Background(), file)
 	require.NoError(t, err)

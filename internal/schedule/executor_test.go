@@ -159,7 +159,7 @@ func TestExecutor_OneShotFires(t *testing.T) {
 	require.NoError(t, err)
 
 	past := time.Now().Add(-time.Minute).UTC()
-	_, err = schedStore.AddScheduleWithMeta(
+	_, err = schedStore.AddSchedule(
 		context.Background(),
 		rec.ID,
 		"",
@@ -202,7 +202,13 @@ func TestExecutor_StandaloneOneShotDeliversFutureInput(t *testing.T) {
 
 	past := time.Now().Add(-time.Minute).UTC()
 	standalone, err := schedStore.AddSchedule(
-		context.Background(), rec.ID, "", &past, "one-time check", false,
+		context.Background(),
+		rec.ID,
+		"",
+		&past,
+		"one-time check",
+		false,
+		schedule.ScheduleMetadata{},
 	)
 	require.NoError(t, err)
 
@@ -241,7 +247,13 @@ func TestExecutor_FreshStandaloneOneShotUsesFreshDelivery(t *testing.T) {
 
 	past := time.Now().Add(-time.Minute).UTC()
 	standalone, err := schedStore.AddSchedule(
-		context.Background(), rec.ID, "", &past, "fresh one-time work", true,
+		context.Background(),
+		rec.ID,
+		"",
+		&past,
+		"fresh one-time work",
+		true,
+		schedule.ScheduleMetadata{},
 	)
 	require.NoError(t, err)
 
@@ -267,7 +279,15 @@ func TestExecutor_CronFires(t *testing.T) {
 	rec, err := sessStore.CreateSession(context.Background(), pid, "", "", nil)
 	require.NoError(t, err)
 
-	_, err = schedStore.AddSchedule(context.Background(), rec.ID, "* * * * *", nil, "periodic check", false)
+	_, err = schedStore.AddSchedule(
+		context.Background(),
+		rec.ID,
+		"* * * * *",
+		nil,
+		"periodic check",
+		false,
+		schedule.ScheduleMetadata{},
+	)
 	require.NoError(t, err)
 
 	executor := newTestExecutor(schedStore, sender)
@@ -299,7 +319,15 @@ func TestExecutor_CronDeliveryFailureIsNotAcknowledged(t *testing.T) {
 	rec, err := sessStore.CreateSession(context.Background(), pid, "", "", nil)
 	require.NoError(t, err)
 
-	_, err = schedStore.AddSchedule(context.Background(), rec.ID, "* * * * *", nil, "retry me", false)
+	_, err = schedStore.AddSchedule(
+		context.Background(),
+		rec.ID,
+		"* * * * *",
+		nil,
+		"retry me",
+		false,
+		schedule.ScheduleMetadata{},
+	)
 	require.NoError(t, err)
 
 	executor := newTestExecutor(schedStore, sender)
@@ -325,7 +353,15 @@ func TestExecutor_FreshCronFires(t *testing.T) {
 	rec, err := sessStore.CreateSession(context.Background(), pid, "", "", nil)
 	require.NoError(t, err)
 
-	_, err = schedStore.AddSchedule(context.Background(), rec.ID, "* * * * *", nil, "do the fresh job", true)
+	_, err = schedStore.AddSchedule(
+		context.Background(),
+		rec.ID,
+		"* * * * *",
+		nil,
+		"do the fresh job",
+		true,
+		schedule.ScheduleMetadata{},
+	)
 	require.NoError(t, err)
 
 	executor := newTestExecutor(schedStore, sender)
@@ -353,7 +389,15 @@ func TestExecutor_CronDoesNotDoubleFire(t *testing.T) {
 	rec, err := sessStore.CreateSession(context.Background(), pid, "", "", nil)
 	require.NoError(t, err)
 
-	sched, err := schedStore.AddSchedule(context.Background(), rec.ID, "* * * * *", nil, "periodic", false)
+	sched, err := schedStore.AddSchedule(
+		context.Background(),
+		rec.ID,
+		"* * * * *",
+		nil,
+		"periodic",
+		false,
+		schedule.ScheduleMetadata{},
+	)
 	require.NoError(t, err)
 
 	now := time.Now()

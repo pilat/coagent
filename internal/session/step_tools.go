@@ -530,11 +530,11 @@ func countUniqueOutcomes(window []toolRecord) int {
 // External titles and notices share the payload budget; local results retain
 // their historical output-only truncation.
 func formatToolResult(result *tool.Result, contextWindow int, browserFrame bool) string {
-	budget := tool.DynamicToolResultBudgetForWindow(contextWindow)
+	budget := tool.ToolResultBudgetForWindow(contextWindow, tool.MaxToolResultSize)
 	hint := ""
 
 	if browserFrame {
-		budget = tool.BrowserFrameBudgetForWindow(contextWindow)
+		budget = tool.ToolResultBudgetForWindow(contextWindow, tool.MaxBrowserFrameSize)
 		hint = " Read an omitted part with browser_snapshot target (a CSS selector or a visible container ref) and/or depth."
 	}
 
@@ -551,7 +551,7 @@ func formatToolResult(result *tool.Result, contextWindow int, browserFrame bool)
 	var sb strings.Builder
 
 	appendResultTitle(&sb, result.Title)
-	sb.WriteString(truncateHeadTailWithHint(result.Output, budget, hint))
+	sb.WriteString(truncateHeadTail(result.Output, budget, hint))
 	appendTruncationNotice(&sb, result)
 
 	return sb.String()
@@ -574,14 +574,18 @@ func appendTruncationNotice(sb *strings.Builder, result *tool.Result) {
 
 // Truncate before escaping so a cut cannot recreate a boundary token.
 func wrapUntrustedContent(payload string, contextWindow int) string {
-	return wrapUntrustedContentWithBudget(payload, tool.DynamicToolResultBudgetForWindow(contextWindow), "")
+	return wrapUntrustedContentWithBudget(
+		payload,
+		tool.ToolResultBudgetForWindow(contextWindow, tool.MaxToolResultSize),
+		"",
+	)
 }
 
 func wrapUntrustedContentWithBudget(payload string, budget int, hint string) string {
 	begin := tool.UntrustedContentBegin
 	end := tool.UntrustedContentEnd
 
-	payload = truncateHeadTailWithHint(payload, budget, hint)
+	payload = truncateHeadTail(payload, budget, hint)
 
 	for _, marker := range []string{begin, end} {
 		prefix := strings.TrimSuffix(marker, ">>>")
@@ -606,18 +610,9 @@ func identifyUntrustedContent(content string) string {
 		strings.TrimSuffix(tool.UntrustedContentEnd, ">>>"), markerID)
 }
 
-// truncateHeadTail truncates s to maxRunes using a head+tail strategy,
-// splitting 70% head / 30% tail by default. If the tail contains
-// error/stack-trace patterns, the split is adjusted to 50/50 to preserve
-// more tail context.
-// Cut points are snapped to the nearest newline boundary when possible.
-// A middle marker showing omitted size is counted inside the limit.
-// Returns s unchanged if under maxRunes.
-func truncateHeadTail(s string, maxRunes int) string {
-	return truncateHeadTailWithHint(s, maxRunes, "")
-}
-
-func truncateHeadTailWithHint(s string, maxRunes int, hint string) string {
+// truncateHeadTail preserves more tail context for errors and stack traces;
+// the omission marker and hint count toward the rune limit.
+func truncateHeadTail(s string, maxRunes int, hint string) string {
 	const defaultHeadRatio = 0.7
 
 	headRatio := defaultHeadRatio

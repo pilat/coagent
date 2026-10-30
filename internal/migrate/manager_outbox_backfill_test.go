@@ -48,10 +48,14 @@ func TestMigrate_ManagerOutboxBackfillSeedsExistingManagerRoots(t *testing.T) {
 
 	// The stored fingerprint must match the store's own contract for the same
 	// row, so a future re-enqueue replays as an idempotent no-op.
-	require.Equal(t,
+	require.Equal(
+		t,
 		sessionstore.OutputFingerprint(
-			sessionstore.OutputSessionOpened, "", 152,
+			sessionstore.OutputSessionOpened,
+			"",
+			152,
 			map[string]any{"name": "p", "work_dir": "/tmp/p"},
+			false,
 		),
 		rows[0]["fingerprint"].String,
 		"backfill fingerprint must equal sessionstore.OutputFingerprint",

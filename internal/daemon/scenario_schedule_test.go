@@ -190,7 +190,15 @@ func TestIntegration_UserInterruptCancelsSleepWithoutDeletingStandaloneOneShot(t
 		return listErr == nil && len(schedules) == 1 && !h.mgr.HasActiveLoop(parentID)
 	})
 	standaloneAt := time.Now().Add(2 * time.Hour).UTC()
-	_, err = h.schedules.AddSchedule(h.ctx, parentID, "", &standaloneAt, "standalone future input", false)
+	_, err = h.schedules.AddSchedule(
+		h.ctx,
+		parentID,
+		"",
+		&standaloneAt,
+		"standalone future input",
+		false,
+		schedule.ScheduleMetadata{},
+	)
 	require.NoError(t, err)
 	h.startInboxWake()
 	require.NoError(t, h.mgr.sendToSession(h.ctx, parentID, "interrupt now"))
@@ -219,7 +227,15 @@ func TestIntegration_StandaloneOneShotFlowsThroughExecutorAndDaemonQueue(t *test
 	require.NoError(t, err)
 	h.waitUntil("session idle", func() bool { return !h.mgr.HasActiveLoop(parentID) })
 	due := time.Now().Add(-time.Minute).UTC()
-	_, err = h.schedules.AddSchedule(h.ctx, parentID, "", &due, "one-time scheduled work", false)
+	_, err = h.schedules.AddSchedule(
+		h.ctx,
+		parentID,
+		"",
+		&due,
+		"one-time scheduled work",
+		false,
+		schedule.ScheduleMetadata{},
+	)
 	require.NoError(t, err)
 	executor := schedule.NewExecutor(h.schedules, h.mgr)
 	executor.Start(h.ctx)
@@ -250,7 +266,15 @@ func TestIntegration_OneShotAckFailureRedeliversWithoutDuplicateTranscriptOrPubl
 	require.NoError(t, err)
 	h.waitUntil("session idle", func() bool { return !h.mgr.HasActiveLoop(parentID) })
 	due := time.Now().Add(-time.Minute).UTC()
-	_, err = h.schedules.AddSchedule(h.ctx, parentID, "", &due, "one-time retry-safe work", false)
+	_, err = h.schedules.AddSchedule(
+		h.ctx,
+		parentID,
+		"",
+		&due,
+		"one-time retry-safe work",
+		false,
+		schedule.ScheduleMetadata{},
+	)
 	require.NoError(t, err)
 	sub := h.mgr.bus.Subscribe(parentID)
 	defer h.mgr.bus.Unsubscribe(parentID, sub)
@@ -390,7 +414,7 @@ func TestIntegration_LegacySubagentOneShotIsDiscardedWithoutRun(t *testing.T) {
 	h := newHarness(t, harnessOptions{respond: trivialRespond})
 	childID := createScheduleBoundarySubagent(t, h)
 	due := time.Now().Add(-time.Minute).UTC()
-	_, err := h.schedules.AddSchedule(t.Context(), childID, "", &due, "legacy task", false)
+	_, err := h.schedules.AddSchedule(t.Context(), childID, "", &due, "legacy task", false, schedule.ScheduleMetadata{})
 	require.NoError(t, err)
 	executor := schedule.NewExecutor(h.schedules, h.mgr)
 	executor.Start(t.Context())
@@ -423,7 +447,15 @@ func TestIntegration_LegacySubagentCronOccurrencesAreAcknowledgedWithoutRun(t *t
 			before := h.messages(childID)
 			collector := collectEvents(t, h.mgr.bus.SubscribeAll())
 			defer collector.stop()
-			entry, err := h.schedules.AddSchedule(t.Context(), childID, "* * * * *", nil, "legacy task", tt.fresh)
+			entry, err := h.schedules.AddSchedule(
+				t.Context(),
+				childID,
+				"* * * * *",
+				nil,
+				"legacy task",
+				tt.fresh,
+				schedule.ScheduleMetadata{},
+			)
 			require.NoError(t, err)
 			executor := schedule.NewExecutor(h.schedules, h.mgr)
 			executor.Start(t.Context())
@@ -694,7 +726,7 @@ func createScheduleSession(t *testing.T, h *scheduleRestartHarness, events *even
 func addFlakyDueOneShot(t *testing.T, h *scheduleRestartHarness, sessionID int64) *failFirstRemoveScheduleStore {
 	t.Helper()
 	due := time.Now().Add(-time.Minute).UTC()
-	_, err := h.schedules.AddSchedule(h.ctx, sessionID, "", &due, "scheduled once", false)
+	_, err := h.schedules.AddSchedule(h.ctx, sessionID, "", &due, "scheduled once", false, schedule.ScheduleMetadata{})
 	require.NoError(t, err)
 	return &failFirstRemoveScheduleStore{Store: h.schedules, attempted: make(chan struct{})}
 }
@@ -876,7 +908,15 @@ func runDueStoppedRootSchedule(
 ) string {
 	t.Helper()
 	due := time.Now().Add(-time.Minute).UTC()
-	entry, err := h.schedules.AddSchedule(t.Context(), rootID, "", &due, tc.prompt, tc.fresh)
+	entry, err := h.schedules.AddSchedule(
+		t.Context(),
+		rootID,
+		"",
+		&due,
+		tc.prompt,
+		tc.fresh,
+		schedule.ScheduleMetadata{},
+	)
 	require.NoError(t, err)
 	observer := newScheduleRunningObserver(t, h.mgr.bus)
 	sender := &orderedScheduleSender{SessionSender: h.mgr, running: observer.running, done: observer.done}

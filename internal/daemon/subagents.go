@@ -456,17 +456,12 @@ func (s *Service) enqueueChildFailureOutput(ctx context.Context, parentID, child
 	attributes := map[string]any{"source": "agent"}
 
 	_, err = outputs.EnqueueOutput(ctx, sessionstore.OutputDraft{
-		SessionID:  parentID,
-		Type:       sessionstore.OutputMessage,
-		Content:    message,
-		Attributes: attributes,
-		SourceKey:  fmt.Sprintf("child:%d:%d:outcome", childID, link.ActivationSeq),
-		Fingerprint: sessionstore.OutputFingerprint(
-			sessionstore.OutputMessage,
-			message,
-			parentID,
-			attributes,
-		),
+		SessionID:   parentID,
+		Type:        sessionstore.OutputMessage,
+		Content:     message,
+		Attributes:  attributes,
+		SourceKey:   fmt.Sprintf("child:%d:%d:outcome", childID, link.ActivationSeq),
+		Fingerprint: sessionstore.OutputFingerprint(sessionstore.OutputMessage, message, parentID, attributes, false),
 	})
 	if errors.Is(err, sessionstore.ErrOutputOwner) {
 		return nil

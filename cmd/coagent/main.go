@@ -142,25 +142,15 @@ func run() int {
 	return runWith(
 		runtime.GOOS,
 		os.Args[1:],
-		runModes(
-			backgroundprocess.RunGuardian,
-		),
-		dispatch,
-	)
-}
-
-// runModes chains the hidden mode entry points: the first one that recognizes
-// the invocation handles it.
-func runModes(modes ...func(args []string) (bool, error)) func(args []string) (bool, error) {
-	return func(args []string) (bool, error) {
-		for _, mode := range modes {
-			if handled, err := mode(args); handled {
+		func(args []string) (bool, error) {
+			if handled, err := backgroundprocess.RunGuardian(args); handled {
 				return true, err
 			}
-		}
 
-		return false, nil
-	}
+			return false, nil
+		},
+		dispatch,
+	)
 }
 
 // runWith is the entry seam with the platform injected. The platform guard is

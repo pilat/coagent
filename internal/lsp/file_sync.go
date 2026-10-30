@@ -19,19 +19,13 @@ type documentSync struct {
 	generation uint64
 }
 
-func (c *client) ensureFileOpen(ctx context.Context, file string) error {
-	_, err := c.syncFile(ctx, file)
-
-	return err
-}
-
 func (c *client) syncFile(ctx context.Context, file string) (documentSync, error) {
 	content, err := c.readRegularFile(file)
 	if err != nil {
 		return documentSync{}, err
 	}
 
-	uri := pathToURI(file)
+	uri := fileURI(file)
 
 	state, opened, release, err := c.beginFileSync(ctx, uri)
 	if err != nil {
@@ -96,7 +90,7 @@ func (c *client) notifySync(ctx context.Context, method string, params any, uri 
 
 	// The writer captures this immediately before the actual pipe write. It
 	// therefore orders versionless publications against the sync frame itself.
-	return c.sendFrame(ctx, data, func() uint64 { return c.diagnosticsGeneration(uri) })
+	return c.send(ctx, data, func() uint64 { return c.diagnosticsGeneration(uri) })
 }
 
 func (c *client) restoreFile(uri string, state documentState, opened bool) {

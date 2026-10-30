@@ -5,6 +5,8 @@ import (
 	"errors"
 	"net/http"
 	"slices"
+	"strconv"
+	"strings"
 	"time"
 
 	"go.uber.org/zap"
@@ -89,7 +91,7 @@ func (m *Manager) processUpdate(ctx context.Context, update telegramUpdate) {
 		return
 	}
 
-	if msg.Text == "" && msg.Voice == nil && !hasAttachment(msg) {
+	if msg.Text == "" && msg.Voice == nil && attachmentOf(msg) == nil {
 		log.Debug("update_dropped", zap.String("reason", "no_text_or_voice_or_attachment"))
 		return
 	}
@@ -109,20 +111,20 @@ func (m *Manager) processUpdate(ctx context.Context, update telegramUpdate) {
 }
 
 func (m *Manager) processChatUpdate(ctx context.Context, msg *telegramMessage) {
-	if msg.Voice == nil && !hasAttachment(msg) {
+	if msg.Voice == nil && attachmentOf(msg) == nil {
 		m.handleChatText(ctx, normalizeTextCommand(msg.Text))
 		return
 	}
 
-	focus, err := m.chat.ChatFocus(ctx, m.chatKey())
+	focus, err := m.chat.ChatFocus(ctx, strconv.FormatInt(m.effectiveChatID(), 10))
 	if err != nil {
-		m.reply(ctx, err.Error())
+		_, _ = m.sendMessage(ctx, strings.ReplaceAll(err.Error(), "\n", " "))
 		return
 	}
 
 	sessionID, err := m.inputSessionID(ctx, focus)
 	if err != nil {
-		m.reply(ctx, err.Error())
+		_, _ = m.sendMessage(ctx, strings.ReplaceAll(err.Error(), "\n", " "))
 		return
 	}
 

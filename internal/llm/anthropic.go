@@ -309,11 +309,10 @@ func (c *anthropicClient) imageSlot(ref llmwire.ImageRef) anthropic.ContentBlock
 		return anthropic.NewTextBlock(llmwire.ImagePlaceholder(reason))
 	}
 
-	return c.base64ImageBlock(ref.Mime, data)
-}
-
-func (c *anthropicClient) base64ImageBlock(mime string, data []byte) anthropic.ContentBlockParamUnion {
-	return anthropic.NewImageBlockBase64(string(anthropicImageMediaType(mime)), base64.StdEncoding.EncodeToString(data))
+	return anthropic.NewImageBlockBase64(
+		string(anthropicImageMediaType(ref.Mime)),
+		base64.StdEncoding.EncodeToString(data),
+	)
 }
 
 // anthropicImageMediaType maps canonical wire MIME strings onto the SDK's media

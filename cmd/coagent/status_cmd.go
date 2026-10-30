@@ -31,7 +31,9 @@ func statusOf(ctx context.Context, socket string) int {
 
 	defer func() { _ = client.Close() }()
 
-	st, err := client.Status(ctx)
+	var st ctl.StatusResult
+
+	err = client.Call(ctx, ctl.OpStatus, nil, &st)
 	if err != nil {
 		return reportStatusFailure(err)
 	}

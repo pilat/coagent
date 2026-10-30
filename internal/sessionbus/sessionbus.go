@@ -117,16 +117,9 @@ func (ps *Bus) UnsubscribeManager(ch <-chan controllerapi.SessionNotification) {
 	}
 }
 
-// Publish sends a notification to all per-session subscribers for the given session
-// and to all global subscribers. Non-blocking: if a subscriber's channel is full, the
-// notification is dropped with a warning log.
-func (ps *Bus) Publish(sessionID int64, n sessionevent.Notification) {
-	ps.PublishOwned(sessionID, "", n)
-}
-
-// PublishOwned fans an event out to observers and to the session's one owning
+// Publish fans an event out to observers and to the session's one owning
 // manager. An empty owner reaches no manager subscription.
-func (ps *Bus) PublishOwned(sessionID int64, managerID string, n sessionevent.Notification) {
+func (ps *Bus) Publish(sessionID int64, managerID string, n sessionevent.Notification) {
 	log := logger.Named("sessionbus")
 
 	ps.mu.RLock()

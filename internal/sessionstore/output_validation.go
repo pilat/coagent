@@ -31,13 +31,14 @@ func validateOutputDraft(draft OutputDraft) error {
 		return err
 	}
 
-	if draft.SourceKey != "" && draft.Fingerprint != outputFingerprintWithRelease(
-		draft.Type,
-		draft.Content,
-		draft.SessionID,
-		draft.Attributes,
-		draft.ReleasesInput,
-	) {
+	if draft.SourceKey != "" &&
+		draft.Fingerprint != OutputFingerprint(
+			draft.Type,
+			draft.Content,
+			draft.SessionID,
+			draft.Attributes,
+			draft.ReleasesInput,
+		) {
 		return ErrOutputConflict
 	}
 

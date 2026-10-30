@@ -7,12 +7,12 @@ import (
 )
 
 func TestDynamicToolResultBudgetForWindow(t *testing.T) {
-	small := DynamicToolResultBudgetForWindow(15000)
-	large := DynamicToolResultBudgetForWindow(200000)
+	small := ToolResultBudgetForWindow(15000, MaxToolResultSize)
+	large := ToolResultBudgetForWindow(200000, MaxToolResultSize)
 
 	assert.Less(t, small, large, "smaller context window should produce smaller budget")
 	assert.Less(t, small, MaxToolResultSize, "budget for 15K window should be below MaxToolResultSize")
 
-	huge := DynamicToolResultBudgetForWindow(1000000)
+	huge := ToolResultBudgetForWindow(1000000, MaxToolResultSize)
 	assert.LessOrEqual(t, huge, MaxToolResultSize, "budget should not exceed MaxToolResultSize")
 }

@@ -153,10 +153,6 @@ func attachmentOf(msg *telegramMessage) *tgAttachment {
 	}
 }
 
-func hasAttachment(msg *telegramMessage) bool {
-	return attachmentOf(msg) != nil
-}
-
 // saveAttachment resolves the bot-API file and streams it straight into
 // os.CreateTemp("", "coagent-*"+ext): O_EXCL naming keeps collisions away.
 func (m *Manager) saveAttachment(ctx context.Context, att *tgAttachment) (string, error) {

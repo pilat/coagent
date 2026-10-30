@@ -21,13 +21,17 @@ func parseGwtCommand(text string) (string, bool) {
 
 func (m *Manager) handleGWT(ctx context.Context, sessionID int64, name string) {
 	if name == "" {
-		m.reply(ctx, "Usage: /gwt <name> — fork this project into a git worktree.")
+		_, _ = m.sendMessage(
+			ctx,
+			strings.ReplaceAll("Usage: /gwt <name> — fork this project into a git worktree.", "\n", " "),
+		)
+
 		return
 	}
 
 	workDir, ok := m.workDirBySessionID(ctx, sessionID)
 	if !ok || workDir == "" {
-		m.reply(ctx, "Could not resolve this session's directory.")
+		_, _ = m.sendMessage(ctx, strings.ReplaceAll("Could not resolve this session's directory.", "\n", " "))
 		return
 	}
 

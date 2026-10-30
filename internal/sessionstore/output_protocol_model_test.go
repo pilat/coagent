@@ -53,7 +53,7 @@ func runOutputLogModel(t *testing.T, commands, template []byte) {
 				Content:   content,
 				SourceKey: fmt.Sprint(key),
 			}
-			draft.Fingerprint = OutputFingerprint(draft.Type, content, draft.SessionID, nil)
+			draft.Fingerprint = OutputFingerprint(draft.Type, content, draft.SessionID, nil, false)
 			result, err := store.EnqueueOutput(t.Context(), draft)
 			previous, exists := expected[identity]
 			switch {

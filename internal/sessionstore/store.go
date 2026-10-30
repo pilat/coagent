@@ -358,7 +358,7 @@ func (s *Store) ListSessions(ctx context.Context) ([]*SessionRecord, error) {
 	var records []*SessionRecord
 
 	for rows.Next() {
-		rec, err := scanSessionRows(rows)
+		rec, err := scanSessionFrom(rows)
 		if err != nil {
 			return nil, err
 		}
@@ -385,7 +385,7 @@ func (s *Store) ListAllSessions(ctx context.Context) ([]*SessionRecord, error) {
 	var records []*SessionRecord
 
 	for rows.Next() {
-		rec, scanErr := scanSessionRows(rows)
+		rec, scanErr := scanSessionFrom(rows)
 		if scanErr != nil {
 			return nil, scanErr
 		}
@@ -416,7 +416,7 @@ func (s *Store) ListTree(ctx context.Context, rootID int64) ([]*SessionRecord, e
 	var records []*SessionRecord
 
 	for rows.Next() {
-		rec, scanErr := scanSessionRows(rows)
+		rec, scanErr := scanSessionFrom(rows)
 		if scanErr != nil {
 			return nil, scanErr
 		}
@@ -810,10 +810,6 @@ func scanSession(row *sql.Row) (*SessionRecord, error) {
 	}
 
 	return rec, nil
-}
-
-func scanSessionRows(rows *sql.Rows) (*SessionRecord, error) {
-	return scanSessionFrom(rows)
 }
 
 func scanSessionFrom(sc rowScanner) (*SessionRecord, error) {

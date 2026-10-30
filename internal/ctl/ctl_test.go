@@ -129,7 +129,8 @@ func TestStatus_WithoutConfig(t *testing.T) {
 	h := newHarness(t, &config.Config{})
 	c := h.dial(t)
 
-	st, err := c.Status(context.Background())
+	var st StatusResult
+	err := c.Call(context.Background(), OpStatus, nil, &st)
 	require.NoError(t, err)
 
 	assert.False(t, st.ConfigPresent)
@@ -147,17 +148,20 @@ func TestStatus_WithoutConfig(t *testing.T) {
 func TestStatus_BootIDNamesTheRunNotTheBinary(t *testing.T) {
 	first := newHarness(t, &config.Config{}).dial(t)
 
-	st, err := first.Status(context.Background())
+	var st StatusResult
+	err := first.Call(context.Background(), OpStatus, nil, &st)
 	require.NoError(t, err)
 	require.NotEmpty(t, st.BootID)
 
-	again, err := first.Status(context.Background())
+	var again StatusResult
+	err = first.Call(context.Background(), OpStatus, nil, &again)
 	require.NoError(t, err)
 	assert.Equal(t, st.BootID, again.BootID, "one run, one id")
 
 	second := newHarness(t, &config.Config{}).dial(t)
 
-	other, err := second.Status(context.Background())
+	var other StatusResult
+	err = second.Call(context.Background(), OpStatus, nil, &other)
 	require.NoError(t, err)
 	assert.NotEqual(t, st.BootID, other.BootID)
 	assert.Equal(t, st.BinaryVersion, other.BinaryVersion, "same binary — the version cannot tell them apart")
@@ -185,7 +189,8 @@ func TestStatus_WithConfig(t *testing.T) {
 
 	c := h.dial(t)
 
-	st, err := c.Status(context.Background())
+	var st StatusResult
+	err := c.Call(context.Background(), OpStatus, nil, &st)
 	require.NoError(t, err)
 
 	assert.True(t, st.ConfigPresent)
@@ -216,7 +221,8 @@ func TestStatus_DisabledManagerCarriesNoError(t *testing.T) {
 	h := newHarness(t, cfg)
 	h.managers.fail("tg", errors.New("boom"))
 
-	st, err := h.dial(t).Status(context.Background())
+	var st StatusResult
+	err := h.dial(t).Call(context.Background(), OpStatus, nil, &st)
 	require.NoError(t, err)
 
 	require.Len(t, st.Managers, 1)
@@ -237,7 +243,8 @@ func TestStatus_ADownManagerCarriesItsOwnReasonOnly(t *testing.T) {
 	h := newHarness(t, cfg)
 	h.managers.fail("tg-one", errors.New(`start manager "tg-one": unauthorized`))
 
-	st, err := h.dial(t).Status(context.Background())
+	var st StatusResult
+	err := h.dial(t).Call(context.Background(), OpStatus, nil, &st)
 	require.NoError(t, err)
 
 	require.Len(t, st.Managers, 2)

@@ -1,7 +1,6 @@
 package progressruntime
 
 import (
-	"context"
 	"sync"
 
 	"github.com/pilat/coagent/internal/progress"
@@ -23,10 +22,6 @@ type Live struct {
 
 func New(store *sessionstore.Store) *Runtime {
 	return &Runtime{sessionStore: store, live: make(map[int64]Live)}
-}
-
-func (r *Runtime) Current(ctx context.Context, rootID int64) (string, error) {
-	return r.current(ctx, rootID)
 }
 
 func (r *Runtime) SetLive(sessionID int64, live Live) {

@@ -36,19 +36,10 @@ type (
 		createdAt    time.Time
 	}
 
-	//nolint:interfacebloat // Occurrence persistence and exact-call admission form one schedule protocol.
 	Store interface {
 		Enqueue(ctx context.Context, input sessionstore.Input) (*sessionstore.Enqueued, error)
 		CallPending(ctx context.Context, sessionID int64, callID string) (bool, error)
 		AddSchedule(
-			ctx context.Context,
-			sessionID int64,
-			cronExpr string,
-			oneShotAt *time.Time,
-			inputMessage string,
-			fresh bool,
-		) (*Schedule, error)
-		AddScheduleWithMeta(
 			ctx context.Context,
 			sessionID int64,
 			cronExpr string,
@@ -115,17 +106,6 @@ func (s *store) CallPending(ctx context.Context, sessionID int64, callID string)
 }
 
 func (s *store) AddSchedule(
-	ctx context.Context,
-	sessionID int64,
-	cronExpr string,
-	oneShotAt *time.Time,
-	inputMessage string,
-	fresh bool,
-) (*Schedule, error) {
-	return s.AddScheduleWithMeta(ctx, sessionID, cronExpr, oneShotAt, inputMessage, fresh, ScheduleMetadata{})
-}
-
-func (s *store) AddScheduleWithMeta(
 	ctx context.Context,
 	sessionID int64,
 	cronExpr string,

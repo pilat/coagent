@@ -131,7 +131,7 @@ func (m *Manager) Install(ctx context.Context) error {
 		return err
 	}
 
-	if err := m.reload(ctx); err != nil {
+	if err := runSystemctl(ctx, "daemon-reload"); err != nil {
 		return err
 	}
 
@@ -154,7 +154,7 @@ func (m *Manager) Uninstall(ctx context.Context) error {
 		return fmt.Errorf("remove %s: %w", m.unitPath, err)
 	}
 
-	if err := m.reload(ctx); err != nil {
+	if err := runSystemctl(ctx, "daemon-reload"); err != nil {
 		return err
 	}
 
@@ -175,8 +175,4 @@ func (m *Manager) Stop(ctx context.Context) error {
 
 func (m *Manager) Restart(ctx context.Context) error {
 	return runSystemctl(ctx, "restart", unitName)
-}
-
-func (m *Manager) reload(ctx context.Context) error {
-	return runSystemctl(ctx, "daemon-reload")
 }

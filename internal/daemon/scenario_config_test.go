@@ -200,7 +200,7 @@ func TestRunStagedApply_RefusesToCommitForASuspendTheTranscriptDoesNotCarry(t *t
 	pending, err := h.mgr.applier.Ops().LoadPending()
 	require.NoError(t, err)
 	assert.Nil(t, pending, "no marker is armed for a call no boot could answer")
-	assert.False(t, h.mgr.applier.Has(h.sessionID), "the call is settled in-process, not across a restart")
+	assert.Empty(t, h.mgr.applier.Calls(h.sessionID), "the call is settled in-process, not across a restart")
 	assert.True(t, h.mgr.applier.ClaimApply(), "the slot is free for the next change")
 }
 
@@ -792,13 +792,13 @@ func TestConfigTool_SuccessStagesAndSuspends(t *testing.T) {
 	h := newConfigHarness(t)
 	require.ErrorIs(t, h.grantedCall(t, "c1", configHarnessCandidate), tool.ErrSuspend)
 	assert.Equal(t, toolConfig, h.configBytes(t), "nothing is written by the tool itself")
-	assert.True(t, h.mgr.applier.Has(h.sessionID))
+	assert.NotEmpty(t, h.mgr.applier.Calls(h.sessionID))
 	assert.Equal(t, map[string]string{"c1": tool.IDConfigEdit}, h.mgr.applier.Calls(h.sessionID))
 	assert.Equal(t, 0, h.restartCount())
 	h.mgr.applier.RunStagedApply(context.Background(), h.sessionID)
 	assert.Equal(t, 1, h.restartCount(), "the apply asks the daemon to come back")
 	assert.Contains(t, h.configBytes(t), "id: claude-opus-5\n      provider: work\n    - id: claude-sonnet-5")
-	assert.True(t, h.mgr.applier.Has(h.sessionID), "the call stays open until its verdict arrives")
+	assert.NotEmpty(t, h.mgr.applier.Calls(h.sessionID), "the call stays open until its verdict arrives")
 }
 
 // Guard violations are ordinary tool errors: nothing staged, no suspend, no
@@ -825,7 +825,7 @@ func TestConfigTool_GuardViolationsAreImmediateErrors(t *testing.T) {
 		require.NotErrorIs(t, err, tool.ErrSuspend)
 		assert.Contains(t, err.Error(), "document is required")
 	})
-	assert.False(t, h.mgr.applier.Has(h.sessionID))
+	assert.Empty(t, h.mgr.applier.Calls(h.sessionID))
 	assert.Equal(t, 0, h.restartCount())
 	assert.Equal(t, toolConfig, h.configBytes(t))
 }
@@ -849,7 +849,7 @@ func TestConfigTool_TwoAppliesInSequence(t *testing.T) {
 
 	// The daemon comes back and delivers the verdict.
 	h.restart(t, "c1", tool.IDConfigEdit)
-	assert.False(t, h.mgr.applier.Has(h.sessionID))
+	assert.Empty(t, h.mgr.applier.Calls(h.sessionID))
 	require.ErrorIs(t, h.grantedCall(t, "c2", toolConfig), tool.ErrSuspend)
 	h.mgr.applier.RunStagedApply(ctx, h.sessionID)
 	assert.Equal(t, 2, h.restartCount())
@@ -901,7 +901,7 @@ func TestConfigTool_DeliversOneVerdictAfterRestart(t *testing.T) {
 	require.ErrorIs(t, h.grantedCall(t, "tags-1", configHarnessCandidate), tool.ErrSuspend)
 	h.mgr.applier.RunStagedApply(context.Background(), h.sessionID)
 	h.restart(t, "tags-1", tool.IDConfigEdit)
-	assert.False(t, h.mgr.applier.Has(h.sessionID))
+	assert.Empty(t, h.mgr.applier.Calls(h.sessionID))
 	assert.Equal(t, 1, h.restartCount())
 	messages, err := h.sessions.LoadActiveMessages(context.Background(), h.sessionID)
 	require.NoError(t, err)
@@ -1145,13 +1145,13 @@ func testAbandonedApply(t *testing.T, failure string) {
 	d.waitUntil("failed apply settled", func() bool {
 		record, err := d.store.GetSession(d.ctx, id)
 		return err == nil && record.Status == sessionstore.SessionStatusError &&
-			!d.mgr.HasActiveLoop(id) && (failWrite || !d.mgr.applier.Has(id))
+			!d.mgr.HasActiveLoop(id) && (failWrite || len(d.mgr.applier.Calls(id)) == 0)
 	})
 	pending, err := d.store.PeekPending(d.ctx, id)
 	require.NoError(t, err)
 	assert.Equal(t, "keep this input", pending.RawContent)
 	if failWrite {
-		assert.True(t, d.mgr.applier.Has(id))
+		assert.NotEmpty(t, d.mgr.applier.Calls(id))
 		assert.False(t, hasToolResultFor(d.messages(id), tool.IDConfigEdit))
 		_, err = d.db.ExecContext(d.ctx, "DROP TRIGGER reject_apply_result")
 		require.NoError(t, err)
@@ -1162,7 +1162,7 @@ func testAbandonedApply(t *testing.T, failure string) {
 		require.ErrorIs(t, err, sessionstore.ErrNoPendingInput)
 		assert.True(t, hasUserContaining(d.messages(id), "keep this input"))
 	}
-	assert.False(t, d.mgr.applier.Has(id))
+	assert.Empty(t, d.mgr.applier.Calls(id))
 	assert.Contains(t, configLastToolResultContent(d.messages(id), tool.IDConfigEdit), "Config change abandoned")
 	assert.Zero(t, d.restartCount())
 	apply, err := d.ops.LoadPending()
@@ -1326,7 +1326,7 @@ func (h *configHarness) liveSession(t *testing.T) int64 {
 func (h *configHarness) recordCall(t *testing.T, callID, toolName string) {
 	t.Helper()
 	activation, activationErr := h.sessions.PendingActivation(t.Context(), h.sessionID)
-	if activationErr == nil && !h.mgr.applier.Has(h.sessionID) {
+	if activationErr == nil && len(h.mgr.applier.Calls(h.sessionID)) == 0 {
 		_, err := h.sessions.Commit(t.Context(), sessionstore.Commit{
 			SessionID: h.sessionID,
 			Activation: &sessionstore.ActivationChange{
@@ -1336,7 +1336,7 @@ func (h *configHarness) recordCall(t *testing.T, callID, toolName string) {
 		})
 		require.NoError(t, err)
 	}
-	if !h.mgr.applier.Has(h.sessionID) {
+	if len(h.mgr.applier.Calls(h.sessionID)) == 0 {
 		input, err := h.sessions.Enqueue(
 			context.Background(),
 			sessionstore.Input{SessionID: h.sessionID, Source: sessionstore.InputSourceUser, Content: "/config"},

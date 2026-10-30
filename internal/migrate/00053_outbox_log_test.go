@@ -178,7 +178,7 @@ func TestMigrate_54_ReinsertsLegacySourceKeysThroughRealStore(t *testing.T) {
 		if !draft.ReleasesInput {
 			assert.Equal(
 				t,
-				sessionstore.OutputFingerprint(draft.Type, draft.Content, draft.SessionID, draft.Attributes),
+				sessionstore.OutputFingerprint(draft.Type, draft.Content, draft.SessionID, draft.Attributes, false),
 				draft.Fingerprint,
 			)
 		}

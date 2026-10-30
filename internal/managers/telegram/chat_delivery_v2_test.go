@@ -78,10 +78,20 @@ func TestHarnessScenario_DigestOnAssistantReturnAndSeenContextOnReentry(t *testi
 	require.Eventually(t, func() bool { return len(messages()) == 6 }, time.Second, time.Millisecond)
 	want = append(want, fmt.Sprintf("→ #%d project", two), fmt.Sprintf("#%d project\nwork answer", two))
 	assert.Equal(t, want, messages())
-	seen, err := h.sessions.ChatSeen(t.Context(), delayedTelegramManagerID, manager.chatKey(), two)
+	seen, err := h.sessions.ChatSeen(
+		t.Context(),
+		delayedTelegramManagerID,
+		strconv.FormatInt(manager.effectiveChatID(), 10),
+		two,
+	)
 	require.NoError(t, err)
 	assert.Equal(t, output, seen)
-	seen, err = h.sessions.ChatSeen(t.Context(), delayedTelegramManagerID, manager.chatKey(), one)
+	seen, err = h.sessions.ChatSeen(
+		t.Context(),
+		delayedTelegramManagerID,
+		strconv.FormatInt(manager.effectiveChatID(), 10),
+		one,
+	)
 	require.NoError(t, err)
 	assert.Zero(t, seen)
 }

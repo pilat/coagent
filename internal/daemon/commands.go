@@ -18,15 +18,6 @@ import (
 	"github.com/pilat/coagent/internal/sessionstore"
 )
 
-func (s *Service) Send(
-	ctx context.Context,
-	projectID int64,
-	prompt, model string,
-	attrs map[string]any,
-) (int64, error) {
-	return s.send(ctx, projectID, prompt, model, attrs)
-}
-
 func (s *Service) sendToSession(ctx context.Context, sessionID int64, prompt string) error {
 	input, err := s.enqueueUserSessionInput(ctx, sessionID, prompt)
 	if err != nil {
@@ -418,7 +409,7 @@ func (s *Service) sessionInputAttributes(ctx context.Context, sessionID int64, p
 	return attributes, nil
 }
 
-func (s *Service) send(
+func (s *Service) Send(
 	ctx context.Context,
 	projectID int64,
 	prompt, model string,

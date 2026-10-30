@@ -162,7 +162,7 @@ func (r disabledRunner) SnapshotShell(
 ) (*exec.Cmd, error) {
 	line := command
 	if snapshot != "" {
-		line = sourceLine(snapshot, command)
+		line = ("source " + shellPath(snapshot) + "; " + command)
 	}
 
 	return r.Command(ctx, procexec.Request{
@@ -198,11 +198,6 @@ func snapshotFor(
 	}
 
 	return provider.Shell(), snap
-}
-
-// sourceLine builds `source <snap>; <command>` with the snapshot path quoted.
-func sourceLine(snap, command string) string {
-	return "source " + shellPath(snap) + "; " + command
 }
 
 func innerEnvironment(configured []string, workDir string) ([]environmentEntry, error) {
