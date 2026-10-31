@@ -65,13 +65,6 @@ func TestMessageAndLifecycleOutputsDoNotStampGeneration(t *testing.T) {
 		Type:      sessionstore.OutputMessage,
 		Content:   "still working",
 		SourceKey: "k1",
-		Fingerprint: sessionstore.OutputFingerprint(
-			sessionstore.OutputMessage,
-			"still working",
-			session.ID,
-			nil,
-			false,
-		),
 	}
 	commit, err = store.EnqueueOutput(ctx, draft)
 	require.NoError(t, err)
@@ -98,8 +91,7 @@ func TestSourceKeyReplaySurvivesGenerationChange(t *testing.T) {
 
 	draft := sessionstore.OutputDraft{
 		SessionID: session.ID, Type: sessionstore.OutputMessage, Content: "card",
-		SourceKey:   "progress:change:x:g0",
-		Fingerprint: sessionstore.OutputFingerprint(sessionstore.OutputMessage, "card", session.ID, nil, false),
+		SourceKey: "progress:change:x:g0",
 	}
 	commit, err := store.EnqueueOutput(ctx, draft)
 	require.NoError(t, err)
@@ -110,6 +102,9 @@ func TestSourceKeyReplaySurvivesGenerationChange(t *testing.T) {
 	require.NoError(t, err)
 	_, err = acceptInput(ctx, store, input.ID, "next")
 	require.NoError(t, err)
+	state, err := testStore(db).LoadCompletionCheckState(ctx, session.ID)
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), state.ModelInputGeneration)
 
 	replay, err := store.EnqueueOutput(ctx, draft)
 	require.NoError(t, err)

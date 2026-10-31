@@ -227,8 +227,7 @@ func (p *generationProduction) apply(command generationProtocolCommand) {
 		key := "model:" + strconv.FormatInt(p.inputs, 10)
 		_, err := p.store.EnqueueOutput(p.ctx, OutputDraft{
 			SessionID: p.root, Type: kind, Content: "card " + strconv.FormatInt(p.inputs, 10),
-			SourceKey:   key,
-			Fingerprint: OutputFingerprint(kind, "card "+strconv.FormatInt(p.inputs, 10), p.root, nil, false),
+			SourceKey: key,
 		})
 		require.NoError(p.t, err)
 	case genEmitDirectReply:

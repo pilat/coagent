@@ -50,7 +50,13 @@ func TestMigrate_56_DropsWriteOnlyColumnsPreservingRows(t *testing.T) {
 	assert.False(t, tableExists(t, db, "subagent_links_legacy_00056"))
 	assert.Empty(t, dumpRows(t, db, `PRAGMA foreign_key_check`))
 	assertWriteOnlyColumnsAbsent(t, db)
-	assertMigratedOutputFingerprint(t, db, draft)
+	var fingerprint string
+	require.NoError(t, db.QueryRowContext(t.Context(), `SELECT fingerprint FROM session_outbox WHERE id = 30`).
+		Scan(&fingerprint))
+	assert.Equal(t, frozenOutputFingerprint(t, draft), fingerprint)
+	_, err = provider.Up(t.Context())
+	require.NoError(t, err)
+	assertMigratedOutputReplay(t, db, draft)
 }
 
 func seedWriteOnlyColumns(t *testing.T, db *sql.DB) sessionstore.OutputDraft {
@@ -75,20 +81,13 @@ func seedWriteOnlyColumns(t *testing.T, db *sql.DB) sessionstore.OutputDraft {
 		SessionID: 1, Type: sessionstore.OutputMessage, Content: "answer",
 		Attributes: map[string]any{"source": "agent"}, SourceKey: "message:10:final", ReleasesInput: true,
 	}
-	draft.Fingerprint = sessionstore.OutputFingerprint(
-		draft.Type,
-		draft.Content,
-		draft.SessionID,
-		draft.Attributes,
-		true,
-	)
 	_, err = db.ExecContext(
 		t.Context(),
 		`INSERT INTO session_outbox
 		(id, session_id, type, content, attributes, source_key, fingerprint, releases_input, created_at)
 		VALUES (30, 1, 'message', 'answer', '{"manager_id":"owner","source":"agent"}', ?, ?, 1, '2026-01-02 00:00:00')`,
 		draft.SourceKey,
-		draft.Fingerprint,
+		frozenOutputFingerprint(t, draft),
 	)
 	require.NoError(t, err)
 	return draft
@@ -103,7 +102,7 @@ func assertWriteOnlyColumnsAbsent(t *testing.T, db *sql.DB) {
 	assert.False(t, columnExists(t, db, "subagent_links", "delivered_input_id"))
 }
 
-func assertMigratedOutputFingerprint(t *testing.T, db *sql.DB, draft sessionstore.OutputDraft) {
+func assertMigratedOutputReplay(t *testing.T, db *sql.DB, draft sessionstore.OutputDraft) {
 	t.Helper()
 
 	store := sessionstore.NewStore(db)
@@ -113,14 +112,9 @@ func assertMigratedOutputFingerprint(t *testing.T, db *sql.DB, draft sessionstor
 	assert.True(t, output.Existing)
 	assert.Equal(t, int64(30), output.OutputID)
 	draft.ReleasesInput = false
-	draft.Fingerprint = sessionstore.OutputFingerprint(
-		draft.Type,
-		draft.Content,
-		draft.SessionID,
-		draft.Attributes,
-		false,
-	)
-	_, err = store.EnqueueOutput(t.Context(), draft)
-	require.ErrorIs(t, err, sessionstore.ErrOutputConflict)
+	replay, err := store.EnqueueOutput(t.Context(), draft)
+	require.NoError(t, err)
+	assert.True(t, replay.Existing)
+	assert.Equal(t, output.OutputID, replay.OutputID)
 	assert.Equal(t, 1, countRows(t, db, "session_outbox", "1 = 1"))
 }

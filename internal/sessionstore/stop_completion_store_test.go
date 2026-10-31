@@ -163,8 +163,8 @@ func TestSelectInterruptedExplicitStops(t *testing.T) {
 	_, err = db.Exec(`UPDATE sessions SET status = 'stopping' WHERE id = ?`, session.ID)
 	require.NoError(t, err)
 	_, err = db.Exec(`INSERT INTO session_outbox
-		(session_id, type, content, attributes, source_key, fingerprint, created_at)
-		VALUES (?, 'message', '⏹ Stopping...', '{"manager_id":"mgr"}', ?, 'fp-legacy', datetime('now'))`,
+		(session_id, type, content, attributes, source_key, created_at)
+		VALUES (?, 'message', '⏹ Stopping...', '{"manager_id":"mgr"}', ?, datetime('now'))`,
 		session.ID, "input:"+strconv.FormatInt(legacy.ID, 10)+":stop:result")
 	require.NoError(t, err)
 

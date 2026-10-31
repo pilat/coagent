@@ -256,36 +256,23 @@ func TestHarnessModel_CompletionEmptyStopEscalation(t *testing.T) {
 	assert.Equal(t, 1, outbox, "the sixth empty stop commits one terminal notice")
 
 	var sourceKey string
-	var fingerprint string
 	require.NoError(t, db.QueryRowContext(ctx,
-		`SELECT COALESCE(source_key, ''), COALESCE(fingerprint, '') FROM session_outbox WHERE session_id = ?`,
-		sessionID).Scan(&sourceKey, &fingerprint))
+		`SELECT COALESCE(source_key, '') FROM session_outbox WHERE session_id = ?`,
+		sessionID).Scan(&sourceKey))
 	assert.Equal(t, fmt.Sprintf("message:%d:final", terminal.MessageIDs[0]), sourceKey,
 		"the terminal notice is keyed to its attempt for idempotent replay")
 
-	// The no-duplicate guarantee lives in the outbox identity: redelivering
-	// the same source key with the same fingerprint is a no-op returning the
-	// existing row, never a second notice.
 	replay, err := store.EnqueueOutput(ctx, sessionstore.OutputDraft{
 		SessionID: sessionID, Type: sessionstore.OutputMessage,
 		Content:   sessionstore.EmptyStopTerminalNotice(sessionstore.EmptyStopTerminalStreak),
-		SourceKey: sourceKey, Fingerprint: fingerprint, ReleasesInput: true,
+		SourceKey: sourceKey, ReleasesInput: true,
 	})
 	require.NoError(t, err)
-	assert.True(t, replay.Existing, "same-key same-fingerprint redelivery must reuse the row")
+	assert.True(t, replay.Existing, "same-key redelivery must reuse the row")
 
 	require.NoError(t, db.QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM session_outbox WHERE session_id = ?`, sessionID).Scan(&outbox))
 	assert.Equal(t, 1, outbox, "the terminal notice commits exactly once")
-
-	// Reusing the key with different content fails closed instead of
-	// replacing the committed notice.
-	_, err = store.EnqueueOutput(ctx, sessionstore.OutputDraft{
-		SessionID: sessionID, Type: sessionstore.OutputMessage,
-		Content:   "different notice",
-		SourceKey: sourceKey, Fingerprint: "different-fingerprint", ReleasesInput: true,
-	})
-	require.ErrorIs(t, err, sessionstore.ErrOutputConflict)
 }
 
 // The wake-source projection reads the producer ledger first: a completed but

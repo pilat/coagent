@@ -230,9 +230,6 @@ func TestCommit_Parts(t *testing.T) {
 				require.NoError(t, replayErr)
 				assert.Equal(t, first.Outputs[0].OutputID, replay.Outputs[0].OutputID)
 				assert.True(t, replay.Outputs[0].Existing)
-				step.Outputs[0].Content = "conflict"
-				_, commitErr = store.Commit(ctx, step)
-				require.ErrorIs(t, commitErr, ErrOutputConflict)
 				return
 			case "keyless outputs", "host keyless outputs":
 				for range 2 {
@@ -255,7 +252,7 @@ func TestCommit_Parts(t *testing.T) {
 				var rows int
 				require.NoError(
 					t,
-					db.QueryRowContext(ctx, `SELECT COUNT(*) FROM session_outbox WHERE session_id=? AND source_key IS NULL AND fingerprint IS NULL`, root.ID).
+					db.QueryRowContext(ctx, `SELECT COUNT(*) FROM session_outbox WHERE session_id=? AND source_key IS NULL`, root.ID).
 						Scan(&rows),
 				)
 				assert.Equal(t, 2, rows)

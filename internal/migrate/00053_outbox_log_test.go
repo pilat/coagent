@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"maps"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -166,22 +167,21 @@ func TestMigrate_54_ReinsertsLegacySourceKeysThroughRealStore(t *testing.T) {
 	}
 	_, err = provider.UpTo(t.Context(), 54)
 	require.NoError(t, err)
-	store := sessionstore.NewStore(db)
 	for i, fixture := range fixtures {
 		draft := fixture.draft
+		var fingerprint string
 		require.NoError(
 			t,
 			db.QueryRowContext(t.Context(), `SELECT fingerprint FROM session_outbox WHERE id = ?`, i+10).
-				Scan(&draft.Fingerprint),
+				Scan(&fingerprint),
 		)
-		assert.NotEqual(t, "old-fingerprint", draft.Fingerprint)
-		if !draft.ReleasesInput {
-			assert.Equal(
-				t,
-				sessionstore.OutputFingerprint(draft.Type, draft.Content, draft.SessionID, draft.Attributes, false),
-				draft.Fingerprint,
-			)
-		}
+		assert.Equal(t, frozenOutputFingerprint(t, draft), fingerprint)
+	}
+	_, err = provider.Up(t.Context())
+	require.NoError(t, err)
+	store := sessionstore.NewStore(db)
+	for i, fixture := range fixtures {
+		draft := fixture.draft
 		commit, err := store.EnqueueOutput(t.Context(), draft)
 		require.NoError(t, err)
 		require.NotNil(t, commit)
@@ -189,4 +189,20 @@ func TestMigrate_54_ReinsertsLegacySourceKeysThroughRealStore(t *testing.T) {
 		assert.Equal(t, int64(i+10), commit.OutputID)
 	}
 	assert.Equal(t, len(fixtures), countRows(t, db, "session_outbox", "1 = 1"))
+}
+
+func frozenOutputFingerprint(t *testing.T, draft sessionstore.OutputDraft) string {
+	t.Helper()
+
+	encoded, err := json.Marshal(draft.Attributes)
+	require.NoError(t, err)
+	decoder := json.NewDecoder(strings.NewReader(string(encoded)))
+	decoder.UseNumber()
+	var attributes map[string]any
+	require.NoError(t, decoder.Decode(&attributes))
+
+	return outputFingerprint54(outboxFingerprintRow54{
+		sessionID: draft.SessionID, kind: string(draft.Type), content: draft.Content,
+		attributes: attributes, releases: draft.ReleasesInput,
+	})
 }

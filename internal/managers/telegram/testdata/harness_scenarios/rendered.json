@@ -323,6 +323,24 @@
       "calls": null
     },
     {
+      "trace": "repeated_run_failure.json",
+      "source_test": "TestHarnessScenario_NewInputMakesRepeatedRunFailureVisible",
+      "calls": [
+        {
+          "method": "sendMessage",
+          "chat_id": -100123,
+          "text": "#1 &lt;name&gt;\n❌ LLM error: chat completion: openrouter api error: status=400, body=scripted provider failure 1\n",
+          "parse_mode": "HTML"
+        },
+        {
+          "method": "sendMessage",
+          "chat_id": -100123,
+          "text": "#1 &lt;name&gt;\n❌ LLM error: chat completion: openrouter api error: status=400, body=scripted provider failure 2\n",
+          "parse_mode": "HTML"
+        }
+      ]
+    },
+    {
       "trace": "scatter_gather_shrinking_wait_set.json",
       "source_test": "TestHarnessScenario_ForegroundScatterGatherProjectsShrinkingAllWaitSet",
       "calls": null

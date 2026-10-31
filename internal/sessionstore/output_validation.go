@@ -18,31 +18,24 @@ func validateOutputDraft(draft OutputDraft) error {
 		return errors.New("invalid output content")
 	}
 
-	if (draft.SourceKey == "") != (draft.Fingerprint == "") {
-		return errors.New("output identity requires source key and fingerprint together")
-	}
-
-	if draft.SourceKey != "" &&
-		(strings.TrimSpace(draft.SourceKey) == "" || strings.TrimSpace(draft.Fingerprint) == "") {
+	if draft.SourceKey != "" && strings.TrimSpace(draft.SourceKey) == "" {
 		return errors.New("empty output identity")
 	}
 
-	if err := validateProducerAttributes(draft.Type, draft.Attributes); err != nil {
-		return err
-	}
+	return validateProducerAttributes(draft.Type, draft.Attributes)
+}
 
-	if draft.SourceKey != "" &&
-		draft.Fingerprint != OutputFingerprint(
-			draft.Type,
-			draft.Content,
-			draft.SessionID,
-			draft.Attributes,
-			draft.ReleasesInput,
-		) {
-		return ErrOutputConflict
+func validOutputType(kind OutputType) bool {
+	switch kind {
+	case OutputMessage, OutputSessionOpened, OutputSessionReplaced, OutputSessionClosed:
+		return true
+	default:
+		return false
 	}
+}
 
-	return nil
+func isMessageOutput(kind OutputType) bool {
+	return kind == OutputMessage
 }
 
 //nolint:gocyclo // Closed output variants validate their paired producer payloads at one boundary.
