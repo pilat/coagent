@@ -251,16 +251,29 @@ func (h *toolHost) CreateWork(
 	ctx context.Context,
 	owner string,
 	spec WorkSpec,
+	text string,
+	enqueue func(*sql.Tx, int64, map[string]any) (*sessionstore.InboxInput, error),
 ) (int64, string, error) {
-	record, _, err := h.sessions.CreateManagerRoot(ctx, sessionstore.ManagerRootCreate{
-		ProjectID: spec.ProjectID, Model: spec.Model, ReasoningLevel: spec.Effort,
-		Name: spec.Name, WorkDir: spec.WorkDir,
-		Attributes: map[string]any{"manager_id": owner, sessionstore.TitleAttribute: spec.Title},
+	var record *sessionstore.SessionRecord
+	err := h.sessions.WithTx(ctx, func(tx *sql.Tx) error {
+		var err error
+		record, _, err = sessionstore.CreateManagerRootTx(ctx, tx, sessionstore.ManagerRootCreate{
+			ProjectID: spec.ProjectID, Model: spec.Model, ReasoningLevel: spec.Effort,
+			Name: spec.Name, WorkDir: spec.WorkDir,
+			Attributes: map[string]any{"manager_id": owner, sessionstore.TitleAttribute: spec.Title},
+		})
+		if err != nil {
+			return err
+		}
+
+		_, err = enqueue(tx, record.ID, map[string]any{})
+		return err
 	})
 	if err != nil {
 		return 0, "", err
 	}
 	h.created = append(h.created, record.ID)
+	h.deliveries = append(h.deliveries, text)
 	return record.ID, spec.Name, nil
 }
 

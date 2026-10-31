@@ -10,10 +10,13 @@ import (
 	"path/filepath"
 	"time"
 
+	"go.uber.org/zap"
+
 	"github.com/pilat/coagent/internal/assistant"
 	"github.com/pilat/coagent/internal/budget"
 	"github.com/pilat/coagent/internal/configapply"
 	"github.com/pilat/coagent/internal/controllerapi"
+	"github.com/pilat/coagent/internal/logger"
 	"github.com/pilat/coagent/internal/projectpath"
 	"github.com/pilat/coagent/internal/sessionstore"
 	"github.com/pilat/coagent/internal/tool"
@@ -59,7 +62,15 @@ func (h assistantHost) CreateWork(
 	ctx context.Context,
 	owner string,
 	spec assistant.WorkSpec,
+	text string,
+	enqueue func(*sql.Tx, int64, map[string]any) (*sessionstore.InboxInput, error),
 ) (int64, string, error) {
+	log := logger.Ctx(ctx).Named("daemon.assistant")
+
+	if isReadOnlyCommand(text) || isEnqueueCommand(text) {
+		return 0, "", errors.New("open needs an instruction; send commands to an existing session")
+	}
+
 	model := cmp.Or(spec.Model, h.s.models.defaultModel)
 
 	level, err := h.s.models.effort(model, "", spec.Effort)
@@ -78,12 +89,50 @@ func (h assistantHost) CreateWork(
 	}
 	created.StampAttributes(attributes)
 
-	record, _, err := h.s.store.CreateManagerRoot(ctx, sessionstore.ManagerRootCreate{
-		ProjectID: spec.ProjectID, Model: model, ReasoningLevel: level,
-		Attributes: attributes,
-		Name:       spec.Name, WorkDir: spec.WorkDir,
+	var record *sessionstore.SessionRecord
+	var unlock func()
+
+	defer func() {
+		if unlock != nil {
+			unlock()
+		}
+	}()
+
+	err = h.s.store.WithTx(ctx, func(tx *sql.Tx) error {
+		var err error
+
+		record, _, err = sessionstore.CreateManagerRootTx(ctx, tx, sessionstore.ManagerRootCreate{
+			ProjectID: spec.ProjectID, Model: model, ReasoningLevel: level,
+			Attributes: attributes,
+			Name:       spec.Name, WorkDir: spec.WorkDir,
+		})
+		if err != nil {
+			return fmt.Errorf("create work root: %w", err)
+		}
+
+		// The fresh root must be fenced before commit makes its wake visible.
+		unlock, err = h.s.trees.lock(ctx, record.ID)
+		if err != nil {
+			return err
+		}
+
+		_, err = enqueue(tx, record.ID, map[string]any{})
+
+		return err
 	})
 	if err != nil {
+		return 0, "", fmt.Errorf("create assistant work session: %w", created.Abandon(err))
+	}
+
+	if err := h.s.startLocked(context.WithoutCancel(ctx), record.ID); errors.Is(err, errDaemonShuttingDown) {
+		return record.ID, spec.Name, nil
+	} else if err != nil {
+		if _, killErr := h.s.store.MarkSessionKilledWithOutput(
+			context.WithoutCancel(ctx), record.ID, 0,
+		); killErr != nil {
+			log.Warn("cleanup_orphaned_session", zap.Int64("session_id", record.ID), zap.Error(killErr))
+		}
+
 		return 0, "", fmt.Errorf("create assistant work session: %w", created.Abandon(err))
 	}
 
