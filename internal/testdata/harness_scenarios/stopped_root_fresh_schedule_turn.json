@@ -62,7 +62,7 @@
       "session_id": 1,
       "type": "message",
       "content": "⏰ scheduled\n\nfresh scheduled task",
-      "source_key": "schedule:schedule:one-shot:1:announcement"
+      "source_key": "schedule:3:announcement"
     },
     {
       "id": 6,

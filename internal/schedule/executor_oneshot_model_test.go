@@ -85,13 +85,12 @@ type oneShotDeliveryStore struct {
 	sender *modelSender
 }
 
-func (s oneShotDeliveryStore) CallPending(context.Context, int64, string) (bool, error) {
-	return true, nil
-}
-
-func (s oneShotDeliveryStore) Enqueue(ctx context.Context, in sessionstore.Input) (*sessionstore.Enqueued, error) {
-	_, err := s.sender.DeliverPendingCallResult(ctx, in.SessionID, "", "", in.Content)
-	return &sessionstore.Enqueued{}, err
+func (s oneShotDeliveryStore) DeliverSleep(ctx context.Context, sched *Schedule) (bool, error) {
+	_, err := s.sender.DeliverPendingCallResult(ctx, sched.sessionID, "", "", sched.inputMessage)
+	if err != nil {
+		return false, err
+	}
+	return false, s.RemoveSchedule(ctx, sched.id)
 }
 
 type oneShotHarness struct {

@@ -35,7 +35,7 @@
       "session_id": 1,
       "type": "message",
       "content": "⏰ scheduled\n\nscheduled once",
-      "source_key": "schedule:schedule:one-shot:1:announcement"
+      "source_key": "schedule:2:announcement"
     },
     {
       "id": 4,

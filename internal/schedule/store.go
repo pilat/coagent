@@ -37,7 +37,15 @@ type (
 	}
 
 	Store interface {
-		Enqueue(ctx context.Context, input sessionstore.Input) (*sessionstore.Enqueued, error)
+		DeliverOneShot(ctx context.Context, sched *Schedule, content string, attributes map[string]any) (bool, error)
+		DeliverSleep(ctx context.Context, sched *Schedule) (bool, error)
+		DeliverCron(
+			ctx context.Context,
+			sched *Schedule,
+			content string,
+			attributes map[string]any,
+			occurrence, now time.Time,
+		) (bool, error)
 		CallPending(ctx context.Context, sessionID int64, callID string) (bool, error)
 		AddSchedule(
 			ctx context.Context,
@@ -50,13 +58,11 @@ type (
 		) (*Schedule, error)
 		RemoveSchedule(ctx context.Context, id int64) error
 		RemoveScheduleForSession(ctx context.Context, sessionID int64, scheduleID int64) error
-		RemoveOneShotSchedules(ctx context.Context, sessionID int64) (int64, error)
 		RemoveSleepSchedules(ctx context.Context, sessionID int64) (int64, error)
 		RemoveAllSchedules(ctx context.Context, sessionID int64) error
 		ListSchedules(ctx context.Context, sessionID int64) ([]*Schedule, error)
 		ListDueSchedules(ctx context.Context, now time.Time) ([]*Schedule, error)
 		ListDueCronSchedules(ctx context.Context, now time.Time) ([]*Schedule, error)
-		UpdateScheduleLastFired(ctx context.Context, id int64, t time.Time) error
 	}
 
 	store struct {
@@ -85,15 +91,6 @@ func (s *Schedule) ReportTo() int64 { return s.metadata.ReportTo }
 
 func NewStore(db *sql.DB, sessions *sessionstore.Store) Store {
 	return &store{db: db, sessions: sessions}
-}
-
-func (s *store) Enqueue(ctx context.Context, input sessionstore.Input) (*sessionstore.Enqueued, error) {
-	result, err := s.sessions.Enqueue(ctx, input)
-	if err != nil {
-		return nil, fmt.Errorf("enqueue scheduled input: %w", err)
-	}
-
-	return result, nil
 }
 
 func (s *store) CallPending(ctx context.Context, sessionID int64, callID string) (bool, error) {
@@ -200,24 +197,6 @@ func (s *store) RemoveScheduleForSession(ctx context.Context, sessionID, schedul
 	return nil
 }
 
-func (s *store) RemoveOneShotSchedules(ctx context.Context, sessionID int64) (int64, error) {
-	result, err := s.db.ExecContext(
-		ctx,
-		`DELETE FROM schedules WHERE session_id = ? AND one_shot_at IS NOT NULL`,
-		sessionID,
-	)
-	if err != nil {
-		return 0, fmt.Errorf("delete one-shot schedules: %w", err)
-	}
-
-	rows, err := result.RowsAffected()
-	if err != nil {
-		return 0, fmt.Errorf("rows affected: %w", err)
-	}
-
-	return rows, nil
-}
-
 // RemoveSleepSchedules deletes only one-shot rows that own an exact suspended
 // sleep tool call. Generic one-shot schedules are standalone future inputs and
 // must survive interruption of the current sleep.
@@ -290,29 +269,6 @@ func (s *store) ListDueCronSchedules(ctx context.Context, now time.Time) ([]*Sch
 	defer rows.Close()
 
 	return scanSchedules(rows)
-}
-
-func (s *store) UpdateScheduleLastFired(ctx context.Context, id int64, t time.Time) error {
-	result, err := s.db.ExecContext(
-		ctx,
-		`UPDATE schedules SET last_fired_at = ?, fire_count = fire_count + 1 WHERE id = ?`,
-		t.UTC(),
-		id,
-	)
-	if err != nil {
-		return fmt.Errorf("update last_fired_at: %w", err)
-	}
-
-	rows, err := result.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("rows affected: %w", err)
-	}
-
-	if rows == 0 {
-		return fmt.Errorf("schedule %d not found", id)
-	}
-
-	return nil
 }
 
 func scanSchedules(rows *sql.Rows) ([]*Schedule, error) {

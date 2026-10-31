@@ -589,7 +589,7 @@ func TestEnqueue_SourcesDedupAndWaking(t *testing.T) {
 			})
 		}
 	}
-	for _, name := range []string{"transaction commit", "transaction rollback", "unregistered transaction", "legacy schedule claim", "stopped schedule", "call result attributes", "invalid source", "stop preserves producers", "call result recovery"} {
+	for _, name := range []string{"transaction commit", "transaction rollback", "unregistered transaction", "stopped schedule", "call result attributes", "invalid source", "stop preserves producers", "call result recovery"} {
 		t.Run(name, func(t *testing.T) {
 			store, db, projectID := newTestStore(t)
 			root, err := store.CreateSession(t.Context(), projectID, "model", "", nil)
@@ -679,14 +679,6 @@ func TestEnqueue_SourcesDedupAndWaking(t *testing.T) {
 				_, err = EnqueueTx(t.Context(), tx, input)
 				require.ErrorContains(t, err, "requires WithTx")
 				return
-			case "legacy schedule claim":
-				_, err = db.ExecContext(
-					t.Context(),
-					`INSERT INTO session_deliveries(session_id,delivery_id,kind,fingerprint,delivered_at) VALUES(?,'tick','tool_notification','legacy',?)`,
-					root.ID,
-					time.Now().UTC(),
-				)
-				require.NoError(t, err)
 			case "stopped schedule":
 				require.NoError(t, store.UpdateSessionStatus(t.Context(), root.ID, SessionStatusStopped))
 			case "call result attributes":
@@ -701,7 +693,7 @@ func TestEnqueue_SourcesDedupAndWaking(t *testing.T) {
 				return
 			}
 			require.NoError(t, enqueueErr)
-			assert.Equal(t, name != "legacy schedule claim", result.Applied)
+			assert.True(t, result.Applied)
 			if name == "stopped schedule" {
 				record, getErr := store.GetSession(t.Context(), root.ID)
 				require.NoError(t, getErr)

@@ -187,9 +187,18 @@ func (s *Store) ListPending(ctx context.Context, sessionID int64) ([]*InboxInput
 }
 
 func (s *Store) CallPending(ctx context.Context, sessionID int64, callID string) (bool, error) {
+	return callPending(ctx, s.db, sessionID, callID)
+}
+
+// CallPendingTx checks call ownership in the producer's delivery transaction.
+func CallPendingTx(ctx context.Context, tx *sql.Tx, sessionID int64, callID string) (bool, error) {
+	return callPending(ctx, tx, sessionID, callID)
+}
+
+func callPending(ctx context.Context, q execer, sessionID int64, callID string) (bool, error) {
 	var pending bool
 
-	err := s.db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM messages call,json_each(call.tool_calls) item
+	err := q.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM messages call,json_each(call.tool_calls) item
   WHERE call.session_id = ? AND call.rejected_reason IS NULL AND json_extract(item.value,'$.ID') = ?
   AND NOT EXISTS(SELECT 1 FROM messages result WHERE result.session_id = call.session_id AND result.role = 'tool' AND result.tool_call_id = ?))`, sessionID, callID, callID).Scan(&pending)
 	if err != nil {
@@ -369,9 +378,8 @@ func enqueueDuplicateTx(ctx context.Context, tx *sql.Tx, in Input) (bool, error)
 	}
 	var exists bool
 
-	err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM session_inbox WHERE session_id = ? AND delivery_key = ?)
-   OR (? = 'schedule' AND EXISTS(SELECT 1 FROM session_deliveries WHERE session_id = ? AND delivery_id = ?))`,
-		in.SessionID, in.DeliveryKey, in.Source, in.SessionID, in.DeliveryKey).
+	err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM session_inbox WHERE session_id = ? AND delivery_key = ?)`,
+		in.SessionID, in.DeliveryKey).
 		Scan(&exists)
 	if err != nil {
 		return false, fmt.Errorf("check input delivery: %w", err)

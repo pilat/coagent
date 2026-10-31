@@ -15,8 +15,8 @@ once in the package map; only packages with architecture-bearing contracts get
 a profile below it.
 
 Read [the glossary](docs/glossary.md) first. Its terms are normative here:
-notably daemon, session, manager, controller, pending external call, delivery
-identity, and subagent round.
+notably daemon, session, manager, controller, pending external call, schedule
+occurrence, and subagent round.
 
 ## System shape
 
@@ -619,25 +619,34 @@ recovered from the durable streak, never fabricated.
 Schedules are durable producer records. A one-shot with a tool-call identifier
 is a pending sleep and owes an exact suspended-call result; a one-shot without
 `tool_call_id` is future session input and may carry `report_to` for its observer.
-Cron and standalone one-shot deliveries carry a deterministic identity. The
-identity is unique per session in the durable inbox. A duplicate occurrence is
-acknowledged without another row; legacy `session_deliveries` claims also prevent
-replay after upgrading. The boundary commits the tick or fresh opening turn,
-model-input generation and announcement together.
+Schedule owns the transaction that enqueues an occurrence through session-store
+and acknowledges its producer row: one-shots and sleeps are deleted, while cron
+advances its last-fired time and count only for a newer minute. An enqueue error
+rolls both changes back. A cancelled row enqueues nothing; sleep call ownership
+is checked inside that same transaction, and a stale wake retires only its row.
+Wake hints and scheduler notifications follow commit; only applied input
+publishes a scheduler notification. The session boundary later commits the tick
+or fresh opening turn, model-input generation and announcement together.
 
-Cron chooses one canonical minute for identity and payload. One-shot delivery
+Cron chooses one canonical minute for admission and payload. One-shot delivery
 retries are deliberately bounded: ten consecutive same-process failures remove
 the row; recreating the executor resets that in-memory counter. This prevents a
 permanent retry storm but is not a dead-letter protocol. See ADR-0020 for the
 accepted recovery trade-off.
+
+Upgrade reconciles older durable inbox and legacy claims before retiring the
+legacy claim ledger: claimed one-shots and sleeps are removed, and cron advances
+to its latest claimed minute while preserving a later timestamp and its count.
+This prevents pre-upgrade enqueue/ack gaps from becoming new work.
 
 Only roots may own standalone schedules. The daemon verifies persisted session
 parentage both when it attaches the `schedule` tool and before it creates a
 runner for a delivery; `sleep` remains available to subagents because it owns an
 existing pending call. An old standalone schedule addressed to a subagent is
 acknowledged as unapplied without a runner, transcript mutation, publication or
-retry. A newly claimed standalone occurrence can reactivate a stopped root as a
-new turn, while an already-claimed retry leaves it stopped. See ADR-0027.
+retry. A newly delivered standalone occurrence can reactivate a stopped root as a
+new turn in its enqueue/ack transaction; an acknowledged retry leaves it stopped.
+See ADR-0027.
 The assistant can schedule its own root or an addressable work root, using cron
 or a future local timestamp. Its list and cancellation exclude sleep rows.
 Reported schedules persist the assistant root in metadata; delivery stamps that

@@ -64,7 +64,7 @@
       "session_id": 1,
       "type": "message",
       "content": "⏰ scheduled\n\nproduce the weekly report",
-      "source_key": "schedule:delivery-chain-1:announcement"
+      "source_key": "schedule:2:announcement"
     },
     {
       "id": 4,

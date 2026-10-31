@@ -12,7 +12,6 @@ import (
 	"github.com/pilat/coagent/internal/logger"
 	"github.com/pilat/coagent/internal/sessionevent"
 	"github.com/pilat/coagent/internal/sessionstore"
-	"github.com/pilat/coagent/internal/tool"
 )
 
 // maxOneShotAttempts bounds delivery retries for a one-shot schedule. An
@@ -99,7 +98,13 @@ func (e *Executor) fireOneShotSchedules(ctx context.Context, now time.Time, l *z
 	for _, sched := range schedules {
 		l.Info("firing_one_shot", zap.Int64("schedule_id", sched.id), zap.Int64("session_id", sched.sessionID))
 
-		applied, err := e.deliverOneShot(ctx, sched)
+		var applied bool
+		if sched.metadata.ToolCallID != "" {
+			applied, err = e.store.DeliverSleep(ctx, sched)
+		} else {
+			applied, err = e.store.DeliverOneShot(ctx, sched, sched.inputMessage, scheduleAttributes(sched))
+		}
+
 		if err != nil {
 			e.handleOneShotFailure(ctx, sched, err, l)
 			continue
@@ -114,39 +119,9 @@ func (e *Executor) fireOneShotSchedules(ctx context.Context, now time.Time, l *z
 				Source:  "scheduler",
 			})
 		}
-
-		if err := e.store.RemoveSchedule(ctx, sched.id); err != nil {
-			l.Warn("remove_schedule_failed", zap.Int64("schedule_id", sched.id), zap.Error(err))
-		}
 	}
 
 	return nil
-}
-
-func (e *Executor) deliverOneShot(ctx context.Context, sched *Schedule) (bool, error) {
-	if sched.metadata.ToolCallID != "" {
-		pending, err := e.store.CallPending(ctx, sched.sessionID, sched.metadata.ToolCallID)
-		if err != nil {
-			return false, fmt.Errorf("check one-shot call: %w", err)
-		}
-
-		if !pending {
-			return false, nil
-		}
-
-		result, err := e.store.Enqueue(ctx, sessionstore.Input{
-			SessionID: sched.sessionID, Source: sessionstore.InputSourceCallResult,
-			Content: sched.inputMessage, DeliveryKey: fmt.Sprintf("sleep:%d", sched.id),
-			Attributes: map[string]any{"call_id": sched.metadata.ToolCallID, "tool_id": tool.IDSleep},
-		})
-		if err != nil {
-			return false, fmt.Errorf("deliver one shot: %w", err)
-		}
-
-		return result.Applied, nil
-	}
-
-	return e.deliverCronSchedule(ctx, sched, oneShotDeliveryID(sched.id), sched.inputMessage)
 }
 
 // handleOneShotFailure records a delivery failure and drops the schedule once
@@ -232,9 +207,7 @@ func (e *Executor) fireCronSchedules(ctx context.Context, now time.Time, l *zap.
 			}
 		}
 
-		deliveryID := cronDeliveryID(sched.id, truncatedNow)
-
-		applied, sendErr := e.deliverCronSchedule(ctx, sched, deliveryID, content)
+		applied, sendErr := e.store.DeliverCron(ctx, sched, content, scheduleAttributes(sched), truncatedNow, now)
 		if sendErr != nil {
 			l.Warn(
 				"send_failed",
@@ -244,13 +217,6 @@ func (e *Executor) fireCronSchedules(ctx context.Context, now time.Time, l *zap.
 			)
 
 			continue
-		}
-
-		// A cron occurrence is acknowledged only after the session accepted it.
-		// Otherwise the next tick retries instead of losing the event behind a
-		// pending external tool call or a transient transcript write failure.
-		if err := e.store.UpdateScheduleLastFired(ctx, sched.id, now); err != nil {
-			l.Warn("update_last_fired_failed", zap.Int64("schedule_id", sched.id), zap.Error(err))
 		}
 
 		if applied {
@@ -265,38 +231,14 @@ func (e *Executor) fireCronSchedules(ctx context.Context, now time.Time, l *zap.
 	return nil
 }
 
-func (e *Executor) deliverCronSchedule(
-	ctx context.Context,
-	sched *Schedule,
-	deliveryID, content string,
-) (bool, error) {
+func scheduleAttributes(sched *Schedule) map[string]any {
 	attributes := map[string]any{"fresh": sched.fresh}
 	if sched.metadata.ReportTo != 0 {
 		attributes[sessionstore.ObserverSessionIDAttribute] = sched.metadata.ReportTo
 		attributes["schedule_id"] = sched.id
 	}
 
-	result, err := e.store.Enqueue(ctx, sessionstore.Input{
-		SessionID: sched.sessionID, Source: sessionstore.InputSourceSchedule,
-		Content: content, DeliveryKey: deliveryID, Attributes: attributes,
-	})
-	if err != nil {
-		return false, fmt.Errorf("deliver schedule tick: %w", err)
-	}
-
-	return result.Applied, nil
-}
-
-func oneShotDeliveryID(scheduleID int64) string {
-	return fmt.Sprintf("schedule:one-shot:%d", scheduleID)
-}
-
-func cronDeliveryID(scheduleID int64, occurrence time.Time) string {
-	return fmt.Sprintf(
-		"schedule:cron:%d:%s",
-		scheduleID,
-		occurrence.UTC().Format("20060102T1504Z"),
-	)
+	return attributes
 }
 
 // SplitCronTZ splits a stored cron expression into its 5-field part and timezone
