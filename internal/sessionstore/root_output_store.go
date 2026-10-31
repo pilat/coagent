@@ -13,6 +13,24 @@ func (s *Store) CreateManagerRoot(
 	ctx context.Context,
 	create ManagerRootCreate,
 ) (*SessionRecord, *OutputCommit, error) {
+	var record *SessionRecord
+	var output *OutputCommit
+	err := s.WithTx(ctx, func(tx *sql.Tx) error {
+		var err error
+		record, output, err = CreateManagerRootTx(ctx, tx, create)
+
+		return err
+	})
+
+	return record, output, err
+}
+
+// CreateManagerRootTx composes root creation with other writes in a Store.WithTx transaction.
+func CreateManagerRootTx(
+	ctx context.Context,
+	tx *sql.Tx,
+	create ManagerRootCreate,
+) (*SessionRecord, *OutputCommit, error) {
 	err := requireManagerOwner(create.Attributes)
 	if err != nil {
 		return nil, nil, err
@@ -25,40 +43,33 @@ func (s *Store) CreateManagerRoot(
 	if create.ReasoningLevel == "" {
 		create.ReasoningLevel = defaultReasoningLevel
 	}
-	var record *SessionRecord
-	var output *OutputCommit
-	err = s.WithTx(ctx, func(tx *sql.Tx) error {
-		now := time.Now().UTC()
-		var err error
 
-		record, err = insertManagerRoot(ctx, tx, create, now)
-		if err != nil {
-			return err
-		}
+	now := time.Now().UTC()
 
-		output, err = insertLifecycleOutput(
-			ctx,
-			tx,
-			record.ID,
-			OutputSessionOpened,
+	record, err := insertManagerRoot(ctx, tx, create, now)
+	if err != nil {
+		return nil, nil, err
+	}
 
-			map[string]any{
-				outputAttributeName:    create.Name,
-				outputAttributeWorkDir: create.WorkDir,
-			},
-			fmt.Sprintf("session:%d:opened", record.ID),
-			now,
-		)
-		if err != nil {
-			return err
-		}
+	output, err := insertLifecycleOutput(
+		ctx,
+		tx,
+		record.ID,
+		OutputSessionOpened,
+		map[string]any{
+			outputAttributeName:    create.Name,
+			outputAttributeWorkDir: create.WorkDir,
+		},
+		fmt.Sprintf("session:%d:opened", record.ID),
+		now,
+	)
+	if err != nil {
+		return record, nil, err
+	}
 
-		if create.Prompt != "" {
-			_, err = EnqueueTx(ctx, tx, Input{SessionID: record.ID, Source: InputSourceUser, Content: create.Prompt})
-		}
-
-		return err
-	})
+	if create.Prompt != "" {
+		_, err = EnqueueTx(ctx, tx, Input{SessionID: record.ID, Source: InputSourceUser, Content: create.Prompt})
+	}
 
 	return record, output, err
 }

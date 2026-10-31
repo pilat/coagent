@@ -922,11 +922,14 @@ All tool effects execute immediately through the ordinary tool protocol, return
 real ids and survive a later model failure. Tool handlers orchestrate work through
 the daemon host; the assistant store owns persistence queries and the transactional
 authority check. Memory and focus enforce their limits inside their write
-transactions. Open validates model and effort before creation,
-then creates the root with that selection and its title before admitting input.
+transactions. Open validates model and effort before atomically committing the
+root, its title and the first authorized instruction. The fresh root's tree fence
+is acquired before that commit publishes a wake and held through startup or
+failed-start cleanup. Startup ignores request cancellation; shutdown preserves
+the durable input for boot recovery, while another startup failure kills the root.
 Optional worktree creation shares the human `/gwt` path and remote selection,
-fetches the remote default and rolls back on failures before the root exists.
-Delivery authorizes inside its enqueue transaction while holding the tree lock. The daemon
+fetches the remote default and rolls back on transaction or startup failure.
+Send authorizes inside its enqueue transaction while holding the tree lock. The daemon
 host supplies creation, delivery, stop, chat switching and model administration,
 while the session owns model calls,
 step commits, durable errors and output. Effects and their tool-result commits
@@ -938,8 +941,10 @@ transcript row, trimmed and CRLF-normalized as a blockquote. Its label warns tha
 the user works with several sessions and some words may concern other work.
 Instructions already containing those words, slash-prefixed instructions and
 activations without an active user row receive no quote. Multiple handovers each
-receive it. Open/send deliver commands and `/skill <name> [args]` verbatim. Generic
-commands dispatch after delivery releases the tree lock, just as human commands do.
+receive it. Send delivers generic commands verbatim and dispatches them after
+releasing the tree lock, just as human commands do. Open refuses generic read-only
+and lifecycle commands before worktree or root creation. Both hand over
+`/skill <name> [args]` verbatim.
 One session-store predicate defines human input: `source=user` and `from`
 different from `assistant`; an observer reference does not change authority.
 Only human input creates activation grants or releases a fired budget; assistant

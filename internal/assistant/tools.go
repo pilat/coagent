@@ -90,7 +90,10 @@ var _ tool.Tool = (*assistantTool)(nil)
 
 // Host provides work-session lifecycle; Deliver's transaction rechecks authority.
 type Host interface {
-	CreateWork(ctx context.Context, owner string, spec WorkSpec) (int64, string, error)
+	// CreateWork commits the root and its first instruction together before starting it.
+	CreateWork(ctx context.Context, owner string, spec WorkSpec, text string,
+		enqueue func(tx *sql.Tx, id int64, attributes map[string]any) (*sessionstore.InboxInput, error),
+	) (int64, string, error)
 	// Deliver commits enqueue under the tree lock, then dispatches commands or wakes the session.
 	Deliver(ctx context.Context, sessionID int64, text string,
 		enqueue func(*sql.Tx, map[string]any) (*sessionstore.InboxInput, error),

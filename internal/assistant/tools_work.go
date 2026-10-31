@@ -62,13 +62,11 @@ func (t *assistantTool) open(ctx context.Context, raw json.RawMessage) (string, 
 	id, name, err := t.host.CreateWork(ctx, t.scope.Owner, WorkSpec{
 		ProjectID: choice.id, Name: choice.name, WorkDir: choice.path, Title: title,
 		Model: model.ID, Effort: effort, Worktree: args.Worktree,
+	}, text, func(tx *sql.Tx, id int64, attributes map[string]any) (*sessionstore.InboxInput, error) {
+		return t.store.instructTx(ctx, tx, t.scope, id, text, attributes)
 	})
 	if err != nil {
 		return "", fmt.Errorf("open assistant work: %w", err)
-	}
-
-	if err := t.deliver(ctx, id, text); err != nil {
-		return "", err
 	}
 
 	record, err := t.store.sessions.GetSession(ctx, id)
