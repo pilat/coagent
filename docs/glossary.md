@@ -453,9 +453,12 @@ _Avoid_: synthetic sleep notice, polling message.
 A one-shot schedule carrying `metadata.tool_call_id`, and therefore owning the eventual result of one exact suspended `sleep` call. `PendingSleeps` is the only schedule-domain projection used for waiting UI and interruption. A one-shot without `tool_call_id` is standalone scheduled input and must survive `/stop` or interruption of a different sleep.
 _Avoid_: one-shot wait (ambiguous), any one-shot is sleep.
 
-**scheduled delivery identity**:
-A deterministic ID for one standalone one-shot or cron occurrence, stored as a unique per-session inbox delivery key. Producer retries return `applied=false`; pre-upgrade claims in `session_deliveries` also suppress replay. Cron uses one canonical minute for ID and payload.
-_Avoid_: schedule message ID, retry token.
+**schedule occurrence**:
+One due one-shot or sleep, or one cron minute. An applied occurrence's producer
+acknowledgement commits with its session input: the row is deleted or its last-fired time
+advances. An acknowledged retry returns `applied=false`. Cron uses one canonical
+minute for admission and payload.
+_Avoid_: scheduled delivery identity (the retired delivery-key contract).
 
 **scheduled root**:
 A root with at least one schedule that is not a pending sleep. The `⏰` marker
@@ -463,7 +466,12 @@ appears on its assistant card, in `/sessions` and in its switch header, includin
 Assistant (`#0`); individual delivered messages do not repeat it.
 
 **scheduled turn**:
-New standalone work injected by a one-shot or cron schedule, rather than the result of a pending external call. Only a root session may own a scheduled turn. A due scheduled turn may reactivate a stopped root after its deterministic delivery identity is claimed; duplicate acknowledgement leaves that root stopped. A legacy scheduled occurrence addressed to a subagent is acknowledged as an unapplied no-op.
+New standalone work injected by a one-shot or cron schedule, rather than the
+result of a pending external call. Only a root session may own a scheduled turn.
+A due scheduled turn may reactivate a stopped root in the transaction that
+acknowledges its producer and enqueues its input; an acknowledged retry leaves
+that root stopped. A legacy scheduled occurrence addressed to a subagent is
+acknowledged as an unapplied no-op.
 _Avoid_: sleep wake, subagent wake.
 
 **admission control**:

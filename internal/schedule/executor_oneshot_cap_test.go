@@ -11,11 +11,9 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/pilat/coagent/internal/sessionevent"
-	"github.com/pilat/coagent/internal/sessionstore"
 )
 
-// capFakeStore embeds Store (nil) and overrides only the two methods
-// fireOneShotSchedules touches; any other call would panic, which is the point.
+// Unused embedded methods panic so the cap test exposes new dependencies.
 type capFakeStore struct {
 	Store
 	due     []*Schedule
@@ -23,10 +21,9 @@ type capFakeStore struct {
 	calls   int
 }
 
-func (*capFakeStore) CallPending(context.Context, int64, string) (bool, error) { return true, nil }
-func (f *capFakeStore) Enqueue(context.Context, sessionstore.Input) (*sessionstore.Enqueued, error) {
+func (f *capFakeStore) DeliverSleep(context.Context, *Schedule) (bool, error) {
 	f.calls++
-	return nil, errors.New("session gone")
+	return false, errors.New("session gone")
 }
 
 func (f *capFakeStore) ListDueSchedules(_ context.Context, _ time.Time) ([]*Schedule, error) {
