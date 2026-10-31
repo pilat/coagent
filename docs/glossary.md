@@ -175,8 +175,8 @@ bookkeeping before finishing. Tool-based corrections invalidate the candidate;
 the next answer must repeat the complete response.
 
 **move**:
-An assistant-requested open, send or stop applied immediately through the daemon's
-ordinary session lifecycle during tool execution.
+An assistant-requested open, send, stop or kill applied immediately through the
+daemon's ordinary session lifecycle during tool execution.
 _Avoid_: dispatch intent.
 
 **observation** (assistant):
@@ -360,8 +360,8 @@ lifecycle row. It is not a transport receipt or a per-row delivery flag.
 _Avoid_: delivery receipt, shared cursor.
 
 **unread digest**:
-The message sent only when chat focus returns to the assistant, showing each
-other live owned session's newest unread message, ordered newest first.
+The message sent only on entry to the assistant, including repeated explicit
+entry, showing each other live owned session's newest unread message, ordered newest first.
 It does not mark those messages seen and is not
 the effective policy's **digest**.
 _Avoid_: policy digest, full unread history.
@@ -370,7 +370,7 @@ _Avoid_: policy digest, full unread history.
 The `#<id> <Name>` line prefixed at delivery to every renderable work-root row,
 using the same display name as `/sessions`. It is never stored in the output
 log; assistant rows have none.
-_Avoid_: switch header (the `→ #N <Name>` line confirming a focus change).
+_Avoid_: switch header (the `→ #N <Name>` line confirming entry to a session).
 
 **entry context**:
 The newest already-seen renderable output-log row replayed when entering a

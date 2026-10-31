@@ -74,9 +74,17 @@ func TestHarnessScenario_DigestOnAssistantReturnAndSeenContextOnReentry(t *testi
 		time.Second, time.Millisecond)
 	want = append(want, "→ #0 Assistant", digest)
 	assert.Equal(t, want, messages())
+	manager.processUpdate(t.Context(), assistantTelegramUpdate("/assistant"))
+	want = append(want, "→ #0 Assistant", digest)
+	require.Eventually(t, func() bool { return len(messages()) == len(want) }, time.Second, time.Millisecond)
+	assert.Equal(t, want, messages())
+	manager.processUpdate(t.Context(), assistantTelegramUpdate(fmt.Sprintf("/switch %d", manager.assistantRootID)))
+	want = append(want, "→ #0 Assistant", digest)
+	require.Eventually(t, func() bool { return len(messages()) == len(want) }, time.Second, time.Millisecond)
+	assert.Equal(t, want, messages())
 	manager.processUpdate(t.Context(), assistantTelegramUpdate(fmt.Sprintf("/switch %d", two)))
-	require.Eventually(t, func() bool { return len(messages()) == 6 }, time.Second, time.Millisecond)
 	want = append(want, fmt.Sprintf("→ #%d project", two), fmt.Sprintf("#%d project\nwork answer", two))
+	require.Eventually(t, func() bool { return len(messages()) == len(want) }, time.Second, time.Millisecond)
 	assert.Equal(t, want, messages())
 	seen, err := h.sessions.ChatSeen(
 		t.Context(),

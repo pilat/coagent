@@ -12,8 +12,11 @@ import (
 )
 
 type chatLoopStub struct {
-	focus int64
-	wakes int
+	focus        int64
+	wakes        int
+	enters       int
+	target       int64
+	enterTargets []int64
 }
 
 func TestHeartbeatTypingUsesOnlyLoopChatFocus(t *testing.T) {
@@ -43,13 +46,16 @@ func TestFocusWritesWakeLoopWithoutTheirOwnConfirmation(t *testing.T) {
 		ID: 42, Attributes: map[string]any{"manager_id": "telegram-main"},
 	}}}
 	manager := newCmdTestManager(t, controller, &messages)
+	root, _ := controller.EnsureAssistantRoot(t.Context())
+	manager.assistantRootID = root.SessionID
 	loop := &chatLoopStub{}
 	manager.delivery = loop
 	manager.handleChatText(t.Context(), "/switch 42")
 	manager.handleChatText(t.Context(), "/assistant")
-	root, _ := controller.EnsureAssistantRoot(t.Context())
 	manager.handleChatText(t.Context(), fmt.Sprintf("/switch %d", root.SessionID))
+	assert.Equal(t, 3, loop.enters)
 	assert.Equal(t, 3, loop.wakes)
+	assert.Equal(t, []int64{42, 0, 0}, loop.enterTargets)
 	assert.Zero(t, controller.focus)
 	assert.Empty(t, messages)
 }
@@ -77,3 +83,8 @@ func (s *chatLoopStub) Start(context.Context)      {}
 func (s *chatLoopStub) Stop(context.Context) error { return nil }
 func (s *chatLoopStub) Focus() int64               { return s.focus }
 func (s *chatLoopStub) Wake()                      { s.wakes++ }
+func (s *chatLoopStub) Enter(target int64) {
+	s.enters++
+	s.target = target
+	s.enterTargets = append(s.enterTargets, target)
+}

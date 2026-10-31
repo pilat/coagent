@@ -30,6 +30,7 @@ type toolHost struct {
 	deliveries []string
 	created    []int64
 	stopped    []int64
+	killed     []int64
 	focused    []int64
 	models     []Model
 	modelsRead int
@@ -163,7 +164,7 @@ func TestAssistantToolsRefuseUnauthorizedWork(t *testing.T) {
 	)
 	require.NoError(t, err)
 	for _, target := range []int64{foreign, child, retired, killed, f.root} {
-		for _, id := range []string{"read_session", "send", "stop"} {
+		for _, id := range []string{"read_session", "send", "stop", "kill"} {
 			_, err := f.tools[id].Execute(
 				t.Context(),
 				json.RawMessage(fmt.Sprintf(`{"session":%d,"text":"go","count":1}`, target)),
@@ -178,6 +179,7 @@ func TestAssistantToolsRefuseUnauthorizedWork(t *testing.T) {
 	}
 	assert.Empty(t, f.host.deliveries)
 	assert.Empty(t, f.host.stopped)
+	assert.Empty(t, f.host.killed)
 }
 
 func TestAssistantToolValidation(t *testing.T) {
@@ -235,7 +237,7 @@ func newToolFixture(t *testing.T) *toolFixture {
 	for _, instance := range Tools(store, Scope{Root: root, Owner: testOwner}, f.host) {
 		f.tools[instance.ID()] = instance
 	}
-	require.Len(t, f.tools, 18)
+	require.Len(t, f.tools, 19)
 	return f
 }
 
@@ -296,6 +298,11 @@ func (h *toolHost) Deliver(
 func (h *toolHost) Stop(ctx context.Context, id int64) error {
 	h.stopped = append(h.stopped, id)
 	return h.sessions.UpdateSessionStatus(ctx, id, sessionstore.SessionStatusStopped)
+}
+
+func (h *toolHost) Kill(_ context.Context, id int64) error {
+	h.killed = append(h.killed, id)
+	return nil
 }
 
 func (h *toolHost) FocusChat(ctx context.Context, owner string, id int64) error {

@@ -191,12 +191,33 @@ func (m *Manager) inputSessionID(ctx context.Context, focus int64) (int64, error
 }
 
 func (m *Manager) switchChat(ctx context.Context, id int64) {
+	m.mu.RLock()
+	delivery := m.delivery
+	assistantID := m.assistantRootID
+	m.mu.RUnlock()
+
+	target := id
+	if id == assistantID {
+		target = 0
+	}
+
+	if delivery != nil {
+		delivery.Enter(target)
+	}
+
 	if err := m.chat.SetChatFocus(ctx, strconv.FormatInt(m.effectiveChatID(), 10), id); err != nil {
+		if delivery != nil {
+			delivery.Enter(-1)
+		}
+
 		_, _ = m.sendMessage(ctx, strings.ReplaceAll(err.Error(), "\n", " "))
+
 		return
 	}
 
-	m.wakeDelivery()
+	if delivery != nil {
+		delivery.Wake()
+	}
 }
 
 func (m *Manager) handleNumberedControl(ctx context.Context, command, arg string) {

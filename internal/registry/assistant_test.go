@@ -24,7 +24,7 @@ func TestAssistantAgentType(t *testing.T) {
 	assert.True(t, cfg.DisableIntegratedSearch)
 	want := []string{
 		"search", "around", "read_session", "sessions", "projects", "focus_list",
-		"open", "send", "stop", "remember", "rewrite_memory", "forget_memory",
+		"open", "send", "stop", "kill", "remember", "rewrite_memory", "forget_memory",
 		"focus", "update_focus", "done_focus",
 		"switch", "models", "set_model",
 		tool.IDSchedule, tool.IDMCPAdd, tool.IDMCPRemove, tool.IDMCPEnable, tool.IDMCPDisable, tool.IDMCPList,
@@ -63,6 +63,8 @@ func TestAssistantPromptIncludesBoundedHostAdministration(t *testing.T) {
 		"list shows yours and work sessions' schedules", "cancel removes one by id",
 		"one short line without retelling", "freshly fetched remote default branch",
 		"Never tell a session to create a worktree itself", "for a config refusal, suggest /gwt",
+		"stop pauses work that can be resumed", "kill deletes a session for good",
+		"only when the user asks to delete or remove it",
 	} {
 		assert.Contains(t, AssistantPrompt, text)
 	}

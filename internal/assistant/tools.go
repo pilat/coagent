@@ -53,6 +53,10 @@ var toolTable = []toolEntry{
 	{schema("stop", "Do: stop a work session's current work immediately.",
 		`{"session":{"type":"string","description":"A session id like \"244\" or \"#244\"."}}`, "session",
 	), false, (*assistantTool).stop},
+	{schema("kill",
+		"Do: delete a work session for good at the user's request: its work stops and it leaves every list.",
+		`{"session":{"type":"string","description":"A session id like \"244\" or \"#244\"."}}`, "session",
+	), false, (*assistantTool).kill},
 	{schema("switch",
 		"Do: switch the user into a work session while they are talking to you; they return with /assistant.",
 		`{"session":{"type":"string","description":"A session id like \"244\" or \"#244\"."}}`,
@@ -99,6 +103,7 @@ type Host interface {
 		enqueue func(*sql.Tx, map[string]any) (*sessionstore.InboxInput, error),
 	) error
 	Stop(ctx context.Context, sessionID int64) error
+	Kill(ctx context.Context, sessionID int64) error
 	FocusChat(ctx context.Context, owner string, sessionID int64) error
 	Models(ctx context.Context) ([]Model, error)
 	SetModel(ctx context.Context, sessionID int64, model, effort string) error
