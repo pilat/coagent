@@ -53,16 +53,14 @@ func runOutputLogModel(t *testing.T, commands, template []byte) {
 				Content:   content,
 				SourceKey: fmt.Sprint(key),
 			}
-			draft.Fingerprint = OutputFingerprint(draft.Type, content, draft.SessionID, nil, false)
 			result, err := store.EnqueueOutput(t.Context(), draft)
 			previous, exists := expected[identity]
 			switch {
-			case exists && previous.content != content:
-				require.ErrorIs(t, err, ErrOutputConflict)
 			case exists:
 				require.NoError(t, err)
 				assert.True(t, result.Existing)
 				assert.Equal(t, previous.id, result.OutputID)
+				assert.Equal(t, previous.content, result.Content)
 			default:
 				require.NoError(t, err)
 				assert.False(t, result.Existing)
@@ -133,7 +131,7 @@ func newTemplateTestStore(t *testing.T, migratedDB []byte) (*Store, *sql.DB, int
 	return testStore(db), db, projectID
 }
 
-func TestHarnessModel_OutputLogAppendReplayConflictAndRestart(t *testing.T) {
+func TestHarnessModel_OutputLogAppendReplayAndRestart(t *testing.T) {
 	runOutputLogModel(t, []byte{0, 0, 4, 1, 32, 36, 33, 28, 0, 32, 2, 34}, nil)
 }
 

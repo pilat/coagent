@@ -71,25 +71,19 @@ func recordStartFailureOutputTx(ctx context.Context, tx *sql.Tx, record *Session
 		key = fmt.Sprintf("session-start-failure:input:%d", inputID)
 	}
 
-	var exists bool
-	if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM session_outbox WHERE session_id = ? AND source_key = ?)`, record.ID, key).
-		Scan(&exists); err != nil {
-		return false, fmt.Errorf("find start failure receipt: %w", err)
-	}
-
-	if exists {
-		return false, nil
-	}
-
 	out, err := insertOutputTx(ctx, tx, OutputDraft{
 		SessionID: record.ID, Type: OutputMessage, Content: content,
-		SourceKey: key, Fingerprint: OutputFingerprint(OutputMessage, content, record.ID, nil, false),
+		SourceKey: key,
 	}, CommitLoop)
 	if err != nil {
 		return false, fmt.Errorf("record start failure receipt: %w", err)
 	}
 
 	if out != nil {
+		if out.Existing {
+			return false, nil
+		}
+
 		if err := notifyObserversTx(ctx, tx, record.ID, 0, out.OutputID, content); err != nil {
 			return false, err
 		}

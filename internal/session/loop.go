@@ -577,9 +577,15 @@ func (s *Session) commitRunState(ctx context.Context, r *runState, runErr error)
 			r.result.ErrorNotice = projectionErrorNotice(runErr)
 		}
 
+		state, stateErr := s.store.LoadCompletionCheckState(ctx, s.id)
+		if stateErr != nil {
+			return errors.Join(runErr, stateErr)
+		}
+
+		key := fmt.Sprintf("run:%d:%d:error", state.ModelInputGeneration, iteration)
 		c.Outputs = []sessionstore.Output{{
 			Type: sessionstore.OutputMessage, Content: r.result.ErrorNotice,
-			Key: fmt.Sprintf("run:%d:error", iteration), MessageRef: -1, ReleasesInput: true,
+			Key: key, MessageRef: -1, ReleasesInput: true,
 		}}
 	}
 

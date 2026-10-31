@@ -16,7 +16,6 @@ func TestOutputStore_AppendsAndReplaysWithoutMutatingHistory(t *testing.T) {
 	root, err := store.CreateSession(t.Context(), project, "model", "", map[string]any{"manager_id": "owner"})
 	require.NoError(t, err)
 	draft := OutputDraft{SessionID: root.ID, Type: OutputMessage, Content: "first", SourceKey: "first"}
-	draft.Fingerprint = OutputFingerprint(draft.Type, draft.Content, draft.SessionID, nil, false)
 	first, err := store.EnqueueOutput(t.Context(), draft)
 	require.NoError(t, err)
 	second, err := store.EnqueueOutput(
@@ -25,10 +24,12 @@ func TestOutputStore_AppendsAndReplaysWithoutMutatingHistory(t *testing.T) {
 	)
 	require.NoError(t, err)
 	store = testStore(db)
+	draft.Content = "changed"
 	replay, err := store.EnqueueOutput(t.Context(), draft)
 	require.NoError(t, err)
 	assert.True(t, replay.Existing)
 	assert.Equal(t, first.OutputID, replay.OutputID)
+	assert.Equal(t, "first", replay.Content)
 	assert.Less(t, first.OutputID, second.OutputID)
 	rows, err := store.ChatOutputs(t.Context(), "owner", "chat", root.ID, 100)
 	require.NoError(t, err)
@@ -38,7 +39,7 @@ func TestOutputStore_AppendsAndReplaysWithoutMutatingHistory(t *testing.T) {
 	assert.Equal(t, first.OutputID, rows[0].ID)
 }
 
-func TestOutputStore_RejectsIdentityAndOwnershipViolations(t *testing.T) {
+func TestOutputStore_SkipsOwnerlessSessionsAndSubagents(t *testing.T) {
 	ctx := context.Background()
 	store, _, projectID := newTestStore(t)
 	owned, err := store.CreateSession(ctx, projectID, "model", "", map[string]any{"manager_id": "alpha"})
@@ -57,48 +58,6 @@ func TestOutputStore_RejectsIdentityAndOwnershipViolations(t *testing.T) {
 	skipped, err = store.EnqueueOutput(ctx, OutputDraft{SessionID: child, Type: OutputMessage, Content: "x"})
 	require.NoError(t, err)
 	assert.Nil(t, skipped)
-	_, err = store.EnqueueOutput(
-		ctx,
-		OutputDraft{
-			SessionID:   owned.ID,
-			Type:        OutputMessage,
-			Content:     "x",
-			SourceKey:   "key",
-			Fingerprint: OutputFingerprint(OutputMessage, "x", owned.ID, nil, false),
-		},
-	)
-	require.NoError(t, err)
-	_, err = store.EnqueueOutput(
-		ctx,
-		OutputDraft{
-			SessionID:   owned.ID,
-			Type:        OutputMessage,
-			Content:     "changed",
-			SourceKey:   "key",
-			Fingerprint: OutputFingerprint(OutputMessage, "changed", owned.ID, nil, false),
-		},
-	)
-	require.ErrorIs(t, err, ErrOutputConflict)
-}
-
-func TestOutputStore_RejectsFingerprintThatDoesNotMatchPayload(t *testing.T) {
-	ctx := context.Background()
-	store, _, projectID := newTestStore(t)
-	owned, err := store.CreateSession(ctx, projectID, "model", "", map[string]any{"manager_id": "alpha"})
-	require.NoError(t, err)
-
-	fingerprint := OutputFingerprint(OutputMessage, "original", owned.ID, nil, false)
-	_, err = store.EnqueueOutput(ctx, OutputDraft{
-		SessionID: owned.ID, Type: OutputMessage, Content: "original",
-		SourceKey: "key", Fingerprint: fingerprint,
-	})
-	require.NoError(t, err)
-
-	_, err = store.EnqueueOutput(ctx, OutputDraft{
-		SessionID: owned.ID, Type: OutputMessage, Content: "changed",
-		SourceKey: "key", Fingerprint: fingerprint,
-	})
-	require.ErrorIs(t, err, ErrOutputConflict)
 }
 
 func TestOutputStore_MarkSessionKilledWithOutputCommitsBoth(t *testing.T) {

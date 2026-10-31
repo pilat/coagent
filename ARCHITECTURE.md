@@ -161,7 +161,7 @@ fails with `ErrInputResolved` and rolls back the whole step.
 Manager-owned roots append messages and lifecycle facts to `session_outbox` in
 the same transaction as their transcript/control effects. Its closed vocabulary
 is `message`, `session_opened`, `session_replaced` and `session_closed`.
-Rows keep their owner and stable source-key/fingerprint identity; there are no
+Rows keep their owner and stable source-key identity; there are no
 attempts, transport receipts, delivery states or external-message edits.
 Every accepted tool-calling step of a work root publishes one message: model text
 when present, then a tool trail, including steps with no text. The assistant
@@ -177,8 +177,8 @@ commit. `chat_seen` stores a monotonic watermark per manager/chat/session; unrea
 counts and newest unread text are derived from the log above it, never stored
 as per-row delivery state. Reads and marks remain authorized for a killed root
 so its selected tail can finish. The log preserves IDs and its AUTOINCREMENT
-high-water mark across schema rebuilds; the upgrade freezes the new fingerprint
-formula so existing source keys remain idempotent on producer replay.
+high-water mark across schema rebuilds. Replaying a source key returns the original
+row without comparing or changing its payload.
 
 Delivery sends rows in ascending ID order and advances the watermark only after
 the effect, a probe-confirmed skip, or a non-rendering lifecycle row. A crash
@@ -191,8 +191,9 @@ are recorded in [ADR-0076](docs/adr/0076-flat-chat-with-a-focus.md).
 An explicit skill activation commits one releasing receipt in its promotion
 transaction, keyed by the accepted input and containing only the canonical
 skill name. A skill tool's receipt is ordinary direct tool output; injected
-skills produce none. Model-input generation remains session-local input and
-completion-nudge state and is absent from outbox rows.
+skills produce none. Model-input generation tracks accepted model-bound input and
+completion-nudge state. Run-error source keys include it with the iteration, so
+fresh input gets a new notice while a wake without input reuses the prior one.
 
 ### Runtime isolation and admission
 

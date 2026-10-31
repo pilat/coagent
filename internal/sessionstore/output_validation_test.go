@@ -20,10 +20,7 @@ func TestValidateOutputDraft_RejectsEachInvalidIdentityComponent(t *testing.T) {
 		},
 		{name: "type", draft: OutputDraft{SessionID: 1, Type: "unknown"}, message: "invalid output draft"},
 		{name: "blank source key", draft: OutputDraft{
-			SessionID: 1, Type: OutputMessage, Content: "x", SourceKey: " ", Fingerprint: "digest",
-		}, message: "empty output identity"},
-		{name: "blank fingerprint", draft: OutputDraft{
-			SessionID: 1, Type: OutputMessage, Content: "x", SourceKey: "key", Fingerprint: " ",
+			SessionID: 1, Type: OutputMessage, Content: "x", SourceKey: " ",
 		}, message: "empty output identity"},
 	}
 
@@ -56,12 +53,10 @@ func TestPositiveInt64_RequiresPositiveIntegralValues(t *testing.T) {
 	}
 }
 
-func TestOutputMessage_UsesOnlySourceInProducerAttributesAndFingerprint(t *testing.T) {
+func TestOutputMessage_RejectsHostOwnedProducerAttributes(t *testing.T) {
 	attributes := map[string]any{"source": outputSourceAgent}
-	want := OutputFingerprint(OutputMessage, "answer", 7, attributes, false)
 	for _, key := range []string{"waiting", "waiting_identity", "progress_revision", "message_ids", ModelInputGenerationAttribute} {
 		attributes[key] = "old metadata"
-		assert.Equal(t, want, OutputFingerprint(OutputMessage, "answer", 7, attributes, false))
 		require.ErrorContains(t, validateProducerAttributes(OutputMessage, attributes), key)
 		delete(attributes, key)
 	}

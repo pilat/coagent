@@ -14,8 +14,8 @@ const (
 
 const managerIDAttribute = "manager_id"
 
-// ModelInputGenerationAttribute is host-owned outbox metadata: producers cannot
-// set it, and it never enters semantic output fingerprints.
+// ModelInputGenerationAttribute is reserved for host-owned generation state;
+// output producers cannot set it.
 const ModelInputGenerationAttribute = "model_input_generation"
 
 const killedReason = "killed"
@@ -41,7 +41,6 @@ type OutputDraft struct {
 	Content       string
 	Attributes    map[string]any
 	SourceKey     string
-	Fingerprint   string
 	ReleasesInput bool
 	CreatedAt     time.Time
 }

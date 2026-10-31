@@ -21,6 +21,7 @@ type CompletionCheckState struct {
 	// nudge ack. Empty when no candidate is pending.
 	CandidateText        string
 	NudgedThisGeneration bool
+	ModelInputGeneration int64
 	EmptyStopStreak      int
 }
 
@@ -40,13 +41,15 @@ func (s *Store) LoadCompletionCheckState(ctx context.Context, sessionID int64) (
 	var candidateText sql.NullString
 	var streak sql.NullInt64
 	var nudged bool
+	var generation int64
 
 	err := s.db.QueryRowContext(ctx, `SELECT sessions.completion_check_candidate_id,
 		messages.content, sessions.empty_stop_streak,
-		COALESCE(sessions.completion_nudge_generation = sessions.model_input_generation, FALSE)
+		COALESCE(sessions.completion_nudge_generation = sessions.model_input_generation, FALSE),
+		sessions.model_input_generation
 		FROM sessions LEFT JOIN messages ON messages.id = sessions.completion_check_candidate_id
 		WHERE sessions.id = ?`, sessionID).
-		Scan(&candidate, &candidateText, &streak, &nudged)
+		Scan(&candidate, &candidateText, &streak, &nudged, &generation)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, errSessionNotFound
 	}
@@ -58,6 +61,7 @@ func (s *Store) LoadCompletionCheckState(ctx context.Context, sessionID int64) (
 	state := &CompletionCheckState{
 		CandidateText:        candidateText.String,
 		NudgedThisGeneration: nudged,
+		ModelInputGeneration: generation,
 		EmptyStopStreak:      int(streak.Int64),
 	}
 	if candidate.Valid {

@@ -139,19 +139,6 @@ func insertExplicitStopOutput(
 	now time.Time,
 ) (int64, error) {
 	key := fmt.Sprintf("input:%d:stop:completed", inputID)
-	var existingID int64
-
-	// Retries retain the committed count even after process cleanup has progressed.
-	err := tx.QueryRowContext(ctx,
-		`SELECT id FROM session_outbox WHERE session_id = ? AND source_key = ?`, rootID, key).
-		Scan(&existingID)
-	if err == nil {
-		return existingID, nil
-	}
-
-	if !errors.Is(err, sql.ErrNoRows) {
-		return 0, fmt.Errorf("load completed stop output: %w", err)
-	}
 
 	out, err := insertOutputTx(ctx, tx, OutputDraft{
 		SessionID: rootID, Type: OutputMessage,
