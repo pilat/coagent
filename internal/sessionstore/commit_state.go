@@ -43,14 +43,6 @@ func commitAcceptTx(
 		return ErrInputNotFound
 	}
 
-	if input.State == InputStateAccepted && accept.State == InputStateAccepted {
-		if linkedID == 0 {
-			result.MessageIDs = append(result.MessageIDs, input.AcceptedMessageID)
-		}
-
-		return nil
-	}
-
 	if input.State != InputStatePending {
 		return ErrInputResolved
 	}
@@ -79,7 +71,7 @@ func commitAcceptTx(
 	}
 
 	if accept.ModelBound {
-		if err := acceptModelInputTx(ctx, tx, c.SessionID, id); err != nil {
+		if err := acceptModelInputTx(ctx, tx, c.SessionID); err != nil {
 			return err
 		}
 	}
@@ -282,8 +274,8 @@ func resolveCommitInputTx(ctx context.Context, tx *sql.Tx, c Commit, accept Acce
 	return nil
 }
 
-func acceptModelInputTx(ctx context.Context, tx *sql.Tx, sessionID, id int64) error {
-	if err := advanceModelInputGeneration(ctx, tx, sessionID, id); err != nil {
+func acceptModelInputTx(ctx context.Context, tx *sql.Tx, sessionID int64) error {
+	if err := advanceModelInputGeneration(ctx, tx, sessionID); err != nil {
 		return err
 	}
 

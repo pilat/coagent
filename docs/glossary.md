@@ -323,8 +323,8 @@ A session→controller event — a message chunk, a state change, a heartbeat (`
 _Avoid_: bare "Notification".
 
 **model-input generation**:
-The session-local monotonic counter and transcript boundary message ID that
-advance atomically when model-bound input enters conversation history: inbox
+The session-local monotonic counter that advances atomically when model-bound
+input enters conversation history: inbox
 promotion or standalone scheduled-turn injection. Pending input, tool results,
 external-call completions, compaction and host-handled commands do not advance
 it. Completion nudges use it to enforce one nudge per accepted input generation.

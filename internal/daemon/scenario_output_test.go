@@ -49,7 +49,7 @@ func TestHarnessScenario_CompletionCheckConfirmsBeforePublishing(t *testing.T) {
 	collector.waitMessage(root, "premature candidate answer")
 	collector.waitIdleAfter(root, "premature candidate answer")
 	assert.Equal(t, 2, calls, "the no-wake stop costs exactly one confirmation call")
-	var ackLeaks, messages, releases int
+	var ackLeaks, messages int
 	for _, row := range h.outbox(root) {
 		content := strings.ToLower(row.Content)
 		if strings.Contains(content, "why i am stopping") {
@@ -59,14 +59,10 @@ func TestHarnessScenario_CompletionCheckConfirmsBeforePublishing(t *testing.T) {
 			if strings.HasPrefix(content, "premature candidate answer") {
 				messages++
 			}
-			if row.ReleasesInput {
-				releases++
-			}
 		}
 	}
 	assert.Zero(t, ackLeaks, "the discarded nudge ack must never reach any outbox row")
 	assert.Equal(t, 1, messages, "exactly one manager answer commits: the candidate text")
-	assert.Equal(t, 1, releases, "the confirmed output releases the manager input")
 	assertHarnessTrace(t, h, "completion_check_confirmed_final.json", collector.snapshot(), root)
 }
 
@@ -99,7 +95,7 @@ func TestHarnessScenario_CompletionNudgeAfterToolStopsOnce(t *testing.T) {
 		}
 	}
 	for _, row := range h.outbox(root) {
-		if row.Type == "message" && row.ReleasesInput &&
+		if row.Type == "message" &&
 			strings.Contains(row.Content, "complete answer after checking work") {
 			finals++
 		}
@@ -152,7 +148,7 @@ func TestHarnessScenario_CompletionCheckBackgroundProcessYieldPublishesOnce(t *t
 	assert.Equal(t, int64(1), calls.Load(), "a wake yield trusts the stop without a confirmation call")
 	var yieldOutputs int
 	for _, row := range h.outbox(root) {
-		if row.Type == "message" && row.Content == "yielding to the running process" && row.ReleasesInput {
+		if row.Type == "message" && row.Content == "yielding to the running process" {
 			yieldOutputs++
 		}
 	}
@@ -662,7 +658,7 @@ func TestHarnessScenario_ProcessCompletionRevivesCompletedRoot(t *testing.T) {
 	// A completion wake hides its first candidate, then commits one persistent releasing answer.
 	assert.Equal(t, int64(2), calls.Load())
 	assert.Equal(t, 1, countUserCompletions(h.messages(root), "<process_completion>"))
-	var messages, releasing int
+	var messages int
 	for _, row := range h.outbox(root) {
 		if !strings.HasPrefix(strings.ToLower(row.Content), "idle process completion observed") {
 			continue
@@ -670,12 +666,8 @@ func TestHarnessScenario_ProcessCompletionRevivesCompletedRoot(t *testing.T) {
 		if row.Type == "message" {
 			messages++
 		}
-		if row.ReleasesInput {
-			releasing++
-		}
 	}
 	assert.Equal(t, 1, messages)
-	assert.Equal(t, 1, releasing, "terminal output still releases the accepted asynchronous input")
 	var state string
 	require.NoError(t, h.db.QueryRowContext(h.ctx, `SELECT state FROM session_inbox
 		WHERE source = 'process' AND json_extract(attributes, '$.process_id') = ?`, process.ID).Scan(&state))

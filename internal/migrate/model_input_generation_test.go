@@ -38,7 +38,7 @@ func TestMigrate_ModelInputGenerationBackfill(t *testing.T) {
 		`INSERT INTO messages (id, session_id, role, content) VALUES (11, 1, 'assistant', 'old narration')`)
 	require.NoError(t, err)
 
-	_, err = provider.Up(ctx)
+	_, err = provider.UpTo(ctx, 29)
 	require.NoError(t, err)
 
 	var gen1 int64

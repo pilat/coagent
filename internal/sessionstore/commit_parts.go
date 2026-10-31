@@ -7,7 +7,7 @@ import (
 	"time"
 )
 
-func prepareCommitTx(ctx context.Context, tx *sql.Tx, c Commit) (Commit, bool, error) {
+func prepareCommitTx(ctx context.Context, tx *sql.Tx, c Commit) (Commit, error) {
 	if c.At.IsZero() {
 		c.At = time.Now().UTC()
 	}
@@ -17,25 +17,14 @@ func prepareCommitTx(ctx context.Context, tx *sql.Tx, c Commit) (Commit, bool, e
 	}
 
 	if err := checkCommitFence(ctx, tx, c); err != nil {
-		return c, false, err
+		return c, err
 	}
 
-	replay, err := acceptedBatchReplay(ctx, tx, c)
-	if err != nil {
-		return c, false, err
-	}
-
-	if replay {
-		if err := prepareReplayOutputKeys(ctx, tx, &c); err != nil {
-			return c, false, err
-		}
-	}
-
-	return c, replay, nil
+	return c, nil
 }
 
-func applyCommitTx(ctx context.Context, tx *sql.Tx, c Commit, replay bool, result *CommitResult) error {
-	if err := commitBoundaryPartsTx(ctx, tx, c, replay, result); err != nil {
+func applyCommitTx(ctx context.Context, tx *sql.Tx, c Commit, result *CommitResult) error {
+	if err := commitBoundaryPartsTx(ctx, tx, c, result); err != nil {
 		return err
 	}
 
@@ -66,8 +55,8 @@ func applyCommitTx(ctx context.Context, tx *sql.Tx, c Commit, replay bool, resul
 	return commitOutputPartsTx(ctx, tx, c, result)
 }
 
-func commitBoundaryPartsTx(ctx context.Context, tx *sql.Tx, c Commit, replay bool, result *CommitResult) error {
-	linked, err := commitAcceptPartsTx(ctx, tx, c, replay, result)
+func commitBoundaryPartsTx(ctx context.Context, tx *sql.Tx, c Commit, result *CommitResult) error {
+	linked, err := commitAcceptPartsTx(ctx, tx, c, result)
 	if err != nil {
 		return err
 	}
@@ -79,7 +68,7 @@ func commitBoundaryPartsTx(ctx context.Context, tx *sql.Tx, c Commit, replay boo
 		}
 	}
 
-	if err := commitMessagePartsTx(ctx, tx, c, linked, replay, result); err != nil {
+	if err := commitMessagePartsTx(ctx, tx, c, linked, result); err != nil {
 		return err
 	}
 
@@ -94,13 +83,12 @@ func commitAcceptPartsTx(
 	ctx context.Context,
 	tx *sql.Tx,
 	c Commit,
-	replay bool,
 	result *CommitResult,
 ) ([]Accept, error) {
 	var linked []Accept
 
 	for _, accept := range c.Accept {
-		if !replay && accept.State == InputStateAccepted && accept.Content == "" && accept.LinkRef >= 0 {
+		if accept.State == InputStateAccepted && accept.Content == "" && accept.LinkRef >= 0 {
 			linked = append(linked, accept)
 			continue
 		}
@@ -133,13 +121,8 @@ func commitMessagePartsTx(
 	tx *sql.Tx,
 	c Commit,
 	linked []Accept,
-	replay bool,
 	result *CommitResult,
 ) error {
-	if replay {
-		return nil
-	}
-
 	if c.State.ResetContext {
 		if err := resetContextTx(ctx, tx, c.SessionID, c.At); err != nil {
 			return err
@@ -147,7 +130,7 @@ func commitMessagePartsTx(
 	}
 
 	offset := len(result.MessageIDs)
-	if err := appendReferencedMessages(ctx, tx, c, linked, result); err != nil {
+	if err := appendReferencedMessages(ctx, tx, c, result); err != nil {
 		return err
 	}
 

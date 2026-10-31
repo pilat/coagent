@@ -34,7 +34,6 @@ const (
 // generationModelRow mirrors one message outbox row the protocol can observe.
 type generationModelRow struct {
 	generation  int64
-	releases    bool
 	sourceKey   string
 	inputID     int64
 	stopStarted bool
@@ -140,7 +139,7 @@ func (m *generationProtocolModel) apply(command generationProtocolCommand) {
 		m.stopped = true
 		m.hasBudget = false
 		m.rows = append(m.rows, generationModelRow{
-			generation: m.generation, releases: true, inputID: m.stopInput,
+			generation: m.generation, inputID: m.stopInput,
 			sourceKey: "input:" + strconv.FormatInt(m.stopInput, 10) + ":stop:completed", stopDone: true,
 		})
 	case genRestart:
@@ -312,16 +311,15 @@ func (p *generationProduction) assertMatches(model *generationProtocolModel, ste
 		`SELECT COUNT(*) FROM session_outbox WHERE session_id = ?`, p.root).Scan(&count))
 	require.Len(p.t, model.rows, count, "step %d: outbox row count", step)
 
-	rows, err := p.db.QueryContext(p.ctx, `SELECT type, COALESCE(source_key, ''), attributes,
-		releases_input FROM session_outbox WHERE session_id = ? ORDER BY id`, p.root)
+	rows, err := p.db.QueryContext(p.ctx, `SELECT type, COALESCE(source_key, ''), attributes
+		FROM session_outbox WHERE session_id = ? ORDER BY id`, p.root)
 	require.NoError(p.t, err)
 	defer rows.Close()
 
 	i := 0
 	for rows.Next() {
 		var kind, sourceKey, attributes string
-		var releases bool
-		require.NoError(p.t, rows.Scan(&kind, &sourceKey, &attributes, &releases))
+		require.NoError(p.t, rows.Scan(&kind, &sourceKey, &attributes))
 
 		want := model.rows[i]
 		wantKind := OutputMessage
@@ -345,7 +343,6 @@ func (p *generationProduction) assertMatches(model *generationProtocolModel, ste
 			assert.Equal(p.t, want.sourceKey, sourceKey, "step %d row %d: source key", step, i)
 		}
 
-		assert.Equal(p.t, want.releases, releases, "step %d row %d: release flag", step, i)
 		assert.NotContains(p.t, attributes, `"model_input_generation":`, "step %d row %d", step, i)
 
 		i++

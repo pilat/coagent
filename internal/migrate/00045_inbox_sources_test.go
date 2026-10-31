@@ -32,7 +32,7 @@ func TestMigrate_InboxSourcesCopiesLinksByColumnName(t *testing.T) {
 		require.NoError(t, err, stmt)
 	}
 
-	_, err = provider.Up(ctx)
+	_, err = provider.UpTo(ctx, 45)
 	require.NoError(t, err)
 
 	var (

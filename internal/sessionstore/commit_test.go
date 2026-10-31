@@ -49,9 +49,21 @@ func TestCommit_Parts(t *testing.T) {
 				require.Len(t, first.Outputs, 1)
 				assertInputState(t, db, input.Input.ID, InputStateAccepted)
 				replay, replayErr := store.Commit(ctx, step)
-				require.NoError(t, replayErr)
-				assert.Equal(t, first.MessageIDs, replay.MessageIDs)
-				assert.Empty(t, replay.Outputs)
+				require.ErrorIs(t, replayErr, ErrInputResolved)
+				assert.Nil(t, replay)
+				var messages, outputs int
+				require.NoError(
+					t,
+					db.QueryRowContext(ctx, `SELECT COUNT(*) FROM messages WHERE session_id = ?`, root.ID).
+						Scan(&messages),
+				)
+				require.NoError(
+					t,
+					db.QueryRowContext(ctx, `SELECT COUNT(*) FROM session_outbox WHERE session_id = ?`, root.ID).
+						Scan(&outputs),
+				)
+				assert.Equal(t, 1, messages)
+				assert.Equal(t, 1, outputs)
 				record, readErr := store.GetSession(ctx, root.ID)
 				require.NoError(t, readErr)
 				assert.Equal(t, int64(1), record.ModelInputGeneration)

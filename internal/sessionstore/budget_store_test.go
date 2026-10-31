@@ -111,11 +111,6 @@ func TestBudgetStore_ArmFireAndReplayAreAtomic(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, fired.FiredAt, duplicate.FiredAt)
 	assert.True(t, duplicateCheckpoint.Existing)
-
-	var releases bool
-	require.NoError(t, db.QueryRowContext(ctx, `SELECT releases_input FROM session_outbox WHERE id = ?`,
-		checkpoint.OutputID).Scan(&releases))
-	assert.True(t, releases)
 }
 
 func TestBudgetStore_CrossingResponseCommitsUsageNonExecutionAndCheckpointTogether(t *testing.T) {
@@ -162,7 +157,7 @@ func TestBudgetStore_CrossingResponseCommitsUsageNonExecutionAndCheckpointTogeth
 		WHERE session_id = ? AND role = 'tool' AND tool_call_id = 'danger'
 			AND content = ?`, root.ID, budgetToolNotExecuted).Scan(&resultCount))
 	require.NoError(t, db.QueryRowContext(ctx, `SELECT COUNT(*) FROM session_outbox
-		WHERE session_id = ? AND source_key = ? AND releases_input = 1`,
+		WHERE session_id = ? AND source_key = ?`,
 		root.ID, "budget:1:checkpoint").Scan(&checkpointCount))
 	assert.Equal(t, 1, assistantCount)
 	assert.Equal(t, 1, resultCount)

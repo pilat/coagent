@@ -90,12 +90,10 @@ func TestHarnessModel_CompletionCheckRestartAndDelivery(t *testing.T) {
 		`SELECT COUNT(*) FROM session_outbox WHERE session_id = ?`, sessionID).Scan(&outbox))
 	assert.Equal(t, 1, outbox, "confirmation publishes exactly one releasing output")
 
-	var releases int
 	var content string
 	require.NoError(t, db.QueryRowContext(ctx,
-		`SELECT releases_input, content FROM session_outbox WHERE session_id = ?`, sessionID).
-		Scan(&releases, &content))
-	assert.Equal(t, 1, releases, "the confirmed output releases the manager input")
+		`SELECT content FROM session_outbox WHERE session_id = ?`, sessionID).
+		Scan(&content))
 	assert.NotContains(t, content, "first answer",
 		"the hidden candidate text must never reach the manager")
 
