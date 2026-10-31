@@ -128,6 +128,24 @@ func (t *assistantTool) stop(ctx context.Context, raw json.RawMessage) (string, 
 	return fmt.Sprintf("stopped session %d", card.ID), nil
 }
 
+func (t *assistantTool) kill(ctx context.Context, raw json.RawMessage) (string, error) {
+	var args sendArgs
+	if err := decodeArgs(t.ID(), raw, &args); err != nil {
+		return "", err
+	}
+
+	card, err := t.target(ctx, args.Session)
+	if err != nil {
+		return "", err
+	}
+
+	if err := t.host.Kill(ctx, card.ID); err != nil {
+		return "", fmt.Errorf("kill assistant work: %w", err)
+	}
+
+	return fmt.Sprintf("deleted session %d", card.ID), nil
+}
+
 func (t *assistantTool) target(ctx context.Context, ref sessionRef) (Card, error) {
 	id, err := ref.parse()
 	if err != nil {

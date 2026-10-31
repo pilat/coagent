@@ -55,6 +55,7 @@ type ChatTransport interface {
 type ChatLoop interface {
 	Start(context.Context)
 	Wake()
+	Enter(target int64)
 	Stop(context.Context) error
 	Focus() int64
 }

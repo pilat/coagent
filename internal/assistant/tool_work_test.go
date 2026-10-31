@@ -68,3 +68,12 @@ func TestAssistantSendHashSession(t *testing.T) {
 	require.Len(t, pending, 1)
 	assert.Equal(t, "continue", pending[0].RawContent)
 }
+
+func TestAssistantKillOwnedWork(t *testing.T) {
+	t.Parallel()
+	f := newToolFixture(t)
+	assert.Equal(t, fmt.Sprintf("deleted session %d", f.work),
+		f.execute(t, "kill", fmt.Sprintf(`{"session":"#%d"}`, f.work)))
+	assert.Equal(t, []int64{f.work}, f.host.killed)
+	assert.Empty(t, f.host.stopped)
+}

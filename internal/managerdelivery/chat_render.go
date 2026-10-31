@@ -8,12 +8,13 @@ import (
 )
 
 func (w *chatLoop) prepare(ctx context.Context, focus int64) error {
-	if !w.initialized {
+	enter := w.enterTarget.Load() == focus
+	if !w.initialized && !enter {
 		w.initialized, w.lastFocus = true, focus
 		return nil
 	}
 
-	if focus == w.lastFocus {
+	if w.initialized && focus == w.lastFocus && !enter {
 		return nil
 	}
 
@@ -63,7 +64,8 @@ func (w *chatLoop) prepare(ctx context.Context, focus int64) error {
 	}
 
 	w.prelude = prelude
-	w.lastFocus = focus
+	w.initialized, w.lastFocus = true, focus
+	w.enterTarget.CompareAndSwap(focus, -1)
 
 	return nil
 }

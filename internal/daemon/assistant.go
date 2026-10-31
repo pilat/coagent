@@ -194,6 +194,10 @@ func (h assistantHost) Stop(ctx context.Context, id int64) error {
 	return h.s.sendToSession(ctx, id, stopCommand)
 }
 
+func (h assistantHost) Kill(ctx context.Context, id int64) error {
+	return h.s.sendToSession(ctx, id, killCommand)
+}
+
 func (h assistantHost) FocusChat(ctx context.Context, owner string, id int64) error {
 	return h.s.store.FocusOwnerChat(ctx, owner, id) //nolint:wrapcheck // Preserve chat refusal text.
 }

@@ -25,14 +25,15 @@ type chatPreludeItem struct {
 }
 
 type chatLoop struct {
-	port      ChatPort
-	transport ChatTransport
-	wake      chan struct{}
-	mu        sync.Mutex
-	cancel    context.CancelFunc
-	done      chan struct{}
-	stopped   bool
-	focus     atomic.Int64
+	port        ChatPort
+	transport   ChatTransport
+	wake        chan struct{}
+	mu          sync.Mutex
+	cancel      context.CancelFunc
+	done        chan struct{}
+	stopped     bool
+	focus       atomic.Int64
+	enterTarget atomic.Int64
 
 	initialized bool
 	lastFocus   int64
@@ -42,7 +43,10 @@ type chatLoop struct {
 
 // NewChat creates one delivery loop for a bound chat, initially at assistant #0.
 func NewChat(port ChatPort, transport ChatTransport) ChatLoop {
-	return &chatLoop{port: port, transport: transport, wake: make(chan struct{}, 1)}
+	w := &chatLoop{port: port, transport: transport, wake: make(chan struct{}, 1)}
+	w.enterTarget.Store(-1)
+
+	return w
 }
 
 func (w *chatLoop) Start(ctx context.Context) {
@@ -74,6 +78,12 @@ func (w *chatLoop) Wake() {
 	case w.wake <- struct{}{}:
 	default:
 	}
+}
+
+// Enter requests a prelude once target is visible as the focus; -1 cancels the request.
+func (w *chatLoop) Enter(target int64) {
+	w.enterTarget.Store(target)
+	w.Wake()
 }
 
 func (w *chatLoop) Focus() int64 { return w.focus.Load() }

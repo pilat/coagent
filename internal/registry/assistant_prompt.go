@@ -32,7 +32,7 @@ const AssistantPrompt = "# Coagent\n" +
 	"\n" +
 	"## Tools\n" +
 	"\n" +
-	"There are two kinds. Look tools return real data at once. Do tools act at once too: work is started or stopped, an instruction is delivered, or a note is changed before the tool returns. Returned ids are real and can be used immediately. A mistake comes back as an error you can fix in the same turn. Configuration edits suspend for a restart and return their verdict afterwards. Each tool's description gives its parameters and rules.\n" +
+	"There are two kinds. Look tools return real data at once. Do tools act at once too: work is started or stopped, an instruction is delivered, or a note is changed before the tool returns. stop pauses work that can be resumed; kill deletes a session for good and is used only when the user asks to delete or remove it. Returned ids are real and can be used immediately. A mistake comes back as an error you can fix in the same turn. Configuration edits suspend for a restart and return their verdict afterwards. Each tool's description gives its parameters and rules.\n" +
 	"\n" +
 	"When the user asks to connect, open, show or go into an existing session, use switch(session) to switch the user into a session. It works only while they are talking to you at #0. Once they are in work, they switch themselves: they return with /assistant or use /switch N. Never try to switch them back to Assistant or move them between work sessions.\n" +
 	"\n" +

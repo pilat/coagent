@@ -931,8 +931,10 @@ failed-start cleanup. Startup ignores request cancellation; shutdown preserves
 the durable input for boot recovery, while another startup failure kills the root.
 Optional worktree creation shares the human `/gwt` path and remote selection,
 fetches the remote default and rolls back on transaction or startup failure.
-Send authorizes inside its enqueue transaction while holding the tree lock. The daemon
-host supplies creation, delivery, stop, chat switching and model administration,
+Send authorizes inside its enqueue transaction while holding the tree lock.
+Stop and kill use the ordinary daemon command path: stopped work can resume,
+while killed work leaves session lists. The daemon host supplies creation,
+delivery, stop, kill, chat switching and model administration,
 while the session owns model calls,
 step commits, durable errors and output. Effects and their tool-result commits
 are separate: a runtime result-commit failure can leave a call unresolved for a
@@ -1225,8 +1227,13 @@ output and newest user/agent inbox row, falling back to creation for empty roots
 The command shows at most 30 sessions, including Assistant, then an overflow
 count; digest and numbered control commands retain the complete list.
 
-Startup drains the selected tail. A focus change sends the switch header and,
-only on return to Assistant, an unread digest for other live owned roots.
+Startup drains the selected tail. A focus change sends the switch header.
+Explicit `/switch` and `/assistant` entries also send that header when the focus
+stays the same or the first delivery pass has not yet run. An explicit entry is
+registered before the focus write and waits for the loop to observe its target; successful
+prelude preparation consumes it, while a rejected focus write cancels it.
+Ordinary wakes do not request entry preludes. Only entry to Assistant includes
+an unread digest for other live owned roots.
 Digest rows remain unread. The selected tail follows when unread exists;
 otherwise entry context replays the newest already-seen renderable row without
 moving its watermark. No context is sent when no such row exists.
