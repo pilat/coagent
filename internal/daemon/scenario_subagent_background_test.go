@@ -290,7 +290,7 @@ func TestHarnessScenario_RootBackgroundYieldIsUnchanged(t *testing.T) {
 	})
 	assert.Zero(t, countUserCompletions(h.messages(rootID), backgroundExitNudgeMarker), "roots get no exit nudge")
 	yielded := slices.ContainsFunc(h.outbox(rootID), func(row outboxRow) bool {
-		return row.Type == "message" && row.Content == "root waiting" && row.ReleasesInput
+		return row.Type == "message" && row.Content == "root waiting"
 	})
 	assert.True(t, yielded, "the root still publishes its background yield")
 

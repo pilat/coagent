@@ -164,7 +164,7 @@ func TestMigrate_54_ReinsertsLegacySourceKeysThroughRealStore(t *testing.T) {
 		)
 		require.NoError(t, err)
 	}
-	_, err = provider.Up(t.Context())
+	_, err = provider.UpTo(t.Context(), 54)
 	require.NoError(t, err)
 	store := sessionstore.NewStore(db)
 	for i, fixture := range fixtures {

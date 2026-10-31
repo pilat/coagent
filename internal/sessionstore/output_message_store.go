@@ -79,10 +79,9 @@ func insertOutputTx(ctx context.Context, tx *sql.Tx, draft OutputDraft, mode Com
 
 	result, err := tx.ExecContext(ctx, `
 		INSERT INTO session_outbox
-			(session_id, type, content, attributes, source_key, fingerprint, created_at, releases_input)
-		VALUES (?, ?, ?, ?, NULLIF(?, ''), NULLIF(?, ''), ?, ?)`,
-		draft.SessionID, draft.Type, draft.Content, string(encoded), draft.SourceKey, draft.Fingerprint, now,
-		draft.ReleasesInput)
+			(session_id, type, content, attributes, source_key, fingerprint, created_at)
+		VALUES (?, ?, ?, ?, NULLIF(?, ''), NULLIF(?, ''), ?)`,
+		draft.SessionID, draft.Type, draft.Content, string(encoded), draft.SourceKey, draft.Fingerprint, now)
 	if err == nil {
 		id, idErr := result.LastInsertId()
 		if idErr != nil {

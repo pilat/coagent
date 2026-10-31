@@ -25,7 +25,7 @@ func TestHarnessScenario_OwnedRootBecomesIdleWithoutOutputAcknowledgement(t *tes
 	assert.False(t, h.mgr.HasActiveLoop(root))
 	var pending int
 	require.NoError(t, h.db.QueryRowContext(h.ctx, `SELECT COUNT(*) FROM session_outbox
-		WHERE session_id = ? AND releases_input = 1`, root).Scan(&pending))
+		WHERE session_id = ? AND type = 'message'`, root).Scan(&pending))
 	assert.Equal(t, 1, pending)
 	var idleCount int
 	for _, event := range collector.snapshot() {

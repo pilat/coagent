@@ -259,7 +259,7 @@ func (s *store) Resume(ctx context.Context, childID int64) error {
 	err := s.sessions.WithTx(ctx, func(tx *sql.Tx) error {
 		result, err := tx.ExecContext(ctx, `UPDATE subagent_links
    SET state = 'running', blocking = 0, activation_seq = activation_seq + 1,
-    delivered_at = NULL, delivered_msg_id = NULL, delivered_input_id = NULL WHERE child_id = ?`, childID)
+    delivered_at = NULL WHERE child_id = ?`, childID)
 		if err != nil {
 			return fmt.Errorf("reset link running: %w", err)
 		}
@@ -293,7 +293,7 @@ func (s *store) Rearm(ctx context.Context, childID int64) (bool, error) {
 	err := s.sessions.WithTx(ctx, func(tx *sql.Tx) error {
 		result, err := tx.ExecContext(ctx, `UPDATE subagent_links
    SET state = 'running', blocking = 0, activation_seq = activation_seq + 1,
-    delivered_at = NULL, delivered_msg_id = NULL, delivered_input_id = NULL
+    delivered_at = NULL
    WHERE child_id = ? AND delivered_at IS NOT NULL
     AND ((state = 'completed' AND EXISTS (SELECT 1 FROM session_inbox input
      WHERE input.session_id = subagent_links.child_id AND input.state = 'pending'))
@@ -400,14 +400,9 @@ func (s *store) deliver(ctx context.Context, link Link, input sessionstore.Input
 			}
 		}
 
-		var inputID any
-		if queued.Input != nil {
-			inputID = queued.Input.ID
-		}
-
-		result, err := tx.ExecContext(ctx, `UPDATE subagent_links SET delivered_at = ?, delivered_input_id = ?
+		result, err := tx.ExecContext(ctx, `UPDATE subagent_links SET delivered_at = ?
    WHERE child_id = ? AND parent_id = ? AND activation_seq = ? AND delivered_at IS NULL`,
-			time.Now().UTC().Unix(), inputID, link.ChildID, link.ParentID, link.ActivationSeq)
+			time.Now().UTC().Unix(), link.ChildID, link.ParentID, link.ActivationSeq)
 		if err != nil {
 			return fmt.Errorf("ack completion input: %w", err)
 		}

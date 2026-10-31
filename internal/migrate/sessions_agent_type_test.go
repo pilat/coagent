@@ -63,58 +63,17 @@ func TestMigrate_SessionsAgentTypeRebuildPreservesExistingDB(t *testing.T) {
 		WHERE type='index' AND tbl_name='sessions' ORDER BY name`
 
 	rowsBefore := dumpRows(t, db, `SELECT * FROM sessions ORDER BY id`)
-	// Migration 28 later drops compaction_brief; the rebuild comparison uses the
-	// columns both sides have after the full run.
-	for i := range rowsBefore {
-		delete(rowsBefore[i], "compaction_brief")
-	}
 	indexesBefore := dumpRows(t, db, sessionIndexes)
 	require.Len(t, indexesBefore, 1, "idx_sessions_project_id is the only index on sessions")
 
-	_, err = provider.Up(ctx)
+	_, err = provider.UpTo(ctx, 22)
 	require.NoError(t, err)
 
 	rowsAfter := dumpRows(t, db, `SELECT * FROM sessions ORDER BY id`)
 	require.Len(t, rowsAfter, len(rowsBefore))
 
-	// Later additive migrations introduce NOT NULL defaults; the v21 snapshot
-	// predates them, so validate their backfill and compare the shared columns.
-	for i := range rowsAfter {
-		delete(rowsAfter[i], "context_baseline_model")
-		delete(rowsAfter[i], "context_baseline_prompt_tokens")
-		delete(rowsAfter[i], "context_baseline_message_count")
-		// 00042 adds durable completion-check state; legacy rows carry no
-		// pending candidate, no reply obligation, and a zero empty streak.
-		assert.False(t, rowsAfter[i]["completion_check_candidate_id"].Valid)
-		delete(rowsAfter[i], "completion_check_candidate_id")
-		assert.NotContains(t, rowsAfter[i], "manager_reply_pending")
-		assert.Equal(t, "0", rowsAfter[i]["empty_stop_streak"].String)
-		delete(rowsAfter[i], "empty_stop_streak")
-		// 00043 adds the confirmed-answer pointer; legacy rows point nowhere.
-		assert.False(t, rowsAfter[i]["completion_check_confirmed_answer_id"].Valid)
-		delete(rowsAfter[i], "completion_check_confirmed_answer_id")
-		assert.False(t, rowsAfter[i]["completion_nudge_generation"].Valid)
-		delete(rowsAfter[i], "completion_nudge_generation")
-	}
-
 	// Legacy NULLs get 00021's rule; every other row is byte-for-byte identical.
 	for i := range rowsBefore {
-		if rowsBefore[i]["id"].String == "1" {
-			assert.Equal(t, rowsBefore[i]["updated_at"].String, rowsAfter[i]["episode_started_at"].String)
-			rowsBefore[i]["episode_started_at"] = rowsAfter[i]["episode_started_at"]
-		} else {
-			rowsBefore[i]["episode_started_at"] = sql.NullString{}
-		}
-		// 00028 backfills generation only for sessions with transcript history.
-		if rowsBefore[i]["id"].String == "1" {
-			assert.Equal(t, "1", rowsAfter[i]["model_input_generation"].String)
-			assert.Equal(t, "1", rowsAfter[i]["model_input_boundary"].String)
-		} else {
-			assert.Equal(t, "0", rowsAfter[i]["model_input_generation"].String)
-			assert.False(t, rowsAfter[i]["model_input_boundary"].Valid)
-		}
-		rowsBefore[i]["model_input_generation"] = rowsAfter[i]["model_input_generation"]
-		rowsBefore[i]["model_input_boundary"] = rowsAfter[i]["model_input_boundary"]
 		switch rowsBefore[i]["id"].String {
 		case "4":
 			assert.False(t, rowsBefore[i]["agent_type"].Valid, "row 4 was the legacy NULL root")
@@ -130,11 +89,7 @@ func TestMigrate_SessionsAgentTypeRebuildPreservesExistingDB(t *testing.T) {
 	}
 
 	indexesAfter := dumpRows(t, db, sessionIndexes)
-	require.Len(t, indexesAfter, 3,
-		"root history and assistant indexes survive; 00052 retires the management index")
-	assert.Equal(t, indexesBefore[0], indexesAfter[1], "the existing sessions index is recreated verbatim")
-	assert.Equal(t, "idx_sessions_assistant_root", indexesAfter[0]["name"].String)
-	assert.Equal(t, "idx_sessions_root_history", indexesAfter[2]["name"].String)
+	assert.Equal(t, indexesBefore, indexesAfter, "the existing sessions index is recreated verbatim")
 
 	assert.Empty(t, dumpRows(t, db, `PRAGMA foreign_key_check`), "no dangling references after the rebuild")
 

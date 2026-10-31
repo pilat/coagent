@@ -1245,12 +1245,11 @@ func containsAll(value string, needles ...string) bool {
 }
 
 type outboxRow struct {
-	ID            int64
-	SessionID     int64
-	Type          string
-	SourceKey     string
-	Content       string
-	ReleasesInput bool
+	ID        int64
+	SessionID int64
+	Type      string
+	SourceKey string
+	Content   string
 }
 
 func managerAttrs(id string) map[string]any {
@@ -1291,7 +1290,7 @@ func (h *harness) outbox(sessionID int64) []outboxRow {
 	h.t.Helper()
 	rows, err := h.db.QueryContext(
 		h.ctx,
-		`SELECT id, session_id, type, COALESCE(source_key, ''), content, releases_input
+		`SELECT id, session_id, type, COALESCE(source_key, ''), content
 		FROM session_outbox WHERE session_id = ? ORDER BY id`,
 		sessionID,
 	)
@@ -1301,7 +1300,7 @@ func (h *harness) outbox(sessionID int64) []outboxRow {
 	for rows.Next() {
 		var row outboxRow
 		require.NoError(
-			h.t, rows.Scan(&row.ID, &row.SessionID, &row.Type, &row.SourceKey, &row.Content, &row.ReleasesInput),
+			h.t, rows.Scan(&row.ID, &row.SessionID, &row.Type, &row.SourceKey, &row.Content),
 		)
 		out = append(out, row)
 	}

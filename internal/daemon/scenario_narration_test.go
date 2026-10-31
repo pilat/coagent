@@ -18,7 +18,6 @@ func assertNarratedOutputOrder(t *testing.T, h *harness, root int64, want ...str
 		}
 
 		assert.Equal(t, "message", row.Type)
-		assert.Equal(t, strings.HasSuffix(row.SourceKey, ":final"), row.ReleasesInput)
 		assert.Regexp(t, `^message:[0-9]+:(reply|final)$`, row.SourceKey)
 		contents = append(contents, row.Content)
 	}

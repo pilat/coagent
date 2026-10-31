@@ -155,6 +155,8 @@ transaction API. It chooses response outcomes; the store applies their parts
 and observes tree-wide budgets atomically. Its model messages contain no database fields: a positional
 row-ID vector travels with the projection across session assembly and compaction,
 then keys durable replacement and idempotent final output.
+Boundary commits accept pending inbox rows only; resubmitting an accepted input
+fails with `ErrInputResolved` and rolls back the whole step.
 
 Manager-owned roots append messages and lifecycle facts to `session_outbox` in
 the same transaction as their transcript/control effects. Its closed vocabulary

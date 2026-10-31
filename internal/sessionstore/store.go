@@ -33,7 +33,7 @@ const (
 	SessionStatusKilled      SessionStatus = "killed"
 )
 
-const sessionColumns = `id, project_id, model, reasoning_level, master_enabled, attributes, agent_type, parent_id, iteration, status, todo_items, created_at, updated_at, killed_at, root_id, model_input_generation, model_input_boundary, context_baseline_model, context_baseline_prompt_tokens, context_baseline_message_count, completion_check_candidate_id, empty_stop_streak, completion_check_confirmed_answer_id`
+const sessionColumns = `id, project_id, model, reasoning_level, master_enabled, attributes, agent_type, parent_id, iteration, status, todo_items, created_at, updated_at, killed_at, root_id, model_input_generation, context_baseline_model, context_baseline_prompt_tokens, context_baseline_message_count, completion_check_candidate_id, empty_stop_streak, completion_check_confirmed_answer_id`
 
 // errSessionNotFound signals a lookup query matched no row.
 var errSessionNotFound = errors.New("session not found")
@@ -63,9 +63,6 @@ type SessionRecord struct {
 	// model-bound input enters conversation history; zero means no generated
 	// input has ever been committed for this session.
 	ModelInputGeneration int64
-	// ModelInputBoundary is the transcript message ID at which the current
-	// generation began. Nil only on sessions with generation 0 and no history.
-	ModelInputBoundary *int64
 
 	// Persisted context baseline: the last provider-measured prompt size and
 	// the transcript length it covered. Zero values mean nothing was measured;
@@ -819,7 +816,6 @@ func scanSessionFrom(sc rowScanner) (*SessionRecord, error) {
 	var masterEnabled sql.NullBool
 	var projectID, parentID, iteration, rootID sql.NullInt64
 	var killedAt sql.NullTime
-	var boundary sql.NullInt64
 	var candidateID sql.NullInt64
 	var emptyStopStreak sql.NullInt64
 	var confirmedAnswerID sql.NullInt64
@@ -827,7 +823,7 @@ func scanSessionFrom(sc rowScanner) (*SessionRecord, error) {
 	err := sc.Scan(&rec.ID, &projectID, &model, &reasoning, &masterEnabled, &attrsRaw,
 		&agentType, &parentID, &iteration, &status, &todoItems,
 		&rec.CreatedAt, &rec.UpdatedAt, &killedAt, &rootID,
-		&rec.ModelInputGeneration, &boundary,
+		&rec.ModelInputGeneration,
 		&rec.ContextBaselineModel, &rec.ContextBaselinePromptTokens, &rec.ContextBaselineMessageCount,
 		&candidateID, &emptyStopStreak, &confirmedAnswerID)
 	if err != nil {
@@ -849,10 +845,6 @@ func scanSessionFrom(sc rowScanner) (*SessionRecord, error) {
 
 	if killedAt.Valid {
 		rec.KilledAt = &killedAt.Time
-	}
-
-	if boundary.Valid {
-		rec.ModelInputBoundary = &boundary.Int64
 	}
 
 	if candidateID.Valid {

@@ -43,8 +43,12 @@ func TestHarnessModel_AsyncInboxMixedFIFOStopErrorKillAndRestart(t *testing.T) {
 		require.NoError(t, promoteErr)
 		model[i].state = InputStateAccepted
 		duplicate, duplicateErr := acceptInput(ctx, store, input.ID, "changed duplicate")
-		require.NoError(t, duplicateErr)
-		assert.Equal(t, message.ID, duplicate.ID)
+		require.ErrorIs(t, duplicateErr, ErrInputResolved)
+		assert.Nil(t, duplicate)
+		messages, readErr := store.LoadActiveMessages(ctx, record.ID)
+		require.NoError(t, readErr)
+		require.Len(t, messages, i+1)
+		assert.Equal(t, message.ID, messages[i].ID)
 		assertAsyncInboxMatchesModel(t, db, record.ID, model)
 	}
 

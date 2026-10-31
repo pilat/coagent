@@ -33,13 +33,11 @@ func TestBeginLifecycleStopStartsPersistentNonReleasingRow(t *testing.T) {
 	require.NotZero(t, commit.OutputID)
 
 	var kind, content, sourceKey string
-	var releases bool
-	require.NoError(t, db.QueryRow(`SELECT type, content, COALESCE(source_key, ''), releases_input
-		FROM session_outbox WHERE id = ?`, commit.OutputID).Scan(&kind, &content, &sourceKey, &releases))
+	require.NoError(t, db.QueryRow(`SELECT type, content, COALESCE(source_key, '')
+		FROM session_outbox WHERE id = ?`, commit.OutputID).Scan(&kind, &content, &sourceKey))
 	assert.Equal(t, "message", kind)
 	assert.Equal(t, "⏳ Stopping…", content)
 	assert.Equal(t, "input:"+strconv.FormatInt(input.ID, 10)+":stop:started", sourceKey)
-	assert.False(t, releases)
 
 	var status string
 	require.NoError(t, db.QueryRow(`SELECT status FROM sessions WHERE id = ?`, session.ID).Scan(&status))
@@ -69,11 +67,9 @@ func TestBeginLifecycleKillKeepsPersistentReleasingRow(t *testing.T) {
 	require.NoError(t, err)
 
 	var kind string
-	var releases bool
-	require.NoError(t, db.QueryRow(`SELECT type, releases_input FROM session_outbox
-		WHERE id = ?`, commit.OutputID).Scan(&kind, &releases))
+	require.NoError(t, db.QueryRow(`SELECT type FROM session_outbox
+		WHERE id = ?`, commit.OutputID).Scan(&kind))
 	assert.Equal(t, "message", kind)
-	assert.True(t, releases)
 }
 
 func TestCompleteExplicitStopAtomic(t *testing.T) {
@@ -106,13 +102,11 @@ func TestCompleteExplicitStopAtomic(t *testing.T) {
 	assert.Equal(t, "stopped", releasedReason)
 
 	var kind, content, sourceKey string
-	var releases bool
-	require.NoError(t, db.QueryRow(`SELECT type, content, COALESCE(source_key, ''), releases_input
-		FROM session_outbox WHERE id = ?`, commit.OutputID).Scan(&kind, &content, &sourceKey, &releases))
+	require.NoError(t, db.QueryRow(`SELECT type, content, COALESCE(source_key, '')
+		FROM session_outbox WHERE id = ?`, commit.OutputID).Scan(&kind, &content, &sourceKey))
 	assert.Equal(t, "message", kind)
 	assert.Equal(t, "⏸️ Session stopped\nCancelled background processes: 2", content)
 	assert.Equal(t, "input:"+strconv.FormatInt(input.ID, 10)+":stop:completed", sourceKey)
-	assert.True(t, releases)
 
 	// Idempotent replay returns the original row, not a duplicate.
 	replay, err := store.CompleteExplicitStop(ctx, session.ID, input.ID, 9)
@@ -169,8 +163,8 @@ func TestSelectInterruptedExplicitStops(t *testing.T) {
 	_, err = db.Exec(`UPDATE sessions SET status = 'stopping' WHERE id = ?`, session.ID)
 	require.NoError(t, err)
 	_, err = db.Exec(`INSERT INTO session_outbox
-		(session_id, type, content, attributes, source_key, fingerprint, created_at, releases_input)
-		VALUES (?, 'message', '⏹ Stopping...', '{"manager_id":"mgr"}', ?, 'fp-legacy', datetime('now'), 1)`,
+		(session_id, type, content, attributes, source_key, fingerprint, created_at)
+		VALUES (?, 'message', '⏹ Stopping...', '{"manager_id":"mgr"}', ?, 'fp-legacy', datetime('now'))`,
 		session.ID, "input:"+strconv.FormatInt(legacy.ID, 10)+":stop:result")
 	require.NoError(t, err)
 

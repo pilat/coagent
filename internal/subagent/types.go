@@ -28,19 +28,17 @@ const (
 
 // Link is a durable parent-child relationship and completion obligation.
 type Link struct {
-	ParentID         int64
-	ChildID          int64
-	TaskCallID       string
-	Blocking         bool
-	Depth            int
-	State            State
-	DeliveredAt      int64
-	DeliveredMsgID   int64
-	DeliveredInputID int64
-	CreatedAt        int64
-	ActivationSeq    int64
-	Result           string
-	Outcome          Outcome
+	ParentID      int64
+	ChildID       int64
+	TaskCallID    string
+	Blocking      bool
+	Depth         int
+	State         State
+	DeliveredAt   int64
+	CreatedAt     int64
+	ActivationSeq int64
+	Result        string
+	Outcome       Outcome
 }
 
 // Create describes the child session, link, and initial input committed together.

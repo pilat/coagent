@@ -20,13 +20,13 @@ func (s *Store) Commit(ctx context.Context, c Commit) (*CommitResult, error) {
 	pending := registerEnqueueTransaction(tx)
 	defer enqueueTransactions.Delete(tx)
 
-	c, replay, err := prepareCommitTx(ctx, tx, c)
+	c, err = prepareCommitTx(ctx, tx, c)
 	if err != nil {
 		return nil, err
 	}
 
 	result := &CommitResult{}
-	if err := applyCommitTx(ctx, tx, c, replay, result); err != nil {
+	if err := applyCommitTx(ctx, tx, c, result); err != nil {
 		return nil, err
 	}
 
