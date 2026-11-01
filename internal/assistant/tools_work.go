@@ -14,8 +14,6 @@ import (
 	"github.com/pilat/coagent/internal/sessionstore"
 )
 
-const userWordsIntro = "\n\nThe user's own words (they work with several sessions at once, so part of this may concern other work):\n"
-
 func (t *assistantTool) open(ctx context.Context, raw json.RawMessage) (string, error) {
 	var args openArgs
 	if err := decodeArgs(t.ID(), raw, &args); err != nil {
@@ -49,10 +47,7 @@ func (t *assistantTool) open(ctx context.Context, raw json.RawMessage) (string, 
 		}
 	}
 
-	text, err := t.quoted(ctx, args.Text)
-	if err != nil {
-		return "", err
-	}
+	text := args.Text
 
 	choice, err := t.store.openTarget(ctx, args.Project, args.Worktree != "")
 	if err != nil {
@@ -98,16 +93,52 @@ func (t *assistantTool) send(ctx context.Context, raw json.RawMessage) (string, 
 		return "", errors.New("send needs a text")
 	}
 
-	text, err := t.quoted(ctx, strings.TrimSpace(args.Text))
-	if err != nil {
-		return "", err
-	}
+	text := strings.TrimSpace(args.Text)
 
 	if err := t.deliver(ctx, id, text); err != nil {
 		return "", err
 	}
 
 	return fmt.Sprintf("sent to session %d", id), nil
+}
+
+func (t *assistantTool) forward(ctx context.Context, raw json.RawMessage) (string, error) {
+	var args forwardArgs
+	if err := decodeArgs(t.ID(), raw, &args); err != nil {
+		return "", err
+	}
+
+	card, err := t.target(ctx, args.Session)
+	if err != nil {
+		return "", err
+	}
+
+	input, err := t.store.sessions.ActiveHumanInput(ctx, t.scope.Root)
+	if err != nil {
+		return "", fmt.Errorf("load current human input: %w", err)
+	}
+
+	if input == nil {
+		return "", sessionstore.ErrForwardInput
+	}
+
+	if strings.HasPrefix(strings.TrimSpace(input.RawContent), "/") {
+		return "", sessionstore.ErrForwardedCommand
+	}
+
+	err = t.host.Deliver(
+		ctx,
+		card.ID,
+		input.RawContent,
+		func(tx *sql.Tx, attributes map[string]any) (*sessionstore.InboxInput, error) {
+			return t.store.forwardTx(ctx, tx, t.scope, card.ID, attributes)
+		},
+	)
+	if err != nil {
+		return "", fmt.Errorf("deliver forwarded input: %w", err)
+	}
+
+	return fmt.Sprintf("forwarded the user's message to session %d", card.ID), nil
 }
 
 func (t *assistantTool) stop(ctx context.Context, raw json.RawMessage) (string, error) {
@@ -164,15 +195,6 @@ func (t *assistantTool) deliver(ctx context.Context, id int64, text string) erro
 	}
 
 	return nil
-}
-
-func (t *assistantTool) quoted(ctx context.Context, text string) (string, error) {
-	words, err := t.store.sessions.ActiveUserInput(ctx, t.scope.Root)
-	if err != nil {
-		return "", fmt.Errorf("quote current user input: %w", err)
-	}
-
-	return withUserWords(text, words), nil
 }
 
 func (t *assistantTool) switchChat(ctx context.Context, raw json.RawMessage) (string, error) {
@@ -256,21 +278,4 @@ func chooseModel(models []Model, id string, effort *string) (Model, string, erro
 	}
 
 	return Model{}, "", fmt.Errorf("unknown model: %s", id)
-}
-
-func withUserWords(text, words string) string {
-	words = strings.ReplaceAll(strings.TrimSpace(words), "\r\n", "\n")
-	if words == "" || strings.HasPrefix(strings.TrimSpace(text), "/") || strings.Contains(text, words) {
-		return text
-	}
-
-	lines := strings.Split(words, "\n")
-	for i, line := range lines {
-		lines[i] = ">"
-		if line != "" {
-			lines[i] += " " + line
-		}
-	}
-
-	return text + userWordsIntro + strings.Join(lines, "\n")
 }

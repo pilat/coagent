@@ -19,11 +19,13 @@ type ChatFocusController interface {
 }
 
 type ChatOutput struct {
-	ID        int64  `json:"id"`
-	SessionID int64  `json:"session_id"`
-	Name      string `json:"name"`
-	Type      string `json:"type"`
-	Content   string `json:"content"`
+	ID         int64  `json:"id"`
+	SessionID  int64  `json:"session_id"`
+	Name       string `json:"name"`
+	Type       string `json:"type"`
+	Content    string `json:"content"`
+	Origin     int64  `json:"origin"`
+	OriginName string `json:"origin_name"`
 }
 
 // ChatSessionInfo keeps the assistant's public #0 separate from its durable root ID.

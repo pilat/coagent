@@ -24,7 +24,7 @@ func TestAssistantAgentType(t *testing.T) {
 	assert.True(t, cfg.DisableIntegratedSearch)
 	want := []string{
 		"search", "around", "read_session", "sessions", "projects", "focus_list",
-		"open", "send", "stop", "kill", "remember", "rewrite_memory", "forget_memory",
+		"open", "send", "forward", "stop", "kill", "remember", "rewrite_memory", "forget_memory",
 		"focus", "update_focus", "done_focus",
 		"switch", "models", "set_model",
 		tool.IDSchedule, tool.IDMCPAdd, tool.IDMCPRemove, tool.IDMCPEnable, tool.IDMCPDisable, tool.IDMCPList,
@@ -61,7 +61,9 @@ func TestAssistantPromptIncludesBoundedHostAdministration(t *testing.T) {
 		"or the user talked to directly", "⏰", "exactly one of cron or at",
 		"Set report only when the user wants to be told the result", "schedule #N fired",
 		"list shows yours and work sessions' schedules", "cancel removes one by id",
-		"one short line without retelling", "freshly fetched remote default branch",
+		"forward(session)", "word for word", "finish with no text", "Route first", "Forward their answer",
+		"your own schedule or a host note", "A silent finish gets no second look",
+		"Only a `you:` line", "followed only by relays", "freshly fetched remote default branch",
 		"Never tell a session to create a worktree itself", "for a config refusal, suggest /gwt",
 		"stop pauses work that can be resumed", "kill deletes a session for good",
 		"only when the user asks to delete or remove it",
@@ -76,4 +78,8 @@ func TestAssistantPromptIncludesBoundedHostAdministration(t *testing.T) {
 	assert.NotContains(t, AssistantPrompt, "Your schedule and budget tools affect your own assistant root")
 	assert.NotContains(t, AssistantPrompt, "commands belong to the user")
 	assert.NotContains(t, AssistantPrompt, "/etc/nginx.conf")
+	assert.NotContains(t, AssistantPrompt, "Retell, "+"don't relay")
+	assert.NotContains(t, AssistantPrompt, "One "+"voice")
+	assert.NotContains(t, AssistantPrompt, "Always finish "+"with text")
+	assert.NotContains(t, AssistantPrompt, "attaches the user's message")
 }

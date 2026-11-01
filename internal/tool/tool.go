@@ -151,6 +151,8 @@ type Result struct {
 	// rather than authority. Execution-time only: never serialized, never
 	// persisted, so the durable transcript schema stays untouched.
 	Untrusted bool `json:"-"`
+	// AnswersInput marks a successful result answering pending human input, permitting a textless finish.
+	AnswersInput bool `json:"-"`
 }
 
 // ActivationIndex returns the exact command owner map for a registry. Duplicate

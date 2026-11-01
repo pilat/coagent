@@ -164,7 +164,7 @@ func TestAssistantToolsRefuseUnauthorizedWork(t *testing.T) {
 	)
 	require.NoError(t, err)
 	for _, target := range []int64{foreign, child, retired, killed, f.root} {
-		for _, id := range []string{"read_session", "send", "stop", "kill"} {
+		for _, id := range []string{"read_session", "send", "forward", "stop", "kill"} {
 			_, err := f.tools[id].Execute(
 				t.Context(),
 				json.RawMessage(fmt.Sprintf(`{"session":%d,"text":"go","count":1}`, target)),
@@ -237,7 +237,7 @@ func newToolFixture(t *testing.T) *toolFixture {
 	for _, instance := range Tools(store, Scope{Root: root, Owner: testOwner}, f.host) {
 		f.tools[instance.ID()] = instance
 	}
-	require.Len(t, f.tools, 19)
+	require.Len(t, f.tools, 20)
 	return f
 }
 

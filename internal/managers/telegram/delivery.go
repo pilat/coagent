@@ -105,5 +105,8 @@ func (t *outputTransport) Send(ctx context.Context, text string) managerdelivery
 }
 
 func chatRow(row controllerapi.ChatOutput) managerdelivery.ChatRow {
-	return managerdelivery.ChatRow{ID: row.ID, Name: row.Name, Type: row.Type, Content: row.Content}
+	return managerdelivery.ChatRow{
+		ID: row.ID, Name: row.Name, Type: row.Type, Content: row.Content,
+		Origin: row.Origin, OriginName: row.OriginName,
+	}
 }

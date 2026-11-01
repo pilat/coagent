@@ -21,7 +21,7 @@ func TestHarnessScenario_AssistantWorkScheduleReport(t *testing.T) {
 			t.Run(fmt.Sprintf("report=%t/fresh=%t", report, fresh), func(t *testing.T) {
 				h := newHarness(t, harnessOptions{respond: func(system string, _ []llmwire.Message) *llmwire.Response {
 					if strings.HasPrefix(system, registry.AssistantPrompt) {
-						return textReply("reported schedule result")
+						return textReply("")
 					}
 					return textReply("work schedule answer")
 				}})
@@ -54,10 +54,12 @@ func TestHarnessScenario_AssistantWorkScheduleReport(t *testing.T) {
 					return assistantSayCount(t, h, work, "work schedule answer") == 1 && !h.mgr.HasActiveLoop(work)
 				})
 				if report {
-					h.waitUntil("schedule report retold", func() bool {
-						return assistantSayCount(t, h, root.ID, "reported schedule result") == 1 &&
-							!h.mgr.HasActiveLoop(root.ID)
-					})
+					waitAssistantObservation(t, h, root.ID, 1)
+					rows := assistantChatMessages(t, h, root.ID)
+					require.Len(t, rows, 1)
+					assert.Equal(t, work, rows[0].Origin)
+					assert.Equal(t, "work schedule answer", rows[0].Content)
+					assertAssistantOwnOutputCount(t, h, root.ID, 0)
 					assert.Equal(t, 1, assistantEventCount(t, h, root.ID))
 					var event string
 					require.NoError(

@@ -20,21 +20,21 @@ import (
 
 var assistantFocusRef = regexp.MustCompile(`\[f\d+\]`)
 
-func TestHarnessScenario_AssistantOpenAndRetell(t *testing.T) {
+func TestHarnessScenario_AssistantOpenAndFrameQuestion(t *testing.T) {
 	workRelease := make(chan struct{})
 	t.Cleanup(func() { closeOnce(workRelease) })
 	h := newHarness(t, harnessOptions{respond: func(system string, messages []llmwire.Message) *llmwire.Response {
 		if !strings.HasPrefix(system, registry.AssistantPrompt) {
 			<-workRelease
-			return textReply("work answer")
+			return textReply("Apply the fix?")
 		}
 
 		switch {
 		case hasUserContaining(messages, "user wrote:"):
-			return textReply("direct exchange noted")
+			return textReply("Apply this follow-up fix?")
 		case hasUserContaining(messages, "answered:"):
 			if hasToolResultFor(messages, "done_focus") {
-				return textReply("retold answer")
+				return textReply("Apply the fix now?")
 			}
 			focus := assistantFocusRef.FindString(messages[0].Content)
 			return assistantCalls("", llmwire.ToolCall{
@@ -75,7 +75,10 @@ func TestHarnessScenario_AssistantOpenAndRetell(t *testing.T) {
 	require.NoError(t, h.store.BindChat(h.ctx, scenarioManagerID, "chat"))
 	require.NoError(t, h.store.SetChatFocus(h.ctx, scenarioManagerID, "chat", work))
 	close(workRelease)
-	h.waitUntil("assistant retelling", func() bool { return assistantSayCount(t, h, root.ID, "retold answer") == 1 })
+	h.waitUntil(
+		"assistant frames question",
+		func() bool { return assistantSayCount(t, h, root.ID, "Apply the fix now?") == 1 },
+	)
 	h.waitUntil("assistant idle", func() bool { return !h.mgr.HasActiveLoop(root.ID) })
 	assert.NotEmpty(t, h.messages(root.ID), "the assistant now uses the ordinary transcript")
 	assert.Zero(t, countToolResultsFor(h.messages(root.ID), "open"), "the prior activation's tools were compacted")
@@ -86,14 +89,14 @@ func TestHarnessScenario_AssistantOpenAndRetell(t *testing.T) {
 	assert.Equal(t, 1, assistantEventCount(t, h, root.ID))
 	var workOutputs int
 	require.NoError(t, h.db.QueryRowContext(h.ctx, `SELECT count(*) FROM session_outbox
-		WHERE session_id = ? AND type = 'message' AND content LIKE 'work answer%'`, work).Scan(&workOutputs))
+		WHERE session_id = ? AND type = 'message' AND content LIKE 'Apply the fix?%'`, work).Scan(&workOutputs))
 	assert.Equal(t, 1, workOutputs)
 
 	require.NoError(t, h.mgr.sendToSession(h.ctx, work, "direct user follow-up"))
 	h.waitUntil("direct reply finished", func() bool { return !h.mgr.HasActiveLoop(work) })
 	h.waitUntil(
-		"direct exchange noted",
-		func() bool { return assistantSayCount(t, h, root.ID, "direct exchange noted") == 1 },
+		"direct question framed",
+		func() bool { return assistantSayCount(t, h, root.ID, "Apply this follow-up fix?") == 1 },
 	)
 	assert.Equal(t, 2, assistantEventCount(t, h, root.ID))
 	var exchange string
@@ -110,6 +113,10 @@ func TestHarnessScenario_AssistantOpenAndRetell(t *testing.T) {
 	require.NoError(t, h.db.QueryRowContext(h.ctx, `SELECT count(*) FROM session_outbox
 		WHERE session_id = ? AND type = 'message' AND source_key NOT LIKE 'message:%'`, root.ID).Scan(&cards))
 	assert.Zero(t, cards)
+	var relays int
+	require.NoError(t, h.db.QueryRowContext(h.ctx, `SELECT COUNT(*) FROM session_outbox
+		WHERE session_id = ? AND source_key LIKE 'relay:%'`, root.ID).Scan(&relays))
+	assert.Zero(t, relays)
 }
 
 func TestHarnessScenario_AssistantOpenRegisteredWorktree(t *testing.T) {

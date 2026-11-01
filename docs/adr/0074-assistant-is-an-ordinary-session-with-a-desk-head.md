@@ -6,6 +6,7 @@
 - **Amended by:** [ADR-0075](0075-work-answers-reach-the-observer-through-its-inbox.md) — work answers reach the assistant as inbox input written in the work root's own commit; the send ledger, the observation calls and the boot sweep are gone
 - **Amended by:** [ADR-0077](0077-assistant-moves-the-user-in-never-out.md) — the assistant switches the user from `#0` into work, sets work roots' model and budget, and never sends slash commands
 - **Amended by:** [ADR-0080](0080-assistant-administers-work-at-open-and-hears-direct-exchanges.md) — `open` takes model, effort and worktree; the assistant schedules work roots and hears the user's direct exchanges
+- **Amended by:** [ADR-0081](0081-assistant-forwards-and-the-host-relays-work-answers.md) — event turns may finish silently; hand-overs no longer carry the user's words, `forward` does
 
 ## Context
 

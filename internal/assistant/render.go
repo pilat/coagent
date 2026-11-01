@@ -116,8 +116,12 @@ func renderConversation(b *strings.Builder, lines []Line, total int, now time.Ti
 
 	for _, line := range lines {
 		role := "user"
-		if line.Kind == sayKind {
+
+		switch line.Kind {
+		case sayKind, forwardKind:
 			role = "you"
+		case relayKind:
+			role = fmt.Sprintf("#%d", line.Origin)
 		}
 
 		fmt.Fprintf(b, "%s %s\n", deskTime(line.At, now), Clip(role+": «"+line.Text+"»", dialogTextLimit))

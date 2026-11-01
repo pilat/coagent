@@ -39,7 +39,7 @@ A manager submits work as a session. A session owns one agent-loop activation:
 its model client, tool registry, prompt projection, and conversation handling.
 Each manager chat selects Assistant, public session #0, or a work session through
 `/switch`. Assistant has a deterministic desk head, desk tools and bounded owner
-tools; it delegates work to other roots and retells their answers.
+tools; it routes work to other roots and introduces their relayed answers.
 The daemon coordinates work that crosses sessions, survives a process restart,
 or needs global admission decisions; the owning domain package retains each
 ledger. Built-in managers program against the private controller
@@ -157,15 +157,18 @@ row-ID vector travels with the projection across session assembly and compaction
 then keys durable replacement and idempotent final output.
 Boundary commits accept pending inbox rows only; resubmitting an accepted input
 fails with `ErrInputResolved` and rolls back the whole step.
+The first boundary advances a durable run counter; acceptance stamps each inbox
+row in that transaction, so current-run input is independent of transcript compaction.
 
 Manager-owned roots append messages and lifecycle facts to `session_outbox` in
 the same transaction as their transcript/control effects. Its closed vocabulary
 is `message`, `session_opened`, `session_replaced` and `session_closed`.
 Rows keep their owner and stable source-key identity; there are no
 attempts, transport receipts, delivery states or external-message edits.
+Forward receipts and relays are host rows committed with their input/output producer.
 Every accepted tool-calling step of a work root publishes one message: model text
-when present, then a tool trail, including steps with no text. The assistant
-publishes only non-blank model text, without a trail; subagents publish nothing.
+when present, then a tool trail, including steps with no text. The assistant's
+model steps publish only non-blank text, without a trail; subagents publish nothing.
 The trail stays out of the model transcript and observer answers.
 Confirmed finals and compaction/stop notices also append;
 model answers have no footer. A completion candidate stays hidden until confirmed.
@@ -318,7 +321,11 @@ advances the generation and restores the one-nudge allowance
 ([ADR-0060](docs/adr/0060-wake-aware-model-completion-check.md), amended by
 [ADR-0061](docs/adr/0061-completion-check-publishes-the-candidate-answer.md) and
 [ADR-0068](docs/adr/0068-one-completion-nudge-per-model-input.md)).
-Empty no-wake stops are a durable anti-loop signal instead: the third receives
+With `SilentFinish`, an empty stop finishes silently when no human answer is owed,
+or confirms a pending candidate. The run starts conservatively owing an answer;
+its first accepted batch sets that obligation, later human input renews it, and
+a committed successful `AnswersInput` result clears it. Otherwise empty no-wake
+stops are a durable anti-loop signal: the third receives
 the strong warning, the sixth commits one host notice and ends the activation
 in error. Every accepted response commits its
 assistant message, iteration, completion state, empty streak, budget verdict,
@@ -514,8 +521,8 @@ due roots to the inbox wake worker; timer callbacks never perform ledger writes.
 Failed deadline observations and unfinished parks remain retryable without
 reviving a newer generation. Parking joins runners before taking the tree fence,
 then rechecks liveness under that fence.
-The next ordinary model-bound human input to the root atomically releases a fired
-checkpoint and resumes only the root. Assistant input is refused while the budget
+The next direct model-bound human input to the root atomically releases a fired
+checkpoint and resumes only the root. Assistant and forwarded input are refused while the budget
 is fired; control and read-only commands still pass. The assistant lifts a work
 checkpoint explicitly by setting or clearing its budget.
 
@@ -896,7 +903,8 @@ as an answer still owed. Automatic compaction preserves the first desk row.
 The desk shows live memory (at most 4000 characters), the ten newest focus items,
 the ten newest roots touched by assistant instructions or direct human input and forty chronological conversation
 lines clipped to 2000 characters each. Conversation joins accepted user inbox
-rows with model-speech outbox rows, excluding host notices. Older compacted
+rows with speech, forward receipts (`you:`) and relays (`#N:`); only a `you:` line
+answers a user line. Other host notices stay excluded. Older compacted
 history stays available through search. Observations enter as ordinary agent
 inputs after the head, with their event text clipped to 20000 characters.
 
@@ -950,18 +958,19 @@ step commits, durable errors and output. Effects and their tool-result commits
 are separate: a runtime result-commit failure can leave a call unresolved for a
 later activation; boot instead settles interrupted calls as typed failures.
 
-Every open/send appends the latest accepted user input still linked to an active
-transcript row, trimmed and CRLF-normalized as a blockquote. Its label warns that
-the user works with several sessions and some words may concern other work.
-Instructions already containing those words, slash-prefixed instructions and
-activations without an active user row receive no quote. Multiple handovers each
-receive it. Send delivers generic commands verbatim and dispatches them after
+Open/send carry only the assistant's text. `forward(session)` selects the newest
+human input accepted in the current run and copies its raw content byte for byte,
+with human authority and observation provenance. The store rechecks the run stamp,
+refuses slash text before lifecycle or duplicate checks, and never lifts a fired
+budget. The work input and `→ #N name (forwarded)` receipt commit atomically;
+per-input/target keys make replay a no-op. The receipt keeps its original name.
+Forward never changes chat focus. Send delivers generic commands verbatim and dispatches them after
 releasing the tree lock, just as human commands do. Open refuses generic read-only
 and lifecycle commands before worktree or root creation. Both hand over
 `/skill <name> [args]` verbatim.
 One session-store predicate defines human input: `source=user` and `from`
 different from `assistant`; an observer reference does not change authority.
-Only human input creates activation grants or releases a fired budget; assistant
+Only direct human input creates activation grants or releases a fired budget; assistant
 commands otherwise retain ordinary command dispatch, skill expansion and resume semantics.
 
 Every assistant instruction carries its observer root reference in its work
@@ -971,7 +980,8 @@ commands, assistant roots and subagents. Reported schedule ticks carry the same
 reference. A non-yield final of the work root enqueues one answered agent input
 per observer in the same transaction, joining active finals since that observer's
 earliest open input. The event prefixes human ref rows with bounded quotes and
-reported schedule rows with a firing notice, in inbox order. The latest non-cancelled answered inbox event anchors
+reported schedule rows with a firing notice, in inbox order; forwarded input is
+labelled `you forwarded`. The latest non-cancelled answered inbox event anchors
 the next window on the work root's message ids; direct user input does not close
 an outstanding observer instruction. A committed terminal error or a fresh
 start-failure receipt enqueues the error notice without moving that anchor.
@@ -981,12 +991,20 @@ The inbox-row reference is written only in-process and is never accepted from a
 controller. No send ledger, daemon notification hook or boot sweep is involved;
 ordinary inbox recovery delivers committed events after restart. Kill, clear
 and stop notify nobody. A non-accepting observer is skipped; other enqueue errors
-roll back the work transaction. Work roots keep their own output logs, delivered
-when selected by chat focus.
+roll back the work transaction. The same commit copies every window final's
+user-visible outbox row and each failure notice into the observer's outbox unless
+its manager's chat focus is that work root. `relay:<output id>` deduplicates copies;
+content is verbatim, including confirmed candidate text and earlier yield finals.
+Unwritable observers are skipped; other relay insert errors roll back the work.
+Relays never join the work root's committed live outputs or advance its watermark.
+Delivery adds their current `#N name` header on `#0`; entering work can show them again.
 
-The assistant uses ordinary reply, final, completion-nudge and empty-stop/error
-semantics. Its prompt requires text even when an observation changes nothing;
-if tools correct a candidate answer, the next answer repeats it whole. State
+The daemon enables generic `SilentFinish` for assistant roots. A successful forward
+returns `AnswersInput`, so its receipt can answer a routing-only human turn.
+Event turns may finish without output or a second look; pending human input still
+takes the ordinary empty-stop nudge/error path. The prompt reserves speech for
+questions, mismatches and requested reports, and requires it for own schedules and
+host notes. If tools correct a candidate, the next answer repeats it whole. State
 notifications and heartbeat typing flow normally. Assistant roots remain
 protected from stop, kill, clear and compact. The session model is
 recorded in [ADR-0074](docs/adr/0074-assistant-is-an-ordinary-session-with-a-desk-head.md),
@@ -994,7 +1012,8 @@ superseding [ADR-0073](docs/adr/0073-assistant-turn-is-a-buffered-tool-loop.md),
 observer delivery recorded in [ADR-0075](docs/adr/0075-work-answers-reach-the-observer-through-its-inbox.md)
 and work administration in [ADR-0077](docs/adr/0077-assistant-moves-the-user-in-never-out.md),
 amended by [ADR-0078](docs/adr/0078-assistant-input-is-never-human-authority.md)
-and [ADR-0080](docs/adr/0080-assistant-administers-work-at-open-and-hears-direct-exchanges.md).
+and [ADR-0080](docs/adr/0080-assistant-administers-work-at-open-and-hears-direct-exchanges.md),
+with forwarding, relaying and silence in [ADR-0081](docs/adr/0081-assistant-forwards-and-the-host-relays-work-answers.md).
 
 ### Daemon, sessions and persistence
 
@@ -1248,7 +1267,8 @@ Digest rows remain unread. The selected tail follows when unread exists;
 otherwise entry context replays the newest already-seen renderable row without
 moving its watermark. No context is sent when no such row exists.
 Every delivered work row carries a session header, with its display name read
-once per batch; Assistant rows have no session header. Headers are added at
+once per batch; relays on Assistant carry their work origin's header, while
+Assistant's own rows have none. Headers are added at
 delivery and are absent from stored output. A row-permanent context failure
 drops that prelude item; transient and chat failures retain it for backoff.
 After each marked row, the loop re-reads chat focus. A changed selection ends

@@ -15,11 +15,13 @@ const assistantChatRootSQL = liveChatRootSQL + ` AND COALESCE(s.agent_type, '') 
 
 // ChatOutput includes non-rendering lifecycle rows that still advance the chat watermark.
 type ChatOutput struct {
-	ID        int64
-	SessionID int64
-	Name      string
-	Type      OutputType
-	Content   string
+	ID         int64
+	SessionID  int64
+	Name       string
+	Type       OutputType
+	Content    string
+	Origin     int64
+	OriginName string
 }
 
 // ChatSession separates the assistant's display identity from its durable session ID.
@@ -162,7 +164,8 @@ func (s *Store) ChatOutputs(
 		return nil, err
 	}
 
-	rows, err := s.db.QueryContext(ctx, `SELECT id, session_id, type, content FROM session_outbox
+	rows, err := s.db.QueryContext(ctx, `SELECT id, session_id, type, content,
+		COALESCE(json_extract(attributes, '$.relayed_session_id'), 0) FROM session_outbox
 		WHERE session_id = ? AND id > COALESCE((SELECT last_outbox_id FROM chat_seen
 			WHERE manager_id = ? AND chat_id = ? AND session_id = ?), 0)
 		ORDER BY id LIMIT ?`, sessionID, managerID, chatID, sessionID, limit)
@@ -175,7 +178,7 @@ func (s *Store) ChatOutputs(
 
 	for rows.Next() {
 		var output ChatOutput
-		if err := rows.Scan(&output.ID, &output.SessionID, &output.Type, &output.Content); err != nil {
+		if err := rows.Scan(&output.ID, &output.SessionID, &output.Type, &output.Content, &output.Origin); err != nil {
 			return nil, fmt.Errorf("scan unread chat output: %w", err)
 		}
 
@@ -186,6 +189,14 @@ func (s *Store) ChatOutputs(
 
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterate unread chat outputs: %w", err)
+	}
+
+	if err := rows.Close(); err != nil {
+		return nil, fmt.Errorf("close unread chat outputs: %w", err)
+	}
+
+	if err := s.chatOutputOrigins(ctx, outputs); err != nil {
+		return nil, err
 	}
 
 	return outputs, nil
@@ -199,12 +210,13 @@ func (s *Store) LastSeenChatOutput(
 ) (ChatOutput, bool, error) {
 	var output ChatOutput
 
-	err := s.db.QueryRowContext(ctx, `SELECT o.id, o.session_id, o.type, o.content FROM session_outbox o
+	err := s.db.QueryRowContext(ctx, `SELECT o.id, o.session_id, o.type, o.content,
+		COALESCE(json_extract(o.attributes, '$.relayed_session_id'), 0) FROM session_outbox o
 		JOIN chat_seen seen ON seen.session_id = o.session_id
 		WHERE seen.manager_id = ? AND seen.chat_id = ? AND o.session_id = ?
 			AND o.id <= seen.last_outbox_id AND o.type NOT IN ('session_opened', 'session_replaced')
 		ORDER BY o.id DESC LIMIT 1`, managerID, chatID, sessionID).
-		Scan(&output.ID, &output.SessionID, &output.Type, &output.Content)
+		Scan(&output.ID, &output.SessionID, &output.Type, &output.Content, &output.Origin)
 	if errors.Is(err, sql.ErrNoRows) {
 		return ChatOutput{}, false, nil
 	}
@@ -218,7 +230,41 @@ func (s *Store) LastSeenChatOutput(
 		return ChatOutput{}, false, err
 	}
 
+	if output.Origin != 0 {
+		output.OriginName, err = s.chatOutputName(ctx, output.Origin)
+		if err != nil {
+			return ChatOutput{}, false, err
+		}
+	}
+
 	return output, true, nil
+}
+
+func (s *Store) chatOutputOrigins(ctx context.Context, outputs []ChatOutput) error {
+	names := make(map[int64]string)
+
+	for i := range outputs {
+		row := &outputs[i]
+		if row.Origin == 0 {
+			continue
+		}
+
+		name, ok := names[row.Origin]
+		if !ok {
+			var err error
+
+			name, err = s.chatOutputName(ctx, row.Origin)
+			if err != nil {
+				return err
+			}
+
+			names[row.Origin] = name
+		}
+
+		row.OriginName = name
+	}
+
+	return nil
 }
 
 func (s *Store) chatOutputName(ctx context.Context, sessionID int64) (string, error) {

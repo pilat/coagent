@@ -31,10 +31,11 @@ func (s *Store) RecordSessionStartFailure(ctx context.Context, sessionID int64, 
 		return false, nil
 	}
 
+	now := time.Now().UTC()
 	if _, err := tx.ExecContext(
 		ctx,
 		`UPDATE sessions SET status = 'error', updated_at = ? WHERE id = ?`,
-		time.Now().UTC(),
+		now,
 		sessionID,
 	); err != nil {
 		return false, fmt.Errorf("park failed session: %w", err)
@@ -44,7 +45,7 @@ func (s *Store) RecordSessionStartFailure(ctx context.Context, sessionID int64, 
 
 	reported := record.Status != SessionStatusError
 	if owner != "" && record.ParentID == 0 {
-		reported, err = recordStartFailureOutputTx(ctx, tx, record, content)
+		reported, err = recordStartFailureOutputTx(ctx, tx, record, content, now)
 		if err != nil {
 			return false, err
 		}
@@ -59,7 +60,13 @@ func (s *Store) RecordSessionStartFailure(ctx context.Context, sessionID int64, 
 	return reported, nil
 }
 
-func recordStartFailureOutputTx(ctx context.Context, tx *sql.Tx, record *SessionRecord, content string) (bool, error) {
+func recordStartFailureOutputTx(
+	ctx context.Context,
+	tx *sql.Tx,
+	record *SessionRecord,
+	content string,
+	at time.Time,
+) (bool, error) {
 	var inputID int64
 	if err := tx.QueryRowContext(ctx, `SELECT COALESCE(MIN(id), 0) FROM session_inbox WHERE session_id = ? AND state = 'pending'`, record.ID).
 		Scan(&inputID); err != nil {
@@ -73,7 +80,7 @@ func recordStartFailureOutputTx(ctx context.Context, tx *sql.Tx, record *Session
 
 	out, err := insertOutputTx(ctx, tx, OutputDraft{
 		SessionID: record.ID, Type: OutputMessage, Content: content,
-		SourceKey: key,
+		SourceKey: key, CreatedAt: at,
 	}, CommitLoop)
 	if err != nil {
 		return false, fmt.Errorf("record start failure receipt: %w", err)
@@ -84,7 +91,7 @@ func recordStartFailureOutputTx(ctx context.Context, tx *sql.Tx, record *Session
 			return false, nil
 		}
 
-		if err := notifyObserversTx(ctx, tx, record.ID, 0, out.OutputID, content); err != nil {
+		if err := notifyObserversTx(ctx, tx, record.ID, 0, out.OutputID, content, at, CommitLoop); err != nil {
 			return false, err
 		}
 	}

@@ -131,8 +131,8 @@ _Avoid_: management project, privileged project.
 
 **assistant**:
 Coagent's `#0` in a manager's chat: an ordinary root of the hidden `assistant`
-type, with a desk head and immediate tools for delegating work and retelling
-answers. It can switch the user into live owned work from `#0`, list configured
+type, with a desk head and immediate tools for routing work and introducing
+relayed answers. It can switch the user into live owned work from `#0`, list configured
 models and change work roots' models. Its owner tools administer global MCP
 registration, its own and addressable work roots' schedules, and configuration under `/config`. It sets
 budgets for addressable work roots on request without a grant; changing its own
@@ -149,8 +149,9 @@ Resuming without new input preserves the existing head and transcript.
 **desk**:
 The first message of an assistant activation: live memory, the newest focus items,
 the newest assistant-touched sessions and the last forty conversation lines.
-The accepted inputs follow the head. Every list states how much it shows and
-which tool shows the rest; a trailing unanswered user line is still owed a reply.
+The accepted inputs follow the head. Conversation includes relays as `#N:` and
+forward receipts as `you:` lines. Only a `you:` line answers a user line; relays
+alone leave it owed. Every list states how much it shows and which tool shows the rest.
 _Avoid_: transcript, context compaction, catalog.
 
 **memory** (assistant):
@@ -171,11 +172,11 @@ execution and return real ids through the ordinary tool-result path.
 
 **second look** (assistant):
 The ordinary completion nudge asking the model to check its answer and
-bookkeeping before finishing. Tool-based corrections invalidate the candidate;
+bookkeeping before finishing. A silent finish gets none. Tool-based corrections invalidate the candidate;
 the next answer must repeat the complete response.
 
 **move**:
-An assistant-requested open, send, stop or kill applied immediately through the
+An assistant-requested open, send, forward, stop or kill applied immediately through the
 daemon's ordinary session lifecycle during tool execution.
 _Avoid_: dispatch intent.
 
@@ -183,11 +184,30 @@ _Avoid_: dispatch intent.
 A work answer or error notice queued as agent input in the work root's own
 transaction, for inputs carrying an observer reference: assistant instructions,
 direct human input, or schedules with `report_to`. Human ref rows add bounded
-quote lines and reported schedules add firing notices to that same event.
+quote lines (`you forwarded` for forwards) and reported schedules add firing
+notices to that same event. The same transaction relays the observed output
+unless the manager is focused on that work root.
 A non-yield final
 reports the joined window answer and anchors the next window through its inbox
 event, unless that event is cancelled; a failure leaves the window open. Kill,
 clear and stop produce no observation.
+
+**forward**:
+The assistant's target-only call that copies the newest human input accepted in
+its current activation into a work session, byte for byte and as human input.
+It carries forwarding and observer provenance, never moves chat focus, and is
+idempotent per input and target. Slash text and fired-budget targets are refused.
+The work input and the assistant's `→ #N name (forwarded)` receipt commit together;
+the receipt answers the user without requiring assistant text.
+_Avoid_: relay, pass-through.
+
+**relay**:
+The host's verbatim copy of observed work finals or failure notices into the
+assistant's output log, committed with the work output unless chat focus is on
+that work root. It copies the user-visible outbox content, including confirmed
+candidates and yield finals, and deduplicates by source output id. Delivery adds
+the current work-session header; the work root's watermark never moves.
+_Avoid_: forward, retell, echo.
 
 **context artifact**:
 One of the three instruction files a session loads at open — **global**, **project**, or **local** — each resolved by a first-match-wins search over an ordered candidate list, then merged into the opening context as a `[role] <path>` labeled section with the home directory abbreviated to `~`. The section's path is the winning candidate, not the resolved symlink target.
@@ -369,13 +389,13 @@ _Avoid_: policy digest, full unread history.
 **session header**:
 The `#<id> <Name>` line prefixed at delivery to every renderable work-root row,
 using the same display name as `/sessions`. It is never stored in the output
-log; assistant rows have none.
+log; relays on the assistant carry their work origin's header, while its own rows have none.
 _Avoid_: switch header (the `→ #N <Name>` line confirming entry to a session).
 
 **entry context**:
 The newest already-seen renderable output-log row replayed when entering a
 session with nothing unread. It never moves the watermark; a work row keeps
-its session header and an assistant row has none.
+its session header, including a relay on the assistant; the assistant's own row has none.
 _Avoid_: unread tail, new output.
 
 **tool trail**:
@@ -412,15 +432,16 @@ A root-tree checkpoint over additional persisted USD cost, additional wall
 time, or both, set by the user's `/budget` grant or, for a work root, by the
 assistant on request. One generation is armed from durable baselines, fires
 once, closes admission and parks the tree, then is released by the next
-ordinary model-bound **human input** to the root. Assistant input into a parked
-root is refused; the assistant lifts a checkpoint only with `set_budget`.
+direct model-bound **human input** to the root. Assistant and forwarded input into a parked
+root are refused; the assistant lifts a checkpoint only with `set_budget`.
 It is not a permanent spending policy.
 _Avoid_: iteration budget, billing limit, permanent ceiling.
 
 **human input**:
 A `source = 'user'` session input with `from` different from `assistant`.
-An `observer_session_id` does not change its authority. Only human input creates tool
-activation grants or lifts a fired budget. Assistant input with `source = 'user'`
+An `observer_session_id` or forwarding provenance does not change its authority.
+A forwarded input is human, but slash text is refused and it never lifts a fired
+budget. Only direct human input creates tool activation grants or lifts a fired budget. Assistant input with `source = 'user'`
 otherwise behaves like the user's, including commands and skills.
 _Avoid_: user input (it includes the assistant's), real user message.
 

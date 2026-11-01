@@ -84,13 +84,14 @@ func TestBuildAssistant(t *testing.T) {
 	started := time.Now()
 	sess, cleanup, err := Build(t.Context(), BuildInput{
 		Record: record, Config: cfg, Store: store, WorkDir: workDir, MemoryStore: memories,
-		OwnerTools: []tool.Tool{owner}, OutputEnabled: true, Head: head,
+		OwnerTools: []tool.Tool{owner}, OutputEnabled: true, SilentFinish: true, Head: head,
 	})
 	require.NoError(t, err)
 	t.Logf("assistant Build with isolated configuration (no MCP): %s", time.Since(started))
 	t.Cleanup(cleanup)
 	t.Cleanup(sess.Close)
 	assert.Equal(t, reflect.ValueOf(head).Pointer(), reflect.ValueOf(sess).Elem().FieldByName("head").Pointer())
+	assert.True(t, reflect.ValueOf(sess).Elem().FieldByName("silentFinish").Bool())
 	_, err = sess.Run(t.Context())
 	require.NoError(t, err)
 	assert.EqualValues(t, 1, owner.runs.Load(), "the exact owner tool instance executes")

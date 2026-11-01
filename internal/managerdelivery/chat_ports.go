@@ -21,10 +21,12 @@ type SendResult struct {
 }
 
 type ChatRow struct {
-	ID      int64
-	Name    string
-	Type    string
-	Content string
+	ID         int64
+	Name       string
+	Type       string
+	Content    string
+	Origin     int64
+	OriginName string
 }
 
 type ChatSession struct {
