@@ -1297,6 +1297,11 @@ func runTestLoop(t *testing.T, s *Session) (RunResult, error) {
 	return s.Run(t.Context())
 }
 
+func executeToolCalls(ctx context.Context, agent *Session, calls []llmwire.ToolCall) error {
+	_, err := runToolCalls(ctx, agent, calls)
+	return err
+}
+
 func textResponse(text string) *llmwire.Response {
 	return &llmwire.Response{Text: text, FinishType: llmwire.FinishStop}
 }

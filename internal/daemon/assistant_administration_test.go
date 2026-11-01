@@ -30,7 +30,7 @@ func TestHarnessScenario_AssistantProjectsExactlyDeskAndOwnerTools(t *testing.T)
 	})
 	assert.ElementsMatch(t, []string{
 		"search", "around", "read_session", "sessions", "projects", "focus_list",
-		"open", "send", "stop", "kill", "remember", "rewrite_memory", "forget_memory",
+		"open", "send", "forward", "stop", "kill", "remember", "rewrite_memory", "forget_memory",
 		"focus", "update_focus", "done_focus",
 		"switch", "models", "set_model",
 		tool.IDSchedule, tool.IDMCPAdd, tool.IDMCPRemove, tool.IDMCPEnable, tool.IDMCPDisable, tool.IDMCPList,

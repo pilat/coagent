@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"time"
 	"unicode/utf8"
 )
 
@@ -70,7 +71,16 @@ func notifyObserverOutputTx(
 
 	if output.Phase == "final" && !output.Yield && output.MessageRef >= 0 &&
 		output.MessageRef < len(result.MessageIDs) {
-		return notifyObserversTx(ctx, tx, c.SessionID, result.MessageIDs[output.MessageRef], out.OutputID, "")
+		return notifyObserversTx(
+			ctx,
+			tx,
+			c.SessionID,
+			result.MessageIDs[output.MessageRef],
+			out.OutputID,
+			"",
+			c.At,
+			CommitLoop,
+		)
 	}
 
 	status := c.State.Status
@@ -79,13 +89,20 @@ func notifyObserverOutputTx(
 	}
 
 	if status != nil && *status == SessionStatusError && output.ReleasesInput && output.MessageRef == -1 {
-		return notifyObserversTx(ctx, tx, c.SessionID, 0, out.OutputID, out.Content)
+		return notifyObserversTx(ctx, tx, c.SessionID, 0, out.OutputID, out.Content, c.At, CommitLoop)
 	}
 
 	return nil
 }
 
-func notifyObserversTx(ctx context.Context, tx *sql.Tx, work, final, output int64, notice string) error {
+func notifyObserversTx(
+	ctx context.Context,
+	tx *sql.Tx,
+	work, final, output int64,
+	notice string,
+	at time.Time,
+	mode CommitMode,
+) error {
 	windows, err := observerWindowsTx(ctx, tx, work, final)
 	if err != nil || len(windows) == 0 {
 		return err
@@ -98,6 +115,10 @@ LEFT JOIN projects p ON p.id = s.project_id WHERE s.id = ?`, work).Scan(&project
 	}
 
 	for _, window := range windows {
+		if err := relayObservedTx(ctx, tx, work, final, output, notice, window, at, mode); err != nil {
+			return err
+		}
+
 		kind, text := "failed", notice
 
 		attrs := map[string]any{ObservedSessionIDAttribute: work, ObservedKindAttribute: kind}

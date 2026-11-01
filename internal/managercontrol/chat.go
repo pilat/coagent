@@ -197,5 +197,6 @@ func chatOutput(record *sessionstore.SessionRecord, row sessionstore.ChatOutput)
 
 	return controllerapi.ChatOutput{
 		ID: row.ID, SessionID: id, Name: row.Name, Type: string(row.Type), Content: row.Content,
+		Origin: row.Origin, OriginName: row.OriginName,
 	}
 }

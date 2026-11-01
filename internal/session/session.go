@@ -43,6 +43,7 @@ type Input struct {
 	OpeningContext           string
 	OutputEnabled            bool
 	ToolTrail                bool
+	SilentFinish             bool
 	PreserveStopped          bool
 	Schedules                string
 	Status                   string
@@ -79,6 +80,7 @@ type Session struct {
 	status          string
 	outputEnabled   bool
 	toolTrail       bool
+	silentFinish    bool
 	preserveStopped bool
 	budgetFired     bool
 	head            func(context.Context) (string, error)
@@ -160,6 +162,7 @@ func New(ctx context.Context, in Input) (*Session, error) {
 		events:                   in.Events,
 		outputEnabled:            in.OutputEnabled,
 		toolTrail:                in.ToolTrail,
+		silentFinish:             in.SilentFinish,
 		preserveStopped:          in.PreserveStopped,
 		activeBackgroundSnapshot: in.BackgroundSnapshot,
 		compactionDeferAnnounced: in.CompactionDeferAnnounced,

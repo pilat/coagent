@@ -34,7 +34,7 @@ func TestHarnessScenario_AssistantCreatesWorktree(t *testing.T) {
 				},
 				respond: func(system string, _ []llmwire.Message) *llmwire.Response {
 					if strings.HasPrefix(system, registry.AssistantPrompt) {
-						return textReply("worktree done")
+						return textReply("")
 					}
 					return textReply("worktree answer")
 				},
@@ -73,10 +73,12 @@ func TestHarnessScenario_AssistantCreatesWorktree(t *testing.T) {
 			data, err := os.ReadFile(filepath.Join(path, "f.txt"))
 			require.NoError(t, err)
 			assert.Equal(t, "remote version", string(data))
-			h.waitUntil(
-				"worktree answer retold",
-				func() bool { return assistantSayCount(t, h, root.ID, "worktree done") == 1 },
-			)
+			waitAssistantObservation(t, h, root.ID, 1)
+			rows := assistantChatMessages(t, h, root.ID)
+			require.Len(t, rows, 1)
+			assert.Equal(t, card.ID, rows[0].Origin)
+			assert.Equal(t, "worktree answer", rows[0].Content)
+			assertAssistantOwnOutputCount(t, h, root.ID, 0)
 		})
 	}
 }

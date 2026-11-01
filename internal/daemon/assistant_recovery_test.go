@@ -22,7 +22,7 @@ func TestHarnessScenario_AssistantBackgroundResult(t *testing.T) {
 	t.Cleanup(func() { closeOnce(processRunning) })
 	h := newHarness(t, harnessOptions{respond: func(system string, messages []llmwire.Message) *llmwire.Response {
 		if strings.HasPrefix(system, registry.AssistantPrompt) {
-			return textReply("full result")
+			return textReply("")
 		}
 
 		if hasUserContaining(messages, "<process_completion>") {
@@ -53,7 +53,12 @@ func TestHarnessScenario_AssistantBackgroundResult(t *testing.T) {
 	assert.Zero(t, assistantEventCount(t, h, root.ID))
 	assert.True(t, assistantPending(t, h, root.ID, work.ID))
 	require.NoError(t, os.WriteFile(release, nil, 0o600))
-	h.waitUntil("process result retold", func() bool { return assistantSayCount(t, h, root.ID, "full result") == 1 })
+	waitAssistantObservation(t, h, root.ID, 1)
+	rows := assistantChatMessages(t, h, root.ID)
+	require.Len(t, rows, 2)
+	assert.Equal(t, "yield before process", rows[0].Content)
+	assert.Equal(t, "answer after process", rows[1].Content)
+	assertAssistantOwnOutputCount(t, h, root.ID, 0)
 	var body string
 	require.NoError(t, h.db.QueryRowContext(h.ctx, `SELECT raw_content FROM session_inbox
 		WHERE session_id = ? AND source = 'agent'`, root.ID).Scan(&body))
@@ -108,14 +113,16 @@ func TestHarnessScenario_AssistantBootObservesCompletedSend(t *testing.T) {
 	second := newHarness(
 		t,
 		harnessOptions{dbPath: path, respond: func(_ string, _ []llmwire.Message) *llmwire.Response {
-			return textReply("recovered answer")
+			return textReply("")
 		}},
 	)
 	require.NoError(t, second.mgr.Start(second.ctx))
-	second.waitUntil(
-		"recovered observation",
-		func() bool { return assistantSayCount(t, second, root.ID, "recovered answer") == 1 },
-	)
+	waitAssistantObservation(t, second, root.ID, 1)
+	rows := assistantChatMessages(t, second, root.ID)
+	require.Len(t, rows, 1)
+	assert.Equal(t, "finished before crash", rows[0].Content)
+	assert.Equal(t, work.ID, rows[0].Origin)
+	assertAssistantOwnOutputCount(t, second, root.ID, 0)
 	assert.Equal(t, 1, assistantEventCount(t, second, root.ID))
 }
 

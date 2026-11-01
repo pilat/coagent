@@ -72,6 +72,10 @@ func (w *chatLoop) prepare(ctx context.Context, focus int64) error {
 
 func chatRowText(focus int64, row ChatRow) string {
 	if focus == 0 {
+		if row.Origin != 0 {
+			return fmt.Sprintf("#%d %s\n%s", row.Origin, row.OriginName, row.Content)
+		}
+
 		return row.Content
 	}
 

@@ -18,6 +18,45 @@ import (
 	"github.com/pilat/coagent/internal/transcript"
 )
 
+func TestRunBoundaryScopesHumanInput(t *testing.T) {
+	_, store, s := newHeadFixture(t, []llmwire.Message{usr("history"), asst("answer")})
+	s.head = nil
+	r := &runState{}
+	human, err := store.Enqueue(
+		t.Context(),
+		sessionstore.Input{SessionID: s.id, Source: sessionstore.InputSourceUser, Content: "current"},
+	)
+	require.NoError(t, err)
+	accepted, err := s.boundaryStep(t.Context(), r)
+	require.NoError(t, err)
+	require.True(t, accepted)
+	input, err := store.ActiveHumanInput(t.Context(), s.id)
+	require.NoError(t, err)
+	require.NotNil(t, input)
+	assert.Equal(t, human.Input.ID, input.ID)
+	_, err = store.Enqueue(
+		t.Context(),
+		sessionstore.Input{SessionID: s.id, Source: sessionstore.InputSourceAgent, Content: "mid-run event"},
+	)
+	require.NoError(t, err)
+	accepted, err = s.boundaryStep(t.Context(), r)
+	require.NoError(t, err)
+	require.True(t, accepted)
+	input, err = store.ActiveHumanInput(t.Context(), s.id)
+	require.NoError(t, err)
+	require.NotNil(t, input)
+	assert.Equal(t, human.Input.ID, input.ID)
+	accepted, err = s.boundaryStep(t.Context(), &runState{})
+	require.NoError(t, err)
+	assert.False(t, accepted)
+	input, err = store.ActiveHumanInput(t.Context(), s.id)
+	require.NoError(t, err)
+	assert.Nil(t, input)
+	rows, err := store.LoadActiveMessages(t.Context(), s.id)
+	require.NoError(t, err)
+	assert.Len(t, rows, 4)
+}
+
 func TestHeadBoundaryReplacesTranscript(t *testing.T) {
 	for _, previous := range [][]llmwire.Message{
 		nil,

@@ -257,6 +257,26 @@ func (s *Store) instructTx(ctx context.Context, tx *sql.Tx, scope Scope,
 	return result.Input, nil
 }
 
+func (s *Store) forwardTx(ctx context.Context, tx *sql.Tx, scope Scope,
+	id int64, attributes map[string]any,
+) (*sessionstore.InboxInput, error) {
+	ok, err := authorizedTx(ctx, tx, scope.Owner, id)
+	if err != nil {
+		return nil, err
+	}
+
+	if !ok {
+		return nil, fmt.Errorf("session %d is not a work session you can address", id)
+	}
+
+	result, err := sessionstore.ForwardTx(ctx, tx, scope.Root, id, attributes)
+	if err != nil {
+		return nil, fmt.Errorf("enqueue forwarded input: %w", err)
+	}
+
+	return result.Input, nil
+}
+
 // newestWithin keeps whole entries from the newest backwards; only a single oversized
 // entry is cut, and then in its middle.
 func newestWithin(entries []string, limit int) string {

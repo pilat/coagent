@@ -50,7 +50,7 @@ func outputSessionWritable(ctx context.Context, tx *sql.Tx, sessionID int64) err
 
 	if killedAt.Valid || status == SessionStatusStopping || status == SessionStatusTerminating ||
 		status == SessionStatusKilled {
-		return fmt.Errorf("session %d cannot commit ordinary output", sessionID)
+		return fmt.Errorf("session %d %w", sessionID, ErrOutputNotWritable)
 	}
 
 	return nil

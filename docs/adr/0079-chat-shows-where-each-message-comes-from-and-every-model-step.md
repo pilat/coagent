@@ -3,6 +3,7 @@
 - **Status:** Accepted
 - **Date:** 2026-10-30
 - **Amends:** [ADR-0076](0076-flat-chat-with-a-focus.md)
+- **Amended by:** [ADR-0081](0081-assistant-forwards-and-the-host-relays-work-answers.md) — relayed work rows on `#0` get the `#N name` header at delivery
 
 ## Context
 

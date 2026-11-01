@@ -291,6 +291,21 @@ func (s *Session) prepareStopResponse(
 	state *sessionstore.CompletionCheckState,
 	wake bool,
 ) {
+	if s.silentFinish && !r.answerOwed && response.FinishType == llmwire.FinishStop &&
+		strings.TrimSpace(response.Text) == "" {
+		candidate := durableCandidateID(state)
+		if candidate != 0 {
+			c.State.Candidate = &sessionstore.CandidateChange{Expected: candidate, NextRef: -1}
+			c.State.ConfirmedAnswerID = &candidate
+			s.finalParts(c, state.CandidateText, false)
+			r.result.Final = state.CandidateText
+		}
+
+		r.terminal = true
+
+		return
+	}
+
 	if wake {
 		s.finalParts(c, response.Text, true)
 		r.result.Final = response.Text

@@ -169,7 +169,11 @@ func (h assistantHost) Deliver(
 			return fmt.Errorf("commit assistant instruction: %w", err)
 		}
 
-		command = input != nil && isEnqueueCommand(text)
+		if input == nil {
+			return nil
+		}
+
+		command = isEnqueueCommand(text)
 		if command {
 			return nil
 		}

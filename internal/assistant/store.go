@@ -13,8 +13,10 @@ import (
 )
 
 const (
-	userKind = "user"
-	sayKind  = "say"
+	userKind    = "user"
+	sayKind     = "say"
+	relayKind   = "relay"
+	forwardKind = "forward"
 	// conversationLines bounds the dialog the desk repeats; older lines are found by search.
 	conversationLines = 40
 )
@@ -42,11 +44,12 @@ type Focus struct {
 	CreatedAt, UpdatedAt time.Time
 }
 
-// Line is one accepted user input or published model message.
+// Line is one accepted user input or displayed chat message, including routed work.
 type Line struct {
 	ID         int64
 	At         time.Time
 	Kind, Text string
+	Origin     int64
 }
 
 // Scope names the assistant root and the manager whose work roots it may address.
@@ -160,13 +163,15 @@ func (s *Store) Focus(ctx context.Context, root int64) ([]Focus, error) {
 }
 
 func (s *Store) conversation(ctx context.Context, root int64) ([]Line, int, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id, at, kind, text, COUNT(*) OVER () FROM (
-SELECT id, received_at AS at, 'user' AS kind, raw_content AS text
+	rows, err := s.db.QueryContext(ctx, `SELECT id, at, kind, text, origin, COUNT(*) OVER () FROM (
+SELECT id, received_at AS at, 'user' AS kind, raw_content AS text, 0 AS origin
 FROM session_inbox WHERE session_id = ? AND source = 'user' AND state = 'accepted'
 UNION ALL
-SELECT id, created_at AS at, 'say' AS kind, content AS text
+SELECT id, created_at AS at, CASE WHEN source_key LIKE 'relay:%' THEN 'relay'
+WHEN source_key LIKE 'forward:%' THEN 'forward' ELSE 'say' END AS kind, content AS text,
+COALESCE(json_extract(attributes, '$.relayed_session_id'), 0) AS origin
 FROM session_outbox WHERE session_id = ? AND type = 'message'
-AND source_key LIKE 'message:%'
+AND (source_key LIKE 'message:%' OR source_key LIKE 'relay:%' OR source_key LIKE 'forward:%')
 ) ORDER BY at DESC, id DESC, kind DESC LIMIT ?`, root, root, conversationLines)
 	if err != nil {
 		return nil, 0, fmt.Errorf("query assistant conversation: %w", err)
@@ -177,7 +182,7 @@ AND source_key LIKE 'message:%'
 
 	for rows.Next() {
 		var line Line
-		if err := rows.Scan(&line.ID, &line.At, &line.Kind, &line.Text, &total); err != nil {
+		if err := rows.Scan(&line.ID, &line.At, &line.Kind, &line.Text, &line.Origin, &total); err != nil {
 			return nil, 0, fmt.Errorf("scan assistant conversation: %w", err)
 		}
 

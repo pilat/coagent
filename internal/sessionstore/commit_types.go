@@ -23,6 +23,7 @@ type Commit struct {
 	SessionID, RootID int64
 	At                time.Time
 	Mode              CommitMode
+	BeginRun          bool
 	Accept            []Accept
 	Messages          []*transcript.Message
 	ToolResults       []*transcript.Message

@@ -7,6 +7,7 @@
   [ADR-0075](0075-work-answers-reach-the-observer-through-its-inbox.md),
   [ADR-0077](0077-assistant-moves-the-user-in-never-out.md),
   [ADR-0078](0078-assistant-input-is-never-human-authority.md)
+- **Amended by:** [ADR-0081](0081-assistant-forwards-and-the-host-relays-work-answers.md) — observed answers are relayed into `#0`; the assistant speaks on them only when it adds something
 
 ## Context
 

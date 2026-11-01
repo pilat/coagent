@@ -182,7 +182,9 @@ func acceptPendingInput(
 ) error {
 	result, err := tx.ExecContext(ctx, `
 		UPDATE session_inbox
-		SET state = 'accepted', resolved_at = ?, accepted_message_id = ?
+		SET state = 'accepted', resolved_at = ?, accepted_message_id = ?,
+			attributes = json_set(COALESCE(attributes, '{}'), '$.accepted_run',
+				(SELECT json_extract(attributes, '$.current_run') FROM sessions WHERE id = session_inbox.session_id))
 		WHERE id = ? AND state = 'pending'`,
 		now, messageID, inputID,
 	)

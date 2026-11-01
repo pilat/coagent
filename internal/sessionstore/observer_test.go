@@ -204,6 +204,9 @@ WHEN NEW.session_id = %d BEGIN SELECT RAISE(ABORT, 'observer insert failed'); EN
 			require.ErrorContains(t, err, "observer insert failed")
 			assert.Equal(t, before, f.count(t, "messages"))
 			assert.Zero(t, f.count(t, "session_outbox"))
+			var outputs int
+			require.NoError(t, f.db.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM session_outbox`).Scan(&outputs))
+			assert.Zero(t, outputs)
 			assert.Empty(t, f.events(t))
 			assert.Empty(t, f.store.TakeWoken())
 			record, err := f.store.GetSession(t.Context(), f.work)
@@ -240,9 +243,9 @@ func TestObserverReplay(t *testing.T) {
 	f := newObserverFixture(t)
 	f.ref(t, true)
 	step := observerFinal(f.work, "answer", false)
-	step.Outputs[0].Key = "replayed-final"
 	first, err := f.store.Commit(t.Context(), step)
 	require.NoError(t, err)
+	step.Outputs[0].Key = fmt.Sprintf("message:%d:final", first.MessageIDs[0])
 	events := f.events(t)
 	require.Len(t, events, 1)
 	_, err = f.store.Commit(t.Context(), Commit{SessionID: f.observer, Accept: []Accept{{
@@ -254,6 +257,9 @@ func TestObserverReplay(t *testing.T) {
 	assert.Equal(t, first.Outputs[0].OutputID, replay.Outputs[0].OutputID)
 	assert.Len(t, f.events(t), 1)
 	assert.Equal(t, int64(1), f.count(t, "session_outbox"))
+	var total int
+	require.NoError(t, f.db.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM session_outbox`).Scan(&total))
+	assert.Equal(t, 2, total)
 }
 
 func TestObserverDistinctObservers(t *testing.T) {
@@ -278,6 +284,7 @@ func TestObserverProtocolAcrossRestart(t *testing.T) {
 	f := newObserverFixture(t)
 	open := false
 	var parts, expected []string
+	var relayed, pendingFinals []string
 	for index, action := range []string{"ref", "yield", "restart", "failure", "restart", "answer", "answer", "ref", "restart", "answer"} {
 		t.Run(fmt.Sprintf("%d_%s", index, action), func(t *testing.T) {
 			switch action {
@@ -287,6 +294,7 @@ func TestObserverProtocolAcrossRestart(t *testing.T) {
 			case "yield":
 				f.final(t, "yield", true)
 				parts = append(parts, "yield")
+				pendingFinals = append(pendingFinals, "yield")
 			case "restart":
 				f.store = NewStore(f.db)
 			case "failure":
@@ -294,11 +302,15 @@ func TestObserverProtocolAcrossRestart(t *testing.T) {
 				require.NoError(t, err)
 				if open {
 					expected = append(expected, fmt.Sprintf("← test (%d) failed: unavailable", f.work))
+					relayed = append(relayed, "unavailable")
 				}
 			case "answer":
 				f.final(t, "answer", false)
 				if open {
 					parts = append(parts, "answer")
+					relayed = append(relayed, pendingFinals...)
+					relayed = append(relayed, "answer")
+					pendingFinals = nil
 					expected = append(
 						expected,
 						fmt.Sprintf("← test (%d) answered: %q", f.work, strings.Join(parts, "\n\n---\n\n")),
@@ -311,6 +323,11 @@ func TestObserverProtocolAcrossRestart(t *testing.T) {
 				actual = append(actual, event.RawContent)
 			}
 			assert.Equal(t, expected, actual)
+			var actualRelays []string
+			for _, row := range relayRows(t, f) {
+				actualRelays = append(actualRelays, row.content)
+			}
+			assert.Equal(t, relayed, actualRelays)
 		})
 	}
 }
@@ -358,7 +375,7 @@ func newObserverFixture(t *testing.T) observerFixture {
 	store, db, project := newTestStore(t)
 	work, err := store.CreateSession(t.Context(), project, "model", "", map[string]any{"manager_id": "manager"})
 	require.NoError(t, err)
-	observer, err := store.CreateSession(t.Context(), project, "model", "", nil)
+	observer, err := store.CreateSession(t.Context(), project, "model", "", map[string]any{"manager_id": "manager"})
 	require.NoError(t, err)
 	return observerFixture{store: store, db: db, work: work.ID, observer: observer.ID, project: project}
 }

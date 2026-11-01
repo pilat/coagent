@@ -33,6 +33,28 @@ type chatFake struct {
 
 type chatSendFunc func(context.Context, string) SendResult
 
+func TestChatLoop_RelayHeaderAndAssistantOrder(t *testing.T) {
+	fake := newChatFake()
+	row := ChatRow{ID: 1, Type: "message", Content: "work\nanswer", Origin: 42, OriginName: "project · purpose"}
+	fake.rows[0] = []ChatRow{row, {ID: 2, Type: "message", Content: "assistant introduction"}}
+	w := NewChat(fake, fake).(*chatLoop)
+	require.Zero(t, w.pass(t.Context()))
+	assert.Equal(t, []string{"#42 project · purpose\nwork\nanswer", "assistant introduction"}, fake.sent)
+	assert.Equal(t, int64(2), fake.seen[0])
+	fake.rows[0] = []ChatRow{row}
+	fake.seen[0] = 1
+	fake.sessions = []ChatSession{{ID: 0, Name: "Assistant"}}
+	w.Enter(0)
+	require.Zero(t, w.pass(t.Context()))
+	assert.Equal(t, []string{"→ #0 Assistant", "#42 project · purpose\nwork\nanswer"}, fake.sent[2:])
+	assert.Equal(t, int64(1), fake.seen[0])
+	assert.Equal(
+		t,
+		"#7 current\nwork\nanswer",
+		chatRowText(7, ChatRow{Name: "current", Content: row.Content, Origin: row.Origin, OriginName: row.OriginName}),
+	)
+}
+
 func TestChatLoop_StartupTailAndFocusChange(t *testing.T) {
 	fake := newChatFake()
 	fake.focus = 12

@@ -62,6 +62,11 @@ func EnqueueTx(ctx context.Context, tx *sql.Tx, in Input) (*Enqueued, error) {
 		return nil, err
 	}
 
+	if _, forwarded := in.Attributes[ForwardedByAttribute]; forwarded &&
+		strings.HasPrefix(strings.TrimSpace(in.Content), "/") {
+		return nil, ErrForwardedCommand
+	}
+
 	var parentID int64
 	var status SessionStatus
 	var killed sql.NullTime
@@ -248,7 +253,7 @@ func isExactControlCommand(content string) bool {
 	}
 }
 
-func prepareManagerModelInputTx(ctx context.Context, tx *sql.Tx, id int64, human bool, now time.Time) error {
+func prepareManagerModelInputTx(ctx context.Context, tx *sql.Tx, id int64, mayLift bool, now time.Time) error {
 	if _, err := tx.ExecContext(ctx, `UPDATE sessions SET episode_started_at = ? WHERE id = ?
   AND (episode_started_at IS NULL OR status NOT IN ('active','suspended'))`, now, id); err != nil {
 		return fmt.Errorf("start autonomous episode: %w", err)
@@ -269,7 +274,7 @@ func prepareManagerModelInputTx(ctx context.Context, tx *sql.Tx, id int64, human
 		return nil
 	}
 
-	if !human {
+	if !mayLift {
 		return fmt.Errorf("session #%d %w", id, ErrBudgetParked)
 	}
 
@@ -434,11 +439,12 @@ func prepareEnqueueAttributesTx(
 	}
 
 	if parentID == 0 && !isExactControlCommand(in.Content) {
+		_, forwarded := in.Attributes[ForwardedByAttribute]
 		if err := prepareManagerModelInputTx(
 			ctx,
 			tx,
 			in.SessionID,
-			human,
+			human && !forwarded,
 			at,
 		); err != nil {
 			return nil, err

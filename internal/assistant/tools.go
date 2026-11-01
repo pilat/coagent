@@ -25,20 +25,20 @@ var toolTable = []toolEntry{
 		"(\"кеш* cach* прав* permission*\"). Returns at most 10 hits with refs for around, read_session, "+
 		"rewrite_memory and update_focus.",
 		`{"query":{"type":"string","description":"Words or stems; a trailing * matches any ending."}}`, "query",
-	), false, (*assistantTool).search},
+	), false, false, (*assistantTool).search},
 	{schema("around", "Look: show a message search hit among that session's requests and answers.",
 		`{"ref":{"type":"string","description":"\"msg 5012\" from a search result."},`+
-			`"count":{"type":"integer","minimum":1,"maximum":10,"description":"Entries on each side."}}`, "ref", "count"), true, (*assistantTool).around},
+			`"count":{"type":"integer","minimum":1,"maximum":10,"description":"Entries on each side."}}`, "ref", "count"), true, false, (*assistantTool).around},
 	{schema("read_session", "Look: the last requests and final answers of one work session, each whole.",
 		`{"session":{"type":"string","description":"A session id like \"244\" or \"#244\"."},`+
 			`"count":{"type":"integer","minimum":1,"maximum":60,"description":"How many entries."}}`,
-		"session", "count"), true, (*assistantTool).readSession},
+		"session", "count"), true, false, (*assistantTool).readSession},
 	{schema("sessions", "Look: every work session you may address, most recently active first, 20 per page.",
 		`{"offset":{"type":"integer","minimum":0,"description":"How many to skip."},`+
-			`"project":{"type":"string","description":"Only this project key, optional."}}`, "offset"), true, (*assistantTool).sessions},
+			`"project":{"type":"string","description":"Only this project key, optional."}}`, "offset"), true, false, (*assistantTool).sessions},
 	{schema("projects", "Look: the known projects with their keys, places and last activity.",
-		`{}`), true, (*assistantTool).projects},
-	{schema("focus_list", "Look: every live focus item.", `{}`), true, (*assistantTool).focusList},
+		`{}`), true, false, (*assistantTool).projects},
+	{schema("focus_list", "Look: every live focus item.", `{}`), true, false, (*assistantTool).focusList},
 	{schema("open", "Do: start new work immediately with a self-contained instruction; returns the real session id.",
 		`{"project":{"type":"string","description":"An existing project key, or a new name for a scratch folder."},`+
 			`"about":{"type":"string","description":"One line, why this session exists (1-80 characters)."},`+
@@ -46,48 +46,52 @@ var toolTable = []toolEntry{
 			`"model":{"type":"string","description":"Configured model id; omitted uses the default model."},`+
 			`"effort":{"type":"string","description":"Effort level; omitted uses the model's default."},`+
 			`"worktree":{"type":"string","description":"New branch and worktree name in an existing repository project."}}`,
-		"project", "about", "text"), false, (*assistantTool).open},
+		"project", "about", "text"), false, false, (*assistantTool).open},
 	{schema("send", "Do: immediately continue a work session, finished or stopped or still running.",
 		`{"session":{"type":"string","description":"A session id like \"244\" or \"#244\"."},`+
-			`"text":{"type":"string","description":"The instruction, in the user's language."}}`, "session", "text"), false, (*assistantTool).send},
+			`"text":{"type":"string","description":"The instruction, in the user's language."}}`, "session", "text"), false, false, (*assistantTool).send},
+	{schema("forward", "Do: deliver the user's current message to a work session word for word, as "+
+		"their own input; you choose only the session.",
+		`{"session":{"type":"string","description":"A session id like \"244\" or \"#244\"."}}`, "session",
+	), false, true, (*assistantTool).forward},
 	{schema("stop", "Do: stop a work session's current work immediately.",
 		`{"session":{"type":"string","description":"A session id like \"244\" or \"#244\"."}}`, "session",
-	), false, (*assistantTool).stop},
+	), false, false, (*assistantTool).stop},
 	{schema("kill",
 		"Do: delete a work session for good at the user's request: its work stops and it leaves every list.",
 		`{"session":{"type":"string","description":"A session id like \"244\" or \"#244\"."}}`, "session",
-	), false, (*assistantTool).kill},
+	), false, false, (*assistantTool).kill},
 	{schema("switch",
 		"Do: switch the user into a work session while they are talking to you; they return with /assistant.",
 		`{"session":{"type":"string","description":"A session id like \"244\" or \"#244\"."}}`,
-		"session"), false, (*assistantTool).switchChat},
+		"session"), false, false, (*assistantTool).switchChat},
 	{schema("models", "Look: configured models in order, with default, effort choices, reasoning and catalog prices.",
-		`{}`), true, (*assistantTool).models},
+		`{}`), true, false, (*assistantTool).models},
 	{schema("set_model",
 		"Do: set a work session's configured model and optional effort; omitted effort uses its default.",
 		`{"session":{"type":"string","description":"A session id like \"244\" or \"#244\"."},`+
 			`"model":{"type":"string"},"effort":{"type":"string"}}`,
-		"session", "model"), false, (*assistantTool).setModel},
+		"session", "model"), false, false, (*assistantTool).setModel},
 	{schema("remember", "Do: add a memory note (at most 300 characters). Without until it is permanent; "+
 		"with until it leaves the desk after that date but stays searchable.",
 		`{"text":{"type":"string"},"until":{"type":"string","description":"YYYY-MM-DD, optional."}}`, "text",
-	), false, (*assistantTool).remember},
+	), false, false, (*assistantTool).remember},
 	{schema("rewrite_memory", "Do: replace a memory note's text and lifetime; omitting until makes it permanent.",
 		`{"id":{"type":"string","description":"Memory id, for example \"m12\"."},`+
-			`"text":{"type":"string"},"until":{"type":"string","description":"YYYY-MM-DD, optional."}}`, "id", "text"), false, (*assistantTool).rewriteMemory},
+			`"text":{"type":"string"},"until":{"type":"string","description":"YYYY-MM-DD, optional."}}`, "id", "text"), false, false, (*assistantTool).rewriteMemory},
 	{schema("forget_memory", "Do: delete a memory note; it can no longer be found.",
 		`{"id":{"type":"string","description":"Memory id, for example \"m12\"."}}`, "id",
-	), false, (*assistantTool).forgetMemory},
+	), false, false, (*assistantTool).forgetMemory},
 	{schema("focus", "Do: add a focus item (at most 200 characters): what is being done now and what to tell "+
 		"the user when it answers.",
 		`{"text":{"type":"string"},"sessions":{"type":"array","items":{"type":"string"},`+
-			`"description":"Session ids this item waits on; may be empty."}}`, "text", "sessions"), false, (*assistantTool).addFocus},
+			`"description":"Session ids this item waits on; may be empty."}}`, "text", "sessions"), false, false, (*assistantTool).addFocus},
 	{schema("update_focus", "Do: replace a focus item's text and sessions; omitted sessions are kept.",
 		`{"id":{"type":"string","description":"Focus id, for example \"f3\"."},"text":{"type":"string"},`+
-			`"sessions":{"type":"array","items":{"type":"string"}}}`, "id", "text"), false, (*assistantTool).updateFocus},
+			`"sessions":{"type":"array","items":{"type":"string"}}}`, "id", "text"), false, false, (*assistantTool).updateFocus},
 	{schema("done_focus", "Do: remove a focus item that is finished or no longer wanted.",
 		`{"id":{"type":"string","description":"Focus id, for example \"f3\"."}}`, "id",
-	), false, (*assistantTool).doneFocus},
+	), false, false, (*assistantTool).doneFocus},
 }
 
 var _ tool.Tool = (*assistantTool)(nil)
@@ -125,6 +129,7 @@ type WorkSpec struct {
 type toolEntry struct {
 	schema   llmwire.ToolSchema
 	parallel bool
+	answers  bool
 	run      func(*assistantTool, context.Context, json.RawMessage) (string, error)
 }
 
@@ -166,6 +171,10 @@ type openArgs struct {
 type sendArgs struct {
 	Session sessionRef `json:"session"`
 	Text    string     `json:"text"`
+}
+
+type forwardArgs struct {
+	Session sessionRef `json:"session"`
 }
 
 type memoryArgs struct {
@@ -210,7 +219,7 @@ func (t *assistantTool) Execute(ctx context.Context, args json.RawMessage) (*too
 		return nil, fmt.Errorf("%s: %w", t.ID(), err)
 	}
 
-	return &tool.Result{Output: text}, nil
+	return &tool.Result{Output: text, AnswersInput: t.entry.answers}, nil
 }
 
 func (r *sessionRef) UnmarshalJSON(data []byte) error {

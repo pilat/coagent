@@ -12,12 +12,60 @@ import (
 	"github.com/pilat/coagent/internal/controllerapi"
 	"github.com/pilat/coagent/internal/migrate"
 	"github.com/pilat/coagent/internal/sessionstore"
+	"github.com/pilat/coagent/internal/transcript"
 )
 
 type chatTestBackend struct {
 	Backend
 	store   *sessionstore.Store
 	project int64
+}
+
+func TestChatCapability_RelayOriginSurvivesTailAndContext(t *testing.T) {
+	factory, store, project := newChatControl(t)
+	chat := chatCapability(t, factory, "owner")
+	assistant, err := factory.ForManager("owner").EnsureAssistantRoot(t.Context())
+	require.NoError(t, err)
+	work, err := store.CreateSession(
+		t.Context(),
+		project,
+		"model",
+		"",
+		map[string]any{"manager_id": "owner", "title": "purpose"},
+	)
+	require.NoError(t, err)
+	input, err := store.Enqueue(t.Context(), sessionstore.Input{
+		SessionID: work.ID, Source: sessionstore.InputSourceUser, Content: "work request",
+	})
+	require.NoError(t, err)
+	assert.EqualValues(t, assistant.SessionID, input.Input.Attributes[sessionstore.ObserverSessionIDAttribute])
+	_, err = store.Commit(t.Context(), sessionstore.Commit{
+		SessionID: work.ID,
+		Accept: []sessionstore.Accept{{
+			InputID: input.Input.ID, State: sessionstore.InputStateAccepted,
+			Content: input.Input.RawContent, LinkRef: -1, ModelBound: true,
+		}},
+	})
+	require.NoError(t, err)
+	_, err = store.Commit(t.Context(), sessionstore.Commit{
+		SessionID: work.ID,
+		Messages:  []*transcript.Message{{Role: "assistant", Content: "work answer", FinishType: "stop"}},
+		Outputs: []sessionstore.Output{
+			{Type: sessionstore.OutputMessage, Content: "work answer", MessageRef: 0, Phase: "final"},
+		},
+	})
+	require.NoError(t, err)
+	rows, err := chat.ChatOutputs(t.Context(), "chat", 0, 10)
+	require.NoError(t, err)
+	row := rows[len(rows)-1]
+	assert.Zero(t, row.SessionID)
+	assert.Equal(t, work.ID, row.Origin)
+	assert.Contains(t, row.OriginName, "purpose")
+	require.NoError(t, chat.MarkChatSeen(t.Context(), "chat", 0, row.ID))
+	last, found, err := chat.LastSeenChatOutput(t.Context(), "chat", 0)
+	require.NoError(t, err)
+	require.True(t, found)
+	assert.Equal(t, row, last)
 }
 
 func TestChatCapability_RejectsForeignFocusReadAndMark(t *testing.T) {
